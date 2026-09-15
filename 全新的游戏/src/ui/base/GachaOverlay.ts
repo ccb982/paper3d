@@ -156,6 +156,25 @@ export class GachaOverlay {
   private _isHoverLeft = false;
   private _isHoverRight = false;
 
+  // ============================================================
+  // ★ 行动按钮（2026-09-15 用户定调）
+  //   抽完卡（单抽/十连）后，抽卡按钮 由 行动按钮 取代（同一槽位、同一比例适配）；
+  //   常规 → 「开始行动」；已抽到 Boss 普瑞赛斯（未通关）→ 「开始突袭」。
+  //   点击行动按钮才真正出击；抽完卡不再自动进战斗。
+  // ============================================================
+  private _departAsset: FtxAsset | null = null;
+  private _departMesh: THREE.Mesh | null = null;
+  private _departGlowMesh: THREE.Mesh | null = null;
+  private _departDefaultScale: { x: number; y: number } | null = null;
+  private _departGlowDef: { w: number; h: number; cy: number; texH: number } | null = null;
+  private _isHoverDepart = false;
+  /** 当前处于「行动」态（抽卡已完成，等待出击） */
+  private _departMode = false;
+  /** 行动按钮命中区（相机坐标，Y 已翻转） */
+  private _departHit: { x: number; y: number; w: number; h: number } | null = null;
+  /** ★ 按钮槽位（抽卡按钮 / 行动按钮 共用：位置与比例完全一致） */
+  private _btnTexRect: { offX: number; offY: number; w: number; h: number; hitOffY: number } | null = null;
+
   // 按钮底部 glow 网格
   private _btnLeftGlowMesh: THREE.Mesh | null = null;
   private _btnRightGlowMesh: THREE.Mesh | null = null;
@@ -211,6 +230,14 @@ export class GachaOverlay {
       this._btnRightGlowMesh.position.y = cy - (texH * rightS) / 2 + (rgH * rightS) * 0.3 + 0.007;
     }
 
+    // ★ 行动按钮 glow 跟随缩放
+    if (this._departGlowMesh && this._departMesh && this._departGlowDef && this._departDefaultScale) {
+      const { w, h, cy, texH } = this._departGlowDef;
+      const s = this._departMesh.scale.x / this._departDefaultScale.x;
+      this._departGlowMesh.scale.set(w * s, h * s, 1);
+      this._departGlowMesh.position.y = cy - (texH * s) / 2 + (h * s) * 0.3 + 0.007;
+    }
+
     if (pending.length > 0) {
       this._btnAnimId = requestAnimationFrame(() => this.tickBtnAnim());
     }
@@ -236,6 +263,16 @@ export class GachaOverlay {
     this.animateBtn(mesh, defScale, s, isHover ? 0.2 : 0);
   }
   private updateButtonHover(wx: number, wy: number): void {
+    // ★ 行动态：只判定行动按钮
+    if (this._departMode) {
+      const d = this._departHit;
+      const on = !!d && wx >= d.x && wx <= d.x + d.w && wy >= d.y && wy <= d.y + d.h;
+      if (on !== this._isHoverDepart) {
+        this._isHoverDepart = on;
+        this.animateBtn(this._departMesh, this._departDefaultScale, on ? 1.05 : 1, on ? 0.2 : 0);
+      }
+      return;
+    }
     const { left, right } = this.buttonHit;
     const onLeft = wx >= left.x && wx <= left.x + left.w && wy >= left.y && wy <= left.y + left.h;
     const onRight = wx >= left.x + left.w && wx <= left.x + left.w + right.w && wy >= left.y && wy <= left.y + left.h;
@@ -249,6 +286,10 @@ export class GachaOverlay {
     }
   }
   private clearHover(): void {
+    if (this._isHoverDepart) {
+      this._isHoverDepart = false;
+      this.animateBtn(this._departMesh, this._departDefaultScale, 1, 0);
+    }
     if (this._isHoverLeft) {
       this._isHoverLeft = false;
       this.setBtnHover(this._btnLeftMesh, this._btnLeftDefaultScale, false);
@@ -327,9 +368,12 @@ export class GachaOverlay {
     this.resultList = this.resultOverlay.querySelector('#gacha-result-list')!;
     this.resultOverlay.querySelector('#gacha-close-result')!.addEventListener('click', () => {
       this.resultOverlay.style.display = 'none';
-      // ★ 抽完自动出击
-      this.hide();
-      this.onDepart?.();
+      // ★ 2026-09-15：抽卡按钮已在点击抽卡时换成行动按钮，这里只关结果弹窗；
+      //   若素材缺失导致没换成行动按钮，则退回旧行为（关闭即出击），避免卡死。
+      if (!this._departMode) {
+        this.hide();
+        this.onDepart?.();
+      }
     });
 
     // 画布点击
@@ -393,6 +437,17 @@ export class GachaOverlay {
     const hitOffY = (1 - (btnArea.y + btnArea.h)) + (btnArea.h - sH0) / 2;
     this.buttonHit.left = { x: texOffX, y: hitOffY, w: sW0 / 2, h: sH0 };
     this.buttonHit.right = { x: texOffX + sW0 / 2, y: hitOffY, w: sW0 / 2, h: sH0 };
+
+    // ★ 记录按钮槽位：行动按钮复用（位置 / 尺寸 / 居中适配规则完全一致）
+    this._btnTexRect = { offX: texOffX, offY: texOffY, w: sW0, h: sH0, hitOffY };
+
+    // ★ 行动按钮资源（抽完卡后替换抽卡按钮；缺资源时降级为不替换）
+    try {
+      this._departAsset = await FtxAsset.load('/ui/行动按钮.ftx3.gz');
+    } catch {
+      this._departAsset = null;
+      console.warn('[GachaOverlay] 行动按钮素材缺失，抽完卡后不替换按钮（放入 public/ui/行动按钮.ftx3.gz 即生效）');
+    }
 
     // 第三层：累积抽卡数字 + 六颗星星 + 问号
     const stars = await FtxAsset.load('/ui/六颗星星.ftx3.gz');
@@ -681,6 +736,135 @@ export class GachaOverlay {
   }
 
   // ============================================================
+  // ★ 行动按钮（抽卡按钮的替代态）
+  // ============================================================
+
+  /**
+   * 是否进入 Boss 突袭流程。
+   * 与 WorldMode 的 bossRun 判定保持一致：已获得普瑞赛斯 且 尚未通关。
+   */
+  private isBossRun(): boolean {
+    const bossId = (gachaPool as unknown as { boss?: { id: string } }).boss?.id ?? 'priestess';
+    return !!this.session.outOfRun?.owned?.[bossId] && !this.session.meta?.bossCleared;
+  }
+
+  /** 抽卡按钮显隐（切换成行动按钮时隐藏，不销毁以便复用） */
+  private setGachaButtonsVisible(visible: boolean): void {
+    if (this._btnLeftMesh) this._btnLeftMesh.visible = visible;
+    if (this._btnRightMesh) this._btnRightMesh.visible = visible;
+    if (this._btnLeftGlowMesh) this._btnLeftGlowMesh.visible = visible;
+    if (this._btnRightGlowMesh) this._btnRightGlowMesh.visible = visible;
+  }
+
+  /**
+   * ★ 抽完卡后：把抽卡按钮换成行动按钮（点击抽卡的瞬间就切，不等关闭结果列表）。
+   * - 槽位 / 比例：完全沿用抽卡按钮的适配结果（同一区域、保持纹理比例居中）
+   * - 常规 → 「开始行动」；已抽到 Boss → 「开始突袭」
+   * - 只在点击行动按钮时出击（不再自动进战斗）
+   */
+  private switchToDepartButton(): void {
+    if (this._departMode) return;
+    if (!this.renderDepartButton()) return; // 素材缺失：保留抽卡按钮，出击仍由结果弹窗「确定」兜底
+    this._departMode = true;
+    this.setGachaButtonsVisible(false);
+    this.clearHover();
+  }
+
+  /** 渲染行动按钮（含底部 glow），沿用抽卡按钮槽位；成功返回 true */
+  private renderDepartButton(): boolean {
+    if (this._departMesh) return true;
+    const asset = this._departAsset;
+    const rect = this._btnTexRect;
+    if (!asset || !rect || !asset.getFramePair(0)) return false;
+
+    const raid = this.isBossRun();
+    // 按帧名取：开始突袭 / 开始行动；取不到则退回索引（0=行动，1=突袭）
+    const idx = (raid ? asset.resolveFrame('开始突袭') : asset.resolveFrame('开始行动'))
+      ?? (raid ? 1 : 0);
+    const pair = asset.getFramePair(idx) ?? asset.getFramePair(0);
+    if (!pair) return false;
+
+    const cx = rect.offX + rect.w / 2;
+    const cy = rect.offY + rect.h / 2;
+
+    const mat = this.makeHSLMat(pair.base, pair.residual);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    mesh.scale.set(rect.w, rect.h, 1);
+    mesh.position.set(cx, cy, 0.2);
+    this.scene.add(mesh);
+    this._departMesh = mesh;
+    this._departDefaultScale = { x: rect.w, y: rect.h };
+
+    // 底部发光条：行动=冷白蓝，突袭=赤红
+    const cvs = document.createElement('canvas');
+    cvs.width = 64;
+    cvs.height = 64;
+    const g = cvs.getContext('2d')!;
+    const grad = g.createLinearGradient(0, 64, 0, 0);
+    const hot = raid ? '255,86,64' : '150,205,255';
+    grad.addColorStop(0, `rgba(${hot},0.9)`);
+    grad.addColorStop(0.5, `rgba(${hot},0.5)`);
+    grad.addColorStop(0.85, `rgba(${hot},0.15)`);
+    grad.addColorStop(1, `rgba(${hot},0)`);
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(cvs);
+    tex.flipY = false;
+    tex.colorSpace = THREE.LinearSRGBColorSpace;
+    const glowMat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, opacity: 1, side: THREE.DoubleSide,
+      depthWrite: false, depthTest: false,
+    });
+    const glowW = rect.w * 0.96;
+    const glowH = rect.h * 0.08;
+    const glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), glowMat);
+    glowMesh.scale.set(glowW, glowH, 1);
+    glowMesh.position.set(cx, cy - rect.h / 2 + glowH * 0.3 + 0.007, 0.19);
+    this.scene.add(glowMesh);
+    this._departGlowMesh = glowMesh;
+    this._departGlowDef = { w: glowW, h: glowH, cy, texH: rect.h };
+
+    // 命中区（与抽卡按钮同一槽位）
+    this._departHit = { x: rect.offX, y: rect.hitOffY, w: rect.w, h: rect.h };
+
+    // 出场：轻微缩放回弹（最终停在原始比例，与抽卡按钮尺寸一致）
+    this.animateBtn(mesh, this._departDefaultScale, 1.06, 0.15);
+    setTimeout(() => {
+      if (this._departMesh === mesh) this.animateBtn(mesh, this._departDefaultScale, 1, 0);
+    }, 160);
+    return true;
+  }
+
+  private pressDepartBtn(): void {
+    this.animateBtn(this._departMesh, this._departDefaultScale, 1.15, 1);
+  }
+  private releaseDepartBtn(): void {
+    const s = this._isHoverDepart ? 1.05 : 1;
+    this.animateBtn(this._departMesh, this._departDefaultScale, s, this._isHoverDepart ? 0.2 : 0);
+  }
+
+  /** 复位回抽卡态（每次进入抽卡页时调用） */
+  private resetToGachaState(): void {
+    this._departMode = false;
+    this._isHoverDepart = false;
+    if (this._departMesh) {
+      (this._departMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._departMesh);
+      this._departMesh = null;
+    }
+    if (this._departGlowMesh) {
+      (this._departGlowMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._departGlowMesh);
+      this._departGlowMesh = null;
+    }
+    this._departDefaultScale = null;
+    this._departGlowDef = null;
+    this._departHit = null;
+    if (!this._btnLeftMesh && !this._btnRightMesh) return;
+    this.setGachaButtonsVisible(true);
+  }
+
+  // ============================================================
   // 渲染资源显示纹理（frame 1 - 右下）
   // ============================================================
 
@@ -934,6 +1118,24 @@ export class GachaOverlay {
       return;
     }
 
+    // ★ 行动态：只响应行动按钮，点击才出击
+    if (this._departMode) {
+      const d = this._departHit;
+      if (d && wx >= d.x && wx <= d.x + d.w && wy >= d.y && wy <= d.y + d.h) {
+        this.pressDepartBtn();
+        setTimeout(() => this.releaseDepartBtn(), 150);
+        setTimeout(() => {
+          this.hide();
+          this.onDepart?.();
+        }, 170);
+        return;
+      }
+      // 非按钮区域：继续背景流体交互
+      this.isPointerDown = true;
+      this.injectFluidAt(e);
+      return;
+    }
+
     const { left, right } = this.buttonHit;
 
     if (wx >= left.x && wx <= left.x + left.w + right.w &&
@@ -1103,6 +1305,8 @@ export class GachaOverlay {
 
     this.updatePullCount();
     SaveSystem.save(s);
+    // ★ 点击抽卡的瞬间就把抽卡按钮换成行动按钮（不等结果列表关闭）
+    this.switchToDepartButton();
     this.showResult(results);
   }
 
@@ -1178,6 +1382,8 @@ export class GachaOverlay {
 
   show(onDepart: () => void): void {
     this.onDepart = onDepart;
+    // ★ 每次进入抽卡页都回到「抽卡按钮」态（行动按钮由抽完卡触发）
+    this.resetToGachaState();
     this.root.style.display = 'block';
     this.syncSize();
     this.tick();
@@ -1379,6 +1585,23 @@ export class GachaOverlay {
       this.scene.remove(this._btnRightMesh);
       this._btnRightMesh = null;
     }
+    // ★ 行动按钮（抽卡按钮替代态）
+    if (this._departGlowMesh) {
+      (this._departGlowMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._departGlowMesh);
+      this._departGlowMesh = null;
+    }
+    if (this._departMesh) {
+      (this._departMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._departMesh);
+      this._departMesh = null;
+    }
+    this._departDefaultScale = null;
+    this._departGlowDef = null;
+    this._departHit = null;
+    this._departMode = false;
+    this._departAsset?.dispose();
+    this._departAsset = null;
     if (this._btnAnimId !== null) {
       cancelAnimationFrame(this._btnAnimId);
       this._btnAnimId = null;
