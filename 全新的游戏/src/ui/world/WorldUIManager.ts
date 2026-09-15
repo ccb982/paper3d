@@ -387,8 +387,8 @@ export class WorldUIManager extends BaseInteractionUI {
       el.style.cssText = [
         'position:fixed', 'top:84px', 'left:50%', 'transform:translateX(-50%)',
         'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
-        'font-size:30px', 'font-weight:bold', 'letter-spacing:4px',
-        'padding:14px 40px', 'border-radius:10px',
+        'font-size:20px', 'font-weight:bold', 'letter-spacing:3px',
+        'padding:9px 27px', 'border-radius:7px',
         'background:rgba(28,21,7,0.78)', 'color:#ffd87a',
         'border:1px solid rgba(255,216,122,0.45)',
         'text-shadow:0 2px 8px #000, 0 0 22px rgba(255,210,120,0.9)',
