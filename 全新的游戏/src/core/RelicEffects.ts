@@ -37,6 +37,8 @@ export interface RelicStatAccumulator {
   bonusDef: number;
   /** ★ 复活等待时间倍率（1 = 无缩减；<1 = 更快复活；多效果相乘） */
   respawnTimeMul: number;
+  /** ★ 生命回复加值（每秒；与装备 hpRegen 同口径，base + flat 加算） */
+  bonusRegen: number;
 }
 
 export interface RelicStatContext {
@@ -261,5 +263,22 @@ relicEffectRegistry.set('start_items', {
       itemId: g.itemId,
       count: Math.max(1, g.count) * ctx.count,
     }));
+  },
+});
+
+/**
+ * regen —— 生命回复（每秒；永久被动，多件递增）。
+ * 参数：
+ *   base     首件每秒回复量（如 1 = 1 点/秒）
+ *   perCopy  每多一件的增量（如 0.5）
+ * 口径：写入 acc.bonusRegen，由 WorldMode 塞进遗物源的 flat.hpRegen；
+ *       与装备 hpRegen（黍姐的XX）加算，逐帧经 applyHeal 结算（满血/死亡自动跳过）。
+ */
+relicEffectRegistry.set('regen', {
+  modifyStats(ctx, cfg) {
+    const base = (cfg.base as number | undefined) ?? 0;
+    const perCopy = (cfg.perCopy as number | undefined) ?? 0;
+    const total = base + perCopy * Math.max(0, ctx.count - 1);
+    if (total > 0) ctx.acc.bonusRegen += total;
   },
 });

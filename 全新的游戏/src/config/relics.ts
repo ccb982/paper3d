@@ -55,5 +55,27 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     ],
   },
 
+  /**
+   * ★ 衣服（2026-09-15）
+   * 设计口径：凯尔希 = 罗得岛医疗主管。她给你的不是武器，是"活着回来"这件事本身。
+   *   ① regen      —— 每秒回复生命（多件递增）：医生的持续照料，最贴合她的职业
+   *   ② start_items —— 出击时额外携带「古米的蜂蜜糖」：她顺手塞进你口袋的补给
+   * 两条管线都是**独立效果类型**，核心（Session/WorldMode）零改动。
+   */
+  kaltsit_coat: {
+    id: 'kaltsit_coat',
+    name: '衣服',
+    rarity: 5,
+    description: '凯尔希的外套。她替你理了理领口：「活着回来，这是命令。」\n'
+      + '每秒回复 1 点生命（每多一件再 +0.5）；出击时额外携带 1 块古米的蜂蜜糖（每多一件再 +1）',
+    texture: '/fx/衣服.ftx3.gz',
+    effects: [
+      // ① 持续治疗：首件 1/s，每多一件 +0.5/s
+      { type: 'regen', base: 1, perCopy: 0.5 },
+      // ② 出击补给：1 块蜂蜜糖 × 拥有件数
+      { type: 'start_items', items: [{ itemId: 'gummy_honey_candy', count: 1 }] },
+    ],
+  },
+
   // 新增遗物只需在这里加配置（效果类型在 RelicEffects 注册表），代码零改动
 };

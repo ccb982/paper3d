@@ -46,10 +46,14 @@ export interface ItemIconConfig {
 const FTX_ICON_SOURCES: Record<string, string> = {
   shu_jie_xx: '/fx/黍姐的XX.ftx3.gz',
   yuandeng: '/fx/圆凳.ftx3.gz',
+  // ★ 消耗品（2026-09-15）：古米的蜂蜜糖 / 霜星的辣味糖，各自的 FTX 纹理直绘
+  gummy_honey_candy: '/fx/古米的蜂蜜糖.ftx3.gz',
+  frostnova_spicy_candy: '/fx/霜星的辣味糖.ftx3.gz',
   // 遗物（抽卡/遗物查看与背包同一条"服务 + 播放"管线的回退）：
   black_crown: '/fx/魔王的黑冠.ftx3.gz',
   gravel_love: '/fx/砾小姐的爱.ftx3.gz',
   zuzong_launcher: '/fx/祖宗发射器.ftx3.gz',
+  kaltsit_coat: '/fx/衣服.ftx3.gz',
 };
 
 export class ItemIconRegistry {

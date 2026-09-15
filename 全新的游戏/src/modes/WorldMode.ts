@@ -503,6 +503,8 @@ export class WorldMode implements IGameMode {
   private sentinelSummonUnsub?: () => void;
   /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
   private deploymentUnsub?: () => void;
+  /** ★ 存档基础属性被永久改写订阅（「训练类」消耗品加上限 → 立即重算玩家实体） */
+  private playerStatsUnsub?: () => void;
   /** ★ 舰船受击订阅（UI 明显报警：横幅+红屏+状态条闪红；天气来自 damageShip 事件） */
   private shipDamagedUnsub?: () => void;
   /** ★ 角色入水检测（每角色上一帧：是否水面 + 位置上帧快照 + 上次溅波时刻） */
@@ -970,6 +972,12 @@ export class WorldMode implements IGameMode {
         this.syncSlotAllies();
         this.combatItems?.syncLoadout();
       }
+    });
+    // ★ 存档基础属性被永久改写（「训练类」消耗品，如古米的蜂蜜糖/霜星的辣味糖）：
+    //   session.player 的 maxHp/attackPower/defense 是 EffectSystem 的 base 层，
+    //   改了之后必须重算，否则本次出击内看不到提升（下次出击才会自然生效）。
+    this.playerStatsUnsub = eventBus.on('player_stats_changed', () => {
+      this.refreshPlayerStats();
     });
   }
 
@@ -1482,6 +1490,8 @@ export class WorldMode implements IGameMode {
     this.sentinelSummonUnsub = undefined;
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
+    this.playerStatsUnsub?.();
+    this.playerStatsUnsub = undefined;
     this.shipDamagedUnsub?.();
     this.shipDamagedUnsub = undefined;
     for (const d of this.drones) d.dispose();
@@ -2705,6 +2715,8 @@ export class WorldMode implements IGameMode {
         maxHp: mods.bonusHp,
         attackPower: mods.bonusAtk,
         defense: mods.bonusDef,
+        // ★ 遗物生命回复（regen 效果，如「衣服」）→ 与装备 hpRegen 加算
+        hpRegen: mods.bonusRegen,
       },
     }]);
     // ---- 装备层：加算 + 加法乘区（弹药/装备/消耗品 buff 由队列各自维护） ----

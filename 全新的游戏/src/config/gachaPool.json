@@ -4,10 +4,8 @@
     "description": "全部免费。物资抽到即进背包，遗物抽到即永久生效。保底 10 抽必出遗物。唯一 6★ 普瑞赛斯：基础 2%，50 抽后递增，99 抽必出。"
   },
   "items": [
-    { "id": "healing_potion", "rarity": 3, "weight": 24 },
-    { "id": "food_ration", "rarity": 3, "weight": 22 },
-    { "id": "strength_potion", "rarity": 4, "weight": 12 },
-    { "id": "medkit", "rarity": 4, "weight": 10 },
+    { "id": "gummy_honey_candy", "rarity": 4, "weight": 14 },
+    { "id": "frostnova_spicy_candy", "rarity": 4, "weight": 14 },
     { "id": "kaltsit_drone", "rarity": 4, "weight": 8 },
     { "id": "shu_jie_xx", "rarity": 4, "weight": 6 },
     { "id": "yusheng_mengmengxiang", "rarity": 4, "weight": 6 },
@@ -20,6 +18,7 @@
   "outOfRunItems": [
     { "id": "black_crown", "rarity": 5, "weight": 2 },
     { "id": "gravel_love", "rarity": 5, "weight": 3 },
-    { "id": "zuzong_launcher", "rarity": 5, "weight": 3 }
+    { "id": "zuzong_launcher", "rarity": 5, "weight": 3 },
+    { "id": "kaltsit_coat", "rarity": 5, "weight": 4 }
   ]
 }

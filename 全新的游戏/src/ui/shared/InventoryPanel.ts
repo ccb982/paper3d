@@ -154,9 +154,16 @@ export class InventoryPanel {
       const minWidth = this.opts.minWidth ?? 540;
       const cellSize = Math.min(48, Math.floor(minWidth / cols));
       this.gridRenderer.render(gridView, grid, layer, (e) => {
-        this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
+        // ★ 左键单击图标 = 直接使用（可使用物品）；不可使用 / 需转移丢弃 → 走详情
+        this.activateSlot(
+          e.layer as keyof GameSession['inventories'], e.row, e.col, refresh,
+        );
       }, cellSize, flashItemId, {
         dragItemIds: allItems,
+        // ★ 右键 = 详情（转移 / 丢弃）
+        onSlotContextMenu: (e) => {
+          this.openItemDetail(e.layer as keyof GameSession['inventories'], e.row, e.col);
+        },
         // ★ 网格内自由整理（同层移动/交换；跨层仍走详情面板"转移"）
         onCellDrop: (src, dstLayer, dstRow, dstCol) => {
           const [sl, sr, sc] = src.split(',');
@@ -281,6 +288,58 @@ export class InventoryPanel {
         .filter((l): l is InventoryLayerOption => !!l);
     }
     return this.opts.layers.filter((t) => t.key !== layer);
+  }
+
+  /**
+   * ★ 左键单击图标的行为分流（2026-09-15 用户定调：点图标就能用）：
+   *   · 可使用（消耗品 / 弹药 / 装备）→ **直接使用**，用后就地刷新网格；
+   *   · 其余（材料等）→ 打开详情（保留右键入口，两处行为一致）。
+   * 失败原因（如"已达到上限""出击槽已满"）用轻提示告知，避免静默无反应。
+   */
+  private activateSlot(
+    layer: keyof GameSession['inventories'],
+    row: number,
+    col: number,
+    refresh: () => void,
+  ): void {
+    const grid = this.opts.session.inventories[layer] as InventoryGrid;
+    const slot = grid?.[row]?.[col];
+    if (!slot) return;
+
+    const canUse = (this.opts.allowUse ?? true) && this.opts.itemManager.canUse(slot.itemId);
+    if (!canUse) {
+      this.openItemDetail(layer, row, col);
+      return;
+    }
+
+    const result = this.opts.itemManager.useItem(layer, row, col);
+    if (!result.success) {
+      this.flash(result.message ?? '无法使用', false);
+      return;
+    }
+    this.flash(result.message ?? '已使用', true);
+    this.opts.onDataChanged();
+    refresh();
+  }
+
+  /** ★ 轻提示（使用结果）：底部居中浮一条，1.4s 自动消失 */
+  private flash(text: string, ok: boolean): void {
+    if (!text) return;
+    for (const old of Array.from(document.querySelectorAll('.ui-inv-toast'))) old.remove();
+    const el = document.createElement('div');
+    el.className = 'ui-inv-toast';
+    el.textContent = text;
+    el.style.cssText = [
+      'position:fixed', 'left:50%', 'bottom:64px', 'transform:translateX(-50%)',
+      'z-index:400', 'pointer-events:none', 'white-space:pre-line',
+      'padding:8px 18px', 'border-radius:6px', 'font:13px/1.5 "Microsoft YaHei",sans-serif',
+      `color:${ok ? '#d8ffd8' : '#ffd0c0'}`,
+      `background:${ok ? 'rgba(24,48,30,0.94)' : 'rgba(58,24,20,0.94)'}`,
+      `border:1px solid ${ok ? 'rgba(120,220,140,0.55)' : 'rgba(230,120,90,0.6)'}`,
+      'box-shadow:0 4px 16px rgba(0,0,0,0.5)',
+    ].join(';');
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 1400);
   }
 
   /** 物品详情（使用/转移/丢弃/关闭） */

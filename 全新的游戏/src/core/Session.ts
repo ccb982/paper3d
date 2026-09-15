@@ -290,6 +290,8 @@ export interface RelicStatModifiers {
   bonusAtk: number;
   bonusDef: number;
   respawnTimeMul: number;
+  /** ★ 生命回复加值（每秒；来源 = 遗物 regen 效果，供实体 flat.hpRegen） */
+  bonusRegen: number;
 }
 
 /** ★ 汇总遗物修正（computeCombatStats 与 EffectSystem 遗物源共用同一结算） */
@@ -303,6 +305,7 @@ export function computeRelicModifiers(
     mulHp: 1, mulAtk: 1, mulDef: 1,
     bonusHp: 0, bonusAtk: 0, bonusDef: 0,
     respawnTimeMul: 1,
+    bonusRegen: 0,
   };
   eachOwnedRelic(session, relicItemConfig ?? ({} as Record<string, RelicItemConfig>), (cfg, count) => {
     for (const eff of cfg.effects ?? []) {

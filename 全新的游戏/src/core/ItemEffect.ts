@@ -124,3 +124,53 @@ effectRegistry.set('summon_sentinel', (_params, _ctx) => {
   eventBus.emit('sentinel_summon', {});
   return { success: true, message: '已放置祖宗' };
 });
+
+/**
+ * ★ train —— 永久提升存档基础属性（"加上限"类消耗品：糖果/补剂）。
+ *
+ * 与 buff 的区别：
+ *   - buff   = 限时（效果队列），只在作战中生效，过期即消失；
+ *   - train  = **直接改写 session.player 的基础属性并存盘**，永久累积、
+ *              基地/战场都可用、下次出击依旧生效。
+ *
+ * 参数：
+ *   stats: { maxHp?: number; attackPower?: number; defense?: number; ... }  各属性增量
+ *   cap?:  { maxHp?: number; ... }  该属性的**绝对值上限**（省略 = 不设上限）
+ *   message?: 自定义提示（省略则自动拼"攻击力 +2"这类文案）
+ *
+ * 口径：写的是"基础值"（EffectSystem 的 base 层），遗物乘区/装备加算照旧叠在它之上。
+ */
+const TRAIN_LABELS: Record<string, string> = {
+  maxHp: '生命上限',
+  attackPower: '攻击力',
+  defense: '防御',
+};
+
+effectRegistry.set('train', (params, ctx) => {
+  const stats = params.stats as Record<string, number> | undefined;
+  if (!stats) return { success: false, message: '效果配置缺失' };
+  const cap = (params.cap ?? {}) as Record<string, number>;
+  const player = ctx.session.player as unknown as Record<string, number>;
+  const parts: string[] = [];
+
+  for (const [key, inc] of Object.entries(stats)) {
+    if (typeof inc !== 'number' || inc === 0) continue;
+    const cur = player[key];
+    if (typeof cur !== 'number') continue;
+    const limit = cap[key];
+    const next = typeof limit === 'number' ? Math.min(limit, cur + inc) : cur + inc;
+    const delta = next - cur;
+    if (delta === 0) continue;
+    player[key] = next;
+    parts.push(`${TRAIN_LABELS[key] ?? key} +${+delta.toFixed(2)}`);
+  }
+
+  if (parts.length === 0) return { success: false, message: '已达到上限' };
+
+  // 当前生命若被抬高上限，按提升后的上限保留（不额外回血；回血由 heal 效果负责）
+  eventBus.emit('player_stats_changed', { reason: 'train' });
+  return {
+    success: true,
+    message: params.message ? String(params.message) : `永久 ${parts.join('、')}`,
+  };
+});

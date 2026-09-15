@@ -57,6 +57,9 @@ export interface EventMap {
   'sentinel_summon': { x?: number; z?: number };
   // ★ 出击槽池变动（背包页面拖入/拖出/替换；WorldMode 订阅生成/回收友军 + 贴片兜底同步）
   'deployment_changed': { slotIndex: number; itemId: string | null; prev: string | null };
+  // ★ 存档基础属性被永久改写（「训练类」消耗品，如糖果加上限）；
+  //   WorldMode 订阅 → 重算玩家实体；BaseMode 订阅 → 刷新属性面板
+  'player_stats_changed': { reason: string };
 }
 
 export type EventKey = keyof EventMap;

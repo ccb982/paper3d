@@ -46,6 +46,8 @@ export class InventoryGridRenderer {
       dragItemIds?: Set<string>;
       /** ★ 网格内自由整理：把源格拖到目标格（同层）时回调（源 "layer,row,col"） */
       onCellDrop?: (src: string, layer: string, row: number, col: number) => void;
+      /** ★ 右键单击格子（打开详情：转移 / 丢弃；左键留给"直接使用"） */
+      onSlotContextMenu?: (e: InventorySlotClickEvent) => void;
     },
   ): void {
     container.innerHTML = '';
@@ -86,6 +88,7 @@ export class InventoryGridRenderer {
     opts?: {
       dragItemIds?: Set<string>;
       onCellDrop?: (src: string, layer: string, row: number, col: number) => void;
+      onSlotContextMenu?: (e: InventorySlotClickEvent) => void;
     },
   ): HTMLElement {
     const el = document.createElement('div');
@@ -129,6 +132,14 @@ export class InventoryGridRenderer {
 
       el.addEventListener('click', () => {
         onSlotClick?.({ layer, row, col, item: slot });
+      });
+
+      // ★ 右键 = 详情（转移 / 丢弃）。左键已被"直接使用"占用，详情入口挪到这里，
+      //   同时屏蔽浏览器原生菜单。
+      el.title = '左键：使用　右键：详情（转移 / 丢弃）';
+      el.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        opts?.onSlotContextMenu?.({ layer, row, col, item: slot });
       });
 
       // ★ 所有有物品的格子可拖拽：网格内自由整理（同层移动/交换）

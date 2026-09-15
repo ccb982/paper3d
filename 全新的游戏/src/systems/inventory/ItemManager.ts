@@ -198,6 +198,13 @@ export class ItemManager {
     return this.archetypes.get(itemId)?.type === 'equip';
   }
 
+  /** ★ 物品是否"可使用"（与 useItem 的类型门槛一致：consumable / ammo / equip）。
+   *  UI 用它决定「点图标 = 直接使用」还是「点图标 = 打开详情」。 */
+  canUse(itemId: string): boolean {
+    const t = this.archetypes.get(itemId)?.type;
+    return t === 'consumable' || t === 'ammo' || t === 'equip';
+  }
+
   /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null；仅信息展示/贴片锚点用） */
   equipSlotOf(itemId: string): string | null {
     return this.archetypes.get(itemId)?.equipSlot ?? null;
