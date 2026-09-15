@@ -61,6 +61,7 @@ import { NpcEntity } from '../entity/NpcEntity';
 import { VisitorNpcBase } from '../entity/VisitorNpc';
 import { VisitorManager } from '../systems/visitors/VisitorManager';
 import type { VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
+import type { VisitorModelStyle } from '../services/render/VisitorModelRenderer';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
@@ -3261,16 +3262,23 @@ export class WorldMode implements IGameMode {
     const quads = fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait }));
     // ★ 已到舰访客：固定站位（按到舰顺序分配）；F 交谈 → 谈完离舰（onEnd 收尾）。
     //   有程序化身体的走 3D 身体（脸=各自纹理）；没有的退回贴片立绘。
-    const bodies: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[] = [];
+    const bodies: {
+      x: number; z: number;
+      asset?: FrameAssetSource | null;
+      style?: VisitorBodyStyle;
+      model?: VisitorModelStyle;
+    }[] = [];
     const insiders = this.visitorManager?.insiders ?? [];
-    let bodyIdx = 0; // 身体索引（仅 body 型访客递增；交互站跟随它走动）
+    let bodyIdx = 0; // 身体索引（仅身体型访客递增；交互站跟随它走动）
     insiders.forEach((v, i) => {
       const a = WorldMode.VISITOR_ANCHORS[i % WorldMode.VISITOR_ANCHORS.length];
       const style = v.def.body;
+      const model = v.def.model;
+      const hasBody = !!style || !!model;
       stations.push({
         x: a.x, z: a.z, rx: 2.4, rz: 2.0,
         label: '交谈',
-        followBodyIndex: style ? bodyIdx : undefined,
+        followBodyIndex: hasBody ? bodyIdx : undefined,
         cb: () => {
           if (this.dialogue!.start(v.visitDialogue)) {
             this.pendingVisitor = v;
@@ -3280,8 +3288,8 @@ export class WorldMode implements IGameMode {
           }
         },
       });
-      if (style) {
-        bodies.push({ x: a.x, z: a.z, asset: v.anim?.source ?? null, style });
+      if (hasBody) {
+        bodies.push({ x: a.x, z: a.z, asset: v.anim?.source ?? null, style, model });
         bodyIdx++;
       } else {
         quads.push({ x: a.x, z: a.z, assetUrl: v.def.assetUrl });

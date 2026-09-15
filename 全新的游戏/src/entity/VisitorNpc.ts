@@ -25,6 +25,8 @@ import type { CameraFrame } from '../services/camera/CameraController';
 import { FTXQuad } from '../services/render/FTXQuad';
 import type { FxRendererBase } from '../services/render/FxRendererBase';
 import { VisitorBodyRenderer, type VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
+import { VisitorModelRenderer, type VisitorModelStyle } from '../services/render/VisitorModelRenderer';
+import type { VisitorBodyLike } from '../services/render/VisitorBodyLike';
 import { sameTeam } from '../services/combat/teams';
 import { RasterMap } from '../services/map/RasterMap';
 
@@ -85,8 +87,10 @@ export interface VisitorDef {
   /** 伤害统计窗口覆盖（秒；缺省 VISITOR_FLEE_WINDOW） */
   fleeWindow?: number;
   /** ★ 程序化身体（球头 + 方身 + 关节胶囊四肢；每名访客只换脸纹理）。
-   *  填了则不走 FTX 贴片（纹理资产只取首帧/前帧作脸）；不填 = 传统贴片访客 */
+   *  与 model 二选一；都填时 model 优先 */
   body?: VisitorBodyStyle;
+  /** ★ GLB 模型身体（骨骼 + 动画；缺省 5 名访客共用 public/models/visitors/visitor.glb） */
+  model?: VisitorModelStyle;
 }
 
 export interface VisitorNpcOptions {
@@ -139,8 +143,8 @@ export class VisitorNpcBase extends CharacterBase {
   private readonly visitorAnimMap: CharacterAnimMap;
   /** 当前动画态（幂等：状态不变不重播） */
   private animMoving: boolean | null = null;
-  /** ★ 程序化身体渲染器（def.body 时启用；关节动画由它自己驱动） */
-  private bodyRenderer: VisitorBodyRenderer | null = null;
+  /** ★ 程序化身体 / GLB 模型渲染器（def.body 或 def.model 时启用；关节/骨骼动画由它驱动） */
+  private bodyRenderer: VisitorBodyLike | null = null;
 
   constructor(em: EntityManager, scene: THREE.Scene, asset: FrameAssetSource, opts: VisitorNpcOptions) {
     const animMap = opts.animMap ?? deriveVisitorAnimMap(asset);
@@ -171,8 +175,8 @@ export class VisitorNpcBase extends CharacterBase {
     this.getCameraFrame = opts.getCameraFrame;
     this.visitorAnimMap = animMap;
     this.camp = 'neutral';
-    // ★ 程序化身体：关 billboard（3D 身体按移动方向 yaw，不用面向相机的 2D 贴片）
-    if (opts.def.body) this.billboard = false;
+    // ★ 程序化身体 / GLB 模型：关 billboard（按移动方向 yaw，不用面向相机的 2D 贴片）
+    if (opts.def.body || opts.def.model) this.billboard = false;
     // ★ 访客不参战；地形跟随：可涉水、可爬坡、**可上台阶** ——
     //   climbAnyTerrain 关闭 CharacterBase 的"立面阻挡 + 落地高差回退"
     //   （否则 >0.5m（EDGE_CLIFF_BAND）的台阶会被原地卡死，NPC 不会上台阶）；
@@ -251,8 +255,13 @@ export class VisitorNpcBase extends CharacterBase {
     }
   }
 
-  /** ★ 渲染器：程序化身体（def.body）或 FTXQuad billboard 贴片（与 NPC / 主角同管线） */
+  /** ★ 渲染器：GLB 模型（def.model）/ 程序化身体（def.body）/ FTXQuad billboard 贴片 */
   protected createRenderer(scene: THREE.Scene): FxRendererBase | null {
+    if (this.def.model) {
+      const body = new VisitorModelRenderer(scene, this.def.model, this.anim?.source ?? null);
+      this.bodyRenderer = body;
+      return body;
+    }
     if (this.def.body) {
       const body = new VisitorBodyRenderer(scene, this.anim?.source ?? null, this.def.body);
       this.bodyRenderer = body;

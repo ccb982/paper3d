@@ -22,6 +22,7 @@
 import * as THREE from 'three';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import { FxRendererBase } from './FxRendererBase';
+import type { VisitorBodyLike } from './VisitorBodyLike';
 import { compositeFrameToCanvas } from '../../ui/shared/ftxFrameToCanvas';
 import type { FtxAsset } from '../../vendor/player/FtxAsset';
 
@@ -76,9 +77,9 @@ const OUTLINE_SCALE = 1.05;
 /** 基准身高（bobAmp 等按此缩放；= 1.8 × 默认 1.8 倍率） */
 const BASE_H = 3.24;
 
-/** 卡通梯度（4 阶明暗；模块级共享，勿释放） */
+/** 卡通梯度（4 阶明暗；模块级共享，勿释放）—— 程序化身体与 GLB 模型共用 */
 let _toonGradient: THREE.DataTexture | null = null;
-function toonGradient(): THREE.DataTexture {
+export function getVisitorToonGradient(): THREE.DataTexture {
   if (_toonGradient) return _toonGradient;
   const steps = new Uint8Array([70, 140, 210, 255]);
   const tex = new THREE.DataTexture(steps, steps.length, 1, THREE.RedFormat);
@@ -89,7 +90,7 @@ function toonGradient(): THREE.DataTexture {
   return tex;
 }
 
-export class VisitorBodyRenderer extends FxRendererBase {
+export class VisitorBodyRenderer extends FxRendererBase implements VisitorBodyLike {
   private root: THREE.Group;
   private body: THREE.Group;
   private headPivot!: THREE.Group;
@@ -151,7 +152,7 @@ export class VisitorBodyRenderer extends FxRendererBase {
     const bodyColor = new THREE.Color(style.bodyColor ?? 0xd8d2c6);
     const limbColor = new THREE.Color(style.limbColor ?? bodyColor.clone().multiplyScalar(0.82));
     const accentColor = new THREE.Color(style.accentColor ?? bodyColor.clone().multiplyScalar(0.55));
-    const grad = toonGradient();
+    const grad = getVisitorToonGradient();
     const bodyMat = new THREE.MeshToonMaterial({ color: bodyColor, gradientMap: grad });
     const limbMat = new THREE.MeshToonMaterial({ color: limbColor, gradientMap: grad });
     const accentMat = new THREE.MeshToonMaterial({ color: accentColor, gradientMap: grad });

@@ -1,13 +1,18 @@
 // ============================================================
-// visitors.ts —— 访客名册（每名访客独立纹理 / 对话 / 身体配色）
+// visitors.ts —— 访客名册（每名访客独立纹理 / 对话 / 体型）
 // ============================================================
 // 设计（2026-09-15 用户定）：
-//   · 每天世界上生成 1~2 名访客，向舰船行进 → 进舰内房间；
-//   · 纹理 = 各自 FTX（脸 = 首帧/"前"帧 CPU 合成，贴到程序化身体头上）；
-//   · 程序化身体：球头 + 方盒身 + 关节胶囊四肢（VisitorBodyStyle）。
+//   · 每天落地时全部访客在舰船附近出现，走进舰内；
+//   · 身体 = 现成 GLB 模型（Kenney "Mini Characters 1"，CC0）——
+//     **5 名访客共用同一模型**（public/models/visitors/visitor.glb，~240KB），
+//     差异全靠"脸上糊各自的纹理"（模型自带 idle/walk/sprint 骨骼动画）；
+//   · 程序化 Q 版身体（VisitorBodyStyle）仍保留为可选后备（def.body）。
 // 新增访客：在 VISITORS 加一条 + 在 dialogues.json 加对应对话树即可。
 
 import type { VisitorDef } from '../entity/VisitorNpc';
+
+/** 共用模型路径（Kenney Mini Characters 1 · character-male-a，CC0） */
+const VISITOR_MODEL_URL = '/models/visitors/visitor.glb';
 
 export const VISITORS: VisitorDef[] = [
   {
@@ -16,7 +21,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/zc.ftx3.gz',
     dialogue: 'visitor_zc',
     moveSpeed: 3.1,
-    body: { height: 1.85, bodyColor: 0x6f7d8c, limbColor: 0x59636e, accentColor: 0xc9803a },
+    model: { url: VISITOR_MODEL_URL, height: 3.3 },
   },
   {
     id: 'buxiaoxiao',
@@ -24,7 +29,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/不许笑.ftx3.gz',
     dialogue: 'visitor_buxiaoxiao',
     moveSpeed: 3.0,
-    body: { height: 1.72, bodyColor: 0x8fae9b, limbColor: 0x6f8a7a, accentColor: 0xd9c9a8 },
+    model: { url: VISITOR_MODEL_URL, height: 3.1 },
   },
   {
     id: 'tutou',
@@ -32,7 +37,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/兔头.ftx3.gz',
     dialogue: 'visitor_tutou',
     moveSpeed: 3.4,
-    body: { height: 1.62, bodyColor: 0xe8e2e6, limbColor: 0xcfc6cc, accentColor: 0xe6a8bc },
+    model: { url: VISITOR_MODEL_URL, height: 2.9 },
   },
   {
     id: 'jiaofu',
@@ -40,7 +45,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/教父.ftx3.gz',
     dialogue: 'visitor_jiaofu',
     moveSpeed: 2.9,
-    body: { height: 1.9, bodyColor: 0x3b3d44, limbColor: 0x2c2e34, accentColor: 0x8f2b2b },
+    model: { url: VISITOR_MODEL_URL, height: 3.4 },
   },
   {
     id: 'shenren',
@@ -48,6 +53,6 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/神人.ftx3.gz',
     dialogue: 'visitor_shenren',
     moveSpeed: 3.2,
-    body: { height: 1.8, bodyColor: 0xc9a15f, limbColor: 0xa8834a, accentColor: 0x3f7a6a },
+    model: { url: VISITOR_MODEL_URL, height: 3.2 },
   },
 ];

@@ -19,6 +19,8 @@ import { VehicleRide } from '../../systems/itemPlayback/VehicleRide';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import { loadFtxCached } from '../../services/fx/FtxAssetCache';
 import { VisitorBodyRenderer, type VisitorBodyStyle } from '../../services/render/VisitorBodyRenderer';
+import { VisitorModelRenderer, type VisitorModelStyle } from '../../services/render/VisitorModelRenderer';
+import type { VisitorBodyLike } from '../../services/render/VisitorBodyLike';
 import baseRooms from '../../config/baseRooms.json';
 
 export interface RoomDef {
@@ -107,7 +109,7 @@ export class BaseScene {
   /** ★ 访客程序化身体（舰内：圆润 Q 版小人 + 脸部纹理；setEventBodies 全量替换）。
    *  在家附近自动游荡（走 → 停 → 再走），停下时面向维维美 + 待机小动作。 */
   private eventBodies: {
-    body: VisitorBodyRenderer;
+    body: VisitorBodyLike;
     x: number; z: number;
     homeX: number; homeZ: number;
     targetX: number; targetZ: number;
@@ -243,14 +245,21 @@ export class BaseScene {
     }
   }
 
-  /** ★ 访客程序化身体（舰内；与事件 NPC 立绘并存）。
+  /** ★ 访客程序化身体 / GLB 模型（舰内；与事件 NPC 立绘并存）。
    *  资产已在上层加载好 → 同步创建；在家附近自动游荡（见 update）。 */
-  setEventBodies(list: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[]): void {
+  setEventBodies(list: {
+    x: number; z: number;
+    asset?: FrameAssetSource | null;
+    style?: VisitorBodyStyle;
+    model?: VisitorModelStyle;
+  }[]): void {
     for (const b of this.eventBodies) b.body.dispose();
     this.eventBodies = [];
     for (const e of list) {
-      if (!e.asset || !e.style) continue;
-      const body = new VisitorBodyRenderer(this.sceneRef, e.asset, e.style);
+      if (!e.model && !e.style) continue;
+      const body: VisitorBodyLike = e.model
+        ? new VisitorModelRenderer(this.sceneRef, e.model, e.asset ?? null)
+        : new VisitorBodyRenderer(this.sceneRef, e.asset ?? null, e.style);
       body.setPosition(e.x, 0, e.z);
       body.setLocomotion(false, 0);
       body.update(0);
