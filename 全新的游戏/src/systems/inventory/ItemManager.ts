@@ -21,7 +21,6 @@ export interface UseItemResult {
   success: boolean;
   message?: string;
   healAmount?: number;
-  ammoAmount?: number;
 }
 
 /** ★ 装备属性汇总（数值项全量；healProc 为 proc 配置而非数值，取单件生效） */
@@ -100,8 +99,8 @@ export class ItemManager {
     const slot = grid[row][col]!;
     const arch = this.archetypes.get(slot.itemId);
     if (!arch) return { success: false, message: '未知物品' };
-    // ★ 可使用类型：消耗品 / 弹药（入弹药池）/ 装备（穿戴到装备位）
-    if (arch.type !== 'consumable' && arch.type !== 'ammo' && arch.type !== 'equip') {
+    // ★ 可使用类型：消耗品 / 装备（穿戴到装备位）；弹药不可"使用"（由攻击键发射）
+    if (arch.type !== 'consumable' && arch.type !== 'equip') {
       return { success: false, message: '该物品无法使用' };
     }
 

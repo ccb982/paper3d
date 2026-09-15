@@ -59,8 +59,6 @@ export interface GameSession {
     maxHp: number;
     attackPower: number;
     defense: number;
-    /** ★ 弹药池（跨场保留 ≈ 随身携带的子弹数；弹药包使用 → 入池，开火 → 出池） */
-    ammo: Record<string, number>;
     /** ★ 出击槽池（SLOT_COUNT 格）：友军/装备任意混放；
      *  装备在格即视为已穿戴（全量叠加贴片）；可部署在格即出队。null = 空槽 */
     slots: (string | null)[];
@@ -376,7 +374,7 @@ export function createNewSession(): GameSession {
       createdAt: new Date().toISOString(),
       lastSavedAt: new Date().toISOString(),
     },
-    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, ammo: { default: 150 }, slots: Array<null>(SLOT_COUNT).fill(null) },
+    player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, slots: Array<null>(SLOT_COUNT).fill(null) },
     inventories: {
       base: createEmptyGrid(30, 30),
       ship: createEmptyGrid(8, 10),

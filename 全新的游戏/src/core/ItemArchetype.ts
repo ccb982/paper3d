@@ -124,7 +124,6 @@ export class ItemArchetype {
     let allSuccess = true;
     let lastMessage = '使用成功';
     let totalHeal = 0;
-    let totalAmmo = 0;
 
     for (const def of this._effects) {
       const handler = effectRegistry.get(def.type);
@@ -141,10 +140,9 @@ export class ItemArchetype {
         lastMessage = result.message;
       }
       if (result.healAmount) totalHeal += result.healAmount;
-      if (result.ammoAmount) totalAmmo += result.ammoAmount;
     }
 
-    return { success: allSuccess, message: lastMessage, healAmount: totalHeal, ammoAmount: totalAmmo };
+    return { success: allSuccess, message: lastMessage, healAmount: totalHeal };
   }
 
   /** ★ 世界实体工厂：生成一个 3D 掉落物 */

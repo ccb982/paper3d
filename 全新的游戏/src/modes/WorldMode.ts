@@ -435,7 +435,7 @@ export class WorldMode implements IGameMode {
   private craftingManager!: CraftingManager;
   private interactionManager!: InteractionManager;
 
-  // ★ 战斗道具播放（弹药池 + 装备贴片）
+  // ★ 战斗道具播放（装备贴片；友军走 AllyPlaybackRegistry）
   private combatItems!: CombatItemController;
   /** ★ 穿戴同步节拍（战斗中使用装备道具 → 贴片 0.5s 内刷新） */
   private syncLoadoutAccum = 0;
@@ -829,7 +829,7 @@ export class WorldMode implements IGameMode {
     // ★ 敌人索敌优先级队列：祖宗（吸仇恨）＞ 玩家 ＞ 一般友军（无人机）
     this.aiCtx.targetCandidates = (e) => this.enemyTargetCandidates(e);
 
-    // ---- ★ 战斗道具播放：弹药池 + 装备贴片（挂主角 mesh） ----
+    // ---- ★ 战斗道具播放：装备贴片（挂主角 mesh） ----
     this.combatItems = new CombatItemController(
       ctx.session,
       this.scene,

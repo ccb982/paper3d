@@ -30,7 +30,6 @@ export interface ItemEffectResult {
   success: boolean;
   message?: string;
   healAmount?: number;
-  ammoAmount?: number;
   // 任意扩展字段（未来 buff/teleport/summon 等）
 }
 
@@ -88,16 +87,6 @@ effectRegistry.set('buff', (params, ctx) => {
     pct: params.pct,
   });
   return { success: true, message: params.message ?? '获得增益' };
-});
-
-effectRegistry.set('ammo', (params, ctx) => {
-  // ★ 弹药补给：使用弹药包 → 入弹药池（AMMO类型分池，默认 'default'）
-  const value = params.value ?? 50;
-  const ammoType = params.ammoType ?? 'default';
-  const pool = ctx.session.player.ammo;
-  if (!pool) return { success: false, message: '弹药池未初始化' };
-  pool[ammoType] = (pool[ammoType] ?? 0) + value;
-  return { success: true, ammoAmount: value, message: `补充 ${value} 发弹药` };
 });
 
 effectRegistry.set('equip', (_params, ctx) => {

@@ -1,8 +1,7 @@
 // ============================================================
-// CombatItemController —— 战斗道具播放装配（弹药 + 友军 + 装备）
+// CombatItemController —— 战斗道具播放装配（装备 + 友军）
 // ============================================================
 // WorldMode 唯一的战斗道具播放入口：
-//   ammo     弹药池（数值；快捷栏 AmmoPanel 显示背包弹药，弹药包已移除）
 //   equipment 装备贴片（挂主角 mesh，场景内自动渲染）
 //   友军    由 WorldMode 进战场时查 AllyPlaybackRegistry 分发
 // 方向：表现模块单向调用 Session/ItemManager，不反向。
@@ -10,11 +9,9 @@
 
 import type * as THREE from 'three';
 import type { GameSession } from '../../core/Session';
-import { AmmoStore, DEFAULT_AMMO_TYPE } from './AmmoStore';
 import { EquipmentLayer } from './EquipmentLayer';
 
 export class CombatItemController {
-  readonly ammo: AmmoStore;
   readonly equipment: EquipmentLayer;
 
   constructor(
@@ -23,13 +20,7 @@ export class CombatItemController {
     host: THREE.Object3D,
     getFacing: () => '前' | '后',
   ) {
-    this.ammo = new AmmoStore(session);
     this.equipment = new EquipmentLayer(scene, host, getFacing);
-  }
-
-  /** ★ 玩家开火弹药消耗：池空 → 拒发（返回 false，调用方跳过开火） */
-  tryFire(): boolean {
-    return this.ammo.tryFire(DEFAULT_AMMO_TYPE, 1);
   }
 
   /** 每帧驱动（装备贴片帧动画 + 贴地影子） */
