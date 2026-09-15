@@ -51,6 +51,8 @@ export interface BaseStation {
   rz: number;
   label: string;
   cb: () => void;
+  /** ★ 跟随访客身体索引（0-based，对应 setEventBodies 顺序）：站位随 NPC 走动同步 */
+  followBodyIndex?: number;
 }
 
 export interface BaseSceneOptions {
@@ -102,8 +104,18 @@ export class BaseScene {
   private activeStation: BaseStation | null = null;
   /** ★ 事件 NPC 立绘（固定位贴片；setEventNpcs 全量替换） */
   private npcQuads: FTXQuad[] = [];
-  /** ★ 访客程序化身体（舰内：球头/方盒身/关节胶囊四肢 + 脸部纹理；setEventBodies 全量替换） */
-  private eventBodies: { body: VisitorBodyRenderer; x: number; z: number }[] = [];
+  /** ★ 访客程序化身体（舰内：圆润 Q 版小人 + 脸部纹理；setEventBodies 全量替换）。
+   *  在家附近自动游荡（走 → 停 → 再走），停下时面向维维美 + 待机小动作。 */
+  private eventBodies: {
+    body: VisitorBodyRenderer;
+    x: number; z: number;
+    homeX: number; homeZ: number;
+    targetX: number; targetZ: number;
+    walking: boolean;
+    speed: number;
+    /** 当前状态剩余时间（走→驻足 / 驻足→起步） */
+    timer: number;
+  }[] = [];
   /** ★ NPC 立绘异步装载令牌（防过期加载回写） */
   private npcLoadToken = 0;
   private promptEl: HTMLDivElement;
@@ -232,7 +244,7 @@ export class BaseScene {
   }
 
   /** ★ 访客程序化身体（舰内；与事件 NPC 立绘并存）。
-   *  资产已在上层加载好 → 同步创建；每帧面向维维美待机（见 update）。 */
+   *  资产已在上层加载好 → 同步创建；在家附近自动游荡（见 update）。 */
   setEventBodies(list: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[]): void {
     for (const b of this.eventBodies) b.body.dispose();
     this.eventBodies = [];
@@ -242,7 +254,15 @@ export class BaseScene {
       body.setPosition(e.x, 0, e.z);
       body.setLocomotion(false, 0);
       body.update(0);
-      this.eventBodies.push({ body, x: e.x, z: e.z });
+      this.eventBodies.push({
+        body,
+        x: e.x, z: e.z,
+        homeX: e.x, homeZ: e.z,
+        targetX: e.x, targetZ: e.z,
+        walking: false,
+        speed: 1.6,
+        timer: 0.8 + Math.random() * 2.4, // 入场先站一会儿再开始走
+      });
     }
   }
 
@@ -341,10 +361,74 @@ export class BaseScene {
     if (this.camera) {
       for (const q of this.npcQuads) q.setBillboard(this.camera);
     }
-    // ★ 访客身体：待机步态 + 面向维维美（人走到哪看到哪）
-    for (const b of this.eventBodies) {
-      b.body.setYaw(Math.atan2(this.charPos.x - b.x, this.charPos.z - b.z));
+    // ★ 访客身体：舰内自动走动（家附近 3~8m 游荡；停下面向维维美 + 待机小动作；
+    //   对话/面板打开（uiBlocking）时原地冻结，别在交谈中走开）
+    const bodiesFrozen = this.uiBlocking?.() ?? false;
+    for (let i = 0; i < this.eventBodies.length; i++) {
+      const b = this.eventBodies[i];
+      if (!bodiesFrozen) {
+        b.timer -= dt;
+        if (b.walking) {
+          const dx = b.targetX - b.x;
+          const dz = b.targetZ - b.z;
+          const d = Math.hypot(dx, dz);
+          if (d < 0.15 || b.timer <= 0) {
+            b.walking = false;
+            b.timer = 1.2 + Math.random() * 2.6; // 驻足 1.2~3.8s
+          } else {
+            const step = Math.min(d, b.speed * dt);
+            b.x += (dx / d) * step;
+            b.z += (dz / d) * step;
+            b.body.setYaw(Math.atan2(dx, dz));
+          }
+        } else if (b.timer <= 0) {
+          // 抽新目标：家附近 3~8m 随机点（房间边界内留 ~1.5m 墙距）
+          const ang = Math.random() * Math.PI * 2;
+          const r = 3 + Math.random() * 5;
+          b.targetX = Math.max(-this.hallW / 2 + 1.5, Math.min(this.hallW / 2 - 1.5, b.homeX + Math.cos(ang) * r));
+          b.targetZ = Math.max(-ROOM_D / 2 + 1.4, Math.min(ROOM_D / 2 - 1.2, b.homeZ + Math.sin(ang) * r));
+          b.walking = true;
+          b.timer = 6; // 单段最长 6s（防卡）
+          b.speed = 1.5 + Math.random() * 0.8;
+        }
+        // 与维维美 / 其他访客的简单分离（别穿模）
+        const pdx = b.x - this.charPos.x;
+        const pdz = b.z - this.charPos.z;
+        const pd = Math.hypot(pdx, pdz);
+        if (pd < 1.1 && pd > 1e-4) {
+          b.x = this.charPos.x + (pdx / pd) * 1.1;
+          b.z = this.charPos.z + (pdz / pd) * 1.1;
+        }
+        for (let j = 0; j < this.eventBodies.length; j++) {
+          if (j === i) continue;
+          const o = this.eventBodies[j];
+          const odx = b.x - o.x;
+          const odz = b.z - o.z;
+          const od = Math.hypot(odx, odz);
+          if (od < 1.0 && od > 1e-4) {
+            b.x = o.x + (odx / od) * 1.0;
+            b.z = o.z + (odz / od) * 1.0;
+          }
+        }
+      }
+      b.body.setPosition(b.x, 0, b.z);
+      if (b.walking && !bodiesFrozen) {
+        b.body.setLocomotion(true, b.speed);
+      } else {
+        b.body.setLocomotion(false, 0);
+        // 站住时面向维维美（人走到哪看到哪）
+        const fdx = this.charPos.x - b.x;
+        const fdz = this.charPos.z - b.z;
+        if (Math.hypot(fdx, fdz) > 0.3) b.body.setYaw(Math.atan2(fdx, fdz));
+      }
       b.body.update(dt);
+      // ★ 交互站跟随（F 交谈的触发位置跟着 NPC 走）
+      for (const st of this.stations) {
+        if (st.followBodyIndex === i) {
+          st.x = b.x;
+          st.z = b.z;
+        }
+      }
     }
     // ★ 无人机编队：三帧叠加合成 + 包围角色转圈。
     //   防重叠：每层 4 架（层内 90° 间隔）、逐层半径+高度递增、层内奇偶槽再交错半径/高度，

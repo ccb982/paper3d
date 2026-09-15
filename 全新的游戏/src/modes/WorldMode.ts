@@ -31,7 +31,7 @@ import { applyShipDamage, damageShip, isShipDestroyed, reviveShip } from '../sys
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
-import { BaseScene } from '../ui/base/BaseScene';
+import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import { createButton } from '../ui/components/Button';
@@ -3247,7 +3247,7 @@ export class WorldMode implements IGameMode {
   private applyShipInteriorEvents(interior: BaseScene): void {
     if (!this.eventSystem || !this.dialogue) return;
     const fixed = this.eventSystem.fixedEvents('ship');
-    const stations = fixed.map((f) => ({
+    const stations: BaseStation[] = fixed.map((f) => ({
       x: f.x, z: f.z, rx: 2.4, rz: 2.0,
       label: this.eventSystem.label(f.event),
       cb: () => {
@@ -3263,11 +3263,14 @@ export class WorldMode implements IGameMode {
     //   有程序化身体的走 3D 身体（脸=各自纹理）；没有的退回贴片立绘。
     const bodies: { x: number; z: number; asset?: FrameAssetSource | null; style?: VisitorBodyStyle }[] = [];
     const insiders = this.visitorManager?.insiders ?? [];
+    let bodyIdx = 0; // 身体索引（仅 body 型访客递增；交互站跟随它走动）
     insiders.forEach((v, i) => {
       const a = WorldMode.VISITOR_ANCHORS[i % WorldMode.VISITOR_ANCHORS.length];
+      const style = v.def.body;
       stations.push({
         x: a.x, z: a.z, rx: 2.4, rz: 2.0,
         label: '交谈',
+        followBodyIndex: style ? bodyIdx : undefined,
         cb: () => {
           if (this.dialogue!.start(v.visitDialogue)) {
             this.pendingVisitor = v;
@@ -3277,8 +3280,9 @@ export class WorldMode implements IGameMode {
           }
         },
       });
-      if (v.def.body) {
-        bodies.push({ x: a.x, z: a.z, asset: v.anim?.source ?? null, style: v.def.body });
+      if (style) {
+        bodies.push({ x: a.x, z: a.z, asset: v.anim?.source ?? null, style });
+        bodyIdx++;
       } else {
         quads.push({ x: a.x, z: a.z, assetUrl: v.def.assetUrl });
       }

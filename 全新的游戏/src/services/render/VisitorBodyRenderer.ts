@@ -1,21 +1,18 @@
 // ============================================================
-// VisitorBodyRenderer —— 访客程序化身体（球头 + 方身 + 关节胶囊四肢）
+// VisitorBodyRenderer —— 访客程序化身体（Q 版小人）
 // ============================================================
-// 用户定调（2026-09-15）：访客没有模型 ——
-//   · 头 = 球（大头比例 0.155×身高）/ 身体 = 方盒
-//   · 四肢 = 两端半球圆柱（THREE.CapsuleGeometry，即"有头有尾的圆柱"）
-//   · 每名访客只换"脸"纹理（FTX 帧 → 头球正面的球面补丁，"糊在脸上"，按宽高比自适应）
-//
-// ★ 造型优化（2026-09-15 二版：全网调研"低模怎么才好看"后落地）：
-//   · **剪影优先**：大头/宽肩/分开的四肢 + 手（小球）/ 脚（横卧胶囊）/ 关节球，
-//     黑剪影也要能认出"人"（低模第一原则：silhouette test）；
-//   · **卡通着色**：MeshToonMaterial + 4 阶梯度贴图（NearestFilter）→ 明暗分层，
-//     比 PBR 更适合纯几何体（参考 three.js MeshToonMaterial 官方用法）；
-//   · **描边**：反向壳（BackSide 外扩 6%）深色描边，卡通轮廓、远看也立得住；
-//   · **三色配色**：身体主色 / 四肢次色 / 腰带点缀色（accent），一眼可辨；
-//   · **接地感**：脚下半透明圆形接触影（不依赖 FTX 剪影管线）；
-//   · **动作带戏**：速度越大摆幅越大（夸张）、前倾、头部反向稳定、
-//     手臂外展不穿模、待机呼吸起伏（低模"动画好看 > 模型精细"）。
+// 用户定调（2026-09-15 四/五版"彻底重做"）：不要"球上糊一张脸"的人——
+//   看起来不吉利；要**顺眼的 Q 版小人**：
+//   · 圆润豆形身体（不是方盒）+ 中头圆脸 + 围脖 + 短粗四肢、
+//     连指手套手 + 圆头鞋 —— 整体圆润、无棱角、无裸露关节缝；**不要头发**；
+//   · 脸纹理= 头球正面的**球面补丁**（"糊在脸上"、微下沉），
+//     只有脸用纹理，其余全是纯色几何 —— 一眼是"角色"，不是"面具"；
+//   · 卡通着色 `MeshToonMaterial` + 4 阶梯度 + 反向壳描边；三色配色
+//     （身体 / 四肢 / 点缀：围脖+鞋），每人一组；
+//   · 剪影优先：四肢分开、手脚收口、脚下接触影；
+//   · 动作带戏：速度越大摆幅越大、前倾、头部反向稳定、手臂外展、待机呼吸；
+//   · ★ **待机随机小动作**（舰内/路上站立时）：张望 / 点头 / 挥手 / 挪重心 /
+//     伸懒腰 / 原地小跳，随机间隔 2.5~6.5s 触发一次（包络淡入淡出）。
 //
 // 步态参数（2026-09-15 网上调研，可在 VisitorBodyStyle 覆盖）：正常成人步幅 1.4~1.6m、
 //   步频 100~130 步/分；髋摆 ±0.45 rad、摆动相膝屈 0.9 rad、肩摆 ±0.4 rad、
@@ -34,15 +31,15 @@ export interface VisitorBodyStyle {
   height?: number;
   /** 整体尺寸倍率（缺省 1.8） */
   scale?: number;
-  /** 躯干/头部颜色（hex 或 CSS；缺省米灰 #d8d2c6） */
+  /** 躯干/头颜色（hex 或 CSS；缺省米灰 #d8d2c6） */
   bodyColor?: number | string;
   /** 四肢颜色（缺省 = bodyColor 略深） */
   limbColor?: number | string;
-  /** 点缀色（腰带；缺省 = 主色深调，用于三色配色的"accent"） */
+  /** 点缀色（围脖 + 鞋；缺省 = bodyColor 深调） */
   accentColor?: number | string;
   /** 脸纹理取第几帧（缺省：优先"前"帧，否则 0） */
   faceFrame?: number;
-  /** 步幅（米/整周期；缺省 1.6）——决定步频 = 速度 / 步幅 */
+  /** 步幅（米/整周期；缺省 1.3——Q 版短腿小碎步）——决定步频 = 速度 / 步幅 */
   strideLength?: number;
   /** 髋摆动幅度（rad；缺省 0.45 ≈ 26°） */
   legSwing?: number;
@@ -56,15 +53,17 @@ export interface VisitorBodyStyle {
   torsoTwist?: number;
   /** 躯干侧摆幅度（rad；缺省 0.05） */
   torsoSway?: number;
-  /** 垂直起伏幅度（米；缺省 0.025） */
+  /** 垂直起伏幅度（米 @ 基准身高；缺省 0.025） */
   bobAmp?: number;
 }
 
 const TAU = Math.PI * 2;
-/** 脸贴片横向张角（弧度；≈126°，覆盖头球正面） */
-const FACE_PHI_SPAN = 2.2;
-/** 脸贴片纵向张角上限（弧度；≈126°，长脸纹理可到更大但封顶） */
-const FACE_THETA_SPAN = 2.2;
+/** 脸贴片横向张角（弧度；≈109°） */
+const FACE_PHI_SPAN = 1.9;
+/** 脸贴片纵向张角上限（弧度） */
+const FACE_THETA_SPAN = 1.6;
+/** 脸贴片整体下移（弧度；略微压低，额头留白） */
+const FACE_TILT = 0.12;
 /** 步频夹取（整周期/秒）：慢走下限 / 小跑上限 */
 const MIN_CYCLE_HZ = 0.5;
 const MAX_CYCLE_HZ = 2.4;
@@ -73,7 +72,9 @@ const JOINT_EASE = 12;
 /** 摆幅全开参考速度（米/秒；访客基础步速 3.2 → 越大摆得越夸张） */
 const WALK_REF_SPEED = 3.2;
 /** 反向壳描边外扩比例 */
-const OUTLINE_SCALE = 1.06;
+const OUTLINE_SCALE = 1.05;
+/** 基准身高（bobAmp 等按此缩放；= 1.8 × 默认 1.8 倍率） */
+const BASE_H = 3.24;
 
 /** 卡通梯度（4 阶明暗；模块级共享，勿释放） */
 let _toonGradient: THREE.DataTexture | null = null;
@@ -124,22 +125,29 @@ export class VisitorBodyRenderer extends FxRendererBase {
   private speed = 0;
   /** 待机计时（呼吸/张望用） */
   private idleT = 0;
+  /** ★ 待机随机小动作（站立等待时）：look/nod/wave/shift/stretch/hop */
+  private idleAction: 'none' | 'look' | 'nod' | 'wave' | 'shift' | 'stretch' | 'hop' = 'none';
+  private idleActionT = 0;
+  private idleActionDur = 0;
+  private idleActionNext = 2 + Math.random() * 3;
+  private idleSide: 1 | -1 = 1;
   /** 已销毁（异步脸纹理迟到 → 直接释放） */
   private disposed = false;
 
   constructor(scene: THREE.Scene, faceAsset: FrameAssetSource | null, style: VisitorBodyStyle = {}) {
     super();
     const H = (style.height ?? 1.8) * (style.scale ?? 1.8);
-    this.strideLength = style.strideLength ?? 1.6;
+    const sizeK = H / BASE_H;
+    this.strideLength = style.strideLength ?? 1.3;
     this.legSwing = style.legSwing ?? 0.45;
     this.kneeBend = style.kneeBend ?? 0.9;
     this.armSwing = style.armSwing ?? 0.4;
     this.elbowBend = style.elbowBend ?? 0.18;
     this.torsoTwist = style.torsoTwist ?? 0.08;
     this.torsoSway = style.torsoSway ?? 0.05;
-    this.bobAmp = style.bobAmp ?? 0.025;
+    this.bobAmp = (style.bobAmp ?? 0.025) * sizeK;
 
-    // ★ 三色配色：主色（躯干/头）/ 次色（四肢）/ 点缀色（腰带）
+    // ★ 配色：主色（身体/头）/ 次色（四肢）/ 点缀（围脖+鞋）
     const bodyColor = new THREE.Color(style.bodyColor ?? 0xd8d2c6);
     const limbColor = new THREE.Color(style.limbColor ?? bodyColor.clone().multiplyScalar(0.82));
     const accentColor = new THREE.Color(style.accentColor ?? bodyColor.clone().multiplyScalar(0.55));
@@ -153,18 +161,18 @@ export class VisitorBodyRenderer extends FxRendererBase {
     });
     this.materials.push(bodyMat, limbMat, accentMat, this.outlineMat, faceMat);
 
-    // ---- 尺寸（大头卡通比例；剪影优先：四肢分开、头肩清晰）----
-    const legLen = H * 0.4;
-    const torsoH = H * 0.28;
-    const torsoW = H * 0.3;
-    const torsoD = H * 0.17;
-    const headR = H * 0.155;
-    const armR = H * 0.045;
-    const legR = H * 0.06;
-    const upperArm = H * 0.15;
-    const foreArm = H * 0.14;
-    const thigh = H * 0.2;
-    const shin = H * 0.2;
+    // ---- ★ Q 版比例（圆润豆身 + 中头，无头发）：头直径 ≈ 0.34H、总高 ≈ H ----
+    const legLen = H * 0.33;
+    const bodyH = H * 0.36;     // 身体胶囊总高
+    const bodyR = H * 0.13;     // 身体横半径
+    const bodyFlat = 0.78;      // 前后压扁（椭圆截面）
+    const headR = H * 0.17;
+    const armR = H * 0.032;
+    const legR = H * 0.05;
+    const upperArm = H * 0.1;
+    const foreArm = H * 0.09;
+    const thigh = H * 0.165;
+    const shin = H * 0.165;
     this.hipY = legLen;
     this.headR = headR;
 
@@ -173,63 +181,73 @@ export class VisitorBodyRenderer extends FxRendererBase {
     this.body.position.y = this.hipY;
     this.root.add(this.body);
 
-    // ★ 接触影（接地感；不随身体起伏）
+    // 接触影（接地感；不随身体起伏）
     const shadowMat = new THREE.MeshBasicMaterial({
       color: 0x000000, transparent: true, opacity: 0.26, depthWrite: false,
     });
-    const shadow = new THREE.Mesh(new THREE.CircleGeometry(H * 0.13, 20), shadowMat);
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(H * 0.17, 20), shadowMat);
     shadow.rotation.x = -Math.PI / 2;
     shadow.position.y = 0.02;
     this.root.add(shadow);
     this.materials.push(shadowMat);
 
-    // 躯干（方盒）+ 腰带（点缀色）
-    this.addPart(this.body, new THREE.BoxGeometry(torsoW, torsoH, torsoD), bodyMat, 0, torsoH / 2, 0);
-    this.addPart(
+    // ★ 身体 = 圆润豆形（胶囊 + 前后压扁），不是方盒
+    const torso = this.addPart(
       this.body,
-      new THREE.BoxGeometry(torsoW * 1.06, torsoH * 0.13, torsoD * 1.1), accentMat,
-      0, torsoH * 0.22, 0, 0,
+      new THREE.CapsuleGeometry(bodyR, Math.max(0.01, bodyH - bodyR * 2), 6, 14),
+      bodyMat, 0, bodyH / 2, 0,
     );
+    torso.scale.z = bodyFlat;
 
-    // 头部（球 + 球面脸补丁；headPivot 用于反向稳定/待机张望）
-    const headY = torsoH + headR * 0.85;
+    // ★ 围脖（点缀色 torus，盖住颈缝）
+    const collar = this.addPart(
+      this.body,
+      new THREE.TorusGeometry(headR * 0.52, headR * 0.1, 8, 20), accentMat,
+      0, bodyH * 0.98, 0,
+    );
+    collar.rotation.x = Math.PI / 2;
+    collar.scale.z = bodyFlat;
+
+    // ★ 头部：圆脸球 + 球面脸补丁（无头发；headPivot 用于反向稳定/待机张望/点头）
+    const headY = bodyH + headR * 0.75;
     this.headPivot = new THREE.Group();
     this.headPivot.position.y = headY;
     this.body.add(this.headPivot);
-    this.addPart(this.headPivot, new THREE.SphereGeometry(headR, 20, 14), bodyMat, 0, 0, 0);
+    const head = this.addPart(this.headPivot, new THREE.SphereGeometry(headR, 22, 16), bodyMat, 0, 0, 0);
+    head.scale.set(1.0, 1.04, 1.0);
     this.faceMesh = new THREE.Mesh(this.makeFaceGeometry(1), faceMat);
     this.faceMesh.visible = false;
     this.headPivot.add(this.faceMesh);
     if (faceAsset) void this.loadFace(faceAsset, style.faceFrame);
 
-    // ---- 四肢（胶囊 + 关节球 + 手脚；肩/髋轴心 → 肘/膝轴心）----
-    const shoulderX = torsoW / 2 + armR * 1.2;
-    const shoulderY = torsoH * 0.86;
+    // ---- 四肢：短粗胶囊 + 关节球 + 连指手套 + 圆头鞋 ----
+    const shoulderX = bodyR * 0.95 + armR * 1.15;
+    const shoulderY = bodyH * 0.74;
     this.shoulderL = this.addLimbRoot(-shoulderX, shoulderY, upperArm, armR, limbMat);
     this.shoulderR = this.addLimbRoot(shoulderX, shoulderY, upperArm, armR, limbMat);
-    this.elbowL = this.addJoint(this.shoulderL, -upperArm, armR * 1.05, limbMat);
-    this.elbowR = this.addJoint(this.shoulderR, -upperArm, armR * 1.05, limbMat);
-    this.addPart(this.elbowL, new THREE.CapsuleGeometry(armR, Math.max(0.01, foreArm - armR * 2), 4, 8), limbMat, 0, -foreArm / 2, 0);
-    this.addPart(this.elbowR, new THREE.CapsuleGeometry(armR, Math.max(0.01, foreArm - armR * 2), 4, 8), limbMat, 0, -foreArm / 2, 0);
-    // 手（小球，剪影末端收口）
-    this.addPart(this.elbowL, new THREE.SphereGeometry(armR * 1.15, 10, 8), limbMat, 0, -foreArm, 0);
-    this.addPart(this.elbowR, new THREE.SphereGeometry(armR * 1.15, 10, 8), limbMat, 0, -foreArm, 0);
+    this.elbowL = this.addJoint(this.shoulderL, -upperArm, armR * 1.08, limbMat);
+    this.elbowR = this.addJoint(this.shoulderR, -upperArm, armR * 1.08, limbMat);
+    this.addPart(this.elbowL, new THREE.CapsuleGeometry(armR, Math.max(0.01, foreArm - armR * 2), 4, 10), limbMat, 0, -foreArm / 2, 0);
+    this.addPart(this.elbowR, new THREE.CapsuleGeometry(armR, Math.max(0.01, foreArm - armR * 2), 4, 10), limbMat, 0, -foreArm / 2, 0);
+    // 连指手套（圆手，剪影收口）
+    this.addPart(this.elbowL, new THREE.SphereGeometry(armR * 1.45, 12, 10), limbMat, 0, -foreArm, 0);
+    this.addPart(this.elbowR, new THREE.SphereGeometry(armR * 1.45, 12, 10), limbMat, 0, -foreArm, 0);
 
-    const hipX = torsoW * 0.28;
+    const hipX = bodyR * 0.55;
     this.hipL = this.addLimbRoot(-hipX, 0, thigh, legR, limbMat);
     this.hipR = this.addLimbRoot(hipX, 0, thigh, legR, limbMat);
-    this.kneeL = this.addJoint(this.hipL, -thigh, legR * 1.05, limbMat);
-    this.kneeR = this.addJoint(this.hipR, -thigh, legR * 1.05, limbMat);
-    this.addPart(this.kneeL, new THREE.CapsuleGeometry(legR, Math.max(0.01, shin - legR * 2), 4, 8), limbMat, 0, -shin / 2, 0);
-    this.addPart(this.kneeR, new THREE.CapsuleGeometry(legR, Math.max(0.01, shin - legR * 2), 4, 8), limbMat, 0, -shin / 2, 0);
-    // 脚（横卧胶囊，向前伸出；剪影落地）
+    this.kneeL = this.addJoint(this.hipL, -thigh, legR * 1.08, limbMat);
+    this.kneeR = this.addJoint(this.hipR, -thigh, legR * 1.08, limbMat);
+    this.addPart(this.kneeL, new THREE.CapsuleGeometry(legR, Math.max(0.01, shin - legR * 2), 4, 10), limbMat, 0, -shin / 2, 0);
+    this.addPart(this.kneeR, new THREE.CapsuleGeometry(legR, Math.max(0.01, shin - legR * 2), 4, 10), limbMat, 0, -shin / 2, 0);
+    // 圆头鞋（点缀色，横卧胶囊向前）
     for (const knee of [this.kneeL, this.kneeR]) {
-      const foot = this.addPart(
+      const shoe = this.addPart(
         knee,
-        new THREE.CapsuleGeometry(legR * 0.78, legR * 1.7, 4, 8), limbMat,
-        0, -shin + legR * 0.35, legR * 1.15,
+        new THREE.CapsuleGeometry(legR * 0.9, legR * 1.9, 5, 12), accentMat,
+        0, -shin + legR * 0.3, legR * 1.25,
       );
-      foot.rotation.x = Math.PI / 2; // 胶囊轴 → 前后
+      shoe.rotation.x = Math.PI / 2;
     }
 
     scene.add(this.root);
@@ -256,8 +274,8 @@ export class VisitorBodyRenderer extends FxRendererBase {
     const pivot = new THREE.Group();
     pivot.position.set(x, y, 0);
     this.body.add(pivot);
-    this.addPart(pivot, new THREE.SphereGeometry(r * 1.05, 12, 10), mat); // 关节球（藏接缝）
-    this.addPart(pivot, new THREE.CapsuleGeometry(r, Math.max(0.01, segLen - r * 2), 4, 8), mat, 0, -segLen / 2, 0);
+    this.addPart(pivot, new THREE.SphereGeometry(r * 1.12, 12, 10), mat); // 关节球（藏接缝）
+    this.addPart(pivot, new THREE.CapsuleGeometry(r, Math.max(0.01, segLen - r * 2), 4, 10), mat, 0, -segLen / 2, 0);
     return pivot;
   }
 
@@ -270,15 +288,15 @@ export class VisitorBodyRenderer extends FxRendererBase {
     return pivot;
   }
 
-  /** ★ 脸贴片几何：头球正面的球面补丁（以 +Z 为中线；微大半径贴附，"糊在脸上"）。
-   *  横向张角固定，纵向张角按纹理宽高比自适应（长脸盖更高、宽脸盖更矮）。 */
+  /** ★ 脸贴片几何：头球正面的球面补丁（以 +Z 为中线、整体压低到发盖下；
+   *  横向张角固定，纵向张角按纹理宽高比自适应）。 */
   private makeFaceGeometry(aspect: number): THREE.SphereGeometry {
     const w = FACE_PHI_SPAN;
-    const h = Math.min(FACE_THETA_SPAN, w / Math.max(0.35, aspect));
+    const h = Math.min(FACE_THETA_SPAN, w / Math.max(0.35, aspect) * 0.85);
     return new THREE.SphereGeometry(
-      this.headR * 1.03, 24, 16,
+      this.headR * 1.02, 24, 16,
       Math.PI / 2 - w / 2, w,
-      Math.PI / 2 - h / 2, h,
+      Math.PI / 2 + FACE_TILT - h / 2, h,
     );
   }
 
@@ -310,15 +328,29 @@ export class VisitorBodyRenderer extends FxRendererBase {
     this.speed = moving && speed > 0.05 ? speed : 0;
   }
 
-  /** ★ 每帧关节动画：相位 = 2π·(速度/步幅)，正弦驱动四肢 + 躯干反相 + 待机呼吸 */
+  /** ★ 每帧关节动画：相位 = 2π·(速度/步幅)，正弦驱动四肢 + 躯干反相 + 待机呼吸/随机动作 */
   update(dt: number): void {
     const moving = this.speed > 0.05;
     const speedN = Math.min(1, this.speed / WALK_REF_SPEED);
     if (moving) {
       const hz = Math.min(MAX_CYCLE_HZ, Math.max(MIN_CYCLE_HZ, this.speed / this.strideLength));
       this.phase += dt * TAU * hz;
+      // 走动打断待机动作
+      this.idleAction = 'none';
+      this.idleActionNext = 2 + Math.random() * 3;
     } else {
       this.idleT += dt;
+      // ★ 待机随机小动作调度：动作播完 → 随机间隔后再抽一个
+      if (this.idleAction !== 'none') {
+        this.idleActionT += dt;
+        if (this.idleActionT >= this.idleActionDur) {
+          this.idleAction = 'none';
+          this.idleActionNext = 2.5 + Math.random() * 4;
+        }
+      } else {
+        this.idleActionNext -= dt;
+        if (this.idleActionNext <= 0) this.startIdleAction();
+      }
     }
     const s = Math.sin(this.phase);
     const k = 1 - Math.exp(-dt * JOINT_EASE);
@@ -332,31 +364,97 @@ export class VisitorBodyRenderer extends FxRendererBase {
     const armA = moving ? s * this.armSwing * swing : 0;
     const armB = moving ? -s * this.armSwing * swing : 0;
 
-    this.hipL.rotation.x = ease(this.hipL.rotation.x, legA);
-    this.hipR.rotation.x = ease(this.hipR.rotation.x, legB);
-    this.kneeL.rotation.x = ease(this.kneeL.rotation.x, kneeA);
-    this.kneeR.rotation.x = ease(this.kneeR.rotation.x, kneeB);
-    this.shoulderL.rotation.x = ease(this.shoulderL.rotation.x, armA);
-    this.shoulderR.rotation.x = ease(this.shoulderR.rotation.x, armB);
-    // 手臂外展（不贴身体、剪影更清楚）
-    this.shoulderL.rotation.z = ease(this.shoulderL.rotation.z, moving ? -0.14 : -0.1);
-    this.shoulderR.rotation.z = ease(this.shoulderR.rotation.z, moving ? 0.14 : 0.1);
-    // 肘：基础屈曲 + 前摆略增（负 X = 前摆方向）
-    this.elbowL.rotation.x = ease(this.elbowL.rotation.x, this.elbowBend + Math.max(0, -armA) * 0.3);
-    this.elbowR.rotation.x = ease(this.elbowR.rotation.x, this.elbowBend + Math.max(0, -armB) * 0.3);
-    // 躯干：前倾（速度越大越倾）+ 扭转 + 侧摆
-    this.body.rotation.x = ease(this.body.rotation.x, moving ? 0.05 + speedN * 0.09 : 0);
-    this.body.rotation.y = ease(this.body.rotation.y, moving ? s * this.torsoTwist : Math.sin(this.idleT * 0.9) * 0.04);
-    this.body.rotation.z = ease(this.body.rotation.z, moving ? -s * this.torsoSway : 0);
-    // 头：反向稳定（躯干转、头稳住）+ 待机张望
-    this.headPivot.rotation.y = ease(
-      this.headPivot.rotation.y,
-      moving ? -s * this.torsoTwist * 0.6 : Math.sin(this.idleT * 0.6) * 0.08,
-    );
-    this.headPivot.rotation.z = ease(this.headPivot.rotation.z, moving ? s * this.torsoSway * 0.5 : 0);
-    // 起伏：走路 = 每周期两次；待机 = 呼吸微起伏
-    const bob = moving ? Math.sin(this.phase * 2) * this.bobAmp : Math.sin(this.idleT * 2.2) * 0.012;
-    this.body.position.y = ease(this.body.position.y, this.hipY + bob);
+    // ---- 目标姿态（先算好；待机动作叠加后再统一阻尼跟随）----
+    let hipLx = legA, hipRx = legB, kneeLx = kneeA, kneeRx = kneeB;
+    let shLx = armA, shRx = armB;
+    let shLz = moving ? -0.22 : -0.16;
+    let shRz = moving ? 0.22 : 0.16;
+    let elLx = this.elbowBend + Math.max(0, -armA) * 0.3;
+    let elRx = this.elbowBend + Math.max(0, -armB) * 0.3;
+    const bodyRx = moving ? 0.05 + speedN * 0.09 : 0;
+    let bodyRy = moving ? s * this.torsoTwist : Math.sin(this.idleT * 0.9) * 0.04;
+    let bodyRz = moving ? -s * this.torsoSway : 0;
+    let headRy = moving ? -s * this.torsoTwist * 0.6 : Math.sin(this.idleT * 0.6) * 0.08;
+    let headRz = moving ? s * this.torsoSway * 0.5 : 0;
+    let headRx = 0;
+    const bob = moving ? Math.sin(this.phase * 2) * this.bobAmp : Math.sin(this.idleT * 2.2) * this.bobAmp * 0.5;
+    let bodyY = this.hipY + bob;
+
+    // ★ 待机随机小动作（包络 0→1→0，淡入淡出；不打断正常呼吸）
+    if (!moving && this.idleAction !== 'none') {
+      const p = Math.min(1, this.idleActionT / this.idleActionDur);
+      const env = Math.sin(Math.PI * p);
+      switch (this.idleAction) {
+        case 'look': // 张望：脑袋转向一侧
+          headRy += env * 0.7 * this.idleSide;
+          break;
+        case 'nod': // 点头
+          headRx += env * 0.4;
+          break;
+        case 'wave': // 挥手：单臂抬起左右摆
+          if (this.idleSide > 0) {
+            shRz = 2.15 + Math.sin(this.idleActionT * 13) * 0.22;
+            shRx = 0.25;
+            elRx = 0.35;
+          } else {
+            shLz = -2.15 - Math.sin(this.idleActionT * 13) * 0.22;
+            shLx = 0.25;
+            elLx = 0.35;
+          }
+          headRy += this.idleSide * 0.2 * env;
+          break;
+        case 'stretch': // 伸懒腰：双臂上举 + 后仰
+          shLz = -2.5;
+          shRz = 2.5;
+          shLx = 0.15;
+          shRx = 0.15;
+          headRx -= 0.25 * env;
+          break;
+        case 'shift': // 挪重心：左右晃一下
+          bodyRz += env * 0.08 * this.idleSide;
+          break;
+        case 'hop': { // 原地小跳
+          const hop = 4 * p * (1 - p);
+          bodyY += hop * this.bobAmp * 3;
+          kneeLx += hop * 0.35;
+          kneeRx += hop * 0.35;
+          break;
+        }
+      }
+    }
+
+    this.hipL.rotation.x = ease(this.hipL.rotation.x, hipLx);
+    this.hipR.rotation.x = ease(this.hipR.rotation.x, hipRx);
+    this.kneeL.rotation.x = ease(this.kneeL.rotation.x, kneeLx);
+    this.kneeR.rotation.x = ease(this.kneeR.rotation.x, kneeRx);
+    this.shoulderL.rotation.x = ease(this.shoulderL.rotation.x, shLx);
+    this.shoulderR.rotation.x = ease(this.shoulderR.rotation.x, shRx);
+    this.shoulderL.rotation.z = ease(this.shoulderL.rotation.z, shLz);
+    this.shoulderR.rotation.z = ease(this.shoulderR.rotation.z, shRz);
+    this.elbowL.rotation.x = ease(this.elbowL.rotation.x, elLx);
+    this.elbowR.rotation.x = ease(this.elbowR.rotation.x, elRx);
+    this.body.rotation.x = ease(this.body.rotation.x, bodyRx);
+    this.body.rotation.y = ease(this.body.rotation.y, bodyRy);
+    this.body.rotation.z = ease(this.body.rotation.z, bodyRz);
+    this.headPivot.rotation.x = ease(this.headPivot.rotation.x, headRx);
+    this.headPivot.rotation.y = ease(this.headPivot.rotation.y, headRy);
+    this.headPivot.rotation.z = ease(this.headPivot.rotation.z, headRz);
+    this.body.position.y = ease(this.body.position.y, bodyY);
+  }
+
+  /** 抽一个待机小动作（时长/方向随机） */
+  private startIdleAction(): void {
+    const r = Math.random();
+    const a = r < 0.24 ? 'look'
+      : r < 0.45 ? 'nod'
+      : r < 0.63 ? 'wave'
+      : r < 0.8 ? 'shift'
+      : r < 0.92 ? 'stretch'
+      : 'hop';
+    this.idleAction = a;
+    this.idleActionT = 0;
+    this.idleActionDur = a === 'hop' ? 0.7 : a === 'nod' ? 1.2 : 1.6;
+    this.idleSide = Math.random() < 0.5 ? -1 : 1;
   }
 
   /** 脸纹理：FTX 资产首帧（或"前"帧）CPU 合成 → CanvasTexture */

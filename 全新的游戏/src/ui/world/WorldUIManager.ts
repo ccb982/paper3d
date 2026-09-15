@@ -380,17 +380,18 @@ export class WorldUIManager extends BaseInteractionUI {
     el.textContent = text;
   }
 
-  /** ★ 访客到访提示（金色横幅：停留 seconds 秒后淡出；与敌袭横幅互不干扰） */
-  showVisitorNotice(text: string, seconds = 12): void {
+  /** ★ 访客到访提示（金色大横幅：停留 seconds 秒后淡出；与敌袭横幅互不干扰） */
+  showVisitorNotice(text: string, seconds = 14): void {
     if (!this.visitorNoticeEl) {
       const el = document.createElement('div');
       el.style.cssText = [
-        'position:fixed', 'top:74px', 'left:50%', 'transform:translateX(-50%)',
+        'position:fixed', 'top:84px', 'left:50%', 'transform:translateX(-50%)',
         'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
-        'font-size:16px', 'font-weight:bold', 'letter-spacing:2px',
-        'padding:6px 18px', 'border-radius:4px',
-        'background:rgba(26,20,8,0.62)', 'color:#ffd87a',
-        'text-shadow:0 1px 3px #000, 0 0 10px rgba(240,200,110,0.55)',
+        'font-size:30px', 'font-weight:bold', 'letter-spacing:4px',
+        'padding:14px 40px', 'border-radius:10px',
+        'background:rgba(28,21,7,0.78)', 'color:#ffd87a',
+        'border:1px solid rgba(255,216,122,0.45)',
+        'text-shadow:0 2px 8px #000, 0 0 22px rgba(255,210,120,0.9)',
         'transition:opacity 0.4s',
       ].join(';');
       document.body.appendChild(el);
