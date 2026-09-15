@@ -21,7 +21,8 @@ export abstract class SidePanel<P = object> extends Panel<P> {
 
   protected build(opts: PanelRenderOptions): HTMLElement {
     const wrap = document.createElement('div');
-    // ★ 复用 Panel.header() 内置的「✕ 关闭」按钮（经 ctx.close() 触发宿主 close）
+    // ★ 复用 Panel.header() 的标题栏（左上角统一「返回」按钮，
+    //   经 ctx.close() 触发宿主 close）
     wrap.appendChild(this.header(this.title()));
     wrap.appendChild(this.body(opts));
     return wrap;

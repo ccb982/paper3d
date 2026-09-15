@@ -13,6 +13,7 @@ import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { CraftModule, slotCss } from './CraftModule';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { compositeFrameToCanvas } from '../shared/ftxFrameToCanvas';
+import { createBackButton } from '../components/BackButton';
 import { applyShaderDebug } from '../../services/render/GameRenderer';
 
 const HSL_VERT = `
@@ -146,16 +147,11 @@ export class CraftingOverlay {
       this.dragState.moved = 0;
     }, true);
 
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕ 关闭';
-    closeBtn.style.cssText = [
-      'position:absolute', 'top:12px', 'right:12px', 'z-index:300',
-      'padding:8px 16px', 'font-size:14px', 'cursor:pointer',
-      'color:#8af', 'background:rgba(20,20,40,0.85)',
-      'border:1px solid #4466aa', 'border-radius:6px',
-    ].join(';');
-    closeBtn.addEventListener('click', () => this.hide());
-    this.root.appendChild(closeBtn);
+    // ★ 统一返回按钮（左上角；取代旧的「✕ 关闭」文字按钮）
+    this.root.appendChild(createBackButton({
+      onClick: () => this.hide(),
+      style: 'position:absolute;top:14px;left:14px;z-index:300;',
+    }));
 
     window.addEventListener('resize', this.onResize);
   }

@@ -13,6 +13,7 @@
 import type { PanelDef } from './Panel';
 import { Panel } from './Panel';
 import type { PanelRenderOptions } from './types';
+import { createBackButton } from '../components/BackButton';
 
 interface StackEntry {
   id: string;
@@ -148,26 +149,23 @@ export class PanelManager {
       const wrapper = document.createElement('div');
       wrapper.style.cssText = 'background:rgba(20,20,40,0.95);border:1px solid #4466aa;border-radius:8px;padding:16px;min-width:300px;max-width:90vw;max-height:90vh;overflow-y:auto;';
       const head = document.createElement('div');
-      head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
+      head.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;';
+      // ★ 统一返回按钮（面板左上角；取代旧的「✕ 关闭」文字按钮）
+      if (top.closable) {
+        head.appendChild(createBackButton({ onClick: () => this.close(top.id) }));
+      }
       const t = document.createElement('h3');
-      t.style.cssText = 'color:#8af;margin:0;';
+      t.style.cssText = 'color:#8af;margin:0;flex:1;min-width:0;';
       t.textContent = top.title;
       head.appendChild(t);
       const actions = document.createElement('div');
-      actions.style.cssText = 'display:flex;gap:8px;';
+      actions.style.cssText = 'display:flex;gap:8px;flex:none;';
       for (const a of top.actions ?? []) {
         const btn = document.createElement('button');
         btn.textContent = a.label ?? '';
         btn.style.cssText = 'padding:4px 12px;font-size:12px;background:transparent;color:#8af;border:1px solid #4466aa;border-radius:6px;cursor:pointer;';
         btn.addEventListener('click', a.onClick);
         actions.appendChild(btn);
-      }
-      if (top.closable) {
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '✕ 关闭';
-        closeBtn.style.cssText = 'padding:4px 12px;font-size:12px;background:transparent;color:#8af;border:1px solid #4466aa;border-radius:6px;cursor:pointer;';
-        closeBtn.addEventListener('click', () => this.close(top.id));
-        actions.appendChild(closeBtn);
       }
       head.appendChild(actions);
       wrapper.appendChild(head);

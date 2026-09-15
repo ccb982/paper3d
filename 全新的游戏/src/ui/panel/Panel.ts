@@ -9,6 +9,7 @@
 // ============================================================
 
 import type { PanelAction, PanelRenderOptions } from './types';
+import { createBackButton } from '../components/BackButton';
 
 /** 声明式面板定义 */
 export interface PanelDef {
@@ -50,16 +51,21 @@ export abstract class Panel<P = undefined> {
     this.ctx.close();
   }
 
-  /** 便捷：渲染标题栏（标题 + 关闭按钮） */
+  /**
+   * 便捷：渲染标题栏（★ 统一「返回」按钮 + 标题 + 右侧动作）。
+   * 返回按钮固定在**面板左上角**（2026-09-15 统一），语义 = 关闭本面板；
+   * 旧的「✕ 关闭」文字按钮已被它取代。
+   */
   protected header(title: string, extraActions: PanelAction[] = []): HTMLElement {
     const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;';
+    head.appendChild(createBackButton({ onClick: () => this.close() }));
     const h = document.createElement('h3');
-    h.style.cssText = 'color:#8af;margin:0;';
+    h.style.cssText = 'color:#8af;margin:0;flex:1;min-width:0;';
     h.textContent = title;
     head.appendChild(h);
     const actions = document.createElement('div');
-    actions.style.cssText = 'display:flex;gap:8px;';
+    actions.style.cssText = 'display:flex;gap:8px;flex:none;';
     for (const a of extraActions) {
       const btn = document.createElement('button');
       btn.textContent = a.label ?? '';
@@ -67,11 +73,6 @@ export abstract class Panel<P = undefined> {
       btn.addEventListener('click', a.onClick);
       actions.appendChild(btn);
     }
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = '✕ 关闭';
-    closeBtn.style.cssText = 'padding:4px 12px;font-size:12px;background:transparent;color:#8af;border:1px solid #4466aa;border-radius:6px;cursor:pointer;';
-    closeBtn.addEventListener('click', () => this.close());
-    actions.appendChild(closeBtn);
     head.appendChild(actions);
     return head;
   }

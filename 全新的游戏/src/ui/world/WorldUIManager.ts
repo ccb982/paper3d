@@ -25,6 +25,7 @@ import { AllyHud } from '../../services/ui/AllyHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
+import { createBackButton } from '../components/BackButton';
 import { CSS } from '../shared/UIConstants';
 import { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import type { FinalStats } from '../../services/combat/FinalStats';
@@ -633,19 +634,17 @@ export class WorldUIManager extends BaseInteractionUI {
     const content = document.createElement('div');
     content.className = 'ui-panel-inner';
 
-    // 标题 + 手动关闭按钮
+    // ★ 标题栏：统一返回按钮（左上角）+ 标题
     const head = document.createElement('div');
-    head.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+    head.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    head.appendChild(createBackButton({
+      onClick: () => this.closePanel('inventory-panel'),
+    }));
     const title = document.createElement('div');
     title.className = CSS.panelTitle;
     title.style.marginBottom = '0';
     title.textContent = '背包';
     head.appendChild(title);
-    const closeBtn = createButton({
-      label: '✕ 关闭', size: 'sm', style: 'ghost',
-      onClick: () => this.closePanel('inventory-panel'),
-    });
-    head.appendChild(closeBtn);
     content.appendChild(head);
 
     // ★ 独立背包模块渲染（标签页 + 网格）—— 渲染进独立子容器，避免清空标题栏
