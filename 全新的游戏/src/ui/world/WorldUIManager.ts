@@ -135,7 +135,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
   /** 每帧更新（高频调用） */
   update(dt: number, ctx: WorldUIState): void {
-    this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+    this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities, ctx.swarm);
     // ★ 舰船受击报警：横幅脉冲闪烁 + 红晕随剩余时间渐隐
     if (this.shipAlertTimer > 0) {
       this.shipAlertTimer -= dt;
@@ -152,7 +152,7 @@ export class WorldUIManager extends BaseInteractionUI {
     }
     // ★ 世界地图面板（打开时才重绘）
     if (this.mapPanel?.isOpen) {
-      this.mapPanel.update(dt, ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities);
+      this.mapPanel.update(dt, ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities, ctx.swarm);
     }
     // ★ 航行操船期：战斗 HUD（血条/快捷栏/友军列表）不绘制也不更新
     if (this.combatHudVisible) {

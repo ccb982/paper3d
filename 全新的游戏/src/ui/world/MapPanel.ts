@@ -10,12 +10,17 @@
 // 交互：
 //   · 滚轮缩放（px/米）、拖拽平移（拖动后停止跟随玩家）
 //   · 「回到玩家」重新跟随；M / Esc 关闭
-// 标记：白=玩家 青=舰船 黄=NPC 红=敌人（仅已探索格）
+// 标记：白=玩家 青=舰船 黄=NPC 红=敌人
+//   ★ 敌人（2026-09-15）：只播报视野半径（LOD_MAX_DIST=90m = lod3 边界）内的；
+//     超过即 lod3、实体不渲染 → 不留"记忆敌情"。与小地图完全一致。
+//   ★ 敌情来源 = entities（35m 内已升格的实体）+ swarm 代理池（35m 外的远层敌人）；
+//     只遍历 entities 会让 90m 规则形同虚设（实际只看得到 35m 内）。
 // ============================================================
 
 import type { EntityBase } from '../../entity/EntityBase';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+import { LOD_MAX_DIST } from '../../services/lod';
 
 /** 探索记忆（Minimap 实现；地形记录由 RasterMap 提供——地图不再自建彩色表） */
 export interface MapPanelMemory {
@@ -29,6 +34,17 @@ const CANVAS_H = 620;
 const DARK: [number, number, number] = [6, 9, 15];
 const MIN_SCALE = 0.6;
 const MAX_SCALE = 12;
+/** 重绘节流（秒）：跟随玩家时按 ~8Hz 重绘即可（原先跟随每帧置 dirty → 节流被完全废掉） */
+const REDRAW_SEC = 0.12;
+/** ★ 采样预算（离屏像素数上限）：1 离屏像素 = step 米。
+ *  原先离屏恒为 1px/1m，`vw×vh` 随缩小按平方爆炸（scale=0.6 → 1667×1034 = 172 万像素，
+ *  每帧全采样）。超预算就降采样（step>1），`drawImage` 仍按用户缩放拉伸 →
+ *  缩得很小时只是"1 像素代表几米"，视觉等价（画布本就是 image-rendering:pixelated）。
+ *  默认 scale=3 → 334×207 = 6.9 万 < 预算 → step=1，观感零变化。 */
+const MAX_SAMPLE_PX = 120_000;
+/** ★ 视野半径平方（= LOD_MAX_DIST 的平方，与 Minimap.viewRadius 同源）：
+ *  两图统一 —— 只播报 ≤90m（lod3 边界以内）的敌人，超过即 lod3、实体本就不渲染。 */
+const SIGHT_R_SQ = LOD_MAX_DIST * LOD_MAX_DIST;
 
 export class MapPanel {
   readonly root: HTMLDivElement;
@@ -185,19 +201,30 @@ export class MapPanel {
     this.root.remove();
   }
 
-  /** 每帧驱动（打开时；重绘节流 ~8Hz，拖拽/缩放立即） */
-  update(dt: number, px: number, pz: number, yaw: number, entities: EntityBase[]): void {
+  /** 每帧驱动（打开时；重绘节流 ~8Hz，拖拽/缩放立即）
+   *  `swarm` = 蜂群代理池（远层敌人；可空）：>35m 的敌人不是 EntityBase，
+   *  只遍历 entities 会让大地图实际只看得到 35m 内（2026-09-15 用户反馈修复）。 */
+  update(
+    dt: number,
+    px: number,
+    pz: number,
+    yaw: number,
+    entities: EntityBase[],
+    swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
+  ): void {
     if (!this.open_) return;
     if (this.follow) {
+      // ★ 跟随：只更新中心，**不再每帧置 dirty** —— 原先这里每帧 dirty=true，
+      //   把下面的 0.12s 节流完全废掉，整幅重绘以 60Hz 空转（大地图掉到十几帧的主因）。
+      //   跟随由节流按 ~8Hz 驱动足够（地图不是实时仪表），拖拽/缩放仍走 dirty 立即重绘。
       this.centerX = px;
       this.centerZ = pz;
-      this.dirty = true;
     }
     this.redrawAccum += dt;
-    if (this.dirty || this.redrawAccum >= 0.12) {
+    if (this.dirty || this.redrawAccum >= REDRAW_SEC) {
       this.redrawAccum = 0;
       this.dirty = false;
-      this.render(px, pz, yaw, entities);
+      this.render(px, pz, yaw, entities, swarm);
     }
   }
 
@@ -205,26 +232,38 @@ export class MapPanel {
   // 渲染
   // ============================================================
 
-  private render(px: number, pz: number, yaw: number, entities: EntityBase[]): void {
+  private render(
+    px: number,
+    pz: number,
+    yaw: number,
+    entities: EntityBase[],
+    swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
+  ): void {
     const vw = Math.max(8, Math.ceil(CANVAS_W / this.scale));
     const vh = Math.max(8, Math.ceil(CANVAS_H / this.scale));
+    // ★ 采样预算闸门：vw*vh 超上限 → 1 个离屏像素代表 step 米（防缩小时像素数平方爆炸）
+    const step = Math.max(1, Math.ceil(Math.sqrt((vw * vh) / MAX_SAMPLE_PX)));
+    const ow = Math.max(8, Math.ceil(vw / step));
+    const oh = Math.max(8, Math.ceil(vh / step));
     const x0 = Math.floor(this.centerX - vw / 2);
     const z0 = Math.floor(this.centerZ - vh / 2);
 
-    // 1m/px 底图（持久表；无记录 = 未探索暗色）
-    if (this.off.width !== vw || this.off.height !== vh) {
-      this.off.width = vw;
-      this.off.height = vh;
+    // 离屏底图（1 离屏像素 = step 米；持久表取色，无记录 = 未探索暗色）
+    if (this.off.width !== ow || this.off.height !== oh) {
+      this.off.width = ow;
+      this.off.height = oh;
       this.img = null;
     }
-    if (!this.img) this.img = this.offCtx.createImageData(vw, vh);
+    if (!this.img) this.img = this.offCtx.createImageData(ow, oh);
     const img = this.img;
     const d = img.data;
-    for (let iz = 0; iz < vh; iz++) {
-      const wz = z0 + iz;
-      for (let ix = 0; ix < vw; ix++) {
-        const wx = x0 + ix;
-        const i = (iz * vw + ix) * 4;
+    // 采样点取 step×step 块中心（step=1 时 = +0，与原先逐格一致）
+    const half = step >> 1;
+    for (let iz = 0; iz < oh; iz++) {
+      const wz = z0 + iz * step + half;
+      for (let ix = 0; ix < ow; ix++) {
+        const wx = x0 + ix * step + half;
+        const i = (iz * ow + ix) * 4;
         if (this.memory.isExplored(wx, wz)) {
           // ★ 地形记录取色（实时 chunk 优先，卸载回放 blockTypes 快照）
           const packed = this.raster.mapColorAt(wx, wz);
@@ -245,7 +284,7 @@ export class MapPanel {
     ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#04060a';
     ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    ctx.drawImage(this.off, 0, 0, vw, vh, 0, 0, vw * this.scale, vh * this.scale);
+    ctx.drawImage(this.off, 0, 0, ow, oh, 0, 0, vw * this.scale, vh * this.scale);
 
     // 区块网格（60m；淡线）
     ctx.strokeStyle = 'rgba(120,170,220,0.12)';
@@ -270,7 +309,15 @@ export class MapPanel {
       if (info.kind === 'item' && info.moving) continue;
       const ex = e.position.x;
       const ez = e.position.z;
-      if (info.kind === 'enemy' && !this.memory.isExplored(ex, ez)) continue;
+      if (info.kind === 'enemy') {
+        // ★ 只播报视野半径（= LOD_MAX_DIST = 90m = lod3 边界）内的敌人 —— 与小地图同一条规则
+        //  （2026-09-15 用户定调：超过即 lod3、实体本就不渲染 → 地图也不留"记忆敌情"，
+        //    两图行为完全一致）。原先这里按 `memory.isExplored` 过滤，>90m 的已探明区
+        //    敌人仍会显示，与小地图不一致。
+        const edx = ex - px;
+        const edz = ez - pz;
+        if (edx * edx + edz * edz > SIGHT_R_SQ) continue;
+      }
       const sx = toX(ex);
       const sy = toY(ez);
       if (sx < -6 || sy < -6 || sx > CANVAS_W + 6 || sy > CANVAS_H + 6) continue;
@@ -280,6 +327,22 @@ export class MapPanel {
         : '#ffdd55';
       const s = info.kind === 'ship' || info.kind === 'npc' ? 5 : 3;
       ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
+    }
+
+    // ★ 远层代理（>35m 敌人）：同一半径规则（≤ LOD_MAX_DIST=90m）与同一配色
+    if (swarm) {
+      ctx.fillStyle = '#ff4444';
+      for (let i = 0; i < swarm.count; i++) {
+        const ex = swarm.x[i];
+        const ez = swarm.z[i];
+        const edx = ex - px;
+        const edz = ez - pz;
+        if (edx * edx + edz * edz > SIGHT_R_SQ) continue;
+        const sx = toX(ex);
+        const sy = toY(ez);
+        if (sx < -6 || sy < -6 || sx > CANVAS_W + 6 || sy > CANVAS_H + 6) continue;
+        ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+      }
     }
 
     // 玩家箭头（屏幕朝向 = 相机偏航；与 Minimap 同款旋转）

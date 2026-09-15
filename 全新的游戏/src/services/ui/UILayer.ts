@@ -26,8 +26,9 @@ export class UILayer {
     entities: import('../../entity/EntityBase').EntityBase[],
     hp: number,
     maxHp: number,
+    swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
   ): void {
-    this.minimap.update(px, pz, playerYaw, entities);
+    this.minimap.update(px, pz, playerYaw, entities, swarm);
     this.hud.update(hp, maxHp);
   }
 

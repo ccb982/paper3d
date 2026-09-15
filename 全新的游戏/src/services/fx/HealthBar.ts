@@ -31,7 +31,11 @@ export class HealthBar implements EntityEffect {
     const w = opts?.width ?? 0.8;
     this.height = opts?.height ?? 0.1;
     this.offsetY = opts?.offsetY ?? 2.3;
-    this.maxHp = target.hp; // 初始血量 = 最大值
+    // ★ 上限取实体的 maxHp；实体尚未写 maxHp 时（= 0）回退当时 hp。
+    //   ⚠ 不能只写 `= target.hp`：蜂群升格路径（WorldMode.createEnemyEntity）是
+    //   「先 new EnemyBase(hp=受损值) 挂血条 → 再补 enemey.maxHp = 真实上限」，
+    //   构造那一刻 target.hp 已是残血 → 快照当上限 → 比例恒 = 1（永远满血）。
+    this.maxHp = target.maxHp > 0 ? target.maxHp : target.hp;
 
     const bgGeo = new THREE.PlaneGeometry(w, this.height);
     // ★ 与子弹同款层级（BulletRenderer）：水面 renderOrder=10 先画，血条排 20 后画；
@@ -67,7 +71,9 @@ export class HealthBar implements EntityEffect {
   /** 每帧：跟随实体头顶 + 按 hp 比例缩放 */
   update(_dt: number, x: number, y: number, z: number): boolean {
     this.group.position.set(x, y + this.offsetY, z);
-    const ratio = Math.max(0, Math.min(1, this.target.hp / this.maxHp));
+    // ★ 上限每帧从实体读（含"构造后才写入 maxHp"的升格路径 / 上限被 buff 改动）
+    const maxHp = this.target.maxHp > 0 ? this.target.maxHp : this.maxHp;
+    const ratio = maxHp > 0 ? Math.max(0, Math.min(1, this.target.hp / maxHp)) : 0;
     this.fg.scale.x = ratio;
     this.fg.visible = ratio > 0;
     return false; // 常驻（随实体销毁）

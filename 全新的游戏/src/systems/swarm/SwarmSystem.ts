@@ -248,12 +248,14 @@ export class SwarmSystem {
     void t0;
   }
 
-  /** 渲染同步（每帧调用；代理位置/贴图批次 → InstancedMesh） */
-  syncRender(): void {
+  /** 渲染同步（每帧调用；代理位置/贴图批次 → InstancedMesh）
+   *  ★ camera + 焦点（玩家）给定时：视野半径内的代理额外绘制头顶血条
+   *    （远层敌人 35~90m 无 EnemyBase → 无 HealthBar，这里用实例化血条补齐） */
+  syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0): void {
     if (!this.batch) return;
     const t0 = performance.now();
     const raster = RasterMap.current;
-    this.batch.sync(this.pool, (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0);
+    this.batch.sync(this.pool, (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0, camera, focusX, focusZ);
     entityPerf.swarmRender += performance.now() - t0;
   }
 

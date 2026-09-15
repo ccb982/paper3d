@@ -10,6 +10,7 @@ import * as THREE from 'three';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
 import { AGENT_CAPACITY } from './AgentPool';
+import { LOD_MAX_DIST } from '../../services/lod';
 
 interface MobBatch {
   mesh: THREE.InstancedMesh;
@@ -104,9 +105,40 @@ const FRAG = /* glsl */ `
   }
 `;
 
+// ---- 远层代理血条（实例化单 draw call；与世界实体血条同尺寸/同位置/同配色） ----
+// 前景条在片元里按 aRatio 左端收缩（等价 HealthBar 的 fg.scale.x），暗底常驻。
+const BAR_VERT = /* glsl */ `
+  attribute float aRatio;
+  varying vec2 vUv;
+  varying float vRatio;
+  void main() {
+    vUv = uv;
+    vRatio = aRatio;
+    #ifdef USE_INSTANCING
+      gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+    #else
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #endif
+  }
+`;
+
+const BAR_FRAG = /* glsl */ `
+  varying vec2 vUv;
+  varying float vRatio;
+  void main() {
+    float filled = step(vUv.x, vRatio);              // 左端锚定：比例越小越靠左收缩
+    vec3 col = mix(vec3(0.10, 0.10, 0.12), vec3(1.0, 0.20, 0.20), filled);
+    gl_FragColor = vec4(col, mix(0.62, 0.92, filled));
+  }
+`;
+
 export class SwarmBatch {
   /** 与 assets 一一对应（烘焙失败 = null，保持 mobIndex 映射） */
   private mobs: (MobBatch | null)[] = [];
+  /** ★ 远层代理血条（单 InstancedMesh = 1 draw call；所有兵种共用） */
+  private bars: THREE.InstancedMesh | null = null;
+  private barRatio: THREE.InstancedBufferAttribute | null = null;
+  private barCount = 0;
 
   constructor(scene: THREE.Scene, assets: FrameAssetSource[]) {
     for (const asset of assets) {
@@ -177,12 +209,53 @@ export class SwarmBatch {
       scene.add(mesh);
       this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1) });
     }
+
+    // ---- ★ 远层代理血条：单个 InstancedMesh（所有兵种共用 → 1 draw call） ----
+    //   远层代理（> L3 升格半径）本身没有 EnemyBase，也就没有 HealthBar；
+    //   之前在 35~90m 这段敌人是"打得中但看不见血条"，这里补齐。
+    const barGeo = new THREE.PlaneGeometry(1, 1);
+    const ratioAttr = new THREE.InstancedBufferAttribute(new Float32Array(AGENT_CAPACITY), 1);
+    ratioAttr.setUsage(THREE.DynamicDrawUsage);
+    barGeo.setAttribute('aRatio', ratioAttr);
+    const barMat = new THREE.ShaderMaterial({
+      vertexShader: BAR_VERT,
+      fragmentShader: BAR_FRAG,
+      transparent: true,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2,
+    });
+    const barMesh = new THREE.InstancedMesh(barGeo, barMat, AGENT_CAPACITY);
+    barMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    barMesh.frustumCulled = false;
+    barMesh.count = 0;
+    barMesh.renderOrder = 20; // 与 HealthBar 同层级（水面 10 之后）
+    scene.add(barMesh);
+    this.bars = barMesh;
+    this.barRatio = ratioAttr;
   }
 
-  /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧） */
-  sync(pool: AgentPool, groundAt: (x: number, z: number, y: number) => number): void {
+  /** 每帧同步：代理 → 各兵种实例矩阵（贴地 + 底部锚点 + yaw + 前后帧）
+   *  ★ 同时喂血条实例（camera + 焦点给定时）：只做"视野半径 maxDist 内"的代理，
+   *    与实体 LOD（lod3 = 90m 不渲染）同口径 → 远层敌人有血条，但不会全图刷。 */
+  sync(
+    pool: AgentPool,
+    groundAt: (x: number, z: number, y: number) => number,
+    camera?: THREE.Camera,
+    focusX = 0,
+    focusZ = 0,
+    maxDist = LOD_MAX_DIST,
+  ): void {
     const counters: number[] = [];
     for (let m = 0; m < this.mobs.length; m++) counters.push(0);
+    this.barCount = 0;
+    const barMesh = this.bars;
+    const barRatio = this.barRatio;
+    const maxDist2 = maxDist * maxDist;
+    const wantBars = !!camera && !!barMesh && !!barRatio;
     for (let i = 0; i < pool.count; i++) {
       const mob = pool.mobIndex[i];
       const batch = this.mobs[mob];
@@ -199,6 +272,23 @@ export class SwarmBatch {
       batch.mesh.setMatrixAt(idx, _m);
       batch.tiles.setX(idx, pool.facingBack[i]);
       batch.flash.setX(idx, pool.flash[i]);
+
+      // ---- 血条实例（世界实体 HealthBar 同款：宽 0.8×体型、高 0.1、
+      //      中心 = 贴片顶端 + 0.4；billboard = 相机朝向） ----
+      if (wantBars) {
+        const bdx = pool.x[i] - focusX;
+        const bdz = pool.z[i] - focusZ;
+        if (bdx * bdx + bdz * bdz <= maxDist2) {
+          const bi = this.barCount++;
+          _p.set(pool.x[i], gy + h + 0.4, pool.z[i]);
+          _q.copy((camera as THREE.Camera).quaternion);
+          _s.set(w * 0.8, 0.1, 1);
+          _m.compose(_p, _q, _s);
+          barMesh!.setMatrixAt(bi, _m);
+          const mx = pool.maxHp[i];
+          barRatio!.setX(bi, mx > 0 ? Math.max(0, Math.min(1, pool.hp[i] / mx)) : 0);
+        }
+      }
     }
     for (let m = 0; m < this.mobs.length; m++) {
       const b = this.mobs[m];
@@ -207,6 +297,13 @@ export class SwarmBatch {
       b.mesh.instanceMatrix.needsUpdate = true;
       b.tiles.needsUpdate = true;
       b.flash.needsUpdate = true;
+    }
+    if (barMesh) {
+      barMesh.count = this.barCount;
+      if (this.barCount > 0) {
+        barMesh.instanceMatrix.needsUpdate = true;
+        barRatio!.needsUpdate = true;
+      }
     }
   }
 
@@ -220,5 +317,13 @@ export class SwarmBatch {
       b.mesh.parent?.remove(b.mesh);
     }
     this.mobs.length = 0;
+    if (this.bars) {
+      this.bars.geometry.dispose();
+      (this.bars.material as THREE.Material).dispose();
+      this.bars.parent?.remove(this.bars);
+      this.bars = null;
+      this.barRatio = null;
+      this.barCount = 0;
+    }
   }
 }

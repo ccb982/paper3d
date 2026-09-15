@@ -1120,6 +1120,8 @@ export class WorldMode implements IGameMode {
         ? (() => { const f = this.ship.forward; return Math.atan2(f.x, f.z); })()
         : this.cameraCtrl.worldYaw,
       entities: this.entities.allBases(),
+      // ★ 远层代理（35m 外敌人）：小地图/大地图与实体同口径播报（≤90m）
+      swarm: this.swarm.pool,
       playerStats: { hp: this.player.hp, maxHp: queryFinalStats(this.player).maxHp },
       ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
@@ -1434,7 +1436,9 @@ export class WorldMode implements IGameMode {
     if (this.player) renderManager.follow(this.player.position);
     this.entities.renderAll(this.camera);
     // ★ 蜂群代理批量渲染（实例矩阵同步；每帧一次，与实体渲染同帧）
-    this.swarm.syncRender();
+    //   ★ 传相机 + 玩家焦点：视野半径内的代理同时实例化画头顶血条
+    const playerP = this.player?.controllerPosition;
+    this.swarm.syncRender(this.camera, playerP?.x ?? 0, playerP?.y ?? 0);
     this.bullets.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
 

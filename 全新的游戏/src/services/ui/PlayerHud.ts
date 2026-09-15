@@ -18,7 +18,9 @@ export class PlayerHud {
     this.canvas.width = this.w;
     this.canvas.height = this.h;
     this.canvas.style.cssText = [
-      'position:fixed;top:176px;left:8px;',
+      // ★ top 跟随小地图高度：小地图 8(top) + MINIMAP_SIZE + 2(border) + 6(缝)
+      //   （2026-09-15 小地图 160 → 180 → 176 → 196，防重叠）
+      'position:fixed;top:196px;left:8px;',
       `width:${this.w}px;height:${this.h}px;`,
       'z-index:998;pointer-events:none;',
     ].join('');

@@ -36,10 +36,13 @@ import { LOD_MAX_DIST } from '../lod';
 
 // ============ 共享常量（渲染层唯一来源） ============
 
-/** 小地图画布边长（像素；1 像素 = 1 米） */
-export const MINIMAP_SIZE = 160;
-/** 小地图窗口半宽（米）—— 窗口 = 玩家 ± windowHalf */
-export const MINIMAP_WINDOW_HALF = 80;
+/** 小地图画布边长（像素；1 像素 = 1 米）
+ *  ★ 2026-09-15：160 → 180。原先 160（±80m）< 可见半径 90m → 80~90m 这圈的敌人
+ *  "屏幕上看得见、小地图上没有"（被 update 的窗口落位判定裁掉）。
+ *  180 = 2 × 90，窗口与 `MINIMAP_VIEW_RADIUS` 完全对齐，可见范围内敌人全收。 */
+export const MINIMAP_SIZE = 180;
+/** 小地图窗口半宽（米）—— 窗口 = 玩家 ± windowHalf；恒 = MINIMAP_SIZE / 2 */
+export const MINIMAP_WINDOW_HALF = 90;
 /** 开雾（探索点亮）半径（米）= LOD 消失距离 */
 export const MINIMAP_VIEW_RADIUS = LOD_MAX_DIST;
 /** LOD 圈"点亮边带"半宽（米）：覆盖跨格位移 + reveal 浮点/量化中心偏差（±~0.7m） */

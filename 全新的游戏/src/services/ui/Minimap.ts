@@ -6,10 +6,13 @@
 //   - 黑雾 = 稀疏探索记忆（无限持久），窗口内未探索像素盖黑
 //   - ★ 记忆灰雾（2026-08-23）：常驻掩码盖住所有已探明区域，
 //     仅 LOD_MAX_DIST 圈内"挖孔"露全彩；偏暗=记忆观感。
-//     敌人只在【已探索 且 LOD 圈内】显示；我方道具始终显示
+//     敌人按【当前视野半径 viewRadius】播报，不叠加地图记忆（2026-09-15 改）；我方道具始终显示
+//   - ★ 敌情含【远层代理】：>35m 的敌人不是 EntityBase（在蜂群代理池里），
+//     必须额外遍历 update 的 swarm 参数，否则地图实际只看得到 35m 内（2026-09-15 修）
 //   - 玩家恒居中，箭头 = 摄像机朝向（准星方向）
-// 窗口 ±80 米（160px → 1m/px，与 RasterMap 1 地块 = 1 像素对应）
-// 开雾范围 = LOD_MAX_DIST（< 窗口 → 可见雾边界）
+// 窗口 ±90 米（180px → 1m/px，与 RasterMap 1 地块 = 1 像素对应）
+// ★ 窗口与 viewRadius（= LOD_MAX_DIST = 90m）完全对齐 → 角色可见范围内的敌人全收
+//   （2026-09-15：原为 160px / ±80m，会让 80~90m 这圈的敌人被窗口落位判定裁掉）
 //
 // ★ 预加载（2026-09-15）：探索记忆 / 底图 / LOD 边带索引三样都是纯函数
 //   （探索圆盘与地形数据无关；地形色 = f(seed,x,z)，blockTypes 运行时不改），
@@ -150,8 +153,16 @@ export class Minimap {
     return this.warmed;
   }
 
-  /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向） */
-  update(px: number, pz: number, playerYaw: number, entities: EntityBase[]): void {
+  /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向）
+   *  `swarm` = 蜂群代理池（远层敌人；可空）：35m 外的敌人不是 EntityBase，
+   *  不遍历它的话地图就只能看到 35m 内的敌人（2026-09-15 用户反馈修复）。 */
+  update(
+    px: number,
+    pz: number,
+    playerYaw: number,
+    entities: EntityBase[],
+    swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
+  ): void {
     if (!this.visible) return; // ★ 隐藏期间零开销（舰内房间）
     const ctx = this.ctx;
     const ds = this.displaySize;
@@ -172,8 +183,8 @@ export class Minimap {
     ctx.clearRect(0, 0, ds, ds);
 
     // 实体点（世界 → 窗口像素）：
-    //   敌人：仅【已探索 且 LOD 圈内】绘制（圈外探明区有灰雾=记忆区，敌人不显示）
-    //   物品：静止的始终绘制（我方道具不受灰雾影响）
+    //   敌人：仅【视野半径 viewRadius(=LOD_MAX_DIST=90m) 内】绘制（超出即 lod3 不渲染 → 不播报）
+    //   物品：静止的始终绘制（我方道具不受视野影响）
     const x0 = Math.floor(px - this.windowHalf);
     const z0 = Math.floor(pz - this.windowHalf);
     const rSq = this.viewRadius * this.viewRadius;
@@ -182,11 +193,15 @@ export class Minimap {
       const ez = Math.floor(e.position.z);
       const info = e.minimapInfo;
       if (info.kind === 'enemy') {
+        // ★ 视野内一律播报（2026-09-15）：只按"角色可见半径"判定，**不再叠加地图记忆**。
+        //   原条件 explored && inLod 有两个漏洞：
+        //   ① reveal 只在跨格时点亮、且按格心判定 → 视野边缘有一条 1~2m 的"在视野内
+        //      但记作未探索"的壳，敌人走到那儿会闪一下；
+        //   ② 移动快（载具/航行）时位移 d 大 → 环带更厚，未点亮区更宽。
+        //   语义上"地图记忆"= 地形看过，"视野"= 现在能看见，两者不该混用。
         const edx = ex - px;
         const edz = ez - pz;
-        const explored = this.explored.has(ex, ez);
-        const inLod = edx * edx + edz * edz <= rSq;
-        if (!explored || !inLod) continue;
+        if (edx * edx + edz * edz > rSq) continue;
       }
       if (info.kind === 'item' && info.moving) continue;
       const pxw = ex - x0;
@@ -198,6 +213,22 @@ export class Minimap {
         : '#ffdd55';
       ctx.fillStyle = color;
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
+    }
+
+    // ★ 远层代理（35m 外敌人）：同一半径规则（≤ viewRadius），同色同尺寸
+    if (swarm) {
+      ctx.fillStyle = '#ff4444';
+      for (let i = 0; i < swarm.count; i++) {
+        const ex = Math.floor(swarm.x[i]);
+        const ez = Math.floor(swarm.z[i]);
+        const edx = ex - px;
+        const edz = ez - pz;
+        if (edx * edx + edz * edz > rSq) continue;
+        const pxw = ex - x0;
+        const pzw = ez - z0;
+        if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
+        ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
+      }
     }
 
     // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = π - θ；

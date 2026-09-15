@@ -14,6 +14,15 @@ export interface WorldUIState {
   cameraYaw: number;
   /** 所有实体列表（小地图标记用） */
   entities: EntityBase[];
+  /** ★ 蜂群代理（远层敌人）位置源：**引用池本体、零分配只读遍历**。
+   *  为什么需要：35m 外的敌人只是代理、不在 EntityManager 里 → 只喂 entities
+   *  的话小地图/大地图实际只能看到 35m 内的敌人（用户 2026-09-15 反馈
+   *  "地图显示敌人的距离很小"）。池引用稳定，起止以 count 为准。 */
+  swarm?: {
+    readonly x: Float32Array;
+    readonly z: Float32Array;
+    readonly count: number;
+  } | null;
   /** 玩家血量状态 */
   playerStats: { hp: number; maxHp: number };
   /** ★ 弹药栏条目（左下角 AmmoPanel：背包弹药类型 + 数量 + 选中态） */
