@@ -1,21 +1,3 @@
 {
-  "events": [
-    {
-      "id": "ship_first",
-      "where": "ship",
-      "npc": { "speaker": "维维美", "portrait": "/characters/protagonist/维维美.ftx3.gz" },
-      "dialogue": "ship_first",
-      "label": "交谈",
-      "anchors": [{ "x": -6, "z": 4 }, { "x": 6, "z": 4 }],
-      "once": true
-    },
-    {
-      "id": "world_survivor",
-      "where": "world",
-      "npc": { "speaker": "幸存者", "portrait": "/characters/protagonist/维维美.ftx3.gz" },
-      "dialogue": "world_survivor",
-      "chancePerChunk": 0.04,
-      "cooldownDays": 2
-    }
-  ]
+  "events": []
 }

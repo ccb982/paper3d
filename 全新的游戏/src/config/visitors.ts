@@ -16,7 +16,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/zc.ftx3.gz',
     dialogue: 'visitor_zc',
     moveSpeed: 3.1,
-    body: { height: 1.85, bodyColor: 0x6f7d8c, limbColor: 0x59636e },
+    body: { height: 1.85, bodyColor: 0x6f7d8c, limbColor: 0x59636e, accentColor: 0xc9803a },
   },
   {
     id: 'buxiaoxiao',
@@ -24,7 +24,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/不许笑.ftx3.gz',
     dialogue: 'visitor_buxiaoxiao',
     moveSpeed: 3.0,
-    body: { height: 1.72, bodyColor: 0x8fae9b, limbColor: 0x6f8a7a },
+    body: { height: 1.72, bodyColor: 0x8fae9b, limbColor: 0x6f8a7a, accentColor: 0xd9c9a8 },
   },
   {
     id: 'tutou',
@@ -32,7 +32,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/兔头.ftx3.gz',
     dialogue: 'visitor_tutou',
     moveSpeed: 3.4,
-    body: { height: 1.62, bodyColor: 0xe8e2e6, limbColor: 0xcfc6cc },
+    body: { height: 1.62, bodyColor: 0xe8e2e6, limbColor: 0xcfc6cc, accentColor: 0xe6a8bc },
   },
   {
     id: 'jiaofu',
@@ -40,7 +40,7 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/教父.ftx3.gz',
     dialogue: 'visitor_jiaofu',
     moveSpeed: 2.9,
-    body: { height: 1.9, bodyColor: 0x3b3d44, limbColor: 0x2c2e34 },
+    body: { height: 1.9, bodyColor: 0x3b3d44, limbColor: 0x2c2e34, accentColor: 0x8f2b2b },
   },
   {
     id: 'shenren',
@@ -48,6 +48,6 @@ export const VISITORS: VisitorDef[] = [
     assetUrl: '/characters/protagonist/神人.ftx3.gz',
     dialogue: 'visitor_shenren',
     moveSpeed: 3.2,
-    body: { height: 1.8, bodyColor: 0xc9a15f, limbColor: 0xa8834a },
+    body: { height: 1.8, bodyColor: 0xc9a15f, limbColor: 0xa8834a, accentColor: 0x3f7a6a },
   },
 ];

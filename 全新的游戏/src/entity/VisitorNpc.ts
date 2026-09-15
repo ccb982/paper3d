@@ -173,8 +173,11 @@ export class VisitorNpcBase extends CharacterBase {
     this.camp = 'neutral';
     // ★ 程序化身体：关 billboard（3D 身体按移动方向 yaw，不用面向相机的 2D 贴片）
     if (opts.def.body) this.billboard = false;
-    // ★ 访客不参战；地形跟随与玩家同款：可涉水、可爬坡，仅绕开坑洞
-    this.blockCliffClimb = false;
+    // ★ 访客不参战；地形跟随：可涉水、可爬坡、**可上台阶** ——
+    //   climbAnyTerrain 关闭 CharacterBase 的"立面阻挡 + 落地高差回退"
+    //   （否则 >0.5m（EDGE_CLIFF_BAND）的台阶会被原地卡死，NPC 不会上台阶）；
+    //   贴地高度由 followTerrain 限速结算；坑洞仍由 isHazardAhead 绕行。
+    this.climbAnyTerrain = true;
     this.attachToScene(scene);
     const scale = opts.def.scale ?? 2.0;
     if (this.renderer && 'setScaleKeepAspect' in this.renderer) {
