@@ -20,6 +20,7 @@ import { entityPerf } from './entity/EntityPerf';
 import type { WorldModeEnterContext } from './modes/WorldMode';
 import { SaveSystem } from './core/SaveSystem';
 import { RasterMap } from './services/map/RasterMap';
+import { digPerf } from './services/map/ChunkManager';
 import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
@@ -183,6 +184,8 @@ async function boot() {
     (window as unknown as { __ppMode?: () => unknown }).__ppMode = () => currentMode;
     (window as unknown as { __ppWp?: unknown }).__ppWp = worldPerf;
     (window as unknown as { __ppEp?: unknown }).__ppEp = entityPerf;
+    // ★ 打坑链路分项耗时（累计 ms / 计数；脚本按段 reset() 采样）
+    (window as unknown as { __ppDig?: unknown }).__ppDig = digPerf;
     // ★ 小地图预加载状态（拿它验证"抽卡页预热 → 进世界交接"是否生效）
     (window as unknown as { __mmWarm?: () => unknown }).__mmWarm = () => minimapWarmupState();
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {

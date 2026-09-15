@@ -60,6 +60,46 @@ import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics
 /** 命中解析：装饰实体探测半径（m）——耗尽原石晶体碰撞半径 ~1.15×scale */
 const PROP_PROBE_R = 3.0;
 
+/**
+ * ★ 打坑链路分项耗时（累计 ms / 计数；?perf=1 由 main.ts 暴露为 window.__ppDig）。
+ *  用途：定位「挖坑卡顿」到底花在同步落库 / 跨块联动 / 视觉原地写 / 分区 collider
+ *  原位换 / 装饰重贴地 的哪一段——纯数字累加，零分配零开销，常驻开启。
+ */
+export const digPerf = {
+  /** 命中次数（playBulletImpact 进入次数） */
+  hits: 0,
+  /** 同步落库 + 包络差分（digCells） */
+  digCells: 0,
+  /** 跨块破坏联动登记（markNeighborsForDug） */
+  neighbors: 0,
+  /** 跨块联动入队的邻块数（用于观察是否被爆炸式放大） */
+  neighborEnq: 0,
+  /** 邻块入队时装饰被判为 full 的次数 vs 降级为局部 */
+  decorFull: 0,
+  decorLocal: 0,
+  /** 主线程掩码预计算 + 3×3 邻域拷贝投递（terrainPatch.compute 同步段） */
+  dispatch: 0,
+  /** Worker 往返等待（异步，不计入帧内成本；用于判断 Worker 是否成瓶颈） */
+  workerWait: 0,
+  /** 破坏重建发起次数（flushPatchRebuilds 实投递） */
+  rebuilds: 0,
+  /** 重建装配（rebuildTerrainOnly：视觉原地写 + 入物理队列） */
+  assemble: 0,
+  /** 分区 trimesh collider 原位换（GROUND_CELL 排空） */
+  ground: 0,
+  groundCount: 0,
+  /** 装饰重贴地排空（full 段 / props 段 分别计时） */
+  decorDrainFull: 0,
+  decorDrainProps: 0,
+  /** 重置（脚本按段采样用） */
+  reset(): void {
+    this.hits = 0; this.digCells = 0; this.neighbors = 0; this.neighborEnq = 0;
+    this.decorFull = 0; this.decorLocal = 0; this.dispatch = 0; this.assemble = 0;
+    this.workerWait = 0; this.rebuilds = 0;
+    this.ground = 0; this.groundCount = 0; this.decorDrainFull = 0; this.decorDrainProps = 0;
+  },
+};
+
 /** 装饰计划（预渲染前放置完成；烘焙与装配两侧消费同一份） */
 export interface DecorPlan {
   decals: PlannedDecal[];
@@ -347,8 +387,10 @@ export class ChunkManager {
   // ---- ★ 装饰脏区局部重贴地（2026-09-10）：挖坑不再整 chunk 重排装饰 ----
   /** 最近一次构建的装饰计划（挖坑影响判定 + 道具 y 重贴地数据源） */
   private decorCache = new Map<number, DecorPlan>();
-  /** 本 chunk 攒下的挖动 1m cell（局部 idx = lz*60+lx）；full = 必须整块重贴地（邻块联动等） */
-  private decorDirty = new Map<number, { cells: Set<number>; full: boolean }>();
+  /** 本 chunk 攒下的挖动 1m cell（局部 idx = lz*60+lx）；full = 必须整块重贴地（邻块联动等）
+   *  props = 邻块联动降级标记：本 chunk 整块无 platform 地块 → 「整块重贴地」不可能必要，
+   *  只需重贴一次道具 y（resnapProps，廉价）。 */
+  private decorDirty = new Map<number, { cells: Set<number>; full: boolean; props: boolean }>();
   /** 已挂进 chunk group 的道具层引用（局部重贴地时只拆它，围裙/台座不动） */
   private propLayers = new Map<number, THREE.Object3D>();
 
@@ -609,7 +651,9 @@ export class ChunkManager {
         //   装饰按脏区模式处理（none=不动 / props=只重贴道具 / full=整块重贴）。
         //   2026-09-09：挖坑重建优先原地更新（attr 写入 + 分块 collider 原位换）
         const mode = a.decorMode ?? 'full';
+        const _tr = performance.now();
         this.rebuildTerrainOnly(a.cx, a.cz, a.maps, a.top, a.wall, a.water, a.cells, a.bounds, mode);
+        if (a.decor === null) digPerf.assemble += performance.now() - _tr; // 破坏重建（挖坑）路径
       } else {
         this.assembleTableChunk(a.cx, a.cz, a.maps, a.decor, a.top, a.wall, a.water, a.cells, a.bounds);
       }
@@ -623,6 +667,8 @@ export class ChunkManager {
     }
     // ★ 物理分区 collider 原位换：帧预算排空（典型单分区同帧生效；
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
+    //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
+    //     收益微乎其微 → 保持 FIFO，避免无谓的行为变更。）
     if (this.host.updateGroundCell) {
       let g = ChunkManager.GROUND_CELL_PER_FRAME;
       const _tg = performance.now();
@@ -635,10 +681,12 @@ export class ChunkManager {
         this.groundCellQueue.delete(firstKey);
         try {
           this.host.updateGroundCell(c.bodyId, c.slot, c.vertices, c.indices);
+          digPerf.groundCount++;
         } catch (e) {
           console.error('[ChunkManager] 分区 collider 原位换失败（保留旧碰撞体）', e);
         }
       }
+      digPerf.ground += performance.now() - _tg;
     }
     // ★ 延迟装饰补挂：地形重建结束后重贴地（此刻 levels 已落库、
     //   surfaceHeightAt 含有挖坑下探）→ props 落到新坑面，不再浮空。
@@ -656,6 +704,7 @@ export class ChunkManager {
       if (j.mode === 'props') {
         // ★ 脏区局部：只重排/重贴受影响道具层（围裙/台座/碰撞体不动）——§17.11
         this.resnapProps(j.cx, j.cz, group);
+        digPerf.decorDrainProps += performance.now() - _td;
         this.applyDecorCooldown(_td);
         continue;
       }
@@ -667,6 +716,7 @@ export class ChunkManager {
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
       this.createDecorColliders(j.cx, j.cz, decor);
       this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
+      digPerf.decorDrainFull += performance.now() - _td;
       this.applyDecorCooldown(_td);
     }
     // ★ 看门狗：自愈一切"数据在、网格丢"的状态（Worker 被杀/消息丢失/
@@ -2053,14 +2103,15 @@ const key2 = chunkKeyOf(cx, cz);
   /** ★ 挖坑装饰影响判定：none=无影响（不拆不建）/ props=仅道具 / full=整块（结构件/未知） */
   private decideDecorMode(
     cx: number, cz: number,
-    dd: { cells: Set<number>; full: boolean } | undefined,
+    dd: { cells: Set<number>; full: boolean; props: boolean } | undefined,
   ): 'none' | 'props' | 'full' {
     const key = chunkKeyOf(cx, cz);
     const plan = this.decorCache.get(key);
     if (!plan) return 'full';           // 无计划（首建等）：走整块
-    if (!dd) return 'full';             // 非挖动触发（邻块/其它）：保守整块
-    if (dd.full) return 'full';         // 邻块联动：保守整块
-    if (dd.cells.size === 0) return 'none';
+    if (!dd) return 'full';             // 非挖动触发（其它）：保守整块
+    if (dd.full) return 'full';         // 含 platform 地块的邻块联动：保守整块
+    // 邻块联动已降级（整块无 platform）：脏区带精确登记过 → 只重贴一次道具
+    if (dd.cells.size === 0) return dd.props ? 'props' : 'none';
     if (this.dirtyTouchesPlatform(cx, cz, dd.cells)) return 'full'; // 围裙/台座可能受影响
     // 道具足迹 ±6m 与脏区相交 → 仅重贴道具（余量覆盖层过渡 W=0.5m/层 × 深挖）
     for (const p of plan.props) {
@@ -2074,6 +2125,9 @@ const key2 = chunkKeyOf(cx, cz);
         }
       }
     }
+    // ★ 邻块联动（cells 是映射的影响带、未必压到道具足迹）→ 至少重贴一次道具 y，
+    //   防「seam 侧道具被挖动下沉后仍浮空」。resnapProps 廉价（只拆/建道具层）。
+    if (dd.props) return 'props';
     return 'none';
   }
 
@@ -2327,6 +2381,8 @@ const key2 = chunkKeyOf(cx, cz);
     }
     // ★ 打坑半径：0.6 → 0.49（面积 ×2/3，即"打坑面积缩小 1/3"；0.6×√(2/3)≈0.49）
     const R = 0.49; // §14.10 T2 轻量档（破坏小）
+    // ★ 命中点所在 chunk 记为本帧焦点：与玩家所在 chunk 同享 40ms 短节流
+    this.dugFocusKey = chunkKeyOf(Math.floor(r.x / CHUNK_SIZE), Math.floor(r.z / CHUNK_SIZE));
     const byChunk = new Map<number, {
       cx: number; cz: number;
       cells: { lx: number; lz: number }[];
@@ -2343,7 +2399,10 @@ const key2 = chunkKeyOf(cx, cz);
       rec.dirty.add(worldBlockKey(c.cx * BLOCKS_PER_SIDE + (c.lx >> 2), c.cz * BLOCKS_PER_SIDE + (c.lz >> 2)));
     }
     for (const [, rec] of byChunk) {
-      if (this.raster.digCells(rec.cx, rec.cz, rec.cells)) {
+      const _t0 = performance.now();
+      const changed = this.raster.digCells(rec.cx, rec.cz, rec.cells);
+      digPerf.digCells += performance.now() - _t0;
+      if (changed) {
         // ★ 帧间合并：不立即重建——digCells 已同步落库（数据即时正确），
         //   视觉重建攒进 pendingPatches，flushPatchRebuilds 每帧开头合并为一次
         const key = chunkKeyOf(rec.cx, rec.cz);
@@ -2356,62 +2415,93 @@ const key2 = chunkKeyOf(cx, cz);
           for (const d of rec.dirty) p.dirty.add(d);
           // ★ 装饰脏区（局部 1m cell）：flushPatchRebuilds 据此判定局部重贴地
           let dd = this.decorDirty.get(key);
-          if (!dd) { dd = { cells: new Set(), full: false }; this.decorDirty.set(key, dd); }
+          if (!dd) { dd = { cells: new Set(), full: false, props: false }; this.decorDirty.set(key, dd); }
           for (const c of rec.cells) dd.cells.add(c.lz * CHUNK_SIZE + c.lx);
         }
       }
       // ★ 跨 chunk 联动（2026-09-10）：本块挖动改变邻块包络场/共享边 → 邻块也要重建
+      const _tn = performance.now();
       this.markNeighborsForDug(rec);
+      digPerf.neighbors += performance.now() - _tn;
     }
+    digPerf.hits++;
   }
 
   /**
    * ★ 跨 chunk 破坏联动（2026-09-10）：本 chunk 的挖动会改变邻 chunk 的包络场
    * （射线穿 seam 经 levelAt 读本块层数）与共享边补丁判定 → 需一并重建。
-   * 影响半径 = 邻块贴 seam 边界的最大层数 × 层过渡宽度 W（m/层）：
+   * 影响半径 = 邻块「面向本块那条边界线」的最大层数 × 层过渡宽度 W（m/层）：
    *   我们的挖动 cell 到该边界的距离 ≤ reach 时才可能改变邻块包络场（安全超集）。
    * 邻块无补丁（边界层数 0）→ reach<0 跳过（其几何不依赖本块）。数据已同步落库；
    * 未建成的 chunk 由后续标准构建自然读到新层数。
+   *
+   * ★ 2026-09-15 精度/性能修正（打坑卡顿主因之一）：
+   *   ① 只扫「面向本块」的那一条边界线（60 格），而不是原来四条边 240 格取最大
+   *      —— 包络场的 4 条卡氏射线全是轴对齐直线，只有朝向本块的那条能穿出 seam，
+   *      另三条永远留在邻块/第三方块内 → 四边取最大是纯粹的过度保守，会凭空把
+   *      「邻块远处另有深坑」误判成「邻块边界有补丁」，从而对每一枪都触发邻块
+   *      全量重建 + full 重贴地。收窄后仍为安全超集，只是不再无谓放大。
+   *   ② 同一次调用内按 (邻块, 朝向) 缓存边界层数 → 多 cell 命中不再重复扫描。
    */
   private markNeighborsForDug(rec: { cx: number; cz: number; cells: { lx: number; lz: number }[] }): void {
     const N = CHUNK_SIZE;
+    // 本帧本次调用的边界层数缓存（4 邻 × 朝向 ≤ 4 次 60 格扫描）
+    const edgeCache = new Map<number, number>();
     for (const c of rec.cells) {
-      const dirs: [number, number, number][] = [
-        [c.lx, rec.cx - 1, rec.cz],          // 西邻：本 cell 距西边界距离
-        [N - 1 - c.lx, rec.cx + 1, rec.cz],  // 东邻
-        [c.lz, rec.cx, rec.cz - 1],          // 南邻
-        [N - 1 - c.lz, rec.cx, rec.cz + 1],  // 北邻
+      // [距本侧边界格距, 邻块 cx, 邻块 cz, 邻块面向本块的边, 邻块内正交坐标]
+      //   边约定与 RasterMap 一致：0=西(lx=0) 1=东(lx=N-1) 2=南(lz=0) 3=北(lz=N-1)
+      const dirs: [number, number, number, 0 | 1 | 2 | 3, number][] = [
+        [c.lx, rec.cx - 1, rec.cz, 1, c.lz],           // 西邻：其东边面朝本块，正交=z
+        [N - 1 - c.lx, rec.cx + 1, rec.cz, 0, c.lz],   // 东邻：其西边
+        [c.lz, rec.cx, rec.cz - 1, 3, c.lx],           // 南邻：其北边，正交=x
+        [N - 1 - c.lz, rec.cx, rec.cz + 1, 2, c.lx],   // 北邻：其南边
       ];
-      for (const [dist, ncx, ncz] of dirs) {
-        const lv = this.neighborBoundaryMaxLevel(ncx, ncz);
-        if (lv <= 0) continue; // 邻块 seam 边界无补丁 → 不受本块影响
-        if (dist <= lv * PATCH_LEVEL_WIDTH) this.enqueuePatch(ncx, ncz);
+      for (const [dist, ncx, ncz, side, ortho] of dirs) {
+        const ck = chunkKeyOf(ncx, ncz) * 4 + side;
+        let lv = edgeCache.get(ck);
+        if (lv === undefined) {
+          lv = this.neighborEdgeMaxLevel(ncx, ncz, side);
+          edgeCache.set(ck, lv);
+        }
+        if (lv <= 0) continue; // 邻块该边界线无补丁 → 不受本块影响
+        if (dist > lv * PATCH_LEVEL_WIDTH) continue;
+        this.enqueuePatch(ncx, ncz, side, dist, ortho, lv);
       }
     }
   }
 
-  /** 邻 chunk 面向本块一侧的边界线最大层数（0 = 无补丁/未加载） */
-  private neighborBoundaryMaxLevel(ncx: number, ncz: number): number {
+  /** 邻 chunk「面向本块那一侧」边界线的最大层数（0 = 无补丁/未加载）
+   *  side：0=西(lx=0) 1=东(lx=N-1) 2=南(lz=0) 3=北(lz=N-1) */
+  private neighborEdgeMaxLevel(ncx: number, ncz: number, side: 0 | 1 | 2 | 3): number {
     const d = this.raster.getChunkData(ncx, ncz);
     if (!d?.levels) return 0;
     const lv = d.levels, N = CHUNK_SIZE;
     let max = 0;
-    // 取四条边界线的最大值（安全超集：实际只同行 cell 的射线能看见本块）
-    for (let i = 0; i < N; i++) {
-      const wcol = lv[i * N];
-      if (wcol > max) max = wcol;
-      const ecol = lv[i * N + N - 1];
-      if (ecol > max) max = ecol;
-      const srow = lv[i];
-      if (srow > max) max = srow;
-      const nrow = lv[(N - 1) * N + i];
-      if (nrow > max) max = nrow;
+    if (side === 0) {
+      for (let i = 0; i < N; i++) { const v = lv[i * N]; if (v > max) max = v; }
+    } else if (side === 1) {
+      for (let i = 0; i < N; i++) { const v = lv[i * N + N - 1]; if (v > max) max = v; }
+    } else if (side === 2) {
+      for (let i = 0; i < N; i++) { const v = lv[i]; if (v > max) max = v; }
+    } else {
+      for (let i = 0; i < N; i++) { const v = lv[(N - 1) * N + i]; if (v > max) max = v; }
     }
     return max;
   }
 
-  /** 把邻 chunk 加入破坏重建缓冲（未建成则跳过：数据落库，后续构建自然带新层数） */
-  private enqueuePatch(cx: number, cz: number): void {
+  /**
+   * ★ 把邻 chunk 加入破坏重建缓冲（未建成则跳过：数据落库，后续构建自然带新层数）。
+   *  2026-09-15 装饰降级：邻块联动原先一律 `dd.full = true` → 每枪都可能给最多 4 个
+   *  邻块排「整块重贴地」（planDecor + buildDecorLayer + colliders + 围裙/台座刚体
+   *  重建，10~40ms/块），是连续打坑时最重的主线程方阵。改成：
+   *    · 该 chunk 整块含 platform 地块 → 仍 full（围裙/台座高度随挖动变，必须整块重造）；
+   *    · 否则 → 只标 props（重贴一次道具 y，resnapProps 廉价）——与 decideDecorMode
+   *      的精确判定等价（dirtyTouchesPlatform 恒 false 时不可能需要 full）。
+   *  并把「本块挖动 cell 映射到邻块贴 seam 的影响带」写进装饰脏区，供精确判定消费。
+   */
+  private enqueuePatch(
+    cx: number, cz: number, side: 0 | 1 | 2 | 3, dist: number, ortho: number, edgeLevel: number,
+  ): void {
     const key = chunkKeyOf(cx, cz);
     if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
     let p = this.pendingPatches.get(key);
@@ -2419,11 +2509,69 @@ const key2 = chunkKeyOf(cx, cz);
       p = { cx, cz, dirty: new Set() };
       this.pendingPatches.set(key, p);
     }
-    // ★ 邻块联动：包络场影响范围难精确 → 装饰脏区标记 full（保守整块重贴地）
-    let dd = this.decorDirty.get(key);
-    if (!dd) { dd = { cells: new Set(), full: false }; this.decorDirty.set(key, dd); }
-    dd.full = true;
+    digPerf.neighborEnq++;
+    const dd = this.decorDirtyAt(key);
+    if (this.chunkHasPlatform(cx, cz)) {
+      dd.full = true;
+      digPerf.decorFull++;
+    } else {
+      dd.props = true;
+      digPerf.decorLocal++;
+    }
+    this.markNeighborCells(key, side, dist, ortho, edgeLevel);
   }
+
+  /** 把「本块挖动 cell 对邻块局部 cell 的影响带」写进装饰脏区（供 decideDecorMode 精确判定）：
+   *  邻块内受影响 = 贴 seam 的同正交坐标 ±2 格、向内 depth 格的一条窄带
+   *  （depth 由邻块该边界线层数决定的包络影响深度 + 余量）。 */
+  private markNeighborCells(
+    key: number, side: 0 | 1 | 2 | 3, dist: number, ortho: number, edgeLevel: number,
+  ): void {
+    const dd = this.decorDirtyAt(key);
+    const N = CHUNK_SIZE;
+    const depth = Math.min(N - 1, Math.max(1, Math.ceil(edgeLevel * PATCH_LEVEL_WIDTH) + Math.ceil(dist) + 2));
+    for (let t = 0; t < depth; t++) {
+      for (let du = -2; du <= 2; du++) {
+        const uu = ortho + du;
+        if (uu < 0 || uu >= N) continue;
+        let lx: number, lz: number;
+        if (side === 1) { lx = N - 1 - t; lz = uu; }      // 西邻：贴着其东边向内
+        else if (side === 0) { lx = t; lz = uu; }         // 东邻：其西边向内
+        else if (side === 3) { lx = uu; lz = N - 1 - t; } // 南邻：其北边向内
+        else { lx = uu; lz = t; }                         // 北邻：其南边向内
+        dd.cells.add(lz * N + lx);
+      }
+    }
+  }
+
+  /** 装饰脏区取用（惰性创建；props/full 双标记） */
+  private decorDirtyAt(key: number): { cells: Set<number>; full: boolean; props: boolean } {
+    let dd = this.decorDirty.get(key);
+    if (!dd) { dd = { cells: new Set(), full: false, props: false }; this.decorDirty.set(key, dd); }
+    return dd;
+  }
+
+  /** 本 chunk 是否含 platform（水泥台座/围裙）地块——整块判定，结果缓存 */
+  private platformFlagCache = new Map<number, boolean>();
+
+  private chunkHasPlatform(cx: number, cz: number): boolean {
+    const key = chunkKeyOf(cx, cz);
+    const hit = this.platformFlagCache.get(key);
+    if (hit !== undefined) return hit;
+    const d = this.raster.getChunkData(cx, cz);
+    let has = true; // 数据缺省 → 保守按「有」处理（走 full）
+    if (d) {
+      has = false;
+      const B = BLOCKS_PER_SIDE;
+      for (let i = 0; i < B * B; i++) {
+        if (tileById(d.blockTypes[i]).genRole === 'platform') { has = true; break; }
+      }
+    }
+    if (this.platformFlagCache.size > 96) this.platformFlagCache.clear();
+    this.platformFlagCache.set(key, has);
+    return has;
+  }
+
 
   /** 同一 chunk 破坏重建的最短间隔（ms）：连射/多跳弹 → 视觉分批下陷，
    *  不再每帧一次全量重建+装配（worker 与主线程都不再被持续射击打满）。 */
@@ -2437,6 +2585,10 @@ const key2 = chunkKeyOf(cx, cz);
 
   /** ★ 热点 chunk = 玩家当前所在：重建节流间隔更短（40ms vs 120ms）。 */
   private hotChunkKey = -1;
+
+  /** ★ 本帧刚被打中的 chunk（准星落点）：与热点同享 40ms 短节流
+   *  —— 远距离射击时坑在别的 chunk，原先吃 120ms 节流 → 「打了半天没反应」。 */
+  private dugFocusKey = -1;
 
   private markHotChunk(px: number, pz: number): void {
     const cx = Math.floor(px / CHUNK_SIZE);
@@ -2452,7 +2604,7 @@ const key2 = chunkKeyOf(cx, cz);
    *   一次性投递。digCells 已同步落库（数据即时正确），此处只补视觉重建——
    *   同 chunk 同帧 N 挖 → 1 次重建（dirty 取并集，worker 收敛终态）；
    *   跨帧连续挖 → 按节流间隔分批，未到期/在途的继续攒缓冲。
-   *   ★ 热点 chunk（玩家当前）节流 40ms；其他 chunk 120ms。 */
+   *   ★ 热点 chunk（玩家当前 / 本帧命中点）节流 40ms；其他 chunk 120ms。 */
   private flushPatchRebuilds(): void {
     if (this.pendingPatches.size === 0) return;
     const now = performance.now();
@@ -2460,7 +2612,7 @@ const key2 = chunkKeyOf(cx, cz);
     this.pendingPatches.clear();
     for (const p of items) {
       const key = chunkKeyOf(p.cx, p.cz);
-      const hot = key === this.hotChunkKey;
+      const hot = key === this.hotChunkKey || key === this.dugFocusKey;
       const minMs = hot ? ChunkManager.PATCH_REBUILD_MIN_MS_HOT : ChunkManager.PATCH_REBUILD_MIN_MS;
       const last = this.lastPatchStart.get(key) ?? -Infinity;
       if (now - last < minMs || this.patchRebuilds.has(key)) {
@@ -2475,6 +2627,7 @@ const key2 = chunkKeyOf(cx, cz);
       const dd = this.decorDirty.get(key);
       this.decorDirty.delete(key);
       const mode = this.decideDecorMode(p.cx, p.cz, dd);
+      digPerf.rebuilds++;
       this.patchRebuildChunk(p.cx, p.cz, p.dirty.size > 0 ? [...p.dirty] : null, mode);
     }
   }
@@ -2508,10 +2661,18 @@ const key2 = chunkKeyOf(cx, cz);
       // ★ 层数表必须传拷贝：postMessage(transfer) 会转移所有权，本体在 chunk 数据
       const levels = new Uint8Array(levelsArr);
       try {
-        const geom = await terrainPatch.compute(
+        // ★ 同步段计时：terrainPatch.compute 在返回 Promise 前会在主线程完成
+        //   「受影响掩码预计算 + 3×3 邻域 9 份数组拷贝 + postMessage」。这段是每枪
+        //   必付的主线程成本（Worker 算得再快也躲不掉）→ 单独计量。
+        const _tSync = performance.now();
+        const geomP = terrainPatch.compute(
           { seed: this.raster.worldSeed, cx, cz, levels, dirty, fineS: this.chunkFineS.get(key) ?? FINE_S_NEAR },
           (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
         );
+        const _tDispatched = performance.now();
+        digPerf.dispatch += _tDispatched - _tSync;
+        const geom = await geomP;
+        digPerf.workerWait += performance.now() - _tDispatched; // 异步等待（非帧内成本）
         if (!geom) { this.requestStandardBake(cx, cz); return; } // Worker 失败 → 兜底
         if (!this.meshes.has(key) && !this.voidKeys.has(key)) return;
         const maps2 = getCachedChunkMaps(this.raster.worldSeed, cx, cz);
