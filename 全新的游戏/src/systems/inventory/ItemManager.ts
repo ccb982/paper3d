@@ -198,11 +198,12 @@ export class ItemManager {
     return this.archetypes.get(itemId)?.type === 'equip';
   }
 
-  /** ★ 物品是否"可使用"（与 useItem 的类型门槛一致：consumable / ammo / equip）。
-   *  UI 用它决定「点图标 = 直接使用」还是「点图标 = 打开详情」。 */
+  /** ★ 物品是否"可点击使用"（**只供背包左键分流用**：consumable / equip）。
+   *  ★ 弹药**不在内**（2026-09-15 用户定调）：弹药由武器发射消耗（如祖宗），
+   *    点背包图标不该把它"用掉"；点弹药 → 打开详情（转移/丢弃）。 */
   canUse(itemId: string): boolean {
     const t = this.archetypes.get(itemId)?.type;
-    return t === 'consumable' || t === 'ammo' || t === 'equip';
+    return t === 'consumable' || t === 'equip';
   }
 
   /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null；仅信息展示/贴片锚点用） */
