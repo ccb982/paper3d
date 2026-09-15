@@ -42,10 +42,6 @@ export class MapMarkers {
     return this.list.length;
   }
 
-  get isFull(): boolean {
-    return this.list.length >= MapMarkers.MAX;
-  }
-
   /** 放置标记（**永不顶掉旧标记**；正常情况必成功）；color 缺省 = 色板第一个 */
   add(x: number, z: number, color: string = MARKER_COLOR): MapMarker | null {
     if (this.list.length >= MapMarkers.MAX) return null;

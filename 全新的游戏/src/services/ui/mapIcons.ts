@@ -33,9 +33,9 @@ export const MARKER_PALETTE = [
 /** 默认标记色（= 色板第一个；MapMarkers 不指定颜色时用它） */
 export const MARKER_COLOR = MARKER_PALETTE[0];
 
-/** #rrggbb → rgba(r,g,b,a)（带缓存；颜色只有两个，不每帧拼字符串） */
+/** #rrggbb → rgba(r,g,b,a)（带缓存；不每帧拼字符串）。模块内私有，不对外暴露 */
 const rgbaCache = new Map<string, [number, number, number]>();
-export function withAlpha(hex: string, a: number): string {
+function withAlpha(hex: string, a: number): string {
   let rgb = rgbaCache.get(hex);
   if (!rgb) {
     rgb = [

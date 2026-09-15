@@ -2,7 +2,7 @@
 // WorldUIManager.ts —— 世界 UI 管理器
 // 封装 HUD、小地图、准星、交互提示、浮动文字、对话气泡。
 // 继承 BaseInteractionUI 统一管理弹窗栈。
-// 对应原 services/ui/UILayer + Crosshair，合并为一个统一 UI 管理器。
+// ★ 它取代了旧的 services/ui/UILayer（那份已随重构删除，不再保留空壳）。
 // ============================================================
 
 import { BaseInteractionUI } from '../BaseInteractionUI';
