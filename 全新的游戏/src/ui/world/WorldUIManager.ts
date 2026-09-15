@@ -16,6 +16,8 @@ import { InventoryPanel } from '../shared/InventoryPanel';
 import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/CharacterStatsPanel';
 import { Minimap } from '../../services/ui/Minimap';
 import { MapPanel } from './MapPanel';
+import { MapMarkers } from '../../services/ui/MapMarkers';
+import { NavHints } from '../../services/ui/NavHints';
 import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
 import { AmmoPanel } from '../../services/ui/AmmoPanel';
@@ -33,6 +35,10 @@ export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
   /** ★ 世界地图面板（M 键；读地形记录表，chunk 卸载不丢） */
   private mapPanel: MapPanel | null = null;
+  /** ★ 玩家标记点（大地图放置；小地图 + 场景方位提示共用同一份实例） */
+  private mapMarkers = new MapMarkers();
+  /** ★ 场景方位提示（右下角：舰船 / 标记点的方向 + 距离） */
+  private navHints = new NavHints();
   private hud: PlayerHud;
   private crosshair: Crosshair;
   private ammoPanel: AmmoPanel;
@@ -135,7 +141,15 @@ export class WorldUIManager extends BaseInteractionUI {
 
   /** 每帧更新（高频调用） */
   update(dt: number, ctx: WorldUIState): void {
-    this.minimap.update(ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw, ctx.entities, ctx.swarm);
+    this.minimap.update(
+      ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw,
+      ctx.entities, ctx.swarm, this.mapMarkers,
+    );
+    // ★ 场景方位提示（右下角）：舰船 + 标记点的方向/距离；与地图同源、零分配
+    this.navHints.update(
+      ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw,
+      ctx.shipPosition ?? null, this.mapMarkers,
+    );
     // ★ 舰船受击报警：横幅脉冲闪烁 + 红晕随剩余时间渐隐
     if (this.shipAlertTimer > 0) {
       this.shipAlertTimer -= dt;
@@ -370,9 +384,10 @@ export class WorldUIManager extends BaseInteractionUI {
     this.enemyScaleEl.style.color = color;
   }
 
-  /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示） */
+  /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示）—— 场景方位提示同步收起 */
   setMinimapVisible(v: boolean): void {
     this.minimap.setVisible(v);
+    this.navHints.setVisible(v);
   }
 
   /** ★ 世界地图面板是否打开（输入门控：打开时丢弃视角/缩放） */
@@ -386,7 +401,7 @@ export class WorldUIManager extends BaseInteractionUI {
       this.closePanel('map-panel');
       return;
     }
-    this.mapPanel ??= new MapPanel(this.raster, this.minimap);
+    this.mapPanel ??= new MapPanel(this.raster, this.minimap, this.mapMarkers);
     const panel = this.mapPanel;
     this.openPanel({
       id: 'map-panel',
@@ -740,6 +755,8 @@ export class WorldUIManager extends BaseInteractionUI {
     this.minimap.dispose();
     this.mapPanel?.dispose();
     this.mapPanel = null;
+    this.navHints.dispose();
+    this.mapMarkers.clear();
     this.hud.dispose();
     this.crosshair.dispose();
     this.ammoPanel.dispose();

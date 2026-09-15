@@ -10,6 +10,9 @@
 //   - ★ 敌情含【远层代理】：>35m 的敌人不是 EntityBase（在蜂群代理池里），
 //     必须额外遍历 update 的 swarm 参数，否则地图实际只看得到 35m 内（2026-09-15 修）
 //   - 玩家恒居中，箭头 = 摄像机朝向（准星方向）
+//   - ★ 图标（2026-09-15）：玩家=白箭头；舰船=青菱形+呼吸光环（很显眼）；
+//     标记点=橙黄菱形。舰船/标记**出窗后贴到画布边框**（三角朝外 + 距离数字），
+//     形状与配色与大地图共用 `mapIcons`，场景提示 NavHints 同源。
 // 窗口 ±90 米（180px → 1m/px，与 RasterMap 1 地块 = 1 像素对应）
 // ★ 窗口与 viewRadius（= LOD_MAX_DIST = 90m）完全对齐 → 角色可见范围内的敌人全收
 //   （2026-09-15：原为 160px / ±80m，会让 80~90m 这圈的敌人被窗口落位判定裁掉）
@@ -24,6 +27,14 @@
 import { RasterMap } from '../map/RasterMap';
 import { ExploredMask } from '../map/ExploredMask';
 import type { EntityBase } from '../../entity/EntityBase';
+import type { MapMarkers } from './MapMarkers';
+import {
+  drawMarkerIcon,
+  drawOffscreenIndicator,
+  drawPlayerArrow,
+  drawShipIcon,
+  SHIP_COLOR,
+} from './mapIcons';
 import {
   buildBandIdx,
   consumeMinimapWarmup,
@@ -155,13 +166,15 @@ export class Minimap {
 
   /** ★ 每帧更新：地表底图仅跨格重建 → 其余帧重贴底图 + 实体点 + 玩家箭头（居中，= 摄像机朝向）
    *  `swarm` = 蜂群代理池（远层敌人；可空）：35m 外的敌人不是 EntityBase，
-   *  不遍历它的话地图就只能看到 35m 内的敌人（2026-09-15 用户反馈修复）。 */
+   *  不遍历它的话地图就只能看到 35m 内的敌人（2026-09-15 用户反馈修复）。
+   *  `markers` = 玩家标记点（大地图放置）：与舰船同一套"窗内图标 / 出窗贴边方位"处理。 */
   update(
     px: number,
     pz: number,
     playerYaw: number,
     entities: EntityBase[],
     swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
+    markers?: MapMarkers | null,
   ): void {
     if (!this.visible) return; // ★ 隐藏期间零开销（舰内房间）
     const ctx = this.ctx;
@@ -185,13 +198,22 @@ export class Minimap {
     // 实体点（世界 → 窗口像素）：
     //   敌人：仅【视野半径 viewRadius(=LOD_MAX_DIST=90m) 内】绘制（超出即 lod3 不渲染 → 不播报）
     //   物品：静止的始终绘制（我方道具不受视野影响）
+    //   ★ 玩家/舰船不在这里画：玩家恒居中（由箭头代表）、舰船走 mapIcons 的大图标
     const x0 = Math.floor(px - this.windowHalf);
     const z0 = Math.floor(pz - this.windowHalf);
     const rSq = this.viewRadius * this.viewRadius;
+    let shipX = NaN;
+    let shipZ = NaN;
     for (const e of entities) {
       const ex = Math.floor(e.position.x);
       const ez = Math.floor(e.position.z);
       const info = e.minimapInfo;
+      if (info.kind === 'ship') {
+        shipX = ex;
+        shipZ = ez;
+        continue;
+      }
+      if (info.kind === 'player' || info.kind === 'decoration') continue;
       if (info.kind === 'enemy') {
         // ★ 视野内一律播报（2026-09-15）：只按"角色可见半径"判定，**不再叠加地图记忆**。
         //   原条件 explored && inLod 有两个漏洞：
@@ -207,11 +229,7 @@ export class Minimap {
       const pxw = ex - x0;
       const pzw = ez - z0;
       if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
-      const color = info.kind === 'player' ? '#ffffff'
-        : info.kind === 'enemy' ? '#ff4444'
-        : info.kind === 'ship' ? '#66e0ff'
-        : '#ffdd55';
-      ctx.fillStyle = color;
+      ctx.fillStyle = info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
     }
 
@@ -231,26 +249,41 @@ export class Minimap {
       }
     }
 
+    // ★ 舰船 / 标记点：窗内画大图标，出窗 → 贴边方位三角（+距离）。
+    //   与大地图共用 mapIcons 同一套形状/配色；"最近"优先画在最后（箭头之上）。
+    //   pulse = 呼吸量（光环/三角随时间微缩放，远处也能一眼扫到）。
+    const cxm = ds / 2;
+    const cym = ds / 2;
+    const halfIn = ds / 2 - 6; // 图标要完整落在画布内（贴边会被裁一半）
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0035);
+    if (!Number.isNaN(shipX)) {
+      const dx = shipX - px;
+      const dz = shipZ - pz;
+      const d = Math.hypot(dx, dz);
+      if (Math.abs(dx) <= halfIn && Math.abs(dz) <= halfIn) {
+        drawShipIcon(ctx, cxm + dx, cym + dz, 4.5, pulse);
+      } else {
+        drawOffscreenIndicator(ctx, cxm, cym, dx, dz, halfIn, halfIn, SHIP_COLOR, pulse, d);
+      }
+    }
+    if (markers) {
+      const items = markers.items;
+      for (let i = 0; i < items.length; i++) {
+        const m = items[i];
+        const dx = m.x - px;
+        const dz = m.z - pz;
+        const d = Math.hypot(dx, dz);
+        if (Math.abs(dx) <= halfIn && Math.abs(dz) <= halfIn) {
+          drawMarkerIcon(ctx, cxm + dx, cym + dz, 3.4, m.color, pulse);
+        } else {
+          drawOffscreenIndicator(ctx, cxm, cym, dx, dz, halfIn, halfIn, m.color, pulse, d);
+        }
+      }
+    }
+
     // ★ 玩家箭头：居中，方向 = 摄像机朝向（世界角 θ → canvas 旋转角 = π - θ；
     //   世界 +z → canvas 下方 → (sinθ,cosθ) → canvas (sinθ,+cosθ)）
-    const acx = ds / 2;
-    const acy = ds / 2;
-    const phi = Math.PI - playerYaw;
-    ctx.save();
-    ctx.translate(acx, acy);
-    ctx.rotate(phi);
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#111';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, -6);
-    ctx.lineTo(-4.5, 5);
-    ctx.lineTo(0, 2.5);
-    ctx.lineTo(4.5, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    drawPlayerArrow(ctx, cxm, cym, 7, Math.PI - playerYaw);
   }
 
   /** ★ 重建地表底图（地形 + 双层雾）：首帧全量；之后仅【滚动已有像素 + 补新边条】。

@@ -9,8 +9,13 @@
 //   整屏 6.9 万像素的取色从"每像素重算 HSL"降到一次字段读。
 // 交互：
 //   · 滚轮缩放（px/米）、拖拽平移（拖动后停止跟随玩家）
-//   · 「回到玩家」重新跟随；M / Esc 关闭
-// 标记：白=玩家 青=舰船 黄=NPC 红=敌人
+//   · ★ 左键单击 = 放置标记点 / 点已有标记 = 删除它（拖动平移仍走拖拽，靠位移阈值区分）
+//   · 「回到玩家」重新跟随、「清除标记」清空全部标记；M / Esc 关闭
+// 标记：白=玩家 青=舰船（菱形+光环） 黄=NPC 红=敌人
+//   ★ 玩家标记：颜色自选（顶部色板 = MARKER_PALETTE，避开蓝/灰白），
+//     每个标记记住自己的颜色 → 小地图、场景提示 NavHints 同色显示。
+//   ★ 玩家/舰船/标记用 mapIcons 统一形状（小地图 + 场景提示 NavHints 同源）：
+//     出画布的目标贴到边框上画方位三角（+ 距离数字），不会被"看不见"吞掉。
 //   ★ 敌人（2026-09-15）：只播报视野半径（LOD_MAX_DIST=90m = lod3 边界）内的；
 //     超过即 lod3、实体不渲染 → 不留"记忆敌情"。与小地图完全一致。
 //   ★ 敌情来源 = entities（35m 内已升格的实体）+ swarm 代理池（35m 外的远层敌人）；
@@ -21,6 +26,16 @@ import type { EntityBase } from '../../entity/EntityBase';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { LOD_MAX_DIST } from '../../services/lod';
+import { MapMarkers } from '../../services/ui/MapMarkers';
+import {
+  drawMarkerIcon,
+  drawOffscreenIndicator,
+  drawPlayerArrow,
+  drawShipIcon,
+  MARKER_COLOR,
+  MARKER_PALETTE,
+  SHIP_COLOR,
+} from '../../services/ui/mapIcons';
 
 /** 探索记忆（Minimap 实现；地形记录由 RasterMap 提供——地图不再自建彩色表） */
 export interface MapPanelMemory {
@@ -45,6 +60,12 @@ const MAX_SAMPLE_PX = 120_000;
 /** ★ 视野半径平方（= LOD_MAX_DIST 的平方，与 Minimap.viewRadius 同源）：
  *  两图统一 —— 只播报 ≤90m（lod3 边界以内）的敌人，超过即 lod3、实体本就不渲染。 */
 const SIGHT_R_SQ = LOD_MAX_DIST * LOD_MAX_DIST;
+/** ★ 单击判定阈值（CSS 像素）：按下→松手位移小于它 = 单击（放置/删除标记），否则算平移 */
+const DRAG_SLOP_PX = 4;
+/** ★ 单击命中已有标记的屏幕半径（CSS 像素；换算成世界米要除以 scale） */
+const MARKER_HIT_PX = 16;
+/** 出画布目标的贴边三角留白（像素） */
+const EDGE_PAD = 16;
 
 export class MapPanel {
   readonly root: HTMLDivElement;
@@ -66,13 +87,27 @@ export class MapPanel {
   /** 跟随玩家（拖动后关闭；「回到玩家」恢复） */
   private follow = true;
   private dragging = false;
+  /** ★ 本次按下是否已越过拖拽阈值（决定"松手 = 单击放置标记"还是"平移结束"） */
+  private dragMoved = false;
+  private dragDown = { x: 0, y: 0 };
   private dragLast = { x: 0, y: 0 };
+  /** ★ 上一帧 render 的视口原点 + 缩放（单击 → 世界坐标反算用；与画面严格一致） */
+  private lastX0 = 0;
+  private lastZ0 = 0;
+  /** ★ 新建标记用的颜色（顶部色板；避开蓝与灰白，见 MARKER_PALETTE） */
+  private activeColor: string = MARKER_COLOR;
+  private swatches: { el: HTMLButtonElement; color: string }[] = [];
+  /** ★ 临时提示（如"标记已满"）——覆盖信息行，几秒后自动恢复 */
+  private warnText: string | null = null;
+  private warnTimer: number | undefined;
   private redrawAccum = 0;
   private dirty = true;
 
   constructor(
     private readonly raster: RasterMap,
     private readonly memory: MapPanelMemory,
+    /** ★ 玩家标记点（与 Minimap / NavHints 共用同一份实例） */
+    private readonly markers: MapMarkers,
     parent: HTMLElement = document.body,
   ) {
     this.root = document.createElement('div');
@@ -104,8 +139,27 @@ export class MapPanel {
       return b;
     };
     const recenter = mkBtn('回到玩家', () => { this.follow = true; this.dirty = true; });
+    // ★ 清除标记走"再点一次确认"：一发误点删掉二十几个玩家放的点，比多点一次难受得多
+    let clearArmed = false;
+    const clearMarks = mkBtn('清除标记', () => {
+      if (!clearArmed) {
+        clearArmed = true;
+        clearMarks.textContent = '再点一次确认';
+        this.showWarn(`再点一次「清除标记」将删除全部 ${this.markers.count} 个标记`);
+        window.setTimeout(() => {
+          clearArmed = false;
+          clearMarks.textContent = '清除标记';
+        }, 3000);
+        return;
+      }
+      clearArmed = false;
+      clearMarks.textContent = '清除标记';
+      this.markers.clear();
+      this.dirty = true;
+    });
     const close = mkBtn('关闭 (M)', () => this.onClose?.());
-    head.append(title, spacer, recenter, close);
+    // ★ 标记色板（选中的颜色 = 之后放置的标记色；每个标记记住自己的颜色）
+    head.append(title, this.buildPalette(), spacer, recenter, clearMarks, close);
 
     // 画布
     const box = document.createElement('div');
@@ -141,14 +195,25 @@ export class MapPanel {
       this.dirty = true;
     }, { passive: false });
     this.canvas.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return; // 只认左键（拖拽平移 + 单击标记）
       this.dragging = true;
-      this.follow = false;
+      this.dragMoved = false;
+      this.dragDown = { x: e.clientX, y: e.clientY };
       this.dragLast = { x: e.clientX, y: e.clientY };
-      this.canvas.style.cursor = 'grabbing';
       e.preventDefault();
     });
+    // ★ 位移阈值：越过才进入"平移"（同时关闭跟随）；没越过 → 松手算单击（放置/删除标记）。
+    //   原实现在 mousedown 就 follow=false → 单纯点一下也会把跟随关掉。
     const onMove = (e: MouseEvent): void => {
       if (!this.dragging) return;
+      if (!this.dragMoved) {
+        const far = Math.abs(e.clientX - this.dragDown.x) + Math.abs(e.clientY - this.dragDown.y);
+        if (far < DRAG_SLOP_PX) return;
+        this.dragMoved = true;
+        this.follow = false;
+        this.dragLast = { x: e.clientX, y: e.clientY };
+        this.canvas.style.cursor = 'grabbing';
+      }
       const rect = this.canvas.getBoundingClientRect();
       const k = CANVAS_W / Math.max(1, rect.width);
       this.centerX -= (e.clientX - this.dragLast.x) * k / this.scale;
@@ -156,10 +221,13 @@ export class MapPanel {
       this.dragLast = { x: e.clientX, y: e.clientY };
       this.dirty = true;
     };
-    const onUp = (): void => {
+    const onUp = (e: MouseEvent): void => {
       if (!this.dragging) return;
+      const moved = this.dragMoved;
       this.dragging = false;
+      this.dragMoved = false;
       this.canvas.style.cursor = 'grab';
+      if (!moved && this.open_ && e.button === 0) this.handleClick(e);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -170,7 +238,7 @@ export class MapPanel {
   }
 
   private _onMove: (e: MouseEvent) => void;
-  private _onUp: () => void;
+  private _onUp: (e: MouseEvent) => void;
 
   get isOpen(): boolean {
     return this.open_;
@@ -190,6 +258,7 @@ export class MapPanel {
     this.open_ = false;
     this.onClose = null;
     this.dragging = false;
+    this.dragMoved = false;
     this.root.style.display = 'none';
     window.removeEventListener('keydown', this.onKeyDown, true);
   }
@@ -201,7 +270,7 @@ export class MapPanel {
     this.root.remove();
   }
 
-  /** 每帧驱动（打开时；重绘节流 ~8Hz，拖拽/缩放立即）
+  /** ★ 每帧驱动（打开时；重绘节流 ~8Hz，拖拽/缩放/标记立即）
    *  `swarm` = 蜂群代理池（远层敌人；可空）：>35m 的敌人不是 EntityBase，
    *  只遍历 entities 会让大地图实际只看得到 35m 内（2026-09-15 用户反馈修复）。 */
   update(
@@ -232,6 +301,78 @@ export class MapPanel {
   // 渲染
   // ============================================================
 
+  /**
+   * ★ 单击（未拖动）：点在图上的已有标记上 → 删除它；否则在该处放置新标记。
+   * 反算用上一帧 render 存下的 lastX0/lastZ0/scale → 与画面所见严格一致
+   * （不用「当前 center」重算：节流期间 center 可能已前进半帧，会偏几米）。
+   */
+  private handleClick(e: MouseEvent): void {
+    const rect = this.canvas.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const k = CANVAS_W / rect.width;
+    const cx = (e.clientX - rect.left) * k;
+    const cy = (e.clientY - rect.top) * k;
+    if (cx < 0 || cy < 0 || cx > CANVAS_W || cy > CANVAS_H) return;
+    const wx = this.lastX0 + cx / this.scale;
+    const wz = this.lastZ0 + cy / this.scale;
+    // 命中已有标记（屏幕半径换算成米）→ 删除；否则放置（用色板当前颜色）
+    const hitR = MARKER_HIT_PX / this.scale;
+    if (this.markers.removeNear(wx, wz, hitR)) {
+      this.dirty = true;
+      return;
+    }
+    // ★ 兜底：上限已放宽到 int max（实际不可达）。真触到也明确提示，绝不静默丢标记
+    if (this.markers.add(wx, wz, this.activeColor) === null) {
+      this.showWarn('标记数量已达上限，点已有标记可删除，或用「清除标记」');
+    }
+    this.dirty = true;
+  }
+
+  /** 临时提示（覆盖信息行 + 变红，几秒后自动恢复；节流重绘期间也保持可见） */
+  private showWarn(msg: string): void {
+    this.warnText = msg;
+    clearTimeout(this.warnTimer);
+    this.warnTimer = window.setTimeout(() => {
+      this.warnText = null;
+      this.dirty = true;
+    }, 3000);
+    this.dirty = true;
+  }
+
+  /** ★ 标记色板（标题右侧一排小色块；点击切换"新建标记"的颜色） */
+  private buildPalette(): HTMLDivElement {
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex;align-items:center;gap:5px;';
+    const label = document.createElement('span');
+    label.textContent = '标记颜色';
+    label.style.cssText = 'font-size:12px;color:#7fa8cd;';
+    box.appendChild(label);
+    for (const c of MARKER_PALETTE) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.title = `新建标记用 ${c}`;
+      b.style.cssText = `width:18px;height:18px;padding:0;border-radius:4px;cursor:pointer;background:${c};`;
+      b.addEventListener('click', () => {
+        this.activeColor = c;
+        this.syncSwatches();
+      });
+      this.swatches.push({ el: b, color: c });
+      box.appendChild(b);
+    }
+    this.syncSwatches();
+    return box;
+  }
+
+  /** 色板选中态（选中 = 白描边 + 同色外发光 + 微放大） */
+  private syncSwatches(): void {
+    for (const s of this.swatches) {
+      const on = s.color === this.activeColor;
+      s.el.style.border = on ? '2px solid #ffffff' : '1px solid rgba(255,255,255,0.3)';
+      s.el.style.boxShadow = on ? `0 0 8px ${s.color}` : 'none';
+      s.el.style.transform = on ? 'scale(1.12)' : 'none';
+    }
+  }
+
   private render(
     px: number,
     pz: number,
@@ -247,6 +388,9 @@ export class MapPanel {
     const oh = Math.max(8, Math.ceil(vh / step));
     const x0 = Math.floor(this.centerX - vw / 2);
     const z0 = Math.floor(this.centerZ - vh / 2);
+    // ★ 单击反算基准（与画面所见严格一致；见 handleClick）
+    this.lastX0 = x0;
+    this.lastZ0 = z0;
 
     // 离屏底图（1 离屏像素 = step 米；持久表取色，无记录 = 未探索暗色）
     if (this.off.width !== ow || this.off.height !== oh) {
@@ -300,15 +444,22 @@ export class MapPanel {
       ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(CANVAS_W, sy); ctx.stroke();
     }
 
-    // 实体标记
+    // 实体标记（玩家/舰船单独画：见下面 mapIcons 那段）
     const toX = (wx: number): number => (wx - x0) * this.scale;
     const toY = (wz: number): number => (wz - z0) * this.scale;
+    let shipX = NaN;
+    let shipZ = NaN;
     for (const e of entities) {
       const info = e.minimapInfo;
       if (info.kind === 'player' || info.kind === 'decoration') continue;
-      if (info.kind === 'item' && info.moving) continue;
       const ex = e.position.x;
       const ez = e.position.z;
+      if (info.kind === 'ship') {
+        shipX = ex;
+        shipZ = ez;
+        continue;
+      }
+      if (info.kind === 'item' && info.moving) continue;
       if (info.kind === 'enemy') {
         // ★ 只播报视野半径（= LOD_MAX_DIST = 90m = lod3 边界）内的敌人 —— 与小地图同一条规则
         //  （2026-09-15 用户定调：超过即 lod3、实体本就不渲染 → 地图也不留"记忆敌情"，
@@ -325,7 +476,7 @@ export class MapPanel {
         : info.kind === 'ship' ? '#66e0ff'
         : info.kind === 'npc' ? '#ffd75e'
         : '#ffdd55';
-      const s = info.kind === 'ship' || info.kind === 'npc' ? 5 : 3;
+      const s = info.kind === 'npc' ? 5 : 3;
       ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
     }
 
@@ -345,31 +496,71 @@ export class MapPanel {
       }
     }
 
-    // 玩家箭头（屏幕朝向 = 相机偏航；与 Minimap 同款旋转）
-    const acx = toX(px);
-    const acy = toY(pz);
-    ctx.save();
-    ctx.translate(acx, acy);
-    ctx.rotate(Math.PI - yaw);
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#0a1420';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(0, -9);
-    ctx.lineTo(-6, 7);
-    ctx.lineTo(0, 3.5);
-    ctx.lineTo(6, 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
+    // ★ 舰船 / 标记点 / 出屏方位：与 Minimap 共用 mapIcons（形状、配色、呼吸一致）
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0035);
+    const hw = CANVAS_W / 2 - EDGE_PAD;
+    const hh = CANVAS_H / 2 - EDGE_PAD;
+    const midX = CANVAS_W / 2;
+    const midY = CANVAS_H / 2;
+    if (!Number.isNaN(shipX)) {
+      const dPx = (shipX - this.centerX) * this.scale;
+      const dPy = (shipZ - this.centerZ) * this.scale;
+      if (Math.abs(dPx) <= hw && Math.abs(dPy) <= hh) {
+        drawShipIcon(ctx, midX + dPx, midY + dPy, 6, pulse);
+        this.drawLabel(ctx, '舰船', midX + dPx, midY + dPy + 17, SHIP_COLOR);
+        this.drawLabel(
+          ctx, `${Math.round(Math.hypot(shipX - px, shipZ - pz))}m`,
+          midX + dPx, midY + dPy - 17, SHIP_COLOR,
+        );
+      } else {
+        drawOffscreenIndicator(
+          ctx, midX, midY, dPx, dPy, hw, hh, SHIP_COLOR, pulse,
+          Math.hypot(shipX - px, shipZ - pz),
+        );
+      }
+    }
+    for (let i = 0; i < this.markers.count; i++) {
+      const m = this.markers.items[i];
+      const dPx = (m.x - this.centerX) * this.scale;
+      const dPy = (m.z - this.centerZ) * this.scale;
+      const dist = Math.hypot(m.x - px, m.z - pz);
+      if (Math.abs(dPx) <= hw && Math.abs(dPy) <= hh) {
+        drawMarkerIcon(ctx, midX + dPx, midY + dPy, 5, m.color, pulse);
+        this.drawLabel(ctx, m.label, midX + dPx, midY + dPy + 16, m.color);
+      } else {
+        drawOffscreenIndicator(ctx, midX, midY, dPx, dPy, hw, hh, m.color, pulse, dist);
+      }
+    }
+    // 玩家箭头（屏幕朝向 = 相机偏航；与 Minimap 同款旋转 → mapIcons 同款形状）
+    drawPlayerArrow(ctx, toX(px), toY(pz), 9, Math.PI - yaw);
 
-    // 信息行
+    // 信息行（临时提示优先：变红盖住一整行）
+    if (this.warnText) {
+      this.infoEl.textContent = `⚠ ${this.warnText}`;
+      this.infoEl.style.color = '#ff9a9a';
+      return;
+    }
+    this.infoEl.style.color = '#7fa8cd';
     const fmt = (v: number): string => v.toFixed(1);
     this.infoEl.textContent =
       `已探索 ${this.memory.exploredCount} 格　·　视野中心 (${fmt(this.centerX)}, ${fmt(this.centerZ)})`
       + `${this.follow ? '（跟随玩家）' : '（拖拽定位）'}　·　缩放 ${this.scale.toFixed(1)} 像素/米`
-      + '　·　白=玩家 青=舰船 黄=NPC 红=敌人';
+      + `　·　标记 ${this.markers.count} 个`
+      + '　·　左键点击=放置/删除标记（颜色取上方色块）　·　白=玩家 青=舰船 黄=NPC 红=敌人';
+  }
+
+  /** 地图上的小标签（深色描边保证压在任何地表色上都能读） */
+  private drawLabel(
+    ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string,
+  ): void {
+    ctx.font = 'bold 12px "Microsoft YaHei",sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.strokeStyle = 'rgba(4,8,12,0.9)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(text, x, y);
+    ctx.fillStyle = color;
+    ctx.fillText(text, x, y);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {

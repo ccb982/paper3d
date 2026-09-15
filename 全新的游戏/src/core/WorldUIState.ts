@@ -25,6 +25,9 @@ export interface WorldUIState {
   } | null;
   /** 玩家血量状态 */
   playerStats: { hp: number; maxHp: number };
+  /** ★ 舰船世界坐标（场景方位提示 NavHints：方向 + 距离；null = 无舰船）。
+   *  直接传 ShipEntity.position（稳定对象）→ 零每帧分配。 */
+  shipPosition?: { x: number; z: number } | null;
   /** ★ 弹药栏条目（左下角 AmmoPanel：背包弹药类型 + 数量 + 选中态） */
   ammoEntries: AmmoEntryView[];
   /** ★ 友军编队列表（AllyHud 左侧渲染：图标 + 血条；WorldMode 每帧构造） */

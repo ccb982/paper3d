@@ -1123,6 +1123,8 @@ export class WorldMode implements IGameMode {
       // ★ 远层代理（35m 外敌人）：小地图/大地图与实体同口径播报（≤90m）
       swarm: this.swarm.pool,
       playerStats: { hp: this.player.hp, maxHp: queryFinalStats(this.player).maxHp },
+      // ★ 舰船世界坐标（场景方位提示：角色离舰船很远时显示方向 + 距离）
+      shipPosition: this.ship?.position ?? null,
       ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
         .map((d) => ({
