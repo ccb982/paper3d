@@ -45,6 +45,10 @@ export const MINIMAP_SIZE = 180;
 export const MINIMAP_WINDOW_HALF = 90;
 /** 开雾（探索点亮）半径（米）= LOD 消失距离 */
 export const MINIMAP_VIEW_RADIUS = LOD_MAX_DIST;
+/** ★ 舰船独立开雾半径（米）：舰船自己点亮周围探索记忆，与玩家视野半径解耦（可调）。
+ *  取 > MINIMAP_VIEW_RADIUS：航行时航线两侧探明更宽（小地图窗口仍是玩家/舰船 ±90m，
+ *  多出的走廊只体现在大地图与小地图后续滚动到的区域）。 */
+export const MINIMAP_SHIP_VIEW_RADIUS = 120;
 /** LOD 圈"点亮边带"半宽（米）：覆盖跨格位移 + reveal 浮点/量化中心偏差（±~0.7m） */
 export const LOD_BAND = 4.0;
 

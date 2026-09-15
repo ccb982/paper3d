@@ -57,8 +57,8 @@ export class ExploredMask {
     return this.sparse.has(cellKeyOf(x, z));
   }
 
-  /** 标记已探明（幂等） */
-  mark(x: number, z: number): void {
+  /** 标记已探明（幂等）；返回是否为本轮新标记（开雾方据此决定是否重绘底图） */
+  mark(x: number, z: number): boolean {
     const ix = x - this.x0;
     const iz = z - this.z0;
     if (ix >= 0 && iz >= 0 && ix < this.w && iz < this.h) {
@@ -66,14 +66,17 @@ export class ExploredMask {
       if (this.bits[i] === 0) {
         this.bits[i] = 1;
         this.n++;
+        return true;
       }
-      return;
+      return false;
     }
     const k = cellKeyOf(x, z);
     if (!this.sparse.has(k)) {
       this.sparse.set(k, true);
       this.n++;
+      return true;
     }
+    return false;
   }
 
   /** 已探明格数（面板信息行） */

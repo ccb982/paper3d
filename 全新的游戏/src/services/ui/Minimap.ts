@@ -6,7 +6,7 @@
 //   - 黑雾 = 稀疏探索记忆（无限持久），窗口内未探索像素盖黑
 //   - ★ 记忆灰雾（2026-08-23）：常驻掩码盖住所有已探明区域，
 //     仅 LOD_MAX_DIST 圈内"挖孔"露全彩；偏暗=记忆观感。
-//     敌人按【当前视野半径 viewRadius】播报，不叠加地图记忆（2026-09-15 改）；我方道具始终显示
+//     敌人按【玩家视野半径 ∪ 舰船雷达半径】播报（不叠加地图记忆）；NPC 金点常显；我方道具始终显示
 //   - ★ 敌情含【远层代理】：>35m 的敌人不是 EntityBase（在蜂群代理池里），
 //     必须额外遍历 update 的 swarm 参数，否则地图实际只看得到 35m 内（2026-09-15 修）
 //   - 玩家恒居中，箭头 = 摄像机朝向（准星方向）
@@ -39,6 +39,7 @@ import {
   buildBandIdx,
   consumeMinimapWarmup,
   MINIMAP_SIZE,
+  MINIMAP_SHIP_VIEW_RADIUS,
   MINIMAP_WINDOW_HALF,
   MINIMAP_VIEW_RADIUS,
   LOD_BAND,
@@ -91,6 +92,17 @@ export class Minimap {
    */
   private lastRevealPX = NaN;
   private lastRevealPZ = NaN;
+  /** ★ 舰船独立开雾（半径解耦）：上次点亮圆心（浮点）/上次所在格（跨格触发） */
+  private shipViewRadius: number;
+  private lastShipRevealPX = NaN;
+  private lastShipRevealPZ = NaN;
+  private lastShipCellX = NaN;
+  private lastShipCellZ = NaN;
+  /** ★ 舰船开雾"窗口内新增格"收集缓冲（只重绘这几百个像素；溢出 → 全量重绘兜底） */
+  private newCellX = new Int32Array(2048);
+  private newCellZ = new Int32Array(2048);
+  private newCellCount = 0;
+  private newCellOverflow = false;
   /** ★ LOD 圈边带像素索引（静态预计算） */
   private bandIdx: Uint32Array | null = null;
   private bandIdxReady = false;
@@ -103,6 +115,8 @@ export class Minimap {
     displaySize = MINIMAP_SIZE,
     windowHalf = MINIMAP_WINDOW_HALF,
     viewRadius = MINIMAP_VIEW_RADIUS,
+    /** ★ 舰船独立开雾半径（米；与玩家视野解耦） */
+    shipViewRadius = MINIMAP_SHIP_VIEW_RADIUS,
     /** ★ 预加载数据（缺省自动按 raster.worldSeed 取；传 null 显式走冷路径） */
     warm: MinimapWarmData | null | undefined = undefined,
   ) {
@@ -110,6 +124,7 @@ export class Minimap {
     this.displaySize = displaySize;
     this.windowHalf = windowHalf;
     this.viewRadius = viewRadius;
+    this.shipViewRadius = shipViewRadius;
     this.explored = new ExploredMask(0, 0, 0, 0); // 默认全稀疏（= 旧行为）
     const posCss =
       `position:fixed;top:8px;left:8px;width:${displaySize}px;height:${displaySize}px;` +
@@ -175,8 +190,12 @@ export class Minimap {
     entities: EntityBase[],
     swarm?: { readonly x: Float32Array; readonly z: Float32Array; readonly count: number } | null,
     markers?: MapMarkers | null,
+    /** ★ 舰船世界坐标（独立开雾圆心 + 敌情雷达；null = 无舰船） */
+    shipPosition?: { x: number; z: number } | null,
   ): void {
     if (!this.visible) return; // ★ 隐藏期间零开销（舰内房间）
+    // ★ 舰船独立开雾：舰船跨格 → 点亮自身半径（与玩家视野解耦）
+    if (shipPosition) this.revealShip(shipPosition.x, shipPosition.z, px, pz);
     const ctx = this.ctx;
     const ds = this.displaySize;
 
@@ -215,20 +234,27 @@ export class Minimap {
       }
       if (info.kind === 'player' || info.kind === 'decoration') continue;
       if (info.kind === 'enemy') {
-        // ★ 视野内一律播报（2026-09-15）：只按"角色可见半径"判定，**不再叠加地图记忆**。
-        //   原条件 explored && inLod 有两个漏洞：
-        //   ① reveal 只在跨格时点亮、且按格心判定 → 视野边缘有一条 1~2m 的"在视野内
-        //      但记作未探索"的壳，敌人走到那儿会闪一下；
-        //   ② 移动快（载具/航行）时位移 d 大 → 环带更厚，未点亮区更宽。
-        //   语义上"地图记忆"= 地形看过，"视野"= 现在能看见，两者不该混用。
+        // ★ 只播报（玩家视野半径）或（舰船雷达半径）内的敌人：与大地图/舰船独立开雾同一规则
         const edx = ex - px;
         const edz = ez - pz;
-        if (edx * edx + edz * edz > rSq) continue;
+        if (edx * edx + edz * edz > rSq) {
+          if (!shipPosition) continue;
+          const sdx = ex - shipPosition.x;
+          const sdz = ez - shipPosition.z;
+          const sr = this.shipViewRadius;
+          if (sdx * sdx + sdz * sdz > sr * sr) continue;
+        }
       }
       if (info.kind === 'item' && info.moving) continue;
       const pxw = ex - x0;
       const pzw = ez - z0;
       if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;
+      // ★ NPC（访客/事件角色）：金色大方点常显（与大地图同色同尺寸，一眼可辨）
+      if (info.kind === 'npc') {
+        ctx.fillStyle = '#ffd75e';
+        ctx.fillRect(pxw - 2, pzw - 2, 5, 5);
+        continue;
+      }
       ctx.fillStyle = info.kind === 'enemy' ? '#ff4444' : '#ffdd55';
       ctx.fillRect(pxw - 1, pzw - 1, 3, 3);
     }
@@ -456,18 +482,95 @@ export class Minimap {
     this.markDisk(px, pz, this.viewRadius, this.viewRadius - Math.hypot(px - ox, pz - oz));
   }
 
+  /** ★ 舰船独立开雾：以舰船为圆心、shipViewRadius 为半径点亮探索记忆
+   *  （与玩家视野半径解耦；舰船跨格才动掩码，增量环带与玩家 reveal 同法）。
+   *  舰船在窗口内 → 强制下帧重建底图，新点亮区域立即上屏
+   *  （大地图逐帧读同一份掩码 isExplored，无需额外处理）。 */
+  private revealShip(x: number, z: number, px: number, pz: number): void {
+    const cx = Math.floor(x);
+    const cz = Math.floor(z);
+    if (cx === this.lastShipCellX && cz === this.lastShipCellZ) return;
+    this.lastShipCellX = cx;
+    this.lastShipCellZ = cz;
+    const ox = this.lastShipRevealPX;
+    const oz = this.lastShipRevealPZ;
+    this.lastShipRevealPX = x;
+    this.lastShipRevealPZ = z;
+    const inner = Number.isFinite(ox)
+      ? this.shipViewRadius - Math.hypot(x - ox, z - oz)
+      : -1;
+    const img = this.baseImg;
+    if (!img) {
+      this.markDisk(x, z, this.shipViewRadius, inner);
+      return;
+    }
+    // ★ 只收集"落在底图窗口内"的新增格：盒外点亮只影响大地图（逐帧读同一份掩码），无需重绘
+    this.newCellCount = 0;
+    this.newCellOverflow = false;
+    const added = this.markDisk(
+      x, z, this.shipViewRadius, inner,
+      this.baseOX, this.baseOZ, this.baseOX + this.displaySize - 1, this.baseOZ + this.displaySize - 1,
+    );
+    if (added <= 0) return;
+    if (this.newCellOverflow) this.repaintBaseFull(px, pz);
+    else this.paintCollectedCells();
+  }
+
+  /** ★ 重绘收集到的"窗口内新增格"并上屏（舰船开雾常态路径：几百像素，不整窗重绘） */
+  private paintCollectedCells(): void {
+    const img = this.baseImg;
+    if (!img || this.newCellCount === 0) return;
+    const ds = this.displaySize;
+    const rSq = this.viewRadius * this.viewRadius;
+    // 底图 LOD 圆心 = 玩家格中心（与 rebuildBase 的 cx+0.5 同口径）
+    const px = this.baseOX + this.windowHalf + 0.5;
+    const pz = this.baseOZ + this.windowHalf + 0.5;
+    for (let k = 0; k < this.newCellCount; k++) {
+      const wx = this.newCellX[k];
+      const wz = this.newCellZ[k];
+      const ix = wx - this.baseOX;
+      const iy = wz - this.baseOZ;
+      if (ix < 0 || iy < 0 || ix >= ds || iy >= ds) continue;
+      this.paintPixel(img, (iy * ds + ix) * 4, wx, wz, px, pz, rSq);
+    }
+    this.baseCtx.putImageData(img, 0, 0);
+  }
+
+  /** ★ 底图全量重绘 + 上屏（新增格溢出收集缓冲的兜底；窗口原点不变） */
+  private repaintBaseFull(px: number, pz: number): void {
+    const img = this.baseImg;
+    if (!img) return;
+    const ds = this.displaySize;
+    const rSq = this.viewRadius * this.viewRadius;
+    const x0 = this.baseOX;
+    const z0 = this.baseOZ;
+    for (let iy = 0; iy < ds; iy++) {
+      for (let ix = 0; ix < ds; ix++) {
+        this.paintPixel(img, (iy * ds + ix) * 4, x0 + ix, z0 + iy, px, pz, rSq);
+      }
+    }
+    this.baseCtx.putImageData(img, 0, 0);
+  }
+
   /**
    * ★ 点亮"以 (px,pz) 为心、半径 r"的圆盘内所有整数格；`inner > 0` 时挖掉内盘，
    *   只标 dist ∈ (inner, r] 的环带。逐行求圆的 x 区间（无浪费的圆判定、无漏格）。
    *   格 x 在盘内 ⇔ |x + 0.5 − px| ≤ √(r² − dz²)（dz = z + 0.5 − pz）
    *            ⇔ px − h − 0.5 ≤ x ≤ px + h − 0.5
+   *  @returns 新点亮格数；给了裁剪盒（clipX0 ≤ clipX1）时只统计盒内新增
+   *           —— 舰船独立开雾据此判断是否需要重绘底图（盒外点亮只影响大地图）。
    */
-  private markDisk(px: number, pz: number, r: number, inner: number): void {
+  private markDisk(
+    px: number, pz: number, r: number, inner: number,
+    clipX0 = 0, clipZ0 = 0, clipX1 = -1, clipZ1 = -1,
+  ): number {
     const mask = this.explored;
     const rSq = r * r;
     const innerSq = inner > 0 ? inner * inner : -1;
     const zA = Math.floor(pz - r);
     const zB = Math.floor(pz + r);
+    const hasClip = clipX1 >= clipX0;
+    let added = 0;
     for (let z = zA; z <= zB; z++) {
       const dz = z + 0.5 - pz;
       const dzSq = dz * dz;
@@ -475,6 +578,7 @@ export class Minimap {
       const hOut = Math.sqrt(rSq - dzSq);
       const xa = Math.ceil(px - hOut - 0.5);
       const xb = Math.floor(px + hOut - 0.5);
+      const zInClip = hasClip && z >= clipZ0 && z <= clipZ1;
       if (innerSq > 0) {
         const inSq = innerSq - dzSq;
         if (inSq > 0) {
@@ -482,13 +586,39 @@ export class Minimap {
           const hIn = Math.sqrt(inSq);
           const ia = Math.ceil(px - hIn - 0.5);
           const ib = Math.floor(px + hIn - 0.5);
-          for (let x = xa; x < ia; x++) mask.mark(x, z);
-          for (let x = ib + 1; x <= xb; x++) mask.mark(x, z);
+          for (let x = xa; x < ia; x++) {
+            if (mask.mark(x, z) && this.countAdded(x, z, hasClip, zInClip, clipX0, clipX1)) added++;
+          }
+          for (let x = ib + 1; x <= xb; x++) {
+            if (mask.mark(x, z) && this.countAdded(x, z, hasClip, zInClip, clipX0, clipX1)) added++;
+          }
           continue;
         }
       }
-      for (let x = xa; x <= xb; x++) mask.mark(x, z);
+      for (let x = xa; x <= xb; x++) {
+        if (mask.mark(x, z) && this.countAdded(x, z, hasClip, zInClip, clipX0, clipX1)) added++;
+      }
     }
+    return added;
+  }
+
+  /** ★ 新增格统计/收集：无裁剪盒 = 全部计入；有裁剪盒 = 只计盒内并写入重绘缓冲
+   *  （舰船开雾只重绘这几百个像素，避免整窗重绘）。 */
+  private countAdded(
+    x: number, z: number,
+    hasClip: boolean, zInClip: boolean,
+    clipX0: number, clipX1: number,
+  ): boolean {
+    if (!hasClip) return true;
+    if (!zInClip || x < clipX0 || x > clipX1) return false;
+    if (this.newCellCount < this.newCellX.length) {
+      this.newCellX[this.newCellCount] = x;
+      this.newCellZ[this.newCellCount] = z;
+      this.newCellCount++;
+    } else {
+      this.newCellOverflow = true;
+    }
+    return true;
   }
 
   /** ★ 探索判定出口（大地图面板共用同一探索记忆） */
@@ -510,5 +640,9 @@ export class Minimap {
     this.lastCellZ = NaN;
     this.lastRevealPX = NaN;
     this.lastRevealPZ = NaN;
+    this.lastShipRevealPX = NaN;
+    this.lastShipRevealPZ = NaN;
+    this.lastShipCellX = NaN;
+    this.lastShipCellZ = NaN;
   }
 }

@@ -144,7 +144,7 @@ export class WorldUIManager extends BaseInteractionUI {
   update(dt: number, ctx: WorldUIState): void {
     this.minimap.update(
       ctx.playerPosition.x, ctx.playerPosition.z, ctx.cameraYaw,
-      ctx.entities, ctx.swarm, this.mapMarkers,
+      ctx.entities, ctx.swarm, this.mapMarkers, ctx.shipPosition ?? null,
     );
     // ★ 场景方位提示（右下角）：舰船 + 标记点的方向/距离；与地图同源、零分配
     this.navHints.update(

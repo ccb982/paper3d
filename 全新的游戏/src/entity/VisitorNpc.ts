@@ -189,6 +189,14 @@ export class VisitorNpcBase extends CharacterBase {
     return this.def.name;
   }
 
+  /** ★ 小地图/大地图：NPC 金色点常显（世界侧行进/逃跑中标记为移动） */
+  override get minimapInfo(): { kind: string; moving: boolean } {
+    return {
+      kind: 'npc',
+      moving: this.phase === 'approaching' || this.phase === 'fleeing',
+    };
+  }
+
   /** ★ 是否可被攻击：仅世界侧行进/逃跑中；抵达/进舰后（舰内）免疫 */
   get attackable(): boolean {
     return this.phase === 'approaching' || this.phase === 'fleeing';

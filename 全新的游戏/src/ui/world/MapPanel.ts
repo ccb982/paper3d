@@ -18,6 +18,8 @@
 //     出画布的目标贴到边框上画方位三角（+ 距离数字），不会被"看不见"吞掉。
 //   ★ 敌人（2026-09-15）：只播报视野半径（LOD_MAX_DIST=90m = lod3 边界）内的；
 //     超过即 lod3、实体不渲染 → 不留"记忆敌情"。与小地图完全一致。
+//     ★ 舰船雷达：玩家视野外的敌人若在舰船独立开雾半径（MINIMAP_SHIP_VIEW_RADIUS）
+//       内也播报（舰船不只亮地形，也亮敌情）。
 //   ★ 敌情来源 = entities（35m 内已升格的实体）+ swarm 代理池（35m 外的远层敌人）；
 //     只遍历 entities 会让 90m 规则形同虚设（实际只看得到 35m 内）。
 // ============================================================
@@ -26,6 +28,7 @@ import type { EntityBase } from '../../entity/EntityBase';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { LOD_MAX_DIST } from '../../services/lod';
+import { MINIMAP_SHIP_VIEW_RADIUS } from '../../services/ui/MinimapWarmup';
 import { MapMarkers } from '../../services/ui/MapMarkers';
 import {
   drawMarkerIcon,
@@ -60,6 +63,9 @@ const MAX_SAMPLE_PX = 120_000;
 /** ★ 视野半径平方（= LOD_MAX_DIST 的平方，与 Minimap.viewRadius 同源）：
  *  两图统一 —— 只播报 ≤90m（lod3 边界以内）的敌人，超过即 lod3、实体本就不渲染。 */
 const SIGHT_R_SQ = LOD_MAX_DIST * LOD_MAX_DIST;
+/** ★ 舰船雷达半径平方（= 舰船独立开雾半径）：玩家视野外的敌人若在舰船雷达圈内仍播报
+ *  （舰船不只点亮地形，也点亮敌情；半径与小地图/开雾同一真源）。 */
+const SHIP_R_SQ = MINIMAP_SHIP_VIEW_RADIUS * MINIMAP_SHIP_VIEW_RADIUS;
 /** ★ 单击判定阈值（CSS 像素）：按下→松手位移小于它 = 单击（放置/删除标记），否则算平移 */
 const DRAG_SLOP_PX = 4;
 /** ★ 单击命中已有标记的屏幕半径（CSS 像素；换算成世界米要除以 scale） */
@@ -447,27 +453,32 @@ export class MapPanel {
     // 实体标记（玩家/舰船单独画：见下面 mapIcons 那段）
     const toX = (wx: number): number => (wx - x0) * this.scale;
     const toY = (wz: number): number => (wz - z0) * this.scale;
+    // ★ 先取舰船坐标：敌人播报 = 玩家视野 ∪ 舰船雷达（同循环内顺序不定，必须预扫）
     let shipX = NaN;
     let shipZ = NaN;
+    for (const e of entities) {
+      if (e.minimapInfo.kind !== 'ship') continue;
+      shipX = e.position.x;
+      shipZ = e.position.z;
+      break;
+    }
     for (const e of entities) {
       const info = e.minimapInfo;
       if (info.kind === 'player' || info.kind === 'decoration') continue;
       const ex = e.position.x;
       const ez = e.position.z;
-      if (info.kind === 'ship') {
-        shipX = ex;
-        shipZ = ez;
-        continue;
-      }
+      if (info.kind === 'ship') continue;
       if (info.kind === 'item' && info.moving) continue;
       if (info.kind === 'enemy') {
-        // ★ 只播报视野半径（= LOD_MAX_DIST = 90m = lod3 边界）内的敌人 —— 与小地图同一条规则
-        //  （2026-09-15 用户定调：超过即 lod3、实体本就不渲染 → 地图也不留"记忆敌情"，
-        //    两图行为完全一致）。原先这里按 `memory.isExplored` 过滤，>90m 的已探明区
-        //    敌人仍会显示，与小地图不一致。
+        // ★ 只播报（玩家视野半径）或（舰船雷达半径）内的敌人 —— 与小地图同一条规则
         const edx = ex - px;
         const edz = ez - pz;
-        if (edx * edx + edz * edz > SIGHT_R_SQ) continue;
+        if (edx * edx + edz * edz > SIGHT_R_SQ) {
+          if (Number.isNaN(shipX)) continue;
+          const sdx = ex - shipX;
+          const sdz = ez - shipZ;
+          if (sdx * sdx + sdz * sdz > SHIP_R_SQ) continue;
+        }
       }
       const sx = toX(ex);
       const sy = toY(ez);
@@ -480,7 +491,7 @@ export class MapPanel {
       ctx.fillRect(sx - s / 2, sy - s / 2, s, s);
     }
 
-    // ★ 远层代理（>35m 敌人）：同一半径规则（≤ LOD_MAX_DIST=90m）与同一配色
+    // ★ 远层代理（>35m 敌人）：同一半径规则（玩家视野 ∪ 舰船雷达）与同一配色
     if (swarm) {
       ctx.fillStyle = '#ff4444';
       for (let i = 0; i < swarm.count; i++) {
@@ -488,7 +499,12 @@ export class MapPanel {
         const ez = swarm.z[i];
         const edx = ex - px;
         const edz = ez - pz;
-        if (edx * edx + edz * edz > SIGHT_R_SQ) continue;
+        if (edx * edx + edz * edz > SIGHT_R_SQ) {
+          if (Number.isNaN(shipX)) continue;
+          const sdx = ex - shipX;
+          const sdz = ez - shipZ;
+          if (sdx * sdx + sdz * sdz > SHIP_R_SQ) continue;
+        }
         const sx = toX(ex);
         const sy = toY(ez);
         if (sx < -6 || sy < -6 || sx > CANVAS_W + 6 || sy > CANVAS_H + 6) continue;
