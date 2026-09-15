@@ -272,6 +272,14 @@ export interface RelicItemConfig {
   name: string;
   rarity: number;
   description: string;
+  /**
+   * ★ 标识分类（2026-09-15）：决定 UI 上挂什么牌子。
+   *   - 'relic'（默认）：遗物 —— 抽卡结果标「遗物」、进遗物面板
+   *   - 'boss'：BOSS —— 抽卡结果标「BOSS」、不进遗物计数/遗物列表
+   *   注意：两者共用 outOfRun.owned 存储 + RELIC_ITEM_CONFIG 配置（普瑞赛斯就是这样：
+   *   她是 6★ Boss，但只要有 iconFrame/texture 就得有个能查名字/图标的地方）。
+   */
+  kind?: 'relic' | 'boss';
   /** FTX 纹理路径（仅展示用） */
   texture?: string;
   /** ★ 多帧图标：根据拥有数量挑选 FTX 帧（count=拥有数；省略恒为第 0 帧） */
@@ -280,6 +288,7 @@ export interface RelicItemConfig {
    *  一个遗物可挂多条效果（如"每日属性 + 开局道具"），核心代码零改动。 */
   effects?: RelicEffectConfig[];
 }
+
 
 /** ★ 遗物修正汇总（效果源 'relic' 的原始乘区；EffectSystem 消费） */
 export interface RelicStatModifiers {

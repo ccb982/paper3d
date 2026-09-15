@@ -9,11 +9,13 @@
 
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 
-/** 遗物展示条目 */
+/** 局外条目展示（遗物 / BOSS 共用；kind 决定挂在哪个区块、什么配色） */
 export interface RelicEntry {
   id: string;
   name: string;
   count: number;
+  /** ★ 'boss' = 普瑞赛斯等（不进「遗物」区块，单独标 BOSS）；缺省视作遗物 */
+  kind?: 'relic' | 'boss';
   /** 多帧图标帧号（RELIC_ITEM_CONFIG.iconFrame(count)） */
   iconFrame: number;
   description: string;
@@ -53,6 +55,9 @@ export interface CharacterStatsSnapshot {
 
 const ORANGE_BRIGHT = '#ffc06a';
 const ORANGE_DIM = 'rgba(240,162,74,0.55)';
+/** ★ BOSS 区块色（赤红；与「遗物」的暖金区分开） */
+const BOSS_BRIGHT = '#ff8a6a';
+const BOSS_DIM = 'rgba(255,86,64,0.55)';
 /** 局内装备临时加成色（青） */
 const TEMP = '#7fd4ff';
 const TEXT_DIM = '#b9a58c';
@@ -119,24 +124,40 @@ export class CharacterStatsPanel {
     root.appendChild(this.plainRow('天数', String(snapshot.day)));
     root.appendChild(this.plainRow('累计死亡', String(snapshot.deaths)));
 
-    // ---- 遗物 ----
-    const relicTitle = document.createElement('div');
-    relicTitle.textContent = '遗物';
-    relicTitle.style.cssText = [
-      `color:${ORANGE_BRIGHT}`, 'font-weight:bold', 'font-style:italic',
-      `border-bottom:1px solid ${ORANGE_DIM}`, 'padding-bottom:4px', 'margin-top:2px',
-    ].join(';');
-    root.appendChild(relicTitle);
-    if (snapshot.relics.length === 0) {
+    // ---- 遗物（★ BOSS 不算遗物：普瑞赛斯走下面单独的 BOSS 区块）----
+    const relicEntries = snapshot.relics.filter((r) => r.kind !== 'boss');
+    const bossEntries = snapshot.relics.filter((r) => r.kind === 'boss');
+
+    root.appendChild(this.sectionTitle('遗物', ORANGE_BRIGHT, ORANGE_DIM));
+    if (relicEntries.length === 0) {
       const empty = document.createElement('div');
       empty.textContent = '尚未拥有遗物';
       empty.style.cssText = `color:${TEXT_DIM};`;
       root.appendChild(empty);
     } else {
-      for (const r of snapshot.relics) {
+      for (const r of relicEntries) {
         root.appendChild(this.relicRow(r, iconRegistry));
       }
     }
+
+    // ---- BOSS（唯一 6★；牌子是「BOSS」不是「遗物」）----
+    if (bossEntries.length > 0) {
+      root.appendChild(this.sectionTitle('BOSS', BOSS_BRIGHT, BOSS_DIM));
+      for (const r of bossEntries) {
+        root.appendChild(this.relicRow(r, iconRegistry));
+      }
+    }
+  }
+
+  /** 分区标题（遗物 / BOSS 共用样式，仅配色不同） */
+  private sectionTitle(text: string, bright: string, dim: string): HTMLDivElement {
+    const title = document.createElement('div');
+    title.textContent = text;
+    title.style.cssText = [
+      `color:${bright}`, 'font-weight:bold', 'font-style:italic',
+      `border-bottom:1px solid ${dim}`, 'padding-bottom:4px', 'margin-top:2px',
+    ].join(';');
+    return title;
   }
 
   /** 实时生命刷新（面板打开时每帧调用；无 DOM 写入时也零分配） */
@@ -189,19 +210,22 @@ export class CharacterStatsPanel {
     return row.el;
   }
 
-  /** 遗物行：图标 + 名称×件数 + 描述 */
+  /** 局外条目行：图标 + 名称×件数 + 描述（遗物 / BOSS 共用，仅配色与牌子不同） */
   private relicRow(r: RelicEntry, iconRegistry: ItemIconRegistry): HTMLDivElement {
+    const isBoss = r.kind === 'boss';
+    const bright = isBoss ? BOSS_BRIGHT : ORANGE_BRIGHT;
+    const dim = isBoss ? BOSS_DIM : ORANGE_DIM;
     const row = document.createElement('div');
     row.style.cssText = [
       'display:flex', 'align-items:center', 'gap:8px',
-      'padding:5px 7px', `background:${'rgba(240,162,74,0.08)'}`,
-      `border:1px solid rgba(240,162,74,0.30)`, 'border-radius:5px',
+      'padding:5px 7px', `background:${isBoss ? 'rgba(255,86,64,0.08)' : 'rgba(240,162,74,0.08)'}`,
+      `border:1px solid ${dim}`, 'border-radius:5px',
     ].join(';');
     const iconBox = document.createElement('div');
     iconBox.style.cssText = [
       'width:32px', 'height:32px', 'flex:none', 'display:flex',
       'align-items:center', 'justify-content:center',
-      'background:rgba(12,10,6,0.8)', `border:1px solid ${ORANGE_DIM}`,
+      'background:rgba(12,10,6,0.8)', `border:1px solid ${dim}`,
       'border-radius:5px', 'overflow:hidden',
     ].join(';');
     try {
@@ -217,8 +241,11 @@ export class CharacterStatsPanel {
     const text = document.createElement('div');
     text.style.cssText = 'flex:1;min-width:0;';
     const name = document.createElement('div');
-    name.textContent = `${r.name} ×${r.count}`;
-    name.style.cssText = `color:${ORANGE_BRIGHT};font-weight:bold;`;
+    const tag = isBoss
+      ? '<span style="font-size:10px;padding:0 4px;border:1px solid rgba(255,86,64,0.6);border-radius:3px;margin-right:5px;vertical-align:1px;">BOSS</span>'
+      : '';
+    name.innerHTML = `${tag}${r.name} ×${r.count}`;
+    name.style.cssText = `color:${bright};font-weight:bold;`;
     const desc = document.createElement('div');
     desc.textContent = r.description;
     desc.style.cssText = `color:${TEXT_DIM};font-size:11px;margin-top:2px;line-height:1.35;`;

@@ -215,6 +215,39 @@ export class ItemManager {
     return Array.isArray(this.session.player.slots) ? this.session.player.slots : [];
   }
 
+  /**
+   * ★ 一键装备：把背包格里的「可部署友军 / 可装备」物品放进装备栏第一个空槽。
+   *
+   * 与 putIntoSlot（拖入指定槽位）等价，只是槽位由系统挑第一个空的 ——
+   * 供背包「左键点图标」用：可部署/可装备物品点一下 = 装备，而不是被"使用"消耗掉。
+   *   · 装备栏已满 → 失败并提示「装备栏已满」（**不消耗物品**，避免点一下东西就没了）
+   *   · 非装备/非可部署 → 失败（UI 侧不会走到这里）
+   */
+  equipToFirstFreeSlot(
+    layer: keyof GameSession['inventories'], row: number, col: number,
+  ): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const cell = grid?.[row]?.[col];
+    if (!cell) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(cell.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能装备' };
+
+    // ★ 只在 SLOT_COUNT 范围内找空槽（数组可能更长，避免装到可见格子之外）
+    let idx = -1;
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      if (!slots[i]) { idx = i; break; }
+    }
+    if (idx === -1) return { success: false, message: `装备栏已满（${SLOT_COUNT}/${SLOT_COUNT}）` };
+
+    slots[idx] = cell.itemId;
+    this.removeItem(layer, cell.itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex: idx, itemId: cell.itemId, prev: null });
+    return { success: true, message: `已装备到装备栏 ${idx + 1}` };
+  }
+
   /** ★ 拖入槽池：源格子物品 → 放入指定空槽（一格一个物品，违规/占位拒绝）。发事件由世界侧生成/同步 */
   putIntoSlot(slotIndex: number, layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
     const slots = this.session.player.slots;

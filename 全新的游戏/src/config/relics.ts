@@ -37,6 +37,8 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     id: 'priestess',
     name: '普瑞赛斯',
     rarity: 6,
+    /** ★ 她不是遗物，是 Boss（抽卡结果标「BOSS」，不计入遗物数量/列表） */
+    kind: 'boss',
     description: '唯一的 6★（明日方舟 6★ 规则：基础 2%，50 抽未出后每抽 +2%，99 抽必出）。抽到她之后，下一次出击将进入「四维空间」——击败她，这一切就结束了。',
     effects: [],
   },
@@ -79,3 +81,24 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
 
   // 新增遗物只需在这里加配置（效果类型在 RelicEffects 注册表），代码零改动
 };
+
+// ============================================================
+// ★ 局外条目分类工具（2026-09-15）
+// 背景：outOfRun.owned 里混着「遗物」和「BOSS」（普瑞赛斯），但两者 UI 牌子不同。
+// 统一从这里取分类，避免 UI 各处散落 `RELIC_ITEM_CONFIG[id]?.kind ?? 'relic'`。
+// ============================================================
+
+/** 局外条目分类（缺省 = 遗物） */
+export function relicKindOf(id: string): 'relic' | 'boss' {
+  return RELIC_ITEM_CONFIG[id]?.kind ?? 'relic';
+}
+
+/** 已拥有的**遗物** id（排除 BOSS）：供"遗物 N 种"计数与遗物面板列表 */
+export function ownedRelicIds(owned: Record<string, number> | undefined): string[] {
+  return Object.keys(owned ?? {}).filter((id) => !!RELIC_ITEM_CONFIG[id] && relicKindOf(id) === 'relic');
+}
+
+/** 已拥有的 **BOSS** id（普瑞赛斯等）：抽卡结果与面板单独标识 */
+export function ownedBossIds(owned: Record<string, number> | undefined): string[] {
+  return Object.keys(owned ?? {}).filter((id) => !!RELIC_ITEM_CONFIG[id] && relicKindOf(id) === 'boss');
+}

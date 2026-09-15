@@ -16,7 +16,7 @@ import type { CraftingOverlay } from './CraftingOverlay';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { ActionPanel, OperatorPanel } from './ShipPanels';
 import { computeCombatStats } from '../../core/Session';
-import { RELIC_ITEM_CONFIG } from '../../config/relics';
+import { RELIC_ITEM_CONFIG, relicKindOf } from '../../config/relics';
 import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/CharacterStatsPanel';
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
@@ -240,6 +240,8 @@ export class ShipUIManager extends BaseInteractionUI {
           id,
           name: cfg?.name ?? id,
           count,
+          // ★ BOSS（普瑞赛斯）不算遗物 → 面板单独挂「BOSS」区块
+          kind: relicKindOf(id),
           iconFrame: cfg?.iconFrame ? cfg.iconFrame(count) : 0,
           description: cfg?.description ?? '',
         };

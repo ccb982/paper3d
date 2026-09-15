@@ -120,6 +120,23 @@ const HSL_FRAG_CHAR = `
   }
 `;
 
+/**
+ * ★ 抽卡结果归属分类（决定结果卡挂什么牌子 + 图标查哪张表）：
+ *   - 'inRun' 物资：进背包
+ *   - 'outRun' 遗物：永久生效、进遗物面板、重置遗物保底
+ *   - 'boss'  BOSS（普瑞赛斯）：唯一的 6★，牌子是「BOSS」不是「遗物」
+ */
+type GachaResultKind = 'inRun' | 'outRun' | 'boss';
+
+interface GachaResultEntry {
+  kind: GachaResultKind;
+  id: string;
+  name: string;
+  rarity: number;
+  description: string;
+  isNew: boolean;
+}
+
 export class GachaOverlay {
   private root: HTMLDivElement;
   private canvas: HTMLCanvasElement;
@@ -1332,7 +1349,7 @@ export class GachaOverlay {
     //   第 99 抽必出（100%）；获得即重置计数
     const bossCfg = (gachaPool as unknown as { boss?: { id: string; rarity: number } }).boss;
 
-    const results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }> = [];
+    const results: GachaResultEntry[] = [];
     for (let i = 0; i < count; i++) {
       s.gacha.totalPulls++;
       s.gacha.pityCounter++;
@@ -1348,7 +1365,8 @@ export class GachaOverlay {
           s.gacha.bossPity = 0;
           const cfg = RELIC_ITEM_CONFIG[bossCfg.id];
           results.push({
-            kind: 'outRun',
+            // ★ 普瑞赛斯是 BOSS，不是遗物 → 结果卡挂「BOSS」牌
+            kind: 'boss',
             id: bossCfg.id,
             name: cfg?.name ?? bossCfg.id,
             rarity: bossCfg.rarity,
@@ -1408,7 +1426,7 @@ export class GachaOverlay {
     this.showResult(results);
   }
 
-  private showResult(results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }>): void {
+  private showResult(results: GachaResultEntry[]): void {
     this.resultList.innerHTML = '';
     for (const r of results) {
       const item = document.createElement('div');
@@ -1426,9 +1444,12 @@ export class GachaOverlay {
       const rarityLabel = r.rarity >= 6 ? '\u26056' : r.rarity >= 5 ? '\u26055' : r.rarity >= 4 ? '\u26054' : '\u26053';
       const newBadge = r.isNew ? ' \uD83C\uDD95' : '';
 
-      const badge = r.kind === 'outRun'
-        ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">遗物</span>'
-        : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">物资</span>';
+      // ★ 牌子三态：物资（蓝）/ 遗物（金）/ BOSS（赤红）—— 普瑞赛斯走 BOSS
+      const badge = r.kind === 'boss'
+        ? '<span style="color:#f96;font-size:12px;padding:1px 6px;background:rgba(255,86,64,0.15);border:1px solid rgba(255,86,64,0.45);border-radius:4px;margin-right:6px;">BOSS</span>'
+        : r.kind === 'outRun'
+          ? '<span style="color:#ff9;font-size:12px;padding:1px 6px;background:rgba(255,215,0,0.15);border:1px solid rgba(255,215,0,0.4);border-radius:4px;margin-right:6px;">遗物</span>'
+          : '<span style="color:#9cf;font-size:12px;padding:1px 6px;background:rgba(68,136,255,0.15);border:1px solid rgba(68,136,255,0.45);border-radius:4px;margin-right:6px;">物资</span>';
 
       item.appendChild(this.makeResultIcon(r));
 
@@ -1454,7 +1475,7 @@ export class GachaOverlay {
   }
 
 /** ★ 结果卡片图标：与背包/加工台同一条绘制管线（局外 FTX 纹理、局内物品色块/无人机动态播放） */
-  private makeResultIcon(r: { kind: 'inRun' | 'outRun'; id: string; rarity: number }): HTMLElement {
+  private makeResultIcon(r: GachaResultEntry): HTMLElement {
     const box = document.createElement('div');
     const borderColor = r.rarity >= 5 ? '#c8a0ff' : r.rarity >= 4 ? '#8af' : '#8c8';
     box.style.cssText = [
@@ -1462,9 +1483,10 @@ export class GachaOverlay {
       `border:2px solid ${borderColor}`, 'background:rgba(15,15,30,0.7)',
       'display:flex', 'align-items:center', 'justify-content:center',
     ].join(';');
-    // ★ 多帧纹理：遗物按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
-    const owned = r.kind === 'outRun' ? (this.session.outOfRun?.owned?.[r.id] ?? 0) : 0;
-    const cfg = r.kind === 'outRun' ? RELIC_ITEM_CONFIG[r.id] : undefined;
+    // ★ 多帧纹理：局外条目（遗物 / BOSS）按拥有数选帧（如砾小姐的爱：1件=帧1、≥2件=帧2）
+    const isOutRun = r.kind !== 'inRun';
+    const owned = isOutRun ? (this.session.outOfRun?.owned?.[r.id] ?? 0) : 0;
+    const cfg = isOutRun ? RELIC_ITEM_CONFIG[r.id] : undefined;
     const frame = cfg?.iconFrame ? cfg.iconFrame(owned) : 0;
     const el = this.iconRegistry.createIconElement(r.id, frame);
     el.style.width = '100%';

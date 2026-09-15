@@ -292,9 +292,11 @@ export class InventoryPanel {
 
   /**
    * ★ 左键单击图标的行为分流（2026-09-15 用户定调：点图标就能用）：
-   *   · 可使用（消耗品 / 弹药 / 装备）→ **直接使用**，用后就地刷新网格；
+   *   · 可部署友军 / 可装备（无人机、防具、载具）→ **装备**：放进装备栏第一个空槽
+   *     （与拖入空槽同管线；装备栏满则提示「装备栏已满」，**不消耗物品**）；
+   *   · 消耗品 / 弹药 → **直接使用**，用后就地刷新网格；
    *   · 其余（材料等）→ 打开详情（保留右键入口，两处行为一致）。
-   * 失败原因（如"已达到上限""出击槽已满"）用轻提示告知，避免静默无反应。
+   * 失败原因（如"已达到上限""装备栏已满""需在作战中使用"）用轻提示告知，避免静默无反应。
    */
   private activateSlot(
     layer: keyof GameSession['inventories'],
@@ -306,20 +308,38 @@ export class InventoryPanel {
     const slot = grid?.[row]?.[col];
     if (!slot) return;
 
-    const canUse = (this.opts.allowUse ?? true) && this.opts.itemManager.canUse(slot.itemId);
-    if (!canUse) {
-      this.openItemDetail(layer, row, col);
+    const allow = this.opts.allowUse ?? true;
+    const im = this.opts.itemManager;
+    const itemId = slot.itemId;
+
+    // ★ 可部署友军（无人机）/ 可装备（防具、载具）→ 点一下 = 放进装备栏，
+    //   与「拖入空槽」同一条管线（在槽即已穿戴/已部署）。绝不能走 useItem：
+    //   那会把物品"用掉"消耗（无人机在基地内没有世界侧监听 → 直接消失）。
+    if (allow && (im.isDeployable(itemId) || im.isEquip(itemId))) {
+      const equipped = im.equipToFirstFreeSlot(layer, row, col);
+      this.flash(equipped.message ?? (equipped.success ? '已装备' : '无法装备'), equipped.success);
+      if (equipped.success) {
+        this.opts.onDataChanged();
+        refresh();
+      }
       return;
     }
 
-    const result = this.opts.itemManager.useItem(layer, row, col);
-    if (!result.success) {
-      this.flash(result.message ?? '无法使用', false);
+    // ★ 消耗品 / 弹药 → 直接使用
+    if (allow && im.canUse(itemId)) {
+      const result = im.useItem(layer, row, col);
+      if (!result.success) {
+        this.flash(result.message ?? '无法使用', false);
+        return;
+      }
+      this.flash(result.message ?? '已使用', true);
+      this.opts.onDataChanged();
+      refresh();
       return;
     }
-    this.flash(result.message ?? '已使用', true);
-    this.opts.onDataChanged();
-    refresh();
+
+    // 其余（材料等）→ 打开详情（右键入口也保留，两处行为一致）
+    this.openItemDetail(layer, row, col);
   }
 
   /** ★ 轻提示（使用结果）：底部居中浮一条，1.4s 自动消失 */
@@ -377,6 +397,9 @@ export class InventoryPanel {
               if (result.success) {
                 this.opts.closePanel('item-detail');
                 this.opts.onDataChanged();
+              } else {
+                // ★ 失败要出声（如"装备栏已满"），否则点了没反应还以为卡了
+                this.flash(result.message ?? '无法装备', false);
               }
             },
           }));

@@ -8,7 +8,7 @@
 import { BaseInteractionUI } from '../BaseInteractionUI';
 import type { GameSession } from '../../core/Session';
 import { computeCombatStats } from '../../core/Session';
-import { RELIC_ITEM_CONFIG } from '../../config/relics';
+import { RELIC_ITEM_CONFIG, relicKindOf } from '../../config/relics';
 import type { WorldUIState } from '../../core/WorldUIState';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
@@ -690,6 +690,8 @@ export class WorldUIManager extends BaseInteractionUI {
           id,
           name: cfg?.name ?? id,
           count,
+          // ★ BOSS（普瑞赛斯）不算遗物 → 面板单独挂「BOSS」区块
+          kind: relicKindOf(id),
           iconFrame: cfg?.iconFrame ? cfg.iconFrame(count) : 0,
           description: cfg?.description ?? '',
         };

@@ -106,20 +106,28 @@ effectRegistry.set('equip', (_params, ctx) => {
   if (!itemId) return { success: false, message: '装备数据缺失' };
   const slots = ctx.session.player.slots;
   if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
-  const idx = slots.findIndex((s) => !s);
-  if (idx === -1) return { success: false, message: `出击槽已满（${SLOT_COUNT}/${SLOT_COUNT}）` };
+  // ★ 只在 SLOT_COUNT 范围内找空槽（与 ItemManager.equipToFirstFreeSlot 同口径）
+  let idx = -1;
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    if (!slots[i]) { idx = i; break; }
+  }
+  if (idx === -1) return { success: false, message: `装备栏已满（${SLOT_COUNT}/${SLOT_COUNT}）` };
   slots[idx] = itemId;
   eventBus.emit('deployment_changed', { slotIndex: idx, itemId, prev: null });
-  return { success: true, message: `已放入出击槽 ${idx + 1}` };
+  return { success: true, message: `已装备到装备栏 ${idx + 1}` };
 });
 
-effectRegistry.set('summon_drone', (_params, _ctx) => {
+effectRegistry.set('summon_drone', (_params, ctx) => {
+  // ★ 召唤必须发生在战场上：基地里没有世界侧监听，成功返回会让物品被"用掉"却什么都没发生。
+  if (!ctx.user) return { success: false, message: '需在作战中使用' };
   // ★ 召唤「可露希尔的无人机」：广播事件，由 WorldMode 近玩家位置生成无人机
   eventBus.emit('drone_summon', {});
   return { success: true, message: '已放出可露希尔的无人机' };
 });
 
-effectRegistry.set('summon_sentinel', (_params, _ctx) => {
+effectRegistry.set('summon_sentinel', (_params, ctx) => {
+  // ★ 同上：放置类效果只在战场生效（避免基地误点把祖宗消耗掉）
+  if (!ctx.user) return { success: false, message: '需在作战中使用' };
   // ★ 放置「祖宗」：广播事件，由 WorldMode 在玩家身前放置站桩友军
   eventBus.emit('sentinel_summon', {});
   return { success: true, message: '已放置祖宗' };
