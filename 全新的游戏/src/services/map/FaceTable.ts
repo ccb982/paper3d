@@ -11,7 +11,7 @@
 // 表只标注属性；精确几何交创建函数（见《地形与渲染管线架构.md》）。
 // ============================================================
 
-import { BLOCKS_PER_SIDE, CHUNK_SIZE } from "./ChunkGenerator";
+import { BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import {
   type BlockSource,
   surfaceHeightCore,
@@ -21,7 +21,6 @@ import {
 import { tileById, type TileGenRole } from "./Tiles";
 
 const BPS = BLOCKS_PER_SIDE; // 15
-const N = CHUNK_SIZE; // 60
 export const DIR4 = [
   { dx: 1, dz: 0 },
   { dx: -1, dz: 0 },
@@ -230,18 +229,6 @@ export function pass2Build(table: FaceTable, src: BlockSource): void {
     if (dir === 1) return [[x0, z0 + s], [x0, z0 + s + 1]];
     if (dir === 2) return [[x0 + s, z0 + 4], [x0 + s + 1, z0 + 4]];
     return [[x0 + s, z0], [x0 + s + 1, z0]];
-  };
-
-  /** 邻块在共享边（邻块 dir^1 边）的本视角视觉顶，逐段 max */
-  const neighborEdgeTop = (bx: number, bz: number, dir: number): number => {
-    const nbx = bx + DIR4[dir].dx;
-    const nbz = bz + DIR4[dir].dz;
-    let m = -1e9;
-    for (let s = 0; s < 4; s++) {
-      const [[ax, az], [bx2, bz2]] = segEnds(nbx, nbz, oppositeDir(dir), s);
-      m = Math.max(m, viewTopAt(src, nbx, nbz, ax, az), viewTopAt(src, nbx, nbz, bx2, bz2));
-    }
-    return m;
   };
 
   for (let lbz = 0; lbz < BPS; lbz++) {

@@ -209,8 +209,6 @@ export class SkyDome {
   /** 主渲染器引用（setup 先于 setMoonEffect 调用，保存此处用于延迟注入） */
   private _renderer: THREE.WebGLRenderer | null = null;
 
-  /** 云纹理滚动偏移（累积；U 水平漂移） */
-  private cloudScroll = { x: 0, y: 0 };
 
   constructor() {
     // ---- 天空穹顶：大半径下半球（只画背面/内侧朝下的球壳，避免 0,0 处自遮挡） ----

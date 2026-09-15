@@ -60,9 +60,9 @@ export class BulletManager {
   private hitEffectShapes: HitEffectShapeExport[];
 
   constructor(
-    private em: EntityManager,
+    em: EntityManager,
     private scene: THREE.Scene,
-    private asset: FrameAssetSource,
+    asset: FrameAssetSource,
     capacity = 10, // ★ 2026-09-12：池 100 → 10（用户定调；90 个休眠记录/刚体随之消失）
     glRenderer?: THREE.WebGLRenderer,
     hitEffectShapes: HitEffectShapeExport[] = [],

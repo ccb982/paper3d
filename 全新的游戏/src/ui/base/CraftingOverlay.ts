@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import type { ItemManager } from '../../systems/inventory/ItemManager';
 import type { CraftingManager } from '../../systems/inventory/CraftingManager';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
-import { CraftModule, MODULE_SLOTS, slotCss } from './CraftModule';
+import { CraftModule, slotCss } from './CraftModule';
 import { FtxAsset } from '../../vendor/player/FtxAsset';
 import { compositeFrameToCanvas } from '../shared/ftxFrameToCanvas';
 import { applyShaderDebug } from '../../services/render/GameRenderer';
@@ -55,7 +55,6 @@ export class CraftingOverlay {
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.OrthographicCamera;
-  private ready = false;
   private rafId: number | null = null;
   private station: 'ship' | 'portable' = 'ship';
 
@@ -297,7 +296,6 @@ export class CraftingOverlay {
       console.warn('[CraftingOverlay] 加工模块素材载入失败:', err);
     }
 
-    this.ready = true;
   }
 
   // ============================================================

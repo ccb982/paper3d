@@ -24,19 +24,7 @@
 // ============================================================
 
 import { tileById, type TileGenRole } from "./Tiles";
-import {
-  hash2,
-  CHUNK_SIZE,
-  BLOCK_SIZE,
-  BLOCKS_PER_SIDE,
-} from "./ChunkGenerator";
-import { hsl2rgb } from "./TerrainPalette";
-import {
-  applyGroupTintHsl,
-  SEMANTIC_THEME_MIX,
-  type GroupPalette,
-} from "./TileGroups";
-import { BAKE_SUN, CAST_MIN_DEPTH } from "./RefinementConstants";
+import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
 import { APRON_ANCHOR_P, apronAnchorRoll } from "./decor/ApronAnchor";
 
 // ============================================================

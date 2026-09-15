@@ -100,7 +100,7 @@ effectRegistry.set('ammo', (params, ctx) => {
   return { success: true, ammoAmount: value, message: `补充 ${value} 发弹药` };
 });
 
-effectRegistry.set('equip', (params, ctx) => {
+effectRegistry.set('equip', (_params, ctx) => {
   // ★ 防具武器类：使用道具 → 放入出击槽池第一个空槽（在格即已穿戴，贴片全量叠加）
   const itemId = ctx.itemId;
   if (!itemId) return { success: false, message: '装备数据缺失' };

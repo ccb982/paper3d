@@ -113,7 +113,7 @@ export class ItemBase extends EntityBase {
   }
 
   /** ★ 坠落保护 */
-  protected override onUpdate(dt: number): void {
+  protected override onUpdate(_dt: number): void {
     if (this.entity.position.y < -20) this.dispose();
   }
 

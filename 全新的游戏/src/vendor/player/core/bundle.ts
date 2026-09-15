@@ -1,6 +1,5 @@
 import type { Manifest, PerFrameData, AnnotationsFile, HitEffectsFile } from './types';
 
-const LOCAL_HEADER_SIG = 0x04034b50;
 const CENTRAL_HEADER_SIG = 0x02014b50;
 const EOCD_SIG = 0x06054b50;
 
@@ -11,25 +10,6 @@ export function fnv1a32(bytes: Uint8Array): string {
     hash = Math.imul(hash, 16777619) >>> 0;
   }
   return hash.toString(16).padStart(8, '0');
-}
-
-function crc32(bytes: Uint8Array): number {
-  const CRC_TABLE = (() => {
-    const t = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) {
-        c = c & 1 ? (0xedb88320 ^ (c >>> 1)) >>> 0 : c >>> 1;
-      }
-      t[n] = c >>> 0;
-    }
-    return t;
-  })();
-  let crc = 0xffffffff;
-  for (let i = 0; i < bytes.length; i++) {
-    crc = (CRC_TABLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8)) >>> 0;
-  }
-  return (crc ^ 0xffffffff) >>> 0;
 }
 
 export interface ZipEntry {

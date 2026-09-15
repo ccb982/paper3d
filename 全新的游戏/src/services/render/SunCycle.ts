@@ -237,10 +237,8 @@ export class SunCycle {
     //
     // 利用 daylight 平方作为"正午感"，dl 本身作为"白天感"
     // dusk 感来自 |dl - dl²|（过渡带峰值）
-    const noonFactor = dl * dl;                // 正午最强，晨昏/夜晚为 0
     const dayFactor = dl;                      // 白天感
     const duskFactor = Math.abs(dl - dl * dl); // 晨昏带 = dl*(1-dl) 在 0.5 处峰值
-    const nightFactor = 1 - dl;               // 夜晚感
 
     // 晨昏过渡在日出/日落附近额外增强（±1.5h 窗口）
     const dawnDusk = smoothstep(SUNRISE - 0.5, SUNRISE + 1.5, t) *

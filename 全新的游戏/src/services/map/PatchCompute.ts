@@ -24,7 +24,7 @@ import {
   type GeoUpdateRanges,
   type LevelAtWorld,
 } from "./FaceBuild";
-import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, computeIncrementalMasks, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
+import { incrementalGeometry, incrementalDropCache, seedBaseGeometry, partitionGroundCells, PHYS_GRID } from "./IncrementalGeometry";
 import { buildWaterSurface, levelsHash, type WaterSurfaceRaw } from "./WaterSurface";
 import {
   makeChunkSource,

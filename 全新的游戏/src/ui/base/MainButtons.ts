@@ -326,7 +326,6 @@ export class MainButtons {
     this._btnMeshes.push(decoMesh);
 
     // 装饰梯形的底部黑光 glow
-    const decoBottomY = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtl.y : dbl.y;
     const decoBLeft = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtl : dbl;
     const decoBRight = (dtl.y + dtr.y) / 2 < (dbl.y + dbr.y) / 2 ? dtr : dbr;
     const decoGlowCanvas = document.createElement('canvas');

@@ -12,7 +12,6 @@ import {
   CharacterController,
   type CharacterAnimMap,
 } from "../systems/player/CharacterController";
-import type { FrameAssetSource } from "../services/fx/AssetSource";
 import type { InputActions } from "../platform/input/InputActions";
 import type { CameraFrame } from "../services/camera/CameraController";
 import { shapeExtents, separateXZ } from "../services/physics/Collision";

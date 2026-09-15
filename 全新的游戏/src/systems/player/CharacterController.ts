@@ -150,7 +150,7 @@ export class CharacterController {
    * ★ AI 定向移动（无输入）：设置期望方向（速度驱动，物理结算位置）。
    * 供敌人/AI 行为调用（玩家走 update 输入驱动）。
    */
-  moveToward(dx: number, dz: number, dt: number, speed: number): void {
+  moveToward(dx: number, dz: number, _dt: number, speed: number): void {
     const len = Math.hypot(dx, dz);
     if (len > 0.001) {
       this.moveDir.x = dx / len;

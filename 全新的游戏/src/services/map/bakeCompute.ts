@@ -449,7 +449,6 @@ function stampPropShadows(
   for (let i = 0; i < P; i++) {
     const x = propVolumes[i * 5];
     const z = propVolumes[i * 5 + 1];
-    const y = propVolumes[i * 5 + 2];
     const r = propVolumes[i * 5 + 3];
     const h = propVolumes[i * 5 + 4];
     if (h <= 0.01) continue;

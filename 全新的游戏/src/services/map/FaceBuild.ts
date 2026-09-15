@@ -334,7 +334,7 @@ export function getFineS(): number {
 const WELD_FINE_EPS = 0.03;
 
 /** cell(lx,lz)（视角=所属块）是否落在 bevel 弧带影响区（需 fine） */
-function cellBevelFine(table: FaceTable, src: BlockSource, lx: number, lz: number): boolean {
+function cellBevelFine(table: FaceTable, _src: BlockSource, lx: number, lz: number): boolean {
   const ox = table.cx * N, oz = table.cz * N;
   const vbx = table.cx * BPS + Math.floor(lx / 4);
   const vbz = table.cz * BPS + Math.floor(lz / 4);

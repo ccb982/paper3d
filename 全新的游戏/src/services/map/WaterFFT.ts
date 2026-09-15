@@ -126,7 +126,6 @@ function bakeLayer(
   amp: number,
   chop: number,
 ): OceanTile {
-  const invG = 1 / 9.81;
   const wLen = Math.hypot(windX, windZ) || 1;
   const wx = windX / wLen, wz = windZ / wLen;
 

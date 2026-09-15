@@ -4,8 +4,8 @@ import { applyDistortionCPU } from './mask';
 export function buildDisplacementTextureData(
   boundary: Point[][],
   maskEffect: MaskEffect | null,
-  canvasWidth: number,
-  canvasHeight: number,
+  _canvasWidth: number,
+  _canvasHeight: number,
   fixedVertices: number[],
   loopFrames: number = 30,
 ): { data: Float32Array; width: number; height: number } | null {

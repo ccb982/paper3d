@@ -367,7 +367,6 @@ function settleComp(
   for (;;) {
     let L = 0;
     for (const k of comp.blocks) {
-      const bx = blockX(k), bz = blockZ(k);
       for (let dir = 0; dir < 4; dir++) {
         const p = ensureProbe(s, src, patch, edgeKey(k, dir));
         if (p && p.kind === PKind.LAND && p.doorMin < L) L = p.doorMin;

@@ -25,7 +25,7 @@ export class CraftingManager {
   }));
 
   constructor(
-    private session: GameSession,
+    _session: GameSession,
     private itemManager: ItemManager,
   ) {}
 

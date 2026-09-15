@@ -58,7 +58,7 @@ export class FramePlaybackController {
   advance(dt: number): void {
     const prev = this._ts._prevFrameIndex;
     const prevState = this._ts._prevState;
-    const changed = advanceState(this._ts, dt);
+    advanceState(this._ts, dt);
 
     if (this._ts.state !== prevState) {
       this.callbacks.onStateChange?.(this._ts.state, prevState);

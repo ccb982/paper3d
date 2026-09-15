@@ -669,7 +669,7 @@ export function buildCrystalCluster(params: Record<string, number>, variant: num
   }
 
   // ---- 晶簇体（主峰 + 环晶 + 细针 + 碎屑；全部确定性随机） ----
-  const jit = (r: number, k: number) => r * (1 + (rng() - 0.5) * noise * 1.6);
+  const jit = (r: number, _k: number) => r * (1 + (rng() - 0.5) * noise * 1.6);
 
   // 主峰（1~2 根：中央高塔 + 偶发第二峰）
   const nBig = 1 + (rng() < 0.45 ? 1 : 0);
@@ -805,9 +805,6 @@ const PLANT_GUST_CHUNKS = new Map<string, PlantGustEntry[]>();
 const ALL_PLANT_GUST: PlantGustEntry[] = [];
 /** 本帧有衰减更新的条目（减少无谓的 instanceColor.needsUpdate） */
 const GUST_DIRTY = new Set<PlantGustEntry>();
-/** 尚未注册的残留条目（chunk 销毁时并入清理） */
-const GUST_DEAD: PlantGustEntry[] = [];
-
 /** ★ 注册某 chunk 的植物 mesh 条目（'plant' 渲染器 build 时调用） */
 export function registerPlantGust(cx: number, cz: number, entry: PlantGustEntry): void {
   const key = `${cx}|${cz}`;

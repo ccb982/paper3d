@@ -205,7 +205,7 @@ export class DroneCompositeRender extends FxRendererBase {
 
   constructor(
     scene: THREE.Scene,
-    private source: CharacterFxAssetSource,
+    source: CharacterFxAssetSource,
     private anim: FrameAnimatorBase | null = null,
   ) {
     super();

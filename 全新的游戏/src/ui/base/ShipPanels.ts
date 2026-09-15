@@ -6,7 +6,6 @@
 // ============================================================
 
 import { SidePanel } from '../panel/SidePanel';
-import type { PanelRenderOptions } from '../panel/types';
 import type { GameSession } from '../../core/Session';
 import { countItemsInGrid } from '../../core/Session';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';

@@ -58,7 +58,6 @@ import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type Thr
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { NpcEntity } from '../entity/NpcEntity';
-import { ItemArchetype } from '../core/ItemArchetype';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
@@ -221,7 +220,6 @@ const _camMat = new THREE.Matrix4();
 const _camEye = new THREE.Vector3();
 const _camAt = new THREE.Vector3();
 const _camUp = new THREE.Vector3(0, 1, 0);
-const _camQuat = new THREE.Quaternion();
 const _arcV = new THREE.Vector3();
 
 /** ★ 相机姿态插值（资料共识"绕注视点的球面弧"）：
@@ -1567,7 +1565,6 @@ export class WorldMode implements IGameMode {
     lines.push(`  光照 hour=${sun.hour.toFixed(1)} daylight=${sun.daylight.toFixed(3)} intensityScale=${sun.intensityScale.toFixed(3)} color=#${sun.color.toString(16).padStart(6,'0')}`);
 
     // 游标位置（射线方向投影到屏幕中心附近）
-    const ray = this.cameraRay();
     let sx = Math.round(cw / 2), sy = Math.round(ch / 2);
     const aim = this.crosshairPoint();
     if (aim && this.camera) {
@@ -2102,7 +2099,7 @@ export class WorldMode implements IGameMode {
    *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。 */
   private spawnOne(
     def: MobDef,
-    x: number, y: number, z: number,
+    x: number, _y: number, z: number,
     intent: number = INTENT_NONE,
     assaultIndex = -1,
   ): boolean {
@@ -2326,7 +2323,7 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ P2：代理被子弹击杀（掉落 + 遗物击杀统计，与实体击杀同口径） */
-  private onAgentKilled(mobIndex: number, x: number, y: number, z: number): void {
+  private onAgentKilled(mobIndex: number, x: number, _y: number, z: number): void {
     const def = this.mobDefs[mobIndex];
     if (def) this.rollDropsFromDef(def);
     if (this.session) {

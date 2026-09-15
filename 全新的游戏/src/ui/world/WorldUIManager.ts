@@ -96,7 +96,7 @@ export class WorldUIManager extends BaseInteractionUI {
   constructor(
     private session: GameSession,
     private itemManager: ItemManager,
-    private interactionManager: InteractionManager,
+    _interactionManager: InteractionManager,
     private raster: RasterMap,
   ) {
     super();

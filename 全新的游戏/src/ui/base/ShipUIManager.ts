@@ -4,7 +4,7 @@
 // 继承 BaseInteractionUI 统一管理弹窗栈。
 // ============================================================
 
-import { BaseInteractionUI, type PanelDef, Panel } from '../BaseInteractionUI';
+import { BaseInteractionUI, Panel } from '../BaseInteractionUI';
 import type { GameSession } from '../../core/Session';
 import { ItemManager } from '../../systems/inventory/ItemManager';
 import { CraftingManager } from '../../systems/inventory/CraftingManager';
@@ -48,8 +48,8 @@ export class ShipUIManager extends BaseInteractionUI {
   constructor(
     private session: GameSession,
     private itemManager: ItemManager,
-    private craftingManager: CraftingManager,
-    private interactionManager: InteractionManager,
+    _craftingManager: CraftingManager,
+    _interactionManager: InteractionManager,
     private iconRegistry: ItemIconRegistry,
     private onDepart: (() => void) | null,
   ) {

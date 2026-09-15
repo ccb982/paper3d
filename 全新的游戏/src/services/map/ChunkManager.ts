@@ -31,7 +31,6 @@ import { groupByKey, applyGroupTintHsl, type GroupPalette } from './TileGroups';
 import { resolveTileLook } from './TileMaterials';
 import { srgbHslToOklch, srgbHslJitterAmp } from './colorLab';
 import { circleCells, PATCH_LEVEL_WIDTH, type FaceGeometry } from './FaceBuild';
-import { vnoise } from './TerrainNoise';
 import { computeTableGeometry, type PatchGeomResult, type PatchGroundCell, type GeomBounds } from './PatchCompute';
 import type { WaterSurfaceRaw } from './WaterSurface';
 import { worldBlockKey } from './WaterSurface';
@@ -48,13 +47,13 @@ import {
 } from './Boss4DArena';
 import { planChunkDecals, type PlannedDecal } from './decor/TileDecalBase';
 import {
-  planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey, groupPropsByKey,
+  planChunkProps, buildPropLayer, computePropVolumes, mapDecorByKey,
   type ChunkGroundHost, type PlannedProp,
 } from './decor/MapEntityDecorBase';
 // ★ 采集物植被（side-effect 注册：草丛/花丛/浆果丛/小树）
 import { isCollectibleKey } from './decor/CollectibleProps';
 import { buildCaveCaps, disposeCaveCapShared, CAVE_CAP_THICK, type CaveCapPhysics } from './decor/CaveCap';
-import { buildTileLabelLayer, disposeTileLabelCache } from './debug/TileLabels';
+import { disposeTileLabelCache } from './debug/TileLabels';
 import { buildPlatformAprons, type ApronPhysics } from './decor/PlatformApron';
 import { buildCementPlinths, disposeCementPlinthShared, type CementPlinthPhysics } from './decor/CementPlinth';
 
@@ -581,14 +580,6 @@ export class ChunkManager {
   private coarseDynamic: { dx: number; dz: number }[] = [];
   /** 每帧最多装配粗块数 */
   private static readonly COARSE_PER_FRAME = 3;
-  /** 粗块补齐顺序（由内向外） */
-  private static readonly COARSE_OFFSETS: { dx: number; dz: number }[] = (() => {
-    const R = ChunkManager.COARSE_RADIUS;
-    const out: { dx: number; dz: number }[] = [];
-    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) out.push({ dx, dz });
-    out.sort((a, b) => Math.max(Math.abs(a.dx), Math.abs(a.dz)) - Math.max(Math.abs(b.dx), Math.abs(b.dz)));
-    return out;
-  })();
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;

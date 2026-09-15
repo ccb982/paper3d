@@ -238,7 +238,7 @@ export function buildEntityMesh(
   entity: SerializedRegionEntity,
   ftxBbox: { x: number; y: number; w: number; h: number },
   displacementTexture: THREE.DataTexture,
-  vertexCount: number,
+  _vertexCount: number,
   totalFrames: number,
   canvasSize: number,
   canvasSizeY?: number,

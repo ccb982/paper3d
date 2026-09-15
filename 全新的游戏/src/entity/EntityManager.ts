@@ -6,7 +6,7 @@
 //   不传 → 纯逻辑/视觉实体（装饰/资源点）
 // 解耦：EntityManager 依赖 PhysicsWorld 接口，不直接调用 rapier。
 
-import type { Entity, EntityKind, RigidBodyRef } from './Entity';
+import type { Entity, EntityKind } from './Entity';
 import type { PhysicsWorld, BodyOptions } from '../services/physics/PhysicsWorld';
 import type { EntityBase } from './EntityBase';
 import type { InputActions } from '../platform/input/InputActions';

@@ -32,8 +32,6 @@ import {
   buildTopGeometry,
   buildWallGeometry,
   buildLevelOverlay,
-  FINE_S_NEAR,
-  getFineS,
   setFineS,
   TOP_COARSE_TRI,
   type FaceGeometry,
@@ -137,7 +135,7 @@ function wallNodes(fine: Uint8Array, lbx: number, lbz: number, dir: number, FS: 
 /** 构建并缓存基座（无补丁 full 构建）；已缓存直接返回 */
 export function seedBaseGeometry(
   seed: number, cx: number, cz: number, fineS: number,
-  table: FaceTable, src: BlockSource,
+  _table: FaceTable, _src: BlockSource,
   baseFine: Uint8Array, top: FaceGeometry, wall: FaceGeometry,
 ): ChunkBase {
   const key = cacheKey(seed, cx, cz, fineS);
@@ -231,7 +229,7 @@ export function computeIncrementalMasks(
 
 function buildTopIncremental(
   base: ChunkBase, table: FaceTable, src: BlockSource,
-  patch: PatchOverlay, fineE: Uint8Array, mask: Uint8Array,
+  patch: PatchOverlay, _fineE: Uint8Array, mask: Uint8Array,
   prev?: { vPre: Int32Array; iPre: Int32Array },
 ): { geom: FaceGeometry; vPre: Int32Array; iPre: Int32Array } {
   const FS = base.fineS;

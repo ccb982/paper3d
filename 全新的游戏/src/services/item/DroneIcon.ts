@@ -13,7 +13,6 @@
 
 import * as THREE from 'three';
 import { FtxAsset, Asset } from '../../vendor/player';
-import type { CharacterFxAssetSource } from '../fx/AssetSource';
 import { FrameAnimatorBase } from '../fx/FrameAnimatorBase';
 import { DroneCompositeRender } from '../render/DroneCompositeRender';
 import { OffscreenBake } from '../render/OffscreenBake';

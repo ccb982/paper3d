@@ -86,8 +86,8 @@ export class InteractionManager {
     };
   }
 
-  /** 快捷辅助：拾取（WorldMode 专用） */
-  pickup(itemId: string, fromWorld: boolean = true): boolean {
+  /** 快捷辅助：拾取（WorldMode 专用）。★ fromWorld 未参与逻辑，调用方别依赖它 */
+  pickup(itemId: string, _fromWorld: boolean = true): boolean {
     return this.ctx.itemManager.addItem('player', itemId, 1);
   }
 }

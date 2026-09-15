@@ -462,9 +462,6 @@ export class LevelSetSolver {
     band: number,
     fadeTo: number,
   ): void {
-    const w = targetGrid.resolution.w;
-    const h = targetGrid.resolution.h;
-
     const mat = this.gpu.getMaterial('levelset_liquid_constraint_v2', {
       uTarget: { value: targetGrid.read },
       uPhi: { value: phiTex },

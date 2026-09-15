@@ -51,7 +51,6 @@ export interface CharacterStatsSnapshot {
   relics: RelicEntry[];
 }
 
-const ORANGE = '#f0a24a';
 const ORANGE_BRIGHT = '#ffc06a';
 const ORANGE_DIM = 'rgba(240,162,74,0.55)';
 /** 局内装备临时加成色（青） */

@@ -188,7 +188,6 @@ export class GachaOverlay {
 
   // 概率显示页面
   private _probAsset: FtxAsset | null = null;
-  private _probOverlay: HTMLDivElement | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
 
   // 按钮动画
@@ -221,7 +220,7 @@ export class GachaOverlay {
 
     // 更新 glow 位置和大小跟随按钮缩放
     if (this._btnLeftGlowMesh && this._btnRightGlowMesh && this._btnGlowDefData && this._btnLeftDefaultScale && this._btnRightDefaultScale) {
-      const { cy, texH, lgW, lgH, rgW, rgH, leftGlowCx, rightGlowCx } = this._btnGlowDefData;
+      const { cy, texH, lgW, lgH, rgW, rgH } = this._btnGlowDefData;
       // 左 glow
       const leftS = this._btnLeftMesh!.scale.x / this._btnLeftDefaultScale.x;
       this._btnLeftGlowMesh.scale.set(lgW * leftS, lgH * leftS, 1);
@@ -1090,10 +1089,8 @@ export class GachaOverlay {
 
     overlay.addEventListener('click', () => {
       overlay.remove();
-      this._probOverlay = null;
     });
 
-    this._probOverlay = overlay;
   }
 
   // ============================================================
@@ -1237,7 +1234,6 @@ export class GachaOverlay {
     //   基础 2%；连续 50 抽未出 6★ → 第 51 抽起每抽 +2%（第 51 抽 4%）；
     //   第 99 抽必出（100%）；获得即重置计数
     const bossCfg = (gachaPool as unknown as { boss?: { id: string; rarity: number } }).boss;
-    const bossOwned = !!(bossCfg && s.outOfRun.owned[bossCfg.id]);
 
     const results: Array<{ kind: 'inRun' | 'outRun'; id: string; name: string; rarity: number; description: string; isNew: boolean }> = [];
     for (let i = 0; i < count; i++) {

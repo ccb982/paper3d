@@ -33,7 +33,6 @@ export class FrameAnimatorBase {
   readonly state: FrameState;
 
   protected controller: FramePlaybackController;
-  private _curNames: string[] = [];
   private _curIdxs: number[] = [];
   private _loop = true;
   private _baseFps = 3;
@@ -62,7 +61,6 @@ export class FrameAnimatorBase {
   /** 播放帧序列（子类状态机/外部最终调用） */
   playFrames(names: string[], opts: PlayFramesOptions = {}): void {
     if (names.length === 0) return;
-    this._curNames = names.slice();
     this._loop = opts.loop ?? true;
     this._baseFps = opts.fps ?? 3;
     // 帧名 → 索引序列（time.ts 原生支持 sequence 顺序，循环只在序列内）

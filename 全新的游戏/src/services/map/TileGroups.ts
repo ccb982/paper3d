@@ -14,7 +14,7 @@
 // ============================================================
 
 import { hash2 } from './TerrainNoise';
-import { tileByKey, tileById, allTiles, TILE_FLAT_SAND, TILE_PLATFORM_SAND, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
+import { tileByKey, allTiles, TILE_FLAT_SAND, TILE_PLATFORM_SAND, TILE_WATER, TILE_PIT, type TileDef, type TileGenRole } from './Tiles';
 
 // ============================================================
 // 组定义与注册表

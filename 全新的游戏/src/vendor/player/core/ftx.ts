@@ -277,18 +277,3 @@ function getAdaptiveBlockIndex(x: number, y: number, w: number, h: number): numb
   return row * ADAPTIVE_BLOCK_COLS + col;
 }
 
-function getRangeForBlock(blockFlags: bigint, blockIdx: number): number {
-  return (blockFlags & (1n << BigInt(blockIdx))) ? 0.25 : 0.5;
-}
-
-function dequantizeH(encoded: number, range: number): number {
-  return ((encoded / 63) * 2 * range) - range;
-}
-
-function dequantizeS(encoded: number, range: number): number {
-  return ((encoded / 31) * 2 * range) - range;
-}
-
-function dequantizeL(encoded: number, range: number): number {
-  return ((encoded / 31) * 2 * range) - range;
-}

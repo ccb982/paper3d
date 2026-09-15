@@ -323,7 +323,7 @@ function paintCluster(
 }
 
 /** 在可用格中挑起始点（salt 洗牌后取第一个） */
-function pickStart(roles: Uint8Array, allow: (i: number) => boolean, salt: number): number {
+function pickStart(_roles: Uint8Array, allow: (i: number) => boolean, salt: number): number {
   const all: number[] = [];
   for (let i = 0; i < N; i++) if (allow(i)) all.push(i);
   if (all.length === 0) return -1;
@@ -739,7 +739,7 @@ registerPreset({
       if (painted > 0) heights[s0] = 0.5;
     }
     // 栈桥：每个端口向主岛方向铺 1 格宽通路（跨水）
-    const bridge = (c: number, sx: number, sz: number): void => {
+    const bridge = (_c: number, sx: number, sz: number): void => {
       let x = sx, z = sz;
       for (let guard = 0; guard < SIDE * 2; guard++) {
         const i = z * SIDE + x;

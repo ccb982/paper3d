@@ -142,7 +142,7 @@ export class EnemyBase extends CharacterBase {
   aiActiveRadius = 75;
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */
-  updateAI(dt: number, ctx: BehaviorContext): void {
+  updateAI(_dt: number, ctx: BehaviorContext): void {
     // ★ 本帧默认不移动；行为调 moveBy 才设方向（否则攻击等无移动行为会残留速度漂移）
     this.controller.moveDir.x = 0;
     this.controller.moveDir.y = 0;

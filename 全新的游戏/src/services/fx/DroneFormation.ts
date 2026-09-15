@@ -20,7 +20,7 @@ export interface DroneFollowOffset {
 }
 
 /** ★ 编队槽位 → 3D 跟随偏移（index = 第几架，0 起） */
-export function droneFollowOffset(index: number, frame: CameraFrame): DroneFollowOffset {
+export function droneFollowOffset(index: number, _frame: CameraFrame): DroneFollowOffset {
   const side = index % 2 === 0 ? 1 : -1;              // 左右交替：0 右 / 1 左 / 2 右 …
   const tier = Math.floor(index / 2);                  // 第几层（更多无人机向外扩）
   const r = side * (1.1 + tier * 0.55);                // 横向：≥1.1m，远离准星

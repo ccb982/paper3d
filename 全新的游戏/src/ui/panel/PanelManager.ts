@@ -31,7 +31,7 @@ export class PanelManager {
   private stack: StackEntry[] = [];
   private overlayRoot: HTMLElement;
 
-  constructor(private opts: { zIndex?: number } = {}) {
+  constructor(opts: { zIndex?: number } = {}) {
     this.overlayRoot = document.createElement('div');
     const z = opts.zIndex ?? 300;
     this.overlayRoot.style.cssText = [

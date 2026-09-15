@@ -318,7 +318,6 @@ function hash01(s: number): number {
 }
 
 export function build4DCurtains(H: Float32Array, cx: number, cz: number): WaterSurfaceRaw {
-  const N = CHUNK_SIZE;
   let maxH = -1e9;
   for (let i = 0; i < H.length; i++) if (H[i] > maxH) maxH = H[i];
   const seed = hash2(cx * 13 + 5, cz * 7 + 3, 0xB0_55);

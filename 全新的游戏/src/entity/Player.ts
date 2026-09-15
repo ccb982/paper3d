@@ -106,7 +106,7 @@ export class Player extends CharacterBase {
 
   /** ★ 玩家死亡（不销毁主角；死亡动画 + 等待 WorldMode 倒计时复活）
    *   不再即时回血——复活血量/时机由 WorldMode 统一结算 */
-  override onDeath(source: EntityBase | null): void {
+  override onDeath(_source: EntityBase | null): void {
     this.playDeathAnim();
     if (this.preDeathHp <= 0) this.preDeathHp = this.hp > 0 ? this.hp : this.maxHp * 0.5;
     this.dead = true;
