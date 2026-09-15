@@ -4,7 +4,7 @@
 // 用户定调（2026-09-15）：访客没有模型 ——
 //   · 头 = 球（大头比例 0.155×身高）/ 身体 = 方盒
 //   · 四肢 = 两端半球圆柱（THREE.CapsuleGeometry，即"有头有尾的圆柱"）
-//   · 每名访客只换"脸"纹理（FTX 帧 → 大头正前方 1.9×头半径的贴板，按宽高比自适应）
+//   · 每名访客只换"脸"纹理（FTX 帧 → 头球正面的球面补丁，张角按宽高比自适应，"糊在脸上"）
 // 关节：肩/肘/髋/膝各一个 Group 轴心，rotation.x 前后摆动。
 //   （人物面朝 +Z；绕 +X 正旋转 = 肢体向后摆 → 前摆用负值。）
 //
@@ -58,6 +58,10 @@ export interface VisitorBodyStyle {
 }
 
 const TAU = Math.PI * 2;
+/** 脸贴片横向张角（弧度；≈126°，覆盖头球正面） */
+const FACE_PHI_SPAN = 2.2;
+/** 脸贴片纵向张角上限（弧度；≈126°，长脸纹理可到更大但封顶） */
+const FACE_THETA_SPAN = 2.2;
 /** 步频夹取（整周期/秒）：慢走下限 / 小跑上限 */
 const MIN_CYCLE_HZ = 0.5;
 const MAX_CYCLE_HZ = 2.4;
@@ -151,14 +155,14 @@ export class VisitorBodyRenderer extends FxRendererBase {
     head.position.y = headY;
     this.body.add(head);
 
-    // 脸贴片（每名访客只换这张纹理；贴在大头正前方 —— 尺寸自适应纹理宽高比）
+    // ★ 脸纹理"糊在脸上"：头球正面一块微大的球面贴片（曲面贴附，不是悬浮平板），
+    //   张角按纹理宽高比自适应；MeshBasic + toneMapped=false → 原色醒目
     const faceMat = new THREE.MeshBasicMaterial({
       transparent: true, depthWrite: false, toneMapped: false,
     });
     this.materials.push(faceMat);
-    this.faceMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), faceMat);
-    this.faceMesh.position.set(0, headY, headR * 0.92);
-    this.faceMesh.scale.set(headR * 1.9, headR * 1.9, 1);
+    this.faceMesh = new THREE.Mesh(this.makeFaceGeometry(1), faceMat);
+    this.faceMesh.position.set(0, headY, 0);
     this.faceMesh.visible = false;
     this.body.add(this.faceMesh);
     if (faceAsset) void this.loadFace(faceAsset, style.faceFrame);
@@ -293,6 +297,18 @@ export class VisitorBodyRenderer extends FxRendererBase {
     }
   }
 
+  /** ★ 脸贴片几何：头球正面的球面补丁（以 +Z 为中线；微大半径贴附，"糊在脸上"）。
+   *  横向张角固定，纵向张角按纹理宽高比自适应（长脸盖更高、宽脸盖更矮）。 */
+  private makeFaceGeometry(aspect: number): THREE.SphereGeometry {
+    const w = FACE_PHI_SPAN;
+    const h = Math.min(FACE_THETA_SPAN, w / Math.max(0.35, aspect));
+    return new THREE.SphereGeometry(
+      this.headR * 1.03, 24, 16,
+      Math.PI / 2 - w / 2, w,
+      Math.PI / 2 - h / 2, h,
+    );
+  }
+
   /** 直接注入脸纹理（上层已加载/自定义贴图；旧纹理自动释放；aspect = 宽/高） */
   setFaceTexture(tex: THREE.Texture | null, aspect = 1): void {
     if (this.disposed) { tex?.dispose(); return; }
@@ -302,13 +318,14 @@ export class VisitorBodyRenderer extends FxRendererBase {
     const mat = this.faceMesh.material as THREE.MeshBasicMaterial;
     mat.map = tex;
     mat.needsUpdate = true;
-    this.faceMesh.visible = !!tex;
-    if (!tex) return;
-    // 脸板贴满大头正面（长边 = 1.9 × 头半径；按纹理宽高比自适应）
-    const size = this.headR * 1.9;
-    const w = aspect >= 1 ? size : size * aspect;
-    const h = aspect >= 1 ? size / aspect : size;
-    this.faceMesh.scale.set(w, h, 1);
+    if (!tex) {
+      this.faceMesh.visible = false;
+      return;
+    }
+    // 重建球面补丁几何（按纹理宽高比调整纵向张角）
+    this.faceMesh.geometry.dispose();
+    this.faceMesh.geometry = this.makeFaceGeometry(aspect);
+    this.faceMesh.visible = true;
   }
 
   override dispose(): void {
