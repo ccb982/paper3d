@@ -93,6 +93,11 @@ export const digPerf = {
   /** 装饰重贴地排空（full 段 / props 段 分别计时） */
   decorDrainFull: 0,
   decorDrainProps: 0,
+  /** 整块重贴地四段拆分：计划 / 建层 / 碰撞体 / 围裙台座刚体 */
+  decorPlan: 0,
+  decorBuild: 0,
+  decorColliders: 0,
+  decorStruct: 0,
   /** 出生/停靠强制构建（bootstrap 直建那一块；其余走预算化队列） */
   bootstrap: 0,
   bootstrapN: 0,
@@ -111,6 +116,7 @@ export const digPerf = {
     this.ground = 0; this.groundCount = 0; this.decorDrainFull = 0; this.decorDrainProps = 0;
     this.bootstrap = 0; this.bootstrapN = 0; this.planDecor = 0; this.planCount = 0;
     this.terrainMesh = 0; this.chunkGround = 0;
+    this.decorPlan = 0; this.decorBuild = 0; this.decorColliders = 0; this.decorStruct = 0;
   },
 };
 
@@ -418,6 +424,56 @@ export class ChunkManager {
   /** 物理分区原位换耗时预算（ms）：超出即停（防多分区同步 cooking 尖峰） */
   private static readonly GROUND_CELL_BUDGET_MS = 3;
 
+  /**
+   * ★ 远期 chunk 物理分区延迟建（2026-09-15，针对实测 5.5~5.7ms/个的 collider）：
+   *   原先每块 chunk 建成都把 9 个分区里的 8 个塞进 groundCellQueue →
+   *   5×5 构建环 = 200 个待补 collider，按 1 个/帧排 = 约 2 秒的 5.7ms/帧尾巴
+   *   （进世界/停靠/跨区建图那几秒一直在吃）。
+   *   现在：只有玩家切比雪夫距离 ≤ LAZY_GROUND_RADIUS 的 chunk 才补建全部分区；
+   *   更远的 chunk 只保留已同步建的那 1 个分区，其余 8 个等玩家靠近再补。
+   *   安全性：角色 Y 由 clampCharacter 按 raster 高度场驱动，不依赖地面刚体；
+   *   远期 chunk 只影响"那边掉落的动态物"，且玩家真走过去时会立刻补建。
+   */
+  private static readonly LAZY_GROUND_RADIUS = 1;
+  /** 待补分区（key → 该 chunk 尚未建 collider 的分区） */
+  private lazyGround = new Map<number, {
+    cx: number; cz: number; bodyId: number; cells: PatchGroundCell[];
+  }>();
+
+  /** ★ 玩家靠近后补建分区 collider（每帧调用；远期 chunk 的 8 个分区在此入队） */
+  private flushLazyGround(): void {
+    if (this.lazyGround.size === 0) return;
+    for (const [key, rec] of this.lazyGround) {
+      // chunk 已卸载 / 刚体已换（重建过）→ 整条作废（重建会自带新 cells）
+      if (this.bodies.get(key) !== rec.bodyId
+        || (!this.meshes.has(key) && !this.voidKeys.has(key))) {
+        this.lazyGround.delete(key);
+        continue;
+      }
+      const dist = Math.max(Math.abs(rec.cx - this.hotPcx), Math.abs(rec.cz - this.hotPcz));
+      if (dist > ChunkManager.LAZY_GROUND_RADIUS) continue;
+      for (const c of rec.cells) {
+        this.groundCellQueue.set(rec.bodyId * 1024 + c.slot, {
+          bodyId: rec.bodyId, slot: c.slot, vertices: c.vertices, indices: c.indices,
+        });
+      }
+      this.lazyGround.delete(key);
+    }
+  }
+
+  /** 指定 chunk 的待补分区立即入队（该块被挖动时：交互已发生 → 不再偷懒） */
+  private flushLazyChunk(key: number): void {
+    const rec = this.lazyGround.get(key);
+    if (!rec) return;
+    this.lazyGround.delete(key);
+    if (this.bodies.get(key) !== rec.bodyId) return;
+    for (const c of rec.cells) {
+      this.groundCellQueue.set(rec.bodyId * 1024 + c.slot, {
+        bodyId: rec.bodyId, slot: c.slot, vertices: c.vertices, indices: c.indices,
+      });
+    }
+  }
+
   // ---- ★ 地形修改性能重构（原地更新，2026-09-09） ----
   // 计算侧（Worker 内 IncrementalGeometry 逐 cell 重发）本就增量；主线程开销大头
   // 是「新建 BufferGeometry×3 + 材质×2 + 整块 trimesh 销毁重建 + 装饰销毁重挂」。
@@ -698,6 +754,8 @@ export class ChunkManager {
     //   多分区联动按 3/帧分摊 + 耗时预算，防单帧同步 cooking 尖峰）
     //   （2026-09-15：曾试过"近处优先"重排序，但队列插入序本就≈优先级序，
     //     收益微乎其微 → 保持 FIFO，避免无谓的行为变更。）
+    //   ★ 先处理"远期 chunk 待补分区"：玩家靠近的 chunk 在此入队，本帧即可开换
+    this.flushLazyGround();
     if (this.host.updateGroundCell) {
       let g = ChunkManager.GROUND_CELL_PER_FRAME;
       const _tg = performance.now();
@@ -738,13 +796,22 @@ export class ChunkManager {
         continue;
       }
       // ★ 整块重贴地：以当前 levels 重计划整个 chunk 的装饰（props Y 含下探）
+      const _t1 = performance.now();
       const decor = this.planDecor(j.cx, j.cz);
       this.cacheDecorPlan(first, decor);
+      const _t2 = performance.now();
       const decorLayer = this.buildDecorLayer(j.cx, j.cz, decor);
       if (decorLayer) group.add(decorLayer.layer);
+      const _t3 = performance.now();
       // ★ 与 assembleTableChunk 同构：碰撞体与围裙/台座刚体独立于装饰层有无
       this.createDecorColliders(j.cx, j.cz, decor);
+      const _t4 = performance.now();
       this.createStructuralGround(j.cx, j.cz, decorLayer?.apronPhysics ?? null, decorLayer?.plinthPhysics ?? null, decorLayer?.cavePhysics ?? null);
+      const _t5 = performance.now();
+      digPerf.decorPlan += _t2 - _t1;
+      digPerf.decorBuild += _t3 - _t2;
+      digPerf.decorColliders += _t4 - _t3;
+      digPerf.decorStruct += _t5 - _t4;
       digPerf.decorDrainFull += performance.now() - _td;
       this.applyDecorCooldown(_td);
     }
@@ -889,6 +956,7 @@ export class ChunkManager {
     this.decorDirty.clear();
     this.propLayers.clear();
     this.groundCellQueue.clear(); // 物理原位换队列随风格换代作废
+    this.lazyGround.clear();      // 远期待补分区同作废（几何/刚体都已换代）
     for (const p of this.pendingBakes.values()) this.enqueueChunk(p.cx, p.cz, false);
     this.pendingBakes.clear();
     // ★ 可见 + 虚空一并重建（虚空块不在 meshes 里，漏掉会永远悬空）
@@ -920,6 +988,7 @@ export class ChunkManager {
     this.decorDirty.clear();
     this.propLayers.clear();
     this.groundCellQueue.clear(); // 物理原位换队列随 dispose 作废
+    this.lazyGround.clear();      // 远期待补分区随 dispose 作废
     // ★ 在途烘焙全部作废（Worker 结果到达后因换代+scene 空被丢弃）
     this.pendingBakes.clear();
     for (const id of this.bodies.values()) {
@@ -1901,6 +1970,8 @@ const key2 = chunkKeyOf(cx, cz);
     // ③ 水：小网格整体换（拓扑可变）
     this.replaceWaterMesh(group, entry, waterG);
     // ② 物理：受影响分区入队（帧预算排空；同 slot 最新覆盖，其余分区不动）
+    //   ★ 本块若还压着"远期待补分区" → 交互已发生，立刻补齐（不再偷懒）
+    this.flushLazyChunk(key);
     for (const c of cells) {
       this.groundCellQueue.set(bodyId * 1024 + c.slot, {
         bodyId, slot: c.slot, vertices: c.vertices, indices: c.indices,
@@ -2287,13 +2358,19 @@ const key2 = chunkKeyOf(cx, cz);
       const id = this.host.createGroundCells(cx, cz, sync);
       if (id !== null && id !== undefined) {
         this.bodies.set(key, id);
-        for (const c of queued) {
-          this.groundCellQueue.set(id * 1024 + c.slot, {
-            bodyId: id,
-            slot: c.slot,
-            vertices: c.vertices,
-            indices: c.indices,
-          });
+        // ★ 远期 chunk：8 个分区不进队列，改为"玩家靠近才补建"（见 LAZY_GROUND_RADIUS 注释）
+        const dist = Math.max(Math.abs(cx - this.hotPcx), Math.abs(cz - this.hotPcz));
+        if (dist <= ChunkManager.LAZY_GROUND_RADIUS) {
+          for (const c of queued) {
+            this.groundCellQueue.set(id * 1024 + c.slot, {
+              bodyId: id,
+              slot: c.slot,
+              vertices: c.vertices,
+              indices: c.indices,
+            });
+          }
+        } else if (queued.length > 0) {
+          this.lazyGround.set(key, { cx, cz, bodyId: id, cells: queued });
         }
         digPerf.chunkGround += performance.now() - _tg;
         return;
