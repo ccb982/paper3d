@@ -190,6 +190,18 @@ export class GachaOverlay {
   private _probAsset: FtxAsset | null = null;
   private _probButtonHit: { x: number; y: number; w: number; h: number } | null = null;
 
+  // ============================================================
+  // ★ 返回按钮（左上角，2026-09-15 用户定调）
+  //   行为：只关闭抽卡页、回到基地主页面，不触发出击；
+  //   出击仍由「行动」按钮负责（两者互不干扰，任何状态下都可用）。
+  // ============================================================
+  private _backAsset: FtxAsset | null = null;
+  private _backMesh: THREE.Mesh | null = null;
+  private _backDefaultScale: { x: number; y: number } | null = null;
+  private _isHoverBack = false;
+  /** 返回按钮命中区（指针空间：y=0 在屏幕顶部） */
+  private _backHit: { x: number; y: number; w: number; h: number } | null = null;
+
   // 按钮动画
   private animateBtn(mesh: THREE.Mesh | null, defScale: { x: number; y: number } | null, sEnd: number, gEnd: number): void {
     if (!mesh || !defScale) return;
@@ -264,6 +276,14 @@ export class GachaOverlay {
     this.animateBtn(mesh, defScale, s, isHover ? 0.2 : 0);
   }
   private updateButtonHover(wx: number, wy: number): void {
+    // ★ 返回按钮：任何状态下都参与 hover（左上角，不与抽卡/行动按钮重叠）
+    const bk = this._backHit;
+    const onBack = !!bk && wx >= bk.x && wx <= bk.x + bk.w && wy >= bk.y && wy <= bk.y + bk.h;
+    if (onBack !== this._isHoverBack) {
+      this._isHoverBack = onBack;
+      this.animateBtn(this._backMesh, this._backDefaultScale, onBack ? 1.05 : 1, onBack ? 0.2 : 0);
+    }
+
     // ★ 行动态：只判定行动按钮
     if (this._departMode) {
       const d = this._departHit;
@@ -287,6 +307,10 @@ export class GachaOverlay {
     }
   }
   private clearHover(): void {
+    if (this._isHoverBack) {
+      this._isHoverBack = false;
+      this.animateBtn(this._backMesh, this._backDefaultScale, 1, 0);
+    }
     if (this._isHoverDepart) {
       this._isHoverDepart = false;
       this.animateBtn(this._departMesh, this._departDefaultScale, 1, 0);
@@ -469,6 +493,15 @@ export class GachaOverlay {
 
     // 预加载概率显示纹理
     this._probAsset = await FtxAsset.load('/ui/概率显示.ftx3.gz');
+
+    // ★ 返回按钮（左上角；点击回到基地主页面，不触发出击）
+    try {
+      this._backAsset = await FtxAsset.load('/ui/返回按钮.ftx3.gz');
+      this.renderBackButton();
+    } catch {
+      this._backAsset = null;
+      console.warn('[GachaOverlay] 返回按钮素材缺失，抽卡页左上角不显示返回按钮（放入 public/ui/返回按钮.ftx3.gz 即生效）');
+    }
 
     // 创建粒子效果
     this.createParticles();
@@ -846,6 +879,61 @@ export class GachaOverlay {
     this.animateBtn(this._departMesh, this._departDefaultScale, s, this._isHoverDepart ? 0.2 : 0);
   }
 
+  // ============================================================
+  // ★ 返回按钮（左上角）
+  // ============================================================
+
+  /**
+   * 渲染左上角返回按钮。
+   * - 尺寸：约 80px 高（1080p 基准，相机单位 0.075），保持纹理原始比例；
+   * - 位置：左上角，留白 0.03（相机单位）；
+   * - 只出现在抽卡页，不随「抽卡按钮 / 行动按钮」的切换而隐藏。
+   *
+   * 坐标系：相机 1 单位 = 屏幕短边像素；y 轴底原点。
+   *   横屏 camTop = 1，竖屏 camTop = 1/aspect（与 syncSize 一致）。
+   *   wx == 相机 x（两种朝向都成立），wy = camTop − 相机 y，
+   *   所以命中矩形在 wy 空间的**尺寸与留白恰好等于相机单位的值** → 无需按朝向换算。
+   */
+  private renderBackButton(): void {
+    const asset = this._backAsset;
+    if (!asset) return;
+    const pair = asset.getFramePair(0);
+    if (!pair) return;
+
+    const f = asset.frames[0];
+    const texAspect = (f?.bbox.w || 252) / (f?.bbox.h || 88);
+
+    const H = 0.075;          // 高度（相机单位，≈81px @1080p）
+    const W = H * texAspect;  // 宽度按纹理比例（右侧不再留白）
+    const MARGIN = 0.03;      // 左上角留白（相机单位，≈32px @1080p）
+
+    const aspect = window.innerWidth / window.innerHeight;
+    const camTop = aspect > 1 ? 1 : 1 / aspect;
+
+    const cx = MARGIN + W / 2;
+    const cy = camTop - MARGIN - H / 2; // 相机坐标（y 越大越靠上）
+
+    const mat = this.makeHSLMat(pair.base, pair.residual);
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+    mesh.scale.set(W, H, 1);
+    // z 高于抽卡/行动按钮（0.2），保证不被压住
+    mesh.position.set(cx, cy, 0.21);
+    this.scene.add(mesh);
+    this._backMesh = mesh;
+    this._backDefaultScale = { x: W, y: H };
+
+    // 命中区：与 handleCanvasClick / handlePointerMove 的 wx / wy 同空间
+    this._backHit = { x: MARGIN, y: MARGIN, w: W, h: H };
+  }
+
+  private pressBackBtn(): void {
+    this.animateBtn(this._backMesh, this._backDefaultScale, 1.12, 1);
+  }
+  private releaseBackBtn(): void {
+    const s = this._isHoverBack ? 1.05 : 1;
+    this.animateBtn(this._backMesh, this._backDefaultScale, s, this._isHoverBack ? 0.2 : 0);
+  }
+
   /** 复位回抽卡态（每次进入抽卡页时调用） */
   private resetToGachaState(): void {
     this._departMode = false;
@@ -1111,6 +1199,15 @@ export class GachaOverlay {
     } else {
       wx = (e.clientX - rect.left) / rect.width;
       wy = ((e.clientY - rect.top) / rect.height) * (1 / aspect);
+    }
+
+    // ★ 返回按钮（左上角）：关闭抽卡页，回到基地主页面（不触发出击）
+    const bk = this._backHit;
+    if (bk && wx >= bk.x && wx <= bk.x + bk.w && wy >= bk.y && wy <= bk.y + bk.h) {
+      this.pressBackBtn();
+      setTimeout(() => this.releaseBackBtn(), 150);
+      setTimeout(() => this.hide(), 170);
+      return;
     }
 
     // 概率显示按钮（透明按钮）
@@ -1607,6 +1704,17 @@ export class GachaOverlay {
     this._departMode = false;
     this._departAsset?.dispose();
     this._departAsset = null;
+    // ★ 返回按钮（左上角）
+    if (this._backMesh) {
+      (this._backMesh.material as THREE.Material).dispose();
+      this.scene.remove(this._backMesh);
+      this._backMesh = null;
+    }
+    this._backDefaultScale = null;
+    this._backHit = null;
+    this._isHoverBack = false;
+    this._backAsset?.dispose();
+    this._backAsset = null;
     if (this._btnAnimId !== null) {
       cancelAnimationFrame(this._btnAnimId);
       this._btnAnimId = null;
