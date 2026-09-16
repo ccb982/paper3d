@@ -100,13 +100,16 @@ export interface GameSession {
   dayProgress: {
     hasDepartedToday: boolean;
     /** ★ 当天敌人配额与击杀进度（2026-09-16）。
-     *  quota = 击杀可达上限（按威胁档位动态估算，远距回收会扣减）；
-     *  kills = 真击杀数（子弹/近战致死、掉深坑致死）；recalled = 已还回的配额数。
+     *  quota = 当天敌人总数（**预计算后冻结，全天不变**）；
+     *  kills = 真击杀数（子弹/近战致死、掉深坑致死）；
+     *  recalled = 已因远距回收而消失的数（**只记账，不影响 quota**）；
+     *  spawned = 当天累计生成过多少只（配额闸门依据，只增不减）。
      *  跨出击持久（同日多次出击累计）；换日由 resetDayQuota 清 0 重算。 */
     enemies?: {
       quota: number;
       kills: number;
       recalled: number;
+      spawned: number;
     };
     /** ★ 已为哪一天初始化过敌人配额（防同日重复出击把进度清零）。
      *  = session.meta.day 时表示当天配额已就绪；换日不等 → 重新初始化。 */

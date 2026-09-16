@@ -43,6 +43,10 @@ export interface DirectorInputs {
   playerZ: number;
   shipX: number;
   shipZ: number;
+  /** ★ 当天配额剩余可生成数（= quota − spawned；2026-09-16）。
+   *  环境补怪据此**持续补刷到打满总数**，不再只看 alive。
+   *  缺省（undefined）时按旧行为处理（不补刷）→ 兼容未接线的调用方。 */
+  quotaLeft?: number;
 }
 
 export interface SpawnOrder {
@@ -186,8 +190,21 @@ export class Director {
         }
       }
       if (this.phase === 'calm' && this.spawnTimer <= 0) {
-        this.spawnTimer = this.threat.ambientInterval;
-        if (inp.alive < this.threat.ambientTarget && inp.playerHpRatio >= 0.3) {
+        // ★ 配额未刷完 → 加快补刷节拍（2026-09-16）：
+        //   当天总数是定死的计划值，刷怪有义务把 spawned 送到 quota。
+        //   旧的 ambientInterval（16s→4.5s）太慢，光靠它磨不满分母。
+        //   还剩得多 → 节拍缩到 1/3（下限 1.2s），把缺口补上。
+        const left = inp.quotaLeft ?? 0;
+        const backfill = left > 0;
+        this.spawnTimer = backfill
+          ? Math.max(1.2, this.threat.ambientInterval / 3)
+          : this.threat.ambientInterval;
+        // ★ 两道闸（2026-09-16 修正）：
+        //   ① 低血保护仍然保留（玩家快死时不该再凭空加怪）
+        //   ② 存活数只在**配额已刷完**时才是硬闸；配额没完 → 允许越过
+        //      ambientTarget 继续补（否则场上够多就永远补不满）
+        const aliveOk = backfill || inp.alive < this.threat.ambientTarget;
+        if (aliveOk && inp.playerHpRatio >= 0.3) {
           // ★ 攻击欲望：威胁越高，越多的环境怪直接带追击意图开进（不再是纯游荡）
           const hunter = Math.random() < this.threat.intentChance;
           return {

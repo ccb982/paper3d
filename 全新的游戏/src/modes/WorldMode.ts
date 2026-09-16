@@ -55,9 +55,12 @@ import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
-// ★ 击杀统计 + 每日敌人配额（2026-09-16）：远距清除不算击杀，且从配额里扣减
+// ★ 击杀统计 + 每日敌人配额（2026-09-16）
+//   口径：quota 预计算后**冻结**（当天总数不变）；远距清除**不算击杀**（只记 recalled）；
+//   配额闸门依据 = quota − spawned（只增不减，不受回收影响）。
 import {
-  ensureDayQuota, resetDayQuota, recordKill, recordRecall, queryKillProgress,
+  ensureDayQuota, resetDayQuota, recordKill, recordRecall, recordSpawn,
+  queryKillProgress, remainingQuota,
 } from '../systems/combat/KillCounter';
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
@@ -349,7 +352,8 @@ export class WorldMode implements IGameMode {
     melee: () => {},
     // ★ 真击杀（代理侧）：记当日击杀数（掉落/遗物由 onAgentKilled 单独结算）
     onAgentKilled: () => { recordKill(this.session); },
-    // ★ 远距回收（不算击杀）：从当日配额里扣减（玩家再也杀不到这些了）
+    // ★ 远距回收（不算击杀）：只记 recalled —— **不动分母**（当天总数冻结）。
+    //   配额闸门看 spawned（只增不减），所以回收后不会补刷（2026-09-16 修正）
     onAgentRecalled: (n) => { recordRecall(this.session, n); },
   };
   /** ★ 祖宗嘲讽查询复用对象（蜂群每帧多次调用 → 零分配） */
@@ -824,8 +828,9 @@ export class WorldMode implements IGameMode {
     };
     this.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
-    // ★ 当天敌人配额（2026-09-16）：新的一天先清零再按当日威胁重算；
-    //   同日多次出击则沿用已有进度（跨出击累计，配额不重置）。
+    // ★ 当天敌人总数（2026-09-16）：换日先清零，再按当日威胁**预计算并冻结**；
+    //   同日多次出击沿用已有进度（跨出击累计，quota 不重置、不重算）。
+    //   → HUD 分母全天不变（用户定调："当天的敌人会预计算好会有多少人"）。
     if (ctx.session.dayProgress.everDeparted !== ctx.session.meta.day) {
       resetDayQuota(ctx.session);
       ctx.session.dayProgress.everDeparted = ctx.session.meta.day;
@@ -1306,6 +1311,9 @@ export class WorldMode implements IGameMode {
         playerHpRatio: this.player.hp / Math.max(1, this.player.maxHp),
         playerX: pp.x, playerZ: pp.y,
         shipX: this.ship.position.x, shipZ: this.ship.position.z,
+        // ★ 当天配额剩余（2026-09-16）：环境补怪据此持续补刷到打满总数。
+        //   分母 quota 冻结 → "打满"由刷怪负责，UI 不做任何补偿。
+        quotaLeft: remainingQuota(this.session),
       }, this.directorHooks);
       if (order) this.spawnDirectorWave(order);
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
@@ -2340,20 +2348,23 @@ export class WorldMode implements IGameMode {
         bias: this.threat?.biasMul ?? 0.12,
         intent,
       });
-      if (idx >= 0) any = true;
+      if (idx >= 0) {
+        any = true;
+        // ★ 计入当天已生成（配额闸门依据；只增不减 → 回收不会腾出名额）
+        recordSpawn(this.session);
+      }
     }
     return any;
   }
 
-  /** ★ 每日配额闸门（2026-09-16）：当天生成名额 = 配额 − 已击杀 − 场上存活。
-   *  配额 = 击杀可达上限（KillCounter 按威胁档位估算，远距回收会扣减）。
+  /** ★ 每日配额闸门（2026-09-16）：当天**还能再生成**多少只 = quota − spawned。
+   *  ★ 分母 quota 预计算后冻结（全天不变）；spawned 只增不减（不受回收影响）
+   *    → 闸门稳定，不会因敌人被远距回收而"腾出名额"导致无限刷。
    *  四维空间 Boss 战不受配额约束（Boss 是独立实体，不经 spawnOne 的杂兵路径）。 */
   private quotaAllows(): boolean {
     const s = this.session;
     if (!s) return true;
-    const prog = queryKillProgress(s);
-    const alive = this.enemies.length + this.swarm.count;
-    return alive < Math.max(0, prog.total - prog.kills);
+    return remainingQuota(s) > 0;
   }
 
   /** ★ 升格：代理 → L3 实体（蜂群 hooks.promote；同步创建 EnemyBase） */
