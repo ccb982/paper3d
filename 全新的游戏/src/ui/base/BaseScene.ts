@@ -29,7 +29,7 @@ import {
   DOOR_H, DOOR_HALF, ROOM_D, ROOM_GAP, ROOM_H, ROOM_W, WALL_T,
   createDecorMats, createPadMaterialFor, decorateControl, decorateCockpit,
   decorateShell, decorateStorage, decorateWorkshop, updateRoomTime,
-  type AddFn, type DecorMats,
+  type AddFn, type DecorMats, type RegisterAnim,
 } from './RoomDecor';
 import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
 
@@ -93,6 +93,8 @@ export class BaseScene {
 
   /** 通用时钟（盟友绕行/呼吸等周期动画用） */
   private t = 0;
+  /** ★ 房间可动元素（传送带/机械臂/行车/全息…）：装饰期注册，每帧统一驱动 */
+  private roomAnims: ((t: number, dt: number) => void)[] = [];
 
   // ---- 角色（维维美） ----
   private quad: FTXQuad | null = null;
@@ -374,6 +376,8 @@ export class BaseScene {
   update(dt: number): void {
     this.t += dt;
     updateRoomTime(this.t); // ★ 驱动全部房间 shader（灯带呼吸 / 屏幕数据块 / 光圈脉冲）
+    // ★ 驱动房间里的可动元素（几十个小变换，开销可忽略）
+    for (let i = 0; i < this.roomAnims.length; i++) this.roomAnims[i](this.t, dt);
     this.updateInput(dt);
     if (this.anim && this.quad) {
       if (this.moving !== this.wasMoving) {
@@ -515,6 +519,7 @@ export class BaseScene {
     for (const d of this.droneAllies) d.view.dispose();
     this.droneAllies.length = 0;
     this.pads = [];
+    this.roomAnims.length = 0;
     this.mats = null;
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -558,8 +563,11 @@ export class BaseScene {
     add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
     add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, W / 2 + WALL_T / 2, ROOM_H / 2, 0);
 
+    // ---- 可动元素注册器（装饰函数往里塞动画；update 每帧统一驱动）----
+    const anim: RegisterAnim = (fn) => { this.roomAnims.push(fn); };
+
     // ---- 大厅级装饰：踢脚斜面 / 墙面腰线 / 天花板桁架 / 背墙管道 / 通风百叶 / 灯槽 ----
-    decorateShell(add, mats, W, this.bays);
+    decorateShell(add, mats, W, this.bays, anim);
 
     // ---- 分界：墙 + 门（2026-09-12 用户定调：房间之间要有墙、留门）----
     const segD = ROOM_D / 2 - DOOR_HALF;
@@ -595,13 +603,13 @@ export class BaseScene {
         bay.add(m);
         return m;
       };
-      if (defs[i].id === 'control') decorateControl(addIn, mats);
-      else if (defs[i].id === 'storage') decorateStorage(addIn, mats);
+      if (defs[i].id === 'control') decorateControl(addIn, mats, anim);
+      else if (defs[i].id === 'storage') decorateStorage(addIn, mats, anim);
       else if (defs[i].id === 'workshop') {
-        decorateWorkshop(addIn, mats);
+        decorateWorkshop(addIn, mats, anim);
         this.craftBayX = this.bays[i]; // ★ 加工站房间（进房间就显示"打开加工台"提示）
-      } else if (defs[i].id === 'cockpit') decorateCockpit(addIn, mats);
-      else decorateWorkshop(addIn, mats);
+      } else if (defs[i].id === 'cockpit') decorateCockpit(addIn, mats, anim);
+      else decorateWorkshop(addIn, mats, anim);
       const plate = this.makeNameplate(defs[i].name, defs[i].label);
       addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.14);
       addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), mats.strip, 0, ROOM_H - 0.06, 0.4);

@@ -293,6 +293,7 @@ const SCREEN_FRAG = /* glsl */ `
   uniform float uTime;      // ★ 见 STRIP_FRAG 注释：漏声明会让整个 program 挂掉
   uniform vec3  uColor;
   uniform float uSeed;
+  uniform float uMode;      // 0=数据块 1=数字列（七段数码管） 2=雷达 3=柱状图
 
   float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 345.45));
@@ -300,11 +301,50 @@ const SCREEN_FRAG = /* glsl */ `
     return fract(p.x * p.y);
   }
 
+  // ---------------- 七段数码管（"数字抖动"屏） ----------------
+  float segDist(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
+    return length(pa - ba * h);
+  }
+  float digitBits(float d) {          // 段位掩码 a b c d e f g
+    if (d < 0.5) return 63.0;         // 0
+    if (d < 1.5) return 6.0;          // 1
+    if (d < 2.5) return 91.0;         // 2
+    if (d < 3.5) return 79.0;         // 3
+    if (d < 4.5) return 102.0;        // 4
+    if (d < 5.5) return 109.0;        // 5
+    if (d < 6.5) return 125.0;        // 6
+    if (d < 7.5) return 7.0;          // 7
+    if (d < 8.5) return 127.0;        // 8
+    return 111.0;                     // 9
+  }
+  float digitGlyph(vec2 p, float d) {
+    float bits = digitBits(d);
+    float on = 0.0;
+    // 段端点（格子局部坐标）
+    vec4 segs[7];
+    segs[0] = vec4(-0.26, 0.40,  0.26, 0.40);
+    segs[1] = vec4( 0.30, 0.32,  0.30, 0.05);
+    segs[2] = vec4( 0.30,-0.05,  0.30,-0.32);
+    segs[3] = vec4(-0.26,-0.40,  0.26,-0.40);
+    segs[4] = vec4(-0.30,-0.05, -0.30,-0.32);
+    segs[5] = vec4(-0.30, 0.32, -0.30, 0.05);
+    segs[6] = vec4(-0.22, 0.00,  0.22, 0.00);
+    for (int i = 0; i < 7; i++) {
+      float bit = mod(floor(bits / exp2(float(i))), 2.0);
+      float dist = segDist(p, segs[i].xy, segs[i].zw);
+      on = max(on, bit * (1.0 - smoothstep(0.035, 0.055, dist)));
+    }
+    return on;
+  }
+
   void main() {
     float t = uTime + uSeed;
     vec2 uv = vUv;
 
-    // 底色：中间亮、四周暗的荧光屏观感（比旧版更暗更稳）
+    // 底色：中心亮、四周暗的荧光屏观感
     float vig = smoothstep(1.0, 0.30, length(uv - 0.5) * 1.7);
     vec3 col = uColor * (0.10 + 0.30 * vig);
 
@@ -312,22 +352,195 @@ const SCREEN_FRAG = /* glsl */ `
     float scan = 0.5 + 0.5 * sin(uv.y * 150.0 - t * 3.0);
     col += uColor * scan * 0.035;
 
-    // 缓慢滚动的数据列（整列一块一块地亮；不做随机闪烁）
-    vec2 cellId = vec2(floor(uv.x * 13.0), floor(uv.y * 9.0 - t * 0.30));
-    float blk = step(0.84, hash21(cellId));
-    col += uColor * blk * 0.10;
-
     // 顶部一条状态线（视觉锚点，让屏幕一眼像仪表）
     float topLine = smoothstep(0.035, 0.0, abs(uv.y - 0.94));
     col += uColor * topLine * 0.35;
+
+    if (uMode < 0.5) {
+      // ---- 0：缓慢滚动的数据列 ----
+      vec2 cellId = vec2(floor(uv.x * 13.0), floor(uv.y * 9.0 - t * 0.30));
+      float blk = step(0.84, hash21(cellId));
+      col += uColor * blk * 0.10;
+    } else if (uMode < 1.5) {
+      // ---- 1：数字列（每格一个数码管数字，按行错频抖动）----
+      vec2 g = vec2(5.0, 3.0);
+      vec2 cell = floor(uv * g);
+      vec2 lp = (fract(uv * g) - 0.5) * vec2(0.92, 1.25);
+      // 每格独立换数频率（行/列错开），并有少量格子不显示 → 像在刷新的读数
+      float rate = 2.5 + hash21(cell + 3.7) * 5.0;
+      float stepId = floor(t * rate + hash21(cell + 9.1) * 3.0);
+      float v = hash21(cell + stepId * 1.37 + uSeed);
+      float d = floor(v * 10.0);
+      float on = digitGlyph(lp, d);
+      // 少数格子空着（间隔感）
+      on *= step(0.12, hash21(cell + 17.3));
+      col += uColor * on * 0.85;
+    } else if (uMode < 2.5) {
+      // ---- 2：雷达（同心圆 + 旋转扫掠 + 目标点）----
+      vec2 p = (uv - 0.5) * vec2(1.0, 1.6);
+      float r = length(p);
+      float a = atan(p.y, p.x);
+      float rings = 0.0;
+      for (int i = 1; i <= 3; i++) {
+        float rr = float(i) * 0.12;
+        rings += 1.0 - smoothstep(0.002, 0.006, abs(r - rr));
+      }
+      float crosshair = (1.0 - smoothstep(0.002, 0.006, abs(p.x)))
+                      + (1.0 - smoothstep(0.002, 0.006, abs(p.y)));
+      float sweep = pow(max(sin(a - t * 1.3), 0.0), 14.0) * smoothstep(0.42, 0.0, r);
+      col += uColor * (rings * 0.5 + crosshair * 0.25 + sweep * 0.9);
+      // 目标点（固定位置 + 扫过时点亮）
+      for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        vec2 tp = (vec2(hash21(vec2(fi, 1.7)), hash21(vec2(fi, 5.3))) - 0.5) * vec2(0.8, 0.8);
+        float ta = atan(tp.y, tp.x);
+        float ang = mod(a - ta + 6.2831, 6.2831);
+        float blip = exp(-pow((length(p - tp)) * 90.0, 2.0)) * (0.25 + 0.75 * step(ang, 0.6));
+        col += uColor * blip;
+      }
+    } else {
+      // ---- 3：柱状图（跳动条 + 峰值线）----
+      float bars = 12.0;
+      float colId = floor(uv.x * bars);
+      float h = fract(sin(t * (0.6 + hash21(vec2(colId, 2.2)) * 1.4) + colId * 1.7) * 43758.5453);
+      h = 0.12 + 0.78 * abs(h);
+      float bar = step(uv.y, h) * step(uv.x - colId / bars, (colId + 0.7) / bars);
+      col += uColor * bar * 0.35 * smoothstep(0.0, 0.1, uv.y);
+    }
 
     gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
   }
 `;
 
-/** 屏幕 / 数据屏（低压扫描线 + 缓慢数据块；亮度整体压低，避免抢镜） */
-export function createScreenMaterial(color: number, seed = 0): THREE.ShaderMaterial {
+/** 屏幕 / 数据屏。mode：0=滚动数据块 1=数字列（数码管抖动）2=雷达 3=柱状图 */
+export function createScreenMaterial(color: number, seed = 0, mode = 0): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uTime,
+      uColor: { value: new THREE.Color(color) },
+      uSeed: { value: seed },
+      uMode: { value: mode },
+    },
+    vertexShader: STRIP_VERT,
+    fragmentShader: SCREEN_FRAG,
+  });
+}
+
+// ------------------------------------------------------------
+// 3.5) 管路流光 / 蒸汽 / 全息（可动元素专用）
+// ------------------------------------------------------------
+
+const FLOW_FRAG = /* glsl */ `
+  varying vec3 vW;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform vec3  uColor;
+  uniform float uSpeed;
+  uniform float uDots;
+  void main() {
+    float along = vUv.x;
+    // 一列向 +x 移动的光点（管路里的介质流动）
+    float ph = along * uDots - uTime * uSpeed;
+    float dot0 = pow(max(sin(ph * 3.1416), 0.0), 10.0);
+    float ends = smoothstep(0.0, 0.06, along) * smoothstep(1.0, 0.94, along);
+    vec3 col = uColor * (0.10 + dot0 * 1.1) * (0.35 + 0.65 * ends);
+    gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 管路 / 线缆内的流光（沿 uv.x 流动的离散光点） */
+export function createFlowMaterial(color: number, opts: { speed?: number; dots?: number } = {}): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uTime,
+      uColor: { value: new THREE.Color(color) },
+      uSpeed: { value: opts.speed ?? 0.55 },
+      uDots: { value: opts.dots ?? 4.0 },
+    },
+    vertexShader: STRIP_VERT,
+    fragmentShader: FLOW_FRAG,
+  });
+}
+
+const STEAM_FRAG = /* glsl */ `
+  varying vec3 vW;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform vec3  uColor;
+  uniform float uSeed;
+  uniform float uRise;
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+  }
+  float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+               mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    float s = 0.0, amp = 0.5;
+    for (int i = 0; i < 4; i++) { s += noise(p) * amp; p *= 2.03; amp *= 0.5; }
+    return s;
+  }
+  void main() {
+    // 向上翻滚的汽团：噪声坐标随高度/时间上移
+    vec2 q = vec2(vUv.x * 2.2, vUv.y * 2.6 + uTime * uRise + uSeed * 3.7);
+    float n = fbm(q);
+    // 上下都收口 + 淡出
+    float shape = smoothstep(0.05, 0.45, vUv.y) * smoothstep(1.0, 0.35, vUv.y)
+                * (1.0 - abs(vUv.x - 0.5) * 1.7);
+    float a = smoothstep(0.42, 0.95, n) * shape * 0.42;
+    gl_FragColor = vec4(uColor, clamp(a, 0.0, 1.0));
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 蒸汽 / 热气（竖直面片，向上翻滚的汽团；transparent） */
+export function createSteamMaterial(seed = 0, rise = 0.22, color = 0xd8e2ea): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uTime,
+      uColor: { value: new THREE.Color(color) },
+      uSeed: { value: seed },
+      uRise: { value: rise },
+    },
+    vertexShader: STRIP_VERT,
+    fragmentShader: STEAM_FRAG,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+}
+
+const HOLO_FRAG = /* glsl */ `
+  varying vec3 vW;
+  varying vec2 vUv;
+  uniform float uTime;
+  uniform vec3  uColor;
+  uniform float uSeed;
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+  }
+  void main() {
+    // 全息投影：横向扫描线 + 竖向淡出 + 偶发抖动
+    float scan = 0.60 + 0.40 * sin(vUv.y * 70.0 - uTime * 4.0);
+    float fade = smoothstep(0.0, 0.25, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
+    float flick = 0.90 + 0.10 * sin(uTime * 37.0 + uSeed * 9.0) * sin(uTime * 11.0 + uSeed * 3.0);
+    float a = scan * fade * flick * 0.85;
+    gl_FragColor = vec4(uColor * a, a);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 全息投影（光柱 / 悬浮图标；transparent + 不写深度） */
+export function createHoloMaterial(color: number, seed = 0): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
       uTime: uTime,
@@ -335,7 +548,10 @@ export function createScreenMaterial(color: number, seed = 0): THREE.ShaderMater
       uSeed: { value: seed },
     },
     vertexShader: STRIP_VERT,
-    fragmentShader: SCREEN_FRAG,
+    fragmentShader: HOLO_FRAG,
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
 }
 
