@@ -1296,9 +1296,10 @@ export class WorldMode implements IGameMode {
         this.cullAccum = 0;
         this.demoteFarEnemies(pp.x, pp.y);
       }
-      // ---- ★ 舰船遇围警示：近舰敌军（实体 + 代理）大量且持续 → 顶部红色横幅 ----
-      this.updateShipGroupWarning(dt);
     }
+    // ---- ★ 舰船遇围警示（无条件下方执行）：只要舰船活着就一直盯着，
+    //   跟"大规模进攻"节奏无关（详见 updateShipGroupWarning）----
+    this.updateShipGroupWarning(dt);
     const _t4 = performance.now();
 
     // --------------------------------------------------
@@ -2089,14 +2090,15 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 舰船遇围警示播报（双通道，谁触发取谁计数）：
+  /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
+   *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。双通道，谁触发取谁计数：
    *   ① 近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
    *      且持续 SHIP_GROUP_SUSTAIN 秒 —— 团已扎到船边；
    *   ② 意图通道：≥SHIP_INTENT_COUNT 个代理明确扑向舰船（池 intent=INTENT_SHIP）持续
    *      SHIP_INTENT_SUSTAIN 秒 —— 波次刚刷、还在路上就报，灵敏度更高。
    *   横幅显示 max(近距, 扑舰) 计数并实时刷新；双双回落到各自 HIDE 才清除。 */
   private updateShipGroupWarning(dt: number): void {
-    if (!this.ship || this.phase !== 'explore' || this.shipDestroyed) {
+    if (!this.ship || this.shipDestroyed) {
       this.groupWarnAccum = 0;
       if (this.groupWarnShown) {
         this.groupWarnShown = false;
