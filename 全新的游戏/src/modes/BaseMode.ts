@@ -30,6 +30,15 @@ import { MainButtons, type ButtonId } from '../ui/base/MainButtons';
 import { DialogueView } from '../ui/shared/DialogueView';
 import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
 import { EventSystem } from '../systems/events/EventSystem';
+import { getPlatformAdapter } from '../platform';
+
+/**
+ * ★ 出击提示音（点击「开始行动」/「开始突袭」后播放）
+ *   素材：public/music/哈吉马路由.mp3。
+ *   文件名含中文 → 先 encodeURI 再交给 Audio，避免个别服务器/小程序
+ *   对未编码路径的解析差异（本地 vite dev 与 build 产物都走这一条）。
+ */
+const DEPART_SFX = encodeURI('/music/哈吉马路由.mp3');
 
 export class BaseMode implements IGameMode {
   // 场景对象（由 ctx 注入，模式内只读）
@@ -229,9 +238,16 @@ export class BaseMode implements IGameMode {
     }
   }
 
-  /** 出击：回调主流程（战斗属性由 WorldMode 进图时统一刷新） */
+  /**
+   * 出击：回调主流程（战斗属性由 WorldMode 进图时统一刷新）
+   * ★ 出击提示音在这里播（一次性，不循环）：抽卡页的行动按钮有
+   *   「开始行动」/「开始突袭」两张脸，但点击后都汇到本方法，
+   *   所以只需挂这一处就同时覆盖两者（含素材缺失时的「确定」兜底路径）。
+   */
   private doDepart(): void {
     if (!this.session || !this.onDepart) return;
+    // 音频统一走平台适配器（业务层不直接 new Audio）；无适配器时静默跳过
+    getPlatformAdapter()?.audio.playSfx(DEPART_SFX);
     this.session.dayProgress.hasDepartedToday = true;
     SaveSystem.save(this.session);
     this.onDepart(this.session.meta.day);

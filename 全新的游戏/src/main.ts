@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { WebAdapter } from './platform/WebAdapter';
+import { setPlatformAdapter } from './platform';
 import { ensureRapierReady } from './services/physics/PhysicsWorld';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { Asset, MoonEffect } from './vendor/player';
@@ -110,6 +111,7 @@ let enemyStress = 0;
 async function boot() {
   // ---- 1. 平台初始化 ----
   const adapter = new WebAdapter();
+  setPlatformAdapter(adapter); // ★ 供业务层取平台能力（音频/存储）；勿在业务层直接 new Audio
   const canvas = adapter.createCanvas();
   canvas.style.position = 'fixed';
   canvas.style.inset = '0';
