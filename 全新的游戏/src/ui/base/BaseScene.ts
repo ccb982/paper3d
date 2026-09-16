@@ -53,6 +53,24 @@ export interface BaseStation {
   followBodyIndex?: number;
 }
 
+/** ★ 彩蛋门槛：地球自转多少圈后普瑞赛斯登场。
+ *  50 圈 ≈ 11.6 分钟（地球自转 0.45 rad/s ≈ 14 秒一圈；见 SpaceBackdrop.EARTH_SPIN）。 */
+const PRIESTESS_TURNS = 50;
+
+/** 普瑞赛斯立绘的位置与大小
+ *  坐标是"脚底锚点"——setPosition 会按当前高度自动把中心抬到 y + H/2，
+ *  所以**每帧设完缩放后必须重新 setPosition**（否则缩放变化时锚点不跟随）。
+ *  可见窗口：地板前缘(28.9°) ~ 屏幕下沿(41.8°) 之间那条扁带（约 11 单位高）。 */
+const PRIESTESS_X = 0;
+const PRIESTESS_Y = -128;  // 脚底；立绘顶 = -128 + H = -8 → 只有头部落进可见窗口
+// ★ 深度必须**始终在地球之上**（地球球心 (0,-38,-35)、r=26 → 最前表面 z≈-9）。
+//   做法：立绘**关闭深度测试**（setDepthTest(false)）——
+//   位置固定不跟随镜头，billboard 随镜头转（和原先一样）；
+//   但因为不读深度缓冲，无论怎么转都不会被地球/任何几何切掉。
+//   同时 setDepthWrite(false)：纯叠加层，不干扰其它透明物体排序。
+const PRIESTESS_Z = -4;
+const PRIESTESS_H = 120;   // 立绘**高**（世界单位）
+
 /** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
 const MOVE_SPEED = 9.5;
 const JUMP_V = 7.2;
@@ -108,7 +126,8 @@ export class BaseScene {
   private backdrop: SpaceBackdrop | null = null;
   /** ★ 彩蛋：地球转满 100 圈 → 普瑞赛思登场 */
   private priestess: FTXQuad | null = null;
-  private priestessAnim: FrameAnimatorBase | null = null;
+  private priestessFrame = 0;   // 静态帧索引（'前'）
+  private priestessAspect = 1.4; // 立绘宽高比（h/w；用素材帧数据算，兜底 1.4）
   private priestessAt = 0;      // 触发时刻（0 = 还没触发）
   /** 已经数过的圈数（每帧从 t 重算，避免浮点漂移累积） */
   private earthTurns = 0;
@@ -197,16 +216,32 @@ export class BaseScene {
         this.updatePriestess(t, dt);
       });
 
-      // ★ 彩蛋：地球转满 100 圈 → 普瑞赛斯出现在地球上（立绘从 0 弹性放大）
+      // ★ 彩蛋：地球转满 N 圈 → 普瑞赛斯的脸出现在星球上（立绘从 0 弹性放大）
+      //   定位要点（踩过的坑）：
+      //     a) 必须在地球球体**前表面之外**（球心 (0,-38,-35)、r=26 → 前表面 z≈-9），
+      //        否则立绘被地球自己挡住 → 完全看不见；
+      //     b) 必须在地板前缘的遮挡线之下才可见：
+      //        可见判据 y < 8.8 - 0.55 × (25 - z)（相机 (0,8.8,25)，地板前缘 z=9,y=0）；
+      //     c) 可见"窗口"很扁（约 11 单位高）→ 把立绘做得很大、只让**头部**落在窗口里，
+      //        看起来就是"一张脸贴在星球地平线上"。
       const bossAsset = opts.bossAsset;
       if (bossAsset) {
         this.priestess = new FTXQuad(this.sceneRef, bossAsset);
-        this.priestess.setScaleKeepAspect(0.001);
+        // ★ 始终压在地球之上（不读深度缓冲 → 不可能被星球切掉）
+        this.priestess.setDepthTest(false);
+        this.priestess.setDepthWrite(false);
         this.priestess.setAnchorBottom(true);
-        this.priestess.setPosition(0, -58, -22);
+        this.priestess.setScale(0.001, 0.001);
+        this.priestess.setPosition(PRIESTESS_X, PRIESTESS_Y, PRIESTESS_Z);
         this.priestess.setVisible(false);
-        this.priestessAnim = new FrameAnimatorBase(bossAsset);
-        this.priestessAnim.playFrames(['前'], { fps: 1, loop: true });
+        // 静态一帧（普瑞赛斯素材的正面帧；不用逐帧动画，避免帧名不匹配时空白）
+        this.priestessFrame = bossAsset.resolveFrame('前') ?? 0;
+        // 纹理宽高比（保持立绘比例：只按"高"给尺寸，宽按比例折算）
+        const src = bossAsset as unknown as {
+          getFtxFrame?: (i: number) => { width?: number; height?: number } | null;
+        };
+        const f = src.getFtxFrame?.(this.priestessFrame) ?? null;
+        this.priestessAspect = f && f.width && f.height ? f.height / f.width : 1.4;
       }
     }
 
@@ -574,8 +609,6 @@ export class BaseScene {
     this.clickTargets.length = 0;
     this.priestess?.dispose();
     this.priestess = null;
-    this.priestessAnim?.dispose();
-    this.priestessAnim = null;
     this.backdrop = null;
     this.mats = null;
     this.root.traverse((o) => {
@@ -751,16 +784,21 @@ export class BaseScene {
     const q = this.priestess;
     if (!q) return;
     if (this.priestessAt === 0) {
-      if (this.earthTurns < 100) return;
+      // ★ 预览期：暂时设为 1 圈（约 14 秒）就能看到；正式值 100 圈（见 PRIESTESS_TURNS）
+      if (this.earthTurns < PRIESTESS_TURNS) return;
       this.priestessAt = t;
     }
+    void dt;
     const k = Math.min(1, (t - this.priestessAt) / 1.6);
     const ease = 1 - Math.pow(1 - k, 3);
     const pop = 1 + 0.10 * Math.sin(k * 16.0) * (1 - k);   // 登场回弹
-    q.setScaleKeepAspect(46 * ease * pop);
+    // ★ 先缩放、再重设位置（底部锚点抬升要按新高度算 → 否则立绘沉到窗口外）
+    const h = Math.max(0.01, PRIESTESS_H * ease * pop);
+    q.setScale(h / this.priestessAspect, h);
+    // ★ 位置固定（不跟随镜头）+ 立牌式朝向镜头（和之前一样）
+    q.setPosition(PRIESTESS_X, PRIESTESS_Y, PRIESTESS_Z);
     q.setVisible(ease > 0.01);
-    this.priestessAnim?.update(dt);
-    q.render({ frameIndex: this.priestessAnim?.frameIndex ?? 0 });
+    q.render({ frameIndex: this.priestessFrame });
     if (this.camera) q.setBillboard(this.camera);
   }
 

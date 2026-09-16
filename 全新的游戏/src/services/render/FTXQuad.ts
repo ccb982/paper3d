@@ -323,6 +323,13 @@ export class FTXQuad extends FxRendererBase {
     this.material.needsUpdate = true;
   }
 
+  /** ★ 深度测试开关（"永远画在最上层"用：不受任何几何遮挡。
+   *   例：基地彩蛋的普瑞赛斯立绘要始终压在地球之上，不允许被星球切掉。） */
+  setDepthTest(v: boolean): void {
+    this.material.depthTest = v;
+    this.material.needsUpdate = true;
+  }
+
   override dispose(): void {
     super.dispose();
   }
