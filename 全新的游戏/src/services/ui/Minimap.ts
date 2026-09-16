@@ -246,6 +246,8 @@ export class Minimap {
         }
       }
       if (info.kind === 'item' && info.moving) continue;
+      // ★ 强制隐藏（进舰/builder 消失的实体：本体还在实体表里但不该出现在地图上）
+      if (info.hideOnMap) continue;
       const pxw = ex - x0;
       const pzw = ez - z0;
       if (pxw < 0 || pzw < 0 || pxw >= ds || pzw >= ds) continue;

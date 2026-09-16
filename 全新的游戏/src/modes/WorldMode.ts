@@ -53,7 +53,7 @@ import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
-import { Director, INTENT_NONE, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
+import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
@@ -433,14 +433,20 @@ export class WorldMode implements IGameMode {
   /** ★ 舰船遇围警示（顶部红色横幅）：近舰敌军持续超标才播报 */
   private groupWarnAccum = 0;
   private groupWarnShown = false;
-  /** 近舰敌军统计半径（米；比舰船雷达 120m 聚焦，圈"贴身"敌军） */
-  private static readonly SHIP_GROUP_RADIUS = 55;
-  /** ★ 播报触发：近舰敌军（实体 + 代理）≥ 此数 且持续 SHIP_GROUP_SUSTAIN 秒 */
-  private static readonly SHIP_GROUP_COUNT = 8;
-  /** 迟滞：降到 ≤ 此数才清除（防临界抖动反复播/消） */
-  private static readonly SHIP_GROUP_HIDE_COUNT = 5;
-  /** 持续时长（秒）：一群怪路过闪一瞬不报，扎住才报 */
-  private static readonly SHIP_GROUP_SUSTAIN = 1.2;
+  /** 近舰敌军统计半径（米；圈"贴身"敌军；比舰船雷达 120m 聚焦） */
+  private static readonly SHIP_GROUP_RADIUS = 65;
+  /** ★ 近距通道触发：舰船这圈内敌军（实体 + 代理）≥ 此数 且持续 SHIP_GROUP_SUSTAIN 秒 */
+  private static readonly SHIP_GROUP_COUNT = 5;
+  /** 迟滞：近距数降到 ≤ 此数 才可清除（防临界抖动反复播/消） */
+  private static readonly SHIP_GROUP_HIDE_COUNT = 3;
+  /** 近距通道持续时长（秒）：一群怪路过闪一瞬不报，扎住才报 */
+  private static readonly SHIP_GROUP_SUSTAIN = 0.6;
+  /** ★ 意图通道触发：≥ 此数蜂群代理**明确扑向舰船**（INTENT_SHIP）→ 快速播报（不论远近） */
+  private static readonly SHIP_INTENT_COUNT = 4;
+  /** 意图通道迟滞：扑向舰船的代理 ≤ 此数 才可清除 */
+  private static readonly SHIP_INTENT_HIDE = 2;
+  /** 意图通道持续时长（秒；比近距更快，扑舰波次换位期间不错过） */
+  private static readonly SHIP_INTENT_SUSTAIN = 0.3;
 
   // ★ 私有物理世界和输入绑定（外界不可见，exit 时完整清理）
   private physics: PhysicsWorld | null = null;
@@ -2083,9 +2089,12 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 舰船遇围警示播报：统计近舰（≤SHIP_GROUP_RADIUS）敌军数（L3 实体 + 蜂群代理池），
-   *   ≥SHIP_GROUP_COUNT 且持续 SHIP_GROUP_SUSTAIN 秒 → 顶部红色横幅"大量敌人逼近舰船"，
-   *   count 实时刷新；降到 ≤SHIP_GROUP_HIDE_COUNT（迟滞）才清除。 */
+  /** ★ 舰船遇围警示播报（双通道，谁触发取谁计数）：
+   *   ① 近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
+   *      且持续 SHIP_GROUP_SUSTAIN 秒 —— 团已扎到船边；
+   *   ② 意图通道：≥SHIP_INTENT_COUNT 个代理明确扑向舰船（池 intent=INTENT_SHIP）持续
+   *      SHIP_INTENT_SUSTAIN 秒 —— 波次刚刷、还在路上就报，灵敏度更高。
+   *   横幅显示 max(近距, 扑舰) 计数并实时刷新；双双回落到各自 HIDE 才清除。 */
   private updateShipGroupWarning(dt: number): void {
     if (!this.ship || this.phase !== 'explore' || this.shipDestroyed) {
       this.groupWarnAccum = 0;
@@ -2098,35 +2107,44 @@ export class WorldMode implements IGameMode {
     const sx = this.ship.position.x;
     const sz = this.ship.position.z;
     const r2 = WorldMode.SHIP_GROUP_RADIUS ** 2;
-    let count = 0;
+    let dist = 0;
     for (const e of this.enemies) {
       const dx = e.position.x - sx, dz = e.position.z - sz;
-      if (dx * dx + dz * dz <= r2) count++;
+      if (dx * dx + dz * dz <= r2) dist++;
     }
     const pool = this.swarm.pool;
+    let intentShip = 0;
     for (let i = 0; i < pool.count; i++) {
       const dx = pool.x[i] - sx, dz = pool.z[i] - sz;
-      if (dx * dx + dz * dz <= r2) count++;
+      if (dx * dx + dz * dz <= r2) dist++;
+      if (pool.intent[i] === INTENT_SHIP) intentShip++;
     }
-    const showAt = WorldMode.SHIP_GROUP_COUNT;
-    const hideAt = WorldMode.SHIP_GROUP_HIDE_COUNT;
-    if (count >= showAt) {
-      this.groupWarnAccum += dt;
-      if (this.groupWarnAccum >= WorldMode.SHIP_GROUP_SUSTAIN && !this.groupWarnShown) {
+    const proxHit = dist >= WorldMode.SHIP_GROUP_COUNT;
+    const intentHit = intentShip >= WorldMode.SHIP_INTENT_COUNT;
+    if (proxHit || intentHit) {
+      // 意图通道更快响应；已显示则持续刷新计数
+      const need = intentHit
+        ? WorldMode.SHIP_INTENT_SUSTAIN
+        : WorldMode.SHIP_GROUP_SUSTAIN;
+      this.groupWarnAccum = Math.min(need, this.groupWarnAccum + dt);
+      if (this.groupWarnShown) {
+        this.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+      } else if (this.groupWarnAccum >= need) {
         this.groupWarnShown = true;
-        this.worldUIManager.showEnemyGroupWarning(count);
-      } else if (this.groupWarnShown) {
-        this.worldUIManager.showEnemyGroupWarning(count);
+        this.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
       }
-    } else if (count <= hideAt) {
+    } else if (
+      dist <= WorldMode.SHIP_GROUP_HIDE_COUNT &&
+      intentShip <= WorldMode.SHIP_INTENT_HIDE
+    ) {
       this.groupWarnAccum = 0;
       if (this.groupWarnShown) {
         this.groupWarnShown = false;
         this.worldUIManager.clearEnemyGroupWarning();
       }
     } else if (this.groupWarnShown) {
-      // 迟滞带内（hide < count < show）：已显示则维持并刷新计数，未显示不新亮
-      this.worldUIManager.showEnemyGroupWarning(count);
+      // 迟滞带（已触发但未落到清除线）：维持并刷新计数
+      this.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
     }
   }
 

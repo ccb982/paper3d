@@ -205,11 +205,13 @@ export class VisitorNpcBase extends CharacterBase {
     return this.def.name;
   }
 
-  /** ★ 小地图/大地图：NPC 金色点常显（世界侧行进/逃跑中标记为移动） */
-  override get minimapInfo(): { kind: string; moving: boolean } {
+  /** ★ 小地图/大地图：NPC 金色点常显（世界侧行进/逃跑中标记为移动）；
+   *   进舰（entered）/ 已离舰（fled）后在世界上不存在 → hideOnMap 抹除 */
+  override get minimapInfo(): { kind: string; moving: boolean; hideOnMap?: boolean } {
     return {
       kind: 'npc',
       moving: this.phase === 'approaching' || this.phase === 'fleeing',
+      hideOnMap: this.phase === 'entered' || this.phase === 'fled',
     };
   }
 

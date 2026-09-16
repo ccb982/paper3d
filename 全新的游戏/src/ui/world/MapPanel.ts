@@ -469,6 +469,8 @@ export class MapPanel {
       const ez = e.position.z;
       if (info.kind === 'ship') continue;
       if (info.kind === 'item' && info.moving) continue;
+      // ★ 强制隐藏（进舰的访客：本体保留供舰内对话，但地图上不再出现）
+      if (info.hideOnMap) continue;
       if (info.kind === 'enemy') {
         // ★ 只播报（玩家视野半径）或（舰船雷达半径）内的敌人 —— 与小地图同一条规则
         const edx = ex - px;

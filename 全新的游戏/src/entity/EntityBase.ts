@@ -86,8 +86,9 @@ export abstract class EntityBase {
   collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
 
   /** ★ 小地图展示属性（实体基类提供，Minimap 直接消费；子类可覆写 moving）
-   *   kind = 实体类型（小地图配色）；moving = 移动中（如移动中的物品不显示） */
-  get minimapInfo(): { kind: string; moving: boolean } {
+   *   kind = 实体类型（小地图配色）；moving = 移动中（如移动中的物品不显示）；
+   *   hideOnMap = 强制隐藏（如已进舰的访客在世界侧没有存在感） */
+  get minimapInfo(): { kind: string; moving: boolean; hideOnMap?: boolean } {
     return { kind: this.entity.kind, moving: false };
   }
 
