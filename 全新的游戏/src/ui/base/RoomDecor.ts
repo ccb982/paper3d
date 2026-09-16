@@ -21,7 +21,10 @@
 //   · decorateShell —— 大厅级装饰（踢脚/腰线/桁架/管道/百叶/灯槽）
 //   · decorate*     —— 单间内部布置（坐标为 bay 局部：x ∈ [-13.5, 13.5]，z ∈ [-9, 9]）
 //
-// ⚠️ 家具一律**不做碰撞**（沿用既有定调）——角色的 xz 只受房间外墙与分界墙钳制。
+// ★ 碰撞（2026-09-16 用户定调）：**基地/舰内所有实体都有物理体积**——
+//   房间建好后由 BaseScene.collectSolids 遍历场景自动收集（xz AABB），
+//   角色与访客走动时用圆形推出解算；会动的道具（行车/小车/传送带工件/机械臂）
+//   用 movable() 打标排除（它们位置每帧在变，静态 AABB 会对不上）。
 
 import * as THREE from 'three';
 import {
@@ -262,6 +265,11 @@ function haloTexture(): THREE.Texture {
   return tex;
 }
 
+/** ★ 标记"会动的道具"：位置每帧在变 → 不参与实体碰撞收集（BaseScene.collectSolids） */
+function movable(...objs: THREE.Object3D[]): void {
+  for (const o of objs) o.userData.noSolid = true;
+}
+
 /** 流水指示灯条（流光沿长轴跑；沿 x 放） */
 function flowBar(add: AddFn, mats: DecorMats, x: number, y: number, z: number, len: number): THREE.Mesh {
   return add(new THREE.BoxGeometry(len, 0.07, 0.07), mats.flow, x, y, z);
@@ -338,6 +346,7 @@ function agvCart(
   const box = add(new THREE.BoxGeometry(0.95, 0.85, 0.95), mats.crate, x, 1.13, z0);
   const glow = add(new THREE.BoxGeometry(1.55, 0.06, 2.35), mats.flow, x, 0.15, z0);
   const sh = shadow(add, mats, x, z0, 0.95, 1.35);
+  movable(body, deck, box, glow);
   anim((t) => {
     const k = 0.5 - 0.5 * Math.cos(t * speed);   // 平滑往返（端点自然减速）
     const z = z0 + (z1 - z0) * k;
@@ -362,6 +371,7 @@ function gantryCrane(
   const cable = add(new THREE.CylinderGeometry(0.04, 0.04, 1, 6, 1), mats.struct, x0, yTop - 0.8, z);
   const hook = add(new THREE.BoxGeometry(1.0, 0.12, 1.0), mats.struct, x0, yTop - 1.4, z);
   const box = add(new THREE.BoxGeometry(0.95, 0.95, 0.95), mats.crate, x0, yTop - 2.0, z);
+  movable(trolley, cable, hook, box);
   anim((t) => {
     const kx = 0.5 - 0.5 * Math.cos(t * 0.11);                  // 沿轨道慢速往返
     const x = x0 + (x1 - x0) * kx;
@@ -398,6 +408,7 @@ function beltLine(
   for (let i = 0; i < pkgs; i++) {
     list.push(add(boxGeo, mats.crate, x0 + (i * len) / pkgs, y + 0.60, z));
   }
+  movable(...list);
   anim((t) => {
     for (const r of rollers) r.rotation.z = -t * 2.4;
     for (let i = 0; i < list.length; i++) {
@@ -455,6 +466,7 @@ function robotArm(
   placed.position.set(landX, 0.46, landZ);
   turret.parent?.add(placed);                            // 与转台同级（不随机械臂移动）
 
+  movable(turret, shoulder, upper, elbow, fore, gripper, fL, fR, carried, placed);
   const T = 9.0;                                         // 一个取放循环（秒）
   anim((t) => {
     const p = (t % T) / T;

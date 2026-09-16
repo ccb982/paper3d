@@ -71,6 +71,10 @@ const PRIESTESS_Y = -128;  // 脚底；立绘顶 = -128 + H = -8 → 只有头�
 const PRIESTESS_Z = -4;
 const PRIESTESS_H = 120;   // 立绘**高**（世界单位）
 
+/** ★ 实体碰撞半径（角色 / 访客；圆形近似） */
+const CHAR_R = 0.55;
+const NPC_R = 0.42;
+
 /** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
 const MOVE_SPEED = 9.5;
 const JUMP_V = 7.2;
@@ -118,6 +122,11 @@ export class BaseScene {
   private t = 0;
   /** ★ 房间可动元素（传送带/机械臂/行车/全息…）：装饰期注册，每帧统一驱动 */
   private roomAnims: ((t: number, dt: number) => void)[] = [];
+  /** ★ 实体碰撞体（2026-09-16 用户定调：基地/舰内**所有实体都要有物理体积**）
+   *  收集体：房间建好后遍历 root 自动生成（xz 平面 AABB，人走路的圆去撞）
+   *  过滤：只收"人走会撞到的高度区间"（0.35 ~ 1.6m）、排除薄片/小零件/
+   *  灯带屏幕等装饰材质、以及标记了 userData.noSolid 的会动道具。 */
+  private solids: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
   /** ★ 可点击目标（房间彩蛋：双击命中 → 回调） */
   private clickTargets: { mesh: THREE.Object3D; cb: () => void }[] = [];
   private raycaster = new THREE.Raycaster();
@@ -135,7 +144,8 @@ export class BaseScene {
   // ---- 角色（维维美） ----
   private quad: FTXQuad | null = null;
   private anim: FrameAnimatorBase | null = null;
-  private charPos = new THREE.Vector3(0, 0, 1.0);
+  /** 出生点：仓库间中区空地（避开货箱矩阵；有实体碰撞后必须选空位，否则开局被顶） */
+  private charPos = new THREE.Vector3(0, 0, 4.0);
   private facingRight = true;
   private moving = false;
   private wasMoving = false;
@@ -496,9 +506,13 @@ export class BaseScene {
             b.timer = 1.2 + Math.random() * 2.6; // 驻足 1.2~3.8s
           } else {
             const step = Math.min(d, b.speed * dt);
-            b.x += (dx / d) * step;
-            b.z += (dz / d) * step;
-            b.body.setYaw(Math.atan2(dx, dz));
+            const sx = (dx / d) * step;
+            const sz = (dz / d) * step;
+            let movedAny = false;
+            if (!this.blockedCircle(b.x + sx, b.z, NPC_R)) { b.x += sx; movedAny = true; }
+            if (!this.blockedCircle(b.x, b.z + sz, NPC_R)) { b.z += sz; movedAny = true; }
+            if (movedAny) b.body.setYaw(Math.atan2(dx, dz));
+            else { b.walking = false; b.timer = 0.3; }   // 前面是家具 → 换个目标
           }
         } else if (b.timer <= 0) {
           // 抽新目标：家附近 3~8m 随机点（房间边界内留 ~1.5m 墙距）
@@ -530,6 +544,11 @@ export class BaseScene {
           }
         }
       }
+      // ★ 访客也脱困（分离逻辑可能把它挤进家具）
+      _npcPos.set(b.x, 0, b.z);
+      this.unstick(_npcPos, NPC_R);
+      b.x = _npcPos.x;
+      b.z = _npcPos.z;
       b.body.setPosition(b.x, 0, b.z);
       if (b.walking && !bodiesFrozen) {
         b.body.setLocomotion(true, b.speed);
@@ -607,6 +626,7 @@ export class BaseScene {
     this.pads = [];
     this.roomAnims.length = 0;
     this.clickTargets.length = 0;
+    this.solids.length = 0;
     this.priestess?.dispose();
     this.priestess = null;
     this.backdrop = null;
@@ -648,11 +668,18 @@ export class BaseScene {
     };
 
     // ---- 壳体（打通：一整条）—— 五大面全部换成程序化表面材质 ----
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.floor, 0, -WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), mats.wall, 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2);
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.ceil, 0, ROOM_H + WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, W / 2 + WALL_T / 2, ROOM_H / 2, 0);
+    // ★ 壳体与分界墙**不参与实体碰撞收集**：外墙/房间边界与门洞由既有钳制逻辑
+    //   （DOOR_HALF 吸附到 0.9m）负责。若也让它们当实体，会与实体推出（0.7m）每帧
+    //   互相顶 → 角色卡墙 + 抖动闪烁（2026-09-16 修）。
+    const noSolid = (m: THREE.Mesh): THREE.Mesh => {
+      m.userData.noSolid = true;
+      return m;
+    };
+    noSolid(add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.floor, 0, -WALL_T / 2, 0));
+    noSolid(add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), mats.wall, 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2));
+    noSolid(add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.ceil, 0, ROOM_H + WALL_T / 2, 0));
+    noSolid(add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, -W / 2 - WALL_T / 2, ROOM_H / 2, 0));
+    noSolid(add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, W / 2 + WALL_T / 2, ROOM_H / 2, 0));
 
     // ---- 可动元素注册器（装饰函数往里塞动画；update 每帧统一驱动）----
     const anim: RegisterAnim = (fn) => { this.roomAnims.push(fn); };
@@ -706,6 +733,76 @@ export class BaseScene {
       const plate = this.makeNameplate(defs[i].name, defs[i].label);
       addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.14);
       addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), mats.strip, 0, ROOM_H - 0.06, 0.4);
+    }
+
+    // ---- ★ 实体碰撞体收集（家具/设备/货箱…全部实体化，角色与访客都撞得到）----
+    this.collectSolids();
+  }
+
+  /** ★ 遍历房间自动收集实体碰撞盒（xz 平面 AABB）。
+   *  只保留"挡住人走路"的那一层：盒子与 [0.35, 1.6] 的高度区间有交集；
+   *  薄片（屏幕/贴片/铭牌）、小零件（把手/灯珠）与装饰材质（灯带/光圈/蒸汽/阴影）
+   *  一律跳过；会动的道具（行车/小车/传送带工件/机械臂）在装饰期标了 noSolid。 */
+  private collectSolids(): void {
+    const skip = new Set<THREE.Material | undefined>([
+      this.mats?.shadow, this.mats?.pad, this.mats?.flow, this.mats?.holo, this.mats?.steam,
+      this.mats?.strip, this.mats?.stripWarm, this.mats?.stripVert,
+      this.mats?.screen, this.mats?.screenAlt, this.mats?.viewport,
+    ]);
+    const box = new THREE.Box3();
+    this.root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;                 // 点云/组不算
+      if (o.userData.noSolid === true) return;                // 会动的道具
+      const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+      if (skip.has(mat) || mat?.userData?.noSolid === true) return;
+      const geo = o.geometry as THREE.BufferGeometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      if (!geo.boundingBox) return;
+      o.updateWorldMatrix(true, false);
+      box.copy(geo.boundingBox).applyMatrix4(o.matrixWorld);
+      if (box.max.y < 0.35 || box.min.y > 1.6) return;        // 脚下的薄板 / 头顶的梁
+      const sx = box.max.x - box.min.x;
+      const sz = box.max.z - box.min.z;
+      if (Math.min(sx, sz) < 0.12) return;                    // 薄片（屏幕 / 贴片 / 铭牌）
+      if (sx * sz < 0.03) return;                             // 小零件（把手 / 灯珠）
+      // ★ 保险：超大盒子是房间整体/天穹之类，不能当实体（否则角色被关在里面走不动）
+      if (sx > 60 || sz > 60) return;
+      this.solids.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
+    });
+  }
+
+  /** ★ 圆形 vs 实体 AABB 的碰撞查询（xz 平面）——移动前问一句"能不能过去" */
+  private blockedCircle(x: number, z: number, r: number): boolean {
+    for (let i = 0; i < this.solids.length; i++) {
+      const s = this.solids[i];
+      const cx = Math.max(s.minX, Math.min(x, s.maxX));
+      const cz = Math.max(s.minZ, Math.min(z, s.maxZ));
+      const dx = x - cx;
+      const dz = z - cz;
+      if (dx * dx + dz * dz < r * r) return true;
+    }
+    return false;
+  }
+
+  /** ★ 兜底脱困：已经陷在实体里（出生点 / 被挤住）→ 8 方向逐级外扩找最近的合法位。
+   *  只在"当前就重叠"时调用，命中即停；找不到（极端情况）就原地不动，交给下一帧。 */
+  private unstick(pos: THREE.Vector3, r: number): void {
+    if (!this.blockedCircle(pos.x, pos.z, r)) return;
+    const halfW = this.hallW / 2 - 0.9;
+    const minZ = -ROOM_D / 2 + 0.9;
+    const maxZ = ROOM_D / 2 - 1.2;
+    for (let step = 1; step <= 16; step++) {
+      const d = step * 0.1;
+      for (let k = 0; k < 8; k++) {
+        const a = (k / 8) * Math.PI * 2;
+        const x = Math.max(-halfW, Math.min(halfW, pos.x + Math.cos(a) * d));
+        const z = Math.max(minZ, Math.min(maxZ, pos.z + Math.sin(a) * d));
+        if (!this.blockedCircle(x, z, r)) {
+          pos.x = x;
+          pos.z = z;
+          return;
+        }
+      }
     }
   }
 
@@ -875,8 +972,17 @@ export class BaseScene {
       const prevX = this.charPos.x;
       if (this.moving) {
         const spd = MOVE_SPEED * (this.vehicleRide?.moveSpeedMul ?? 1); // ★ 载具移速提升
-        this.charPos.x += (mx / len) * spd * dt;
-        this.charPos.z += (mz / len) * spd * dt;
+        // ★ 逐轴推进 + 碰撞拒绝（撞到实体就取消该轴位移）：
+        //   不用"先走再推出"——推出方向可能正对房间外墙，会被边界夹回来，每帧互顶 → 卡死。
+        //   拒绝式的好处：撞墙自然沿墙滑行，且永远不会把角色塞进墙里。
+        const stepX = (mx / len) * spd * dt;
+        const stepZ = (mz / len) * spd * dt;
+        if (!this.blockedCircle(this.charPos.x + stepX, this.charPos.z, CHAR_R)) {
+          this.charPos.x += stepX;
+        }
+        if (!this.blockedCircle(this.charPos.x, this.charPos.z + stepZ, CHAR_R)) {
+          this.charPos.z += stepZ;
+        }
       }
       // 边界
       const halfW = this.hallW / 2 - 0.9;
@@ -893,6 +999,8 @@ export class BaseScene {
           this.charPos.x = d + (prevX >= d ? half : -half);
         }
       }
+      // ★ 兜底脱困（出生点 / 被会动道具挤住 / 门洞吸附后仍在实体里）
+      this.unstick(this.charPos, CHAR_R);
       // 跳跃（空格；着地才可起跳）
       if (this.wantJump && this.grounded) {
         this.vy = JUMP_V;
@@ -944,6 +1052,7 @@ const MOVE_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowlef
 
 /** 跟随机位目标：x 跟角色，高度/距离随缩放（y = 4.5 + dist×0.18，z = 角色 z + dist） */
 const _tmpTarget = new THREE.Vector3();
+const _npcPos = new THREE.Vector3();
 function camFollowSnap(out: THREE.Vector3, charPos: THREE.Vector3, dist: number): void {
   out.set(charPos.x, 4.5 + dist * 0.18, charPos.z + dist);
 }

@@ -66,6 +66,7 @@ export function createSpaceBackdrop(
   const dome = new THREE.Mesh(domeGeo, domeMat);
   dome.frustumCulled = false;
   dome.renderOrder = -10;
+  dome.userData.noSolid = true;          // ★ 半径 260 的天穹不能当实体（否则角色被"关"在里面）
   scene.add(dome);
 
   // ---- ② 可点击星点云 ----
@@ -103,6 +104,7 @@ export function createSpaceBackdrop(
   const stars = new THREE.Points(starGeo, starMat);
   stars.frustumCulled = false;
   stars.renderOrder = -9;
+  stars.userData.noSolid = true;         // 星点云（Points，本就不会被收集；标注以防万一）
   scene.add(stars);
 
   // ---- ③ 自转地球 ----
@@ -111,6 +113,7 @@ export function createSpaceBackdrop(
   const earth = new THREE.Mesh(earthGeo, earthMat);
   earth.position.set(ex, ey, ez);
   earth.rotation.z = 0.41;         // 23.4° 轴倾角
+  earth.userData.noSolid = true;   // ★ 星球也不能当实体（大球同理）
   scene.add(earth);
 
   return {
