@@ -138,6 +138,8 @@ class TerrainPatchService {
       levels: Uint8Array | undefined; dirty?: number[] | null;
       /** ★ 构建档位（8=0.125m / 4=0.25m；缺省 = FINE_S_NEAR） */
       fineS?: number;
+      /** ★ 水面求解档：'none' = 跳过水体（坑洞优先；水面由 WaterSolve 异步补算） */
+      waterMode?: 'full' | 'none';
     },
     readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
   ): Promise<PatchGeomResult | null> {
@@ -168,7 +170,10 @@ class TerrainPatchService {
     if (!w) {
       // 主线程同步回退：同一纯函数（readChunk 闭包直接用）
       return Promise.resolve(
-        computeTableGeometry(readChunk, seed, cx, cz, req.levels, req.dirty, masks, makeLevelAt(chunks), false, undefined, req.fineS),
+        computeTableGeometry(
+          readChunk, seed, cx, cz, req.levels, req.dirty, masks, makeLevelAt(chunks),
+          false, undefined, req.fineS, req.waterMode ?? 'full',
+        ),
       );
     }
     const id = this.nextIds[i] = (this.nextIds[i] ?? 0) + 1;
@@ -194,6 +199,7 @@ class TerrainPatchService {
           dirty: req.dirty ?? null,
           masks,
           fineS: req.fineS ?? 8,
+          waterMode: req.waterMode ?? 'full',
           chunks,
         },
         transfer,

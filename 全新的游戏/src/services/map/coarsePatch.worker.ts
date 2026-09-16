@@ -41,8 +41,12 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
   // ★ 粗块静水（液块平 quad；粗加载/航行期可见）
-  push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
-  push(r.water.deep); push(r.water.border); push(r.water.spin); push(r.water.indices);
+  //   粗块路径恒产水面（coarse=true 直接 buildCoarseWater）；waterMode:'none'
+  //   只用于细化破坏重建，此处理论上非空 —— 仍判空以防后续档位组合变化。
+  if (r.water) {
+    push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
+    push(r.water.deep); push(r.water.border); push(r.water.spin); push(r.water.indices);
+  }
   return out;
 }
 

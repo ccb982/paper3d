@@ -24,6 +24,7 @@ import {
 } from './ChunkAppearance';
 import { terrainBaker, type BakeResult } from './TerrainBaker';
 import { terrainPatch } from './TerrainPatch';
+import { waterSolve } from './WaterSolve'; // ★ 水体异步慢算（破坏/水体解耦）
 import { coarsePatch } from './CoarsePatch';
 import { TerrainMaterial, MATERIAL_SLOTS, materialFnIndex, clearWallMaterialRegistry, type TileRenderConfig } from './TerrainMaterial';
 import { tileById } from './Tiles';
@@ -103,6 +104,12 @@ export const digPerf = {
   /** 主线程装饰计划 planDecor 累计（planChunkProps + computePropVolumes；每块一算） */
   planDecor: 0,
   planCount: 0,
+  /** ★ 破坏/水体解耦（2026-09-16）：本次重建【跳过水面】次数（坑洞涉及区无水） */
+  waterSkip: 0,
+  /** ★ 水面转异步慢算次数（坑洞涉及区有水，但先出坑洞） */
+  waterDefer: 0,
+  /** ★ 异步水面落地次数（WaterSolve 回结果并换上水网格；失败/丢弃不计） */
+  waterApplied: 0,
   /** 装配子项①：buildTerrainMeshes（BufferGeometry/材质/网格创建） */
   terrainMesh: 0,
   /** 装配子项②：createChunkGround（同步建分区 trimesh collider） */
@@ -115,6 +122,7 @@ export const digPerf = {
     this.ground = 0; this.groundCount = 0; this.decorDrainFull = 0; this.decorDrainProps = 0;
     this.bootstrap = 0; this.bootstrapN = 0; this.planDecor = 0; this.planCount = 0;
     this.terrainMesh = 0; this.chunkGround = 0;
+    this.waterSkip = 0; this.waterDefer = 0; this.waterApplied = 0;
     this.decorPlan = 0; this.decorBuild = 0; this.decorColliders = 0; this.decorStruct = 0;
   },
 };
@@ -338,7 +346,9 @@ export class ChunkManager {
     maps: ChunkMaps; decor: DecorPlan | null; // null = 破坏重建(只换地形，见 rebuildTerrainOnly)
     deferDecor?: boolean; // 首建：先上地形，装饰层延后见 pendingDecorJobs
     decorMode?: 'none' | 'props' | 'full'; // ★ 挖坑局部重贴地：无影响/仅道具/整块（缺省 full）
-    top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw;
+    /** ★ undefined = 保持旧水面（waterMode:'none'；异步水结果后到）；
+     *     有值 = 换上新水面；null 不出现在此（null 在入口已折算成 undefined） */
+    top: FaceGeometry; wall: FaceGeometry; water: WaterSurfaceRaw | undefined;
     cells?: PatchGroundCell[]; // ★ 物理分区（增量重建只含受影响分区；缺省 = 合并 trimesh）
     bounds?: { top: GeomBounds; wall: GeomBounds }; // ★ y 范围（Worker 扫出 → 解析构造包围球）
   }[] = [];
@@ -940,6 +950,8 @@ export class ChunkManager {
     this.clearCoarse();
     coarsePatch.clearCaches();   // ★ 粗池静态源缓存同换代
     terrainPatch.clearCaches(); // ★ 增量基座缓存随 chunk 数据换代作废
+    waterSolve.clearCaches();   // ★ 水 worker 的静态源/水体增量状态同换代
+    this.waterMaskCache.clear(); // ★ 水体位图随地形数据换代作废
     this.geoInflight.clear();      // ★ 几何在途/待装配随风格换代作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随风格换代作废
@@ -972,6 +984,8 @@ export class ChunkManager {
 
     coarsePatch.clearCaches();    // ★ 粗池静态源缓存同清
     terrainPatch.clearCaches();   // ★ 增量基座缓存随 dispose 作废
+    waterSolve.clearCaches();     // ★ 水 worker 缓存/水体增量状态同作废
+    this.waterMaskCache.clear();
     this.geoInflight.clear();     // ★ 几何在途/待装配随 dispose 作废
     this.assembleQueue.length = 0;
     this.pendingDecorJobs.clear(); // 延迟装饰随 dispose 作废
@@ -1540,7 +1554,7 @@ export class ChunkManager {
     //   几何由 buildCoarseWater 产出（deep/border/spin 齐全，border=1 全钉死 = 文档"静态层"）；
     //   颜色/着色/pass 与细化水完全一致（canvas 占位材质退役）。
     //   不挂 isWater 旗标 → 航行期不被整批隐藏（航行时它就是可见的水面）。
-    if (g.water.indices.length > 0) {
+    if (g.water && g.water.indices.length > 0) {
       const wmesh = createWaterMesh(g.water);
       wmesh.userData.isWater = false;
       group.add(wmesh);
@@ -1794,6 +1808,7 @@ export class ChunkManager {
     //   未建过的 chunk 默认近档——只在近环首建）
     const fineS = this.detailWant.get(key) ?? this.chunkFineS.get(key) ?? FINE_S_NEAR;
     terrainPatch
+      // ★ 首建/标准构建：waterMode 缺省 'full'（必须带水面——没有"旧水面"可保持）
       .compute({ seed: this.raster.worldSeed, cx, cz, levels: new Uint8Array(levels), fineS }, readChunk)
       .then((geom) => {
         if (this.bakeGen !== gen) return; // 换代（切风格/dispose）已作废
@@ -1809,7 +1824,7 @@ const key2 = chunkKeyOf(cx, cz);
             key: key2, cx, cz, maps,
             decor, // 仅 isFirstBuild=false（重建已有）时用于完整装配
             deferDecor: isFirstBuild,
-            top: geom.top, wall: geom.wall, water: geom.water,
+            top: geom.top, wall: geom.wall, water: geom.water ?? undefined,
             cells: geom.cells,
             bounds: { top: geom.topBounds, wall: geom.wallBounds },
           });
@@ -1850,12 +1865,12 @@ const key2 = chunkKeyOf(cx, cz);
     decor: DecorPlan,
     topG: FaceGeometry,
     wallG: FaceGeometry,
-    waterG?: WaterSurfaceRaw,
+    waterG?: WaterSurfaceRaw | null,
     cells?: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
   ): void {
     const key = chunkKeyOf(cx, cz);
-    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
+    const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
     const group = new THREE.Group();
     for (const m of cfg.meshes) group.add(m);
     group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -1883,7 +1898,7 @@ const key2 = chunkKeyOf(cx, cz);
    */
   private rebuildTerrainOnly(
     cx: number, cz: number, maps: ChunkMaps,
-    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw,
+    topG: FaceGeometry, wallG: FaceGeometry, waterG?: WaterSurfaceRaw | null,
     cells?: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
     decorMode: 'none' | 'props' | 'full' = 'full',
@@ -1896,7 +1911,10 @@ const key2 = chunkKeyOf(cx, cz);
         if (decorMode !== 'none') this.queueDecorJob(cx, cz, maps, decorMode === 'props' ? 'props' : 'full');
         return;
       }
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
+      // ★ 全量换装会整体拆旧（含旧水面）→ 本次若不带水面（异步水在路上），
+      //   先把旧水网格摘出来保住，换装后原样挂回，等异步水结果覆盖（防水面闪没）
+      const stashed = waterG === undefined ? this.stashWaterMesh(key) : null;
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -1905,13 +1923,14 @@ const key2 = chunkKeyOf(cx, cz);
       // 有现存网格（破坏重建/结构重建）：replaceChunk 统一拆旧——
       // 旧地形与装饰视觉、旧 trimesh、旧 propBodies/注册表/围裙/台座全清
       this.replaceChunk(key, group, cx, cz, cfg.pv, cfg.pi, cells);
+      if (stashed) this.restoreWaterMesh(key, group, stashed);
       // ★ 全量换装把装饰整体销毁了 → 必须整块重贴地
       this.queueDecorJob(cx, cz, maps, 'full');
       return;
     }
     if (!this.voidKeys.has(key)) {
       // 首建：无现存网格 → 只挂地形 mesh + 分区地面（装饰后补）
-      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG, bounds);
+      const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
       const group = new THREE.Group();
       for (const m of cfg.meshes) group.add(m);
       group.position.set(cx * CHUNK_SIZE + CHUNK_SIZE / 2, 0, cz * CHUNK_SIZE + CHUNK_SIZE / 2);
@@ -1937,7 +1956,7 @@ const key2 = chunkKeyOf(cx, cz);
   private applyTerrainPatchInPlace(
     key: number,
     topG: FaceGeometry, wallG: FaceGeometry,
-    waterG: WaterSurfaceRaw | undefined,
+    waterG: WaterSurfaceRaw | null | undefined,
     cells: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
     decorMode: 'none' | 'props' | 'full' = 'full',
@@ -2066,11 +2085,16 @@ const key2 = chunkKeyOf(cx, cz);
     return true;
   }
 
-  /** ③ 水网格整体换（拓扑可变；共享 WaterMaterial，旧几何就地释放） */
+  /** ③ 水网格整体换（拓扑可变；共享 WaterMaterial，旧几何就地释放）
+   *  ★ 三态（2026-09-16 破坏/水体解耦）：
+   *    undefined = 【不更新】保持旧水面（坑洞优先：水面由 WaterSolve 异步补算覆盖）
+   *    null / 0-quad = 空水面 → 拆掉旧网格
+   *    有 quad    = 换新网格 */
   private replaceWaterMesh(
     group: THREE.Group, entry: { water: THREE.Mesh | null },
-    waterG: WaterSurfaceRaw | undefined,
+    waterG: WaterSurfaceRaw | null | undefined,
   ): void {
+    if (waterG === undefined) return; // ★ 本次不带水面 → 保持现状，等异步水覆盖
     const old = entry.water;
     if (waterG && waterG.indices.length > 0) {
       const m = createWaterMesh(waterG);
@@ -2086,6 +2110,40 @@ const key2 = chunkKeyOf(cx, cz);
       old.geometry.dispose();
       entry.water = null;
     }
+  }
+
+  /** ★ 摘下旧水网格保住（不带 dispose；用于全量换装前保留异步水到来前的旧水面） */
+  private stashWaterMesh(key: number): THREE.Mesh | null {
+    const entry = this.terrainVisuals.get(key);
+    const group = this.meshes.get(key) as THREE.Group | undefined;
+    const m = entry?.water;
+    if (!m || !group) return null;
+    group.remove(m);
+    entry!.water = null;
+    return m;
+  }
+
+  /** ★ 挂回暂存的水网格（全量换装后；登记回 terrainVisuals 以保持后续可换） */
+  private restoreWaterMesh(key: number, group: THREE.Group, m: THREE.Mesh): void {
+    const entry = this.terrainVisuals.get(key);
+    if (!entry) { m.geometry.dispose(); return; } // 登记已不存在 → 丢弃（防泄漏）
+    group.add(m);
+    entry.water = m;
+  }
+
+  /**
+   * ★ 异步水面落地（WaterSolve 慢算完成 → 只换水网格，不动地形/物理/装饰）。
+   *  水允许迟到：期间坑洞早已按 waterMode:'none' 装配完毕并可见。
+   *  @returns 是否落地成功（false = chunk 已卸载/未建/数据换代，结果丢弃）
+   */
+  private applyWaterResult(cx: number, cz: number, water: WaterSurfaceRaw): boolean {
+    const key = chunkKeyOf(cx, cz);
+    if (!this.meshes.has(key) && !this.voidKeys.has(key)) return false;
+    const entry = this.terrainVisuals.get(key);
+    const group = this.meshes.get(key) as THREE.Group | undefined;
+    if (!entry || !group) return false;
+    this.replaceWaterMesh(group, entry, water);
+    return true;
   }
 
   /** ④ 装饰销毁（tag 版：不依赖 children 次序，水网格先/后挂都安全）：
@@ -2693,6 +2751,80 @@ const key2 = chunkKeyOf(cx, cz);
     return has;
   }
 
+  // ============================================================
+  // ★ 破坏 / 水体解耦（2026-09-16 用户定调）
+  // ============================================================
+  // 原架构：buildWaterSurface 与坑洞几何【串行在同一个 terrainPatch worker 调用内】
+  //   → 打「有水 chunk」时，水体求解（initSolve/updateSolve + 5cm 边界探针点阵采样）
+  //     这一跳把整个几何返回拖慢 → 坑洞更新肉眼可见地卡；无水 chunk 也白走一遍。
+  // 新架构：
+  //   · 坑洞涉及区域【没有水】→ waterMode:'none'：完全不碰水体（不求解也不建状态）
+  //   · 坑洞涉及区域【有水】  → 先出坑洞（waterMode:'none'），水面交给
+  //     WaterSolve 专用 worker 慢慢算，算完只换水网格（applyWaterResult）
+  //   → 坑洞几何（top/wall/物理分区）永远不再被水体拖住。
+  // ============================================================
+
+  /** 本 chunk 4m 块水体位图（1 = 液体地块；blockTypes 是静态地形 → 可安全缓存） */
+  private waterMaskCache = new Map<number, Uint8Array | null>();
+
+  /** 水体位图取用（惰性扫描 + 缓存；数据缺省 → 返回 null = 「未知，按有水处理」） */
+  private chunkWaterMask(cx: number, cz: number): Uint8Array | null {
+    const key = chunkKeyOf(cx, cz);
+    if (this.waterMaskCache.has(key)) return this.waterMaskCache.get(key)!;
+    const d = this.raster.getChunkData(cx, cz);
+    let mask: Uint8Array | null = null;
+    if (d) {
+      const B = BLOCKS_PER_SIDE;
+      let any = false;
+      const m = new Uint8Array(B * B);
+      for (let i = 0; i < B * B; i++) {
+        if (tileById(d.blockTypes[i]).genRole === 'liquid') { m[i] = 1; any = true; }
+      }
+      mask = any ? m : null; // 整块无液体 → null（快速路径：直接 skip）
+    }
+    if (this.waterMaskCache.size > 96) this.waterMaskCache.clear();
+    this.waterMaskCache.set(key, mask);
+    return mask;
+  }
+
+  /** 判定：本次 dirty（世界 4m 块 key 列表）是否落在水体的影响半径内
+   *  R 单位 = 4m 块；阈值取自水体包络的最大影响范围（挖穿湖底/岸边削坡都在此内） */
+  private static readonly WATER_NEAR_BLOCKS = 4;
+
+  private dirtyNearWater(cx: number, cz: number, dirty: number[] | null): boolean {
+    const mask = this.chunkWaterMask(cx, cz);
+    if (!mask) return false; // 整块无液体 → 必定不影响水
+    if (!dirty || dirty.length === 0) return true; // 无增量信息 → 保守按"涉及水"（走异步全量）
+    const B = BLOCKS_PER_SIDE;
+    const R = ChunkManager.WATER_NEAR_BLOCKS;
+    for (const k of dirty) {
+      const bx = Math.floor(k / 8192) - 4096; // worldBlockKey 解码（WaterSurface 同式）
+      const bz = (k % 8192) - 4096;
+      const lbx = bx - cx * B;
+      const lbz = bz - cz * B;
+      for (let dz = -R; dz <= R; dz++) {
+        const z = lbz + dz;
+        if (z < 0 || z >= B) continue;
+        for (let dx = -R; dx <= R; dx++) {
+          const x = lbx + dx;
+          if (x < 0 || x >= B) continue;
+          if (mask[z * B + x]) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * ★ 水模式决策（破坏重建专用）：
+   *   'none'  = 坑洞涉及区无水 → 完全跳过水体求解（本次不带水面，保持旧水面）
+   *   'defer' = 涉及水 → 坑洞先出，水面转 WaterSolve 异步慢算
+   *  ★ 注意：水面【不参与】坑洞的关键路径，两种情况几何侧都传 waterMode:'none'。
+   */
+  private decideWaterMode(cx: number, cz: number, dirty: number[] | null): 'none' | 'defer' {
+    return this.dirtyNearWater(cx, cz, dirty) ? 'defer' : 'none';
+  }
+
 
   /** 同一 chunk 破坏重建的最短间隔（ms）：连射/多跳弹 → 视觉分批下陷，
    *  不再每帧一次全量重建+装配（worker 与主线程都不再被持续射击打满）。 */
@@ -2805,15 +2937,35 @@ const key2 = chunkKeyOf(cx, cz);
       const levelsArr = this.raster.levelsOf(cx, cz);
       // ★ 层数表必须传拷贝：postMessage(transfer) 会转移所有权，本体在 chunk 数据
       const levels = new Uint8Array(levelsArr);
+      // ★ 破坏/水体解耦：坑洞几何恒走 waterMode:'none'（水面不进关键路径）。
+      //   涉及水的 chunk → 转 WaterSolve 专用 worker 异步慢算（见下方 applyWaterResult）。
+      const waterMode = this.decideWaterMode(cx, cz, dirty ?? null);
+      if (waterMode === 'none') digPerf.waterSkip++;
+      else digPerf.waterDefer++;
       try {
         // ★ 同步段计时：terrainPatch.compute 在返回 Promise 前会在主线程完成
         //   「受影响掩码预计算 + 3×3 邻域 9 份数组拷贝 + postMessage」。这段是每枪
         //   必付的主线程成本（Worker 算得再快也躲不掉）→ 单独计量。
         const _tSync = performance.now();
         const geomP = terrainPatch.compute(
-          { seed: this.raster.worldSeed, cx, cz, levels, dirty, fineS: this.chunkFineS.get(key) ?? FINE_S_NEAR },
+          {
+            seed: this.raster.worldSeed, cx, cz, levels, dirty,
+            fineS: this.chunkFineS.get(key) ?? FINE_S_NEAR,
+            waterMode: 'none', // ★ 水面永远不阻塞坑洞
+          },
           (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
         );
+        // ★ 水面异步慢算（专属 worker；不占几何 worker、不阻塞本次重建）
+        if (waterMode === 'defer') {
+          const wLevels = new Uint8Array(levelsArr); // 独立拷贝：上面那份已被 transfer
+          void waterSolve.compute(
+            { seed: this.raster.worldSeed, cx, cz, levels: wLevels, dirty },
+            (ccx, ccz) => this.raster.getChunkData(ccx, ccz),
+          ).then((w) => {
+            if (!w) return; // 求解失败/被更新的请求覆盖 → 保持旧水面，下次重建再试
+            if (this.applyWaterResult(cx, cz, w)) digPerf.waterApplied++;
+          });
+        }
         const _tDispatched = performance.now();
         digPerf.dispatch += _tDispatched - _tSync;
         const geom = await geomP;
@@ -2828,7 +2980,9 @@ const key2 = chunkKeyOf(cx, cz);
         //  2026-09-09 原地更新：视觉 attr 原地写 + 受影响物理分区原位换，失败回退全量
         this.assembleQueue.push({
           key, cx, cz, maps: maps2, decor: null, decorMode,
-          top: geom.top, wall: geom.wall, water: geom.water,
+          // ★ geom.water 为 null（waterMode:'none'）→ 传 undefined = 保持旧水面，
+          //   由 WaterSolve 异步结果（applyWaterResult）覆盖；绝不能传 null（会拆旧水面）
+          top: geom.top, wall: geom.wall, water: geom.water ?? undefined,
           cells: geom.cells,
           bounds: { top: geom.topBounds, wall: geom.wallBounds },
         });

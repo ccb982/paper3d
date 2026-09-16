@@ -73,8 +73,10 @@ export interface PatchGeomRaw {
     /** ★ 增量局部更新区间（缺省 = 整块上传） */
     updateRanges?: GeoUpdateRanges;
   };
-  /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《地形与渲染管线架构.md》） */
-  water: WaterSurfaceRaw;
+  /** ★ 水体静止基面（水位 0 平面 + 坑水帘；无起伏/动画，见 《地形与渲染管线架构.md》）
+   *   ★ null = 本次【不产水面】（waterMode:'none'）——调用方保持旧水面，
+   *     由后续异步水任务覆盖。与"空水面（0 quad）"语义不同：空水面会拆掉旧网格。 */
+  water: WaterSurfaceRaw | null;
   /** ★ 物理分区（全量构建 = 全部 grid²；增量构建 = 受影响分区 → 主线程只换这些） */
   cells: PatchGroundCell[];
   /** ★ y 范围（Worker 单遍扫出 → 主线程解析构造包围球；创建/原地更新共用） */
@@ -231,6 +233,14 @@ export function computeTableGeometry(
   palette?: GroupPalette,
   /** ★ 构建档位（每 1m cell 细分段数：8=0.125m 近环 / 4=0.25m 远环；缺省近档） */
   fineS: number = FINE_S_NEAR,
+  /**
+   * ★ 水面求解档（2026-09-16）：水体求解（initSolve/updateSolve + 5cm 边界探针采样）
+   *   在有水 chunk 上是最贵的一跳，原先与几何串行 → 打水边坑洞时整体变慢。
+   *     'full' = 同步算水面（现状；首建/无水异步能力缺失时的回退）
+   *     'none' = 跳过水面求解，返回 water:null（调用方保持旧水面，稍后异步覆盖）
+   *   —— 坑洞几何（top/wall/物理分区）恒优先产出，不再被水体拖住。
+   */
+  waterMode: 'full' | 'none' = 'full',
 ): PatchGeomResult {
   setFineS(fineS); // ★ 档位注入：顶面/侧壁/增量布局统一按此档位
   // ★ 每 chunk 静态数据缓存：refined src + FaceTable 只依赖 heights/blockTypes
@@ -285,10 +295,14 @@ export function computeTableGeometry(
     wall = buildWallGeometry(table, src);
     seedBaseGeometry(seed, cx, cz, fineS, table, src, baseFine, top, wall); // 播种基座缓存
   }
-  const water = buildWaterSurface(
-    table, src, patch,
-    patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
-  );
+  // ★ waterMode:'none' → 完全不碰水体求解（也不建 waterStateFor 状态），
+  //   直接返回 null：坑洞几何先走，水面由独立水 Worker 异步慢算覆盖。
+  const water = waterMode === 'none'
+    ? null
+    : buildWaterSurface(
+        table, src, patch,
+        patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
+      );
   // ★ 物理分区：全量 = 全部 grid²；增量 = 受影响 1m cell 掩码 → 所属分区（提前返回，
   //   只输出命中分区，主线程只换这些 collider —— 顶点焊接跨界已由 ±1 环掩码覆盖）
   // ★ 物理分区恒用【粗档 0.25m】（2026-09-14 用户定：物理与视觉解耦）——
@@ -332,6 +346,33 @@ export function computeTableGeometry(
     topBounds: yBoundsOf(top.vertices),
     wallBounds: yBoundsOf(wall.vertices),
   };
+}
+
+// ------------------------------------------------------------
+// ★ 只算水面（2026-09-16 破坏/水体解耦）——供【独立水 Worker】异步慢算：
+//   破坏重建走 waterMode:'none' 先出坑洞，水面随后由本函数在专属 worker 上补算，
+//   主线程收到结果后只换水网格。不碰 top/wall/物理分区/装饰，成本只是
+//   「精修源（命中 chunk 静态缓存）+ 补丁覆盖层 + 水体重解」。
+//   ★ 必须是【固定单 Worker】：WaterSurface 的 waterStates 是模块级 Map，
+//     换 worker 会丢增量状态 → 退化为全量重解（更慢）。见 WaterSolve 服务说明。
+// ------------------------------------------------------------
+export function computeWaterOnly(
+  readChunk: (ccx: number, ccz: number) => ChunkDataLite | undefined,
+  seed: number,
+  cx: number,
+  cz: number,
+  levels?: Uint8Array,
+  dirty?: number[] | null,
+  levelAt?: LevelAtWorld,
+): WaterSurfaceRaw {
+  const { src, table } = getRefinedSource(readChunk, seed, cx, cz);
+  const patch = levels && levels.length > 0
+    ? buildLevelOverlay(levels, cx, cz, undefined, undefined, levelAt)
+    : undefined;
+  return buildWaterSurface(
+    table, src, patch,
+    patch ? { dirty: dirty ?? undefined, layersHash: levels ? levelsHash(levels) : 0 } : undefined,
+  );
 }
 
 // ------------------------------------------------------------

@@ -23,6 +23,8 @@ interface PatchChunkMsg {
   masks: { top: Uint8Array; side: Uint8Array } | null;
   /** ★ 构建档位（细分段数：8=0.125m 近环 / 4=0.25m 远环） */
   fineS: number;
+  /** ★ 水面求解档：'none' = 跳过水体（坑洞优先，水面交给独立水 Worker 慢算） */
+  waterMode?: 'full' | 'none';
   chunks: {
     ccx: number;
     ccz: number;
@@ -49,8 +51,11 @@ function transferOf(r: PatchGeomResult): ArrayBuffer[] {
   push(r.top.colors); push(r.top.patchW); push(r.top.indices);
   push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
   push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
-  push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
-  push(r.water.deep); push(r.water.spin); push(r.water.indices);
+  // ★ waterMode:'none' → water 为 null（本次不产水面），无水面缓冲可转移
+  if (r.water) {
+    push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
+    push(r.water.deep); push(r.water.spin); push(r.water.indices);
+  }
   for (const c of r.cells) { push(c.vertices); push(c.indices); } // ★ 物理分区
   return out;
 }
@@ -83,9 +88,10 @@ ctx.onmessage = (ev: MessageEvent) => {
     msg.dirty ?? null,
     msg.masks,
     levelAt,
-    false,              // coarse
-    undefined,          // palette
-    msg.fineS,          // ★ 构建档位
+    false,                    // coarse
+    undefined,                // palette
+    msg.fineS,                // ★ 构建档位
+    msg.waterMode ?? 'full',  // ★ 水面求解档（none = 坑洞优先，水异步补）
   );
   ctx.postMessage(
     { type: "result", id: msg.id, ...out },
