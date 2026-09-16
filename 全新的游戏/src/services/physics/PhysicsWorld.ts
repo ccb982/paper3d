@@ -265,6 +265,12 @@ export class PhysicsWorld {
     return body.translation();
   }
 
+  /** 读刚体质量（推挤强度按质量衰减：隔墙这种大件应该"推不太动"） */
+  getMass(id: number): number {
+    const body = this.getBody(id);
+    return body ? body.mass() : 0;
+  }
+
   /** 读刚体姿态（同步 mesh 用） */
   getRotation(id: number): Quat {
     const body = this.getBody(id);

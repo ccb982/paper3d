@@ -26,6 +26,9 @@ interface Cluster {
   group: THREE.Group;
   /** 各部件相对簇中心的盒半长（用于刷新世界 AABB） */
   parts: { hx: number; hy: number; hz: number; cx: number; cy: number; cz: number }[];
+  /** ★ 每部件一个世界 AABB（预分配、每帧原地改 → 零 GC；门框这类"中间有洞"的簇
+   *  必须按部件算，用并集盒会把门洞一起盖住，人就出不去了） */
+  worldBoxes: SolidBox[];
   /** 簇的半长（并集，供 AABB 刷新） */
   half: THREE.Vector3;
   /** 初始中心 */
@@ -55,12 +58,19 @@ export interface SolidBox {
   maxY: number;
 }
 
+const _offVec = new THREE.Vector3();
+
 const FURNITURE_DENSITY = 20;   // 轻一点（大件也不会变成几吨）
 const FURNITURE_DAMPING = 3.0;  // 停下得快，不滑来滑去
 /** ★ 推挤速度（m/s）：**直接给速度**而不是施冲量 ——
  *  冲量要打赢"摩擦 + 重力"（μ·m·g 动辄几千牛），小冲量根本推不动；
- *  给速度则与质量无关，手感稳定（角色以这个速度把家具顶走）。 */
+ *  给速度则手感稳定（角色以这个速度把家具顶走）。 */
 const PUSH_SPEED = 1.6;
+/** ★ 质量衰减：实际推速 = PUSH_SPEED × PUSH_REF_MASS / 质量（下限 PUSH_MIN）。
+ *  轻件（货箱 ~百来公斤）≈全速；大件（隔墙 ~1400kg）≈每秒几厘米 → "很难拆"，
+ *  但只要一直顶就推得动（用户定调：隔墙做成很难拆的）。 */
+const PUSH_REF_MASS = 60;
+const PUSH_MIN = 0.05;
 const CLUSTER_MARGIN = 0.12;    // 部件"算接触"的间距
 
 export class RoomPhysics {
@@ -171,6 +181,9 @@ export class RoomPhysics {
         id,
         group,
         parts,
+        worldBoxes: parts.map(() => ({
+          minX: 0, maxX: 0, minZ: 0, maxZ: 0, minY: 0, maxY: 0,
+        })),
         half,
         center: center.clone(),
         box: unionBox.clone(),
@@ -240,15 +253,18 @@ export class RoomPhysics {
       const dz = z - cz;
       if (dx * dx + dz * dz > r * r) continue;
       this.world.wake(c.id);
+      // ★ 目标速度按质量衰减：大件（隔墙）只有几厘米/秒 → 很难拆
+      const mass = Math.max(this.world.getMass(c.id), 0.001);
+      const target = Math.max(PUSH_MIN, Math.min(PUSH_SPEED, (PUSH_SPEED * PUSH_REF_MASS) / mass));
       const v = this.world.getLinearVelocity(c.id);
       const along = v.x * dirX + v.z * dirZ;      // 当前沿推动方向的速度分量
-      if (along >= PUSH_SPEED) continue;          // 已经在跑 → 别压速度
-      // v_new = d·PUSH_SPEED + (v − (v·d)d)：沿推动方向补到目标速度，横向分量原样保留
+      if (along >= target) continue;              // 已经在跑 → 别压速度
+      // v_new = d·target + (v − (v·d)d)：沿推动方向补到目标速度，横向分量原样保留
       this.world.setLinearVelocity(
         c.id,
-        v.x + (PUSH_SPEED - along) * dirX,
+        v.x + (target - along) * dirX,
         0,
-        v.z + (PUSH_SPEED - along) * dirZ,
+        v.z + (target - along) * dirZ,
       );
     }
   }
@@ -266,7 +282,7 @@ export class RoomPhysics {
       this.world.step();
       this.acc -= this.stepDt;
     }
-    // 同步 mesh + AABB（先静态建筑，再可推家具）
+    // 同步 mesh + AABB（先静态建筑，再可推家具；家具**按部件**出盒，见 worldBoxes 注释）
     solids.length = 0;
     for (const st of this.statics) solids.push(st);
     for (const c of this.clusters) {
@@ -274,19 +290,35 @@ export class RoomPhysics {
       const q = this.world.getRotation(c.id);
       c.group.position.set(p.x, p.y, p.z);
       c.group.quaternion.set(q.x, q.y, q.z, q.w);
-      // 并集盒随刚体姿态走：半长按旋转后的绝对值展开
       this._q.set(q.x, q.y, q.z, q.w);
-      this._ext.copy(c.half).applyQuaternion(this._q);
-      this._ext.set(Math.abs(this._ext.x), Math.abs(this._ext.y), Math.abs(this._ext.z));
-      // 中心也随刚体移动（原中心 → 刚体中心）
-      solids.push({
-        minX: p.x - this._ext.x,
-        maxX: p.x + this._ext.x,
-        minZ: p.z - this._ext.z,
-        maxZ: p.z + this._ext.z,
-        minY: p.y - this._ext.y,
-        maxY: p.y + this._ext.y,
-      });
+      const off = _offVec.set(1, 0, 0);
+      for (let i = 0; i < c.parts.length; i++) {
+        const part = c.parts[i];
+        // 部件的世界中心 = 刚体中心 + R·局部偏移
+        off.set(part.cx, part.cy, part.cz).applyQuaternion(this._q);
+        const wcx = p.x + off.x;
+        const wcy = p.y + off.y;
+        const wcz = p.z + off.z;
+        // 部件半长按姿态展开（用 |R| 的等效做法：三分量分别取旋转后的绝对值）
+        this._v.set(part.hx, 0, 0).applyQuaternion(this._q);
+        this._ext.set(Math.abs(this._v.x), Math.abs(this._v.y), Math.abs(this._v.z));
+        this._v.set(0, part.hy, 0).applyQuaternion(this._q);
+        this._ext.x += Math.abs(this._v.x);
+        this._ext.y += Math.abs(this._v.y);
+        this._ext.z += Math.abs(this._v.z);
+        this._v.set(0, 0, part.hz).applyQuaternion(this._q);
+        this._ext.x += Math.abs(this._v.x);
+        this._ext.y += Math.abs(this._v.y);
+        this._ext.z += Math.abs(this._v.z);
+        const b = c.worldBoxes[i];
+        b.minX = wcx - this._ext.x;
+        b.maxX = wcx + this._ext.x;
+        b.minY = wcy - this._ext.y;
+        b.maxY = wcy + this._ext.y;
+        b.minZ = wcz - this._ext.z;
+        b.maxZ = wcz + this._ext.z;
+        solids.push(b);
+      }
       // 记录当前中心（pushAt 用）
       c.center.set(p.x, p.y, p.z);
     }

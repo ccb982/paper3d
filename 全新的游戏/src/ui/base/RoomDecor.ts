@@ -91,6 +91,10 @@ export interface DecorMats {
   holo: THREE.Material;
   /** 装饰用地面光圈（悬浮泊位 / 磁悬浮小物） */
   pad: THREE.Material;
+  /** ★ 会被推动的墙/门框专用：wall 的**物体坐标**版本（否则推墙时格线钉在世界空间） */
+  wallLocal: THREE.Material;
+  /** ★ 同上：结构件（门柱/遮檐）的物体坐标版本 */
+  structLocal: THREE.Material;
 }
 
 export function createDecorMats(cockpit: boolean): DecorMats {
@@ -118,6 +122,8 @@ export function createDecorMats(cockpit: boolean): DecorMats {
     steam: createSteamMaterial(0, 0.20, cockpit ? 0xcfd8de : 0xd8e2ea),
     holo: createHoloMaterial(cockpit ? 0xffc07a : 0x7fd8ff),
     pad: createPadMaterial(cockpit ? 0xffc98a : 0x8fd8ff, 0.35),
+    wallLocal: createRoomSurfaceMaterial({ preset: cockpit ? 'cockpit' : 'wall', local: true }),
+    structLocal: createRoomSurfaceMaterial({ preset: 'struct', local: true }),
   };
 }
 

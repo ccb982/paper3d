@@ -709,32 +709,40 @@ export class BaseScene {
     decorateShell(add, mats, W, this.bays, anim);
 
     // ---- 分界：墙 + 门（2026-09-12 用户定调：房间之间要有墙、留门）----
+    // ★ 2026-09-16 用户定调：**隔墙要能推倒** —— 整组（前后两段墙 + 门楣 + 门柱 + 遮檐）
+    //   标 userData.pushable → 进可推物理（聚成一簇 = 一整套门框，推的时候整组滑走，
+    //   门洞跟着一起移动）。因此：
+    //     · 用 local:true 的材质版本（墙被推走时板缝纹理得跟着走）；
+    //     · **删掉旧的"门洞吸附"逻辑**（那是给静态墙用的，会与物理互顶 → 卡门）；
+    //       通行改由物理碰撞盒负责（门洞在碰撞体上本来就是通的）。
     const segD = ROOM_D / 2 - DOOR_HALF;
+    const pushable = (m: THREE.Mesh): THREE.Mesh => {
+      m.userData.pushable = true;
+      return m;
+    };
     for (const bx of this.bays.slice(0, -1)) {
       const divider = bx + (ROOM_W + ROOM_GAP) / 2;
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wall, divider,
-        ROOM_H / 2, -(ROOM_D / 2 - segD / 2)); // 后段
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wall, divider,
-        ROOM_H / 2, ROOM_D / 2 - segD / 2);    // 前段
-      add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), mats.wall, divider,
-        (ROOM_H + DOOR_H) / 2, 0);             // 门楣
-      // ★ 门柱：**不许与墙的洞口切面共面**（共面 → z-fighting → "门的侧边一直在闪"）。
-      //   门柱面留在洞口切面外 1cm，并且比门头灯带更长 → 灯带端面藏进门柱里。
+      pushable(add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wallLocal, divider,
+        ROOM_H / 2, -(ROOM_D / 2 - segD / 2))); // 后段
+      pushable(add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wallLocal, divider,
+        ROOM_H / 2, ROOM_D / 2 - segD / 2));    // 前段
+      pushable(add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), mats.wallLocal, divider,
+        (ROOM_H + DOOR_H) / 2, 0));             // 门楣（与两段墙咬合 → 同簇）
+      // 门柱（不许与洞口切面共面，防 z-fighting：面留在切面外 1cm，比灯带更长把端面藏进去）
       const jamb = extrudeProfile(chamferRectProfile(WALL_T + 0.08, DOOR_H, 0.05), 0.26);
-      // ★ 门柱不参与可推物理：门洞通行由既有 DOOR_HALF 吸附负责（否则 0.74 vs 0.9 互顶 → 卡门）
-      const jambF = new THREE.Mesh(jamb, mats.struct);
+      const jambF = new THREE.Mesh(jamb, mats.structLocal);
       jambF.position.set(divider, DOOR_H / 2, DOOR_HALF + 0.14);
-      jambF.userData.noSolid = true;
+      jambF.userData.pushable = true;
       this.root.add(jambF);                                            // 门柱（前）
-      const jambB = new THREE.Mesh(jamb, mats.struct);
+      const jambB = new THREE.Mesh(jamb, mats.structLocal);
       jambB.position.set(divider, DOOR_H / 2, -DOOR_HALF - 0.14);
-      jambB.userData.noSolid = true;
+      jambB.userData.pushable = true;
       this.root.add(jambB);                                            // 门柱（后）
-      // 门头灯带 + 门楣斜遮檐（手搓楔形，让门在俯视机位下读得出来）
+      // 门头灯带（uv 纹理，自带跟随）+ 门楣斜遮檐
       add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.40), mats.stripWarm, divider,
         DOOR_H + 0.1, 0);
-      add(extrudeProfile(wedgeProfile(0.9, 0.32, 0.5), DOOR_HALF * 2 + 0.60), mats.struct,
-        divider, DOOR_H + 0.62, 0);
+      pushable(add(extrudeProfile(wedgeProfile(0.9, 0.32, 0.5), DOOR_HALF * 2 + 0.60), mats.structLocal,
+        divider, DOOR_H + 0.62, 0));
     }
 
     // ---- 分区内装 + 名牌 + 顶灯 ----
@@ -831,6 +839,15 @@ export class BaseScene {
     this.root.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;                 // 点云/组不算
       if (o.userData.noSolid === true) return;                // 会动的道具
+      // ★ pushable：显式要求"可推"的物件（分界墙整组：两段墙 + 门楣 + 门柱 + 遮檐）
+      //   → 绕过材质/高度/尺寸过滤，保证整组进同一簇（不然门楣/遮檐会被"头顶的梁"过滤掉，
+      //   推墙时只剩两段墙在滑、门楣悬空不动）
+      if (o.userData.pushable === true) {
+        const g = o.geometry as THREE.BufferGeometry;
+        if (!g.boundingBox) g.computeBoundingBox();
+        if (g.boundingBox) out.push(o);
+        return;
+      }
       const mat = Array.isArray(o.material) ? o.material[0] : o.material;
       if (skip.has(mat) || mat?.userData?.noSolid === true) return;
       const geo = o.geometry as THREE.BufferGeometry;
@@ -1066,7 +1083,6 @@ export class BaseScene {
     const len = Math.hypot(mx, mz);
     this.moving = len > 0;
     if (this.quad) {
-      const prevX = this.charPos.x;
       if (this.moving) {
         const spd = MOVE_SPEED * (this.vehicleRide?.moveSpeedMul ?? 1); // ★ 载具移速提升
         // ★ 逐轴推进 + 碰撞拒绝（撞到实体就取消该轴位移）：
@@ -1089,17 +1105,8 @@ export class BaseScene {
       const halfW = this.hallW / 2 - 0.9;
       this.charPos.x = Math.max(-halfW, Math.min(halfW, this.charPos.x));
       this.charPos.z = Math.max(-ROOM_D / 2 + 0.9, Math.min(ROOM_D / 2 - 1.2, this.charPos.z));
-      // ★ 分界墙阻挡：过墙必须走门洞（|z| ≤ DOOR_HALF）。
-      //   ⚠️ 用"贴墙半径"判定（不用跨越符号）：低帧率一帧位移可能 > 半径，
-      //   跨线判定会 越线→弹回→再越线 反复横跳（用户反馈"卡住不停闪"）。
-      for (const bx of this.bays.slice(0, -1)) {
-        const d = bx + (ROOM_W + ROOM_GAP) / 2;
-        if (Math.abs(this.charPos.z) <= DOOR_HALF) continue; // 门洞内可通行
-        const half = 0.9; // 贴墙停靠距离（含立绘宽度余量，避免穿插闪面）
-        if (Math.abs(this.charPos.x - d) < half) {
-          this.charPos.x = d + (prevX >= d ? half : -half);
-        }
-      }
+      // ★ 分界墙不再做代码吸附：隔墙已进物理（可推倒），阻挡由碰撞盒负责，
+      //   门洞在碰撞体上本来就是通的（旧 DOOR_HALF 吸附会与物理互顶 → 卡门）。
       // ★ 兜底脱困（出生点 / 被会动道具挤住 / 门洞吸附后仍在实体里）
       this.unstick(this.charPos, CHAR_R);
       // ---- 竖直：脚下地面（地台/踏步/矮箱顶面）+ 跳跃 ----
