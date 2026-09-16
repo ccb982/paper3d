@@ -66,6 +66,18 @@
   min-width: 500px;
 }
 
+/* ---- 遗物滚动区：隐藏滚动条的独立滑动块（不让遗物列表撑高背包页） ---- */
+.ui-relic-scroll {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧 Edge / IE */
+}
+
+.ui-relic-scroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none; /* Chrome / Edge / Electron */
+}
+
 /* ---- 面板标题 ---- */
 .ui-panel-title {
   color: #aac;

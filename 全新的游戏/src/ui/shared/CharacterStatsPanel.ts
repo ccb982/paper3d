@@ -61,6 +61,8 @@ const BOSS_DIM = 'rgba(255,86,64,0.55)';
 /** 局内装备临时加成色（青） */
 const TEMP = '#7fd4ff';
 const TEXT_DIM = '#b9a58c';
+/** ★ 遗物滚动区最大高度（px）：条目再多也只占这么高，内部滚动，不撑大背包页 */
+const RELIC_SCROLL_MAX_HEIGHT_PX = 188;
 
 export class CharacterStatsPanel {
   private hpText: HTMLDivElement | null = null;
@@ -100,7 +102,7 @@ export class CharacterStatsPanel {
     const fill = document.createElement('div');
     fill.style.cssText = `height:100%;width:100%;background:linear-gradient(180deg,${ORANGE_BRIGHT},#d97d24);`;
     bar.appendChild(fill);
-    this.    hpFill = fill;
+    this.hpFill = fill;
     root.appendChild(bar);
     this.updateHp(snapshot.current.maxHp, snapshot.current.maxHp);
 
@@ -128,25 +130,62 @@ export class CharacterStatsPanel {
     const relicEntries = snapshot.relics.filter((r) => r.kind !== 'boss');
     const bossEntries = snapshot.relics.filter((r) => r.kind === 'boss');
 
-    root.appendChild(this.sectionTitle('遗物', ORANGE_BRIGHT, ORANGE_DIM));
-    if (relicEntries.length === 0) {
+    // ★ 遗物 / BOSS 共用一条独立滚动区（隐藏滚动条）：条目再多也只占固定高度，
+    //   不再把「角色属性」栏（及其所在的整个背包页）撑高。
+    const total = relicEntries.length + bossEntries.length;
+    if (total === 0) {
+      root.appendChild(this.sectionTitle('遗物', ORANGE_BRIGHT, ORANGE_DIM));
       const empty = document.createElement('div');
       empty.textContent = '尚未拥有遗物';
       empty.style.cssText = `color:${TEXT_DIM};`;
       root.appendChild(empty);
     } else {
-      for (const r of relicEntries) {
-        root.appendChild(this.relicRow(r, iconRegistry));
+      const scroll = this.scrollBox(RELIC_SCROLL_MAX_HEIGHT_PX);
+      if (relicEntries.length > 0) {
+        scroll.appendChild(this.sectionTitle('遗物', ORANGE_BRIGHT, ORANGE_DIM));
+        for (const r of relicEntries) scroll.appendChild(this.relicRow(r, iconRegistry));
       }
+      // ---- BOSS（唯一 6★；牌子是「BOSS」不是「遗物」）----
+      if (bossEntries.length > 0) {
+        scroll.appendChild(this.sectionTitle('BOSS', BOSS_BRIGHT, BOSS_DIM));
+        for (const r of bossEntries) scroll.appendChild(this.relicRow(r, iconRegistry));
+      }
+      root.appendChild(scroll);
     }
+  }
 
-    // ---- BOSS（唯一 6★；牌子是「BOSS」不是「遗物」）----
-    if (bossEntries.length > 0) {
-      root.appendChild(this.sectionTitle('BOSS', BOSS_BRIGHT, BOSS_DIM));
-      for (const r of bossEntries) {
-        root.appendChild(this.relicRow(r, iconRegistry));
-      }
-    }
+  /**
+   * ★ 隐藏滚动条的纵向滚动容器（遗物列表专用）。
+   *   - 条目不超 maxHeight 时高度自适应（不浪费空间），超出才内部滚动
+   *   - overscroll-behavior:contain + 滚轮 stopPropagation：滚到底不带动外层背包页
+   */
+  private scrollBox(maxHeight: number): HTMLDivElement {
+    const box = document.createElement('div');
+    box.style.cssText = [
+      `max-height:${maxHeight}px`,
+      'overflow-y:auto',
+      'overflow-x:hidden',
+      'display:flex',
+      'flex-direction:column',
+      'gap:8px',
+      'min-height:0',
+      'overscroll-behavior:contain',
+      // 隐藏滚动条（Firefox / IE）
+      'scrollbar-width:none',
+      '-ms-overflow-style:none',
+      // 右侧留一点内边距，避免内容贴边（补偿滚动条消失）
+      'padding-right:2px',
+    ].join(';');
+    // 隐藏滚动条（WebKit / Blink：Chrome / Edge / Electron）
+    const style = document.createElement('style');
+    style.textContent = `.ui-relic-scroll::-webkit-scrollbar{width:0;height:0;display:none;}`;
+    box.className = 'ui-relic-scroll';
+    box.appendChild(style);
+    // 滚轮只滚这一块，不冒泡给外层（gridRoot / 弹窗 wrapper 都是可滚的）
+    box.addEventListener('wheel', (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+    return box;
   }
 
   /** 分区标题（遗物 / BOSS 共用样式，仅配色不同） */
