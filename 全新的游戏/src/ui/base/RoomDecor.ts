@@ -31,6 +31,7 @@ import {
   arcLayout, chamferRectProfile, extrudeProfile, iBeamProfile,
   polyProfile, trapezoidProfile, wedgeProfile, type ArcSlot,
 } from '../../services/render/RoomDecoGeo';
+import type { KineticMover } from '../../services/physics/RoomPhysics';
 import {
   createBlobShadowMaterial, createFlowMaterial, createHoloMaterial, createPadMaterial,
   createRoomSurfaceMaterial, createScreenMaterial, createSteamMaterial,
@@ -43,6 +44,9 @@ export type RoomAnimFn = (t: number, dt: number) => void;
 export type RegisterAnim = (fn: RoomAnimFn) => void;
 /** 点击注册器（BaseScene 注入；双击命中该 mesh 时回调 —— 彩蛋 / 小交互用） */
 export type RegisterClick = (mesh: THREE.Object3D, cb: () => void) => void;
+/** ★ 运动学道具注册器（BaseScene 注入）：动画驱动的道具同时拥有物理实体，
+ *  由 rapier 负责把沿途的 dynamic 家具推开（AGV 小车 / 行车吊箱）。 */
+export type RegisterKinetic = (mover: KineticMover) => void;
 
 // ★ 房间尺寸的唯一事实来源（BaseScene 与装饰件共用，不要各写一份）
 export const ROOM_W = 27;
@@ -328,6 +332,7 @@ function hoverCrate(
   pad.renderOrder = 1;
   const box = add(new THREE.BoxGeometry(size, size * 0.8, size), mats.crate, x, hoverY, z);
   const sh = shadow(add, mats, x, z, size * 0.85, size * 0.85);
+  movable(box);   // 自身在上下浮动 → 不做刚体家具
   anim((t) => {
     box.position.y = hoverY + Math.sin(t * 1.05 + phase) * 0.075;
     box.rotation.y = Math.sin(t * 0.22 + phase) * 0.14;
@@ -338,7 +343,7 @@ function hoverCrate(
 
 /** 自动导引小车（沿 z 往返；车上有货 + 底部流光） */
 function agvCart(
-  add: AddFn, mats: DecorMats, anim: RegisterAnim,
+  add: AddFn, mats: DecorMats, anim: RegisterAnim, kinetic: RegisterKinetic,
   x: number, z0: number, z1: number, speed = 0.20,
 ): void {
   const body = add(new THREE.BoxGeometry(1.5, 0.42, 2.3), mats.furn, x, 0.40, z0);
@@ -347,9 +352,13 @@ function agvCart(
   const glow = add(new THREE.BoxGeometry(1.55, 0.06, 2.35), mats.flow, x, 0.15, z0);
   const sh = shadow(add, mats, x, z0, 0.95, 1.35);
   movable(body, deck, box, glow);
+  // ★ 物理实体：kinematic 盒随动画走，rapier 自动推挤沿途家具
+  const pos = { x, y: 0.45, z: z0 };
+  kinetic({ hx: 0.8, hy: 0.32, hz: 1.18, at: () => pos });
   anim((t) => {
     const k = 0.5 - 0.5 * Math.cos(t * speed);   // 平滑往返（端点自然减速）
     const z = z0 + (z1 - z0) * k;
+    pos.z = z;
     body.position.z = z;
     deck.position.z = z;
     glow.position.z = z;
@@ -361,7 +370,7 @@ function agvCart(
 
 /** 吊装行车（轨道 + 小车沿 x 往返 + 吊索升降 + 吊着货箱） */
 function gantryCrane(
-  add: AddFn, mats: DecorMats, anim: RegisterAnim,
+  add: AddFn, mats: DecorMats, anim: RegisterAnim, kinetic: RegisterKinetic,
   x0: number, x1: number, z: number, yTop: number, yLow: number,
 ): void {
   const mid = (x0 + x1) / 2;
@@ -372,6 +381,9 @@ function gantryCrane(
   const hook = add(new THREE.BoxGeometry(1.0, 0.12, 1.0), mats.struct, x0, yTop - 1.4, z);
   const box = add(new THREE.BoxGeometry(0.95, 0.95, 0.95), mats.crate, x0, yTop - 2.0, z);
   movable(trolley, cable, hook, box);
+  // ★ 吊箱也有物理实体（kinematic）：扫过去能把货堆撞开
+  const hb = { x: x0, y: yTop - 2.0, z };
+  kinetic({ hx: 0.55, hy: 0.55, hz: 0.55, at: () => hb });
   anim((t) => {
     const kx = 0.5 - 0.5 * Math.cos(t * 0.11);                  // 沿轨道慢速往返
     const x = x0 + (x1 - x0) * kx;
@@ -383,6 +395,8 @@ function gantryCrane(
     cable.position.set(x, yTop - 0.39 - cLen / 2, z);
     hook.position.set(x, hookY, z);
     box.position.set(x, hookY - 0.56, z);
+    hb.x = x;
+    hb.y = hookY - 0.56;
   });
 }
 
@@ -519,6 +533,7 @@ function hoverProp(
   const pad = add(new THREE.PlaneGeometry(0.7, 0.7), mats.pad, x, y - 0.16, z, -Math.PI / 2, 0, 0);
   pad.renderOrder = 1;
   const prop = add(geo, mats.struct, x, y, z);
+  movable(prop);  // 磁悬浮 → 不做刚体家具
   anim((t) => {
     prop.position.y = y + Math.sin(t * 1.7 + phase) * 0.035;
     prop.rotation.y = t * 0.4 + phase;
@@ -774,7 +789,7 @@ export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim,
 // 仓库：2 组货架 + 货箱矩阵 + 托盘 + 料桶 + 居中卷帘门 + 安全黄线
 // ------------------------------------------------------------
 
-export function decorateStorage(add: AddFn, mats: DecorMats, anim: RegisterAnim): void {
+export function decorateStorage(add: AddFn, mats: DecorMats, anim: RegisterAnim, kinetic: RegisterKinetic): void {
   const zb = -ROOM_D / 2;
 
   // ---- 2 组货架塔（对称靠后；立柱 + 4 层横梁层板）----
@@ -839,8 +854,8 @@ export function decorateStorage(add: AddFn, mats: DecorMats, anim: RegisterAnim)
   add(new THREE.BoxGeometry(17.0, 0.03, 0.12), mats.flow, 0, 0.012, 6.6);
 
   // ---- ★ 可动元素：吊装行车 / 导引小车 / 悬浮货箱 / 进货传送带 ----
-  gantryCrane(add, mats, anim, -11.0, 11.0, zb + 2.9, ROOM_H - 1.2, 1.7);
-  agvCart(add, mats, anim, 6.4, -3.0, 5.6, 0.22);
+  gantryCrane(add, mats, anim, kinetic, -11.0, 11.0, zb + 2.9, ROOM_H - 1.2, 1.7);
+  agvCart(add, mats, anim, kinetic, 6.4, -3.0, 5.6, 0.22);
   hoverCrate(add, mats, anim, -3.4, -6.4, 1.15, 0.82, 0.0);
   hoverCrate(add, mats, anim, 3.4, -6.4, 1.15, 0.82, 2.1);
   beltLine(add, mats, anim, -1.6, 9.6, -5.2, 1.0, 4, 0.06);

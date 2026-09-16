@@ -29,10 +29,11 @@ import {
   DOOR_H, DOOR_HALF, ROOM_D, ROOM_GAP, ROOM_H, ROOM_W, WALL_T,
   createDecorMats, createPadMaterialFor, decorateControl, decorateCockpit,
   decorateShell, decorateStorage, decorateWorkshop, updateRoomTime,
-  type AddFn, type DecorMats, type RegisterAnim, type RegisterClick,
+  type AddFn, type DecorMats, type RegisterAnim, type RegisterClick, type RegisterKinetic,
 } from './RoomDecor';
 import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
 import { createSpaceBackdrop, spinDome, type SpaceBackdrop } from '../../services/render/SpaceBackdrop';
+import { RoomPhysics, type KineticMover } from '../../services/physics/RoomPhysics';
 
 export interface RoomDef {
   id: string;
@@ -127,6 +128,10 @@ export class BaseScene {
    *  过滤：只收"人走会撞到的高度区间"（0.35 ~ 1.6m）、排除薄片/小零件/
    *  灯带屏幕等装饰材质、以及标记了 userData.noSolid 的会动道具。 */
   private solids: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
+  /** ★ 可推家具物理（rapier；家具被推走后 solids 每帧跟着刷新） */
+  private roomPhys: RoomPhysics | null = null;
+  /** ★ 运动学道具（AGV 小车 / 行车吊箱）：动画位置 → 物理刚体 */
+  private kineticMovers: KineticMover[] = [];
   /** ★ 可点击目标（房间彩蛋：双击命中 → 回调） */
   private clickTargets: { mesh: THREE.Object3D; cb: () => void }[] = [];
   private raycaster = new THREE.Raycaster();
@@ -472,6 +477,8 @@ export class BaseScene {
     updateRoomTime(this.t); // ★ 驱动全部房间 shader（灯带呼吸 / 屏幕数据块 / 光圈脉冲）
     // ★ 驱动房间里的可动元素（几十个小变换，开销可忽略）
     for (let i = 0; i < this.roomAnims.length; i++) this.roomAnims[i](this.t, dt);
+    // ★ 家具物理步进（同步 mesh + 把新位置刷进 solids：挡路判定永远跟着家具走）
+    this.roomPhys?.step(dt, this.t, this.solids);
     this.updateInput(dt);
     if (this.anim && this.quad) {
       if (this.moving !== this.wasMoving) {
@@ -627,6 +634,9 @@ export class BaseScene {
     this.roomAnims.length = 0;
     this.clickTargets.length = 0;
     this.solids.length = 0;
+    this.roomPhys?.dispose();
+    this.roomPhys = null;
+    this.kineticMovers.length = 0;
     this.priestess?.dispose();
     this.priestess = null;
     this.backdrop = null;
@@ -685,6 +695,8 @@ export class BaseScene {
     const anim: RegisterAnim = (fn) => { this.roomAnims.push(fn); };
     // ---- 点击注册器（房间彩蛋：双击命中 mesh → 回调）----
     const click: RegisterClick = (mesh, cb) => { this.clickTargets.push({ mesh, cb }); };
+    // ---- 运动学道具注册器（AGV / 行车吊箱 → 有物理实体，能推开家具）----
+    const kinetic: RegisterKinetic = (mover) => { this.kineticMovers.push(mover); };
 
     // ---- 大厅级装饰：踢脚斜面 / 墙面腰线 / 天花板桁架 / 背墙管道 / 通风百叶 / 灯槽 ----
     decorateShell(add, mats, W, this.bays, anim);
@@ -724,7 +736,7 @@ export class BaseScene {
         return m;
       };
       if (defs[i].id === 'control') decorateControl(addIn, mats, anim, click);
-      else if (defs[i].id === 'storage') decorateStorage(addIn, mats, anim);
+      else if (defs[i].id === 'storage') decorateStorage(addIn, mats, anim, kinetic);
       else if (defs[i].id === 'workshop') {
         decorateWorkshop(addIn, mats, anim);
         this.craftBayX = this.bays[i]; // ★ 加工站房间（进房间就显示"打开加工台"提示）
@@ -735,15 +747,29 @@ export class BaseScene {
       addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), mats.strip, 0, ROOM_H - 0.06, 0.4);
     }
 
-    // ---- ★ 实体碰撞体收集（家具/设备/货箱…全部实体化，角色与访客都撞得到）----
-    this.collectSolids();
+    // ---- ★ 可推家具物理（rapier）：家具成簇建 dynamic 刚体，能被角色/小车推开 ----
+    this.buildRoomPhysics();
   }
 
-  /** ★ 遍历房间自动收集实体碰撞盒（xz 平面 AABB）。
-   *  只保留"挡住人走路"的那一层：盒子与 [0.35, 1.6] 的高度区间有交集；
-   *  薄片（屏幕/贴片/铭牌）、小零件（把手/灯珠）与装饰材质（灯带/光圈/蒸汽/阴影）
-   *  一律跳过；会动的道具（行车/小车/传送带工件/机械臂）在装饰期标了 noSolid。 */
-  private collectSolids(): void {
+  /** ★ 建可推家具物理：把"家具 mesh"交给 RoomPhysics（聚簇 → dynamic 复合刚体）。
+   *  过滤与说明见 collectFurnitureMeshes；家具被推动后 solids 每帧由物理刷新。 */
+  private buildRoomPhysics(): void {
+    const meshes = this.collectFurnitureMeshes();
+    const phys = new RoomPhysics();
+    phys.addFurniture(meshes, this.root);
+    phys.addRoomBounds(this.hallW / 2, ROOM_D / 2);
+    for (const m of this.kineticMovers) phys.addKinetic(m);
+    this.kineticMovers.length = 0;
+    this.roomPhys = phys;
+  }
+
+  /** ★ 收集"可推家具"的 mesh 清单。
+   *  只保留挡人走路的那一层：盒子与 [0.35, 1.6] 有交集；薄片（屏幕/贴片/铭牌）、
+   *  小零件（把手/灯珠）、装饰材质（灯带/光圈/蒸汽/阴影）跳过；
+   *  会动的道具（行车/小车/传送带工件/机械臂）装饰期标了 noSolid；
+   *  超大盒（房间/天穹）跳过。 */
+  private collectFurnitureMeshes(): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
     const skip = new Set<THREE.Material | undefined>([
       this.mats?.shadow, this.mats?.pad, this.mats?.flow, this.mats?.holo, this.mats?.steam,
       this.mats?.strip, this.mats?.stripWarm, this.mats?.stripVert,
@@ -767,8 +793,9 @@ export class BaseScene {
       if (sx * sz < 0.03) return;                             // 小零件（把手 / 灯珠）
       // ★ 保险：超大盒子是房间整体/天穹之类，不能当实体（否则角色被关在里面走不动）
       if (sx > 60 || sz > 60) return;
-      this.solids.push({ minX: box.min.x, maxX: box.max.x, minZ: box.min.z, maxZ: box.max.z });
+      out.push(o);
     });
+    return out;
   }
 
   /** ★ 圆形 vs 实体 AABB 的碰撞查询（xz 平面）——移动前问一句"能不能过去" */
@@ -983,6 +1010,10 @@ export class BaseScene {
         if (!this.blockedCircle(this.charPos.x, this.charPos.z + stepZ, CHAR_R)) {
           this.charPos.z += stepZ;
         }
+        // ★ 推挤：与角色相交的家具簇被施加冲量（无扭矩 → 平移不翻倒）
+        const dx = mx / len;
+        const dz = mz / len;
+        this.roomPhys?.pushAt(this.charPos.x, this.charPos.z, CHAR_R + 0.12, dx, dz);
       }
       // 边界
       const halfW = this.hallW / 2 - 0.9;

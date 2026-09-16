@@ -61,6 +61,12 @@ function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
   }
 }
 
+export interface ExtraCollider {
+  shape: ColliderShape;
+  /** 相对刚体原点的偏移（复合刚体：一簇家具 = 一个刚体 + 多个盒子） */
+  offset: { x: number; y: number; z: number };
+}
+
 export interface BodyOptions {
   shape: ColliderShape;
   /** 线性阻尼（越大越"黏"，玩家用高阻尼防滑） */
@@ -78,6 +84,10 @@ export interface BodyOptions {
   userData?: number;
   /** ★ 连续碰撞检测（子弹：高速薄目标防隧穿） */
   ccd?: boolean;
+  /** ★ 复合刚体：在主碰撞体之外追加的碰撞体（各自带局部偏移） */
+  extraColliders?: ExtraCollider[];
+  /** ★ 主碰撞体的局部偏移（复合刚体：主碰撞体也是"某个部件"时用） */
+  shapeOffset?: { x: number; y: number; z: number };
   /** ★ 恢复系数（反弹：子弹打地面/墙弹起；默认 0 不弹） */
   restitution?: number;
   /** ★ 分块地面分区槽位（grid 分区 cell 序）：创建首块时登记进记账，
@@ -163,13 +173,23 @@ export class PhysicsWorld {
     }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation);
+    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation, opts.shapeOffset);
+    if (opts.extraColliders) {
+      for (const c of opts.extraColliders) {
+        this.attachCollider(body, c.shape, opts.sensor ?? false, opts.density, opts.restitution, undefined, c.offset);
+      }
+    }
     return this.registerBody(body);
   }
 
-  private attachCollider(body: RAPIER.RigidBody, shape: ColliderShape, sensor = false, density?: number, restitution?: number, rotation?: Quat): RAPIER.Collider {
+  private attachCollider(
+    body: RAPIER.RigidBody, shape: ColliderShape, sensor = false,
+    density?: number, restitution?: number, rotation?: Quat,
+    offset?: { x: number; y: number; z: number },
+  ): RAPIER.Collider {
     const desc = makeColliderDesc(shape);
     if (rotation) desc.setRotation(rotation); // ★ 碰撞体局部旋转（圆柱横放等）
+    if (offset) desc.setTranslation(offset.x, offset.y, offset.z); // ★ 复合刚体的部件偏移
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
     if (restitution !== undefined) desc.setRestitution(restitution);
@@ -243,6 +263,31 @@ export class PhysicsWorld {
     const body = this.getBody(id);
     if (!body) { return { x: 0, y: 0, z: 0 }; }
     return body.translation();
+  }
+
+  /** 读刚体姿态（同步 mesh 用） */
+  getRotation(id: number): Quat {
+    const body = this.getBody(id);
+    if (!body) return { x: 0, y: 0, z: 0, w: 1 };
+    const r = body.rotation();
+    return { x: r.x, y: r.y, z: r.z, w: r.w };
+  }
+
+  /** ★ 物理步长（房间用固定 1/60 累加；默认 rapier 也是 1/60） */
+  setTimestep(dt: number): void {
+    this.world.timestep = dt;
+  }
+
+  /** ★ 在指定点沿方向施冲量（房间"推家具"用：不产生力矩，家具平移不翻倒） */
+  applyImpulseAtCenter(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) return;
+    body.applyImpulse({ x, y, z }, true);
+  }
+
+  /** 唤醒刚体（被推动时必须醒着，否则冲量被 sleep 吃掉） */
+  wake(id: number): void {
+    this.getBody(id)?.wakeUp();
   }
 
   /** 设刚体速度（子弹发射） */

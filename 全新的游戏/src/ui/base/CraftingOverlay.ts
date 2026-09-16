@@ -313,6 +313,8 @@ export class CraftingOverlay {
   show(station: 'ship' | 'portable' = 'ship'): void {
     this.station = station;
     this.closeAllQuantity();
+    // ★ 加工页是左上角返回键的布局 → 临时压制设置齿轮（否则齿轮正好压在返回键上）
+    (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(true);
     // ★ 先显示 + 同步尺寸（背景/槽位按真实屏幕比例定位），再渲染配方模块
     this.root.style.display = 'block';
     this.syncSize();
@@ -325,6 +327,7 @@ export class CraftingOverlay {
     this.root.style.display = 'none';
     this.closeAllQuantity();
     this.stopTick();
+    (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(false);
   }
 
   /** ★ 是否正在显示（基地加工站提示/输入遮挡判定用） */

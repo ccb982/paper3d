@@ -381,6 +381,14 @@ async function boot() {
   // 控制台逃生口：setHudVisible(true/false) / toggleSettings()
   (globalThis as { setHudVisible?: (v: boolean) => void }).setHudVisible = applyHudVisible;
   (globalThis as { toggleSettings?: () => void }).toggleSettings = () => settingsUi?.toggle();
+  // ★ 齿轮分两级控制：
+  //   settingsAllowed  —— 模式级（只有基地允许出现齿轮）
+  //   settingsSuppressed —— 页面级（加工台等全屏页打开时临时压制，避免挡住左上角返回键）
+  (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed = (v: boolean) => {
+    settingsSuppressed = v;
+    applySettingsVisible();
+  };
+  applySettingsVisible();
 
   // ★ 帧率技术统计（FPS / 帧时峰值 / 主渲染器绘制调用与三角数 / 更新与渲染耗时）
   const fpsEl = document.createElement('div');
@@ -561,7 +569,8 @@ function enterBaseMode(
   // 1. 如果有旧模式，彻底清理
   currentMode?.exit();
   currentMode = null;
-  settingsUi?.setVisible(true); // ★ 仅基地模式提供设置入口（左上角齿轮）
+  settingsAllowed = true;       // ★ 仅基地模式提供设置入口（左上角齿轮）
+  applySettingsVisible();
 
   // 2. 保存存档
   if (currentSession) {
@@ -600,7 +609,8 @@ function enterWorldMode(
   // 1. 清理旧模式
   currentMode?.exit();
   currentMode = null;
-  settingsUi?.setVisible(false); // ★ 世界模式不提供设置入口（左上角小地图占用）
+  settingsAllowed = false;      // ★ 世界模式不提供设置入口（左上角小地图占用）
+  applySettingsVisible();
 
   // 2. 创建 WorldMode（完全自包含：PhysicsWorld/DesktopBinding 内部创建）
   const world = new WorldMode();
@@ -693,6 +703,15 @@ window.addEventListener('unhandledrejection', (e) => {
 
 /** boot 内创建；enterBaseMode/enterWorldMode 调 setVisible 切换入口显隐 */
 let settingsUi: SettingsUi | null = null;
+/** 模式级允许（只有基地 true） */
+let settingsAllowed = false;
+/** 页面级压制（加工台等全屏页打开 → 齿轮隐藏，让出左上角给返回键） */
+let settingsSuppressed = false;
+
+/** 统一刷新齿轮显隐（模式允许 && 未被页面压制） */
+function applySettingsVisible(): void {
+  settingsUi?.setVisible(settingsAllowed && !settingsSuppressed);
+}
 
 // ============================================================
 // 启动
