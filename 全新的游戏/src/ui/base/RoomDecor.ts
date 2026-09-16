@@ -169,24 +169,24 @@ export function decorateShell(
 
   // ---- ① 墙脚斜面踢脚：把墙面和地面接起来，不再是一条直棱 ----
   const skirt = extrudeProfile(wedgeProfile(0.46, 0.40, 0.30), W);
-  add(skirt, mats.struct, 0, 0.20, zb + 0.23, 0, -Math.PI / 2, 0);   // 背墙（斜面向 +z）
+  add(skirt, mats.struct, 0, 0.20, zb + 0.25, 0, -Math.PI / 2, 0);   // 背墙（斜面向 +z）
   const skirtSide = extrudeProfile(wedgeProfile(0.46, 0.40, 0.30), ROOM_D);
-  add(skirtSide, mats.struct, -halfW + 0.23, 0.20, 0);               // 左墙（斜面向 +x）
-  add(skirtSide, mats.struct, halfW - 0.23, 0.20, 0, 0, Math.PI, 0); // 右墙（斜面向 -x）
+  add(skirtSide, mats.struct, -halfW + 0.25, 0.20, 0);               // 左墙（斜面向 +x）
+  add(skirtSide, mats.struct, halfW - 0.25, 0.20, 0, 0, Math.PI, 0); // 右墙（斜面向 -x）
 
   // ---- ② 墙面结构腰线（y=3.0）：给 12.6m 高的墙分段，一条就够 ----
   const belt = extrudeProfile(chamferRectProfile(0.26, 0.34, 0.08), W);
-  add(belt, mats.struct, 0, 3.0, zb + 0.13, 0, -Math.PI / 2, 0);
+  add(belt, mats.struct, 0, 3.0, zb + 0.15, 0, -Math.PI / 2, 0);
   const beltSide = extrudeProfile(chamferRectProfile(0.26, 0.34, 0.08), ROOM_D);
-  add(beltSide, mats.struct, -halfW + 0.13, 3.0, 0);
-  add(beltSide, mats.struct, halfW - 0.13, 3.0, 0, 0, Math.PI, 0);
+  add(beltSide, mats.struct, -halfW + 0.15, 3.0, 0);
+  add(beltSide, mats.struct, halfW - 0.15, 3.0, 0, 0, Math.PI, 0);
 
   // ---- ③ 天花板桁架：每间 2 道横梁（z=±3.4）+ 分界处纵梁（数量砍半）----
   const truss = extrudeProfile(iBeamProfile(0.50, 0.34, 0.08), W);
   for (const dz of [-3.4, 3.4]) beamX(add, truss, mats.struct, 0, yCeil, dz);
   const trussZ = extrudeProfile(iBeamProfile(0.50, 0.34, 0.08), ROOM_D);
   const divs = bays.slice(0, -1).map((b) => b + (ROOM_W + ROOM_GAP) / 2);
-  for (const dx of [-halfW + 0.35, ...divs, halfW - 0.35]) add(trussZ, mats.struct, dx, yCeil + 0.55, 0);
+  for (const dx of [-halfW + 0.35, ...divs, halfW - 0.35]) add(trussZ, mats.struct, dx, yCeil + 0.20, 0);
 
   // ---- ④ 背墙竖向管道 + 卡箍（每间 2 根；整条 hall 只留一条管线束）----
   const pipeGeo = new THREE.CylinderGeometry(0.20, 0.20, ROOM_H - 1.4, 10, 1);

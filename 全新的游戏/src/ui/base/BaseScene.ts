@@ -571,13 +571,15 @@ export class BaseScene {
         ROOM_H / 2, ROOM_D / 2 - segD / 2);    // 前段
       add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), mats.wall, divider,
         (ROOM_H + DOOR_H) / 2, 0);             // 门楣
-      const jamb = extrudeProfile(chamferRectProfile(WALL_T + 0.08, DOOR_H, 0.05), 0.22);
-      add(jamb, mats.struct, divider, DOOR_H / 2, DOOR_HALF + 0.11);   // 门柱（前）
-      add(jamb, mats.struct, divider, DOOR_H / 2, -DOOR_HALF - 0.11);  // 门柱（后）
+      // ★ 门柱：**不许与墙的洞口切面共面**（共面 → z-fighting → "门的侧边一直在闪"）。
+      //   门柱面留在洞口切面外 1cm，并且比门头灯带更长 → 灯带端面藏进门柱里。
+      const jamb = extrudeProfile(chamferRectProfile(WALL_T + 0.08, DOOR_H, 0.05), 0.26);
+      add(jamb, mats.struct, divider, DOOR_H / 2, DOOR_HALF + 0.14);   // 门柱（前）
+      add(jamb, mats.struct, divider, DOOR_H / 2, -DOOR_HALF - 0.14);  // 门柱（后）
       // 门头灯带 + 门楣斜遮檐（手搓楔形，让门在俯视机位下读得出来）
-      add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.44), mats.stripWarm, divider,
+      add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.40), mats.stripWarm, divider,
         DOOR_H + 0.1, 0);
-      add(extrudeProfile(wedgeProfile(0.9, 0.32, 0.5), DOOR_HALF * 2 + 0.6), mats.struct,
+      add(extrudeProfile(wedgeProfile(0.9, 0.32, 0.5), DOOR_HALF * 2 + 0.60), mats.struct,
         divider, DOOR_H + 0.62, 0);
     }
 
@@ -601,7 +603,7 @@ export class BaseScene {
       } else if (defs[i].id === 'cockpit') decorateCockpit(addIn, mats);
       else decorateWorkshop(addIn, mats);
       const plate = this.makeNameplate(defs[i].name, defs[i].label);
-      addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.4);
+      addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.14);
       addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), mats.strip, 0, ROOM_H - 0.06, 0.4);
     }
   }
