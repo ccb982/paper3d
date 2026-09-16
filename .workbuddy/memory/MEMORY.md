@@ -71,3 +71,8 @@
 - ★ 自定义 ShaderMaterial 检查清单：每个 frag 用到的自定义 uniform 必须自己声明（uTime 也不例外）；GLSL 禁尾随逗号；frag 末尾 `#include <colorspace_fragment>`。漏一条 = program 编译失败 = **该材质全部 mesh 不渲染（房间整片消失）**。
 - ★ shader 排障最快路径：临时验收页只挂 BaseScene + vite dev + puppeteer-core + 本机 Chrome（swiftshader 软渲染，不抢游戏 GPU），console.error 重定向进 DOM 截图拿报错行号。
 - 舰内交互 = 站点制（`WorldMode.SHIP_STATIONS` + `setStationPads` 地面光圈），键位 E/F 通用；起飞/返航 = 航行终端面板二选一。
+
+## ★ UI 约定（2026-09-16）
+- 一切「关闭/返回上一级」语义的面板，统一用 `ui/components/BackButton.ts` 的 `createBackButton()`（FTX 素材 `/ui/返回按钮.ftx3.gz`），别写自造 ✕。
+- 设置入口 = 基地左上角白齿轮（`main.ts` `createSettingsUI`），**仅基地模式显示**（`enterBaseMode` 显 / `enterWorldMode` 隐）。齿轮 z-index 必须 > 遮罩，否则点不到。
+- 性能 HUD（`hudWrap`）默认隐藏；「关闭」= 统计段整块不进 `if (hudVisible)` 之外，零累加零 DOM 写入。

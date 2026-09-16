@@ -27,7 +27,6 @@ import { GachaOverlay } from '../ui/base/GachaOverlay';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { BaseScene } from '../ui/base/BaseScene';
 import { MainButtons, type ButtonId } from '../ui/base/MainButtons';
-import { createButton } from '../ui/components/Button';
 import { DialogueView } from '../ui/shared/DialogueView';
 import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
 import { EventSystem } from '../systems/events/EventSystem';
@@ -62,8 +61,6 @@ export class BaseMode implements IGameMode {
   private mainButtons: MainButtons | null = null;
   /** ★ 出击槽变动订阅（基地内换装：装备贴片/无人机即时刷新） */
   private deploymentUnsub: (() => void) | null = null;
-  /** ★ 删档按钮（基地右上角；确认后清 localStorage 并重开） */
-  private wipeBtn: HTMLButtonElement | null = null;
 
   // ★ 事件 / 对话模块（2026-09-14；基地与战斗共用同一套系统与 UI）
   private eventSystem!: EventSystem;
@@ -142,8 +139,6 @@ export class BaseMode implements IGameMode {
     this.mainButtons.init(ctx.renderer!).catch(err => {
       console.error('[BaseMode] 主页面按钮加载失败:', err);
     });
-    // ★ 删档按钮（右上角小按钮 → 确认面板 → 清档重开）
-    this.createWipeButton();
 
     // ⑤ 创建抽卡覆盖层（行动后触发；与背包/加工台共享图标服务）
     this.gachaOverlay = new GachaOverlay(ctx.session, this.iconRegistry);
@@ -171,11 +166,9 @@ export class BaseMode implements IGameMode {
     this.deploymentUnsub?.();
     this.deploymentUnsub = null;
 
-    // ① 销毁主页面按钮 + 删档按钮
+    // ① 销毁主页面按钮
     this.mainButtons?.dispose();
     this.mainButtons = null;
-    this.wipeBtn?.remove();
-    this.wipeBtn = null;
 
     // ② 销毁抽卡覆盖层
     this.gachaOverlay?.dispose();
@@ -245,62 +238,6 @@ export class BaseMode implements IGameMode {
   }
 
   /** 主页面按钮业务路由（action→抽卡覆盖层；其余→面板开关）——原逻辑不变 */
-  /** ★ 删档按钮（右上角；低调样式） */
-  private createWipeButton(): void {
-    if (this.wipeBtn) return;
-    const btn = document.createElement('button');
-    btn.textContent = '删档';
-    btn.style.cssText = [
-      'position:fixed', 'top:10px', 'right:12px', 'z-index:80',
-      'padding:5px 14px', 'border-radius:4px', 'cursor:pointer',
-      'font:13px "Microsoft YaHei",sans-serif', 'letter-spacing:2px',
-      'color:#c9b8a2', 'background:rgba(20,16,12,0.6)',
-      'border:1px solid rgba(160,120,80,0.45)',
-    ].join(';');
-    btn.addEventListener('mouseenter', () => { btn.style.color = '#ff9a8a'; btn.style.borderColor = 'rgba(220,110,90,0.7)'; });
-    btn.addEventListener('mouseleave', () => { btn.style.color = '#c9b8a2'; btn.style.borderColor = 'rgba(160,120,80,0.45)'; });
-    btn.addEventListener('click', () => this.openWipeConfirm());
-    document.body.appendChild(btn);
-    this.wipeBtn = btn;
-  }
-
-  /** 删档确认面板（二次确认，防误触） */
-  private openWipeConfirm(): void {
-    const content = document.createElement('div');
-    content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 36px;color:#f2e3d0;font-size:14px;text-align:center;';
-    const title = document.createElement('div');
-    title.textContent = '确认删除存档？';
-    title.style.cssText = 'font-size:19px;font-weight:bold;color:#ff8a8a;letter-spacing:2px;';
-    const body = document.createElement('div');
-    body.textContent = '将清除全部进度（天数/遗物/背包/舰船强化），删除后立即重开，无法恢复。';
-    body.style.cssText = 'color:#c9b8a2;line-height:1.7;';
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;gap:14px;';
-    const cancel = createButton({
-      label: '取消', style: 'secondary', size: 'md',
-      onClick: () => this.uiManager.closePanel('wipe-save'),
-    });
-    const confirm = createButton({
-      label: '确认删档', style: 'danger', size: 'md',
-      onClick: () => {
-        try {
-          localStorage.removeItem('arknights_rogue_save');
-        } catch (e) {
-          console.error('[删档] 清除失败:', e);
-        }
-        location.reload();
-      },
-    });
-    row.append(cancel, confirm);
-    content.append(title, body, row);
-    this.uiManager.openPanel({
-      id: 'wipe-save',
-      title: '删档',
-      render: () => content,
-      onClose: () => {},
-    });
-  }
-
   private onButtonPress(id: ButtonId): void {
     if (id === 'action') {
       const gacha = this.gachaOverlay;
