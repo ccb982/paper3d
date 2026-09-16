@@ -29,7 +29,7 @@ import {
   DOOR_H, DOOR_HALF, ROOM_D, ROOM_GAP, ROOM_H, ROOM_W, WALL_T,
   createDecorMats, createPadMaterialFor, decorateControl, decorateCockpit,
   decorateShell, decorateStorage, decorateWorkshop, updateRoomTime,
-  type AddFn, type DecorMats, type RegisterAnim,
+  type AddFn, type DecorMats, type RegisterAnim, type RegisterClick,
 } from './RoomDecor';
 import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
 
@@ -95,6 +95,10 @@ export class BaseScene {
   private t = 0;
   /** ★ 房间可动元素（传送带/机械臂/行车/全息…）：装饰期注册，每帧统一驱动 */
   private roomAnims: ((t: number, dt: number) => void)[] = [];
+  /** ★ 可点击目标（房间彩蛋：双击命中 → 回调） */
+  private clickTargets: { mesh: THREE.Object3D; cb: () => void }[] = [];
+  private raycaster = new THREE.Raycaster();
+  private ndc = new THREE.Vector2();
 
   // ---- 角色（维维美） ----
   private quad: FTXQuad | null = null;
@@ -222,6 +226,7 @@ export class BaseScene {
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('wheel', this.onWheel, { passive: true });
+    window.addEventListener('dblclick', this.onDblClick);
   }
 
   /** ★ 交互站列表（F 触发；本地大厅坐标） */
@@ -504,6 +509,7 @@ export class BaseScene {
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('dblclick', this.onDblClick);
     this.promptEl.remove();
     this.quad?.dispose();
     this.anim?.dispose();
@@ -522,6 +528,7 @@ export class BaseScene {
     this.droneAllies.length = 0;
     this.pads = [];
     this.roomAnims.length = 0;
+    this.clickTargets.length = 0;
     this.mats = null;
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -529,7 +536,8 @@ export class BaseScene {
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         for (const m of mats) {
           const std = m as THREE.MeshStandardMaterial;
-          std.map?.dispose();
+          // ★ userData.keep：缓存贴图（如彩蛋数字）跨房间复用，不随房间销毁
+          if (std.map && (std.map as THREE.Texture).userData.keep !== true) std.map.dispose();
           m.dispose();
         }
       }
@@ -567,6 +575,8 @@ export class BaseScene {
 
     // ---- 可动元素注册器（装饰函数往里塞动画；update 每帧统一驱动）----
     const anim: RegisterAnim = (fn) => { this.roomAnims.push(fn); };
+    // ---- 点击注册器（房间彩蛋：双击命中 mesh → 回调）----
+    const click: RegisterClick = (mesh, cb) => { this.clickTargets.push({ mesh, cb }); };
 
     // ---- 大厅级装饰：踢脚斜面 / 墙面腰线 / 天花板桁架 / 背墙管道 / 通风百叶 / 灯槽 ----
     decorateShell(add, mats, W, this.bays, anim);
@@ -605,7 +615,7 @@ export class BaseScene {
         bay.add(m);
         return m;
       };
-      if (defs[i].id === 'control') decorateControl(addIn, mats, anim);
+      if (defs[i].id === 'control') decorateControl(addIn, mats, anim, click);
       else if (defs[i].id === 'storage') decorateStorage(addIn, mats, anim);
       else if (defs[i].id === 'workshop') {
         decorateWorkshop(addIn, mats, anim);
@@ -685,6 +695,23 @@ export class BaseScene {
 
   private onKeyUp = (e: KeyboardEvent): void => {
     this.keys.delete(e.key.toLowerCase());
+  };
+
+  /** ★ 双击：射线命中注册过的 mesh → 触发回调（房间彩蛋；UI 遮挡时不响应） */
+  private onDblClick = (e: MouseEvent): void => {
+    const canvas = this.renderer3d?.domElement;
+    if (!canvas || (e.target !== canvas && e.target !== document.body)) return;
+    if (!this.camera || this.clickTargets.length === 0) return;
+    if (this.uiBlocking?.() ?? false) return;
+    this.ndc.set(
+      (e.clientX / window.innerWidth) * 2 - 1,
+      -(e.clientY / window.innerHeight) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    const hits = this.raycaster.intersectObjects(this.clickTargets.map((c) => c.mesh), false);
+    if (hits.length === 0) return;
+    const hit = this.clickTargets.find((c) => c.mesh === hits[0].object);
+    hit?.cb();
   };
 
   /** 滚轮：缩放视野（改跟随机距；8~45m 平滑；房间 3× 后放宽上限） */

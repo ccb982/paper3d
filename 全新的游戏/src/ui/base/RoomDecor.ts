@@ -38,6 +38,8 @@ import {
 export type RoomAnimFn = (t: number, dt: number) => void;
 /** 动画注册器（BaseScene 注入；进入房间时收集，update 每帧统一驱动） */
 export type RegisterAnim = (fn: RoomAnimFn) => void;
+/** 点击注册器（BaseScene 注入；双击命中该 mesh 时回调 —— 彩蛋 / 小交互用） */
+export type RegisterClick = (mesh: THREE.Object3D, cb: () => void) => void;
 
 // ★ 房间尺寸的唯一事实来源（BaseScene 与装饰件共用，不要各写一份）
 export const ROOM_W = 27;
@@ -181,6 +183,84 @@ function lockerBank(
 // ------------------------------------------------------------
 // 可动元素（2026-09-16 用户定调："房间小就要塞满可动的东西，不然浪费性能"）
 // ------------------------------------------------------------
+
+/** ★ 大屏数字贴图（彩蛋用）：0..9 × {冷色, 金色} 缓存（Canvas 画，不占外部资源） */
+const digitTexCache = new Map<string, THREE.Texture>();
+function digitTexture(d: number, gold: boolean): THREE.Texture {
+  const key = d + (gold ? 'g' : 'c');
+  const hit = digitTexCache.get(key);
+  if (hit) return hit;
+  const cv = document.createElement('canvas');
+  cv.width = 256;
+  cv.height = 256;
+  const g = cv.getContext('2d')!;
+  g.fillStyle = '#070b0f';
+  g.fillRect(0, 0, 256, 256);
+  // 底纹网格（屏幕质感）
+  g.strokeStyle = gold ? 'rgba(255,190,90,0.22)' : 'rgba(130,200,225,0.16)';
+  g.lineWidth = 2;
+  for (let i = 1; i < 4; i++) {
+    g.beginPath(); g.moveTo(i * 64, 0); g.lineTo(i * 64, 256); g.stroke();
+    g.beginPath(); g.moveTo(0, i * 64); g.lineTo(256, i * 64); g.stroke();
+  }
+  const col = gold ? '#ffc44a' : '#8fe0ff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = 'bold 170px "Consolas", "Courier New", monospace';
+  g.shadowColor = col;
+  g.shadowBlur = 38;
+  g.fillStyle = col;
+  g.fillText(String(d), 128, 140);
+  g.fillText(String(d), 128, 140);   // 叠两遍加强辉光
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // ★ 命中缓存的贴图**不随房间销毁**（跨房间复用；BaseScene.dispose 见 userData.keep 跳过）
+  tex.userData.keep = true;
+  digitTexCache.set(key, tex);
+  return tex;
+}
+
+/** ★ 金色星芒光晕贴图（彩蛋闪光的"炫目"层）：径向渐变 + 十字星芒，缓存复用 */
+let haloTexCache: THREE.Texture | null = null;
+function haloTexture(): THREE.Texture {
+  if (haloTexCache) return haloTexCache;
+  const cv = document.createElement('canvas');
+  cv.width = 512;
+  cv.height = 512;
+  const g = cv.getContext('2d')!;
+  g.clearRect(0, 0, 512, 512);
+  // 中心径向辉光
+  const rad = g.createRadialGradient(256, 256, 0, 256, 256, 250);
+  rad.addColorStop(0.0, 'rgba(255,244,214,1.00)');
+  rad.addColorStop(0.18, 'rgba(255,214,120,0.85)');
+  rad.addColorStop(0.45, 'rgba(255,186,72,0.35)');
+  rad.addColorStop(1.0, 'rgba(255,170,40,0.00)');
+  g.fillStyle = rad;
+  g.fillRect(0, 0, 512, 512);
+  // 十字星芒（横 / 竖 / 两条斜向细芒）
+  const flares: readonly [number, number, number][] = [
+    [1, 0, 1.0], [0, 1, 0.9], [0.7071, 0.7071, 0.45], [0.7071, -0.7071, 0.45],
+  ];
+  for (const [dx, dy, k] of flares) {
+    const grad = g.createLinearGradient(256 - dx * 256, 256 - dy * 256, 256 + dx * 256, 256 + dy * 256);
+    grad.addColorStop(0.0, 'rgba(255,200,90,0.0)');
+    grad.addColorStop(0.5, 'rgba(255,246,220,0.95)');
+    grad.addColorStop(1.0, 'rgba(255,200,90,0.0)');
+    g.save();
+    g.translate(256, 256);
+    g.rotate(Math.atan2(dy, dx));
+    g.scale(1, k * 12 / 256);
+    g.translate(-256, -256);
+    g.fillStyle = grad;
+    g.fillRect(0, 248, 512, 16);
+    g.restore();
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.userData.keep = true;
+  haloTexCache = tex;
+  return tex;
+}
 
 /** 流水指示灯条（流光沿长轴跑；沿 x 放） */
 function flowBar(add: AddFn, mats: DecorMats, x: number, y: number, z: number, len: number): THREE.Mesh {
@@ -525,7 +605,7 @@ export function decorateShell(
 // 指挥室：三联大屏 + 3 工位指挥弧 + 中央全息台 + 侧墙机柜 + 绿植
 // ------------------------------------------------------------
 
-export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim): void {
+export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim, click: RegisterClick): void {
   const zb = -ROOM_D / 2; // -9
 
   // ---- 屏幕墙：3 块大屏（不是 7 块小板）—— 大面、留白、单点发光 ----
@@ -537,12 +617,87 @@ export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim)
     createScreenMaterial(0x8fe0ff, 0.0, 1),
     createScreenMaterial(0x63dcc0, 0.0, 3),
   ];
+  // ★ 彩蛋（用户定调）：双击屏幕 → 显示 0，再双击 +1（0..9 循环）；
+  //   三块屏读成 325 或 799 → 屏幕变金色且数字持续闪烁。
+  const lockDigits = [-1, -1, -1];                       // -1 = 还在播动态内容
+  const digitMats: THREE.MeshBasicMaterial[] = [];
+  const digitFaces: THREE.Mesh[] = [];
+  const halos: THREE.Mesh[] = [];
+  const isLucky = (): boolean =>
+    (lockDigits[0] === 3 && lockDigits[1] === 2 && lockDigits[2] === 5)
+    || (lockDigits[0] === 7 && lockDigits[1] === 9 && lockDigits[2] === 9);
+  const refreshDigits = (): void => {
+    const gold = isLucky();
+    for (let i = 0; i < 3; i++) {
+      if (lockDigits[i] < 0) continue;
+      const m = digitMats[i];
+      m.map = digitTexture(lockDigits[i], gold);
+      m.needsUpdate = true;
+    }
+  };
   for (let i = 0; i < 3; i++) {
     const sx = [-5.4, 0, 5.4][i];
     const yaw = sx === 0 ? 0 : (sx < 0 ? 0.10 : -0.10);
     add(screenPanel, mats.furn, sx, 3.5, zb + 0.40, 0, yaw, 0);
-    add(screenFace, screenModes[i], sx, 3.5, zb + 0.60, 0, yaw, 0);
+    const face = add(screenFace, screenModes[i], sx, 3.5, zb + 0.60, 0, yaw, 0);
+    digitFaces.push(face);
+    // 金色星芒光晕（加色混合；平时 opacity=0，中奖时过曝闪）
+    const halo = add(
+      new THREE.PlaneGeometry(5.8, 3.8),
+      new THREE.MeshBasicMaterial({
+        map: haloTexture(), color: 0xffc24a, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      }),
+      sx, 3.5, zb + 0.52, 0, yaw, 0,
+    );
+    halos.push(halo);
+    const dmat = new THREE.MeshBasicMaterial({ map: digitTexture(0, false), toneMapped: false });
+    digitMats.push(dmat);
+    click(face, () => {
+      lockDigits[i] = lockDigits[i] < 0 ? 0 : (lockDigits[i] + 1) % 10;
+      face.material = dmat;                              // 切到"数字锁"模式
+      refreshDigits();
+    });
   }
+  // ★ 金色 = 炫目夸张的爆闪：数字本体过曝（>1 会被压成白心）+ 星芒光晕 + 抖屏缩放
+  anim((t) => {
+    if (lockDigits[0] < 0 && lockDigits[1] < 0 && lockDigits[2] < 0) return;
+    const lucky = isLucky();
+    if (!lucky) {
+      for (let i = 0; i < 3; i++) {
+        digitMats[i].color.setScalar(1.0);
+        const face = digitFaces[i];
+        // 抖动残留清零（位置 / 缩放都复原）
+        face.position.set([-5.4, 0, 5.4][i], 3.5, zb + 0.60);
+        face.scale.setScalar(1);
+        const halo = halos[i];
+        (halo.material as THREE.MeshBasicMaterial).opacity = 0;
+        halo.scale.setScalar(1);
+      }
+      return;
+    }
+    // 方波爆闪（约 9Hz，带二次谐波 → 不均匀的"啪、啪"感）
+    const w = Math.sin(t * 22.0) + 0.35 * Math.sin(t * 47.0);
+    const on = w > -0.1;
+    const v = on ? 2.9 : 0.28;                             // 过曝（白心金边）
+    const haloA = on ? 0.95 : 0.10;
+    const haloScale = on ? 1.12 : 0.94;
+    // 抖屏：高频小幅位移 + 随机缩放（"不稳的高压闪光"）
+    const jx = 0.035 * (Math.sin(t * 61.0) + 0.6 * Math.sin(t * 97.0));
+    const jy = 0.030 * (Math.cos(t * 73.0) + 0.5 * Math.sin(t * 113.0));
+    const sc = 1 + (on ? 0.055 : -0.02) + 0.012 * Math.sin(t * 89.0);
+    for (let i = 0; i < 3; i++) {
+      digitMats[i].color.setScalar(v);
+      const face = digitFaces[i];
+      const baseX = [-5.4, 0, 5.4][i];
+      face.position.set(baseX - jx, 3.5 + jy, zb + 0.60);
+      face.scale.setScalar(sc);
+      const halo = halos[i];
+      const h = halo.material as THREE.MeshBasicMaterial;
+      h.opacity = haloA;
+      halo.scale.setScalar(haloScale + 0.05 * Math.sin(t * 55.0 + i));
+    }
+  });
   flowBar(add, mats, 0, 1.82, zb + 0.16, 15.2); // 屏底流水灯带（可动）
 
   // ---- 指挥弧：3 个工位（旧版 5 个挤成一排；3 个才有"值班席"的呼吸感）----
