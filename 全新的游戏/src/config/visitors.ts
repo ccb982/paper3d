@@ -55,4 +55,12 @@ export const VISITORS: VisitorDef[] = [
     moveSpeed: 3.2,
     model: { url: VISITOR_MODEL_URL, height: 3.2 },
   },
+  {
+    id: 'yjwangzi',
+    name: '鹰叫王子',
+    assetUrl: '/characters/protagonist/鹰叫王子.ftx3.gz',
+    dialogue: 'visitor_yjwangzi',
+    moveSpeed: 3.1,
+    model: { url: VISITOR_MODEL_URL, height: 3.3 },
+  },
 ];

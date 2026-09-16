@@ -3501,12 +3501,13 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 舰内加工台（懒建覆盖层；与基地加工台同一实现） */
-  private openShipCrafting(): void {
+  private async openShipCrafting(): Promise<void> {
     if (!this.craftingManager || !this.itemManager || !this.iconRegistry) return;
     if (!this.craftingOverlay) {
       this.craftingOverlay = new CraftingOverlay(this.craftingManager, this.itemManager, this.iconRegistry);
-      this.craftingOverlay.load().catch((err) => console.error('[interior] 加工台加载失败:', err));
     }
+    // ★ 等背景/模块素材加载完再开页，否则首次打开加工模块没有背景（2026-09-16 修复）
+    await this.craftingOverlay.load().catch((err) => console.error('[interior] 加工台加载失败:', err));
     this.craftingOverlay.show('ship');
   }
 
@@ -3529,7 +3530,7 @@ export class WorldMode implements IGameMode {
     this.player.visible = true;
     this.worldUIManager?.setCombatHudVisible(true);
     this.worldUIManager?.setMinimapVisible(true); // ★ 修复：舰内隐藏的小地图出舱恢复（否则一去不回）
-    this.worldUIManager?.setDockButtonVisible(true);
+    this.worldUIManager?.setDockButtonVisible(false);
     renderManager.setEnvironment('world');
     renderManager.setFlightMode(false);
     this.chunks.setWaterVisible(true);

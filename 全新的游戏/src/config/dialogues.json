@@ -248,6 +248,37 @@
           "end": true
         }
       }
+    },
+    "visitor_yjwangzi": {
+      "speaker": "鹰叫王子",
+      "portrait": "/characters/protagonist/鹰叫王子.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "唳——！本王子巡游到此，你这船，气派！",
+          "choices": [
+            { "text": "您是？", "next": "n2" },
+            { "text": "为什么叫鹰叫？", "next": "n3" },
+            { "text": "（回礼）", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "鹰叫王子——领地上的风声，都归本王子的嗓子管。",
+          "next": "n3"
+        },
+        "n3": {
+          "text": "赏你两块固原岩，拿回去垫船脚！",
+          "effects": [
+            { "kind": "item", "id": "raw_rock", "count": 2 },
+            { "kind": "flag", "key": "met_yjwangzi" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "嗯，懂礼数。走前最后送你一嗓子——唳！",
+          "end": true
+        }
+      }
     }
   }
 }

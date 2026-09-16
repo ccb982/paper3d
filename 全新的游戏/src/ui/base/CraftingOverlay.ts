@@ -61,6 +61,7 @@ export class CraftingOverlay {
 
   private bgMesh: THREE.Mesh | null = null;
   private moduleBgDataURL = '';
+  private loadPromise: Promise<void> | null = null;
 
   /** ★ 配方滚动容器（6 槽位窗口 = 可视区；配方多时可向下滑，方舟同款交互） */
   private scrollEl!: HTMLDivElement;
@@ -269,7 +270,8 @@ export class CraftingOverlay {
   // 资源加载
   // ============================================================
 
-  async load(): Promise<void> {
+  /** 实际素材加载（背景 FTX → 背景网格；加工模块 FTX → 槽位底图 dataURL） */
+  private async doLoad(): Promise<void> {
     const bg = await FtxAsset.load('/ui/加工台背景ui.ftx3.gz');
     this.buildBackground(bg);
 
@@ -291,7 +293,17 @@ export class CraftingOverlay {
       this.moduleBgDataURL = '';
       console.warn('[CraftingOverlay] 加工模块素材载入失败:', err);
     }
+  }
 
+  /** 加载背景/模块素材（幂等：重复调用返回同一次加载；失败自动复位可重试） */
+  load(): Promise<void> {
+    if (this.loadPromise) return this.loadPromise;
+    const p = this.doLoad().catch((err) => {
+      this.loadPromise = null;
+      throw err;
+    });
+    this.loadPromise = p;
+    return p;
   }
 
   // ============================================================

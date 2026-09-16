@@ -478,10 +478,19 @@ export class WorldUIManager extends BaseInteractionUI {
     }
     this.mapPanel ??= new MapPanel(this.raster, this.minimap, this.mapMarkers);
     const panel = this.mapPanel;
+    // ★ 面板遮罩是半透明 → 航行期停靠按钮（z60）会透出来；记下开图前的显隐，
+    //   开图时藏掉、关图时恢复（2026-09-16 修复）
+    const dockWasVisible = !!this.dockBtn && this.dockBtn.style.display !== 'none';
     this.openPanel({
       id: 'map-panel',
-      onOpen: () => panel.open(() => this.closePanel('map-panel')),
-      onClose: () => panel.close(),
+      onOpen: () => {
+        if (this.dockBtn) this.dockBtn.style.display = 'none';
+        panel.open(() => this.closePanel('map-panel'));
+      },
+      onClose: () => {
+        if (this.dockBtn) this.dockBtn.style.display = dockWasVisible ? 'block' : 'none';
+        panel.close();
+      },
       render: () => panel.root,
     });
   }
