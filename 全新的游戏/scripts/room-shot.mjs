@@ -12,7 +12,7 @@ const shots = JSON.parse(process.argv[2] ?? '[]');
 let vite = null;
 async function probe(port) {
   try {
-    const r = await fetch(`http://localhost:${port}/room-preview.html`);
+    const r = await fetch(`http://localhost:${port}/scripts/room-preview.html`);
     return r.ok;
   } catch { return false; }
 }
@@ -43,7 +43,7 @@ for (const s of shots) {
   const logs = [];
   page.on('console', (m) => { if (m.type() === 'error') logs.push(m.text()); });
   page.on('pageerror', (e) => logs.push('PAGEERROR: ' + e.message));
-  await page.goto(`http://localhost:${port}/${s.page ?? 'room-preview.html'}${s.qs ?? ''}`, { waitUntil: 'domcontentloaded', timeout: 180000 });
+  await page.goto(`http://localhost:${port}/${s.page ?? 'scripts/room-preview.html'}${s.qs ?? ''}`, { waitUntil: 'domcontentloaded', timeout: 180000 });
   await new Promise((r) => setTimeout(r, s.wait ?? 8000));
   if (s.keys) {
     for (const k of s.keys) {
