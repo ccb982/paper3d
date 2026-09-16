@@ -576,6 +576,7 @@ function enterBaseMode(
       session: currentSession!,
       protagonistAsset, // ★ 基地内部行走立绘（维维美）
       droneAsset: droneAsset ?? undefined, // 基地盟友跟随（无人机；祖宗为弹药消耗品不绘制）
+      bossAsset: enemyAsset,              // ★ 普瑞赛斯：基地星空彩蛋用
       onDepart: (day: number) => {
         enterWorldMode(scene, camera, renderer, day);
       },

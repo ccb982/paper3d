@@ -24,6 +24,8 @@ export interface IGameModeContext {
   protagonistAsset?: FtxAsset;
   /** ★ 基地盟友立绘素材（无人机）：出击槽带槽即跟随绘制（祖宗是弹药消耗品，不进基地） */
   droneAsset?: FrameAssetSource;
+  /** ★ 普瑞赛斯素材（Boss）：基地彩蛋用（地球转满 100 圈 → 出现在地球上） */
+  bossAsset?: FrameAssetSource;
   /** 返回回调：WorldMode 按 E 键时触发 → main 进入 BaseMode */
   onReturn?: () => void;
   /** 出击回调：BaseMode 点击"出击"时触发 → main 进入 WorldMode */

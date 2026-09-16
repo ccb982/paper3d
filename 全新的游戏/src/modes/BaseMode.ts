@@ -117,7 +117,8 @@ export class BaseMode implements IGameMode {
       droneAsset: ctx.droneAsset,
       itemManager: this.itemManager,
       renderer: ctx.renderer,
-      spaceBackdrop: true,   // ★ 基地背景：星空 + 自转地球
+      spaceBackdrop: true,        // ★ 基地背景：星空 + 自转地球
+      bossAsset: ctx.bossAsset,   // ★ 彩蛋：地球转满 100 圈 → 普瑞赛斯出现
     });
     this.baseScene.setupCamera(ctx.camera!);
     // ★ 房间屏幕叠加（暗角；在场景渲染之后叠一层，不改色彩管线/深度关系）

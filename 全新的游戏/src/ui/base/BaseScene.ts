@@ -32,7 +32,7 @@ import {
   type AddFn, type DecorMats, type RegisterAnim, type RegisterClick,
 } from './RoomDecor';
 import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
-import { createSpaceBackdrop } from '../../services/render/SpaceBackdrop';
+import { createSpaceBackdrop, spinDome, type SpaceBackdrop } from '../../services/render/SpaceBackdrop';
 
 export interface RoomDef {
   id: string;
@@ -80,6 +80,8 @@ export interface BaseSceneOptions {
   renderer?: THREE.WebGLRenderer;
   /** ★ 舷外空间背景（星空天穹 + 自转地球；基地 true，舰内 false 保持灰底） */
   spaceBackdrop?: boolean;
+  /** ★ 普瑞赛斯素材（彩蛋：地球转满 100 圈 → 出现在地球上） */
+  bossAsset?: FrameAssetSource;
 }
 
 export class BaseScene {
@@ -102,6 +104,14 @@ export class BaseScene {
   private clickTargets: { mesh: THREE.Object3D; cb: () => void }[] = [];
   private raycaster = new THREE.Raycaster();
   private ndc = new THREE.Vector2();
+  /** ★ 舷外空间背景（星空 + 地球；基地才有） */
+  private backdrop: SpaceBackdrop | null = null;
+  /** ★ 彩蛋：地球转满 100 圈 → 普瑞赛思登场 */
+  private priestess: FTXQuad | null = null;
+  private priestessAnim: FrameAnimatorBase | null = null;
+  private priestessAt = 0;      // 触发时刻（0 = 还没触发）
+  /** 已经数过的圈数（每帧从 t 重算，避免浮点漂移累积） */
+  private earthTurns = 0;
 
   // ---- 角色（维维美） ----
   private quad: FTXQuad | null = null;
@@ -174,12 +184,30 @@ export class BaseScene {
 
     // ★ 舷外空间背景：星空 + 自转地球（只基地开；舰内保持灰底）
     if (opts.spaceBackdrop) {
-      const backdrop = createSpaceBackdrop(scene);
-      this.root.add(backdrop.dome, backdrop.earth);
-      // 整片星空缓慢自转（"不停的动"）；地球自转在 shader 里靠共享时钟驱动
-      this.roomAnims.push((_t, dt) => {
-        backdrop.dome.rotation.y -= dt * 0.0045;
+      const backdrop = createSpaceBackdrop(scene, {
+        pixelRatio: this.renderer3d?.getPixelRatio() ?? 1,
       });
+      this.backdrop = backdrop;
+      this.root.add(backdrop.dome, backdrop.earth, backdrop.stars);
+      this.roomAnims.push((t, dt) => {
+        // 整片星空缓慢自转（"不停的动"）；地球自转在 shader 里靠共享时钟驱动
+        spinDome(backdrop, dt);
+        // 地球已转圈数（JS 用与 shader 相同的 EARTH_SPIN 常数换算）
+        this.earthTurns = (t * backdrop.spin) / (Math.PI * 2);
+        this.updatePriestess(t, dt);
+      });
+
+      // ★ 彩蛋：地球转满 100 圈 → 普瑞赛斯出现在地球上（立绘从 0 弹性放大）
+      const bossAsset = opts.bossAsset;
+      if (bossAsset) {
+        this.priestess = new FTXQuad(this.sceneRef, bossAsset);
+        this.priestess.setScaleKeepAspect(0.001);
+        this.priestess.setAnchorBottom(true);
+        this.priestess.setPosition(0, -58, -22);
+        this.priestess.setVisible(false);
+        this.priestessAnim = new FrameAnimatorBase(bossAsset);
+        this.priestessAnim.playFrames(['前'], { fps: 1, loop: true });
+      }
     }
 
     // 环境光（冷顶光 + 极淡暖补 + 相机侧正面补光；2026-09-16 极简版：
@@ -240,6 +268,7 @@ export class BaseScene {
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('wheel', this.onWheel, { passive: true });
     window.addEventListener('dblclick', this.onDblClick);
+    window.addEventListener('click', this.onClick);
   }
 
   /** ★ 交互站列表（F 触发；本地大厅坐标） */
@@ -523,6 +552,7 @@ export class BaseScene {
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('dblclick', this.onDblClick);
+    window.removeEventListener('click', this.onClick);
     this.promptEl.remove();
     this.quad?.dispose();
     this.anim?.dispose();
@@ -542,6 +572,11 @@ export class BaseScene {
     this.pads = [];
     this.roomAnims.length = 0;
     this.clickTargets.length = 0;
+    this.priestess?.dispose();
+    this.priestess = null;
+    this.priestessAnim?.dispose();
+    this.priestessAnim = null;
+    this.backdrop = null;
     this.mats = null;
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -710,6 +745,25 @@ export class BaseScene {
     this.keys.delete(e.key.toLowerCase());
   };
 
+  /** ★ 彩蛋：地球转满 100 圈 → 普瑞赛斯在星球表面出现（弹性放大，随后常驻）
+   *  触发后每帧只做"放大 + 朝向相机"，开销可忽略。 */
+  private updatePriestess(t: number, dt: number): void {
+    const q = this.priestess;
+    if (!q) return;
+    if (this.priestessAt === 0) {
+      if (this.earthTurns < 100) return;
+      this.priestessAt = t;
+    }
+    const k = Math.min(1, (t - this.priestessAt) / 1.6);
+    const ease = 1 - Math.pow(1 - k, 3);
+    const pop = 1 + 0.10 * Math.sin(k * 16.0) * (1 - k);   // 登场回弹
+    q.setScaleKeepAspect(46 * ease * pop);
+    q.setVisible(ease > 0.01);
+    this.priestessAnim?.update(dt);
+    q.render({ frameIndex: this.priestessAnim?.frameIndex ?? 0 });
+    if (this.camera) q.setBillboard(this.camera);
+  }
+
   /** ★ 双击：射线命中注册过的 mesh → 触发回调（房间彩蛋；UI 遮挡时不响应） */
   private onDblClick = (e: MouseEvent): void => {
     const canvas = this.renderer3d?.domElement;
@@ -730,6 +784,32 @@ export class BaseScene {
   /** 滚轮：缩放视野（改跟随机距；8~45m 平滑；房间 3× 后放宽上限） */
   private onWheel = (e: WheelEvent): void => {
     this.camDistTarget = Math.max(8, Math.min(45, this.camDistTarget * (1 + e.deltaY * 0.0012)));
+  };
+
+  /** UI 遮挡判定（未注入时视为不遮挡） */
+  private isUiBlocked(): boolean {
+    return this.uiBlocking?.() ?? false;
+  }
+
+  /** ★ 单击：射线命中**星点云** → 那颗星熄灭（彩蛋）。
+   *  用房间几何做遮挡判定：墙/家具/立绘挡在前面的星点不会被点到。 */
+  private onClick = (e: MouseEvent): void => {
+    const canvas = this.renderer3d?.domElement;
+    if (!canvas || (e.target !== canvas && e.target !== document.body)) return;
+    if (!this.camera || !this.backdrop || this.isUiBlocked()) return;
+    this.ndc.set(
+      (e.clientX / window.innerWidth) * 2 - 1,
+      -(e.clientY / window.innerHeight) * 2 + 1,
+    );
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    this.raycaster.params.Points.threshold = 2.0;   // 244 距离处 2 世界单位 ≈ 几像素
+    const hits = this.raycaster.intersectObject(this.backdrop.stars, false);
+    if (hits.length === 0) return;
+    // 房间几何挡在前面就不算点中（否则会点到"墙后面的星星"）
+    const blocked = this.raycaster.intersectObject(this.root, true);
+    if (blocked.length > 0 && blocked[0].distance < hits[0].distance) return;
+    const idx = (hits[0] as THREE.Intersection & { index?: number }).index ?? -1;
+    this.backdrop.extinguish(idx);
   };
 
   private updateInput(dt: number): void {

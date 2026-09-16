@@ -699,7 +699,7 @@ export function createViewportMaterial(color = 0x7fb6ff): THREE.ShaderMaterial {
 // ------------------------------------------------------------
 
 const STAR_FRAG = /* glsl */ `
-  varying vec3 vObj;
+  varying vec3 vObj;      // 物体空间方向（天穹球：球心在原点、不旋转 → 方向稳定）
   uniform float uTime;
   uniform vec3  uColor;
 
@@ -720,46 +720,21 @@ const STAR_FRAG = /* glsl */ `
     return s;
   }
 
-  // ★ 一颗"圆点星"：格内随机位置 + 随机半径（大小不一）+ 软边 + 独立相位的闪烁
-  float starLayer(vec2 uv, float gridY, float density, float bright, float seed) {
-    vec2 p = uv * vec2(gridY * 2.0, gridY);
-    vec2 cell = floor(p);
-    vec2 lp = fract(p) - 0.5;
-    float h = hash21(cell + seed);
-    if (h > density) return 0.0;                                  // 稀疏：不是每个格子都有星
-    vec2 jit = (vec2(hash21(cell + seed + 1.7), hash21(cell + seed + 5.3)) - 0.5) * 0.6;
-    float d = length(lp - jit);
-    float r = 0.028 + 0.085 * hash21(cell + seed + 9.1);          // 半径随机，但整体**很小**
-    float core = 1.0 - smoothstep(r * 0.30, r, d);                // 圆点本体
-    float halo = (1.0 - smoothstep(r, r * 2.4, d)) * 0.10;        // 极淡柔光晕
-    float tw = 0.35 + 0.65 * sin(uTime * (0.9 + h * 3.4) + h * 63.0);   // 一闪一闪
-    float edge = smoothstep(0.5, 0.34, max(abs(lp.x), abs(lp.y)));      // 格边淡出（防跳变）
-    return (core + halo) * (0.45 + 0.55 * tw) * edge * bright;
-  }
-
+  // ★ 天穹**只画底色**：近乎纯黑 + 若有若无的银河/星云。
+  //   星点是 createStarPointsMaterial 的可点击点云（要点得中，就必须是真几何）。
   void main() {
-    // 用**物体空间方向**（天穹球不旋转缩放）→ 星点稳定，不随镜头平移抖动
     vec3 d = normalize(vObj);
     vec2 uv = vec2(atan(d.z, d.x) * 0.1591549, asin(clamp(d.y, -1.0, 1.0)) * 0.3183099);
-
-    vec3 col = vec3(0.0015, 0.0022, 0.0045);                       // 近乎纯黑的深空底
-
-    // ★ 星空以黑为主：只有**少量很小的星点**点缀（远密而极暗 / 近处偶有亮星）
-    col += vec3(0.88, 0.94, 1.00) * starLayer(uv, 150.0, 0.10, 0.55, 0.0);
-    col += vec3(0.86, 0.92, 1.00) * starLayer(uv, 95.0, 0.055, 0.85, 3.7);
-    col += vec3(1.00, 0.92, 0.80) * starLayer(uv, 58.0, 0.030, 1.35, 8.1);
-
-    // 银河带 / 星云只留"若有若无"的一层（不能破坏黑暗）
+    vec3 col = vec3(0.0015, 0.0022, 0.0045);
     float band = exp(-pow((uv.y - 0.16 * sin(uv.x * 2.2)) * 3.4, 2.0));
     col += vec3(0.26, 0.31, 0.46) * fbm(uv * vec2(260.0, 130.0) + uTime * 0.02) * band * 0.10;
     col += uColor * pow(fbm(uv * 12.0 - uTime * 0.01), 2.6) * 0.035;
-
     gl_FragColor = vec4(col, 1.0);
     #include <colorspace_fragment>
   }
 `;
 
-/** 星空天穹（大球 + BackSide；星点/银河/星云，靠 uTime 慢闪） */
+/** 星空天穹（大球 + BackSide；只出底色，星点在点云里） */
 export function createStarDomeMaterial(color = 0x5a7fd0): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: {
@@ -767,13 +742,10 @@ export function createStarDomeMaterial(color = 0x5a7fd0): THREE.ShaderMaterial {
       uColor: { value: new THREE.Color(color) },
     },
     vertexShader: /* glsl */ `
-      varying vec3 vW;
       varying vec3 vObj;
       void main() {
         vObj = position;
-        vec4 wp = modelMatrix * vec4(position, 1.0);
-        vW = wp.xyz;
-        gl_Position = projectionMatrix * viewMatrix * wp;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }
     `,
     fragmentShader: STAR_FRAG,
@@ -782,11 +754,67 @@ export function createStarDomeMaterial(color = 0x5a7fd0): THREE.ShaderMaterial {
   });
 }
 
+// ------------------------------------------------------------
+// 可点击星点云（THREE.Points；每颗星独立属性 → 点中即灭）
+// ------------------------------------------------------------
+
+const STAR_POINTS_VERT = /* glsl */ `
+  attribute float aSize;    // 视觉大小（有大有小）
+  attribute float aPhase;   // 闪烁相位（各闪各的）
+  attribute float aAlive;   // 1 = 亮着；0 = 已熄灭
+  attribute vec3  aTint;    // 星色（冷白 / 暖白）
+  uniform float uTime;
+  uniform float uPixelRatio;
+  varying float vAlpha;
+  varying vec3  vTint;
+  void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    float tw = 0.35 + 0.65 * sin(uTime * (0.9 + aPhase * 3.4) + aPhase * 63.0);
+    vAlpha = aAlive * (0.40 + 0.60 * tw);
+    vTint = aTint;
+    // 透视缩放：远处星点自动变小（260 ≈ 天穹半径的参考距离）
+    gl_PointSize = aSize * uPixelRatio * (260.0 / max(-mv.z, 1.0));
+  }
+`;
+
+const STAR_POINTS_FRAG = /* glsl */ `
+  varying float vAlpha;
+  varying vec3  vTint;
+  void main() {
+    // 圆点（软边）：gl_PointCoord 是点精灵内的 0..1 坐标
+    vec2 p = gl_PointCoord - 0.5;
+    float d = length(p) * 2.0;
+    float core = 1.0 - smoothstep(0.16, 1.0, d);
+    float halo = (1.0 - smoothstep(0.0, 1.0, d)) * 0.22;
+    float a = (core + halo) * vAlpha;
+    if (a < 0.012) discard;
+    gl_FragColor = vec4(vTint, clamp(a, 0.0, 1.0));
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 可点击星点云：圆点 / 大小不一 / 独立闪烁 / 点中即灭（改 aAlive） */
+export function createStarPointsMaterial(pixelRatio = 1): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uTime,
+      uPixelRatio: { value: pixelRatio },
+    },
+    vertexShader: STAR_POINTS_VERT,
+    fragmentShader: STAR_POINTS_FRAG,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+}
+
 const EARTH_FRAG = /* glsl */ `
   varying vec3 vW;
   varying vec3 vObj;
   varying vec3 vN;
   uniform float uTime;
+  uniform float uSpin;      // 自转角速度（rad/s）—— JS 侧按同一常数累计圈数
 
   float hash31(vec3 p) {
     p = fract(p * 0.3183099 + vec3(0.11, 0.17, 0.13));
@@ -817,7 +845,7 @@ const EARTH_FRAG = /* glsl */ `
   void main() {
     vec3 sp = normalize(vObj);
     // —— 地表自转（把采样方向绕 y 轴转）——
-    vec3 gp = rotY(sp, uTime * 0.035);
+    vec3 gp = rotY(sp, uTime * uSpin);
     float land = fbm3(gp * 2.3 + 4.2);
     float isLand = smoothstep(0.47, 0.53, land);
     vec3 ocean = mix(vec3(0.020, 0.075, 0.190), vec3(0.05, 0.16, 0.32), fbm3(gp * 5.0));
@@ -826,7 +854,7 @@ const EARTH_FRAG = /* glsl */ `
     // 极冠（纬度按未旋转的球坐标 y）
     col = mix(col, vec3(0.86, 0.91, 0.96), smoothstep(0.74, 0.93, abs(sp.y)));
     // 云层（稍快自转 → 与地表有相对运动）
-    vec3 cp = rotY(sp, uTime * 0.05 + 1.7);
+    vec3 cp = rotY(sp, uTime * uSpin * 1.45 + 1.7);
     float cloud = smoothstep(0.52, 0.74, fbm3(cp * 3.6));
     col = mix(col, vec3(0.95, 0.96, 1.0), cloud * 0.55);
     // 昼夜（固定太阳方向）
@@ -840,10 +868,11 @@ const EARTH_FRAG = /* glsl */ `
   }
 `;
 
-/** 自转地球（体表 / 云层 / 极冠 / 昼夜 / 大气边缘；全部靠 uTime 驱动） */
-export function createEarthMaterial(): THREE.ShaderMaterial {
+/** 自转地球（体表 / 云层 / 极冠 / 昼夜 / 大气边缘；uTime × uSpin 驱动自转）
+ *  @param spin 自转角速度（rad/s）。默认 ≈ 0.45（约 14 秒一圈）。 */
+export function createEarthMaterial(spin = 0.45): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
-    uniforms: { uTime: uTime },
+    uniforms: { uTime: uTime, uSpin: { value: spin } },
     vertexShader: /* glsl */ `
       varying vec3 vW;
       varying vec3 vObj;
