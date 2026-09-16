@@ -301,45 +301,6 @@ const SCREEN_FRAG = /* glsl */ `
     return fract(p.x * p.y);
   }
 
-  // ---------------- 七段数码管（"数字抖动"屏） ----------------
-  float segDist(vec2 p, vec2 a, vec2 b) {
-    vec2 pa = p - a;
-    vec2 ba = b - a;
-    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 1e-5), 0.0, 1.0);
-    return length(pa - ba * h);
-  }
-  float digitBits(float d) {          // 段位掩码 a b c d e f g
-    if (d < 0.5) return 63.0;         // 0
-    if (d < 1.5) return 6.0;          // 1
-    if (d < 2.5) return 91.0;         // 2
-    if (d < 3.5) return 79.0;         // 3
-    if (d < 4.5) return 102.0;        // 4
-    if (d < 5.5) return 109.0;        // 5
-    if (d < 6.5) return 125.0;        // 6
-    if (d < 7.5) return 7.0;          // 7
-    if (d < 8.5) return 127.0;        // 8
-    return 111.0;                     // 9
-  }
-  float digitGlyph(vec2 p, float d) {
-    float bits = digitBits(d);
-    float on = 0.0;
-    // 段端点（格子局部坐标）
-    vec4 segs[7];
-    segs[0] = vec4(-0.26, 0.40,  0.26, 0.40);
-    segs[1] = vec4( 0.30, 0.32,  0.30, 0.05);
-    segs[2] = vec4( 0.30,-0.05,  0.30,-0.32);
-    segs[3] = vec4(-0.26,-0.40,  0.26,-0.40);
-    segs[4] = vec4(-0.30,-0.05, -0.30,-0.32);
-    segs[5] = vec4(-0.30, 0.32, -0.30, 0.05);
-    segs[6] = vec4(-0.22, 0.00,  0.22, 0.00);
-    for (int i = 0; i < 7; i++) {
-      float bit = mod(floor(bits / exp2(float(i))), 2.0);
-      float dist = segDist(p, segs[i].xy, segs[i].zw);
-      on = max(on, bit * (1.0 - smoothstep(0.035, 0.055, dist)));
-    }
-    return on;
-  }
-
   void main() {
     float t = uTime + uSeed;
     vec2 uv = vUv;
@@ -362,19 +323,26 @@ const SCREEN_FRAG = /* glsl */ `
       float blk = step(0.84, hash21(cellId));
       col += uColor * blk * 0.10;
     } else if (uMode < 1.5) {
-      // ---- 1：数字列（每格一个数码管数字，按行错频抖动）----
-      vec2 g = vec2(5.0, 3.0);
-      vec2 cell = floor(uv * g);
-      vec2 lp = (fract(uv * g) - 0.5) * vec2(0.92, 1.25);
-      // 每格独立换数频率（行/列错开），并有少量格子不显示 → 像在刷新的读数
-      float rate = 2.5 + hash21(cell + 3.7) * 5.0;
-      float stepId = floor(t * rate + hash21(cell + 9.1) * 3.0);
-      float v = hash21(cell + stepId * 1.37 + uSeed);
-      float d = floor(v * 10.0);
-      float on = digitGlyph(lp, d);
-      // 少数格子空着（间隔感）
-      on *= step(0.12, hash21(cell + 17.3));
-      col += uColor * on * 0.85;
+      // ---- 1：示波器（三路波形 + 标尺网格 + 扫描头）----
+      vec2 gg = abs(fract(uv * vec2(12.0, 6.0)) - 0.5);
+      float grid = (1.0 - smoothstep(0.03, 0.06, gg.x)) + (1.0 - smoothstep(0.03, 0.06, gg.y));
+      col += uColor * grid * 0.06;
+      float axis = 1.0 - smoothstep(0.004, 0.010, abs(uv.y - 0.5));
+      col += uColor * axis * 0.14;
+      // 三路不同频率 / 相位的信号
+      float wave = 0.0;
+      for (int i = 0; i < 3; i++) {
+        float fi = float(i);
+        float amp = 0.17 - fi * 0.045;
+        float yy = 0.5
+          + amp * sin((uv.x * (5.0 + fi * 3.0) + t * (0.85 + fi * 0.55)) * 3.1416)
+          + amp * 0.45 * sin((uv.x * (13.0 - fi * 4.0) - t * (1.35 + fi * 0.9)) * 3.1416);
+        wave += (1.0 - smoothstep(0.005, 0.014, abs(uv.y - yy))) * (0.95 - fi * 0.24);
+      }
+      col += uColor * wave;
+      // 扫描头：从左向右反复扫过一次，带一道窄辉光（示波器的"刷新"感）
+      float head = fract(t * 0.16);
+      col += uColor * exp(-pow((uv.x - head) * 16.0, 2.0)) * 0.30;
     } else if (uMode < 2.5) {
       // ---- 2：雷达（同心圆 + 旋转扫掠 + 目标点）----
       vec2 p = (uv - 0.5) * vec2(1.0, 1.6);
@@ -399,13 +367,21 @@ const SCREEN_FRAG = /* glsl */ `
         col += uColor * blip;
       }
     } else {
-      // ---- 3：柱状图（跳动条 + 峰值线）----
-      float bars = 12.0;
-      float colId = floor(uv.x * bars);
-      float h = fract(sin(t * (0.6 + hash21(vec2(colId, 2.2)) * 1.4) + colId * 1.7) * 43758.5453);
-      h = 0.12 + 0.78 * abs(h);
-      float bar = step(uv.y, h) * step(uv.x - colId / bars, (colId + 0.7) / bars);
-      col += uColor * bar * 0.35 * smoothstep(0.0, 0.1, uv.y);
+      // ---- 3：频谱柱 + 平滑包络线（像均衡器，不再是无意义数字）----
+      float barsN = 12.0;
+      float ci = floor(uv.x * barsN);
+      float f = fract(uv.x * barsN);
+      #define BARH(id) (0.12 + 0.78 * abs(fract(sin(t * (0.6 + hash21(vec2(id, 2.2)) * 1.4) + id * 1.7) * 43758.5453)))
+      float h0 = BARH(ci);
+      float h1 = BARH(ci + 1.0);
+      float bar = step(uv.y, h0) * step(f, 0.72);
+      col += uColor * bar * 0.26 * smoothstep(0.0, 0.08, uv.y);
+      // 包络线（把柱顶连起来）
+      float hv = mix(h0, h1, smoothstep(0.0, 1.0, f));
+      col += uColor * (1.0 - smoothstep(0.004, 0.012, abs(uv.y - hv))) * 0.55;
+      // 峰值保持（一根慢慢下落的横线）
+      float peak = 0.55 + 0.42 * abs(sin(t * 0.23 + uSeed));
+      col += uColor * (1.0 - smoothstep(0.002, 0.006, abs(uv.y - peak))) * 0.35;
     }
 
     gl_FragColor = vec4(col, 1.0);

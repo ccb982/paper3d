@@ -531,7 +531,7 @@ export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim)
   // ---- 屏幕墙：3 块大屏（不是 7 块小板）—— 大面、留白、单点发光 ----
   const screenPanel = extrudeProfile(chamferRectProfile(4.9, 3.1, 0.22), 0.36);
   const screenFace = new THREE.PlaneGeometry(4.3, 2.55);
-  // ★ 三块屏各一种动态内容：警戒雷达 / 数字抖动 / 柱状图（用户要的"数的抖动"）
+  // ★ 三块屏各一种动态内容：警戒雷达 / 示波器波形 / 频谱柱+包络（都不带无意义数字）
   const screenModes: THREE.Material[] = [
     createScreenMaterial(0x76d2ea, 0.0, 2),
     createScreenMaterial(0x8fe0ff, 0.0, 1),
@@ -552,13 +552,13 @@ export function decorateControl(add: AddFn, mats: DecorMats, anim: RegisterAnim)
   const deskSeat = extrudeProfile(chamferRectProfile(0.82, 0.15, 0.05), 0.82);
   const deskBack = extrudeProfile(chamferRectProfile(0.82, 0.85, 0.09), 0.18);
   const deskScreen = new THREE.PlaneGeometry(1.8, 1.0);
-  const deskDigits = createScreenMaterial(0x8fe0ff, 4.2, 1);   // 工位 = 数字抖动读数
+  const deskWave = createScreenMaterial(0x8fe0ff, 4.2, 1);     // 工位 = 示波器波形
   const seatPost = new THREE.CylinderGeometry(0.06, 0.06, 0.70, 8, 1);
   for (const s of desks) {
     place(add, deskBody, mats.furn, s, 0, 0.48, 0);
     place(add, deskTop, mats.furn, s, 0, 1.02, 0.05);
     // 工位朝向：faceOut=false → 局部 +z 指向屏幕墙；-oz 一侧是操作者
-    place(add, deskScreen, deskDigits, s, 0, 1.56, 0.34, Math.PI, -0.46);
+    place(add, deskScreen, deskWave, s, 0, 1.56, 0.34, Math.PI, -0.46);
     place(add, deskSeat, mats.furn, s, 0, 0.82, -1.15);
     place(add, deskBack, mats.furn, s, 0, 1.26, -1.52);
     place(add, seatPost, mats.struct, s, 0, 0.34, -1.15);
@@ -703,7 +703,7 @@ export function decorateWorkshop(add: AddFn, mats: DecorMats, anim: RegisterAnim
   for (let i = 0; i < 4; i++) {
     add(tool, mats.struct, -6.2 + i * 0.95, 2.55, zb + 0.34, Math.PI / 2, 0, 0);
   }
-  // 挂板右侧：工序读数屏（数字抖动）+ 下方流水灯
+  // 挂板右侧：工序波形屏（示波器）+ 下方流水灯
   add(new THREE.PlaneGeometry(1.5, 1.1), createScreenMaterial(0x8fe0ff, 1.7, 1), -2.55, 2.6, zb + 0.28);
   flowBar(add, mats, -4.8, 1.18, zb + 0.30, 4.4);
 
@@ -808,7 +808,7 @@ export function decorateCockpit(add: AddFn, mats: DecorMats, anim: RegisterAnim)
   const body = extrudeProfile(trapezoidProfile(3.2, 2.8, 0.90), 1.6);
   const top = extrudeProfile(chamferRectProfile(3.6, 0.16, 0.09), 1.9);
   const scr = new THREE.PlaneGeometry(2.5, 1.10);
-  const scrMat = createScreenMaterial(0xffb060, 2.3, 1);   // 主屏 = 数字抖动读表
+  const scrMat = createScreenMaterial(0xffb060, 2.3, 1);   // 主屏 = 示波器波形（飞行员看信号，不看数字）
   const seat = extrudeProfile(chamferRectProfile(0.95, 0.16, 0.05), 0.95);
   const back = extrudeProfile(chamferRectProfile(0.95, 1.00, 0.10), 0.20);
   const postGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.44, 8, 1);
