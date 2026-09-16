@@ -31,9 +31,9 @@
     ]
   },
   "rooms": [
-    { "id": "control", "name": "指挥室", "kind": "placeholder", "label": "施工中" },
-    { "id": "storage", "name": "仓库", "kind": "placeholder", "label": "施工中" },
-    { "id": "workshop", "name": "加工站", "kind": "placeholder", "label": "施工中" }
+    { "id": "control", "name": "指挥室", "kind": "placeholder", "label": "航行调度中枢" },
+    { "id": "storage", "name": "仓库", "kind": "placeholder", "label": "物资仓储区" },
+    { "id": "workshop", "name": "加工站", "kind": "placeholder", "label": "合成与加工" }
   ],
   "shipRoom": {
     "id": "cockpit",

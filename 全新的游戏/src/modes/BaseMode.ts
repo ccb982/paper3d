@@ -26,6 +26,7 @@ import { ShipUIManager } from '../ui/base/ShipUIManager';
 import { GachaOverlay } from '../ui/base/GachaOverlay';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { BaseScene } from '../ui/base/BaseScene';
+import { RoomPostFx } from '../services/render/RoomPostFx';
 import { MainButtons, type ButtonId } from '../ui/base/MainButtons';
 import { DialogueView } from '../ui/shared/DialogueView';
 import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
@@ -68,6 +69,8 @@ export class BaseMode implements IGameMode {
   // ★ 基地内部 3D 剖切空间（固定侧视；返回后的界面）与主按钮
   private baseScene: BaseScene | null = null;
   private mainButtons: MainButtons | null = null;
+  /** ★ 房间屏幕叠加（暗角；在场景直渲之后叠加） */
+  private roomFx: RoomPostFx | null = null;
   /** ★ 出击槽变动订阅（基地内换装：装备贴片/无人机即时刷新） */
   private deploymentUnsub: (() => void) | null = null;
 
@@ -116,6 +119,8 @@ export class BaseMode implements IGameMode {
       renderer: ctx.renderer,
     });
     this.baseScene.setupCamera(ctx.camera!);
+    // ★ 房间屏幕叠加（暗角；在场景渲染之后叠一层，不改色彩管线/深度关系）
+    this.roomFx = new RoomPostFx();
     // ★ 加工台入口（2026-09-12 用户定调）：走到"加工站"房间按 F（原编队面板入口已移除）
     this.baseScene.onCraftStation(() => this.uiManager.openCrafting('ship'));
     // ★ UI 遮挡：抽卡页/加工台/背包等任何覆盖层打开时，不绘制加工站提示且 F 不响应
@@ -194,7 +199,9 @@ export class BaseMode implements IGameMode {
     // ③ 销毁 UI 层
     this.uiManager?.dispose();
 
-    // ④ 销毁基地 3D 空间
+    // ④ 销毁基地 3D 空间（含暗角叠加层）
+    this.roomFx?.dispose();
+    this.roomFx = null;
     this.baseScene?.dispose();
     this.baseScene = null;
 
@@ -232,7 +239,9 @@ export class BaseMode implements IGameMode {
 
   render(): void {
     if (this.scene && this.camera && this.renderer) {
+      // ★ 场景照旧直渲（材质色彩空间 / 立绘深度关系零改动），随后叠暗角
       this.renderer.render(this.scene, this.camera);
+      this.roomFx?.render(this.renderer);
       // 主页面按钮覆盖层（不清除背景；autoClear 配对在组件内部）
       this.mainButtons?.render(this.renderer);
     }

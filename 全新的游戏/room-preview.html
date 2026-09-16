@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>房间预览（临时调试页）</title>
+  <style>html, body { margin: 0; height: 100%; overflow: hidden; background: #14171b; }</style>
+</head>
+<body>
+  <script type="module">
+    import * as THREE from 'three';
+    import { BaseScene } from '/src/ui/base/BaseScene.ts';
+    import { RoomPostFx } from '/src/services/render/RoomPostFx.ts';
+    import baseRooms from '/src/config/baseRooms.json';
+
+    const params = new URLSearchParams(location.search);
+    const which = params.get('room') ?? 'base';
+    const dist = Number(params.get('dist') ?? 24);
+    const yaw = Number(params.get('yaw') ?? 0);
+    const host = params.get('host') ?? '';
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(1);
+    renderer.setClearColor(0x14171b, 1);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    document.body.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 500);
+
+    const rooms = which === 'cockpit' ? [baseRooms.shipRoom] : baseRooms.rooms;
+    const roomScene = new BaseScene(scene, { rooms, renderer });
+    roomScene.setupCamera(camera);
+
+    // 取景：绕房间中心偏转 + 调整距离（预览用，不影响游戏）
+    const cx = Number(params.get('cx') ?? 0);
+    const cz = Number(params.get('cz') ?? 0);
+    const cy = Number(params.get('cy') ?? 1.6);
+    camera.position.set(
+      cx + Math.sin(yaw) * dist,
+      cy + 4.0 + dist * 0.18,
+      cz + Math.cos(yaw) * dist,
+    );
+    camera.lookAt(cx, cy, cz);
+    camera.updateProjectionMatrix();
+
+    const fx = new RoomPostFx();
+
+    let last = performance.now();
+    function frame(now) {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      roomScene.update(dt);
+      // 预览页自己摆机位（update 里相机跟随会覆盖 → 再摆回来）
+      camera.position.set(
+        cx + Math.sin(yaw) * dist,
+        cy + 4.0 + dist * 0.18,
+        cz + Math.cos(yaw) * dist,
+      );
+      camera.lookAt(cx, cy, cz);
+      renderer.render(scene, camera);
+      fx.render(renderer);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+    window.__roomReady = true;
+    void host;
+  </script>
+</body>
+</html>

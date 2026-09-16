@@ -32,6 +32,7 @@ import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
 import { DroneEntity } from '../entity/DroneEntity';
 import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
+import { RoomPostFx } from '../services/render/RoomPostFx';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import { createButton } from '../ui/components/Button';
@@ -386,6 +387,8 @@ export class WorldMode implements IGameMode {
   private shipInterior: BaseScene | null = null;
   /** ★ 舰内独立场景（不画世界：彻底隔离粗块/地形/雾/天空） */
   private interiorScene: THREE.Scene | null = null;
+  /** ★ 舰内房间屏幕叠加（暗角；在场景直渲之后叠加） */
+  private interiorFx: RoomPostFx | null = null;
   /** ★ 舰内操作按钮条（下船/起飞/返回罗德岛号/加工台/背包） */
   /** ★ 加工台覆盖层（舰内按钮打开；懒建）与共享图标服务 */
   private craftingOverlay: CraftingOverlay | null = null;
@@ -1547,7 +1550,9 @@ export class WorldMode implements IGameMode {
     this.renderer.setRenderTarget(null);
     // ★ 舰内：只渲染独立房间场景（世界粗块/地形/天空/雾全部不参与）
     if (this.phase === 'interior' && this.interiorScene) {
+      // ★ 场景照旧直渲（材质色彩空间 / 立绘深度关系零改动），随后叠暗角
       this.renderer.render(this.interiorScene, this.camera); // 场景自带背景色
+      this.interiorFx?.render(this.renderer);
       return;
     }
     // ★ 地形光照视锥裁剪：只喂视野锥内 chunk 的昼夜 uniform（视锥外冻结，进视野即刷新）
@@ -1577,6 +1582,8 @@ export class WorldMode implements IGameMode {
     this.craftingOverlay = null;
     this.shipInterior?.dispose();
     this.shipInterior = null;
+    this.interiorFx?.dispose();
+    this.interiorFx = null;
     this.interiorScene = null;
     // ---- 事件 / 对话（对话视图销毁 + NPC 实体回收） ----
     this.dialogue?.close();
@@ -3493,6 +3500,8 @@ export class WorldMode implements IGameMode {
     }
     this.shipInterior = interior;
     this.phase = 'interior';
+    // ★ 舰内屏幕叠加（暗角）；随舰内房间一起创建 / 销毁
+    this.interiorFx = new RoomPostFx();
     this.player.controlLocked = true;
     this.player.visible = false;
     this.worldUIManager?.setCombatHudVisible(false);
@@ -3617,6 +3626,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.closePanel('interior-return');
     this.shipInterior.dispose();
     this.shipInterior = null;
+    this.interiorFx?.dispose();
+    this.interiorFx = null;
     this.interiorScene = null; // 场景随房间一并废弃（下次重建）
     this.worldUIManager?.setAssaultBanner(null);
     // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）

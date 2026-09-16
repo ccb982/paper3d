@@ -61,8 +61,9 @@ let currentEnv: 'ship' | 'world' = 'ship';
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
 
-/** 舰船内部固定背景色（中性灰；2026-09-14 用户定调：基地区背景改为灰色，不随昼夜变化） */
-const SHIP_BG = 0x808080;
+/** 舰船内部固定背景色（中性深石墨；2026-09-16 极简改版：灰底换成深底，
+ *  剖切房间在暗背景上"亮起来"，GTAO/暗角的对比也更干净） */
+const SHIP_BG = 0x14171b;
 
 /**
  * ★ 每帧刷新背景清屏色 + 雾色（按当前模式区分）：

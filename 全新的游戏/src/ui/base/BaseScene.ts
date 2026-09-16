@@ -163,13 +163,14 @@ export class BaseScene {
     this.root = new THREE.Group();
     scene.add(this.root);
 
-    // 环境光（冷顶光 + 暖补光 + 相机侧正面补光；2026-09-13 提亮：基地不再灰暗）
-    const hemi = new THREE.HemisphereLight(0xbcd0e0, 0x2a3540, 1.15);
-    const key = new THREE.DirectionalLight(0xe4eef8, 1.35);
+    // 环境光（冷顶光 + 极淡暖补 + 相机侧正面补光；2026-09-16 极简版：
+    //   大面积表面由 RoomSurfaceMaterial 自己烘焙光照，这里只负责角色/NPC/绿植等实体）
+    const hemi = new THREE.HemisphereLight(0xbcd0e0, 0x2a3540, 0.95);
+    const key = new THREE.DirectionalLight(0xe4eef8, 0.85);
     key.position.set(-6, 10, 8);
-    const warm = new THREE.DirectionalLight(0xffd9a8, 0.5);
+    const warm = new THREE.DirectionalLight(0xffd9a8, 0.16);
     warm.position.set(7, 4, 6);
-    const fill = new THREE.DirectionalLight(0xc8d8e6, 0.5);
+    const fill = new THREE.DirectionalLight(0xc8d8e6, 0.28);
     fill.position.set(0, 6, 18);
     this.root.add(hemi, key, warm, fill);
 
@@ -206,14 +207,14 @@ export class BaseScene {
       this.syncVehicle();
     }
 
-    // 加工站提示条（靠近加工站房间时显示）
+    // 交互站提示条（靠近站点时显示；极简配色：深底 + 发丝边 + 冷色文本）
     this.promptEl = document.createElement('div');
     this.promptEl.style.cssText =
       'position:fixed;left:50%;bottom:16%;transform:translateX(-50%);display:none;'
-      + 'color:#ffe9b0;background:rgba(20,14,4,0.88);border:1px solid rgba(216,166,58,0.7);'
-      + 'padding:6px 14px;border-radius:8px;font:14px "Microsoft YaHei",sans-serif;'
-      + 'z-index:600;pointer-events:none;white-space:pre';
-    this.promptEl.textContent = 'F';
+      + 'color:#e8eef4;background:rgba(12,15,19,0.82);border:1px solid rgba(150,185,210,0.35);'
+      + 'padding:6px 16px;border-radius:6px;font:14px "Microsoft YaHei",sans-serif;'
+      + 'letter-spacing:0.06em;z-index:600;pointer-events:none;white-space:pre';
+    this.promptEl.textContent = this.promptKey;
     document.body.appendChild(this.promptEl);
 
     window.addEventListener('keydown', this.onKeyDown);
@@ -372,6 +373,7 @@ export class BaseScene {
   /** 每帧：角色行走 → 帧动画 → 相机跟随/缩放（BaseMode.update 调用） */
   update(dt: number): void {
     this.t += dt;
+    updateRoomTime(this.t); // ★ 驱动全部房间 shader（灯带呼吸 / 屏幕数据块 / 光圈脉冲）
     this.updateInput(dt);
     if (this.anim && this.quad) {
       if (this.moving !== this.wasMoving) {
@@ -624,25 +626,27 @@ export class BaseScene {
     });
   }
 
-  /** 名牌贴片：Canvas 文本 → 纹理 */
+  /** 名牌贴片：Canvas 文本 → 纹理（极简版：无框、无底、只留一条发丝线 + 两级文字） */
   private makeNameplate(name: string, label: string): THREE.MeshBasicMaterial {
     const cv = document.createElement('canvas');
     cv.width = 512;
     cv.height = 144;
     const g = cv.getContext('2d')!;
-    g.fillStyle = 'rgba(8,16,22,0.85)';
-    g.fillRect(0, 0, cv.width, cv.height);
-    g.strokeStyle = 'rgba(120,220,255,0.45)';
-    g.lineWidth = 4;
-    g.strokeRect(2, 2, cv.width - 4, cv.height - 4);
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillStyle = '#dcecf6';
-    g.font = 'bold 56px "Microsoft YaHei", sans-serif';
-    g.fillText(name, cv.width / 2, 56);
-    g.fillStyle = 'rgba(150,190,210,0.75)';
-    g.font = '30px "Microsoft YaHei", sans-serif';
-    g.fillText(label, cv.width / 2, 106);
+    // 顶置发丝线（代替旧版的整圈描边方框）
+    g.strokeStyle = 'rgba(168,196,214,0.55)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(cv.width * 0.18, 30);
+    g.lineTo(cv.width * 0.82, 30);
+    g.stroke();
+    g.fillStyle = '#e6edf3';
+    g.font = 'bold 52px "Microsoft YaHei", sans-serif';
+    g.fillText(name, cv.width / 2, 74);
+    g.fillStyle = 'rgba(158,186,204,0.80)';
+    g.font = '28px "Microsoft YaHei", sans-serif';
+    g.fillText(label, cv.width / 2, 116);
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     return new THREE.MeshBasicMaterial({ map: tex, transparent: true });
@@ -755,8 +759,8 @@ export class BaseScene {
         this.promptShown = showPrompt;
         this.promptEl.style.display = showPrompt ? 'block' : 'none';
       }
-      if (best && this.promptEl.textContent !== `F · ${best.label}`) {
-        this.promptEl.textContent = `F · ${best.label}`;
+      if (best && this.promptEl.textContent !== `${this.promptKey} · ${best.label}`) {
+        this.promptEl.textContent = `${this.promptKey} · ${best.label}`;
       }
     } else {
       this.wantJump = false;
