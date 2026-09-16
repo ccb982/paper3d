@@ -5,19 +5,31 @@
 // 单帧成本）。数据面 = 3×3 邻域 chunk 的 heights/blockTypes 拷贝（每份 ~135KB，
 // memcpy 微秒级）→ postMessage(transfer) → Worker 纯计算 → 零拷贝回传。
 //
+// ★ 坑洞优先 / 水体解耦（2026-09-16）：本池【不再求解水体】——调用方（ChunkManager
+//   .patchRebuildChunk）恒传 waterMode:'none'，几何只出 top/wall/物理分区。
+//   水面转由 ./WaterSolve 的专用单 worker 异步慢算，算完只换水网格。
+//   背景：水体求解（initSolve/updateSolve + 5cm 边界探针点阵采样）原先与几何串行
+//   在同一调用内，打「有水 chunk」时把坑洞整体拖慢；解耦后实测水体不再卡。
+//
 // ★ 多 Worker（2026-09-08）：WORKER_COUNT=3，**选排队最短的 worker 投递** →
 //   · 不同 chunk 的破坏重建并行（3 核分摊）；同 chunk 已被 flushPatchRebuilds
 //     节流串行化，不会并发双算同一 chunk。
 //   · 按 pending 队列长度贪心分发（新任务永远进最闲的 worker）——为「多个地形
 //     破坏按序进入各自 worker」的最小等待策略；worker 各自内串行处理。
-//   · 无 hash 亲缘：同一 chunk 可能换 worker；其水体增量状态（WaterSurface
-//     探针/分量）在异 worker 上会退化为全量重解（确定性不变，仅略慢），可接受。
+//   · ★ 亲缘性澄清（2026-09-16，修正旧注释的误述）：pickLeastBusy 用
+//     `cost < bestCost`【严格小于】比较，平局时保留【最小编号】→ 单发（最常见
+//     场景）恒落 worker#0，基座缓存（patchSourceCache / incrementalDropCache，
+//     均为 worker 模块级）命中率很好；只有并发多 chunk 重建时才散到 #1/#2，
+//     此时同 chunk【先后】落异 worker 会重跑一次基座。确定性不变，仅略慢。
+//     旧注释写「无 hash 亲缘…可接受」，容易让人误判命中率，勿信。
+//     ★ 水体增量状态（WaterSurface 探针/分量）自 2026-09-16 起已不在本池持有。
 //
 // 流程：
-//   compute({seed, cx, cz, mask}, readChunk)
+//   compute({seed, cx, cz, mask, waterMode}, readChunk)
 //     ├─ 主线程：拷 3×3 邻域数组（不转移活数组所有权）
-//     ├─ 归属 worker 可用 → postMessage(transfer) → resolve(几何字节)
-//     ├─ 归属 worker 断裂/不存在 → 主线程同步 computeTableGeometry（同函数同字节）
+//     ├─ 选中最闲 worker（pickLeastBusy，非固定归属）→ postMessage(transfer)
+//     │    → worker 内 computeTableGeometry → resolve(几何字节；water 可能为 null)
+//     ├─ worker 断裂/不存在 → 主线程同步 computeTableGeometry（同函数同字节）
 //     └─ 计算失败 → resolve(null)（调用方走既有 requestStandardBake 兜底）
 //
 // ★ 字节一致由构造保证：Worker 用 makeChunkSource(拷贝闭包) + refineChunkSource
@@ -129,8 +141,12 @@ class TerrainPatchService {
 
   /**
    * 计算带补丁层数表的 chunk 几何（并行：不同 chunk 由不同 worker 处理）。
-   * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表（水体重建增量）；缺省 = 全量
-   * @returns 几何字节；归属 Worker 失败 → resolve(null)，调用方走标准烘焙兜底。
+   * @param req.dirty 本次 dig 直接挖到的世界 4m 块 key 列表；缺省 = 全量。
+   *   ★ 2026-09-16：waterMode:'none' 时几何侧【不消费】dirty（不求解水体）；
+   *     dirty 由调用方（ChunkManager）另行转发给 WaterSolve 做异步水体增量。
+   *     waterMode:'full'（首建）时仍按原语义传给 buildWaterSurface。
+   * @returns 几何字节（waterMode:'none' 时 result.water === null）；
+   *   所用 Worker 断裂/计算失败 → resolve(null)，调用方走标准烘焙兜底。
    */
   compute(
     req: {
