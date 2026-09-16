@@ -106,6 +106,9 @@ export interface SwarmHooks {
   nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
   onAgentKilled?: (mobIndex: number, x: number, y: number, z: number) => void;
+  /** ★ 代理被远距回收（2026-09-16 击杀统计）：**不算击杀**，模式层据此扣减当日配额。
+   *  与 onAgentKilled 严格互斥：回收路径只发本回调，不发 onAgentKilled。 */
+  onAgentRecalled?: (count: number) => void;
 }
 
 const _sep = { x: 0, z: 0 };
@@ -177,6 +180,8 @@ export class SwarmSystem {
     const now = performance.now() / 1000;
 
     let promotes = 0;
+    /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
+    let recalled = 0;
     const nearR2 = SWARM.L3_RADIUS * SWARM.L3_RADIUS;
     const l2R2 = SWARM.L2_RADIUS * SWARM.L2_RADIUS;
     const l1R2 = SWARM.L1_RADIUS * SWARM.L1_RADIUS;
@@ -209,7 +214,10 @@ export class SwarmSystem {
       const dFocus2 = dpx * dpx + dpz * dpz;
       const dShip2 = dsx * dsx + dsz * dsz;
       if (Math.min(dFocus2, dShip2) > l1R2) {
+        // ★ 2026-09-16：远距清除 = **不算击杀**（只回收，不报 onAgentKilled）；
+        //   计入 recalled，帧末统一回调 → 模式层扣减当日敌人配额
         this.removeAgent(i);
+        recalled++;
         continue;
       }
       // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
@@ -243,6 +251,8 @@ export class SwarmSystem {
       }
     }
     const t2 = performance.now();
+    // ★ 远距回收统一回调（不算击杀；模式层据此扣减当日配额）
+    if (recalled > 0) hooks.onAgentRecalled?.(recalled);
     entityPerf.swarmBrain += t2 - t1;
     entityPerf.swarmAgents = this.pool.count;
     void t0;

@@ -22,6 +22,7 @@ import { PlayerHud } from '../../services/ui/PlayerHud';
 import { Crosshair } from '../../services/ui/Crosshair';
 import { AmmoPanel } from '../../services/ui/AmmoPanel';
 import { AllyHud } from '../../services/ui/AllyHud';
+import { EnemyKillHud } from '../../services/ui/EnemyKillHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
@@ -79,8 +80,10 @@ export class WorldUIManager extends BaseInteractionUI {
   private playerStatsProvider: (() => FinalStats) | null = null;
   /** ★ 航行期停靠按钮 */
   private dockBtn: HTMLButtonElement | null = null;
-  /** ★ 舰船状态条（HP/油量；航行与探索均显示） */
-  private shipStatusEl: HTMLDivElement | null = null;
+  /** ★ 顶部状态条：左 = 敌人数量（击杀/当天总数），右 = 舰船生命（红字纯数字）
+   *  素材《敌人数量和舰船生命》（644×68）等比缩到 46px 高、水平居中于屏幕最顶部。
+   *  旧版"舰船 HP/油量"单行文本已废弃；油量改在舰内面板（ShipPanels）查看。 */
+  private enemyKillHud = new EnemyKillHud();
   /** ★ 舰船受击报警：顶部大横幅 + 全屏红晕（脉冲闪烁；剩余秒数） */
   private shipAlertEl: HTMLDivElement | null = null;
   private shipVignetteEl: HTMLDivElement | null = null;
@@ -297,27 +300,19 @@ export class WorldUIManager extends BaseInteractionUI {
     if (this.dockBtn) this.dockBtn.style.display = v ? 'block' : 'none';
   }
 
-  /** ★ 舰船状态条（顶部居中：HP + 油量；sailing=航行中标注） */
-  setShipStatus(hp: number, maxHp: number, fuel: number, fuelMax: number, sailing: boolean): void {
-    if (!this.shipStatusEl) {
-      const el = document.createElement('div');
-      el.style.cssText = [
-        'position:fixed', 'top:10px', 'left:50%', 'transform:translateX(-50%)',
-        'z-index:60', 'pointer-events:none', 'text-align:center',
-        'font-size:14px', 'font-weight:bold', 'letter-spacing:1px',
-        'color:#cfe8ff', 'text-shadow:0 1px 3px #000,0 0 8px rgba(60,120,200,0.4)',
-      ].join(';');
-      document.body.appendChild(el);
-      this.shipStatusEl = el;
-    }
-    const hpRatio = maxHp > 0 ? hp / maxHp : 0;
-    const alert = this.shipAlertTimer > 0;
-    this.shipStatusEl.style.color = alert ? '#ff5b5b' : hpRatio < 0.3 ? '#ff8a8a' : '#cfe8ff';
-    this.shipStatusEl.style.textShadow = alert
-      ? '0 1px 3px #000, 0 0 14px rgba(255,60,60,0.9)'
-      : '0 1px 3px #000, 0 0 8px rgba(60,120,200,0.4)';
-    this.shipStatusEl.textContent =
-      `${alert ? '⚠ ' : ''}舰船 ${Math.ceil(hp)}/${Math.ceil(maxHp)}　油量 ${Math.ceil(fuel)}/${Math.ceil(fuelMax)}${sailing ? '　· 航行中' : ''}`;
+  /** ★ 顶部状态条刷新（左：敌人数量 击杀/当天总数；右：舰船生命红字纯数字）
+   *  —— 用户定调 2026-09-16：素材图放在屏幕最顶部；舰船生命**不要血条**、只显示数字，
+   *     ≥90% 白 / ≥30% 黄 / 更低红橙。旧版"舰船 HP/油量"单行文本已废弃（油量仍由独立渠道展示）。 */
+  setShipStatus(
+    hp: number, maxHp: number,
+    kills: number, total: number,
+  ): void {
+    this.enemyKillHud.update(kills, total, hp, maxHp);
+  }
+
+  /** ★ 顶部状态条显隐（舰内/结算时可收起） */
+  setShipStatusVisible(v: boolean): void {
+    this.enemyKillHud.setVisible(v);
   }
 
   /** ★ 舰船受击：明显 UI 报警（顶部大横幅 + 全屏红晕脉冲 + 状态条闪红）——
@@ -848,8 +843,8 @@ export class WorldUIManager extends BaseInteractionUI {
     // ★ 舰船相关 DOM（停靠按钮/状态条/复活倒计时）跨局防残留
     this.dockBtn?.remove();
     this.dockBtn = null;
-    this.shipStatusEl?.remove();
-    this.shipStatusEl = null;
+    // ★ 顶部状态条（敌人数量 / 舰船生命）跨局防残留
+    this.enemyKillHud.dispose();
     // ★ 舰船受击报警 DOM（横幅 + 红晕）跨局防残留
     this.shipAlertEl?.remove();
     this.shipAlertEl = null;

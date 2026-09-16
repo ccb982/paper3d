@@ -320,6 +320,12 @@ export abstract class EntityBase {
   /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
   dead = false;
 
+  /** ★ 死亡性质（2026-09-16 击杀统计）：true = 真击杀（计入当天击杀数）；
+   *  false = 非战斗移除（远距回收/超时清理/池回收）→ **不算击杀**。
+   *  默认 true（走 onTakeDamage 致死的是真击杀）；远距清理路径置 false 后再 dispose。
+   *  注意：这只影响统计口径，不影响掉落/遗物等既有管线。 */
+  killedByCombat = true;
+
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
   onTakeDamage(dmg: number, source: EntityBase | null): void {
     if (this.hp <= 0) return;

@@ -13,6 +13,7 @@ import {
   type CharacterBaseOptions,
 } from './CharacterBase';
 import type { EntityManager } from './EntityManager';
+import type { EntityBase } from './EntityBase';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -21,6 +22,7 @@ import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
 import { RasterMap } from '../services/map/RasterMap';
+import { eventBus } from '../core/EventBus';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -375,9 +377,26 @@ export class EnemyBase extends CharacterBase {
     }
   }
 
-  /** 销毁：同时从 AI 系统注销 */
+  /** 销毁：同时从 AI 系统注销；★ 真击杀在此上报当天击杀统计 */
   override dispose(): void {
+    // ★ 击杀统计（2026-09-16）：只有"真击杀"才计入；
+    //   远距回收/非战斗清理路径会先把 killedByCombat 置 false（见 WorldMode）
+    if (this.killedByCombat && !this.deathReported) {
+      this.deathReported = true;
+      eventBus.emit('enemy_killed', { source: this.deathSource, x: this.entity.position.x, z: this.entity.position.z });
+    }
     aiSystem.unregister(this);
     super.dispose();
+  }
+
+  /** ★ 防重复上报（dispose 可能被多路径触发） */
+  private deathReported = false;
+  /** ★ 致死来源（onDeath 记下，供统计区分玩家/友军/环境） */
+  private deathSource: EntityBase | null = null;
+
+  /** ★ 致死钩子：记下来源供统计，再走默认销毁 */
+  override onDeath(source: EntityBase | null): void {
+    this.deathSource = source;
+    super.onDeath(source);
   }
 }

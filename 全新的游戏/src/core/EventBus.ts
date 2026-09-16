@@ -60,6 +60,14 @@ export interface EventMap {
   // ★ 存档基础属性被永久改写（「训练类」消耗品，如糖果加上限）；
   //   WorldMode 订阅 → 重算玩家实体；BaseMode 订阅 → 刷新属性面板
   'player_stats_changed': { reason: string };
+  // ★ 敌人真击杀（2026-09-16 击杀统计）：**仅统计口径**，不影响掉落/遗物管线。
+  //   由 EnemyBase.dispose 发出（killedByCombat=true 时）；远距回收不触发本事件。
+  //   代理路径由 WorldMode.onAgentKilled 直接记数（不发本事件，避免双计）。
+  'enemy_killed': {
+    source: import('../entity/EntityBase').EntityBase | null;
+    x: number;
+    z: number;
+  };
 }
 
 export type EventKey = keyof EventMap;

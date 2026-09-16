@@ -1,0 +1,4 @@
+﻿root _* files: 0
+
+scripts _*: 1
+_tsc_check.cjs

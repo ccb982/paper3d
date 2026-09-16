@@ -63,4 +63,12 @@ export const VISITORS: VisitorDef[] = [
     moveSpeed: 3.1,
     model: { url: VISITOR_MODEL_URL, height: 3.3 },
   },
+  {
+    id: 'puruiyinshua',
+    name: '普瑞印刷',
+    assetUrl: '/characters/protagonist/普瑞印刷.ftx3.gz',
+    dialogue: 'visitor_puruiyinshua',
+    moveSpeed: 3.0,
+    model: { url: VISITOR_MODEL_URL, height: 3.2 },
+  },
 ];

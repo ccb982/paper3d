@@ -55,6 +55,10 @@ import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
+// ★ 击杀统计 + 每日敌人配额（2026-09-16）：远距清除不算击杀，且从配额里扣减
+import {
+  ensureDayQuota, resetDayQuota, recordKill, recordRecall, queryKillProgress,
+} from '../systems/combat/KillCounter';
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { NpcEntity } from '../entity/NpcEntity';
@@ -343,6 +347,10 @@ export class WorldMode implements IGameMode {
     entityCount: 0,
     promote: () => {},
     melee: () => {},
+    // ★ 真击杀（代理侧）：记当日击杀数（掉落/遗物由 onAgentKilled 单独结算）
+    onAgentKilled: () => { recordKill(this.session); },
+    // ★ 远距回收（不算击杀）：从当日配额里扣减（玩家再也杀不到这些了）
+    onAgentRecalled: (n) => { recordRecall(this.session, n); },
   };
   /** ★ 祖宗嘲讽查询复用对象（蜂群每帧多次调用 → 零分配） */
   private _tauntScratch = { x: 0, z: 0 };
@@ -493,6 +501,8 @@ export class WorldMode implements IGameMode {
   private damageUnsub?: () => void;
   /** ★ killed 事件订阅：杂兵死亡 → 从 enemies 列表移除 */
   private killedUnsub?: () => void;
+  /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
+  private enemyKilledUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁） */
   private drones: DroneEntity[] = [];
@@ -814,6 +824,13 @@ export class WorldMode implements IGameMode {
     };
     this.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
+    // ★ 当天敌人配额（2026-09-16）：新的一天先清零再按当日威胁重算；
+    //   同日多次出击则沿用已有进度（跨出击累计，配额不重置）。
+    if (ctx.session.dayProgress.everDeparted !== ctx.session.meta.day) {
+      resetDayQuota(ctx.session);
+      ctx.session.dayProgress.everDeparted = ctx.session.meta.day;
+    }
+    if (this.threat) ensureDayQuota(ctx.session, this.threat);
     // ★ 遗物局内周期补给（祖宗发射器等）：每间隔补 1，多件缩短间隔
     this.timedRelics = relicTimedFor(ctx.session, RELIC_ITEM_CONFIG)
       .map((g) => ({ itemId: g.itemId, interval: g.interval, timer: 0 }));
@@ -1013,6 +1030,11 @@ export class WorldMode implements IGameMode {
         dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
         this.statsDirty = true;
       }
+    });
+    // ★ 真击杀统计（2026-09-16）：实体侧由 EnemyBase.dispose 发出（killedByCombat=true）；
+    //   代理侧在 swarmHooks.onAgentKilled 里直接记数（两条路径互斥，不会双计）。
+    this.enemyKilledUnsub = eventBus.on('enemy_killed', () => {
+      recordKill(this.session);
     });
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
@@ -1448,11 +1470,13 @@ export class WorldMode implements IGameMode {
     }
 
     // ---- ★ 舰船状态：HUD 节拍刷新 + 毁灭判定（真结局 → 结算/复活面板） ----
+    //   2026-09-16：状态条换成顶部通栏（左 敌人数量 / 右 舰船生命红字纯数字）
     this.shipStatusAccum += dt;
     if (this.shipStatusAccum >= 0.1 && this.session) {
       this.shipStatusAccum = 0;
       const s = this.session.ship;
-      this.worldUIManager.setShipStatus(s.hp, s.maxHp, s.fuel, s.fuelMax, this.phase === 'sail');
+      const prog = queryKillProgress(this.session);
+      this.worldUIManager.setShipStatus(s.hp, s.maxHp, prog.kills, prog.total);
     }
     if (this.session && !this.shipDestroyed && isShipDestroyed(this.session)) {
       this.shipDestroyed = true;
@@ -1571,6 +1595,9 @@ export class WorldMode implements IGameMode {
     // ---- 取消 killed 事件订阅 ----
     this.killedUnsub?.();
     this.killedUnsub = undefined;
+    // ---- 取消 enemy_killed 事件订阅（击杀统计） ----
+    this.enemyKilledUnsub?.();
+    this.enemyKilledUnsub = undefined;
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
@@ -2069,6 +2096,8 @@ export class WorldMode implements IGameMode {
       const def = this.enemyDefs.get(e);
       const mobIndex = def ? this.mobDefs.indexOf(def) : -1;
       if (!def || mobIndex < 0) {
+        // ★ 非战斗清理（无定义可回池）→ 不算击杀（2026-09-16 击杀统计）
+        e.killedByCombat = false;
         e.dispose();
         this.enemies.splice(i, 1);
         continue;
@@ -2085,6 +2114,9 @@ export class WorldMode implements IGameMode {
         yaw: 0,
         aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
       });
+      // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
+      //   置 killedByCombat=false 后再 dispose，避免误计（2026-09-16）
+      e.killedByCombat = false;
       e.dispose();
       this.enemies.splice(i, 1);
     }
@@ -2286,6 +2318,9 @@ export class WorldMode implements IGameMode {
       }
       // ★ 上限检查（每只都查；实体 + 代理合计）
       if (this.enemies.length + this.swarm.count >= WorldMode.MAX_ALIVE) break;
+      // ★ 每日配额闸门（2026-09-16）：当天敌人总数有限 → 生成名额 = 配额 − 已击杀 − 场上存活。
+      //   所有刷怪路径（导演波次/扫描波次/压测）都经 spawnOne，此处是唯一收口点。
+      if (!this.quotaAllows()) break;
       // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
       const role = this.raster.tileDefAt(sx, sz).genRole;
       if (role === 'pit' || role === 'liquid') continue;
@@ -2308,6 +2343,17 @@ export class WorldMode implements IGameMode {
       if (idx >= 0) any = true;
     }
     return any;
+  }
+
+  /** ★ 每日配额闸门（2026-09-16）：当天生成名额 = 配额 − 已击杀 − 场上存活。
+   *  配额 = 击杀可达上限（KillCounter 按威胁档位估算，远距回收会扣减）。
+   *  四维空间 Boss 战不受配额约束（Boss 是独立实体，不经 spawnOne 的杂兵路径）。 */
+  private quotaAllows(): boolean {
+    const s = this.session;
+    if (!s) return true;
+    const prog = queryKillProgress(s);
+    const alive = this.enemies.length + this.swarm.count;
+    return alive < Math.max(0, prog.total - prog.kills);
   }
 
   /** ★ 升格：代理 → L3 实体（蜂群 hooks.promote；同步创建 EnemyBase） */

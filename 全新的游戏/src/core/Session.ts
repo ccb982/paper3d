@@ -99,6 +99,18 @@ export interface GameSession {
   // ----- ⑧ 每日进度 -----
   dayProgress: {
     hasDepartedToday: boolean;
+    /** ★ 当天敌人配额与击杀进度（2026-09-16）。
+     *  quota = 击杀可达上限（按威胁档位动态估算，远距回收会扣减）；
+     *  kills = 真击杀数（子弹/近战致死、掉深坑致死）；recalled = 已还回的配额数。
+     *  跨出击持久（同日多次出击累计）；换日由 resetDayQuota 清 0 重算。 */
+    enemies?: {
+      quota: number;
+      kills: number;
+      recalled: number;
+    };
+    /** ★ 已为哪一天初始化过敌人配额（防同日重复出击把进度清零）。
+     *  = session.meta.day 时表示当天配额已就绪；换日不等 → 重新初始化。 */
+    everDeparted?: number;
   };
 
   // ----- ⑨ ★ 遗物（原局外道具：只可抽取、不占背包、无需携带；拥有即全局永久生效） -----

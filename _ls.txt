@@ -1,0 +1,12 @@
+﻿== public/ui ==
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\主界面三个按钮.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\六颗星星.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\加工台背景ui.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\加工模块.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\抽卡和资源显示ui.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\抽卡背景页面.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\敌人数量和舰船生命.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\概率显示.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\行动按钮.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\返回按钮.ftx3.gz
+C:\Users\22641\Desktop\架构重置\全新的游戏\public\ui\问号.ftx3.gz

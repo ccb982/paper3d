@@ -279,6 +279,37 @@
           "end": true
         }
       }
+    },
+    "visitor_puruiyinshua": {
+      "speaker": "普瑞印刷",
+      "portrait": "/characters/protagonist/普瑞印刷.ftx3.gz",
+      "start": "n1",
+      "nodes": {
+        "n1": {
+          "text": "让一让，油墨还没干——蹭你身上我可不赔。",
+          "choices": [
+            { "text": "你是谁？", "next": "n2" },
+            { "text": "油墨？你印东西的？", "next": "n3" },
+            { "text": "（默默后退半步）", "next": "n4" }
+          ]
+        },
+        "n2": {
+          "text": "普瑞印刷。名字是压出来的，人也是——可惜那一版墨重了点。",
+          "next": "n3"
+        },
+        "n3": {
+          "text": "废土上什么都缺，唯独不缺替身。这个给你，正品我自己留着。",
+          "effects": [
+            { "kind": "item", "id": "polyester", "count": 1 },
+            { "kind": "flag", "key": "met_puruiyinshua" }
+          ],
+          "end": true
+        },
+        "n4": {
+          "text": "退得挺快。上一位没你这么机灵——他现在还在我的版上。",
+          "end": true
+        }
+      }
     }
   }
 }
