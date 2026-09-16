@@ -22,6 +22,16 @@ import { VisitorBodyRenderer, type VisitorBodyStyle } from '../../services/rende
 import { VisitorModelRenderer, type VisitorModelStyle } from '../../services/render/VisitorModelRenderer';
 import type { VisitorBodyLike } from '../../services/render/VisitorBodyLike';
 import baseRooms from '../../config/baseRooms.json';
+// ★ 2026-09-16：房间不再用 Box+MeshStandardMaterial 硬搭，改由
+//   RoomDeco（手搓顶点布局）+ RoomSurfaceMaterial（程序化表面 shader）接管。
+//   房间尺寸常量也一并搬到 RoomDeco 里做唯一事实来源，这里 import 回来。
+import {
+  DOOR_H, DOOR_HALF, ROOM_D, ROOM_GAP, ROOM_H, ROOM_W, WALL_T,
+  createDecorMats, createPadMaterialFor, decorateControl, decorateCockpit,
+  decorateShell, decorateStorage, decorateWorkshop, updateRoomTime,
+  type AddFn, type DecorMats,
+} from './RoomDecor';
+import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
 
 export interface RoomDef {
   id: string;
@@ -30,22 +40,7 @@ export interface RoomDef {
   label: string;
 }
 
-/** 单间尺寸（米）与分界缝；三间打通 = 大厅宽 = 3×ROOM_W + 2×ROOM_GAP
- *  ★ 2026-09-12 用户定调：房间扩大三倍（27×12.6×18m；门/家具保持人体尺度） */
-const ROOM_W = 27;
-const ROOM_H = 12.6;
-const ROOM_D = 18;
-const ROOM_GAP = 1.4;
-const WALL_T = 0.3;
-/** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
-const MOVE_SPEED = 9.5;
-const JUMP_V = 7.2;
-const GRAVITY = 20;
-/** 分界墙门洞半宽（沿进深 z；门高 3.0） */
-const DOOR_HALF = 1.1;
-const DOOR_H = 3.0;
-
-/** ★ 交互站（F 触发）：本地大厅坐标 + 触发范围（xz 半宽；1e9 = 不限） */
+/** ★ 交互站（E / F 触发）：本地大厅坐标 + 触发范围（xz 半宽；1e9 = 不限） */
 export interface BaseStation {
   x: number;
   z: number;
@@ -55,6 +50,20 @@ export interface BaseStation {
   cb: () => void;
   /** ★ 跟随访客身体索引（0-based，对应 setEventBodies 顺序）：站位随 NPC 走动同步 */
   followBodyIndex?: number;
+}
+
+/** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
+const MOVE_SPEED = 9.5;
+const JUMP_V = 7.2;
+const GRAVITY = 20;
+
+/** ★ 交互站地面光圈（x/z 本地大厅坐标；label 与站点一致 → 进区时光圈收紧变亮） */
+export interface StationPadSpec {
+  x: number;
+  z: number;
+  color: number;
+  radius?: number;
+  label: string;
 }
 
 export interface BaseSceneOptions {
@@ -77,6 +86,10 @@ export class BaseScene {
   private root: THREE.Group;
   private hallW: number;
   private bays: number[] = [];
+  /** ★ 房间材质集合（shader；由 buildHall 创建，dispose 时随 root 遍历回收） */
+  private mats: DecorMats | null = null;
+  /** ★ 交互站地面光圈（label 与站点对应；进区 → uActive=1） */
+  private pads: { mesh: THREE.Mesh; mat: THREE.ShaderMaterial; label: string }[] = [];
 
   /** 通用时钟（盟友绕行/呼吸等周期动画用） */
   private t = 0;
@@ -123,6 +136,8 @@ export class BaseScene {
   private promptEl: HTMLDivElement;
   /** 提示是否已显示（与 inCraftZone 分开：UI 打开时要临时隐藏） */
   private promptShown = false;
+  /** ★ 提示上的按键名（基地沿用 F；舰内用 E，与世界侧的交互键统一） */
+  private promptKey = 'F';
   /** ★ UI 遮挡判定（面板/覆盖层打开 → 隐藏加工台提示并禁用 F；BaseMode 注入） */
   private uiBlocking: (() => boolean) | null = null;
 
@@ -291,7 +306,12 @@ export class BaseScene {
     this.setStations(list);
   }
 
-  /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、F 禁用） */
+  /** ★ 交互提示的按键名（默认 F；舰内传 'E' 与世界侧统一） */
+  setPromptKey(key: string): void {
+    this.promptKey = key;
+  }
+
+  /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、E/F 禁用） */
   setUiBlocking(fn: () => boolean): void {
     this.uiBlocking = fn;
   }
@@ -431,11 +451,14 @@ export class BaseScene {
         if (Math.hypot(fdx, fdz) > 0.3) b.body.setYaw(Math.atan2(fdx, fdz));
       }
       b.body.update(dt);
-      // ★ 交互站跟随（F 交谈的触发位置跟着 NPC 走）
+      // ★ 交互站跟随（交谈的触发位置跟着 NPC 走）；地面光圈同步跟
       for (const st of this.stations) {
         if (st.followBodyIndex === i) {
           st.x = b.x;
           st.z = b.z;
+          for (const p of this.pads) {
+            if (p.label === st.label) p.mesh.position.set(b.x, 0.03, b.z);
+          }
         }
       }
     }
@@ -489,6 +512,8 @@ export class BaseScene {
     this.npcLoadToken++;
     for (const d of this.droneAllies) d.view.dispose();
     this.droneAllies.length = 0;
+    this.pads = [];
+    this.mats = null;
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();
@@ -506,135 +531,97 @@ export class BaseScene {
   // ============================================================
   // 大厅（三间打通：共用地面/背墙/天花板，只留分界立柱与顶梁）
   // ============================================================
+  // ★ 2026-09-16 用户定调：房间要"全面美化"且**不许建模**——
+  //   壳体与全部实体装饰改由 RoomDeco 负责：几何走 extrudeProfile 手搓顶点，
+  //   材质走 RoomSurfaceMaterial 的程序化 shader。这里只负责"装哪几面、挂哪个 add"。
 
   private buildHall(defs: RoomDef[]): void {
     const W = this.hallW;
-    const matStd = (hex: number, rough = 0.88): THREE.MeshStandardMaterial =>
-      new THREE.MeshStandardMaterial({ color: hex, roughness: rough, metalness: 0.08 });
-    const matEmis = (hex: number): THREE.MeshBasicMaterial => new THREE.MeshBasicMaterial({ color: hex });
-    const add = (
-      geo: THREE.BufferGeometry, mat: THREE.Material,
-      px: number, py: number, pz: number, rx = 0, ry = 0, rz = 0,
-    ): THREE.Mesh => {
+    const isShip = defs.length === 1 && defs[0].id === 'cockpit';
+    const mats: DecorMats = createDecorMats(isShip);
+    this.mats = mats;
+
+    const add: AddFn = (geo, mat, px, py, pz, rx = 0, ry = 0, rz = 0): THREE.Mesh => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(px, py, pz);
       m.rotation.set(rx, ry, rz);
       this.root.add(m);
       return m;
     };
-    // 壳体（打通：一整条）
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x2b3f4b), 0, -WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), matStd(0x263c4a), 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2);
-    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), matStd(0x1c2a35), 0, ROOM_H + WALL_T / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x223542), -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
-    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), matStd(0x223542), W / 2 + WALL_T / 2, ROOM_H / 2, 0);
-    // 背墙灯带（贯通）+ 天花板灯管（每间一根）
-    add(new THREE.BoxGeometry(W * 0.9, 0.12, 0.06), matEmis(0xffd6a0), 0, ROOM_H * 0.78, -ROOM_D / 2 + 0.05);
-    // ★ 分界：墙 + 门（2026-09-12 用户定调：房间之间要有墙、留门）
-    //   墙沿进深 z 分成前后两段，中间留门洞；俯视机位下前后段错位投影 →
-    //   门洞清晰可见；门框（门楣 + 门柱）强化"门"的读感。
-    const segD = ROOM_D / 2 - DOOR_HALF; // 单段深度
+
+    // ---- 壳体（打通：一整条）—— 五大面全部换成程序化表面材质 ----
+    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.floor, 0, -WALL_T / 2, 0);
+    add(new THREE.BoxGeometry(W, ROOM_H, WALL_T), mats.wall, 0, ROOM_H / 2, -ROOM_D / 2 - WALL_T / 2);
+    add(new THREE.BoxGeometry(W, WALL_T, ROOM_D), mats.ceil, 0, ROOM_H + WALL_T / 2, 0);
+    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, -W / 2 - WALL_T / 2, ROOM_H / 2, 0);
+    add(new THREE.BoxGeometry(WALL_T, ROOM_H, ROOM_D), mats.wall, W / 2 + WALL_T / 2, ROOM_H / 2, 0);
+
+    // ---- 大厅级装饰：踢脚斜面 / 墙面腰线 / 天花板桁架 / 背墙管道 / 通风百叶 / 灯槽 ----
+    decorateShell(add, mats, W, this.bays);
+
+    // ---- 分界：墙 + 门（2026-09-12 用户定调：房间之间要有墙、留门）----
+    const segD = ROOM_D / 2 - DOOR_HALF;
     for (const bx of this.bays.slice(0, -1)) {
       const divider = bx + (ROOM_W + ROOM_GAP) / 2;
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x2a4050), divider,
+      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wall, divider,
         ROOM_H / 2, -(ROOM_D / 2 - segD / 2)); // 后段
-      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), matStd(0x2a4050), divider,
+      add(new THREE.BoxGeometry(WALL_T, ROOM_H, segD), mats.wall, divider,
         ROOM_H / 2, ROOM_D / 2 - segD / 2);    // 前段
-      add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), matStd(0x2a4050), divider,
+      add(new THREE.BoxGeometry(WALL_T + 0.1, ROOM_H - DOOR_H, DOOR_HALF * 2 + 0.3), mats.wall, divider,
         (ROOM_H + DOOR_H) / 2, 0);             // 门楣
-      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x38505f), divider,
-        DOOR_H / 2, DOOR_HALF + 0.11);         // 门柱（前）
-      add(new THREE.BoxGeometry(WALL_T + 0.08, DOOR_H, 0.22), matStd(0x38505f), divider,
-        DOOR_H / 2, -DOOR_HALF - 0.11);        // 门柱（后）
-      add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.44), matEmis(0x8fd0ff), divider,
-        DOOR_H + 0.1, 0);                      // 门头灯带
+      const jamb = extrudeProfile(chamferRectProfile(WALL_T + 0.08, DOOR_H, 0.05), 0.22);
+      add(jamb, mats.struct, divider, DOOR_H / 2, DOOR_HALF + 0.11);   // 门柱（前）
+      add(jamb, mats.struct, divider, DOOR_H / 2, -DOOR_HALF - 0.11);  // 门柱（后）
+      // 门头灯带 + 门楣斜遮檐（手搓楔形，让门在俯视机位下读得出来）
+      add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.44), mats.stripWarm, divider,
+        DOOR_H + 0.1, 0);
+      add(extrudeProfile(wedgeProfile(0.9, 0.32, 0.5), DOOR_HALF * 2 + 0.6), mats.struct,
+        divider, DOOR_H + 0.62, 0);
     }
-    // 分区内装 + 名牌 + 顶灯
+
+    // ---- 分区内装 + 名牌 + 顶灯 ----
     for (let i = 0; i < defs.length; i++) {
       const bay = new THREE.Group();
       bay.position.x = this.bays[i];
       this.root.add(bay);
-      const addIn = (
-        geo: THREE.BufferGeometry, mat: THREE.Material,
-        px: number, py: number, pz: number, rx = 0, ry = 0, rz = 0,
-      ): THREE.Mesh => {
+      const addIn: AddFn = (geo, mat, px, py, pz, rx = 0, ry = 0, rz = 0): THREE.Mesh => {
         const m = new THREE.Mesh(geo, mat);
         m.position.set(px, py, pz);
         m.rotation.set(rx, ry, rz);
         bay.add(m);
         return m;
       };
-      if (defs[i].id === 'control') this.fillControl(addIn, matStd, matEmis);
-      else if (defs[i].id === 'storage') this.fillStorage(addIn, matStd);
+      if (defs[i].id === 'control') decorateControl(addIn, mats);
+      else if (defs[i].id === 'storage') decorateStorage(addIn, mats);
       else if (defs[i].id === 'workshop') {
-        this.fillWorkshop(addIn, matStd);
-        this.craftBayX = this.bays[i]; // ★ 加工站房间（按 F 打开加工台的区域）
-      } else this.fillWorkshop(addIn, matStd);
+        decorateWorkshop(addIn, mats);
+        this.craftBayX = this.bays[i]; // ★ 加工站房间（进房间就显示"打开加工台"提示）
+      } else if (defs[i].id === 'cockpit') decorateCockpit(addIn, mats);
+      else decorateWorkshop(addIn, mats);
       const plate = this.makeNameplate(defs[i].name, defs[i].label);
-      // 名牌贴背墙中部（房间 3× 后尺寸放大；不要放到天花板之上）
       addIn(new THREE.PlaneGeometry(5.4, 1.5), plate, 0, ROOM_H * 0.58, -ROOM_D / 2 + 0.4);
-      addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), matEmis(0xdfefff), 0, ROOM_H - 0.06, 0.4);
+      addIn(new THREE.BoxGeometry(ROOM_W * 0.5, 0.08, 0.3), mats.strip, 0, ROOM_H - 0.06, 0.4);
     }
   }
 
-  /** 指挥室占位：屏幕墙 + 操作台 + 座椅 */
-  private fillControl(
-    add: (geo: THREE.BufferGeometry, mat: THREE.Material, px: number, py: number, pz: number, rx?: number, ry?: number, rz?: number) => THREE.Mesh,
-    matStd: (hex: number, rough?: number) => THREE.MeshStandardMaterial,
-    matEmis: (hex: number) => THREE.MeshBasicMaterial,
-  ): void {
-    const zb = -ROOM_D / 2 + 0.6; // 背墙内侧（房间 3×：贴背墙布置）
-    for (let i = -1; i <= 1; i++) {
-      add(new THREE.BoxGeometry(3.0, 1.8, 0.14), matEmis(0x2e6f8f), i * 5.0, 3.2, zb + 0.03);
-      add(new THREE.BoxGeometry(3.3, 2.1, 0.12), matStd(0x0e1a22), i * 5.0, 3.2, zb);
+  /** ★ 交互站地面光圈：上层把"站点列表"同步一份进来 → 玩家看得见触发区在哪。
+   *  纯 shader 圆环（圆形裁切在 frag 里 discard，不占额外几何）。全量替换。 */
+  setStationPads(list: StationPadSpec[]): void {
+    for (const p of this.pads) {
+      p.mesh.removeFromParent();
+      p.mesh.geometry.dispose();
+      p.mat.dispose();
     }
-    // 长操作台（人体尺度，居中）
-    add(new THREE.BoxGeometry(16, 0.2, 1.4), matStd(0x2a3742), 0, 1.1, -5.0);
-    add(new THREE.BoxGeometry(16, 1.0, 0.2), matStd(0x1e2830), 0, 0.55, -5.8);
-    for (const dx of [-5.0, 0, 5.0]) {
-      add(new THREE.BoxGeometry(0.8, 0.14, 0.8), matStd(0x37424e), dx, 0.62, -2.6);
-      add(new THREE.BoxGeometry(0.8, 1.0, 0.14), matStd(0x37424e), dx, 1.1, -2.1);
-    }
-  }
-
-  /** 仓库占位：货箱堆 */
-  private fillStorage(
-    add: (geo: THREE.BufferGeometry, mat: THREE.Material, px: number, py: number, pz: number, rx?: number, ry?: number, rz?: number) => THREE.Mesh,
-    matStd: (hex: number, rough?: number) => THREE.MeshStandardMaterial,
-  ): void {
-    const crate = (x: number, y: number, z: number, s: number, tone: number): void => {
-      add(new THREE.BoxGeometry(s, s, s), matStd(tone), x, y + s / 2, z);
-      add(new THREE.BoxGeometry(s * 0.92, 0.1, s * 0.92), matStd(0x1a2229), x, y + s * 0.62, z);
-    };
-    // 沿背墙一排货堆（人体尺度货箱铺满 27m 宽；房间 3×）
-    crate(-10.0, 0, -6.6, 1.4, 0x3a4753);
-    crate(-8.4, 0, -6.9, 1.2, 0x44515e);
-    crate(-9.2, 1.4, -6.7, 1.0, 0x4a5764);
-    crate(-2.0, 0, -6.5, 1.5, 0x3a4753);
-    crate(-0.3, 0, -6.8, 1.1, 0x44515e);
-    crate(5.5, 0, -6.4, 1.4, 0x3a4753);
-    crate(7.2, 0, -6.7, 1.2, 0x44515e);
-    crate(6.3, 1.5, -6.5, 1.0, 0x4a5764);
-    crate(11.0, 0, -6.8, 1.3, 0x44515e);
-    // 托盘（散放在中区）
-    add(new THREE.BoxGeometry(1.8, 0.16, 1.4), matStd(0x2a343d), -5.0, 0.08, -2.0);
-    add(new THREE.BoxGeometry(1.8, 0.16, 1.4), matStd(0x2a343d), 3.0, 0.08, 0.5);
-  }
-
-  /** 加工站占位：工作台 + 机械臂 */
-  private fillWorkshop(
-    add: (geo: THREE.BufferGeometry, mat: THREE.Material, px: number, py: number, pz: number, rx?: number, ry?: number, rz?: number) => THREE.Mesh,
-    matStd: (hex: number, rough?: number) => THREE.MeshStandardMaterial,
-  ): void {
-    const zb = -ROOM_D / 2 + 2.2; // 工作台靠背墙（房间 3×）
-    add(new THREE.BoxGeometry(6.0, 0.2, 1.6), matStd(0x2a3742), 0, 1.1, zb);
-    add(new THREE.BoxGeometry(6.0, 1.0, 0.35), matStd(0x1e2830), 0, 0.55, zb - 0.8);
-    // 两节机械臂（人体尺度）
-    add(new THREE.CylinderGeometry(0.18, 0.26, 2.4, 10), matStd(0x54616e), 4.6, 2.4, zb - 0.4);
-    add(new THREE.CylinderGeometry(0.14, 0.14, 3.0, 10), matStd(0x54616e), 2.6, 4.2, zb + 0.2, 0, 0, 1.0);
-    add(new THREE.BoxGeometry(0.6, 0.36, 0.6), matStd(0x6b7885), 1.2, 4.8, zb + 0.4);
-    // 工件
-    add(new THREE.BoxGeometry(0.9, 0.7, 0.9), matStd(0x4a5764), -0.8, 1.55, zb);
+    this.pads = [];
+    list.forEach((spec, i) => {
+      const mat = createPadMaterialFor(spec.color, i * 0.37);
+      const r = spec.radius ?? 2.2;
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(r * 2, r * 2), mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.set(spec.x, 0.03, spec.z);
+      this.root.add(mesh);
+      this.pads.push({ mesh, mat, label: spec.label });
+    });
   }
 
   /** 名牌贴片：Canvas 文本 → 纹理 */
@@ -672,9 +659,11 @@ export class BaseScene {
       this.wantJump = true; // ★ 空格：跳跃
       e.preventDefault();
     }
-    // ★ 加工站：F 打开加工台（UI 遮挡期不响应，避免叠层里再开）
-    // ★ 交互站：F 触发（UI 遮挡期不响应）
-    if (k === 'f' && this.activeStation && !(this.uiBlocking?.() ?? false)) this.activeStation.cb();
+    // ★ 交互站：E / F 都能触发（世界侧统一是 E，基地历史习惯是 F，两者都认）
+    //   UI 遮挡期不响应，避免叠层里再开
+    if ((k === 'e' || k === 'f') && this.activeStation && !(this.uiBlocking?.() ?? false)) {
+      this.activeStation.cb();
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {

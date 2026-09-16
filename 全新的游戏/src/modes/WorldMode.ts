@@ -387,7 +387,6 @@ export class WorldMode implements IGameMode {
   /** ★ 舰内独立场景（不画世界：彻底隔离粗块/地形/雾/天空） */
   private interiorScene: THREE.Scene | null = null;
   /** ★ 舰内操作按钮条（下船/起飞/返回罗德岛号/加工台/背包） */
-  private interiorButtons: HTMLDivElement | null = null;
   /** ★ 加工台覆盖层（舰内按钮打开；懒建）与共享图标服务 */
   private craftingOverlay: CraftingOverlay | null = null;
   private iconRegistry: ItemIconRegistry | null = null;
@@ -873,8 +872,8 @@ export class WorldMode implements IGameMode {
           }
         }
         if (this.shipInterior) {
+          // ★ 访客增减后重建交互站列表（功能站 + 交谈站一并重算）
           this.applyShipInteriorEvents(this.shipInterior);
-          this.buildInteriorButtons();
         }
       },
     });
@@ -1573,8 +1572,7 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
-    // ---- 舰内房间（若在舱内退出：释放房间场景/按钮/加工台） ----
-    this.removeInteriorButtons();
+    // ---- 舰内房间（若在舱内退出：释放房间场景/交互站/加工台） ----
     this.craftingOverlay?.dispose();
     this.craftingOverlay = null;
     this.shipInterior?.dispose();
@@ -3381,21 +3379,44 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 舰内固定位事件：交互站（F 交谈）+ NPC 立绘（本地坐标；与按钮条并存） */
+  /** ★ 舰内固定位事件（2026-09-16 改版）：
+   *   ① 三个**固定功能站**（加工台 / 航行终端 / 下船）—— 走到地面光圈里按 E 触发；
+   *      其中【起飞】与【返回罗德岛号】合成"航行终端"一件事的两个选项。
+   *   ② NPC / 访客交谈站 —— 仍然注册进同一份交互站列表。
+   *   功能站**排在最前面**：交互站取"最近的一个"，并列时先注册者胜 → 功能优先。 */
   private applyShipInteriorEvents(interior: BaseScene): void {
     if (!this.eventSystem || !this.dialogue) return;
+    const S = WorldMode.SHIP_STATIONS;
+    const stations: BaseStation[] = [
+      {
+        x: S.nav.x, z: S.nav.z, rx: S.nav.rx, rz: S.nav.rz, label: S.nav.label,
+        cb: () => this.openNavChoice(),
+      },
+      {
+        x: S.craft.x, z: S.craft.z, rx: S.craft.rx, rz: S.craft.rz, label: S.craft.label,
+        cb: () => { void this.openShipCrafting(); },
+      },
+      {
+        x: S.exit.x, z: S.exit.z, rx: S.exit.rx, rz: S.exit.rz, label: S.exit.label,
+        cb: () => this.exitShipInterior(),
+      },
+    ];
+    const pads = [
+      { x: S.nav.x, z: S.nav.z, color: S.nav.color, radius: S.nav.pad, label: S.nav.label },
+      { x: S.craft.x, z: S.craft.z, color: S.craft.color, radius: S.craft.pad, label: S.craft.label },
+      { x: S.exit.x, z: S.exit.z, color: S.exit.color, radius: S.exit.pad, label: S.exit.label },
+    ];
     const fixed = this.eventSystem.fixedEvents('ship');
-    const stations: BaseStation[] = fixed.map((f) => ({
+    stations.push(...fixed.map((f) => ({
       x: f.x, z: f.z, rx: 2.4, rz: 2.0,
       label: this.eventSystem.label(f.event),
       cb: () => {
         if (this.dialogue.start(f.event.dialogue, { eventId: f.event.id })) {
           this.player.controlLocked = true;
-          this.removeInteriorButtons(); // 对话期间收起操作按钮，防误点
           eventBus.emit('dialogue', { id: f.event.dialogue });
         }
       },
-    }));
+    })));
     const quads = fixed.map((f) => ({ x: f.x, z: f.z, assetUrl: f.event.npc.portrait }));
     // ★ 已到舰访客：固定站位（按到舰顺序分配）；F 交谈 → 谈完离舰（onEnd 收尾）。
     //   有程序化身体的走 3D 身体（脸=各自纹理）；没有的退回贴片立绘。
@@ -3420,7 +3441,6 @@ export class WorldMode implements IGameMode {
           if (this.dialogue!.start(v.visitDialogue)) {
             this.pendingVisitor = v;
             this.player.controlLocked = true;
-            this.removeInteriorButtons();
             eventBus.emit('dialogue', { id: v.visitDialogue });
           }
         },
@@ -3435,6 +3455,7 @@ export class WorldMode implements IGameMode {
     interior.setEventStations(stations);
     interior.setEventNpcs(quads);
     interior.setEventBodies(bodies);
+    interior.setStationPads(pads); // ★ 功能站地面光圈（玩家看得见走到哪能按键）
   }
 
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
@@ -3484,43 +3505,65 @@ export class WorldMode implements IGameMode {
     renderManager.setEnvironment('ship');
     renderManager.setFlightMode(true);
     this.chunks.setWaterVisible(false);
-    // ★ 舰内操作按钮（用户定调：按钮而不是走位交互）+ 固定位事件（F 交谈）
-    this.buildInteriorButtons();
+    // ★ 舰内操作全部事件触发式（2026-09-16 用户定调：加工台/下船/起飞/返回罗德岛号
+    //   都做成走到指定区域按键触发，不再有按钮条）；提示按键与世界侧统一为 E。
+    interior.setPromptKey('E');
     this.applyShipInteriorEvents(interior);
     return true;
   }
 
-  /** ★ 舰内操作按钮条：下船/起飞/返回罗德岛号/加工台/背包 */
-  private buildInteriorButtons(): void {
-    this.removeInteriorButtons();
-    const bar = document.createElement('div');
-    bar.style.cssText = [
-      'position:fixed', 'left:50%', 'bottom:7%', 'transform:translateX(-50%)',
-      'z-index:90', 'display:flex', 'gap:12px', 'pointer-events:auto',
-    ].join(';');
-    const mk = (label: string, cb: () => void): void => {
-      const b = document.createElement('button');
-      b.textContent = label;
-      b.style.cssText = [
-        'padding:10px 26px', 'font:15px "Microsoft YaHei",sans-serif', 'font-weight:bold',
-        'letter-spacing:2px', 'color:#eaf6ff', 'background:rgba(24,44,72,0.9)',
-        'border:2px solid #6ab0ff', 'border-radius:10px', 'cursor:pointer',
-      ].join(';');
-      b.addEventListener('click', cb);
-      bar.appendChild(b);
-    };
-    mk('下船', () => this.exitShipInterior());
-    mk('起飞', () => { this.exitShipInterior(); this.tryBoardShip(); });
-    mk('返回罗德岛号', () => this.openReturnConfirm()); // ★ 二次确认，防点错
-    mk('加工台', () => this.openShipCrafting());
-    mk('背包', () => this.worldUIManager?.toggleInventory()); // ★ 舰内也可使用背包（含 I 键）
-    document.body.appendChild(bar);
-    this.interiorButtons = bar;
-  }
+  /** ★ 舰内三个**固定交互站**（2026-09-16 用户定调：全部事件触发式，
+   *   走到地面光圈里按 E，不再有 DOM 按钮条）。
+   *   ★ 起飞 与 返回罗德岛号 **合成一件事的两个选项**（航行终端面板二选一）。
+   *   坐标是驾驶舱房间本地坐标（单间 x∈[-12.6,12.6]，z∈[-8.1,7.8]），
+   *   与 RoomDecor.decorateCockpit 里摆的实体座子一一对应（导航台 / 工作台 / 舱门）。 */
+  private static readonly SHIP_STATIONS = {
+    nav:   { x: 9.8,  z: 5.6, rx: 3.2, rz: 2.6, pad: 3.0, color: 0xffb765, label: '航行终端' },
+    craft: { x: -9.8, z: 5.6, rx: 3.2, rz: 2.6, pad: 3.0, color: 0x7ce0c8, label: '加工台' },
+    exit:  { x: 0,    z: 7.2, rx: 3.4, rz: 2.0, pad: 2.8, color: 0x8fd0ff, label: '下船' },
+  } as const;
 
-  private removeInteriorButtons(): void {
-    this.interiorButtons?.remove();
-    this.interiorButtons = null;
+  /** ★ 航行终端：起飞 / 返回罗德岛号 —— 一件事的两个选项。
+   *  返航代价高（结束本次出击）→ 选中后仍走一次二次确认。 */
+  private openNavChoice(): void {
+    const content = document.createElement('div');
+    content.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:16px;padding:22px 36px;color:#eaf6ff;text-align:center;';
+    const title = document.createElement('div');
+    title.textContent = '航行模式已就绪';
+    title.style.cssText = 'font-size:19px;font-weight:bold;color:#ffc98a;letter-spacing:2px;';
+    const sub = document.createElement('div');
+    sub.textContent = '舰船已加注完毕，请选择接下来的行动。';
+    sub.style.cssText = 'color:#a8c4e0;font-size:14px;line-height:1.7;';
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:14px;flex-wrap:wrap;justify-content:center;';
+
+    const takeoff = createButton({
+      label: '起飞', style: 'primary', size: 'lg',
+      onClick: () => {
+        this.worldUIManager?.closePanel('interior-nav');
+        this.exitShipInterior();
+        this.tryBoardShip();
+      },
+    });
+    const back = createButton({
+      label: '返回罗德岛号', style: 'secondary', size: 'lg',
+      onClick: () => {
+        this.worldUIManager?.closePanel('interior-nav');
+        this.openReturnConfirm();
+      },
+    });
+    const cancel = createButton({
+      label: '取消', style: 'ghost', size: 'md',
+      onClick: () => this.worldUIManager?.closePanel('interior-nav'),
+    });
+    row.append(takeoff, back);
+    content.append(title, sub, row, cancel);
+    this.worldUIManager?.openPanel({
+      id: 'interior-nav',
+      title: '航行终端',
+      render: () => content,
+      onClose: () => {},
+    });
   }
 
   /** ★ 返回罗德岛号确认面板（舰内按钮触发；确认后才出舱返航） */
@@ -3571,7 +3614,6 @@ export class WorldMode implements IGameMode {
   /** 离开舰内房间（按来源恢复：探索=回地面 / 航行=回驾驶；相机瞬移防长镜头） */
   private exitShipInterior(): void {
     if (!this.shipInterior) return;
-    this.removeInteriorButtons();
     this.craftingOverlay?.hide();
     this.worldUIManager?.closePanel('interior-return');
     this.shipInterior.dispose();

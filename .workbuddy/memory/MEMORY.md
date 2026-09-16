@@ -64,3 +64,10 @@
 - **用户可能正在玩游戏** → 不要擅自跑游戏内实测（会抢 GPU 帧率崩，且会被误归因到刚改的代码）。
   要实测先问一句。
 - 用户偏好：**直接、简短、可验证**的结论；给数字；明确说清做了什么、踩了什么坑、回退了什么。
+
+
+## ★ 房间/基地视觉架构（2026-09-16）
+- 房间三件套：`RoomDecoGeo`(手搓顶点挤出) + `RoomSurfaceMaterial`(全部程序化 shader) + `ui/base/RoomDecor.ts`(布局)。尺寸常量唯一源在 RoomDecor.ts，BaseScene import。
+- ★ 自定义 ShaderMaterial 检查清单：每个 frag 用到的自定义 uniform 必须自己声明（uTime 也不例外）；GLSL 禁尾随逗号；frag 末尾 `#include <colorspace_fragment>`。漏一条 = program 编译失败 = **该材质全部 mesh 不渲染（房间整片消失）**。
+- ★ shader 排障最快路径：临时验收页只挂 BaseScene + vite dev + puppeteer-core + 本机 Chrome（swiftshader 软渲染，不抢游戏 GPU），console.error 重定向进 DOM 截图拿报错行号。
+- 舰内交互 = 站点制（`WorldMode.SHIP_STATIONS` + `setStationPads` 地面光圈），键位 E/F 通用；起飞/返航 = 航行终端面板二选一。
