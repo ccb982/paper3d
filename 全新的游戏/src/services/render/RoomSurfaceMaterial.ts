@@ -557,6 +557,7 @@ const PAD_VERT = /* glsl */ `
 
 const PAD_FRAG = /* glsl */ `
   varying vec2 vUv;
+  uniform float uTime;     // ★ 必须显式声明（漏了 → 整个 program 编译失败、光圈全黑）
   uniform vec3  uColor;
   uniform float uActive;   // 0/1：角色是否在触发区内（进区 → 光圈收紧变亮）
   uniform float uSeed;

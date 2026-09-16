@@ -43,12 +43,16 @@ export interface KineticMover {
   hz: number;
 }
 
-/** 暴露给 BaseScene 的实心盒（xz AABB；家具推动后会刷新） */
+/** 暴露给 BaseScene 的实心盒（xz AABB + 高度；家具推动后会刷新）。
+ *  ★ 带 maxY 是为了"台阶/高台"：顶面在 STEP_MAX 以内的可以迈上去（变成脚下地面），
+ *    高过 STEP_MAX 的才算挡墙；minY 用来判断能不能从下面钻过去。 */
 export interface SolidBox {
   minX: number;
   maxX: number;
   minZ: number;
   maxZ: number;
+  minY: number;
+  maxY: number;
 }
 
 const FURNITURE_DENSITY = 20;   // 轻一点（大件也不会变成几吨）
@@ -62,6 +66,8 @@ const CLUSTER_MARGIN = 0.12;    // 部件"算接触"的间距
 export class RoomPhysics {
   private world = new PhysicsWorld({ x: 0, y: -22, z: 0 });
   private clusters: Cluster[] = [];
+  /** ★ 静态实体盒（建筑构件：地台 / 挂板 / 舱门柱…）：不能推，但要挡人 */
+  private statics: SolidBox[] = [];
   private kinetic: { id: number; mover: KineticMover }[] = [];
   private acc = 0;
   private readonly stepDt = 1 / 60;
@@ -188,6 +194,22 @@ export class RoomPhysics {
     }
   }
 
+  /** ★ 静态实体（建筑构件）：挡人但不参与推动（地台、墙上的挂板、舱门柱等）。
+   *  这些构件的材质是 wall / floor / ceil —— 不做可推家具，但必须有体积。 */
+  addStaticBoxes(boxes: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[]): void {
+    for (const b of boxes) {
+      const hx = (b.maxX - b.minX) / 2;
+      const hy = (b.maxY - b.minY) / 2;
+      const hz = (b.maxZ - b.minZ) / 2;
+      if (hx < 0.01 || hy < 0.01 || hz < 0.01) continue;
+      this.world.addFixed(
+        { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2, z: (b.minZ + b.maxZ) / 2 },
+        { type: 'cuboid', hx, hy, hz },
+      );
+      this.statics.push({ minX: b.minX, maxX: b.maxX, minZ: b.minZ, maxZ: b.maxZ, minY: b.minY, maxY: b.maxY });
+    }
+  }
+
   /** ★ 静态围栏：地面 + 四面墙（家具不会被推出房间） */
   addRoomBounds(halfW: number, halfD: number): void {
     this.world.addFixed({ x: 0, y: -0.5, z: 0 }, { type: 'cuboid', hx: halfW + 6, hy: 0.5, hz: halfD + 6 });
@@ -244,8 +266,9 @@ export class RoomPhysics {
       this.world.step();
       this.acc -= this.stepDt;
     }
-    // 同步 mesh + AABB
+    // 同步 mesh + AABB（先静态建筑，再可推家具）
     solids.length = 0;
+    for (const st of this.statics) solids.push(st);
     for (const c of this.clusters) {
       const p = this.world.getPosition(c.id);
       const q = this.world.getRotation(c.id);
@@ -261,6 +284,8 @@ export class RoomPhysics {
         maxX: p.x + this._ext.x,
         minZ: p.z - this._ext.z,
         maxZ: p.z + this._ext.z,
+        minY: p.y - this._ext.y,
+        maxY: p.y + this._ext.y,
       });
       // 记录当前中心（pushAt 用）
       c.center.set(p.x, p.y, p.z);

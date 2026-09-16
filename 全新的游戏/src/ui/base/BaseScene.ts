@@ -75,6 +75,10 @@ const PRIESTESS_H = 120;   // 立绘**高**（世界单位）
 /** ★ 实体碰撞半径（角色 / 访客；圆形近似） */
 const CHAR_R = 0.55;
 const NPC_R = 0.42;
+/** ★ 能迈上去的最大台阶（米）：≤ 它的实体顶面直接变成脚下地面（地台/踏步/矮箱） */
+const STEP_MAX = 0.5;
+/** ★ 角色高度（米）：实体底面高过这个值 → 从下面钻过去，不算挡 */
+const HEAD_H = 1.9;
 
 /** 角色参数（2026-09-12 用户定调：可跳跃、移速加快；房间 3× 后再提一档） */
 const MOVE_SPEED = 9.5;
@@ -127,7 +131,7 @@ export class BaseScene {
    *  收集体：房间建好后遍历 root 自动生成（xz 平面 AABB，人走路的圆去撞）
    *  过滤：只收"人走会撞到的高度区间"（0.35 ~ 1.6m）、排除薄片/小零件/
    *  灯带屏幕等装饰材质、以及标记了 userData.noSolid 的会动道具。 */
-  private solids: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
+  private solids: import('../../services/physics/RoomPhysics').SolidBox[] = [];
   /** ★ 可推家具物理（rapier；家具被推走后 solids 每帧跟着刷新） */
   private roomPhys: RoomPhysics | null = null;
   /** ★ 运动学道具（AGV 小车 / 行车吊箱）：动画位置 → 物理刚体 */
@@ -155,11 +159,14 @@ export class BaseScene {
   private moving = false;
   private wasMoving = false;
   private keys = new Set<string>();
-  /** 跳跃（空格）：高度/竖直速度/是否着地 */
+  /** 跳跃（空格）：相对地面的高度 / 竖直速度 / 是否着地 */
   private charY = 0;
   private vy = 0;
   private grounded = true;
   private wantJump = false;
+  /** ★ 脚下地面高度（地台等可踩实体顶面）与脚底绝对高度（挡路判定用） */
+  private groundY = 0;
+  private feetY = 0;
 
   // ---- 交互站（F 触发；基地 = 加工站 + 事件角色，舰内 = 事件角色 + 按钮条） ----
   /** 加工站房间的本地 x（onCraftStation 默认站点用） */
@@ -516,8 +523,8 @@ export class BaseScene {
             const sx = (dx / d) * step;
             const sz = (dz / d) * step;
             let movedAny = false;
-            if (!this.blockedCircle(b.x + sx, b.z, NPC_R)) { b.x += sx; movedAny = true; }
-            if (!this.blockedCircle(b.x, b.z + sz, NPC_R)) { b.z += sz; movedAny = true; }
+            if (!this.blockedCircle(b.x + sx, b.z, NPC_R, 0)) { b.x += sx; movedAny = true; }
+            if (!this.blockedCircle(b.x, b.z + sz, NPC_R, 0)) { b.z += sz; movedAny = true; }
             if (movedAny) b.body.setYaw(Math.atan2(dx, dz));
             else { b.walking = false; b.timer = 0.3; }   // 前面是家具 → 换个目标
           }
@@ -553,7 +560,7 @@ export class BaseScene {
       }
       // ★ 访客也脱困（分离逻辑可能把它挤进家具）
       _npcPos.set(b.x, 0, b.z);
-      this.unstick(_npcPos, NPC_R);
+      this.unstick(_npcPos, NPC_R, 0);
       b.x = _npcPos.x;
       b.z = _npcPos.z;
       b.body.setPosition(b.x, 0, b.z);
@@ -592,7 +599,7 @@ export class BaseScene {
         2.0 + ring * 0.95 + (islot % 2) * 0.4 + Math.sin(this.t * 2.1 + d.index * 1.7) * 0.12;
       d.view.setPosition(
         this.charPos.x + Math.cos(ang) * radius,
-        this.charY + height,
+        this.groundY + this.charY + height,
         this.charPos.z + Math.sin(ang) * radius,
       );
       d.view.render({ frameIndex: d.anim.frameIndex });
@@ -714,8 +721,15 @@ export class BaseScene {
       // ★ 门柱：**不许与墙的洞口切面共面**（共面 → z-fighting → "门的侧边一直在闪"）。
       //   门柱面留在洞口切面外 1cm，并且比门头灯带更长 → 灯带端面藏进门柱里。
       const jamb = extrudeProfile(chamferRectProfile(WALL_T + 0.08, DOOR_H, 0.05), 0.26);
-      add(jamb, mats.struct, divider, DOOR_H / 2, DOOR_HALF + 0.14);   // 门柱（前）
-      add(jamb, mats.struct, divider, DOOR_H / 2, -DOOR_HALF - 0.14);  // 门柱（后）
+      // ★ 门柱不参与可推物理：门洞通行由既有 DOOR_HALF 吸附负责（否则 0.74 vs 0.9 互顶 → 卡门）
+      const jambF = new THREE.Mesh(jamb, mats.struct);
+      jambF.position.set(divider, DOOR_H / 2, DOOR_HALF + 0.14);
+      jambF.userData.noSolid = true;
+      this.root.add(jambF);                                            // 门柱（前）
+      const jambB = new THREE.Mesh(jamb, mats.struct);
+      jambB.position.set(divider, DOOR_H / 2, -DOOR_HALF - 0.14);
+      jambB.userData.noSolid = true;
+      this.root.add(jambB);                                            // 门柱（后）
       // 门头灯带 + 门楣斜遮檐（手搓楔形，让门在俯视机位下读得出来）
       add(new THREE.BoxGeometry(WALL_T + 0.14, 0.16, DOOR_HALF * 2 + 0.40), mats.stripWarm, divider,
         DOOR_H + 0.1, 0);
@@ -755,6 +769,7 @@ export class BaseScene {
    *  过滤与说明见 collectFurnitureMeshes；家具被推动后 solids 每帧由物理刷新。 */
   private buildRoomPhysics(): void {
     const meshes = this.collectFurnitureMeshes();
+    const statics = this.collectStaticBoxes();
     // ★ 接触阴影面片：不进碰撞体，但跟着家具一起走（否则推走家具、影子留在原地）
     const shadows: THREE.Mesh[] = [];
     if (this.mats) {
@@ -764,10 +779,37 @@ export class BaseScene {
     }
     const phys = new RoomPhysics();
     phys.addFurniture(meshes, this.root, shadows);
+    phys.addStaticBoxes(statics);
     phys.addRoomBounds(this.hallW / 2, ROOM_D / 2);
     for (const m of this.kineticMovers) phys.addKinetic(m);
     this.kineticMovers.length = 0;
     this.roomPhys = phys;
+  }
+
+  /** ★ 收集"建筑构件"的静态实体盒（wall / floor / ceil 材质的非 noSolid 件）：
+   *  舰内抬高地台、墙上的工具挂板、舱门柱 —— 不能推，但必须挡人。 */
+  private collectStaticBoxes(): { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[] {
+    const arch = new Set<THREE.Material | undefined>([this.mats?.wall, this.mats?.floor, this.mats?.ceil]);
+    const out: { minX: number; maxX: number; minY: number; maxY: number; minZ: number; maxZ: number }[] = [];
+    const box = new THREE.Box3();
+    this.root.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      if (o.userData.noSolid === true) return;
+      const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+      if (!arch.has(mat)) return;
+      const geo = o.geometry as THREE.BufferGeometry;
+      if (!geo.boundingBox) geo.computeBoundingBox();
+      if (!geo.boundingBox) return;
+      o.updateWorldMatrix(true, false);
+      box.copy(geo.boundingBox).applyMatrix4(o.matrixWorld);
+      if (box.max.y < 0.30 || box.min.y > 1.6) return;     // 与角色身高无关的薄板/顶板
+      out.push({
+        minX: box.min.x, maxX: box.max.x,
+        minY: box.min.y, maxY: box.max.y,
+        minZ: box.min.z, maxZ: box.max.z,
+      });
+    });
+    return out;
   }
 
   /** ★ 收集"可推家具"的 mesh 清单。
@@ -781,6 +823,9 @@ export class BaseScene {
       this.mats?.shadow, this.mats?.pad, this.mats?.flow, this.mats?.holo, this.mats?.steam,
       this.mats?.strip, this.mats?.stripWarm, this.mats?.stripVert,
       this.mats?.screen, this.mats?.screenAlt, this.mats?.viewport,
+      // ★ 建筑构件材质：挂板（wall）、地台/地砖（floor）、天花板（ceil）——
+      //   这些是"房间结构"不是可推家具（地台被当家具就会连整套舱内构件一起走）。
+      this.mats?.wall, this.mats?.floor, this.mats?.ceil,
     ]);
     const box = new THREE.Box3();
     this.root.traverse((o) => {
@@ -793,7 +838,7 @@ export class BaseScene {
       if (!geo.boundingBox) return;
       o.updateWorldMatrix(true, false);
       box.copy(geo.boundingBox).applyMatrix4(o.matrixWorld);
-      if (box.max.y < 0.35 || box.min.y > 1.6) return;        // 脚下的薄板 / 头顶的梁
+      if (box.max.y < 0.30 || box.min.y > 1.6) return;        // 脚下的薄板 / 头顶的梁
       const sx = box.max.x - box.min.x;
       const sz = box.max.z - box.min.z;
       if (Math.min(sx, sz) < 0.12) return;                    // 薄片（屏幕 / 贴片 / 铭牌）
@@ -805,23 +850,41 @@ export class BaseScene {
     return out;
   }
 
-  /** ★ 圆形 vs 实体 AABB 的碰撞查询（xz 平面）——移动前问一句"能不能过去" */
-  private blockedCircle(x: number, z: number, r: number): boolean {
+  /** ★ 圆形 vs 实体 AABB 的碰撞查询（xz 平面）——移动前问一句"能不能过去"。
+   *  feetY = 判断者的脚底高度：顶面 ≤ feetY + STEP_MAX 的可以踩上去（不算挡），
+   *  底面 ≥ feetY + HEAD_H 的可以从下面钻过去（也不算挡）。 */
+  private blockedCircle(x: number, z: number, r: number, feetY = this.feetY): boolean {
     for (let i = 0; i < this.solids.length; i++) {
       const s = this.solids[i];
       const cx = Math.max(s.minX, Math.min(x, s.maxX));
       const cz = Math.max(s.minZ, Math.min(z, s.maxZ));
       const dx = x - cx;
       const dz = z - cz;
-      if (dx * dx + dz * dz < r * r) return true;
+      if (dx * dx + dz * dz >= r * r) continue;
+      if (s.maxY <= feetY + STEP_MAX) continue;   // 迈得上去 → 当地面
+      if (s.minY >= feetY + HEAD_H) continue;     // 从下面穿过
+      return true;
     }
     return false;
   }
 
+  /** ★ 某点可站立的地面高度：把所有"能迈上去"的实体顶面取最高（脚下地面）。
+   *  顶面比 feetY + STEP_MAX 还高 → 属于墙，不算地面。 */
+  private groundAt(x: number, z: number, feetY: number): number {
+    let g = 0;
+    for (let i = 0; i < this.solids.length; i++) {
+      const s = this.solids[i];
+      if (x < s.minX || x > s.maxX || z < s.minZ || z > s.maxZ) continue;
+      const top = s.maxY;
+      if (top <= feetY + STEP_MAX && top > g) g = top;
+    }
+    return g;
+  }
+
   /** ★ 兜底脱困：已经陷在实体里（出生点 / 被挤住）→ 8 方向逐级外扩找最近的合法位。
    *  只在"当前就重叠"时调用，命中即停；找不到（极端情况）就原地不动，交给下一帧。 */
-  private unstick(pos: THREE.Vector3, r: number): void {
-    if (!this.blockedCircle(pos.x, pos.z, r)) return;
+  private unstick(pos: THREE.Vector3, r: number, feetY = this.feetY): void {
+    if (!this.blockedCircle(pos.x, pos.z, r, feetY)) return;
     const halfW = this.hallW / 2 - 0.9;
     const minZ = -ROOM_D / 2 + 0.9;
     const maxZ = ROOM_D / 2 - 1.2;
@@ -831,7 +894,7 @@ export class BaseScene {
         const a = (k / 8) * Math.PI * 2;
         const x = Math.max(-halfW, Math.min(halfW, pos.x + Math.cos(a) * d));
         const z = Math.max(minZ, Math.min(maxZ, pos.z + Math.sin(a) * d));
-        if (!this.blockedCircle(x, z, r)) {
+        if (!this.blockedCircle(x, z, r, feetY)) {
           pos.x = x;
           pos.z = z;
           return;
@@ -1039,7 +1102,17 @@ export class BaseScene {
       }
       // ★ 兜底脱困（出生点 / 被会动道具挤住 / 门洞吸附后仍在实体里）
       this.unstick(this.charPos, CHAR_R);
-      // 跳跃（空格；着地才可起跳）
+      // ---- 竖直：脚下地面（地台/踏步/矮箱顶面）+ 跳跃 ----
+      //   groundY = 站的地面高度；charY = 相对地面的跳跃高度
+      const g = this.groundAt(this.charPos.x, this.charPos.z, this.feetY);
+      if (this.grounded) {
+        if (g > this.groundY + 0.001) {
+          this.groundY = g;                 // 迈上台阶（STEP_MAX 以内，平滑升上去）
+        } else if (g < this.groundY - 0.02) {
+          this.grounded = false;            // 走下边缘 → 落体
+          this.vy = 0;
+        }
+      }
       if (this.wantJump && this.grounded) {
         this.vy = JUMP_V;
         this.grounded = false;
@@ -1048,8 +1121,14 @@ export class BaseScene {
       if (!this.grounded) {
         this.vy -= GRAVITY * dt;
         this.charY += this.vy * dt;
-        if (this.charY <= 0) { this.charY = 0; this.vy = 0; this.grounded = true; }
+        if (this.vy <= 0 && this.groundY + this.charY <= g) {
+          this.groundY = g;
+          this.charY = 0;
+          this.vy = 0;
+          this.grounded = true;
+        }
       }
+      this.feetY = this.groundY + this.charY;   // 本帧脚底高度（下一帧挡路判定用）
       if (mx !== 0) {
         const faceRight = mx > 0;
         if (faceRight !== this.facingRight) {
@@ -1057,7 +1136,7 @@ export class BaseScene {
           this.quad.setFlip(!faceRight, false); // 左行镜像（素材默认朝右）
         }
       }
-      this.quad.setPosition(this.charPos.x, this.charY, this.charPos.z);
+      this.quad.setPosition(this.charPos.x, this.groundY + this.charY, this.charPos.z);
       // ★ 加工站区域判定（在加工站房间内 → 显示"F · 打开加工台"提示）；
       //   抽卡/加工台/背包等 UI 打开时（uiBlocking）不绘制提示
       // ★ 交互站判定（大厅坐标；最近的命中站点生效）→ 显示"F · 标签"

@@ -545,8 +545,16 @@ function hoverProp(
 // ------------------------------------------------------------
 
 export function decorateShell(
-  add: AddFn, mats: DecorMats, hallW: number, bays: number[], anim: RegisterAnim,
+  addRaw: AddFn, mats: DecorMats, hallW: number, bays: number[], anim: RegisterAnim,
 ): void {
+  // ★ 壳体级装饰（踢脚 / 腰线 / 桁架 / 管道 / 通风口 / 灯槽 / 灯柱）是**建筑**，
+  //   不参与"可推家具"物理：否则沿墙一圈的踢脚线会与地台/管道等**串成一个
+  //   覆盖整间房的大簇**（合簇是按 AABB 接触传递的）→ 角色被关在里面走不动。
+  const add: AddFn = (geo, mat, x, y, z, rx, ry, rz) => {
+    const m = addRaw(geo, mat, x, y, z, rx, ry, rz);
+    m.userData.noSolid = true;
+    return m;
+  };
   const W = hallW;
   const halfW = W / 2;
   const zb = -ROOM_D / 2;       // 背墙内表面 z

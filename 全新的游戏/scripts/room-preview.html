@@ -63,6 +63,7 @@
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
+    window.__room = roomScene;   // 调试：暴露房间实例（无头诊断用）
     window.__roomReady = true;
     void host;
   </script>
