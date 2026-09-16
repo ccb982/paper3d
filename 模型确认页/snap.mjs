@@ -34,8 +34,27 @@ const stagePng = path.join(STAGE, 'p' + stamp + '.png');
 const prof = path.join(STAGE, 'prof' + stamp);
 fs.mkdirSync(prof, { recursive: true });
 
-// HTML 复制到 ASCII 路径（内容已全部内联，无相对引用）
+// HTML 复制到 ASCII 路径。
+// ★ 若 HTML 里有**相对引用**（<script src="x.js">），必须一并把同目录的兄弟文件
+//   复制过去 —— 否则 staging 目录里 404，页面脚本直接 ReferenceError（静默白屏）。
 fs.copyFileSync(path.join(DIR, html), stageHtml);
+{
+  const htmlText = fs.readFileSync(path.join(DIR, html), 'utf8');
+  const refs = [...htmlText.matchAll(/(?:src|href)\s*=\s*["']([^"'#?]+)["']/g)]
+    .map((m) => m[1])
+    .filter((r) => !/^(https?:|\/\/|data:)/i.test(r));
+  for (const r of new Set(refs)) {
+    const src = path.join(DIR, r);
+    if (fs.existsSync(src) && fs.statSync(src).isFile()) {
+      fs.copyFileSync(src, path.join(STAGE, path.basename(r)));
+      console.log('  + asset ' + r);
+    }
+  }
+  // 记录以便收尾清理
+  globalThis.__stagedAssets = [...new Set(refs)]
+    .map((r) => path.join(STAGE, path.basename(r)))
+    .filter((p) => fs.existsSync(p));
+}
 
 const args = [
   '--headless=new',
@@ -63,7 +82,10 @@ child.on('exit', (code) => {
   if (fs.existsSync(stagePng)) {
     fs.copyFileSync(stagePng, path.join(DIR, png));
     const sz = fs.statSync(path.join(DIR, png)).size;
-    try { fs.unlinkSync(stagePng); fs.unlinkSync(stageHtml); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(stagePng); fs.unlinkSync(stageHtml);
+      for (const a of (globalThis.__stagedAssets || [])) { try { fs.unlinkSync(a); } catch { /* ignore */ } }
+    } catch { /* ignore */ }
     console.log('OK ' + png + ' ' + sz + 'B (exit=' + code + ')');
   } else {
     console.error('NO SHOT exit=' + code);

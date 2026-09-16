@@ -62,21 +62,36 @@ export interface VisitorModelStyle {
   faceRect?: { u0: number; u1: number; v0: number; v1: number };
   /** ★ 脸区底色采样点 UV 覆盖（缺省用内置值） */
   skinUV?: { u: number; v: number };
-  /** ★ 换脸策略（2026-09-16 新增）：
-   *  · 'flatten'（缺省）= 删正面小面片 + 补平板（Kenney Mini Characters 用）
-   *  · 'remap' = **只重映射正脸顶点 UV**，不增删几何（Cube Guy 这类
-   *    「单块网格 + 调色板贴图」必须用这个，用 flatten 会把整个身体正面挖空） */
-  faceMode?: 'flatten' | 'remap';
-  /** ★ 'remap' 模式：正脸顶点判定阈值（顶点法线的"前向分量"）。
-   *  模型前向轴 + 符号由 frontAxis 指定；阈值越高只取越正对镜头的面。缺省 0.7。 */
-  faceFacingMin?: number;
-  /** ★ 'remap' 模式：模型局部空间的**前向轴**（缺省 'z'）。
+  /** ★ 换脸策略（2026-09-16 最终只剩一个：'plate'）：
+   *  · 'plate'（缺省）= **把前脸片几何真正压平** + 重映射 UV —— 用户要的
+   *    「纯平脸 + 立绘」。只有这个模式能做出"平"的效果（只改 UV 时凸起的
+   *    共面小方板照样看得见）。
+   *  （历史上还有 'flatten'（删正面补平板，Kenney 用）与 'remap'（只改 UV，
+   *     Cube Guy 中间方案）—— 两者都已删除：前者会把单块全身网格挖空，
+   *    后者做不出"平"。2026-09-16 清理。） */
+  faceMode?: 'plate';
+  /** ★ 模型局部空间的**前向轴**。
    *  ★★ 带符号！ '+y' / '-y' / '+x' / '-x' / '+z' / '-z' 均可。
    *  Quaternius Cube Guy 实测：**'-y' 才是脸朝向**（FBX 惯例 y=前后，但脸在 -y）。
    *  判错方向的最典型症状 = **立绘糊在后脑勺上**。 */
   frontAxis?: '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
-  /** ★ 'remap' 模式：模型局部空间的**高度轴**（缺省 'y'）。Cube Guy 传 'z'。 */
+  /** ★ 模型局部空间的**高度轴**。Cube Guy 传 'z'。 */
   upAxis?: 'x' | 'y' | 'z';
+  /** ★ **删掉眼睛浮雕**（用户定调「把眼睛删了就行了」）。
+   *  眼睛浮雕范围用 CG_EYE_* 实测常量；只重排索引，蒙皮零错位。缺省 true。 */
+  removeEyes?: boolean;
+  /** ★ 脸面片的三维范围（模型局部坐标；用于压平与 UV 映射）。
+   *  缺省用 Cube Guy 实测值。换模型时必须按新模型实测重标。 */
+  facePlate?: {
+    /** 脸区下界（高度轴上） */
+    z0: number;
+    /** 脸区上界（高度轴上） */
+    z1: number;
+    /** 该范围之外、比此值更靠后的顶点不参与压平（前后轴上；越靠脸越"小"取负） */
+    projMin: number;
+    /** 压平后的平面位置（前后轴上的投影值；越大越靠前） */
+    flatProj: number;
+  };
 }
 
 /** 走路动画的参考速度（米/秒；timeScale = speed / 此值，1 附近最自然） */
@@ -85,10 +100,8 @@ const WALK_REF_SPEED = 3.4;
 const SPRINT_MUL = 1.35;
 /** 待机/走路的交叉淡化时长（秒） */
 const FADE_SECONDS = 0.2;
-/** 头部正面判定：z 距头网格最大 z 此阈值以内（覆盖 4 层五官面片） */
-const FRONT_EPS = 0.02;
-/** ★ 脸区矩形（UV；贴图左上角空白区，实测无网格使用；v=0 = 图顶）。
- *  像素矩形 232×224 ≈ 头正面宽高比（0.29:0.28），脸图拉伸铺满 → 几乎无形变。 */
+/** ★ 脸区矩形缺省（UV；**Kenney Mini Characters** 那张 512 贴图的左上角空白区；
+ *  v=0 = 图顶）。Cube Guy 用 visitors.ts 的 faceRect 覆盖 → 走 CG_FACE_* 那一套。 */
 const FACE_U0 = 80 / 512;
 const FACE_U1 = 312 / 512;
 const FACE_V0 = 6 / 512;
@@ -99,30 +112,90 @@ const SKIN_UV = { u: 0.514, v: 0.847 };
 const ATLAS_SIZE = 512;
 
 // ============================================================
-// ★ Cube Guy / 调色板贴图模型的换脸参数（2026-09-16 实测标定）
+// ★ Cube Guy 换脸参数（2026-09-16 探针实测，**已推翻并重写**）
 // ============================================================
-// Quaternius "Cube Guy"（visitor_cubeguy.glb）与 Kenney 是**两类完全不同的模型**：
-//   · 整个模型只有 **8 个 UV 坐标**、贴图是一张 **32×32 的 8 色调色板**——
-//     每个面片只采样**一个 texel**，没有"画好的脸"；
-//   · 全身是**一整块** `Character` 蒙皮网格（3122 三角面），**没有独立头网格**；
-//   · 头部正脸**是平的**（局部 y = +maxY 的那一面，法线 (0,1,0)），
-//     但它在**局部 y 轴**上朝前，不是 z 轴（FBX 惯例：y=前后、z=高度）。
+// Quaternius "Cube Guy"（visitor_cubeguy.glb）的真实情况（probe1-16 实测）：
+//   · 全身是**一整块** `Character` 蒙皮网格（1794 顶点 / 3122 三角面），无独立头网格；
+//   · 贴图 Atlas.png，整个模型**只采样 8 个 UV**（全在 v≈0.308..0.328 窄带）；
+//   · ★★ **模型身上根本没有"画好的脸"**：脸面层(y=-0.005707) 与它对面的
+//     后脑层(y=+0.005707) **采样同一个 texel `0.0665,0.3119`**，看起来一模一样
+//     （都是纯肤色）。用户看到的"眼睛/头发"**全是几何浮雕**，不是贴图。
+//     全模型只有 8 个顶点用了与众不同的 texel `0.3270,0.3251`（那才是唯一"细节色"）。
+//   · 局部轴（probe10 手算节点四元数）：**y = 前后**（脸朝 **-y**）、**z = 高度**、x = 左右；
+//     mesh 节点带 -90°X 旋转 → 局部 **-y → 世界 +Z**。而游戏里 yaw=atan2(dx,dz)
+//     即"局部前向 = 世界 +Z" ⇒ **frontAxis:'-y' 正确**。
+//   · 头是一个封闭方盒：y 完全对称（±0.005707），z 0.014933..0.028388；
+//     两端各有一块 ~200 面的大平面（前=脸面层，后=后脑层，**外观无差别**）。
+//   · 脸上的"五官"是共面小方板叠出来的浮雕：
+//       眼睛浮雕 y ∈ (-0.005707, -0.0040]、z 0.021003..0.022260、|x| 0.0017..0.0060（100 面）
+//       头发     z >= 脸面上沿 0.026036 的整个盒盖（462 面）
+//       耳朵     |x|=0.006784、z 0.018930..0.021726（远低于脸面上沿 → 天然不被削，用户要保留）
 //
-// 因此 Kenney 那套「删正面小面片 + 补平板」在华盖哥上会**把整个身体正面挖空**
-//（"正面"筛选命中全身）——必须改用 `faceMode: 'remap'`：**只改正脸顶点的 UV**，
-// 让它指向贴图里一块干净区域，再把立绘画到那块区域。不增删几何，零副作用。
+// ★★ 两个必须记住的坑（都真实踩过）：
+//  ① 判断"脸平不平"必须用**射线探针**，不能拿"正脸顶点 bbox 跨度"下结论
+//     （0.0038 的跨度是把耳朵算进去造成的假象；脸面层自己跨度只有 3e-9）。
+//  ② "取最靠前那一层"的**投影方向**极易搞反：proj = f * fSign 时，
+//     "最靠前" = proj **最大**。写成最小会选中后脑层（fSign=-1 时最小= y 最大）。
+//     症状 = 立绘整片糊到后脑勺。已加自检（层法线朝后则放弃换脸）。
 //
-// 安全贴图区：模型自用 texel 全在 v≈0.307..0.329 这条窄带；脸图区必须避开。
-// 下面这块 6×9 texel（u 0..0.1875, v 0.71875..1.0）经实测**无任何顶点采样**。
-/** ★ Cube Guy 脸图区（UV 矩形；u 0..6/32, v 23/32..1） */
-const CG_FACE_U0 = 0 / 32;
-const CG_FACE_U1 = 6 / 32;
-const CG_FACE_V0 = 23 / 32;
-const CG_FACE_V1 = 1;
+// 做法：`faceMode:'plate'` —— 把「头正面」整片几何**真正压平**到一块平面 +
+// 把这块平面的 UV 映射到贴图空白区画立绘 + 删掉眼睛浮雕面。
+// （Kenney 那套「删正面补平板」会挖空整个身体正面，已删除不用。）
+//
+// 安全贴图区：模型自用 texel 全在 v≈0.308..0.328；脸图区选下方空白区，实测无采样。
 /** texel 内缩（避免线性过滤把相邻 texel 混进来） */
 const CG_FACE_PAD = 0.5 / 32;
-/** 正脸判定阈值：只取法线前向分量 > 此值的顶点 */
-const CG_FACING_MIN = 0.7;
+
+// ---- 眼睛浮雕参数（probe7-13 实测坐标，模型局部 z=高度 / y=前后 / x=左右）----
+/** 眼睛浮雕的 z 带 与 |x| 带 */
+const CG_EYE_Z0 = 0.0208;
+const CG_EYE_Z1 = 0.0223;
+const CG_EYE_AX0 = 0.0017;
+const CG_EYE_AX1 = 0.0060;
+/** 眼睛浮雕的最深 y（实测 -0.004097）——它位于脸面层**之后**（y 更大） */
+const CG_EYE_Y_MAX = -0.0040;
+
+// ============================================================
+// ★★ 脸面片（probe17-24 实测，2026-09-16 定案 —— 这是第 4 次也是最后一次修正）
+// ============================================================
+// 【踩坑回顾】前三版全错在**分不清"脸"与"额头/头发"**：
+//   ① 第 1 版：拿"最靠前那一层"当脸 → 它是 y=-0.005707 的 33 顶点，
+//      形状是**左侧鬓角 + 额前刘海**（L 形，下半边只有左半边，上半边才全宽），
+//      根本不含眼睛 —— 于是立绘糊在额头上，用户说"纹理绘制在前面头发上"。
+//   ② 第 2 版：拿 "z >= 脸面上沿 0.026036" 当头发削掉 → 头是**封闭方盒**，
+//      这等于把**整个头顶**削了 —— 用户说"你把头顶头发弄没了"。
+//   ③ 第 3 版：以为头发垂在脸前 → **射线探针（probe24）证明：脸区 45%~82% 高度
+//      区间内，0 个采样点被头发遮挡**。头发全在 z>=0.026（82.5% 以上），
+//      **不存在"垂在脸前的刘海"**。
+//
+// 【真相 —— 这个头的层级结构（探针实测）】
+//   z 0.014933..0.026036  ← **头正面**（一个封闭方盒的正面；下巴底 → 发际线）
+//     其中 z 45.1%..53.4% (0.021003..0.022119) 是**眼睛浮雕**（法线朝前）
+//   z >= 82.5%   (0.026036..)  ← **头发盖**（薄圈带 352 面 + 顶隆起 110 面）
+//   脸朝 -y；头盒 y 完全对称 ±0.005707。
+//
+// 【最终方案】用户定调：「整个前脸片全削平再贴」+「扩大脸面到整个头正面」
+//   +「头发只去掉靠近脸的，其余保留」+「把眼睛删了就行了」。
+//   · 压平：把「头正面」范围内（z ∈ [0.014933, 0.026036] 且 proj >= 0.0038）
+//     的所有顶点，沿前向轴推到同一平面 CG_PLATE_FLAT_PROJ → **真正的一块平面**；
+//   · 脸面因此是 0.0130 宽 × 0.0111 高 ≈ **1.17:1** 的近方形（立绘比例自然）；
+//   · 眼睛浮雕：**整面删除**（只重排索引；实测命中 100 面）—— 用户明确要求，
+//     压平（第 4 轮方案）之外再补这一步；
+//   · 头发**完全不动**：射线探针证明它不挡脸，且用户要保留。
+//
+// 【为什么必须"压平几何"而不是只改 UV】
+//   只改 UV 时几何仍是凸的，共面小方板的高低差照样看得见；
+//   用户要的是「纯平脸」，只有真的把顶点推到同一平面才成立。
+/** 脸面片下界（高度轴）—— ★ 用户定调「扩大脸面到整个头正面」：
+ *  取**头的底面 0.014933**（不是眼睛下沿 0.0210）→ 脸面从下巴一直到发际线，
+ *  得到 0.0130 宽 × 0.0111 高 ≈ **1.17:1** 的近方形脸面，立绘比例自然。 */
+const CG_PLATE_Z0 = 0.014933;
+/** 脸面片上界（高度轴；= 发际线 0.026036，头发从这里开始，不动头发） */
+const CG_PLATE_Z1 = 0.026036;
+/** 参与压平的"最靠后"投影值：只压 proj >= 此值的顶点（避免把后脑/脖子拉进来） */
+const CG_PLATE_PROJ_MIN = 0.0038;
+/** 压平后的平面投影值（越靠前越大；取实测最前 0.005707 + 少量凸出消 z-fighting） */
+const CG_PLATE_FLAT_PROJ = 0.00585;
 
 type ModelTemplate = { scene: THREE.Object3D; animations: THREE.AnimationClip[]; baseImage: CanvasImageSource | null };
 
@@ -208,6 +281,54 @@ function findHeadMesh(model: THREE.Object3D, override?: string): THREE.SkinnedMe
     if (top > bestTop) { bestTop = top; best = s; }
   }
   return best;
+}
+
+/** ★ 解析换脸用的三根局部轴 + 前向符号。
+ *
+ *  · 前向轴：`style.frontAxis`（**带符号**，如 Cube Guy 的 '-y'），缺省 'z'。
+ *    ★★ 符号判错的最典型症状 = 立绘整片糊到后脑勺（且不报任何错）。
+ *  · 高度轴：`style.upAxis`，缺省 'y'。
+ *  · 左右轴：剩下那根（三轴必然互不相同）。
+ *  · fSign：前向轴符号（'-' 给 -1，否则 +1）。所有"越靠脸越靠前"的投影量都乘它，
+ *    于是统一成"**proj 越大越靠前**"，后续比较不必再分正负两种情况。
+ */
+function resolveAxes(style: VisitorModelStyle): {
+  fAxis: 'x' | 'y' | 'z';
+  uAxis: 'x' | 'y' | 'z';
+  lrAxis: 'x' | 'y' | 'z';
+  fSign: 1 | -1;
+} {
+  const rawFront = style.frontAxis ?? 'z';
+  const fSign: 1 | -1 = rawFront.startsWith('-') ? -1 : 1;
+  const fAxis = (rawFront.replace(/^[+-]/, '') || 'z') as 'x' | 'y' | 'z';
+  const uAxis = (style.upAxis ?? 'y') as 'x' | 'y' | 'z';
+  const lrAxis = (['x', 'y', 'z'] as const).find((a) => a !== fAxis && a !== uAxis) ?? 'x';
+  return { fAxis, uAxis, lrAxis, fSign };
+}
+
+/** ★ 生成"该顶点是否由 Head 关节主导"的判定函数。
+ *
+ *  做法：取 skinWeight 最大的那一路，看它指向的关节是不是 `Head`，且权重 > 0.5。
+ *  ★ 关节索引比较的是 **skinIndex 里存的值**（那是相对 `skin.joints` 的下标，
+ *    不是节点下标）—— 所以用骨架自身的 `bones.findIndex` 求 Head，两者同域。
+ *  找不到 Head 骨 / 没有蒙皮属性时返回恒 false 的判定（调用方会因命中过少而警告跳过）。
+ */
+function makeHeadDomTest(
+  head: THREE.SkinnedMesh,
+  jnt: THREE.BufferAttribute | undefined,
+  wgt: THREE.BufferAttribute | undefined,
+): (i: number) => boolean {
+  const headJoint = head.skeleton?.bones.findIndex((b) => b.name === 'Head') ?? -1;
+  if (!jnt || !wgt || headJoint < 0) return () => false;
+  return (i: number): boolean => {
+    let bw = 0;
+    let bj = -1;
+    for (let k = 0; k < 4; k++) {
+      const w = wgt.getComponent(i, k);
+      if (w > bw) { bw = w; bj = jnt.getComponent(i, k); }
+    }
+    return bj === headJoint && bw > 0.5;
+  };
 }
 
 /** 模板加载缓存（所有访客共用一次加载） */
@@ -359,8 +480,16 @@ export class VisitorModelRenderer extends FxRendererBase implements VisitorBodyL
       ctx.fillStyle = '#e6c39a';
     }
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-    // 拉伸铺满脸区（贴图矩形按头正面宽高比取，形变可忽略；透明处透出皮肤底色）
-    ctx.drawImage(face, x0, y0, x1 - x0, y1 - y0);
+    // ★ 立绘按 contain 铺（不变形）：faceRect 已按脸面比例选取 → 正常情况刚好铺满；
+    //   万一比例不匹配，宁可留底色也不拉伸（拉伸过的立绘一眼假）。
+    const rectW = x1 - x0;
+    const rectH = y1 - y0;
+    const imgW = (face as HTMLCanvasElement).width || 1;
+    const imgH = (face as HTMLCanvasElement).height || 1;
+    const s = Math.min(rectW / imgW, rectH / imgH);
+    const dw = imgW * s;
+    const dh = imgH * s;
+    ctx.drawImage(face, x0 + (rectW - dw) / 2, y0 + (rectH - dh) / 2, dw, dh);
     // 贴图（glTF 约定 flipY=false：v=0 = 图顶）
     const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
@@ -375,109 +504,95 @@ export class VisitorModelRenderer extends FxRendererBase implements VisitorBodyL
       tm.map = tex;
       tm.needsUpdate = true;
     }
-    // ★ 换脸落点：两种策略（由 style.faceMode 选）
-    //   · 'remap'  = 只改正脸顶点 UV（单块网格 + 调色板贴图，如 Cube Guy）
-    //   · 'flatten'= 削平正面 + 补平板（多网格、有独立头网格，如 Kenney）
-    if (style.faceMode === 'remap') {
-      this.remapFaceUV(model, style, FR);
-    } else {
-      this.flattenFace(model, style, FR);
-    }
+    // ★ 换脸落点：'plate' = 把前脸片几何**真正压平** + 重映射 UV + 删眼睛浮雕
+    //   （这是 2026-09-16 收敛后的唯一策略；'flatten'/'remap' 已删除，见类型注释）
+    this.flattenFacePlate(model, style, FR);
   }
 
   /**
-   * ★ 只重映射「正脸顶点」的 UV（不增删几何）—— 用于「单块网格 + 调色板贴图」模型
-   *（Quaternius Cube Guy）。Kenney 那套 flattenFace 会把整个身体正面挖空。
+   * ★★★ 把「前脸片」几何**真正压平**成一块平面 + 重映射 UV + 删眼睛浮雕
+   *   —— Cube Guy 的最终（也是唯一）换脸方案。
    *
-   * 原理：
-   *  ① 头网格 = 全身那唯一一块 SkinnedMesh；"头部顶点"按**主导关节 == Head** 筛；
-   *  ② "正脸"再按**法线的前向分量 > faceFacingMin** 筛（模型前向轴由 frontAxis 指定）；
-   *  ③ 正脸顶点按 (左右轴, 高度轴) 的局部包围盒归一化 → 映射到脸图区 UV；
-   *  ④ 因为模型原本只采样 8 个 texel，改 UV 后这些顶点就只读脸图区 →
-   *     立绘就"贴"在脸上了，且**不会**串色到身体（身体 UV 一个都没动）。
+   * 为什么必须"压平几何"而不是只改 UV：只改 UV 时几何仍是凸的，共面小方板的
+   * 高低差照样看得见；用户要的是「纯平脸 + 立绘」，只有真把顶点推到同一平面才成立。
+   *
+   * 判据（全部探针实测，见文件头 CG_PLATE_* 注释）：
+   *  ① 头网格 = 唯一那块 SkinnedMesh，头部顶点按**主导关节 == Head** 筛；
+   *  ② 前脸片 = 头部顶点里满足「高度 ∈ [z0, z1] ∧ 前向投影 >= projMin」的那些；
+   *  ③ 把这些顶点的前向坐标统一设为 flatProj → 一块平面；
+   *  ④ 同时把法线改成**纯前向** (0,±1,0)（随 fAxis），否则压平后光照还是花的；
+   *  ⑤ 前脸片顶点按 (左右, 高度) 归一化 → 映射到脸图区 UV；
+   *  ⑥ 按用户定调删掉眼睛浮雕面（只重排索引，蒙皮零错位）。
+   *
+   * ★ 头发完全不动：probe24 射线探针证明脸区 45%~82% 高度内 **0 个采样点被头发遮挡**，
+   *   "垂在脸前的刘海"在本模型上不存在。用户要「其余头发保留」。
    *
    * ★ 只在**本实例克隆出来的几何**上改，共享模板几何不动。
    */
-  private remapFaceUV(
+  private flattenFacePlate(
     model: THREE.Object3D,
     style: VisitorModelStyle,
     FR: { u0: number; u1: number; v0: number; v1: number },
   ): void {
     const head = findHeadMesh(model, style.headMeshName);
     if (!head) {
-      console.warn('[VisitorModel] 未找到头部网格，跳过换脸（可用 style.headMeshName 指定）');
+      console.warn('[VisitorModel] 压平脸：未找到头部网格，跳过（可用 style.headMeshName 指定）');
       return;
     }
-    // ★ 关键：不能直接改共享模板的几何 —— 克隆一份自己的
-    const src = head.geometry;
-    const geo = src.clone();
-    head.geometry = geo;
-    this.ownGeometries.push(geo);
-
+    // 不能直接改共享模板几何
+    let geo = head.geometry;
+    if (!this.ownGeometries.includes(geo)) {
+      geo = head.geometry.clone();
+      head.geometry = geo;
+      this.ownGeometries.push(geo);
+    }
     const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
     const nrm = geo.getAttribute('normal') as THREE.BufferAttribute | undefined;
     const uv = geo.getAttribute('uv') as THREE.BufferAttribute | undefined;
     const jnt = geo.getAttribute('skinIndex') as THREE.BufferAttribute | undefined;
     const wgt = geo.getAttribute('skinWeight') as THREE.BufferAttribute | undefined;
     if (!pos || !nrm || !uv) {
-      console.warn('[VisitorModel] 头部几何缺 position/normal/uv，跳过换脸');
+      console.warn('[VisitorModel] 压平脸：几何缺 position/normal/uv，跳过');
       return;
     }
-    // 前向 / 高度 / 左右 三个局部轴（★ 前向轴带符号：'-y' 表示脸朝局部 -y）
-    const AXV: Record<'x' | 'y' | 'z', (i: number) => number> = {
-      x: (i) => pos.getX(i),
-      y: (i) => pos.getY(i),
-      z: (i) => pos.getZ(i),
+    const { fAxis, uAxis, lrAxis, fSign } = resolveAxes(style);
+    const isHeadDom = makeHeadDomTest(head, jnt, wgt);
+    // 分轴读写器（Cube Guy: fAxis='y', uAxis='z', lrAxis='x'）
+    const getF = (i: number) => (fAxis === 'x' ? pos.getX(i) : fAxis === 'y' ? pos.getY(i) : pos.getZ(i));
+    const getU = (i: number) => (uAxis === 'x' ? pos.getX(i) : uAxis === 'y' ? pos.getY(i) : pos.getZ(i));
+    const getL = (i: number) => (lrAxis === 'x' ? pos.getX(i) : lrAxis === 'y' ? pos.getY(i) : pos.getZ(i));
+    const setF = (i: number, v: number) => {
+      if (fAxis === 'x') pos.setX(i, v); else if (fAxis === 'y') pos.setY(i, v); else pos.setZ(i, v);
     };
-    const NXV: Record<'x' | 'y' | 'z', (i: number) => number> = {
-      x: (i) => nrm.getX(i),
-      y: (i) => nrm.getY(i),
-      z: (i) => nrm.getZ(i),
+    const setNF = (i: number, v: number) => {
+      if (fAxis === 'x') nrm.setX(i, v); else if (fAxis === 'y') nrm.setY(i, v); else nrm.setZ(i, v);
     };
-    // 解析 frontAxis：'+y' / '-y' / 'x' …（不带符号时按 '+'）
-    const rawFront = style.frontAxis ?? 'z';
-    const fSign: number = rawFront.startsWith('-') ? -1 : 1;
-    const fAxis = (rawFront.replace(/^[+-]/, '') || 'z') as 'x' | 'y' | 'z';
-    const uAxis = style.upAxis ?? 'y';
-    // 左右轴 = 剩下那个（x/y/z 中除 fAxis 与 uAxis 之外的）
-    const rest = (['x', 'y', 'z'] as const).filter((a) => a !== fAxis && a !== uAxis);
-    const lrAxis: 'x' | 'y' | 'z' = rest[0] ?? (fAxis === 'x' ? 'y' : 'x');
-    const getF = AXV[fAxis];
-    const getU = AXV[uAxis];
-    const getL = AXV[lrAxis];
-    const getNF = NXV[fAxis];
 
-    // ① 头部主导顶点（主导关节 == Head 且权重 > 0.5）
-    let headJoint = -1;
-    if (jnt && wgt && head.skeleton) {
-      headJoint = head.skeleton.bones.findIndex((b) => b.name === 'Head');
-    }
-    const isHeadDom = (i: number): boolean => {
-      if (headJoint < 0 || !jnt || !wgt) return true; // 无法判定 → 全算（单网格小模型）
-      let bw = 0;
-      let bj = -1;
-      for (let k = 0; k < 4; k++) {
-        const w = wgt.getComponent(i, k);
-        if (w > bw) { bw = w; bj = jnt.getComponent(i, k); }
-      }
-      return bj === headJoint && bw > 0.5;
-    };
-    // ② 正脸 = 头部主导 + 法线前向分量 > 阈值（★ 用 fSign 把"脸朝向"统一为正）
-    const facingMin = style.faceFacingMin ?? CG_FACING_MIN;
-    const face: number[] = [];
+    // 范围：内置实测值（Cube Guy）或 style 覆盖
+    const FP = style.facePlate;
+    const pz0 = FP?.z0 ?? CG_PLATE_Z0;
+    const pz1 = FP?.z1 ?? CG_PLATE_Z1;
+    const projMin = FP?.projMin ?? CG_PLATE_PROJ_MIN;
+    const flatProj = FP?.flatProj ?? CG_PLATE_FLAT_PROJ;
+
+    // ② 选前脸片顶点
+    const plate: number[] = [];
     for (let i = 0; i < pos.count; i++) {
       if (!isHeadDom(i)) continue;
-      if (getNF(i) * fSign < facingMin) continue;
-      face.push(i);
+      const u = getU(i);
+      if (u < pz0 || u > pz1) continue;
+      if (getF(i) * fSign < projMin) continue;   // 太靠后（后脑/侧后）不要
+      plate.push(i);
     }
-    if (face.length < 3) {
-      console.warn('[VisitorModel] 正脸顶点过少（' + face.length + '），换脸跳过；',
-        '可调 style.faceFacingMin / frontAxis / upAxis');
+    if (plate.length < 3) {
+      console.warn('[VisitorModel] 压平脸：前脸片顶点过少（' + plate.length + '），跳过；',
+        '可调 style.facePlate / frontAxis / upAxis');
       return;
     }
-    // ③ 正脸在 (左右, 高度) 平面上的包围盒
+
+    // ③ 压平 + 法线拉直；④ 同时记录 (左右, 高度) 包围盒用于 UV 映射
     let l0 = Infinity, l1 = -Infinity, u0 = Infinity, u1 = -Infinity;
-    for (const i of face) {
+    for (const i of plate) {
       const l = getL(i), u = getU(i);
       if (l < l0) l0 = l;
       if (l > l1) l1 = l;
@@ -486,112 +601,77 @@ export class VisitorModelRenderer extends FxRendererBase implements VisitorBodyL
     }
     const lw = Math.max(1e-6, l1 - l0);
     const uh = Math.max(1e-6, u1 - u0);
-    // ④ 映射到脸图区（texel 内缩；v=0 = 图顶 → 高度大的对应 v 小）
+
+    // ★★ UV 映射：把脸面的 (左右, 高度) 线性映射到脸图区。
+    //
+    // 【关键】脸图区（faceRect）的**宽高比必须与脸面宽高比一致** —— 否则要么
+    //   拉伸立绘、要么裁剪掉大半（曾踩坑：脸 1.169:1 vs 立绘区 0.625:1，
+    //   走"横铺+纵裁"后立绘只用了 36% 高度，看起来像"没贴上/只贴了一半"）。
+    //   新 faceRect 已按脸面比例（1.169:1）选取，此处直接用满，不做裁剪。
+    //
+    // 方向：v=0 = 图顶（glTF flipY=false）。高度大的（额头）→ v 小（靠图顶），
+    //   故用 (1 - tu)。这样立绘的"头顶在上、下巴在下"与模型一致。
     const pu = FR.u0 + CG_FACE_PAD;
     const pu1 = FR.u1 - CG_FACE_PAD;
     const pv = FR.v0 + CG_FACE_PAD;
     const pv1 = FR.v1 - CG_FACE_PAD;
-    for (const i of face) {
+
+    for (const i of plate) {
+      setF(i, flatProj * fSign);          // ★ 沿前向推到同一平面（fSign=-1 时得到 -0.00585）
+      setNF(i, fSign);                    // ★ 法线拉直成纯前向，否则压平后光照还是花的
       const tl = (getL(i) - l0) / lw;
       const tu = (getU(i) - u0) / uh;
       uv.setXY(i, pu + tl * (pu1 - pu), pv + (1 - tu) * (pv1 - pv));
     }
-    uv.needsUpdate = true;
-    console.info('[VisitorModel] 换脸(remap)：正脸顶点 ' + face.length
-      + '/' + pos.count + '，脸区 u ' + FR.u0.toFixed(3) + '..' + FR.u1.toFixed(3)
-      + ' v ' + FR.v0.toFixed(3) + '..' + FR.v1.toFixed(3));
-  }
-
-  /** ★ 彻底削平头正面：删掉原正面 4 层小面片，开口处补一整块平面四边形
-   *  （法线 +Z、跟随头骨骼），4 顶点 UV 直接映射到脸区矩形。
-   *  只新建本实例几何并换给该 SkinnedMesh；共享模板几何不动。
-   *  ★ 2026-09-16 解耦：头网格改为**自动推断**（原来写死 'head-mesh'）。 */
-  private flattenFace(
-    model: THREE.Object3D,
-    style: VisitorModelStyle,
-    FR: { u0: number; u1: number; v0: number; v1: number },
-  ): void {
-    const head = findHeadMesh(model, style.headMeshName);
-    if (!head) {
-      console.warn('[VisitorModel] 未找到头部网格，跳过换脸（可用 style.headMeshName 指定）');
-      return;
-    }
-    const src = head.geometry;
-    const pos = src.getAttribute('position') as THREE.BufferAttribute;
-    const srcIdx = src.getIndex();
-    if (!pos || !srcIdx) return;
-    // 1) 前平面判定 + 外接矩形（取一个正面顶点做骨骼/次要属性样板）
-    let maxZ = -Infinity;
-    for (let i = 0; i < pos.count; i++) maxZ = Math.max(maxZ, pos.getZ(i));
-    const isFront = (i: number): boolean => pos.getZ(i) > maxZ - FRONT_EPS;
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    let srcV = -1;
-    for (let i = 0; i < pos.count; i++) {
-      if (!isFront(i)) continue;
-      if (srcV < 0) srcV = i;
-      minX = Math.min(minX, pos.getX(i));
-      maxX = Math.max(maxX, pos.getX(i));
-      minY = Math.min(minY, pos.getY(i));
-      maxY = Math.max(maxY, pos.getY(i));
-    }
-    if (srcV < 0 || !(maxX > minX) || !(maxY > minY)) return;
-    // 2) 索引：丢掉正面三角形
-    const oldIdx = srcIdx.array;
-    const newIdx: number[] = [];
-    for (let t = 0; t < oldIdx.length; t += 3) {
-      const a = oldIdx[t];
-      const b = oldIdx[t + 1];
-      const c = oldIdx[t + 2];
-      if (isFront(a) && isFront(b) && isFront(c)) continue;
-      newIdx.push(a, b, c);
-    }
-    // 3) 属性：全量拷贝 + 追加 4 个平板顶点（骨骼/次要 UV 从 srcV 复制）
-    const base = pos.count;
-    const attrs: Record<string, THREE.BufferAttribute> = {};
-    for (const name of Object.keys(src.attributes)) {
-      const a = src.attributes[name] as THREE.BufferAttribute;
-      const data = new Float32Array((a.count + 4) * a.itemSize);
-      for (let i = 0; i < a.count; i++) {
-        for (let c = 0; c < a.itemSize; c++) data[i * a.itemSize + c] = a.getComponent(i, c);
-      }
-      attrs[name] = new THREE.BufferAttribute(data, a.itemSize);
-    }
-    // 四角：左上 / 右上 / 左下 / 右下（UV 与平面坐标一一对应；v=0 = 图顶）
-    const corners = [
-      { x: minX, y: maxY, u: FR.u0, v: FR.v0 },
-      { x: maxX, y: maxY, u: FR.u1, v: FR.v0 },
-      { x: minX, y: minY, u: FR.u0, v: FR.v1 },
-      { x: maxX, y: minY, u: FR.u1, v: FR.v1 },
-    ];
-    const zPlane = maxZ + 0.0004; // 与原最前层齐平略凸，消除 z-fighting
-    for (let q = 0; q < 4; q++) {
-      const vi = base + q;
-      const c = corners[q];
-      attrs.position.setXYZ(vi, c.x, c.y, zPlane);
-      attrs.normal?.setXYZ(vi, 0, 0, 1);
-      attrs.uv?.setXY(vi, c.u, c.v);
-      attrs.tangent?.setXYZW(vi, 1, 0, 0, 1);
-      for (const name of Object.keys(attrs)) {
-        if (name === 'position' || name === 'normal' || name === 'uv' || name === 'tangent') continue;
-        const a = src.attributes[name] as THREE.BufferAttribute;
-        const out = attrs[name];
-        for (let cc = 0; cc < a.itemSize; cc++) {
-          (out.array as Float32Array)[vi * a.itemSize + cc] = a.getComponent(srcV, cc);
+    // ⑤ 删眼睛浮雕（用户定调「把眼睛删了就行了」）
+    //    眼睛浮雕实测：z ∈ [0.0208, 0.0223]、|x| ∈ [0.0017, 0.0060]、
+    //    且位于脸面层**之后**（proj < 最前层）、不比 -0.0040 更深。
+    //    ★ 判据用**三角形三顶点全中**才删，避免误伤脸颊/鼻子。
+    //    ★ 只重排索引，不动顶点缓冲 → 蒙皮属性零错位。
+    let eyeFaces = 0;
+    if (style.removeEyes !== false) {
+      const idx = geo.getIndex();
+      if (idx) {
+        const eyeProjMin = CG_EYE_Y_MAX * fSign;
+        const isEyeVert = (i: number): boolean => {
+          const u = getU(i);
+          const ax = Math.abs(getL(i));
+          const proj = getF(i) * fSign;
+          if (u < CG_EYE_Z0 || u > CG_EYE_Z1) return false;
+          if (ax < CG_EYE_AX0 || ax > CG_EYE_AX1) return false;
+          if (proj < eyeProjMin) return false;
+          return true;
+        };
+        const oldIdx = idx.array;
+        const newIdx: number[] = [];
+        for (let t = 0; t < oldIdx.length; t += 3) {
+          const a = oldIdx[t];
+          const b = oldIdx[t + 1];
+          const c = oldIdx[t + 2];
+          if (isEyeVert(a) && isEyeVert(b) && isEyeVert(c)) { eyeFaces++; continue; }
+          newIdx.push(a, b, c);
+        }
+        if (eyeFaces > 0) {
+          // ★ count 是只读属性 → 换一个新的 BufferAttribute（沿用原 array 类型）
+          const Src = (oldIdx as unknown as { constructor: new (a: number[]) => ArrayLike<number> }).constructor;
+          geo.setIndex(new THREE.BufferAttribute(new Src(newIdx) as never, 1));
         }
       }
     }
-    // 4) 新几何（平板朝 +Z：逆时针绕序 tl→bl→tr / bl→br→tr）
-    const geo = new THREE.BufferGeometry();
-    for (const [name, attr] of Object.entries(attrs)) geo.setAttribute(name, attr);
-    geo.setIndex([...newIdx, base + 0, base + 2, base + 1, base + 2, base + 3, base + 1]);
+
+    pos.needsUpdate = true;
+    nrm.needsUpdate = true;
+    uv.needsUpdate = true;
     geo.computeBoundingBox();
     geo.computeBoundingSphere();
-    head.geometry = geo;
-    this.ownGeometries.push(geo);
+    console.info('[VisitorModel] 压平脸：顶点 ' + plate.length + '/' + pos.count
+      + '（高度 ' + pz0.toFixed(4) + '..' + pz1.toFixed(4)
+      + '，压到 proj=' + flatProj.toFixed(5) + '）'
+      + (eyeFaces > 0 ? '，删眼睛 ' + eyeFaces + ' 面' : '')
+      + '，脸区 u ' + FR.u0.toFixed(3) + '..' + FR.u1.toFixed(3)
+      + ' v ' + FR.v0.toFixed(3) + '..' + FR.v1.toFixed(3));
   }
+
 
   // ---- VisitorBodyLike / FxRendererBase ----
 
