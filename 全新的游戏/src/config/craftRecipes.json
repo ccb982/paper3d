@@ -98,15 +98,11 @@
       "inputs": [
         {
           "itemId": "sugar",
-          "count": 2
-        },
-        {
-          "itemId": "flower",
-          "count": 3
+          "count": 1
         },
         {
           "itemId": "berry",
-          "count": 3
+          "count": 1
         }
       ],
       "output": {
@@ -122,15 +118,11 @@
       "inputs": [
         {
           "itemId": "sugar",
-          "count": 2
-        },
-        {
-          "itemId": "berry",
-          "count": 4
+          "count": 1
         },
         {
           "itemId": "herb",
-          "count": 2
+          "count": 1
         }
       ],
       "output": {
