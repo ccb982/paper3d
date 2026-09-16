@@ -74,5 +74,5 @@
 
 ## ★ UI 约定（2026-09-16）
 - 一切「关闭/返回上一级」语义的面板，统一用 `ui/components/BackButton.ts` 的 `createBackButton()`（FTX 素材 `/ui/返回按钮.ftx3.gz`），别写自造 ✕。
-- 设置入口 = 基地左上角白齿轮（`main.ts` `createSettingsUI`），**仅基地模式显示**（`enterBaseMode` 显 / `enterWorldMode` 隐）。齿轮 z-index 必须 > 遮罩，否则点不到。
+- 设置入口 = 基地左上角白齿轮（实现 `ui/components/SettingsPanel.ts` 的 `createSettingsUI`），**仅基地模式显示**（`enterBaseMode` 显 / `enterWorldMode` 隐）。齿轮 z-index 必须 > 遮罩，否则点不到。
 - 性能 HUD（`hudWrap`）默认隐藏；「关闭」= 统计段整块不进 `if (hudVisible)` 之外，零累加零 DOM 写入。
