@@ -693,3 +693,169 @@ export function createViewportMaterial(color = 0x7fb6ff): THREE.ShaderMaterial {
     fragmentShader: VIEW_FRAG,
   });
 }
+
+// ------------------------------------------------------------
+// 7) 舰外空间背景（星空天穹 + 自转地球）—— 舰内独立场景用
+// ------------------------------------------------------------
+
+const STAR_FRAG = /* glsl */ `
+  varying vec3 vObj;
+  uniform float uTime;
+  uniform vec3  uColor;
+
+  float hash21(vec2 p) {
+    p = fract(p * vec2(123.34, 345.45));
+    p += dot(p, p + 34.345);
+    return fract(p.x * p.y);
+  }
+  float noise(vec2 p) {
+    vec2 i = floor(p); vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+               mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float fbm(vec2 p) {
+    float s = 0.0, amp = 0.5;
+    for (int i = 0; i < 4; i++) { s += noise(p) * amp; p *= 2.03; amp *= 0.5; }
+    return s;
+  }
+
+  // ★ 一颗"圆点星"：格内随机位置 + 随机半径（大小不一）+ 软边 + 独立相位的闪烁
+  float starLayer(vec2 uv, float gridY, float density, float bright, float seed) {
+    vec2 p = uv * vec2(gridY * 2.0, gridY);
+    vec2 cell = floor(p);
+    vec2 lp = fract(p) - 0.5;
+    float h = hash21(cell + seed);
+    if (h > density) return 0.0;                                  // 稀疏：不是每个格子都有星
+    vec2 jit = (vec2(hash21(cell + seed + 1.7), hash21(cell + seed + 5.3)) - 0.5) * 0.6;
+    float d = length(lp - jit);
+    float r = 0.028 + 0.085 * hash21(cell + seed + 9.1);          // 半径随机，但整体**很小**
+    float core = 1.0 - smoothstep(r * 0.30, r, d);                // 圆点本体
+    float halo = (1.0 - smoothstep(r, r * 2.4, d)) * 0.10;        // 极淡柔光晕
+    float tw = 0.35 + 0.65 * sin(uTime * (0.9 + h * 3.4) + h * 63.0);   // 一闪一闪
+    float edge = smoothstep(0.5, 0.34, max(abs(lp.x), abs(lp.y)));      // 格边淡出（防跳变）
+    return (core + halo) * (0.45 + 0.55 * tw) * edge * bright;
+  }
+
+  void main() {
+    // 用**物体空间方向**（天穹球不旋转缩放）→ 星点稳定，不随镜头平移抖动
+    vec3 d = normalize(vObj);
+    vec2 uv = vec2(atan(d.z, d.x) * 0.1591549, asin(clamp(d.y, -1.0, 1.0)) * 0.3183099);
+
+    vec3 col = vec3(0.0015, 0.0022, 0.0045);                       // 近乎纯黑的深空底
+
+    // ★ 星空以黑为主：只有**少量很小的星点**点缀（远密而极暗 / 近处偶有亮星）
+    col += vec3(0.88, 0.94, 1.00) * starLayer(uv, 150.0, 0.10, 0.55, 0.0);
+    col += vec3(0.86, 0.92, 1.00) * starLayer(uv, 95.0, 0.055, 0.85, 3.7);
+    col += vec3(1.00, 0.92, 0.80) * starLayer(uv, 58.0, 0.030, 1.35, 8.1);
+
+    // 银河带 / 星云只留"若有若无"的一层（不能破坏黑暗）
+    float band = exp(-pow((uv.y - 0.16 * sin(uv.x * 2.2)) * 3.4, 2.0));
+    col += vec3(0.26, 0.31, 0.46) * fbm(uv * vec2(260.0, 130.0) + uTime * 0.02) * band * 0.10;
+    col += uColor * pow(fbm(uv * 12.0 - uTime * 0.01), 2.6) * 0.035;
+
+    gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 星空天穹（大球 + BackSide；星点/银河/星云，靠 uTime 慢闪） */
+export function createStarDomeMaterial(color = 0x5a7fd0): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: uTime,
+      uColor: { value: new THREE.Color(color) },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      varying vec3 vObj;
+      void main() {
+        vObj = position;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: STAR_FRAG,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+}
+
+const EARTH_FRAG = /* glsl */ `
+  varying vec3 vW;
+  varying vec3 vObj;
+  varying vec3 vN;
+  uniform float uTime;
+
+  float hash31(vec3 p) {
+    p = fract(p * 0.3183099 + vec3(0.11, 0.17, 0.13));
+    p *= 17.0;
+    return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+  }
+  float noise3(vec3 x) {
+    vec3 i = floor(x);
+    vec3 f = fract(x);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash31(i), hash31(i + vec3(1, 0, 0)), f.x),
+          mix(hash31(i + vec3(0, 1, 0)), hash31(i + vec3(1, 1, 0)), f.x), f.y),
+      mix(mix(hash31(i + vec3(0, 0, 1)), hash31(i + vec3(1, 0, 1)), f.x),
+          mix(hash31(i + vec3(0, 1, 1)), hash31(i + vec3(1, 1, 1)), f.x), f.y),
+      f.z);
+  }
+  float fbm3(vec3 p) {
+    float s = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++) { s += noise3(p) * amp; p *= 2.03; amp *= 0.5; }
+    return s;
+  }
+  vec3 rotY(vec3 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec3(c * p.x - s * p.z, p.y, s * p.x + c * p.z);
+  }
+
+  void main() {
+    vec3 sp = normalize(vObj);
+    // —— 地表自转（把采样方向绕 y 轴转）——
+    vec3 gp = rotY(sp, uTime * 0.035);
+    float land = fbm3(gp * 2.3 + 4.2);
+    float isLand = smoothstep(0.47, 0.53, land);
+    vec3 ocean = mix(vec3(0.020, 0.075, 0.190), vec3(0.05, 0.16, 0.32), fbm3(gp * 5.0));
+    vec3 veg = mix(vec3(0.09, 0.22, 0.11), vec3(0.34, 0.30, 0.17), fbm3(gp * 7.0 + 2.0));
+    vec3 col = mix(ocean, veg, isLand);
+    // 极冠（纬度按未旋转的球坐标 y）
+    col = mix(col, vec3(0.86, 0.91, 0.96), smoothstep(0.74, 0.93, abs(sp.y)));
+    // 云层（稍快自转 → 与地表有相对运动）
+    vec3 cp = rotY(sp, uTime * 0.05 + 1.7);
+    float cloud = smoothstep(0.52, 0.74, fbm3(cp * 3.6));
+    col = mix(col, vec3(0.95, 0.96, 1.0), cloud * 0.55);
+    // 昼夜（固定太阳方向）
+    float ndl = max(dot(normalize(vN), normalize(vec3(0.62, 0.34, 0.70))), 0.0);
+    col *= 0.10 + 1.00 * pow(ndl, 0.75);
+    // 大气边缘辉光
+    float rim = pow(1.0 - max(dot(normalize(vN), normalize(cameraPosition - vW)), 0.0), 2.4);
+    col += vec3(0.28, 0.52, 1.0) * rim * 0.9;
+    gl_FragColor = vec4(col, 1.0);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** 自转地球（体表 / 云层 / 极冠 / 昼夜 / 大气边缘；全部靠 uTime 驱动） */
+export function createEarthMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    uniforms: { uTime: uTime },
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      varying vec3 vObj;
+      varying vec3 vN;
+      void main() {
+        vObj = position;
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vW = wp.xyz;
+        vN = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: EARTH_FRAG,
+  });
+}

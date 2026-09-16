@@ -32,6 +32,7 @@ import {
   type AddFn, type DecorMats, type RegisterAnim, type RegisterClick,
 } from './RoomDecor';
 import { chamferRectProfile, extrudeProfile, wedgeProfile } from '../../services/render/RoomDecoGeo';
+import { createSpaceBackdrop } from '../../services/render/SpaceBackdrop';
 
 export interface RoomDef {
   id: string;
@@ -77,6 +78,8 @@ export interface BaseSceneOptions {
   itemManager?: ItemManager;
   /** WebGL 渲染器（无人机三帧合成 + 翅膀 VAT 离屏烘焙共享上下文用） */
   renderer?: THREE.WebGLRenderer;
+  /** ★ 舷外空间背景（星空天穹 + 自转地球；基地 true，舰内 false 保持灰底） */
+  spaceBackdrop?: boolean;
 }
 
 export class BaseScene {
@@ -168,6 +171,16 @@ export class BaseScene {
     this.renderer3d = opts.renderer ?? null;
     this.root = new THREE.Group();
     scene.add(this.root);
+
+    // ★ 舷外空间背景：星空 + 自转地球（只基地开；舰内保持灰底）
+    if (opts.spaceBackdrop) {
+      const backdrop = createSpaceBackdrop(scene);
+      this.root.add(backdrop.dome, backdrop.earth);
+      // 整片星空缓慢自转（"不停的动"）；地球自转在 shader 里靠共享时钟驱动
+      this.roomAnims.push((_t, dt) => {
+        backdrop.dome.rotation.y -= dt * 0.0045;
+      });
+    }
 
     // 环境光（冷顶光 + 极淡暖补 + 相机侧正面补光；2026-09-16 极简版：
     //   大面积表面由 RoomSurfaceMaterial 自己烘焙光照，这里只负责角色/NPC/绿植等实体）

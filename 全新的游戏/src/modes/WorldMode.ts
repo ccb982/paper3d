@@ -3482,7 +3482,7 @@ export class WorldMode implements IGameMode {
     const shipRoom = (baseRoomsJson as unknown as { shipRoom: import('../ui/base/BaseScene').RoomDef }).shipRoom;
     // ★ 独立场景：舰内只画自己（世界粗块/地形/天空/雾全部不参与）
     this.interiorScene = new THREE.Scene();
-    this.interiorScene.background = new THREE.Color(0x0b1016);
+    this.interiorScene.background = new THREE.Color(0x0b1016);   // 舰内保持灰底（用户定调）
     interior = new BaseScene(this.interiorScene, {
       rooms: [shipRoom],
       protagonistAsset: this.protagonistAssetRef,
