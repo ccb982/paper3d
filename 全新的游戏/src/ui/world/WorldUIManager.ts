@@ -92,6 +92,9 @@ export class WorldUIManager extends BaseInteractionUI {
   private visitorNoticeTimer = 0;
   /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
   private enemyScaleEl: HTMLDivElement | null = null;
+  /** ★ 舰船遇围警示横幅（顶部红色播报；WorldMode 统计近舰敌军数驱动） */
+  private enemyGroupWarnEl: HTMLDivElement | null = null;
+  private lastEnemyGroupWarnText = '';
   /** ★ 进舰提示（靠近舰船按 E） */
   private boardPromptEl: HTMLDivElement | null = null;
   /** ★ 战斗 HUD 显隐（航行操船期隐藏：血条/准星/快捷栏/友军列表） */
@@ -424,6 +427,36 @@ export class WorldUIManager extends BaseInteractionUI {
     }
     this.enemyScaleEl.textContent = text;
     this.enemyScaleEl.style.color = color;
+  }
+
+  /** ★ 舰船遇围警示播报（顶部红色横幅，独立于敌袭预警/访客横幅）：
+   *   count = 近舰敌军数；文本不变不重写（WorldMode 每帧驱动）；clear 隐藏。 */
+  showEnemyGroupWarning(count: number): void {
+    const text = `⚠ 大量敌人正在逼近舰船！　当前 ${count} 名接近中`;
+    if (text === this.lastEnemyGroupWarnText) return;
+    this.lastEnemyGroupWarnText = text;
+    if (!this.enemyGroupWarnEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:112px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
+        'font-size:18px', 'font-weight:bold', 'letter-spacing:2px',
+        'padding:7px 20px', 'border-radius:5px',
+        'background:rgba(46,10,8,0.82)', 'border:1px solid rgba(255,96,70,0.85)',
+        'color:#ffc9a0', 'text-shadow:0 1px 3px #000, 0 0 12px rgba(255,70,40,0.8)',
+      ].join(';');
+      document.body.appendChild(el);
+      this.enemyGroupWarnEl = el;
+    }
+    const el = this.enemyGroupWarnEl;
+    el.textContent = text;
+    el.style.display = 'block';
+  }
+
+  /** 隐藏舰船遇围警示（敌军散去 / 离探索 / 舰船被毁） */
+  clearEnemyGroupWarning(): void {
+    this.lastEnemyGroupWarnText = '';
+    if (this.enemyGroupWarnEl) this.enemyGroupWarnEl.style.display = 'none';
   }
 
   /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示）—— 场景方位提示同步收起 */

@@ -430,6 +430,17 @@ export class WorldMode implements IGameMode {
   /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
   private static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
+  /** ★ 舰船遇围警示（顶部红色横幅）：近舰敌军持续超标才播报 */
+  private groupWarnAccum = 0;
+  private groupWarnShown = false;
+  /** 近舰敌军统计半径（米；比舰船雷达 120m 聚焦，圈"贴身"敌军） */
+  private static readonly SHIP_GROUP_RADIUS = 55;
+  /** ★ 播报触发：近舰敌军（实体 + 代理）≥ 此数 且持续 SHIP_GROUP_SUSTAIN 秒 */
+  private static readonly SHIP_GROUP_COUNT = 8;
+  /** 迟滞：降到 ≤ 此数才清除（防临界抖动反复播/消） */
+  private static readonly SHIP_GROUP_HIDE_COUNT = 5;
+  /** 持续时长（秒）：一群怪路过闪一瞬不报，扎住才报 */
+  private static readonly SHIP_GROUP_SUSTAIN = 1.2;
 
   // ★ 私有物理世界和输入绑定（外界不可见，exit 时完整清理）
   private physics: PhysicsWorld | null = null;
@@ -1279,6 +1290,8 @@ export class WorldMode implements IGameMode {
         this.cullAccum = 0;
         this.demoteFarEnemies(pp.x, pp.y);
       }
+      // ---- ★ 舰船遇围警示：近舰敌军（实体 + 代理）大量且持续 → 顶部红色横幅 ----
+      this.updateShipGroupWarning(dt);
     }
     const _t4 = performance.now();
 
@@ -2067,6 +2080,53 @@ export class WorldMode implements IGameMode {
       });
       e.dispose();
       this.enemies.splice(i, 1);
+    }
+  }
+
+  /** ★ 舰船遇围警示播报：统计近舰（≤SHIP_GROUP_RADIUS）敌军数（L3 实体 + 蜂群代理池），
+   *   ≥SHIP_GROUP_COUNT 且持续 SHIP_GROUP_SUSTAIN 秒 → 顶部红色横幅"大量敌人逼近舰船"，
+   *   count 实时刷新；降到 ≤SHIP_GROUP_HIDE_COUNT（迟滞）才清除。 */
+  private updateShipGroupWarning(dt: number): void {
+    if (!this.ship || this.phase !== 'explore' || this.shipDestroyed) {
+      this.groupWarnAccum = 0;
+      if (this.groupWarnShown) {
+        this.groupWarnShown = false;
+        this.worldUIManager.clearEnemyGroupWarning();
+      }
+      return;
+    }
+    const sx = this.ship.position.x;
+    const sz = this.ship.position.z;
+    const r2 = WorldMode.SHIP_GROUP_RADIUS ** 2;
+    let count = 0;
+    for (const e of this.enemies) {
+      const dx = e.position.x - sx, dz = e.position.z - sz;
+      if (dx * dx + dz * dz <= r2) count++;
+    }
+    const pool = this.swarm.pool;
+    for (let i = 0; i < pool.count; i++) {
+      const dx = pool.x[i] - sx, dz = pool.z[i] - sz;
+      if (dx * dx + dz * dz <= r2) count++;
+    }
+    const showAt = WorldMode.SHIP_GROUP_COUNT;
+    const hideAt = WorldMode.SHIP_GROUP_HIDE_COUNT;
+    if (count >= showAt) {
+      this.groupWarnAccum += dt;
+      if (this.groupWarnAccum >= WorldMode.SHIP_GROUP_SUSTAIN && !this.groupWarnShown) {
+        this.groupWarnShown = true;
+        this.worldUIManager.showEnemyGroupWarning(count);
+      } else if (this.groupWarnShown) {
+        this.worldUIManager.showEnemyGroupWarning(count);
+      }
+    } else if (count <= hideAt) {
+      this.groupWarnAccum = 0;
+      if (this.groupWarnShown) {
+        this.groupWarnShown = false;
+        this.worldUIManager.clearEnemyGroupWarning();
+      }
+    } else if (this.groupWarnShown) {
+      // 迟滞带内（hide < count < show）：已显示则维持并刷新计数，未显示不新亮
+      this.worldUIManager.showEnemyGroupWarning(count);
     }
   }
 
