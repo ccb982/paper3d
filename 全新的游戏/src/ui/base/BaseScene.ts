@@ -138,8 +138,8 @@ export class BaseScene {
   private promptEl: HTMLDivElement;
   /** 提示是否已显示（与 inCraftZone 分开：UI 打开时要临时隐藏） */
   private promptShown = false;
-  /** ★ 提示上的按键名（基地沿用 F；舰内用 E，与世界侧的交互键统一） */
-  private promptKey = 'F';
+  /** ★ 交互按键名（小写，与 KeyboardEvent.key.toLowerCase() 对齐；显示时转大写） */
+  private promptKey = 'f';
   /** ★ UI 遮挡判定（面板/覆盖层打开 → 隐藏加工台提示并禁用 F；BaseMode 注入） */
   private uiBlocking: (() => boolean) | null = null;
 
@@ -216,7 +216,7 @@ export class BaseScene {
       + 'color:#e8eef4;background:rgba(12,15,19,0.82);border:1px solid rgba(150,185,210,0.35);'
       + 'padding:6px 16px;border-radius:6px;font:14px "Microsoft YaHei",sans-serif;'
       + 'letter-spacing:0.06em;z-index:600;pointer-events:none;white-space:pre';
-    this.promptEl.textContent = this.promptKey;
+    this.promptEl.textContent = this.promptKey.toUpperCase();
     document.body.appendChild(this.promptEl);
 
     window.addEventListener('keydown', this.onKeyDown);
@@ -309,12 +309,14 @@ export class BaseScene {
     this.setStations(list);
   }
 
-  /** ★ 交互提示的按键名（默认 F；舰内传 'E' 与世界侧统一） */
+  /** ★ 交互提示/触发按键名（**默认 F，基地与舰内一律 F**）。
+   *  注意：房间内**不接受 E**——E 是世界侧（进舱/登船/交互）的键，
+   *  在世界侧按 E 进舱后，如果舱内也认 E，会出现"同一次按键既进舱又触发舱内站点"。 */
   setPromptKey(key: string): void {
-    this.promptKey = key;
+    this.promptKey = key.toLowerCase();
   }
 
-  /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、E/F 禁用） */
+  /** UI 遮挡判定（BaseMode 注入：面板/覆盖层打开时为 true → 提示隐藏、按键禁用） */
   setUiBlocking(fn: () => boolean): void {
     this.uiBlocking = fn;
   }
@@ -673,9 +675,10 @@ export class BaseScene {
       this.wantJump = true; // ★ 空格：跳跃
       e.preventDefault();
     }
-    // ★ 交互站：E / F 都能触发（世界侧统一是 E，基地历史习惯是 F，两者都认）
-    //   UI 遮挡期不响应，避免叠层里再开
-    if ((k === 'e' || k === 'f') && this.activeStation && !(this.uiBlocking?.() ?? false)) {
+    // ★ 交互站：只认配置的按键（默认 F）。房间内**禁用 E**——
+    //   世界侧 E 是"进舱/登船"，同一次按键在舱内再触发一次就是重复响应。
+    //   UI 遮挡期不响应，避免叠层里再开。
+    if (k === this.promptKey && this.activeStation && !(this.uiBlocking?.() ?? false)) {
       this.activeStation.cb();
     }
   };
@@ -769,8 +772,9 @@ export class BaseScene {
         this.promptShown = showPrompt;
         this.promptEl.style.display = showPrompt ? 'block' : 'none';
       }
-      if (best && this.promptEl.textContent !== `${this.promptKey} · ${best.label}`) {
-        this.promptEl.textContent = `${this.promptKey} · ${best.label}`;
+      if (best) {
+        const promptText = `${this.promptKey.toUpperCase()} · ${best.label}`;
+        if (this.promptEl.textContent !== promptText) this.promptEl.textContent = promptText;
       }
     } else {
       this.wantJump = false;

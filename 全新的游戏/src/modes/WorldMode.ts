@@ -3517,8 +3517,10 @@ export class WorldMode implements IGameMode {
     renderManager.setFlightMode(true);
     this.chunks.setWaterVisible(false);
     // ★ 舰内操作全部事件触发式（2026-09-16 用户定调：加工台/下船/起飞/返回罗德岛号
-    //   都做成走到指定区域按键触发，不再有按钮条）；提示按键与世界侧统一为 E。
-    interior.setPromptKey('E');
+    //   都做成走到指定区域按键触发，不再有按钮条）。
+    //   ★ 按键：舱内**只用 F**（用户定调 2026-09-16）——E 是"进舱"的键，
+    //     如果舱内也认 E，落地的同一次按键会连带触发舱内最近的站点。
+    interior.setPromptKey('f');
     this.applyShipInteriorEvents(interior);
     return true;
   }
