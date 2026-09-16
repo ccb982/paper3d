@@ -79,6 +79,35 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     ],
   },
 
+  /**
+   * ★ 喜羊羊（2026-09-16）
+   * 设定：闪灵 —— 罗得岛使徒，医疗干员。玩家喊她「喜羊羊」（角与发型的梗）。
+   * 定位：**治疗 / 守护系**（与「衣服」的凯尔希路线呼应，但更偏"战地救护站"）。
+   *   ① regen         —— 每秒回血（医疗本职，最贴合她的职业）
+   *   ② stat_multiplier(scope:'defense') —— 每日防御复利（她的庇护：使徒的剑不出鞘时是盾）
+   *   ③ respawn_time  —— 复活等待缩减（你倒下时她把你拉回来）
+   * 三条都是**现有管线**，核心（Session/WorldMode/main）零改动。
+   * ★ scope:'defense' 是本次为它新开的 stat_multiplier 分支（见 RelicEffects.ts）。
+   */
+  xiyangyang: {
+    id: 'xiyangyang',
+    name: '喜羊羊',
+    rarity: 5,
+    description: '闪灵的角与发。她说自己只是来送药的，可你倒下时，总是她先到。\n'
+      + '每秒回复 1.2 点生命（每多一件再 +0.6）；'
+      + '防御每日 +8%（每多一件再 +1%，复利）；'
+      + '复活等待 -20%（每多一件再 -2%，下限 -90%）',
+    texture: '/fx/喜羊羊.ftx3.gz',
+    effects: [
+      // ① 持续治疗：首件 1.2/s，每多一件 +0.6/s
+      { type: 'regen', base: 1.2, perCopy: 0.6 },
+      // ② 防御每日复利：首件 1.08/天，每多一件步长 +0.01
+      { type: 'stat_multiplier', perDay: 1.08, perDayStep: 0.01, scope: 'defense' },
+      // ③ 复活加速：首件 -20%，每多一件再 -2%
+      { type: 'respawn_time', base: 0.2, perCopy: 0.02 },
+    ],
+  },
+
   // 新增遗物只需在这里加配置（效果类型在 RelicEffects 注册表），代码零改动
 };
 

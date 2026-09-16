@@ -42,7 +42,15 @@ export interface ItemIconConfig {
   l: number;
 }
 
-/** ★ 直绘 FTX 图标源（itemId → .ftx3 URL；解包后第 0 帧合成，ID→画布失效则回退色块） */
+/** ★ 直绘 FTX 图标源（itemId → .ftx3 URL；解包后第 0 帧合成，ID→画布失效则回退色块）
+ *
+ *  ★★ 2026-09-16 重要：这是遗物图标的**实际唯一真源**（relics.ts 里的 `texture`
+ *     字段没有任何消费者）。**新增遗物必须在这里补一条**，否则图标空白。
+ *
+ *  ★ 曾试图改成 `import { RELIC_ITEM_CONFIG } from '../../config/relics'` 自动派生
+ *    → **当场把全部遗物图标干成空白**：relics.ts 是 `import type` 才看起来"零依赖"，
+ *    但打包后 ItemIconRegistry 会被拖进 core 层初始化链，运行时报错/环。
+ *    **结论：这里保持显式声明，不要自动派生。** */
 const FTX_ICON_SOURCES: Record<string, string> = {
   shu_jie_xx: '/fx/黍姐的XX.ftx3.gz',
   yuandeng: '/fx/圆凳.ftx3.gz',
@@ -54,6 +62,8 @@ const FTX_ICON_SOURCES: Record<string, string> = {
   gravel_love: '/fx/砾小姐的爱.ftx3.gz',
   zuzong_launcher: '/fx/祖宗发射器.ftx3.gz',
   kaltsit_coat: '/fx/衣服.ftx3.gz',
+  // ★ 喜羊羊（2026-09-16）：闪灵的遗物
+  xiyangyang: '/fx/喜羊羊.ftx3.gz',
 };
 
 export class ItemIconRegistry {
@@ -79,7 +89,7 @@ export class ItemIconRegistry {
     loadGatherIcons()
       .then((map) => { this.gatherIcons = map; this.cache.delete('herb'); this.cache.delete('flower'); this.cache.delete('wood'); this.cache.delete('berry'); })
       .catch((err) => console.warn('[ItemIconRegistry] 采集物图标载入失败，回退色块:', err));
-    // 异步预载直绘 FTX 图标（当前：黍姐的XX 防具 / 遗物），按需取帧
+    // 异步预载直绘 FTX 图标（消耗品/装备/遗物），按需取帧
     for (const [id, url] of Object.entries(FTX_ICON_SOURCES)) {
       FtxAsset.load(encodeURI(url))
         .then((asset) => {

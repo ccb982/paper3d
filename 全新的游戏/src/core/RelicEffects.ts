@@ -189,6 +189,7 @@ export function dispatchRelicEvent(
  *   perDay / perDayStep      首件每日率、每多一件的步长（如 1.05 / 0.01）
  *   perDeath / perDeathStep  首件每次死亡率、每多一件的步长（如 1.005 / 0.001）
  *   scope                    'all'（默认三属性同吃）| 'attack'（只加攻击力）
+ *                            | 'defense'（只加防御 —— 2026-09-16 为「喜羊羊」新增）
  * 口径：每件各按自己的百分比独立复利（2 件黑冠 = 1.05×1.06 每日）。
  */
 relicEffectRegistry.set('stat_multiplier', {
@@ -206,8 +207,12 @@ relicEffectRegistry.set('stat_multiplier', {
       for (let i = 0; i < k; i++) m *= Math.pow(perDeath + step * i, ctx.deaths);
     }
     if (m === 1) return;
+    // ★ 作用域：'all' 缺省吃满三属性；'attack' / 'defense' 只落到单一属性
+    //   （新增 'defense' 不改变既有行为 —— 缺省分支仍是全属性）
     if (cfg.scope === 'attack') {
       ctx.acc.mulAtk *= m;
+    } else if (cfg.scope === 'defense') {
+      ctx.acc.mulDef *= m;
     } else {
       ctx.acc.mulHp *= m;
       ctx.acc.mulAtk *= m;
