@@ -58,12 +58,15 @@ export interface RoomSurfaceOpts {
   bandY: number;
   /** ★ 双色调：墙裙（下段）颜色 —— 与 base 形成高对比的第二色调 */
   band: number;
+  /** ★ 纹理坐标系：false = 世界坐标（静态壳体，相邻构件格线连续）；
+   *  true = **物体坐标**（会被推动的家具/货箱 —— 否则"物品动、纹理不动"） */
+  local: boolean;
 }
 
 const ROOM_DEFAULTS: RoomSurfaceOpts = {
   base: 0x333a42, tint: 0x9fc4d8, grout: 0x14171b,
   panel: 3.6, jitter: 0.06, vign: 0.55, metal: 0.16, gain: 1.0,
-  bandY: 0, band: 0x2b3138,
+  bandY: 0, band: 0x2b3138, local: false,
 };
 
 /** 房间标配调色板（由 BaseScene.buildHall 取用；配色改动集中在这里）
@@ -80,10 +83,10 @@ export const ROOM_PALETTES: Record<string, Partial<RoomSurfaceOpts>> = {
   ceil: { base: 0x1a1d21, tint: 0xa9adb2, grout: 0x0b0d0e, panel: 4.0, jitter: 0.05, vign: 0.50, metal: 0.04, gain: 0.95 },
   /** 结构件（梁 / 柱 / 框架 / 踢脚）：深炭骨架 —— 压在亮墙上的暗线 */
   struct: { base: 0x2f353b, tint: 0xc8ab84, grout: 0x111417, panel: 2.4, jitter: 0.04, vign: 0.24, metal: 0.34, gain: 1.0 },
-  /** 家具 / 控制台：比墙裙亮一档（在下半区读得出来） */
-  furn: { base: 0x363c42, tint: 0xb9c2c8, grout: 0x14171a, panel: 2.0, jitter: 0.05, vign: 0.20, metal: 0.18, gain: 1.0 },
-  /** 货箱 / 料桶：最亮一档（在场里一眼可读） */
-  crate: { base: 0x5e646a, tint: 0xd8b070, grout: 0x1f2226, panel: 1.6, jitter: 0.08, vign: 0.16, metal: 0.12, gain: 1.0 },
+  /** 家具 / 控制台：比墙裙亮一档（在下半区读得出来）。★ local：会被推动 → 纹理跟着物体走 */
+  furn: { base: 0x363c42, tint: 0xb9c2c8, grout: 0x14171a, panel: 2.0, jitter: 0.05, vign: 0.20, metal: 0.18, gain: 1.0, local: true },
+  /** 货箱 / 料桶：最亮一档（在场里一眼可读）。★ local：同上 */
+  crate: { base: 0x5e646a, tint: 0xd8b070, grout: 0x1f2226, panel: 1.6, jitter: 0.08, vign: 0.16, metal: 0.12, gain: 1.0, local: true },
   /** 驾驶舱：暖调双色调（上段暖骨灰 / 下段暖炭黑） */
   cockpit: { base: 0xaba49a, tint: 0xe0b088, grout: 0x1d1d1c, panel: 3.2, jitter: 0.06, vign: 0.34, metal: 0.10, gain: 1.0, bandY: 3.2, band: 0x302b26 },
   /** 驾驶舱地台 / 舷侧走道：深炭（与墙裙同族） */
@@ -92,8 +95,10 @@ export const ROOM_PALETTES: Record<string, Partial<RoomSurfaceOpts>> = {
 
 const SURF_VERT = /* glsl */ `
   varying vec3 vW;
+  varying vec3 vO;      // ★ 物体坐标（local=1 时纹理用它 → 家具被推动时纹理跟着走）
   varying vec3 vN;
   void main() {
+    vO = position;
     vec4 wp = modelMatrix * vec4(position, 1.0);
     vW = wp.xyz;
     vN = normalize(mat3(modelMatrix) * normal);
@@ -103,6 +108,7 @@ const SURF_VERT = /* glsl */ `
 
 const SURF_FRAG = /* glsl */ `
   varying vec3 vW;
+  varying vec3 vO;
   varying vec3 vN;
 
   uniform vec3  uBase;
@@ -116,6 +122,8 @@ const SURF_FRAG = /* glsl */ `
   uniform float uMetal;
   uniform float uGain;
   uniform float uRoomH;
+  /** 0 = 世界坐标（静态壳体格线连续）/ 1 = 物体坐标（可推动的家具） */
+  uniform float uLocal;
 
   // ★ 把 BaseScene 的光烘进 shader（线性空间值，与场景里的真实灯同色同强度）
   const vec3 HEMI_SKY = vec3(0.5026, 0.6312, 0.7446); // 0xbcd0e0
@@ -133,8 +141,11 @@ const SURF_FRAG = /* glsl */ `
   void main() {
     vec3 n = normalize(vN);
     vec3 an = abs(n);
-    // 平面坐标：按面法线主轴取世界坐标的两个分量（相邻 / 不同尺寸的构件网格连续）
-    vec2 sp = (an.y > 0.7) ? vW.xz : ((an.x > 0.7) ? vW.zy : vW.xy);
+    // 平面坐标：按面法线主轴取两个分量。
+    // ★ 静态壳体用世界坐标（相邻 / 不同尺寸的构件网格连续）；
+    //   会被推动的家具用**物体坐标** —— 否则物体动、纹理钉在世界空间不动。
+    vec3 P = mix(vW, vO, uLocal);
+    vec2 sp = (an.y > 0.7) ? P.xz : ((an.x > 0.7) ? P.zy : P.xy);
     bool isFloor = an.y > 0.7;
 
     // ---- 大板缝（fwidth 恒定屏幕线宽 → 远近一样细）----
@@ -220,6 +231,7 @@ export function createRoomSurfaceMaterial(
       uMetal: { value: o.metal },
       uGain: { value: o.gain },
       uRoomH: { value: 12.6 },
+      uLocal: { value: o.local ? 1 : 0 },
     },
     vertexShader: SURF_VERT,
     fragmentShader: SURF_FRAG,

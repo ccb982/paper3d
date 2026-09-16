@@ -30,6 +30,8 @@ interface Cluster {
   half: THREE.Vector3;
   /** 初始中心 */
   center: THREE.Vector3;
+  /** 初始并集盒（视觉跟随件的归属判定用一次） */
+  box: THREE.Box3;
 }
 
 /** 运动学道具（动画驱动 + 推动别人） */
@@ -69,8 +71,9 @@ export class RoomPhysics {
   private _ext = new THREE.Vector3();
 
   /** ★ 把一批家具 mesh 聚簇 → 建 dynamic 刚体 + Group（成员原样保留相对位置）。
-   *  @param parent 簇 Group 的挂载点（房间 root） */
-  addFurniture(meshes: THREE.Mesh[], parent: THREE.Object3D): void {
+   *  @param parent    簇 Group 的挂载点（房间 root）
+   *  @param followers 纯视觉跟随件（接触阴影等）：不进碰撞体，但跟着所在簇一起走 */
+  addFurniture(meshes: THREE.Mesh[], parent: THREE.Object3D, followers: THREE.Mesh[] = []): void {
     // ---- ① 收集每个 mesh 的世界 AABB（房间坐标 = root 局部坐标） ----
     const items = meshes.map((mesh) => {
       const geo = mesh.geometry as THREE.BufferGeometry;
@@ -164,7 +167,24 @@ export class RoomPhysics {
         parts,
         half,
         center: center.clone(),
+        box: unionBox.clone(),
       });
+
+      // ---- ★ 视觉跟随件：初始位置落在本簇并集盒内的（接触阴影等）→ 挂进 Group ----
+      for (let k = followers.length - 1; k >= 0; k--) {
+        const f = followers[k];
+        f.updateWorldMatrix(true, false);
+        f.getWorldPosition(this._v);
+        const fx = this._v.x;
+        const fz = this._v.z;
+        const fy = this._v.y;
+        if (fx < unionBox.min.x || fx > unionBox.max.x || fz < unionBox.min.z || fz > unionBox.max.z) continue;
+        if (fy > unionBox.max.y + 0.2 || fy < unionBox.min.y) continue;
+        followers.splice(k, 1);
+        f.parent?.remove(f);
+        f.position.set(fx - center.x, fy - center.y, fz - center.z);
+        group.add(f);
+      }
     }
   }
 

@@ -55,8 +55,8 @@ export interface BaseStation {
 }
 
 /** ★ 彩蛋门槛：地球自转多少圈后普瑞赛斯登场。
- *  50 圈 ≈ 11.6 分钟（地球自转 0.45 rad/s ≈ 14 秒一圈；见 SpaceBackdrop.EARTH_SPIN）。 */
-const PRIESTESS_TURNS = 50;
+ *  30 圈 ≈ 7 分钟（地球自转 0.45 rad/s ≈ 14 秒一圈；见 SpaceBackdrop.EARTH_SPIN）。 */
+const PRIESTESS_TURNS = 30;
 
 /** 普瑞赛斯立绘的位置与大小
  *  坐标是"脚底锚点"——setPosition 会按当前高度自动把中心抬到 y + H/2，
@@ -755,8 +755,15 @@ export class BaseScene {
    *  过滤与说明见 collectFurnitureMeshes；家具被推动后 solids 每帧由物理刷新。 */
   private buildRoomPhysics(): void {
     const meshes = this.collectFurnitureMeshes();
+    // ★ 接触阴影面片：不进碰撞体，但跟着家具一起走（否则推走家具、影子留在原地）
+    const shadows: THREE.Mesh[] = [];
+    if (this.mats) {
+      this.root.traverse((o) => {
+        if (o instanceof THREE.Mesh && o.material === this.mats?.shadow) shadows.push(o);
+      });
+    }
     const phys = new RoomPhysics();
-    phys.addFurniture(meshes, this.root);
+    phys.addFurniture(meshes, this.root, shadows);
     phys.addRoomBounds(this.hallW / 2, ROOM_D / 2);
     for (const m of this.kineticMovers) phys.addKinetic(m);
     this.kineticMovers.length = 0;
