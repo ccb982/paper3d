@@ -209,7 +209,8 @@ export class BaseMode implements IGameMode {
   /** 是否有 UI 遮挡（模态面板 / 抽卡 / 加工台 / 全屏背包页 / 对话） */
   private isUiBlocking(): boolean {
     if (this.uiManager?.hasModalOpen) return true;
-    if (this.craftingOverlay?.isOpen()) return true;
+    if (this.uiManager?.craftingOpen) return true;   // ★ 改查 ShipUIManager 的加工台实例
+    if (this.craftingOverlay?.isOpen()) return true; // 兜底：本地另建的那份
     if (this.gachaOverlay?.isOpen()) return true;
     if (this.dialogue?.isActive) return true;
     return false;

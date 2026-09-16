@@ -3484,7 +3484,9 @@ export class WorldMode implements IGameMode {
       renderer: this.renderer,
     });
     interior.setupCamera(this.camera);
-    interior.setUiBlocking(() => this.dialogue?.isActive || (this.worldUIManager?.hasModalOpen ?? false));
+    interior.setUiBlocking(() => this.dialogue?.isActive
+      || (this.worldUIManager?.hasModalOpen ?? false)
+      || (this.craftingOverlay?.isOpen() ?? false));       // ★ 加工台打开时也要收提示（2026-09-16 修）
     } catch (err) {
       console.error('[interior] 创建失败:', err);
       return false;
@@ -3552,12 +3554,9 @@ export class WorldMode implements IGameMode {
         this.openReturnConfirm();
       },
     });
-    const cancel = createButton({
-      label: '取消', style: 'ghost', size: 'md',
-      onClick: () => this.worldUIManager?.closePanel('interior-nav'),
-    });
+    // ★ 不提供"取消"：面板自带关闭（右上角 / ESC），用户定调去掉这个按钮
     row.append(takeoff, back);
-    content.append(title, sub, row, cancel);
+    content.append(title, sub, row);
     this.worldUIManager?.openPanel({
       id: 'interior-nav',
       title: '航行终端',

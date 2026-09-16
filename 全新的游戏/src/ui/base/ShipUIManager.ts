@@ -279,6 +279,13 @@ export class ShipUIManager extends BaseInteractionUI {
     this._craftingOverlay?.show(station);
   }
 
+  /** ★ 加工台覆盖层是否打开（2026-09-16 修：基地/舰内的交互站提示与 E/F 按键屏蔽都依赖它。
+   *   此前上层各查各自的 craftingOverlay 字段，查的不是这个实例 → 加工台打开后
+   *   "F · 打开加工台" 提示还盖在加工台页面上。） */
+  get craftingOpen(): boolean {
+    return this._craftingOverlay?.isOpen() ?? false;
+  }
+
   // ============================================================
   // 对话
   // ============================================================
