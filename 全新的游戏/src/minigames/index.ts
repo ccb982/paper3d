@@ -1,5 +1,5 @@
 // ============================================================
-// index.ts —— 小游戏模块入口（对外只暴露 startMiniGame / 状态查询）
+// index.ts —— 小游戏模块入口（对外只暴露 startMiniGame / closeMiniGame）
 // ============================================================
 // ★★ 加小游戏的正确姿势（2026-09-17 定）：
 //   1. 在 games/ 下新建 `XxxGame.ts`；
@@ -32,11 +32,6 @@ export interface StartMiniGameOptions {
 
 /** 同一时刻只允许一个小游戏 */
 let current: MiniGameOverlay | null = null;
-
-/** 是否有小游戏在跑（模式层据此锁输入） */
-export function isMiniGameRunning(): boolean {
-  return current !== null;
-}
 
 /**
  * 开一局小游戏。

@@ -239,7 +239,8 @@
    `index.ts` 的 `import.meta.glob('./games/*.ts', { eager: true })` 自动 import（副作用即注册）。
 
 - 契约：`MiniGameResult{score: 0~100, detail?}` —— **分数口径由调用方解释**（如 ≥80/≥50 分档）。
-- 对外只用三个：`startMiniGame(id, {onFinish, onCancel})` / `closeMiniGame()` / `isMiniGameRunning()`。单实例锁 `current`。
+- 对外只用两个：`startMiniGame(id, {onFinish, onCancel})` / `closeMiniGame()`。单实例锁 `current`。
+  （原 `isMiniGameRunning()` 零调用，2026-09-17 死代码审计已删。）
 - 壳 `MiniGameOverlay` 的硬约定：
   - **z-index 300**（对话 280）→ 小游戏一定盖在对话之上；
   - ESC 用 **capture + stopPropagation**；遮罩点击**不关闭**（玩法多为点击判定）；
@@ -270,3 +271,40 @@
 
 对话 effects 的 `kind`：`'relic'` 写 `session.outOfRun.owned`（永久生效）；
 `'item'` 走 `ItemManager.addItem` 塞背包格子（**不校验 id**，写错会得到无图标的幽灵道具）。
+
+## ★ 死代码审计结论（2026-09-17，全仓 240 文件）
+
+**结论：架构是干净的。** 四条流水线跑完只清出 3 处真垃圾，其余全是误报或故意保留。
+
+清理的 3 处：
+
+| 位置 | 是什么 | 为什么 |
+|---|---|---|
+| `ShipUIManager._gachaOverlay` + `setGachaOverlay` + 调用点 + import | 死字段/死方法 | `BaseMode` 重构后抽卡 overlay 自己管自己，套装接口没拆 |
+| `minigames/index.ts` 的 `isMiniGameRunning()` | 零调用导出 | 写的时候想给模式层判断，实际没人用 |
+| `RandomRelic.ts` 的 `randomRelicPool` / `RandomRelicEntry` | 多余 export | 表只在模块内用 |
+
+审计后：`tsc --noEmit` / `--noUnusedLocals --noUnusedParameters` 均 EXIT=0（零诊断），
+`npm run build` EXIT=0（14.40s，`index-BvQ1-lXh.js`）。
+
+### ★ 判定为「误报 / 故意保留」的，**不要删**（下次审计直接跳过这些类别）
+
+- **自注册扩展点**：`registerMiniGame` / `registerTile` / `registerXxx` 这类 —— 定义处看着零调用，
+  实际由各自模块底部副作用调用 + `import.meta.glob(eager)` 拉起。删了 = 整片功能静默消失。
+- **`import.meta.glob` 的产物**：glob 出来的模块在静态分析里永远"没人 import"。
+- **worker 入口**：`*.worker.ts` 由 `new Worker(new URL(...))` 引用，grep 追不到。
+- **build 期脚本 / 预留接口**：`PRESERVER_AI` 之类的常量表、`drainInteractions` 之类的待接线方法。
+- **B2 结构性类型**：只在本模块用但必须 export 的类型（被 public API 签名引用）—— 误报。
+
+### 脚本姿势（`package.json` 有 `"type": "module"`）
+
+临时验证脚本**不能**直接 `.js` 丢项目根跑（会被当 ESM，`require is not defined`）。
+→ 建 `_t/` 目录放 `{"type":"commonjs"}`，或直接把脚本落成 `.mjs` 丢出去跑；
+**跑完必须删**（`.deadscan.mjs` / `.exportscan.mjs` / `.unused.log` / `_t/`）。
+
+### ★ 疑似「写了但没接线」的 3 处（2026-09-17 记录，未动）
+
+审计顺带发现的，**不是垃圾**，但可能该接上或该删，等用户裁定：
+1. `registerTile` —— 零调用（是否还有地形走老路径注册？）
+2. `PRESERVER_AI` —— 常量表零引用（是否规划了保全派单位？）
+3. `drainInteractions` —— 零调用（交互队列是否只 push 没消费？）

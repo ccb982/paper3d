@@ -12,14 +12,15 @@
 import gachaPool from '../config/gachaPool.json';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 
-export interface RandomRelicEntry {
+/** 池子条目（**模块私有**：外部只需要 rollRandomRelic 的返回值） */
+interface RandomRelicEntry {
   id: string;
   rarity: number;
   weight: number;
 }
 
-/** 奖励用遗物池（顺序 = 配置顺序；配置缺失的条目直接剔除） */
-export function randomRelicPool(): RandomRelicEntry[] {
+/** 奖励用遗物池（顺序 = 配置顺序；配置缺失的条目直接剔除）—— 模块私有 helper，不对外暴露 */
+function randomRelicPool(): RandomRelicEntry[] {
   const out: RandomRelicEntry[] = [];
   for (const e of (gachaPool.outOfRunItems ?? [])) {
     if (!e || typeof e.id !== 'string') continue;

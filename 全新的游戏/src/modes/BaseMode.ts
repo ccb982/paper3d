@@ -157,10 +157,11 @@ export class BaseMode implements IGameMode {
     });
 
     // ⑤ 创建抽卡覆盖层（行动后触发；与背包/加工台共享图标服务）
+    //   ★ 不再经 ShipUIManager 中转：本类直接持有并驱动（show / isOpen / dispose 都在这里），
+    //     原先那句 `uiManager.setGachaOverlay(...)` 存进去后从没人读，属重构遗留（2026-09-17 清）。
     this.gachaOverlay = new GachaOverlay(ctx.session, this.iconRegistry);
-    this.gachaOverlay.load().then(() => {
-      // 将抽卡覆盖层传递给 UI 管理器，点在"行动"时显示
-      this.uiManager.setGachaOverlay(this.gachaOverlay);
+    void this.gachaOverlay.load().catch((err) => {
+      console.error('[BaseMode] 抽卡覆盖层预加载失败:', err);
     });
 
     // ⑥ 创建加工台覆盖层（基地入口：编队面板 → 合成台；与背包共享图标服务）

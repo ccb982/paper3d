@@ -11,7 +11,6 @@ import { CraftingManager } from '../../systems/inventory/CraftingManager';
 import { InteractionManager } from '../../systems/interaction/InteractionManager';
 import { InventoryPanel } from '../shared/InventoryPanel';
 import { renderDialogBubble } from '../components/DialogBubble';
-import type { GachaOverlay } from './GachaOverlay';
 import type { CraftingOverlay } from './CraftingOverlay';
 import type { ItemIconRegistry } from '../../services/item/ItemIconRegistry';
 import { ActionPanel, OperatorPanel } from './ShipPanels';
@@ -32,13 +31,7 @@ export class ShipUIManager extends BaseInteractionUI {
   private panelContainer: HTMLDivElement;
   private titleEl: HTMLDivElement;
   private inventoryPanel: InventoryPanel;
-  private _gachaOverlay: GachaOverlay | null = null;
   private _craftingOverlay: CraftingOverlay | null = null;
-
-  /** 设置抽卡覆盖层（行动后触发） */
-  setGachaOverlay(overlay: GachaOverlay): void {
-    this._gachaOverlay = overlay;
-  }
 
   /** 设置加工台覆盖层（替代原简单合成台弹窗） */
   setCraftingOverlay(overlay: CraftingOverlay): void {
