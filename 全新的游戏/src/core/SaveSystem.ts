@@ -4,7 +4,8 @@
 // 存储介质：localStorage（Web）/ 后续可替换为 Adapter
 // ============================================================
 
-import type { GameSession } from './Session';
+import type { GameSession, InventoryGrid } from './Session';
+import { RELIC_ITEM_CONFIG } from '../config/relics';
 
 const STORAGE_KEY = 'arknights_rogue_save';
 
@@ -46,10 +47,45 @@ export const SaveSystem = {
         console.warn('[存档] 存档缺失必要字段，将丢弃');
         return null;
       }
+      this.sanitize(data);
       return data;
     } catch (e) {
       console.error('[存档] 读取失败:', e);
       return null;
+    }
+  },
+
+  /**
+   * ★ 存档矫正（2026-09-17）：**遗物不该出现在背包里**。
+   *   Session 里写明遗物是「永久生效、不入背包、拥有即全局生效」，
+   *   但早期对话把遗物写成了 `kind:'item'` → 往背包网格塞了一个"遗物"格：
+   *   既占格子，遗物列表（CharacterStatsPanel）里又看不见它。
+   *
+   *   这里在**读取时**把这类格子摘掉，件数**补进 outOfRun.owned**
+   *   —— 只搬位置、不吞玩家已得到的东西（重复即叠加，语义不变）。
+   *   幂等：修正后存档里不再有遗物格，下次读取无操作。
+   */
+  sanitize(session: GameSession): void {
+    const grids = session.inventories as unknown as Record<string, InventoryGrid> | undefined;
+    const owned = session.outOfRun?.owned;
+    if (!grids || !owned) return;
+    for (const layer of Object.keys(grids)) {
+      const grid = grids[layer];
+      if (!Array.isArray(grid)) continue;
+      for (const row of grid) {
+        if (!Array.isArray(row)) continue;
+        for (let i = 0; i < row.length; i++) {
+          const cell = row[i];
+          if (!cell || !RELIC_ITEM_CONFIG[cell.itemId]) continue;
+          const n = cell.stackSize || 1;
+          owned[cell.itemId] = (owned[cell.itemId] ?? 0) + n;
+          console.warn(
+            `[存档] 背包里的遗物「${RELIC_ITEM_CONFIG[cell.itemId].name}」×${n}` +
+            ` 已移出背包 → 计入遗物列表（${layer}）`,
+          );
+          row[i] = null;
+        }
+      }
     }
   },
 

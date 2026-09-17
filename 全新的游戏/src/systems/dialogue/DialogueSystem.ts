@@ -12,6 +12,7 @@
 import type { GameSession } from '../../core/Session';
 import { SaveSystem } from '../../core/SaveSystem';
 import { rollRandomRelic } from '../../core/RandomRelic';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
 import type { ItemManager } from '../inventory/ItemManager';
 import dialogueConfigJson from '../../config/dialogues.json';
 import {
@@ -165,14 +166,39 @@ export class DialogueSystem {
     for (const ef of effects) {
       switch (ef.kind) {
         case 'item': {
-          // ★ 取 addItem 的返回值判成败（背包满 = false）→ 上层据此播报
           const count = ef.count ?? 1;
+          // ★ 防呆（2026-09-17）：**遗物写成 kind:'item' 会掉进背包格子** ——
+          //   背包是格子制、遗物是 outOfRun.owned 永久叠加，混进去两头都不对
+          //   （背包里多一个占格子的"遗物"，遗物列表里反而没有它）。
+          //   这里直接改走遗物通道，并大声告警，方便把配置改回 kind:'relic'。
+          if (RELIC_ITEM_CONFIG[ef.id]) {
+            console.warn(
+              `[对话] ${ef.id} 是遗物（relics.ts 已登记），却写成 kind:'item' —— ` +
+              '已自动改走遗物通道；请把配置改成 kind:\'relic\'',
+            );
+            const owned = this.session.outOfRun.owned;
+            owned[ef.id] = (owned[ef.id] ?? 0) + count;
+            this.onGrant?.({ kind: 'relic', id: ef.id, count, success: true });
+            break;
+          }
+          // ★ 取 addItem 的返回值判成败（背包满 = false）→ 上层据此播报
           const ok = this.itemManager.addItem('player', ef.id, count);
           this.onGrant?.({ kind: 'item', id: ef.id, count, success: ok });
           break;
         }
         case 'relic': {
           const count = ef.count ?? 1;
+          // ★ 反向防呆：非遗物 id 写成 kind:'relic' 会塞进遗物列表，
+          //   而它没有 RELIC_ITEM_CONFIG（无名字/无图标/无效果）→ 掉进背包才是对的。
+          if (!RELIC_ITEM_CONFIG[ef.id]) {
+            console.warn(
+              `[对话] ${ef.id} 不是遗物（relics.ts 未登记），却写成 kind:'relic' —— ` +
+              '已自动改走背包通道；请把配置改成 kind:\'item\'',
+            );
+            const ok = this.itemManager.addItem('player', ef.id, count);
+            this.onGrant?.({ kind: 'item', id: ef.id, count, success: ok });
+            break;
+          }
           const owned = this.session.outOfRun.owned;
           owned[ef.id] = (owned[ef.id] ?? 0) + count;
           this.onGrant?.({ kind: 'relic', id: ef.id, count, success: true });

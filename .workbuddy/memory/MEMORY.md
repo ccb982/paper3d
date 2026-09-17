@@ -191,7 +191,10 @@
   脚本用 `Write` 写成 `.py` 再跑，**跑完就删**（bash 工具链损坏，`python -c` 里塞大段中文 JSON 不可靠）。
 - 对话文案真源：`src/config/dialogues.json`（顶层 key 是 `trees`）。
   树内节点结构：`{text, next?|choices[], effects?, end?}`；
-  effects 支持 `item`(id,count) / `relic`(id,count) / `flag`(key,value?) / `heal`(amount|percent)。
+  effects 共 5 种：`item`(id,count) / `relic`(id,count) / **`random_relic`(count)** /
+  `flag`(key,value?) / `heal`(amount|percent)。
+  - ★ `random_relic` = 从 `gachaPool.outOfRunItems` 按权重抽（`src/core/RandomRelic.ts`）。
+    **要奖励随机遗物就加它，别在对话里写死 id**；文案与效果解耦（改效果不动文案）。
 
 
 ## ★ 给玩家东西 = 走 `WorldUIManager.showPickupResult`（唯一播报渠道）
