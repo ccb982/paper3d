@@ -11,6 +11,7 @@
 
 import type { GameSession } from '../../core/Session';
 import { SaveSystem } from '../../core/SaveSystem';
+import { rollRandomRelic } from '../../core/RandomRelic';
 import type { ItemManager } from '../inventory/ItemManager';
 import dialogueConfigJson from '../../config/dialogues.json';
 import {
@@ -175,6 +176,21 @@ export class DialogueSystem {
           const owned = this.session.outOfRun.owned;
           owned[ef.id] = (owned[ef.id] ?? 0) + count;
           this.onGrant?.({ kind: 'relic', id: ef.id, count, success: true });
+          break;
+        }
+        case 'random_relic': {
+          // ★ 随机遗物：抽 N 件，每件单独报一次（UI 一物一条播报）
+          const count = ef.count ?? 1;
+          const owned = this.session.outOfRun.owned;
+          for (let i = 0; i < count; i++) {
+            const id = rollRandomRelic();
+            if (!id) {
+              console.warn('[对话] 随机遗物池为空，本次未发放');
+              break;
+            }
+            owned[id] = (owned[id] ?? 0) + 1;
+            this.onGrant?.({ kind: 'relic', id, count: 1, success: true });
+          }
           break;
         }
         case 'flag':

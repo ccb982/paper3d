@@ -300,7 +300,7 @@
         "n1": {
           "text": "校队成立。这是鹰叫网络的记录。收好。",
           "effects": [
-            { "kind": "item", "id": "black_crown", "count": 1 },
+            { "kind": "random_relic", "count": 1 },
             { "kind": "flag", "key": "yjwangzi_alliance" }
           ],
           "end": true

@@ -26,6 +26,8 @@ export interface StoryCond {
 export type DialogueEffectDef =
   | { kind: 'item'; id: string; count?: number }
   | { kind: 'relic'; id: string; count?: number }
+  /** ★ 随机遗物：从 gachaPool.outOfRunItems 按权重抽（count 件，各抽各的） */
+  | { kind: 'random_relic'; count?: number }
   | { kind: 'flag'; key: string; value?: number }
   | { kind: 'heal'; amount?: number; percent?: number };
 
