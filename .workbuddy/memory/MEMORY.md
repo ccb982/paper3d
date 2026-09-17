@@ -213,6 +213,22 @@
 - 遗物（`kind:'relic'`）**不入背包** → 只播报，**不要** `flashItemAndRefresh`。
 - 尚未覆盖：**BaseMode 的事件对话**（`base_supply` / `base_echo`）没有播报渠道，仍是静默。
 
+## ★★ 遗物绝不进背包（2026-09-17 定调）
+
+`Session.ts` 写明遗物口径：**"永久生效、不入背包（格子制）、拥有即全局生效"** →
+**遗物只住 `session.outOfRun.owned`，永远不进 `inventories` 网格，也不进 `player.slots`。**
+
+- 对话效果的正确 kind：遗物一律 `{kind:'relic'}` 或 `{kind:'random_relic'}`；
+  `{kind:'item'}` **只给普通物资**。写错的后果：背包多一个占格子的"遗物"，
+  而遗物列表（`CharacterStatsPanel` 读 `owned`）里反而看不到它。
+- ★ **`DialogueSystem.applyEffects` 有双向防呆**（不要删）：`item` 分支发现 id 在
+  `RELIC_ITEM_CONFIG` 里就自动改走遗物通道；`relic` 分支发现 id 没登记就自动改走背包。
+  两边都 `console.warn`，便于发现配置写错。
+- ★ **老存档矫正 = `SaveSystem.sanitize()`**，在 `load()` 里调用：扫三层背包把遗物格摘出、
+  件数补进 `owned`（只搬位置不吞东西），幂等。
+  **教训：改配置不改存档 = 用户那边看起来没修好**（背包里那格会一直留着）。这类"东西放错地方"的问题，
+  必须同时处理「新数据」+「已落地的老存档」。
+
 
 
 ## ★ 小游戏模块（2026-09-17 新建）
