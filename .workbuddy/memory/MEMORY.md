@@ -179,3 +179,75 @@
 - 一切「关闭/返回上一级」语义的面板，统一用 `ui/components/BackButton.ts` 的 `createBackButton()`（FTX 素材 `/ui/返回按钮.ftx3.gz`），别写自造 ✕。
 - 设置入口 = 基地左上角白齿轮（实现 `ui/components/SettingsPanel.ts` 的 `createSettingsUI`），**仅基地模式显示**（`enterBaseMode` 显 / `enterWorldMode` 隐）。齿轮 z-index 必须 > 遮罩，否则点不到。
 - 性能 HUD（`hudWrap`）默认隐藏；「关闭」= 统计段整块不进 `if (hudVisible)` 之外，零累加零 DOM 写入。
+
+## ★★ 剧情/文案：用户贴的文本一律「逐字照抄」，禁止润色（2026-09-17 返工教训）
+
+**用户贴出 JSON / 台词片段 = 定稿，不是参考稿。** 不要按自己的文风重写、不要"顺一下句子"、
+不要改标点、不要因为觉得某处笔误就替换物品 id 或措辞。不确定就照抄 + 单独问。
+
+- 落地后**必须有一步机器校验**，不能靠肉眼看：把用户的原文嵌进一次性 python 脚本，
+  与 `dialogues.json` 解析结果做 **dict 深比较**（`cur[key] == exp[key]`）+ `difflib` 打印差异行。
+  dict 相等是 key 顺序无关、内容敏感的 → 多键/少键/任何一个字符差异都会暴露。
+  脚本用 `Write` 写成 `.py` 再跑，**跑完就删**（bash 工具链损坏，`python -c` 里塞大段中文 JSON 不可靠）。
+- 对话文案真源：`src/config/dialogues.json`（顶层 key 是 `trees`）。
+  树内节点结构：`{text, next?|choices[], effects?, end?}`；
+  effects 支持 `item`(id,count) / `relic`(id,count) / `flag`(key,value?) / `heal`(amount|percent)。
+
+
+## ★ 给玩家东西 = 走 `WorldUIManager.showPickupResult`（唯一播报渠道）
+
+**任何"获得了 X"都要上屏，且只有一条渠道**（2026-09-17 定）：
+击杀掉落 / 采集 / 定时遗物补给 / **对话与访客奖励** 全部调
+`worldUIManager.showPickupResult(itemId, success, count)`；成功再配 `flashItemAndRefresh(itemId)`。
+
+- 位置：`position:fixed; top:8.97%; right:0.16%; width:20.3%; z-index:70`，挂 body，**不受战斗 HUD 显隐影响**。
+- 与 `DialogueView`（`bottom:36px; z-index:280`，无全屏遮罩）**不重叠** → z-index 低也没事。
+- ★ **取名必须走 `WorldUIManager.displayNameOf()`**：archetype 未命中时回退 `RELIC_ITEM_CONFIG[id].name`。
+  直接写 `getArchetype(id)?.name ?? id` 的话，给遗物会播报成 `获得了 black_crown`。
+- 层间契约：`DialogueSystem` **零 DOM**，只通过 `onGrant(grant)` 回调把
+  `{kind:'item'|'relic', id, count, success}` 报给模式层；**模式层负责上屏**。
+  `success` 取 `itemManager.addItem` 的返回值（背包满 = false）。
+- 遗物（`kind:'relic'`）**不入背包** → 只播报，**不要** `flashItemAndRefresh`。
+- 尚未覆盖：**BaseMode 的事件对话**（`base_supply` / `base_echo`）没有播报渠道，仍是静默。
+
+
+
+## ★ 小游戏模块（2026-09-17 新建）
+
+**加一个新小游戏 = 丢一个文件进 `src/minigames/games/`，零索引改动：**
+1. 新建 `XxxGame.ts`，实现 `MiniGame`（`mount(root, host)` / `dispose()`）；
+2. 文件底部 `registerMiniGame('xxx', () => new XxxGame())`。
+   `index.ts` 的 `import.meta.glob('./games/*.ts', { eager: true })` 自动 import（副作用即注册）。
+
+- 契约：`MiniGameResult{score: 0~100, detail?}` —— **分数口径由调用方解释**（如 ≥80/≥50 分档）。
+- 对外只用三个：`startMiniGame(id, {onFinish, onCancel})` / `closeMiniGame()` / `isMiniGameRunning()`。单实例锁 `current`。
+- 壳 `MiniGameOverlay` 的硬约定：
+  - **z-index 300**（对话 280）→ 小游戏一定盖在对话之上；
+  - ESC 用 **capture + stopPropagation**；遮罩点击**不关闭**（玩法多为点击判定）；
+  - `finish`/`cancel` **幂等**；`forceClose()` 不触发任何回调（模式退出用）。
+- 模式层接线：对话 `onEnd` 里查 flag → 开小游戏 → **开成就直接 return**，别走原收尾（否则 NPC 走了、结果对话还在说话）；
+  `exit()` 第一件事 `closeMiniGame()`。
+
+### ★ 写「素材降级」时的两个必踩坑
+1. **`<img>` 没有 src 时 `onerror` 不会触发** → 靠 onerror 做降级 = 死代码。必须在 `.then(tex => ...)` 里显式判 `!tex`。
+2. **`replaceWith` 之后字段引用失效** → 动画目标会指向已脱离 DOM 的节点，从此不动。
+   正确做法：外层用**固定尺寸的槽位 div**（内部 img ↔ 文字可换），动画只驱动槽位，引用全生命周期恒定。
+3. `let x` + `Promise<typeof x>` → TS 会把 `typeof` 窄化成初值类型（如 `null`，报 TS2322）。**显式声明 interface。**
+
+## ★ 查「一个 id 到底是不是合法物品」要看三处，不是一处
+
+`items.json` 只管**普通物品/消耗品**。遗物与图标在别的地方：
+
+| 想知道 | 去哪查 |
+|---|---|
+| 普通物品/消耗品/可部署 | `src/config/items.json` |
+| **遗物配置 + 名称/效果** | `src/config/relics.ts`（`RELIC_ITEM_CONFIG`） |
+| **图标真源** | `src/services/item/ItemIconRegistry.ts`（`FTX_ICON_SOURCES`） |
+| 能否抽到 | `src/config/gachaPool.json`（`outOfRunItems`） |
+| 开局自带 | `src/core/Session.ts`（`STARTER_RELICS`） |
+
+例：`black_crown`（魔王的黑冠）**不在 items.json**，但它是正经 5★ 遗物，四处都登记了。
+→ 别因为 items.json 查不到就把它替换掉。
+
+对话 effects 的 `kind`：`'relic'` 写 `session.outOfRun.owned`（永久生效）；
+`'item'` 走 `ItemManager.addItem` 塞背包格子（**不校验 id**，写错会得到无图标的幽灵道具）。

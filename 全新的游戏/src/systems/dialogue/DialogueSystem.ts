@@ -23,12 +23,27 @@ import {
   type DialogueViewLike,
 } from './DialogueTypes';
 
+/**
+ * ★ 对话给出的奖励（物资 / 遗物）。
+ *   DialogueSystem 本身不碰 UI —— 它只把"到手了什么"报给上层，
+ *   由模式层决定怎么提示（世界模式 → 右上角"获得物品"播报）。
+ */
+export interface DialogueGrant {
+  kind: 'item' | 'relic';
+  id: string;
+  count: number;
+  /** 是否真正到手（背包满 = false；遗物恒为 true，写进 owned 即生效） */
+  success: boolean;
+}
+
 export interface DialogueSystemOptions {
   session: GameSession;
   itemManager: ItemManager;
   view: DialogueViewLike;
   /** 对话结束回调（参数 = start 时传入的 eventId；主动关闭不触发） */
   onEnd?: (eventId: string | null) => void;
+  /** ★ 奖励到手回调（每件物资/遗物各触发一次；UI 用它弹提示） */
+  onGrant?: (grant: DialogueGrant) => void;
 }
 
 export class DialogueSystem {
@@ -36,6 +51,7 @@ export class DialogueSystem {
   private readonly itemManager: ItemManager;
   private readonly view: DialogueViewLike;
   private readonly onEnd?: (eventId: string | null) => void;
+  private readonly onGrant?: (grant: DialogueGrant) => void;
 
   private tree: DialogueTreeDef | null = null;
   private eventId: string | null = null;
@@ -45,6 +61,7 @@ export class DialogueSystem {
     this.itemManager = opts.itemManager;
     this.view = opts.view;
     this.onEnd = opts.onEnd;
+    this.onGrant = opts.onGrant;
   }
 
   /** 是否有对话进行中 */
@@ -146,12 +163,18 @@ export class DialogueSystem {
     if (!effects || effects.length === 0) return;
     for (const ef of effects) {
       switch (ef.kind) {
-        case 'item':
-          this.itemManager.addItem('player', ef.id, ef.count ?? 1);
+        case 'item': {
+          // ★ 取 addItem 的返回值判成败（背包满 = false）→ 上层据此播报
+          const count = ef.count ?? 1;
+          const ok = this.itemManager.addItem('player', ef.id, count);
+          this.onGrant?.({ kind: 'item', id: ef.id, count, success: ok });
           break;
+        }
         case 'relic': {
+          const count = ef.count ?? 1;
           const owned = this.session.outOfRun.owned;
-          owned[ef.id] = (owned[ef.id] ?? 0) + (ef.count ?? 1);
+          owned[ef.id] = (owned[ef.id] ?? 0) + count;
+          this.onGrant?.({ kind: 'relic', id: ef.id, count, success: true });
           break;
         }
         case 'flag':

@@ -575,7 +575,7 @@ export class WorldUIManager extends BaseInteractionUI {
   /** 显示拾取结果：右上角"获得物品"面板（手绘 JSON 布局，左图标 + 右文字）；
    *  背包满 → 失败文案（图标淡化）。可叠加：每次生成一条，向下堆叠、到期下滑淡出。 */
   showPickupResult(itemId: string, success: boolean, count = 1): void {
-    const name = this.itemManager.getArchetype(itemId)?.name ?? itemId;
+    const name = this.displayNameOf(itemId);
     const label = success
       ? count > 1 ? `获得了 ${name} ×${count}` : `获得了 ${name}`
       : `背包已满，无法拾取 ${name}`;
@@ -601,6 +601,14 @@ export class WorldUIManager extends BaseInteractionUI {
       // 动画完成后清除
       setTimeout(() => { this.flashItemId = null; }, 700);
     }
+  }
+
+  /** ★ 播报显示名：普通物品走 archetype；**遗物不在 items.json**（getArchetype 返回 null），
+   *  回退查 relics.ts —— 否则对话给遗物会播报成 `获得了 black_crown` 这种原始 id。 */
+  private displayNameOf(itemId: string): string {
+    const arch = this.itemManager.getArchetype(itemId);
+    if (arch) return arch.name;
+    return RELIC_ITEM_CONFIG[itemId]?.name ?? itemId;
   }
 
   /** 退场：向下滑动 + 淡出 → 移除（幂等） */

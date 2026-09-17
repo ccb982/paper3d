@@ -89,7 +89,7 @@ import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
 import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { DialogueView } from '../ui/shared/DialogueView';
-import { DialogueSystem } from '../systems/dialogue/DialogueSystem';
+import { DialogueSystem, type DialogueGrant } from '../systems/dialogue/DialogueSystem';
 import { EventSystem } from '../systems/events/EventSystem';
 import { loadFtxCached } from '../services/fx/FtxAssetCache';
 import { MAP_SPAWN_X, MAP_SPAWN_Z } from '../services/ui/MinimapWarmup';
@@ -103,6 +103,7 @@ import { InteractionManager } from '../systems/interaction/InteractionManager';
 import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
+import { startMiniGame, closeMiniGame } from '../minigames';
 
 /** ★ 友军物品 id：部署生成 / 损毁即彻底消失（不返还、不可维修） */
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -854,11 +855,16 @@ export class WorldMode implements IGameMode {
       session: ctx.session,
       itemManager: this.itemManager,
       view: this.dialogueView,
+      // ★ 对话给东西要上屏（访客/事件送物资、遗物 → 右上角"获得物品"播报）
+      onGrant: (g) => this.onDialogueGrant(g),
       onEnd: (eventId) => {
         if (eventId) {
           this.eventSystem.complete(eventId);
           SaveSystem.save(ctx.session);
         }
+        // ★ 小游戏请求（对话以 flag 点名要开哪局）：开了就直接返回 ——
+        //   访客**暂不离舰**、玩家**保持锁定**，等结果对话播完再走下面的收尾。
+        if (this.tryStartMiniGameFromFlags(ctx.session)) return;
         if (this.phase === 'explore') this.player.controlLocked = false;
         // 事件完成 → 消耗该 NPC；舰内则刷新固定位（once/冷却生效）
         if (this.pendingNpc) {
@@ -1589,6 +1595,8 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
+    // ---- 小游戏（若正在跑：强制关闭，别把 DOM 面板留在基地界面上） ----
+    closeMiniGame();
     // ---- 舰内房间（若在舱内退出：释放房间场景/交互站/加工台） ----
     this.craftingOverlay?.dispose();
     this.craftingOverlay = null;
@@ -3391,6 +3399,52 @@ export class WorldMode implements IGameMode {
     v.faceToward(this.player.position.x, this.player.position.z);
     this.player.controlLocked = true;
     eventBus.emit('dialogue', { id: v.approachDialogue });
+  }
+
+  /**
+   * ★ 对话奖励上屏：对话/访客送物资或遗物时，走右上角「获得物品」播报。
+   *   与击杀掉落、采集复用同一条渠道（WorldUIManager.showPickupResult），观感统一。
+   *   · 背包满 → success=false → 红字「背包已满，无法拾取 X」；
+   *   · 遗物不入背包 → 只播报、**不闪背包格子**（闪了也没有那个格子）。
+   */
+  private onDialogueGrant(g: DialogueGrant): void {
+    this.worldUIManager?.showPickupResult(g.id, g.success, g.count);
+    if (g.success && g.kind === 'item') this.worldUIManager?.flashItemAndRefresh(g.id);
+  }
+
+  /**
+   * ★ 对话点名的「小游戏请求」：对话树把某个剧情 flag 置位表示"谈完要开局"。
+   *   目前只有鹰叫王子的校队检测（flag: yjwangzi_trial_start）。
+   *
+   * 流程：对话结束 → 本方法检出 flag → 开局 → 结算按分数播对应结果树 →
+   *   结果树结束再次进 onEnd（此时 flag 已清）→ 正常收尾（访客离舰 / 解锁输入）。
+   * ★ 返回 true 表示"已接管"，onEnd 必须直接 return，**不要**再走访客离舰那套收尾 ——
+   *   否则人走了、结果对话还在说话。
+   */
+  private tryStartMiniGameFromFlags(session: GameSession): boolean {
+    const flags = session.story.flags;
+    if (!flags.yjwangzi_trial_start) return false;
+    flags.yjwangzi_trial_start = 0;   // ★ 先清位：小游戏/结果树期间的任何重入都不会再触发
+
+    const ok = startMiniGame('alignment_trial', {
+      onFinish: (r) => {
+        const tree = r.score >= 80 ? 'yjwangzi_result_high'
+          : r.score >= 50 ? 'yjwangzi_result_mid'
+          : 'yjwangzi_result_low';
+        console.log(`[校队检测] 得分 ${r.score}（${r.detail ?? ''}）→ ${tree}`);
+        this.dialogue.start(tree);
+      },
+      onCancel: () => {
+        // 放弃：按最低档走，剧情不断线（访客照常离舰）
+        this.dialogue.start('yjwangzi_result_low');
+      },
+    });
+    if (!ok) {
+      // 开局失败（未登记/已有小游戏在跑）→ 兜底按最低档，别把对话卡死
+      this.dialogue.start('yjwangzi_result_low');
+      return true;
+    }
+    return true;
   }
 
   /** ★ 采收（E 自动接触 / 子弹命中共享）：掉落入包 + 株采集次数 +1。
