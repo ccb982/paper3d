@@ -35,6 +35,7 @@ import { ItemManager } from './systems/inventory/ItemManager';
 import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
 import { RELIC_ITEM_CONFIG } from './config/relics';
 import { createSettingsUI, type SettingsUi } from './ui/components/SettingsPanel';
+import { playBgm } from './services/audio/Bgm';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -597,6 +598,8 @@ function enterBaseMode(
   currentMode = base;
   currentEnv = 'ship';
   renderManager.setEnvironment('ship');
+  // ★ BGM：基地曲（曲目表 src/config/bgm.ts；同曲重复调用不会重头播放）
+  playBgm('base');
 }
 
 /** 出击到世界模式 */
@@ -654,6 +657,8 @@ function enterWorldMode(
   currentMode = world;
   currentEnv = 'world';
   renderManager.setEnvironment('world');
+  // ★ BGM：这里**不下发**曲目 —— 世界模式自己按阶段切曲（在舰船上播 / 下机出去静音），
+  //   见 WorldMode.syncShipBgm（舰船曲目仍是 src/config/bgm.ts 的 'ship' 一条真源）。
 }
 
 // ============================================================

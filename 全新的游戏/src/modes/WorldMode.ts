@@ -42,6 +42,7 @@ import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
+import { playBgm, stopBgm } from '../services/audio/Bgm';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
@@ -276,7 +277,10 @@ export class WorldMode implements IGameMode {
   player!: Player;
   /** ★ 舰船实体（航行阶段可操控；停靠后静止，敌人索敌最优先） */
   ship!: ShipEntity;
-  /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索 */
+  /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索
+   *  ★ BGM 只在「船内」响（用户定调 2026-09-17）：基地房间 / 舰内舱有音乐，
+   *    出击到露天（sail 航行段 / explore 下机）一律静音。
+   *    阶段每次赋值都必须跟一次 syncShipBgm()（漏一处就有一段时间音乐不对）。 */
   private phase: 'sail' | 'explore' | 'interior' = 'sail';
   /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
    *  只自动固定高度（不动角度/方向）；期间地形已切细化实时加载。
@@ -689,6 +693,7 @@ export class WorldMode implements IGameMode {
     // ★ 舰船：航行阶段可操控（停靠后转为静止受击目标，敌人索敌最优先）
     this.ship = new ShipEntity(this.entities, this.scene, ctx.session, spawn.x, spawn.z);
     this.phase = 'sail';
+    this.syncShipBgm();          // ★ 出图（航行段）= 在外面 → 静音
     this.shipDestroyed = false;
     this.flightCamInit = false;
     this.landing = null;
@@ -3262,6 +3267,7 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.phase = 'explore';
+    this.syncShipBgm();          // ★ 落地停稳 = 人下机到地面 → 静音
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -3465,6 +3471,18 @@ export class WorldMode implements IGameMode {
     interior.setStationPads(pads); // ★ 功能站地面光圈（玩家看得见走到哪能按键）
   }
 
+  /**
+   * ★ BGM：只在「船内」响（用户定调 2026-09-17）——
+   *   基地房间 / 舰内舱 = 有音乐；一出去（航行段、下机探索）立刻静音。
+   *   interior（舰内房间）→ 舰船曲；sail（驾驶航行）/ explore（下机）→ 停。
+   *   ⚠️ 航行段也算「在外面」：点开始行动/开始突袭进图第一件事就是把音乐停掉。
+   *   基地曲不在这里：由 main.enterBaseMode 下发。
+   */
+  private syncShipBgm(): void {
+    if (this.phase === 'interior') playBgm('ship');
+    else stopBgm();
+  }
+
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
   private enterShipInterior(): boolean {
     if (!this.ship || !this.scene || !this.camera || !this.renderer) return false;
@@ -3500,6 +3518,7 @@ export class WorldMode implements IGameMode {
     }
     this.shipInterior = interior;
     this.phase = 'interior';
+    this.syncShipBgm();          // ★ 进舱 = 船内 → 舰船 BGM
     // ★ 舰内屏幕叠加（暗角）；随舰内房间一起创建 / 销毁
     this.interiorFx = new RoomPostFx();
     this.player.controlLocked = true;
@@ -3634,6 +3653,7 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setAssaultBanner(null);
     // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
     this.phase = 'explore';
+    this.syncShipBgm();          // ★ 出舱回露天 → 静音
     // ★ 舰内换装落地：出舱时与世界侧对齐（友军增删换 + 角色贴片立即重挂）
     this.syncSlotAllies();
     this.combatItems?.syncLoadout();
@@ -3662,6 +3682,7 @@ export class WorldMode implements IGameMode {
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.phase = 'sail';
+    this.syncShipBgm();          // ★ 登船起飞 = 出到露天 → 静音
     this.chunks.setCoarseMode(true);  // 航行极简：粗块 LOD
     this.chunks.setWaterVisible(false);
     renderManager.setFlightMode(true);

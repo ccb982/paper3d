@@ -33,6 +33,25 @@
 'regen'            // { base, perCopy }
 ```
 
+## ★ BGM 约定（2026-09-17 用户定调）
+
+**只在「船内」有音乐，出击到露天一律静音**：
+- 有音乐：基地（BaseMode；罗德岛号舱内）、舰内舱（WorldMode `phase === 'interior'`）
+- 静音：`sail`（驾驶舰船航行）、`explore`（下机探索）
+  —— **航行段也算「在外面」**。点「开始行动/开始突袭」进图第一件事就是停音乐。
+
+接线点（改音乐只碰这两个）：
+- 曲目真源 `src/config/bgm.ts`（`base` / `ship` 两条路径；换曲子 = 丢文件进 public/music + 改这两行）
+- 播放器 `src/services/audio/Bgm.ts`（`playBgm(key)` / `stopBgm()`，走 platform adapter）
+- 基地：`main.enterBaseMode` → `playBgm('base')`
+- 世界：`WorldMode.syncShipBgm()` —— **每个 `this.phase =` 赋值后必须跟一次**（5 处：
+  enter / finishDock / enterShipInterior / exitShipInterior / tryBoardShip）。漏一处 = 音乐状态错一段时间。
+
+`WebAdapter.playBgm` 有**路径级去重**：同 src 在播 → 不动；同 src 已暂停 → 直接 `play()` 续播（不重设 src，
+所以同曲来回切不重头）；自动播放被拦 → 挂一次性 pointerdown/keydown 补播。
+**音量淡入/淡出也在 WebAdapter**（`BGM_FADE_MS = 700` 线性，setInterval 驱动不是 rAF）：
+开场/切入淡入、停止淡出到 0 再 pause、切曲 = 旧轨淡出 + 新轨淡入（交叉）。
+
 ## ★ 抽卡池分档概率（2026-09-16 用户定调）
 
 弹药消耗品 **35%** / 可装备道具 **45%** / 遗物 **18%** / BOSS **2%**（精确，非约等）。

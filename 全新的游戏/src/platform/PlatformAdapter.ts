@@ -27,7 +27,7 @@ export interface PlatformAdapter {
     remove(key: string): void;
   };
 
-  /** 音频统一入口 */
+  /** 音频统一入口（BGM 由实现方负责淡入淡出，业务层只管"放哪一首"） */
   audio: {
     playBgm(src: string): void;
     stopBgm(): void;
