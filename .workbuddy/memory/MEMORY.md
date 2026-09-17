@@ -132,6 +132,12 @@
 - 「素材不够响」的正确解法不是调 volume（峰值早就削波了），而是**压缩降 crest factor**：
   扫描参数网格，选「归一到同峰值后 RMS 最大」那组。见 `_audio_backup/scan_land.py`。
 - 测响度：`ffmpeg -i x -af ebur128=peak=true -f null -` 拿 LUFS/peak；短音效额外自己解 PCM 算 RMS 更靠谱。
+- ★★★ **`afade=t=out:st=S:d=D` 从 S 起淡到 0 后是「一直保持静音」，不是只淡那一小段**。
+  写成 `afade=t=out:st=0:d=0.02`（本意"去掉起始爆音"）= 整段音频只剩 0.02s，
+  实测 RMS 0.1625 → 0.0052（压掉 31 倍），成品"小到几乎听不见"。
+  **要淡入写 `t=in`；要淡出必须写 `st=<末尾时刻>`。**
+- ★ 选素材的响度指标要用「**裁掉首尾静音后的有效段 RMS**」，不是峰值也不是 25ms 窗峰值。
+  短促瞬态音 peak 高但 RMS 极低 = 听着很轻。脚本 `_audio_backup/pick_laser.py` 就是干这个的。
 - **node/npx 要用托管版**：`C:\Users\22641\.workbuddy\binaries\node\versions\22.22.2-3`，
   并把其目录加进 `PATH` 再 `cmd /c npx ...`。打包 = `npm.cmd run build`（cwd=项目根）。
 - **系统没有 ffmpeg**。要转码音频用托管 venv 里的 imageio-ffmpeg：
