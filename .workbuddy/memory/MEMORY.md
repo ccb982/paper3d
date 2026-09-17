@@ -79,7 +79,12 @@
 - **bash 工具链损坏**：`ls` / `head` / `cat` / `dirname` / `cd` 全 command not found
   → 一律用 `python -c` + `subprocess` 代替。
 - **node/npx 要用托管版**：`C:\Users\22641\.workbuddy\binaries\node\versions\22.22.2-3`，
-  并把其目录加进 `PATH` 再 `cmd /c npx ...`。
+  并把其目录加进 `PATH` 再 `cmd /c npx ...`。打包 = `npm.cmd run build`（cwd=项目根）。
+- **系统没有 ffmpeg**。要转码音频用托管 venv 里的 imageio-ffmpeg：
+  `C:\Users\22641\.workbuddy\binaries\python\envs\default\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe`
+  （自带 libmp3lame / libopus / libvorbis）。BGM 压码率命令见 `.workbuddy/memory/2026-09-17.md`。
+- `vite.config.ts` **没设 `base`**（默认 `'/'`，产物是绝对路径 `/assets/...`）→ 子目录托管/预览面板会 404 白屏。
+- 沙箱**不能监听端口**：vite dev / preview 起不来，别在这里做 browser 联调。
 - **用户可能正在玩游戏** → 不要擅自跑游戏内实测（会抢 GPU 帧率崩，且会被误归因到刚改的代码）。
   要实测先问一句。
 - 用户偏好：**直接、简短、可验证**的结论；给数字；明确说清做了什么、踩了什么坑、回退了什么。
