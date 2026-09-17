@@ -578,6 +578,34 @@ export class SwarmSystem {
   agentY(i: number): number { return this.pool.y[i]; }
   agentZ(i: number): number { return this.pool.z[i]; }
 
+  // ============================================================
+  // ★ 代理层索敌（2026-09-17：祖宗远程用）
+  // ============================================================
+  // 为什么需要：敌人**实体**只在玩家 L3_RADIUS(35m) 内存在，远处只有代理。
+  //   祖宗射程 42m > 35m，且站桩不动 → 一旦离开玩家，它眼里一个实体都没有
+  //   （EntityManager 查不到），表现为「远处的祖宗不开火」。
+  //   所以祖宗必须能直接打代理——代理池就是远处敌人的唯一表示。
+
+  /** ★ 半径内最近的存活代理下标（-1 = 无）。O(count)，祖宗数量少故可逐个调用 */
+  nearestAgentIndex(x: number, z: number, radius: number): number {
+    const p = this.pool;
+    const r2 = radius * radius;
+    let best = -1;
+    let bestD2 = Infinity;
+    for (let i = 0; i < p.count; i++) {
+      if (p.hp[i] <= 0) continue;
+      const dx = p.x[i] - x, dz = p.z[i] - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= r2 && d2 < bestD2) { bestD2 = d2; best = i; }
+    }
+    return best;
+  }
+
+  /** ★ 代理是否仍存活（下标越界 / 已被回收 / hp<=0 = false） */
+  agentAlive(i: number): boolean {
+    return i >= 0 && i < this.pool.count && this.pool.hp[i] > 0;
+  }
+
   /** ★ P4 狂暴（同伴阵亡：附近代理短时加速，冲上去拼命） */
   enrageAt(x: number, z: number, radius: number, seconds: number): void {
     const now = performance.now() / 1000;

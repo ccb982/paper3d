@@ -26,6 +26,7 @@ import { queryFinalStats } from '../services/combat/FinalStats';
 import { RasterMap } from '../services/map/RasterMap';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
+import { playSfx } from '../services/audio/Sfx';
 
 /** 无人机 AI 状态 */
 export type DroneState = 'follow' | 'approach' | 'attack' | 'return';
@@ -68,6 +69,19 @@ export class DroneEntity extends EntityBase {
   stationaryBaseY = 0;
   /** ★ 远程攻击回调（站桩模式；WorldMode 注入 = 发射友军弹道） */
   rangedAttack: ((target: EntityBase) => void) | null = null;
+  /**
+   * ★ 代理层索敌回调（站桩模式；WorldMode 注入 = swarm.nearestAgentIndex）
+   *   为什么需要：敌人**实体**只在玩家 35m 内存在，远处只剩代理；祖宗射程 42m 且站桩不动，
+   *   离开玩家后 em.querySphere 一个实体都查不到 → 表现为「远处的祖宗不开火」。
+   *   → 实体目标锁不到时退而打代理，用现成的 swarm.damageAgent 结算。
+   */
+  findAgentTarget: ((x: number, z: number, radius: number) => number) | null = null;
+  /** ★ 代理坐标回调（WorldMode 注入；光束终点跟着代理走；无效/已死 = null） */
+  agentPosOf: ((idx: number) => { x: number; y: number; z: number } | null) | null = null;
+  /** ★ 对代理结算伤害（WorldMode 注入 = swarm.damageAgent） */
+  rangedAgentAttack: ((idx: number) => void) | null = null;
+  /** ★ 当前代理目标下标（-1 = 无；与 target 互斥：有实体目标时优先打实体） */
+  agentIdx = -1;
   /** ★ 自动挖矿回调（站桩模式无敌人时；WorldMode 选点/结算，实体只播光束） */
   mineAttack: ((from: DroneEntity) => void) | null = null;
   /** 挖矿冷却计时 */
@@ -187,8 +201,7 @@ export class DroneEntity extends EntityBase {
       dmgType: 'physical',
     });
     // ★ 攻击特效：射线从无人机射向目标（0.55s 高亮保持；上一束未播完则先销毁）
-    this.beam?.dispose();
-    this.beam = new DroneBeamEffect(this._sceneRef);
+    this.playBeam();   // ★ 走公共入口（激光音效在里面，别在这里直接 new DroneBeamEffect）
   }
 
   /**
@@ -274,6 +287,11 @@ export class DroneEntity extends EntityBase {
       const end = this._beamEnd;
       if (this.target && this.targetAlive(this.target)) {
         end.set(this.target.position.x, this.target.position.y + ATTACK_AIM_Y, this.target.position.z);
+      } else if (this.agentIdx >= 0) {
+        // ★ 代理目标：光束终点跟着代理当前位置（代理会移动，每帧刷新）
+        const ap = this.agentPosOf?.(this.agentIdx);
+        if (ap) end.set(ap.x, ap.y + ATTACK_AIM_Y, ap.z);
+        else this.agentIdx = -1;   // 代理已死/被回收 → 断锁
       }
       const done = this.beam.update(
         dt,
@@ -329,6 +347,8 @@ export class DroneEntity extends EntityBase {
     // ★ 流体步进由 WorldMode 统一每帧一次（多个祖宗共享同一份实例，绝不能每个都 step）
     if (!this.targetAlive(this.target)) this.target = null;
     this.relockTimer -= dt;
+
+    // ---- ① 实体目标优先（玩家附近时敌人就是实体）----
     if (!this.target && this.relockTimer <= 0) {
       this.relockTimer = 0.4;
       this.target = this.findNearestEnemy(SENTINEL_RANGE, p.x, p.z);
@@ -346,25 +366,69 @@ export class DroneEntity extends EntityBase {
           this.playBeam();
           this.rangedAttack?.(t);
         }
+        this.holdStationY(p);
+        return;
       }
-    } else {
-      // ★ 无敌人 → 自动挖矿：随机打附近的铁（原石晶体）/ 水 / 地面
+    }
+
+    // ---- ② 无实体 → 打代理层（★ 远处祖宗唯一能看见的敌人）----
+    //   敌人实体只在玩家 L3_RADIUS(35m) 内存在，祖宗射程 42m 且站桩不动 →
+    //   离开玩家后 ① 永远锁不到，必须退到代理层，否则表现为「远处祖宗不开火」。
+    // ★★ 每帧重新锁定最近代理，**绝不跨帧缓存下标**：
+    //    AgentPool 是 swap-remove（删中间元素 = 末尾元素补位），缓存的 idx 会在别的代理
+    //    死亡/被回收时静默指到另一只身上 —— 表现为"激光突然打向不相干的方向"。
+    //    每帧一次 O(count) 扫描（祖宗数量个位数、count 数百）开销可忽略，换取绝对正确。
+    this.agentIdx = this.findAgentTarget?.(p.x, p.z, SENTINEL_RANGE) ?? -1;
+    if (this.agentIdx >= 0) {
+      const ap = this.agentPosOf?.(this.agentIdx) ?? null;
+      if (!ap) {
+        this.agentIdx = -1;                       // 代理已死 / 被回收
+      } else {
+        this.attackCd -= dt;
+        if (this.attackCd <= 0) {
+          this.attackCd = SENTINEL_ATTACK_CD;
+          this.playBeam();
+          this.rangedAgentAttack?.(this.agentIdx);
+        }
+        this.holdStationY(p);
+        return;
+      }
+    }
+
+    // ---- ③ 实体和代理都没有 → 自动挖矿：随机打附近的铁（原石晶体）/ 水 / 地面 ----
+    if (this.agentIdx < 0) {
       this.mineCd -= dt;
       if (this.mineCd <= 0) {
         this.mineCd = SENTINEL_MINE_CD;
         this.mineAttack?.(this);
       }
     }
-    // 原地固定高度（不上下摆动；随地形抬升但不低于放置基准）
+    this.holdStationY(p);
+  }
+
+  /** ★ 站桩固定高度（不上下摆动；随地形抬升但不低于放置基准） */
+  private holdStationY(p: { x: number; y: number; z: number }): void {
     const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0; // 洞顶不穿模
     p.y = Math.max(gy + 0.5, this.stationaryBaseY);
   }
 
-  /** ★ 播放红色激光光束（攻击/挖矿共用；上一束未播完先销毁） */
+  /**
+   * ★ 播放红色激光光束（**唯一入口**：近战挥击 / 祖宗远程 / 祖宗挖矿 都走这里；
+   *   上一束未播完先销毁）。激光音效也挂在这里，三处自动都有声。
+   *   ★ 音效带距离门：祖宗射程 42m，玩家不在附近时不响（否则远处自动开火会很吵）。
+   *   ★ 节流 60ms：多只同帧开火只响一次，避免叠加成噪音。
+   */
   playBeam(): void {
     this.beam?.dispose();
     this.beam = new DroneBeamEffect(this._sceneRef);
+    const dx = this.entity.position.x - this.playerPos.x;
+    const dz = this.entity.position.z - this.playerPos.z;
+    if (dx * dx + dz * dz <= DroneEntity.LASER_SFX_RANGE ** 2) {
+      playSfx('laserFire', 60);
+    }
   }
+  /** ★ 激光音效的听距（米；玩家超出这个距离就不响） */
+  private static readonly LASER_SFX_RANGE = 40;
 
   /** 影子：无人机悬浮，给一个小的地面投影剪影（主体轮廓）；
    *  ★ 祖宗是 2.0 大体积站桩 → 用更大的影子，避免"看起来没影子" */

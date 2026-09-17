@@ -830,22 +830,27 @@ export function unregisterPlantGustChunk(cx: number, cz: number): void {
   }
 }
 
-/** ★ 角色子弹命中采集物触发：按 propRegistry 的 (cx, cz, planIndex) 找株、赋满扭曲 */
-export function plantGustAt(cx: number, cz: number, planIndex: number, now = performance.now()): void {
+/**
+ * ★ 角色子弹命中采集物触发：按 propRegistry 的 (cx, cz, planIndex) 找株、赋满扭曲。
+ * @returns **true = 本次真的摇动了**（冷却通过）；false = 未注册 / 该株冷却中。
+ *   返回值只给「击草音效」用——WorldMode 靠它判断要不要发声，避免每帧狂响。
+ */
+export function plantGustAt(cx: number, cz: number, planIndex: number, now = performance.now()): boolean {
   const list = PLANT_GUST_CHUNKS.get(`${cx}|${cz}`);
-  if (!list) return;
+  if (!list) return false;
   for (const e of list) {
     // planIdx 与 propRegistry 同序（build 时按同批 visibleProps 生成）→ 下标一一对应
     const i = e.planIdx.indexOf(planIndex);
     if (i < 0) continue;
-    if (now - e.last[i] < PROP_GUST_RETRIGGER_COOLDOWN * 1000) continue;
+    if (now - e.last[i] < PROP_GUST_RETRIGGER_COOLDOWN * 1000) return false;
     e.gust[i] = 1;
     // ★ 随机方向：按实例位置 hash（确定性 → 组里各株方向各异、同株重掷也乱）
     e.dir[i] = hash2(e.mesh.count * 7 + i, planIndex * 13, 4242 + Math.floor(now / 1000) * 31) % 1;
     e.last[i] = now;
     GUST_DIRTY.add(e);
-    return; // 一张 mesh 内 planIdx 唯一
+    return true; // 一张 mesh 内 planIdx 唯一
   }
+  return false;
 }
 
 /** ★ 采收冷却门（E 键 / 子弹共享，2026-09-14）：同株两次掉落至少间隔 cooldownMs。

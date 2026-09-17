@@ -32,6 +32,13 @@ export interface PlatformAdapter {
     playBgm(src: string): void;
     stopBgm(): void;
     playSfx(src: string): void;
+    /**
+     * ★ 循环音效通道（与 BGM 通道**互相独立**、可同时响）：
+     *   引擎轰鸣这类"要一直响、但属于音效不属于音乐"的走这里，
+     *   否则会跟 BGM 抢同一个元素（换 BGM 时把引擎顶掉 / 反之）。
+     */
+    playLoopSfx(src: string): void;
+    stopLoopSfx(): void;
   };
 
   /** 触摸/鼠标事件（映射为抽象触摸事件） */

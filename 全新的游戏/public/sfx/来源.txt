@@ -1,0 +1,50 @@
+音效来源与许可（2026-09-17 采集）
+全部来自 Mixkit —— Mixkit Free License：免费、可商用、无需署名。
+（https://mixkit.co/license/#sfxFree）
+加工：裁剪 + 峰值归一 + 转 64kbps / 单声道 / 44.1kHz（ffmpeg libmp3lame）。
+
+脚步草.mp3        <- Grass step (id 1920)
+脚步草重.mp3      <- Heavy grass step (id 1922)
+脚步石.mp3        <- Walking on stones loop (id 1269)
+脚步土.mp3        <- Footsteps in the forest ground (id 1230)
+涉水.mp3          <- Water splash (id 1311)
+入水.mp3          <- Jump into the water (id 1180)
+踩水坑.mp3        <- Footsteps in a muddy puddle (id 536)
+拨草.mp3          <- Handling grass (id 1925)
+落叶沙沙.mp3      <- Dry leaves rustling (id 2430)
+击草.mp3          <- Sand swish (id 1494)
+击中水面.mp3      <- 裁自「Jump into the water」(id 1180) 的入水瞬态 0.30~0.68s
+                     ★ 加工：atempo=1.25（子弹比人快）+ treble=g=5:f=3200（清脆，区别于"人扑通入水"）
+                     ★ 峰值对齐到 0.67（参照 击中地面 0.594 / 涉水 0.554 同档）
+                     ★ 64kbps 单声道 0.32s ≈ 3KB
+（割草.mp3 = Quick knife slice cutting id 2152 —— 2026-09-17 按用户要求移除，
+  原始文件备份在 _audio_backup/割草.已弃用.mp3，不要再加回 SFX 表）
+
+击中地面.mp3      <- Light impact on the ground (id 2070)
+击中地面2.mp3     <- Dirt debris falling (id 402)
+激光发射.mp3      <- 激光类 (laser tag id 1678)，能量全在 0~0.25s → 裁 0~0.45s
+激光发射2.mp3     <- 激光类 (laser tag id 1514)，主体在 0.25~0.50s → 裁 0.15~0.70s
+                     ★ 两条随机变体（高频触发，单条会听腻）；尾端 0.10s 淡出、treble 微提
+                     ★ 峰值归一 0.62 / 0.67；64kbps 单声道 4.1KB / 4.9KB
+                     ★ 接线：`DroneEntity.playBeam()`（唯一入口）——近战挥击 / 祖宗远程 / 祖宗挖矿
+                       三条路径都走它，音效自动全覆盖。**别在别处直接 new DroneBeamEffect**
+                     ★ 带 40m 听距门（祖宗射程 42m，远处自动开火不该响）+ 同 id 60ms 节流
+飞行引擎.mp3      <- Transport airplane flying rumble (id 1590)
+                     ★ 取原曲 20~30s（整段是"由远及近再到远去"，这段在轰鸣平台区）
+                     ★ 无缝循环：尾 1.5s 淡出后叠回开头；首尾 RMS 0.056/0.062，接缝听不出
+                     ★ 音量压到 0.45；48kbps 单声道，10s ≈ 59KB
+                     ★ 走**独立循环通道**（WebAdapter.playLoopSfx），与 BGM 同时响不互相顶掉
+舰船着陆.mp3      <- 重击 (thud 类 id 757)，1.55s
+                     ★ 加工：bass=g=12:f=110 低频增强（巨物感）+ 轻微 aecho 余韵
+                     ★★ 提响：素材 crest factor 高达 4.45（峰值早就削到 +3.2dBFS 还是不显响），
+                        单纯调 volume 只会更失真 → 必须**先压缩再归一**。
+                        扫描 36 组参数得出最优：acompressor=threshold=0.12:ratio=6:makeup=8
+                        → crest 4.45→2.60，RMS 0.247→0.385（**+3.8dB**），峰值封回 0.95 不再削波。
+                        （ratio 上限是 20，不是 30；loudnorm 对 1~2s 短素材完全失效，别用）
+                     ★ 64kbps 单声道 15KB
+环境微风.mp3      <- Breeze through the trees (id 2427)
+                     ★ 无缝循环处理：末段 1.5s 淡出后叠回开头（首尾接得上，loop 无咔哒）
+                     ★ 音量压低 12dB 当垫底；48kbps 单声道，12.9s ≈ 76KB
+
+曲目表（代码真源）：src/config/sfx.ts  /  环境音走 src/config/bgm.ts 的 ambient
+

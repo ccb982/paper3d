@@ -36,6 +36,7 @@ import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
 import { RELIC_ITEM_CONFIG } from './config/relics';
 import { createSettingsUI, type SettingsUi } from './ui/components/SettingsPanel';
 import { playBgm } from './services/audio/Bgm';
+import { stopLoopSfx } from './services/audio/Sfx';
 
 /** 剪贴板兜底（非安全上下文/旧浏览器）：textarea 选中 + execCommand */
 function fallbackCopy(text: string): void {
@@ -600,6 +601,8 @@ function enterBaseMode(
   renderManager.setEnvironment('ship');
   // ★ BGM：基地曲（曲目表 src/config/bgm.ts；同曲重复调用不会重头播放）
   playBgm('base');
+  // ★ 循环音效通道：从航行段直接回基地时，引擎轰鸣不会自己停（WorldMode.exit 不碰音频）
+  stopLoopSfx();
 }
 
 /** 出击到世界模式 */

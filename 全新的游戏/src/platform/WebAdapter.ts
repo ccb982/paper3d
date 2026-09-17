@@ -8,6 +8,18 @@ import type { PlatformAdapter, TouchEvent } from './PlatformAdapter';
 const BGM_FADE_MS = 700;
 /** ★ BGM 目标音量（淡入终点） */
 const BGM_VOLUME = 1;
+/** ★ 循环音效通道目标音量（引擎轰鸣：要听得见但不能盖过音乐/音效） */
+const LOOP_SFX_VOLUME = 0.55;
+
+/**
+ * ★ 循环音效通道元素句柄（独立于 bgmAudio 的第二条常驻音轨）。
+ *   存在意义：引擎轰鸣是"音效"不是"音乐"，且必须和 BGM 同时响——
+ *   共用 BGM 通道会导致二选一互相顶掉。
+ */
+interface LoopTrack {
+  el: HTMLAudioElement;
+  src: string;
+}
 
 export class WebAdapter implements PlatformAdapter {
   private bgmAudio: HTMLAudioElement | null = null;
@@ -19,6 +31,8 @@ export class WebAdapter implements PlatformAdapter {
   private autoplayArmed = false;
   /** ★ 每条约上正在跑的淡化计时器（元素 → interval id）：切断淡化时按元素清理 */
   private bgmFades = new Map<HTMLAudioElement, number>();
+  /** ★ 循环音效通道（引擎轰鸣等）：null = 没在播 */
+  private loopTrack: LoopTrack | null = null;
 
   createCanvas(): HTMLCanvasElement {
     return document.createElement('canvas');
@@ -75,6 +89,41 @@ export class WebAdapter implements PlatformAdapter {
     playSfx: (src: string) => {
       const a = new Audio(src);
       a.play().catch(() => {});
+    },
+    playLoopSfx: (src: string) => {
+      const cur = this.loopTrack;
+      // ① 同一条：不重设 src（避免重头播），暂停中就续播 + 淡入
+      if (cur && cur.src === src) {
+        if (cur.el.paused) {
+          cur.el.volume = 0;
+          cur.el.play()
+            .then(() => this.fadeTo(cur.el, LOOP_SFX_VOLUME, null))
+            .catch(() => {});
+        } else if (cur.el.volume < LOOP_SFX_VOLUME) {
+          this.fadeTo(cur.el, LOOP_SFX_VOLUME, null);   // 打断淡出，拉回来
+        }
+        return;
+      }
+      // ② 换音 / 首次：旧轨淡出，新轨淡入
+      if (cur) {
+        const old = cur;
+        this.fadeTo(old.el, 0, () => { old.el.pause(); });
+        this.loopTrack = null;
+      }
+      const el = new Audio();
+      el.loop = true;
+      el.volume = 0;
+      el.src = src;
+      this.loopTrack = { el, src };
+      el.play()
+        .then(() => this.fadeTo(el, LOOP_SFX_VOLUME, null))
+        .catch(() => { /* 自动播放被拦：等下一次调用或用户手势再补 */ });
+    },
+    stopLoopSfx: () => {
+      const cur = this.loopTrack;
+      if (!cur) return;
+      this.loopTrack = null;   // 先解绑，淡出期间再调 play 会新建元素
+      this.fadeTo(cur.el, 0, () => { cur.el.pause(); });
     },
   };
 

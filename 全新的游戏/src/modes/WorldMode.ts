@@ -43,6 +43,7 @@ import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
 import { DesktopBinding } from '../platform/input/DesktopBinding';
 import { playBgm, stopBgm } from '../services/audio/Bgm';
+import { playSfx, playLoopSfx, stopLoopSfx } from '../services/audio/Sfx';
 import { RasterMap, chunkKeyOf } from '../services/map/RasterMap';
 import { CHUNK_SIZE } from '../services/map/ChunkGenerator';
 import { ChunkManager, type ImpactReport, type DecorPropInstance } from '../services/map/ChunkManager';
@@ -278,9 +279,9 @@ export class WorldMode implements IGameMode {
   /** ★ 舰船实体（航行阶段可操控；停靠后静止，敌人索敌最优先） */
   ship!: ShipEntity;
   /** ★ 阶段：sail = 操控舰船航行（耗油/选停靠）；explore = 控制角色探索
-   *  ★ BGM 只在「船内」响（用户定调 2026-09-17）：基地房间 / 舰内舱有音乐，
-   *    出击到露天（sail 航行段 / explore 下机）一律静音。
-   *    阶段每次赋值都必须跟一次 syncShipBgm()（漏一处就有一段时间音乐不对）。 */
+   *  ★ 音乐只在「船内」响（用户定调 2026-09-17）：interior → 舰船曲；sail → 静音。
+   *    explore（下机到野外）放的是**环境音**而不是音乐（低音量循环底噪，见 syncSceneBgm）。
+   *    阶段每次赋值都必须跟一次 syncSceneBgm()（漏一处就有一段时间声音不对）。 */
   private phase: 'sail' | 'explore' | 'interior' = 'sail';
   /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
    *  只自动固定高度（不动角度/方向）；期间地形已切细化实时加载。
@@ -693,7 +694,7 @@ export class WorldMode implements IGameMode {
     // ★ 舰船：航行阶段可操控（停靠后转为静止受击目标，敌人索敌最优先）
     this.ship = new ShipEntity(this.entities, this.scene, ctx.session, spawn.x, spawn.z);
     this.phase = 'sail';
-    this.syncShipBgm();          // ★ 出图（航行段）= 在外面 → 静音
+    this.syncSceneBgm();          // ★ 出图（航行段）= 在外面 → 静音
     this.shipDestroyed = false;
     this.flightCamInit = false;
     this.landing = null;
@@ -1391,7 +1392,11 @@ export class WorldMode implements IGameMode {
       this.entities.onEntityMoved(this.ship);
       if (this.landing?.phase === 'approach') {
         // ★ 触地 → 转落稳段（镜头仍追舰船；完整看到接地）；无超时瞬移接地
-        if (this.landingTouchdown) this.beginSettle();
+        //   只在这一帧成立（beginSettle 立刻把 phase 切成 settle）→ 着陆音不会连播
+        if (this.landingTouchdown) {
+          this.beginSettle();
+          playSfx('shipLand', 600);
+        }
       } else if (this.landing?.phase === 'settle') {
         this.updateSettle(dt);
       } else if (!this.landing) {
@@ -1418,6 +1423,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感；航行期角色在船上） ----
     if (this.phase === 'explore') this.updateWaterEntry(this.player, dt);
+    // ★ 环境音效：脚步 / 拨草（入水·涉水音在 updateWaterEntry 内，只对玩家那次生效）
+    if (this.phase === 'explore') this.updateAmbientSfx(dt);
     for (const e of this.enemies) this.updateWaterEntry(e, dt);
     const _e3 = performance.now();
 
@@ -2153,6 +2160,7 @@ export class WorldMode implements IGameMode {
       if (this.groupWarnShown) {
         this.groupWarnShown = false;
         this.worldUIManager.clearEnemyGroupWarning();
+        this.syncSceneBgm();   // ★ 舰没了 → 战斗曲淡出，回常态
       }
       return;
     }
@@ -2184,6 +2192,7 @@ export class WorldMode implements IGameMode {
       } else if (this.groupWarnAccum >= need) {
         this.groupWarnShown = true;
         this.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+        this.syncSceneBgm();   // ★ 大举入侵成立 → 战斗曲交叉淡入
       }
     } else if (
       dist <= WorldMode.SHIP_GROUP_HIDE_COUNT &&
@@ -2193,6 +2202,7 @@ export class WorldMode implements IGameMode {
       if (this.groupWarnShown) {
         this.groupWarnShown = false;
         this.worldUIManager.clearEnemyGroupWarning();
+        this.syncSceneBgm();   // ★ 威胁解除 → 淡回环境音 / 舰船曲
       }
     } else if (this.groupWarnShown) {
       // 迟滞带（已触发但未落到清除线）：维持并刷新计数
@@ -2425,6 +2435,9 @@ export class WorldMode implements IGameMode {
     return enemy;
   }
 
+  /** ★ 脚步间距（米）：每走这么远播一步 —— 速度越快步频越高（2026-09-17） */
+  private static readonly STEP_DISTANCE = 2.2;
+
   /**
    * ★ 角色入水检测：走进水面 / 从高处落入水面 → 该处水面剧烈波动；
    *   在水中持续移动 → 脚下周期性泛波。只触发波动表现，不改角色位置。
@@ -2451,6 +2464,7 @@ export class WorldMode implements IGameMode {
     if (liquid && !prevLiquid && p.y < 0.5) {
       rec.rippleMs = performance.now();
       sharedWaterMaterial.addImpact(p.x, p.z, 0.8);
+      if (e === this.player) playSfx('waterEnter', 400);
       return;
     }
     // 高处坠落 / 跳入：本帧穿过 y=0 水面 → 波幅随坠落速度增大
@@ -2458,6 +2472,7 @@ export class WorldMode implements IGameMode {
       rec.rippleMs = performance.now();
       const vy = Math.max(0, (prevY - p.y) / Math.max(dt, 1e-3));
       sharedWaterMaterial.addImpact(p.x, p.z, Math.min(1.6, 0.7 + vy * 0.15));
+      if (e === this.player) playSfx('waterEnter', 400);
       return;
     }
     // ★ 在水中移动 → 脚下周期性泛波（按【实际位移速度】：静止不泛波——载具圆凳悬停时不再高频溅波）
@@ -2468,6 +2483,7 @@ export class WorldMode implements IGameMode {
       if (now - rec.rippleMs >= gap) {
         rec.rippleMs = now;
         sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + movedSpeed * 0.06));
+        if (e === this.player) playSfx('waterWade', 330);
       }
     }
   }
@@ -2496,6 +2512,10 @@ export class WorldMode implements IGameMode {
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
     this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门；capHit 走挖洞顶）
+    // ★ 击地 / 击水音：water='hit' = 真打在水面上 → 水花；
+    //   'edge'（岸边地块）和 'none' 都算打到实地 → 击地音（水面另有波动，不重复响）
+    if (impact.water === 'hit') playSfx('bulletWater', 70);
+    else playSfx('bulletGround');
     this.agitateWaterNear(point.x, point.z); // 水面波动
     if (!impact.capHit) this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告（洞顶不掉）
   }
@@ -2634,6 +2654,14 @@ export class WorldMode implements IGameMode {
     s.stationaryBaseY = py;
     s.rangedAttack = (t) => this.fireSentinelShot(s, t);
     s.mineAttack = (d) => this.sentinelMine(d); // ★ 无敌人时自动挖矿
+    // ★ 代理层通道（远处敌人只有代理，没有实体 → 祖宗必须能打代理，否则「远处不开火」）
+    s.findAgentTarget = (x, z, r) => this.swarm.nearestAgentIndex(x, z, r);
+    s.agentPosOf = (i) => (
+      this.swarm.agentAlive(i)
+        ? { x: this.swarm.agentX(i), y: this.swarm.agentY(i), z: this.swarm.agentZ(i) }
+        : null
+    );
+    s.rangedAgentAttack = (i) => this.fireSentinelShotAtAgent(i);
     s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
     this.drones.push(s);
     if (this.renderer) {
@@ -2728,7 +2756,8 @@ export class WorldMode implements IGameMode {
         if (b.camp !== 'player' && b.camp !== 'ally') return;
         const p = b.entity.position;
         this.chunks.forEachCollectibleNear(p.x, p.z, PROP_GUST_RADIUS, (prop) => {
-          plantGustAt(prop.cx, prop.cz, prop.index);
+          // ★ 真的摇动了（该株冷却通过）才发击草音 —— 否则每颗子弹每帧都会响
+          if (plantGustAt(prop.cx, prop.cz, prop.index)) playSfx('grassHit', 110);
           // ★ 射击采收：与 E 键同一条掉落/上限管线（含株级冷却 → 一发子弹一次掉落）
           this.harvestCollectible(prop, true);
         });
@@ -3267,7 +3296,7 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.phase = 'explore';
-    this.syncShipBgm();          // ★ 落地停稳 = 人下机到地面 → 静音
+    this.syncSceneBgm();          // ★ 落地停稳 = 人下机到地面 → 静音
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -3471,16 +3500,86 @@ export class WorldMode implements IGameMode {
     interior.setStationPads(pads); // ★ 功能站地面光圈（玩家看得见走到哪能按键）
   }
 
+  // ============================================================
+  // ★ 环境音效（2026-09-17 用户点题：地上走 / 在水里 / 走过草丛 / 击中草丛）
+  //   曲目表 src/config/sfx.ts；三条触发线：
+  //     脚步 + 拨草 → updateAmbientSfx（本文件）
+  //     入水/涉水   → updateWaterEntry（复用水面泛波节拍）
+  //     击草       → updatePlantGustSweep（plantGustAt 冷却通过才算一次）
+  // ============================================================
+
+  /** 累计水平位移（米）；达到 STEP_DISTANCE 播一步（跑得快 → 步频自然高） */
+  private stepAccum = 0;
+  /** 上一帧玩家坐标（算位移用） */
+  private stepLastX = 0;
+  private stepLastZ = 0;
+  /** 草丛检测节拍累计（秒；不是每帧查——附近植被查询有开销） */
+  private grassCheckAccum = 0;
+
   /**
-   * ★ BGM：只在「船内」响（用户定调 2026-09-17）——
-   *   基地房间 / 舰内舱 = 有音乐；一出去（航行段、下机探索）立刻静音。
-   *   interior（舰内房间）→ 舰船曲；sail（驾驶航行）/ explore（下机）→ 停。
-   *   ⚠️ 航行段也算「在外面」：点开始行动/开始突袭进图第一件事就是把音乐停掉。
+   * ★ 环境音效每帧推进（仅探索期）：脚步按位移触发，草丛按 0.2s 节拍查询。
+   *   水里那两条不在这里（updateWaterEntry 已经算好了入水/泛波节拍）。
+   */
+  private updateAmbientSfx(dt: number): void {
+    const pl = this.player;
+    if (!pl || pl.dead || pl.controlLocked) return;
+    const p = pl.position;
+    const dx = p.x - this.stepLastX;
+    const dz = p.z - this.stepLastZ;
+    this.stepLastX = p.x;
+    this.stepLastZ = p.z;
+    const dist = Math.hypot(dx, dz);
+    const speed = dt > 1e-3 ? dist / dt : 0;
+    if (speed > 0.4) {
+      // ---- 脚步：每走 STEP_DISTANCE 米一步 ----
+      this.stepAccum += dist;
+      if (this.stepAccum >= WorldMode.STEP_DISTANCE) {
+        this.stepAccum = 0;
+        this.playFootstep(p.x, p.z);
+      }
+      // ---- 拨草：脚下 1.3m 内有植被 → 沙沙声（550ms 节流防糊成一片） ----
+      this.grassCheckAccum += dt;
+      if (this.grassCheckAccum >= 0.2) {
+        this.grassCheckAccum = 0;
+        let near = false;
+        this.chunks.forEachCollectibleNear(p.x, p.z, 1.3, () => { near = true; });
+        if (near) playSfx('grassBrush', 550);
+      }
+    } else {
+      this.grassCheckAccum = 0;
+      // 站着别积压距离（否则一动就连响好几步）
+      this.stepAccum = Math.min(this.stepAccum, WorldMode.STEP_DISTANCE * 0.6);
+    }
+  }
+
+  /** ★ 单步脚步音：按脚下地块 + 附近植被选音色（水/坑不响，交给涉水音） */
+  private playFootstep(x: number, z: number): void {
+    const td = this.raster.tileDefAt(x, z);
+    if (td.genRole === 'liquid' || td.genRole === 'pit') return;
+    if (td.genRole === 'platform') { playSfx('stepStone', 120); return; }
+    let hasGrass = false;
+    this.chunks.forEachCollectibleNear(x, z, 1.6, () => { hasGrass = true; });
+    playSfx(hasGrass ? 'stepGrass' : 'stepDirt', 120);
+  }
+
+  /**
+   * ★ 场景音：只在「船内」放音乐，野外放低音量环境音（用户定调 2026-09-17）。
+   *   interior（舰内舱）→ 舰船曲《生命流》
+   *   explore（下机到野外）→ 环境音循环底噪（微风；不是音乐，不违背"出去不放 BGM"）
+   *   sail（驾驶舰船航行）→ 静音（航行段也算「在外面」：出击进图第一件事就是停音乐）
    *   基地曲不在这里：由 main.enterBaseMode 下发。
    */
-  private syncShipBgm(): void {
+  private syncSceneBgm(): void {
+    // ★ 引擎循环音（独立通道，与 BGM 互不打断）：只有航行段响，落地/进舱淡出
+    if (this.phase === 'sail') playLoopSfx('shipEngine');
+    else stopLoopSfx();
+    // ① 航行段永远静音（用户定调：在外面飞就不放音乐），优先级最高
+    if (this.phase === 'sail') { stopBgm(); return; }
+    // ② 敌人大举入侵（近舰敌军持续超标）→ 战斗曲（WebAdapter 换曲 = 旧轨淡出 + 新轨淡入）
+    if (this.groupWarnShown) { playBgm('battle'); return; }
+    // ③ 常态
     if (this.phase === 'interior') playBgm('ship');
-    else stopBgm();
+    else playBgm('ambient'); // explore
   }
 
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
@@ -3518,7 +3617,7 @@ export class WorldMode implements IGameMode {
     }
     this.shipInterior = interior;
     this.phase = 'interior';
-    this.syncShipBgm();          // ★ 进舱 = 船内 → 舰船 BGM
+    this.syncSceneBgm();          // ★ 进舱 = 船内 → 舰船 BGM
     // ★ 舰内屏幕叠加（暗角）；随舰内房间一起创建 / 销毁
     this.interiorFx = new RoomPostFx();
     this.player.controlLocked = true;
@@ -3653,7 +3752,7 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setAssaultBanner(null);
     // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
     this.phase = 'explore';
-    this.syncShipBgm();          // ★ 出舱回露天 → 静音
+    this.syncSceneBgm();          // ★ 出舱回露天 → 静音
     // ★ 舰内换装落地：出舱时与世界侧对齐（友军增删换 + 角色贴片立即重挂）
     this.syncSlotAllies();
     this.combatItems?.syncLoadout();
@@ -3682,7 +3781,7 @@ export class WorldMode implements IGameMode {
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.phase = 'sail';
-    this.syncShipBgm();          // ★ 登船起飞 = 出到露天 → 静音
+    this.syncSceneBgm();          // ★ 登船起飞 = 出到露天 → 静音
     this.chunks.setCoarseMode(true);  // 航行极简：粗块 LOD
     this.chunks.setWaterVisible(false);
     renderManager.setFlightMode(true);
@@ -3745,6 +3844,18 @@ export class WorldMode implements IGameMode {
     if (target instanceof EnemyBase && target.hp > 0 && target.applyStun()) {
       this.showFloatingAt(target.position.x, target.position.y + 2.2, target.position.z, '眩晕', 'normal');
     }
+  }
+
+  /**
+   * ★ 祖宗激光打**代理层**（远处敌人没有实体，只有代理 —— 见 updateStationaryAI ②）。
+   *   伤害口径与 fireSentinelShot 完全一致（同攻击力系数、同下限），
+   *   但结算走 swarm.damageAgent（防御减法 + 取整，与实体伤害管线同口径）。
+   *   ★ 不施加眩晕：代理层没有 stun 状态，避免"打远处反而更强/更弱"的口径分裂。
+   */
+  private fireSentinelShotAtAgent(idx: number): void {
+    if (!this.swarm.agentAlive(idx)) return;
+    const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
+    this.swarm.damageAgent(idx, dmg);
   }
 
   /** ★ 祖宗自动挖矿（无敌人时）：随机在 铁（耗尽原石晶体）/ 水 / 地面 三类中找点，
