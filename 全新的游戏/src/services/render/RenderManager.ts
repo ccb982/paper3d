@@ -38,6 +38,10 @@ class RenderManager {
   private _tsTimer = 0;
   private _tsScale = 1;
   private _lastCost = 0;
+  /** ★ 昼夜时钟冻结（2026-09-18）：舰内等"世界已停"的室内场景用。
+   *  只停太阳/昼夜，不动 scaledDt —— 房间行走、UI 动画照常用真实 dt。
+   *  接线方负责成对开合（WorldMode：进舱 true / 出舱 + 每次 enter 复位 false）。 */
+  private clockPaused = false;
 
   /** boot 装配光照（main.ts 调一次；幂等）
    *  renderer 用于构造 GPU 云朵求解器；scene 挂天空穹顶
@@ -62,6 +66,11 @@ class RenderManager {
     this.flightMode = v;
   }
 
+  /** ★ 昼夜时钟冻结开关（室内场景：世界逻辑已停，太阳也不该偷偷走） */
+  setClockPaused(v: boolean): void {
+    this.clockPaused = v;
+  }
+
   update(dt: number): void {
     this._rawDt = dt;
     let ts = 1;
@@ -70,7 +79,8 @@ class RenderManager {
       ts = this._tsTimer > 0 ? this._tsScale : 1;
     }
     this._timeScale = ts;
-    this.sunCycle.update(dt * ts); // 顿帧时全世界冻结（含太阳），经典 hitstop
+    // 顿帧时全世界冻结（含太阳），经典 hitstop；舰内等室内场景 clockPaused 也冻结昼夜
+    if (!this.clockPaused) this.sunCycle.update(dt * ts);
     // 云朵求解推进（跟随真实时间，顿帧时也冻结保持一致性）；航行期不推进（省 GPU）
     if (!this.flightMode) {
       this.cloudSolver?.setHour(this.sunCycle.current.hour);

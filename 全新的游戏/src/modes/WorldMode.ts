@@ -668,6 +668,7 @@ export class WorldMode implements IGameMode {
     // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
     this.chunks.setWaterVisible(false);
     renderManager.setFlightMode(true);
+    renderManager.setClockPaused(false); // ★ 每次进世界复位昼夜时钟（防上一局残留冻结）
 
     // ★ 昼夜循环重置：每次出击从晚上出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
@@ -1508,6 +1509,9 @@ export class WorldMode implements IGameMode {
     }
     if (this.session && !this.shipDestroyed && isShipDestroyed(this.session)) {
       this.shipDestroyed = true;
+      // ★ 结算/复活等待期世界冻结（update 直接 return）→ 昼夜同步冻结，
+      //   否则出现「敌人不动但时间照走」的割裂态（用户 2026-09-18 定调）
+      renderManager.setClockPaused(true);
       this.worldUIManager.showShipDestroyedPanel(() => this.reviveShip());
     }
 
@@ -3687,6 +3691,7 @@ export class WorldMode implements IGameMode {
     //   （否则离屏 RT 与主渲染形成 feedback loop：GL_INVALID_OPERATION）
     renderManager.setEnvironment('ship');
     renderManager.setFlightMode(true);
+    renderManager.setClockPaused(true);   // ★ 舰内冻结昼夜：世界已停，出舱时天色不该变
     this.chunks.setWaterVisible(false);
     // ★ 舰内操作全部事件触发式（2026-09-16 用户定调：加工台/下船/起飞/返回罗德岛号
     //   都做成走到指定区域按键触发，不再有按钮条）。
@@ -3817,6 +3822,7 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setDockButtonVisible(false);
     renderManager.setEnvironment('world');
     renderManager.setFlightMode(false);
+    renderManager.setClockPaused(false);  // ★ 出舱解冻昼夜
     this.chunks.setWaterVisible(true);
     const p = this.player.position;
     this.cameraCtrl?.snapTo(p.x, p.y, p.z);
@@ -3886,6 +3892,7 @@ export class WorldMode implements IGameMode {
     reviveShip(this.session);
     this.ship.hp = this.session.ship.hp;
     this.shipDestroyed = false;
+    renderManager.setClockPaused(false); // ★ 复活后世界恢复 → 昼夜解冻
     this.shipStatusAccum = 1; // 下一帧立刻刷新 HUD
   }
 
