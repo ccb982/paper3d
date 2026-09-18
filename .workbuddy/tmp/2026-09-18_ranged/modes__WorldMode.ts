@@ -73,10 +73,7 @@ import { VisitorManager } from '../systems/visitors/VisitorManager';
 import type { VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
 import type { VisitorModelStyle } from '../services/render/VisitorModelRenderer';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
-import {
-  createSolidBulletAsset, createArrowAsset, ARROW_BASE_WIDTH,
-  createFireballAsset, FIREBALL_BASE_WIDTH,
-} from '../services/fx/SolidBulletAsset';
+import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 // ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
 import { footSinkRatioOf } from '../services/fx/FootAnchor';
@@ -451,10 +448,6 @@ export class WorldMode implements IGameMode {
   private worldUIManager!: WorldUIManager;
 
   private bullets!: BulletManager;
-  /** ★ 敌方弹道池 · 箭（程序化箭矢：弩手） */
-  private enemyBullets!: BulletManager;
-  /** ★ 敌方弹道池 · 法球（程序化火球：扩音术士 / 战争术士） */
-  private enemyBolts!: BulletManager;
   private bulletCooldown = 0;
   // （chunk 流式构建已下沉 services/map/ChunkManager；材质为每 chunk 独立 Canvas 外观）
   private aiCtx: BehaviorContext = {
@@ -929,36 +922,7 @@ export class WorldMode implements IGameMode {
       // ★ 命中解析层入口：每次碰撞开始，所有命中（敌人 / 装饰物 / 地块）都进这里分类结算
       (payload) => this.resolveBulletHit(payload),
     );
-    // ★ 敌方弹道池（程序化箭矢；细长弹体 → baseWidth 给小数，否则 4 倍长的方片）
-    this.enemyBullets = new BulletManager(
-      this.entities, this.scene,
-      createArrowAsset(), 8,
-      this.renderer,
-      ctx.hitEffectAsset?.hitEffects ?? [],
-      (payload) => this.resolveBulletHit(payload),
-      { baseWidth: ARROW_BASE_WIDTH },
-    );
-    // ★ 敌方法球池（术士；正方形纹理 → 世界尺寸 = baseWidth 见方）
-    this.enemyBolts = new BulletManager(
-      this.entities, this.scene,
-      createFireballAsset(), 6,
-      this.renderer,
-      ctx.hitEffectAsset?.hitEffects ?? [],
-      (payload) => this.resolveBulletHit(payload),
-      { baseWidth: FIREBALL_BASE_WIDTH },
-    );
-    // ★ 路由：敌方弹按 `bulletSkin` 选池（箭 / 法球）；其余（玩家/友军）→ 玩家池
-    this.aiCtx.attack = (opts) => {
-      if (opts.type === 'projectile' && opts.camp === 'enemy') {
-        executeAttack(
-          this.entities,
-          opts.bulletSkin === 'fireball' ? this.enemyBolts : this.enemyBullets,
-          opts,
-        );
-        return;
-      }
-      executeAttack(this.entities, this.bullets, opts);
-    };
+    this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
     // ★ 敌人索敌优先级队列：祖宗（吸仇恨）＞ 玩家 ＞ 一般友军（无人机）
     this.aiCtx.targetCandidates = (e) => this.enemyTargetCandidates(e);
 
@@ -1331,9 +1295,6 @@ export class WorldMode implements IGameMode {
     this.aiCtx.findTarget = () => ({ x: pp.x, z: pp.y });
     this.aiCtx.focusX = pp.x;
     this.aiCtx.focusZ = pp.y;
-    // ★ 焦点瞄准高度 = 玩家受击锚点（贴片 65% 胸口）——远程弹道纵向瞄准用
-    //   （focusX/Z 只是无高度的平面坐标；固定 +1.0 对高个目标会偏低）
-    this.aiCtx.focusY = this.player.hitAnchorY();
 
     // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
     if (this.phase === 'explore') {
@@ -1549,8 +1510,6 @@ export class WorldMode implements IGameMode {
     // ---- 子弹效果/死亡动画（航行期全免：只算地形） ----
     if (this.phase === 'explore') {
       this.bullets.update(dt, this.camera);
-      this.enemyBullets.update(dt, this.camera);
-      this.enemyBolts.update(dt, this.camera);
       // ★ 子弹扫掠采集物 → 顶部扭曲（2026-09-14）：角色子弹经过植被附近，
       //   触发 CPU 大摆（复用 propRegistry 索引、不另建检测体系）
       this.updatePlantGustSweep(dt);
@@ -1619,8 +1578,6 @@ export class WorldMode implements IGameMode {
     const playerP = this.player?.controllerPosition;
     this.swarm.syncRender(this.camera, playerP?.x ?? 0, playerP?.y ?? 0);
     this.bullets.syncHitEffects(this.camera);
-    this.enemyBullets.syncHitEffects(this.camera);
-    this.enemyBolts.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
 
     // ★ 调试：F9 置位后本帧末同步回读（渲染刚完成、缓冲未 swap，读数有效）
@@ -1707,8 +1664,6 @@ export class WorldMode implements IGameMode {
     // ---- 准星 / UI / 子弹 ----
     this.worldUIManager?.dispose();
     this.bullets?.dispose();
-    this.enemyBullets?.dispose();
-    this.enemyBolts?.dispose();
     CharacterFxManager.dispose();
 
     // ---- 拾取发光粒子 ----
@@ -2042,9 +1997,6 @@ export class WorldMode implements IGameMode {
       applyDamage(damage, self, other, { hitPoint: point });
       return;
     }
-    // ★ 敌方弹（弩箭等）打地形：不改造地形、不掉落 —— 否则玩家能靠敌人弹"挖矿"
-    //   （命中特效仍由 BulletEntity.hitFx 播放，反馈不缺）
-    if (self.camp === 'enemy') return;
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
     this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门；capHit 走挖洞顶）
     // ★ 击地 / 击水音：water='hit' = 真打在水面上 → 水花；

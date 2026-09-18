@@ -73,10 +73,7 @@ import { VisitorManager } from '../systems/visitors/VisitorManager';
 import type { VisitorBodyStyle } from '../services/render/VisitorBodyRenderer';
 import type { VisitorModelStyle } from '../services/render/VisitorModelRenderer';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
-import {
-  createSolidBulletAsset, createArrowAsset, ARROW_BASE_WIDTH,
-  createFireballAsset, FIREBALL_BASE_WIDTH,
-} from '../services/fx/SolidBulletAsset';
+import { createSolidBulletAsset, createArrowAsset, ARROW_BASE_WIDTH } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
 // ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
 import { footSinkRatioOf } from '../services/fx/FootAnchor';
@@ -451,10 +448,8 @@ export class WorldMode implements IGameMode {
   private worldUIManager!: WorldUIManager;
 
   private bullets!: BulletManager;
-  /** ★ 敌方弹道池 · 箭（程序化箭矢：弩手） */
+  /** ★ 敌方弹道池（程序化箭矢）：远程兵种的可见弹道（与玩家池分开 = 视觉独立） */
   private enemyBullets!: BulletManager;
-  /** ★ 敌方弹道池 · 法球（程序化火球：扩音术士 / 战争术士） */
-  private enemyBolts!: BulletManager;
   private bulletCooldown = 0;
   // （chunk 流式构建已下沉 services/map/ChunkManager；材质为每 chunk 独立 Canvas 外观）
   private aiCtx: BehaviorContext = {
@@ -938,27 +933,12 @@ export class WorldMode implements IGameMode {
       (payload) => this.resolveBulletHit(payload),
       { baseWidth: ARROW_BASE_WIDTH },
     );
-    // ★ 敌方法球池（术士；正方形纹理 → 世界尺寸 = baseWidth 见方）
-    this.enemyBolts = new BulletManager(
-      this.entities, this.scene,
-      createFireballAsset(), 6,
-      this.renderer,
-      ctx.hitEffectAsset?.hitEffects ?? [],
-      (payload) => this.resolveBulletHit(payload),
-      { baseWidth: FIREBALL_BASE_WIDTH },
+    // ★ 路由：敌方弹道 → 敌方池（程序化箭矢）；其余（玩家/友军）→ 玩家池
+    this.aiCtx.attack = (opts) => executeAttack(
+      this.entities,
+      (opts.type === 'projectile' && opts.camp === 'enemy') ? this.enemyBullets : this.bullets,
+      opts,
     );
-    // ★ 路由：敌方弹按 `bulletSkin` 选池（箭 / 法球）；其余（玩家/友军）→ 玩家池
-    this.aiCtx.attack = (opts) => {
-      if (opts.type === 'projectile' && opts.camp === 'enemy') {
-        executeAttack(
-          this.entities,
-          opts.bulletSkin === 'fireball' ? this.enemyBolts : this.enemyBullets,
-          opts,
-        );
-        return;
-      }
-      executeAttack(this.entities, this.bullets, opts);
-    };
     // ★ 敌人索敌优先级队列：祖宗（吸仇恨）＞ 玩家 ＞ 一般友军（无人机）
     this.aiCtx.targetCandidates = (e) => this.enemyTargetCandidates(e);
 
@@ -1550,7 +1530,6 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'explore') {
       this.bullets.update(dt, this.camera);
       this.enemyBullets.update(dt, this.camera);
-      this.enemyBolts.update(dt, this.camera);
       // ★ 子弹扫掠采集物 → 顶部扭曲（2026-09-14）：角色子弹经过植被附近，
       //   触发 CPU 大摆（复用 propRegistry 索引、不另建检测体系）
       this.updatePlantGustSweep(dt);
@@ -1619,8 +1598,6 @@ export class WorldMode implements IGameMode {
     const playerP = this.player?.controllerPosition;
     this.swarm.syncRender(this.camera, playerP?.x ?? 0, playerP?.y ?? 0);
     this.bullets.syncHitEffects(this.camera);
-    this.enemyBullets.syncHitEffects(this.camera);
-    this.enemyBolts.syncHitEffects(this.camera);
     this.renderer.render(this.scene, this.camera);
 
     // ★ 调试：F9 置位后本帧末同步回读（渲染刚完成、缓冲未 swap，读数有效）
@@ -1708,7 +1685,6 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.dispose();
     this.bullets?.dispose();
     this.enemyBullets?.dispose();
-    this.enemyBolts?.dispose();
     CharacterFxManager.dispose();
 
     // ---- 拾取发光粒子 ----

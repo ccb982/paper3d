@@ -1,0 +1,406 @@
+======================================================================
+services/fx/SolidBulletAsset.ts   +75 lines
+======================================================================
+--- 
++++ 
+@@ -2,5 +2,5 @@
+ // SolidBulletAsset —— 程序生成的子弹贴片资产（FrameAssetSource）
+ // ============================================================
+-// 用途：子弹系统落地前的测试资产（发光圆点），无需资产文件。
++// 用途：子弹系统落地前的测试资产（发光圆点）+ 敌方远程弹道（程序化箭矢）。
+ // 实现最小接口：1 帧 + mock 播放控制器（子弹无动画，帧恒 0）。
+ // 正式资产就绪后替换为 .ftx3/.scene.zip，管线不变。
+@@ -9,4 +9,48 @@
+ import type { FrameAssetSource } from './AssetSource';
+ import type { FramePlaybackController, PlaybackConfig, FramePlaybackCallbacks } from '../../vendor/player/core/controller';
++
++/** ★ 子弹无动画：mock 控制器（帧恒 0）—— 两种程序化资产共用 */
++function mockBulletController(): FramePlaybackController {
++  return {
++    callbacks: {},
++    frameIndex: 0,
++    state: 'playing',
++    reset: () => undefined,
++    goto: () => undefined,
++    gotoTime: () => undefined,
++    stepForward: () => undefined,
++    stepBackward: () => undefined,
++    hold: () => undefined,
++    release: () => undefined,
++    play: () => undefined,
++    pause: () => undefined,
++    resume: () => undefined,
++    stop: () => undefined,
++    advance: () => undefined,
++    dispose: () => undefined,
++  } as unknown as FramePlaybackController;
++}
++
++/** ★ 单帧程序化资产封装（width/height 由调用方决定；residual 恒 128 = 无残差） */
++function makeSingleFrameAsset(
++  baseData: Float32Array,
++  resData: Uint8Array,
++  width: number,
++  height: number,
++): FrameAssetSource {
++  const base = new THREE.DataTexture(baseData, width, height, THREE.RGBAFormat, THREE.FloatType);
++  const residual = new THREE.DataTexture(resData, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
++  base.needsUpdate = true;
++  residual.needsUpdate = true;
++  return {
++    frameCount: 1,
++    getFramePair: (i) => (i === 0 ? { base, residual } : null),
++    createController: (_config?: PlaybackConfig, _callbacks?: FramePlaybackCallbacks): FramePlaybackController =>
++      mockBulletController(),
++    resolveFrame: () => 0,
++    hasFrame: () => false,
++    frameNames: () => [],
++  };
++}
+ 
+ /** 生成发光圆点子弹资产（size=纹理边长像素；h/s/l=HSL 颜色） */
+@@ -33,35 +77,66 @@
+     }
+   }
+-  const base = new THREE.DataTexture(baseData, size, size, THREE.RGBAFormat, THREE.FloatType);
+-  const residual = new THREE.DataTexture(resData, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+-  base.needsUpdate = true;
+-  residual.needsUpdate = true;
++  return makeSingleFrameAsset(baseData, resData, size, size);
++}
+ 
+-  return {
+-    frameCount: 1,
+-    getFramePair: (i) => (i === 0 ? { base, residual } : null),
+-    // 子弹无动画：mock 控制器（帧恒 0）
+-    createController: (_config?: PlaybackConfig, _callbacks?: FramePlaybackCallbacks): FramePlaybackController =>
+-      ({
+-        callbacks: {},
+-        frameIndex: 0,
+-        state: 'playing',
+-        reset: () => undefined,
+-        goto: () => undefined,
+-        gotoTime: () => undefined,
+-        stepForward: () => undefined,
+-        stepBackward: () => undefined,
+-        hold: () => undefined,
+-        release: () => undefined,
+-        play: () => undefined,
+-        pause: () => undefined,
+-        resume: () => undefined,
+-        stop: () => undefined,
+-        advance: () => undefined,
+-        dispose: () => undefined,
+-      }) as unknown as FramePlaybackController,
+-    resolveFrame: () => 0,
+-    hasFrame: () => false,
+-    frameNames: () => [],
+-  };
++// ------------------------------------------------------------
++// ★ 程序化箭矢（敌方远程弹道：弩手）
++// ------------------------------------------------------------
++// 纵向 = 弹道方向：**row 0 = 尖端**（与 BulletEntity「row0=顶部=弹头」约定一致），
++// 末行 = 尾羽。宽高比 1:4 ⇒ 世界尺寸 = baseWidth 宽 × baseWidth×4 长（见
++// BulletEntity.computeWorldSize）。
++// 三段式：箭头（钢灰三角）→ 箭杆（木棕细条）→ 尾羽（红，双侧叶片 + 中间细杆）。
++// 纯程序化，无资产文件 —— 与项目"无资产手搓特效"口径一致。
++
++/** HSL 三段配色（与 base 通道语义一致：h∈[0,1), s∈[0,1], l∈[0,1]） */
++const ARROW_STEEL: readonly [number, number, number] = [0.60, 0.08, 0.78];  // 箭头：冷钢灰
++const ARROW_WOOD: readonly [number, number, number] = [0.07, 0.55, 0.34];   // 箭杆：木棕
++const ARROW_FLETCH: readonly [number, number, number] = [0.98, 0.72, 0.48]; // 尾羽：暗红
++
++/** 生成程序化箭矢资产（size=纹理宽像素，length=纹理高像素） */
++export function createArrowAsset(size = 24, length = 96): FrameAssetSource {
++  const n = size * length;
++  const baseData = new Float32Array(n * 4);
++  const resData = new Uint8Array(n * 4);
++  const HEAD_END = 0.20;      // 箭头段占比（row 0 → HEAD_END）
++  const FLETCH_START = 0.82;  // 尾羽起始占比
++  const SHAFT_HW = 0.075;     // 箭杆半宽（归一化到纹理宽）
++  const HEAD_HW = 0.45;       // 箭头底部半宽
++  const FLETCH_HW = 0.40;     // 尾羽末端半宽
++  const FLETCH_GAP = 0.10;    // 尾羽与中线之间的缝（做出"两片羽"）
++  const cx = (size - 1) / 2;
++
++  for (let y = 0; y < length; y++) {
++    const ny = y / length;
++    for (let x = 0; x < size; x++) {
++      const ax = Math.abs((x - cx) / size);
++      let col: readonly [number, number, number] | null = null;
++      if (ny < HEAD_END) {
++        // 箭头：尖端在 row 0，线性张开到 HEAD_HW
++        if (ax <= HEAD_HW * (ny / HEAD_END)) col = ARROW_STEEL;
++      } else if (ny < FLETCH_START) {
++        // 箭杆
++        if (ax <= SHAFT_HW) col = ARROW_WOOD;
++      } else {
++        // 尾羽：中线细杆 + 两侧叶片
++        const k = (ny - FLETCH_START) / (1 - FLETCH_START);
++        const bladeHw = SHAFT_HW + (FLETCH_HW - SHAFT_HW) * k;
++        if (ax <= SHAFT_HW) col = ARROW_WOOD;
++        else if (ax >= FLETCH_GAP && ax <= bladeHw) col = ARROW_FLETCH;
++      }
++      const i = (y * size + x) * 4;
++      baseData[i] = col ? col[0] : 0;
++      baseData[i + 1] = col ? col[1] : 0;
++      baseData[i + 2] = col ? col[2] : 0;
++      baseData[i + 3] = col ? 1 : 0;
++      resData[i] = 128;
++      resData[i + 1] = 128;
++      resData[i + 2] = 128;
++      resData[i + 3] = 255;
++    }
++  }
++  return makeSingleFrameAsset(baseData, resData, size, length);
+ }
++
++/** ★ 箭矢世界宽度（米）。长度 = 本值 × 4（纹理 1:4） */
++export const ARROW_BASE_WIDTH = 0.28;
+======================================================================
+services/combat/BulletManager.ts   +3 lines
+======================================================================
+--- 
++++ 
+@@ -68,4 +68,7 @@
+     hitEffectShapes: HitEffectShapeExport[] = [],
+     onHit?: (payload: BulletHitPayload) => void,
++    /** ★ 世界宽度（米）：高 = 本值 × 纹理宽高比。缺省 3.0（原口径）；
++     *  程序化箭矢等细长弹道须给小数（如 0.28）→ 否则 4 倍长的方片 */
++    opts?: { baseWidth?: number },
+   ) {
+     this.hitEffectShapes = hitEffectShapes;
+@@ -87,5 +90,5 @@
+ 
+     // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 基类函数计算）----
+-    const quadSize = BulletEntity.computeWorldSize(asset);
++    const quadSize = BulletEntity.computeWorldSize(asset, opts?.baseWidth ?? 3.0);
+     this.renderer = new BulletRenderer(scene, capacity, quadSize);
+     this.renderer.setTexture(this.visual ? this.visual.getTexture() : null);
+======================================================================
+systems/ai/behaviors.ts   +57 lines
+======================================================================
+--- 
++++ 
+@@ -33,4 +33,6 @@
+   focusX?: number;
+   focusZ?: number;
++  /** ★ 焦点（玩家）的世界高度 y —— 远程弹道瞄准用（focusX/Z 是无高度的平面坐标） */
++  focusY?: number;
+ }
+ 
+@@ -140,2 +142,57 @@
+   if (entity.aiAttackTimer <= 0) entity.aiSwingDone = true;
+ });
++
++/**
++ * ★ 远程射击：一次性发射真弹道（计时播完 → attackFinished，下一轮由状态机重新进入）。
++ *   与 meleeSwing 同构（同一 aiAttackTimer / aiSwingDone 契约），差别只在意图类型：
++ *     meleeSwing → type:'melee'（原地范围瞬时判定）
++ *     rangedShot → type:'projectile'（飞到接触才命中 → 有可见弹道 + 飞行时间）
++ *   ★ 发射点 = 自身脚下 + muzzleHeight；瞄准点 = 目标脚下 + aimHeight
++ *     （目标高度问 ctx.focusY —— focusX/Z 只是无高度的平面坐标）。
++ *   ★ 阵营给 'enemy'：模式层据此把弹道路由到"敌方子弹池"（程序化箭矢视觉）。
++ */
++registerBehavior('rangedShot', (entity, ctx, params) => {
++  const duration = pnum(params, 'duration', 0.8);
++  const damage = pnum(params, 'damage', 8);
++  const speed = pnum(params, 'speed', 26);
++  const lifetime = pnum(params, 'lifetime', 2.4);
++  const aimHeight = pnum(params, 'aimHeight', 1.0);
++  const muzzleHeight = pnum(params, 'muzzleHeight', 1.3);
++  const spread = pnum(params, 'spread', 0.05);
++  if (entity.aiAttackTimer <= 0) {
++    entity.aiAttackTimer = duration;
++    entity.aiSwingDone = false;
++    const t = ctx.target;
++    if (t) {
++      const ox = entity.position.x;
++      const oy = entity.position.y + muzzleHeight;
++      const oz = entity.position.z;
++      const ty = (ctx.focusY ?? entity.position.y) + aimHeight;
++      let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
++      const len = Math.hypot(dx, dy, dz) || 1;
++      dx /= len; dy /= len; dz /= len;
++      // ★ 散布：绕竖直轴随机偏转 + 轻微俯仰抖动（不做"激光般精确"，命中要靠站位）
++      if (spread > 0) {
++        const a = (Math.random() - 0.5) * 2 * spread;
++        const ca = Math.cos(a), sa = Math.sin(a);
++        const nx = dx * ca - dz * sa;
++        const nz = dx * sa + dz * ca;
++        dx = nx; dz = nz;
++        dy += (Math.random() - 0.5) * spread;
++        const l2 = Math.hypot(dx, dy, dz) || 1;
++        dx /= l2; dy /= l2; dz /= l2;
++      }
++      // 出膛前移：避免与自身碰撞体重叠（同阵营本来也不判定，但物理体不应生在体内）
++      const muzzle = 0.7;
++      ctx.attack({
++        type: 'projectile',
++        source: entity,
++        x: ox + dx * muzzle, y: oy + dy * muzzle, z: oz + dz * muzzle,
++        dirX: dx, dirY: dy, dirZ: dz,
++        speed, camp: 'enemy', lifetime, damage,
++      });
++    }
++  }
++  entity.aiAttackTimer -= ctx.dt;
++  if (entity.aiAttackTimer <= 0) entity.aiSwingDone = true;
++});
+======================================================================
+systems/ai/aiconfig.ts   +40 lines
+======================================================================
+--- 
++++ 
+@@ -94,4 +94,24 @@
+   /** 单次挥击伤害预留给伤害管线，此处仅注记 */
+   meleeDamage?: number;
++  /** ★ 真弹道（2026-09-18）：填了 → attack 状态改用 `rangedShot` 发射**可见弹道**
++   *  （飞行 → 接触命中），且攻击播完回 `chase` 而非 `patrol`（持续开火）。
++   *  不填 = 原 `meleeSwing`（范围瞬时判定，有 attackRange 却无弹道视觉）。 */
++  ranged?: MobRangedParams;
++}
++
++/** ★ 远程弹道参数（mobAI 的 `ranged` 档） */
++export interface MobRangedParams {
++  /** 弹速（m/s） */
++  speed?: number;
++  /** 弹寿命（秒） */
++  lifetime?: number;
++  /** 瞄准点相对目标脚下的高度（m） */
++  aimHeight?: number;
++  /** 发射点相对自身脚下的高度（m） */
++  muzzleHeight?: number;
++  /** 散布半角（弧度）——弹道不精确，命中取决于站位 */
++  spread?: number;
++  /** 单发伤害（缺省 = meleeDamage） */
++  damage?: number;
+ }
+ 
+@@ -106,4 +126,20 @@
+   // ★ 判定半径缺省 1.8（既有三兵种原样）；远程兵种显式给 attackRange
+   const range = p.attackRange ?? 1.8;
++  // ★ 真弹道档：attack 状态换行为 + 攻击完回 chase（持续开火，而不是回 patrol 晾 3 秒）
++  const rng = p.ranged;
++  const attackBehavior: AIBehaviorDef = rng
++    ? {
++        name: 'rangedShot',
++        params: {
++          duration: melee,
++          damage: rng.damage ?? dmg,
++          speed: rng.speed ?? 26,
++          lifetime: rng.lifetime ?? 2.4,
++          aimHeight: rng.aimHeight ?? 1.0,
++          muzzleHeight: rng.muzzleHeight ?? 1.3,
++          spread: rng.spread ?? 0.05,
++        },
++      }
++    : { name: 'meleeSwing', params: { duration: melee, damage: dmg, range } };
+   return {
+     states: {
+@@ -124,9 +160,10 @@
+       },
+       attack: {
+-        behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg, range } }],
++        behaviors: [attackBehavior],
+         transitions: [
+           { cond: 'retarget', to: 'chase' },
+-          { cond: 'attackFinished', to: 'patrol' },
+-          { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: 'patrol' },
++          // ★ 近战：打一下回巡逻；远程：回追击 → 立刻再次进射程 → 持续开火
++          { cond: 'attackFinished', to: rng ? 'chase' : 'patrol' },
++          { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: rng ? 'chase' : 'patrol' },
+         ],
+       },
+@@ -186,9 +223,12 @@
+ });
+ 
+-/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低 */
++/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低
++ *  ★ 2026-09-18：改真弹道（`ranged`）—— 此前是"大 attackRange 的瞬时空打"，
++ *    攻击没有任何可见效果；现在射程序化箭矢（飞行 → 接触命中）。 */
+ export const CROSSBOW_AI: AIConfig = mobAI({
+   wanderSpeed: 2.2, chaseSpeed: 2.8, aggroRadius: 14,
+   attackRadius: 9, attackRange: 9, loseRadius: 24,
+   meleeDuration: 0.5, meleeDamage: 8,
++  ranged: { speed: 30, lifetime: 1.6, damage: 8, aimHeight: 1.0, muzzleHeight: 1.2, spread: 0.045 },
+ });
+ 
+======================================================================
+modes/WorldMode.ts   +21 lines
+======================================================================
+--- 
++++ 
+@@ -74,5 +74,5 @@
+ import type { VisitorModelStyle } from '../services/render/VisitorModelRenderer';
+ import type { FrameAssetSource } from '../services/fx/AssetSource';
+-import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
++import { createSolidBulletAsset, createArrowAsset, ARROW_BASE_WIDTH } from '../services/fx/SolidBulletAsset';
+ import { CharacterFxManager } from '../services/fx/CharacterFxManager';
+ // ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
+@@ -449,4 +449,6 @@
+ 
+   private bullets!: BulletManager;
++  /** ★ 敌方弹道池（程序化箭矢）：远程兵种的可见弹道（与玩家池分开 = 视觉独立） */
++  private enemyBullets!: BulletManager;
+   private bulletCooldown = 0;
+   // （chunk 流式构建已下沉 services/map/ChunkManager；材质为每 chunk 独立 Canvas 外观）
+@@ -923,5 +925,19 @@
+       (payload) => this.resolveBulletHit(payload),
+     );
+-    this.aiCtx.attack = (opts) => executeAttack(this.entities, this.bullets, opts);
++    // ★ 敌方弹道池（程序化箭矢；细长弹体 → baseWidth 给小数，否则 4 倍长的方片）
++    this.enemyBullets = new BulletManager(
++      this.entities, this.scene,
++      createArrowAsset(), 8,
++      this.renderer,
++      ctx.hitEffectAsset?.hitEffects ?? [],
++      (payload) => this.resolveBulletHit(payload),
++      { baseWidth: ARROW_BASE_WIDTH },
++    );
++    // ★ 路由：敌方弹道 → 敌方池（程序化箭矢）；其余（玩家/友军）→ 玩家池
++    this.aiCtx.attack = (opts) => executeAttack(
++      this.entities,
++      (opts.type === 'projectile' && opts.camp === 'enemy') ? this.enemyBullets : this.bullets,
++      opts,
++    );
+     // ★ 敌人索敌优先级队列：祖宗（吸仇恨）＞ 玩家 ＞ 一般友军（无人机）
+     this.aiCtx.targetCandidates = (e) => this.enemyTargetCandidates(e);
+@@ -1511,4 +1527,5 @@
+     if (this.phase === 'explore') {
+       this.bullets.update(dt, this.camera);
++      this.enemyBullets.update(dt, this.camera);
+       // ★ 子弹扫掠采集物 → 顶部扭曲（2026-09-14）：角色子弹经过植被附近，
+       //   触发 CPU 大摆（复用 propRegistry 索引、不另建检测体系）
+@@ -1665,4 +1682,5 @@
+     this.worldUIManager?.dispose();
+     this.bullets?.dispose();
++    this.enemyBullets?.dispose();
+     CharacterFxManager.dispose();
+ 
+@@ -1998,4 +2016,7 @@
+       return;
+     }
++    // ★ 敌方弹（弩箭等）打地形：不改造地形、不掉落 —— 否则玩家能靠敌人弹"挖矿"
++    //   （命中特效仍由 BulletEntity.hitFx 播放，反馈不缺）
++    if (self.camp === 'enemy') return;
+     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
+     this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门；capHit 走挖洞顶）
+======================================================================
+config/enemyRoster.ts   +1 lines
+======================================================================
+--- 
++++ 
+@@ -163,4 +163,5 @@
+   },
+   // 战争术士：重火力。最远射程 + 最高单发，但血薄移速慢 —— 优先点掉的目标
++  // ★ 2026-09-18：体型 ×2（2.1 → 4.2，碰撞同比例）—— 用户定调"敌人太小、战争术士放大两倍"
+   {
+     id: 'war_caster', name: '战争术士',
+@@ -168,5 +169,5 @@
+     ai: WAR_CASTER_AI,
+     hp: 55, defense: 0, attackPower: 6,
+-    scale: 2.1, collisionScale: 1.2, pack: 1, weight: 3,
++    scale: 4.2, collisionScale: 2.4, pack: 1, weight: 3,
+     drops: [
+       { itemId: 'ketone', chance: 0.35, min: 1, max: 1 },

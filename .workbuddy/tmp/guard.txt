@@ -1,0 +1,11 @@
+[arch-guard] 243 个 TS 文件 / 68019 行
+[arch-guard] phase 赋值 1 处 / setPhase 5 处 / syncSceneBgm 4 处
+[arch-guard] 遗物 6 件 / 图标 12 / 池内 12
+[arch-guard] 敌军 11 种（名册真源 config/enemyRoster.ts）
+  warn  已知债务 modes/WorldMode.ts = 3595 行（上限 1200）
+  warn  已知债务 services/map/ChunkManager.ts = 3481 行（上限 1200）
+  warn  已知债务 ui/base/GachaOverlay.ts = 1763 行（上限 1200）
+  warn  已知债务 vendor/player/fluid/FluidSolver.ts = 1505 行（上限 1200）
+  warn  已知债务 services/map/decor/MapEntityDecorBase.ts = 1430 行（上限 1200）
+  warn  已知债务 services/map/TerrainMaterial.ts = 1265 行（上限 1200）
+[arch-guard] OK（6 项已知债务警告）

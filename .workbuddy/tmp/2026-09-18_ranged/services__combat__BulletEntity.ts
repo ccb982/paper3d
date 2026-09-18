@@ -73,11 +73,8 @@ export const BULLET_BULGE_DIST = 5.0;
 export const BULLET_CLOSE_DIST = 15.0;
 
 export class BulletEntity extends EntityBase {
-  /** 共享剪影画布（BulletManager 初始化时提取一次；**按池**写成实例字段，
-   *  ★ 多弹种（玩家圆弹 / 敌方箭矢）并存时不能只靠 static —— 后建的池会覆盖前一个） */
+  /** 共享剪影画布（所有同类子弹共用一张；BulletManager 初始化时提取一次） */
   static sharedSilhouetteCanvas: HTMLCanvasElement | null = null;
-  /** ★ 本实例所属子弹池的剪影画布（BulletManager 建池时注入；null → 回退 static） */
-  silhouetteCanvas: HTMLCanvasElement | null = null;
 
   /** ★ 子弹逻辑命中体积（球体；物理体积另见 BULLET_BODY_RADIUS，二者解耦） */
   readonly collisionVolume: { shape: import('../../services/physics/PhysicsWorld').ColliderShape; offsetY: number } = {
@@ -126,10 +123,11 @@ export class BulletEntity extends EntityBase {
     return this.groundShadowYaw + Math.PI;
   }
 
-  /** 剪影源：本池画布优先（多弹种正确），缺省回退 static 共享张 */
+  /** 剪影源：共享画布（一次性提取，全部子弹实例复用，内部去重零开销） */
   protected override getShadowFrameData(): ShadowFrameSource | null {
-    const canvas = this.silhouetteCanvas ?? BulletEntity.sharedSilhouetteCanvas;
-    return canvas ? { canvas } : null;
+    return BulletEntity.sharedSilhouetteCanvas
+      ? { canvas: BulletEntity.sharedSilhouetteCanvas }
+      : null;
   }
 
   constructor(

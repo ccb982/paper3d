@@ -43,9 +43,6 @@ export interface SpawnBulletOptions {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
-  /** ★ 弹种标签（**组合层路由用**：选哪个子弹池 → 哪种程序化视觉）。
-   *  BulletEntity 不读它；WorldMode 按它把敌方弹分派到箭池 / 法球池。缺省 = 'arrow'。 */
-  bulletSkin?: string;
 }
 
 export class BulletManager {
@@ -70,32 +67,26 @@ export class BulletManager {
     glRenderer?: THREE.WebGLRenderer,
     hitEffectShapes: HitEffectShapeExport[] = [],
     onHit?: (payload: BulletHitPayload) => void,
-    /** ★ 世界宽度（米）：高 = 本值 × 纹理宽高比。缺省 3.0（原口径）；
-     *  程序化箭矢等细长弹道须给小数（如 0.28）→ 否则 4 倍长的方片 */
-    opts?: { baseWidth?: number },
   ) {
     this.hitEffectShapes = hitEffectShapes;
     // ---- ① 离屏视觉（流体 + 蒙版/VAT → 纹理）----
     this.visual = glRenderer ? new BulletVisual(glRenderer, asset) : null;
     // ★ 提取子弹剪影遮罩（公共工具一次性提取 → 共享画布，全部子弹实例复用）
-    //   ★ 同时写进每个实例（多弹种并存时 static 会被后建的池覆盖，见 BulletEntity）
-    let silhouette: HTMLCanvasElement | null = null;
     if (asset) {
       try {
         const pair0 = asset.getFramePair(0);
         const raw = pair0?.base?.image?.data as unknown as Float32Array | undefined;
         if (raw) {
-          silhouette = makeSilhouetteCanvas(
+          BulletEntity.sharedSilhouetteCanvas = makeSilhouetteCanvas(
             raw, pair0!.base!.image.width, pair0!.base!.image.height, 16,
           );
-          BulletEntity.sharedSilhouetteCanvas = silhouette;
         }
       } catch { /* 提取失败不阻塞 */ }
     }
     this.visual?.init(); // 强制首帧烘焙，避免 RT 纹理全黑
 
     // ---- ③ 3D 渲染器（InstancedMesh；世界尺寸 = 基类函数计算）----
-    const quadSize = BulletEntity.computeWorldSize(asset, opts?.baseWidth ?? 3.0);
+    const quadSize = BulletEntity.computeWorldSize(asset);
     this.renderer = new BulletRenderer(scene, capacity, quadSize);
     this.renderer.setTexture(this.visual ? this.visual.getTexture() : null);
     // ★ 扭曲/纹理旋转参数（素材包 per_frame_data 携带；纯纹理包无 → 关闭）
@@ -138,7 +129,6 @@ export class BulletManager {
       // ★ 命中解析层回调：每次碰撞开始把命中（敌人/装饰物/地块）交给解析层分类结算
       b.onHit = onHit ?? null;
       b.setSceneReference(scene); // ★ 让子弹的贴地圆影能创建（需要场景引用）
-      b.silhouetteCanvas = silhouette; // ★ 本池剪影（多弹种各自正确）
       this.allBullets.push(b);
       this.pool.push(b);
     }

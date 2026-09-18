@@ -43,9 +43,6 @@ export interface SpawnBulletOptions {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
-  /** ★ 弹种标签（**组合层路由用**：选哪个子弹池 → 哪种程序化视觉）。
-   *  BulletEntity 不读它；WorldMode 按它把敌方弹分派到箭池 / 法球池。缺省 = 'arrow'。 */
-  bulletSkin?: string;
 }
 
 export class BulletManager {

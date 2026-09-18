@@ -32,8 +32,6 @@ export interface BehaviorContext {
   /** ★ 玩家世界坐标（AI 距离分级/波次生成用） */
   focusX?: number;
   focusZ?: number;
-  /** ★ 焦点（玩家）的世界高度 y —— 远程弹道瞄准用（focusX/Z 是无高度的平面坐标） */
-  focusY?: number;
 }
 
 export type BehaviorFn = (entity: EnemyBase, ctx: BehaviorContext, params: Record<string, string | number>) => void;
@@ -138,65 +136,6 @@ registerBehavior('meleeSwing', (entity, ctx, params) => {
     }
   }
   // 倒计时；播完 → 标记完成（状态机据此退出 attack）
-  entity.aiAttackTimer -= ctx.dt;
-  if (entity.aiAttackTimer <= 0) entity.aiSwingDone = true;
-});
-
-/**
- * ★ 远程射击：一次性发射真弹道（计时播完 → attackFinished，下一轮由状态机重新进入）。
- *   与 meleeSwing 同构（同一 aiAttackTimer / aiSwingDone 契约），差别只在意图类型：
- *     meleeSwing → type:'melee'（原地范围瞬时判定）
- *     rangedShot → type:'projectile'（飞到接触才命中 → 有可见弹道 + 飞行时间）
- *   ★ 发射点 = 自身受击锚点（`hitAnchorY()` = 贴片 65% 胸口）+ muzzleHeight；
- *     瞄准点 = 目标受击锚点（ctx.focusY）+ aimHeight。
- *     ★ 别用 position.y + 固定值：贴片单位的身高差异极大（1.9 与 4.2 缩放差 2 倍），
- *       固定值对小兵是头顶、对大个子是膝盖。
- *   ★ 阵营给 'enemy'：模式层据此把弹道路由到"敌方子弹池"（程序化箭矢视觉）。
- */
-registerBehavior('rangedShot', (entity, ctx, params) => {
-  const duration = pnum(params, 'duration', 0.8);
-  const damage = pnum(params, 'damage', 8);
-  const speed = pnum(params, 'speed', 26);
-  const lifetime = pnum(params, 'lifetime', 2.4);
-  const aimHeight = pnum(params, 'aimHeight', 0);
-  const muzzleHeight = pnum(params, 'muzzleHeight', 0);
-  const spread = pnum(params, 'spread', 0.05);
-  // ★ 弹种标签：模式层据此选子弹池（箭 / 法球）——行为层只透传，不认识池
-  const bulletSkin = pstr(params, 'skin', 'arrow');
-  if (entity.aiAttackTimer <= 0) {
-    entity.aiAttackTimer = duration;
-    entity.aiSwingDone = false;
-    const t = ctx.target;
-    if (t) {
-      const ox = entity.position.x;
-      const oy = entity.hitAnchorY() + muzzleHeight;
-      const oz = entity.position.z;
-      const ty = (ctx.focusY ?? entity.hitAnchorY()) + aimHeight;
-      let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
-      const len = Math.hypot(dx, dy, dz) || 1;
-      dx /= len; dy /= len; dz /= len;
-      // ★ 散布：绕竖直轴随机偏转 + 轻微俯仰抖动（不做"激光般精确"，命中要靠站位）
-      if (spread > 0) {
-        const a = (Math.random() - 0.5) * 2 * spread;
-        const ca = Math.cos(a), sa = Math.sin(a);
-        const nx = dx * ca - dz * sa;
-        const nz = dx * sa + dz * ca;
-        dx = nx; dz = nz;
-        dy += (Math.random() - 0.5) * spread;
-        const l2 = Math.hypot(dx, dy, dz) || 1;
-        dx /= l2; dy /= l2; dz /= l2;
-      }
-      // 出膛前移：避免与自身碰撞体重叠（同阵营本来也不判定，但物理体不应生在体内）
-      const muzzle = 0.7;
-      ctx.attack({
-        type: 'projectile',
-        source: entity,
-        x: ox + dx * muzzle, y: oy + dy * muzzle, z: oz + dz * muzzle,
-        dirX: dx, dirY: dy, dirZ: dz,
-        speed, camp: 'enemy', lifetime, damage, bulletSkin,
-      });
-    }
-  }
   entity.aiAttackTimer -= ctx.dt;
   if (entity.aiAttackTimer <= 0) entity.aiSwingDone = true;
 });

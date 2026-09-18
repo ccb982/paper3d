@@ -161,8 +161,6 @@ registerBehavior('rangedShot', (entity, ctx, params) => {
   const aimHeight = pnum(params, 'aimHeight', 0);
   const muzzleHeight = pnum(params, 'muzzleHeight', 0);
   const spread = pnum(params, 'spread', 0.05);
-  // ★ 弹种标签：模式层据此选子弹池（箭 / 法球）——行为层只透传，不认识池
-  const bulletSkin = pstr(params, 'skin', 'arrow');
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
     entity.aiSwingDone = false;
@@ -193,7 +191,7 @@ registerBehavior('rangedShot', (entity, ctx, params) => {
         source: entity,
         x: ox + dx * muzzle, y: oy + dy * muzzle, z: oz + dz * muzzle,
         dirX: dx, dirY: dy, dirZ: dz,
-        speed, camp: 'enemy', lifetime, damage, bulletSkin,
+        speed, camp: 'enemy', lifetime, damage,
       });
     }
   }

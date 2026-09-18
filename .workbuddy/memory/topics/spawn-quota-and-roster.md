@@ -32,7 +32,40 @@
   `attackRadius` 只是刹车距离，真正的判定半径是 `meleeSwing.params.range`（缺省 1.8）
   ⇒ 只放大 attackRadius 会「站远处挥空」。
 - 素材缺失只 warn 跳过（不阻断）；`npm run guard` 校验 file / 掉落 id / id 唯一 / public 漏登记。
-- 已知引擎缺口：远程无弹道 / 飞行怪无空中层 / 海怪不下水。
+- 已知引擎缺口：~~远程无弹道~~（2026-09-18 已修，见下）/ 飞行怪无空中层 / 海怪不下水。
+
+## ★★ 远程真弹道（2026-09-18 落地）
+
+**接线 = 4 处，加一个远程兵只需改 1 行**：
+
+1. `aiconfig.ts` 的 `MobAIParams.ranged`（`MobRangedParams`）—— 填了 → `mobAI` 把 attack
+   状态的行为从 `meleeSwing` 换成 `rangedShot`，**且 `attackFinished/outOfRange` 回 `chase`
+   而非 `patrol`**（否则打一发回巡逻晾 3 秒 minStay，完全不像"射速快"）。
+2. `behaviors.ts` 的 `rangedShot`：发 `type:'projectile'` 意图（与 `meleeSwing` 同一
+   `aiAttackTimer`/`aiSwingDone` 契约，只是意图类型不同）。
+3. `WorldMode.aiCtx.attack` 按 **camp 路由**：`opts.type==='projectile' && opts.camp==='enemy'`
+   → `this.enemyBullets`（独立池）；其余 → `this.bullets`。**加弹种不用改 behaviors**。
+4. 弹种视觉 = 池级资产：`services/fx/SolidBulletAsset.ts` 的 `createArrowAsset()`
+   （纯程序化，24×96，无资产文件）。
+
+**必须记住的坑**：
+
+- ★★ **`BulletManager` 的弹体世界宽度由资产宽高比推**（`computeWorldSize(asset, baseWidth)`），
+  默认 `baseWidth = 3.0`。细长弹（箭 1:4）**必须**传 `opts.baseWidth`（箭用 0.28）——
+  否则得到一张 3m 宽 × 12m 长的方片。为此给 `BulletManager` 加了第 8 参 `opts`。
+- ★★ **`BulletEntity.sharedSilhouetteCanvas` 是 static** → 建第二个子弹池会**覆盖**第一个池的
+  地面剪影（玩家圆弹变成箭形影子）。已修：`BulletManager` 建池时把画布**同时写进每个实例的
+  `silhouetteCanvas`**，`getShadowFrameData()` 实例优先、static 兜底。
+- ★★ **敌方弹打地形必须门掉经济副作用**：`WorldMode.resolveBulletHit` 的"静态世界"分支会
+  `playBulletImpact`（改地形）+ `spawnItemDrops`（掉落）⇒ 不加 `if (self.camp==='enemy') return;`
+  玩家就能靠敌人箭免费挖矿。命中特效仍走 `BulletEntity.hitFx`，反馈不缺。
+- ★★ **瞄准/出膛用 `hitAnchorY()`（贴片 65% 胸口），别用 `position.y + 固定值`**：
+  名册 scale 跨度 1.6~4.2（身高差 2.6 倍），固定值对小兵是头顶、对大个子是膝盖。
+  `ctx.focusY` 也默认给 `player.hitAnchorY()`（`focusX/Z` 只是无高度的平面坐标）。
+- 池容量：敌方 8（玩家 10）。`BulletManager` 池空只 warn + 丢弃该发，不崩。
+- 命中可靠性：敌方弹物理半径只有 `BULLET_BODY_RADIUS = 0.05`，且 ≤15m 的"近点小弹"
+  不放大（`BULLET_CLOSE_DIST`）⇒ 弩手（射程 9m）**永不放大命中窗口**，全靠 CCD 撞
+  运动学碰撞体。若实测"箭穿人而过"，就去松 `BULLET_CLOSE_DIST` 或给弹加 per-instance 半径。
 
 ### ★★ 贴片接地（新素材必查）
 

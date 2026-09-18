@@ -93,29 +93,6 @@ export interface MobAIParams {
   meleeDuration?: number;
   /** 单次挥击伤害预留给伤害管线，此处仅注记 */
   meleeDamage?: number;
-  /** ★ 真弹道（2026-09-18）：填了 → attack 状态改用 `rangedShot` 发射**可见弹道**
-   *  （飞行 → 接触命中），且攻击播完回 `chase` 而非 `patrol`（持续开火）。
-   *  不填 = 原 `meleeSwing`（范围瞬时判定，有 attackRange 却无弹道视觉）。 */
-  ranged?: MobRangedParams;
-}
-
-/** ★ 远程弹道参数（mobAI 的 `ranged` 档） */
-export interface MobRangedParams {
-  /** 弹速（m/s） */
-  speed?: number;
-  /** 弹寿命（秒） */
-  lifetime?: number;
-  /** 瞄准点相对【目标受击锚点（胸口）】的纵向偏移（m），缺省 0 */
-  aimHeight?: number;
-  /** 发射点相对【自身受击锚点（胸口）】的纵向偏移（m），缺省 0 */
-  muzzleHeight?: number;
-  /** 散布半角（弧度）——弹道不精确，命中取决于站位 */
-  spread?: number;
-  /** 单发伤害（缺省 = meleeDamage） */
-  damage?: number;
-  /** ★ 弹种标签：'arrow'（缺省，箭矢）/ 'fireball'（术士法球）。
-   *  模式层按它选子弹池；行为层只透传。 */
-  skin?: string;
 }
 
 export function mobAI(p: MobAIParams = {}): AIConfig {
@@ -128,23 +105,6 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
   const dmg = p.meleeDamage ?? 8;
   // ★ 判定半径缺省 1.8（既有三兵种原样）；远程兵种显式给 attackRange
   const range = p.attackRange ?? 1.8;
-  // ★ 真弹道档：attack 状态换行为 + 攻击完回 chase（持续开火，而不是回 patrol 晾 3 秒）
-  const rng = p.ranged;
-  const attackBehavior: AIBehaviorDef = rng
-    ? {
-        name: 'rangedShot',
-        params: {
-          duration: melee,
-          damage: rng.damage ?? dmg,
-          speed: rng.speed ?? 26,
-          lifetime: rng.lifetime ?? 2.4,
-          aimHeight: rng.aimHeight ?? 0,
-          muzzleHeight: rng.muzzleHeight ?? 0,
-          spread: rng.spread ?? 0.05,
-          skin: rng.skin ?? 'arrow',
-        },
-      }
-    : { name: 'meleeSwing', params: { duration: melee, damage: dmg, range } };
   return {
     states: {
       patrol: {
@@ -163,12 +123,11 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
         ],
       },
       attack: {
-        behaviors: [attackBehavior],
+        behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg, range } }],
         transitions: [
           { cond: 'retarget', to: 'chase' },
-          // ★ 近战：打一下回巡逻；远程：回追击 → 立刻再次进射程 → 持续开火
-          { cond: 'attackFinished', to: rng ? 'chase' : 'patrol' },
-          { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: rng ? 'chase' : 'patrol' },
+          { cond: 'attackFinished', to: 'patrol' },
+          { cond: 'outOfRange', params: { radius: attack + 0.5 }, to: 'patrol' },
         ],
       },
     },
@@ -226,32 +185,25 @@ export const BOMBER_AI: AIConfig = mobAI({
   meleeDuration: 0.45, meleeDamage: 22,
 });
 
-/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低
- *  ★ 2026-09-18：改真弹道（`ranged`）—— 此前是"大 attackRange 的瞬时空打"，
- *    攻击没有任何可见效果；现在射程序化箭矢（飞行 → 接触命中）。 */
+/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低 */
 export const CROSSBOW_AI: AIConfig = mobAI({
   wanderSpeed: 2.2, chaseSpeed: 2.8, aggroRadius: 14,
   attackRadius: 9, attackRange: 9, loseRadius: 24,
   meleeDuration: 0.5, meleeDamage: 8,
-  ranged: { speed: 30, lifetime: 1.6, damage: 8, spread: 0.045 },
 });
 
-/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中
- *  ★ 2026-09-18：改真弹道（法球 `skin:'fireball'`）—— 术士放法球，不再是瞬时空打 */
+/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中 */
 export const AMP_CASTER_AI: AIConfig = mobAI({
   wanderSpeed: 2, chaseSpeed: 2.4, aggroRadius: 16,
   attackRadius: 10, attackRange: 10, loseRadius: 26,
   meleeDuration: 0.8, meleeDamage: 10,
-  ranged: { speed: 22, lifetime: 1.4, damage: 10, spread: 0.035, skin: 'fireball' },
 });
 
-/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆
- *  ★ 2026-09-18：改真弹道（大火球：更慢、更大、更痛） */
+/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆 */
 export const WAR_CASTER_AI: AIConfig = mobAI({
   wanderSpeed: 1.6, chaseSpeed: 2.0, aggroRadius: 22,
   attackRadius: 13, attackRange: 13, loseRadius: 34,
   meleeDuration: 1.2, meleeDamage: 20,
-  ranged: { speed: 18, lifetime: 1.6, damage: 20, spread: 0.03, skin: 'fireball' },
 });
 
 /** ★ 原石虫巨人：小 boss。大仇恨圈 + 3.4m 挥击圈 + 高单发（整体慢） */

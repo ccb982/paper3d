@@ -138,13 +138,12 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     ],
   },
   // 远程弩手：最轻的远程，射速快、伤害低（远程兵的最低档）
-  // ★ 2026-09-18：体型上调一档（1.9 → 2.6，碰撞同比例）—— 用户"放大一下弩手，就是远程杂兵"
   {
     id: 'crossbow', name: '远程弩手',
     file: '远程弩手小怪.ftx3.gz',
     ai: CROSSBOW_AI,
     hp: 34, defense: 0, attackPower: 2,
-    scale: 2.6, collisionScale: 1.45, pack: 1, weight: 7,
+    scale: 1.9, collisionScale: 1.1, pack: 1, weight: 7,
     drops: [
       { itemId: 'polyester', chance: 0.6, min: 1, max: 1 },
       { itemId: 'sugar', chance: 0.3, min: 1, max: 1 },

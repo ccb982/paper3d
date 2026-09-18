@@ -113,9 +113,6 @@ export interface MobRangedParams {
   spread?: number;
   /** 单发伤害（缺省 = meleeDamage） */
   damage?: number;
-  /** ★ 弹种标签：'arrow'（缺省，箭矢）/ 'fireball'（术士法球）。
-   *  模式层按它选子弹池；行为层只透传。 */
-  skin?: string;
 }
 
 export function mobAI(p: MobAIParams = {}): AIConfig {
@@ -141,7 +138,6 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
           aimHeight: rng.aimHeight ?? 0,
           muzzleHeight: rng.muzzleHeight ?? 0,
           spread: rng.spread ?? 0.05,
-          skin: rng.skin ?? 'arrow',
         },
       }
     : { name: 'meleeSwing', params: { duration: melee, damage: dmg, range } };
@@ -236,22 +232,18 @@ export const CROSSBOW_AI: AIConfig = mobAI({
   ranged: { speed: 30, lifetime: 1.6, damage: 8, spread: 0.045 },
 });
 
-/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中
- *  ★ 2026-09-18：改真弹道（法球 `skin:'fireball'`）—— 术士放法球，不再是瞬时空打 */
+/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中 */
 export const AMP_CASTER_AI: AIConfig = mobAI({
   wanderSpeed: 2, chaseSpeed: 2.4, aggroRadius: 16,
   attackRadius: 10, attackRange: 10, loseRadius: 26,
   meleeDuration: 0.8, meleeDamage: 10,
-  ranged: { speed: 22, lifetime: 1.4, damage: 10, spread: 0.035, skin: 'fireball' },
 });
 
-/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆
- *  ★ 2026-09-18：改真弹道（大火球：更慢、更大、更痛） */
+/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆 */
 export const WAR_CASTER_AI: AIConfig = mobAI({
   wanderSpeed: 1.6, chaseSpeed: 2.0, aggroRadius: 22,
   attackRadius: 13, attackRange: 13, loseRadius: 34,
   meleeDuration: 1.2, meleeDamage: 20,
-  ranged: { speed: 18, lifetime: 1.6, damage: 20, spread: 0.03, skin: 'fireball' },
 });
 
 /** ★ 原石虫巨人：小 boss。大仇恨圈 + 3.4m 挥击圈 + 高单发（整体慢） */
