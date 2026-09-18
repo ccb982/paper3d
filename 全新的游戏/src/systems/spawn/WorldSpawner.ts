@@ -1,0 +1,745 @@
+// ============================================================
+// WorldSpawner —— 刷怪 / 波次 / LOD 升降格 / 舰船威胁告警
+// ============================================================
+// ★ 2026-09-18 从 WorldMode 整段迁出（P1 拆分）。
+//   迁出原因：WorldMode 曾 4129 行 / 91 方法，是"新功能默认往里塞"的垃圾桶；
+//   而这一簇（18 个方法）职责完整、外部零引用，且**即将大改蜂群引擎** ——
+//   刷怪逻辑必须独立于蜂群实现，否则改引擎会连带改玩法。
+//
+// ★ 为什么放在 systems/spawn 而不是 systems/swarm：
+//   swarm = 蜂群**引擎**（代理池/LOD/流场），spawn = **玩法层**（刷什么/刷多少/刷哪）。
+//   两者解耦后改引擎不动刷怪。
+//
+// 依赖注入：WorldMode 持有世界状态，通过 `SpawnDeps` 传给本类（getter/setter 桥接，
+//   保证读到的永远是实时值、写入直接反映到 WorldMode 的字段）。
+//   ★ 不要在 Spawner 里缓存 deps 的引用字段（player/ship 等会随局重建）。
+// ============================================================
+
+import * as THREE from 'three';
+import type { GameSession } from '../../core/Session';
+import { computeRelicModifiers } from '../../core/Session';
+import { RELIC_ITEM_CONFIG } from '../../config/relics';
+import { FtxAsset } from '../../vendor/player/FtxAsset';
+import type { Asset } from '../../vendor/player';
+import { EntityManager } from '../../entity/EntityManager';
+import type { EntityBase } from '../../entity/EntityBase';
+import { Player } from '../../entity/Player';
+import { ShipEntity } from '../../entity/ShipEntity';
+import { EnemyBase } from '../../entity/EnemyBase';
+import { DroneEntity } from '../../entity/DroneEntity';
+import { resolveDockSpawn } from '../../services/ship/DockResolver';
+import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
+import { applyDamage } from '../../services/combat/DamagePipeline';
+import { recordSpawn, readDayProgress, remainingQuota } from '../../systems/combat/KillCounter';
+import { RasterMap, chunkKeyOf } from '../../services/map/RasterMap';
+import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+import { ChunkManager } from '../../services/map/ChunkManager';
+import { LOD_MAX_DIST } from '../../services/lod';
+import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
+import { SwarmSystem, SWARM } from '../../systems/swarm/SwarmSystem';
+import { Director, INTENT_NONE, INTENT_SHIP, type SpawnOrder } from '../../systems/swarm/Director';
+import {
+  computeEnemyScale, computeThreat, threatTier,
+  type EnemyScale, type ThreatProfile,
+} from '../../systems/swarm/EnemyScaling';
+import {
+  AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot,
+} from '../../systems/swarm/AgentPool';
+import { WorldUIManager } from '../../ui/world/WorldUIManager';
+
+// ============================================================
+// ★ 杂兵配置条目（原 WorldMode 内部类型，随迁出改为 export）
+// ============================================================
+export interface MobDef {
+  asset: FtxAsset;
+  ai: AIConfig;
+  hp: number;
+  /** 防御（减法减伤） */
+  defense: number;
+  /** 攻击力加成（叠加在 AI 近战伤害上） */
+  attackPower: number;
+  scale: number;
+  collisionScale: number;
+  /** 集群规模（一次落点生成几只；原石虫成群用） */
+  pack: number;
+  /** 随机抽取权重（原石虫权重大 → 成队出现） */
+  weight: number;
+  /** ★ 击杀掉落规则（每项独立掷概率） */
+  drops: { itemId: string; chance: number; min: number; max: number }[];
+}
+
+/** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
+ *  代理没有 EntityBase 实体，数值全部由 dmg 直接给出） */
+/** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
+ *  代理没有 EntityBase 实体，数值全部由 dmg 直接给出） */
+export const AGENT_SOURCE = {
+  camp: 'enemy',
+  attackPower: 0,
+  critRate: 0,
+  critMult: 1.5,
+} as unknown as EntityBase;
+
+/** ★ 祖宗吸仇恨半径（米）：敌人与祖宗在此范围内时，索敌优先级压过玩家 */
+/** ★ 祖宗吸仇恨半径（米）：敌人与祖宗在此范围内时，索敌优先级压过玩家 */
+export const SENTINEL_TAUNT_RADIUS = 40;
+
+// ============================================================
+// ★ SpawnDeps —— WorldMode 提供给 Spawner 的一切（含共享可变状态）
+// ============================================================
+export interface SpawnDeps {
+  // ---- 共享可变状态（WorldMode 持有；Spawner 读写同一份）----
+  enemies: EnemyBase[];
+  enemyDefs: WeakMap<EnemyBase, MobDef>;
+  mobDefs: MobDef[];
+  bossEntity: EnemyBase | null;
+  bossRun: boolean;
+  threat: ThreatProfile | null;
+  spawnChunkKey: number;
+  scalingInputs: { day: number; totalPulls: number; refHp: number; refAtk: number; refDef: number } | null;
+  enemyScale: EnemyScale;
+  // ---- 世界引用（实时）----
+  player: Player;
+  ship: ShipEntity;
+  entities: EntityManager;
+  swarm: SwarmSystem;
+  swarmDirector: Director;
+  chunks: ChunkManager;
+  raster: RasterMap;
+  session: GameSession | null;
+  scene: THREE.Scene | null;
+  camera: THREE.PerspectiveCamera | null;
+  drones: DroneEntity[];
+  worldUIManager: WorldUIManager;
+  testChunk: boolean;
+  shipDestroyed: boolean;
+  bossAsset: FtxAsset | Asset | null;
+  // ---- 回调（Spawner 不该知道的 WorldMode 内部事）----
+  showFloatingAt(x: number, y: number, z: number, text: string,
+    type: 'normal' | 'crit' | 'heal' | 'miss' | 'pickup'): void;
+  syncSceneBgm(): void;
+  returnToBase(): void;
+}
+
+export class WorldSpawner {
+  static readonly MAX_ALIVE = 200;
+  /** ★ 环境刷怪预铺闸（扫描式波次只批量预铺到 ambientTarget 的一半；
+   *  其余由导演低频补至 threat.ambientTarget。前期 target=6 → 只预铺 3 只，
+   *  场间几乎无扰，给足发育时间；中后期随威胁度增长铺满） */
+  static readonly AMBIENT_PRELOAD_RATIO = 0.5;
+  /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
+   *  远距回收本身已由 SwarmSystem 统一处理（实体降格 40m / 代理回收 140m） */
+  static readonly ENEMY_CULL_RADIUS = 120;
+  /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
+  static readonly ENEMY_CULL_INTERVAL = 0.25;
+  private cullAccum = 0;
+  /** ★ 舰船遇围警示（顶部红色横幅）：近舰敌军持续超标才播报 */
+  private groupWarnAccum = 0;
+  private groupWarnShown = false;
+  /** 近舰敌军统计半径（米；圈"贴身"敌军；比舰船雷达 120m 聚焦） */
+  static readonly SHIP_GROUP_RADIUS = 65;
+  /** ★ 近距通道触发：舰船这圈内敌军（实体 + 代理）≥ 此数 且持续 SHIP_GROUP_SUSTAIN 秒 */
+  static readonly SHIP_GROUP_COUNT = 5;
+  /** 迟滞：近距数降到 ≤ 此数 才可清除（防临界抖动反复播/消） */
+  static readonly SHIP_GROUP_HIDE_COUNT = 3;
+  /** 近距通道持续时长（秒）：一群怪路过闪一瞬不报，扎住才报 */
+  static readonly SHIP_GROUP_SUSTAIN = 0.6;
+  /** ★ 意图通道触发：≥ 此数蜂群代理**明确扑向舰船**（INTENT_SHIP）→ 快速播报（不论远近） */
+  static readonly SHIP_INTENT_COUNT = 4;
+  /** 意图通道迟滞：扑向舰船的代理 ≤ 此数 才可清除 */
+  static readonly SHIP_INTENT_HIDE = 2;
+  /** 意图通道持续时长（秒；比近距更快，扑舰波次换位期间不错过） */
+  static readonly SHIP_INTENT_SUSTAIN = 0.3;
+
+
+  /** 已完成波次的 chunk（避免重复铺；换局由 reset() 清空） */
+  private spawnedChunks = new Set<number>();
+  /** 祖宗嘲讽查询的复用对象（零分配） */
+  private _tauntScratch = { x: 0, z: 0 };
+
+  constructor(private deps: SpawnDeps) {}
+
+  /** ★ 换局清理（WorldMode.enter 调用） */
+  reset(): void {
+    this.spawnedChunks.clear();
+    this.cullAccum = 0;
+    this.groupWarnAccum = 0;
+    this.groupWarnShown = false;
+  }
+
+  /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */
+  tickDemote(dt: number, px: number, pz: number): void {
+    this.cullAccum += dt;
+    if (this.cullAccum < WorldSpawner.ENEMY_CULL_INTERVAL) return;
+    this.cullAccum = 0;
+    this.demoteFarEnemies(px, pz);
+  }
+
+  /** ★ 舰船被围横幅是否已展示（WorldMode.syncSceneBgm 据此切战斗曲；只读） */
+  get warnShown(): boolean { return this.groupWarnShown; }
+
+  scanAndSpawnWaves(px: number, pz: number, budget: number): void {
+    if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
+    if (this.deps.chunks.isBoss4D) return; // 四维空间（最终 Boss 战地图）不刷杂兵
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    let placedTotal = 0;
+    // ★ 从内环到外环扫（保证离玩家近的 chunk 优先铺满）
+    for (let ring = 1; ring <= 2 && placedTotal < budget; ring++) {
+      for (let dz = -ring; dz <= ring && placedTotal < budget; dz++) {
+        for (let dx = -ring; dx <= ring && placedTotal < budget; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue; // 只在环上
+          const cx = pcx + dx, cz = pcz + dz;
+          const key = chunkKeyOf(cx, cz);
+          if (key === this.deps.spawnChunkKey) continue;  // 出生 chunk 不刷
+          if (this.spawnedChunks.has(key)) continue; // 已完成波次的 chunk 跳过
+          // ★ chunk 地形已就绪（有数据环）才可落点
+          if (!this.deps.raster.getChunkData(cx, cz)) continue;
+          // ★ 回收环约束（2026-09-12 狠缩环配套）：chunk 最近点超过回收环 −10m
+          //   → 整块不刷【且不标记完成】（靠近后转内环再补），避免刷出即被销毁
+          const nxp = Math.max(cx * CHUNK_SIZE, Math.min(px, (cx + 1) * CHUNK_SIZE));
+          const nzp = Math.max(cz * CHUNK_SIZE, Math.min(pz, (cz + 1) * CHUNK_SIZE));
+          const nd = Math.hypot(nxp - px, nzp - pz);
+          if (nd > WorldSpawner.ENEMY_CULL_RADIUS - 10) continue;
+          // ★ 每 chunk 一波 1~2 个（2026-09-13 二次定调：预铺只做保底，密度减半）
+          const want = 1 + Math.floor(Math.random() * 2);
+          let placed = 0;
+          let attempts = 0;
+          for (; attempts < want * 10 && placed < want && placedTotal < budget; attempts++) {
+            if (this.spawnAtRandomPointInChunk(cx, cz)) placed++;
+          }
+          placedTotal += placed;
+          // ★ 放满 / 尝试耗尽（地形基本没位置）才算完成；预算截断 → 下帧继续
+          if (placed >= want || attempts >= want * 10) {
+            this.spawnedChunks.add(key);
+          }
+        }
+      }
+    }
+  }
+
+  /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
+  spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
+    if (this.deps.mobDefs.length === 0 || !this.deps.scene || !this.deps.camera) return false;
+    // ★ 存活上限（实体 + 代理合计；防无限世界累积）+ 环境预铺闸
+    //   （预铺 = ambientTarget 的一半，其余交给导演按 ambientInterval 低频补）
+    if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
+    const ambientTarget = this.deps.threat?.ambientTarget ?? 10;
+    const preloadCap = Math.max(2, Math.ceil(ambientTarget * WorldSpawner.AMBIENT_PRELOAD_RATIO));
+    if (this.deps.enemies.length + this.deps.swarm.count >= preloadCap) return false;
+    const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
+    const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
+    // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
+    //   邻 chunk 允许到 12m——初始密度够又不出现在脚边）
+    const p = this.deps.player?.position;
+    if (p) {
+      const ddx = x - p.x, ddz = z - p.z;
+      const d2 = ddx * ddx + ddz * ddz;
+      if (d2 < 12 * 12) return false;
+      // ★ 回收环约束（配套狠缩环）：超出 回收环−10m 的点不刷——否则 0.25s 后即被清
+      const maxR = WorldSpawner.ENEMY_CULL_RADIUS - 10;
+      if (d2 > maxR * maxR) return false;
+    }
+    // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
+    const role = this.deps.raster.tileDefAt(x, z).genRole;
+    if (role === 'pit' || role === 'liquid') return false;
+    // ★ 洞顶优先（浮空洞顶第二层）：不把杂兵刷进洞里
+    const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9);
+    // ★ 落点过低（挖坑后的深坑区）不生成
+    if (y < -1.2) return false;
+    return this.spawnOne(this.pickMob(), x, y, z);
+  }
+
+  /** ★ 重算当日敌强（出击开始）——参考属性 = 玩家基础 + 遗物，**不含装备**；
+   *  生成/升格共用同一口径（含硬下限：血量 ≥ 角色攻击/2、攻击 ≥ 角色攻击/10） */
+  refreshEnemyScale(): void {
+    if (!this.deps.session || !this.deps.player || !this.deps.worldUIManager) return;
+    const base = this.deps.session.player;
+    const mods = computeRelicModifiers(this.deps.session, RELIC_ITEM_CONFIG);
+    const inputs = {
+      day: this.deps.session.meta.day ?? 1,
+      totalPulls: this.deps.session.gacha?.totalPulls ?? 0,
+      refHp: base.maxHp * mods.mulHp + mods.bonusHp,
+      refAtk: base.attackPower * mods.mulAtk + mods.bonusAtk,
+      refDef: base.defense * mods.mulDef + mods.bonusDef,
+    };
+    this.deps.scalingInputs = inputs;
+    this.deps.enemyScale = computeEnemyScale(inputs);
+    // ★ 威胁度（波次/数量/攻击欲望）与敌强同源；注入导演后再开局
+    this.deps.threat = computeThreat(inputs);
+    this.deps.swarmDirector.setThreat(this.deps.threat);
+    // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
+    const tier = threatTier(this.deps.threat.index);
+    this.deps.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
+  }
+
+  /** ★ 生成 Boss（普瑞赛斯）：四维空间决战；数值吃当日敌强，体型 4× */
+  spawnBoss(x: number, z: number): void {
+    const asset = this.deps.bossAsset;
+    if (!asset || !this.deps.scene || !this.deps.camera) return;
+    const safe = resolveDockSpawn(this.deps.raster, x + 30, z);
+    const sc = this.deps.enemyScale;
+    const ai = BOSS_AI;
+    const hp = Math.max(1200, Math.round(2500 * sc.hp));
+    const atkPower = Math.round(30 * sc.atk);
+    const dfs = 8 + sc.def;
+    const enemy = new EnemyBase(this.deps.entities, this.deps.scene, asset, {
+      x: safe.x, y: safe.y, z: safe.z,
+      animMap: {
+        states: {
+          idle: { 前: ['前'], 后: ['后'] },
+          walk: { 前: ['前'], 后: ['后'] },
+          attack: { 前: ['前'], 后: ['后'] },
+        },
+        fps: { idle: 1, walk: 1, attack: 1 },
+      },
+      facing: '前',
+      aggressive: true,
+      aiConfig: ai,
+      hp,
+      defense: dfs,
+      attackPower: atkPower,
+      scale: 4,
+      collisionScale: 2.2,
+    }, this.deps.camera);
+    enemy.billboard = false;
+    const def: MobDef = {
+      asset: asset as unknown as FtxAsset,
+      ai,
+      hp,
+      defense: dfs,
+      attackPower: atkPower,
+      scale: 4,
+      collisionScale: 2.2,
+      pack: 1,
+      weight: 0,
+      drops: [],
+    };
+    this.deps.enemyDefs.set(enemy, def);
+    this.deps.enemies.push(enemy);
+    this.deps.bossEntity = enemy;
+    this.deps.showFloatingAt(safe.x, safe.y + 4, safe.z, '普瑞赛斯', 'crit');
+  }
+
+  /** ★ 击败普瑞赛斯：通关（四维空间结束；之后恢复常规出击） */
+  onBossDefeated(): void {
+    if (!this.deps.session) return;
+    this.deps.session.meta.bossCleared = true;
+    this.deps.bossRun = false;
+    this.deps.chunks.setStyle(false);
+    this.deps.player.controller.requireRealLanding = this.deps.chunks.isBoss4D;
+    this.deps.worldUIManager?.showVictoryPanel(() => this.deps.returnToBase());
+  }
+
+  /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
+   *  两波之间方向明显错开（双面夹击），但每面都是"一团人"而非全向散兵 */
+  spawnDirectorWave(order: SpawnOrder): void {
+    // ★ 袭击订单带主攻扇区（整场固定的一个方向）；环境散兵随机
+    let sector = order.sector ?? Math.random() * Math.PI * 2;
+    for (let w = 0; w < order.waves; w++) {
+      this.spawnWaveNear(order.anchorX, order.anchorZ, {
+        count: order.count,
+        intent: order.intent,
+        preferPack: order.preferPack,
+        sector,
+        spread: 0.5,
+        assaultIndex: order.assaultIndex ?? -1,
+      });
+      sector += Math.PI * (0.6 + Math.random() * 0.6);
+    }
+  }
+
+  /** ★ 波次生成（导演订单 / 调试用）：
+   *  在指定焦点的 LOD 外环（94~130m 纵深带，chunk 数据环内）铺 count 只代理。
+   *  sector 给定则整波集中在 ±spread 扇区（集中大波，便于防守）。
+   *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
+  spawnWaveNear(
+    fx: number, fz: number,
+    opts: {
+      count: number; intent: number; preferPack: boolean;
+      sector?: number; spread?: number; assaultIndex?: number;
+    },
+  ): void {
+    if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
+    if (this.deps.chunks.isBoss4D) return; // 四维空间不补杂兵
+    const want = Math.max(1, opts.count);
+    let placed = 0;
+    const pp = this.deps.player?.position;
+    const sp = this.deps.ship?.position;
+    // ★ 方向：整波集中在 [sector ± spread] 扇区（默认全向；导演订单必带扇区）
+    const baseAng = opts.sector ?? Math.random() * Math.PI * 2;
+    const spread = opts.spread ?? Math.PI;
+    const lo = LOD_MAX_DIST + 4;
+    const span = 130 - lo; // 波内纵深带（lo~130m；回收环 140 内）
+    // ★ count = 个体数（2026-09-13 三次修正：原按"窝"计数——原石虫一窝 4 只，
+    //   导演"每波 5~8"实际最多刷 32 只；现按个体扣减，窝仍是刷怪单位）
+    for (let i = 0; i < want * 10 && placed < want; i++) {
+      const ang = baseAng + (Math.random() - 0.5) * 2 * spread;
+      const dist = lo + Math.random() * span;
+      const x = fx + Math.cos(ang) * dist;
+      const z = fz + Math.sin(ang) * dist;
+      // 安全圈：不在玩家/舰船近旁生成（焦点波次也不贴脸）
+      if (pp && (x - pp.x) ** 2 + (z - pp.z) ** 2 < 12 * 12) continue;
+      if (sp && (x - sp.x) ** 2 + (z - sp.z) ** 2 < 15 * 15) continue;
+      // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）
+      const cx = Math.floor(x / CHUNK_SIZE);
+      const cz = Math.floor(z / CHUNK_SIZE);
+      if (chunkKeyOf(cx, cz) === this.deps.spawnChunkKey) continue;
+      if (!this.deps.raster.getChunkData(cx, cz)) continue;
+      const role = this.deps.raster.tileDefAt(x, z).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（不刷进洞里）
+      if (y < -1.2) continue;
+      const def = this.pickMob(opts.preferPack);
+      if (this.spawnOne(def, x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed += def.pack;
+    }
+  }
+
+  /** ★ 随机取一条杂兵配置（按 weight 加权：原石虫权重大 → 成群出现）；
+   *  preferPack = 突涌期偏成群（洪流感） */
+  pickMob(preferPack = false): MobDef {
+    let total = 0;
+    for (const d of this.deps.mobDefs) total += d.weight * (preferPack && d.pack > 1 ? 4 : 1);
+    let r = Math.random() * total;
+    for (const d of this.deps.mobDefs) {
+      r -= d.weight * (preferPack && d.pack > 1 ? 4 : 1);
+      if (r <= 0) return d;
+    }
+    return this.deps.mobDefs[this.deps.mobDefs.length - 1];
+  }
+
+  /** ★ 远距实体降格（《蜂群架构.md》§5.5）：实体超出 DEMOTE_RADIUS →
+   *  数据快照回代理池 + 销毁实体（远层继续用廉价代理维护，不再硬销毁）。
+   *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。 */
+  demoteFarEnemies(px: number, pz: number): void {
+    const r2 = SWARM.DEMOTE_RADIUS ** 2;
+    for (let i = this.deps.enemies.length - 1; i >= 0; i--) {
+      const e = this.deps.enemies[i];
+      const dx = e.position.x - px, dz = e.position.z - pz;
+      if (dx * dx + dz * dz <= r2) continue;
+      if (e.dead) continue;
+      const def = this.deps.enemyDefs.get(e);
+      const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
+      if (!def || mobIndex < 0) {
+        // ★ 非战斗清理（无定义可回池）→ 不算击杀（2026-09-16 击杀统计）
+        e.killedByCombat = false;
+        e.dispose();
+        this.deps.enemies.splice(i, 1);
+        continue;
+      }
+      const stats = this.mobAgentStats(def);
+      this.deps.swarm.demote({
+        mobIndex,
+        x: e.position.x, y: e.position.y, z: e.position.z,
+        hp: e.hp, maxHp: e.maxHp,
+        defense: e.defense, attackPower: e.attackPower,
+        speed: stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
+        scale: def.scale,
+        tier: AGENT_TIER_FAR,
+        yaw: 0,
+        aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
+      });
+      // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
+      //   置 killedByCombat=false 后再 dispose，避免误计（2026-09-16）
+      e.killedByCombat = false;
+      e.dispose();
+      this.deps.enemies.splice(i, 1);
+    }
+  }
+
+  /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
+   *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。双通道，谁触发取谁计数：
+   *   ① 近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
+   *      且持续 SHIP_GROUP_SUSTAIN 秒 —— 团已扎到船边；
+   *   ② 意图通道：≥SHIP_INTENT_COUNT 个代理明确扑向舰船（池 intent=INTENT_SHIP）持续
+   *      SHIP_INTENT_SUSTAIN 秒 —— 波次刚刷、还在路上就报，灵敏度更高。
+   *   横幅显示 max(近距, 扑舰) 计数并实时刷新；双双回落到各自 HIDE 才清除。 */
+  updateShipGroupWarning(dt: number): void {
+    if (!this.deps.ship || this.deps.shipDestroyed) {
+      this.groupWarnAccum = 0;
+      if (this.groupWarnShown) {
+        this.groupWarnShown = false;
+        this.deps.worldUIManager.clearEnemyGroupWarning();
+        this.deps.syncSceneBgm();   // ★ 舰没了 → 战斗曲淡出，回常态
+      }
+      return;
+    }
+    const sx = this.deps.ship.position.x;
+    const sz = this.deps.ship.position.z;
+    const r2 = WorldSpawner.SHIP_GROUP_RADIUS ** 2;
+    let dist = 0;
+    for (const e of this.deps.enemies) {
+      const dx = e.position.x - sx, dz = e.position.z - sz;
+      if (dx * dx + dz * dz <= r2) dist++;
+    }
+    const pool = this.deps.swarm.pool;
+    let intentShip = 0;
+    for (let i = 0; i < pool.count; i++) {
+      const dx = pool.x[i] - sx, dz = pool.z[i] - sz;
+      if (dx * dx + dz * dz <= r2) dist++;
+      if (pool.intent[i] === INTENT_SHIP) intentShip++;
+    }
+    const proxHit = dist >= WorldSpawner.SHIP_GROUP_COUNT;
+    const intentHit = intentShip >= WorldSpawner.SHIP_INTENT_COUNT;
+    if (proxHit || intentHit) {
+      // 意图通道更快响应；已显示则持续刷新计数
+      const need = intentHit
+        ? WorldSpawner.SHIP_INTENT_SUSTAIN
+        : WorldSpawner.SHIP_GROUP_SUSTAIN;
+      this.groupWarnAccum = Math.min(need, this.groupWarnAccum + dt);
+      if (this.groupWarnShown) {
+        this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+      } else if (this.groupWarnAccum >= need) {
+        this.groupWarnShown = true;
+        this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+        this.deps.syncSceneBgm();   // ★ 大举入侵成立 → 战斗曲交叉淡入
+      }
+    } else if (
+      dist <= WorldSpawner.SHIP_GROUP_HIDE_COUNT &&
+      intentShip <= WorldSpawner.SHIP_INTENT_HIDE
+    ) {
+      this.groupWarnAccum = 0;
+      if (this.groupWarnShown) {
+        this.groupWarnShown = false;
+        this.deps.worldUIManager.clearEnemyGroupWarning();
+        this.deps.syncSceneBgm();   // ★ 威胁解除 → 淡回环境音 / 舰船曲
+      }
+    } else if (this.groupWarnShown) {
+      // 迟滞带（已触发但未落到清除线）：维持并刷新计数
+      this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+    }
+  }
+
+  /** ★ 代理近战结算（伤害管线同源；source = 代理占位源，数值全由 dmg 给出） */
+  agentMelee(targetKind: number, dmg: number, x: number, z: number): void {
+    // ★ 祖宗：代理思考侧已在贴身距离判定 → 取近旁存活祖宗（取最近者兜底 3m）
+    if (targetKind === AGENT_TARGET_SENTINEL) {
+      let best: DroneEntity | null = null;
+      let bestD2 = 3 * 3;
+      for (const d of this.deps.drones) {
+        if (!d.stationary || d.hp <= 0) continue;
+        const dx = d.position.x - x, dz = d.position.z - z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= bestD2) { bestD2 = d2; best = d; }
+      }
+      if (best) applyDamage(dmg, AGENT_SOURCE, best);
+      return;
+    }
+    const s = this.deps.session;
+    if (!s) return;
+    if (targetKind === AGENT_TARGET_SHIP) {
+      if (!isShipDestroyed(s)) damageShip(s, dmg);
+      return;
+    }
+    if (!this.deps.player.dead) applyDamage(dmg, AGENT_SOURCE, this.deps.player);
+  }
+
+  /** ★ 祖宗嘲讽查询（蜂群代理）：(x,z) 嘲讽圈内最近存活祖宗；对象复用零分配 */
+  nearestTauntSentinel(x: number, z: number): { x: number; z: number } | null {
+    let best: DroneEntity | null = null;
+    let bestD2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
+    for (const d of this.deps.drones) {
+      if (!d.stationary || d.hp <= 0) continue;
+      const dx = d.position.x - x, dz = d.position.z - z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= bestD2) { bestD2 = d2; best = d; }
+    }
+    if (!best) return null;
+    this._tauntScratch.x = best.position.x;
+    this._tauntScratch.z = best.position.z;
+    return this._tauntScratch;
+  }
+
+  /** ★ P0 压测：在玩家周围 40~120m 铺 N 只代理（?enemies=N；近处会自动升格为实体） */
+  spawnStressAgents(n: number): void {
+    if (!this.deps.scene || this.deps.mobDefs.length === 0) return;
+    const pp = this.deps.player?.position;
+    if (!pp) return;
+    let placed = 0;
+    for (let guard = 0; guard < n * 20 && placed < n; guard++) {
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 40 + Math.random() * 80;
+      const x = pp.x + Math.cos(ang) * dist;
+      const z = pp.z + Math.sin(ang) * dist;
+      const role = this.deps.raster.tileDefAt(x, z).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（压测铺代理）
+      if (y < -1.2) continue;
+      const def = this.pickMob();
+      const mobIndex = this.deps.mobDefs.indexOf(def);
+      if (mobIndex < 0) return;
+      const stats = this.mobAgentStats(def);
+      const sc = this.deps.enemyScale;
+      const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+      const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
+      const idx = this.deps.swarm.spawn({
+        mobIndex,
+        x, y, z,
+        hp, maxHp: hp,
+        defense: def.defense + sc.def, attackPower: 0,
+        speed: stats.speed,
+        meleeDamage: meleeTotal, meleeRange: stats.range,
+        scale: def.scale,
+        tier: AGENT_TIER_FAR,
+        aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
+        wanderSpeed: stats.wanderSpeed,
+        bias: this.deps.threat?.biasMul ?? 0.12,
+      });
+      if (idx >= 0) placed++;
+      if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
+    }
+  }
+
+  /** ★ 从 MobDef 的 AI 配置提取代理所需的移动/近战/仇恨参数（缺省与 behaviors 默认一致） */
+  mobAgentStats(def: MobDef): {
+    speed: number; damage: number; range: number;
+    wanderSpeed: number; aggro: number;
+  } {
+    let speed = 2.5, damage = 8, range = 1.8;
+    let wanderSpeed = 2, aggro = 8;
+    for (const st of Object.values(def.ai.states)) {
+      for (const b of st.behaviors) {
+        if (b.name === 'moveToTarget' && b.params?.speed !== undefined) speed = Number(b.params.speed);
+        if (b.name === 'wander' && b.params?.speed !== undefined) wanderSpeed = Number(b.params.speed);
+        if (b.name === 'meleeSwing') {
+          if (b.params?.damage !== undefined) damage = Number(b.params.damage);
+          if (b.params?.range !== undefined) range = Number(b.params.range);
+        }
+      }
+      for (const tr of st.transitions) {
+        if (tr.cond === 'seePlayer' && tr.params?.radius !== undefined) aggro = Number(tr.params.radius);
+      }
+    }
+    return { speed, damage, range, wanderSpeed, aggro };
+  }
+
+  /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
+   *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。 */
+  spawnOne(
+    def: MobDef,
+    x: number, _y: number, z: number,
+    intent: number = INTENT_NONE,
+    assaultIndex = -1,
+  ): boolean {
+    if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
+    const mobIndex = this.deps.mobDefs.indexOf(def);
+    if (mobIndex < 0) return false;
+    const stats = this.mobAgentStats(def);
+    // ★ 敌人数值增强（EnemyScaling：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
+    const base = this.deps.scalingInputs ?? { day: 1, totalPulls: 0, refHp: 100, refAtk: 10, refDef: 2 };
+    const sc = assaultIndex > 0
+      ? computeEnemyScale({ ...base, assaultIndex })
+      : this.deps.enemyScale;
+    const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+    // 近战总量 =（AI 挥击 + 攻击力加成）× 攻击倍率，且不低于攻击下限；代理统一记在 meleeDamage
+    const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
+    const dfs = def.defense + sc.def;
+    let any = false;
+    for (let k = 0; k < def.pack; k++) {
+      // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
+      let sx = x, sz = z;
+      if (k > 0) {
+        const ang = (k / def.pack) * Math.PI * 2 + Math.random() * 0.8;
+        const dist = 1.2 + Math.random() * 1.6;
+        sx = x + Math.cos(ang) * dist;
+        sz = z + Math.sin(ang) * dist;
+      }
+      // ★ 上限检查（每只都查；实体 + 代理合计）
+      if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
+      // ★ 每日配额闸门（2026-09-16）：当天敌人总数有限 → 生成名额 = 配额 − 已击杀 − 场上存活。
+      //   所有刷怪路径（导演波次/扫描波次/压测）都经 spawnOne，此处是唯一收口点。
+      if (!this.quotaAllows()) break;
+      // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
+      const role = this.deps.raster.tileDefAt(sx, sz).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const sy = this.deps.raster.surfaceHeightAt(sx, sz);
+      if (sy < -1.2) continue;
+      const idx = this.deps.swarm.spawn({
+        mobIndex,
+        x: sx, y: sy, z: sz,
+        hp, maxHp: hp,
+        defense: dfs, attackPower: 0,
+        speed: stats.speed,
+        meleeDamage: meleeTotal, meleeRange: stats.range,
+        scale: def.scale,
+        tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
+        aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
+        wanderSpeed: stats.wanderSpeed,
+        bias: this.deps.threat?.biasMul ?? 0.12,
+        intent,
+      });
+      if (idx >= 0) {
+        any = true;
+        // ★ 计入当天已生成（配额闸门依据；只增不减 → 回收不会腾出名额）
+        recordSpawn(this.deps.session);
+      }
+    }
+    return any;
+  }
+
+  /** ★ 每日配额闸门（2026-09-16）：当天**还能再生成**多少只 = quota − spawned。
+   *  ★ 分母 quota 预计算后冻结（全天不变）；spawned 只增不减（不受回收影响）
+   *    → 闸门稳定，不会因敌人被远距回收而"腾出名额"导致无限刷。
+   *  四维空间 Boss 战不受配额约束（Boss 是独立实体，不经 spawnOne 的杂兵路径）。 */
+  quotaAllows(): boolean {
+    const s = this.deps.session;
+    if (!s) return true;
+    // ★ 兜底（2026-09-18）：quota<=0 表示**从未初始化** ——
+    //   ensureDayQuota 只对 quota<=0 计算一次，若它没跑到（threat 为空 / enter 中断），
+    //   quota 就停在 0，而 remainingQuota = 0 - spawned = 0 → **永久一只都不刷**，
+    //   换日也救不回来（resetDayQuota 也只是再清成 0）。这是异常态，不该由闸门背锅。
+    //   正常路径（quota 已按威胁档位预计算）不受影响。
+    if (readDayProgress(s).quota <= 0) {
+      console.warn('[spawn] 当日配额未初始化（quota<=0）→ 本次放行，交 ensureDayQuota 补算');
+      return true;
+    }
+    return remainingQuota(s) > 0;
+  }
+
+  /** ★ 升格：代理 → L3 实体（蜂群 hooks.promote；同步创建 EnemyBase） */
+  promoteAgent(snap: AgentSnapshot): void {
+    if (!this.deps.scene || !this.deps.camera) return;
+    const def = this.deps.mobDefs[snap.mobIndex];
+    if (!def) return;
+    const enemy = this.createEnemyEntity(def, snap.x, snap.y, snap.z, snap.hp, snap.maxHp);
+    if (!enemy) return;
+    const stats = this.mobAgentStats(def);
+    enemy.defense = snap.defense;
+    // ★ 实体近战 = AI 基础挥击（behavior.damage）+ attackPower → 反推 attackPower 保持同口径
+    enemy.attackPower = Math.max(0, Math.round(snap.meleeDamage - stats.damage));
+    enemy.hp = Math.min(snap.hp, snap.maxHp);
+  }
+
+  /** ★ 创建 L3 实体（升格路径；统一在此维护 animMap/掉落映射） */
+  createEnemyEntity(
+    def: MobDef,
+    x: number, y: number, z: number,
+    hp: number, maxHp: number,
+  ): EnemyBase | null {
+    if (!this.deps.scene || !this.deps.camera) return null;
+    const enemy = new EnemyBase(this.deps.entities, this.deps.scene, def.asset, {
+      x, y, z,
+      animMap: {
+        states: {
+          idle: { 前: ['前'], 后: ['后'] },
+          walk: { 前: ['前'], 后: ['后'] },
+          attack: { 前: ['前'], 后: ['后'] },
+        },
+        fps: { idle: 1, walk: 1, attack: 1 },
+      },
+      facing: Math.random() < 0.5 ? '前' : '后',
+      aggressive: true,
+      aiConfig: def.ai,
+      hp,
+      defense: def.defense,
+      attackPower: def.attackPower,
+      scale: def.scale,
+      collisionScale: def.collisionScale,
+    }, this.deps.camera);
+    enemy.maxHp = maxHp;
+    enemy.hp = Math.min(hp, maxHp);
+    enemy.billboard = false;
+    this.deps.enemyDefs.set(enemy, def);
+    this.deps.enemies.push(enemy);
+    return enemy;
+  }
+}

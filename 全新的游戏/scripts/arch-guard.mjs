@@ -15,6 +15,9 @@ import path from 'node:path';
 
 const SRC = path.resolve('src');
 const LINE_LIMIT = 1200;
+/** 硬天花板：任何文件都不许超过这个行数（KNOWN_BIG 也照样失败）——
+ *  已知债务可以"还没还"，但不许一边欠债一边继续长 */
+const HARD_CAP = 3800;
 /** 已知大文件（技术债务）：只警告，不算失败 —— 修好后从表里删掉 */
 const KNOWN_BIG = new Set([
   'modes/WorldMode.ts',
@@ -50,6 +53,10 @@ for (const f of big) {
   if (KNOWN_BIG.has(f.rel)) warns.push(`已知债务 ${msg}`);
   else errors.push(`文件膨胀 ${msg}`);
 }
+// 硬天花板：欠债可以，继续长不行
+for (const f of big) {
+  if (f.n > HARD_CAP) errors.push(`硬天花板 ${f.rel} = ${f.n} 行（>${HARD_CAP}，先拆再写）`);
+}
 
 // ---------- ② 不变量退化 ----------
 const wm = read('modes/WorldMode.ts');
@@ -65,6 +72,17 @@ if (setPhaseCalls < 3) {
 }
 if (bgmCalls > 8) {
   errors.push(`WorldMode: syncSceneBgm 调用 ${bgmCalls} 处（>8 = 又不收口了）`);
+}
+// ★ 已迁出的刷怪子系统不许回潮（2026-09-18 P1）
+const MOVED_OUT = ['scanAndSpawnWaves', 'spawnDirectorWave', 'spawnWaveNear', 'pickMob',
+  'demoteFarEnemies', 'updateShipGroupWarning', 'agentMelee', 'nearestTauntSentinel',
+  'spawnStressAgents', 'mobAgentStats', 'spawnOne', 'quotaAllows', 'promoteAgent',
+  'createEnemyEntity', 'spawnAtRandomPointInChunk', 'refreshEnemyScale', 'spawnBoss',
+  'onBossDefeated'];
+for (const name of MOVED_OUT) {
+  if (new RegExp(`^\\s{2}(?:private |public )?${name}\\s*\\(`, 'm').test(wm)) {
+    errors.push(`WorldMode: ${name} 又长回去了（应留在 systems/spawn/WorldSpawner）`);
+  }
 }
 
 // ---------- ③ 配置真源同步 ----------

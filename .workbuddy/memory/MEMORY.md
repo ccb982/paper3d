@@ -182,7 +182,7 @@ effects 内置 type 小抄：
 
 | 文件 | 行数 | 诊断 |
 |---|---|---|
-| `modes/WorldMode.ts` | **4129** | 上帝对象：89 import / 85 字段 / 91 方法 |
+| `modes/WorldMode.ts` | ~~4129~~ → **3563**（2026-09-18 P1 拆出刷怪子系统后） | 上帝对象：89 import / 85 字段 / 91 方法 |
 | `services/map/ChunkManager.ts` | 3480 | 地形流式（加载/装配/LOD/水面/装饰可能混一起） |
 | `ui/base/GachaOverlay.ts` | 1760 | 单 UI 文件过大；`HSL_VERT/HSL_FRAG` 与 CraftingOverlay 重复 |
 | `vendor/player/fluid/FluidSolver.ts` | 1504 | 特效库，相对独立 |
@@ -209,8 +209,66 @@ effects 内置 type 小抄：
 - ✅ P2 已完成：删 `PRESERVER_AI` / `drainInteractions`（原文备份在
   `.workbuddy/deadcode/2026-09-18.txt`，**项目没有 git**）；新增 `npm run guard`
   （`scripts/arch-guard.mjs`：行数上限 + 不变量退化 + 配置三处同步）。
-- ⏸ P0-b（BgmKey 改 keyof 派生）与 P1（WorldMode 拆刷怪波次 → systems/swarm）**未做**。
+- ✅ **P1 已完成（2026-09-18）**：刷怪/波次/LOD 升降格/威胁告警全部迁到
+  `src/systems/spawn/WorldSpawner.ts`，WorldMode 4158 → 3563。详见下节。
+- ⏸ P0-b（BgmKey 改 keyof 派生）**未做**。下一刀建议 `ChunkManager.ts`（3481）。
 - `registerTile` 有 16 次引用，**已接线**，不是死代码（旧记录过时）。
+
+## ★★ 刷怪子系统 `systems/spawn/WorldSpawner.ts`（2026-09-18 建立）
+
+**用户定调：刷怪/波次必须与蜂群引擎解耦**（他后面要大改蜂群引擎）。
+→ 于是刷怪是**玩法层**（刷什么/何时/多少），蜂群是**引擎层**（AgentPool/LOD/流场），
+两者只通过 `SwarmSystem` + `swarmHooks` 对话。改引擎不要动 `WorldSpawner`。
+
+- WorldMode 只留一行 `private spawner!: WorldSpawner;`，构造在 `enter()` **最开头**。
+- 依赖通过 `SpawnDeps`（**getter/setter 桥**）拿实时值：`get enemies(){return self.enemies}`、
+  `set bossEntity(v)`。★ 别改成构造时快照 —— WorldMode 会重新赋值 `this.enemies = []`。
+- 回调三项：`showFloatingAt` / `syncSceneBgm` / `returnToBase`（= `onReturn?.()`）。
+- `tickDemote(dt, px, pz)`：降格节拍（0.25s 一拍）也在子系统里，WorldMode 只调一行。
+- `get warnShown()`：BGM 判断战斗曲用（WorldMode.syncSceneBgm 读它）。
+
+**★ 加新刷怪逻辑 = 写进 WorldSpawner，不要写回 WorldMode**（护栏会 FAIL）。
+
+### ★★ 症状「敌人不生成」的排查顺序（2026-09-18 实战）
+
+**先别再怀疑代码搬移** —— 搬移已用「方法体归一化 difflib 逐行比对」证明等价。
+按闸门链从上往下查：
+
+| # | 闸门 | 位置 | 说明 |
+|---|---|---|---|
+| 1 | `if (this.phase === 'explore')` | WorldMode.update | 只有探索段刷怪；卡在 sail 就一只不刷 |
+| 2 | `testChunk \|\| mobDefs.length === 0` | scanAndSpawnWaves 首行 | 调试开关 / 素材没传进来 |
+| 3 | `spawnedChunks` | 每 chunk 一波 | 标记过就不再刷（每局 reset） |
+| 4 | **`quotaAllows()` = `quota − spawned > 0`** | spawnOne 内，唯一收口 | ★ 头号嫌疑 |
+| 5 | `preloadCap` = ambientTarget/2 | spawnAtRandomPointInChunk | 扫描式预铺只铺一半，其余靠导演 |
+| 6 | `MAX_ALIVE`(200) / preloadCap | 同上 | 场上满了就不刷 |
+
+★★ **`spawned` 是当天累计生成数，只增不减、跨出击累计**，只有
+`everDeparted !== meta.day`（换日）才 `resetDayQuota`。
+→ **"一只都没有 + 删档就好" 99% 是第 4 条：当天配额打满了。**
+→ ★ `meta.day++` 只发生在 `onReturn` 里 → **刷新页面 / 强退不换日**，
+  配额打满后就一直没有敌人。
+
+★ 已加兜底：`quota <= 0`（从未初始化）时闸门放行 + warn，
+避免 `ensureDayQuota` 没跑到导致 `quota` 卡 0 → 永久不刷、换日也救不回。
+
+### 相关技能
+
+大类拆分流程已沉淀成 `god-object-extraction`（`~/.workbuddy/skills/`），
+含 `member-ranges.py`（成员精确取界）与 `verify-move.py`（搬移等价性验证），
+两个脚本都用本项目实战数据跑通。拆 `ChunkManager` 时直接用。
+
+### 拆大类方法（下次照做的流程）
+
+1. 备份原文件到 `.workbuddy/tmp/`（**项目没有 git**）。
+2. 用**成员起止行**定位：方法声明行 → 下一个 **2 空格缩进的 `  }`**。
+   ★ 不要用花括号配平 —— 多行签名里的对象类型 `{ count: number; ... }` 会提前结束
+   （把 562 行的段判成 36 行，我踩过）。
+3. 生成新类后，检查**声明在原类、但只被搬走段引用**的字段，一并搬走。
+4. 迁移脚本**每个待删区间都要断言首尾行文本**，行号一漂就误删。
+5. ★ **验证**：写一次性 .py，把备份与新类的方法体归一化后 `difflib` 逐行比对
+   （归一化：`this.deps.`→`this.`、类名前缀、去 `private`、回调改名）。
+   跑出「18/18 一致」才算没搬坏 —— **tsc 通过 ≠ 行为一致**。跑完删脚本。
 
 ## ★ 从 Mixkit 找/下音效的直链方法（2026-09-18 验证可用）
 
@@ -229,6 +287,9 @@ effects 内置 type 小抄：
   ★ bash 会把 python -c 里的**反引号当命令替换**（写 md 日志会吞内容）→ 长文本用 Write 写 .py 再跑。
 - **node/npx 用托管版** `C:\Users\22641\.workbuddy\binaries\node\versions\22.22.2-3`（加进 PATH 再 `cmd /c npx`）；
   打包 `npm.cmd run build`（cwd=项目根）。tsc：`node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`。
+  ★ **`cd` 也是坏的**（`cd: null directory`）→ 在项目根跑命令的唯一可靠姿势：写一个
+  `_run.py` 用 `subprocess.run(cmd, cwd=ROOT, env={PATH: NODE_DIR+...}, shell=True)`，
+  然后 `python _run.py npm.cmd run build`。跑完删。
 - **系统无 ffmpeg** → 用托管 venv 的 imageio-ffmpeg：
   `...\python\envs\default\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe`（自带 lame/opus/vorbis）。
 - `vite.config.ts` **没设 base**（产物绝对路径 `/assets/...`）→ 子目录托管会 404 白屏。
