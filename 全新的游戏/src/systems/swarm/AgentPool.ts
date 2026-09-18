@@ -5,6 +5,8 @@
 // swap-remove 删除，全程零分配；升格为 L3 实体 / 降格回池都走快照拷贝。
 // ============================================================
 
+import type { SwarmSnapshot } from '../../entity/SwarmUnit';
+
 /** 池容量（= 全图存活上限 200 + 缓冲；《蜂群架构.md》§9） */
 export const AGENT_CAPACITY = 256;
 
@@ -59,8 +61,8 @@ export interface AgentSpawnData {
   altitude?: number;
 }
 
-/** 代理快照（升格/降格搬运） */
-export interface AgentSnapshot {
+/** 代理快照（升格/降格搬运；★ v2 字段以实体侧 SwarmSnapshot 为基，单一事实源） */
+export interface AgentSnapshot extends SwarmSnapshot {
   mobIndex: number;
   x: number;
   y: number;

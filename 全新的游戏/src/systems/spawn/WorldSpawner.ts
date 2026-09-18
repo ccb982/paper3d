@@ -24,6 +24,7 @@ import type { Asset } from '../../vendor/player';
 import { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
 import { Player } from '../../entity/player/Player';
+import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
 import type { AllyBase } from '../../entity/ally/AllyBase';
@@ -80,6 +81,10 @@ export interface MobDef {
   isAir: boolean;
   /** 悬停高度（米，相对地表）；`isAir` 为假时无意义 */
   airAltitude: number;
+  /** ★ v2 兵种角色（大编队配比依据；缺省 = grunt，行为不变；《实体架构.md》§5.3） */
+  role?: UnitRole;
+  /** ★ v2 攻击类型（缺省 = melee，行为不变） */
+  attackType?: UnitAttackType;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -510,6 +515,8 @@ export class WorldSpawner {
         // ★ 空中层（2026-09-18）：飞行标记随降格带回代理池（否则一降格就落地）
         isAir: def.isAir,
         altitude: def.airAltitude,
+        // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
+        ...e.drain(),
       });
       // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
       //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
@@ -871,6 +878,8 @@ export class WorldSpawner {
     // ★ 实体近战 = AI 基础挥击（behavior.damage）+ attackPower → 反推 attackPower 保持同口径
     enemy.attackPower = Math.max(0, Math.round(snap.meleeDamage - stats.damage));
     enemy.hp = Math.min(snap.hp, snap.maxHp);
+    // ★ v2：编队/uid/移动目标等随快照回灌（缺省字段不动，行为不变）
+    enemy.hydrate(snap);
   }
 
   /** ★ 创建 L3 实体（升格路径；统一在此维护 animMap/掉落映射） */
@@ -902,6 +911,9 @@ export class WorldSpawner {
       // ★ 空中层（2026-09-18）：升格后的 L3 实体也悬停（与代理层同一高度口径）
       airborne: def.isAir,
       airAltitude: def.airAltitude,
+      // ★ v2 蜂群预留字段（缺省值 = 行为不变）
+      role: def.role,
+      attackType: def.attackType,
     }, this.deps.camera);
     enemy.maxHp = maxHp;
     enemy.hp = Math.min(hp, maxHp);

@@ -14,6 +14,9 @@ import {
 } from './CharacterBase';
 import type { EntityManager } from './EntityManager';
 import type { EntityBase, RetireReason } from './EntityBase';
+import type {
+  SwarmCarrier, SteerIntent, SwarmSnapshot, UnitRole, UnitAttackType,
+} from './SwarmUnit';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -47,11 +50,97 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   airborne?: boolean;
   /** ★ 空中悬停高度（米，相对地表；缺省 2.6）。仅 airborne 有效。 */
   airAltitude?: number;
+  /** ★ v2 兵种角色（大编队配比依据；缺省 = grunt，行为不变） */
+  role?: UnitRole;
+  /** ★ v2 攻击类型（缺省 = melee，行为不变） */
+  attackType?: UnitAttackType;
 }
 
-export class EnemyBase extends CharacterBase {
+export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private assetRef: CharacterFxAssetSource;
   readonly aggressive: boolean;
+
+  // ============================================================
+  // ★ 蜂群预留字段（《实体架构.md》§5.3；v2 由 SwarmTierPort 填值）
+  //   当前全部为默认值（散兵/未编队/地面/近战）→ 行为零变化。
+  // ============================================================
+  /** 稳定 uid（升格/降格往返不变；替代裸 index） */
+  swarmUid = 0;
+  /** 当前载体（L3 实体恒为 'entity'） */
+  readonly carrier = 'entity' as const;
+  /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
+  battalionId = -1;
+  /** 小编队（-1 = 散兵/未编队） */
+  squadId = -1;
+  /** 阵型槽位（-1 = 未分配） */
+  formSlot = -1;
+  /** 沿走廊推进进度（waypoint 索引） */
+  corridorIdx = -1;
+  /** 兵种角色（软约束） */
+  role: UnitRole = 'grunt';
+  /** 移动目标点（世界坐标；编队/寻路下发，hold 语义；null = 无目标） */
+  moveTarget: { x: number; y: number; z: number } | null = null;
+  /** 攻击类型：none/melee/ranged/bombard */
+  attackType: UnitAttackType = 'melee';
+  /** ★ 控制权（唯一切换点；只允许在 Phase 4 改） */
+  controlSource: 'swarm' | 'local' = 'local';
+  /** 飞天/悬停高度 = CharacterBase 的 airborne/airAltitude（单一事实源） */
+  get isAir(): boolean { return this.airborne; }
+  get altitude(): number { return this.airAltitude; }
+
+  /** ★ steer 保持窗口（秒）：超时自动回落 local（不允许停摆，v2 铁律 3） */
+  static readonly STEER_TTL = 0.5;
+  /** 最近一次 steer（hold；E4 消费，当前仅记录不参与移动决策） */
+  private readonly steerState: SteerIntent = { dirX: 0, dirZ: 0, speed: 0, source: 'none' };
+  private steerFreshUntil = 0;
+
+  /** Phase 1→2：swarm 下发移动意图（hold 语义；null = 清除） */
+  applySteer(intent: SteerIntent | null): void {
+    if (!intent) {
+      this.steerState.source = 'none';
+      return;
+    }
+    Object.assign(this.steerState, intent);
+    this.steerFreshUntil = performance.now() / 1000 + EnemyBase.STEER_TTL;
+  }
+
+  /** 是否有新鲜 steer（E4 起 Brain→移动消费；当前仅供调试/断言） */
+  get hasFreshSteer(): boolean {
+    return this.steerState.source !== 'none' && performance.now() / 1000 <= this.steerFreshUntil;
+  }
+
+  /** Phase 4 升格：快照灌入（只覆盖快照携带的字段，其余保持构造默认） */
+  hydrate(snap: SwarmSnapshot): void {
+    if (snap.uid !== undefined) this.swarmUid = snap.uid;
+    if (snap.battalionId !== undefined) this.battalionId = snap.battalionId;
+    if (snap.squadId !== undefined) this.squadId = snap.squadId;
+    if (snap.formSlot !== undefined) this.formSlot = snap.formSlot;
+    if (snap.corridorIdx !== undefined) this.corridorIdx = snap.corridorIdx;
+    if (snap.role !== undefined) this.role = snap.role;
+    if (snap.attackType !== undefined) this.attackType = snap.attackType;
+    if (snap.moveTargetX !== undefined && snap.moveTargetZ !== undefined) {
+      this.moveTarget = { x: snap.moveTargetX, y: snap.moveTargetY ?? 0, z: snap.moveTargetZ };
+    }
+  }
+
+  /** Phase 4 降格：抽干实体侧字段（def 派生项由 WorldSpawner 桥接层补齐） */
+  drain(): SwarmSnapshot {
+    const out: SwarmSnapshot = {
+      uid: this.swarmUid,
+      battalionId: this.battalionId,
+      squadId: this.squadId,
+      formSlot: this.formSlot,
+      corridorIdx: this.corridorIdx,
+      role: this.role,
+      attackType: this.attackType,
+    };
+    if (this.moveTarget) {
+      out.moveTargetX = this.moveTarget.x;
+      out.moveTargetY = this.moveTarget.y;
+      out.moveTargetZ = this.moveTarget.z;
+    }
+    return out;
+  }
 
   // ---- AI 状态（behaviors/conditions 访问） ----
   aiStateMachine: AIStateMachine | null = null;
@@ -120,6 +209,9 @@ export class EnemyBase extends CharacterBase {
     this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
     this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
     this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
+    // ★ 蜂群预留字段：从名册透传（缺省 = 行为不变）
+    this.role = opts.role ?? 'grunt';
+    this.attackType = opts.attackType ?? 'melee';
     this.attachToScene(scene);
     // ★ 远距影子强 LOD：80% 远敌无影子（lod≥2 全无）
     this.shadowFarCull = EnemyBase.SHADOW_FAR_CULL;
