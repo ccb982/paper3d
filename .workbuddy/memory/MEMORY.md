@@ -1,324 +1,141 @@
 # MEMORY.md —— 项目长期约定（架构重置 / 明日方舟同人游戏）
 
-## ★ 时间 / 昼夜（2026-09-18）
+> 详细流水见同目录 `YYYY-MM-DD.md`；本文件只留长期不变的约定与铁律。
 
-- 时间唯一入口：`main.ts` 主循环无条件调 `renderManager.update(dt)` → `SunCycle.update`。
-  `DAY_SECONDS = 900`（现实 15 分钟 = 游戏 24h，≈37.5s/游戏小时），`START_HOUR = 6`。
-- `WorldMode.enter()` 里 `renderManager.resetDay()` → 每次出击都重置到 6 点。
-- ★★ **不变量（2026-09-18 用户定调）：不允许出现「敌人不动 + 时间照常流逝」**。
-  舰内要么时间暂停，要么敌人 AI 照常 —— 二选一，禁止中间态（用户选了「全冻结」）。
-  → 凡是 `WorldMode.update` 里**直接 return 冻结世界**的分支，都必须同步 `setClockPaused(true)`。
-- ★ `renderManager.setClockPaused(true/false)`：只停太阳/昼夜，**不影响 scaledDt**
-  （房间行走照常）。现有接线：`enter()` 复位 false / 进舱 true / 出舱 false /
-  `shipDestroyed=true` 结算等待 true / `reviveShip()` false。
-  （不加的话：舱内看不到天空但太阳偷偷走，待 10 分钟出舱天黑 16 小时。）
-- `phase === 'interior'` 与 `shipDestroyed` 时 `WorldMode.update` 直接 return → 实体/敌人/定时遗物全停。
-- 一致态：对话中 / 面板打开 = 世界照跑（只锁输入与指针）+ 时间照跑；顿帧 = 两者同缩。
+## ★ 环境 / 工程习惯（先看这条）
+- **bash 工具链损坏**：`ls/head/cat/dirname/cd/wc` 全 command not found → 一律用托管 python
+  `~/.workbuddy/binaries/python/versions/3.13.12/python.exe -c`，或 Write 一个 `.py` 再跑。
+  ★ bash 会把 `python -c` 里的**反引号当命令替换**（写 md 日志会吞内容）→ 长文本必须 Write。
+- **`cd` 也坏**（`cd: null directory`）→ 在项目根跑命令唯一可靠姿势：Write `_run.py`，
+  `subprocess.run(cmd, cwd=ROOT, env={PATH: NODE_DIR+...}, shell=True)`，再 `python _run.py npm.cmd run build`。跑完删。
+- **node/npx 用托管版** `~/.workbuddy/binaries/node/versions/22.22.2-3`（加 PATH 再 `cmd /c npx`）。
+  tsc：`node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`。
+- **项目没有 git** → 删/改前备份 `.workbuddy/tmp/`；死代码证据留 `.workbuddy/deadcode/`。
+- `vite.config.ts` **没设 base**（产物绝对路径 `/assets/...`，子目录托管会 404 白屏）。
+- 沙箱**不能监听端口**（vite dev/preview 起不来）。无系统 ffmpeg → 用托管 venv 的 imageio-ffmpeg。
+- **用户可能在玩游戏 → 不擅自跑游戏内实测**（抢 GPU、误归因）。要实测先问。
+- 沟通：**直接、简短、可验证**，给数字，说清改了什么 / 踩了什么坑 / 回退了什么。
 
-## ★ 新增遗物的正确流程（2026-09-16）
+## ★ 时间 / 昼夜 + 阶段收口（2026-09-18）
+- 唯一入口：`main.ts` 无条件调 `renderManager.update(dt)` → `SunCycle`。`DAY_SECONDS=900`、`START_HOUR=6`。
+- ★★ 不变量：**禁止「敌人不动 + 时间照常流逝」**。舱内要么时间暂停要么敌人照跑 → 选了「全冻结」。
+  凡 `WorldMode.update` 里直接 `return` 冻结世界的分支，必须同步 `setClockPaused(true)`。
+- `setClockPaused` 只停太阳/昼夜，不影响 scaledDt（房间行走照常）。接线：enter 复位 / 进舱 true / 出舱 false / 船毁结算 true / revive false。
+- `phase==='interior'` 与 `shipDestroyed` 时 update 直接 return → 实体/敌人/定时遗物全停。
+- ★ **`WorldMode.setPhase(next)` 是 phase 变更唯一入口**（P0-a）：环境/飞行/昼夜冻结/水面/粗块/涉水轨/BGM 全在里面。
+  改阶段**不要直接 `this.phase =`**，否则副作用不触发（护栏盯着）。音频三级优先：`syncSceneBgm()` = sail 静音 > battle(`spawner.warnShown`) > interior/explore。
 
-**必须改三处**：
-1. `src/config/relics.ts` → 加 `RELIC_ITEM_CONFIG` 条目（效果走 `src/core/RelicEffects.ts` 注册表，核心零改动）。
-2. `src/services/item/ItemIconRegistry.ts` → `FTX_ICON_SOURCES` 补一条 `id: '/fx/xxx.ftx3.gz'`。
-3. `src/config/gachaPool.json` → `outOfRunItems` 加 `{ id, rarity, weight }`，否则抽不到。
+## ★★ 刷怪子系统 `src/systems/spawn/WorldSpawner.ts`（2026-09-18 建立）
+- 用户定调：**刷怪/波次必须与蜂群引擎解耦**（他后面要大改蜂群）。刷怪=玩法层，蜂群=引擎层，
+  只通过 `SwarmSystem`+`swarmHooks` 对话。**改引擎别动 WorldSpawner**。
+- WorldMode 只留 `private spawner!: WorldSpawner;`，构造在 `enter()` **最开头**
+  （否则 `setPhase`→`syncSceneBgm`→`spawner.warnShown` 崩）。
+- 依赖走 `SpawnDeps`（getter/setter 桥）拿实时值；★ 别改成构造时快照（WorldMode 会重赋 `this.enemies=[]`）。
+- 回调三项 `showFloatingAt`/`syncSceneBgm`/`returnToBase`；`get warnShown()` 供 BGM 判战斗曲。
+- **★ 加新刷怪逻辑 = 写进 WorldSpawner，别写回 WorldMode**（`npm run guard` 会 FAIL）。
 
-陷阱：
-- `RelicItemConfig.texture` 是**死数据**；图标唯一真源是 `FTX_ICON_SOURCES`（漏填 = 图标空白）。
-- **不要把 `FTX_ICON_SOURCES` 改成从 relics.ts 派生**（值导入会把 relics 拖进 core 初始化链 → 全灭）。试过并回退，注释里有警告。
+### ★★ 症状「敌人不生成」排查顺序（实战）
+先别怀疑代码搬移（已用「方法体归一化 difflib」证等价）。按闸门链自上而下：
+1. `phase!=='explore'`（卡 sail 一只不刷）2. `testChunk||mobDefs.length===0` 3. `spawnedChunks`（每 chunk 一波，每局 reset）
+4. **`quotaAllows()` = `quota − spawned > 0`** ★头号嫌疑 5. `preloadCap=ambientTarget/2`（扫描预铺只铺一半）6. `MAX_ALIVE=200`
+- ★★ `spawned` 是**当天累计生成数**，只增不减、跨出击累计；只有换日（`everDeparted!==meta.day`）才 resetDayQuota。
+  → **「一只都没有 + 删档就好」99% 是配额打满**。★ `meta.day++` 只在 `onReturn` → **刷新/强退不换日**。
+- 已加兜底：`quota<=0`（未初始化）时放行 + warn，避免卡 0 永久不刷、换日也救不回。
+- 已加配额耗尽提示（威胁标语「已肃清」+ 一次性公告 + 飘字）。
 
-effects 内置 type 小抄：
-`stat_multiplier` / `timed_item` / `respawn_time` / `start_items` / `regen`。
+## ★ 敌人 LOD 三层（2026-09-17）
+| 层 | 半径(距玩家) | 表示 |
+|---|---|---|
+| L3 实体 | 升 35m / 降 40m | EntityManager EntityBase |
+| L2 代理 | 80m | `swarm.pool` |
+| L1 回收 | 140m 外删除 | — |
+- **索敌半径 > 35m 的单位「看不见敌人」**（查的是 EntityManager，远处只有代理）。
+  修法：开代理层通道（查 pool + `swarm.damageAgent`），**别**把远处敌人升格（占满 `L3_CAP=30`）。
+- ★★ AgentPool 是 **swap-remove** → 代理下标**每帧重锁**，绝不跨帧缓存（v2 编队 id 同此约束）。
+
+## ★★ 蜂群 v2 设计（2026-09-18，文档 `全新的游戏/蜂群架构.md` §11~§21，待实施）
+- 三级：**大编队 Battalion**（战术：任务/目标、跑 **一次** HPA*、姿态机、兵种配比）
+  → **小编队 Squad**（执行：复用走廊 + 局部修正 + 分车道）→ 个体/代理。
+- ★ 编队层次**正交于 LOD**：`squadId` 跨升降格持久（L3↔L2 切换必须携带 `squadId/uid/formSlot/corridorIdx`）。
+- ★ 寻路升级为 **HPA\* + 走廊带**（现有 FlowField 只 324m 窗口、窗外直线撞墙 → 「找不到玩家」根因）。
+  cluster 32m / portal 图 / 簇内路径缓存 / funnel 平滑 / `CorridorNode` 带 halfWidth（小编队据此分车道）。
+  降级链：HPA* → FlowField → 直线（**绝不能「找不到路就不动」**）。
+- ★ `AgentSnapshot` 必须补 `squadId/uid/formSlot/corridorIdx/intent/bias/aggro/wanderSpeed`。
+- ★ 迁移 **F0（容器 + 调试可视化）先行**，再 F1~F5（编队 / P→HPA* / 车道 / 角色 / 远程兵）。
+- ★ **地形战术 §21**（2026-09-18 追加）：序盘 `scout→seize→fortify→encircle→assault`，序盘**不开火**(ROE=hold)。
+  ★★ **portal 图 = 山脚守点来源**（高地簇与邻簇的 portal 即隘口，前移 2~4m）；远程占顶缘、近战守隘口、
+  突击做预备队；包围圈环上优先吸附高地**但必须闭合**。铁律：ROE≠停摆 / 据点必须给玩家解法（不许无解堵路）/
+  选点只算一次不每帧重打分 / 任何姿态都要有超时兜底。
+- ★ **防御工事 §22**（2026-09-18 追加）：「敌人会造工事」。`fortify` 时**杂兵兼任施工**（掩体/路障/火力点，
+  ★ 用户裁定**不设工兵兵种**），★★ **两阵营通行掩码**：工事对玩家=阻挡，**对敌人己方=高代价但可通行**（否则 AI 自锁）；
+  ★ 工事改导航**必须标脏 cluster**；**必须可摧毁 + 不许封死唯一通路**；随波次清理、不入存档。
+- ★ **绕后偷袭 §23**（2026-09-18 追加）：★ **总攻必须有 1~2 组偷袭分队**（硬上限 2，
+  抽调后正面不低于 `MAIN_FORCE_MIN`=60%）。路径 = **第二条侧翼走廊**（同一套 HPA* + 可见度代价），
+  终点 = 目标背向 ±90°；`assault` 号令后**延迟 1~2s** 发动（正面先接火）。★ 两条兜底铁律：
+  **必须给可察觉线索**（不许无提示背刺，12m 内隐蔽失效）/ `AMBUSH_TIMEOUT` 20s 到点并回正面。
+  ★ §21.6「反斜面 assault」就是偷袭分队的预置形态 —— 不是新系统，是既有件重组。
+- ★ **两级火力 + 陷阱 §22.9 / §24**（2026-09-18 追加）：**普通远程兵 = 机动单位**（`ranged`）；
+  **高危火力点 = 固定工事，高位 + 藏在工事之后**（纵深两层：外层工事吃伤害遮视线 → 内层火力点，
+  `FP_LOS_BLOCK`）。★ 铁律：**不许"看不见又打不到"的死角**（解法=侧面/绕后·间接火力·拆外层，
+  ★ 正好由 §23 偷袭从背向端掉）。**陷阱**=诡雷/绊线/陷坑，**不是障碍**（★ **不参与 HPA*、不标脏 cluster**，
+  与工事相反），**己方无害**（`passFaction`），**必须可察觉**（线索/敌人绕开轨迹/可侦察/可提前引爆）；
+  ★★ **工事缺口就是最好的陷阱位**。
+- ★ **飞行兵 §25**（2026-09-18 追加）：★ 用户主动要的**减法** —— **只做轰炸、绝不缠斗**（持续空中攻击"怪恶心"）。
+  出击循环：待机→进场→**投弹一次**→撤离→冷却 12~20s；单组上限 `MAX_AIR_SQUADS=1`。
+  ★★ **不参与地面寻路**（独立空中层：直线+避障；飞越工事、不踩陷阱）→ SoA 加 `isAir`/`altitude`。
+  ★ 落点**预警 + 延迟引信**（玩家可躲）；投弹航段最脆。★ 必须有**防空威慑**（火力点兼对空），否则万能解。
 
 ## ★ 音频（BGM / SFX / 循环轨）
+- **只在船内有音乐**：基地 `base` / 舱内 `ship` / `sail` 静音 / `explore` `ambient` / 战斗 `battle`(warnShown 期间)。
+- 曲目真源 `src/config/bgm.ts`；★ 加键必须同步手写 `BgmKey` 联合类型（漏了=TS2353，踩过两次）。
+- SFX：`src/config/sfx.ts` + `Sfx.playSfx(id,minGapMs,rate?)`，**必须节流**（触发点在 update）。
+  ★★ **`minGapMs` ≥ 素材时长**，否则叠着响=糊（涉水 0.73s/330ms 就是这坑）；`rate<1` 拉长时长，间隔同步放大。
+  rate 走 WebAdapter `a.playbackRate`（**必须 play() 之前设**）。
+- 循环轨：`playLoopSfx/stopLoopSfx` + `LOOP_SFX` 表，**按 src 分轨**（`loopTracks: Map`）可多轨同响。
+  ★★ `LoopTrack.target` 不能省 —— 每帧调 `playLoopSfx` 时只有目标真变才重 fade，否则每帧打断=指数逼近=短动作没声。
+  ★ `LOOP_FADE_MS=220`；循环素材必须做过无缝循环（主体 + 尾淡出 amix 叠回）。
+- ★ 水里持续游动 = **连续循环轨**（`WorldMode.updateWadeLoop` 每帧裁决）；入水随机 rate/volume、轨内固定。
+  ★★ 循环轨硬经验：①选**平坦段**（判据=40ms 窗 RMS 包络起伏，不是 LUFS）；**动作层做主层**、连续层只填空隙；
+  ②音量别给太低（一次性音效默认 vol=1.0）→ 现随机 vol 0.45~0.62 + rate 0.80~0.92；
+  ③这版 ffmpeg `acompressor` 救不了 peak 贴顶的短素材 → 换选段/调音量，别死磕压缩。
 
-- **只在「船内」有音乐**：基地 → `base`；舰内舱（`phase==='interior'`）→ `ship`；
-  `sail` → 静音；`explore` → `ambient`（野外微风底噪，走 BGM 通道所以自带淡入淡出）。
-  战斗曲 `battle`：`groupWarnShown=true` 期间切入。
-- 曲目真源 `src/config/bgm.ts`；★ 加键必须同步改手写联合类型 `BgmKey`（漏了 = TS2353，踩过两次）。
-- 接线点：`main.enterBaseMode` → `playBgm('base')`；`WorldMode.syncSceneBgm()`
-  （三级优先：sail 静音 > battle > interior/explore）。**每个 `this.phase =` 赋值后必须跟一次**
-  （5 处）+ `groupWarnShown` 翻转后也要跟（3 处）。
-- `WebAdapter.playBgm` 有路径级去重（同 src 续播不重头）；淡入淡出 `BGM_FADE_MS=700` 也在 WebAdapter。
-- SFX：`src/config/sfx.ts`（每个 id 一组候选变体）+ `Sfx.ts` 的 `playSfx(id, minGapMs, rate?)`，
-  **必须节流**（触发点在 update 里）。素材 Mixkit，64kbps 单声道，`public/sfx/` 11 个 ≈84KB。
-  ★ **`minGapMs` 必须 ≥ 素材时长**，否则每次都在上一个没播完时 new 一个新实例 → 多层叠着响 = 糊成噪声
-  （涉水 0.73s/330ms 就是这个坑）。`rate<1` 慢放会拉长时长，间隔要同步放大。
-  rate 走 `WebAdapter` 的 `a.playbackRate`（**必须在 play() 之前设**），微信侧对应 `InnerAudioContext.playbackRate`。
-  触发线：`updateAmbientSfx`（脚步按位移 2.2m 一步）/ `updateWaterEntry`（仅玩家）/
-  `updatePlantGustSweep`（`plantGustAt` 返回 boolean 才响）/ `resolveBulletHit` → bulletGround。
-- 循环轨走 **`playLoopSfx(id, {rate?, volume?})` / `stopLoopSfx(id?)` + `LOOP_SFX` 独立表**，
-  不进 BGM 通道（BGM 只有一个 audio 元素，会互相顶掉）。从航行段直接回基地要手动停
-  （`main.enterBaseMode` 里的无参 `stopLoopSfx()` = 全停）。
-  ★ **按 src 分轨（`loopTracks: Map`）→ 多条同时响**：`shipEngine`（sail 段）+ `waterSwim`（涉水）。
-  ★ `playbackRate` 必须设在 `play()` 之前；已在册的轨换 rate 直接改属性（不重头播、不破坏循环）。
-  ★★ **`LoopTrack.target` 不能省**：调用方可能每帧调 `playLoopSfx`（涉水轨就是），
-  `fadeTo` 会 `clearInterval` 上一个并从当前音量重新淡 → 每帧打断 = 指数逼近、1.5~2s 才到
-  目标音量，短动作"等于没声"。只有目标真变了才重新 fade。
-  ★ 循环轨淡入/淡出用 **`LOOP_FADE_MS = 220`**（不是 BGM 的 700）：循环轨跟的是秒级动作。
-  ★ 循环素材**必须做过无缝循环**（主体 + 尾淡出 `amix` 叠回开头），否则接缝咔哒。
-- ★ **水里持续游动 = 连续循环轨，不是点播**（2026-09-18 用户定调）：
-  `WorldMode.updateWadeLoop()` 每帧裁决 —— 在水里且位移 > 0.3 → 起轨，
-  停 / 出水 / 非 explore / 死亡 → 停。慢放比例**每次入水随机 0.70~0.85，轨内固定**（随机防腻、固定防抖），
-  音量 0.35。停止点：`enterShipInterior`（interior 时 update 直接 return）+ `dispose`。
-  水面泛波的视觉节奏（`gap = 340 - speed*28`）独立于声音，没动。
-- ★★ **做"持续声"循环轨的两条硬经验**（2026-09-18 踩过）：
-  1. **选段要选平坦段，不能用瞬态素材去 loop**：`涉水.mp3` 是"哗"的一声（crest 15dB、
-     40ms 窗 RMS 起伏大），loop 起来听着就是"一下一下"。判据 = **40ms 窗 RMS 包络的起伏**，
-     不是 LUFS/peak（旧版 LUFS 更高但更难听清）。
-     现素材 = Mixkit `Sea swimming loop`(1181) **6.0~7.5s 主层**(划水冲击)
-     + `River water flowing`(2454) 20~21.5s **压 6dB 垫底**(填静音谷)，1.28s/10KB，
-     I=-16.5 LUFS、40ms 窗平均 RMS -17.9dB、最大 -14.1dB。
-     ★ **动作层必须是主层，连续层只填空隙** —— 反过来做（河流主+划水压6dB）会得到一段
-     平坦底噪：LUFS/RMS 数据都不差，但人耳完全注意不到（用户反馈"几乎没声"）。
-  2. **循环轨音量别给太低**：一次性音效 `new Audio()` 默认 volume **1.0**，循环轨若给 0.35
-     就比脚步声还轻。当前 `waterSwim` 起轨时**随机** `volume 0.45~0.62`
-     （等效 ≈ -21~-24 LUFS，与脚步 -22.9 同档）+ 随机 `rate 0.80~0.92`
-     （<0.8 明显发闷，反而听不清）。两者都缓存在字段里（轨内固定）。
-  3. **这版 ffmpeg 的 `acompressor` 救不了短素材**：peak 已贴顶（≈-1.2dBFS）时压缩换不来响度
-     （实测 threshold 0.08/ratio 14 反而 I -19.5→-28.7；0.35/ratio 6 只有 +1.3dB）。
-     → 该换选段 / 调播放音量，别死磕压缩。
+## ★ 遗物 / 物品 / 抽卡 / 文案播报
+- **新增遗物改三处**：`config/relics.ts`（效果走 `core/RelicEffects.ts` 注册表，核心零改）+
+  `services/item/ItemIconRegistry.ts` 的 `FTX_ICON_SOURCES`（**图标唯一真源**，漏=空白）+
+  `config/gachaPool.json` 的 `outOfRunItems`（否则抽不到）。
+  ★ 别把 `FTX_ICON_SOURCES` 改成从 relics 派生（值导入拖进 core 初始化链 → 全灭，试过回退）。
+- 查 id 是否合法：`items.json`(普通) / `relics.ts`(遗物) / `ItemIconRegistry.ts`(图标) / `gachaPool.json`(能否抽) / `Session.ts`(开局自带)。
+- ★★ **遗物绝不进背包**：只住 `session.outOfRun.owned`。对话 kind 写错会双写 → `applyEffects` 有双向防呆（勿删）。
+  ★ 老存档矫正走 `SaveSystem.sanitize()`（load 里调，幂等）：**改配置不改存档 = 用户那边看着没修好**。
+- 抽卡分档：弹药 35% / 可装备 45% / 遗物 18% / BOSS 2%（BOSS 独立优先判定不占权重）。
+- ★ **用户贴的剧情文本一律逐字照抄，禁止润色**。落地后必须机器校验（一次性 .py 与 `dialogues.json` 深比较 + difflib，跑完删）。
+  真源 `config/dialogues.json`（顶层 `trees`）；effects 五种 `item/relic/random_relic/flag/heal`；随机遗物用 `random_relic`。
+- ★ 给玩家东西 = 走 `WorldUIManager.showPickupResult`（唯一播报渠道），成功再 `flashItemAndRefresh`；
+  取名走 `displayNameOf()`（否则播报成 `black_crown`）。`DialogueSystem` 零 DOM，只回调 `onGrant` 给模式层上屏。
 
-## ★ 敌人 LOD 三层与友军索敌（2026-09-17）
+## ★ 其他模块约定
+- 访客：加访客只改 2 config（`config/visitors.ts` + `dialogues.json`）；模型 Quaternius Cube Guy（7 名共用，CC0），
+  `faceMode:'plate'` 换脸；模型轴 `y`=前后(脸朝 -y)、`z`=高、`x`=左右。详见技能 `threejs-glb-model-swap`。
+- 小游戏：加新游戏 = 丢文件进 `src/minigames/games/`（零索引改动，`import.meta.glob` 自注册）。
+  壳 `MiniGameOverlay` z-index 300；`exit()` 第一件事 `closeMiniGame()`。
+- UI：「关闭/返回上一级」统一 `ui/components/BackButton.ts`；设置入口仅基地显示，z-index > 遮罩；性能 HUD 默认隐藏。
+- 房间/基地视觉：`RoomDecoGeo` + `RoomSurfaceMaterial` + `ui/base/RoomDecor.ts`。
+  ★ ShaderMaterial 检查清单：frag 用到的每个自定义 uniform 都要声明（含 uTime）；GLSL 禁尾随逗号；末尾 `#include <colorspace_fragment>`。
+  漏一条 = 该材质全部 mesh 不渲染（房间整片消失）。
 
-| 层 | 半径（距玩家） | 表示 |
-|---|---|---|
-| L3 实体 | 升格 35m / 降格 40m | EntityManager 里的 EntityBase |
-| L2 代理 | 80m | `swarm.pool` 廉价代理 |
-| L1 回收 | 140m 外删除 | — |
+## ★ 架构治理 + 拆大类（2026-09-18，全仓 240 文件 / 66.6k 行）
+- 头部过重：`WorldMode.ts` **~~4129~~→3563**（P1 后）、`map/ChunkManager.ts` 3480、`ui/base/GachaOverlay.ts` 1760、`vendor/.../FluidSolver.ts` 1504。
+- ✅ 已完成：P0-a（setPhase 收口）/ P1（拆 WorldSpawner）/ P2（删死代码 + `npm run guard`：行数上限 + 不变量退化 + 配置三处同步）。
+- ⏸ 未做 P0-b（BgmKey 改 keyof 派生）；下一刀建议 `ChunkManager.ts`。
+- **真正让项目膨胀的是「人肉同步」**：不变量靠注释 + 记得改 N 处；配置真源不单点；WorldMode 是默认垃圾桶。
+- 拆大类流程：①备份 ②用**成员起止行**定位（声明 → 下一个 2 空格缩进 `  }`；★别用花括号配平，多行签名里的 `{...}` 会提前结束）
+  ③顺带搬走「声明在原类、只被搬走段引用」的字段 ④迁移脚本每段**断言首尾行文本** ⑤★ **验证**：.py 把方法体归一化后
+  difflib 逐行比对，跑出「N/N 一致」才算没搬坏 —— **tsc 通过 ≠ 行为一致**。
+  → 已沉淀技能 `god-object-extraction`（含 `member-ranges.py` / `verify-move.py`，本项目实战跑通）。
 
-- **索敌半径 > 35m 的单位会「看不见敌人」**（查的是 EntityManager，远处只有代理）。
-  修法：给它开代理层通道（查 pool + `swarm.damageAgent`），**不要**把远处敌人升格成实体（会占满 `L3_CAP=30`）。
-- ★★ AgentPool 是 swap-remove → 代理下标**每帧重锁**，绝不跨帧缓存。
-- 无人机 `LOCK_RANGE=12m` < 35m，不受影响。
-
-## ★ 房间 / 基地视觉（2026-09-16）
-
-- 三件套：`RoomDecoGeo`（手搓顶点挤出）+ `RoomSurfaceMaterial`（程序化 shader）+ `ui/base/RoomDecor.ts`（布局，尺寸常量唯一源）。
-- ★ 自定义 ShaderMaterial 检查清单：frag 用到的**每个**自定义 uniform 都要自己声明（含 uTime）；
-  GLSL 禁尾随逗号；frag 末尾 `#include <colorspace_fragment>`。
-  漏一条 = program 编译失败 = **该材质全部 mesh 不渲染（房间整片消失）**。
-- 排障最快路径：临时验收页只挂 BaseScene + vite dev + puppeteer-core + 本机 Chrome（swiftshader 软渲染）。
-- 舰内交互 = 站点制（`WorldMode.SHIP_STATIONS` + `setStationPads` 地面光圈），E/F 通用。
-
-## ★ UI 约定
-
-- 「关闭/返回上一级」统一用 `ui/components/BackButton.ts` 的 `createBackButton()`。
-- 设置入口 = 基地左上角白齿轮，`SettingsPanel.createSettingsUI`，**仅基地显示**；z-index 必须 > 遮罩。
-- 性能 HUD 默认隐藏（关闭时零累加零 DOM 写入）。
-
-## ★ 剧情文案：用户贴的文本一律逐字照抄，禁止润色（2026-09-17 返工教训）
-
-- 贴出的 JSON/台词 = **定稿**。不重写、不顺句、不改标点、不擅自换 id。
-- 落地后**必须机器校验**：Write 一个一次性 .py 脚本，与 `dialogues.json` 解析结果做
-  **dict 深比较** + `difflib` 打差异；跑完就删。
-- 真源 `src/config/dialogues.json`（顶层 key 是 `trees`）；节点 `{text, next?|choices[], effects?, end?}`；
-  effects 五种：`item` / `relic` / `random_relic` / `flag` / `heal`。
-  ★ 要随机遗物就用 `random_relic`（按 gachaPool 权重抽），别在对话里写死 id。
-
-## ★ 给玩家东西 = 走 `WorldUIManager.showPickupResult`（唯一播报渠道）
-
-击杀掉落 / 采集 / 定时遗物 / **对话与访客奖励** 全调它；成功再配 `flashItemAndRefresh`。
-- ★ 取名必须走 `WorldUIManager.displayNameOf()`（否则遗物播报成 `获得了 black_crown`）。
-- 层间契约：`DialogueSystem` 零 DOM，只通过 `onGrant({kind,id,count,success})` 回调给模式层，**模式层负责上屏**。
-- 遗物（`kind:'relic'`）不入背包 → 只播报，不要 `flashItemAndRefresh`。
-- 未覆盖：BaseMode 的事件对话（`base_supply` / `base_echo`）仍静默。
-
-## ★★ 遗物绝不进背包（2026-09-17 定调）
-
-遗物只住 `session.outOfRun.owned`，永不进 `inventories` / `player.slots`。
-- 对话 kind 写错（`relic` 写成 `item`）= 背包多一格 + 遗物列表看不到它。
-- ★ `DialogueSystem.applyEffects` 有双向防呆（不要删）：`item` 分支发现 id 在 `RELIC_ITEM_CONFIG`
-  自动改走遗物；`relic` 分支发现未登记自动改走背包，两边 `console.warn`。
-- ★ 老存档矫正 = `SaveSystem.sanitize()`（`load()` 里调，幂等）。
-  **教训：改配置不改存档 = 用户那边看着没修好。**
-
-## ★ 查「一个 id 是不是合法物品」要看三处
-
-| 想知道 | 去哪查 |
-|---|---|
-| 普通物品/消耗品/可部署 | `src/config/items.json` |
-| 遗物配置+名称/效果 | `src/config/relics.ts` |
-| 图标真源 | `src/services/item/ItemIconRegistry.ts` |
-| 能否抽到 | `src/config/gachaPool.json` |
-| 开局自带 | `src/core/Session.ts`（`STARTER_RELICS`） |
-
-例：`black_crown` 不在 items.json，但四处都登记了 → 别因为查不到就替换掉。
-
-## ★ 抽卡池分档（2026-09-16 定）：弹药 35% / 可装备 45% / 遗物 18% / BOSS 2%
-
-总刻度 2000：弹药 2×350、可装备 4×225、遗物 5×72、**BOSS 40 独立优先判定不占权重**。
-分类按 `items.json` 自动判定（弹药 = consumable 且无 deployable；可装备 = equip 或 deployable，
-★ 无人机 consumable+deployable 归此档）。5★ 遗物档内权重均等。
-
-## ★ 访客系统
-
-名册驱动：**加访客只改 2 个 config** —— `src/config/visitors.ts` + `dialogues.json`。
-模型 = Quaternius Cube Guy（7 名共用，CC0），换脸用 `faceMode:'plate'`（压平几何 + 贴立绘 + 删眼睛浮雕）。
-模型局部轴：**`y`=前后（脸朝 `-y`）、`z`=高度、`x`=左右**；贴图 32×32 只采样 8 个 UV；头是封闭方盒，五官是几何浮雕。
-详见 `.workbuddy/memory/2026-09-16.md` 与技能 `threejs-glb-model-swap`。
-
-## ★ 小游戏模块（2026-09-17）
-
-**加新游戏 = 丢一个文件进 `src/minigames/games/`，零索引改动**（底部 `registerMiniGame(id, ctor)`，
-`import.meta.glob('./games/*.ts', {eager:true})` 自动拉起）。
-- 契约 `MiniGameResult{score:0~100}`，**分数口径由调用方解释**。
-- 对外只有 `startMiniGame(id, {onFinish,onCancel})` / `closeMiniGame()`。
-- 壳 `MiniGameOverlay`：z-index 300（盖住对话 280）；ESC capture+stopPropagation；
-  遮罩点击不关闭；`finish`/`cancel` 幂等；`forceClose()` 不触发回调。
-- 模式层：对话 `onEnd` 查 flag → 开小游戏 → **开成就直接 return**；`exit()` 第一件事 `closeMiniGame()`。
-
-写「素材降级」两个必踩坑：
-1. `<img>` 无 src 时 **onerror 不触发** → 必须在 `.then(tex => ...)` 里显式判 `!tex`。
-2. `replaceWith` 后字段引用失效 → 外层用**固定尺寸槽位 div**，动画只驱动槽位。
-3. `let x` + `Promise<typeof x>` → TS 窄化成初值类型 → **显式声明 interface**。
-
-## ★ 架构体检基线（2026-09-18，全仓 240 文件 / 66,643 行）
-
-**整体健康**：分层清楚（services 32.9k / ui 9.6k / vendor 7.1k / systems 5.0k / modes 4.4k / entity 3.8k），
-**中位数 153 行**（粒度好），平均 277。做得好的扩展点：小游戏（丢一个文件零改动）、
-`registerTile`、`import.meta.glob` 自注册。
-
-**头部过重**：4 个 ≥1500 行文件 = 10,873 行（占 16%）
-
-| 文件 | 行数 | 诊断 |
-|---|---|---|
-| `modes/WorldMode.ts` | ~~4129~~ → **3563**（2026-09-18 P1 拆出刷怪子系统后） | 上帝对象：89 import / 85 字段 / 91 方法 |
-| `services/map/ChunkManager.ts` | 3480 | 地形流式（加载/装配/LOD/水面/装饰可能混一起） |
-| `ui/base/GachaOverlay.ts` | 1760 | 单 UI 文件过大；`HSL_VERT/HSL_FRAG` 与 CraftingOverlay 重复 |
-| `vendor/player/fluid/FluidSolver.ts` | 1504 | 特效库，相对独立 |
-
-**WorldMode 可切出的簇**（"其他"43 方法里）：
-刷怪/波次 15 个（`scanAndSpawnWaves`/`spawnWaveNear`/`promoteAgent`/`demoteFarEnemies`/`quotaAllows`…）
-→ **已有归属**：`systems/swarm/Director.ts` + `EnemyScaling.ts`，只是被塞在模式层里；
-采集挖矿 4 / 瞄准 4 / 玩家状态 4 / 相机落地 5 / UI 浮层 4。
-
-### ★★ 真正让项目膨胀的机制（不是行数，是"人肉同步"）
-
-1. **不变量靠注释 + 记得改 N 处**：`phase` 赋值 5 处，每个赋值点要手动跟
-   `syncSceneBgm`（**10 处调用**）/ `setClockPaused`（5）/ `setFlightMode`（5）/ 环境 / 水声。
-   今天加"昼夜冻结"就是又补 3 处 → 每加一条不变量 = 再 ×N。
-2. **配置真源不单点**：加遗物要改 3 处（relics / ItemIconRegistry / gachaPool）、
-   加 BGM 键要改 2 处（表 + 手写 `BgmKey` 联合类型，漏了 = TS2353，已踩两次）。
-3. **WorldMode 是默认垃圾桶**：新功能往里塞方法最快，于是越来越大。
-
-治理状态（2026-09-18）：
-- ✅ **P0-a `setPhase()` 收口已完成**：`WorldMode.setPhase(next)` 是 phase 变更的唯一入口，
-  环境 / 飞行模式 / 昼夜冻结 / 水面 / 粗块 / 涉水轨 / BGM 全在里面。
-  ★ **改阶段不要直接 `this.phase =`，必须走 setPhase** —— 否则副作用不触发。
-  现状：phase 直接赋值 1 处、setPhase 5 处、syncSceneBgm 6 处（护栏在盯着）。
-- ✅ P2 已完成：删 `PRESERVER_AI` / `drainInteractions`（原文备份在
-  `.workbuddy/deadcode/2026-09-18.txt`，**项目没有 git**）；新增 `npm run guard`
-  （`scripts/arch-guard.mjs`：行数上限 + 不变量退化 + 配置三处同步）。
-- ✅ **P1 已完成（2026-09-18）**：刷怪/波次/LOD 升降格/威胁告警全部迁到
-  `src/systems/spawn/WorldSpawner.ts`，WorldMode 4158 → 3563。详见下节。
-- ⏸ P0-b（BgmKey 改 keyof 派生）**未做**。下一刀建议 `ChunkManager.ts`（3481）。
-- `registerTile` 有 16 次引用，**已接线**，不是死代码（旧记录过时）。
-
-## ★★ 刷怪子系统 `systems/spawn/WorldSpawner.ts`（2026-09-18 建立）
-
-**用户定调：刷怪/波次必须与蜂群引擎解耦**（他后面要大改蜂群引擎）。
-→ 于是刷怪是**玩法层**（刷什么/何时/多少），蜂群是**引擎层**（AgentPool/LOD/流场），
-两者只通过 `SwarmSystem` + `swarmHooks` 对话。改引擎不要动 `WorldSpawner`。
-
-- WorldMode 只留一行 `private spawner!: WorldSpawner;`，构造在 `enter()` **最开头**。
-- 依赖通过 `SpawnDeps`（**getter/setter 桥**）拿实时值：`get enemies(){return self.enemies}`、
-  `set bossEntity(v)`。★ 别改成构造时快照 —— WorldMode 会重新赋值 `this.enemies = []`。
-- 回调三项：`showFloatingAt` / `syncSceneBgm` / `returnToBase`（= `onReturn?.()`）。
-- `tickDemote(dt, px, pz)`：降格节拍（0.25s 一拍）也在子系统里，WorldMode 只调一行。
-- `get warnShown()`：BGM 判断战斗曲用（WorldMode.syncSceneBgm 读它）。
-
-**★ 加新刷怪逻辑 = 写进 WorldSpawner，不要写回 WorldMode**（护栏会 FAIL）。
-
-### ★★ 症状「敌人不生成」的排查顺序（2026-09-18 实战）
-
-**先别再怀疑代码搬移** —— 搬移已用「方法体归一化 difflib 逐行比对」证明等价。
-按闸门链从上往下查：
-
-| # | 闸门 | 位置 | 说明 |
-|---|---|---|---|
-| 1 | `if (this.phase === 'explore')` | WorldMode.update | 只有探索段刷怪；卡在 sail 就一只不刷 |
-| 2 | `testChunk \|\| mobDefs.length === 0` | scanAndSpawnWaves 首行 | 调试开关 / 素材没传进来 |
-| 3 | `spawnedChunks` | 每 chunk 一波 | 标记过就不再刷（每局 reset） |
-| 4 | **`quotaAllows()` = `quota − spawned > 0`** | spawnOne 内，唯一收口 | ★ 头号嫌疑 |
-| 5 | `preloadCap` = ambientTarget/2 | spawnAtRandomPointInChunk | 扫描式预铺只铺一半，其余靠导演 |
-| 6 | `MAX_ALIVE`(200) / preloadCap | 同上 | 场上满了就不刷 |
-
-★★ **`spawned` 是当天累计生成数，只增不减、跨出击累计**，只有
-`everDeparted !== meta.day`（换日）才 `resetDayQuota`。
-→ **"一只都没有 + 删档就好" 99% 是第 4 条：当天配额打满了。**
-→ ★ `meta.day++` 只发生在 `onReturn` 里 → **刷新页面 / 强退不换日**，
-  配额打满后就一直没有敌人。
-
-★ 已加兜底：`quota <= 0`（从未初始化）时闸门放行 + warn，
-避免 `ensureDayQuota` 没跑到导致 `quota` 卡 0 → 永久不刷、换日也救不回。
-
-### 相关技能
-
-大类拆分流程已沉淀成 `god-object-extraction`（`~/.workbuddy/skills/`），
-含 `member-ranges.py`（成员精确取界）与 `verify-move.py`（搬移等价性验证），
-两个脚本都用本项目实战数据跑通。拆 `ChunkManager` 时直接用。
-
-### 拆大类方法（下次照做的流程）
-
-1. 备份原文件到 `.workbuddy/tmp/`（**项目没有 git**）。
-2. 用**成员起止行**定位：方法声明行 → 下一个 **2 空格缩进的 `  }`**。
-   ★ 不要用花括号配平 —— 多行签名里的对象类型 `{ count: number; ... }` 会提前结束
-   （把 562 行的段判成 36 行，我踩过）。
-3. 生成新类后，检查**声明在原类、但只被搬走段引用**的字段，一并搬走。
-4. 迁移脚本**每个待删区间都要断言首尾行文本**，行号一漂就误删。
-5. ★ **验证**：写一次性 .py，把备份与新类的方法体归一化后 `difflib` 逐行比对
-   （归一化：`this.deps.`→`this.`、类名前缀、去 `private`、回调改名）。
-   跑出「18/18 一致」才算没搬坏 —— **tsc 通过 ≠ 行为一致**。跑完删脚本。
-
-## ★ 从 Mixkit 找/下音效的直链方法（2026-09-18 验证可用）
-
-- 分类页：`https://mixkit.co/free-sound-effects/<tag>/`（water / sea / rivers / underwater …）。
-- **拿 id**：抓 HTML → 用**标题文字出现的位置往前回溯最近的 `active_storage/sfx/<id>/`** 即为该条目的 id
-  （校验过：Water splash→1311、Jump into the water→1180，与 `public/sfx/来源.txt` 一致）。
-  卡片结构里 waveform url 在标题之前，所以是"往前找最后一个"。
-- **下载**：`https://assets.mixkit.co/active_storage/sfx/<id>/<id>-preview.mp3`（preview = 完整素材，非截断）。
-- 沙箱里用 `urllib` + `ssl.CERT_NONE` 能直连；`urllib.request` 要带 UA。
-- 加工链：裁段 → `amix` 分层（主层平坦 + 次层动作感）→ 尾 0.2~0.3s 淡出叠回（无缝循环）
-  → `volume` 归一 -1.5dBFS → 64kbps 单声道。
-
-## ★ 工程习惯 / 环境
-
-- **bash 工具链损坏**：`ls`/`head`/`cat`/`dirname`/`cd` 全 command not found → 用 `python -c` + `subprocess`。
-  ★ bash 会把 python -c 里的**反引号当命令替换**（写 md 日志会吞内容）→ 长文本用 Write 写 .py 再跑。
-- **node/npx 用托管版** `C:\Users\22641\.workbuddy\binaries\node\versions\22.22.2-3`（加进 PATH 再 `cmd /c npx`）；
-  打包 `npm.cmd run build`（cwd=项目根）。tsc：`node ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json`。
-  ★ **`cd` 也是坏的**（`cd: null directory`）→ 在项目根跑命令的唯一可靠姿势：写一个
-  `_run.py` 用 `subprocess.run(cmd, cwd=ROOT, env={PATH: NODE_DIR+...}, shell=True)`，
-  然后 `python _run.py npm.cmd run build`。跑完删。
-- **系统无 ffmpeg** → 用托管 venv 的 imageio-ffmpeg：
-  `...\python\envs\default\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe`（自带 lame/opus/vorbis）。
-- `vite.config.ts` **没设 base**（产物绝对路径 `/assets/...`）→ 子目录托管会 404 白屏。
-- 沙箱**不能监听端口**：vite dev/preview 起不来。
-- **用户可能在玩游戏** → 不擅自跑游戏内实测（抢 GPU 帧率崩 + 误归因）。要实测先问。
-- 用户偏好：**直接、简短、可验证**；给数字；说清做了什么 / 踩了什么坑 / 回退了什么。
-
-## ★ ffmpeg 音频加工踩坑（2026-09-17）
-
-- **不能原地写文件**（`same as Input` 报错）→ 临时文件 + `shutil.move`。
-- **`loudnorm` 对 1~2s 短音效完全失效** → 短音效用「测 RMS → 算增益 → 压缩 + 线性归一」。
-- **`alimiter` 在这版不生效** → 用 `volume=<target/current>` 手动归一；`acompressor` ratio 上限 20。
-- 「素材不够响」的正解是**压缩降 crest factor**（网格扫描选「归一后 RMS 最大」那组），不是调 volume。
-- 测响度 `ffmpeg -i x -af ebur128=peak=true -f null -`；短音效自己解 PCM 算 RMS 更靠谱。
-- ★★★ `afade=t=out:st=S:d=D` 是从 S 起**一直静音**，不是只淡那一小段。
-  要淡入写 `t=in`；要淡出必须写 `st=<末尾时刻>`。
-- ★ 选素材看「**裁掉首尾静音后的有效段 RMS**」，不是峰值（瞬态音 peak 高但听着轻）。
-- 无缝循环：`atrim 0:(L-f)` 主体 + `atrim (L-f):L` 淡出 → `amix=normalize=0` 叠回开头。
-
-## ★ 死代码审计结论（2026-09-17，240 文件）
-
-**架构干净**，只清出 3 处真垃圾：`ShipUIManager._gachaOverlay` 套装 /
-`minigames/index.ts` 的 `isMiniGameRunning()` / `RandomRelic.ts` 的多余 export。
-审计后 `tsc --noEmit`（含 `--noUnusedLocals --noUnusedParameters`）与 `npm run build` 均 EXIT=0。
-
-**这些类别不要删**（下次审计直接跳过）：自注册扩展点（`registerMiniGame`/`registerTile`）、
-`import.meta.glob` 产物、worker 入口、build 期脚本/预留接口、只在本模块用但被 public 签名引用的类型。
-
-临时脚本姿势（`package.json` 有 `"type":"module"`）：不能丢 `.js` 到项目根（会被当 ESM）。
-→ 建 `_t/` 放 `{"type":"commonjs"}`，或用 `.mjs`；**跑完必须删**。
-
-**疑似写了没接线（未动，等裁定）**：`registerTile` 零调用 / `PRESERVER_AI` 零引用 / `drainInteractions` 零调用。
+## ★ 音效素材 / 加工
+- Mixkit 直链：分类页 `https://mixkit.co/free-sound-effects/<tag>/`；**拿 id** = 抓 HTML，标题文字往前回溯最近的
+  `active_storage/sfx/<id>/`；**下载** `https://assets.mixkit.co/active_storage/sfx/<id>/<id>-preview.mp3`（preview=完整素材）。
+- ffmpeg：裁段 → `amix` 分层 → 尾 0.2~0.3s 淡出叠回（无缝循环）→ volume 归一 -1.5dBFS → 64kbps 单声道。
+  ★ `afade=t=out:st=S:d=D` 是**从 S 起一直静音**，要淡出必须 `st=<末尾时刻>`；`loudnorm` 对 1~2s 短音效失效；
+  `alimiter` 不生效 → 用 `volume=<target/current>` 手动归一；不能原地写文件（临时文件 + move）。
