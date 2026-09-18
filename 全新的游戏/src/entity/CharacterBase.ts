@@ -14,7 +14,7 @@ import {
 } from "../systems/player/CharacterController";
 import type { InputActions } from "../platform/input/InputActions";
 import type { CameraFrame } from "../services/camera/CameraController";
-import { shapeExtents, separateXZ } from "../services/physics/Collision";
+import { shapeExtents, separateXZ, pushOutOBB } from "../services/physics/Collision";
 import { CharacterHitDye } from "../services/fx/CharacterHitDye";
 import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
@@ -240,10 +240,21 @@ export abstract class CharacterBase extends EntityBase {
     const p = this.entity.position;
     queryStaticObstaclesInto(p.x, p.z, me.hx + 0.4, _obstacleBuf);
     for (const o of _obstacleBuf) {
-      // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
-      const baseY = o.y - o.hy,
-        topY = o.y + o.hy;
-      if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
+      const topY = o.y + o.hy;
+      if (o.walkableTop) {
+        // ★ 顶面可站（船体）：脚底已在顶面以上 → 不推（站在/跳在甲板上）
+        if (p.y >= topY - 0.1) continue;
+      } else {
+        // 层差过滤：角色脚底不在障碍高度带内不推挤（允许上下平台重叠）
+        const baseY = o.y - o.hy;
+        if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
+      }
+      // ★ 定向矩形（船体分段）：圆 vs OBB 推出
+      if (o.hw !== undefined && o.hl !== undefined && o.yaw !== undefined) {
+        const push = pushOutOBB(p.x, p.z, Math.max(me.hx, me.hz), o.x, o.z, o.hw, o.hl, o.yaw);
+        if (push) { p.x += push.dx; p.z += push.dz; }
+        continue;
+      }
       const dx = p.x - o.x,
         dz = p.z - o.z;
       const minDist = me.hx + o.r;

@@ -734,6 +734,8 @@ export class WorldMode implements IGameMode {
       raster: this.raster,
       player: this.player,
       clampVehicle: (d) => this.clampVehicle(d),
+      // ★ 停靠舰船甲板：站上甲板（含从高处跳落）时以甲板顶面为地面
+      shipDeckTop: (x, z) => this.ship?.deckTopAt(x, z) ?? null,
     });
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----

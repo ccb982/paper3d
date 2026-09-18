@@ -11,12 +11,20 @@
 export interface StaticObstacle {
   id: number;
   x: number; z: number; y: number;
-  /** 水平半径（cuboid hx=hz=r） */
+  /** 水平半径（圆形障碍：cuboid hx=hz=r；矩形障碍时 = max(hw,hl)，仅作参考） */
   r: number;
   /** 半高（cuboid hy） */
   hy: number;
   /** 查询去重标记（内部用） */
   q: number;
+  /** ★ 定向矩形（可选；船体分段等）：局部半宽 hw / 半长 hl / 朝向 yaw */
+  hw?: number;
+  hl?: number;
+  yaw?: number;
+  /** ★ 顶面可站（船体）：脚底 ≥ 顶面-0.1 时不再推挤（站/跳在顶上不推） */
+  walkableTop?: boolean;
+  /** 桶半径（内部：圆=r；矩形=外接半径） */
+  br: number;
 }
 
 const CELL = 8;
@@ -33,10 +41,23 @@ function bucketKey(ix: number, iz: number): number {
 
 /** 登记装饰物碰撞体（x,y,z = 体中心；r = 水平半径；hy = 半高） */
 export function addStaticObstacle(id: number, x: number, y: number, z: number, r: number, hy: number): void {
-  const o: StaticObstacle = { id, x, y, z, r, hy, q: 0 };
-  live.set(id, o);
-  const x0 = Math.floor((x - r) / CELL), x1 = Math.floor((x + r) / CELL);
-  const z0 = Math.floor((z - r) / CELL), z1 = Math.floor((z + r) / CELL);
+  insert({ id, x, y, z, r, hy, q: 0, br: r });
+}
+
+/** ★ 定向矩形障碍（船体分段）：局部 +z = 朝向；walkableTop = 顶面可站（脚底在顶面以上不推） */
+export function addStaticObstacleRect(
+  id: number, x: number, y: number, z: number,
+  hw: number, hl: number, hy: number, yaw: number, walkableTop = true,
+): void {
+  const br = Math.hypot(hw, hl);
+  insert({ id, x, y, z, r: Math.max(hw, hl), hy, q: 0, hw, hl, yaw, walkableTop, br });
+}
+
+function insert(o: StaticObstacle): void {
+  const r = o.br;
+  live.set(o.id, o);
+  const x0 = Math.floor((o.x - r) / CELL), x1 = Math.floor((o.x + r) / CELL);
+  const z0 = Math.floor((o.z - r) / CELL), z1 = Math.floor((o.z + r) / CELL);
   for (let ix = x0; ix <= x1; ix++) {
     for (let iz = z0; iz <= z1; iz++) {
       const k = bucketKey(ix, iz);
@@ -52,8 +73,8 @@ export function removeStaticObstacle(id: number): void {
   const o = live.get(id);
   if (!o) return;
   live.delete(id);
-  const x0 = Math.floor((o.x - o.r) / CELL), x1 = Math.floor((o.x + o.r) / CELL);
-  const z0 = Math.floor((o.z - o.r) / CELL), z1 = Math.floor((o.z + o.r) / CELL);
+  const x0 = Math.floor((o.x - o.br) / CELL), x1 = Math.floor((o.x + o.br) / CELL);
+  const z0 = Math.floor((o.z - o.br) / CELL), z1 = Math.floor((o.z + o.br) / CELL);
   for (let ix = x0; ix <= x1; ix++) {
     for (let iz = z0; iz <= z1; iz++) {
       const arr = buckets.get(bucketKey(ix, iz));

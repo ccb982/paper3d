@@ -60,3 +60,35 @@ export function separateXZ(
   const dir = dz >= 0 ? 1 : -1;
   return { ax: 0, az: dir * overlapZ / 2, bx: 0, bz: -dir * overlapZ / 2 };
 }
+
+/** ★ 圆 vs 定向矩形（OBB，水平面）：相交则返回把圆心推出矩形的世界位移；null = 不相交。
+ *   矩形局部 +z = yaw 方向（与舰船 forward 同口径），hw/hl = 半宽/半长。 */
+export function pushOutOBB(
+  px: number, pz: number, r: number,
+  ox: number, oz: number, hw: number, hl: number, yaw: number,
+): { dx: number; dz: number } | null {
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);   // 局部 +z（前）
+  const rx = fz, rz = -fx;                         // 局部 +x（右）
+  const ddx = px - ox, ddz = pz - oz;
+  const lx = ddx * rx + ddz * rz;
+  const lz = ddx * fx + ddz * fz;
+  const cx = Math.max(-hw, Math.min(hw, lx));
+  const cz = Math.max(-hl, Math.min(hl, lz));
+  const ex = lx - cx, ez = lz - cz;
+  const d2 = ex * ex + ez * ez;
+  let px2: number, pz2: number;
+  if (d2 > 1e-8) {
+    if (d2 >= r * r) return null;                  // 圆与矩形不相交
+    const d = Math.sqrt(d2);
+    const push = r - d;
+    px2 = (ex / d) * push;
+    pz2 = (ez / d) * push;
+  } else {
+    // 圆心在矩形内：沿最小穿透轴推出
+    const penX = hw - Math.abs(lx) + r;
+    const penZ = hl - Math.abs(lz) + r;
+    if (penX < penZ) { px2 = (lx >= 0 ? 1 : -1) * penX; pz2 = 0; }
+    else { px2 = 0; pz2 = (lz >= 0 ? 1 : -1) * penZ; }
+  }
+  return { dx: px2 * rx + pz2 * fx, dz: px2 * rz + pz2 * fz };
+}

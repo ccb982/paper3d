@@ -134,11 +134,21 @@ export class PhysicsWorld {
   }
 
   /** 创建固定刚体（地面/墙/静态障碍；tileSlot = 分区地面首块登记） */
-  addFixed(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0, tileSlot?: number, rotation?: Quat): number {
+  addFixed(
+    position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0,
+    tileSlot?: number, rotation?: Quat,
+    extraColliders?: ExtraCollider[], shapeOffset?: { x: number; y: number; z: number },
+  ): number {
     const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
     desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation);
+    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation, shapeOffset);
+    // ★ 复合刚体：主碰撞体之外的部件（舰船分段等；各自带局部偏移）
+    if (extraColliders) {
+      for (const c of extraColliders) {
+        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset);
+      }
+    }
     const id = this.registerBody(body);
     if (tileSlot !== undefined) this.tileColliders.set(id * 1024 + tileSlot, col);
     return id;

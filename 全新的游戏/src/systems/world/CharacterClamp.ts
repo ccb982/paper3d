@@ -19,6 +19,8 @@ export interface CharacterClampDeps {
   player: CharacterBase;
   /** 玩家载具贴地桥接（WorldMode.clampVehicle；多采样抬高 + 限速） */
   clampVehicle(dt: number): void;
+  /** 停靠舰船甲板顶面高度（ShipEntity.deckTopAt；null = 不在甲板范围/航行期） */
+  shipDeckTop?(x: number, z: number): number | null;
 }
 
 export class CharacterClamp {
@@ -51,7 +53,11 @@ export class CharacterClamp {
     const p = e.position;
     const raster = this.deps.raster;
     // ★ 第二层高度（浮空洞顶）：在山上走站洞顶、进洞后站洞底（surfaceHeightAtFor）
-    const targetY = raster.surfaceHeightAtFor(p.x, p.z, p.y);
+    let targetY = raster.surfaceHeightAtFor(p.x, p.z, p.y);
+    // ★ 停靠舰船甲板：脚底已接近甲板面（≥ 甲板 - 1.6m）→ 以甲板为地面；
+    //   否则保持地形（防止船下/远处角色被抬穿船体）
+    const deck = this.deps.shipDeckTop?.(p.x, p.z) ?? null;
+    if (deck !== null && deck > targetY && p.y >= deck - 1.6) targetY = deck;
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
     //   所在 4m 地块是坑洞（genRole==='pit'）。普通地块被挖深的补丁坑：正常贴地站立

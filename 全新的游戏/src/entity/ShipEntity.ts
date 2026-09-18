@@ -9,8 +9,10 @@
 //             受击走 ShipState.applyShipDamage（护盾→装甲→HP）。
 // 视觉：ShipRenderer（GLB `public/models/ship.glb` 优先 + 程序化军武运输舰兜底；
 //       机头朝 +Z，姿态 YXZ，喷口随油门增亮）。
-// 物理：fixed 刚体（圆柱碰撞体横放对齐机身，机翼不参与物理）；停靠时挡人走 JS 静态障碍索引。
-//       敌人近战经 querySphere（空间索引）命中。
+// 物理：fixed 刚体 = **分段长方体复合体**（`ship/hullShape.ts` 唯一数据源；
+//       每段取视觉截面最小宽/高 → 物理体积恒 ≤ 渲染体积；机翼不参与物理）。
+//       角色碰撞：停靠期把同组分段登记进 JS 静态障碍索引（定向矩形 OBB；
+//       顶面可站 → 站在甲板上不再被推）。敌人近战经 querySphere（空间索引）命中。
 
 import * as THREE from 'three';
 import { EntityBase } from './EntityBase';
@@ -18,7 +20,8 @@ import type { EntityManager } from './EntityManager';
 import type { GameSession } from '../core/Session';
 import { damageShip } from '../systems/ship/ShipState';
 import { RasterMap } from '../services/map/RasterMap';
-import { addStaticObstacle, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
+import { addStaticObstacleRect, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
+import { SHIP_HULL_SEGMENTS, hullSegmentAt } from './ship/hullShape';
 import { FxRendererBase } from '../services/render/FxRendererBase';
 import { ShipRenderer } from './ship/ShipRenderer';
 import type { InputActions } from '../platform/input/InputActions';
@@ -54,14 +57,24 @@ export class ShipEntity extends EntityBase {
       x,
       y: (RasterMap.current?.surfaceHeightAt(x, z) ?? 0) + travelConfig.flightStartClearance,
       z,
-      // ★ 船体实体（2026-09-12 用户点题：舰船必须有实体）：fixed 刚体，
-      //   碰撞体抽象成【圆柱】（半径 3.6 / 全長 25，绕 X 转 90° 横放对齐机头方向）；
-      //   机翼不参与物理（无碰撞体）。子弹命中船体；航行期物理步不跑（停靠/落稳时同步位置）。
+      // ★ 船体实体（2026-09-12 用户点题：舰船必须有实体）：fixed 刚体 =
+      //   **分段长方体复合体**（ship/hullShape.ts）——楔形船体单盒会在首尾形成
+      //   远超视觉的"空气墙"；分段后每段取保守宽/高 → 物理 ≤ 视觉。
+      //   机翼不参与物理；子弹命中船体；姿态同步见 syncBody（航行/落稳每帧）。
       physics: {
         type: 'fixed',
         options: {
-          shape: { type: 'cylinder', halfHeight: 12.5, radius: 3.6 }, // 4× 船体 ≈25m 长
-          rotation: { x: Math.SQRT1_2, y: 0, z: 0, w: Math.SQRT1_2 }, // Y 轴 → Z 轴（绕 X +90°）
+          shape: {
+            type: 'cuboid',
+            hx: SHIP_HULL_SEGMENTS[2]!.hw, hy: SHIP_HULL_SEGMENTS[2]!.hy, hz: SHIP_HULL_SEGMENTS[2]!.hz,
+          },
+          shapeOffset: { x: 0, y: SHIP_HULL_SEGMENTS[2]!.cy, z: SHIP_HULL_SEGMENTS[2]!.cz },
+          extraColliders: SHIP_HULL_SEGMENTS
+            .filter((_, i) => i !== 2)
+            .map((s) => ({
+              shape: { type: 'cuboid' as const, hx: s.hw, hy: s.hy, hz: s.hz },
+              offset: { x: 0, y: s.cy, z: s.cz },
+            })),
         },
       },
     });
@@ -77,6 +90,20 @@ export class ShipEntity extends EntityBase {
   get forward(): { x: number; y: number; z: number } {
     const cp = Math.cos(this.pitch);
     return { x: Math.sin(this.heading) * cp, y: Math.sin(this.pitch), z: Math.cos(this.heading) * cp };
+  }
+
+  /**
+   * ★ 甲板顶面高度（世界 Y）；不在舰体俯视投影内 → null。
+   *   供角色贴地（CharacterClamp）判断"站在甲板上"。
+   *   仅停靠期有效；用航向做水平投影（俯仰/滚转的倾斜忽略，碰撞体近似）。
+   *   仅当角色脚底接近甲板面（caller 自行判断）时才应采纳，避免船下角色被抬穿船体。
+   */
+  deckTopAt(x: number, z: number): number | null {
+    if (this.sailable) return null;
+    const p = this.entity.position;
+    const seg = hullSegmentAt(x, z, p.x, p.z, this.heading);
+    if (!seg) return null;
+    return p.y + seg.cy + seg.hy;
   }
 
   protected override createRenderer(scene: THREE.Scene): FxRendererBase {
@@ -114,9 +141,13 @@ export class ShipEntity extends EntityBase {
   }
 
   /** ★ 停靠：转为静止目标（位置由 WorldMode 设为安全落点）；
-   *  同步刚体位置 + 登记船体挡人索引（仅停靠期） */
+   *  同步刚体位置 + 登记船体挡人索引（仅停靠期）
+   *  ★ 姿态回正：视觉（onUpdate）停靠期恒为 (heading,0,0)，碰撞体必须同口径——
+   *    否则飞行残留的 pitch/roll 会把长方体掀翻/埋地，表现为"可见船体没有碰撞"。 */
   land(): void {
     this.sailable = false;
+    this.pitch = 0;
+    this.roll = 0;
     const p = this.entity.position;
     p.y = (RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0) + LANDED_HEIGHT;
     this.renderer?.setPosition(p.x, p.y, p.z); // 停靠当帧就位（下一帧起骨架接管同步）
@@ -124,33 +155,33 @@ export class ShipEntity extends EntityBase {
     this.registerHullBlock();
   }
 
-  /** 同步 fixed 刚体到当前船体位置与姿态（停靠/落稳；航行期物理步不跑无需逐帧） */
+  /** 同步 fixed 刚体到当前船体位置与姿态（停靠/落稳；航行期物理步不跑无需逐帧）
+   *  ★ 欧拉序必须与 ShipRenderer 完全一致（order='YXZ'：y=heading, x=-pitch, z=roll） */
   private syncBody(): void {
     const rb = this.entity.rigidBody;
     const p = this.entity.position;
     const phys = this.em.physics;
     if (!rb || !phys) return;
     phys.setPosition(rb.handle, p.x, p.y, p.z);
-    // ★ 圆柱碰撞体随姿态（与 ShipRenderer 同序 YXZ：航向→俯仰→滚转）
-    _tmpEuler.set(-this.pitch, this.heading, this.roll, 'XYZ');
+    _tmpEuler.set(-this.pitch, this.heading, this.roll, 'YXZ');
     _tmpQuat.setFromEuler(_tmpEuler);
     phys.setRotation(rb.handle, { x: _tmpQuat.x, y: _tmpQuat.y, z: _tmpQuat.z, w: _tmpQuat.w });
   }
 
-  /** ★ 船体挡人（静态障碍 JS 索引；仅停靠期）：机身三圆近似圆柱（机翼不挡人） */
+  /** ★ 船体挡人（静态障碍 JS 索引；仅停靠期）：**与物理/视觉同源的分段定向矩形**。
+   *   walkableTop = 顶面可站：脚底在顶面以上（站/跳在甲板上）不再被推。 */
   private hullBlockIds: number[] = [];
   private registerHullBlock(): void {
     this.clearHullBlock();
     const p = this.entity.position;
     const f = this.forward;
-    const spots: [number, number][] = [
-      [0, -8], [0, 0], [0, 8], // 机身（沿机头方向）
-    ];
-    for (let k = 0; k < spots.length; k++) {
+    for (let k = 0; k < SHIP_HULL_SEGMENTS.length; k++) {
+      const s = SHIP_HULL_SEGMENTS[k]!;
       const id = -(this.entity.id * 16 + k + 1); // 负 id：与实体/地面/装饰 id 不冲突
-      const x = p.x + f.x * spots[k][1];
-      const z = p.z + f.z * spots[k][1];
-      addStaticObstacle(id, x, p.y, z, 3.6, 2.0);
+      addStaticObstacleRect(
+        id, p.x + f.x * s.cz, p.y + s.cy, p.z + f.z * s.cz,
+        s.hw, s.hz, s.hy, this.heading,
+      );
       this.hullBlockIds.push(id);
     }
   }
@@ -203,6 +234,7 @@ export class ShipEntity extends EntityBase {
       p.y = Math.min(target, p.y + travelConfig.flightLandingSinkMax * dt);
     }
     this.renderer?.setPosition(p.x, p.y, p.z);
+    this.syncBody(); // ★ 航行期刚体跟随（否则碰撞体留在起飞点 → "碰撞体不在船上"）
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     sr?.setThrottle?.(0.35);
@@ -247,6 +279,7 @@ export class ShipEntity extends EntityBase {
     const arrived = p.y >= minY;
     if (arrived) p.y = minY;
     this.renderer?.setPosition(p.x, p.y, p.z);
+    this.syncBody(); // ★ 起飞段刚体跟随
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     sr?.setThrottle?.(0.85);
@@ -280,6 +313,7 @@ export class ShipEntity extends EntityBase {
     const gy = this.smoothGround(rawGy, dt);
     p.y = clamp(p.y, gy + travelConfig.flightMinClearance, rawGy + travelConfig.flightMaxClearance);
     this.renderer?.setPosition(p.x, p.y, p.z);
+    this.syncBody(); // ★ 航行每帧同步刚体（碰撞体始终贴在船上）
     const sr = this.renderer as ShipRenderer | null;
     sr?.setAttitude?.(this.heading, this.pitch, this.roll);
     // ★ 喷口随油门（0..1 归一化）
