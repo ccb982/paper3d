@@ -126,6 +126,27 @@ export class WaterFx {
     stopLoopSfx('waterSwim');
   }
 
+  /** ★ 命中点附近水面剧烈波动（子弹落水；原 WorldMode.agitateWaterNear） */
+  agitateNear(x: number, z: number, r = 0.6): void {
+    const hit = this.waterPointWithin(x, z, r);
+    if (!hit) return;
+    sharedWaterMaterial.addImpact(hit.x, hit.z, 1.4);
+  }
+
+  /** 命中点及半径 r 的十字采样内找水面；返回最近水面点，无则 null */
+  private waterPointWithin(x: number, z: number, r: number): { x: number; z: number } | null {
+    if (this.raster.tileDefAt(x, z).genRole === 'liquid') return { x, z };
+    for (let i = 0; i < 4; i++) {
+      const a = (Math.PI / 2) * i;
+      const sx = x + Math.cos(a) * r;
+      const sz = z + Math.sin(a) * r;
+      if (this.raster.tileDefAt(sx, sz).genRole === 'liquid') {
+        return { x: sx, z: sz };
+      }
+    }
+    return null;
+  }
+
   /** ★ 跨局清理（退模式）：入水记录 + 涉水轨状态 */
   reset(): void {
     this.prev.clear();

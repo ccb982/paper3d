@@ -37,6 +37,7 @@ import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { allySystem } from '../systems/ally/AllySystem';
 import { WaterFx } from '../systems/world/WaterFx';
 import { CharacterClamp } from '../systems/world/CharacterClamp';
+import { CombatSystem } from '../systems/combat/CombatSystem';
 import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
 import { RoomPostFx } from '../services/render/RoomPostFx';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
@@ -520,6 +521,8 @@ export class WorldMode implements IGameMode {
   private waterFx!: WaterFx;
   /** ★ 角色贴地 / 悬停 / 掉坑结算系统（同上） */
   private charClamp!: CharacterClamp;
+  /** ★ 命中解析层（P5：子弹命中 / 代理命中唯一结算入口） */
+  private combatSystem!: CombatSystem;
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
@@ -950,7 +953,7 @@ export class WorldMode implements IGameMode {
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
       // ★ 命中解析层入口：每次碰撞开始，所有命中（敌人 / 装饰物 / 地块）都进这里分类结算
-      (payload) => this.resolveBulletHit(payload),
+      (payload) => this.combatSystem.resolveBulletHit(payload),
     );
     // ★ 敌方弹道池（程序化箭矢；细长弹体 → baseWidth 给小数，否则 4 倍长的方片）
     this.enemyBullets = new BulletManager(
@@ -958,7 +961,7 @@ export class WorldMode implements IGameMode {
       createArrowAsset(), 8,
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
-      (payload) => this.resolveBulletHit(payload),
+      (payload) => this.combatSystem.resolveBulletHit(payload),
       { baseWidth: ARROW_BASE_WIDTH },
     );
     // ★ 敌方法球池（术士；正方形纹理 → 世界尺寸 = baseWidth 见方）
@@ -967,9 +970,20 @@ export class WorldMode implements IGameMode {
       createFireballAsset(), 6,
       this.renderer,
       ctx.hitEffectAsset?.hitEffects ?? [],
-      (payload) => this.resolveBulletHit(payload),
+      (payload) => this.combatSystem.resolveBulletHit(payload),
       { baseWidth: FIREBALL_BASE_WIDTH },
     );
+    // ★ 命中解析层（P5）：子弹命中/代理命中的唯一结算入口（掉落/友军/水面由本类注入）
+    this.combatSystem = new CombatSystem({
+      physics: this.physics,
+      swarm: this.swarm,
+      bullets: this.bullets,
+      chunks: this.chunks,
+      spawnSentinelAt: (x, z) => this.spawnSentinelAt(x, z),
+      spawnItemDrops: (impact) => this.spawnItemDrops(impact),
+      agitateWaterNear: (x, z) => this.waterFx.agitateNear(x, z),
+      showAgentDamage: (x, y, z, dmg) => this.showFloatingAt(x, y, z, String(dmg), 'normal'),
+    });
     // ★ 路由：敌方弹按 `bulletSkin` 选池（箭 / 法球）；其余（玩家/友军）→ 玩家池
     this.aiCtx.attack = (opts) => {
       if (opts.type === 'projectile' && opts.camp === 'enemy') {
@@ -1360,7 +1374,7 @@ export class WorldMode implements IGameMode {
       this.swarm.update(dt, hooks);
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
-      this.swarmBulletCheck(dt);
+      this.combatSystem.updateAgentHits(dt);
       // ---- ★ P4：导演调度波次（节奏 + 预算 + intent 分工） ----
       const order = this.swarmDirector.update({
         dt,
@@ -1924,69 +1938,6 @@ export class WorldMode implements IGameMode {
   /** ★ 脚步间距（米）：每走这么远播一步 —— 速度越快步频越高（2026-09-17） */
   private static readonly STEP_DISTANCE = 2.2;
 
-  /**
-   * ★ 炮弹/子弹落点 0.6m 半径内若存在水面 → 注入水面剧烈波动。
-   */
-  /**
-   * ★★ 命中解析层（唯一入口）：一次子弹碰撞 → 全分类结算。
-   *   敌人实体 → 伤害管线 + 'damage' 事件（combat 归口）；
-   *   静态世界（地块 / 装饰物）→ resolveImpact 一次权威判定 →
-   *     地形扣除（消费地块属性）/ 水面波动 / 物品掉落（消费报告三键）。
-   */
-  private resolveBulletHit({ self, other, point, damage }: BulletHitPayload): void {
-    // ★ 祖宗弹：命中/落地 → 在落点生成站桩友军，子弹就地回收（不结算伤害、不改地形）
-    if (self.allyOnHit) {
-      self.deactivate();
-      self.recycle?.();
-      this.spawnSentinelAt(point.x, point.z);
-      return;
-    }
-    if (other) {
-      // 伤害/事件统一在 applyDamage 内结算（base 已含攻击力 → 不再叠加）
-      // ★ 命中点 = bullet 接触点（payload 自带）→ 受击染料落在中弹处
-      applyDamage(damage, self, other, { hitPoint: point });
-      return;
-    }
-    // ★ 敌方弹（弩箭等）打地形：不改造地形、不掉落 —— 否则玩家能靠敌人弹"挖矿"
-    //   （命中特效仍由 BulletEntity.hitFx 播放，反馈不缺）
-    if (self.camp === 'enemy') return;
-    const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
-    this.chunks.playBulletImpact(impact); // 地形修改：消费解析结果（含地块资格门；capHit 走挖洞顶）
-    // ★ 击地 / 击水音：water='hit' = 真打在水面上 → 水花；
-    //   'edge'（岸边地块）和 'none' 都算打到实地 → 击地音（水面另有波动，不重复响）
-    if (impact.water === 'hit') playSfx('bulletWater', 70);
-    else playSfx('bulletGround');
-    this.agitateWaterNear(point.x, point.z); // 水面波动
-    if (!impact.capHit) this.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告（洞顶不掉）
-  }
-
-  private agitateWaterNear(x: number, z: number): void {
-    const hit = this.waterPointWithin(x, z, 0.6);
-    if (!hit) return;
-    sharedWaterMaterial.addImpact(hit.x, hit.z, 1.4);
-  }
-
-  /** 命中点及半径 r 的十字采样内找水面；返回最近水面点，无则 null */
-  private waterPointWithin(
-    x: number, z: number, r: number,
-  ): { x: number; z: number } | null {
-    if (this.raster.tileDefAt(x, z).genRole === 'liquid') return { x, z };
-    for (let i = 0; i < 4; i++) {
-      const a = (Math.PI / 2) * i;
-      const sx = x + Math.cos(a) * r;
-      const sz = z + Math.sin(a) * r;
-      if (this.raster.tileDefAt(sx, sz).genRole === 'liquid') {
-        return { x: sx, z: sz };
-      }
-    }
-    return null;
-  }
-
-  /**
-   * ★ 物品掉落管线：命中报告（ImpactReport）→ 掷掉落 → 背包落账 + UI 提示。
-   *   地面(固原岩) / 水面或贴水地块(酮凝集) / 耗尽原石晶体~3m(异铁)；
-   *   有空间直接入袋&提示，背包满则提示失败。
-   */
   /** ★ 击杀掉落：按敌人 MobDef.drops 逐项掷概率 → 直接入袋 + UI 提示 */
   private rollEnemyDrops(enemy: EnemyBase): void {
     const def = this.enemyDefs.get(enemy);
@@ -2019,36 +1970,11 @@ export class WorldMode implements IGameMode {
     this.swarm.enrageAt(x, z, SWARM.RAGE_RADIUS, SWARM.RAGE_SECONDS);
   }
 
-  /** ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算并回收子弹） */
-  private swarmBulletCheck(dt: number): void {
-    const phys = this.physics;
-    if (!phys || this.swarm.count === 0) return;
-    this.bullets.forEachActive((b) => {
-      if (!b.isActive || b.camp === 'enemy') return;
-      const p = b.entity.position;
-      let x0 = p.x, z0 = p.z;
-      const rb = b.entity.rigidBody;
-      if (rb) {
-        const v = phys.getLinearVelocity(rb.handle);
-        x0 -= v.x * dt;
-        z0 -= v.z * dt;
-      }
-      const idx = this.swarm.hitTestSegment(x0, z0, p.x, p.z, b.hitRadius);
-      if (idx < 0) return;
-      const final = this.swarm.damageAgent(idx, b.damageAtHit());
-      if (final > 0) {
-        this.showFloatingAt(
-          this.swarm.agentX(idx), this.swarm.agentY(idx) + 1.4, this.swarm.agentZ(idx),
-          String(final), 'normal',
-        );
-      }
-      // ★ 命中反馈 + 正确回池：只 deactivate 不 recycle 会漏池（10 发池打空后无法开火）
-      b.hitFx?.(null);
-      b.deactivate();
-      b.recycle?.();
-    });
-  }
-
+  /**
+   * ★ 物品掉落管线：命中报告（ImpactReport）→ 掷掉落 → 背包落账 + UI 提示。
+   *   地面(固原岩) / 水面或贴水地块(酮凝集) / 耗尽原石晶体~3m(异铁)；
+   *   有空间直接入袋&提示，背包满则提示失败。
+   */
   private spawnItemDrops(r: ImpactReport): void {
     const drops = rollDrops({
       hasGround: r.tile.role === 'ground' || r.tile.role === 'platform',
@@ -3396,7 +3322,7 @@ export class WorldMode implements IGameMode {
     const y = this.raster.surfaceHeightAt(pt.x, pt.z);
     const impact = this.chunks.resolveImpact(pt.x, y, pt.z);
     this.spawnItemDrops(impact);      // 掉落：铁/水/地面 → 异铁/酮凝集/固原岩
-    if (impact.water !== 'none') this.agitateWaterNear(pt.x, pt.z);
+    if (impact.water !== 'none') this.waterFx.agitateNear(pt.x, pt.z);
   }
 
   /** ★ 挖矿选点：三类随机优先（1/3 概率），采样不中回退其它两类；全无 → null */
