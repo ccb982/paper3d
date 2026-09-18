@@ -35,6 +35,8 @@ import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { allySystem } from '../systems/ally/AllySystem';
+import { WaterFx } from '../systems/world/WaterFx';
+import { CharacterClamp } from '../systems/world/CharacterClamp';
 import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
 import { RoomPostFx } from '../services/render/RoomPostFx';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
@@ -514,22 +516,10 @@ export class WorldMode implements IGameMode {
   private playerStatsUnsub?: () => void;
   /** ★ 舰船受击订阅（UI 明显报警：横幅+红屏+状态条闪红；天气来自 damageShip 事件） */
   private shipDamagedUnsub?: () => void;
-  /** ★ 角色入水检测（每角色上一帧：是否水面 + 位置上帧快照 + 上次溅波时刻） */
-  private waterPrev = new Map<
-    CharacterBase,
-    { liquid: boolean; y: number; x: number; z: number; rippleMs: number }
-  >();
-  /**
-   * ★ 涉水循环轨状态（2026-09-18 用户定调：水里持续游动 = **慢放的连续水声**，不是点播音）
-   *   - `wadeLoopOn`：循环轨是否起过（幂等起停，避免每帧重建元素）
-   *   - `wadeRate`：本次入水的慢放比例（起轨时随机一次，轨内固定 → 不抖）
-   *   - `wadePrev`：上帧位置（算真实位移速度；静止不动 = 停声）
-   */
-  private wadeLoopOn = false;
-  private wadeRate = 1;
-  /** ★ 本次入水的循环轨音量（起轨时随机一次，轨内固定） */
-  private wadeVol = 0.5;
-  private wadePrev = { x: 0, z: 0, valid: false };
+  /** ★ 入水表现系统（入水波动 + 涉水循环轨；《实体架构.md》§9.5 模式层下沉） */
+  private waterFx!: WaterFx;
+  /** ★ 角色贴地 / 悬停 / 掉坑结算系统（同上） */
+  private charClamp!: CharacterClamp;
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
@@ -735,6 +725,13 @@ export class WorldMode implements IGameMode {
     });
     // ★ 每天出击重置：复活阶梯/倒计时归零（首死瞬间复活）
     this.playerPipeline.resetRun();
+    // ★ 模式层下沉系统：入水表现 + 贴地/悬停/掉坑结算（行为与旧 WorldMode 私有方法一致）
+    this.waterFx = new WaterFx(this.raster);
+    this.charClamp = new CharacterClamp({
+      raster: this.raster,
+      player: this.player,
+      clampVehicle: (d) => this.clampVehicle(d),
+    });
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
@@ -1461,17 +1458,17 @@ export class WorldMode implements IGameMode {
     const _e2 = performance.now();
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感；航行期角色在船上） ----
-    if (this.phase === 'explore') this.updateWaterEntry(this.player, dt);
+    if (this.phase === 'explore') this.waterFx.entry(this.player, dt, true);
     // ★ 涉水循环轨：每帧统一裁决（非探索阶段自动淡出，防航行/舰内残留水声）
-    this.updateWadeLoop(dt);
-    // ★ 环境音效：脚步 / 拨草（入水·涉水音在 updateWaterEntry 内，只对玩家那次生效）
+    this.waterFx.wade(dt, this.phase === 'explore', this.player);
+    // ★ 环境音效：脚步 / 拨草（入水·涉水音在 WaterFx 内，只对玩家那次生效）
     if (this.phase === 'explore') this.updateAmbientSfx(dt);
-    for (const e of this.enemies) this.updateWaterEntry(e, dt);
+    for (const e of this.enemies) this.waterFx.entry(e, dt, false);
     const _e3 = performance.now();
 
     // ---- 角色地形跟随（航行期角色位置由舰船同步） ----
-    if (this.phase === 'explore') this.clampCharacter(this.player, dt);
-    for (const e of this.enemies) this.clampCharacter(e, dt);
+    if (this.phase === 'explore') this.charClamp.update(this.player, dt);
+    for (const e of this.enemies) this.charClamp.update(e, dt);
     const _t5 = performance.now();
     worldPerf.drones = _e1 - _e0;
     worldPerf.ent = _e2 - _e1;
@@ -1719,11 +1716,9 @@ export class WorldMode implements IGameMode {
     for (const g of this.pickupGlows) g.dispose();
     this.pickupGlows = [];
 
-    // ---- ★ 角色入水检测状态 ----
-    this.waterPrev.clear();
-
-    // ---- ★ 涉水循环轨（退出世界必须停：否则水声会跟着你进基地） ----
-    this.stopWadeLoop();
+    // ---- ★ 入水表现系统：跨局清理 + 涉水轨必停（否则水声会跟着你进基地） ----
+    this.waterFx?.reset();
+    this.waterFx?.stopWade();
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -1928,100 +1923,6 @@ export class WorldMode implements IGameMode {
 
   /** ★ 脚步间距（米）：每走这么远播一步 —— 速度越快步频越高（2026-09-17） */
   private static readonly STEP_DISTANCE = 2.2;
-
-  /**
-   * ★ 角色入水检测：走进水面 / 从高处落入水面 → 该处水面剧烈波动；
-   *   在水中持续移动 → 脚下周期性泛波。只触发波动表现，不改角色位置。
-   */
-  private updateWaterEntry(e: CharacterBase, dt: number): void {
-    const p = e.position;
-    const liquid = this.raster.tileDefAt(p.x, p.z).genRole === 'liquid';
-    // ★ 复用记录对象（每帧 set 新对象会制造 GC 压力——60+ 实体每帧一个）
-    let rec = this.waterPrev.get(e);
-    if (!rec) {
-      rec = { liquid, y: p.y, x: p.x, z: p.z, rippleMs: 0 };
-      this.waterPrev.set(e, rec);
-      return;
-    }
-    const prevLiquid = rec.liquid;
-    const prevY = rec.y;
-    const prevX = rec.x;
-    const prevZ = rec.z;
-    rec.liquid = liquid;
-    rec.y = p.y;
-    rec.x = p.x;
-    rec.z = p.z;
-    // 走进水面（方块由非水 → 水，且脚底在水面以下 0.5m 内才算真正入水）
-    if (liquid && !prevLiquid && p.y < 0.5) {
-      rec.rippleMs = performance.now();
-      sharedWaterMaterial.addImpact(p.x, p.z, 0.8);
-      if (e === this.player) playSfx('waterEnter', 400);
-      return;
-    }
-    // 高处坠落 / 跳入：本帧穿过 y=0 水面 → 波幅随坠落速度增大
-    if (liquid && prevY > 0.08 && p.y <= 0.08) {
-      rec.rippleMs = performance.now();
-      const vy = Math.max(0, (prevY - p.y) / Math.max(dt, 1e-3));
-      sharedWaterMaterial.addImpact(p.x, p.z, Math.min(1.6, 0.7 + vy * 0.15));
-      if (e === this.player) playSfx('waterEnter', 400);
-      return;
-    }
-    // ★ 在水中移动 → 脚下周期性泛波（按【实际位移速度】：静止不泛波——载具圆凳悬停时不再高频溅波）
-    const movedSpeed = dt > 1e-3 ? Math.hypot(p.x - prevX, p.z - prevZ) / dt : 0;
-    if (liquid && movedSpeed > 0.3) {
-      const now = performance.now();
-      const gap = 340 - Math.min(movedSpeed, 10) * 28; // 慢走 0.3s 一泛，快跑 ~0.2s
-      if (now - rec.rippleMs >= gap) {
-        rec.rippleMs = now;
-        sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + movedSpeed * 0.06));
-        // ★ 涉水声不再按节拍点播（0.73s 素材 @330ms = 多层叠着响的糊声）→ 改走
-        //   连续循环轨，见 updateWadeLoop（慢放比例每次入水随机）。
-      }
-    }
-  }
-
-  /**
-   * ★ 涉水循环轨（仅玩家）：在水里且真的在移动 → 一条慢放的连续水声；
-   *   停下 / 出水 / 非探索阶段 → 淡出。
-   *
-   * 为什么是循环轨而不是点播：素材 0.73s，点播再怎么拉间隔都是"一段一段"的；
-   *   而游动是持续状态，听感上必须连续。慢放比例每次起轨随机（0.70~0.85），
-   *   同一条轨内固定 —— 随机是为了不腻，固定是为了不抖。
-   */
-  private updateWadeLoop(dt: number): void {
-    const on = this.phase === 'explore' && !this.player.dead;
-    const p = this.player.position;
-    const liquid = on && this.raster.tileDefAt(p.x, p.z).genRole === 'liquid';
-    let speed = 0;
-    if (this.wadePrev.valid && dt > 1e-3) {
-      speed = Math.hypot(p.x - this.wadePrev.x, p.z - this.wadePrev.z) / dt;
-    }
-    this.wadePrev.x = p.x;
-    this.wadePrev.z = p.z;
-    this.wadePrev.valid = true;
-
-    if (on && liquid && speed > 0.3) {
-      if (!this.wadeLoopOn) {
-        this.wadeLoopOn = true;
-        // ★ 每次入水随机慢放比例（降速同时降调 → 水里的黏滞感）。
-        //   0.80~0.92：再慢（<0.8）会明显发闷，反而听不清。
-        this.wadeRate = 0.80 + Math.random() * 0.12;
-        // ★ 每次入水随机音量 0.45~0.62（等效 ≈ -21~-24 LUFS，与脚步声 -22.9 同档）。
-        //   ★★ 必须缓存在字段里：每帧都调 playLoopSfx，音量若逐帧变化会不停触发淡入淡出。
-        this.wadeVol = 0.45 + Math.random() * 0.17;
-      }
-      playLoopSfx('waterSwim', { rate: this.wadeRate, volume: this.wadeVol });
-    } else if (this.wadeLoopOn) {
-      this.stopWadeLoop();
-    }
-  }
-
-  /** ★ 停掉涉水循环轨（进舱 / 退模式 / 换局：防止水声残留到别的场景） */
-  private stopWadeLoop(): void {
-    this.wadeLoopOn = false;
-    this.wadePrev.valid = false;
-    stopLoopSfx('waterSwim');
-  }
 
   /**
    * ★ 炮弹/子弹落点 0.6m 半径内若存在水面 → 注入水面剧烈波动。
@@ -3104,7 +3005,7 @@ export class WorldMode implements IGameMode {
   // ★ 环境音效（2026-09-17 用户点题：地上走 / 在水里 / 走过草丛 / 击中草丛）
   //   曲目表 src/config/sfx.ts；三条触发线：
   //     脚步 + 拨草 → updateAmbientSfx（本文件）
-  //     入水/涉水   → updateWaterEntry（复用水面泛波节拍）
+  //     入水/涉水   → WaterFx.entry/wade（复用水面泛波节拍）
   //     击草       → updatePlantGustSweep（plantGustAt 冷却通过才算一次）
   // ============================================================
 
@@ -3118,7 +3019,7 @@ export class WorldMode implements IGameMode {
 
   /**
    * ★ 环境音效每帧推进（仅探索期）：脚步按位移触发，草丛按 0.2s 节拍查询。
-   *   水里那两条不在这里（updateWaterEntry 已经算好了入水/泛波节拍）。
+   *   水里那两条不在这里（WaterFx 已经算好了入水/泛波节拍）。
    */
   private updateAmbientSfx(dt: number): void {
     const pl = this.player;
@@ -3193,7 +3094,7 @@ export class WorldMode implements IGameMode {
       this.chunks.setCoarseMode(next === 'sail');
     }
     // ★ 舰内时 update 直接 return，涉水轨不会被裁决 → 必须在这里显式停
-    if (next === 'interior') this.stopWadeLoop();
+    if (next === 'interior') this.waterFx?.stopWade();
     this.syncSceneBgm();
   }
 
@@ -3565,83 +3466,4 @@ export class WorldMode implements IGameMode {
     p.y += dy > 0 ? Math.min(dy, VEHICLE_CLIMB_SPEED * dt) : Math.max(dy, -30 * dt);
   }
 
-  private clampCharacter(e: CharacterBase, dt: number): void {
-    // ★ 死亡等待复活：冻结在死亡地点（不贴地/不重复判死），复活时统一传送回出生点
-    if (e.dead) return;
-    // ★ 空中层（2026-09-18）：飞行单位**悬停** —— y = 地表高 + airAltitude（+ 个体相位浮动）。
-    //   不走贴地/掉坑分支（飞在空中不该被判掉坑），也不受地形落差影响。
-    //   ★ 地表取样必须与 L2 代理（SwarmBatch 的 groundAt）同口径 → 都用 surfaceHeightAtFor(x,z,y)，
-    //     否则升/降格瞬间会"跳一下"。
-    if (e.airborne) {
-      const p = e.position;
-      const gy = this.raster.surfaceHeightAtFor(p.x, p.z, p.y);
-      const bob = Math.sin(performance.now() / 1000 * AIR_BOB_RATE + e.airPhase) * AIR_BOB_AMP;
-      const targetY = gy + Math.max(0.4, e.airAltitude) + bob;
-      const dy = targetY - p.y;
-      // 上下都用限速逼近（爬升 3m/s / 下降 3m/s）：跨地形时不瞬移、不"贴脸闪现"
-      p.y += dy > 0 ? Math.min(dy, 3 * dt) : Math.max(dy, -3 * dt);
-      return;
-    }
-    // ★ 空中态不钉地形：真实跳跃（空格）让 y 由 CharacterBase 的抛物线结算，
-    //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
-    if (e.controller.isAirborne()) return;
-    if (e === this.player && this.player.rideVehicle) {
-      this.clampVehicle(dt);
-      return;
-    }
-    const p = e.position;
-    // ★ 第二层高度（浮空洞顶）：在山上走站洞顶、进洞后站洞底（surfaceHeightAtFor）
-    const targetY = this.raster.surfaceHeightAtFor(p.x, p.z, p.y);
-    // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
-    //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须
-    //   所在 4m 地块是坑洞（genRole==='pit'）。普通地块被挖深的补丁坑：正常贴地站立
-    //   （不沉落、不判死）；天然坑洞：维持沉落死亡。
-    //   ★ 2026-09-10 水里连射被误判掉坑：isDepression 同时覆盖坑洞与水（Tiles.ts），
-    //   子弹会把水底挖到 −1.5 以下 → 判死传送。水不是坑洞 → 死亡门槛只认 pit。
-    const onPitTile = this.raster.tileDefAt(p.x, p.z).genRole === 'pit';
-    if (targetY >= -1.5 || !onPitTile) {
-      const dy = targetY - p.y;
-      if (dy > 0) p.y += Math.min(dy, 7.5 * dt);
-      else p.y += Math.max(dy, -25 * dt);
-      return;
-    }
-    p.y += Math.max(targetY - p.y, -25 * dt);
-    if (p.y <= targetY + 0.05) {
-      if (e === this.player) {
-        // ★ 玩家掉坑死亡：补发 killed 事件 → 计入遗物"每次死亡"统计（meta.deaths）
-        //   （血量归零路径经由 onTakeDamage 自发 killed；掉坑是环境死亡，需手动补发）
-        eventBus.emit('killed', { target: e, source: null });
-        e.onDeath(null);
-      } else {
-        // ★ 敌人掉坑减半血（2026-09-14 用户定调）：按最大生命 50% 直接扣血（不吃防御/闪避）；
-        //   扣死 → onTakeDamage 自发 killed（掉落/统计走统一管线并移除）；
-        //   存活 → 放回坑沿最近可站点，防永久卡坑底
-        e.onTakeDamage(Math.max(1, Math.round(e.maxHp * 0.5)), null);
-        if (e.hp > 0) this.relocateFromPit(e);
-      }
-      // 玩家：不在此处传送——镜头留在死亡地点，复活时统一回出生点（PlayerPipeline）
-    }
-  }
-
-  /** ★ 敌人掉坑幸存：放回坑沿最近可站点（8 向 × 1.5~8m 搜索；
-   *  找不到落点（大坑/孤岛）→ 补刀结算，不留卡坑单位） */
-  private relocateFromPit(e: CharacterBase): void {
-    const p = e.position;
-    for (let r = 1.5; r <= 8; r += 0.75) {
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        const x = p.x + Math.cos(a) * r;
-        const z = p.z + Math.sin(a) * r;
-        const td = this.raster.tileDefAt(x, z);
-        if (td.genRole === 'pit' || td.genRole === 'liquid') continue;
-        const y = this.raster.surfaceHeightAt(x, z);
-        if (y < -1.2) continue;
-        p.x = x;
-        p.z = z;
-        p.y = y;
-        return;
-      }
-    }
-    e.onTakeDamage(e.hp, null); // 无处可放 → 补刀（killed 由 onTakeDamage 统一发）
-  }
 }
