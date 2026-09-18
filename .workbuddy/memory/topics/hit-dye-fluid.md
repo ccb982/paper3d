@@ -155,6 +155,28 @@
 - `ExplosionConfig` 全字段：`cx/cy/radius/strength`（必填）+ `createWater/waterColor/duration/decay/waterMultiplier/perturbation/velCap/velCapDuration/velCapRecovery`。
   死亡动画只用前 4 个 + `duration`。**不设 `velCap`**（`maxVelocity` 已是 200，不需要临时抬升）。
 
+## ★★ 散度爆炸与"降频 1/30"的关系（用户 2026-09-18 追问的点）
+
+`processExplosions()` 只在 `step()` 内被调（step 3.6）⇒ **它跟着 step 的节拍走 = 30 次/s**，不是 60。
+
+| 项 | 是否乘 dt | 降频后 |
+|---|---|---|
+| `strength × envelope`（散度源） | **否** | **总注入量缩水** |
+| `radialSpeed × dt`（径向速度） | 是 | 节拍无关 |
+| `velImpulse × dt`（抖动冲量） | 是 | 节拍无关 |
+
+- `duration` **不失真**：`ex.elapsed += dt`，dt 是**累积真实时间** ⇒ 仍为 0.25s 墙钟。
+- `envelope ×= decay` 是**按调用次数**衰减的 ⇒ 0.25s 窗口内：
+  · 30 步/s ⇒ 注入 **7 次**，Σenvelope = 9×(1−0.9⁷) ≈ **4.70**
+  · 60 步/s ⇒ 注入 **14 次**，Σenvelope = 9×(1−0.9¹⁴) ≈ **6.94**
+  ⇒ **总散度注入量 ≈ 60fps 时的 68%**。
+- ★ 但**峰值相同**：当前 `strength = -30000` 大到「一步就把流速顶到 `maxVelocity = 200`」，
+  所以两种节拍的峰值都被钳在 200，只是 30/s 的**尾巴短约 30%**。
+  **只有把 strength 调到不再饱和时，这 68% 才会真的显形。**
+- 想精确复刻 60fps 设计量：`strength × (6.94/4.70) = ×1.48` ⇒ **-30000 → -44000**。
+- 另：`applyPressureGradient()` **不带 dt**（`FluidSolver.ts:871`）⇒ 压力链路每步的量也是固定的，
+  所以"降频 ⇒ 每步步长翻倍"并不会放大单步的压力推动。
+
 ## ★★ levelSet 开启的三个坑
 
 1. **`surfaceTension > 0` 才真的施加**（`FluidSolver.ts:1080` `if (ls.surfaceTension > 0)`）

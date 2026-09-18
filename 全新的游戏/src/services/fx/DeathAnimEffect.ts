@@ -38,9 +38,20 @@ const DEATH_IMPULSE_MAX = 40; // px/s
  *  ★ 量级参照旧库爆炸的 25000 量级（本处取 30000 = "比较大"）。
  *    注意：爆炸产生的径向流速最终仍受 `maxVelocity = 200 px/s` 钳制，
  *    所以 strength 主要决定"多快拉满"，而不是超过 200 的峰值。
+ *  ★★ **本注入跑在"降频后"的节拍上**：`processExplosions()` 只在 `step()` 内被调（step 3.6），
+ *    而 `DeathAnimEffect.update` 把 `step()` 降到 **30 次/s** ⇒ 0.25s 窗口内只注入 **7 次**
+ *    （60fps 下是 14 次）。
+ *    · `duration` 不失真：`ex.elapsed += dt` 用的是**累积真实 dt** ⇒ 仍是 0.25s 墙钟。
+ *    · ★ 但 `envelope ×= decay` 是**按调用次数**衰减，而散度源 `strength × envelope` **不乘 dt**
+ *      （对比：`radialSpeed × dt` 与 `velImpulse × dt` 都乘 dt ⇒ 那两项节拍无关）
+ *      ⇒ **总散度注入量 ≈ 60fps 时的 68%**（Σenvelope 4.70 vs 6.94）。
+ *    · ★ 峰值不受影响：当前 strength 大到「一步就顶到 `maxVelocity = 200`」
+ *      ⇒ 两种情况峰值相同，只是 30/s 的尾巴短约 30%。**只有把 strength 调到不再饱和时，
+ *      这 68% 才会真的显形**。
+ *    · 想精确复刻 60fps 设计量：`strength × (6.94/4.70) ≈ -44000`。
  *  ★ 前提：`enablePressure` 必须为 true —— 散度源是**压力方程的源项**，
  *    压力投影关掉时没人消费它，注入等于白写（死亡流体一直是 true）。 */
-const DEATH_EXPLODE_STRENGTH = -30000; // 负 = 向外推
+const DEATH_EXPLODE_STRENGTH = -30000; // 负 = 向外推（符号推导见上）
 const DEATH_EXPLODE_RADIUS = 0.4; // 归一化半径
 const DEATH_EXPLODE_DURATION = 0.25; // 秒（包络指数衰减，默认 decay 0.9/步）
 

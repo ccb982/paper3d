@@ -57,7 +57,12 @@
   **`v_eq` 必须 < `maxVelocity`**，否则被钳位、怎么调都是同一个结果（踩过：g=160 ⇒ v_eq≈261 ⇒ 仍顶格）。
 - ★★ **散度注入 = `FluidSolver.explode()`**（step 3.6，**压力投影之前**）：**`strength` 必须为负才是"向外"**；
   散度场每步 4.5 `clearGrid` = 一次性消费 ⇒ **别每帧调**；只在 `enablePressure = true` 时有效。
-  ★ **levelSet**：`surfaceTension > 0` 才真的施加（负值 = 等效关闭）、`reinitIterations` **无兜底**必须给全、
+- ★★ **散度爆炸与"降频"的关系（易漏）**：`processExplosions` 只在 `step()` 里跑 ⇒ 也是 30 次/s。
+  `duration` 不失真（`elapsed += dt` 累积真实 dt），但 `envelope ×= decay` 是**按调用次数**衰减，
+  且散度源 `strength × envelope` **不乘 dt** ⇒ **总注入量按节拍缩水**（0.25s 内 30/s 只 7 次、
+  60/s 是 14 次 ⇒ 约 **68%**）。而 `radialSpeed × dt` / `velImpulse × dt` 都**乘 dt** ⇒ 那两项节拍无关。
+  当前 strength 大到一步即顶 `maxVelocity` ⇒ 峰值相同、只是尾巴短；strength 调小后才显形。
+- ★ **levelSet**：`surfaceTension > 0` 才真的施加（负值 = 等效关闭）、`reinitIterations` **无兜底**必须给全、
   开启后压力求解切成**自由表面模式**。详见 `topics/hit-dye-fluid.md`。
 - ★★ **注入位置用 `mesh.worldToLocal()`**（位置 + 镜像 scale + `setBillboard` 竖牌朝向一并处理），`u=0.5+local.x`、`v=0.5−local.y`；
   **竖直高度问 `EntityBase.hitAnchorY()`**（覆写 = 贴片 65%），**别再写死 `position.y + 1.0`**（3.67m 敌人落大腿）。
