@@ -39,6 +39,9 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   defense?: number;
   /** ★ 攻击力加成（默认 0） */
   attackPower?: number;
+  /** ★ 接地补偿（世界单位；纹理底部透明余量 → 往下压这么多，避免悬空）。
+   *  来源：FootAnchor.footSinkRatioOf(asset) × scale（见 MobDef.groundSink）。 */
+  groundSink?: number;
 }
 
 export class EnemyBase extends CharacterBase {
@@ -120,11 +123,15 @@ export class EnemyBase extends CharacterBase {
     this.setFrameAnimated((opts.facing ?? '前') as '前' | '后');
     // 纹理宽高比缩放（不压扁；宽 = scale，高 = scale×bbox高宽比）
     this.applyRenderScale(scale);
+    // ★ 接地补偿：必须在 applyRenderScale 之后（半高由缩放决定）
+    const quad = this.renderer as unknown as { setGroundSink?: (s: number) => void };
+    if (opts.groundSink && quad?.setGroundSink) quad.setGroundSink(opts.groundSink);
     // ★ 头顶血条：按放大后的实际贴片高度定位（顶端 + 0.4 余量），宽度随体型
+    //   ★ 减去 groundSink：接地补偿把贴片整体压低了，血条要跟着走（否则血条悬空）
     const aspect = ftxFrame ? ftxFrame.bbox.h / ftxFrame.bbox.w : 1;
     this.attachEffect('health', new HealthBar(scene, this, {
       width: 0.8 * scale,
-      offsetY: scale * aspect + 0.4,
+      offsetY: scale * aspect + 0.4 - (opts.groundSink ?? 0),
     }));
 
     // ---- AI：配置驱动状态机 + 注册到系统 ----

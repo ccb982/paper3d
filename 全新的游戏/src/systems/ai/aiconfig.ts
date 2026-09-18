@@ -80,8 +80,13 @@ export interface MobAIParams {
   chaseSpeed?: number;
   /** 索敌半径 */
   aggroRadius?: number;
-  /** 攻击距离 */
+  /** 攻击距离（= 追击时"何时停下开打"的刹车距离） */
   attackRadius?: number;
+  /** ★ 攻击判定半径（= 挥击/射击真正打得到多远）
+   *  ★ 必须与 attackRadius 分开：远程兵种若只放大 attackRadius，
+   *    会停在 13m 外但挥击判定仍是默认 1.8m → **站远处一直打空**（2026-09-18 踩点）。
+   *  缺省保持 1.8（既有三兵种手感不变）。 */
+  attackRange?: number;
   /** 脱离索敌半径 */
   loseRadius?: number;
   /** 攻击时长（秒） */
@@ -98,6 +103,8 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
   const lose = p.loseRadius ?? 12;
   const melee = p.meleeDuration ?? 0.6;
   const dmg = p.meleeDamage ?? 8;
+  // ★ 判定半径缺省 1.8（既有三兵种原样）；远程兵种显式给 attackRange
+  const range = p.attackRange ?? 1.8;
   return {
     states: {
       patrol: {
@@ -116,7 +123,7 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
         ],
       },
       attack: {
-        behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg } }],
+        behaviors: [{ name: 'meleeSwing', params: { duration: melee, damage: dmg, range } }],
         transitions: [
           { cond: 'retarget', to: 'chase' },
           { cond: 'attackFinished', to: 'patrol' },
@@ -144,4 +151,64 @@ export const REUNION_AI: AIConfig = mobAI({
 export const LAOJIE_AI: AIConfig = mobAI({
   wanderSpeed: 3, chaseSpeed: 3.8, aggroRadius: 12,
   attackRadius: 1.8, loseRadius: 18, meleeDuration: 0.65, meleeDamage: 14,
+});
+
+// ============================================================
+// ★ 2026-09-18 新增兵种 AI（名册见 `config/enemyRoster.ts`）
+//   分五档：近战主力 / 重装 / 快速自爆 / 远程（弩手＜术士＜重火力）/ 小 boss
+// ============================================================
+
+/** ★ 海怪：中血中速小兵（两只一组）。比整合凶一点、比牢杰稳 */
+export const SEA_MONSTER_AI: AIConfig = mobAI({
+  wanderSpeed: 1.8, chaseSpeed: 2.2, aggroRadius: 9,
+  attackRadius: 1.8, loseRadius: 14, meleeDuration: 0.7, meleeDamage: 12,
+});
+
+/** ★ 萨卡兹大剑手：近战主力（"较强的杂兵"）。挥击慢、单发高 */
+export const SARKAZ_SWORDSMAN_AI: AIConfig = mobAI({
+  wanderSpeed: 2.4, chaseSpeed: 3.2, aggroRadius: 11,
+  attackRadius: 2.2, attackRange: 2.2, loseRadius: 18,
+  meleeDuration: 0.7, meleeDamage: 18,
+});
+
+/** ★ 盾卫：重装。极慢、小索敌、低攻高防 —— 拦路石，不是威胁源 */
+export const SHIELD_GUARD_AI: AIConfig = mobAI({
+  wanderSpeed: 1.2, chaseSpeed: 1.6, aggroRadius: 10,
+  attackRadius: 2.0, attackRange: 2.2, loseRadius: 16,
+  meleeDuration: 0.8, meleeDamage: 10,
+});
+
+/** ★ 爆炸飞行怪：快速自爆型。全兵种最快 + 最脆 + 单发最痛 */
+export const BOMBER_AI: AIConfig = mobAI({
+  wanderSpeed: 3, chaseSpeed: 4.2, aggroRadius: 14,
+  attackRadius: 2.0, attackRange: 2.0, loseRadius: 22,
+  meleeDuration: 0.45, meleeDamage: 22,
+});
+
+/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低 */
+export const CROSSBOW_AI: AIConfig = mobAI({
+  wanderSpeed: 2.2, chaseSpeed: 2.8, aggroRadius: 14,
+  attackRadius: 9, attackRange: 9, loseRadius: 24,
+  meleeDuration: 0.5, meleeDamage: 8,
+});
+
+/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中 */
+export const AMP_CASTER_AI: AIConfig = mobAI({
+  wanderSpeed: 2, chaseSpeed: 2.4, aggroRadius: 16,
+  attackRadius: 10, attackRange: 10, loseRadius: 26,
+  meleeDuration: 0.8, meleeDamage: 10,
+});
+
+/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆 */
+export const WAR_CASTER_AI: AIConfig = mobAI({
+  wanderSpeed: 1.6, chaseSpeed: 2.0, aggroRadius: 22,
+  attackRadius: 13, attackRange: 13, loseRadius: 34,
+  meleeDuration: 1.2, meleeDamage: 20,
+});
+
+/** ★ 原石虫巨人：小 boss。大仇恨圈 + 3.4m 挥击圈 + 高单发（整体慢） */
+export const ROCK_GIANT_AI: AIConfig = mobAI({
+  wanderSpeed: 1.8, chaseSpeed: 2.6, aggroRadius: 16,
+  attackRadius: 3.4, attackRange: 3.4, loseRadius: 30,
+  meleeDuration: 1.0, meleeDamage: 26,
 });

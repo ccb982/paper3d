@@ -2,7 +2,8 @@
 
 > 详细流水见同目录 `YYYY-MM-DD.md`；本文件只留长期不变的约定与铁律。
 > 已沉淀技能：`god-object-extraction` / `game-audio-sfx-pipeline` / `game-frame-budget-profiling` /
-> `shader-fit-from-reference` / `threejs-glb-model-swap` / `game-map-hud-overlay` / `codebase-dead-code-audit`。
+> `shader-fit-from-reference` / `threejs-glb-model-swap` / `game-map-hud-overlay` /
+> `codebase-dead-code-audit` / `data-driven-roster-registration`（批量注册新内容）。
 
 ## ★ 环境 / 工程习惯（先看这条）
 
@@ -98,6 +99,28 @@
   真源 `config/dialogues.json`（顶层 `trees`）；effects `item/relic/random_relic/flag/heal`；随机遗物用 `random_relic`。
 - ★ 给玩家东西 = 走 `WorldUIManager.showPickupResult`（唯一播报渠道），成功再 `flashItemAndRefresh`；
   取名走 `displayNameOf()`（否则播报成 `black_crown`）。`DialogueSystem` 零 DOM，只回调 `onGrant`。
+
+## ★★ 敌军名册（2026-09-18 建立，唯一真源 `src/config/enemyRoster.ts`）
+
+- **加敌军 = 放帧包 + 名册加一条，零其他改动**（id/name/file/ai/数值/pack/weight/drops）。
+  `ENEMY_ROSTER` 顺序 = `main.ts` 加载顺序 = `mobIndex`（代理池/图集/掉落按此回查）。
+- ★★ **禁止再出现「取模复用数值」**：旧 `MOB_BLUEPRINTS[i % 3]` 会让第 4 个之后的敌人循环套用
+  前三条的 AI/血量/掉落（新敌人 = 换皮）。现按 id `ENEMY_BY_ID.get()` 一一对应；查不到 → warn + 回退。
+- ★★ **远程兵种必须同时给 `attackRadius` 与 `attackRange`**：前者只是"何时停下开打"的刹车距离，
+  真正判定半径是 `meleeSwing.params.range`（缺省 1.8）→ **只放大 attackRadius 会站远处挥空**。
+- 素材缺失只跳过该兵种（warn），不阻断启动；`npm run guard` 会校验 file 存在 / 掉落 id 合法 /
+  id 不重复 / public 下无漏登记帧包。
+- 缺口（引擎未支持，非注册问题）：远程**无弹道**（大 range 瞬时命中）／飞行怪**无空中层**／海怪不下水。
+- 成本：SwarmBatch 每兵种 1 图集 + 1 InstancedMesh → draw call = 兵种数；**别到几十兵种**。
+- ★★ **贴片接地：新素材必查**。FTX 的 bbox **不保证紧贴脚底**（导出留白）→ 而贴片用底部锚点
+  ⇒ 留白 = 角色悬空（实测 11 个新包里 10 个有：海怪 0.34m、盾卫 0.25m、爆炸飞行怪 0.22m）。
+  运行时由 `services/fx/FootAnchor.ts` **自动量出**（读 base 纹理 alpha，不用手填）：
+  `MobDef.groundSink = ratio × scale + 名册手调`。
+  ★★ **两条渲染路径都要补偿**，否则"远看接地、近看悬空"：L3 = `FTXQuad.setGroundSink`、
+  L2 = `SwarmBatch` 实例 y（含血条 y）。血条 `offsetY` 也要同步减。
+  ★ 名册 `scale` 语义是 **quad 宽**，实际身高 = `scale × (bbox.h/bbox.w)` → 与 bbox 宽高比强耦合
+  （主角 2.0m，敌军 1.1~4.8m）。要统一身高得改成"目标身高(米)"字段（未做，等用户定）。
+  ★ 体检工具：`.workbuddy/tools/ftx_foot_measure.py <目录>`（离线量脚底余量/quad 高，不用起游戏）。
 
 ## ★ 其他模块约定
 

@@ -46,6 +46,8 @@ import {
   AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot,
 } from '../../systems/swarm/AgentPool';
 import { WorldUIManager } from '../../ui/world/WorldUIManager';
+// ★ 贴片接地补偿（底部透明余量 → 下沉；与 L2 代理同口径）
+import { footSinkRatioOf } from '../../services/fx/FootAnchor';
 
 // ============================================================
 // ★ 杂兵配置条目（原 WorldMode 内部类型，随迁出改为 export）
@@ -66,6 +68,9 @@ export interface MobDef {
   weight: number;
   /** ★ 击杀掉落规则（每项独立掷概率） */
   drops: { itemId: string; chance: number; min: number; max: number }[];
+  /** ★ 接地补偿（世界单位；= 纹理底部透明余量比例 × scale + 名册手调量）。
+   *  见 services/fx/FootAnchor.ts —— 底边留白的素材靠它压回地面。 */
+  groundSink: number;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -326,6 +331,9 @@ export class WorldSpawner {
     const hp = Math.max(1200, Math.round(2500 * sc.hp));
     const atkPower = Math.round(30 * sc.atk);
     const dfs = 8 + sc.def;
+    const bossScale = 4;
+    // ★ 接地补偿（与杂兵同口径；Boss 素材读不到 alpha 时为 0 → 行为不变）
+    const bossSink = footSinkRatioOf(asset) * bossScale;
     const enemy = new EnemyBase(this.deps.entities, this.deps.scene, asset, {
       x: safe.x, y: safe.y, z: safe.z,
       animMap: {
@@ -342,8 +350,9 @@ export class WorldSpawner {
       hp,
       defense: dfs,
       attackPower: atkPower,
-      scale: 4,
+      scale: bossScale,
       collisionScale: 2.2,
+      groundSink: bossSink,
     }, this.deps.camera);
     enemy.billboard = false;
     const def: MobDef = {
@@ -352,11 +361,12 @@ export class WorldSpawner {
       hp,
       defense: dfs,
       attackPower: atkPower,
-      scale: 4,
+      scale: bossScale,
       collisionScale: 2.2,
       pack: 1,
       weight: 0,
       drops: [],
+      groundSink: bossSink,
     };
     this.deps.enemyDefs.set(enemy, def);
     this.deps.enemies.push(enemy);
@@ -781,6 +791,7 @@ export class WorldSpawner {
       attackPower: def.attackPower,
       scale: def.scale,
       collisionScale: def.collisionScale,
+      groundSink: def.groundSink,
     }, this.deps.camera);
     enemy.maxHp = maxHp;
     enemy.hp = Math.min(hp, maxHp);

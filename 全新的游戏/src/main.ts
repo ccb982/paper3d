@@ -34,6 +34,10 @@ import { registerAssetIconSource, registerDynamicIcon } from './services/item/It
 import { ItemManager } from './systems/inventory/ItemManager';
 import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
 import { RELIC_ITEM_CONFIG } from './config/relics';
+// ★ 敌军名册（唯一真源）：加载与 mobDefs 派生都从它遍历
+import {
+  ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry,
+} from './config/enemyRoster';
 import { createSettingsUI, type SettingsUi } from './ui/components/SettingsPanel';
 import { playBgm } from './services/audio/Bgm';
 import { stopLoopSfx } from './services/audio/Sfx';
@@ -93,8 +97,8 @@ function updateSky(): void {
 let protagonistAsset: FtxAsset;
 let bulletAsset: Asset | FtxAsset;
 let enemyAsset: Asset;
-/** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
-let mobAssets: FtxAsset[] = [];
+/** ★ 敌军素材（纯纹理包；id 对应 config/enemyRoster.ts，地图大量随机生成用） */
+let mobAssets: EnemyAssetEntry[] = [];
 let hitEffectAsset: Asset | null;
 /** ★ 可露希尔的无人机（特效包优先，回退纯纹理包） */
 let droneAsset: Asset | FtxAsset | null = null;
@@ -213,12 +217,24 @@ async function boot() {
   enemyAsset = await Asset.load(encodeURI('/characters/enemies/普瑞赛斯.scene.zip'));
   registerDynamicIcon('priestess', enemyAsset); // ★ 6★ 普瑞赛斯图标（卡池/遗物面板）
 
-  // ---- ★ 三个杂兵（纯纹理包）：地图大量随机生成用 ----
-  mobAssets = await Promise.all([
-    FtxAsset.load(encodeURI('/characters/enemies/原石虫，杂兵.ftx3.gz')),
-    FtxAsset.load(encodeURI('/characters/enemies/整合运动人员，杂兵.ftx3.gz')),
-    FtxAsset.load(encodeURI('/characters/enemies/牢杰，杂兵.ftx3.gz')),
-  ]);
+  // ---- ★ 敌军名册（唯一真源 src/config/enemyRoster.ts）：地图大量随机生成用 ----
+  //   ★ 顺序 = ENEMY_ROSTER 顺序 = mobIndex（代理池/图集/掉落按此回查）。
+  //   ★ 单个素材缺失只跳过该兵种（warn），不阻断启动；缺谁在控制台可见。
+  const loadedMobs = await Promise.all(
+    ENEMY_ROSTER.map(async (spec): Promise<EnemyAssetEntry | null> => {
+      try {
+        return { id: spec.id, asset: await FtxAsset.load(enemyAssetUrl(spec)) };
+      } catch (err) {
+        console.warn(`[boot] 敌军素材缺失：${enemyAssetUrl(spec)}（${spec.name} / ${spec.id} 本次不生成）`, err);
+        return null;
+      }
+    }),
+  );
+  mobAssets = loadedMobs.filter((m): m is EnemyAssetEntry => m !== null);
+  console.log(
+    `[boot] 敌军注册 ${mobAssets.length}/${ENEMY_ROSTER.length}：`
+    + mobAssets.map((m) => m.id).join(', '),
+  );
 
   // ---- ★ 采集物纹理图集（每 key 一包 4 帧；替代程序化模型，直接贴图）----
   for (const [key, file] of [

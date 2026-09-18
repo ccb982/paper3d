@@ -2,7 +2,10 @@
 // SwarmBatch —— 远层代理批量渲染（《蜂群架构.md》§5.7）
 // ============================================================
 // 每兵种一张图集（前/后两帧；base+residual 在 CPU 按 FTXQuad 同款公式烘焙），
-// 一个 InstancedMesh 画完该兵种全部代理（≤4 兵种 = ≤4 draw call）。
+// 一个 InstancedMesh 画完该兵种全部代理（draw call = 兵种数；当前 11 兵种 ≈ 11 次）。
+// ★ 兵种数增长的成本 = 每兵种 1 张图集纹理 + 1 个 InstancedMesh(AGENT_CAPACITY=256)
+//   + 2 个 Float32Array(256) 属性（≈ 每兵种几十 KB 显存）；11 兵种仍远低于瓶颈，
+//   但**别再往"几十兵种"走**——真到那一步应改多兵种共享图集 + 单 InstancedMesh。
 // 放弃 residual 动态/流体/受击染色（L2/L1 视觉底线：半频动画 / 冻结帧）。
 // ============================================================
 
@@ -19,6 +22,8 @@ interface MobBatch {
   flash: THREE.InstancedBufferAttribute;
   /** 贴图高宽比（h/w；实例缩放用） */
   aspect: number;
+  /** ★ 接地补偿（世界单位；纹理底部透明余量 → 实例 y 下沉这么多） */
+  sink: number;
 }
 
 const _m = new THREE.Matrix4();
@@ -140,8 +145,9 @@ export class SwarmBatch {
   private barRatio: THREE.InstancedBufferAttribute | null = null;
   private barCount = 0;
 
-  constructor(scene: THREE.Scene, assets: FrameAssetSource[]) {
-    for (const asset of assets) {
+  constructor(scene: THREE.Scene, assets: FrameAssetSource[], sinks: number[] = []) {
+    for (let ai = 0; ai < assets.length; ai++) {
+      const asset = assets[ai];
       // 帧位：0=前 / 1=后（缺省回退第 0 帧）
       const iFront = asset.resolveFrame('前') ?? 0;
       const iBack = asset.resolveFrame('后') ?? iFront;
@@ -207,7 +213,7 @@ export class SwarmBatch {
       mesh.frustumCulled = false;
       mesh.count = 0;
       scene.add(mesh);
-      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1) });
+      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1), sink: sinks[ai] ?? 0 });
     }
 
     // ---- ★ 远层代理血条：单个 InstancedMesh（所有兵种共用 → 1 draw call） ----
@@ -265,7 +271,8 @@ export class SwarmBatch {
       const h = w * batch.aspect;
       const gy = groundAt(pool.x[i], pool.z[i], pool.y[i]); // ★ y 提示选层（浮空洞顶）
       pool.y[i] = gy; // 贴地回写（渲染与逻辑同源）
-      _p.set(pool.x[i], gy + h / 2, pool.z[i]);
+      // ★ 接地补偿：底透明余量 → 实例整体下沉（与 L3 实体 FTXQuad.setGroundSink 同口径）
+      _p.set(pool.x[i], gy + h / 2 - batch.sink, pool.z[i]);
       _q.setFromAxisAngle(_axisY, pool.yaw[i]);
       _s.set(w, h, 1);
       _m.compose(_p, _q, _s);
@@ -280,7 +287,7 @@ export class SwarmBatch {
         const bdz = pool.z[i] - focusZ;
         if (bdx * bdx + bdz * bdz <= maxDist2) {
           const bi = this.barCount++;
-          _p.set(pool.x[i], gy + h + 0.4, pool.z[i]);
+          _p.set(pool.x[i], gy + h + 0.4 - batch.sink, pool.z[i]);
           _q.copy((camera as THREE.Camera).quaternion);
           _s.set(w * 0.8, 0.1, 1);
           _m.compose(_p, _q, _s);

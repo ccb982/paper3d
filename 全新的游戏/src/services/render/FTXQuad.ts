@@ -166,6 +166,17 @@ export class FTXQuad extends FxRendererBase {
     this.anchorLift = v;
   }
 
+  /** ★ 接地补偿：把贴片按 sink（世界单位）往下压，让"纹理底透明余量"不再表现为悬空。
+   *   等价于把底部锚点抬升量从"半高"改成"半高 − sink"（用 setAnchorLift 实现，
+   *   两套语义共用一个字段，避免出现两个锚点来源互相打）。 */
+  setGroundSink(sink: number): void {
+    if (!(sink > 0)) {
+      this.anchorLift = null; // 无补偿 → 还原默认（脚踩地面 = 半高）
+      return;
+    }
+    this.anchorLift = Math.abs(this.baseScale.y) / 2 - sink;
+  }
+
   /** ★ 平面内滚转（弧度；setBillboard 时绕贴片法线应用；0 = 还原） */
   setRoll(rad: number): void {
     this.rollRad = rad;

@@ -37,6 +37,8 @@ import { CraftingOverlay } from '../ui/base/CraftingOverlay';
 import { ItemIconRegistry } from '../services/item/ItemIconRegistry';
 import { createButton } from '../ui/components/Button';
 import baseRoomsJson from '../config/baseRooms.json';
+// ★ 敌军名册（唯一真源）：mobDefs 按 id 从这里装配
+import { ENEMY_BY_ID, ENEMY_FALLBACK, type EnemyAssetEntry } from '../config/enemyRoster';
 import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
@@ -53,8 +55,6 @@ import { LOD_MAX_DIST } from '../services/lod';
 import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_RADIUS, type ChunkGroundHost } from '../services/map/decor/MapEntityDecorBase';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
-import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../systems/ai/aiconfig';
-import type { AIConfig } from '../systems/ai/aiconfig';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
@@ -75,6 +75,8 @@ import type { VisitorModelStyle } from '../services/render/VisitorModelRenderer'
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { createSolidBulletAsset } from '../services/fx/SolidBulletAsset';
 import { CharacterFxManager } from '../services/fx/CharacterFxManager';
+// ★ 贴片接地补偿（量素材底部透明余量；详见该文件头注释）
+import { footSinkRatioOf } from '../services/fx/FootAnchor';
 import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { BULLET_HIT_RADIUS } from '../services/combat/BulletEntity';
@@ -170,8 +172,8 @@ export interface WorldModeEnterContext extends IGameModeContext {
   day: number;
   protagonistAsset: FtxAsset;
   bulletAsset?: Asset | FtxAsset;
-  /** ★ 三个杂兵素材（纯纹理包；地图大量随机生成用） */
-  enemyAssets?: FtxAsset[];
+  /** ★ 敌军素材（id 对应 `config/enemyRoster.ts` 名册；地图大量随机生成用） */
+  enemyAssets?: EnemyAssetEntry[];
   /** ★ 普瑞赛斯（Boss 战实体素材；scene.zip） */
   bossAsset?: FtxAsset | Asset;
   hitEffectAsset?: Asset;
@@ -343,7 +345,7 @@ export class WorldMode implements IGameMode {
     onAgentRecalled: (n) => { recordRecall(this.session, n); },
   };
 
-  /** ★ 杂兵配置条目（由 enemyAssets 派生：素材+AI+HP+体型；生成时随机取一条） */
+  /** ★ 杂兵配置条目（由 enemyAssets 按 id 查 config/enemyRoster.ts 装配；生成时按权重随机取一条） */
   private mobDefs: MobDef[] = [];
   /** ★ 敌人实例 → 其 MobDef（击杀掉落结算用；WeakMap 不阻回收） */
   private enemyDefs = new WeakMap<EnemyBase, MobDef>();
@@ -748,39 +750,37 @@ export class WorldMode implements IGameMode {
     // ---- ★ 死亡动画管线初始化 ----
     CharacterFxManager.init(this.scene, this.renderer);
 
-    // ---- ★ 杂兵配置条目（三种特色：原石虫=慢/脆/成群；整合=高防高血；
-    //       牢杰/杰斯顿=高速高攻脆皮）----
-    const MOB_BLUEPRINTS: Omit<MobDef, 'asset'>[] = [
-      {
-        ai: ROCK_BUG_AI, hp: 22, defense: 0, attackPower: 0,
-        scale: 1.6, collisionScale: 1.1, pack: 4, weight: 1, // ★ 成群（慢速炮灰；2026-09-09 权重 3→1：单次仍一次生 4 只）
-        drops: [{ itemId: 'polyester', chance: 0.35, min: 1, max: 1 }],
-      },
-      {
-        ai: REUNION_AI, hp: 75, defense: 3, attackPower: 2,
-        scale: 2, collisionScale: 1.25, pack: 1, weight: 1, // ★ 中高防中血（2026-09-09 削：130/6 → 75/3；权重 2→1 平衡牢杰）
-        drops: [
-          { itemId: 'polyester', chance: 0.3, min: 1, max: 1 },
-          { itemId: 'device', chance: 0.8, min: 1, max: 2 },
-        ],
-      },
-      {
-        ai: LAOJIE_AI, hp: 45, defense: 0, attackPower: 12,
-        scale: 2, collisionScale: 1.25, pack: 1, weight: 2, // ★ 高速高攻脆皮（2026-09-09 权重 1→2：提高出现率）
-        drops: [{ itemId: 'device', chance: 0.95, min: 1, max: 3 }],
-      },
-    ];
+    // ---- ★ 杂兵配置：唯一直源 = `config/enemyRoster.ts`（按 id 一一对应）----
+    //   ★ 这里**不能**用"取模复用"（曾为 `MOB_BLUEPRINTS[i % 3]`）：
+    //     素材一多，第 4 个之后的敌人会循环套用前三条数值 → 新敌人拿到错的 AI/血量/掉落。
+    //   ★ 名册查不到只 warn + 回退，绝不中断（mobDefs 下标 = mobIndex，不能有空洞）。
     this.bossAsset = ctx.bossAsset ?? null;
-    this.mobDefs = (ctx.enemyAssets ?? []).map((asset, i) => ({
-      asset,
-      ...(MOB_BLUEPRINTS[i % MOB_BLUEPRINTS.length] ?? MOB_BLUEPRINTS[1]),
-    }));
+    this.mobDefs = (ctx.enemyAssets ?? []).map(({ id, asset }) => {
+      let spec = ENEMY_BY_ID.get(id);
+      if (!spec) {
+        console.warn(`[WorldMode] 敌军 "${id}" 未登记于 config/enemyRoster.ts → 回退 ${ENEMY_FALLBACK.id} 数值`);
+        spec = ENEMY_FALLBACK;
+      }
+      return {
+        asset,
+        ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
+        scale: spec.scale, collisionScale: spec.collisionScale,
+        pack: spec.pack, weight: spec.weight, drops: spec.drops,
+        // ★ 接地补偿：量出素材底透明余量（比例）× scale = 世界下沉量，再叠加名册手调
+        groundSink: footSinkRatioOf(asset) * spec.scale + (spec.groundSink ?? 0),
+      };
+    });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
     for (const [key, asset] of Object.entries(ctx.plantAssets ?? {})) {
       setPropAtlas(key, asset);
     }
     // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《蜂群架构.md》§5.7）
-    this.swarm.buildBatch(this.scene!, this.mobDefs.map((d) => d.asset));
+    //   ★ 必须传接地补偿：L2 代理与 L3 实体口径不同会让"远看接地、近看悬空"
+    this.swarm.buildBatch(
+      this.scene!,
+      this.mobDefs.map((d) => d.asset),
+      this.mobDefs.map((d) => d.groundSink),
+    );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     this.swarmHooks.promote = (snap) => this.spawner.promoteAgent(snap);
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);

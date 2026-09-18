@@ -129,11 +129,44 @@ if (m) {
   for (const k of typeKeys) if (!tableKeys.has(k)) errors.push(`bgm.ts: BgmKey 有 ${k}，表里没有`);
 }
 
+// 敌军名册：config/enemyRoster.ts 的 file 必须在 public 下存在、掉落 id 必须在 items.json
+//   （★ "注册了新敌军但名字对不上" 是最常见的静默失败：素材在、名册有、文件名差一个字
+//     → 加载时被 try/catch 吞掉，游戏里只是"这个兵种永远不出现"）
+const rosterSrc = read('config/enemyRoster.ts');
+const itemsSrc = JSON.parse(fs.readFileSync(path.join(SRC, 'config/items.json'), 'utf8'));
+const itemIds = new Set((itemsSrc.items ?? []).map((i) => i.id));
+
+const rosterFiles = [...rosterSrc.matchAll(/file:\s*'([^']+)'/g)].map((m) => m[1]);
+const rosterIds = [...rosterSrc.matchAll(/^\s{4}id:\s*'([^']+)'/gm)].map((m) => m[1]);
+if (rosterFiles.length === 0) {
+  warns.push('enemyRoster.ts 没解析出 file（正则可能失效，请人工确认）');
+}
+const enemyDir = path.join(process.cwd(), 'public/characters/enemies');
+for (const f of rosterFiles) {
+  if (!fs.existsSync(path.join(enemyDir, f))) {
+    errors.push(`enemyRoster: 素材缺失 public/characters/enemies/${f}`);
+  }
+}
+for (const d of rosterSrc.matchAll(/itemId:\s*'([^']+)'/g)) {
+  if (!itemIds.has(d[1])) errors.push(`enemyRoster: 掉落 id "${d[1]}" 不在 items.json`);
+}
+if (rosterIds.length !== new Set(rosterIds).size) {
+  errors.push('enemyRoster: 有重复的 id（mobIndex 回查会错位）');
+}
+// 反向：目录里的帧包有没有漏登记（只查 .ftx3.gz；Boss 等 .scene.zip 走独立通道）
+if (fs.existsSync(enemyDir) && rosterFiles.length) {
+  for (const f of fs.readdirSync(enemyDir)) {
+    if (!f.endsWith('.ftx3.gz')) continue;
+    if (!rosterFiles.includes(f)) warns.push(`enemyRoster: public 下有未登记帧包 ${f}（不会生成）`);
+  }
+}
+
 // ---------- 输出 ----------
 const total = files.reduce((n, p) => n + fs.readFileSync(p, 'utf8').split('\n').length, 0);
 console.log(`[arch-guard] ${files.length} 个 TS 文件 / ${total} 行`);
 console.log(`[arch-guard] phase 赋值 ${phaseAssign} 处 / setPhase ${setPhaseCalls} 处 / syncSceneBgm ${bgmCalls} 处`);
 console.log(`[arch-guard] 遗物 ${relicIds.size} 件 / 图标 ${iconIds.size} / 池内 ${poolIds.size}`);
+console.log(`[arch-guard] 敌军 ${rosterFiles.length} 种（名册真源 config/enemyRoster.ts）`);
 for (const w of warns) console.warn(`  warn  ${w}`);
 for (const e of errors) console.error(`  FAIL  ${e}`);
 if (errors.length) {

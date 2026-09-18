@@ -130,9 +130,10 @@ export class SwarmSystem {
   /** ★ P2：攻击令牌计数（每目标同时挥击数；索引含祖宗 2） */
   private tokenUsed = [0, 0, 0];
 
-  /** 构建批量渲染（模式层在 mobDefs 就绪后调用；素材顺序 = mobIndex） */
-  buildBatch(scene: import('three').Scene, assets: FrameAssetSource[]): void {
-    this.batch = new SwarmBatch(scene, assets);
+  /** 构建批量渲染（模式层在 mobDefs 就绪后调用；素材顺序 = mobIndex）
+   *  ★ sinks：每兵种接地补偿（世界单位；与 mobDefs 同序，可省 = 不补偿） */
+  buildBatch(scene: import('three').Scene, assets: FrameAssetSource[], sinks?: number[]): void {
+    this.batch = new SwarmBatch(scene, assets, sinks);
   }
 
   get count(): number {
