@@ -491,9 +491,8 @@ export class WorldSpawner {
       const def = this.deps.enemyDefs.get(e);
       const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
       if (!def || mobIndex < 0) {
-        // ★ 非战斗清理（无定义可回池）→ 不算击杀（2026-09-16 击杀统计）
-        e.killedByCombat = false;
-        e.dispose();
+        // ★ 非战斗清理（无定义可回池）→ 不算击杀（retire 原因收口，2026-09-18）
+        e.retire('recycled');
         this.deps.enemies.splice(i, 1);
         continue;
       }
@@ -513,9 +512,8 @@ export class WorldSpawner {
         altitude: def.airAltitude,
       });
       // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
-      //   置 killedByCombat=false 后再 dispose，避免误计（2026-09-16）
-      e.killedByCombat = false;
-      e.dispose();
+      //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
+      e.retire('demoted');
       this.deps.enemies.splice(i, 1);
     }
   }

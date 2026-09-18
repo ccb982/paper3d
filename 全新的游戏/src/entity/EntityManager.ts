@@ -197,9 +197,9 @@ export class EntityManager {
     return o;
   }
 
-  /** 销毁全部（模式切换/场景卸载） */
+  /** 销毁全部（模式切换/场景卸载；走统一退役入口 mode_cleanup） */
   clear(): void {
-    for (const base of this.bases.values()) base.dispose();
+    for (const base of this.bases.values()) base.retire('mode_cleanup');
     this.bases.clear();
     this.entities.clear();
     this.raster.clear();

@@ -36,6 +36,18 @@ import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/comba
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
 export type PhysicsMode = 'none' | 'kinematic' | 'read';
 
+/** ★ 生命周期状态（《实体架构.md》§9.3）：active → retiring → disposed */
+export type EntityLifeState = 'active' | 'retiring' | 'disposed';
+
+/** ★ 退役原因 = 业务语义的唯一来源（取代 killedByCombat/deathReported）：
+ *  - 'killed'       战斗致死：emit killed（已在伤害管线）/ 掉落 / 死亡动画 / 击杀统计
+ *  - 'demoted'      降格回代理池：先 drain 快照，再释放（不算击杀、不掉落）
+ *  - 'recycled'     远距/超时回收：不算击杀、不掉落
+ *  - 'despawned'    主动移除（导演收手 / 登船收友军）
+ *  - 'mode_cleanup' 模式切换 / 场景卸载
+ *  注意：只影响业务流程口径，不影响资源释放路径。 */
+export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup';
+
 /** ★ 命中点（世界坐标）——伤害管线透传给表现层（受击染料的注入位置）。
  *  2D 贴片只吃 x/y；3D 判定点带 z 也不影响。 */
 export interface EntityHitPoint {
@@ -249,11 +261,32 @@ export abstract class EntityBase {
   /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
   dead = false;
 
-  /** ★ 死亡性质（2026-09-16 击杀统计）：true = 真击杀（计入当天击杀数）；
-   *  false = 非战斗移除（远距回收/超时清理/池回收）→ **不算击杀**。
-   *  默认 true（走 onTakeDamage 致死的是真击杀）；远距清理路径置 false 后再 dispose。
-   *  注意：这只影响统计口径，不影响掉落/遗物等既有管线。 */
-  killedByCombat = true;
+  // ============ 生命周期（《实体架构.md》§9.3：状态机 + 退役原因） ============
+
+  /** 生命周期状态（active；retire 幂等；dispose 亦幂等） */
+  private _life: EntityLifeState = 'active';
+  /** 退役原因（仅 retiring/disposed 阶段有意义；业务口径都读它） */
+  retireReason: RetireReason | null = null;
+
+  get lifeState(): EntityLifeState {
+    return this._life;
+  }
+
+  /** ★ 统一退役入口（幂等）：标记状态 → 子类业务钩子 → 资源释放。
+   *  ★ 击杀 / 降格 / 回收 / 清场全部经此；业务事件只能从这里（onRetire）发出。 */
+  retire(reason: RetireReason): void {
+    if (this._life !== 'active') return; // ★ 幂等：任何路径重复调用都安全
+    this._life = 'retiring';
+    this.retireReason = reason;
+    this.onRetire(reason);
+    this.dispose();
+  }
+
+  /** ★ 退役业务钩子（子类覆写：击杀统计/槽位联动等；默认无）。
+   *  调用时机 = 资源释放之前；此时位置/数据仍可读。 */
+  protected onRetire(_reason: RetireReason): void {
+    // 默认无
+  }
 
   /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath）
    *  hitPoint = 命中点（世界坐标）——仅表现层消费，默认实现忽略 */
@@ -449,13 +482,16 @@ export abstract class EntityBase {
     // 默认无处理（角色碰撞由物理响应，子弹/伤害逻辑覆写）
   }
 
-  /** 死亡钩子（子类覆写：掉落/结算；默认销毁） */
+  /** 死亡钩子（子类覆写：掉落/死亡表现/来源记录；默认退役 = killed）
+   *  ★ 不调用 super 的子类 = "不死"（玩家死亡等待复活）；见 Player.onDeath */
   onDeath(_source: EntityBase | null): void {
-    this.dispose();
+    this.retire('killed');
   }
 
-  /** 销毁（动画/渲染/管线资源全释放） */
+  /** 销毁（动画/渲染/管线资源全释放；★ 幂等、不发业务事件——业务在 onRetire/onDeath） */
   dispose(): void {
+    if (this._life === 'disposed') return;
+    this._life = 'disposed';
     this.effects = null;
     this.statBase = null;
     this.anim?.dispose();

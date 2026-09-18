@@ -12,6 +12,7 @@ import type * as THREE from 'three';
 import type { CameraFrame } from '../../services/camera/CameraController';
 import { droneFollowOffset } from '../../services/fx/DroneFormation';
 import type { AllyBase, AllyWorldPort } from '../../entity/ally/AllyBase';
+import type { RetireReason } from '../../entity/EntityBase';
 
 /** 每帧上下文（WorldMode 喂入；玩家位置 + 相机帧） */
 export interface AllyUpdateContext {
@@ -77,9 +78,9 @@ export class AllySystem {
     }
   }
 
-  /** 全部销毁（登船/退出模式） */
-  disposeAll(): void {
-    for (const a of this.list) a.dispose();
+  /** 全部退役（登船 = despawned；退出模式 = mode_cleanup） */
+  disposeAll(reason: RetireReason = 'despawned'): void {
+    for (const a of this.list) a.retire(reason);
     this.list = [];
   }
 

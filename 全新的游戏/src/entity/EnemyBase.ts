@@ -13,7 +13,7 @@ import {
   type CharacterBaseOptions,
 } from './CharacterBase';
 import type { EntityManager } from './EntityManager';
-import type { EntityBase } from './EntityBase';
+import type { EntityBase, RetireReason } from './EntityBase';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -401,24 +401,25 @@ export class EnemyBase extends CharacterBase {
     }
   }
 
-  /** 销毁：同时从 AI 系统注销；★ 真击杀在此上报当天击杀统计 */
-  override dispose(): void {
-    // ★ 击杀统计（2026-09-16）：只有"真击杀"才计入；
-    //   远距回收/非战斗清理路径会先把 killedByCombat 置 false（见 WorldMode）
-    if (this.killedByCombat && !this.deathReported) {
-      this.deathReported = true;
+  /** ★ 退役业务钩子：真击杀在此上报当天击杀统计（retire('killed') 由 onDeath 触发）；
+   *  降格/回收/清场走其他 reason → 天然不计击杀（取代 killedByCombat/deathReported） */
+  protected override onRetire(reason: RetireReason): void {
+    if (reason === 'killed') {
       eventBus.emit('enemy_killed', { source: this.deathSource, x: this.entity.position.x, z: this.entity.position.z });
     }
+    super.onRetire(reason);
+  }
+
+  /** 销毁：从 AI 系统注销（幂等；任何 dispose 路径都必须注销） */
+  override dispose(): void {
     aiSystem.unregister(this);
     super.dispose();
   }
 
-  /** ★ 防重复上报（dispose 可能被多路径触发） */
-  private deathReported = false;
   /** ★ 致死来源（onDeath 记下，供统计区分玩家/友军/环境） */
   private deathSource: EntityBase | null = null;
 
-  /** ★ 致死钩子：记下来源供统计，再走默认销毁 */
+  /** ★ 致死钩子：记下来源供统计，再走统一退役（默认 killed） */
   override onDeath(source: EntityBase | null): void {
     this.deathSource = source;
     super.onDeath(source);

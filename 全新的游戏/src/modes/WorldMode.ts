@@ -1091,7 +1091,7 @@ export class WorldMode implements IGameMode {
         this.statsDirty = true;
       }
     });
-    // ★ 真击杀统计（2026-09-16）：实体侧由 EnemyBase.dispose 发出（killedByCombat=true）；
+    // ★ 真击杀统计（2026-09-16）：实体侧由 EnemyBase.onRetire('killed') 发出（退役原因收口）；
     //   代理侧在 swarmHooks.onAgentKilled 里直接记数（两条路径互斥，不会双计）。
     this.enemyKilledUnsub = eventBus.on('enemy_killed', () => {
       recordKill(this.session);
@@ -1681,7 +1681,7 @@ export class WorldMode implements IGameMode {
     this.shipDamagedUnsub?.();
     this.shipDamagedUnsub = undefined;
     allySystem.setWorldPort(null);
-    allySystem.disposeAll();
+    allySystem.disposeAll('mode_cleanup');
     for (const s of this.sentinelShots) s.proj.dispose();
     this.sentinelShots = [];
     this.sentinelTex?.dispose();
@@ -2622,7 +2622,7 @@ export class WorldMode implements IGameMode {
       if (d.slotIndex < 0) continue;
       if (wanted.get(d.slotIndex) === d.itemId) continue;
       allySystem.remove(d);
-      d.dispose();
+      d.retire('recycled');
     }
     // ② 补齐：有槽位但没有实体 → 生成
     for (const [slotIndex, itemId] of wanted) {
