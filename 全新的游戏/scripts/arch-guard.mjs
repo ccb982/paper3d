@@ -1,0 +1,125 @@
+// ============================================================
+// arch-guard —— 架构护栏（防止项目无序膨胀）
+// 用法：npm run guard
+// ============================================================
+// 检查三类问题：
+//   ① 文件膨胀：单文件超 LINE_LIMIT 行（超标文件在 KNOWN_BIG 里只警告、不失败）
+//   ② 不变量退化：WorldMode 的 phase 直接赋值必须只有 1 处（setPhase 内部），
+//      syncSceneBgm 调用点不能超过上限 —— 防止"每处手写副作用"卷土重来
+//   ③ 配置真源不同步：遗物三处登记 / BGM 表与手写 BgmKey 联合类型
+// 只用正则读文本，不 import TS（无需构建）。
+// ============================================================
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+const SRC = path.resolve('src');
+const LINE_LIMIT = 1200;
+/** 已知大文件（技术债务）：只警告，不算失败 —— 修好后从表里删掉 */
+const KNOWN_BIG = new Set([
+  'modes/WorldMode.ts',
+  'services/map/ChunkManager.ts',
+  'ui/base/GachaOverlay.ts',
+  'vendor/player/fluid/FluidSolver.ts',
+  'services/map/decor/MapEntityDecorBase.ts',
+  'services/map/TerrainMaterial.ts',
+]);
+
+const errors = [];
+const warns = [];
+
+function walk(dir, out = []) {
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) walk(p, out);
+    else if (e.name.endsWith('.ts')) out.push(p);
+  }
+  return out;
+}
+
+const files = walk(SRC);
+const read = (rel) => fs.readFileSync(path.join(SRC, rel), 'utf8');
+
+// ---------- ① 文件膨胀 ----------
+const big = files
+  .map((p) => ({ rel: path.relative(SRC, p).replace(/\\/g, '/'), n: fs.readFileSync(p, 'utf8').split('\n').length }))
+  .filter((f) => f.n > LINE_LIMIT)
+  .sort((a, b) => b.n - a.n);
+for (const f of big) {
+  const msg = `${f.rel} = ${f.n} 行（上限 ${LINE_LIMIT}）`;
+  if (KNOWN_BIG.has(f.rel)) warns.push(`已知债务 ${msg}`);
+  else errors.push(`文件膨胀 ${msg}`);
+}
+
+// ---------- ② 不变量退化 ----------
+const wm = read('modes/WorldMode.ts');
+const count = (s, re) => (s.match(re) || []).length;
+const phaseAssign = count(wm, /this\.phase = /g);
+const setPhaseCalls = count(wm, /this\.setPhase\(/g);
+const bgmCalls = count(wm, /syncSceneBgm\(\)/g);
+if (phaseAssign !== 1) {
+  errors.push(`WorldMode: this.phase 直接赋值 ${phaseAssign} 处（必须 = 1，即 setPhase 内部）`);
+}
+if (setPhaseCalls < 3) {
+  errors.push(`WorldMode: setPhase 调用仅 ${setPhaseCalls} 处 —— 有赋值点绕过收口了吗？`);
+}
+if (bgmCalls > 8) {
+  errors.push(`WorldMode: syncSceneBgm 调用 ${bgmCalls} 处（>8 = 又不收口了）`);
+}
+
+// ---------- ③ 配置真源同步 ----------
+// 遗物：relics.ts / ItemIconRegistry.ts / gachaPool.json 三处必须一致
+const relicSrc = read('config/relics.ts');
+const iconSrc = read('services/item/ItemIconRegistry.ts');
+const pool = JSON.parse(fs.readFileSync(path.join(SRC, 'config/gachaPool.json'), 'utf8'));
+
+const relicIds = new Set(
+  [...relicSrc.matchAll(/^\s{2}'?([a-z0-9_]+)'?:\s*\{/gm)].map((m) => m[1]),
+);
+// 图标两条来源：① FTX_ICON_SOURCES 表（`key: '/fx/...'`）② registerDynamicIcon('id', ...)
+const ftxBlock = (iconSrc.match(/FTX_ICON_SOURCES[^=]*=\s*\{([\s\S]*?)\n\};/) || [])[1] || '';
+const iconIds = new Set([
+  ...[...ftxBlock.matchAll(/^\s{2}([a-zA-Z0-9_]+):/gm)].map((m) => m[1]),
+  ...[...files.flatMap((p) => [...fs.readFileSync(p, 'utf8').matchAll(/registerDynamicIcon\(\s*'([^']+)'/g)].map((m) => m[1]))],
+]);
+// ★ 抽卡池分档存放（outOfRunItems / boss 档等，可能嵌套），递归收全部 id
+const poolIds = new Set();
+(function collect(node) {
+  if (Array.isArray(node)) return node.forEach(collect);
+  if (node && typeof node === 'object') {
+    if (typeof node.id === 'string') poolIds.add(node.id);
+    for (const v of Object.values(node)) collect(v);
+  }
+})(pool);
+
+if (relicIds.size === 0) {
+  warns.push('relics.ts 没解析出条目（正则可能失效，请人工确认）');
+} else {
+  for (const id of relicIds) {
+    if (!iconIds.has(id)) errors.push(`遗物 ${id}: ItemIconRegistry.FTX_ICON_SOURCES 未登记（图标会空白）`);
+    if (!poolIds.has(id)) warns.push(`遗物 ${id}: gachaPool.outOfRunItems 未登记（抽不到）`);
+  }
+}
+
+// BGM：表键与手写 BgmKey 联合类型必须一致（漏改 = TS2353，已踩两次）
+const bgmSrc = read('config/bgm.ts');
+const tableKeys = new Set([...bgmSrc.matchAll(/^\s{2}'?([a-zA-Z]+)'?:\s*\[?/gm)].map((m) => m[1]));
+const m = bgmSrc.match(/type BgmKey\s*=([^;]+);/);
+if (m) {
+  const typeKeys = new Set([...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]));
+  for (const k of tableKeys) if (!typeKeys.has(k)) errors.push(`bgm.ts: 表有 ${k}，BgmKey 联合类型漏了`);
+  for (const k of typeKeys) if (!tableKeys.has(k)) errors.push(`bgm.ts: BgmKey 有 ${k}，表里没有`);
+}
+
+// ---------- 输出 ----------
+const total = files.reduce((n, p) => n + fs.readFileSync(p, 'utf8').split('\n').length, 0);
+console.log(`[arch-guard] ${files.length} 个 TS 文件 / ${total} 行`);
+console.log(`[arch-guard] phase 赋值 ${phaseAssign} 处 / setPhase ${setPhaseCalls} 处 / syncSceneBgm ${bgmCalls} 处`);
+console.log(`[arch-guard] 遗物 ${relicIds.size} 件 / 图标 ${iconIds.size} / 池内 ${poolIds.size}`);
+for (const w of warns) console.warn(`  warn  ${w}`);
+for (const e of errors) console.error(`  FAIL  ${e}`);
+if (errors.length) {
+  console.error(`[arch-guard] ${errors.length} 项不通过`);
+  process.exit(1);
+}
+console.log(`[arch-guard] OK（${warns.length} 项已知债务警告）`);

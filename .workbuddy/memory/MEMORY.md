@@ -172,6 +172,46 @@ effects 内置 type 小抄：
 2. `replaceWith` 后字段引用失效 → 外层用**固定尺寸槽位 div**，动画只驱动槽位。
 3. `let x` + `Promise<typeof x>` → TS 窄化成初值类型 → **显式声明 interface**。
 
+## ★ 架构体检基线（2026-09-18，全仓 240 文件 / 66,643 行）
+
+**整体健康**：分层清楚（services 32.9k / ui 9.6k / vendor 7.1k / systems 5.0k / modes 4.4k / entity 3.8k），
+**中位数 153 行**（粒度好），平均 277。做得好的扩展点：小游戏（丢一个文件零改动）、
+`registerTile`、`import.meta.glob` 自注册。
+
+**头部过重**：4 个 ≥1500 行文件 = 10,873 行（占 16%）
+
+| 文件 | 行数 | 诊断 |
+|---|---|---|
+| `modes/WorldMode.ts` | **4129** | 上帝对象：89 import / 85 字段 / 91 方法 |
+| `services/map/ChunkManager.ts` | 3480 | 地形流式（加载/装配/LOD/水面/装饰可能混一起） |
+| `ui/base/GachaOverlay.ts` | 1760 | 单 UI 文件过大；`HSL_VERT/HSL_FRAG` 与 CraftingOverlay 重复 |
+| `vendor/player/fluid/FluidSolver.ts` | 1504 | 特效库，相对独立 |
+
+**WorldMode 可切出的簇**（"其他"43 方法里）：
+刷怪/波次 15 个（`scanAndSpawnWaves`/`spawnWaveNear`/`promoteAgent`/`demoteFarEnemies`/`quotaAllows`…）
+→ **已有归属**：`systems/swarm/Director.ts` + `EnemyScaling.ts`，只是被塞在模式层里；
+采集挖矿 4 / 瞄准 4 / 玩家状态 4 / 相机落地 5 / UI 浮层 4。
+
+### ★★ 真正让项目膨胀的机制（不是行数，是"人肉同步"）
+
+1. **不变量靠注释 + 记得改 N 处**：`phase` 赋值 5 处，每个赋值点要手动跟
+   `syncSceneBgm`（**10 处调用**）/ `setClockPaused`（5）/ `setFlightMode`（5）/ 环境 / 水声。
+   今天加"昼夜冻结"就是又补 3 处 → 每加一条不变量 = 再 ×N。
+2. **配置真源不单点**：加遗物要改 3 处（relics / ItemIconRegistry / gachaPool）、
+   加 BGM 键要改 2 处（表 + 手写 `BgmKey` 联合类型，漏了 = TS2353，已踩两次）。
+3. **WorldMode 是默认垃圾桶**：新功能往里塞方法最快，于是越来越大。
+
+治理状态（2026-09-18）：
+- ✅ **P0-a `setPhase()` 收口已完成**：`WorldMode.setPhase(next)` 是 phase 变更的唯一入口，
+  环境 / 飞行模式 / 昼夜冻结 / 水面 / 粗块 / 涉水轨 / BGM 全在里面。
+  ★ **改阶段不要直接 `this.phase =`，必须走 setPhase** —— 否则副作用不触发。
+  现状：phase 直接赋值 1 处、setPhase 5 处、syncSceneBgm 6 处（护栏在盯着）。
+- ✅ P2 已完成：删 `PRESERVER_AI` / `drainInteractions`（原文备份在
+  `.workbuddy/deadcode/2026-09-18.txt`，**项目没有 git**）；新增 `npm run guard`
+  （`scripts/arch-guard.mjs`：行数上限 + 不变量退化 + 配置三处同步）。
+- ⏸ P0-b（BgmKey 改 keyof 派生）与 P1（WorldMode 拆刷怪波次 → systems/swarm）**未做**。
+- `registerTile` 有 16 次引用，**已接线**，不是死代码（旧记录过时）。
+
 ## ★ 从 Mixkit 找/下音效的直链方法（2026-09-18 验证可用）
 
 - 分类页：`https://mixkit.co/free-sound-effects/<tag>/`（water / sea / rivers / underwater …）。

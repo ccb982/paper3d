@@ -284,6 +284,12 @@ export class WorldMode implements IGameMode {
    *    explore（下机到野外）放的是**环境音**而不是音乐（低音量循环底噪，见 syncSceneBgm）。
    *    阶段每次赋值都必须跟一次 syncSceneBgm()（漏一处就有一段时间声音不对）。 */
   private phase: 'sail' | 'explore' | 'interior' = 'sail';
+  /**
+   * ★ 当前环境（天空/云开关）：与 phase 绑定，由 `setPhase` 唯一维护。
+   *   记录它是为了**幂等**——`renderManager.setEnvironment('world')` 会重置云场，
+   *   不能每次 phase 赋值都无脑调一遍。
+   */
+  private envKind: 'ship' | 'world' = 'world';
   /** ★ 降落进近（按 F 后，2026-09-12 用户定调）：保留前进速度 + 低操控（25%）+
    *  只自动固定高度（不动角度/方向）；期间地形已切细化实时加载。
    *  approach → 触地 → settle（镜头仍跟随舰船，完整看到接地停稳）→ finishDock。 */
@@ -678,8 +684,10 @@ export class WorldMode implements IGameMode {
     this.chunks.setCoarseMode(true);
     // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
     this.chunks.setWaterVisible(false);
-    renderManager.setFlightMode(true);
-    renderManager.setClockPaused(false); // ★ 每次进世界复位昼夜时钟（防上一局残留冻结）
+    // ★ 环境基准复位（防上一局在舰内退出 → skyDome 还藏着）；
+    //   phase 相关的其余副作用由下面的 setPhase('sail') 统一处理。
+    this.envKind = 'world';
+    renderManager.setEnvironment('world');
 
     // ★ 昼夜循环重置：每次出击从晚上出发（后续可按 Session.day 变化出发时刻）
     renderManager.resetDay();
@@ -706,8 +714,7 @@ export class WorldMode implements IGameMode {
 
     // ★ 舰船：航行阶段可操控（停靠后转为静止受击目标，敌人索敌最优先）
     this.ship = new ShipEntity(this.entities, this.scene, ctx.session, spawn.x, spawn.z);
-    this.phase = 'sail';
-    this.syncSceneBgm();          // ★ 出图（航行段）= 在外面 → 静音
+    this.setPhase('sail');        // ★ 含 BGM / 环境 / 飞行模式 / 昼夜解冻 / 粗块 / 水面
     this.shipDestroyed = false;
     this.flightCamInit = false;
     this.landing = null;
@@ -3367,8 +3374,7 @@ export class WorldMode implements IGameMode {
     this.landingTouchdown = false;
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
-    this.phase = 'explore';
-    this.syncSceneBgm();          // ★ 落地停稳 = 人下机到地面 → 静音
+    this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -3681,6 +3687,41 @@ export class WorldMode implements IGameMode {
   }
 
   /**
+   * ★★ 阶段切换**唯一入口**（2026-09-18 收口）：所有与 phase 绑定的副作用都在这里，
+   *   调用方只管"要切到哪个阶段"。
+   *
+   *   为什么必须有这个：在此之前 5 个赋值点各写一遍（BGM / 环境 / 飞行模式 /
+   *   昼夜冻结 / 水面 / 粗块 / 涉水轨），**每新增一条不变量就要补 5 处**，
+   *   漏一处就是一段时间状态不对（syncSceneBgm 曾因此散落 10 处调用）。
+   *
+   *   不变量一览（phase → 副作用）：
+   *   | phase    | 环境   | flightMode | 昼夜冻结 | 水面 | 粗块 | 涉水轨 |
+   *   |----------|--------|------------|----------|------|------|--------|
+   *   | sail     | world  | true       | false    | 隐藏 | true | 停     |
+   *   | explore  | world  | false      | false    | 显示 | false| 由 update 裁决 |
+   *   | interior | ship   | true       | **true** | 隐藏 | 保持 | **停** |
+   *
+   *   ★ 与 `shipDestroyed` 的冻结互不冲突：那条不是 phase 变化，单独维护。
+   */
+  private setPhase(next: 'sail' | 'explore' | 'interior'): void {
+    this.phase = next;
+    const env: 'ship' | 'world' = next === 'interior' ? 'ship' : 'world';
+    if (env !== this.envKind) {
+      this.envKind = env;
+      renderManager.setEnvironment(env);   // 内部会重置云场 → 只在真的切换时调
+    }
+    renderManager.setFlightMode(next !== 'explore');
+    renderManager.setClockPaused(next === 'interior');
+    if (next !== 'interior') {
+      this.chunks.setWaterVisible(next === 'explore');
+      this.chunks.setCoarseMode(next === 'sail');
+    }
+    // ★ 舰内时 update 直接 return，涉水轨不会被裁决 → 必须在这里显式停
+    if (next === 'interior') this.stopWadeLoop();
+    this.syncSceneBgm();
+  }
+
+  /**
    * ★ 场景音：只在「船内」放音乐，野外放低音量环境音（用户定调 2026-09-17）。
    *   interior（舰内舱）→ 舰船曲《生命流》
    *   explore（下机到野外）→ 环境音循环底噪（微风；不是音乐，不违背"出去不放 BGM"）
@@ -3689,8 +3730,10 @@ export class WorldMode implements IGameMode {
    */
   private syncSceneBgm(): void {
     // ★ 引擎循环音（独立通道，与 BGM 互不打断）：只有航行段响，落地/进舱淡出
+    //   ★ 只停引擎轨——无参 stopLoopSfx() 会连涉水轨一起停（涉水轨在 explore 段由
+    //     updateWadeLoop 每帧重起，被误停会出现一瞬断音）
     if (this.phase === 'sail') playLoopSfx('shipEngine');
-    else stopLoopSfx();
+    else stopLoopSfx('shipEngine');
     // ① 航行段永远静音（用户定调：在外面飞就不放音乐），优先级最高
     if (this.phase === 'sail') { stopBgm(); return; }
     // ② 敌人大举入侵（近舰敌军持续超标）→ 战斗曲（WebAdapter 换曲 = 旧轨淡出 + 新轨淡入）
@@ -3734,8 +3777,8 @@ export class WorldMode implements IGameMode {
       return false;
     }
     this.shipInterior = interior;
-    this.phase = 'interior';
-    this.syncSceneBgm();          // ★ 进舱 = 船内 → 舰船 BGM
+    // ★ 进舱：船内环境 / 舰船 BGM / 昼夜冻结 / 关云月亮离屏 / 停涉水轨 —— 全在 setPhase 里
+    this.setPhase('interior');
     // ★ 舰内屏幕叠加（暗角）；随舰内房间一起创建 / 销毁
     this.interiorFx = new RoomPostFx();
     this.player.controlLocked = true;
@@ -3747,13 +3790,8 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.closePanel('map-panel');
     this.worldUIManager?.setAssaultBanner('舰内 · 驾驶舱', false);
     this.worldUIManager?.clearVisitorNotice(); // 已回舰：到访提示谢幕（人在房间里了）
-    // ★ 与基地模式同款：舰内关闭天空/云/月亮/水的离屏 pass
-    //   （否则离屏 RT 与主渲染形成 feedback loop：GL_INVALID_OPERATION）
-    renderManager.setEnvironment('ship');
-    renderManager.setFlightMode(true);
-    renderManager.setClockPaused(true);   // ★ 舰内冻结昼夜：世界已停，出舱时天色不该变
-    this.stopWadeLoop();                  // ★ 进舱时 update 直接 return → 必须手动停水声
-    this.chunks.setWaterVisible(false);
+    // （环境切换 / 飞行模式 / 昼夜冻结 / 涉水轨 / 水面 已由 setPhase('interior') 统一处理：
+    //   舰内要关天空/云/月亮/水的离屏 pass，否则离屏 RT 与主渲染形成 feedback loop）
     // ★ 舰内操作全部事件触发式（2026-09-16 用户定调：加工台/下船/起飞/返回罗德岛号
     //   都做成走到指定区域按键触发，不再有按钮条）。
     //   ★ 按键：舱内**只用 F**（用户定调 2026-09-16）——E 是"进舱"的键，
@@ -3870,9 +3908,8 @@ export class WorldMode implements IGameMode {
     this.interiorFx = null;
     this.interiorScene = null; // 场景随房间一并废弃（下次重建）
     this.worldUIManager?.setAssaultBanner(null);
-    // 回地面（恢复露天环境 + 玩家可见 + 相机瞬移）
-    this.phase = 'explore';
-    this.syncSceneBgm();          // ★ 出舱回露天 → 静音
+    // 回地面：露天环境 / 静音 / 昼夜解冻 / 水面恢复 / 细化 LOD —— 全在 setPhase 里
+    this.setPhase('explore');
     // ★ 舰内换装落地：出舱时与世界侧对齐（友军增删换 + 角色贴片立即重挂）
     this.syncSlotAllies();
     this.combatItems?.syncLoadout();
@@ -3881,10 +3918,6 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setCombatHudVisible(true);
     this.worldUIManager?.setMinimapVisible(true); // ★ 修复：舰内隐藏的小地图出舱恢复（否则一去不回）
     this.worldUIManager?.setDockButtonVisible(false);
-    renderManager.setEnvironment('world');
-    renderManager.setFlightMode(false);
-    renderManager.setClockPaused(false);  // ★ 出舱解冻昼夜
-    this.chunks.setWaterVisible(true);
     const p = this.player.position;
     this.cameraCtrl?.snapTo(p.x, p.y, p.z);
   }
@@ -3901,11 +3934,7 @@ export class WorldMode implements IGameMode {
     this.drones = [];
     this.takeoff = true;
     this.ship.beginTakeoff();
-    this.phase = 'sail';
-    this.syncSceneBgm();          // ★ 登船起飞 = 出到露天 → 静音
-    this.chunks.setCoarseMode(true);  // 航行极简：粗块 LOD
-    this.chunks.setWaterVisible(false);
-    renderManager.setFlightMode(true);
+    this.setPhase('sail');        // ★ 登船起飞：静音 + 粗块 LOD + 藏水面 + 飞行模式（统一收口）
     this.player.controlLocked = true;
     this.worldUIManager.setCombatHudVisible(false);
     this.worldUIManager.setDockButtonVisible(true);

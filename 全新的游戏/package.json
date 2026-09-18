@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "guard": "node scripts/arch-guard.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d": "^0.14.0",

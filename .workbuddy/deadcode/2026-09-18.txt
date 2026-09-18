@@ -1,0 +1,65 @@
+# 死代码删除备份（2026-09-18 架构体检）
+
+项目**没有 git**，删掉的代码原文存在这里以便找回。
+两处均为全仓零引用（除自身定义）。
+
+---
+
+## 1. src/systems/ai/aiconfig.ts —— `PRESERVER_AI`（33-67 行）
+
+零引用原因：敌人 AI 已改为 `mobAI` 数据驱动模板（`MobAIParams`），
+而 `BOSS_AI` 仍在用（普瑞赛斯·四维空间决战），所以只删这个基准配置。
+
+```ts
+/** ★ 普瑞赛斯（基准敌人）：巡逻 → 索敌 → 追击 → 近战 → 脱离回巡逻游走 */
+export const PRESERVER_AI: AIConfig = {
+  states: {
+    patrol: {
+      // speed 游走速度 / turnRate 转向幅度 / turnInterval 转向间隔
+      // targetBias 游走略微偏向目标的强度(0=纯随机,0.04≈轻微) / biasCamp 偏谁('player'/'ally'/''=不偏)
+      behaviors: [{ name: 'wander', params: { speed: 2, turnRate: 0.5, turnInterval: 0.4, targetBias: 0.04, biasCamp: 'player' } }],
+      transitions: [
+        // radius 索敌半径 / camp 索敌阵营('player'/'ally'/'player,ally')
+        { cond: 'seePlayer', params: { radius: 8, camp: 'player' }, to: 'chase' },
+      ],
+      // ★ 最短停留时间（秒）：进入该状态后至少停留这么久才允许转移（防状态抖动）
+      minStay: 3,
+    },
+    chase: {
+      behaviors: [{ name: 'moveToTarget', params: { speed: 2.5 } }],
+      transitions: [
+        // ★ 追人途中祖宗在嘲讽半径内 → 强制换仇（挂在最前，优先于攻击判定）
+        { cond: 'retarget', to: 'chase' },
+        { cond: 'inRange', params: { radius: 1.5 }, to: 'attack' },
+        { cond: 'loseTarget', params: { radius: 12 }, to: 'patrol' },
+      ],
+    },
+    attack: {
+      // ★ 一次性近战挥击：播完（duration 秒）→ attackFinished 自动退出
+      behaviors: [{ name: 'meleeSwing', params: { duration: 0.6 } }],
+      transitions: [
+        { cond: 'retarget', to: 'chase' },
+        { cond: 'attackFinished', to: 'patrol' },
+        { cond: 'outOfRange', params: { radius: 2 }, to: 'patrol' },
+      ],
+    },
+  },
+  initial: 'patrol',
+};
+```
+
+---
+
+## 2. src/platform/input/InputActions.ts —— `drainInteractions`（68-73 行）
+
+零引用原因：交互队列 `interactions` 由 `DesktopBinding` 自己 push（112/124）
+并自己每帧清空（134），从没有消费者。队列本身保留（将来接线），只删这个没人调的函数。
+
+```ts
+/** 消费并清空交互事件队列 */
+export function drainInteractions(input: InputActions): InputInteraction[] {
+  const list = input.interactions;
+  input.interactions = [];
+  return list;
+}
+```

@@ -65,12 +65,9 @@ export function createInputActions(): InputActions {
   };
 }
 
-/** 消费并清空交互事件队列 */
-export function drainInteractions(input: InputActions): InputInteraction[] {
-  const list = input.interactions;
-  input.interactions = [];
-  return list;
-}
+// （2026-09-18 体检删除：`drainInteractions` 全仓零调用 —— 交互队列由
+//   DesktopBinding 自己 push 并自己每帧清空，从没有消费者。队列字段保留以备接线，
+//   原文备份在 `.workbuddy/deadcode/2026-09-18.txt`。）
 
 /** 归一化移动轴向（斜向长度 = 1，避免斜走更快） */
 export function normalizeAxis(axis: { x: number; y: number }): { x: number; y: number } {
