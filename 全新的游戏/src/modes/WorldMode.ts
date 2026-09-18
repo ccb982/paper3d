@@ -30,7 +30,9 @@ import { resolveDockSpawn } from '../services/ship/DockResolver';
 import { applyShipDamage, damageShip, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
-import { DroneEntity } from '../entity/DroneEntity';
+import { AllyBase } from '../entity/ally/AllyBase';
+import { DroneAlly } from '../entity/ally/DroneAlly';
+import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
 import { RoomPostFx } from '../services/render/RoomPostFx';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
@@ -477,8 +479,8 @@ export class WorldMode implements IGameMode {
   /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
   private enemyKilledUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
-  /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁） */
-  private drones: DroneEntity[] = [];
+  /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）★ 2026-09-18 起为 AllyBase 三种骨架 */
+  private drones: AllyBase[] = [];
   /** ★ 无人机素材（特效包/纯纹理包；enter 存入上下文引用） */
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材，美术到位后只换路径） */
@@ -1067,7 +1069,7 @@ export class WorldMode implements IGameMode {
         this.playerRespawnShown = -1;
         return; // 玩家不算杂兵、不掉落
       }
-      const di = this.drones.indexOf(payload.target as DroneEntity);
+      const di = this.drones.indexOf(payload.target as AllyBase);
       if (di !== -1) {
         const drone = this.drones[di];
         this.drones.splice(di, 1);
@@ -2176,7 +2178,7 @@ export class WorldMode implements IGameMode {
   private spawnDroneNearPlayer(slotIndex = -1, itemId = DRONE_ITEM): void {
     if (!this.scene || !this.player || !this.droneAsset) return;
     const p = this.player.position;
-    const drone = new DroneEntity(this.entities, this.scene, this.droneAsset, {
+    const drone = new DroneAlly(this.entities, this.scene, this.droneAsset, {
       x: p.x + (Math.random() - 0.5) * 2, y: p.y + 2.0, z: p.z + (Math.random() - 0.5) * 2,
       scale: 1.2,
     });
@@ -2195,10 +2197,9 @@ export class WorldMode implements IGameMode {
     if (!asset) return;
     // ★ 与主角同尺寸（主角 applyRenderScale(2.0)）；中心锚点 → 半身高贴身摆放（可调）
     const py = this.raster.surfaceHeightAt(x, z) + 0.5;
-    const s = new DroneEntity(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
+    const s = new SentinelAlly(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
     s.slotIndex = -1;
     s.itemId = 'zuzong';
-    s.stationary = true;
     s.stationaryBaseY = py;
     s.rangedAttack = (t) => this.fireSentinelShot(s, t);
     s.mineAttack = (d) => this.sentinelMine(d); // ★ 无敌人时自动挖矿
@@ -2363,8 +2364,8 @@ export class WorldMode implements IGameMode {
     const ep = enemy.position;
     const out = this.candOut;
     out.length = 0;
-    let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
-    let ally: DroneEntity | null = null, allyD2 = Infinity;
+    let sentinel: AllyBase | null = null, sentinelD2 = Infinity;
+    let ally: AllyBase | null = null, allyD2 = Infinity;
     for (const d of this.drones) {
       if (d.hp <= 0) continue;
       const dx = d.position.x - ep.x, dz = d.position.z - ep.z;
@@ -3511,7 +3512,7 @@ export class WorldMode implements IGameMode {
 
   /** ★ 祖宗远程射击：友军弹道（复用子弹管线；数值集中此处便于调平衡） */
   /** ★ 祖宗激光命中结算（红色激光是瞬时 hitscan；光束特效由祖宗实体播放） */
-  private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
+  private fireSentinelShot(from: AllyBase, target: EntityBase): void {
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
     applyDamage(dmg, from, target, { hitPoint: from.position }); // 事件统一在 applyDamage
     // ★ 眩晕（2026-09-14 用户定调）：激光命中 → 眩晕 1s；眩晕结束后 2s 免疫（防锁死）
@@ -3534,7 +3535,7 @@ export class WorldMode implements IGameMode {
 
   /** ★ 祖宗自动挖矿（无敌人时）：随机在 铁（耗尽原石晶体）/ 水 / 地面 三类中找点，
    *  播激光 → 复用命中解析层掉落（只出资源，不挖坑/不改地形） */
-  private sentinelMine(from: DroneEntity): void {
+  private sentinelMine(from: AllyBase): void {
     if (!this.itemManager || !this.worldUIManager) return;
     const p = from.position;
     const pt = this.pickMinePoint(p.x, p.z);

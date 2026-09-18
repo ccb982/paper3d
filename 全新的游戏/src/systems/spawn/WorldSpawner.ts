@@ -26,7 +26,7 @@ import type { EntityBase } from '../../entity/EntityBase';
 import { Player } from '../../entity/Player';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
-import { DroneEntity } from '../../entity/DroneEntity';
+import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
 import { applyDamage } from '../../services/combat/DamagePipeline';
@@ -122,7 +122,7 @@ export interface SpawnDeps {
   session: GameSession | null;
   scene: THREE.Scene | null;
   camera: THREE.PerspectiveCamera | null;
-  drones: DroneEntity[];
+  drones: AllyBase[];
   worldUIManager: WorldUIManager;
   testChunk: boolean;
   shipDestroyed: boolean;
@@ -587,7 +587,7 @@ export class WorldSpawner {
   agentMelee(targetKind: number, dmg: number, x: number, z: number): void {
     // ★ 祖宗：代理思考侧已在贴身距离判定 → 取近旁存活祖宗（取最近者兜底 3m）
     if (targetKind === AGENT_TARGET_SENTINEL) {
-      let best: DroneEntity | null = null;
+      let best: AllyBase | null = null;
       let bestD2 = 3 * 3;
       for (const d of this.deps.drones) {
         if (!d.stationary || d.hp <= 0) continue;
@@ -614,7 +614,7 @@ export class WorldSpawner {
 
   /** ★ 祖宗嘲讽查询（蜂群代理）：(x,z) 嘲讽圈内最近存活祖宗；对象复用零分配 */
   nearestTauntSentinel(x: number, z: number): { x: number; z: number } | null {
-    let best: DroneEntity | null = null;
+    let best: AllyBase | null = null;
     let bestD2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
     for (const d of this.deps.drones) {
       if (!d.stationary || d.hp <= 0) continue;
