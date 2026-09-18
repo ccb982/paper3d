@@ -1327,6 +1327,8 @@ export class WorldMode implements IGameMode {
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);
+      // ---- ★ 当日配额耗尽 → 一次性提示（否则"野外一只敌人都没有"看着就是 bug） ----
+      this.spawner.notifyQuotaExhausted(dt);
     }
     // ---- ★ 舰船遇围警示（无条件下方执行）：只要舰船活着就一直盯着，
     //   跟"大规模进攻"节奏无关（详见 updateShipGroupWarning）----

@@ -93,6 +93,9 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 访客到访提示（金色横幅；独立于敌袭横幅，到时自动隐藏） */
   private visitorNoticeEl: HTMLDivElement | null = null;
   private visitorNoticeTimer = 0;
+  /** ★ 通用临时通知（自动淡出；与敌袭横幅 / 访客提示三通道互不干扰） */
+  private noticeEl: HTMLDivElement | null = null;
+  private noticeTimer = 0;
   /** ★ 敌军攻势档位（顶部小字；EnemyScaling） */
   private enemyScaleEl: HTMLDivElement | null = null;
   /** ★ 舰船遇围警示横幅（顶部红色播报；WorldMode 统计近舰敌军数驱动） */
@@ -181,6 +184,15 @@ export class WorldUIManager extends BaseInteractionUI {
       if (el) {
         if (this.visitorNoticeTimer <= 0) el.style.display = 'none';
         else if (this.visitorNoticeTimer < 1) el.style.opacity = String(Math.max(0, this.visitorNoticeTimer));
+      }
+    }
+    // ★ 通用临时通知：到时淡出（最后一秒渐隐）
+    if (this.noticeTimer > 0) {
+      this.noticeTimer -= dt;
+      const el = this.noticeEl;
+      if (el) {
+        if (this.noticeTimer <= 0) el.style.display = 'none';
+        else if (this.noticeTimer < 1) el.style.opacity = String(Math.max(0, this.noticeTimer));
       }
     }
     // ★ 世界地图面板（打开时才重绘）
@@ -399,6 +411,31 @@ export class WorldUIManager extends BaseInteractionUI {
     this.visitorNoticeEl.style.display = 'block';
     this.visitorNoticeEl.style.opacity = '1';
     this.visitorNoticeTimer = seconds;
+  }
+
+  /** ★ 通用临时通知（青色横幅，停 seconds 秒后 1s 渐隐）
+   *  用途：非战斗、非访客的状态播报，如「今日敌军已肃清」。
+   *  通道独立于 setAssaultBanner（敌袭）与 showVisitorNotice（访客），三者互不覆盖。 */
+  showNotice(text: string, seconds = 8): void {
+    if (!this.noticeEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'top:124px', 'left:50%', 'transform:translateX(-50%)',
+        'z-index:65', 'pointer-events:none', 'text-align:center', 'white-space:nowrap',
+        'font-size:18px', 'font-weight:bold', 'letter-spacing:2px',
+        'padding:8px 22px', 'border-radius:6px',
+        'background:rgba(12,20,30,0.74)', 'color:#bfe0ff',
+        'border:1px solid rgba(150,200,255,0.40)',
+        'text-shadow:0 2px 6px #000, 0 0 16px rgba(140,200,255,0.75)',
+        'transition:opacity 0.4s',
+      ].join(';');
+      document.body.appendChild(el);
+      this.noticeEl = el;
+    }
+    this.noticeEl.textContent = text;
+    this.noticeEl.style.display = 'block';
+    this.noticeEl.style.opacity = '1';
+    this.noticeTimer = seconds;
   }
 
   /** 隐藏访客到访提示（进舰/谈完/访客离开时调用） */
@@ -864,6 +901,9 @@ export class WorldUIManager extends BaseInteractionUI {
     this.visitorNoticeEl?.remove();
     this.visitorNoticeEl = null;
     this.visitorNoticeTimer = 0;
+    this.noticeEl?.remove();
+    this.noticeEl = null;
+    this.noticeTimer = 0;
     this.enemyScaleEl?.remove();
     this.enemyScaleEl = null;
     this.boardPromptEl?.remove();

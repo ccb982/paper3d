@@ -155,6 +155,12 @@ export class WorldSpawner {
   private spawnedChunks = new Set<number>();
   /** 祖宗嘲讽查询的复用对象（零分配） */
   private _tauntScratch = { x: 0, z: 0 };
+  /** ★ 当日配额未初始化的 warn 只打一次（否则每帧刷屏） */
+  private quotaInitWarned = false;
+  /** ★ 「今日敌军已肃清」是否已播报（每局一次；reset 清） */
+  private quotaExhaustedShown = false;
+  /** 肃清判定的延迟计时（进图后 1.5s 再判，避开落地动画） */
+  private quotaExhaustedAccum = 0;
 
   constructor(private deps: SpawnDeps) {}
 
@@ -164,6 +170,41 @@ export class WorldSpawner {
     this.cullAccum = 0;
     this.groupWarnAccum = 0;
     this.groupWarnShown = false;
+    this.quotaInitWarned = false;
+    this.quotaExhaustedShown = false;
+    this.quotaExhaustedAccum = 0;
+  }
+
+  /** ★ 当天配额是否已耗尽（quota 已初始化且 spawned 顶满） */
+  private quotaExhausted(): boolean {
+    const s = this.deps.session;
+    if (!s) return false;
+    const e = readDayProgress(s);
+    return e.quota > 0 && remainingQuota(s) <= 0;
+  }
+
+  /**
+   * ★ 「今日敌军已肃清」提示（WorldMode.update 每帧调，explore 段）。
+   *
+   * 为什么需要：当天 quota 被 spawned 顶满后，刷怪闸门关闭 → 玩家在野外
+   * 一只敌人都遇不到，**看起来跟"敌人不生成"的 bug 完全一样**（2026-09-18
+   * 就在这上面白查了一轮）。这里做一次性播报 + 常驻标签，让状态可见。
+   *
+   * 一次性：每局只播一次（reset 清）；进图后延迟 1.5s 再判（避开落地动画）。
+   */
+  notifyQuotaExhausted(dt: number): void {
+    if (this.quotaExhaustedShown) return;
+    this.quotaExhaustedAccum += dt;
+    if (this.quotaExhaustedAccum < 1.5) return;
+    if (!this.quotaExhausted()) return;
+    this.quotaExhaustedShown = true;
+    // ① 常驻：顶部档位标签改口径（玩家随时能看到"为什么没敌人"）
+    this.deps.worldUIManager.setThreatLabel('敌军攻势：已肃清', '#9fe6b0');
+    // ② 一次性横幅
+    this.deps.worldUIManager.showNotice('今日敌军已肃清 · 可返回基地', 9);
+    // ③ 头顶浮空字（就在玩家眼前，不会看漏）
+    const p = this.deps.player;
+    if (p) this.deps.showFloatingAt(p.position.x, p.position.y + 2.8, p.position.z, '今日敌军已肃清', 'heal');
   }
 
   /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */
@@ -179,6 +220,9 @@ export class WorldSpawner {
 
   scanAndSpawnWaves(px: number, pz: number, budget: number): void {
     if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
+    // ★ 配额耗尽就整段跳过（省掉每帧 24 个 chunk 的扫描；语义等价 ——
+    //   耗尽时 spawnOne 必然全被 quotaAllows 拦下）
+    if (!this.quotaAllows()) return;
     if (this.deps.chunks.isBoss4D) return; // 四维空间（最终 Boss 战地图）不刷杂兵
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
@@ -689,7 +733,10 @@ export class WorldSpawner {
     //   换日也救不回来（resetDayQuota 也只是再清成 0）。这是异常态，不该由闸门背锅。
     //   正常路径（quota 已按威胁档位预计算）不受影响。
     if (readDayProgress(s).quota <= 0) {
-      console.warn('[spawn] 当日配额未初始化（quota<=0）→ 本次放行，交 ensureDayQuota 补算');
+      if (!this.quotaInitWarned) {
+        this.quotaInitWarned = true;
+        console.warn('[spawn] 当日配额未初始化（quota<=0）→ 本次放行，交 ensureDayQuota 补算');
+      }
       return true;
     }
     return remainingQuota(s) > 0;
