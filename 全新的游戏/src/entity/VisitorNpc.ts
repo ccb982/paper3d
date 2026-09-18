@@ -17,7 +17,7 @@
 
 import type * as THREE from 'three';
 import { CharacterBase } from './CharacterBase';
-import type { EntityBase } from './EntityBase';
+import type { EntityBase, EntityHitPoint } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import type { CharacterAnimMap } from '../systems/player/CharacterController';
@@ -299,20 +299,20 @@ export class VisitorNpcBase extends CharacterBase {
   // ============ 被攻击 / 逃跑 ============
 
   /** ★ 受击：仅世界侧可被攻击；玩家侧短窗口累计 → 逃；致命伤 → 逃（访客不死） */
-  override onTakeDamage(dmg: number, source: EntityBase | null): void {
+  override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
     if (!this.attackable) return;
     if (this.isPlayerSide(source)) this.trackPlayerDamage(dmg, source); // 可能直接触发逃跑
     if (this.phase === 'fleeing') {
-      super.onTakeDamage(0, source); // 触发/逃跑中不再扣血（保留受击表现）
+      super.onTakeDamage(0, source, hitPoint); // 触发/逃跑中不再扣血（保留受击表现）
       return;
     }
     if (dmg >= this.hp) {
       this.hp = 1;
-      super.onTakeDamage(0, source); // 受击表现
+      super.onTakeDamage(0, source, hitPoint); // 受击表现
       this.startFlee(source);        // 未被"短时爆发"触发时的致命一击 → 逃
       return;
     }
-    super.onTakeDamage(dmg, source);
+    super.onTakeDamage(dmg, source, hitPoint);
   }
 
   /** ★ 访客不死：任何致死路径都转为逃跑（防止误触发 killed 结算） */

@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { CharacterBase, type CharacterBaseOptions } from './CharacterBase';
-import type { EntityBase } from './EntityBase';
+import type { EntityBase, EntityHitPoint } from './EntityBase';
 import type { EntityManager } from './EntityManager';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
@@ -98,10 +98,10 @@ export class Player extends CharacterBase {
   controlLocked = false;
 
   /** ★ 受击：记录致死前血量（复活 = 死前一半，保底 10% 上限） */
-  override onTakeDamage(dmg: number, source: EntityBase | null): void {
+  override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
     if (this.dead) return; // 死亡等待复活：免伤
     if (this.hp > 0) this.preDeathHp = this.hp;
-    super.onTakeDamage(dmg, source);
+    super.onTakeDamage(dmg, source, hitPoint);
   }
 
   /** ★ 玩家死亡（不销毁主角；死亡动画 + 等待 WorldMode 倒计时复活）

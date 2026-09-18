@@ -575,7 +575,10 @@ export class WorldSpawner {
         const d2 = dx * dx + dz * dz;
         if (d2 <= bestD2) { bestD2 = d2; best = d; }
       }
-      if (best) applyDamage(dmg, AGENT_SOURCE, best);
+      // ★ 命中点：横向取代理位置（代理侧只给了 x/z）；纵向用目标躯干高度
+      if (best) applyDamage(dmg, AGENT_SOURCE, best, {
+        hitPoint: { x, y: best.position.y + 1.0, z },
+      });
       return;
     }
     const s = this.deps.session;
@@ -584,7 +587,9 @@ export class WorldSpawner {
       if (!isShipDestroyed(s)) damageShip(s, dmg);
       return;
     }
-    if (!this.deps.player.dead) applyDamage(dmg, AGENT_SOURCE, this.deps.player);
+    if (!this.deps.player.dead) applyDamage(dmg, AGENT_SOURCE, this.deps.player, {
+      hitPoint: { x, y: this.deps.player.position.y + 1.0, z },
+    });
   }
 
   /** ★ 祖宗嘲讽查询（蜂群代理）：(x,z) 嘲讽圈内最近存活祖宗；对象复用零分配 */

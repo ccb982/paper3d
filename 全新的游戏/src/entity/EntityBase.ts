@@ -36,6 +36,14 @@ import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/comba
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
 export type PhysicsMode = 'none' | 'kinematic' | 'read';
 
+/** ★ 命中点（世界坐标）——伤害管线透传给表现层（受击染料的注入位置）。
+ *  2D 贴片只吃 x/y；3D 判定点带 z 也不影响。 */
+export interface EntityHitPoint {
+  x: number;
+  y: number;
+  z?: number;
+}
+
 export interface EntityBaseOptions {
   kind: EntityKind;
   x: number;
@@ -326,8 +334,9 @@ export abstract class EntityBase {
    *  注意：这只影响统计口径，不影响掉落/遗物等既有管线。 */
   killedByCombat = true;
 
-  /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath） */
-  onTakeDamage(dmg: number, source: EntityBase | null): void {
+  /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath）
+   *  hitPoint = 命中点（世界坐标）——仅表现层消费，默认实现忽略 */
+  onTakeDamage(dmg: number, source: EntityBase | null, _hitPoint?: EntityHitPoint): void {
     if (this.hp <= 0) return;
     this.hp -= dmg;
     if (this.hp <= 0) {

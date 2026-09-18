@@ -6,7 +6,7 @@
 // 子类：Player（输入驱动）/ Ally / Enemy（AI 驱动）
 
 import * as THREE from "three";
-import { EntityBase, type EntityBaseOptions } from "./EntityBase";
+import { EntityBase, type EntityBaseOptions, type EntityHitPoint } from "./EntityBase";
 import type { EntityManager } from "./EntityManager";
 import {
   CharacterController,
@@ -300,6 +300,19 @@ export abstract class CharacterBase extends EntityBase {
   ];
   /** 受击染料注入半径（归一化，默认 0.45） */
   protected hitDyeRadius = 0.45;
+  /** ★ 受击染料解算步长（秒）—— 累积到该步长才 step 一次（降频省算）。
+   *  ★ 为什么降频反而让扩散更清楚：解算器里 `velocityScale: 0.85` 是**每步**乘一次，
+   *    即每秒衰减 0.85^N。60 步/s → 0.85^60 ≈ 6e-5，一秒内速度基本归零（红团原地糊住）；
+   *    30 步/s → 0.85^30 ≈ 7.6e-3，速度留存多 **130 倍** → 红团真的会"流"出去。
+   *  ★ 失稳风险：平流是半拉格朗日（无条件稳定）；子步数 substeps = ceil(maxVel·dt / minGrid)，
+   *    hit-dye 的 maxVelocity = 3000 ⇒ 阈值 minGrid ≥ maxVel/30 = **100px**：
+   *      · minGrid ≥ 100px 的贴片 → 仍为 1 个子步（绝大多数敌人）；
+   *      · 小于 100px 的最小贴片（如原石虫一档 ≈88px）→ 平流那一趟升到 2 个子步。
+   *    即便升到 2，也只抵消「平流」这 1 趟，其余约 10 趟 GPU pass 依旧砍半 ⇒ 净收益仍为正。
+   *  ⇒ 1/30 是安全点，与 `WorldMode` 祖宗流体、图标动画的 1/30 约定一致；想更明显可调 1/20。 */
+  protected hitDyeStep = 1 / 30;
+  /** 已累积的未解算时间（跨帧；新建流体/释放后不重置，只会让首步稍早发生） */
+  private hitDyeAccum = 0;
 
   /** ★ 受击：注入红色染料（矢量平流晕开；已有则重置计时重新注入）。
    *   仅 viewLod===0（最高档）启用——远程 LOD 省算、不干扰远焦。 */
@@ -335,11 +348,18 @@ export abstract class CharacterBase extends EntityBase {
     });
   }
 
-  /** ★ 受击染料每帧驱动（update 内调用） */
+  /** ★ 受击染料每帧驱动（update 内调用）—— **按 hitDyeStep 降频解算**。
+   *  计时按真实 dt 走（1.2s 总时长不变），只把"解算次数"减半；
+   *  单步 dt 用累积量 → 物理时间守恒（不是把流体变慢）。
+   *  单步上限 1/10s：卡顿一帧 300ms 时不会把一次解算推进 300ms（防突兀跳变）。 */
   private updateHitDye(dt: number): void {
     if (this.hitDye && this.hitDyeTimer > 0) {
-      this.hitDye.step(dt);
       this.hitDyeTimer -= dt;
+      this.hitDyeAccum += dt;
+      if (this.hitDyeAccum >= this.hitDyeStep) {
+        this.hitDye.step(Math.min(this.hitDyeAccum, 1 / 10));
+        this.hitDyeAccum = 0;
+      }
       if (this.hitDyeTimer <= 0) {
         // ★ 计时结束：释放流体 → 恢复原纹理（下次受击重建）
         this.hitDye.dispose();
@@ -352,13 +372,37 @@ export abstract class CharacterBase extends EntityBase {
   }
 
   /** ★ 受伤钩子：受击染红 + 死亡动画（正常扣血/死亡流程不变） */
-  override onTakeDamage(dmg: number, source: EntityBase | null): void {
-    // ★ 受击染料：注入点 = 上半身（x 居中微偏，y=0.35 胸口附近）
-    this.spawnHitDye({
+  override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
+    // ★ 受击染料：注入点 = 真实命中点换算到贴片 bbox（拿不到点 → 回退上半身居中微偏）
+    this.spawnHitDye(this.hitUvOf(hitPoint));
+    super.onTakeDamage(dmg, source, hitPoint);
+  }
+
+  /** ★ 命中点（世界）→ 贴片注入点（bbox 局部归一化：x 0~1 左→右，y 0~1 上→下）。
+   *  依据三条：
+   *   ① FluidEffect 约定「注入源位置 = bbox 归一化 (0~1)，Y 向下为正」，且解算器分辨率 = 帧 bbox；
+   *   ② FTXQuad 的 texUV = (vUv*(1,-1) * frameSize - bbox.xy) / bbox.zw → bbox 正好铺满整张贴片，
+   *      且流体纹理与基础色共用这个 texUV ⇒ bbox 归一化坐标 = 贴片上的位置；
+   *   ③ 贴片镜像走 mesh.scale 取负（FxRendererBase.applyFlip）⇒ 乘符号还原到纹理方向。
+   *  ★ 夹取到 [0.12,0.88] / [0.08,0.85]：命中点常在体外（近战挥击中心/远处射手），
+   *    这样才能落到"身体近侧边缘"，而不是把整片染到角上。 */
+  private hitUvOf(point: EntityHitPoint | null | undefined): { x: number; y: number } {
+    const fallback = (): { x: number; y: number } => ({
       x: 0.5 + (Math.random() - 0.5) * 0.2,
       y: 0.35 + (Math.random() - 0.5) * 0.2,
     });
-    super.onTakeDamage(dmg, source);
+    if (!point) return fallback();
+    const mesh = (this.renderer as unknown as { mesh?: THREE.Mesh } | null)?.mesh;
+    if (!mesh) return fallback();
+    const w = Math.abs(mesh.scale.x);
+    const h = Math.abs(mesh.scale.y);
+    if (!(w > 1e-4) || !(h > 1e-4)) return fallback();
+    const u = 0.5 + ((point.x - mesh.position.x) / w) * (mesh.scale.x < 0 ? -1 : 1);
+    const v = 0.5 - ((point.y - mesh.position.y) / h) * (mesh.scale.y < 0 ? -1 : 1);
+    return {
+      x: Math.min(0.88, Math.max(0.12, u)),
+      y: Math.min(0.85, Math.max(0.08, v)),
+    };
   }
 
   /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */

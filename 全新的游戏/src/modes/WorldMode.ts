@@ -1993,7 +1993,8 @@ export class WorldMode implements IGameMode {
     }
     if (other) {
       // 伤害/事件统一在 applyDamage 内结算（base 已含攻击力 → 不再叠加）
-      applyDamage(damage, self, other);
+      // ★ 命中点 = bullet 接触点（payload 自带）→ 受击染料落在中弹处
+      applyDamage(damage, self, other, { hitPoint: point });
       return;
     }
     const impact = this.chunks.resolveImpact(point.x, point.y, point.z);
@@ -2221,7 +2222,7 @@ export class WorldMode implements IGameMode {
           ? rec.damage
           : Math.max(SENTINEL_IMPACT_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_IMPACT_ATK_RATIO));
         // 玩家祖宗弹的 dmg 已含攻击力 → 不再叠加 source.attackPower（修双计）
-        applyDamage(dmg, src, hit);
+        applyDamage(dmg, src, hit, { hitPoint: shot.sprite.position });
       }
       if (land || hit) {
         this.sentinelShots.splice(i, 1);
@@ -2498,7 +2499,11 @@ export class WorldMode implements IGameMode {
     const n = Math.min(proc.maxTargets, targets.length);
     for (let i = 0; i < n; i++) {
       // ★ 法术口径：跳过减法防御（其余照常，事件统一在 applyDamage）
-      applyDamage(dmg, p, targets[i], { type: 'arts', ignoreDefense: true });
+      applyDamage(dmg, p, targets[i], {
+        type: 'arts',
+        ignoreDefense: true,
+        hitPoint: { x: p.position.x, y: targets[i].position.y + 1.0, z: p.position.z },
+      });
     }
   }
 
@@ -3397,7 +3402,7 @@ export class WorldMode implements IGameMode {
   /** ★ 祖宗激光命中结算（红色激光是瞬时 hitscan；光束特效由祖宗实体播放） */
   private fireSentinelShot(from: DroneEntity, target: EntityBase): void {
     const dmg = Math.max(SENTINEL_MIN_DAMAGE, Math.round(queryFinalStats(this.player).attackPower * SENTINEL_ATK_RATIO));
-    applyDamage(dmg, from, target); // 事件统一在 applyDamage
+    applyDamage(dmg, from, target, { hitPoint: from.position }); // 事件统一在 applyDamage
     // ★ 眩晕（2026-09-14 用户定调）：激光命中 → 眩晕 1s；眩晕结束后 2s 免疫（防锁死）
     if (target instanceof EnemyBase && target.hp > 0 && target.applyStun()) {
       this.showFloatingAt(target.position.x, target.position.y + 2.2, target.position.z, '眩晕', 'normal');

@@ -12,7 +12,7 @@
 //   - ignoreDefense=true 跳过减法防御（法术/环境口径，如治疗转伤害 proc）。
 //   ★ 命中事件（damage）统一由 applyDamage 发出——调用点不再手发，漏发不可能。
 
-import type { EntityBase } from '../../entity/EntityBase';
+import type { EntityBase, EntityHitPoint } from '../../entity/EntityBase';
 import { eventBus } from '../../core/EventBus';
 
 /** ★ 调用选项（语义显式化，见文件头契约） */
@@ -23,6 +23,9 @@ export interface DamageOptions {
   includeSourceAttack?: boolean;
   /** 跳过减法防御（默认 false） */
   ignoreDefense?: boolean;
+  /** ★ 命中点（世界坐标）——透传给目标表现层（受击染料注入处）。
+   *  调用方给不出点时省略 → 表现层自行回退（不改变既有手感）。 */
+  hitPoint?: EntityHitPoint;
 }
 
 /** 伤害结算结果 */
@@ -145,7 +148,7 @@ export function applyDamage(
   opts: DamageOptions = {},
 ): DamageResult {
   const r = resolveDamage(base, source, target, opts);
-  if (!r.dodged && r.final > 0) target.onTakeDamage(r.final, source);
+  if (!r.dodged && r.final > 0) target.onTakeDamage(r.final, source, opts.hitPoint);
   eventBus.emit('damage', {
     target,
     source,
