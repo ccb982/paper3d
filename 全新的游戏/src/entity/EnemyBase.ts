@@ -54,6 +54,8 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   role?: UnitRole;
   /** ★ v2 攻击类型（缺省 = melee，行为不变） */
   attackType?: UnitAttackType;
+  /** ★ 强制始终面对相机（缺省 = 自动检测：无「后」帧素材强制 billboard） */
+  billboard?: boolean;
 }
 
 export class EnemyBase extends CharacterBase implements SwarmCarrier {
@@ -226,8 +228,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
         { x: 0, y: 0, w: b.w, h: b.h },
       );
     }
-    // 初始朝向（贴片朝 +z；显示帧由相机判定）
-    this.setFrameAnimated((opts.facing ?? '前') as '前' | '后');
+    // ★ 背面素材检测（2026-09-18）：没有「后」帧的敌人 → 始终面对相机（billboard），
+    //   不做相机侧换帧/转身 180°（否则会露出背面空白/镜像贴图）。
+    //   有「后」帧 = 维持原双向贴片逻辑；可用 opts.billboard 强制覆盖。
+    const hasBackFrame = asset.hasFrame('后');
+    this.billboard = opts.billboard ?? !hasBackFrame;
+    // 初始朝向（贴片朝 +z；显示帧由相机判定；无背面素材恒为「前」）
+    this.setFrameAnimated(this.billboard ? '前' : ((opts.facing ?? '前') as '前' | '后'));
     // 纹理宽高比缩放（不压扁；宽 = scale，高 = scale×bbox高宽比）
     this.applyRenderScale(scale);
     // ★ 接地补偿：必须在 applyRenderScale 之后（半高由缩放决定）
@@ -396,8 +403,12 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (this.showFacing === facing) return;
     this.showFacing = facing;
     const source = this.anim!.source;
-    const name = source.hasFrame(facing) ? facing : '帧 1';
-    this.anim!.playFrames([name], { loop: true, fps: 1 });
+    // 缺帧回退：目标帧 → 前帧 → 资产单帧「帧 1」；都没有 = 保持第 0 帧（不刷警告）
+    let name: string | null = null;
+    if (source.hasFrame(facing)) name = facing;
+    else if (source.hasFrame('前')) name = '前';
+    else if (source.hasFrame('帧 1')) name = '帧 1';
+    if (name) this.anim!.playFrames([name], { loop: true, fps: 1 });
   }
   /** 贴片朝向角（移动方向决定） */
   private yawBase = 0;
@@ -417,9 +428,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     // ★ 显示帧 + 转身由相机判定（旁观者视角）：
     //   相机在角色正面侧 → 前帧 + 贴片保持移动方向朝向
     //   相机在背面侧 → 后帧 + 贴片转身 180°（面向相机绘制背面）
-    //   ★ 视锥外不做这些纯表现计算（动画/朝向/扭曲），回到视野下一帧自动恢复
+    // ★ 视锥外不做这些纯表现计算（动画/朝向/扭曲），回到视野下一帧自动恢复
     if (!this.inFrustum) return;
-    if (this.camera) {
+    if (this.billboard) {
+      // ★ 无背面素材：始终正面朝相机（billboard 由 EntityBase.render 应用）——
+      //   不转身、不切后帧（否则露出背面空白/镜像贴图）
+      this.setFrameAnimated('前');
+    } else if (this.camera) {
       const camDirZ = this.camera.position.z - this.entity.position.z;
       const camDirX = this.camera.position.x - this.entity.position.x;
       // 贴片正面方向（+z 经 yawBase 旋转）

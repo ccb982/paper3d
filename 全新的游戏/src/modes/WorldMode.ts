@@ -787,6 +787,8 @@ export class WorldMode implements IGameMode {
         // ★ 空中层（2026-09-18）：名册 isAir/airAltitude → 玩法层装配；缺省高度取引擎兜底
         isAir: spec.isAir === true,
         airAltitude: spec.airAltitude ?? AIR_ALTITUDE_DEFAULT,
+        // ★ 贴片朝向（2026-09-18）：缺省自动（无「后」帧 → billboard）
+        billboard: spec.billboard,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）

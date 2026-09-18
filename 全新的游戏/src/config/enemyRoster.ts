@@ -62,6 +62,10 @@ export interface EnemySpec {
   /** 空中悬停高度（米，**相对地表**；缺省引擎兜底 `AIR_ALTITUDE_DEFAULT`，见 AgentPool）。
    *  仅 `isAir` 有效。 */
   airAltitude?: number;
+  /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
+   *  缺省 = 自动检测：素材**没有「后」帧** → 强制 billboard（否则转身 180° 会露出
+   *  背面空白/镜像）；有「后」帧 = 双向贴片（相机侧换帧 + 转身）。 */
+  billboard?: boolean;
 }
 
 /** 素材目录（public 下） */

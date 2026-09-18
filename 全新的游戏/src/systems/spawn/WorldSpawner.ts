@@ -85,6 +85,8 @@ export interface MobDef {
   role?: UnitRole;
   /** ★ v2 攻击类型（缺省 = melee，行为不变） */
   attackType?: UnitAttackType;
+  /** ★ 始终面对相机（缺省 = 自动：素材无「后」帧 → billboard；见 EnemyBase 构造） */
+  billboard?: boolean;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -370,7 +372,8 @@ export class WorldSpawner {
       collisionScale: 2.2,
       groundSink: bossSink,
     }, this.deps.camera);
-    enemy.billboard = false;
+    // ★ 不再强制 billboard=false：由 EnemyBase 按素材「后」帧自动判定
+    //   （Boss 有前/后帧 → 仍为双向；无背面素材 → 始终面向相机）
     const def: MobDef = {
       // ★ Boss 不在名册里（独立资产/独立路径），这里给稳定键与显示名，
       //   方便日志与"名册陈列"的排除判据（陈列只遍历 mobDefs，Boss 天然不在其中）
@@ -914,10 +917,12 @@ export class WorldSpawner {
       // ★ v2 蜂群预留字段（缺省值 = 行为不变）
       role: def.role,
       attackType: def.attackType,
+      // ★ 贴片朝向（缺省自动判定：无「后」帧 → billboard）
+      billboard: def.billboard,
     }, this.deps.camera);
     enemy.maxHp = maxHp;
     enemy.hp = Math.min(hp, maxHp);
-    enemy.billboard = false;
+    // ★ 不再强制 billboard=false：由 EnemyBase 按素材「后」帧自动判定（见其构造）
     this.deps.enemyDefs.set(enemy, def);
     this.deps.enemies.push(enemy);
     return enemy;
