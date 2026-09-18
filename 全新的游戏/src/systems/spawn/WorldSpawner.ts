@@ -23,7 +23,7 @@ import { FtxAsset } from '../../vendor/player/FtxAsset';
 import type { Asset } from '../../vendor/player';
 import { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
-import { Player } from '../../entity/Player';
+import { Player } from '../../entity/player/Player';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
 import type { AllyBase } from '../../entity/ally/AllyBase';

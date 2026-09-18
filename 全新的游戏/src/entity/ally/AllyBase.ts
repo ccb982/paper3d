@@ -39,6 +39,23 @@ export const ALLY_ATTACK_AIM_Y = 0.9;
 /** 激光音效的听距（米；玩家超出这个距离就不响） */
 const LASER_SFX_RANGE = 40;
 
+/**
+ * ★ 友军世界端口 —— AllyBase 与外部世界（模式层 / 蜂群 / 掉落）的唯一交互面。
+ *   由 WorldMode 实现一次、经 AllySystem 注入所有友军（不再逐个体回调）。
+ */
+export interface AllyWorldPort {
+  /** 远程攻击（实体目标；from = 发起友军，模式层据此算伤害/命中点） */
+  rangedAttack(from: AllyBase, target: EntityBase): void;
+  /** 代理层索敌（返回池下标；-1 = 无） */
+  findAgentTarget(x: number, z: number, radius: number): number;
+  /** 代理坐标（无效/已死 = null） */
+  agentPosOf(idx: number): { x: number; y: number; z: number } | null;
+  /** 对代理结算伤害 */
+  rangedAgentAttack(from: AllyBase, idx: number): void;
+  /** 自动挖矿（无敌人时；模式层选点/结算，实体只播光束） */
+  mineAttack(from: AllyBase): void;
+}
+
 export abstract class AllyBase extends EntityBase {
   // ---- 锚点 / 身份 ----
   /** 跟随目标（WorldMode 每帧喂入：玩家侧上方偏移 / 编队偏移） */
@@ -52,17 +69,8 @@ export abstract class AllyBase extends EntityBase {
   /** 主人实体（WorldMode 生成时写入；攻击瞬间实时查询其最终攻击力） */
   owner: EntityBase | null = null;
 
-  // ---- 世界端口（E2 暂以回调承载；后续收成 AllyWorldPort 注入） ----
-  /** 远程攻击回调（站桩模式；WorldMode 注入 = 发射友军弹道） */
-  rangedAttack: ((target: EntityBase) => void) | null = null;
-  /** 代理层索敌回调（WorldMode 注入 = swarm.nearestAgentIndex） */
-  findAgentTarget: ((x: number, z: number, radius: number) => number) | null = null;
-  /** 代理坐标回调（光束终点跟着代理走；无效/已死 = null） */
-  agentPosOf: ((idx: number) => { x: number; y: number; z: number } | null) | null = null;
-  /** 对代理结算伤害（WorldMode 注入 = swarm.damageAgent） */
-  rangedAgentAttack: ((idx: number) => void) | null = null;
-  /** 自动挖矿回调（站桩模式无敌人时；WorldMode 选点/结算，实体只播光束） */
-  mineAttack: ((from: AllyBase) => void) | null = null;
+  // ---- 世界端口（WorldMode 实现、AllySystem 一次性注入；见 AllyWorldPort） ----
+  worldPort: AllyWorldPort | null = null;
 
   /** 当前代理目标下标（-1 = 无；与 target 互斥：有实体目标时优先打实体） */
   agentIdx = -1;
@@ -195,7 +203,7 @@ export abstract class AllyBase extends EntityBase {
       end.set(this.target.position.x, this.target.position.y + ALLY_ATTACK_AIM_Y, this.target.position.z);
     } else if (this.agentIdx >= 0) {
       // ★ 代理目标：光束终点跟着代理当前位置（代理会移动，每帧刷新）
-      const ap = this.agentPosOf?.(this.agentIdx);
+      const ap = this.worldPort?.agentPosOf(this.agentIdx);
       if (ap) end.set(ap.x, ap.y + ALLY_ATTACK_AIM_Y, ap.z);
       else this.agentIdx = -1;   // 代理已死/被回收 → 断锁
     }

@@ -48,7 +48,7 @@ export class SentinelAlly extends GroundStationaryAlly {
           this.attackCd = SENTINEL_ATTACK_CD;
           // ★ 红色激光：光束特效从这里射向目标；瞬时伤害由模式层结算（rangedAttack）
           this.playBeam();
-          this.rangedAttack?.(t);
+          this.worldPort?.rangedAttack(this, t);
         }
         this.holdStationY(p);
         return;
@@ -62,9 +62,9 @@ export class SentinelAlly extends GroundStationaryAlly {
     //    AgentPool 是 swap-remove（删中间元素 = 末尾元素补位），缓存的 idx 会在别的代理
     //    死亡/被回收时静默指到另一只身上 —— 表现为"激光突然打向不相干的方向"。
     //    每帧一次 O(count) 扫描（祖宗数量个位数、count 数百）开销可忽略，换取绝对正确。
-    this.agentIdx = this.findAgentTarget?.(p.x, p.z, SENTINEL_RANGE) ?? -1;
+    this.agentIdx = this.worldPort?.findAgentTarget(p.x, p.z, SENTINEL_RANGE) ?? -1;
     if (this.agentIdx >= 0) {
-      const ap = this.agentPosOf?.(this.agentIdx) ?? null;
+      const ap = this.worldPort?.agentPosOf(this.agentIdx) ?? null;
       if (!ap) {
         this.agentIdx = -1;                       // 代理已死 / 被回收
       } else {
@@ -72,7 +72,7 @@ export class SentinelAlly extends GroundStationaryAlly {
         if (this.attackCd <= 0) {
           this.attackCd = SENTINEL_ATTACK_CD;
           this.playBeam();
-          this.rangedAgentAttack?.(this.agentIdx);
+          this.worldPort?.rangedAgentAttack(this, this.agentIdx);
         }
         this.holdStationY(p);
         return;
@@ -84,7 +84,7 @@ export class SentinelAlly extends GroundStationaryAlly {
       this.mineCd -= dt;
       if (this.mineCd <= 0) {
         this.mineCd = SENTINEL_MINE_CD;
-        this.mineAttack?.(this);
+        this.worldPort?.mineAttack(this);
       }
     }
     this.holdStationY(p);

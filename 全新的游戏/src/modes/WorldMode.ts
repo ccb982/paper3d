@@ -24,15 +24,17 @@ import { stepFluidShared } from '../services/fx/FluidShared';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
 import type { EntityBase } from '../entity/EntityBase';
-import { Player } from '../entity/Player';
+import { Player } from '../entity/player/Player';
+import { PlayerPipeline } from '../systems/player/PlayerPipeline';
 import { ShipEntity, SHIP_LANDED_HEIGHT } from '../entity/ShipEntity';
 import { resolveDockSpawn } from '../services/ship/DockResolver';
 import { applyShipDamage, damageShip, isShipDestroyed, reviveShip } from '../systems/ship/ShipState';
 import travelConfig from '../config/travel.json';
 import { EnemyBase } from '../entity/EnemyBase';
-import { AllyBase } from '../entity/ally/AllyBase';
+import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
+import { allySystem } from '../systems/ally/AllySystem';
 import { BaseScene, type BaseStation } from '../ui/base/BaseScene';
 import { RoomPostFx } from '../services/render/RoomPostFx';
 import { CraftingOverlay } from '../ui/base/CraftingOverlay';
@@ -41,7 +43,6 @@ import { createButton } from '../ui/components/Button';
 import baseRoomsJson from '../config/baseRooms.json';
 // ★ 敌军名册（唯一真源）：mobDefs 按 id 从这里装配
 import { ENEMY_BY_ID, ENEMY_FALLBACK, type EnemyAssetEntry } from '../config/enemyRoster';
-import { droneFollowOffset } from '../services/fx/DroneFormation';
 import { CameraController } from '../services/camera/CameraController';
 import { renderManager } from '../services/render/RenderManager';
 import { PhysicsWorld } from '../services/physics/PhysicsWorld';
@@ -157,17 +158,7 @@ const SENTINEL_MINE_RANGE = 22;
 const SENTINEL_MINE_SAMPLES = 16;
 /** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
 const HEAL_PROC_MIN_HEAL = 1.0;
-/** ★ 复活倒计时阶梯（按"当天出击内"累计死亡次数分档；每天出击重置）：
- *   1 死瞬间复活 → 2~10 死 5s → 11~20 死 10s → 21~30 死 20s → 31 死起 30s 封顶 */
-const PLAYER_RESPAWN_TIERS: { minDeaths: number; delay: number }[] = [
-  { minDeaths: 1, delay: 0 },
-  { minDeaths: 2, delay: 5 },
-  { minDeaths: 11, delay: 10 },
-  { minDeaths: 21, delay: 20 },
-  { minDeaths: 31, delay: 30 },
-];
-/** ★ 复活血量保底 = 最大血量 × 该比例（死前一半更低时取保底） */
-const PLAYER_RESPAWN_FLOOR_HP_RATIO = 0.1;
+// ★ 复活倒计时阶梯 / 血量保底已下沉 systems/player/PlayerPipeline.ts（架构 §7）
 
 // ============================================================
 // WorldMode 进入上下文（扩展 IGameModeContext）
@@ -479,14 +470,13 @@ export class WorldMode implements IGameMode {
   /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
   private enemyKilledUnsub?: () => void;
   private pickupGlows: PickupGlowEffect[] = [];
-  /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）★ 2026-09-18 起为 AllyBase 三种骨架 */
-  private drones: AllyBase[] = [];
+  /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）
+   *  ★ 2026-09-18 起由 AllySystem 统一持有/驱动；此处只保留只读视图 */
+  private get drones(): AllyBase[] { return allySystem.allies; }
   /** ★ 无人机素材（特效包/纯纹理包；enter 存入上下文引用） */
   private droneAsset: Asset | FtxAsset | null = null;
   /** ★ 祖宗素材（站桩友军；缺省回退无人机素材，美术到位后只换路径） */
   private sentinelAsset: Asset | FtxAsset | null = null;
-  /** ★ 遗物复活时间倍率（computeRelicModifiers 汇总；复活倒计时结算用） */
-  private relicRespawnMul = 1;
   /** ★ 装备提供的友军每秒回血（黍姐的XX 等；refreshPlayerStats 汇总，无人机/祖宗每帧结算） */
   private allyRegen = 0;
   /** ★ 当前选择的快捷弹药（'default' = 普通弹药；其余 = 弹药 itemId）
@@ -510,14 +500,10 @@ export class WorldMode implements IGameMode {
   private sentinelFluidAccum = 0;
   /** ★ 治疗转伤害 proc 命中候选缓冲（复用防每帧分配） */
   private _healProcTargets: EnemyBase[] = [];
-  /** ★ 当天出击内死亡次数（复活倒计时阶梯；每次进入世界清零 → 每天重置） */
-  private runDeaths = 0;
+  /** ★ 玩家专属每帧管线（效果队列/属性刷新/复活倒计时；《实体架构.md》§7） */
+  private playerPipeline!: PlayerPipeline;
   /** ★ 遗物属性脏标记（死亡/击杀等事件可能改变遗物结算；每帧最多重算一次） */
   private statsDirty = false;
-  /** ★ 玩家复活倒计时（秒；玩家 dead 时倒数，到 0 复活）——与刷怪波次 respawnTimer 区分 */
-  private playerRespawnTimer = 0;
-  /** 倒计时 UI 上次刷新值（0.1s 节流，避免每帧写 DOM） */
-  private playerRespawnShown = -1;
   /** ★ 无人机召唤事件订阅（enter 注册 / exit 移除） */
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
@@ -734,10 +720,21 @@ export class WorldMode implements IGameMode {
     // ★ 航行期：角色隐藏 + 操作锁（停靠时落到安全出生点接管）
     this.player.controlLocked = true;
 
-    // ★ 复活倒计时状态：每天出击重置（首死瞬间复活）
-    this.runDeaths = 0;
-    this.playerRespawnTimer = 0;
-    this.playerRespawnShown = -1;
+    // ★ 玩家专属每帧管线（《实体架构.md》§7）：效果/属性/复活收口，模式层只注入依赖
+    //   （依赖项惰性求值：worldUIManager/ship 等稍后才建，闭包在调用时才读）
+    this.playerPipeline = new PlayerPipeline({
+      player: this.player,
+      isStatsDirty: () => this.statsDirty,
+      refreshStats: () => { this.statsDirty = false; this.refreshPlayerStats(); },
+      markStatsDirty: () => { this.statsDirty = true; },
+      setRespawnCountdown: (sec) => this.worldUIManager.setRespawnCountdown(sec),
+      respawnPoint: () => this.ship?.position ?? this.spawnPoint,
+      surfaceHeightAt: (x, z) => this.raster.surfaceHeightAt(x, z),
+      snapCamera: (x, y, z) => this.cameraCtrl.snapTo(x, y, z),
+      showFloating: (x, y, z, text, style) => this.showFloatingAt(x, y, z, text, style),
+    });
+    // ★ 每天出击重置：复活阶梯/倒计时归零（首死瞬间复活）
+    this.playerPipeline.resetRun();
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
@@ -808,6 +805,18 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
+    // ★ 友军世界端口（一次性注入所有友军；替代逐个体的 6 个回调）
+    allySystem.setWorldPort({
+      rangedAttack: (from, target) => this.fireSentinelShot(from, target),
+      findAgentTarget: (x, z, r) => this.swarm.nearestAgentIndex(x, z, r),
+      agentPosOf: (i) => (
+        this.swarm.agentAlive(i)
+          ? { x: this.swarm.agentX(i), y: this.swarm.agentY(i), z: this.swarm.agentZ(i) }
+          : null
+      ),
+      rangedAgentAttack: (_from, i) => this.fireSentinelShotAtAgent(i),
+      mineAttack: (from) => this.sentinelMine(from),
+    });
     // ★ P0 压测：?enemies=N → 开局在玩家周围 40~120m 铺 N 只代理（基线度量用）
     this.debugEnemyStress = ctx.debug?.enemyStress ?? 0;
     if (this.debugEnemyStress > 0) this.spawner.spawnStressAgents(this.debugEnemyStress);
@@ -1056,23 +1065,12 @@ export class WorldMode implements IGameMode {
         s.meta.deaths = (s.meta.deaths ?? 0) + 1;
         // ★ 遗物死亡时机管线
         dispatchRelicEvent(s, RELIC_ITEM_CONFIG, 'onPlayerDeath', {});
-        // ★ 标记属性脏：砾小姐的爱等"每次死亡"遗物实时生效（本帧统一重算，非手动刷点）
-        this.statsDirty = true;
-        // ★ 复活倒计时：按当天出击内累计死亡次数分档（每天重置；首死 0s 瞬间复活）
-        this.runDeaths++;
-        let delay = 0;
-        for (const t of PLAYER_RESPAWN_TIERS) {
-          if (this.runDeaths >= t.minDeaths) delay = t.delay;
-        }
-        // ★ 遗物缩减（砾小姐的爱等：respawnTimeMul < 1）
-        this.playerRespawnTimer = delay * this.relicRespawnMul;
-        this.playerRespawnShown = -1;
+        // ★ 复活倒计时 + 属性标脏（管线收口：PlayerPipeline）
+        this.playerPipeline.onPlayerDeath();
         return; // 玩家不算杂兵、不掉落
       }
-      const di = this.drones.indexOf(payload.target as AllyBase);
-      if (di !== -1) {
-        const drone = this.drones[di];
-        this.drones.splice(di, 1);
+      const drone = payload.target as AllyBase;
+      if (allySystem.remove(drone)) {
         // ★ 无人机损毁 = 彻底没了（2026-09-13 用户定调：不再有残骸/维修）
         if (drone.slotIndex >= 0) this.itemManager?.clearSlot(drone.slotIndex);
         this.showFloatingAt(drone.position.x, drone.position.y, drone.position.z, '无人机损毁', 'crit');
@@ -1405,22 +1403,17 @@ export class WorldMode implements IGameMode {
         }
       }
       const dp = this.player.position;
-      const frame = this.cameraCtrl.getFrame();
-      for (let i = 0; i < this.drones.length; i++) {
-        const d = this.drones[i];
-        const off = droneFollowOffset(i, frame);
-        d.followTarget.x = dp.x + frame.right.x * off.r + frame.forward.x * off.f;
-        d.followTarget.z = dp.z + frame.right.z * off.r + frame.forward.z * off.f;
-        d.followTarget.y = dp.y + off.up;
-        d.playerPos.x = dp.x;
-        d.playerPos.y = dp.y;
-        d.playerPos.z = dp.z;
-        // （友军伤害在攻击瞬间 queryFinalStats(d.owner) 实时查询，无需逐帧注入）
-        d.updateAI(dt, this.camera);
-      }
+      // ★ 统一更新入口（AllySystem：喂编队槽位偏移 + playerPos → updateAI）
+      allySystem.update(dt, {
+        frame: this.cameraCtrl.getFrame(),
+        camera: this.camera,
+        playerX: dp.x,
+        playerY: dp.y,
+        playerZ: dp.z,
+      });
       // ★ 友军回血（黍姐的XX）：装备汇总的每秒回复量 → 所有友军（无人机/祖宗）
       if (this.allyRegen > 0) {
-        for (const d of this.drones) {
+        for (const d of allySystem.allies) {
           if (d.hp > 0) applyHeal(d, this.allyRegen * dt);
         }
       }
@@ -1459,15 +1452,8 @@ export class WorldMode implements IGameMode {
     } else {
       this.entities.update(dt, input, this.cameraCtrl.getFrame());
     }
-    // ★ 效果队列只服务玩家（队友/敌人不参与、零每帧开销）：WorldMode 每帧显式推进
-    if (this.player.effects) effectSystem.tickEntity(this.player, dt);
-    // ★ 遗物属性脏标记：本帧统一刷新（基础+遗物+装备一次聚合；每帧最多一次，事件处只标记）
-    if (this.statsDirty) {
-      this.statsDirty = false;
-      this.refreshPlayerStats();
-    }
-    // ★ 复活倒计时推进（玩家死亡等待期）
-    this.updatePlayerRespawn(dt);
+    // ★ 玩家专属每帧管线：效果队列 → 属性脏刷新（基础+遗物+装备一次聚合）→ 复活倒计时
+    this.playerPipeline.update(dt);
     const _e2 = performance.now();
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感；航行期角色在船上） ----
@@ -1694,14 +1680,13 @@ export class WorldMode implements IGameMode {
     this.playerStatsUnsub = undefined;
     this.shipDamagedUnsub?.();
     this.shipDamagedUnsub = undefined;
-    for (const d of this.drones) d.dispose();
+    allySystem.setWorldPort(null);
+    allySystem.disposeAll();
     for (const s of this.sentinelShots) s.proj.dispose();
     this.sentinelShots = [];
     this.sentinelTex?.dispose();
     this.sentinelTex = null;
-    this.drones = [];
     this.droneAsset = null;
-    this.relicRespawnMul = 1;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
 
@@ -2185,7 +2170,7 @@ export class WorldMode implements IGameMode {
     drone.slotIndex = slotIndex;
     drone.itemId = itemId;
     drone.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
-    this.drones.push(drone);
+    allySystem.add(drone);
     // ★ 注入主渲染器：翅膀 VAT 离屏 RT 需与主渲染器共享 WebGL 上下文（同 MoonEffect）
     if (this.renderer) drone.setRenderer(this.renderer);
   }
@@ -2201,18 +2186,9 @@ export class WorldMode implements IGameMode {
     s.slotIndex = -1;
     s.itemId = 'zuzong';
     s.stationaryBaseY = py;
-    s.rangedAttack = (t) => this.fireSentinelShot(s, t);
-    s.mineAttack = (d) => this.sentinelMine(d); // ★ 无敌人时自动挖矿
-    // ★ 代理层通道（远处敌人只有代理，没有实体 → 祖宗必须能打代理，否则「远处不开火」）
-    s.findAgentTarget = (x, z, r) => this.swarm.nearestAgentIndex(x, z, r);
-    s.agentPosOf = (i) => (
-      this.swarm.agentAlive(i)
-        ? { x: this.swarm.agentX(i), y: this.swarm.agentY(i), z: this.swarm.agentZ(i) }
-        : null
-    );
-    s.rangedAgentAttack = (i) => this.fireSentinelShotAtAgent(i);
+    // ★ 世界端口（远程/代理/挖矿）由 AllySystem 统一注入，不再逐个体绑定回调
     s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
-    this.drones.push(s);
+    allySystem.add(s);
     if (this.renderer) {
       s.setRenderer(this.renderer);
       // ★ 祖宗：单帧 + 流体参数 → 启用常驻流体（魂体流动；无流体参数则自动跳过）
@@ -2525,7 +2501,7 @@ export class WorldMode implements IGameMode {
     });
     // ---- 遗物层：复利乘区 + 加值（每次死亡/击杀后由 statsDirty 触发重算） ----
     const mods = computeRelicModifiers(s, RELIC_ITEM_CONFIG);
-    this.relicRespawnMul = mods.respawnTimeMul;
+    this.playerPipeline.setRespawnTimeMul(mods.respawnTimeMul);
     effectSystem.setSourceEffects(this.player, 'relic', [{
       id: 'relics',
       duration: Infinity,
@@ -2611,34 +2587,6 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 玩家死亡等待复活：倒计时推进 → 到期复活
-   *   复活血量 = 死前血量一半，保底最大血量 10%（阶梯/重置见 PLAYER_RESPAWN_DELAYS） */
-  private updatePlayerRespawn(dt: number): void {
-    if (!this.player.dead) return;
-    if (this.playerRespawnTimer > 0) {
-      this.playerRespawnTimer = Math.max(0, this.playerRespawnTimer - dt);
-      const shown = Math.ceil(this.playerRespawnTimer * 10) / 10;
-      if (shown !== this.playerRespawnShown) {
-        this.playerRespawnShown = shown;
-        this.worldUIManager.setRespawnCountdown(shown);
-      }
-      if (this.playerRespawnTimer > 0) return;
-    }
-    const maxHp = queryFinalStats(this.player).maxHp;
-    const hp = Math.max(this.player.preDeathHp * 0.5, maxHp * PLAYER_RESPAWN_FLOOR_HP_RATIO);
-    // ★ 复活点 = 舰船停靠点（出生点）；死亡期间镜头留在死亡地点
-    const sp = this.ship?.position ?? this.spawnPoint;
-    const pos = this.player.position;
-    pos.x = sp.x;
-    pos.z = sp.z;
-    pos.y = this.raster.surfaceHeightAt(sp.x, sp.z);
-    this.cameraCtrl.snapTo(pos.x, pos.y, pos.z);
-    this.player.revive(hp);
-    this.playerRespawnShown = -1;
-    this.worldUIManager.setRespawnCountdown(null);
-    this.showFloatingAt(pos.x, pos.y, pos.z, '复活', 'heal');
-  }
-
   /** ★ 航行推进：耗油 + 油尽惩罚（扣当前血量一半 → 当前位置就近安全点紧急停靠） */
   private updateSail(dt: number): void {
     const s = this.session;
@@ -2669,16 +2617,16 @@ export class WorldMode implements IGameMode {
       if (id && allyPlaybackRegistry.has(id)) wanted.set(i, id);
     }
     // ① 回收：槽位已空 / 换型 → 销毁世界实体
-    for (let i = this.drones.length - 1; i >= 0; i--) {
-      const d = this.drones[i];
+    for (let i = allySystem.allies.length - 1; i >= 0; i--) {
+      const d = allySystem.allies[i];
       if (d.slotIndex < 0) continue;
       if (wanted.get(d.slotIndex) === d.itemId) continue;
-      this.drones.splice(i, 1);
+      allySystem.remove(d);
       d.dispose();
     }
     // ② 补齐：有槽位但没有实体 → 生成
     for (const [slotIndex, itemId] of wanted) {
-      if (this.drones.some((d) => d.slotIndex === slotIndex && d.itemId === itemId)) continue;
+      if (allySystem.allies.some((d) => d.slotIndex === slotIndex && d.itemId === itemId)) continue;
       allyPlaybackRegistry.get(itemId)!.spawn({
         itemId,
         slotIndex,
@@ -3454,8 +3402,7 @@ export class WorldMode implements IGameMode {
     const s = this.ship.position;
     const dx = p.x - s.x, dz = p.z - s.z;
     if (dx * dx + dz * dz > WorldMode.REBOARD_RADIUS ** 2) return false;
-    for (const d of this.drones) d.dispose();
-    this.drones = [];
+    allySystem.disposeAll();
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.setPhase('sail');        // ★ 登船起飞：静音 + 粗块 LOD + 藏水面 + 飞行模式（统一收口）
@@ -3668,7 +3615,7 @@ export class WorldMode implements IGameMode {
         e.onTakeDamage(Math.max(1, Math.round(e.maxHp * 0.5)), null);
         if (e.hp > 0) this.relocateFromPit(e);
       }
-      // 玩家：不在此处传送——镜头留在死亡地点，复活时统一回出生点（updatePlayerRespawn）
+      // 玩家：不在此处传送——镜头留在死亡地点，复活时统一回出生点（PlayerPipeline）
     }
   }
 
