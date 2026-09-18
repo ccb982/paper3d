@@ -1508,6 +1508,8 @@ export class GachaOverlay {
     warmupMinimap(this.session);
     // ★ 每次进入抽卡页都回到「抽卡按钮」态（行动按钮由抽完卡触发）
     this.resetToGachaState();
+    // ★ 抽卡页同样是左上角返回键的布局 → 临时压制设置齿轮（否则齿轮正好压在返回键上）
+    (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(true);
     this.root.style.display = 'block';
     this.syncSize();
     this.tick();
@@ -1516,6 +1518,7 @@ export class GachaOverlay {
   hide(): void {
     this.root.style.display = 'none';
     this.resultOverlay.style.display = 'none';
+    (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(false);
   }
 
   /** ★ 是否正在显示（基地提示/输入遮挡判定用） */
