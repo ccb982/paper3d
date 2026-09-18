@@ -67,6 +67,13 @@ export abstract class EntityBase {
   get position(): { x: number; y: number; z: number } {
     return this.entity.position;
   }
+  /** ★★ 受击锚点高度（世界 Y）—— 命中特效 / 受击染料的**默认竖直取样点**。
+   *  基类给"脚底 + 1.0m"（≈1.7m 人体的胸口）；有渲染贴片的子类覆写成**贴片高度的 65%**。
+   *  ★ 为什么必须问实体自己：固定 +1.0m 对 3.7m 的敌人落在**大腿**（v≈0.73），
+   *    对 4.8m 的 BOSS 更低 —— 命中药剂/染料会明显"偏低"。 */
+  hitAnchorY(): number {
+    return this.position.y + 1.0;
+  }
   /** 动画管线（无 asset 时为 null） */
   readonly anim: FrameAnimatorBase | null;
   /** 动画状态（渲染管线读取的衔接层） */

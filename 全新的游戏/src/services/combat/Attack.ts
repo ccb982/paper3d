@@ -66,12 +66,12 @@ export function executeAttack(
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
         // ★ 近战 = "AI 基础伤害 + 攻方攻击力"：显式开启叠加（事件由 applyDamage 统一发）
-        // ★ 命中点：横向取挥击中心（决定染料落在身体哪一侧）；纵向用目标自身躯干
-        //   （挥击中心 y 是地面高度，直接透传会把染料压到脚底）
+        // ★ 命中点：横向取挥击中心（决定染料落在身体哪一侧）；纵向问目标自己
+        //   （★ 别写死 +1.0：挥击中心 y 是地面高度，且固定 1.0m 对 3.7m 敌人只有大腿高）
         applyDamage(opts.damage, opts.source, t, {
           type: opts.dmgType,
           includeSourceAttack: true,
-          hitPoint: { x: opts.x, y: t.position.y + 1.0, z: opts.z },
+          hitPoint: { x: opts.x, y: t.hitAnchorY(), z: opts.z },
         });
       }
       break;
@@ -82,11 +82,11 @@ export function executeAttack(
       for (const t of targets) {
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 3) continue;
-        // ★ 命中点同上：横向取爆心，纵向用目标躯干（染料落在"离爆心最近的那一侧"）
+        // ★ 命中点同上：横向取爆心，纵向问目标自己（染料落在"离爆心最近的那一侧"）
         applyDamage(opts.damage, opts.source, t, {
           type: opts.dmgType,
           includeSourceAttack: true,
-          hitPoint: { x: opts.x, y: t.position.y + 1.0, z: opts.z },
+          hitPoint: { x: opts.x, y: t.hitAnchorY(), z: opts.z },
         });
       }
       break;

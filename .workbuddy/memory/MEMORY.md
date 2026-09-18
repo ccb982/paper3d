@@ -1,8 +1,10 @@
 # MEMORY.md —— 项目长期约定（架构重置 / 明日方舟同人游戏）
 
-> 详细流水见同目录 `YYYY-MM-DD.md`（只增不改）；本文件只留**长期铁律**。
-> 已沉淀技能：god-object-extraction / game-audio-sfx-pipeline / game-frame-budget-profiling / shader-fit-from-reference /
-> threejs-glb-model-swap / game-map-hud-overlay / codebase-dead-code-audit / data-driven-roster-registration。
+> 本文件只留**长期铁律**。细节在 `topics/*.md`，流水在 `YYYY-MM-DD.md`（只增不改）。
+> 专题：`hit-dye-fluid.md` / `spawn-quota-and-roster.md` / `ui-overlay-and-misc.md` / `arch-and-swarm-v2.md`
+> 已沉淀技能：god-object-extraction · game-audio-sfx-pipeline · game-frame-budget-profiling ·
+> shader-fit-from-reference · threejs-glb-model-swap · game-map-hud-overlay ·
+> codebase-dead-code-audit · data-driven-roster-registration
 
 ## ★ 环境 / 工具
 
@@ -19,14 +21,11 @@
 - 时间唯一入口：`main.ts` 无条件调 `renderManager.update(dt)` → `SunCycle`（`DAY_SECONDS=900`、`START_HOUR=6`）。
 - ★★ 不变量：**禁止「敌人不动 + 时间照常流逝」** → 凡 `WorldMode.update` 里 `return` 冻结世界的分支，必须同步 `setClockPaused(true)`（该开关只停太阳，不影响 scaledDt）。
 - ★ **`WorldMode.setPhase(next)` 是 phase 变更唯一入口**（环境/昼夜/水面/BGM 副作用全在里面），别直接 `this.phase =`。
-  音频优先：`syncSceneBgm()` = sail 静音 > battle(`spawner.warnShown`) > interior/explore。
 
-## ★★ 刷怪 `src/systems/spawn/WorldSpawner.ts`
+## ★★ 刷怪 → 详见 `topics/spawn-quota-and-roster.md`
 
-- **刷怪=玩法层、蜂群=引擎层**，只经 `SwarmSystem`+`swarmHooks`；改引擎别动 WorldSpawner；新刷怪逻辑写这里（写回 WorldMode 则 guard FAIL）。
-- `spawner` 构造在 `enter()` **最开头**（否则 `setPhase`→`syncSceneBgm`→`spawner.warnShown` 崩）；依赖走 `SpawnDeps` 实时桥，别做构造时快照。
-- 症状「敌人不生成」排查：`phase!=='explore'` → `mobDefs.length===0` → `spawnedChunks` → ★**`quotaAllows()`（`quota−spawned>0`，头号嫌疑）** → `MAX_ALIVE=200`。
-  ★★ `spawned` 是**当天累计**、只增不减、跨出击累计，只有换日 `resetDayQuota`（`meta.day++` 只在 `onReturn`）⇒ **「一只没有 + 删档就好」99% 是配额打满**。
+- **刷怪=玩法层、蜂群=引擎层**，只经 `SwarmSystem`+`swarmHooks`；新刷怪逻辑写 `WorldSpawner.ts`（写回 WorldMode 则 guard FAIL）。
+- 症状「敌人不生成」头号嫌疑 = ★★ **`quotaAllows()` 配额打满**：`spawned` 当天累计、只增不减、跨出击累计，只有换日 `resetDayQuota` 才清零 ⇒ **「一只没有 + 删档就好」99% 是这个**。
 
 ## ★ 敌人 LOD 三层
 
@@ -37,22 +36,32 @@
 | L1 回收 | 140m 外删除 | — |
 
 - **索敌半径 > 35m 的单位「看不见敌人」**（只查 EntityManager）→ 修法是开代理层通道（查 pool + `swarm.damageAgent`），**别**把远处敌人升格（占满 `L3_CAP=30`）。
-  ★★ AgentPool 是 **swap-remove** → 代理下标**每帧重锁**，绝不跨帧缓存。
+- ★★ AgentPool 是 **swap-remove** → 代理下标**每帧重锁**，绝不跨帧缓存。
 
 ## ★ 音频
 
 - **只在船内有音乐**：基地 `base` / 舱内 `ship` / `sail` 静音 / `explore` `ambient` / 战斗 `battle`(warnShown 期间)。真源 `config/bgm.ts`；★ 加键必须同步手写 `BgmKey` 联合类型（漏=TS2353）。
-- SFX：`Sfx.playSfx(id,minGapMs,rate?)`，**必须节流**。★★ **`minGapMs` ≥ 素材时长**（否则新实例叠着响=糊）；`rate<1` 拉长时长、间隔同步放大；rate 必须在 `play()` 前设。
-- 循环轨：`playLoopSfx/stopLoopSfx` + `LOOP_SFX` 表，**按 src 分轨**可多轨同响。
-  ★★ `LoopTrack.target` 不能省（否则每帧重 fade = 指数逼近 = 短动作没声）；`LOOP_FADE_MS=220`；素材须无缝循环。
-- ★ 涉水持续游动 = `WorldMode.updateWadeLoop` 每帧裁决的连续轨。硬经验：①选**平坦段**（判据 = 40ms 窗 RMS 包络起伏，不是 LUFS），**动作层做主层**、连续层只填空隙；②循环轨音量别太低 → 随机 vol 0.45~0.62 + rate 0.80~0.92；③这版 ffmpeg `acompressor` 救不了 peak 贴顶的短素材，换选段/调音量。
+- ★★ 实现细节（SFX 必须节流且 **`minGapMs` ≥ 素材时长**、循环轨**按 src 分轨** + `LoopTrack.target` 不能省 + `LOOP_FADE_MS=220`、涉水连续轨选段判据 = 40ms 窗 RMS 包络起伏、`acompressor` 救不了 peak 贴顶的短素材）见**技能 `game-audio-sfx-pipeline`**。
 
-## ★ 受击染料流体（`CharacterBase` / `FtxAsset.createHitDyeEffect`）
+## ★ 受击染料流体 → 详见 `topics/hit-dye-fluid.md`
 
-- ★★ **降频解算 = 既省算又更清楚**：`velocityScale:0.85` 是**每 step 乘一次**（不按 dt 折算）→ 1s 衰减 0.85^N。
-  60 步/s ≈ 6e-5（速度秒归零、红团糊住）vs 30 步/s ≈ 7.6e-3（留存 **≈130×** → 真会"流"开）。
-  现 `hitDyeStep=1/30` 累积步进，单步 dt 用累积量（**物理时间守恒**）+ 上限 1/10s。
-- ★ 注入点 = **真实命中点**换算成 bbox 归一化（`DamageOptions.hitPoint` → `onTakeDamage(dmg,src,hitPoint)` → `hitUvOf`），拿不到才回退。`hitDyeRadius` 越小越像局部血点（现 0.45 偏大，待定）。
+- ★★ **两个 `createHitDyeEffect` 实现，配置完全不同，改前先确认实体走哪条**：
+  `FtxAsset.load('.ftx3.gz')`（**主角/普通敌人**，`vector`、无衰减、**有注入速度**）
+  vs `Asset.load('.scene.zip')`（**BOSS/无人机/祖宗/抽卡立绘**，`scalar`、**`decayRate 0.0588/步`**、无速度）。
+- ★★ **"注入量大"只能靠持续注入**（`injectDensity`/`injectColor` 的 rate 都 clamp ≤1.0，重注入=**覆盖非叠加**）
+  ⇒ 每个解算步**先重注入再 `step`**。★ **降频影响按路径分**：scalar 的 `decayRate` 是每步的 ⇒ 30 步/s 比 60 步/s 亮 **6.4×**；vector 无衰减 ⇒ 只省算。
+- ★★ **流体特效解算统一 1/30 降频**（受击染料 / 死亡动画 / 祖宗流体 / 图标动画）。
+  **`maxVelocity`：受击染料 50、死亡动画 200 px/s**（死亡动画原 20000 太猛、50 太温）。
+  **压力投影开关的判据 = 速度场是否恒 0**。
+- ★★ **调"力度"前先算稳态流速**：`v_eq ≈ g / (步率 × (1 − velocityScale))`（死亡动画 ≈ **1.63g**）。
+  **`v_eq` 必须 < `maxVelocity`**，否则被钳位、怎么调都是同一个结果（踩过：g=160 ⇒ v_eq≈261 ⇒ 仍顶格）。
+- ★★ **散度注入 = `FluidSolver.explode()`**（step 3.6，**压力投影之前**）：**`strength` 必须为负才是"向外"**；
+  散度场每步 4.5 `clearGrid` = 一次性消费 ⇒ **别每帧调**；只在 `enablePressure = true` 时有效。
+  ★ **levelSet**：`surfaceTension > 0` 才真的施加（负值 = 等效关闭）、`reinitIterations` **无兜底**必须给全、
+  开启后压力求解切成**自由表面模式**。详见 `topics/hit-dye-fluid.md`。
+- ★★ **注入位置用 `mesh.worldToLocal()`**（位置 + 镜像 scale + `setBillboard` 竖牌朝向一并处理），`u=0.5+local.x`、`v=0.5−local.y`；
+  **竖直高度问 `EntityBase.hitAnchorY()`**（覆写 = 贴片 65%），**别再写死 `position.y + 1.0`**（3.67m 敌人落大腿）。
+- ★ 注入值在**残差空间**（0.5 = 不变，`h=0` 是色相 −180° 不是"红"）；贴片是**整体替换**流体纹理，不是叠加。
 
 ## ★ 遗物 / 物品 / 抽卡 / 文案
 
@@ -64,32 +73,21 @@
 - ★ **用户贴的剧情文本逐字照抄，禁止润色**；落地后机器校验（一次性 .py 深比较 + difflib，跑完删）。真源 `config/dialogues.json`（顶层 `trees`）；effects `item/relic/random_relic/flag/heal`，随机遗物用 `random_relic`。
 - ★ 给玩家东西 = `WorldUIManager.showPickupResult`（唯一播报渠道），成功再 `flashItemAndRefresh`；取名走 `displayNameOf()`。
 
-## ★★ 敌军名册（唯一真源 `src/config/enemyRoster.ts`）
+## ★★ 敌军名册 → 详见 `topics/spawn-quota-and-roster.md`
 
-- **加敌军 = 放帧包 + 名册加一条，零其他改动**；`ENEMY_ROSTER` 顺序 = `main.ts` 加载顺序 = `mobIndex`。
-- ★★ **禁止「取模复用数值」**（旧 `MOB_BLUEPRINTS[i%3]` = 第 4 个起变换皮）→ 现按 id `ENEMY_BY_ID.get()` 一一对应，查不到 warn+回退。
-- ★★ **远程兵种必须同时给 `attackRadius` 与 `attackRange`**：前者只是刹车距离，真正判定半径是 `meleeSwing.params.range`（缺省 1.8）→ 只放大 attackRadius 会站远处挥空。
-- 素材缺失只 warn 跳过；`npm run guard` 校验 file/掉落 id/id 唯一/public 漏登记。引擎缺口：远程无弹道／飞行怪无空中层／海怪不下水。
-- ★★ **贴片接地：新素材必查**。FTX bbox 不保证贴脚底（导出留白）→ 底部锚点 ⇒ 留白 = 悬空。`services/fx/FootAnchor.ts` 运行时自动量（读 alpha）；`MobDef.groundSink = ratio×scale + 手调`。
-  ★★ **L3 `FTXQuad.setGroundSink` 与 L2 `SwarmBatch` 实例 y（含血条 `offsetY`）两条路径都要补**，否则"远看接地近看悬空"。★ 名册 `scale` = **quad 宽**，身高 = `scale×(bbox.h/bbox.w)`。工具 `.workbuddy/tools/ftx_foot_measure.py`。
+- 唯一真源 `src/config/enemyRoster.ts`：**加敌军 = 放帧包 + 名册加一条，零其他改动**；顺序 = `main.ts` 加载顺序 = `mobIndex`。
+- ★★ **禁「取模复用数值」**（第 4 个起变换皮）→ 按 id `ENEMY_BY_ID.get()` 一一对应。**远程兵种必须同时给 `attackRadius` 与 `attackRange`**（真正判定半径是 `meleeSwing.params.range`，缺省 1.8）。
+- ★★ **贴片接地新素材必查**：FTX bbox 不保证贴脚底 → `FootAnchor.ts` 自动量 + `MobDef.groundSink`；**L3 `FTXQuad.setGroundSink` 与 L2 `SwarmBatch` 实例 y（含血条 `offsetY`）两条路径都要补**。
 
-## ★ 其他模块
+## ★ 其他模块 → 详见 `topics/ui-overlay-and-misc.md`
 
-- 访客：加访客只改 2 config（`visitors.ts` + `dialogues.json`）；模型轴 `y`=前后(脸朝 -y)、`z`=高、`x`=左右（详见技能 `threejs-glb-model-swap`）。
-- 小游戏：加新游戏 = 丢文件进 `src/minigames/games/`（`import.meta.glob` 自注册）；壳 `MiniGameOverlay` z-index 300；`exit()` 先 `closeMiniGame()`。★ 素材降级两坑：`<img>` 无 src 时 **onerror 不触发** → 显式判 `!tex`；`replaceWith` 后旧字段引用失效。
-- ★★ **UI 入口显隐两级控制**：`settingsAllowed`（只有 BaseMode true）+ `settingsSuppressed`（页面级）→ `applySettingsVisible()` = `setVisible(allowed && !suppressed)`，页面调 `globalThis.setSettingsSuppressed(bool)`。
-  ★★ **凡左上角有返回键的全屏页，show()/hide() 必须成对压制/恢复齿轮**（已接 `CraftingOverlay`、`GachaOverlay`）。返回按钮统一 `ui/components/BackButton.ts`；性能 HUD 默认隐藏。
-- 房间/基地视觉：`RoomDecoGeo` + `RoomSurfaceMaterial` + `ui/base/RoomDecor.ts`。★ ShaderMaterial：frag 每个自定义 uniform 都要声明（含 uTime）、GLSL 禁尾随逗号、末尾 `#include <colorspace_fragment>`——漏一条 = 该材质全部 mesh 不渲染。
+- ★★ **UI 入口显隐两级**：`settingsAllowed`（只有 BaseMode）× `settingsSuppressed`（页面级）；**凡左上角有返回键的全屏页 `show()/hide()` 必须成对压制/恢复齿轮**。返回统一 `ui/components/BackButton.ts`。
+- 小游戏：**丢文件进 `src/minigames/games/` 零索引改动**（`import.meta.glob` 自注册）；壳 z-index 300。
+- 访客：只改 `visitors.ts` + `dialogues.json` 两 config。
+- 房间视觉：`RoomDecoGeo` + `RoomSurfaceMaterial` + `ui/base/RoomDecor.ts`；★ ShaderMaterial 漏声明一个 uniform = 该材质全部 mesh 不渲染。
 
-## ★ 架构治理
+## ★ 架构治理 / 蜂群 v2 → 详见 `topics/arch-and-swarm-v2.md`
 
-- 头部过重（上限 1200，已知债务 warn）：`WorldMode.ts` 4129→**3570**、`ChunkManager.ts` 3481、`GachaOverlay.ts` 1763、`FluidSolver.ts` 1505。下一刀建议 `ChunkManager.ts`。
-- ✅ P0-a（setPhase 收口）/ P1（拆 WorldSpawner）/ P2（删死代码 + guard）已完成；未做 P0-b（BgmKey 改 keyof 派生）。
-- **真正让项目膨胀的是「人肉同步」**：不变量靠注释 + 记得改 N 处；WorldMode 是默认垃圾桶。
-- 拆大类见技能 `god-object-extraction`：★ 成员起止行别用花括号配平 → 断言式迁移脚本 → ★ 验证用 .py 方法体归一化 difflib 比对（**tsc 通过 ≠ 行为一致**）。
-
-## ★ 蜂群 v2（设计稿 `全新的游戏/蜂群架构.md` §11~§25，待实施）
-
-- 三级 Battalion→Squad→个体/代理；★ 编队层次**正交于 LOD**。★ 寻路升 **HPA\*+走廊带**（现 FlowField 324m 窗口 = 「找不到玩家」根因），降级链 HPA*→FlowField→直线（**绝不能不动**）。
-- 硬不变量：**两阵营通行掩码**（对玩家=阻挡、对己方=高代价可通行，否则 AI 自锁）；陷阱**不参与 HPA\***；飞行兵**不参与地面寻路**（独立空中层 `isAir`/`altitude`），★ 用户主动要的**减法：只轰炸、绝不缠斗**。
-- 其余（序盘五阶段 / 工事 / 偷袭分队 / 两级火力 / 落点预警）细节一律查该文档，勿凭记忆。
+- 头部过重（上限 1200，仅 warn）：`WorldMode.ts` 4129→**3570**、`ChunkManager.ts` 3481、`GachaOverlay.ts` 1763、`FluidSolver.ts` 1505。**下一刀 `ChunkManager.ts`**。
+- ★ **真正让项目膨胀的是「人肉同步」**：不变量靠注释 + 记得改 N 处；`WorldMode` 是默认垃圾桶。拆大类流程见技能 `god-object-extraction`（**tsc 通过 ≠ 行为一致**，须方法体 difflib 比对）。
+- 蜂群 v2（设计稿 `蜂群架构.md` §11~§25，待实施）：寻路升 **HPA\*+走廊带**（现 FlowField 只 324m 窗口 = 「找不到玩家」根因）；硬不变量 = 两阵营通行掩码 / 陷阱不参与 HPA\* / 飞行兵不参与地面寻路。**细节一律查该文档**。

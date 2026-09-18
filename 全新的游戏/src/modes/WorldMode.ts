@@ -2502,7 +2502,8 @@ export class WorldMode implements IGameMode {
       applyDamage(dmg, p, targets[i], {
         type: 'arts',
         ignoreDefense: true,
-        hitPoint: { x: p.position.x, y: targets[i].position.y + 1.0, z: p.position.z },
+        // ★ 纵向问目标自己（别写死 +1.0：对高个敌人会落到大腿）
+        hitPoint: { x: p.position.x, y: targets[i].hitAnchorY(), z: p.position.z },
       });
     }
   }

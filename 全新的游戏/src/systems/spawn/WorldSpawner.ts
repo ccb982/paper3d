@@ -575,9 +575,9 @@ export class WorldSpawner {
         const d2 = dx * dx + dz * dz;
         if (d2 <= bestD2) { bestD2 = d2; best = d; }
       }
-      // ★ 命中点：横向取代理位置（代理侧只给了 x/z）；纵向用目标躯干高度
+      // ★ 命中点：横向取代理位置（代理侧只给了 x/z）；纵向问目标自己（别写死 +1.0）
       if (best) applyDamage(dmg, AGENT_SOURCE, best, {
-        hitPoint: { x, y: best.position.y + 1.0, z },
+        hitPoint: { x, y: best.hitAnchorY(), z },
       });
       return;
     }
@@ -588,7 +588,7 @@ export class WorldSpawner {
       return;
     }
     if (!this.deps.player.dead) applyDamage(dmg, AGENT_SOURCE, this.deps.player, {
-      hitPoint: { x, y: this.deps.player.position.y + 1.0, z },
+      hitPoint: { x, y: this.deps.player.hitAnchorY(), z },
     });
   }
 

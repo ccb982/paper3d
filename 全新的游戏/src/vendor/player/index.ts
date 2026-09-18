@@ -368,16 +368,38 @@ export class Asset implements CharacterFxAssetSource {
       entities.push(ed);
     }
 
-    // ★ 死亡动画强制矢量模式 + 强重力 + 大速度上限（流体消散用）
+    // ★ 死亡动画强制矢量模式。
+    // ★★ 速度上限（2026-09-18 定稿 = **200 px/s**）：原 20000 → 50 → 200。
+    //   20000 太猛（冲量 800~2000 直接飞散）／ 50 太温（散度爆炸被限死）⇒ 200 正好。
+    //   ⚠ 同时决定平流子步数 substeps = ceil(maxVel·dt/minGrid)：200 px/s @1/30s = 6.7px/步
+    //     ⇒ 正常尺寸贴片仍是 1 个子步。
+    // ★ 小力度推力：`gravity` 4000 → **20 px/s²**。这里只是初值，
+    //   `DeathAnimEffect.play()` 会立刻 `updateConfig` 覆盖成随机方向的 20（见其 DEATH_PUSH_FORCE）。
+    //   ★ 判据 = 稳态流速 v_eq ≈ 1.63·g 必须 < maxVelocity；g=20 ⇒ ≈33 px/s，留足余量。
+    // ★ 2026-09-18：levelSet **开启**（此前未配置 = 关）。配置说明见 FtxAsset 同名方法。
     const physics: PhysicsConfig = {
       ...(this.frames[frameIndex].physics ?? {}),
       enableAdvection: true,
       enablePressure: true,
       pressureIterations: 30,
       advectionMode: 'vector',
-      gravity: { x: 0, y: 4000 },
+      gravity: { x: 0, y: 20 },
       velocityScale: 0.98,
-      maxVelocity: 20000,
+      maxVelocity: 200,
+      levelSetConfig: {
+        enabled: true,
+        reinitInterval: 10,
+        reinitIterations: 2,
+        surfaceTension: 10000,
+        smoothingRadius: 2,
+        narrowBandWidth: 5,
+        constrainLiquid: false,
+        outwardDamping: 1,
+        clampAirPhi: true,
+        maxAirPhi: 0,
+        compensateWaterPhi: true,
+        waterCompensationRate: 0.1,
+      },
     };
 
     return new FluidEffect(renderer, physics, ftxFrame, palette, entities);
@@ -403,7 +425,14 @@ export class Asset implements CharacterFxAssetSource {
     const physics: PhysicsConfig = {
       // coreSwitches
       enableAdvection: true,
-      enablePressure: true,
+      // ★★ 2026-09-18 关掉压力投影：本路径**不注入速度**（`Asset` 不声明 hitDyeSpreadSpeed
+      //    ⇒ CharacterBase 的 hitDyeVel 恒为 {0,0}），且 gravity = {0,0}、无持续源 / 无爆炸
+      //    ⇒ 速度场自 initFields() 清零后**恒为 0** ⇒ ∇·u ≡ 0 ⇒ 解 ∇²p = 0（Neumann）得 p ≡ 0。
+      //    于是「100 迭代 × 红黑两趟 = 200 趟 GPU pass/step」全部是恒等变换（纯白烧）。
+      //    关掉后视觉零影响，且这笔省下的预算**超过** vector 路径恢复压力投影的代价
+      //    （那边 20 迭代 = 40 趟/step）⇒ 两边合起来仍是净省。
+      //    ⚠ 若将来给这条路径也加注入速度，必须改回 true，否则压力不投影。
+      enablePressure: false,
       pressureIterations: 100,
       pressureOmega: 1.7,
       pressureBoundaryMode: 'neumann',

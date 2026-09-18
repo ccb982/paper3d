@@ -24,6 +24,8 @@ import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physi
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
 const _obstacleBuf: StaticObstacle[] = [];
+/** ★ 命中点→贴片局部坐标的 scratch（命中是低频事件，但仍不分配） */
+const _hitLocal = new THREE.Vector3();
 
 export interface CharacterBaseOptions extends EntityBaseOptions {
   /** 动画状态表（状态 → 帧名序列，按朝向分组） */
@@ -165,7 +167,7 @@ export abstract class CharacterBase extends EntityBase {
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     this.separateFromStatics();
     const _c3 = performance.now();
-    // ★ 受击染料推进（矢量平流 + 计时释放）
+    // ★ 受击染料推进（降频解算 + 每步持续注入 + 计时释放）
     this.updateHitDye(dt);
     const _c4 = performance.now();
     entityPerf.move += _c1 - _c0;
@@ -286,7 +288,9 @@ export abstract class CharacterBase extends EntityBase {
    *   死亡动画开关（玩家死亡 = 传送复活，不销毁 → 走 onDeath 覆写跳过） */
   protected deathAnimEnabled = true;
 
-  // ★ 受击染料管线（矢量平流注红 + 速度阻尼；变色表示受伤，缓停后恢复）
+  // ★ 受击染料管线（FTX 残差通道染色：色相反转 + 提饱和提亮；计时到点释放恢复原样）
+  //   ★ 现状 = **静态色斑**：注入速度 {0,0} + 无重力/持续源/爆炸 ⇒ 速度场恒 0，没有"流动"。
+  //     想让它"晕开"需要给注入速度（见 FtxAsset 里 enablePressure 的条件说明）。
   protected hitDye: FluidEffect | null = null;
   /** 受击染料存活计时（超时释放 → 恢复原纹理） */
   private hitDyeTimer = 0;
@@ -294,28 +298,61 @@ export abstract class CharacterBase extends EntityBase {
   protected hitDyeDuration = 1.2;
   /** 受击染料开关（不需要的角色可关，默认开；★ 仅最高档 LOD(0) 启用，远距离省算） */
   protected hitDyeEnabled = true;
-  /** ★ 受击染料注入参数（H/S/L/A + 速率；红色系，高饱和/高亮更明显） */
+  /** ★ 受击染料注入目标（写进 **残差场** colorGrid —— 0.5 才是"不变"，不是最终颜色！）
+   *  合成公式（FluidSolver.buildCompositeMat / FTXQuad 同款）：
+   *    finalH = fract(baseH + (h−0.5))、finalS/L = clamp(baseS/L + (s/l−0.5))、
+   *    finalA = max(base.a, a)
+   *  ⇒ 现值含义：
+   *    h=0    → 色相 **−180°**（对任何底色都是最剧烈的反转，所以不需要"红"）；
+   *    s=1    → 饱和度 **+0.5**（拉满）；
+   *    l=0.8  → 明度 **+0.3**（显著提亮）；
+   *    a=0.4  → ★ **只压"溢出体外"的色雾**：体内 base.a 恒为 1 → `max(1,0.4)=1`，
+   *             染色强度不受影响；体外 base.a=0 → 色雾淡一档，不再糊一大团。
+   *  ★ 目标不是"变红"而是"受击处最大对比"——色相反转 + 提饱和 + 提亮已是极限组合。 */
   protected hitDyeColor: [number, number, number, number] = [
-    0.0, 0.95, 0.6, 0.9,
+    0.0, 1.0, 0.8, 0.4,
   ];
-  /** 受击染料注入半径（归一化，默认 0.45） */
-  protected hitDyeRadius = 0.45;
-  /** ★ 受击染料解算步长（秒）—— 累积到该步长才 step 一次（降频省算）。
-   *  ★ 为什么降频反而让扩散更清楚：解算器里 `velocityScale: 0.85` 是**每步**乘一次，
-   *    即每秒衰减 0.85^N。60 步/s → 0.85^60 ≈ 6e-5，一秒内速度基本归零（红团原地糊住）；
-   *    30 步/s → 0.85^30 ≈ 7.6e-3，速度留存多 **130 倍** → 红团真的会"流"出去。
-   *  ★ 失稳风险：平流是半拉格朗日（无条件稳定）；子步数 substeps = ceil(maxVel·dt / minGrid)，
-   *    hit-dye 的 maxVelocity = 3000 ⇒ 阈值 minGrid ≥ maxVel/30 = **100px**：
-   *      · minGrid ≥ 100px 的贴片 → 仍为 1 个子步（绝大多数敌人）；
-   *      · 小于 100px 的最小贴片（如原石虫一档 ≈88px）→ 平流那一趟升到 2 个子步。
-   *    即便升到 2，也只抵消「平流」这 1 趟，其余约 10 趟 GPU pass 依旧砍半 ⇒ 净收益仍为正。
-   *  ⇒ 1/30 是安全点，与 `WorldMode` 祖宗流体、图标动画的 1/30 约定一致；想更明显可调 1/20。 */
+  /** 受击染料注入半径（bbox 归一化）。
+   *  ★ 0.45 → 0.13：原来 `smoothstep(0.45, 0, d)` 覆盖 ≈90% 贴片宽 ⇒ 变化被摊薄成一大片淡染
+   *    （这才是"不明显"的主因）。收到 0.13 后中心满染、边缘羽化 ⇒ 局部高对比"受击斑"。
+   *  ★ uv 空间各向异性：竖直方向实际半径 = 0.13 × (bbox.h/bbox.w)，高瘦贴片上呈竖椭圆斑
+   *    （躯干命中反而自然）。 */
+  protected hitDyeRadius = 0.13;
+  /** ★ 受击染料解算步长（秒）—— 累积到该步长才 step 一次（降频省算，也定义"持续注入"的节拍）。
+   *  ★ 收益：解算次数从 ~60/s 降到 30/s ⇒ GPU pass 减半。
+   *  ★★ **降频对观感的影响"按路径分"，不能一概而论**（前后两次误判都出在这一点）：
+   *    · `scalar`（BOSS/无人机/祖宗/抽卡）：`decayRate 0.0588/步` ⇒ 降频真的更持久 ——
+   *      60 步/s 一秒剩 2.5%、30 步/s 剩 15.7%（**6.4×**）；
+   *    · `vector`（主角/普通敌人）：无衰减项 ⇒ 降频**只省算**。
+   *      （`velocityScale` 虽也是"每步乘一次"，但本效应靠**持续注入速度**把流速顶在
+   *        `maxVelocity`，所以那里同样不敏感。）
+   *  ★ 失稳风险：平流是半拉格朗日（无条件稳定）；子步数 substeps = ceil(maxVel·dt / minGrid)。
+   *    hit-dye 的 `maxVelocity` 现为 **50 px/s**（vector 路径，2026-09-18 由 3000 压下来）
+   *    ⇒ 阈值 minGrid ≥ 50/30 ≈ **1.7px**，任何贴片都远大于它 ⇒ **恒定 1 个子步**，
+   *      降频不会再换来额外子步 ⇒ 净收益 = 纯粹的 pass 减半。
+   *  ⇒ 1/30 是安全点，与 `WorldMode` 祖宗流体、图标动画、死亡动画共用同一约定。 */
   protected hitDyeStep = 1 / 30;
   /** 已累积的未解算时间（跨帧；新建流体/释放后不重置，只会让首步稍早发生） */
   private hitDyeAccum = 0;
 
-  /** ★ 受击：注入红色染料（矢量平流晕开；已有则重置计时重新注入）。
-   *   仅 viewLod===0（最高档）启用——远程 LOD 省算、不干扰远焦。 */
+  /** ★★ 持续注入：注入点（bbox 归一化 uv）—— 每个解算步都重注入到这里。
+   *  ★ 为什么"量大"必须靠持续注入而非调数字：
+   *    `injectDensity` 的 value 与 rate 都被 clamp 到 ≤1.0（`FluidInjector.ts:417/459`）
+   *    ⇒ `density = 1.0` 已是**天花板**，调不出"更大量"；`injectColor` 的 rate 同样 ≤1.0
+   *    （`FluidInjector.ts:272`）⇒ 重注入是**覆盖**不是叠加。
+   *  ★ 收益（scalar 路径）：`decayRate 0.0588/步` ⇒ 一次性注入 1 秒后只剩 15.7%，
+   *    每步重注入则全程钉在 ≈0.94 → 全程满强度。
+   *  ★ vector 路径：无衰减项 ⇒ 重注入**幂等**，那里的"看得见"靠注入速度（见 hitDyeVel）。 */
+  private hitDyeAt = { x: 0.5, y: 0.5 };
+  /** ★ 注入速度（uv 空间的向量，px/s）：方向 = 贴片中心→命中点，
+   *  只有资产声明 `hitDyeSpreadSpeed` 时才非零（vector 路径；scalar 路径保持 0）。 */
+  private hitDyeVel = { x: 0, y: 0 };
+  /** 是否处于"持续注入"窗口（受击 → 计时结束/释放） */
+  private hitDyeActive = false;
+
+  /** ★ 受击：注入 FTX 残差染料（在命中点局部染色；已有则重置计时重新注入）。
+   *  仅 viewLod===0（最高档）启用——远程 LOD 省算、不干扰远焦。
+   *  ★★ 这里只负责"开闸"：真正的染色由 `queueHitDyeInjection` 在每个解算步**持续注入**。 */
   protected spawnHitDye(at: { x: number; y: number }): void {
     if (!this.hitDyeEnabled || this.viewLod !== 0) return;
     const renderer = CharacterFxManager.renderer;
@@ -324,6 +361,8 @@ export abstract class CharacterBase extends EntityBase {
         renderer: THREE.WebGLRenderer,
         frameIndex: number,
       ) => FluidEffect | null;
+      /** ★ vector 路径的注入速度幅值（px/s）；scalar 路径不声明 → undefined ⇒ 不注入速度 */
+      hitDyeSpreadSpeed?: number;
     };
     if (!renderer || !source?.createHitDyeEffect) return;
 
@@ -336,36 +375,72 @@ export abstract class CharacterBase extends EntityBase {
     if (!this.hitDye) return;
 
     this.hitDyeTimer = this.hitDyeDuration;
-    // ★ 注入红色染料（scalar 模式注入密度，vector 模式注入颜色）
+    // ★ 注入点缓存（持续注入每个解算步都要复用）
+    this.hitDyeAt.x = at.x;
+    this.hitDyeAt.y = at.y;
+    // ★ 注入速度：方向 = 贴片中心 → 命中点（"朝受击的那一侧晕开"）；幅值由资产给
+    const speed = source.hitDyeSpreadSpeed ?? 0;
+    if (speed > 0) {
+      const dx = at.x - 0.5;
+      const dy = at.y - 0.5;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-4) {
+        this.hitDyeVel.x = (dx / len) * speed;
+        this.hitDyeVel.y = (dy / len) * speed;
+      } else {
+        // 命中点正好在正中（退化）：随机方向，避免零向量不推
+        const a = Math.random() * Math.PI * 2;
+        this.hitDyeVel.x = Math.cos(a) * speed;
+        this.hitDyeVel.y = Math.sin(a) * speed;
+      }
+    } else {
+      this.hitDyeVel.x = 0;
+      this.hitDyeVel.y = 0;
+    }
+    this.hitDyeActive = true;
+    this.queueHitDyeInjection();
+  }
+
+  /** ★★ 往解算队列塞一次染料注入（**每个解算步调一次** = 持续注入）。
+   *  `step()` 开头处理队列、处理完立刻 `length = 0`（`FluidSolver.ts:1020/647`）
+   *  ⇒ 每步重塞是安全的，不会累积重复注入（重复塞才会叠加，这里不会）。
+   *  ★ 注意 `injectVelocity` 是**累加**（`FluidInjector.ts:532` `current + added`）
+   *    ⇒ 持续注入速度会让流速顶到 `maxVelocity` 并保持 = 稳定水流。 */
+  private queueHitDyeInjection(): void {
+    if (!this.hitDye || !this.hitDyeActive) return;
     this.hitDye.solver.queueInjection({
       enabled: true,
-      position: { x: at.x, y: at.y },
+      position: { x: this.hitDyeAt.x, y: this.hitDyeAt.y },
       radius: this.hitDyeRadius,
-      velocity: { x: 0, y: 0 },
+      velocity: { x: this.hitDyeVel.x, y: this.hitDyeVel.y },
       color: this.hitDyeColor,
-      density: 1.0,  // scalar 模式注入浓度，vector 模式忽略
-      rate: 0.6,
+      density: 1.0,  // scalar 模式注入浓度（clamp ≤1.0，已是天花板），vector 模式忽略
+      rate: 1.0,     // 中心直接走到目标残差（拿到最大变化量）
     });
   }
 
-  /** ★ 受击染料每帧驱动（update 内调用）—— **按 hitDyeStep 降频解算**。
+  /** ★ 受击染料每帧驱动（update 内调用）—— **按 hitDyeStep 降频解算 + 持续注入**。
    *  计时按真实 dt 走（1.2s 总时长不变），只把"解算次数"减半；
    *  单步 dt 用累积量 → 物理时间守恒（不是把流体变慢）。
-   *  单步上限 1/10s：卡顿一帧 300ms 时不会把一次解算推进 300ms（防突兀跳变）。 */
+   *  单步上限 1/10s：卡顿一帧 300ms 时不会把一次解算推进 300ms（防突兀跳变）。
+   *  ★★ 每个解算步**先重注入再解算** → 浓度/残差被钉住（持续注入的落点就在这一行）。 */
   private updateHitDye(dt: number): void {
     if (this.hitDye && this.hitDyeTimer > 0) {
       this.hitDyeTimer -= dt;
       this.hitDyeAccum += dt;
       if (this.hitDyeAccum >= this.hitDyeStep) {
+        this.queueHitDyeInjection();
         this.hitDye.step(Math.min(this.hitDyeAccum, 1 / 10));
         this.hitDyeAccum = 0;
       }
       if (this.hitDyeTimer <= 0) {
         // ★ 计时结束：释放流体 → 恢复原纹理（下次受击重建）
+        this.hitDyeActive = false;
         this.hitDye.dispose();
         this.hitDye = null;
       }
     } else if (this.hitDye && this.hitDyeTimer <= 0) {
+      this.hitDyeActive = false;
       this.hitDye.dispose();
       this.hitDye = null;
     }
@@ -379,13 +454,18 @@ export abstract class CharacterBase extends EntityBase {
   }
 
   /** ★ 命中点（世界）→ 贴片注入点（bbox 局部归一化：x 0~1 左→右，y 0~1 上→下）。
-   *  依据三条：
-   *   ① FluidEffect 约定「注入源位置 = bbox 归一化 (0~1)，Y 向下为正」，且解算器分辨率 = 帧 bbox；
-   *   ② FTXQuad 的 texUV = (vUv*(1,-1) * frameSize - bbox.xy) / bbox.zw → bbox 正好铺满整张贴片，
-   *      且流体纹理与基础色共用这个 texUV ⇒ bbox 归一化坐标 = 贴片上的位置；
-   *   ③ 贴片镜像走 mesh.scale 取负（FxRendererBase.applyFlip）⇒ 乘符号还原到纹理方向。
-   *  ★ 夹取到 [0.12,0.88] / [0.08,0.85]：命中点常在体外（近战挥击中心/远处射手），
-   *    这样才能落到"身体近侧边缘"，而不是把整片染到角上。 */
+   *  依据：
+   *   ① `FluidEffect` 约定「注入源位置 = bbox 归一化 (0~1)，Y 向下为正」，解算器分辨率 = 帧 bbox；
+   *   ② 敌人/玩家都调 `setFrameMapping({w:b.w,h:b.h}, {0,0,w,h})` ⇒ `texUV = vUv`（bbox 正好铺满贴片）
+   *      ⇒ bbox 归一化坐标 = 贴片 uv；
+   *   ③ 贴片几何是 `PlaneGeometry(1,1)` ⇒ 挂点局部坐标 ∈ [-0.5, 0.5]，`u = 0.5 + local.x`、`v = 0.5 - local.y`。
+   *  ★★ 用 `mesh.worldToLocal()` 一次处理**三件事**（此前只做了第 1 件，另两件是"位置偏"的来源）：
+   *      · **位置**：mesh.position 已是贴片中心（`FTXQuad.setPosition` 自动抬半高 − groundSink）；
+   *      · **镜像**：`applyFlip` 把 scale 取负 ⇒ worldToLocal 自动带符号（不必手乘 ±1）；
+   *      · **竖牌朝向**：`setBillboard` 每帧把贴片绕 Y 轴转向相机 ⇒ 世界 x 轴 ≠ 贴片局部 x 轴。
+   *        相机不在 +Z 轴上时（第三人称绕圈时几乎总是如此），只用 `point.x − center.x` 会**横向偏移**。
+   *  ★ 夹取到 [0.12,0.88] / [0.08,0.85]：命中点常在体外（挥击中心/远处射手）⇒ 落到"身体近侧边缘"。
+   */
   private hitUvOf(point: EntityHitPoint | null | undefined): { x: number; y: number } {
     const fallback = (): { x: number; y: number } => ({
       x: 0.5 + (Math.random() - 0.5) * 0.2,
@@ -397,12 +477,25 @@ export abstract class CharacterBase extends EntityBase {
     const w = Math.abs(mesh.scale.x);
     const h = Math.abs(mesh.scale.y);
     if (!(w > 1e-4) || !(h > 1e-4)) return fallback();
-    const u = 0.5 + ((point.x - mesh.position.x) / w) * (mesh.scale.x < 0 ? -1 : 1);
-    const v = 0.5 - ((point.y - mesh.position.y) / h) * (mesh.scale.y < 0 ? -1 : 1);
+    mesh.updateMatrixWorld();
+    _hitLocal.set(point.x, point.y, point.z ?? 0);
+    mesh.worldToLocal(_hitLocal);
+    const u = 0.5 + _hitLocal.x;
+    const v = 0.5 - _hitLocal.y;
     return {
       x: Math.min(0.88, Math.max(0.12, u)),
       y: Math.min(0.85, Math.max(0.08, v)),
     };
+  }
+
+  /** ★ 受击锚点高度：贴片竖直 65% 处（胸口）。
+   *  贴片中心在 50% ⇒ `centerY + 0.15 × 贴片高`。
+   *  ★ 基类的"脚底 +1.0m"对 3.7m 敌人只有 v≈0.73（大腿）、对 BOSS 更低 ⇒ 必须问贴片自己。 */
+  override hitAnchorY(): number {
+    const mesh = (this.renderer as unknown as { mesh?: THREE.Mesh } | null)?.mesh;
+    const h = mesh ? Math.abs(mesh.scale.y) : 0;
+    if (mesh && h > 1e-4) return mesh.position.y + h * 0.15;
+    return super.hitAnchorY();
   }
 
   /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */
@@ -430,6 +523,7 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
   override dispose(): void {
+    this.hitDyeActive = false;
     this.hitDye?.dispose();
     this.hitDye = null;
     super.dispose();
