@@ -24,8 +24,6 @@ export const SFX = {
   stepDirt: [encodeURI('/sfx/脚步土.mp3'), encodeURI('/sfx/踩水坑.mp3')],
   /** 入水（一次，走进/落入水面） */
   waterEnter: [encodeURI('/sfx/入水.mp3')],
-  /** 涉水（水中移动，按泛波节拍触发） */
-  waterWade: [encodeURI('/sfx/涉水.mp3')],
   /** 拨草（走过草丛的沙沙声） */
   grassBrush: [encodeURI('/sfx/拨草.mp3'), encodeURI('/sfx/落叶沙沙.mp3')],
   /** 击中草丛（★ 「割草」版已按用户要求移除，不要再把它加回来） */
@@ -50,6 +48,15 @@ export type SfxId = keyof typeof SFX;
 export const LOOP_SFX = {
   /** 舰船航行期引擎轰鸣（10s 无缝循环，48kbps 单声道 59KB） */
   shipEngine: encodeURI('/sfx/飞行引擎.mp3'),
+  /**
+   * ★ 水中持续游动（0.64s 无缝循环，64kbps 单声道 5.5KB）。
+   *   选段来源 = **「入水.mp3」的 0.45~1.25s 持续尾段**（平坦的水流余韵，
+   *   40ms 窗 RMS -18~-23dB、起伏 6.5dB），不是「涉水.mp3」——后者是"哗"的一声瞬态，
+   *   crest 15dB、平均只有 -22dB，循环起来听着就是"一下一下"。
+   *   加工：主体 atrim 0:0.64 + 尾 0.16s 淡出 → amix 叠回开头（否则 loop 接缝咔哒）
+   *   + 归一到 -1.5dBFS。★ 播放速率由调用方每次入水随机（慢放降调）。
+   */
+  waterSwim: encodeURI('/sfx/涉水_loop.mp3'),
 } as const;
 
 export type LoopSfxId = keyof typeof LOOP_SFX;

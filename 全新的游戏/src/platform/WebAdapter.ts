@@ -10,6 +10,12 @@ const BGM_FADE_MS = 700;
 const BGM_VOLUME = 1;
 /** ★ 循环音效通道目标音量（引擎轰鸣：要听得见但不能盖过音乐/音效） */
 const LOOP_SFX_VOLUME = 0.55;
+/**
+ * ★ 循环轨淡入/淡出时长（ms）：比 BGM 的 700ms 短得多。
+ *   原因：循环轨跟的是**秒级动作**（在水里游一下就出来了），
+ *   700ms 淡入会造成"起来了又停了，等于没声"。
+ */
+const LOOP_FADE_MS = 220;
 
 /**
  * ★ 循环音效通道元素句柄（独立于 bgmAudio 的第二条常驻音轨）。
@@ -19,6 +25,14 @@ const LOOP_SFX_VOLUME = 0.55;
 interface LoopTrack {
   el: HTMLAudioElement;
   src: string;
+  /**
+   * ★ 该轨**已下达**的淡入目标音量（2026-09-18 修）：
+   *   调用方可能每帧调 playLoopSfx（涉水轨就是这样），若不看目标就每次 fadeTo，
+   *   fadeTo 会 clearInterval 上一个、从当前音量重新起一段淡入 → 淡入被无限打断，
+   *   音量指数逼近、1.5~2s 才升到目标，短促涉水时等于没声。
+   *   记下目标后，只有目标真的变了才重新淡。
+   */
+  target: number;
 }
 
 export class WebAdapter implements PlatformAdapter {
@@ -31,8 +45,11 @@ export class WebAdapter implements PlatformAdapter {
   private autoplayArmed = false;
   /** ★ 每条约上正在跑的淡化计时器（元素 → interval id）：切断淡化时按元素清理 */
   private bgmFades = new Map<HTMLAudioElement, number>();
-  /** ★ 循环音效通道（引擎轰鸣等）：null = 没在播 */
-  private loopTrack: LoopTrack | null = null;
+  /**
+   * ★ 循环音效通道（引擎轰鸣 / 涉水声等）：**按 src 分轨 → 多条可同时响**
+   *   （2026-09-18：涉水轨要在引擎轨之外独立存在，两者不互相顶掉）。
+   */
+  private loopTracks = new Map<string, LoopTrack>();
 
   createCanvas(): HTMLCanvasElement {
     return document.createElement('canvas');
@@ -86,44 +103,56 @@ export class WebAdapter implements PlatformAdapter {
       const el = this.bgmAudio;
       if (el && !el.paused) this.fadeOut(el);
     },
-    playSfx: (src: string) => {
+    playSfx: (src: string, rate?: number) => {
       const a = new Audio(src);
+      // ★ 慢放：水里涉水声降速 + 降调（更黏滞）；必须在 play 之前设，否则首帧仍是原速
+      if (rate && rate > 0) a.playbackRate = rate;
       a.play().catch(() => {});
     },
-    playLoopSfx: (src: string) => {
-      const cur = this.loopTrack;
-      // ① 同一条：不重设 src（避免重头播），暂停中就续播 + 淡入
-      if (cur && cur.src === src) {
+    playLoopSfx: (src: string, opts?: { rate?: number; volume?: number }) => {
+      const vol = opts?.volume ?? LOOP_SFX_VOLUME;
+      const rate = opts?.rate ?? 1;
+      const cur = this.loopTracks.get(src);
+      // ① 同一条已在册：不重设 src（避免重头播），暂停中就续播 + 淡入
+      if (cur) {
         if (cur.el.paused) {
           cur.el.volume = 0;
           cur.el.play()
-            .then(() => this.fadeTo(cur.el, LOOP_SFX_VOLUME, null))
+            .then(() => this.fadeTo(cur.el, vol, null, LOOP_FADE_MS))
             .catch(() => {});
-        } else if (cur.el.volume < LOOP_SFX_VOLUME) {
-          this.fadeTo(cur.el, LOOP_SFX_VOLUME, null);   // 打断淡出，拉回来
+          cur.target = vol;
+        } else if (Math.abs(cur.target - vol) > 0.001) {
+          cur.target = vol;
+          this.fadeTo(cur.el, vol, null, LOOP_FADE_MS);   // 目标变了才重新淡
         }
+        // ★ 慢放比例即时生效（同一条循环轨换速率不必重建元素）
+        if (cur.el.playbackRate !== rate) cur.el.playbackRate = rate;
         return;
       }
-      // ② 换音 / 首次：旧轨淡出，新轨淡入
-      if (cur) {
-        const old = cur;
-        this.fadeTo(old.el, 0, () => { old.el.pause(); });
-        this.loopTrack = null;
-      }
+      // ② 首次起轨（不再顶掉别的轨：引擎与涉水可同时响）
       const el = new Audio();
       el.loop = true;
       el.volume = 0;
+      el.playbackRate = rate;   // ★ 必须在 play 之前设
       el.src = src;
-      this.loopTrack = { el, src };
+      this.loopTracks.set(src, { el, src, target: vol });
       el.play()
-        .then(() => this.fadeTo(el, LOOP_SFX_VOLUME, null))
+        .then(() => this.fadeTo(el, vol, null, LOOP_FADE_MS))
         .catch(() => { /* 自动播放被拦：等下一次调用或用户手势再补 */ });
     },
-    stopLoopSfx: () => {
-      const cur = this.loopTrack;
-      if (!cur) return;
-      this.loopTrack = null;   // 先解绑，淡出期间再调 play 会新建元素
-      this.fadeTo(cur.el, 0, () => { cur.el.pause(); });
+    stopLoopSfx: (src?: string) => {
+      if (src) {
+        const cur = this.loopTracks.get(src);
+        if (!cur) return;
+        this.loopTracks.delete(src);   // 先解绑，淡出期间再调 play 会新建元素
+        this.fadeTo(cur.el, 0, () => { cur.el.pause(); }, LOOP_FADE_MS);
+        return;
+      }
+      // 全停（退模式 / 回基地）
+      for (const cur of this.loopTracks.values()) {
+        this.fadeTo(cur.el, 0, () => { cur.el.pause(); }, LOOP_FADE_MS);
+      }
+      this.loopTracks.clear();
     },
   };
 
@@ -142,10 +171,16 @@ export class WebAdapter implements PlatformAdapter {
   }
 
   /**
-   * 单条音轨音量线性渐变到目标值（约 BGM_FADE_MS 完成）。
+   * 单条音轨音量线性渐变到目标值（默认 BGM_FADE_MS 完成；循环轨传 LOOP_FADE_MS
+   * —— 游动是秒级动作，700ms 淡入等于"来不及响"）。
    * 用 setInterval 而非 rAF：切后台时 rAF 停摆，音量会卡在半途。
    */
-  private fadeTo(el: HTMLAudioElement, to: number, onDone: (() => void) | null): void {
+  private fadeTo(
+    el: HTMLAudioElement,
+    to: number,
+    onDone: (() => void) | null,
+    ms: number = BGM_FADE_MS,
+  ): void {
     const prev = this.bgmFades.get(el);
     if (prev !== undefined) {
       window.clearInterval(prev);
@@ -158,7 +193,7 @@ export class WebAdapter implements PlatformAdapter {
     }
     const t0 = Date.now();
     const timer = window.setInterval(() => {
-      const k = Math.min(1, (Date.now() - t0) / BGM_FADE_MS);
+      const k = Math.min(1, (Date.now() - t0) / ms);
       el.volume = from + (to - from) * k;
       if (k >= 1) {
         window.clearInterval(timer);

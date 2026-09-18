@@ -39,12 +39,44 @@ effects 内置 type 小抄：
   （三级优先：sail 静音 > battle > interior/explore）。**每个 `this.phase =` 赋值后必须跟一次**
   （5 处）+ `groupWarnShown` 翻转后也要跟（3 处）。
 - `WebAdapter.playBgm` 有路径级去重（同 src 续播不重头）；淡入淡出 `BGM_FADE_MS=700` 也在 WebAdapter。
-- SFX：`src/config/sfx.ts`（每个 id 一组候选变体）+ `Sfx.ts` 的 `playSfx(id, minGapMs)`，
+- SFX：`src/config/sfx.ts`（每个 id 一组候选变体）+ `Sfx.ts` 的 `playSfx(id, minGapMs, rate?)`，
   **必须节流**（触发点在 update 里）。素材 Mixkit，64kbps 单声道，`public/sfx/` 11 个 ≈84KB。
+  ★ **`minGapMs` 必须 ≥ 素材时长**，否则每次都在上一个没播完时 new 一个新实例 → 多层叠着响 = 糊成噪声
+  （涉水 0.73s/330ms 就是这个坑）。`rate<1` 慢放会拉长时长，间隔要同步放大。
+  rate 走 `WebAdapter` 的 `a.playbackRate`（**必须在 play() 之前设**），微信侧对应 `InnerAudioContext.playbackRate`。
   触发线：`updateAmbientSfx`（脚步按位移 2.2m 一步）/ `updateWaterEntry`（仅玩家）/
   `updatePlantGustSweep`（`plantGustAt` 返回 boolean 才响）/ `resolveBulletHit` → bulletGround。
-- 循环轨（`shipEngine` 引擎声，sail 段响）走 **`playLoopSfx/stopLoopSfx` + `LOOP_SFX` 独立表**，
-  不进 BGM 通道（BGM 只有一个 audio 元素，会互相顶掉）。从航行段直接回基地要手动停。
+- 循环轨走 **`playLoopSfx(id, {rate?, volume?})` / `stopLoopSfx(id?)` + `LOOP_SFX` 独立表**，
+  不进 BGM 通道（BGM 只有一个 audio 元素，会互相顶掉）。从航行段直接回基地要手动停
+  （`main.enterBaseMode` 里的无参 `stopLoopSfx()` = 全停）。
+  ★ **按 src 分轨（`loopTracks: Map`）→ 多条同时响**：`shipEngine`（sail 段）+ `waterSwim`（涉水）。
+  ★ `playbackRate` 必须设在 `play()` 之前；已在册的轨换 rate 直接改属性（不重头播、不破坏循环）。
+  ★★ **`LoopTrack.target` 不能省**：调用方可能每帧调 `playLoopSfx`（涉水轨就是），
+  `fadeTo` 会 `clearInterval` 上一个并从当前音量重新淡 → 每帧打断 = 指数逼近、1.5~2s 才到
+  目标音量，短动作"等于没声"。只有目标真变了才重新 fade。
+  ★ 循环轨淡入/淡出用 **`LOOP_FADE_MS = 220`**（不是 BGM 的 700）：循环轨跟的是秒级动作。
+  ★ 循环素材**必须做过无缝循环**（主体 + 尾淡出 `amix` 叠回开头），否则接缝咔哒。
+- ★ **水里持续游动 = 连续循环轨，不是点播**（2026-09-18 用户定调）：
+  `WorldMode.updateWadeLoop()` 每帧裁决 —— 在水里且位移 > 0.3 → 起轨，
+  停 / 出水 / 非 explore / 死亡 → 停。慢放比例**每次入水随机 0.70~0.85，轨内固定**（随机防腻、固定防抖），
+  音量 0.35。停止点：`enterShipInterior`（interior 时 update 直接 return）+ `dispose`。
+  水面泛波的视觉节奏（`gap = 340 - speed*28`）独立于声音，没动。
+- ★★ **做"持续声"循环轨的两条硬经验**（2026-09-18 踩过）：
+  1. **选段要选平坦段，不能用瞬态素材去 loop**：`涉水.mp3` 是"哗"的一声（crest 15dB、
+     40ms 窗 RMS 起伏大），loop 起来听着就是"一下一下"。判据 = **40ms 窗 RMS 包络的起伏**，
+     不是 LUFS/peak（旧版 LUFS 更高但更难听清）。
+     现素材 = Mixkit `Sea swimming loop`(1181) **6.0~7.5s 主层**(划水冲击)
+     + `River water flowing`(2454) 20~21.5s **压 6dB 垫底**(填静音谷)，1.28s/10KB，
+     I=-16.5 LUFS、40ms 窗平均 RMS -17.9dB、最大 -14.1dB。
+     ★ **动作层必须是主层，连续层只填空隙** —— 反过来做（河流主+划水压6dB）会得到一段
+     平坦底噪：LUFS/RMS 数据都不差，但人耳完全注意不到（用户反馈"几乎没声"）。
+  2. **循环轨音量别给太低**：一次性音效 `new Audio()` 默认 volume **1.0**，循环轨若给 0.35
+     就比脚步声还轻。当前 `waterSwim` 起轨时**随机** `volume 0.45~0.62`
+     （等效 ≈ -21~-24 LUFS，与脚步 -22.9 同档）+ 随机 `rate 0.80~0.92`
+     （<0.8 明显发闷，反而听不清）。两者都缓存在字段里（轨内固定）。
+  3. **这版 ffmpeg 的 `acompressor` 救不了短素材**：peak 已贴顶（≈-1.2dBFS）时压缩换不来响度
+     （实测 threshold 0.08/ratio 14 反而 I -19.5→-28.7；0.35/ratio 6 只有 +1.3dB）。
+     → 该换选段 / 调播放音量，别死磕压缩。
 
 ## ★ 敌人 LOD 三层与友军索敌（2026-09-17）
 
@@ -139,6 +171,17 @@ effects 内置 type 小抄：
 1. `<img>` 无 src 时 **onerror 不触发** → 必须在 `.then(tex => ...)` 里显式判 `!tex`。
 2. `replaceWith` 后字段引用失效 → 外层用**固定尺寸槽位 div**，动画只驱动槽位。
 3. `let x` + `Promise<typeof x>` → TS 窄化成初值类型 → **显式声明 interface**。
+
+## ★ 从 Mixkit 找/下音效的直链方法（2026-09-18 验证可用）
+
+- 分类页：`https://mixkit.co/free-sound-effects/<tag>/`（water / sea / rivers / underwater …）。
+- **拿 id**：抓 HTML → 用**标题文字出现的位置往前回溯最近的 `active_storage/sfx/<id>/`** 即为该条目的 id
+  （校验过：Water splash→1311、Jump into the water→1180，与 `public/sfx/来源.txt` 一致）。
+  卡片结构里 waveform url 在标题之前，所以是"往前找最后一个"。
+- **下载**：`https://assets.mixkit.co/active_storage/sfx/<id>/<id>-preview.mp3`（preview = 完整素材，非截断）。
+- 沙箱里用 `urllib` + `ssl.CERT_NONE` 能直连；`urllib.request` 要带 UA。
+- 加工链：裁段 → `amix` 分层（主层平坦 + 次层动作感）→ 尾 0.2~0.3s 淡出叠回（无缝循环）
+  → `volume` 归一 -1.5dBFS → 64kbps 单声道。
 
 ## ★ 工程习惯 / 环境
 

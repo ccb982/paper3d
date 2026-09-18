@@ -570,6 +570,17 @@ export class WorldMode implements IGameMode {
     CharacterBase,
     { liquid: boolean; y: number; x: number; z: number; rippleMs: number }
   >();
+  /**
+   * ★ 涉水循环轨状态（2026-09-18 用户定调：水里持续游动 = **慢放的连续水声**，不是点播音）
+   *   - `wadeLoopOn`：循环轨是否起过（幂等起停，避免每帧重建元素）
+   *   - `wadeRate`：本次入水的慢放比例（起轨时随机一次，轨内固定 → 不抖）
+   *   - `wadePrev`：上帧位置（算真实位移速度；静止不动 = 停声）
+   */
+  private wadeLoopOn = false;
+  private wadeRate = 1;
+  /** ★ 本次入水的循环轨音量（起轨时随机一次，轨内固定） */
+  private wadeVol = 0.5;
+  private wadePrev = { x: 0, z: 0, valid: false };
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 调试：F9 颜色回读监听器（exit 时移除） */
@@ -1430,6 +1441,8 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 角色入水 → 水面剧烈波动（只加波动表现，不动角色位置/手感；航行期角色在船上） ----
     if (this.phase === 'explore') this.updateWaterEntry(this.player, dt);
+    // ★ 涉水循环轨：每帧统一裁决（非探索阶段自动淡出，防航行/舰内残留水声）
+    this.updateWadeLoop(dt);
     // ★ 环境音效：脚步 / 拨草（入水·涉水音在 updateWaterEntry 内，只对玩家那次生效）
     if (this.phase === 'explore') this.updateAmbientSfx(dt);
     for (const e of this.enemies) this.updateWaterEntry(e, dt);
@@ -1682,6 +1695,9 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 角色入水检测状态 ----
     this.waterPrev.clear();
+
+    // ---- ★ 涉水循环轨（退出世界必须停：否则水声会跟着你进基地） ----
+    this.stopWadeLoop();
 
     // ---- ★ 销毁私有输入绑定 ----
     this.binding?.dispose();
@@ -2495,9 +2511,53 @@ export class WorldMode implements IGameMode {
       if (now - rec.rippleMs >= gap) {
         rec.rippleMs = now;
         sharedWaterMaterial.addImpact(p.x, p.z, Math.min(0.55, 0.28 + movedSpeed * 0.06));
-        if (e === this.player) playSfx('waterWade', 330);
+        // ★ 涉水声不再按节拍点播（0.73s 素材 @330ms = 多层叠着响的糊声）→ 改走
+        //   连续循环轨，见 updateWadeLoop（慢放比例每次入水随机）。
       }
     }
+  }
+
+  /**
+   * ★ 涉水循环轨（仅玩家）：在水里且真的在移动 → 一条慢放的连续水声；
+   *   停下 / 出水 / 非探索阶段 → 淡出。
+   *
+   * 为什么是循环轨而不是点播：素材 0.73s，点播再怎么拉间隔都是"一段一段"的；
+   *   而游动是持续状态，听感上必须连续。慢放比例每次起轨随机（0.70~0.85），
+   *   同一条轨内固定 —— 随机是为了不腻，固定是为了不抖。
+   */
+  private updateWadeLoop(dt: number): void {
+    const on = this.phase === 'explore' && !this.player.dead;
+    const p = this.player.position;
+    const liquid = on && this.raster.tileDefAt(p.x, p.z).genRole === 'liquid';
+    let speed = 0;
+    if (this.wadePrev.valid && dt > 1e-3) {
+      speed = Math.hypot(p.x - this.wadePrev.x, p.z - this.wadePrev.z) / dt;
+    }
+    this.wadePrev.x = p.x;
+    this.wadePrev.z = p.z;
+    this.wadePrev.valid = true;
+
+    if (on && liquid && speed > 0.3) {
+      if (!this.wadeLoopOn) {
+        this.wadeLoopOn = true;
+        // ★ 每次入水随机慢放比例（降速同时降调 → 水里的黏滞感）。
+        //   0.80~0.92：再慢（<0.8）会明显发闷，反而听不清。
+        this.wadeRate = 0.80 + Math.random() * 0.12;
+        // ★ 每次入水随机音量 0.45~0.62（等效 ≈ -21~-24 LUFS，与脚步声 -22.9 同档）。
+        //   ★★ 必须缓存在字段里：每帧都调 playLoopSfx，音量若逐帧变化会不停触发淡入淡出。
+        this.wadeVol = 0.45 + Math.random() * 0.17;
+      }
+      playLoopSfx('waterSwim', { rate: this.wadeRate, volume: this.wadeVol });
+    } else if (this.wadeLoopOn) {
+      this.stopWadeLoop();
+    }
+  }
+
+  /** ★ 停掉涉水循环轨（进舱 / 退模式 / 换局：防止水声残留到别的场景） */
+  private stopWadeLoop(): void {
+    this.wadeLoopOn = false;
+    this.wadePrev.valid = false;
+    stopLoopSfx('waterSwim');
   }
 
   /**
@@ -3692,6 +3752,7 @@ export class WorldMode implements IGameMode {
     renderManager.setEnvironment('ship');
     renderManager.setFlightMode(true);
     renderManager.setClockPaused(true);   // ★ 舰内冻结昼夜：世界已停，出舱时天色不该变
+    this.stopWadeLoop();                  // ★ 进舱时 update 直接 return → 必须手动停水声
     this.chunks.setWaterVisible(false);
     // ★ 舰内操作全部事件触发式（2026-09-16 用户定调：加工台/下船/起飞/返回罗德岛号
     //   都做成走到指定区域按键触发，不再有按钮条）。
