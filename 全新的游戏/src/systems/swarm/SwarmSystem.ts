@@ -168,9 +168,10 @@ export class SwarmSystem {
   // 每帧驱动（模式层 explore 阶段调用）
   // ============================================================
   update(dt: number, hooks: SwarmHooks): void {
-    const t0 = performance.now();
+    const _te = entityPerf.enabled;
+    const t0 = _te ? performance.now() : 0;
     this.grid.rebuild(this.pool);
-    const t1 = performance.now();
+    const t1 = _te ? performance.now() : 0;
     // ★ P2：流场重建（3Hz 或中心移动 > 1 格）——源 = 玩家 + 舰船
     const raster = RasterMap.current;
     this.flowTimer -= dt;
@@ -255,7 +256,7 @@ export class SwarmSystem {
         this.move(i, step);
       }
     }
-    const t2 = performance.now();
+    const t2 = _te ? performance.now() : 0;
     // ★ 远距回收统一回调（不算击杀；模式层据此扣减当日配额）
     if (recalled > 0) hooks.onAgentRecalled?.(recalled);
     entityPerf.swarmBrain += t2 - t1;
@@ -268,7 +269,7 @@ export class SwarmSystem {
    *    （远层敌人 35~90m 无 EnemyBase → 无 HealthBar，这里用实例化血条补齐） */
   syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0): void {
     if (!this.batch) return;
-    const t0 = performance.now();
+    const t0 = entityPerf.enabled ? performance.now() : 0;
     const raster = RasterMap.current;
     // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
     this.batch.sync(
@@ -278,7 +279,7 @@ export class SwarmSystem {
       undefined, // maxDist：走默认（LOD_MAX_DIST）
       performance.now() / 1000,
     );
-    entityPerf.swarmRender += performance.now() - t0;
+    entityPerf.swarmRender += (entityPerf.enabled ? performance.now() : 0) - t0;
   }
 
   // ============================================================
@@ -498,9 +499,9 @@ export class SwarmSystem {
       if (Math.abs(dx) > 1e-4 || Math.abs(dz) > 1e-4) p.yaw[i] = Math.atan2(dx, dz);
     }
     // ---- 人群分离（网格 3×3 邻域） ----
-    const t0 = performance.now();
+    const t0 = entityPerf.enabled ? performance.now() : 0;
     this.grid.separation(p, i, _sep);
-    entityPerf.swarmSep += performance.now() - t0;
+    entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     if (_sep.x !== 0 || _sep.z !== 0) {
       p.x[i] += _sep.x;
       p.z[i] += _sep.z;

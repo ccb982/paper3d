@@ -6,6 +6,9 @@
 // ============================================================
 
 export const entityPerf = {
+  /** ★ P1 采样开关：false = 热路径不做 performance.now()（分项保持 0）。
+   *  由 main 置位：`?perf=1`（脚本采样）或性能 HUD 开启。 */
+  enabled: false,
   /** 子类行为（移动/位置推进、角色推挤等） */
   behavior: 0,
   /** 物理同步（kinematic 写位 / read 读位） */

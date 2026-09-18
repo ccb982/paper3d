@@ -197,7 +197,10 @@ async function boot() {
     }
   };
   // ★ ?perf=1 → 暴露性能采样钩子（scripts/perf/* 采集用，默认零足迹）
-  if (urlParams.get('perf') === '1') {
+  //   ★ P1：同时打开 entityPerf 计时采样；性能 HUD 开启时也会打开（见 applyHudVisible）
+  const perfHook = urlParams.get('perf') === '1';
+  entityPerf.enabled = perfHook;
+  if (perfHook) {
     (window as unknown as { __ppMode?: () => unknown }).__ppMode = () => currentMode;
     (window as unknown as { __ppWp?: unknown }).__ppWp = worldPerf;
     (window as unknown as { __ppEp?: unknown }).__ppEp = entityPerf;
@@ -395,6 +398,8 @@ async function boot() {
 
   function applyHudVisible(v: boolean): void {
     hudVisible = v;
+    // ★ P1：HUD 关闭且无 ?perf=1 → entityPerf 计时关采样（热路径零 performance.now）
+    entityPerf.enabled = v || perfHook;
     hudWrap.style.display = v ? 'flex' : 'none';
   }
   // ★ 设置面板（左上角白齿轮）：性能面板开关 + 删档

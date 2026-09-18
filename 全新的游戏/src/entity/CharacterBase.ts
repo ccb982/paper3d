@@ -99,7 +99,8 @@ export abstract class CharacterBase extends EntityBase {
     input?: InputActions,
     cameraFrame?: CameraFrame,
   ): void {
-    const _c0 = performance.now();
+    const _ct = entityPerf.enabled;
+    const _c0 = _ct ? performance.now() : 0;
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
@@ -170,16 +171,16 @@ export abstract class CharacterBase extends EntityBase {
         !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;
     }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
-    const _c1 = performance.now();
+    const _c1 = _ct ? performance.now() : 0;
     this.separateFromOthers();
-    const _c2 = performance.now();
+    const _c2 = _ct ? performance.now() : 0;
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     this.separateFromStatics();
-    const _c3 = performance.now();
+    const _c3 = _ct ? performance.now() : 0;
     // ★ 受击染料推进（降频解算 + 每步持续注入 + 计时释放）
     this.hitDyeFx.update(dt);
-    const _c4 = performance.now();
+    const _c4 = _ct ? performance.now() : 0;
     entityPerf.move += _c1 - _c0;
     entityPerf.sepOther += _c2 - _c1;
     entityPerf.sepStatic += _c3 - _c2;

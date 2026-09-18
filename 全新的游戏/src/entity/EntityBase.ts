@@ -369,36 +369,24 @@ export abstract class EntityBase {
     return this._gsFd;
   }
 
-  // ============ 更新骨架 ============
+  // ============ 更新骨架（★ P3 相位切分：Simulate / Present） ============
 
-  /** 每帧驱动（模式层/EntityManager 调用） */
-  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
-    const _p0 = performance.now();
+  /**
+   * ★ Phase 2 Simulate（玩法相）：子类行为（移动/意图消费）→ 物理同步 → 空间索引移块。
+   *   不做任何表现工作（动画/贴片/特效/影子都归 present）。
+   */
+  simulate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    const _t = entityPerf.enabled;
+    const _p0 = _t ? performance.now() : 0;
     this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
-    const _p1 = performance.now();
+    const _p1 = _t ? performance.now() : 0;
     this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
-    const _p2 = performance.now();
-    // ★ 视锥外：跳过纯渲染管线（动画/渲染同步/特效），只保留玩法+物理+空间索引
-    //   （inFrustum 由上帧 renderAll 写入；lodExempt 豁免体恒 true）
-    if (this.inFrustum) {
-      this.anim?.update(dt);                // ③ 动画推进
-    }
-    const _p3 = performance.now();
-    if (this.inFrustum) {
-      this.syncRender();                    // ④ 渲染同步
-      this.updateEffects(dt);               // ⑤ 附属特效驱动（跟随/时间轴/回收）
-    }
-    const _p4 = performance.now();
-    this.em.onEntityMoved(this);            // ⑥ 空间索引移块（集中刷新点）
-    const _p5 = performance.now();
-    this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
-    const _p6 = performance.now();
+    const _p2 = _t ? performance.now() : 0;
+    this.em.onEntityMoved(this);            // ③ 空间索引移块（保持同帧可见，不推迟到表现相）
+    const _p3 = _t ? performance.now() : 0;
     entityPerf.behavior += _p1 - _p0;
     entityPerf.phys += _p2 - _p1;
-    entityPerf.anim += _p3 - _p2;
-    entityPerf.render += _p4 - _p3;
-    entityPerf.moved += _p5 - _p4;
-    entityPerf.shadow += _p6 - _p5;
+    entityPerf.moved += _p3 - _p2;
 
     // ★ 影子朝向跟踪：从位移差实时更新（shadowYaw 消费；与相机角度无关）
     if (!isNaN(this._gsLastX)) {
@@ -410,6 +398,35 @@ export abstract class EntityBase {
     }
     this._gsLastX = this.entity.position.x;
     this._gsLastZ = this.entity.position.z;
+  }
+
+  /**
+   * ★ Phase 5 Present（表现相）：动画推进 → 渲染同步 → 附属特效 → 贴地影子。
+   *   ★ 视锥外（上一帧 renderAll 未命中）只在末尾做影子隐藏调度；回到视野下一帧自动恢复。
+   */
+  present(dt: number): void {
+    const _t = entityPerf.enabled;
+    const _p0 = _t ? performance.now() : 0;
+    if (this.inFrustum) {
+      this.anim?.update(dt);                // ④ 动画推进
+    }
+    const _p1 = _t ? performance.now() : 0;
+    if (this.inFrustum) {
+      this.syncRender();                    // ⑤ 渲染同步
+      this.updateEffects(dt);               // ⑥ 附属特效驱动（跟随/时间轴/回收）
+    }
+    const _p2 = _t ? performance.now() : 0;
+    this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
+    const _p3 = _t ? performance.now() : 0;
+    entityPerf.anim += _p1 - _p0;
+    entityPerf.render += _p2 - _p1;
+    entityPerf.shadow += _p3 - _p2;
+  }
+
+  /** 兼容入口：simulate + present 连跑（旧调用方/单测用；WorldMode 已改显式两相） */
+  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    this.simulate(dt, input, cameraFrame);
+    this.present(dt);
   }
 
   /** 子类行为逻辑（覆写） */

@@ -97,17 +97,30 @@ export class EntityManager {
     this.raster.move(base);
   }
 
-  /** ★ 每帧驱动所有基类实体（统一管线入口：行为→物理→动画→渲染同步） */
-  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
-    // ★ 阶段耗时聚合归零（EntityBase.update 内累加；main.ts HUD 读取）
+  /** ★ Phase 2 Simulate：全部实体跑玩法相（行为→物理→空间索引；结算/查询在此时可见新位置） */
+  simulate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    // ★ 阶段耗时聚合归零（EntityBase.simulate/present 内累加；main.ts HUD 读取）
     entityPerf.behavior = 0; entityPerf.phys = 0; entityPerf.anim = 0;
     entityPerf.render = 0; entityPerf.moved = 0; entityPerf.shadow = 0;
     entityPerf.move = 0; entityPerf.sepOther = 0; entityPerf.sepStatic = 0; entityPerf.dye = 0;
     entityPerf.count = 0;
     for (const base of this.bases.values()) {
-      base.update(dt, input, cameraFrame);
+      base.simulate(dt, input, cameraFrame);
       entityPerf.count++;
     }
+  }
+
+  /** ★ Phase 5 Present：全部实体跑表现相（动画→渲染同步→特效→影子；视锥外自动跳过表现） */
+  present(dt: number): void {
+    for (const base of this.bases.values()) {
+      base.present(dt);
+    }
+  }
+
+  /** 兼容入口：Simulate + Present 连跑（旧调用方用；WorldMode 已改显式两相） */
+  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    this.simulate(dt, input, cameraFrame);
+    this.present(dt);
   }
 
   /** ★ 渲染阶段：2D 梯形（相机视锥地面投影）内实体 → 距离分级 LOD →

@@ -1452,7 +1452,9 @@ export class WorldMode implements IGameMode {
         this.player.position.y = sp.y;
       }
     } else {
-      this.entities.update(dt, input, this.cameraCtrl.getFrame());
+      // ★ P3 相位：Simulate（玩法）→ Present（表现）显式两相（行为与旧 update 等价）
+      this.entities.simulate(dt, input, this.cameraCtrl.getFrame());
+      this.entities.present(dt);
     }
     // ★ 玩家专属每帧管线：效果队列 → 属性脏刷新（基础+遗物+装备一次聚合）→ 复活倒计时
     this.playerPipeline.update(dt);
