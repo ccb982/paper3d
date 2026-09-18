@@ -15,13 +15,13 @@
 //   - onDeath() / onTakeDamage()：生命周期钩子
 
 import * as THREE from 'three';
-import { RasterMap } from '../services/map/RasterMap';
 import type { Entity, EntityKind } from './Entity';
 import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { levelForDistance } from '../services/lod';
-import { SilhouetteShadow, type ShadowFrameSource } from '../services/render/SilhouetteShadow';
-import { renderManager } from '../services/render/RenderManager';
+import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
+import { GroundShadowController, type GroundShadowHost } from '../services/render/GroundShadowController';
+import { EffectSlots } from '../services/fx/EffectSlots';
 import { eventBus } from '../core/EventBus';
 import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
 import type { FrameAssetSource } from '../services/fx/AssetSource';
@@ -90,7 +90,7 @@ export abstract class EntityBase {
     if (this.renderer) this.renderer.setVisible(v);
     // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
     //   必须立即隐藏，否则留下"幽灵影子"）
-    if (this.gsShadow) this.gsShadow.mesh.visible = v && this.viewLod < 3;
+    this.gsCtl.setVisible(v && this.viewLod < 3);
   }
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
@@ -139,90 +139,16 @@ export abstract class EntityBase {
   private _gsLastX = NaN;
   private _gsLastZ = NaN;
 
-  private gsShadow: SilhouetteShadow | null = null;
-  /** ★ 影子仿射上次更新时刻（中远 LOD 降频用） */
-  private _gsLastAffMs = 0;
   /** ★ 远距影子强 LOD 裁剪比例（0~1；0 = 不裁）：lod≥1 按实体固定键裁掉该比例，
    *  lod≥2 全裁。敌人 = 0.8（80% 远距无需影子）；主角/无人机 lodExempt 不受影响 */
   shadowFarCull = 0;
-  /** 实体级固定裁剪随机键（构造时一次；同一实体远近移动不闪变） */
-  private readonly shadowCullKey = Math.random();
 
-  /** ★ 每帧影子同步（update 骨架⑦：惰性创建 + 剪影更新 + 太阳投影仿射 + LOD/日照渐隐） */
+  /** ★ 贴地剪影影子控制器（组合件：状态/网格/裁剪全在里面；纯搬运自原 syncShadow） */
+  private readonly gsCtl: GroundShadowController;
+
+  /** ★ 每帧影子同步（update 骨架⑦：控制器内做惰性创建 + 剪影更新 + 太阳投影 + LOD/日照渐隐） */
   private syncShadow(): void {
-    const shape = this.shadowShape;
-    if (!shape || !this._scene) return;
-    // ★ 视锥外（上一帧渲染未命中）→ 影子不计算、网格隐藏；转回视野内下一帧自动恢复
-    if (!this.inFrustum) {
-      if (this.gsShadow) this.gsShadow.mesh.visible = false;
-      return;
-    }
-    const lod = this.viewLod;
-    if (!this.visible || lod >= 3) {
-      if (this.gsShadow) this.gsShadow.mesh.visible = false;
-      return;
-    }
-    // ★ 强 LOD（2026-09-12 用户定调：80% 远距敌人无需影子）：
-    //   lod≥1 按实体固定 hash 裁掉 shadowFarCull 比例，lod≥2 全裁；
-    //   放在剪影源解析/网格创建【之前】→ 连逐顶点贴地采样都省掉。
-    //   （主角/无人机 lodExempt 恒 lod0，不受影响；Items 默认 0 = 不裁）
-    if (this.shadowFarCull > 0 && lod >= 1
-      && (lod >= 2 || this.shadowCullKey < this.shadowFarCull)) {
-      if (this.gsShadow) this.gsShadow.mesh.visible = false;
-      return;
-    }
-    const fd = this.getShadowFrameData();
-    if (!fd) return; // 无剪影源 = 无影子（不做纯色矩形兜底）
-    if (!this.gsShadow) {
-      this.gsShadow = new SilhouetteShadow(this._scene, shape.w, shape.alpha ?? 0.38);
-    }
-    this.gsShadow.setSource(fd);
-
-    // ★ 性能：逐顶点贴地采样（77→15 点/次）是实体更新的最大单点开销，
-    //   不可见/最远档直接隐藏跳过；中远档（lod≥1）降频到 80ms 一次（位置差不可感）
-    const nowMs = performance.now();
-    if (lod >= 1 && nowMs - this._gsLastAffMs < 80) return;
-    this._gsLastAffMs = nowMs;
-
-    // ---- 地面仿射基：宽向量 R × 长向量 S（脚跟锚定，向阳反方向延伸） ----
-    const p = this.entity.position;
-    const sun = renderManager.querySun();
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? 0;
-    const airH = Math.max(0, p.y - gy);
-    // 太阳水平单位向量(脚跟→影子方向) 与 投影比 1/tan(仰角)
-    const ux = -sun.dir.x, uz = -sun.dir.z;
-    const ul = Math.hypot(ux, uz) || 1e-6;
-    const sunUx = ux / ul, sunUz = uz / ul;
-    const ratio = ul / Math.max(0.15, sun.dir.y);
-    let ax = p.x, az = p.z;
-    let rx: number, rz: number, sx: number, sz: number, len: number;
-
-    if (shape.len != null) {
-      // 固定长轴模式（子弹等自拉伸体）：椭圆居中于地面投影点，
-      // 方向 = shadowYaw；离地高度使整条影子沿太阳反向位移
-      const yaw = this.shadowYaw;
-      sx = Math.sin(yaw); sz = Math.cos(yaw);
-      len = shape.len;
-      rx = sz; rz = -sx;
-      ax += sunUx * airH * ratio - sx * len / 2;
-      az += sunUz * airH * ratio - sz * len / 2;
-    } else {
-      // 太阳投影模式：影长 = 视觉高 × 投影比；锚点 = 脚点投影
-      // （脚跟在 P_xz + S×离地投影，末端再向外延 h×投影比）
-      sx = sunUx; sz = sunUz;
-      len = (shape.h ?? shape.w) * ratio;
-      rx = -sz; rz = sx;                       // 宽轴默认垂直长轴
-      const rb = this.rendererGroundBasisX();  // 贴片右向量投影（近共线时退化）
-      if (rb && Math.abs(rb.x * sx + rb.z * sz) < 0.98) { rx = rb.x; rz = rb.z; }
-      ax += sx * airH * ratio;
-      az += sz * airH * ratio;
-    }
-
-    this.gsShadow.followAffine(ax, az, rx, rz, sx, sz, len,
-      (wx, wz) => RasterMap.current?.surfaceHeightAt(wx, wz) ?? 0);
-    this.gsShadow.mesh.visible = true;
-    // 浓度随白昼因子调制：正午浓、晨昏淡、夜晚自然消失
-    this.gsShadow.setLodOpacity(lod, 0.2 + 0.8 * sun.daylight);
+    this.gsCtl.sync();
   }
 
   /** 贴片右向量（mesh 矩阵 X 基）的地面投影——剪影影子的宽轴 */
@@ -260,40 +186,28 @@ export abstract class EntityBase {
 
   // ============ 附属特效管线（表现层，跟随实体；属于实体基类） ============
 
-  /** ★ 特效槽（血条/技能特效/受击/光环；与主贴片渲染管线分开） */
-  private effectSlots = new Map<string, import('../services/fx/EntityEffect').EntityEffect>();
+  /** ★ 特效槽（血条/技能特效/受击/光环；与主贴片渲染管线分开）——组合件 EffectSlots */
+  private readonly fx = new EffectSlots();
 
   /** 挂特效（同名覆盖；跟随实体位置/生命周期由本骨架驱动） */
   attachEffect(name: string, effect: import('../services/fx/EntityEffect').EntityEffect): void {
-    this.detachEffect(name);
-    this.effectSlots.set(name, effect);
+    this.fx.attach(name, effect);
   }
 
   /** 卸特效 */
   detachEffect(name: string): void {
-    const fx = this.effectSlots.get(name);
-    if (fx) {
-      fx.dispose();
-      this.effectSlots.delete(name);
-    }
+    this.fx.detach(name);
   }
 
   /** 取特效（子类/外部读取状态用） */
   getEffect<T extends import('../services/fx/EntityEffect').EntityEffect>(name: string): T | undefined {
-    return this.effectSlots.get(name) as T | undefined;
+    return this.fx.get<T>(name);
   }
 
   /** 特效槽每帧驱动（更新骨架内：跟随位置 + 时间轴 + 回收） */
   private updateEffects(dt: number): void {
-    if (this.effectSlots.size === 0) return;
     const p = this.entity.position;
-    for (const [name, fx] of this.effectSlots) {
-      const done = fx.update(dt, p.x, p.y, p.z);
-      if (done) {
-        fx.dispose();
-        this.effectSlots.delete(name);
-      }
-    }
+    this.fx.update(dt, p.x, p.y, p.z);
   }
 
   // ============ 生命与战斗属性（伤害管线 modifiers 链，架构 4.1） ============
@@ -367,6 +281,20 @@ export abstract class EntityBase {
     });
     this.anim = opts.asset ? new FrameAnimatorBase(opts.asset, opts.animInitial) : null;
     this.state = this.anim ? this.anim.state : null;
+    // ★ 影子控制器（组合件；host 回调惰性读取宿主状态，零分配/行为与原 syncShadow 一致）
+    const host: GroundShadowHost = {
+      scene: () => this._scene,
+      shape: () => this.shadowShape,
+      yaw: () => this.shadowYaw,
+      visible: () => this.visible,
+      inFrustum: () => this.inFrustum,
+      lod: () => this.viewLod,
+      farCull: () => this.shadowFarCull,
+      frameData: () => this.getShadowFrameData(),
+      basisX: () => this.rendererGroundBasisX(),
+      position: () => this.entity.position,
+    };
+    this.gsCtl = new GroundShadowController(host);
     em.register(this);
     // ★ 刚体初始位置修正：刚体中心 = 实体脚底 + 偏移（如角色胶囊中心在脚底上方）
     if (this.entity.rigidBody && this.physicsBodyOffsetY() !== 0) {
@@ -504,7 +432,7 @@ export abstract class EntityBase {
     // ★ 流体纹理钩子（子类覆写：受击染料/技能附着的 composite 纹理；null=普通贴片）
     this.renderer.render(this.state, this.getFluidTexture());
     // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
-    for (const fx of this.effectSlots.values()) fx.render(camera);
+    this.fx.render(camera);
   }
 
   /** ★ 流体纹理钩子（子类覆写返回要喂给贴片的 composite 纹理；默认 null） */
@@ -532,10 +460,8 @@ export abstract class EntityBase {
     this.statBase = null;
     this.anim?.dispose();
     this.renderer?.dispose();
-    this.gsShadow?.dispose();
-    this.gsShadow = null;
-    for (const fx of this.effectSlots.values()) fx.dispose();
-    this.effectSlots.clear();
+    this.gsCtl.dispose();
+    this.fx.disposeAll();
     this.em.unregister(this);
     this.em.destroy(this.entity.id);
   }

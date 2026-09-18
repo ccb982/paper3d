@@ -15,8 +15,8 @@ import {
 import type { InputActions } from "../platform/input/InputActions";
 import type { CameraFrame } from "../services/camera/CameraController";
 import { shapeExtents, separateXZ } from "../services/physics/Collision";
-import { CharacterFxManager } from "../services/fx/CharacterFxManager";
-import type { FluidEffect } from "../vendor/player/fluid/FluidEffect";
+import { CharacterHitDye } from "../services/fx/CharacterHitDye";
+import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
@@ -178,7 +178,7 @@ export abstract class CharacterBase extends EntityBase {
     this.separateFromStatics();
     const _c3 = performance.now();
     // ★ 受击染料推进（降频解算 + 每步持续注入 + 计时释放）
-    this.updateHitDye(dt);
+    this.hitDyeFx.update(dt);
     const _c4 = performance.now();
     entityPerf.move += _c1 - _c0;
     entityPerf.sepOther += _c2 - _c1;
@@ -188,7 +188,7 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 受击染料流体纹理（有染料时贴片采样 composite；Timer 结束后恢复 null） */
   protected override getFluidTexture(): THREE.Texture | null {
-    return this.hitDye ? this.hitDye.getCompositeTexture() : null;
+    return this.hitDyeFx.getCompositeTexture();
   }
 
   /** ★ 角色间推挤：分块查询邻近角色（querySphere）→ 水平重叠 → 最小分离轴推开
@@ -293,173 +293,21 @@ export abstract class CharacterBase extends EntityBase {
     };
   }
 
-  /** ★ 死亡动画自动管线：任何角色死亡 → 纹理所有权转移给死亡动画
-   *   （独立流体撕碎消散，纯表现，不阻塞掉落/结算）。
-   *   死亡动画开关（玩家死亡 = 传送复活，不销毁 → 走 onDeath 覆写跳过） */
-  protected deathAnimEnabled = true;
+  /** ★ 死亡动画（组合件 `services/fx/CharacterDeathFx`）：任何角色死亡 →
+   *  纹理所有权转移给死亡动画（独立流体撕碎消散，纯表现，不阻塞掉落/结算）。
+   *  `deathAnimEnabled` 保留为转发访问器（如玩家死亡 = 传送复活，覆写 onDeath 跳过）。 */
+  protected readonly deathFx = new CharacterDeathFx();
+  protected get deathAnimEnabled(): boolean { return this.deathFx.enabled; }
+  protected set deathAnimEnabled(v: boolean) { this.deathFx.enabled = v; }
 
-  // ★ 受击染料管线（FTX 残差通道染色：色相反转 + 提饱和提亮；计时到点释放恢复原样）
-  //   ★ 现状 = **静态色斑**：注入速度 {0,0} + 无重力/持续源/爆炸 ⇒ 速度场恒 0，没有"流动"。
-  //     想让它"晕开"需要给注入速度（见 FtxAsset 里 enablePressure 的条件说明）。
-  protected hitDye: FluidEffect | null = null;
-  /** 受击染料存活计时（超时释放 → 恢复原纹理） */
-  private hitDyeTimer = 0;
-  /** 受击染料时长（秒，默认 1.2） */
-  protected hitDyeDuration = 1.2;
-  /** 受击染料开关（不需要的角色可关，默认开；★ 仅最高档 LOD(0) 启用，远距离省算） */
-  protected hitDyeEnabled = true;
-  /** ★ 受击染料注入目标（写进 **残差场** colorGrid —— 0.5 才是"不变"，不是最终颜色！）
-   *  合成公式（FluidSolver.buildCompositeMat / FTXQuad 同款）：
-   *    finalH = fract(baseH + (h−0.5))、finalS/L = clamp(baseS/L + (s/l−0.5))、
-   *    finalA = max(base.a, a)
-   *  ⇒ 现值含义：
-   *    h=0    → 色相 **−180°**（对任何底色都是最剧烈的反转，所以不需要"红"）；
-   *    s=1    → 饱和度 **+0.5**（拉满）；
-   *    l=0.8  → 明度 **+0.3**（显著提亮）；
-   *    a=0.4  → ★ **只压"溢出体外"的色雾**：体内 base.a 恒为 1 → `max(1,0.4)=1`，
-   *             染色强度不受影响；体外 base.a=0 → 色雾淡一档，不再糊一大团。
-   *  ★ 目标不是"变红"而是"受击处最大对比"——色相反转 + 提饱和 + 提亮已是极限组合。 */
-  protected hitDyeColor: [number, number, number, number] = [
-    0.0, 1.0, 0.8, 0.4,
-  ];
-  /** 受击染料注入半径（bbox 归一化）。
-   *  ★ 0.45 → 0.13：原来 `smoothstep(0.45, 0, d)` 覆盖 ≈90% 贴片宽 ⇒ 变化被摊薄成一大片淡染
-   *    （这才是"不明显"的主因）。收到 0.13 后中心满染、边缘羽化 ⇒ 局部高对比"受击斑"。
-   *  ★ uv 空间各向异性：竖直方向实际半径 = 0.13 × (bbox.h/bbox.w)，高瘦贴片上呈竖椭圆斑
-   *    （躯干命中反而自然）。 */
-  protected hitDyeRadius = 0.13;
-  /** ★ 受击染料解算步长（秒）—— 累积到该步长才 step 一次（降频省算，也定义"持续注入"的节拍）。
-   *  ★ 收益：解算次数从 ~60/s 降到 30/s ⇒ GPU pass 减半。
-   *  ★★ **降频对观感的影响"按路径分"，不能一概而论**（前后两次误判都出在这一点）：
-   *    · `scalar`（BOSS/无人机/祖宗/抽卡）：`decayRate 0.0588/步` ⇒ 降频真的更持久 ——
-   *      60 步/s 一秒剩 2.5%、30 步/s 剩 15.7%（**6.4×**）；
-   *    · `vector`（主角/普通敌人）：无衰减项 ⇒ 降频**只省算**。
-   *      （`velocityScale` 虽也是"每步乘一次"，但本效应靠**持续注入速度**把流速顶在
-   *        `maxVelocity`，所以那里同样不敏感。）
-   *  ★ 失稳风险：平流是半拉格朗日（无条件稳定）；子步数 substeps = ceil(maxVel·dt / minGrid)。
-   *    hit-dye 的 `maxVelocity` 现为 **50 px/s**（vector 路径，2026-09-18 由 3000 压下来）
-   *    ⇒ 阈值 minGrid ≥ 50/30 ≈ **1.7px**，任何贴片都远大于它 ⇒ **恒定 1 个子步**，
-   *      降频不会再换来额外子步 ⇒ 净收益 = 纯粹的 pass 减半。
-   *  ⇒ 1/30 是安全点，与 `WorldMode` 祖宗流体、图标动画、死亡动画共用同一约定。 */
-  protected hitDyeStep = 1 / 30;
-  /** 已累积的未解算时间（跨帧；新建流体/释放后不重置，只会让首步稍早发生） */
-  private hitDyeAccum = 0;
-
-  /** ★★ 持续注入：注入点（bbox 归一化 uv）—— 每个解算步都重注入到这里。
-   *  ★ 为什么"量大"必须靠持续注入而非调数字：
-   *    `injectDensity` 的 value 与 rate 都被 clamp 到 ≤1.0（`FluidInjector.ts:417/459`）
-   *    ⇒ `density = 1.0` 已是**天花板**，调不出"更大量"；`injectColor` 的 rate 同样 ≤1.0
-   *    （`FluidInjector.ts:272`）⇒ 重注入是**覆盖**不是叠加。
-   *  ★ 收益（scalar 路径）：`decayRate 0.0588/步` ⇒ 一次性注入 1 秒后只剩 15.7%，
-   *    每步重注入则全程钉在 ≈0.94 → 全程满强度。
-   *  ★ vector 路径：无衰减项 ⇒ 重注入**幂等**，那里的"看得见"靠注入速度（见 hitDyeVel）。 */
-  private hitDyeAt = { x: 0.5, y: 0.5 };
-  /** ★ 注入速度（uv 空间的向量，px/s）：方向 = 贴片中心→命中点，
-   *  只有资产声明 `hitDyeSpreadSpeed` 时才非零（vector 路径；scalar 路径保持 0）。 */
-  private hitDyeVel = { x: 0, y: 0 };
-  /** 是否处于"持续注入"窗口（受击 → 计时结束/释放） */
-  private hitDyeActive = false;
-
-  /** ★ 受击：注入 FTX 残差染料（在命中点局部染色；已有则重置计时重新注入）。
-   *  仅 viewLod===0（最高档）启用——远程 LOD 省算、不干扰远焦。
-   *  ★★ 这里只负责"开闸"：真正的染色由 `queueHitDyeInjection` 在每个解算步**持续注入**。 */
-  protected spawnHitDye(at: { x: number; y: number }): void {
-    if (!this.hitDyeEnabled || this.viewLod !== 0) return;
-    const renderer = CharacterFxManager.renderer;
-    const source = this.anim?.source as unknown as {
-      createHitDyeEffect?: (
-        renderer: THREE.WebGLRenderer,
-        frameIndex: number,
-      ) => FluidEffect | null;
-      /** ★ vector 路径的注入速度幅值（px/s）；scalar 路径不声明 → undefined ⇒ 不注入速度 */
-      hitDyeSpreadSpeed?: number;
-    };
-    if (!renderer || !source?.createHitDyeEffect) return;
-
-    const frameIndex = this.anim?.state.frameIndex ?? 0;
-    if (!this.hitDye || this.hitDyeTimer <= 0) {
-      // 首次受击（或已超时释放）：新建独立流体
-      this.hitDye?.dispose();
-      this.hitDye = source.createHitDyeEffect(renderer, frameIndex) ?? null;
-    }
-    if (!this.hitDye) return;
-
-    this.hitDyeTimer = this.hitDyeDuration;
-    // ★ 注入点缓存（持续注入每个解算步都要复用）
-    this.hitDyeAt.x = at.x;
-    this.hitDyeAt.y = at.y;
-    // ★ 注入速度：方向 = 贴片中心 → 命中点（"朝受击的那一侧晕开"）；幅值由资产给
-    const speed = source.hitDyeSpreadSpeed ?? 0;
-    if (speed > 0) {
-      const dx = at.x - 0.5;
-      const dy = at.y - 0.5;
-      const len = Math.hypot(dx, dy);
-      if (len > 1e-4) {
-        this.hitDyeVel.x = (dx / len) * speed;
-        this.hitDyeVel.y = (dy / len) * speed;
-      } else {
-        // 命中点正好在正中（退化）：随机方向，避免零向量不推
-        const a = Math.random() * Math.PI * 2;
-        this.hitDyeVel.x = Math.cos(a) * speed;
-        this.hitDyeVel.y = Math.sin(a) * speed;
-      }
-    } else {
-      this.hitDyeVel.x = 0;
-      this.hitDyeVel.y = 0;
-    }
-    this.hitDyeActive = true;
-    this.queueHitDyeInjection();
-  }
-
-  /** ★★ 往解算队列塞一次染料注入（**每个解算步调一次** = 持续注入）。
-   *  `step()` 开头处理队列、处理完立刻 `length = 0`（`FluidSolver.ts:1020/647`）
-   *  ⇒ 每步重塞是安全的，不会累积重复注入（重复塞才会叠加，这里不会）。
-   *  ★ 注意 `injectVelocity` 是**累加**（`FluidInjector.ts:532` `current + added`）
-   *    ⇒ 持续注入速度会让流速顶到 `maxVelocity` 并保持 = 稳定水流。 */
-  private queueHitDyeInjection(): void {
-    if (!this.hitDye || !this.hitDyeActive) return;
-    this.hitDye.solver.queueInjection({
-      enabled: true,
-      position: { x: this.hitDyeAt.x, y: this.hitDyeAt.y },
-      radius: this.hitDyeRadius,
-      velocity: { x: this.hitDyeVel.x, y: this.hitDyeVel.y },
-      color: this.hitDyeColor,
-      density: 1.0,  // scalar 模式注入浓度（clamp ≤1.0，已是天花板），vector 模式忽略
-      rate: 1.0,     // 中心直接走到目标残差（拿到最大变化量）
-    });
-  }
-
-  /** ★ 受击染料每帧驱动（update 内调用）—— **按 hitDyeStep 降频解算 + 持续注入**。
-   *  计时按真实 dt 走（1.2s 总时长不变），只把"解算次数"减半；
-   *  单步 dt 用累积量 → 物理时间守恒（不是把流体变慢）。
-   *  单步上限 1/10s：卡顿一帧 300ms 时不会把一次解算推进 300ms（防突兀跳变）。
-   *  ★★ 每个解算步**先重注入再解算** → 浓度/残差被钉住（持续注入的落点就在这一行）。 */
-  private updateHitDye(dt: number): void {
-    if (this.hitDye && this.hitDyeTimer > 0) {
-      this.hitDyeTimer -= dt;
-      this.hitDyeAccum += dt;
-      if (this.hitDyeAccum >= this.hitDyeStep) {
-        this.queueHitDyeInjection();
-        this.hitDye.step(Math.min(this.hitDyeAccum, 1 / 10));
-        this.hitDyeAccum = 0;
-      }
-      if (this.hitDyeTimer <= 0) {
-        // ★ 计时结束：释放流体 → 恢复原纹理（下次受击重建）
-        this.hitDyeActive = false;
-        this.hitDye.dispose();
-        this.hitDye = null;
-      }
-    } else if (this.hitDye && this.hitDyeTimer <= 0) {
-      this.hitDyeActive = false;
-      this.hitDye.dispose();
-      this.hitDye = null;
-    }
-  }
+  /** ★ 受击染料（组合件 `services/fx/CharacterHitDye`）：FTX 残差通道染色 +
+   *  持续注入 + 按 step 降频解算（仅 LOD0 启用）；配置默认值/说明见该文件。 */
+  protected readonly hitDyeFx = new CharacterHitDye();
 
   /** ★ 受伤钩子：受击染红 + 死亡动画（正常扣血/死亡流程不变） */
   override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
     // ★ 受击染料：注入点 = 真实命中点换算到贴片 bbox（拿不到点 → 回退上半身居中微偏）
-    this.spawnHitDye(this.hitUvOf(hitPoint));
+    this.hitDyeFx.spawn(this.anim, this.viewLod, this.hitUvOf(hitPoint));
     super.onTakeDamage(dmg, source, hitPoint);
   }
 
@@ -510,17 +358,8 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 只触发死亡动画（不销毁实体）——玩家死亡（传送复活）用 */
   playDeathAnim(): void {
-    if (!this.deathAnimEnabled) return;
-    const frameIndex = this.anim?.state.frameIndex ?? 0;
     const p = this.entity.position;
-    CharacterFxManager.spawnDeathAnim(
-      this.anim!.source,
-      frameIndex,
-      p.x,
-      p.y,
-      p.z,
-      { worldSize: this.deathAnimWorldSize() },
-    );
+    this.deathFx.spawn(this.anim, p.x, p.y, p.z, this.deathAnimWorldSize());
   }
 
   /** ★ 死亡动画贴片高度：取角色贴片当前世界高度（跟随体型放大/缩放，
@@ -533,26 +372,14 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 销毁：释放受击染料流体（恢复原纹理资源） */
   override dispose(): void {
-    this.hitDyeActive = false;
-    this.hitDye?.dispose();
-    this.hitDye = null;
+    this.hitDyeFx.dispose();
     super.dispose();
   }
 
   /** ★ 死亡：先触发死亡动画（冻结死亡帧 → 流体消散），再走默认销毁 */
   override onDeath(source: EntityBase | null): void {
-    if (this.deathAnimEnabled) {
-      const frameIndex = this.anim?.state.frameIndex ?? 0;
-      const p = this.entity.position;
-      CharacterFxManager.spawnDeathAnim(
-        this.anim!.source,
-        frameIndex,
-        p.x,
-        p.y,
-        p.z,
-        { worldSize: this.deathAnimWorldSize() },
-      );
-    }
+    const p = this.entity.position;
+    this.deathFx.spawn(this.anim, p.x, p.y, p.z, this.deathAnimWorldSize());
     super.onDeath(source);
   }
 

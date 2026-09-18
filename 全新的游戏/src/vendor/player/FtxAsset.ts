@@ -234,7 +234,7 @@ export class FtxAsset implements CharacterFxAssetSource {
     return new FluidEffect(renderer, physics, frame, this.palette, []);
   }
 
-  /** ★ 受击染料注入速度幅值（px/s）—— 由 `CharacterBase.spawnHitDye` 按
+  /** ★ 受击染料注入速度幅值（px/s）—— 由 `CharacterHitDye.spawn` 按
    *  "贴片中心 → 命中点"方向取用，并在每个解算步持续注入。
    *  ★ 只有本类（vector 路径）声明它；scalar 的 `Asset.createHitDyeEffect` 不声明
    *    ⇒ `hitDyeSpreadSpeed === undefined` ⇒ 那条路径不注入速度（保持它自己的浓度扩散）。 */
@@ -252,8 +252,8 @@ export class FtxAsset implements CharacterFxAssetSource {
       enableAdvection: true,
       // ★★ 恢复压力投影（2026-09-18）：现在**有注入速度**了，速度场不再恒 0
       //    ⇒ 必须投影出无散场，否则局部推速会堆出"吹气球"式的假流动。
-      //    代价：20 迭代 × 红黑两趟 = 40 趟 GPU pass/step —— 由 CharacterBase 的
-      //    `hitDyeStep = 1/30` 降频抵消（解算次数本来就砍半）。
+      //    代价：20 迭代 × 红黑两趟 = 40 趟 GPU pass/step —— 由 CharacterHitDye 的
+      //    `step = 1/30` 降频抵消（解算次数本来就砍半）。
       //    （历史：此处曾为 false，因为那时注入 velocity = {0,0} ⇒ ∇·u ≡ 0 ⇒ 投影纯白烧。）
       enablePressure: true,
       pressureIterations: 20,
@@ -265,7 +265,7 @@ export class FtxAsset implements CharacterFxAssetSource {
       velocityScale: 0.97,
       // ★ 3000 → 50（2026-09-18）：与 scalar 路径对齐，把"晕开"限制成可见的缓慢扩散。
       //   副作用（正向）：子步数 substeps = ceil(maxVel·dt/minGrid) 恒为 1
-      //   ⇒ 降频不会再换来额外平流子步（见 CharacterBase.hitDyeStep 注释）。
+      //   ⇒ 降频不会再换来额外平流子步（见 CharacterHitDye.step 注释）。
       maxVelocity: 50,
     };
     return new FluidEffect(renderer, physics, frame, this.palette, []);
