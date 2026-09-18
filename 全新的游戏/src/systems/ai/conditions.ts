@@ -16,9 +16,21 @@ export function registerCondition(name: string, fn: ConditionFn): void {
   conditionTable[name] = fn;
 }
 
-/** 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target。
- *  ★ 若模式层提供 targetCandidates（优先级队列：祖宗 > 舰船 > 玩家 > 友军），
- *    按序取第一个"在有效半径内"的候选；候选自带 radius（如祖宗嘲讽半径）优先于通用视野半径 */
+/**
+ * ★★ 索敌：视野半径内找到目标（camp 参数指定阵营，逗号分隔多选）→ 写入 ctx.target。
+ *
+ * ★ 若模式层提供 targetCandidates（优先级队列：祖宗 > 舰船 > 玩家 > 友军），
+ *   按序取第一个"在有效半径内"的候选；候选自带 radius（如祖宗嘲讽半径）优先于通用视野半径。
+ *
+ * ★★ 写进 ctx.target 的是**候选对象本身**（引用），不是坐标拷贝 —— 而 seePlayer
+ *   **只挂在 patrol 上**，chase/attack 期间不再重跑索敌。因此候选**必须是"活对象"**：
+ *   模式层每帧原地更新它的 x/z，ctx.target 就自动跟着目标走。
+ *   ★ 若模式层改成 push 坐标拷贝，ctx.target 会退化成"看见那一刻的坐标快照"，
+ *     而 inRange / outOfRange / loseTarget 全部按该快照判定 ——
+ *     远程兵（attackFinished → chase 持续开火，永不回 patrol）会**永久锁死在旧坐标上
+ *     朝空气射击**（2026-09-18 实测：玩家跑到 38m 外，弹道与真实方向夹角 157.7°）。
+ *     不变量持有者是 `WorldMode.enemyTargetCandidates`（见那里的注释）。
+ */
 registerCondition('seePlayer', (entity, ctx, params) => {
   const radius = pnum(params, 'radius', 8);
   const ep = entity.entity.position;

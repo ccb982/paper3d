@@ -52,16 +52,6 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 限制爬崖（敌人等开启）：禁止朝高台立面位移——只能走插值坡/≤EDGE_CLIFF_BAND 小台阶，
    *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
   blockCliffClimb = false;
-
-  // ---- ★ 空中层（2026-09-18；《蜂群架构.md》§25）----
-  /** 飞行单位：悬停在「地表高 + airAltitude」，不贴地、不受地形落差阻挡、不吃掉坑判死。
-   *  ★ y 的唯一驱动点是 `WorldMode.clampCharacter`（它会优先处理飞行分支）；
-   *    开启者在 EnemyBase 构造里按名册 `isAir` 设置，并同时打开 `climbAnyTerrain`。 */
-  airborne = false;
-  /** 空中悬停高度（米，**相对地表**） */
-  airAltitude = 2.6;
-  /** 空中浮动相位（每只随机；避免整队同频上下摆） */
-  airPhase = Math.random() * Math.PI * 2;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */

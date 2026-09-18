@@ -42,11 +42,6 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   /** ★ 接地补偿（世界单位；纹理底部透明余量 → 往下压这么多，避免悬空）。
    *  来源：FootAnchor.footSinkRatioOf(asset) × scale（见 MobDef.groundSink）。 */
   groundSink?: number;
-  /** ★ 空中层（2026-09-18）：飞行单位（悬停；不贴地/不绕坑/不掉坑判死）。
-   *  来源：名册 `EnemySpec.isAir`（经 MobDef 透传）。 */
-  airborne?: boolean;
-  /** ★ 空中悬停高度（米，相对地表；缺省 2.6）。仅 airborne 有效。 */
-  airAltitude?: number;
 }
 
 export class EnemyBase extends CharacterBase {
@@ -105,16 +100,6 @@ export class EnemyBase extends CharacterBase {
     this.camp = 'enemy';
     // ★ 2026-09-14 用户定调：敌人只能从插值坡上高台（禁止贴墙瞬移攀爬）
     this.blockCliffClimb = true;
-    // ★ 空中层（2026-09-18）：飞行单位 —— 悬停 + 不贴地 + 无视地形落差/危险地形。
-    //   climbAnyTerrain 关掉 CharacterBase 的立面阻挡（飞在空中不该被墙挡住）；
-    //   y 由 WorldMode.clampCharacter 的飞行分支统一驱动。
-    if (opts.airborne) {
-      this.airborne = true;
-      this.airAltitude = opts.airAltitude ?? this.airAltitude;
-      this.climbAnyTerrain = true;
-      // 出生即抬到悬停高度（否则第一帧从地面"弹"上去）
-      this.entity.position.y = (RasterMap.current?.surfaceHeightAt(this.entity.position.x, this.entity.position.z) ?? 0) + this.airAltitude;
-    }
     this.hp = opts.hp ?? 30; // ★ 敌人生命（普瑞赛斯 30；子弹 10 伤害 × 3 发）
     this.maxHp = this.hp;
     this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
@@ -268,8 +253,6 @@ export class EnemyBase extends CharacterBase {
   private isDangerAhead(dx: number, dz: number): boolean {
     const len = Math.hypot(dx, dz);
     if (len < 1e-4) return false;
-    // ★ 空中层（2026-09-18）：飞行单位不吃地面危险（坑/深水/立面）→ 永远"前方安全"
-    if (this.airborne) return false;
     const ux = dx / len, uz = dz / len;
     const raster = RasterMap.current;
     if (!raster) return false;

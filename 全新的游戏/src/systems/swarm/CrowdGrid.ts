@@ -96,6 +96,8 @@ export class CrowdGrid {
         if (!arr) continue;
         for (const j of arr) {
           if (j === i) continue;
+          // ★ 空中层（2026-09-18）：不同层互不推挤（飞兵悬在地面兵头顶，水平重叠不该互相挤）
+          if (pool.isAir[i] !== pool.isAir[j]) continue;
           const ox = pool.x[j] - x, oz = pool.z[j] - z;
           const rr = rSelf + pool.scale[j] * 0.45;
           const d2 = ox * ox + oz * oz;

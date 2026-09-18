@@ -53,10 +53,6 @@ import { footSinkRatioOf } from '../../services/fx/FootAnchor';
 // ★ 杂兵配置条目（原 WorldMode 内部类型，随迁出改为 export）
 // ============================================================
 export interface MobDef {
-  /** ★ 名册稳定键（config/enemyRoster.ts 的 id）；调试/日志/陈列标签用 */
-  id: string;
-  /** ★ 显示名（陈列标签 / 击杀播报） */
-  name: string;
   asset: FtxAsset;
   ai: AIConfig;
   hp: number;
@@ -75,11 +71,6 @@ export interface MobDef {
   /** ★ 接地补偿（世界单位；= 纹理底部透明余量比例 × scale + 名册手调量）。
    *  见 services/fx/FootAnchor.ts —— 底边留白的素材靠它压回地面。 */
   groundSink: number;
-  /** ★ 空中层（2026-09-18）：飞行单位（悬停、不参与地面寻路/不吃坑水、不掉坑判死）。
-   *  来源：名册 `EnemySpec.isAir`。 */
-  isAir: boolean;
-  /** 悬停高度（米，相对地表）；`isAir` 为假时无意义 */
-  airAltitude: number;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -143,8 +134,6 @@ export class WorldSpawner {
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
    *  远距回收本身已由 SwarmSystem 统一处理（实体降格 40m / 代理回收 140m） */
   static readonly ENEMY_CULL_RADIUS = 120;
-  /** ★ 落地名册陈列的环带半径（米）：落在 L3 升格半径 35m 之内 → 落地就能看全实体行为 */
-  static readonly SHOWCASE_RADIUS = 16;
   /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
   static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
@@ -367,9 +356,6 @@ export class WorldSpawner {
     }, this.deps.camera);
     enemy.billboard = false;
     const def: MobDef = {
-      // ★ Boss 不在名册里（独立资产/独立路径），这里给稳定键与显示名，
-      //   方便日志与"名册陈列"的排除判据（陈列只遍历 mobDefs，Boss 天然不在其中）
-      id: 'priestess', name: '普瑞赛斯',
       asset: asset as unknown as FtxAsset,
       ai,
       hp,
@@ -381,9 +367,6 @@ export class WorldSpawner {
       weight: 0,
       drops: [],
       groundSink: bossSink,
-      // Boss 是地面单位（空中层只给名册里 isAir 的兵种）
-      isAir: false,
-      airAltitude: 0,
     };
     this.deps.enemyDefs.set(enemy, def);
     this.deps.enemies.push(enemy);
@@ -508,9 +491,6 @@ export class WorldSpawner {
         tier: AGENT_TIER_FAR,
         yaw: 0,
         aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
-        // ★ 空中层（2026-09-18）：飞行标记随降格带回代理池（否则一降格就落地）
-        isAir: def.isAir,
-        altitude: def.airAltitude,
       });
       // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
       //   置 killedByCombat=false 后再 dispose，避免误计（2026-09-16）
@@ -640,14 +620,10 @@ export class WorldSpawner {
       const x = pp.x + Math.cos(ang) * dist;
       const z = pp.z + Math.sin(ang) * dist;
       const role = this.deps.raster.tileDefAt(x, z).genRole;
+      if (role === 'pit' || role === 'liquid') continue;
+      const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（压测铺代理）
+      if (y < -1.2) continue;
       const def = this.pickMob();
-      // ★ 空中层（2026-09-18）：飞行兵可以铺在水/坑上方（它不落地）；地面兵照旧排除
-      const air = def.isAir === true;
-      if (!air && (role === 'pit' || role === 'liquid')) continue;
-      const y = air
-        ? this.deps.raster.surfaceHeightAtFor(x, z, 1e9) + def.airAltitude
-        : this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（压测铺代理）
-      if (!air && y < -1.2) continue;
       const mobIndex = this.deps.mobDefs.indexOf(def);
       if (mobIndex < 0) return;
       const stats = this.mobAgentStats(def);
@@ -666,8 +642,6 @@ export class WorldSpawner {
         aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
         wanderSpeed: stats.wanderSpeed,
         bias: this.deps.threat?.biasMul ?? 0.12,
-        isAir: air,
-        altitude: air ? def.airAltitude : 0,
       });
       if (idx >= 0) placed++;
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
@@ -695,77 +669,6 @@ export class WorldSpawner {
       }
     }
     return { speed, damage, range, wanderSpeed, aggro };
-  }
-
-  /** ★★ 落地名册陈列（验收用）：把名册里**每一种敌人各生成一只**，绕 (x,z) 均匀铺开。
-   *
-   *  做这个是因为"远程兵到底会不会打"这类问题光看代码判断不准 —— 一次性把全部
-   *  兵种摆到眼前，谁悬停、谁贴脸、谁放箭/放法球，一眼能对。每只头顶飘一次名字。
-   *
-   *  · **不含普瑞塞斯**：Boss 不在 `mobDefs` 里（它由 `spawnBoss` 的独立路径生成），
-   *    所以"排除 Boss"是结构性的，不需要在这里特判 id。
-   *  · 仍然走 `spawnOne`（= 所有刷怪路径的唯一收口点）：配额计账 / 落点闸门 /
-   *    坑水排除 / 空中豁免 / 蜂群代理池全部与正常出怪同源 →
-   *    看到的就是真实行为，不是另一条特例路径。
-   *  · 落点在 (x,z) 周围环带上按兵种序号均匀分角；该点不可站（坑/水/过低/未生成）
-   *    时按固定候选表微调角度与半径重试，仍不行就跳过该兵种（不阻断其余兵种）。
-   *
-   *  @param radius 环带半径（米）
-   *  @returns 实际铺出的**兵种数**（配额打满 / 存活上限 / 地形不可站都会少） */
-  spawnRosterShowcase(
-    x: number, z: number,
-    radius = WorldSpawner.SHOWCASE_RADIUS,
-  ): number {
-    if (!this.deps.scene || !this.deps.camera) return 0;
-    const defs = this.deps.mobDefs;
-    if (defs.length === 0) return 0;
-    // ★ 名额预检：整场陈列 = 各兵种 pack 之和；存活上限不够就整段跳过（避免铺一半更迷惑）
-    let need = 0;
-    for (const d of defs) need += Math.max(1, d.pack);
-    if (this.deps.enemies.length + this.deps.swarm.count + need > WorldSpawner.MAX_ALIVE) {
-      console.warn(
-        `[spawn] 名册陈列跳过：存活 ${this.deps.enemies.length + this.deps.swarm.count}`
-        + ` + 需要 ${need} > 上限 ${WorldSpawner.MAX_ALIVE}`,
-      );
-      return 0;
-    }
-    let types = 0;
-    for (let i = 0; i < defs.length; i++) {
-      const def = defs[i];
-      const air = def.isAir === true;
-      let placed = false;
-      // ★ 候选落点表：本兵种分角 → 左右各偏一档 → 半径内缩一档 → 半径外扩一档
-      const baseAng = (i / defs.length) * Math.PI * 2;
-      const cands: { ang: number; r: number }[] = [
-        { ang: baseAng, r: radius },
-        { ang: baseAng + 0.5, r: radius },
-        { ang: baseAng - 0.5, r: radius },
-        { ang: baseAng, r: radius * 0.72 },
-        { ang: baseAng, r: radius * 1.28 },
-      ];
-      for (const c of cands) {
-        const px = x + Math.cos(c.ang) * c.r;
-        const pz = z + Math.sin(c.ang) * c.r;
-        // ★ 与正常刷怪同一套落点闸门（空中单位豁免坑/水 —— 它悬在空中）
-        const role = this.deps.raster.tileDefAt(px, pz).genRole;
-        if (!air && (role === 'pit' || role === 'liquid')) continue;
-        const y = air
-          ? this.deps.raster.surfaceHeightAtFor(px, pz, 1e9) + def.airAltitude
-          : this.deps.raster.surfaceHeightAt(px, pz);
-        if (!air && y < -1.2) continue;
-        if (!this.spawnOne(def, px, y, pz)) continue;
-        // ★ 头顶标一次名字（否则一堆陌生兵种分不清谁是谁）
-        this.deps.showFloatingAt(px, y + def.scale * 2.2 + 1.2, pz, def.name, 'normal');
-        types++;
-        placed = true;
-        break;
-      }
-      if (!placed) {
-        console.warn(`[spawn] 名册陈列：${def.name}(${def.id}) 无可用落点，已跳过`);
-      }
-    }
-    console.log(`[spawn] 落地名册陈列：${types}/${defs.length} 个兵种已铺（不含普瑞赛斯）`);
-    return types;
   }
 
   /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
@@ -805,18 +708,13 @@ export class WorldSpawner {
       //   所有刷怪路径（导演波次/扫描波次/压测）都经 spawnOne，此处是唯一收口点。
       if (!this.quotaAllows()) break;
       // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
-      //   ★ 空中层（2026-09-18）：飞行兵**豁免**这些闸门 —— 它悬在空中，落点是不是坑/水无所谓
-      const air = def.isAir === true;
       const role = this.deps.raster.tileDefAt(sx, sz).genRole;
-      if (!air && (role === 'pit' || role === 'liquid')) continue;
-      // ★ 空中层用**顶层地表**（洞顶）当悬停基准：否则飞在坑/水上方时会以坑底为基准 → 飞到地下
-      const sy = air
-        ? this.deps.raster.surfaceHeightAtFor(sx, sz, 1e9)
-        : this.deps.raster.surfaceHeightAt(sx, sz);
-      if (!air && sy < -1.2) continue;
+      if (role === 'pit' || role === 'liquid') continue;
+      const sy = this.deps.raster.surfaceHeightAt(sx, sz);
+      if (sy < -1.2) continue;
       const idx = this.deps.swarm.spawn({
         mobIndex,
-        x: sx, y: air ? sy + def.airAltitude : sy, z: sz,
+        x: sx, y: sy, z: sz,
         hp, maxHp: hp,
         defense: dfs, attackPower: 0,
         speed: stats.speed,
@@ -827,8 +725,6 @@ export class WorldSpawner {
         wanderSpeed: stats.wanderSpeed,
         bias: this.deps.threat?.biasMul ?? 0.12,
         intent,
-        isAir: air,
-        altitude: air ? def.airAltitude : 0,
       });
       if (idx >= 0) {
         any = true;
@@ -901,9 +797,6 @@ export class WorldSpawner {
       scale: def.scale,
       collisionScale: def.collisionScale,
       groundSink: def.groundSink,
-      // ★ 空中层（2026-09-18）：升格后的 L3 实体也悬停（与代理层同一高度口径）
-      airborne: def.isAir,
-      airAltitude: def.airAltitude,
     }, this.deps.camera);
     enemy.maxHp = maxHp;
     enemy.hp = Math.min(hp, maxHp);

@@ -158,9 +158,6 @@ export class SwarmSystem {
       aggro: snap.aggro ?? 8,
       wanderSpeed: snap.wanderSpeed ?? 2,
       intent: 255,
-      // ★ 空中层（2026-09-18）：飞行标记必须跟着降格实体回池，否则回池即落地
-      isAir: snap.isAir,
-      altitude: snap.altitude,
     });
   }
 
@@ -200,8 +197,7 @@ export class SwarmSystem {
         continue;
       }
       // ★ 掉坑（深坑底）：代理直接结算死亡（实体层掉半血并爬回；代理简化——防永久卡坑底）
-      //   ★ 空中层（2026-09-18）：飞行兵悬在空中，不吃坑 —— 否则飞过坑口就被判死
-      if (raster && p.isAir[i] !== 1) {
+      if (raster) {
         if (
           raster.tileDefAt(p.x[i], p.z[i]).genRole === 'pit' &&
           raster.surfaceHeightAt(p.x[i], p.z[i]) < -1.2
@@ -270,14 +266,7 @@ export class SwarmSystem {
     if (!this.batch) return;
     const t0 = performance.now();
     const raster = RasterMap.current;
-    // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
-    this.batch.sync(
-      this.pool,
-      (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0,
-      camera, focusX, focusZ,
-      undefined, // maxDist：走默认（LOD_MAX_DIST）
-      performance.now() / 1000,
-    );
+    this.batch.sync(this.pool, (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0, camera, focusX, focusZ);
     entityPerf.swarmRender += performance.now() - t0;
   }
 
@@ -402,10 +391,8 @@ export class SwarmSystem {
         p.fromFlow[i] = 0;
       } else {
         if (p.slotIdx[i] >= 0) this.releaseSlot(i);
-        if (tk === AGENT_TARGET_SENTINEL || p.isAir[i] === 1) {
+        if (tk === AGENT_TARGET_SENTINEL) {
           // ★ 祖宗是静止目标：不借流场，直走（流场只指向玩家/舰船）
-          // ★ 空中层（2026-09-18）：飞行兵走**直线** —— 流场是地面路径场（编码坑/水/立面），
-          //   飞兵用不上，而且沿流场走会贴着地面障碍绕圈（与"独立空中层"不符）
           p.fromFlow[i] = 0;
         } else {
           p.fromFlow[i] = this.flow.dirAt(px, pz, _flow) ? 1 : 0;
@@ -461,9 +448,6 @@ export class SwarmSystem {
       const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
       const danger = (ux: number, uz: number): boolean => {
         if (!raster) return false;
-        // ★ 空中层（2026-09-18）：飞行兵不受地面危险约束（坑/深水/高台立面）
-        //   → 直接飞过去；也不吃"绕行 ±90°"的绕路（与"独立空中寻路 = 直线"一致）
-        if (p.isAir[i] === 1) return false;
         const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);

@@ -65,7 +65,7 @@ import {
   ensureDayQuota, resetDayQuota, recordKill, recordRecall, recordSpawn,
   queryKillProgress, remainingQuota,
 } from '../systems/combat/KillCounter';
-import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, AIR_ALTITUDE_DEFAULT, AIR_BOB_AMP, AIR_BOB_RATE, type AgentSnapshot } from '../systems/swarm/AgentPool';
+import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { NpcEntity } from '../entity/NpcEntity';
 import { VisitorNpcBase } from '../entity/VisitorNpc';
@@ -187,13 +187,7 @@ export interface WorldModeEnterContext extends IGameModeContext {
   /** ★ 采集物纹理图集（key → FTX 包，每包 4 帧；每株随机抽 1 帧静态显示） */
   plantAssets?: Record<string, FtxAsset>;
   /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
-  debug?: {
-    testChunk?: boolean;
-    enemyStress?: number;
-    /** ★ 落地名册陈列：舰船落地后把每种敌人各铺一只（见 WorldSpawner.spawnRosterShowcase）。
-     *  `?roster=0` 可关（缺省开）。 */
-    rosterOnLanding?: boolean;
-  };
+  debug?: { testChunk?: boolean; enemyStress?: number };
 }
 
 // ============================================================
@@ -544,8 +538,6 @@ export class WorldMode implements IGameMode {
   private wadePrev = { x: 0, z: 0, valid: false };
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
-  /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
-  private rosterOnLanding = false;
   /** ★ 调试：F9 颜色回读监听器（exit 时移除） */
   private _f9Handler: ((e: KeyboardEvent) => void) | null = null;
   /** ★ 调试：置位后本帧 render() 末尾立即回读（默认帧缓冲 swap 后读返回 0） */
@@ -670,7 +662,6 @@ export class WorldMode implements IGameMode {
       onChunkActivated: (cx, cz) => this.onChunkActivated(cx, cz),
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
-    this.rosterOnLanding = ctx.debug?.rosterOnLanding ?? false;
     // ★ 航行期：地图两级构建的【粗加载】——大半径铺粗块（硬边/纯色/无物理/无水面/无装饰）
     this.chunks.setCoarseMode(true);
     // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
@@ -778,16 +769,12 @@ export class WorldMode implements IGameMode {
         spec = ENEMY_FALLBACK;
       }
       return {
-        id: spec.id, name: spec.name,
         asset,
         ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
         scale: spec.scale, collisionScale: spec.collisionScale,
         pack: spec.pack, weight: spec.weight, drops: spec.drops,
         // ★ 接地补偿：量出素材底透明余量（比例）× scale = 世界下沉量，再叠加名册手调
         groundSink: footSinkRatioOf(asset) * spec.scale + (spec.groundSink ?? 0),
-        // ★ 空中层（2026-09-18）：名册 isAir/airAltitude → 玩法层装配；缺省高度取引擎兜底
-        isAir: spec.isAir === true,
-        airAltitude: spec.airAltitude ?? AIR_ALTITUDE_DEFAULT,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -2327,42 +2314,13 @@ export class WorldMode implements IGameMode {
     return null;
   }
 
-  /** ★★ 敌人索敌候选的**活对象槽**（4 个：祖宗 / 舰船 / 玩家 / 友军；复用零分配）。
-   *
-   *  ★★ 不变量：这里返回的候选**必须是"每帧原地更新 x/z 的活对象"**。
-   *   `conditions.seePlayer` 把候选对象**引用**直接写进 `ctx.target`，而 seePlayer
-   *   **只挂在 patrol 上**（chase/attack 期间不重跑索敌）。于是：
-   *
-   *     · 候选是活对象 → ctx.target 自动跟着目标跑，弹道/追击/脱战判定全部正确；
-   *     · 候选若是坐标拷贝（`{ x: p.x, z: p.z }`）→ ctx.target 退化成
-   *       **"看见那一刻的坐标快照"**，inRange / outOfRange / loseTarget 全按快照判定。
-   *       首当其冲的是**远程兵**：它的 `attackFinished → chase`（持续开火设计）
-   *       → 永不回 patrol → 永不重跑 seePlayer → **永久锁死在旧坐标上朝空气射击**
-   *       （2026-09-18 实测：玩家跑到 38m 外，弹道与真实方向夹角 157.7°，且不会脱战）。
-   *       近战兵只是"侥幸"能靠 `attackFinished → patrol` 重新索敌，同样在追鬼影。
-   *
-   *  ⚠️ 改这里请保持"活对象"语义；别再写 `{ x: …, z: … }`。
-   *  （slots[0] 带 radius=祖宗嘲讽半径，其余 radius 必须为 undefined ——
-   *    `retarget` 用 `c.radius === undefined` 区分"普通目标"与"吸仇恨目标"。）
-   */
-  private readonly candSlots: TargetCandidate[] = [
-    { x: 0, z: 0, radius: SENTINEL_TAUNT_RADIUS }, // 0 祖宗
-    { x: 0, z: 0, radius: undefined },             // 1 舰船
-    { x: 0, z: 0, radius: undefined },             // 2 玩家
-    { x: 0, z: 0, radius: undefined },             // 3 友军（无人机）
-  ];
-  /** ★ 复用输出数组（同上：零分配；targetCandidates 不会重入） */
-  private candOut: TargetCandidate[] = [];
-
   /** ★ 敌人索敌候选（优先级从高到低，2026-09-12 用户定调）：
    *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内——有索敌效果，优先级最高）
    *  ② 舰船（停靠后）③ 玩家 ④ 一般友军（最近无人机）
-   *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列
-   *  ★★ 返回的是**活对象**（引用），见 candSlots 的不变量说明。 */
+   *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列 */
   private enemyTargetCandidates(enemy: EnemyBase): TargetCandidate[] {
     const ep = enemy.position;
-    const out = this.candOut;
-    out.length = 0;
+    const out: TargetCandidate[] = [];
     let sentinel: DroneEntity | null = null, sentinelD2 = Infinity;
     let ally: DroneEntity | null = null, allyD2 = Infinity;
     for (const d of this.drones) {
@@ -2380,26 +2338,14 @@ export class WorldMode implements IGameMode {
     //   seePlayer/retarget 用该半径判定，不走敌人通用视野半径
     const taunt2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
     if (sentinel && sentinelD2 <= taunt2) {
-      const s = this.candSlots[0];
-      s.x = sentinel.position.x; s.z = sentinel.position.z;
-      out.push(s);
+      out.push({ x: sentinel.position.x, z: sentinel.position.z, radius: SENTINEL_TAUNT_RADIUS });
     }
     // ★ 其次舰船（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
     if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {
-      const s = this.candSlots[1];
-      s.x = this.ship.position.x; s.z = this.ship.position.z;
-      out.push(s);
+      out.push({ x: this.ship.position.x, z: this.ship.position.z });
     }
-    if (this.player) {
-      const s = this.candSlots[2];
-      s.x = this.player.position.x; s.z = this.player.position.z;
-      out.push(s);
-    }
-    if (ally) {
-      const s = this.candSlots[3];
-      s.x = ally.position.x; s.z = ally.position.z;
-      out.push(s);
-    }
+    if (this.player) out.push({ x: this.player.position.x, z: this.player.position.z });
+    if (ally) out.push({ x: ally.position.x, z: ally.position.z });
     return out;
   }
 
@@ -2912,14 +2858,6 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
     this.syncSlotAllies();                         // ★ 停靠后：友军出队（与出击槽全量同步）
     this.showFloatingAt(exit.x, exit.y + 1.6, exit.z, emergency ? '紧急停靠' : '已停靠', 'heal');
-    // ★ 落地名册陈列（?roster=1）：每种敌人各铺一只（不含普瑞赛斯），绕舰船落点一圈。
-    //   放在角色就位之后 —— 环带以舰船为中心，角色在舷侧，整圈都落在 L3 升格半径 35m 内，
-    //   下一帧起就会逐个升格成实体（能看到真实的 AI/弹道）。
-    if (this.rosterOnLanding) {
-      this.spawner.spawnRosterShowcase(sp.x, sp.z);
-      // 头顶再提示一次，避免玩家没注意脚下已经围了一圈
-      this.showFloatingAt(exit.x, exit.y + 3.2, exit.z, '名册陈列：每兵种一只', 'crit');
-    }
     // 兜底：若镜头调度意外缺失（无相机/被取消），直接就位并交还控制
     if (!this.camBlend) {
       this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);
@@ -3616,20 +3554,6 @@ export class WorldMode implements IGameMode {
   private clampCharacter(e: CharacterBase, dt: number): void {
     // ★ 死亡等待复活：冻结在死亡地点（不贴地/不重复判死），复活时统一传送回出生点
     if (e.dead) return;
-    // ★ 空中层（2026-09-18）：飞行单位**悬停** —— y = 地表高 + airAltitude（+ 个体相位浮动）。
-    //   不走贴地/掉坑分支（飞在空中不该被判掉坑），也不受地形落差影响。
-    //   ★ 地表取样必须与 L2 代理（SwarmBatch 的 groundAt）同口径 → 都用 surfaceHeightAtFor(x,z,y)，
-    //     否则升/降格瞬间会"跳一下"。
-    if (e.airborne) {
-      const p = e.position;
-      const gy = this.raster.surfaceHeightAtFor(p.x, p.z, p.y);
-      const bob = Math.sin(performance.now() / 1000 * AIR_BOB_RATE + e.airPhase) * AIR_BOB_AMP;
-      const targetY = gy + Math.max(0.4, e.airAltitude) + bob;
-      const dy = targetY - p.y;
-      // 上下都用限速逼近（爬升 3m/s / 下降 3m/s）：跨地形时不瞬移、不"贴脸闪现"
-      p.y += dy > 0 ? Math.min(dy, 3 * dt) : Math.max(dy, -3 * dt);
-      return;
-    }
     // ★ 空中态不钉地形：真实跳跃（空格）让 y 由 CharacterBase 的抛物线结算，
     //   落地瞬间再回落贴地；否则会把跳起来的角色钉回地面、无法跃过 0.5 高差。
     if (e.controller.isAirborne()) return;

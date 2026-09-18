@@ -110,6 +110,9 @@ const plantAssets: Record<string, FtxAsset> = {};
 let testChunk = false;
 /** ★ P0 蜂群压测：?enemies=N 开局铺 N 只代理（0 = 关；《蜂群架构.md》§8-P0） */
 let enemyStress = 0;
+/** ★ 落地名册陈列：?roster=1 开 / ?roster=0 关（缺省**开**）—— 舰船落地后每种敌人各铺一只
+ *  （不含普瑞赛斯）。用途：一眼验收各兵种真实行为（悬停/贴脸/箭矢/法球）。 */
+let rosterOnLanding = true;
 
 // ============================================================
 // 启动引导
@@ -174,6 +177,10 @@ async function boot() {
   if (testPreset) setTestPreset(testPreset); // 未知 key 抛错（fail-fast）
   testChunk = testGroup !== null || urlParams.get('single') === '1';
   enemyStress = Math.max(0, Math.min(200, Number(urlParams.get('enemies') ?? 0) || 0));
+  // ★ 落地名册陈列：缺省开；显式 `?roster=0` 关、`?roster=1` 开（便于临时恢复正常出怪节奏）
+  const rosterParam = urlParams.get('roster');
+  if (rosterParam === '0') rosterOnLanding = false;
+  else if (rosterParam === '1') rosterOnLanding = true;
   // ★ 测试组面板延后到存档就绪（需当天地图种子 = 主种子 × 天数）再显示
   // 控制台换组时联动刷新面板
   (window as unknown as { setTestPreset?: (k: string | null) => void }).setTestPreset = (k) => {
@@ -648,7 +655,7 @@ function enterWorldMode(
     droneAsset: droneAsset ?? undefined,
     sentinelAsset: sentinelAsset ?? undefined,
     plantAssets,
-    debug: { testChunk, enemyStress },
+    debug: { testChunk, enemyStress, rosterOnLanding },
     onReturn: () => {
       // 返回时：★ 行囊（弹药背包）保持原样——不转移祖宗，随存档原样落盘
       //   → 遗物"返回/天数"时机管线 → 推进天数 → BaseMode（内部 SaveSystem.save）

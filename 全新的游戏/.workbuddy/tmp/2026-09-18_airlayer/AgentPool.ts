@@ -8,15 +8,6 @@
 /** 池容量（= 全图存活上限 200 + 缓冲；《蜂群架构.md》§9） */
 export const AGENT_CAPACITY = 256;
 
-/** ★ 空中层默认悬停高度（米，**相对地表**）——名册（`EnemySpec.airAltitude`）未给时的兜底。
- *  引擎层默认值放这里（`AgentPool` 零三方依赖），玩法层（WorldSpawner）负责填入。 */
-export const AIR_ALTITUDE_DEFAULT = 2.6;
-/** ★ 空中层悬停浮动（幅度 m / 角频率 rad/s）——**纯表现**：只加在渲染/贴地回写上，
- *  不影响 AI 的水平决策；相位用 `AgentPool.phase`（每只随机）错开，避免整队同频上下摆。
- *  L2（SwarmBatch 实例矩阵）与 L3（WorldMode.clampCharacter）两条路径共用，口径必须一致。 */
-export const AIR_BOB_AMP = 0.22;
-export const AIR_BOB_RATE = 1.35;
-
 /** 目标类型（代理索敌） */
 export const AGENT_TARGET_PLAYER = 0;
 export const AGENT_TARGET_SHIP = 1;
@@ -53,10 +44,6 @@ export interface AgentSpawnData {
   intent?: number;
   /** 游荡时朝目标的偏向强度（威胁度驱动；缺省 0.12） */
   bias?: number;
-  /** ★ 空中层（2026-09-18）：是否飞行单位（不贴地/不绕坑/不涉水/不掉坑判死） */
-  isAir?: boolean;
-  /** ★ 空中层悬停高度（米，**相对地表**；仅 isAir 有效；0/负 = 视为地面单位） */
-  altitude?: number;
 }
 
 /** 代理快照（升格/降格搬运） */
@@ -80,9 +67,6 @@ export interface AgentSnapshot {
   wanderSpeed?: number;
   /** 攻击意图（缺省 = 无意图/环境刷新） */
   intent?: number;
-  /** ★ 空中层（升格搬运必须携带，否则飞兵一升格就落地） */
-  isAir?: boolean;
-  altitude?: number;
 }
 
 export class AgentPool {
@@ -140,12 +124,6 @@ export class AgentPool {
   readonly curSpeed = new Float32Array(AGENT_CAPACITY);
   /** 游荡偏向强度（威胁度驱动） */
   readonly bias = new Float32Array(AGENT_CAPACITY);
-
-  // ---- P5：空中层（2026-09-18；《蜂群架构.md》§25）----
-  /** 是否飞行单位（1 = 独立空中层：不贴地、不绕坑/水、不掉坑判死、直线导航） */
-  readonly isAir = new Uint8Array(AGENT_CAPACITY);
-  /** 悬停高度（米，**相对地表**；仅 isAir=1 有效；≤0 = 按地面单位处理） */
-  readonly altitude = new Float32Array(AGENT_CAPACITY);
 
   // ---- P2：攻击槽 / 攻击令牌 / 警戒反应 ----
   /** 攻击槽索引（-1 = 未占；按目标扇区环形占位） */
@@ -208,8 +186,6 @@ export class AgentPool {
     this.flash[i] = 0;
     this.intent[i] = d.intent ?? 255;
     this.bias[i] = d.bias ?? 0.12;
-    this.isAir[i] = d.isAir ? 1 : 0;
-    this.altitude[i] = d.altitude ?? 0;
     this.retreatUntil[i] = 0;
     this.nextRetreatAt[i] = 0;
     this.rageUntil[i] = 0;
@@ -253,8 +229,6 @@ export class AgentPool {
     this.flash[to] = this.flash[from];
     this.intent[to] = this.intent[from];
     this.bias[to] = this.bias[from];
-    this.isAir[to] = this.isAir[from];
-    this.altitude[to] = this.altitude[from];
     this.retreatUntil[to] = this.retreatUntil[from];
     this.nextRetreatAt[to] = this.nextRetreatAt[from];
     this.rageUntil[to] = this.rageUntil[from];
@@ -271,8 +245,6 @@ export class AgentPool {
       meleeDamage: this.meleeDamage[i], meleeRange: this.meleeRange[i],
       scale: this.scale[i], tier: this.tier[i],
       yaw: this.yaw[i],
-      isAir: this.isAir[i] === 1,
-      altitude: this.altitude[i],
     };
   }
 

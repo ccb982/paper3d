@@ -142,11 +142,22 @@ export class BulletVisual extends OffscreenBake {
     }
 
     // ---- 无蒙版实体时的全幅合成 quad（同一 RT） ----
+    // ★ 位置必须 (0.5, 0.5)：离屏相机视锥是 [0,1]²（OffscreenBake 的
+    //   `OrthographicCamera(0, 1, 1, 0, -1, 1)`），而 `PlaneGeometry(1,1)` 自身
+    //   以原点为中心（跨度 [-0.5,0.5]²）→ 直接 add 会被裁到**左下角四分之一**，
+    //   烘焙出的纹理只有 1/4 有内容。程序化弹（`createArrowAsset` /
+    //   `createFireballAsset` / `createSolidBulletAsset`，走的就是这条全幅路径）
+    //   因此被裁成一小条残片 → 敌方的箭/火球看起来"根本没画出来"（2026-09-18 定位）。
+    //   ★ 真素材（.scene.zip）走的是模板/实体路径（entities.length > 0），
+    //     实体网格自身跨度就是 [0,1] → 不受影响（这就是玩家子弹一直正常的原因）。
     this.fullMat = makeCompositeMaterial();
     this.fullQuad = this.entities.length === 0
       ? new THREE.Mesh(new THREE.PlaneGeometry(1, 1), this.fullMat)
       : null;
-    if (this.fullQuad) this.scene.add(this.fullQuad);
+    if (this.fullQuad) {
+      this.fullQuad.position.set(0.5, 0.5, 0);
+      this.scene.add(this.fullQuad);
+    }
   }
 
   /** ★ 强制首帧烘焙 + 预热（解决构造时纹理全黑 + 首次开火 shader 编译卡顿） */

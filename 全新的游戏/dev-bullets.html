@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>DEV - 子弹烘焙诊断（BulletVisual 离屏 RT 完整性）</title>
+  <style>
+    body { margin: 0; background: #0d0d14; color: #ddd;
+           font: 13px/1.5 ui-monospace, Consolas, monospace; }
+    h1 { font-size: 16px; margin: 14px 0 2px 12px; color: #9fd; }
+    .sub { margin: 0 12px 12px; color: #889; font-size: 12px; }
+    #gallery { display: flex; flex-wrap: wrap; gap: 14px; padding: 0 12px 6px; align-items: flex-start; }
+    .card { background: #15151f; border: 1px solid #2a2a3a; border-radius: 6px; padding: 8px 10px; }
+    .card h2 { font-size: 12px; margin: 0 0 6px; color: #cde; font-weight: 600; }
+    .meta { font-size: 11px; color: #8a8; margin-top: 6px; white-space: pre; }
+    .meta.bad { color: #f88; }
+    canvas.prev { image-rendering: pixelated; display: block;
+                  background: repeating-conic-gradient(#1b1b26 0 25%, #23232f 0 50%) 0 0 / 12px 12px;
+                  border: 1px solid #33334a; }
+    #out { margin: 6px 12px 24px; white-space: pre; font-size: 11px; color: #9aa; }
+  </style>
+</head>
+<body>
+  <h1>子弹烘焙诊断 —— BulletVisual 的离屏 RT 是否完整</h1>
+  <p class="sub">
+    棋盘格 = 透明。程序化弹（箭 / 法球 / 圆点）走「全幅合成」路径；真素材（.scene.zip）走「蒙版实体」路径。
+    两者都由同一个 <code>OffscreenBake</code> 相机（视锥 [0,1]²）烘焙。
+  </p>
+  <div id="gallery"></div>
+  <div id="out">running...</div>
+  <script type="module">
+    import * as THREE from 'three';
+    import {
+      createArrowAsset, createFireballAsset, createSolidBulletAsset,
+    } from '/src/services/fx/SolidBulletAsset';
+    import { BulletVisual } from '/src/services/combat/BulletVisual';
+
+    const out = document.getElementById('out');
+    const gallery = document.getElementById('gallery');
+    const L = [];
+    const log = (s) => { L.push(s); out.textContent = L.join('\n'); };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 8; canvas.height = 8;
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: false });
+    renderer.setClearColor(0x0d0d14, 1);
+
+    /** RT 的 alpha 通道 → ASCII（看烘焙结果是否完整 / 被裁 / 全空） */
+    function asciiAlpha(px, w, h, cols = 46, rows = 16) {
+      const chars = ' .:-=+*#%@';
+      const lines = [];
+      for (let ry = 0; ry < rows; ry++) {
+        let line = '';
+        for (let rx = 0; rx < cols; rx++) {
+          const y = Math.floor((rows - 1 - ry + 0.5) / rows * h); // readPixels 自下而上 → 翻回
+          const x = Math.floor((rx + 0.5) / cols * w);
+          const a = px[(y * w + x) * 4 + 3];
+          line += chars[Math.min(9, Math.round(a / 255 * 9))];
+        }
+        lines.push(line);
+      }
+      return lines;
+    }
+
+    // compare=false = 真素材走模板/实体路径，RT 是「渲染出来的人形」而非源纹理的逐像素拷贝，
+    // 因此不能拿源纹理覆盖率当判据（只当对照：修复前后应保持一致）。
+    function probe(name, asset, note, compare = true) {
+      const pair = asset.getFramePair(0);
+      if (!pair) { log(`\n[${name}] getFramePair(0) = null  ← ★ FAIL`); return; }
+      const w = pair.base.image.width, h = pair.base.image.height;
+
+      const sd = pair.base.image.data;
+      let srcN = 0;
+      for (let i = 0; i < w * h; i++) if (sd[i * 4 + 3] > 0.5) srcN++;
+
+      // 走真实 BulletVisual 建 RT + 烘焙
+      const visual = new BulletVisual(renderer, asset);
+      visual.init();
+      const rt = visual.getRenderTarget();
+      const rw = rt.width, rh = rt.height;
+      const px = new Uint8Array(rw * rh * 4);
+      renderer.readRenderTargetPixels(rt, 0, 0, rw, rh, px);
+      let rtN = 0;
+      for (let i = 0; i < rw * rh; i++) if (px[i * 4 + 3] > 127) rtN++;
+
+      const srcPct = 100 * srcN / (w * h);
+      const rtPct = 100 * rtN / (rw * rh);
+      const ok = compare ? rtPct > srcPct * 0.9 : true;
+
+      // 预览（翻转行序 + 放大）
+      const cv = document.createElement('canvas');
+      cv.width = rw; cv.height = rh;
+      const ctx = cv.getContext('2d');
+      const img = ctx.createImageData(rw, rh);
+      for (let y = 0; y < rh; y++) {
+        const sy = rh - 1 - y;
+        for (let x = 0; x < rw; x++) {
+          const s = (sy * rw + x) * 4, d = (y * rw + x) * 4;
+          img.data[d] = px[s]; img.data[d + 1] = px[s + 1];
+          img.data[d + 2] = px[s + 2]; img.data[d + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+
+      const scale = Math.max(2, Math.round(150 / rh));
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<h2>${name}</h2>`;
+      cv.className = 'prev';
+      cv.style.width = (rw * scale) + 'px';
+      cv.style.height = (rh * scale) + 'px';
+      card.appendChild(cv);
+      const meta = document.createElement('div');
+      meta.className = 'meta' + (ok ? '' : ' bad');
+      const verdict = !compare ? '— 对照（模板路径，不与源逐像素对应）' : (ok ? '✔ 与源一致' : '✘ 被裁');
+      meta.textContent =
+        `源纹理 ${w}×${h}  不透明 ${srcPct.toFixed(1)}%\n` +
+        `烘焙RT ${rw}×${rh}  不透明 ${rtPct.toFixed(1)}%  ${verdict}` +
+        (note ? '\n' + note : '');
+      card.appendChild(meta);
+      gallery.appendChild(card);
+
+      log(`\n[${name}] 源 ${w}×${h} ${srcPct.toFixed(1)}%  →  RT ${rw}×${rh} ${rtPct.toFixed(1)}%  ${!compare ? '(对照)' : (ok ? '✔' : '✘')}`);
+      for (const l of asciiAlpha(px, rw, rh)) log('    |' + l + '|');
+      visual.dispose();
+    }
+
+    try {
+      probe('程序化箭矢（弩手）', createArrowAsset(), '全幅合成路径');
+      probe('程序化法球（术士）', createFireballAsset(), '全幅合成路径');
+      probe('程序化圆点（兜底）', createSolidBulletAsset(), '全幅合成路径');
+      try {
+        const { Asset } = await import('/src/vendor/player/index');
+        const real = await Asset.load(encodeURI('/fx/bullets/维什戴尔子弹.scene.zip'));
+        const n = real.getFrameRenderData?.(0)?.entities?.length ?? 0;
+        probe('对照：真素材 维什戴尔子弹', real, `蒙版实体路径（entities=${n}）`, false);
+      } catch (e) {
+        log('\n[对照 真素材] 加载失败: ' + e.message);
+      }
+      log('\n=== DONE ===');
+      window.__DONE = true;
+    } catch (e) {
+      log('❌ ' + e.stack);
+      window.__DONE = true;
+    }
+  </script>
+</body>
+</html>

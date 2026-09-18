@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
-import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE } from './AgentPool';
+import { AGENT_CAPACITY } from './AgentPool';
 import { LOD_MAX_DIST } from '../../services/lod';
 
 interface MobBatch {
@@ -254,7 +254,6 @@ export class SwarmBatch {
     focusX = 0,
     focusZ = 0,
     maxDist = LOD_MAX_DIST,
-    time = 0,
   ): void {
     const counters: number[] = [];
     for (let m = 0; m < this.mobs.length; m++) counters.push(0);
@@ -271,17 +270,9 @@ export class SwarmBatch {
       const w = Math.max(0.05, pool.scale[i]);
       const h = w * batch.aspect;
       const gy = groundAt(pool.x[i], pool.z[i], pool.y[i]); // ★ y 提示选层（浮空洞顶）
-      // ★ 空中层（2026-09-18）：飞行兵**不贴地** —— 以地表高 + 悬停高度（+ 个体相位错开的
-      //   上下浮动）定位；地面兵照旧贴地回写（渲染与逻辑同源）。
-      //   ★ 浮动相位用 pool.phase（0~1 个体随机），同一批飞兵不会整齐上下摆。
-      let baseY = gy;
-      if (pool.isAir[i] === 1 && pool.altitude[i] > 0) {
-        baseY = gy + pool.altitude[i]
-          + Math.sin(time * AIR_BOB_RATE + pool.phase[i] * 6.2831853) * AIR_BOB_AMP;
-      }
-      pool.y[i] = baseY;
+      pool.y[i] = gy; // 贴地回写（渲染与逻辑同源）
       // ★ 接地补偿：底透明余量 → 实例整体下沉（与 L3 实体 FTXQuad.setGroundSink 同口径）
-      _p.set(pool.x[i], baseY + h / 2 - batch.sink, pool.z[i]);
+      _p.set(pool.x[i], gy + h / 2 - batch.sink, pool.z[i]);
       _q.setFromAxisAngle(_axisY, pool.yaw[i]);
       _s.set(w, h, 1);
       _m.compose(_p, _q, _s);
@@ -296,7 +287,7 @@ export class SwarmBatch {
         const bdz = pool.z[i] - focusZ;
         if (bdx * bdx + bdz * bdz <= maxDist2) {
           const bi = this.barCount++;
-          _p.set(pool.x[i], baseY + h + 0.4 - batch.sink, pool.z[i]);
+          _p.set(pool.x[i], gy + h + 0.4 - batch.sink, pool.z[i]);
           _q.copy((camera as THREE.Camera).quaternion);
           _s.set(w * 0.8, 0.1, 1);
           _m.compose(_p, _q, _s);

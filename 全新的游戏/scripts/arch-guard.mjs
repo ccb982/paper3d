@@ -85,6 +85,29 @@ for (const name of MOVED_OUT) {
   }
 }
 
+// ★ 索敌候选必须是"活对象"（2026-09-18 实测踩点）
+//   `ctx.target` 只在 **patrol 的 seePlayer** 里被赋值 —— chase/attack 期间不再重跑索敌。
+//   所以候选对象必须是"每帧原地更新 x/z 的活对象"（WorldMode.candSlots）。
+//   一旦退回坐标字面量 `{ x: …, z: … }`，ctx.target 就退化成"看见那一刻的坐标快照"，
+//   而 inRange / outOfRange / loseTarget 全按快照判定：
+//     · 远程兵 attackFinished → chase（持续开火）→ 永不回 patrol → 永不重新索敌
+//       → **永久锁死在旧坐标朝空气射击**（离屏实测：玩家跑到 38m 外，弹道偏角 145°）；
+//     · 近战兵只是靠"打完回 patrol"侥幸重新索敌，同样在追鬼影。
+{
+  const candStart = wm.indexOf('private enemyTargetCandidates');
+  const candBody = candStart < 0 ? '' : wm.slice(candStart, wm.indexOf('\n  }', candStart));
+  if (!candBody) {
+    errors.push('WorldMode: 找不到 enemyTargetCandidates（方法被改名/移除？本项护栏需同步更新）');
+  } else {
+    if (/out\.push\(\s*\{/.test(candBody)) {
+      errors.push('enemyTargetCandidates: 推入了**坐标字面量** → ctx.target 退化成快照（远程兵会朝空气射击）');
+    }
+    if (!/candSlots/.test(candBody)) {
+      errors.push('enemyTargetCandidates: 没引用活对象槽 candSlots（索敌候选必须是活对象）');
+    }
+  }
+}
+
 // ---------- ③ 配置真源同步 ----------
 // 遗物：relics.ts / ItemIconRegistry.ts / gachaPool.json 三处必须一致
 const relicSrc = read('config/relics.ts');
@@ -159,6 +182,26 @@ if (fs.existsSync(enemyDir) && rosterFiles.length) {
     if (!f.endsWith('.ftx3.gz')) continue;
     if (!rosterFiles.includes(f)) warns.push(`enemyRoster: public 下有未登记帧包 ${f}（不会生成）`);
   }
+}
+
+// ---------- ★ 空中层（2026-09-18）：名册 isAir 必须配套 ----------
+// 静默失败类：设了 `isAir: true` 却忘了 `airAltitude` → 落到引擎兜底高度（2.6m），
+//   数值看着"生效了"但完全不是设计值；反过来给地面兵写 airAltitude 也是白写。
+// 检查法：按 `id: 'xxx'` 切块，逐块判 isAir / airAltitude 是否成对。
+{
+  const idMarks = [...rosterSrc.matchAll(/^\s{4}id:\s*'([^']+)'/gm)];
+  const airIds = [];
+  for (let k = 0; k < idMarks.length; k++) {
+    const from = idMarks[k].index;
+    const to = k + 1 < idMarks.length ? idMarks[k + 1].index : rosterSrc.length;
+    const block = rosterSrc.slice(from, to);
+    const isAir = /isAir:\s*true/.test(block);
+    const hasAlt = /airAltitude:\s*[\d.]+/.test(block);
+    if (isAir && !hasAlt) errors.push(`enemyRoster: "${idMarks[k][1]}" 设了 isAir 却没给 airAltitude（会静默用兜底高度）`);
+    if (!isAir && hasAlt) errors.push(`enemyRoster: "${idMarks[k][1]}" 不是空中单位却写了 airAltitude（无效配置）`);
+    if (isAir) airIds.push(idMarks[k][1]);
+  }
+  if (airIds.length) console.log(`[arch-guard] 空中层 ${airIds.length} 种：${airIds.join(', ')}`);
 }
 
 // ---------- 输出 ----------

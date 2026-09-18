@@ -53,15 +53,6 @@ export interface EnemySpec {
    *    ② 本来就该悬空的单位（飞行/漂浮）→ 给负值。
    *  缺省 0。 */
   groundSink?: number;
-  /** ★ 空中单位（2026-09-18 落地）：**独立空中层**
-   *  —— 不参与地面寻路（不看流场/不绕坑/不涉水）、不会掉坑判死、
-   *  以 `airAltitude`（相对地表）悬停，并带轻微上下浮动。
-   *  两条渲染路径都按此抬升：L2 代理（`SwarmBatch.sync`）与 L3 实体（`WorldMode.clampCharacter`）。
-   *  见《蜂群架构.md》§25。 */
-  isAir?: boolean;
-  /** 空中悬停高度（米，**相对地表**；缺省引擎兜底 `AIR_ALTITUDE_DEFAULT`，见 AgentPool）。
-   *  仅 `isAir` 有效。 */
-  airAltitude?: number;
 }
 
 /** 素材目录（public 下） */
@@ -173,29 +164,24 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   },
   // 战争术士：重火力。最远射程 + 最高单发，但血薄移速慢 —— 优先点掉的目标
   // ★ 2026-09-18：体型 ×2（2.1 → 4.2，碰撞同比例）—— 用户定调"敌人太小、战争术士放大两倍"
-  // ★ 2026-09-18：加入**空中层**（悬停 3.2m 高空放火球；真弹道见 aiconfig WAR_CASTER_AI）
   {
     id: 'war_caster', name: '战争术士',
     file: '战争术士，重火力.ftx3.gz',
     ai: WAR_CASTER_AI,
     hp: 55, defense: 0, attackPower: 6,
     scale: 4.2, collisionScale: 2.4, pack: 1, weight: 3,
-    isAir: true, airAltitude: 3.2,
     drops: [
       { itemId: 'ketone', chance: 0.35, min: 1, max: 1 },
       { itemId: 'device', chance: 0.7, min: 1, max: 2 },
     ],
   },
-  // 爆炸飞行怪：最快 + 极脆 + 单发最痛（自爆型）。
-  // ★ 2026-09-18：加入**空中层**（贴地 1.8m 低空扑脸；此前"无空中层"→ 走地面，已改）
-  //   TODO：§25 的"只盘旋不缠斗 + 落点延迟引信轰炸"尚未实现 → 目前仍以贴脸挥击结算。
+  // 爆炸飞行怪：最快 + 极脆 + 单发最痛（自爆型）。★ 目前无空中层 → 走地面寻路
   {
     id: 'bomber', name: '爆炸飞行怪',
     file: '爆炸飞行怪.ftx3.gz',
     ai: BOMBER_AI,
     hp: 26, defense: 0, attackPower: 4,
     scale: 1.9, collisionScale: 1.1, pack: 1, weight: 4,
-    isAir: true, airAltitude: 1.8,
     drops: [
       { itemId: 'iron_grain', chance: 0.6, min: 1, max: 1 },
       { itemId: 'device', chance: 0.5, min: 1, max: 1 },
@@ -232,11 +218,9 @@ export function enemyAssetUrl(spec: EnemySpec): string {
 
 // ============================================================
 // TODO（名册已登记但引擎尚未支持的形态；需要时按此顺序补）
-//   ① 真弹道：**已完成**（2026-09-18，`MobAIParams.ranged` + camp 路由 → arrow/fireball 池）。
-//   ② 空中层：**基础层已完成**（2026-09-18）—— `isAir`/`airAltitude` 已进 AgentPool SoA、
-//      独立于地面寻路（直线导航）、悬停渲染（L2 实例矩阵 / L3 clampCharacter）。
-//      未做：§25 的"飞行兵只轰炸不缠斗"完整 sortie 循环（盘旋→投弹→延迟引信爆炸→返场），
-//      目前飞行兵仍以贴脸挥击/法球结算。
+//   ① 真弹道：现在"远程"= 大 attackRange 的瞬时命中（无弹道视觉）。
+//      要子弹得加 behaviors 的 `rangedShot` + 给敌对阵营分配 bulletAsset。
+//   ② 空中层（爆炸飞行怪）：`isAir`/`altitude` 需进 AgentSnapshot SoA +
+//      独立空中寻路（《蜂群架构.md》§25）——现按地面单位跑。
 //   ③ 海怪下水：WorldSpawner 落点闸门排除 `genRole === 'liquid'`。
-//      ★ 注意：空中单位已豁免该闸门（可刷在水/坑上方），别把豁免连带删掉。
 // ============================================================
