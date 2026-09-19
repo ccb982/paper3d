@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, wallNear } from '../entity/CoverEntity';
 import { coverBrickTexture, COVER_W, COVER_T } from '../services/render/CoverRenderer';
 import { DeployPreview } from '../services/fx/DeployPreview';
 import { stepFluidShared } from '../services/fx/FluidShared';
@@ -1005,7 +1005,6 @@ export class WorldMode implements IGameMode {
       physics: this.physics,
       swarm: this.swarm,
       bullets: this.bullets,
-      enemyBullets: [this.enemyBullets, this.enemyBolts],
       chunks: this.chunks,
       spawnSentinelAt: (x, z) => this.spawnSentinelAt(x, z),
       spawnItemDrops: (impact) => this.spawnItemDrops(impact),
@@ -1407,8 +1406,6 @@ export class WorldMode implements IGameMode {
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
-      // ★ 射击孔单向：敌弹不得穿城墙孔（玩家弹照常穿缝）
-      this.combatSystem.updateEnemySlitBlock(dt);
       // ---- ★ P4：导演调度波次（节奏 + 预算 + intent 分工） ----
       const order = this.swarmDirector.update({
         dt,
@@ -1981,6 +1978,8 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
       targetX: aim.x, targetY: aim.y, targetZ: aim.z,
+      // ★ 贴墙开枪无视墙（防被自己的城墙挡）；离墙远则照常命中（能拆敌墙）
+      ignoreWalls: wallNear(p.x, p.z),
     });
     // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
     this.swarm.alertAt(p.x, p.z, 16, 6);

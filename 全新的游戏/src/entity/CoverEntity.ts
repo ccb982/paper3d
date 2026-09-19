@@ -15,6 +15,7 @@ import { StructureEntity, type StructureOptions } from './StructureEntity';
 import type { EntityManager } from './EntityManager';
 import { addStaticObstacleRect, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { HealthBar } from '../services/fx/HealthBar';
+import { GROUP_WALL } from '../services/physics/PhysicsWorld';
 import { RasterMap } from '../services/map/RasterMap';
 import {
   CoverRenderer,
@@ -31,6 +32,8 @@ export const WALL_AURA_HP_RATIO = 0.8;
 export const WALL_AURA_DEF = 6;
 /** 持续修复速度（HP/秒） */
 export const WALL_AURA_HEAL = 25;
+/** ★ 玩家在城墙附近此半径内开枪 → 子弹"无视墙"（防贴墙被自己的墙挡；远距离照常命中） */
+export const WALL_IGNORE_R = 4;
 /** 玩家部署的默认成型时长（秒；插值长高） */
 export const COVER_DEPLOY_BUILD_TIME = 0.6;
 
@@ -70,15 +73,13 @@ export function updateWallAuras(playerMaxHp: number, dt: number): void {
   }
 }
 
-/** ★ 射击孔单向阻挡（2026-09-19）：**敌弹不得穿孔**——
- *  线段 vs 城墙射击孔带（局部坐标）；命中孔带返回 true（调用方回收敌弹）。
- *  玩家弹不做此检查（正常穿缝）。 */
-export function enemySlitBlocks(
-  x0: number, y0: number, z0: number,
-  x1: number, y1: number, z1: number,
-): boolean {
+/** ★ 玩家附近是否有墙（开枪时判定"无视墙"；数量个位数，线性扫描） */
+export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
+  const r2 = r * r;
   for (const c of _coverRegistry) {
-    if (c.slitBlocksSegment(x0, y0, z0, x1, y1, z1)) return true;
+    const dx = c.position.x - x;
+    const dz = c.position.z - z;
+    if (dx * dx + dz * dz <= r2) return true;
   }
   return false;
 }
@@ -114,44 +115,17 @@ export class CoverEntity extends StructureEntity {
 
   constructor(em: EntityManager, scene: THREE.Scene, opts: CoverOptions) {
     const hasSlit = (opts.variant ?? 'cover') !== 'wall';
-    const phys: StructureOptions['physics'] = hasSlit
-      ? (() => {
-          const pillarW = (COVER_W - COVER_SLIT_W) / 2;
-          const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
-          const midH = (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2;
-          return {
-            type: 'fixed' as const,
-            options: {
-              // 主碰撞体 = 孔下段（全宽）
-              shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: COVER_SLIT_Y0 / 2, hz: COVER_T / 2 },
-              shapeOffset: { x: 0, y: COVER_SLIT_Y0 / 2, z: 0 },
-              extraColliders: [
-                // 孔上段（全宽）
-                {
-                  shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: (COVER_H - COVER_SLIT_Y1) / 2, hz: COVER_T / 2 },
-                  offset: { x: 0, y: (COVER_SLIT_Y1 + COVER_H) / 2, z: 0 },
-                },
-                // 左右立柱（中间留射击孔）
-                {
-                  shape: { type: 'cuboid' as const, hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
-                  offset: { x: -(COVER_SLIT_W / 2 + pillarW / 2), y: midY, z: 0 },
-                },
-                {
-                  shape: { type: 'cuboid' as const, hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
-                  offset: { x: COVER_SLIT_W / 2 + pillarW / 2, y: midY, z: 0 },
-                },
-              ],
-            },
-          };
-        })()
-      // 实心墙：整面一个长方体
-      : {
-          type: 'fixed' as const,
-          options: {
-            shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: COVER_H / 2, hz: COVER_T / 2 },
-            shapeOffset: { x: 0, y: COVER_H / 2, z: 0 },
-          },
-        };
+    // ★ 物理 = 实心单盒（2026-09-19 二次定调：射击孔纯视觉——敌弹不得穿孔；
+    //   玩家贴墙开枪由子弹侧"无视墙"解决，见 wallNear / BulletEntity.ignoreWalls）
+    const phys: StructureOptions['physics'] = {
+      type: 'fixed',
+      options: {
+        shape: { type: 'cuboid', hx: COVER_W / 2, hy: COVER_H / 2, hz: COVER_T / 2 },
+        shapeOffset: { x: 0, y: COVER_H / 2, z: 0 },
+        // ★ 墙专属碰撞分组（玩家子弹可 filter 掉该位实现"无视墙"）
+        collisionGroups: (GROUP_WALL << 16) | 0xffff,
+      },
+    };
     super(em, {
       x: opts.x, y: opts.y, z: opts.z,
       physics: phys,
@@ -183,7 +157,7 @@ export class CoverEntity extends StructureEntity {
     this.blockId = -(this.entity.id * 16 + 1);
     addStaticObstacleRect(
       this.blockId, opts.x, opts.y + COVER_H / 2, opts.z,
-      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true,
+      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true, true,
     );
     _coverRegistry.add(this);
   }
@@ -197,29 +171,6 @@ export class CoverEntity extends StructureEntity {
     if (healPerSec > 0 && this.hp < maxHp) {
       this.hp = Math.min(maxHp, this.hp + healPerSec * dt);
     }
-  }
-
-  /** ★ 射击孔单向阻挡：敌弹线段是否穿过本城墙的孔带（局部坐标判定；墙 = 实心恒 false） */
-  slitBlocksSegment(
-    x0: number, y0: number, z0: number,
-    x1: number, y1: number, z1: number,
-  ): boolean {
-    if (!this.hasSlit) return false;
-    const p = this.entity.position;
-    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
-    const rx = fz, rz = -fx;                       // 局部 +x（宽度轴）
-    const lx0 = (x0 - p.x) * rx + (z0 - p.z) * rz;
-    const lz0 = (x0 - p.x) * fx + (z0 - p.z) * fz;
-    const lx1 = (x1 - p.x) * rx + (z1 - p.z) * rz;
-    const lz1 = (x1 - p.x) * fx + (z1 - p.z) * fz;
-    if (lz0 === lz1) return false;                 // 平行于墙面
-    if ((lz0 > 0) === (lz1 > 0)) return false;     // 未跨越墙平面
-    const t = lz0 / (lz0 - lz1);                   // 穿越点插值参数
-    const lx = lx0 + (lx1 - lx0) * t;
-    const y = y0 + (y1 - y0) * t;
-    const ly = y - p.y;                            // 相对墙底高度
-    return Math.abs(lx) <= COVER_SLIT_W / 2
-      && ly >= COVER_SLIT_Y0 && ly <= COVER_SLIT_Y1;
   }
 
   /** ★ 顶面高度（世界 Y；点在墙足迹内才返回）——角色落顶/攀爬目标 */
@@ -273,7 +224,7 @@ export class CoverEntity extends StructureEntity {
     removeStaticObstacle(this.blockId);
     addStaticObstacleRect(
       this.blockId, p.x, p.y + COVER_H / 2, p.z,
-      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true,
+      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true, true,
     );
   }
 

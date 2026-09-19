@@ -11,6 +11,8 @@ import type { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { applyDamage } from './DamagePipeline';
 import { sameTeam } from './teams';
+import { queryStaticObstaclesInto, type StaticObstacle } from '../physics/StaticObstacleRegistry';
+import { segmentOBBHit } from '../physics/Collision';
 import { BulletManager, type SpawnBulletOptions } from './BulletManager';
 
 /** 阵营类型 */
@@ -47,6 +49,28 @@ export type AttackOptions =
       dmgType?: string;
     };
 
+/** ★ 近战线段复用缓冲（零分配） */
+const _meleeBuf: StaticObstacle[] = [];
+
+/** ★ 墙挡近战：线段（挥击中心 → 目标）是否被"墙"截断（wall 标记的定向矩形）。
+ *  高度判定：截断点低于墙顶才算挡住（站在墙顶上互殴不受影响）。 */
+function meleeWallBlocked(
+  x0: number, y0: number, z0: number,
+  x1: number, y1: number, z1: number,
+): boolean {
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  if (len < 1e-4) return false;
+  queryStaticObstaclesInto((x0 + x1) / 2, (z0 + z1) / 2, len / 2 + 6, _meleeBuf);
+  for (const o of _meleeBuf) {
+    if (!o.wall || o.hw === undefined || o.hl === undefined || o.yaw === undefined) continue;
+    const t = segmentOBBHit(x0, z0, x1, z1, o.x, o.z, o.hw, o.hl, o.yaw);
+    if (t === null) continue;
+    const yc = y0 + (y1 - y0) * t;
+    if (yc < o.y + o.hy) return true;
+  }
+  return false;
+}
+
 /** ★ 攻击执行器：分派攻击意图 → 命中判定 → 伤害管线 */
 export function executeAttack(
   em: EntityManager,
@@ -65,6 +89,8 @@ export function executeAttack(
       for (const t of targets) {
         if (t === opts.source || sameTeam(t.camp, opts.camp)) continue; // ★ 友军过滤（唯一真源）
         if (Math.abs(t.position.y - opts.y) > 2) continue; // 高度过滤（不同层）
+        // ★ 墙挡近战（2026-09-19）：挥击中心 → 目标 的线段被城墙/墙截断 → 打不到
+        if (meleeWallBlocked(opts.x, opts.y, opts.z, t.position.x, t.position.y + 1, t.position.z)) continue;
         // ★ 近战 = "AI 基础伤害 + 攻方攻击力"：显式开启叠加（事件由 applyDamage 统一发）
         // ★ 命中点：横向取挥击中心（决定染料落在身体哪一侧）；纵向问目标自己
         //   （★ 别写死 +1.0：挥击中心 y 是地面高度，且固定 1.0m 对 3.7m 敌人只有大腿高）

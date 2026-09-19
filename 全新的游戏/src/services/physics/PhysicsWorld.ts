@@ -26,6 +26,11 @@ export async function ensureRapierReady(): Promise<void> {
  *   ★ 根治：不信任 body.handle，PhysicsWorld 内部自管 id → RigidBody 映射，
  *     对外接口不变（仍返回 number id），调用方完全无感。 */
 
+/** ★ 碰撞分组位（2026-09-19：射击孔单向 / 掩体穿透用）：
+ *  默认刚体 membership/filter 全 1（与一切交互）；
+ *  城墙 membership = GROUP_WALL，子弹 filter 去掉该位即可"无视墙"。 */
+export const GROUP_WALL = 0x0002;
+
 export type ColliderShape =
   | { type: 'ball'; radius: number }
   | { type: 'cuboid'; hx: number; hy: number; hz: number }
@@ -95,6 +100,8 @@ export interface BodyOptions {
   tileSlot?: number;
   /** ★ 碰撞体局部旋转（四元数；圆柱横放用：Y 轴 → Z 轴 = 绕 X 转 90°） */
   rotation?: Quat;
+  /** ★ 碰撞分组（membership<<16 | filter；缺省 = rapier 默认全交互） */
+  collisionGroups?: number;
 }
 
 export interface CollisionEvent {
@@ -112,6 +119,8 @@ export class PhysicsWorld {
   /** ★ 自管刚体映射（绕过 rapier 坏 handle：id → RigidBody，id 不复用） */
   private bodyById = new Map<number, RAPIER.RigidBody>();
   private nextBodyId = 1;
+  /** ★ 主碰撞体记账（bodyId → Collider；碰撞分组运行时切换用） */
+  private readonly colliders = new Map<number, RAPIER.Collider>();
   /** ★ 分区地面 collider 记账（key = bodyId*1024+slot → Collider；grid 分区 cell） */
   private tileColliders = new Map<number, RAPIER.Collider>();
 
@@ -138,18 +147,20 @@ export class PhysicsWorld {
     position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0,
     tileSlot?: number, rotation?: Quat,
     extraColliders?: ExtraCollider[], shapeOffset?: { x: number; y: number; z: number },
+    collisionGroups?: number,
   ): number {
     const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
     desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation, shapeOffset);
+    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation, shapeOffset, collisionGroups);
     // ★ 复合刚体：主碰撞体之外的部件（舰船分段等；各自带局部偏移）
     if (extraColliders) {
       for (const c of extraColliders) {
-        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset);
+        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset, collisionGroups);
       }
     }
     const id = this.registerBody(body);
+    this.colliders.set(id, col);
     if (tileSlot !== undefined) this.tileColliders.set(id * 1024 + tileSlot, col);
     return id;
   }
@@ -183,23 +194,27 @@ export class PhysicsWorld {
     }
     desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
     const body = this.world.createRigidBody(desc);
-    this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation, opts.shapeOffset);
+    const col = this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation, opts.shapeOffset, opts.collisionGroups);
     if (opts.extraColliders) {
       for (const c of opts.extraColliders) {
-        this.attachCollider(body, c.shape, opts.sensor ?? false, opts.density, opts.restitution, undefined, c.offset);
+        this.attachCollider(body, c.shape, opts.sensor ?? false, opts.density, opts.restitution, undefined, c.offset, opts.collisionGroups);
       }
     }
-    return this.registerBody(body);
+    const id = this.registerBody(body);
+    this.colliders.set(id, col);
+    return id;
   }
 
   private attachCollider(
     body: RAPIER.RigidBody, shape: ColliderShape, sensor = false,
     density?: number, restitution?: number, rotation?: Quat,
     offset?: { x: number; y: number; z: number },
+    collisionGroups?: number,
   ): RAPIER.Collider {
     const desc = makeColliderDesc(shape);
     if (rotation) desc.setRotation(rotation); // ★ 碰撞体局部旋转（圆柱横放等）
     if (offset) desc.setTranslation(offset.x, offset.y, offset.z); // ★ 复合刚体的部件偏移
+    if (collisionGroups !== undefined) desc.setCollisionGroups(collisionGroups); // ★ 碰撞分组
     if (sensor) desc.setSensor(true);
     if (density !== undefined) desc.setDensity(density);
     if (restitution !== undefined) desc.setRestitution(restitution);
@@ -232,6 +247,11 @@ export class PhysicsWorld {
     const body = this.getBody(id);
     if (!body) { return; }
     body.setTranslation({ x, y, z }, true);
+  }
+
+  /** ★ 设置刚体主碰撞体的碰撞分组（membership<<16 | filter；子弹"无视墙"用） */
+  setCollisionGroups(id: number, groups: number): void {
+    this.colliders.get(id)?.setCollisionGroups(groups);
   }
 
   /** ★ 强制设刚体姿态（fixed 刚体随实体姿态同步：舰船圆柱碰撞体随航向/俯仰） */

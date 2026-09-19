@@ -73,6 +73,7 @@ export class EntityManager {
             { x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id,
             opts.physics.options.tileSlot, opts.physics.options.rotation,
             opts.physics.options.extraColliders, opts.physics.options.shapeOffset,
+            opts.physics.options.collisionGroups,
           )
         : opts.physics.type === 'kinematic'
           ? this.physicsWorld.addKinematic({ x: opts.x, y: opts.y, z: opts.z }, opts.physics.options.shape, id)

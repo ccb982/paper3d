@@ -23,6 +23,8 @@ export interface StaticObstacle {
   yaw?: number;
   /** ★ 顶面可站（船体）：脚底 ≥ 顶面-0.1 时不再推挤（站/跳在顶上不推） */
   walkableTop?: boolean;
+  /** ★ 墙标记（城墙/墙）：近战线段被其截断（墙挡近战，2026-09-19） */
+  wall?: boolean;
   /** 桶半径（内部：圆=r；矩形=外接半径） */
   br: number;
 }
@@ -47,10 +49,11 @@ export function addStaticObstacle(id: number, x: number, y: number, z: number, r
 /** ★ 定向矩形障碍（船体分段）：局部 +z = 朝向；walkableTop = 顶面可站（脚底在顶面以上不推） */
 export function addStaticObstacleRect(
   id: number, x: number, y: number, z: number,
-  hw: number, hl: number, hy: number, yaw: number, walkableTop = true,
+  hw: number, hl: number, hy: number, yaw: number,
+  walkableTop = true, wall = false,
 ): void {
   const br = Math.hypot(hw, hl);
-  insert({ id, x, y, z, r: Math.max(hw, hl), hy, q: 0, hw, hl, yaw, walkableTop, br });
+  insert({ id, x, y, z, r: Math.max(hw, hl), hy, q: 0, hw, hl, yaw, walkableTop, wall, br });
 }
 
 function insert(o: StaticObstacle): void {

@@ -92,3 +92,30 @@ export function pushOutOBB(
   }
   return { dx: px2 * rx + pz2 * fx, dz: px2 * rz + pz2 * fz };
 }
+
+/** ★ 线段 vs 定向矩形（水平面，slab 法）：返回首次命中参数 t∈[0,1]；null = 不相交。
+ *  矩形局部 +z = yaw 方向，hw/hl = 半宽/半长（与 pushOutOBB 同口径）。 */
+export function segmentOBBHit(
+  x0: number, z0: number, x1: number, z1: number,
+  ox: number, oz: number, hw: number, hl: number, yaw: number,
+): number | null {
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  const rx = fz, rz = -fx;
+  const lx0 = (x0 - ox) * rx + (z0 - oz) * rz;
+  const lz0 = (x0 - ox) * fx + (z0 - oz) * fz;
+  const lx1 = (x1 - ox) * rx + (z1 - oz) * rz;
+  const lz1 = (x1 - ox) * fx + (z1 - oz) * fz;
+  const dx = lx1 - lx0, dz = lz1 - lz0;
+  let t0 = 0, t1 = 1;
+  const slab = (p: number, d: number, min: number, max: number): boolean => {
+    if (Math.abs(d) < 1e-8) return p >= min && p <= max;
+    let ta = (min - p) / d, tb = (max - p) / d;
+    if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+    t0 = Math.max(t0, ta);
+    t1 = Math.min(t1, tb);
+    return t0 <= t1;
+  };
+  if (!slab(lx0, dx, -hw, hw)) return null;
+  if (!slab(lz0, dz, -hl, hl)) return null;
+  return t0;
+}

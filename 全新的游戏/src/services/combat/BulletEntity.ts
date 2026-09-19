@@ -8,6 +8,7 @@
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { sameTeam } from './teams';
+import { GROUP_WALL } from '../physics/PhysicsWorld';
 import { queryFinalStats } from './FinalStats';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
@@ -53,6 +54,8 @@ export interface BulletEntityOptions {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
+  /** ★ 无视墙（玩家贴城墙开枪时置位）：碰撞分组 filter 掉 GROUP_WALL，子弹穿墙 */
+  ignoreWalls?: boolean;
 }
 
 /** ★ 子弹命中判定半径（米）——逻辑命中口径（蜂群线段判定等）×
@@ -97,6 +100,8 @@ export class BulletEntity extends EntityBase {
   private bulged = false;
   /** ★ 近点小弹：投射落点离出生点很近（≤ BULLET_CLOSE_DIST）→ 全程小体积 */
   private closeShot = false;
+  /** ★ 无视墙（玩家贴城墙开枪）：碰撞分组 filter 掉 GROUP_WALL */
+  private ignoreWalls = false;
   /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
   allyOnHit: string | null = null;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
@@ -167,6 +172,7 @@ export class BulletEntity extends EntityBase {
     this.attackFormula = opts.attackFormula ?? null;
     this.owner = opts.owner ?? null;
     this.allyOnHit = opts.allyOnHit ?? null;
+    this.ignoreWalls = opts.ignoreWalls ?? false;
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
     this.entity.position.z = opts.z;
@@ -187,6 +193,11 @@ export class BulletEntity extends EntityBase {
       this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
       // ★ 常规物理体积全程极小（0.05）：近点不放大；远点由 onUpdate 临近落点放大
       this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
+      // ★ 贴墙开枪"无视墙"：碰撞分组 filter 掉 GROUP_WALL（敌弹不置位 → 墙对敌弹实心）
+      this.em.physics.setCollisionGroups(
+        rb.handle,
+        (0xffff << 16) | (this.ignoreWalls ? (0xffff & ~GROUP_WALL) : 0xffff),
+      );
       const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;
       this.em.physics.setLinearVelocity(
         rb.handle,

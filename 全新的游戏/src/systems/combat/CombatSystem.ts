@@ -15,15 +15,12 @@ import type { PhysicsWorld } from '../../services/physics/PhysicsWorld';
 import type { ChunkManager, ImpactReport } from '../../services/map/ChunkManager';
 import { playSfx } from '../../services/audio/Sfx';
 import type { SwarmSystem } from '../swarm/SwarmSystem';
-import { enemySlitBlocks } from '../../entity/CoverEntity';
 
 export interface CombatSystemDeps {
   physics: PhysicsWorld | null;
   swarm: SwarmSystem;
   /** 玩家/友军子弹池（代理线段判定只扫这个池；敌方弹不参与） */
   bullets: BulletManager;
-  /** ★ 敌方弹池（箭 / 法球；射击孔单向：敌弹不得穿城墙孔） */
-  enemyBullets: BulletManager[];
   chunks: ChunkManager;
   /** 友军弹落地生成站桩友军（WorldMode.spawnSentinelAt） */
   spawnSentinelAt(x: number, z: number): void;
@@ -67,29 +64,6 @@ export class CombatSystem {
     else playSfx('bulletGround');
     this.deps.agitateWaterNear(point.x, point.z); // 水面波动
     if (!impact.capHit) this.deps.spawnItemDrops(impact); // 掉落：ground/water/crystal 全来自报告（洞顶不掉）
-  }
-
-  /** ★ 射击孔单向拦截（2026-09-19）：敌弹穿过城墙射击孔带 → 拦截回收（玩家弹照常穿缝）
-   *   线段检测（上一帧位置 → 当前位置），防高速穿透。 */
-  updateEnemySlitBlock(dt: number): void {
-    const phys = this.deps.physics;
-    for (const pool of this.deps.enemyBullets) {
-      pool.forEachActive((b) => {
-        if (!b.isActive || b.camp !== 'enemy') return;
-        const p = b.entity.position;
-        let x0 = p.x, y0 = p.y, z0 = p.z;
-        const rb = b.entity.rigidBody;
-        if (rb && phys) {
-          const v = phys.getLinearVelocity(rb.handle);
-          x0 -= v.x * dt; y0 -= v.y * dt; z0 -= v.z * dt;
-        }
-        if (!enemySlitBlocks(x0, y0, z0, p.x, p.y, p.z)) return;
-        // 打在孔带上：视为撞墙 → 回收（不结算伤害；命中特效照常）
-        b.hitFx?.(null);
-        b.deactivate();
-        b.recycle?.();
-      });
-    }
   }
 
   /** ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算并回收子弹）
