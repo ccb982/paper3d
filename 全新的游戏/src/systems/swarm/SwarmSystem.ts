@@ -333,8 +333,8 @@ export class SwarmSystem {
 
     // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
     this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
-    // ★ 指挥器：大队任务周期重发（TTL 保持）
-    this.commander.tick(dt);
+    // ★ 指挥器：大队任务周期重发 + S1 工程（带玩家位置）
+    this.commander.tick(dt, hooks.playerX, hooks.playerZ);
 
     // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
     this.tacticsAccum += dt;

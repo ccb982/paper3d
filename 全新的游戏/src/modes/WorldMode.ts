@@ -43,6 +43,7 @@ import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
+import { buildEnemyCover } from './world/EnemyCoverBuild';
 import { ExplosionFx } from '../services/fx/ExplosionFx';
 import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
@@ -875,6 +876,9 @@ export class WorldMode implements IGameMode {
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
+    // ★ S1 工程：工程兵造掩体端口（无海报；正面朝来向）+ S0 勘察
+    this.swarm.commander.buildCover = (x, z, v) => buildEnemyCover(this.entities, this.scene!, x, this.deploySurfaceAt(x, z, 0), z, v, this.swarm.commander.defensePlan);
+    this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
