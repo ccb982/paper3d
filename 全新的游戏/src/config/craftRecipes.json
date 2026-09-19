@@ -131,6 +131,26 @@
       },
       "station": "ship",
       "sort": 201
+    },
+    {
+      "id": "tumu_laojie",
+      "name": "土木老姐",
+      "inputs": [
+        {
+          "itemId": "raw_rock",
+          "count": 1
+        },
+        {
+          "itemId": "wood",
+          "count": 1
+        }
+      ],
+      "output": {
+        "itemId": "tumu_laojie",
+        "count": 1
+      },
+      "station": "ship",
+      "sort": 260
     }
   ]
 }

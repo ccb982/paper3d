@@ -69,14 +69,16 @@ export class DeployPreview {
     (this.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
   }
 
-  /** 掩体落点：矩形足迹（宽 w × 厚 l，随 heading 旋转） */
-  showRect(x: number, y: number, z: number, w: number, l: number, heading: number): void {
+  /** 掩体/墙落点：矩形足迹（宽 w × 厚 l，随 heading 旋转；color 区分变体） */
+  showRect(x: number, y: number, z: number, w: number, l: number, heading: number, color = 0xffffff): void {
     this.circleGroup.visible = false;
     this.rectGroup.visible = true;
     this.rectGroup.position.set(x, y, z);
     this.rectGroup.rotation.y = heading;
     this.rectPlane.scale.set(w, 1, l);
     this.rectEdge.scale.set(w, 1, l);
+    (this.rectPlane.material as THREE.MeshBasicMaterial).color.setHex(color);
+    (this.rectEdge.material as THREE.LineBasicMaterial).color.setHex(color);
   }
 
   hide(): void {

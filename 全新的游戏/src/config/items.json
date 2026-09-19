@@ -425,6 +425,34 @@
       ]
     },
     {
+      "id": "tumu_laojie",
+      "name": "土木老姐",
+      "type": "ammo",
+      "description": "发射后落点生成一面实心墙（无射击孔）：可攀爬、可被双方打烂",
+      "maxStack": 999,
+      "color": {
+        "h": 0.08,
+        "s": 0.22,
+        "l": 0.5
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.3,
+          "hy": 0.3,
+          "hz": 0.3
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_cover",
+          "variant": "wall"
+        }
+      ]
+    },
+    {
       "id": "herb",
       "name": "草药",
       "type": "material",

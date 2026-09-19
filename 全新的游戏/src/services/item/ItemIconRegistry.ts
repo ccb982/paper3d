@@ -68,6 +68,8 @@ const FTX_ICON_SOURCES: Record<string, string> = {
   grudge_hatred: '/characters/protagonist/不许笑.ftx3.gz',
   // ★ 掩体弹药（子弹列表图标）：同样用不许笑的脸
   cover: '/characters/protagonist/不许笑.ftx3.gz',
+  // ★ 土木老姐弹药（子弹列表图标）：土木老姐的脸（资产在 public/fx/）
+  tumu_laojie: '/fx/土木老姐.ftx3.gz',
 };
 
 export class ItemIconRegistry {

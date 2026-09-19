@@ -75,7 +75,8 @@ export class CoverRenderer extends FxRendererBase {
   private group: THREE.Group;
   private parts: THREE.Mesh[] = [];
 
-  constructor(scene: THREE.Scene) {
+  /** @param slit 是否带射击孔（false = 实心墙「土木老姐」） */
+  constructor(scene: THREE.Scene, slit = true) {
     super();
     const g = new THREE.Group();
     this.group = g;
@@ -92,13 +93,18 @@ export class CoverRenderer extends FxRendererBase {
       g.add(m);
       this.parts.push(m);
     };
-    // 与碰撞体同布局：下段 / 上段 / 左右立柱（中间 = 射击孔）
-    add(COVER_W, COVER_SLIT_Y0, 0, COVER_SLIT_Y0 / 2);
-    add(COVER_W, COVER_H - COVER_SLIT_Y1, 0, (COVER_SLIT_Y1 + COVER_H) / 2);
-    const pillarW = (COVER_W - COVER_SLIT_W) / 2;
-    const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
-    add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, -(COVER_SLIT_W / 2 + pillarW / 2), midY);
-    add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, +(COVER_SLIT_W / 2 + pillarW / 2), midY);
+    if (!slit) {
+      // 实心墙（土木老姐）：整面
+      add(COVER_W, COVER_H, 0, COVER_H / 2);
+    } else {
+      // 与碰撞体同布局：下段 / 上段 / 左右立柱（中间 = 射击孔）
+      add(COVER_W, COVER_SLIT_Y0, 0, COVER_SLIT_Y0 / 2);
+      add(COVER_W, COVER_H - COVER_SLIT_Y1, 0, (COVER_SLIT_Y1 + COVER_H) / 2);
+      const pillarW = (COVER_W - COVER_SLIT_W) / 2;
+      const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
+      add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, -(COVER_SLIT_W / 2 + pillarW / 2), midY);
+      add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, +(COVER_SLIT_W / 2 + pillarW / 2), midY);
+    }
   }
 
   /** 朝向（局部 +Z = 墙厚轴/正面法线） */

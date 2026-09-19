@@ -148,7 +148,7 @@ const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
  *  取相机射线上此距离处作为虚拟落点 → 子弹仍与准星共点（不会与相机平行"各飞各的"） */
 const CROSSHAIR_CONVERGE_DIST = 200;
 /** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
-const FIREABLE_AMMO = new Set<string>(['zuzong', 'cover']);
+const FIREABLE_AMMO = new Set<string>(['zuzong', 'cover', 'tumu_laojie']);
 /** ★ 祖宗弹（专属投影物）：速度（m/s）/ 寿命（s） */
 const SENTINEL_SHOT_SPEED = 20;
 const SENTINEL_SHOT_LIFETIME = 3.0;
@@ -501,8 +501,10 @@ export class WorldMode implements IGameMode {
     damage: number;
     /** 伤害来源（伤害事件/遗物管线用） */
     source: EntityBase | null;
-    /** ★ 弹种：sentinel = 祖宗弹；cover = 掩体弹（不结算命中，落地生成掩体） */
+    /** ★ 弹种：sentinel = 祖宗弹；cover = 掩体/墙弹（不结算命中，落地生成） */
     kind: 'sentinel' | 'cover';
+    /** ★ 掩体弹变体：cover = 带孔掩体；wall = 实心墙（土木老姐） */
+    variant: 'cover' | 'wall';
     /** ★ 落地朝向（掩体弹：墙法线 = 发射方向） */
     heading: number;
   }[] = [];
@@ -1149,8 +1151,8 @@ export class WorldMode implements IGameMode {
       this.launchSentinelProjectile();
     });
     // ★ 掩体部署：使用「掩体」→ 沿准星发射掩体弹，落点生成玩家掩体
-    this.coverSummonUnsub = eventBus.on('cover_summon', () => {
-      this.launchCoverProjectile();
+    this.coverSummonUnsub = eventBus.on('cover_summon', (payload) => {
+      this.launchCoverProjectile(payload.variant === 'wall' ? 'wall' : 'cover');
     });
     // ★ 出击槽池变动（装备/友军增删换）：2026-09-14 修复"舰内换装不刷新"
     this.deploymentUnsub = eventBus.on('deployment_changed', () => {
@@ -1946,7 +1948,11 @@ export class WorldMode implements IGameMode {
         return;
       }
       if (this.selectedQuickItem === 'cover') {
-        this.launchCoverProjectile();
+        this.launchCoverProjectile('cover');
+        return;
+      }
+      if (this.selectedQuickItem === 'tumu_laojie') {
+        this.launchCoverProjectile('wall');
         return;
       }
     }
@@ -2097,6 +2103,7 @@ export class WorldMode implements IGameMode {
       damage: -1,
       source: this.player,
       kind: 'sentinel',
+      variant: 'cover',
       heading: 0,
     });
   }
@@ -2106,7 +2113,7 @@ export class WorldMode implements IGameMode {
     const dp = this.deployPreview;
     if (!dp) return;
     const q = this.selectedQuickItem;
-    const isDeploy = q === 'zuzong' || q === 'cover';
+    const isDeploy = q === 'zuzong' || q === 'cover' || q === 'tumu_laojie';
     if (this.phase !== 'explore' || !isDeploy || this.player.dead || this.player.controlLocked
       || !this.itemManager?.hasItem('player', q, 1)) {
       dp.hide();
@@ -2118,14 +2125,16 @@ export class WorldMode implements IGameMode {
       dp.showCircle(aim.x, gy, aim.z, 1.6);
       return;
     }
-    // 掩体：足迹矩形（宽 × 厚），朝向 = 玩家 → 落点方向（墙法线）
+    // 掩体 / 实心墙：足迹矩形（宽 × 厚），朝向 = 玩家 → 落点方向（墙法线）
     const p = this.player.position;
-    dp.showRect(aim.x, gy, aim.z, COVER_W, COVER_T, Math.atan2(aim.x - p.x, aim.z - p.z));
+    const wall = q === 'tumu_laojie';
+    dp.showRect(aim.x, gy, aim.z, COVER_W, COVER_T,
+      Math.atan2(aim.x - p.x, aim.z - p.z), wall ? 0xffcc66 : 0xffffff);
   }
 
   /** ★ 掩体弹（玩家遗物「死仇时代的恨意」/ 道具「掩体」）：像祖宗弹一样从枪口沿准星发射；
    *  不结算命中（直接飞过敌人），落地生成玩家掩体（朝向 = 发射方向）。 */
-  private launchCoverProjectile(): void {
+  private launchCoverProjectile(variant: 'cover' | 'wall' = 'cover'): void {
     if (!this.player || !this.scene) return;
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
@@ -2143,17 +2152,18 @@ export class WorldMode implements IGameMode {
       damage: -1,
       source: this.player,
       kind: 'cover',
+      variant,
       heading: Math.atan2(dx, dz),
     });
   }
 
   /** ★ 玩家掩体落成（含上限：超出先拆最早的一面） */
   private playerCovers: CoverEntity[] = [];
-  private spawnCoverAt(x: number, z: number, heading: number): void {
+  private spawnCoverAt(x: number, z: number, heading: number, variant: 'cover' | 'wall' = 'cover'): void {
     if (!this.scene) return;
     const y = this.raster.surfaceHeightAt(x, z);
     const cover = new CoverEntity(this.entities, this.scene, {
-      x, y, z, heading, owner: 'player', buildTime: COVER_DEPLOY_BUILD_TIME,
+      x, y, z, heading, owner: 'player', buildTime: COVER_DEPLOY_BUILD_TIME, variant,
     });
     this.playerCovers.push(cover);
     while (this.playerCovers.length > MAX_COVER_PLAYER) {
@@ -2191,7 +2201,7 @@ export class WorldMode implements IGameMode {
           this.sentinelShots.splice(i, 1);
           const cp = shot.sprite.position;
           shot.dispose();
-          this.spawnCoverAt(cp.x, cp.z, rec.heading);
+          this.spawnCoverAt(cp.x, cp.z, rec.heading, rec.variant);
         }
         continue;
       }

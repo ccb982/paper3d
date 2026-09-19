@@ -35,6 +35,8 @@ export interface CoverOptions {
   hp?: number;
   /** 成型时长（秒；0 = 立即成型） */
   buildTime?: number;
+  /** ★ 变体：cover = 带射击孔掩体（默认）；wall = 实心墙「土木老姐」（无孔、可攀） */
+  variant?: 'cover' | 'wall';
 }
 
 /** ★ 掩体注册表（顶面站立 / 攀爬查询用；数量个位数，线性扫描足够） */
@@ -52,6 +54,10 @@ export function coverTopAt(x: number, z: number): number | null {
 
 export class CoverEntity extends StructureEntity {
   readonly owner: 'player' | 'enemy';
+  /** ★ 变体（掩体 / 实心墙） */
+  readonly variant: 'cover' | 'wall';
+  /** 是否带射击孔（wall = false：整面实心） */
+  private readonly hasSlit: boolean;
   private readonly buildTime: number;
   private buildElapsed = 0;
   /** ★ 角色阻挡索引 id（JS 静态障碍：掩体挡人走，不挡弹——弹走物理复合体） */
@@ -60,33 +66,45 @@ export class CoverEntity extends StructureEntity {
   private readonly heading: number;
 
   constructor(em: EntityManager, scene: THREE.Scene, opts: CoverOptions) {
-    const pillarW = (COVER_W - COVER_SLIT_W) / 2;
-    const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
-    const midH = (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2;
-    const phys: StructureOptions['physics'] = {
-      type: 'fixed',
-      options: {
-        // 主碰撞体 = 孔下段（全宽）
-        shape: { type: 'cuboid', hx: COVER_W / 2, hy: COVER_SLIT_Y0 / 2, hz: COVER_T / 2 },
-        shapeOffset: { x: 0, y: COVER_SLIT_Y0 / 2, z: 0 },
-        extraColliders: [
-          // 孔上段（全宽）
-          {
-            shape: { type: 'cuboid', hx: COVER_W / 2, hy: (COVER_H - COVER_SLIT_Y1) / 2, hz: COVER_T / 2 },
-            offset: { x: 0, y: (COVER_SLIT_Y1 + COVER_H) / 2, z: 0 },
+    const hasSlit = (opts.variant ?? 'cover') !== 'wall';
+    const phys: StructureOptions['physics'] = hasSlit
+      ? (() => {
+          const pillarW = (COVER_W - COVER_SLIT_W) / 2;
+          const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
+          const midH = (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2;
+          return {
+            type: 'fixed' as const,
+            options: {
+              // 主碰撞体 = 孔下段（全宽）
+              shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: COVER_SLIT_Y0 / 2, hz: COVER_T / 2 },
+              shapeOffset: { x: 0, y: COVER_SLIT_Y0 / 2, z: 0 },
+              extraColliders: [
+                // 孔上段（全宽）
+                {
+                  shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: (COVER_H - COVER_SLIT_Y1) / 2, hz: COVER_T / 2 },
+                  offset: { x: 0, y: (COVER_SLIT_Y1 + COVER_H) / 2, z: 0 },
+                },
+                // 左右立柱（中间留射击孔）
+                {
+                  shape: { type: 'cuboid' as const, hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
+                  offset: { x: -(COVER_SLIT_W / 2 + pillarW / 2), y: midY, z: 0 },
+                },
+                {
+                  shape: { type: 'cuboid' as const, hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
+                  offset: { x: COVER_SLIT_W / 2 + pillarW / 2, y: midY, z: 0 },
+                },
+              ],
+            },
+          };
+        })()
+      // 实心墙：整面一个长方体
+      : {
+          type: 'fixed' as const,
+          options: {
+            shape: { type: 'cuboid' as const, hx: COVER_W / 2, hy: COVER_H / 2, hz: COVER_T / 2 },
+            shapeOffset: { x: 0, y: COVER_H / 2, z: 0 },
           },
-          // 左右立柱（中间留射击孔）
-          {
-            shape: { type: 'cuboid', hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
-            offset: { x: -(COVER_SLIT_W / 2 + pillarW / 2), y: midY, z: 0 },
-          },
-          {
-            shape: { type: 'cuboid', hx: pillarW / 2, hy: midH, hz: COVER_T / 2 },
-            offset: { x: COVER_SLIT_W / 2 + pillarW / 2, y: midY, z: 0 },
-          },
-        ],
-      },
-    };
+        };
     super(em, {
       x: opts.x, y: opts.y, z: opts.z,
       physics: phys,
@@ -96,6 +114,8 @@ export class CoverEntity extends StructureEntity {
       defense: 2,
     });
     this.owner = opts.owner ?? 'enemy';
+    this.variant = opts.variant ?? 'cover';
+    this.hasSlit = this.variant !== 'wall';
     this.heading = opts.heading ?? 0;
     this.buildTime = opts.buildTime ?? 0;
     // ★ 建造进度必须与渲染器同步（否则基类默认 1 → onUpdate 直接 return，永远停在起始缩放）
@@ -137,7 +157,7 @@ export class CoverEntity extends StructureEntity {
   }
 
   protected createRenderer(scene: THREE.Scene): CoverRenderer {
-    return new CoverRenderer(scene);
+    return new CoverRenderer(scene, this.hasSlit);
   }
 
   /** 建造插值推进（0→1 长高）+ ★ 随地面变化插值（挖坑/地形改动时平滑沉/升） */
