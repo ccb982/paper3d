@@ -71,6 +71,8 @@ export interface EnemySpec {
   suicide?: boolean;
   /** ★ 编制模式：normal = 同质小队 4~12；singleton = 1 单位 1 小队（Boss/小 boss） */
   squadMode?: 'normal' | 'singleton';
+  /** ★ 精英标签（大队概率额外携带；2026-09-19） */
+  elite?: boolean;
   /** ★ 单例且不降格（Boss：永保 active，不因距离降格回代理） */
   noDemote?: boolean;
   /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
@@ -119,7 +121,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'laojie', name: '牢杰',
     file: '牢杰，杂兵.ftx3.gz',
-    role: 'assault', attackType: 'melee',
+    role: 'assault', attackType: 'melee', elite: true,
     ai: LAOJIE_AI,
     hp: 45, defense: 0, attackPower: 12,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 12,
@@ -232,7 +234,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'rock_giant', name: '原石虫巨人',
     file: '原石虫巨人，小boss.ftx3.gz',
     role: 'assault', attackType: 'melee',
-    squadMode: 'singleton', noDemote: true,
+    squadMode: 'singleton', noDemote: true, elite: true,
     ai: ROCK_GIANT_AI,
     hp: 320, defense: 6, attackPower: 8,
     scale: 3.6, collisionScale: 1.9, pack: 1, weight: 1,

@@ -34,7 +34,7 @@ export class SwarmCommander {
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
   digTrench: ((x: number, z: number) => void) | null = null;
   /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**） */
-  spawnMob: ((x: number, z: number, role: UnitRole) => void) | null = null;
+  spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean) => void) | null = null;
   /** ★ 大队：一队 30 怪；一局多个 */
   private battalionCount = 0;
   private reinforceAccum = 0;
@@ -101,19 +101,29 @@ export class SwarmCommander {
     const plan = this.plan;
     if (!plan || !this.spawnMob || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
     this.battalionCount++;
-    // 配比（30）：盾 8 / 突击 10 / 远程 6 / 后勤 4 / 飞行 2
-    const comp: [UnitRole, number][] = [
-      ['shield', 8], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 2],
+    // ★ 配比（基准 30；2026-09-19 用户定调）：盾 6 / 突击 10 / 远程 6 / 后勤 4 / 飞行 4
+    //   每类 ±2 随机浮动（下限 1）；另概率额外带 1~2 只精英怪
+    const base: [UnitRole, number][] = [
+      ['shield', 6], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 4],
     ];
+    const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
     const baseA = Math.atan2(plan.approachZ, plan.approachX);
     const ringR = 56 + (this.battalionCount - 1) * 8;
+    // 精英：50% 额外 1 只，20% 再多 1 只（沿环布置，比例不计入基准 30）
+    const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
+    let total = comp.reduce((s, [, n]) => s + n, 0) + eliteN;
     let k = 0;
     for (const [role, n] of comp) {
       for (let i = 0; i < n; i++) {
-        const a = baseA + (-1 + (2 * k) / SwarmCommander.BATTALION_SIZE) * (Math.PI / 3);   // 来向 ±60°
+        const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);   // 来向 ±60°
         this.spawnMob(plan.cx + Math.cos(a) * ringR, plan.cz + Math.sin(a) * ringR, role);
         k++;
       }
+    }
+    for (let i = 0; i < eliteN; i++) {
+      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);
+      this.spawnMob(plan.cx + Math.cos(a) * ringR, plan.cz + Math.sin(a) * ringR, 'assault', true);
+      k++;
     }
     return true;
   }

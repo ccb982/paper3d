@@ -857,9 +857,9 @@ export class WorldMode implements IGameMode {
         attackType: spec.attackType,
         // ★ 自爆标签（基类字段）
         suicide: spec.suicide,
-        // ★ 步骤 7：编制模式 / 不降格（名册透传）
+        // ★ 步骤 7：编制模式 / 不降格 / 精英（名册透传）
         squadMode: spec.squadMode,
-        noDemote: spec.noDemote,
+        noDemote: spec.noDemote, elite: spec.elite,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -877,8 +877,7 @@ export class WorldMode implements IGameMode {
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
     // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）+ S0 勘察
-    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0) });
-    this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
+    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0) }); this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）

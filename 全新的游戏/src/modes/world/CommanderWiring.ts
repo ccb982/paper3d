@@ -34,9 +34,12 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   d.commander.digTrench = (x, z) => {
     d.chunks?.digRect(x, z, 2, 2);
   };
-  // ★ 兵力创建（全权在蜂群架构）：按角色挑名册兵种 → 走唯一收口 spawnOne（配额/落点/代理池）
-  d.commander.spawnMob = (x, z, role: UnitRole) => {
-    const def = d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0];
+  // ★ 兵力创建（全权在蜂群架构）：按角色挑名册兵种；精英按 elite 标签挑
+  //   → 走唯一收口 spawnOne（落点闸门 / MAX_ALIVE / 记账；绕过旧每日配额）
+  d.commander.spawnMob = (x, z, role: UnitRole, elite = false) => {
+    const def = elite
+      ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
+      : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
     if (def) d.spawner.spawnOne(def, x, d.raster.surfaceHeightAt(x, z), z, INTENT_NONE, -1, true);
   };
 }

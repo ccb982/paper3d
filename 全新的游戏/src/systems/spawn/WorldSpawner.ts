@@ -94,6 +94,8 @@ export interface MobDef {
   suicide?: boolean;
   /** ★ 编制模式（singleton = 1 单位 1 小队） */
   squadMode?: 'normal' | 'singleton';
+  /** ★ 精英（大队概率额外携带） */
+  elite?: boolean;
   /** ★ 不降格（Boss：永保 active） */
   noDemote?: boolean;
 }
