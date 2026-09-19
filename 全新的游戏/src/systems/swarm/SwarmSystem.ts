@@ -25,11 +25,14 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
-import { SquadTactics, squadBucket } from './SquadTactics';
+import { SquadTactics, squadBucket, roleBucket } from './SquadTactics';
 import {
-  roleFromCode, orderCode, directiveCode, fireCode,
+  roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
   type TacticalOrder, type UnitDirective,
 } from '../../entity/SwarmUnit';
+import {
+  AtomExecutor, MOVE_ATOMS, resolveWeights, atomDirection,
+} from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
@@ -125,6 +128,7 @@ export interface SwarmHooks {
 
 const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
+const _atomDir = { x: 0, z: 0 };
 
 export class SwarmSystem {
   readonly pool = new AgentPool();
@@ -142,6 +146,8 @@ export class SwarmSystem {
   readonly tactics = new SquadTactics();
   /** ★ 步骤 9b：分解节拍（2Hz） */
   private tacticsAccum = 0;
+  /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
+  private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
@@ -423,6 +429,26 @@ export class SwarmSystem {
     const d = Math.hypot(tx, tz);
     const tick = 1 / SWARM.THINK_HZ[p.tier[i]];
 
+    // ---- ★ 执行层（§5.13）：指令活跃 → 原子掷（移动五选一 + 开火二元，正交） ----
+    const dk = directiveFromCode(p.directiveKind[i]);
+    const directiveActive = dk !== 'none' && (p.directiveUntil[i] === 0 || now < p.directiveUntil[i]);
+    if (directiveActive) {
+      const sit = {
+        inRange: d <= p.meleeRange[i] + SWARM.MELEE_PAD,
+        lowHp: p.hp[i] < p.maxHp[i] * 0.3,
+        justHit: p.flash[i] > 0.5,
+        hasTarget: d > 1e-3,
+      };
+      const w = resolveWeights(dk, orderFromCode(p.orderKind[i]), roleBucket(roleFromCode(p.role[i])), sit);
+      const atom = this.atoms.step(p.swarmUid[i], now, p.directiveSeq[i], w, sit.justHit);
+      p.atomMove[i] = MOVE_ATOMS.indexOf(atom.move);
+      p.atomFire[i] = atom.fire ? 1 : 0;
+    } else {
+      p.atomMove[i] = 255;      // 无指令 → 本地自主（旧行为）
+      p.atomFire[i] = 1;
+      p.directiveSpeedMul[i] = 1;
+    }
+
     // ---- 警戒场：共享感知 + 个体反应延迟（被同伴/玩家开火刷到 → 延迟后察觉） ----
     const alerted = this.flow.isAlerted(px, pz, now);
     if (alerted) {
@@ -538,7 +564,7 @@ export class SwarmSystem {
       if (d <= p.meleeRange[i] + SWARM.MELEE_PAD) {
         p.dirX[i] = 0;
         p.dirZ[i] = 0;
-        if (p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && this.tokenUsed[tk] < SWARM.ATTACK_TOKENS) {
+        if (p.atomFire[i] === 1 && p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && this.tokenUsed[tk] < SWARM.ATTACK_TOKENS) {
           p.attackCd[i] = SWARM.ATTACK_CD_MIN + Math.random() * SWARM.ATTACK_CD_SPAN;
           p.hasToken[i] = 1;
           p.tokenTarget[i] = tk;
@@ -559,6 +585,17 @@ export class SwarmSystem {
   private move(i: number, dt: number): void {
     const p = this.pool;
     let dx = p.dirX[i], dz = p.dirZ[i];
+    // ★ 执行层：指令原子覆盖方向（forward/back/strafe/hold；危险地形绕行仍生效）
+    if (p.atomMove[i] !== 255) {
+      const atom = MOVE_ATOMS[p.atomMove[i]];
+      let tx = p.directiveTargetX[i] - p.x[i];
+      let tz = p.directiveTargetZ[i] - p.z[i];
+      const td = Math.hypot(tx, tz);
+      if (td > 0.5) { tx /= td; tz /= td; } else { tx = dx; tz = dz; }
+      atomDirection(atom, tx, tz, _atomDir);
+      dx = _atomDir.x;
+      dz = _atomDir.z;
+    }
     if (dx !== 0 || dz !== 0) {
       // ---- 危险地形绕行：前瞻探测 → 转向 ±90°，缓存 0.4s ----
       //   ★ 2026-09-14：探测常态开启（原先只探非流场方向）——流场也可能指向深水/立面；
@@ -602,7 +639,7 @@ export class SwarmSystem {
         dx = p.safeDirX[i];
         dz = p.safeDirZ[i];
       }
-      const sp = p.curSpeed[i] * dt;
+      const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 执行层：限速（默认 1）
       p.x[i] += dx * sp;
       p.z[i] += dz * sp;
       if (Math.abs(dx) > 1e-4 || Math.abs(dz) > 1e-4) p.yaw[i] = Math.atan2(dx, dz);
@@ -858,6 +895,7 @@ export class SwarmSystem {
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
+    this.atoms.clear();
   }
 
   dispose(): void {

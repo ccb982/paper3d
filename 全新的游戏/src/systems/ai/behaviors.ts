@@ -119,6 +119,7 @@ registerBehavior('meleeSwing', (entity, ctx, params) => {
   const duration = pnum(params, 'duration', 0.6);
   const range = pnum(params, 'range', 1.8);
   const damage = pnum(params, 'damage', 8);
+  if (entity.fireHold) return;   // ★ 执行层：本段禁火（开火掷为假）
   // 挥击未开始/已播完（含首次进入）→ 重新开始一轮挥击
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
@@ -163,6 +164,7 @@ registerBehavior('rangedShot', (entity, ctx, params) => {
   const spread = pnum(params, 'spread', 0.05);
   // ★ 弹种标签：模式层据此选子弹池（箭 / 法球）——行为层只透传，不认识池
   const bulletSkin = pstr(params, 'skin', 'arrow');
+  if (entity.fireHold) return;   // ★ 执行层：本段禁火（开火揗为假）
   if (entity.aiAttackTimer <= 0) {
     entity.aiAttackTimer = duration;
     entity.aiSwingDone = false;

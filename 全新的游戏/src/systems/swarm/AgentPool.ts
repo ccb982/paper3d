@@ -241,6 +241,9 @@ export class AgentPool {
   readonly directiveFire = new Uint8Array(AGENT_CAPACITY);
   readonly directiveSpeedMul = new Float32Array(AGENT_CAPACITY).fill(1);
   readonly directiveSeq = new Int32Array(AGENT_CAPACITY);
+  /** ★ 执行层（瞬时，不入快照）：当前移动原子（255 = 无覆盖）/ 开火决策（1 = 可开火） */
+  readonly atomMove = new Uint8Array(AGENT_CAPACITY).fill(255);
+  readonly atomFire = new Uint8Array(AGENT_CAPACITY).fill(1);
 
   // ---- P4：导演意图 / 士气 ----
   /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
@@ -323,6 +326,8 @@ export class AgentPool {
     this.directiveFire[i] = d.directiveFire ?? 0;
     this.directiveSpeedMul[i] = d.directiveSpeedMul ?? 1;
     this.directiveSeq[i] = d.directiveSeq ?? 0;
+    this.atomMove[i] = 255;
+    this.atomFire[i] = 1;
     return i;
   }
 
@@ -400,6 +405,8 @@ export class AgentPool {
     this.directiveFire[to] = this.directiveFire[from];
     this.directiveSpeedMul[to] = this.directiveSpeedMul[from];
     this.directiveSeq[to] = this.directiveSeq[from];
+    this.atomMove[to] = this.atomMove[from];
+    this.atomFire[to] = this.atomFire[from];
   }
 
   /** 快照（升格用；★ E3b：全列导出——编队/指挥/意图/移动目标随升格带回实体） */

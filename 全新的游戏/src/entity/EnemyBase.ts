@@ -19,8 +19,11 @@ import type {
   SquadOrderKind, DirectiveKind, TacticalOrder, UnitDirective,
 } from './SwarmUnit';
 import {
-  orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE,
+  orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE, roleBucket,
 } from './SwarmUnit';
+import {
+  MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
+} from './AtomExecutor';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -61,6 +64,8 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   /** ★ 强制始终面对相机（缺省 = 自动检测：无「后」帧素材强制 billboard） */
   billboard?: boolean;
 }
+
+const _atomDir = { x: 0, z: 0 };
 
 export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private assetRef: CharacterFxAssetSource;
@@ -105,6 +110,18 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   directiveFire = FIRE_FREE;
   directiveSpeedMul = 1;
   directiveSeq = 0;
+
+  // ============================================================
+  // ★ 执行层（瞬时，不入快照）：指令 → 原子（移动/开火）；承诺窗口
+  // ============================================================
+  /** 当前移动原子下标（255 = 无覆盖） */
+  atomMove = 255;
+  /** 本段开火门控（true = 本段不开火；meleeSwing/rangedShot 消费） */
+  fireHold = false;
+  private atomSeq = -1;
+  private atomUntil = 0;
+  private atomMoveIdx = 4;
+  private atomFire = true;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -369,7 +386,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   aiActiveRadius = 75;
 
   /** ★ AI 驱动入口（AISystem 每帧调用） */
-  updateAI(_dt: number, ctx: BehaviorContext): void {
+  updateAI(dt: number, ctx: BehaviorContext): void {
     // ★ 本帧默认不移动；行为调 moveBy 才设方向（否则攻击等无移动行为会残留速度漂移）
     this.controller.moveDir.x = 0;
     this.controller.moveDir.y = 0;
@@ -384,6 +401,53 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       if (dx * dx + dz * dz > r * r) return;
     }
     this.aiStateMachine?.update(this, ctx);
+    // ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控
+    this.applyDirectiveAtoms(dt, ctx);
+  }
+
+  /** ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控（危险地形绕行仍生效） */
+  private applyDirectiveAtoms(dt: number, ctx: BehaviorContext): void {
+    const now = performance.now() / 1000;
+    const dk = this.directiveKind;
+    // 无指令 / 指令过期 → 回落本地自主（旧行为）
+    if (dk === 'none' || !(this.directiveUntil === 0 || now < this.directiveUntil)) {
+      this.atomMove = 255;         // 无指令 → 本地自主（旧行为）
+      this.fireHold = false;
+      this.directiveSpeedMul = 1;
+      return;
+    }
+    const t = ctx.target;
+    const dist = t ? Math.hypot(t.x - this.position.x, t.z - this.position.z) : 0;
+    const range = this.attackType === 'ranged' ? 12 : 2.2;   // 近似（精确射程在 aiConfig；后续配置化）
+    const w = resolveWeights(dk, this.orderKind, roleBucket(this.role), {
+      inRange: !!t && dist <= range,
+      lowHp: this.hp < this.maxHp * 0.3,
+      justHit: false,            // 后续接入受击时间戳
+      hasTarget: !!t,
+    });
+    // 承诺窗口：指令变更 / 到段边界 → 重掷
+    if (this.directiveSeq !== this.atomSeq || now >= this.atomUntil) {
+      this.atomSeq = this.directiveSeq;
+      this.atomMoveIdx = rollMove(w.move);
+      this.atomFire = rollFire(w.fire);
+      this.atomUntil = now + 0.35 * (0.7 + Math.random() * 0.6);
+    }
+    this.atomMove = this.atomMoveIdx;
+    this.fireHold = !this.atomFire;
+    // 方向：指令目标点 > 当前目标 > 不移动
+    let tx = 0, tz = 0;
+    const dtx = this.directiveTargetX - this.position.x;
+    const dtz = this.directiveTargetZ - this.position.z;
+    const td = Math.hypot(dtx, dtz);
+    if (td > 0.5) { tx = dtx / td; tz = dtz / td; }
+    else if (t && dist > 1e-3) { tx = (t.x - this.position.x) / dist; tz = (t.z - this.position.z) / dist; }
+    if (tx !== 0 || tz !== 0) {
+      atomDirection(MOVE_ATOMS[this.atomMoveIdx], tx, tz, _atomDir);
+      if (_atomDir.x !== 0 || _atomDir.z !== 0) {
+        // 近似基础速度（2.5 m/s；精确移速后续配置化）× 指令限速
+        this.moveBy(_atomDir.x, _atomDir.z, dt, 2.5 * this.directiveSpeedMul);
+      }
+    }
   }
 
   /** ★ 当前是否眩晕中（祖宗激光；眩晕期间 AI 完全停摆） */

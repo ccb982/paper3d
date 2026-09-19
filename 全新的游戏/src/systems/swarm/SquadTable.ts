@@ -10,22 +10,10 @@
 // ============================================================
 
 import type { UnitRole } from '../../entity/SwarmUnit';
+import { type SquadType, squadTypeOf } from '../../entity/SwarmUnit';
 
-/** 小队属性（同质编队由成员角色派生；《实体架构.md》§5.11 评级字段） */
-export type SquadType = 'defense' | 'assault' | 'ranged' | 'logistics' | 'flyer' | 'mixed';
-
-/** 角色 → 小队属性（grunt 归突击；mixed 仅异常兜底） */
-export function squadTypeOf(role: UnitRole): SquadType {
-  switch (role) {
-    case 'shield': return 'defense';
-    case 'ranged': return 'ranged';
-    case 'logistics': return 'logistics';
-    case 'flyer': return 'flyer';
-    case 'assault':
-    case 'grunt':
-    default: return 'assault';
-  }
-}
+// 契约层已上移：本文件保留再导出（兼容旧引用）
+export { type SquadType, squadTypeOf };
 
 /** 小队容量上限（同质编队 4~12；《蜂群架构.md》§16.1） */
 export const SQUAD_MAX = 12;

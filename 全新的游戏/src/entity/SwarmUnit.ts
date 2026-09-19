@@ -106,6 +106,55 @@ export function fireCode(s: 'free' | 'hold' | 'moving'): number {
   return i < 0 ? FIRE_FREE : i;
 }
 
+// ============================================================
+// ★ 小队属性与分解桶（契约层；从 systems 上移，供实体/系统共用）
+// ============================================================
+
+/** 小队属性（同质编队由成员角色派生；评级/战术分派用） */
+export type SquadType = 'defense' | 'assault' | 'ranged' | 'logistics' | 'flyer' | 'mixed';
+
+/** 角色 → 小队属性（grunt 归突击；mixed 仅异常兜底） */
+export function squadTypeOf(role: UnitRole): SquadType {
+  switch (role) {
+    case 'shield': return 'defense';
+    case 'ranged': return 'ranged';
+    case 'logistics': return 'logistics';
+    case 'flyer': return 'flyer';
+    case 'assault':
+    case 'grunt':
+    default: return 'assault';
+  }
+}
+
+/** 指令分解用的角色桶 */
+export type DirectiveRoleBucket = 'melee' | 'ranged' | 'shield' | 'logistics';
+
+/** 兵种角色 → 分解桶（flyer 归远程；grunt/assault 归近战） */
+export function roleBucket(role: UnitRole): DirectiveRoleBucket {
+  switch (role) {
+    case 'shield': return 'shield';
+    case 'ranged': return 'ranged';
+    case 'logistics': return 'logistics';
+    case 'flyer':
+    case 'assault':
+    case 'grunt':
+    default: return 'melee';
+  }
+}
+
+/** 小队属性 → 分解桶（同质小队；mixed 兜底近战） */
+export function squadBucket(type: SquadType): DirectiveRoleBucket {
+  switch (type) {
+    case 'defense': return 'shield';
+    case 'ranged':
+    case 'flyer': return 'ranged';
+    case 'logistics': return 'logistics';
+    case 'assault':
+    case 'mixed':
+    default: return 'melee';
+  }
+}
+
 /** ★ 移动意图（Brain → Simulate 下发；hold 语义） */
 export interface SteerIntent {
   /** 单位方向（0,0 = 停） */

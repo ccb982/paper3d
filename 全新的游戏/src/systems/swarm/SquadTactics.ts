@@ -9,39 +9,13 @@
 // ============================================================
 
 import type {
-  DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective, UnitRole,
+  DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective,
 } from '../../entity/SwarmUnit';
-import { FIRE_FREE } from '../../entity/SwarmUnit';
-import type { Squad, SquadType } from './SquadTable';
+import { FIRE_FREE, type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
+import type { Squad } from './SquadTable';
 
-/** 指令分解用的角色桶（同质小队 → 由小队属性映射） */
-export type DirectiveRoleBucket = 'melee' | 'ranged' | 'shield' | 'logistics';
-
-/** 小队属性 → 分解桶（同质小队；mixed 兜底近战） */
-export function squadBucket(type: SquadType): DirectiveRoleBucket {
-  switch (type) {
-    case 'defense': return 'shield';
-    case 'ranged':
-    case 'flyer': return 'ranged';
-    case 'logistics': return 'logistics';
-    case 'assault':
-    case 'mixed':
-    default: return 'melee';
-  }
-}
-
-/** 兵种角色 → 分解桶（flyer 归远程；grunt/assault 归近战） */
-export function roleBucket(role: UnitRole): DirectiveRoleBucket {
-  switch (role) {
-    case 'shield': return 'shield';
-    case 'ranged': return 'ranged';
-    case 'logistics': return 'logistics';
-    case 'flyer':
-    case 'assault':
-    case 'grunt':
-    default: return 'melee';
-  }
-}
+// 契约层已上移：本文件保留再导出（兼容旧引用）
+export { type DirectiveRoleBucket, roleBucket, squadBucket };
 
 /** 默认分解矩阵（队长未分配时的兜底；《实体架构.md》§5.11） */
 export const DEFAULT_DIRECTIVE: Record<SquadOrderKind, Record<DirectiveRoleBucket, DirectiveKind>> = {
