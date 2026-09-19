@@ -904,6 +904,7 @@ export class WorldMode implements IGameMode {
       // ★ 控制台测试入口（验证命令链）：
       //   __swarm.issueOrder(squadId, { kind:'advance', target:{x,z}, seq:1 })
       (window as unknown as { __swarm?: unknown }).__swarm = this.swarm;
+      (window as unknown as { __commander?: unknown }).__commander = this.swarm.commander;
     }
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);

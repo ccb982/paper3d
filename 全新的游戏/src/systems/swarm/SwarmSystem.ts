@@ -27,6 +27,7 @@ import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
+import { SwarmCommander } from './SwarmCommander';
 import {
   roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
   type TacticalOrder, type UnitDirective,
@@ -172,6 +173,8 @@ export class SwarmSystem {
   private tacticsAccum = 0;
   /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
   private readonly leaderAI = new SquadLeaderAI();
+  /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
+  readonly commander = new SwarmCommander(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒） */
   private readonly recentHits = new Map<number, number>();
   /** ★ 步骤 10：倾盆而出截止（秒；0 = 未触发） */
@@ -330,6 +333,8 @@ export class SwarmSystem {
 
     // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
     this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
+    // ★ 指挥器：大队任务周期重发（TTL 保持）
+    this.commander.tick(dt);
 
     // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
     this.tacticsAccum += dt;
@@ -528,6 +533,7 @@ export class SwarmSystem {
         lowHp: p.hp[i] < p.maxHp[i] * 0.3,
         justHit: p.flash[i] > 0.5,
         hasTarget: d > 1e-3,
+        firePolicy: p.directiveFire[i],   // ★ 五轴 ROE（队长指令的开火策略）
       };
       const w = resolveWeights(dk, orderFromCode(p.orderKind[i]), roleBucket(roleFromCode(p.role[i])), sit);
       const atom = this.atoms.step(p.swarmUid[i], now, p.directiveSeq[i], w, sit.justHit);
@@ -1034,6 +1040,7 @@ export class SwarmSystem {
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
     this.leaderAI.clear();
+    this.commander.clear();
     this.recentHits.clear();
     this.counterUntil = 0;
     this.lastPlayerX = 0;

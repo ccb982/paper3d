@@ -217,6 +217,7 @@ export class EnemyBrain {
       lowHp: entity.hp < entity.maxHp * 0.3,
       justHit: false,            // 后续接入受击时间戳
       hasTarget: !!t,
+      firePolicy: entity.directiveFire,   // ★ 五轴 ROE
     });
     // 承诺窗口：指令变更 / 到段边界 → 重掷
     if (entity.directiveSeq !== this.atomSeq || now >= this.atomUntil) {

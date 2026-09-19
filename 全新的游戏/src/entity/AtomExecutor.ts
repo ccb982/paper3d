@@ -10,6 +10,7 @@
 // ============================================================
 
 import type { DirectiveKind, SquadOrderKind, DirectiveRoleBucket } from './SwarmUnit';
+import { FIRE_HOLD, FIRE_MOVING } from './SwarmUnit';
 
 export const MOVE_ATOMS = ['forward', 'back', 'strafeL', 'strafeR', 'hold'] as const;
 export type MoveAtom = (typeof MOVE_ATOMS)[number];
@@ -59,6 +60,8 @@ export interface AtomSituation {
   inRange: boolean;
   /** ★ 距离比（d / 攻击射程；>1 = 超程，<0.55 = 太近）——远程保持距离用 */
   rangeRatio: number;
+  /** ★ 五轴「交战」ROE 编码（FIRE_FREE/HOLD/MOVING；影响开火掷偏置） */
+  firePolicy: number;
   /** 低血（≤30%） */
   lowHp: boolean;
   /** 刚被击（本拍躲闪偏置） */
@@ -89,6 +92,9 @@ export function resolveWeights(
   }
   if (!sit.inRange) { fire *= 0.1; move[0] += 0.10; }
   if (!sit.hasTarget) fire = 0;
+  // ★ 五轴 ROE：holdFire → 极低开火偏置（软禁火：原子恒可执行）；moving → 略降
+  if (sit.firePolicy === FIRE_HOLD) fire *= 0.05;
+  else if (sit.firePolicy === FIRE_MOVING) fire *= 0.95;
   if (sit.lowHp) { move[1] += 0.15; fire -= 0.20; }
   if (sit.justHit) { move[2] += 0.20; move[3] += 0.20; }
   // 角色覆写

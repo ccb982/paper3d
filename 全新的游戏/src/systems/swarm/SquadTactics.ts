@@ -37,6 +37,10 @@ export interface SquadOrderState {
   until: number;
   /** ★ 命令来源（引擎命令优先；队长只在无引擎命令时自主发令） */
   source: 'engine' | 'leader';
+  /** ★ 五轴「时序」：生效时刻（秒；startAfter 延迟发动） */
+  notBefore: number;
+  /** ★ 五轴「信号」：需等信号 id（undefined = 无需） */
+  signal?: number;
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
@@ -51,6 +55,8 @@ export class SquadBlackboard {
   private orders = new Map<number, SquadOrderState>();
   /** ★ 小队间消息（引擎中转；收件队取走即消） */
   private messages: SquadMessage[] = [];
+  /** ★ 五轴「信号」：已发出的信号 id（等信号的命令到点后才生效） */
+  private signals = new Set<number>();
 
   issue(state: SquadOrderState): void {
     this.orders.set(state.squadId, state);
@@ -68,6 +74,18 @@ export class SquadBlackboard {
     );
     if (i >= 0) this.messages[i] = msg;
     else this.messages.push(msg);
+  }
+
+  /** ★ 发信号（五轴时序：等信号的命令到点后生效） */
+  emitSignal(id: number): void {
+    this.signals.add(id);
+  }
+
+  /** ★ 命令是否已到生效时刻（notBefore + signal） */
+  isActive(state: SquadOrderState, now: number): boolean {
+    if (now < state.notBefore) return false;
+    if (state.signal !== undefined && !this.signals.has(state.signal)) return false;
+    return true;
   }
 
   /** ★ 取走发给本队的消息（过期自动丢弃） */
@@ -97,6 +115,7 @@ export class SquadBlackboard {
   clear(): void {
     this.orders.clear();
     this.messages.length = 0;
+    this.signals.clear();
   }
 }
 
@@ -109,8 +128,29 @@ export class SquadTactics {
    * 保护缺护卫对象、偷袭缺路径都不会发生——降级为可执行命令。
    */
   issue(squadId: number, order: TacticalOrder, now: number, ttl = ORDER_TTL_DEFAULT, source: 'engine' | 'leader' = 'engine'): void {
-    const normalized = SquadTactics.normalize(order);
-    this.board.issue({ squadId, order: normalized, issuedAt: now, until: now + ttl, source });
+    const o: TacticalOrder = { ...order };
+    // ★ 五轴「分工」：子目标按 squadId 分派（比总目标优先）
+    const sub = o.subTargets?.find((t) => t.squadId === squadId);
+    if (sub) o.target = { x: sub.x, z: sub.z };
+    const normalized = SquadTactics.normalize(o);
+    const notBefore = now + Math.max(0, normalized.startAfter ?? 0);
+    this.board.issue({
+      squadId, order: normalized, issuedAt: now, until: now + ttl, source,
+      notBefore, signal: normalized.signal,
+    });
+  }
+
+  /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */
+  static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number } | null {
+    const path = state.order.path;
+    if (path && path.length > 0) {
+      for (const p of path) {
+        const d2 = (p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz);
+        if (d2 > 16) return p;
+      }
+      return path[path.length - 1];
+    }
+    return state.order.target ?? null;
   }
 
   /** 缺参降级：绝不发无法执行的命令 */
@@ -146,7 +186,13 @@ export class SquadTactics {
    */
   decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1): UnitDirective {
     const state = this.board.get(squad.id);
-    const target = state?.order.target;
+    // ★ 五轴。路径：目标沿 path 滚动（队质心前方路点）
+    let cx = 0, cz = 0, n = 0;
+    for (const m of squad.members.values()) { cx += m.x; cz += m.z; n++; }
+    if (n > 0) { cx /= n; cz /= n; }
+    const target = state ? SquadTactics.currentTargetOf(state, cx, cz) : null;
+    // ★ 五轴「紧急度」：限速乘子（1 + urgency·0.3，上限 1.5）
+    const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。
     //   队整体已在撤退档时不重复下发（避免覆盖 retreat 的分解）。
     if (memberHpRatio <= MEMBER_FALLBACK_HP && state?.order.kind !== 'retreat') {
@@ -154,7 +200,7 @@ export class SquadTactics {
         kind: 'fallback',
         until: now + DIRECTIVE_TTL,
         fire: 'hold',
-        speedMul: 1.2,
+        speedMul: 1.2 * urgeMul,
         seq: this.seq++,
       };
       if (target) { dir.targetX = target.x; dir.targetZ = target.z; }
@@ -165,7 +211,7 @@ export class SquadTactics {
       kind,
       until: now + DIRECTIVE_TTL,
       fire: kind === 'sneak' ? 'hold' : kind === 'fallback' ? 'hold' : 'free',
-      speedMul: kind === 'fallback' ? 1.2 : kind === 'boundBack' || kind === 'screen' ? 0.7 : 1,
+      speedMul: (kind === 'fallback' ? 1.2 : kind === 'boundBack' || kind === 'screen' ? 0.7 : 1) * urgeMul,
       seq: this.seq++,
     };
     if (target) { dir.targetX = target.x; dir.targetZ = target.z; }
