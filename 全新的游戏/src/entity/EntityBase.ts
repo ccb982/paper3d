@@ -20,6 +20,7 @@ import type { EntityManager } from './EntityManager';
 import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
 import { levelForDistance } from '../services/lod';
 import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
+import { type CombatStats, createCombatStats } from './CombatStats';
 import { GroundShadowController, type GroundShadowHost } from '../services/render/GroundShadowController';
 import { EffectSlots } from '../services/fx/EffectSlots';
 import { eventBus } from '../core/EventBus';
@@ -223,31 +224,48 @@ export abstract class EntityBase {
   }
 
   // ============ 生命与战斗属性（伤害管线 modifiers 链，架构 4.1） ============
+  // ★ E5+：战斗数值收进 `CombatStats` 组合件（子弹/物品不再背散落字段）；
+  //   以下同名访问器保持旧读写 API（行为零变化）。
+
+  /** 战斗数值组合件（唯一事实源） */
+  readonly stats: CombatStats = createCombatStats();
 
   /** 生命值（子类构造可覆写初始值） */
-  hp = 100;
+  get hp(): number { return this.stats.hp; }
+  set hp(v: number) { this.stats.hp = v; }
   /** 生命上限（HUD/结算显示用；构造后与 hp 同步） */
-  maxHp = 100;
+  get maxHp(): number { return this.stats.maxHp; }
+  set maxHp(v: number) { this.stats.maxHp = v; }
   /** 攻击力加成（modifierDefense：damage + attackPower - defense） */
-  attackPower = 0;
+  get attackPower(): number { return this.stats.attackPower; }
+  set attackPower(v: number) { this.stats.attackPower = v; }
   /** 防御（减法减伤） */
-  defense = 0;
+  get defense(): number { return this.stats.defense; }
+  set defense(v: number) { this.stats.defense = v; }
   /** ★ 攻击速度点数（方舟口径：100 为基准；实际间隔 = 基础间隔 × 100 / (100 + attackSpeed)） */
-  attackSpeed = 0;
+  get attackSpeed(): number { return this.stats.attackSpeed; }
+  set attackSpeed(v: number) { this.stats.attackSpeed = v; }
   /** ★ 庇护：受到的伤害降低比例 0-1（modifierDamageReduction 在防御后乘算） */
-  damageReduction = 0;
+  get damageReduction(): number { return this.stats.damageReduction; }
+  set damageReduction(v: number) { this.stats.damageReduction = v; }
   /** ★ 生命回复速度（每秒回血；模式层每帧结算，卸载装备即失效） */
-  hpRegen = 0;
+  get hpRegen(): number { return this.stats.hpRegen; }
+  set hpRegen(v: number) { this.stats.hpRegen = v; }
   /** 暴击率 0-1（modifierCrit） */
-  critRate = 0;
+  get critRate(): number { return this.stats.critRate; }
+  set critRate(v: number) { this.stats.critRate = v; }
   /** 暴击倍率 */
-  critMult = 1.5;
+  get critMult(): number { return this.stats.critMult; }
+  set critMult(v: number) { this.stats.critMult = v; }
   /** 闪避率 0-1（modifierDodge） */
-  dodgeRate = 0;
+  get dodgeRate(): number { return this.stats.dodgeRate; }
+  set dodgeRate(v: number) { this.stats.dodgeRate = v; }
   /** 格挡率 0-1（modifierBlock） */
-  blockRate = 0;
+  get blockRate(): number { return this.stats.blockRate; }
+  set blockRate(v: number) { this.stats.blockRate = v; }
   /** 格挡减伤倍率（格挡时伤害 × blockMult） */
-  blockMult = 0.5;
+  get blockMult(): number { return this.stats.blockMult; }
+  set blockMult(v: number) { this.stats.blockMult = v; }
 
   /** ★ 活跃效果列表（EffectSystem 队列；当前仅玩家使用。
    *  tick 由 WorldMode 每帧显式调用——队友/敌人不参与，无每帧开销） */
