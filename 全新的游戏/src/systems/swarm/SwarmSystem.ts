@@ -24,6 +24,8 @@ import {
 import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
+import { SquadTable, type SquadRating } from './SquadTable';
+import { roleFromCode } from '../../entity/SwarmUnit';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
@@ -109,6 +111,10 @@ export interface SwarmHooks {
   /** ★ 代理被远距回收（2026-09-16 击杀统计）：**不算击杀**，模式层据此扣减当日配额。
    *  与 onAgentKilled 严格互斥：回收路径只发本回调，不发 onAgentKilled。 */
   onAgentRecalled?: (count: number) => void;
+  /** ★ 步骤 5：队长变更（池侧选举/接任）→ 模式层镜像到 L3 实体 */
+  onLeaderChanged?: (uid: number, isLeader: boolean) => void;
+  /** ★ 步骤 9：**全灭才上报**（单人阵亡只下调评分，不发事件） */
+  onSquadWiped?: (squadId: number) => void;
 }
 
 const _sep = { x: 0, z: 0 };
@@ -116,6 +122,16 @@ const _flow = { x: 0, z: 0 };
 
 export class SwarmSystem {
   readonly pool = new AgentPool();
+  /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
+  readonly squads = new SquadTable();
+  /** ★ 稳定 uid 分配器（spawn/demote 缺省分配；升降格往返不变） */
+  private nextUid = 1;
+  /** ★ 队长变更待广播（帧末统一回调，避免循环内跨层） */
+  private readonly leaderChanges: { uid: number; isLeader: boolean }[] = [];
+  /** ★ 步骤 9：待上报的全灭小队（帧末统一回调） */
+  private readonly pendingWiped: number[] = [];
+  /** ★ 步骤 9：成员状态同步节拍（4Hz） */
+  private ratingAccum = 0;
   private grid = new CrowdGrid();
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
@@ -141,12 +157,22 @@ export class SwarmSystem {
   }
 
   spawn(data: AgentSpawnData): number {
-    return this.pool.push(data);
+    if (!data.uid || data.uid <= 0) data.uid = this.nextUid++;
+    const i = this.pool.push(data);
+    if (i < 0) return i;
+    // ★ 步骤 5：同质就近编队 + 首员即队长
+    const squad = this.squads.assign(data.uid, roleFromCode(this.pool.role[i]), data.x, data.z);
+    this.pool.squadId[i] = squad.id;
+    this.pool.battalionId[i] = squad.battalionId;
+    this.squads.syncMember(data.uid, this.pool.hp[i], this.pool.maxHp[i], data.x, data.z, 0);
+    this.syncLeaderFlags(squad.id);
+    return i;
   }
 
   /** 降格：实体 → 代理（模式层回收实体时调用） */
   demote(snap: AgentSnapshot): void {
-    this.pool.push({
+    const uid = snap.uid && snap.uid > 0 ? snap.uid : this.nextUid++;
+    const i = this.pool.push({
       mobIndex: snap.mobIndex,
       x: snap.x, y: snap.y, z: snap.z,
       hp: snap.hp, maxHp: snap.maxHp,
@@ -162,7 +188,7 @@ export class SwarmSystem {
       isAir: snap.isAir,
       altitude: snap.altitude,
       // ★ E3b（2026-09-19）：编队/指挥/移动目标全字段透传（原实现只挑子集 → 降格即丢编队）
-      uid: snap.uid,
+      uid,
       battalionId: snap.battalionId,
       squadId: snap.squadId,
       formSlot: snap.formSlot,
@@ -181,6 +207,17 @@ export class SwarmSystem {
       aiStateIdx: snap.aiStateIdx,
       aiTimer: snap.aiTimer,
     });
+    if (i < 0) return;
+    // ★ 步骤 5：编队归属兜底（正常随快照保留）+ 队长标记同步
+    const role = roleFromCode(this.pool.role[i]);
+    const squad = this.squads.squadOf(uid)
+      ?? (snap.squadId !== undefined && snap.squadId >= 0
+        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i])
+        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i]));
+    this.pool.squadId[i] = squad.id;
+    this.pool.battalionId[i] = squad.battalionId;
+    this.squads.syncMember(uid, this.pool.hp[i], this.pool.maxHp[i], this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i]);
+    this.syncLeaderFlags(squad.id);
   }
 
   // ============================================================
@@ -203,6 +240,18 @@ export class SwarmSystem {
     }
     const now = performance.now() / 1000;
 
+    // ★ 步骤 9：成员状态同步（4Hz；池侧 hp/位置 → 小队表，评级/选举用）
+    this.ratingAccum += dt;
+    if (this.ratingAccum >= 0.25) {
+      this.ratingAccum = 0;
+      for (let i = 0; i < this.pool.count; i++) {
+        this.squads.syncMember(
+          this.pool.swarmUid[i], this.pool.hp[i], this.pool.maxHp[i],
+          this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i],
+        );
+      }
+    }
+
     let promotes = 0;
     /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
     let recalled = 0;
@@ -215,7 +264,7 @@ export class SwarmSystem {
       if (p.hp[i] <= 0) {
         const mobIndex = p.mobIndex[i];
         const kx = p.x[i], ky = p.y[i], kz = p.z[i];
-        this.removeAgent(i);
+        this.removeAgent(i, true, true);   // ★ 阵亡：单人只下调评分（全灭才上报）
         hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
         continue;
       }
@@ -228,7 +277,7 @@ export class SwarmSystem {
         ) {
           const mobIndex = p.mobIndex[i];
           const kx = p.x[i], ky = p.y[i], kz = p.z[i];
-          this.removeAgent(i);
+          this.removeAgent(i, true, true);   // ★ 掉坑 = 阵亡口径
           hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
           continue;
         }
@@ -248,7 +297,7 @@ export class SwarmSystem {
       // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
       if (dFocus2 < nearR2 && hooks.entityCount + promotes < SWARM.L3_CAP && promotes < SWARM.PROMOTE_PER_FRAME) {
         const snap = p.snapshot(i);
-        this.removeAgent(i);
+        this.removeAgent(i, false);   // ★ 升格 = 换载体：保留小队归属/队长
         hooks.promote(snap);
         promotes++;
         continue;
@@ -278,6 +327,16 @@ export class SwarmSystem {
     const t2 = _te ? performance.now() : 0;
     // ★ 远距回收统一回调（不算击杀；模式层据此扣减当日配额）
     if (recalled > 0) hooks.onAgentRecalled?.(recalled);
+    // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
+    if (this.leaderChanges.length > 0) {
+      for (const c of this.leaderChanges) hooks.onLeaderChanged?.(c.uid, c.isLeader);
+      this.leaderChanges.length = 0;
+    }
+    // ★ 步骤 9：全灭上报（每队一次；此后小队已注销，不再出现在评级表→无需支援）
+    if (this.pendingWiped.length > 0) {
+      for (const id of this.pendingWiped) hooks.onSquadWiped?.(id);
+      this.pendingWiped.length = 0;
+    }
     entityPerf.swarmBrain += t2 - t1;
     entityPerf.swarmAgents = this.pool.count;
     void t0;
@@ -575,9 +634,21 @@ export class SwarmSystem {
     p.attackHold[i] = 0;
   }
 
-  /** swap-remove 包装：释放槽/令牌 + 修正槽主索引（尾元素 → 空出的下标） */
-  private removeAgent(i: number): void {
+  /** 把小队队长标记同步到池（仅该队成员；≤256 扫描，代价可忽略） */
+  private syncLeaderFlags(squadId: number): void {
+    const squad = this.squads.get(squadId);
+    if (!squad) return;
+    for (let i = 0; i < this.pool.count; i++) {
+      if (this.pool.squadId[i] !== squadId) continue;
+      this.pool.isLeader[i] = this.pool.swarmUid[i] === squad.leaderUid ? 1 : 0;
+    }
+  }
+
+  /** swap-remove 包装：释放槽/令牌 + 修正槽主索引（尾元素 → 空出的下标）
+   *  ★ unregister=false（升格路径）：换载体不是死亡，小队归属/队长保留 */
+  private removeAgent(i: number, unregister = true, killed = false): void {
     const last = this.pool.count - 1;
+    const uid = this.pool.swarmUid[i];
     this.releaseAgent(i);
     if (i !== last) {
       for (const owners of this.slotOwner) {
@@ -587,6 +658,14 @@ export class SwarmSystem {
       }
     }
     this.pool.removeAt(i);
+    if (!unregister) return;
+    // ★ 步骤 5/9：注销小队归属；队长阵亡/回收 → 本队接任；全灭上报（帧末统一广播）
+    const res = this.squads.remove(uid, killed);
+    if (res) {
+      for (const c of res.changes) this.leaderChanges.push(c);
+      this.syncLeaderFlags(res.squadId);
+      if (res.wiped) this.pendingWiped.push(res.squadId);
+    }
   }
 
   // ============================================================
@@ -661,6 +740,26 @@ export class SwarmSystem {
     this.flow.paintAlert(x, z, radius, performance.now() / 1000, seconds);
   }
 
+  /** ★ 步骤 9：实体成员同步（模式层 0.25s 节拍喂入；实体不在池内，池侧同步覆盖不到） */
+  syncMember(uid: number, hp: number, maxHp: number, x: number, z: number, lastSeenAt: number): void {
+    this.squads.syncMember(uid, hp, maxHp, x, z, lastSeenAt);
+  }
+
+  /** ★ 步骤 9：实体阵亡/销毁 → 小队注销（全灭上报；单人只下调评分） */
+  onEntityKilled(uid: number): void {
+    if (uid <= 0) return;
+    const res = this.squads.remove(uid, true);
+    if (!res) return;
+    for (const c of res.changes) this.leaderChanges.push(c);
+    this.syncLeaderFlags(res.squadId);
+    if (res.wiped) this.pendingWiped.push(res.squadId);
+  }
+
+  /** ★ 步骤 9：引擎侧信息面（BattalionView 的 squads 面；战术后续消费） */
+  ratings(): SquadRating[] {
+    return this.squads.ratings(performance.now() / 1000);
+  }
+
   /** 调试/统计：层级计数 */
   tierCounts(): { far: number; mid: number } {
     let far = 0, mid = 0;
@@ -673,10 +772,15 @@ export class SwarmSystem {
 
   clear(): void {
     this.pool.clear();
+    this.squads.clear();
+    this.nextUid = 1;
+    this.leaderChanges.length = 0;
+    this.pendingWiped.length = 0;
+    this.ratingAccum = 0;
   }
 
   dispose(): void {
-    this.pool.clear();
+    this.clear();
     this.batch?.dispose();
     this.batch = null;
   }

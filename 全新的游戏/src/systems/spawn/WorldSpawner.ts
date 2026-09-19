@@ -493,6 +493,10 @@ export class WorldSpawner {
     const r2 = SWARM.DEMOTE_RADIUS ** 2;
     for (let i = this.deps.enemies.length - 1; i >= 0; i--) {
       const e = this.deps.enemies[i];
+      // ★ 步骤 9：实体成员状态喂给小队表（0.25s 节拍；评级/选举/目击用）
+      if (e.swarmUid > 0) {
+        this.deps.swarm.syncMember(e.swarmUid, e.hp, e.maxHp, e.position.x, e.position.z, e.lastSeenAt);
+      }
       const dx = e.position.x - px, dz = e.position.z - pz;
       if (dx * dx + dz * dz <= r2) continue;
       if (e.dead) continue;
@@ -521,6 +525,8 @@ export class WorldSpawner {
         // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
         ...e.drain(),
       });
+      // ★ 步骤 5/9：注销 uid 映射（队长标记不再指向该实体）
+      this.forgetEntity(e);
       // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
       //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
       e.retire('demoted');
@@ -869,6 +875,21 @@ export class WorldSpawner {
     return remainingQuota(s) > 0;
   }
 
+  /** ★ 步骤 5：uid → L3 实体（队长标记镜像用；降格时移除） */
+  private readonly byUid = new Map<number, EnemyBase>();
+
+  /** ★ 步骤 9：实体销毁 → 注销 uid 映射（阵亡/降格；小队注销由 swarm.onEntityKilled 负责） */
+  forgetEntity(e: EnemyBase): void {
+    if (e.swarmUid > 0) this.byUid.delete(e.swarmUid);
+  }
+
+  /** ★ 步骤 5：队长标记镜像（池侧选举/接任 → 实体；仅存活实体） */
+  setLeaderFlag(uid: number, isLeader: boolean): void {
+    const e = this.byUid.get(uid);
+    if (!e || e.dead) return;
+    e.isLeader = isLeader;
+  }
+
   /** ★ 升格：代理 → L3 实体（蜂群 hooks.promote；同步创建 EnemyBase） */
   promoteAgent(snap: AgentSnapshot): void {
     if (!this.deps.scene || !this.deps.camera) return;
@@ -883,6 +904,8 @@ export class WorldSpawner {
     enemy.hp = Math.min(snap.hp, snap.maxHp);
     // ★ v2：编队/uid/移动目标等随快照回灌（缺省字段不动，行为不变）
     enemy.hydrate(snap);
+    // ★ 步骤 5：注册 uid → 实体（队长标记镜像用）
+    if (enemy.swarmUid > 0) this.byUid.set(enemy.swarmUid, enemy);
   }
 
   /** ★ 创建 L3 实体（升格路径；统一在此维护 animMap/掉落映射） */

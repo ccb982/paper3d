@@ -9,7 +9,7 @@
 import type { RetireReason } from './EntityBase';
 
 /** 兵种角色（大编队配比 / 阵型软约束依据） */
-export type UnitRole = 'shield' | 'assault' | 'grunt' | 'ranged' | 'flyer';
+export type UnitRole = 'shield' | 'assault' | 'grunt' | 'ranged' | 'flyer' | 'logistics';
 
 /** 攻击类型：none 无 / melee 近战 / ranged 远程弹道 / bombard 轰炸（飞行兵） */
 export type UnitAttackType = 'none' | 'melee' | 'ranged' | 'bombard';
@@ -18,8 +18,8 @@ export type UnitAttackType = 'none' | 'melee' | 'ranged' | 'bombard';
 export const ATTACK_NONE = 0, ATTACK_MELEE = 1, ATTACK_RANGED = 2, ATTACK_BOMBARD = 3;
 
 /** ★ 兵种角色 SoA 编码（AgentPool 存 Uint8；顺序即编码，勿改动既有值） */
-export const ROLE_GRUNT = 0, ROLE_SHIELD = 1, ROLE_ASSAULT = 2, ROLE_RANGED = 3, ROLE_FLYER = 4;
-export const ROLE_ORDER: readonly UnitRole[] = ['grunt', 'shield', 'assault', 'ranged', 'flyer'];
+export const ROLE_GRUNT = 0, ROLE_SHIELD = 1, ROLE_ASSAULT = 2, ROLE_RANGED = 3, ROLE_FLYER = 4, ROLE_LOGISTICS = 5;
+export const ROLE_ORDER: readonly UnitRole[] = ['grunt', 'shield', 'assault', 'ranged', 'flyer', 'logistics'];
 export const ATTACK_ORDER: readonly UnitAttackType[] = ['none', 'melee', 'ranged', 'bombard'];
 
 /** 联合类型 ↔ SoA 编码（唯一换算口；代理池与快照搬运共用） */

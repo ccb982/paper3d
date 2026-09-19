@@ -859,6 +859,8 @@ export class WorldMode implements IGameMode {
     );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     this.swarmHooks.promote = (snap) => this.spawner.promoteAgent(snap);
+    // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
+    this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
@@ -1156,6 +1158,9 @@ export class WorldMode implements IGameMode {
       this.rollEnemyDrops(enemy);
       const idx = this.enemies.indexOf(enemy);
       if (idx !== -1) this.enemies.splice(idx, 1);
+      // ★ 步骤 9：实体阵亡 → uid 注销 + 小队注销（全灭才上报；单人只下调评分）
+      this.spawner.forgetEntity(enemy);
+      this.swarm.onEntityKilled(enemy.swarmUid);
       // ★ 遗物击杀时机管线（脏标记：击杀类属性遗物统一在本帧重算）
       if (this.session) {
         dispatchRelicEvent(this.session, RELIC_ITEM_CONFIG, 'onKill', {});
