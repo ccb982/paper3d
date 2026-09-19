@@ -74,6 +74,13 @@ export interface AgentSpawnData {
   moveTargetX?: number;
   moveTargetY?: number;
   moveTargetZ?: number;
+  /** ★ 感知 / AI 状态（跨 LOD 连续；缺省 = 无/初始） */
+  lastSeenX?: number;
+  lastSeenZ?: number;
+  lastSeenAt?: number;
+  aggroFrom?: number;
+  aiStateIdx?: number;
+  aiTimer?: number;
 }
 
 /** 代理快照（升格/降格搬运；★ v2 字段以实体侧 SwarmSnapshot 为基，单一事实源） */
@@ -199,6 +206,13 @@ export class AgentPool {
   readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
   readonly moveTargetZ = new Float32Array(AGENT_CAPACITY);
   readonly hasMoveTarget = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 感知 / AI 状态（E3b 步骤 2/3：跨 LOD 不失忆；步骤 9 接线填值） */
+  readonly lastSeenX = new Float32Array(AGENT_CAPACITY);
+  readonly lastSeenZ = new Float32Array(AGENT_CAPACITY);
+  readonly lastSeenAt = new Float32Array(AGENT_CAPACITY);
+  readonly aggroFrom = new Int32Array(AGENT_CAPACITY);
+  readonly aiStateIdx = new Uint8Array(AGENT_CAPACITY);
+  readonly aiTimer = new Float32Array(AGENT_CAPACITY);
 
   // ---- P4：导演意图 / 士气 ----
   /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
@@ -262,6 +276,12 @@ export class AgentPool {
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
     this.moveTargetY[i] = hasMt ? (d.moveTargetY ?? 0) : 0;
     this.moveTargetZ[i] = hasMt ? d.moveTargetZ! : 0;
+    this.lastSeenX[i] = d.lastSeenX ?? 0;
+    this.lastSeenZ[i] = d.lastSeenZ ?? 0;
+    this.lastSeenAt[i] = d.lastSeenAt ?? 0;
+    this.aggroFrom[i] = d.aggroFrom ?? 0;
+    this.aiStateIdx[i] = d.aiStateIdx ?? 0;
+    this.aiTimer[i] = d.aiTimer ?? 0;
     return i;
   }
 
@@ -320,6 +340,12 @@ export class AgentPool {
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];
     this.hasMoveTarget[to] = this.hasMoveTarget[from];
+    this.lastSeenX[to] = this.lastSeenX[from];
+    this.lastSeenZ[to] = this.lastSeenZ[from];
+    this.lastSeenAt[to] = this.lastSeenAt[from];
+    this.aggroFrom[to] = this.aggroFrom[from];
+    this.aiStateIdx[to] = this.aiStateIdx[from];
+    this.aiTimer[to] = this.aiTimer[from];
   }
 
   /** 快照（升格用；★ E3b：全列导出——编队/指挥/意图/移动目标随升格带回实体） */
@@ -347,6 +373,12 @@ export class AgentPool {
       bias: this.bias[i],
       aggro: this.aggro[i],
       wanderSpeed: this.wanderSpeed[i],
+      lastSeenX: this.lastSeenX[i],
+      lastSeenZ: this.lastSeenZ[i],
+      lastSeenAt: this.lastSeenAt[i],
+      aggroFrom: this.aggroFrom[i],
+      aiStateIdx: this.aiStateIdx[i],
+      aiTimer: this.aiTimer[i],
     };
     if (this.hasMoveTarget[i] === 1) {
       out.moveTargetX = this.moveTargetX[i];

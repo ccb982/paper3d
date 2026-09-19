@@ -173,6 +173,13 @@ export class SwarmSystem {
       moveTargetX: snap.moveTargetX,
       moveTargetY: snap.moveTargetY,
       moveTargetZ: snap.moveTargetZ,
+      // ★ E3b 步骤 2/3：感知 / AI 状态随降格回池（跨 LOD 不失忆）
+      lastSeenX: snap.lastSeenX,
+      lastSeenZ: snap.lastSeenZ,
+      lastSeenAt: snap.lastSeenAt,
+      aggroFrom: snap.aggroFrom,
+      aiStateIdx: snap.aiStateIdx,
+      aiTimer: snap.aiTimer,
     });
   }
 

@@ -13,9 +13,24 @@ export class AIStateMachine {
   currentState: string;
   /** 当前状态已停留时间（minStay 判定） */
   private stayTimer = 0;
+  /** ★ E3b：状态名表（构造时冻结顺序；导出/导入 idx 用） */
+  private readonly stateNames: string[];
 
   constructor(private config: AIConfig) {
     this.currentState = config.initial;
+    this.stateNames = Object.keys(config.states);
+  }
+
+  /** ★ E3b 跨 LOD：导出状态（idx + 停留时间）→ 随快照搬运（升格不失忆、不重置巡逻） */
+  exportState(): { idx: number; timer: number } {
+    const idx = this.stateNames.indexOf(this.currentState);
+    return { idx: idx < 0 ? 0 : idx, timer: this.stayTimer };
+  }
+
+  /** ★ E3b 跨 LOD：导入状态（同 config 状态表；越界回落初始态） */
+  importState(idx: number, timer: number): void {
+    this.currentState = this.stateNames[idx] ?? this.config.initial;
+    this.stayTimer = timer > 0 ? timer : 0;
   }
 
   /** 每帧驱动：行为 → 条件 → 转移 */

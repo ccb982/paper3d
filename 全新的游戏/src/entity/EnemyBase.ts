@@ -74,6 +74,11 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   readonly activation = 'active' as const;
   /** ★ 是否本队队长（指挥权转移写；dormant 恒 false） */
   isLeader = false;
+  /** ★ 感知（E3b 预留；步骤 9 通信/感知接线填值）：最后目击 + 仇恨来源 */
+  lastSeenX = 0;
+  lastSeenZ = 0;
+  lastSeenAt = 0;
+  aggroFrom = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -125,6 +130,11 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.role !== undefined) this.role = snap.role;
     if (snap.attackType !== undefined) this.attackType = snap.attackType;
     if (snap.isLeader !== undefined) this.isLeader = snap.isLeader;
+    if (snap.lastSeenX !== undefined) this.lastSeenX = snap.lastSeenX;
+    if (snap.lastSeenZ !== undefined) this.lastSeenZ = snap.lastSeenZ;
+    if (snap.lastSeenAt !== undefined) this.lastSeenAt = snap.lastSeenAt;
+    if (snap.aggroFrom !== undefined) this.aggroFrom = snap.aggroFrom;
+    if (snap.aiStateIdx !== undefined) this.aiStateMachine?.importState(snap.aiStateIdx, snap.aiTimer ?? 0);
     if (snap.moveTargetX !== undefined && snap.moveTargetZ !== undefined) {
       this.moveTarget = { x: snap.moveTargetX, y: snap.moveTargetY ?? 0, z: snap.moveTargetZ };
     }
@@ -141,7 +151,16 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       role: this.role,
       attackType: this.attackType,
       isLeader: this.isLeader,
+      lastSeenX: this.lastSeenX,
+      lastSeenZ: this.lastSeenZ,
+      lastSeenAt: this.lastSeenAt,
+      aggroFrom: this.aggroFrom,
     };
+    const st = this.aiStateMachine?.exportState();
+    if (st) {
+      out.aiStateIdx = st.idx;
+      out.aiTimer = st.timer;
+    }
     if (this.moveTarget) {
       out.moveTargetX = this.moveTarget.x;
       out.moveTargetY = this.moveTarget.y;
