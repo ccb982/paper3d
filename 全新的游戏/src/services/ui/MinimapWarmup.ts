@@ -26,11 +26,12 @@
 // ============================================================
 
 import type { GameSession } from '../../core/Session';
-import { dailyMapSeed } from '../../core/Session';
+import { dailySpawnPoint } from '../../core/Session';
+import { loadWorldState } from '../../core/WorldStateCache';
 import { generateChunk, CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE } from '../map/ChunkGenerator';
 import { tileById } from '../map/Tiles';
 import { getTestPreset } from '../map/TerrainPresets';
-import { ExploredMask } from '../map/ExploredMask';
+import { ExploredMask, mergeExploredMask } from '../map/ExploredMask';
 import { chunkKeyOf } from '../map/RasterMap';
 import { LOD_MAX_DIST } from '../lod';
 
@@ -162,7 +163,9 @@ function recordIndexOf(x: number, z: number, cx: number, cz: number): number {
  * 分帧执行（每 tick 只生成 1 列 chunk），不会在抽卡页制造长任务。
  */
 export function warmupMinimap(session: GameSession): void {
-  const seed = dailyMapSeed(session.meta.seed, session.meta.day);
+  // ★ 持久世界：种子 = 主种子（不随天换）；预热中心 = 当日随机出生点
+  const seed = session.meta.seed;
+  const sp = dailySpawnPoint(session.meta.seed, session.meta.day);
   if (getTestPreset() !== null) {
     // 测试预设会改变 generateChunk 输出 → 预热结果不可信，本次不建
     disabled = true;
@@ -171,13 +174,15 @@ export function warmupMinimap(session: GameSession): void {
     return;
   }
   disabled = false;
-  if (build && build.seed === seed && (build.ready || build.mask)) return; // 已在建 / 已就绪
+  const cellX = Math.floor(sp.x);
+  const cellZ = Math.floor(sp.z);
+  // ★ 持久世界下 seed 不变、出生点每天变：出生格不同也要换代重建
+  if (build && build.seed === seed && build.cellX === cellX && build.cellZ === cellZ
+    && (build.ready || build.mask)) return; // 已在建 / 已就绪
 
   const size = MINIMAP_SIZE;
   const windowHalf = MINIMAP_WINDOW_HALF;
   const radius = MINIMAP_VIEW_RADIUS;
-  const cellX = MAP_SPAWN_X;
-  const cellZ = MAP_SPAWN_Z;
   const cxCenter = cellX + 0.5;
   const czCenter = cellZ + 0.5;
   const x0 = Math.floor(cxCenter - windowHalf);
@@ -264,6 +269,9 @@ export function warmupMinimap(session: GameSession): void {
         if (dx * dx + dzSq <= rSq) mask.mark(x, z);
       }
     }
+    // ★ 合并持久化探索记忆（2026-09-19）：已探索区域跨天一直保留
+    const persisted = loadWorldState(seed)?.explored;
+    if (persisted) mergeExploredMask(mask, persisted);
     b.mask = mask;
     schedule(stepBaseImg);
   };
@@ -288,10 +296,13 @@ export function warmupMinimap(session: GameSession): void {
  */
 export function consumeMinimapWarmup(
   seed: number, size: number, windowHalf: number, radius: number,
+  cellX?: number, cellZ?: number,
 ): MinimapWarmData | null {
   const b = build;
   if (!b || !b.ready || !b.mask || !b.baseImg) return null;
   if (b.seed !== seed || b.size !== size || b.windowHalf !== windowHalf || b.radius !== radius) return null;
+  // ★ 出生点每天随机：预热中心与当前出生格不符 → 弃用（走冷路径，正确性不受影响）
+  if (cellX !== undefined && (b.cellX !== cellX || b.cellZ !== cellZ)) return null;
   consumedCount++;
   return {
     seed: b.seed, size: b.size, windowHalf: b.windowHalf, radius: b.radius,

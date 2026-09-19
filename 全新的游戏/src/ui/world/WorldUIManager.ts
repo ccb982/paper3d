@@ -111,6 +111,8 @@ export class WorldUIManager extends BaseInteractionUI {
     private itemManager: ItemManager,
     _interactionManager: InteractionManager,
     private raster: RasterMap,
+    /** ★ 当前出生点（世界持久化后每天随机；小地图预热中心校验用） */
+    spawn?: { x: number; z: number },
   ) {
     super();
     // ★ 独立背包模块：地图模式只暴露玩家背包 + 飞船仓库（隐藏基地层）
@@ -137,7 +139,11 @@ export class WorldUIManager extends BaseInteractionUI {
     // ★ 模态面板栈挂载到 body（新 PanelManager 拥有遮罩层）
     this.panels.mount(document.body);
 
-    this.minimap = new Minimap(raster);
+    this.minimap = new Minimap(
+      raster, undefined, undefined, undefined, undefined, undefined,
+      spawn ? Math.floor(spawn.x) : undefined,
+      spawn ? Math.floor(spawn.z) : undefined,
+    );
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
     // ★ 左下角弹药栏（显示背包弹药类型/数量；点击切换当前弹药）
@@ -492,6 +498,11 @@ export class WorldUIManager extends BaseInteractionUI {
   }
 
   /** ★ 小地图显隐（舰内房间隐藏；世界/航行保持显示）—— 场景方位提示同步收起 */
+  /** ★ 小地图探索记忆（世界状态持久化用） */
+  getMinimapExploredState(): import('../../services/map/ExploredMask').ExploredMaskState | null {
+    return this.minimap?.exportExploredState() ?? null;
+  }
+
   setMinimapVisible(v: boolean): void {
     this.minimap.setVisible(v);
     this.navHints.setVisible(v);

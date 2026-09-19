@@ -101,7 +101,7 @@ import { applyHeal } from '../services/combat/Healing';
 import { effectSystem } from '../services/combat/EffectSystem';
 import { queryFinalStats } from '../services/combat/FinalStats';
 import { eventBus } from '../core/EventBus';
-import { computeRelicModifiers, dailyMapSeed } from '../core/Session';
+import { computeRelicModifiers, dailySpawnPoint } from '../core/Session';
 import type { AmmoEntryView } from '../services/ui/AmmoPanel';
 import { RELIC_ITEM_CONFIG } from '../config/relics';
 import { relicGrantsFor, dispatchRelicEvent, relicTimedFor } from '../core/RelicEffects';
@@ -110,7 +110,6 @@ import { DialogueView } from '../ui/shared/DialogueView';
 import { DialogueSystem, type DialogueGrant } from '../systems/dialogue/DialogueSystem';
 import { EventSystem } from '../systems/events/EventSystem';
 import { loadFtxCached } from '../services/fx/FtxAssetCache';
-import { MAP_SPAWN_X, MAP_SPAWN_Z } from '../services/ui/MinimapWarmup';
 import { hash2 } from '../services/map/TerrainNoise';
 import { sharedWaterMaterial } from '../services/map/WaterMaterial';
 import { CombatDirector } from '../services/combat/CombatDirector';
@@ -614,10 +613,11 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张） ----
     // ★ 当天地图种子 = 主种子 × 天数（同局同天恒同图；换天/换局换图）
-    this.raster = new RasterMap(dailyMapSeed(ctx.session.meta.seed, ctx.day));
+    // ★ 持久世界（2026-09-19）：地图 = 主种子（不随天换）；出生点每天随机（dailySpawnPoint）
+    this.raster = new RasterMap(ctx.session.meta.seed);
     // ★ 世界状态缓存（同种子不重建）：把地形破坏/植被已采灌进 RasterMap（chunk 生成前）
     {
-      const wst = loadWorldState(ctx.session.meta.seed, ctx.day);
+      const wst = loadWorldState(ctx.session.meta.seed);
       if (wst) {
         // ★ 只恢复坑洞（植被不入缓存：每天重建，资源可恢复）
         this.raster.importPersistState({ levels: wst.levels });
@@ -704,9 +704,9 @@ export class WorldMode implements IGameMode {
     renderManager.resetDay();
     sharedWaterMaterial.resetImpacts(); // ★ 清空落水扰动槽（防跨局残留）
 
-    // ★ 每次出击出生点固定 chunk (0,0)：舰船与角色都从 (30,30) 出发
-    //   （常量与 MinimapWarmup 同源——抽卡页预加载的探索圆盘/底图就以本格为中心）
-    const spawn = { x: MAP_SPAWN_X, z: MAP_SPAWN_Z };
+    // ★ 出生点每天随机（2026-09-19）：由（主种子, 天数）确定性派生 → 同天重进同点
+    const sp0 = dailySpawnPoint(ctx.session.meta.seed, ctx.day);
+    const spawn = { x: sp0.x, z: sp0.z };
     if (ctx.session.ship) ctx.session.ship.position = { x: spawn.x, z: spawn.z };
 
     // ★ 每天出击满油 + 满血（2026-09-12 用户定调：船每天修满，与油同口径）
@@ -886,7 +886,7 @@ export class WorldMode implements IGameMode {
 
     // ---- ★ UI 层（世界专属） ----
     this.worldUIManager = new WorldUIManager(
-      ctx.session, this.itemManager, this.interactionManager, this.raster,
+      ctx.session, this.itemManager, this.interactionManager, this.raster, spawn,
     );
     // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
@@ -2169,10 +2169,11 @@ export class WorldMode implements IGameMode {
       }
       saveWorldState({
         seed: this.session.meta.seed,
-        day: this.session.meta.day,
         levels: rs.levels,          // ★ 只存坑洞；植被每天重建（不入缓存）
         walls: snapshotCovers(),
         allies,
+        // ★ 小地图已探索记忆（跨天一直保留）
+        explored: this.worldUIManager?.getMinimapExploredState() ?? null,
       });
       pruneWorldStates();
     } catch (e) {

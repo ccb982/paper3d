@@ -25,7 +25,7 @@ import { digPerf } from './services/map/ChunkManager';
 import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
-import { createNewSession, dailyMapSeed, type GameSession } from './core/Session';
+import { createNewSession, type GameSession } from './core/Session';
 import { clearWorldStates } from './core/WorldStateCache';
 import { minimapWarmupState } from './services/ui/MinimapWarmup';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
@@ -193,7 +193,7 @@ async function boot() {
     if (testChunk) {
       showTestGroupPanel(
         k ?? undefined,
-        currentSession ? dailyMapSeed(currentSession.meta.seed, currentSession.meta.day) : undefined,
+        currentSession ? currentSession.meta.seed : undefined,
       );
     }
   };
@@ -351,7 +351,7 @@ async function boot() {
   }
   // ★ 测试组面板（调试）：存档就绪后用当天地图种子（主种子 × 天数）统计实际 chunk
   if (testChunk) {
-    showTestGroupPanel(testGroup ?? undefined, dailyMapSeed(currentSession.meta.seed, currentSession.meta.day));
+    showTestGroupPanel(testGroup ?? undefined, currentSession.meta.seed);
   }
 
   // ★ 调试：?priestess=1 直接获得普瑞赛斯（验证四维空间 Boss 流程用）
@@ -479,7 +479,7 @@ async function boot() {
         // ★ 种子权威来源 = 存档（主种子 × 天数）；RasterMap.current 极端情况
         //   （HMR/模块换代）可能为空 → 用 dailyMapSeed 回退，保证 HUD 恒有数值
         const dailySeed = RasterMap.current?.worldSeed
-          ?? (currentSession ? dailyMapSeed(currentSession.meta.seed, currentSession.meta.day) : null);
+          ?? (currentSession ? currentSession.meta.seed : null);
         hudEl.textContent =
           `${currentEnv === 'world' ? '世界' : '基地'}  seed ${dailySeed ?? '?'}\n`
           + `x ${p.x.toFixed(1)}  z ${p.z.toFixed(1)}\n`

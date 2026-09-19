@@ -25,7 +25,8 @@
 // ============================================================
 
 import { RasterMap } from '../map/RasterMap';
-import { ExploredMask } from '../map/ExploredMask';
+import { ExploredMask, mergeExploredMask } from '../map/ExploredMask';
+import { loadWorldState } from '../../core/WorldStateCache';
 import type { EntityBase } from '../../entity/EntityBase';
 import type { MapMarkers } from './MapMarkers';
 import {
@@ -109,6 +110,8 @@ export class Minimap {
 
   /** ★ 是否吃到预加载（调试/HUD 可读） */
   private warmed = false;
+  /** ★ 跨模式保留的探索记忆（2026-09-19 持久世界：小地图不再每天销毁重建） */
+  private static persistMask: { seed: number; mask: ExploredMask } | null = null;
 
   constructor(
     raster: RasterMap,
@@ -119,6 +122,9 @@ export class Minimap {
     shipViewRadius = MINIMAP_SHIP_VIEW_RADIUS,
     /** ★ 预加载数据（缺省自动按 raster.worldSeed 取；传 null 显式走冷路径） */
     warm: MinimapWarmData | null | undefined = undefined,
+    /** ★ 当前出生格（持久世界 + 每日随机出生点：预热中心校验用） */
+    spawnCellX?: number,
+    spawnCellZ?: number,
   ) {
     this.raster = raster;
     this.displaySize = displaySize;
@@ -147,9 +153,21 @@ export class Minimap {
 
     // ★ 预加载交接：整段"开局点亮"在抽卡页已经算完，这里只做两次字节拷贝
     const w = warm === undefined
-      ? consumeMinimapWarmup(raster.worldSeed, displaySize, windowHalf, viewRadius)
+      ? consumeMinimapWarmup(raster.worldSeed, displaySize, windowHalf, viewRadius, spawnCellX, spawnCellZ)
       : warm;
+    // ★ 优先吃"上一个小地图实例"的探索记忆（同存档跨天/跨模式不销毁）
+    const pm = Minimap.persistMask;
+    if (pm && pm.seed === raster.worldSeed) {
+      this.explored = pm.mask.clone();
+      this.warmed = true;
+      return;
+    }
     if (w) this.adoptWarm(w);
+    else {
+      // ★ 冷路径也恢复持久化探索记忆（2026-09-19）：已探索区域一直保留
+      const st = loadWorldState(raster.worldSeed)?.explored;
+      if (st) this.explored = ExploredMask.fromState(st);
+    }
   }
 
   /** ★ 吃下预加载数据：底图即刻上屏 + 探索记忆/边带索引就位 + 首次 update 直接跳过 */
@@ -157,6 +175,9 @@ export class Minimap {
     const ds = this.displaySize;
     if (w.size !== ds) return;
     this.explored = w.mask;
+    // ★ 预热盘可能是"进入世界前"的旧快照 → 用持久化探索记忆补上后续进度
+    const persisted = loadWorldState(this.raster.worldSeed)?.explored;
+    if (persisted) mergeExploredMask(this.explored, persisted);
     const img = this.baseCtx.createImageData(ds, ds);
     img.data.set(w.baseImg);
     this.baseImg = img;
@@ -629,11 +650,18 @@ export class Minimap {
   }
 
   /** 已探索格数（面板信息行） */
+  /** ★ 导出探索记忆（持久化；WorldStateCache 用） */
+  exportExploredState(): import('../map/ExploredMask').ExploredMaskState {
+    return this.explored.exportState();
+  }
+
   get exploredCount(): number {
     return this.explored.size;
   }
 
   dispose(): void {
+    // ★ 存下探索记忆（同存档下次进世界直接接上，不再重建）
+    Minimap.persistMask = { seed: this.raster.worldSeed, mask: this.explored.clone() };
     this.canvas.remove();
     this.baseCanvas.remove();
     this.explored = new ExploredMask(0, 0, 0, 0);

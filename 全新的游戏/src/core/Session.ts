@@ -364,13 +364,24 @@ export function newRunSeed(): number {
 }
 
 /** ★ 当天地图种子 = 主种子 × 天数 混合（确定性 32 位）。
- *  同主种子同天恒同图（重进/回放一致）；不同天/不同局不同图。
- *  RasterMap 生成、外观烘焙、装饰噪声全部以本值为 seed。 */
+ *  ★ 2026-09-19 起地图**不再每天换**（持久世界：地图 = 主种子；见 dailySpawnPoint），
+ *  本函数保留作为确定性哈希（出生点/其它按天派生用）。 */
 export function dailyMapSeed(mainSeed: number, day: number): number {
   let h = (Math.imul(mainSeed | 0, 0x9e3779b1) ^ Math.imul(day | 0, 0x85ebca77)) >>> 0;
   h = Math.imul(h ^ (h >>> 16), 0x21f0aaad);
   h = Math.imul(h ^ (h >>> 15), 0x735a2d97);
   return (h ^ (h >>> 15)) >>> 0;
+}
+
+/** ★ 每日出生点（2026-09-19 用户定调）：地图持久不变，**出生点每天随机**
+ *  ——由（主种子, 天数）确定性派生：同一天重进出生点一致，换天换点。 */
+export function dailySpawnPoint(mainSeed: number, day: number): { x: number; z: number } {
+  // ★ 随机度加强（2026-09-19）：角度/半径各自独立哈希（去相关），半径 200~2400m
+  const ha = dailyMapSeed(mainSeed ^ 0x9e3779b1, day);
+  const hr = dailyMapSeed(mainSeed, day ^ 0x85ebca77);
+  const ang = (ha / 0x100000000) * Math.PI * 2;
+  const rad = 200 + (hr / 0x100000000) * 2200;                 // 200~2400m
+  return { x: Math.cos(ang) * rad, z: Math.sin(ang) * rad };
 }
 
 /** ★ 新建存档（2026-09-19）：可指定主种子（新局手输/分享复现）；缺省 = 随机 */

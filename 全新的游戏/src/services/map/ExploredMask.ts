@@ -22,6 +22,27 @@
 
 import { cellKeyOf } from './RasterMap';
 
+/** ★ 持久化状态（2026-09-19）：稠密位图 + 稀疏格键；WorldStateCache 存 */
+export interface ExploredMaskState {
+  x0: number; z0: number; w: number; h: number;
+  bits: Uint8Array;
+  count: number;
+  sparse: number[];
+}
+
+/** ★ 合并持久化探索状态到目标掩码（幂等；预热旧快照补新进度用） */
+export function mergeExploredMask(target: ExploredMask, st: ExploredMaskState): void {
+  const { x0, z0, w, h, bits, sparse } = st;
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      if (bits[j * w + i]) target.mark(x0 + i, z0 + j);
+    }
+  }
+  for (const k of sparse) {
+    target.mark((k % 8192) - 4096, Math.floor(k / 8192) - 4096);
+  }
+}
+
 export class ExploredMask {
   private bits: Uint8Array;
   private sparse: Map<number, boolean>;
@@ -89,7 +110,26 @@ export class ExploredMask {
     return this.bits;
   }
 
-  /** 克隆：稠密区一次字节拷贝（32KB ≈ 0.01ms），稀疏区浅拷贝 */
+  /** ★ 导出持久化状态（bits 直接引用；调用方自行拷贝/编码） */
+  exportState(): ExploredMaskState {
+    return {
+      x0: this.x0, z0: this.z0, w: this.w, h: this.h,
+      bits: this.bits, count: this.n,
+      sparse: [...this.sparse.keys()],
+    };
+  }
+
+  /** ★ 由持久化状态重建 */
+  static fromState(st: ExploredMaskState): ExploredMask {
+    const sparse = new Map<number, boolean>();
+    for (const k of st.sparse) sparse.set(k, true);
+    return new ExploredMask(
+      st.x0, st.z0, st.w, st.h,
+      new Uint8Array(st.bits), st.count, sparse,
+    );
+  }
+
+  /** ★ 克隆：稠密区一次字节拷贝（32KB ≈ 0.01ms），稀疏区浅拷贝 */
   clone(): ExploredMask {
     return new ExploredMask(
       this.x0, this.z0, this.w, this.h,
