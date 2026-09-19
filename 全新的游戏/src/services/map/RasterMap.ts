@@ -37,6 +37,13 @@ export function cellKeyOf(x: number, z: number): number {
   return (x + 1e7) * 2e7 + (z + 1e7);
 }
 
+/** ★ 格键 → 世界格坐标（cellKeyOf 的唯一逆运算；持久化稀疏格还原必须用它） */
+export function cellKeyToXZ(k: number): { x: number; z: number } {
+  const z = (k % 2e7) - 1e7;
+  const x = Math.floor(k / 2e7) - 1e7;
+  return { x, z };
+}
+
 export class RasterMap {
   /** 地形 chunk：chunkKey → ChunkData（块状地形：平地/高台/坑洞） */
   private chunks = new Map<number, ChunkData>();
@@ -234,11 +241,11 @@ export class RasterMap {
 
   // ============ ★ 世界状态持久化（2026-09-19） ============
 
-  /** ★ 导出"玩家造成的差异"（挖坑层数 + 采集已采/次数）——供 WorldStateCache 持久化 */
+  /** ★ 导出世界持久化面（挖坑层数 + 地形记录）——供 WorldStateCache 持久化。
+   *  ★ 2026-09-19 重构：地形记录也存（大地图回放/已探索区域底图，不依赖 chunk 重载）。 */
   exportPersistState(): {
     levels: [number, Uint8Array][];
-    harvested: [number, number[]][];
-    harvestCounts: [number, [number, number][]][];
+    mapRecords: [number, Uint8Array][];
   } {
     const levels = new Map<number, Uint8Array>();
     for (const [k, lv] of this.levelsStore) levels.set(k, lv);
@@ -246,17 +253,18 @@ export class RasterMap {
       const cd = this.chunks.get(k);
       if (cd) levels.set(k, cd.levels);
     }
-    return {
-      levels: [...levels],
-      harvested: [...this.harvestedStore].map(([k, set]) => [k, [...set]]),
-      harvestCounts: [...this.propHarvestCounts].map(([k, m]) => [k, [...m]]),
-    };
+    // 地形记录：已卸载留档 + 当前在载 chunk 的 blockTypes（合并，键唯一）
+    const records = new Map<number, Uint8Array>();
+    for (const [k, bt] of this.mapRecords) records.set(k, bt);
+    for (const [k, cd] of this.chunks) records.set(k, cd.blockTypes);
+    return { levels: [...levels], mapRecords: [...records] };
   }
 
-  /** ★ 导入持久化状态（进入世界、chunk 生成前调用）：挖过的坑不愈合；
+  /** ★ 导入持久化状态（进入世界、chunk 生成前调用）：挖过的坑不愈合 + 地形记录回放；
    *  ★ 植被不导入（每天重建 → 资源可恢复，2026-09-19 用户定调） */
   importPersistState(st: {
     levels: [number, Uint8Array][];
+    mapRecords?: [number, Uint8Array][];
     harvested?: [number, number[]][];
     harvestCounts?: [number, [number, number][]][];
   }): void {

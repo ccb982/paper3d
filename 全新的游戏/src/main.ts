@@ -27,6 +27,7 @@ import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, type GameSession } from './core/Session';
 import { clearWorldStates } from './core/WorldStateCache';
+import { Minimap } from './services/ui/Minimap';
 import { minimapWarmupState } from './services/ui/MinimapWarmup';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer, applyShaderDebug } from './services/render/GameRenderer';
@@ -326,7 +327,8 @@ async function boot() {
   if (new URLSearchParams(location.search).get('wipe') === '1') {
     try {
       localStorage.removeItem('arknights_rogue_save');
-      clearWorldStates();   // ★ 世界状态缓存一并清空（2026-09-19）
+      clearWorldStates();        // ★ 世界状态缓存一并清空（2026-09-19）
+      Minimap.clearPersistMask(); // ★ 页内探索缓存（仅删档清）
       console.warn('[boot] 已删档（?wipe=1）：旧存档与世界缓存清除，将创建新档');
     } catch (e) {
       console.error('[boot] 删档失败:', e);

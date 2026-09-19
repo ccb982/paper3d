@@ -113,6 +113,11 @@ export class Minimap {
   /** ★ 跨模式保留的探索记忆（2026-09-19 持久世界：小地图不再每天销毁重建） */
   private static persistMask: { seed: number; mask: ExploredMask } | null = null;
 
+  /** ★ 清空页内探索缓存（仅删档/换存档调用；正常进出世界**绝不**清） */
+  static clearPersistMask(): void {
+    Minimap.persistMask = null;
+  }
+
   constructor(
     raster: RasterMap,
     displaySize = MINIMAP_SIZE,
@@ -125,6 +130,8 @@ export class Minimap {
     /** ★ 当前出生格（持久世界 + 每日随机出生点：预热中心校验用） */
     spawnCellX?: number,
     spawnCellZ?: number,
+    /** ★ 持久化的探索记忆（2026-09-19 重构：单一恢复路径——先持久、再页内缓存、再预热合并） */
+    initialExplored?: import('../map/ExploredMask').ExploredMaskState | null,
   ) {
     this.raster = raster;
     this.displaySize = displaySize;
@@ -155,29 +162,26 @@ export class Minimap {
     const w = warm === undefined
       ? consumeMinimapWarmup(raster.worldSeed, displaySize, windowHalf, viewRadius, spawnCellX, spawnCellZ)
       : warm;
-    // ★ 优先吃"上一个小地图实例"的探索记忆（同存档跨天/跨模式不销毁）
-    const pm = Minimap.persistMask;
-    if (pm && pm.seed === raster.worldSeed) {
-      this.explored = pm.mask.clone();
-      this.warmed = true;
-      return;
-    }
-    if (w) this.adoptWarm(w);
+    // ★ 单一恢复路径（重构）：① 持久化探索 ② 页内上一个实例的探索 ③ 预热盘 —— 全部**合并**
+    if (initialExplored) this.explored = ExploredMask.fromState(initialExplored);
     else {
-      // ★ 冷路径也恢复持久化探索记忆（2026-09-19）：已探索区域一直保留
-      const st = loadWorldState(raster.worldSeed)?.explored;
+      const st = loadWorldState(raster.worldSeed)?.explored;   // 兜底（未注入时自取）
       if (st) this.explored = ExploredMask.fromState(st);
     }
+    const pm = Minimap.persistMask;
+    if (pm && pm.seed === raster.worldSeed) {
+      mergeExploredMask(this.explored, pm.mask.exportState());   // 页内更新（可能比磁盘新）
+      this.warmed = true;
+    }
+    if (w) this.adoptWarm(w);
   }
 
   /** ★ 吃下预加载数据：底图即刻上屏 + 探索记忆/边带索引就位 + 首次 update 直接跳过 */
   private adoptWarm(w: MinimapWarmData): void {
     const ds = this.displaySize;
     if (w.size !== ds) return;
-    this.explored = w.mask;
-    // ★ 预热盘可能是"进入世界前"的旧快照 → 用持久化探索记忆补上后续进度
-    const persisted = loadWorldState(this.raster.worldSeed)?.explored;
-    if (persisted) mergeExploredMask(this.explored, persisted);
+    // ★ 预热盘只补"底图 + 边带 + 出生盘"，探索记忆一律**合并**（绝不覆盖已恢复的进度）
+    mergeExploredMask(this.explored, w.mask.exportState());
     const img = this.baseCtx.createImageData(ds, ds);
     img.data.set(w.baseImg);
     this.baseImg = img;

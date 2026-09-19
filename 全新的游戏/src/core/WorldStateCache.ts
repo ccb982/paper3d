@@ -1,17 +1,21 @@
 // ============================================================
-// WorldStateCache —— 世界状态持久化（2026-09-19）
+// WorldStateCache —— 世界 / 地图持久化（v2，2026-09-19 彻底重构）
 // ============================================================
-// 目的（用户定调）：**同一个种子不每局重建**——把"玩家造成的世界差异"缓存下来，
-//   重进同一天（刷新/回基地再出击/重开页面）时恢复，而不是从零重建。
-// 缓存内容：
-//   · 地形破坏（挖坑层数 levels；按 chunk 存）——★ 坑洞不重建
-//   · 玩家/敌人建的城墙与墙
-//   · 召唤友军（祖宗 / 无人机；出击槽友军由配装自然重建，不入缓存）
-//   · ★ 小地图已探索记忆（跨天一直保留；每天只换出生点）
-// ★ 2026-09-19 二次定调：**植被不入缓存**（每天重建 → 资源可恢复）。
-// 存储：独立 localStorage 键（不塞 Session JSON，避免存档膨胀）：
-//   `arknights_rogue_world_<seed>`（★ 2026-09-19 持久世界：地图不换天 → 键去掉 day）
-// 清理：只保留最近 MAX_ENTRIES 份（LRU）；删档时 clearWorldStates()。
+// 设计（用户定调）：**每个存档一张持久地图**；每天随机出生点；植被每天重建；
+//   其余不重建（坑洞 / 地形记录 / 已探索 / 地图标记 / 墙 / 召唤友军）。
+//
+// 单一记录（按主种子）：`arknights_rogue_world_<seed>`
+//   v2 字段：
+//     · levels      挖坑层数（chunkKey → 层数数组；b64）
+//     · mapRecords  地形记录（chunkKey → blockTypes；大地图回放用；b64）
+//     · explored    小地图已探索记忆（稠密位图 + 稀疏格；b64）
+//     · markers     玩家地图标记（x/z/label/color）
+//     · walls       城墙 / 墙
+//     · allies      召唤友军（祖宗 / 无人机；出击槽友军不入缓存）
+//
+// 写入时机：WorldMode exit / beforeunload / 周期自动保存（15s）
+// 清理：LRU 保留最近 MAX_ENTRIES 份；删档 clearWorldStates()
+// 失败静默：缓存不是关键路径（容量/隐私模式等都不应影响游戏）
 // ============================================================
 
 import type { ExploredMaskState } from '../services/map/ExploredMask';
@@ -35,24 +39,36 @@ export interface AllyRec {
   stationaryBaseY?: number;
 }
 
+/** 地图标记记录 */
+export interface MarkerRec {
+  x: number; z: number;
+  label: string;
+  color: string;
+}
+
 export interface WorldStateData {
   seed: number;
   /** 挖坑层数（chunkKey → 层数数组） */
   levels: [number, Uint8Array][];
+  /** ★ 地形记录（chunkKey → blockTypes；大地图回放） */
+  mapRecords: [number, Uint8Array][];
   walls: WallRec[];
   allies: AllyRec[];
   /** ★ 小地图已探索记忆（持久；每天只换出生点） */
   explored?: ExploredMaskState | null;
+  /** ★ 玩家地图标记（跨模式/跨天保留） */
+  markers: MarkerRec[];
 }
 
 interface WorldStateRec {
-  v: 1;
+  v: 2;
   seed: number;
   savedAt: number;
   levels: [number, string][];
+  mapRecords: [number, string][];
   walls: WallRec[];
   allies: AllyRec[];
-  /** 探索记忆：{x0,z0,w,h,count,bits(base64),sparse:number[]} */
+  markers: MarkerRec[];
   explored?: {
     x0: number; z0: number; w: number; h: number;
     count: number; bits: string; sparse: number[];
@@ -80,41 +96,64 @@ function b64ToBytes(s: string): Uint8Array {
   return out;
 }
 
-/** 保存世界状态（编码 levels 为 base64；失败静默——缓存不是关键路径） */
+/** 保存世界状态（v2）。★ 容量降级链（2026-09-19）：完整 → 丢地形记录 → 丢探索位图 →
+ *  最小集（坑洞/墙/友军/标记）。任何一级成功即返回；全失败才告警（缓存非关键路径）。 */
 export function saveWorldState(data: WorldStateData): void {
-  try {
-    const ex = data.explored;
-    const rec: WorldStateRec = {
-      v: 1,
+  const build = (withRecords: boolean, withExplored: boolean): WorldStateRec => {
+    const ex = withExplored ? data.explored : null;
+    return {
+      v: 2,
       seed: data.seed,
       savedAt: Date.now(),
       levels: data.levels.map(([k, lv]) => [k, bytesToB64(lv)]),
+      mapRecords: withRecords ? data.mapRecords.map(([k, bt]) => [k, bytesToB64(bt)]) : [],
       walls: data.walls,
       allies: data.allies,
+      markers: data.markers,
       explored: ex ? {
         x0: ex.x0, z0: ex.z0, w: ex.w, h: ex.h,
         count: ex.count, bits: bytesToB64(ex.bits), sparse: ex.sparse,
       } : null,
     };
-    localStorage.setItem(keyOf(data.seed), JSON.stringify(rec));
-  } catch (e) {
-    console.warn('[WorldStateCache] 保存失败（忽略）:', e);
+  };
+  const attempts: [boolean, boolean][] = [[true, true], [false, true], [false, false]];
+  for (const [recs, exp] of attempts) {
+    try {
+      const rec = build(recs, exp);
+      const json = JSON.stringify(rec);
+      localStorage.setItem(keyOf(data.seed), json);
+      console.info(
+        `[世界缓存] 保存 seed=${data.seed} 坑洞=${data.levels.length} 地形记录=${recs ? data.mapRecords.length : 0}`
+        + ` 探索=${exp && data.explored ? data.explored.count : 0} 标记=${data.markers.length} 墙=${data.walls.length}`
+        + ` 体积=${(json.length / 1024).toFixed(0)}KB`,
+      );
+      return;
+    } catch (e) {
+      console.warn('[世界缓存] 保存降级重试（丢记录/探索）:', e);
+    }
   }
+  console.warn('[世界缓存] 保存失败（已降级到最小集仍失败）');
 }
 
-/** 读取世界状态（同 seed+day）；无/损坏 → null */
+/** 读取世界状态（同 seed）；无/损坏 → null。v1 旧记录只迁移 levels。 */
 export function loadWorldState(seed: number): WorldStateData | null {
   try {
     const raw = localStorage.getItem(keyOf(seed));
     if (!raw) return null;
-    const rec = JSON.parse(raw) as WorldStateRec;
-    if (rec.v !== 1 || rec.seed !== seed) return null;
+    const rec = JSON.parse(raw) as WorldStateRec | (Partial<WorldStateRec> & { v: 1 });
+    if (!rec || rec.seed !== seed) return null;
     const ex = rec.explored;
+    console.info(
+      `[世界缓存] 读取 seed=${seed} 坑洞=${(rec.levels ?? []).length} 地形记录=${(rec.mapRecords ?? []).length}`
+      + ` 探索=${ex ? ex.count : 0} 标记=${(rec.markers ?? []).length}`,
+    );
     return {
       seed: rec.seed,
       levels: (rec.levels ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
+      mapRecords: (rec.mapRecords ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
       walls: rec.walls ?? [],
       allies: rec.allies ?? [],
+      markers: rec.markers ?? [],
       explored: ex ? {
         x0: ex.x0, z0: ex.z0, w: ex.w, h: ex.h,
         count: ex.count, bits: b64ToBytes(ex.bits), sparse: ex.sparse ?? [],

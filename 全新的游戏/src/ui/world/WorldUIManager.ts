@@ -113,6 +113,8 @@ export class WorldUIManager extends BaseInteractionUI {
     private raster: RasterMap,
     /** ★ 当前出生点（世界持久化后每天随机；小地图预热中心校验用） */
     spawn?: { x: number; z: number },
+    /** ★ 持久化探索记忆（2026-09-19 重构：小地图单一恢复路径） */
+    initialExplored?: import('../../services/map/ExploredMask').ExploredMaskState | null,
   ) {
     super();
     // ★ 独立背包模块：地图模式只暴露玩家背包 + 飞船仓库（隐藏基地层）
@@ -143,6 +145,7 @@ export class WorldUIManager extends BaseInteractionUI {
       raster, undefined, undefined, undefined, undefined, undefined,
       spawn ? Math.floor(spawn.x) : undefined,
       spawn ? Math.floor(spawn.z) : undefined,
+      initialExplored ?? null,
     );
     this.hud = new PlayerHud();
     this.crosshair = new Crosshair();
@@ -501,6 +504,16 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 小地图探索记忆（世界状态持久化用） */
   getMinimapExploredState(): import('../../services/map/ExploredMask').ExploredMaskState | null {
     return this.minimap?.exportExploredState() ?? null;
+  }
+
+  /** ★ 地图标记持久化面（世界状态持久化用） */
+  getMapMarkersState(): import('../../core/WorldStateCache').MarkerRec[] {
+    return this.mapMarkers.exportState();
+  }
+
+  /** ★ 恢复地图标记（进入世界时调用；替代"每天清空"） */
+  loadMapMarkersState(list: import('../../core/WorldStateCache').MarkerRec[]): void {
+    this.mapMarkers.importState(list);
   }
 
   setMinimapVisible(v: boolean): void {

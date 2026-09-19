@@ -20,7 +20,7 @@
 //   size = 已标记格数（与旧实现 visited.size 同义）。
 // ============================================================
 
-import { cellKeyOf } from './RasterMap';
+import { cellKeyOf, cellKeyToXZ } from './RasterMap';
 
 /** ★ 持久化状态（2026-09-19）：稠密位图 + 稀疏格键；WorldStateCache 存 */
 export interface ExploredMaskState {
@@ -39,7 +39,8 @@ export function mergeExploredMask(target: ExploredMask, st: ExploredMaskState): 
     }
   }
   for (const k of sparse) {
-    target.mark((k % 8192) - 4096, Math.floor(k / 8192) - 4096);
+    const c = cellKeyToXZ(k);
+    target.mark(c.x, c.z);
   }
 }
 

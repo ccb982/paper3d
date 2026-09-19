@@ -552,6 +552,8 @@ export class WorldMode implements IGameMode {
   private pendingWorldState: WorldStateData | null = null;
   /** ★ beforeunload 存档回调（刷新页面也保住世界状态） */
   private worldStateUnload: (() => void) | null = null;
+  /** ★ 周期自动保存计时（15s；防崩溃/关页丢进度） */
+  private worldSaveAccum = 0;
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
@@ -618,9 +620,10 @@ export class WorldMode implements IGameMode {
     // ★ 世界状态缓存（同种子不重建）：把地形破坏/植被已采灌进 RasterMap（chunk 生成前）
     {
       const wst = loadWorldState(ctx.session.meta.seed);
+      if (!wst) console.info(`[世界缓存] seed=${ctx.session.meta.seed} 无记录（首次进入或已清档）`);
       if (wst) {
-        // ★ 只恢复坑洞（植被不入缓存：每天重建，资源可恢复）
-        this.raster.importPersistState({ levels: wst.levels });
+        // ★ 恢复坑洞 + 地形记录（植被不入缓存：每天重建，资源可恢复）
+        this.raster.importPersistState({ levels: wst.levels, mapRecords: wst.mapRecords });
         this.pendingWorldState = wst;
       }
     }
@@ -887,6 +890,7 @@ export class WorldMode implements IGameMode {
     // ---- ★ UI 层（世界专属） ----
     this.worldUIManager = new WorldUIManager(
       ctx.session, this.itemManager, this.interactionManager, this.raster, spawn,
+      this.pendingWorldState?.explored ?? null,
     );
     // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
@@ -1540,6 +1544,14 @@ export class WorldMode implements IGameMode {
     this.updateDeployPreview();
     // ★ 城墙光环：范围内墙体持续修复 + 上限（跟随玩家生命）+ 防御
     if (this.phase === 'explore') updateWallAuras(queryFinalStats(this.player).maxHp, dt);
+    // ★ 周期自动保存（15s 一拍；世界状态缓存）
+    if (this.phase === 'explore') {
+      this.worldSaveAccum += dt;
+      if (this.worldSaveAccum >= 15) {
+        this.worldSaveAccum = 0;
+        this.saveWorldStateNow();
+      }
+    }
     // ★ 环境音效：脚步 / 拨草（入水·涉水音在 WaterFx 内，只对玩家那次生效）
     if (this.phase === 'explore') this.updateAmbientSfx(dt);
     for (const e of this.enemies) this.waterFx.entry(e, dt, false);
@@ -2169,11 +2181,13 @@ export class WorldMode implements IGameMode {
       }
       saveWorldState({
         seed: this.session.meta.seed,
-        levels: rs.levels,          // ★ 只存坑洞；植被每天重建（不入缓存）
+        levels: rs.levels,              // ★ 只存坑洞；植被每天重建（不入缓存）
+        mapRecords: rs.mapRecords,      // ★ 地形记录（大地图回放）
         walls: snapshotCovers(),
         allies,
-        // ★ 小地图已探索记忆（跨天一直保留）
+        // ★ 小地图已探索记忆 + 地图标记（跨模式/跨天一直保留）
         explored: this.worldUIManager?.getMinimapExploredState() ?? null,
+        markers: this.worldUIManager?.getMapMarkersState() ?? [],
       });
       pruneWorldStates();
     } catch (e) {
@@ -2184,6 +2198,8 @@ export class WorldMode implements IGameMode {
   /** ★ 世界状态恢复：墙（CoverEntity）+ 召唤友军（祖宗/无人机） */
   private restoreWorldState(data: WorldStateData): void {
     if (!this.scene) return;
+    // ★ 地图标记恢复（跨模式/跨天保留；不再每天清空）
+    if (data.markers.length > 0) this.worldUIManager?.loadMapMarkersState(data.markers);
     for (const w of data.walls) {
       const cover = new CoverEntity(this.entities, this.scene, {
         x: w.x, y: w.y, z: w.z,

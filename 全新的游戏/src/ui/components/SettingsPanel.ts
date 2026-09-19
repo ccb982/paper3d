@@ -17,6 +17,7 @@ import { createButton } from './Button';
 import { createBackButton } from './BackButton';
 import { SaveSystem } from '../../core/SaveSystem';
 import { clearWorldStates } from '../../core/WorldStateCache';
+import { Minimap } from '../../services/ui/Minimap';
 
 /** 白色齿轮图标（Material settings，单 path 双子路径 → 自带中心圆孔）
  *  ★ 尺寸走 100%（由按钮 padding 决定），改按钮大小不用动图标 */
@@ -194,7 +195,8 @@ export function createSettingsUI(deps: SettingsDeps): SettingsUi {
         else localStorage.removeItem('arknights_rogue_next_seed');
       } catch { /* 忽略 */ }
       SaveSystem.clear();
-      clearWorldStates();   // ★ 世界状态缓存一并清空（2026-09-19）
+      clearWorldStates();        // ★ 世界状态缓存一并清空（2026-09-19）
+      Minimap.clearPersistMask(); // ★ 页内探索缓存（仅删档清）
       console.warn('[设置] 手动删档：存档与世界缓存已清除，重载后将创建新档');
       location.reload();
     },

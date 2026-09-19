@@ -51,6 +51,19 @@ export class MapMarkers {
     return m;
   }
 
+  /** ★ 导出持久化面（2026-09-19：地图标记跨模式/跨天保留） */
+  exportState(): import('../../core/WorldStateCache').MarkerRec[] {
+    return this.list.map((m) => ({ x: m.x, z: m.z, label: m.label, color: m.color }));
+  }
+
+  /** ★ 由持久化状态恢复（清空现有列表；nextId 从已有标签续号，避免重号） */
+  importState(list: import('../../core/WorldStateCache').MarkerRec[]): void {
+    this.list = list.map((r, i) => ({
+      id: i + 1, x: r.x, z: r.z, label: r.label, color: r.color,
+    }));
+    this.nextId = this.list.length + 1;
+  }
+
   /** 删除离 (x,z) 最近、且在 r 内的标记；返回是否删掉了 */
   removeNear(x: number, z: number, r: number): boolean {
     let best = -1;
