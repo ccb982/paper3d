@@ -39,6 +39,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private mapPanel: MapPanel | null = null;
   /** ★ 玩家标记点（大地图放置；小地图 + 场景方位提示共用同一份实例） */
   private mapMarkers = new MapMarkers();
+  /** ★ 地图数据变更回调（标记增删 → 世界状态立即落盘） */
+  onMapChanged: (() => void) | null = null;
   /** ★ 场景方位提示（右下角：舰船 / 标记点的方向 + 距离） */
   private navHints = new NavHints();
   private hud: PlayerHud;
@@ -141,6 +143,7 @@ export class WorldUIManager extends BaseInteractionUI {
     // ★ 模态面板栈挂载到 body（新 PanelManager 拥有遮罩层）
     this.panels.mount(document.body);
 
+    this.mapMarkers.onChange = () => this.onMapChanged?.();
     this.minimap = new Minimap(
       raster, undefined, undefined, undefined, undefined, undefined,
       spawn ? Math.floor(spawn.x) : undefined,

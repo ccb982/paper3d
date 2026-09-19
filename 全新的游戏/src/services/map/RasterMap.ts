@@ -274,6 +274,7 @@ export class RasterMap {
       const cd = this.chunks.get(k);
       if (cd) cd.levels = copy;   // 已加载块同步（正常在生成前调用，此处兜底）
     }
+    if (st.mapRecords) for (const [k, bt] of st.mapRecords) this.mapRecords.set(k, new Uint8Array(bt)); // ★ 地形记录回放（2026-09-19 修复：原实现漏恢复 → 已探索区全画 flat 棕）
     if (st.harvested) for (const [k, arr] of st.harvested) this.harvestedStore.set(k, new Set(arr));
     if (st.harvestCounts) for (const [k, m] of st.harvestCounts) this.propHarvestCounts.set(k, new Map(m));
   }

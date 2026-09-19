@@ -892,6 +892,8 @@ export class WorldMode implements IGameMode {
       ctx.session, this.itemManager, this.interactionManager, this.raster, spawn,
       this.pendingWorldState?.explored ?? null,
     );
+    // ★ 地图标记增删 → 世界状态立即落盘（永久化存储：不放 15s 窗口里赌）
+    this.worldUIManager.onMapChanged = () => this.saveWorldStateNow();
     // ★ 属性面板实时数据源（含限时 buff/遗物变化的最终属性）
     this.worldUIManager.setPlayerStatsProvider(() => queryFinalStats(this.player));
     // ★ 共享图标服务（背包/加工台同一份）
@@ -1544,10 +1546,10 @@ export class WorldMode implements IGameMode {
     this.updateDeployPreview();
     // ★ 城墙光环：范围内墙体持续修复 + 上限（跟随玩家生命）+ 防御
     if (this.phase === 'explore') updateWallAuras(queryFinalStats(this.player).maxHp, dt);
-    // ★ 周期自动保存（15s 一拍；世界状态缓存）
+    // ★ 周期自动保存（8s 一拍；世界状态缓存：坑洞/地形记录/探索/标记/墙/友军）
     if (this.phase === 'explore') {
       this.worldSaveAccum += dt;
-      if (this.worldSaveAccum >= 15) {
+      if (this.worldSaveAccum >= 8) {
         this.worldSaveAccum = 0;
         this.saveWorldStateNow();
       }

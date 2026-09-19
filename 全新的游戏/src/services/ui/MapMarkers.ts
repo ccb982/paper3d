@@ -33,6 +33,8 @@ export class MapMarkers {
   static readonly MAX = 2147483647;
   private list: MapMarker[] = [];
   private nextId = 1;
+  /** ★ 变更回调（2026-09-19：标记增删 → 立即持久化，防"刚放完刷新就丢"） */
+  onChange: (() => void) | null = null;
 
   get items(): readonly MapMarker[] {
     return this.list;
@@ -48,6 +50,7 @@ export class MapMarkers {
     const m: MapMarker = { id: this.nextId, x, z, label: `标记${this.nextId}`, color };
     this.nextId++;
     this.list.push(m);
+    this.onChange?.();
     return m;
   }
 
@@ -79,6 +82,7 @@ export class MapMarkers {
     }
     if (best < 0) return false;
     this.list.splice(best, 1);
+    this.onChange?.();
     return true;
   }
 
