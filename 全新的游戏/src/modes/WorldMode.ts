@@ -43,7 +43,7 @@ import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
-import { buildEnemyCover } from './world/EnemyCoverBuild';
+import { wireCommanderPorts } from './world/CommanderWiring';
 import { ExplosionFx } from '../services/fx/ExplosionFx';
 import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
@@ -876,8 +876,8 @@ export class WorldMode implements IGameMode {
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
-    // ★ S1 工程：工程兵造掩体端口（无海报；正面朝来向）+ S0 勘察
-    this.swarm.commander.buildCover = (x, z, v) => buildEnemyCover(this.entities, this.scene!, x, this.deploySurfaceAt(x, z, 0), z, v, this.swarm.commander.defensePlan);
+    // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）+ S0 勘察
+    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0) });
     this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
@@ -1529,7 +1529,8 @@ export class WorldMode implements IGameMode {
         //   分母 quota 冻结 → "打满"由刷怪负责，UI 不做任何补偿。
         quotaLeft: remainingQuota(this.session),
       }, this.directorHooks);
-      if (order) this.spawner.spawnDirectorWave(order);
+      // ★ 兵力创建全权交给蜂群架构（指挥器）：开局不预置刷兵，给玩家发育机会
+      void order;
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
       this.spawner.scanAndSpawnWaves(pp.x, pp.y, 4);
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，

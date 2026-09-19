@@ -21,7 +21,7 @@ export interface DefensePlan {
   coverSlots: { x: number; z: number; ring: 0 | 1 | 2 }[];
   /** 隘口（盾兵守点；v1 空，后续 portal 分析） */
   chokepoints: { x: number; z: number }[];
-  /** 战壕线（后续挖坑实现；先出线位，v1 空） */
+  /** 战壕线（每环一条弧；每 4m 一个战壕块中心，3 块 ≈ 12m 宽工事） */
   trenchLines: { x: number; z: number }[][];
 }
 
@@ -99,12 +99,26 @@ export function analyzeLandingTerrain(raster: RasterMap, cx: number, cz: number,
     }
   }
 
+  // ---- ④ 战壕线：每环一条弧（来向 ±60°，7.5° 步进 ≈ 每 4m 一块）----
+  const trenchLines: { x: number; z: number }[][] = [];
+  for (const r of rings) {
+    const line: { x: number; z: number }[] = [];
+    for (let k = -8; k <= 8; k++) {
+      const a = baseA + (k * 7.5 * Math.PI) / 180;
+      const x = cx + Math.cos(a) * r;
+      const z = cz + Math.sin(a) * r;
+      if (!walkable(raster, x, z).ok) continue;
+      line.push({ x, z });
+    }
+    trenchLines.push(line);
+  }
+
   return {
     cx, cz,
     approachX: bestDirX, approachZ: bestDirZ,
     highGround,
     coverSlots,
     chokepoints: [],
-    trenchLines: [],
+    trenchLines,
   };
 }

@@ -851,6 +851,8 @@ export class WorldSpawner implements SwarmTierPort {
     x: number, _y: number, z: number,
     intent: number = INTENT_NONE,
     assaultIndex = -1,
+    /** ★ 蜂群架构兵力创建：跳过每日配额（仍走落点闸门/MAX_ALIVE/记账） */
+    ignoreQuota = false,
   ): boolean {
     if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
     const mobIndex = this.deps.mobDefs.indexOf(def);
@@ -879,7 +881,7 @@ export class WorldSpawner implements SwarmTierPort {
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
       // ★ 每日配额闸门（2026-09-16）：当天敌人总数有限 → 生成名额 = 配额 − 已击杀 − 场上存活。
       //   所有刷怪路径（导演波次/扫描波次/压测）都经 spawnOne，此处是唯一收口点。
-      if (!this.quotaAllows()) break;
+      if (!ignoreQuota && !this.quotaAllows()) break;
       // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
       //   ★ 空中层（2026-09-18）：飞行兵**豁免**这些闸门 —— 它悬在空中，落点是不是坑/水无所谓
       const air = def.isAir === true;

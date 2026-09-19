@@ -2577,6 +2577,16 @@ const key2 = chunkKeyOf(cx, cz);
       rec.cells.push({ lx: c.lx, lz: c.lz });
       rec.dirty.add(worldBlockKey(c.cx * BLOCKS_PER_SIDE + (c.lx >> 2), c.cz * BLOCKS_PER_SIDE + (c.lz >> 2)));
     }
+    this.applyDigGroups(byChunk);
+    digPerf.hits++;
+  }
+
+  /** ★ 统一挖坑落地：逐 chunk digCells → 帧间合并重建 + 跨块联动（playBulletImpact / digRect 共用） */
+  private applyDigGroups(byChunk: Map<number, {
+    cx: number; cz: number;
+    cells: { lx: number; lz: number }[];
+    dirty: Set<number>;
+  }>): void {
     for (const [, rec] of byChunk) {
       const _t0 = performance.now();
       const changed = this.raster.digCells(rec.cx, rec.cz, rec.cells);
@@ -2603,8 +2613,39 @@ const key2 = chunkKeyOf(cx, cz);
       this.markNeighborsForDug(rec);
       digPerf.neighbors += performance.now() - _tn;
     }
-    digPerf.hits++;
   }
+
+  /** ★ 敌人工程兵挖战壕（2026-09-19）：矩形区域（halfW × halfL，1m 格）逐格 +1 层（慢挖，一次一层） */
+  digRect(x: number, z: number, halfW: number, halfL: number): boolean {
+    if (this.boss4D) return false;
+    const byChunk = new Map<number, {
+      cx: number; cz: number;
+      cells: { lx: number; lz: number }[];
+      dirty: Set<number>;
+    }>();
+    const x0 = Math.floor(x - halfW), x1 = Math.floor(x + halfW);
+    const z0 = Math.floor(z - halfL), z1 = Math.floor(z + halfL);
+    for (let wx = x0; wx <= x1; wx++) {
+      for (let wz = z0; wz <= z1; wz++) {
+        const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
+        const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
+        const key = chunkKeyOf(cx, cz);
+        let rec = byChunk.get(key);
+        if (!rec) {
+          rec = { cx, cz, cells: [], dirty: new Set() };
+          byChunk.set(key, rec);
+        }
+        rec.cells.push({ lx, lz });
+        rec.dirty.add(worldBlockKey(cx * BLOCKS_PER_SIDE + (lx >> 2), cz * BLOCKS_PER_SIDE + (lz >> 2)));
+      }
+    }
+    if (byChunk.size === 0) return false;
+    this.applyDigGroups(byChunk);
+    digPerf.hits++;
+    return true;
+  }
+
+
 
   /**
    * ★ 跨 chunk 破坏联动（2026-09-10）：本 chunk 的挖动会改变邻 chunk 的包络场

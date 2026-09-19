@@ -12,7 +12,7 @@ import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
 import type { SquadRating } from './SquadTable';
-import type { TacticalOrder } from '../../entity/SwarmUnit';
+import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
 /** ★ 引擎侧信息面（《蜂群架构.md》§16.6）：战术决策的输入 */
 export interface BattalionView {
@@ -31,10 +31,20 @@ export class SwarmCommander {
   private plan: DefensePlan | null = null;
   /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)） */
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
+  /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
+  digTrench: ((x: number, z: number) => void) | null = null;
+  /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**） */
+  spawnMob: ((x: number, z: number, role: UnitRole) => void) | null = null;
+  /** ★ 大队：一队 30 怪；一局多个 */
+  private battalionCount = 0;
+  private reinforceAccum = 0;
+  private static readonly BATTALION_SIZE = 30;
+  private static readonly BATTALION_MAX = 4;
+  private static readonly REINFORCE_S = 180;
   /** ★ 战术阶段（S0 勘察 → S1 工程 → S2 防线就绪） */
   stage: 'S0' | 'S1' | 'S2' = 'S0';
-  /** 待建掩体位（排序：外环 → 中环 → 内环；50m 开外先起线） */
-  private buildQueue: DefensePlan['coverSlots'] = [];
+  /** ★ 待建工事块（逐步拼装：掩体每块 4m，战壕每块 4m；外环 → 内环） */
+  private buildPieces: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 }[] = [];
   private readonly builtSlots = new Set<string>();
   private engAccum = 0;
   private buildCd = 0;
@@ -66,10 +76,46 @@ export class SwarmCommander {
     if (!raster) return null;
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
     // ★ 建造顺序：外环（≈56m）50m 开外）→ 中环 → 内环（≈24m ≈ 远程覆盖线）
-    this.buildQueue = [...this.plan.coverSlots].sort((a, b) => b.ring - a.ring);
+    //   每环：**掩体先行**（每个掩位 3 块，沿切线 ±4m → 12m 宽）→ **战壕跟进**（该环弧上每 4m 一块）
+    const ringOrder: (0 | 1 | 2)[] = [2, 1, 0];
+    this.buildPieces = [];
+    for (const r of ringOrder) {
+      const tx = -this.plan.approachZ, tz = this.plan.approachX;   // 环的切线方向
+      for (const slot of this.plan.coverSlots.filter((s) => s.ring === r)) {
+        for (const off of [-4, 0, 4]) {
+          this.buildPieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r });
+        }
+      }
+      const line = this.plan.trenchLines[r] ?? [];
+      for (const p of line) this.buildPieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
+    }
     this.builtSlots.clear();
     this.stage = 'S1';
+    // ★ 兵力创建（全权在本层）：首批驻防大队（S0）
+    this.spawnBattalion();
     return this.plan;
+  }
+
+  /** ★ 生成一个大队（30 怪；按角色配比 · 沿外环弧部署；后续大队更远列阵） */
+  spawnBattalion(): boolean {
+    const plan = this.plan;
+    if (!plan || !this.spawnMob || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
+    this.battalionCount++;
+    // 配比（30）：盾 8 / 突击 10 / 远程 6 / 后勤 4 / 飞行 2
+    const comp: [UnitRole, number][] = [
+      ['shield', 8], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 2],
+    ];
+    const baseA = Math.atan2(plan.approachZ, plan.approachX);
+    const ringR = 56 + (this.battalionCount - 1) * 8;
+    let k = 0;
+    for (const [role, n] of comp) {
+      for (let i = 0; i < n; i++) {
+        const a = baseA + (-1 + (2 * k) / SwarmCommander.BATTALION_SIZE) * (Math.PI / 3);   // 来向 ±60°
+        this.spawnMob(plan.cx + Math.cos(a) * ringR, plan.cz + Math.sin(a) * ringR, role);
+        k++;
+      }
+    }
+    return true;
   }
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
@@ -103,6 +149,14 @@ export class SwarmCommander {
       }
     }
     this.engineeringTick(dt, playerX, playerZ);
+    // ★ 增援：战术启动后每 REINFORCE_S 再来一个大队（上限 BATTALION_MAX）
+    if (this.plan && this.stage !== 'S0') {
+      this.reinforceAccum += dt;
+      if (this.reinforceAccum >= SwarmCommander.REINFORCE_S) {
+        this.reinforceAccum = 0;
+        this.spawnBattalion();
+      }
+    }
   }
 
   /** ★ S1 工程（2s 决策拍）：掩护队先行 → 工程兵小步跟进 →
@@ -118,7 +172,7 @@ export class SwarmCommander {
     this.engAccum = 0;
     // 玩家跌进 30m：暂停施工（转防御；队长自主交战接管）
     if (Math.hypot(playerX - this.plan.cx, playerZ - this.plan.cz) < 30) return;
-    const slot = this.buildQueue.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
+    const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
     if (!slot) { this.stage = 'S2'; return; }
     const plan = this.plan;
     // ① 掩护队（盾/突击，最多 2 队）先行到防线前方
@@ -132,7 +186,7 @@ export class SwarmCommander {
     }
     // ② 工程兵小步跟进（到待建位；holdFire 行军）
     for (let i = 0; i < builders.length; i++) {
-      const t = this.buildQueue.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? slot;
+      const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? slot;
       this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
     }
     // ③ 远程队：**火力支援**（protect 施工点；站射程环对接近威胁输出）
@@ -152,7 +206,8 @@ export class SwarmCommander {
         seq: 0,
       }, 6);
     }
-    // ⑤ 施工：工程兵到达待建位 ≤4m → 生成掩体（带施工插值）
+    // ⑤ 施工（**逐步拼装**）：工程兵到达待建块 ≤4m →
+    //   掩体块（每块 4m，每 8s 一块）/ 战壕块（每块 4×4m、1 层，每 10s 一块）
     if (this.buildCd <= 0) {
       for (const s of builders) {
         let cx = 0, cz = 0, n = 0;
@@ -160,9 +215,14 @@ export class SwarmCommander {
         if (n === 0) continue;
         cx /= n; cz /= n;
         if (Math.hypot(cx - slot.x, cz - slot.z) <= 4) {
-          this.buildCover(slot.x, slot.z, 'cover');
+          if (slot.kind === 'cover') {
+            this.buildCover(slot.x, slot.z, 'cover');
+            this.buildCd = 8;            // 慢工：掩体 8s/块（3 块 = 12m ≈ 24s）
+          } else {
+            this.digTrench?.(slot.x, slot.z);
+            this.buildCd = 10;           // 慢挖：战壕 10s/块（3 块 = 12m ≈ 30s）
+          }
           this.builtSlots.add(`${slot.x},${slot.z}`);
-          this.buildCd = 3;
           break;
         }
       }
@@ -174,7 +234,9 @@ export class SwarmCommander {
     this.mission = null;
     this.plan = null;
     this.stage = 'S0';
-    this.buildQueue = [];
+    this.battalionCount = 0;
+    this.reinforceAccum = 0;
+    this.buildPieces = [];
     this.builtSlots.clear();
     this.engAccum = 0;
     this.buildCd = 0;
