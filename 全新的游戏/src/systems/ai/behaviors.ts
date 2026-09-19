@@ -154,6 +154,36 @@ registerBehavior('meleeSwing', (entity, ctx, params) => {
  *       固定值对小兵是头顶、对大个子是膝盖。
  *   ★ 阵营给 'enemy'：模式层据此把弹道路由到"敌方子弹池"（程序化箭矢视觉）。
  */
+/**
+ * ★ 自爆（爆炸飞行怪）2026-09-19：进入 attack → 引信（fuse）→
+ *   范围爆炸（aoe）+ **自身死亡**（走统一 onDeath → 击杀统计/掉落管线）。
+ *   参数：radius 爆炸半径 / damage 伤害 / fuse 引信时长（秒）
+ */
+registerBehavior('selfDestruct', (entity, ctx, params) => {
+  if (entity.fireHold) return;   // ★ 执行层：本段禁火
+  const radius = pnum(params, 'radius', 3);
+  const damage = pnum(params, 'damage', 26);
+  const fuse = pnum(params, 'fuse', 0.25);
+  if (entity.aiAttackTimer <= 0 && !entity.aiSwingDone) {
+    entity.aiAttackTimer = fuse;
+  }
+  entity.aiAttackTimer -= ctx.dt;
+  if (entity.aiAttackTimer <= 0 && !entity.aiSwingDone) {
+    entity.aiSwingDone = true;
+    ctx.attack({
+      type: 'aoe',
+      source: entity,
+      x: entity.position.x,
+      y: entity.position.y + 0.8,
+      z: entity.position.z,
+      radius,
+      damage,
+      camp: 'enemy',
+    });
+    entity.onDeath(null);   // 自爆 = 自身死亡
+  }
+});
+
 registerBehavior('rangedShot', (entity, ctx, params) => {
   const duration = pnum(params, 'duration', 0.8);
   const damage = pnum(params, 'damage', 8);

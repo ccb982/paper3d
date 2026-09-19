@@ -182,6 +182,8 @@ export interface SwarmUnit {
   isLeader: boolean;
   /** ★ 是否代理载体（carrier==='agent' 派生位；实体恒 false） */
   readonly isAgent: boolean;
+  /** ★ 自爆标签（2026-09-19）：攻击 = 范围爆炸 + 自身死亡（爆炸飞行怪） */
+  readonly suicide: boolean;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId: number;
   /** 小编队（-1 = 散兵/未编队） */
@@ -230,6 +232,8 @@ export interface SwarmSnapshot {
   /** 休眠 AI 状态（降格抽干 / 升格回灌 → 不失忆、不重置巡逻） */
   aiStateIdx?: number;
   aiTimer?: number;
+  /** ★ 自爆标签（跨 LOD） */
+  suicide?: boolean;
   // ---- ★ 步骤 9b：命令/指令（跨 LOD 不失令；编码见 ORDER_CODES/DIRECTIVE_CODES/FIRE_*） ----
   orderKind?: number;
   orderTargetX?: number;

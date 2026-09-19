@@ -70,6 +70,8 @@ export interface AgentSpawnData {
   role?: UnitRole;
   attackType?: UnitAttackType;
   isLeader?: boolean;
+  /** ★ 自爆标签（跨 LOD） */
+  suicide?: boolean;
   /** 移动目标（三个都给了才视为有效） */
   moveTargetX?: number;
   moveTargetY?: number;
@@ -215,6 +217,8 @@ export class AgentPool {
   readonly attackType = new Uint8Array(AGENT_CAPACITY);
   /** 本队队长标记（指挥权；dormant 不允许） */
   readonly isLeader = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 自爆标签（0 = 普通；1 = 自爆单位） */
+  readonly suicide = new Uint8Array(AGENT_CAPACITY);
   /** 移动目标（hasMoveTarget=1 时有效；hold 语义） */
   readonly moveTargetX = new Float32Array(AGENT_CAPACITY);
   readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
@@ -302,6 +306,7 @@ export class AgentPool {
     this.role[i] = roleCode(d.role ?? 'grunt');
     this.attackType[i] = attackCode(d.attackType ?? 'melee');
     this.isLeader[i] = d.isLeader ? 1 : 0;
+    this.suicide[i] = d.suicide ? 1 : 0;
     const hasMt = d.moveTargetX !== undefined && d.moveTargetZ !== undefined;
     this.hasMoveTarget[i] = hasMt ? 1 : 0;
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
@@ -382,6 +387,7 @@ export class AgentPool {
     this.role[to] = this.role[from];
     this.attackType[to] = this.attackType[from];
     this.isLeader[to] = this.isLeader[from];
+    this.suicide[to] = this.suicide[from];
     this.moveTargetX[to] = this.moveTargetX[from];
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];
@@ -430,6 +436,7 @@ export class AgentPool {
       role: roleFromCode(this.role[i]),
       attackType: attackFromCode(this.attackType[i]),
       isLeader: this.isLeader[i] === 1,
+      suicide: this.suicide[i] === 1,
       intent: this.intent[i],
       bias: this.bias[i],
       aggro: this.aggro[i],

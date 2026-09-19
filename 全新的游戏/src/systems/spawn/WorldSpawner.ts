@@ -88,6 +88,8 @@ export interface MobDef {
   attackType?: UnitAttackType;
   /** ★ 始终面对相机（缺省 = 自动：素材无「后」帧 → billboard；见 EnemyBase 构造） */
   billboard?: boolean;
+  /** ★ 自爆标签（爆炸飞行怪；基类字段） */
+  suicide?: boolean;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -523,6 +525,7 @@ export class WorldSpawner {
         // ★ 空中层（2026-09-18）：飞行标记随降格带回代理池（否则一降格就落地）
         isAir: def.isAir,
         altitude: def.airAltitude,
+        suicide: def.suicide === true,
         // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
         ...e.drain(),
       });
@@ -686,6 +689,7 @@ export class WorldSpawner {
         bias: this.deps.threat?.biasMul ?? 0.12,
         isAir: air,
         altitude: air ? def.airAltitude : 0,
+        suicide: def.suicide === true,
       });
       if (idx >= 0) placed++;
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
@@ -966,6 +970,8 @@ export class WorldSpawner {
       // ★ 空中层（2026-09-18）：升格后的 L3 实体也悬停（与代理层同一高度口径）
       airborne: def.isAir,
       airAltitude: def.airAltitude,
+      // ★ 自爆标签（基类字段）
+      suicide: def.suicide === true,
       // ★ v2 蜂群预留字段（缺省值 = 行为不变）
       role: def.role,
       attackType: def.attackType,

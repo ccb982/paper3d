@@ -17,6 +17,7 @@
 
 import type { AIConfig } from '../systems/ai/aiconfig';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
+import type { UnitAttackType, UnitRole } from '../entity/SwarmUnit';
 import {
   ROCK_BUG_AI, REUNION_AI, LAOJIE_AI,
   ROCK_GIANT_AI, WAR_CASTER_AI, AMP_CASTER_AI, CROSSBOW_AI,
@@ -27,6 +28,10 @@ import {
 export interface EnemySpec {
   /** ★ 稳定键：日志 / 调试 / 存档迁移用；改中文名不动它 */
   id: string;
+  /** ★ 兵种角色（同质编队/小队属性依据；缺省 grunt） */
+  role?: UnitRole;
+  /** ★ 攻击类型（缺省 melee；远程显式给 ranged） */
+  attackType?: UnitAttackType;
   /** 显示名（击杀播报 / 调试面板） */
   name: string;
   /** `public/characters/enemies/` 下的帧包文件名（含扩展名） */
@@ -62,6 +67,8 @@ export interface EnemySpec {
   /** 空中悬停高度（米，**相对地表**；缺省引擎兜底 `AIR_ALTITUDE_DEFAULT`，见 AgentPool）。
    *  仅 `isAir` 有效。 */
   airAltitude?: number;
+  /** ★ 自爆标签（爆炸飞行怪；基类字段） */
+  suicide?: boolean;
   /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
    *  缺省 = 自动检测：素材**没有「后」帧** → 强制 billboard（否则转身 180° 会露出
    *  背面空白/镜像）；有「后」帧 = 双向贴片（相机侧换帧 + 转身）。 */
@@ -87,6 +94,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'rock_bug', name: '原石虫',
     file: '原石虫，杂兵.ftx3.gz',
+    role: 'assault', attackType: 'melee',
     ai: ROCK_BUG_AI,
     hp: 22, defense: 0, attackPower: 0,
     scale: 1.6, collisionScale: 1.1, pack: 4, weight: 6,
@@ -95,6 +103,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'reunion', name: '整合运动人员',
     file: '整合运动人员，杂兵.ftx3.gz',
+    role: 'shield', attackType: 'melee',
     ai: REUNION_AI,
     hp: 75, defense: 3, attackPower: 2,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 6,
@@ -106,6 +115,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'laojie', name: '牢杰',
     file: '牢杰，杂兵.ftx3.gz',
+    role: 'assault', attackType: 'melee',
     ai: LAOJIE_AI,
     hp: 45, defense: 0, attackPower: 12,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 12,
@@ -118,6 +128,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'sea_monster', name: '海怪',
     file: '海怪，小兵.ftx3.gz',
+    role: 'assault', attackType: 'melee',
     ai: SEA_MONSTER_AI,
     hp: 90, defense: 2, attackPower: 3,
     scale: 2.3, collisionScale: 1.3, pack: 2, weight: 8,
@@ -130,6 +141,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'sarkaz_swordsman', name: '萨卡兹大剑手',
     file: '萨卡兹大剑手，较强的杂兵.ftx3.gz',
+    role: 'assault', attackType: 'melee',
     ai: SARKAZ_SWORDSMAN_AI,
     hp: 70, defense: 1, attackPower: 6,
     scale: 2.2, collisionScale: 1.25, pack: 1, weight: 7,
@@ -142,6 +154,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'shield_guard', name: '盾卫',
     file: '盾卫，重装.ftx3.gz',
+    role: 'shield', attackType: 'melee',
     ai: SHIELD_GUARD_AI,
     hp: 160, defense: 10, attackPower: 1,
     scale: 2.4, collisionScale: 1.4, pack: 1, weight: 5,
@@ -155,6 +168,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'crossbow', name: '远程弩手',
     file: '远程弩手小怪.ftx3.gz',
+    role: 'ranged', attackType: 'ranged',
     ai: CROSSBOW_AI,
     hp: 34, defense: 0, attackPower: 2,
     scale: 2.6, collisionScale: 1.45, pack: 1, weight: 7,
@@ -167,6 +181,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'amp_caster', name: '扩音术士',
     file: '扩音术士，远程.ftx3.gz',
+    role: 'ranged', attackType: 'ranged',
     ai: AMP_CASTER_AI,
     hp: 40, defense: 0, attackPower: 2,
     scale: 2.0, collisionScale: 1.15, pack: 1, weight: 5,
@@ -181,6 +196,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'war_caster', name: '战争术士',
     file: '战争术士，重火力.ftx3.gz',
+    role: 'ranged', attackType: 'ranged',
     ai: WAR_CASTER_AI,
     hp: 55, defense: 0, attackPower: 6,
     scale: 4.2, collisionScale: 2.4, pack: 1, weight: 3,
@@ -196,6 +212,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'bomber', name: '爆炸飞行怪',
     file: '爆炸飞行怪.ftx3.gz',
+    role: 'flyer', attackType: 'bombard', suicide: true,
     ai: BOMBER_AI,
     hp: 26, defense: 0, attackPower: 4,
     scale: 1.9, collisionScale: 1.1, pack: 1, weight: 4,
@@ -209,6 +226,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'rock_giant', name: '原石虫巨人',
     file: '原石虫巨人，小boss.ftx3.gz',
+    role: 'assault', attackType: 'melee',
     ai: ROCK_GIANT_AI,
     hp: 320, defense: 6, attackPower: 8,
     scale: 3.6, collisionScale: 1.9, pack: 1, weight: 1,

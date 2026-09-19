@@ -41,6 +41,9 @@ import { EnemyBase } from '../entity/EnemyBase';
 import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
+import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
+import { ExplosionFx } from '../services/fx/ExplosionFx';
+import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
 import { allySystem } from '../systems/ally/AllySystem';
 import { WaterFx } from '../systems/world/WaterFx';
@@ -484,6 +487,11 @@ export class WorldMode implements IGameMode {
   private killedUnsub?: () => void;
   /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
   private enemyKilledUnsub?: () => void;
+  /** ★ 调试可视化（?swarmdbg=1）：小队/属性/指令 */
+  private swarmDbg: SwarmDebugOverlay | null = null;
+  private swarmDbgAccum = 0;
+  /** ★ 爆炸视觉（自爆/范围爆炸） */
+  private explosionFx: ExplosionFx | null = null;
   private pickupGlows: PickupGlowEffect[] = [];
   /** ★ 可露希尔的无人机编队（可多架悬浮体；使用道具追加，退出时销毁）
    *  ★ 2026-09-18 起由 AllySystem 统一持有/驱动；此处只保留只读视图 */
@@ -844,6 +852,11 @@ export class WorldMode implements IGameMode {
         airAltitude: spec.airAltitude ?? AIR_ALTITUDE_DEFAULT,
         // ★ 贴片朝向（2026-09-18）：缺省自动（无「后」帧 → billboard）
         billboard: spec.billboard,
+        // ★ 步骤 7：名册 role/attackType 透传（同质编队/小队属性依据）
+        role: spec.role,
+        attackType: spec.attackType,
+        // ★ 自爆标签（基类字段）
+        suicide: spec.suicide,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -864,6 +877,13 @@ export class WorldMode implements IGameMode {
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
     this.swarmHooks.onDirective = (uid, order, directive, until) =>
       this.spawner.applyOrderToEntity(uid, order, directive, until);
+    // ★ 调试可视化：?swarmdbg=1（小队/属性/指令；无 flag 零开销）
+    if (location.search.includes('swarmdbg')) {
+      this.swarmDbg = new SwarmDebugOverlay();
+      // ★ 控制台测试入口（验证命令链）：
+      //   __swarm.issueOrder(squadId, { kind:'advance', target:{x,z}, seq:1 })
+      (window as unknown as { __swarm?: unknown }).__swarm = this.swarm;
+    }
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
@@ -1047,8 +1067,13 @@ export class WorldMode implements IGameMode {
       agitateWaterNear: (x, z) => this.waterFx.agitateNear(x, z),
       showAgentDamage: (x, y, z, dmg) => this.showFloatingAt(x, y, z, String(dmg), 'normal'),
     });
+    // ★ 爆炸视觉（自爆/范围爆炸）：aoe 结算处统一出特效
+    this.explosionFx = new ExplosionFx(this.scene);
     // ★ 路由：敌方弹按 `bulletSkin` 选池（箭 / 法球）；其余（玩家/友军）→ 玩家池
     this.aiCtx.attack = (opts) => {
+      if (opts.type === 'aoe' && opts.camp === 'enemy') {
+        this.explosionFx?.spawn(opts.x, opts.y, opts.z, opts.radius);
+      }
       if (opts.type === 'projectile' && opts.camp === 'enemy') {
         executeAttack(
           this.entities,
@@ -1451,6 +1476,10 @@ export class WorldMode implements IGameMode {
       hooks.camForwardX = camF.x; hooks.camForwardZ = camF.z;
       hooks.entityCount = this.enemies.length;
       this.swarm.update(dt, hooks);
+      this.updateSwarmDbg(dt);
+      // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
+      updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y);
+      this.explosionFx?.update(dt);
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
@@ -1786,6 +1815,13 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
+    // ---- 调试可视化（?swarmdbg=1） ----
+    this.swarmDbg?.dispose();
+    this.swarmDbg = null;
+    // ---- 爆炸视觉 ----
+    this.explosionFx?.dispose();
+    this.explosionFx = null;
+    delete (window as unknown as { __swarm?: unknown }).__swarm;
     this.sentinelSummonUnsub?.();
     this.sentinelSummonUnsub = undefined;
     this.coverSummonUnsub?.();
@@ -2237,6 +2273,25 @@ export class WorldMode implements IGameMode {
         s.hp = Math.max(1, Math.round(a.hp));
       }
     }
+  }
+
+  /** ★ 调试可视化（?swarmdbg=1）：采集在覆盖层内，这里只做 10Hz 限流 + 接线 */
+  private updateSwarmDbg(dt: number): void {
+    const dbg = this.swarmDbg;
+    if (!dbg || !this.camera) return;
+    this.swarmDbgAccum += dt;
+    if (this.swarmDbgAccum < 0.1) return;
+    this.swarmDbgAccum = 0;
+    updateSwarmDebug(dbg, {
+      swarm: this.swarm,
+      enemies: this.enemies,
+      playerX: this.player.position.x,
+      playerY: this.player.position.y,
+      playerZ: this.player.position.z,
+      camera: this.camera,
+      groundAt: (x, z) => this.raster.surfaceHeightAt(x, z),
+      mobName: (kind) => this.mobDefs[kind]?.name ?? `#${kind}`,
+    });
   }
 
   /** ★ 放置面高度：地形 / 墙顶 / 舰船甲板 取最高（墙上加墙用） */

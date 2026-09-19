@@ -4,6 +4,7 @@
 // 条件返回 true → 状态转移。索敌在 seePlayer 内完成并写入 ctx.target。
 
 import type { EnemyBase } from '../../entity/EnemyBase';
+import { ENEMY_ENGAGE_FLOOR } from './aiconfig';
 import { pnum, pstr } from './behaviors';
 import type { BehaviorContext } from './behaviors';
 
@@ -35,13 +36,15 @@ registerCondition('seePlayer', (entity, ctx, params) => {
   const radius = pnum(params, 'radius', 8);
   const ep = entity.entity.position;
   let t: { x: number; z: number } | null = null;
+  // ★ 无命令自主交战保底：无指令时视野不低于 ENEMY_ENGAGE_FLOOR
+  const floor = entity.directiveKind === 'none' ? ENEMY_ENGAGE_FLOOR : 0;
 
   const cands = ctx.targetCandidates?.(entity);
   if (cands && cands.length > 0) {
     for (const c of cands) {
       const dx = c.x - ep.x;
       const dz = c.z - ep.z;
-      const r = c.radius ?? radius;
+      const r = Math.max(c.radius ?? radius, floor);
       if (dx * dx + dz * dz <= r * r) { t = c; break; }
     }
   } else {

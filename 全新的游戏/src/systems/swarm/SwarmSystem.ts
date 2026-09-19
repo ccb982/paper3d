@@ -87,6 +87,8 @@ export const SWARM = {
   RAGE_SPEED: 1.25,
   RAGE_SECONDS: 5,
   RAGE_RADIUS: 12,
+  /** ★ 无命令自主交战保底半径（米；《实体架构.md》§5.12） */
+  AUTONOMY_ENGAGE_R: 16,
   /** 警戒场：持续时间 / 反应延迟区间 / 察觉时刷出的半径 / 挥击时刷出的半径 */
   ALERT_SECONDS: 6,
   ALERT_DELAY_MIN: 0.2,
@@ -177,7 +179,7 @@ export class SwarmSystem {
     const i = this.pool.push(data);
     if (i < 0) return i;
     // ★ 步骤 5：同质就近编队 + 首员即队长
-    const squad = this.squads.assign(data.uid, roleFromCode(this.pool.role[i]), data.x, data.z);
+    const squad = this.squads.assign(data.uid, roleFromCode(this.pool.role[i]), data.x, data.z, this.pool.mobIndex[i]);
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(data.uid, this.pool.hp[i], this.pool.maxHp[i], data.x, data.z, 0);
@@ -242,8 +244,8 @@ export class SwarmSystem {
     const role = roleFromCode(this.pool.role[i]);
     const squad = this.squads.squadOf(uid)
       ?? (snap.squadId !== undefined && snap.squadId >= 0
-        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i])
-        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i]));
+        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i])
+        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i]));
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(uid, this.pool.hp[i], this.pool.maxHp[i], this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i]);
@@ -461,7 +463,9 @@ export class SwarmSystem {
     const aware = alerted && now >= p.alertAt[i];
     const objective = intent !== INTENT_NONE;
     const taunted = taunt !== null;
-    const chasing = objective || taunted || d <= p.aggro[i] || aware;
+    // ★ 无命令自主交战（保底）：无指令时用保底半径（不依赖各兵种短视野）
+    const engageR = dk === 'none' ? SWARM.AUTONOMY_ENGAGE_R : 0;
+    const chasing = objective || taunted || d <= Math.max(p.aggro[i], engageR) || aware;
 
     // ---- 攻击冷却 / 令牌释放 ----
     p.attackCd[i] -= tick;

@@ -41,6 +41,8 @@ interface MemberInfo {
 
 export interface Squad {
   id: number;
+  /** ★ 同质编队：一队一兵种（mobIndex） */
+  mobKind: number;
   /** 大编队（当前 = 小队自身；大队合并后续做） */
   battalionId: number;
   leaderUid: number;
@@ -88,20 +90,20 @@ export class SquadTable {
     return this.squads.get(id) ?? null;
   }
 
-  /** 生成时分配：同质就近并入（< SQUAD_MAX），否则新建；首员即队长 */
-  assign(uid: number, role: UnitRole, x: number, z: number): Squad {
+  /** 生成时分配：**同兵种同属性**就近并入（< SQUAD_MAX），否则新建；首员即队长 */
+  assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;
     const type = squadTypeOf(role);
     let best: Squad | null = null;
     let bestD2 = SQUAD_JOIN_R * SQUAD_JOIN_R;
     for (const s of this.squads.values()) {
-      if (s.type !== type || s.members.size >= SQUAD_MAX) continue;
+      if (s.type !== type || s.mobKind !== mobKind || s.members.size >= SQUAD_MAX) continue;
       const c = this.centroid(s);
       const d2 = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
       if (d2 < bestD2) { bestD2 = d2; best = s; }
     }
-    const squad = best ?? this.create(type);
+    const squad = best ?? this.create(type, mobKind);
     squad.members.set(uid, { hp: 0, maxHp: 0, x, z, lastSeenAt: 0 });
     this.ofUid.set(uid, squad.id);
     if (squad.leaderUid === 0) squad.leaderUid = uid;
@@ -109,12 +111,12 @@ export class SquadTable {
   }
 
   /** 降格回池兜底：按快照里的原 squadId 重建归属（表丢失/跨模式时用） */
-  adopt(uid: number, squadId: number, battalionId: number, role: UnitRole, x: number, z: number): Squad {
+  adopt(uid: number, squadId: number, battalionId: number, role: UnitRole, x: number, z: number, mobKind = -1): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;
     let squad = this.squads.get(squadId);
     if (!squad) {
-      squad = { id: squadId, battalionId, leaderUid: 0, type: squadTypeOf(role), members: new Map(), casualties: 0 };
+      squad = { id: squadId, battalionId, mobKind, leaderUid: 0, type: squadTypeOf(role), members: new Map(), casualties: 0 };
       this.squads.set(squadId, squad);
       if (squadId >= this.nextId) this.nextId = squadId + 1;
     }
@@ -221,9 +223,9 @@ export class SquadTable {
     return n > 0 ? { x: x / n, z: z / n } : { x: 0, z: 0 };
   }
 
-  private create(type: SquadType): Squad {
+  private create(type: SquadType, mobKind: number): Squad {
     const id = this.nextId++;
-    const squad: Squad = { id, battalionId: id, leaderUid: 0, type, members: new Map(), casualties: 0 };
+    const squad: Squad = { id, battalionId: id, mobKind, leaderUid: 0, type, members: new Map(), casualties: 0 };
     this.squads.set(id, squad);
     return squad;
   }

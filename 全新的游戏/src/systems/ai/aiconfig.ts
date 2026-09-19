@@ -97,6 +97,9 @@ export interface MobAIParams {
    *  （飞行 → 接触命中），且攻击播完回 `chase` 而非 `patrol`（持续开火）。
    *  不填 = 原 `meleeSwing`（范围瞬时判定，有 attackRange 却无弹道视觉）。 */
   ranged?: MobRangedParams;
+  /** ★ 自爆档（2026-09-19）：填了 → attack 状态改用 `selfDestruct`
+   *  （范围爆炸 + 自身死亡）；优先级高于 ranged/melee。 */
+  suicide?: { radius?: number; damage?: number; fuse?: number };
 }
 
 /** ★ 远程弹道参数（mobAI 的 `ranged` 档） */
@@ -118,6 +121,10 @@ export interface MobRangedParams {
   skin?: string;
 }
 
+/** ★ 无命令自主交战保底半径（米；与《实体架构.md》§5.12 同口径）：
+ *  实体无指令时视野不低于此值（各兵种 aggro 只能更大）——防“贴脸也不打” */
+export const ENEMY_ENGAGE_FLOOR = 16;
+
 export function mobAI(p: MobAIParams = {}): AIConfig {
   const wander = p.wanderSpeed ?? 2;
   const chase = p.chaseSpeed ?? 2.5;
@@ -129,8 +136,18 @@ export function mobAI(p: MobAIParams = {}): AIConfig {
   // ★ 判定半径缺省 1.8（既有三兵种原样）；远程兵种显式给 attackRange
   const range = p.attackRange ?? 1.8;
   // ★ 真弹道档：attack 状态换行为 + 攻击完回 chase（持续开火，而不是回 patrol 晾 3 秒）
+  const sui = p.suicide;
   const rng = p.ranged;
-  const attackBehavior: AIBehaviorDef = rng
+  const attackBehavior: AIBehaviorDef = sui
+    ? {
+        name: 'selfDestruct',
+        params: {
+          radius: sui.radius ?? 3,
+          damage: sui.damage ?? dmg,
+          fuse: sui.fuse ?? 0.25,
+        },
+      }
+    : rng
     ? {
         name: 'rangedShot',
         params: {
@@ -224,6 +241,8 @@ export const BOMBER_AI: AIConfig = mobAI({
   wanderSpeed: 3, chaseSpeed: 4.2, aggroRadius: 14,
   attackRadius: 2.0, attackRange: 2.0, loseRadius: 22,
   meleeDuration: 0.45, meleeDamage: 22,
+  // ★ 自爆：冲到近身 → 短引信 → 范围爆炸 + 自身死亡（用户定调）
+  suicide: { radius: 3.2, damage: 22, fuse: 0.25 },
 });
 
 /** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低

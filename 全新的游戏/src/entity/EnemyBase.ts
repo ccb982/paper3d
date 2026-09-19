@@ -64,6 +64,8 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   attackType?: UnitAttackType;
   /** ★ 强制始终面对相机（缺省 = 自动检测：无「后」帧素材强制 billboard） */
   billboard?: boolean;
+  /** ★ 自爆标签（基类字段；与 isAir/role 同级） */
+  suicide?: boolean;
 }
 
 const _atomDir = { x: 0, z: 0 };
@@ -86,6 +88,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   isLeader = false;
   /** ★ 是否代理载体（实体恒 false；carrier 派生位，逻辑分支统一读它） */
   readonly isAgent = false;
+  /** ★ 自爆标签（基类字段；构造从 MobDef，快照跨 LOD） */
+  suicide = false;
   /** ★ 感知（E3b 预留；步骤 9 通信/感知接线填值）：最后目击 + 仇恨来源 */
   lastSeenX = 0;
   lastSeenZ = 0;
@@ -123,6 +127,22 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private atomUntil = 0;
   private atomMoveIdx = 4;
   private atomFire = true;
+
+  // ============================================================
+  // ★ 保底攻击（2026-09-19 用户定调）：无指令且状态机未接管时，
+  //   目标在射程内 → 直接开火（构造时从 AI 配置解析一次）——防“贴脸不打”。
+  // ============================================================
+  private fbKind: 'none' | 'melee' | 'ranged' | 'suicide' = 'none';
+  private fbRadius = 3;
+  private fbRange = 1.8;
+  private fbDamage = 8;
+  private fbSpeed = 26;
+  private fbLifetime = 2.4;
+  private fbAim = 0;
+  private fbMuzzle = 0;
+  private fbSpread = 0.05;
+  private fbSkin = 'arrow';
+  private fbCd = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -179,6 +199,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.lastSeenAt !== undefined) this.lastSeenAt = snap.lastSeenAt;
     if (snap.aggroFrom !== undefined) this.aggroFrom = snap.aggroFrom;
     if (snap.aiStateIdx !== undefined) this.aiStateMachine?.importState(snap.aiStateIdx, snap.aiTimer ?? 0);
+    if (snap.suicide !== undefined) this.suicide = snap.suicide;
     // ★ 步骤 9b：命令/指令回灌（编码 → 可读类型）
     if (snap.orderKind !== undefined) this.orderKind = orderFromCode(snap.orderKind);
     if (snap.orderTargetX !== undefined) this.orderTargetX = snap.orderTargetX;
@@ -219,6 +240,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       out.aiStateIdx = st.idx;
       out.aiTimer = st.timer;
     }
+    out.suicide = this.suicide;
     // ★ 步骤 9b：命令/指令抽干（可读类型 → 编码）
     out.orderKind = orderCode(this.orderKind);
     out.orderTargetX = this.orderTargetX;
@@ -333,6 +355,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
     this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
     this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
+    this.suicide = opts.suicide === true;
     // ★ 蜂群预留字段：从名册透传（缺省 = 行为不变）
     this.role = opts.role ?? 'grunt';
     this.attackType = opts.attackType ?? 'melee';
@@ -388,6 +411,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (opts.aiConfig) {
       this.aiStateMachine = new AIStateMachine(opts.aiConfig);
       aiSystem.register(this);
+      this.parseFallbackAttack(opts.aiConfig);
     }
   }
 
@@ -418,6 +442,127 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.aiStateMachine?.update(this, ctx);
     // ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控
     this.applyDirectiveAtoms(dt, ctx);
+    // ★ 保底攻击：无指令且状态机未进攻时，目标在射程内直接开火
+    this.fallbackAttack(dt, ctx);
+  }
+
+  /** ★ 解析保底攻击参数（构造期一次；从 AI 配置的 inRange 转移 + 攻击行为取值） */
+  private parseFallbackAttack(cfg: AIConfig): void {
+    // ★ 标签兜底：自爆单位即使 AI 没配 selfDestruct 也保底自爆
+    if (this.suicide) this.fbKind = 'suicide';
+    for (const st of Object.values(cfg.states)) {
+      for (const tr of st.transitions) {
+        if (tr.cond === 'inRange' && tr.params?.radius !== undefined) {
+          this.fbRange = Number(tr.params.radius);
+        }
+      }
+    }
+    for (const st of Object.values(cfg.states)) {
+      for (const b of st.behaviors) {
+        const p = b.params ?? {};
+        if (b.name === 'meleeSwing') {
+          this.fbKind = 'melee';
+          this.fbDamage = Number(p.damage ?? 8);
+          if (p.range !== undefined) this.fbRange = Math.max(this.fbRange, Number(p.range));
+          return;
+        }
+        if (b.name === 'selfDestruct') {
+          this.fbKind = 'suicide';
+          this.fbDamage = Number(p.damage ?? 26);
+          this.fbRadius = Number(p.radius ?? 3);
+          return;
+        }
+        if (b.name === 'rangedShot') {
+          this.fbKind = 'ranged';
+          this.fbDamage = Number(p.damage ?? 8);
+          this.fbSpeed = Number(p.speed ?? 26);
+          this.fbLifetime = Number(p.lifetime ?? 2.4);
+          this.fbAim = Number(p.aimHeight ?? 0);
+          this.fbMuzzle = Number(p.muzzleHeight ?? 0);
+          this.fbSpread = Number(p.spread ?? 0.05);
+          this.fbSkin = String(p.skin ?? 'arrow');
+          return;
+        }
+      }
+    }
+  }
+
+  /** ★ 保底攻击：无指令 + 状态机未处于 attack → 目标在射程内直接开火（冷却节流） */
+  private fallbackAttack(dt: number, ctx: BehaviorContext): void {
+    if (this.fbKind === 'none') return;
+    this.fbCd -= dt;
+    if (this.fbCd > 0) return;
+    if (this.directiveKind !== 'none') return;                 // 命令优先
+    if (this.aiStateMachine?.currentState === 'attack') return; // 状态机在打 → 让位（防双开火）
+    // 目标：优先自选候选（状态机未评估 seePlayer 时 ctx.target 可能为空）
+    let t: { x: number; z: number } | null = null;
+    const cands = ctx.targetCandidates?.(this);
+    if (cands && cands.length > 0) {
+      for (const c of cands) {
+        const d2 = (c.x - this.position.x) ** 2 + (c.z - this.position.z) ** 2;
+        if (d2 <= this.fbRange * this.fbRange) { t = c; break; }
+      }
+    }
+    if (!t) t = ctx.target;
+    if (!t) return;
+    const d = Math.hypot(t.x - this.position.x, t.z - this.position.z);
+    if (d > this.fbRange) return;
+    this.fbCd = 0.9 + Math.random() * 0.4;
+    if (this.fbKind === 'suicide') {
+      // ★ 自爆保底：范围爆炸 + 自身死亡（与 selfDestruct 行为同口径）
+      ctx.attack({
+        type: 'aoe',
+        source: this,
+        x: this.position.x,
+        y: this.position.y + 0.8,
+        z: this.position.z,
+        radius: this.fbRadius,
+        damage: this.fbDamage,
+        camp: 'enemy',
+      });
+      this.onDeath(null);
+      return;
+    }
+    if (this.fbKind === 'melee') {
+      ctx.attack({
+        type: 'melee',
+        source: this,
+        x: this.position.x,
+        y: this.position.y + 1.0,
+        z: this.position.z,
+        range: this.fbRange,
+        damage: this.fbDamage,
+        camp: 'enemy',
+      });
+      return;
+    }
+    // 远程：真弹道（与 rangedShot 同构：出膛点/矄准点/散布/出膛前移）
+    const ox = this.position.x;
+    const oy = this.hitAnchorY() + this.fbMuzzle;
+    const oz = this.position.z;
+    const ty = (ctx.focusY ?? this.hitAnchorY()) + this.fbAim;
+    let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    dx /= len; dy /= len; dz /= len;
+    if (this.fbSpread > 0) {
+      const a = (Math.random() - 0.5) * 2 * this.fbSpread;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      const nx = dx * ca - dz * sa;
+      const nz = dx * sa + dz * ca;
+      dx = nx; dz = nz;
+      dy += (Math.random() - 0.5) * this.fbSpread;
+      const l2 = Math.hypot(dx, dy, dz) || 1;
+      dx /= l2; dy /= l2; dz /= l2;
+    }
+    const muzzle = 0.7;
+    ctx.attack({
+      type: 'projectile',
+      source: this,
+      x: ox + dx * muzzle, y: oy + dy * muzzle, z: oz + dz * muzzle,
+      dirX: dx, dirY: dy, dirZ: dz,
+      speed: this.fbSpeed, camp: 'enemy', lifetime: this.fbLifetime,
+      damage: this.fbDamage, bulletSkin: this.fbSkin,
+    });
   }
 
   /** ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控（危险地形绕行仍生效） */

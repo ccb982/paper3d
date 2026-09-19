@@ -89,6 +89,8 @@ export class WorldUIManager extends BaseInteractionUI {
   /** ★ 舰船受击报警：顶部大横幅 + 全屏红晕（脉冲闪烁；剩余秒数） */
   private shipAlertEl: HTMLDivElement | null = null;
   private shipVignetteEl: HTMLDivElement | null = null;
+  /** ★ 自爆单位逼近提醒（边框红晕；强度 0~1 驱动 + 脉冲） */
+  private dangerVignetteEl: HTMLDivElement | null = null;
   private shipAlertTimer = 0;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
@@ -373,6 +375,28 @@ export class WorldUIManager extends BaseInteractionUI {
     this.shipVignetteEl.style.display = 'block';
     this.shipAlertEl.style.opacity = '1';
     this.shipVignetteEl.style.opacity = '0.75';
+  }
+
+  /** ★ 自爆危急提醒（2026-09-19）：屏幕边框发红（强度 0~1，随距离逐强）。
+   *  与舰船受击红晕分层（z-index 68 < 69）；intensity ≤ 0 → 隐藏。 */
+  setDangerVignette(intensity: number): void {
+    if (intensity <= 0.01) {
+      if (this.dangerVignetteEl) this.dangerVignetteEl.style.opacity = '0';
+      return;
+    }
+    if (!this.dangerVignetteEl) {
+      const v = document.createElement('div');
+      v.style.cssText = [
+        'position:fixed', 'inset:0', 'z-index:68', 'pointer-events:none',
+        'box-shadow:inset 0 0 120px 28px rgba(255,20,20,0.92)',
+        'opacity:0', 'transition:opacity 0.12s linear',
+      ].join(';');
+      document.body.appendChild(v);
+      this.dangerVignetteEl = v;
+    }
+    // 脉冲（时间正弦：不依赖 CSS 关键帧注入，与舰船预警同节奏感）
+    const pulse = 0.72 + 0.28 * Math.sin(performance.now() / 90);
+    this.dangerVignetteEl.style.opacity = String(Math.min(1, intensity * pulse));
   }
 
   /** ★ 敌袭预警/战报横幅（顶部居中，打字机感描边；null = 隐藏）
@@ -922,6 +946,9 @@ export class WorldUIManager extends BaseInteractionUI {
     this.shipAlertEl = null;
     this.shipVignetteEl?.remove();
     this.shipVignetteEl = null;
+    // ★ 自爆危急提醒（边框红晕）跨局防残留
+    this.dangerVignetteEl?.remove();
+    this.dangerVignetteEl = null;
     this.shipAlertTimer = 0;
     this.assaultBannerEl?.remove();
     this.assaultBannerEl = null;
