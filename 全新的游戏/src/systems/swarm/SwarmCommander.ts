@@ -38,6 +38,11 @@ export class SwarmCommander {
   /** ★ 大队：一队 30 怪；一局多个 */
   private battalionCount = 0;
   private reinforceAccum = 0;
+  /** ★ 待登场队列（**逐步登场**；总攻可一次性整编队） */
+  private spawnQueue: { x: number; z: number; role: UnitRole; elite: boolean }[] = [];
+  private spawnAccum = 0;
+  /** 登场间隔（秒/只） */
+  private static readonly SPAWN_INTERVAL = 1.5;
   private static readonly BATTALION_SIZE = 30;
   private static readonly BATTALION_MAX = 4;
   private static readonly REINFORCE_S = 180;
@@ -96,8 +101,9 @@ export class SwarmCommander {
     return this.plan;
   }
 
-  /** ★ 生成一个大队（30 怪；按角色配比 · 沿外环弧部署；后续大队更远列阵） */
-  spawnBattalion(): boolean {
+  /** ★ 生成一个大队（30 怪；按角色配比 · 沿外环弧部署；后续大队更远列阵）
+   *  @param instant 总攻用：true = 一次性上整编队；false = **逐步登场**（队列滴灌） */
+  spawnBattalion(instant = false): boolean {
     const plan = this.plan;
     if (!plan || !this.spawnMob || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
     this.battalionCount++;
@@ -113,18 +119,18 @@ export class SwarmCommander {
     const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
     let total = comp.reduce((s, [, n]) => s + n, 0) + eliteN;
     let k = 0;
-    for (const [role, n] of comp) {
-      for (let i = 0; i < n; i++) {
-        const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);   // 来向 ±60°
-        this.spawnMob(plan.cx + Math.cos(a) * ringR, plan.cz + Math.sin(a) * ringR, role);
-        k++;
-      }
-    }
-    for (let i = 0; i < eliteN; i++) {
-      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);
-      this.spawnMob(plan.cx + Math.cos(a) * ringR, plan.cz + Math.sin(a) * ringR, 'assault', true);
+    const push = (role: UnitRole, elite: boolean): void => {
+      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);   // 来向 ±60°
+      const x = plan.cx + Math.cos(a) * ringR;
+      const z = plan.cz + Math.sin(a) * ringR;
       k++;
+      if (instant) this.spawnMob?.(x, z, role, elite);
+      else this.spawnQueue.push({ x, z, role, elite });   // ★ 逐步登场
+    };
+    for (const [role, n] of comp) {
+      for (let i = 0; i < n; i++) push(role, false);
     }
+    for (let i = 0; i < eliteN; i++) push('assault', true);
     return true;
   }
 
@@ -159,6 +165,15 @@ export class SwarmCommander {
       }
     }
     this.engineeringTick(dt, playerX, playerZ);
+    // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
+    if (this.spawnQueue.length > 0) {
+      this.spawnAccum += dt;
+      while (this.spawnAccum >= SwarmCommander.SPAWN_INTERVAL && this.spawnQueue.length > 0) {
+        this.spawnAccum -= SwarmCommander.SPAWN_INTERVAL;
+        const u = this.spawnQueue.shift()!;
+        this.spawnMob?.(u.x, u.z, u.role, u.elite);
+      }
+    }
     // ★ 增援：战术启动后每 REINFORCE_S 再来一个大队（上限 BATTALION_MAX）
     if (this.plan && this.stage !== 'S0') {
       this.reinforceAccum += dt;
@@ -246,6 +261,8 @@ export class SwarmCommander {
     this.stage = 'S0';
     this.battalionCount = 0;
     this.reinforceAccum = 0;
+    this.spawnQueue = [];
+    this.spawnAccum = 0;
     this.buildPieces = [];
     this.builtSlots.clear();
     this.engAccum = 0;
