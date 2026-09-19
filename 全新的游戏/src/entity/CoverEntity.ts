@@ -70,6 +70,19 @@ export function updateWallAuras(playerMaxHp: number, dt: number): void {
   }
 }
 
+/** ★ 射击孔单向阻挡（2026-09-19）：**敌弹不得穿孔**——
+ *  线段 vs 城墙射击孔带（局部坐标）；命中孔带返回 true（调用方回收敌弹）。
+ *  玩家弹不做此检查（正常穿缝）。 */
+export function enemySlitBlocks(
+  x0: number, y0: number, z0: number,
+  x1: number, y1: number, z1: number,
+): boolean {
+  for (const c of _coverRegistry) {
+    if (c.slitBlocksSegment(x0, y0, z0, x1, y1, z1)) return true;
+  }
+  return false;
+}
+
 /** ★ 掩体注册表（顶面站立 / 攀爬查询用；数量个位数，线性扫描足够） */
 const _coverRegistry = new Set<CoverEntity>();
 
@@ -186,6 +199,29 @@ export class CoverEntity extends StructureEntity {
     }
   }
 
+  /** ★ 射击孔单向阻挡：敌弹线段是否穿过本城墙的孔带（局部坐标判定；墙 = 实心恒 false） */
+  slitBlocksSegment(
+    x0: number, y0: number, z0: number,
+    x1: number, y1: number, z1: number,
+  ): boolean {
+    if (!this.hasSlit) return false;
+    const p = this.entity.position;
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    const rx = fz, rz = -fx;                       // 局部 +x（宽度轴）
+    const lx0 = (x0 - p.x) * rx + (z0 - p.z) * rz;
+    const lz0 = (x0 - p.x) * fx + (z0 - p.z) * fz;
+    const lx1 = (x1 - p.x) * rx + (z1 - p.z) * rz;
+    const lz1 = (x1 - p.x) * fx + (z1 - p.z) * fz;
+    if (lz0 === lz1) return false;                 // 平行于墙面
+    if ((lz0 > 0) === (lz1 > 0)) return false;     // 未跨越墙平面
+    const t = lz0 / (lz0 - lz1);                   // 穿越点插值参数
+    const lx = lx0 + (lx1 - lx0) * t;
+    const y = y0 + (y1 - y0) * t;
+    const ly = y - p.y;                            // 相对墙底高度
+    return Math.abs(lx) <= COVER_SLIT_W / 2
+      && ly >= COVER_SLIT_Y0 && ly <= COVER_SLIT_Y1;
+  }
+
   /** ★ 顶面高度（世界 Y；点在墙足迹内才返回）——角色落顶/攀爬目标 */
   topAt(x: number, z: number): number | null {
     const p = this.entity.position;
@@ -205,7 +241,9 @@ export class CoverEntity extends StructureEntity {
 
   protected createRenderer(scene: THREE.Scene): CoverRenderer {
     // ★ 背面道具图标：城墙 = 不许笑的脸；墙 = 土木老姐的脸（资产在 public/fx/）
-    const iconUrl = this.hasSlit ? '/fx/不许笑.ftx3.gz' : '/fx/土木老姐.ftx3.gz';
+    const iconUrl = this.hasSlit
+      ? '/characters/protagonist/不许笑.ftx3.gz'   // 城墙：不许笑（资产在 protagonist）
+      : '/fx/土木老姐.ftx3.gz';                    // 墙：土木老姐
     return new CoverRenderer(scene, this.hasSlit, iconUrl);
   }
 

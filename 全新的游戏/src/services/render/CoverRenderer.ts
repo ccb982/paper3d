@@ -32,12 +32,11 @@ function loadIconTexture(url: string, onReady: (tex: THREE.CanvasTexture) => voi
 export const COVER_W = 4.0;
 export const COVER_H = 3.0;
 export const COVER_T = 0.8;
-/** 射击孔：宽 / 高度带（★ 对齐**武器/枪口射击线**而非第一人称相机高度：
- *  玩家枪口 ≈ 脚底 +1.1，站立在掩体后 1~3m 时弹道高度 ≈ 1.0~1.3；
- *  孔带 1.0~1.5 让"站姿直射"能穿缝，蹲/远距离仍会被墙挡） */
-export const COVER_SLIT_W = 0.5;
-export const COVER_SLIT_Y0 = 1.0;
-export const COVER_SLIT_Y1 = 1.5;
+/** 射击孔：宽 / 高度带（★ 2026-09-19 用户定调"增大"：
+ *  对齐武器/枪口射击线（枪口 ≈ 脚底 +1.1）并留足容差） */
+export const COVER_SLIT_W = 1.2;
+export const COVER_SLIT_Y0 = 0.9;
+export const COVER_SLIT_Y1 = 1.8;
 
 /** 程序化灰砖贴图（模块级缓存；所有掩体/掩体弹共享） */
 let _brickTex: THREE.CanvasTexture | null = null;
@@ -127,18 +126,17 @@ export class CoverRenderer extends FxRendererBase {
       add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, -(COVER_SLIT_W / 2 + pillarW / 2), midY);
       add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, +(COVER_SLIT_W / 2 + pillarW / 2), midY);
     }
-    // ★ 背面道具图标（2026-09-19 用户定调）：贴在墙背面（-Z 侧）的"海报"
-    //   城墙放在射击孔上方，墙放正中；异步载入，未就绪前不显示
+    // ★ 道具图标海报（2026-09-19 二次定调：放**正面 +Z，给敌人看**）
+    //   居中摆放（不避开射击孔）；异步载入，未就绪前不显示
     if (iconUrl) {
-      const posterSize = slit ? 1.3 : 2.2;
-      const posterY = slit ? 2.2 : 1.5;
+      const posterSize = slit ? 1.8 : 2.2;
+      const posterY = 1.5;
       const pm = new THREE.MeshBasicMaterial({
         transparent: true, opacity: 0, depthWrite: false, side: THREE.FrontSide,
       });
       this.ownMats.push(pm);
       const poster = new THREE.Mesh(new THREE.PlaneGeometry(posterSize, posterSize), pm);
-      poster.position.set(0, posterY, -COVER_T / 2 - 0.02);
-      poster.rotation.y = Math.PI;   // 面向 -Z（背面）
+      poster.position.set(0, posterY, COVER_T / 2 + 0.02);
       g.add(poster);
       this.parts.push(poster);
       loadIconTexture(iconUrl, (tex) => {
