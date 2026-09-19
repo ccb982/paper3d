@@ -1,12 +1,13 @@
 // ============================================================
-// CoverEntity —— 掩体（StructureEntity 子类；《蜂群架构.md》§22.11）
+// CoverEntity —— 城墙 / 墙（StructureEntity 子类；《蜂群架构.md》§22.11）
 // ============================================================
-// 形态：高 3m / 宽 4m / 厚 0.8m；灰砖墙 + 正面竖向射击孔（宽 0.4 / 高 1.2~1.6）。
+// 形态：高 3m / 宽 4m / 厚 0.8m；灰砖。城墙 = 正面竖向射击孔（宽 0.5 / 高 1.0~1.5）+ 光环；墙 = 实心。
 // 碰撞：复合长方体 = 下段 + 上段 + 左右立柱 —— 只有穿过孔带才能命中后方
 //       （复用 BodyOptions.extraColliders，与舰船分段同一套基建）。
 // 建造：buildProgress 0→1 插值长高（渲染器消费）；施工期可被打断（玩法层控制）。
 // 摧毁：走 applyDamage（StructureEntity 覆写，不发 killed / 不计击杀）。
-// 来源：敌方杂兵施工（owner='enemy'）/ 玩家遗物道具发射落地（owner='player'）。
+// 来源：敌方杂兵施工（owner='enemy'）/ 玩家道具发射落地（owner='player'）。
+// ★ 城墙光环（2026-09-19）：范围内墙体持续修复 + 生命上限（跟随玩家生命）+ 防御。
 // ============================================================
 
 import type * as THREE from 'three';
@@ -20,8 +21,16 @@ import {
   COVER_W, COVER_H, COVER_T, COVER_SLIT_W, COVER_SLIT_Y0, COVER_SLIT_Y1,
 } from '../services/render/CoverRenderer';
 
-/** 掩体生命值（走 applyDamage 口径；可被拆） */
+/** 城墙/墙生命值（走 applyDamage 口径；可被拆） */
 export const COVER_HP = 400;
+/** ★ 城墙光环（2026-09-19）：范围内墙体持续修复 + 上限提升（跟随玩家生命）+ 防御加成 */
+export const WALL_AURA_R = 10;
+/** 上限提升 = 玩家最大生命 × 该比例（不叠加，取最高来源） */
+export const WALL_AURA_HP_RATIO = 0.8;
+/** 防御加成（不叠加，取最高来源） */
+export const WALL_AURA_DEF = 6;
+/** 持续修复速度（HP/秒） */
+export const WALL_AURA_HEAL = 25;
 /** 玩家部署的默认成型时长（秒；插值长高） */
 export const COVER_DEPLOY_BUILD_TIME = 0.6;
 
@@ -39,6 +48,28 @@ export interface CoverOptions {
   variant?: 'cover' | 'wall';
 }
 
+/** ★ 城墙光环结算（每帧；数量个位数 → O(n²) 可忽略）：
+ *  来源 = 城墙（variant 'cover'）；目标 = 所有墙（含城墙自身/彼此）。
+ *  上限/防御不叠加（取最高来源）；范围内持续回血；离开范围自动回落基础值。 */
+export function updateWallAuras(playerMaxHp: number, dt: number): void {
+  const all: CoverEntity[] = [];
+  for (const c of _coverRegistry) all.push(c);
+  const bonusHp = Math.round(playerMaxHp * WALL_AURA_HP_RATIO);
+  for (const w of all) {
+    let bh = 0, bd = 0, heal = 0;
+    for (const src of all) {
+      if (src.variant !== 'cover') continue;
+      const dx = src.position.x - w.position.x;
+      const dz = src.position.z - w.position.z;
+      if (dx * dx + dz * dz > WALL_AURA_R * WALL_AURA_R) continue;
+      if (bonusHp > bh) bh = bonusHp;
+      if (WALL_AURA_DEF > bd) bd = WALL_AURA_DEF;
+      if (WALL_AURA_HEAL > heal) heal = WALL_AURA_HEAL;
+    }
+    w.applyAura(bh, bd, heal, dt);
+  }
+}
+
 /** ★ 掩体注册表（顶面站立 / 攀爬查询用；数量个位数，线性扫描足够） */
 const _coverRegistry = new Set<CoverEntity>();
 
@@ -54,7 +85,7 @@ export function coverTopAt(x: number, z: number): number | null {
 
 export class CoverEntity extends StructureEntity {
   readonly owner: 'player' | 'enemy';
-  /** ★ 变体（掩体 / 实心墙） */
+  /** ★ 变体（城墙 = 带射击孔+光环；墙 = 实心） */
   readonly variant: 'cover' | 'wall';
   /** 是否带射击孔（wall = false：整面实心） */
   private readonly hasSlit: boolean;
@@ -64,6 +95,9 @@ export class CoverEntity extends StructureEntity {
   private readonly blockId: number;
   /** 墙朝向（碰撞体/阻挡索引/渲染共用） */
   private readonly heading: number;
+  /** ★ 光环前的基础值（城墙光环动态改 maxHp/defense，离开范围要能回落） */
+  private readonly baseMaxHp: number;
+  private readonly baseDefense: number;
 
   constructor(em: EntityManager, scene: THREE.Scene, opts: CoverOptions) {
     const hasSlit = (opts.variant ?? 'cover') !== 'wall';
@@ -117,6 +151,8 @@ export class CoverEntity extends StructureEntity {
     this.variant = opts.variant ?? 'cover';
     this.hasSlit = this.variant !== 'wall';
     this.heading = opts.heading ?? 0;
+    this.baseMaxHp = this.maxHp;
+    this.baseDefense = this.defense;
     this.buildTime = opts.buildTime ?? 0;
     // ★ 建造进度必须与渲染器同步（否则基类默认 1 → onUpdate 直接 return，永远停在起始缩放）
     this.buildProgress = this.buildTime > 0 ? 0 : 1;
@@ -137,6 +173,17 @@ export class CoverEntity extends StructureEntity {
       COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true,
     );
     _coverRegistry.add(this);
+  }
+
+  /** ★ 城墙光环结算（由 updateWallAuras 调用）：上限/防御取最高来源（不叠加），范围内持续回血 */
+  applyAura(bonusHp: number, bonusDef: number, healPerSec: number, dt: number): void {
+    const maxHp = this.baseMaxHp + bonusHp;
+    this.maxHp = maxHp;
+    this.defense = this.baseDefense + bonusDef;
+    if (this.hp > maxHp) this.hp = maxHp;
+    if (healPerSec > 0 && this.hp < maxHp) {
+      this.hp = Math.min(maxHp, this.hp + healPerSec * dt);
+    }
   }
 
   /** ★ 顶面高度（世界 Y；点在墙足迹内才返回）——角色落顶/攀爬目标 */

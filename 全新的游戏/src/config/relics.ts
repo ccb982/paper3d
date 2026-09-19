@@ -68,7 +68,7 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
     id: 'grudge_hatred',
     name: '死仇时代的恨意',
     rarity: 5,
-    description: '不许笑的脸。进入战场立即获得掩体（每多一件 +1）；之后定时恢复掩体（多件再缩短间隔）',
+    description: '不许笑的脸。进入战场立即获得城墙（每多一件 +1）；之后定时恢复城墙（多件再缩短间隔）',
     texture: '/characters/protagonist/不许笑.ftx3.gz',
     effects: [
       { type: 'start_items', items: [{ itemId: 'cover', count: 1 }] },

@@ -1,9 +1,9 @@
 // ============================================================
-// DeployPreview —— 投送落点预览（祖宗 / 掩体 统一）
+// DeployPreview —— 投送落点预览（祖宗 / 城墙 / 墙 统一）
 // ============================================================
 // 用途：选中「祖宗 / 掩体」弹药时，在准星落点显示投放预览：
 //   · circle —— 祖宗（半径圈 + 半透明底盘）
-//   · rect   —— 掩体（4×0.8 足迹 + 描边，随发射方向旋转）
+//   · rect   —— 城墙/墙（4×0.8 足迹 + 描边，随发射方向旋转）
 // 纯表现：贴地摆放、不写深度、renderOrder 高于水面（与子弹/血条同档）。
 // ============================================================
 
@@ -69,7 +69,7 @@ export class DeployPreview {
     (this.ring.material as THREE.MeshBasicMaterial).color.setHex(color);
   }
 
-  /** 掩体/墙落点：矩形足迹（宽 w × 厚 l，随 heading 旋转；color 区分变体） */
+  /** 城墙/墙落点：矩形足迹（宽 w × 厚 l，随 heading 旋转；color 区分变体） */
   showRect(x: number, y: number, z: number, w: number, l: number, heading: number, color = 0xffffff): void {
     this.circleGroup.visible = false;
     this.rectGroup.visible = true;

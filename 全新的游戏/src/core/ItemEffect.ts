@@ -125,10 +125,10 @@ effectRegistry.set('summon_sentinel', (_params, ctx) => {
 effectRegistry.set('summon_cover', (_params, ctx) => {
   // ★ 同祖宗：部署类效果只在战场生效
   if (!ctx.user) return { success: false, message: '需在作战中使用' };
-  // ★ 部署「掩体 / 土木老姐」：广播事件（variant 区分带孔掩体 / 实心墙）
+  // ★ 部署「城墙 / 墙」：广播事件（variant 区分带孔城墙 / 实心墙）
   const variant = _params.variant === 'wall' ? 'wall' : 'cover';
   eventBus.emit('cover_summon', { variant });
-  return { success: true, message: variant === 'wall' ? '已部署土木老姐' : '已部署掩体' };
+  return { success: true, message: variant === 'wall' ? '已部署墙' : '已部署城墙' };
 });
 
 /**

@@ -55,7 +55,7 @@ export interface EventMap {
   'drone_summon': { x?: number; z?: number };
   // ★ 祖宗召唤事件（WorldMode 订阅；使用「祖宗」局内道具触发 → 身前放置站桩友军）
   'sentinel_summon': { x?: number; z?: number };
-  // ★ 掩体/墙部署事件（WorldMode 订阅；「掩体」「土木老姐」→ 沿准星发射投送弹，落点生成）
+  // ★ 城墙/墙部署事件（WorldMode 订阅；「城墙」「墙」→ 沿准星发射投送弹，落点生成）
   'cover_summon': { x?: number; z?: number; variant?: 'cover' | 'wall' };
   // ★ 出击槽池变动（背包页面拖入/拖出/替换；WorldMode 订阅生成/回收友军 + 贴片兜底同步）
   'deployment_changed': { slotIndex: number; itemId: string | null; prev: string | null };

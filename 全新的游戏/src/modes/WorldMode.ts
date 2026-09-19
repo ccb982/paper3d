@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras } from '../entity/CoverEntity';
 import { coverBrickTexture, COVER_W, COVER_T } from '../services/render/CoverRenderer';
 import { DeployPreview } from '../services/fx/DeployPreview';
 import { stepFluidShared } from '../services/fx/FluidShared';
@@ -760,7 +760,7 @@ export class WorldMode implements IGameMode {
         return Math.max(deck, cover);
       },
     });
-    // ★ 投送落点预览（祖宗/掩体）
+    // ★ 投送落点预览（祖宗/城墙/墙）
     if (this.scene) this.deployPreview = new DeployPreview(this.scene);
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
@@ -1150,7 +1150,7 @@ export class WorldMode implements IGameMode {
     this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
       this.launchSentinelProjectile();
     });
-    // ★ 掩体部署：使用「掩体」→ 沿准星发射掩体弹，落点生成玩家掩体
+    // ★ 城墙/墙部署：使用「城墙 / 墙」→ 沿准星发射投送弹，落点生成
     this.coverSummonUnsub = eventBus.on('cover_summon', (payload) => {
       this.launchCoverProjectile(payload.variant === 'wall' ? 'wall' : 'cover');
     });
@@ -1506,8 +1506,10 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'explore') this.waterFx.entry(this.player, dt, true);
     // ★ 涉水循环轨：每帧统一裁决（非探索阶段自动淡出，防航行/舰内残留水声）
     this.waterFx.wade(dt, this.phase === 'explore', this.player);
-    // ★ 投送落点预览（祖宗/掩体）
+    // ★ 投送落点预览（祖宗/城墙/墙）
     this.updateDeployPreview();
+    // ★ 城墙光环：范围内墙体持续修复 + 上限（跟随玩家生命）+ 防御
+    if (this.phase === 'explore') updateWallAuras(queryFinalStats(this.player).maxHp, dt);
     // ★ 环境音效：脚步 / 拨草（入水·涉水音在 WaterFx 内，只对玩家那次生效）
     if (this.phase === 'explore') this.updateAmbientSfx(dt);
     for (const e of this.enemies) this.waterFx.entry(e, dt, false);
@@ -2132,7 +2134,7 @@ export class WorldMode implements IGameMode {
       Math.atan2(aim.x - p.x, aim.z - p.z), wall ? 0xffcc66 : 0xffffff);
   }
 
-  /** ★ 掩体弹（玩家遗物「死仇时代的恨意」/ 道具「掩体」）：像祖宗弹一样从枪口沿准星发射；
+  /** ★ 城墙/墙弹（遗物「死仇时代的恨意」/ 道具「城墙」「墙」）：像祖宗弹一样从枪口沿准星发射；
    *  不结算命中（直接飞过敌人），落地生成玩家掩体（朝向 = 发射方向）。 */
   private launchCoverProjectile(variant: 'cover' | 'wall' = 'cover'): void {
     if (!this.player || !this.scene) return;
@@ -2157,7 +2159,7 @@ export class WorldMode implements IGameMode {
     });
   }
 
-  /** ★ 玩家掩体落成（含上限：超出先拆最早的一面） */
+  /** ★ 玩家城墙/墙落成（含上限：超出先拆最早的一面） */
   private playerCovers: CoverEntity[] = [];
   private spawnCoverAt(x: number, z: number, heading: number, variant: 'cover' | 'wall' = 'cover'): void {
     if (!this.scene) return;
@@ -2195,7 +2197,7 @@ export class WorldMode implements IGameMode {
       const rec = this.sentinelShots[i];
       const shot = rec.proj;
       const land = shot.update(dt, this.camera);
-      // ★ 掩体弹：不结算命中（直接飞过敌人），落地生成玩家掩体
+      // ★ 城墙/墙弹：不结算命中（直接飞过敌人），落地生成
       if (rec.kind === 'cover') {
         if (land) {
           this.sentinelShots.splice(i, 1);
