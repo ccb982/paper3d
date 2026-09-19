@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, wallNear, snapshotCovers } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers } from '../entity/CoverEntity';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
   type WorldStateData, type AllyRec,
@@ -2114,8 +2114,8 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
       targetX: aim.x, targetY: aim.y, targetZ: aim.z,
-      // ★ 贴墙开枪无视墙（防被自己的城墙挡）；离墙远则照常命中（能拆敌墙）
-      ignoreWalls: wallNear(p.x, p.z),
+      // ★ 掩体口径（2026-09-19）：玩家子弹**自动穿自家掩体**（分组过滤），
+      //   打敌掩体需从射击孔穿过（不再贴墙全忽略）。
     });
     // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
     this.swarm.alertAt(p.x, p.z, 16, 6);

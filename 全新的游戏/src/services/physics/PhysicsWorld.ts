@@ -30,6 +30,11 @@ export async function ensureRapierReady(): Promise<void> {
  *  默认刚体 membership/filter 全 1（与一切交互）；
  *  城墙 membership = GROUP_WALL，子弹 filter 去掉该位即可"无视墙"。 */
 export const GROUP_WALL = 0x0002;
+/** ★ 玩家造掩体分组（2026-09-19）：玩家/友军子弹可 filter 掉它实现“穿自家掩体” */
+export const GROUP_COVER_PLAYER = 0x0004;
+/** ★ 我方射击孔膜（2026-09-19）：玩家造城墙的孔口贴一层薄膜，
+ *  只挡敌弹（敌弹 filter 含本位）；玩家/友军弹 filter 剔除本位 → 自由穿。 */
+export const GROUP_SLIT_PLAYER = 0x0008;
 
 export type ColliderShape =
   | { type: 'ball'; radius: number }
@@ -70,6 +75,8 @@ export interface ExtraCollider {
   shape: ColliderShape;
   /** 相对刚体原点的偏移（复合刚体：一簇家具 = 一个刚体 + 多个盒子） */
   offset: { x: number; y: number; z: number };
+  /** ★ 单体碰撞分组覆写（缺省 = 刚体组；射击孔膜用） */
+  groups?: number;
 }
 
 export interface BodyOptions {
@@ -156,7 +163,7 @@ export class PhysicsWorld {
     // ★ 复合刚体：主碰撞体之外的部件（舰船分段等；各自带局部偏移）
     if (extraColliders) {
       for (const c of extraColliders) {
-        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset, collisionGroups);
+        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset, c.groups ?? collisionGroups);
       }
     }
     const id = this.registerBody(body);

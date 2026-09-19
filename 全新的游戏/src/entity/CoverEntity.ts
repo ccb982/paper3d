@@ -15,7 +15,7 @@ import { StructureEntity, type StructureOptions } from './StructureEntity';
 import type { EntityManager } from './EntityManager';
 import { addStaticObstacleRect, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { HealthBar } from '../services/fx/HealthBar';
-import { GROUP_WALL } from '../services/physics/PhysicsWorld';
+import { GROUP_WALL, GROUP_COVER_PLAYER, GROUP_SLIT_PLAYER } from '../services/physics/PhysicsWorld';
 import { RasterMap } from '../services/map/RasterMap';
 import {
   CoverRenderer,
@@ -50,6 +50,8 @@ export interface CoverOptions {
   buildTime?: number;
   /** ★ 变体：cover = 带射击孔掩体（默认）；wall = 实心墙「土木老姐」（无孔、可攀） */
   variant?: 'cover' | 'wall';
+  /** ★ 海报（2026-09-19 用户定调：**玩家造的有海报，敌人造的没有**；缺省 true） */
+  poster?: boolean;
 }
 
 /** ★ 城墙光环结算（每帧；数量个位数 → O(n²) 可忽略）：
@@ -146,20 +148,56 @@ export class CoverEntity extends StructureEntity {
   /** ★ 光环前的基础值（城墙光环动态改 maxHp/defense，离开范围要能回落） */
   private readonly baseMaxHp: number;
   private readonly baseDefense: number;
+  /** ★ 海报开关（玩家造 = true；敌人造 = false） */
+  private readonly poster: boolean;
 
   constructor(em: EntityManager, scene: THREE.Scene, opts: CoverOptions) {
     const hasSlit = (opts.variant ?? 'cover') !== 'wall';
-    // ★ 物理 = 实心单盒（2026-09-19 二次定调：射击孔纯视觉——敌弹不得穿孔；
-    //   玩家贴墙开枪由子弹侧"无视墙"解决，见 wallNear / BulletEntity.ignoreWalls）
-    const phys: StructureOptions['physics'] = {
-      type: 'fixed',
-      options: {
-        shape: { type: 'cuboid', hx: COVER_W / 2, hy: COVER_H / 2, hz: COVER_T / 2 },
-        shapeOffset: { x: 0, y: COVER_H / 2, z: 0 },
-        // ★ 墙专属碰撞分组（玩家子弹可 filter 掉该位实现"无视墙"）
-        collisionGroups: (GROUP_WALL << 16) | 0xffff,
-      },
-    };
+    // ★ 碰撞分组（2026-09-19 用户定调）：玩家造 → GROUP_COVER_PLAYER（玩家/友军子弹穿自家）；
+    //   敌人造 → GROUP_WALL（敌弹穿自家）；对方子弹一律实心（只能穿射击孔）。
+    const groups = opts.owner === 'player'
+      ? (GROUP_COVER_PLAYER << 16) | 0xffff
+      : (GROUP_WALL << 16) | 0xffff;
+    // ★ 物理（2026-09-19 三次定调）：城墙 = **带射击孔的复合体**
+    //   （下沿 / 上沿 / 左右立柱；子弹可从孔穿过）；墙（无孔）= 实心单盒。
+    const phys: StructureOptions['physics'] = hasSlit
+      ? {
+          type: 'fixed',
+          options: {
+            shape: { type: 'cuboid', hx: COVER_W / 2, hy: COVER_SLIT_Y0 / 2, hz: COVER_T / 2 },
+            shapeOffset: { x: 0, y: COVER_SLIT_Y0 / 2, z: 0 },
+            extraColliders: [
+              {
+                shape: { type: 'cuboid', hx: COVER_W / 2, hy: (COVER_H - COVER_SLIT_Y1) / 2, hz: COVER_T / 2 },
+                offset: { x: 0, y: (COVER_SLIT_Y1 + COVER_H) / 2, z: 0 },
+              },
+              {
+                shape: { type: 'cuboid', hx: (COVER_W - COVER_SLIT_W) / 4, hy: (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2, hz: COVER_T / 2 },
+                offset: { x: -(COVER_W + COVER_SLIT_W) / 4, y: (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2, z: 0 },
+              },
+              {
+                shape: { type: 'cuboid', hx: (COVER_W - COVER_SLIT_W) / 4, hy: (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2, hz: COVER_T / 2 },
+                offset: { x: (COVER_W + COVER_SLIT_W) / 4, y: (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2, z: 0 },
+              },
+              // ★ 我方射击孔膜（2026-09-19）：玩家造城墙的孔口贴薄膜——
+              //   **只挡敌弹**（敌弹 filter 含 GROUP_SLIT_PLAYER）；玩家/友军弹剔除本组 → 自由穿。
+              ...(opts.owner === 'player' ? [{
+                shape: { type: 'cuboid' as const, hx: COVER_SLIT_W / 2, hy: (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2, hz: COVER_T / 2 },
+                offset: { x: 0, y: (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2, z: 0 },
+                groups: (GROUP_SLIT_PLAYER << 16) | 0xffff,
+              }] : []),
+            ],
+            collisionGroups: groups,
+          },
+        }
+      : {
+          type: 'fixed',
+          options: {
+            shape: { type: 'cuboid', hx: COVER_W / 2, hy: COVER_H / 2, hz: COVER_T / 2 },
+            shapeOffset: { x: 0, y: COVER_H / 2, z: 0 },
+            collisionGroups: groups,
+          },
+        };
     super(em, {
       x: opts.x, y: opts.y, z: opts.z,
       physics: phys,
@@ -170,6 +208,7 @@ export class CoverEntity extends StructureEntity {
     });
     this.owner = opts.owner ?? 'enemy';
     this.variant = opts.variant ?? 'cover';
+    this.poster = opts.poster !== false;
     this.hasSlit = this.variant !== 'wall';
     this.heading = opts.heading ?? 0;
     this.baseMaxHp = this.maxHp;
@@ -225,11 +264,12 @@ export class CoverEntity extends StructureEntity {
   }
 
   protected createRenderer(scene: THREE.Scene): CoverRenderer {
-    // ★ 背面道具图标：城墙 = 不许笑的脸；墙 = 土木老姐的脸（资产在 public/fx/）
+    // ★ 海报口径（2026-09-19 用户定调）：**玩家造的有海报，敌人造的没有**。
+    //   城墙 = 不许笑的脸；墙 = 土木老姐的脸（资产在 public/fx/）
     const iconUrl = this.hasSlit
       ? '/characters/protagonist/不许笑.ftx3.gz'   // 城墙：不许笑（资产在 protagonist）
       : '/fx/土木老姐.ftx3.gz';                    // 墙：土木老姐
-    return new CoverRenderer(scene, this.hasSlit, iconUrl);
+    return new CoverRenderer(scene, this.hasSlit, this.poster ? iconUrl : null);
   }
 
   /** 建造插值推进（0→1 长高）+ ★ 随地面变化插值（挖坑/地形改动时平滑沉/升） */

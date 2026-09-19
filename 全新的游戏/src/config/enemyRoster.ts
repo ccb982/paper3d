@@ -145,7 +145,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'sarkaz_swordsman', name: '萨卡兹大剑手',
     file: '萨卡兹大剑手，较强的杂兵.ftx3.gz',
-    role: 'assault', attackType: 'melee',
+    // ★ 2026-09-19 用户定调：改造为**后勤兵**（挖坑、造掩体；行为后续接）
+    role: 'logistics', attackType: 'melee',
     ai: SARKAZ_SWORDSMAN_AI,
     hp: 70, defense: 1, attackPower: 6,
     scale: 2.2, collisionScale: 1.25, pack: 1, weight: 7,
