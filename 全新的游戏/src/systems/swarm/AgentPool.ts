@@ -74,6 +74,8 @@ export interface AgentSpawnData {
   suicide?: boolean;
   /** ★ 被击免降格截止（秒） */
   noDemoteUntil?: number;
+  /** ★ 单例编制 */
+  singleton?: boolean;
   /** ★ 远程档（瞬时） */
   ranged?: boolean;
   skin?: number;
@@ -137,6 +139,8 @@ export interface AgentSnapshot extends SwarmSnapshot {
   shotLife?: number;
   suicide?: boolean;
   noDemoteUntil?: number;
+  /** ★ 步骤 7：单例编制 */
+  singleton?: boolean;
 }
 
 export class AgentPool {
@@ -240,6 +244,10 @@ export class AgentPool {
   readonly skin = new Uint8Array(AGENT_CAPACITY);
   readonly shotSpeed = new Float32Array(AGENT_CAPACITY).fill(26);
   readonly shotLife = new Float32Array(AGENT_CAPACITY).fill(2.4);
+  /** ★ 步骤 7：单例编制（1 = 1 单位 1 小队） */
+  readonly singleton = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 步骤 6：被击升格标记（1 = 本帧立即升格） */
+  readonly forcePromote = new Uint8Array(AGENT_CAPACITY);
   /** 移动目标（hasMoveTarget=1 时有效；hold 语义） */
   readonly moveTargetX = new Float32Array(AGENT_CAPACITY);
   readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
@@ -333,6 +341,8 @@ export class AgentPool {
     this.skin[i] = d.skin ?? 0;
     this.shotSpeed[i] = d.shotSpeed ?? 26;
     this.shotLife[i] = d.shotLife ?? 2.4;
+    this.singleton[i] = d.singleton ? 1 : 0;
+    this.forcePromote[i] = 0;
     const hasMt = d.moveTargetX !== undefined && d.moveTargetZ !== undefined;
     this.hasMoveTarget[i] = hasMt ? 1 : 0;
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
@@ -419,6 +429,8 @@ export class AgentPool {
     this.skin[to] = this.skin[from];
     this.shotSpeed[to] = this.shotSpeed[from];
     this.shotLife[to] = this.shotLife[from];
+    this.singleton[to] = this.singleton[from];
+    this.forcePromote[to] = this.forcePromote[from];
     this.moveTargetX[to] = this.moveTargetX[from];
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];

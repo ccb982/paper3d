@@ -69,6 +69,10 @@ export interface EnemySpec {
   airAltitude?: number;
   /** ★ 自爆标签（爆炸飞行怪；基类字段） */
   suicide?: boolean;
+  /** ★ 编制模式：normal = 同质小队 4~12；singleton = 1 单位 1 小队（Boss/小 boss） */
+  squadMode?: 'normal' | 'singleton';
+  /** ★ 单例且不降格（Boss：永保 active，不因距离降格回代理） */
+  noDemote?: boolean;
   /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
    *  缺省 = 自动检测：素材**没有「后」帧** → 强制 billboard（否则转身 180° 会露出
    *  背面空白/镜像）；有「后」帧 = 双向贴片（相机侧换帧 + 转身）。 */
@@ -227,6 +231,7 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'rock_giant', name: '原石虫巨人',
     file: '原石虫巨人，小boss.ftx3.gz',
     role: 'assault', attackType: 'melee',
+    squadMode: 'singleton', noDemote: true,
     ai: ROCK_GIANT_AI,
     hp: 320, defense: 6, attackPower: 8,
     scale: 3.6, collisionScale: 1.9, pack: 1, weight: 1,

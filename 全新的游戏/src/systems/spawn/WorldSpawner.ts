@@ -27,6 +27,8 @@ import { Player } from '../../entity/player/Player';
 import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
+import type { SwarmTierPort } from '../swarm/SwarmTierPort';
+import { recordRecall } from '../combat/KillCounter';
 import { fireCode, type TacticalOrder, type UnitDirective } from '../../entity/SwarmUnit';
 import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
@@ -90,6 +92,10 @@ export interface MobDef {
   billboard?: boolean;
   /** ★ 自爆标签（爆炸飞行怪；基类字段） */
   suicide?: boolean;
+  /** ★ 编制模式（singleton = 1 单位 1 小队） */
+  squadMode?: 'normal' | 'singleton';
+  /** ★ 不降格（Boss：永保 active） */
+  noDemote?: boolean;
 }
 
 /** ★ 代理近战伤害源占位（伤害管线只读 camp/attackPower/critRate/critMult；
@@ -144,7 +150,7 @@ export interface SpawnDeps {
   returnToBase(): void;
 }
 
-export class WorldSpawner {
+export class WorldSpawner implements SwarmTierPort {
   static readonly MAX_ALIVE = 200;
   /** ★ 环境刷怪预铺闸（扫描式波次只批量预铺到 ambientTarget 的一半；
    *  其余由导演低频补至 threat.ambientTarget。前期 target=6 → 只预铺 3 只，
@@ -366,7 +372,6 @@ export class WorldSpawner {
         fps: { idle: 1, walk: 1, attack: 1 },
       },
       facing: '前',
-      aggressive: true,
       aiConfig: ai,
       hp,
       defense: dfs,
@@ -503,47 +508,69 @@ export class WorldSpawner {
       const dx = e.position.x - px, dz = e.position.z - pz;
       if (dx * dx + dz * dz <= r2) continue;
       if (e.dead) continue;
+      // ★ 步骤 7：Boss/单例 noDemote → 永不降格
+      const eDef = this.deps.enemyDefs.get(e);
+      if (eDef?.noDemote) continue;
       // ★ 步骤 10：被击 / 小队警觉 / 倾盆而出期间不降格（交火中的不许降频）
       const now10 = performance.now() / 1000;
       if (e.noDemoteUntil > now10 || this.deps.swarm.holdDemote(e.squadId, now10)) continue;
-      const def = this.deps.enemyDefs.get(e);
-      const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
-      if (!def || mobIndex < 0) {
-        // ★ 非战斗清理（无定义可回池）→ 不算击杀（retire 原因收口，2026-09-18）
-        e.retire('recycled');
-        this.deps.enemies.splice(i, 1);
-        continue;
-      }
-      const stats = this.mobAgentStats(def);
-      this.deps.swarm.demote({
-        mobIndex,
-        x: e.position.x, y: e.position.y, z: e.position.z,
-        hp: e.hp, maxHp: e.maxHp,
-        defense: e.defense, attackPower: e.attackPower,
-        speed: stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
-        scale: def.scale,
-        tier: AGENT_TIER_FAR,
-        yaw: 0,
-        aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
-        // ★ 空中层（2026-09-18）：飞行标记随降格带回代理池（否则一降格就落地）
-        isAir: def.isAir,
-        altitude: def.airAltitude,
-        suicide: def.suicide === true,
-        ranged: stats.ranged,
-        skin: stats.skin,
-        shotSpeed: stats.shotSpeed,
-        shotLife: stats.shotLife,
-        // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
-        ...e.drain(),
-      });
-      // ★ 步骤 5/9：注销 uid 映射（队长标记不再指向该实体）
-      this.forgetEntity(e);
-      // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
-      //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
-      e.retire('demoted');
-      this.deps.enemies.splice(i, 1);
+      this.demote(e);
     }
   }
+
+  /** ★ 步骤 8：单实体降格（SwarmTierPort.demote；数据回池 + 实体退役，不算击杀） */
+  demote(enemy: EnemyBase): void {
+    const e = enemy;
+    const def = this.deps.enemyDefs.get(e);
+    const idx = this.deps.enemies.indexOf(e);
+    const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
+    if (!def || mobIndex < 0) {
+      // ★ 非战斗清理（无定义可回池）→ 不算击杀（retire 原因收口，2026-09-18）
+      e.retire('recycled');
+      if (idx >= 0) this.deps.enemies.splice(idx, 1);
+      return;
+    }
+    const stats = this.mobAgentStats(def);
+    this.deps.swarm.demote({
+      mobIndex,
+      x: e.position.x, y: e.position.y, z: e.position.z,
+      hp: e.hp, maxHp: e.maxHp,
+      defense: e.defense, attackPower: e.attackPower,
+      speed: stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
+      scale: def.scale,
+      tier: AGENT_TIER_FAR,
+      yaw: 0,
+      aggro: stats.aggro, wanderSpeed: stats.wanderSpeed,
+      // ★ 空中层（2026-09-18）：飞行标记必须跟着降格实体回池，否则回池即落地
+      isAir: def.isAir,
+      altitude: def.airAltitude,
+      suicide: def.suicide === true,
+      ranged: stats.ranged,
+      skin: stats.skin,
+      shotSpeed: stats.shotSpeed,
+      shotLife: stats.shotLife,
+      singleton: def.squadMode === 'singleton',
+      // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
+      ...e.drain(),
+    });
+    // ★ 步骤 5/9：注销 uid 映射（队长标记不再指向该实体）
+    this.forgetEntity(e);
+    // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
+    //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
+    e.retire('demoted');
+    if (idx >= 0) this.deps.enemies.splice(idx, 1);
+  }
+
+  /** ★ 步骤 8：升格（SwarmTierPort.promote；委托 promoteAgent） */
+  promote(snap: AgentSnapshot): void {
+    this.promoteAgent(snap);
+  }
+
+  /** ★ 步骤 8：远距回收（SwarmTierPort.recall；不算击杀，只扣当日配额） */
+  recall(count: number): void {
+    recordRecall(this.deps.session, count);
+  }
+
 
   /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
    *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。双通道，谁触发取谁计数：
@@ -701,6 +728,7 @@ export class WorldSpawner {
         skin: stats.skin,
         shotSpeed: stats.shotSpeed,
         shotLife: stats.shotLife,
+        singleton: def.squadMode === 'singleton',
       });
       if (idx >= 0) placed++;
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
@@ -882,6 +910,7 @@ export class WorldSpawner {
         skin: stats.skin,
         shotSpeed: stats.shotSpeed,
         shotLife: stats.shotLife,
+        singleton: def.squadMode === 'singleton',
       });
       if (idx >= 0) {
         any = true;
@@ -990,7 +1019,6 @@ export class WorldSpawner {
         fps: { idle: 1, walk: 1, attack: 1 },
       },
       facing: Math.random() < 0.5 ? '前' : '后',
-      aggressive: true,
       aiConfig: def.ai,
       hp,
       defense: def.defense,

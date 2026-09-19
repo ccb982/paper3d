@@ -26,6 +26,9 @@ import {
   MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
 } from './AtomExecutor';
 import { autoGroundSinkFromFrame } from '../services/fx/groundSink';
+import { EnemyLocomotion } from './enemy/EnemyLocomotion';
+import { EnemyBrain } from './enemy/EnemyBrain';
+import { EnemyPresentation } from './enemy/EnemyPresentation';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -39,7 +42,6 @@ import { eventBus } from '../core/EventBus';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
-  aggressive?: boolean;
   /** AI 配置（无 → 静止） */
   aiConfig?: AIConfig;
   /** 生命值（默认 30） */
@@ -74,7 +76,12 @@ const _atomDir = { x: 0, z: 0 };
 
 export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private assetRef: CharacterFxAssetSource;
-  readonly aggressive: boolean;
+  /** ★ E5：移动器（危险地形绕行；纯搬运） */
+  private readonly locomotion = new EnemyLocomotion();
+  /** ★ E5：表现器（显示帧/转身/扭曲；纯搬运） */
+  private readonly presentation = new EnemyPresentation();
+  /** ★ E5：行为器（眩晕/保底攻击/指令→原子；纯搬运） */
+  private readonly brain = new EnemyBrain();
 
   // ============================================================
   // ★ 蜂群预留字段（《实体架构.md》§5.3；v2 由 SwarmTierPort 填值）
@@ -120,32 +127,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   directiveSpeedMul = 1;
   directiveSeq = 0;
 
-  // ============================================================
-  // ★ 执行层（瞬时，不入快照）：指令 → 原子（移动/开火）；承诺窗口
-  // ============================================================
-  /** 当前移动原子下标（255 = 无覆盖） */
-  atomMove = 255;
-  /** 本段开火门控（true = 本段不开火；meleeSwing/rangedShot 消费） */
-  fireHold = false;
-  private atomSeq = -1;
-  private atomUntil = 0;
-  private atomMoveIdx = 4;
-  private atomFire = true;
+  /** ★ E5：本段开火门控（行为层读取；由 EnemyBrain 写入） */
+  get fireHold(): boolean { return this.brain.fireHold; }
+  /** ★ E5：本段移动原子下标（255 = 无覆盖） */
+  get atomMove(): number { return this.brain.atomMove; }
+  /** ★ E5：是否眩晕中（行为器判定） */
+  get isStunned(): boolean { return this.brain.isStunned; }
 
-  // ============================================================
-  // ★ 保底攻击（2026-09-19 用户定调）：无指令且状态机未接管时，
-  //   目标在射程内 → 直接开火（构造时从 AI 配置解析一次）——防“贴脸不打”。
-  // ============================================================
-  private fbKind: 'none' | 'melee' | 'ranged' | 'suicide' = 'none';
-  private fbRadius = 3;
-  private fbRange = 1.8;
-  private fbDamage = 8;
-  private fbSpeed = 26;
-  private fbLifetime = 2.4;
-  private fbAim = 0;
-  private fbMuzzle = 0;
-  private fbSpread = 0.05;
-  private fbSkin = 'arrow';
   private fbCd = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
@@ -309,19 +297,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   aiAttackTimer = 0;
   /** ★ 本次挥击是否已播完（attackFinished 条件用） */
   aiSwingDone = false;
-  /** ★ 眩晕截止 / 免疫截止时刻（秒；祖宗激光效果，2026-09-14 用户定调） */
-  private stunUntil = 0;
-  private stunImmuneUntil = 0;
-  /** 眩晕时长（秒）/ 眩晕结束后的免疫时长（秒）——防连续锁死 */
-  private static readonly STUN_SECONDS = 1.0;
-  private static readonly STUN_IMMUNE_AFTER = 2.0;
   aiMoveDir = { x: 1, z: 0 };
-  /** ★ 危险地形转向节流计时（前方坑洞/悬崖 → 禁止直行，转向避让） */
-  private hazardTurnTimer = 0;
-  /** ★ 上次采纳的安全绕行航向（贴边连续走，不来回抖动；null=无） */
-  private hazardSafeDir: { x: number; z: number } | null = null;
-  /** ★ 前方探测距离（米；> 碰撞半宽，提前一个身位避开坑沿） */
-  private static readonly HAZARD_PROBE = 2.0;
   /** ★ 远距影子强 LOD（2026-09-12 用户定调）：lod1 起 80% 敌人无影子、lod2 起全无
    *  （剪影解析前裁剪 → 逐顶点贴地采样/仿射全免） */
   private static readonly SHADOW_FAR_CULL = 0.8;
@@ -367,7 +343,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.maxHp = this.hp;
     this.defense = opts.defense ?? 0;       // ★ 防御（高防 = 子弹/近战都更难打动）
     this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
-    this.assetRef = asset;    this.aggressive = opts.aggressive ?? false;
+    this.assetRef = asset;
     this.suicide = opts.suicide === true;
     // ★ 蜂群预留字段：从名册透传（缺省 = 行为不变）
     this.role = opts.role ?? 'grunt';
@@ -395,7 +371,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     const hasBackFrame = !!backFrame && backFrame.bbox.w > 0 && backFrame.bbox.h > 0;
     this.billboard = opts.billboard ?? !hasBackFrame;
     // 初始朝向（贴片朝 +z；显示帧由相机判定；无背面素材恒为「前」）
-    this.setFrameAnimated(this.billboard ? '前' : ((opts.facing ?? '前') as '前' | '后'));
+    this.presentation.setFrameAnimated(this.anim!, this.billboard ? '前' : ((opts.facing ?? '前') as '前' | '后'));
     // 纹理宽高比缩放（不压扁；宽 = scale，高 = scale×bbox高宽比）
     this.applyRenderScale(scale);
     // ★ 接地补偿：必须在 applyRenderScale 之后（半高由缩放决定）
@@ -424,7 +400,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (opts.aiConfig) {
       this.aiStateMachine = new AIStateMachine(opts.aiConfig);
       aiSystem.register(this);
-      this.parseFallbackAttack(opts.aiConfig);
+      this.brain.parse(this, opts.aiConfig);
     }
   }
 
@@ -453,200 +429,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       if (dx * dx + dz * dz > r * r) return;
     }
     this.aiStateMachine?.update(this, ctx);
-    // ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控
-    this.applyDirectiveAtoms(dt, ctx);
-    // ★ 保底攻击：无指令且状态机未进攻时，目标在射程内直接开火
-    this.fallbackAttack(dt, ctx);
+    // ★ E5：执行层（原子覆盖）+ 保底攻击（EnemyBrain；纯搬运）
+    this.brain.tick(this, dt, ctx);
   }
 
-  /** ★ 解析保底攻击参数（构造期一次；从 AI 配置的 inRange 转移 + 攻击行为取值） */
-  private parseFallbackAttack(cfg: AIConfig): void {
-    // ★ 标签兜底：自爆单位即使 AI 没配 selfDestruct 也保底自爆
-    if (this.suicide) this.fbKind = 'suicide';
-    for (const st of Object.values(cfg.states)) {
-      for (const tr of st.transitions) {
-        if (tr.cond === 'inRange' && tr.params?.radius !== undefined) {
-          this.fbRange = Number(tr.params.radius);
-        }
-      }
-    }
-    for (const st of Object.values(cfg.states)) {
-      for (const b of st.behaviors) {
-        const p = b.params ?? {};
-        if (b.name === 'meleeSwing') {
-          this.fbKind = 'melee';
-          this.fbDamage = Number(p.damage ?? 8);
-          if (p.range !== undefined) this.fbRange = Math.max(this.fbRange, Number(p.range));
-          return;
-        }
-        if (b.name === 'selfDestruct') {
-          this.fbKind = 'suicide';
-          this.fbDamage = Number(p.damage ?? 26);
-          this.fbRadius = Number(p.radius ?? 3);
-          return;
-        }
-        if (b.name === 'rangedShot') {
-          this.fbKind = 'ranged';
-          // ★ 远程保底射程：不小于视野保底（先手开火，而非等到 AI inRange 的 9~10m）
-          this.fbRange = Math.max(this.fbRange, ENEMY_ENGAGE_FLOOR);
-          this.fbDamage = Number(p.damage ?? 8);
-          this.fbSpeed = Number(p.speed ?? 26);
-          this.fbLifetime = Number(p.lifetime ?? 2.4);
-          this.fbAim = Number(p.aimHeight ?? 0);
-          this.fbMuzzle = Number(p.muzzleHeight ?? 0);
-          this.fbSpread = Number(p.spread ?? 0.05);
-          this.fbSkin = String(p.skin ?? 'arrow');
-          return;
-        }
-      }
-    }
-  }
-
-  /** ★ 本地目标解析：候选列表（祖宗/舰船/玩家/友军）中第一个在保底射程内的 → `ctx.target` 兜底。
-   *  ★ 不依赖状态机是否评估过 seePlayer（patrol minStay 期间 ctx.target 可能为空）。 */
-  private resolveLocalTarget(ctx: BehaviorContext): { x: number; z: number } | null {
-    const cands = ctx.targetCandidates?.(this);
-    if (cands && cands.length > 0) {
-      const r2 = this.fbRange * this.fbRange;
-      for (const c of cands) {
-        const d2 = (c.x - this.position.x) ** 2 + (c.z - this.position.z) ** 2;
-        if (d2 <= r2) return c;
-      }
-    }
-    return ctx.target;
-  }
-
-  /** ★ 保底攻击：本段开火掷为真（fireHold=false）+ 状态机未在 attack → 目标在射程内直接开火。
-   *  命令优先由开火掷体现（禁火段不打）——不再“有指令就彻底不打”。 */
-  private fallbackAttack(dt: number, ctx: BehaviorContext): void {
-    if (this.fbKind === 'none') return;
-    this.fbCd -= dt;
-    if (this.fbCd > 0) return;
-    if (this.fireHold) return;                                  // ★ 执行层开火掷为假 → 本段不开火
-    if (this.aiStateMachine?.currentState === 'attack') return; // 状态机在打 → 让位（防双开火）
-    const t = this.resolveLocalTarget(ctx);
-    if (!t) return;
-    const d = Math.hypot(t.x - this.position.x, t.z - this.position.z);
-    if (d > this.fbRange) return;
-    this.fbCd = 0.9 + Math.random() * 0.4;
-    if (this.fbKind === 'suicide') {
-      // ★ 自爆保底：范围爆炸 + 自身死亡（与 selfDestruct 行为同口径）
-      ctx.attack({
-        type: 'aoe',
-        source: this,
-        x: this.position.x,
-        y: this.position.y + 0.8,
-        z: this.position.z,
-        radius: this.fbRadius,
-        damage: this.fbDamage,
-        camp: 'enemy',
-      });
-      this.onDeath(null);
-      return;
-    }
-    if (this.fbKind === 'melee') {
-      ctx.attack({
-        type: 'melee',
-        source: this,
-        x: this.position.x,
-        y: this.position.y + 1.0,
-        z: this.position.z,
-        range: this.fbRange,
-        damage: this.fbDamage,
-        camp: 'enemy',
-      });
-      return;
-    }
-    // 远程：真弹道（与 rangedShot 同构：出膛点/矄准点/散布/出膛前移）
-    const ox = this.position.x;
-    const oy = this.hitAnchorY() + this.fbMuzzle;
-    const oz = this.position.z;
-    const ty = (ctx.focusY ?? this.hitAnchorY()) + this.fbAim;
-    let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
-    const len = Math.hypot(dx, dy, dz) || 1;
-    dx /= len; dy /= len; dz /= len;
-    if (this.fbSpread > 0) {
-      const a = (Math.random() - 0.5) * 2 * this.fbSpread;
-      const ca = Math.cos(a), sa = Math.sin(a);
-      const nx = dx * ca - dz * sa;
-      const nz = dx * sa + dz * ca;
-      dx = nx; dz = nz;
-      dy += (Math.random() - 0.5) * this.fbSpread;
-      const l2 = Math.hypot(dx, dy, dz) || 1;
-      dx /= l2; dy /= l2; dz /= l2;
-    }
-    const muzzle = 0.7;
-    ctx.attack({
-      type: 'projectile',
-      source: this,
-      x: ox + dx * muzzle, y: oy + dy * muzzle, z: oz + dz * muzzle,
-      dirX: dx, dirY: dy, dirZ: dz,
-      speed: this.fbSpeed, camp: 'enemy', lifetime: this.fbLifetime,
-      damage: this.fbDamage, bulletSkin: this.fbSkin,
-    });
-  }
-
-  /** ★ 执行层（§5.13）：指令活跃 → 原子掷覆盖移动 + 开火门控（危险地形绕行仍生效） */
-  private applyDirectiveAtoms(dt: number, ctx: BehaviorContext): void {
-    const now = performance.now() / 1000;
-    const dk = this.directiveKind;
-    // 无指令 / 指令过期 → 回落本地自主（旧行为）
-    if (dk === 'none' || !(this.directiveUntil === 0 || now < this.directiveUntil)) {
-      this.atomMove = 255;         // 无指令 → 本地自主（旧行为）
-      this.fireHold = false;
-      this.directiveSpeedMul = 1;
-      return;
-    }
-    const t = this.resolveLocalTarget(ctx);
-    const dist = t ? Math.hypot(t.x - this.position.x, t.z - this.position.z) : 0;
-    const range = this.fbRange > 0 ? this.fbRange : (this.attackType === 'ranged' ? 12 : 2.2);
-    const w = resolveWeights(dk, this.orderKind, roleBucket(this.role), {
-      inRange: !!t && dist <= range,
-      rangeRatio: dist / Math.max(1e-3, range),
-      lowHp: this.hp < this.maxHp * 0.3,
-      justHit: false,            // 后续接入受击时间戳
-      hasTarget: !!t,
-    });
-    // 承诺窗口：指令变更 / 到段边界 → 重掷
-    if (this.directiveSeq !== this.atomSeq || now >= this.atomUntil) {
-      this.atomSeq = this.directiveSeq;
-      this.atomMoveIdx = rollMove(w.move);
-      this.atomFire = rollFire(w.fire);
-      this.atomUntil = now + 0.35 * (0.7 + Math.random() * 0.6);
-    }
-    this.atomMove = this.atomMoveIdx;
-    this.fireHold = !this.atomFire;
-    // 方向：指令目标点 > 当前目标 > 不移动
-    let tx = 0, tz = 0;
-    const dtx = this.directiveTargetX - this.position.x;
-    const dtz = this.directiveTargetZ - this.position.z;
-    const td = Math.hypot(dtx, dtz);
-    if (td > 0.5) { tx = dtx / td; tz = dtz / td; }
-    else if (t && dist > 1e-3) { tx = (t.x - this.position.x) / dist; tz = (t.z - this.position.z) / dist; }
-    if (tx !== 0 || tz !== 0) {
-      atomDirection(MOVE_ATOMS[this.atomMoveIdx], tx, tz, _atomDir);
-      if (_atomDir.x !== 0 || _atomDir.z !== 0) {
-        // 近似基础速度（2.5 m/s；精确移速后续配置化）× 指令限速
-        this.moveBy(_atomDir.x, _atomDir.z, dt, 2.5 * this.directiveSpeedMul);
-      }
-    }
-  }
-
-  /** ★ 当前是否眩晕中（祖宗激光；眩晕期间 AI 完全停摆） */
-  get isStunned(): boolean {
-    return performance.now() / 1000 < this.stunUntil;
-  }
-
-  /** ★ 施加眩晕（祖宗激光命中）：免疫期内/已死亡 → 不生效。
-   *  眩晕同时打断当前挥击（可读性：被打断即中止）。返回是否实际眩晕。 */
+  /** ★ E5：施加眩晕（祖宗激光命中）——转发 EnemyBrain */
   applyStun(): boolean {
-    const now = performance.now() / 1000;
-    if (this.hp <= 0 || now < this.stunImmuneUntil) return false;
-    this.stunUntil = now + EnemyBase.STUN_SECONDS;
-    this.stunImmuneUntil = now + EnemyBase.STUN_SECONDS + EnemyBase.STUN_IMMUNE_AFTER;
-    this.aiAttackTimer = 0; // 打断当前挥击
-    this.aiSwingDone = true;
-    return true;
+    return this.brain.applyStun(this);
   }
 
   /** ★ 移动（统一走 CharacterController 基类函数，与玩家一致）：
@@ -654,122 +443,30 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度）
    *   ★ 防掉坑：移动前探测前方地形，坑洞/悬崖/水面前提前停下转向 */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
-    // ★ 危险地形回避：若目标方向前方 HAZARD_PROBE 米内有坑/悬崖，
-    //   不朝该方向直行，改沿安全方向绕行
-    if (this.isDangerAhead(dx, dz)) {
-      // ★ 若上次安全航向仍安全（且与目标方向不相反）→ 延续，贴边连续走
-      if (this.hazardSafeDir) {
-        const k = this.hazardSafeDir;
-        if (k.x * dx + k.z * dz > -0.1 && !this.isDangerAhead(k.x, k.z)) {
-          this.controller.moveToward(k.x, k.z, dt, speed);
-          this.yawBase = Math.atan2(k.x, k.z);
-          return;
-        }
-        this.hazardSafeDir = null;
-      }
-      // ★ 节流：只隔一段时间重新扫向（避免原地高频抖动/每帧重算）
-      this.hazardTurnTimer -= dt;
-      if (this.hazardTurnTimer > 0) {
-        this.controller.moveDir.x = 0;
-        this.controller.moveDir.y = 0;
-        return;
-      }
-      this.hazardTurnTimer = 0.45;
-      // ★ 扫描候选航向：从小到大偏转 ±22.5°、±45°… 直到找到安全方向
-      const base = Math.atan2(dz, dx);
-      let found: { x: number; z: number } | null = null;
-      for (let k = 1; k <= 8; k++) {
-        const dev = (Math.PI / 8) * k;
-        for (const s of [1, -1] as const) {
-          const a = base + dev * s;
-          const cdx = Math.cos(a), cdz = Math.sin(a);
-          if (!this.isDangerAhead(cdx, cdz)) { found = { x: cdx, z: cdz }; break; }
-        }
-        if (found) break;
-      }
-      if (found) {
-        this.hazardSafeDir = found;
-        dx = found.x;
-        dz = found.z;
-      } else {
-        // 全部方向都危险（深坑孤岛）：本帧不动，等下一轮节流再试
-        this.controller.moveDir.x = 0;
-        this.controller.moveDir.y = 0;
-        return;
-      }
-    } else {
-      this.hazardTurnTimer = 0;
-      this.hazardSafeDir = null;
+    // ★ E5：危险地形绕行由 EnemyLocomotion 解析（纯搬运）
+    const r = this.locomotion.resolve(
+      this.entity.position.x, this.entity.position.y, this.entity.position.z,
+      this.airborne, dx, dz, dt,
+    );
+    if (!r.move) {
+      this.controller.moveDir.x = 0;
+      this.controller.moveDir.y = 0;
+      return;
     }
-    this.controller.moveToward(dx, dz, dt, speed);
+    this.controller.moveToward(r.x, r.z, dt, speed);
     // 贴片朝向 = 移动方向（绕 Y 旋转：+z 指向移动方向）
-    if (Math.abs(dx) > 0.001 || Math.abs(dz) > 0.001) {
-      this.yawBase = Math.atan2(dx, dz);
+    if (Math.abs(r.x) > 0.001 || Math.abs(r.z) > 0.001) {
+      this.presentation.yawBase = Math.atan2(r.x, r.z);
     }
   }
-
-  /** ★ 前方是否有危险地形（只挡"坑/深水/高台立面"）：
-   *   从脚下向 (dx,dz) 方向探测 HAZARD_PROBE 米，
-   *   落点是坑洞地块（lethal）或表面过低（深坑底）→ 危险；
-   *   ★ 深水（水深 > 0.8m）→ 危险（敌人不过水）；
-   *   ★ 高台立面（近探陡升且不继续延伸 = 墙）→ 危险；插值坡（连续上升）放行。
-   *   用 RasterMap 高度场（静态），不依赖物理体，成本极低。 */
-  private isDangerAhead(dx: number, dz: number): boolean {
-    const len = Math.hypot(dx, dz);
-    if (len < 1e-4) return false;
-    // ★ 空中层（2026-09-18）：飞行单位不吃地面危险（坑/深水/立面）→ 永远"前方安全"
-    if (this.airborne) return false;
-    const ux = dx / len, uz = dz / len;
-    const raster = RasterMap.current;
-    if (!raster) return false;
-    const p = this.entity.position;
-    const p1 = EnemyBase.HAZARD_PROBE;
-    const p2 = p1 * 0.55; // 中间采样点（更早发现坑沿，转角更平滑）
-    // ★ 第二层高度（浮空洞顶）：用自身当前高度选层——站在山上的敌人不会把洞当坑
-    const h0 = raster.surfaceHeightAtFor(p.x, p.z, p.y);
-    for (const d of [p2, p1]) {
-      const hx = p.x + ux * d;
-      const hz = p.z + uz * d;
-      const role = raster.tileDefAt(hx, hz).genRole;
-      const h = raster.surfaceHeightAtFor(hx, hz, p.y);
-      // 坑洞地块（lethal 深坑）：不可站立 → 危险
-      if (role === 'pit') return true;
-      // 坑底过低（挖深/坑洞的深底，判定死亡线以下）→ 危险
-      if (h < -1.2) return true;
-      // ★ 深水（水面 0 − 水底 > 0.8m）：敌人不涉水 → 危险
-      if (role === 'liquid' && h < -0.8) return true;
-    }
-    // ★ 高台立面判定：0.45m 处陡升 > 0.6m，且 1.2m 处没有同斜率延续 → 墙（插值坡放行）
-    const hNear = raster.surfaceHeightAtFor(p.x + ux * 0.45, p.z + uz * 0.45, p.y);
-    const hFar = raster.surfaceHeightAtFor(p.x + ux * 1.2, p.z + uz * 1.2, p.y);
-    const riseNear = hNear - h0;
-    const riseFar = hFar - hNear;
-    if (riseNear > 0.6 && riseFar < riseNear * 0.5) return true;
-    return false;
-  }
-
-  /** 切帧（显示帧：由相机判定，见 onUpdate） */
-  private setFrameAnimated(facing: '前' | '后'): void {
-    if (this.showFacing === facing) return;
-    this.showFacing = facing;
-    const source = this.anim!.source;
-    // 缺帧回退：目标帧 → 前帧 → 资产单帧「帧 1」；都没有 = 保持第 0 帧（不刷警告）
-    let name: string | null = null;
-    if (source.hasFrame(facing)) name = facing;
-    else if (source.hasFrame('前')) name = '前';
-    else if (source.hasFrame('帧 1')) name = '帧 1';
-    if (name) this.anim!.playFrames([name], { loop: true, fps: 1 });
-  }
-  /** 贴片朝向角（移动方向决定） */
-  private yawBase = 0;
-  /** 当前显示帧（相机判定） */
-  private showFacing: '前' | '后' | null = null;
 
   /** ★ 渲染距离应用（基类联动动画/渲染管线；基类 viewLod 供子类降级表现） */
   override applyViewDistance(distance: number): void {
     super.applyViewDistance(distance);
     // 立即按等级应用扭曲开关（不等下一帧 onUpdate）
-    this.applyDistort();
+    this.presentation.applyDistort({
+      anim: this.anim!, asset: this.assetRef, renderer: this.renderer, viewLod: this.viewLod,
+    });
   }
 
   protected override onUpdate(dt: number): void {
@@ -780,82 +477,12 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     //   相机在背面侧 → 后帧 + 贴片转身 180°（面向相机绘制背面）
     // ★ 视锥外不做这些纯表现计算（动画/朝向/扭曲），回到视野下一帧自动恢复
     if (!this.inFrustum) return;
-    if (this.billboard) {
-      // ★ 无背面素材：始终正面朝相机（billboard 由 EntityBase.render 应用）——
-      //   不转身、不切后帧（否则露出背面空白/镜像贴图）
-      this.setFrameAnimated('前');
-    } else if (this.camera) {
-      const camDirZ = this.camera.position.z - this.entity.position.z;
-      const camDirX = this.camera.position.x - this.entity.position.x;
-      // 贴片正面方向（+z 经 yawBase 旋转）
-      const fz = Math.cos(this.yawBase);
-      const fx = Math.sin(this.yawBase);
-      // 相机是否在正面侧（点积 > 0）
-      const facingCam = (camDirX * fx + camDirZ * fz) >= 0;
-      if (facingCam) {
-        this.setFrameAnimated('前');
-        this.applyYaw(this.yawBase);
-      } else {
-        this.setFrameAnimated('后');
-        this.applyYaw(this.yawBase + Math.PI);
-      }
-    }
-
-    // ★ 每帧应用当前帧的扭曲参数（特效包参数，第一帧已继承到所有帧；
-    //   ★ LOD 降级：viewLod 1+ 不应用扭曲——省计算，视觉可接受）
-    this.applyDistort();
-  }
-
-  /** 应用当前帧扭曲参数（按 viewLod 开关）。
-   *  ★ 兼容两种资产：特效包(Asset)走 getFrameRenderData；纯纹理包(FtxAsset)
-   *    无该方法，改从 getFtxFrame 读同一组 distort 字段。 */
-  private applyDistort(): void {
-    const idx = this.anim!.state.frameIndex;
-    let d: {
-      distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
-      distortSpeed: number; distortRotation: number;
-    } | null | undefined;
-    const a = this.assetRef as unknown as {
-      getFrameRenderData?: (i: number) => {
-        distortEnabled: boolean; distortAmplitude: number; distortFrequency: number;
-        distortSpeed: number; distortRotation: number;
-      } | null;
-    };
-    if (typeof a.getFrameRenderData === 'function') {
-      d = a.getFrameRenderData(idx);
-      if (d && 'distortEnabled' in d) {
-        // 特效包：直接使用
-      } else {
-        d = null;
-      }
-    } else {
-      // 纯纹理包(FtxAsset)：无特效包 distort 参数 → 默认关闭
-      const f = this.assetRef.getFtxFrame(idx) as unknown as {
-        distortEnabled?: boolean; distortAmplitude?: number; distortFrequency?: number;
-        distortSpeed?: number; distortRotation?: number;
-      } | null;
-      d = f ? {
-        distortEnabled: !!f.distortEnabled, distortAmplitude: f.distortAmplitude ?? 0.06,
-        distortFrequency: f.distortFrequency ?? 5.0, distortSpeed: f.distortSpeed ?? 1.2,
-        distortRotation: f.distortRotation ?? 0,
-      } : null;
-    }
-    if (d && this.renderer) {
-      (this.renderer as FTXQuad).setDistort({
-        enabled: this.viewLod === 0 && d.distortEnabled,
-        amplitude: d.distortAmplitude,
-        frequency: d.distortFrequency,
-        speed: d.distortSpeed,
-        rotation: d.distortRotation,
-      });
-    }
-  }
-
-  /** 贴片绕 Y 旋转（朝相机侧显示对应面） */
-  private applyYaw(rad: number): void {
-    if (this.renderer && 'setYaw' in this.renderer) {
-      (this.renderer as { setYaw(r: number): void }).setYaw(rad);
-    }
+    // ★ E5：显示帧 + 转身 + 扭曲由 EnemyPresentation 处理（纯搬运）
+    this.presentation.update({
+      anim: this.anim!, asset: this.assetRef, renderer: this.renderer, viewLod: this.viewLod,
+      billboard: this.billboard, camera: this.camera,
+      x: this.entity.position.x, z: this.entity.position.z,
+    });
   }
 
   /** ★ 退役业务钩子：真击杀在此上报当天击杀统计（retire('killed') 由 onDeath 触发）；

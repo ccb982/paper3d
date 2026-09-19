@@ -357,13 +357,9 @@ export class WorldMode implements IGameMode {
     shipX: 0, shipZ: 0,
     camForwardX: 0, camForwardZ: 1,
     entityCount: 0,
-    promote: () => {},
     melee: () => {},
     // ★ 真击杀（代理侧）：记当日击杀数（掉落/遗物由 onAgentKilled 单独结算）
     onAgentKilled: () => { recordKill(this.session); },
-    // ★ 远距回收（不算击杀）：只记 recalled —— **不动分母**（当天总数冻结）。
-    //   配额闸门看 spawned（只增不减），所以回收后不会补刷（2026-09-16 修正）
-    onAgentRecalled: (n) => { recordRecall(this.session, n); },
   };
 
   /** ★ 杂兵配置条目（由 enemyAssets 按 id 查 config/enemyRoster.ts 装配；生成时按权重随机取一条） */
@@ -860,6 +856,9 @@ export class WorldMode implements IGameMode {
         attackType: spec.attackType,
         // ★ 自爆标签（基类字段）
         suicide: spec.suicide,
+        // ★ 步骤 7：编制模式 / 不降格（名册透传）
+        squadMode: spec.squadMode,
+        noDemote: spec.noDemote,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -874,7 +873,8 @@ export class WorldMode implements IGameMode {
       this.mobDefs.map((d) => d.groundSink),
     );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
-    this.swarmHooks.promote = (snap) => this.spawner.promoteAgent(snap);
+    // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
+    this.swarmHooks.tierPort = this.spawner;
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）

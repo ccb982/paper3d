@@ -11,7 +11,7 @@
 import type {
   DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective,
 } from '../../entity/SwarmUnit';
-import { FIRE_FREE, type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
+import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
@@ -44,8 +44,13 @@ export const ORDER_TTL_DEFAULT = 30;
 /** 个体指令 TTL（弱权限：短 TTL） */
 export const DIRECTIVE_TTL = 6;
 
+/** ★ 队内保命线（个体 hpRatio）：低于此值 → 队长给该员下 `fallback`（撤出战斗） */
+export const MEMBER_FALLBACK_HP = 0.3;
+
 export class SquadBlackboard {
   private orders = new Map<number, SquadOrderState>();
+  /** ★ 小队间消息（引擎中转；收件队取走即消） */
+  private messages: SquadMessage[] = [];
 
   issue(state: SquadOrderState): void {
     this.orders.set(state.squadId, state);
@@ -55,13 +60,43 @@ export class SquadBlackboard {
     return this.orders.get(squadId) ?? null;
   }
 
+  /** ★ 小队间发消息（同 kind+from+to 覆盖旧件，避免堆积） */
+  send(msg: SquadMessage): void {
+    if (msg.toSquadId < 0 || msg.toSquadId === msg.fromSquadId) return;
+    const i = this.messages.findIndex(
+      (m) => m.kind === msg.kind && m.fromSquadId === msg.fromSquadId && m.toSquadId === msg.toSquadId,
+    );
+    if (i >= 0) this.messages[i] = msg;
+    else this.messages.push(msg);
+  }
+
+  /** ★ 取走发给本队的消息（过期自动丢弃） */
+  takeFor(squadId: number, now: number): SquadMessage[] {
+    if (this.messages.length === 0) return [];
+    const out: SquadMessage[] = [];
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i];
+      if (m.until <= now) {
+        this.messages.splice(i, 1);
+        continue;
+      }
+      if (m.toSquadId === squadId) {
+        out.push(m);
+        this.messages.splice(i, 1);
+      }
+    }
+    return out;
+  }
+
   /** 小队注销（全灭）→ 黑板同步清 */
   dropSquad(squadId: number): void {
     this.orders.delete(squadId);
+    this.messages = this.messages.filter((m) => m.fromSquadId !== squadId && m.toSquadId !== squadId);
   }
 
   clear(): void {
     this.orders.clear();
+    this.messages.length = 0;
   }
 }
 
@@ -109,10 +144,23 @@ export class SquadTactics {
    * 分解：命令 + 成员角色桶 → 个体指令（默认矩阵；稳定输出）。
    * 目标点：命令 target → 指令 target（路径滚动由后续执行层按 corridorIdx 推进）。
    */
-  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number): UnitDirective {
+  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1): UnitDirective {
     const state = this.board.get(squad.id);
-    const kind: DirectiveKind = state ? DEFAULT_DIRECTIVE[state.order.kind][bucket] : 'regroup';
     const target = state?.order.target;
+    // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。
+    //   队整体已在撤退档时不重复下发（避免覆盖 retreat 的分解）。
+    if (memberHpRatio <= MEMBER_FALLBACK_HP && state?.order.kind !== 'retreat') {
+      const dir: UnitDirective = {
+        kind: 'fallback',
+        until: now + DIRECTIVE_TTL,
+        fire: 'hold',
+        speedMul: 1.2,
+        seq: this.seq++,
+      };
+      if (target) { dir.targetX = target.x; dir.targetZ = target.z; }
+      return dir;
+    }
+    const kind: DirectiveKind = state ? DEFAULT_DIRECTIVE[state.order.kind][bucket] : 'regroup';
     const dir: UnitDirective = {
       kind,
       until: now + DIRECTIVE_TTL,
@@ -130,12 +178,27 @@ export class SquadTactics {
   }
 }
 
-/** 指令的“开火策略”默认值（执行层消费；避免魔法字符串） */
-export const DIRECTIVE_FIRE_DEFAULT = FIRE_FREE;
 
 // ============================================================
 // ★ 队长自主发令（9d；《实体架构.md》§5.11）
 // ============================================================
+
+/** ★ 上报（队员→队长；《实体架构.md》§5.11；当前实现 contact/underAttack/lowHp/needSupport，其余预留） */
+export type SwarmReportKind = 'contact' | 'underAttack' | 'casualty' | 'lowHp' | 'blocked' | 'arrived' | 'needSupport';
+
+/** ★ 小队间消息（队长↔队长，经引擎中转；当前实现 requestSupport/shareContact，其余预留） */
+export type SquadMessageKind = 'shareContact' | 'requestSupport' | 'warn' | 'regroupWith' | 'flankCall';
+
+export interface SquadMessage {
+  kind: SquadMessageKind;
+  fromSquadId: number;
+  toSquadId: number;
+  /** 位置（求援点 / 共享的目击点） */
+  x: number;
+  z: number;
+  /** 截止（秒；过期丢弃） */
+  until: number;
+}
 
 /** ★ 队长策略（按小队属性；2026-09-19 用户定调：不同属性不同策略） */
 export interface LeaderStrategy {
@@ -172,6 +235,12 @@ export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
 /** 命令 TTL（秒） */
 export const LEADER_TTL = 4;
 
+/** ★ 队长 AI 需要的评级面（结构化最小子集；避免引入 SquadRating 全量字段） */
+export type LeaderRating = {
+  hpRatio: number; cx: number; cz: number;
+  lastSeenX?: number; lastSeenZ?: number; lastSeenAt?: number;
+};
+
 /** ★ 队长自主发令器（1Hz）：按**小队属性**选策略（引擎命令优先，不抢）。 */
 export class SquadLeaderAI {
   private accum = 0;
@@ -180,7 +249,7 @@ export class SquadLeaderAI {
     dt: number,
     squads: {
       all(): IterableIterator<Squad>;
-      ratingOf(id: number, now: number): { hpRatio: number; cx: number; cz: number } | null;
+      ratingOf(id: number, now: number): LeaderRating | null;
     },
     tactics: SquadTactics,
     px: number,
@@ -198,8 +267,37 @@ export class SquadLeaderAI {
       if (!r) continue;
       const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];
       const d = Math.hypot(r.cx - px, r.cz - pz);
-      // ① 残血撤退（自爆档不撤）
-      if (strat.retreatHp > 0 && r.hpRatio <= strat.retreatHp && d < 40) {
+      // ---- ★ 步骤 9e：小队间消息（队长↔队长，经黑板中转） ----
+      const msgs = tactics.board.takeFor(s.id, now);
+      let reacted = false;
+      for (const m of msgs) {
+        if (m.kind === 'requestSupport') {
+          // 友邻求援：自己还健康 → 赴援（向求援点推进）
+          if (r.hpRatio > 0.5) {
+            tactics.issue(s.id, { kind: 'advance', target: { x: m.x, z: m.z }, seq: 0 }, now, LEADER_TTL, 'leader');
+            reacted = true;
+          }
+        } else if (m.kind === 'shareContact') {
+          // 共享目击：自己没情报 → 过去看看
+          const fresh = r.lastSeenAt !== undefined && now - r.lastSeenAt <= 3;
+          if (!fresh) {
+            tactics.issue(s.id, { kind: 'advance', target: { x: m.x, z: m.z }, seq: 0 }, now, LEADER_TTL, 'leader');
+            reacted = true;
+          }
+        }
+      }
+      if (reacted) continue;
+      // ★ 队长看队内具体状态：过半成员残血 → 全队撤（即使队均血量还行）
+      let low = 0, alive = 0;
+      for (const m of s.members.values()) {
+        alive++;
+        if (m.maxHp > 0 && m.hp / m.maxHp <= MEMBER_FALLBACK_HP) low++;
+      }
+      const squadBroken = alive > 0 && low * 2 >= alive;
+      // ① 残血撤退（自爆档不撤；队均低血 或 过半残血）
+      if (strat.retreatHp > 0 && d < 40 && (r.hpRatio <= strat.retreatHp || squadBroken)) {
+        // ★ 步骤 9e：危急 → 向最近的其他小队发 `requestSupport`（引擎中转）
+        this.requestSupport(s.id, r.cx, r.cz, squads, tactics, now);
         const ax = r.cx - px, az = r.cz - pz;
         const len = Math.hypot(ax, az) || 1;
         tactics.issue(s.id, {
@@ -211,6 +309,16 @@ export class SquadLeaderAI {
       }
       // ② 接敌
       if (d >= strat.engageR) continue;
+      // ★ 步骤 9e：有新鲜目击 → 向最近的其他小队共享（shareContact）
+      if (r.lastSeenAt !== undefined && now - r.lastSeenAt <= 3 && r.lastSeenX !== undefined && r.lastSeenZ !== undefined) {
+        const near = this.nearestOther(s.id, r.cx, r.cz, squads);
+        if (near >= 0) {
+          tactics.board.send({
+            kind: 'shareContact', fromSquadId: s.id, toSquadId: near,
+            x: r.lastSeenX, z: r.lastSeenZ, until: now + 3,
+          });
+        }
+      }
       if (strat.press) {
         // 压迫式：直扑玩家（突击/防御/飞行/自爆）
         tactics.issue(s.id, { kind: 'advance', target: { x: px, z: pz }, seq: 0 }, now, LEADER_TTL, 'leader');
@@ -225,6 +333,40 @@ export class SquadLeaderAI {
         }, now, LEADER_TTL, 'leader');
       }
     }
+  }
+
+  /** ★ 步骤 9e：向最近的其他小队发求援（引擎中转；同 from+to 自动去重） */
+  private requestSupport(
+    squadId: number, cx: number, cz: number,
+    squads: { all(): IterableIterator<Squad>; ratingOf(id: number, now: number): { hpRatio: number; cx: number; cz: number } | null },
+    tactics: SquadTactics,
+    now: number,
+  ): void {
+    const near = this.nearestOther(squadId, cx, cz, squads);
+    if (near < 0) return;
+    tactics.board.send({
+      kind: 'requestSupport', fromSquadId: squadId, toSquadId: near,
+      x: cx, z: cz, until: now + 4,
+    });
+  }
+
+  /** 最近的其他小队 id（无 = -1） */
+  private nearestOther(
+    squadId: number, cx: number, cz: number,
+    squads: { all(): IterableIterator<Squad>; ratingOf(id: number, now: number): { hpRatio: number; cx: number; cz: number } | null },
+  ): number {
+    let best = -1;
+    let bestD2 = Infinity;
+    for (const o of squads.all()) {
+      if (o.id === squadId) continue;
+      let ox = 0, oz = 0, n = 0;
+      for (const m of o.members.values()) { ox += m.x; oz += m.z; n++; }
+      if (n === 0) continue;
+      ox /= n; oz /= n;
+      const d2 = (ox - cx) * (ox - cx) + (oz - cz) * (oz - cz);
+      if (d2 < bestD2) { bestD2 = d2; best = o.id; }
+    }
+    return best;
   }
 
   clear(): void {
