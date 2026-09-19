@@ -203,9 +203,6 @@ export interface WorldModeEnterContext extends IGameModeContext {
   debug?: {
     testChunk?: boolean;
     enemyStress?: number;
-    /** ★ 落地名册陈列：舰船落地后把每种敌人各铺一只（见 WorldSpawner.spawnRosterShowcase）。
-     *  `?roster=0` 可关（缺省开）。 */
-    rosterOnLanding?: boolean;
   };
 }
 
@@ -568,7 +565,7 @@ export class WorldMode implements IGameMode {
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
-  private rosterOnLanding = false;
+
   /** ★ 调试：F9 颜色回读监听器（exit 时移除） */
   private _f9Handler: ((e: KeyboardEvent) => void) | null = null;
   /** ★ 调试：置位后本帧 render() 末尾立即回读（默认帧缓冲 swap 后读返回 0） */
@@ -704,7 +701,7 @@ export class WorldMode implements IGameMode {
       onChunkActivated: (cx, cz) => this.onChunkActivated(cx, cz),
     });
     this.testChunk = ctx.debug?.testChunk ?? false;
-    this.rosterOnLanding = ctx.debug?.rosterOnLanding ?? false;
+
     // ★ 航行期：地图两级构建的【粗加载】——大半径铺粗块（硬边/纯色/无物理/无水面/无装饰）
     this.chunks.setCoarseMode(true);
     // ★ 航行低耗渲染：水面隐藏（不渲染水/不跑水面 FFT 着色）+ 云流体/月亮离屏不推进
@@ -877,7 +874,7 @@ export class WorldMode implements IGameMode {
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
     // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）+ S0 勘察
-    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0) }); this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
+    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) }); this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
@@ -1531,7 +1528,7 @@ export class WorldMode implements IGameMode {
       // ★ 兵力创建全权交给蜂群架构（指挥器）：开局不预置刷兵，给玩家发育机会
       void order;
       // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
-      this.spawner.scanAndSpawnWaves(pp.x, pp.y, 4);
+      // ★ 兵力创建全权交给蜂群架构：环扫刷怪已关闭（落地不再一堆兵）
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);
@@ -3094,14 +3091,6 @@ export class WorldMode implements IGameMode {
     this.worldUIManager.setCombatHudVisible(true); // ★ 停靠后：正式绘制战斗 HUD
     this.syncSlotAllies();                         // ★ 停靠后：友军出队（与出击槽全量同步）
     this.showFloatingAt(exit.x, exit.y + 1.6, exit.z, emergency ? '紧急停靠' : '已停靠', 'heal');
-    // ★ 落地名册陈列（?roster=1）：每种敌人各铺一只（不含普瑞赛斯），绕舰船落点一圈。
-    //   放在角色就位之后 —— 环带以舰船为中心，角色在舷侧，整圈都落在 L3 升格半径 35m 内，
-    //   下一帧起就会逐个升格成实体（能看到真实的 AI/弹道）。
-    if (this.rosterOnLanding) {
-      this.spawner.spawnRosterShowcase(sp.x, sp.z);
-      // 头顶再提示一次，避免玩家没注意脚下已经围了一圈
-      this.showFloatingAt(exit.x, exit.y + 3.2, exit.z, '名册陈列：每兵种一只', 'crit');
-    }
     // 兜底：若镜头调度意外缺失（无相机/被取消），直接就位并交还控制
     if (!this.camBlend) {
       this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);

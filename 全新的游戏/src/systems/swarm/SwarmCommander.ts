@@ -114,15 +114,17 @@ export class SwarmCommander {
     ];
     const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
     const baseA = Math.atan2(plan.approachZ, plan.approachX);
-    const ringR = 56 + (this.battalionCount - 1) * 8;
+    // ★ 集结区（正面楔形：±30°、≈96m 起）——从来向远处进场，**不围圈**
+    const ringR = 96 + (this.battalionCount - 1) * 8;
     // 精英：50% 额外 1 只，20% 再多 1 只（沿环布置，比例不计入基准 30）
     const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
     let total = comp.reduce((s, [, n]) => s + n, 0) + eliteN;
     let k = 0;
     const push = (role: UnitRole, elite: boolean): void => {
-      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 3);   // 来向 ±60°
-      const x = plan.cx + Math.cos(a) * ringR;
-      const z = plan.cz + Math.sin(a) * ringR;
+      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 6);   // 来向 ±30°（正面楔形）
+      const rr = ringR + (Math.random() - 0.5) * 10;              // 小幅纵深抖动
+      const x = plan.cx + Math.cos(a) * rr;
+      const z = plan.cz + Math.sin(a) * rr;
       k++;
       if (instant) this.spawnMob?.(x, z, role, elite);
       else this.spawnQueue.push({ x, z, role, elite });   // ★ 逐步登场
@@ -195,10 +197,10 @@ export class SwarmCommander {
     this.engAccum += dt;
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
-    // 玩家跌进 30m：暂停施工（转防御；队长自主交战接管）
-    if (Math.hypot(playerX - this.plan.cx, playerZ - this.plan.cz) < 30) return;
     const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
     if (!slot) { this.stage = 'S2'; return; }
+    // 玩家跌进施工点 30m：暂停施工（转防御；队长自主交战接管）
+    if (Math.hypot(playerX - slot.x, playerZ - slot.z) < 30) return;
     const plan = this.plan;
     // ① 掩护队（盾/突击，最多 2 队）先行到防线前方
     for (const s of squads.filter((q) => q.type === 'defense' || q.type === 'assault').slice(0, 2)) {

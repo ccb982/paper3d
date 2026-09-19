@@ -132,6 +132,18 @@ export function recordKill(session: GameSession | null | undefined): void {
   dp.enemies.kills++;
 }
 
+/**
+ * ★ 蜂群架构兵力创建（2026-09-19）：**同步抬高当天敌人总数**。
+ *   新模型下兵力计划由指挥层动态决定（大队一个个来），分母跟着实际生成走，
+ *   HUD 「kills / quota」才不会出现“杀了 60 总数才 40”的不一致。
+ */
+export function addQuota(session: GameSession | null | undefined, count = 1): void {
+  if (!session || count <= 0) return;
+  const dp = session.dayProgress as unknown as { enemies?: DayEnemyProgress };
+  if (!dp.enemies) dp.enemies = { quota: 0, kills: 0, recalled: 0, spawned: 0 };
+  dp.enemies.quota += count;
+}
+
 /** ★ 记一次生成（配额闸门的唯一依据；只增不减） */
 export function recordSpawn(session: GameSession | null | undefined, count = 1): void {
   if (!session || count <= 0) return;

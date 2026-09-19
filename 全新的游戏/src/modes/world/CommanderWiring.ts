@@ -25,6 +25,8 @@ export interface CommanderWiringDeps {
   chunks: ChunkManager | null;
   /** 可站面高度（WorldMode.deploySurfaceAt 薄包装） */
   surfaceAt: (x: number, z: number) => number;
+  /** 玩家位置（生成点距离门控） */
+  playerPos: () => { x: number; z: number };
 }
 
 /** ★ 一次性接线（enter）：buildCover / digTrench / spawnMob */
@@ -36,10 +38,19 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   };
   // ★ 兵力创建（全权在蜂群架构）：按角色挑名册兵种；精英按 elite 标签挑
   //   → 走唯一收口 spawnOne（落点闸门 / MAX_ALIVE / 记账；绕过旧每日配额）
+  //   ★ **生成点必须距玩家 ≥80m**：不够就**沿来向向外推**（保持正面阵形，
+  //   绝不从玩家径向外推——那会把阵形推成围着玩家的一圈）；到位靠行军
   d.commander.spawnMob = (x, z, role: UnitRole, elite = false) => {
+    const p = d.playerPos();
+    const plan = d.commander.defensePlan;
+    const ax = plan?.approachX ?? 1, az = plan?.approachZ ?? 0;
+    let sx = x, sz = z;
+    for (let i = 0; i < 10 && Math.hypot(sx - p.x, sz - p.z) < 80; i++) {
+      sx += ax * 10; sz += az * 10;
+    }
     const def = elite
       ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
       : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
-    if (def) d.spawner.spawnOne(def, x, d.raster.surfaceHeightAt(x, z), z, INTENT_NONE, -1, true);
+    if (def) d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1, true);
   };
 }

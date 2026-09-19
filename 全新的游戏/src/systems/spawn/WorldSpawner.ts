@@ -34,7 +34,7 @@ import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
 import { applyDamage } from '../../services/combat/DamagePipeline';
-import { recordSpawn, readDayProgress, remainingQuota } from '../../systems/combat/KillCounter';
+import { recordSpawn, addQuota, readDayProgress, remainingQuota } from '../../systems/combat/KillCounter';
 import { RasterMap, chunkKeyOf } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { ChunkManager } from '../../services/map/ChunkManager';
@@ -161,8 +161,6 @@ export class WorldSpawner implements SwarmTierPort {
   /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
    *  远距回收本身已由 SwarmSystem 统一处理（实体降格 40m / 代理回收 140m） */
   static readonly ENEMY_CULL_RADIUS = 120;
-  /** ★ 落地名册陈列的环带半径（米）：落在 L3 升格半径 35m 之内 → 落地就能看全实体行为 */
-  static readonly SHOWCASE_RADIUS = 16;
   /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
   static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
@@ -775,76 +773,6 @@ export class WorldSpawner implements SwarmTierPort {
     return { speed, damage, range, wanderSpeed, aggro, ranged, skin, shotSpeed, shotLife };
   }
 
-  /** ★★ 落地名册陈列（验收用）：把名册里**每一种敌人各生成一只**，绕 (x,z) 均匀铺开。
-   *
-   *  做这个是因为"远程兵到底会不会打"这类问题光看代码判断不准 —— 一次性把全部
-   *  兵种摆到眼前，谁悬停、谁贴脸、谁放箭/放法球，一眼能对。每只头顶飘一次名字。
-   *
-   *  · **不含普瑞塞斯**：Boss 不在 `mobDefs` 里（它由 `spawnBoss` 的独立路径生成），
-   *    所以"排除 Boss"是结构性的，不需要在这里特判 id。
-   *  · 仍然走 `spawnOne`（= 所有刷怪路径的唯一收口点）：配额计账 / 落点闸门 /
-   *    坑水排除 / 空中豁免 / 蜂群代理池全部与正常出怪同源 →
-   *    看到的就是真实行为，不是另一条特例路径。
-   *  · 落点在 (x,z) 周围环带上按兵种序号均匀分角；该点不可站（坑/水/过低/未生成）
-   *    时按固定候选表微调角度与半径重试，仍不行就跳过该兵种（不阻断其余兵种）。
-   *
-   *  @param radius 环带半径（米）
-   *  @returns 实际铺出的**兵种数**（配额打满 / 存活上限 / 地形不可站都会少） */
-  spawnRosterShowcase(
-    x: number, z: number,
-    radius = WorldSpawner.SHOWCASE_RADIUS,
-  ): number {
-    if (!this.deps.scene || !this.deps.camera) return 0;
-    const defs = this.deps.mobDefs;
-    if (defs.length === 0) return 0;
-    // ★ 名额预检：整场陈列 = 各兵种 pack 之和；存活上限不够就整段跳过（避免铺一半更迷惑）
-    let need = 0;
-    for (const d of defs) need += Math.max(1, d.pack);
-    if (this.deps.enemies.length + this.deps.swarm.count + need > WorldSpawner.MAX_ALIVE) {
-      console.warn(
-        `[spawn] 名册陈列跳过：存活 ${this.deps.enemies.length + this.deps.swarm.count}`
-        + ` + 需要 ${need} > 上限 ${WorldSpawner.MAX_ALIVE}`,
-      );
-      return 0;
-    }
-    let types = 0;
-    for (let i = 0; i < defs.length; i++) {
-      const def = defs[i];
-      const air = def.isAir === true;
-      let placed = false;
-      // ★ 候选落点表：本兵种分角 → 左右各偏一档 → 半径内缩一档 → 半径外扩一档
-      const baseAng = (i / defs.length) * Math.PI * 2;
-      const cands: { ang: number; r: number }[] = [
-        { ang: baseAng, r: radius },
-        { ang: baseAng + 0.5, r: radius },
-        { ang: baseAng - 0.5, r: radius },
-        { ang: baseAng, r: radius * 0.72 },
-        { ang: baseAng, r: radius * 1.28 },
-      ];
-      for (const c of cands) {
-        const px = x + Math.cos(c.ang) * c.r;
-        const pz = z + Math.sin(c.ang) * c.r;
-        // ★ 与正常刷怪同一套落点闸门（空中单位豁免坑/水 —— 它悬在空中）
-        const role = this.deps.raster.tileDefAt(px, pz).genRole;
-        if (!air && (role === 'pit' || role === 'liquid')) continue;
-        const y = air
-          ? this.deps.raster.surfaceHeightAtFor(px, pz, 1e9) + def.airAltitude
-          : this.deps.raster.surfaceHeightAt(px, pz);
-        if (!air && y < -1.2) continue;
-        if (!this.spawnOne(def, px, y, pz)) continue;
-        // ★ 头顶标一次名字（否则一堆陌生兵种分不清谁是谁）
-        this.deps.showFloatingAt(px, y + def.scale * 2.2 + 1.2, pz, def.name, 'normal');
-        types++;
-        placed = true;
-        break;
-      }
-      if (!placed) {
-        console.warn(`[spawn] 名册陈列：${def.name}(${def.id}) 无可用落点，已跳过`);
-      }
-    }
-    console.log(`[spawn] 落地名册陈列：${types}/${defs.length} 个兵种已铺（不含普瑞赛斯）`);
-    return types;
-  }
 
   /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
    *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。 */
@@ -920,6 +848,8 @@ export class WorldSpawner implements SwarmTierPort {
         any = true;
         // ★ 计入当天已生成（配额闸门依据；只增不减 → 回收不会腾出名额）
         recordSpawn(this.deps.session);
+        // ★ 指挥层生成（绕过配额闸门）：**分母同步 +1** → HUD 计数保持准确
+        if (ignoreQuota) addQuota(this.deps.session, 1);
       }
     }
     return any;
