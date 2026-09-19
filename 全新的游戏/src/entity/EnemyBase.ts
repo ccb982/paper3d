@@ -74,6 +74,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   readonly activation = 'active' as const;
   /** ★ 是否本队队长（指挥权转移写；dormant 恒 false） */
   isLeader = false;
+  /** ★ 是否代理载体（实体恒 false；carrier 派生位，逻辑分支统一读它） */
+  readonly isAgent = false;
   /** ★ 感知（E3b 预留；步骤 9 通信/感知接线填值）：最后目击 + 仇恨来源 */
   lastSeenX = 0;
   lastSeenZ = 0;
@@ -182,8 +184,6 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private static readonly STUN_SECONDS = 1.0;
   private static readonly STUN_IMMUNE_AFTER = 2.0;
   aiMoveDir = { x: 1, z: 0 };
-  /** 巡逻目标点（wander 用；null = 选新目标） */
-  aiWaypoint: { x: number; z: number } | null = null;
   /** ★ 危险地形转向节流计时（前方坑洞/悬崖 → 禁止直行，转向避让） */
   private hazardTurnTimer = 0;
   /** ★ 上次采纳的安全绕行航向（贴边连续走，不来回抖动；null=无） */

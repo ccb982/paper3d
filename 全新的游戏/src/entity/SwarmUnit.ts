@@ -63,6 +63,8 @@ export interface SwarmUnit {
   readonly activation: 'dormant' | 'active';
   /** ★ 是否本队队长（指挥资格只挂 active；dormant 恒 false） */
   isLeader: boolean;
+  /** ★ 是否代理载体（carrier==='agent' 派生位；实体恒 false） */
+  readonly isAgent: boolean;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId: number;
   /** 小编队（-1 = 散兵/未编队） */
