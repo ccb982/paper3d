@@ -9,6 +9,24 @@
 
 import * as THREE from 'three';
 import { FxRendererBase } from './FxRendererBase';
+import { FtxAsset } from '../../vendor/player/FtxAsset';
+import { compositeFrameToCanvas } from '../item/BasicMaterialsIcons';
+
+/** ★ 背面道具图标贴图缓存（按 URL；异步加载完成后回填材质） */
+const _iconTexCache = new Map<string, THREE.CanvasTexture>();
+function loadIconTexture(url: string, onReady: (tex: THREE.CanvasTexture) => void): void {
+  const cached = _iconTexCache.get(url);
+  if (cached) { onReady(cached); return; }
+  FtxAsset.load(encodeURI(url))
+    .then((asset) => {
+      const canvas = compositeFrameToCanvas(asset, 0);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      _iconTexCache.set(url, tex);
+      onReady(tex);
+    })
+    .catch((err) => console.warn(`[CoverRenderer] 背面图标载入失败: ${url}`, err));
+}
 
 /** 城墙/墙尺寸（世界米；与碰撞体同口径） */
 export const COVER_W = 4.0;
@@ -74,9 +92,12 @@ export function coverBrickTexture(): THREE.CanvasTexture {
 export class CoverRenderer extends FxRendererBase {
   private group: THREE.Group;
   private parts: THREE.Mesh[] = [];
+  /** 自建材质（砖面 / 背面图标海报；dispose 时释放） */
+  private ownMats: THREE.Material[] = [];
 
-  /** @param slit 是否带射击孔（false = 实心墙「土木老姐」） */
-  constructor(scene: THREE.Scene, slit = true) {
+  /** @param slit 是否带射击孔（false = 实心墙「墙」）
+   *  @param iconUrl 背面道具图标（城墙 = 不许笑 / 墙 = 土木老姐；null = 不放） */
+  constructor(scene: THREE.Scene, slit = true, iconUrl: string | null = null) {
     super();
     const g = new THREE.Group();
     this.group = g;
@@ -87,6 +108,7 @@ export class CoverRenderer extends FxRendererBase {
       roughness: 0.92,
       metalness: 0.04,
     });
+    this.ownMats.push(mat);
     const add = (w: number, h: number, x: number, y: number): void => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, COVER_T), mat);
       m.position.set(x, y, 0);
@@ -104,6 +126,26 @@ export class CoverRenderer extends FxRendererBase {
       const midY = (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2;
       add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, -(COVER_SLIT_W / 2 + pillarW / 2), midY);
       add(pillarW, COVER_SLIT_Y1 - COVER_SLIT_Y0, +(COVER_SLIT_W / 2 + pillarW / 2), midY);
+    }
+    // ★ 背面道具图标（2026-09-19 用户定调）：贴在墙背面（-Z 侧）的"海报"
+    //   城墙放在射击孔上方，墙放正中；异步载入，未就绪前不显示
+    if (iconUrl) {
+      const posterSize = slit ? 1.3 : 2.2;
+      const posterY = slit ? 2.2 : 1.5;
+      const pm = new THREE.MeshBasicMaterial({
+        transparent: true, opacity: 0, depthWrite: false, side: THREE.FrontSide,
+      });
+      this.ownMats.push(pm);
+      const poster = new THREE.Mesh(new THREE.PlaneGeometry(posterSize, posterSize), pm);
+      poster.position.set(0, posterY, -COVER_T / 2 - 0.02);
+      poster.rotation.y = Math.PI;   // 面向 -Z（背面）
+      g.add(poster);
+      this.parts.push(poster);
+      loadIconTexture(iconUrl, (tex) => {
+        pm.map = tex;
+        pm.opacity = 0.96;   // 载入完成才显形（未就绪时不出现白方块）
+        pm.needsUpdate = true;
+      });
     }
   }
 
@@ -124,6 +166,8 @@ export class CoverRenderer extends FxRendererBase {
   override dispose(): void {
     for (const m of this.parts) m.geometry.dispose();
     this.parts = [];
+    for (const m of this.ownMats) m.dispose();
+    this.ownMats = [];
     this.group.parent?.remove(this.group);
     this.mesh = null;
   }

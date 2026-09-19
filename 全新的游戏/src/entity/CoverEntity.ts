@@ -204,7 +204,9 @@ export class CoverEntity extends StructureEntity {
   }
 
   protected createRenderer(scene: THREE.Scene): CoverRenderer {
-    return new CoverRenderer(scene, this.hasSlit);
+    // ★ 背面道具图标：城墙 = 不许笑的脸；墙 = 土木老姐的脸（资产在 public/fx/）
+    const iconUrl = this.hasSlit ? '/fx/不许笑.ftx3.gz' : '/fx/土木老姐.ftx3.gz';
+    return new CoverRenderer(scene, this.hasSlit, iconUrl);
   }
 
   /** 建造插值推进（0→1 长高）+ ★ 随地面变化插值（挖坑/地形改动时平滑沉/升） */
