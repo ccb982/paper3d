@@ -482,6 +482,11 @@ export abstract class EntityBase {
     // ★ 流体纹理钩子（子类覆写：受击染料/技能附着的 composite 纹理；null=普通贴片）
     this.renderer.render(this.state, this.getFluidTexture());
     // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
+    this.renderEffects(camera);
+  }
+
+  /** ★ 附属特效渲染入口（子类覆写 render 时复用：如工事只画血条、不画贴片） */
+  protected renderEffects(camera: THREE.Camera): void {
     this.fx.render(camera);
   }
 

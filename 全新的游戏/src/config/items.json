@@ -398,6 +398,33 @@
       ]
     },
     {
+      "id": "cover",
+      "name": "掩体",
+      "type": "ammo",
+      "description": "发射后落点生成一面灰砖掩体：可被摧毁，正面留有竖向射击孔（只有穿过孔带才能打到掩体后方）",
+      "maxStack": 999,
+      "color": {
+        "h": 0.0,
+        "s": 0.0,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.3,
+          "hy": 0.3,
+          "hz": 0.3
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_cover"
+        }
+      ]
+    },
+    {
       "id": "herb",
       "name": "草药",
       "type": "material",

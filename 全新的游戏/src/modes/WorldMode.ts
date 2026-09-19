@@ -20,6 +20,8 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME } from '../entity/CoverEntity';
+import { coverBrickTexture } from '../services/render/CoverRenderer';
 import { stepFluidShared } from '../services/fx/FluidShared';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
@@ -145,10 +147,14 @@ const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
  *  取相机射线上此距离处作为虚拟落点 → 子弹仍与准星共点（不会与相机平行"各飞各的"） */
 const CROSSHAIR_CONVERGE_DIST = 200;
 /** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
-const FIREABLE_AMMO = new Set<string>(['zuzong']);
+const FIREABLE_AMMO = new Set<string>(['zuzong', 'cover']);
 /** ★ 祖宗弹（专属投影物）：速度（m/s）/ 寿命（s） */
 const SENTINEL_SHOT_SPEED = 20;
 const SENTINEL_SHOT_LIFETIME = 3.0;
+/** ★ 掩体弹（玩家遗物部署）：速度/寿命/同时存在上限 */
+const COVER_SHOT_SPEED = 18;
+const COVER_SHOT_LIFETIME = 3.0;
+const MAX_COVER_PLAYER = 6;
 /** ★ 祖宗弹命中伤害 = max(下限, 主角攻击力 × 系数)，结算后立即落地生成祖宗 */
 const SENTINEL_IMPACT_MIN_DAMAGE = 8;
 const SENTINEL_IMPACT_ATK_RATIO = 0.8;
@@ -485,7 +491,7 @@ export class WorldMode implements IGameMode {
   /** ★ 当前选择的快捷弹药（'default' = 普通弹药；其余 = 弹药 itemId）
    *  Q 切换 / 点击切换；攻击键发射。消耗品不进快捷栏，在背包内使用 */
   private selectedQuickItem = 'default';
-  /** ★ 祖宗弹投影物（专属纹理/朝向；落地或寿命到 → 生成站桩祖宗） */
+  /** ★ 投送弹（祖宗弹 / 掩体弹；落地或寿命到 → 生成对应实体） */
   private sentinelShots: {
     proj: SentinelProjectile;
     /** 落地是否生成祖宗（玩家祖宗弹 true；祖宗自身攻击弹 false） */
@@ -494,6 +500,10 @@ export class WorldMode implements IGameMode {
     damage: number;
     /** 伤害来源（伤害事件/遗物管线用） */
     source: EntityBase | null;
+    /** ★ 弹种：sentinel = 祖宗弹；cover = 掩体弹（不结算命中，落地生成掩体） */
+    kind: 'sentinel' | 'cover';
+    /** ★ 落地朝向（掩体弹：墙法线 = 发射方向） */
+    heading: number;
   }[] = [];
   /** 祖宗弹共享纹理（懒建；exit 释放） */
   private sentinelTex: THREE.CanvasTexture | null = null;
@@ -511,6 +521,8 @@ export class WorldMode implements IGameMode {
   private droneSummonUnsub?: () => void;
   /** ★ 祖宗召唤事件订阅（enter 注册 / exit 移除） */
   private sentinelSummonUnsub?: () => void;
+  /** ★ 掩体部署订阅（遗物/道具） */
+  private coverSummonUnsub?: () => void;
   /** ★ 出击槽池变动订阅（部署/卸载/替换 → 友军生成/回收；enter 注册 / exit 移除） */
   private deploymentUnsub?: () => void;
   /** ★ 存档基础属性被永久改写订阅（「训练类」消耗品加上限 → 立即重算玩家实体） */
@@ -1125,6 +1137,10 @@ export class WorldMode implements IGameMode {
     this.sentinelSummonUnsub = eventBus.on('sentinel_summon', () => {
       this.launchSentinelProjectile();
     });
+    // ★ 掩体部署：使用「掩体」→ 沿准星发射掩体弹，落点生成玩家掩体
+    this.coverSummonUnsub = eventBus.on('cover_summon', () => {
+      this.launchCoverProjectile();
+    });
     // ★ 出击槽池变动（装备/友军增删换）：2026-09-14 修复"舰内换装不刷新"
     this.deploymentUnsub = eventBus.on('deployment_changed', () => {
       // ① 装备属性重算（穿脱/互换立即生效）
@@ -1691,6 +1707,8 @@ export class WorldMode implements IGameMode {
     this.droneSummonUnsub = undefined;
     this.sentinelSummonUnsub?.();
     this.sentinelSummonUnsub = undefined;
+    this.coverSummonUnsub?.();
+    this.coverSummonUnsub = undefined;
     this.deploymentUnsub?.();
     this.deploymentUnsub = undefined;
     this.playerStatsUnsub?.();
@@ -1701,6 +1719,7 @@ export class WorldMode implements IGameMode {
     allySystem.disposeAll('mode_cleanup');
     for (const s of this.sentinelShots) s.proj.dispose();
     this.sentinelShots = [];
+    this.playerCovers = [];
     this.sentinelTex?.dispose();
     this.sentinelTex = null;
     this.droneAsset = null;
@@ -1911,6 +1930,10 @@ export class WorldMode implements IGameMode {
         this.launchSentinelProjectile();
         return;
       }
+      if (this.selectedQuickItem === 'cover') {
+        this.launchCoverProjectile();
+        return;
+      }
     }
     if (this.selectedQuickItem !== 'default' && FIREABLE_AMMO.has(this.selectedQuickItem)) {
       this.selectedQuickItem = 'default';
@@ -2058,7 +2081,47 @@ export class WorldMode implements IGameMode {
       spawnOnLand: true,
       damage: -1,
       source: this.player,
+      kind: 'sentinel',
+      heading: 0,
     });
+  }
+
+  /** ★ 掩体弹（玩家遗物「死仇时代的恨意」/ 道具「掩体」）：像祖宗弹一样从枪口沿准星发射；
+   *  不结算命中（直接飞过敌人），落地生成玩家掩体（朝向 = 发射方向）。 */
+  private launchCoverProjectile(): void {
+    if (!this.player || !this.scene) return;
+    const p = this.player.position;
+    const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
+    const dir = this.aimDirectionFromMuzzle(muzzle);
+    let dx = dir.x, dy = dir.y, dz = dir.z;
+    const assisted = this.aimAssist(muzzle, dx, dy, dz);
+    dx = assisted.x; dy = assisted.y; dz = assisted.z;
+    this.sentinelShots.push({
+      proj: new SentinelProjectile(
+        this.scene, coverBrickTexture(),
+        muzzle.x + dx * 1.5, muzzle.y + dy * 1.5, muzzle.z + dz * 1.5,
+        dx, dy, dz, COVER_SHOT_SPEED, COVER_SHOT_LIFETIME,
+      ),
+      spawnOnLand: false,
+      damage: -1,
+      source: this.player,
+      kind: 'cover',
+      heading: Math.atan2(dx, dz),
+    });
+  }
+
+  /** ★ 玩家掩体落成（含上限：超出先拆最早的一面） */
+  private playerCovers: CoverEntity[] = [];
+  private spawnCoverAt(x: number, z: number, heading: number): void {
+    if (!this.scene) return;
+    const y = this.raster.surfaceHeightAt(x, z);
+    const cover = new CoverEntity(this.entities, this.scene, {
+      x, y, z, heading, owner: 'player', buildTime: COVER_DEPLOY_BUILD_TIME,
+    });
+    this.playerCovers.push(cover);
+    while (this.playerCovers.length > MAX_COVER_PLAYER) {
+      this.playerCovers.shift()!.retire('recycled');
+    }
   }
 
   /** 祖宗弹纹理（懒建缓存：祖宗素材第 0 帧合成） */
@@ -2085,6 +2148,16 @@ export class WorldMode implements IGameMode {
       const rec = this.sentinelShots[i];
       const shot = rec.proj;
       const land = shot.update(dt, this.camera);
+      // ★ 掩体弹：不结算命中（直接飞过敌人），落地生成玩家掩体
+      if (rec.kind === 'cover') {
+        if (land) {
+          this.sentinelShots.splice(i, 1);
+          const cp = shot.sprite.position;
+          shot.dispose();
+          this.spawnCoverAt(cp.x, cp.z, rec.heading);
+        }
+        continue;
+      }
       // ★ 命中敌人：结算伤害（玩家弹用 IMPACT 公式；祖宗攻击弹用发射时算好的 damage）
       const hit = land ? null : this.sentinelShotHitEnemy(shot);
       if (hit) {

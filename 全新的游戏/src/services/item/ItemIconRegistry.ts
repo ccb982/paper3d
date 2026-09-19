@@ -64,6 +64,8 @@ const FTX_ICON_SOURCES: Record<string, string> = {
   kaltsit_coat: '/fx/衣服.ftx3.gz',
   // ★ 喜羊羊（2026-09-16）：闪灵的遗物
   xiyangyang: '/fx/喜羊羊.ftx3.gz',
+  // ★ 死仇时代的恨意（2026-09-19）：不许笑的脸（复用访客立绘资产）
+  grudge_hatred: '/characters/protagonist/不许笑.ftx3.gz',
 };
 
 export class ItemIconRegistry {

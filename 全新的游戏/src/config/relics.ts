@@ -58,6 +58,25 @@ export const RELIC_ITEM_CONFIG: Record<string, RelicItemConfig> = {
   },
 
   /**
+   * ★ 死仇时代的恨意（2026-09-19）
+   * 获取：与访客「不许笑」对话（所有分支都给）。
+   * 贴图：不许笑的脸（图标在 ItemIconRegistry.FTX_ICON_SOURCES 注册）。
+   * 效果：与「祖宗发射器」同口径 —— 入场立即获得「掩体」×件数；
+   *       之后定时恢复（每多一件再缩短间隔）。
+   */
+  grudge_hatred: {
+    id: 'grudge_hatred',
+    name: '死仇时代的恨意',
+    rarity: 5,
+    description: '不许笑的脸。进入战场立即获得掩体（每多一件 +1）；之后定时恢复掩体（多件再缩短间隔）',
+    texture: '/characters/protagonist/不许笑.ftx3.gz',
+    effects: [
+      { type: 'start_items', items: [{ itemId: 'cover', count: 1 }] },
+      { type: 'timed_item', itemId: 'cover', interval: 60, perCopyMul: 0.8, minInterval: 15 },
+    ],
+  },
+
+  /**
    * ★ 衣服（2026-09-15）
    * 设计口径：凯尔希 = 罗得岛医疗主管。她给你的不是武器，是"活着回来"这件事本身。
    *   ① regen      —— 每秒回复生命（多件递增）：医生的持续照料，最贴合她的职业

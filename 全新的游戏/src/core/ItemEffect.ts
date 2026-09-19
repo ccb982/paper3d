@@ -122,6 +122,14 @@ effectRegistry.set('summon_sentinel', (_params, ctx) => {
   return { success: true, message: '已放置祖宗' };
 });
 
+effectRegistry.set('summon_cover', (_params, ctx) => {
+  // ★ 同祖宗：部署类效果只在战场生效
+  if (!ctx.user) return { success: false, message: '需在作战中使用' };
+  // ★ 部署「掩体」：广播事件，由 WorldMode 沿准星发射掩体弹，落点生成掩体
+  eventBus.emit('cover_summon', {});
+  return { success: true, message: '已部署掩体' };
+});
+
 /**
  * ★ train —— 永久提升存档基础属性（"加上限"类消耗品：糖果/补剂）。
  *
