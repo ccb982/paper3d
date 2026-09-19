@@ -11,7 +11,7 @@
 //     · explored    小地图已探索记忆（稠密位图 + 稀疏格；b64）
 //     · markers     玩家地图标记（x/z/label/color）
 //     · walls       城墙 / 墙
-//     · allies      召唤友军（祖宗 / 无人机；出击槽友军不入缓存）
+//     · allies      召唤友军（仅祖宗：留存回位+休眠，接触唤醒；无人机跟随玩家不入缓存；出击槽友军由配装重建）
 //
 // 写入时机：WorldMode exit / beforeunload / 周期自动保存（15s）
 // 清理：LRU 保留最近 MAX_ENTRIES 份；删档 clearWorldStates()
@@ -29,7 +29,7 @@ export interface WallRec {
   owner: 'player' | 'enemy';
 }
 
-/** 召唤友军记录（slotIndex < 0 的道具召唤：祖宗 / 无人机） */
+/** 召唤友军记录（仅祖宗；kind 保留兼容旧档读取，旧档 drone 记录恢复时丢弃） */
 export interface AllyRec {
   kind: 'drone' | 'sentinel';
   x: number; y: number; z: number;

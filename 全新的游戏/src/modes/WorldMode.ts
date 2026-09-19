@@ -166,6 +166,8 @@ const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
 /** ★ 祖宗自动挖矿：索矿半径（米；无敌人时随机打铁/水/地面） */
 const SENTINEL_MINE_RANGE = 22;
+/** ★ 留存祖宗唤醒：玩家接触半径（米；休眠祖宗被碰到 → 启用 + 入队友列表） */
+const SENTINEL_WAKE_R = 2.2;
 /** 挖矿采样次数上限（每类） */
 const SENTINEL_MINE_SAMPLES = 16;
 /** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
@@ -1374,6 +1376,7 @@ export class WorldMode implements IGameMode {
       shipPosition: this.ship?.position ?? null,
       ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
+        .filter((d) => !(d instanceof SentinelAlly && d.dormant)) // ★ 休眠祖宗不入队友列表（接触唤醒后自动出现）
         .map((d) => ({
           id: `a${d.entity.id}`,
           itemId: d.itemId,
@@ -1491,6 +1494,12 @@ export class WorldMode implements IGameMode {
         playerY: dp.y,
         playerZ: dp.z,
       });
+      // ★ 留存祖宗唤醒：玩家回到原地接触 → 启用（重新索敌/攻击/挖矿）并加入队友列表
+      for (const a of allySystem.allies) {
+        if (!(a instanceof SentinelAlly) || !a.dormant) continue;
+        const dx = a.position.x - dp.x, dz = a.position.z - dp.z;
+        if (dx * dx + dz * dz <= SENTINEL_WAKE_R * SENTINEL_WAKE_R) a.dormant = false;
+      }
       // ★ 友军回血（黍姐的XX）：装备汇总的每秒回复量 → 所有友军（无人机/祖宗）
       if (this.allyRegen > 0) {
         for (const d of allySystem.allies) {
@@ -2109,7 +2118,7 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 在指定落点生成祖宗（站桩友军）：每个祖宗都是独立实体，可多个并存（列表按落地顺序追加） */
-  private spawnSentinelAt(x: number, z: number): void {
+  private spawnSentinelAt(x: number, z: number, dormant = false): void {
     if (!this.scene || !this.player) return;
     const asset = this.sentinelAsset ?? this.droneAsset;
     if (!asset) return;
@@ -2118,6 +2127,7 @@ export class WorldMode implements IGameMode {
     const s = new SentinelAlly(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
     s.slotIndex = -1;
     s.itemId = 'zuzong';
+    s.dormant = dormant;   // ★ 留存恢复 = 休眠入场（接触唤醒）
     s.stationaryBaseY = py;
     // ★ 世界端口（远程/代理/挖矿）由 AllySystem 统一注入，不再逐个体绑定回调
     s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力
@@ -2172,14 +2182,13 @@ export class WorldMode implements IGameMode {
       const rs = this.raster.exportPersistState();
       const allies: AllyRec[] = [];
       for (const a of allySystem.allies) {
-        if (a.slotIndex >= 0) continue;   // 出击槽友军由配装重建，不入缓存
-        const kind = a instanceof SentinelAlly ? 'sentinel' : 'drone';
-        const rec: AllyRec = {
-          kind, x: a.position.x, y: a.position.y, z: a.position.z,
+        if (a.slotIndex >= 0) continue;            // 出击槽友军由配装重建，不入缓存
+        if (!(a instanceof SentinelAlly)) continue; // ★ 无人机一直跟随玩家，不写入缓存（2026-09-19 用户定调）
+        allies.push({
+          kind: 'sentinel', x: a.position.x, y: a.position.y, z: a.position.z,
           hp: a.hp, itemId: a.itemId,
-        };
-        if (a instanceof SentinelAlly) rec.stationaryBaseY = a.stationaryBaseY;
-        allies.push(rec);
+          stationaryBaseY: a.stationaryBaseY,
+        });
       }
       saveWorldState({
         seed: this.session.meta.seed,
@@ -2214,23 +2223,13 @@ export class WorldMode implements IGameMode {
       if (w.owner === 'player') this.playerCovers.push(cover);
     }
     for (const a of data.allies) {
-      if (a.kind === 'sentinel') {
-        this.spawnSentinelAt(a.x, a.z);
-        const s = allySystem.allies[allySystem.allies.length - 1];
-        if (s instanceof SentinelAlly) {
-          s.position.y = a.y;
-          s.stationaryBaseY = a.stationaryBaseY ?? a.y;
-          s.hp = Math.max(1, Math.round(a.hp));
-        }
-      } else {
-        this.spawnDroneNearPlayer(-1, a.itemId);
-        const d = allySystem.allies[allySystem.allies.length - 1];
-        if (d instanceof DroneAlly) {
-          d.position.x = a.x;
-          d.position.y = a.y;
-          d.position.z = a.z;
-          d.hp = Math.max(1, Math.round(a.hp));
-        }
+      if (a.kind !== 'sentinel') continue;   // ★ 无人机不入缓存（旧档残留记录直接丢弃）
+      this.spawnSentinelAt(a.x, a.z, true);  // ★ 休眠入场：回到原地接触才启用
+      const s = allySystem.allies[allySystem.allies.length - 1];
+      if (s instanceof SentinelAlly) {
+        s.position.y = a.y;
+        s.stationaryBaseY = a.stationaryBaseY ?? a.y;
+        s.hp = Math.max(1, Math.round(a.hp));
       }
     }
   }
