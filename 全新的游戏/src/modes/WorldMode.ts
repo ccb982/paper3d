@@ -1883,7 +1883,9 @@ export class WorldMode implements IGameMode {
       origin: ray.origin, dir: ray.dir, maxDist: CROSSHAIR_CONVERGE_DIST,
       exclude: this.player,
       filter: (e) => e.camp === 'enemy',
-      skipPhysics: (e) => e.camp === 'player' || e.camp === 'ally',
+      // ★ 城墙/墙不影响射击判定线（2026-09-19）：准星射线跳过墙（含遮挡校验），
+      //   与"我方近墙射击无视墙"同一口径；子弹物理仍按实心处理（敌弹照常被挡）
+      skipPhysics: (e) => e.camp === 'player' || e.camp === 'ally' || e instanceof CoverEntity,
     });
     // ★ 蜂群代理（主力杂兵）：3D 圆柱近似锁准星——比地形/实体落点更近才采用
     const swarmDist = hit ? hit.distance : Infinity;

@@ -32,11 +32,11 @@ function loadIconTexture(url: string, onReady: (tex: THREE.CanvasTexture) => voi
 export const COVER_W = 4.0;
 export const COVER_H = 3.0;
 export const COVER_T = 0.8;
-/** 射击孔：宽 / 高度带（★ 2026-09-19 用户定调"增大"：
- *  对齐武器/枪口射击线（枪口 ≈ 脚底 +1.1）并留足容差） */
-export const COVER_SLIT_W = 1.2;
-export const COVER_SLIT_Y0 = 0.9;
-export const COVER_SLIT_Y1 = 1.8;
+/** 射击孔：宽 / 高度带（★ 2026-09-19 三次定调"再上移、按摄像机高度"：
+ *  纯视觉（物理实心、我方近墙射击无视墙）；高度带覆盖 TPS 相机眼位（≈脚底+1.2 起）） */
+export const COVER_SLIT_W = 1.6;
+export const COVER_SLIT_Y0 = 1.3;
+export const COVER_SLIT_Y1 = 2.5;
 
 /** 程序化灰砖贴图（模块级缓存；所有掩体/掩体弹共享） */
 let _brickTex: THREE.CanvasTexture | null = null;

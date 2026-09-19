@@ -92,7 +92,7 @@ export function aimRaycast(em: EntityManager, opts: AimOptions): AimHit | null {
   return { point: hit.point, target: null, distance: dist };
 }
 
-/** ★ 物理射线（忽略子弹/友军实体）：命中 skip 实体 → 从命中点稍前继续投，最多 4 次。
+/** ★ 物理射线（忽略子弹/友军/城墙实体）：命中 skip 实体 → 从命中点稍前继续投，最多 6 次。
  *  用于准星落点：子弹飞行中的弹体、自家舰船/友军都不能劫持准星。 */
 function castRayPast(
   em: EntityManager,
@@ -108,7 +108,7 @@ function castRayPast(
   let toi = maxToi;
   let excl = excludeBody;
   let hit = em.physics.castRay(origin, d, toi, excl);
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     if (!hit) return null;
     const record = em.get(hit.handle);
     const base = em.baseOf(hit.handle);
