@@ -20,7 +20,11 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, wallNear } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, wallNear, snapshotCovers } from '../entity/CoverEntity';
+import {
+  loadWorldState, saveWorldState, pruneWorldStates,
+  type WorldStateData, type AllyRec,
+} from '../core/WorldStateCache';
 import { coverBrickTexture, COVER_W, COVER_T } from '../services/render/CoverRenderer';
 import { DeployPreview } from '../services/fx/DeployPreview';
 import { stepFluidShared } from '../services/fx/FluidShared';
@@ -545,6 +549,10 @@ export class WorldMode implements IGameMode {
   private combatSystem!: CombatSystem;
   /** ★ 投送落点预览（祖宗/掩体弹药选中时显示） */
   private deployPreview: DeployPreview | null = null;
+  /** ★ 世界状态缓存（同种子不重建）：进入时读到的待恢复数据（地形在 chunk 生成前灌入） */
+  private pendingWorldState: WorldStateData | null = null;
+  /** ★ beforeunload 存档回调（刷新页面也保住世界状态） */
+  private worldStateUnload: (() => void) | null = null;
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
@@ -607,6 +615,15 @@ export class WorldMode implements IGameMode {
     // ---- ★ 统一空间层（初始 3×3 chunk，玩家驱动扩张） ----
     // ★ 当天地图种子 = 主种子 × 天数（同局同天恒同图；换天/换局换图）
     this.raster = new RasterMap(dailyMapSeed(ctx.session.meta.seed, ctx.day));
+    // ★ 世界状态缓存（同种子不重建）：把地形破坏/植被已采灌进 RasterMap（chunk 生成前）
+    {
+      const wst = loadWorldState(ctx.session.meta.seed, ctx.day);
+      if (wst) {
+        // ★ 只恢复坑洞（植被不入缓存：每天重建，资源可恢复）
+        this.raster.importPersistState({ levels: wst.levels });
+        this.pendingWorldState = wst;
+      }
+    }
     this.entities = new EntityManager(this.physics, this.raster);
 
     // ---- ★ 地图流式管理器（地面刚体经 ChunkGroundHost 适配进实体系统） ----
@@ -1179,6 +1196,14 @@ export class WorldMode implements IGameMode {
     this.playerStatsUnsub = eventBus.on('player_stats_changed', () => {
       this.refreshPlayerStats();
     });
+    // ★ 世界状态缓存：恢复墙 / 召唤友军（出击槽友军由 syncSlotAllies 自然重建）
+    if (this.pendingWorldState) {
+      this.restoreWorldState(this.pendingWorldState);
+      this.pendingWorldState = null;
+    }
+    // ★ 刷新页面也保住世界状态（exit 不一定被调用）
+    this.worldStateUnload = () => this.saveWorldStateNow();
+    window.addEventListener('beforeunload', this.worldStateUnload);
   }
 
   /** 每帧驱动（自包含：输入 → 物理 → 相机 → 实体 → AI） */
@@ -1688,6 +1713,12 @@ export class WorldMode implements IGameMode {
 
   /** 退出模式：完整清理所有私有资源 */
   exit(): void {
+    // ★ 世界状态缓存：退出前落盘（同种子下次进入不重建）
+    this.saveWorldStateNow();
+    if (this.worldStateUnload) {
+      window.removeEventListener('beforeunload', this.worldStateUnload);
+      this.worldStateUnload = null;
+    }
     // ---- 小游戏（若正在跑：强制关闭，别把 DOM 面板留在基地界面上） ----
     closeMiniGame();
     // ---- 舰内房间（若在舱内退出：释放房间场景/交互站/加工台） ----
@@ -2118,6 +2149,71 @@ export class WorldMode implements IGameMode {
       heading: 0,
       targetX: 0, targetY: 0, targetZ: 0, flyLeft: 0,
     });
+  }
+
+  /** ★ 世界状态落盘（exit / beforeunload）：地形破坏 + 植被 + 墙 + 召唤友军 */
+  private saveWorldStateNow(): void {
+    if (!this.session || !this.raster) return;
+    try {
+      const rs = this.raster.exportPersistState();
+      const allies: AllyRec[] = [];
+      for (const a of allySystem.allies) {
+        if (a.slotIndex >= 0) continue;   // 出击槽友军由配装重建，不入缓存
+        const kind = a instanceof SentinelAlly ? 'sentinel' : 'drone';
+        const rec: AllyRec = {
+          kind, x: a.position.x, y: a.position.y, z: a.position.z,
+          hp: a.hp, itemId: a.itemId,
+        };
+        if (a instanceof SentinelAlly) rec.stationaryBaseY = a.stationaryBaseY;
+        allies.push(rec);
+      }
+      saveWorldState({
+        seed: this.session.meta.seed,
+        day: this.session.meta.day,
+        levels: rs.levels,          // ★ 只存坑洞；植被每天重建（不入缓存）
+        walls: snapshotCovers(),
+        allies,
+      });
+      pruneWorldStates();
+    } catch (e) {
+      console.warn('[WorldMode] 世界状态保存失败（忽略）:', e);
+    }
+  }
+
+  /** ★ 世界状态恢复：墙（CoverEntity）+ 召唤友军（祖宗/无人机） */
+  private restoreWorldState(data: WorldStateData): void {
+    if (!this.scene) return;
+    for (const w of data.walls) {
+      const cover = new CoverEntity(this.entities, this.scene, {
+        x: w.x, y: w.y, z: w.z,
+        heading: w.heading,
+        variant: w.variant,
+        owner: w.owner,
+        hp: Math.max(1, Math.round(w.hp)),
+        buildTime: 0,
+      });
+      if (w.owner === 'player') this.playerCovers.push(cover);
+    }
+    for (const a of data.allies) {
+      if (a.kind === 'sentinel') {
+        this.spawnSentinelAt(a.x, a.z);
+        const s = allySystem.allies[allySystem.allies.length - 1];
+        if (s instanceof SentinelAlly) {
+          s.position.y = a.y;
+          s.stationaryBaseY = a.stationaryBaseY ?? a.y;
+          s.hp = Math.max(1, Math.round(a.hp));
+        }
+      } else {
+        this.spawnDroneNearPlayer(-1, a.itemId);
+        const d = allySystem.allies[allySystem.allies.length - 1];
+        if (d instanceof DroneAlly) {
+          d.position.x = a.x;
+          d.position.y = a.y;
+          d.position.z = a.z;
+          d.hp = Math.max(1, Math.round(a.hp));
+        }
+      }
+    }
   }
 
   /** ★ 放置面高度：地形 / 墙顶 / 舰船甲板 取最高（墙上加墙用） */

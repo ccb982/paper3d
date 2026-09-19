@@ -373,7 +373,8 @@ export function dailyMapSeed(mainSeed: number, day: number): number {
   return (h ^ (h >>> 15)) >>> 0;
 }
 
-export function createNewSession(): GameSession {
+/** ★ 新建存档（2026-09-19）：可指定主种子（新局手输/分享复现）；缺省 = 随机 */
+export function createNewSession(seedOverride?: number): GameSession {
   const player = createEmptyGrid(4, 6);
   // 开荒种子：六区兄弟（六种基础材料）各一份，背包首行展示
   SIX_BROTHER_MATERIAL_IDS.forEach((id, i) => {
@@ -383,7 +384,9 @@ export function createNewSession(): GameSession {
     meta: {
       version: '0.2.0',
       day: 1,
-      seed: newRunSeed(),
+      seed: (seedOverride !== undefined && Number.isFinite(seedOverride) && seedOverride > 0)
+        ? (seedOverride >>> 0)
+        : newRunSeed(),
       totalDaysSurvived: 0,
       deaths: 0,
       createdAt: new Date().toISOString(),

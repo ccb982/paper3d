@@ -16,6 +16,7 @@
 import { createButton } from './Button';
 import { createBackButton } from './BackButton';
 import { SaveSystem } from '../../core/SaveSystem';
+import { clearWorldStates } from '../../core/WorldStateCache';
 
 /** 白色齿轮图标（Material settings，单 path 双子路径 → 自带中心圆孔）
  *  ★ 尺寸走 100%（由按钮 padding 决定），改按钮大小不用动图标 */
@@ -44,6 +45,8 @@ export interface SettingsUi {
 export interface SettingsDeps {
   isHudVisible: () => boolean;
   setHudVisible: (v: boolean) => void;
+  /** ★ 当前存档主种子（无存档 = null；设置面板显示/复制用） */
+  getSeed: () => number | null;
 }
 
 export function createSettingsUI(deps: SettingsDeps): SettingsUi {
@@ -131,7 +134,45 @@ export function createSettingsUI(deps: SettingsDeps): SettingsUi {
     perfBtn.style.background = on ? '#4488ff' : '#4466aa';
   }
 
-  // ---- 行 2：删档（二次确认） ----
+  // ---- 行 2：地图种子（显示 + 复制；2026-09-19） ----
+  const seedSlot = mkRow('地图种子', '同一存档同一天地图固定（主种子 × 天数）；换天/换局换图。可复制分享。');
+  const seedWrap = document.createElement('div');
+  seedWrap.style.cssText = 'display:flex;align-items:center;gap:8px';
+  const seedVal = document.createElement('div');
+  seedVal.style.cssText =
+    'font:13px Consolas,monospace;color:#cfe6ff;background:rgba(0,0,0,0.35);'
+    + 'border:1px solid #2a4a72;border-radius:6px;padding:4px 8px;max-width:120px;'
+    + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  const seedCopy = createButton({
+    label: '复制', style: 'secondary', size: 'sm',
+    onClick: () => {
+      const v = seedVal.textContent ?? '';
+      const done = () => { seedCopy.textContent = '已复制'; setTimeout(() => { seedCopy.textContent = '复制'; }, 1000); };
+      if (navigator.clipboard?.writeText) navigator.clipboard.writeText(v).then(done).catch(() => done());
+      else done();
+    },
+  });
+  seedWrap.append(seedVal, seedCopy);
+  seedSlot.appendChild(seedWrap);
+  function syncSeed(): void {
+    const v = deps.getSeed();
+    seedVal.textContent = v === null ? '—' : String(v);
+  }
+
+  // ---- 行 3：新局种子（删档重开时使用；留空 = 随机） ----
+  const newSeedSlot = mkRow('新局种子', '删除存档并重开时使用；留空 = 随机。输入指定种子可复现地图。');
+  const seedInput = document.createElement('input');
+  seedInput.type = 'text';
+  seedInput.inputMode = 'numeric';
+  seedInput.placeholder = '留空 = 随机';
+  seedInput.style.cssText =
+    'width:120px;box-sizing:border-box;font:13px Consolas,monospace;text-align:center;'
+    + 'color:#eaf6ff;background:rgba(0,0,0,0.35);border:1px solid #2a4a72;border-radius:6px;'
+    + 'padding:5px 6px;outline:none';
+  seedInput.addEventListener('keydown', (e) => e.stopPropagation()); // 输入不被全局按键拦截
+  newSeedSlot.appendChild(seedInput);
+
+  // ---- 行 4：删档（二次确认；重开时带上"新局种子"） ----
   const delSlot = mkRow('删除存档', '清空本地存档并重新开局：进度、道具、遗物全部丢失，不可恢复。');
   let armed = false;
   let armTimer = 0;
@@ -146,8 +187,15 @@ export function createSettingsUI(deps: SettingsDeps): SettingsUi {
         return;
       }
       window.clearTimeout(armTimer);
+      // ★ 新局种子（可留空）：暂存到 localStorage，boot 建新档时读取（用完即删）
+      try {
+        const raw = seedInput.value.trim();
+        if (/^\d+$/.test(raw)) localStorage.setItem('arknights_rogue_next_seed', raw);
+        else localStorage.removeItem('arknights_rogue_next_seed');
+      } catch { /* 忽略 */ }
       SaveSystem.clear();
-      console.warn('[设置] 手动删档：存档已清除，重载后将创建新档');
+      clearWorldStates();   // ★ 世界状态缓存一并清空（2026-09-19）
+      console.warn('[设置] 手动删档：存档与世界缓存已清除，重载后将创建新档');
       location.reload();
     },
   });
@@ -169,7 +217,7 @@ export function createSettingsUI(deps: SettingsDeps): SettingsUi {
     gear.style.background = v ? 'rgba(20,80,200,0.7)' : 'rgba(0,0,0,0.45)';
     gear.style.transform = 'none';
     gear.title = v ? '关闭设置' : '设置';
-    if (v) { syncPerf(); resetArm(); }
+    if (v) { syncPerf(); syncSeed(); resetArm(); }
   }
 
   gear.addEventListener('click', () => setOpen(!open)); // 开 / 关（返回）都是它

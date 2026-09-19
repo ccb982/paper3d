@@ -91,6 +91,22 @@ export function coverSupportAt(
   return best;
 }
 
+/** ★ 世界状态持久化：导出全部城墙/墙记录（WorldStateCache 用） */
+export function snapshotCovers(): import('../core/WorldStateCache').WallRec[] {
+  const out: import('../core/WorldStateCache').WallRec[] = [];
+  for (const c of _coverRegistry) {
+    const p = c.position;
+    out.push({
+      x: p.x, y: p.y, z: p.z,
+      heading: c.heading,
+      variant: c.variant,
+      hp: c.hp,
+      owner: c.owner,
+    });
+  }
+  return out;
+}
+
 /** ★ 玩家附近是否有墙（开枪时判定"无视墙"；数量个位数，线性扫描） */
 export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
   const r2 = r * r;
@@ -126,7 +142,7 @@ export class CoverEntity extends StructureEntity {
   /** ★ 角色阻挡索引 id（JS 静态障碍：掩体挡人走，不挡弹——弹走物理复合体） */
   private readonly blockId: number;
   /** 墙朝向（碰撞体/阻挡索引/渲染共用） */
-  private readonly heading: number;
+  readonly heading: number;
   /** ★ 光环前的基础值（城墙光环动态改 maxHp/defense，离开范围要能回落） */
   private readonly baseMaxHp: number;
   private readonly baseDefense: number;

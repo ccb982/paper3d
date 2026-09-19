@@ -26,6 +26,7 @@ import { setTestGroup } from './services/map/TileGroups';
 import { setTestPreset } from './services/map/TerrainPresets';
 import { showTestGroupPanel } from './services/map/debug/TestGroupPanel';
 import { createNewSession, dailyMapSeed, type GameSession } from './core/Session';
+import { clearWorldStates } from './core/WorldStateCache';
 import { minimapWarmupState } from './services/ui/MinimapWarmup';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer, applyShaderDebug } from './services/render/GameRenderer';
@@ -325,14 +326,27 @@ async function boot() {
   if (new URLSearchParams(location.search).get('wipe') === '1') {
     try {
       localStorage.removeItem('arknights_rogue_save');
-      console.warn('[boot] 已删档（?wipe=1）：旧存档清除，将创建新档');
+      clearWorldStates();   // ★ 世界状态缓存一并清空（2026-09-19）
+      console.warn('[boot] 已删档（?wipe=1）：旧存档与世界缓存清除，将创建新档');
     } catch (e) {
       console.error('[boot] 删档失败:', e);
     }
   }
   currentSession = SaveSystem.load();
   if (!currentSession) {
-    currentSession = createNewSession();
+    // ★ 新局种子（2026-09-19）：?seed=123 优先；其次设置面板"新局种子"暂存值；否则随机
+    let seedOverride: number | undefined;
+    try {
+      const urlSeed = new URLSearchParams(location.search).get('seed');
+      const pending = localStorage.getItem('arknights_rogue_next_seed');
+      localStorage.removeItem('arknights_rogue_next_seed');
+      const raw = urlSeed ?? pending;
+      if (raw !== null && /^\d+$/.test(raw.trim())) {
+        const v = Number(raw.trim());
+        if (Number.isFinite(v) && v > 0) seedOverride = v >>> 0;
+      }
+    } catch { /* 隐私模式等：忽略，走随机 */ }
+    currentSession = createNewSession(seedOverride);
     SaveSystem.save(currentSession);
   }
   // ★ 测试组面板（调试）：存档就绪后用当天地图种子（主种子 × 天数）统计实际 chunk
@@ -407,6 +421,7 @@ async function boot() {
   settingsUi = createSettingsUI({
     isHudVisible: () => hudVisible,
     setHudVisible: applyHudVisible,
+    getSeed: () => currentSession?.meta.seed ?? null,
   });
   // 控制台逃生口：setHudVisible(true/false) / toggleSettings()
   (globalThis as { setHudVisible?: (v: boolean) => void }).setHudVisible = applyHudVisible;

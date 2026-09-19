@@ -232,6 +232,44 @@ export class RasterMap {
     this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
   }
 
+  // ============ ★ 世界状态持久化（2026-09-19） ============
+
+  /** ★ 导出"玩家造成的差异"（挖坑层数 + 采集已采/次数）——供 WorldStateCache 持久化 */
+  exportPersistState(): {
+    levels: [number, Uint8Array][];
+    harvested: [number, number[]][];
+    harvestCounts: [number, [number, number][]][];
+  } {
+    const levels = new Map<number, Uint8Array>();
+    for (const [k, lv] of this.levelsStore) levels.set(k, lv);
+    for (const k of this.dirtyLevelKeys) {
+      const cd = this.chunks.get(k);
+      if (cd) levels.set(k, cd.levels);
+    }
+    return {
+      levels: [...levels],
+      harvested: [...this.harvestedStore].map(([k, set]) => [k, [...set]]),
+      harvestCounts: [...this.propHarvestCounts].map(([k, m]) => [k, [...m]]),
+    };
+  }
+
+  /** ★ 导入持久化状态（进入世界、chunk 生成前调用）：挖过的坑不愈合；
+   *  ★ 植被不导入（每天重建 → 资源可恢复，2026-09-19 用户定调） */
+  importPersistState(st: {
+    levels: [number, Uint8Array][];
+    harvested?: [number, number[]][];
+    harvestCounts?: [number, [number, number][]][];
+  }): void {
+    for (const [k, lv] of st.levels) {
+      const copy = new Uint8Array(lv);
+      this.levelsStore.set(k, copy);
+      const cd = this.chunks.get(k);
+      if (cd) cd.levels = copy;   // 已加载块同步（正常在生成前调用，此处兜底）
+    }
+    if (st.harvested) for (const [k, arr] of st.harvested) this.harvestedStore.set(k, new Set(arr));
+    if (st.harvestCounts) for (const [k, m] of st.harvestCounts) this.propHarvestCounts.set(k, new Map(m));
+  }
+
   // ============ ★ 采集物已采状态（2026-09-14） ============
 
   /** 该 chunk 是否有已采记录（快路径：无记录直接跳过过滤） */
