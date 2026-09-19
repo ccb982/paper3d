@@ -154,7 +154,6 @@ const SENTINEL_SHOT_SPEED = 20;
 const SENTINEL_SHOT_LIFETIME = 3.0;
 /** ★ 掩体弹（玩家遗物部署）：速度/寿命/同时存在上限 */
 const COVER_SHOT_SPEED = 18;
-const COVER_SHOT_LIFETIME = 3.0;
 const MAX_COVER_PLAYER = 6;
 /** ★ 祖宗弹命中伤害 = max(下限, 主角攻击力 × 系数)，结算后立即落地生成祖宗 */
 const SENTINEL_IMPACT_MIN_DAMAGE = 8;
@@ -507,6 +506,12 @@ export class WorldMode implements IGameMode {
     variant: 'cover' | 'wall';
     /** ★ 落地朝向（掩体弹：墙法线 = 发射方向） */
     heading: number;
+    /** ★ 掩体/墙弹的**预定落点**（预览点 = 实际落点；飞行仅视觉） */
+    targetX: number;
+    targetY: number;
+    targetZ: number;
+    /** 剩余飞行时间（到点即落成） */
+    flyLeft: number;
   }[] = [];
   /** 祖宗弹共享纹理（懒建；exit 释放） */
   private sentinelTex: THREE.CanvasTexture | null = null;
@@ -2109,7 +2114,82 @@ export class WorldMode implements IGameMode {
       kind: 'sentinel',
       variant: 'cover',
       heading: 0,
+      targetX: 0, targetY: 0, targetZ: 0, flyLeft: 0,
     });
+  }
+
+  /** ★ 放置面高度：地形 / 墙顶 / 舰船甲板 取最高（墙上加墙用） */
+  private deploySurfaceAt(x: number, z: number, y: number): number {
+    let h = this.raster.surfaceHeightAtFor(x, z, y);
+    const wallTop = coverTopAt(x, z);
+    if (wallTop !== null && wallTop > h) h = wallTop;
+    const deck = this.ship?.deckTopAt(x, z);
+    if (deck !== null && deck !== undefined && deck > h) h = deck;
+    return h;
+  }
+
+  /** ★ 沿射线的第一个放置面交点（与 deployAimPoint 同口径；给祖宗弹预览/落点用） */
+  private landingAlong(
+    origin: { x: number; y: number; z: number },
+    dir: { x: number; y: number; z: number },
+  ): { x: number; y: number; z: number } {
+    const maxD = CROSSHAIR_CONVERGE_DIST;
+    const step = 1.5;
+    let prevT = 0;
+    for (let t = step; t <= maxD; t += step) {
+      const x = origin.x + dir.x * t;
+      const y = origin.y + dir.y * t;
+      const z = origin.z + dir.z * t;
+      if (y <= this.deploySurfaceAt(x, z, y)) {
+        let lo = prevT, hi = t;
+        for (let i = 0; i < 8; i++) {
+          const mid = (lo + hi) / 2;
+          const mx = origin.x + dir.x * mid;
+          const my = origin.y + dir.y * mid;
+          const mz = origin.z + dir.z * mid;
+          if (my <= this.deploySurfaceAt(mx, mz, my)) hi = mid; else lo = mid;
+        }
+        const x2 = origin.x + dir.x * hi;
+        const z2 = origin.z + dir.z * hi;
+        return { x: x2, y: this.deploySurfaceAt(x2, z2, origin.y), z: z2 };
+      }
+      prevT = t;
+    }
+    const x = origin.x + dir.x * maxD;
+    const z = origin.z + dir.z * maxD;
+    return { x, y: this.deploySurfaceAt(x, z, origin.y), z };
+  }
+
+  /** ★ 投送落点（2026-09-19 用户定调）：**正中心一条射线**打到"放置面"的第一个交点
+   *  —— 不锁敌人/代理、不做范围判定；预览与实际落点共用本函数（预览 = 实际）。
+   *  放置面包含墙顶 → 允许"墙上加墙"。 */
+  private deployAimPoint(): { x: number; y: number; z: number } {
+    const ray = this.cameraRay();
+    const maxD = CROSSHAIR_CONVERGE_DIST;
+    const step = 1.5;
+    let prevT = 0;
+    for (let t = step; t <= maxD; t += step) {
+      const x = ray.origin.x + ray.dir.x * t;
+      const y = ray.origin.y + ray.dir.y * t;
+      const z = ray.origin.z + ray.dir.z * t;
+      if (y <= this.deploySurfaceAt(x, z, y)) {
+        let lo = prevT, hi = t;
+        for (let i = 0; i < 8; i++) {
+          const mid = (lo + hi) / 2;
+          const mx = ray.origin.x + ray.dir.x * mid;
+          const my = ray.origin.y + ray.dir.y * mid;
+          const mz = ray.origin.z + ray.dir.z * mid;
+          if (my <= this.deploySurfaceAt(mx, mz, my)) hi = mid; else lo = mid;
+        }
+        const x2 = ray.origin.x + ray.dir.x * hi;
+        const z2 = ray.origin.z + ray.dir.z * hi;
+        return { x: x2, y: this.deploySurfaceAt(x2, z2, ray.origin.y), z: z2 };
+      }
+      prevT = t;
+    }
+    const x = ray.origin.x + ray.dir.x * maxD;
+    const z = ray.origin.z + ray.dir.z * maxD;
+    return { x, y: this.deploySurfaceAt(x, z, ray.origin.y), z };
   }
 
   /** ★ 投送落点预览：选中「祖宗 / 掩体」时在准星落点显示投放圈/足迹（其余情况隐藏） */
@@ -2123,12 +2203,17 @@ export class WorldMode implements IGameMode {
       dp.hide();
       return;
     }
-    const aim = this.crosshairPoint();
-    const gy = this.raster.surfaceHeightAt(aim.x, aim.z) + 0.06;
     if (q === 'zuzong') {
-      dp.showCircle(aim.x, gy, aim.z, 1.6);
+      // ★ 祖宗：预览 = 枪口沿准星方向的第一个放置面交点（与实际弹道同射线）
+      const p0 = this.player.position;
+      const muzzle = { x: p0.x, y: p0.y + 1.1, z: p0.z };
+      const dir = this.aimDirectionFromMuzzle(muzzle);
+      const land = this.landingAlong(muzzle, dir);
+      dp.showCircle(land.x, land.y + 0.06, land.z, 1.6);
       return;
     }
+    const aim = this.deployAimPoint();
+    const gy = aim.y + 0.06;
     // 掩体 / 实心墙：足迹矩形（宽 × 厚），朝向 = 玩家 → 落点方向（墙法线）
     const p = this.player.position;
     const wall = q === 'tumu_laojie';
@@ -2142,22 +2227,26 @@ export class WorldMode implements IGameMode {
     if (!this.player || !this.scene) return;
     const p = this.player.position;
     const muzzle = { x: p.x, y: p.y + 1.1, z: p.z };
-    const dir = this.aimDirectionFromMuzzle(muzzle);
-    let dx = dir.x, dy = dir.y, dz = dir.z;
-    const assisted = this.aimAssist(muzzle, dx, dy, dz);
-    dx = assisted.x; dy = assisted.y; dz = assisted.z;
+    // ★ 落点 = 预览点（同一函数）→ 预览位置 == 实际位置
+    const aim = this.deployAimPoint();
+    const dx = aim.x - muzzle.x, dy = aim.y - muzzle.y, dz = aim.z - muzzle.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const dirX = dx / (dist || 1), dirY = dy / (dist || 1), dirZ = dz / (dist || 1);
     this.sentinelShots.push({
       proj: new SentinelProjectile(
         this.scene, coverBrickTexture(),
-        muzzle.x + dx * 1.5, muzzle.y + dy * 1.5, muzzle.z + dz * 1.5,
-        dx, dy, dz, COVER_SHOT_SPEED, COVER_SHOT_LIFETIME,
+        muzzle.x + dirX * 1.5, muzzle.y + dirY * 1.5, muzzle.z + dirZ * 1.5,
+        dirX, dirY, dirZ, COVER_SHOT_SPEED, Math.max(0.15, dist / COVER_SHOT_SPEED),
       ),
       spawnOnLand: false,
       damage: -1,
       source: this.player,
       kind: 'cover',
       variant,
-      heading: Math.atan2(dx, dz),
+      // 朝向 = 玩家 → 落点（墙法线背对玩家）
+      heading: Math.atan2(aim.x - p.x, aim.z - p.z),
+      targetX: aim.x, targetY: aim.y, targetZ: aim.z,
+      flyLeft: Math.max(0.15, dist / COVER_SHOT_SPEED),
     });
   }
 
@@ -2165,7 +2254,8 @@ export class WorldMode implements IGameMode {
   private playerCovers: CoverEntity[] = [];
   private spawnCoverAt(x: number, z: number, heading: number, variant: 'cover' | 'wall' = 'cover'): void {
     if (!this.scene) return;
-    const y = this.raster.surfaceHeightAt(x, z);
+    // ★ 放置面 = 地形 / 墙顶 / 舰船甲板 取最高（允许墙上加墙、允许穿模）
+    const y = this.deploySurfaceAt(x, z, this.raster.surfaceHeightAt(x, z) + 1);
     const cover = new CoverEntity(this.entities, this.scene, {
       x, y, z, heading, owner: 'player', buildTime: COVER_DEPLOY_BUILD_TIME, variant,
     });
@@ -2199,13 +2289,13 @@ export class WorldMode implements IGameMode {
       const rec = this.sentinelShots[i];
       const shot = rec.proj;
       const land = shot.update(dt, this.camera);
-      // ★ 城墙/墙弹：不结算命中（直接飞过敌人），落地生成
+      // ★ 城墙/墙弹：不结算命中（直接飞过敌人）；飞行纯视觉，到点落在**预定落点**
       if (rec.kind === 'cover') {
-        if (land) {
+        rec.flyLeft -= dt;
+        if (rec.flyLeft <= 0) {
           this.sentinelShots.splice(i, 1);
-          const cp = shot.sprite.position;
           shot.dispose();
-          this.spawnCoverAt(cp.x, cp.z, rec.heading, rec.variant);
+          this.spawnCoverAt(rec.targetX, rec.targetZ, rec.heading, rec.variant);
         }
         continue;
       }

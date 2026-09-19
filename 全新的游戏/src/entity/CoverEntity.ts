@@ -24,13 +24,14 @@ import {
 
 /** 城墙/墙生命值（走 applyDamage 口径；可被拆） */
 export const COVER_HP = 400;
-/** ★ 城墙光环（2026-09-19）：范围内墙体持续修复 + 上限提升（跟随玩家生命）+ 防御加成 */
+/** ★ 城墙光环（2026-09-19）：范围内墙体持续修复 + 上限提升（跟随玩家生命）+ 防御加成。
+ *  ★ 2026-09-19 二次定调：**多个城墙可叠加**（每座城墙各贡献一份），城墙之间/对墙一视同仁。 */
 export const WALL_AURA_R = 10;
-/** 上限提升 = 玩家最大生命 × 该比例（不叠加，取最高来源） */
+/** 每座城墙的上限提升 = 玩家最大生命 × 该比例（多座城墙相加） */
 export const WALL_AURA_HP_RATIO = 0.8;
-/** 防御加成（不叠加，取最高来源） */
+/** 每座城墙的防御加成（多座城墙相加） */
 export const WALL_AURA_DEF = 6;
-/** 持续修复速度（HP/秒） */
+/** 每座城墙的持续修复速度（HP/秒；多座城墙相加） */
 export const WALL_AURA_HEAL = 25;
 /** ★ 玩家在城墙附近此半径内开枪 → 子弹"无视墙"（防贴墙被自己的墙挡；远距离照常命中） */
 export const WALL_IGNORE_R = 4;
@@ -53,24 +54,41 @@ export interface CoverOptions {
 
 /** ★ 城墙光环结算（每帧；数量个位数 → O(n²) 可忽略）：
  *  来源 = 城墙（variant 'cover'）；目标 = 所有墙（含城墙自身/彼此）。
- *  上限/防御不叠加（取最高来源）；范围内持续回血；离开范围自动回落基础值。 */
+ *  ★ **可叠加**：范围内每座城墙各贡献一份（上限/防御/修复都相加）；
+ *  离开范围自动回落基础值。 */
 export function updateWallAuras(playerMaxHp: number, dt: number): void {
   const all: CoverEntity[] = [];
   for (const c of _coverRegistry) all.push(c);
-  const bonusHp = Math.round(playerMaxHp * WALL_AURA_HP_RATIO);
+  const perHp = Math.round(playerMaxHp * WALL_AURA_HP_RATIO);
+  const r2 = WALL_AURA_R * WALL_AURA_R;
   for (const w of all) {
     let bh = 0, bd = 0, heal = 0;
     for (const src of all) {
       if (src.variant !== 'cover') continue;
       const dx = src.position.x - w.position.x;
       const dz = src.position.z - w.position.z;
-      if (dx * dx + dz * dz > WALL_AURA_R * WALL_AURA_R) continue;
-      if (bonusHp > bh) bh = bonusHp;
-      if (WALL_AURA_DEF > bd) bd = WALL_AURA_DEF;
-      if (WALL_AURA_HEAL > heal) heal = WALL_AURA_HEAL;
+      if (dx * dx + dz * dz > r2) continue;
+      bh += perHp;
+      bd += WALL_AURA_DEF;
+      heal += WALL_AURA_HEAL;
     }
     w.applyAura(bh, bd, heal, dt);
   }
+}
+
+/** ★ 支撑面（墙上叠墙用）：排除自身，只认"脚下或略高"（≤ belowY+0.6）的墙顶 */
+export function coverSupportAt(
+  x: number, z: number, belowY: number, exclude: CoverEntity,
+): number | null {
+  let best: number | null = null;
+  for (const c of _coverRegistry) {
+    if (c === exclude) continue;
+    const top = c.topAt(x, z);
+    if (top === null) continue;
+    if (top > belowY + 0.6) continue;
+    if (best === null || top > best) best = top;
+  }
+  return best;
 }
 
 /** ★ 玩家附近是否有墙（开枪时判定"无视墙"；数量个位数，线性扫描） */
@@ -162,7 +180,7 @@ export class CoverEntity extends StructureEntity {
     _coverRegistry.add(this);
   }
 
-  /** ★ 城墙光环结算（由 updateWallAuras 调用）：上限/防御取最高来源（不叠加），范围内持续回血 */
+  /** ★ 城墙光环结算（由 updateWallAuras 调用）：多座城墙**叠加**（上限/防御/修复相加），范围内持续回血 */
   applyAura(bonusHp: number, bonusDef: number, healPerSec: number, dt: number): void {
     const maxHp = this.baseMaxHp + bonusHp;
     this.maxHp = maxHp;
@@ -205,9 +223,12 @@ export class CoverEntity extends StructureEntity {
       this.buildProgress = Math.min(1, this.buildTime > 0 ? this.buildElapsed / this.buildTime : 1);
       (this.renderer as CoverRenderer | null)?.setBuildProgress(this.buildProgress);
     }
-    // ★ 地面跟随（插值）：采样脚下地表高，平滑逼近；变化超过阈值才同步刚体/阻挡索引
+    // ★ 支撑面跟随（插值）：地形 / **下方墙顶**（墙上叠墙时不被地形拽下去）；
+    //   变化超过阈值才同步刚体/阻挡索引
     const p = this.entity.position;
-    const gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? p.y;
+    let gy = RasterMap.current?.surfaceHeightAt(p.x, p.z) ?? p.y;
+    const support = coverSupportAt(p.x, p.z, p.y, this);
+    if (support !== null && support > gy) gy = support;
     const dy = gy - p.y;
     if (Math.abs(dy) > 1e-3) {
       p.y += dy * Math.min(1, dt * 4);
