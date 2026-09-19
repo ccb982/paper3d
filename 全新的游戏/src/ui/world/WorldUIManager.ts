@@ -91,6 +91,8 @@ export class WorldUIManager extends BaseInteractionUI {
   private shipVignetteEl: HTMLDivElement | null = null;
   /** ★ 自爆单位逼近提醒（边框红晕；强度 0~1 驱动 + 脉冲） */
   private dangerVignetteEl: HTMLDivElement | null = null;
+  /** ★ 爆炸闪光（近处爆炸全屏橙白闪） */
+  private explosionFlashEl: HTMLDivElement | null = null;
   private shipAlertTimer = 0;
   /** ★ 敌袭预警/战报横幅（顶部居中；《Director》节奏播报） */
   private assaultBannerEl: HTMLDivElement | null = null;
@@ -397,6 +399,30 @@ export class WorldUIManager extends BaseInteractionUI {
     // 脉冲（时间正弦：不依赖 CSS 关键帧注入，与舰船预警同节奏感）
     const pulse = 0.72 + 0.28 * Math.sin(performance.now() / 90);
     this.dangerVignetteEl.style.opacity = String(Math.min(1, intensity * pulse));
+  }
+
+  /** ★ 爆炸闪光（2026-09-19）：近处爆炸→全屏橙白闪（强度 0~1，随距离衰减）。
+   *  实现：立即上到 intensity → 下一帧起 0.28s 淡出。 */
+  flashExplosion(intensity: number): void {
+    if (intensity <= 0.02) return;
+    if (!this.explosionFlashEl) {
+      const el = document.createElement('div');
+      el.style.cssText = [
+        'position:fixed', 'inset:0', 'z-index:67', 'pointer-events:none',
+        'background:radial-gradient(circle at 50% 55%, rgba(255,240,200,0.95) 0%, ' +
+          'rgba(255,140,40,0.55) 35%, rgba(255,60,20,0) 70%)',
+        'opacity:0', 'transition:opacity 0.28s ease-out',
+      ].join(';');
+      document.body.appendChild(el);
+      this.explosionFlashEl = el;
+    }
+    const el = this.explosionFlashEl;
+    el.style.transition = 'none';
+    el.style.opacity = String(Math.min(0.85, intensity));
+    requestAnimationFrame(() => {
+      el.style.transition = 'opacity 0.28s ease-out';
+      el.style.opacity = '0';
+    });
   }
 
   /** ★ 敌袭预警/战报横幅（顶部居中，打字机感描边；null = 隐藏）
@@ -949,6 +975,8 @@ export class WorldUIManager extends BaseInteractionUI {
     // ★ 自爆危急提醒（边框红晕）跨局防残留
     this.dangerVignetteEl?.remove();
     this.dangerVignetteEl = null;
+    this.explosionFlashEl?.remove();
+    this.explosionFlashEl = null;
     this.shipAlertTimer = 0;
     this.assaultBannerEl?.remove();
     this.assaultBannerEl = null;

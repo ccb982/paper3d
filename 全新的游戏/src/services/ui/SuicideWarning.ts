@@ -10,14 +10,22 @@ import type { EnemyBase } from '../../entity/EnemyBase';
 
 /** 预警半径（米）：进入后边框红晕随距离增强 */
 export const SUICIDE_WARN_R = 14;
+/** 接近预警半径（米）：这么远就开始盯“正在接近” */
+export const SUICIDE_APPROACH_R = 26;
+/** 接近速度阈值（m/s）：超过即报警（越快越红） */
+export const SUICIDE_APPROACH_SPEED = 0.8;
 
-/** 每帧：最近自爆单位距离 → UI 红晕强度（0~1） */
+/** 上一帧最近距离（接近速度推算；无目标 = Infinity） */
+let prevDist = Infinity;
+
+/** 每帧：最近自爆单位距离 + 接近速度 → UI 红晕强度（0~1） */
 export function updateSuicideWarning(
   ui: { setDangerVignette(v: number): void } | null | undefined,
   pool: AgentPool,
   enemies: EnemyBase[],
   px: number,
   pz: number,
+  dt: number,
 ): void {
   if (!ui) return;
   let best = Infinity;
@@ -34,6 +42,16 @@ export function updateSuicideWarning(
     if (d2 < best) best = d2;
   }
   const d = Math.sqrt(best);
-  const intensity = d < SUICIDE_WARN_R ? Math.max(0, 1 - d / SUICIDE_WARN_R) : 0;
-  ui.setDangerVignette(intensity);
+  // 接近速度（正 = 正在拉近）
+  const closing = Number.isFinite(prevDist) && dt > 0 ? (prevDist - d) / dt : 0;
+  prevDist = Number.isFinite(d) ? d : Infinity;
+  // ① 近距预警：随距离逐强
+  let intensity = d < SUICIDE_WARN_R ? 1 - d / SUICIDE_WARN_R : 0;
+  // ② 接近预警：更远就提醒（越近、越快 → 越红）
+  if (d < SUICIDE_APPROACH_R && closing > SUICIDE_APPROACH_SPEED) {
+    const near = 1 - d / SUICIDE_APPROACH_R;
+    const fast = Math.min(1, (closing - SUICIDE_APPROACH_SPEED) / 3);
+    intensity = Math.max(intensity, 0.35 + 0.5 * Math.max(near, fast));
+  }
+  ui.setDangerVignette(Math.min(1, intensity));
 }

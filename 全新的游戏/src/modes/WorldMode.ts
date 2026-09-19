@@ -42,6 +42,7 @@ import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
+import { buildEnemyTargetCandidates } from './world/TargetCandidates';
 import { ExplosionFx } from '../services/fx/ExplosionFx';
 import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
@@ -1073,6 +1074,11 @@ export class WorldMode implements IGameMode {
     this.aiCtx.attack = (opts) => {
       if (opts.type === 'aoe' && opts.camp === 'enemy') {
         this.explosionFx?.spawn(opts.x, opts.y, opts.z, opts.radius);
+        // ★ 近处爆炸：全屏橙白闪（随距离衰减）
+        const pp = this.player.position;
+        const dx = opts.x - pp.x, dz = opts.z - pp.z;
+        const d = Math.hypot(dx, dz);
+        if (d < 18) this.worldUIManager?.flashExplosion(1 - d / 18);
       }
       if (opts.type === 'projectile' && opts.camp === 'enemy') {
         executeAttack(
@@ -1478,7 +1484,7 @@ export class WorldMode implements IGameMode {
       this.swarm.update(dt, hooks);
       this.updateSwarmDbg(dt);
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
-      updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y);
+      updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
       this.explosionFx?.update(dt);
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
@@ -2553,6 +2559,13 @@ export class WorldMode implements IGameMode {
   ];
   /** ★ 复用输出数组（同上：零分配；targetCandidates 不会重入） */
   private candOut: TargetCandidate[] = [];
+  /** ★ 复用宿主（零分配；实现拆至 modes/world/TargetCandidates.ts） */
+  private readonly candHost = {
+    drones: [] as AllyBase[],
+    ship: null as ShipEntity | null,
+    player: null as Player | null,
+    explore: false,
+  };
 
   /** ★ 敌人索敌候选（优先级从高到低，2026-09-12 用户定调）：
    *  ① 祖宗（站桩·吸仇恨；TAUNT 半径内——有索敌效果，优先级最高）
@@ -2560,47 +2573,12 @@ export class WorldMode implements IGameMode {
    *  条件侧按序取第一个"在该敌视野半径内"的候选 → 实现攻击优先级队列
    *  ★★ 返回的是**活对象**（引用），见 candSlots 的不变量说明。 */
   private enemyTargetCandidates(enemy: EnemyBase): TargetCandidate[] {
-    const ep = enemy.position;
-    const out = this.candOut;
-    out.length = 0;
-    let sentinel: AllyBase | null = null, sentinelD2 = Infinity;
-    let ally: AllyBase | null = null, allyD2 = Infinity;
-    for (const d of this.drones) {
-      if (d.hp <= 0) continue;
-      const dx = d.position.x - ep.x, dz = d.position.z - ep.z;
-      const d2 = dx * dx + dz * dz;
-      if (d.stationary) {
-        if (d2 < sentinelD2) { sentinelD2 = d2; sentinel = d; }
-      } else if (d2 < allyD2) {
-        allyD2 = d2;
-        ally = d;
-      }
-    }
-    // ★ 祖宗最高优先（TAUNT 半径内；吸仇恨）：radius = 自身嘲讽半径，
-    //   seePlayer/retarget 用该半径判定，不走敌人通用视野半径
-    const taunt2 = SENTINEL_TAUNT_RADIUS * SENTINEL_TAUNT_RADIUS;
-    if (sentinel && sentinelD2 <= taunt2) {
-      const s = this.candSlots[0];
-      s.x = sentinel.position.x; s.z = sentinel.position.z;
-      out.push(s);
-    }
-    // ★ 其次舰船（仅探索阶段存在；hp<=0 由结算接管不再嘲讽）
-    if (this.phase === 'explore' && this.ship && this.ship.hp > 0) {
-      const s = this.candSlots[1];
-      s.x = this.ship.position.x; s.z = this.ship.position.z;
-      out.push(s);
-    }
-    if (this.player) {
-      const s = this.candSlots[2];
-      s.x = this.player.position.x; s.z = this.player.position.z;
-      out.push(s);
-    }
-    if (ally) {
-      const s = this.candSlots[3];
-      s.x = ally.position.x; s.z = ally.position.z;
-      out.push(s);
-    }
-    return out;
+    const h = this.candHost;
+    h.drones = this.drones;
+    h.ship = this.ship;
+    h.player = this.player;
+    h.explore = this.phase === 'explore';
+    return buildEnemyTargetCandidates(this.candOut, this.candSlots, enemy, h);
   }
 
   /** ★ 快捷栏条目：普通弹药（∞）+ 行囊内弹药（祖宗等）。

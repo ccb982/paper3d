@@ -25,7 +25,7 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
-import { SquadTactics, squadBucket, roleBucket } from './SquadTactics';
+import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
 import {
   roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
   type TacticalOrder, type UnitDirective,
@@ -148,6 +148,8 @@ export class SwarmSystem {
   readonly tactics = new SquadTactics();
   /** ★ 步骤 9b：分解节拍（2Hz） */
   private tacticsAccum = 0;
+  /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
+  private readonly leaderAI = new SquadLeaderAI();
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
@@ -283,6 +285,9 @@ export class SwarmSystem {
         );
       }
     }
+
+    // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
+    this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
 
     // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
     this.tacticsAccum += dt;
@@ -900,6 +905,7 @@ export class SwarmSystem {
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
+    this.leaderAI.clear();
     this.atoms.clear();
   }
 

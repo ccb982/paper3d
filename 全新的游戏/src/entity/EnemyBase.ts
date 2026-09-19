@@ -31,6 +31,7 @@ import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
+import { ENEMY_ENGAGE_FLOOR } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
 import { RasterMap } from '../services/map/RasterMap';
 import { eventBus } from '../core/EventBus';
@@ -474,6 +475,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
         }
         if (b.name === 'rangedShot') {
           this.fbKind = 'ranged';
+          // ★ 远程保底射程：不小于视野保底（先手开火，而非等到 AI inRange 的 9~10m）
+          this.fbRange = Math.max(this.fbRange, ENEMY_ENGAGE_FLOOR);
           this.fbDamage = Number(p.damage ?? 8);
           this.fbSpeed = Number(p.speed ?? 26);
           this.fbLifetime = Number(p.lifetime ?? 2.4);
