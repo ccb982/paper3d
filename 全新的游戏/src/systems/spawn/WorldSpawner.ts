@@ -659,9 +659,12 @@ export class WorldSpawner {
       // ★ 空中层（2026-09-18）：飞行兵可以铺在水/坑上方（它不落地）；地面兵照旧排除
       const air = def.isAir === true;
       if (!air && (role === 'pit' || role === 'liquid')) continue;
+      // ★ 2026-09-19 修正：地面单位必须落真实地表（surfaceHeightAt）——
+      //   原“洞顶优先（hint=1e9）”会把波次地面代理铺在洞顶/浮空岛上层，
+      //   且批量跟随又用自身 y 做层提示 → 永远“站”在洞顶（玩家看=浮空）。
       const y = air
         ? this.deps.raster.surfaceHeightAtFor(x, z, 1e9) + def.airAltitude
-        : this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（压测铺代理）
+        : this.deps.raster.surfaceHeightAt(x, z);
       if (!air && y < -1.2) continue;
       const mobIndex = this.deps.mobDefs.indexOf(def);
       if (mobIndex < 0) return;

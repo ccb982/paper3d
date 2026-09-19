@@ -578,7 +578,8 @@ export class SwarmSystem {
 
     // 贴图前后帧：远离相机 = 背对（'后'）
     const dot = p.dirX[i] * hooks.camForwardX + p.dirZ[i] * hooks.camForwardZ;
-    p.facingBack[i] = dot > 0.25 ? 1 : 0;
+    // ★ 迟滞：单阈值 0.25 在朝向临界会逐帧翻转（背面帧缺失时 = 闪现）→ 双阈值
+    p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
   /** 移动积分（危险地形绕行：坑/深水/高台立面，无论流场还是直行都探测） */

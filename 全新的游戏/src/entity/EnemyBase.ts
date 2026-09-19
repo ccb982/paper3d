@@ -24,6 +24,7 @@ import {
 import {
   MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
 } from './AtomExecutor';
+import { autoGroundSinkFromFrame } from '../services/fx/groundSink';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
 import { AIStateMachine } from '../systems/ai/AIStateMachine';
@@ -352,21 +353,35 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     // ★ 背面素材检测（2026-09-18）：没有「后」帧的敌人 → 始终面对相机（billboard），
     //   不做相机侧换帧/转身 180°（否则会露出背面空白/镜像贴图）。
     //   有「后」帧 = 维持原双向贴片逻辑；可用 opts.billboard 强制覆盖。
-    const hasBackFrame = asset.hasFrame('后');
+    // ★ 2026-09-19 强化：声明了「后」但为空帧（bbox 为 0）的资产同样按无背面处理（billboard）
+    const backIdx = asset.resolveFrame('后');
+    const backFrame = backIdx !== null ? asset.getFtxFrame(backIdx) : null;
+    const hasBackFrame = !!backFrame && backFrame.bbox.w > 0 && backFrame.bbox.h > 0;
     this.billboard = opts.billboard ?? !hasBackFrame;
     // 初始朝向（贴片朝 +z；显示帧由相机判定；无背面素材恒为「前」）
     this.setFrameAnimated(this.billboard ? '前' : ((opts.facing ?? '前') as '前' | '后'));
     // 纹理宽高比缩放（不压扁；宽 = scale，高 = scale×bbox高宽比）
     this.applyRenderScale(scale);
     // ★ 接地补偿：必须在 applyRenderScale 之后（半高由缩放决定）
+    //   2026-09-19：未配置 groundSink 时按前帧底部透明余量自动计算（治“穿着浮空”）
+    const sinkAspect = ftxFrame ? ftxFrame.bbox.h / ftxFrame.bbox.w : 1;
+    let sink = opts.groundSink ?? 0;
+    if (!(sink > 0)) {
+      const frontIdx = asset.resolveFrame('前') ?? 0;
+      const pair = asset.getFramePair(frontIdx);
+      const img = pair?.base?.image as unknown as
+        | { data?: Float32Array | Uint8Array; width: number; height: number }
+        | undefined;
+      if (img?.data) sink = autoGroundSinkFromFrame(img, scale * sinkAspect);
+    }
     const quad = this.renderer as unknown as { setGroundSink?: (s: number) => void };
-    if (opts.groundSink && quad?.setGroundSink) quad.setGroundSink(opts.groundSink);
+    if (sink > 0 && quad?.setGroundSink) quad.setGroundSink(sink);
     // ★ 头顶血条：按放大后的实际贴片高度定位（顶端 + 0.4 余量），宽度随体型
     //   ★ 减去 groundSink：接地补偿把贴片整体压低了，血条要跟着走（否则血条悬空）
     const aspect = ftxFrame ? ftxFrame.bbox.h / ftxFrame.bbox.w : 1;
     this.attachEffect('health', new HealthBar(scene, this, {
       width: 0.8 * scale,
-      offsetY: scale * aspect + 0.4 - (opts.groundSink ?? 0),
+      offsetY: scale * aspect + 0.4 - sink,
     }));
 
     // ---- AI：配置驱动状态机 + 注册到系统 ----

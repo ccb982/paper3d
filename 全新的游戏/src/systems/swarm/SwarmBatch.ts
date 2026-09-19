@@ -14,6 +14,7 @@ import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
 import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE } from './AgentPool';
 import { LOD_MAX_DIST } from '../../services/lod';
+import { autoGroundSinkFrac } from '../../services/fx/groundSink';
 
 interface MobBatch {
   mesh: THREE.InstancedMesh;
@@ -22,8 +23,10 @@ interface MobBatch {
   flash: THREE.InstancedBufferAttribute;
   /** 贴图高宽比（h/w；实例缩放用） */
   aspect: number;
-  /** ★ 接地补偿（世界单位；纹理底部透明余量 → 实例 y 下沉这么多） */
+  /** ★ 接地补偿（世界单位；配置值；0 = 用自动余量） */
   sink: number;
+  /** ★ 自动接地余量（帧高比例；按实例高度折算世界下沉） */
+  sinkFrac: number;
 }
 
 const _m = new THREE.Matrix4();
@@ -44,6 +47,15 @@ function hsl2rgb(h: number, s: number, l: number): [number, number, number] {
     l + s * (ch(4) - 0.5) * mix,
     l + s * (ch(2) - 0.5) * mix,
   ];
+}
+
+/** 整帧透明检测（背面帧缺失的常见形态；构建期一次，成本可忽略） */
+function isEmptyImage(img: ImageData): boolean {
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) {
+    if (d[i] !== 0) return false;
+  }
+  return true;
 }
 
 /** 单帧烘焙为 RGBA8（base 为 HSL Float32；residual 为 Uint8 偏移） */
@@ -152,11 +164,14 @@ export class SwarmBatch {
       const iFront = asset.resolveFrame('前') ?? 0;
       const iBack = asset.resolveFrame('后') ?? iFront;
       const fFront = bakeFrame(asset, iFront);
-      const fBack = iBack === iFront ? fFront : bakeFrame(asset, iBack);
       if (!fFront) {
         this.mobs.push(null);
         continue;
       }
+      // ★ 2026-09-19：背面帧缺失/为空（烘焙失败或整帧透明）→ 回退前帧。
+      //   否则代理转身切背面 tile 时整片透明（"绕到背面就看不见 + 闪现"）。
+      let fBack = iBack === iFront ? fFront : bakeFrame(asset, iBack);
+      if (!fBack || isEmptyImage(fBack)) fBack = fFront;
 
       const w1 = fFront.width, h1 = fFront.height;
       const w2 = fBack?.width ?? w1, h2 = fBack?.height ?? h1;
@@ -213,7 +228,9 @@ export class SwarmBatch {
       mesh.frustumCulled = false;
       mesh.count = 0;
       scene.add(mesh);
-      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1), sink: sinks[ai] ?? 0 });
+      // ★ 自动接地：配置缺省时按前帧底部透明余量下沉（治“穿着浮空”）
+      const sinkFrac = autoGroundSinkFrac(fFront);   // 每个兵种只算一次（资产级缓存）
+      this.mobs.push({ mesh, tiles, flash, aspect: h1 / Math.max(1, w1), sink: sinks[ai] ?? 0, sinkFrac });
     }
 
     // ---- ★ 远层代理血条：单个 InstancedMesh（所有兵种共用 → 1 draw call） ----
@@ -281,7 +298,8 @@ export class SwarmBatch {
       }
       pool.y[i] = baseY;
       // ★ 接地补偿：底透明余量 → 实例整体下沉（与 L3 实体 FTXQuad.setGroundSink 同口径）
-      _p.set(pool.x[i], baseY + h / 2 - batch.sink, pool.z[i]);
+      const sinkWorld = batch.sink > 0 ? batch.sink : batch.sinkFrac * h;
+      _p.set(pool.x[i], baseY + h / 2 - sinkWorld, pool.z[i]);
       _q.setFromAxisAngle(_axisY, pool.yaw[i]);
       _s.set(w, h, 1);
       _m.compose(_p, _q, _s);
