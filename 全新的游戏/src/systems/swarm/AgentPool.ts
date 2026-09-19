@@ -5,7 +5,8 @@
 // swap-remove 删除，全程零分配；升格为 L3 实体 / 降格回池都走快照拷贝。
 // ============================================================
 
-import type { SwarmSnapshot } from '../../entity/SwarmUnit';
+import type { SwarmSnapshot, UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
+import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity/SwarmUnit';
 
 /** 池容量（= 全图存活上限 200 + 缓冲；《蜂群架构.md》§9） */
 export const AGENT_CAPACITY = 256;
@@ -59,6 +60,20 @@ export interface AgentSpawnData {
   isAir?: boolean;
   /** ★ 空中层悬停高度（米，**相对地表**；仅 isAir 有效；0/负 = 视为地面单位） */
   altitude?: number;
+  // ---- ★ E3b（2026-09-19）：蜂群编队/指挥/移动目标随快照往返（缺省 = 未编队/无目标） ----
+  /** 稳定 uid（升格/降格往返不变） */
+  uid?: number;
+  battalionId?: number;
+  squadId?: number;
+  formSlot?: number;
+  corridorIdx?: number;
+  role?: UnitRole;
+  attackType?: UnitAttackType;
+  isLeader?: boolean;
+  /** 移动目标（三个都给了才视为有效） */
+  moveTargetX?: number;
+  moveTargetY?: number;
+  moveTargetZ?: number;
 }
 
 /** 代理快照（升格/降格搬运；★ v2 字段以实体侧 SwarmSnapshot 为基，单一事实源） */
@@ -167,6 +182,24 @@ export class AgentPool {
   /** 受击白闪量（0~1；命中置 1，指数衰减；实例化批渲染消费） */
   readonly flash = new Float32Array(AGENT_CAPACITY);
 
+  // ---- ★ E3b（2026-09-19）：蜂群编队 / 指挥 / 移动目标（降格不再丢编队） ----
+  /** 稳定 uid（0 = 未分配；跨 LOD 身份） */
+  readonly swarmUid = new Int32Array(AGENT_CAPACITY);
+  readonly battalionId = new Int16Array(AGENT_CAPACITY).fill(-1);
+  readonly squadId = new Int16Array(AGENT_CAPACITY).fill(-1);
+  readonly formSlot = new Int8Array(AGENT_CAPACITY).fill(-1);
+  readonly corridorIdx = new Int16Array(AGENT_CAPACITY).fill(-1);
+  /** 兵种角色 / 攻击类型（SoA 编码；换算走 roleCode/attackCode） */
+  readonly role = new Uint8Array(AGENT_CAPACITY);
+  readonly attackType = new Uint8Array(AGENT_CAPACITY);
+  /** 本队队长标记（指挥权；dormant 不允许） */
+  readonly isLeader = new Uint8Array(AGENT_CAPACITY);
+  /** 移动目标（hasMoveTarget=1 时有效；hold 语义） */
+  readonly moveTargetX = new Float32Array(AGENT_CAPACITY);
+  readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
+  readonly moveTargetZ = new Float32Array(AGENT_CAPACITY);
+  readonly hasMoveTarget = new Uint8Array(AGENT_CAPACITY);
+
   // ---- P4：导演意图 / 士气 ----
   /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
   readonly intent = new Uint8Array(AGENT_CAPACITY);
@@ -215,6 +248,20 @@ export class AgentPool {
     this.retreatUntil[i] = 0;
     this.nextRetreatAt[i] = 0;
     this.rageUntil[i] = 0;
+    // ★ E3b：蜂群字段（缺省 = 未编队/散兵/近战/无目标）
+    this.swarmUid[i] = d.uid ?? 0;
+    this.battalionId[i] = d.battalionId ?? -1;
+    this.squadId[i] = d.squadId ?? -1;
+    this.formSlot[i] = d.formSlot ?? -1;
+    this.corridorIdx[i] = d.corridorIdx ?? -1;
+    this.role[i] = roleCode(d.role ?? 'grunt');
+    this.attackType[i] = attackCode(d.attackType ?? 'melee');
+    this.isLeader[i] = d.isLeader ? 1 : 0;
+    const hasMt = d.moveTargetX !== undefined && d.moveTargetZ !== undefined;
+    this.hasMoveTarget[i] = hasMt ? 1 : 0;
+    this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
+    this.moveTargetY[i] = hasMt ? (d.moveTargetY ?? 0) : 0;
+    this.moveTargetZ[i] = hasMt ? d.moveTargetZ! : 0;
     return i;
   }
 
@@ -260,11 +307,24 @@ export class AgentPool {
     this.retreatUntil[to] = this.retreatUntil[from];
     this.nextRetreatAt[to] = this.nextRetreatAt[from];
     this.rageUntil[to] = this.rageUntil[from];
+    // ★ E3b：新列必须同步搬移（漏一列 = swap-remove 后静默丢值）
+    this.swarmUid[to] = this.swarmUid[from];
+    this.battalionId[to] = this.battalionId[from];
+    this.squadId[to] = this.squadId[from];
+    this.formSlot[to] = this.formSlot[from];
+    this.corridorIdx[to] = this.corridorIdx[from];
+    this.role[to] = this.role[from];
+    this.attackType[to] = this.attackType[from];
+    this.isLeader[to] = this.isLeader[from];
+    this.moveTargetX[to] = this.moveTargetX[from];
+    this.moveTargetY[to] = this.moveTargetY[from];
+    this.moveTargetZ[to] = this.moveTargetZ[from];
+    this.hasMoveTarget[to] = this.hasMoveTarget[from];
   }
 
-  /** 快照（升格用） */
+  /** 快照（升格用；★ E3b：全列导出——编队/指挥/意图/移动目标随升格带回实体） */
   snapshot(i: number): AgentSnapshot {
-    return {
+    const out: AgentSnapshot = {
       mobIndex: this.mobIndex[i],
       x: this.x[i], y: this.y[i], z: this.z[i],
       hp: this.hp[i], maxHp: this.maxHp[i],
@@ -275,7 +335,25 @@ export class AgentPool {
       yaw: this.yaw[i],
       isAir: this.isAir[i] === 1,
       altitude: this.altitude[i],
+      uid: this.swarmUid[i],
+      battalionId: this.battalionId[i],
+      squadId: this.squadId[i],
+      formSlot: this.formSlot[i],
+      corridorIdx: this.corridorIdx[i],
+      role: roleFromCode(this.role[i]),
+      attackType: attackFromCode(this.attackType[i]),
+      isLeader: this.isLeader[i] === 1,
+      intent: this.intent[i],
+      bias: this.bias[i],
+      aggro: this.aggro[i],
+      wanderSpeed: this.wanderSpeed[i],
     };
+    if (this.hasMoveTarget[i] === 1) {
+      out.moveTargetX = this.moveTargetX[i];
+      out.moveTargetY = this.moveTargetY[i];
+      out.moveTargetZ = this.moveTargetZ[i];
+    }
+    return out;
   }
 
   clear(): void {

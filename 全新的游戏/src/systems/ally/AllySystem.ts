@@ -12,6 +12,7 @@ import type * as THREE from 'three';
 import type { CameraFrame } from '../../services/camera/CameraController';
 import { droneFollowOffset } from '../../services/fx/DroneFormation';
 import type { AllyBase, AllyWorldPort } from '../../entity/ally/AllyBase';
+import { GroundStationaryAlly } from '../../entity/ally/GroundStationaryAlly';
 import type { RetireReason } from '../../entity/EntityBase';
 
 /** 每帧上下文（WorldMode 喂入；玩家位置 + 相机帧） */
@@ -76,6 +77,21 @@ export class AllySystem {
       // （友军伤害在攻击瞬间 queryFinalStats(d.owner) 实时查询，无需逐帧注入）
       d.updateAI(dt, camera);
     }
+  }
+
+  /**
+   * ★ 接触唤醒（站桩友军留存通用）：玩家 (x,z) 半径 r 内的休眠站桩友军 → wake()；
+   *   返回本次唤醒数（WorldMode 每帧调一次，唤醒后自动重新索敌并出现在队友列表）。
+   */
+  wakeStationaryNear(x: number, z: number, r: number): number {
+    let n = 0;
+    const r2 = r * r;
+    for (const a of this.list) {
+      if (!(a instanceof GroundStationaryAlly) || !a.dormant) continue;
+      const dx = a.position.x - x, dz = a.position.z - z;
+      if (dx * dx + dz * dz <= r2) { a.wake(); n++; }
+    }
+    return n;
   }
 
   /** 全部退役（登船 = despawned；退出模式 = mode_cleanup） */

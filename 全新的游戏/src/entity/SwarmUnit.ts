@@ -15,10 +15,28 @@ export type UnitRole = 'shield' | 'assault' | 'grunt' | 'ranged' | 'flyer';
 export type UnitAttackType = 'none' | 'melee' | 'ranged' | 'bombard';
 
 /** AgentPool SoA 用的 Uint8 常量（与 AGENT_TARGET_* 同风格） */
-export const ATTACK_NONE = 0;
-export const ATTACK_MELEE = 1;
-export const ATTACK_RANGED = 2;
-export const ATTACK_BOMBARD = 3;
+export const ATTACK_NONE = 0, ATTACK_MELEE = 1, ATTACK_RANGED = 2, ATTACK_BOMBARD = 3;
+
+/** ★ 兵种角色 SoA 编码（AgentPool 存 Uint8；顺序即编码，勿改动既有值） */
+export const ROLE_GRUNT = 0, ROLE_SHIELD = 1, ROLE_ASSAULT = 2, ROLE_RANGED = 3, ROLE_FLYER = 4;
+export const ROLE_ORDER: readonly UnitRole[] = ['grunt', 'shield', 'assault', 'ranged', 'flyer'];
+export const ATTACK_ORDER: readonly UnitAttackType[] = ['none', 'melee', 'ranged', 'bombard'];
+
+/** 联合类型 ↔ SoA 编码（唯一换算口；代理池与快照搬运共用） */
+export function roleCode(r: UnitRole): number {
+  const i = ROLE_ORDER.indexOf(r);
+  return i < 0 ? ROLE_GRUNT : i;
+}
+export function roleFromCode(c: number): UnitRole {
+  return ROLE_ORDER[c] ?? 'grunt';
+}
+export function attackCode(t: UnitAttackType): number {
+  const i = ATTACK_ORDER.indexOf(t);
+  return i < 0 ? ATTACK_MELEE : i;
+}
+export function attackFromCode(c: number): UnitAttackType {
+  return ATTACK_ORDER[c] ?? 'melee';
+}
 
 /** ★ 移动意图（Brain → Simulate 下发；hold 语义） */
 export interface SteerIntent {
@@ -41,6 +59,10 @@ export interface SwarmUnit {
   swarmUid: number;
   /** 当前载体：L3 实体 = 'entity'；L1/L2 代理 = 'agent' */
   readonly carrier: 'entity' | 'agent';
+  /** ★ 激活态（单一单位模型，2026-09-19）：dormant = 能力门控（代理）；active = 全能力（L3） */
+  readonly activation: 'dormant' | 'active';
+  /** ★ 是否本队队长（指挥资格只挂 active；dormant 恒 false） */
+  isLeader: boolean;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId: number;
   /** 小编队（-1 = 散兵/未编队） */
@@ -78,6 +100,17 @@ export interface SwarmSnapshot {
   bias?: number;
   aggro?: number;
   wanderSpeed?: number;
+  // ---- ★ 2026-09-19：单一单位模型（感知/指挥/AI 连续性；缺省 = 无/初始） ----
+  /** 是否本队队长（指挥权标记；dormant 不允许） */
+  isLeader?: boolean;
+  /** 感知（属于逻辑单位，跨 LOD 保留）：最后目击 + 仇恨来源 */
+  lastSeenX?: number;
+  lastSeenZ?: number;
+  lastSeenAt?: number;
+  aggroFrom?: number;
+  /** 休眠 AI 状态（降格抽干 / 升格回灌 → 不失忆、不重置巡逻） */
+  aiStateIdx?: number;
+  aiTimer?: number;
 }
 
 /** ★ 蜂群载体完整契约（L3 实体实现；友军远期可选） */

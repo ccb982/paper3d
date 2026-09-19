@@ -20,9 +20,6 @@ const SENTINEL_ATTACK_CD = 1.1; // 激光冷却（秒）
 const SENTINEL_MINE_CD = 1.8;
 
 export class SentinelAlly extends GroundStationaryAlly {
-  /** ★ 休眠（2026-09-19 留存祖宗）：重进世界后留在原地，不索敌/不攻击/不挖矿，
-   *  玩家回到原地**接触**（≈2.2m）才启用并加入队友列表（HUD） */
-  dormant = false;
   /** 挖矿冷却计时 */
   private mineCd = 0;
   /** ★ 常驻流体（祖宗：单帧 + 流体参数；由资产缓存持有，实体销毁不 dispose） */
@@ -31,8 +28,7 @@ export class SentinelAlly extends GroundStationaryAlly {
   /** ★ 站桩模式：原地不动；绕自身索敌；目标在射程内 → 定时远程攻击 */
   protected think(dt: number): void {
     const p = this.entity.position;
-    // ★ 休眠：站桩保持，不做任何索敌/攻击/挖矿（接触唤醒由 WorldMode 判定）
-    if (this.dormant) { this.holdStationY(p); return; }
+    // （休眠闸门在骨架 GroundStationaryAlly.updateAI：休眠期 think 根本不会被调到）
     // ★ 流体步进由 WorldMode 统一每帧一次（多个祖宗共享同一份实例，绝不能每个都 step）
     if (!this.targetAlive(this.target)) this.target = null;
     this.relockTimer -= dt;

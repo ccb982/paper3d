@@ -70,6 +70,10 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   swarmUid = 0;
   /** 当前载体（L3 实体恒为 'entity'） */
   readonly carrier = 'entity' as const;
+  /** ★ 激活态（2026-09-19 单一单位模型）：实体载体恒 active（代理池 = dormant） */
+  readonly activation = 'active' as const;
+  /** ★ 是否本队队长（指挥权转移写；dormant 恒 false） */
+  isLeader = false;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -120,6 +124,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.corridorIdx !== undefined) this.corridorIdx = snap.corridorIdx;
     if (snap.role !== undefined) this.role = snap.role;
     if (snap.attackType !== undefined) this.attackType = snap.attackType;
+    if (snap.isLeader !== undefined) this.isLeader = snap.isLeader;
     if (snap.moveTargetX !== undefined && snap.moveTargetZ !== undefined) {
       this.moveTarget = { x: snap.moveTargetX, y: snap.moveTargetY ?? 0, z: snap.moveTargetZ };
     }
@@ -135,6 +140,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       corridorIdx: this.corridorIdx,
       role: this.role,
       attackType: this.attackType,
+      isLeader: this.isLeader,
     };
     if (this.moveTarget) {
       out.moveTargetX = this.moveTarget.x;

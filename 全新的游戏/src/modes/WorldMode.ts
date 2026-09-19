@@ -41,6 +41,7 @@ import { EnemyBase } from '../entity/EnemyBase';
 import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
+import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
 import { allySystem } from '../systems/ally/AllySystem';
 import { WaterFx } from '../systems/world/WaterFx';
 import { CharacterClamp } from '../systems/world/CharacterClamp';
@@ -1376,7 +1377,7 @@ export class WorldMode implements IGameMode {
       shipPosition: this.ship?.position ?? null,
       ammoEntries: this.buildAmmoEntries(),
       allies: this.drones
-        .filter((d) => !(d instanceof SentinelAlly && d.dormant)) // ★ 休眠祖宗不入队友列表（接触唤醒后自动出现）
+        .filter((d) => !(d instanceof GroundStationaryAlly && d.dormant)) // ★ 休眠站桩友军不入队友列表（接触唤醒后自动出现）
         .map((d) => ({
           id: `a${d.entity.id}`,
           itemId: d.itemId,
@@ -1494,12 +1495,8 @@ export class WorldMode implements IGameMode {
         playerY: dp.y,
         playerZ: dp.z,
       });
-      // ★ 留存祖宗唤醒：玩家回到原地接触 → 启用（重新索敌/攻击/挖矿）并加入队友列表
-      for (const a of allySystem.allies) {
-        if (!(a instanceof SentinelAlly) || !a.dormant) continue;
-        const dx = a.position.x - dp.x, dz = a.position.z - dp.z;
-        if (dx * dx + dz * dz <= SENTINEL_WAKE_R * SENTINEL_WAKE_R) a.dormant = false;
-      }
+      // ★ 留存站桩友军唤醒：玩家回到原地接触 → 启用（重新索敌/攻击/挖矿）并加入队友列表
+      allySystem.wakeStationaryNear(dp.x, dp.z, SENTINEL_WAKE_R);
       // ★ 友军回血（黍姐的XX）：装备汇总的每秒回复量 → 所有友军（无人机/祖宗）
       if (this.allyRegen > 0) {
         for (const d of allySystem.allies) {
@@ -2127,7 +2124,7 @@ export class WorldMode implements IGameMode {
     const s = new SentinelAlly(this.entities, this.scene, asset, { x, y: py, z, scale: 2.0 });
     s.slotIndex = -1;
     s.itemId = 'zuzong';
-    s.dormant = dormant;   // ★ 留存恢复 = 休眠入场（接触唤醒）
+    if (dormant) s.sleep();   // ★ 留存恢复 = 休眠入场（接触唤醒）
     s.stationaryBaseY = py;
     // ★ 世界端口（远程/代理/挖矿）由 AllySystem 统一注入，不再逐个体绑定回调
     s.owner = this.player; // ★ 攻击时实时查询主人最终攻击力

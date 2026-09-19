@@ -157,10 +157,22 @@ export class SwarmSystem {
       tier: snap.tier,
       aggro: snap.aggro ?? 8,
       wanderSpeed: snap.wanderSpeed ?? 2,
-      intent: 255,
+      intent: snap.intent ?? 255,
       // ★ 空中层（2026-09-18）：飞行标记必须跟着降格实体回池，否则回池即落地
       isAir: snap.isAir,
       altitude: snap.altitude,
+      // ★ E3b（2026-09-19）：编队/指挥/移动目标全字段透传（原实现只挑子集 → 降格即丢编队）
+      uid: snap.uid,
+      battalionId: snap.battalionId,
+      squadId: snap.squadId,
+      formSlot: snap.formSlot,
+      corridorIdx: snap.corridorIdx,
+      role: snap.role,
+      attackType: snap.attackType,
+      isLeader: snap.isLeader,
+      moveTargetX: snap.moveTargetX,
+      moveTargetY: snap.moveTargetY,
+      moveTargetZ: snap.moveTargetZ,
     });
   }
 
