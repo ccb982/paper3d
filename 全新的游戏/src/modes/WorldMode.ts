@@ -126,7 +126,7 @@ import { WorldUIManager } from '../ui/world/WorldUIManager';
 import { PickupGlowEffect } from '../services/fx/PickupGlowEffect';
 import { rollDrops } from '../services/item/ItemDropPipeline';
 import { startMiniGame, closeMiniGame } from '../minigames';
-import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS } from '../systems/spawn/WorldSpawner';
+import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT_SOURCE } from '../systems/spawn/WorldSpawner';
 
 /** ★ 友军物品 id：部署生成 / 损毁即彻底消失（不返还、不可维修） */
 const DRONE_ITEM = 'kaltsit_drone';
@@ -488,6 +488,8 @@ export class WorldMode implements IGameMode {
   private killedUnsub?: () => void;
   /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
   private enemyKilledUnsub?: () => void;
+  /** ★ 步骤 10：敌人受击 → 小队/大队警觉（自主 LOD） */
+  private enemyHitUnsub?: () => void;
   /** ★ 调试可视化（?swarmdbg=1）：小队/属性/指令 */
   private swarmDbg: SwarmDebugOverlay | null = null;
   private swarmDbgAccum = 0;
@@ -878,6 +880,24 @@ export class WorldMode implements IGameMode {
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
     this.swarmHooks.onDirective = (uid, order, directive, until) =>
       this.spawner.applyOrderToEntity(uid, order, directive, until);
+    // ★ 远程代理射击（真弹道；箭/法球按 skin 选池；源用 AGENT_SOURCE 与代理近战同口径）
+    this.swarmHooks.onAgentRanged = (tk, dmg, x, z, tx, tz, skin, speed, life) => {
+      const oy = this.raster.surfaceHeightAt(x, z) + 1.0;
+      const aimY = tk === AGENT_TARGET_SENTINEL ? 1.2
+        : tk === AGENT_TARGET_SHIP ? this.ship.position.y + 2
+        : this.player.hitAnchorY();
+      let dx = tx - x, dy = aimY - oy, dz = tz - z;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      dx /= len; dy /= len; dz /= len;
+      this.aiCtx.attack({
+        type: 'projectile',
+        source: AGENT_SOURCE,
+        x: x + dx * 0.7, y: oy + dy * 0.7, z: z + dz * 0.7,
+        dirX: dx, dirY: dy, dirZ: dz,
+        speed, camp: 'enemy', lifetime: life, damage: dmg,
+        bulletSkin: skin === 1 ? 'fireball' : 'arrow',
+      });
+    };
     // ★ 调试可视化：?swarmdbg=1（小队/属性/指令；无 flag 零开销）
     if (location.search.includes('swarmdbg')) {
       this.swarmDbg = new SwarmDebugOverlay();
@@ -1205,6 +1225,10 @@ export class WorldMode implements IGameMode {
     //   代理侧在 swarmHooks.onAgentKilled 里直接记数（两条路径互斥，不会双计）。
     this.enemyKilledUnsub = eventBus.on('enemy_killed', () => {
       recordKill(this.session);
+    });
+    // ★ 步骤 10：敌人受击（实体侧广播）→ 小队/大队警觉（免降格 + 倾盆而出）
+    this.enemyHitUnsub = eventBus.on('enemy_hit', (payload) => {
+      this.swarm.noteHit(payload.squadId, performance.now() / 1000);
     });
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
@@ -1818,6 +1842,9 @@ export class WorldMode implements IGameMode {
     // ---- 取消 enemy_killed 事件订阅（击杀统计） ----
     this.enemyKilledUnsub?.();
     this.enemyKilledUnsub = undefined;
+    // ---- 取消 enemy_hit 事件订阅（自主 LOD 警觉） ----
+    this.enemyHitUnsub?.();
+    this.enemyHitUnsub = undefined;
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;

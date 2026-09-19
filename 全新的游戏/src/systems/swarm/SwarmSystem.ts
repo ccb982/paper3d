@@ -97,6 +97,25 @@ export const SWARM = {
   ALERT_PAINT_RADIUS_ATTACK: 10,
 } as const;
 
+/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《实体架构.md》§5.10；集中可调） */
+export const AUTONOMY = {
+  /** 单位被击免降格窗口（秒） */
+  UNIT_HOLD_S: 6,
+  /** 小队警觉窗口（秒；任一成员被击 → 全队） */
+  SQUAD_ALERT_S: 8,
+  /** 大队警觉统计窗口（秒） */
+  BATTALION_WINDOW_S: 12,
+  /** 触发倾盆而出所需“不同小队被击”数 */
+  COUNTER_SQUADS: 3,
+  /** 倾盆而出持续（秒） */
+  COUNTER_S: 20,
+  /** 倾盆而出全图警戒半径（米） */
+  COUNTER_ALERT_R: 220,
+  /** 倾盆而出动态算力：L3 上限 / 每帧升格 加成 */
+  L3_CAP_BOOST: 15,
+  PROMOTE_BOOST: 4,
+} as const;
+
 export interface SwarmHooks {
   /** 玩家位置（分层基准 / 索敌） */
   playerX: number;
@@ -126,6 +145,11 @@ export interface SwarmHooks {
   onSquadWiped?: (squadId: number) => void;
   /** ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体不在池内，走 uid 映射） */
   onDirective?: (uid: number, order: TacticalOrder, directive: UnitDirective, until: number) => void;
+  /** ★ 远程代理射击（真弹道；模式层按 skin 选池：0=箭 / 1=法球） */
+  onAgentRanged?: (
+    targetKind: number, dmg: number, x: number, z: number,
+    tx: number, tz: number, skin: number, speed: number, life: number,
+  ) => void;
 }
 
 const _sep = { x: 0, z: 0 };
@@ -150,6 +174,10 @@ export class SwarmSystem {
   private tacticsAccum = 0;
   /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
   private readonly leaderAI = new SquadLeaderAI();
+  /** ★ 步骤 10：大队警觉（squadId → 最近被击秒） */
+  private readonly recentHits = new Map<number, number>();
+  /** ★ 步骤 10：倾盆而出截止（秒；0 = 未触发） */
+  private counterUntil = 0;
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
@@ -181,7 +209,7 @@ export class SwarmSystem {
     const i = this.pool.push(data);
     if (i < 0) return i;
     // ★ 步骤 5：同质就近编队 + 首员即队长
-    const squad = this.squads.assign(data.uid, roleFromCode(this.pool.role[i]), data.x, data.z, this.pool.mobIndex[i]);
+    const squad = this.squads.assign(data.uid, roleFromCode(this.pool.role[i]), data.x, data.z, this.pool.mobIndex[i], this.pool.suicide[i] === 1);
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(data.uid, this.pool.hp[i], this.pool.maxHp[i], data.x, data.z, 0);
@@ -240,14 +268,21 @@ export class SwarmSystem {
       directiveFire: snap.directiveFire,
       directiveSpeedMul: snap.directiveSpeedMul,
       directiveSeq: snap.directiveSeq,
+      // ★ 自爆标签 / 被击免降格 / 远程档随降格回池
+      suicide: snap.suicide,
+      noDemoteUntil: snap.noDemoteUntil,
+      ranged: snap.ranged,
+      skin: snap.skin,
+      shotSpeed: snap.shotSpeed,
+      shotLife: snap.shotLife,
     });
     if (i < 0) return;
     // ★ 步骤 5：编队归属兜底（正常随快照保留）+ 队长标记同步
     const role = roleFromCode(this.pool.role[i]);
     const squad = this.squads.squadOf(uid)
       ?? (snap.squadId !== undefined && snap.squadId >= 0
-        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i])
-        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i]));
+        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1)
+        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1));
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(uid, this.pool.hp[i], this.pool.maxHp[i], this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i]);
@@ -296,6 +331,34 @@ export class SwarmSystem {
       this.applyOrders(now, hooks);
     }
 
+    // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
+    if (now >= this.counterUntil) {
+      let n = 0;
+      for (const [k, t] of this.recentHits) {
+        if (now - t > AUTONOMY.BATTALION_WINDOW_S) this.recentHits.delete(k);
+        else n++;
+      }
+      if (n >= AUTONOMY.COUNTER_SQUADS) {
+        let near = false;
+        for (const k of this.recentHits.keys()) {
+          const s = this.squads.get(k);
+          if (!s) continue;
+          let cx = 0, cz = 0, m = 0;
+          for (const mem of s.members.values()) { cx += mem.x; cz += mem.z; m++; }
+          if (m > 0) { cx /= m; cz /= m; }
+          if (Math.hypot(cx - hooks.playerX, cz - hooks.playerZ) <= 80) { near = true; break; }
+        }
+        if (near) {
+          this.counterUntil = now + AUTONOMY.COUNTER_S;
+          this.flow.paintAlert(hooks.playerX, hooks.playerZ, AUTONOMY.COUNTER_ALERT_R, now, AUTONOMY.COUNTER_S);
+        }
+      }
+    }
+    const counter = now < this.counterUntil;
+    /** ★ 动态算力：倾盆而出期间提高实体上限与升格预算（增多非代理敌人） */
+    const l3Cap = SWARM.L3_CAP + (counter ? AUTONOMY.L3_CAP_BOOST : 0);
+    const promoteBudget = SWARM.PROMOTE_PER_FRAME + (counter ? AUTONOMY.PROMOTE_BOOST : 0);
+
     let promotes = 0;
     /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
     let recalled = 0;
@@ -332,6 +395,8 @@ export class SwarmSystem {
       const dFocus2 = dpx * dpx + dpz * dpz;
       const dShip2 = dsx * dsx + dsz * dsz;
       if (Math.min(dFocus2, dShip2) > l1R2) {
+        // ★ 步骤 10：被击 / 小队警觉 / 倾盆而出期间免回收（交火中的不许被远距清除）
+        if (counter || p.noDemoteUntil[i] > now || this.holdDemote(p.squadId[i], now)) continue;
         // ★ 2026-09-16：远距清除 = **不算击杀**（只回收，不报 onAgentKilled）；
         //   计入 recalled，帧末统一回调 → 模式层扣减当日敌人配额
         this.removeAgent(i);
@@ -339,7 +404,7 @@ export class SwarmSystem {
         continue;
       }
       // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
-      if (dFocus2 < nearR2 && hooks.entityCount + promotes < SWARM.L3_CAP && promotes < SWARM.PROMOTE_PER_FRAME) {
+      if (dFocus2 < nearR2 && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
         const snap = p.snapshot(i);
         this.removeAgent(i, false);   // ★ 升格 = 换载体：保留小队归属/队长
         hooks.promote(snap);
@@ -442,6 +507,7 @@ export class SwarmSystem {
     if (directiveActive) {
       const sit = {
         inRange: d <= p.meleeRange[i] + SWARM.MELEE_PAD,
+        rangeRatio: d / Math.max(1e-3, p.meleeRange[i] + SWARM.MELEE_PAD),
         lowHp: p.hp[i] < p.maxHp[i] * 0.3,
         justHit: p.flash[i] > 0.5,
         hasTarget: d > 1e-3,
@@ -569,19 +635,33 @@ export class SwarmSystem {
         p.dirX[i] = 0;
         p.dirZ[i] = 0;
       }
-      // 进射程：停步 + 令牌攻击（同目标同时挥击上限）
+      // 进射程：令牌攻击（同目标同时挥击上限）
       if (d <= p.meleeRange[i] + SWARM.MELEE_PAD) {
-        p.dirX[i] = 0;
-        p.dirZ[i] = 0;
+        // ★ 移动/开火正交（用户设计）：指令活跃（原子掷接管）→ **不停步**；
+        //   无指令（atomMove=255）→ 保留旧行为（停步挥击，防穿过目标）
+        if (p.atomMove[i] === 255) {
+          p.dirX[i] = 0;
+          p.dirZ[i] = 0;
+        }
         if (p.atomFire[i] === 1 && p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && this.tokenUsed[tk] < SWARM.ATTACK_TOKENS) {
           p.attackCd[i] = SWARM.ATTACK_CD_MIN + Math.random() * SWARM.ATTACK_CD_SPAN;
           p.hasToken[i] = 1;
           p.tokenTarget[i] = tk;
           this.tokenUsed[tk]++;
           p.attackHold[i] = SWARM.ATTACK_HOLD;
-          hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i], px, pz);
+          if (p.ranged[i] === 1) {
+            // ★ 远程代理：真弹道（箭/法球），射程边缘开火（不追脸）
+            hooks.onAgentRanged?.(tk, p.meleeDamage[i] + p.attackPower[i], px, pz, gx, gz, p.skin[i], p.shotSpeed[i], p.shotLife[i]);
+          } else {
+            hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i], px, pz);
+          }
           this.flow.paintAlert(px, pz, SWARM.ALERT_PAINT_RADIUS_ATTACK, now, SWARM.ALERT_SECONDS);
         }
+      }
+      // ★ 远程保距（2026-09-19）：太近 → 反向拉开（不追脸；边退边打）
+      if (p.ranged[i] === 1 && d < p.meleeRange[i] * 0.55 && d > 1e-4) {
+        p.dirX[i] = -tx / d;
+        p.dirZ[i] = -tz / d;
       }
     }
 
@@ -766,6 +846,10 @@ export class SwarmSystem {
     if (final > 0) {
       this.pool.hp[i] -= final;
       this.pool.flash[i] = 1; // ★ P3：受击白闪
+      // ★ 步骤 10：被击 → 单位免降格 + 小队警觉 + 大队警觉累积
+      const now = performance.now() / 1000;
+      this.pool.noDemoteUntil[i] = now + AUTONOMY.UNIT_HOLD_S;
+      this.noteHit(this.pool.squadId[i], now);
     }
     return final;
   }
@@ -839,6 +923,24 @@ export class SwarmSystem {
     }
   }
 
+  /** ★ 步骤 10：被击上报（代理在 damageAgent 内直调；实体经 enemy_hit → WorldMode → 这里） */
+  noteHit(squadId: number, now: number): void {
+    if (squadId < 0) return;
+    this.squads.alert(squadId, now + AUTONOMY.SQUAD_ALERT_S);
+    this.recentHits.set(squadId, now);
+  }
+
+  /** ★ 步骤 10：免降格门控（WorldSpawner 降格判定用；含小队警觉与倾盆而出） */
+  holdDemote(squadId: number, now: number): boolean {
+    if (now < this.counterUntil) return true;
+    return squadId >= 0 && this.squads.isAlerted(squadId, now);
+  }
+
+  /** ★ 步骤 10：倾盆而出中（动态算力 + 全体免降格/免回收） */
+  get counterActive(): boolean {
+    return performance.now() / 1000 < this.counterUntil;
+  }
+
   /** ★ 步骤 9：引擎侧信息面（BattalionView 的 squads 面；战术后续消费） */
   ratings(): SquadRating[] {
     return this.squads.ratings(performance.now() / 1000);
@@ -906,6 +1008,8 @@ export class SwarmSystem {
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
     this.leaderAI.clear();
+    this.recentHits.clear();
+    this.counterUntil = 0;
     this.atoms.clear();
   }
 

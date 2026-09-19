@@ -72,6 +72,13 @@ export interface AgentSpawnData {
   isLeader?: boolean;
   /** ★ 自爆标签（跨 LOD） */
   suicide?: boolean;
+  /** ★ 被击免降格截止（秒） */
+  noDemoteUntil?: number;
+  /** ★ 远程档（瞬时） */
+  ranged?: boolean;
+  skin?: number;
+  shotSpeed?: number;
+  shotLife?: number;
   /** 移动目标（三个都给了才视为有效） */
   moveTargetX?: number;
   moveTargetY?: number;
@@ -123,6 +130,13 @@ export interface AgentSnapshot extends SwarmSnapshot {
   /** ★ 空中层（升格搬运必须携带，否则飞兵一升格就落地） */
   isAir?: boolean;
   altitude?: number;
+  /** ★ 远程档 / 自爆 / 免降格（降格携带；瞬时项） */
+  ranged?: boolean;
+  skin?: number;
+  shotSpeed?: number;
+  shotLife?: number;
+  suicide?: boolean;
+  noDemoteUntil?: number;
 }
 
 export class AgentPool {
@@ -219,6 +233,13 @@ export class AgentPool {
   readonly isLeader = new Uint8Array(AGENT_CAPACITY);
   /** ★ 自爆标签（0 = 普通；1 = 自爆单位） */
   readonly suicide = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 步骤 10：被击免降格截止（秒） */
+  readonly noDemoteUntil = new Float32Array(AGENT_CAPACITY);
+  /** ★ 远程档（瞬时；降格时由名册重填）：0 = 近战 / 1 = 远程；skin 0=箭 1=法球 */
+  readonly ranged = new Uint8Array(AGENT_CAPACITY);
+  readonly skin = new Uint8Array(AGENT_CAPACITY);
+  readonly shotSpeed = new Float32Array(AGENT_CAPACITY).fill(26);
+  readonly shotLife = new Float32Array(AGENT_CAPACITY).fill(2.4);
   /** 移动目标（hasMoveTarget=1 时有效；hold 语义） */
   readonly moveTargetX = new Float32Array(AGENT_CAPACITY);
   readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
@@ -307,6 +328,11 @@ export class AgentPool {
     this.attackType[i] = attackCode(d.attackType ?? 'melee');
     this.isLeader[i] = d.isLeader ? 1 : 0;
     this.suicide[i] = d.suicide ? 1 : 0;
+    this.noDemoteUntil[i] = d.noDemoteUntil ?? 0;
+    this.ranged[i] = d.ranged ? 1 : 0;
+    this.skin[i] = d.skin ?? 0;
+    this.shotSpeed[i] = d.shotSpeed ?? 26;
+    this.shotLife[i] = d.shotLife ?? 2.4;
     const hasMt = d.moveTargetX !== undefined && d.moveTargetZ !== undefined;
     this.hasMoveTarget[i] = hasMt ? 1 : 0;
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
@@ -388,6 +414,11 @@ export class AgentPool {
     this.attackType[to] = this.attackType[from];
     this.isLeader[to] = this.isLeader[from];
     this.suicide[to] = this.suicide[from];
+    this.noDemoteUntil[to] = this.noDemoteUntil[from];
+    this.ranged[to] = this.ranged[from];
+    this.skin[to] = this.skin[from];
+    this.shotSpeed[to] = this.shotSpeed[from];
+    this.shotLife[to] = this.shotLife[from];
     this.moveTargetX[to] = this.moveTargetX[from];
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];
@@ -437,6 +468,7 @@ export class AgentPool {
       attackType: attackFromCode(this.attackType[i]),
       isLeader: this.isLeader[i] === 1,
       suicide: this.suicide[i] === 1,
+      noDemoteUntil: this.noDemoteUntil[i],
       intent: this.intent[i],
       bias: this.bias[i],
       aggro: this.aggro[i],

@@ -245,32 +245,32 @@ export const BOMBER_AI: AIConfig = mobAI({
   suicide: { radius: 3.2, damage: 22, fuse: 0.25 },
 });
 
-/** ★ 远程·轻档：弩手。射程 9m、射速最快、单发最低
+/** ★ 远程·轻档：弩手。射程 20m、射速最快、单发最低
  *  ★ 2026-09-18：改真弹道（`ranged`）—— 此前是"大 attackRange 的瞬时空打"，
  *    攻击没有任何可见效果；现在射程序化箭矢（飞行 → 接触命中）。 */
 export const CROSSBOW_AI: AIConfig = mobAI({
-  wanderSpeed: 2.2, chaseSpeed: 2.8, aggroRadius: 14,
-  attackRadius: 9, attackRange: 9, loseRadius: 24,
+  wanderSpeed: 2.2, chaseSpeed: 2.8, aggroRadius: 24,
+  attackRadius: 20, attackRange: 20, loseRadius: 34,
   meleeDuration: 0.5, meleeDamage: 8,
   ranged: { speed: 30, lifetime: 1.6, damage: 8, spread: 0.045 },
 });
 
-/** ★ 远程·中档：扩音术士。射程 10m、伤害与节奏居中
+/** ★ 远程·中档：扩音术士。射程 20m、伤害与节奏居中
  *  ★ 2026-09-18：改真弹道（法球 `skin:'fireball'`）—— 术士放法球，不再是瞬时空打 */
 export const AMP_CASTER_AI: AIConfig = mobAI({
-  wanderSpeed: 2, chaseSpeed: 2.4, aggroRadius: 16,
-  attackRadius: 10, attackRange: 10, loseRadius: 26,
+  wanderSpeed: 2, chaseSpeed: 2.4, aggroRadius: 24,
+  attackRadius: 20, attackRange: 20, loseRadius: 34,
   meleeDuration: 0.8, meleeDamage: 10,
-  ranged: { speed: 22, lifetime: 1.4, damage: 10, spread: 0.035, skin: 'fireball' },
+  ranged: { speed: 22, lifetime: 1.6, damage: 10, spread: 0.035, skin: 'fireball' },
 });
 
-/** ★ 远程·重档：战争术士。射程最远 13m + 单发最高，代价是慢与脆
+/** ★ 远程·重档：战争术士。射程最远 22m + 单发最高，代价是慢与脆
  *  ★ 2026-09-18：改真弹道（大火球：更慢、更大、更痛） */
 export const WAR_CASTER_AI: AIConfig = mobAI({
-  wanderSpeed: 1.6, chaseSpeed: 2.0, aggroRadius: 22,
-  attackRadius: 13, attackRange: 13, loseRadius: 34,
+  wanderSpeed: 1.6, chaseSpeed: 2.0, aggroRadius: 26,
+  attackRadius: 22, attackRange: 22, loseRadius: 38,
   meleeDuration: 1.2, meleeDamage: 20,
-  ranged: { speed: 18, lifetime: 1.6, damage: 20, spread: 0.03, skin: 'fireball' },
+  ranged: { speed: 18, lifetime: 1.8, damage: 20, spread: 0.03, skin: 'fireball' },
 });
 
 /** ★ 原石虫巨人：小 boss。大仇恨圈 + 3.4m 挥击圈 + 高单发（整体慢） */

@@ -71,6 +71,8 @@ export interface EventMap {
     x: number;
     z: number;
   };
+  // ★ 敌人受击（步骤 10 自主 LOD）：实体被击广播 → WorldMode 转交 swarm.noteHit
+  'enemy_hit': { squadId: number };
 }
 
 export type EventKey = keyof EventMap;

@@ -57,6 +57,8 @@ const ORDER_MOD: Record<SquadOrderKind, [number, number, number, number, number]
 export interface AtomSituation {
   /** 目标在攻击射程内（远程 = 射程；近战 = 挥击距离） */
   inRange: boolean;
+  /** ★ 距离比（d / 攻击射程；>1 = 超程，<0.55 = 太近）——远程保持距离用 */
+  rangeRatio: number;
   /** 低血（≤30%） */
   lowHp: boolean;
   /** 刚被击（本拍躲闪偏置） */
@@ -91,7 +93,18 @@ export function resolveWeights(
   if (sit.justHit) { move[2] += 0.20; move[3] += 0.20; }
   // 角色覆写
   if (bucket === 'logistics') { fire -= 0.15; move[0] -= 0.10; move[2] += 0.05; move[3] += 0.05; }
-  if (bucket === 'ranged') { move[0] -= 0.10; move[2] += 0.05; move[3] += 0.05; }
+  if (bucket === 'ranged') {
+    // ★ 远程保距档（用户定调）：合适距离 → 多停止/左右游荡；太近 → 多后退；超程 → 多前进
+    const rr = sit.rangeRatio;
+    if (rr < 0.55) {
+      move[1] += 0.35; move[0] -= 0.10; move[4] -= 0.05;   // 太近：后退
+    } else if (rr <= 1.0) {
+      move[4] += 0.20; move[2] += 0.10; move[3] += 0.10; move[0] -= 0.10; // 合适：停止 + 左右游荡
+    } else {
+      move[0] += 0.25; move[4] -= 0.10;                     // 超程：前进
+    }
+    move[0] -= 0.05; move[2] += 0.03; move[3] += 0.03;
+  }
   // 归一化 + clamp（软约束：原子恒可执行）
   for (let k = 0; k < 5; k++) move[k] = Math.max(0.01, move[k]);
   const sum = move[0] + move[1] + move[2] + move[3] + move[4];

@@ -13,13 +13,14 @@ import {
   type CharacterBaseOptions,
 } from './CharacterBase';
 import type { EntityManager } from './EntityManager';
-import type { EntityBase, RetireReason } from './EntityBase';
+import type { EntityBase, EntityHitPoint, RetireReason } from './EntityBase';
 import type {
   SwarmCarrier, SteerIntent, SwarmSnapshot, UnitRole, UnitAttackType,
   SquadOrderKind, DirectiveKind, TacticalOrder, UnitDirective,
 } from './SwarmUnit';
 import {
   orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE, roleBucket,
+  UNIT_HIT_HOLD_S,
 } from './SwarmUnit';
 import {
   MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
@@ -91,6 +92,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   readonly isAgent = false;
   /** ★ 自爆标签（基类字段；构造从 MobDef，快照跨 LOD） */
   suicide = false;
+  /** ★ 被击免降格截止（秒；步骤 10；队长/大队警觉在 swarm 侧） */
+  noDemoteUntil = 0;
   /** ★ 感知（E3b 预留；步骤 9 通信/感知接线填值）：最后目击 + 仇恨来源 */
   lastSeenX = 0;
   lastSeenZ = 0;
@@ -185,6 +188,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     return this.steerState.source !== 'none' && performance.now() / 1000 <= this.steerFreshUntil;
   }
 
+  /** ★ 被击（步骤 10 自主 LOD）：单位级免降格窗口 + 广播（小队/大队警觉由 WorldMode 转交 swarm） */
+  override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
+    this.noDemoteUntil = performance.now() / 1000 + UNIT_HIT_HOLD_S;
+    eventBus.emit('enemy_hit', { squadId: this.squadId });
+    super.onTakeDamage(dmg, source, hitPoint);
+  }
+
   /** Phase 4 升格：快照灌入（只覆盖快照携带的字段，其余保持构造默认） */
   hydrate(snap: SwarmSnapshot): void {
     if (snap.uid !== undefined) this.swarmUid = snap.uid;
@@ -201,6 +211,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.aggroFrom !== undefined) this.aggroFrom = snap.aggroFrom;
     if (snap.aiStateIdx !== undefined) this.aiStateMachine?.importState(snap.aiStateIdx, snap.aiTimer ?? 0);
     if (snap.suicide !== undefined) this.suicide = snap.suicide;
+    if (snap.noDemoteUntil !== undefined) this.noDemoteUntil = snap.noDemoteUntil;
     // ★ 步骤 9b：命令/指令回灌（编码 → 可读类型）
     if (snap.orderKind !== undefined) this.orderKind = orderFromCode(snap.orderKind);
     if (snap.orderTargetX !== undefined) this.orderTargetX = snap.orderTargetX;
@@ -242,6 +253,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       out.aiTimer = st.timer;
     }
     out.suicide = this.suicide;
+    out.noDemoteUntil = this.noDemoteUntil;
     // ★ 步骤 9b：命令/指令抽干（可读类型 → 编码）
     out.orderKind = orderCode(this.orderKind);
     out.orderTargetX = this.orderTargetX;
@@ -490,23 +502,29 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     }
   }
 
-  /** ★ 保底攻击：无指令 + 状态机未处于 attack → 目标在射程内直接开火（冷却节流） */
+  /** ★ 本地目标解析：候选列表（祖宗/舰船/玩家/友军）中第一个在保底射程内的 → `ctx.target` 兜底。
+   *  ★ 不依赖状态机是否评估过 seePlayer（patrol minStay 期间 ctx.target 可能为空）。 */
+  private resolveLocalTarget(ctx: BehaviorContext): { x: number; z: number } | null {
+    const cands = ctx.targetCandidates?.(this);
+    if (cands && cands.length > 0) {
+      const r2 = this.fbRange * this.fbRange;
+      for (const c of cands) {
+        const d2 = (c.x - this.position.x) ** 2 + (c.z - this.position.z) ** 2;
+        if (d2 <= r2) return c;
+      }
+    }
+    return ctx.target;
+  }
+
+  /** ★ 保底攻击：本段开火掷为真（fireHold=false）+ 状态机未在 attack → 目标在射程内直接开火。
+   *  命令优先由开火掷体现（禁火段不打）——不再“有指令就彻底不打”。 */
   private fallbackAttack(dt: number, ctx: BehaviorContext): void {
     if (this.fbKind === 'none') return;
     this.fbCd -= dt;
     if (this.fbCd > 0) return;
-    if (this.directiveKind !== 'none') return;                 // 命令优先
+    if (this.fireHold) return;                                  // ★ 执行层开火掷为假 → 本段不开火
     if (this.aiStateMachine?.currentState === 'attack') return; // 状态机在打 → 让位（防双开火）
-    // 目标：优先自选候选（状态机未评估 seePlayer 时 ctx.target 可能为空）
-    let t: { x: number; z: number } | null = null;
-    const cands = ctx.targetCandidates?.(this);
-    if (cands && cands.length > 0) {
-      for (const c of cands) {
-        const d2 = (c.x - this.position.x) ** 2 + (c.z - this.position.z) ** 2;
-        if (d2 <= this.fbRange * this.fbRange) { t = c; break; }
-      }
-    }
-    if (!t) t = ctx.target;
+    const t = this.resolveLocalTarget(ctx);
     if (!t) return;
     const d = Math.hypot(t.x - this.position.x, t.z - this.position.z);
     if (d > this.fbRange) return;
@@ -579,11 +597,12 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       this.directiveSpeedMul = 1;
       return;
     }
-    const t = ctx.target;
+    const t = this.resolveLocalTarget(ctx);
     const dist = t ? Math.hypot(t.x - this.position.x, t.z - this.position.z) : 0;
-    const range = this.attackType === 'ranged' ? 12 : 2.2;   // 近似（精确射程在 aiConfig；后续配置化）
+    const range = this.fbRange > 0 ? this.fbRange : (this.attackType === 'ranged' ? 12 : 2.2);
     const w = resolveWeights(dk, this.orderKind, roleBucket(this.role), {
       inRange: !!t && dist <= range,
+      rangeRatio: dist / Math.max(1e-3, range),
       lowHp: this.hp < this.maxHp * 0.3,
       justHit: false,            // 后续接入受击时间戳
       hasTarget: !!t,

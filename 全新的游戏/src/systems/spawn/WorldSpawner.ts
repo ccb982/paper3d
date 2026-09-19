@@ -503,6 +503,9 @@ export class WorldSpawner {
       const dx = e.position.x - px, dz = e.position.z - pz;
       if (dx * dx + dz * dz <= r2) continue;
       if (e.dead) continue;
+      // ★ 步骤 10：被击 / 小队警觉 / 倾盆而出期间不降格（交火中的不许降频）
+      const now10 = performance.now() / 1000;
+      if (e.noDemoteUntil > now10 || this.deps.swarm.holdDemote(e.squadId, now10)) continue;
       const def = this.deps.enemyDefs.get(e);
       const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
       if (!def || mobIndex < 0) {
@@ -526,6 +529,10 @@ export class WorldSpawner {
         isAir: def.isAir,
         altitude: def.airAltitude,
         suicide: def.suicide === true,
+        ranged: stats.ranged,
+        skin: stats.skin,
+        shotSpeed: stats.shotSpeed,
+        shotLife: stats.shotLife,
         // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
         ...e.drain(),
       });
@@ -690,6 +697,10 @@ export class WorldSpawner {
         isAir: air,
         altitude: air ? def.airAltitude : 0,
         suicide: def.suicide === true,
+        ranged: stats.ranged,
+        skin: stats.skin,
+        shotSpeed: stats.shotSpeed,
+        shotLife: stats.shotLife,
       });
       if (idx >= 0) placed++;
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
@@ -700,9 +711,13 @@ export class WorldSpawner {
   mobAgentStats(def: MobDef): {
     speed: number; damage: number; range: number;
     wanderSpeed: number; aggro: number;
+    /** ★ 远程档（2026-09-19）：代理真弹道射击（马手/术士不再追脸近战） */
+    ranged: boolean; skin: number; shotSpeed: number; shotLife: number;
   } {
     let speed = 2.5, damage = 8, range = 1.8;
     let wanderSpeed = 2, aggro = 8;
+    let ranged = false, skin = 0, shotSpeed = 26, shotLife = 2.4;
+    // ① 行为扫描：移动/游走/近战/远程参数（远程兵以 rangedShot 为准）
     for (const st of Object.values(def.ai.states)) {
       for (const b of st.behaviors) {
         if (b.name === 'moveToTarget' && b.params?.speed !== undefined) speed = Number(b.params.speed);
@@ -711,12 +726,23 @@ export class WorldSpawner {
           if (b.params?.damage !== undefined) damage = Number(b.params.damage);
           if (b.params?.range !== undefined) range = Number(b.params.range);
         }
-      }
-      for (const tr of st.transitions) {
-        if (tr.cond === 'seePlayer' && tr.params?.radius !== undefined) aggro = Number(tr.params.radius);
+        if (b.name === 'rangedShot') {
+          ranged = true;
+          if (b.params?.damage !== undefined) damage = Number(b.params.damage);
+          if (b.params?.speed !== undefined) shotSpeed = Number(b.params.speed);
+          if (b.params?.lifetime !== undefined) shotLife = Number(b.params.lifetime);
+          skin = b.params?.skin === 'fireball' ? 1 : 0;
+        }
       }
     }
-    return { speed, damage, range, wanderSpeed, aggro };
+    // ② 转移扫描：索敌半径 + 远程开火距离（inRange = attackRadius，如 9~10m）
+    for (const st of Object.values(def.ai.states)) {
+      for (const tr of st.transitions) {
+        if (tr.cond === 'seePlayer' && tr.params?.radius !== undefined) aggro = Number(tr.params.radius);
+        if (ranged && tr.cond === 'inRange' && tr.params?.radius !== undefined) range = Number(tr.params.radius);
+      }
+    }
+    return { speed, damage, range, wanderSpeed, aggro, ranged, skin, shotSpeed, shotLife };
   }
 
   /** ★★ 落地名册陈列（验收用）：把名册里**每一种敌人各生成一只**，绕 (x,z) 均匀铺开。
@@ -851,6 +877,11 @@ export class WorldSpawner {
         intent,
         isAir: air,
         altitude: air ? def.airAltitude : 0,
+        suicide: def.suicide === true,
+        ranged: stats.ranged,
+        skin: stats.skin,
+        shotSpeed: stats.shotSpeed,
+        shotLife: stats.shotLife,
       });
       if (idx >= 0) {
         any = true;

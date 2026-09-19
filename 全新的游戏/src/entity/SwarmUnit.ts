@@ -85,6 +85,8 @@ export const DIRECTIVE_CODES: readonly (DirectiveKind | 'none')[] =
   ['none', 'push', 'suppress', 'screen', 'fallback', 'boundBack', 'guardWard', 'block', 'intercept',
    'sneak', 'pin', 'strike', 'bound', 'cover', 'focusFire', 'regroup'];
 export const FIRE_FREE = 0, FIRE_HOLD = 1, FIRE_MOVING = 2;
+/** ★ 单位被击免降格窗口（秒；步骤 10；与 SwarmSystem.AUTONOMY.UNIT_HOLD_S 同口径） */
+export const UNIT_HIT_HOLD_S = 6;
 export const FIRE_CODES: readonly ('free' | 'hold' | 'moving')[] = ['free', 'hold', 'moving'];
 
 export function orderCode(k: SquadOrderKind | 'none'): number {
@@ -234,6 +236,8 @@ export interface SwarmSnapshot {
   aiTimer?: number;
   /** ★ 自爆标签（跨 LOD） */
   suicide?: boolean;
+  /** ★ 被击免降格截止（秒；步骤 10 自主 LOD） */
+  noDemoteUntil?: number;
   // ---- ★ 步骤 9b：命令/指令（跨 LOD 不失令；编码见 ORDER_CODES/DIRECTIVE_CODES/FIRE_*） ----
   orderKind?: number;
   orderTargetX?: number;

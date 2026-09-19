@@ -50,6 +50,10 @@ export interface Squad {
   members: Map<number, MemberInfo>;
   /** 累计阵亡数（士气扣减用；单人不外报） */
   casualties: number;
+  /** ★ 步骤 10：小队警觉截止（被击 → 全队免降格/免回收） */
+  alertUntil: number;
+  /** ★ 自爆小队（首员标签决定；队长策略走冲锋档） */
+  suicide: boolean;
 }
 
 export interface LeaderChange {
@@ -91,7 +95,7 @@ export class SquadTable {
   }
 
   /** 生成时分配：**同兵种同属性**就近并入（< SQUAD_MAX），否则新建；首员即队长 */
-  assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1): Squad {
+  assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;
     const type = squadTypeOf(role);
@@ -103,7 +107,7 @@ export class SquadTable {
       const d2 = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
       if (d2 < bestD2) { bestD2 = d2; best = s; }
     }
-    const squad = best ?? this.create(type, mobKind);
+    const squad = best ?? this.create(type, mobKind, suicide);
     squad.members.set(uid, { hp: 0, maxHp: 0, x, z, lastSeenAt: 0 });
     this.ofUid.set(uid, squad.id);
     if (squad.leaderUid === 0) squad.leaderUid = uid;
@@ -111,12 +115,12 @@ export class SquadTable {
   }
 
   /** 降格回池兜底：按快照里的原 squadId 重建归属（表丢失/跨模式时用） */
-  adopt(uid: number, squadId: number, battalionId: number, role: UnitRole, x: number, z: number, mobKind = -1): Squad {
+  adopt(uid: number, squadId: number, battalionId: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;
     let squad = this.squads.get(squadId);
     if (!squad) {
-      squad = { id: squadId, battalionId, mobKind, leaderUid: 0, type: squadTypeOf(role), members: new Map(), casualties: 0 };
+      squad = { id: squadId, battalionId, mobKind, leaderUid: 0, type: squadTypeOf(role), members: new Map(), casualties: 0, alertUntil: 0, suicide };
       this.squads.set(squadId, squad);
       if (squadId >= this.nextId) this.nextId = squadId + 1;
     }
@@ -223,9 +227,9 @@ export class SquadTable {
     return n > 0 ? { x: x / n, z: z / n } : { x: 0, z: 0 };
   }
 
-  private create(type: SquadType, mobKind: number): Squad {
+  private create(type: SquadType, mobKind: number, suicide = false): Squad {
     const id = this.nextId++;
-    const squad: Squad = { id, battalionId: id, mobKind, leaderUid: 0, type, members: new Map(), casualties: 0 };
+    const squad: Squad = { id, battalionId: id, mobKind, leaderUid: 0, type, members: new Map(), casualties: 0, alertUntil: 0, suicide };
     this.squads.set(id, squad);
     return squad;
   }
@@ -241,6 +245,18 @@ export class SquadTable {
 
   leaderUidOf(uid: number): number {
     return this.squadOf(uid)?.leaderUid ?? 0;
+  }
+
+  /** ★ 步骤 10：小队警觉（被击传播；全队免降格/免回收） */
+  alert(squadId: number, until: number): void {
+    const s = this.squads.get(squadId);
+    if (s && until > s.alertUntil) s.alertUntil = until;
+  }
+
+  /** ★ 步骤 10：小队是否警觉中 */
+  isAlerted(squadId: number, now: number): boolean {
+    const s = this.squads.get(squadId);
+    return !!s && s.alertUntil > now;
   }
 
   all(): IterableIterator<Squad> { return this.squads.values(); }

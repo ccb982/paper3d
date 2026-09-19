@@ -12,7 +12,7 @@ import type {
   DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective,
 } from '../../entity/SwarmUnit';
 import { FIRE_FREE, type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
-import type { Squad } from './SquadTable';
+import type { Squad, SquadType } from './SquadTable';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -137,21 +137,42 @@ export const DIRECTIVE_FIRE_DEFAULT = FIRE_FREE;
 // ★ 队长自主发令（9d；《实体架构.md》§5.11）
 // ============================================================
 
-/** 队长自主发令参数（集中可调） */
-export const LEADER_AI = {
-  /** 决策节拍（秒） */
-  INTERVAL: 1,
-  /** 接敌半径（米：队均质心距玩家 → 主动进攻） */
-  ENGAGE_R: 20,
-  /** 残血必撤（hpRatio 阈值） */
-  RETREAT_HP: 0.3,
-  /** 撤退集结点距离（米：背离玩家方向） */
-  RETREAT_DIST: 18,
-  /** 命令 TTL（秒） */
-  TTL: 4,
-} as const;
+/** ★ 队长策略（按小队属性；2026-09-19 用户定调：不同属性不同策略） */
+export interface LeaderStrategy {
+  /** 接敌半径（米；队质心距玩家 → 进入策略） */
+  engageR: number;
+  /** 压迫式进攻（true = 直扑玩家；false = 站到射程环上保持距离） */
+  press: boolean;
+  /** 非压迫档的站位距离（米；玩家 → 队伍方向，保持此距） */
+  standoff: number;
+  /** 残血撤退阈值（hpRatio；0 = 不撤，如自爆） */
+  retreatHp: number;
+  /** 撤退集结距离（米；背离玩家） */
+  retreatDist: number;
+}
 
-/** ★ 队长自主发令器：1Hz 按战况下“进攻 / 撤退”令（引擎命令优先，不抢）。 */
+/** ★ 队长策略表（后续战术重写只改本表 / SquadLeaderAI） */
+export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
+  /** 突击：直扑贴身 */
+  assault:   { engageR: 22, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
+  /** 防御：稳推进（接敌略近、残血更晚撤） */
+  defense:   { engageR: 18, press: true,  standoff: 2,  retreatHp: 0.22, retreatDist: 14 },
+  /** 远程：远距开火 + 保持射程环（不追脸） */
+  ranged:    { engageR: 28, press: false, standoff: 20, retreatHp: 0.35, retreatDist: 22 },
+  /** 后勤：缩后（不接敌，保持更远站位） */
+  logistics: { engageR: 18, press: false, standoff: 10, retreatHp: 0.55, retreatDist: 24 },
+  /** 飞行：直扑 */
+  flyer:     { engageR: 24, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
+  /** 混编：折中 */
+  mixed:     { engageR: 20, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
+  /** 自爆：冲锋（不撤；冲得最积极） */
+  suicide:   { engageR: 34, press: true,  standoff: 0,  retreatHp: 0,    retreatDist: 0 },
+};
+
+/** 命令 TTL（秒） */
+export const LEADER_TTL = 4;
+
+/** ★ 队长自主发令器（1Hz）：按**小队属性**选策略（引擎命令优先，不抢）。 */
 export class SquadLeaderAI {
   private accum = 0;
 
@@ -167,7 +188,7 @@ export class SquadLeaderAI {
     now: number,
   ): void {
     this.accum += dt;
-    if (this.accum < LEADER_AI.INTERVAL) return;
+    if (this.accum < 1) return;
     this.accum = 0;
     for (const s of squads.all()) {
       const cur = tactics.board.get(s.id);
@@ -175,21 +196,34 @@ export class SquadLeaderAI {
       if (cur && cur.source === 'engine' && now < cur.until) continue;
       const r = squads.ratingOf(s.id, now);
       if (!r) continue;
+      const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];
       const d = Math.hypot(r.cx - px, r.cz - pz);
-      if (r.hpRatio <= LEADER_AI.RETREAT_HP && d < 40) {
-        // 残血必撤：向背离玩家方向的集结点后撤
+      // ① 残血撤退（自爆档不撤）
+      if (strat.retreatHp > 0 && r.hpRatio <= strat.retreatHp && d < 40) {
         const ax = r.cx - px, az = r.cz - pz;
         const len = Math.hypot(ax, az) || 1;
         tactics.issue(s.id, {
           kind: 'retreat',
-          target: { x: r.cx + (ax / len) * LEADER_AI.RETREAT_DIST, z: r.cz + (az / len) * LEADER_AI.RETREAT_DIST },
+          target: { x: r.cx + (ax / len) * strat.retreatDist, z: r.cz + (az / len) * strat.retreatDist },
           seq: 0,
-        }, now, LEADER_AI.TTL, 'leader');
-      } else if (d < LEADER_AI.ENGAGE_R) {
-        // 接敌 → 主动进攻玩家
-        tactics.issue(s.id, { kind: 'advance', target: { x: px, z: pz }, seq: 0 }, now, LEADER_AI.TTL, 'leader');
+        }, now, LEADER_TTL, 'leader');
+        continue;
       }
-      // 其余：不发令（本地自主 / 巡逻）
+      // ② 接敌
+      if (d >= strat.engageR) continue;
+      if (strat.press) {
+        // 压迫式：直扑玩家（突击/防御/飞行/自爆）
+        tactics.issue(s.id, { kind: 'advance', target: { x: px, z: pz }, seq: 0 }, now, LEADER_TTL, 'leader');
+      } else {
+        // 保持距离：站到“射程环”上（玩家 → 队伍方向 × standoff）
+        const ax = r.cx - px, az = r.cz - pz;
+        const len = Math.hypot(ax, az) || 1;
+        tactics.issue(s.id, {
+          kind: 'advance',
+          target: { x: px + (ax / len) * strat.standoff, z: pz + (az / len) * strat.standoff },
+          seq: 0,
+        }, now, LEADER_TTL, 'leader');
+      }
     }
   }
 
