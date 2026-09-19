@@ -861,6 +861,9 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.promote = (snap) => this.spawner.promoteAgent(snap);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
+    // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
+    this.swarmHooks.onDirective = (uid, order, directive, until) =>
+      this.spawner.applyOrderToEntity(uid, order, directive, until);
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);

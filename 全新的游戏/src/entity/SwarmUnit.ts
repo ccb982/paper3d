@@ -38,6 +38,74 @@ export function attackFromCode(c: number): UnitAttackType {
   return ATTACK_ORDER[c] ?? 'melee';
 }
 
+// ============================================================
+// ★ 步骤 9b：命令与个体指令（载体契约；《实体架构.md》§5.11）
+// ============================================================
+
+/** 小队整体命令（mode；引擎→队长→全队） */
+export type SquadOrderKind = 'advance' | 'retreat' | 'protect' | 'flank' | 'bound' | 'focus' | 'regroup';
+/** 个体指令（do；队长→士兵） */
+export type DirectiveKind =
+  | 'push' | 'suppress' | 'screen' | 'fallback' | 'boundBack'
+  | 'guardWard' | 'block' | 'intercept'
+  | 'sneak' | 'pin' | 'strike' | 'bound' | 'cover'
+  | 'focusFire' | 'regroup';
+
+/** 通用五轴命令（引擎侧外壳；路径/目标/ROE/队形/时序+分工） */
+export interface TacticalOrder {
+  kind: SquadOrderKind;
+  path?: { x: number; z: number }[];
+  target?: { x: number; z: number; r?: number };
+  roe?: 'engage' | 'holdFire' | 'fireOnArrival' | 'focusOnly';
+  formation?: 'column' | 'line' | 'loose' | 'wings';
+  startAfter?: number;
+  signal?: number;
+  subTargets?: { x: number; z: number; squadId?: number }[];
+  urgency?: number;
+  deadline?: number;
+  seq: number;
+}
+
+/** 个体指令（随快照跨 LOD） */
+export interface UnitDirective {
+  kind: DirectiveKind;
+  targetX?: number;
+  targetZ?: number;
+  wardUid?: number;
+  until: number;
+  fire: 'free' | 'hold' | 'moving';
+  speedMul: number;
+  seq: number;
+}
+
+/** SoA/快照编码（0 = none；顺序即编码，勿改既有值） */
+export const ORDER_CODES: readonly (SquadOrderKind | 'none')[] =
+  ['none', 'advance', 'retreat', 'protect', 'flank', 'bound', 'focus', 'regroup'];
+export const DIRECTIVE_CODES: readonly (DirectiveKind | 'none')[] =
+  ['none', 'push', 'suppress', 'screen', 'fallback', 'boundBack', 'guardWard', 'block', 'intercept',
+   'sneak', 'pin', 'strike', 'bound', 'cover', 'focusFire', 'regroup'];
+export const FIRE_FREE = 0, FIRE_HOLD = 1, FIRE_MOVING = 2;
+export const FIRE_CODES: readonly ('free' | 'hold' | 'moving')[] = ['free', 'hold', 'moving'];
+
+export function orderCode(k: SquadOrderKind | 'none'): number {
+  const i = ORDER_CODES.indexOf(k);
+  return i < 0 ? 0 : i;
+}
+export function orderFromCode(c: number): SquadOrderKind | 'none' {
+  return ORDER_CODES[c] ?? 'none';
+}
+export function directiveCode(k: DirectiveKind | 'none'): number {
+  const i = DIRECTIVE_CODES.indexOf(k);
+  return i < 0 ? 0 : i;
+}
+export function directiveFromCode(c: number): DirectiveKind | 'none' {
+  return DIRECTIVE_CODES[c] ?? 'none';
+}
+export function fireCode(s: 'free' | 'hold' | 'moving'): number {
+  const i = FIRE_CODES.indexOf(s);
+  return i < 0 ? FIRE_FREE : i;
+}
+
 /** ★ 移动意图（Brain → Simulate 下发；hold 语义） */
 export interface SteerIntent {
   /** 单位方向（0,0 = 停） */
@@ -113,6 +181,20 @@ export interface SwarmSnapshot {
   /** 休眠 AI 状态（降格抽干 / 升格回灌 → 不失忆、不重置巡逻） */
   aiStateIdx?: number;
   aiTimer?: number;
+  // ---- ★ 步骤 9b：命令/指令（跨 LOD 不失令；编码见 ORDER_CODES/DIRECTIVE_CODES/FIRE_*） ----
+  orderKind?: number;
+  orderTargetX?: number;
+  orderTargetZ?: number;
+  orderUntil?: number;
+  orderSeq?: number;
+  directiveKind?: number;
+  directiveTargetX?: number;
+  directiveTargetZ?: number;
+  directiveWard?: number;
+  directiveUntil?: number;
+  directiveFire?: number;
+  directiveSpeedMul?: number;
+  directiveSeq?: number;
 }
 
 /** ★ 蜂群载体完整契约（L3 实体实现；友军远期可选） */

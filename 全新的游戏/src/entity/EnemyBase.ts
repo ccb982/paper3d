@@ -16,6 +16,10 @@ import type { EntityManager } from './EntityManager';
 import type { EntityBase, RetireReason } from './EntityBase';
 import type {
   SwarmCarrier, SteerIntent, SwarmSnapshot, UnitRole, UnitAttackType,
+  SquadOrderKind, DirectiveKind, TacticalOrder, UnitDirective,
+} from './SwarmUnit';
+import {
+  orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE,
 } from './SwarmUnit';
 import type { CharacterFxAssetSource } from '../services/fx/AssetSource';
 import { FTXQuad } from '../services/render/FTXQuad';
@@ -81,6 +85,26 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   lastSeenZ = 0;
   lastSeenAt = 0;
   aggroFrom = 0;
+
+  // ============================================================
+  // ★ 步骤 9b：命令 / 个体指令（低频推送；随快照跨 LOD）
+  //   'none' = 无命令 → 本地自主（无命令自主 / 有命令命令优先）
+  // ============================================================
+  /** 小队命令镜像（kind/target/until/seq） */
+  orderKind: SquadOrderKind | 'none' = 'none';
+  orderTargetX = 0;
+  orderTargetZ = 0;
+  orderUntil = 0;
+  orderSeq = 0;
+  /** 个体指令（kind/target/ward/until/fire/speedMul/seq） */
+  directiveKind: DirectiveKind | 'none' = 'none';
+  directiveTargetX = 0;
+  directiveTargetZ = 0;
+  directiveWard = 0;
+  directiveUntil = 0;
+  directiveFire = FIRE_FREE;
+  directiveSpeedMul = 1;
+  directiveSeq = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -137,6 +161,20 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.lastSeenAt !== undefined) this.lastSeenAt = snap.lastSeenAt;
     if (snap.aggroFrom !== undefined) this.aggroFrom = snap.aggroFrom;
     if (snap.aiStateIdx !== undefined) this.aiStateMachine?.importState(snap.aiStateIdx, snap.aiTimer ?? 0);
+    // ★ 步骤 9b：命令/指令回灌（编码 → 可读类型）
+    if (snap.orderKind !== undefined) this.orderKind = orderFromCode(snap.orderKind);
+    if (snap.orderTargetX !== undefined) this.orderTargetX = snap.orderTargetX;
+    if (snap.orderTargetZ !== undefined) this.orderTargetZ = snap.orderTargetZ;
+    if (snap.orderUntil !== undefined) this.orderUntil = snap.orderUntil;
+    if (snap.orderSeq !== undefined) this.orderSeq = snap.orderSeq;
+    if (snap.directiveKind !== undefined) this.directiveKind = directiveFromCode(snap.directiveKind);
+    if (snap.directiveTargetX !== undefined) this.directiveTargetX = snap.directiveTargetX;
+    if (snap.directiveTargetZ !== undefined) this.directiveTargetZ = snap.directiveTargetZ;
+    if (snap.directiveWard !== undefined) this.directiveWard = snap.directiveWard;
+    if (snap.directiveUntil !== undefined) this.directiveUntil = snap.directiveUntil;
+    if (snap.directiveFire !== undefined) this.directiveFire = snap.directiveFire;
+    if (snap.directiveSpeedMul !== undefined) this.directiveSpeedMul = snap.directiveSpeedMul;
+    if (snap.directiveSeq !== undefined) this.directiveSeq = snap.directiveSeq;
     if (snap.moveTargetX !== undefined && snap.moveTargetZ !== undefined) {
       this.moveTarget = { x: snap.moveTargetX, y: snap.moveTargetY ?? 0, z: snap.moveTargetZ };
     }
@@ -163,12 +201,53 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       out.aiStateIdx = st.idx;
       out.aiTimer = st.timer;
     }
+    // ★ 步骤 9b：命令/指令抽干（可读类型 → 编码）
+    out.orderKind = orderCode(this.orderKind);
+    out.orderTargetX = this.orderTargetX;
+    out.orderTargetZ = this.orderTargetZ;
+    out.orderUntil = this.orderUntil;
+    out.orderSeq = this.orderSeq;
+    out.directiveKind = directiveCode(this.directiveKind);
+    out.directiveTargetX = this.directiveTargetX;
+    out.directiveTargetZ = this.directiveTargetZ;
+    out.directiveWard = this.directiveWard;
+    out.directiveUntil = this.directiveUntil;
+    out.directiveFire = this.directiveFire;
+    out.directiveSpeedMul = this.directiveSpeedMul;
+    out.directiveSeq = this.directiveSeq;
     if (this.moveTarget) {
       out.moveTargetX = this.moveTarget.x;
       out.moveTargetY = this.moveTarget.y;
       out.moveTargetZ = this.moveTarget.z;
     }
     return out;
+  }
+
+  /** ★ 步骤 9b：接收命令/指令（低频推送，与 applySteer 同范式；seq 防旧包回放） */
+  applyOrder(
+    order: { kind: SquadOrderKind | 'none'; targetX: number; targetZ: number; until: number; seq: number },
+    directive: {
+      kind: DirectiveKind | 'none'; targetX: number; targetZ: number; wardUid: number;
+      until: number; fire: number; speedMul: number; seq: number;
+    },
+  ): void {
+    if (order.seq >= this.orderSeq) {
+      this.orderKind = order.kind;
+      this.orderTargetX = order.targetX;
+      this.orderTargetZ = order.targetZ;
+      this.orderUntil = order.until;
+      this.orderSeq = order.seq;
+    }
+    if (directive.seq >= this.directiveSeq) {
+      this.directiveKind = directive.kind;
+      this.directiveTargetX = directive.targetX;
+      this.directiveTargetZ = directive.targetZ;
+      this.directiveWard = directive.wardUid;
+      this.directiveUntil = directive.until;
+      this.directiveFire = directive.fire;
+      this.directiveSpeedMul = directive.speedMul;
+      this.directiveSeq = directive.seq;
+    }
   }
 
   // ---- AI 状态（behaviors/conditions 访问） ----

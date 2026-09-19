@@ -25,7 +25,11 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
-import { roleFromCode } from '../../entity/SwarmUnit';
+import { SquadTactics, squadBucket } from './SquadTactics';
+import {
+  roleFromCode, orderCode, directiveCode, fireCode,
+  type TacticalOrder, type UnitDirective,
+} from '../../entity/SwarmUnit';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
@@ -115,6 +119,8 @@ export interface SwarmHooks {
   onLeaderChanged?: (uid: number, isLeader: boolean) => void;
   /** ★ 步骤 9：**全灭才上报**（单人阵亡只下调评分，不发事件） */
   onSquadWiped?: (squadId: number) => void;
+  /** ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体不在池内，走 uid 映射） */
+  onDirective?: (uid: number, order: TacticalOrder, directive: UnitDirective, until: number) => void;
 }
 
 const _sep = { x: 0, z: 0 };
@@ -132,6 +138,10 @@ export class SwarmSystem {
   private readonly pendingWiped: number[] = [];
   /** ★ 步骤 9：成员状态同步节拍（4Hz） */
   private ratingAccum = 0;
+  /** ★ 步骤 9b：小队黑板 + 命令分解（同质默认矩阵） */
+  readonly tactics = new SquadTactics();
+  /** ★ 步骤 9b：分解节拍（2Hz） */
+  private tacticsAccum = 0;
   private grid = new CrowdGrid();
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
@@ -206,6 +216,20 @@ export class SwarmSystem {
       aggroFrom: snap.aggroFrom,
       aiStateIdx: snap.aiStateIdx,
       aiTimer: snap.aiTimer,
+      // ★ 步骤 9b：命令/指令随降格回池（跨 LOD 不失令）
+      orderKind: snap.orderKind,
+      orderTargetX: snap.orderTargetX,
+      orderTargetZ: snap.orderTargetZ,
+      orderUntil: snap.orderUntil,
+      orderSeq: snap.orderSeq,
+      directiveKind: snap.directiveKind,
+      directiveTargetX: snap.directiveTargetX,
+      directiveTargetZ: snap.directiveTargetZ,
+      directiveWard: snap.directiveWard,
+      directiveUntil: snap.directiveUntil,
+      directiveFire: snap.directiveFire,
+      directiveSpeedMul: snap.directiveSpeedMul,
+      directiveSeq: snap.directiveSeq,
     });
     if (i < 0) return;
     // ★ 步骤 5：编队归属兜底（正常随快照保留）+ 队长标记同步
@@ -250,6 +274,13 @@ export class SwarmSystem {
           this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i],
         );
       }
+    }
+
+    // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
+    this.tacticsAccum += dt;
+    if (this.tacticsAccum >= 0.5) {
+      this.tacticsAccum = 0;
+      this.applyOrders(now, hooks);
     }
 
     let promotes = 0;
@@ -664,7 +695,10 @@ export class SwarmSystem {
     if (res) {
       for (const c of res.changes) this.leaderChanges.push(c);
       this.syncLeaderFlags(res.squadId);
-      if (res.wiped) this.pendingWiped.push(res.squadId);
+      if (res.wiped) {
+        this.pendingWiped.push(res.squadId);
+        this.tactics.board.dropSquad(res.squadId);   // ★ 全灭 → 黑板同步清
+      }
     }
   }
 
@@ -752,12 +786,57 @@ export class SwarmSystem {
     if (!res) return;
     for (const c of res.changes) this.leaderChanges.push(c);
     this.syncLeaderFlags(res.squadId);
-    if (res.wiped) this.pendingWiped.push(res.squadId);
+    if (res.wiped) {
+      this.pendingWiped.push(res.squadId);
+      this.tactics.board.dropSquad(res.squadId);
+    }
   }
 
   /** ★ 步骤 9：引擎侧信息面（BattalionView 的 squads 面；战术后续消费） */
   ratings(): SquadRating[] {
     return this.squads.ratings(performance.now() / 1000);
+  }
+
+  /** ★ 步骤 9b：发令（引擎/测试入口；参数校验+缺参降级在 SquadTactics 内） */
+  issueOrder(squadId: number, order: TacticalOrder, ttl?: number): void {
+    this.tactics.issue(squadId, order, performance.now() / 1000, ttl);
+  }
+
+  /** ★ 步骤 9b：把小队命令分解成个体指令（池写列；实体经 onDirective 推送） */
+  private applyOrders(now: number, hooks: SwarmHooks): void {
+    for (const squad of this.squads.all()) {
+      const state = this.tactics.board.get(squad.id);
+      if (!state) continue;
+      if (state.until > 0 && now > state.until) {
+        this.tactics.board.dropSquad(squad.id);   // 命令到期 → 回落本地自主
+        continue;
+      }
+      const directive = this.tactics.decompose(squad, squadBucket(squad.type), now);
+      const ox = state.order.target?.x ?? 0;
+      const oz = state.order.target?.z ?? 0;
+      for (const uid of squad.members.keys()) {
+        let found = false;
+        for (let i = 0; i < this.pool.count; i++) {
+          if (this.pool.swarmUid[i] !== uid) continue;
+          this.pool.orderKind[i] = orderCode(state.order.kind);
+          this.pool.orderTargetX[i] = ox;
+          this.pool.orderTargetZ[i] = oz;
+          this.pool.orderUntil[i] = state.until;
+          this.pool.orderSeq[i] = state.order.seq;
+          this.pool.directiveKind[i] = directiveCode(directive.kind);
+          this.pool.directiveTargetX[i] = directive.targetX ?? 0;
+          this.pool.directiveTargetZ[i] = directive.targetZ ?? 0;
+          this.pool.directiveWard[i] = directive.wardUid ?? 0;
+          this.pool.directiveUntil[i] = directive.until;
+          this.pool.directiveFire[i] = fireCode(directive.fire);
+          this.pool.directiveSpeedMul[i] = directive.speedMul;
+          this.pool.directiveSeq[i] = directive.seq;
+          found = true;
+          break;
+        }
+        if (!found) hooks.onDirective?.(uid, state.order, directive, state.until);
+      }
+    }
   }
 
   /** 调试/统计：层级计数 */
@@ -773,10 +852,12 @@ export class SwarmSystem {
   clear(): void {
     this.pool.clear();
     this.squads.clear();
+    this.tactics.clear();
     this.nextUid = 1;
     this.leaderChanges.length = 0;
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
+    this.tacticsAccum = 0;
   }
 
   dispose(): void {

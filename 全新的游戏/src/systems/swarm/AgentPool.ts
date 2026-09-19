@@ -81,6 +81,20 @@ export interface AgentSpawnData {
   aggroFrom?: number;
   aiStateIdx?: number;
   aiTimer?: number;
+  /** ★ 步骤 9b：命令/指令（编码；随快照往返） */
+  orderKind?: number;
+  orderTargetX?: number;
+  orderTargetZ?: number;
+  orderUntil?: number;
+  orderSeq?: number;
+  directiveKind?: number;
+  directiveTargetX?: number;
+  directiveTargetZ?: number;
+  directiveWard?: number;
+  directiveUntil?: number;
+  directiveFire?: number;
+  directiveSpeedMul?: number;
+  directiveSeq?: number;
 }
 
 /** 代理快照（升格/降格搬运；★ v2 字段以实体侧 SwarmSnapshot 为基，单一事实源） */
@@ -213,6 +227,20 @@ export class AgentPool {
   readonly aggroFrom = new Int32Array(AGENT_CAPACITY);
   readonly aiStateIdx = new Uint8Array(AGENT_CAPACITY);
   readonly aiTimer = new Float32Array(AGENT_CAPACITY);
+  /** ★ 步骤 9b：命令 / 个体指令（编码见 SwarmUnit.ORDER_CODES/DIRECTIVE_CODES/FIRE_*） */
+  readonly orderKind = new Uint8Array(AGENT_CAPACITY);
+  readonly orderTargetX = new Float32Array(AGENT_CAPACITY);
+  readonly orderTargetZ = new Float32Array(AGENT_CAPACITY);
+  readonly orderUntil = new Float32Array(AGENT_CAPACITY);
+  readonly orderSeq = new Int32Array(AGENT_CAPACITY);
+  readonly directiveKind = new Uint8Array(AGENT_CAPACITY);
+  readonly directiveTargetX = new Float32Array(AGENT_CAPACITY);
+  readonly directiveTargetZ = new Float32Array(AGENT_CAPACITY);
+  readonly directiveWard = new Int32Array(AGENT_CAPACITY);
+  readonly directiveUntil = new Float32Array(AGENT_CAPACITY);
+  readonly directiveFire = new Uint8Array(AGENT_CAPACITY);
+  readonly directiveSpeedMul = new Float32Array(AGENT_CAPACITY).fill(1);
+  readonly directiveSeq = new Int32Array(AGENT_CAPACITY);
 
   // ---- P4：导演意图 / 士气 ----
   /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
@@ -282,6 +310,19 @@ export class AgentPool {
     this.aggroFrom[i] = d.aggroFrom ?? 0;
     this.aiStateIdx[i] = d.aiStateIdx ?? 0;
     this.aiTimer[i] = d.aiTimer ?? 0;
+    this.orderKind[i] = d.orderKind ?? 0;
+    this.orderTargetX[i] = d.orderTargetX ?? 0;
+    this.orderTargetZ[i] = d.orderTargetZ ?? 0;
+    this.orderUntil[i] = d.orderUntil ?? 0;
+    this.orderSeq[i] = d.orderSeq ?? 0;
+    this.directiveKind[i] = d.directiveKind ?? 0;
+    this.directiveTargetX[i] = d.directiveTargetX ?? 0;
+    this.directiveTargetZ[i] = d.directiveTargetZ ?? 0;
+    this.directiveWard[i] = d.directiveWard ?? 0;
+    this.directiveUntil[i] = d.directiveUntil ?? 0;
+    this.directiveFire[i] = d.directiveFire ?? 0;
+    this.directiveSpeedMul[i] = d.directiveSpeedMul ?? 1;
+    this.directiveSeq[i] = d.directiveSeq ?? 0;
     return i;
   }
 
@@ -346,6 +387,19 @@ export class AgentPool {
     this.aggroFrom[to] = this.aggroFrom[from];
     this.aiStateIdx[to] = this.aiStateIdx[from];
     this.aiTimer[to] = this.aiTimer[from];
+    this.orderKind[to] = this.orderKind[from];
+    this.orderTargetX[to] = this.orderTargetX[from];
+    this.orderTargetZ[to] = this.orderTargetZ[from];
+    this.orderUntil[to] = this.orderUntil[from];
+    this.orderSeq[to] = this.orderSeq[from];
+    this.directiveKind[to] = this.directiveKind[from];
+    this.directiveTargetX[to] = this.directiveTargetX[from];
+    this.directiveTargetZ[to] = this.directiveTargetZ[from];
+    this.directiveWard[to] = this.directiveWard[from];
+    this.directiveUntil[to] = this.directiveUntil[from];
+    this.directiveFire[to] = this.directiveFire[from];
+    this.directiveSpeedMul[to] = this.directiveSpeedMul[from];
+    this.directiveSeq[to] = this.directiveSeq[from];
   }
 
   /** 快照（升格用；★ E3b：全列导出——编队/指挥/意图/移动目标随升格带回实体） */
@@ -379,6 +433,19 @@ export class AgentPool {
       aggroFrom: this.aggroFrom[i],
       aiStateIdx: this.aiStateIdx[i],
       aiTimer: this.aiTimer[i],
+      orderKind: this.orderKind[i],
+      orderTargetX: this.orderTargetX[i],
+      orderTargetZ: this.orderTargetZ[i],
+      orderUntil: this.orderUntil[i],
+      orderSeq: this.orderSeq[i],
+      directiveKind: this.directiveKind[i],
+      directiveTargetX: this.directiveTargetX[i],
+      directiveTargetZ: this.directiveTargetZ[i],
+      directiveWard: this.directiveWard[i],
+      directiveUntil: this.directiveUntil[i],
+      directiveFire: this.directiveFire[i],
+      directiveSpeedMul: this.directiveSpeedMul[i],
+      directiveSeq: this.directiveSeq[i],
     };
     if (this.hasMoveTarget[i] === 1) {
       out.moveTargetX = this.moveTargetX[i];

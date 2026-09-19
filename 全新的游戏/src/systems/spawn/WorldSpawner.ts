@@ -27,6 +27,7 @@ import { Player } from '../../entity/player/Player';
 import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
+import { fireCode, type TacticalOrder, type UnitDirective } from '../../entity/SwarmUnit';
 import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
@@ -881,6 +882,31 @@ export class WorldSpawner {
   /** ★ 步骤 9：实体销毁 → 注销 uid 映射（阵亡/降格；小队注销由 swarm.onEntityKilled 负责） */
   forgetEntity(e: EnemyBase): void {
     if (e.swarmUid > 0) this.byUid.delete(e.swarmUid);
+  }
+
+  /** ★ 步骤 9b：命令/指令推送到 L3 实体（池侧写列；实体不在池内，走 uid 映射） */
+  applyOrderToEntity(uid: number, order: TacticalOrder, directive: UnitDirective, until: number): void {
+    const e = this.byUid.get(uid);
+    if (!e || e.dead) return;
+    e.applyOrder(
+      {
+        kind: order.kind,
+        targetX: order.target?.x ?? 0,
+        targetZ: order.target?.z ?? 0,
+        until,
+        seq: order.seq,
+      },
+      {
+        kind: directive.kind,
+        targetX: directive.targetX ?? 0,
+        targetZ: directive.targetZ ?? 0,
+        wardUid: directive.wardUid ?? 0,
+        until: directive.until,
+        fire: fireCode(directive.fire),
+        speedMul: directive.speedMul,
+        seq: directive.seq,
+      },
+    );
   }
 
   /** ★ 步骤 5：队长标记镜像（池侧选举/接任 → 实体；仅存活实体） */
