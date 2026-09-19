@@ -19,8 +19,9 @@ export interface CharacterClampDeps {
   player: CharacterBase;
   /** 玩家载具贴地桥接（WorldMode.clampVehicle；多采样抬高 + 限速） */
   clampVehicle(dt: number): void;
-  /** 停靠舰船甲板顶面高度（ShipEntity.deckTopAt；null = 不在甲板范围/航行期） */
-  shipDeckTop?(x: number, z: number): number | null;
+  /** ★ 平台顶面高度（停靠舰船甲板 / 掩体顶；null = 不在任何平台足迹内）
+   *  供角色"站上平台"（含攀爬落顶）用 */
+  platformTopAt?(x: number, z: number): number | null;
 }
 
 export class CharacterClamp {
@@ -29,6 +30,8 @@ export class CharacterClamp {
   update(e: CharacterBase, dt: number): void {
     // ★ 死亡等待复活：冻结在死亡地点（不贴地/不重复判死），复活时统一传送回出生点
     if (e.dead) return;
+    // ★ 攀爬中：位置由 CharacterBase 的攀爬插值接管（贴地不抢）
+    if (e.isClimbing) return;
     // ★ 空中层（2026-09-18）：飞行单位**悬停** —— y = 地表高 + airAltitude（+ 个体相位浮动）。
     //   不走贴地/掉坑分支（飞在空中不该被判掉坑），也不受地形落差影响。
     //   ★ 地表取样必须与 L2 代理（SwarmBatch 的 groundAt）同口径 → 都用 surfaceHeightAtFor(x,z,y)，
@@ -54,9 +57,9 @@ export class CharacterClamp {
     const raster = this.deps.raster;
     // ★ 第二层高度（浮空洞顶）：在山上走站洞顶、进洞后站洞底（surfaceHeightAtFor）
     let targetY = raster.surfaceHeightAtFor(p.x, p.z, p.y);
-    // ★ 停靠舰船甲板：脚底已接近甲板面（≥ 甲板 - 1.6m）→ 以甲板为地面；
-    //   否则保持地形（防止船下/远处角色被抬穿船体）
-    const deck = this.deps.shipDeckTop?.(p.x, p.z) ?? null;
+    // ★ 平台顶（舰船甲板 / 掩体顶）：脚底已接近顶面（≥ 顶 - 1.6m）→ 以顶面为地面；
+    //   否则保持地形（防止平台下/远处角色被抬穿实体）
+    const deck = this.deps.platformTopAt?.(p.x, p.z) ?? null;
     if (deck !== null && deck > targetY && p.y >= deck - 1.6) targetY = deck;
     // ★ 脚下地块复核（2026-09-05 用户实测：补丁把普通地块挖到 <−1.5 也被当深坑判死）：
     //   死亡只属于"坑洞地块的足够深位置"——地面低于 −1.5 只是触发条件之一，还须

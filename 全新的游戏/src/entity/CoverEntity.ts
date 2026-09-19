@@ -37,6 +37,19 @@ export interface CoverOptions {
   buildTime?: number;
 }
 
+/** ★ 掩体注册表（顶面站立 / 攀爬查询用；数量个位数，线性扫描足够） */
+const _coverRegistry = new Set<CoverEntity>();
+
+/** ★ 掩体顶面高度（世界 Y；不在任何掩体足迹内 → null）——供角色贴地/落顶 */
+export function coverTopAt(x: number, z: number): number | null {
+  let best: number | null = null;
+  for (const c of _coverRegistry) {
+    const top = c.topAt(x, z);
+    if (top !== null && (best === null || top > best)) best = top;
+  }
+  return best;
+}
+
 export class CoverEntity extends StructureEntity {
   readonly owner: 'player' | 'enemy';
   private readonly buildTime: number;
@@ -97,15 +110,28 @@ export class CoverEntity extends StructureEntity {
       offsetY: COVER_H + 0.4,
     }));
     // ★ 角色阻挡（所有 CharacterBase 的 separateFromStatics 消费）：
-    //   半宽/半厚/半高；yaw = 墙朝向；walkableTop=false（薄墙不可站顶）
+    //   半宽/半厚/半高；yaw = 墙朝向；walkableTop=true（顶面可站/可攀）
     this.blockId = -(this.entity.id * 16 + 1);
     addStaticObstacleRect(
       this.blockId, opts.x, opts.y + COVER_H / 2, opts.z,
-      COVER_W / 2, COVER_T / 2, COVER_H / 2, opts.heading ?? 0, false,
+      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true,
     );
+    _coverRegistry.add(this);
+  }
+
+  /** ★ 顶面高度（世界 Y；点在墙足迹内才返回）——角色落顶/攀爬目标 */
+  topAt(x: number, z: number): number | null {
+    const p = this.entity.position;
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    const dx = x - p.x, dz = z - p.z;
+    const lz = dx * fx + dz * fz;   // 厚度轴
+    const lx = dx * fz - dz * fx;   // 宽度轴
+    if (Math.abs(lx) > COVER_W / 2 || Math.abs(lz) > COVER_T / 2) return null;
+    return p.y + COVER_H;
   }
 
   override dispose(): void {
+    _coverRegistry.delete(this);
     removeStaticObstacle(this.blockId);
     super.dispose();
   }
@@ -140,7 +166,7 @@ export class CoverEntity extends StructureEntity {
     removeStaticObstacle(this.blockId);
     addStaticObstacleRect(
       this.blockId, p.x, p.y + COVER_H / 2, p.z,
-      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, false,
+      COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true,
     );
   }
 

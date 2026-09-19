@@ -20,8 +20,9 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME } from '../entity/CoverEntity';
-import { coverBrickTexture } from '../services/render/CoverRenderer';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt } from '../entity/CoverEntity';
+import { coverBrickTexture, COVER_W, COVER_T } from '../services/render/CoverRenderer';
+import { DeployPreview } from '../services/fx/DeployPreview';
 import { stepFluidShared } from '../services/fx/FluidShared';
 import { CharacterBase } from '../entity/CharacterBase';
 import { EntityManager } from '../entity/EntityManager';
@@ -535,6 +536,8 @@ export class WorldMode implements IGameMode {
   private charClamp!: CharacterClamp;
   /** ★ 命中解析层（P5：子弹命中 / 代理命中唯一结算入口） */
   private combatSystem!: CombatSystem;
+  /** ★ 投送落点预览（祖宗/掩体弹药选中时显示） */
+  private deployPreview: DeployPreview | null = null;
   /** ★ 测试地图（单 chunk 陈列馆；ctx.debug.testChunk） */
   private testChunk = false;
   /** ★ 落地名册陈列（?roster=1）：落地后每种敌人各铺一只 —— 兵种行为肉眼验收用 */
@@ -746,9 +749,17 @@ export class WorldMode implements IGameMode {
       raster: this.raster,
       player: this.player,
       clampVehicle: (d) => this.clampVehicle(d),
-      // ★ 停靠舰船甲板：站上甲板（含从高处跳落）时以甲板顶面为地面
-      shipDeckTop: (x, z) => this.ship?.deckTopAt(x, z) ?? null,
+      // ★ 平台顶（舰船甲板 + 掩体顶）：站上平台（含攀爬落顶）时以顶面为地面
+      platformTopAt: (x, z) => {
+        const deck = this.ship?.deckTopAt(x, z) ?? null;
+        const cover = coverTopAt(x, z);
+        if (deck === null) return cover;
+        if (cover === null) return deck;
+        return Math.max(deck, cover);
+      },
     });
+    // ★ 投送落点预览（祖宗/掩体）
+    if (this.scene) this.deployPreview = new DeployPreview(this.scene);
 
     // ---- ★ 初始化业务逻辑层（共享模块） —— 必须先于战斗属性应用（装备属性汇总依赖 itemManager）----
     this.itemManager = new ItemManager(ctx.session);
@@ -1493,6 +1504,8 @@ export class WorldMode implements IGameMode {
     if (this.phase === 'explore') this.waterFx.entry(this.player, dt, true);
     // ★ 涉水循环轨：每帧统一裁决（非探索阶段自动淡出，防航行/舰内残留水声）
     this.waterFx.wade(dt, this.phase === 'explore', this.player);
+    // ★ 投送落点预览（祖宗/掩体）
+    this.updateDeployPreview();
     // ★ 环境音效：脚步 / 拨草（入水·涉水音在 WaterFx 内，只对玩家那次生效）
     if (this.phase === 'explore') this.updateAmbientSfx(dt);
     for (const e of this.enemies) this.waterFx.entry(e, dt, false);
@@ -1722,6 +1735,8 @@ export class WorldMode implements IGameMode {
     this.playerCovers = [];
     this.sentinelTex?.dispose();
     this.sentinelTex = null;
+    this.deployPreview?.dispose();
+    this.deployPreview = null;
     this.droneAsset = null;
     // ---- 战斗导演退场（取消事件订阅） ----
     this.director?.dispose();
@@ -2084,6 +2099,28 @@ export class WorldMode implements IGameMode {
       kind: 'sentinel',
       heading: 0,
     });
+  }
+
+  /** ★ 投送落点预览：选中「祖宗 / 掩体」时在准星落点显示投放圈/足迹（其余情况隐藏） */
+  private updateDeployPreview(): void {
+    const dp = this.deployPreview;
+    if (!dp) return;
+    const q = this.selectedQuickItem;
+    const isDeploy = q === 'zuzong' || q === 'cover';
+    if (this.phase !== 'explore' || !isDeploy || this.player.dead || this.player.controlLocked
+      || !this.itemManager?.hasItem('player', q, 1)) {
+      dp.hide();
+      return;
+    }
+    const aim = this.crosshairPoint();
+    const gy = this.raster.surfaceHeightAt(aim.x, aim.z) + 0.06;
+    if (q === 'zuzong') {
+      dp.showCircle(aim.x, gy, aim.z, 1.6);
+      return;
+    }
+    // 掩体：足迹矩形（宽 × 厚），朝向 = 玩家 → 落点方向（墙法线）
+    const p = this.player.position;
+    dp.showRect(aim.x, gy, aim.z, COVER_W, COVER_T, Math.atan2(aim.x - p.x, aim.z - p.z));
   }
 
   /** ★ 掩体弹（玩家遗物「死仇时代的恨意」/ 道具「掩体」）：像祖宗弹一样从枪口沿准星发射；
@@ -3083,6 +3120,7 @@ export class WorldMode implements IGameMode {
    */
   private setPhase(next: 'sail' | 'explore' | 'interior'): void {
     this.phase = next;
+    if (next !== 'explore') this.deployPreview?.hide();
     const env: 'ship' | 'world' = next === 'interior' ? 'ship' : 'world';
     if (env !== this.envKind) {
       this.envKind = env;

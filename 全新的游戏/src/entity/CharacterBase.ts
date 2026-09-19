@@ -64,6 +64,21 @@ export abstract class CharacterBase extends EntityBase {
   airPhase = Math.random() * Math.PI * 2;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
+  // ---- ★ 攀爬（可攀工事：掩体等 walkableTop 矩形；持续顶住自动翻上） ----
+  /** 可攀最大高差（米）：顶面高于脚底不超过此值才能攀（掩体 3m 也在内） */
+  static readonly CLIMB_MAX = 3.2;
+  /** 持续顶住时长（秒）→ 触发攀爬（防误触） */
+  private static readonly CLIMB_HOLD = 0.25;
+  /** 攀爬时长（秒） */
+  private static readonly CLIMB_TIME = 0.45;
+  private climbT = -1;
+  private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
+  private climbToX = 0; private climbToY = 0; private climbToZ = 0;
+  private climbContactT = 0;
+  private climbCand: { top: number; ix: number; iz: number } | null = null;
+  /** ★ 是否正在攀爬（CharacterClamp 跳过贴地，避免抢位置） */
+  get isClimbing(): boolean { return this.climbT >= 0; }
+
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   collisionVolume: {
     shape: import("../services/physics/PhysicsWorld").ColliderShape;
@@ -101,6 +116,11 @@ export abstract class CharacterBase extends EntityBase {
   ): void {
     const _ct = entityPerf.enabled;
     const _c0 = _ct ? performance.now() : 0;
+    // ★ 攀爬中：位置由攀爬插值接管（不接受输入移动）
+    if (this.climbT >= 0) {
+      this.stepClimb(dt);
+      return;
+    }
     if (input && cameraFrame) {
       this.controller.update(dt, input, cameraFrame);
     }
@@ -177,6 +197,13 @@ export abstract class CharacterBase extends EntityBase {
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     this.separateFromStatics();
+    // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去
+    if (this.climbCand && !this.controller.isAirborne() && !this.airborne) {
+      this.climbContactT += dt;
+      if (this.climbContactT >= CharacterBase.CLIMB_HOLD) this.beginClimb(this.climbCand);
+    } else {
+      this.climbContactT = 0;
+    }
     const _c3 = _ct ? performance.now() : 0;
     // ★ 受击染料推进（降频解算 + 每步持续注入 + 计时释放）
     this.hitDyeFx.update(dt);
@@ -238,6 +265,7 @@ export abstract class CharacterBase extends EntityBase {
     const me = shapeExtents(vol.shape);
     if (me.hx <= 0 || me.hz <= 0) return;
     const p = this.entity.position;
+    this.climbCand = null;   // ★ 每帧重置攀爬候选（接触期间由下面的推出分支写入）
     queryStaticObstaclesInto(p.x, p.z, me.hx + 0.4, _obstacleBuf);
     for (const o of _obstacleBuf) {
       const topY = o.y + o.hy;
@@ -249,10 +277,19 @@ export abstract class CharacterBase extends EntityBase {
         const baseY = o.y - o.hy;
         if (p.y < baseY - me.hy - 0.3 || p.y > topY + me.hy + 0.3) continue;
       }
-      // ★ 定向矩形（船体分段）：圆 vs OBB 推出
+      // ★ 定向矩形（船体分段/掩体）：圆 vs OBB 推出
       if (o.hw !== undefined && o.hl !== undefined && o.yaw !== undefined) {
         const push = pushOutOBB(p.x, p.z, Math.max(me.hx, me.hz), o.x, o.z, o.hw, o.hl, o.yaw);
-        if (push) { p.x += push.dx; p.z += push.dz; }
+        if (push) {
+          p.x += push.dx; p.z += push.dz;
+          // ★ 攀爬候选：顶面可站 + 高差在可攀范围（0.4~CLIMB_MAX）→ 持续顶住则翻上去
+          const top = o.y + o.hy;
+          const rise = top - p.y;
+          if (o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
+            const len = Math.hypot(push.dx, push.dz) || 1;
+            this.climbCand = { top, ix: -push.dx / len, iz: -push.dz / len };
+          }
+        }
         continue;
       }
       const dx = p.x - o.x,
@@ -268,6 +305,41 @@ export abstract class CharacterBase extends EntityBase {
       const push = (minDist - d) / d;
       p.x += dx * push;
       p.z += dz * push;
+    }
+  }
+
+  /** ★ 开始攀爬（目标 = 沿"朝墙内"方向前进一个身位 + 顶面高度） */
+  private beginClimb(cand: { top: number; ix: number; iz: number }): void {
+    const p = this.entity.position;
+    const vol = this.collisionVolume;
+    const me = vol ? shapeExtents(vol.shape) : { hx: 0.3, hy: 1, hz: 0.3 };
+    const reach = Math.max(0.5, Math.max(me.hx, me.hz) + 0.35);
+    this.climbFromX = p.x; this.climbFromY = p.y; this.climbFromZ = p.z;
+    this.climbToX = p.x + cand.ix * reach;
+    this.climbToZ = p.z + cand.iz * reach;
+    this.climbToY = cand.top + 0.02;
+    this.climbT = 0;
+    this.climbContactT = 0;
+    this.climbCand = null;
+    this.controller.moveDir.x = 0;
+    this.controller.moveDir.y = 0;
+  }
+
+  /** ★ 攀爬步进：前 60% 时间升到顶，随后水平推进；结束交还贴地 */
+  private stepClimb(dt: number): void {
+    this.climbT += dt;
+    const k = Math.min(1, this.climbT / CharacterBase.CLIMB_TIME);
+    const ex = k * k * (3 - 2 * k);
+    const ky = Math.min(1, k / 0.6);
+    const ey = ky * ky * (3 - 2 * ky);
+    const p = this.entity.position;
+    p.x = this.climbFromX + (this.climbToX - this.climbFromX) * ex;
+    p.z = this.climbFromZ + (this.climbToZ - this.climbFromZ) * ex;
+    p.y = this.climbFromY + (this.climbToY - this.climbFromY) * ey;
+    if (k >= 1) {
+      p.y = this.climbToY;
+      this.climbT = -1;
+      this.controller.onFloor = true;
     }
   }
 
