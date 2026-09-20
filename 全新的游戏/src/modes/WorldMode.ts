@@ -76,6 +76,7 @@ import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { dayT01FromHour } from '../systems/swarm/PostureFn';
 import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
 // ★ 击杀统计 + 每日敌人总数（2026-09-20 重做）：**蜂群引擎直管**（SwarmSystem.ledger）
@@ -353,6 +354,7 @@ export class WorldMode implements IGameMode {
     shipX: 0, shipZ: 0,
     camForwardX: 0, camForwardZ: 1,
     entityCount: 0,
+    dayT01: 0,
     melee: () => {},
   };
 
@@ -1513,6 +1515,8 @@ export class WorldMode implements IGameMode {
       hooks.shipX = this.ship.position.x; hooks.shipZ = this.ship.position.z;
       hooks.camForwardX = camF.x; hooks.camForwardZ = camF.z;
       hooks.entityCount = this.enemies.length;
+      // ★ M2：当日进度（太阳钟：6:00=0 / 18:00=1）→ 蜂群态势函数日程
+      hooks.dayT01 = dayT01FromHour(renderManager.querySun().hour);
       this.swarm.update(dt, hooks);
       this.updateSwarmDbg(dt);
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进

@@ -135,6 +135,7 @@ export interface SwarmHooks {
   camForwardZ: number;
   /** 当前 L3 实体数（升格上限判定） */
   entityCount: number;
+  dayT01?: number;   // ★ M2 当日进度 0~1（太阳钟 6:00=0/18:00=1；缺省 → 引擎落地兜底钟）
   /** ★ E4a：L3 实体只读列表（编队 steer 消费；模式层给 EntityManager 的敌人数组） */
   activeUnits?: () => readonly SwarmCarrier[];
   /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
@@ -153,8 +154,7 @@ export interface SwarmHooks {
   onSquadWiped?: (squadId: number) => void;
   /** ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体不在池内，走 uid 映射） */
   onDirective?: (uid: number, order: TacticalOrder, directive: UnitDirective, until: number) => void;
-  /** ★ 远程代理射击（真弹道；模式层按 skin 选池：0=箭 / 1=法球）
-   *  spread = 散布弧度（远距掩护性散射 / 近距精准） */
+  /** ★ 远程代理射击（真弹道；skin 0=箭/1=法球；spread=散布弧度） */
   onAgentRanged?: (
     targetKind: number, dmg: number, x: number, z: number,
     tx: number, tz: number, skin: number, speed: number, life: number, spread: number,
@@ -378,8 +378,8 @@ export class SwarmSystem {
 
     // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
     this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
-    // ★ 指挥器：大队任务周期重发 + S1 工程（带玩家位置）
-    this.commander.tick(dt, hooks.playerX, hooks.playerZ);
+    // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
+    this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1);
 
     // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
     this.tacticsAccum += dt;
@@ -919,9 +919,9 @@ export class SwarmSystem {
     }
   }
 
-  /** swap-remove 包装：释放槽/令牌 + 修正槽主索引（尾元素 → 空出的下标）
-   *  ★ unregister=false（升格路径）：换载体不是死亡，小队归属/队长保留 */
-  private removeAgent(i: number, unregister = true, killed = false): void {
+  /** swap-remove 包装：释放槽/令牌 + 修正槽主索引；★ public（迷失销毁等非击杀离场用，
+   *  调用方负责 ledger.noteRemoved）；unregister=false（升格路径）→ 小队归属/队长保留 */
+  removeAgent(i: number, unregister = true, killed = false): void {
     const last = this.pool.count - 1;
     const uid = this.pool.swarmUid[i];
     this.releaseAgent(i);

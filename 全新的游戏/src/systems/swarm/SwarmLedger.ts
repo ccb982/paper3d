@@ -42,23 +42,31 @@ export class SwarmLedger {
   recalled = 0;
   /** 其他非击杀离场累计（主动清场等；同样归还编制） */
   removed = 0;
+  /** ★ M2：日节律放行上限（指挥器每拍按 releaseAt(t01) 写入；早间只放少量，波峰放宽） */
+  releaseCap = 0;
 
-  /** ★ 已消耗的计划额度（场上 + 已击杀；回收/离场不算） */
+  /** 已消耗的计划额度（场上 + 已击杀；回收/离场不算） */
   get deployed(): number {
     return Math.max(0, this.spawned - this.recalled - this.removed);
   }
 
+  /** 有效放行上限 = min(当日计划, 日节律放行) */
+  private cap(): number {
+    if (this.total <= 0) return Number.MAX_SAFE_INTEGER;
+    return Math.min(this.total, Math.max(0, this.releaseCap));
+  }
+
   /** 还能生成多少（total <= 0 = 未初始化 → 无限，交 beginDay 兜底） */
   get remaining(): number {
-    return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.total - this.deployed);
+    return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.cap() - this.deployed);
   }
 
   /** 生成闸门（唯一判据；生成口在 SwarmSystem.spawn） */
   canSpawn(): boolean {
-    return this.total <= 0 || this.deployed < this.total;
+    return this.total <= 0 || this.deployed < this.cap();
   }
 
-  /** 换日 / 首次出击：按威胁预计算总数并清零 */
+  /** 换日 / 首次出击：按威胁预计算总数并清零（放行上限 = 0：落地后由指挥器按节律放开） */
   beginDay(threat: ThreatProfile, expectedMinutes = 12): void {
     this.total = estimateDailyTotal(threat, expectedMinutes);
     this.spawned = 0;
@@ -66,6 +74,7 @@ export class SwarmLedger {
     this.kills = 0;
     this.recalled = 0;
     this.removed = 0;
+    this.releaseCap = 0;
   }
 
   /** 同日再出击：从存档镜像回灌（进度累计，总数不重算） */
@@ -81,7 +90,9 @@ export class SwarmLedger {
     // 旧档无 removed：按不变量推导
     this.removed = typeof s.removed === 'number' && s.removed >= 0
       ? s.removed
-      : Math.max(0, s.spawned - this.alive - s.kills - s.recalled);
+      : Math.max(0, this.spawned - this.alive - this.kills - this.recalled);
+    // ★ M2：同日再出击 → 放行上限先给满（指挥器首拍会按当日节律重新收放）
+    this.releaseCap = this.total;
   }
 
   /** 镜像导出（写档用；复用 out 零分配） */
@@ -132,6 +143,7 @@ export class SwarmLedger {
     this.kills = 0;
     this.recalled = 0;
     this.removed = 0;
+    this.releaseCap = 0;
   }
 }
 

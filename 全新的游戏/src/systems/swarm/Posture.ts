@@ -1,12 +1,12 @@
 // ============================================================
-// Posture —— 蜂群态势机（引擎内部变量；《蜂群架构.md》§13.2/§21）
+// Posture —— 蜂群态势：档位定义 + 档位 × 部署表叠加（《蜂群引擎架构.md》§3）
 // ============================================================
 // 态势决定"给各编队发什么强度的命令"：
-//   开局 fortify（造工事 + 巡逻守线）→ patrol（守成/游弋）
-//   → advance（试探推进）→ mass（集结）→ assault（总攻：激进进攻）
-//   → withdraw（损失过大：撤退重组）→ patrol
-// 部署表（SquadDoctrine）描述"各兵种怎么打"，态势描述"这一阶段打到什么程度"；
-// 两者在 resolveDoctrine 之后叠加（applyPosture）。
+//   fortify（扎根：施工 + 守线）→ patrol（守成/游弋）→ advance（试探）
+//   → mass（集结）→ assault（总攻）→ withdraw（撤退重组）
+// ★ M2：态势**转移**已改由连续态势函数 PostureFn（p = schedule + provocation）负责；
+//   本文件只保留档位类型与"档位如何改部署强度"（applyPosture）。
+// 部署表（SquadDoctrine）描述"各兵种怎么打"，态势描述"这一阶段打到什么程度"。
 // ============================================================
 
 import type { SquadDoctrine } from './SquadDoctrine';
@@ -18,17 +18,6 @@ export type BattlePosture =
   | 'mass'       // 集结：各队向正面收拢
   | 'assault'    // 总攻：全部激进（近战冲锋、飞行轰炸、施工停止）
   | 'withdraw';  // 撤退：全线后撤重组
-
-export interface PostureInputs {
-  /** 玩家距落点（米） */
-  playerDist: number;
-  /** 工事完成度 0~1 */
-  builtRatio: number;
-  /** 近期有接触（被击/警戒） */
-  contact: boolean;
-  /** 相对态势开始时的兵力比（<1 = 有损失） */
-  aliveRatio: number;
-}
 
 /** ★ 态势 × 部署表：态势只改"强度"，不改"兵种怎么打" */
 export function applyPosture(d: SquadDoctrine, posture: BattlePosture): SquadDoctrine {
@@ -61,52 +50,4 @@ export function applyPosture(d: SquadDoctrine, posture: BattlePosture): SquadDoc
       break;
   }
   return o;
-}
-
-/** ★ 态势机（低频更新；转移条件集中在此） */
-export class PostureMachine {
-  posture: BattlePosture = 'fortify';
-  private since = 0;
-
-  reset(): void {
-    this.posture = 'fortify';
-    this.since = 0;
-  }
-
-  set(p: BattlePosture, now: number): void {
-    this.posture = p;
-    this.since = now;
-  }
-
-  update(now: number, inp: PostureInputs): BattlePosture {
-    if (this.since === 0) this.since = now;
-    const t = now - this.since;
-    switch (this.posture) {
-      case 'fortify':
-        // 工事大致完成（或守够 150s）→ 转入守成
-        if (inp.builtRatio >= 0.8 || t > 150) this.set('patrol', now);
-        break;
-      case 'patrol':
-        // ★ 挑衅 = 被击 + 累计战损 ≥12% → 升级；否则守着等"一天将尽"（时间兜底）
-        if (inp.contact && inp.aliveRatio < 0.88) this.set('advance', now);
-        else if (t > 180) this.set('advance', now);
-        break;
-      case 'advance':
-        // ★ 累计损失 ≥20% → 集结；不收玩家距离驱动（玩家守舰船 ≠ 进攻）
-        if (inp.aliveRatio < 0.80 || t > 60) this.set('mass', now);
-        break;
-      case 'mass':
-        // ★ 总攻标准：连续损失 ≥25%（或一天将尽的时间兜底）
-        if (inp.aliveRatio < 0.75 || t > 30) this.set('assault', now);
-        break;
-      case 'assault':
-        // 总攻损失过大（<40%）→ 撤退
-        if (t > 8 && inp.aliveRatio < 0.4) this.set('withdraw', now);
-        break;
-      case 'withdraw':
-        if (t > 30 || inp.playerDist > 120) this.set('patrol', now);
-        break;
-    }
-    return this.posture;
-  }
 }

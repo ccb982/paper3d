@@ -12,7 +12,8 @@ import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
 import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
-import { applyPosture, PostureMachine, type BattlePosture } from './Posture';
+import { applyPosture, type BattlePosture } from './Posture';
+import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
@@ -47,8 +48,32 @@ export class SwarmCommander {
   mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
   /** ★ 当前态势（引擎内部变量；驱动各编队命令强度） */
   battlePosture: BattlePosture = 'fortify';
-  /** ★ 态势机（转移条件集中在 Posture.ts） */
-  private readonly postureMachine = new PostureMachine();
+  /** ★ 态势函数（M2：p = clamp(schedule(t) + provocation)；连续权重插值） */
+  private readonly postureFn = new PostureFn();
+  /** ★ 态势调试值：攻势强度 / 日程 / 挑衅（覆盖层与测试读取） */
+  postureP = 0;
+  postureSchedule = 0;
+  postureProvocation = 0;
+  /** 内部日程时钟（无太阳钟输入时的兜底：落地起算，7.5 分钟 = 一个白天） */
+  private rhythmT = 0;
+  /** 太阳钟口径：落地时的当日进度（节奏从落地起算 → t01 在黄昏到达 1；<0 = 待定） */
+  private t01Base = -1;
+  private static readonly DAY_RHYTHM_S = 450;
+  /** 挑衅采样：最近命中戳（防重复计）+ 击杀差分 */
+  private readonly hitSeen = new Map<number, number>();
+  private lastKills = 0;
+  /** 单日节律增兵：第一波 / 总攻 是否已增兵 */
+  private wave1Sent = false;
+  private finalSent = false;
+  /** ★ 调试/测试：日程进度覆盖（0~1；<0 = 关闭覆盖，用太阳钟） */
+  debugDayT01 = -1;
+  /** ★ 迷失回收：离队长过远且卡住的代理（uid → 上次位置/时间/连续卡死次数） */
+  private readonly lost = new Map<number, { x: number; z: number; at: number; stuck: number }>();
+  private lostAccum = 0;
+  /** 迷失判定：离队长 > 60m；8s 内挪动 < 2m 视为卡死；连续 2 拍 → 自我销毁 */
+  private static readonly LOST_DIST = 60;
+  private static readonly LOST_STUCK_S = 8;
+  private static readonly LOST_MOVE_EPS = 2;
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
   /** ★ 战役级闭环（1Hz）：小队评级/求援/受阻 → 大队改派（自下而上的反馈闭环） */
@@ -71,7 +96,6 @@ export class SwarmCommander {
   private recalledRoster: { mobIndex: number; role: UnitRole; count: number }[] | null = null;
   /** ★ 大队：一队 30 怪；一局多个 */
   private battalionCount = 0;
-  private reinforceAccum = 0;
   /** ★ 待登场队列（**逐步登场**；总攻可一次性整编队） */
   private spawnQueue: { x: number; z: number; role: UnitRole; elite: boolean; mobIndex: number }[] = [];
   private spawnAccum = 0;
@@ -79,7 +103,6 @@ export class SwarmCommander {
   private static readonly SPAWN_INTERVAL = 1.5;
   private static readonly BATTALION_SIZE = 30;
   private static readonly BATTALION_MAX = 4;
-  private static readonly REINFORCE_S = 180;
   /** ★ 战术阶段（S0 勘察 → S1 工程 → S2 防线就绪） */
   stage: 'S0' | 'S1' | 'S2' = 'S0';
   /** ★ 待建工事块（逐步拼装：掩体每块 4m，战壕每块 4m；外环 → 内环） */
@@ -171,9 +194,26 @@ export class SwarmCommander {
     this.spawnQueue.length = 0;
     this.spawnAccum = 0;
     this.battalionCount = 0;
-    // ★ 兵力创建（全权在本层）：起飞回收过 → 用**回收名单**做编成（数量/兵种照旧），
-    //   放置位置仍由本层战术逻辑（来向楔形 + 落点环）决定；否则起全新驻防大队
-    this.spawnBattalion(true);
+    // ★ 单日节律复位（§3.5）：日程从落地重新走，波次标记/挑衅采样清零
+    this.rhythmT = 0;
+    this.t01Base = -1;
+    this.wave1Sent = false;
+    this.finalSent = false;
+    this.hitSeen.clear();
+    this.lost.clear();
+    this.lostAccum = 0;
+    this.lastKills = this.swarm.ledger.kills;
+    this.postureFn.reset(performance.now() / 1000);
+    this.battlePosture = 'fortify';
+    // ★ 兵力创建（全权在本层）：
+    //   · 回收名单 → 按名单**逐步回场**（数量/兵种照旧）
+    //   · 全新驻防 → 开局只上**少量班底**（近战 + 后勤修工事），其余由节律逐步补满基数
+    if (this.recalledRoster) {
+      this.spawnBattalion(false);
+    } else {
+      this.spawnCadre();
+      this.spawnBattalion(false);
+    }
     return this.plan;
   }
 
@@ -242,6 +282,20 @@ export class SwarmCommander {
     return true;
   }
 
+  /** ★ 开局班底（§3.5 扎根期）：少量近战守线 + 后勤/远程开工；其余由单日节律逐步补 */
+  private spawnCadre(): void {
+    const plan = this.plan;
+    if (!plan || !this.spawnMob) return;
+    const anchors = this.placementAnchors(plan);
+    const roles: UnitRole[] = ['logistics', 'logistics', 'shield', 'shield', 'assault', 'assault', 'ranged', 'ranged'];
+    for (let k = 0; k < roles.length; k++) {
+      const a = anchors.length > 0
+        ? anchors[k % anchors.length]
+        : { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
+      this.spawnMob(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, roles[k], false);
+    }
+  }
+
   /** ★ 可站部署锚点（地形分析产物：掩体位 + 高地 + 战壕线；空 = 无可用点） */
   private placementAnchors(plan: DefensePlan): { x: number; z: number }[] {
     const out: { x: number; z: number }[] = [];
@@ -286,6 +340,10 @@ export class SwarmCommander {
     // ★ 扫描产物（有利位置）优先作为驻守点；coverSlots 兜底
     for (const p of plan.posts) add(p.x, p.z);
     for (const c of plan.coverSlots) add(c.x, c.z);
+    // ★ 战壕也是驻守点（全兵种偏好；前线附近取一格）
+    const tr = this.terrainScore.bestTrenchNear(
+      plan.cx + plan.approachX * 45, plan.cz + plan.approachZ * 45, 35);
+    if (tr) add(tr.x, tr.z);
     out.sort((a, b) => a.d2 - b.d2);
     return out.map((o) => ({ x: o.x, z: o.z }));
   }
@@ -306,35 +364,55 @@ export class SwarmCommander {
     };
   }
 
-  /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护 */
-  tick(dt: number, playerX = 0, playerZ = 0): void {
-    // ★ 态势更新（开局 fortify → patrol → advance → mass → assault → withdraw）
+  /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护
+   *  @param dayT01 当日进度 0~1（太阳钟：6:00=0 / 18:00=1；<0 = 无输入 → 内部兜底钟） */
+  tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1): void {
+    // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
+    //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
     const now = performance.now() / 1000;
-    const builtRatio = this.buildPieces.length > 0
-      ? this.builtSlots.size / this.buildPieces.length : 0;
-    let contact = false;
-    for (const [, t] of this.swarm.recentHits) {
-      if (now - t <= 8) { contact = true; break; }
+    this.rhythmT += dt;
+    // ★ 节奏口径：从落地起算 → 黄昏（18:00）到达 1；落地即黄昏/夜晚 → 直接进入总攻节奏
+    const dRaw = this.debugDayT01 >= 0 ? this.debugDayT01 : dayT01;
+    let t01: number;
+    if (dRaw >= 0) {
+      if (this.t01Base < 0) this.t01Base = dRaw;
+      t01 = (1 - this.t01Base) < 0.08
+        ? 1
+        : Math.min(1, Math.max(0, (dRaw - this.t01Base) / (1 - this.t01Base)));
+    } else {
+      t01 = Math.min(1, this.rhythmT / SwarmCommander.DAY_RHYTHM_S);
     }
-    const next = this.postureMachine.update(now, {
-      playerDist: this.plan ? Math.hypot(playerX - this.plan.cx, playerZ - this.plan.cz) : 9999,
-      builtRatio,
-      contact,
-      aliveRatio: this.aliveAtPosture > 0
-        ? this.swarm.ledger.alive / this.aliveAtPosture : 1,
-    });
+    // ★ 兵力放行（日节律）：早间只放少量 → 基数 → 第一波/总攻放宽（账本闸门是唯一真源）
+    this.swarm.ledger.releaseCap = Math.ceil(this.swarm.ledger.total * releaseAt(t01));
+    for (const [id, t] of this.swarm.recentHits) {
+      if (this.hitSeen.get(id) !== t) { this.hitSeen.set(id, t); this.postureFn.provoke(0.01); }
+    }
+    if (this.hitSeen.size > 64) {
+      for (const id of this.hitSeen.keys()) if (!this.swarm.recentHits.has(id)) this.hitSeen.delete(id);
+    }
+    const killed = this.swarm.ledger.kills - this.lastKills;
+    if (killed > 0) { this.lastKills = this.swarm.ledger.kills; this.postureFn.provoke(0.03 * killed); }
+    const aliveRatio = this.aliveAtPosture > 0
+      ? this.swarm.ledger.alive / this.aliveAtPosture : 1;
+    const st = this.postureFn.update(dt, t01, aliveRatio, now);
+    this.postureP = st.p;
+    this.postureSchedule = st.schedule;
+    this.postureProvocation = st.provocation;
+    const next = st.posture;
     if (next !== this.battlePosture) {
       this.battlePosture = next;
       this.postureEpoch++;   // ★ 态势切换 → 进攻队列重新整队
-      if (next === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
+      // 进总攻：记撤退判定基准；离开总攻：清基准（aliveRatio 回到 1）
+      this.aliveAtPosture = next === 'assault' ? this.swarm.ledger.alive : 0;
       this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
     }
-    // ★ 地块评分表重建（换落点/掩体数/态势变化才真正重算）
+    // ★ 地块评分表重建（换落点/态势变化才全量重算；掩体/挖掘走局部重算）
     if (this.plan) {
       const raster = RasterMap.current;
       if (raster) {
-        this.terrainScore.rebuild(raster, this.plan, this.builtCovers, this.battlePosture,
-          this.scoreStamp + this.postureEpoch * 100000 + this.builtCovers.length * 100);
+        this.terrainScore.rebuild(raster, this.plan, this.builtCovers, this.postureP,
+          this.scoreStamp + this.postureEpoch * 100000,
+          this.battlePosture);
       }
     }
     if (this.mission) {
@@ -345,6 +423,8 @@ export class SwarmCommander {
       }
     }
     this.engineeringTick(dt, playerX, playerZ);
+    // ★ 迷失回收（1Hz）：卡死回不来的代理自我销毁（非击杀，归还编制）
+    this.reapLost(dt);
     // ★ 战役级闭环（1Hz，晚于工程拍 → 反馈决策可覆盖基础部署）
     this.tacticalTick(dt, playerX, playerZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
@@ -357,14 +437,54 @@ export class SwarmCommander {
         else this.spawnMob?.(u.x, u.z, u.role, u.elite);
       }
     }
-    // ★ 增援：战术启动后每 REINFORCE_S 再来一个大队（上限 BATTALION_MAX）
+    // ★ 单日节律增兵（§3.5）：第一波（t01≥0.45）与总攻（t01≥0.80）各来一个大队；
+    //   开局班底 + 逐步补满的基数是常备，两个波峰才是"大量增兵"（BATTALION_MAX 兜底）
     if (this.plan && this.stage !== 'S0') {
-      this.reinforceAccum += dt;
-      if (this.reinforceAccum >= SwarmCommander.REINFORCE_S) {
-        this.reinforceAccum = 0;
+      if (!this.wave1Sent && t01 >= 0.45) {
+        this.wave1Sent = true;
         this.spawnBattalion();
+        this.lastDecision = { squad: -1, kind: 'wave1', at: now };
+      }
+      if (!this.finalSent && t01 >= 0.80) {
+        this.finalSent = true;
+        this.spawnBattalion(true);   // 总攻：整编一次性压上
+        this.lastDecision = { squad: -1, kind: 'final', at: now };
       }
     }
+  }
+
+  /** ★ 迷失回收（1Hz）：回队长寻路失败 → 目标改回队长；仍卡死 → 自我销毁
+   *  触发：离队长 >60m 且 8s 内挪动 <2m（连续 2 拍）。销毁 = 非击杀离场（归还编制），
+   *  避免"陷进出不去的地形"的代理永远占编制 / 算力（L3 实体由降格逻辑兜底）。 */
+  private reapLost(dt: number): void {
+    this.lostAccum += dt;
+    if (this.lostAccum < 1) return;
+    this.lostAccum = 0;
+    const pool = this.swarm.pool;
+    const now = performance.now() / 1000;
+    for (let i = pool.count - 1; i >= 0; i--) {
+      if (pool.isLeader[i] === 1) continue;
+      const uid = pool.swarmUid[i];
+      const squad = this.swarm.squads.get(pool.squadId[i]);
+      const leader = squad?.members.get(squad.leaderUid);
+      if (!leader) { this.lost.delete(uid); continue; }
+      const d = Math.hypot(pool.x[i] - leader.x, pool.z[i] - leader.z);
+      if (d < SwarmCommander.LOST_DIST) { this.lost.delete(uid); continue; }
+      // ★ 回队长：迷失时把移动目标改到队长（寻路回队）
+      pool.moveTargetX[i] = leader.x;
+      pool.moveTargetZ[i] = leader.z;
+      const rec = this.lost.get(uid);
+      if (!rec) { this.lost.set(uid, { x: pool.x[i], z: pool.z[i], at: now, stuck: 0 }); continue; }
+      if (Math.hypot(pool.x[i] - rec.x, pool.z[i] - rec.z) > SwarmCommander.LOST_MOVE_EPS) {
+        rec.x = pool.x[i]; rec.z = pool.z[i]; rec.at = now; rec.stuck = 0; continue;
+      }
+      if (now - rec.at > SwarmCommander.LOST_STUCK_S && ++rec.stuck >= 2) {
+        this.swarm.removeAgent(i, true, false);   // 非击杀离场 → 归还编制
+        this.swarm.ledger.noteRemoved(1);
+        this.lost.delete(uid);
+      }
+    }
+    if (this.lost.size > 64) this.lost.clear();   // 防御：异常堆积直接清空
   }
 
   /** ★ 部署维护（2s 决策拍）——**按兵种分工 + 对玩家移动的敏感度不同**：
@@ -403,9 +523,12 @@ export class SwarmCommander {
     // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 逐兵种 + 施工 override）→ 再叠态势
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
-    // ★ 进攻队列调控（advance/mass/assault 时生效；前/中/后排 + 横向车道，8s 整队一次）
+    // ★ 进攻队列调控（advance/mass/assault 时生效；前/中/后排 + 横向车道）
+    //   ★ 用户定调（2026-09-21）：线位只是"队形调整的短暂命令"——**只有刚整队那一拍才下发**，
+    //   其余时间不强制线位，让各队执行自己的战术（追击玩家/驻守/推进），否则永远不总攻。
     const lineActive = this.battlePosture === 'advance'
       || this.battlePosture === 'mass' || this.battlePosture === 'assault';
+    let lineFresh = false;
     if (lineActive) {
       let fx = plan.approachX, fz = plan.approachZ;
       const ax = playerX - plan.cx, az = playerZ - plan.cz;
@@ -418,7 +541,7 @@ export class SwarmCommander {
         if (n > 0) { cx /= n; cz /= n; }
         units.push({ id: s.id, type: s.type, builders: s.builders, cx, cz });
       }
-      this.battleLine.update(performance.now() / 1000, playerX, playerZ, fx, fz, units,
+      lineFresh = this.battleLine.update(performance.now() / 1000, playerX, playerZ, fx, fz, units,
         this.battlePosture === 'assault', this.postureEpoch);
     }
     let coverIdx = 0;
@@ -430,7 +553,9 @@ export class SwarmCommander {
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
       );
-      const lineSlot = lineActive ? this.battleLine.get(s.id) : null;
+      // ★ 线位只在"刚整队"那一拍生效（短暂队形调整命令）；★ 正在攻击（chase）的队**不受队列影响**，
+      //   始终执行自己的攻击目标（用户定调：调整队列不能影响攻击）
+      const lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
       let kind: TacticalOrder['kind'] = 'advance';
       let target = meleeAt(d.chase);
       let roe: TacticalOrder['roe'] = 'engage';
@@ -521,6 +646,12 @@ export class SwarmCommander {
           }
           break;
       }
+      // ★ 战壕偏好（全兵种）：静止驻守/集结类目标就近入壕（≤8m；追击/推进不受影响）
+      if (kind === 'protect' || kind === 'regroup') {
+        const tr = this.terrainScore.bestTrenchNear(target.x, target.z, 8);
+        if (tr) target = { x: tr.x, z: tr.z };
+      }
+      if (lineSlot) ttl = Math.min(ttl, 3);   // ★ 队形调整 = 短暂命令，不长期霸占
       this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
     }
     // ⑤ 施工（**逐步拼装**，仅 S1）：施工队**任一成员**到达待建块 ≤5m →
@@ -537,9 +668,11 @@ export class SwarmCommander {
         if (buildSlot.kind === 'cover') {
           this.buildCover(buildSlot.x, buildSlot.z, 'cover');
           this.builtCovers.push({ x: buildSlot.x, z: buildSlot.z });   // ★ 远程驻守点
+          this.terrainScore.invalidateArea(buildSlot.x, buildSlot.z, 12);   // ★ 新掩体 → 表局部重算
           this.buildCd = 3;            // 掩体 3s/块（3 块 = 12m ≈ 9s）
         } else {
           this.digTrench?.(buildSlot.x, buildSlot.z);
+          this.terrainScore.invalidateArea(buildSlot.x, buildSlot.z, 12, true);   // ★ 战壕（挖掘标记）→ 表局部重算
           this.buildCd = 4;            // 战壕 4s/块（3 块 = 12m ≈ 12s）
         }
         this.builtSlots.add(`${buildSlot.x},${buildSlot.z}`);
@@ -650,6 +783,13 @@ export class SwarmCommander {
     const plan = this.plan;
     if (!plan || range <= 0) return null;
     const ideal = range * RANGED.PREFER_RATIO;
+    // ★ 远程优先入壕（用户定调）：在"理想站位 ±6m"的射程环带里找最高分战壕 → 直接选它
+    const dMin = Math.max(minDist, range * 0.5, ideal - 6);
+    const dMax = Math.min(range * 1.05, ideal + 6);
+    if (dMax > dMin) {
+      const trRing = this.terrainScore.bestTrenchNear(px, pz, dMax, dMin, dMax);
+      if (trRing) return { x: trRing.x, z: trRing.z };
+    }
     let best: { x: number; z: number } | null = null;
     let bestScore = -Infinity;
     const consider = (x: number, z: number, high: boolean, base = 0): void => {
@@ -669,6 +809,9 @@ export class SwarmCommander {
     for (const c of this.builtCovers) {
       consider(c.x - plan.approachX * 1.2, c.z - plan.approachZ * 1.2, false, 3.5);
     }
+    // ★ 战壕偏好（全兵种；远程最重）：玩家射程带内最高分战壕格
+    const tr = this.terrainScore.bestTrenchNear(px, pz, range * 1.05);
+    if (tr) consider(tr.x, tr.z, false, 2.0);
     if (best) return best;
     // ★ 扫描产物/掩体都不在射程带内（玩家跑远了）→ **现场找位**：
     //   以玩家为圆心、0.8R 为半径环采样（高地优先 / 掩体加成 / 可站）
@@ -707,12 +850,24 @@ export class SwarmCommander {
     return best;
   }
 
-  /** ★ 调试/测试：强制切态势（覆盖态势机自动转移） */
+  /** ★ 调试/测试：强制切态势（覆盖态势函数自动转移；总攻同样锁定） */
   setPosture(p: BattlePosture): void {
-    this.postureMachine.set(p, performance.now() / 1000);
+    this.postureFn.force(p, performance.now() / 1000);
     this.battlePosture = p;
-    if (p === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
+    this.aliveAtPosture = p === 'assault' ? this.swarm.ledger.alive : 0;
     this.engAccum = 2;   // 下一拍立即重发部署
+  }
+
+  /** ★ 地形脏区（模式层任何挖改都调这个）：表局部重算（脏窗 + 邻环）
+   *  @param dug 显式挖掘（战壕）→ 打挖掘标记（战壕阈值放宽到 0.12m） */
+  markTerrainDirty(x: number, z: number, r = 12, dug = false): void {
+    this.terrainScore.invalidateArea(x, z, r, dug);
+  }
+
+  /** ★ 调试：态势一行摘要（覆盖层/测试读取） */
+  postureInfo(): string {
+    return `态势 ${this.battlePosture} p=${this.postureP.toFixed(2)}`
+      + ` 日程=${this.postureSchedule.toFixed(2)} 挑衅=${this.postureProvocation.toFixed(2)}`;
   }
 
   /** 清理（退出模式） */
@@ -721,7 +876,6 @@ export class SwarmCommander {
     this.plan = null;
     this.stage = 'S0';
     this.battalionCount = 0;
-    this.reinforceAccum = 0;
     this.spawnQueue = [];
     this.spawnAccum = 0;
     this.buildPieces = [];
@@ -731,9 +885,20 @@ export class SwarmCommander {
     this.buildCd = 0;
     this.resendAccum = 0;
     this.recalledRoster = null;
-    this.postureMachine.reset();
+    this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
     this.aliveAtPosture = 0;
+    this.rhythmT = 0;
+    this.t01Base = -1;
+    this.wave1Sent = false;
+    this.finalSent = false;
+    this.debugDayT01 = -1;
+    this.hitSeen.clear();
+    this.lost.clear();
+    this.lostAccum = 0;
+    this.postureP = 0;
+    this.postureSchedule = 0;
+    this.postureProvocation = 0;
     this.tacticalAccum = 0;
     this.progress.clear();
     this.supportCd.clear();
