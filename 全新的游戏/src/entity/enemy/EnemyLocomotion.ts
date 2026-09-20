@@ -92,8 +92,7 @@ export class EnemyLocomotion {
       if (role === 'pit') return true;
       // 坑底过低（挖深/坑洞的深底，判定死亡线以下）→ 危险
       if (h < -1.2) return true;
-      // ★ 深水（水面 0 − 水底 > 0.8m）：敌人不涉水 → 危险
-      if (role === 'liquid' && h < -0.8) return true;
+      // ★ 水域允许站立（不再当危险；移动端由 SteerPick 给"上岸"权重）
     }
     // ★ 高台立面判定：0.45m 处陡升 > 0.6m，且 1.2m 处没有同斜率延续 → 墙（插值坡放行）
     const hNear = raster.surfaceHeightAtFor(px + ux * 0.45, pz + uz * 0.45, py);

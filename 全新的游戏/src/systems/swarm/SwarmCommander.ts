@@ -17,6 +17,7 @@ import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
+import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
@@ -112,6 +113,18 @@ export class SwarmCommander {
   private buildCd = 0;
   private resendAccum = 0;
   private static readonly RESEND_S = 10;
+
+  /** ★ 部署选点（Decide.ts）：状态计数 + 上下文复用对象（每拍赋值，零分配） */
+  private readonly decideSt: DecideState = { coverIdx: 0, assaultIdx: 0, screenIdx: 0, flyerIdx: 0 };
+  private readonly decideCtx: DecideCtx = {
+    plan: null as unknown as DecideCtx['plan'],
+    table: null as unknown as TerrainScore,
+    playerX: 0, playerZ: 0, chase: false, lineSlot: null,
+    front: { x: 0, z: 0 },
+    buildSlot: null, slot: undefined,
+    builders: [], buildPieces: [], builtSlots: new Set<string>(),
+    highPick: null, covers: [],
+  };
 
   constructor(private readonly swarm: SwarmSystem) {}
 
@@ -515,11 +528,6 @@ export class SwarmCommander {
     // ★ 近战类目标：按**姿态 × 兵种配置**的追击开关决定打玩家还是守正面；
     //   施工期盾队前出掩护工事（screen 分支单独处理）
     const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
-    const meleeAt = (doctrineChase: boolean): { x: number; z: number } => (
-      doctrineChase && chase
-        ? { x: playerX, z: playerZ }
-        : { x: front.x + plan.approachX * 10, z: front.z + plan.approachZ * 10 }
-    );
     // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 逐兵种 + 施工 override）→ 再叠态势
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
@@ -544,128 +552,24 @@ export class SwarmCommander {
       lineFresh = this.battleLine.update(performance.now() / 1000, playerX, playerZ, fx, fz, units,
         this.battlePosture === 'assault', this.postureEpoch);
     }
-    let coverIdx = 0;
-    let assaultIdx = 0;
-    let screenIdx = 0;
-    let flyerIdx = 0;
+    // ★ 部署选点（Decide.ts）：读表投影集中一处；计数轮转复用对象（零分配）
+    const st = this.decideSt;
+    st.coverIdx = 0; st.assaultIdx = 0; st.screenIdx = 0; st.flyerIdx = 0;
+    const ctx = this.decideCtx;
+    ctx.plan = plan; ctx.table = this.terrainScore;
+    ctx.playerX = playerX; ctx.playerZ = playerZ; ctx.chase = chase;
+    ctx.front = front; ctx.buildSlot = buildSlot; ctx.slot = slot;
+    ctx.builders = builders; ctx.buildPieces = this.buildPieces;
+    ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
     for (const s of squads) {
       const d = applyPosture(
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
       );
-      // ★ 线位只在"刚整队"那一拍生效（短暂队形调整命令）；★ 正在攻击（chase）的队**不受队列影响**，
-      //   始终执行自己的攻击目标（用户定调：调整队列不能影响攻击）
-      const lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
-      let kind: TacticalOrder['kind'] = 'advance';
-      let target = meleeAt(d.chase);
-      let roe: TacticalOrder['roe'] = 'engage';
-      let ttl = 6;
-      let urgency = 0;
-      switch (d.mode) {
-        case 'build': {
-          if (buildSlot) {
-            const bi = builders.indexOf(s);
-            const t = this.buildPieces.find((q, idx) => idx >= bi && !this.builtSlots.has(`${q.x},${q.z}`)) ?? buildSlot;
-            target = { x: t.x, z: t.z };
-            roe = 'holdFire';
-          } else {
-            const hold = slot ?? front;
-            kind = 'protect';
-            target = { x: hold.x, z: hold.z };
-            roe = 'holdFire';
-            ttl = 8;
-          }
-          break;
-        }
-        case 'garrison': {
-          let cx = 0, cz = 0, n = 0;
-          for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-          if (n > 0) { cx /= n; cz /= n; }
-          const cov = d.preferCover && covers.length > 0 && !lineSlot
-            ? covers[coverIdx++ % covers.length] : null;
-          let hx: number, hz: number;
-          if (cov) {
-            hx = cov.x; hz = cov.z;
-          } else if (lineSlot) {
-            // ★ 进攻队列：后排线位（层深已含射程站距）
-            hx = lineSlot.x; hz = lineSlot.z;
-          } else if (chase && n > 0) {
-            const ax = cx - playerX, az = cz - playerZ;
-            const al = Math.hypot(ax, az) || 1;
-            const sd = d.standoff || 45;
-            hx = playerX + (ax / al) * sd;
-            hz = playerZ + (az / al) * sd;
-          } else {
-            const hold = highPick ?? front;
-            hx = hold.x; hz = hold.z;
-          }
-          const far = n === 0 || Math.hypot(cx - hx, cz - hz) > 4;
-          kind = far ? 'advance' : 'protect';
-          target = { x: hx, z: hz };
-          urgency = far ? 1 : 0;
-          ttl = far ? 8 : 6;
-          break;
-        }
-        case 'flank': {
-          const side = assaultIdx++ % 2 === 0 ? 1 : -1;
-          const base = lineSlot ?? meleeAt(d.chase);
-          kind = 'flank';
-          target = { x: base.x - plan.approachZ * side * 6, z: base.z + plan.approachX * side * 6 };
-          break;
-        }
-        case 'screen': {
-          const si = screenIdx++;
-          if (buildSlot && d.screenDist > 0) {
-            const dx = playerX - buildSlot.x, dz = playerZ - buildSlot.z;
-            const dl = Math.hypot(dx, dz) || 1;
-            target = { x: buildSlot.x + (dx / dl) * d.screenDist, z: buildSlot.z + (dz / dl) * d.screenDist };
-          } else if (!chase && plan.chokepoints.length > 0 && !lineSlot) {
-            const c = plan.chokepoints[si % plan.chokepoints.length];
-            kind = 'protect';
-            target = { x: c.x, z: c.z };
-            ttl = 8;
-          } else {
-            target = lineSlot ?? meleeAt(d.chase);
-          }
-          break;
-        }
-        case 'regroup': {
-          kind = 'regroup';
-          target = { x: front.x - plan.approachX * 8, z: front.z - plan.approachZ * 8 };
-          break;
-        }
-        case 'press':
-        default:
-          if (s.type === 'flyer' && !lineSlot) {
-            // 飞行不排队，但也别叠在同一格：左右错开 9m
-            const side = flyerIdx++ % 2 === 0 ? 1 : -1;
-            const base = meleeAt(d.chase);
-            target = { x: base.x - plan.approachZ * side * 9, z: base.z + plan.approachX * side * 9 };
-          } else {
-            target = lineSlot ?? meleeAt(d.chase);
-          }
-          break;
-      }
-      // ★ 进攻选位（找坡面/近路）：追击中的推进行动 → 目标 8m 内取最高分格（高地/战壕/近路优先）
-      if (d.chase && (kind === 'advance' || kind === 'flank')) {
-        const ap = this.terrainScore.bestNear(target.x, target.z, 8);
-        if (ap) target = { x: ap.x, z: ap.z };
-      }
-      // ★ 防御选位（队长掩体判定）：驻守/集结目标 → 就近躲"硬墙后 / 战壕后"（≤14m）
-      if (kind === 'protect' || kind === 'regroup') {
-        const cov = this.terrainScore.bestCoverNear(target.x, target.z, 14, playerX, playerZ)
-          ?? this.terrainScore.bestTrenchNear(target.x, target.z, 8);
-        if (cov) target = { x: cov.x, z: cov.z };
-      }
-      // ★ 目标校验（防把队带进墙）：落点不可站（墙/坑水）→ 就近换可站最高分格
-      const tsc = this.terrainScore.scoreAt(target.x, target.z);
-      if (tsc === null || tsc <= -1e8) {
-        const fix = this.terrainScore.bestNear(target.x, target.z, 12)
-          ?? this.terrainScore.bestNear(target.x, target.z, 24);
-        if (fix) target = { x: fix.x, z: fix.z };
-      }
-      if (lineSlot) ttl = Math.min(ttl, 3);   // ★ 队形调整 = 短暂命令，不长期霸占
-      this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
+      // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
+      ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
+      const out = decideTarget(d, s, ctx, st);
+      this.swarm.issueOrder(s.id, { kind: out.kind, target: out.target, roe: out.roe, urgency: out.urgency, seq: 0 }, out.ttl);
     }
     // ⑤ 施工（**逐步拼装**，仅 S1）：施工队**任一成员**到达待建块 ≤5m →
     //   掩体块（每块 4m，每 8s 一块）/ 战壕块（每块 4×4m、1 层，每 10s 一块）
@@ -879,6 +783,11 @@ export class SwarmCommander {
   /** ★ 表分查询（执行层候选方向打分用；未就绪/表外 → null） */
   scoreAt(x: number, z: number): number | null {
     return this.terrainScore.scoreAt(x, z);
+  }
+
+  /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
+  isWaterAt(x: number, z: number): boolean {
+    return this.terrainScore.isWaterAt(x, z);
   }
 
   /** ★ 地形脏区（模式层任何挖改都调这个）：表局部重算（脏窗 + 邻环）

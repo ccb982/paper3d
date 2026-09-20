@@ -822,7 +822,6 @@ export class SwarmSystem {
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);
         if (role === 'pit' && h < -1.2) return true;
-        if (role === 'liquid' && h < -SWARM.DEEP_WATER) return true;
         return h - here > 1.0;   // 连续陡坡（≈40°+）也是墙
       };
       const res = pickSteer(

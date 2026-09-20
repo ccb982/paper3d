@@ -11,6 +11,8 @@
 /** 表只读接口（SwarmCommander 实现；避免 entity 层依赖） */
 export interface SteerTable {
   scoreAt(x: number, z: number): number | null;
+  /** ★ 水域查询（可选）：在水中时提高"上岸"方向的权重 */
+  isWaterAt?(x: number, z: number): boolean;
 }
 
 export interface SteerOut {
@@ -40,6 +42,8 @@ const W_TABLE = 0.8;
 const W_AVOID = 1.0;
 /** ★ 已在硬边界里时的逃离权重（优先选可走方向） */
 const ESCAPE_W = 1.4;
+/** ★ 在水里时的"上岸"权重（允许站水里，只是更想上岸） */
+const W_SHORE = 1.0;
 /** 表分归一（分数量级 ±6） */
 const TABLE_NORM = 6;
 
@@ -72,6 +76,7 @@ export function pickSteer(
   const ax = al > 1e-4 ? avoidX / al : 0;
   const az = al > 1e-4 ? avoidZ / al : 0;
   const aMag = Math.min(1, al);
+  const inWater = table?.isWaterAt ? table.isWaterAt(x, z) : false;
 
   let any = false;
   let sum = 0;
@@ -88,6 +93,10 @@ export function pickSteer(
     if (table) {
       const ts = table.scoreAt(x + cx * PROBE, z + cz * PROBE);
       if (ts !== null) s += W_TABLE * Math.max(-1, Math.min(1, ts / TABLE_NORM));
+      // ★ 水中：往岸上走的权重（允许站水里，只是更想上岸）
+      if (inWater && table.isWaterAt) {
+        s += table.isWaterAt(x + cx * PROBE, z + cz * PROBE) ? -W_SHORE : W_SHORE;
+      }
     }
     if (aMag > 0.05) s -= W_AVOID * aMag * Math.max(0, cx * ax + cz * az);
     _scores[k] = s;

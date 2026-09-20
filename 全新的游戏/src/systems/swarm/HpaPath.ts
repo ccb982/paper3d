@@ -378,7 +378,7 @@ export class HpaPath {
     const z = gz * CELL + CELL / 2;
     const h = raster.surfaceHeightAt(x, z);
     const role = raster.tileDefAt(x, z).genRole;
-    const pass = role !== 'pit' && !(role === 'liquid' && h < -0.8) && h >= -1.2;
+    const pass = role !== 'pit' && h >= -1.2;   // ★ 水域允许通行（不再挡 liquid）
     return { h, pass };
   }
 

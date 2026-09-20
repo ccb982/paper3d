@@ -87,7 +87,8 @@ export class SquadPathFinder {
         const h = raster.surfaceHeightAt(wx, wz);
         height[i] = h;
         const role = raster.tileDefAt(wx, wz).genRole;
-        if (role === 'pit' || (role === 'liquid' && h < -DEEP_WATER)) {
+        // ★ 水域允许通过（不再阻挡；站立/涉水由执行层处理）
+        if (role === 'pit') {
           blocked[i] = 1;
           cost[i] = 1;
           continue;
