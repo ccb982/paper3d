@@ -147,6 +147,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   role: UnitRole = 'grunt';
   /** 移动目标点（世界坐标；编队/寻路下发，hold 语义；null = 无目标） */
   moveTarget: { x: number; y: number; z: number } | null = null;
+  /** ★ 编队移动速度（m/s；steer 消费；随快照跨 LOD） */
+  moveSpeed = 2.5;
   /** 攻击类型：none/melee/ranged/bombard */
   attackType: UnitAttackType = 'melee';
   /** ★ 控制权（唯一切换点；只允许在 Phase 4 改） */
@@ -157,9 +159,16 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
 
   /** ★ steer 保持窗口（秒）：超时自动回落 local（不允许停摆，v2 铁律 3） */
   static readonly STEER_TTL = 0.5;
-  /** 最近一次 steer（hold；E4 消费，当前仅记录不参与移动决策） */
+  /** 最近一次 steer（hold；swarm 控制时每帧消费） */
   private readonly steerState: SteerIntent = { dirX: 0, dirZ: 0, speed: 0, source: 'none' };
   private steerFreshUntil = 0;
+  /** ★ E4a：steer 消费内的 moveBy 重入豁免（本地 AI 走 moveBy 一律被拦） */
+  private applyingSteer = false;
+
+  /** ★ 编队控制中（swarm 且 steer 新鲜）：本地 AI 只保留战斗决策（《实体架构.md》§9.4） */
+  get swarmControlled(): boolean {
+    return this.controlSource === 'swarm' && this.hasFreshSteer;
+  }
 
   /** Phase 1→2：swarm 下发移动意图（hold 语义；null = 清除） */
   applySteer(intent: SteerIntent | null): void {
@@ -169,11 +178,46 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     }
     Object.assign(this.steerState, intent);
     this.steerFreshUntil = performance.now() / 1000 + EnemyBase.STEER_TTL;
+    // ★ E4a：收到 steer = 控制权交给 swarm（超时回落由 applySteerMovement 执行）
+    this.controlSource = 'swarm';
   }
 
-  /** 是否有新鲜 steer（E4 起 Brain→移动消费；当前仅供调试/断言） */
+  /** 是否有新鲜 steer（steer 消费 / 调试用） */
   get hasFreshSteer(): boolean {
     return this.steerState.source !== 'none' && performance.now() / 1000 <= this.steerFreshUntil;
+  }
+
+  /** ★ E4a：消费 steer（编队槽位求导 + 局部避障 + 位移）；超时未刷新 → 回落 local */
+  private applySteerMovement(dt: number): void {
+    if (this.controlSource !== 'swarm') return;
+    if (!this.hasFreshSteer) {
+      this.controlSource = 'local';
+      return;
+    }
+    const s = this.steerState;
+    let dx = s.dirX, dz = s.dirZ;
+    if (this.moveTarget && s.source === 'formation') {
+      dx = this.moveTarget.x - this.entity.position.x;
+      dz = this.moveTarget.z - this.entity.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.55) {
+        this.controller.moveDir.x = 0;
+        this.controller.moveDir.y = 0;
+        return;
+      }
+      dx /= d; dz /= d;
+    }
+    if (dx === 0 && dz === 0) {
+      this.controller.moveDir.x = 0;
+      this.controller.moveDir.y = 0;
+      return;
+    }
+    // ★ 队长指令限速（ROE/压迫档）仍生效；本地 AI 的方向选择被让位
+    const mul = this.directiveKind !== 'none' ? this.directiveSpeedMul : 1;
+    const base = s.speed > 0 ? s.speed : this.moveSpeed;
+    this.applyingSteer = true;
+    this.moveBy(dx, dz, dt, base * mul);
+    this.applyingSteer = false;
   }
 
   /** ★ 被击（步骤 10 自主 LOD）：单位级免降格窗口 + 广播（小队/大队警觉由 WorldMode 转交 swarm） */
@@ -192,6 +236,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.corridorIdx !== undefined) this.corridorIdx = snap.corridorIdx;
     if (snap.role !== undefined) this.role = snap.role;
     if (snap.attackType !== undefined) this.attackType = snap.attackType;
+    if (snap.moveSpeed !== undefined && snap.moveSpeed > 0) this.moveSpeed = snap.moveSpeed;
     if (snap.isLeader !== undefined) this.isLeader = snap.isLeader;
     if (snap.lastSeenX !== undefined) this.lastSeenX = snap.lastSeenX;
     if (snap.lastSeenZ !== undefined) this.lastSeenZ = snap.lastSeenZ;
@@ -228,6 +273,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       formSlot: this.formSlot,
       corridorIdx: this.corridorIdx,
       role: this.role,
+      moveSpeed: this.moveSpeed,
       attackType: this.attackType,
       isLeader: this.isLeader,
       lastSeenX: this.lastSeenX,
@@ -348,6 +394,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     // ★ 蜂群预留字段：从名册透传（缺省 = 行为不变）
     this.role = opts.role ?? 'grunt';
     this.attackType = opts.attackType ?? 'melee';
+    // ★ E4a：编队速度 = 构造 moveSpeed（缺省 2.5，与本地 AI 同口径）
+    this.moveSpeed = this.controller.moveSpeed;
     this.attachToScene(scene);
     // ★ 远距影子强 LOD：80% 远敌无影子（lod≥2 全无）
     this.shadowFarCull = EnemyBase.SHADOW_FAR_CULL;
@@ -422,7 +470,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (this.isStunned) return;
     // ★ 距离分级：超出 AI 激活半径 → 休眠（chunk 波次可能在 100m+ 外生成，
     //   全图 AI 全速跑没意义——进入半径自动唤醒，状态机保留）
-    if (ctx.focusX !== undefined && ctx.focusZ !== undefined) {
+    //   ★ E4a：编队控制中不休眠（移动/Brain 由 swarm 负责；本地只跑战斗决策）
+    if (!this.swarmControlled && ctx.focusX !== undefined && ctx.focusZ !== undefined) {
       const dx = this.entity.position.x - ctx.focusX;
       const dz = this.entity.position.z - ctx.focusZ;
       const r = this.aiActiveRadius;
@@ -431,6 +480,15 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.aiStateMachine?.update(this, ctx);
     // ★ E5：执行层（原子覆盖）+ 保底攻击（EnemyBrain；纯搬运）
     this.brain.tick(this, dt, ctx);
+    // ★ E4a：swarm steer 消费（编队移动；本地 AI 的 moveBy 已被让位）
+    this.applySteerMovement(dt);
+    // ★ 感知上报（逻辑单位）：有目标 → 持续刷新最后目击（小队评级/选举/威胁数用）
+    const t = ctx.target;
+    if (t) {
+      this.lastSeenX = t.x;
+      this.lastSeenZ = t.z;
+      this.lastSeenAt = performance.now() / 1000;
+    }
   }
 
   /** ★ E5：施加眩晕（祖宗激光命中）——转发 EnemyBrain */
@@ -443,6 +501,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度）
    *   ★ 防掉坑：移动前探测前方地形，坑洞/悬崖/水面前提前停下转向 */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
+    // ★ E4a：编队控制中本地 AI 不再自行选路（steer 消费经 applyingSteer 豁免）
+    if (this.swarmControlled && !this.applyingSteer) return;
     // ★ E5：危险地形绕行由 EnemyLocomotion 解析（纯搬运）
     const r = this.locomotion.resolve(
       this.entity.position.x, this.entity.position.y, this.entity.position.z,

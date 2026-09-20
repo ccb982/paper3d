@@ -268,6 +268,16 @@ export class SquadTable {
     return !!s && s.alertUntil > now;
   }
 
+  /** ★ E4a：队质心写入 out（编队 steer 的本地坐标系基准；零分配） */
+  centroidOf(squadId: number, out: { x: number; z: number }): boolean {
+    const squad = this.squads.get(squadId);
+    if (!squad || squad.members.size === 0) return false;
+    const c = this.centroid(squad);
+    out.x = c.x;
+    out.z = c.z;
+    return true;
+  }
+
   all(): IterableIterator<Squad> { return this.squads.values(); }
 
   clear(): void {

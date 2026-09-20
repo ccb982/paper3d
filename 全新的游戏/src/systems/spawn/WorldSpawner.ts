@@ -536,7 +536,7 @@ export class WorldSpawner implements SwarmTierPort {
       x: e.position.x, y: e.position.y, z: e.position.z,
       hp: e.hp, maxHp: e.maxHp,
       defense: e.defense, attackPower: e.attackPower,
-      speed: stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
+      speed: e.moveSpeed > 0 ? e.moveSpeed : stats.speed, meleeDamage: stats.damage, meleeRange: stats.range,
       scale: def.scale,
       tier: AGENT_TIER_FAR,
       yaw: 0,
@@ -968,6 +968,8 @@ export class WorldSpawner implements SwarmTierPort {
       // ★ v2 蜂群预留字段（缺省值 = 行为不变）
       role: def.role,
       attackType: def.attackType,
+      // ★ E4a：编队移动速度（steer 下发速度；与代理层 stats.speed 同源）
+      moveSpeed: this.mobAgentStats(def).speed,
       // ★ 贴片朝向（缺省自动判定：无「后」帧 → billboard）
       billboard: def.billboard,
     }, this.deps.camera);

@@ -466,6 +466,7 @@ export class AgentPool {
       hp: this.hp[i], maxHp: this.maxHp[i],
       defense: this.defense[i], attackPower: this.attackPower[i],
       speed: this.speed[i],
+      moveSpeed: this.speed[i],
       meleeDamage: this.meleeDamage[i], meleeRange: this.meleeRange[i],
       scale: this.scale[i], tier: this.tier[i],
       yaw: this.yaw[i],

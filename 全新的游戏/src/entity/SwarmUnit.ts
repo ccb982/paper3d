@@ -202,6 +202,8 @@ export interface SwarmUnit {
   readonly altitude: number;
   /** 移动目标点（世界坐标；编队槽位/寻路下发，hold 语义；null = 无目标） */
   moveTarget: { x: number; y: number; z: number } | null;
+  /** ★ 编队移动速度（m/s；steer 下发速度的兜底；随快照跨 LOD） */
+  moveSpeed: number;
   /** 攻击类型 */
   attackType: UnitAttackType;
 }
@@ -217,6 +219,8 @@ export interface SwarmSnapshot {
   moveTargetX?: number;
   moveTargetY?: number;
   moveTargetZ?: number;
+  /** ★ 编队移动速度（m/s；代理侧 = AgentSnapshot.speed 同源） */
+  moveSpeed?: number;
   attackType?: UnitAttackType;
   /** v2：现有缺失项（降格不再依赖模式层猜） */
   intent?: number;

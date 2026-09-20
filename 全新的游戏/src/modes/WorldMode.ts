@@ -873,6 +873,8 @@ export class WorldMode implements IGameMode {
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
+    // ★ E4a：L3 实体编队 steer 的只读单位面（本帧敌人数组；升/降格即时反映）
+    this.swarmHooks.activeUnits = () => this.enemies;
     // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）+ S0 勘察
     wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) }); this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
