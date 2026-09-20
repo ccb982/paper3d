@@ -136,6 +136,30 @@ export class SquadTable {
     return squad;
   }
 
+  /** ★ 小队重组（§4.6）：把 uid 从原队移入 toSquad——**不触发"全灭上报"**（那不是伤亡）；
+   *  原队空了直接注销；队长空缺按选举补齐。返回队长变更供模式层镜像。 */
+  mergeMember(uid: number, toSquad: Squad): { from: number; leaderChanges: LeaderChange[] } | null {
+    const from = this.squadOf(uid);
+    if (!from || from.id === toSquad.id) return null;
+    from.members.delete(uid);
+    this.ofUid.set(uid, toSquad.id);
+    toSquad.members.set(uid, { hp: 0, maxHp: 0, x: 0, z: 0, lastSeenAt: 0 });
+    const leaderChanges: LeaderChange[] = [];
+    if (from.members.size === 0) {
+      this.squads.delete(from.id);
+      if (from.leaderUid === uid) leaderChanges.push({ uid, isLeader: false });
+    } else if (from.leaderUid === uid) {
+      leaderChanges.push({ uid, isLeader: false });
+      from.leaderUid = this.electLeader(from);
+      leaderChanges.push({ uid: from.leaderUid, isLeader: true });
+    }
+    if (toSquad.leaderUid === 0) {
+      toSquad.leaderUid = uid;
+      leaderChanges.push({ uid, isLeader: true });
+    }
+    return { from: from.id, leaderChanges };
+  }
+
   /** 成员信息低频同步（hp/位置/目击；选举与评级用） */
   syncMember(uid: number, hp: number, maxHp: number, x: number, z: number, lastSeenAt: number): void {
     const m = this.squadOf(uid)?.members.get(uid);

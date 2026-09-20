@@ -12,6 +12,7 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { samplerFor } from '../../services/map/TerrainSampler';
 import { WALL_DH } from './TerrainScore';
 
 const CELL = 4;
@@ -376,8 +377,9 @@ export class HpaPath {
   private sample(raster: RasterMap, gx: number, gz: number): { h: number; pass: boolean } {
     const x = gx * CELL + CELL / 2;
     const z = gz * CELL + CELL / 2;
-    const h = raster.surfaceHeightAt(x, z);
-    const role = raster.tileDefAt(x, z).genRole;
+    const smp = samplerFor(raster);
+    const h = smp.heightAt(raster, x, z);
+    const role = smp.roleAt(raster, x, z);
     const pass = role !== 'pit' && h >= -1.2;   // ★ 水域允许通行（不再挡 liquid）
     return { h, pass };
   }

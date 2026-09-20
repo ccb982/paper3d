@@ -14,6 +14,7 @@
 // ============================================================
 
 import type { RasterMap } from '../../services/map/RasterMap';
+import { samplerFor, type TerrainSampler } from '../../services/map/TerrainSampler';
 import type { BattlePosture } from './Posture';
 import type { DefensePlan } from './LandingTerrain';
 
@@ -108,11 +109,15 @@ export class TerrainScore {
   private readonly dug = new Uint8Array(SIDE * SIDE);
   /** 重建中间量：逐格高度（第二遍算坡面/墙面/战壕用；复用零分配） */
   private readonly heights = new Float32Array(SIDE * SIDE);
+  /** ★ 平滑分 S̃（3×3 均值；防掩体/阻挡格跳变把梯度带偏） */
+  private readonly sm = new Float32Array(SIDE * SIDE);
   /** 最近一次重建参数（局部重算 invalidateArea 必须复用同一套权重/加成） */
   private lastRaster: RasterMap | null = null;
   private lastPlan: DefensePlan | null = null;
   private lastBonus: Map<string, number> | null = null;
   private lastW: ScoreWeights | null = null;
+  /** ★ 统一采样器（同域一次采样多处复用） */
+  private smp: TerrainSampler | null = null;
 
   get isReady(): boolean { return this.ready; }
 
@@ -163,12 +168,14 @@ export class TerrainScore {
     this.sz = plan.cz - R;
     this.lastRaster = raster;
     this.lastPlan = plan;
+    this.smp = samplerFor(raster);
     this.lastW = weightsFor(p, posture);
     this.lastBonus = this.buildBonus(plan, builtCovers);
     for (let iz = 0; iz < SIDE; iz++) {
       for (let ix = 0; ix < SIDE; ix++) this.writeFeature(ix, iz);
     }
     this.classify(0, 0, SIDE - 1, SIDE - 1);
+    this.smoothWindow(0, 0, SIDE - 1, SIDE - 1);
     this.ready = true;
   }
 
@@ -194,6 +201,45 @@ export class TerrainScore {
       for (let ix = ix0; ix <= ix1; ix++) this.writeFeature(ix, iz);
     }
     this.classify(ix0, iz0, ix1, iz1);
+    this.smoothWindow(
+      Math.max(0, ix0 - 1), Math.max(0, iz0 - 1),
+      Math.min(SIDE - 1, ix1 + 1), Math.min(SIDE - 1, iz1 + 1),
+    );
+  }
+
+  /** ★ 平滑分 S̃（3×3 均值；未就绪/表外 → null） */
+  smoothAt(x: number, z: number): number | null {
+    if (!this.ready) return null;
+    const i = this.indexAt(x, z);
+    return i < 0 || !this.pass[i] ? null : this.sm[i];
+  }
+
+  /** ★ 平滑梯度（中心差分、单位向量；写入 out；表边/无梯度 → false）
+   *  用途：站位/施工点微调（≤2m 小步长）、集结点漂移、热力图可视化 */
+  gradientInto(x: number, z: number, out: { x: number; z: number }): boolean {
+    if (!this.ready) return false;
+    const i = this.indexAt(x, z);
+    if (i < 0 || !this.pass[i]) return false;
+    const ix = i % SIDE, iz = (i - ix) / SIDE;
+    if (ix === 0 || iz === 0 || ix === SIDE - 1 || iz === SIDE - 1) return false;
+    const gx = (this.sm[i + 1] - this.sm[i - 1]) / (2 * CELL);
+    const gz = (this.sm[i + SIDE] - this.sm[i - SIDE]) / (2 * CELL);
+    const l = Math.hypot(gx, gz);
+    if (l < 1e-6) { out.x = 0; out.z = 0; return false; }
+    out.x = gx / l; out.z = gz / l;
+    return true;
+  }
+
+  /** ★ 平台区（|∇S̃| 小且分不为负）：集结点/驻守优选位 */
+  isPlateau(x: number, z: number, eps = 0.25): boolean {
+    if (!this.ready) return false;
+    const i = this.indexAt(x, z);
+    if (i < 0 || !this.pass[i] || this.sm[i] < 0) return false;
+    const ix = i % SIDE, iz = (i - ix) / SIDE;
+    if (ix === 0 || iz === 0 || ix === SIDE - 1 || iz === SIDE - 1) return true;
+    const gx = Math.abs(this.sm[i + 1] - this.sm[i - 1]);
+    const gz = Math.abs(this.sm[i + SIDE] - this.sm[i - SIDE]);
+    return Math.hypot(gx, gz) < eps;
   }
 
   /** 该点评分（未就绪/表外 → null；不可站 → -1e9） */
@@ -310,9 +356,9 @@ export class TerrainScore {
     const x = this.sx + ix * CELL + CELL / 2;
     const z = this.sz + iz * CELL + CELL / 2;
     const i = iz * SIDE + ix;
-    const h = raster.surfaceHeightAt(x, z);
+    const h = this.smp ? this.smp.heightAt(raster, x, z) : raster.surfaceHeightAt(x, z);
     this.heights[i] = h;
-    const role = raster.tileDefAt(x, z).genRole;
+    const role = this.smp ? this.smp.roleAt(raster, x, z) : raster.tileDefAt(x, z).genRole;
     // ★ 硬边界只剩"坑洞/过低"（水域允许站立，软惩罚 + 上岸权重）
     const hardRole = role === 'pit' || h < -1.2;
     this.cls[i] = hardRole ? 3 : 0;
@@ -351,6 +397,29 @@ export class TerrainScore {
         const low = this.dug[i] === 1 || (n > 0 && (sum / n - h) > thr);
         this.trench[i] = low ? 1 : 0;
         if (low) this.score[i] += TRENCH_SCORE;
+      }
+    }
+  }
+
+  /** 3×3 均值平滑（窗口；阻挡格不可用 → -1e9） */
+  private smoothWindow(ix0: number, iz0: number, ix1: number, iz1: number): void {
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        if (!this.pass[i]) { this.sm[i] = -1e9; continue; }
+        let sum = 0, n = 0;
+        for (let dz = -1; dz <= 1; dz++) {
+          const jz = iz + dz;
+          if (jz < 0 || jz >= SIDE) continue;
+          for (let dx = -1; dx <= 1; dx++) {
+            const jx = ix + dx;
+            if (jx < 0 || jx >= SIDE) continue;
+            const j = jz * SIDE + jx;
+            if (!this.pass[j]) continue;
+            sum += this.score[j]; n++;
+          }
+        }
+        this.sm[i] = n > 0 ? sum / n : this.score[i];
       }
     }
   }

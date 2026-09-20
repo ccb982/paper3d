@@ -17,11 +17,17 @@ import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
+import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { engineMissionFor } from './UnitTactics';
 import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
+import { SQUAD_MAX, type Squad } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
+
+/** 重组/岗位计算用的复用暂存（零分配） */
+const _c0 = { x: 0, z: 0 };
+const _c1 = { x: 0, z: 0 };
 
 /** ★ 引擎侧信息面（《蜂群架构.md》§16.6）：战术决策的输入 */
 export interface BattalionView {
@@ -500,21 +506,24 @@ export class SwarmCommander {
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
 
-  /** ★ 岗位分派：新队 → 就近未被认领的岗（一次定终身，杜绝每拍轮转 → 左右摆） */
-  private ensurePosts(squads: readonly { id: number; members: Map<number, { x: number; z: number }> }[]): void {
+  /** ★ 岗位分派：新队 → 就近未被认领的岗（一次定终身，杜绝每拍轮转 → 左右摆）
+   *  ★ 兵种投影：盾队优先**隘口**（窄口吃线），其余按 高地/掩体位/战壕 */
+  private ensurePosts(
+    squads: readonly { id: number; type: string; members: Map<number, { x: number; z: number }> }[],
+  ): void {
     const plan = this.plan;
     if (!plan) return;
     const missing = squads.filter((s) => !this.postAssign.has(s.id));
     if (missing.length === 0) return;
     const posts: { x: number; z: number }[] = [];
     for (const c of plan.chokepoints) posts.push({ x: c.x, z: c.z });
+    const chokeN = posts.length;
     for (const g of plan.highGround) posts.push({ x: g.x, z: g.z });
     for (const p of plan.posts) posts.push({ x: p.x, z: p.z });
     for (const line of plan.trenchLines) for (const p of line) posts.push(p);
     if (posts.length === 0) return;
     const claimed = new Set<number>();
-    for (const [id, pos] of this.postAssign) {
-      void id;
+    for (const [, pos] of this.postAssign) {
       for (let i = 0; i < posts.length; i++) {
         if (posts[i].x === pos.x && posts[i].z === pos.z) { claimed.add(i); break; }
       }
@@ -525,32 +534,121 @@ export class SwarmCommander {
       if (n === 0) continue;
       cx /= n; cz /= n;
       let bi = -1, bd = Infinity;
-      for (let i = 0; i < posts.length; i++) {
-        if (claimed.has(i)) continue;
-        const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
-        if (d < bd) { bd = d; bi = i; }
+      // ★ 盾队先找隘口（80m 内最近未认领）；找不到再走通用列表
+      if (s.type === 'defense') {
+        for (let i = 0; i < chokeN; i++) {
+          if (claimed.has(i)) continue;
+          const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
+          if (d < bd && d < 80 * 80) { bd = d; bi = i; }
+        }
+      }
+      if (bi < 0) {
+        bd = Infinity;
+        for (let i = 0; i < posts.length; i++) {
+          if (claimed.has(i)) continue;
+          const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
+          if (d < bd) { bd = d; bi = i; }
+        }
       }
       if (bi < 0) bi = 0;   // 岗全被认领 → 允许共用最近岗
       if (bi >= 0) { claimed.add(bi); this.postAssign.set(s.id, { x: posts[bi].x, z: posts[bi].z }); }
     }
   }
 
-  /** ★ 工程队分派：保持已派未建块；否则挑最近未被其他队认领的块（防来回跑） */
+  /** ★ 成员级分块（工程并行）：把本队成员分到附近未认领块 → 直写 moveTarget
+   *  （大任务仍是 build；成员各自走向不同块，谁到了谁就施工） */
+  private spreadBuilders(s: { members: Map<number, { x: number; z: number }> }, cx: number, cz: number): void {
+    const pool = this.swarm.pool;
+    const near: number[] = [];
+    for (let i = 0; i < this.buildPieces.length && near.length < 3; i++) {
+      const q = this.buildPieces[i];
+      if (this.builtSlots.has(`${q.x},${q.z}`)) continue;
+      if ((q.x - cx) ** 2 + (q.z - cz) ** 2 > 40 * 40) continue;
+      near.push(i);
+    }
+    if (near.length === 0) return;
+    let k = 0;
+    for (const uid of s.members.keys()) {
+      const q = this.buildPieces[near[k % near.length]];
+      k++;
+      for (let i = 0; i < pool.count; i++) {
+        if (pool.swarmUid[i] !== uid) continue;
+        pool.moveTargetX[i] = q.x;
+        pool.moveTargetZ[i] = q.z;
+        break;
+      }
+    }
+  }
+
+  /** ★ 工程队分派：保持已派未建块；否则**在自己环带内**挑最近未认领块（少横穿），
+   *  本环带建完再跨环 → "环带作业"（外环→中环→内环） */
   private assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.buildAssign.get(squadId);
     if (cur !== undefined && cur < this.buildPieces.length
       && !this.builtSlots.has(`${this.buildPieces[cur].x},${this.buildPieces[cur].z}`)) return cur;
     const claimed = new Set<number>(this.buildAssign.values());
-    let best = -1, bestD = Infinity;
+    // 就近未建块 → 作为本队"环带基准"
+    let homeRing = -1, homeD = Infinity, anyBest = -1, anyD = Infinity;
     for (let i = 0; i < this.buildPieces.length; i++) {
       const q = this.buildPieces[i];
       if (this.builtSlots.has(`${q.x},${q.z}`) || claimed.has(i)) continue;
       const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d < bestD) { bestD = d; best = i; }
+      if (d < anyD) { anyD = d; anyBest = i; }
+      if (d < homeD) { homeD = d; homeRing = q.ring; }
     }
-    if (best < 0) return -1;
+    if (anyBest < 0) return -1;
+    // 环带内最近未认领块（优先级：环带基准 → 全局最近）
+    let ringBest = -1, ringD = Infinity;
+    for (let i = 0; i < this.buildPieces.length; i++) {
+      const q = this.buildPieces[i];
+      if (q.ring !== homeRing) continue;
+      if (this.builtSlots.has(`${q.x},${q.z}`) || claimed.has(i)) continue;
+      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
+      if (d < ringD) { ringD = d; ringBest = i; }
+    }
+    const best = ringBest >= 0 ? ringBest : anyBest;
     this.buildAssign.set(squadId, best);
     return best;
+  }
+
+  /** ★ 小队自动重组（1Hz，§4.6）：同键"不满半"小队 → 并入最近的同键队
+   *  只在双方都无进行中命令时进行；**不触发全灭上报**（走 mergeMember） */
+  private mergeTick(now: number): void {
+    const list = [...this.swarm.squads.all()].filter((s) =>
+      !s.singleton && !s.suicide && s.members.size > 0 && s.members.size * 2 <= SQUAD_MAX);
+    if (list.length === 0) return;
+    const pool = this.swarm.pool;
+    for (const small of list) {
+      const st = this.swarm.tactics.board.get(small.id);
+      if (st && now < st.until) continue;                      // 有命令在身 → 不并
+      if (!this.swarm.squads.centroidOf(small.id, _c0)) continue;
+      const cSmall = { x: _c0.x, z: _c0.z };
+      let best: Squad | null = null;
+      let bestD = Infinity;
+      for (const big of this.swarm.squads.all()) {
+        if (big === small || big.singleton || big.suicide) continue;
+        if (big.type !== small.type || big.mobKind !== small.mobKind
+          || big.builders !== small.builders || big.suicide !== small.suicide) continue;
+        if (big.members.size + small.members.size > SQUAD_MAX) continue;
+        if (!this.swarm.squads.centroidOf(big.id, _c1)) continue;
+        const d = (_c1.x - cSmall.x) ** 2 + (_c1.z - cSmall.z) ** 2;
+        if (d < bestD) { bestD = d; best = big; }
+      }
+      if (!best) continue;
+      for (const uid of [...small.members.keys()]) {
+        const res = this.swarm.squads.mergeMember(uid, best);
+        if (!res) continue;
+        for (const ch of res.leaderChanges) this.swarm.pushLeaderChange(ch.uid, ch.isLeader);   // ★ L3 队长镜像
+        for (let i = 0; i < pool.count; i++) {
+          if (pool.swarmUid[i] !== uid) continue;
+          pool.squadId[i] = best.id;
+          pool.battalionId[i] = best.battalionId;
+          break;
+        }
+      }
+      this.lastDecision = { squad: small.id, kind: 'merge', at: now };
+      break;   // 一拍只并一队（避免连锁抖动）
+    }
   }
 
   /** ★ 迷失回收（1Hz）：回队长寻路失败 → 目标改回队长；仍卡死 → 自我销毁
@@ -690,10 +788,13 @@ export class SwarmCommander {
         this.missionAssign.set(s.id, ma);
       }
       ctx.mission = ma.mission;
-      // ★ 施工块稳定分派（施工大任务下才有目标）
+      // ★ 施工块稳定分派（施工大任务下才有目标；成员再分到不同块 → 并行施工）
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        if (n > 0) this.spreadBuilders(s, cx / n, cz / n);
       } else {
         ctx.buildTarget = null;
       }
@@ -711,23 +812,25 @@ export class SwarmCommander {
       for (const s of builders) {
         const cd = this.buildCds.get(s.id) ?? 0;
         if (cd > 0) { this.buildCds.set(s.id, cd - dt); continue; }
-        const idx = this.buildAssign.get(s.id);
-        if (idx === undefined || idx < 0 || idx >= this.buildPieces.length) continue;
-        const piece = this.buildPieces[idx];
-        if (this.builtSlots.has(`${piece.x},${piece.z}`)) continue;
-        let atSite = false;
+        // ★ 就近动工：任一成员 ≤5m 的**最近未建块**（配合成员级分块 → 多块并行）
+        let piece: { kind: 'cover' | 'trench'; x: number; z: number } | null = null;
+        let bestD = 25;
         for (const m of s.members.values()) {
-          if (Math.hypot(m.x - piece.x, m.z - piece.z) <= 5) { atSite = true; break; }
+          for (const q of this.buildPieces) {
+            if (this.builtSlots.has(`${q.x},${q.z}`)) continue;
+            const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
+            if (d <= bestD) { bestD = d; piece = q; }
+          }
         }
-        if (!atSite) continue;
+        if (!piece) continue;
         if (piece.kind === 'cover') {
           this.buildCover(piece.x, piece.z, 'cover');
           this.builtCovers.push({ x: piece.x, z: piece.z });   // ★ 远程驻守点
-          this.terrainScore.invalidateArea(piece.x, piece.z, 12);   // ★ 新掩体 → 表局部重算
+          this.markTerrainDirty(piece.x, piece.z, 12);          // ★ 新掩体 → 表 + 采样缓存局部重算
           this.buildCds.set(s.id, 3);
         } else {
           this.digTrench?.(piece.x, piece.z);
-          this.terrainScore.invalidateArea(piece.x, piece.z, 12, true);   // ★ 战壕（挖掘标记）→ 表局部重算
+          this.markTerrainDirty(piece.x, piece.z, 12, true);    // ★ 战壕（挖掘标记）→ 表 + 采样缓存局部重算
           this.buildCds.set(s.id, 4);
         }
         this.builtSlots.add(`${piece.x},${piece.z}`);
@@ -745,6 +848,8 @@ export class SwarmCommander {
     if (this.tacticalAccum < 1) return;
     this.tacticalAccum = 0;
     const now = performance.now() / 1000;
+    // ★ 小队自动重组（§4.6）：同键不满半 → 并入最近同键队（有命令/交战中不并）
+    this.mergeTick(now);
     const ratings = this.swarm.ratings();
     // ① 队长上报 → 大队裁决（跨队决策上收：队长不再私聊响应）
     for (const r of ratings) {
@@ -932,6 +1037,8 @@ export class SwarmCommander {
    *  @param dug 显式挖掘（战壕）→ 打挖掘标记（战壕阈值放宽到 0.12m） */
   markTerrainDirty(x: number, z: number, r = 12, dug = false): void {
     this.terrainScore.invalidateArea(x, z, r, dug);
+    const raster = RasterMap.current;
+    if (raster) samplerFor(raster).invalidateArea(x, z, r);   // ★ 统一采样缓存同步失效
   }
 
   /** ★ 调试：态势一行摘要（覆盖层/测试读取） */

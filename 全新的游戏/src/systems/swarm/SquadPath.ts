@@ -16,6 +16,7 @@
 
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+import { samplerFor } from '../../services/map/TerrainSampler';
 import { SLOPE_DH, WALL_DH, SLOPE_COST } from './TerrainScore';
 
 const CELL = 4;
@@ -79,14 +80,15 @@ export class SquadPathFinder {
 
     // ---- 采样：阻碍 / 基础代价 / 高度 ----
     const cost = this.cost, blocked = this.blocked, height = this.height;
+    const smp = samplerFor(raster);
     for (let iz = 0; iz < rows; iz++) {
       for (let ix = 0; ix < cols; ix++) {
         const i = iz * cols + ix;
         const wx = (minX + ix) * CELL + CELL / 2;
         const wz = (minZ + iz) * CELL + CELL / 2;
-        const h = raster.surfaceHeightAt(wx, wz);
+        const h = smp.heightAt(raster, wx, wz);
         height[i] = h;
-        const role = raster.tileDefAt(wx, wz).genRole;
+        const role = smp.roleAt(raster, wx, wz);
         // ★ 水域允许通过（不再阻挡；站立/涉水由执行层处理）
         if (role === 'pit') {
           blocked[i] = 1;

@@ -903,6 +903,11 @@ export class SwarmSystem {
     }
   }
 
+  /** ★ 外部（引擎重组等）产生的队长变更：入同一通道，下一帧随 hooks 广播（L3 镜像用） */
+  pushLeaderChange(uid: number, isLeader: boolean): void {
+    this.leaderChanges.push({ uid, isLeader });
+  }
+
   /** swap-remove 包装：释放槽/令牌 + 修正槽主索引；★ public（迷失销毁等非击杀离场用，
    *  调用方负责 ledger.noteRemoved）；unregister=false（升格路径）→ 小队归属/队长保留 */
   removeAgent(i: number, unregister = true, killed = false): void {

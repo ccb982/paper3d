@@ -86,6 +86,8 @@ export interface DecideOut {
 
 /** 复用输出（零分配） */
 const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage', ttl: 6, urgency: 0, mission: '' };
+/** ★ ∇S̃ 梯度复用（微调用） */
+const _grad = { x: 0, z: 0 };
 
 /** 部署选点（读表投影全部在此；返回复用对象，调用方立即消费） */
 export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, st: DecideState): DecideOut {
@@ -214,7 +216,15 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     }
     case 'regroup': {
       _out.kind = 'regroup';
-      _out.target = { x: ctx.front.x - plan.approachX * 8, z: ctx.front.z - plan.approachZ * 8 };
+      // ★ 后勤后置（读表代理位）：后场基准 = 正面 − 前进方向×14；若分到"靠近后场"的稳定岗 → 用岗
+      const rear = ctx.post.get(s.id);
+      const bx = ctx.front.x - plan.approachX * 14;
+      const bz = ctx.front.z - plan.approachZ * 14;
+      if (rear && (rear.x - bx) ** 2 + (rear.z - bz) ** 2 <= 40 * 40) {
+        _out.target = { x: rear.x, z: rear.z };
+      } else {
+        _out.target = { x: bx, z: bz };
+      }
       break;
     }
     case 'press':
@@ -252,6 +262,11 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
         ctx.hold.delete(s.id);
       }
     }
+  }
+  // ★ ∇S̃ 微调（≤2m）：驻守/集结点沿平滑梯度上坡（避开格边缘/掩体边缘的跳变带）
+  if ((_out.kind === 'protect' || _out.kind === 'regroup')
+    && ctx.table.gradientInto(_out.target.x, _out.target.z, _grad)) {
+    _out.target = { x: _out.target.x + _grad.x * 2, z: _out.target.z + _grad.z * 2 };
   }
   // 目标校验：落点不可站（墙/坑水）→ 就近可站最高分格
   const tsc = ctx.table.scoreAt(_out.target.x, _out.target.z);
