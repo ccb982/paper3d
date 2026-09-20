@@ -47,6 +47,12 @@ export class SwarmCommander {
   private readonly postureMachine = new PostureMachine();
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
+  /** ★ 战役级闭环（1Hz）：小队评级/求援/受阻 → 大队改派（自下而上的反馈闭环） */
+  private tacticalAccum = 0;
+  private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
+  private readonly supportCd = new Map<number, number>();
+  /** 最近一次大队决策（调试/测试读取） */
+  lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
   private readonly builtCovers: { x: number; z: number }[] = [];
   /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
@@ -135,6 +141,8 @@ export class SwarmCommander {
       }
     }
     this.builtSlots.clear();
+    this.progress.clear();      // ★ 换落点：战役级闭环状态复位
+    this.supportCd.clear();
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
@@ -304,6 +312,8 @@ export class SwarmCommander {
       }
     }
     this.engineeringTick(dt, playerX, playerZ);
+    // ★ 战役级闭环（1Hz，晚于工程拍 → 反馈决策可覆盖基础部署）
+    this.tacticalTick(dt, playerX, playerZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
     if (this.spawnQueue.length > 0) {
       this.spawnAccum += dt;
@@ -473,6 +483,102 @@ export class SwarmCommander {
     }
   }
 
+  /** ★ 战役级闭环（1Hz）：**自下而上的反馈 → 大队重新决策**
+   *  读：小队评级（血量/接敌/存活）+ 队长上报（求援/共享目击）+ 推进进度（受阻）
+   *  写：覆盖该队的引擎命令（改派抽援 / 重算路径 / 换目标 / 残血撤离）
+   *  规则集中在此；态势与兵种配置仍作兜底。 */
+  private tacticalTick(dt: number, playerX: number, playerZ: number): void {
+    if (!this.plan) return;
+    this.tacticalAccum += dt;
+    if (this.tacticalAccum < 1) return;
+    this.tacticalAccum = 0;
+    const now = performance.now() / 1000;
+    const ratings = this.swarm.ratings();
+    // ① 队长上报 → 大队裁决（跨队决策上收：队长不再私聊响应）
+    for (const r of ratings) {
+      const msgs = this.swarm.tactics.board.takeFor(r.squadId, now);
+      for (const m of msgs) {
+        if (m.kind !== 'requestSupport' && m.kind !== 'shareContact') continue;
+        const helper = this.pickHelper(ratings, m.x, m.z, r.squadId, now);
+        if (!helper) continue;
+        this.swarm.issueOrder(helper.squadId, {
+          kind: 'advance', target: { x: m.x, z: m.z }, roe: 'engage', seq: 0,
+        }, 6);
+        this.supportCd.set(helper.squadId, now + 10);
+        this.lastDecision = { squad: helper.squadId, kind: m.kind === 'requestSupport' ? 'support' : 'scout', at: now };
+      }
+    }
+    // ② 逐队：受阻重试/换目标 + 残血撤离（按逐兵种 retreatHp）
+    for (const r of ratings) {
+      const squad = this.swarm.squads.get(r.squadId);
+      const st = this.swarm.tactics.board.get(r.squadId);
+      const tgt = st?.order.target;
+      if (tgt) {
+        const d = Math.hypot(r.cx - tgt.x, r.cz - tgt.z);
+        const pr = this.progress.get(r.squadId);
+        if (!pr || d < pr.d - 1.5) {
+          this.progress.set(r.squadId, { d, at: now, stall: 0 });
+        } else if (now - pr.at > 8 && d > 8) {
+          pr.stall++;
+          if (pr.stall <= 1 && st) {
+            st.pathAt = 0; st.pathFailedAt = 0; st.order.path = undefined;   // 重算路径重试
+            this.lastDecision = { squad: r.squadId, kind: 'retry', at: now };
+          } else {
+            const alt = this.alternateTarget(r.cx, r.cz, tgt);
+            this.swarm.issueOrder(r.squadId, { kind: 'advance', target: alt, roe: 'engage', seq: 0 }, 8);
+            this.lastDecision = { squad: r.squadId, kind: 'retarget', at: now };
+          }
+          pr.at = now; pr.d = d;
+        }
+      }
+      const dct = resolveDoctrine(r.type, squad?.builders === true,
+        squad ? this.mobTactics?.(squad.mobKind) ?? null : null);
+      if (dct.retreatHp > 0 && r.hpRatio <= dct.retreatHp && st?.order.kind !== 'retreat') {
+        const ax = r.cx - playerX, az = r.cz - playerZ;
+        const al = Math.hypot(ax, az) || 1;
+        this.swarm.issueOrder(r.squadId, {
+          kind: 'retreat',
+          target: { x: r.cx + (ax / al) * 18, z: r.cz + (az / al) * 18 },
+          seq: 0,
+        }, 6);
+        this.lastDecision = { squad: r.squadId, kind: 'withdraw', at: now };
+      }
+    }
+  }
+
+  /** 抽援对象：最近的空闲健康队（同队除外；10s 冷却防连环抽调） */
+  private pickHelper(
+    ratings: SquadRating[], x: number, z: number, exclude: number, now: number,
+  ): SquadRating | null {
+    let best: SquadRating | null = null;
+    let bestD2 = Infinity;
+    for (const r of ratings) {
+      if (r.squadId === exclude || r.status !== 'idle' || r.hpRatio < 0.5) continue;
+      if ((this.supportCd.get(r.squadId) ?? 0) > now) continue;
+      const d2 = (r.cx - x) ** 2 + (r.cz - z) ** 2;
+      if (d2 < bestD2) { bestD2 = d2; best = r; }
+    }
+    return best;
+  }
+
+  /** 受阻换目标：取最近的高地/掩体位；无地形点 → 原目标横向偏移 12m */
+  private alternateTarget(cx: number, cz: number, tgt: { x: number; z: number }): { x: number; z: number } {
+    const plan = this.plan;
+    if (!plan) return tgt;
+    let best: { x: number; z: number } | null = null;
+    let bestD = Infinity;
+    for (const g of plan.highGround) {
+      const d = (g.x - cx) ** 2 + (g.z - cz) ** 2;
+      if (d < bestD) { bestD = d; best = { x: g.x, z: g.z }; }
+    }
+    for (const c of plan.coverSlots) {
+      const d = (c.x - cx) ** 2 + (c.z - cz) ** 2;
+      if (d < bestD) { bestD = d; best = { x: c.x, z: c.z }; }
+    }
+    if (best) return best;
+    return { x: tgt.x - plan.approachZ * 12, z: tgt.z + plan.approachX * 12 };
+  }
+
   /** ★ 调试/测试：强制切态势（覆盖态势机自动转移） */
   setPosture(p: BattlePosture): void {
     this.postureMachine.set(p, performance.now() / 1000);
@@ -500,6 +606,9 @@ export class SwarmCommander {
     this.postureMachine.reset();
     this.battlePosture = 'fortify';
     this.aliveAtPosture = 0;
+    this.tacticalAccum = 0;
+    this.progress.clear();
+    this.supportCd.clear();
   }
 
   private dispatchMission(): void {

@@ -384,26 +384,8 @@ export class SquadLeaderAI {
       if (!r) continue;
       const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];
       const d = Math.hypot(r.cx - px, r.cz - pz);
-      // ---- ★ 步骤 9e：小队间消息（队长↔队长，经黑板中转） ----
-      const msgs = tactics.board.takeFor(s.id, now);
-      let reacted = false;
-      for (const m of msgs) {
-        if (m.kind === 'requestSupport') {
-          // 友邻求援：自己还健康 → 赴援（向求援点推进）
-          if (r.hpRatio > 0.5) {
-            tactics.issue(s.id, { kind: 'advance', target: { x: m.x, z: m.z }, seq: 0 }, now, LEADER_TTL, 'leader');
-            reacted = true;
-          }
-        } else if (m.kind === 'shareContact') {
-          // 共享目击：自己没情报 → 过去看看
-          const fresh = r.lastSeenAt !== undefined && now - r.lastSeenAt <= 3;
-          if (!fresh) {
-            tactics.issue(s.id, { kind: 'advance', target: { x: m.x, z: m.z }, seq: 0 }, now, LEADER_TTL, 'leader');
-            reacted = true;
-          }
-        }
-      }
-      if (reacted) continue;
+      // ★ 2026-09-21：跨队决策**上收大队**——队长不再消费/响应小队间消息
+      //   （求援/共享目击由 SwarmCommander.tacticalTick 裁决并改派；此处只管本队）
       // ★ 队长看队内具体状态：过半成员残血 → 全队撤（即使队均血量还行）
       let low = 0, alive = 0;
       for (const m of s.members.values()) {
