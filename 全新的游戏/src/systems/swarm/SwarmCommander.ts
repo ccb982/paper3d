@@ -35,11 +35,15 @@ export class SwarmCommander {
   digTrench: ((x: number, z: number) => void) | null = null;
   /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**） */
   spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean) => void) | null = null;
+  /** ★ 按 mobIndex 生成一只（名单重放用；模式层注入） */
+  spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
+  /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
+  private recalledRoster: { mobIndex: number; role: UnitRole; count: number }[] | null = null;
   /** ★ 大队：一队 30 怪；一局多个 */
   private battalionCount = 0;
   private reinforceAccum = 0;
   /** ★ 待登场队列（**逐步登场**；总攻可一次性整编队） */
-  private spawnQueue: { x: number; z: number; role: UnitRole; elite: boolean }[] = [];
+  private spawnQueue: { x: number; z: number; role: UnitRole; elite: boolean; mobIndex: number }[] = [];
   private spawnAccum = 0;
   /** 登场间隔（秒/只） */
   private static readonly SPAWN_INTERVAL = 1.5;
@@ -96,44 +100,87 @@ export class SwarmCommander {
     }
     this.builtSlots.clear();
     this.stage = 'S1';
-    // ★ 兵力创建（全权在本层）：首批驻防大队（S0）
-    this.spawnBattalion();
+    // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
+    //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
+    this.spawnQueue.length = 0;
+    this.spawnAccum = 0;
+    this.battalionCount = 0;
+    // ★ 兵力创建（全权在本层）：起飞回收过 → 用**回收名单**做编成（数量/兵种照旧），
+    //   放置位置仍由本层战术逻辑（来向楔形 + 落点环）决定；否则起全新驻防大队
+    this.spawnBattalion(true);
     return this.plan;
   }
 
+  /** ★ 起飞回收：只交**名单**（兵种属性 + 数量）——怎么布置由本层决定 */
+  setRecalledRoster(roster: { mobIndex: number; role: UnitRole; count: number }[]): void {
+    this.recalledRoster = roster.length > 0 ? roster : null;
+  }
+
   /** ★ 生成一个大队（30 怪；按角色配比 · 沿外环弧部署；后续大队更远列阵）
-   *  @param instant 总攻用：true = 一次性上整编队；false = **逐步登场**（队列滴灌） */
+   *  编成来源：优先**起飞回收名单**（兵种/数量照旧；放置仍按本层战术布置），
+   *  否则标准配比（±2 随机 + 概率精英）。
+   *  @param instant 总攻/落地用：true = 一次性上整编队；false = **逐步登场**（队列滴灌） */
   spawnBattalion(instant = false): boolean {
     const plan = this.plan;
-    if (!plan || !this.spawnMob || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
+    if (!plan || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
+    const roster = this.recalledRoster;
+    const useRoster = !!roster && !!this.spawnMobIndex;
+    if (!useRoster && !this.spawnMob) return false;
     this.battalionCount++;
-    // ★ 配比（基准 30；2026-09-19 用户定调）：盾 6 / 突击 10 / 远程 6 / 后勤 4 / 飞行 4
-    //   每类 ±2 随机浮动（下限 1）；另概率额外带 1~2 只精英怪
-    const base: [UnitRole, number][] = [
-      ['shield', 6], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 4],
-    ];
-    const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
+    const entries: { role: UnitRole; elite: boolean; mobIndex: number }[] = [];
+    if (useRoster) {
+      this.recalledRoster = null;
+      for (const r of roster!) {
+        for (let i = 0; i < r.count; i++) entries.push({ role: r.role, elite: false, mobIndex: r.mobIndex });
+      }
+    } else {
+      // ★ 配比（基准 30）：盾 6 / 突击 10 / 远程 6 / 后勤 4 / 飞行 4；每类 ±2；精英 0~2
+      const base: [UnitRole, number][] = [
+        ['shield', 6], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 4],
+      ];
+      const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
+      for (const [role, n] of comp) for (let i = 0; i < n; i++) entries.push({ role, elite: false, mobIndex: -1 });
+      const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
+      for (let i = 0; i < eliteN; i++) entries.push({ role: 'assault', elite: true, mobIndex: -1 });
+    }
+    if (entries.length === 0) return false;
     const baseA = Math.atan2(plan.approachZ, plan.approachX);
     // ★ 集结区（正面楔形：±30°、≈96m 起）——从来向远处进场，**不围圈**
     const ringR = 96 + (this.battalionCount - 1) * 8;
-    // 精英：50% 额外 1 只，20% 再多 1 只（沿环布置，比例不计入基准 30）
-    const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
-    let total = comp.reduce((s, [, n]) => s + n, 0) + eliteN;
+    const total = entries.length;
+    // ★ 回收名单部署：优先用**地形分析产出的可站点**（掩体位/高地/战壕线）做锚点
+    const anchors = useRoster ? this.placementAnchors(plan) : null;
     let k = 0;
-    const push = (role: UnitRole, elite: boolean): void => {
-      const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 6);   // 来向 ±30°（正面楔形）
-      const rr = ringR + (Math.random() - 0.5) * 10;              // 小幅纵深抖动
-      const x = plan.cx + Math.cos(a) * rr;
-      const z = plan.cz + Math.sin(a) * rr;
+    for (const e of entries) {
+      let x: number, z: number;
+      if (anchors && anchors.length > 0) {
+        const a = anchors[k % anchors.length];
+        x = a.x + (Math.random() - 0.5) * 2;
+        z = a.z + (Math.random() - 0.5) * 2;
+      } else {
+        const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 6);
+        const rr = ringR + (Math.random() - 0.5) * 10;
+        x = plan.cx + Math.cos(a) * rr;
+        z = plan.cz + Math.sin(a) * rr;
+      }
       k++;
-      if (instant) this.spawnMob?.(x, z, role, elite);
-      else this.spawnQueue.push({ x, z, role, elite });   // ★ 逐步登场
-    };
-    for (const [role, n] of comp) {
-      for (let i = 0; i < n; i++) push(role, false);
+      if (instant) {
+        if (e.mobIndex >= 0 && this.spawnMobIndex) this.spawnMobIndex(x, z, e.mobIndex);
+        else this.spawnMob?.(x, z, e.role, e.elite);
+      } else {
+        this.spawnQueue.push({ x, z, role: e.role, elite: e.elite, mobIndex: e.mobIndex });
+      }
     }
-    for (let i = 0; i < eliteN; i++) push('assault', true);
     return true;
+  }
+
+  /** ★ 可站部署锚点（地形分析产物：掩体位 + 高地 + 战壕线；空 = 无可用点） */
+  private placementAnchors(plan: DefensePlan): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    for (const c of plan.coverSlots) out.push({ x: c.x, z: c.z });
+    for (const g of plan.highGround) out.push({ x: g.x, z: g.z });
+    for (const line of plan.trenchLines) for (const p of line) out.push(p);
+    return out;
   }
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
@@ -186,7 +233,8 @@ export class SwarmCommander {
       while (this.spawnAccum >= SwarmCommander.SPAWN_INTERVAL && this.spawnQueue.length > 0) {
         this.spawnAccum -= SwarmCommander.SPAWN_INTERVAL;
         const u = this.spawnQueue.shift()!;
-        this.spawnMob?.(u.x, u.z, u.role, u.elite);
+        if (u.mobIndex >= 0 && this.spawnMobIndex) this.spawnMobIndex(u.x, u.z, u.mobIndex);
+        else this.spawnMob?.(u.x, u.z, u.role, u.elite);
       }
     }
     // ★ 增援：战术启动后每 REINFORCE_S 再来一个大队（上限 BATTALION_MAX）
@@ -307,6 +355,7 @@ export class SwarmCommander {
     this.engAccum = 0;
     this.buildCd = 0;
     this.resendAccum = 0;
+    this.recalledRoster = null;
   }
 
   private dispatchMission(): void {

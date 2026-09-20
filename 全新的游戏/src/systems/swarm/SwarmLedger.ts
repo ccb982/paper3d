@@ -11,8 +11,10 @@
 //   alive    = 当前存活；引擎创建兵 +1；被击杀 −1；被 LOD 清除 −1；其他离场 −1
 //   kills    = 击杀计数；只有"被击杀"才 +1（LOD 清除 / 回收**不算**）
 //   total    = 当日兵力计划（beginDay 按威胁预计算一次后冻结，只作生成闸门）
-//   spawned  = 累计生成（只增；闸门 = spawned < total）
-//   recalled = 远距 LOD 清除累计（不算击杀；alive 已在清除时 −1）
+//   spawned  = 累计生成（只增）
+//   recalled = 回收/清除累计（存活 −1，不算击杀）
+//   ★ 生成闸门 = (spawned − recalled − removed) < total：
+//     回收的兵**归还编制**，换登陆点后可原样重新统一布置（回收数 ≈ 下次放置数）。
 // ============================================================
 
 import type { ThreatProfile } from './EnemyScaling';
@@ -23,6 +25,8 @@ export interface SwarmLedgerSnapshot {
   alive: number;
   kills: number;
   recalled: number;
+  /** 非击杀离场（可省：seed 时按 spawned − alive − kills − recalled 推导） */
+  removed?: number;
 }
 
 export class SwarmLedger {
@@ -36,15 +40,22 @@ export class SwarmLedger {
   kills = 0;
   /** 远距 LOD 清除累计（不算击杀） */
   recalled = 0;
+  /** 其他非击杀离场累计（主动清场等；同样归还编制） */
+  removed = 0;
+
+  /** ★ 已消耗的计划额度（场上 + 已击杀；回收/离场不算） */
+  get deployed(): number {
+    return Math.max(0, this.spawned - this.recalled - this.removed);
+  }
 
   /** 还能生成多少（total <= 0 = 未初始化 → 无限，交 beginDay 兜底） */
   get remaining(): number {
-    return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.total - this.spawned);
+    return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.total - this.deployed);
   }
 
   /** 生成闸门（唯一判据；生成口在 SwarmSystem.spawn） */
   canSpawn(): boolean {
-    return this.total <= 0 || this.spawned < this.total;
+    return this.total <= 0 || this.deployed < this.total;
   }
 
   /** 换日 / 首次出击：按威胁预计算总数并清零 */
@@ -54,6 +65,7 @@ export class SwarmLedger {
     this.alive = 0;
     this.kills = 0;
     this.recalled = 0;
+    this.removed = 0;
   }
 
   /** 同日再出击：从存档镜像回灌（进度累计，总数不重算） */
@@ -62,20 +74,25 @@ export class SwarmLedger {
     this.spawned = s.spawned;
     this.kills = s.kills;
     this.recalled = s.recalled;
-    // 旧档无 alive：按 生成 − 击杀 − 清除 兜底
+    // 旧档无 alive：按 生成 − 击杀 − 回收 兜底
     this.alive = typeof s.alive === 'number' && s.alive >= 0
       ? s.alive
       : Math.max(0, s.spawned - s.kills - s.recalled);
+    // 旧档无 removed：按不变量推导
+    this.removed = typeof s.removed === 'number' && s.removed >= 0
+      ? s.removed
+      : Math.max(0, s.spawned - this.alive - s.kills - s.recalled);
   }
 
   /** 镜像导出（写档用；复用 out 零分配） */
   snapshot(out?: SwarmLedgerSnapshot): SwarmLedgerSnapshot {
-    const o = out ?? { total: 0, spawned: 0, alive: 0, kills: 0, recalled: 0 };
+    const o = out ?? { total: 0, spawned: 0, alive: 0, kills: 0, recalled: 0, removed: 0 };
     o.total = this.total;
     o.spawned = this.spawned;
     o.alive = this.alive;
     o.kills = this.kills;
     o.recalled = this.recalled;
+    o.removed = this.removed;
     return o;
   }
 
@@ -101,9 +118,10 @@ export class SwarmLedger {
     this.alive = Math.max(0, this.alive - count);
   }
 
-  /** 其他非击杀离场（回收无定义体 / 主动清场）：存活 −1（不算击杀） */
+  /** 其他非击杀离场（主动清场等）：存活 −1（不算击杀；同样归还编制） */
   noteRemoved(count = 1): void {
     if (count <= 0) return;
+    this.removed += count;
     this.alive = Math.max(0, this.alive - count);
   }
 
@@ -113,6 +131,7 @@ export class SwarmLedger {
     this.alive = 0;
     this.kills = 0;
     this.recalled = 0;
+    this.removed = 0;
   }
 }
 

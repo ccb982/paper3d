@@ -102,10 +102,10 @@ export interface GameSession {
     /** ★ 当天敌人进度（2026-09-20 重做：**蜂群引擎直管**，存档仅镜像）。
      *  运行时唯一真源 = SwarmSystem.ledger（SwarmLedger）：
      *  total = 当日敌人总数（引擎 beginDay 按威胁预计算后冻结，只作生成闸门）；
-     *  spawned = 累计生成（只增；生成闸门 = spawned < total）；
+     *  spawned = 累计生成（只增；生成闸门 = spawned − recalled − removed < total）；
      *  alive = 当前存活（引擎内部计数，不上 HUD；生成 +1 / 击杀 −1 / LOD 清除 −1 / 其他离场 −1）；
      *  kills = 击杀计数（只有击杀 +1；LOD 清除不算）；
-     *  recalled = 远距 LOD 清除累计（存活已 −1，不算击杀）。
+     *  recalled = 回收累计（存活已 −1，不算击杀；**归还编制** → 换登陆点可重新统一布置）。
      *  跨出击持久（同日多次出击累计）；WorldMode 每 0.1s 回写镜像。 */
     enemies?: {
       total: number;

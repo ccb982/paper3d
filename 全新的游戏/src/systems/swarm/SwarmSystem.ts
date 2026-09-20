@@ -226,9 +226,11 @@ export class SwarmSystem {
     this.casualtyUnsub = eventBus.on('enemy_killed', (p) => {
       if (p.uid > 0) this.ledger.reportCasualty(1);
     });
-    // ★ 非击杀离场：存活 −1（不算击杀）
+    // ★ 非击杀离场：存活 −1；recycled 视为回收（归还编制、计 recalled）
     this.removedUnsub = eventBus.on('enemy_removed', (p) => {
-      if (p.uid > 0) this.ledger.noteRemoved(1);
+      if (p.uid <= 0) return;
+      if (p.reason === 'recycled') this.ledger.noteRecall(1);
+      else this.ledger.noteRemoved(1);
     });
   }
 
@@ -1108,7 +1110,17 @@ export class SwarmSystem {
     return { far, mid };
   }
 
-  clear(): void {
+  /** ★ 舰船起飞统一回收：清空全部存活代理 + 小队/命令/指挥状态；
+   *  账本按 **LOD 清除**口径记 recalled（存活 −1，不算击杀，**归还编制**）。
+   *  实体侧由模式层 retire('recycled') → enemy_removed(reason='recycled')（同一口径）。 */
+  recallAll(): void {
+    const n = this.pool.count;
+    if (n > 0) this.ledger.noteRecall(n);
+    this.resetRuntime();
+  }
+
+  /** 运行时状态清空（不含账本；clear 与 recallAll 共用） */
+  private resetRuntime(): void {
     this.pool.clear();
     this.squads.clear();
     this.tactics.clear();
@@ -1125,8 +1137,13 @@ export class SwarmSystem {
     this.lastPlayerZ = 0;
     this.steerAccum = 0;
     this.nav.clear();
-    this.ledger.clear();
     this.atoms.clear();
+  }
+
+  /** 模式退出清理（运行时 + 账本） */
+  clear(): void {
+    this.resetRuntime();
+    this.ledger.clear();
   }
 
   dispose(): void {

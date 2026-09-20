@@ -868,8 +868,9 @@ export class WorldMode implements IGameMode {
     // ★ E4a：L3 实体编队 steer 的只读单位面（本帧敌人数组；升/降格即时反映）
     this.swarmHooks.activeUnits = () => this.enemies;
     // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）
-    //   ★ 地形获取 / 战术布置延后到 **finishDock**（真实落点）：enter 时舰位还在航路上，
-    //     可能在水面/空中 → 扫描退化成空布置（2026-09-20 实测踩坑）。
+    //   ★ 地形获取 / 战术布置在 **finishDock**（每次落地的真实落点）执行：
+    //     enter 时舰位还在航路上（可能在水面）→ 扫描会退化成空布置；
+    //     舰船会不断移动换登陆点 → 每次落地必须重扫、重布置。
     wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
@@ -3074,8 +3075,8 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
-    // ★ S0 勘察 + 战术布置：用**真实落点**扫描地形（每次出击首次触地做一次）
-    if (!this.swarm.commander.defensePlan) this.swarm.commander.planDefense(sp.x, sp.z);
+    // ★ S0 勘察 + 战术布置：**每次落地都重做**（舰船会不断移动换登陆点 → 地形/布置必须重扫）
+    this.swarm.commander.planDefense(sp.x, sp.z);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -3633,6 +3634,8 @@ export class WorldMode implements IGameMode {
     const dx = p.x - s.x, dz = p.z - s.z;
     if (dx * dx + dz * dz > WorldMode.REBOARD_RADIUS ** 2) return false;
     allySystem.disposeAll();
+    // ★ 起飞统一回收：全部存活敌人（实体 + 代理）撤离 —— 不算击杀、不结算掉落
+    this.spawner.recallAllEnemies();
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.setPhase('sail');        // ★ 登船起飞：静音 + 粗块 LOD + 藏水面 + 飞行模式（统一收口）

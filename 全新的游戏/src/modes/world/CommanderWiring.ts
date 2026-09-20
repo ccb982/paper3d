@@ -53,4 +53,17 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
     if (def) d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1);
   };
+  // ★ 起飞回收名单重放：引擎给锚点，这里只做**可站性微调**（水/坑里就近挪几米），
+  //   保证"回收数 = 放置数"（布置决策仍在引擎）
+  d.commander.spawnMobIndex = (x, z, mobIndex) => {
+    const def = d.mobDefs[mobIndex];
+    if (!def) return;
+    for (let i = 0; i < 6; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = i === 0 ? 0 : 2 + Math.random() * 6;
+      const sx = x + Math.cos(a) * r;
+      const sz = z + Math.sin(a) * r;
+      if (d.spawner.spawnSingle(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1)) return;
+    }
+  };
 }

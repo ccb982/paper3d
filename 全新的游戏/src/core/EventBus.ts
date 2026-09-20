@@ -74,10 +74,10 @@ export interface EventMap {
     x: number;
     z: number;
   };
-  // ★ 敌人非击杀离场（2026-09-20 账本口径）：回收无定义体 / 主动清场；
-  //   引擎账本只做"存活 −1"（不算击杀）。由 EnemyBase.onRetire('recycled'|'despawned'|
-  //   'mode_cleanup') 发出；uid = 0 的单位同样不计。
-  'enemy_removed': { uid: number };
+  // ★ 敌人非击杀离场（2026-09-20 账本口径）：回收 / 主动清场；
+  //   引擎账本只做"存活 −1"（不算击杀）。由 EnemyBase.onRetire 发出；
+  //   uid = 0 的单位不计；reason='recycled' → 归还编制并计入 recalled。
+  'enemy_removed': { uid: number; reason: 'recycled' | 'despawned' | 'mode_cleanup' };
   // ★ 敌人受击（步骤 10 自主 LOD）：实体被击广播 → WorldMode 转交 swarm.noteHit
   'enemy_hit': { squadId: number };
 }

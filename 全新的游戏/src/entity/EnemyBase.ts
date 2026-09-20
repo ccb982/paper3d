@@ -558,7 +558,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       });
     } else if (reason !== 'demoted') {
       // recycled / despawned / mode_cleanup：蜂群账本存活 −1（不算击杀）
-      eventBus.emit('enemy_removed', { uid: this.swarmUid });
+      eventBus.emit('enemy_removed', { uid: this.swarmUid, reason });
     }
     super.onRetire(reason);
   }

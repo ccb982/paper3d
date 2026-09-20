@@ -28,7 +28,7 @@ import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
 import type { SwarmTierPort } from '../swarm/SwarmTierPort';
-import { fireCode, type TacticalOrder, type UnitDirective } from '../../entity/SwarmUnit';
+import { fireCode, roleFromCode, type TacticalOrder, type UnitDirective } from '../../entity/SwarmUnit';
 import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
@@ -230,6 +230,35 @@ export class WorldSpawner implements SwarmTierPort {
     // ③ 头顶浮空字（就在玩家眼前，不会看漏）
     const p = this.deps.player;
     if (p) this.deps.showFloatingAt(p.position.x, p.position.y + 2.8, p.position.z, '今日敌军已肃清', 'heal');
+  }
+
+  /** ★ 舰船起飞：统一回收全部存活敌人（实体 retire('recycled') → 账本存活 −1；
+   *  代理池 `swarm.recallAll()` → recalled）。**不算击杀**、不结算掉落；
+   *  ★ 同时把本批**编成名单**交给指挥层：落地原样重放（回收数 = 放置数）。 */
+  recallAllEnemies(): void {
+    const list = this.deps.enemies;
+    const roster = new Map<number, { role: UnitRole; count: number }>();
+    const add = (mi: number, role: UnitRole): void => {
+      const r = roster.get(mi);
+      if (r) r.count++;
+      else roster.set(mi, { role, count: 1 });
+    };
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i];
+      const def = this.deps.enemyDefs.get(e);
+      const mi = def ? this.deps.mobDefs.indexOf(def) : -1;
+      if (def && mi >= 0) add(mi, def.isAir ? 'flyer' : (def.role ?? 'grunt'));
+      this.forgetEntity(e);
+      e.retire('recycled');
+    }
+    list.length = 0;
+    this.deps.bossEntity = null;
+    const pool = this.deps.swarm.pool;
+    for (let i = 0; i < pool.count; i++) add(pool.mobIndex[i], roleFromCode(pool.role[i]));
+    this.deps.swarm.recallAll();
+    const out: { mobIndex: number; role: UnitRole; count: number }[] = [];
+    for (const [mobIndex, r] of roster) out.push({ mobIndex, role: r.role, count: r.count });
+    this.deps.swarm.commander.setRecalledRoster(out);
   }
 
   /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */
@@ -774,9 +803,33 @@ export class WorldSpawner implements SwarmTierPort {
     intent: number = INTENT_NONE,
     assaultIndex = -1,
   ): boolean {
+    let any = false;
+    for (let k = 0; k < def.pack; k++) {
+      let sx = x, sz = z;
+      if (k > 0) {
+        // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
+        const ang = (k / def.pack) * Math.PI * 2 + Math.random() * 0.8;
+        const dist = 1.2 + Math.random() * 1.6;
+        sx = x + Math.cos(ang) * dist;
+        sz = z + Math.sin(ang) * dist;
+      }
+      if (this.spawnSingle(def, sx, _y, sz, intent, assaultIndex)) any = true;
+    }
+    return any;
+  }
+
+  /** ★ 生成**单只**（精确编成/起飞回收名单重放用；不含窝散布） */
+  spawnSingle(
+    def: MobDef,
+    x: number, _y: number, z: number,
+    intent: number = INTENT_NONE,
+    assaultIndex = -1,
+  ): boolean {
     if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
     const mobIndex = this.deps.mobDefs.indexOf(def);
     if (mobIndex < 0) return false;
+    // ★ 上限检查（每只都查；实体 + 代理合计）
+    if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
     const stats = this.mobAgentStats(def);
     // ★ 敌人数值增强（EnemyScaling：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
     const base = this.deps.scalingInputs ?? { day: 1, totalPulls: 0, refHp: 100, refAtk: 10, refDef: 2 };
@@ -787,53 +840,37 @@ export class WorldSpawner implements SwarmTierPort {
     // 近战总量 =（AI 挥击 + 攻击力加成）× 攻击倍率，且不低于攻击下限；代理统一记在 meleeDamage
     const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
     const dfs = def.defense + sc.def;
-    let any = false;
-    for (let k = 0; k < def.pack; k++) {
-      // ★ 同伴散布（k=0 中心；其余绕圈小偏移）
-      let sx = x, sz = z;
-      if (k > 0) {
-        const ang = (k / def.pack) * Math.PI * 2 + Math.random() * 0.8;
-        const dist = 1.2 + Math.random() * 1.6;
-        sx = x + Math.cos(ang) * dist;
-        sz = z + Math.sin(ang) * dist;
-      }
-      // ★ 上限检查（每只都查；实体 + 代理合计）
-      if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
-      // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
-      //   ★ 空中层（2026-09-18）：飞行兵**豁免**这些闸门 —— 它悬在空中，落点是不是坑/水无所谓
-      const air = def.isAir === true;
-      const role = this.deps.raster.tileDefAt(sx, sz).genRole;
-      if (!air && (role === 'pit' || role === 'liquid')) continue;
-      // ★ 空中层用**顶层地表**（洞顶）当悬停基准：否则飞在坑/水上方时会以坑底为基准 → 飞到地下
-      const sy = air
-        ? this.deps.raster.surfaceHeightAtFor(sx, sz, 1e9)
-        : this.deps.raster.surfaceHeightAt(sx, sz);
-      if (!air && sy < -1.2) continue;
-      const idx = this.deps.swarm.spawn({
-        mobIndex,
-        x: sx, y: air ? sy + def.airAltitude : sy, z: sz,
-        hp, maxHp: hp,
-        defense: dfs, attackPower: 0,
-        speed: stats.speed,
-        meleeDamage: meleeTotal, meleeRange: stats.range,
-        scale: def.scale,
-        tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
-        aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
-        wanderSpeed: stats.wanderSpeed,
-        bias: this.deps.threat?.biasMul ?? 0.12,
-        intent,
-        isAir: air,
-        altitude: air ? def.airAltitude : 0,
-        suicide: def.suicide === true,
-        ranged: stats.ranged,
-        skin: stats.skin,
-        shotSpeed: stats.shotSpeed,
-        shotLife: stats.shotLife,
-        singleton: def.squadMode === 'singleton',
-      });
-      if (idx >= 0) any = true;   // ★ 账本由引擎 spawn() 自增（唯一生成口）
-    }
-    return any;
+    // ★ 落点可站（坑/水/过低跳过）；空中层豁免（悬停）
+    const air = def.isAir === true;
+    const role = this.deps.raster.tileDefAt(x, z).genRole;
+    if (!air && (role === 'pit' || role === 'liquid')) return false;
+    const sy = air
+      ? this.deps.raster.surfaceHeightAtFor(x, z, 1e9)
+      : this.deps.raster.surfaceHeightAt(x, z);
+    if (!air && sy < -1.2) return false;
+    const idx = this.deps.swarm.spawn({
+      mobIndex,
+      x, y: air ? sy + def.airAltitude : sy, z,
+      hp, maxHp: hp,
+      defense: dfs, attackPower: 0,
+      speed: stats.speed,
+      meleeDamage: meleeTotal, meleeRange: stats.range,
+      scale: def.scale,
+      tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
+      aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
+      wanderSpeed: stats.wanderSpeed,
+      bias: this.deps.threat?.biasMul ?? 0.12,
+      intent,
+      isAir: air,
+      altitude: air ? def.airAltitude : 0,
+      suicide: def.suicide === true,
+      ranged: stats.ranged,
+      skin: stats.skin,
+      shotSpeed: stats.shotSpeed,
+      shotLife: stats.shotLife,
+      singleton: def.squadMode === 'singleton',
+    });
+    return idx >= 0;   // ★ 账本由引擎 spawn() 自增（唯一生成口）
   }
 
   /** ★ 步骤 5：uid → L3 实体（队长标记镜像用；降格时移除） */
