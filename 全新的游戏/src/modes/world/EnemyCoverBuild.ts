@@ -7,10 +7,11 @@
 
 import type * as THREE from 'three';
 import type { EntityManager } from '../../entity/EntityManager';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME } from '../../entity/CoverEntity';
+import { EnemyCoverEntity } from '../../entity/enemy/EnemyCoverEntity';
+import { COVER_DEPLOY_BUILD_TIME } from '../../entity/CoverEntity';
 import type { DefensePlan } from '../../systems/swarm/LandingTerrain';
 
-/** ★ 在 (x,z) 造一座敌人掩体（y = 模式层给的可站面高度） */
+/** ★ 在 (x,z) 造一座敌人掩体（y = 模式层给的可站面高度；独立实体类型） */
 export function buildEnemyCover(
   entities: EntityManager,
   scene: THREE.Scene,
@@ -22,11 +23,9 @@ export function buildEnemyCover(
 ): void {
   // 正面 +Z 朝向玩家来向（射击孔面向来敌）
   const heading = plan ? Math.atan2(plan.approachX, plan.approachZ) : 0;
-  new CoverEntity(entities, scene, {
+  new EnemyCoverEntity(entities, scene, {
     x, y, z,
     heading,
-    owner: 'enemy',
-    poster: false,                    // ★ 敌人造的没有海报
     buildTime: COVER_DEPLOY_BUILD_TIME,
     variant,
   });

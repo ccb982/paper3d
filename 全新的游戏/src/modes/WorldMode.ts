@@ -21,6 +21,7 @@ import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
 import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers } from '../entity/CoverEntity';
+import { restoreWalls } from './world/RestoreWalls';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
   type WorldStateData, type AllyRec,
@@ -2279,7 +2280,8 @@ export class WorldMode implements IGameMode {
         seed: this.session.meta.seed,
         levels: rs.levels,              // ★ 只存坑洞；植被每天重建（不入缓存）
         mapRecords: rs.mapRecords,      // ★ 地形记录（大地图回放）
-        walls: snapshotCovers(),
+        walls: snapshotCovers('player'),
+        enemyWalls: snapshotCovers('enemy'),
         allies,
         // ★ 小地图已探索记忆 + 地图标记（跨模式/跨天一直保留）
         explored: this.worldUIManager?.getMinimapExploredState() ?? null,
@@ -2296,17 +2298,8 @@ export class WorldMode implements IGameMode {
     if (!this.scene) return;
     // ★ 地图标记恢复（跨模式/跨天保留；不再每天清空）
     if (data.markers.length > 0) this.worldUIManager?.loadMapMarkersState(data.markers);
-    for (const w of data.walls) {
-      const cover = new CoverEntity(this.entities, this.scene, {
-        x: w.x, y: w.y, z: w.z,
-        heading: w.heading,
-        variant: w.variant,
-        owner: w.owner,
-        hp: Math.max(1, Math.round(w.hp)),
-        buildTime: 0,
-      });
-      if (w.owner === 'player') this.playerCovers.push(cover);
-    }
+    // ★ 玩家墙 + 敌人掩体恢复（分开建；旧档混存按 owner 分流）
+    restoreWalls(this.entities, this.scene, data.walls, data.enemyWalls ?? [], this.playerCovers);
     for (const a of data.allies) {
       if (a.kind !== 'sentinel') continue;   // ★ 无人机不入缓存（旧档残留记录直接丢弃）
       this.spawnSentinelAt(a.x, a.z, true);  // ★ 休眠入场：回到原地接触才启用

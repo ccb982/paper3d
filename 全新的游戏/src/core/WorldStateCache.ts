@@ -10,7 +10,9 @@
 //     · mapRecords  地形记录（chunkKey → blockTypes；大地图回放用；b64）
 //     · explored    小地图已探索记忆（稠密位图 + 稀疏格；b64）
 //     · markers     玩家地图标记（x/z/label/color）
-//     · walls       城墙 / 墙
+//     · walls       玩家城墙 / 墙
+//     · enemyWalls  敌人施工的掩体/墙（**独立记录**：不占玩家墙上限、不吃玩家墙光环；
+//                   实体类型 EnemyCoverEntity）
 //     · allies      召唤友军（仅祖宗：留存回位+休眠，接触唤醒；无人机跟随玩家不入缓存；出击槽友军由配装重建）
 //
 // 写入时机：WorldMode exit / beforeunload / 周期自动保存（15s）
@@ -53,6 +55,8 @@ export interface WorldStateData {
   /** ★ 地形记录（chunkKey → blockTypes；大地图回放） */
   mapRecords: [number, Uint8Array][];
   walls: WallRec[];
+  /** ★ 敌人施工的掩体/墙（独立记录；与玩家墙分开存档） */
+  enemyWalls: WallRec[];
   allies: AllyRec[];
   /** ★ 小地图已探索记忆（持久；每天只换出生点） */
   explored?: ExploredMaskState | null;
@@ -67,6 +71,8 @@ interface WorldStateRec {
   levels: [number, string][];
   mapRecords: [number, string][];
   walls: WallRec[];
+  /** ★ 敌人墙（旧档无此字段 → 空数组；旧的混存记录在恢复时按 owner 分流） */
+  enemyWalls?: WallRec[];
   allies: AllyRec[];
   markers: MarkerRec[];
   explored?: {
@@ -108,6 +114,7 @@ export function saveWorldState(data: WorldStateData): void {
       levels: data.levels.map(([k, lv]) => [k, bytesToB64(lv)]),
       mapRecords: withRecords ? data.mapRecords.map(([k, bt]) => [k, bytesToB64(bt)]) : [],
       walls: data.walls,
+      enemyWalls: data.enemyWalls,
       allies: data.allies,
       markers: data.markers,
       explored: ex ? {
@@ -125,6 +132,7 @@ export function saveWorldState(data: WorldStateData): void {
       console.info(
         `[世界缓存] 保存 seed=${data.seed} 坑洞=${data.levels.length} 地形记录=${recs ? data.mapRecords.length : 0}`
         + ` 探索=${exp && data.explored ? data.explored.count : 0} 标记=${data.markers.length} 墙=${data.walls.length}`
+        + ` 敌墙=${data.enemyWalls.length}`
         + ` 体积=${(json.length / 1024).toFixed(0)}KB`,
       );
       return;
@@ -152,6 +160,7 @@ export function loadWorldState(seed: number): WorldStateData | null {
       levels: (rec.levels ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
       mapRecords: (rec.mapRecords ?? []).map(([k, b]) => [k, b64ToBytes(b)] as [number, Uint8Array]),
       walls: rec.walls ?? [],
+      enemyWalls: rec.enemyWalls ?? [],
       allies: rec.allies ?? [],
       markers: rec.markers ?? [],
       explored: ex ? {

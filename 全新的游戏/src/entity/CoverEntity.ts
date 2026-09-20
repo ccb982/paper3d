@@ -55,18 +55,19 @@ export interface CoverOptions {
 }
 
 /** ★ 城墙光环结算（每帧；数量个位数 → O(n²) 可忽略）：
- *  来源 = 城墙（variant 'cover'）；目标 = 所有墙（含城墙自身/彼此）。
- *  ★ **可叠加**：范围内每座城墙各贡献一份（上限/防御/修复都相加）；
- *  离开范围自动回落基础值。 */
+ *  ★ **只作用于玩家墙**（敌人掩体不吃玩家城墙光环，也不提供光环）。
+ *  来源 = 玩家城墙（variant 'cover'）；目标 = 玩家墙（含自身/彼此）。
+ *  可叠加：范围内每座城墙各贡献一份；离开范围自动回落基础值。 */
 export function updateWallAuras(playerMaxHp: number, dt: number): void {
   const all: CoverEntity[] = [];
   for (const c of _coverRegistry) all.push(c);
   const perHp = Math.round(playerMaxHp * WALL_AURA_HP_RATIO);
   const r2 = WALL_AURA_R * WALL_AURA_R;
   for (const w of all) {
+    if (w.owner !== 'player') continue;   // ★ 敌人掩体不参与玩家墙光环
     let bh = 0, bd = 0, heal = 0;
     for (const src of all) {
-      if (src.variant !== 'cover') continue;
+      if (src.owner !== 'player' || src.variant !== 'cover') continue;
       const dx = src.position.x - w.position.x;
       const dz = src.position.z - w.position.z;
       if (dx * dx + dz * dz > r2) continue;
@@ -93,10 +94,12 @@ export function coverSupportAt(
   return best;
 }
 
-/** ★ 世界状态持久化：导出全部城墙/墙记录（WorldStateCache 用） */
-export function snapshotCovers(): import('../core/WorldStateCache').WallRec[] {
+/** ★ 世界状态持久化：导出墙记录（WorldStateCache 用）。
+ *  @param owner 只导出该归属（玩家墙 / 敌人掩体**分开存档**，不混） */
+export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/WorldStateCache').WallRec[] {
   const out: import('../core/WorldStateCache').WallRec[] = [];
   for (const c of _coverRegistry) {
+    if (owner !== undefined && c.owner !== owner) continue;
     const p = c.position;
     out.push({
       x: p.x, y: p.y, z: p.z,
@@ -109,10 +112,11 @@ export function snapshotCovers(): import('../core/WorldStateCache').WallRec[] {
   return out;
 }
 
-/** ★ 玩家附近是否有墙（开枪时判定"无视墙"；数量个位数，线性扫描） */
+/** ★ 玩家附近是否有**玩家墙**（开枪时判定"无视自家墙"；敌人墙不享受该便利） */
 export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
   const r2 = r * r;
   for (const c of _coverRegistry) {
+    if (c.owner !== 'player') continue;
     const dx = c.position.x - x;
     const dz = c.position.z - z;
     if (dx * dx + dz * dz <= r2) return true;
