@@ -75,6 +75,9 @@ export interface EnemySpec {
   elite?: boolean;
   /** ★ 单例且不降格（Boss：永保 active，不因距离降格回代理） */
   noDemote?: boolean;
+  /** ★ 施工能力（2026-09-20）：会挖战壕/造掩体的兵种。
+   *  ★ 与 role 解耦：后勤不一定能施工、杂兵也可以兼任施工（用户定调）。 */
+  canBuild?: boolean;
   /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
    *  缺省 = 自动检测：素材**没有「后」帧** → 强制 billboard（否则转身 180° 会露出
    *  背面空白/镜像）；有「后」帧 = 双向贴片（相机侧换帧 + 转身）。 */
@@ -110,6 +113,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'reunion', name: '整合运动人员',
     file: '整合运动人员，杂兵.ftx3.gz',
     role: 'shield', attackType: 'melee',
+    // ★ 施工能力：杂兵兼任施工（挖战壕/造掩体；与 role 解耦）
+    canBuild: true,
     ai: REUNION_AI,
     hp: 75, defense: 3, attackPower: 2,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 6,

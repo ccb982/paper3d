@@ -92,6 +92,8 @@ export interface MobDef {
   suicide?: boolean;
   /** ★ 编制模式（singleton = 1 单位 1 小队） */
   squadMode?: 'normal' | 'singleton';
+  /** ★ 施工能力（与 role 解耦：后勤不一定能施工、杂兵也可以兼任；2026-09-20） */
+  canBuild?: boolean;
   /** ★ 精英（大队概率额外携带） */
   elite?: boolean;
   /** ★ 不降格（Boss：永保 active） */
@@ -743,6 +745,10 @@ export class WorldSpawner implements SwarmTierPort {
         isAir: air,
         altitude: air ? def.airAltitude : 0,
         suicide: def.suicide === true,
+        canBuild: def.canBuild === true,
+        // ★ 兵种画像透传到代理（此前漏传 → 所有代理被当 grunt/melee：小队类型/分工全错）
+        role: def.role ?? (air ? 'flyer' : 'grunt'),
+        attackType: def.attackType ?? (stats.ranged ? 'ranged' : 'melee'),
         ranged: stats.ranged,
         skin: stats.skin,
         shotSpeed: stats.shotSpeed,
@@ -864,6 +870,10 @@ export class WorldSpawner implements SwarmTierPort {
       isAir: air,
       altitude: air ? def.airAltitude : 0,
       suicide: def.suicide === true,
+      canBuild: def.canBuild === true,
+      // ★ 兵种画像透传到代理（此前漏传 → 所有代理被当 grunt/melee：小队类型/分工全错）
+      role: def.role ?? (air ? 'flyer' : 'grunt'),
+      attackType: def.attackType ?? (stats.ranged ? 'ranged' : 'melee'),
       ranged: stats.ranged,
       skin: stats.skin,
       shotSpeed: stats.shotSpeed,
@@ -961,6 +971,8 @@ export class WorldSpawner implements SwarmTierPort {
       airAltitude: def.airAltitude,
       // ★ 自爆标签（基类字段）
       suicide: def.suicide === true,
+      // ★ 施工能力（与 role 解耦）
+      canBuild: def.canBuild === true,
       // ★ v2 蜂群预留字段（缺省值 = 行为不变）
       role: def.role,
       attackType: def.attackType,

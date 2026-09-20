@@ -186,6 +186,8 @@ export interface SwarmUnit {
   readonly isAgent: boolean;
   /** ★ 自爆标签（2026-09-19）：攻击 = 范围爆炸 + 自身死亡（爆炸飞行怪） */
   readonly suicide: boolean;
+  /** ★ 施工能力（挖战壕/造掩体；与 role 解耦：后勤不一定能施工、杂兵也可兼任） */
+  readonly canBuild: boolean;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId: number;
   /** 小编队（-1 = 散兵/未编队） */
@@ -240,6 +242,8 @@ export interface SwarmSnapshot {
   aiTimer?: number;
   /** ★ 自爆标签（跨 LOD） */
   suicide?: boolean;
+  /** ★ 施工能力（与 role 解耦；跨 LOD） */
+  canBuild?: boolean;
   /** ★ 被击免降格截止（秒；步骤 10 自主 LOD） */
   noDemoteUntil?: number;
   // ---- ★ 步骤 9b：命令/指令（跨 LOD 不失令；编码见 ORDER_CODES/DIRECTIVE_CODES/FIRE_*） ----

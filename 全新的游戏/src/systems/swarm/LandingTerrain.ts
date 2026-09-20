@@ -136,8 +136,13 @@ function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): S
   return { n, radius, cx, cz, h, pass, stand, reach, width };
 }
 
-/** ★ 舰船落地周边地形检测 + 战术分析（v2） */
-export function analyzeLandingTerrain(raster: RasterMap, cx: number, cz: number, radius = 80): DefensePlan {
+/** ★ 舰船落地周边地形检测 + 战术分析（v2）
+ *  @param preferX,preferZ 战术轴偏好（★ 玩家位置）：给了就以此为主来向（仍需落点可站）
+ *         —— 玩家从哪边来，防线/工事/高地就朝哪边摆；缺省 = 扫描出的最可走方向。 */
+export function analyzeLandingTerrain(
+  raster: RasterMap, cx: number, cz: number, radius = 80,
+  preferX?: number, preferZ?: number,
+): DefensePlan {
   const scan = buildScan(raster, cx, cz, radius);
   const { n, pass, stand, reach, width, h } = scan;
   const x0 = cx - radius;
@@ -171,7 +176,12 @@ export function analyzeLandingTerrain(raster: RasterMap, cx: number, cz: number,
     const score = ok / Math.max(1, cnt) - (rise / Math.max(1, cnt)) * 0.05;
     if (score > bestScore) { bestScore = score; bestDirX = dx; bestDirZ = dz; }
   }
-  const baseA = Math.atan2(bestDirZ, bestDirX);
+  const baseA = preferX !== undefined && preferZ !== undefined
+    ? Math.atan2(preferZ, preferX)
+    : Math.atan2(bestDirZ, bestDirX);
+  // ★ 战术轴：玩家在附近 → 朝向玩家（"玩家位置改变整体部署"）；否则用扫描结果
+  const axisX = preferX !== undefined && preferZ !== undefined ? preferX : bestDirX;
+  const axisZ = preferX !== undefined && preferZ !== undefined ? preferZ : bestDirZ;
 
   // ---- ② 高地：可达 + 12m 窗局部最高 + 突出 ≥2m（去重，取前 8） ----
   const highRaw: { x: number; z: number; h: number; prom: number }[] = [];
@@ -207,7 +217,6 @@ export function analyzeLandingTerrain(raster: RasterMap, cx: number, cz: number,
 
   // ---- ③ 隘口：宽度 ≤8m 且来向轴前后变宽的收缩段（聚类去重，取前 6） ----
   const chokeRaw: { x: number; z: number; w: number }[] = [];
-  const axisX = bestDirX, axisZ = bestDirZ;
   for (let iz = 1; iz < n - 1; iz++) {
     for (let ix = 1; ix < n - 1; ix++) {
       const i = iz * n + ix;
@@ -287,7 +296,7 @@ export function analyzeLandingTerrain(raster: RasterMap, cx: number, cz: number,
 
   return {
     cx, cz,
-    approachX: bestDirX, approachZ: bestDirZ,
+    approachX: axisX, approachZ: axisZ,
     highGround,
     coverSlots,
     chokepoints,

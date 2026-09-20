@@ -849,6 +849,8 @@ export class WorldMode implements IGameMode {
         // ★ 步骤 7：编制模式 / 不降格 / 精英（名册透传）
         squadMode: spec.squadMode,
         noDemote: spec.noDemote, elite: spec.elite,
+        // ★ 施工能力（与 role 解耦）
+        canBuild: spec.canBuild,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -3075,8 +3077,8 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
-    // ★ S0 勘察 + 战术布置：**每次落地都重做**（舰船会不断移动换登陆点 → 地形/布置必须重扫）
-    this.swarm.commander.planDefense(sp.x, sp.z);
+    // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；玩家位置参与战术轴
+    this.swarm.commander.planDefense(sp.x, sp.z, 80, this.player.position.x, this.player.position.z);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;

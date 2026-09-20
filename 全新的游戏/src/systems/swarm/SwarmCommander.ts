@@ -79,11 +79,19 @@ export class SwarmCommander {
     this.swarm.tactics.board.emitSignal(id);
   }
 
-  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环） */
-  planDefense(cx: number, cz: number, radius = 80): DefensePlan | null {
+  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
+   *  @param playerX,playerZ 玩家位置：**参与战术轴**（玩家从哪边来，防线朝哪边摆） */
+  planDefense(cx: number, cz: number, radius = 80, playerX?: number, playerZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
-    this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
+    // ★ 战术轴偏好 = 舰船 → 玩家（玩家在附近 15~140m 时；否则用扫描的最可走方向）
+    let px: number | undefined, pz: number | undefined;
+    if (playerX !== undefined && playerZ !== undefined) {
+      const dx = playerX - cx, dz = playerZ - cz;
+      const d = Math.hypot(dx, dz);
+      if (d > 15 && d < 140) { px = dx / d; pz = dz / d; }
+    }
+    this.plan = analyzeLandingTerrain(raster, cx, cz, radius, px, pz);
     // ★ 建造顺序：外环（≈56m）50m 开外）→ 中环 → 内环（≈24m ≈ 远程覆盖线）
     //   每环：**掩体先行**（每个掩位 3 块，沿切线 ±4m → 12m 宽）→ **战壕跟进**（该环弧上每 4m 一块）
     const ringOrder: (0 | 1 | 2)[] = [2, 1, 0];
@@ -148,8 +156,10 @@ export class SwarmCommander {
     // ★ 集结区（正面楔形：±30°、≈96m 起）——从来向远处进场，**不围圈**
     const ringR = 96 + (this.battalionCount - 1) * 8;
     const total = entries.length;
-    // ★ 回收名单部署：优先用**地形分析产出的可站点**（掩体位/高地/战壕线）做锚点
-    const anchors = useRoster ? this.placementAnchors(plan) : null;
+    // ★ 部署锚点：**优先用自身地形分析产出的可站点**（掩体位/高地/战壕线）——
+    //   保证所有兵都落在可达陆地上（此前盲投 96m 环：施工队掉湖里 → 永远开不了工）；
+    //   锚点不足时才退回来向楔形环。
+    const anchors = this.placementAnchors(plan);
     let k = 0;
     for (const e of entries) {
       let x: number, z: number;
@@ -217,7 +227,7 @@ export class SwarmCommander {
     };
   }
 
-  /** ★ 每帧：大队任务周期重发（TTL 保持）+ S1 工程 */
+  /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护 */
   tick(dt: number, playerX = 0, playerZ = 0): void {
     if (this.mission) {
       this.resendAccum += dt;
@@ -247,34 +257,59 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ S1 工程（2s 决策拍）：掩护队先行 → 工程兵小步跟进 →
-   *  在掩护下造防线；**远程队提供火力支援**（protect 施工点）；其余队向防线后集结。 */
+  /** ★ 部署维护（2s 决策拍）——**按兵种分工 + 对玩家移动的敏感度不同**：
+   *  · 近战（盾/突击）：**追玩家**（玩家在附近时直接压上去；否则推进到防线）
+   *  · 施工队（canBuild）：守着自己的工位/工事，不因玩家跑动被拉走
+   *  · 远程队：占住高地/火力点，**不追脸**
+   *  · 后勤等：向防线后集结
+   *  S1 = 边打边施工；S2 = 只维护部署（不再施工）。 */
   private engineeringTick(dt: number, playerX: number, playerZ: number): void {
-    if (this.stage !== 'S1' || !this.plan || !this.buildCover) return;
+    if (!this.plan) return;
     this.buildCd -= dt;
     const squads = [...this.swarm.squads.all()];
-    const builders = squads.filter((s) => s.type === 'logistics');
-    if (builders.length === 0) return;
+    // ★ 施工队 = **具备施工能力的兵种**（后勤不一定能施工；杂兵可兼任）
+    const builders = squads.filter((s) => s.builders);
     this.engAccum += dt;
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
     const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
-    if (!slot) { this.stage = 'S2'; return; }
-    // 玩家跌进施工点 30m：暂停施工（转防御；队长自主交战接管）
-    if (Math.hypot(playerX - slot.x, playerZ - slot.z) < 30) return;
     const plan = this.plan;
-    // ① 掩护队（盾/突击，最多 2 队）先行到防线前方
-    for (const s of squads.filter((q) => q.type === 'defense' || q.type === 'assault').slice(0, 2)) {
+    if (!slot && this.stage === 'S1') this.stage = 'S2';   // 无待建块 → 就绪
+    // 玩家跌进施工点 30m：暂停施工（转防御；队长自主交战接管）
+    const nearPlayer = slot ? Math.hypot(playerX - slot.x, playerZ - slot.z) < 30 : false;
+    const buildSlot = this.stage === 'S1' && slot && !nearPlayer ? slot : null;
+    // 正面基准：有工事点用工事点；否则落点前方 40m
+    const front = buildSlot ?? { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
+    // ★ 近战追击：玩家在落点 90m 内 → 直接压玩家（玩家移动 → 近战跟着走）
+    const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
+    const meleeX = chase ? playerX : front.x + plan.approachX * 10;
+    const meleeZ = chase ? playerZ : front.z + plan.approachZ * 10;
+    // ① 盾队守正面/追玩家（最多 2 队，不含施工队）
+    for (const s of squads.filter((q) => q.type === 'defense' && !q.builders).slice(0, 2)) {
       this.swarm.issueOrder(s.id, {
         kind: 'advance',
-        target: { x: slot.x + plan.approachX * 10, z: slot.z + plan.approachZ * 10 },
+        target: { x: meleeX, z: meleeZ },
         roe: 'engage',
         seq: 0,
       }, 6);
     }
-    // ①b ★ 隘口据守（地形分析产物）：防御队各领一个隘口（有则驻守，无则跳过）
-    if (plan.chokepoints.length > 0) {
-      const guards = squads.filter((q) => q.type === 'defense').slice(0, plan.chokepoints.length);
+    // ①a 突击队两翼错开（不抢中线；来向左右各一）
+    const assaults = squads.filter((q) => q.type === 'assault' && !q.builders).slice(0, 2);
+    for (let i = 0; i < assaults.length; i++) {
+      const side = i % 2 === 0 ? 1 : -1;
+      this.swarm.issueOrder(assaults[i].id, {
+        kind: 'flank',
+        target: {
+          x: meleeX - plan.approachZ * side * 14,
+          z: meleeZ + plan.approachX * side * 14,
+        },
+        roe: 'engage',
+        seq: 0,
+      }, 6);
+    }
+    // ①b ★ 隘口据守（地形分析产物）：**不追击时**盾队各领一个隘口
+    if (!chase && plan.chokepoints.length > 0) {
+      const guards = squads.filter((q) => q.type === 'defense' && !q.builders).slice(0, plan.chokepoints.length);
       for (let i = 0; i < guards.length; i++) {
         const c = plan.chokepoints[i];
         this.swarm.issueOrder(guards[i].id, {
@@ -285,58 +320,57 @@ export class SwarmCommander {
         }, 8);
       }
     }
-    // ② 工程兵小步跟进（到待建位；holdFire 行军）
+    // ② 施工队：有工位 → 小步跟进（holdFire）；施工完 → **守住工位/工事**（不追玩家）
     for (let i = 0; i < builders.length; i++) {
-      const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? slot;
-      this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
-    }
-    // ③ ★ 远程队：优先占据高地（地形分析产物；取离施工点最近的一处），
-    //    无可占高地 → 火力支援施工点（protect）
-    const highPick = this.pickHighGroundNear(plan, slot.x, slot.z, 48);
-    for (const s of squads.filter((q) => q.type === 'ranged')) {
-      if (highPick) {
-        this.swarm.issueOrder(s.id, {
-          kind: 'advance',
-          target: { x: highPick.x, z: highPick.z },
-          roe: 'fireOnArrival',
-          seq: 0,
-        }, 8);
+      if (buildSlot) {
+        const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? buildSlot;
+        this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
       } else {
-        this.swarm.issueOrder(s.id, {
-          kind: 'protect',
-          target: { x: slot.x, z: slot.z },
-          roe: 'engage',
-          seq: 0,
-        }, 6);
+        this.swarm.issueOrder(builders[i].id, { kind: 'protect', target: { x: front.x, z: front.z }, roe: 'engage', seq: 0 }, 8);
       }
     }
-    // ④ 其余队：向已建防线后集结
-    for (const s of squads.filter((q) => q.type !== 'logistics' && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged')) {
+    // ③ ★ 远程队：占高地/火力点；**到位就守**（不追脸）；无可占高地 → 支援正面
+    const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
+    for (const s of squads.filter((q) => q.type === 'ranged')) {
+      const hold = highPick ?? front;
+      let cx = 0, cz = 0, n = 0;
+      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+      if (n > 0) { cx /= n; cz /= n; }
+      const far = n === 0 || Math.hypot(cx - hold.x, cz - hold.z) > 10;
+      this.swarm.issueOrder(s.id, {
+        kind: far ? 'advance' : 'protect',
+        target: { x: hold.x, z: hold.z },
+        roe: far ? 'fireOnArrival' : 'engage',
+        seq: 0,
+      }, far ? 8 : 6);
+    }
+    // ④ 其余队（后勤等，不含施工/盾/突击/远程）：向防线后集结
+    for (const s of squads.filter((q) => !q.builders && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged')) {
       this.swarm.issueOrder(s.id, {
         kind: 'regroup',
-        target: { x: slot.x - plan.approachX * 8, z: slot.z - plan.approachZ * 8 },
+        target: { x: front.x - plan.approachX * 8, z: front.z - plan.approachZ * 8 },
         seq: 0,
       }, 6);
     }
-    // ⑤ 施工（**逐步拼装**）：工程兵到达待建块 ≤4m →
+    // ⑤ 施工（**逐步拼装**，仅 S1）：施工队**任一成员**到达待建块 ≤5m →
     //   掩体块（每块 4m，每 8s 一块）/ 战壕块（每块 4×4m、1 层，每 10s 一块）
-    if (this.buildCd <= 0) {
+    if (buildSlot && this.buildCover && this.buildCd <= 0) {
+      let atSite = false;
       for (const s of builders) {
-        let cx = 0, cz = 0, n = 0;
-        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-        if (n === 0) continue;
-        cx /= n; cz /= n;
-        if (Math.hypot(cx - slot.x, cz - slot.z) <= 4) {
-          if (slot.kind === 'cover') {
-            this.buildCover(slot.x, slot.z, 'cover');
-            this.buildCd = 8;            // 慢工：掩体 8s/块（3 块 = 12m ≈ 24s）
-          } else {
-            this.digTrench?.(slot.x, slot.z);
-            this.buildCd = 10;           // 慢挖：战壕 10s/块（3 块 = 12m ≈ 30s）
-          }
-          this.builtSlots.add(`${slot.x},${slot.z}`);
-          break;
+        for (const m of s.members.values()) {
+          if (Math.hypot(m.x - buildSlot.x, m.z - buildSlot.z) <= 5) { atSite = true; break; }
         }
+        if (atSite) break;
+      }
+      if (atSite) {
+        if (buildSlot.kind === 'cover') {
+          this.buildCover(buildSlot.x, buildSlot.z, 'cover');
+          this.buildCd = 8;            // 慢工：掩体 8s/块（3 块 = 12m ≈ 24s）
+        } else {
+          this.digTrench?.(buildSlot.x, buildSlot.z);
+          this.buildCd = 10;           // 慢挖：战壕 10s/块（3 块 = 12m ≈ 30s）
+        }
+        this.builtSlots.add(`${buildSlot.x},${buildSlot.z}`);
       }
     }
   }

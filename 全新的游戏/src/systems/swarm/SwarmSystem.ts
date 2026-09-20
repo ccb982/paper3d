@@ -256,6 +256,7 @@ export class SwarmSystem {
     const squad = this.squads.assign(
       data.uid, roleFromCode(this.pool.role[i]), data.x, data.z,
       this.pool.mobIndex[i], this.pool.suicide[i] === 1, this.pool.singleton[i] === 1,
+      this.pool.canBuild[i] === 1,
     );
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
@@ -317,6 +318,7 @@ export class SwarmSystem {
       directiveSeq: snap.directiveSeq,
       // ★ 自爆标签 / 被击免降格 / 远程档随降格回池
       suicide: snap.suicide,
+      canBuild: snap.canBuild,
       noDemoteUntil: snap.noDemoteUntil,
       ranged: snap.ranged,
       skin: snap.skin,
@@ -329,8 +331,8 @@ export class SwarmSystem {
     const role = roleFromCode(this.pool.role[i]);
     const squad = this.squads.squadOf(uid)
       ?? (snap.squadId !== undefined && snap.squadId >= 0
-        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1, this.pool.singleton[i] === 1)
-        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1, this.pool.singleton[i] === 1));
+        ? this.squads.adopt(uid, snap.squadId, snap.battalionId ?? snap.squadId, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1, this.pool.singleton[i] === 1, this.pool.canBuild[i] === 1)
+        : this.squads.assign(uid, role, this.pool.x[i], this.pool.z[i], this.pool.mobIndex[i], this.pool.suicide[i] === 1, this.pool.singleton[i] === 1, this.pool.canBuild[i] === 1));
     this.pool.squadId[i] = squad.id;
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(uid, this.pool.hp[i], this.pool.maxHp[i], this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i]);

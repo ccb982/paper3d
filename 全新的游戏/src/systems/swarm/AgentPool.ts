@@ -72,6 +72,8 @@ export interface AgentSpawnData {
   isLeader?: boolean;
   /** ★ 自爆标签（跨 LOD） */
   suicide?: boolean;
+  /** ★ 施工能力（挖战壕/造掩体；与 role 解耦，跨 LOD） */
+  canBuild?: boolean;
   /** ★ 被击免降格截止（秒） */
   noDemoteUntil?: number;
   /** ★ 单例编制 */
@@ -138,6 +140,8 @@ export interface AgentSnapshot extends SwarmSnapshot {
   shotSpeed?: number;
   shotLife?: number;
   suicide?: boolean;
+  /** ★ 施工能力（与 role 解耦） */
+  canBuild?: boolean;
   noDemoteUntil?: number;
   /** ★ 步骤 7：单例编制 */
   singleton?: boolean;
@@ -237,6 +241,8 @@ export class AgentPool {
   readonly isLeader = new Uint8Array(AGENT_CAPACITY);
   /** ★ 自爆标签（0 = 普通；1 = 自爆单位） */
   readonly suicide = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 施工能力（与 role 解耦；1 = 会挖战壕/造掩体） */
+  readonly canBuild = new Uint8Array(AGENT_CAPACITY);
   /** ★ 步骤 10：被击免降格截止（秒） */
   readonly noDemoteUntil = new Float32Array(AGENT_CAPACITY);
   /** ★ 远程档（瞬时；降格时由名册重填）：0 = 近战 / 1 = 远程；skin 0=箭 1=法球 */
@@ -336,6 +342,7 @@ export class AgentPool {
     this.attackType[i] = attackCode(d.attackType ?? 'melee');
     this.isLeader[i] = d.isLeader ? 1 : 0;
     this.suicide[i] = d.suicide ? 1 : 0;
+    this.canBuild[i] = d.canBuild ? 1 : 0;
     this.noDemoteUntil[i] = d.noDemoteUntil ?? 0;
     this.ranged[i] = d.ranged ? 1 : 0;
     this.skin[i] = d.skin ?? 0;
@@ -424,6 +431,7 @@ export class AgentPool {
     this.attackType[to] = this.attackType[from];
     this.isLeader[to] = this.isLeader[from];
     this.suicide[to] = this.suicide[from];
+    this.canBuild[to] = this.canBuild[from];
     this.noDemoteUntil[to] = this.noDemoteUntil[from];
     this.ranged[to] = this.ranged[from];
     this.skin[to] = this.skin[from];
@@ -481,6 +489,7 @@ export class AgentPool {
       attackType: attackFromCode(this.attackType[i]),
       isLeader: this.isLeader[i] === 1,
       suicide: this.suicide[i] === 1,
+      canBuild: this.canBuild[i] === 1,
       noDemoteUntil: this.noDemoteUntil[i],
       intent: this.intent[i],
       bias: this.bias[i],

@@ -70,6 +70,8 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   billboard?: boolean;
   /** ★ 自爆标签（基类字段；与 isAir/role 同级） */
   suicide?: boolean;
+  /** ★ 施工能力（会挖战壕/造掩体；与 role 解耦；缺省 false） */
+  canBuild?: boolean;
 }
 
 const _atomDir = { x: 0, z: 0 };
@@ -99,6 +101,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   readonly isAgent = false;
   /** ★ 自爆标签（基类字段；构造从 MobDef，快照跨 LOD） */
   suicide = false;
+  /** ★ 施工能力（挖战壕/造掩体；与 role 解耦） */
+  canBuild = false;
   /** ★ 被击免降格截止（秒；步骤 10；队长/大队警觉在 swarm 侧） */
   noDemoteUntil = 0;
   /** ★ 感知（E3b 预留；步骤 9 通信/感知接线填值）：最后目击 + 仇恨来源 */
@@ -244,6 +248,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (snap.aggroFrom !== undefined) this.aggroFrom = snap.aggroFrom;
     if (snap.aiStateIdx !== undefined) this.aiStateMachine?.importState(snap.aiStateIdx, snap.aiTimer ?? 0);
     if (snap.suicide !== undefined) this.suicide = snap.suicide;
+    if (snap.canBuild !== undefined) this.canBuild = snap.canBuild;
     if (snap.noDemoteUntil !== undefined) this.noDemoteUntil = snap.noDemoteUntil;
     // ★ 步骤 9b：命令/指令回灌（编码 → 可读类型）
     if (snap.orderKind !== undefined) this.orderKind = orderFromCode(snap.orderKind);
@@ -287,6 +292,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       out.aiTimer = st.timer;
     }
     out.suicide = this.suicide;
+    out.canBuild = this.canBuild;
     out.noDemoteUntil = this.noDemoteUntil;
     // ★ 步骤 9b：命令/指令抽干（可读类型 → 编码）
     out.orderKind = orderCode(this.orderKind);
@@ -391,6 +397,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.attackPower = opts.attackPower ?? 0; // ★ 攻击力加成（叠加在 AI 近战伤害上）
     this.assetRef = asset;
     this.suicide = opts.suicide === true;
+    this.canBuild = opts.canBuild === true;
     // ★ 蜂群预留字段：从名册透传（缺省 = 行为不变）
     this.role = opts.role ?? 'grunt';
     this.attackType = opts.attackType ?? 'melee';

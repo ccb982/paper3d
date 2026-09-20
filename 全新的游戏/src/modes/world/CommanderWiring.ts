@@ -51,7 +51,15 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
     const def = elite
       ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
       : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
-    if (def) d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1);
+    if (!def) return;
+    // ★ 可站性微调：环位可能落在水里（此前直接失败 → 施工队只剩 1 只，永远开不了工）
+    for (let i = 0; i < 6; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = i === 0 ? 0 : 2 + Math.random() * 6;
+      const qx = sx + Math.cos(a) * r;
+      const qz = sz + Math.sin(a) * r;
+      if (d.spawner.spawnOne(def, qx, d.raster.surfaceHeightAt(qx, qz), qz, INTENT_NONE, -1)) return;
+    }
   };
   // ★ 起飞回收名单重放：引擎给锚点，这里只做**可站性微调**（水/坑里就近挪几米），
   //   保证"回收数 = 放置数"（布置决策仍在引擎）
