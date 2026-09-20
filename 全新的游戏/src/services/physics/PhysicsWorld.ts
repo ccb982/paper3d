@@ -7,6 +7,8 @@
 
 import RAPIER, { ActiveEvents } from '@dimforge/rapier3d';
 import { initRapierWasm } from './rapierWasm';
+import { RasterMap } from '../map/RasterMap';
+import { terrainRayDist } from './TerrainRay';
 
 /**
  * ★ rapier wasm 初始化（进程内一次性；进入战斗前必须调用）。
@@ -393,6 +395,24 @@ export class PhysicsWorld {
     const excl = excludeBodyId !== undefined ? (this.getBody(excludeBodyId) ?? undefined) : undefined;
     const ray = new RAPIER.Ray({ x: origin.x, y: origin.y, z: origin.z }, { x: dir.x, y: dir.y, z: dir.z });
     const hit = this.world.castRay(ray, maxToi, true, undefined, undefined, undefined, excl);
+    const raster = RasterMap.current;
+    // ★ 解析地形兜底（修"帧预算/懒建分区无碰撞体 → 子弹穿地"；水地同理）
+    if (raster) {
+      const tTerr = terrainRayDist(origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, maxToi);
+      if (tTerr !== null) {
+        let physDist = Infinity;
+        if (hit) {
+          const t = hit.timeOfImpact;
+          physDist = Math.hypot(dir.x * t, dir.y * t, dir.z * t);
+        }
+        if (tTerr < physDist) {
+          return {
+            handle: -1,   // 解析地形：无实体句柄（消费方按"地形"处理）
+            point: { x: origin.x + dir.x * tTerr, y: origin.y + dir.y * tTerr, z: origin.z + dir.z * tTerr },
+          };
+        }
+      }
+    }
     if (!hit) return null;
     const t = hit.timeOfImpact;
     const parent = hit.collider.parent();
