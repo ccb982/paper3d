@@ -3,8 +3,7 @@
 // ============================================================
 // 职责：
 //   · 代理池 + 人群网格 + 批量渲染的唯一持有者与驱动者
-//   · 分层（L1/L2）决策与移动 tick（降频 + 个体相位抖动）
-//   · 升格（近处 → EnemyBase）/ 降格（远处实体 → 代理）/ 远距回收
+//   · 分层（L1/L2）决策与移动 tick（降频 + 相位抖动）；升格/降格/远距回收
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
@@ -28,6 +27,7 @@ import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { formationOffset } from './Formation';
+import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
@@ -35,13 +35,13 @@ import {
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
-  AtomExecutor, MOVE_ATOMS, resolveWeights, atomDirection,
+  AtomExecutor, MOVE_ATOMS, atomDirection, runDirective, fireProfile,
+  type DirectiveRun,
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
-/** 分层/回收参数（《蜂群架构.md》§9；集中可调）
- *  ★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
+/** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
   /** L3 实体层：升格半径 / 实体上限 */
   L3_RADIUS: 45,
@@ -164,6 +164,8 @@ export interface SwarmHooks {
 const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
 const _atomDir = { x: 0, z: 0 };
+/** ★ 统一决策内核输出 scratch（零分配） */
+const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
 /** ★ 成员 uid scratch（编队槽位 rank 基准；容量复用，零分配） */
 const _memberUids: number[] = [];
 export class SwarmSystem {
@@ -199,7 +201,7 @@ export class SwarmSystem {
   /** ★ 步骤 6：上帧玩家位置（被击升格的 L3 范围判定） */
   private lastPlayerX = 0;
   private lastPlayerZ = 0;
-  /** ★ E4a：L3 编队 steer（10Hz；按 squadId 分组，容器复用零分配） */
+  /** ★ E4a 编队 steer / HPA 预热节拍（10Hz） */
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
@@ -246,8 +248,7 @@ export class SwarmSystem {
     return this.pool.count;
   }
 
-  /** 生成代理（唯一生成口；账本 `spawned` 在此 +1）
-   *  @param force 调试/压测绕过配额闸门（仍记账） */
+  /** 生成代理（唯一生成口；账本 spawned 在此 +1）@param force 调试绕过配额闸门 */
   spawn(data: AgentSpawnData, force = false): number {
     if (!force && !this.ledger.canSpawn()) return -1;
     if (!data.uid || data.uid <= 0) data.uid = this.nextUid++;
@@ -501,11 +502,13 @@ export class SwarmSystem {
       }
     }
     const t2 = _te ? performance.now() : 0;
-    // ★ E4a：L3 实体编队 steer（10Hz；有命令才接管，无命令保持 local）
+    // ★ E4a 编队 steer（10Hz）+ HPA 簇预热（同拍顺带 2 个簇，长路径查询时基本命中缓存）
     this.steerAccum += dt;
     if (this.steerAccum >= 1 / SWARM.STEER_HZ) {
       this.steerAccum = 0;
-      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, this.tactics, now);
+      if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
+      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, this.tactics, now,
+        (x, z, r) => this.commander.rangedPost(x, z, r));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     if (recalled > 0) this.ledger.noteRecall(recalled);
@@ -580,20 +583,16 @@ export class SwarmSystem {
     if (directiveActive) {
       // ★ 远程射击判定半径：射程 + 2.5m 余量（"小于 50m 就要开始射击"）
       const fireRange = p.meleeRange[i] + (p.ranged[i] === 1 ? 2.5 : SWARM.MELEE_PAD);
-      const sit = {
-        inRange: d <= fireRange,
-        rangeRatio: d / Math.max(1e-3, fireRange),
-        lowHp: p.hp[i] < p.maxHp[i] * 0.3,
-        justHit: p.flash[i] > 0.5,
-        hasTarget: d > 1e-3,
-        firePolicy: p.directiveFire[i],   // ★ 五轴 ROE（队长指令的开火策略）
-      };
-      const w = resolveWeights(dk, orderFromCode(p.orderKind[i]), roleBucket(roleFromCode(p.role[i])), sit);
-      const atom = this.atoms.step(p.swarmUid[i], now, p.directiveSeq[i], w, sit.justHit);
-      // ★ 已进入攻击距离：前进原子不再覆盖本地走位（否则一直往目标身上挤、攻击槽失效）；
-      //   后退/横移仍生效（边打边撤/游荡）
-      p.atomMove[i] = sit.inRange && atom.move === 'forward' ? 255 : MOVE_ATOMS.indexOf(atom.move);
-      p.atomFire[i] = atom.fire ? 1 : 0;
+      // ★ 统一决策内核（与 L3 实体同一份：指令×命令×角色×情境 → 两层掷）
+      runDirective(this.atoms, p.swarmUid[i], now, dk, orderFromCode(p.orderKind[i]),
+        roleBucket(roleFromCode(p.role[i])), p.directiveSeq[i], {
+          dist: d, range: fireRange,
+          hpRatio: p.maxHp[i] > 0 ? p.hp[i] / p.maxHp[i] : 1,
+          flash: p.flash[i], hasTarget: d > 1e-3, firePolicy: p.directiveFire[i],
+        }, _run);
+      // ★ 已进入攻击距离：前进原子不再覆盖本地走位；后退/横移仍生效（攻击槽失效问题）
+      p.atomMove[i] = _run.inRange && _run.move === 'forward' ? 255 : _run.moveIdx;
+      p.atomFire[i] = _run.fire ? 1 : 0;
     } else {
       p.atomMove[i] = 255;      // 无指令 → 本地自主（旧行为）
       p.atomFire[i] = 1;
@@ -627,8 +626,7 @@ export class SwarmSystem {
       }
     }
 
-    // ---- P4：士气（低血撤退；同伴阵亡由 WorldMode 触发狂暴） ----
-    //   ★ 通用战术；逐兵种队内侧战术 / 盾卫 / 自爆兵可豁免（名册 tactics.unit.lowHp='fight'）
+    // ---- P4 士气：低血撤退（通用战术；盾/自爆/名册 unit.lowHp='fight' 豁免） ----
     const mobT = hooks.mobTactics?.(p.mobIndex[i]) ?? null;
     const noRetreat = mobT?.unit?.lowHp === 'fight' || p.suicide[i] === 1 || p.role[i] === ROLE_SHIELD;
     if (objective && d < 20 && now >= p.nextRetreatAt[i]
@@ -716,6 +714,12 @@ export class SwarmSystem {
           }
         }
       }
+      // ★ 远程：不追打——边撤边打 / 占制高掩体后（2026-09-21 定调）
+      if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
+        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i],
+          (x, z, r) => this.commander.rangedPost(x, z, r));
+        if (t) { destX = t.x; destZ = t.z; p.fromFlow[i] = 0; }
+      }
       const mx = destX - px, mz = destZ - pz;
       const md = Math.hypot(mx, mz);
       if (md > 0.05) {
@@ -739,11 +743,9 @@ export class SwarmSystem {
         const needToken = p.ranged[i] === 0;
         const tokenOk = !needToken || this.tokenUsed[tk] < SWARM.ATTACK_TOKENS;
         if (p.atomFire[i] === 1 && p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && tokenOk) {
-          // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准射击
-          const near = d < 20;
-          p.attackCd[i] = near
-            ? 0.35 + Math.random() * 0.25
-            : 1.1 + Math.random() * 1.0;
+          // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准（统一节拍表）
+          const prof = fireProfile(d);
+          p.attackCd[i] = prof.cd;
           if (needToken) {
             p.hasToken[i] = 1;
             p.tokenTarget[i] = tk;
@@ -754,7 +756,7 @@ export class SwarmSystem {
             // ★ 远程代理：真弹道（箭/法球）；散布随距离（远散近准）
             hooks.onAgentRanged?.(
               tk, p.meleeDamage[i] + p.attackPower[i], px, pz, gx, gz,
-              p.skin[i], p.shotSpeed[i], p.shotLife[i], near ? 0.012 : 0.15,
+              p.skin[i], p.shotSpeed[i], p.shotLife[i], prof.spread,
             );
           } else {
             hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i], px, pz);
@@ -1044,7 +1046,7 @@ export class SwarmSystem {
     }
   }
 
-  /** ★ 步骤 10：被击上报（代理在 damageAgent 内直调；实体经 enemy_hit → WorldMode → 这里） */
+  /** ★ 步骤 10：被击上报（代理直调；实体经 enemy_hit → WorldMode → 这里） */
   noteHit(squadId: number, now: number): void {
     if (squadId < 0) return;
     this.squads.alert(squadId, now + AUTONOMY.SQUAD_ALERT_S);

@@ -217,6 +217,8 @@ export interface SteerIntent {
 
 /** ★ 实体侧数据面（EnemyBase 实现；玩家/友军不实现） */
 export interface SwarmUnit {
+  /** ★ 世界坐标（只读；远程选位/边撤边打需要读自身位置） */
+  readonly position: { x: number; y: number; z: number };
   /** 稳定 uid（升格/降格往返不变；替代裸 index） */
   swarmUid: number;
   /** 当前载体：L3 实体 = 'entity'；L1/L2 代理 = 'agent' */

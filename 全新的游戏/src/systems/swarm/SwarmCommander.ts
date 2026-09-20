@@ -14,6 +14,8 @@ import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
 import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
 import { applyPosture, PostureMachine, type BattlePosture } from './Posture';
 import { BattleLine, type LineUnit } from './BattleLine';
+import { RANGED } from './RangedTactics';
+import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
@@ -119,9 +121,15 @@ export class SwarmCommander {
     //   每环：**掩体先行**（每个掩位 3 块，沿切线 ±4m → 12m 宽）→ **战壕跟进**（该环弧上每 4m 一块）
     const ringOrder: (0 | 1 | 2)[] = [2, 1, 0];
     this.buildPieces = [];
+    // ★ 工程兵优先在**有利位置**（扫描产物评分）施工：同环内按 post 分排序
+    const postScore = new Map<string, number>();
+    for (const p of this.plan.posts) postScore.set(`${p.x.toFixed(1)},${p.z.toFixed(1)}`, p.score);
+    const scoreOf = (x: number, z: number): number => postScore.get(`${x.toFixed(1)},${z.toFixed(1)}`) ?? 0;
     for (const r of ringOrder) {
       const tx = -this.plan.approachZ, tz = this.plan.approachX;   // 环的切线方向
-      for (const slot of this.plan.coverSlots.filter((s) => s.ring === r)) {
+      const slots = this.plan.coverSlots.filter((s) => s.ring === r)
+        .sort((a, b) => scoreOf(b.x, b.z) - scoreOf(a.x, a.z));
+      for (const slot of slots) {
         for (const off of [-4, 0, 4]) {
           this.buildPieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r });
         }
@@ -267,6 +275,8 @@ export class SwarmCommander {
       out.push({ x: bx, z: bz, d2 });
     };
     for (const c of this.builtCovers) add(c.x, c.z);
+    // ★ 扫描产物（有利位置）优先作为驻守点；coverSlots 兜底
+    for (const p of plan.posts) add(p.x, p.z);
     for (const c of plan.coverSlots) add(c.x, c.z);
     out.sort((a, b) => a.d2 - b.d2);
     return out.map((o) => ({ x: o.x, z: o.z }));
@@ -615,6 +625,35 @@ export class SwarmCommander {
     }
     if (best) return best;
     return { x: tgt.x - plan.approachZ * 12, z: tgt.z + plan.approachX * 12 };
+  }
+
+  /** ★ 远程有利位置（制高点 / 掩体后；含"掩体真的挡子弹"校验）。
+   *  规则：距离在 [0.5R, 1.05R]（能射到且不贴脸）且 **≥ minDist**（边撤边打时要求更远）；
+   *  掩体挡住玩家视线加分；越接近理想站位（0.8R）越好；无合适点 → null（原地射击）。 */
+  rangedPost(px: number, pz: number, range: number, minDist = 0): { x: number; z: number } | null {
+    const plan = this.plan;
+    if (!plan || range <= 0) return null;
+    const ideal = range * RANGED.PREFER_RATIO;
+    let best: { x: number; z: number } | null = null;
+    let bestScore = -Infinity;
+    const consider = (x: number, z: number, high: boolean, base = 0): void => {
+      const d = Math.hypot(x - px, z - pz);
+      if (d < range * 0.5 || d > range * 1.05 || d < minDist) return;
+      const blocked = coverBlocksLine(px, pz, x, z);   // 玩家 → 该点：掩体挡不挡
+      let score = base + -Math.abs(d - ideal) * 0.08;
+      if (blocked) score += 3;
+      if (high) score += 0.8;
+      if (score > bestScore) { bestScore = score; best = { x, z }; }
+    };
+    // ★ 优先用**落地扫描产物**（posts：一次算好的制高/掩体位）；已建掩体实时补入
+    for (const p of plan.posts) {
+      if (p.kind === 'cover') consider(p.x - plan.approachX * 1.2, p.z - plan.approachZ * 1.2, false, p.score);
+      else consider(p.x, p.z, true, p.score);
+    }
+    for (const c of this.builtCovers) {
+      consider(c.x - plan.approachX * 1.2, c.z - plan.approachZ * 1.2, false, 3.5);
+    }
+    return best;
   }
 
   /** ★ 调试/测试：强制切态势（覆盖态势机自动转移） */

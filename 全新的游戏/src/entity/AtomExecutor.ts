@@ -178,6 +178,67 @@ export function rollFire(p: number): boolean {
   return Math.random() < p;
 }
 
+// ============================================================
+// ★ 统一决策内核（2026-09-21）：L3 实体与代理共用同一条
+//    「指令 × 命令 × 角色 × 情境 → 两层掷 → 移动原子/开火」管线
+// ============================================================
+
+/** 指令执行情境（两种载体口径统一；dist 与 range 同单位） */
+export interface DirectiveSituation {
+  dist: number;
+  range: number;
+  hpRatio: number;
+  /** 受击白闪（>0.5 = 刚被击） */
+  flash: number;
+  hasTarget: boolean;
+  /** 五轴 ROE 编码（FIRE_*） */
+  firePolicy: number;
+}
+
+/** 内核输出（复用对象，零分配） */
+export interface DirectiveRun {
+  moveIdx: number;
+  move: MoveAtom;
+  fire: boolean;
+  /** 目标在攻击距离内（dist ≤ range） */
+  inRange: boolean;
+}
+
+/** ★ 一次决策：合成权重（指令×命令×角色×情境）→ 承诺窗内沿用 / 到点重掷 */
+export function runDirective(
+  atoms: AtomExecutor,
+  uid: number,
+  now: number,
+  directive: DirectiveKind,
+  order: SquadOrderKind | 'none',
+  bucket: DirectiveRoleBucket,
+  seq: number,
+  sit: DirectiveSituation,
+  out: DirectiveRun,
+): void {
+  out.inRange = sit.dist <= sit.range;
+  const w = resolveWeights(directive, order, bucket, {
+    inRange: out.inRange,
+    rangeRatio: sit.dist / Math.max(1e-3, sit.range),
+    lowHp: sit.hpRatio < 0.3,
+    justHit: sit.flash > 0.5,
+    hasTarget: sit.hasTarget,
+    firePolicy: sit.firePolicy,
+  });
+  const atom = atoms.step(uid, now, seq, w, sit.flash > 0.5);
+  out.move = atom.move;
+  out.moveIdx = MOVE_ATOMS.indexOf(atom.move);
+  out.fire = atom.fire;
+}
+
+/** ★ 开火节拍与散布（远距掩护性零星散射 / 近距<20m 疯狂精准）——两种载体同源 */
+export function fireProfile(dist: number): { near: boolean; cd: number; spread: number } {
+  const near = dist < 20;
+  return near
+    ? { near, cd: 0.35 + Math.random() * 0.25, spread: 0.012 }
+    : { near, cd: 1.1 + Math.random() * 1.0, spread: 0.15 };
+}
+
 function rollIndex(weights: number[]): number {
   const r = Math.random();
   let acc = 0;

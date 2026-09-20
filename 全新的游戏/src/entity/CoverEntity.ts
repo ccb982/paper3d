@@ -112,6 +112,34 @@ export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/Worl
   return out;
 }
 
+/** ★ 线段 (ax,az)→(bx,bz) 是否被某座墙挡住（远程选位的"掩体真的挡子弹吗"校验）。
+ *  实现：把线段变换到墙局部坐标，与矩形 [-W/2,W/2]×[-T/2,T/2] 做 slab 相交。 */
+export function coverBlocksLine(ax: number, az: number, bx: number, bz: number): boolean {
+  for (const c of _coverRegistry) {
+    const p = c.position;
+    const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);   // 厚轴
+    const rgtX = fwdZ, rgtZ = -fwdX;                                // 宽轴
+    const rel = (x: number, z: number): { u: number; v: number } => ({
+      u: (x - p.x) * rgtX + (z - p.z) * rgtZ,   // 宽向
+      v: (x - p.x) * fwdX + (z - p.z) * fwdZ,   // 厚向
+    });
+    const a = rel(ax, az), b = rel(bx, bz);
+    const du = b.u - a.u, dv = b.v - a.v;
+    const hw = COVER_W / 2, ht = COVER_T / 2;
+    let t0 = 0, t1 = 1;
+    const clip = (p0: number, d: number, lo: number, hi: number): boolean => {
+      if (Math.abs(d) < 1e-6) return p0 >= lo && p0 <= hi;
+      let tA = (lo - p0) / d, tB = (hi - p0) / d;
+      if (tA > tB) { const tmp = tA; tA = tB; tB = tmp; }
+      t0 = Math.max(t0, tA);
+      t1 = Math.min(t1, tB);
+      return t0 <= t1;
+    };
+    if (clip(a.u, du, -hw, hw) && clip(a.v, dv, -ht, ht)) return true;
+  }
+  return false;
+}
+
 /** ★ 玩家附近是否有**玩家墙**（开枪时判定"无视自家墙"；敌人墙不享受该便利） */
 export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
   const r2 = r * r;

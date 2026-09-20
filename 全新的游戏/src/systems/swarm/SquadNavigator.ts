@@ -13,8 +13,13 @@ import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import { formationOffset } from './Formation';
 import { SquadPathFinder } from './SquadPath';
+import { HpaPath } from './HpaPath';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
 import type { Squad, SquadTable } from './SquadTable';
+import { shouldKite, kitePoint } from './RangedTactics';
+
+/** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
+const NAV_RANGE = 50;
 
 /** 寻路参数（集中可调） */
 export const NAV = {
@@ -31,6 +36,8 @@ const _zeroSlot = { fx: 0, fz: 0 };
 
 export class SquadNavigator {
   private readonly pathFinder = new SquadPathFinder();
+  /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
+  private readonly hpa = new HpaPath();
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   private readonly _centroid = { x: 0, z: 0 };
 
@@ -47,11 +54,18 @@ export class SquadNavigator {
     const raster = RasterMap.current;
     if (!raster || !squads.centroidOf(squad.id, this._centroid)) return;
     const path: { x: number; z: number }[] = [];
-    if (this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path)) {
+    // ★ 长距离优先 HPA*（全局、绕大障碍）；失败 → 有界 A*（SquadPath）→ 直线
+    const dist = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+    let ok = false;
+    if (dist > 70) ok = this.hpa.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path);
+    const warming = dist > 70 && this.hpa.warming;
+    if (!ok) ok = this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path);
+    if (ok) {
       state.order.path = path;
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
-      state.pathAt = now;
+      // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
+      state.pathAt = warming ? 0 : now;
       state.pathFailedAt = 0;
     } else {
       // ★ 无解 → 清路径走直线（绝不停摆；冷却后再试）
@@ -66,6 +80,8 @@ export class SquadNavigator {
     squads: SquadTable,
     tactics: SquadTactics,
     now: number,
+    /** ★ 远程有利位置提供者（制高/掩体后；由指挥器实现；minDist = 边撤边打要求更远） */
+    rangedPost?: (x: number, z: number, range: number, minDist?: number) => { x: number; z: number } | null,
   ): void {
     if (!units || units.length === 0) return;
     const bySquad = this.unitsBySquad;
@@ -98,6 +114,38 @@ export class SquadNavigator {
       const type = squad.type;
       const singleton = squad.singleton;
       for (const u of members) {
+        // ★ 远程：不追打——玩家逼近 → 边撤边打；否则优先占制高/掩体后（覆盖编队槽位）
+        if (rangedPost && u.attackType === 'ranged') {
+          const up = u.position;
+          const dT = Math.hypot(tgt.x - up.x, tgt.z - up.z);
+          const speed = u.moveSpeed > 0 ? u.moveSpeed : 2.5;
+          if (shouldKite(dT, NAV_RANGE)) {
+            // ★ 边撤边打 = 优先换到"更远 + 有掩体/高地"的位置；没有才沿径向后撤
+            const kp = rangedPost(up.x, up.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE);
+            const kx = kp.x - up.x, kz = kp.z - up.z;
+            const kl = Math.hypot(kx, kz) || 1;
+            u.controlSource = 'swarm';
+            u.applySteer({
+              dirX: kx / kl, dirZ: kz / kl, speed,
+              source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
+            });
+            continue;
+          }
+          const post = rangedPost(up.x, up.z, NAV_RANGE);
+          if (post) {
+            const dx = post.x - up.x, dz = post.z - up.z;
+            const dl = Math.hypot(dx, dz) || 1;
+            const mt = u.moveTarget;
+            if (mt) { mt.x = post.x; mt.y = 0; mt.z = post.z; }
+            else u.moveTarget = { x: post.x, y: 0, z: post.z };
+            u.controlSource = 'swarm';
+            u.applySteer({
+              dirX: dx / dl, dirZ: dz / dl, speed,
+              source: 'formation', targetX: post.x, targetY: 0, targetZ: post.z,
+            });
+            continue;
+          }
+        }
         // ★ 槽位 rank = 全员 uid（与 applyOrders 同口径：L3 + 代理跨 LOD 不换位）
         let rank = 0;
         for (const uid of squad.members.keys()) if (uid < u.swarmUid) rank++;
@@ -119,7 +167,13 @@ export class SquadNavigator {
     }
   }
 
+  /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */
+  warm(raster: RasterMap, x: number, z: number): void {
+    this.hpa.warmup(raster, x, z, 2);
+  }
+
   clear(): void {
     this.unitsBySquad.clear();
+    this.hpa.clear();
   }
 }

@@ -10,18 +10,19 @@ import { ENEMY_ENGAGE_FLOOR } from '../../systems/ai/aiconfig';
 import type { BehaviorContext } from '../../systems/ai/behaviors';
 import type { EnemyBase } from '../EnemyBase';
 import {
-  MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
+  MOVE_ATOMS, atomDirection, AtomExecutor, runDirective, fireProfile,
+  type DirectiveRun,
 } from '../AtomExecutor';
 import { roleBucket } from '../SwarmUnit';
 
 const _atomDir = { x: 0, z: 0 };
 
+/** ★ 统一决策内核输出 scratch（零分配；与代理共用同一条管线） */
+const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
+
 export class EnemyBrain {
-  // ---- 原子承诺状态（瞬时） ----
-  private atomSeq = -1;
-  private atomUntil = 0;
-  private atomMoveIdx = 4;
-  private atomFire = true;
+  // ---- 原子承诺状态（与代理同源：AtomExecutor 的承诺窗） ----
+  private readonly atoms = new AtomExecutor();
   /** 当前移动原子下标（255 = 无覆盖） */
   atomMove = 255;
   /** 本段开火门控（true = 本段不开火；meleeSwing/rangedShot 消费） */
@@ -139,9 +140,9 @@ export class EnemyBrain {
     if (!t) return;
     const d = Math.hypot(t.x - entity.position.x, t.z - entity.position.z);
     if (d > this.fbRange) return;
-    // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准射击
-    const near = d < 20;
-    this.fbCd = near ? 0.35 + Math.random() * 0.25 : 1.1 + Math.random() * 1.0;
+    // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准（统一节拍表）
+    const prof = fireProfile(d);
+    this.fbCd = prof.cd;
     if (this.fbKind === 'suicide') {
       // ★ 自爆保底：范围爆炸 + 自身死亡（与 selfDestruct 行为同口径）
       ctx.attack({
@@ -178,7 +179,7 @@ export class EnemyBrain {
     let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
     const len = Math.hypot(dx, dy, dz) || 1;
     dx /= len; dy /= len; dz /= len;
-    const sp = near ? 0.012 : 0.15;
+    const sp = prof.spread;
     if (sp > 0) {
       const a = (Math.random() - 0.5) * 2 * sp;
       const ca = Math.cos(a), sa = Math.sin(a);
@@ -214,23 +215,17 @@ export class EnemyBrain {
     const t = this.resolveLocalTarget(entity, ctx);
     const dist = t ? Math.hypot(t.x - entity.position.x, t.z - entity.position.z) : 0;
     const range = this.fbRange > 0 ? this.fbRange : (entity.attackType === 'ranged' ? 12 : 2.2);
-    const w = resolveWeights(dk, entity.orderKind, roleBucket(entity.role), {
-      inRange: !!t && dist <= range,
-      rangeRatio: dist / Math.max(1e-3, range),
-      lowHp: entity.hp < entity.maxHp * 0.3,
-      justHit: false,            // 后续接入受击时间戳
-      hasTarget: !!t,
-      firePolicy: entity.directiveFire,   // ★ 五轴 ROE
-    });
-    // 承诺窗口：指令变更 / 到段边界 → 重掷
-    if (entity.directiveSeq !== this.atomSeq || now >= this.atomUntil) {
-      this.atomSeq = entity.directiveSeq;
-      this.atomMoveIdx = rollMove(w.move);
-      this.atomFire = rollFire(w.fire);
-      this.atomUntil = now + 0.35 * (0.7 + Math.random() * 0.6);
-    }
-    this.atomMove = this.atomMoveIdx;
-    this.fireHold = !this.atomFire;
+    // ★ 统一决策内核（与代理同一份：指令×命令×角色×情境 → 两层掷 → 原子/开火）
+    runDirective(this.atoms, entity.swarmUid, now, dk, entity.orderKind,
+      roleBucket(entity.role), entity.directiveSeq, {
+        dist, range,
+        hpRatio: entity.maxHp > 0 ? entity.hp / entity.maxHp : 1,
+        flash: 0,                  // 实体受击时间戳后续接入
+        hasTarget: !!t,
+        firePolicy: entity.directiveFire,
+      }, _run);
+    this.atomMove = _run.moveIdx;
+    this.fireHold = !_run.fire;
     // 方向：指令目标点 > 当前目标 > 不移动
     let tx = 0, tz = 0;
     const dtx = entity.directiveTargetX - entity.position.x;
@@ -239,7 +234,7 @@ export class EnemyBrain {
     if (td > 0.5) { tx = dtx / td; tz = dtz / td; }
     else if (t && dist > 1e-3) { tx = (t.x - entity.position.x) / dist; tz = (t.z - entity.position.z) / dist; }
     if (tx !== 0 || tz !== 0) {
-      atomDirection(MOVE_ATOMS[this.atomMoveIdx], tx, tz, _atomDir);
+      atomDirection(MOVE_ATOMS[_run.moveIdx], tx, tz, _atomDir);
       if (_atomDir.x !== 0 || _atomDir.z !== 0) {
         // 近似基础速度（2.5 m/s；精确移速后续配置化）× 指令限速
         entity.moveBy(_atomDir.x, _atomDir.z, dt, 2.5 * entity.directiveSpeedMul);

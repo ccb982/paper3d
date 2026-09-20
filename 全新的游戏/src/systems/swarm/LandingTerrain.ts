@@ -17,6 +17,16 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 
+/** ★ 有利位置（落地扫描一次算好；远程驻守 / 工程兵优先施工共用） */
+export interface DefensePost {
+  x: number;
+  z: number;
+  /** high = 制高点；cover = 掩体后 */
+  kind: 'high' | 'cover';
+  /** 综合评分（越高越好；远程选位/施工排序用） */
+  score: number;
+}
+
 /** ★ 防守布置（地形检测输出；阶段机 S0~S6 消费） */
 export interface DefensePlan {
   cx: number;
@@ -24,6 +34,8 @@ export interface DefensePlan {
   /** 主要来向（单位向量；玩家最可能从这来） */
   approachX: number;
   approachZ: number;
+  /** ★ 有利位置清单（落地扫描产出；远程兵/工程兵共用） */
+  posts: DefensePost[];
   /** 高地（视野优势点；远程/观察） */
   highGround: { x: number; z: number; h: number }[];
   /** 掩体位（三环：0 外 / 1 中 / 2 内；工程兵按环序建造） */
@@ -307,9 +319,32 @@ export function analyzeLandingTerrain(
     trenchLines.push(line);
   }
 
+  // ---- ⑥ ★ 有利位置清单（一次扫描算好，供远程驻守 / 工程兵优先施工） ----
+  //   掩体位：统一分（真实遮挡已在 ④ 保证；环位越接近"理想驻守带 55m"越高）
+  //   高地：按突出度归一 + 基础分；两类合并排序、去重（≥10m）
+  const posts: DefensePost[] = [];
+  for (const c of coverSlots) {
+    const r = rings[c.ring];
+    posts.push({ x: c.x, z: c.z, kind: 'cover', score: 2 + (1 - Math.abs(r - 55) / 40) });
+  }
+  for (const g of highGround) {
+    posts.push({ x: g.x, z: g.z, kind: 'high', score: 1 + Math.min(1, g.h / 12) * 0.5 });
+  }
+  posts.sort((a, b) => b.score - a.score);
+  const picked: DefensePost[] = [];
+  for (const p of posts) {
+    if (picked.length >= 24) break;
+    let near = false;
+    for (const q of picked) {
+      if ((q.x - p.x) ** 2 + (q.z - p.z) ** 2 < 10 * 10) { near = true; break; }
+    }
+    if (!near) picked.push(p);
+  }
+
   return {
     cx, cz,
     approachX: axisX, approachZ: axisZ,
+    posts: picked,
     highGround,
     coverSlots,
     chokepoints,
