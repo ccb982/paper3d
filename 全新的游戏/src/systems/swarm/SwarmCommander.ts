@@ -108,6 +108,22 @@ export class SwarmCommander {
       const line = this.plan.trenchLines[r] ?? [];
       for (const p of line) this.buildPieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
     }
+    // ★ 兜底：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
+    if (this.buildPieces.length === 0) {
+      const raster = RasterMap.current;
+      const a0 = Math.atan2(this.plan.approachZ, this.plan.approachX);
+      for (const r of [2, 1, 0] as const) {
+        for (const k of [-2, 0, 2]) {
+          const a = a0 + k * 0.35;
+          const x = this.plan.cx + Math.cos(a) * [40, 60, 80][r];
+          const z = this.plan.cz + Math.sin(a) * [40, 60, 80][r];
+          const role = raster?.tileDefAt(x, z).genRole;
+          if (role === 'pit' || role === 'liquid') continue;
+          if (raster && raster.surfaceHeightAt(x, z) < -1.2) continue;
+          this.buildPieces.push({ kind: 'cover', x, z, ring: r });
+        }
+      }
+    }
     this.builtSlots.clear();
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
@@ -213,15 +229,23 @@ export class SwarmCommander {
     return best;
   }
 
-  /** ★ 最近的已建掩体（远程驻守用；无 = null） */
-  private nearestBuiltCover(x: number, z: number): { x: number; z: number } | null {
-    let best: { x: number; z: number } | null = null;
-    let bestD2 = Infinity;
-    for (const c of this.builtCovers) {
-      const d2 = (c.x - x) ** 2 + (c.z - z) ** 2;
-      if (d2 < bestD2) { bestD2 = d2; best = c; }
-    }
-    return best;
+  /** ★ 远程驻守点（掩体后侧）：已建掩体 > 规划掩体位；点在"掩体背向来向"一侧 1.2m。
+   *  requireInRange = 只取距玩家 ≤48m 的（保证驻守点能射到玩家）；按距玩家近→远排序。 */
+  private garrisonCovers(
+    plan: DefensePlan, playerX: number, playerZ: number, requireInRange: boolean,
+  ): { x: number; z: number }[] {
+    const out: { x: number; z: number; d2: number }[] = [];
+    const add = (x: number, z: number): void => {
+      const bx = x - plan.approachX * 1.2;
+      const bz = z - plan.approachZ * 1.2;
+      const d2 = (bx - playerX) ** 2 + (bz - playerZ) ** 2;
+      if (requireInRange && d2 > 48 * 48) return;
+      out.push({ x: bx, z: bz, d2 });
+    };
+    for (const c of this.builtCovers) add(c.x, c.z);
+    for (const c of plan.coverSlots) add(c.x, c.z);
+    out.sort((a, b) => a.d2 - b.d2);
+    return out.map((o) => ({ x: o.x, z: o.z }));
   }
 
   setDefensePlan(plan: DefensePlan | null): void {
@@ -280,8 +304,10 @@ export class SwarmCommander {
     if (!this.plan) return;
     this.buildCd -= dt;
     const squads = [...this.swarm.squads.all()];
-    // ★ 施工队 = **具备施工能力的兵种**（后勤不一定能施工；杂兵可兼任）
-    const builders = squads.filter((s) => s.builders);
+    // ★ 施工队 = **具备施工能力的兵种**（后勤不一定能施工；杂兵可兼任）；
+    //   兜底：名册里一个施工兵种都没有（缺素材/未加载）→ 杂兵（assault）兼任
+    let builders = squads.filter((s) => s.builders);
+    if (builders.length === 0) builders = squads.filter((s) => s.type === 'assault');
     this.engAccum += dt;
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
@@ -363,32 +389,37 @@ export class SwarmCommander {
         this.swarm.issueOrder(builders[i].id, { kind: 'protect', target: { x: hold.x, z: hold.z }, roe: 'holdFire', seq: 0 }, 8);
       }
     }
-    // ③ ★ 远程队：**交战中站射程环**（距玩家 20m ≈ 弩手/术士射程 20~22m）→ 保证真能开火；
-    //    非交战（玩家远）→ 占高地/火力点守（不追脸）
+    // ③ ★ 远程队：**优先驻守掩体后**（已建掩体 > 规划掩体位；取掩体背向来向一侧）——
+    //    掩体距玩家 ≤48m（射程内）才算驻守点；无可用掩体 → 交战站射程环 45m / 非交战占高地
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
+    const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
+    let coverIdx = 0;
     for (const s of squads.filter((q) => q.type === 'ranged')) {
       let cx = 0, cz = 0, n = 0;
       for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
       if (n > 0) { cx /= n; cz /= n; }
+      const cov = covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
       let holdX: number, holdZ: number;
-      if (chase && n > 0) {
+      if (cov) {
+        holdX = cov.x;
+        holdZ = cov.z;
+      } else if (chase && n > 0) {
         const ax = cx - playerX, az = cz - playerZ;
         const al = Math.hypot(ax, az) || 1;
         // ★ 射程环 45m（射程 50m+ → 留余量；远距输出、不追脸）
         holdX = playerX + (ax / al) * 45;
         holdZ = playerZ + (az / al) * 45;
       } else {
-        // ★ 造好的掩体 → **远程驻守进去**；无掩体 → 高地；再退正面
-        const cov = this.nearestBuiltCover(cx, cz);
-        const hold = cov ?? highPick ?? front;
+        const hold = highPick ?? front;
         holdX = hold.x;
         holdZ = hold.z;
       }
-      const far = n === 0 || Math.hypot(cx - holdX, cz - holdZ) > 4;   // 收紧：站上射程环才算到位
+      const far = n === 0 || Math.hypot(cx - holdX, cz - holdZ) > 4;   // 收紧：站上驻守点才算到位
       this.swarm.issueOrder(s.id, {
         kind: far ? 'advance' : 'protect',
         target: { x: holdX, z: holdZ },
-        roe: far ? 'fireOnArrival' : 'engage',
+        // ★ 一进射程就开火（不再 fireOnArrival 等到位；<20m 自动转精准）
+        roe: 'engage',
         urgency: far ? 1 : 0,          // 远程赶路加急（射程环到位才能输出）
         seq: 0,
       }, far ? 8 : 6);

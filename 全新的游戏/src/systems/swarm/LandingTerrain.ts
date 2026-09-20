@@ -252,37 +252,45 @@ export function analyzeLandingTerrain(
     if (!near) chokepoints.push({ x: c.x, z: c.z });
   }
 
-  // ---- ④ 掩体位：三环 × 来向 ±60°；优先贴真实遮挡（前方 4m 内不可通行/更高） ----
-  //   ★ 2026-09-20：环半径放大到 40/60/80m（用户定调：开始造掩体距离拉到 80m）
+  // ---- ④ 掩体位：三环 × 来向 ±60°（★ 保证每环都有位：有遮挡优先，没有也不跳过） ----
+  //   ★ 2026-09-20：环半径放大到 40/60/80m（用户定调：开始造掩体距离拉到 80m）；
+  //     早期"没遮挡就不硬凑"→ 开阔地形 0 掩体位 → 工程兵无活可干（用户实测）
   const rings = [40, 60, 80];
   const coverSlots: { x: number; z: number; ring: 0 | 1 | 2 }[] = [];
   for (let r = 0; r < rings.length; r++) {
+    const cand: { x: number; z: number; covered: boolean }[] = [];
     for (let k = -4; k <= 4; k++) {
       const a = baseA + (k * 15 * Math.PI) / 180;
       const px = cx + Math.cos(a) * rings[r];
       const pz = cz + Math.sin(a) * rings[r];
       if (!okAt(px, pz)) continue;
-      // 贴遮挡：朝来向（外）4m 处不可通行 或 高出 ≥1m
+      // 贴遮挡：朝来向（外）4m 处不可通行 或 高出 ≥1m（有更好，没有也可）
       const ox = Math.cos(a) * 4, oz = Math.sin(a) * 4;
       const oix = Math.round((px + ox - x0) / STEP);
       const oiz = Math.round((pz + oz - z0) / STEP);
       const inRange = oix >= 0 && oiz >= 0 && oix < n && oiz < n;
       const covered = inRange && (pass[oiz * n + oix] === 0 || h[oiz * n + oix] >= hAt(px, pz) + 1);
-      if (!covered) continue;                    // 没遮挡不硬凑
+      cand.push({ x: px, z: pz, covered });
+    }
+    // 有遮挡的排前面；同环间距 ≥3m
+    cand.sort((a, b) => Number(b.covered) - Number(a.covered));
+    for (const c of cand) {
       let tooClose = false;
-      for (const c of coverSlots) {
-        if (c.ring !== r) continue;
-        if ((c.x - px) ** 2 + (c.z - pz) ** 2 < 9) { tooClose = true; break; }
+      for (const s of coverSlots) {
+        if (s.ring !== r) continue;
+        if ((s.x - c.x) ** 2 + (s.z - c.z) ** 2 < 9) { tooClose = true; break; }
       }
       if (tooClose) continue;
-      coverSlots.push({ x: px, z: pz, ring: r as 0 | 1 | 2 });
+      coverSlots.push({ x: c.x, z: c.z, ring: r as 0 | 1 | 2 });
     }
   }
 
-  // ---- ⑤ 战壕线：三环弧线（7.5° 步进 ≈ 每 4m 一块），仅 stand ∧ reach ----
+  // ---- ⑤ 战壕线：三环弧线（7.5° 步进 ≈ 每 4m 一块），仅 stand ∧ reach；
+  //        若整条线不足 3 块（崖边/遮挡地形）→ 用 pass ∧ reach 兜底，保证有壕可挖 ----
   const trenchLines: { x: number; z: number }[][] = [];
   for (const r of rings) {
     const line: { x: number; z: number }[] = [];
+    const fallback: { x: number; z: number }[] = [];
     for (let k = -8; k <= 8; k++) {
       const a = baseA + (k * 7.5 * Math.PI) / 180;
       const x = cx + Math.cos(a) * r;
@@ -291,9 +299,11 @@ export function analyzeLandingTerrain(
       const iz = Math.round((z - z0) / STEP);
       if (ix < 0 || iz < 0 || ix >= n || iz >= n) continue;
       const i = iz * n + ix;
-      if (stand[i] !== 1 || reach[i] !== 1) continue;
-      line.push({ x, z });
+      if (pass[i] !== 1 || reach[i] !== 1) continue;
+      if (stand[i] === 1) line.push({ x, z });
+      else fallback.push({ x, z });
     }
+    if (line.length < 3) line.push(...fallback.slice(0, 6));
     trenchLines.push(line);
   }
 

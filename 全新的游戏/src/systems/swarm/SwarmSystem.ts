@@ -577,9 +577,11 @@ export class SwarmSystem {
     const dk = directiveFromCode(p.directiveKind[i]);
     const directiveActive = dk !== 'none' && (p.directiveUntil[i] === 0 || now < p.directiveUntil[i]);
     if (directiveActive) {
+      // ★ 远程射击判定半径：射程 + 2.5m 余量（"小于 50m 就要开始射击"）
+      const fireRange = p.meleeRange[i] + (p.ranged[i] === 1 ? 2.5 : SWARM.MELEE_PAD);
       const sit = {
-        inRange: d <= p.meleeRange[i] + SWARM.MELEE_PAD,
-        rangeRatio: d / Math.max(1e-3, p.meleeRange[i] + SWARM.MELEE_PAD),
+        inRange: d <= fireRange,
+        rangeRatio: d / Math.max(1e-3, fireRange),
         lowHp: p.hp[i] < p.maxHp[i] * 0.3,
         justHit: p.flash[i] > 0.5,
         hasTarget: d > 1e-3,
@@ -718,7 +720,8 @@ export class SwarmSystem {
         p.dirZ[i] = 0;
       }
       // 进射程：令牌攻击（同目标同时挥击上限）
-      if (d <= p.meleeRange[i] + SWARM.MELEE_PAD) {
+      const fireRange = p.meleeRange[i] + (p.ranged[i] === 1 ? 2.5 : SWARM.MELEE_PAD);
+      if (d <= fireRange) {
         // ★ 移动/开火正交（用户设计）：指令活跃（原子掷接管）→ **不停步**；
         //   无指令（atomMove=255）→ 保留旧行为（停步挥击，防穿过目标）
         if (p.atomMove[i] === 255) {
