@@ -193,8 +193,8 @@ export class SwarmSystem {
   private readonly leaderAI = new SquadLeaderAI();
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
   readonly commander = new SwarmCommander(this);
-  /** ★ 步骤 10：大队警觉（squadId → 最近被击秒） */
-  private readonly recentHits = new Map<number, number>();
+  /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
+  readonly recentHits = new Map<number, number>();
   /** ★ 步骤 10：倾盆而出截止（秒；0 = 未触发） */
   private counterUntil = 0;
   /** ★ 步骤 6：上帧玩家位置（被击升格的 L3 范围判定） */

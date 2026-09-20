@@ -12,6 +12,7 @@ import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
 import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
+import { applyPosture, PostureMachine, type BattlePosture } from './Posture';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
@@ -40,6 +41,12 @@ export class SwarmCommander {
   spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
   /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
   mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
+  /** ★ 当前态势（引擎内部变量；驱动各编队命令强度） */
+  battlePosture: BattlePosture = 'fortify';
+  /** ★ 态势机（转移条件集中在 Posture.ts） */
+  private readonly postureMachine = new PostureMachine();
+  /** 进入总攻时的兵力（撤退判定基准） */
+  private aliveAtPosture = 0;
   /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
   private readonly builtCovers: { x: number; z: number }[] = [];
   /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
@@ -269,6 +276,26 @@ export class SwarmCommander {
 
   /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护 */
   tick(dt: number, playerX = 0, playerZ = 0): void {
+    // ★ 态势更新（开局 fortify → patrol → advance → mass → assault → withdraw）
+    const now = performance.now() / 1000;
+    const builtRatio = this.buildPieces.length > 0
+      ? this.builtSlots.size / this.buildPieces.length : 0;
+    let contact = false;
+    for (const [, t] of this.swarm.recentHits) {
+      if (now - t <= 8) { contact = true; break; }
+    }
+    const next = this.postureMachine.update(now, {
+      playerDist: this.plan ? Math.hypot(playerX - this.plan.cx, playerZ - this.plan.cz) : 9999,
+      builtRatio,
+      contact,
+      aliveRatio: this.aliveAtPosture > 0
+        ? this.swarm.ledger.alive / this.aliveAtPosture : 1,
+    });
+    if (next !== this.battlePosture) {
+      this.battlePosture = next;
+      if (next === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
+      this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
+    }
     if (this.mission) {
       this.resendAccum += dt;
       if (this.resendAccum >= SwarmCommander.RESEND_S) {
@@ -322,31 +349,27 @@ export class SwarmCommander {
     const buildSlot = this.stage === 'S1' && slot && !nearPlayer ? slot : null;
     // 正面基准：有工事点用工事点；否则落点前方 40m
     const front = buildSlot ?? { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
-    // ★ 近战目标：**施工期前出掩护工事**（在工位朝玩家方向 15m）；施工完 → 玩家近则追玩家
+    // ★ 近战类目标：按**姿态 × 兵种配置**的追击开关决定打玩家还是守正面；
+    //   施工期盾队前出掩护工事（screen 分支单独处理）
     const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
-    let meleeX: number, meleeZ: number;
-    if (buildSlot) {
-      const dx = playerX - buildSlot.x, dz = playerZ - buildSlot.z;
-      const dl = Math.hypot(dx, dz) || 1;
-      meleeX = buildSlot.x + (dx / dl) * 15;
-      meleeZ = buildSlot.z + (dz / dl) * 15;
-    } else if (chase) {
-      meleeX = playerX;
-      meleeZ = playerZ;
-    } else {
-      meleeX = front.x + plan.approachX * 10;
-      meleeZ = front.z + plan.approachZ * 10;
-    }
-    // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 施工 override）
+    const meleeAt = (doctrineChase: boolean): { x: number; z: number } => (
+      doctrineChase && chase
+        ? { x: playerX, z: playerZ }
+        : { x: front.x + plan.approachX * 10, z: front.z + plan.approachZ * 10 }
+    );
+    // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 逐兵种 + 施工 override）→ 再叠态势
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
     let coverIdx = 0;
     let assaultIdx = 0;
     let screenIdx = 0;
     for (const s of squads) {
-      const d = resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null);
+      const d = applyPosture(
+        resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
+        this.battlePosture,
+      );
       let kind: TacticalOrder['kind'] = 'advance';
-      let target = { x: meleeX, z: meleeZ };
+      let target = meleeAt(d.chase);
       let roe: TacticalOrder['roe'] = 'engage';
       let ttl = 6;
       let urgency = 0;
@@ -393,8 +416,9 @@ export class SwarmCommander {
         }
         case 'flank': {
           const side = assaultIdx++ % 2 === 0 ? 1 : -1;
+          const base = meleeAt(d.chase);
           kind = 'flank';
-          target = { x: meleeX - plan.approachZ * side * 14, z: meleeZ + plan.approachX * side * 14 };
+          target = { x: base.x - plan.approachZ * side * 14, z: base.z + plan.approachX * side * 14 };
           break;
         }
         case 'screen': {
@@ -409,7 +433,7 @@ export class SwarmCommander {
             target = { x: c.x, z: c.z };
             ttl = 8;
           } else {
-            target = { x: meleeX, z: meleeZ };
+            target = meleeAt(d.chase);
           }
           break;
         }
@@ -420,7 +444,7 @@ export class SwarmCommander {
         }
         case 'press':
         default:
-          target = { x: meleeX, z: meleeZ };
+          target = meleeAt(d.chase);
           break;
       }
       this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
@@ -449,6 +473,14 @@ export class SwarmCommander {
     }
   }
 
+  /** ★ 调试/测试：强制切态势（覆盖态势机自动转移） */
+  setPosture(p: BattlePosture): void {
+    this.postureMachine.set(p, performance.now() / 1000);
+    this.battlePosture = p;
+    if (p === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
+    this.engAccum = 2;   // 下一拍立即重发部署
+  }
+
   /** 清理（退出模式） */
   clear(): void {
     this.mission = null;
@@ -465,6 +497,9 @@ export class SwarmCommander {
     this.buildCd = 0;
     this.resendAccum = 0;
     this.recalledRoster = null;
+    this.postureMachine.reset();
+    this.battlePosture = 'fortify';
+    this.aliveAtPosture = 0;
   }
 
   private dispatchMission(): void {
