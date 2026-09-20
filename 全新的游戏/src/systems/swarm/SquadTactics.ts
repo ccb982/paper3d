@@ -69,6 +69,33 @@ function sameTarget(
 /** ★ 队内保命线（个体 hpRatio）：低于此值 → 队长给该员下 `fallback`（撤出战斗） */
 export const MEMBER_FALLBACK_HP = 0.3;
 
+// ============================================================
+// ★ 队内战术表（通用 + 角色/标签覆盖；《蜂群架构.md》§14）
+// ============================================================
+/** 队内通用战术（所有兵种默认；低血后撤属于通用战术） */
+export interface UnitDoctrine {
+  /** 低血（≤30%）行为：fallback=撤出（通用）/ fight=继续战斗（盾、自爆） */
+  lowHp: 'fallback' | 'fight';
+}
+
+export const GENERIC_UNIT_DOCTRINE: UnitDoctrine = { lowHp: 'fallback' };
+
+/** ★ 兵种角色覆盖（缺省继承通用） */
+export const UNIT_DOCTRINE: Record<DirectiveRoleBucket, Partial<UnitDoctrine>> = {
+  melee: {},
+  ranged: {},
+  /** 盾卫：死守不退（用户定调：通用后撤不适用于盾） */
+  shield: { lowHp: 'fight' },
+  logistics: {},
+};
+
+/** 解析：通用 ← 角色覆盖；自爆标签强制 fight（冲上去引爆，不撤） */
+export function resolveUnitDoctrine(bucket: DirectiveRoleBucket, suicide: boolean): UnitDoctrine {
+  const d: UnitDoctrine = { ...GENERIC_UNIT_DOCTRINE, ...(UNIT_DOCTRINE[bucket] ?? {}) };
+  if (suicide) d.lowHp = 'fight';
+  return d;
+}
+
 export class SquadBlackboard {
   private orders = new Map<number, SquadOrderState>();
   /** ★ 小队间消息（引擎中转；收件队取走即消） */
@@ -224,8 +251,9 @@ export class SquadTactics {
     // ★ 五轴「紧急度」：限速乘子（1 + urgency·0.3，上限 1.5）
     const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。
-    //   队整体已在撤退档时不重复下发（避免覆盖 retreat 的分解）。
-    if (memberHpRatio <= MEMBER_FALLBACK_HP && state?.order.kind !== 'retreat') {
+    //   ★ 通用战术；盾卫/自爆兵不吃（`UNIT_DOCTRINE` 覆盖）；队整体已在撤退档时不重复下发。
+    const ud = resolveUnitDoctrine(bucket, squad.suicide);
+    if (ud.lowHp === 'fallback' && memberHpRatio <= MEMBER_FALLBACK_HP && state?.order.kind !== 'retreat') {
       const dir: UnitDirective = {
         kind: 'fallback',
         until: now + DIRECTIVE_TTL,
@@ -303,8 +331,8 @@ export interface LeaderStrategy {
 export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
   /** 突击：直扑贴身 */
   assault:   { engageR: 22, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
-  /** 防御：稳推进（接敌略近、残血更晚撤） */
-  defense:   { engageR: 18, press: true,  standoff: 2,  retreatHp: 0.22, retreatDist: 14 },
+  /** 防御：稳推进（接敌略近、**死守不退**：通用低血后撤不适用） */
+  defense:   { engageR: 18, press: true,  standoff: 2,  retreatHp: 0,    retreatDist: 14 },
   /** 远程：远距开火 + 保持射程环（不追脸；射程 50m+ → 站 45m 环） */
   ranged:    { engageR: 55, press: false, standoff: 45, retreatHp: 0.35, retreatDist: 22 },
   /** 后勤：缩后（不接敌，保持更远站位） */

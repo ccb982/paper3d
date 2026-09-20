@@ -34,6 +34,7 @@ import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
   roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
+  ROLE_SHIELD,
   type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
@@ -627,7 +628,10 @@ export class SwarmSystem {
     }
 
     // ---- P4：士气（低血撤退；同伴阵亡由 WorldMode 触发狂暴） ----
-    if (objective && d < 20 && now >= p.nextRetreatAt[i] && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO) {
+    //   ★ 通用战术；盾卫/自爆兵不吃（与 SquadDoctrine.retreatHp / UNIT_DOCTRINE 同口径）
+    if (objective && d < 20 && now >= p.nextRetreatAt[i]
+      && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO
+      && p.suicide[i] !== 1 && p.role[i] !== ROLE_SHIELD) {
       p.retreatUntil[i] = now + SWARM.RETREAT_TIME_MIN + Math.random() * SWARM.RETREAT_TIME_SPAN;
       p.nextRetreatAt[i] = now + SWARM.RETREAT_COOLDOWN;
     }

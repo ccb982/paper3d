@@ -11,6 +11,7 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
+import { resolveDoctrine } from './SquadDoctrine';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
@@ -334,103 +335,93 @@ export class SwarmCommander {
       meleeX = front.x + plan.approachX * 10;
       meleeZ = front.z + plan.approachZ * 10;
     }
-    // ① 盾队守正面/追玩家（最多 2 队，不含施工队）
-    for (const s of squads.filter((q) => q.type === 'defense' && !q.builders).slice(0, 2)) {
-      this.swarm.issueOrder(s.id, {
-        kind: 'advance',
-        target: { x: meleeX, z: meleeZ },
-        roe: 'engage',
-        seq: 0,
-      }, 6);
-    }
-    // ①a 突击队两翼错开（不抢中线；来向左右各一）
-    const assaults = squads.filter((q) => q.type === 'assault' && !q.builders).slice(0, 2);
-    for (let i = 0; i < assaults.length; i++) {
-      const side = i % 2 === 0 ? 1 : -1;
-      this.swarm.issueOrder(assaults[i].id, {
-        kind: 'flank',
-        target: {
-          x: meleeX - plan.approachZ * side * 14,
-          z: meleeZ + plan.approachX * side * 14,
-        },
-        roe: 'engage',
-        seq: 0,
-      }, 6);
-    }
-    // ①b ★ 隘口据守（地形分析产物）：**不追击时**盾队各领一个隘口
-    if (!chase && plan.chokepoints.length > 0) {
-      const guards = squads.filter((q) => q.type === 'defense' && !q.builders).slice(0, plan.chokepoints.length);
-      for (let i = 0; i < guards.length; i++) {
-        const c = plan.chokepoints[i];
-        this.swarm.issueOrder(guards[i].id, {
-          kind: 'protect',
-          target: { x: c.x, z: c.z },
-          roe: 'engage',
-          seq: 0,
-        }, 8);
-      }
-    }
-    // ①c ★ 飞行队（轰炸）：直扑玩家（独立空中层，不参与地面寻路）
-    for (const s of squads.filter((q) => q.type === 'flyer')) {
-      this.swarm.issueOrder(s.id, {
-        kind: 'advance',
-        target: { x: meleeX, z: meleeZ },
-        roe: 'engage',
-        seq: 0,
-      }, 6);
-    }
-    // ② 施工队：**施工优先**——有工位就去工位（holdFire）；暂停/完工时守在工区（不追玩家）
-    for (let i = 0; i < builders.length; i++) {
-      if (buildSlot) {
-        const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? buildSlot;
-        this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
-      } else {
-        const hold = slot ?? front;
-        this.swarm.issueOrder(builders[i].id, { kind: 'protect', target: { x: hold.x, z: hold.z }, roe: 'holdFire', seq: 0 }, 8);
-      }
-    }
-    // ③ ★ 远程队：**优先驻守掩体后**（已建掩体 > 规划掩体位；取掩体背向来向一侧）——
-    //    掩体距玩家 ≤48m（射程内）才算驻守点；无可用掩体 → 交战站射程环 45m / 非交战占高地
+    // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 施工 override）
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
     let coverIdx = 0;
-    for (const s of squads.filter((q) => q.type === 'ranged')) {
-      let cx = 0, cz = 0, n = 0;
-      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-      if (n > 0) { cx /= n; cz /= n; }
-      const cov = covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
-      let holdX: number, holdZ: number;
-      if (cov) {
-        holdX = cov.x;
-        holdZ = cov.z;
-      } else if (chase && n > 0) {
-        const ax = cx - playerX, az = cz - playerZ;
-        const al = Math.hypot(ax, az) || 1;
-        // ★ 射程环 45m（射程 50m+ → 留余量；远距输出、不追脸）
-        holdX = playerX + (ax / al) * 45;
-        holdZ = playerZ + (az / al) * 45;
-      } else {
-        const hold = highPick ?? front;
-        holdX = hold.x;
-        holdZ = hold.z;
+    let assaultIdx = 0;
+    let screenIdx = 0;
+    for (const s of squads) {
+      const d = resolveDoctrine(s.type, s.builders);
+      let kind: TacticalOrder['kind'] = 'advance';
+      let target = { x: meleeX, z: meleeZ };
+      let roe: TacticalOrder['roe'] = 'engage';
+      let ttl = 6;
+      let urgency = 0;
+      switch (d.mode) {
+        case 'build': {
+          if (buildSlot) {
+            const bi = builders.indexOf(s);
+            const t = this.buildPieces.find((q, idx) => idx >= bi && !this.builtSlots.has(`${q.x},${q.z}`)) ?? buildSlot;
+            target = { x: t.x, z: t.z };
+            roe = 'holdFire';
+          } else {
+            const hold = slot ?? front;
+            kind = 'protect';
+            target = { x: hold.x, z: hold.z };
+            roe = 'holdFire';
+            ttl = 8;
+          }
+          break;
+        }
+        case 'garrison': {
+          let cx = 0, cz = 0, n = 0;
+          for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+          if (n > 0) { cx /= n; cz /= n; }
+          const cov = covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
+          let hx: number, hz: number;
+          if (cov) {
+            hx = cov.x; hz = cov.z;
+          } else if (chase && n > 0) {
+            const ax = cx - playerX, az = cz - playerZ;
+            const al = Math.hypot(ax, az) || 1;
+            const sd = d.standoff || 45;
+            hx = playerX + (ax / al) * sd;
+            hz = playerZ + (az / al) * sd;
+          } else {
+            const hold = highPick ?? front;
+            hx = hold.x; hz = hold.z;
+          }
+          const far = n === 0 || Math.hypot(cx - hx, cz - hz) > 4;
+          kind = far ? 'advance' : 'protect';
+          target = { x: hx, z: hz };
+          urgency = far ? 1 : 0;
+          ttl = far ? 8 : 6;
+          break;
+        }
+        case 'flank': {
+          const side = assaultIdx++ % 2 === 0 ? 1 : -1;
+          kind = 'flank';
+          target = { x: meleeX - plan.approachZ * side * 14, z: meleeZ + plan.approachX * side * 14 };
+          break;
+        }
+        case 'screen': {
+          const si = screenIdx++;
+          if (buildSlot && d.screenDist > 0) {
+            const dx = playerX - buildSlot.x, dz = playerZ - buildSlot.z;
+            const dl = Math.hypot(dx, dz) || 1;
+            target = { x: buildSlot.x + (dx / dl) * d.screenDist, z: buildSlot.z + (dz / dl) * d.screenDist };
+          } else if (!chase && plan.chokepoints.length > 0) {
+            const c = plan.chokepoints[si % plan.chokepoints.length];
+            kind = 'protect';
+            target = { x: c.x, z: c.z };
+            ttl = 8;
+          } else {
+            target = { x: meleeX, z: meleeZ };
+          }
+          break;
+        }
+        case 'regroup': {
+          kind = 'regroup';
+          target = { x: front.x - plan.approachX * 8, z: front.z - plan.approachZ * 8 };
+          break;
+        }
+        case 'press':
+        default:
+          target = { x: meleeX, z: meleeZ };
+          break;
       }
-      const far = n === 0 || Math.hypot(cx - holdX, cz - holdZ) > 4;   // 收紧：站上驻守点才算到位
-      this.swarm.issueOrder(s.id, {
-        kind: far ? 'advance' : 'protect',
-        target: { x: holdX, z: holdZ },
-        // ★ 一进射程就开火（不再 fireOnArrival 等到位；<20m 自动转精准）
-        roe: 'engage',
-        urgency: far ? 1 : 0,          // 远程赶路加急（射程环到位才能输出）
-        seq: 0,
-      }, far ? 8 : 6);
-    }
-    // ④ 其余队（后勤等，不含施工/盾/突击/远程/飞行）：向防线后集结
-    for (const s of squads.filter((q) => !q.builders && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged' && q.type !== 'flyer')) {
-      this.swarm.issueOrder(s.id, {
-        kind: 'regroup',
-        target: { x: front.x - plan.approachX * 8, z: front.z - plan.approachZ * 8 },
-        seq: 0,
-      }, 6);
+      this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
     }
     // ⑤ 施工（**逐步拼装**，仅 S1）：施工队**任一成员**到达待建块 ≤5m →
     //   掩体块（每块 4m，每 8s 一块）/ 战壕块（每块 4×4m、1 层，每 10s 一块）
