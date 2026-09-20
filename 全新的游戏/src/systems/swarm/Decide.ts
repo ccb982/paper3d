@@ -46,6 +46,10 @@ export interface DecideCtx {
   protectState: Map<number, boolean>;
   /** ★ 近 8s 被击的小队（"打了保护的士兵 → 该打还是打"的反击开关） */
   alert: Set<number>;
+  /** ★ 每队稳定岗位（squadId → 岗哨/高地/掩体位/战壕；不随拍轮转 → 防左右摆） */
+  post: Map<number, { x: number; z: number }>;
+  /** ★ 本队当前"大任务"（引擎粘性分派；队长的动态调整不改变它） */
+  mission: string;
   /** 无待建块时的兜底工事锚 */
   slot: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | undefined;
   builders: readonly DecideSquad[];
@@ -96,30 +100,36 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
   _out.roe = 'engage';
   _out.ttl = 6;
   _out.urgency = 0;
-  _out.mission = '';
-  // ★ 独有状态：施工（只有被分派施工块的小队进入）
-  if (ctx.buildTarget) {
-    _out.target = { x: ctx.buildTarget.x, z: ctx.buildTarget.z };
-    _out.roe = 'holdFire';
-    _out.mission = 'build';
-  } else if (ctx.stage === 'S1' && ctx.buildSite && canTake(s.type, 'guard') && !d.chase) {
-    // ★ 共用状态：保护（所有近战）——站到"工地 ↔ 威胁"之间护卫工程队
-    //   原则：**离施工队远 → 不主动进攻**；但 ① 本队近期被击(alert) 或 ② 威胁贴脸(engageDist) → 该打就打
+  // ★ 大任务（引擎粘性）：默认驻守；施工/护卫/进攻等由 commander 分派后写入 ctx.mission
+  _out.mission = ctx.mission || 'hold';
+  // ★ 独有状态：施工（大任务 = build）
+  if (ctx.mission === 'build') {
+    const bt = ctx.buildTarget ?? ctx.buildSlot;
+    if (bt) {
+      _out.target = { x: bt.x, z: bt.z };
+      _out.roe = 'holdFire';
+    } else {
+      const hold = ctx.slot ?? ctx.front;
+      _out.kind = 'protect';
+      _out.target = { x: hold.x, z: hold.z };
+      _out.roe = 'holdFire';
+      _out.ttl = 8;
+    }
+  } else if (ctx.mission === 'guard' && !d.chase) {
+    // ★ 共用状态：保护——离工地远不主动进攻；被击(alert)/贴脸(engageDist) → 动态反击
     let cx = 0, cz = 0, n = 0;
     for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
     const p = UNIT_TACTICS[s.type];
     const alert = ctx.alert.has(s.id);
     const close = n > 0 && Math.hypot(ctx.playerX - cx, ctx.playerZ - cz) <= p.engageDist;
-    if (alert || close) {
+    if (ctx.buildSite && (alert || close)) {
       _out.kind = 'advance';
       _out.target = { x: ctx.playerX, z: ctx.playerZ };
-      _out.mission = 'assault';
       _out.ttl = 4;
-    } else {
+    } else if (ctx.buildSite) {
       _out.kind = 'protect';
       _out.target = guardPoint(ctx.buildSite.x, ctx.buildSite.z, ctx.playerX, ctx.playerZ, p.guardDist);
-      _out.mission = 'guard';
     }
   } else {
   switch (d.mode) {
@@ -141,8 +151,10 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       let cx = 0, cz = 0, n = 0;
       for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
       if (n > 0) { cx /= n; cz /= n; }
-      const cov = d.preferCover && ctx.covers.length > 0 && !ctx.lineSlot
-        ? ctx.covers[st.coverIdx++ % ctx.covers.length] : null;
+      const cov = d.preferCover && !ctx.lineSlot
+        ? (ctx.post.get(s.id)
+          ?? (ctx.covers.length > 0 ? ctx.covers[st.coverIdx++ % ctx.covers.length] : null))
+        : null;
       let hx: number, hz: number;
       if (cov) {
         hx = cov.x; hz = cov.z;
@@ -184,6 +196,12 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
           x: ctx.buildSlot.x + (dx / dl) * sd,
           z: ctx.buildSlot.z + (dz / dl) * sd,
         };
+      } else if (!ctx.chase && !ctx.lineSlot && ctx.post.has(s.id)) {
+        // ★ 稳定岗位（岗哨/高地/掩体位）：不再按循环下标轮转（防左右摆）
+        const c = ctx.post.get(s.id)!;
+        _out.kind = 'protect';
+        _out.target = { x: c.x, z: c.z };
+        _out.ttl = 8;
       } else if (!ctx.chase && plan.chokepoints.length > 0 && !ctx.lineSlot) {
         const c = plan.chokepoints[si % plan.chokepoints.length];
         _out.kind = 'protect';

@@ -18,6 +18,7 @@ import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
+import { engineMissionFor } from './UnitTactics';
 import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
@@ -134,7 +135,7 @@ export class SwarmCommander {
     playerX: 0, playerZ: 0, chase: false, lineSlot: null,
     front: { x: 0, z: 0 },
     buildSlot: null, slot: undefined, buildTarget: null, buildSite: null, stage: 'S0',
-    hold: new Map(), protectState: new Map(), alert: new Set(),
+    hold: new Map(), protectState: new Map(), alert: new Set(), post: new Map(), mission: 'hold',
     builders: [], buildPieces: [], builtSlots: new Set<string>(),
     highPick: null, covers: [],
   };
@@ -231,6 +232,8 @@ export class SwarmCommander {
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();
+    this.postAssign.clear();
+    this.missionAssign.clear();
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
@@ -492,6 +495,46 @@ export class SwarmCommander {
     }
   }
 
+  /** ★ 每队稳定岗位（squadId → 岗哨/高地/掩体位/战壕；拆队前一直有效） */
+  private readonly postAssign = new Map<number, { x: number; z: number }>();
+  /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
+  private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
+
+  /** ★ 岗位分派：新队 → 就近未被认领的岗（一次定终身，杜绝每拍轮转 → 左右摆） */
+  private ensurePosts(squads: readonly { id: number; members: Map<number, { x: number; z: number }> }[]): void {
+    const plan = this.plan;
+    if (!plan) return;
+    const missing = squads.filter((s) => !this.postAssign.has(s.id));
+    if (missing.length === 0) return;
+    const posts: { x: number; z: number }[] = [];
+    for (const c of plan.chokepoints) posts.push({ x: c.x, z: c.z });
+    for (const g of plan.highGround) posts.push({ x: g.x, z: g.z });
+    for (const p of plan.posts) posts.push({ x: p.x, z: p.z });
+    for (const line of plan.trenchLines) for (const p of line) posts.push(p);
+    if (posts.length === 0) return;
+    const claimed = new Set<number>();
+    for (const [id, pos] of this.postAssign) {
+      void id;
+      for (let i = 0; i < posts.length; i++) {
+        if (posts[i].x === pos.x && posts[i].z === pos.z) { claimed.add(i); break; }
+      }
+    }
+    for (const s of missing) {
+      let cx = 0, cz = 0, n = 0;
+      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+      if (n === 0) continue;
+      cx /= n; cz /= n;
+      let bi = -1, bd = Infinity;
+      for (let i = 0; i < posts.length; i++) {
+        if (claimed.has(i)) continue;
+        const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
+        if (d < bd) { bd = d; bi = i; }
+      }
+      if (bi < 0) bi = 0;   // 岗全被认领 → 允许共用最近岗
+      if (bi >= 0) { claimed.add(bi); this.postAssign.set(s.id, { x: posts[bi].x, z: posts[bi].z }); }
+    }
+  }
+
   /** ★ 工程队分派：保持已派未建块；否则挑最近未被其他队认领的块（防来回跑） */
   private assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.buildAssign.get(squadId);
@@ -606,6 +649,9 @@ export class SwarmCommander {
     ctx.builders = builders; ctx.buildPieces = this.buildPieces;
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
     ctx.hold = this.holdPos; ctx.protectState = this.protectState;
+    // ★ 稳定岗位（每队一次分派；无岗队补岗）
+    this.ensurePosts(squads);
+    ctx.post = this.postAssign;
     // ★ 近 8s 被击小队 → "保护状态"的反击开关（打了保护的士兵 → 该打就打）
     this.alertSet.clear();
     const nowS = performance.now() / 1000;
@@ -624,13 +670,28 @@ export class SwarmCommander {
     }
     ctx.buildSite = buildSite;
     ctx.stage = this.stage;
+    // ★ 大任务粘性（引擎只在此刻重派：落点/态势/施工阶段切换）
+    const missionEpoch = this.postureEpoch * 100000 + this.scoreStamp * 2 + (this.stage === 'S1' ? 0 : 1);
     for (const s of squads) {
       const d = applyPosture(
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
       );
-      // ★ 施工 = 施工队独有状态（含"杂兵兼任"兜底名单）；其余队无施工目标
-      if (builders.includes(s) && this.stage === 'S1') {
+      let ma = this.missionAssign.get(s.id);
+      if (!ma || ma.epoch !== missionEpoch) {
+        ma = {
+          mission: engineMissionFor(s.type, {
+            isBuilder: builders.includes(s) || s.builders,
+            stage: this.stage,
+            posture: this.battlePosture,
+          }),
+          epoch: missionEpoch,
+        };
+        this.missionAssign.set(s.id, ma);
+      }
+      ctx.mission = ma.mission;
+      // ★ 施工块稳定分派（施工大任务下才有目标）
+      if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
       } else {
@@ -908,6 +969,8 @@ export class SwarmCommander {
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();
+    this.postAssign.clear();
+    this.missionAssign.clear();
     this.postureP = 0;
     this.postureSchedule = 0;
     this.postureProvocation = 0;

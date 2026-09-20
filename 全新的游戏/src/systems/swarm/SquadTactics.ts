@@ -370,6 +370,8 @@ export type LeaderRating = {
 /** ★ 队长自主发令器（1Hz）：按**小队属性**选策略（引擎命令优先，不抢）。 */
 export class SquadLeaderAI {
   private accum = 0;
+  /** ★ 接敌滞回（squadId → 上一拍是否已接敌）：避免在 engageR 边界来回切 → 左右摆 */
+  private readonly engaged = new Map<number, boolean>();
 
   tick(
     dt: number,
@@ -415,8 +417,10 @@ export class SquadLeaderAI {
         }, now, LEADER_TTL, 'leader');
         continue;
       }
-      // ② 接敌
-      if (d >= strat.engageR) continue;
+      // ② 接敌（★ 滞回：进入用 0.85×R、退出用 1.15×R，防边界来回切）
+      const engaged = this.engaged.get(s.id) === true;
+      if (d >= strat.engageR * (engaged ? 1.15 : 0.85)) { this.engaged.set(s.id, false); continue; }
+      this.engaged.set(s.id, true);
       // ★ 步骤 9e：有新鲜目击 → 向最近的其他小队共享（shareContact）
       if (r.lastSeenAt !== undefined && now - r.lastSeenAt <= 3 && r.lastSeenX !== undefined && r.lastSeenZ !== undefined) {
         const near = this.nearestOther(s.id, r.cx, r.cz, squads);

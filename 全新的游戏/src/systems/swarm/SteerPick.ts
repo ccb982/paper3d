@@ -29,9 +29,13 @@ export const steerOut: SteerOut = { x: 0, z: 0, hold: false, until: 0 };
 /** 候选方向数（16 向） */
 const DIR_N = 16;
 /** softmax 温度（低 = 果断贪心，高 = 多样试探） */
-const TEMP = 0.35;
+const TEMP = 0.18;
 /** 承诺窗（秒；选定后保持，防逐帧抖动） */
-const COMMIT_S = 0.3;
+const COMMIT_S = 0.5;
+/** ★ 转向惯性权重（与上一方向同向加分 → 抑制左右摆） */
+const W_TURN = 0.7;
+/** ★ 换向迟滞：新最优需高出这个倍率才换向 */
+const SWITCH_MARGIN = 1.12;
 /** 危险探测距离（米；与移动步长同量级） */
 const PROBE = 1.6;
 /** 期望方向权重（路径/指令） */
@@ -77,6 +81,9 @@ export function pickSteer(
   const az = al > 1e-4 ? avoidZ / al : 0;
   const aMag = Math.min(1, al);
   const inWater = table?.isWaterAt ? table.isWaterAt(x, z) : false;
+  // ★ 上一方向（承诺中且未被否决 → 作为转向惯性/迟滞基准）
+  const heldValid = (heldX !== 0 || heldZ !== 0)
+    && !danger(x + heldX * PROBE, z + heldZ * PROBE);
 
   let any = false;
   let sum = 0;
@@ -99,6 +106,7 @@ export function pickSteer(
       }
     }
     if (aMag > 0.05) s -= W_AVOID * aMag * Math.max(0, cx * ax + cz * az);
+    if (heldValid) s += W_TURN * (cx * heldX + cz * heldZ);   // ★ 转向惯性（同向加分）
     _scores[k] = s;
     any = true;
     if (s > bestS) bestS = s;
@@ -109,10 +117,21 @@ export function pickSteer(
     return steerOut;
   }
   // ★ 承诺：未到期且承诺方向未被否决 → 保持（不再抽样）；在禁区里不承诺，立刻逃离
-  if (!insideBlocked && heldUntil > now && (heldX !== 0 || heldZ !== 0)
-    && !danger(x + heldX * PROBE, z + heldZ * PROBE)) {
-    steerOut.x = heldX; steerOut.z = heldZ; steerOut.hold = false; steerOut.until = heldUntil;
-    return steerOut;
+  if (!insideBlocked && heldValid) {
+    if (heldUntil > now) {
+      steerOut.x = heldX; steerOut.z = heldZ; steerOut.hold = false; steerOut.until = heldUntil;
+      return steerOut;
+    }
+    // ★ 迟滞：承诺到期后，旧方向只要不差（≥最佳/1.12）就续用 → 抑制左右摆
+    const hi = Math.round(
+      (((Math.atan2(heldZ, heldX) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * DIR_N,
+    ) % DIR_N;
+    const hs = _scores[hi];
+    if (hs > -Infinity && hs * SWITCH_MARGIN >= bestS) {
+      steerOut.x = _cx[hi]; steerOut.z = _cz[hi]; steerOut.hold = false;
+      steerOut.until = now + COMMIT_S;
+      return steerOut;
+    }
   }
   // ★ softmax 抽样（决策权重即概率）
   let r = Math.random() * sum;

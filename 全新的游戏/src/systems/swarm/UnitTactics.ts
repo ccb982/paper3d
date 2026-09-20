@@ -58,6 +58,23 @@ export const MISSION_EXEC: Record<Mission, MissionExec> = {
   rear:   { fire: 'fireOnArrival',speedMul: 0.9 },
 };
 
+/** ★ 引擎大任务（**粘性**：只在落点/态势切换时重派；细节由队长动态调） */
+export function engineMissionFor(
+  type: SquadType,
+  opts: { isBuilder: boolean; stage: string; posture: string },
+): Mission {
+  if (opts.isBuilder && opts.stage === 'S1') return 'build';           // 施工（独有）
+  if (opts.stage === 'S1' && canTake(type, 'guard')) return 'guard';   // 施工期：近战护卫
+  if (opts.posture === 'assault') {
+    if (canTake(type, 'assault')) return 'assault';
+    return canTake(type, 'kite') ? 'kite' : 'rear';
+  }
+  if (type === 'ranged') return 'hold';
+  if (type === 'logistics') return 'rear';
+  if (canTake(type, 'flank')) return 'flank';
+  return 'guard';
+}
+
 /** 近战（共用"保护/突进"）：盾 / 突击 / 混编 */
 export function isMelee(type: SquadType): boolean {
   const k = TYPE_KIND[type];
