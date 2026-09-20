@@ -67,15 +67,17 @@ export interface EventMap {
   //   降格/回收/清场走其他 reason，不触发本事件。
   //   ★ 2026-09-20：唯一订阅方 = 蜂群引擎（SwarmSystem → SwarmLedger.reportCasualty），
   //     与代理侧死亡同一账本；只报"死了一个"，不需要兵种。
+  //     uid = 蜂群稳定 uid；**0 = 计划外直建实体（Boss）→ 账本不计**（引擎只统计自己创建的单位）。
   'enemy_killed': {
+    uid: number;
     source: import('../entity/EntityBase').EntityBase | null;
     x: number;
     z: number;
   };
   // ★ 敌人非击杀离场（2026-09-20 账本口径）：回收无定义体 / 主动清场；
   //   引擎账本只做"存活 −1"（不算击杀）。由 EnemyBase.onRetire('recycled'|'despawned'|
-  //   'mode_cleanup') 发出。
-  'enemy_removed': {};
+  //   'mode_cleanup') 发出；uid = 0 的单位同样不计。
+  'enemy_removed': { uid: number };
   // ★ 敌人受击（步骤 10 自主 LOD）：实体被击广播 → WorldMode 转交 swarm.noteHit
   'enemy_hit': { squadId: number };
 }

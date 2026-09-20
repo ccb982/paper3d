@@ -202,18 +202,18 @@ export class WorldSpawner implements SwarmTierPort {
     this.forceExhaustedAccum = 0;
   }
 
-  /** ★ 当天兵力计划是否已全部生成（引擎账本口径） */
+  /** ★ 今日是否已肃清（引擎账本口径）：**击杀数 == 今日上限** */
   private forceExhausted(): boolean {
     const L = this.deps.swarm.ledger;
-    return L.total > 0 && L.spawned >= L.total;
+    return L.total > 0 && L.kills >= L.total;
   }
 
   /**
-   * ★ 「今日敌军已全部投入」提示（WorldMode.update 每帧调，explore 段）。
+   * ★ 「今日敌军已肃清」提示（WorldMode.update 每帧调，explore 段）。
    *
-   * 为什么需要：引擎账本的生成闸门关闭后 → 玩家在野外一只敌人都遇不到，
-   * **看起来跟"敌人不生成"的 bug 完全一样**（2026-09-18 就在这上面白查了一轮）。
-   * 这里做一次性播报 + 常驻标签，让状态可见。
+   * 判定 = 击杀数打满今日上限（引擎账本）；打满后生成闸门关闭 → 玩家在野外
+   * 一只敌人都遇不到，**看起来跟"敌人不生成"的 bug 完全一样**（2026-09-18
+   * 就在这上面白查了一轮）。这里做一次性播报 + 常驻标签，让状态可见。
    *
    * 一次性：每局只播一次（reset 清）；进图后延迟 1.5s 再判（避开落地动画）。
    */
@@ -340,8 +340,11 @@ export class WorldSpawner implements SwarmTierPort {
     this.deps.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
   }
 
-  /** ★ 生成 Boss（普瑞赛斯）：四维空间决战；数值吃当日敌强，体型 4× */
+  /** ★ 生成终局 Boss（普瑞赛斯）：**只在四维空间（终局战）生成**，常规图绝不出现。
+   *  数值吃当日敌强，体型 4×。小 Boss / 精英（singleton / elite）不走这里 ——
+   *  它们走常规 `spawnOne` → 蜂群引擎 `spawn()`，正常入账（引擎只看 uid>0）。 */
   spawnBoss(x: number, z: number): void {
+    if (!this.deps.chunks.isBoss4D) return;   // ★ 常规地图不生成终局 Boss
     const asset = this.deps.bossAsset;
     if (!asset || !this.deps.scene || !this.deps.camera) return;
     const safe = resolveDockSpawn(this.deps.raster, x + 30, z);
@@ -396,8 +399,7 @@ export class WorldSpawner implements SwarmTierPort {
     this.deps.enemyDefs.set(enemy, def);
     this.deps.enemies.push(enemy);
     this.deps.bossEntity = enemy;
-    // ★ Boss 是计划外直建单位：账本显式扩编（total/spawned 同步 +1，HUD 恒 kills ≤ total）
-    this.deps.swarm.ledger.grant(1);
+    // ★ Boss 是计划外直建实体（swarmUid=0）：不进蜂群账本（总数不会越过今日上限）
     this.deps.showFloatingAt(safe.x, safe.y + 4, safe.z, '普瑞赛斯', 'crit');
   }
 
@@ -764,7 +766,8 @@ export class WorldSpawner implements SwarmTierPort {
 
   /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
    *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。
-   *   ★ 当日兵力计划（引擎账本 total）在此消耗；额度满 → spawn 返回 -1，本窝停止。 */
+   *   ★ 当日兵力计划（引擎账本 total）在此消耗；额度满 → spawn 返回 -1，本窝停止。
+   *   ★ 小 Boss / 精英（singleton / elite）与杂兵同路（正常入账）。 */
   spawnOne(
     def: MobDef,
     x: number, _y: number, z: number,

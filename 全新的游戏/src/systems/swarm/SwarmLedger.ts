@@ -5,7 +5,7 @@
 //   · 「击杀」与「今日上限」由蜂群引擎直管，模式层 / 存档只做镜像
 //   · 「当前存活」是引擎内部计数（**不上 HUD**，只用于引擎自身判断）
 //   · 伤亡上报是**独立通道**：代理 / 队长 / 实体都只报"死了一个"，不需要兵种
-//   · 生成也只有一个口：引擎 `spawn()` 自增；Boss 等直建实体走 grant()
+//   · 生成也只有一个口：引擎 `spawn()` 自增；计划外直建实体（Boss，swarmUid=0）不入账
 //
 // 计数规则（唯一口径）：
 //   alive    = 当前存活；引擎创建兵 +1；被击杀 −1；被 LOD 清除 −1；其他离场 −1
@@ -105,14 +105,6 @@ export class SwarmLedger {
   noteRemoved(count = 1): void {
     if (count <= 0) return;
     this.alive = Math.max(0, this.alive - count);
-  }
-
-  /** 显式扩编（Boss 等计划外单位）：计划 / 生成 / 存活同步 +n */
-  grant(count = 1): void {
-    if (count <= 0) return;
-    this.total += count;
-    this.spawned += count;
-    this.alive += count;
   }
 
   clear(): void {

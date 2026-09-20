@@ -221,10 +221,15 @@ export class SwarmSystem {
 
   constructor() {
     // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
-    //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种
-    this.casualtyUnsub = eventBus.on('enemy_killed', () => this.ledger.reportCasualty(1));
+    //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种。
+    //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。
+    this.casualtyUnsub = eventBus.on('enemy_killed', (p) => {
+      if (p.uid > 0) this.ledger.reportCasualty(1);
+    });
     // ★ 非击杀离场：存活 −1（不算击杀）
-    this.removedUnsub = eventBus.on('enemy_removed', () => this.ledger.noteRemoved(1));
+    this.removedUnsub = eventBus.on('enemy_removed', (p) => {
+      if (p.uid > 0) this.ledger.noteRemoved(1);
+    });
   }
 
   /** 构建批量渲染（模式层在 mobDefs 就绪后调用；素材顺序 = mobIndex）
