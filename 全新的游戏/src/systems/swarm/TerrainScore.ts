@@ -33,6 +33,8 @@ const TRENCH_DH = 0.6;
 /** ★ 被"挖掘标记"过的格：阈值降到 0.12m（digRect 一次只 +1 层 ≈0.2m） */
 const TRENCH_DH_DUG = 0.12;
 const TRENCH_SCORE = 1.2;
+/** ★ 紧贴硬墙的可站格 → 掩体加成（硬墙当掩体；不挡站位的墙给邻格加分） */
+const WALL_COVER_SCORE = 0.8;
 /** 坡面代价（分数扣减 / 路径代价倍率） */
 const SLOPE_PENALTY = 0.6;
 export const SLOPE_COST = 1.6;
@@ -274,6 +276,8 @@ export class TerrainScore {
         this.cls[i] = dh > SLOPE_DH ? 1 : 0;
         this.pass[i] = 1;
         if (this.cls[i] === 1) this.score[i] -= SLOPE_PENALTY;
+        // ★ 硬墙当掩体：紧贴墙面（邻格陡差）的可站格 → 掩体加成
+        if (dh > WALL_DH * 0.8) this.score[i] += WALL_COVER_SCORE;
         // 战壕：显式挖掘标记 → 直接算；否则看自然低洼（低于邻域）
         const thr = this.dug[i] === 1 ? TRENCH_DH_DUG : TRENCH_DH;
         const low = this.dug[i] === 1 || (n > 0 && (sum / n - h) > thr);

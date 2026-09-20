@@ -858,6 +858,11 @@ export class SwarmCommander {
     this.engAccum = 2;   // 下一拍立即重发部署
   }
 
+  /** ★ 硬边界查询（墙面/坑水；表未就绪 → false）：移动/寻路的危险地形判定 */
+  blockedAt(x: number, z: number): boolean {
+    return this.terrainScore.blockedAt(x, z);
+  }
+
   /** ★ 地形脏区（模式层任何挖改都调这个）：表局部重算（脏窗 + 邻环）
    *  @param dug 显式挖掘（战壕）→ 打挖掘标记（战壕阈值放宽到 0.12m） */
   markTerrainDirty(x: number, z: number, r = 12, dug = false): void {

@@ -98,6 +98,7 @@ export class EnemyLocomotion {
     // ★ 高台立面判定：0.45m 处陡升 > 0.6m，且 1.2m 处没有同斜率延续 → 墙（插值坡放行）
     const hNear = raster.surfaceHeightAtFor(px + ux * 0.45, pz + uz * 0.45, py);
     const hFar = raster.surfaceHeightAtFor(px + ux * 1.2, pz + uz * 1.2, py);
+    if (hFar - h0 > 1.0) return true;   // ★ 连续陡坡（≈40°+）也是墙：别一直撞（硬墙仍可当掩体）
     const riseNear = hNear - h0;
     const riseFar = hFar - hNear;
     if (riseNear > 0.6 && riseFar < riseNear * 0.5) return true;

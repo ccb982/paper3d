@@ -804,9 +804,7 @@ export class SwarmSystem {
       dz = _atomDir.z;
     }
     if (dx !== 0 || dz !== 0) {
-      // ---- 危险地形绕行：前瞻探测 → 转向 ±90°，缓存 0.4s ----
-      //   ★ 2026-09-14：探测常态开启（原先只探非流场方向）——流场也可能指向深水/立面；
-      //   深水（敌人不涉水）与高台立面（只能走插值坡）一并阻挡
+      // ---- 危险地形绕行：前瞻探测 → 转向 ±90°，缓存 0.4s（流场也可能指向深水/立面） ----
       p.hazardTimer[i] -= dt;
       const raster = RasterMap.current;
       const probe = SWARM.HAZARD_PROBE;
@@ -815,10 +813,10 @@ export class SwarmSystem {
       const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
       const danger = (ux: number, uz: number): boolean => {
         if (!raster) return false;
-        // ★ 空中层（2026-09-18）：飞行兵不受地面危险约束（坑/深水/高台立面）
-        //   → 直接飞过去；也不吃"绕行 ±90°"的绕路（与"独立空中寻路 = 直线"一致）
+        // ★ 空中层：飞行兵不受地面危险约束（坑/深水/高台立面），也不吃绕行
         if (p.isAir[i] === 1) return false;
         const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
+        if (this.commander.blockedAt(hx, hz)) return true;   // ★ 表：硬墙/坑水
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);
         if (role === 'pit' && h < -1.2) return true;
@@ -826,6 +824,7 @@ export class SwarmSystem {
         // 高台立面：0.45m 陡升 > 阈值且 1.2m 无同斜率延续 → 墙（插值坡放行）
         const hn = raster.surfaceHeightAtFor(p.x[i] + ux * 0.45, p.z[i] + uz * 0.45, hint);
         const hf = raster.surfaceHeightAtFor(p.x[i] + ux * 1.2, p.z[i] + uz * 1.2, hint);
+        if (hf - here > 1.0) return true;   // ★ 连续陡坡（≈40°+）也是墙，别硬撞
         const rn = hn - here, rf = hf - hn;
         return rn > SWARM.MOVE_STEP_MAX && rf < rn * 0.5;
       };
