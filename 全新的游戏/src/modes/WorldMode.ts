@@ -45,6 +45,20 @@ import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
 import { wireCommanderPorts } from './world/CommanderWiring';
+import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint } from './world/LandingCamera';
+import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
+import {
+  DRONE_ITEM, PLAYER_MOVE_SPEED, VEHICLE_BRIDGE_RADIUS, VEHICLE_CLIMB_SPEED,
+  PLAYER_BULLET_MIN_DAMAGE, PLAYER_BULLET_ATK_RATIO, PLAYER_ATTACK_INTERVAL,
+  PLAYER_BULLET_SPEED, PLAYER_BULLET_LIFETIME,
+  AIM_ASSIST_ANGLE, AIM_ASSIST_MAX, AIM_ASSIST_RANGE, AIM_ASSIST_STRENGTH,
+  CROSSHAIR_CONVERGE_DIST, FIREABLE_AMMO,
+  SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME, COVER_SHOT_SPEED, MAX_COVER_PLAYER,
+  SENTINEL_IMPACT_MIN_DAMAGE, SENTINEL_IMPACT_ATK_RATIO, SENTINEL_MIN_DAMAGE, SENTINEL_ATK_RATIO,
+  SENTINEL_MINE_RANGE, SENTINEL_WAKE_R, SENTINEL_MINE_SAMPLES, HEAL_PROC_MIN_HEAL,
+  interpCamPose, _camMat, _camEye, _camAt, _camUp, _arcV, type WorldModeEnterContext,
+} from './world/WorldConfig';
+export type { WorldModeEnterContext } from './world/WorldConfig';
 import { ExplosionFx } from '../services/fx/ExplosionFx';
 import { updateSuicideWarning } from '../services/ui/SuicideWarning';
 import { GroundStationaryAlly } from '../entity/ally/GroundStationaryAlly';
@@ -128,82 +142,7 @@ import { rollDrops } from '../services/item/ItemDropPipeline';
 import { startMiniGame, closeMiniGame } from '../minigames';
 import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT_SOURCE } from '../systems/spawn/WorldSpawner';
 
-/** ★ 友军物品 id：部署生成 / 损毁即彻底消失（不返还、不可维修） */
-const DRONE_ITEM = 'kaltsit_drone';
-// ---- ★ 载具（逻各斯的圆凳）：移速 / 爬坡 / 过坑 ----
-/** 主角基础移速（m/s）；装备移速加成（VehicleRide.moveSpeedMul）在此之上乘算 */
-const PLAYER_MOVE_SPEED = 5.0;
-/** 过坑：贴地桥接采样半径（米）——脚下取邻域最高面，骑过坑洞不沉底 */
-const VEHICLE_BRIDGE_RADIUS = 1.6;
-/** 爬坡上行速度（m/s；普通角色 7.5） */
-const VEHICLE_CLIMB_SPEED = 24;
-
-/** ★ 玩家子弹伤害 = max(下限, 角色攻击力 × 系数)；遗物/装备加成的攻击力实时生效。
- *  （子弹 source = 子弹实体，attackPower 恒 0 → 管线只做减法防御，不会重复加攻击） */
-const PLAYER_BULLET_MIN_DAMAGE = 10;
-const PLAYER_BULLET_ATK_RATIO = 1.0;
-/** ★ 主角基础攻击间隔（秒）：实际间隔 = 本值 × 100 / (100 + 攻击速度点数)（方舟攻速口径） */
-const PLAYER_ATTACK_INTERVAL = 0.9;
-/** ★ 主角子弹飞行参数：速度（m/s）/ 寿命（s）→ 射程 = 速度 × 寿命 */
-const PLAYER_BULLET_SPEED = 50;
-const PLAYER_BULLET_LIFETIME = 3.0;
-/** ★ 主角子弹轻微弹道修正（自瞄）：只修正准星小偏角内的敌人，幅度很小不影响甩枪手感 */
-const AIM_ASSIST_ANGLE = 0.05;    // 仅候选：偏角 ≤ ~2.9°
-const AIM_ASSIST_MAX = 0.03;      // 单发最多修正 ~1.7°
-const AIM_ASSIST_RANGE = 32;      // 只对 32m 内敌人生效（米）
-const AIM_ASSIST_STRENGTH = 0.6;  // 修正比例（0=不修，1=完全指向）
-/** ★ 经典 TPS 枪口→准星收敛：准星射线无命中（对天/虚空）时，
- *  取相机射线上此距离处作为虚拟落点 → 子弹仍与准星共点（不会与相机平行"各飞各的"） */
-const CROSSHAIR_CONVERGE_DIST = 200;
-/** ★ 可发射弹药 itemId（背包中有该类型即可在弹药栏切换；开火消耗 1） */
-const FIREABLE_AMMO = new Set<string>(['zuzong', 'cover', 'tumu_laojie']);
-/** ★ 祖宗弹（专属投影物）：速度（m/s）/ 寿命（s） */
-const SENTINEL_SHOT_SPEED = 20;
-const SENTINEL_SHOT_LIFETIME = 3.0;
-/** ★ 掩体弹（玩家遗物部署）：速度/寿命/同时存在上限 */
-const COVER_SHOT_SPEED = 18;
-const MAX_COVER_PLAYER = 6;
-/** ★ 祖宗弹命中伤害 = max(下限, 主角攻击力 × 系数)，结算后立即落地生成祖宗 */
-const SENTINEL_IMPACT_MIN_DAMAGE = 8;
-const SENTINEL_IMPACT_ATK_RATIO = 0.8;
-/** ★ 祖宗弹伤害 = max(下限, 主角攻击力 × 系数)（与无人机同口径：友军随主角强度） */
-const SENTINEL_MIN_DAMAGE = 8;
-const SENTINEL_ATK_RATIO = 1.0;
-/** ★ 祖宗自动挖矿：索矿半径（米；无敌人时随机打铁/水/地面） */
-const SENTINEL_MINE_RANGE = 22;
-/** ★ 留存祖宗唤醒：玩家接近半径（米；休眠祖宗进入 10m → 启用 + 入队友列表） */
-const SENTINEL_WAKE_R = 10;
-/** 挖矿采样次数上限（每类） */
-const SENTINEL_MINE_SAMPLES = 16;
-/** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
-const HEAL_PROC_MIN_HEAL = 1.0;
 // ★ 复活倒计时阶梯 / 血量保底已下沉 systems/player/PlayerPipeline.ts（架构 §7）
-
-// ============================================================
-// WorldMode 进入上下文（扩展 IGameModeContext）
-// ============================================================
-
-export interface WorldModeEnterContext extends IGameModeContext {
-  day: number;
-  protagonistAsset: FtxAsset;
-  bulletAsset?: Asset | FtxAsset;
-  /** ★ 敌军素材（id 对应 `config/enemyRoster.ts` 名册；地图大量随机生成用） */
-  enemyAssets?: EnemyAssetEntry[];
-  /** ★ 普瑞赛斯（Boss 战实体素材；scene.zip） */
-  bossAsset?: FtxAsset | Asset;
-  hitEffectAsset?: Asset;
-  /** ★ 可露希尔的无人机素材（特效包优先，回退纯纹理包） */
-  droneAsset?: Asset | FtxAsset;
-  /** ★ 祖宗素材（站桩友军；缺省回退无人机素材） */
-  sentinelAsset?: Asset | FtxAsset;
-  /** ★ 采集物纹理图集（key → FTX 包，每包 4 帧；每株随机抽 1 帧静态显示） */
-  plantAssets?: Record<string, FtxAsset>;
-  /** ★ 调试开关（main.ts 从 URL 参数解析；素材填充测试用） */
-  debug?: {
-    testChunk?: boolean;
-    enemyStress?: number;
-  };
-}
 
 // ============================================================
 // WorldMode 类
@@ -221,49 +160,6 @@ export const worldPerf = {
   /** ★ 本帧 chunk 装配耗时（ms；0=未装配） */
   assembly: 0,
 };
-
-// ★ 镜头调度临时量（follow 每帧刷新目标机位，零分配）
-const _camMat = new THREE.Matrix4();
-const _camEye = new THREE.Vector3();
-const _camAt = new THREE.Vector3();
-const _camUp = new THREE.Vector3(0, 1, 0);
-const _arcV = new THREE.Vector3();
-
-/** ★ 相机姿态插值（资料共识"绕注视点的球面弧"）：
- *  位置 = 相对 pivot 的球坐标 (r,θ,φ) 各分量插值（角度走最短路径）→ 折返弧线，
- *  不会直线穿过地形/目标；朝向独立 slerp。pivot 为空退化为线性。 */
-function interpCamPose(
-  fromPos: THREE.Vector3, fromQuat: THREE.Quaternion,
-  toPos: THREE.Vector3, toQuat: THREE.Quaternion,
-  e: number, pivot: THREE.Vector3 | null,
-  outPos: THREE.Vector3, outQuat: THREE.Quaternion,
-): void {
-  if (!pivot) {
-    outPos.lerpVectors(fromPos, toPos, e);
-  } else {
-    const fv = _arcV.copy(fromPos).sub(pivot);
-    const rF = Math.max(fv.length(), 1e-3);
-    const thF = Math.atan2(fv.z, fv.x);
-    const phF = Math.asin(Math.max(-1, Math.min(1, fv.y / rF)));
-    const tv = _arcV.copy(toPos).sub(pivot);
-    const rT = Math.max(tv.length(), 1e-3);
-    const thT = Math.atan2(tv.z, tv.x);
-    const phT = Math.asin(Math.max(-1, Math.min(1, tv.y / rT)));
-    let dTh = thT - thF;
-    while (dTh > Math.PI) dTh -= Math.PI * 2;
-    while (dTh < -Math.PI) dTh += Math.PI * 2;
-    const r = rF + (rT - rF) * e;
-    const th = thF + dTh * e;
-    const ph = phF + (phT - phF) * e;
-    const cp = Math.cos(ph);
-    outPos.set(
-      pivot.x + r * cp * Math.cos(th),
-      pivot.y + r * Math.sin(ph),
-      pivot.z + r * cp * Math.sin(th),
-    );
-  }
-  outQuat.slerpQuaternions(fromQuat, toQuat, e);
-}
 
 export class WorldMode implements IGameMode {
   entities!: EntityManager;
@@ -295,23 +191,6 @@ export class WorldMode implements IGameMode {
     exitX: number; exitY: number; exitZ: number;
     emergency: boolean;
   } | null = null;
-  /** ★ 降落"观察机位"（2026-09-12 重写，按资料共识：固定镜头 + 一次性取景）：
-   *  到起调高度后在**触发瞬间一次算好**机位/朝向/注视点（装下"飞机→预测落点"整段），
-   *  用缓入缓出+绕注视点的球面弧移动过去，之后**保持不动**——飞机独立降入画面。
-   *  全程无逐帧重算/无双重混合 → 不抖。 */
-  private camShot: {
-    t: number;
-    fromPos: THREE.Vector3; fromQuat: THREE.Quaternion;
-    shotPos: THREE.Vector3; shotQuat: THREE.Quaternion;
-    /** 注视点（也是弧线插值中心） */
-    pivot: THREE.Vector3;
-  } | null = null;
-  /** 观察机位起调高度（米）：高空段仍是追尾机 */
-  private static readonly CAM_SHOT_START_ALT = 45;
-  /** 追尾机位 → 观察机位 的过渡时长（秒；资料建议 0.5~1.5s 缓入缓出） */
-  private static readonly CAM_SHOT_BLEND = 1.2;
-  /** 玩家下机点：舰船侧旁偏移（米；避开翼展/机体——4× 模型翼展 ≈±10m） */
-  private static readonly PLAYER_EXIT_OFFSET = 13;
   /** 本帧是否触地（landingStep 结果；实体段转落稳用） */
   private landingTouchdown = false;
   /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
@@ -739,7 +618,7 @@ export class WorldMode implements IGameMode {
     this.landingTouchdown = false;
     this.takeoff = false;
     this.camBlend = null;
-    this.camShot = null;
+    landingCamera.shot = null;
 
     // ★ 主角
     this.protagonistAssetRef = ctx.protagonistAsset ?? null;
@@ -1663,14 +1542,14 @@ export class WorldMode implements IGameMode {
       // ★ 镜头调度接管（下机/上机过渡；期间两套相机控制器都不驱动 → 无漂移）
       this.updateCamBlend(dt);
     } else if (this.phase === 'sail') {
-      if (this.camShot) {
+      if (landingCamera.shot) {
         // ★ 观察机位接管：移动到定好的机位后保持不动（飞机独立降入画面）
-        this.updateLandingShot(dt);
+        updateLandingShot(this.camera, dt);
       } else {
         // ★ 飞行追尾相机：机后上方平滑跟随 + 看向机头前方（不随滚转翻转地平线）
         this.updateFlightCamera(dt);
         // ★ 降到起调高度 → 一次性取景切换到观察机位
-        if (this.landing?.phase === 'approach') this.tryStartLandingShot();
+        if (this.landing?.phase === 'approach') tryStartLandingShot(this.camera, this.ship);
       }
     } else {
       // ★ position.y 现在空中含真实跳高 → height = 贴地/起跳站立面（减回跳高），
@@ -2253,55 +2132,17 @@ export class WorldMode implements IGameMode {
     });
   }
 
-  /** ★ 世界状态落盘（exit / beforeunload）：地形破坏 + 植被 + 墙 + 召唤友军 */
+  /** ★ 世界状态落盘（exit / beforeunload）：实现在 world/WorldPersistence.ts */
   private saveWorldStateNow(): void {
-    if (!this.session || !this.raster) return;
-    try {
-      const rs = this.raster.exportPersistState();
-      const allies: AllyRec[] = [];
-      for (const a of allySystem.allies) {
-        if (a.slotIndex >= 0) continue;            // 出击槽友军由配装重建，不入缓存
-        if (!(a instanceof SentinelAlly)) continue; // ★ 无人机一直跟随玩家，不写入缓存（2026-09-19 用户定调）
-        allies.push({
-          kind: 'sentinel', x: a.position.x, y: a.position.y, z: a.position.z,
-          hp: a.hp, itemId: a.itemId,
-          stationaryBaseY: a.stationaryBaseY,
-        });
-      }
-      saveWorldState({
-        seed: this.session.meta.seed,
-        levels: rs.levels,              // ★ 只存坑洞；植被每天重建（不入缓存）
-        mapRecords: rs.mapRecords,      // ★ 地形记录（大地图回放）
-        walls: snapshotCovers('player'),
-        enemyWalls: snapshotCovers('enemy'),
-        allies,
-        // ★ 小地图已探索记忆 + 地图标记（跨模式/跨天一直保留）
-        explored: this.worldUIManager?.getMinimapExploredState() ?? null,
-        markers: this.worldUIManager?.getMapMarkersState() ?? [],
-      });
-      pruneWorldStates();
-    } catch (e) {
-      console.warn('[WorldMode] 世界状态保存失败（忽略）:', e);
-    }
+    saveWorldStateNow(this.session, this.raster, this.worldUIManager ?? null);
   }
 
-  /** ★ 世界状态恢复：墙（CoverEntity）+ 召唤友军（祖宗/无人机） */
+  /** ★ 世界状态恢复：实现在 world/WorldPersistence.ts */
   private restoreWorldState(data: WorldStateData): void {
-    if (!this.scene) return;
-    // ★ 地图标记恢复（跨模式/跨天保留；不再每天清空）
-    if (data.markers.length > 0) this.worldUIManager?.loadMapMarkersState(data.markers);
-    // ★ 玩家墙 + 敌人掩体恢复（分开建；旧档混存按 owner 分流）
-    restoreWalls(this.entities, this.scene, data.walls, data.enemyWalls ?? [], this.playerCovers);
-    for (const a of data.allies) {
-      if (a.kind !== 'sentinel') continue;   // ★ 无人机不入缓存（旧档残留记录直接丢弃）
-      this.spawnSentinelAt(a.x, a.z, true);  // ★ 休眠入场：回到原地接触才启用
-      const s = allySystem.allies[allySystem.allies.length - 1];
-      if (s instanceof SentinelAlly) {
-        s.position.y = a.y;
-        s.stationaryBaseY = a.stationaryBaseY ?? a.y;
-        s.hp = Math.max(1, Math.round(a.hp));
-      }
-    }
+    restoreWorldState(
+      this.scene, this.entities, this.playerCovers, this.worldUIManager ?? null, data,
+      (x, z, dormant) => this.spawnSentinelAt(x, z, dormant),
+    );
   }
 
   /** ★ 调试可视化（?swarmdbg=1）：采集在覆盖层内，这里只做 10Hz 限流 + 接线 */
@@ -2859,92 +2700,6 @@ export class WorldMode implements IGameMode {
     }
   }
 
-  /** ★ 玩家下机点：舰船右舷侧旁偏移（右向量 = (f.z, -f.x)），只避坑 */
-  private playerExitPoint(shipX: number, shipZ: number): { x: number; y: number; z: number } {
-    const f = this.ship?.forward ?? { x: 0, y: 0, z: 1 };
-    const rx = f.z, rz = -f.x;
-    const safe = resolveDockSpawn(
-      this.raster,
-      shipX + rx * WorldMode.PLAYER_EXIT_OFFSET,
-      shipZ + rz * WorldMode.PLAYER_EXIT_OFFSET,
-    );
-    return { x: safe.x, y: this.raster.surfaceHeightAt(safe.x, safe.z), z: safe.z };
-  }
-
-  /** ★ 起调判定（降到起调高度）→ **一次性取景**：观察机位装下"飞机当前位置 →
-   *  预测落点"整段（垂直跨度按 FOV 反推距离），注视点取两点中段偏上。
-   *  触发后相机姿势/朝向/注视点全部冻结，不再逐帧重算（资料共识：固定镜头不抖）。 */
-  private tryStartLandingShot(): void {
-    const cam = this.camera;
-    const ship = this.ship;
-    if (!cam || !ship || this.camShot) return;
-    const gy0 = RasterMap.current?.surfaceHeightAt(ship.position.x, ship.position.z) ?? 0;
-    const alt0 = ship.position.y - gy0;
-    if (alt0 > WorldMode.CAM_SHOT_START_ALT) return;
-    // ★ 落点预测 = 与 landingStep 同模型的离散推进（收油 16 m/s²、sink=clamp(alt×0.4,2,8)）
-    //   （旧版 speed×时间×0.6 在高速时严重高估漂移 → 跨度巨大 → 机位被推到几百米外）
-    const f = ship.forward;
-    let px = ship.position.x, pz = ship.position.z;
-    let alt = alt0, v = ship.speedValue;
-    for (let t = 0; t < 30 && alt > 0; t += 0.25) {
-      px += f.x * v * 0.25;
-      pz += f.z * v * 0.25;
-      const sink = Math.min(
-        travelConfig.flightLandingSinkMax,
-        Math.max(travelConfig.flightLandingSink, alt * 0.4),
-      );
-      alt -= sink * 0.25;
-      v = Math.max(travelConfig.flightLandingSpeed, v - 16 * 0.25);
-    }
-    const lgy = RasterMap.current?.surfaceHeightAt(px, pz) ?? 0;
-    const ax = ship.position.x, ay = ship.position.y, az = ship.position.z;
-    const dx = px - ax, dz = pz - az;
-    const hspan = Math.hypot(dx, dz);
-    const hl = hspan || 1;
-    const dirX = dx / hl, dirZ = dz / hl;
-    const sideX = dirZ, sideZ = -dirX; // 进近方向右侧
-    // ★ 机位基准 = A→B 整段【中点】（侧向取景；不再相对落点前移 → 修"只能看到机头"）
-    const mx = (ax + px) * 0.5, mz = (az + pz) * 0.5;
-    const span3 = Math.hypot(hspan, ay - lgy);
-    // 4× 大船：取景距离/高度同步放大（船体 ≈26m 长）
-    const D = Math.min(140, Math.max(70, span3 * 0.55));
-    const H = Math.min(50, Math.max(18, span3 * 0.25));
-    // 正侧方（略向 A 偏 10%：从侧后方看，能看到完整机身而非迎面机头）
-    const sx = mx + sideX * D - dirX * D * 0.1;
-    const sz = mz + sideZ * D - dirZ * D * 0.1;
-    const sgy = RasterMap.current?.surfaceHeightAt(sx, sz) ?? 0;
-    // 机位抬高到"整段中间高度"之上（含地形净空）
-    const midY = (ay + lgy) * 0.5;
-    const shotPos = new THREE.Vector3(sx, Math.max(midY + H, sgy + 8), sz);
-    // 注视点 = 整段中点（飞机从画面上方一路降到中心，全程在画幅内）
-    const pivot = new THREE.Vector3(mx, midY + span3 * 0.06, mz);
-    _camMat.lookAt(_camEye.copy(shotPos), pivot, _camUp);
-    const shotQuat = new THREE.Quaternion().setFromRotationMatrix(_camMat);
-    this.camShot = {
-      t: 0,
-      fromPos: cam.position.clone(),
-      fromQuat: cam.quaternion.clone(),
-      shotPos, shotQuat, pivot,
-    };
-  }
-
-  /** ★ 观察机位步进：缓入缓出 + 绕注视点的球面弧移动过去；到位后保持静止
-   *  （飞机独立降入画面，全程无逐帧目标重算 → 不抖）。 */
-  private updateLandingShot(dt: number): void {
-    const S = this.camShot;
-    const cam = this.camera;
-    if (!S || !cam) return;
-    S.t += dt;
-    const k = Math.min(1, S.t / WorldMode.CAM_SHOT_BLEND);
-    const e = k * k * (3 - 2 * k);
-    interpCamPose(S.fromPos, S.fromQuat, S.shotPos, S.shotQuat, e, S.pivot, cam.position, cam.quaternion);
-    if (k >= 1) {
-      // 到位：钉死在观察机位（其它系统若有残留写入也被覆盖）
-      cam.position.copy(S.shotPos);
-      cam.quaternion.copy(S.shotQuat);
-    }
-  }
-
   /** ★ 镜头调度步进：缓入缓出 + 绕注视点的球面弧（pivot 为空则线性），
    *  完成后交还控制权 */
   private updateCamBlend(dt: number): void {
@@ -2992,7 +2747,7 @@ export class WorldMode implements IGameMode {
       exitX: 0, exitY: 0, exitZ: 0, emergency,
     };
     this.landingTouchdown = false;
-    this.camShot = null; // 高空段追尾；降到起调高度再切观察机位
+    landingCamera.shot = null; // 高空段追尾；降到起调高度再切观察机位
     // ★ 降落冲刺：立刻转细化 + 落点 3×3 强制构建 + 放开闸门；
     //   优先级（进近窗口内）= 当前块 > 机头方向下一块 > 十字臂 > 其余
     const fw = this.ship.forward;
@@ -3013,9 +2768,9 @@ export class WorldMode implements IGameMode {
     L.fromZ = cur.z;
     L.toX = sp.x;
     L.toZ = sp.z;
-    this.camShot = null; // 观察机位结束，交棒落稳段镜头
+    landingCamera.shot = null; // 观察机位结束，交棒落稳段镜头
     // 玩家下机点：舰船右舷侧旁（不在机体里）
-    const exit = this.playerExitPoint(sp.x, sp.z);
+    const exit = playerExitPoint(this.ship, this.raster, sp.x, sp.z);
     L.exitX = exit.x; L.exitY = exit.y; L.exitZ = exit.z;
     // ★ 镜头调度收尾：从当前（已预调度过半的）机位 → 角色机位；与落稳同步结束
     const cam = this.camera;
@@ -3077,7 +2832,7 @@ export class WorldMode implements IGameMode {
     // ★ 角色在下机点就位（舰船侧旁，不在飞机里）；控制权由镜头调度结束交还
     const exit = L && (L.exitX !== 0 || L.exitZ !== 0)
       ? { x: L.exitX, y: L.exitY, z: L.exitZ }
-      : this.playerExitPoint(sp.x, sp.z);
+      : playerExitPoint(this.ship, this.raster, sp.x, sp.z);
     const p = this.player;
     p.controlLocked = true;
     p.position.x = exit.x;
