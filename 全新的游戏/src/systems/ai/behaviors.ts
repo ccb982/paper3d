@@ -195,8 +195,14 @@ registerBehavior('rangedShot', (entity, ctx, params) => {
   // ★ 弹种标签：模式层据此选子弹池（箭 / 法球）——行为层只透传，不认识池
   const bulletSkin = pstr(params, 'skin', 'arrow');
   if (entity.fireHold) return;   // ★ 执行层：本段禁火（开火揗为假）
+  const t0 = ctx.target;
+  const dist0 = t0 ? Math.hypot(t0.x - entity.position.x, t0.z - entity.position.z) : 0;
+  // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准射击
+  const near = dist0 > 0 && dist0 < 20;
+  const dur = near ? duration * 0.55 : duration * 1.6;
+  const sp = near ? 0.012 : Math.max(spread, 0.15);
   if (entity.aiAttackTimer <= 0) {
-    entity.aiAttackTimer = duration;
+    entity.aiAttackTimer = dur;
     entity.aiSwingDone = false;
     const t = ctx.target;
     if (t) {
@@ -207,14 +213,14 @@ registerBehavior('rangedShot', (entity, ctx, params) => {
       let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
       const len = Math.hypot(dx, dy, dz) || 1;
       dx /= len; dy /= len; dz /= len;
-      // ★ 散布：绕竖直轴随机偏转 + 轻微俯仰抖动（不做"激光般精确"，命中要靠站位）
-      if (spread > 0) {
-        const a = (Math.random() - 0.5) * 2 * spread;
+      // ★ 散布：绕竖直轴随机偏转 + 轻微俯仰抖动（远散近准）
+      if (sp > 0) {
+        const a = (Math.random() - 0.5) * 2 * sp;
         const ca = Math.cos(a), sa = Math.sin(a);
         const nx = dx * ca - dz * sa;
         const nz = dx * sa + dz * ca;
         dx = nx; dz = nz;
-        dy += (Math.random() - 0.5) * spread;
+        dy += (Math.random() - 0.5) * sp;
         const l2 = Math.hypot(dx, dy, dz) || 1;
         dx /= l2; dy /= l2; dz /= l2;
       }

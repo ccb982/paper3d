@@ -89,7 +89,9 @@ function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): S
     }
   }
 
-  // ---- 可达性（从中心洪泛；边检查：只禁止"爬升超限"，下落放行） ----
+  // ---- 可达性（从中心洪泛；**严格**：相邻格高差 ≤ CLIMB_MAX，上下都算）----
+  //   ★ 部署锚点必须"能去也能回"：早期只挡爬升、下落放行 → 锚点会落到崖下，
+  //     部队生成在低层台地后**爬不回舰船/玩家**（实测：远程/施工队卡在崖边不动）
   const reach = new Uint8Array(n * n);
   const cix = Math.round((cx - x0) / STEP);
   const ciz = Math.round((cz - z0) / STEP);
@@ -106,7 +108,7 @@ function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): S
         if (nx < 0 || nz < 0 || nx >= n || nz >= n) return;
         const nb = nz * n + nx;
         if (!pass[nb] || reach[nb]) return;
-        if (h[nb] - hc > CLIMB_MAX) return;   // 不能爬崖；下落/平走放行
+        if (Math.abs(h[nb] - hc) > CLIMB_MAX) return;   // 崖/墙：不可达
         reach[nb] = 1;
         stack.push(nb);
       };
@@ -251,7 +253,8 @@ export function analyzeLandingTerrain(
   }
 
   // ---- ④ 掩体位：三环 × 来向 ±60°；优先贴真实遮挡（前方 4m 内不可通行/更高） ----
-  const rings = [24, 40, 56];
+  //   ★ 2026-09-20：环半径放大到 40/60/80m（用户定调：开始造掩体距离拉到 80m）
+  const rings = [40, 60, 80];
   const coverSlots: { x: number; z: number; ring: 0 | 1 | 2 }[] = [];
   for (let r = 0; r < rings.length; r++) {
     for (let k = -4; k <= 4; k++) {

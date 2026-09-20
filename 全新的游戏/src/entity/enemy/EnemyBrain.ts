@@ -139,7 +139,9 @@ export class EnemyBrain {
     if (!t) return;
     const d = Math.hypot(t.x - entity.position.x, t.z - entity.position.z);
     if (d > this.fbRange) return;
-    this.fbCd = 0.9 + Math.random() * 0.4;
+    // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准射击
+    const near = d < 20;
+    this.fbCd = near ? 0.35 + Math.random() * 0.25 : 1.1 + Math.random() * 1.0;
     if (this.fbKind === 'suicide') {
       // ★ 自爆保底：范围爆炸 + 自身死亡（与 selfDestruct 行为同口径）
       ctx.attack({
@@ -176,13 +178,14 @@ export class EnemyBrain {
     let dx = t.x - ox, dy = ty - oy, dz = t.z - oz;
     const len = Math.hypot(dx, dy, dz) || 1;
     dx /= len; dy /= len; dz /= len;
-    if (this.fbSpread > 0) {
-      const a = (Math.random() - 0.5) * 2 * this.fbSpread;
+    const sp = near ? 0.012 : 0.15;
+    if (sp > 0) {
+      const a = (Math.random() - 0.5) * 2 * sp;
       const ca = Math.cos(a), sa = Math.sin(a);
       const nx = dx * ca - dz * sa;
       const nz = dx * sa + dz * ca;
       dx = nx; dz = nz;
-      dy += (Math.random() - 0.5) * this.fbSpread;
+      dy += (Math.random() - 0.5) * sp;
       const l2 = Math.hypot(dx, dy, dz) || 1;
       dx /= l2; dy /= l2; dz /= l2;
     }

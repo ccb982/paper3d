@@ -152,10 +152,11 @@ export interface SwarmHooks {
   onSquadWiped?: (squadId: number) => void;
   /** ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体不在池内，走 uid 映射） */
   onDirective?: (uid: number, order: TacticalOrder, directive: UnitDirective, until: number) => void;
-  /** ★ 远程代理射击（真弹道；模式层按 skin 选池：0=箭 / 1=法球） */
+  /** ★ 远程代理射击（真弹道；模式层按 skin 选池：0=箭 / 1=法球）
+   *  spread = 散布弧度（远距掩护性散射 / 近距精准） */
   onAgentRanged?: (
     targetKind: number, dmg: number, x: number, z: number,
-    tx: number, tz: number, skin: number, speed: number, life: number,
+    tx: number, tz: number, skin: number, speed: number, life: number, spread: number,
   ) => void;
 }
 
@@ -586,7 +587,9 @@ export class SwarmSystem {
       };
       const w = resolveWeights(dk, orderFromCode(p.orderKind[i]), roleBucket(roleFromCode(p.role[i])), sit);
       const atom = this.atoms.step(p.swarmUid[i], now, p.directiveSeq[i], w, sit.justHit);
-      p.atomMove[i] = MOVE_ATOMS.indexOf(atom.move);
+      // ★ 已进入攻击距离：前进原子不再覆盖本地走位（否则一直往目标身上挤、攻击槽失效）；
+      //   后退/横移仍生效（边打边撤/游荡）
+      p.atomMove[i] = sit.inRange && atom.move === 'forward' ? 255 : MOVE_ATOMS.indexOf(atom.move);
       p.atomFire[i] = atom.fire ? 1 : 0;
     } else {
       p.atomMove[i] = 255;      // 无指令 → 本地自主（旧行为）
@@ -636,10 +639,11 @@ export class SwarmSystem {
       p.wanderTimer[i] -= tick;
       if (p.wanderTimer[i] <= 0) {
         const a = Math.random() * Math.PI * 2;
-        const r = Math.random() * 6;
+        // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
+        const r = 6 + Math.random() * 16;
         p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
         p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
-        p.wanderTimer[i] = 2 + Math.random() * 3;
+        p.wanderTimer[i] = 5 + Math.random() * 5;
       }
       const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
       const wd = Math.hypot(wdx, wdz);
@@ -721,15 +725,28 @@ export class SwarmSystem {
           p.dirX[i] = 0;
           p.dirZ[i] = 0;
         }
-        if (p.atomFire[i] === 1 && p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && this.tokenUsed[tk] < SWARM.ATTACK_TOKENS) {
-          p.attackCd[i] = SWARM.ATTACK_CD_MIN + Math.random() * SWARM.ATTACK_CD_SPAN;
-          p.hasToken[i] = 1;
-          p.tokenTarget[i] = tk;
-          this.tokenUsed[tk]++;
-          p.attackHold[i] = SWARM.ATTACK_HOLD;
+        // ★ 攻击令牌只约束**近战**挥击可读性；远程走独立冷却（否则大团压上时
+        //   3 个令牌被近战占满 → 远程全程哑火：用户实测"远程不射箭"）
+        const needToken = p.ranged[i] === 0;
+        const tokenOk = !needToken || this.tokenUsed[tk] < SWARM.ATTACK_TOKENS;
+        if (p.atomFire[i] === 1 && p.attackHold[i] <= 0 && p.attackCd[i] <= 0 && tokenOk) {
+          // ★ 远距 = 掩护性零星散射（慢 + 大散布）；近距（<20m）= 疯狂精准射击
+          const near = d < 20;
+          p.attackCd[i] = near
+            ? 0.35 + Math.random() * 0.25
+            : 1.1 + Math.random() * 1.0;
+          if (needToken) {
+            p.hasToken[i] = 1;
+            p.tokenTarget[i] = tk;
+            this.tokenUsed[tk]++;
+            p.attackHold[i] = SWARM.ATTACK_HOLD;
+          }
           if (p.ranged[i] === 1) {
-            // ★ 远程代理：真弹道（箭/法球），射程边缘开火（不追脸）
-            hooks.onAgentRanged?.(tk, p.meleeDamage[i] + p.attackPower[i], px, pz, gx, gz, p.skin[i], p.shotSpeed[i], p.shotLife[i]);
+            // ★ 远程代理：真弹道（箭/法球）；散布随距离（远散近准）
+            hooks.onAgentRanged?.(
+              tk, p.meleeDamage[i] + p.attackPower[i], px, pz, gx, gz,
+              p.skin[i], p.shotSpeed[i], p.shotLife[i], near ? 0.012 : 0.15,
+            );
           } else {
             hooks.melee(tk, p.meleeDamage[i] + p.attackPower[i], px, pz);
           }
@@ -740,6 +757,17 @@ export class SwarmSystem {
       if (p.ranged[i] === 1 && d < p.meleeRange[i] * 0.55 && d > 1e-4) {
         p.dirX[i] = -tx / d;
         p.dirZ[i] = -tz / d;
+      }
+    }
+
+    // ★ 到位静止（防"左右抽风"）：指令点附近 + 目标不在射程 → 完全站住（不左右来回转）
+    if (directiveActive) {
+      const hx = p.directiveTargetX[i] - p.x[i];
+      const hz = p.directiveTargetZ[i] - p.z[i];
+      if (hx * hx + hz * hz < 16 && d > p.meleeRange[i] + SWARM.MELEE_PAD) {
+        p.dirX[i] = 0;
+        p.dirZ[i] = 0;
+        p.atomMove[i] = 255;
       }
     }
 

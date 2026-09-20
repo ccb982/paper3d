@@ -15,8 +15,8 @@ import { FIRE_HOLD, FIRE_MOVING } from './SwarmUnit';
 export const MOVE_ATOMS = ['forward', 'back', 'strafeL', 'strafeR', 'hold'] as const;
 export type MoveAtom = (typeof MOVE_ATOMS)[number];
 
-/** 原子承诺窗口（秒；段边界才允许重掷，防每拍翻转） */
-export const ATOM_SEGMENT_S = 0.35;
+/** 原子承诺窗口（秒；段边界才允许重掷，防每拍翻转）——1.0s：到位后不再"左右抽风" */
+export const ATOM_SEGMENT_S = 1.0;
 
 interface TableRow {
   /** forward / back / strafeL / strafeR / hold */
@@ -27,12 +27,12 @@ interface TableRow {
 /** 基准表（按个体指令，15 条；《实体架构.md》§5.13） */
 const BASE: Record<DirectiveKind, TableRow> = {
   push:      { move: [0.55, 0.05, 0.15, 0.15, 0.10], fire: 0.85 },
-  suppress:  { move: [0.10, 0.05, 0.20, 0.20, 0.45], fire: 0.95 },
-  screen:    { move: [0.05, 0.40, 0.20, 0.20, 0.15], fire: 0.85 },
-  fallback:  { move: [0.05, 0.50, 0.20, 0.20, 0.05], fire: 0.25 },
-  boundBack: { move: [0.10, 0.45, 0.15, 0.15, 0.15], fire: 0.45 },
-  guardWard: { move: [0.20, 0.10, 0.30, 0.30, 0.10], fire: 0.90 },
-  block:     { move: [0.15, 0.10, 0.25, 0.25, 0.25], fire: 0.70 },
+  suppress:  { move: [0.10, 0.05, 0.10, 0.10, 0.65], fire: 0.95 },
+  screen:    { move: [0.05, 0.40, 0.15, 0.15, 0.25], fire: 0.85 },
+  fallback:  { move: [0.05, 0.50, 0.15, 0.15, 0.15], fire: 0.25 },
+  boundBack: { move: [0.10, 0.45, 0.12, 0.12, 0.21], fire: 0.45 },
+  guardWard: { move: [0.20, 0.10, 0.10, 0.10, 0.50], fire: 0.90 },
+  block:     { move: [0.15, 0.10, 0.08, 0.08, 0.59], fire: 0.70 },
   intercept: { move: [0.55, 0.05, 0.15, 0.15, 0.10], fire: 0.90 },
   sneak:     { move: [0.70, 0.02, 0.10, 0.10, 0.08], fire: 0.05 },
   pin:       { move: [0.15, 0.10, 0.30, 0.30, 0.15], fire: 0.90 },
@@ -105,7 +105,7 @@ export function resolveWeights(
     if (rr < 0.55) {
       move[1] += 0.35; move[0] -= 0.10; move[4] -= 0.05;   // 太近：后退
     } else if (rr <= 1.0) {
-      move[4] += 0.20; move[2] += 0.10; move[3] += 0.10; move[0] -= 0.10; // 合适：停止 + 左右游荡
+      move[4] += 0.20; move[2] += 0.04; move[3] += 0.04; move[0] -= 0.10; // 合适：停止为主
     } else {
       move[0] += 0.25; move[4] -= 0.10;                     // 超程：前进
     }

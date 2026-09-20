@@ -237,10 +237,19 @@ export class SquadTactics {
       return dir;
     }
     const kind: DirectiveKind = state ? DEFAULT_DIRECTIVE[state.order.kind][bucket] : 'regroup';
+    // ★ 五轴 ROE → 开火策略（此前 roe 被忽略：holdFire 照打、fireOnArrival 无效）
+    const roe = state?.order.roe;
+    let fire: 'free' | 'hold' | 'moving' =
+      kind === 'sneak' || kind === 'fallback' ? 'hold' : 'free';
+    if (roe === 'holdFire') fire = 'hold';
+    else if (roe === 'fireOnArrival' && target) {
+      const dist = Math.hypot(target.x - cx, target.z - cz);
+      if (dist > 12) fire = 'hold';   // 到位（≤12m）才自由开火
+    }
     const dir: UnitDirective = {
       kind,
       until: now + DIRECTIVE_TTL,
-      fire: kind === 'sneak' ? 'hold' : kind === 'fallback' ? 'hold' : 'free',
+      fire,
       speedMul: (kind === 'fallback' ? 1.2 : kind === 'boundBack' || kind === 'screen' ? 0.7 : 1) * urgeMul,
       seq: this.seq++,
     };
@@ -296,8 +305,8 @@ export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
   assault:   { engageR: 22, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
   /** 防御：稳推进（接敌略近、残血更晚撤） */
   defense:   { engageR: 18, press: true,  standoff: 2,  retreatHp: 0.22, retreatDist: 14 },
-  /** 远程：远距开火 + 保持射程环（不追脸） */
-  ranged:    { engageR: 28, press: false, standoff: 20, retreatHp: 0.35, retreatDist: 22 },
+  /** 远程：远距开火 + 保持射程环（不追脸；射程 50m+ → 站 45m 环） */
+  ranged:    { engageR: 55, press: false, standoff: 45, retreatHp: 0.35, retreatDist: 22 },
   /** 后勤：缩后（不接敌，保持更远站位） */
   logistics: { engageR: 18, press: false, standoff: 10, retreatHp: 0.55, retreatDist: 24 },
   /** 飞行：直扑 */

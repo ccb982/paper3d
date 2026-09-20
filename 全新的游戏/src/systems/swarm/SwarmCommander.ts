@@ -37,6 +37,8 @@ export class SwarmCommander {
   spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean) => void) | null = null;
   /** ★ 按 mobIndex 生成一只（名单重放用；模式层注入） */
   spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
+  /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
+  private readonly builtCovers: { x: number; z: number }[] = [];
   /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
   private recalledRoster: { mobIndex: number; role: UnitRole; count: number }[] | null = null;
   /** ★ 大队：一队 30 怪；一局多个 */
@@ -211,6 +213,17 @@ export class SwarmCommander {
     return best;
   }
 
+  /** ★ 最近的已建掩体（远程驻守用；无 = null） */
+  private nearestBuiltCover(x: number, z: number): { x: number; z: number } | null {
+    let best: { x: number; z: number } | null = null;
+    let bestD2 = Infinity;
+    for (const c of this.builtCovers) {
+      const d2 = (c.x - x) ** 2 + (c.z - z) ** 2;
+      if (d2 < bestD2) { bestD2 = d2; best = c; }
+    }
+    return best;
+  }
+
   setDefensePlan(plan: DefensePlan | null): void {
     this.plan = plan;
   }
@@ -275,15 +288,26 @@ export class SwarmCommander {
     const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
     const plan = this.plan;
     if (!slot && this.stage === 'S1') this.stage = 'S2';   // 无待建块 → 就绪
-    // 玩家跌进施工点 30m：暂停施工（转防御；队长自主交战接管）
-    const nearPlayer = slot ? Math.hypot(playerX - slot.x, playerZ - slot.z) < 30 : false;
+    // ★ 施工优先：施工队只受"玩家正踩在待建块上"（≤6m）影响，其余情况一律继续施工
+    const nearPlayer = slot ? Math.hypot(playerX - slot.x, playerZ - slot.z) < 6 : false;
     const buildSlot = this.stage === 'S1' && slot && !nearPlayer ? slot : null;
     // 正面基准：有工事点用工事点；否则落点前方 40m
     const front = buildSlot ?? { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
-    // ★ 近战追击：玩家在落点 90m 内 → 直接压玩家（玩家移动 → 近战跟着走）
+    // ★ 近战目标：**施工期前出掩护工事**（在工位朝玩家方向 15m）；施工完 → 玩家近则追玩家
     const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
-    const meleeX = chase ? playerX : front.x + plan.approachX * 10;
-    const meleeZ = chase ? playerZ : front.z + plan.approachZ * 10;
+    let meleeX: number, meleeZ: number;
+    if (buildSlot) {
+      const dx = playerX - buildSlot.x, dz = playerZ - buildSlot.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      meleeX = buildSlot.x + (dx / dl) * 15;
+      meleeZ = buildSlot.z + (dz / dl) * 15;
+    } else if (chase) {
+      meleeX = playerX;
+      meleeZ = playerZ;
+    } else {
+      meleeX = front.x + plan.approachX * 10;
+      meleeZ = front.z + plan.approachZ * 10;
+    }
     // ① 盾队守正面/追玩家（最多 2 队，不含施工队）
     for (const s of squads.filter((q) => q.type === 'defense' && !q.builders).slice(0, 2)) {
       this.swarm.issueOrder(s.id, {
@@ -320,32 +344,57 @@ export class SwarmCommander {
         }, 8);
       }
     }
-    // ② 施工队：有工位 → 小步跟进（holdFire）；施工完 → **守住工位/工事**（不追玩家）
+    // ①c ★ 飞行队（轰炸）：直扑玩家（独立空中层，不参与地面寻路）
+    for (const s of squads.filter((q) => q.type === 'flyer')) {
+      this.swarm.issueOrder(s.id, {
+        kind: 'advance',
+        target: { x: meleeX, z: meleeZ },
+        roe: 'engage',
+        seq: 0,
+      }, 6);
+    }
+    // ② 施工队：**施工优先**——有工位就去工位（holdFire）；暂停/完工时守在工区（不追玩家）
     for (let i = 0; i < builders.length; i++) {
       if (buildSlot) {
         const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? buildSlot;
         this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
       } else {
-        this.swarm.issueOrder(builders[i].id, { kind: 'protect', target: { x: front.x, z: front.z }, roe: 'engage', seq: 0 }, 8);
+        const hold = slot ?? front;
+        this.swarm.issueOrder(builders[i].id, { kind: 'protect', target: { x: hold.x, z: hold.z }, roe: 'holdFire', seq: 0 }, 8);
       }
     }
-    // ③ ★ 远程队：占高地/火力点；**到位就守**（不追脸）；无可占高地 → 支援正面
+    // ③ ★ 远程队：**交战中站射程环**（距玩家 20m ≈ 弩手/术士射程 20~22m）→ 保证真能开火；
+    //    非交战（玩家远）→ 占高地/火力点守（不追脸）
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     for (const s of squads.filter((q) => q.type === 'ranged')) {
-      const hold = highPick ?? front;
       let cx = 0, cz = 0, n = 0;
       for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
       if (n > 0) { cx /= n; cz /= n; }
-      const far = n === 0 || Math.hypot(cx - hold.x, cz - hold.z) > 10;
+      let holdX: number, holdZ: number;
+      if (chase && n > 0) {
+        const ax = cx - playerX, az = cz - playerZ;
+        const al = Math.hypot(ax, az) || 1;
+        // ★ 射程环 45m（射程 50m+ → 留余量；远距输出、不追脸）
+        holdX = playerX + (ax / al) * 45;
+        holdZ = playerZ + (az / al) * 45;
+      } else {
+        // ★ 造好的掩体 → **远程驻守进去**；无掩体 → 高地；再退正面
+        const cov = this.nearestBuiltCover(cx, cz);
+        const hold = cov ?? highPick ?? front;
+        holdX = hold.x;
+        holdZ = hold.z;
+      }
+      const far = n === 0 || Math.hypot(cx - holdX, cz - holdZ) > 4;   // 收紧：站上射程环才算到位
       this.swarm.issueOrder(s.id, {
         kind: far ? 'advance' : 'protect',
-        target: { x: hold.x, z: hold.z },
+        target: { x: holdX, z: holdZ },
         roe: far ? 'fireOnArrival' : 'engage',
+        urgency: far ? 1 : 0,          // 远程赶路加急（射程环到位才能输出）
         seq: 0,
       }, far ? 8 : 6);
     }
-    // ④ 其余队（后勤等，不含施工/盾/突击/远程）：向防线后集结
-    for (const s of squads.filter((q) => !q.builders && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged')) {
+    // ④ 其余队（后勤等，不含施工/盾/突击/远程/飞行）：向防线后集结
+    for (const s of squads.filter((q) => !q.builders && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged' && q.type !== 'flyer')) {
       this.swarm.issueOrder(s.id, {
         kind: 'regroup',
         target: { x: front.x - plan.approachX * 8, z: front.z - plan.approachZ * 8 },
@@ -365,10 +414,11 @@ export class SwarmCommander {
       if (atSite) {
         if (buildSlot.kind === 'cover') {
           this.buildCover(buildSlot.x, buildSlot.z, 'cover');
-          this.buildCd = 8;            // 慢工：掩体 8s/块（3 块 = 12m ≈ 24s）
+          this.builtCovers.push({ x: buildSlot.x, z: buildSlot.z });   // ★ 远程驻守点
+          this.buildCd = 3;            // 掩体 3s/块（3 块 = 12m ≈ 9s）
         } else {
           this.digTrench?.(buildSlot.x, buildSlot.z);
-          this.buildCd = 10;           // 慢挖：战壕 10s/块（3 块 = 12m ≈ 30s）
+          this.buildCd = 4;            // 战壕 4s/块（3 块 = 12m ≈ 12s）
         }
         this.builtSlots.add(`${buildSlot.x},${buildSlot.z}`);
       }
@@ -386,6 +436,7 @@ export class SwarmCommander {
     this.spawnAccum = 0;
     this.buildPieces = [];
     this.builtSlots.clear();
+    this.builtCovers.length = 0;
     this.engAccum = 0;
     this.buildCd = 0;
     this.resendAccum = 0;

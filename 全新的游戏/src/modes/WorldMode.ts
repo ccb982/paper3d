@@ -99,6 +99,7 @@ import { aimRaycast, raySphereHit } from '../services/combat/Targeting';
 import { BulletManager, type BulletHitPayload } from '../services/combat/BulletManager';
 import { BULLET_HIT_RADIUS } from '../services/combat/BulletEntity';
 import { applyDamage } from '../services/combat/DamagePipeline';
+import { scatterDir } from '../services/combat/Scatter';
 import { applyHeal } from '../services/combat/Healing';
 import { effectSystem } from '../services/combat/EffectSystem';
 import { queryFinalStats } from '../services/combat/FinalStats';
@@ -867,12 +868,8 @@ export class WorldMode implements IGameMode {
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
     this.swarmHooks.tierPort = this.spawner;
-    // ★ E4a：L3 实体编队 steer 的只读单位面（本帧敌人数组；升/降格即时反映）
-    this.swarmHooks.activeUnits = () => this.enemies;
-    // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）
-    //   ★ 地形获取 / 战术布置在 **finishDock**（每次落地的真实落点）执行：
-    //     enter 时舰位还在航路上（可能在水面）→ 扫描会退化成空布置；
-    //     舰船会不断移动换登陆点 → 每次落地必须重扫、重布置。
+    this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
+    // ★ 蜂群指挥器端口（兵力/工事全权在指挥层；地形扫描延后到 finishDock 真实落点，enter 时舰位在水面会扫空）
     wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
@@ -880,7 +877,7 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.onDirective = (uid, order, directive, until) =>
       this.spawner.applyOrderToEntity(uid, order, directive, until);
     // ★ 远程代理射击（真弹道；箭/法球按 skin 选池；源用 AGENT_SOURCE 与代理近战同口径）
-    this.swarmHooks.onAgentRanged = (tk, dmg, x, z, tx, tz, skin, speed, life) => {
+    this.swarmHooks.onAgentRanged = (tk, dmg, x, z, tx, tz, skin, speed, life, spread) => {
       const oy = this.raster.surfaceHeightAt(x, z) + 1.0;
       const aimY = tk === AGENT_TARGET_SENTINEL ? 1.2
         : tk === AGENT_TARGET_SHIP ? this.ship.position.y + 2
@@ -888,6 +885,12 @@ export class WorldMode implements IGameMode {
       let dx = tx - x, dy = aimY - oy, dz = tz - z;
       const len = Math.hypot(dx, dy, dz) || 1;
       dx /= len; dy /= len; dz /= len;
+      // ★ 散布：远距掩护性散射（不指望准）/ 近距精准（spread ≈ 0）
+      if (spread > 0) {
+        const s = { x: dx, y: dy, z: dz };
+        scatterDir(s, spread);
+        dx = s.x; dy = s.y; dz = s.z;
+      }
       this.aiCtx.attack({
         type: 'projectile',
         source: AGENT_SOURCE,
@@ -966,8 +969,7 @@ export class WorldMode implements IGameMode {
     };
     this.spawner.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
-    // ★ 蜂群账本（引擎直管，2026-09-20）：换日 → 引擎按当日威胁预计算总数并清零；
-    //   同日再出击 → 从存档镜像回灌（进度累计，总数不重算）。
+    // ★ 蜂群账本（引擎直管）：换日 → 引擎按威胁预计算总数并清零；同日再出击 → 存档镜像回灌
     //   Session.dayProgress.enemies 只是持久层，运行时唯一真源 = swarm.ledger。
     const dp = ctx.session.dayProgress;
     if (dp.everDeparted !== ctx.session.meta.day || !dp.enemies) {
@@ -1230,8 +1232,7 @@ export class WorldMode implements IGameMode {
         this.statsDirty = true;
       }
     });
-    // ★ 真击杀统计（2026-09-20 重做）：由蜂群引擎直接消费 `enemy_killed`（SwarmLedger），
-    //   WorldMode 不再重复计数 —— 击杀/总数的唯一真源 = swarm.ledger。
+    // ★ 真击杀统计：蜂群引擎直接消费 `enemy_killed`（SwarmLedger），WorldMode 不重复计数
     // ★ 步骤 10：敌人受击（实体侧广播）→ 小队/大队警觉（免降格 + 倾盆而出）
     this.enemyHitUnsub = eventBus.on('enemy_hit', (payload) => {
       this.swarm.noteHit(payload.squadId, performance.now() / 1000);
@@ -1710,7 +1711,7 @@ export class WorldMode implements IGameMode {
       const L = this.swarm.ledger;
       // ★ 左段只给玩家看「今日击杀 / 今日上限」（存活是引擎内部计数，不上 HUD）
       this.worldUIManager.setShipStatus(s.hp, s.maxHp, L.kills, L.total);
-      // ★ 账本镜像到存档（引擎直管；每 0.1s 回写 5 个数字）
+      // ★ 账本镜像到存档（引擎直管；每 0.1s 回写）
       const e = this.session.dayProgress.enemies;
       if (e) {
         e.total = L.total; e.spawned = L.spawned; e.alive = L.alive;
@@ -3636,8 +3637,7 @@ export class WorldMode implements IGameMode {
     const dx = p.x - s.x, dz = p.z - s.z;
     if (dx * dx + dz * dz > WorldMode.REBOARD_RADIUS ** 2) return false;
     allySystem.disposeAll();
-    // ★ 起飞统一回收：全部存活敌人（实体 + 代理）撤离 —— 不算击杀、不结算掉落
-    this.spawner.recallAllEnemies();
+    this.spawner.recallAllEnemies();   // ★ 起飞统一回收：全部存活敌人撤离（不算击杀）
     this.takeoff = true;
     this.ship.beginTakeoff();
     this.setPhase('sail');        // ★ 登船起飞：静音 + 粗块 LOD + 藏水面 + 飞行模式（统一收口）
