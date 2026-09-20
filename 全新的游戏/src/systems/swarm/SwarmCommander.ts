@@ -13,6 +13,7 @@ import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
 import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
 import { applyPosture, PostureMachine, type BattlePosture } from './Posture';
+import { BattleLine, type LineUnit } from './BattleLine';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
@@ -49,6 +50,10 @@ export class SwarmCommander {
   private aliveAtPosture = 0;
   /** ★ 战役级闭环（1Hz）：小队评级/求援/受阻 → 大队改派（自下而上的反馈闭环） */
   private tacticalAccum = 0;
+  /** ★ 进攻队列调控（前/中/后排 + 车道；进攻态势时生效） */
+  private readonly battleLine = new BattleLine();
+  /** 态势代次（切换 → 触发整队） */
+  private postureEpoch = 0;
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
   private readonly supportCd = new Map<number, number>();
   /** 最近一次大队决策（调试/测试读取） */
@@ -143,6 +148,7 @@ export class SwarmCommander {
     this.builtSlots.clear();
     this.progress.clear();      // ★ 换落点：战役级闭环状态复位
     this.supportCd.clear();
+    this.battleLine.clear();    // ★ 换落点：进攻队列复位
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
@@ -301,6 +307,7 @@ export class SwarmCommander {
     });
     if (next !== this.battlePosture) {
       this.battlePosture = next;
+      this.postureEpoch++;   // ★ 态势切换 → 进攻队列重新整队
       if (next === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
       this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
     }
@@ -370,14 +377,34 @@ export class SwarmCommander {
     // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 逐兵种 + 施工 override）→ 再叠态势
     const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
     const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
+    // ★ 进攻队列调控（advance/mass/assault 时生效；前/中/后排 + 横向车道，8s 整队一次）
+    const lineActive = this.battlePosture === 'advance'
+      || this.battlePosture === 'mass' || this.battlePosture === 'assault';
+    if (lineActive) {
+      let fx = plan.approachX, fz = plan.approachZ;
+      const ax = playerX - plan.cx, az = playerZ - plan.cz;
+      const al = Math.hypot(ax, az);
+      if (al > 12) { fx = ax / al; fz = az / al; }
+      const units: LineUnit[] = [];
+      for (const s of squads) {
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        if (n > 0) { cx /= n; cz /= n; }
+        units.push({ id: s.id, type: s.type, builders: s.builders, cx, cz });
+      }
+      this.battleLine.update(performance.now() / 1000, playerX, playerZ, fx, fz, units,
+        this.battlePosture === 'assault', this.postureEpoch);
+    }
     let coverIdx = 0;
     let assaultIdx = 0;
     let screenIdx = 0;
+    let flyerIdx = 0;
     for (const s of squads) {
       const d = applyPosture(
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
       );
+      const lineSlot = lineActive ? this.battleLine.get(s.id) : null;
       let kind: TacticalOrder['kind'] = 'advance';
       let target = meleeAt(d.chase);
       let roe: TacticalOrder['roe'] = 'engage';
@@ -403,10 +430,14 @@ export class SwarmCommander {
           let cx = 0, cz = 0, n = 0;
           for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
           if (n > 0) { cx /= n; cz /= n; }
-          const cov = d.preferCover && covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
+          const cov = d.preferCover && covers.length > 0 && !lineSlot
+            ? covers[coverIdx++ % covers.length] : null;
           let hx: number, hz: number;
           if (cov) {
             hx = cov.x; hz = cov.z;
+          } else if (lineSlot) {
+            // ★ 进攻队列：后排线位（层深已含射程站距）
+            hx = lineSlot.x; hz = lineSlot.z;
           } else if (chase && n > 0) {
             const ax = cx - playerX, az = cz - playerZ;
             const al = Math.hypot(ax, az) || 1;
@@ -426,9 +457,9 @@ export class SwarmCommander {
         }
         case 'flank': {
           const side = assaultIdx++ % 2 === 0 ? 1 : -1;
-          const base = meleeAt(d.chase);
+          const base = lineSlot ?? meleeAt(d.chase);
           kind = 'flank';
-          target = { x: base.x - plan.approachZ * side * 14, z: base.z + plan.approachX * side * 14 };
+          target = { x: base.x - plan.approachZ * side * 6, z: base.z + plan.approachX * side * 6 };
           break;
         }
         case 'screen': {
@@ -437,13 +468,13 @@ export class SwarmCommander {
             const dx = playerX - buildSlot.x, dz = playerZ - buildSlot.z;
             const dl = Math.hypot(dx, dz) || 1;
             target = { x: buildSlot.x + (dx / dl) * d.screenDist, z: buildSlot.z + (dz / dl) * d.screenDist };
-          } else if (!chase && plan.chokepoints.length > 0) {
+          } else if (!chase && plan.chokepoints.length > 0 && !lineSlot) {
             const c = plan.chokepoints[si % plan.chokepoints.length];
             kind = 'protect';
             target = { x: c.x, z: c.z };
             ttl = 8;
           } else {
-            target = meleeAt(d.chase);
+            target = lineSlot ?? meleeAt(d.chase);
           }
           break;
         }
@@ -454,7 +485,14 @@ export class SwarmCommander {
         }
         case 'press':
         default:
-          target = meleeAt(d.chase);
+          if (s.type === 'flyer' && !lineSlot) {
+            // 飞行不排队，但也别叠在同一格：左右错开 9m
+            const side = flyerIdx++ % 2 === 0 ? 1 : -1;
+            const base = meleeAt(d.chase);
+            target = { x: base.x - plan.approachZ * side * 9, z: base.z + plan.approachX * side * 9 };
+          } else {
+            target = lineSlot ?? meleeAt(d.chase);
+          }
           break;
       }
       this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
@@ -609,6 +647,7 @@ export class SwarmCommander {
     this.tacticalAccum = 0;
     this.progress.clear();
     this.supportCd.clear();
+    this.battleLine.clear();
   }
 
   private dispatchMission(): void {
