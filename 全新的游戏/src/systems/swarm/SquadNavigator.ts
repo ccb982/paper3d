@@ -145,6 +145,14 @@ export class SquadNavigator {
             });
             continue;
           }
+          // ★ 已在理想射程位：站住打（不追、不随编队前压）
+          {
+            const mt = u.moveTarget;
+            if (mt) { mt.x = up.x; mt.y = 0; mt.z = up.z; }
+            u.controlSource = 'swarm';
+            u.applySteer({ dirX: 0, dirZ: 0, speed: 0, source: 'formation', targetX: up.x, targetY: 0, targetZ: up.z });
+            continue;
+          }
         }
         // ★ 槽位 rank = 全员 uid（与 applyOrders 同口径：L3 + 代理跨 LOD 不换位）
         let rank = 0;

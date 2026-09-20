@@ -15,6 +15,7 @@ import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
 import { applyPosture, PostureMachine, type BattlePosture } from './Posture';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
+import { TerrainScore } from './TerrainScore';
 import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
@@ -54,6 +55,10 @@ export class SwarmCommander {
   private tacticalAccum = 0;
   /** ★ 进攻队列调控（前/中/后排 + 车道；进攻态势时生效） */
   private readonly battleLine = new BattleLine();
+  /** ★ 地块有利位置评分表（全兵种共用；掩体/态势变化即重建） */
+  private readonly terrainScore = new TerrainScore();
+  /** 评分表触发戳（换落点 +1） */
+  private scoreStamp = 0;
   /** 态势代次（切换 → 触发整队） */
   private postureEpoch = 0;
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
@@ -157,6 +162,9 @@ export class SwarmCommander {
     this.progress.clear();      // ★ 换落点：战役级闭环状态复位
     this.supportCd.clear();
     this.battleLine.clear();    // ★ 换落点：进攻队列复位
+    this.postCache.clear();     // ★ 现场有利位置缓存复位
+    this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
+    this.terrainScore.clear();
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
@@ -320,6 +328,14 @@ export class SwarmCommander {
       this.postureEpoch++;   // ★ 态势切换 → 进攻队列重新整队
       if (next === 'assault') this.aliveAtPosture = this.swarm.ledger.alive;
       this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
+    }
+    // ★ 地块评分表重建（换落点/掩体数/态势变化才真正重算）
+    if (this.plan) {
+      const raster = RasterMap.current;
+      if (raster) {
+        this.terrainScore.rebuild(raster, this.plan, this.builtCovers, this.battlePosture,
+          this.scoreStamp + this.postureEpoch * 100000 + this.builtCovers.length * 100);
+      }
     }
     if (this.mission) {
       this.resendAccum += dt;
@@ -653,6 +669,41 @@ export class SwarmCommander {
     for (const c of this.builtCovers) {
       consider(c.x - plan.approachX * 1.2, c.z - plan.approachZ * 1.2, false, 3.5);
     }
+    if (best) return best;
+    // ★ 扫描产物/掩体都不在射程带内（玩家跑远了）→ **现场找位**：
+    //   以玩家为圆心、0.8R 为半径环采样（高地优先 / 掩体加成 / 可站）
+    return this.terrainPost(px, pz, range);
+  }
+
+  /** ★ 现场有利位置（无扫描产物时）：玩家周围射程环采样 + 1.5s 缓存（多小队共用） */
+  private readonly postCache = new Map<string, { x: number; z: number; at: number }>();
+  private terrainPost(px: number, pz: number, range: number): { x: number; z: number } | null {
+    const raster = RasterMap.current;
+    if (!raster) return null;
+    const key = `${Math.floor(px / 16)},${Math.floor(pz / 16)},${Math.round(range)}`;
+    const nowMs = performance.now();
+    const hit = this.postCache.get(key);
+    if (hit && nowMs - hit.at < 1500) return { x: hit.x, z: hit.z };
+    const r = range * RANGED.PREFER_RATIO;
+    let best: { x: number; z: number } | null = null;
+    let bestScore = -Infinity;
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const x = px + Math.cos(a) * r;
+      const z = pz + Math.sin(a) * r;
+      const role = raster.tileDefAt(x, z).genRole;
+      const h = raster.surfaceHeightAt(x, z);
+      if (role === 'pit' || (role === 'liquid' && h < -0.8) || h < -1.2) continue;
+      // 高地加成：相对周边 5m 的抬升
+      const elev = h - (raster.surfaceHeightAt(x + 5, z) + raster.surfaceHeightAt(x - 5, z)
+        + raster.surfaceHeightAt(x, z + 5) + raster.surfaceHeightAt(x, z - 5)) / 4;
+      // ★ 优先读地块评分表（全兵种共用；掩体/态势权重已在表内）；表未就绪回落高程探针
+      let score = this.terrainScore.scoreAt(x, z) ?? (elev * 0.5);
+      if (score <= -1e8) continue;
+      if (coverBlocksLine(px, pz, x, z)) score += 3;
+      if (score > bestScore) { bestScore = score; best = { x, z }; }
+    }
+    if (best) this.postCache.set(key, { x: best.x, z: best.z, at: nowMs });
     return best;
   }
 
@@ -687,6 +738,8 @@ export class SwarmCommander {
     this.progress.clear();
     this.supportCd.clear();
     this.battleLine.clear();
+    this.postCache.clear();
+    this.terrainScore.clear();
   }
 
   private dispatchMission(): void {

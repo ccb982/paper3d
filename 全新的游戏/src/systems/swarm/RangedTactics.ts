@@ -36,7 +36,7 @@ export function shouldKite(dist: number, range: number): boolean {
 }
 
 /** ★ 代理侧一步到位：玩家逼近 → **边撤边打（优先撤向更远更安全的优势位置，没找到才径向后撤）**；
- *  否则 → 有利位置（制高/掩体后）；无 → null */
+ *  否则 → 有利位置（制高/掩体后）；**没有有利位置也绝不追打**：退/进到射程环（0.8R）待机射击 */
 export function rangedMoveTarget(
   px: number, pz: number, tx: number, tz: number, dist: number, range: number,
   rangedPost?: (x: number, z: number, range: number, minDist?: number) => { x: number; z: number } | null,
@@ -46,5 +46,10 @@ export function rangedMoveTarget(
     const post = rangedPost?.(px, pz, range, dist + 4);
     return post ?? kitePoint(tx, tz, px, pz, range);
   }
-  return rangedPost ? rangedPost(px, pz, range, 0) : null;
+  const post = rangedPost?.(px, pz, range, 0);
+  if (post) return post;
+  // ★ 没有有利位置也不追：远了就前进到射程环（不贴脸），在环上就原地射击
+  const ideal = range * RANGED.PREFER_RATIO;
+  if (dist > ideal + 4) return kitePoint(tx, tz, px, pz, range);
+  return null;
 }

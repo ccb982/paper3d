@@ -702,9 +702,7 @@ export class SwarmSystem {
       } else {
         if (p.slotIdx[i] >= 0) this.releaseSlot(i);
         if (tk === AGENT_TARGET_SENTINEL || p.isAir[i] === 1) {
-          // ★ 祖宗是静止目标：不借流场，直走（流场只指向玩家/舰船）
-          // ★ 空中层（2026-09-18）：飞行兵走**直线** —— 流场是地面路径场（编码坑/水/立面），
-          //   飞兵用不上，而且沿流场走会贴着地面障碍绕圈（与"独立空中层"不符）
+          // ★ 祖宗静止/飞行兵：不借流场直走（流场是地面路径场，飞兵沿走会贴障碍绕圈）
           p.fromFlow[i] = 0;
         } else {
           p.fromFlow[i] = this.flow.dirAt(px, pz, _flow) ? 1 : 0;
@@ -714,11 +712,13 @@ export class SwarmSystem {
           }
         }
       }
-      // ★ 远程：不追打——边撤边打 / 占制高掩体后（2026-09-21 定调）
+      // ★ 远程不追打（让位本地移动 atomMove=255，否则原子覆盖仍按 directiveTarget 走向玩家）
       if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
-        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i],
-          (x, z, r) => this.commander.rangedPost(x, z, r));
-        if (t) { destX = t.x; destZ = t.z; p.fromFlow[i] = 0; }
+        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.commander.rangedPost(x, z, r));
+        destX = t ? t.x : px;
+        destZ = t ? t.z : pz;
+        p.fromFlow[i] = 0;
+        p.atomMove[i] = 255;
       }
       const mx = destX - px, mz = destZ - pz;
       const md = Math.hypot(mx, mz);
