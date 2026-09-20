@@ -87,13 +87,17 @@ export class PostureMachine {
         if (inp.builtRatio >= 0.8 || t > 150) this.set('patrol', now);
         break;
       case 'patrol':
-        if (inp.contact || inp.playerDist < 70) this.set('advance', now);
+        // ★ 挑衅 = 被击 + 累计战损 ≥12% → 升级；否则守着等"一天将尽"（时间兜底）
+        if (inp.contact && inp.aliveRatio < 0.88) this.set('advance', now);
+        else if (t > 180) this.set('advance', now);
         break;
       case 'advance':
-        if (inp.playerDist < 45 || t > 25) this.set('mass', now);
+        // ★ 累计损失 ≥20% → 集结；不收玩家距离驱动（玩家守舰船 ≠ 进攻）
+        if (inp.aliveRatio < 0.80 || t > 60) this.set('mass', now);
         break;
       case 'mass':
-        if (inp.playerDist < 30 || t > 15) this.set('assault', now);
+        // ★ 总攻标准：连续损失 ≥25%（或一天将尽的时间兜底）
+        if (inp.aliveRatio < 0.75 || t > 30) this.set('assault', now);
         break;
       case 'assault':
         // 总攻损失过大（<40%）→ 撤退
