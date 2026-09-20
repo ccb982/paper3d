@@ -11,6 +11,49 @@ import type { RetireReason } from './EntityBase';
 /** 兵种角色（大编队配比 / 阵型软约束依据） */
 export type UnitRole = 'shield' | 'assault' | 'grunt' | 'ranged' | 'flyer' | 'logistics';
 
+// ============================================================
+// ★ 逐兵种战术配置（2026-09-21 用户定调：兵种战术独立化）
+// ============================================================
+// 写在名册 `EnemySpec.tactics` 里；**两层各自独立**（可只配一层，另一层走角色兜底）：
+//   `engine`：蜂群引擎侧战术部署（解析：通用 ← 小队属性 ← 本层 ← 施工 override）
+//   `unit`  ：小队内战术（解析：通用 ← 角色 ← 本层 ← 自爆标签 override）
+export type DeployMode =
+  | 'press'      // 直扑（近战/飞行）
+  | 'screen'     // 前出掩护（盾；施工期护工事）
+  | 'flank'      // 两翼包抄（突击）
+  | 'garrison'   // 掩体/射程环驻守（远程）
+  | 'regroup'    // 后方集结（后勤等）
+  | 'build';     // 施工（施工兵种）
+
+/** 引擎侧战术部署（逐兵种覆盖；《蜂群架构.md》§13） */
+export interface EngineTactics {
+  /** 部署模式（缺省 = 按小队属性） */
+  mode?: DeployMode;
+  /** 追击玩家（false = 守自己的位置） */
+  chase?: boolean;
+  /** 站距（米；远程/支援） */
+  standoff?: number;
+  /** 优先掩体后驻守 */
+  preferCover?: boolean;
+  /** 低血后撤阈值（0 = 不撤） */
+  retreatHp?: number;
+  /** 施工期前出掩护距离（米；0 = 不掩护） */
+  screenDist?: number;
+}
+
+/** 队内战术（逐兵种覆盖；《蜂群架构.md》§14） */
+export interface UnitTactics {
+  /** 低血（≤30%）行为：fallback=撤出（通用）/ fight=继续战斗 */
+  lowHp?: 'fallback' | 'fight';
+}
+
+export interface MobTactics {
+  /** 蜂群引擎侧战术（独立配置） */
+  engine?: EngineTactics;
+  /** 小队内战术（独立配置） */
+  unit?: UnitTactics;
+}
+
 /** 攻击类型：none 无 / melee 近战 / ranged 远程弹道 / bombard 轰炸（飞行兵） */
 export type UnitAttackType = 'none' | 'melee' | 'ranged' | 'bombard';
 

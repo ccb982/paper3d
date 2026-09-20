@@ -850,8 +850,9 @@ export class WorldMode implements IGameMode {
         // ★ 步骤 7：编制模式 / 不降格 / 精英（名册透传）
         squadMode: spec.squadMode,
         noDemote: spec.noDemote, elite: spec.elite,
-        // ★ 施工能力（与 role 解耦）
+        // ★ 施工能力 / 逐兵种战术（与 role 解耦；名册透传）
         canBuild: spec.canBuild,
+        tactics: spec.tactics,
       };
     });
     // ★ 采集物纹理图集注入（'plant' 渲染器消费；需在本帧任何 chunk 装配之前）
@@ -866,9 +867,9 @@ export class WorldMode implements IGameMode {
       this.mobDefs.map((d) => d.groundSink),
     );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
-    // ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4；WorldSpawner 实现）
-    this.swarmHooks.tierPort = this.spawner;
+    this.swarmHooks.tierPort = this.spawner;   // 升降格/回收唯一桥接（WorldSpawner 实现）
     this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
+    this.swarmHooks.mobTactics = (mi) => this.mobDefs[mi]?.tactics ?? null;   // ★ 逐兵种战术表
     // ★ 蜂群指挥器端口（兵力/工事全权在指挥层；地形扫描延后到 finishDock 真实落点，enter 时舰位在水面会扫空）
     wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
@@ -970,7 +971,6 @@ export class WorldMode implements IGameMode {
     this.spawner.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
     // ★ 蜂群账本（引擎直管）：换日 → 引擎按威胁预计算总数并清零；同日再出击 → 存档镜像回灌
-    //   Session.dayProgress.enemies 只是持久层，运行时唯一真源 = swarm.ledger。
     const dp = ctx.session.dayProgress;
     if (dp.everDeparted !== ctx.session.meta.day || !dp.enemies) {
       dp.everDeparted = ctx.session.meta.day;

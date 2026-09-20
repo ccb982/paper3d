@@ -17,7 +17,7 @@
 
 import type { AIConfig } from '../systems/ai/aiconfig';
 import type { FtxAsset } from '../vendor/player/FtxAsset';
-import type { UnitAttackType, UnitRole } from '../entity/SwarmUnit';
+import type { UnitAttackType, UnitRole, MobTactics } from '../entity/SwarmUnit';
 import {
   ROCK_BUG_AI, REUNION_AI, LAOJIE_AI,
   ROCK_GIANT_AI, WAR_CASTER_AI, AMP_CASTER_AI, CROSSBOW_AI,
@@ -78,6 +78,9 @@ export interface EnemySpec {
   /** ★ 施工能力（2026-09-20）：会挖战壕/造掩体的兵种。
    *  ★ 与 role 解耦：后勤不一定能施工、杂兵也可以兼任施工（用户定调）。 */
   canBuild?: boolean;
+  /** ★ 逐兵种战术配置（2026-09-21 用户定调：兵种战术独立化）。
+   *  解析：通用战术 ← 小队属性战术 ← **本字段** ← 施工标签 override。 */
+  tactics?: MobTactics;
   /** ★ 始终面对相机（2026-09-18）：L3 贴片是否强制 billboard。
    *  缺省 = 自动检测：素材**没有「后」帧** → 强制 billboard（否则转身 180° 会露出
    *  背面空白/镜像）；有「后」帧 = 双向贴片（相机侧换帧 + 转身）。 */
@@ -104,6 +107,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'rock_bug', name: '原石虫',
     file: '原石虫，杂兵.ftx3.gz',
     role: 'assault', attackType: 'melee',
+    // ★ 逐兵种战术：虫群两翼包抄
+    tactics: { engine: { mode: 'flank', chase: true, retreatHp: 0.25 } },
     ai: ROCK_BUG_AI,
     hp: 22, defense: 0, attackPower: 0,
     scale: 1.6, collisionScale: 1.1, pack: 4, weight: 6,
@@ -115,6 +120,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     role: 'shield', attackType: 'melee',
     // ★ 施工能力：杂兵兼任施工（挖战壕/造掩体；与 role 解耦）
     canBuild: true,
+    // ★ 逐兵种战术：施工优先（死守不退）
+    tactics: { engine: { mode: 'build', chase: false, screenDist: 0 }, unit: { lowHp: 'fight' } },
     ai: REUNION_AI,
     hp: 75, defense: 3, attackPower: 2,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 6,
@@ -127,6 +134,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'laojie', name: '牢杰',
     file: '牢杰，杂兵.ftx3.gz',
     role: 'assault', attackType: 'melee', elite: true,
+    // ★ 逐兵种战术：精英突击（低血才撤）
+    tactics: { engine: { mode: 'flank', chase: true, retreatHp: 0.15 } },
     ai: LAOJIE_AI,
     hp: 45, defense: 0, attackPower: 12,
     scale: 2, collisionScale: 1.25, pack: 1, weight: 12,
@@ -140,6 +149,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'sea_monster', name: '海怪',
     file: '海怪，小兵.ftx3.gz',
     role: 'assault', attackType: 'melee',
+    // ★ 逐兵种战术：正面压迫
+    tactics: { engine: { mode: 'press', chase: true, retreatHp: 0.2 } },
     ai: SEA_MONSTER_AI,
     hp: 90, defense: 2, attackPower: 3,
     scale: 2.3, collisionScale: 1.3, pack: 2, weight: 8,
@@ -154,6 +165,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     file: '萨卡兹大剑手，较强的杂兵.ftx3.gz',
     // ★ 2026-09-19 用户定调：改造为**后勤兵**（挖坑、造掩体；行为后续接）
     role: 'logistics', attackType: 'melee',
+    // ★ 逐兵种战术：后方集结
+    tactics: { engine: { mode: 'regroup', chase: false, retreatHp: 0.55 } },
     ai: SARKAZ_SWORDSMAN_AI,
     hp: 70, defense: 1, attackPower: 6,
     scale: 2.2, collisionScale: 1.25, pack: 1, weight: 7,
@@ -167,6 +180,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'shield_guard', name: '盾卫',
     file: '盾卫，重装.ftx3.gz',
     role: 'shield', attackType: 'melee',
+    // ★ 逐兵种战术：前出掩护、死守不退
+    tactics: { engine: { mode: 'screen', chase: true, retreatHp: 0 }, unit: { lowHp: 'fight' } },
     ai: SHIELD_GUARD_AI,
     hp: 160, defense: 10, attackPower: 1,
     scale: 2.4, collisionScale: 1.4, pack: 1, weight: 5,
@@ -181,6 +196,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'crossbow', name: '远程弩手',
     file: '远程弩手小怪.ftx3.gz',
     role: 'ranged', attackType: 'ranged',
+    // ★ 逐兵种战术：掩体后驻守（射程 50 → 站 45）
+    tactics: { engine: { mode: 'garrison', chase: false, standoff: 45, preferCover: true, retreatHp: 0.35 } },
     ai: CROSSBOW_AI,
     hp: 34, defense: 0, attackPower: 2,
     scale: 2.6, collisionScale: 1.45, pack: 1, weight: 7,
@@ -194,6 +211,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'amp_caster', name: '扩音术士',
     file: '扩音术士，远程.ftx3.gz',
     role: 'ranged', attackType: 'ranged',
+    // ★ 逐兵种战术：掩体后驻守（射程 52 → 站 48）
+    tactics: { engine: { mode: 'garrison', chase: false, standoff: 48, preferCover: true, retreatHp: 0.35 } },
     ai: AMP_CASTER_AI,
     hp: 40, defense: 0, attackPower: 2,
     scale: 2.0, collisionScale: 1.15, pack: 1, weight: 5,
@@ -209,6 +228,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'war_caster', name: '战争术士',
     file: '战争术士，重火力.ftx3.gz',
     role: 'ranged', attackType: 'ranged',
+    // ★ 逐兵种战术：掩体后驻守（射程 55 → 站 50）
+    tactics: { engine: { mode: 'garrison', chase: false, standoff: 50, preferCover: true, retreatHp: 0.4 } },
     ai: WAR_CASTER_AI,
     hp: 55, defense: 0, attackPower: 6,
     scale: 4.2, collisionScale: 2.4, pack: 1, weight: 3,
@@ -225,6 +246,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     id: 'bomber', name: '爆炸飞行怪',
     file: '爆炸飞行怪.ftx3.gz',
     role: 'flyer', attackType: 'bombard', suicide: true,
+    // ★ 逐兵种战术：轰炸直扑（自爆不撤）
+    tactics: { engine: { mode: 'press', chase: true, retreatHp: 0 }, unit: { lowHp: 'fight' } },
     ai: BOMBER_AI,
     hp: 26, defense: 0, attackPower: 4,
     scale: 1.9, collisionScale: 1.1, pack: 1, weight: 4,
@@ -240,6 +263,8 @@ export const ENEMY_ROSTER: EnemySpec[] = [
     file: '原石虫巨人，小boss.ftx3.gz',
     role: 'assault', attackType: 'melee',
     squadMode: 'singleton', noDemote: true, elite: true,
+    // ★ 逐兵种战术：小 boss 正面压迫（死战不退）
+    tactics: { engine: { mode: 'press', chase: true, retreatHp: 0 }, unit: { lowHp: 'fight' } },
     ai: ROCK_GIANT_AI,
     hp: 320, defense: 6, attackPower: 8,
     scale: 3.6, collisionScale: 1.9, pack: 1, weight: 1,

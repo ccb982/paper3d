@@ -34,8 +34,7 @@ import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
   roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
-  ROLE_SHIELD,
-  type TacticalOrder, type UnitDirective, type SwarmCarrier,
+  ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
   AtomExecutor, MOVE_ATOMS, resolveWeights, atomDirection,
@@ -139,6 +138,8 @@ export interface SwarmHooks {
   entityCount: number;
   /** ★ E4a：L3 实体只读列表（编队 steer 消费；模式层给 EntityManager 的敌人数组） */
   activeUnits?: () => readonly SwarmCarrier[];
+  /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
+  mobTactics?: (mobIndex: number) => MobTactics | null;
   /** ★ 步骤 8：升降格 / 回收唯一桥接（管线 P4）；模式层实现（WorldSpawner） */
   tierPort?: SwarmTierPort;
   /** 代理近战结算（targetKind：0=玩家 / 1=舰船 / 2=祖宗；x/z = 代理位置——祖宗结算定位用） */
@@ -628,10 +629,12 @@ export class SwarmSystem {
     }
 
     // ---- P4：士气（低血撤退；同伴阵亡由 WorldMode 触发狂暴） ----
-    //   ★ 通用战术；盾卫/自爆兵不吃（与 SquadDoctrine.retreatHp / UNIT_DOCTRINE 同口径）
+    //   ★ 通用战术；逐兵种队内侧战术 / 盾卫 / 自爆兵可豁免（名册 tactics.unit.lowHp='fight'）
+    const mobT = hooks.mobTactics?.(p.mobIndex[i]) ?? null;
+    const noRetreat = mobT?.unit?.lowHp === 'fight' || p.suicide[i] === 1 || p.role[i] === ROLE_SHIELD;
     if (objective && d < 20 && now >= p.nextRetreatAt[i]
       && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO
-      && p.suicide[i] !== 1 && p.role[i] !== ROLE_SHIELD) {
+      && !noRetreat) {
       p.retreatUntil[i] = now + SWARM.RETREAT_TIME_MIN + Math.random() * SWARM.RETREAT_TIME_SPAN;
       p.nextRetreatAt[i] = now + SWARM.RETREAT_COOLDOWN;
     }
@@ -1104,7 +1107,9 @@ export class SwarmSystem {
       for (const [uid, info] of squad.members) {
         // ★ 队长管队内：按每个成员的血量分解（残血 → fallback）
         const hpRatio = info.maxHp > 0 ? info.hp / info.maxHp : 1;
-        const directive = this.tactics.decompose(squad, bucket, now, hpRatio);
+        const directive = this.tactics.decompose(
+          squad, bucket, now, hpRatio, hooks.mobTactics?.(squad.mobKind) ?? null,
+        );
         // ★ 队长第二指挥（编队位置）：按 uid rank 下发阵型槽位目标（单例不排阵）
         if (!squad.singleton) {
           let rank = 0;

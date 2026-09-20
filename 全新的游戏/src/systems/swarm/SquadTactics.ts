@@ -9,7 +9,7 @@
 // ============================================================
 
 import type {
-  DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective,
+  DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective, MobTactics,
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
@@ -89,9 +89,13 @@ export const UNIT_DOCTRINE: Record<DirectiveRoleBucket, Partial<UnitDoctrine>> =
   logistics: {},
 };
 
-/** 解析：通用 ← 角色覆盖；自爆标签强制 fight（冲上去引爆，不撤） */
-export function resolveUnitDoctrine(bucket: DirectiveRoleBucket, suicide: boolean): UnitDoctrine {
+/** 解析：通用 ← 角色覆盖 ← **逐兵种队内侧覆盖**；自爆标签强制 fight */
+export function resolveUnitDoctrine(
+  bucket: DirectiveRoleBucket, suicide: boolean, mob?: MobTactics | null,
+): UnitDoctrine {
   const d: UnitDoctrine = { ...GENERIC_UNIT_DOCTRINE, ...(UNIT_DOCTRINE[bucket] ?? {}) };
+  const u = mob?.unit;
+  if (u?.lowHp !== undefined) d.lowHp = u.lowHp;
   if (suicide) d.lowHp = 'fight';
   return d;
 }
@@ -241,7 +245,7 @@ export class SquadTactics {
    * 分解：命令 + 成员角色桶 → 个体指令（默认矩阵；稳定输出）。
    * 目标点：命令 target → 指令 target（路径滚动由后续执行层按 corridorIdx 推进）。
    */
-  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1): UnitDirective {
+  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1, mob?: MobTactics | null): UnitDirective {
     const state = this.board.get(squad.id);
     // ★ 五轴。路径：目标沿 path 滚动（队质心前方路点）
     let cx = 0, cz = 0, n = 0;
@@ -252,7 +256,7 @@ export class SquadTactics {
     const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。
     //   ★ 通用战术；盾卫/自爆兵不吃（`UNIT_DOCTRINE` 覆盖）；队整体已在撤退档时不重复下发。
-    const ud = resolveUnitDoctrine(bucket, squad.suicide);
+    const ud = resolveUnitDoctrine(bucket, squad.suicide, mob);
     if (ud.lowHp === 'fallback' && memberHpRatio <= MEMBER_FALLBACK_HP && state?.order.kind !== 'retreat') {
       const dir: UnitDirective = {
         kind: 'fallback',

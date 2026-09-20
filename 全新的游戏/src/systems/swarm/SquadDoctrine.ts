@@ -9,16 +9,10 @@
 // 队内层见 SquadTactics.UNIT_DOCTRINE（同结构：通用 + 角色/标签覆盖）。
 // ============================================================
 
-import type { SquadType } from '../../entity/SwarmUnit';
+import type { SquadType, DeployMode, MobTactics } from '../../entity/SwarmUnit';
 
-/** 部署模式（引擎只认这几种；具体目标点在指挥器里算） */
-export type DeployMode =
-  | 'press'      // 直扑（近战/飞行）
-  | 'screen'     // 前出掩护（盾；施工期护工事）
-  | 'flank'      // 两翼包抄（突击）
-  | 'garrison'   // 掩体/射程环驻守（远程）
-  | 'regroup'    // 后方集结（后勤等）
-  | 'build';     // 施工（施工兵种）
+// 部署模式与逐兵种战术类型在契约层（entity/SwarmUnit）定义；此处再导出兼容旧引用
+export type { DeployMode, MobTactics };
 
 export interface SquadDoctrine {
   mode: DeployMode;
@@ -60,9 +54,20 @@ export const SQUAD_DOCTRINE: Record<SquadType, Partial<SquadDoctrine>> = {
   mixed:     {},
 };
 
-/** ★ 解析：通用 ← 属性覆盖；施工兵种强制 build（施工优先） */
-export function resolveDoctrine(type: SquadType, builders: boolean): SquadDoctrine {
+/** ★ 解析：通用 ← 属性覆盖 ← **逐兵种引擎侧覆盖**；施工兵种强制 build（施工优先） */
+export function resolveDoctrine(
+  type: SquadType, builders: boolean, mob?: MobTactics | null,
+): SquadDoctrine {
   const d: SquadDoctrine = { ...GENERIC_DOCTRINE, ...(SQUAD_DOCTRINE[type] ?? {}) };
+  const e = mob?.engine;
+  if (e) {
+    if (e.mode !== undefined) d.mode = e.mode;
+    if (e.chase !== undefined) d.chase = e.chase;
+    if (e.standoff !== undefined) d.standoff = e.standoff;
+    if (e.preferCover !== undefined) d.preferCover = e.preferCover;
+    if (e.retreatHp !== undefined) d.retreatHp = e.retreatHp;
+    if (e.screenDist !== undefined) d.screenDist = e.screenDist;
+  }
   if (builders) {
     d.mode = 'build';
     d.chase = false;

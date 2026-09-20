@@ -24,7 +24,7 @@ import type { Asset } from '../../vendor/player';
 import { EntityManager } from '../../entity/EntityManager';
 import type { EntityBase } from '../../entity/EntityBase';
 import { Player } from '../../entity/player/Player';
-import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
+import type { UnitRole, UnitAttackType, MobTactics } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
 import type { SwarmTierPort } from '../swarm/SwarmTierPort';
@@ -94,6 +94,8 @@ export interface MobDef {
   squadMode?: 'normal' | 'singleton';
   /** ★ 施工能力（与 role 解耦：后勤不一定能施工、杂兵也可以兼任；2026-09-20） */
   canBuild?: boolean;
+  /** ★ 逐兵种战术配置（名册透传；2026-09-21） */
+  tactics?: MobTactics;
   /** ★ 精英（大队概率额外携带） */
   elite?: boolean;
   /** ★ 不降格（Boss：永保 active） */

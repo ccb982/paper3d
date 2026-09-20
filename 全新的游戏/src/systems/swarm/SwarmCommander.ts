@@ -11,7 +11,7 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmSystem } from './SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
-import { resolveDoctrine } from './SquadDoctrine';
+import { resolveDoctrine, type MobTactics } from './SquadDoctrine';
 import type { SquadRating } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 
@@ -38,6 +38,8 @@ export class SwarmCommander {
   spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean) => void) | null = null;
   /** ★ 按 mobIndex 生成一只（名单重放用；模式层注入） */
   spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
+  /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
+  mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
   /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
   private readonly builtCovers: { x: number; z: number }[] = [];
   /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
@@ -342,7 +344,7 @@ export class SwarmCommander {
     let assaultIdx = 0;
     let screenIdx = 0;
     for (const s of squads) {
-      const d = resolveDoctrine(s.type, s.builders);
+      const d = resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null);
       let kind: TacticalOrder['kind'] = 'advance';
       let target = { x: meleeX, z: meleeZ };
       let roe: TacticalOrder['roe'] = 'engage';
@@ -368,7 +370,7 @@ export class SwarmCommander {
           let cx = 0, cz = 0, n = 0;
           for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
           if (n > 0) { cx /= n; cz /= n; }
-          const cov = covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
+          const cov = d.preferCover && covers.length > 0 ? covers[coverIdx++ % covers.length] : null;
           let hx: number, hz: number;
           if (cov) {
             hx = cov.x; hz = cov.z;

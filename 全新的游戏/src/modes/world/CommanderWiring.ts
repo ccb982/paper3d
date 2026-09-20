@@ -74,4 +74,6 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       if (d.spawner.spawnSingle(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1)) return;
     }
   };
+  // ★ 逐兵种战术表（名册 EnemySpec.tactics）
+  d.commander.mobTactics = (mobIndex) => d.mobDefs[mobIndex]?.tactics ?? null;
 }
