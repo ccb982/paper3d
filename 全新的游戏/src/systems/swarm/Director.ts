@@ -43,10 +43,10 @@ export interface DirectorInputs {
   playerZ: number;
   shipX: number;
   shipZ: number;
-  /** ★ 当天配额剩余可生成数（= quota − spawned；2026-09-16）。
-   *  环境补怪据此**持续补刷到打满总数**，不再只看 alive。
+  /** ★ 当日兵力计划剩余（引擎账本 remaining；2026-09-20 改口径）。
+   *  环境补怪据此**持续补刷到计划打满**，不再只看 alive。
    *  缺省（undefined）时按旧行为处理（不补刷）→ 兼容未接线的调用方。 */
-  quotaLeft?: number;
+  budgetLeft?: number;
 }
 
 export interface SpawnOrder {
@@ -190,11 +190,11 @@ export class Director {
         }
       }
       if (this.phase === 'calm' && this.spawnTimer <= 0) {
-        // ★ 配额未刷完 → 加快补刷节拍（2026-09-16）：
-        //   当天总数是定死的计划值，刷怪有义务把 spawned 送到 quota。
+        // ★ 兵力计划未刷完 → 加快补刷节拍（2026-09-20）：
+        //   当天总数是引擎定死的计划值，刷怪有义务把 spawned 送到 total。
         //   旧的 ambientInterval（16s→4.5s）太慢，光靠它磨不满分母。
         //   还剩得多 → 节拍缩到 1/3（下限 1.2s），把缺口补上。
-        const left = inp.quotaLeft ?? 0;
+        const left = inp.budgetLeft ?? 0;
         const backfill = left > 0;
         this.spawnTimer = backfill
           ? Math.max(1.2, this.threat.ambientInterval / 3)

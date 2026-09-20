@@ -62,15 +62,20 @@ export interface EventMap {
   // ★ 存档基础属性被永久改写（「训练类」消耗品，如糖果加上限）；
   //   WorldMode 订阅 → 重算玩家实体；BaseMode 订阅 → 刷新属性面板
   'player_stats_changed': { reason: string };
-  // ★ 敌人真击杀（2026-09-16 击杀统计）：**仅统计口径**，不影响掉落/遗物管线。
+  // ★ 敌人真击杀（2026-09-16）：**仅统计口径**，不影响掉落/遗物管线。
   //   由 EnemyBase.onRetire('killed') 发出（2026-09-18 起退役原因收口）；
   //   降格/回收/清场走其他 reason，不触发本事件。
-  //   代理路径由 WorldMode.onAgentKilled 直接记数（不发本事件，避免双计）。
+  //   ★ 2026-09-20：唯一订阅方 = 蜂群引擎（SwarmSystem → SwarmLedger.reportCasualty），
+  //     与代理侧死亡同一账本；只报"死了一个"，不需要兵种。
   'enemy_killed': {
     source: import('../entity/EntityBase').EntityBase | null;
     x: number;
     z: number;
   };
+  // ★ 敌人非击杀离场（2026-09-20 账本口径）：回收无定义体 / 主动清场；
+  //   引擎账本只做"存活 −1"（不算击杀）。由 EnemyBase.onRetire('recycled'|'despawned'|
+  //   'mode_cleanup') 发出。
+  'enemy_removed': {};
   // ★ 敌人受击（步骤 10 自主 LOD）：实体被击广播 → WorldMode 转交 swarm.noteHit
   'enemy_hit': { squadId: number };
 }

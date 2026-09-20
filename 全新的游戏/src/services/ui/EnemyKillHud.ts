@@ -8,7 +8,7 @@
 // 素材版式（实测解码 644×68，**两段式**镜像对称）：
 //   竖线①  x≈18  (0.028)   —— 左端装饰
 //   ENEMY 图标 x 65~137 (中心 0.157)  —— 橙色准星
-//   左段留白   x 140~330 (中心 0.365)  ← 在此放「击杀数 / 当天总数」
+//   左段留白   x 140~330 (中心 0.365)  ← 在此放「今日击杀 / 今日上限」（蜂群引擎账本）
 //   竖线②  x≈332 (0.516)   —— 中缝
 //   舰船图标   x 401~463 (中心 0.671)  —— 蓝色舰船
 //   右段留白   x 470~627 (中心 0.852)  ← 在此放「舰船生命数字」
@@ -137,7 +137,7 @@ export class EnemyKillHud {
       'display:block', 'pointer-events:none',
     ].join(';');
 
-    // ---- 左半：敌人数量（击杀数 / 当天总数） ----
+    // ---- 左半：敌人数量（今日击杀 / 今日上限） ----
     this.killText = document.createElement('span');
     this.killText.textContent = '0 / 0';
     this.killText.style.cssText = [
@@ -203,8 +203,8 @@ export class EnemyKillHud {
 
   /**
    * ★ 刷新（WorldMode 低频节拍调用，约 0.1s 一次）
-   * @param kills 当天已击杀数
-   * @param total 当天敌人总数（击杀可达上限）
+   * @param kills 今日击杀数（蜂群引擎账本）
+   * @param total 今日上限（引擎 beginDay 预计算的当日总数）
    * @param shipHp 舰船当前生命
    * @param shipMaxHp 舰船生命上限
    */

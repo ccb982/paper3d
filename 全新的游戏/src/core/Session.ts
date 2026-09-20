@@ -99,20 +99,23 @@ export interface GameSession {
   // ----- ⑧ 每日进度 -----
   dayProgress: {
     hasDepartedToday: boolean;
-    /** ★ 当天敌人配额与击杀进度（2026-09-16）。
-     *  quota = 当天敌人总数（**预计算后冻结，全天不变**）；
-     *  kills = 真击杀数（子弹/近战致死、掉深坑致死）；
-     *  recalled = 已因远距回收而消失的数（**只记账，不影响 quota**）；
-     *  spawned = 当天累计生成过多少只（配额闸门依据，只增不减）。
-     *  跨出击持久（同日多次出击累计）；换日由 resetDayQuota 清 0 重算。 */
+    /** ★ 当天敌人进度（2026-09-20 重做：**蜂群引擎直管**，存档仅镜像）。
+     *  运行时唯一真源 = SwarmSystem.ledger（SwarmLedger）：
+     *  total = 当日敌人总数（引擎 beginDay 按威胁预计算后冻结，只作生成闸门）；
+     *  spawned = 累计生成（只增；生成闸门 = spawned < total）；
+     *  alive = 当前存活（引擎内部计数，不上 HUD；生成 +1 / 击杀 −1 / LOD 清除 −1 / 其他离场 −1）；
+     *  kills = 击杀计数（只有击杀 +1；LOD 清除不算）；
+     *  recalled = 远距 LOD 清除累计（存活已 −1，不算击杀）。
+     *  跨出击持久（同日多次出击累计）；WorldMode 每 0.1s 回写镜像。 */
     enemies?: {
-      quota: number;
+      total: number;
+      spawned: number;
+      alive: number;
       kills: number;
       recalled: number;
-      spawned: number;
     };
-    /** ★ 已为哪一天初始化过敌人配额（防同日重复出击把进度清零）。
-     *  = session.meta.day 时表示当天配额已就绪；换日不等 → 重新初始化。 */
+    /** ★ 已为哪一天初始化过敌人总数（防同日重复出击把进度清零）。
+     *  = session.meta.day 时表示当天账本已就绪；换日不等 → 引擎重算。 */
     everDeparted?: number;
   };
 

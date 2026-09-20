@@ -28,13 +28,11 @@ import type { UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { ShipEntity } from '../../entity/ShipEntity';
 import { EnemyBase } from '../../entity/EnemyBase';
 import type { SwarmTierPort } from '../swarm/SwarmTierPort';
-import { recordRecall } from '../combat/KillCounter';
 import { fireCode, type TacticalOrder, type UnitDirective } from '../../entity/SwarmUnit';
 import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
 import { applyDamage } from '../../services/combat/DamagePipeline';
-import { recordSpawn, addQuota, readDayProgress, remainingQuota } from '../../systems/combat/KillCounter';
 import { RasterMap, chunkKeyOf } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { ChunkManager } from '../../services/map/ChunkManager';
@@ -187,12 +185,10 @@ export class WorldSpawner implements SwarmTierPort {
   private spawnedChunks = new Set<number>();
   /** 祖宗嘲讽查询的复用对象（零分配） */
   private _tauntScratch = { x: 0, z: 0 };
-  /** ★ 当日配额未初始化的 warn 只打一次（否则每帧刷屏） */
-  private quotaInitWarned = false;
-  /** ★ 「今日敌军已肃清」是否已播报（每局一次；reset 清） */
-  private quotaExhaustedShown = false;
-  /** 肃清判定的延迟计时（进图后 1.5s 再判，避开落地动画） */
-  private quotaExhaustedAccum = 0;
+  /** ★ 「今日敌军已全部投入」是否已播报（每局一次；reset 清） */
+  private forceExhaustedShown = false;
+  /** 判定延迟计时（进图后 1.5s 再判，避开落地动画） */
+  private forceExhaustedAccum = 0;
 
   constructor(private deps: SpawnDeps) {}
 
@@ -202,34 +198,31 @@ export class WorldSpawner implements SwarmTierPort {
     this.cullAccum = 0;
     this.groupWarnAccum = 0;
     this.groupWarnShown = false;
-    this.quotaInitWarned = false;
-    this.quotaExhaustedShown = false;
-    this.quotaExhaustedAccum = 0;
+    this.forceExhaustedShown = false;
+    this.forceExhaustedAccum = 0;
   }
 
-  /** ★ 当天配额是否已耗尽（quota 已初始化且 spawned 顶满） */
-  private quotaExhausted(): boolean {
-    const s = this.deps.session;
-    if (!s) return false;
-    const e = readDayProgress(s);
-    return e.quota > 0 && remainingQuota(s) <= 0;
+  /** ★ 当天兵力计划是否已全部生成（引擎账本口径） */
+  private forceExhausted(): boolean {
+    const L = this.deps.swarm.ledger;
+    return L.total > 0 && L.spawned >= L.total;
   }
 
   /**
-   * ★ 「今日敌军已肃清」提示（WorldMode.update 每帧调，explore 段）。
+   * ★ 「今日敌军已全部投入」提示（WorldMode.update 每帧调，explore 段）。
    *
-   * 为什么需要：当天 quota 被 spawned 顶满后，刷怪闸门关闭 → 玩家在野外
-   * 一只敌人都遇不到，**看起来跟"敌人不生成"的 bug 完全一样**（2026-09-18
-   * 就在这上面白查了一轮）。这里做一次性播报 + 常驻标签，让状态可见。
+   * 为什么需要：引擎账本的生成闸门关闭后 → 玩家在野外一只敌人都遇不到，
+   * **看起来跟"敌人不生成"的 bug 完全一样**（2026-09-18 就在这上面白查了一轮）。
+   * 这里做一次性播报 + 常驻标签，让状态可见。
    *
    * 一次性：每局只播一次（reset 清）；进图后延迟 1.5s 再判（避开落地动画）。
    */
-  notifyQuotaExhausted(dt: number): void {
-    if (this.quotaExhaustedShown) return;
-    this.quotaExhaustedAccum += dt;
-    if (this.quotaExhaustedAccum < 1.5) return;
-    if (!this.quotaExhausted()) return;
-    this.quotaExhaustedShown = true;
+  notifyForceExhausted(dt: number): void {
+    if (this.forceExhaustedShown) return;
+    this.forceExhaustedAccum += dt;
+    if (this.forceExhaustedAccum < 1.5) return;
+    if (!this.forceExhausted()) return;
+    this.forceExhaustedShown = true;
     // ① 常驻：顶部档位标签改口径（玩家随时能看到"为什么没敌人"）
     this.deps.worldUIManager.setThreatLabel('敌军攻势：已肃清', '#9fe6b0');
     // ② 一次性横幅
@@ -252,9 +245,8 @@ export class WorldSpawner implements SwarmTierPort {
 
   scanAndSpawnWaves(px: number, pz: number, budget: number): void {
     if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
-    // ★ 配额耗尽就整段跳过（省掉每帧 24 个 chunk 的扫描；语义等价 ——
-    //   耗尽时 spawnOne 必然全被 quotaAllows 拦下）
-    if (!this.quotaAllows()) return;
+    // ★ 引擎账本生成闸门已满 → 整段跳过（省掉每帧 24 个 chunk 的扫描）
+    if (!this.deps.swarm.ledger.canSpawn()) return;
     if (this.deps.chunks.isBoss4D) return; // 四维空间（最终 Boss 战地图）不刷杂兵
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
@@ -404,6 +396,8 @@ export class WorldSpawner implements SwarmTierPort {
     this.deps.enemyDefs.set(enemy, def);
     this.deps.enemies.push(enemy);
     this.deps.bossEntity = enemy;
+    // ★ Boss 是计划外直建单位：账本显式扩编（total/spawned 同步 +1，HUD 恒 kills ≤ total）
+    this.deps.swarm.ledger.grant(1);
     this.deps.showFloatingAt(safe.x, safe.y + 4, safe.z, '普瑞赛斯', 'crit');
   }
 
@@ -566,12 +560,6 @@ export class WorldSpawner implements SwarmTierPort {
     this.promoteAgent(snap);
   }
 
-  /** ★ 步骤 8：远距回收（SwarmTierPort.recall；不算击杀，只扣当日配额） */
-  recall(count: number): void {
-    recordRecall(this.deps.session, count);
-  }
-
-
   /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
    *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。双通道，谁触发取谁计数：
    *   ① 近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
@@ -729,7 +717,7 @@ export class WorldSpawner implements SwarmTierPort {
         shotSpeed: stats.shotSpeed,
         shotLife: stats.shotLife,
         singleton: def.squadMode === 'singleton',
-      });
+      }, true);   // ★ 压测：绕过账本闸门（调试专用）
       if (idx >= 0) placed++;
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
     }
@@ -775,14 +763,13 @@ export class WorldSpawner implements SwarmTierPort {
 
 
   /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
-   *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。 */
+   *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。
+   *   ★ 当日兵力计划（引擎账本 total）在此消耗；额度满 → spawn 返回 -1，本窝停止。 */
   spawnOne(
     def: MobDef,
     x: number, _y: number, z: number,
     intent: number = INTENT_NONE,
     assaultIndex = -1,
-    /** ★ 蜂群架构兵力创建：跳过每日配额（仍走落点闸门/MAX_ALIVE/记账） */
-    ignoreQuota = false,
   ): boolean {
     if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
     const mobIndex = this.deps.mobDefs.indexOf(def);
@@ -809,9 +796,6 @@ export class WorldSpawner implements SwarmTierPort {
       }
       // ★ 上限检查（每只都查；实体 + 代理合计）
       if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) break;
-      // ★ 每日配额闸门（2026-09-16）：当天敌人总数有限 → 生成名额 = 配额 − 已击杀 − 场上存活。
-      //   所有刷怪路径（导演波次/扫描波次/压测）都经 spawnOne，此处是唯一收口点。
-      if (!ignoreQuota && !this.quotaAllows()) break;
       // ★ 同伴落点也要可站（坑/水/过低跳过该同伴）
       //   ★ 空中层（2026-09-18）：飞行兵**豁免**这些闸门 —— 它悬在空中，落点是不是坑/水无所谓
       const air = def.isAir === true;
@@ -844,37 +828,9 @@ export class WorldSpawner implements SwarmTierPort {
         shotLife: stats.shotLife,
         singleton: def.squadMode === 'singleton',
       });
-      if (idx >= 0) {
-        any = true;
-        // ★ 计入当天已生成（配额闸门依据；只增不减 → 回收不会腾出名额）
-        recordSpawn(this.deps.session);
-        // ★ 指挥层生成（绕过配额闸门）：**分母同步 +1** → HUD 计数保持准确
-        if (ignoreQuota) addQuota(this.deps.session, 1);
-      }
+      if (idx >= 0) any = true;   // ★ 账本由引擎 spawn() 自增（唯一生成口）
     }
     return any;
-  }
-
-  /** ★ 每日配额闸门（2026-09-16）：当天**还能再生成**多少只 = quota − spawned。
-   *  ★ 分母 quota 预计算后冻结（全天不变）；spawned 只增不减（不受回收影响）
-   *    → 闸门稳定，不会因敌人被远距回收而"腾出名额"导致无限刷。
-   *  四维空间 Boss 战不受配额约束（Boss 是独立实体，不经 spawnOne 的杂兵路径）。 */
-  quotaAllows(): boolean {
-    const s = this.deps.session;
-    if (!s) return true;
-    // ★ 兜底（2026-09-18）：quota<=0 表示**从未初始化** ——
-    //   ensureDayQuota 只对 quota<=0 计算一次，若它没跑到（threat 为空 / enter 中断），
-    //   quota 就停在 0，而 remainingQuota = 0 - spawned = 0 → **永久一只都不刷**，
-    //   换日也救不回来（resetDayQuota 也只是再清成 0）。这是异常态，不该由闸门背锅。
-    //   正常路径（quota 已按威胁档位预计算）不受影响。
-    if (readDayProgress(s).quota <= 0) {
-      if (!this.quotaInitWarned) {
-        this.quotaInitWarned = true;
-        console.warn('[spawn] 当日配额未初始化（quota<=0）→ 本次放行，交 ensureDayQuota 补算');
-      }
-      return true;
-    }
-    return remainingQuota(s) > 0;
   }
 
   /** ★ 步骤 5：uid → L3 实体（队长标记镜像用；降格时移除） */

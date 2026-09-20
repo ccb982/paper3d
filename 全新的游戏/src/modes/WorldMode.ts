@@ -77,13 +77,9 @@ import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
-// ★ 击杀统计 + 每日敌人配额（2026-09-16）
-//   口径：quota 预计算后**冻结**（当天总数不变）；远距清除**不算击杀**（只记 recalled）；
-//   配额闸门依据 = quota − spawned（只增不减，不受回收影响）。
-import {
-  ensureDayQuota, resetDayQuota, recordKill, recordRecall, recordSpawn,
-  queryKillProgress, remainingQuota,
-} from '../systems/combat/KillCounter';
+// ★ 击杀统计 + 每日敌人总数（2026-09-20 重做）：**蜂群引擎直管**（SwarmSystem.ledger）
+//   口径：total = 引擎 beginDay 预计算并冻结；spawned/kills/recalled 三计数只增；
+//   Session.dayProgress.enemies 只是存档镜像（WorldMode 每 0.1s 回写，换日清）。
 import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, AIR_ALTITUDE_DEFAULT, AIR_BOB_AMP, AIR_BOB_RATE, type AgentSnapshot } from '../systems/swarm/AgentPool';
 import { entityPerf } from '../entity/EntityPerf';
 import { NpcEntity } from '../entity/NpcEntity';
@@ -356,8 +352,6 @@ export class WorldMode implements IGameMode {
     camForwardX: 0, camForwardZ: 1,
     entityCount: 0,
     melee: () => {},
-    // ★ 真击杀（代理侧）：记当日击杀数（掉落/遗物由 onAgentKilled 单独结算）
-    onAgentKilled: () => { recordKill(this.session); },
   };
 
   /** ★ 杂兵配置条目（由 enemyAssets 按 id 查 config/enemyRoster.ts 装配；生成时按权重随机取一条） */
@@ -480,8 +474,6 @@ export class WorldMode implements IGameMode {
   private damageUnsub?: () => void;
   /** ★ killed 事件订阅：杂兵死亡 → 从 enemies 列表移除 */
   private killedUnsub?: () => void;
-  /** ★ enemy_killed 事件订阅：真击杀 → 当日击杀数 +1（实体侧） */
-  private enemyKilledUnsub?: () => void;
   /** ★ 步骤 10：敌人受击 → 小队/大队警觉（自主 LOD） */
   private enemyHitUnsub?: () => void;
   /** ★ 调试可视化（?swarmdbg=1）：小队/属性/指令 */
@@ -969,14 +961,23 @@ export class WorldMode implements IGameMode {
     };
     this.spawner.refreshEnemyScale();
     this.swarmDirector.beginDay(ctx.session.meta.day, this.directorHooks);
-    // ★ 当天敌人总数（2026-09-16）：换日先清零，再按当日威胁**预计算并冻结**；
-    //   同日多次出击沿用已有进度（跨出击累计，quota 不重置、不重算）。
-    //   → HUD 分母全天不变（用户定调："当天的敌人会预计算好会有多少人"）。
-    if (ctx.session.dayProgress.everDeparted !== ctx.session.meta.day) {
-      resetDayQuota(ctx.session);
-      ctx.session.dayProgress.everDeparted = ctx.session.meta.day;
+    // ★ 蜂群账本（引擎直管，2026-09-20）：换日 → 引擎按当日威胁预计算总数并清零；
+    //   同日再出击 → 从存档镜像回灌（进度累计，总数不重算）。
+    //   Session.dayProgress.enemies 只是持久层，运行时唯一真源 = swarm.ledger。
+    const dp = ctx.session.dayProgress;
+    if (dp.everDeparted !== ctx.session.meta.day || !dp.enemies) {
+      dp.everDeparted = ctx.session.meta.day;
+      dp.enemies = { total: 0, spawned: 0, alive: 0, kills: 0, recalled: 0 };
+      if (this.threat) this.swarm.ledger.beginDay(this.threat);
+    } else {
+      const e = dp.enemies;
+      this.swarm.ledger.seed({
+        total: e.total ?? 0, spawned: e.spawned ?? 0, alive: e.alive ?? -1,
+        kills: e.kills ?? 0, recalled: e.recalled ?? 0,
+      });
+      // 旧存档迁移 / 威胁晚到：总数缺失 → 引擎补算（幂等）
+      if (this.swarm.ledger.total <= 0 && this.threat) this.swarm.ledger.beginDay(this.threat);
     }
-    if (this.threat) ensureDayQuota(ctx.session, this.threat);
     // ★ 遗物局内周期补给（祖宗发射器等）：每间隔补 1，多件缩短间隔
     this.timedRelics = relicTimedFor(ctx.session, RELIC_ITEM_CONFIG)
       .map((g) => ({ itemId: g.itemId, interval: g.interval, timer: 0 }));
@@ -1224,11 +1225,8 @@ export class WorldMode implements IGameMode {
         this.statsDirty = true;
       }
     });
-    // ★ 真击杀统计（2026-09-16）：实体侧由 EnemyBase.onRetire('killed') 发出（退役原因收口）；
-    //   代理侧在 swarmHooks.onAgentKilled 里直接记数（两条路径互斥，不会双计）。
-    this.enemyKilledUnsub = eventBus.on('enemy_killed', () => {
-      recordKill(this.session);
-    });
+    // ★ 真击杀统计（2026-09-20 重做）：由蜂群引擎直接消费 `enemy_killed`（SwarmLedger），
+    //   WorldMode 不再重复计数 —— 击杀/总数的唯一真源 = swarm.ledger。
     // ★ 步骤 10：敌人受击（实体侧广播）→ 小队/大队警觉（免降格 + 倾盆而出）
     this.enemyHitUnsub = eventBus.on('enemy_hit', (payload) => {
       this.swarm.noteHit(payload.squadId, performance.now() / 1000);
@@ -1523,9 +1521,8 @@ export class WorldMode implements IGameMode {
         playerHpRatio: this.player.hp / Math.max(1, this.player.maxHp),
         playerX: pp.x, playerZ: pp.y,
         shipX: this.ship.position.x, shipZ: this.ship.position.z,
-        // ★ 当天配额剩余（2026-09-16）：环境补怪据此持续补刷到打满总数。
-        //   分母 quota 冻结 → "打满"由刷怪负责，UI 不做任何补偿。
-        quotaLeft: remainingQuota(this.session),
+        // ★ 引擎账本剩余兵力计划：环境补怪据此补刷到计划满（口径见 SwarmLedger）
+        budgetLeft: this.swarm.ledger.remaining,
       }, this.directorHooks);
       // ★ 兵力创建全权交给蜂群架构（指挥器）：开局不预置刷兵，给玩家发育机会
       void order;
@@ -1534,8 +1531,8 @@ export class WorldMode implements IGameMode {
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);
-      // ---- ★ 当日配额耗尽 → 一次性提示（否则"野外一只敌人都没有"看着就是 bug） ----
-      this.spawner.notifyQuotaExhausted(dt);
+      // ---- ★ 兵力计划耗尽 → 一次性提示（否则"野外一只敌人都没有"看着就是 bug） ----
+      this.spawner.notifyForceExhausted(dt);
     }
     // ---- ★ 舰船遇围警示（无条件下方执行）：只要舰船活着就一直盯着，
     //   跟"大规模进攻"节奏无关（详见 updateShipGroupWarning）----
@@ -1705,8 +1702,15 @@ export class WorldMode implements IGameMode {
     if (this.shipStatusAccum >= 0.1 && this.session) {
       this.shipStatusAccum = 0;
       const s = this.session.ship;
-      const prog = queryKillProgress(this.session);
-      this.worldUIManager.setShipStatus(s.hp, s.maxHp, prog.kills, prog.total);
+      const L = this.swarm.ledger;
+      // ★ 左段只给玩家看「今日击杀 / 今日上限」（存活是引擎内部计数，不上 HUD）
+      this.worldUIManager.setShipStatus(s.hp, s.maxHp, L.kills, L.total);
+      // ★ 账本镜像到存档（引擎直管；每 0.1s 回写 5 个数字）
+      const e = this.session.dayProgress.enemies;
+      if (e) {
+        e.total = L.total; e.spawned = L.spawned; e.alive = L.alive;
+        e.kills = L.kills; e.recalled = L.recalled;
+      }
     }
     if (this.session && !this.shipDestroyed && isShipDestroyed(this.session)) {
       this.shipDestroyed = true;
@@ -1843,9 +1847,6 @@ export class WorldMode implements IGameMode {
     // ---- 取消 killed 事件订阅 ----
     this.killedUnsub?.();
     this.killedUnsub = undefined;
-    // ---- 取消 enemy_killed 事件订阅（击杀统计） ----
-    this.enemyKilledUnsub?.();
-    this.enemyKilledUnsub = undefined;
     // ---- 取消 enemy_hit 事件订阅（自主 LOD 警觉） ----
     this.enemyHitUnsub?.();
     this.enemyHitUnsub = undefined;

@@ -11,6 +11,8 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { entityPerf } from '../../entity/EntityPerf';
+import { eventBus } from '../../core/EventBus';
+import { SwarmLedger } from './SwarmLedger';
 import {
   AgentPool,
   AGENT_TARGET_PLAYER,
@@ -165,6 +167,12 @@ const _zeroSlot = { fx: 0, fz: 0 };
 const _memberUids: number[] = [];
 
 export class SwarmSystem {
+  /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
+  readonly ledger = new SwarmLedger();
+  /** ★ 唯一伤亡通道订阅（实体侧：EnemyBase.onRetire('killed') → enemy_killed；代理侧引擎内直记） */
+  private readonly casualtyUnsub: () => void;
+  /** ★ 非击杀离场订阅（recycled/despawned：账本存活 −1） */
+  private readonly removedUnsub: () => void;
   readonly pool = new AgentPool();
   /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
   readonly squads = new SquadTable();
@@ -211,6 +219,14 @@ export class SwarmSystem {
   /** ★ P2：攻击令牌计数（每目标同时挥击数；索引含祖宗 2） */
   private tokenUsed = [0, 0, 0];
 
+  constructor() {
+    // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
+    //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种
+    this.casualtyUnsub = eventBus.on('enemy_killed', () => this.ledger.reportCasualty(1));
+    // ★ 非击杀离场：存活 −1（不算击杀）
+    this.removedUnsub = eventBus.on('enemy_removed', () => this.ledger.noteRemoved(1));
+  }
+
   /** 构建批量渲染（模式层在 mobDefs 就绪后调用；素材顺序 = mobIndex）
    *  ★ sinks：每兵种接地补偿（世界单位；与 mobDefs 同序，可省 = 不补偿） */
   buildBatch(scene: import('three').Scene, assets: FrameAssetSource[], sinks?: number[]): void {
@@ -221,10 +237,14 @@ export class SwarmSystem {
     return this.pool.count;
   }
 
-  spawn(data: AgentSpawnData): number {
+  /** 生成代理（唯一生成口；账本 `spawned` 在此 +1）
+   *  @param force 调试/压测绕过配额闸门（仍记账） */
+  spawn(data: AgentSpawnData, force = false): number {
+    if (!force && !this.ledger.canSpawn()) return -1;
     if (!data.uid || data.uid <= 0) data.uid = this.nextUid++;
     const i = this.pool.push(data);
     if (i < 0) return i;
+    this.ledger.noteSpawn(1);
     // ★ 步骤 5：同质就近编队 + 首员即队长
     const squad = this.squads.assign(
       data.uid, roleFromCode(this.pool.role[i]), data.x, data.z,
@@ -397,7 +417,8 @@ export class SwarmSystem {
         const mobIndex = p.mobIndex[i];
         const kx = p.x[i], ky = p.y[i], kz = p.z[i];
         this.removeAgent(i, true, true);   // ★ 阵亡：单人只下调评分（全灭才上报）
-        hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
+        this.ledger.reportCasualty(1);     // ★ 伤亡通道（代理）：账本击杀 +1
+        hooks.onAgentKilled?.(mobIndex, kx, ky, kz);   // 掉落/遗物/狂暴（与账本无关）
         continue;
       }
       // ★ 掉坑（深坑底）：代理直接结算死亡（实体层掉半血并爬回；代理简化——防永久卡坑底）
@@ -410,6 +431,7 @@ export class SwarmSystem {
           const mobIndex = p.mobIndex[i];
           const kx = p.x[i], ky = p.y[i], kz = p.z[i];
           this.removeAgent(i, true, true);   // ★ 掉坑 = 阵亡口径
+          this.ledger.reportCasualty(1);     // ★ 伤亡通道（代理）：账本击杀 +1
           hooks.onAgentKilled?.(mobIndex, kx, ky, kz);
           continue;
         }
@@ -432,8 +454,7 @@ export class SwarmSystem {
       if (Math.min(dFocus2, dShip2) > l1R2) {
         // ★ 步骤 10：被击 / 小队警觉 / 倾盆而出期间免回收（交火中的不许被远距清除）
         if (counter || p.noDemoteUntil[i] > now || this.holdDemote(p.squadId[i], now)) continue;
-        // ★ 2026-09-16：远距清除 = **不算击杀**（只回收，不报 onAgentKilled）；
-        //   计入 recalled，帧末统一回调 → 模式层扣减当日敌人配额
+        // ★ 远距清除 = **不算击杀**；引擎账本记 recalled（模式层无需参与）
         this.removeAgent(i);
         recalled++;
         continue;
@@ -475,8 +496,8 @@ export class SwarmSystem {
       this.steerAccum = 0;
       this.steerL3(hooks, now);
     }
-    // ★ 远距回收统一回调（不算击杀；模式层据此扣减当日配额）
-    if (recalled > 0) hooks.tierPort?.recall(recalled);
+    // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
+    if (recalled > 0) this.ledger.noteRecall(recalled);
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
     if (this.leaderChanges.length > 0) {
       for (const c of this.leaderChanges) hooks.onLeaderChanged?.(c.uid, c.isLeader);
@@ -1157,10 +1178,13 @@ export class SwarmSystem {
     this.lastPlayerZ = 0;
     this.steerAccum = 0;
     this.unitsBySquad.clear();
+    this.ledger.clear();
     this.atoms.clear();
   }
 
   dispose(): void {
+    this.casualtyUnsub();
+    this.removedUnsub();
     this.clear();
     this.batch?.dispose();
     this.batch = null;

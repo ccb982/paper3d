@@ -546,10 +546,14 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   }
 
   /** ★ 退役业务钩子：真击杀在此上报当天击杀统计（retire('killed') 由 onDeath 触发）；
-   *  降格/回收/清场走其他 reason → 天然不计击杀（取代 killedByCombat/deathReported） */
+   *  降格/回收/清场走其他 reason → 天然不计击杀（取代 killedByCombat/deathReported）；
+   *  ★ 2026-09-20 账本口径：killed → 击杀+1/存活−1；非击杀离场 → 存活−1（demoted 除外）。 */
   protected override onRetire(reason: RetireReason): void {
     if (reason === 'killed') {
       eventBus.emit('enemy_killed', { source: this.deathSource, x: this.entity.position.x, z: this.entity.position.z });
+    } else if (reason !== 'demoted') {
+      // recycled / despawned / mode_cleanup：蜂群账本存活 −1（不算击杀）
+      eventBus.emit('enemy_removed', {});
     }
     super.onRetire(reason);
   }

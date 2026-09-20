@@ -51,6 +51,6 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
     const def = elite
       ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
       : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
-    if (def) d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1, true);
+    if (def) d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1);
   };
 }

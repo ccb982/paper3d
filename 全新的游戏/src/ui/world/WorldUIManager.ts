@@ -328,9 +328,10 @@ export class WorldUIManager extends BaseInteractionUI {
     if (this.dockBtn) this.dockBtn.style.display = v ? 'block' : 'none';
   }
 
-  /** ★ 顶部状态条刷新（左：敌人数量 击杀/当天总数；右：舰船生命红字纯数字）
+  /** ★ 顶部状态条刷新（左：今日击杀/今日上限；右：舰船生命红字纯数字）
    *  —— 用户定调 2026-09-16：素材图放在屏幕最顶部；舰船生命**不要血条**、只显示数字，
-   *     ≥90% 白 / ≥30% 黄 / 更低红橙。旧版"舰船 HP/油量"单行文本已废弃（油量仍由独立渠道展示）。 */
+   *     ≥90% 白 / ≥30% 黄 / 更低红橙。旧版"舰船 HP/油量"单行文本已废弃（油量仍由独立渠道展示）。
+   *  ★ 2026-09-20：左段口径 = 今天击杀 / 今天上限（蜂群引擎账本；存活只给引擎内部用）。 */
   setShipStatus(
     hp: number, maxHp: number,
     kills: number, total: number,
