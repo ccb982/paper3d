@@ -168,8 +168,8 @@ const SENTINEL_MIN_DAMAGE = 8;
 const SENTINEL_ATK_RATIO = 1.0;
 /** ★ 祖宗自动挖矿：索矿半径（米；无敌人时随机打铁/水/地面） */
 const SENTINEL_MINE_RANGE = 22;
-/** ★ 留存祖宗唤醒：玩家接触半径（米；休眠祖宗被碰到 → 启用 + 入队友列表） */
-const SENTINEL_WAKE_R = 2.2;
+/** ★ 留存祖宗唤醒：玩家接近半径（米；休眠祖宗进入 10m → 启用 + 入队友列表） */
+const SENTINEL_WAKE_R = 10;
 /** 挖矿采样次数上限（每类） */
 const SENTINEL_MINE_SAMPLES = 16;
 /** ★ 治疗转伤害（遥·幽隙栖萤）：累计治疗量 ≥ 该值才触发一次（避免每帧 1 点伤害刷屏/暴涨） */
@@ -1563,7 +1563,7 @@ export class WorldMode implements IGameMode {
         playerY: dp.y,
         playerZ: dp.z,
       });
-      // ★ 留存站桩友军唤醒：玩家回到原地接触 → 启用（重新索敌/攻击/挖矿）并加入队友列表
+      // ★ 留存站桩友军唤醒：玩家进入 10m → 启用（重新索敌/攻击/挖矿）并加入队友列表
       allySystem.wakeStationaryNear(dp.x, dp.z, SENTINEL_WAKE_R);
       // ★ 友军回血（黍姐的XX）：装备汇总的每秒回复量 → 所有友军（无人机/祖宗）
       if (this.allyRegen > 0) {
