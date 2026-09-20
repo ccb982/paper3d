@@ -87,6 +87,9 @@ export interface AgentSpawnData {
   moveTargetX?: number;
   moveTargetY?: number;
   moveTargetZ?: number;
+  /** ★ 成员级任务目标（工程分块 / 护卫扇区；跨 LOD 保留） */
+  taskX?: number;
+  taskZ?: number;
   /** ★ 感知 / AI 状态（跨 LOD 连续；缺省 = 无/初始） */
   lastSeenX?: number;
   lastSeenZ?: number;
@@ -259,6 +262,9 @@ export class AgentPool {
   readonly moveTargetY = new Float32Array(AGENT_CAPACITY);
   readonly moveTargetZ = new Float32Array(AGENT_CAPACITY);
   readonly hasMoveTarget = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 成员级任务目标（引擎写：工程各自的分块 / 护卫各自的扇区；0,0 = 无任务） */
+  readonly taskX = new Float32Array(AGENT_CAPACITY);
+  readonly taskZ = new Float32Array(AGENT_CAPACITY);
   /** ★ 感知 / AI 状态（E3b 步骤 2/3：跨 LOD 不失忆；步骤 9 接线填值） */
   readonly lastSeenX = new Float32Array(AGENT_CAPACITY);
   readonly lastSeenZ = new Float32Array(AGENT_CAPACITY);
@@ -355,6 +361,8 @@ export class AgentPool {
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
     this.moveTargetY[i] = hasMt ? (d.moveTargetY ?? 0) : 0;
     this.moveTargetZ[i] = hasMt ? d.moveTargetZ! : 0;
+    this.taskX[i] = d.taskX ?? 0;
+    this.taskZ[i] = d.taskZ ?? 0;
     this.lastSeenX[i] = d.lastSeenX ?? 0;
     this.lastSeenZ[i] = d.lastSeenZ ?? 0;
     this.lastSeenAt[i] = d.lastSeenAt ?? 0;
@@ -443,6 +451,8 @@ export class AgentPool {
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];
     this.hasMoveTarget[to] = this.hasMoveTarget[from];
+    this.taskX[to] = this.taskX[from];
+    this.taskZ[to] = this.taskZ[from];
     this.lastSeenX[to] = this.lastSeenX[from];
     this.lastSeenZ[to] = this.lastSeenZ[from];
     this.lastSeenAt[to] = this.lastSeenAt[from];
@@ -519,6 +529,13 @@ export class AgentPool {
       out.moveTargetX = this.moveTargetX[i];
       out.moveTargetY = this.moveTargetY[i];
       out.moveTargetZ = this.moveTargetZ[i];
+    }
+    // ★ 成员级任务目标（0,0 = 无；对象复用 → 显式清空）
+    out.taskX = undefined;
+    out.taskZ = undefined;
+    if (this.taskX[i] !== 0 || this.taskZ[i] !== 0) {
+      out.taskX = this.taskX[i];
+      out.taskZ = this.taskZ[i];
     }
     return out;
   }

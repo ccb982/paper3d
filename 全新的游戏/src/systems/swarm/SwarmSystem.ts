@@ -39,7 +39,7 @@ import {
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
-import { pickSteer } from './SteerPick';
+import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
@@ -797,8 +797,13 @@ export class SwarmSystem {
     this.grid.separation(p, i, _sep);
     entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     let dx = p.dirX[i], dz = p.dirZ[i];
-    // ★ 执行层：指令原子覆盖"期望方向"（forward/back/strafe/hold；仍只是打分输入）
-    if (p.atomMove[i] !== 255) {
+    // ★ 成员级任务目标（工程分块 / 护卫扇区）：**优先作为期望方向**（压过指令原子）
+    const hasTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
+    if (hasTask) {
+      const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
+      const td = Math.hypot(tx, tz);
+      if (td > 1.2) { dx = tx / td; dz = tz / td; } else { dx = 0; dz = 0; }
+    } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
       let tx = p.directiveTargetX[i] - p.x[i];
       let tz = p.directiveTargetZ[i] - p.z[i];

@@ -20,6 +20,8 @@ import { TerrainScore } from './TerrainScore';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { engineMissionFor } from './UnitTactics';
+import { guardPoint, UNIT_TACTICS } from './UnitTactics';
+import { setSteerTable } from '../../entity/SteerPick';
 import { coverBlocksLine } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import { SQUAD_MAX, type Squad } from './SquadTable';
@@ -240,6 +242,8 @@ export class SwarmCommander {
     this.protectState.clear();
     this.postAssign.clear();
     this.missionAssign.clear();
+    this.taskedSquads.clear();
+    setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
@@ -460,7 +464,8 @@ export class SwarmCommander {
       if (raster) {
         this.terrainScore.rebuild(raster, this.plan, this.builtCovers, this.postureP,
           this.scoreStamp + this.postureEpoch * 100000,
-          this.battlePosture);
+          this.battlePosture, playerX, playerZ);
+        setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
       }
     }
     if (this.mission) {
@@ -555,10 +560,45 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 成员级分块（工程并行）：把本队成员分到附近未认领块 → 直写 moveTarget
-   *  （大任务仍是 build；成员各自走向不同块，谁到了谁就施工） */
-  private spreadBuilders(s: { members: Map<number, { x: number; z: number }> }, cx: number, cz: number): void {
+  /** ★ 成员级任务：写/清（写 taskX/Z 列；uid → 池下标扫描） */
+  private writeTask(uid: number, x: number, z: number): void {
     const pool = this.swarm.pool;
+    for (let i = 0; i < pool.count; i++) {
+      if (pool.swarmUid[i] !== uid) continue;
+      pool.taskX[i] = x; pool.taskZ[i] = z;
+      return;
+    }
+  }
+
+  private clearMemberTasks(s: { id: number; members: Map<number, { x: number; z: number }> }): void {
+    if (!this.taskedSquads.has(s.id)) return;
+    for (const uid of s.members.keys()) this.writeTask(uid, 0, 0);
+    this.taskedSquads.delete(s.id);
+  }
+
+  /** ★ 护卫扇区（成员级）：沿"工地→威胁"垂线分散站位（每人 4m 间隔） */
+  private spreadGuards(
+    s: { id: number; type: string; members: Map<number, { x: number; z: number }> },
+    siteX: number, siteZ: number, px: number, pz: number,
+  ): void {
+    const dx = px - siteX, dz = pz - siteZ;
+    const dl = Math.hypot(dx, dz) || 1;
+    const ux = dx / dl, uz = dz / dl;
+    const gd = UNIT_TACTICS[s.type as keyof typeof UNIT_TACTICS]?.guardDist ?? 8;
+    const gx = siteX + ux * gd, gz = siteZ + uz * gd;
+    const tx = -uz, tz = ux;   // 垂线（弧线切线）
+    const n = s.members.size;
+    let k = 0;
+    for (const uid of s.members.keys()) {
+      const off = (k - (n - 1) / 2) * 4;
+      k++;
+      this.writeTask(uid, gx + tx * off, gz + tz * off);
+    }
+    this.taskedSquads.add(s.id);
+  }
+
+  /** ★ 成员级分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标 */
+  private spreadBuilders(s: { id: number; members: Map<number, { x: number; z: number }> }, cx: number, cz: number): void {
     const near: number[] = [];
     for (let i = 0; i < this.buildPieces.length && near.length < 3; i++) {
       const q = this.buildPieces[i];
@@ -571,13 +611,9 @@ export class SwarmCommander {
     for (const uid of s.members.keys()) {
       const q = this.buildPieces[near[k % near.length]];
       k++;
-      for (let i = 0; i < pool.count; i++) {
-        if (pool.swarmUid[i] !== uid) continue;
-        pool.moveTargetX[i] = q.x;
-        pool.moveTargetZ[i] = q.z;
-        break;
-      }
+      this.writeTask(uid, q.x, q.z);
     }
+    this.taskedSquads.add(s.id);
   }
 
   /** ★ 工程队分派：保持已派未建块；否则**在自己环带内**挑最近未认领块（少横穿），
@@ -611,8 +647,9 @@ export class SwarmCommander {
     return best;
   }
 
-  /** ★ 小队自动重组（1Hz，§4.6）：同键"不满半"小队 → 并入最近的同键队
-   *  只在双方都无进行中命令时进行；**不触发全灭上报**（走 mergeMember） */
+  /** ★ 成员级任务列使用中的小队（任务切走时清零用） */
+  private readonly taskedSquads = new Set<number>();
+  /** ★ 小队自动重组（§4.6）：同键"不满半"小队 → 并入最近同键队 */
   private mergeTick(now: number): void {
     const list = [...this.swarm.squads.all()].filter((s) =>
       !s.singleton && !s.suicide && s.members.size > 0 && s.members.size * 2 <= SQUAD_MAX);
@@ -638,6 +675,7 @@ export class SwarmCommander {
       for (const uid of [...small.members.keys()]) {
         const res = this.swarm.squads.mergeMember(uid, best);
         if (!res) continue;
+        this.writeTask(uid, 0, 0);   // ★ 并队后旧任务清零（由新队的任务重派接管）
         for (const ch of res.leaderChanges) this.swarm.pushLeaderChange(ch.uid, ch.isLeader);   // ★ L3 队长镜像
         for (let i = 0; i < pool.count; i++) {
           if (pool.swarmUid[i] !== uid) continue;
@@ -795,8 +833,14 @@ export class SwarmCommander {
         let cx = 0, cz = 0, n = 0;
         for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
         if (n > 0) this.spreadBuilders(s, cx / n, cz / n);
+      } else if (ma.mission === 'guard') {
+        ctx.buildTarget = null;
+        // ★ 护卫扇区（成员级）：被击/无工地 → 清任务（交给动态反击）；否则分散护卫位
+        if (this.alertSet.has(s.id) || !ctx.buildSite) this.clearMemberTasks(s);
+        else this.spreadGuards(s, ctx.buildSite.x, ctx.buildSite.z, playerX, playerZ);
       } else {
         ctx.buildTarget = null;
+        this.clearMemberTasks(s);
       }
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;

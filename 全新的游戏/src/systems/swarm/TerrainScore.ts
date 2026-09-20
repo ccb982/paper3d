@@ -47,17 +47,24 @@ const COVER_BONUS = 2.0;
 const SLOPE_PENALTY = 0.6;
 export const SLOPE_COST = 1.6;
 
-/** ★ 态势权重表（h 高度 / dist 舰船距离 / cover 掩体制高 / near 近舰负分） */
-export const PHASE_WEIGHTS: Record<BattlePosture, { h: number; dist: number; cover: number; near: number }> = {
-  fortify:  { h: 0.6, dist: 0.06, cover: 0.8, near: 1.6 },   // 前期：距离权重低，靠近飞船负分
-  patrol:   { h: 0.6, dist: 0.08, cover: 0.8, near: 1.2 },
-  advance:  { h: 0.5, dist: 0.02, cover: 1.0, near: 0.0 },
-  mass:     { h: 0.4, dist: -0.06, cover: 1.0, near: 0.0 },
-  assault:  { h: 0.3, dist: -0.35, cover: 0.6, near: 0.0 },  // 总攻：舰船距离猛加（负号=越近越高）
-  withdraw: { h: 0.5, dist: 0.25, cover: 1.2, near: 0.0 },   // 撤退：远离舰船
+/** ★ 态势权重表（h 高度 / dist 舰距 / threat 玩家距 / cover 掩体 / width 宽度 / choke 隘口 / near 近舰负分） */
+export const PHASE_WEIGHTS: Record<BattlePosture, {
+  h: number; dist: number; threat: number; cover: number; width: number; choke: number; near: number;
+}> = {
+  fortify:  { h: 0.6, dist: 0.06, threat: 0, cover: 0.8, width: 0.05, choke: 0.20, near: 1.6 },
+  patrol:   { h: 0.6, dist: 0.08, threat: 0, cover: 0.8, width: 0.10, choke: 0.30, near: 1.2 },
+  advance:  { h: 0.5, dist: 0.02, threat: -0.05, cover: 1.0, width: 0.25, choke: 0.20, near: 0.0 },
+  mass:     { h: 0.4, dist: -0.06, threat: -0.10, cover: 1.0, width: 0.35, choke: 0.10, near: 0.0 },
+  assault:  { h: 0.3, dist: -0.35, threat: -0.15, cover: 0.6, width: 0.40, choke: 0.05, near: 0.0 },
+  withdraw: { h: 0.5, dist: 0.25, threat: 0.60, cover: 1.2, width: 0.20, choke: 0.10, near: 0.0 },
 };
 
-export interface ScoreWeights { h: number; dist: number; cover: number; near: number }
+export interface ScoreWeights {
+  h: number; dist: number; threat: number; cover: number; width: number; choke: number; near: number;
+}
+
+/** ★ 宽度/隘口项的量级系数（与 DIST_SCALE 同思路：拉平到与高度可比） */
+const FEAT_SCALE = 4;
 
 /** ★ 态势强度 p 的权重锚点（连续插值；锚点沿用现行档位值，M3 再换归一化口径） */
 const P_ANCHORS: ReadonlyArray<readonly [number, ScoreWeights]> = [
@@ -81,7 +88,10 @@ export function weightsFor(p: number, posture: BattlePosture): ScoreWeights {
       return {
         h: wa.h + (wb.h - wa.h) * k,
         dist: wa.dist + (wb.dist - wa.dist) * k,
+        threat: wa.threat + (wb.threat - wa.threat) * k,
         cover: wa.cover + (wb.cover - wa.cover) * k,
+        width: wa.width + (wb.width - wa.width) * k,
+        choke: wa.choke + (wb.choke - wa.choke) * k,
         near: wa.near + (wb.near - wa.near) * k,
       };
     }
@@ -111,6 +121,12 @@ export class TerrainScore {
   private readonly heights = new Float32Array(SIDE * SIDE);
   /** ★ 平滑分 S̃（3×3 均值；防掩体/阻挡格跳变把梯度带偏） */
   private readonly sm = new Float32Array(SIDE * SIDE);
+  /** ★ 通行宽度 0~1（轴向连续可站格/4）与隘口标记 */
+  private readonly width = new Float32Array(SIDE * SIDE);
+  private readonly choke = new Uint8Array(SIDE * SIDE);
+  /** 玩家位置（威胁距项；随重建刷新） */
+  private lastPlayerX = 0;
+  private lastPlayerZ = 0;
   /** 最近一次重建参数（局部重算 invalidateArea 必须复用同一套权重/加成） */
   private lastRaster: RasterMap | null = null;
   private lastPlan: DefensePlan | null = null;
@@ -150,6 +166,18 @@ export class TerrainScore {
     return i >= 0 && this.water[i] === 1;
   }
 
+  /** ★ 通行宽度 0~1（轴向连续可站格；未就绪/表外 → 0） */
+  widthAt(x: number, z: number): number {
+    const i = this.indexAt(x, z);
+    return i < 0 ? 0 : this.width[i];
+  }
+
+  /** ★ 隘口（窄口；盾兵守点用） */
+  isChokeAt(x: number, z: number): boolean {
+    const i = this.indexAt(x, z);
+    return i >= 0 && this.choke[i] === 1;
+  }
+
   /** ★ 路径代价倍率（坡面减速；供 SquadPath/HPA 消费，⏳ 接线） */
   costAt(x: number, z: number): number {
     const c = this.clsAt(x, z);
@@ -157,10 +185,12 @@ export class TerrainScore {
     return c === 1 ? SLOPE_COST : 1;
   }
 
-  /** 全量重建（触发戳 = 落点版本 + 态势代次；掩体/挖掘走局部重算） */
+  /** 全量重建（触发戳 = 落点版本 + 态势代次；掩体/挖掘走局部重算）
+   *  @param playerX,playerZ 玩家位置（威胁距项 T；缺省 0 视为无威胁） */
   rebuild(
     raster: RasterMap, plan: DefensePlan, builtCovers: { x: number; z: number }[],
     p: number, stamp: number, posture: BattlePosture = 'patrol',
+    playerX = 0, playerZ = 0,
   ): void {
     if (this.ready && stamp === this.stamp) return;
     this.stamp = stamp;
@@ -168,6 +198,8 @@ export class TerrainScore {
     this.sz = plan.cz - R;
     this.lastRaster = raster;
     this.lastPlan = plan;
+    this.lastPlayerX = playerX;
+    this.lastPlayerZ = playerZ;
     this.smp = samplerFor(raster);
     this.lastW = weightsFor(p, posture);
     this.lastBonus = this.buildBonus(plan, builtCovers);
@@ -368,6 +400,11 @@ export class TerrainScore {
     // ★ 距离项按 R 归一化（点积量级与 h/cover 可比；见 DIST_SCALE 注释）
     let s = w.h * h + w.dist * (d / R) * DIST_SCALE + (bonus.get(this.key(x, z)) ?? 0) * w.cover;
     if (w.near > 0 && d < 30) s -= w.near * (1 - d / 30) * 4;   // 近舰负分（前期往外展开）
+    // ★ T 威胁距（玩家）：负权重 = 压向玩家（总攻），正权重 = 远离（撤退）
+    if (w.threat !== 0) {
+      const dt = Math.hypot(x - this.lastPlayerX, z - this.lastPlayerZ);
+      s += w.threat * (dt / R) * DIST_SCALE;
+    }
     if (this.water[i] === 1) s -= WATER_PENALTY;                 // 水中不适（软惩罚）
     this.score[i] = s;
   }
@@ -389,6 +426,17 @@ export class TerrainScore {
         this.cls[i] = dh > SLOPE_DH ? 1 : 0;
         this.pass[i] = 1;
         if (this.cls[i] === 1) this.score[i] -= SLOPE_PENALTY;
+        // ★ 通行宽度 W（轴向连续可站格，上限 4）与隘口 K（窄口）
+        let runX = 1, runZ = 1;
+        for (let k = 1; k <= 3 && ix - k >= 0 && this.pass[i - k] === 1; k++) runX++;
+        for (let k = 1; k <= 3 && ix + k < SIDE && this.pass[i + k] === 1; k++) runX++;
+        for (let k = 1; k <= 3 && iz - k >= 0 && this.pass[i - k * SIDE] === 1; k++) runZ++;
+        for (let k = 1; k <= 3 && iz + k < SIDE && this.pass[i + k * SIDE] === 1; k++) runZ++;
+        const wCells = Math.min(runX, runZ);
+        this.width[i] = Math.min(1, wCells / 4);
+        this.choke[i] = wCells <= 1 ? 1 : 0;
+        const wt = this.lastW;
+        if (wt) this.score[i] += (wt.width * this.width[i] + wt.choke * this.choke[i]) * FEAT_SCALE;
         // ★ 硬墙当掩体：紧贴墙面（邻格陡差）的可站格 → 掩体加成
         this.wallNear[i] = dh > WALL_DH * 0.8 ? 1 : 0;
         if (this.wallNear[i] === 1) this.score[i] += WALL_COVER_SCORE;
