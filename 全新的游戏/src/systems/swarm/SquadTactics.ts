@@ -13,6 +13,7 @@ import type {
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
+import { MISSION_EXEC as MISSION_EXEC_TABLE } from './UnitTactics';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -273,6 +274,14 @@ export class SquadTactics {
     const roe = state?.order.roe;
     let fire: 'free' | 'hold' | 'moving' =
       kind === 'sneak' || kind === 'fallback' ? 'hold' : 'free';
+    // ★ 任务表（引擎布置 → 队内执行参数）：施工禁火、护卫自由、驻守稳站（UnitTactics.MISSION_EXEC）
+    const exec = state?.order.mission
+      ? MISSION_EXEC_TABLE[state.order.mission as keyof typeof MISSION_EXEC_TABLE] : undefined;
+    let speedMul = (kind === 'fallback' ? 1.2 : kind === 'boundBack' || kind === 'screen' ? 0.7 : 1) * urgeMul;
+    if (exec) {
+      if (exec.fire === 'hold') fire = 'hold';
+      speedMul *= exec.speedMul;
+    }
     if (roe === 'holdFire') fire = 'hold';
     else if (roe === 'fireOnArrival' && target) {
       const dist = Math.hypot(target.x - cx, target.z - cz);
@@ -282,7 +291,7 @@ export class SquadTactics {
       kind,
       until: now + DIRECTIVE_TTL,
       fire,
-      speedMul: (kind === 'fallback' ? 1.2 : kind === 'boundBack' || kind === 'screen' ? 0.7 : 1) * urgeMul,
+      speedMul,
       seq: this.seq++,
     };
     if (target) { dir.targetX = target.x; dir.targetZ = target.z; }

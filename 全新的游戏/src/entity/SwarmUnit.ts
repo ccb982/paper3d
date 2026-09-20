@@ -106,6 +106,8 @@ export interface TacticalOrder {
   subTargets?: { x: number; z: number; squadId?: number }[];
   urgency?: number;
   deadline?: number;
+  /** ★ 任务名（引擎布置 → 队长读它做队内执行参数；'build'|'guard'|'hold'|'kite'|'rear'|'assault'|'flank'） */
+  mission?: string;
   seq: number;
 }
 

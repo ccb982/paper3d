@@ -13,6 +13,7 @@ import type { SquadType } from '../../entity/SwarmUnit';
 import type { SquadDoctrine } from './SquadDoctrine';
 import type { DefensePlan } from './LandingTerrain';
 import type { TerrainScore } from './TerrainScore';
+import { canTake, guardPoint, UNIT_TACTICS } from './UnitTactics';
 
 /** 命令字段（与 TacticalOrder 对齐；避免 Decide 依赖整个实体契约） */
 export type DecideKind =
@@ -33,6 +34,18 @@ export interface DecideCtx {
   front: { x: number; z: number };
   /** 当前待建块（S1 施工优先；null = 不施工） */
   buildSlot: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
+  /** ★ 本队已分派的施工块（稳定分派：不再每拍重挑 → 修复工程队来回跑） */
+  buildTarget: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
+  /** ★ 当前"工地"（第一个在建块；近战护卫用） */
+  buildSite: { x: number; z: number } | null;
+  /** ★ 战术阶段（S1 = 施工期 → 近战进入"保护"共用状态） */
+  stage: string;
+  /** ★ 驻守位锁定（squadId → 已选掩体/战壕位；靠近则不换 → 修复来回走） */
+  hold: Map<number, { x: number; z: number }>;
+  /** ★ 驻守/推进滞回状态（squadId → 上一拍是否 protect） */
+  protectState: Map<number, boolean>;
+  /** ★ 近 8s 被击的小队（"打了保护的士兵 → 该打还是打"的反击开关） */
+  alert: Set<number>;
   /** 无待建块时的兜底工事锚 */
   slot: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | undefined;
   builders: readonly DecideSquad[];
@@ -63,10 +76,12 @@ export interface DecideOut {
   roe: DecideRoe;
   ttl: number;
   urgency: number;
+  /** ★ 任务名（引擎布置 → 队长读；见 UnitTactics.MISSION_EXEC） */
+  mission: string;
 }
 
 /** 复用输出（零分配） */
-const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage', ttl: 6, urgency: 0 };
+const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage', ttl: 6, urgency: 0, mission: '' };
 
 /** 部署选点（读表投影全部在此；返回复用对象，调用方立即消费） */
 export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, st: DecideState): DecideOut {
@@ -81,13 +96,37 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
   _out.roe = 'engage';
   _out.ttl = 6;
   _out.urgency = 0;
+  _out.mission = '';
+  // ★ 独有状态：施工（只有被分派施工块的小队进入）
+  if (ctx.buildTarget) {
+    _out.target = { x: ctx.buildTarget.x, z: ctx.buildTarget.z };
+    _out.roe = 'holdFire';
+    _out.mission = 'build';
+  } else if (ctx.stage === 'S1' && ctx.buildSite && canTake(s.type, 'guard') && !d.chase) {
+    // ★ 共用状态：保护（所有近战）——站到"工地 ↔ 威胁"之间护卫工程队
+    //   原则：**离施工队远 → 不主动进攻**；但 ① 本队近期被击(alert) 或 ② 威胁贴脸(engageDist) → 该打就打
+    let cx = 0, cz = 0, n = 0;
+    for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+    if (n > 0) { cx /= n; cz /= n; }
+    const p = UNIT_TACTICS[s.type];
+    const alert = ctx.alert.has(s.id);
+    const close = n > 0 && Math.hypot(ctx.playerX - cx, ctx.playerZ - cz) <= p.engageDist;
+    if (alert || close) {
+      _out.kind = 'advance';
+      _out.target = { x: ctx.playerX, z: ctx.playerZ };
+      _out.mission = 'assault';
+      _out.ttl = 4;
+    } else {
+      _out.kind = 'protect';
+      _out.target = guardPoint(ctx.buildSite.x, ctx.buildSite.z, ctx.playerX, ctx.playerZ, p.guardDist);
+      _out.mission = 'guard';
+    }
+  } else {
   switch (d.mode) {
     case 'build': {
-      if (ctx.buildSlot) {
-        const bi = ctx.builders.indexOf(s);
-        const t = ctx.buildPieces.find((q, idx) => idx >= bi && !ctx.builtSlots.has(`${q.x},${q.z}`))
-          ?? ctx.buildSlot;
-        _out.target = { x: t.x, z: t.z };
+      const bt = ctx.buildTarget ?? ctx.buildSlot;
+      if (bt) {
+        _out.target = { x: bt.x, z: bt.z };
         _out.roe = 'holdFire';
       } else {
         const hold = ctx.slot ?? ctx.front;
@@ -119,7 +158,9 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
         const hold = ctx.highPick ?? ctx.front;
         hx = hold.x; hz = hold.z;
       }
-      const far = n === 0 || Math.hypot(cx - hx, cz - hz) > 4;
+      const wasProtect = ctx.protectState.get(s.id) === true;
+      const far = n === 0 || Math.hypot(cx - hx, cz - hz) > (wasProtect ? 9 : 4);
+      ctx.protectState.set(s.id, !far);
       _out.kind = far ? 'advance' : 'protect';
       _out.target = { x: hx, z: hz };
       _out.urgency = far ? 1 : 0;
@@ -135,12 +176,13 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     }
     case 'screen': {
       const si = st.screenIdx++;
-      if (ctx.buildSlot && d.screenDist > 0) {
+      const sd = d.screenDist || 10;   // ★ 默认 10m 护航距离（前期保护工程队）
+      if (ctx.buildSlot) {
         const dx = ctx.playerX - ctx.buildSlot.x, dz = ctx.playerZ - ctx.buildSlot.z;
         const dl = Math.hypot(dx, dz) || 1;
         _out.target = {
-          x: ctx.buildSlot.x + (dx / dl) * d.screenDist,
-          z: ctx.buildSlot.z + (dz / dl) * d.screenDist,
+          x: ctx.buildSlot.x + (dx / dl) * sd,
+          z: ctx.buildSlot.z + (dz / dl) * sd,
         };
       } else if (!ctx.chase && plan.chokepoints.length > 0 && !ctx.lineSlot) {
         const c = plan.chokepoints[si % plan.chokepoints.length];
@@ -169,6 +211,7 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       break;
     }
   }
+  }
 
   // ---- ★ 读表投影（集中处） ----
   // 进攻选位：追击中的推进/包抄 → 8m 内最高分格（坡面/近路/高地）
@@ -176,11 +219,21 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     const ap = ctx.table.bestNear(_out.target.x, _out.target.z, 8);
     if (ap) _out.target = { x: ap.x, z: ap.z };
   }
-  // 防御选位（队长掩体判定）：驻守/集结 → 硬墙后 / 战壕后
+  // 防御选位（队长掩体判定）：驻守/集结 → 硬墙后 / 战壕后；**锁定已选位**（靠近则不换，防来回走）
   if (_out.kind === 'protect' || _out.kind === 'regroup') {
-    const cov = ctx.table.bestCoverNear(_out.target.x, _out.target.z, 14, ctx.playerX, ctx.playerZ)
-      ?? ctx.table.bestTrenchNear(_out.target.x, _out.target.z, 8);
-    if (cov) _out.target = { x: cov.x, z: cov.z };
+    const held = ctx.hold.get(s.id);
+    if (held && Math.hypot(_out.target.x - held.x, _out.target.z - held.z) < 8) {
+      _out.target = { x: held.x, z: held.z };
+    } else {
+      const cov = ctx.table.bestCoverNear(_out.target.x, _out.target.z, 14, ctx.playerX, ctx.playerZ)
+        ?? ctx.table.bestTrenchNear(_out.target.x, _out.target.z, 8);
+      if (cov) {
+        _out.target = { x: cov.x, z: cov.z };
+        ctx.hold.set(s.id, { x: cov.x, z: cov.z });
+      } else {
+        ctx.hold.delete(s.id);
+      }
+    }
   }
   // 目标校验：落点不可站（墙/坑水）→ 就近可站最高分格
   const tsc = ctx.table.scoreAt(_out.target.x, _out.target.z);

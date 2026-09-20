@@ -41,10 +41,13 @@ export class SwarmCommander {
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
   digTrench: ((x: number, z: number) => void) | null = null;
-  /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**） */
-  spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean) => void) | null = null;
+  /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**）
+   *  @param near 开局班底用：**不做"≥80m 远离玩家"外推**（直接在锚点生成，工程队能立刻开工） */
+  spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
   /** ★ 按 mobIndex 生成一只（名单重放用；模式层注入） */
   spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
+  /** ★ 施工兵种生成端口（独有施工战术：模式层挑名册 canBuild 兵种；无 → 杂兵兜底） */
+  spawnBuilder: ((x: number, z: number) => void) | null = null;
   /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
   mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
   /** ★ 当前态势（引擎内部变量；驱动各编队命令强度） */
@@ -111,17 +114,27 @@ export class SwarmCommander {
   private readonly builtSlots = new Set<string>();
   private engAccum = 0;
   private buildCd = 0;
+  /** ★ 各工程队自己的施工冷却（squadId → 剩余秒；并行施工用） */
+  private readonly buildCds = new Map<number, number>();
   private resendAccum = 0;
   private static readonly RESEND_S = 10;
 
   /** ★ 部署选点（Decide.ts）：状态计数 + 上下文复用对象（每拍赋值，零分配） */
   private readonly decideSt: DecideState = { coverIdx: 0, assaultIdx: 0, screenIdx: 0, flyerIdx: 0 };
+  /** ★ 工程队稳定分派（squadId → buildPieces 下标；防止每拍重挑 → 来回跑） */
+  private readonly buildAssign = new Map<number, number>();
+  /** ★ 驻守位锁定 / 驻守滞回（Decide 消费；防"来回走"） */
+  private readonly holdPos = new Map<number, { x: number; z: number }>();
+  private readonly protectState = new Map<number, boolean>();
+  /** ★ 近 8s 被击小队（保护状态的反击开关；每决策拍从 recentHits 重建） */
+  private readonly alertSet = new Set<number>();
   private readonly decideCtx: DecideCtx = {
     plan: null as unknown as DecideCtx['plan'],
     table: null as unknown as TerrainScore,
     playerX: 0, playerZ: 0, chase: false, lineSlot: null,
     front: { x: 0, z: 0 },
-    buildSlot: null, slot: undefined,
+    buildSlot: null, slot: undefined, buildTarget: null, buildSite: null, stage: 'S0',
+    hold: new Map(), protectState: new Map(), alert: new Set(),
     builders: [], buildPieces: [], builtSlots: new Set<string>(),
     highPick: null, covers: [],
   };
@@ -215,6 +228,9 @@ export class SwarmCommander {
     this.hitSeen.clear();
     this.lost.clear();
     this.lostAccum = 0;
+    this.buildAssign.clear();
+    this.holdPos.clear();
+    this.protectState.clear();
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
@@ -295,17 +311,27 @@ export class SwarmCommander {
     return true;
   }
 
-  /** ★ 开局班底（§3.5 扎根期）：少量近战守线 + 后勤/远程开工；其余由单日节律逐步补 */
+  /** ★ 开局班底（§3.5 扎根期）：少量近战守线 + 后勤/远程开工；其余由单日节律逐步补
+   *  ★ 施工兵优先走 `spawnBuilder`（名册 canBuild 兵种）——保证开局有真正的工程队 */
   private spawnCadre(): void {
     const plan = this.plan;
-    if (!plan || !this.spawnMob) return;
+    if (!plan) return;
     const anchors = this.placementAnchors(plan);
-    const roles: UnitRole[] = ['logistics', 'logistics', 'shield', 'shield', 'assault', 'assault', 'ranged', 'ranged'];
+    const at = (k: number): { x: number; z: number } => (anchors.length > 0
+      ? { x: anchors[k % anchors.length].x, z: anchors[k % anchors.length].z }
+      : { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 });
+    // ① 工程队：3 只（有专门端口用专门的；否则退"杂兵兼任"名单）
+    for (let k = 0; k < 3; k++) {
+      const a = at(k);
+      if (this.spawnBuilder) this.spawnBuilder(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2);
+      else this.spawnMob?.(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, 'assault', false, true);
+    }
+    // ② 近战护卫 + 远程
+    if (!this.spawnMob) return;
+    const roles: UnitRole[] = ['shield', 'shield', 'assault', 'assault', 'ranged'];
     for (let k = 0; k < roles.length; k++) {
-      const a = anchors.length > 0
-        ? anchors[k % anchors.length]
-        : { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
-      this.spawnMob(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, roles[k], false);
+      const a = at(k + 3);
+      this.spawnMob(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, roles[k], false, true);
     }
   }
 
@@ -466,6 +492,24 @@ export class SwarmCommander {
     }
   }
 
+  /** ★ 工程队分派：保持已派未建块；否则挑最近未被其他队认领的块（防来回跑） */
+  private assignBuild(squadId: number, cx: number, cz: number): number {
+    const cur = this.buildAssign.get(squadId);
+    if (cur !== undefined && cur < this.buildPieces.length
+      && !this.builtSlots.has(`${this.buildPieces[cur].x},${this.buildPieces[cur].z}`)) return cur;
+    const claimed = new Set<number>(this.buildAssign.values());
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < this.buildPieces.length; i++) {
+      const q = this.buildPieces[i];
+      if (this.builtSlots.has(`${q.x},${q.z}`) || claimed.has(i)) continue;
+      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    if (best < 0) return -1;
+    this.buildAssign.set(squadId, best);
+    return best;
+  }
+
   /** ★ 迷失回收（1Hz）：回队长寻路失败 → 目标改回队长；仍卡死 → 自我销毁
    *  触发：离队长 >60m 且 8s 内挪动 <2m（连续 2 拍）。销毁 = 非击杀离场（归还编制），
    *  避免"陷进出不去的地形"的代理永远占编制 / 算力（L3 实体由降格逻辑兜底）。 */
@@ -561,38 +605,71 @@ export class SwarmCommander {
     ctx.front = front; ctx.buildSlot = buildSlot; ctx.slot = slot;
     ctx.builders = builders; ctx.buildPieces = this.buildPieces;
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
+    ctx.hold = this.holdPos; ctx.protectState = this.protectState;
+    // ★ 近 8s 被击小队 → "保护状态"的反击开关（打了保护的士兵 → 该打就打）
+    this.alertSet.clear();
+    const nowS = performance.now() / 1000;
+    for (const [id, t] of this.swarm.recentHits) if (nowS - t <= 8) this.alertSet.add(id);
+    ctx.alert = this.alertSet;
+    // ★ 预分派工程队（稳定分配；取第一个在建块作为"工地"给近战护卫）
+    let buildSite: { x: number; z: number } | null = null;
+    if (this.stage === 'S1') {
+      for (const s of builders) {
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        if (n > 0) { cx /= n; cz /= n; }
+        const idx = this.assignBuild(s.id, cx, cz);
+        if (idx >= 0 && !buildSite) buildSite = { x: this.buildPieces[idx].x, z: this.buildPieces[idx].z };
+      }
+    }
+    ctx.buildSite = buildSite;
+    ctx.stage = this.stage;
     for (const s of squads) {
       const d = applyPosture(
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
       );
+      // ★ 施工 = 施工队独有状态（含"杂兵兼任"兜底名单）；其余队无施工目标
+      if (builders.includes(s) && this.stage === 'S1') {
+        const idx = this.buildAssign.get(s.id);
+        ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
+      } else {
+        ctx.buildTarget = null;
+      }
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
       const out = decideTarget(d, s, ctx, st);
-      this.swarm.issueOrder(s.id, { kind: out.kind, target: out.target, roe: out.roe, urgency: out.urgency, seq: 0 }, out.ttl);
+      this.swarm.issueOrder(s.id, {
+        kind: out.kind, target: out.target, roe: out.roe,
+        urgency: out.urgency, mission: out.mission || undefined, seq: 0,
+      }, out.ttl);
     }
-    // ⑤ 施工（**逐步拼装**，仅 S1）：施工队**任一成员**到达待建块 ≤5m →
-    //   掩体块（每块 4m，每 8s 一块）/ 战壕块（每块 4×4m、1 层，每 10s 一块）
-    if (buildSlot && this.buildCover && this.buildCd <= 0) {
-      let atSite = false;
+    // ⑤ 施工（**逐步拼装**，仅 S1）：**按各工程队自己的分配块并行施工**
+    //   （每队 3s 掩体 / 4s 战壕；任一成员到块 ≤5m 即动工 → 修"来回跑/停摆"）
+    if (this.stage === 'S1' && this.buildCover) {
       for (const s of builders) {
+        const cd = this.buildCds.get(s.id) ?? 0;
+        if (cd > 0) { this.buildCds.set(s.id, cd - dt); continue; }
+        const idx = this.buildAssign.get(s.id);
+        if (idx === undefined || idx < 0 || idx >= this.buildPieces.length) continue;
+        const piece = this.buildPieces[idx];
+        if (this.builtSlots.has(`${piece.x},${piece.z}`)) continue;
+        let atSite = false;
         for (const m of s.members.values()) {
-          if (Math.hypot(m.x - buildSlot.x, m.z - buildSlot.z) <= 5) { atSite = true; break; }
+          if (Math.hypot(m.x - piece.x, m.z - piece.z) <= 5) { atSite = true; break; }
         }
-        if (atSite) break;
-      }
-      if (atSite) {
-        if (buildSlot.kind === 'cover') {
-          this.buildCover(buildSlot.x, buildSlot.z, 'cover');
-          this.builtCovers.push({ x: buildSlot.x, z: buildSlot.z });   // ★ 远程驻守点
-          this.terrainScore.invalidateArea(buildSlot.x, buildSlot.z, 12);   // ★ 新掩体 → 表局部重算
-          this.buildCd = 3;            // 掩体 3s/块（3 块 = 12m ≈ 9s）
+        if (!atSite) continue;
+        if (piece.kind === 'cover') {
+          this.buildCover(piece.x, piece.z, 'cover');
+          this.builtCovers.push({ x: piece.x, z: piece.z });   // ★ 远程驻守点
+          this.terrainScore.invalidateArea(piece.x, piece.z, 12);   // ★ 新掩体 → 表局部重算
+          this.buildCds.set(s.id, 3);
         } else {
-          this.digTrench?.(buildSlot.x, buildSlot.z);
-          this.terrainScore.invalidateArea(buildSlot.x, buildSlot.z, 12, true);   // ★ 战壕（挖掘标记）→ 表局部重算
-          this.buildCd = 4;            // 战壕 4s/块（3 块 = 12m ≈ 12s）
+          this.digTrench?.(piece.x, piece.z);
+          this.terrainScore.invalidateArea(piece.x, piece.z, 12, true);   // ★ 战壕（挖掘标记）→ 表局部重算
+          this.buildCds.set(s.id, 4);
         }
-        this.builtSlots.add(`${buildSlot.x},${buildSlot.z}`);
+        this.builtSlots.add(`${piece.x},${piece.z}`);
       }
     }
   }
@@ -828,6 +905,9 @@ export class SwarmCommander {
     this.hitSeen.clear();
     this.lost.clear();
     this.lostAccum = 0;
+    this.buildAssign.clear();
+    this.holdPos.clear();
+    this.protectState.clear();
     this.postureP = 0;
     this.postureSchedule = 0;
     this.postureProvocation = 0;
