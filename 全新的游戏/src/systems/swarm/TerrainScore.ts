@@ -35,6 +35,9 @@ const TRENCH_DH_DUG = 0.12;
 const TRENCH_SCORE = 1.2;
 /** ★ 紧贴硬墙的可站格 → 掩体加成（硬墙当掩体；不挡站位的墙给邻格加分） */
 const WALL_COVER_SCORE = 0.8;
+/** ★ 距离项归一化：d/R（0~1）× 此系数 → 与高度/掩体量级可比（否则 180m 距离项碾压一切；
+ *  调大 → 距离影响更强：总攻压向舰船更狠、前期更往外展开） */
+const DIST_SCALE = 12;
 /** 坡面代价（分数扣减 / 路径代价倍率） */
 const SLOPE_PENALTY = 0.6;
 export const SLOPE_COST = 1.6;
@@ -254,7 +257,8 @@ export class TerrainScore {
     this.cls[i] = hardRole ? 3 : 0;
     this.trench[i] = 0;
     const d = Math.hypot(x - plan.cx, z - plan.cz);
-    let s = w.h * h + w.dist * d + (bonus.get(this.key(x, z)) ?? 0) * w.cover;
+    // ★ 距离项按 R 归一化（点积量级与 h/cover 可比；见 DIST_SCALE 注释）
+    let s = w.h * h + w.dist * (d / R) * DIST_SCALE + (bonus.get(this.key(x, z)) ?? 0) * w.cover;
     if (w.near > 0 && d < 30) s -= w.near * (1 - d / 30) * 4;   // 近舰负分（前期往外展开）
     this.score[i] = s;
   }
