@@ -25,9 +25,9 @@ const SIDE = Math.floor((R * 2) / CELL) + 1;
 
 // ---- ★ 通行分类（cls）：0 可走 / 1 坡面(减速) / 2 墙面(硬边界) / 3 坑洞水域(硬边界) ----
 /** 相邻格（4m）高差 > 1.5m ≈ 21° 视为坡面（可走、减速扣分） */
-const SLOPE_DH = 1.5;
+export const SLOPE_DH = 1.5;
 /** 高差 > 3.0m ≈ 37° 视为墙面（硬边界，不可走） */
-const WALL_DH = 3.0;
+export const WALL_DH = 3.0;
 /** 低于邻域均值 ≥ 0.6m → 自然低洼视为战壕（可走 + 掩体加成） */
 const TRENCH_DH = 0.6;
 /** ★ 被"挖掘标记"过的格：阈值降到 0.12m（digRect 一次只 +1 层 ≈0.2m） */

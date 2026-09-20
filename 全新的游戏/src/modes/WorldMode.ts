@@ -77,7 +77,7 @@ import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
 import { dayT01FromHour } from '../systems/swarm/PostureFn';
-import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../systems/swarm/Director';
+import { Director, type DirectorHooks } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
 // ★ 击杀统计 + 每日敌人总数（2026-09-20 重做）：**蜂群引擎直管**（SwarmSystem.ledger）
 //   口径：total = 引擎 beginDay 预计算并冻结；spawned/kills/recalled 三计数只增；
@@ -1525,20 +1525,8 @@ export class WorldMode implements IGameMode {
       entityPerf.swarmEntities = this.enemies.length;
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
-      // ---- ★ P4：导演调度波次（节奏 + 预算 + intent 分工） ----
-      const order = this.swarmDirector.update({
-        dt,
-        alive: this.enemies.length + this.swarm.count,
-        playerHpRatio: this.player.hp / Math.max(1, this.player.maxHp),
-        playerX: pp.x, playerZ: pp.y,
-        shipX: this.ship.position.x, shipZ: this.ship.position.z,
-        // ★ 引擎账本剩余兵力计划：环境补怪据此补刷到计划满（口径见 SwarmLedger）
-        budgetLeft: this.swarm.ledger.remaining,
-      }, this.directorHooks);
-      // ★ 兵力创建全权交给蜂群架构（指挥器）：开局不预置刷兵，给玩家发育机会
-      void order;
-      // ---- ★ 扫描式波次：周围 ±2 已加载但未刷过的 chunk 逐帧补怪（生成速度加倍） ----
-      // ★ 兵力创建全权交给蜂群架构：环扫刷怪已关闭（落地不再一堆兵）
+      // ---- ★ 攻势播报（M3.5：节奏唯一来源 = PostureFn；这里只把姿态变化播给 UI） ----
+      this.swarmDirector.announce(this.swarm.commander.battlePosture, this.swarm.commander.postureP);
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);

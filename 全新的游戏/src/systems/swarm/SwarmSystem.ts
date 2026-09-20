@@ -39,6 +39,7 @@ import {
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
+import { pickSteer } from './SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
@@ -788,11 +789,15 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
-  /** 移动积分（危险地形绕行：坑/深水/高台立面，无论流场还是直行都探测） */
+  /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
   private move(i: number, dt: number): void {
     const p = this.pool;
+    // ---- 人群分离：本拍只算一次（方向决策里当"反向惩罚"，移动后做一次物理外推） ----
+    const t0 = entityPerf.enabled ? performance.now() : 0;
+    this.grid.separation(p, i, _sep);
+    entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     let dx = p.dirX[i], dz = p.dirZ[i];
-    // ★ 执行层：指令原子覆盖方向（forward/back/strafe/hold；危险地形绕行仍生效）
+    // ★ 执行层：指令原子覆盖"期望方向"（forward/back/strafe/hold；仍只是打分输入）
     if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
       let tx = p.directiveTargetX[i] - p.x[i];
@@ -803,57 +808,38 @@ export class SwarmSystem {
       dx = _atomDir.x;
       dz = _atomDir.z;
     }
-    if (dx !== 0 || dz !== 0) {
-      // ---- 危险地形绕行：前瞻探测 → 转向 ±90°，缓存 0.4s（流场也可能指向深水/立面） ----
+    // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
+    const inside = this.commander.blockedAt(p.x[i], p.z[i]);
+    if (dx !== 0 || dz !== 0 || inside) {
       p.hazardTimer[i] -= dt;
       const raster = RasterMap.current;
-      const probe = SWARM.HAZARD_PROBE;
-      // ★ 第二层高度（浮空洞顶）：按代理当前高度选层——洞顶上的代理不会把洞当坑
       const hint = p.y[i];
       const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
-      const danger = (ux: number, uz: number): boolean => {
+      const dangerAt = (hx: number, hz: number): boolean => {
         if (!raster) return false;
-        // ★ 空中层：飞行兵不受地面危险约束（坑/深水/高台立面），也不吃绕行
-        if (p.isAir[i] === 1) return false;
-        const hx = p.x[i] + ux * probe, hz = p.z[i] + uz * probe;
-        if (this.commander.blockedAt(hx, hz)) return true;   // ★ 表：硬墙/坑水
+        if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
+        if (this.commander.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);
         if (role === 'pit' && h < -1.2) return true;
-        if (role === 'liquid' && h < -SWARM.DEEP_WATER) return true; // 深水
-        // 高台立面：0.45m 陡升 > 阈值且 1.2m 无同斜率延续 → 墙（插值坡放行）
-        const hn = raster.surfaceHeightAtFor(p.x[i] + ux * 0.45, p.z[i] + uz * 0.45, hint);
-        const hf = raster.surfaceHeightAtFor(p.x[i] + ux * 1.2, p.z[i] + uz * 1.2, hint);
-        if (hf - here > 1.0) return true;   // ★ 连续陡坡（≈40°+）也是墙，别硬撞
-        const rn = hn - here, rf = hf - hn;
-        return rn > SWARM.MOVE_STEP_MAX && rf < rn * 0.5;
+        if (role === 'liquid' && h < -SWARM.DEEP_WATER) return true;
+        return h - here > 1.0;   // 连续陡坡（≈40°+）也是墙
       };
-      if (danger(dx, dz)) {
-        if (p.hazardTimer[i] <= 0) {
-          // 两侧 ±90° 优先选不危险的一侧（避免"绕开墙却撞进水里"）
-          const base = Math.atan2(dz, dx);
-          const offs = p.phase[i] < 0.5 ? [Math.PI / 2, -Math.PI / 2] : [-Math.PI / 2, Math.PI / 2];
-          let a = base + offs[0];
-          for (const off of offs) {
-            const c = base + off;
-            if (!danger(Math.cos(c), Math.sin(c))) { a = c; break; }
-          }
-          p.safeDirX[i] = Math.cos(a);
-          p.safeDirZ[i] = Math.sin(a);
-          p.hazardTimer[i] = 0.4;
-        }
-        dx = p.safeDirX[i];
-        dz = p.safeDirZ[i];
+      const res = pickSteer(
+        p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
+        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], performance.now() / 1000,
+        this.commander.blockedAt(p.x[i], p.z[i]),
+        dangerAt, this.commander,
+      );
+      if (!res.hold) {
+        p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
+        const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 执行层：限速（默认 1）
+        p.x[i] += res.x * sp;
+        p.z[i] += res.z * sp;
+        p.yaw[i] = Math.atan2(res.x, res.z);
       }
-      const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 执行层：限速（默认 1）
-      p.x[i] += dx * sp;
-      p.z[i] += dz * sp;
-      if (Math.abs(dx) > 1e-4 || Math.abs(dz) > 1e-4) p.yaw[i] = Math.atan2(dx, dz);
     }
-    // ---- 人群分离（网格 3×3 邻域） ----
-    const t0 = entityPerf.enabled ? performance.now() : 0;
-    this.grid.separation(p, i, _sep);
-    entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
+    // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
     if (_sep.x !== 0 || _sep.z !== 0) {
       p.x[i] += _sep.x;
       p.z[i] += _sep.z;

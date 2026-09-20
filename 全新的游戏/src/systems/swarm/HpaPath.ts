@@ -12,6 +12,7 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { WALL_DH } from './TerrainScore';
 
 const CELL = 4;
 /** 簇边长（格；8×8 = 32m） */
@@ -327,6 +328,20 @@ export class HpaPath {
         const i = iz * CL + ix;
         h[i] = s.h;
         pass[i] = s.pass ? 1 : 0;
+      }
+    }
+    // ★ 表口径（与 TerrainScore 同源）：4 邻域陡差 > WALL_DH → 硬边界（不可进簇/不可穿越）
+    for (let iz = 0; iz < CL; iz++) {
+      for (let ix = 0; ix < CL; ix++) {
+        const i = iz * CL + ix;
+        if (!pass[i]) continue;
+        const hh = h[i];
+        let dh = 0;
+        if (ix > 0) dh = Math.max(dh, Math.abs(hh - h[i - 1]));
+        if (ix < CL - 1) dh = Math.max(dh, Math.abs(hh - h[i + 1]));
+        if (iz > 0) dh = Math.max(dh, Math.abs(hh - h[i - CL]));
+        if (iz < CL - 1) dh = Math.max(dh, Math.abs(hh - h[i + CL]));
+        if (dh > WALL_DH) pass[i] = 0;
       }
     }
     const cl: Cluster = { gx0, gz0, h, pass, portals: [], builtAt: this.nowMs, intra: new Map() };

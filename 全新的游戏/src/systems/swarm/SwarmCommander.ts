@@ -876,6 +876,11 @@ export class SwarmCommander {
     return this.terrainScore.blockedAt(x, z);
   }
 
+  /** ★ 表分查询（执行层候选方向打分用；未就绪/表外 → null） */
+  scoreAt(x: number, z: number): number | null {
+    return this.terrainScore.scoreAt(x, z);
+  }
+
   /** ★ 地形脏区（模式层任何挖改都调这个）：表局部重算（脏窗 + 邻环）
    *  @param dug 显式挖掘（战壕）→ 打挖掘标记（战壕阈值放宽到 0.12m） */
   markTerrainDirty(x: number, z: number, r = 12, dug = false): void {

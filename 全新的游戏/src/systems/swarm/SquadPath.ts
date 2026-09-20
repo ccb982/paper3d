@@ -16,6 +16,7 @@
 
 import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+import { SLOPE_DH, WALL_DH, SLOPE_COST } from './TerrainScore';
 
 const CELL = 4;
 /** 单次寻路窗口上限（格；120×120 ≈ 480m，超出即拒绝，走直线兜底） */
@@ -96,6 +97,22 @@ export class SquadPathFinder {
           Math.floor(wx / CHUNK_SIZE), Math.floor(wz / CHUNK_SIZE),
         );
         cost[i] = loaded ? 1 : COST_UNKNOWN;
+      }
+    }
+
+    // ★ 表口径（与 TerrainScore 同源，4m 同格）：陡差 > WALL_DH → 硬边界；
+    //   > SLOPE_DH → 坡面加价（不再"只挡上升"，两侧陡差都算）
+    for (let iz = 1; iz < rows - 1; iz++) {
+      for (let ix = 1; ix < cols - 1; ix++) {
+        const i = iz * cols + ix;
+        if (blocked[i]) continue;
+        const h = height[i];
+        const dh = Math.max(
+          Math.abs(h - height[i - 1]), Math.abs(h - height[i + 1]),
+          Math.abs(h - height[i - cols]), Math.abs(h - height[i + cols]),
+        );
+        if (dh > WALL_DH) { blocked[i] = 1; continue; }
+        if (dh > SLOPE_DH) cost[i] *= SLOPE_COST;
       }
     }
 
