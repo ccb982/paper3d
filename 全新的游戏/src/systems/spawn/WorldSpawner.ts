@@ -160,9 +160,11 @@ export class WorldSpawner implements SwarmTierPort {
    *  其余由导演低频补至 threat.ambientTarget。前期 target=6 → 只预铺 3 只，
    *  场间几乎无扰，给足发育时间；中后期随威胁度增长铺满） */
   static readonly AMBIENT_PRELOAD_RATIO = 0.5;
-  /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 140m 的预留带）。
-   *  远距回收本身已由 SwarmSystem 统一处理（实体降格 40m / 代理回收 140m） */
-  static readonly ENEMY_CULL_RADIUS = 120;
+  /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 190m 的预留带）。
+   *  ★ 2026-09-21：LOD 显示半径 90→140m 后同步 120→180m */
+  static readonly ENEMY_CULL_RADIUS = 180;
+  /** ★ 波次纵深带上限（米；lo = LOD_MAX_DIST+4 ~ 此值，且 ≤ 回收环预留带） */
+  static readonly SPAWN_BAND_HI = 170;
   /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
   static readonly ENEMY_CULL_INTERVAL = 0.25;
   private cullAccum = 0;
@@ -485,7 +487,8 @@ export class WorldSpawner implements SwarmTierPort {
     const baseAng = opts.sector ?? Math.random() * Math.PI * 2;
     const spread = opts.spread ?? Math.PI;
     const lo = LOD_MAX_DIST + 4;
-    const span = 130 - lo; // 波内纵深带（lo~130m；回收环 140 内）
+    // ★ 波内纵深带：lo ~ SPAWN_BAND_HI（扩 LOD 后 lo 变远，带上限同步外扩）
+    const span = WorldSpawner.SPAWN_BAND_HI - lo;
     // ★ count = 个体数（2026-09-13 三次修正：原按"窝"计数——原石虫一窝 4 只，
     //   导演"每波 5~8"实际最多刷 32 只；现按个体扣减，窝仍是刷怪单位）
     for (let i = 0; i < want * 10 && placed < want; i++) {

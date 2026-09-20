@@ -5,8 +5,6 @@
 //   · 代理池 + 人群网格 + 批量渲染的唯一持有者与驱动者
 //   · 分层（L1/L2）决策与移动 tick（降频 + 个体相位抖动）
 //   · 升格（近处 → EnemyBase）/ 降格（远处实体 → 代理）/ 远距回收
-// P1 说明：暂无流场/攻击槽（P2）；代理用"直线逼近 + 分离 + 坑绕行"，
-//   行为与旧远距 AI 的观感一致（远处本来就以追击为主）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
@@ -42,17 +40,18 @@ import {
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 
-/** 分层/回收参数（《蜂群架构.md》§9；集中可调） */
+/** 分层/回收参数（《蜂群架构.md》§9；集中可调）
+ *  ★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
   /** L3 实体层：升格半径 / 实体上限 */
-  L3_RADIUS: 35,
-  L3_CAP: 30,
+  L3_RADIUS: 45,
+  L3_CAP: 36,
   /** L2 代理层半径（L3~L2 = 代理半频） */
-  L2_RADIUS: 80,
+  L2_RADIUS: 120,
   /** L1 远群半径（超出即回收） */
-  L1_RADIUS: 140,
+  L1_RADIUS: 190,
   /** 降格半径（实体 > 此距离 → 回代理） */
-  DEMOTE_RADIUS: 40,
+  DEMOTE_RADIUS: 55,
   /** 升格预算（每帧最多几只；防一圈同时升级的尖刺） */
   PROMOTE_PER_FRAME: 2,
   /** 决策频率（Hz）：索引 = tier（1/2） */
