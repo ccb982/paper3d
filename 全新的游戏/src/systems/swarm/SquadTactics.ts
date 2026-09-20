@@ -41,12 +41,30 @@ export interface SquadOrderState {
   notBefore: number;
   /** ★ 五轴「信号」：需等信号 id（undefined = 无需） */
   signal?: number;
+  // ---- ★ 小队路径缓存（SquadPath 产出；currentTargetOf 沿线滚动） ----
+  /** 路径求解时的目标点（位移 > RETARGET_DIST → 重算） */
+  pathGoalX: number;
+  pathGoalZ: number;
+  /** 最近一次求解时刻（秒；超时刷新） */
+  pathAt: number;
+  /** 最近一次求解失败时刻（秒；失败冷却，防每拍重试） */
+  pathFailedAt: number;
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
 export const ORDER_TTL_DEFAULT = 30;
 /** 个体指令 TTL（弱权限：短 TTL） */
 export const DIRECTIVE_TTL = 6;
+
+/** 两个目标点是否近似同点（路径缓存沿用判据） */
+function sameTarget(
+  a: { x: number; z: number } | undefined,
+  b: { x: number; z: number } | undefined,
+  r: number,
+): boolean {
+  if (!a || !b) return !a && !b;
+  return Math.hypot(a.x - b.x, a.z - b.z) <= r;
+}
 
 /** ★ 队内保命线（个体 hpRatio）：低于此值 → 队长给该员下 `fallback`（撤出战斗） */
 export const MEMBER_FALLBACK_HP = 0.3;
@@ -134,10 +152,22 @@ export class SquadTactics {
     if (sub) o.target = { x: sub.x, z: sub.z };
     const normalized = SquadTactics.normalize(o);
     const notBefore = now + Math.max(0, normalized.startAfter ?? 0);
-    this.board.issue({
+    const prev = this.board.get(squadId);
+    const state: SquadOrderState = {
       squadId, order: normalized, issuedAt: now, until: now + ttl, source,
       notBefore, signal: normalized.signal,
-    });
+      pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,
+    };
+    // ★ 同命令延续：路径缓存 / 计时随行（指挥层每 2~10s 重发，不冲掉寻路成果）
+    if (prev && prev.order.kind === normalized.kind
+      && sameTarget(prev.order.target, normalized.target, 12)) {
+      state.pathGoalX = prev.pathGoalX;
+      state.pathGoalZ = prev.pathGoalZ;
+      state.pathAt = prev.pathAt;
+      state.pathFailedAt = prev.pathFailedAt;
+      if (!normalized.path && prev.order.path) normalized.path = prev.order.path;
+    }
+    this.board.issue(state);
   }
 
   /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */

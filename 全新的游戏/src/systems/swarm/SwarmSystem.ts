@@ -28,6 +28,7 @@ import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
+import { SquadNavigator } from './SquadNavigator';
 import { formationOffset } from './Formation';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
@@ -161,11 +162,8 @@ export interface SwarmHooks {
 const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
 const _atomDir = { x: 0, z: 0 };
-/** ★ 单例小队不排阵型（Boss/高威胁：目标点即自身位） */
-const _zeroSlot = { fx: 0, fz: 0 };
 /** ★ 成员 uid scratch（编队槽位 rank 基准；容量复用，零分配） */
 const _memberUids: number[] = [];
-
 export class SwarmSystem {
   /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
   readonly ledger = new SwarmLedger();
@@ -201,7 +199,9 @@ export class SwarmSystem {
   private lastPlayerZ = 0;
   /** ★ E4a：L3 编队 steer（10Hz；按 squadId 分组，容器复用零分配） */
   private steerAccum = 0;
-  private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
+  /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
+  private readonly nav = new SquadNavigator();
+  /** 编队锚点量算复用对象（零分配） */
   private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
@@ -499,7 +499,7 @@ export class SwarmSystem {
     this.steerAccum += dt;
     if (this.steerAccum >= 1 / SWARM.STEER_HZ) {
       this.steerAccum = 0;
-      this.steerL3(hooks, now);
+      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, this.tactics, now);
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     if (recalled > 0) this.ledger.noteRecall(recalled);
@@ -1042,6 +1042,8 @@ export class SwarmSystem {
       }
       // ★ 五轴时序/信号：未到生效时刻/未发信号 → 本拍不下发（旧指令自然过期）
       if (!this.tactics.board.isActive(state, now)) continue;
+      // ★ 小队寻路：命令目标不可直达 → 求走廊 waypoint（实体 steer / 代理指令共用）
+      this.nav.ensurePath(this.squads, squad, state, now);
       const bucket = squadBucket(squad.type);
       // ★ 编队锚点（与 steerL3 同口径）：命令当前路点 + 前进方向
       let ax = state.order.target?.x ?? 0;
@@ -1096,66 +1098,6 @@ export class SwarmSystem {
     }
   }
 
-  // ============================================================
-  // ★ E4a：L3 实体编队 steer（《实体架构.md》§5.2/§9.4；v2 编队轻量版）
-  // ============================================================
-  // 一次编队求解、逐员下发：命令目标 + 阵型槽位 → moveTarget → applySteer。
-  // 控制权契约：有有效命令才接管（controlSource='swarm'）；命令结束 / 超时
-  // 一律 applySteer(null) → 实体侧自动回落 'local'（任何情况不停摆）。
-  private steerL3(hooks: SwarmHooks, now: number): void {
-    const units = hooks.activeUnits?.();
-    if (!units || units.length === 0) return;
-    const bySquad = this.unitsBySquad;
-    bySquad.clear();
-    for (const u of units) {
-      if (u.carrier !== 'entity' || u.activation !== 'active') continue;
-      let arr = bySquad.get(u.squadId);
-      if (!arr) { arr = []; bySquad.set(u.squadId, arr); }
-      arr.push(u);
-    }
-    for (const [sid, members] of bySquad) {
-      const state = this.tactics.board.get(sid);
-      if (!state || (state.until > 0 && now > state.until) || !this.tactics.board.isActive(state, now)) {
-        for (const u of members) u.applySteer(null);
-        continue;
-      }
-      if (!this.squads.centroidOf(sid, this._centroid)) continue;
-      const tgt = SquadTactics.currentTargetOf(state, this._centroid.x, this._centroid.z);
-      if (!tgt) continue;
-      const squad = this.squads.get(sid);
-      if (!squad) {
-        for (const u of members) u.applySteer(null);
-        continue;
-      }
-      const dx = tgt.x - this._centroid.x;
-      const dz = tgt.z - this._centroid.z;
-      const len = Math.hypot(dx, dz);
-      const fx = len > 1e-3 ? dx / len : 1;
-      const fz = len > 1e-3 ? dz / len : 0;
-      const type = squad.type;
-      const singleton = squad.singleton;
-      for (const u of members) {
-        // ★ 槽位 rank = 全员 uid（与 applyOrders 同口径：L3 + 代理跨 LOD 不换位）
-        let rank = 0;
-        for (const uid of squad.members.keys()) if (uid < u.swarmUid) rank++;
-        const off = singleton ? _zeroSlot : formationOffset(type, rank);
-        const sx = tgt.x + fx * off.fx - fz * off.fz;
-        const sz = tgt.z + fz * off.fx + fx * off.fz;
-        u.formSlot = rank;
-        const mt = u.moveTarget;
-        if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; }
-        else u.moveTarget = { x: sx, y: 0, z: sz };
-        u.controlSource = 'swarm';
-        u.applySteer({
-          dirX: fx, dirZ: fz,
-          speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5,
-          source: 'formation',
-          targetX: sx, targetY: 0, targetZ: sz,
-        });
-      }
-    }
-  }
-
   /** 调试/统计：层级计数 */
   tierCounts(): { far: number; mid: number } {
     let far = 0, mid = 0;
@@ -1182,7 +1124,7 @@ export class SwarmSystem {
     this.lastPlayerX = 0;
     this.lastPlayerZ = 0;
     this.steerAccum = 0;
-    this.unitsBySquad.clear();
+    this.nav.clear();
     this.ledger.clear();
     this.atoms.clear();
   }

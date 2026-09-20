@@ -141,6 +141,19 @@ export class SwarmCommander {
     return this.plan;
   }
 
+  /** ★ 取离 (x,z) 最近的高地（半径内；无 = null）——远程队占顶用 */
+  private pickHighGroundNear(
+    plan: DefensePlan, x: number, z: number, radius: number,
+  ): { x: number; z: number; h: number } | null {
+    let best: { x: number; z: number; h: number } | null = null;
+    let bestD2 = radius * radius;
+    for (const g of plan.highGround) {
+      const d2 = (g.x - x) ** 2 + (g.z - z) ** 2;
+      if (d2 <= bestD2) { bestD2 = d2; best = g; }
+    }
+    return best;
+  }
+
   setDefensePlan(plan: DefensePlan | null): void {
     this.plan = plan;
   }
@@ -211,19 +224,43 @@ export class SwarmCommander {
         seq: 0,
       }, 6);
     }
+    // ①b ★ 隘口据守（地形分析产物）：防御队各领一个隘口（有则驻守，无则跳过）
+    if (plan.chokepoints.length > 0) {
+      const guards = squads.filter((q) => q.type === 'defense').slice(0, plan.chokepoints.length);
+      for (let i = 0; i < guards.length; i++) {
+        const c = plan.chokepoints[i];
+        this.swarm.issueOrder(guards[i].id, {
+          kind: 'protect',
+          target: { x: c.x, z: c.z },
+          roe: 'engage',
+          seq: 0,
+        }, 8);
+      }
+    }
     // ② 工程兵小步跟进（到待建位；holdFire 行军）
     for (let i = 0; i < builders.length; i++) {
       const t = this.buildPieces.find((q, idx) => idx >= i && !this.builtSlots.has(`${q.x},${q.z}`)) ?? slot;
       this.swarm.issueOrder(builders[i].id, { kind: 'advance', target: { x: t.x, z: t.z }, roe: 'holdFire', seq: 0 }, 6);
     }
-    // ③ 远程队：**火力支援**（protect 施工点；站射程环对接近威胁输出）
+    // ③ ★ 远程队：优先占据高地（地形分析产物；取离施工点最近的一处），
+    //    无可占高地 → 火力支援施工点（protect）
+    const highPick = this.pickHighGroundNear(plan, slot.x, slot.z, 48);
     for (const s of squads.filter((q) => q.type === 'ranged')) {
-      this.swarm.issueOrder(s.id, {
-        kind: 'protect',
-        target: { x: slot.x, z: slot.z },
-        roe: 'engage',
-        seq: 0,
-      }, 6);
+      if (highPick) {
+        this.swarm.issueOrder(s.id, {
+          kind: 'advance',
+          target: { x: highPick.x, z: highPick.z },
+          roe: 'fireOnArrival',
+          seq: 0,
+        }, 8);
+      } else {
+        this.swarm.issueOrder(s.id, {
+          kind: 'protect',
+          target: { x: slot.x, z: slot.z },
+          roe: 'engage',
+          seq: 0,
+        }, 6);
+      }
     }
     // ④ 其余队：向已建防线后集结
     for (const s of squads.filter((q) => q.type !== 'logistics' && q.type !== 'defense' && q.type !== 'assault' && q.type !== 'ranged')) {

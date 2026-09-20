@@ -867,8 +867,10 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.tierPort = this.spawner;
     // ★ E4a：L3 实体编队 steer 的只读单位面（本帧敌人数组；升/降格即时反映）
     this.swarmHooks.activeUnits = () => this.enemies;
-    // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）+ S0 勘察
-    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) }); this.swarm.commander.planDefense(this.ship.position.x, this.ship.position.z);
+    // ★ 蜂群指挥器端口（兵力创建/造掩体/挖战壕；全权在指挥层）
+    //   ★ 地形获取 / 战术布置延后到 **finishDock**（真实落点）：enter 时舰位还在航路上，
+    //     可能在水面/空中 → 扫描退化成空布置（2026-09-20 实测踩坑）。
+    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
@@ -3072,6 +3074,8 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
+    // ★ S0 勘察 + 战术布置：用**真实落点**扫描地形（每次出击首次触地做一次）
+    if (!this.swarm.commander.defensePlan) this.swarm.commander.planDefense(sp.x, sp.z);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
