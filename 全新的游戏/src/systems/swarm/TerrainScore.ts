@@ -38,6 +38,8 @@ const WALL_COVER_SCORE = 0.8;
 /** ★ 距离项归一化：d/R（0~1）× 此系数 → 与高度/掩体量级可比（否则 180m 距离项碾压一切；
  *  调大 → 距离影响更强：总攻压向舰船更狠、前期更往外展开） */
 const DIST_SCALE = 12;
+/** ★ 掩体判定加成（敌侧有墙/身处战壕 → 队长选位加分） */
+const COVER_BONUS = 2.0;
 /** 坡面代价（分数扣减 / 路径代价倍率） */
 const SLOPE_PENALTY = 0.6;
 export const SLOPE_COST = 1.6;
@@ -96,6 +98,8 @@ export class TerrainScore {
   private readonly cls = new Uint8Array(SIDE * SIDE);
   /** ★ 战壕（低于邻域的可走格；掩体加成已在分内） */
   private readonly trench = new Uint8Array(SIDE * SIDE);
+  /** ★ 紧贴硬墙（陡差 >0.8×WALL_DH 的可站格；硬墙当掩体判定用） */
+  private readonly wallNear = new Uint8Array(SIDE * SIDE);
   /** ★ 挖掘标记格（显式挖过的格；阈值放宽到 0.12m；跨重建保留） */
   private readonly dug = new Uint8Array(SIDE * SIDE);
   /** 重建中间量：逐格高度（第二遍算坡面/墙面/战壕用；复用零分配） */
@@ -123,6 +127,12 @@ export class TerrainScore {
   isTrenchAt(x: number, z: number): boolean {
     const i = this.indexAt(x, z);
     return i >= 0 && this.trench[i] === 1;
+  }
+
+  /** ★ 紧贴硬墙的可站格（掩体判定；硬墙本身不可站） */
+  wallNearAt(x: number, z: number): boolean {
+    const i = this.indexAt(x, z);
+    return i >= 0 && this.wallNear[i] === 1;
   }
 
   /** ★ 路径代价倍率（坡面减速；供 SquadPath/HPA 消费，⏳ 接线） */
@@ -210,19 +220,59 @@ export class TerrainScore {
     return best;
   }
 
-  /** 半径内最高分格（消费方：站位/集结/施工排序；无 → null） */
+  /** ★ 半径内最高分格（窗口扫描；消费方：站位/集结/施工排序；无 → null） */
   bestNear(x: number, z: number, radius: number): { x: number; z: number; score: number } | null {
     if (!this.ready) return null;
+    const ix0 = Math.max(0, Math.floor((x - radius - this.sx) / CELL));
+    const iz0 = Math.max(0, Math.floor((z - radius - this.sz) / CELL));
+    const ix1 = Math.min(SIDE - 1, Math.ceil((x + radius - this.sx) / CELL));
+    const iz1 = Math.min(SIDE - 1, Math.ceil((z + radius - this.sz) / CELL));
     const r2 = radius * radius;
     let best: { x: number; z: number; score: number } | null = null;
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
         const i = iz * SIDE + ix;
         if (!this.pass[i]) continue;
         const bx = this.sx + ix * CELL + CELL / 2;
         const bz = this.sz + iz * CELL + CELL / 2;
         if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
         if (!best || this.score[i] > best.score) best = { x: bx, z: bz, score: this.score[i] };
+      }
+    }
+    return best;
+  }
+
+  /** ★ 掩体判定（队长用）：在半径内找"敌侧有硬墙/身处战壕"的最高分格——
+   *  向敌人方向 2m 处是硬边界（墙），或本格是战壕 → 视为可躲的掩体，额外加分。
+   *  防御躲墙/硬边/战壕后面走这个；无 → null */
+  bestCoverNear(
+    x: number, z: number, radius: number, ex: number, ez: number,
+  ): { x: number; z: number; score: number } | null {
+    if (!this.ready) return null;
+    const ix0 = Math.max(0, Math.floor((x - radius - this.sx) / CELL));
+    const iz0 = Math.max(0, Math.floor((z - radius - this.sz) / CELL));
+    const ix1 = Math.min(SIDE - 1, Math.ceil((x + radius - this.sx) / CELL));
+    const iz1 = Math.min(SIDE - 1, Math.ceil((z + radius - this.sz) / CELL));
+    const r2 = radius * radius;
+    const dx = ex - x, dz = ez - z;
+    const dl = Math.hypot(dx, dz) || 1;
+    const tx = x + (dx / dl) * 2, tz = z + (dz / dl) * 2;   // 向敌人 2m 的探针
+    let best: { x: number; z: number; score: number } | null = null;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        if (!this.pass[i]) continue;
+        const bx = this.sx + ix * CELL + CELL / 2;
+        const bz = this.sz + iz * CELL + CELL / 2;
+        if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
+        // 敌侧探针：以本格为原点、朝敌人方向 2m
+        const ddx = ex - bx, ddz = ez - bz;
+        const ddl = Math.hypot(ddx, ddz) || 1;
+        const px2 = bx + (ddx / ddl) * 3.5, pz2 = bz + (ddz / ddl) * 3.5;
+        const covered = this.trench[i] === 1 || this.wallNear[i] === 1 || this.blockedAt(px2, pz2);
+        if (!covered) continue;
+        const sc = this.score[i] + COVER_BONUS;
+        if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };
       }
     }
     return best;
@@ -269,19 +319,20 @@ export class TerrainScore {
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
         const i = iz * SIDE + ix;
-        if (this.cls[i] === 3) { this.pass[i] = 0; this.score[i] = -1e9; continue; }
+        if (this.cls[i] === 3) { this.pass[i] = 0; this.score[i] = -1e9; this.wallNear[i] = 0; continue; }
         const h = heights[i];
         let dh = 0, sum = 0, n = 0;
         if (ix > 0) { const v = heights[i - 1]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
         if (ix < SIDE - 1) { const v = heights[i + 1]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
         if (iz > 0) { const v = heights[i - SIDE]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
         if (iz < SIDE - 1) { const v = heights[i + SIDE]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
-        if (dh > WALL_DH) { this.cls[i] = 2; this.pass[i] = 0; this.score[i] = -1e9; continue; }
+        if (dh > WALL_DH) { this.cls[i] = 2; this.pass[i] = 0; this.score[i] = -1e9; this.wallNear[i] = 0; continue; }
         this.cls[i] = dh > SLOPE_DH ? 1 : 0;
         this.pass[i] = 1;
         if (this.cls[i] === 1) this.score[i] -= SLOPE_PENALTY;
         // ★ 硬墙当掩体：紧贴墙面（邻格陡差）的可站格 → 掩体加成
-        if (dh > WALL_DH * 0.8) this.score[i] += WALL_COVER_SCORE;
+        this.wallNear[i] = dh > WALL_DH * 0.8 ? 1 : 0;
+        if (this.wallNear[i] === 1) this.score[i] += WALL_COVER_SCORE;
         // 战壕：显式挖掘标记 → 直接算；否则看自然低洼（低于邻域）
         const thr = this.dug[i] === 1 ? TRENCH_DH_DUG : TRENCH_DH;
         const low = this.dug[i] === 1 || (n > 0 && (sum / n - h) > thr);

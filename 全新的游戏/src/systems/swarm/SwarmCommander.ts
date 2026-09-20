@@ -646,10 +646,23 @@ export class SwarmCommander {
           }
           break;
       }
-      // ★ 战壕偏好（全兵种）：静止驻守/集结类目标就近入壕（≤8m；追击/推进不受影响）
+      // ★ 进攻选位（找坡面/近路）：追击中的推进行动 → 目标 8m 内取最高分格（高地/战壕/近路优先）
+      if (d.chase && (kind === 'advance' || kind === 'flank')) {
+        const ap = this.terrainScore.bestNear(target.x, target.z, 8);
+        if (ap) target = { x: ap.x, z: ap.z };
+      }
+      // ★ 防御选位（队长掩体判定）：驻守/集结目标 → 就近躲"硬墙后 / 战壕后"（≤14m）
       if (kind === 'protect' || kind === 'regroup') {
-        const tr = this.terrainScore.bestTrenchNear(target.x, target.z, 8);
-        if (tr) target = { x: tr.x, z: tr.z };
+        const cov = this.terrainScore.bestCoverNear(target.x, target.z, 14, playerX, playerZ)
+          ?? this.terrainScore.bestTrenchNear(target.x, target.z, 8);
+        if (cov) target = { x: cov.x, z: cov.z };
+      }
+      // ★ 目标校验（防把队带进墙）：落点不可站（墙/坑水）→ 就近换可站最高分格
+      const tsc = this.terrainScore.scoreAt(target.x, target.z);
+      if (tsc === null || tsc <= -1e8) {
+        const fix = this.terrainScore.bestNear(target.x, target.z, 12)
+          ?? this.terrainScore.bestNear(target.x, target.z, 24);
+        if (fix) target = { x: fix.x, z: fix.z };
       }
       if (lineSlot) ttl = Math.min(ttl, 3);   // ★ 队形调整 = 短暂命令，不长期霸占
       this.swarm.issueOrder(s.id, { kind, target, roe, urgency, seq: 0 }, ttl);
