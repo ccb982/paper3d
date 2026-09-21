@@ -297,16 +297,19 @@ export function analyzeLandingTerrain(
     }
   }
 
-  // ---- ⑤ 战壕线：三环弧线（7.5° 步进 ≈ 每 4m 一块），仅 stand ∧ reach；
-  //        若整条线不足 3 块（崖边/遮挡地形）→ 用 pass ∧ reach 兜底，保证有壕可挖 ----
+  // ---- ⑤ 战壕线：三环**直线横切**（垂直来向轴的防线，7.5° 时代每 4m 一块 → 现沿切线直线排列，
+  //        段间 4m … 7×7 挖窗重叠 → **连成一条不断开的长壕**），仅 stand ∧ reach；
+  //        若整条线不足 3 块（崖边/遮挡地形）→ 用 pass ∧ reach 兜底，保证有壕可挖。
+  //        ★ 半长随环放大：内环 20m / 中环 24m / 外环 30m → 越靠前越长，防线更宽 ----
   const trenchLines: { x: number; z: number }[][] = [];
-  for (const r of rings) {
+  const TANGENT_X = -axisZ, TANGENT_Z = axisX;
+  const semi = [20, 24, 30];
+  for (let r = 0; r < rings.length; r++) {
     const line: { x: number; z: number }[] = [];
     const fallback: { x: number; z: number }[] = [];
-    for (let k = -8; k <= 8; k++) {
-      const a = baseA + (k * 7.5 * Math.PI) / 180;
-      const x = cx + Math.cos(a) * r;
-      const z = cz + Math.sin(a) * r;
+    for (let t = -semi[r]; t <= semi[r]; t += 4) {
+      const x = cx + axisX * rings[r] + TANGENT_X * t;
+      const z = cz + axisZ * rings[r] + TANGENT_Z * t;
       const ix = Math.round((x - x0) / STEP);
       const iz = Math.round((z - z0) / STEP);
       if (ix < 0 || iz < 0 || ix >= n || iz >= n) continue;

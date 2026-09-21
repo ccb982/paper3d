@@ -130,8 +130,14 @@ export class SwarmCommander {
   private buildPieces: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 }[] = [];
   private readonly builtSlots = new Set<string>();
   private readonly digPasses = new Map<string, number>();   // 战壕多遍加深计数（逐级缩小约束）
+  /** 战壕挖满遍数 = 目标深度（每遍 ≈0.2m → 5 遍 ≈1.0m，等齐水坑蹲伏深度） */
+  private static readonly TRENCH_PASSES = 5;
   /** 施工焦点（队伍↔buildPieces 下标）：认准一块连续挖满 3 遍再换 → 战壕肉眼可见 */
   private readonly buildFocus = new Map<number, number>();
+  /** 防线朝向状态（refaceDefense 用）：当前是否险高威胁、期望的玩家方向单位向量、二次采样间隔 */
+  private faceDanger = false; private faceX = 0; private faceZ = 0;
+  private refaceAccum = 0;
+  private lastPlayerX = 0; private lastPlayerZ = 0;
   private engAccum = 0;
   private buildCd = 0;
   /** ★ 各工程队自己的施工冷却（squadId → 剩余秒；并行施工用） */
@@ -178,49 +184,49 @@ export class SwarmCommander {
     this.swarm.tactics.board.emitSignal(id);
   }
 
-  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
-   *  @param playerX,playerZ 玩家位置：**参与战术轴**（玩家从哪边来，防线朝哪边摆） */
-  planDefense(cx: number, cz: number, radius = 80, playerX?: number, playerZ?: number): DefensePlan | null {
-    const raster = RasterMap.current;
-    if (!raster) return null;
-    // ★ 战术轴偏好 = 舰船 → 玩家（玩家在附近 15~140m 时；否则用扫描的最可走方向）
-    let px: number | undefined, pz: number | undefined;
-    if (playerX !== undefined && playerZ !== undefined) {
-      const dx = playerX - cx, dz = playerZ - cz;
-      const d = Math.hypot(dx, dz);
-      if (d > 15 && d < 140) { px = dx / d; pz = dz / d; }
-    }
-    this.plan = analyzeLandingTerrain(raster, cx, cz, radius, px, pz);
-    // ★ 建造顺序：外环（≈56m）50m 开外）→ 中环 → 内环（≈24m ≈ 远程覆盖线）
-    //   每环：**掩体先行**（每个掩位 3 块，沿切线 ±4m → 12m 宽）→ **战壕跟进**（该环弧上每 4m 一块）
+  /** ★ 由 DefensePlan 重生成施工目标表（planDefense 首次落地 / refaceDefense 绕锚点重摆共用）：
+   *   外环 → 中环 → 内环；每环：**掩体先行**（每掩位 3 块沿切线 ±4m）→ **战壕直线横切跟进**
+   *   → **战壕前方 5m 放一排前线掩体**（朝威胁侧顶住火力）。 */
+  private regenerateBuildPieces(plan: DefensePlan): void {
     const ringOrder: (0 | 1 | 2)[] = [2, 1, 0];
     this.buildPieces = [];
     this.buildFocus.clear();
+    const ax = plan.approachX, az = plan.approachZ;
+    const tx = -az, tz = ax;   // 切线方向
     // ★ 工程兵优先在**有利位置**（扫描产物评分）施工：同环内按 post 分排序
     const postScore = new Map<string, number>();
-    for (const p of this.plan.posts) postScore.set(`${p.x.toFixed(1)},${p.z.toFixed(1)}`, p.score);
+    for (const p of plan.posts) postScore.set(`${p.x.toFixed(1)},${p.z.toFixed(1)}`, p.score);
     const scoreOf = (x: number, z: number): number => postScore.get(`${x.toFixed(1)},${z.toFixed(1)}`) ?? 0;
+    const raster = RasterMap.current;
     for (const r of ringOrder) {
-      const tx = -this.plan.approachZ, tz = this.plan.approachX;   // 环的切线方向
-      const slots = this.plan.coverSlots.filter((s) => s.ring === r)
+      const slots = plan.coverSlots.filter((s) => s.ring === r)
         .sort((a, b) => scoreOf(b.x, b.z) - scoreOf(a.x, a.z));
       for (const slot of slots) {
         for (const off of [-4, 0, 4]) {
           this.buildPieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r });
         }
       }
-      const line = this.plan.trenchLines[r] ?? [];
-      for (const p of line) this.buildPieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
+      const line = plan.trenchLines[r] ?? [];
+      for (const p of line) {
+        this.buildPieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
+        // ★ 战壕前方 5m → 一线掩体（前线抵挡；与战壕同排推进）
+        const fx = p.x + ax * 5, fz = p.z + az * 5;
+        if (raster) {
+          const role = raster.tileDefAt(fx, fz).genRole;
+          if (role === 'pit' || role === 'liquid') continue;
+          if (raster.surfaceHeightAt(fx, fz) < -1.2) continue;
+        }
+        this.buildPieces.push({ kind: 'cover', x: fx, z: fz, ring: r });
+      }
     }
     // ★ 兜底：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
     if (this.buildPieces.length === 0) {
-      const raster = RasterMap.current;
-      const a0 = Math.atan2(this.plan.approachZ, this.plan.approachX);
+      const a0 = Math.atan2(az, ax);
       for (const r of [2, 1, 0] as const) {
         for (const k of [-2, 0, 2]) {
           const a = a0 + k * 0.35;
-          const x = this.plan.cx + Math.cos(a) * [40, 60, 80][r];
-          const z = this.plan.cz + Math.sin(a) * [40, 60, 80][r];
+          const x = plan.cx + Math.cos(a) * [40, 60, 80][r];
+          const z = plan.cz + Math.sin(a) * [40, 60, 80][r];
           const role = raster?.tileDefAt(x, z).genRole;
           if (role === 'pit' || role === 'liquid') continue;
           if (raster && raster.surfaceHeightAt(x, z) < -1.2) continue;
@@ -228,6 +234,47 @@ export class SwarmCommander {
         }
       }
     }
+  }
+
+  /** ★ 威胁判定：进入 mass/assault 总攻或挑衅度量 ≥0.6 → 危险（防线转向玩家） */
+  private isDangerous(): boolean {
+    return this.battlePosture === 'mass' || this.battlePosture === 'assault' || this.postureP >= 0.6;
+  }
+
+  /** ★ 期望防线朝向（低威胁 → 扫描走廊[舰船来向]；高威胁且玩家在 10~160m → 玩家方向） */
+  private refaceDefense(): void {
+    const plan = this.plan;
+    if (!plan) return;
+    const raster = RasterMap.current;
+    if (!raster) return;
+    const dx = this.lastPlayerX - plan.cx, dz = this.lastPlayerZ - plan.cz;
+    const d = Math.hypot(dx, dz);
+    const danger = this.isDangerous();
+    const want = danger && d > 10 && d < 160;
+    const px = want ? dx / d : 0, pz = want ? dz / d : 0;
+    const same = this.faceDanger === danger
+      && Math.hypot(this.faceX - px, this.faceZ - pz) < 0.4;
+    if (same) return;
+    this.faceDanger = danger; this.faceX = px; this.faceZ = pz;
+    // ★ 绕锚点重排：换朝向重算布点，只动施工目标表，不碰日程/兵力/账本
+    this.plan = want
+      ? analyzeLandingTerrain(raster, plan.cx, plan.cz, 80, px, pz)
+      : analyzeLandingTerrain(raster, plan.cx, plan.cz, 80);
+    this.regenerateBuildPieces(this.plan);
+    this.builtSlots.clear(); this.digPasses.clear();
+    this.buildFocus.clear(); this.buildAssign.clear();
+    this.stage = 'S1';
+    this.scoreStamp++;   // 评分表触发戳（换朝向重算）
+  }
+
+  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
+   *  @param playerX,playerZ 玩家位置：**参与战术轴**（玩家从哪边来，防线朝哪边摆） */
+  planDefense(cx: number, cz: number, radius = 80, playerX?: number, playerZ?: number): DefensePlan | null {
+    const raster = RasterMap.current;
+    if (!raster) return null;
+    // ★ 战术轴：**低威胁默认舰船来向**（扫描出的攻击走廊）；高威胁 → refaceDefense 绕锚点重摆朝向玩家
+    this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
+    this.regenerateBuildPieces(this.plan);
     this.builtSlots.clear(); this.digPasses.clear();
     this.progress.clear();      // ★ 换落点：战役级闭环状态复位
     this.supportCd.clear();
@@ -887,6 +934,10 @@ export class SwarmCommander {
         if (cd > 0) this.buildCds.set(s.id, cd - dt);
       }
     }
+    // ★ 防线绕锚点重排（2Hz）：威胁上升 → 施工目标表朝玩家重摆；平息 → 转回舰船来向
+    this.lastPlayerX = playerX; this.lastPlayerZ = playerZ;
+    this.refaceAccum += dt;
+    if (this.refaceAccum >= 2) { this.refaceAccum = 0; this.refaceDefense(); }
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
     const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
@@ -1048,7 +1099,7 @@ export class SwarmCommander {
           this.digTrench?.(piece.x, piece.z);                  // 同一块挖第 pass 遍（7×7 宽面）
           this.markTerrainDirty(piece.x, piece.z, 16);   // ★ 战壕（挖掘标记）→ 表 + 采样缓存重算
           this.buildCds.set(s.id, 4);
-          if (pass >= 3) { this.builtSlots.add(key); this.buildFocus.delete(s.id); }
+          if (pass >= SwarmCommander.TRENCH_PASSES) { this.builtSlots.add(key); this.buildFocus.delete(s.id); }
           else this.digPasses.set(key, pass);
         }
       }
