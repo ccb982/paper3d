@@ -56,11 +56,16 @@ const snap = () => page.evaluate(({ id, uid }) => {
     const d = Math.hypot(x / n - anchor.x, z / n - anchor.z);
     engD = engD < 0 ? d : Math.min(engD, d);
   }
-  const task = c.memberTasks.taskOf(uid);
+  // ★ 队长站位 = 指令目标（命令只给保护对象 + 玩家位置）
+  let di = -1;
+  for (let i = 0; i < sw.pool.count; i++) if (sw.pool.swarmUid[i] === uid) { di = i; break; }
+  const dtx = di >= 0 ? sw.pool.directiveTargetX[di] : 0;
+  const dtz = di >= 0 ? sw.pool.directiveTargetZ[di] : 0;
   return {
     mission, kind: st?.order.kind ?? 'none',
     engDist: +engD.toFixed(1),
-    tkx: task ? +task.x.toFixed(1) : null, tkz: task ? +task.z.toFixed(1) : null,
+    tkx: di >= 0 ? +dtx.toFixed(1) : null, tkz: di >= 0 ? +dtz.toFixed(1) : null,
+    dirAnchor: di >= 0 ? +Math.hypot(dtx - anchor.x, dtz - anchor.z).toFixed(1) : -1,
     ax: +anchor.x.toFixed(1), az: +anchor.z.toFixed(1),
     tx: t ? +t.x.toFixed(1) : null, tz: t ? +t.z.toFixed(1) : null,
     dAnchor: t ? +Math.hypot(t.x - anchor.x, t.z - anchor.z).toFixed(1) : -1,
@@ -126,8 +131,8 @@ for (const a of taskMoves) for (const b of taskMoves) {
   maxTaskMove = Math.max(maxTaskMove, Math.hypot(a.tkx - b.tkx, a.tkz - b.tkz));
 }
 console.log('① 护锚=工程队 :', B.engDist >= 0 && B.engDist < 6 ? 'PASS' : `CHECK engDist=${B.engDist}`);
-console.log('② 扇区稳定   : 任务点最大位移', maxTaskMove.toFixed(1), 'm');
-console.log('③ 保护位邻域 :', B.dAnchor >= 0 && B.dAnchor <= 22 ? 'PASS' : `CHECK d=${B.dAnchor} kind=${B.kind}`);
+console.log('② 指令点位移 : 队长站位最大位移', maxTaskMove.toFixed(1), 'm');
+console.log('③ 队长站位   :', B.dirAnchor >= 0 && B.dirAnchor <= 25 ? 'PASS' : `CHECK dirAnchor=${B.dirAnchor} kind=${B.kind}`);
 console.log('④ 巡逻态(令) :', maxD > 0.5 ? 'PASS' : `CHECK maxD=${maxD}`);
 console.log('⑤ 缰绳截断   :', D.kind === 'advance' ? (D.dAnchor <= 15 ? 'PASS' : `FAIL d=${D.dAnchor}`) : `CHECK kind=${D.kind} d=${D.dAnchor}`);
 console.log('⑥ 撤退不追   :', E.kind !== 'advance' || E.dAnchor <= 15 ? 'PASS' : `FAIL kind=${E.kind} d=${E.dAnchor}`);

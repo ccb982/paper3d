@@ -86,7 +86,7 @@ export function attackFromCode(c: number): UnitAttackType {
 // ============================================================
 
 /** 小队整体命令（mode；引擎→队长→全队） */
-export type SquadOrderKind = 'advance' | 'retreat' | 'protect' | 'flank' | 'bound' | 'focus' | 'regroup';
+export type SquadOrderKind = 'advance' | 'retreat' | 'protect' | 'flank' | 'bound' | 'focus' | 'regroup' | 'garrison';
 /** 个体指令（do；队长→士兵） */
 export type DirectiveKind =
   | 'push' | 'suppress' | 'screen' | 'fallback' | 'boundBack'
@@ -108,6 +108,9 @@ export interface TacticalOrder {
   deadline?: number;
   /** ★ 任务名（引擎布置 → 队长读它做队内执行参数；'build'|'guard'|'hold'|'kite'|'rear'|'assault'|'flank'） */
   mission?: string;
+  /** ★ 威胁位置（引擎提供；驻守掩体命令里的**玩家位置** → 个体自行绕掩体站位） */
+  threatX?: number;
+  threatZ?: number;
   seq: number;
 }
 
@@ -125,7 +128,7 @@ export interface UnitDirective {
 
 /** SoA/快照编码（0 = none；顺序即编码，勿改既有值） */
 export const ORDER_CODES: readonly (SquadOrderKind | 'none')[] =
-  ['none', 'advance', 'retreat', 'protect', 'flank', 'bound', 'focus', 'regroup'];
+  ['none', 'advance', 'retreat', 'protect', 'flank', 'bound', 'focus', 'regroup', 'garrison'];
 export const DIRECTIVE_CODES: readonly (DirectiveKind | 'none')[] =
   ['none', 'push', 'suppress', 'screen', 'fallback', 'boundBack', 'guardWard', 'block', 'intercept',
    'sneak', 'pin', 'strike', 'bound', 'cover', 'focusFire', 'regroup'];

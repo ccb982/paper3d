@@ -42,7 +42,7 @@ import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Directo
 import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
-import { SWARM, AUTONOMY } from './SwarmConfig';
+import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
 
@@ -313,6 +313,13 @@ export class SwarmSystem {
       this.applyOrders(now, hooks);
     }
 
+    // ★ 卡死回收（1Hz；用户定调：驻守/到位/交战豁免 → 其余"长时间不挪窝"回收）
+    this.stuckAccum += dt;
+    if (this.stuckAccum >= STUCK.CHECK_S) {
+      this.stuckAccum = 0;
+      this.stuckTick(now);
+    }
+
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
     if (now >= this.counterUntil) {
       let n = 0;
@@ -343,10 +350,8 @@ export class SwarmSystem {
 
     let promotes = 0;
     /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
-    let recalled = 0;
     const nearR2 = SWARM.L3_RADIUS * SWARM.L3_RADIUS;
     const l2R2 = SWARM.L2_RADIUS * SWARM.L2_RADIUS;
-    const l1R2 = SWARM.L1_RADIUS * SWARM.L1_RADIUS;
 
     for (let i = this.pool.count - 1; i >= 0; i--) {
       const p = this.pool;
@@ -373,6 +378,10 @@ export class SwarmSystem {
           continue;
         }
       }
+      // 焦点距离（升格/分层用；远距回收已废除——由卡死回收统一接管）
+      const dpx = p.x[i] - hooks.playerX, dpz = p.z[i] - hooks.playerZ;
+      const dFocus2 = dpx * dpx + dpz * dpz;
+
       // ---- ★ 步骤 6：被击升格（本帧立即；仍受上限/预算约束） ----
       if (p.forcePromote[i] === 1 && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
         p.forcePromote[i] = 0;
@@ -383,19 +392,6 @@ export class SwarmSystem {
         continue;
       }
 
-      // ---- 回收（距玩家/舰船都超 L1_RADIUS） ----
-      const dpx = p.x[i] - hooks.playerX, dpz = p.z[i] - hooks.playerZ;
-      const dsx = p.x[i] - hooks.shipX, dsz = p.z[i] - hooks.shipZ;
-      const dFocus2 = dpx * dpx + dpz * dpz;
-      const dShip2 = dsx * dsx + dsz * dsz;
-      if (Math.min(dFocus2, dShip2) > l1R2) {
-        // ★ 步骤 10：被击 / 小队警觉 / 倾盆而出期间免回收（交火中的不许被远距清除）
-        if (counter || p.noDemoteUntil[i] > now || this.holdDemote(p.squadId[i], now)) continue;
-        // ★ 远距清除 = **不算击杀**；引擎账本记 recalled（模式层无需参与）
-        this.removeAgent(i);
-        recalled++;
-        continue;
-      }
       // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
       if (dFocus2 < nearR2 && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
         const snap = p.snapshot(i);
@@ -436,7 +432,6 @@ export class SwarmSystem {
         (x, z, r) => this.commander.rangedPost(x, z, r));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
-    if (recalled > 0) this.ledger.noteRecall(recalled);
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
     if (this.leaderChanges.length > 0) {
       for (const c of this.leaderChanges) hooks.onLeaderChanged?.(c.uid, c.isLeader);
@@ -711,6 +706,56 @@ export class SwarmSystem {
     const dot = p.dirX[i] * hooks.camForwardX + p.dirZ[i] * hooks.camForwardZ;
     // ★ 迟滞：单阈值 0.25 在朝向临界会逐帧翻转（背面帧缺失时 = 闪现）→ 双阈值
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
+  }
+
+  /** ★ 卡死回收：uid → 窗口包围盒 + 计时（豁免：驻守/到位/交战） */
+  private readonly stuck = new Map<number, { minX: number; maxX: number; minZ: number; maxZ: number; t: number }>();
+  private stuckAccum = 0;
+  /** 调试计数（每次 stuckTick 重置） */
+  readonly stuckDbg = { exempt: 0, window: 0, tracked: 0, recycled: 0, last: '' };
+
+  /** ★ 卡死回收（STUCK 参数）：代理/队长在窗口内**净活动范围**始终很小 → 自动回收（归还编制）。
+   *  口径从严（宁可错杀，不能放过）：**唯一命令豁免 = 驻守（garrison）**；交火期豁免。
+   *  施工/巡逻不豁免——窗口内有实际位移（包围盒 > BBOX_R）即逃逸；原地摇摆 → 清除。 */
+  private stuckTick(now: number): void {
+    const dbg = this.stuckDbg;
+    dbg.exempt = 0; dbg.window = 0; dbg.tracked = 0; dbg.recycled = 0;
+    const pool = this.pool;
+    for (let i = pool.count - 1; i >= 0; i--) {
+      const uid = pool.swarmUid[i];
+      const squadId = pool.squadId[i];
+      const sq = this.squads.get(squadId);
+      const st = sq ? this.tactics.board.get(squadId) : undefined;
+      if (st?.order.kind === 'garrison') { this.stuck.delete(uid); dbg.exempt++; continue; }   // 驻守命令例外
+      if (pool.noDemoteUntil[i] > now) { this.stuck.delete(uid); dbg.exempt++; continue; }     // 交战中
+      const hitAt = this.recentHits.get(squadId);
+      if (hitAt !== undefined && now - hitAt <= AUTONOMY.SQUAD_ALERT_S) { this.stuck.delete(uid); dbg.exempt++; continue; }
+      const rec = this.stuck.get(uid);
+      if (!rec) {
+        this.stuck.set(uid, { minX: pool.x[i], maxX: pool.x[i], minZ: pool.z[i], maxZ: pool.z[i], t: 0 });
+        continue;
+      }
+      if (pool.x[i] < rec.minX) rec.minX = pool.x[i]; else if (pool.x[i] > rec.maxX) rec.maxX = pool.x[i];
+      if (pool.z[i] < rec.minZ) rec.minZ = pool.z[i]; else if (pool.z[i] > rec.maxZ) rec.maxZ = pool.z[i];
+      rec.t += 1;
+      // 有实际位移（包围盒扩到阈值外）→ 重开窗口（正常行军/换点）
+      dbg.tracked++;
+      if (rec.maxX - rec.minX > STUCK.BBOX_R || rec.maxZ - rec.minZ > STUCK.BBOX_R) {
+        rec.minX = rec.maxX = pool.x[i]; rec.minZ = rec.maxZ = pool.z[i]; rec.t = 0;
+        dbg.window++;
+        continue;
+      }
+      if (rec.t >= STUCK.HOLD_S) {
+        dbg.last = `${sq?.type ?? '?'}${sq?.builders ? '*' : ''}:${st?.order.kind ?? '-'}/${st?.order.mission ?? '-'}`
+          + `@${pool.x[i].toFixed(0)},${pool.z[i].toFixed(0)}`
+          + ` bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`;
+        this.removeAgent(i, true, false);   // 非击杀离场
+        this.ledger.noteRecall(1);           // 归还编制
+        this.stuck.delete(uid);
+        dbg.recycled++;
+      }
+    }
+    if (this.stuck.size > pool.count + 64) this.stuck.clear();
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
@@ -1019,7 +1064,7 @@ export class SwarmSystem {
       let az = state.order.target?.z ?? 0;
       let fx = 1, fz = 0;
       if (this.squads.centroidOf(squad.id, this._centroid)) {
-        const tgt = SquadTactics.currentTargetOf(state, this._centroid.x, this._centroid.z);
+        const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now);
         if (tgt) {
           ax = tgt.x;
           az = tgt.z;
@@ -1100,6 +1145,8 @@ export class SwarmSystem {
     this.tacticsAccum = 0;
     this.leaderAI.clear();
     this.commander.clear();
+    this.stuck.clear();
+    this.stuckAccum = 0;
     this.recentHits.clear();
     this.counterUntil = 0;
     this.lastPlayerX = 0;

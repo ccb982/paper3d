@@ -13,11 +13,11 @@ import type { SquadType } from '../../entity/SwarmUnit';
 import type { SquadDoctrine } from './SquadDoctrine';
 import type { DefensePlan } from './LandingTerrain';
 import type { TerrainScore } from './TerrainScore';
-import { canTake, guardPoint, UNIT_TACTICS } from './UnitTactics';
+import { canTake, UNIT_TACTICS } from './UnitTactics';
 
 /** 命令字段（与 TacticalOrder 对齐；避免 Decide 依赖整个实体契约） */
 export type DecideKind =
-  | 'advance' | 'flank' | 'protect' | 'regroup' | 'retreat' | 'bound' | 'focus';
+  | 'advance' | 'flank' | 'protect' | 'regroup' | 'retreat' | 'bound' | 'focus' | 'garrison';
 export type DecideRoe = 'engage' | 'holdFire' | 'fireOnArrival' | 'focusOnly';
 
 /** 选点需要的全部输入（每拍构建一次，零分配复用） */
@@ -26,7 +26,7 @@ export interface DecideCtx {
   table: TerrainScore;
   playerX: number;
   playerZ: number;
-  /** ★ 决策时刻（秒；保护/巡逻游弋相位用） */
+  /** ★ 决策时刻（秒；驻守/后置的巡逻游弋相位） */
   now: number;
   /** 玩家在落点 90m 内（近战追击开关的现场条件） */
   chase: boolean;
@@ -38,8 +38,8 @@ export interface DecideCtx {
   buildSlot: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
   /** ★ 本队已分派的施工块（稳定分派：不再每拍重挑 → 修复工程队来回跑） */
   buildTarget: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
-  /** ★ 引擎配置的保护对象（本拍下发；队长/个体**只读位置**，不自行选保护对象） */
-  protect: { x: number; z: number } | null;
+  /** ★ 引擎配置的保护对象（本拍下发；含来源：护工/射手/工地/岗位/掩体） */
+  protect: { x: number; z: number; source: 'engineer' | 'shooter' | 'site' | 'post' | 'cover' } | null;
   /** ★ 战术阶段（S1 = 施工期 → 近战进入"保护"共用状态） */
   stage: string;
   /** ★ 驻守位锁定（squadId → 已选掩体/战壕位；靠近则不换 → 修复来回走） */
@@ -84,10 +84,12 @@ export interface DecideOut {
   urgency: number;
   /** ★ 任务名（引擎布置 → 队长读；见 UnitTactics.MISSION_EXEC） */
   mission: string;
+  /** ★ 威胁位置（驻守掩体令：引擎提供玩家位置 → 个体自行绕掩体） */
+  threat?: { x: number; z: number };
 }
 
 /** 复用输出（零分配） */
-const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage', ttl: 6, urgency: 0, mission: '' };
+const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage', ttl: 6, urgency: 0, mission: '', threat: undefined };
 /** ★ ∇S̃ 梯度复用（微调用） */
 const _grad = { x: 0, z: 0 };
 
@@ -96,6 +98,16 @@ const GUARD_CHASE_MAX = 45;
 /** 巡逻游弋角速度（rad/s；约 12.5s 一个来回） */
 const PATROL_OMEGA = 0.5;
 
+/** 目标点叠加切向游弋（驻守/后置/巡逻用：避免"久站 = 卡死回收"） */
+function addPatrolSwing(
+  x: number, z: number, px: number, pz: number, amp: number, phase: number, now: number,
+): { x: number; z: number } {
+  if (amp <= 0) return { x, z };
+  const dx = x - px, dz = z - pz;
+  const dl = Math.hypot(dx, dz) || 1;
+  const sw = Math.sin(now * PATROL_OMEGA + phase) * amp;
+  return { x: x + (-dz / dl) * sw, z: z + (dx / dl) * sw };
+}
 /** 把追击点截断在保护锚的缰绳半径内（撤退了不去追） */
 function clampToLeash(
   tx: number, tz: number, a: { x: number; z: number }, leash: number,
@@ -121,6 +133,15 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
   _out.urgency = 0;
   // ★ 大任务（引擎粘性）：默认驻守；施工/护卫/进攻等由 commander 分派后写入 ctx.mission
   _out.mission = ctx.mission || 'hold';
+  _out.threat = undefined;
+  // ★ 驻守掩体（引擎命令）：给掩体 + 玩家位置；**站位由个体自行计算**（SquadTactics.resolveAnchor 绕掩体）
+  if (ctx.protect?.source === 'cover' && !d.chase) {
+    _out.kind = 'garrison';
+    _out.target = { x: ctx.protect.x, z: ctx.protect.z };
+    _out.roe = 'engage';
+    _out.ttl = 3;
+    _out.threat = { x: ctx.playerX, z: ctx.playerZ };
+  } else
   // ★ 独有状态：施工（大任务 = build）
   if (ctx.mission === 'build') {
     const bt = ctx.buildTarget ?? ctx.buildSlot;
@@ -154,13 +175,11 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       _out.target = clampToLeash(ctx.playerX, ctx.playerZ, anchor, p.leash);
       _out.ttl = 4;
     } else {
-      const g = guardPoint(anchor.x, anchor.z, ctx.playerX, ctx.playerZ, p.guardDist);
-      const dx = ctx.playerX - anchor.x, dz = ctx.playerZ - anchor.z;
-      const dl = Math.hypot(dx, dz) || 1;
-      const tx = -dz / dl, tz = dx / dl;   // 切向（防线横向）
-      const swing = Math.sin(ctx.now * PATROL_OMEGA + s.id * 1.3) * p.patrolR;
+      // ★ 保护令 = 被保护对象位置 + 玩家位置；**站位由队长算**
+      //   （SquadTactics.resolveAnchor：护卫点 + 巡逻游弋；代理/队长自身执行）
       _out.kind = 'protect';
-      _out.target = { x: g.x + tx * swing, z: g.z + tz * swing };
+      _out.target = { x: anchor.x, z: anchor.z };
+      _out.threat = { x: ctx.playerX, z: ctx.playerZ };
       _out.ttl = 3;
     }
   } else {
@@ -206,7 +225,9 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       const far = n === 0 || Math.hypot(cx - hx, cz - hz) > (wasProtect ? 9 : 4);
       ctx.protectState.set(s.id, !far);
       _out.kind = far ? 'advance' : 'protect';
-      _out.target = { x: hx, z: hz };
+      const pr = UNIT_TACTICS[s.type].patrolR;
+      _out.target = far ? { x: hx, z: hz }
+        : addPatrolSwing(hx, hz, ctx.playerX, ctx.playerZ, pr, s.id * 1.3, ctx.now);
       _out.urgency = far ? 1 : 0;
       _out.ttl = far ? 8 : 6;
       break;

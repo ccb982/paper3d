@@ -130,6 +130,18 @@ export function protectActionFor(type: SquadType, isBuilder: boolean): ProtectAc
   return isBuilder ? 'build' : PROTECT_ACTION[type];
 }
 
+/** ★ 掩体背威胁侧站位距离（米；驻守掩体：站到掩体后侧，让掩体挡住威胁方向） */
+export const COVER_STAND = 1.7;
+
+/** ★ 共用原语：掩体背威胁站位（掩体中心沿"远离威胁"方向 COVER_STAND 米） */
+export function coverStandPoint(
+  coverX: number, coverZ: number, threatX: number, threatZ: number,
+): { x: number; z: number } {
+  const dx = coverX - threatX, dz = coverZ - threatZ;
+  const dl = Math.hypot(dx, dz) || 1;
+  return { x: coverX + (dx / dl) * COVER_STAND, z: coverZ + (dz / dl) * COVER_STAND };
+}
+
 /** ★ 共用原语：护卫点（工地与威胁之间，距工地 dist 米，朝玩家一侧） */
 export function guardPoint(
   siteX: number, siteZ: number, threatX: number, threatZ: number, dist: number,

@@ -25,7 +25,6 @@ import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { EngineerCorps, type BuildPiece } from './EngineerCorps';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor } from './UnitTactics';
-import { guardPoint, UNIT_TACTICS } from './UnitTactics';
 import { setSteerTable } from '../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
@@ -37,7 +36,7 @@ const _c0 = { x: 0, z: 0 };
 const _c1 = { x: 0, z: 0 };
 
 /** ★ 引擎保护配置：保护对象（锚）+ 来源（护工/射手/工地/岗位） */
-export interface ProtectTarget { x: number; z: number; source: 'engineer' | 'shooter' | 'site' | 'post' }
+export interface ProtectTarget { x: number; z: number; source: 'engineer' | 'shooter' | 'site' | 'post' | 'cover' }
 
 /** ★ 引擎侧信息面（《敌人管线设计.md》§3.5）：战术决策的输入 */
 export interface BattalionView {
@@ -94,13 +93,6 @@ export class SwarmCommander {
   private finalSent = false;
   /** ★ 调试/测试：日程进度覆盖（0~1；<0 = 关闭覆盖，用太阳钟） */
   debugDayT01 = -1;
-  /** ★ 迷失回收：离队长过远且卡住的代理（uid → 上次位置/时间/连续卡死次数） */
-  private readonly lost = new Map<number, { x: number; z: number; at: number; stuck: number }>();
-  private lostAccum = 0;
-  /** 迷失判定：离队长 > 60m；8s 内挪动 < 2m 视为卡死；连续 2 拍 → 自我销毁 */
-  private static readonly LOST_DIST = 60;
-  private static readonly LOST_STUCK_S = 8;
-  private static readonly LOST_MOVE_EPS = 2;
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
   /** ★ 战役级闭环（1Hz）：小队评级/求援/受阻 → 大队改派（自下而上的反馈闭环） */
@@ -193,7 +185,8 @@ export class SwarmCommander {
   }
 
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
-   *  方向 = 扫描走廊轴（舰船来向），**落地后恒定**；不读玩家位置、不随危机度重排。 */
+   *  展开轴 = 扫描走廊轴（落地一次）；**掩体一律朝舰船（落点中心）侧 +5m、战壕留在原位**；
+   *  此后不随玩家移动/危机度动态重排（《工兵架构.md》§3/§4，用户定调 2026-09-21）。 */
   planDefense(cx: number, cz: number, radius = 80): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
@@ -218,8 +211,6 @@ export class SwarmCommander {
     this.wave1Sent = false;
     this.finalSent = false;
     this.hitSeen.clear();
-    this.lost.clear();
-    this.lostAccum = 0;
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();
@@ -228,6 +219,7 @@ export class SwarmCommander {
     this.memberTasks.clearAll();
     this.escortAssign.clear();
     this.protectAssign.clear();
+    this.coverHolders.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
@@ -499,8 +491,6 @@ export class SwarmCommander {
       }
     }
     this.engineeringTick(dt, playerX, playerZ);
-    // ★ 迷失回收（1Hz）：卡死回不来的代理自我销毁（非击杀，归还编制）
-    this.reapLost(dt);
     // ★ 战役级闭环（1Hz，晚于工程拍 → 反馈决策可覆盖基础部署）
     this.tacticalTick(dt, playerX, playerZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
@@ -533,8 +523,10 @@ export class SwarmCommander {
   private readonly postAssign = new Map<number, { x: number; z: number }>();
   /** ★ S1 护工：非工兵队 → 被保护的工程队（粘性配对；squadId → builder squadId） */
   private readonly escortAssign = new Map<number, number>();
-  /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位）——保护对象由大队定 */
+  /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位/掩体）——保护对象由大队定 */
   readonly protectAssign = new Map<number, ProtectTarget>();
+  /** ★ 掩体驻守（远程，每帧更新）：squadId → 掩体中心（站位由个体自行计算 → 命令提供玩家位置） */
+  private readonly coverHolders = new Map<number, { cx: number; cz: number }>();
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
 
@@ -587,30 +579,6 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 护卫扇区（成员级）：沿"保护对象→威胁"垂线分散站位（每人 4m）+ **巡逻游弋**
-   *  （切向摆动随决策拍刷新 → 保护者在巡逻态；位置随保护对象/玩家滑动） */
-  private spreadGuards(
-    s: { id: number; type: string; members: Map<number, { x: number; z: number }> },
-    siteX: number, siteZ: number, px: number, pz: number, now: number, patrol: boolean,
-  ): void {
-    const dx = px - siteX, dz = pz - siteZ;
-    const dl = Math.hypot(dx, dz) || 1;
-    const ux = dx / dl, uz = dz / dl;
-    const pr = UNIT_TACTICS[s.type as keyof typeof UNIT_TACTICS];
-    const gd = pr?.guardDist ?? 8;
-    const gx = siteX + ux * gd, gz = siteZ + uz * gd;
-    const tx = -uz, tz = ux;   // 垂线（弧线切线）
-    const swing = patrol ? Math.sin(now * 0.5 + s.id * 1.3) * (pr?.patrolR ?? 4) : 0;
-    const n = s.members.size;
-    let k = 0;
-    for (const uid of s.members.keys()) {
-      const off = (k - (n - 1) / 2) * 4 + swing;
-      k++;
-      this.memberTasks.write(uid, gx + tx * off, gz + tz * off);
-    }
-    this.memberTasks.own(s.id);
-  }
-
   /** ★ S1 护工：给非工兵队粘性配对一只工程队（返回其质心作为护锚；失效则换最近） */
   private escortAnchor(
     squadId: number, cx: number, cz: number, engCent: Map<number, { x: number; z: number }>,
@@ -627,6 +595,46 @@ export class SwarmCommander {
       this.escortAssign.set(squadId, pick);
     }
     return engCent.get(pick) ?? null;
+  }
+
+  /** ★ 掩体驻守（远程）：每帧维护"选哪面掩体"（引擎只选**保护对象**；站位由个体绕掩体自算）。
+   *  选择判据：距玩家 8~75m（够近能打/够远不被贴脸）× 距本队 ≤70m；被击/无掩体则不驻。
+   *  命令下发时附带玩家位置（threat），个体据此绕掩体保持遮挡（《敌人管线设计.md》§3.2.1）。 */
+  private updateCoverHolders(
+    squads: readonly { id: number; type: string; builders: boolean; members: Map<number, { x: number; z: number }> }[],
+    playerX: number, playerZ: number,
+  ): void {
+    for (const id of [...this.coverHolders.keys()]) {
+      if (!this.swarm.squads.get(id)) this.coverHolders.delete(id);
+    }
+    let covers: { x: number; z: number }[] | null = null;
+    for (const s of squads) {
+      if (s.type !== 'ranged' || s.builders) continue;
+      let scx = 0, scz = 0, n = 0;
+      for (const m of s.members.values()) { scx += m.x; scz += m.z; n++; }
+      if (n === 0) continue;
+      scx /= n; scz /= n;
+      if (!covers) covers = snapshotCovers('enemy').map((c) => ({ x: c.x, z: c.z }));
+      if (covers.length === 0) { this.coverHolders.delete(s.id); continue; }
+      const ok = (cx: number, cz: number): boolean => {
+        const dp = Math.hypot(cx - playerX, cz - playerZ);
+        const ds = Math.hypot(cx - scx, cz - scz);
+        return dp >= 8 && dp <= 75 && ds <= 70;
+      };
+      const held = this.coverHolders.get(s.id);
+      if (held && ok(held.cx, held.cz)) continue;   // 滞回：掩体仍有效 → 不折腾
+      let best: { cx: number; cz: number } | null = null;
+      let bestScore = Infinity;
+      for (const c of covers) {
+        if (!ok(c.x, c.z)) continue;
+        const dSquad = Math.hypot(c.x - scx, c.z - scz);
+        const dPlayer = Math.hypot(c.x - playerX, c.z - playerZ);
+        const score = dSquad + Math.max(0, dPlayer - 48) * 2;
+        if (score < bestScore) { bestScore = score; best = { cx: c.x, cz: c.z }; }
+      }
+      if (best) this.coverHolders.set(s.id, best);
+      else this.coverHolders.delete(s.id);
+    }
   }
 
   /** ★ 总攻护栏锚：离正面最近的远程小队质心（工兵/护卫以此为"工地"→ 给射手打掩护） */
@@ -687,40 +695,6 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 迷失回收（1Hz）：回队长寻路失败 → 目标改回队长；仍卡死 → 自我销毁
-   *  触发：离队长 >60m 且 8s 内挪动 <2m（连续 2 拍）。销毁 = 非击杀离场（归还编制），
-   *  避免"陷进出不去的地形"的代理永远占编制 / 算力（L3 实体由降格逻辑兜底）。 */
-  private reapLost(dt: number): void {
-    this.lostAccum += dt;
-    if (this.lostAccum < 1) return;
-    this.lostAccum = 0;
-    const pool = this.swarm.pool;
-    const now = performance.now() / 1000;
-    for (let i = pool.count - 1; i >= 0; i--) {
-      if (pool.isLeader[i] === 1) continue;
-      const uid = pool.swarmUid[i];
-      const squad = this.swarm.squads.get(pool.squadId[i]);
-      const leader = squad?.members.get(squad.leaderUid);
-      if (!leader) { this.lost.delete(uid); continue; }
-      const d = Math.hypot(pool.x[i] - leader.x, pool.z[i] - leader.z);
-      if (d < SwarmCommander.LOST_DIST) { this.lost.delete(uid); continue; }
-      // ★ 回队长：迷失时把移动目标改到队长（寻路回队）
-      pool.moveTargetX[i] = leader.x;
-      pool.moveTargetZ[i] = leader.z;
-      const rec = this.lost.get(uid);
-      if (!rec) { this.lost.set(uid, { x: pool.x[i], z: pool.z[i], at: now, stuck: 0 }); continue; }
-      if (Math.hypot(pool.x[i] - rec.x, pool.z[i] - rec.z) > SwarmCommander.LOST_MOVE_EPS) {
-        rec.x = pool.x[i]; rec.z = pool.z[i]; rec.at = now; rec.stuck = 0; continue;
-      }
-      if (now - rec.at > SwarmCommander.LOST_STUCK_S && ++rec.stuck >= 2) {
-        this.swarm.removeAgent(i, true, false);   // 非击杀离场 → 归还编制
-        this.swarm.ledger.noteRemoved(1);
-        this.lost.delete(uid);
-      }
-    }
-    if (this.lost.size > 64) this.lost.clear();   // 防御：异常堆积直接清空
-  }
-
   /** ★ 部署维护（2s 决策拍）——**按兵种分工 + 对玩家移动的敏感度不同**：
    *  · 近战（盾/突击）：**追玩家**（玩家在附近时直接压上去；否则推进到防线）
    *  · 施工队（canBuild）：守着自己的工位/工事，不因玩家跑动被拉走
@@ -736,6 +710,8 @@ export class SwarmCommander {
     //   兜底：名册里一个施工兵种都没有（缺素材/未加载）→ 杂兵（assault）兼任
     let builders = squads.filter((s) => s.builders);
     if (builders.length === 0) builders = squads.filter((s) => s.type === 'assault');
+    // ★ 掩体驻守（远程）：**每帧**按玩家位置更新"能挡射界"的掩体背侧站位（引擎配置 → 个体执行）
+    this.updateCoverHolders(squads, playerX, playerZ);
     this.engAccum += dt;
     // ★ 施工冷却**每帧递减**（不受 2s 拍闸限制）：4s 战壕 = 真 4s；否则每拍减 0.1 → 一趟要 ~80s
     if (this.stage === 'S1') {
@@ -853,8 +829,10 @@ export class SwarmCommander {
       //   S1 非工兵 → 粘性配对的工程队（护工）；总攻 → 射手锚；S1 其余 → 工地；S2 → 岗位
       const escort = !s.builders && sn > 0 && engCent.size > 0
         ? this.escortAnchor(s.id, scx, scz, engCent) : null;
+      const coverHold = (s.type === 'ranged' && !s.builders) ? this.coverHolders.get(s.id) : undefined;
       let pt: ProtectTarget | null = null;
-      if (escort) pt = { x: escort.x, z: escort.z, source: 'engineer' };
+      if (coverHold) pt = { x: coverHold.cx, z: coverHold.cz, source: 'cover' };   // ★ 远程：掩体优先（站位个体自算）
+      else if (escort) pt = { x: escort.x, z: escort.z, source: 'engineer' };
       else if (this.battlePosture === 'assault' && buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
       else if (buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
       else if (ma.mission === 'guard' || ma.mission === 'patrol') {
@@ -872,15 +850,12 @@ export class SwarmCommander {
         ctx.buildTarget = null;
         // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）
         if (this.alertSet.has(s.id) || !ctx.protect) this.memberTasks.clear(s);
-        // ★ 工兵的保护动作 = 造工事（保护对象附近有未建掩体 → 施工；没有 → 站岗扇区）
+        // ★ 工兵的保护动作 = 造工事（有未建掩体 → 施工；没有 → 交队长站位/执行）
         else if (s.builders) {
-          if (!this.corps.spreadBuilders(s, ctx.protect.x, ctx.protect.z)) {
-            this.spreadGuards(s, ctx.protect.x, ctx.protect.z, playerX, playerZ, ctx.now, true);
-          }
-        } else {
-          // 护工队：静态扇区跟随工程队（不游弋 → 步调跟施工走，不再"瞎转"）
-          this.spreadGuards(s, ctx.protect.x, ctx.protect.z, playerX, playerZ, ctx.now, escort === null);
+          if (!this.corps.spreadBuilders(s, ctx.protect.x, ctx.protect.z)) this.memberTasks.clear(s);
         }
+        // ★ 其余保护队：清成员任务 → 保护令（对象+玩家位置）+ 队长站位 + 编队槽执行（代理/队长自身）
+        else this.memberTasks.clear(s);
       } else {
         ctx.buildTarget = null;
         this.memberTasks.clear(s);
@@ -890,7 +865,8 @@ export class SwarmCommander {
       const out = decideTarget(d, s, ctx, st);
       this.swarm.issueOrder(s.id, {
         kind: out.kind, target: out.target, roe: out.roe,
-        urgency: out.urgency, mission: out.mission || undefined, seq: 0,
+        urgency: out.urgency, mission: out.mission || undefined,
+        threatX: out.threat?.x, threatZ: out.threat?.z, seq: 0,
       }, out.ttl);
     }
     // ⑤ 施工（逐步拼装，仅 S1；挖建执行在 EngineerCorps）
@@ -923,6 +899,13 @@ export class SwarmCommander {
         this.supportCd.set(helper.squadId, now + 10);
         this.lastDecision = { squad: helper.squadId, kind: m.kind === 'requestSupport' ? 'support' : 'scout', at: now };
       }
+    }
+    // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
+    for (const [id, h] of this.coverHolders) {
+      this.swarm.issueOrder(id, {
+        kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
+        threatX: playerX, threatZ: playerZ, seq: 0,
+      }, 4);
     }
     // ② 逐队：受阻重试/换目标 + 残血撤离（按逐兵种 retreatHp）
     for (const r of ratings) {
@@ -1139,8 +1122,6 @@ export class SwarmCommander {
     this.finalSent = false;
     this.debugDayT01 = -1;
     this.hitSeen.clear();
-    this.lost.clear();
-    this.lostAccum = 0;
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();

@@ -12,12 +12,14 @@ import { RasterMap } from '../../services/map/RasterMap';
 import type { DefensePlan } from './LandingTerrain';
 import type { MemberTaskBoard, TaskSquad } from './MemberTaskBoard';
 
-/** 施工目标块 */
+/** 施工目标块；pri = 施工优先级（**越小越先**：《工兵架构.md》§4） */
 export interface BuildPiece {
   kind: 'cover' | 'trench';
   x: number;
   z: number;
   ring: 0 | 1 | 2;
+  /** 0 = 前线掩体（战壕前方 5m，先部署） / 1 = 战壕 / 2 = 环上掩体 */
+  pri: number;
 }
 
 /** 宿主端口（由 SwarmCommander 注入；不反向依赖指挥器内部） */
@@ -80,20 +82,23 @@ export class EngineerCorps {
         .sort((a, b) => scoreOf(b.x, b.z) - scoreOf(a.x, a.z));
       for (const slot of slots) {
         for (const off of [-4, 0, 4]) {
-          this.pieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r });
+          this.pieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r, pri: 2 });
         }
       }
       const line = plan.trenchLines[r] ?? [];
       for (const p of line) {
-        this.pieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
-        // 战壕前方 5m → 一线掩体（前线抵挡；与战壕同排推进）
-        const fx = p.x + ax * 5, fz = p.z + az * 5;
+        this.pieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r, pri: 1 });
+        // ★ 掩体朝**舰船（落点中心）**方向 5m；战壕留在原位（脚底下）——用户定调
+        //   （掩体在前、战壕在后；威胁/玩家从舰船方向来）
+        const cdx = plan.cx - p.x, cdz = plan.cz - p.z;
+        const cdl = Math.hypot(cdx, cdz) || 1;
+        const fx = p.x + (cdx / cdl) * 5, fz = p.z + (cdz / cdl) * 5;
         if (raster) {
           const role = raster.tileDefAt(fx, fz).genRole;
           if (role === 'pit' || role === 'liquid') continue;
           if (raster.surfaceHeightAt(fx, fz) < FLOOR_MIN) continue;
         }
-        this.pieces.push({ kind: 'cover', x: fx, z: fz, ring: r });
+        this.pieces.push({ kind: 'cover', x: fx, z: fz, ring: r, pri: 0 });   // ★ 前线掩体：最先部署
       }
     }
     // 兜底：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
@@ -107,43 +112,30 @@ export class EngineerCorps {
           const role = raster?.tileDefAt(x, z).genRole;
           if (role === 'pit' || role === 'liquid') continue;
           if (raster && raster.surfaceHeightAt(x, z) < FLOOR_MIN) continue;
-          this.pieces.push({ kind: 'cover', x, z, ring: r });
+          this.pieces.push({ kind: 'cover', x, z, ring: r, pri: 2 });
         }
       }
     }
   }
 
-  /** 队级分派：保持已派未建块；否则**自己环带内**挑最近未认领块（少横穿、环带作业）。
-   *  选择链：环带战壕 → 环带任意 → 全局战壕 → 全局最近 */
+  /** 队级分派：保持已派未建块；否则按 **pri 施工优先级** 挑最近未认领块。
+   *  选择链：前线掩体（0）→ 战壕（1）→ 环掩体（2）；同 pri 取最近（先部署掩体，不闷头挖长壕）。 */
   assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.assign.get(squadId);
     if (cur !== undefined && cur < this.pieces.length
       && !this.built.has(keyOf(this.pieces[cur]))) return cur;
     const claimed = new Set<number>(this.assign.values());
-    let homeRing = -1, homeD = Infinity, anyBest = -1, anyD = Infinity;
-    let anyTrench = -1, anyTrenchD = Infinity;
+    let minPri = Infinity, anyBest = -1, anyD = Infinity;
     for (let i = 0; i < this.pieces.length; i++) {
       const q = this.pieces[i];
       if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
       const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d < anyD) { anyD = d; anyBest = i; }
-      if (q.kind === 'trench' && d < anyTrenchD) { anyTrenchD = d; anyTrench = i; }
-      if (d < homeD) { homeD = d; homeRing = q.ring; }
+      if (q.pri < minPri) { minPri = q.pri; anyBest = i; anyD = d; }
+      else if (q.pri === minPri && d < anyD) { anyBest = i; anyD = d; }
     }
     if (anyBest < 0) return -1;
-    let ringBest = -1, ringD = Infinity;
-    let ringTrench = -1, ringTrenchD = Infinity;
-    for (let i = 0; i < this.pieces.length; i++) {
-      const q = this.pieces[i];
-      if (q.ring !== homeRing) continue;
-      if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
-      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d < ringD) { ringD = d; ringBest = i; }
-      if (q.kind === 'trench' && d < ringTrenchD) { ringTrenchD = d; ringTrench = i; }
-    }
-    const best = ringTrench >= 0 ? ringTrench : ringBest >= 0 ? ringBest : anyTrench >= 0 ? anyTrench : anyBest;
-    this.assign.set(squadId, best);
-    return best;
+    this.assign.set(squadId, anyBest);
+    return anyBest;
   }
 
   /** 总攻：战壕停挖（剩余战壕件作废 → 不派不挖；assault 不回退 → 本局不再挖）。
@@ -251,10 +243,9 @@ export class EngineerCorps {
           if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 36) { piece = q; break; }
         }
       }
-      // ② 就近动工（新焦点）：**优先战壕**；同种优先"已有挖痕"、再近者先（成员 ≤5m）
+      // ② 就近动工（新焦点）：**pri 小者先**（前线掩体 > 战壕 > 环掩体）→ 挖痕多 → 近（成员 ≤5m）
       if (!piece) {
-        let bi = -1, bD = 25, bPass = -1;
-        let bTrench = false;
+        let bi = -1, bD = 25, bPass = -1, bPri = Infinity;
         for (const m of s.members.values()) {
           for (let i = 0; i < this.pieces.length; i++) {
             const q = this.pieces[i];
@@ -262,9 +253,8 @@ export class EngineerCorps {
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
             if (d > 25) continue;
             const pass = this.passes.get(keyOf(q)) ?? 0;
-            const tr = q.kind === 'trench';
-            if ((tr && !bTrench) || (tr === bTrench && (pass > bPass || (pass === bPass && d < bD)))) {
-              bTrench = tr; bPass = pass; bi = i; bD = d;
+            if (q.pri < bPri || (q.pri === bPri && (pass > bPass || (pass === bPass && d < bD)))) {
+              bPri = q.pri; bPass = pass; bi = i; bD = d;
             }
           }
         }

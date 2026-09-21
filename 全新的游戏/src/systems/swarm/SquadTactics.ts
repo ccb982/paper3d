@@ -13,7 +13,8 @@ import type {
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
-import { MISSION_EXEC as MISSION_EXEC_TABLE } from './UnitTactics';
+import { MISSION_EXEC as MISSION_EXEC_TABLE, coverStandPoint, guardPoint, UNIT_TACTICS } from './UnitTactics';
+import { coverBlocksLine } from '../../entity/CoverEntity';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -23,6 +24,7 @@ export const DEFAULT_DIRECTIVE: Record<SquadOrderKind, Record<DirectiveRoleBucke
   advance: { melee: 'push', ranged: 'suppress', shield: 'push', logistics: 'regroup' },
   retreat: { melee: 'boundBack', ranged: 'boundBack', shield: 'screen', logistics: 'fallback' },
   protect: { melee: 'intercept', ranged: 'guardWard', shield: 'block', logistics: 'guardWard' },
+  garrison:{ melee: 'intercept', ranged: 'guardWard', shield: 'block', logistics: 'guardWard' },
   flank: { melee: 'strike', ranged: 'pin', shield: 'strike', logistics: 'fallback' },
   bound: { melee: 'bound', ranged: 'cover', shield: 'bound', logistics: 'cover' },
   focus: { melee: 'push', ranged: 'focusFire', shield: 'push', logistics: 'focusFire' },
@@ -215,6 +217,42 @@ export class SquadTactics {
     return state.order.target ?? null;
   }
 
+  /** ★ 命令锚（含驻守掩体的**本地站位计算**）：命令提供掩体 + 玩家位置，单位自行绕掩体。
+   *  非 garrison 命令 = 路径/目标原样；garrison = 掩体背玩家侧站位，
+   *  若该点不被遮蔽则沿切线搜索绕掩体，确保掩体真能保护自己。 */
+  static resolveAnchor(
+    state: SquadOrderState, cx: number, cz: number, type?: SquadType, now = 0,
+  ): { x: number; z: number } | null {
+    const o = state.order;
+    // ★ 保护令（队长站位）：命令只给"被保护对象 + 玩家位置" → 队长算护卫点 + 巡逻游弋
+    if (o.kind === 'protect' && o.target) {
+      const tx = o.threatX, tz = o.threatZ;
+      if (tx === undefined || tz === undefined) return o.target;
+      const p = type ? UNIT_TACTICS[type] : null;
+      const g = guardPoint(o.target.x, o.target.z, tx, tz, p?.guardDist ?? 8);
+      const dx = tx - o.target.x, dz = tz - o.target.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      const ux = -dz / dl, uz = dx / dl;   // 切向（防线横向）
+      const swing = Math.sin(now * 0.5 + state.squadId * 1.3) * (p?.patrolR ?? 4);
+      return { x: g.x + ux * swing, z: g.z + uz * swing };
+    }
+    if (o.kind === 'garrison' && o.target) {
+      const tx = o.threatX ?? o.target.x, tz = o.threatZ ?? o.target.z;
+      let p = coverStandPoint(o.target.x, o.target.z, tx, tz);
+      if (o.threatX !== undefined && o.threatZ !== undefined && !coverBlocksLine(p.x, p.z, tx, tz)) {
+        const dx = o.target.x - tx, dz = o.target.z - tz;
+        const dl = Math.hypot(dx, dz) || 1;
+        const ux = -dz / dl, uz = dx / dl;   // 掩体切线
+        for (const off of [1.5, -1.5, 3, -3, 4.5, -4.5]) {
+          const cnd = { x: p.x + ux * off, z: p.z + uz * off };
+          if (coverBlocksLine(cnd.x, cnd.z, tx, tz)) { p = cnd; break; }
+        }
+      }
+      return p;
+    }
+    return SquadTactics.currentTargetOf(state, cx, cz);
+  }
+
   /** 缺参降级：绝不发无法执行的命令 */
   static normalize(order: TacticalOrder): TacticalOrder {
     const o: TacticalOrder = { ...order, seq: order.seq || 1 };
@@ -224,6 +262,9 @@ export class SquadTactics {
         break;
       case 'flank':
         if (!o.path && !o.target) o.kind = 'advance';
+        break;
+      case 'garrison':
+        if (!o.target) o.kind = 'regroup';
         break;
       case 'focus':
         if (!o.target) o.kind = 'advance';
@@ -252,7 +293,7 @@ export class SquadTactics {
     let cx = 0, cz = 0, n = 0;
     for (const m of squad.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
-    const target = state ? SquadTactics.currentTargetOf(state, cx, cz) : null;
+    const target = state ? SquadTactics.resolveAnchor(state, cx, cz, squad.type, now) : null;
     // ★ 五轴「紧急度」：限速乘子（1 + urgency·0.3，上限 1.5）
     const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。

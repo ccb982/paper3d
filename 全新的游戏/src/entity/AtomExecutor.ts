@@ -52,6 +52,7 @@ const ORDER_MOD: Record<SquadOrderKind, [number, number, number, number, number]
   bound:   [ 0.05,  0.00, -0.05,  0.00,  0.00],
   focus:   [-0.05, -0.05,  0.00,  0.10,  0.05],
   regroup: [ 0.05, -0.05,  0.00,  0.00, -0.10],
+  garrison:[ 0.00, -0.10,  0.05,  0.05,  0.15],
 };
 
 /** 局部态势（每决策拍由调用方给） */

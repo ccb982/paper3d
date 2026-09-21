@@ -2836,7 +2836,7 @@ export class WorldMode implements IGameMode {
     const cur = this.ship.position;
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
-    // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；方向=扫描走廊轴，落地后恒定
+    // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；展开轴=扫描走廊（掩体朝舰船，战壕脚底下）
     this.swarm.commander.planDefense(sp.x, sp.z, 80);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
