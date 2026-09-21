@@ -13,6 +13,7 @@
 // ============================================================
 
 import type { SwarmSystem } from '../../systems/swarm/SwarmSystem';
+import { RasterMap } from '../../services/map/RasterMap';
 
 const SAMPLE_DT = 1;         // 采样周期（秒）
 const CAP_S = 720;           // 每单位/每队保留最近 N 秒（> 一天 DAY_SECONDS=900 的一半）
@@ -27,10 +28,24 @@ interface GlobalSample {
   holes: number; holeCells: number; holeMaxD: number; covers: number;
 }
 
+/** 施工事件（每秒 diff 一次；一份地块的一次挖/一块建成 → 一条） */
+export interface DigEvent { t: number; x: number; z: number; pass: number; kind: 'dig' | 'build' }
+/** 地形探针：施工块中心每拍的权威深度（RasterMap.levelDepthAt） */
+export interface TerrainProbe { x: number; z: number; base: number; cur: number }
+
 export class SwarmTrace {
   private readonly units = new Map<number, UnitRec>();
   private readonly squads = new Map<number, SquadSample[]>();
   private readonly globals: GlobalSample[] = [];
+  /** 挖/建事件时间线（diff 逐秒变化；回答"啥时候/在哪挖") */
+  private readonly events: DigEvent[] = [];
+  /** 施工块点上的地形深度探针（base=首拍，cur=每拍；证明地形真变化） */
+  readonly probes: TerrainProbe[] = [];
+  private probeWarm = false;
+  private readonly lastDig = new Map<string, number>();
+  private readonly lastBuilt = new Set<string>();
+  /** 焦点观测（施工队焦点驻守是否真的锁住） */
+  private readonly focusSamples: { t: number; items: { sid: number; fidx: number; cd: number; dMin: number; n: number }[] }[] = [];
   private accum = 1e9;
   private t = 0;
 
@@ -67,6 +82,7 @@ export class SwarmTrace {
       stage?: string; battlePosture?: string; postureP?: number;
       builtSlots?: { size: number }; buildPieces?: unknown[]; digPasses?: { size: number };
       holeTable?: { holes: readonly { cells: number; maxDepth: number }[]; covers: readonly unknown[] };
+      buildFocus?: unknown; buildCds?: unknown;
     };
     const ht = c?.holeTable;
     let holeCells = 0, holeMaxD = 0;
@@ -78,6 +94,68 @@ export class SwarmTrace {
       alive: pool.count, px: Math.round(px), pz: Math.round(pz),
       holes: ht?.holes?.length ?? -1, holeCells, holeMaxD: +holeMaxD.toFixed(2), covers: ht?.covers?.length ?? -1,
     });
+    // 〇 焦点观测（工程队每 squad）：焦点 idx、成员到焦点最近距离、队伍冷却
+    const focusView = (c?.buildFocus as unknown as Map<number, number> | undefined)
+      ?? new Map<number, number>();
+    const cds = c?.buildCds as unknown as Map<number, number> | undefined;
+    const bpAll = c?.buildPieces as unknown as readonly { x: number; z: number }[] | undefined;
+    const focusPts: { sid: number; fidx: number; cd: number; dMin: number; n: number }[] = [];
+    for (const s of swarm.squads.all()) {
+      const sid = s.id;
+      const fdx = focusView.get(sid);
+      if (fdx === undefined) continue;
+      const q = bpAll?.[fdx];
+      if (!q) continue;
+      let dMin = Infinity, n = 0;
+      for (const m of s.members.values()) {
+        n++;
+        const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
+        if (d < dMin) dMin = d;
+      }
+      focusPts.push({ sid, fidx: fdx, cd: Math.round(cds?.get(sid) ?? 0), dMin: Math.round(Math.sqrt(dMin)), n });
+    }
+    if (focusPts.length > 0) this.focusSamples.push({ t: Math.round(this.t), items: focusPts });
+    // ① 挖/建事件 diff（key = `${x},${z}`）
+    const digp = c?.digPasses as unknown as Map<string, number> | undefined;
+    for (const [key, p] of digp ?? []) {
+      const prev = this.lastDig.get(key) ?? 0;
+      if (p > prev) {
+        const [x, z] = key.split(',').map(Number);
+        this.events.push({ t: Math.round(this.t), x, z, pass: p, kind: 'dig' });
+        if (this.events.length > 500) this.events.shift();
+      }
+      this.lastDig.set(key, p);
+    }
+    const builtSet = c?.builtSlots as unknown as Set<string> | undefined;
+    for (const key of builtSet ?? []) {
+      if (!this.lastBuilt.has(key)) {
+        const [x, z] = key.split(',').map(Number);
+        this.events.push({ t: Math.round(this.t), x, z, pass: 0, kind: 'build' });
+        if (this.events.length > 500) this.events.shift();
+        this.lastBuilt.add(key);
+      }
+    }
+    // ② 地形探针：首拍初始化（取每施工块中心 + 玩家），之后每拍刷新现值
+    if (!this.probeWarm && c?.buildPieces) {
+      const bp = c.buildPieces as unknown as readonly { x: number; z: number }[];
+      const seen = new Set<string>();
+      for (const q of bp) {
+        const k = `${q.x},${q.z}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        this.probes.push({ x: q.x, z: q.z, base: -1, cur: 0 });
+        if (this.probes.length >= 96) break;
+      }
+      this.probeWarm = true;
+    }
+    const pm = RasterMap.current;
+    if (this.probes.length > 0) {
+      for (const p of this.probes) {
+        const v = pm ? pm.levelDepthAt(p.x, p.z) : 0;
+        if (p.base < 0) p.base = v;
+        p.cur = v;
+      }
+    }
   }
 
   /** 汇总表：按"冻结时长"降序（谁没动），再看路程/净位移（谁在绕圈） */
@@ -107,7 +185,11 @@ export class SwarmTrace {
     for (const [uid, rec] of this.units) units[uid] = rec;
     const squads: Record<number, SquadSample[]> = {};
     for (const [id, arr] of this.squads) squads[id] = arr;
-    return { generatedAt: new Date().toISOString(), durS: Math.round(this.t), units, squads, globals: this.globals };
+    return {
+      generatedAt: new Date().toISOString(), durS: Math.round(this.t),
+      units, squads, globals: this.globals, events: this.events, probes: this.probes,
+      focus: this.focusSamples,
+    };
   }
 
   /** 下载 JSON（浏览器控制台 `__trace.save()`） */

@@ -41,6 +41,7 @@ import {
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
+import { SquadPathFinder } from './SquadPath';
 
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
@@ -206,6 +207,11 @@ export class SwarmSystem {
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
+  /** ★ 成员任务绕墙走廊（基础寻路保证：任务目标直行撞墙 → A* 绕行，绝不原地磨蹭） */
+  private readonly taskPathFinder = new SquadPathFinder();
+  private readonly taskGoal = new Map<number, { gx: number; gz: number; blocked: boolean }>();
+  private readonly taskIdx = new Map<number, number>();
+  private readonly taskPaths = new Map<string, { x: number; z: number }[]>();
   /** 编队锚点量算复用对象（零分配） */
   private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
@@ -789,6 +795,62 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
+  /** 直行探测：目标到起点直线是否跨 4m 网格 blocked（每 2m 采样；软失败 = 走直线兜底） */
+  private taskLineBlocked(px: number, pz: number, gx: number, gz: number): boolean {
+    const dx = gx - px, dz = gz - pz;
+    const d = Math.hypot(dx, dz);
+    const n = Math.ceil(d / 2);
+    if (n < 2 || !this.commander) return false;
+    for (let k = 1; k < n; k++) {
+      const t = k / n;
+      if (this.commander.blockedAt(px + dx * t, pz + dz * t)) return true;
+    }
+    return false;
+  }
+
+  /** ★ 成员任务走廊（基础寻路保证）：直行可达 → null（快速直线）；
+   *  直行撞墙 → A* 求走廊 waypoint 并沿线滚动；求解失败 → null（回落直线，steer 兜底，绝不停摆）。
+   *  走廊按目标格缓存（同块多成员复用一次求解）。 */
+  private memberTaskWaypoint(i: number, gx: number, gz: number, px: number, pz: number): { x: number; z: number } | null {
+    const uid = this.pool.swarmUid[i];
+    let g = this.taskGoal.get(uid);
+    if (!g || Math.hypot(g.gx - gx, g.gz - gz) > 6) {
+      const blocked = this.taskLineBlocked(px, pz, gx, gz);
+      g = { gx, gz, blocked };
+      this.taskGoal.set(uid, g);
+      if (!blocked) this.taskPaths.delete(this.taskPathKey(gx, gz));
+    }
+    if (!g.blocked) return null;
+    const key = this.taskPathKey(gx, gz);
+    let path = this.taskPaths.get(key);
+    if (!path) {
+      if (this.taskPaths.size > 96) this.taskPaths.clear();
+      const attempt: { x: number; z: number }[] = [];
+      const raster = RasterMap.current;
+      const ok = raster && this.taskPathFinder.find(raster, px, pz, gx, gz, attempt);
+      if (!ok) return null;   // 求解失败 → 直行（steer 危险探测兜底）
+      path = attempt;
+      this.taskPaths.set(key, path);
+    }
+    let idx = this.taskIdx.get(uid) ?? 0;
+    while (idx + 1 < path.length) {
+      const w = path[idx + 1];
+      if ((w.x - px) ** 2 + (w.z - pz) ** 2 > 2.4 * 2.4) break;
+      idx++;
+    }
+    if (idx >= path.length) { this.taskIdx.delete(uid); this.taskGoalsNear(); return null; }
+    this.taskIdx.set(uid, idx);
+    return path[idx];
+  }
+
+  private taskPathKey(gx: number, gz: number): string {
+    return `${Math.round(gx)},${Math.round(gz)}`;
+  }
+
+  private taskGoalsNear(): void {
+    if (this.taskGoal.size > 512) this.taskGoal.clear();
+  }
+
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
   private move(i: number, dt: number): void {
     const p = this.pool;
@@ -802,7 +864,15 @@ export class SwarmSystem {
     if (hasTask) {
       const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
       const td = Math.hypot(tx, tz);
-      if (td > 1.2) { dx = tx / td; dz = tz / td; } else { dx = 0; dz = 0; }
+      if (td > 1.2) {
+        // ★ 基础寻路保证：任务直行遇墙 → 沿 A* 走廊绕行（不再被 steer-escape 原地抵消）
+        const wp = this.memberTaskWaypoint(i, p.taskX[i], p.taskZ[i], p.x[i], p.z[i]);
+        if (wp) {
+          dx = wp.x - p.x[i]; dz = wp.z - p.z[i];
+          const wd = Math.hypot(dx, dz);
+          if (wd > 0.5) { dx /= wd; dz /= wd; } else { dx = 0; dz = 0; }
+        } else { dx = tx / td; dz = tz / td; }
+      } else { dx = 0; dz = 0; }
     } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
       let tx = p.directiveTargetX[i] - p.x[i];

@@ -124,8 +124,11 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     if (n > 0) { cx /= n; cz /= n; }
     const p = UNIT_TACTICS[s.type];
     const alert = ctx.alert.has(s.id);
+    const nearSite = ctx.buildSite
+      && Math.hypot(ctx.playerX - ctx.buildSite.x, ctx.playerZ - ctx.buildSite.z) <= 25;
     const close = n > 0 && Math.hypot(ctx.playerX - cx, ctx.playerZ - cz) <= p.engageDist;
-    if (ctx.buildSite && (alert || close)) {
+    // ★ 工程队不因玩家停工：玩家踩到工地 → 守备队**申请支援**（上来打，工兵照挖）
+    if (ctx.buildSite && (alert || close || nearSite)) {
       _out.kind = 'advance';
       _out.target = { x: ctx.playerX, z: ctx.playerZ };
       _out.ttl = 4;
