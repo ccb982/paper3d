@@ -110,7 +110,7 @@ let sentinelAsset: Asset | FtxAsset | null = null;
 const plantAssets: Record<string, FtxAsset> = {};
 /** ★ 测试地图开关（boot 从 URL 参数解析；enterWorldMode 消费） */
 let testChunk = false;
-/** ★ P0 蜂群压测：?enemies=N 开局铺 N 只代理（0 = 关；《蜂群架构.md》§8-P0） */
+/** ★ P0 蜂群压测：?enemies=N 开局铺 N 只代理（0 = 关；《敌人管线设计.md》） */
 let enemyStress = 0;
 
 

@@ -526,7 +526,7 @@ export class WorldSpawner implements SwarmTierPort {
     return this.deps.mobDefs[this.deps.mobDefs.length - 1];
   }
 
-  /** ★ 远距实体降格（《蜂群架构.md》§5.5）：实体超出 DEMOTE_RADIUS →
+  /** ★ 远距实体降格（《敌人管线设计.md》§6）：实体超出 DEMOTE_RADIUS →
    *  数据快照回代理池 + 销毁实体（远层继续用廉价代理维护，不再硬销毁）。
    *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。 */
   demoteFarEnemies(px: number, pz: number): void {
@@ -804,7 +804,7 @@ export class WorldSpawner implements SwarmTierPort {
   }
 
 
-  /** ★ 生成一"窝"杂兵（《蜂群架构.md》P1：全部先入蜂群代理池，近处自动升格为实体）。
+  /** ★ 生成一"窝"杂兵（《敌人管线设计.md》：全部先入蜂群代理池，近处自动升格为实体）。
    *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。
    *   ★ 当日兵力计划（引擎账本 total）在此消耗；额度满 → spawn 返回 -1，本窝停止。
    *   ★ 小 Boss / 精英（singleton / elite）与杂兵同路（正常入账）。 */

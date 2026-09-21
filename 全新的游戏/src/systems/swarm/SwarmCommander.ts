@@ -31,7 +31,7 @@ import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 const _c0 = { x: 0, z: 0 };
 const _c1 = { x: 0, z: 0 };
 
-/** ★ 引擎侧信息面（《蜂群架构.md》§16.6）：战术决策的输入 */
+/** ★ 引擎侧信息面（《敌人管线设计.md》§3.5）：战术决策的输入 */
 export interface BattalionView {
   squads: SquadRating[];
   playerX: number;

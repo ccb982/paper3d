@@ -25,7 +25,7 @@ export type DeployMode =
   | 'regroup'    // 后方集结（后勤等）
   | 'build';     // 施工（施工兵种）
 
-/** 引擎侧战术部署（逐兵种覆盖；《蜂群架构.md》§13） */
+/** 引擎侧战术部署（逐兵种覆盖；《敌人管线设计.md》§3.2） */
 export interface EngineTactics {
   /** 部署模式（缺省 = 按小队属性） */
   mode?: DeployMode;
@@ -41,7 +41,7 @@ export interface EngineTactics {
   screenDist?: number;
 }
 
-/** 队内战术（逐兵种覆盖；《蜂群架构.md》§14） */
+/** 队内战术（逐兵种覆盖；《敌人管线设计.md》§3.3） */
 export interface UnitTactics {
   /** 低血（≤30%）行为：fallback=撤出（通用）/ fight=继续战斗 */
   lowHp?: 'fallback' | 'fight';

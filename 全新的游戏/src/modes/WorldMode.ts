@@ -225,7 +225,7 @@ export class WorldMode implements IGameMode {
   /** ★ 地图上所有杂兵（按 chunk 波次生成，逐个独立 AI） */
   enemies: EnemyBase[] = [];
 
-  /** ★ 蜂群系统（《蜂群架构.md》P1）：远层代理 + 升/降格 + 批量渲染 */
+  /** ★ 蜂群系统（《敌人管线设计.md》）：远层代理 + 升/降格 + 批量渲染 */
   private swarm = new SwarmSystem();
   /** 蜂群每帧回调（复用对象，避免每帧分配） */
   private swarmHooks: SwarmHooks = {
@@ -741,7 +741,7 @@ export class WorldMode implements IGameMode {
     for (const [key, asset] of Object.entries(ctx.plantAssets ?? {})) {
       setPropAtlas(key, asset);
     }
-    // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《蜂群架构.md》§5.7）
+    // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《敌人管线设计.md》§6）
     //   ★ 必须传接地补偿：L2 代理与 L3 实体口径不同会让"远看接地、近看悬空"
     this.swarm.buildBatch(
       this.scene!,
@@ -1387,7 +1387,7 @@ export class WorldMode implements IGameMode {
     // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
     if (this.phase === 'explore') {
       aiSystem.updateAll(dt, this.aiCtx);
-      // ---- ★ 蜂群（《蜂群架构.md》P1）：远层代理升/降格 + 降频决策/移动 ----
+      // ---- ★ 蜂群（《敌人管线设计.md》）：远层代理升/降格 + 降频决策/移动 ----
       const camF = this.cameraCtrl.getFrame().forward;
       const hooks = this.swarmHooks;
       hooks.playerX = pp.x; hooks.playerZ = pp.y;

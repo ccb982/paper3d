@@ -15,7 +15,7 @@ import { type SquadType, squadTypeOf } from '../../entity/SwarmUnit';
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type SquadType, squadTypeOf };
 
-/** 小队容量上限（同质编队 4~12；《蜂群架构.md》§16.1） */
+/** 小队容量上限（同质编队 4~12；《敌人管线设计.md》§3.1） */
 export const SQUAD_MAX = 12;
 /** 就近并入半径（米）：同质小队质心超出此距离 → 新建 */
 export const SQUAD_JOIN_R = 30;
@@ -65,7 +65,7 @@ export interface LeaderChange {
   isLeader: boolean;
 }
 
-/** 小队状态评级（引擎侧信息面；《蜂群架构.md》§16.6 BattalionView） */
+/** 小队状态评级（引擎侧信息面；《敌人管线设计.md》§3.5 BattalionView） */
 export interface SquadRating {
   squadId: number;
   battalionId: number;
