@@ -63,7 +63,10 @@ export function engineMissionFor(
   type: SquadType,
   opts: { isBuilder: boolean; stage: string; posture: string },
 ): Mission {
-  if (opts.isBuilder && opts.stage === 'S1') return 'build';           // 施工（独有）
+  if (opts.isBuilder) {
+    if (opts.stage === 'S1') return 'build';   // 施工（独有）：掩体+战壕；总攻期战壕已作废 → 只剩掩体
+    return 'guard';                            // S2：护栏（总攻时 buildSite=最近远程小队 → 掩护射手）
+  }
   if (opts.stage === 'S1' && canTake(type, 'guard')) return 'guard';   // 施工期：近战护卫
   if (opts.posture === 'assault') {
     if (canTake(type, 'assault')) return 'assault';

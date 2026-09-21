@@ -41,89 +41,10 @@ import {
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
-import { SquadPathFinder } from './SquadPath';
+import { MemberTaskNav } from './MemberTaskNav';
+import { SWARM, AUTONOMY } from './SwarmConfig';
 
-/** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
-export const SWARM = {
-  /** L3 实体层：升格半径 / 实体上限 */
-  L3_RADIUS: 45,
-  L3_CAP: 36,
-  /** L2 代理层半径（L3~L2 = 代理半频） */
-  L2_RADIUS: 120,
-  /** L1 远群半径（超出即回收） */
-  L1_RADIUS: 190,
-  /** 降格半径（实体 > 此距离 → 回代理） */
-  DEMOTE_RADIUS: 55,
-  /** 升格预算（每帧最多几只；防一圈同时升级的尖刺） */
-  PROMOTE_PER_FRAME: 2,
-  /** 决策频率（Hz）：索引 = tier（1/2） */
-  THINK_HZ: [0, 2, 5],
-  /** 移动积分频率（Hz）：索引 = tier（1/2） */
-  MOVE_HZ: [0, 10, 20],
-  /** ★ E4a：L3 实体编队 steer 下发频率（Hz；《实体架构.md》§9.4） */
-  STEER_HZ: 10,
-  /** 近战额外射程余量（米；进入即停下挥击） */
-  MELEE_PAD: 0.4,
-  /** 攻击冷却区间（秒） */
-  ATTACK_CD_MIN: 0.8,
-  ATTACK_CD_SPAN: 0.4,
-  /** 危险地形（坑）前瞻距离（米；仅非流场方向使用） */
-  HAZARD_PROBE: 1.8,
-  /** ★ 2026-09-14 敌群地形限制：深水判定（水深 > 此值视为不可涉水） */
-  DEEP_WATER: 0.8,
-  /** ★ 高台立面陡升阈值（米；配合"不延续"判定区分墙与插值坡） */
-  MOVE_STEP_MAX: 0.6,
-
-  // ---- P2：流场 / 攻击槽 / 警戒场 ----
-  /** 流场重建频率（Hz） */
-  FLOW_HZ: 3,
-  /** 流场前瞻距离（米；用方向取前瞻点，保证收敛） */
-  FLOW_LOOKAHEAD: 8,
-  /** 攻击槽：环上扇区数 / 环半径 */
-  SLOT_ANGLES: 10,
-  SLOT_RADIUS: 1.7,
-  /** 距目标多近开始占槽（米） */
-  SLOT_COMMIT: 25,
-  /** 同一目标同时挥击上限（攻击令牌数） */
-  ATTACK_TOKENS: 3,
-  /** 令牌/挥击保持窗口（秒） */
-  ATTACK_HOLD: 0.3,
-  /** P4 士气：低血撤退阈值 / 撤退时长区间 / 撤退冷却 / 狂暴速度倍率与时长 */
-  RETREAT_HP_RATIO: 0.3,
-  RETREAT_TIME_MIN: 2,
-  RETREAT_TIME_SPAN: 2,
-  RETREAT_COOLDOWN: 8,
-  RAGE_SPEED: 1.25,
-  RAGE_SECONDS: 5,
-  RAGE_RADIUS: 12,
-  /** ★ 无命令自主交战保底半径（米；《实体架构.md》§5.12） */
-  AUTONOMY_ENGAGE_R: 16,
-  /** 警戒场：持续时间 / 反应延迟区间 / 察觉时刷出的半径 / 挥击时刷出的半径 */
-  ALERT_SECONDS: 6,
-  ALERT_DELAY_MIN: 0.2,
-  ALERT_DELAY_SPAN: 1.3,
-  ALERT_PAINT_RADIUS: 12,
-  ALERT_PAINT_RADIUS_ATTACK: 10,
-} as const;
-
-/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《实体架构.md》§5.10；集中可调） */
-export const AUTONOMY = {
-  /** 单位被击免降格窗口（秒） */
-  UNIT_HOLD_S: 6,
-  /** 小队警觉窗口（秒；任一成员被击 → 全队） */
-  SQUAD_ALERT_S: 8,
-  /** 大队警觉统计窗口（秒） */
-  BATTALION_WINDOW_S: 12,
-  /** 触发倾盆而出所需“不同小队被击”数 */
-  COUNTER_SQUADS: 3,
-  /** 倾盆而出持续（秒） */
-  COUNTER_S: 20,
-  /** 倾盆而出全图警戒半径（米） */
-  COUNTER_ALERT_R: 220,
-  /** 倾盆而出动态算力：L3 上限 / 每帧升格 加成 */
-  L3_CAP_BOOST: 15,
-  PROMOTE_BOOST: 4,
-} as const;
+export { SWARM, AUTONOMY } from './SwarmConfig';
 
 export interface SwarmHooks {
   /** 玩家位置（分层基准 / 索敌） */
@@ -208,10 +129,7 @@ export class SwarmSystem {
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
   /** ★ 成员任务绕墙走廊（基础寻路保证：任务目标直行撞墙 → A* 绕行，绝不原地磨蹭） */
-  private readonly taskPathFinder = new SquadPathFinder();
-  private readonly taskGoal = new Map<number, { gx: number; gz: number; blocked: boolean }>();
-  private readonly taskIdx = new Map<number, number>();
-  private readonly taskPaths = new Map<string, { x: number; z: number }[]>();
+  private readonly taskNav = new MemberTaskNav((x, z) => this.commander.blockedAt(x, z));
   /** 编队锚点量算复用对象（零分配） */
   private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
@@ -795,62 +713,6 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
-  /** 直行探测：目标到起点直线是否跨 4m 网格 blocked（每 2m 采样；软失败 = 走直线兜底） */
-  private taskLineBlocked(px: number, pz: number, gx: number, gz: number): boolean {
-    const dx = gx - px, dz = gz - pz;
-    const d = Math.hypot(dx, dz);
-    const n = Math.ceil(d / 2);
-    if (n < 2 || !this.commander) return false;
-    for (let k = 1; k < n; k++) {
-      const t = k / n;
-      if (this.commander.blockedAt(px + dx * t, pz + dz * t)) return true;
-    }
-    return false;
-  }
-
-  /** ★ 成员任务走廊（基础寻路保证）：直行可达 → null（快速直线）；
-   *  直行撞墙 → A* 求走廊 waypoint 并沿线滚动；求解失败 → null（回落直线，steer 兜底，绝不停摆）。
-   *  走廊按目标格缓存（同块多成员复用一次求解）。 */
-  private memberTaskWaypoint(i: number, gx: number, gz: number, px: number, pz: number): { x: number; z: number } | null {
-    const uid = this.pool.swarmUid[i];
-    let g = this.taskGoal.get(uid);
-    if (!g || Math.hypot(g.gx - gx, g.gz - gz) > 6) {
-      const blocked = this.taskLineBlocked(px, pz, gx, gz);
-      g = { gx, gz, blocked };
-      this.taskGoal.set(uid, g);
-      if (!blocked) this.taskPaths.delete(this.taskPathKey(gx, gz));
-    }
-    if (!g.blocked) return null;
-    const key = this.taskPathKey(gx, gz);
-    let path = this.taskPaths.get(key);
-    if (!path) {
-      if (this.taskPaths.size > 96) this.taskPaths.clear();
-      const attempt: { x: number; z: number }[] = [];
-      const raster = RasterMap.current;
-      const ok = raster && this.taskPathFinder.find(raster, px, pz, gx, gz, attempt);
-      if (!ok) return null;   // 求解失败 → 直行（steer 危险探测兜底）
-      path = attempt;
-      this.taskPaths.set(key, path);
-    }
-    let idx = this.taskIdx.get(uid) ?? 0;
-    while (idx + 1 < path.length) {
-      const w = path[idx + 1];
-      if ((w.x - px) ** 2 + (w.z - pz) ** 2 > 2.4 * 2.4) break;
-      idx++;
-    }
-    if (idx >= path.length) { this.taskIdx.delete(uid); this.taskGoalsNear(); return null; }
-    this.taskIdx.set(uid, idx);
-    return path[idx];
-  }
-
-  private taskPathKey(gx: number, gz: number): string {
-    return `${Math.round(gx)},${Math.round(gz)}`;
-  }
-
-  private taskGoalsNear(): void {
-    if (this.taskGoal.size > 512) this.taskGoal.clear();
-  }
-
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
   private move(i: number, dt: number): void {
     const p = this.pool;
@@ -866,7 +728,7 @@ export class SwarmSystem {
       const td = Math.hypot(tx, tz);
       if (td > 1.2) {
         // ★ 基础寻路保证：任务直行遇墙 → 沿 A* 走廊绕行（不再被 steer-escape 原地抵消）
-        const wp = this.memberTaskWaypoint(i, p.taskX[i], p.taskZ[i], p.x[i], p.z[i]);
+        const wp = this.taskNav.waypoint(p.swarmUid[i], p.taskX[i], p.taskZ[i], p.x[i], p.z[i]);
         if (wp) {
           dx = wp.x - p.x[i]; dz = wp.z - p.z[i];
           const wd = Math.hypot(dx, dz);

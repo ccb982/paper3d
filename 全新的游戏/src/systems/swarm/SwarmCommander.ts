@@ -22,6 +22,8 @@ import { HoleMask } from './HoleMask';
 import { HoleTable } from './HoleTable';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
+import { EngineerCorps, type BuildPiece } from './EngineerCorps';
+import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor } from './UnitTactics';
 import { guardPoint, UNIT_TACTICS } from './UnitTactics';
 import { setSteerTable } from '../../entity/SteerPick';
@@ -124,31 +126,26 @@ export class SwarmCommander {
   private static readonly SPAWN_INTERVAL = 1.5;
   private static readonly BATTALION_SIZE = 30;
   private static readonly BATTALION_MAX = 4;
-  /** ★ 战术阶段（S0 勘察 → S1 工程 → S2 防线就绪） */
-  stage: 'S0' | 'S1' | 'S2' = 'S0';
-  /** ★ 待建工事块（逐步拼装：掩体每块 4m，战壕每块 4m；外环 → 内环） */
-  private buildPieces: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 }[] = [];
-  private readonly builtSlots = new Set<string>();
-  private readonly digPasses = new Map<string, number>();   // 战壕多遍加深计数（逐级缩小约束）
-  /** 战壕挖满遍数 = 目标深度（每遍 ≈0.2m → 5 遍 ≈1.0m，等齐水坑蹲伏深度） */
-  private static readonly TRENCH_PASSES = 5;
-  /** 施工焦点（队伍↔buildPieces 下标）：认准一块连续挖满 3 遍再换 → 战壕肉眼可见 */
-  private readonly buildFocus = new Map<number, number>();
-  /** 防线朝向状态（refaceDefense 用）：当前是否险高威胁、期望的玩家方向单位向量、二次采样间隔 */
-  private faceDanger = false; private faceX = 0; private faceZ = 0;
-  private refaceAccum = 0;
-  private lastPlayerX = 0; private lastPlayerZ = 0;
-  private engAccum = 0;
-  private buildCd = 0;
-  /** ★ 各工程队自己的施工冷却（squadId → 剩余秒；并行施工用） */
-  private readonly buildCds = new Map<number, number>();
+  /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
+  readonly corps: EngineerCorps;
+  /** ★ 成员级任务（taskX/Z）唯一入口（施工分块 / 护卫扇区） */
+  readonly memberTasks: MemberTaskBoard;
+  /** 工兵链状态别名（真源在 corps；外部观测与内部直读都走这里） */
+  get stage(): 'S0' | 'S1' | 'S2' { return this.corps.stage; }
+  set stage(v: 'S0' | 'S1' | 'S2') { this.corps.stage = v; }
+  get buildPieces(): readonly BuildPiece[] { return this.corps.pieces; }
+  get builtSlots(): Set<string> { return this.corps.built; }
+  get digPasses(): Map<string, number> { return this.corps.passes; }
+  private get buildFocus(): Map<number, number> { return this.corps.focus; }
+  private get buildAssign(): Map<number, number> { return this.corps.assign; }
+  private get buildCds(): Map<number, number> { return this.corps.cds; }
+  private get engAccum(): number { return this.corps.accum; }
+  private set engAccum(v: number) { this.corps.accum = v; }
   private resendAccum = 0;
   private static readonly RESEND_S = 10;
 
   /** ★ 部署选点（Decide.ts）：状态计数 + 上下文复用对象（每拍赋值，零分配） */
   private readonly decideSt: DecideState = { coverIdx: 0, assaultIdx: 0, screenIdx: 0, flyerIdx: 0 };
-  /** ★ 工程队稳定分派（squadId → buildPieces 下标；防止每拍重挑 → 来回跑） */
-  private readonly buildAssign = new Map<number, number>();
   /** ★ 驻守位锁定 / 驻守滞回（Decide 消费；防"来回走"） */
   private readonly holdPos = new Map<number, { x: number; z: number }>();
   private readonly protectState = new Map<number, boolean>();
@@ -165,7 +162,15 @@ export class SwarmCommander {
     highPick: null, covers: [],
   };
 
-  constructor(private readonly swarm: SwarmSystem) {}
+  constructor(private readonly swarm: SwarmSystem) {
+    this.memberTasks = new MemberTaskBoard(swarm.pool);
+    this.corps = new EngineerCorps({
+      blockedAt: (x, z) => this.blockedAt(x, z),
+      markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
+      cover: () => this.buildCover,
+      dig: () => this.digTrench,
+    }, this.memberTasks);
+  }
 
   /** ★ 大队任务（路径 + 目标；`subTargets` 按 squadId 分派到各队） */
   setMission(order: TacticalOrder | null): void {
@@ -184,97 +189,13 @@ export class SwarmCommander {
     this.swarm.tactics.board.emitSignal(id);
   }
 
-  /** ★ 由 DefensePlan 重生成施工目标表（planDefense 首次落地 / refaceDefense 绕锚点重摆共用）：
-   *   外环 → 中环 → 内环；每环：**掩体先行**（每掩位 3 块沿切线 ±4m）→ **战壕直线横切跟进**
-   *   → **战壕前方 5m 放一排前线掩体**（朝威胁侧顶住火力）。 */
-  private regenerateBuildPieces(plan: DefensePlan): void {
-    const ringOrder: (0 | 1 | 2)[] = [2, 1, 0];
-    this.buildPieces = [];
-    this.buildFocus.clear();
-    const ax = plan.approachX, az = plan.approachZ;
-    const tx = -az, tz = ax;   // 切线方向
-    // ★ 工程兵优先在**有利位置**（扫描产物评分）施工：同环内按 post 分排序
-    const postScore = new Map<string, number>();
-    for (const p of plan.posts) postScore.set(`${p.x.toFixed(1)},${p.z.toFixed(1)}`, p.score);
-    const scoreOf = (x: number, z: number): number => postScore.get(`${x.toFixed(1)},${z.toFixed(1)}`) ?? 0;
-    const raster = RasterMap.current;
-    for (const r of ringOrder) {
-      const slots = plan.coverSlots.filter((s) => s.ring === r)
-        .sort((a, b) => scoreOf(b.x, b.z) - scoreOf(a.x, a.z));
-      for (const slot of slots) {
-        for (const off of [-4, 0, 4]) {
-          this.buildPieces.push({ kind: 'cover', x: slot.x + tx * off, z: slot.z + tz * off, ring: r });
-        }
-      }
-      const line = plan.trenchLines[r] ?? [];
-      for (const p of line) {
-        this.buildPieces.push({ kind: 'trench', x: p.x, z: p.z, ring: r });
-        // ★ 战壕前方 5m → 一线掩体（前线抵挡；与战壕同排推进）
-        const fx = p.x + ax * 5, fz = p.z + az * 5;
-        if (raster) {
-          const role = raster.tileDefAt(fx, fz).genRole;
-          if (role === 'pit' || role === 'liquid') continue;
-          if (raster.surfaceHeightAt(fx, fz) < -1.2) continue;
-        }
-        this.buildPieces.push({ kind: 'cover', x: fx, z: fz, ring: r });
-      }
-    }
-    // ★ 兜底：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
-    if (this.buildPieces.length === 0) {
-      const a0 = Math.atan2(az, ax);
-      for (const r of [2, 1, 0] as const) {
-        for (const k of [-2, 0, 2]) {
-          const a = a0 + k * 0.35;
-          const x = plan.cx + Math.cos(a) * [40, 60, 80][r];
-          const z = plan.cz + Math.sin(a) * [40, 60, 80][r];
-          const role = raster?.tileDefAt(x, z).genRole;
-          if (role === 'pit' || role === 'liquid') continue;
-          if (raster && raster.surfaceHeightAt(x, z) < -1.2) continue;
-          this.buildPieces.push({ kind: 'cover', x, z, ring: r });
-        }
-      }
-    }
-  }
-
-  /** ★ 威胁判定：进入 mass/assault 总攻或挑衅度量 ≥0.6 → 危险（防线转向玩家） */
-  private isDangerous(): boolean {
-    return this.battlePosture === 'mass' || this.battlePosture === 'assault' || this.postureP >= 0.6;
-  }
-
-  /** ★ 期望防线朝向（低威胁 → 扫描走廊[舰船来向]；高威胁且玩家在 10~160m → 玩家方向） */
-  private refaceDefense(): void {
-    const plan = this.plan;
-    if (!plan) return;
-    const raster = RasterMap.current;
-    if (!raster) return;
-    const dx = this.lastPlayerX - plan.cx, dz = this.lastPlayerZ - plan.cz;
-    const d = Math.hypot(dx, dz);
-    const danger = this.isDangerous();
-    const want = danger && d > 10 && d < 160;
-    const px = want ? dx / d : 0, pz = want ? dz / d : 0;
-    const same = this.faceDanger === danger
-      && Math.hypot(this.faceX - px, this.faceZ - pz) < 0.4;
-    if (same) return;
-    this.faceDanger = danger; this.faceX = px; this.faceZ = pz;
-    // ★ 绕锚点重排：换朝向重算布点，只动施工目标表，不碰日程/兵力/账本
-    this.plan = want
-      ? analyzeLandingTerrain(raster, plan.cx, plan.cz, 80, px, pz)
-      : analyzeLandingTerrain(raster, plan.cx, plan.cz, 80);
-    this.regenerateBuildPieces(this.plan);
-    this.builtSlots.clear(); this.digPasses.clear();
-    this.buildFocus.clear(); this.buildAssign.clear();
-    this.stage = 'S1';
-    this.scoreStamp++;   // 评分表触发戳（换朝向重算）
-  }
-
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
-   *  @param playerX,playerZ 玩家位置：**参与战术轴**（玩家从哪边来，防线朝哪边摆） */
-  planDefense(cx: number, cz: number, radius = 80, playerX?: number, playerZ?: number): DefensePlan | null {
+   *  方向 = 扫描走廊轴（舰船来向），**落地后恒定**；不读玩家位置、不随危机度重排。 */
+  planDefense(cx: number, cz: number, radius = 80): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
-    // ★ 战术轴：**低威胁默认舰船来向**（扫描出的攻击走廊）；高威胁 → refaceDefense 绕锚点重摆朝向玩家
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
-    this.regenerateBuildPieces(this.plan);
+    this.corps.regenerate(this.plan);
     this.builtSlots.clear(); this.digPasses.clear();
     this.progress.clear();      // ★ 换落点：战役级闭环状态复位
     this.supportCd.clear();
@@ -301,7 +222,7 @@ export class SwarmCommander {
     this.protectState.clear();
     this.postAssign.clear();
     this.missionAssign.clear();
-    this.taskedSquads.clear();
+    this.memberTasks.clearAll();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
@@ -516,6 +437,8 @@ export class SwarmCommander {
       // 进总攻：记撤退判定基准；离开总攻：清基准（aliveRatio 回到 1）
       this.aliveAtPosture = next === 'assault' ? this.swarm.ledger.alive : 0;
       this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
+      // ★ 总攻：工兵停挖战壕（剩余战壕件作废）；掩体继续、转掩护射手
+      if (next === 'assault') this.corps.abandonTrenches();
     }
     // ★ 地块评分表重建（换落点/态势变化才全量重算；掩体/挖掘走局部重算）
     if (this.plan) {
@@ -655,22 +578,6 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 成员级任务：写/清（写 taskX/Z 列；uid → 池下标扫描） */
-  private writeTask(uid: number, x: number, z: number): void {
-    const pool = this.swarm.pool;
-    for (let i = 0; i < pool.count; i++) {
-      if (pool.swarmUid[i] !== uid) continue;
-      pool.taskX[i] = x; pool.taskZ[i] = z;
-      return;
-    }
-  }
-
-  private clearMemberTasks(s: { id: number; members: Map<number, { x: number; z: number }> }): void {
-    if (!this.taskedSquads.has(s.id)) return;
-    for (const uid of s.members.keys()) this.writeTask(uid, 0, 0);
-    this.taskedSquads.delete(s.id);
-  }
-
   /** ★ 护卫扇区（成员级）：沿"工地→威胁"垂线分散站位（每人 4m 间隔） */
   private spreadGuards(
     s: { id: number; type: string; members: Map<number, { x: number; z: number }> },
@@ -687,157 +594,29 @@ export class SwarmCommander {
     for (const uid of s.members.keys()) {
       const off = (k - (n - 1) / 2) * 4;
       k++;
-      this.writeTask(uid, gx + tx * off, gz + tz * off);
+      this.memberTasks.write(uid, gx + tx * off, gz + tz * off);
     }
-    this.taskedSquads.add(s.id);
+    this.memberTasks.own(s.id);
   }
 
-  /** ★ 成员级分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标 */
-  private spreadBuilders(s: { id: number; members: Map<number, { x: number; z: number }> }, cx: number, cz: number): void {
-    // ★ 战壕工组：已派块是**未建战壕** → 全员按静态环列围住挖到成（不散开抢掩体 → 战壕必成型）
-    const aidx = this.buildAssign.get(s.id);
-    if (aidx !== undefined && aidx >= 0 && aidx < this.buildPieces.length) {
-      const aq = this.buildPieces[aidx];
-      if (aq.kind === 'trench' && !this.builtSlots.has(`${aq.x},${aq.z}`)) {
-        let k0 = 0;
-        for (const uid of s.members.keys()) {
-          const a = (k0++ / s.members.size) * Math.PI * 2;
-          this.writeTask(uid, aq.x + Math.cos(a), aq.z + Math.sin(a));
-        }
-        this.taskedSquads.add(s.id);
-        return;
-      }
+  /** ★ 总攻护栏锚：离正面最近的远程小队质心（工兵/护卫以此为"工地"→ 给射手打掩护） */
+  private rangedAnchor(
+    squads: readonly { type: string; members: Map<number, { x: number; z: number }> }[],
+    front: { x: number; z: number },
+  ): { x: number; z: number } | null {
+    let bx = 0, bz = 0, bd = Infinity, found = false;
+    for (const s of squads) {
+      if (s.type !== 'ranged') continue;
+      let cx = 0, cz = 0, n = 0;
+      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+      if (n === 0) continue;
+      cx /= n; cz /= n;
+      const d = (cx - front.x) ** 2 + (cz - front.z) ** 2;
+      if (d < bd) { bd = d; bx = cx; bz = cz; found = true; }
     }
-    // ★ 焦点驻守：本队正在建的块 → 全员按**静态环列**围到焦点块（无随机抖动）→ 到点站定等挖
-    const fidx = this.buildFocus.get(s.id);
-    if (fidx !== undefined && fidx >= 0 && fidx < this.buildPieces.length
-      && !this.builtSlots.has(`${this.buildPieces[fidx].x},${this.buildPieces[fidx].z}`)) {
-      const q = this.buildPieces[fidx];
-      let i = 0;
-      for (const uid of s.members.keys()) {
-        const a = (i++ / s.members.size) * Math.PI * 2;
-        this.writeTask(uid, q.x + Math.cos(a), q.z + Math.sin(a));
-      }
-      this.taskedSquads.add(s.id);
-      return;
-    }
-    let near: number[] = [];
-    let nearest = -1, nearestD = Infinity;
-    for (let i = 0; i < this.buildPieces.length; i++) {
-      const q = this.buildPieces[i];
-      if (this.builtSlots.has(`${q.x},${q.z}`)) continue;
-      const d2 = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d2 > 90 * 90) continue;
-      if (this.lineBlocked(cx, cz, q.x, q.z)) continue;   // ★ 直行遇墙 → 跳过（会原地磨蹭）
-      if (d2 < nearestD) { nearestD = d2; nearest = i; }
-      if (d2 <= 40 * 40 && near.length < 3) near.push(i);
-    }
-    // ★ 40m 内无可达块 → 取**直线可达**的全局最近块（防止把目标派到墙对面）
-    if (near.length === 0 && nearest >= 0) near = [nearest];
-    if (near.length === 0) {
-      // ★ 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
-      const idx = this.buildAssign.get(s.id);
-      if (idx === undefined || idx < 0 || idx >= this.buildPieces.length) return;
-      if (this.builtSlots.has(`${this.buildPieces[idx].x},${this.buildPieces[idx].z}`)) return;
-      const q = this.buildPieces[idx];
-      for (const uid of s.members.keys()) this.writeTask(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
-      this.taskedSquads.add(s.id);
-      return;
-    }
-    // ★ 成员分块：目标仍为有效可达块就**不重写**（到点静立 → 修全天转圈）
-    const claimed = new Set<number>();
-    for (const uid of s.members.keys()) {
-      const cur = this.currentTask(uid);
-      if (cur && this.keepsTask(cur.x, cur.z, near)) continue;
-      let bi = -1, bD = Infinity;
-      for (let k2 = 0; k2 < near.length; k2++) {
-        const qi = near[k2];
-        if (claimed.has(qi)) continue;
-        const q = this.buildPieces[qi];
-        const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-        if (d < bD) { bD = d; bi = qi; }
-      }
-      if (bi < 0) bi = near[0];
-      claimed.add(bi);
-      const q = this.buildPieces[bi];
-      this.writeTask(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
-    }
-    this.taskedSquads.add(s.id);
+    return found ? { x: bx, z: bz } : null;
   }
 
-  /** 读成员当前任务目标（池列；无 → null） */
-  private currentTask(uid: number): { x: number; z: number } | null {
-    const pool = this.swarm.pool;
-    for (let i = 0; i < pool.count; i++) {
-      if (pool.swarmUid[i] !== uid) continue;
-      const x = pool.taskX[i], z = pool.taskZ[i];
-      return x !== 0 || z !== 0 ? { x, z } : null;
-    }
-    return null;
-  }
-
-  /** 当前任务仍是"候选可达未建块" → 保持（**到达也不重写**，建完才换下块 → 杜绝转圈） */
-  private keepsTask(tx: number, tz: number, near: number[]): boolean {
-    for (const qi of near) {
-      const q = this.buildPieces[qi];
-      if (Math.hypot(q.x - tx, q.z - tz) <= 0.6) return true;
-    }
-    return false;
-  }
-
-  /** ★ 直行可达性：从 (x0,z0) 直线到工件是否跨 `blockedAt` 硬墙（每 1.5m 一采样）。
-   *  任务目标是直线行走的；中途碰墙会被 steer-escape 抵消 → 原地磨蹭。
-   *  不可达工件事先排除，工程队同侧分区作业，战壕肉眼可见。 */
-  private lineBlocked(x0: number, z0: number, x1: number, z1: number): boolean {
-    const dx = x1 - x0, dz = z1 - z0;
-    const d = Math.hypot(dx, dz);
-    const n = Math.ceil(d / 1.5);
-    if (n < 2) return false;
-    const ts = this.terrainScore;
-    for (let k = 1; k < n; k++) {
-      const t = k / n;
-      if (ts.blockedAt(x0 + dx * t, z0 + dz * t)) return true;
-    }
-    return false;
-  }
-
-  /** ★ 工程队分派：保持已派未建块；否则**在自己环带内**挑最近未认领块（少横穿），
-   *  本环带建完再跨环 → "环带作业"（外环→中环→内环） */
-  private assignBuild(squadId: number, cx: number, cz: number): number {
-    const cur = this.buildAssign.get(squadId);
-    if (cur !== undefined && cur < this.buildPieces.length
-      && !this.builtSlots.has(`${this.buildPieces[cur].x},${this.buildPieces[cur].z}`)) return cur;
-    const claimed = new Set<number>(this.buildAssign.values());
-    // 就近未建块 → 作为本队"环带基准"
-    let homeRing = -1, homeD = Infinity, anyBest = -1, anyD = Infinity;
-    let anyTrench = -1, anyTrenchD = Infinity;
-    for (let i = 0; i < this.buildPieces.length; i++) {
-      const q = this.buildPieces[i];
-      if (this.builtSlots.has(`${q.x},${q.z}`) || claimed.has(i)) continue;
-      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d < anyD) { anyD = d; anyBest = i; }
-      if (q.kind === 'trench' && d < anyTrenchD) { anyTrenchD = d; anyTrench = i; }
-      if (d < homeD) { homeD = d; homeRing = q.ring; }
-    }
-    if (anyBest < 0) return -1;
-    // 环带内最近未认领块（优先级：环带战壕 → 环带任意 → 全局战壕 → 全局最近）
-    let ringBest = -1, ringD = Infinity;
-    let ringTrench = -1, ringTrenchD = Infinity;
-    for (let i = 0; i < this.buildPieces.length; i++) {
-      const q = this.buildPieces[i];
-      if (q.ring !== homeRing) continue;
-      if (this.builtSlots.has(`${q.x},${q.z}`) || claimed.has(i)) continue;
-      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d < ringD) { ringD = d; ringBest = i; }
-      if (q.kind === 'trench' && d < ringTrenchD) { ringTrenchD = d; ringTrench = i; }
-    }
-    const best = ringTrench >= 0 ? ringTrench : ringBest >= 0 ? ringBest : anyTrench >= 0 ? anyTrench : anyBest;
-    this.buildAssign.set(squadId, best);
-    return best;
-  }
-
-  /** ★ 成员级任务列使用中的小队（任务切走时清零用） */
-  private readonly taskedSquads = new Set<number>();
   /** ★ 小队自动重组（§4.6）：同键"不满半"小队 → 并入最近同键队 */
   private mergeTick(now: number): void {
     const list = [...this.swarm.squads.all()].filter((s) =>
@@ -864,7 +643,7 @@ export class SwarmCommander {
       for (const uid of [...small.members.keys()]) {
         const res = this.swarm.squads.mergeMember(uid, best);
         if (!res) continue;
-        this.writeTask(uid, 0, 0);   // ★ 并队后旧任务清零（由新队的任务重派接管）
+        this.memberTasks.write(uid, 0, 0);   // ★ 并队后旧任务清零（由新队的任务重派接管）
         for (const ch of res.leaderChanges) this.swarm.pushLeaderChange(ch.uid, ch.isLeader);   // ★ L3 队长镜像
         for (let i = 0; i < pool.count; i++) {
           if (pool.swarmUid[i] !== uid) continue;
@@ -920,7 +699,8 @@ export class SwarmCommander {
    *  S1 = 边打边施工；S2 = 只维护部署（不再施工）。 */
   private engineeringTick(dt: number, playerX: number, playerZ: number): void {
     if (!this.plan) return;
-    this.buildCd -= dt;
+    // ★ 总攻：工兵停挖战壕（懒处理；覆盖调试 setPosture 等非节律切换路径）
+    if (this.battlePosture === 'assault') this.corps.abandonTrenches();
     const squads = [...this.swarm.squads.all()];
     // ★ 施工队 = **具备施工能力的兵种**（后勤不一定能施工；杂兵可兼任）；
     //   兜底：名册里一个施工兵种都没有（缺素材/未加载）→ 杂兵（assault）兼任
@@ -934,10 +714,6 @@ export class SwarmCommander {
         if (cd > 0) this.buildCds.set(s.id, cd - dt);
       }
     }
-    // ★ 防线绕锚点重排（2Hz）：威胁上升 → 施工目标表朝玩家重摆；平息 → 转回舰船来向
-    this.lastPlayerX = playerX; this.lastPlayerZ = playerZ;
-    this.refaceAccum += dt;
-    if (this.refaceAccum >= 2) { this.refaceAccum = 0; this.refaceDefense(); }
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
     const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
@@ -994,12 +770,17 @@ export class SwarmCommander {
     ctx.alert = this.alertSet;
     // ★ 预分派工程队（稳定分配；取第一个在建块作为"工地"给近战护卫）
     let buildSite: { x: number; z: number } | null = null;
+    if (this.battlePosture === 'assault') {
+      // ★ 总攻：施工只剩掩体（战壕已作废）；"工地"锚切到最近远程小队
+      //   → 护卫/施工都以射手为保护对象（工兵在射手威胁侧展开）
+      buildSite = this.rangedAnchor(squads, front);
+    }
     if (this.stage === 'S1') {
       for (const s of builders) {
         let cx = 0, cz = 0, n = 0;
         for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
         if (n > 0) { cx /= n; cz /= n; }
-        const idx = this.assignBuild(s.id, cx, cz);
+        const idx = this.corps.assignBuild(s.id, cx, cz);
         if (idx >= 0 && !buildSite) buildSite = { x: this.buildPieces[idx].x, z: this.buildPieces[idx].z };
       }
     }
@@ -1031,15 +812,15 @@ export class SwarmCommander {
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
         let cx = 0, cz = 0, n = 0;
         for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-        if (n > 0) this.spreadBuilders(s, cx / n, cz / n);
+        if (n > 0) this.corps.spreadBuilders(s, cx / n, cz / n);
       } else if (ma.mission === 'guard') {
         ctx.buildTarget = null;
         // ★ 护卫扇区（成员级）：被击/无工地 → 清任务（交给动态反击）；否则分散护卫位
-        if (this.alertSet.has(s.id) || !ctx.buildSite) this.clearMemberTasks(s);
+        if (this.alertSet.has(s.id) || !ctx.buildSite) this.memberTasks.clear(s);
         else this.spreadGuards(s, ctx.buildSite.x, ctx.buildSite.z, playerX, playerZ);
       } else {
         ctx.buildTarget = null;
-        this.clearMemberTasks(s);
+        this.memberTasks.clear(s);
       }
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
@@ -1049,61 +830,8 @@ export class SwarmCommander {
         urgency: out.urgency, mission: out.mission || undefined, seq: 0,
       }, out.ttl);
     }
-    // ⑤ 施工（**逐步拼装**，仅 S1）：**认准一块挖/建到成** → 战壕肉眼可见
-    //   （每队 3s 掩体 / 4s 战壕；焦点块未成时优先续挖 → 修"pass1→pass2 就换块"）
-    if (this.stage === 'S1' && this.buildCover) {
-      for (const s of builders) {
-        const cd = this.buildCds.get(s.id) ?? 0;
-        if (cd > 0) continue;   // ★ 冷却中（递减已在每帧完成）
-        // ① 焦点续挖：本队正在建的块（成员 ≤6m 且未成）→ 必须继续，挖满 3 遍再换
-        let piece: { kind: 'cover' | 'trench'; x: number; z: number } | null = null;
-        let fidx = this.buildFocus.get(s.id);
-        if (fidx !== undefined && fidx >= 0 && fidx < this.buildPieces.length
-          && !this.builtSlots.has(`${this.buildPieces[fidx].x},${this.buildPieces[fidx].z}`)) {
-          const q = this.buildPieces[fidx];
-          for (const m of s.members.values()) {
-            if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 36) { piece = q; break; }
-          }
-        }
-        // ② 就近动工（新焦点）：**优先战壕**（强制挖 → 轮廓成型可见）；同种优先"已有挖痕"、再近者先（成员 ≤5m）
-        if (!piece) {
-          let bi = -1, bD = 25, bPass = -1;
-          let bTrench = false;
-          for (const m of s.members.values()) {
-            for (let i = 0; i < this.buildPieces.length; i++) {
-              const q = this.buildPieces[i];
-              if (this.builtSlots.has(`${q.x},${q.z}`)) continue;
-              const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
-              if (d > 25) continue;
-              const pass = this.digPasses.get(`${q.x},${q.z}`) ?? 0;
-              const tr = q.kind === 'trench';
-              if ((tr && !bTrench) || (tr === bTrench && (pass > bPass || (pass === bPass && d < bD)))) {
-                bTrench = tr; bPass = pass; bi = i; bD = d;
-              }
-            }
-          }
-          if (bi < 0) continue;
-          fidx = bi;
-          piece = this.buildPieces[bi];
-        }
-        if (fidx !== undefined) this.buildFocus.set(s.id, fidx);
-        if (piece.kind === 'cover') {
-          this.buildCover(piece.x, piece.z, 'cover');   // ★ 注册表即真源，工事表 2Hz 自动纳入
-          this.markTerrainDirty(piece.x, piece.z, 12);   // ★ 新掩体 → 表 + 采样缓存局部重算
-          this.builtSlots.add(`${piece.x},${piece.z}`);
-          this.buildFocus.delete(s.id);
-          this.buildCds.set(s.id, 3);
-        } else {
-          const key = `${piece.x},${piece.z}`;   // ★ 坑洞逐级缩小（0.5m/层）→ 成片多遍挖才深
-          const pass = (this.digPasses.get(key) ?? 0) + 1;
-          this.digTrench?.(piece.x, piece.z);                  // 同一块挖第 pass 遍（7×7 宽面）
-          this.markTerrainDirty(piece.x, piece.z, 16);   // ★ 战壕（挖掘标记）→ 表 + 采样缓存重算
-          this.buildCds.set(s.id, 4);
-          if (pass >= SwarmCommander.TRENCH_PASSES) { this.builtSlots.add(key); this.buildFocus.delete(s.id); }
-          else this.digPasses.set(key, pass);
-        }
-      }
-    }
+    // ⑤ 施工（逐步拼装，仅 S1；挖建执行在 EngineerCorps）
+    this.corps.construct(builders);
   }
 
   /** ★ 战役级闭环（1Hz）：**自下而上的反馈 → 大队重新决策**
@@ -1332,11 +1060,11 @@ export class SwarmCommander {
     this.battalionCount = 0;
     this.spawnQueue = [];
     this.spawnAccum = 0;
-    this.buildPieces = [];
+    this.corps.pieces = [];
     this.buildFocus.clear();
     this.builtSlots.clear(); this.digPasses.clear();
     this.holeTable.clear();
-    this.engAccum = 0; this.buildCd = 0;
+    this.engAccum = 0;
     this.resendAccum = 0;
     this.recalledRoster = null;
     this.postureFn.reset(performance.now() / 1000);
