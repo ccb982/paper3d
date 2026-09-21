@@ -78,8 +78,9 @@ export function pickSteer(
   insideBlocked: boolean,
   danger: (x: number, z: number) => boolean,
   table: SteerTable | null,
+  useTable = true,
 ): SteerOut {
-  const tbl = table ?? globalTable;
+  const tbl = useTable ? (table ?? globalTable) : null;
   const dl = Math.hypot(desiredX, desiredZ);
   const ux = dl > 1e-4 ? desiredX / dl : 0;
   const uz = dl > 1e-4 ? desiredZ / dl : 0;

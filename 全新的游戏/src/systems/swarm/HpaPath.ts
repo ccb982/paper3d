@@ -68,6 +68,8 @@ const GOAL = '@g';
 export class HpaPath {
   private readonly clusters = new Map<string, Cluster>();
   private nowMs = 0;
+  /** ★ 掩体/战壕寻路折扣（0.6~1；所有地面敌人共用；飞行不接线） */
+  pathMul: ((x: number, z: number) => number) | null = null;
   private buildBudget = 0;
   private queryStart = 0;
   private warmCursor = 0;
@@ -374,6 +376,15 @@ export class HpaPath {
     });
   }
 
+  /** 格（簇内局部坐标）的通行代价倍率（掩体/战壕折扣；[0.5,1.5] 夹取） */
+  private cellMul(cl: Cluster, ix: number, iz: number): number {
+    if (!this.pathMul) return 1;
+    const x = (cl.gx0 + ix) * CELL + CELL / 2;
+    const z = (cl.gz0 + iz) * CELL + CELL / 2;
+    const m = this.pathMul(x, z);
+    return Number.isFinite(m) ? Math.max(0.5, Math.min(1.5, m)) : 1.5;
+  }
+
   private sample(raster: RasterMap, gx: number, gz: number): { h: number; pass: boolean } {
     const x = gx * CELL + CELL / 2;
     const z = gz * CELL + CELL / 2;
@@ -409,7 +420,7 @@ export class HpaPath {
           const n = nz * CL + nx;
           if (!cl.pass[n]) continue;
           if (cl.h[n] - cl.h[c] > RISE_MAX) continue;   // 只挡爬升（下落放行，与个体移动口径一致）
-          const cost = d[c] + (dx !== 0 && dz !== 0 ? 1.4142 : 1);
+          const cost = d[c] + (dx !== 0 && dz !== 0 ? 1.4142 : 1) * this.cellMul(cl, nx, nz);
           if (cost < d[n]) { d[n] = cost; q.push(n); }
         }
       }
@@ -418,28 +429,31 @@ export class HpaPath {
     return d;
   }
 
-  /** 簇内 BFS 回溯出真实折线（世界坐标；不含起点，含终点） */
+  /** 簇内回溯出真实折线（世界坐标；不含起点，含终点）——★ 加权 Dijkstra（含掩体/战壕折扣） */
   private intraPath(cl: Cluster, from: number, to: number): { x: number; z: number }[] {
     const out: { x: number; z: number }[] = [];
     if (from === to) return out;
+    const dist = new Float32Array(CLC).fill(Infinity);
     const parent = new Int16Array(CLC).fill(-1);
-    const q: number[] = [from];
-    parent[from] = from;
-    let found = false;
-    for (let qi = 0; qi < q.length && !found; qi++) {
-      const c = q[qi];
+    const done = new Uint8Array(CLC);
+    dist[from] = 0;
+    for (let it = 0; it < CLC; it++) {
+      let c = -1, best = Infinity;
+      for (let k = 0; k < CLC; k++) if (!done[k] && dist[k] < best) { best = dist[k]; c = k; }
+      if (c < 0) break;
+      done[c] = 1;
+      if (c === to) break;
       const ix = c % CL, iz = (c - ix) / CL;
-      for (let dz = -1; dz <= 1 && !found; dz++) {
+      for (let dz = -1; dz <= 1; dz++) {
         for (let dx = -1; dx <= 1; dx++) {
           if (dx === 0 && dz === 0) continue;
           const nx = ix + dx, nz = iz + dz;
           if (nx < 0 || nz < 0 || nx >= CL || nz >= CL) continue;
           const n = nz * CL + nx;
-          if (parent[n] !== -1 || !cl.pass[n]) continue;
+          if (!cl.pass[n]) continue;
           if (cl.h[n] - cl.h[c] > RISE_MAX) continue;   // 只挡爬升（下落放行，与个体移动口径一致）
-          parent[n] = c;
-          if (n === to) { found = true; break; }
-          q.push(n);
+          const nd = dist[c] + (dx !== 0 && dz !== 0 ? 1.4142 : 1) * this.cellMul(cl, nx, nz);
+          if (nd < dist[n]) { dist[n] = nd; parent[n] = c; }
         }
       }
     }

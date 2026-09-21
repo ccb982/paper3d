@@ -16,7 +16,10 @@ export class MemberTaskNav {
   private readonly idxs = new Map<number, number>();
   private readonly paths = new Map<string, { x: number; z: number }[]>();
 
-  constructor(private readonly blockedAt: (x: number, z: number) => boolean) {}
+  constructor(
+    private readonly blockedAt: (x: number, z: number) => boolean,
+    private readonly pathMul?: (x: number, z: number) => number,
+  ) {}
 
   /** 取本拍走廊 waypoint；直行可达 / 求解失败 → null */
   waypoint(uid: number, gx: number, gz: number, px: number, pz: number): { x: number; z: number } | null {
@@ -34,7 +37,7 @@ export class MemberTaskNav {
       if (this.paths.size > 96) this.paths.clear();
       const attempt: { x: number; z: number }[] = [];
       const raster = RasterMap.current;
-      const ok = raster && this.finder.find(raster, px, pz, gx, gz, attempt);
+      const ok = raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul);
       if (!ok) return null;   // 求解失败 → 直行（steer 危险探测兜底）
       path = attempt;
       this.paths.set(key, path);

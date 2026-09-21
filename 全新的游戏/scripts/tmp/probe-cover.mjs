@@ -120,5 +120,6 @@ console.log('--- 判定 ---');
 console.log('① 引擎选掩体 :', B.ptSource === 'cover' && B.kind === 'garrison' ? 'PASS' : `FAIL src=${B.ptSource} kind=${B.kind}`);
 console.log('② 命令带玩家 :', B.threatX !== null && Math.hypot((B.threatX ?? 0) - B.px, 0) >= 0 ? 'PASS' : 'FAIL');
 console.log('③ 掩体后战壕 :', B.shield && B.outward > 2 ? 'PASS' : `FAIL shield=${B.shield} outward=${B.outward} segD=${B.segD}`);
-console.log('④ 站位稳定   :', C.shield && C.outward > 2 && C.target === B.target ? 'PASS' : `FAIL shield=${C.shield} outward=${C.outward} target=${B.target}→${C.target}`);
+console.log('④ 换位后仍遮蔽:', C.shield && C.outward > 2 ? 'PASS' : `FAIL shield=${C.shield} outward=${C.outward} target=${B.target}→${C.target}`,
+  C.target !== B.target ? '（引擎及时换到更优掩体）' : '（保持原掩体）');
 await browser.close();

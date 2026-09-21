@@ -30,7 +30,6 @@ export const SLOPE_DH = 1.5;
 /** 高差 > 3.0m ≈ 37° 视为墙面（硬边界，不可走） */
 export const WALL_DH = 3.0;
 /** 低于邻域均值 ≥ 0.6m → 自然低洼视为战壕（可走 + 掩体加成） */
-const TRENCH_DH = 0.6;
 /** ★ 被"挖掘标记"过的格：阈值降到 0.12m（digRect 一次只 +1 层 ≈0.2m） */
 const TRENCH_DH_DUG = 0.12;
 const TRENCH_SCORE = 1.2;
@@ -111,6 +110,8 @@ export class TerrainScore {
   private readonly cls = new Uint8Array(SIDE * SIDE);
   /** ★ 战壕（低于邻域的可走格；掩体加成已在分内） */
   private readonly trench = new Uint8Array(SIDE * SIDE);
+  /** ★ 遮蔽加成（0~1.6：built covers/posts 1 + 战壕 1 + 贴墙 0.6）→ 寻路折扣（战壕/掩体=加分点） */
+  private readonly coverF = new Float32Array(SIDE * SIDE);
   /** ★ 紧贴硬墙（陡差 >0.8×WALL_DH 的可站格；硬墙当掩体判定用） */
   private readonly wallNear = new Uint8Array(SIDE * SIDE);
   /** ★ 水域格（可站；分数 -WATER_PENALTY，移动端在岸上时优先上岸） */
@@ -178,11 +179,20 @@ export class TerrainScore {
     return i >= 0 && this.choke[i] === 1;
   }
 
-  /** ★ 路径代价倍率（坡面减速；供 SquadPath/HPA 消费，⏳ 接线） */
+  /** ★ 路径代价倍率（坡面减速；供 HPA 等粗粒度消费） */
   costAt(x: number, z: number): number {
     const c = this.clsAt(x, z);
     if (c >= 2) return Infinity;
     return c === 1 ? SLOPE_COST : 1;
+  }
+
+  /** ★★ 掩体/战壕寻路折扣（0.6~1；《敌人管线设计.md》§5）：遮蔽越多越便宜 →
+   *  拆解路径时"尽可能走掩体多的路线"（用户定调 2026-09-21）。SquadPath 逐格乘算。 */
+  pathMulAt(x: number, z: number): number {
+    const i = this.indexAt(x, z);
+    if (i < 0 || !this.pass[i]) return 1;
+    const c = this.coverF[i];
+    return c > 0 ? Math.max(0.6, 1 - 0.4 * c) : 1;
   }
 
   /** 全量重建（触发戳 = 落点版本 + 态势代次；掩体/挖掘走局部重算）
@@ -396,6 +406,7 @@ export class TerrainScore {
     this.cls[i] = hardRole ? 3 : 0;
     this.water[i] = role === 'liquid' ? 1 : 0;
     this.trench[i] = 0;
+    this.coverF[i] = (bonus.get(this.key(x, z)) ?? 0) > 0 ? 1 : 0;
     const d = Math.hypot(x - plan.cx, z - plan.cz);
     // ★ 距离项按 R 归一化（点积量级与 h/cover 可比；见 DIST_SCALE 注释）
     let s = w.h * h + w.dist * (d / R) * DIST_SCALE + (bonus.get(this.key(x, z)) ?? 0) * w.cover;
@@ -417,11 +428,11 @@ export class TerrainScore {
         const i = iz * SIDE + ix;
         if (this.cls[i] === 3) { this.pass[i] = 0; this.score[i] = -1e9; this.wallNear[i] = 0; this.water[i] = 0; continue; }
         const h = heights[i];
-        let dh = 0, sum = 0, n = 0;
-        if (ix > 0) { const v = heights[i - 1]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
-        if (ix < SIDE - 1) { const v = heights[i + 1]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
-        if (iz > 0) { const v = heights[i - SIDE]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
-        if (iz < SIDE - 1) { const v = heights[i + SIDE]; dh = Math.max(dh, Math.abs(h - v)); sum += v; n++; }
+        let dh = 0;
+        if (ix > 0) dh = Math.max(dh, Math.abs(h - heights[i - 1]));
+        if (ix < SIDE - 1) dh = Math.max(dh, Math.abs(h - heights[i + 1]));
+        if (iz > 0) dh = Math.max(dh, Math.abs(h - heights[i - SIDE]));
+        if (iz < SIDE - 1) dh = Math.max(dh, Math.abs(h - heights[i + SIDE]));
         if (dh > WALL_DH) { this.cls[i] = 2; this.pass[i] = 0; this.score[i] = -1e9; this.wallNear[i] = 0; continue; }
         this.cls[i] = dh > SLOPE_DH ? 1 : 0;
         this.pass[i] = 1;
@@ -438,13 +449,13 @@ export class TerrainScore {
         const wt = this.lastW;
         if (wt) this.score[i] += (wt.width * this.width[i] + wt.choke * this.choke[i]) * FEAT_SCALE;
         // ★ 硬墙当掩体：紧贴墙面（邻格陡差）的可站格 → 掩体加成
+        // ★ 收口：wallNear 只是"地形墙"特征（计入地形分），**不再当掩体加成**（掩体加成只来自 L2 表）
         this.wallNear[i] = dh > WALL_DH * 0.8 ? 1 : 0;
         if (this.wallNear[i] === 1) this.score[i] += WALL_COVER_SCORE;
-        // 战壕：显式挖掘标记 → 直接算；否则看自然低洼（低于邻域）
-        const thr = this.dug[i] === 1 ? TRENCH_DH_DUG : TRENCH_DH;
-        const low = this.dug[i] === 1 || (n > 0 && (sum / n - h) > thr);
-        this.trench[i] = low ? 1 : 0;
-        if (low) this.score[i] += TRENCH_SCORE;
+        // ★ 收口：战壕只认**挖掘标记**（与 HoleMask 同源：digCell 层深 ≥0.12m）——
+        //   不再用"自然低洼"自判（AI 的战壕语义 = L2 工事表 holes）
+        this.trench[i] = this.dug[i] === 1 ? 1 : 0;
+        if (this.trench[i] === 1) { this.score[i] += TRENCH_SCORE; this.coverF[i] += 1; }
       }
     }
   }

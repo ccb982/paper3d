@@ -65,7 +65,7 @@ export function engineMissionFor(
   opts: { isBuilder: boolean; stage: string; posture: string },
 ): Mission {
   if (opts.isBuilder) {
-    if (opts.stage === 'S1') return 'build';   // 施工（独有）：掩体+战壕；总攻期战壕已作废 → 只剩掩体
+    if (opts.stage === 'S1') return 'build';   // 施工（独有）：掩体+战壕；总攻期战壕仅暂停开挖
     return 'guard';                            // S2：护栏（总攻时引擎把保护对象配为射手 → 掩护射手）
   }
   if (opts.stage === 'S1') {

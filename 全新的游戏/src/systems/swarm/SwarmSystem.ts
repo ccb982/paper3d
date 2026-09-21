@@ -129,7 +129,10 @@ export class SwarmSystem {
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
   /** ★ 成员任务绕墙走廊（基础寻路保证：任务目标直行撞墙 → A* 绕行，绝不原地磨蹭） */
-  private readonly taskNav = new MemberTaskNav((x, z) => this.commander.blockedAt(x, z));
+  private readonly taskNav = new MemberTaskNav(
+    (x, z) => this.commander.blockedAt(x, z),
+    (x, z) => this.commander.pathMulAt(x, z),
+  );
   /** 编队锚点量算复用对象（零分配） */
   private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
@@ -149,6 +152,7 @@ export class SwarmSystem {
   private tokenUsed = [0, 0, 0];
 
   constructor() {
+    this.nav.pathMul = (x, z) => this.commander.pathMulAt(x, z);   // ★ 掩体/战壕寻路折扣
     // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
     //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种。
     //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。
@@ -317,7 +321,7 @@ export class SwarmSystem {
     this.stuckAccum += dt;
     if (this.stuckAccum >= STUCK.CHECK_S) {
       this.stuckAccum = 0;
-      this.stuckTick(now);
+      this.stuckTick(now, hooks);
     }
 
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
@@ -717,7 +721,7 @@ export class SwarmSystem {
   /** ★ 卡死回收（STUCK 参数）：代理/队长在窗口内**净活动范围**始终很小 → 自动回收（归还编制）。
    *  口径从严（宁可错杀，不能放过）：**唯一命令豁免 = 驻守（garrison）**；交火期豁免。
    *  施工/巡逻不豁免——窗口内有实际位移（包围盒 > BBOX_R）即逃逸；原地摇摆 → 清除。 */
-  private stuckTick(now: number): void {
+  private stuckTick(now: number, hooks: SwarmHooks): void {
     const dbg = this.stuckDbg;
     dbg.exempt = 0; dbg.window = 0; dbg.tracked = 0; dbg.recycled = 0;
     const pool = this.pool;
@@ -755,7 +759,42 @@ export class SwarmSystem {
         dbg.recycled++;
       }
     }
-    if (this.stuck.size > pool.count + 64) this.stuck.clear();
+    // ★ L3 实体同样卡死回收（池循环只覆盖代理；实体不在池里 —— 用户 2026-09-21 指出的漏洞）
+    const units = hooks.activeUnits?.();
+    if (units) {
+      for (let k = units.length - 1; k >= 0; k--) {
+        const u = units[k];
+        const uid = u.swarmUid;
+        if (uid <= 0) { continue; }                                 // 计划外（Boss 等）
+        if (u.isAir) { this.stuck.delete(uid); continue; }          // 飞行不判
+        const squad = this.squads.squadOf(uid);
+        const st = squad ? this.tactics.board.get(squad.id) : undefined;
+        if (st?.order.kind === 'garrison') { this.stuck.delete(uid); dbg.exempt++; continue; }
+        const hitAt = squad ? this.recentHits.get(squad.id) : undefined;
+        if (hitAt !== undefined && now - hitAt <= AUTONOMY.SQUAD_ALERT_S) { this.stuck.delete(uid); dbg.exempt++; continue; }
+        const x = u.position.x, z = u.position.z;
+        const rec = this.stuck.get(uid);
+        if (!rec) {
+          this.stuck.set(uid, { minX: x, maxX: x, minZ: z, maxZ: z, t: 0 });
+          continue;
+        }
+        if (x < rec.minX) rec.minX = x; else if (x > rec.maxX) rec.maxX = x;
+        if (z < rec.minZ) rec.minZ = z; else if (z > rec.maxZ) rec.maxZ = z;
+        rec.t += 1;
+        if (rec.maxX - rec.minX > STUCK.BBOX_R || rec.maxZ - rec.minZ > STUCK.BBOX_R) {
+          rec.minX = rec.maxX = x; rec.minZ = rec.maxZ = z; rec.t = 0;
+          dbg.window++;
+          continue;
+        }
+        dbg.tracked++;
+        if (rec.t >= STUCK.HOLD_S) {
+          u.retire('recycled');   // 实体退役 → enemy_removed(recycled) → 账本 noteRecall（订阅已接）
+          this.stuck.delete(uid);
+          dbg.recycled++;
+        }
+      }
+    }
+    if (this.stuck.size > pool.count + 256) this.stuck.clear();
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
@@ -811,6 +850,7 @@ export class SwarmSystem {
         p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], performance.now() / 1000,
         this.commander.blockedAt(p.x[i], p.z[i]),
         dangerAt, this.commander,
+        p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
       );
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;

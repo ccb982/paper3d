@@ -62,6 +62,7 @@ export class SquadPathFinder {
     sx: number, sz: number,
     gx: number, gz: number,
     out: { x: number; z: number }[],
+    costMul?: (x: number, z: number) => number,
   ): boolean {
     out.length = 0;
     const scx = Math.floor(sx / CELL), scz = Math.floor(sz / CELL);
@@ -116,6 +117,21 @@ export class SquadPathFinder {
         );
         if (dh > WALL_DH) { blocked[i] = 1; continue; }
         if (dh > SLOPE_DH) cost[i] *= SLOPE_COST;
+      }
+    }
+
+    // ★ 掩体/战壕折扣（0.6~1；战壕/掩体=寻路加分点 → 拆解路径偏好有遮蔽的路线）
+    if (costMul) {
+      for (let iz = 0; iz < rows; iz++) {
+        for (let ix = 0; ix < cols; ix++) {
+          const i = iz * cols + ix;
+          if (blocked[i]) continue;
+          const wx = (minX + ix) * CELL + CELL / 2;
+          const wz = (minZ + iz) * CELL + CELL / 2;
+          const mul = costMul(wx, wz);
+          if (!Number.isFinite(mul)) { blocked[i] = 1; continue; }
+          cost[i] *= Math.max(0.5, Math.min(1.5, mul));
+        }
       }
     }
 

@@ -435,8 +435,6 @@ export class SwarmCommander {
       // 进总攻：记撤退判定基准；离开总攻：清基准（aliveRatio 回到 1）
       this.aliveAtPosture = next === 'assault' ? this.swarm.ledger.alive : 0;
       this.engAccum = 2;   // 态势切换 → 下一拍立即重发部署
-      // ★ 总攻：工兵停挖战壕（剩余战壕件作废）；掩体继续、转掩护射手
-      if (next === 'assault') this.corps.abandonTrenches();
     }
     // ★ 地块评分表重建（换落点/态势变化才全量重算；掩体/挖掘走局部重算）
     if (this.plan) {
@@ -617,15 +615,14 @@ export class SwarmCommander {
       for (const m of s.members.values()) { scx += m.x; scz += m.z; n++; }
       if (n === 0) continue;
       scx /= n; scz /= n;
-      if (!covers) covers = snapshotCovers('enemy').map((c) => ({ x: c.x, z: c.z }));
+      // ★ 收口：AI 掩体选点统一读 **L2 工事表**（HoleTable.covers = 战壕掩体同一张表）
+      if (!covers) covers = this.holeTable.covers.map((c) => ({ x: c.x, z: c.z }));
       if (covers.length === 0) { this.coverHolders.delete(s.id); continue; }
       const ok = (cx: number, cz: number): boolean => {
         const dp = Math.hypot(cx - playerX, cz - playerZ);
         const ds = Math.hypot(cx - scx, cz - scz);
         return dp >= 8 && dp <= 75 && ds <= 70;
       };
-      const held = this.coverHolders.get(s.id);
-      if (held && ok(held.cx, held.cz)) continue;   // 滞回：掩体仍有效 → 不折腾
       // ★ 站位 = 掩体朝**外**（远离舰船/落点中心）5m = 掩体后方的战壕位（用户定调）
       const plan = this.plan!;
       const standOf = (cx: number, cz: number): { x: number; z: number } => {
@@ -633,18 +630,31 @@ export class SwarmCommander {
         const dl = Math.hypot(dx, dz) || 1;
         return { x: cx + (dx / dl) * 5, z: cz + (dz / dl) * 5 };
       };
+      // ★ 评分：近队 + 靠前（贴玩家方向推进，太近扣分）+ 配对掩体（后方有战壕）
+      const scoreOf = (cx: number, cz: number): number => {
+        const st = standOf(cx, cz);
+        const paired = this.corps.pieces.some((q) => q.kind === 'trench'
+          && (q.x - st.x) ** 2 + (q.z - st.z) ** 2 <= 20);
+        const dSquad = Math.hypot(cx - scx, cz - scz);
+        const dPlayer = Math.hypot(cx - playerX, cz - playerZ);
+        return dSquad + Math.max(0, dPlayer - 45) * 3 + Math.max(0, 18 - dPlayer) * 2 + (paired ? 0 : 60);
+      };
       let best: { cx: number; cz: number; x: number; z: number } | null = null;
       let bestScore = Infinity;
       for (const c of covers) {
         if (!ok(c.x, c.z)) continue;
-        const st = standOf(c.x, c.z);
-        // 优先"掩体后有战壕"的配对掩体（前线掩体）；未配对扣 60 分
-        const paired = this.corps.pieces.some((q) => q.kind === 'trench'
-          && (q.x - st.x) ** 2 + (q.z - st.z) ** 2 <= 20);
-        const dSquad = Math.hypot(c.x - scx, c.z - scz);
-        const dPlayer = Math.hypot(c.x - playerX, c.z - playerZ);
-        const score = dSquad + Math.max(0, dPlayer - 48) * 2 + (paired ? 0 : 60);
-        if (score < bestScore) { bestScore = score; best = { cx: c.x, cz: c.z, x: st.x, z: st.z }; }
+        const sc = scoreOf(c.x, c.z);
+        if (sc < bestScore) {
+          bestScore = sc;
+          const st = standOf(c.x, c.z);
+          best = { cx: c.x, cz: c.z, x: st.x, z: st.z };
+        }
+      }
+      const held = this.coverHolders.get(s.id);
+      if (held && ok(held.cx, held.cz)) {
+        const heldScore = scoreOf(held.cx, held.cz);
+        // ★ 及时调整：现掩体仍够好（优 12 分内）→ 守；出现明显更优（更靠前/更配对）→ 换
+        if (bestScore > heldScore - 6) continue;
       }
       if (best) this.coverHolders.set(s.id, best);
       else this.coverHolders.delete(s.id);
@@ -717,8 +727,8 @@ export class SwarmCommander {
    *  S1 = 边打边施工；S2 = 只维护部署（不再施工）。 */
   private engineeringTick(dt: number, playerX: number, playerZ: number): void {
     if (!this.plan) return;
-    // ★ 总攻：工兵停挖战壕（懒处理；覆盖调试 setPosture 等非节律切换路径）
-    if (this.battlePosture === 'assault') this.corps.abandonTrenches();
+    // ★ 总攻：工兵**暂停开挖战壕**（件保留，从不清空——用户定调）；掩体继续、转掩护射手
+    this.corps.setTrenchPaused(this.battlePosture === 'assault');
     const squads = [...this.swarm.squads.all()];
     // ★ 施工队 = **具备施工能力的兵种**（后勤不一定能施工；杂兵可兼任）；
     //   兜底：名册里一个施工兵种都没有（缺素材/未加载）→ 杂兵（assault）兼任
@@ -736,7 +746,8 @@ export class SwarmCommander {
     }
     if (this.engAccum < 2) return;   // 2s 决策拍
     this.engAccum = 0;
-    const slot = this.buildPieces.find((s) => !this.builtSlots.has(`${s.x},${s.z}`));
+    const slot = this.buildPieces.find((s) =>
+      !this.builtSlots.has(`${s.x},${s.z}`) && this.corps.canWork(s.kind));
     const plan = this.plan;
     if (!slot && this.stage === 'S1') this.stage = 'S2';   // 无待建块 → 就绪
     // ★ 施工优先：工程队**完全不因玩家靠近而停工**（旁边有玩家 → 护卫队上，自己该挖挖）
@@ -792,7 +803,7 @@ export class SwarmCommander {
     // ★ 预分派工程队（稳定分配；取第一个在建块作为"工地"给近战护卫）
     let buildSite: { x: number; z: number } | null = null;
     if (this.battlePosture === 'assault') {
-      // ★ 总攻：施工只剩掩体（战壕已作废）；"工地"锚切到最近远程小队
+      // ★ 总攻：施工只剩掩体（战壕暂停开挖）；"工地"锚切到最近远程小队
       //   → 护卫/施工都以射手为保护对象（工兵在射手威胁侧展开）
       buildSite = this.rangedAnchor(squads, front);
     }
@@ -805,19 +816,42 @@ export class SwarmCommander {
         if (idx >= 0 && !buildSite) buildSite = { x: this.buildPieces[idx].x, z: this.buildPieces[idx].z };
       }
     }
-    // ★ 施工分工（用户定调）：**1 个施工队修掩体，其余全部挖战壕**；只有一个队时兼顾
+    // ★ 施工分工（用户定调）：**1 个施工队修掩体，其余全部挖战壕**；只有一个队 / 某类工件没了 → 兼顾。
+    //   每拍按"剩余未建工件类"重算：掩体建完 → 全员转挖壕；总攻 → 战壕只暂停（件保留），全员转修掩体。
     {
+      const key = (q: { x: number; z: number }): string => `${q.x},${q.z}`;
+      const trenchPaused = this.battlePosture === 'assault';
+      this.corps.setTrenchPaused(trenchPaused);
+      const needTrench = !trenchPaused
+        && this.corps.pieces.some((q) => q.kind === 'trench' && !this.corps.built.has(key(q)));
+      const needCover = this.corps.pieces.some((q) => q.kind === 'cover' && !this.corps.built.has(key(q)));
       const aliveB = new Set(builders.map((b) => b.id));
       for (const id of [...this.builderRoles.keys()]) if (!aliveB.has(id)) this.builderRoles.delete(id);
+      // 粘性分工（防抖）：先清掉"本类已没活"的旧分工；再按需补一个掩体班，其余战壕班
+      for (const b of builders) {
+        const r = this.builderRoles.get(b.id);
+        if (r === 'cover' && !needCover) this.builderRoles.delete(b.id);
+        if (r === 'trench' && !needTrench) this.builderRoles.delete(b.id);
+      }
       let hasCover = builders.some((b) => this.builderRoles.get(b.id) === 'cover');
       for (const b of builders) {
         let r = this.builderRoles.get(b.id);
         if (!r) {
-          r = builders.length >= 2 ? (hasCover ? 'trench' : 'cover') : 'any';
+          if (builders.length >= 2 && needCover && needTrench) {
+            r = hasCover ? 'trench' : 'cover';
+            if (r === 'cover') hasCover = true;
+          } else {
+            r = 'any';
+          }
           this.builderRoles.set(b.id, r);
-          if (r === 'cover') hasCover = true;
         }
         this.corps.setRole(b.id, r);
+      }
+      // 掩体班阵亡 → 从战壕班补一个（保持"1 掩体班 + 其余战壕班"）
+      if (builders.length >= 2 && needCover && needTrench && !hasCover) {
+        const b = builders.find((x) => this.builderRoles.get(x.id) === 'trench') ?? builders[0];
+        this.builderRoles.set(b.id, 'cover');
+        this.corps.setRole(b.id, 'cover');
       }
     }
     // ★ S1 护工锚：工程队质心表（非工兵队粘性配对跟随保护）
@@ -1100,6 +1134,11 @@ export class SwarmCommander {
   }
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
+  /** ★ 掩体/战壕寻路折扣（SquadPath 逐格乘算；战壕/掩体=寻路加分点） */
+  pathMulAt(x: number, z: number): number {
+    return this.terrainScore.pathMulAt(x, z);
+  }
+
   isWaterAt(x: number, z: number): boolean {
     return this.terrainScore.isWaterAt(x, z);
   }

@@ -108,16 +108,6 @@ function addPatrolSwing(
   const sw = Math.sin(now * PATROL_OMEGA + phase) * amp;
   return { x: x + (-dz / dl) * sw, z: z + (dx / dl) * sw };
 }
-/** 把追击点截断在保护锚的缰绳半径内（撤退了不去追） */
-function clampToLeash(
-  tx: number, tz: number, a: { x: number; z: number }, leash: number,
-): { x: number; z: number } {
-  const dx = tx - a.x, dz = tz - a.z;
-  const d = Math.hypot(dx, dz);
-  if (d <= leash || d === 0) return { x: tx, z: tz };
-  return { x: a.x + (dx / d) * leash, z: a.z + (dz / d) * leash };
-}
-
 /** 部署选点（读表投影全部在此；返回复用对象，调用方立即消费） */
 export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, st: DecideState): DecideOut {
   const plan = ctx.plan;
@@ -171,8 +161,9 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     const nearSite = !!ctx.protect && dAnchor <= 25;
     const close = n > 0 && Math.hypot(ctx.playerX - cx, ctx.playerZ - cz) <= p.engageDist;
     if ((alert || close || nearSite) && dAnchor <= GUARD_CHASE_MAX) {
+      // ★ 反击 = 直接压上（要能打到才算"有反应"）；只有玩家退到锚 45m 外才不追
       _out.kind = 'advance';
-      _out.target = clampToLeash(ctx.playerX, ctx.playerZ, anchor, p.leash);
+      _out.target = { x: ctx.playerX, z: ctx.playerZ };
       _out.ttl = 4;
     } else {
       // ★ 保护令 = 被保护对象位置 + 玩家位置；**站位由队长算**

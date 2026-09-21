@@ -61,6 +61,8 @@ export class EngineerCorps {
   accum = 0;
   /** ★ 施工分工（蜂群引擎指派）：cover = 修掩体班；trench = 挖战壕班；any = 兼顾（只有一个队时） */
   private readonly roles = new Map<number, 'cover' | 'trench' | 'any'>();
+  /** ★ 战壕暂停开挖（总攻期等）：**只停派活，不删件**（用户定调：战壕件从不作废） */
+  private trenchPaused = false;
 
   constructor(
     private readonly host: EngineerHost,
@@ -103,7 +105,22 @@ export class EngineerCorps {
         this.pieces.push({ kind: 'cover', x: fx, z: fz, ring: r, pri: 0 });   // ★ 前线掩体：最先部署
       }
     }
-    // 兜底：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
+    // ★ 兜底 A：地形没给可用战壕线（某些地形全被拒）→ 用**外环掩位背后 5m** 自造短壕（保证有坑可挖）
+    if (!this.pieces.some((q) => q.kind === 'trench')) {
+      const slots = plan.coverSlots.filter((sl) => sl.ring === 2)
+        .concat(plan.coverSlots.filter((sl) => sl.ring !== 2))
+        .slice(0, 6);
+      for (const sl of slots) {
+        const dx = sl.x - plan.cx, dz = sl.z - plan.cz;
+        const dl = Math.hypot(dx, dz) || 1;
+        const tx2 = sl.x + (dx / dl) * 5, tz2 = sl.z + (dz / dl) * 5;   // 掩体外侧（背船）= 战壕位
+        const role = raster?.tileDefAt(tx2, tz2).genRole;
+        if (role === 'pit' || role === 'liquid') continue;
+        if (raster && raster.surfaceHeightAt(tx2, tz2) < FLOOR_MIN) continue;
+        this.pieces.push({ kind: 'trench', x: tx2, z: tz2, ring: sl.ring, pri: 1 });
+      }
+    }
+    // 兜底 B：地形分析没给出可用点位（开阔地/全被拒）→ 沿来向弧线自造掩体位
     if (this.pieces.length === 0) {
       const a0 = Math.atan2(az, ax);
       for (const r of [2, 1, 0] as const) {
@@ -125,8 +142,19 @@ export class EngineerCorps {
     this.roles.set(squadId, role);
   }
 
-  /** 该队是否可施工该类工件（分工过滤） */
+  /** 战壕暂停/恢复（总攻停挖；件保留，可随时恢复） */
+  setTrenchPaused(v: boolean): void {
+    this.trenchPaused = v;
+  }
+
+  /** 该类工件当前是否可施工（暂停的类不可派、不可挖） */
+  canWork(kind: 'cover' | 'trench'): boolean {
+    return kind === 'cover' || !this.trenchPaused;
+  }
+
+  /** 该队是否可施工该类工件（分工过滤 + 暂停过滤） */
   private allows(squadId: number, kind: 'cover' | 'trench'): boolean {
+    if (!this.canWork(kind)) return false;
     const r = this.roles.get(squadId) ?? 'any';
     return r === 'any' || r === kind;
   }
@@ -153,16 +181,6 @@ export class EngineerCorps {
     return anyBest;
   }
 
-  /** 总攻：战壕停挖（剩余战壕件作废 → 不派不挖；assault 不回退 → 本局不再挖）。
-   *  掩体件保留继续造（工兵随后在射手威胁侧展开）。 */
-  abandonTrenches(): void {
-    if (!this.pieces.some((p) => p.kind === 'trench')) return;
-    this.pieces = this.pieces.filter((p) => p.kind !== 'trench');
-    this.focus.clear();
-    this.assign.clear();
-    this.passes.clear();
-  }
-
   /** 成员分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标。
    *  @returns true = 已派/已持有工件任务；false = 附近无可用工件（调用方转站岗） */
   spreadBuilders(s: TaskSquad, cx: number, cz: number): boolean {
@@ -170,7 +188,7 @@ export class EngineerCorps {
     const aidx = this.assign.get(s.id);
     if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
       const aq = this.pieces[aidx];
-      if (aq.kind === 'trench' && !this.built.has(keyOf(aq))) {
+      if (aq.kind === 'trench' && this.allows(s.id, aq.kind) && !this.built.has(keyOf(aq))) {
         let k0 = 0;
         for (const uid of s.members.keys()) {
           const a = (k0++ / s.members.size) * Math.PI * 2;
@@ -183,6 +201,7 @@ export class EngineerCorps {
     // 焦点驻守：本队正在建的块 → 全员按**静态环列**围到焦点块（无随机抖动）→ 到点站定等挖
     const fidx = this.focus.get(s.id);
     if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
+      && this.allows(s.id, this.pieces[fidx].kind)
       && !this.built.has(keyOf(this.pieces[fidx]))) {
       const q = this.pieces[fidx];
       let i = 0;
@@ -198,6 +217,7 @@ export class EngineerCorps {
     for (let i = 0; i < this.pieces.length; i++) {
       const q = this.pieces[i];
       if (this.built.has(keyOf(q))) continue;
+      if (!this.allows(s.id, q.kind)) continue;
       const d2 = (q.x - cx) ** 2 + (q.z - cz) ** 2;
       if (d2 > 90 * 90) continue;
       if (this.lineBlocked(cx, cz, q.x, q.z)) continue;   // 直行遇墙 → 跳过（会原地磨蹭）
@@ -210,7 +230,7 @@ export class EngineerCorps {
       // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
       const idx = this.assign.get(s.id);
       if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
-      if (this.built.has(keyOf(this.pieces[idx]))) return false;
+      if (this.built.has(keyOf(this.pieces[idx])) || !this.allows(s.id, this.pieces[idx].kind)) return false;
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
