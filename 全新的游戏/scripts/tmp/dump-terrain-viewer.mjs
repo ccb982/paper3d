@@ -1,16 +1,18 @@
 // ============================================================
 // 生成「地形表可视化」自包含网页
 //   左排 = 新 L1 语义表；右排 = 地形**创建时**的原始地形表（地块/基准高度/结构语义）
-// 前置：npm run dev -- --port 5199 --strictPort
-// 运行：node scripts/tmp/dump-terrain-viewer.mjs
+// 前置：npm run dev（vite 默认 5173）
+// 运行：node scripts/tmp/dump-terrain-viewer.mjs [seed]   （缺省=随机 seed → 每次地形都不同）
 // 产物：terrain-viewer.html（双击即可打开；数据已内嵌）
 // ============================================================
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 
+const SEED = Number(process.argv[2]) > 0 ? Number(process.argv[2]) : Math.floor(Math.random() * 1e6);
+console.log(`[viewer] seed = ${SEED}`);
 const grid = (r, c) => Array.from({ length: r }, () => Array(c).fill(null));
 const makeSession = () => ({
-  meta: { version: '0.2.0', day: 1, seed: 4242, totalDaysSurvived: 0, deaths: 0, createdAt: '', lastSavedAt: '' },
+  meta: { version: '0.2.0', day: 1, seed: SEED, totalDaysSurvived: 0, deaths: 0, createdAt: '', lastSavedAt: '' },
   player: { hp: 100, maxHp: 100, attackPower: 10, defense: 2, ammo: { default: 150 }, slots: Array(12).fill(null) },
   inventories: { base: grid(30, 30), ship: grid(8, 10), player: grid(4, 6) },
   ship: { hp: 1e6, maxHp: 1e6, shield: 2e5, armor: 999, fuel: 60, fuelMax: 60, position: { x: 30, z: 30 }, techTree: [], turrets: [] },
@@ -27,7 +29,7 @@ const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 page.on('console', (m) => { if (m.text().startsWith('[L1]')) console.log(m.text().slice(0, 150)); });
 await page.evaluateOnNewDocument((s) => localStorage.setItem('arknights_rogue_save', JSON.stringify(s)), makeSession());
-await page.goto('http://localhost:5199/?perf=1&swarmdbg=1&l1dbg=1', { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto('http://localhost:5173/?perf=1&swarmdbg=1&l1dbg=1', { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction('!!window.__ppEnterWorld', { timeout: 120000 });
 await new Promise((r) => setTimeout(r, 2000));
 await page.evaluate(() => window.__ppEnterWorld());
@@ -36,7 +38,7 @@ await page.evaluate(() => window.__ppMode().finishDock());
 await page.waitForFunction('!!window.__l1', { timeout: 120000 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const data = await page.evaluate(() => {
+const data = await page.evaluate((SEED) => {
   const l1 = window.__l1;
   const mode = window.__ppMode();
   const raster = mode.raster;              // TS private → 运行时可取（调试页专用）
@@ -61,14 +63,15 @@ const data = await page.evaluate(() => {
     dhx[i] = Math.round(o.x * 1000) / 1000; dhz[i] = Math.round(o.z * 1000) / 1000;
   }
   // ---- 创建时原始地形 ----
-  const base = new Array(N), cur = new Array(N), role = new Array(N), color = new Array(N), keyIdx = new Array(N);
+  const base = new Array(N), cur = new Array(N), dig = new Array(N), role = new Array(N), color = new Array(N), keyIdx = new Array(N);
   const keys = [];
   const keyMap = new Map();
   const roleNames = { ground: 0, platform: 1, liquid: 2, pit: 3, '': 4 };
   for (let i = 0; i < N; i++) {
     const [x, z] = xy(i);
-    base[i] = Math.round(raster.baseSurfaceHeightAt(x, z) * 100) / 100;
+    base[i] = Math.round((raster.baseSurfaceHeightAt(x, z) + raster.levelDepthAt(x, z)) * 100) / 100;   // 创建时原始面（未挖）
     cur[i] = Math.round(raster.surfaceHeightAt(x, z) * 100) / 100;
+    dig[i] = Math.round(raster.levelDepthAt(x, z) * 100) / 100;                                          // 真·挖掘深度
     const td = raster.tileDefAt(x, z);
     role[i] = roleNames[td.genRole] ?? 4;
     const c = raster.terrainColorAt(x, z);
@@ -79,36 +82,40 @@ const data = await page.evaluate(() => {
   }
   // ---- 统计 ----
   const names = ['中性', '高地', '低谷', '迎船坡', '背船坡', '关口', '走廊', '开阔地', '隐蔽', '陡壁', '水', '坑'];
-  const hist = {}; for (const n of names) hist[n] = 0;
-  for (const c of l1cls) hist[names[c]]++;
+  const hMask = window.__holeMask, hTab = window.__holeTable;
+  const hHoles = (hTab?.holes ?? []).map((h) => ({ cx: h.cx, cz: h.cz, cells: h.cells, maxD: +h.maxDepth.toFixed(2), score: +h.score.toFixed(3) }));
+  const hCovers = (hTab?.covers ?? []).map((c) => ({ x: c.x, z: c.z, hp: Math.round(c.hp), variant: c.variant, hidden: c.hidden, score: +c.score.toFixed(2) }));
+  const l1st = l1.stats();
+  const hist = l1st.hist;
   const roleHist = [0, 0, 0, 0, 0];
   for (const r of role) roleHist[r]++;
   let bmin = 1e9, bmax = -1e9, dug = 0;
   for (let i = 0; i < N; i++) {
     bmin = Math.min(bmin, base[i]); bmax = Math.max(bmax, base[i]);
-    if (Math.abs(cur[i] - base[i]) > 0.05) dug++;
+    if (dig[i] > 0.05) dug++;
   }
-  const l1st = l1.stats();
   // 最多出现的 8 类地块（图例用）
   const keyCount = new Map();
   for (const ki of keyIdx) keyCount.set(ki, (keyCount.get(ki) ?? 0) + 1);
   const topKeys = [...keyCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
     .map(([ki, n]) => ({ key: keys[ki], n }));
   return {
-    anchor: { x: anchor.x, z: anchor.z }, cell, side, keys, topKeys,
+    anchor: { x: anchor.x, z: anchor.z }, cell, side, keys, topKeys, seed: SEED,
     l1: { cls: l1cls, aspect, slope, blocked, pass, region, width, dhx, dhz },
-    gen: { base, cur, role, color, keyIdx, roleNames: ['ground', 'platform', 'liquid', 'pit', '?'] },
+    gen: { base, cur, dig, role, color, keyIdx, roleNames: ['ground', 'platform', 'liquid', 'pit', '?'] },
+    works: { holes: hHoles, covers: hCovers },
     statsText:
-      `L1：构建 ${l1st.buildMs}ms · 区块 ${l1st.regionCount} · ` + names.map((n) => `${n} ${hist[n]}`).join(' / ') + '\n'
+      `L1（纯初始）：构建 ${l1st.buildMs}ms · 区块 ${l1st.regionCount} · ` + names.map((n) => `${n} ${hist[n]}`).join(' / ') + '\n'
       + `创建时地形：基准高 [${bmin.toFixed(1)}, ${bmax.toFixed(1)}]m · genRole ` +
       `ground ${roleHist[0]} / platform ${roleHist[1]} / liquid ${roleHist[2]} / pit ${roleHist[3]}` +
-      ` · 已被挖改 ${dug} 格（|当前-基准| > 0.05m）`,
+      ` · 已被挖改 ${dug} 格 · ★工事表 ${hHoles.length} 坑洞 + ${hCovers.length} 掩体（动态计算）`,
   };
-});
+}, SEED);
 
 data.generatedAt = new Date().toLocaleString('zh-CN');
 const tpl = fs.readFileSync('scripts/terrain-viewer-template.html', 'utf8');
 const html = tpl.replace('/*__DATA__*/ null', JSON.stringify(data));
 fs.writeFileSync('terrain-viewer.html', html);
-console.log(`[viewer] terrain-viewer.html 已生成（${(html.length / 1024).toFixed(0)} KB）`);
+fs.writeFileSync('terrain-viewer-data.json', JSON.stringify(data));   // 刷新按钮读这个
+console.log(`[viewer] terrain-viewer.html 已生成（${(html.length / 1024).toFixed(0)} KB；刷新按钮数据 terrain-viewer-data.json 同步）`);
 await browser.close();

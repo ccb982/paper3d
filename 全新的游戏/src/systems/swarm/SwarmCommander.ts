@@ -17,13 +17,15 @@ import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
-import { TerrainSemantics, Sem, SEM_NAMES } from './TerrainSemantics';
+import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from './TerrainSemantics';
+import { HoleMask } from './HoleMask';
+import { HoleTable } from './HoleTable';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { engineMissionFor } from './UnitTactics';
 import { guardPoint, UNIT_TACTICS } from './UnitTactics';
 import { setSteerTable } from '../../entity/SteerPick';
-import { coverBlocksLine } from '../../entity/CoverEntity';
+import { coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import { SQUAD_MAX, type Squad } from './SquadTable';
 import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
@@ -47,8 +49,12 @@ export class SwarmCommander {
   private mission: TacticalOrder | null = null;
   /** ★ S0 勘察：地形检测产出的防守布置 */
   private plan: DefensePlan | null = null;
-  /** ★ L1 敌人地形语义表（静态·舰船锚；《敌人管线设计.md》§1；落地/换落点重算） */
+  /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《敌人管线设计.md》§1；落地/换落点重算） */
   readonly semantics = new TerrainSemantics();
+  readonly holeMask = new HoleMask();   // ★ 独立破坏掩码（与 L1 语义表解耦）
+  /** ★★ 敌用动态坑洞公式表（掩码 → 深×近打分；2Hz 持续重排） */
+  readonly holeTable = new HoleTable();
+  private holeClock = 0; private holeMaskDirty = false; private coverTag = '';   // 节拍/脏/掩体指纹
   /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)） */
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
@@ -107,7 +113,6 @@ export class SwarmCommander {
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
-  private readonly builtCovers: { x: number; z: number }[] = [];
   /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
   private recalledRoster: { mobIndex: number; role: UnitRole; count: number }[] | null = null;
   /** ★ 大队：一队 30 怪；一局多个 */
@@ -391,7 +396,7 @@ export class SwarmCommander {
       if (requireInRange && d2 > 48 * 48) return;
       out.push({ x: bx, z: bz, d2 });
     };
-    for (const c of this.builtCovers) add(c.x, c.z);
+    for (const c of this.holeTable.covers) add(c.x, c.z);
     // ★ 扫描产物（有利位置）优先作为驻守点；coverSlots 兜底
     for (const p of plan.posts) add(p.x, p.z);
     for (const c of plan.coverSlots) add(c.x, c.z);
@@ -465,7 +470,7 @@ export class SwarmCommander {
     if (this.plan) {
       const raster = RasterMap.current;
       if (raster) {
-        this.terrainScore.rebuild(raster, this.plan, this.builtCovers, this.postureP,
+        this.terrainScore.rebuild(raster, this.plan, this.holeTable.covers, this.postureP,
           this.scoreStamp + this.postureEpoch * 100000,
           this.battlePosture, playerX, playerZ);
         setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
@@ -477,6 +482,9 @@ export class SwarmCommander {
             heightAt: (x, z) => smp.heightAt(raster, x, z),
             roleAt: (x, z) => smp.roleAt(raster, x, z),
           }, this.plan.cx, this.plan.cz);
+          // ★ 独立坑洞掩码（同锚窗口）：真源 = RasterMap.levelDepthAt（权威挖掘深度）
+          this.holeMask.build({ digDepthAt: (x, z) => raster.levelDepthAt(x, z) },
+            this.plan.cx, this.plan.cz);
           const dbg = typeof location !== 'undefined'
             && (location.search.includes('l1dbg') || location.search.includes('swarmdbg'));
           if (dbg) {
@@ -489,6 +497,23 @@ export class SwarmCommander {
             }
           }
           (globalThis as unknown as { __l1?: TerrainSemantics }).__l1 = this.semantics;
+          const gw = globalThis as unknown as { __holeMask?: HoleMask; __holeTable?: HoleTable };
+          gw.__holeMask = this.holeMask;
+          gw.__holeTable = this.holeTable;
+        }
+        // ★★★ 破坏掩码重扫（破坏后 1 拍内全表刷新；含初始破坏）
+        if (this.holeMaskDirty && this.holeMask.isReady) {
+          this.holeMaskDirty = false;
+          this.holeMask.refresh(this.plan.cx, this.plan.cz, L1_R + 16);
+        }
+        // ★★★ 敌用工事表（动态 2Hz）：坑洞（掩码×深×近）+ 掩体（活注册表×遮蔽×近）
+        this.holeClock += dt;
+        if (this.holeClock >= 0.5) {
+          this.holeClock = 0;
+          const cov = snapshotCovers('enemy').map((c) => ({ x: c.x, z: c.z, hp: c.hp, variant: c.variant, heading: c.heading, hidden: coverBlocksLine(c.x, c.z, playerX, playerZ) }));
+          this.holeTable.rebuild(this.holeMask, this.semantics, playerX, playerZ, cov);
+          const tag = `${cov.length}:${cov.map((c) => `${c.x | 0},${c.z | 0}`).join(';')}`;
+          if (tag !== this.coverTag) { this.coverTag = tag; this.scoreStamp++; }   // 掩体增减 → 评分表全量重评
         }
       }
     }
@@ -892,9 +917,8 @@ export class SwarmCommander {
         }
         if (!piece) continue;
         if (piece.kind === 'cover') {
-          this.buildCover(piece.x, piece.z, 'cover');
-          this.builtCovers.push({ x: piece.x, z: piece.z });   // ★ 远程驻守点
-          this.markTerrainDirty(piece.x, piece.z, 12);          // ★ 新掩体 → 表 + 采样缓存局部重算
+          this.buildCover(piece.x, piece.z, 'cover');   // ★ 注册表即真源，工事表 2Hz 自动纳入
+          this.markTerrainDirty(piece.x, piece.z, 12);   // ★ 新掩体 → 表 + 采样缓存局部重算
           this.buildCds.set(s.id, 3);
         } else {
           this.digTrench?.(piece.x, piece.z);
@@ -1034,7 +1058,7 @@ export class SwarmCommander {
       if (p.kind === 'cover') consider(p.x - plan.approachX * 1.2, p.z - plan.approachZ * 1.2, false, p.score);
       else consider(p.x, p.z, true, p.score);
     }
-    for (const c of this.builtCovers) {
+    for (const c of this.holeTable.covers) {
       consider(c.x - plan.approachX * 1.2, c.z - plan.approachZ * 1.2, false, 3.5);
     }
     // ★ 战壕偏好（全兵种；远程最重）：玩家射程带内最高分战壕格
@@ -1101,10 +1125,17 @@ export class SwarmCommander {
     return this.terrainScore.isWaterAt(x, z);
   }
 
+  /** ★★ 全地形破坏的中央入口（ChunkManager.onTerrainDig 接线）：挖过 → 标脏，
+   *   本 tick 全表重扫破坏掩码（HoleMask）→ 下一低频拍进入 HoleTable（敌读） */
+  noteTerrainDig(x: number, z: number, _r = 16): void {
+    this.holeMaskDirty = true;
+  }
+
   /** ★ 地形脏区（模式层任何挖改都调这个）：表局部重算（脏窗 + 邻环）
    *  @param dug 显式挖掘（战壕）→ 打挖掘标记（战壕阈值放宽到 0.12m） */
   markTerrainDirty(x: number, z: number, r = 12, dug = false): void {
     this.terrainScore.invalidateArea(x, z, r, dug);
+    this.noteTerrainDig(x, z, r);   // ★ 挖改格 → HoleMask 掩码 → HoleTable（敌读）
     const raster = RasterMap.current;
     if (raster) samplerFor(raster).invalidateArea(x, z, r);   // ★ 统一采样缓存同步失效
   }
@@ -1125,7 +1156,7 @@ export class SwarmCommander {
     this.spawnAccum = 0;
     this.buildPieces = [];
     this.builtSlots.clear();
-    this.builtCovers.length = 0;
+    this.holeTable.clear();
     this.engAccum = 0;
     this.buildCd = 0;
     this.resendAccum = 0;

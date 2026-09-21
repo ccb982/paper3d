@@ -1,6 +1,6 @@
 // ============================================================
 // L1 真地形回读：进世界 → 等语义表构建 → 拉 stats + 关键区块（含舰船相对位置）
-// 运行：先 `npm run dev -- --port 5199 --strictPort`，再 `node scripts/tmp/l1-readback.mjs`
+// 运行：先 `npm run dev`（默认 5173），再 `node scripts/tmp/l1-readback.mjs`
 // ============================================================
 import puppeteer from 'puppeteer-core';
 
@@ -26,7 +26,7 @@ page.on('console', (m) => {
   if (t.startsWith('[L1]')) console.log(t);
 });
 await page.evaluateOnNewDocument((s) => localStorage.setItem('arknights_rogue_save', JSON.stringify(s)), makeSession());
-await page.goto('http://localhost:5199/?perf=1&l1dbg=1', { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto('http://localhost:5173/?perf=1&l1dbg=1', { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction('!!window.__ppEnterWorld', { timeout: 120000 });
 await new Promise((r) => setTimeout(r, 2000));
 await page.evaluate(() => window.__ppEnterWorld());

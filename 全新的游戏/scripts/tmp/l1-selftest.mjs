@@ -89,6 +89,7 @@ var TerrainSemantics = class {
   hardRole = new Uint8Array(SIDE * SIDE);
   // pit / h<-1.2
   water = new Uint8Array(SIDE * SIDE);
+  smp = null;
   regionsArr = [];
   get isReady() {
     return this.ready;
@@ -101,6 +102,7 @@ var TerrainSemantics = class {
   // ============================================================
   build(sampler, cx, cz) {
     const t0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+    this.smp = sampler;
     this.ax = cx;
     this.az = cz;
     this.sx = cx - L1_R;
@@ -135,7 +137,7 @@ var TerrainSemantics = class {
   // ============================================================
   // 读表 API
   // ============================================================
-  /** 主类（未就绪/表外 → Neutral） */
+  /** 主类（未就绪/表外 → Neutral）。**纯初始地形语义**——不受任何挖改/构造影响。 */
   classAt(x, z) {
     const i = this.indexAt(x, z);
     return i < 0 ? Sem.Neutral : this.cls[i];
@@ -192,6 +194,25 @@ var TerrainSemantics = class {
   smoothHeightAt(x, z) {
     const i = this.indexAt(x, z);
     return i < 0 ? NaN : this.h[i];
+  }
+  /** 下坡方向（单位向量；写入 out；平地/表外 → false）——坡向箭头的原始方向 */
+  downhillInto(x, z, out) {
+    const i = this.indexAt(x, z);
+    if (i < 0) return false;
+    const ix = i % SIDE, iz = (i - ix) / SIDE;
+    const iL = ix > 0 ? i - 1 : i, iR = ix < SIDE - 1 ? i + 1 : i;
+    const iU = iz > 0 ? i - SIDE : i, iD = iz < SIDE - 1 ? i + SIDE : i;
+    const gx = (this.h[iR] - this.h[iL]) / (2 * L1_CELL);
+    const gz = (this.h[iD] - this.h[iU]) / (2 * L1_CELL);
+    const l = Math.hypot(gx, gz);
+    if (l < 1e-6) {
+      out.x = 0;
+      out.z = 0;
+      return false;
+    }
+    out.x = -gx / l;
+    out.z = -gz / l;
+    return true;
   }
   /** 原始采样高度（回读/评估用；未就绪/表外 → NaN） */
   rawHeightAt(x, z) {
@@ -552,6 +573,195 @@ var TerrainSemantics = class {
   }
 };
 
+// src/systems/swarm/HoleMask.ts
+var HOLE_MIN_MARK = 0.15;
+var HoleMask = class {
+  sx = 0;
+  sz = 0;
+  ready = false;
+  src = null;
+  depth = new Float32Array(SIDE * SIDE);
+  get isReady() {
+    return this.ready;
+  }
+  get anchor() {
+    return { x: this.sx + L1_R, z: this.sz + L1_R };
+  }
+  /** 建立掩码窗口（跟随落点；同锚窗口）并做首扫 */
+  build(src, cx, cz) {
+    this.src = src;
+    this.sx = cx - L1_R;
+    this.sz = cz - L1_R;
+    this.ready = true;
+    this.refresh(cx, cz, L1_R + 16);
+  }
+  /** 掩码读取（世界坐标；表外/未就绪 → 0） */
+  depthAt(x, z) {
+    if (!this.ready) return 0;
+    const ix = Math.floor((x - this.sx) / L1_CELL);
+    const iz = Math.floor((z - this.sz) / L1_CELL);
+    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return 0;
+    return this.depth[iz * SIDE + ix];
+  }
+  /** 该格是否算破坏（深度 ≥ 挖深阈值） */
+  isDug(x, z) {
+    return this.depthAt(x, z) >= HOLE_MIN_MARK;
+  }
+  /** ★★ 刷新（任何挖掘后调用；只扫脏窗，免全表）：
+   *  @returns 该窗内"新达到挖深阈值"的格数 */
+  refresh(x, z, r = 16) {
+    if (!this.ready || !this.src) return 0;
+    let ix0 = Math.max(0, Math.floor((x - r - this.sx) / L1_CELL));
+    let iz0 = Math.max(0, Math.floor((z - r - this.sz) / L1_CELL));
+    let ix1 = Math.min(SIDE - 1, Math.ceil((x + r - this.sx) / L1_CELL));
+    let iz1 = Math.min(SIDE - 1, Math.ceil((z + r - this.sz) / L1_CELL));
+    let n = 0;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        const wx = this.sx + ix * L1_CELL + L1_CELL / 2;
+        const wz = this.sz + iz * L1_CELL + L1_CELL / 2;
+        const d = this.src.digDepthAt(wx, wz);
+        if (d >= HOLE_MIN_MARK && this.depth[i] < HOLE_MIN_MARK) n++;
+        this.depth[i] = d;
+      }
+    }
+    return n;
+  }
+};
+
+// src/systems/swarm/HoleTable.ts
+var HOLE_MIN_DEPTH = 0.3;
+var HOLE_FULL_DEPTH = 1;
+var HOLE_NEAR_R = 40;
+var HOLE_FAR_R = 90;
+var COVER_HIDDEN_W = 1;
+var COVER_OPEN_W = 0.35;
+var HoleTable = class {
+  scores = new Float32Array(SIDE * SIDE);
+  // per-cell 分（>0 = 有效坑；-1 = 非坑）
+  holesArr = [];
+  coversArr = [];
+  get isReady() {
+    return Number.isFinite(this.lastSx);
+  }
+  get holes() {
+    return this.holesArr;
+  }
+  get covers() {
+    return this.coversArr;
+  }
+  /** 清空（退出模式/换落点前） */
+  clear() {
+    this.scores.fill(-1);
+    this.holesArr = [];
+    this.coversArr = [];
+    this.lastSx = NaN;
+    this.lastSz = NaN;
+  }
+  /** ★★ 重排（每个低频拍调一次 = "动态不断修改"）：
+   *  掩码入口 → 逐格打分（深×近）→ 连通块合并成坑洞 → 按分降序。 */
+  rebuild(mask, sem, px, pz, covers = []) {
+    this.scores.fill(-1);
+    this.coversArr = covers.map((c) => {
+      const dist = Math.hypot(c.x - px, c.z - pz);
+      const prox = Math.min(1, Math.max(0, (HOLE_FAR_R - dist) / (HOLE_FAR_R - HOLE_NEAR_R)));
+      return { ...c, dist, score: (c.hidden ? COVER_HIDDEN_W : COVER_OPEN_W) * prox };
+    }).sort((a, b) => b.score - a.score);
+    if (!mask || !mask.isReady || !sem || !sem.isReady) {
+      this.holesArr = [];
+      return;
+    }
+    const R = L1_R, CELL = L1_CELL;
+    const sx = mask.anchor.x - R, sz = mask.anchor.z - R;
+    this.lastSx = sx;
+    this.lastSz = sz;
+    for (let iz = 0; iz < SIDE; iz++) {
+      for (let ix = 0; ix < SIDE; ix++) {
+        const i = iz * SIDE + ix;
+        const wx = sx + ix * CELL + CELL / 2;
+        const wz = sz + iz * CELL + CELL / 2;
+        const depth = mask.depthAt(wx, wz);
+        if (depth < HOLE_MIN_DEPTH) continue;
+        if (!sem.isPassableAt(wx, wz)) continue;
+        const dist = Math.hypot(wx - px, wz - pz);
+        const depthF = Math.min(1, Math.max(0, (depth - HOLE_MIN_DEPTH) / (HOLE_FULL_DEPTH - HOLE_MIN_DEPTH)));
+        const proxF = Math.min(1, Math.max(0, (HOLE_FAR_R - dist) / (HOLE_FAR_R - HOLE_NEAR_R)));
+        this.scores[i] = depthF * proxF;
+      }
+    }
+    const region = new Int16Array(SIDE * SIDE);
+    region.fill(-1);
+    const list = [];
+    let nextId = 0;
+    for (let iz = 0; iz < SIDE; iz++) {
+      for (let ix = 0; ix < SIDE; ix++) {
+        const start = iz * SIDE + ix;
+        if (this.scores[start] <= 0 || region[start] >= 0) continue;
+        const que = [start];
+        region[start] = nextId;
+        let q = 0, n = 0, sumD = 0, maxD = 0, sumX = 0, sumZ = 0;
+        let best = -1, bx = 0, bz = 0;
+        while (q < que.length) {
+          const c = que[q++];
+          const cix = c % SIDE, ciz = (c - cix) / SIDE;
+          const wx = sx + cix * CELL + CELL / 2;
+          const wz = sz + ciz * CELL + CELL / 2;
+          const d = mask.depthAt(wx, wz);
+          n++;
+          sumD += d;
+          sumX += wx;
+          sumZ += wz;
+          if (d > maxD) maxD = d;
+          if (this.scores[c] > best) {
+            best = this.scores[c];
+            bx = wx;
+            bz = wz;
+          }
+          for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nxi = cix + dx, nzi = ciz + dz;
+            if (nxi < 0 || nzi < 0 || nxi >= SIDE || nzi >= SIDE) continue;
+            const ni = nzi * SIDE + nxi;
+            if (this.scores[ni] > 0 && region[ni] < 0) {
+              region[ni] = nextId;
+              que.push(ni);
+            }
+          }
+        }
+        const dist = Math.hypot(bx - px, bz - pz);
+        list.push({
+          id: nextId,
+          cx: bx,
+          cz: bz,
+          mx: sumX / n,
+          mz: sumZ / n,
+          cells: n,
+          maxDepth: maxD,
+          avgDepth: sumD / n,
+          score: Math.max(0, best),
+          dist
+        });
+        nextId++;
+      }
+    }
+    this.holesArr = list.sort((a, b) => b.score - a.score);
+  }
+  /** 读点：坑洞分（世界坐标；非坑/表外 = 0） */
+  scoreAt(x, z) {
+    if (!Number.isFinite(this.lastSx)) return 0;
+    const ix = Math.floor((x - this.lastSx) / L1_CELL);
+    const iz = Math.floor((z - this.lastSz) / L1_CELL);
+    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return 0;
+    return Math.max(0, this.scores[iz * SIDE + ix]);
+  }
+  lastSx = NaN;
+  lastSz = NaN;
+  /** ★ 敌人取坑：分数最高的 n 个坑洞（可加半径筛选） */
+  topHoles(k, maxDist = Infinity) {
+    return this.holesArr.filter((h) => h.dist <= maxDist).slice(0, k);
+  }
+};
+
 // scripts/l1-selftest.ts
 var pass = 0;
 var fail = 0;
@@ -667,6 +877,72 @@ function histOf(s) {
   ok(l1.classAt(-60, 60) === Sem.Water, "\u6C34\u533A \u2192 \u6C34\u7C7B");
   ok(!l1.isPassableAt(60, 60), "\u5751\u4E0D\u53EF\u8D70");
   ok(l1.isPassableAt(-60, 60), "\u6C34\u53EF\u8D70");
+}
+{
+  console.log("\n[5] \u5751\u6D1E\uFF08\u63A9\u7801\u72EC\u7ACB + \u654C\u7528\u52A8\u6001\u516C\u5F0F\u8868\uFF09");
+  const mask = new HoleMask();
+  const inA = (x, z) => x > -44 && x < -16 && z > -44 && z < -16;
+  const digOf = (x, z) => x > 0 && x <= 4 && z > 0 && z <= 4 ? 1.2 : inA(x, z) ? 0.6 : 0;
+  mask.build({ digDepthAt: (x, z) => digOf(x, z) }, 0, 0);
+  const sem = new TerrainSemantics();
+  sem.build(field(() => 0), 0, 0);
+  const holes = new HoleTable();
+  ok(mask.isDug(-30, -30), "\u63A9\u7801\u8BC6\u522B\u521D\u59CB\u7834\u574F\u683C");
+  ok(Math.abs(mask.depthAt(-30, -30) - 0.6) < 0.01, "\u63A9\u7801\u8BB0\u5F55\u6316\u6398\u6DF1\u5EA6");
+  ok(sem.classAt(-30, -30) === Sem.Open, "L1 \u7EAF\u521D\u59CB\uFF1A\u7834\u574F\u683C\u4ECD\u662F\u5E73\u5730\u7C7B\uFF08\u4E0D\u6539\u53D8\u8BED\u4E49\u7C7B\uFF09");
+  ok(sem.stats().hist["\u5F00\u9614\u5730"] === 5329, "L1 hist \u65E0\u7834\u574F\u6876\uFF0812 \u7C7B\uFF09");
+  ok(SEM_NAMES.length === 12, "SEM_NAMES \u5171 12 \u7C7B\uFF08\u6218\u58D5\u5DF2\u5265\u79BB\uFF09");
+  holes.rebuild(mask, sem, 3, 3);
+  const sProbe = holes.scoreAt(2, 2);
+  const sMid = holes.scoreAt(-30, -30);
+  ok(sProbe > 0.9, `\u8FD1\u5904\u6EE1\u6DF1\u5751 \u2192 \u9AD8\u5206\uFF08${sProbe.toFixed(3)}\uFF09`);
+  ok(sMid < sProbe, `\u66F4\u6D45\u66F4\u8FDC\u7684\u7A9D\u5206\u66F4\u4F4E\uFF08${sMid.toFixed(3)} < ${sProbe.toFixed(3)}\uFF09`);
+  const hole = holes.holes[0];
+  ok(!!hole && hole.cells === 1 && Math.abs(hole.maxDepth - 1.2) < 0.01, "\u6EE1\u6DF1\u63A2\u9488\u72EC\u7ACB\u6210\u5751\uFF08cells=1\uFF0C\u6700\u6DF1 1.2\uFF09");
+  ok(hole.score === sProbe, "\u5751\u6D1E\u5206 = \u5757\u5185\u6700\u9AD8\u683C\u5206");
+  holes.rebuild(mask, sem, 500, 500);
+  ok(holes.scoreAt(2, 2) <= 1e-3, `\u8FDC\u5904\u6EE1\u6DF1\u5751\u5206\u584C\u4E3A 0\uFF08${holes.scoreAt(2, 2).toFixed(3)}\uFF09`);
+  const holeFar = holes.holes[0];
+  ok(!holeFar || holeFar.score <= 1e-3, "\u8FDC\u79BB\u73A9\u5BB6 \u2192 \u65E0\u6709\u6548\u9AD8\u5206\u5751\u6D1E\u6761\u76EE");
+  holes.rebuild(mask, sem, 3, 3);
+  const sBack = holes.scoreAt(2, 2);
+  ok(sBack > 0.9, "\u52A8\u6001\u8868\u968F\u73A9\u5BB6\u9760\u8FD1\u56DE\u5347");
+  const shallow = new HoleMask();
+  shallow.build({ digDepthAt: () => 0.1 }, 0, 0);
+  shallow.refresh(50, 50, 40);
+  holes.rebuild(shallow, sem, 0, 0);
+  ok(holes.holes.length === 0, "\u6D45\u5751\uFF08<0.3m\uFF09\u4E0D\u6784\u6210\u6709\u6548\u5751\u6D1E");
+  ok(holes.scoreAt(50, 50) === 0, "\u6D45\u5751\u683C\u5206 = 0");
+  ok(HOLE_FULL_DEPTH > HOLE_MIN_DEPTH, "\u6EE1\u5206\u5E03\u6DF1 > \u95E8\u69DB");
+  ok(HOLE_NEAR_R < HOLE_FAR_R, "\u8FD1\u6EE1 > \u8FDC\u96F6\u534A\u5F84");
+  const covs = [
+    { x: 10, z: 10, hp: 400, variant: "cover", heading: 0, hidden: true },
+    // 近 + 挡射界
+    { x: 12, z: 12, hp: 400, variant: "cover", heading: 0, hidden: false },
+    // 近 + 暴露
+    { x: 300, z: 300, hp: 400, variant: "wall", heading: 0, hidden: true }
+    // 远（距离因子=0）
+  ];
+  holes.rebuild(mask, sem, 0, 0, covs);
+  const cs = holes.covers;
+  ok(cs.length === 3, "\u63A9\u4F53\u6761\u76EE\u968F\u91CD\u6392\u52A8\u6001\u66F4\u65B0");
+  ok(cs[0].x === 10 && cs[0].hidden, "\u906E\u853D\u8FD1\u63A9\u4F53\u6392\u7B2C\u4E00");
+  ok(
+    cs[0].score > cs[1].score && cs[1].score > cs[2].score,
+    `\u63A9\u4F53\u5206\uFF1A\u906E\u853D>\u66B4\u9732>\u8FDC\uFF08${cs[0].score.toFixed(2)}/${cs[1].score.toFixed(2)}/${cs[2].score.toFixed(2)}\uFF09`
+  );
+  holes.rebuild(mask, sem, 0, 0, []);
+  ok(holes.covers.length === 0, "\u63A9\u4F53\u9500\u6BC1\u540E\u52A8\u6001\u8868\u6E05\u7A7A");
+  console.log(
+    "  \u63A2\u9488(\u8FD1\u6EE1\u6DF1) =",
+    sProbe.toFixed(3),
+    " \u4E2D\u7A9D =",
+    sMid.toFixed(3),
+    " \u56DE\u8868 =",
+    sBack.toFixed(3),
+    " \u5751\u6D1E\u6570 =",
+    holes.holes.length
+  );
 }
 console.log(`
 ==== \u7ED3\u679C\uFF1APASS ${pass} / FAIL ${fail} ====`);

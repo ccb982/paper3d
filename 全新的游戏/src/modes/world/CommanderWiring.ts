@@ -36,6 +36,8 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   d.commander.digTrench = (x, z) => {
     d.chunks?.digRect(x, z, 2, 2);
   };
+  // ★ 所有地形破坏（子弹/战壕/任何挖坑）→ L1 战壕层（挖改格=战壕）
+  if (d.chunks) d.chunks.onTerrainDig = (x, z, r) => d.commander.noteTerrainDig(x, z, r);
   // ★ 兵力创建（全权在蜂群架构）：按角色挑名册兵种；精英按 elite 标签挑
   //   → 走唯一收口 spawnOne（落点闸门 / MAX_ALIVE / 记账；绕过旧每日配额）
   //   ★ **生成点必须距玩家 ≥80m**：不够就**沿来向向外推**（保持正面阵形，

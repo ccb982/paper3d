@@ -43,6 +43,7 @@ import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
+import { TerrainTableViewer } from '../services/ui/TerrainTableViewer';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint } from './world/LandingCamera';
@@ -362,6 +363,8 @@ export class WorldMode implements IGameMode {
   /** ★ 调试可视化（?swarmdbg=1）：小队/属性/指令 */
   private swarmDbg: SwarmDebugOverlay | null = null;
   private swarmDbgAccum = 0;
+  /** ★ 地形表实时视图（?l1view=1；读当前世界，1Hz） */
+  private tableViewer: TerrainTableViewer | null = null;
   /** ★ 爆炸视觉（自爆/范围爆炸） */
   private explosionFx: ExplosionFx | null = null;
   private pickupGlows: PickupGlowEffect[] = [];
@@ -784,6 +787,7 @@ export class WorldMode implements IGameMode {
       });
     };
     // ★ 调试可视化：?swarmdbg=1（小队/属性/指令；无 flag 零开销）
+    if (location.search.includes('l1view')) this.tableViewer = new TerrainTableViewer();
     if (location.search.includes('swarmdbg')) {
       this.swarmDbg = new SwarmDebugOverlay();
       // ★ 控制台测试入口（验证命令链）：
@@ -1398,6 +1402,8 @@ export class WorldMode implements IGameMode {
       hooks.dayT01 = dayT01FromHour(renderManager.querySun().hour);
       this.swarm.update(dt, hooks);
       this.updateSwarmDbg(dt);
+      const cmdr = this.swarm.commander;
+      this.tableViewer?.tick(cmdr.semantics, this.raster, cmdr.holeMask, cmdr.holeTable, dt);
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
       this.explosionFx?.update(dt);
@@ -1734,6 +1740,8 @@ export class WorldMode implements IGameMode {
     // ---- 调试可视化（?swarmdbg=1） ----
     this.swarmDbg?.dispose();
     this.swarmDbg = null;
+    this.tableViewer?.dispose();
+    this.tableViewer = null;
     // ---- 爆炸视觉 ----
     this.explosionFx?.dispose();
     this.explosionFx = null;

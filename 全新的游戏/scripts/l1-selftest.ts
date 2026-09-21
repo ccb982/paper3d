@@ -3,6 +3,8 @@
 // 运行：npx esbuild scripts/l1-selftest.ts --bundle --platform=node --format=esm --outfile=scripts/tmp/l1-selftest.mjs && node scripts/tmp/l1-selftest.mjs
 // ============================================================
 import { TerrainSemantics, Sem, SEM_NAMES, type FieldSampler } from '../src/systems/swarm/TerrainSemantics';
+import { HoleMask } from '../src/systems/swarm/HoleMask';
+import { HoleTable, HOLE_MIN_DEPTH, HOLE_FULL_DEPTH, HOLE_NEAR_R, HOLE_FAR_R } from '../src/systems/swarm/HoleTable';
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string, extra = ''): void {
@@ -119,6 +121,69 @@ function histOf(s: ReturnType<TerrainSemantics['stats']>): string {
   ok(l1.classAt(-60, 60) === Sem.Water, '水区 → 水类');
   ok(!l1.isPassableAt(60, 60), '坑不可走');
   ok(l1.isPassableAt(-60, 60), '水可走');
+}
+
+// ---- 5) 坑洞管线：独立掩码 HoleMask（挖改）→ 敌用动态表 HoleTable（深×近打分）----
+{
+  console.log('\n[5] 坑洞（掩码独立 + 敌用动态公式表）');
+  // L1 = 纯初始地形：平坦 ground，无坑无破坏（下水换区测初始破坏进掩码）
+  const mask = new HoleMask();
+  // 真源 = 函数式破坏场（模拟 RasterMap.levelDepthAt，坐标为 4m 格中心）
+  const inA = (x: number, z: number) => x > -44 && x < -16 && z > -44 && z < -16;   // A 窝
+  const digOf = (x: number, z: number) =>
+    x > 0 && x <= 4 && z > 0 && z <= 4 ? 1.2 : inA(x, z) ? 0.6 : 0;
+  mask.build({ digDepthAt: (x, z) => digOf(x, z) }, 0, 0);
+  const sem = new TerrainSemantics();
+  sem.build(field(() => 0), 0, 0);
+  const holes = new HoleTable();
+  // a) 初始破坏（掩码独立于语义表）：开局既有坑 → build 首扫算进掩码；L1 类不受影响
+  ok(mask.isDug(-30, -30), '掩码识别初始破坏格');
+  ok(Math.abs(mask.depthAt(-30, -30) - 0.6) < 0.01, '掩码记录挖掘深度');
+  ok(sem.classAt(-30, -30) === Sem.Open, 'L1 纯初始：破坏格仍是平地类（不改变语义类）');
+  ok(sem.stats().hist['开阔地'] === 5329, 'L1 hist 无破坏桶（12 类）');
+  ok(SEM_NAMES.length === 12, 'SEM_NAMES 共 12 类（战壕已剥离）');
+  // b) 打分：近+深 → 高分；深但远 → 分塌；浅但近 → 分塌
+  holes.rebuild(mask, sem, 3, 3);        // 玩家贴近满深探针格 (2,2)=1.2m
+  const sProbe = holes.scoreAt(2, 2);     // 深满 × 近(<40m) = 高分
+  const sMid = holes.scoreAt(-30, -30);   // 深半(0.6) × 距 45m(≈0.9) = 中分
+  ok(sProbe > 0.9, `近处满深坑 → 高分（${sProbe.toFixed(3)}）`);
+  ok(sMid < sProbe, `更浅更远的窝分更低（${sMid.toFixed(3)} < ${sProbe.toFixed(3)}）`);
+  const hole = holes.holes[0];
+  ok(!!hole && hole.cells === 1 && Math.abs(hole.maxDepth - 1.2) < 0.01, '满深探针独立成坑（cells=1，最深 1.2）');
+  ok(hole.score === sProbe, '坑洞分 = 块内最高格分');
+  holes.rebuild(mask, sem, 500, 500);    // 玩家远离 → 全表分塌为 0
+  ok(holes.scoreAt(2, 2) <= 0.001, `远处满深坑分塌为 0（${holes.scoreAt(2, 2).toFixed(3)}）`);
+  const holeFar = holes.holes[0];
+  ok(!holeFar || holeFar.score <= 0.001, '远离玩家 → 无有效高分坑洞条目');
+  holes.rebuild(mask, sem, 3, 3);        // 恢复高分态（验证"动态不断修改"）
+  const sBack = holes.scoreAt(2, 2);
+  ok(sBack > 0.9, '动态表随玩家靠近回升');
+  // c) 浅坑（0.1m < 0.3m 门槛）→ 无坑洞条目
+  const shallow = new HoleMask();
+  shallow.build({ digDepthAt: () => 0.1 }, 0, 0);
+  shallow.refresh(50, 50, 40);
+  holes.rebuild(shallow, sem, 0, 0);
+  ok(holes.holes.length === 0, '浅坑（<0.3m）不构成有效坑洞');
+  ok(holes.scoreAt(50, 50) === 0, '浅坑格分 = 0');
+  // d) 满分布深 ⇔ 分近临界（验证常数关系：无关点）
+  ok(HOLE_FULL_DEPTH > HOLE_MIN_DEPTH, '满分布深 > 门槛');
+  ok(HOLE_NEAR_R < HOLE_FAR_R, '近满 > 远零半径');
+  // e) 掩体（构造工事）也动态计算：遮蔽×距离 打分 + 排序 + 销毁即清空
+  const covs = [
+    { x: 10, z: 10, hp: 400, variant: 'cover', heading: 0, hidden: true },    // 近 + 挡射界
+    { x: 12, z: 12, hp: 400, variant: 'cover', heading: 0, hidden: false },   // 近 + 暴露
+    { x: 300, z: 300, hp: 400, variant: 'wall', heading: 0, hidden: true },   // 远（距离因子=0）
+  ];
+  holes.rebuild(mask, sem, 0, 0, covs);
+  const cs = holes.covers;
+  ok(cs.length === 3, '掩体条目随重排动态更新');
+  ok(cs[0].x === 10 && cs[0].hidden, '遮蔽近掩体排第一');
+  ok(cs[0].score > cs[1].score && cs[1].score > cs[2].score,
+    `掩体分：遮蔽>暴露>远（${cs[0].score.toFixed(2)}/${cs[1].score.toFixed(2)}/${cs[2].score.toFixed(2)}）`);
+  holes.rebuild(mask, sem, 0, 0, []);   // 掩体全毁 → 条目清空
+  ok(holes.covers.length === 0, '掩体销毁后动态表清空');
+  console.log('  探针(近满深) =', sProbe.toFixed(3), ' 中窝 =', sMid.toFixed(3),
+    ' 回表 =', sBack.toFixed(3), ' 坑洞数 =', holes.holes.length);
 }
 
 console.log(`\n==== 结果：PASS ${pass} / FAIL ${fail} ====`);

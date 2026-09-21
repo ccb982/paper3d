@@ -206,6 +206,10 @@ export class ChunkManager {
   private raster: RasterMap;
   private host: ChunkGroundHost;
 
+  /** ★ 所有地形破坏的中央回调（子弹/战壕/任何 digCells 都经此）：告诉上层"这挖了"
+   *  上层用它把挖改格刷进 L1 战壕层。由模式接线（CommanderWiring）在 enter 时设置。 */
+  onTerrainDig: (x: number, z: number, r: number) => void = () => {};
+
   /** 视觉网格（key → group/mesh） */
   private meshes = new Map<number, THREE.Object3D>();
   /** ★ 虚空地块（四维空间：只建物理不建视觉；key 集合，与 bodies 对齐） */
@@ -2587,11 +2591,23 @@ const key2 = chunkKeyOf(cx, cz);
     cells: { lx: number; lz: number }[];
     dirty: Set<number>;
   }>): void {
+    // ★ 挖坑有实质变化 → 通知上层（L1 战壕层用）；收集世界包围盒
+    let minWX = Infinity, minWZ = Infinity, maxWX = -Infinity, maxWZ = -Infinity;
+    for (const [, rec] of byChunk) {
+      for (const c of rec.cells) {
+        const wx = rec.cx * CHUNK_SIZE + c.lx, wz = rec.cz * CHUNK_SIZE + c.lz;
+        if (wx < minWX) minWX = wx;
+        if (wz < minWZ) minWZ = wz;
+        if (wx > maxWX) maxWX = wx;
+        if (wz > maxWZ) maxWZ = wz;
+      }
+    }
+    let dugSomething = false;
     for (const [, rec] of byChunk) {
       const _t0 = performance.now();
       const changed = this.raster.digCells(rec.cx, rec.cz, rec.cells);
       digPerf.digCells += performance.now() - _t0;
-      if (changed) {
+      if (changed) { dugSomething = true;
         // ★ 帧间合并：不立即重建——digCells 已同步落库（数据即时正确），
         //   视觉重建攒进 pendingPatches，flushPatchRebuilds 每帧开头合并为一次
         const key = chunkKeyOf(rec.cx, rec.cz);
@@ -2612,6 +2628,12 @@ const key2 = chunkKeyOf(cx, cz);
       const _tn = performance.now();
       this.markNeighborsForDug(rec);
       digPerf.neighbors += performance.now() - _tn;
+    }
+    // ★ 有实质挖动 → 通知上层（L1 战壕层）：统一"所有地形破坏 → 战壕"
+    if (dugSomething && Number.isFinite(minWX)) {
+      const cx = (minWX + maxWX) / 2, cz = (minWZ + maxWZ) / 2;
+      const r = Math.max(1, Math.ceil((Math.max(maxWX - minWX, maxWZ - minWZ) + 1) / 2));
+      this.onTerrainDig(cx, cz, r);
     }
   }
 

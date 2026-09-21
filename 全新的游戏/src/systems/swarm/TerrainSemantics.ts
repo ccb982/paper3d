@@ -6,7 +6,10 @@
 // 纯逻辑：只依赖 FieldSampler（高度/role）——游戏内接 TerrainSampler，自测接合成地形。
 // 分层：Primary 类（互斥，见 Sem）+ 正交标记（aspect 坡向、slope、width、losBlocked、concealed）。
 // 方向主轴（用户定调）：面向舰船的坡 = 迎船坡（偏进攻）；背对舰船的坡 = 背船坡（偏防御）。
-// 注意：L1 不含人造物（战壕/掩体/墙 → L2 工件表）、不含态势权重（→ L3 读时合成）。
+// 注意：L1 **只基于初始地形**（创建时高度场）；人造改动一律不算类——
+//  地形破坏 = 独立掩码模块 HoleMask（原始数据，不参与任何语义类）；
+//  敌人读的是另一个**动态坑洞公式表 HoleTable**（深×近打分，持续修改）。
+
 // ============================================================
 
 /** 采样接口：游戏内 = TerrainSampler + RasterMap 的适配器；自测 = 合成高度场 */
@@ -15,11 +18,11 @@ export interface FieldSampler {
   roleAt(x: number, z: number): string;
 }
 
-/** 语义格边长（米；4m = 地形块网格，与挖掘同源） */
+/** 语义格边长（米；4m = 地形块网格，与挖掘同源；HoleMask/HoleTable 共享） */
 export const L1_CELL = 4;
 /** 语义表半径（米；覆盖落点周边） */
 export const L1_R = 144;
-const SIDE = Math.floor((L1_R * 2) / L1_CELL) + 1;
+export const SIDE = Math.floor((L1_R * 2) / L1_CELL) + 1;
 
 // ---- 判据常量（初版可调） ----
 /** 坡面梯度阈值（m/m；1.5m/4m ≈ 21°） */
@@ -50,7 +53,8 @@ const EYE_SHIP = 1.6;
 const EYE_TARGET = 0.4;
 /** 可站宽度上限（轴向各 3 格，同 TerrainScore） */
 const WIDTH_CAP = 3;
-
+/** ★ 战壕判定：当前高比创建时基准低 ≥ 此值（米；一层挖掘 ≈0.2m） */
+// 挖掘深度阈值/掩码 = 独立模块 HoleMask；本模块不持有任何破坏数据
 /** 语义主类（互斥；数值顺序即调试显示顺序） */
 export const Sem = {
   Neutral: 0,
@@ -135,6 +139,7 @@ export class TerrainSemantics {
   private readonly passable = new Uint8Array(SIDE * SIDE);
   private readonly hardRole = new Uint8Array(SIDE * SIDE);   // pit / h<-1.2
   private readonly water = new Uint8Array(SIDE * SIDE);
+  private smp: FieldSampler | null = null;
   private regionsArr: SemRegion[] = [];
 
   get isReady(): boolean { return this.ready; }
@@ -145,6 +150,7 @@ export class TerrainSemantics {
   // ============================================================
   build(sampler: FieldSampler, cx: number, cz: number): void {
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    this.smp = sampler;
     this.ax = cx; this.az = cz;
     this.sx = cx - L1_R;
     this.sz = cz - L1_R;
@@ -172,6 +178,7 @@ export class TerrainSemantics {
     this.computeLos();
     const regions = this.classifyAndGrow();
     this.regionsArr = regions;
+    // 坑洞/破坏 → HoleMask（独立模块）+ HoleTable（敌用动态表）；L1 只读初始地形
     this.ready = true;
     this.buildMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   }
@@ -180,7 +187,7 @@ export class TerrainSemantics {
   // 读表 API
   // ============================================================
 
-  /** 主类（未就绪/表外 → Neutral） */
+  /** 主类（未就绪/表外 → Neutral）。**纯初始地形语义**——不受任何挖改/构造影响。 */
   classAt(x: number, z: number): Sem {
     const i = this.indexAt(x, z);
     return i < 0 ? Sem.Neutral : this.cls[i] as Sem;

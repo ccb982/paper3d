@@ -188,7 +188,7 @@ export class TerrainScore {
   /** 全量重建（触发戳 = 落点版本 + 态势代次；掩体/挖掘走局部重算）
    *  @param playerX,playerZ 玩家位置（威胁距项 T；缺省 0 视为无威胁） */
   rebuild(
-    raster: RasterMap, plan: DefensePlan, builtCovers: { x: number; z: number }[],
+    raster: RasterMap, plan: DefensePlan, builtCovers: readonly { x: number; z: number }[],
     p: number, stamp: number, posture: BattlePosture = 'patrol',
     playerX = 0, playerZ = 0,
   ): void {
@@ -473,7 +473,7 @@ export class TerrainScore {
   }
 
   /** 掩体/制高加成表（扫描产物 + 已建掩体） */
-  private buildBonus(plan: DefensePlan, builtCovers: { x: number; z: number }[]): Map<string, number> {
+  private buildBonus(plan: DefensePlan, builtCovers: readonly { x: number; z: number }[]): Map<string, number> {
     const bonus = new Map<string, number>();
     for (const p of plan.posts) bonus.set(this.key(p.x, p.z), p.kind === 'cover' ? 1.2 : 0.8);
     for (const c of builtCovers) bonus.set(this.key(c.x, c.z), 2.5);   // ★ 造好的掩体 = 新有利位置
