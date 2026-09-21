@@ -220,6 +220,7 @@ export class SwarmCommander {
     this.escortAssign.clear();
     this.protectAssign.clear();
     this.coverHolders.clear();
+    this.builderRoles.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
@@ -525,8 +526,10 @@ export class SwarmCommander {
   private readonly escortAssign = new Map<number, number>();
   /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位/掩体）——保护对象由大队定 */
   readonly protectAssign = new Map<number, ProtectTarget>();
-  /** ★ 掩体驻守（远程，每帧更新）：squadId → 掩体中心（站位由个体自行计算 → 命令提供玩家位置） */
-  private readonly coverHolders = new Map<number, { cx: number; cz: number }>();
+  /** ★ 掩体驻守（远程，每帧更新）：squadId → { 掩体中心, 战壕位（掩体外侧 5m） } */
+  private readonly coverHolders = new Map<number, { cx: number; cz: number; x: number; z: number }>();
+  /** ★ 施工分工（蜂群引擎指派）：cover = 修掩体班；trench = 挖战壕班；any = 兼顾 */
+  private readonly builderRoles = new Map<number, 'cover' | 'trench' | 'any'>();
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
 
@@ -623,14 +626,25 @@ export class SwarmCommander {
       };
       const held = this.coverHolders.get(s.id);
       if (held && ok(held.cx, held.cz)) continue;   // 滞回：掩体仍有效 → 不折腾
-      let best: { cx: number; cz: number } | null = null;
+      // ★ 站位 = 掩体朝**外**（远离舰船/落点中心）5m = 掩体后方的战壕位（用户定调）
+      const plan = this.plan!;
+      const standOf = (cx: number, cz: number): { x: number; z: number } => {
+        const dx = cx - plan.cx, dz = cz - plan.cz;
+        const dl = Math.hypot(dx, dz) || 1;
+        return { x: cx + (dx / dl) * 5, z: cz + (dz / dl) * 5 };
+      };
+      let best: { cx: number; cz: number; x: number; z: number } | null = null;
       let bestScore = Infinity;
       for (const c of covers) {
         if (!ok(c.x, c.z)) continue;
+        const st = standOf(c.x, c.z);
+        // 优先"掩体后有战壕"的配对掩体（前线掩体）；未配对扣 60 分
+        const paired = this.corps.pieces.some((q) => q.kind === 'trench'
+          && (q.x - st.x) ** 2 + (q.z - st.z) ** 2 <= 20);
         const dSquad = Math.hypot(c.x - scx, c.z - scz);
         const dPlayer = Math.hypot(c.x - playerX, c.z - playerZ);
-        const score = dSquad + Math.max(0, dPlayer - 48) * 2;
-        if (score < bestScore) { bestScore = score; best = { cx: c.x, cz: c.z }; }
+        const score = dSquad + Math.max(0, dPlayer - 48) * 2 + (paired ? 0 : 60);
+        if (score < bestScore) { bestScore = score; best = { cx: c.x, cz: c.z, x: st.x, z: st.z }; }
       }
       if (best) this.coverHolders.set(s.id, best);
       else this.coverHolders.delete(s.id);
@@ -791,6 +805,21 @@ export class SwarmCommander {
         if (idx >= 0 && !buildSite) buildSite = { x: this.buildPieces[idx].x, z: this.buildPieces[idx].z };
       }
     }
+    // ★ 施工分工（用户定调）：**1 个施工队修掩体，其余全部挖战壕**；只有一个队时兼顾
+    {
+      const aliveB = new Set(builders.map((b) => b.id));
+      for (const id of [...this.builderRoles.keys()]) if (!aliveB.has(id)) this.builderRoles.delete(id);
+      let hasCover = builders.some((b) => this.builderRoles.get(b.id) === 'cover');
+      for (const b of builders) {
+        let r = this.builderRoles.get(b.id);
+        if (!r) {
+          r = builders.length >= 2 ? (hasCover ? 'trench' : 'cover') : 'any';
+          this.builderRoles.set(b.id, r);
+          if (r === 'cover') hasCover = true;
+        }
+        this.corps.setRole(b.id, r);
+      }
+    }
     // ★ S1 护工锚：工程队质心表（非工兵队粘性配对跟随保护）
     const engCent = new Map<number, { x: number; z: number }>();
     if (this.stage === 'S1' && this.battlePosture !== 'assault') {
@@ -831,7 +860,7 @@ export class SwarmCommander {
         ? this.escortAnchor(s.id, scx, scz, engCent) : null;
       const coverHold = (s.type === 'ranged' && !s.builders) ? this.coverHolders.get(s.id) : undefined;
       let pt: ProtectTarget | null = null;
-      if (coverHold) pt = { x: coverHold.cx, z: coverHold.cz, source: 'cover' };   // ★ 远程：掩体优先（站位个体自算）
+      if (coverHold) pt = { x: coverHold.x, z: coverHold.z, source: 'cover' };   // ★ 远程：驻守掩体后战壕位
       else if (escort) pt = { x: escort.x, z: escort.z, source: 'engineer' };
       else if (this.battlePosture === 'assault' && buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
       else if (buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
@@ -903,7 +932,7 @@ export class SwarmCommander {
     // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
     for (const [id, h] of this.coverHolders) {
       this.swarm.issueOrder(id, {
-        kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
+        kind: 'garrison', target: { x: h.x, z: h.z }, roe: 'engage', mission: 'hold',
         threatX: playerX, threatZ: playerZ, seq: 0,
       }, 4);
     }

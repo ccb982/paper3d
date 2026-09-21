@@ -59,6 +59,8 @@ export class EngineerCorps {
   /** 各队施工冷却（squadId → 剩余秒） */
   readonly cds = new Map<number, number>();
   accum = 0;
+  /** ★ 施工分工（蜂群引擎指派）：cover = 修掩体班；trench = 挖战壕班；any = 兼顾（只有一个队时） */
+  private readonly roles = new Map<number, 'cover' | 'trench' | 'any'>();
 
   constructor(
     private readonly host: EngineerHost,
@@ -118,17 +120,30 @@ export class EngineerCorps {
     }
   }
 
-  /** 队级分派：保持已派未建块；否则按 **pri 施工优先级** 挑最近未认领块。
-   *  选择链：前线掩体（0）→ 战壕（1）→ 环掩体（2）；同 pri 取最近（先部署掩体，不闷头挖长壕）。 */
+  /** ★ 引擎指派施工分工（一个队修掩体、其余挖战壕；单队 = 兼顾） */
+  setRole(squadId: number, role: 'cover' | 'trench' | 'any'): void {
+    this.roles.set(squadId, role);
+  }
+
+  /** 该队是否可施工该类工件（分工过滤） */
+  private allows(squadId: number, kind: 'cover' | 'trench'): boolean {
+    const r = this.roles.get(squadId) ?? 'any';
+    return r === 'any' || r === kind;
+  }
+
+  /** 队级分派：保持已派未建块；否则按 **pri 施工优先级** 挑最近未认领块（限本班工件类）。
+   *  选择链：前线掩体（0）→ 战壕（1）→ 环掩体（2）；同 pri 取最近。 */
   assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.assign.get(squadId);
     if (cur !== undefined && cur < this.pieces.length
-      && !this.built.has(keyOf(this.pieces[cur]))) return cur;
+      && !this.built.has(keyOf(this.pieces[cur]))
+      && this.allows(squadId, this.pieces[cur].kind)) return cur;
     const claimed = new Set<number>(this.assign.values());
     let minPri = Infinity, anyBest = -1, anyD = Infinity;
     for (let i = 0; i < this.pieces.length; i++) {
       const q = this.pieces[i];
       if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
+      if (!this.allows(squadId, q.kind)) continue;
       const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
       if (q.pri < minPri) { minPri = q.pri; anyBest = i; anyD = d; }
       else if (q.pri === minPri && d < anyD) { anyBest = i; anyD = d; }
@@ -237,7 +252,8 @@ export class EngineerCorps {
       let piece: BuildPiece | null = null;
       let fidx = this.focus.get(s.id);
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
-        && !this.built.has(keyOf(this.pieces[fidx]))) {
+        && !this.built.has(keyOf(this.pieces[fidx]))
+        && this.allows(s.id, this.pieces[fidx].kind)) {
         const q = this.pieces[fidx];
         for (const m of s.members.values()) {
           if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 36) { piece = q; break; }
@@ -250,6 +266,7 @@ export class EngineerCorps {
           for (let i = 0; i < this.pieces.length; i++) {
             const q = this.pieces[i];
             if (this.built.has(keyOf(q))) continue;
+            if (!this.allows(s.id, q.kind)) continue;
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
             if (d > 25) continue;
             const pass = this.passes.get(keyOf(q)) ?? 0;

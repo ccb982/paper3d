@@ -13,8 +13,7 @@ import type {
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
-import { MISSION_EXEC as MISSION_EXEC_TABLE, coverStandPoint, guardPoint, UNIT_TACTICS } from './UnitTactics';
-import { coverBlocksLine } from '../../entity/CoverEntity';
+import { MISSION_EXEC as MISSION_EXEC_TABLE, guardPoint, UNIT_TACTICS } from './UnitTactics';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -237,18 +236,8 @@ export class SquadTactics {
       return { x: g.x + ux * swing, z: g.z + uz * swing };
     }
     if (o.kind === 'garrison' && o.target) {
-      const tx = o.threatX ?? o.target.x, tz = o.threatZ ?? o.target.z;
-      let p = coverStandPoint(o.target.x, o.target.z, tx, tz);
-      if (o.threatX !== undefined && o.threatZ !== undefined && !coverBlocksLine(p.x, p.z, tx, tz)) {
-        const dx = o.target.x - tx, dz = o.target.z - tz;
-        const dl = Math.hypot(dx, dz) || 1;
-        const ux = -dz / dl, uz = dx / dl;   // 掩体切线
-        for (const off of [1.5, -1.5, 3, -3, 4.5, -4.5]) {
-          const cnd = { x: p.x + ux * off, z: p.z + uz * off };
-          if (coverBlocksLine(cnd.x, cnd.z, tx, tz)) { p = cnd; break; }
-        }
-      }
-      return p;
+      // ★ 驻守掩体后的**战壕位**：引擎直接给站位（掩体外侧 5m）；个体只执行，不再按玩家绕掩体
+      return o.target;
     }
     return SquadTactics.currentTargetOf(state, cx, cz);
   }

@@ -53,15 +53,28 @@ const snap = () => page.evaluate(() => {
   for (let i = 0; i < pool.count; i++) if (pool.swarmUid[i] === uid) { idx = i; break; }
   const dt = idx >= 0 ? { x: pool.directiveTargetX[idx], z: pool.directiveTargetZ[idx] } : null;
   const pm = window.__ppMode().player.position;
-  // 掩体是否在 指令目标 → 玩家 连线上（点到线段距离 < 2.5m）
-  let shield = false, behind = false, segD = -1;
-  if (pt && dt) {
-    const vx = pm.x - dt.x, vz = pm.z - dt.z;
-    const L2 = vx * vx + vz * vz || 1;
-    const t = Math.max(0, Math.min(1, ((pt.x - dt.x) * vx + (pt.z - dt.z) * vz) / L2));
-    segD = Math.hypot(dt.x + vx * t - pt.x, dt.z + vz * t - pt.z);
-    shield = segD < 2.5;
-    behind = (dt.x - pt.x) * (pm.x - pt.x) + (dt.z - pt.z) * (pm.z - pt.z) < 0;
+  // ★ 掩体是否在 站位（战壕位）→ **舰船（落点中心）** 连线上；站位应在掩体外侧（更远离船）
+  const CC = c.plan;
+  let shield = false, segD = -1, outward = -1;
+  {
+    // 配对掩体：距站位 3~8m 且比站位更靠船（更靠近中心）者中，取距离最接近 5m 的
+    let cover = null, cd = Infinity;
+    for (const cv of c.holeTable.covers) {
+      if (!pt) continue;
+      const d = Math.hypot(cv.x - pt.x, cv.z - pt.z);
+      if (d < 3 || d > 8) continue;
+      if (Math.hypot(cv.x - CC.cx, cv.z - CC.cz) > Math.hypot(pt.x - CC.cx, pt.z - CC.cz) - 2) continue;
+      const score = Math.abs(d - 5);
+      if (score < cd) { cd = score; cover = cv; }
+    }
+    if (cover && pt) {
+      const vx = CC.cx - pt.x, vz = CC.cz - pt.z;
+      const L2 = vx * vx + vz * vz || 1;
+      const t = Math.max(0, Math.min(1, ((cover.x - pt.x) * vx + (cover.z - pt.z) * vz) / L2));
+      segD = Math.hypot(pt.x + vx * t - cover.x, pt.z + vz * t - cover.z);
+      shield = segD < 2.5;
+      outward = +(Math.hypot(pt.x - CC.cx, pt.z - CC.cz) - Math.hypot(cover.x - CC.cx, cover.z - CC.cz)).toFixed(1);
+    }
   }
   return {
     sid, kind: st?.order.kind ?? 'none',
@@ -73,7 +86,8 @@ const snap = () => page.evaluate(() => {
     ptSource: pt?.source ?? 'none',
     coverPt: pt ? `${pt.x.toFixed(1)},${pt.z.toFixed(1)}` : 'none',
     dirX: dt ? +dt.x.toFixed(1) : null, dirZ: dt ? +dt.z.toFixed(1) : null,
-    shield, behind, segD: +segD.toFixed(2),
+    shield, outward, segD: +segD.toFixed(2),
+    target: pt ? `${pt.x.toFixed(1)},${pt.z.toFixed(1)}` : 'none',
   };
 });
 
@@ -105,6 +119,6 @@ console.log('C 换侧 :', JSON.stringify(C));
 console.log('--- 判定 ---');
 console.log('① 引擎选掩体 :', B.ptSource === 'cover' && B.kind === 'garrison' ? 'PASS' : `FAIL src=${B.ptSource} kind=${B.kind}`);
 console.log('② 命令带玩家 :', B.threatX !== null && Math.hypot((B.threatX ?? 0) - B.px, 0) >= 0 ? 'PASS' : 'FAIL');
-console.log('③ 个体绕掩体 :', B.shield && B.behind ? 'PASS' : `FAIL shield=${B.shield} behind=${B.behind} segD=${B.segD}`);
-console.log('④ 换侧跟随   :', C.shield && C.behind ? 'PASS' : `FAIL shield=${C.shield} behind=${C.behind} segD=${C.segD}`);
+console.log('③ 掩体后战壕 :', B.shield && B.outward > 2 ? 'PASS' : `FAIL shield=${B.shield} outward=${B.outward} segD=${B.segD}`);
+console.log('④ 站位稳定   :', C.shield && C.outward > 2 && C.target === B.target ? 'PASS' : `FAIL shield=${C.shield} outward=${C.outward} target=${B.target}→${C.target}`);
 await browser.close();
