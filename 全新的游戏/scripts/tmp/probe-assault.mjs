@@ -35,7 +35,7 @@ const snap = () => page.evaluate(() => {
   for (const b of builders) for (const r of ranged) {
     engToRanged = Math.min(engToRanged, Math.hypot(b[0] - r[0], b[1] - r[1]));
   }
-  const bs = c.decideCtx.buildSite;
+  const bs = c.decideCtx.protect;
   return {
     ax: +c.plan.approachX.toFixed(2), az: +c.plan.approachZ.toFixed(2),
     posture: c.battlePosture, stage: c.stage,

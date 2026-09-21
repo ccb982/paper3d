@@ -36,6 +36,9 @@ import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
 const _c0 = { x: 0, z: 0 };
 const _c1 = { x: 0, z: 0 };
 
+/** ★ 引擎保护配置：保护对象（锚）+ 来源（护工/射手/工地/岗位） */
+export interface ProtectTarget { x: number; z: number; source: 'engineer' | 'shooter' | 'site' | 'post' }
+
 /** ★ 引擎侧信息面（《敌人管线设计.md》§3.5）：战术决策的输入 */
 export interface BattalionView {
   squads: SquadRating[];
@@ -154,9 +157,9 @@ export class SwarmCommander {
   private readonly decideCtx: DecideCtx = {
     plan: null as unknown as DecideCtx['plan'],
     table: null as unknown as TerrainScore,
-    playerX: 0, playerZ: 0, chase: false, lineSlot: null,
+    playerX: 0, playerZ: 0, now: 0, chase: false, lineSlot: null,
     front: { x: 0, z: 0 },
-    buildSlot: null, slot: undefined, buildTarget: null, buildSite: null, stage: 'S0',
+    buildSlot: null, slot: undefined, buildTarget: null, protect: null, stage: 'S0',
     hold: new Map(), protectState: new Map(), alert: new Set(), post: new Map(), mission: 'hold',
     builders: [], buildPieces: [], builtSlots: new Set<string>(),
     highPick: null, covers: [],
@@ -223,6 +226,8 @@ export class SwarmCommander {
     this.postAssign.clear();
     this.missionAssign.clear();
     this.memberTasks.clearAll();
+    this.escortAssign.clear();
+    this.protectAssign.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
@@ -526,6 +531,10 @@ export class SwarmCommander {
 
   /** ★ 每队稳定岗位（squadId → 岗哨/高地/掩体位/战壕；拆队前一直有效） */
   private readonly postAssign = new Map<number, { x: number; z: number }>();
+  /** ★ S1 护工：非工兵队 → 被保护的工程队（粘性配对；squadId → builder squadId） */
+  private readonly escortAssign = new Map<number, number>();
+  /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位）——保护对象由大队定 */
+  readonly protectAssign = new Map<number, ProtectTarget>();
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
 
@@ -578,25 +587,46 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 护卫扇区（成员级）：沿"工地→威胁"垂线分散站位（每人 4m 间隔） */
+  /** ★ 护卫扇区（成员级）：沿"保护对象→威胁"垂线分散站位（每人 4m）+ **巡逻游弋**
+   *  （切向摆动随决策拍刷新 → 保护者在巡逻态；位置随保护对象/玩家滑动） */
   private spreadGuards(
     s: { id: number; type: string; members: Map<number, { x: number; z: number }> },
-    siteX: number, siteZ: number, px: number, pz: number,
+    siteX: number, siteZ: number, px: number, pz: number, now: number, patrol: boolean,
   ): void {
     const dx = px - siteX, dz = pz - siteZ;
     const dl = Math.hypot(dx, dz) || 1;
     const ux = dx / dl, uz = dz / dl;
-    const gd = UNIT_TACTICS[s.type as keyof typeof UNIT_TACTICS]?.guardDist ?? 8;
+    const pr = UNIT_TACTICS[s.type as keyof typeof UNIT_TACTICS];
+    const gd = pr?.guardDist ?? 8;
     const gx = siteX + ux * gd, gz = siteZ + uz * gd;
     const tx = -uz, tz = ux;   // 垂线（弧线切线）
+    const swing = patrol ? Math.sin(now * 0.5 + s.id * 1.3) * (pr?.patrolR ?? 4) : 0;
     const n = s.members.size;
     let k = 0;
     for (const uid of s.members.keys()) {
-      const off = (k - (n - 1) / 2) * 4;
+      const off = (k - (n - 1) / 2) * 4 + swing;
       k++;
       this.memberTasks.write(uid, gx + tx * off, gz + tz * off);
     }
     this.memberTasks.own(s.id);
+  }
+
+  /** ★ S1 护工：给非工兵队粘性配对一只工程队（返回其质心作为护锚；失效则换最近） */
+  private escortAnchor(
+    squadId: number, cx: number, cz: number, engCent: Map<number, { x: number; z: number }>,
+  ): { x: number; z: number } | null {
+    let pick = this.escortAssign.get(squadId) ?? -1;
+    if (pick < 0 || !engCent.has(pick)) {
+      pick = -1;
+      let bd = Infinity;
+      for (const [id, c] of engCent) {
+        const d = (c.x - cx) ** 2 + (c.z - cz) ** 2;
+        if (d < bd) { bd = d; pick = id; }
+      }
+      if (pick < 0) return null;
+      this.escortAssign.set(squadId, pick);
+    }
+    return engCent.get(pick) ?? null;
   }
 
   /** ★ 总攻护栏锚：离正面最近的远程小队质心（工兵/护卫以此为"工地"→ 给射手打掩护） */
@@ -756,6 +786,7 @@ export class SwarmCommander {
     const ctx = this.decideCtx;
     ctx.plan = plan; ctx.table = this.terrainScore;
     ctx.playerX = playerX; ctx.playerZ = playerZ; ctx.chase = chase;
+    ctx.now = performance.now() / 1000;
     ctx.front = front; ctx.buildSlot = buildSlot; ctx.slot = slot;
     ctx.builders = builders; ctx.buildPieces = this.buildPieces;
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
@@ -784,11 +815,23 @@ export class SwarmCommander {
         if (idx >= 0 && !buildSite) buildSite = { x: this.buildPieces[idx].x, z: this.buildPieces[idx].z };
       }
     }
-    ctx.buildSite = buildSite;
+    // ★ S1 护工锚：工程队质心表（非工兵队粘性配对跟随保护）
+    const engCent = new Map<number, { x: number; z: number }>();
+    if (this.stage === 'S1' && this.battlePosture !== 'assault') {
+      for (const b of builders) {
+        let x = 0, z = 0, n = 0;
+        for (const m of b.members.values()) { x += m.x; z += m.z; n++; }
+        if (n > 0) engCent.set(b.id, { x: x / n, z: z / n });
+      }
+    }
     ctx.stage = this.stage;
     // ★ 大任务粘性（引擎只在此刻重派：落点/态势/施工阶段切换）
     const missionEpoch = this.postureEpoch * 100000 + this.scoreStamp * 2 + (this.stage === 'S1' ? 0 : 1);
+    this.protectAssign.clear();
     for (const s of squads) {
+      let scx = 0, scz = 0, sn = 0;
+      for (const m of s.members.values()) { scx += m.x; scz += m.z; sn++; }
+      if (sn > 0) { scx /= sn; scz /= sn; }
       const d = applyPosture(
         resolveDoctrine(s.type, s.builders, this.mobTactics?.(s.mobKind) ?? null),
         this.battlePosture,
@@ -806,18 +849,38 @@ export class SwarmCommander {
         this.missionAssign.set(s.id, ma);
       }
       ctx.mission = ma.mission;
+      // ★★ 引擎保护配置（保护对象由大队定；队长/个体只读位置——《小队战术与命令.md》§2.1）：
+      //   S1 非工兵 → 粘性配对的工程队（护工）；总攻 → 射手锚；S1 其余 → 工地；S2 → 岗位
+      const escort = !s.builders && sn > 0 && engCent.size > 0
+        ? this.escortAnchor(s.id, scx, scz, engCent) : null;
+      let pt: ProtectTarget | null = null;
+      if (escort) pt = { x: escort.x, z: escort.z, source: 'engineer' };
+      else if (this.battlePosture === 'assault' && buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
+      else if (buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
+      else if (ma.mission === 'guard' || ma.mission === 'patrol') {
+        const post = this.postAssign.get(s.id);
+        if (post) pt = { x: post.x, z: post.z, source: 'post' };
+      }
+      if (pt) this.protectAssign.set(s.id, pt);
+      ctx.protect = pt;
       // ★ 施工块稳定分派（施工大任务下才有目标；成员再分到不同块 → 并行施工）
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        let cx = 0, cz = 0, n = 0;
-        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-        if (n > 0) this.corps.spreadBuilders(s, cx / n, cz / n);
-      } else if (ma.mission === 'guard') {
+        this.corps.spreadBuilders(s, scx, scz);
+      } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         ctx.buildTarget = null;
-        // ★ 护卫扇区（成员级）：被击/无工地 → 清任务（交给动态反击）；否则分散护卫位
-        if (this.alertSet.has(s.id) || !ctx.buildSite) this.memberTasks.clear(s);
-        else this.spreadGuards(s, ctx.buildSite.x, ctx.buildSite.z, playerX, playerZ);
+        // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）
+        if (this.alertSet.has(s.id) || !ctx.protect) this.memberTasks.clear(s);
+        // ★ 工兵的保护动作 = 造工事（保护对象附近有未建掩体 → 施工；没有 → 站岗扇区）
+        else if (s.builders) {
+          if (!this.corps.spreadBuilders(s, ctx.protect.x, ctx.protect.z)) {
+            this.spreadGuards(s, ctx.protect.x, ctx.protect.z, playerX, playerZ, ctx.now, true);
+          }
+        } else {
+          // 护工队：静态扇区跟随工程队（不游弋 → 步调跟施工走，不再"瞎转"）
+          this.spreadGuards(s, ctx.protect.x, ctx.protect.z, playerX, playerZ, ctx.now, escort === null);
+        }
       } else {
         ctx.buildTarget = null;
         this.memberTasks.clear(s);

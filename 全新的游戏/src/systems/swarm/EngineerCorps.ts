@@ -156,8 +156,9 @@ export class EngineerCorps {
     this.passes.clear();
   }
 
-  /** 成员分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标 */
-  spreadBuilders(s: TaskSquad, cx: number, cz: number): void {
+  /** 成员分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标。
+   *  @returns true = 已派/已持有工件任务；false = 附近无可用工件（调用方转站岗） */
+  spreadBuilders(s: TaskSquad, cx: number, cz: number): boolean {
     // 战壕工组：已派块是**未建战壕** → 全员按静态环列围住挖到成（不散开抢掩体 → 战壕必成型）
     const aidx = this.assign.get(s.id);
     if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
@@ -169,7 +170,7 @@ export class EngineerCorps {
           this.board.write(uid, aq.x + Math.cos(a), aq.z + Math.sin(a));
         }
         this.board.own(s.id);
-        return;
+        return true;
       }
     }
     // 焦点驻守：本队正在建的块 → 全员按**静态环列**围到焦点块（无随机抖动）→ 到点站定等挖
@@ -183,7 +184,7 @@ export class EngineerCorps {
         this.board.write(uid, q.x + Math.cos(a), q.z + Math.sin(a));
       }
       this.board.own(s.id);
-      return;
+      return true;
     }
     let near: number[] = [];
     let nearest = -1, nearestD = Infinity;
@@ -201,14 +202,14 @@ export class EngineerCorps {
     if (near.length === 0) {
       // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
       const idx = this.assign.get(s.id);
-      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return;
-      if (this.built.has(keyOf(this.pieces[idx]))) return;
+      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
+      if (this.built.has(keyOf(this.pieces[idx]))) return false;
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
       }
       this.board.own(s.id);
-      return;
+      return true;
     }
     // 成员分块：目标仍为有效可达块就**不重写**（到点静立 → 修全天转圈）
     const claimed = new Set<number>();
@@ -229,6 +230,7 @@ export class EngineerCorps {
       this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
     }
     this.board.own(s.id);
+    return true;
   }
 
   /** 施工（2s 拍调用；逐步拼装，仅 S1）：认准一块挖/建到成 → 战壕肉眼可见 */

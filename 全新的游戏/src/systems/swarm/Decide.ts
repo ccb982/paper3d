@@ -26,6 +26,8 @@ export interface DecideCtx {
   table: TerrainScore;
   playerX: number;
   playerZ: number;
+  /** ★ 决策时刻（秒；保护/巡逻游弋相位用） */
+  now: number;
   /** 玩家在落点 90m 内（近战追击开关的现场条件） */
   chase: boolean;
   /** 本队线位（仅"刚整队那一拍"+非追击队会给） */
@@ -36,8 +38,8 @@ export interface DecideCtx {
   buildSlot: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
   /** ★ 本队已分派的施工块（稳定分派：不再每拍重挑 → 修复工程队来回跑） */
   buildTarget: { kind: 'cover' | 'trench'; x: number; z: number; ring: 0 | 1 | 2 } | null;
-  /** ★ 当前"工地"（第一个在建块；近战护卫用） */
-  buildSite: { x: number; z: number } | null;
+  /** ★ 引擎配置的保护对象（本拍下发；队长/个体**只读位置**，不自行选保护对象） */
+  protect: { x: number; z: number } | null;
   /** ★ 战术阶段（S1 = 施工期 → 近战进入"保护"共用状态） */
   stage: string;
   /** ★ 驻守位锁定（squadId → 已选掩体/战壕位；靠近则不换 → 修复来回走） */
@@ -89,6 +91,21 @@ const _out: DecideOut = { kind: 'advance', target: { x: 0, z: 0 }, roe: 'engage'
 /** ★ ∇S̃ 梯度复用（微调用） */
 const _grad = { x: 0, z: 0 };
 
+/** ★ 保护锚最大追敌距离（米；玩家离保护对象超过此值 → 不追，回保护位） */
+const GUARD_CHASE_MAX = 45;
+/** 巡逻游弋角速度（rad/s；约 12.5s 一个来回） */
+const PATROL_OMEGA = 0.5;
+
+/** 把追击点截断在保护锚的缰绳半径内（撤退了不去追） */
+function clampToLeash(
+  tx: number, tz: number, a: { x: number; z: number }, leash: number,
+): { x: number; z: number } {
+  const dx = tx - a.x, dz = tz - a.z;
+  const d = Math.hypot(dx, dz);
+  if (d <= leash || d === 0) return { x: tx, z: tz };
+  return { x: a.x + (dx / d) * leash, z: a.z + (dz / d) * leash };
+}
+
 /** 部署选点（读表投影全部在此；返回复用对象，调用方立即消费） */
 export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, st: DecideState): DecideOut {
   const plan = ctx.plan;
@@ -117,24 +134,34 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       _out.roe = 'holdFire';
       _out.ttl = 8;
     }
-  } else if (ctx.mission === 'guard' && !d.chase) {
-    // ★ 共用状态：保护——离工地远不主动进攻；被击(alert)/贴脸(engageDist) → 动态反击
+  } else if (ctx.mission === 'guard' || ctx.mission === 'patrol') {
+    // ★ 引擎任务优先：护工/巡逻不再被兵种 chase 开关旁路（此前 chase 部队"瞎转"的根因）
+    // ★ 保护 / 巡逻（《小队战术与命令.md》§2.1）：
+    //   锚 = 引擎下发的保护对象（ctx.protect，含护工/射手/工地/岗位四源）；位置随玩家与保护对象滑动；
+    //   接触（被击 / 贴脸 / 玩家踩保护对象）→ 反击，但**目标截断在锚的缰绳内**（撤退了不追）；
+    //   无接触 → 保护位巡逻态（守护点 + 切向游弋）。
     let cx = 0, cz = 0, n = 0;
     for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
     const p = UNIT_TACTICS[s.type];
+    const anchor = ctx.protect ?? ctx.post.get(s.id) ?? ctx.front;
     const alert = ctx.alert.has(s.id);
-    const nearSite = ctx.buildSite
-      && Math.hypot(ctx.playerX - ctx.buildSite.x, ctx.playerZ - ctx.buildSite.z) <= 25;
+    const dAnchor = Math.hypot(ctx.playerX - anchor.x, ctx.playerZ - anchor.z);
+    const nearSite = !!ctx.protect && dAnchor <= 25;
     const close = n > 0 && Math.hypot(ctx.playerX - cx, ctx.playerZ - cz) <= p.engageDist;
-    // ★ 工程队不因玩家停工：玩家踩到工地 → 守备队**申请支援**（上来打，工兵照挖）
-    if (ctx.buildSite && (alert || close || nearSite)) {
+    if ((alert || close || nearSite) && dAnchor <= GUARD_CHASE_MAX) {
       _out.kind = 'advance';
-      _out.target = { x: ctx.playerX, z: ctx.playerZ };
+      _out.target = clampToLeash(ctx.playerX, ctx.playerZ, anchor, p.leash);
       _out.ttl = 4;
-    } else if (ctx.buildSite) {
+    } else {
+      const g = guardPoint(anchor.x, anchor.z, ctx.playerX, ctx.playerZ, p.guardDist);
+      const dx = ctx.playerX - anchor.x, dz = ctx.playerZ - anchor.z;
+      const dl = Math.hypot(dx, dz) || 1;
+      const tx = -dz / dl, tz = dx / dl;   // 切向（防线横向）
+      const swing = Math.sin(ctx.now * PATROL_OMEGA + s.id * 1.3) * p.patrolR;
       _out.kind = 'protect';
-      _out.target = guardPoint(ctx.buildSite.x, ctx.buildSite.z, ctx.playerX, ctx.playerZ, p.guardDist);
+      _out.target = { x: g.x + tx * swing, z: g.z + tz * swing };
+      _out.ttl = 3;
     }
   } else {
   switch (d.mode) {
