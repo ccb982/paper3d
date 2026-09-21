@@ -132,8 +132,6 @@ export class SwarmCommander {
   private readonly digPasses = new Map<string, number>();   // 战壕多遍加深计数（逐级缩小约束）
   /** 施工焦点（队伍↔buildPieces 下标）：认准一块连续挖满 3 遍再换 → 战壕肉眼可见 */
   private readonly buildFocus = new Map<number, number>();
-  /** 施工动作日志（取证用：每次挖/建动作 → [真实秒, 队伍, 焦点块, C/D, 目标|遍数块]） */
-  readonly buildLog: (number | string)[][] = [];
   private engAccum = 0;
   private buildCd = 0;
   /** ★ 各工程队自己的施工冷却（squadId → 剩余秒；并行施工用） */
@@ -1044,7 +1042,6 @@ export class SwarmCommander {
           this.builtSlots.add(`${piece.x},${piece.z}`);
           this.buildFocus.delete(s.id);
           this.buildCds.set(s.id, 3);
-          this.buildLog.push([Math.round(performance.now() / 1000), s.id, fidx ?? -1, 'C', `${piece.x},${piece.z}`]);
         } else {
           const key = `${piece.x},${piece.z}`;   // ★ 坑洞逐级缩小（0.5m/层）→ 成片多遍挖才深
           const pass = (this.digPasses.get(key) ?? 0) + 1;
@@ -1053,7 +1050,6 @@ export class SwarmCommander {
           this.buildCds.set(s.id, 4);
           if (pass >= 3) { this.builtSlots.add(key); this.buildFocus.delete(s.id); }
           else this.digPasses.set(key, pass);
-          this.buildLog.push([Math.round(performance.now() / 1000), s.id, fidx ?? -1, 'D', pass, key]);
         }
       }
     }
