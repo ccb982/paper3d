@@ -17,6 +17,7 @@ import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
 import { TerrainScore } from './TerrainScore';
+import { TerrainSemantics, Sem, SEM_NAMES } from './TerrainSemantics';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { engineMissionFor } from './UnitTactics';
@@ -46,6 +47,8 @@ export class SwarmCommander {
   private mission: TacticalOrder | null = null;
   /** ★ S0 勘察：地形检测产出的防守布置 */
   private plan: DefensePlan | null = null;
+  /** ★ L1 敌人地形语义表（静态·舰船锚；《敌人管线设计.md》§1；落地/换落点重算） */
+  readonly semantics = new TerrainSemantics();
   /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)） */
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
@@ -466,6 +469,27 @@ export class SwarmCommander {
           this.scoreStamp + this.postureEpoch * 100000,
           this.battlePosture, playerX, playerZ);
         setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
+        // ★ L1 语义表（静态）：仅在"未建 / 换落点"时构建一次（玩家移动不触发）
+        const a = this.semantics.anchor;
+        if (!this.semantics.isReady || a.x !== this.plan.cx || a.z !== this.plan.cz) {
+          const smp = samplerFor(raster);
+          this.semantics.build({
+            heightAt: (x, z) => smp.heightAt(raster, x, z),
+            roleAt: (x, z) => smp.roleAt(raster, x, z),
+          }, this.plan.cx, this.plan.cz);
+          const dbg = typeof location !== 'undefined'
+            && (location.search.includes('l1dbg') || location.search.includes('swarmdbg'));
+          if (dbg) {
+            const st = this.semantics.stats();
+            console.log('[L1] 语义表构建完成', JSON.stringify(st));
+            for (const cls of [Sem.HighGround, Sem.Choke, Sem.Hollow, Sem.FrontSlope, Sem.ReverseSlope]) {
+              const top = this.semantics.regionsOf(cls).slice(0, 3)
+                .map((r) => `#${r.id}(a=${r.area}, rep=${r.rx.toFixed(0)},${r.rz.toFixed(0)})`).join(' ');
+              if (top) console.log(`[L1] ${SEM_NAMES[cls]}: ${top}`);
+            }
+          }
+          (globalThis as unknown as { __l1?: TerrainSemantics }).__l1 = this.semantics;
+        }
       }
     }
     if (this.mission) {
