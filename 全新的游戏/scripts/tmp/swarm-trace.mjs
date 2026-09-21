@@ -1,9 +1,12 @@
 // 敌人轨迹取证：跑一局 → 冻结/绕圈排行 + 每队命令时间线 + 全局工程进度；存 swarm-trace.json
-// 运行：node scripts/tmp/swarm-trace.mjs [seed] [waitSec]
+// 运行：node scripts/tmp/swarm-trace.mjs [seed] [wallSec] [simTarget]
+//   wallSec = 墙上秒数上限（默认 60，勿超过 1 分钟）；simTarget = 模拟秒目标（默认 900）
 import fs from 'node:fs';
 import puppeteer from 'puppeteer-core';
 const SEED = Number(process.argv[2]) > 0 ? Number(process.argv[2]) : 4242;
-const WAIT = Number(process.argv[3]) > 0 ? Number(process.argv[3]) : 90;
+const WALL = Number(process.argv[3]) > 0 ? Number(process.argv[3]) : 60;
+const SIM_TARGET = Number(process.argv[4]) > 0 ? Number(process.argv[4]) : 900;
+const STEP = Number(process.argv[5]) > 0 ? Number(process.argv[5]) : 0.1;
 const grid = (r, c) => Array.from({ length: r }, () => Array(c).fill(null));
 const makeSession = (seed) => ({
   meta: { version: '0.2.0', day: 1, seed, totalDaysSurvived: 0, deaths: 0, createdAt: '', lastSavedAt: '' },
@@ -15,7 +18,7 @@ const makeSession = (seed) => ({
 });
 const browser = await puppeteer.launch({
   executablePath: 'C:/Users/22641/AppData/Local/Google/Chrome/Application/chrome.exe',
-  headless: 'new', args: ['--no-sandbox', '--disable-gpu-sandbox'],
+  headless: 'new', protocolTimeout: 6e5, args: ['--no-sandbox', '--disable-gpu-sandbox'],
 });
 const page = await browser.newPage();
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
@@ -27,14 +30,33 @@ await page.evaluate(() => window.__ppEnterWorld());
 await new Promise((r) => setTimeout(r, 4000));
 await page.evaluate(() => window.__ppMode().finishDock());
 await page.waitForFunction('!!window.__trace', { timeout: 120000 });
-console.log(`采样中… ${WAIT}s`);
-await new Promise((r) => setTimeout(r, WAIT * 1000));
+console.log(`推进模拟（墙上限 ${WALL}s，模拟目标 ${SIM_TARGET}s）…`);
+let sim = 0;
+const CHUNK = 10;
+const tStart = Date.now();
+while (sim < SIM_TARGET && Date.now() - tStart < WALL * 1000) {
+  const t0 = Date.now();
+  const d = Math.min(CHUNK, SIM_TARGET - sim);
+  const done = await page.evaluate((s, st) => window.__ppRun(s, st), d, STEP);
+  sim += done;
+  const g = await page.evaluate(() => {
+    const a = window.__trace.dump().globals;
+    return a[a.length - 1] ?? null;
+  });
+  const err = await page.evaluate(() => (window.__ppLastError?.()) ?? null);
+  const wp = await page.evaluate(() => { const w = window.__ppWp; return w ? { a: w.ai, e: w.entity, c: w.combat, u: w.ui, x: w.assembly, tot: w.total } : null; });
+  const wall = ((Date.now() - t0) / 1000).toFixed(1);
+  if (g) console.log(`  sim=${sim}s p=${g.p} 已建=${g.built} 挖遍=${g.pass} 存活=${g.alive} (块${wall}s)${err ? ' ERR:' + err : ''}${wp ? ` WPai=${wp.a.toFixed(0)} asm=${wp.x.toFixed(0)}` : ''}`);
+}
 
 const sum = await page.evaluate(() => window.__trace.summary());
 console.log('\n== 单位排行（冻结优先）==');
 console.log('uid\trole\tsquad\tn\tpath\tnet\tfrozenS');
 for (const r of sum.slice(0, 25)) console.log(`${r.uid}\t${r.role}\t${r.squad}\t${r.n}\t${r.path}\t${r.net}\t${r.frozenS}`);
 
+const cov = await page.evaluate(() => window.__trace.dump().durS);
+console.log(`
+== 模拟覆盖：durS=${cov}s（墙上限 ${WALL}s）==`);
 const g = await page.evaluate(() => window.__trace.dump().globals);
 console.log('\n== 全局进度（每 15s 一行）==');
 for (let i = 0; i < g.length; i += 15) {

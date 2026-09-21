@@ -167,6 +167,20 @@ function histOf(s: ReturnType<TerrainSemantics['stats']>): string {
   ok(holes.holes[0].claimedBy === 7, '占用标注随重排读取');
   holes.rebuild(mask, sem, 3, 3, [], 2500);
   ok(holes.holes[0].claimedBy === 0, '占用过期自动释放');
+  // ★ 回归（2026-09-21）：BFS region 曾用 Int16Array（32767 上限）——坑洞落在
+  // 窗口上半部（grid 索引 ≥32768）时 region 回卷成负数 → 无限入队 → 每帧 `RangeError:
+  // Invalid array length`，世界 update 永远被打断（敌人不施工的元凶）。region 现已 Int32。
+  const hi = new HoleMask();
+  // 窗口内 x∈[120,123]×z∈[120,123]（锚 0 → grid 264..267，min 索引 76032 ≥ 32768）：
+  // Int16 时代 region 值回卷成负数 → 相邻高分格无限互相重入 → rebuild 每次爆炸。
+  hi.build({ digDepthAt: (x, z) => (x >= 120 && x <= 123 && z >= 120 && z <= 123 ? 1.0 : 0) }, 0, 0);
+  const hiHoles = new HoleTable();
+  let hiErr: unknown = null;
+  try { hiHoles.rebuild(hi, sem, 110, 110); } catch (e) { hiErr = e; }
+  ok(hiErr === null, `窗口上半部坑洞 rebuild 不爆（region 已 Int32）${hiErr ? ' err=' + hiErr : ''}`);
+  const hh = hiHoles.holes.find((h: { id: number }) => h.id >= 76032);
+  ok(!!hh, '上半部坑洞可被识别（id 落在高位区）');
+  ok(hiHoles.holes.length === 1, '上半部独立成坑（cells=16）');
   // c) 浅坑（0.1m < 0.3m 门槛）→ 无坑洞条目
   const shallow = new HoleMask();
   shallow.build({ digDepthAt: () => 0.1 }, 0, 0);

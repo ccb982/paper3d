@@ -208,6 +208,38 @@ async function boot() {
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
     };
+    // ★ 手动推进模拟（绕过 headless 下 rAF 被节流 → 墙秒≈0.1 模拟秒的老问题）：
+    //   __ppRun(sec) 以 0.1s 步进直接跑 update（同时推进 renderManager 昼夜钟）。
+    //   自动化取证/长模拟专用；正常游玩不要调用。
+    (window as unknown as {
+      __ppRun?: (sec: number) => number;
+      __ppLastError?: () => string | null;
+    }).__ppRun = (sec: number): number => {
+      let lastError: string | null = null;
+      let tm = 0, tu = 0, tf = 0;
+      let left = sec;
+      while (left > 0) {
+        const dt = Math.min(0.1, left);
+        let tn = performance.now();
+        renderManager.update(dt);
+        tm += performance.now() - tn;
+        if (currentMode) {
+          tn = performance.now();
+          try { currentMode.update(dt); }
+          catch (err) {
+            lastError = (err as Error)?.message ?? String(err);
+          }
+          tu += performance.now() - tn;
+        }
+        left -= dt;
+      }
+      const per = (sec - left);
+      (window as unknown as { __ppLastError?: () => string | null }).__ppLastError = () => lastError;
+      (window as unknown as { __ppTime?: () => unknown }).__ppTime = () =>
+        ({ rmMs: Math.round(tm), upMs: Math.round(tu), frames: Math.round(per / 0.1),
+           rmPerMs: +(tm / (per / 0.1) * 1e3).toFixed(2), upPerMs: +(tu / (per / 0.1) * 1e3).toFixed(2), gcf: tf });
+      return per;
+    };
   }
 
   // ---- 3. 加载资产 ----

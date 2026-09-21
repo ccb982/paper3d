@@ -15,14 +15,16 @@
 import type { SwarmSystem } from '../../systems/swarm/SwarmSystem';
 
 const SAMPLE_DT = 1;         // 采样周期（秒）
-const CAP_S = 180;           // 每单位/每队保留最近 N 秒
+const CAP_S = 720;           // 每单位/每队保留最近 N 秒（> 一天 DAY_SECONDS=900 的一半）
 const FROZEN_MOVE = 0.5;     // 单秒位移 < 此值视为"没动"（冻结判据）
 
-interface UnitRec { role: number; squad: number; pts: number[] }
+interface UnitRec { role: number; squad: number; build: number; pts: number[] }
 interface SquadSample { t: number; kind: string; mission: string; tx: number; tz: number; src: string }
 interface GlobalSample {
   t: number; stage: string; posture: string; p: number;
   built: number; pieces: number; pass: number; alive: number; px: number; pz: number;
+  /** 坑洞现场（表条目数 / 总面积 m² / 最深 m）/ 掩体条目数 */
+  holes: number; holeCells: number; holeMaxD: number; covers: number;
 }
 
 export class SwarmTrace {
@@ -43,7 +45,8 @@ export class SwarmTrace {
       if (uid <= 0) continue;
       let rec = this.units.get(uid);
       if (!rec) {
-        rec = { role: pool.role[i], squad: swarm.squads.squadOf(uid)?.id ?? -1, pts: [] };
+        rec = { role: pool.role[i], squad: swarm.squads.squadOf(uid)?.id ?? -1,
+          build: pool.canBuild[i], pts: [] };
         this.units.set(uid, rec);
       }
       rec.pts.push(Math.round(this.t), Math.round(pool.x[i]), Math.round(pool.z[i]));
@@ -63,14 +66,18 @@ export class SwarmTrace {
     const c = swarm.commander as unknown as {
       stage?: string; battlePosture?: string; postureP?: number;
       builtSlots?: { size: number }; buildPieces?: unknown[]; digPasses?: { size: number };
+      holeTable?: { holes: readonly { cells: number; maxDepth: number }[]; covers: readonly unknown[] };
     };
+    const ht = c?.holeTable;
+    let holeCells = 0, holeMaxD = 0;
+    for (const h of ht?.holes ?? []) { holeCells += h.cells; if (h.maxDepth > holeMaxD) holeMaxD = h.maxDepth; }
     this.globals.push({
       t: Math.round(this.t), stage: c?.stage ?? '?', posture: c?.battlePosture ?? '?',
       p: +(c?.postureP ?? 0).toFixed(2), built: c?.builtSlots?.size ?? -1,
       pieces: c?.buildPieces?.length ?? -1, pass: c?.digPasses?.size ?? -1,
       alive: pool.count, px: Math.round(px), pz: Math.round(pz),
+      holes: ht?.holes?.length ?? -1, holeCells, holeMaxD: +holeMaxD.toFixed(2), covers: ht?.covers?.length ?? -1,
     });
-    if (this.globals.length > CAP_S) this.globals.shift();
   }
 
   /** 汇总表：按"冻结时长"降序（谁没动），再看路程/净位移（谁在绕圈） */

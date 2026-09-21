@@ -83,7 +83,7 @@ function perfNow(): number {
 
 export class HoleTable {
   private readonly scores = new Float32Array(MASK_SIDE * MASK_SIDE);   // per-cell 分（>0 = 有效坑；-1 = 非坑）
-  private readonly region = new Int16Array(MASK_SIDE * MASK_SIDE);     // BFS 复用暂存
+  private readonly region = new Int32Array(MASK_SIDE * MASK_SIDE);    // BFS 复用暂存（万能：索引可到 82943，Int16 会回卷成负 → 死循环）
   private holesArr: Hole[] = [];
   private coversArr: CoverWork[] = [];
   private readonly claims = new Map<number, { squad: number; until: number }>();
@@ -166,6 +166,7 @@ export class HoleTable {
         let q = 0, n = 0, sumD = 0, maxD = 0, sumX = 0, sumZ = 0;
         let best = -1, bx = 0, bz = 0;
         while (q < que.length) {
+          if (que.length > MASK_SIDE * MASK_SIDE) throw new Error('[HoleTable] BFS 队列爆炸（region 标记失效）');
           const c = que[q++];
           const cix = c % MASK_SIDE, ciz = (c - cix) / MASK_SIDE;
           const wx = sx + cix + 0.5, wz = sz + ciz + 0.5;
