@@ -34,7 +34,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   d.commander.buildCover = (x, z, v) =>
     buildEnemyCover(d.entities, d.scene, x, d.surfaceAt(x, z), z, v, d.commander.defensePlan);
   d.commander.digTrench = (x, z) => {
-    d.chunks?.digRect(x, z, 2, 2);
+    d.chunks?.digRect(x, z, 3, 3);   // ★ 7×7 宽面：逐级缩小约束下才能挖深
   };
   // ★ 所有地形破坏（子弹/战壕/任何挖坑）→ L1 战壕层（挖改格=战壕）
   if (d.chunks) d.chunks.onTerrainDig = (x, z, r) => d.commander.noteTerrainDig(x, z, r);

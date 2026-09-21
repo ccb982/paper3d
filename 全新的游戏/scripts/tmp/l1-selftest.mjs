@@ -574,54 +574,56 @@ var TerrainSemantics = class {
 };
 
 // src/systems/swarm/HoleMask.ts
+var MASK_CELL = 1;
+var MASK_SIDE = L1_R * 2 / MASK_CELL;
 var HOLE_MIN_MARK = 0.15;
 var HoleMask = class {
   sx = 0;
   sz = 0;
   ready = false;
   src = null;
-  depth = new Float32Array(SIDE * SIDE);
+  depth = new Float32Array(MASK_SIDE * MASK_SIDE);
   get isReady() {
     return this.ready;
+  }
+  get side() {
+    return MASK_SIDE;
   }
   get anchor() {
     return { x: this.sx + L1_R, z: this.sz + L1_R };
   }
-  /** 建立掩码窗口（跟随落点；同锚窗口）并做首扫 */
+  /** 建立掩码窗口（跟随落点）并全表首扫（接管"落地前已存在"的初始破坏） */
   build(src, cx, cz) {
     this.src = src;
     this.sx = cx - L1_R;
     this.sz = cz - L1_R;
     this.ready = true;
-    this.refresh(cx, cz, L1_R + 16);
+    this.refresh(cx, cz, L1_R + 2);
   }
-  /** 掩码读取（世界坐标；表外/未就绪 → 0） */
+  /** 深度读取（世界坐标 → 所在 1m 格；表外/未就绪 → 0） */
   depthAt(x, z) {
     if (!this.ready) return 0;
-    const ix = Math.floor((x - this.sx) / L1_CELL);
-    const iz = Math.floor((z - this.sz) / L1_CELL);
-    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return 0;
-    return this.depth[iz * SIDE + ix];
+    const ix = Math.floor(x - this.sx), iz = Math.floor(z - this.sz);
+    if (ix < 0 || iz < 0 || ix >= MASK_SIDE || iz >= MASK_SIDE) return 0;
+    return this.depth[iz * MASK_SIDE + ix];
   }
   /** 该格是否算破坏（深度 ≥ 挖深阈值） */
   isDug(x, z) {
     return this.depthAt(x, z) >= HOLE_MIN_MARK;
   }
-  /** ★★ 刷新（任何挖掘后调用；只扫脏窗，免全表）：
-   *  @returns 该窗内"新达到挖深阈值"的格数 */
+  /** ★★ 窗扫（任何挖掘后调用；r = 破坏半径米）：逐 1m 格点采样真源。
+   *  @returns 该窗内新达到"破坏阈值"的格数 */
   refresh(x, z, r = 16) {
     if (!this.ready || !this.src) return 0;
-    let ix0 = Math.max(0, Math.floor((x - r - this.sx) / L1_CELL));
-    let iz0 = Math.max(0, Math.floor((z - r - this.sz) / L1_CELL));
-    let ix1 = Math.min(SIDE - 1, Math.ceil((x + r - this.sx) / L1_CELL));
-    let iz1 = Math.min(SIDE - 1, Math.ceil((z + r - this.sz) / L1_CELL));
+    const ix0 = Math.max(0, Math.floor(x - r - this.sx));
+    const iz0 = Math.max(0, Math.floor(z - r - this.sz));
+    const ix1 = Math.min(MASK_SIDE - 1, Math.ceil(x + r - this.sx));
+    const iz1 = Math.min(MASK_SIDE - 1, Math.ceil(z + r - this.sz));
     let n = 0;
     for (let iz = iz0; iz <= iz1; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
-        const i = iz * SIDE + ix;
-        const wx = this.sx + ix * L1_CELL + L1_CELL / 2;
-        const wz = this.sz + iz * L1_CELL + L1_CELL / 2;
-        const d = this.src.digDepthAt(wx, wz);
+        const i = iz * MASK_SIDE + ix;
+        const d = this.src.digDepthAt(this.sx + ix + 0.5, this.sz + iz + 0.5);
         if (d >= HOLE_MIN_MARK && this.depth[i] < HOLE_MIN_MARK) n++;
         this.depth[i] = d;
       }
@@ -635,13 +637,23 @@ var HOLE_MIN_DEPTH = 0.3;
 var HOLE_FULL_DEPTH = 1;
 var HOLE_NEAR_R = 40;
 var HOLE_FAR_R = 90;
+var COVER_FULL_HP = 400;
 var COVER_HIDDEN_W = 1;
 var COVER_OPEN_W = 0.35;
+var COVER_HP_W = 0.5;
+function perfNow() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
 var HoleTable = class {
-  scores = new Float32Array(SIDE * SIDE);
+  scores = new Float32Array(MASK_SIDE * MASK_SIDE);
   // per-cell 分（>0 = 有效坑；-1 = 非坑）
+  region = new Int16Array(MASK_SIDE * MASK_SIDE);
+  // BFS 复用暂存
   holesArr = [];
   coversArr = [];
+  claims = /* @__PURE__ */ new Map();
+  lastSx = NaN;
+  lastSz = NaN;
   get isReady() {
     return Number.isFinite(this.lastSx);
   }
@@ -656,31 +668,59 @@ var HoleTable = class {
     this.scores.fill(-1);
     this.holesArr = [];
     this.coversArr = [];
+    this.claims.clear();
     this.lastSx = NaN;
     this.lastSz = NaN;
   }
+  /** ★ 占用坑洞（squadId 领取，ttl 毫秒后过期自动释放） */
+  claim(holeId, squad, ttlMs = 15e3, nowMs = perfNow()) {
+    this.claims.set(holeId, { squad, until: nowMs + ttlMs });
+  }
+  /** 释放占用 */
+  release(holeId) {
+    this.claims.delete(holeId);
+  }
+  /** 占用查询（0 = 空闲/已过期） */
+  claimedBy(holeId, nowMs = perfNow()) {
+    const c = this.claims.get(holeId);
+    return c && c.until > nowMs ? c.squad : 0;
+  }
   /** ★★ 重排（每个低频拍调一次 = "动态不断修改"）：
-   *  掩码入口 → 逐格打分（深×近）→ 连通块合并成坑洞 → 按分降序。 */
-  rebuild(mask, sem, px, pz, covers = []) {
+   *  1m 深度场 → 逐格打分（深×近）→ 连通块合并成坑洞 → 按分降序；
+   *  掩体（构造工事）同拍从输入快照重算（遮蔽×近×血量）。
+   *  @param nowMs 占用过期判定时钟（测试可注入） */
+  rebuild(mask, sem, px, pz, covers = [], nowMs = perfNow()) {
     this.scores.fill(-1);
     this.coversArr = covers.map((c) => {
+      const maxHp = c.maxHp ?? COVER_FULL_HP;
+      const hpRatio = Math.max(0, Math.min(1, c.hp / (maxHp || COVER_FULL_HP)));
       const dist = Math.hypot(c.x - px, c.z - pz);
       const prox = Math.min(1, Math.max(0, (HOLE_FAR_R - dist) / (HOLE_FAR_R - HOLE_NEAR_R)));
-      return { ...c, dist, score: (c.hidden ? COVER_HIDDEN_W : COVER_OPEN_W) * prox };
+      const hpF = 1 - COVER_HP_W + COVER_HP_W * hpRatio;
+      return {
+        x: c.x,
+        z: c.z,
+        hp: c.hp,
+        maxHp,
+        variant: c.variant,
+        heading: c.heading,
+        hidden: c.hidden,
+        dist,
+        score: (c.hidden ? COVER_HIDDEN_W : COVER_OPEN_W) * prox * hpF
+      };
     }).sort((a, b) => b.score - a.score);
+    for (const [id, c] of this.claims) if (c.until <= nowMs) this.claims.delete(id);
     if (!mask || !mask.isReady || !sem || !sem.isReady) {
       this.holesArr = [];
       return;
     }
-    const R = L1_R, CELL = L1_CELL;
-    const sx = mask.anchor.x - R, sz = mask.anchor.z - R;
+    const sx = mask.anchor.x - L1_R, sz = mask.anchor.z - L1_R;
     this.lastSx = sx;
     this.lastSz = sz;
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const i = iz * SIDE + ix;
-        const wx = sx + ix * CELL + CELL / 2;
-        const wz = sz + iz * CELL + CELL / 2;
+    for (let iz = 0; iz < MASK_SIDE; iz++) {
+      for (let ix = 0; ix < MASK_SIDE; ix++) {
+        const i = iz * MASK_SIDE + ix;
+        const wx = sx + ix + 0.5, wz = sz + iz + 0.5;
         const depth = mask.depthAt(wx, wz);
         if (depth < HOLE_MIN_DEPTH) continue;
         if (!sem.isPassableAt(wx, wz)) continue;
@@ -690,23 +730,20 @@ var HoleTable = class {
         this.scores[i] = depthF * proxF;
       }
     }
-    const region = new Int16Array(SIDE * SIDE);
-    region.fill(-1);
+    this.region.fill(-1);
     const list = [];
-    let nextId = 0;
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const start = iz * SIDE + ix;
-        if (this.scores[start] <= 0 || region[start] >= 0) continue;
+    for (let iz = 0; iz < MASK_SIDE; iz++) {
+      for (let ix = 0; ix < MASK_SIDE; ix++) {
+        const start = iz * MASK_SIDE + ix;
+        if (this.scores[start] <= 0 || this.region[start] >= 0) continue;
         const que = [start];
-        region[start] = nextId;
+        this.region[start] = start;
         let q = 0, n = 0, sumD = 0, maxD = 0, sumX = 0, sumZ = 0;
         let best = -1, bx = 0, bz = 0;
         while (q < que.length) {
           const c = que[q++];
-          const cix = c % SIDE, ciz = (c - cix) / SIDE;
-          const wx = sx + cix * CELL + CELL / 2;
-          const wz = sz + ciz * CELL + CELL / 2;
+          const cix = c % MASK_SIDE, ciz = (c - cix) / MASK_SIDE;
+          const wx = sx + cix + 0.5, wz = sz + ciz + 0.5;
           const d = mask.depthAt(wx, wz);
           n++;
           sumD += d;
@@ -720,28 +757,28 @@ var HoleTable = class {
           }
           for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
             const nxi = cix + dx, nzi = ciz + dz;
-            if (nxi < 0 || nzi < 0 || nxi >= SIDE || nzi >= SIDE) continue;
-            const ni = nzi * SIDE + nxi;
-            if (this.scores[ni] > 0 && region[ni] < 0) {
-              region[ni] = nextId;
+            if (nxi < 0 || nzi < 0 || nxi >= MASK_SIDE || nzi >= MASK_SIDE) continue;
+            const ni = nzi * MASK_SIDE + nxi;
+            if (this.scores[ni] > 0 && this.region[ni] < 0) {
+              this.region[ni] = start;
               que.push(ni);
             }
           }
         }
         const dist = Math.hypot(bx - px, bz - pz);
         list.push({
-          id: nextId,
+          id: start,
+          cells: n,
+          maxDepth: maxD,
+          avgDepth: sumD / n,
           cx: bx,
           cz: bz,
           mx: sumX / n,
           mz: sumZ / n,
-          cells: n,
-          maxDepth: maxD,
-          avgDepth: sumD / n,
           score: Math.max(0, best),
-          dist
+          dist,
+          claimedBy: this.claimedBy(start, nowMs)
         });
-        nextId++;
       }
     }
     this.holesArr = list.sort((a, b) => b.score - a.score);
@@ -749,16 +786,20 @@ var HoleTable = class {
   /** 读点：坑洞分（世界坐标；非坑/表外 = 0） */
   scoreAt(x, z) {
     if (!Number.isFinite(this.lastSx)) return 0;
-    const ix = Math.floor((x - this.lastSx) / L1_CELL);
-    const iz = Math.floor((z - this.lastSz) / L1_CELL);
-    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return 0;
-    return Math.max(0, this.scores[iz * SIDE + ix]);
+    const ix = Math.floor(x - this.lastSx), iz = Math.floor(z - this.lastSz);
+    if (ix < 0 || iz < 0 || ix >= MASK_SIDE || iz >= MASK_SIDE) return 0;
+    return Math.max(0, this.scores[iz * MASK_SIDE + ix]);
   }
-  lastSx = NaN;
-  lastSz = NaN;
-  /** ★ 敌人取坑：分数最高的 n 个坑洞（可加半径筛选） */
-  topHoles(k, maxDist = Infinity) {
-    return this.holesArr.filter((h) => h.dist <= maxDist).slice(0, k);
+  /** ★ 敌人取坑：分数最高的 n 个坑洞（可加半径筛选 / 只看空闲） */
+  topHoles(k, maxDist = Infinity, freeOnly = false) {
+    const out = [];
+    for (const h of this.holesArr) {
+      if (h.dist > maxDist) continue;
+      if (freeOnly && h.claimedBy !== 0) continue;
+      out.push(h);
+      if (out.length >= k) break;
+    }
+    return out;
   }
 };
 
@@ -882,7 +923,7 @@ function histOf(s) {
   console.log("\n[5] \u5751\u6D1E\uFF08\u63A9\u7801\u72EC\u7ACB + \u654C\u7528\u52A8\u6001\u516C\u5F0F\u8868\uFF09");
   const mask = new HoleMask();
   const inA = (x, z) => x > -44 && x < -16 && z > -44 && z < -16;
-  const digOf = (x, z) => x > 0 && x <= 4 && z > 0 && z <= 4 ? 1.2 : inA(x, z) ? 0.6 : 0;
+  const digOf = (x, z) => x > 2 && x < 3 && z > 2 && z < 3 ? 1.2 : inA(x, z) ? 0.6 : 0;
   mask.build({ digDepthAt: (x, z) => digOf(x, z) }, 0, 0);
   const sem = new TerrainSemantics();
   sem.build(field(() => 0), 0, 0);
@@ -907,6 +948,14 @@ function histOf(s) {
   holes.rebuild(mask, sem, 3, 3);
   const sBack = holes.scoreAt(2, 2);
   ok(sBack > 0.9, "\u52A8\u6001\u8868\u968F\u73A9\u5BB6\u9760\u8FD1\u56DE\u5347");
+  const probeId = holes.holes[0].id;
+  holes.rebuild(mask, sem, 3, 3);
+  ok(holes.holes[0].id === probeId, "\u5751\u6D1E id \u8DE8\u91CD\u6392\u7A33\u5B9A\uFF08= \u5757\u5185\u6700\u5C0F\u683C\u7D22\u5F15\uFF09");
+  holes.claim(probeId, 7, 1e3, 0);
+  holes.rebuild(mask, sem, 3, 3, [], 500);
+  ok(holes.holes[0].claimedBy === 7, "\u5360\u7528\u6807\u6CE8\u968F\u91CD\u6392\u8BFB\u53D6");
+  holes.rebuild(mask, sem, 3, 3, [], 2500);
+  ok(holes.holes[0].claimedBy === 0, "\u5360\u7528\u8FC7\u671F\u81EA\u52A8\u91CA\u653E");
   const shallow = new HoleMask();
   shallow.build({ digDepthAt: () => 0.1 }, 0, 0);
   shallow.refresh(50, 50, 40);
@@ -933,6 +982,8 @@ function histOf(s) {
   );
   holes.rebuild(mask, sem, 0, 0, []);
   ok(holes.covers.length === 0, "\u63A9\u4F53\u9500\u6BC1\u540E\u52A8\u6001\u8868\u6E05\u7A7A");
+  holes.rebuild(mask, sem, 0, 0, [{ x: 10, z: 10, hp: 200, variant: "cover", heading: 0, hidden: true }]);
+  ok(Math.abs(holes.covers[0].score - 0.75) < 0.01, `\u534A\u8840\u63A9\u4F53\u964D\u6743\uFF08${holes.covers[0].score.toFixed(2)} = 0.75\uFF09`);
   console.log(
     "  \u63A2\u9488(\u8FD1\u6EE1\u6DF1) =",
     sProbe.toFixed(3),

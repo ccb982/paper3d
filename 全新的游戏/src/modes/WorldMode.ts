@@ -44,6 +44,7 @@ import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
 import { TerrainTableViewer } from '../services/ui/TerrainTableViewer';
+import { SwarmTrace } from '../services/ui/SwarmTrace';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint } from './world/LandingCamera';
@@ -365,6 +366,8 @@ export class WorldMode implements IGameMode {
   private swarmDbgAccum = 0;
   /** ★ 地形表实时视图（?l1view=1；读当前世界，1Hz） */
   private tableViewer: TerrainTableViewer | null = null;
+  /** ★ 敌人轨迹快照（?swarmtrace=1；调试） */
+  private swarmTrace: SwarmTrace | null = null;
   /** ★ 爆炸视觉（自爆/范围爆炸） */
   private explosionFx: ExplosionFx | null = null;
   private pickupGlows: PickupGlowEffect[] = [];
@@ -794,6 +797,11 @@ export class WorldMode implements IGameMode {
       //   __swarm.issueOrder(squadId, { kind:'advance', target:{x,z}, seq:1 })
       (window as unknown as { __swarm?: unknown }).__swarm = this.swarm;
       (window as unknown as { __commander?: unknown }).__commander = this.swarm.commander;
+    }
+    // ★ 敌人轨迹快照（?swarmtrace=1）：1Hz 记录每只敌人走位 + 每队命令 + 工程进度
+    if (location.search.includes('swarmtrace')) {
+      this.swarmTrace = new SwarmTrace();
+      (window as unknown as { __trace?: unknown }).__trace = this.swarmTrace;
     }
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
@@ -1402,6 +1410,7 @@ export class WorldMode implements IGameMode {
       hooks.dayT01 = dayT01FromHour(renderManager.querySun().hour);
       this.swarm.update(dt, hooks);
       this.updateSwarmDbg(dt);
+      this.swarmTrace?.sample(dt, this.swarm, pp.x, pp.y);   // pp = 地面坐标 (x, y=z)
       const cmdr = this.swarm.commander;
       this.tableViewer?.tick(cmdr.semantics, this.raster, cmdr.holeMask, cmdr.holeTable, dt);
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
@@ -1742,6 +1751,7 @@ export class WorldMode implements IGameMode {
     this.swarmDbg = null;
     this.tableViewer?.dispose();
     this.tableViewer = null;
+    this.swarmTrace = null;
     // ---- 爆炸视觉 ----
     this.explosionFx?.dispose();
     this.explosionFx = null;

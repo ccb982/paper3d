@@ -131,7 +131,7 @@ function histOf(s: ReturnType<TerrainSemantics['stats']>): string {
   // 真源 = 函数式破坏场（模拟 RasterMap.levelDepthAt，坐标为 4m 格中心）
   const inA = (x: number, z: number) => x > -44 && x < -16 && z > -44 && z < -16;   // A 窝
   const digOf = (x: number, z: number) =>
-    x > 0 && x <= 4 && z > 0 && z <= 4 ? 1.2 : inA(x, z) ? 0.6 : 0;
+    x > 2 && x < 3 && z > 2 && z < 3 ? 1.2 : inA(x, z) ? 0.6 : 0;   // 1m 场：只覆盖格心 (2.5,2.5)
   mask.build({ digDepthAt: (x, z) => digOf(x, z) }, 0, 0);
   const sem = new TerrainSemantics();
   sem.build(field(() => 0), 0, 0);
@@ -158,6 +158,15 @@ function histOf(s: ReturnType<TerrainSemantics['stats']>): string {
   holes.rebuild(mask, sem, 3, 3);        // 恢复高分态（验证"动态不断修改"）
   const sBack = holes.scoreAt(2, 2);
   ok(sBack > 0.9, '动态表随玩家靠近回升');
+  // f) 稳定 id + 占用（claim / 过期自动释放）
+  const probeId = holes.holes[0].id;
+  holes.rebuild(mask, sem, 3, 3);
+  ok(holes.holes[0].id === probeId, '坑洞 id 跨重排稳定（= 块内最小格索引）');
+  holes.claim(probeId, 7, 1000, 0);
+  holes.rebuild(mask, sem, 3, 3, [], 500);
+  ok(holes.holes[0].claimedBy === 7, '占用标注随重排读取');
+  holes.rebuild(mask, sem, 3, 3, [], 2500);
+  ok(holes.holes[0].claimedBy === 0, '占用过期自动释放');
   // c) 浅坑（0.1m < 0.3m 门槛）→ 无坑洞条目
   const shallow = new HoleMask();
   shallow.build({ digDepthAt: () => 0.1 }, 0, 0);
@@ -182,6 +191,9 @@ function histOf(s: ReturnType<TerrainSemantics['stats']>): string {
     `掩体分：遮蔽>暴露>远（${cs[0].score.toFixed(2)}/${cs[1].score.toFixed(2)}/${cs[2].score.toFixed(2)}）`);
   holes.rebuild(mask, sem, 0, 0, []);   // 掩体全毁 → 条目清空
   ok(holes.covers.length === 0, '掩体销毁后动态表清空');
+  // g) 残墙降权：半血掩体分 = 遮蔽1 × 距离1 × (0.5+0.5×0.5) = 0.75
+  holes.rebuild(mask, sem, 0, 0, [{ x: 10, z: 10, hp: 200, variant: 'cover', heading: 0, hidden: true }]);
+  ok(Math.abs(holes.covers[0].score - 0.75) < 0.01, `半血掩体降权（${holes.covers[0].score.toFixed(2)} = 0.75）`);
   console.log('  探针(近满深) =', sProbe.toFixed(3), ' 中窝 =', sMid.toFixed(3),
     ' 回表 =', sBack.toFixed(3), ' 坑洞数 =', holes.holes.length);
 }
