@@ -20,8 +20,12 @@ export const DANGER = {
   WALL_DH,
   /** 表坡面阈值（真源 TerrainScore） */
   SLOPE_DH,
-  /** A* 陡升挡（≡ 执行层；只挡升不挡降） */
+  /** A* 陡升挡（≡ 执行层；只挡升不挡降）——历史口径：单步瞬时坎 */
   WALL_STEP: EDGE_CLIFF_BAND,
+  /** ★ 4m 格步升上限（≈32°；= PROBE_RISE × CELL / PROBE_R）。
+   *  寻路必须用这个而不是 WALL_STEP(0.6@瞬时)——40m 尺度上把连续山坡当墙会让 A* 找不到"坡"，
+   *  只能直线硬爬 → "爬高地墨迹"（2026-09-23 用户实感修复）。 */
+  CELL_RISE_MAX: 2.5,
   /** 危险探测陡升（米；@PROBE_R 采样，≈40°+ 视为墙） */
   PROBE_RISE: 1.0,
   /** 危险探测采样距离（米） */

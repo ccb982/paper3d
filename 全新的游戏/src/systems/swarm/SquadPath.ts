@@ -36,7 +36,9 @@ const COST_CLIMB = 1.5;
 const COST_DROP = 0.2;
 /** 相邻格高差超过此值 = 墙（**只挡上升**；下落放行）。
  *  ★ 2026-09-22 与 CharacterBase.EDGE_CLIFF_BAND=0.6 统一（原 0.8 与执行层脱节）。 */
-const WALL_STEP = DANGER.WALL_STEP;
+/** ★ 4m 格步升上限（执行层同口径 ≈32°；单源 SwarmDanger）——
+ *  旧值 0.6（瞬时坎口径）放 4m 尺度 = 15% 坡即墙 → A* 找不到坡、部队只能直线硬爬。 */
+const WALL_STEP = DANGER.CELL_RISE_MAX;
 /** 深水阈值（米；敌人不涉水） */
 const DEEP_WATER = 0.8;
 const SQRT2 = Math.SQRT2;

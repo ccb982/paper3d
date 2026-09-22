@@ -20,8 +20,9 @@ const CELL = 4;
 /** 簇边长（格；8×8 = 32m） */
 const CL = 8;
 const CLC = CL * CL;
-/** 相邻格高差上限（米；超过 = 墙，不可跨越） */
-const RISE_MAX = 0.8;
+/** 相邻格高差上限（米；超过 = 墙，不可跨越）——★ 执行层同口径（≈32°；=SwarmDanger.CELL_RISE_MAX）。
+ *  旧值 0.8（20%）过严：细路径拉直遇正常山坡即拒，路径碎、绕远。 */
+const RISE_MAX = DANGER.CELL_RISE_MAX;
 /** 簇缓存有效期（毫秒；地形变更后的最坏陈旧时间） */
 const TTL_MS = 20000;
 /** 查询包围盒每边最大簇数（超出 = 太远，回落） */
