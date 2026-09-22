@@ -411,18 +411,33 @@ export class SwarmCommander {
         //   所有工兵队每拍都有目标（引擎派区、队持续干到调走）——不空闲 = 不被回收。
         this.fortify.spots.clear();
         for (const s of builders) {
-          // 队质心（可达性校验起点）
-          let bcx = 0, bcz = 0, bn = 0;
-          for (const m of s.members.values()) { bcx += m.x; bcz += m.z; bn++; }
-          if (bn > 0) { bcx /= bn; bcz /= bn; }
+          // ★ 可达性校验起点 = **队长位置**（用户在 2026-09-23 定）；队长缺失才退回质心
+          const lead = s.members.get(s.leaderUid);
+          let lx = 0, lz = 0;
+          if (lead) { lx = lead.x; lz = lead.z; }
+          else {
+            let n = 0;
+            for (const m of s.members.values()) { lx += m.x; lz += m.z; n++; }
+            if (n > 0) { lx /= n; lz /= n; }
+          }
           const sp = this.fortify.spotFor(
             s.id, shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z), DONE,
-            (x, z) => this.swarm.walkableLine(bcx, bcz, x, z),   // ★ 选点必须过道路可行性
+            (x, z) => this.swarm.walkableLine(lx, lz, x, z),   // ★ 队长位→目标可走
           );
           if (sp) this.fortify.spots.set(s.id, sp);
         }
         this.fortify.dbg.assigned = [...this.fortify.spots].map(([id, p]) =>
           `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
+        // ★ 引擎发令：工兵队 → **位置函数的输出点**（"到底去哪"= spotFor；队级走廊出 LOS 路点）
+        //   注入件也落在同一点 → 命令点 = 函数点 = 件点，三者一致
+        for (const [sid, p] of this.fortify.spots) {
+          const sq = this.swarm.squads.get(sid);
+          if (!sq) continue;
+          const lead = sq.members.get(sq.leaderUid);
+          if (!lead) continue;
+          this.issueChecked(sid, lead.x, lead.z,
+            { kind: 'advance', target: { x: p.x, z: p.z }, mission: 'build', seq: 0 }, 8);
+        }
         // ★ 缺口对照（探针）：队数 vs 认领数 vs spot 数——必须全等，否则"某队没任务"
         this.fortify.dbg.builders = builders.length;
         this.fortify.dbg.claimsN = this.fortify.claims.size;

@@ -747,11 +747,19 @@ export class SwarmSystem {
     const squad = this.squads.squadOf(p.swarmUid[i]);
     const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
-    if (lead) {
+    const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
+    if (isLeader && hasMyTask) {
+      // ★ 队长（干活的）：直走本队件点/区目标（施工点；复杂寻路在队级走廊已算）
+      const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
+      const td = Math.hypot(tx, tz);
+      if (td > 2) { dx = tx / td; dz = tz / td; }
+      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+    } else if (lead) {
       const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
       const td = Math.hypot(tx, tz);
-      // 死区 6m：挤在队长身边来回蹭 = 转圈源；到 6m 内即停（分离推挤由后处理承担）
-      if (td > 6) { dx = tx / td; dz = tz / td; }
+      // 双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
+      const stopped = p.atomMove[i] === 255;
+      if (td > (stopped ? 8 : 5)) { dx = tx / td; dz = tz / td; }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
