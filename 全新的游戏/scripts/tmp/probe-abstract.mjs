@@ -103,6 +103,7 @@ const snapPage = (page) => page.evaluate(() => {
     dbgR: sw.stuckDbg.recycled, dbgT: sw.stuckDbg.tracked,
     cmd: sw.cmdLog.snap(), cmdRear: sw.cmdLog.latestPerSquad(10), cmdAll: sw.cmdLog.latestPerSquad(80),
     coarse: { ...sw.commander.coarseDbg, ledgerAdj: sw.cmdLog.adjustedUnreachable | 0 },
+    stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
     drops: sw.orderDrops | 0,
@@ -286,7 +287,12 @@ for (const seed of seeds) {
     const R = s.ranged.map((r) => `#${r.id}:${r.kind}/${r.src} dP=${r.dPlayer} dF=${r.dFront}`).join(' ');
     const c = s.cmd; const kinds = Object.entries(c.kinds).map(([k, v]) => `${k}:${v}`).join(' ');
     console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} ent=${s.ent} pool=${s.pool} 回收=${s.dbgR}/追踪=${s.dbgT} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
-    console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 比=${c.engine ? (c.unique / c.engine).toFixed(2) : '-'} 种类[${kinds}]`);
+    console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 比=${c.engine ? (c.unique / c.engine).toFixed(2) : '-'} 进度=${c.progress} 种类[${kinds}]`);
+    const sd = s.stepDbg;
+    if (sd) {
+      const last = Object.entries(sd.last ?? {}).map(([sid, e]) => `#${sid}:${e.ev} ${e.k}/${e.n} dS=${e.dS} dA=${e.dA}`).join(' ');
+      console.log(`   队长拆步 发步=${sd.issued} 到点=${sd.reached} 完成=${sd.done} 选格失败=${sd.pickFail} | ${last}`);
+    }
     const cg = s.coarse;
     if (cg) console.log(`   可达核验(P2) checked=${cg.checked} 调账=${cg.adjusted}(台账${cg.ledgerAdj}) 拦截=${cg.skipped} 预热放行=${cg.unknown}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）

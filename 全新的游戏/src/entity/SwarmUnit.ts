@@ -94,6 +94,9 @@ export type DirectiveKind =
   | 'sneak' | 'pin' | 'strike' | 'bound' | 'cover'
   | 'focusFire' | 'regroup';
 
+/** ★ P4 战术意图（命令三件套之一；引擎填，队长按它 argmax scoreFor 拆步） */
+export type SquadIntent = 'attack' | 'hold' | 'guard' | 'build' | 'patrol' | 'withdraw' | 'regroup';
+
 /** 通用五轴命令（引擎侧外壳；路径/目标/ROE/队形/时序+分工） */
 export interface TacticalOrder {
   kind: SquadOrderKind;
@@ -113,6 +116,10 @@ export interface TacticalOrder {
   threatZ?: number;
   /** ★ 大致路径 coarse（P2 初级寻路副产物；走廊级软参考 ≤8 路点，小队可随时弃换） */
   coarse?: { x: number; z: number }[];
+  /** ★ P4 命令三件套·目标锚（大目标/区块；引擎填，队长只读——拆步不越此界） */
+  anchor?: { x: number; z: number; r?: number };
+  /** ★ P4 命令三件套·战术意图（引擎填；缺省由 kind+mission 推导——写口仍在 issue()） */
+  intent?: SquadIntent;
   seq: number;
 }
 

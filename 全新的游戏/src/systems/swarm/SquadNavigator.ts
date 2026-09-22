@@ -141,7 +141,10 @@ export class SquadNavigator {
         continue;
       }
       if (!squads.centroidOf(sid, this._centroid)) continue;
-      const tgt = SquadTactics.currentTargetOf(state, this._centroid.x, this._centroid.z);
+      // ★ P4 寻路轨优先：队长步令在身 → 编队锚点 = 当前步（过期/无步回退命令锚）
+      const stepState = tactics.board.getPath(sid);
+      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
+      const tgt = stepTgt ?? SquadTactics.currentTargetOf(state, this._centroid.x, this._centroid.z);
       if (!tgt) continue;
       const squad = squads.get(sid);
       if (!squad) {

@@ -116,7 +116,7 @@ export class SwarmSystem {
   /** ★ 步骤 9b：分解节拍（2Hz） */
   private tacticsAccum = 0;
   /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
-  private readonly leaderAI = new SquadLeaderAI();
+  readonly leaderAI = new SquadLeaderAI();
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
   readonly commander = new SwarmCommander(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
@@ -307,8 +307,9 @@ export class SwarmSystem {
       }
     }
 
-    // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
-    this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
+    // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退；★ P4：引擎命令在身 → 拆步推进）
+    this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now,
+      (t, x, z) => this.commander.scoreForType(t, x, z, hooks.playerX, hooks.playerZ));
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
     this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
@@ -1115,19 +1116,25 @@ export class SwarmSystem {
       // ★ 小队寻路：命令目标不可直达 → 求走廊 waypoint（实体 steer / 代理指令共用）
       this.nav.ensurePath(this.squads, squad, state, now);
       const bucket = squadBucket(squad.type);
-      // ★ 编队锚点（与 steerL3 同口径）：命令当前路点 + 前进方向
+      // ★ 编队锚点（与 steerL3 同口径）：命令当前路点 + 前进方向；
+      //   ★ P4 寻路轨优先：队长步令在身 → 锚点 = 当前步（软参考；过期/无步回退命令锚）
       let ax = state.order.target?.x ?? 0;
       let az = state.order.target?.z ?? 0;
       let fx = 1, fz = 0;
-      if (this.squads.centroidOf(squad.id, this._centroid)) {
+      const hasC = this.squads.centroidOf(squad.id, this._centroid);
+      const stepState = this.tactics.board.getPath(squad.id);
+      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
+      if (stepTgt) {
+        ax = stepTgt.x;
+        az = stepTgt.z;
+      } else if (hasC) {
         const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, this.commander.terrain);
-        if (tgt) {
-          ax = tgt.x;
-          az = tgt.z;
-          const adx = ax - this._centroid.x, adz = az - this._centroid.z;
-          const al = Math.hypot(adx, adz);
-          if (al > 1e-3) { fx = adx / al; fz = adz / al; }
-        }
+        if (tgt) { ax = tgt.x; az = tgt.z; }
+      }
+      if (hasC) {
+        const adx = ax - this._centroid.x, adz = az - this._centroid.z;
+        const al = Math.hypot(adx, adz);
+        if (al > 1e-3) { fx = adx / al; fz = adz / al; }
       }
       // ★ 槽位 rank 基准 = 全员 uid（L3 + 代理同口径，跨 LOD 不换位）
       _memberUids.length = 0;
