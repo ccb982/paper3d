@@ -24,19 +24,21 @@ export class FortifyPlanner {
   readonly dbg = { scans: 0, picks: 0, kept: 0, worst: '-' as string };
 
   /** 找最危险格（4m 网格扫描；scoreAt 未就绪/不可站 → null 跳过）。
+   *  ★ 环状扫描：围绕玩家（包围玩家）——只取 `[rLo, rHi]` 环带内的格。
    *  @param scoreAt 评分查询（commander.scoreAt；未就绪返回 null）
    *  @param keepR 同区粘滞半径（米；目标在半径内且未达标 → 不换区）
    *  @param doneScore 达标线（≥ 此分视为该区已修好 → 允许换区） */
   scan(
-    cx: number, cz: number, r: number,
+    cx: number, cz: number, rHi: number,
     scoreAt: (x: number, z: number) => number | null,
-    keepR = 24, doneScore = 0,
+    keepR = 24, doneScore = 0, rLo = 0,
   ): void {
     this.dbg.scans++;
     let best: FortifyPick | null = null;
-    for (let dz = -r; dz <= r; dz += 4) {
-      for (let dx = -r; dx <= r; dx += 4) {
-        if (dx * dx + dz * dz > r * r) continue;
+    for (let dz = -rHi; dz <= rHi; dz += 4) {
+      for (let dx = -rHi; dx <= rHi; dx += 4) {
+        const d2 = dx * dx + dz * dz;
+        if (d2 > rHi * rHi || d2 < rLo * rLo) continue;   // ★ 环带
         const x = cx + dx, z = cz + dz;
         const s = scoreAt(x, z);
         if (s === null || s <= -1e8) continue;

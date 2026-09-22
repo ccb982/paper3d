@@ -398,9 +398,8 @@ export class SwarmCommander {
     this.fortifyAccum += dt;
     if (this.fortifyAccum >= 1) {
       this.fortifyAccum = 0;
-      if (this.plan) {
-        this.fortify.scan(this.plan.cx, this.plan.cz, 100, (x, z) => this.terrainScore.scoreAt(x, z));
-      }
+      // ★ 环状扫描（围绕**舰船**，包围舰船）：内 24m 外 90m；评分同源 TerrainScore
+      this.fortify.scan(shipX, shipZ, 90, (x, z) => this.terrainScore.scoreAt(x, z), 24, 0, 24);
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
