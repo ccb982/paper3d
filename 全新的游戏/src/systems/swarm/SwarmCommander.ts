@@ -432,7 +432,7 @@ export class SwarmCommander {
           }
           const sp = this.fortify.spotFor(
             s.id, shipX, shipZ, rLo, rHi, (x, z) => this.fortifyNeed(x, z), DONE,
-            (x, z) => this.swarm.walkableLine(lx, lz, x, z),   // ★ 队长位→目标可走
+            (x, z) => this.swarm.walkableLine(lx, lz, x, z) && this.swarm.reachable(lx, lz, x, z),   // ★ 队长位→目标：LOS 粗筛 + 有向可达（可绕障/出扇区）
           );
           if (sp) this.fortify.spots.set(s.id, sp);
         }
@@ -457,22 +457,45 @@ export class SwarmCommander {
         let injected = 0;
         // ★ 设计（用户定）：引擎把**区域任务**派给队 → 队在该区域**持续干**（永远不缺活）。
         //   本区（40m 内）无未建件 → 立刻补一件；已建点 8m 内不再重复（扇区内随机另选点）。
-        for (const [, p] of this.fortify.spots) {
+        for (const [sid, p] of this.fortify.spots) {
           if (injected >= 1 || this.fortify.dbg.injected >= 200) break;
-          const pending = this.corps.pieces.some((q) => !this.corps.built.has(`${q.x},${q.z}`)
-            && !this.corps.gated(q) && Math.hypot(q.x - p.x, q.z - p.z) < 40);
-          if (pending) continue;
+          // ★ 件按扇区：只看**本队本扇区 spot 近旁（<8m）**已有的未建件（= 本队自己的件）；
+          //   没有 → 在 spot 处补一件（绝不扫"最近件"，否则两队抢一件）
+          let own = -1;
+          for (let i = 0; i < this.corps.pieces.length; i++) {
+            const q = this.corps.pieces[i];
+            if (this.corps.built.has(`${q.x},${q.z}`) || this.corps.gated(q)) continue;
+            if (Math.hypot(q.x - p.x, q.z - p.z) < 8) { own = i; break; }
+          }
+          if (own >= 0) {
+            this.corps.assign.set(sid, own);
+            this.corps.focus.set(sid, own);
+            continue;
+          }
           let sx2 = p.x, sz2 = p.z;
           if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < 8)) {
+            // ★ 第二波修复（2026-09-24）：8m 去重命中（第一波已建点在弧链上）→ 扇区内**重采样**：
+            //   用要塞需求 fortifyNeed 校验（不是通用 scoreAt），12 次尝试仍不成就跳过本拍
+            let found = false;
             const a0 = (p.sector / FORTIFY_SECTORS) * Math.PI * 2;
             const a1 = ((p.sector + 1) / FORTIFY_SECTORS) * Math.PI * 2;
-            const a = a0 + Math.random() * (a1 - a0);
-            const rr = rLo + Math.random() * (rHi - rLo);
-            sx2 = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
-            sz2 = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
-            if (this.terrainScore.scoreAt(sx2, sz2) === null) continue;
+            for (let t = 0; t < 12 && !found; t++) {
+              const a = a0 + Math.random() * (a1 - a0);
+              const rr = rLo + Math.random() * (rHi - rLo);
+              const cx2 = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
+              const cz2 = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
+              if (this.fortifyNeed(cx2, cz2) === null) continue;
+              if (this.corps.pieces.some((q) => Math.hypot(q.x - cx2, q.z - cz2) < 8)) continue;
+              sx2 = cx2; sz2 = cz2;
+              found = true;
+            }
+            if (!found) continue;
           }
           this.corps.pieces.push({ kind: 'cover', x: sx2, z: sz2, ring: 2, pri: 3 });
+          // ★ 统一派件源（用户定 2026-09-23）：注入件 = 该队的 assign/focus（三点一致：位置函数点=件点=队的目标）
+          const idx3 = this.corps.pieces.length - 1;
+          this.corps.assign.set(sid, idx3);
+          this.corps.focus.set(sid, idx3);
           injected++;
           this.fortify.dbg.injected++;
         }

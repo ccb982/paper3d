@@ -44,9 +44,13 @@ export class SquadNavigator {
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0 };
+  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, escape: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
+  /** ★ 上一跳方向（惯性，防贴墙沿线来回摆）：同目标 5s 内给同向候选加分——"选一个就不反悔" */
+  private readonly hopDir = new Map<number, { dx: number; dz: number; gx: number; gz: number; at: number }>();
+  /** ★ 脱困锚点（困难检测）：4s 内距目标没净推进 6m（贴墙振荡/卡住）→ 切 LOS 长路径（BFS 绕障）脱离 */
+  private readonly esc = new Map<number, { x: number; z: number; at: number; d: number; gx: number; gz: number }>();
 
   /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
   setPathTable(t: PassTable | null): void {
@@ -84,20 +88,34 @@ export class SquadNavigator {
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     // ★ 队长走廊：LOS 10m 短路 + 贪心校验（一次一跳、滚动重算；不求最优）——队长侧
     if (this.weighted && this.feas.readyFor()) {
-      const best = this.greedyStep(squad.type, this._centroid.x, this._centroid.z, tgt.x, tgt.z);
-      if (best) {
-        state.corridor = [best, { x: tgt.x, z: tgt.z }];   // 覆盖式：段点 + 终目标
-        state.pathGoalX = tgt.x;
-        state.pathGoalZ = tgt.z;
-        state.pathFromX = this._centroid.x;
-        state.pathFromZ = this._centroid.z;
-        state.costStamp = stamp;
-        state.pathAt = now;
-        state.pathFailedAt = 0;
-        this.dbg.seg++;
-        return;
+      // ★ 困难检测（用户定 2026-09-23）：4s 内距目标没净推进 6m（贴墙振荡）→ 走 LOS 长路径脱困
+      const dTgt = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+      const esc = this.esc.get(squad.id);
+      const sameGoal = esc && esc.gx === tgt.x && esc.gz === tgt.z;
+      const stuck = sameGoal && now - esc!.at > 4000 && dTgt > esc!.d - 6;
+      if (stuck) {
+        this.esc.set(squad.id, { x: this._centroid.x, z: this._centroid.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
+        this.dbg.escape++;
+      } else {
+        const best = this.greedyStep(squad.id, squad.type, this._centroid.x, this._centroid.z, tgt.x, tgt.z, now);
+        if (best) {
+          // 真实推进（目标距缩短 >6m）或换目标才重锚；振荡时锚点不动 → 4s 后触发脱困
+          if (!sameGoal || dTgt < esc!.d - 6) {
+            this.esc.set(squad.id, { x: this._centroid.x, z: this._centroid.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
+          }
+          state.corridor = [best, { x: tgt.x, z: tgt.z }];   // 覆盖式：段点 + 终目标
+          state.pathGoalX = tgt.x;
+          state.pathGoalZ = tgt.z;
+          state.pathFromX = this._centroid.x;
+          state.pathFromZ = this._centroid.z;
+          state.costStamp = stamp;
+          state.pathAt = now;
+          state.pathFailedAt = 0;
+          this.dbg.seg++;
+          return;
+        }
+        // 贪心无推进（全半径无解）→ 本拍不发新路，回落可行性 BFS 兜底
       }
-      // 贪心无推进（全半径无解）→ 本拍不发新路，回落可行性 BFS 兜底
     }
     // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
     const feasOut: { x: number; z: number }[] = [];
@@ -300,28 +318,37 @@ export class SquadNavigator {
     }
   }
 
-  /** ★ LOS 10m 短路 + 贪心校验：先小后大（10→6）；候选 = LOS 可走 + 更近（推进>0.5m）+ 更安全（掩体/战壕折扣） */
+  /** ★ LOS 10m 短路 + 贪心校验：候选 = LOS 可走 + 更近（推进>0.5m）+ 更安全 + **惯性同向**（选一个不反悔） */
   private greedyStep(
-    type: string, cx: number, cz: number, tx: number, tz: number,
+    sid: number, type: string, cx: number, cz: number, tx: number, tz: number, now: number,
   ): { x: number; z: number } | null {
     const dNow = Math.hypot(tx - cx, tz - cz);
     if (dNow < 2.5) return null;   // 已到：不需要段
-    const W_ADV = 1, W_SAFE = 4;
+    const W_ADV = 1, W_SAFE = 4, W_DIR = 3;
+    const prev = this.hopDir.get(sid);
+    const sameGoal = prev && prev.gx === tx && prev.gz === tz && now - prev.at < 5000;
+    const lx = sameGoal ? prev!.dx : 0, lz = sameGoal ? prev!.dz : 0;
     for (const r of [10, 6]) {   // ★ LOS 10m 短路（主）/ 6m（窄地形回落）
       let best: { x: number; z: number } | null = null;
       let bestS = 0;
       for (let k = 0; k < 16; k++) {
         const a = (k * Math.PI) / 8;
-        const x = cx + Math.cos(a) * r;
-        const z = cz + Math.sin(a) * r;
+        const dxn = Math.cos(a), dzn = Math.sin(a);
+        const x = cx + dxn * r;
+        const z = cz + dzn * r;
         if (!this.feas.walkableLine(cx, cz, x, z)) continue;
         const adv = dNow - Math.hypot(tx - x, tz - z);
         if (adv <= 0.5) continue;   // 必须更近
         const mul = this.pathMul?.(type, x, z) ?? 1;   // 0.6~1.5；越小=掩体/战壕越足
-        const s = W_ADV * adv + W_SAFE * (1 - mul);
+        const s = W_ADV * adv + W_SAFE * (1 - mul) + W_DIR * (dxn * lx + dzn * lz);
         if (s > bestS) { bestS = s; best = { x, z }; }
       }
-      if (best) return best;   // 10m 有解 → 不放 6m
+      if (best) {
+        const bx = best.x - cx, bz = best.z - cz;
+        const bl = Math.hypot(bx, bz) || 1;
+        this.hopDir.set(sid, { dx: bx / bl, dz: bz / bl, gx: tx, gz: tz, at: now });
+        return best;
+      }
     }
     return null;
   }

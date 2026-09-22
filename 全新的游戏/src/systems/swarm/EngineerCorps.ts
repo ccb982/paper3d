@@ -53,7 +53,9 @@ export class EngineerCorps {
   readonly built = new Set<string>();
   /** ★ 稳步推进闸门（事态函数给）：距此点 < minD 的工件未解锁（minD<=0 = 不限） */
   gate: { x: number; z: number; minD: number } = { x: 0, z: 0, minD: -1 };
-  gated(q: { x: number; z: number }): boolean {
+  gated(q: { x: number; z: number; pri?: number }): boolean {
+    // ★ pri≥3 = 要塞注入件（FortifyPlanner 位置函数输出；已在闸门外环带生成）→ 不受事态闸门锁
+    if ((q.pri ?? 0) >= 3) return false;
     const g = this.gate;
     return g.minD > 0 && Math.hypot(q.x - g.x, q.z - g.z) < g.minD;
   }
@@ -214,6 +216,16 @@ export class EngineerCorps {
           this.board.write(uid, aq.x + Math.cos(a), aq.z + Math.sin(a));
         }
         this.board.own(s.id);
+        return true;
+      }
+    }
+    // ★ 注入件（pri≥3 = 要塞位置函数输出）→ **直接作焦点**：队长任务（订单目标=件点）已足够，
+    //   队友跟队长过来即可；**不写成员任务**（成员任务不驱动移动，construct 只认 5m 近身）
+    if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
+      const aq = this.pieces[aidx];
+      if (aq.pri >= 3 && this.allows(s.id, aq.kind, aq.pri)
+        && !this.built.has(keyOf(aq)) && !this.gated(aq)) {
+        this.focus.set(s.id, aidx);
         return true;
       }
     }

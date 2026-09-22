@@ -1052,6 +1052,12 @@ export class SwarmSystem {
     return this.nav.feas.walkableLine(ax, az, bx, bz);
   }
 
+  /** ★ 有向可达（表图 BFS；可绕障——**允许绕出扇区**）——取点校验用（先 walkableLine 粗筛再调这个） */
+  reachable(ax: number, az: number, bx: number, bz: number): boolean {
+    const out: { x: number; z: number }[] = [];
+    return this.nav.feas.find(ax, az, bx, bz, out) === 'ok';
+  }
+
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);

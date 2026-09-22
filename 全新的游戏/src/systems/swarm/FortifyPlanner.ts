@@ -94,9 +94,23 @@ export class FortifyPlanner {
       return { x, z, score: s };
     }
     if (Number.isFinite(w.score) && (!canReach || canReach(w.x, w.z))) return { x: w.x, z: w.z, score: w.score };
-    // 最终兜底：扇区中弧中点（needAt 不可用也返回）——每队必有目标
+    // ★ 兜底（用户定 2026-09-23：**取点/寻路允许出扇区**）：以中弧点为中心螺旋外扩，
+    //   找"合法需求 + 可达"的点（可越出本扇区/环带）；找不到 → null（宁可不发令，也不发不可达目标）
     const mid = (a0 + a1) / 2;
-    return { x: Math.round((cx + Math.cos(mid) * rm) / 4) * 4, z: Math.round((cz + Math.sin(mid) * rm) / 4) * 4, score: 0 };
+    const mx0 = cx + Math.cos(mid) * rm, mz0 = cz + Math.sin(mid) * rm;
+    for (let r = 0; r <= rHi + 60; r += 4) {
+      const n = r === 0 ? 1 : Math.max(8, Math.round((Math.PI * 2 * r) / 8));
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * TAU;
+        const x = Math.round((mx0 + Math.cos(a) * r) / 4) * 4;
+        const z = Math.round((mz0 + Math.sin(a) * r) / 4) * 4;
+        const s = needAt(x, z);
+        if (s === null) continue;
+        if (canReach && !canReach(x, z)) continue;
+        return { x, z, score: s };
+      }
+    }
+    return null;
   }
 
   /** 统一取点：**仅限本队认领的防区**；无认领 → null */
