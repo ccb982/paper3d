@@ -472,9 +472,13 @@ export class SwarmCommander {
             this.corps.focus.set(sid, own);
             continue;
           }
-          // ★ 件种类（用户定 2026-09-24）：**非总攻 → 挖战壕**（掩体一大堆不如战壕；掩体叠一起没效果）；
-          //   总攻 → 补掩体（推进用）。掩体去重半径拉大（12m）防叠，战壕 8m 便于成线
-          const wantKind: 'cover' | 'trench' = this.battlePosture === 'assault' ? 'cover' : 'trench';
+          // ★ 先造掩体 + 掩体校验（用户定 2026-09-24）：点**未被掩体保护**（cover<1）→ 造掩体优先；
+          //   已被保护 → 不再重复造掩体：非总攻转挖战壕、总攻直接跳过。掩体去重 12m（防叠）、战壕 8m（成线）
+          const f2 = this.terrainScore.featsAt(p.x, p.z, this.viewPX, this.viewPZ);
+          const sheltered = !!f2 && f2.cover >= 1;   // 已被掩体保护
+          const wantKind: 'cover' | 'trench' | null = !sheltered ? 'cover'
+            : (this.battlePosture === 'assault' ? null : 'trench');
+          if (wantKind === null) continue;
           const dedupR = wantKind === 'cover' ? 12 : 8;
           let sx2 = p.x, sz2 = p.z;
           if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < dedupR)) {
