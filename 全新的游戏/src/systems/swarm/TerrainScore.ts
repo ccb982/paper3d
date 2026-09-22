@@ -63,7 +63,23 @@ export interface ScoreWeights {
 }
 
 /** ★ 宽度/隘口项的量级系数（与 DIST_SCALE 同思路：拉平到与高度可比） */
-const FEAT_SCALE = 4;
+export const FEAT_SCALE = 4;
+
+/** ★ 原始特征（L3 scoreFor 读口；重构 P1，2026-09-22）：不含兵种权重的字段快照。
+ *  距离/威胁已归一到与 score 相同口径；constTerm = 贴墙/战壕/水/坡常量（与权重无关）。 */
+export interface CellFeats {
+  pass: boolean;
+  h: number;          // 高度（米）
+  shipD: number;      // 归一舰距 (d/R)·DIST_SCALE
+  nearF: number;      // 近舰负分项（≤0；× w.near）
+  threatN: number;    // 归一玩家距 (dt/R)·DIST_SCALE（读时用实时玩家位置）
+  playerD: number;    // 玩家距（米；远程射程带用）
+  cover: number;      // L2 工事加成原值（× w.cover）
+  width: number;      // 通行宽度 0~1
+  choke: number;      // 隘口 0/1
+  trench: number;     // 战壕 0/1
+  constTerm: number;  // 贴墙·战壕·水·坡 常量项（直接加总）
+}
 
 /** ★ 态势强度 p 的权重锚点（连续插值；锚点沿用现行档位值，M3 再换归一化口径） */
 const P_ANCHORS: ReadonlyArray<readonly [number, ScoreWeights]> = [
@@ -112,6 +128,8 @@ export class TerrainScore {
   private readonly trench = new Uint8Array(SIDE * SIDE);
   /** ★ 遮蔽加成（0~1.6：built covers/posts 1 + 战壕 1 + 贴墙 0.6）→ 寻路折扣（战壕/掩体=加分点） */
   private readonly coverF = new Float32Array(SIDE * SIDE);
+  /** ★ L2 工事 bonus 原值（scoreFor 特征用；不含战壕/贴墙常量） */
+  private readonly featCover = new Float32Array(SIDE * SIDE);
   /** ★ 紧贴硬墙（陡差 >0.8×WALL_DH 的可站格；硬墙当掩体判定用） */
   private readonly wallNear = new Uint8Array(SIDE * SIDE);
   /** ★ 水域格（可站；分数 -WATER_PENALTY，移动端在岸上时优先上岸） */
@@ -284,11 +302,49 @@ export class TerrainScore {
     return Math.hypot(gx, gz) < eps;
   }
 
+  /** ★ 重建时权重快照（parity 断言用：score[] 烙的就是这套） */
+  weightsSnapshot(): ScoreWeights | null {
+    return this.lastW;
+  }
+
   /** 该点评分（未就绪/表外 → null；不可站 → -1e9） */
   scoreAt(x: number, z: number): number | null {
     if (!this.ready) return null;
     const i = this.indexAt(x, z);
     return i < 0 ? null : (this.pass[i] ? this.score[i] : -1e9);
+  }
+
+  /** ★ 原始特征读口（L3 `UnitStrategy.scoreForUnit` 用；重构 P1）
+   *  未就绪/表外 → null；threatN/nearF 与 score 同口径；玩家位置读时传入（比烙死进 score 的更实时） */
+  featsAt(x: number, z: number, playerX = 0, playerZ = 0): CellFeats | null {
+    if (!this.ready || !this.lastPlan) return null;
+    const i = this.indexAt(x, z);
+    if (i < 0) return null;
+    const plan = this.lastPlan;
+    // ★ 距离/威胁一律用**格心**算（score[] 烙在格心；用查询点会漂 ±2m 破坏 parity）
+    const ix = i % SIDE, iz = (i - ix) / SIDE;
+    const gx = this.sx + ix * CELL + CELL / 2;
+    const gz = this.sz + iz * CELL + CELL / 2;
+    const d = Math.hypot(gx - plan.cx, gz - plan.cz);
+    const dt = Math.hypot(gx - playerX, gz - playerZ);
+    const cls = this.cls[i];
+    return {
+      pass: this.pass[i] === 1,
+      h: this.heights[i],
+      shipD: (d / R) * DIST_SCALE,
+      nearF: d < 30 ? -(1 - d / 30) * 4 : 0,
+      threatN: (dt / R) * DIST_SCALE,
+      playerD: dt,
+      cover: this.featCover[i],
+      width: this.width[i],
+      choke: this.choke[i],
+      trench: this.trench[i],
+      constTerm:
+        this.wallNear[i] * WALL_COVER_SCORE +
+        this.trench[i] * TRENCH_SCORE -
+        this.water[i] * WATER_PENALTY -
+        (cls === 1 ? SLOPE_PENALTY : 0),
+    };
   }
 
   /** ★ 半径内最高分战壕格（全兵种战壕偏好；窗口扫描；可限定距离带 [minD, maxD]）
@@ -406,10 +462,12 @@ export class TerrainScore {
     this.cls[i] = hardRole ? 3 : 0;
     this.water[i] = role === 'liquid' ? 1 : 0;
     this.trench[i] = 0;
-    this.coverF[i] = (bonus.get(this.key(x, z)) ?? 0) > 0 ? 1 : 0;
+    const bv = bonus.get(this.key(x, z)) ?? 0;
+    this.featCover[i] = bv;
+    this.coverF[i] = bv > 0 ? 1 : 0;
     const d = Math.hypot(x - plan.cx, z - plan.cz);
     // ★ 距离项按 R 归一化（点积量级与 h/cover 可比；见 DIST_SCALE 注释）
-    let s = w.h * h + w.dist * (d / R) * DIST_SCALE + (bonus.get(this.key(x, z)) ?? 0) * w.cover;
+    let s = w.h * h + w.dist * (d / R) * DIST_SCALE + bv * w.cover;
     if (w.near > 0 && d < 30) s -= w.near * (1 - d / 30) * 4;   // 近舰负分（前期往外展开）
     // ★ T 威胁距（玩家）：负权重 = 压向玩家（总攻），正权重 = 远离（撤退）
     if (w.threat !== 0) {

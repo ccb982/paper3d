@@ -16,7 +16,7 @@ import { applyPosture, type BattlePosture } from './Posture';
 import { PostureFn, releaseAt } from './PostureFn';
 import { BattleLine, type LineUnit } from './BattleLine';
 import { RANGED } from './RangedTactics';
-import { TerrainScore } from './TerrainScore';
+import { TerrainScore, weightsFor } from './TerrainScore';
 import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from './TerrainSemantics';
 import { HoleMask } from './HoleMask';
 import { HoleTable } from './HoleTable';
@@ -25,11 +25,12 @@ import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { EngineerCorps, type BuildPiece } from './EngineerCorps';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor } from './UnitTactics';
+import { scoreForUnit } from './UnitStrategy';
 import { setSteerTable } from '../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import { SQUAD_MAX, type Squad } from './SquadTable';
-import type { TacticalOrder, UnitRole } from '../../entity/SwarmUnit';
+import type { TacticalOrder, UnitRole, SquadType } from '../../entity/SwarmUnit';
 
 /** 重组/岗位计算用的复用暂存（零分配） */
 const _c0 = { x: 0, z: 0 };
@@ -1188,6 +1189,20 @@ export class SwarmCommander {
   /** ★ 表分查询（执行层候选方向打分用；未就绪/表外 → null） */
   scoreAt(x: number, z: number): number | null {
     return this.terrainScore.scoreAt(x, z);
+  }
+
+  /** ★ L3 兵种分（重构 P1）：当前态势基权 × 兵种权重 × 合成字段（探针/中立选位用；
+   *  小队消费在 Decide/SquadPath 内走 UnitStrategy.scoreForUnit 纯函数） */
+  scoreForType(type: SquadType, x: number, z: number, playerX = 0, playerZ = 0): number {
+    const base = weightsFor(this.postureP, this.battlePosture);
+    return scoreForUnit(type, this.terrainScore.featsAt(x, z, playerX, playerZ), base);
+  }
+
+  /** ★ parity 断言用：与 score[] 同一重建权重复算 mixed（隔离态势陈旧差） */
+  scoreMixedAt(x: number, z: number, playerX = 0, playerZ = 0): number | null {
+    const base = this.terrainScore.weightsSnapshot();
+    if (!base) return null;
+    return scoreForUnit('mixed', this.terrainScore.featsAt(x, z, playerX, playerZ), base);
   }
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
