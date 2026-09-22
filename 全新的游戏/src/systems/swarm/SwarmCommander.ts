@@ -411,8 +411,13 @@ export class SwarmCommander {
         //   所有工兵队每拍都有目标（引擎派区、队持续干到调走）——不空闲 = 不被回收。
         this.fortify.spots.clear();
         for (const s of builders) {
+          // 队质心（可达性校验起点）
+          let bcx = 0, bcz = 0, bn = 0;
+          for (const m of s.members.values()) { bcx += m.x; bcz += m.z; bn++; }
+          if (bn > 0) { bcx /= bn; bcz /= bn; }
           const sp = this.fortify.spotFor(
             s.id, shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z), DONE,
+            (x, z) => this.swarm.walkableLine(bcx, bcz, x, z),   // ★ 选点必须过道路可行性
           );
           if (sp) this.fortify.spots.set(s.id, sp);
         }

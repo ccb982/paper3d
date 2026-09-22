@@ -1037,6 +1037,11 @@ export class SwarmSystem {
   /** ★ P4 白名单探针：任务走廊重规划计数 */
   get memberNavDbg(): MemberTaskNav['dbg'] { return this.taskNav.dbg; }
 
+  /** ★ 可行性直达检查（工兵选点等）：直线可走（读表） */
+  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
+    return this.nav.feas.walkableLine(ax, az, bx, bz);
+  }
+
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);

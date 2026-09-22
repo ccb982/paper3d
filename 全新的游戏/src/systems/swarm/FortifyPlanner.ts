@@ -59,26 +59,31 @@ export class FortifyPlanner {
   }
 
   /** ★ 统一目标函数（用户定）：扇区**未达标** → 最危险点（补评分）；**已达标** → 扇区内随机位置（继续干）。
-   *  所有调用方共用此函数，不再各自散写"worst/随机"。 */
+   *  ★ 选点必须过**道路可行性**（canReach：从队位直达可走）——走不到的点不派，否则原地打转。 */
   targetOf(
     cx: number, cz: number, sec: number, rLo: number, rHi: number,
     scoreAt: (x: number, z: number) => number | null, doneScore: number,
+    canReach?: (x: number, z: number) => boolean,
   ): FortifyPick | null {
     const w = this.worst[sec];
-    if (Number.isFinite(w.score) && w.score < doneScore) return { x: w.x, z: w.z, score: w.score };
+    if (Number.isFinite(w.score) && w.score < doneScore
+      && (!canReach || canReach(w.x, w.z))) {
+      return { x: w.x, z: w.z, score: w.score };
+    }
     const TAU = Math.PI * 2;
     const a0 = (sec / FORTIFY_SECTORS) * TAU;
     const a1 = ((sec + 1) / FORTIFY_SECTORS) * TAU;
-    for (let k = 0; k < 8; k++) {
+    for (let k = 0; k < 10; k++) {
       const a = a0 + Math.random() * (a1 - a0);
       const rr = rLo + Math.random() * (rHi - rLo);
       const x = Math.round((cx + Math.cos(a) * rr) / 4) * 4;
       const z = Math.round((cz + Math.sin(a) * rr) / 4) * 4;
       const s = scoreAt(x, z);
       if (s === null || s <= -1e8) continue;
+      if (canReach && !canReach(x, z)) continue;   // ★ 道路可行性
       return { x, z, score: s };
     }
-    if (Number.isFinite(w.score)) return { x: w.x, z: w.z, score: w.score };
+    if (Number.isFinite(w.score) && (!canReach || canReach(w.x, w.z))) return { x: w.x, z: w.z, score: w.score };
     // ★ 最终兜底：扇区中点（评分不可用也返回）——**每队必有目标，spotFor 永不 null**
     const mid = (a0 + a1) / 2;
     const rm = (rLo + rHi) / 2;
@@ -89,10 +94,11 @@ export class FortifyPlanner {
   spotFor(
     sid: number, cx: number, cz: number, rLo: number, rHi: number,
     scoreAt: (x: number, z: number) => number | null, doneScore: number,
+    canReach?: (x: number, z: number) => boolean,
   ): (FortifyPick & { sector: number }) | null {
     const sec = this.claims.get(sid);
     if (sec === undefined) return null;
-    const p = this.targetOf(cx, cz, sec, rLo, rHi, scoreAt, doneScore);
+    const p = this.targetOf(cx, cz, sec, rLo, rHi, scoreAt, doneScore, canReach);
     return p ? { ...p, sector: sec } : null;
   }
 
