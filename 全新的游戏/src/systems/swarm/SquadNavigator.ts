@@ -63,11 +63,15 @@ export class SquadNavigator {
     if (!tgt) return;
     const cur = state.corridor ?? state.order.path;
     const hasPath = !!cur && cur.length > 0;
-    const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
-    if (hasPath && moved <= NAV.RETARGET_DIST && now - state.pathAt <= NAV.REFRESH_S) return;
-    if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     const raster = RasterMap.current;
     if (!raster || !squads.centroidOf(squad.id, this._centroid)) return;
+    // ★ 大修②：目标不变、路径常新——质心离上次求解位 >12m 或超时 → 从当前位置重算（覆盖）
+    const movedFrom = Math.hypot(
+      this._centroid.x - (state.pathFromX ?? 0), this._centroid.z - (state.pathFromZ ?? 0),
+    );
+    const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
+    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 12 && now - state.pathAt <= NAV.REFRESH_S) return;
+    if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
     const feasOut: { x: number; z: number }[] = [];
     const feas = this.feas.find(this._centroid.x, this._centroid.z, tgt.x, tgt.z, feasOut);
@@ -76,6 +80,8 @@ export class SquadNavigator {
       state.corridor = feasOut;   // ★ 寻路轨覆盖（命令对象只读）
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
+      state.pathFromX = this._centroid.x;
+      state.pathFromZ = this._centroid.z;
       state.pathAt = now;
       state.pathFailedAt = 0;
       return;
@@ -108,6 +114,8 @@ export class SquadNavigator {
       state.corridor = path;   // ★ 寻路轨覆盖（命令对象只读）
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
+      state.pathFromX = this._centroid.x;
+      state.pathFromZ = this._centroid.z;
       // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
       state.pathAt = warming ? 0 : now;
       state.pathFailedAt = 0;
@@ -117,6 +125,8 @@ export class SquadNavigator {
       state.corridor = state.order.coarse.slice();
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
+      state.pathFromX = this._centroid.x;
+      state.pathFromZ = this._centroid.z;
       state.pathAt = now;
       state.pathFailedAt = 0;
     } else {

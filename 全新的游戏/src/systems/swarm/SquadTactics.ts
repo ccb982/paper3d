@@ -78,6 +78,9 @@ export interface SquadOrderState {
   stepN?: number;
   /** ★ 寻路轨走廊（覆盖式；ensurePath/拆步产出）——**命令对象只读，路径只覆盖不改令** */
   corridor?: { x: number; z: number }[];
+  /** ★ 寻路轨：最近一次求解时的质心位（位移 >12m → 从当前位置重算；"目标不变、路径常新"） */
+  pathFromX?: number;
+  pathFromZ?: number;
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
@@ -283,6 +286,8 @@ export class SquadTactics {
       state.pathAt = prev.pathAt;
       state.pathFailedAt = prev.pathFailedAt;
       state.corridor = prev.corridor;   // ★ 寻路轨走廊随命令延续（覆盖式；命令对象不自带细路径）
+      state.pathFromX = prev.pathFromX;
+      state.pathFromZ = prev.pathFromZ;
       if (!normalized.path && prev.order.path) normalized.path = prev.order.path;
     }
     this.board.issue(state);
@@ -649,68 +654,10 @@ export class SquadLeaderAI {
     s: Squad, st: SquadOrderState, tactics: SquadTactics, now: number,
     score: (type: SquadType, x: number, z: number) => number,
   ): void {
-    const o = st.order;
-    if (s.type === 'flyer') return;
-    if (!STEP_KINDS.has(o.kind)) return;
-    if (o.mission !== undefined && NO_STEP_MISSIONS.has(o.mission)) return;
-    const anchor = o.anchor ?? o.target;
-    if (!anchor) return;
-    let cx = 0, cz = 0, n = 0;
-    for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-    if (n === 0) return;
-    cx /= n; cz /= n;
-    // 大目标锚漂移不重拆 k：步令到期/到点后按新锚续拆（移动目标=同一任务推进）
-    const cur = tactics.board.getPath(s.id);
-    const dAnchor = Math.hypot(anchor.x - cx, anchor.z - cz);
-    // 大目标已到 → 完成上报（一次）并撤步令
-    if (dAnchor <= LEADER_STEP.REACH_R) {
-      if (cur) {
-        this.stepDbg.done++;
-        this.logStep(s.id, 'done', now, cur.stepK ?? 0, cur.stepN ?? 0, 0, dAnchor);
-        tactics.ledger.noteProgress(now, s.id, cur.stepN ?? 0, cur.stepN ?? 0);
-        tactics.board.dropPath(s.id);
-      }
-      return;
-    }
-    let k = cur?.stepK ?? 0;
-    const nStep = Math.max(1, Math.ceil(dAnchor / LEADER_STEP.LEN));
-    if (cur && cur.order.target) {
-      const dStep = Math.hypot(cur.order.target.x - cx, cur.order.target.z - cz);
-      const dProg = Math.hypot(cx - cur.pathGoalX, cz - cur.pathGoalZ);
-      const arrived = dStep <= LEADER_STEP.ADVANCE_R;
-      const advanced = dProg >= LEADER_STEP.PROGRESS_M;   // 位移推进（不苛求踩点）
-      if (!arrived && !advanced && now < cur.until) {
-        this.logStep(s.id, 'hold', now, k, cur.stepN ?? nStep, dStep, dAnchor);   // 本步进行中
-        return;
-      }
-      if (arrived || advanced) {
-        k += 1;   // 到点/走够位移 → 记一步（过期未推进：k 不变，从当前位置重拆）
-        this.stepDbg.reached++;
-        this.logStep(s.id, 'reach', now, k, cur.stepN ?? nStep, dStep, dAnchor);
-        tactics.ledger.noteProgress(now, s.id, k, cur.stepN ?? nStep);
-        if (cur.stepN !== undefined && k >= cur.stepN) {
-          // 计划走满（位移口径完成）→ 上报并重拆新计划（k 归零；移动目标/长距持续推进）
-          this.stepDbg.done++;
-          this.logStep(s.id, 'done', now, k, cur.stepN, dStep, dAnchor);
-          tactics.board.dropPath(s.id);
-          k = 0;
-        }
-      }
-    }
-    const next = this.pickStep(s.type, st, cx, cz, anchor, score);
-    if (!next) {
-      this.stepDbg.pickFail++;
-      this.logStep(s.id, 'fail', now, k, nStep, 0, dAnchor);
-      return;
-    }
-    this.stepDbg.issued++;
-    this.logStep(s.id, 'issue', now, Math.min(k, nStep), nStep,
-      Math.hypot(next.x - cx, next.z - cz), dAnchor);
-    tactics.issueStep(s.id, {
-      kind: o.kind, target: next, mission: o.mission,
-      anchor: { x: anchor.x, z: anchor.z }, intent: o.intent,
-      roe: o.roe, urgency: o.urgency, threatX: o.threatX, threatZ: o.threatZ, seq: 0,
-    }, now, LEADER_STEP.TTL, Math.min(k, nStep), nStep, cx, cz);
+    // ★ 大修②：拆步 = "目标不变、路径常新"——由 SquadNavigator.ensurePath 按位移 >12m 连续重算（覆盖式）。
+    //   步点链（12m step/K/N）已废；加权版重算（可行性+兵种偏好）在阶段二接回此处。
+    void s; void st; void tactics; void now; void score;
+    return;
   }
 
   /** 拆步选点（★ 阶段一：权重全关）= 走廊前瞻点本身，不做 argmax 偏移
