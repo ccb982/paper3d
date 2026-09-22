@@ -56,7 +56,9 @@ export class SquadNavigator {
 
   /** ★ 阶段二：偏好重算（掩体代次变化触发一次；由 commander 注入） */
   stampFn: (() => number) | null = null;
-  /** ★ 阶段二开关：true = 队长走廊走加权 A*（可行性底座 + 掩体/兵种权重）；false = 纯可行性 BFS */
+  /** ★ 走廊生成（2026-09-23 定稿）：**LOS 10m 短路 + 贪心校验**——
+   *  每次从当前位置取 ~10m 内 LOS 可走的候选，按"推进+安全"贪心选一点（一次一跳，滚动重算）；
+   *  自然就是可行路，不需要后向 LOS/BFS 优先。贪心全无推进才回落表图 BFS。 */
   weighted = true;
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   private readonly _centroid = { x: 0, z: 0 };
@@ -102,7 +104,8 @@ export class SquadNavigator {
     const feas = this.feas.find(this._centroid.x, this._centroid.z, tgt.x, tgt.z, feasOut);
     if (feas === 'ok') {
       this.dbg.feasOk++;
-      state.corridor = feasOut;   // ★ 寻路轨覆盖（命令对象只读）
+      // 贪心无推进时回落：表图 BFS 可行走廊（覆盖式；命令对象只读）
+      state.corridor = feasOut;
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       state.pathFromX = this._centroid.x;
@@ -304,7 +307,7 @@ export class SquadNavigator {
     const dNow = Math.hypot(tx - cx, tz - cz);
     if (dNow < 2.5) return null;   // 已到：不需要段
     const W_ADV = 1, W_SAFE = 4;
-    for (const r of [6, 12, 18]) {
+    for (const r of [10, 6]) {   // ★ LOS 10m 短路（主）/ 6m（窄地形回落）
       let best: { x: number; z: number } | null = null;
       let bestS = 0;
       for (let k = 0; k < 16; k++) {
@@ -321,6 +324,37 @@ export class SquadNavigator {
       if (best) return best;   // 小半径有解 → 不放大了
     }
     return null;
+  }
+
+  /** ★ 贪心校验选优（用户定 2026-09-23）：先有用路（BFS 可行走廊）→ 逐点贪心偏移；
+   *  候选必须**仍可走**（对前一保留点/后一路点做 walkableLine 双校验），只选更安全（掩体）的点。 */
+  private greedyRefine(type: string, path: { x: number; z: number }[]): { x: number; z: number }[] {
+    if (path.length < 3) return path;
+    const out = path.slice();
+    for (let i = 1; i < out.length - 1; i++) {
+      const prev = out[i - 1];
+      const next = out[i + 1];
+      const base = out[i];
+      let best = base;
+      let bestS = this.safetyOf(type, base);
+      for (let k = 0; k < 8; k++) {
+        const a = (k * Math.PI) / 4;
+        const cx = Math.round((base.x + Math.cos(a) * 4) / 2) * 2;
+        const cz = Math.round((base.z + Math.sin(a) * 4) / 2) * 2;
+        if (!this.feas.walkableLine(prev.x, prev.z, cx, cz)) continue;   // 前向仍可走
+        if (!this.feas.walkableLine(cx, cz, next.x, next.z)) continue;   // 后向仍可走
+        const s = this.safetyOf(type, { x: cx, z: cz });
+        if (s > bestS + 0.02) { bestS = s; best = { x: cx, z: cz }; }
+      }
+      out[i] = best;
+    }
+    return out;
+  }
+
+  /** 安全分（越大越安全；掩体/战壕折扣 0.6~1 取反） */
+  private safetyOf(type: string, p: { x: number; z: number }): number {
+    const mul = this.pathMul?.(type, p.x, p.z) ?? 1;
+    return 1 - mul;
   }
 
   /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */
