@@ -104,6 +104,13 @@ const snapPage = (page) => page.evaluate(() => {
         盾突掩: diffI('defense', 'assault', 2),
         后突远: diffI('logistics', 'assault', 3),
       };
+      // ★ P1-3 寻路亲和：同格同掩体，只差兵种亲和 → 关格 defense 应比 assault 便宜、高格 ranged 应比 assault 便宜
+      if (CH && HH) {
+        const pd = c.pathMulFor('defense', CH.x, CH.z), pa = c.pathMulFor('assault', CH.x, CH.z);
+        const pr = c.pathMulFor('ranged', HH.x, HH.z), pa2 = c.pathMulFor('assault', HH.x, HH.z);
+        chk.寻路关 = `${pd < pa ? '✓' : '✗'}D${pd.toFixed(2)}<A${pa.toFixed(2)}`;
+        chk.寻路高 = `${pr < pa2 ? '✓' : '✗'}R${pr.toFixed(2)}<A${pa2.toFixed(2)}`;
+      }
       let dPar = 0, dFresh = 0, worst = null;
       for (let i = 0; i < cells.length; i += 5) {
         const e = cells[i];

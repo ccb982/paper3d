@@ -35,6 +35,9 @@ import type { TacticalOrder, UnitRole, SquadType } from '../../entity/SwarmUnit'
 /** 重组/岗位计算用的复用暂存（零分配） */
 const _c0 = { x: 0, z: 0 };
 const _c1 = { x: 0, z: 0 };
+/** ★ L3 寻路亲和（P1-3）：scoreFor 归一 ±PATH_AFF_N 分 → 倍率 ∓PATH_AFF_W（与掩体折扣相乘） */
+const PATH_AFF_N = 8;
+const PATH_AFF_W = 0.25;
 
 /** ★ 引擎保护配置：保护对象（锚）+ 来源（护工/射手/工地/岗位） */
 export interface ProtectTarget { x: number; z: number; source: 'engineer' | 'shooter' | 'site' | 'post' | 'cover' }
@@ -1234,6 +1237,17 @@ export class SwarmCommander {
   /** ★ 掩体/战壕寻路折扣（SquadPath 逐格乘算；战壕/掩体=寻路加分点） */
   pathMulAt(x: number, z: number): number {
     return this.terrainScore.pathMulAt(x, z);
+  }
+
+  /** ★ L3 寻路代价（重构 P1-3）：掩体折扣 × 兵种亲和——scoreFor 越高越便宜。
+   *  SquadPath/HPA 统一夹取 [0.5,1.5]；非表内/不可站 → 1（阻挡另判） */
+  pathMulFor(type: string, x: number, z: number): number {
+    const cover = this.terrainScore.pathMulAt(x, z);
+    const f = this.terrainScore.featsAt(x, z, this.viewPX, this.viewPZ);
+    if (!f || !f.pass) return 1;
+    const s = scoreForUnit(type as SquadType, f, this.liveWeights());
+    const aff = Math.max(-1, Math.min(1, s / PATH_AFF_N));
+    return cover * (1 - PATH_AFF_W * aff);
   }
 
   isWaterAt(x: number, z: number): boolean {

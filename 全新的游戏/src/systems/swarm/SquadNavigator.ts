@@ -36,8 +36,8 @@ const _zeroSlot = { fx: 0, fz: 0 };
 
 export class SquadNavigator {
   private readonly pathFinder = new SquadPathFinder();
-  /** ★ 掩体/战壕寻路折扣（由 SwarmSystem 注入 TerrainScore.pathMulAt） */
-  pathMul: ((x: number, z: number) => number) | null = null;
+  /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
+  pathMul: ((type: string, x: number, z: number) => number) | null = null;
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
@@ -60,7 +60,10 @@ export class SquadNavigator {
     const dist = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
     let ok = false;
     const isFlyer = (squad.type as string) === 'flyer';
-    const mul = isFlyer ? undefined : this.pathMul ?? undefined;   // ★ 飞行不走地面折扣
+    // ★ 飞行不走地面折扣；地面 = 掩体折扣 × 该队兵种亲和（P1-3）
+    const mul = (!isFlyer && this.pathMul)
+      ? (x: number, z: number) => this.pathMul!(squad.type, x, z)
+      : undefined;
     this.hpa.pathMul = mul ?? null;
     if (dist > 70) ok = this.hpa.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path);
     const warming = dist > 70 && this.hpa.warming;
