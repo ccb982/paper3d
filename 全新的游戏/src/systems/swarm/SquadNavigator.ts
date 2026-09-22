@@ -46,7 +46,7 @@ export class SquadNavigator {
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
   readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
-  private readonly feas = new FeasibilityPath();
+  readonly feas = new FeasibilityPath();
 
   /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
   setPathTable(t: PassTable | null): void {

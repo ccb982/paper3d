@@ -1041,6 +1041,12 @@ export class SwarmSystem {
     this.nav.setPathTable(t);
   }
 
+  /** ★ N1 探针：可行性寻路计数（ok/blocked/outside）+ 最近被拒样本 */
+  get feasDbg(): { ok: number; blocked: number; outside: number } { return this.nav.feas.dbg; }
+  get feasBlockedSamples(): readonly { sx: number; sz: number; gx: number; gz: number }[] {
+    return this.nav.feas.blockedRecent;
+  }
+
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
   private _orderDrops = 0;
   get orderDrops(): number { return this._orderDrops; }

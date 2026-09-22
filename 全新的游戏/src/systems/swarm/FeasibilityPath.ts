@@ -21,6 +21,8 @@ export class FeasibilityPath {
   private table: PassTable | null = null;
   /** 观测（探针/诊断）：最近一次查询结果 */
   readonly dbg = { ok: 0, blocked: 0, outside: 0 };
+  /** 最近被拒样本（诊断：真不可达 vs 表/BFS 口径错） */
+  readonly blockedRecent: { sx: number; sz: number; gx: number; gz: number }[] = [];
 
   setTable(t: PassTable | null): void {
     this.table = t;
@@ -67,7 +69,12 @@ export class FeasibilityPath {
         queue.push(nk);
       }
     }
-    if (!found) { this.dbg.blocked++; return 'blocked'; }
+    if (!found) {
+      this.dbg.blocked++;
+      if (this.blockedRecent.length >= 8) this.blockedRecent.shift();
+      this.blockedRecent.push({ sx: +sx.toFixed(0), sz: +sz.toFixed(0), gx: +gx.toFixed(0), gz: +gz.toFixed(0) });
+      return 'blocked';
+    }
     // 回溯 → 稀疏路点（≤8，起点前列不输出，含精确终点）
     const cells: number[] = [];
     let c = gk;
