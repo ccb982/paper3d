@@ -749,10 +749,15 @@ export class SwarmSystem {
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
     const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
     if (isLeader && hasMyTask) {
-      // ★ 队长（干活的）：直走本队件点/区目标（施工点；复杂寻路在队级走廊已算）
+      // ★ 队长（干活的）：**长腿走队级指令目标**（走廊锚点+阵型，避局部极小）；近程直走件点
       const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
       const td = Math.hypot(tx, tz);
-      if (td > 2) { dx = tx / td; dz = tz / td; }
+      if (td > 15) {
+        const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
+        const ad = Math.hypot(ax, az);
+        if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
+        else { dx = tx / td; dz = tz / td; }
+      } else if (td > 2) { dx = tx / td; dz = tz / td; }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
       const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
