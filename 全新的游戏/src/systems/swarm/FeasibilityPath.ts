@@ -19,8 +19,8 @@ const DIRS: readonly (readonly [number, number])[] = [
 
 export class FeasibilityPath {
   private table: PassTable | null = null;
-  /** 观测（探针/诊断）：最近一次查询结果 */
-  readonly dbg = { ok: 0, blocked: 0, outside: 0 };
+  /** 观测（探针/诊断）：最近一次查询结果（calls = 总调用数，用于定位高频调用方） */
+  readonly dbg = { calls: 0, ok: 0, blocked: 0, outside: 0 };
   /** 最近被拒样本（诊断：真不可达 vs 表/BFS 口径错） */
   readonly blockedRecent: { sx: number; sz: number; gx: number; gz: number }[] = [];
 
@@ -34,6 +34,7 @@ export class FeasibilityPath {
     out: { x: number; z: number }[],
   ): 'ok' | 'blocked' | 'outside' {
     out.length = 0;
+    this.dbg.calls++;
     const t = this.table;
     if (!t || !t.ready) { this.dbg.outside++; return 'outside'; }
     const b = t.bounds();

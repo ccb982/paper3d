@@ -310,7 +310,7 @@ for (const seed of seeds) {
     const fd = s.feasDbg;
     if (fd) {
       const smp = (s.feasBlocked ?? []).slice(-4).map((b) => `${b.sx},${b.sz}→${b.gx},${b.gz}`).join(' ');
-      console.log(`   可行性寻路(N1) ok=${fd.ok} blocked=${fd.blocked} outside=${fd.outside} | 拒样: ${smp || '-'}`);
+      console.log(`   可行性寻路(N1) calls=${fd.calls} ok=${fd.ok} blocked=${fd.blocked} outside=${fd.outside} | 拒样: ${smp || '-'}`);
     }
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;

@@ -1041,8 +1041,8 @@ export class SwarmSystem {
     this.nav.setPathTable(t);
   }
 
-  /** ★ N1 探针：可行性寻路计数（ok/blocked/outside）+ 最近被拒样本 */
-  get feasDbg(): { ok: number; blocked: number; outside: number } { return this.nav.feas.dbg; }
+  /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */
+  get feasDbg(): { calls: number; ok: number; blocked: number; outside: number } { return this.nav.feas.dbg; }
   get feasBlockedSamples(): readonly { sx: number; sz: number; gx: number; gz: number }[] {
     return this.nav.feas.blockedRecent;
   }
