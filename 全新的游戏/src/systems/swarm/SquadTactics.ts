@@ -706,10 +706,11 @@ export class SquadLeaderAI {
     }, now, LEADER_STEP.TTL, Math.min(k, nStep), nStep, cx, cz);
   }
 
-  /** 拆步选格：沿走廊下一路点（避障）推进一步 → 候选 argmax scoreFor；全不可站 → null（回退命令轨） */
+  /** 拆步选点（★ 阶段一：权重全关）= 走廊前瞻点本身，不做 argmax 偏移
+   *  （候选偏移会把步点甩出走廊 → 半路卡死；阶段二再开） */
   private pickStep(
     type: SquadType, st: SquadOrderState, cx: number, cz: number,
-    anchor: { x: number; z: number }, score: (type: SquadType, x: number, z: number) => number,
+    anchor: { x: number; z: number }, _score: (type: SquadType, x: number, z: number) => number,
   ): { x: number; z: number } | null {
     const next = SquadTactics.currentTargetOf(st, cx, cz) ?? anchor;
     let dx = next.x - cx, dz = next.z - cz;
@@ -719,17 +720,7 @@ export class SquadLeaderAI {
     const len = Math.min(LEADER_STEP.LEN, d);
     let bx = cx + (dx / d) * len, bz = cz + (dz / d) * len;
     if (dAnchor <= LEADER_STEP.LEN) { bx = anchor.x; bz = anchor.z; }
-    let bestX = bx, bestZ = bz;
-    let bestS = score(type, bx, bz);
-    for (const r of LEADER_STEP.CAND) {
-      for (const [ux, uz] of _dir8) {
-        const x = bx + ux * r, z = bz + uz * r;
-        const sc = score(type, x, z);
-        if (sc > bestS + 0.01) { bestS = sc; bestX = x; bestZ = z; }
-      }
-    }
-    if (bestS <= -1e8) return null;
-    return { x: bestX, z: bestZ };
+    return { x: bx, z: bz };
   }
 
   /** ★ 步骤 9e：向最近的其他小队发求援（引擎中转；同 from+to 自动去重） */
