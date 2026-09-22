@@ -472,8 +472,12 @@ export class SwarmCommander {
             this.corps.focus.set(sid, own);
             continue;
           }
+          // ★ 件种类（用户定 2026-09-24）：**非总攻 → 挖战壕**（掩体一大堆不如战壕；掩体叠一起没效果）；
+          //   总攻 → 补掩体（推进用）。掩体去重半径拉大（12m）防叠，战壕 8m 便于成线
+          const wantKind: 'cover' | 'trench' = this.battlePosture === 'assault' ? 'cover' : 'trench';
+          const dedupR = wantKind === 'cover' ? 12 : 8;
           let sx2 = p.x, sz2 = p.z;
-          if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < 8)) {
+          if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < dedupR)) {
             // ★ 第二波修复（2026-09-24）：8m 去重命中（第一波已建点在弧链上）→ 扇区内**重采样**：
             //   用要塞需求 fortifyNeed 校验（不是通用 scoreAt），12 次尝试仍不成就跳过本拍
             let found = false;
@@ -485,13 +489,13 @@ export class SwarmCommander {
               const cx2 = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
               const cz2 = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
               if (this.fortifyNeed(cx2, cz2) === null) continue;
-              if (this.corps.pieces.some((q) => Math.hypot(q.x - cx2, q.z - cz2) < 8)) continue;
+              if (this.corps.pieces.some((q) => Math.hypot(q.x - cx2, q.z - cz2) < dedupR)) continue;
               sx2 = cx2; sz2 = cz2;
               found = true;
             }
             if (!found) continue;
           }
-          this.corps.pieces.push({ kind: 'cover', x: sx2, z: sz2, ring: 2, pri: 3 });
+          this.corps.pieces.push({ kind: wantKind, x: sx2, z: sz2, ring: 2, pri: 3 });
           // ★ 统一派件源（用户定 2026-09-23）：注入件 = 该队的 assign/focus（三点一致：位置函数点=件点=队的目标）
           const idx3 = this.corps.pieces.length - 1;
           this.corps.assign.set(sid, idx3);
