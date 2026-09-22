@@ -19,8 +19,11 @@ import { RasterMap } from '../../services/map/RasterMap';
 import { DANGER } from './SwarmDanger';
 
 const CELL = 4;
-/** 边采样步长（米；相邻采样落差为判据） */
-const DS = 1.0;
+/** 边采样步长（米；细分找离散落差用） */
+const DS = 0.4;
+/** 离散落差判定：最大单步落差 > 3×典型单步(中位) + 0.15，即"某一步明显跳"（连续坡不算——坡是正常通路） */
+const STEP_RATIO = 3;
+const STEP_BIAS = 0.15;
 /** 方向索引：E/W/S/N */
 const DIR_E = 0, DIR_W = 1, DIR_S = 2, DIR_N = 3;
 /** 方向向量（与索引同序） */
@@ -120,21 +123,32 @@ export class PassTable {
     const bz = this.oz + jz * CELL + CELL / 2;
     const len = Math.hypot(bx - ax, bz - az);
     const steps = Math.max(1, Math.round(len / DS));
-    let prev = hA;
-    let riseAB = 0, riseBA = 0, maxAbs = 0;
+    const hA0 = hA;
+    let prevH = hA;
+    let maxAbs = 0;
+    let jump = 0;   // 最大单步落差（带符号：正 = A→B 升）
+    const absD: number[] = [];
     for (let k = 1; k <= steps; k++) {
       const t = k / steps;
       const hh = sh(ax + (bx - ax) * t, az + (bz - az) * t);
-      const d = hh - prev;
-      if (d > 0) { if (d > riseAB) riseAB = d; } else if (-d > riseBA) riseBA = -d;
+      const d = hh - prevH;
       const ad = d < 0 ? -d : d;
       if (ad > maxAbs) maxAbs = ad;
-      prev = hh;
+      if (ad > (jump < 0 ? -jump : jump)) jump = d;
+      absD.push(ad);
+      prevH = hh;
     }
-    if (maxAbs > DANGER.CLIFF_DH) return [false, false, hB - hA, 1];   // 绝对墙（悬崖）
-    const fwd = riseAB <= DANGER.WALL_STEP;                              // 正向无 >0.6 升
-    const rev = riseBA <= DANGER.WALL_STEP;                              // 反向无 >0.6 升
-    return [fwd, rev, hB - hA, fwd && rev ? 0 : 2];
+    const net = prevH - hA0;
+    if (maxAbs > DANGER.CLIFF_DH) return [false, false, net, 1];   // 悬崖：绝对墙（双向禁）
+    // ★ 坡是正常通路（不处理）：仅"离散落差"（某一步明显跳）判硬边 → 只可下
+    absD.sort((a, b) => a - b);
+    const med = absD[absD.length >> 1] ?? 0;
+    const discrete = Math.abs(jump) > DANGER.WALL_STEP
+      && Math.abs(jump) > med * STEP_RATIO + STEP_BIAS;
+    if (!discrete) return [true, true, net, 0];
+    const fwd = jump < 0;    // 最大落差是向下 → A→B 可走（只可下）
+    const rev = jump > 0;
+    return [fwd, rev, net, 2];
   }
 
   private setDir(i: number, d: number, ok: boolean, dropM: number): void {
