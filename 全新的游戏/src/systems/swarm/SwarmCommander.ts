@@ -28,6 +28,7 @@ import { AnchorSelect } from './CommanderAnchorSelect';
 import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
+import { RosterController } from './RosterController';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -134,6 +135,8 @@ export class SwarmCommander {
   private readonly spawn: CommanderSpawn;
   /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次；《寻路与导航架构.md》§3.0） */
   readonly passTable = new PassTable();
+  /** ★ §13.1 编制比例（占比统计 + 缺口；只读，不改行为） */
+  readonly roster = new RosterController();
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
   /** ★ 成员级任务（taskX/Z）唯一入口（施工分块 / 护卫扇区） */
@@ -385,6 +388,7 @@ export class SwarmCommander {
   tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
     this.viewPX = playerX;
     this.viewPZ = playerZ;
+    this.roster.tick(dt, this.swarm.squads);   // ★ §13.1 编制占比统计（4Hz）
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
     const now = performance.now() / 1000;

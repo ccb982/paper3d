@@ -108,6 +108,7 @@ const snapPage = (page) => page.evaluate(() => {
     feasBlocked: sw.feasBlockedSamples ?? [],
     taskNavDbg: sw.memberNavDbg ?? null,
     pass: sw.commander.passTable?.stats ?? null,
+    roster: (() => { const r = sw.commander.roster; return r ? { ...r.counts, total: r.dbg.total, gap: r.dbg.gap, gapVal: r.dbg.gapVal } : null; })(),
     stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
@@ -312,6 +313,8 @@ for (const seed of seeds) {
       const smp = (s.feasBlocked ?? []).slice(-4).map((b) => `${b.sx},${b.sz}→${b.gx},${b.gz}`).join(' ');
       console.log(`   可行性寻路(N1) calls=${fd.calls} ok=${fd.ok} blocked=${fd.blocked} outside=${fd.outside} | 拒样: ${smp || '-'}`);
     }
+    const ro = s.roster;
+    if (ro) console.log(`   编制(13.1) 盾${ro.shield} 突${ro.assault} 远${ro.ranged} 后${ro.logistics} 工${ro.builder} 总${ro.total} 缺口=${ro.gap}${ro.gapVal ? `(${ro.gapVal})` : ''}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {
