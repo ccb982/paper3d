@@ -346,8 +346,8 @@ for (const seed of seeds) {
       gate('到期回落=0', (s.drops | 0) === 0, `drops=${s.drops}`);
       gate('调账台账一致', !s.coarse || c.adjusted === s.coarse.ledgerAdj, `adjusted=${c.adjusted} ledger=${s.coarse?.ledgerAdj}`);
       gate('唯一/引擎>0.5', c.engine > 0 && c.unique / c.engine > 0.5, `${c.unique}/${c.engine}`);
-      gate('队长>0', c.leader > 0, `leader=${c.leader}`);
-      gate('progress事件>0', c.progress > 0, `progress=${c.progress}`);
+      gate('导航段重算>0', (s.navDbg?.seg ?? 0) > 0, `seg=${s.navDbg?.seg}`);
+      gate('可行性走廊生效', (s.navDbg?.feasOk ?? 0) > 0, `feasOk=${s.navDbg?.feasOk}`);
       gate('保护堆挤≤2/锚', s.pStack <= 2, `pStack=${s.pStack}`);
       const nd2 = s.navDbg;
       if (nd2) gate('重规划计数闭合', nd2.solves === nd2.hpa + nd2.astar + nd2.coarse + nd2.fail,
