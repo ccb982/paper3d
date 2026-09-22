@@ -304,7 +304,7 @@ for (const seed of seeds) {
     const cg = s.coarse;
     if (cg) console.log(`   可达核验(P2) checked=${cg.checked} 调账=${cg.adjusted}(台账${cg.ledgerAdj}) 拦截=${cg.skipped} 预热放行=${cg.unknown}`);
     const nd = s.navDbg, md = s.taskNavDbg;
-    if (nd && md) console.log(`   重规划(白名单P4) 队路径=${nd.solves}(HPA${nd.hpa}/A*${nd.astar}/coarse${nd.coarse}/失败${nd.fail}) 任务走廊=${md.solves}(偏离重解${md.deviations}/直行复核${md.rechecks}/失败${md.fails})`);
+    if (nd && md) console.log(`   重规划(白名单P4) 队路径=${nd.solves}(HPA${nd.hpa}/A*${nd.astar}/coarse${nd.coarse}/失败${nd.fail}) 可行性=${nd.feasOk}/${nd.feasBlocked} 任务走廊=${md.solves}(偏离重解${md.deviations}/直行复核${md.rechecks}/失败${md.fails})`);
     const pt = s.pass;
     if (pt) console.log(`   可行性表(N0) 格=${pt.cells} 深坑=${pt.lethal} 边=${pt.edges}(开放${pt.open}/单向${pt.oneWay}/绝对${pt.abs}) 建表=${pt.ms}ms`);
     const fd = s.feasDbg;

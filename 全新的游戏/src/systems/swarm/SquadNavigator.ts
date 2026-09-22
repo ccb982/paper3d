@@ -44,7 +44,7 @@ export class SquadNavigator {
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0 };
+  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
 
@@ -67,6 +67,26 @@ export class SquadNavigator {
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     const raster = RasterMap.current;
     if (!raster || !squads.centroidOf(squad.id, this._centroid)) return;
+    // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
+    const feasOut: { x: number; z: number }[] = [];
+    const feas = this.feas.find(this._centroid.x, this._centroid.z, tgt.x, tgt.z, feasOut);
+    if (feas === 'ok') {
+      this.dbg.feasOk++;
+      state.order.path = feasOut;
+      state.pathGoalX = tgt.x;
+      state.pathGoalZ = tgt.z;
+      state.pathAt = now;
+      state.pathFailedAt = 0;
+      return;
+    }
+    if (feas === 'blocked') {
+      // 可行性判死：绝不发不可走的路（清路径 + 冷却；命令门/队长会改派或等 TTL）
+      this.dbg.feasBlocked++;
+      state.pathFailedAt = now;
+      state.order.path = undefined;
+      return;
+    }
+    // 'outside'（表外/未就绪）→ 回落旧口径（HPA/有界 A*）
     this.dbg.solves++;   // ★ P4：白名单探针（真正进入求解；早退不计）
     const path: { x: number; z: number }[] = [];
     // ★ 长距离优先 HPA*（全局、绕大障碍）；失败 → 有界 A*（SquadPath）→ 直线
