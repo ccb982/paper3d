@@ -33,6 +33,27 @@ export class FeasibilityPath {
     return !!this.table && this.table.ready;
   }
 
+  /** 线段可走（2m 采样；有向边位）——贪心段候选过滤用 */
+  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
+    const t = this.table;
+    if (!t || !t.ready) return false;
+    const d = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.ceil(d / 2));
+    let px = ax, pz = az;
+    for (let k = 1; k <= n; k++) {
+      const q = k / n;
+      const x = ax + (bx - ax) * q, z = az + (bz - az) * q;
+      const dx = x - px, dz = z - pz;
+      const sx = Math.abs(dx) < 0.4 ? 0 : (dx > 0 ? 1 : -1);
+      const sz = Math.abs(dz) < 0.4 ? 0 : (dz > 0 ? 1 : -1);
+      if (sx !== 0 || sz !== 0) {
+        if (!t.canStep(px, pz, sx, sz)) return false;
+      }
+      px = x; pz = z;
+    }
+    return true;
+  }
+
   /** 可行性 BFS（8 向；有向边位）。ok → out 填稀疏走廊（≤8 路点，含精确终点）。 */
   find(
     sx: number, sz: number, gx: number, gz: number,

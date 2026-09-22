@@ -44,7 +44,7 @@ export class SquadNavigator {
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0 };
+  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
 
@@ -78,14 +78,13 @@ export class SquadNavigator {
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     const stamp = this.stampFn?.() ?? 0;
     // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
-    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 12 && now - state.pathAt <= NAV.REFRESH_S) return;
+    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 6 && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
-    // ★ 阶段二：加权寻路（可行性底座 + 掩体/兵种权重）——队长侧；失败回落可行性 BFS
+    // ★ 阶段二：贪心局部段（动态半径 6/12/18；更近+更安全即可，不求最优）——队长侧
     if (this.weighted && this.feas.readyFor()) {
-      const mul = (x: number, z: number) => this.pathMul?.(squad.type, x, z) ?? 1;
-      const wpath: { x: number; z: number }[] = [];
-      if (this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, wpath, mul)) {
-        state.corridor = wpath;
+      const best = this.greedyStep(squad.type, this._centroid.x, this._centroid.z, tgt.x, tgt.z);
+      if (best) {
+        state.corridor = [best, { x: tgt.x, z: tgt.z }];   // 覆盖式：段点 + 终目标
         state.pathGoalX = tgt.x;
         state.pathGoalZ = tgt.z;
         state.pathFromX = this._centroid.x;
@@ -93,9 +92,10 @@ export class SquadNavigator {
         state.costStamp = stamp;
         state.pathAt = now;
         state.pathFailedAt = 0;
-        this.dbg.astar++;
+        this.dbg.seg++;
         return;
       }
+      // 贪心无推进（全半径无解）→ 本拍不发新路，回落可行性 BFS 兜底
     }
     // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
     const feasOut: { x: number; z: number }[] = [];
@@ -295,6 +295,32 @@ export class SquadNavigator {
         });
       }
     }
+  }
+
+  /** ★ 贪心局部段（动态半径）：先小后大；候选 = 更近（推进>0.5m）+ 更安全（掩体/战壕折扣） */
+  private greedyStep(
+    type: string, cx: number, cz: number, tx: number, tz: number,
+  ): { x: number; z: number } | null {
+    const dNow = Math.hypot(tx - cx, tz - cz);
+    if (dNow < 2.5) return null;   // 已到：不需要段
+    const W_ADV = 1, W_SAFE = 4;
+    for (const r of [6, 12, 18]) {
+      let best: { x: number; z: number } | null = null;
+      let bestS = 0;
+      for (let k = 0; k < 16; k++) {
+        const a = (k * Math.PI) / 8;
+        const x = cx + Math.cos(a) * r;
+        const z = cz + Math.sin(a) * r;
+        if (!this.feas.walkableLine(cx, cz, x, z)) continue;
+        const adv = dNow - Math.hypot(tx - x, tz - z);
+        if (adv <= 0.5) continue;   // 必须更近
+        const mul = this.pathMul?.(type, x, z) ?? 1;   // 0.6~1.5；越小=掩体/战壕越足
+        const s = W_ADV * adv + W_SAFE * (1 - mul);
+        if (s > bestS) { bestS = s; best = { x, z }; }
+      }
+      if (best) return best;   // 小半径有解 → 不放大了
+    }
+    return null;
   }
 
   /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */
