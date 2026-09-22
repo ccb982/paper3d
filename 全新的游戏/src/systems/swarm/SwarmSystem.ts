@@ -44,6 +44,7 @@ import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
 import { SwarmRecovery } from './SwarmRecovery';
 import { DANGER } from './SwarmDanger';
+import type { PassTable } from './PassTable';
 import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
@@ -1034,6 +1035,11 @@ export class SwarmSystem {
   get navDbg(): SquadNavigator['dbg'] { return this.nav.dbg; }
   /** ★ P4 白名单探针：任务走廊重规划计数 */
   get memberNavDbg(): MemberTaskNav['dbg'] { return this.taskNav.dbg; }
+
+  /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
+  attachPassTable(t: PassTable): void {
+    this.nav.setPathTable(t);
+  }
 
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
   private _orderDrops = 0;

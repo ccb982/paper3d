@@ -149,6 +149,11 @@ export class PassTable {
     else this.stats.open++;
   }
 
+  /** 窗口界（格坐标；可行性寻路 BFS 用） */
+  bounds(): { ox: number; oz: number; side: number } {
+    return { ox: Math.floor(this.ox / CELL), oz: Math.floor(this.oz / CELL), side: this.side };
+  }
+
   private cellAt(x: number, z: number): number {
     if (!this.ready) return -1;
     const ix = Math.floor((x - this.ox) / CELL);

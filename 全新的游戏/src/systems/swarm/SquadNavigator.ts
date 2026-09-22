@@ -18,6 +18,8 @@ import { SquadTactics, type SquadOrderState } from './SquadTactics';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
 import { DANGER } from './SwarmDanger';
+import { FeasibilityPath } from './FeasibilityPath';
+import type { PassTable } from './PassTable';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -43,6 +45,13 @@ export class SquadNavigator {
   private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
   readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0 };
+  /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
+  private readonly feas = new FeasibilityPath();
+
+  /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
+  setPathTable(t: PassTable | null): void {
+    this.feas.setTable(t);
+  }
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   private readonly _centroid = { x: 0, z: 0 };
 
@@ -108,6 +117,10 @@ export class SquadNavigator {
     if (!raster) return 'unknown';
     const dist = Math.hypot(gx - sx, gz - sz);
     if (dist < 2) return 'ok';
+    // ★ N1 阶段一：可行性寻路优先（读表 · 代价恒 1 · 有向边）；表外/未就绪 → 'outside' 回落旧口径
+    const feas = this.feas.find(sx, sz, gx, gz, out);
+    if (feas === 'ok') return 'ok';
+    if (feas === 'blocked') return 'blocked';
     // 直线走廊粗判（4m 采样：仅拦 pit/水域——升向不在此判，避免误杀正常起伏）
     if (dist <= 64) {
       const n = Math.ceil(dist / 4);

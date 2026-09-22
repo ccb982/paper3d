@@ -299,6 +299,7 @@ export class SwarmCommander {
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.terrainScore.clear();
     this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（地形纯函数；一次构建，工事不重建）
+    this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
