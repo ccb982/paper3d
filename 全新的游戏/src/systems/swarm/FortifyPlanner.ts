@@ -85,7 +85,7 @@ export class FortifyPlanner {
     const steps = Math.max(1, Math.round(arcLen / 12));
     for (let k = 0; k < steps; k++) {
       const a = a0 + ((k + 0.5) / steps) * (a1 - a0) + (Math.random() - 0.5) * 0.12;
-      const rr = rm + (Math.random() - 0.5) * 12;
+      const rr = Math.max(rLo, Math.min(rHi, rm + (Math.random() - 0.5) * 12));   // ★ 夹在环带内（不进闸门内界）
       const x = Math.round((cx + Math.cos(a) * rr) / 4) * 4;
       const z = Math.round((cz + Math.sin(a) * rr) / 4) * 4;
       const s = needAt(x, z);
@@ -104,6 +104,7 @@ export class FortifyPlanner {
         const a = (k / n) * TAU;
         const x = Math.round((mx0 + Math.cos(a) * r) / 4) * 4;
         const z = Math.round((mz0 + Math.sin(a) * r) / 4) * 4;
+        if (Math.hypot(x - cx, z - cz) < rLo) continue;   // ★ 允许出扇区，但**不许进闸门内界**（防冲家）
         const s = needAt(x, z);
         if (s === null) continue;
         if (canReach && !canReach(x, z)) continue;
