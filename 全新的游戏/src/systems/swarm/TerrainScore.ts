@@ -307,6 +307,11 @@ export class TerrainScore {
     return this.lastW;
   }
 
+  /** ★ 重建时玩家位置快照（parity 断言用：score[] 烙的威胁项就是这个位） */
+  bakedPlayer(): { x: number; z: number } {
+    return { x: this.lastPlayerX, z: this.lastPlayerZ };
+  }
+
   /** 该点评分（未就绪/表外 → null；不可站 → -1e9） */
   scoreAt(x: number, z: number): number | null {
     if (!this.ready) return null;

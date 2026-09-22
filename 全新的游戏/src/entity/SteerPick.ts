@@ -11,6 +11,8 @@
 /** 表只读接口（SwarmCommander 实现；避免 entity 层依赖） */
 export interface SteerTable {
   scoreAt(x: number, z: number): number | null;
+  /** ★ L3 兵种分（可选；重构 P1-2）：有则 16 向候选按该兵种打分，无则回退 scoreAt */
+  scoreTypeAt?(type: string, x: number, z: number): number | null;
   /** ★ 水域查询（可选）：在水中时提高"上岸"方向的权重 */
   isWaterAt?(x: number, z: number): boolean;
 }
@@ -68,6 +70,8 @@ const _cz = new Float32Array(DIR_N);
  * @param heldX,Z    上次承诺方向；heldUntil 秒（到期/被否决则重选）
  * @param danger     硬否决（墙/坑/水/陡坡，由调用方给出）
  * @param table      表（null = 未就绪，只按期望方向走）
+ * @param useTable   是否吃地面表分（空中层 false）
+ * @param unitType   ★ 兵种（可选；有则走 scoreTypeAt，L3 兵种分）
  */
 export function pickSteer(
   x: number, z: number,
@@ -79,6 +83,7 @@ export function pickSteer(
   danger: (x: number, z: number) => boolean,
   table: SteerTable | null,
   useTable = true,
+  unitType?: string,
 ): SteerOut {
   const tbl = useTable ? (table ?? globalTable) : null;
   const dl = Math.hypot(desiredX, desiredZ);
@@ -106,7 +111,9 @@ export function pickSteer(
     let s = W_PATH * (cx * ux + cz * uz);
     if (insideBlocked) s += bad ? -ESCAPE_W : ESCAPE_W;
     if (tbl) {
-      const ts = tbl.scoreAt(x + cx * PROBE, z + cz * PROBE);
+      const ts = (unitType && tbl.scoreTypeAt)
+        ? tbl.scoreTypeAt(unitType, x + cx * PROBE, z + cz * PROBE)
+        : tbl.scoreAt(x + cx * PROBE, z + cz * PROBE);
       if (ts !== null) s += W_TABLE * Math.max(-1, Math.min(1, ts / TABLE_NORM));
       // ★ 水中：往岸上走的权重（允许站水里，只是更想上岸）
       if (inWater && tbl.isWaterAt) {

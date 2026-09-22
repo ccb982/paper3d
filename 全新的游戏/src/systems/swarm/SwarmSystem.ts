@@ -853,6 +853,7 @@ export class SwarmSystem {
         this.commander.blockedAt(p.x[i], p.z[i]),
         dangerAt, this.commander,
         p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
+        this.squads.squadOf(p.swarmUid[i])?.type,   // ★ L3 兵种分（重构 P1-2；mixed=兵种中立）
       );
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;

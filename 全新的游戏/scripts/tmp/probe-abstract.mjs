@@ -108,7 +108,7 @@ const snapPage = (page) => page.evaluate(() => {
       for (let i = 0; i < cells.length; i += 5) {
         const e = cells[i];
         const s0 = t.scoreAt(e.x, e.z);
-        const sPar = c.scoreMixedAt(e.x, e.z, px, pz);
+        const sPar = c.scoreMixedAt(e.x, e.z);
         if (s0 !== null && sPar !== null) {
           const dd = Math.abs(s0 - sPar);
           if (dd > dPar) { dPar = dd; worst = { x: e.x, z: e.z, s0, sPar, f: e.f }; }
@@ -128,8 +128,29 @@ const snapPage = (page) => page.evaluate(() => {
           th: +worst.f.threatN.toFixed(2), cv: +worst.f.cover.toFixed(2), wd: +worst.f.width.toFixed(2),
           ch: worst.f.choke, tr: worst.f.trench, ct: +worst.f.constTerm.toFixed(2),
           dP: +worst.f.playerD.toFixed(1),
+          lp: { x: +t.bakedPlayer().x.toFixed(1), z: +t.bakedPlayer().z.toFixed(1) },
+          pm: { x: +px.toFixed(1), z: +pz.toFixed(1) },
         } : null,
       };
+    })(),
+    // ★ L3 接线后观察：各兵种站位质心特征（h̄/玩家距̄/隘口率——分化肉眼项）
+    byType: (() => {
+      const t = c.terrainScore, px = pm.x, pz = pm.z;
+      const acc = {};
+      for (const s of sw.squads.all()) {
+        if (s.members.size === 0) continue;
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        const f = t.featsAt(cx / n, cz / n, px, pz);
+        if (!f) continue;
+        const a = (acc[s.type] ||= { n: 0, h: 0, dP: 0, ch: 0 });
+        a.n++; a.h += f.h; a.dP += f.playerD; a.ch += f.choke;
+      }
+      for (const k2 of Object.keys(acc)) {
+        const a = acc[k2];
+        a.h = +(a.h / a.n).toFixed(1); a.dP = +(a.dP / a.n).toFixed(0); a.ch = +(a.ch / a.n).toFixed(2);
+      }
+      return acc;
     })(),
   };
 });
@@ -175,6 +196,8 @@ for (const seed of seeds) {
       console.log(`   冠军格 ${st.heroes}`);
       console.log(`   矩阵(关高掩后) 盾[${st.matrix.defense}] 突[${st.matrix.assault}] 远[${st.matrix.ranged}] 后[${st.matrix.logistics}]`);
       console.log(`   判定 ${Object.entries(st.chk).map(([k2, v]) => `${k2}=${v}`).join('  ')}`);
+      const bt = Object.entries(s.byType).map(([k2, a]) => `${k2}×${a.n}[h̄${a.h} dP̄${a.dP} K̄${a.ch}]`).join(' ');
+      console.log(`   站位 ${bt}`);
     }
   }
   await page.close();

@@ -79,6 +79,12 @@ export class SwarmCommander {
   private readonly postureFn = new PostureFn();
   /** ★ 态势调试值：攻势强度 / 日程 / 挑衅（覆盖层与测试读取） */
   postureP = 0;
+  /** ★ 实时玩家位置（tick 刷新；scoreTypeAt/SteerPick 兵种分用——比 rebuild 烙进 score 的新） */
+  private viewPX = 0;
+  private viewPZ = 0;
+  /** ★ 权重缓存（postureP/posture 变才重算；SteerPick 16 向热路径免重复 weightsFor） */
+  private _wKey = '';
+  private _wCache: ReturnType<typeof weightsFor> | null = null;
   postureSchedule = 0;
   postureProvocation = 0;
   /** 内部日程时钟（无太阳钟输入时的兜底：落地起算，7.5 分钟 = 一个白天） */
@@ -409,6 +415,8 @@ export class SwarmCommander {
   }
 
   tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
+    this.viewPX = playerX;
+    this.viewPZ = playerZ;
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
     const now = performance.now() / 1000;
@@ -1191,18 +1199,35 @@ export class SwarmCommander {
     return this.terrainScore.scoreAt(x, z);
   }
 
+  /** ★ 当前态势权重（带缓存；SteerPick 热路径用） */
+  private liveWeights(): ReturnType<typeof weightsFor> {
+    const key = `${this.postureP}|${this.battlePosture}`;
+    if (key !== this._wKey || !this._wCache) {
+      this._wKey = key;
+      this._wCache = weightsFor(this.postureP, this.battlePosture);
+    }
+    return this._wCache;
+  }
+
   /** ★ L3 兵种分（重构 P1）：当前态势基权 × 兵种权重 × 合成字段（探针/中立选位用；
    *  小队消费在 Decide/SquadPath 内走 UnitStrategy.scoreForUnit 纯函数） */
   scoreForType(type: SquadType, x: number, z: number, playerX = 0, playerZ = 0): number {
-    const base = weightsFor(this.postureP, this.battlePosture);
-    return scoreForUnit(type, this.terrainScore.featsAt(x, z, playerX, playerZ), base);
+    return scoreForUnit(type, this.terrainScore.featsAt(x, z, playerX, playerZ), this.liveWeights());
   }
 
-  /** ★ parity 断言用：与 score[] 同一重建权重复算 mixed（隔离态势陈旧差） */
-  scoreMixedAt(x: number, z: number, playerX = 0, playerZ = 0): number | null {
+  /** ★ SteerTable 扩展（重构 P1-2）：16 向候选按兵种打分；读实时玩家位置 */
+  scoreTypeAt(type: string, x: number, z: number): number | null {
+    const f = this.terrainScore.featsAt(x, z, this.viewPX, this.viewPZ);
+    if (!f) return null;
+    return scoreForUnit(type as SquadType, f, this.liveWeights());
+  }
+
+  /** ★ parity 断言用：与 score[] 同一重建权重+烘焙玩家位复算 mixed（隔离权重/玩家两项陈旧差） */
+  scoreMixedAt(x: number, z: number): number | null {
     const base = this.terrainScore.weightsSnapshot();
     if (!base) return null;
-    return scoreForUnit('mixed', this.terrainScore.featsAt(x, z, playerX, playerZ), base);
+    const lp = this.terrainScore.bakedPlayer();
+    return scoreForUnit('mixed', this.terrainScore.featsAt(x, z, lp.x, lp.z), base);
   }
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
