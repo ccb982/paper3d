@@ -407,21 +407,17 @@ export class SwarmCommander {
         builders.sort((a, b) => a.id - b.id);
         const DONE = -0.5;   // ★ 扇区达标线（调参入口）
         this.fortify.assign(builders.map((s) => s.id), DONE);
-        // ★ 达标也继续造（不空闲）：认领队在本扇区**随机取样**继续补评分
-        for (const [sid, sec] of this.fortify.claims) {
-          if (this.fortify.spots.has(sid)) continue;
-          const a0 = (sec / FORTIFY_SECTORS) * Math.PI * 2;
-          const a1 = ((sec + 1) / FORTIFY_SECTORS) * Math.PI * 2;
-          for (let tries = 0; tries < 6; tries++) {
-            const a = a0 + Math.random() * (a1 - a0);
-            const rr = rLo + Math.random() * (rHi - rLo);
-            const x = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
-            const z = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
-            if (this.terrainScore.scoreAt(x, z) === null) continue;
-            this.fortify.spots.set(sid, { x, z, score: 0, sector: sec });
-            break;
-          }
+        // ★ 统一取点（用户定）：未达标 → 最危险点；已达标 → 扇区内随机位置。
+        //   所有工兵队每拍都有目标（引擎派区、队持续干到调走）——不空闲 = 不被回收。
+        this.fortify.spots.clear();
+        for (const s of builders) {
+          const sp = this.fortify.spotFor(
+            s.id, shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z), DONE,
+          );
+          if (sp) this.fortify.spots.set(s.id, sp);
         }
+        this.fortify.dbg.assigned = [...this.fortify.spots].map(([id, p]) =>
+          `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
         // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
         // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
         let injected = 0;
@@ -445,6 +441,23 @@ export class SwarmCommander {
           this.corps.pieces.push({ kind: 'cover', x: sx2, z: sz2, ring: 2, pri: 3 });
           injected++;
           this.fortify.dbg.injected++;
+        }
+        // ★ 兜底（2Hz）：有区目标但成员**全无任务**（mission 漂移/清任务后）→ 直接写"奔赴本区"任务
+        //   发呆=被卡死回收（用户诊断）→ 绝不允许
+        for (const [sid, p] of this.fortify.spots) {
+          const sq = this.swarm.squads.get(sid);
+          if (!sq || sq.members.size === 0) continue;
+          let noTask = 0, n = 0;
+          for (const uid of sq.members.keys()) { n++; if (!this.memberTasks.taskOf(uid)) noTask++; }
+          if (noTask > 0) {
+            let i = 0;
+            for (const uid of sq.members.keys()) {
+              if (this.memberTasks.taskOf(uid)) continue;   // 已有任务的保留
+              const a = (i++ / n) * Math.PI * 2;
+              this.memberTasks.write(uid, p.x + Math.cos(a) * 2, p.z + Math.sin(a) * 2);
+            }
+            this.memberTasks.own(sid);
+          }
         }
         // ★ 连通阶段（§13.4）：相邻扇区都达标 → 串 trench 连成一片（每拍 ≤1）
         for (const m of this.fortify.connect(DONE, 1)) {
@@ -859,8 +872,20 @@ export class SwarmCommander {
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        // ★ 无活可派（附近无未建块/已建完）→ 清旧任务，不许钉在旧点上干杵（"造完就呆"）
-        if (!this.corps.spreadBuilders(s, scx, scz)) this.memberTasks.clear(s);
+        if (!this.corps.spreadBuilders(s, scx, scz)) {
+          // ★ 无近活 → **奔赴本区目标点**（行军任务；taskNav 绕障）——发呆=送死，绝不允许
+          const fs = this.fortify.spots.get(s.id);
+          if (fs) {
+            let i = 0;
+            for (const uid of s.members.keys()) {
+              const a = (i++ / s.members.size) * Math.PI * 2;
+              this.memberTasks.write(uid, fs.x + Math.cos(a) * 2, fs.z + Math.sin(a) * 2);
+            }
+            this.memberTasks.own(s.id);
+          } else {
+            this.memberTasks.clear(s);
+          }
+        }
       } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         ctx.buildTarget = null;
         // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）

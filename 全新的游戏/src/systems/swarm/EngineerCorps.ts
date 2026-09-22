@@ -250,9 +250,9 @@ export class EngineerCorps {
     if (near.length === 0) {
       // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
       const idx = this.assign.get(s.id);
-      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return this.pinInPlace(s);
+      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
       if (this.built.has(keyOf(this.pieces[idx])) || this.gated(this.pieces[idx])
-        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return this.pinInPlace(s);
+        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return false;
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);

@@ -58,8 +58,49 @@ export class FortifyPlanner {
     this.dbg.sweeps++;
   }
 
-  /** 分配：每队取"未被认领的最低安全值扇区"（**一区一队**）；**仅在队阵亡时释放**——
-   *  达标也不放（继续在本区随机取样造，见 Commander）。顺带产出"低于达标线"队的施工点（spots）。 */
+  /** ★ 统一目标函数（用户定）：扇区**未达标** → 最危险点（补评分）；**已达标** → 扇区内随机位置（继续干）。
+   *  所有调用方共用此函数，不再各自散写"worst/随机"。 */
+  targetOf(
+    cx: number, cz: number, sec: number, rLo: number, rHi: number,
+    scoreAt: (x: number, z: number) => number | null, doneScore: number,
+  ): FortifyPick | null {
+    const w = this.worst[sec];
+    if (Number.isFinite(w.score) && w.score < doneScore) return { x: w.x, z: w.z, score: w.score };
+    const TAU = Math.PI * 2;
+    const a0 = (sec / FORTIFY_SECTORS) * TAU;
+    const a1 = ((sec + 1) / FORTIFY_SECTORS) * TAU;
+    for (let k = 0; k < 8; k++) {
+      const a = a0 + Math.random() * (a1 - a0);
+      const rr = rLo + Math.random() * (rHi - rLo);
+      const x = Math.round((cx + Math.cos(a) * rr) / 4) * 4;
+      const z = Math.round((cz + Math.sin(a) * rr) / 4) * 4;
+      const s = scoreAt(x, z);
+      if (s === null || s <= -1e8) continue;
+      return { x, z, score: s };
+    }
+    return Number.isFinite(w.score) ? { x: w.x, z: w.z, score: w.score } : null;
+  }
+
+  /** 统一取点：按队的认领扇区（无认领 → 最低安全值扇区；都无 → null） */
+  spotFor(
+    sid: number, cx: number, cz: number, rLo: number, rHi: number,
+    scoreAt: (x: number, z: number) => number | null, doneScore: number,
+  ): (FortifyPick & { sector: number }) | null {
+    let sec = this.claims.get(sid);
+    if (sec === undefined) {
+      let bs = Infinity;
+      for (let i = 0; i < FORTIFY_SECTORS; i++) {
+        const v = this.safety[i];
+        if (Number.isFinite(v) && v < bs) { bs = v; sec = i; }
+      }
+    }
+    if (sec === undefined) return null;
+    const p = this.targetOf(cx, cz, sec, rLo, rHi, scoreAt, doneScore);
+    return p ? { ...p, sector: sec } : null;
+  }
+
+  /** 分配：每队取"未被认领的最低安全值扇区"（**一队一队一区**）；**仅在队阵亡时释放**——
+   *  （施工点由 `spotFor` / Commander 每拍统一取） */
   assign(builderIds: readonly number[], doneScore = 0): void {
     const alive = new Set(builderIds);
     for (const [sid] of [...this.claims]) {
@@ -82,29 +123,7 @@ export class FortifyPlanner {
         this.claims.set(sid, bestSec);
       }
     }
-    const used = new Set(this.claims.values());
-    this.spots.clear();
-    for (const sid of builderIds) {
-      let sec = this.claims.get(sid);
-      if (sec === undefined) {
-        sec = undefined;
-        let bs = Infinity;
-        for (let i = 0; i < FORTIFY_SECTORS; i++) {
-          if (used.has(i)) continue;
-          const v = this.safety[i];
-          if (Number.isFinite(v) && v < bs) { bs = v; sec = i; }
-        }
-        if (sec === undefined) break;   // 未认领的有效区已空
-        this.claims.set(sid, sec);
-        used.add(sec);
-      }
-      const w = this.worst[sec];
-      if (Number.isFinite(w.score) && w.score < doneScore) {
-        this.spots.set(sid, { ...w, sector: sec });
-      }
-    }
-    this.dbg.assigned = [...this.spots].map(([id, p]) =>
-      `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
+    void doneScore;
   }
 
   /** ★ 连通阶段（§13.4）：相邻扇区**均已达标** → 两点之间取中点注入连接战壕（把工事连成一片）。
