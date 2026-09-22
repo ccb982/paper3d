@@ -399,13 +399,16 @@ export class SwarmCommander {
     if (this.fortifyAccum >= 0.5) {   // 2Hz：摊销刷新（每次 1 个扇区 → 全区 ~4s 一轮）
       this.fortifyAccum = 0;
       if (this.stage === 'S1') {
+        const DONE = -0.5;   // ★ 扇区达标线（调参入口；必须在 allDone 前声明）
         // 环带受事态闸门约束：内界 = max(24, 允许离舰 + 8)（门内不许施工）
         const rLo = Math.max(24, this.frontMinD + 8);
-        const rHi = Math.max(90, rLo + 30);
+        // ★ 前推（§13.4）：全区达标（连通）后，随 frontP 单调外扩工作面（队数≤8 每队必有区）
+        const allDone = this.fortify.safety.every((v) => Number.isFinite(v) && v >= DONE);
+        const push = allDone ? this.frontP * 60 : 0;
+        const rHi = Math.max(90, rLo + 30) + push;
         this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z));
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
-        const DONE = -0.5;   // ★ 扇区达标线（调参入口）
         this.fortify.assign(builders.map((s) => s.id), DONE);
         // ★ 统一取点（用户定）：未达标 → 最危险点；已达标 → 扇区内随机位置。
         //   所有工兵队每拍都有目标（引擎派区、队持续干到调走）——不空闲 = 不被回收。

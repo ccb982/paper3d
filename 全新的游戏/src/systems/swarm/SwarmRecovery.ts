@@ -62,9 +62,16 @@ export class SwarmRecovery {
         continue;
       }
       if (rec.t >= STUCK.HOLD_S) {
+        // ★ 卡死根因记录（回收前）：令/距指令目标/有无成员任务——找"为什么卡"的现场
+        const stv = this.h.tactics.board.get(squadId);
+        const ddx = pool.directiveTargetX[i] - pool.x[i];
+        const ddz = pool.directiveTargetZ[i] - pool.z[i];
+        const haveTask = pool.taskX[i] !== 0 || pool.taskZ[i] !== 0;
         dbg.last = `${sq?.type ?? '?'}${sq?.builders ? '*' : ''}:${st?.order.kind ?? '-'}/${st?.order.mission ?? '-'}`
           + `@${pool.x[i].toFixed(0)},${pool.z[i].toFixed(0)}`
-          + ` bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`;
+          + ` bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`
+          + ` 令=${st ? (st.until > now ? '在身' : '过期') : '无'}`
+          + ` 走廊=${stv?.corridor?.length ?? 0} 指令距=${Math.hypot(ddx, ddz).toFixed(0)} 任务=${haveTask ? '有' : '无'}`;
         this.h.removeAgent(i, true, false);   // 非击杀离场
         this.h.noteRecall(1);                 // 归还编制
         this.stuck.delete(uid);
