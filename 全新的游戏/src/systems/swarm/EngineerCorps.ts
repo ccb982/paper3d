@@ -51,6 +51,12 @@ export class EngineerCorps {
   /** 施工目标表（外环→内环；掩体+战壕+前线掩体） */
   pieces: BuildPiece[] = [];
   readonly built = new Set<string>();
+  /** ★ 稳步推进闸门（事态函数给）：距此点 < minD 的工件未解锁（minD<=0 = 不限） */
+  gate: { x: number; z: number; minD: number } = { x: 0, z: 0, minD: -1 };
+  gated(q: { x: number; z: number }): boolean {
+    const g = this.gate;
+    return g.minD > 0 && Math.hypot(q.x - g.x, q.z - g.z) < g.minD;
+  }
   readonly passes = new Map<string, number>();
   /** 施工焦点（队伍 ↔ pieces 下标） */
   readonly focus = new Map<number, number>();
@@ -165,12 +171,14 @@ export class EngineerCorps {
     const cur = this.assign.get(squadId);
     if (cur !== undefined && cur < this.pieces.length
       && !this.built.has(keyOf(this.pieces[cur]))
+      && !this.gated(this.pieces[cur])
       && this.allows(squadId, this.pieces[cur].kind)) return cur;
     const claimed = new Set<number>(this.assign.values());
     let minPri = Infinity, anyBest = -1, anyD = Infinity;
     for (let i = 0; i < this.pieces.length; i++) {
       const q = this.pieces[i];
       if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
+      if (this.gated(q)) continue;   // ★ 事态闸门：距舰 < 前沿 → 未解锁
       if (!this.allows(squadId, q.kind)) continue;
       const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
       if (q.pri < minPri) { minPri = q.pri; anyBest = i; anyD = d; }
@@ -202,7 +210,8 @@ export class EngineerCorps {
     const fidx = this.focus.get(s.id);
     if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
       && this.allows(s.id, this.pieces[fidx].kind)
-      && !this.built.has(keyOf(this.pieces[fidx]))) {
+      && !this.built.has(keyOf(this.pieces[fidx]))
+      && !this.gated(this.pieces[fidx])) {
       const q = this.pieces[fidx];
       let i = 0;
       for (const uid of s.members.keys()) {
@@ -217,6 +226,7 @@ export class EngineerCorps {
     for (let i = 0; i < this.pieces.length; i++) {
       const q = this.pieces[i];
       if (this.built.has(keyOf(q))) continue;
+      if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不派）
       if (!this.allows(s.id, q.kind)) continue;
       const d2 = (q.x - cx) ** 2 + (q.z - cz) ** 2;
       if (d2 > 90 * 90) continue;
@@ -230,7 +240,8 @@ export class EngineerCorps {
       // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
       const idx = this.assign.get(s.id);
       if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
-      if (this.built.has(keyOf(this.pieces[idx])) || !this.allows(s.id, this.pieces[idx].kind)) return false;
+      if (this.built.has(keyOf(this.pieces[idx])) || this.gated(this.pieces[idx])
+        || !this.allows(s.id, this.pieces[idx].kind)) return false;
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
@@ -273,6 +284,7 @@ export class EngineerCorps {
       let fidx = this.focus.get(s.id);
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
         && !this.built.has(keyOf(this.pieces[fidx]))
+        && !this.gated(this.pieces[fidx])
         && this.allows(s.id, this.pieces[fidx].kind)) {
         const q = this.pieces[fidx];
         for (const m of s.members.values()) {
@@ -286,6 +298,7 @@ export class EngineerCorps {
           for (let i = 0; i < this.pieces.length; i++) {
             const q = this.pieces[i];
             if (this.built.has(keyOf(q))) continue;
+            if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不挖）
             if (!this.allows(s.id, q.kind)) continue;
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
             if (d > 25) continue;

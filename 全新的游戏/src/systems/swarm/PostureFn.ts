@@ -86,19 +86,36 @@ export interface PostureState {
   schedule: number;
   provocation: number;
   posture: BattlePosture;
+  /** ★ 稳步推进闸门 0~1：整条战线离舰角落差的放行比例（只进不退，见 FRONT_TAU） */
+  frontP: number;
 }
+
+/** ★ 稳步推进：各姿态的**离舰前沿放行上限**（fortify 起手顶多放开一点；总攻才贴近船）
+ *  frontP 只增长、单调向目标值逼近 —— 事态再落也不再回拉阵地（《敌人管线设计.md》§3.9） */
+const FRONT_BY_POSTURE: Record<BattlePosture, number> = {
+  fortify: 0.00,
+  patrol: 0.15,
+  advance: 0.40,
+  mass: 0.70,
+  assault: 0.95,
+  withdraw: 0.15,   // 撤退重组的"前沿锚"回落许可（但 frontP 单调，此处只影响目标值不再起作用）
+};
+/** 前沿放行的逼近时间常数（越大越"稳步"；63% 到达耗时） */
+const FRONT_TAU = 40;
 
 export class PostureFn {
   private prov = 0;
   private posture: BattlePosture = 'fortify';
   private since = 0;
   private locked = false;   // 总攻锁定（只有 withdraw 能解）
+  private frontP = 0;       // ★ 稳步推进闸门（单调不降）
 
   reset(now: number): void {
     this.prov = 0;
     this.posture = 'fortify';
     this.since = now;
     this.locked = false;
+    this.frontP = 0;
   }
 
   /** 调试/测试：强制切姿态（不走 p 阈值；总攻同样锁定） */
@@ -142,7 +159,12 @@ export class PostureFn {
       this.since = now;
       if (next === 'assault') this.locked = true;
     }
-    return { p, schedule, provocation: clamp01(this.prov), posture: this.posture };
+    // ★ 稳步推进闸门：随姿态档单调放开（只进不退；FRONT_TAU 决定"再稳一点"）
+    const fpTarget = FRONT_BY_POSTURE[this.posture];
+    if (this.frontP < fpTarget) {
+      this.frontP += (fpTarget - this.frontP) * (1 - Math.exp(-dt / FRONT_TAU));
+    }
+    return { p, schedule, provocation: clamp01(this.prov), posture: this.posture, frontP: this.frontP };
   }
 }
 

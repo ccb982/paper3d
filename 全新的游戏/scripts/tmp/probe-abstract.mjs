@@ -58,6 +58,11 @@ const snapPage = (page) => page.evaluate(() => {
   return {
     stage: c.stage, posture: c.battlePosture, p: +c.postureP.toFixed(2),
     alive: sw.ledger.alive, recalled: sw.ledger.recalled,
+    ent: window.__ppMode().enemies.length, pool: sw.pool.count,
+    dbgR: sw.stuckDbg.recycled, dbgT: sw.stuckDbg.tracked,
+    cmd: sw.cmdLog.snap(), cmdRear: sw.cmdLog.latestPerSquad(10), cmdAll: sw.cmdLog.latestPerSquad(80),
+    fg: sw.commander.frontGate, shX: 30, shZ: 30,
+    entStillMax: window.__entStillMax | 0,
     pri: priBuilt.join(' '), passes: c.digPasses.size,
     builders, ranged, coverHolders: c.coverHolders.size,
   };
@@ -84,7 +89,17 @@ for (const seed of seeds) {
     const s = await snapPage(page);
     const B = s.builders.map((b) => `${b.id}:${b.role}[f=${b.focus},tc=${b.taskCover},tt=${b.taskTrench},tn=${b.taskNone}]`).join(' ');
     const R = s.ranged.map((r) => `#${r.id}:${r.kind}/${r.src} dP=${r.dPlayer} dF=${r.dFront}`).join(' ');
-    console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
+    const c = s.cmd; const kinds = Object.entries(c.kinds).map(([k, v]) => `${k}:${v}`).join(' ');
+    console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} ent=${s.ent} pool=${s.pool} 回收=${s.dbgR}/追踪=${s.dbgT} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
+    console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 种类[${kinds}]`);
+    // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
+    let over = 0;
+    for (const e of s.cmdAll) {
+      const d = Math.hypot(e.tx - s.shX, e.tz - s.shZ);
+      if (d < s.fg.minD - 0.5) over++;
+    }
+    console.log(`   事态闸门 frontP=${+s.fg.frontP.toFixed(3)} 允许离舰=${+s.fg.minD.toFixed(1)}m 越界命令=${over}/队 实体停滞=${s.entStillMax}s`);
+    for (const e of s.cmdRear) console.log(`   cmd #${e.squadId} ${e.kind}${e.mission ? '(' + e.mission + ')' : ''} @${+e.tx.toFixed(0)},${+e.tz.toFixed(0)} ${e.source} ttl=${e.ttl} (x${e.n})`);
     console.log(`        工兵: ${B || '(无)'}`);
     console.log(`        远程: ${R || '(无)'}`);
   }

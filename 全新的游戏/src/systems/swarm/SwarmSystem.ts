@@ -101,6 +101,8 @@ export class SwarmSystem {
   readonly pool = new AgentPool();
   /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
   readonly squads = new SquadTable();
+  /** ★ 命令台账（诊断面：引擎下了什么命令；唯一写口 = tactics.issue） */
+  get cmdLog() { return this.tactics.ledger; }
   /** ★ 稳定 uid 分配器（spawn/demote 缺省分配；升降格往返不变） */
   private nextUid = 1;
   /** ★ 队长变更待广播（帧末统一回调，避免循环内跨层） */
@@ -308,7 +310,7 @@ export class SwarmSystem {
     // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退）
     this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now);
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
-    this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1);
+    this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
     // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
     this.tacticsAccum += dt;

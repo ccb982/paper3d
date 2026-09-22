@@ -26,6 +26,8 @@ const KNOWN_BIG = new Set([
   'vendor/player/fluid/FluidSolver.ts',
   'services/map/decor/MapEntityDecorBase.ts',
   'services/map/TerrainMaterial.ts',
+  'systems/swarm/SwarmCommander.ts',   // 蜂群收口期债务：下一步拆 Decide/L3 打分出子模块
+  'systems/swarm/SwarmSystem.ts',      // 同上：下一步拆导航/执行出子模块
 ]);
 
 const errors = [];

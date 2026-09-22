@@ -103,8 +103,14 @@ export class SwarmCommander {
   private readonly terrainScore = new TerrainScore();
   /** 评分表触发戳（换落点 +1） */
   private scoreStamp = 0;
+  /** ★ 前进闸门（事态函数给；0~1 只增）：整条战线离舰角落差可放行的比例——"稳步推进" */
+  private frontP = 0;
   /** 态势代次（切换 → 触发整队） */
   private postureEpoch = 0;
+  /** ★ 事态闸门解析出的**允许离舰最小半径**（本次部署拍；-1 = 无闸） */
+  private frontMinD = -1;
+  /** ★ 前线永不再贴近舰船的余量（米） */
+  private static readonly SHIP_CLEAR = 16;
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
   private readonly supportCd = new Map<number, number>();
   /** 最近一次大队决策（调试/测试读取） */
@@ -154,7 +160,7 @@ export class SwarmCommander {
     buildSlot: null, slot: undefined, buildTarget: null, protect: null, stage: 'S0',
     hold: new Map(), protectState: new Map(), alert: new Set(), post: new Map(), mission: 'hold',
     builders: [], buildPieces: [], builtSlots: new Set<string>(),
-    highPick: null, covers: [],
+    highPick: null, covers: [], shipX: 0, shipZ: 0, frontMinD: -1,
   };
 
   constructor(private readonly swarm: SwarmSystem) {
@@ -396,7 +402,12 @@ export class SwarmCommander {
 
   /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护
    *  @param dayT01 当日进度 0~1（太阳钟：6:00=0 / 18:00=1；<0 = 无输入 → 内部兜底钟） */
-  tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1): void {
+  /** ★ 事态闸门（调试/探针读：frontP 单调推进、minD 允许离舰半径） */
+  get frontGate(): { frontP: number; minD: number } {
+    return { frontP: this.frontP, minD: this.frontMinD };
+  }
+
+  tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
     const now = performance.now() / 1000;
@@ -426,6 +437,7 @@ export class SwarmCommander {
       ? this.swarm.ledger.alive / this.aliveAtPosture : 1;
     const st = this.postureFn.update(dt, t01, aliveRatio, now);
     this.postureP = st.p;
+    this.frontP = st.frontP;
     this.postureSchedule = st.schedule;
     this.postureProvocation = st.provocation;
     const next = st.posture;
@@ -489,7 +501,7 @@ export class SwarmCommander {
         this.dispatchMission();
       }
     }
-    this.engineeringTick(dt, playerX, playerZ);
+    this.engineeringTick(dt, playerX, playerZ, shipX, shipZ);
     // ★ 战役级闭环（1Hz，晚于工程拍 → 反馈决策可覆盖基础部署）
     this.tacticalTick(dt, playerX, playerZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
@@ -725,7 +737,7 @@ export class SwarmCommander {
    *  · 远程队：占住高地/火力点，**不追脸**
    *  · 后勤等：向防线后集结
    *  S1 = 边打边施工；S2 = 只维护部署（不再施工）。 */
-  private engineeringTick(dt: number, playerX: number, playerZ: number): void {
+  private engineeringTick(dt: number, playerX: number, playerZ: number, shipX: number, shipZ: number): void {
     if (!this.plan) return;
     // ★ 总攻：工兵**暂停开挖战壕**（件保留，从不清空——用户定调）；掩体继续、转掩护射手
     this.corps.setTrenchPaused(this.battlePosture === 'assault');
@@ -752,8 +764,24 @@ export class SwarmCommander {
     if (!slot && this.stage === 'S1') this.stage = 'S2';   // 无待建块 → 就绪
     // ★ 施工优先：工程队**完全不因玩家靠近而停工**（旁边有玩家 → 护卫队上，自己该挖挖）
     const buildSlot = this.stage === 'S1' && slot ? slot : null;
-    // 正面基准：有工事点用工事点；否则落点前方 40m
-    const front = buildSlot ?? { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 };
+    // 正面基准：有工事点用工事点；否则落点前方 40m（★ 复刻一份，勿改工件坐标）
+    const front0 = (buildSlot ?? { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 });
+    const front = { x: front0.x, z: front0.z };
+    // ★ 事态闸门（用户定调 2026-09-21：事态函数限制与舰船的距离——"稳步推进，不一上来冲家"）：
+    //   命令/前线/施工一律不得越过「允许离舰半径」，该半径随 PostureFn.frontP 单调收拢到 SHIP_CLEAR；
+    //   施工期（S1）封顶 0.35 —— 造掩体战壕阶段基本留守初始前沿，总攻才逐步贴近。
+    {
+      const effFrontP = this.stage === 'S1' ? Math.min(this.frontP, 0.35) : this.frontP;
+      const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
+      this.frontMinD = Math.max(SwarmCommander.SHIP_CLEAR, ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * effFrontP);
+      if (ffrontD > 1e-3 && ffrontD < this.frontMinD - 0.01) {
+        const k = this.frontMinD / ffrontD;
+        front.x = shipX + (front0.x - shipX) * k;
+        front.z = shipZ + (front0.z - shipZ) * k;
+      }
+      // ★ 施工闸门：距舰 < 前沿的工件未解锁 → 稳步推进建造线（近→远逐步开）
+      this.corps.gate = { x: shipX, z: shipZ, minD: this.frontMinD - 12 };
+    }
     // ★ 近战类目标：按**姿态 × 兵种配置**的追击开关决定打玩家还是守正面；
     //   施工期盾队前出掩护工事（screen 分支单独处理）
     const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
@@ -789,6 +817,7 @@ export class SwarmCommander {
     ctx.playerX = playerX; ctx.playerZ = playerZ; ctx.chase = chase;
     ctx.now = performance.now() / 1000;
     ctx.front = front; ctx.buildSlot = buildSlot; ctx.slot = slot;
+    ctx.shipX = shipX; ctx.shipZ = shipZ; ctx.frontMinD = this.frontMinD;   // ★ 事态闸门（离舰半径）
     ctx.builders = builders; ctx.buildPieces = this.buildPieces;
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
     ctx.hold = this.holdPos; ctx.protectState = this.protectState;

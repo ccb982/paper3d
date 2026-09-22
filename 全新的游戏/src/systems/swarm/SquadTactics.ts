@@ -14,6 +14,7 @@ import type {
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
 import { MISSION_EXEC as MISSION_EXEC_TABLE, guardPoint, UNIT_TACTICS } from './UnitTactics';
+import { CommandLedger } from './CommandLedger';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -172,6 +173,8 @@ export class SquadBlackboard {
 
 export class SquadTactics {
   readonly board = new SquadBlackboard();
+  /** ★ 命令台账（唯一写口 = issue()；回答"大规模操作是不是引擎下的命令"） */
+  readonly ledger = new CommandLedger();
   private seq = 1;
 
   /**
@@ -201,6 +204,9 @@ export class SquadTactics {
       if (!normalized.path && prev.order.path) normalized.path = prev.order.path;
     }
     this.board.issue(state);
+    // ★ 命令台账：唯一写口记录（引擎 = mass；队长 = 局部协同）
+    this.ledger.record(now, squadId, normalized.kind, source,
+      o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, ttl);
   }
 
   /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */

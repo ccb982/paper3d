@@ -59,6 +59,10 @@ export interface DecideCtx {
   builtSlots: Set<string>;
   highPick: { x: number; z: number; h: number } | null;
   covers: readonly { x: number; z: number }[];
+  /** ★ 事态闸门：允许离舰最小半径（-1 = 不限）；由 PostureFn.frontP 收紧 */
+  shipX: number;
+  shipZ: number;
+  frontMinD: number;
 }
 
 export interface DecideSquad {
@@ -318,5 +322,15 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     if (fix) _out.target = { x: fix.x, z: fix.z };
   }
   if (ctx.lineSlot) _out.ttl = Math.min(_out.ttl, 3);   // 队形调整 = 短暂命令
+  // ★★ 事态闸门兜底：目标越界（比允许离舰半径更近）→ 沿"舰→目标"径向外拉回许可半径
+  //   施工/驻守目标若在未解锁区，同样等前沿推进后才放行 → 稳步推进、不一上来冲家
+  if (ctx.frontMinD > 0) {
+    const dx = _out.target.x - ctx.shipX, dz = _out.target.z - ctx.shipZ;
+    const dl = Math.hypot(dx, dz);
+    if (dl > 1e-3 && dl < ctx.frontMinD) {
+      const k = ctx.frontMinD / dl;
+      _out.target = { x: ctx.shipX + dx * k, z: ctx.shipZ + dz * k };
+    }
+  }
   return _out;
 }
