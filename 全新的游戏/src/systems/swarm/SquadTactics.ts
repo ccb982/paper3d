@@ -199,6 +199,27 @@ export class SquadTactics {
     const longLived = normalized.kind === 'garrison'
       || (normalized.mission !== undefined && LONG_LIVED_MISSIONS.has(normalized.mission));
     const effTtl = longLived ? Math.max(ttl, MISSION_TTL_FLOOR) : ttl;
+    // ★ P3-3 同签名保活节流（重构总纲 §2.5）：签名不变（kind/mission/roe/urgency/signal/startAfter/
+    //   目标≤2m/威胁≤1m/无新路径）且寿命充足 → **只续命、不重登记**（不进台账）。
+    //   治"2s 决策拍 + 1Hz 掩体重发"刷屏；玩家动 = 威胁变 = 新情报 → 照常重发（不算刷屏）。
+    if (prev && prev.source === source
+      && prev.order.kind === normalized.kind
+      && (prev.order.mission ?? '') === (normalized.mission ?? '')
+      && (prev.order.roe ?? '') === (normalized.roe ?? '')
+      && (prev.order.urgency ?? 0) === (normalized.urgency ?? 0)
+      && (prev.order.signal ?? -1) === (normalized.signal ?? -1)
+      && (prev.order.startAfter ?? 0) === (normalized.startAfter ?? 0)
+      && !normalized.path
+      && sameTarget(prev.order.target, normalized.target, 2)
+      && sameTarget(
+        prev.order.threatX !== undefined ? { x: prev.order.threatX, z: prev.order.threatZ ?? 0 } : undefined,
+        normalized.threatX !== undefined ? { x: normalized.threatX, z: normalized.threatZ ?? 0 } : undefined,
+        1,
+      )
+      && now < prev.until - 5) {
+      prev.until = now + effTtl;   // 在身续期：applyOrders 不 drop（到期-重派归零）
+      return;
+    }
     const state: SquadOrderState = {
       squadId, order: normalized, issuedAt: now, until: now + effTtl, source,
       notBefore, signal: normalized.signal,

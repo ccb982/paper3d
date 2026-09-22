@@ -94,7 +94,7 @@ for (const seed of seeds) {
     const R = s.ranged.map((r) => `#${r.id}:${r.kind}/${r.src} dP=${r.dPlayer} dF=${r.dFront}`).join(' ');
     const c = s.cmd; const kinds = Object.entries(c.kinds).map(([k, v]) => `${k}:${v}`).join(' ');
     console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} ent=${s.ent} pool=${s.pool} 回收=${s.dbgR}/追踪=${s.dbgT} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
-    console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 种类[${kinds}]`);
+    console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 比=${c.engine ? (c.unique / c.engine).toFixed(2) : '-'} 种类[${kinds}]`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {
