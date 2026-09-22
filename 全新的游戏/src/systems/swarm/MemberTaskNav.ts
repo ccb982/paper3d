@@ -15,10 +15,14 @@ import { SquadPathFinder } from './SquadPath';
 
 export class MemberTaskNav {
   private readonly finder = new SquadPathFinder();
-  /** uid → 目标记忆（目标位移 >6m 重算直行探测；blocked=timed 复核直行可达性） */
-  private readonly goals = new Map<number, { gx: number; gz: number; blocked: boolean; at: number }>();
+  /** uid → 目标记忆（目标位移 >6m 重算直行探测；blocked=timed 复核直行可达性；failUntil=失败冷却） */
+  private readonly goals = new Map<number, { gx: number; gz: number; blocked: boolean; at: number; failUntil: number }>();
   private readonly idxs = new Map<number, number>();
   private readonly paths = new Map<string, { x: number; z: number }[]>();
+  /** ★ P4 重规划计数（白名单探针：任务走廊重解次数/分钟口径） */
+  readonly dbg = { solves: 0, fails: 0, rechecks: 0, deviations: 0 };
+  /** ★ 求解失败冷却（ms；治"每拍重试必失败"A* 风暴——白名单纪律：白名单外零重规划） */
+  private static readonly FAIL_COOLDOWN_MS = 2000;
 
   constructor(
     private readonly blockedAt: (x: number, z: number) => boolean,
@@ -31,16 +35,18 @@ export class MemberTaskNav {
     let g = this.goals.get(uid);
     if (!g || Math.hypot(g.gx - gx, g.gz - gz) > 6) {
       const blocked = this.lineBlocked(px, pz, gx, gz);
-      g = { gx, gz, blocked, at: now };
+      g = { gx, gz, blocked, at: now, failUntil: 0 };
       this.goals.set(uid, g);
       if (!blocked) this.paths.delete(this.key(gx, gz));
     } else if (!g.blocked && now - g.at > 1500) {
       // ★ 直行判定定时复核（1.5s）：初判"可达"会过时（兵被挤开/工事落地）→
       //   变堵就转走廊，不再直撞墙被 steer 否决后原地抽风
+      this.dbg.rechecks++;
       g.at = now;
       if (this.lineBlocked(px, pz, gx, gz)) g.blocked = true;
     }
     if (!g.blocked) return null;
+    if (g.failUntil > now) return null;   // ★ 失败冷却：白名单外零重规划（防每拍重试风暴）
     const key = this.key(gx, gz);
     let path = this.paths.get(key);
     if (!path) {
@@ -48,7 +54,12 @@ export class MemberTaskNav {
       const attempt: { x: number; z: number }[] = [];
       const raster = RasterMap.current;
       const ok = raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul);
-      if (!ok) return null;   // 求解失败 → 直行（steer 危险探测兜底）
+      if (!ok) {
+        g.failUntil = now + MemberTaskNav.FAIL_COOLDOWN_MS;
+        this.dbg.fails++;
+        return null;   // 求解失败 → 直行（steer 危险探测兜底）
+      }
+      this.dbg.solves++;
       path = attempt;
       this.paths.set(key, path);
     }
@@ -63,15 +74,19 @@ export class MemberTaskNav {
       if (near2 === 0) break;
     }
     if (near2 > 144) {
+      this.dbg.deviations++;
       this.paths.delete(key);
       this.idxs.delete(uid);
       const attempt: { x: number; z: number }[] = [];
       const raster = RasterMap.current;
       if (raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul)) {
+        this.dbg.solves++;
         path = attempt;
         this.paths.set(key, path);
         idx = 0;
       } else {
+        g.failUntil = now + MemberTaskNav.FAIL_COOLDOWN_MS;
+        this.dbg.fails++;
         return null;   // 重解失败 → 直行兜底
       }
     }

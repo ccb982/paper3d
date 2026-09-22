@@ -40,6 +40,8 @@ export class SquadNavigator {
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
+  /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
+  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0 };
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   private readonly _centroid = { x: 0, z: 0 };
 
@@ -55,20 +57,23 @@ export class SquadNavigator {
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     const raster = RasterMap.current;
     if (!raster || !squads.centroidOf(squad.id, this._centroid)) return;
+    this.dbg.solves++;   // ★ P4：白名单探针（真正进入求解；早退不计）
     const path: { x: number; z: number }[] = [];
     // ★ 长距离优先 HPA*（全局、绕大障碍）；失败 → 有界 A*（SquadPath）→ 直线
     const dist = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
-    let ok = false;
     const isFlyer = (squad.type as string) === 'flyer';
     // ★ 飞行不走地面折扣；地面 = 掩体折扣 × 该队兵种亲和（P1-3）
     const mul = (!isFlyer && this.pathMul)
       ? (x: number, z: number) => this.pathMul!(squad.type, x, z)
       : undefined;
     this.hpa.pathMul = mul ?? null;
-    if (dist > 70) ok = this.hpa.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path);
+    // 一次求解必落一路（hpa/astar/coarse/fail；计数闭合 可断言）
+    let src: 'hpa' | 'astar' | 'coarse' | 'fail' = 'fail';
+    if (dist > 70 && this.hpa.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path)) src = 'hpa';
+    else if (this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path, mul)) src = 'astar';
     const warming = dist > 70 && this.hpa.warming;
-    if (!ok) ok = this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path, mul);
-    if (ok) {
+    if (src === 'hpa' || src === 'astar') {
+      this.dbg[src]++;
       state.order.path = path;
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
@@ -77,6 +82,7 @@ export class SquadNavigator {
       state.pathFailedAt = 0;
     } else if (state.order.coarse && state.order.coarse.length > 0) {
       // ★ P2 coarse 软参考兜底：细解（HPA/有界A*）失败 → 沿随令 coarse 走廊走（仍优于直线）
+      this.dbg.coarse++;
       state.order.path = state.order.coarse.slice();
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
@@ -84,6 +90,7 @@ export class SquadNavigator {
       state.pathFailedAt = 0;
     } else {
       // ★ 无解 → 清路径走直线（绝不停摆；冷却后再试）
+      this.dbg.fail++;
       state.pathFailedAt = now;
       state.order.path = undefined;
     }

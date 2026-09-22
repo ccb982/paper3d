@@ -103,6 +103,8 @@ const snapPage = (page) => page.evaluate(() => {
     dbgR: sw.stuckDbg.recycled, dbgT: sw.stuckDbg.tracked,
     cmd: sw.cmdLog.snap(), cmdRear: sw.cmdLog.latestPerSquad(10), cmdAll: sw.cmdLog.latestPerSquad(80),
     coarse: { ...sw.commander.coarseDbg, ledgerAdj: sw.cmdLog.adjustedUnreachable | 0 },
+    navDbg: sw.navDbg ?? null,
+    taskNavDbg: sw.memberNavDbg ?? null,
     stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
@@ -295,6 +297,8 @@ for (const seed of seeds) {
     }
     const cg = s.coarse;
     if (cg) console.log(`   可达核验(P2) checked=${cg.checked} 调账=${cg.adjusted}(台账${cg.ledgerAdj}) 拦截=${cg.skipped} 预热放行=${cg.unknown}`);
+    const nd = s.navDbg, md = s.taskNavDbg;
+    if (nd && md) console.log(`   重规划(白名单P4) 队路径=${nd.solves}(HPA${nd.hpa}/A*${nd.astar}/coarse${nd.coarse}/失败${nd.fail}) 任务走廊=${md.solves}(偏离重解${md.deviations}/直行复核${md.rechecks}/失败${md.fails})`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {

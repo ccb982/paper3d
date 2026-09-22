@@ -1029,6 +1029,11 @@ export class SwarmSystem {
     return this.nav.coarseCheck(sx, sz, gx, gz, out);
   }
 
+  /** ★ P4 白名单探针：队路径重规划计数 */
+  get navDbg(): SquadNavigator['dbg'] { return this.nav.dbg; }
+  /** ★ P4 白名单探针：任务走廊重规划计数 */
+  get memberNavDbg(): MemberTaskNav['dbg'] { return this.taskNav.dbg; }
+
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
   private _orderDrops = 0;
   get orderDrops(): number { return this._orderDrops; }
