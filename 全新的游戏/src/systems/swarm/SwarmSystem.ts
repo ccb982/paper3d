@@ -1039,6 +1039,7 @@ export class SwarmSystem {
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
+    this.taskNav.setPathTable(t);   // ★ 任务走廊薄层化（可行性寻路）
   }
 
   /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */

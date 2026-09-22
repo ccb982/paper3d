@@ -12,9 +12,20 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { SquadPathFinder } from './SquadPath';
+import { FeasibilityPath } from './FeasibilityPath';
+import type { PassTable } from './PassTable';
 
 export class MemberTaskNav {
   private readonly finder = new SquadPathFinder();
+  /** ★ N1 薄层化：可行性寻路（有表时替代自带 A*；恒权·有向） */
+  private feas: FeasibilityPath | null = null;
+
+  /** ★ N1：接可行性表（表就绪 → 任务走廊直接走可行性寻路） */
+  setPathTable(t: PassTable | null): void {
+    if (!t) { this.feas = null; return; }
+    this.feas = new FeasibilityPath();
+    this.feas.setTable(t);
+  }
   /** uid → 目标记忆（目标位移 >6m 重算直行探测；blocked=timed 复核直行可达性；failUntil=失败冷却） */
   private readonly goals = new Map<number, { gx: number; gz: number; blocked: boolean; at: number; failUntil: number }>();
   private readonly idxs = new Map<number, number>();
@@ -53,18 +64,35 @@ export class MemberTaskNav {
     const key = this.key(gx, gz);
     let path = this.own.get(uid) ?? this.paths.get(key);
     if (!path) {
-      if (this.paths.size > 96) this.paths.clear();
       const attempt: { x: number; z: number }[] = [];
-      const raster = RasterMap.current;
-      const ok = raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul);
-      if (!ok) {
-        g.failUntil = now + MemberTaskNav.FAIL_COOLDOWN_MS;
-        this.dbg.fails++;
-        return null;   // 求解失败 → 直行（steer 危险探测兜底）
+      if (this.feas) {
+        // ★ N1 薄层化：可行性寻路出私有走廊（按成员位置；'outside' 回落旧 A*）
+        const r = this.feas.find(px, pz, gx, gz, attempt);
+        if (r === 'blocked') {
+          g.failUntil = now + MemberTaskNav.FAIL_COOLDOWN_MS;
+          this.dbg.fails++;
+          return null;
+        }
+        if (r === 'ok') {
+          this.dbg.solves++;
+          if (this.own.size > 512) this.own.clear();
+          this.own.set(uid, attempt);
+          path = attempt;
+        }
       }
-      this.dbg.solves++;
-      path = attempt;
-      this.paths.set(key, path);
+      if (!path) {
+        if (this.paths.size > 96) this.paths.clear();
+        const raster = RasterMap.current;
+        const ok = raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul);
+        if (!ok) {
+          g.failUntil = now + MemberTaskNav.FAIL_COOLDOWN_MS;
+          this.dbg.fails++;
+          return null;   // 求解失败 → 直行（steer 危险探测兜底）
+        }
+        this.dbg.solves++;
+        path = attempt;
+        this.paths.set(key, path);
+      }
     }
     let idx = this.idxs.get(uid) ?? 0;
     if (idx >= path.length) idx = 0;
@@ -83,8 +111,14 @@ export class MemberTaskNav {
       this.dbg.deviations++;
       this.idxs.delete(uid);
       const attempt: { x: number; z: number }[] = [];
-      const raster = RasterMap.current;
-      if (raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul)) {
+      let ok = false;
+      if (this.feas) {
+        ok = this.feas.find(px, pz, gx, gz, attempt) === 'ok';
+      } else {
+        const raster = RasterMap.current;
+        ok = !!(raster && this.finder.find(raster, px, pz, gx, gz, attempt, this.pathMul));
+      }
+      if (ok) {
         this.dbg.solves++;
         if (this.own.size > 512) this.own.clear();
         this.own.set(uid, attempt);   // ★ 私有走廊：不删共享（防多成员互相重解抖动）
