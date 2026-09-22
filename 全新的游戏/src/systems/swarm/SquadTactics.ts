@@ -304,23 +304,6 @@ export class SquadTactics {
       o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, effTtl);
   }
 
-  /** ★ P4 队长拆步令（寻路轨；覆盖式发令——覆盖权在小队；台账按 source='leader' 记）。
-   *  与命令轨分开存：引擎命令保活不冲掉步令，步令也不抢引擎命令槽。
-   *  @param fromX,fromZ 步起点（质心；位移推进判定用，存 pathGoal） */
-  issueStep(
-    squadId: number, order: TacticalOrder, now: number, ttl: number, k: number, n: number,
-    fromX = 0, fromZ = 0,
-  ): void {
-    const o: TacticalOrder = { ...order, seq: this.seq++ };
-    const state: SquadOrderState = {
-      squadId, order: o, issuedAt: now, until: now + ttl, source: 'leader',
-      notBefore: now, pathGoalX: fromX, pathGoalZ: fromZ, pathAt: 0, pathFailedAt: 0,
-      stepK: k, stepN: n,
-    };
-    this.board.issuePath(state);
-    this.ledger.record(now, squadId, o.kind, 'leader', o.target?.x ?? 0, o.target?.z ?? 0, o.mission, ttl);
-  }
-
   /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */
   static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number } | null {
     const path = state.corridor ?? state.order.path;
@@ -469,7 +452,7 @@ export class SquadTactics {
 // ★ 队长自主发令（9d；《实体架构.md》§5.11）
 // ============================================================
 
-/** ★ 上报（队员→队长；《实体架构.md》§5.11；当前实现 contact/underAttack/lowHp/needSupport，其余预留） */
+  /** ★ 上报（队员→队长；《实体架构.md》§5.11；当前实现 contact/underAttack/lowHp/needSupport，其余预留） */
 export type SwarmReportKind = 'contact' | 'underAttack' | 'casualty' | 'lowHp' | 'blocked' | 'arrived' | 'needSupport';
 
 /** ★ 小队间消息（队长↔队长，经引擎中转；当前实现 requestSupport/shareContact，其余预留） */
@@ -521,32 +504,6 @@ export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
 /** 命令 TTL（秒） */
 export const LEADER_TTL = 4;
 
-/** ★ P4 队长拆步参数（寻路轨；《敌人管线设计.md》§3.3：大目标 → 步骤序列 → argmax scoreFor） */
-export const LEADER_STEP = {
-  /** 每步推进距离（米；语义小区块） */
-  LEN: 12,
-  /** 当前步到点判定（米；到点 → k+1） */
-  ADVANCE_R: 5,
-  /** 大目标到点判定（米；到点 → progress(N/N) + 撤步令） */
-  REACH_R: 6,
-  /** 步令寿命（秒；到期从当前位置重拆） */
-  TTL: 12,
-  /** 位移推进判定（米；质心离步起点走够此距 → 记一步——不苛求踩点，治"永远到不了"） */
-  PROGRESS_M: 10,
-  /** 候选采样偏移（米；理想推进点周围 argmax） */
-  CAND: [5, 10] as const,
-} as const;
-
-/** ★ 可拆步的命令 kind（移动类；驻守/护卫/工程链不拆——站位/工事按原逻辑） */
-const STEP_KINDS = new Set<SquadOrderKind>(['advance', 'flank', 'regroup', 'bound', 'retreat']);
-/** ★ 不拆步的使命（工程/驻守链；rear 撤退拆步=收拢后撤） */
-const NO_STEP_MISSIONS = new Set(['build', 'guard', 'patrol', 'hold']);
-/** 8 向单位向量（候选偏移用；零分配） */
-const _dir8: readonly (readonly [number, number])[] = Array.from({ length: 8 }, (_, i) => {
-  const a = (i * Math.PI) / 4;
-  return [Math.cos(a), Math.sin(a)] as const;
-});
-
 /** ★ 队长 AI 需要的评级面（结构化最小子集；避免引入 SquadRating 全量字段） */
 export type LeaderRating = {
   hpRatio: number; cx: number; cz: number;
@@ -558,18 +515,7 @@ export class SquadLeaderAI {
   private accum = 0;
   /** ★ 接敌滞回（squadId → 上一拍是否已接敌）：避免在 engageR 边界来回切 → 左右摆 */
   private readonly engaged = new Map<number, boolean>();
-  /** ★ P4 拆步观测（probe） */
-  readonly stepDbg = {
-    issued: 0, reached: 0, done: 0, pickFail: 0,
-    /** 每队最后一步事件（ev: hold/reach/done/fail/issue；dS=质心→步距） */
-    last: {} as Record<number, { ev: string; k: number; n: number; dS: number; dA: number; t: number }>,
-  };
 
-  private logStep(sid: number, ev: string, now: number, k: number, n: number, dS: number, dA: number): void {
-    this.stepDbg.last[sid] = {
-      ev, k, n, dS: +dS.toFixed(1), dA: +dA.toFixed(1), t: Math.round(now),
-    };
-  }
 
   tick(
     dt: number,
@@ -590,10 +536,7 @@ export class SquadLeaderAI {
     for (const s of squads.all()) {
       const cur = tactics.board.get(s.id);
       // 引擎命令优先：未过期的引擎命令 → 队长不抢命令轨；但按意图拆步（寻路轨）推进
-      if (cur && cur.source === 'engine' && now < cur.until) {
-        if (scoreStep) this.stepTick(s, cur, tactics, now, scoreStep);
-        continue;
-      }
+      if (cur && cur.source === 'engine' && now < cur.until) continue;
       const r = squads.ratingOf(s.id, now);
       if (!r) continue;
       const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];
@@ -648,35 +591,6 @@ export class SquadLeaderAI {
         }, now, LEADER_TTL, 'leader');
       }
     }
-  }
-
-  /** ★ P4 拆步（1Hz）：大目标在身 → 逐步 argmax scoreFor 选格推进；推进/完成时上报 progress(k/N)。
-   *  铁律：只发寻路轨步令（不改目标/意图/不撤销大队令）；完成/失败只上报。 */
-  private stepTick(
-    s: Squad, st: SquadOrderState, tactics: SquadTactics, now: number,
-    score: (type: SquadType, x: number, z: number) => number,
-  ): void {
-    // ★ 大修②：拆步 = "目标不变、路径常新"——由 SquadNavigator.ensurePath 按位移 >12m 连续重算（覆盖式）。
-    //   步点链（12m step/K/N）已废；加权版重算（可行性+兵种偏好）在阶段二接回此处。
-    void s; void st; void tactics; void now; void score;
-    return;
-  }
-
-  /** 拆步选点（★ 阶段一：权重全关）= 走廊前瞻点本身，不做 argmax 偏移
-   *  （候选偏移会把步点甩出走廊 → 半路卡死；阶段二再开） */
-  private pickStep(
-    type: SquadType, st: SquadOrderState, cx: number, cz: number,
-    anchor: { x: number; z: number }, _score: (type: SquadType, x: number, z: number) => number,
-  ): { x: number; z: number } | null {
-    const next = SquadTactics.currentTargetOf(st, cx, cz) ?? anchor;
-    let dx = next.x - cx, dz = next.z - cz;
-    let d = Math.hypot(dx, dz);
-    const dAnchor = Math.hypot(anchor.x - cx, anchor.z - cz);
-    if (d < 1e-3 || d > dAnchor) { dx = anchor.x - cx; dz = anchor.z - cz; d = dAnchor || 1; }
-    const len = Math.min(LEADER_STEP.LEN, d);
-    let bx = cx + (dx / d) * len, bz = cz + (dz / d) * len;
-    if (dAnchor <= LEADER_STEP.LEN) { bx = anchor.x; bz = anchor.z; }
-    return { x: bx, z: bz };
   }
 
   /** ★ 步骤 9e：向最近的其他小队发求援（引擎中转；同 from+to 自动去重） */
