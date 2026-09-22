@@ -23,6 +23,8 @@ import { HoleTable } from './HoleTable';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { EngineerCorps, type BuildPiece } from './EngineerCorps';
+import { CommanderSpawn } from './CommanderSpawn';
+import { AnchorSelect } from './CommanderAnchorSelect';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -125,18 +127,8 @@ export class SwarmCommander {
   private readonly supportCd = new Map<number, number>();
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
-  /** ★ 已建成的掩体（远程驻守点；换落点 planDefense 时清空） */
-  /** ★ 起飞回收名单（兵种属性 + 数量；放置由本层决定） */
-  private recalledRoster: { mobIndex: number; role: UnitRole; count: number }[] | null = null;
-  /** ★ 大队：一队 30 怪；一局多个 */
-  private battalionCount = 0;
-  /** ★ 待登场队列（**逐步登场**；总攻可一次性整编队） */
-  private spawnQueue: { x: number; z: number; role: UnitRole; elite: boolean; mobIndex: number }[] = [];
-  private spawnAccum = 0;
-  /** 登场间隔（秒/只） */
-  private static readonly SPAWN_INTERVAL = 1.5;
-  private static readonly BATTALION_SIZE = 30;
-  private static readonly BATTALION_MAX = 4;
+  /** ★ 大队生成/登场队列（自本类拆出：CommanderSpawn；回收名单也在其中） */
+  private readonly spawn: CommanderSpawn;
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
   /** ★ 成员级任务（taskX/Z）唯一入口（施工分块 / 护卫扇区） */
@@ -182,6 +174,19 @@ export class SwarmCommander {
       cover: () => this.buildCover,
       dig: () => this.digTrench,
     }, this.memberTasks);
+    this.spawn = new CommanderSpawn({
+      plan: () => this.plan,
+      mob: () => this.spawnMob,
+      mobIndex: () => this.spawnMobIndex,
+      builder: () => this.spawnBuilder,
+    });
+    this.anchors = new AnchorSelect({
+      plan: () => this.plan,
+      squadExists: (id) => !!this.swarm.squads.get(id),
+      holeCovers: () => this.holeTable.covers,
+      bestTrenchNear: (x, z, r) => this.terrainScore.bestTrenchNear(x, z, r),
+      corpsPieces: () => this.corps.pieces,
+    });
   }
 
   /** ★ 大队任务（路径 + 目标；`subTargets` 按 squadId 分派到各队） */
@@ -292,9 +297,7 @@ export class SwarmCommander {
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
-    this.spawnQueue.length = 0;
-    this.spawnAccum = 0;
-    this.battalionCount = 0;
+    this.spawn.reset();
     // ★ 单日节律复位（§3.5）：日程从落地重新走，波次标记/挑衅采样清零
     this.rhythmT = 0;
     this.t01Base = -1;
@@ -304,168 +307,35 @@ export class SwarmCommander {
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();
-    this.postAssign.clear();
+    this.anchors.reset();
     this.missionAssign.clear();
     this.memberTasks.clearAll();
-    this.escortAssign.clear();
     this.protectAssign.clear();
-    this.coverHolders.clear();
     this.builderRoles.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
-    // ★ 兵力创建（全权在本层）：
+    // ★ 兵力创建（全权在本层，编成/放置见 CommanderSpawn）：
     //   · 回收名单 → 按名单**逐步回场**（数量/兵种照旧）
     //   · 全新驻防 → 开局只上**少量班底**（近战 + 后勤修工事），其余由节律逐步补满基数
-    if (this.recalledRoster) {
-      this.spawnBattalion(false);
-    } else {
-      this.spawnCadre();
-      this.spawnBattalion(false);
-    }
+    this.spawn.deploy();
     return this.plan;
   }
 
   /** ★ 起飞回收：只交**名单**（兵种属性 + 数量）——怎么布置由本层决定 */
   setRecalledRoster(roster: { mobIndex: number; role: UnitRole; count: number }[]): void {
-    this.recalledRoster = roster.length > 0 ? roster : null;
+    this.spawn.setRoster(roster);
   }
 
-  /** ★ 生成一个大队（30 怪；按角色配比 · 沿外环弧部署；后续大队更远列阵）
-   *  编成来源：优先**起飞回收名单**（兵种/数量照旧；放置仍按本层战术布置），
-   *  否则标准配比（±2 随机 + 概率精英）。
-   *  @param instant 总攻/落地用：true = 一次性上整编队；false = **逐步登场**（队列滴灌） */
+  /** ★ 生成一个大队（30 怪；逐步登场/instant；编成/放置见 CommanderSpawn） */
   spawnBattalion(instant = false): boolean {
-    const plan = this.plan;
-    if (!plan || this.battalionCount >= SwarmCommander.BATTALION_MAX) return false;
-    const roster = this.recalledRoster;
-    const useRoster = !!roster && !!this.spawnMobIndex;
-    if (!useRoster && !this.spawnMob) return false;
-    this.battalionCount++;
-    const entries: { role: UnitRole; elite: boolean; mobIndex: number }[] = [];
-    if (useRoster) {
-      this.recalledRoster = null;
-      for (const r of roster!) {
-        for (let i = 0; i < r.count; i++) entries.push({ role: r.role, elite: false, mobIndex: r.mobIndex });
-      }
-    } else {
-      // ★ 配比（基准 30）：盾 6 / 突击 10 / 远程 6 / 后勤 4 / 飞行 4；每类 ±2；精英 0~2
-      const base: [UnitRole, number][] = [
-        ['shield', 6], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 4],
-      ];
-      const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
-      for (const [role, n] of comp) for (let i = 0; i < n; i++) entries.push({ role, elite: false, mobIndex: -1 });
-      const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
-      for (let i = 0; i < eliteN; i++) entries.push({ role: 'assault', elite: true, mobIndex: -1 });
-    }
-    if (entries.length === 0) return false;
-    const baseA = Math.atan2(plan.approachZ, plan.approachX);
-    // ★ 集结区（正面楔形：±30°、≈96m 起）——从来向远处进场，**不围圈**
-    const ringR = 96 + (this.battalionCount - 1) * 8;
-    const total = entries.length;
-    // ★ 部署锚点：**优先用自身地形分析产出的可站点**（掩体位/高地/战壕线）——
-    //   保证所有兵都落在可达陆地上（此前盲投 96m 环：施工队掉湖里 → 永远开不了工）；
-    //   锚点不足时才退回来向楔形环。
-    const anchors = this.placementAnchors(plan);
-    let k = 0;
-    for (const e of entries) {
-      let x: number, z: number;
-      if (anchors && anchors.length > 0) {
-        const a = anchors[k % anchors.length];
-        x = a.x + (Math.random() - 0.5) * 2;
-        z = a.z + (Math.random() - 0.5) * 2;
-      } else {
-        const a = baseA + (-1 + (2 * k) / total) * (Math.PI / 6);
-        const rr = ringR + (Math.random() - 0.5) * 10;
-        x = plan.cx + Math.cos(a) * rr;
-        z = plan.cz + Math.sin(a) * rr;
-      }
-      k++;
-      if (instant) {
-        if (e.mobIndex >= 0 && this.spawnMobIndex) this.spawnMobIndex(x, z, e.mobIndex);
-        else this.spawnMob?.(x, z, e.role, e.elite);
-      } else {
-        this.spawnQueue.push({ x, z, role: e.role, elite: e.elite, mobIndex: e.mobIndex });
-      }
-    }
-    return true;
-  }
-
-  /** ★ 开局班底（§3.5 扎根期）：少量近战守线 + 后勤/远程开工；其余由单日节律逐步补
-   *  ★ 施工兵优先走 `spawnBuilder`（名册 canBuild 兵种）——保证开局有真正的工程队 */
-  private spawnCadre(): void {
-    const plan = this.plan;
-    if (!plan) return;
-    const anchors = this.placementAnchors(plan);
-    const at = (k: number): { x: number; z: number } => (anchors.length > 0
-      ? { x: anchors[k % anchors.length].x, z: anchors[k % anchors.length].z }
-      : { x: plan.cx + plan.approachX * 40, z: plan.cz + plan.approachZ * 40 });
-    // ① 工程队：3 只（有专门端口用专门的；否则退"杂兵兼任"名单）
-    for (let k = 0; k < 3; k++) {
-      const a = at(k);
-      if (this.spawnBuilder) this.spawnBuilder(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2);
-      else this.spawnMob?.(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, 'assault', false, true);
-    }
-    // ② 近战护卫 + 远程
-    if (!this.spawnMob) return;
-    const roles: UnitRole[] = ['shield', 'shield', 'assault', 'assault', 'ranged'];
-    for (let k = 0; k < roles.length; k++) {
-      const a = at(k + 3);
-      this.spawnMob(a.x + (Math.random() - 0.5) * 2, a.z + (Math.random() - 0.5) * 2, roles[k], false, true);
-    }
-  }
-
-  /** ★ 可站部署锚点（地形分析产物：掩体位 + 高地 + 战壕线；空 = 无可用点） */
-  private placementAnchors(plan: DefensePlan): { x: number; z: number }[] {
-    const out: { x: number; z: number }[] = [];
-    for (const c of plan.coverSlots) out.push({ x: c.x, z: c.z });
-    for (const g of plan.highGround) out.push({ x: g.x, z: g.z });
-    for (const line of plan.trenchLines) for (const p of line) out.push(p);
-    return out;
+    return this.spawn.battalion(instant);
   }
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
   get defensePlan(): DefensePlan | null {
     return this.plan;
-  }
-
-  /** ★ 取离 (x,z) 最近的高地（半径内；无 = null）——远程队占顶用 */
-  private pickHighGroundNear(
-    plan: DefensePlan, x: number, z: number, radius: number,
-  ): { x: number; z: number; h: number } | null {
-    let best: { x: number; z: number; h: number } | null = null;
-    let bestD2 = radius * radius;
-    for (const g of plan.highGround) {
-      const d2 = (g.x - x) ** 2 + (g.z - z) ** 2;
-      if (d2 <= bestD2) { bestD2 = d2; best = g; }
-    }
-    return best;
-  }
-
-  /** ★ 远程驻守点（掩体后侧）：已建掩体 > 规划掩体位；点在"掩体背向来向"一侧 1.2m。
-   *  requireInRange = 只取距玩家 ≤48m 的（保证驻守点能射到玩家）；按距玩家近→远排序。 */
-  private garrisonCovers(
-    plan: DefensePlan, playerX: number, playerZ: number, requireInRange: boolean,
-  ): { x: number; z: number }[] {
-    const out: { x: number; z: number; d2: number }[] = [];
-    const add = (x: number, z: number): void => {
-      const bx = x - plan.approachX * 1.2;
-      const bz = z - plan.approachZ * 1.2;
-      const d2 = (bx - playerX) ** 2 + (bz - playerZ) ** 2;
-      if (requireInRange && d2 > 48 * 48) return;
-      out.push({ x: bx, z: bz, d2 });
-    };
-    for (const c of this.holeTable.covers) add(c.x, c.z);
-    // ★ 扫描产物（有利位置）优先作为驻守点；coverSlots 兜底
-    for (const p of plan.posts) add(p.x, p.z);
-    for (const c of plan.coverSlots) add(c.x, c.z);
-    // ★ 战壕也是驻守点（全兵种偏好；前线附近取一格）
-    const tr = this.terrainScore.bestTrenchNear(
-      plan.cx + plan.approachX * 45, plan.cz + plan.approachZ * 45, 35);
-    if (tr) add(tr.x, tr.z);
-    out.sort((a, b) => a.d2 - b.d2);
-    return out.map((o) => ({ x: o.x, z: o.z }));
   }
 
   setDefensePlan(plan: DefensePlan | null): void {
@@ -601,15 +471,7 @@ export class SwarmCommander {
     // ★ 战役级闭环（1Hz，晚于工程拍 → 反馈决策可覆盖基础部署）
     this.tacticalTick(dt, playerX, playerZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
-    if (this.spawnQueue.length > 0) {
-      this.spawnAccum += dt;
-      while (this.spawnAccum >= SwarmCommander.SPAWN_INTERVAL && this.spawnQueue.length > 0) {
-        this.spawnAccum -= SwarmCommander.SPAWN_INTERVAL;
-        const u = this.spawnQueue.shift()!;
-        if (u.mobIndex >= 0 && this.spawnMobIndex) this.spawnMobIndex(u.x, u.z, u.mobIndex);
-        else this.spawnMob?.(u.x, u.z, u.role, u.elite);
-      }
-    }
+    this.spawn.drain(dt);
     // ★ 单日节律增兵（§3.5）：第一波（t01≥0.45）与总攻（t01≥0.80）各来一个大队；
     //   开局班底 + 逐步补满的基数是常备，两个波峰才是"大量增兵"（BATTALION_MAX 兜底）
     if (this.plan && this.stage !== 'S0') {
@@ -626,166 +488,18 @@ export class SwarmCommander {
     }
   }
 
-  /** ★ 每队稳定岗位（squadId → 岗哨/高地/掩体位/战壕；拆队前一直有效） */
-  private readonly postAssign = new Map<number, { x: number; z: number }>();
-  /** ★ S1 护工：非工兵队 → 被保护的工程队（粘性配对；squadId → builder squadId） */
-  private readonly escortAssign = new Map<number, number>();
   /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位/掩体）——保护对象由大队定 */
   readonly protectAssign = new Map<number, ProtectTarget>();
-  /** ★ 掩体驻守（远程，每帧更新）：squadId → { 掩体中心, 战壕位（掩体外侧 5m） } */
-  private readonly coverHolders = new Map<number, { cx: number; cz: number; x: number; z: number }>();
+  /** ★ 岗位/护工/掩体驻守/有利位锚点选择（自本类拆出：CommanderAnchorSelect） */
+  private readonly anchors: AnchorSelect;
+  /** ★ 远程掩体驻守表（只读；probe/覆盖层） */
+  get coverHolders(): Map<number, { cx: number; cz: number; x: number; z: number }> {
+    return this.anchors.coverHolders;
+  }
   /** ★ 施工分工（蜂群引擎指派）：cover = 修掩体班；trench = 挖战壕班；any = 兼顾 */
   private readonly builderRoles = new Map<number, 'cover' | 'trench' | 'any'>();
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
-
-  /** ★ 岗位分派：新队 → 就近未被认领的岗（一次定终身，杜绝每拍轮转 → 左右摆）
-   *  ★ 兵种投影：盾队优先**隘口**（窄口吃线），其余按 高地/掩体位/战壕 */
-  private ensurePosts(
-    squads: readonly { id: number; type: string; members: Map<number, { x: number; z: number }> }[],
-  ): void {
-    const plan = this.plan;
-    if (!plan) return;
-    const missing = squads.filter((s) => !this.postAssign.has(s.id));
-    if (missing.length === 0) return;
-    const posts: { x: number; z: number }[] = [];
-    for (const c of plan.chokepoints) posts.push({ x: c.x, z: c.z });
-    const chokeN = posts.length;
-    for (const g of plan.highGround) posts.push({ x: g.x, z: g.z });
-    for (const p of plan.posts) posts.push({ x: p.x, z: p.z });
-    for (const line of plan.trenchLines) for (const p of line) posts.push(p);
-    if (posts.length === 0) return;
-    const claimed = new Set<number>();
-    for (const [, pos] of this.postAssign) {
-      for (let i = 0; i < posts.length; i++) {
-        if (posts[i].x === pos.x && posts[i].z === pos.z) { claimed.add(i); break; }
-      }
-    }
-    for (const s of missing) {
-      let cx = 0, cz = 0, n = 0;
-      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-      if (n === 0) continue;
-      cx /= n; cz /= n;
-      let bi = -1, bd = Infinity;
-      // ★ 盾队先找隘口（80m 内最近未认领）；找不到再走通用列表
-      if (s.type === 'defense') {
-        for (let i = 0; i < chokeN; i++) {
-          if (claimed.has(i)) continue;
-          const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
-          if (d < bd && d < 80 * 80) { bd = d; bi = i; }
-        }
-      }
-      if (bi < 0) {
-        bd = Infinity;
-        for (let i = 0; i < posts.length; i++) {
-          if (claimed.has(i)) continue;
-          const d = (posts[i].x - cx) ** 2 + (posts[i].z - cz) ** 2;
-          if (d < bd) { bd = d; bi = i; }
-        }
-      }
-      if (bi < 0) bi = 0;   // 岗全被认领 → 允许共用最近岗
-      if (bi >= 0) { claimed.add(bi); this.postAssign.set(s.id, { x: posts[bi].x, z: posts[bi].z }); }
-    }
-  }
-
-  /** ★ S1 护工：给非工兵队粘性配对一只工程队（返回其质心作为护锚；失效则换最近） */
-  private escortAnchor(
-    squadId: number, cx: number, cz: number, engCent: Map<number, { x: number; z: number }>,
-  ): { x: number; z: number } | null {
-    let pick = this.escortAssign.get(squadId) ?? -1;
-    if (pick < 0 || !engCent.has(pick)) {
-      pick = -1;
-      let bd = Infinity;
-      for (const [id, c] of engCent) {
-        const d = (c.x - cx) ** 2 + (c.z - cz) ** 2;
-        if (d < bd) { bd = d; pick = id; }
-      }
-      if (pick < 0) return null;
-      this.escortAssign.set(squadId, pick);
-    }
-    return engCent.get(pick) ?? null;
-  }
-
-  /** ★ 掩体驻守（远程）：每帧维护"选哪面掩体"（引擎只选**保护对象**；站位由个体绕掩体自算）。
-   *  选择判据：距玩家 8~75m（够近能打/够远不被贴脸）× 距本队 ≤70m；被击/无掩体则不驻。
-   *  命令下发时附带玩家位置（threat），个体据此绕掩体保持遮挡（《敌人管线设计.md》§3.2.1）。 */
-  private updateCoverHolders(
-    squads: readonly { id: number; type: string; builders: boolean; members: Map<number, { x: number; z: number }> }[],
-    playerX: number, playerZ: number,
-  ): void {
-    for (const id of [...this.coverHolders.keys()]) {
-      if (!this.swarm.squads.get(id)) this.coverHolders.delete(id);
-    }
-    let covers: { x: number; z: number }[] | null = null;
-    for (const s of squads) {
-      if (s.type !== 'ranged' || s.builders) continue;
-      let scx = 0, scz = 0, n = 0;
-      for (const m of s.members.values()) { scx += m.x; scz += m.z; n++; }
-      if (n === 0) continue;
-      scx /= n; scz /= n;
-      // ★ 收口：AI 掩体选点统一读 **L2 工事表**（HoleTable.covers = 战壕掩体同一张表）
-      if (!covers) covers = this.holeTable.covers.map((c) => ({ x: c.x, z: c.z }));
-      if (covers.length === 0) { this.coverHolders.delete(s.id); continue; }
-      const ok = (cx: number, cz: number): boolean => {
-        const dp = Math.hypot(cx - playerX, cz - playerZ);
-        const ds = Math.hypot(cx - scx, cz - scz);
-        return dp >= 8 && dp <= 75 && ds <= 70;
-      };
-      // ★ 站位 = 掩体朝**外**（远离舰船/落点中心）5m = 掩体后方的战壕位（用户定调）
-      const plan = this.plan!;
-      const standOf = (cx: number, cz: number): { x: number; z: number } => {
-        const dx = cx - plan.cx, dz = cz - plan.cz;
-        const dl = Math.hypot(dx, dz) || 1;
-        return { x: cx + (dx / dl) * 5, z: cz + (dz / dl) * 5 };
-      };
-      // ★ 评分：近队 + 靠前（贴玩家方向推进，太近扣分）+ 配对掩体（后方有战壕）
-      const scoreOf = (cx: number, cz: number): number => {
-        const st = standOf(cx, cz);
-        const paired = this.corps.pieces.some((q) => q.kind === 'trench'
-          && (q.x - st.x) ** 2 + (q.z - st.z) ** 2 <= 20);
-        const dSquad = Math.hypot(cx - scx, cz - scz);
-        const dPlayer = Math.hypot(cx - playerX, cz - playerZ);
-        return dSquad + Math.max(0, dPlayer - 45) * 3 + Math.max(0, 18 - dPlayer) * 2 + (paired ? 0 : 60);
-      };
-      let best: { cx: number; cz: number; x: number; z: number } | null = null;
-      let bestScore = Infinity;
-      for (const c of covers) {
-        if (!ok(c.x, c.z)) continue;
-        const sc = scoreOf(c.x, c.z);
-        if (sc < bestScore) {
-          bestScore = sc;
-          const st = standOf(c.x, c.z);
-          best = { cx: c.x, cz: c.z, x: st.x, z: st.z };
-        }
-      }
-      const held = this.coverHolders.get(s.id);
-      if (held && ok(held.cx, held.cz)) {
-        const heldScore = scoreOf(held.cx, held.cz);
-        // ★ 及时调整：现掩体仍够好（优 12 分内）→ 守；出现明显更优（更靠前/更配对）→ 换
-        if (bestScore > heldScore - 6) continue;
-      }
-      if (best) this.coverHolders.set(s.id, best);
-      else this.coverHolders.delete(s.id);
-    }
-  }
-
-  /** ★ 总攻护栏锚：离正面最近的远程小队质心（工兵/护卫以此为"工地"→ 给射手打掩护） */
-  private rangedAnchor(
-    squads: readonly { type: string; members: Map<number, { x: number; z: number }> }[],
-    front: { x: number; z: number },
-  ): { x: number; z: number } | null {
-    let bx = 0, bz = 0, bd = Infinity, found = false;
-    for (const s of squads) {
-      if (s.type !== 'ranged') continue;
-      let cx = 0, cz = 0, n = 0;
-      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-      if (n === 0) continue;
-      cx /= n; cz /= n;
-      const d = (cx - front.x) ** 2 + (cz - front.z) ** 2;
-      if (d < bd) { bd = d; bx = cx; bz = cz; found = true; }
-    }
-    return found ? { x: bx, z: bz } : null;
-  }
 
   /** ★ 小队自动重组（§4.6）：同键"不满半"小队 → 并入最近同键队 */
   private mergeTick(now: number): void {
@@ -843,7 +557,7 @@ export class SwarmCommander {
     let builders = squads.filter((s) => s.builders);
     if (builders.length === 0) builders = squads.filter((s) => s.type === 'assault');
     // ★ 掩体驻守（远程）：**每帧**按玩家位置更新"能挡射界"的掩体背侧站位（引擎配置 → 个体执行）
-    this.updateCoverHolders(squads, playerX, playerZ);
+    this.anchors.updateCoverHolders(squads, playerX, playerZ);
     this.engAccum += dt;
     // ★ 施工冷却**每帧递减**（不受 2s 拍闸限制）：4s 战壕 = 真 4s；否则每拍减 0.1 → 一趟要 ~80s
     if (this.stage === 'S1') {
@@ -882,8 +596,8 @@ export class SwarmCommander {
     //   施工期盾队前出掩护工事（screen 分支单独处理）
     const chase = Math.hypot(playerX - plan.cx, playerZ - plan.cz) < 90;
     // ★ 按小队属性部署（`SquadDoctrine`：通用兜底 + 属性覆盖 + 逐兵种 + 施工 override）→ 再叠态势
-    const highPick = this.pickHighGroundNear(plan, front.x, front.z, 48);
-    const covers = this.garrisonCovers(plan, playerX, playerZ, chase);
+    const highPick = this.anchors.pickHighGroundNear(plan, front.x, front.z, 48);
+    const covers = this.anchors.garrisonCovers(plan, playerX, playerZ, chase);
     // ★ 进攻队列调控（advance/mass/assault 时生效；前/中/后排 + 横向车道）
     //   ★ 用户定调（2026-09-21）：线位只是"队形调整的短暂命令"——**只有刚整队那一拍才下发**，
     //   其余时间不强制线位，让各队执行自己的战术（追击玩家/驻守/推进），否则永远不总攻。
@@ -919,8 +633,8 @@ export class SwarmCommander {
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
     ctx.hold = this.holdPos; ctx.protectState = this.protectState;
     // ★ 稳定岗位（每队一次分派；无岗队补岗）
-    this.ensurePosts(squads);
-    ctx.post = this.postAssign;
+    this.anchors.ensurePosts(squads);
+    ctx.post = this.anchors.post;
     // ★ 近 8s 被击小队 → "保护状态"的反击开关（打了保护的士兵 → 该打就打）
     this.alertSet.clear();
     const nowS = performance.now() / 1000;
@@ -931,7 +645,7 @@ export class SwarmCommander {
     if (this.battlePosture === 'assault') {
       // ★ 总攻：施工只剩掩体（战壕暂停开挖）；"工地"锚切到最近远程小队
       //   → 护卫/施工都以射手为保护对象（工兵在射手威胁侧展开）
-      buildSite = this.rangedAnchor(squads, front);
+      buildSite = this.anchors.rangedAnchor(squads, front);
     }
     if (this.stage === 'S1') {
       for (const s of builders) {
@@ -1027,13 +741,13 @@ export class SwarmCommander {
       // ★★ 引擎保护配置（保护对象由大队定；队长/个体只读位置——《小队战术与命令.md》§2.1）：
       //   S1 非工兵 → 粘性配对的工程队（护工）；总攻 → 射手锚；S1 其余 → 工地；S2 → 岗位
       const escort = !s.builders && sn > 0 && engCent.size > 0
-        ? this.escortAnchor(s.id, scx, scz, engCent) : null;
-      const coverHold = (s.type === 'ranged' && !s.builders) ? this.coverHolders.get(s.id) : undefined;
+        ? this.anchors.escortAnchor(s.id, scx, scz, engCent) : null;
+      const coverHold = (s.type === 'ranged' && !s.builders) ? this.anchors.coverHolders.get(s.id) : undefined;
       let pt: ProtectTarget | null = null;
       // ★ 配额闸门：cover/site/shooter/post 按锚坐标计数；engineer 按工程队 id 计数（锚随动不误判）
       if (coverHold && quotaOk(coordKey('cov', coverHold.cx, coverHold.cz))) pt = { x: coverHold.cx, z: coverHold.cz, source: 'cover' };   // ★ 远程：驻守掩体（中心；站位由队长绕掩体算）
       else if (escort) {
-        const eid = this.escortAssign.get(s.id) ?? -1;
+        const eid = this.anchors.escort.get(s.id) ?? -1;
         if (eid >= 0 && quotaOk(`eng:${eid}`)) pt = { x: escort.x, z: escort.z, source: 'engineer' };
         else {
           // ★ 本队配对的工程队满额 → 换最近有余量的工程队（重锁粘性配对；都满 → 不配，走常规部署）
@@ -1045,7 +759,7 @@ export class SwarmCommander {
           }
           if (alt >= 0 && quotaOk(`eng:${alt}`)) {
             const c = engCent.get(alt)!;
-            this.escortAssign.set(s.id, alt);
+            this.anchors.escort.set(s.id, alt);
             pt = { x: c.x, z: c.z, source: 'engineer' };
           }
         }
@@ -1053,7 +767,7 @@ export class SwarmCommander {
       else if (this.battlePosture === 'assault' && buildSite && quotaOk(coordKey('site', buildSite.x, buildSite.z))) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
       else if (buildSite && quotaOk(coordKey('site', buildSite.x, buildSite.z))) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
       else if (ma.mission === 'guard' || ma.mission === 'patrol') {
-        const post = this.postAssign.get(s.id);
+        const post = this.anchors.post.get(s.id);
         if (post && quotaOk(coordKey('post', post.x, post.z))) pt = { x: post.x, z: post.z, source: 'post' };
       }
       if (pt) this.protectAssign.set(s.id, pt);
@@ -1121,7 +835,7 @@ export class SwarmCommander {
     const rateOf = new Map<number, SquadRating>();
     for (const r of ratings) rateOf.set(r.squadId, r);
     // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体中心 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
-    for (const [id, h] of this.coverHolders) {
+    for (const [id, h] of this.anchors.coverHolders) {
       const rr = rateOf.get(id);
       const order: TacticalOrder = {
         kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
@@ -1374,16 +1088,13 @@ export class SwarmCommander {
     this.mission = null;
     this.plan = null;
     this.stage = 'S0';
-    this.battalionCount = 0;
-    this.spawnQueue = [];
-    this.spawnAccum = 0;
+    this.spawn.clear();
     this.corps.pieces = [];
     this.buildFocus.clear();
     this.builtSlots.clear(); this.digPasses.clear();
     this.holeTable.clear();
     this.engAccum = 0;
     this.resendAccum = 0;
-    this.recalledRoster = null;
     this.postureFn.reset(performance.now() / 1000);
     this.battlePosture = 'fortify';
     this.aliveAtPosture = 0;
@@ -1396,7 +1107,7 @@ export class SwarmCommander {
     this.buildAssign.clear();
     this.holdPos.clear();
     this.protectState.clear();
-    this.postAssign.clear();
+    this.anchors.reset();
     this.missionAssign.clear();
     this.postureP = 0;
     this.postureSchedule = 0;

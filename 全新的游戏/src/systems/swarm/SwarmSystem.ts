@@ -42,6 +42,7 @@ import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Directo
 import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
+import { SwarmRecovery } from './SwarmRecovery';
 import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
@@ -166,6 +167,14 @@ export class SwarmSystem {
       if (p.uid <= 0) return;
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
+    });
+    this.recovery = new SwarmRecovery({
+      pool: this.pool,
+      squads: this.squads,
+      tactics: this.tactics,
+      recentHits: this.recentHits,
+      removeAgent: (i, killed, report) => this.removeAgent(i, killed, report),
+      noteRecall: (n) => this.ledger.noteRecall(n),
     });
   }
 
@@ -324,7 +333,7 @@ export class SwarmSystem {
     this.stuckAccum += dt;
     if (this.stuckAccum >= STUCK.CHECK_S) {
       this.stuckAccum = 0;
-      this.stuckTick(now, hooks);
+      this.recovery.tick(now, hooks.activeUnits);
     }
 
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
@@ -715,89 +724,12 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
-  /** ★ 卡死回收：uid → 窗口包围盒 + 计时（豁免：驻守/到位/交战） */
-  private readonly stuck = new Map<number, { minX: number; maxX: number; minZ: number; maxZ: number; t: number }>();
   private stuckAccum = 0;
-  /** 调试计数（每次 stuckTick 重置） */
-  readonly stuckDbg = { exempt: 0, window: 0, tracked: 0, recycled: 0, last: '' };
-
-  /** ★ 卡死回收（STUCK 参数）：代理/队长在窗口内**净活动范围**始终很小 → 自动回收（归还编制）。
-   *  口径从严（宁可错杀，不能放过）：**唯一命令豁免 = 驻守（garrison）**；交火期豁免。
-   *  施工/巡逻不豁免——窗口内有实际位移（包围盒 > BBOX_R）即逃逸；原地摇摆 → 清除。 */
-  private stuckTick(now: number, hooks: SwarmHooks): void {
-    const dbg = this.stuckDbg;
-    dbg.exempt = 0; dbg.window = 0; dbg.tracked = 0; dbg.recycled = 0;
-    const pool = this.pool;
-    for (let i = pool.count - 1; i >= 0; i--) {
-      const uid = pool.swarmUid[i];
-      const squadId = pool.squadId[i];
-      const sq = this.squads.get(squadId);
-      const st = sq ? this.tactics.board.get(squadId) : undefined;
-      if (st?.order.kind === 'garrison') { this.stuck.delete(uid); dbg.exempt++; continue; }   // 驻守命令例外
-      if (pool.noDemoteUntil[i] > now) { this.stuck.delete(uid); dbg.exempt++; continue; }     // 交战中
-      const hitAt = this.recentHits.get(squadId);
-      if (hitAt !== undefined && now - hitAt <= AUTONOMY.SQUAD_ALERT_S) { this.stuck.delete(uid); dbg.exempt++; continue; }
-      const rec = this.stuck.get(uid);
-      if (!rec) {
-        this.stuck.set(uid, { minX: pool.x[i], maxX: pool.x[i], minZ: pool.z[i], maxZ: pool.z[i], t: 0 });
-        continue;
-      }
-      if (pool.x[i] < rec.minX) rec.minX = pool.x[i]; else if (pool.x[i] > rec.maxX) rec.maxX = pool.x[i];
-      if (pool.z[i] < rec.minZ) rec.minZ = pool.z[i]; else if (pool.z[i] > rec.maxZ) rec.maxZ = pool.z[i];
-      rec.t += 1;
-      // 有实际位移（包围盒扩到阈值外）→ 重开窗口（正常行军/换点）
-      dbg.tracked++;
-      if (rec.maxX - rec.minX > STUCK.BBOX_R || rec.maxZ - rec.minZ > STUCK.BBOX_R) {
-        rec.minX = rec.maxX = pool.x[i]; rec.minZ = rec.maxZ = pool.z[i]; rec.t = 0;
-        dbg.window++;
-        continue;
-      }
-      if (rec.t >= STUCK.HOLD_S) {
-        dbg.last = `${sq?.type ?? '?'}${sq?.builders ? '*' : ''}:${st?.order.kind ?? '-'}/${st?.order.mission ?? '-'}`
-          + `@${pool.x[i].toFixed(0)},${pool.z[i].toFixed(0)}`
-          + ` bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`;
-        this.removeAgent(i, true, false);   // 非击杀离场
-        this.ledger.noteRecall(1);           // 归还编制
-        this.stuck.delete(uid);
-        dbg.recycled++;
-      }
-    }
-    // ★ L3 实体同样卡死回收（池循环只覆盖代理；实体不在池里 —— 用户 2026-09-21 指出的漏洞）
-    const units = hooks.activeUnits?.();
-    if (units) {
-      for (let k = units.length - 1; k >= 0; k--) {
-        const u = units[k];
-        const uid = u.swarmUid;
-        if (uid <= 0) { continue; }                                 // 计划外（Boss 等）
-        if (u.isAir) { this.stuck.delete(uid); continue; }          // 飞行不判
-        const squad = this.squads.squadOf(uid);
-        const st = squad ? this.tactics.board.get(squad.id) : undefined;
-        if (st?.order.kind === 'garrison') { this.stuck.delete(uid); dbg.exempt++; continue; }
-        const hitAt = squad ? this.recentHits.get(squad.id) : undefined;
-        if (hitAt !== undefined && now - hitAt <= AUTONOMY.SQUAD_ALERT_S) { this.stuck.delete(uid); dbg.exempt++; continue; }
-        const x = u.position.x, z = u.position.z;
-        const rec = this.stuck.get(uid);
-        if (!rec) {
-          this.stuck.set(uid, { minX: x, maxX: x, minZ: z, maxZ: z, t: 0 });
-          continue;
-        }
-        if (x < rec.minX) rec.minX = x; else if (x > rec.maxX) rec.maxX = x;
-        if (z < rec.minZ) rec.minZ = z; else if (z > rec.maxZ) rec.maxZ = z;
-        rec.t += 1;
-        if (rec.maxX - rec.minX > STUCK.BBOX_R || rec.maxZ - rec.minZ > STUCK.BBOX_R) {
-          rec.minX = rec.maxX = x; rec.minZ = rec.maxZ = z; rec.t = 0;
-          dbg.window++;
-          continue;
-        }
-        dbg.tracked++;
-        if (rec.t >= STUCK.HOLD_S) {
-          u.retire('recycled');   // 实体退役 → enemy_removed(recycled) → 账本 noteRecall（订阅已接）
-          this.stuck.delete(uid);
-          dbg.recycled++;
-        }
-      }
-    }
-    if (this.stuck.size > pool.count + 256) this.stuck.clear();
+  /** ★ 卡死回收（自本类拆出：SwarmRecovery；代理 + L3 实体统一口径） */
+  private readonly recovery: SwarmRecovery;
+  /** 调试计数（每次回收拍重置；转发 SwarmRecovery.dbg） */
+  get stuckDbg(): { exempt: number; window: number; tracked: number; recycled: number; last: string } {
+    return this.recovery.dbg;
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
@@ -1209,7 +1141,7 @@ export class SwarmSystem {
     this.tacticsAccum = 0;
     this.leaderAI.clear();
     this.commander.clear();
-    this.stuck.clear();
+    this.recovery.clear();
     this.stuckAccum = 0;
     this.recentHits.clear();
     this.counterUntil = 0;
