@@ -116,6 +116,24 @@ export class FortifyPlanner {
         this.claims.set(sid, bestSec);
       }
     }
+    // ★ 逐个分配（用户定）：无区队按"**最危险优先**"认领未认领扇区 → 每队必有独立区
+    for (const sid of builderIds) {
+      if (this.claims.has(sid)) continue;
+      let bestSec = -1;
+      let bestV = Infinity;
+      for (let i = 0; i < FORTIFY_SECTORS; i++) {
+        if (used0.has(i)) continue;
+        const v = this.safety[i];
+        if (Number.isFinite(v) && v < bestV) { bestV = v; bestSec = i; }
+      }
+      if (bestSec < 0) {
+        // 安全值还没刷新到的（或全 Infinity）→ 先随便认一个未认领区，刷新后由抢占纠正
+        for (let i = 0; i < FORTIFY_SECTORS; i++) if (!used0.has(i)) { bestSec = i; break; }
+      }
+      if (bestSec < 0) break;   // 8 区已满（队数 > 8）
+      this.claims.set(sid, bestSec);
+      used0.add(bestSec);
+    }
     void doneScore;
   }
 
