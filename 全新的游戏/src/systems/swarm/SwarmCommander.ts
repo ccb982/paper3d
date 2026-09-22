@@ -140,6 +140,8 @@ export class SwarmCommander {
   readonly roster = new RosterController();
   /** ★ §13.3 工事规划（最危险区域选择；工兵循环的第一步） */
   readonly fortify = new FortifyPlanner();
+  /** ★ §13.4 前推里程（棘轮：只增；每拍 +≤0.5m，封顶 frontP 允许值×120m） */
+  private pushM = 0;
   private fortifyAccum = 0;
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
@@ -312,6 +314,7 @@ export class SwarmCommander {
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
     this.spawn.reset();
+    this.pushM = 0;   // ★ 前推里程复位（换落点）
     // ★ 单日节律复位（§3.5）：日程从落地重新走，波次标记/挑衅采样清零
     this.rhythmT = 0;
     this.t01Base = -1;
@@ -402,10 +405,14 @@ export class SwarmCommander {
         const DONE = -0.5;   // ★ 扇区达标线（调参入口；必须在 allDone 前声明）
         // 环带受事态闸门约束：内界 = max(24, 允许离舰 + 8)（门内不许施工）
         const rLo = Math.max(24, this.frontMinD + 8);
-        // ★ 前推（§13.4）：全区达标（连通）后，随 frontP 单调外扩工作面（队数≤8 每队必有区）
-        const allDone = this.fortify.safety.every((v) => Number.isFinite(v) && v >= DONE);
-        const push = allDone ? this.frontP * 60 : 0;
-        const rHi = Math.max(90, rLo + 30) + push;
+        // ★ 前推（§13.4）：**受事态控制 + 棘轮步进**——
+        //   ① 8 区全达标（连通）才推进；② 每拍最多 +0.5m（≤1m/s，不跳变）；③ 封顶 frontP×120m（事态允许）
+        const allDone2 = this.fortify.safety.every((v) => Number.isFinite(v) && v >= DONE);
+        if (allDone2) {
+          const targetPush = this.frontP * 120;
+          this.pushM = Math.min(targetPush, this.pushM + 0.5);
+        }
+        const rHi = Math.max(90, rLo + 30) + this.pushM;
         this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z));
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
@@ -1239,6 +1246,7 @@ export class SwarmCommander {
     this.terrainScore.clear();
     this.passTable.clear();
     this.fortify.clear();
+    this.pushM = 0;
   }
 
   private dispatchMission(): void {
