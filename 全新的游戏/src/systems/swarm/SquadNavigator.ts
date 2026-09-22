@@ -77,8 +77,8 @@ export class SquadNavigator {
     );
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     const stamp = this.stampFn?.() ?? 0;
-    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 12 && now - state.pathAt <= NAV.REFRESH_S
-      && (state.costStamp ?? 0) === stamp) return;   // ★ 阶段二：代价代次变（掩体增删）→ 重算一次偏好
+    // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
+    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 12 && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     // ★ 阶段二：加权寻路（可行性底座 + 掩体/兵种权重）——队长侧；失败回落可行性 BFS
     if (this.weighted && this.feas.readyFor()) {
