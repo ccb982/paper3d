@@ -742,20 +742,17 @@ export class SwarmSystem {
     this.grid.separation(p, i, _sep);
     entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     let dx = p.dirX[i], dz = p.dirZ[i];
-    // ★ 成员级任务目标（工程分块 / 护卫扇区）：**优先作为期望方向**（压过指令原子）
-    const hasTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
-    if (hasTask) {
-      const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
+    // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
+    //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员任务（taskX/Z）不再驱动移动。
+    const squad = this.squads.squadOf(p.swarmUid[i]);
+    const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
+    const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
+    if (lead) {
+      const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
       const td = Math.hypot(tx, tz);
-      if (td > 1.2) {
-        // ★ 基础寻路保证：任务直行遇墙 → 沿 A* 走廊绕行（不再被 steer-escape 原地抵消）
-        const wp = this.taskNav.waypoint(p.swarmUid[i], p.taskX[i], p.taskZ[i], p.x[i], p.z[i]);
-        if (wp) {
-          dx = wp.x - p.x[i]; dz = wp.z - p.z[i];
-          const wd = Math.hypot(dx, dz);
-          if (wd > 0.5) { dx /= wd; dz /= wd; } else { dx = 0; dz = 0; }
-        } else { dx = tx / td; dz = tz / td; }
-      } else { dx = 0; dz = 0; }
+      // 死区 6m：挤在队长身边来回蹭 = 转圈源；到 6m 内即停（分离推挤由后处理承担）
+      if (td > 6) { dx = tx / td; dz = tz / td; }
+      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
       let tx = p.directiveTargetX[i] - p.x[i];
