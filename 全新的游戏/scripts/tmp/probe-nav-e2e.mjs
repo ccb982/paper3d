@@ -40,9 +40,12 @@ const setup = await page.evaluate(() => {
 console.log(`\n== 手动发令 e2e v3 seed=${seed} ==`);
 console.log(`   队=${setup.nSquads} 高地=${setup.nHighs} ${setup.note ?? ''}`);
 for (const t of setup.tasks) console.log(`   命令 #${t.id}: (${t.sx},${t.sz}) → 高地(${t.tx},${t.tz}) h=${t.th}`);
+// ★ 测试保真：封大队所有周期发令（issueChecked 门挡），手动令走 issueOrder 直发；
+//   大队其余（增援/工兵/掩体/结算）照常
+await page.evaluate(() => { window.__commander.issueChecked = () => false; });
 
 const reissue = () => page.evaluate((tasks) => {
-  for (const t of tasks) window.__commander.orderSquad(t.id, { kind: 'advance', target: { x: t.tx, z: t.tz }, seq: 0 }, 30);
+  for (const t of tasks) window.__swarm.issueOrder(t.id, { kind: 'advance', target: { x: t.tx, z: t.tz }, seq: 0 }, 30);
 }, setup.tasks);
 const run = async (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) await page.evaluate((a, b) => window.__ppRun(a, b), 8, 0.05); };
 const trace = [];
