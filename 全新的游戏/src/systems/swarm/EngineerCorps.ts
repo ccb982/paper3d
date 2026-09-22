@@ -158,9 +158,11 @@ export class EngineerCorps {
     return kind === 'cover' || !this.trenchPaused;
   }
 
-  /** 该队是否可施工该类工件（分工过滤 + 暂停过滤） */
-  private allows(squadId: number, kind: 'cover' | 'trench'): boolean {
+  /** 该队是否可施工该类工件（分工过滤 + 暂停过滤）。
+   *  ★ `pri === 0.5`（fortify 注入的"补评分件"）**不受分工限制**——谁近谁做，防战壕班空转。 */
+  private allows(squadId: number, kind: 'cover' | 'trench', pri?: number): boolean {
     if (!this.canWork(kind)) return false;
+    if (pri === 0.5) return true;
     const r = this.roles.get(squadId) ?? 'any';
     return r === 'any' || r === kind;
   }
@@ -174,7 +176,7 @@ export class EngineerCorps {
     if (cur !== undefined && cur < this.pieces.length
       && !this.built.has(keyOf(this.pieces[cur]))
       && !this.gated(this.pieces[cur])
-      && this.allows(squadId, this.pieces[cur].kind)) return cur;
+      && this.allows(squadId, this.pieces[cur].kind, this.pieces[cur].pri)) return cur;
     const claimed = new Set<number>(this.assign.values());
     const pick = (maxD2: number): number => {
       let best = -1, bPri = Infinity, bD = Infinity;
@@ -182,7 +184,7 @@ export class EngineerCorps {
         const q = this.pieces[i];
         if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
         if (this.gated(q)) continue;   // ★ 事态闸门：距舰 < 前沿 → 未解锁
-        if (!this.allows(squadId, q.kind)) continue;
+        if (!this.allows(squadId, q.kind, q.pri)) continue;
         const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
         if (d > maxD2) continue;
         if (q.pri < bPri) { bPri = q.pri; best = i; bD = d; }
@@ -204,7 +206,7 @@ export class EngineerCorps {
     const aidx = this.assign.get(s.id);
     if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
       const aq = this.pieces[aidx];
-      if (aq.kind === 'trench' && this.allows(s.id, aq.kind) && !this.built.has(keyOf(aq))) {
+      if (aq.kind === 'trench' && this.allows(s.id, aq.kind, aq.pri) && !this.built.has(keyOf(aq))) {
         let k0 = 0;
         for (const uid of s.members.keys()) {
           const a = (k0++ / s.members.size) * Math.PI * 2;
@@ -217,7 +219,7 @@ export class EngineerCorps {
     // 焦点驻守：本队正在建的块 → 全员按**静态环列**围到焦点块（无随机抖动）→ 到点站定等挖
     const fidx = this.focus.get(s.id);
     if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
-      && this.allows(s.id, this.pieces[fidx].kind)
+      && this.allows(s.id, this.pieces[fidx].kind, this.pieces[fidx].pri)
       && !this.built.has(keyOf(this.pieces[fidx]))
       && !this.gated(this.pieces[fidx])) {
       const q = this.pieces[fidx];
@@ -249,7 +251,7 @@ export class EngineerCorps {
       const idx = this.assign.get(s.id);
       if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
       if (this.built.has(keyOf(this.pieces[idx])) || this.gated(this.pieces[idx])
-        || !this.allows(s.id, this.pieces[idx].kind)) return false;
+        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return false;
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
@@ -293,7 +295,7 @@ export class EngineerCorps {
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
         && !this.built.has(keyOf(this.pieces[fidx]))
         && !this.gated(this.pieces[fidx])
-        && this.allows(s.id, this.pieces[fidx].kind)) {
+        && this.allows(s.id, this.pieces[fidx].kind, this.pieces[fidx].pri)) {
         const q = this.pieces[fidx];
         for (const m of s.members.values()) {
           if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 36) { piece = q; break; }
@@ -307,7 +309,7 @@ export class EngineerCorps {
             const q = this.pieces[i];
             if (this.built.has(keyOf(q))) continue;
             if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不挖）
-            if (!this.allows(s.id, q.kind)) continue;
+            if (!this.allows(s.id, q.kind, q.pri)) continue;
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
             if (d > 25) continue;
             const pass = this.passes.get(keyOf(q)) ?? 0;
