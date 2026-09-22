@@ -1160,6 +1160,18 @@ export class SwarmCommander {
     return this.terrainScore.blockedAt(x, z);
   }
 
+  /** ★ 局部坡度梯度（执行层坡面优化：上坡必须**从坡正面**=沿梯度/fall line 直上）
+   *  ±2m 中心差分 → 单位化梯度（gx,gz 指向最陡上升方向）+ 坡度幅值 mag；表未就绪 → {0,0,0} */
+  slopeGradAt(x: number, z: number): { gx: number; gz: number; mag: number } {
+    const t = this.passTable;
+    if (!t || !t.ready) return { gx: 0, gz: 0, mag: 0 };
+    const gx = (t.heightAt(x + 2, z) - t.heightAt(x - 2, z)) / 4;
+    const gz = (t.heightAt(x, z + 2) - t.heightAt(x, z - 2)) / 4;
+    const mag = Math.hypot(gx, gz);
+    if (mag < 1e-4) return { gx: 0, gz: 0, mag: 0 };
+    return { gx: gx / mag, gz: gz / mag, mag };
+  }
+
   /** ★ 表分查询（执行层候选方向打分用；未就绪/表外 → null） */
   scoreAt(x: number, z: number): number | null {
     return this.terrainScore.scoreAt(x, z);

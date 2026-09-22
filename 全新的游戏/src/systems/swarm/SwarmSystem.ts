@@ -776,6 +776,20 @@ export class SwarmSystem {
       dx = _atomDir.x;
       dz = _atomDir.z;
     }
+    // ★ 坡面优化（用户定 2026-09-24）：上坡必须**从坡正面**（沿梯度/fall line 直上，不斜切横穿）——
+    //   期望方向含上坡分量且局部坡显著 → 向"最陡上升方向"混合（飞行层豁免）
+    if ((dx !== 0 || dz !== 0) && p.isAir[i] !== 1) {
+      const g = this.commander.slopeGradAt(p.x[i], p.z[i]);
+      if (g.mag > 0.18) {
+        const up = dx * g.gx + dz * g.gz;
+        if (up > 0.15) {   // 正在上坡 → 贴坡正面走
+          dx = dx * 0.4 + g.gx * 0.6;
+          dz = dz * 0.4 + g.gz * 0.6;
+          const l = Math.hypot(dx, dz) || 1;
+          dx /= l; dz /= l;
+        }
+      }
+    }
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
     const inside = this.commander.blockedAt(p.x[i], p.z[i]);
     if (dx !== 0 || dz !== 0 || inside) {
