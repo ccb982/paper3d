@@ -56,6 +56,12 @@ export interface SquadOrderState {
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
 export const ORDER_TTL_DEFAULT = 30;
+/** ★ 使命化 TTL 下限（重构总纲 P3-1；2026-09-22）：分钟级使命/驻守令寿命下限。
+ *  基线观测（seed 4242）：正常 2s 决策拍下到期回落=0——"闪烁"主因是重发噪声（P3-3 节流），
+ *  本下限是**断供保险**：决策拍断供/帧抖动 >3s 也不掉令，使命寿命与使命匹配。 */
+export const MISSION_TTL_FLOOR = 30;
+/** 驻守型（分钟级）使命：build/guard/patrol/rear + 默认 hold（含掩体驻守/岗位） */
+const LONG_LIVED_MISSIONS = new Set(['build', 'guard', 'patrol', 'rear', 'hold']);
 /** 个体指令 TTL（弱权限：短 TTL） */
 export const DIRECTIVE_TTL = 6;
 
@@ -189,8 +195,12 @@ export class SquadTactics {
     const normalized = SquadTactics.normalize(o);
     const notBefore = now + Math.max(0, normalized.startAfter ?? 0);
     const prev = this.board.get(squadId);
+    // ★ 使命化 TTL（P3-1）：驻守型使命/garrison 给寿命下限；推进/队形等瞬时令仍走调用方短 TTL
+    const longLived = normalized.kind === 'garrison'
+      || (normalized.mission !== undefined && LONG_LIVED_MISSIONS.has(normalized.mission));
+    const effTtl = longLived ? Math.max(ttl, MISSION_TTL_FLOOR) : ttl;
     const state: SquadOrderState = {
-      squadId, order: normalized, issuedAt: now, until: now + ttl, source,
+      squadId, order: normalized, issuedAt: now, until: now + effTtl, source,
       notBefore, signal: normalized.signal,
       pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,
     };
@@ -204,9 +214,9 @@ export class SquadTactics {
       if (!normalized.path && prev.order.path) normalized.path = prev.order.path;
     }
     this.board.issue(state);
-    // ★ 命令台账：唯一写口记录（引擎 = mass；队长 = 局部协同）
+    // ★ 命令台账：唯一写口记录（引擎 = mass；队长 = 局部协同；ttl = 生效寿命）
     this.ledger.record(now, squadId, normalized.kind, source,
-      o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, ttl);
+      o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, effTtl);
   }
 
   /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */

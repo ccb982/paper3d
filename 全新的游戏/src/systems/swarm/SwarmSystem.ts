@@ -1087,12 +1087,17 @@ export class SwarmSystem {
     this.tactics.issue(squadId, order, performance.now() / 1000, ttl);
   }
 
+  /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
+  private _orderDrops = 0;
+  get orderDrops(): number { return this._orderDrops; }
+
   /** ★ 步骤 9b：把小队命令分解成个体指令（池写列；实体经 onDirective 推送） */
   private applyOrders(now: number, hooks: SwarmHooks): void {
     for (const squad of this.squads.all()) {
       const state = this.tactics.board.get(squad.id);
       if (!state) continue;
       if (state.until > 0 && now > state.until) {
+        this._orderDrops++;   // ★ P3 观测：命令到期回落本地（使命 TTL 使命化前后对比）
         this.tactics.board.dropSquad(squad.id);   // 命令到期 → 回落本地自主
         continue;
       }
