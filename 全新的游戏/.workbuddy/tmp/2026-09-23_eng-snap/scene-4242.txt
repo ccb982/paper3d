@@ -1,0 +1,121 @@
+图 x∈[286,506] z∈[500,680] 步4m；列标=十位数字
+     99900111223334455566777889990011122333445556677788999001
+ 500 ##BBBB#BBB#####BBBBBBBBB........BBBBBBB.......BBB.......
+ 506 ##BBBB###########BBBBBBB...++....BBBBB........BBB.......
+ 512 ##BBBB###########BBBBBBB.........BBBBBB.................
+ 518 ##BBBB###########BBBBB...........BBBB..BBB.BBB..B....B..
+ 524 #BBBBB#B###BBB###BBBBBB..BB.......BB..BBBB.BBB......BBB+
+ 530 BBBBBBBBB#####BBBBBB...BBBBBBBB.BBBB..BBBB.BBBBBB.....+.
+ 536 BBBBBBBBBBBBBBBBBBBBB.BBBBBBBBB.BBBB...BBB.BBBBBB.....+.
+ 542 BBB##BBBB#BBB#BBBBBBBBBB.BB.BB..BBBB..B.BBBB..BBB.......
+ 548 BBBBBBBBBBBBBBBBBBBBBBBB.BBBBBB.B.BBBBB.BBBB.BBBB.......
+ 554 BBBBBBBBBBB#BBB##BBBBBBB.BBBBB..B.BBBBB.BBBB............
+ 560 BBB##BBBB####B#BBBBBBBBB.BBBB..BBBBBBBB.BBB..BBBB.......
+ 566 ##BBBB########BBBBBB@@.......BBBBBBB.......BBBBBBB....+.
+ 572 ##BBBB###########BBBB.......BBBBBBBBB......BBBBBB....BBB
+ 578 BBB##BBB#####B###BBBB...+...BBBBBBBB.......BBBBBBBBB.B.B
+ 584 BBBBBBBBBB##BBBBBBBBB.......BBBBBBBB...SS..BBBBBB..BBBB.
+ 590 B#BBBB#BBB##BBBBBBBBBB.B.....B.BBBBB.BB.SBBBBSSBB.......
+ 596 BBBBBBBBBBBBBBBBBBBBBBBBBBB....BBBBGGBB.BBBBBBBBB...@@..
+ 602 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB......
+ 608 ...............GG.BB#####################BBB####BB......
+ 614 .......+B+++......BB##########++######P#BB+BB###BB....BB
+ 620 ......+#B##+++....BB##########++######P#BB+BB###SB....BB
+ 626 ++....##B######+++BB##########++#########BBBB###BB......
+ 632 #+...++##B######++BB#########BBBB########BBBB###BB......
+ 638 ++...++BB#######BBBB##########BBBB#########++###BB......
+ 644 ++..+++##########BBB##########BB+BB########++###BB......
+ 650 ....++###B###B##++BB###########BBBB#############BB......
+ 656 .....+##BBB#BBB#++BB############BB#############@BSS.....
+ 662 .......B+BBBBBB+++BB###########################@BB......
+ 668 B.......+#BBB####+BB################BBB#########BB...B.B
+ 674 #+.....++#######BBBB###############BB+BB########BB...BBB
+ 680 BBB....++########BBB###############BB++BB######+BSS.BBBB
+
+[
+ {
+  "id": 2,
+  "n": 3,
+  "x": 445.5,
+  "z": 589.8,
+  "kind": "advance",
+  "tgt": "348,608",
+  "goal": "348,608",
+  "corr": "2点 首435,589 末348,608",
+  "focus": "cover3@348,608",
+  "assign": "cover3@348,608",
+  "tasks": "-|-|-",
+  "near": "cover2@481,601*d38 cover2@478,604*d36 cover2@465,603gd24 cover2@462,606gd23 cover2@459,609gd24 cover2@466,614gd32 cover2@463,616gd32 cover2@461,619gd33"
+ },
+ {
+  "id": 9,
+  "n": 1,
+  "x": 468.9,
+  "z": 588.7,
+  "kind": "advance",
+  "tgt": "428,596",
+  "goal": "428,596",
+  "corr": "2点 首458,588 末428,596",
+  "focus": "cover3@428,596",
+  "assign": "cover3@428,596",
+  "tasks": "-",
+  "near": "cover2@484,598*d18 cover2@481,601*d18 cover2@478,604*d18 cover2@465,603gd15 cover2@462,606gd18 cover2@459,609gd22 cover2@466,614gd25 cover2@463,616gd28"
+ },
+ {
+  "id": 10,
+  "n": 1,
+  "x": 484.4,
+  "z": 653.6,
+  "kind": "advance",
+  "tgt": "474,659",
+  "goal": "0,0",
+  "corr": "-",
+  "focus": "trench1@471,653",
+  "assign": "trench1@471,653",
+  "tasks": "484,629",
+  "near": "cover2@483,670*d17 cover2@480,673*d20 cover2@477,676*d23 cover2@466,683*d34 cover2@463,686*d38 trench1@476,677*d25 cover0@472,673*d23 trench1@473,680*d29"
+ },
+ {
+  "id": 22,
+  "n": 1,
+  "x": 484.3,
+  "z": 681.7,
+  "kind": "advance",
+  "tgt": "484,688",
+  "goal": "484,688",
+  "corr": "2点 首484,692 末484,688",
+  "focus": "cover3@452,700",
+  "assign": "cover3@452,700",
+  "tasks": "463,655",
+  "near": "cover2@483,670*d11 cover2@480,673*d9 cover2@477,676*d8 cover2@466,683*d17 cover2@463,686*d20 cover2@461,688*d24 trench1@476,677*d9 cover0@472,673*d13"
+ },
+ {
+  "id": 23,
+  "n": 2,
+  "x": 478.7,
+  "z": 617.8,
+  "kind": "advance",
+  "tgt": "496,596",
+  "goal": "0,0",
+  "corr": "-",
+  "focus": "cover3@500,592",
+  "assign": "cover3@500,592",
+  "tasks": "-|-",
+  "near": "cover2@484,598*d20 cover2@481,601*d16 cover2@478,604*d13 cover2@484,629*d13 cover2@481,632*d14 cover2@478,635*d17 cover2@478,644*d26 cover2@475,646d29"
+ },
+ {
+  "id": 24,
+  "n": 1,
+  "x": 445.1,
+  "z": 584.7,
+  "kind": "advance",
+  "tgt": "368,564",
+  "goal": "0,0",
+  "corr": "-",
+  "focus": "cover3@368,568",
+  "assign": "cover3@368,568",
+  "tasks": "-",
+  "near": "cover2@478,604*d39 cover2@465,603gd27 cover2@462,606gd27 cover2@459,609gd28 cover2@466,614gd36 cover2@463,616gd37 cover2@461,619gd38 cover3@432,576d15"
+ }
+]
+#2->S3 #9->S1 #10->S0 #22->S2 #23->S7 #24->S4
