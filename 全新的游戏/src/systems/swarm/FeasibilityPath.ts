@@ -28,6 +28,11 @@ export class FeasibilityPath {
     this.table = t;
   }
 
+  /** 表是否就绪（阶段二加权路的前置判断用） */
+  readyFor(): boolean {
+    return !!this.table && this.table.ready;
+  }
+
   /** 可行性 BFS（8 向；有向边位）。ok → out 填稀疏走廊（≤8 路点，含精确终点）。 */
   find(
     sx: number, sz: number, gx: number, gz: number,

@@ -1041,6 +1041,7 @@ export class SwarmSystem {
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
     this.taskNav.setPathTable(t);   // ★ 任务走廊薄层化（可行性寻路）
+    this.nav.stampFn = () => this.commander.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
   }
 
   /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */

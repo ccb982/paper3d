@@ -372,6 +372,11 @@ export class SwarmCommander {
     return this.terrainScore;
   }
 
+  /** ★ 阶段二：代价代次（掩体/地形重评 +1；加权寻路的偏好重算依据） */
+  get pathStamp(): number {
+    return this.scoreStamp;
+  }
+
   /** ★ 调试/探针：掩体校验真源（与队长同源 hasCoverFrom） */
   debugHasCover(tx: number, tz: number, x: number, z: number): boolean {
     return hasCoverFrom(tx, tz, x, z, this.terrainScore);

@@ -81,6 +81,8 @@ export interface SquadOrderState {
   /** ★ 寻路轨：最近一次求解时的质心位（位移 >12m → 从当前位置重算；"目标不变、路径常新"） */
   pathFromX?: number;
   pathFromZ?: number;
+  /** ★ 阶段二：求解时的代价代次（TerrainScore.scoreStamp；掩体增删 → 代次变 → 重算一次偏好） */
+  costStamp?: number;
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */

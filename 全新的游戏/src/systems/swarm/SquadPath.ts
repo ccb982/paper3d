@@ -21,6 +21,7 @@ import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { SLOPE_DH, WALL_DH, SLOPE_COST } from './TerrainScore';
 import { DANGER } from './SwarmDanger';
+import type { PassTable } from './PassTable';
 
 const CELL = 4;
 /** 单次寻路窗口上限（格；120×120 ≈ 480m，超出即拒绝，走直线兜底） */
@@ -44,6 +45,10 @@ const DEEP_WATER = 0.8;
 const SQRT2 = Math.SQRT2;
 
 export class SquadPathFinder {
+  /** ★ 阶段二：可行性表（有表 → 边判定读表：绝对墙/单向边同源；代价仍是加权） */
+  private table: PassTable | null = null;
+  setTable(t: PassTable | null): void { this.table = t; }
+
   private cols = 0;
   private rows = 0;
   /** 窗口左上角（世界 4m 格坐标） */
@@ -178,7 +183,12 @@ export class SquadPathFinder {
           if (dx !== 0 && dz !== 0
             && (blocked[iz * cols + nx] || blocked[nz * cols + ix])) continue;
           const dh = height[nb] - hCur;
-          if (dh > WALL_STEP) continue;                      // 陡升 = 墙（不能爬崖）
+          // ★ 阶段二：有表 → 有向边位（绝对墙/单向边=表口径）；无表 → 旧口径
+          if (this.table && this.table.ready) {
+            const wx = (this.ox + ix) * CELL + CELL / 2;
+            const wz = (this.oz + iz) * CELL + CELL / 2;
+            if (!this.table.canStep(wx, wz, dx, dz)) continue;
+          } else if (dh > WALL_STEP) continue;                      // 陡升 = 墙（不能爬崖）
           let step = (dx !== 0 && dz !== 0 ? SQRT2 : 1) * cost[nb];
           if (dh > 0) step += dh * COST_CLIMB;
           else step += -dh * COST_DROP;                      // 下落放行（轻微加价）
