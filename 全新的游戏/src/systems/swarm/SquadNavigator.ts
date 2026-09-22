@@ -82,7 +82,7 @@ export class SquadNavigator {
     // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
     if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 6 && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
-    // ★ 阶段二：贪心局部段（动态半径 6/12/18；更近+更安全即可，不求最优）——队长侧
+    // ★ 队长走廊：LOS 10m 短路 + 贪心校验（一次一跳、滚动重算；不求最优）——队长侧
     if (this.weighted && this.feas.readyFor()) {
       const best = this.greedyStep(squad.type, this._centroid.x, this._centroid.z, tgt.x, tgt.z);
       if (best) {
@@ -300,7 +300,7 @@ export class SquadNavigator {
     }
   }
 
-  /** ★ 贪心局部段（动态半径）：先小后大；候选 = 更近（推进>0.5m）+ 更安全（掩体/战壕折扣） */
+  /** ★ LOS 10m 短路 + 贪心校验：先小后大（10→6）；候选 = LOS 可走 + 更近（推进>0.5m）+ 更安全（掩体/战壕折扣） */
   private greedyStep(
     type: string, cx: number, cz: number, tx: number, tz: number,
   ): { x: number; z: number } | null {
@@ -321,40 +321,9 @@ export class SquadNavigator {
         const s = W_ADV * adv + W_SAFE * (1 - mul);
         if (s > bestS) { bestS = s; best = { x, z }; }
       }
-      if (best) return best;   // 小半径有解 → 不放大了
+      if (best) return best;   // 10m 有解 → 不放 6m
     }
     return null;
-  }
-
-  /** ★ 贪心校验选优（用户定 2026-09-23）：先有用路（BFS 可行走廊）→ 逐点贪心偏移；
-   *  候选必须**仍可走**（对前一保留点/后一路点做 walkableLine 双校验），只选更安全（掩体）的点。 */
-  private greedyRefine(type: string, path: { x: number; z: number }[]): { x: number; z: number }[] {
-    if (path.length < 3) return path;
-    const out = path.slice();
-    for (let i = 1; i < out.length - 1; i++) {
-      const prev = out[i - 1];
-      const next = out[i + 1];
-      const base = out[i];
-      let best = base;
-      let bestS = this.safetyOf(type, base);
-      for (let k = 0; k < 8; k++) {
-        const a = (k * Math.PI) / 4;
-        const cx = Math.round((base.x + Math.cos(a) * 4) / 2) * 2;
-        const cz = Math.round((base.z + Math.sin(a) * 4) / 2) * 2;
-        if (!this.feas.walkableLine(prev.x, prev.z, cx, cz)) continue;   // 前向仍可走
-        if (!this.feas.walkableLine(cx, cz, next.x, next.z)) continue;   // 后向仍可走
-        const s = this.safetyOf(type, { x: cx, z: cz });
-        if (s > bestS + 0.02) { bestS = s; best = { x: cx, z: cz }; }
-      }
-      out[i] = best;
-    }
-    return out;
-  }
-
-  /** 安全分（越大越安全；掩体/战壕折扣 0.6~1 取反） */
-  private safetyOf(type: string, p: { x: number; z: number }): number {
-    const mul = this.pathMul?.(type, p.x, p.z) ?? 1;
-    return 1 - mul;
   }
 
   /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */
