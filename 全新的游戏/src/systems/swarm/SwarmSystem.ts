@@ -780,7 +780,8 @@ export class SwarmSystem {
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);
         if (role === 'pit' && h < DANGER.PIT_H) return true;
-        return h - here > DANGER.PROBE_RISE;   // 连续陡坡（≈40°+）也是墙
+        // ★ N1：坡是正常通路（不否决；坡度只减速）。离散硬边/悬崖已由可行性表拦在走廊外。
+        return false;
       };
       const res = pickSteer(
         p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,

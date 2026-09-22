@@ -62,10 +62,7 @@ export class EnemyLocomotion {
     if (role === 'pit') return true;
     if (h < -1.2) return true;
     if (role === 'liquid') return false;   // ★ 水域允许站立/涉水
-    const here = raster.surfaceHeightAtFor(px, pz, py);
-    const dist = Math.hypot(x - px, z - pz) || 1;
-    const ux = (x - px) / dist, uz = (z - pz) / dist;
-    const hFar = raster.surfaceHeightAtFor(px + ux * 1.2, pz + uz * 1.2, py);
-    return hFar - here > EnemyLocomotion.STEEP_RISE;   // 连续陡坡 = 墙
+    // ★ N1：坡是正常通路（不否决）。离散硬边/悬崖已由可行性表拦在走廊外。
+    return false;
   }
 }
