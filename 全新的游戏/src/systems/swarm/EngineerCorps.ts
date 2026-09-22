@@ -159,10 +159,10 @@ export class EngineerCorps {
   }
 
   /** 该队是否可施工该类工件（分工过滤 + 暂停过滤）。
-   *  ★ `pri === 0.5`（fortify 注入的"补评分件"）**不受分工限制**——谁近谁做，防战壕班空转。 */
+   *  ★ `pri >= 3`（fortify 注入的"补评分件"）**不受分工限制**——谁近谁做，防战壕班空转。 */
   private allows(squadId: number, kind: 'cover' | 'trench', pri?: number): boolean {
     if (!this.canWork(kind)) return false;
-    if (pri === 0.5) return true;
+    if (pri !== undefined && pri >= 3) return true;
     const r = this.roles.get(squadId) ?? 'any';
     return r === 'any' || r === kind;
   }
@@ -185,6 +185,7 @@ export class EngineerCorps {
         if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
         if (this.gated(q)) continue;   // ★ 事态闸门：距舰 < 前沿 → 未解锁
         if (!this.allows(squadId, q.kind, q.pri)) continue;
+        if (this.lineBlocked(cx, cz, q.x, q.z)) continue;   // ★ 直线被墙挡 → 不派（防绕障打转/傻站）
         const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
         if (d > maxD2) continue;
         if (q.pri < bPri) { bPri = q.pri; best = i; bD = d; }
@@ -249,9 +250,9 @@ export class EngineerCorps {
     if (near.length === 0) {
       // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
       const idx = this.assign.get(s.id);
-      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
+      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return this.pinInPlace(s);
       if (this.built.has(keyOf(this.pieces[idx])) || this.gated(this.pieces[idx])
-        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return false;
+        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return this.pinInPlace(s);
       const q = this.pieces[idx];
       for (const uid of s.members.keys()) {
         this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
@@ -347,6 +348,16 @@ export class EngineerCorps {
         else this.passes.set(k, pass);
       }
     }
+  }
+
+  /** ★ 无活可干 → **钉在原地**（任务=当前位置；防无任务乱走/绕圈——"工兵傻掉"主因）。
+   *  下一拍有新活会被正常改写。 */
+  private pinInPlace(s: TaskSquad): boolean {
+    for (const [uid, m] of s.members) {
+      this.board.write(uid, Math.round(m.x * 10) / 10, Math.round(m.z * 10) / 10);
+    }
+    this.board.own(s.id);
+    return true;
   }
 
   /** 直行可达性：从 (x0,z0) 直线到工件是否跨硬墙（每 1.5m 一采样）。

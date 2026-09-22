@@ -28,7 +28,7 @@ export class FortifyPlanner {
   /** 各队当前施工点 */
   readonly spots = new Map<number, FortifyPick & { sector: number }>();
   private cursor = 0;
-  readonly dbg = { sweeps: 0, injected: 0, assigned: '-' };
+  readonly dbg = { sweeps: 0, injected: 0, connected: 0, assigned: '-' };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（环带 [rLo,rHi]；角度 [si,si+1)/8·2π） */
   refreshOne(
@@ -58,11 +58,29 @@ export class FortifyPlanner {
     this.dbg.sweeps++;
   }
 
-  /** 分配：每队取"未被认领的最低安全值扇区"；扇区达标（≥doneScore）→ 释放换下一个。
-   *  顺带产出各队施工点（spots）。 */
+  /** 分配：每队取"未被认领的最低安全值扇区"（**一区一队**）；**仅在队阵亡时释放**——
+   *  达标也不放（继续在本区随机取样造，见 Commander）。顺带产出"低于达标线"队的施工点（spots）。 */
   assign(builderIds: readonly number[], doneScore = 0): void {
+    const alive = new Set(builderIds);
+    for (const [sid] of [...this.claims]) {
+      if (!alive.has(sid)) this.claims.delete(sid);   // 阵亡 → 释放（达标不释放：继续补）
+    }
+    const used0 = new Set(this.claims.values());
+    // ★ 抢占换区（"干到引擎调走"）：存在**未认领且明显更危险（低 ≥ MARGIN）**的扇区 → 调队过去；否则一直干
+    const MARGIN = 1.0;
     for (const [sid, sec] of [...this.claims]) {
-      if (this.safety[sec] >= doneScore) this.claims.delete(sid);   // 该区已修好 → 释放
+      let bestSec = -1;
+      let bestV = this.safety[sec] - MARGIN;
+      for (let i = 0; i < FORTIFY_SECTORS; i++) {
+        if (used0.has(i)) continue;
+        const v = this.safety[i];
+        if (Number.isFinite(v) && v < bestV) { bestV = v; bestSec = i; }
+      }
+      if (bestSec >= 0) {
+        used0.delete(sec);
+        used0.add(bestSec);
+        this.claims.set(sid, bestSec);
+      }
     }
     const used = new Set(this.claims.values());
     this.spots.clear();
@@ -87,6 +105,23 @@ export class FortifyPlanner {
     }
     this.dbg.assigned = [...this.spots].map(([id, p]) =>
       `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
+  }
+
+  /** ★ 连通阶段（§13.4）：相邻扇区**均已达标** → 两点之间取中点注入连接战壕（把工事连成一片）。
+   *  @param cap 本次最多返回几个连接点（调用方限流） */
+  connect(doneScore = 0, cap = 1): { x: number; z: number }[] {
+    const out: { x: number; z: number }[] = [];
+    for (let i = 0; i < FORTIFY_SECTORS && out.length < cap; i++) {
+      const j = (i + 1) % FORTIFY_SECTORS;
+      if (!Number.isFinite(this.safety[i]) || !Number.isFinite(this.safety[j])) continue;
+      if (this.safety[i] < doneScore || this.safety[j] < doneScore) continue;
+      const a = this.worst[i];
+      const b = this.worst[j];
+      if (!Number.isFinite(a.score) || !Number.isFinite(b.score)) continue;
+      if (Math.hypot(a.x - b.x, a.z - b.z) > 40) continue;   // 距离过远不连
+      out.push({ x: Math.round((a.x + b.x) / 8) * 4, z: Math.round((a.z + b.z) / 8) * 4 });
+    }
+    return out;
   }
 
   clear(): void {

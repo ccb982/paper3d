@@ -29,7 +29,7 @@ import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
-import { FortifyPlanner } from './FortifyPlanner';
+import { FortifyPlanner, FORTIFY_SECTORS } from './FortifyPlanner';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -405,19 +405,54 @@ export class SwarmCommander {
         this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z));
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
-        this.fortify.assign(builders.map((s) => s.id), 0);
+        const DONE = -0.5;   // ★ 扇区达标线（调参入口）
+        this.fortify.assign(builders.map((s) => s.id), DONE);
+        // ★ 达标也继续造（不空闲）：认领队在本扇区**随机取样**继续补评分
+        for (const [sid, sec] of this.fortify.claims) {
+          if (this.fortify.spots.has(sid)) continue;
+          const a0 = (sec / FORTIFY_SECTORS) * Math.PI * 2;
+          const a1 = ((sec + 1) / FORTIFY_SECTORS) * Math.PI * 2;
+          for (let tries = 0; tries < 6; tries++) {
+            const a = a0 + Math.random() * (a1 - a0);
+            const rr = rLo + Math.random() * (rHi - rLo);
+            const x = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
+            const z = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
+            if (this.terrainScore.scoreAt(x, z) === null) continue;
+            this.fortify.spots.set(sid, { x, z, score: 0, sector: sec });
+            break;
+          }
+        }
         // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
         // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
         let injected = 0;
+        // ★ 设计（用户定）：引擎把**区域任务**派给队 → 队在该区域**持续干**（永远不缺活）。
+        //   本区（40m 内）无未建件 → 立刻补一件；已建点 8m 内不再重复（扇区内随机另选点）。
         for (const [, p] of this.fortify.spots) {
-          const near = this.corps.pieces.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 8);
-          const busy = this.corps.pieces.some((q) => q.pri <= 1 && !this.corps.built.has(`${q.x},${q.z}`)
-            && Math.hypot(q.x - p.x, q.z - p.z) < 40);
-          if (!near && !busy && injected < 1) {
-            this.corps.pieces.push({ kind: 'cover', x: p.x, z: p.z, ring: 2, pri: 0.5 });
-            injected++;
-            this.fortify.dbg.injected++;
+          if (injected >= 1 || this.fortify.dbg.injected >= 200) break;
+          const pending = this.corps.pieces.some((q) => !this.corps.built.has(`${q.x},${q.z}`)
+            && !this.corps.gated(q) && Math.hypot(q.x - p.x, q.z - p.z) < 40);
+          if (pending) continue;
+          let sx2 = p.x, sz2 = p.z;
+          if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < 8)) {
+            const a0 = (p.sector / FORTIFY_SECTORS) * Math.PI * 2;
+            const a1 = ((p.sector + 1) / FORTIFY_SECTORS) * Math.PI * 2;
+            const a = a0 + Math.random() * (a1 - a0);
+            const rr = rLo + Math.random() * (rHi - rLo);
+            sx2 = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
+            sz2 = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
+            if (this.terrainScore.scoreAt(sx2, sz2) === null) continue;
           }
+          this.corps.pieces.push({ kind: 'cover', x: sx2, z: sz2, ring: 2, pri: 3 });
+          injected++;
+          this.fortify.dbg.injected++;
+        }
+        // ★ 连通阶段（§13.4）：相邻扇区都达标 → 串 trench 连成一片（每拍 ≤1）
+        for (const m of this.fortify.connect(DONE, 1)) {
+          const near = this.corps.pieces.some((q) => Math.hypot(q.x - m.x, q.z - m.z) < 8);
+          if (near) continue;
+          if (this.terrainScore.scoreAt(m.x, m.z) === null) continue;
+          this.corps.pieces.push({ kind: 'trench', x: m.x, z: m.z, ring: 2, pri: 0.6 });
+          this.fortify.dbg.connected++;
         }
       }
     }
@@ -824,7 +859,8 @@ export class SwarmCommander {
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        this.corps.spreadBuilders(s, scx, scz);
+        // ★ 无活可派（附近无未建块/已建完）→ 清旧任务，不许钉在旧点上干杵（"造完就呆"）
+        if (!this.corps.spreadBuilders(s, scx, scz)) this.memberTasks.clear(s);
       } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         ctx.buildTarget = null;
         // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）

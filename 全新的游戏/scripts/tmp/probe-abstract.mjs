@@ -109,7 +109,7 @@ const snapPage = (page) => page.evaluate(() => {
     taskNavDbg: sw.memberNavDbg ?? null,
     pass: sw.commander.passTable?.stats ?? null,
     roster: (() => { const r = sw.commander.roster; return r ? { ...r.counts, total: r.dbg.total, gap: r.dbg.gap, gapVal: r.dbg.gapVal } : null; })(),
-    fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), assigned: f.dbg.assigned }; })(),
+    fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, connected: f.dbg.connected, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), claims: [...f.claims].map(([id, s2]) => `#${id}→区${s2}`).join(' '), assigned: f.dbg.assigned }; })(),
     stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
@@ -227,6 +227,26 @@ const snapPage = (page) => page.evaluate(() => {
       }
       return { gar, tot, cov };
     })(),
+    // ★ 工兵位置快照（500ms 采样）：路径/净移/比/停滞/当前任务/是否钉在任务点
+    engTrk: (() => {
+      const out = [];
+      const c2 = window.__commander;
+      for (const [uid, a] of (window.__engTrk || new Map())) {
+        if (a.length < 4) continue;
+        let path = 0, stall = 0;
+        for (let i = 1; i < a.length; i++) {
+          const d = Math.hypot(a[i][0] - a[i - 1][0], a[i][1] - a[i - 1][1]);
+          path += d;
+          if (d < 0.3) stall++;
+        }
+        const net = Math.hypot(a[a.length - 1][0] - a[0][0], a[a.length - 1][1] - a[0][1]);
+        const last = a[a.length - 1];
+        const t = c2.memberTasks?.taskOf?.(uid) ?? null;
+        const atTask = t ? +Math.hypot(t.x - last[0], t.z - last[1]).toFixed(1) : null;
+        out.push({ uid, path: +path.toFixed(0), net: +net.toFixed(0), ratio: +(path / Math.max(net, 0.5)).toFixed(1), stall, n: a.length, x: last[0], z: last[1], task: t ? `${t.x | 0},${t.z | 0}` : '-', atTask });
+      }
+      return out;
+    })(),
     // ★ 转圈指数（工兵）：跨快照累计路径长/净位移 + 成员任务目标翻转次数
     bTrack: (() => {
       const trk = window.__bTrk || (window.__bTrk = new Map());
@@ -268,7 +288,19 @@ for (const seed of seeds) {
   // ★ 高频任务翻转监控（400ms；15s 快照会漏掉 2s 级抖动）
   await page.evaluate(() => {
     window.__taskMonFlips = 0;
+    window.__engTrk = new Map();   // ★ 工兵位置快照（500ms）
     const c = window.__commander, sw = window.__swarm;
+    setInterval(() => {
+      for (const s of sw.squads.all()) {
+        if (!s.builders) continue;
+        for (const [uid, m] of s.members) {
+          let a = window.__engTrk.get(uid);
+          if (!a) { a = []; window.__engTrk.set(uid, a); }
+          a.push([+m.x.toFixed(1), +m.z.toFixed(1)]);
+          if (a.length > 400) a.shift();
+        }
+      }
+    }, 500);
     const prev = new Map();
     setInterval(() => {
       for (const s of sw.squads.all()) {
@@ -317,7 +349,7 @@ for (const seed of seeds) {
     const ro = s.roster;
     if (ro) console.log(`   编制(13.1) 盾${ro.shield} 突${ro.assault} 远${ro.ranged} 后${ro.logistics} 工${ro.builder} 总${ro.total} 缺口=${ro.gap}${ro.gapVal ? `(${ro.gapVal})` : ''}`);
     const fo = s.fortify;
-    if (fo) console.log(`   工事(13.3) 扫描=${fo.sweeps} 注入=${fo.injected} 安全值=[${fo.safety.map((v) => v === null ? '-' : v).join(',')}] ${fo.assigned}`);
+    if (fo) console.log(`   工事(13.3) 扫描=${fo.sweeps} 注入=${fo.injected} 连通=${fo.connected} 认领[${fo.claims}] 安全值=[${fo.safety.map((v) => v === null ? '-' : v).join(',')}] ${fo.assigned}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {
@@ -329,6 +361,10 @@ for (const seed of seeds) {
     console.log(`        工兵: ${B || '(无)'}`);
     console.log(`        可达 dT均=${s.reach.dTMean}m dTmax=${s.reach.dTMax}m dP均=${s.reach.dPMean}m dPmin=${s.reach.dPMin}m(施工<5m) cd=[${s.cds}] 高频翻转=${s.monFlips}`);
     if (s.bTrack) console.log(`        转圈 n=${s.bTrack.n} 路径=${s.bTrack.path}m 净移=${s.bTrack.net}m 比=${s.bTrack.ratio} 任务翻转=${s.bTrack.flips}`);
+    if (s.engTrk && s.engTrk.length) {
+      const top = [...s.engTrk].sort((a, b) => b.path - a.path).slice(0, 6);
+      console.log('        工兵轨迹 ' + top.map((e) => `#${e.uid} 路径${e.path}/净${e.net}=${e.ratio} 停滞${e.stall}/${e.n} 位${e.x},${e.z} 任务${e.task}(离${e.atTask})`).join(' | '));
+    }
     console.log(`        远程: ${R || '(无)'}`);
     if (k === 3) {
       const st = s.strat;
