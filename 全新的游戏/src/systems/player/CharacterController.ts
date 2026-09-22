@@ -45,8 +45,8 @@ export class CharacterController {
   private jumpOffset = 0;
   private onGround = true;
   /** ★ 跳跃初速 / 重力。★ 空格跳跃真实高度 = jumpSpeed²/(2·gravity) = 0.8
-   *   （2026-09-06 用户定：跳跃高度改 0.8；配合 EDGE_CLIFF_BAND=0.5，
-   *   0.5 以上的地形差距直接跨越） */
+   *   （2026-09-06 用户定：跳跃高度改 0.8；配合 EDGE_CLIFF_BAND=0.6，
+   *   0.6 以上的地形差距直接跨越） */
   jumpSpeed = 0;
   gravity = 12;
   /** ★ 真实贴地（世界每帧回填：角色脚底已贴合地表）。false = 悬空/未落地。

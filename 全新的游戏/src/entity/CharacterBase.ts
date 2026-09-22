@@ -174,8 +174,8 @@ export abstract class CharacterBase extends EntityBase {
       p.y = this.airborneStandY + this.controller.getHeightOffset();
     } else {
       // ★ 落地态：刷新站立基准；cliff（大落差）水平阻挡仅落地态适用——
-      //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.5) 以上 → 回退，
-      //   0.5 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
+      //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.6) 以上 → 回退，
+      //   0.6 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
       if (!this.climbAnyTerrain && gy - p.y > EDGE_CLIFF_BAND) {
         p.x = prevX;

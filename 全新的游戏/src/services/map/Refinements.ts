@@ -40,8 +40,10 @@ export type EdgeRuling = "weld" | "cliff";
  * ★ 2026-08-31 起：edgeRuling 默认引擎已恒 cliff（插值=显式 opt-in），
  *   本常量不参与裁决（默认世界全硬边界）；仅供移动层阻挡阈值与未来
  *   smooth opt-in 高度差判断储备。
+ * ★ 2026-09-22 用户定：敌人须能上"落差 ≤0.6m 的硬边" → 0.5 → 0.6。
+ *   CharacterBase（isWall+回退）、SquadPath.WALL_STEP、危险探测口径同步 0.6。
  */
-export const EDGE_CLIFF_BAND = 0.5;
+export const EDGE_CLIFF_BAND = 0.6;
 
 /**
  * ★ weld 斜坡带宽（米，默认 = 块宽 1/3）。可配层级（由粗到细）：

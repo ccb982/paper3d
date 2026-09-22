@@ -26,18 +26,59 @@ const snapPage = (page) => page.evaluate(() => {
   for (const s of sw.squads.all()) {
     if (!s.builders) continue;
     let tc = 0, tt = 0, tn = 0;
-    for (const uid of s.members.keys()) {
+    const tks = [];
+    for (const [uid, m2] of s.members) {
       const t = c.memberTasks.taskOf(uid);
-      if (!t) { tn++; continue; }
+      if (!t) { tn++; tks.push('-'); continue; }
       const k = pieceKindNear(t.x, t.z);
       if (k === 'cover') tc++; else if (k === 'trench') tt++; else tn++;
+      tks.push(`${Math.round(t.x)},${Math.round(t.z)}`);
     }
     const fidx = c.corps.focus.get(s.id);
+    const aidx = c.corps.assign.get(s.id);
     builders.push({
       id: s.id, role: c.builderRoles.get(s.id) ?? '?', n: s.members.size,
       focus: fidx !== undefined && c.buildPieces[fidx] ? c.buildPieces[fidx].kind : '-',
+      assign: aidx !== undefined && aidx >= 0 && c.buildPieces[aidx]
+        ? `${aidx}:${c.buildPieces[aidx].kind}${c.corps.built.has(`${c.buildPieces[aidx].x},${c.buildPieces[aidx].z}`) ? '*built' : ''}${c.corps.gated(c.buildPieces[aidx]) ? '*gated' : ''}` : '-',
       taskCover: tc, taskTrench: tt, taskNone: tn,
+      tasks: tks.join('|'),
     });
+  }
+  // ★ 施工可达证据：成员→自己任务距离 / 成员→最近未建未锁件距离（<5m construct 才动手）
+  const reach = { dTMax: 0, dTMean: 0, dPMean: 0, dPMin: 1e9, n: 0 };
+  {
+    let tSum = 0, tN = 0, pSum = 0, pN = 0;
+    for (const s of sw.squads.all()) {
+      if (!s.builders) continue;
+      for (const [uid, m2] of s.members) {
+        const t = c.memberTasks.taskOf(uid);
+        if (t) {
+          const d = Math.hypot(t.x - m2.x, t.z - m2.z);
+          tSum += d; tN++;
+          if (d > reach.dTMax) reach.dTMax = d;
+        }
+        let bp = 1e9;
+        for (const q of c.buildPieces) {
+          if (c.corps.built.has(`${q.x},${q.z}`)) continue;
+          if (c.corps.gated(q)) continue;
+          const d2 = Math.hypot(q.x - m2.x, q.z - m2.z);
+          if (d2 < bp) bp = d2;
+        }
+        pSum += bp; pN++;
+        if (bp < reach.dPMin) reach.dPMin = bp;
+      }
+    }
+    reach.dTMean = tN ? +(tSum / tN).toFixed(1) : 0;
+    reach.dTMax = +reach.dTMax.toFixed(1);
+    reach.dPMean = pN ? +(pSum / pN).toFixed(1) : 0;
+    reach.dPMin = reach.dPMin > 1e8 ? -1 : +reach.dPMin.toFixed(1);
+    reach.n = tN;
+  }
+  const cds = [];
+  for (const s of sw.squads.all()) {
+    if (!s.builders) continue;
+    cds.push(`${s.id}:${(c.buildCds.get(s.id) ?? 0).toFixed(1)}`);
   }
   const front = { x: c.plan.cx + c.plan.approachX * 40, z: c.plan.cz + c.plan.approachZ * 40 };
   const pm = window.__ppMode().player.position;
@@ -68,6 +109,7 @@ const snapPage = (page) => page.evaluate(() => {
     pObj: sw.commander.protectAssign.size,
     pri: priBuilt.join(' '), passes: c.digPasses.size,
     builders, ranged, coverHolders: c.coverHolders.size,
+    reach, cds: cds.join(' '), monFlips: window.__taskMonFlips | 0,
     // ★ L3 兵种分分化（重构 P1）：特征冠军格×四兵种矩阵 + 与 scoreAt parity
     strat: (() => {
       const t = c.terrainScore, px = pm.x, pz = pm.z;
@@ -176,6 +218,30 @@ const snapPage = (page) => page.evaluate(() => {
       }
       return { gar, tot, cov };
     })(),
+    // ★ 转圈指数（工兵）：跨快照累计路径长/净位移 + 成员任务目标翻转次数
+    bTrack: (() => {
+      const trk = window.__bTrk || (window.__bTrk = new Map());
+      let pathSum = 0, netSum = 0, flips = 0, n = 0;
+      for (const s of sw.squads.all()) {
+        if (!s.builders || s.members.size === 0) continue;
+        for (const [uid, m] of s.members) {
+          const t = c.memberTasks.taskOf(uid);
+          const tk = t ? `${t.x},${t.z}` : '-';
+          let o = trk.get(uid);
+          if (!o) { trk.set(uid, { x: m.x, z: m.z, sx: m.x, sz: m.z, path: 0, tk, flips: 0, snaps: 0 }); continue; }
+          o.path += Math.hypot(m.x - o.x, m.z - o.z);
+          o.x = m.x; o.z = m.z; o.snaps++;
+          if (tk !== o.tk) { o.flips++; o.tk = tk; }
+          if (o.snaps >= 3) {
+            pathSum += o.path;
+            netSum += Math.hypot(o.x - o.sx, o.z - o.sz);
+            flips += o.flips;
+            n++;
+          }
+        }
+      }
+      return n ? { n, path: +pathSum.toFixed(1), net: +netSum.toFixed(1), ratio: +(pathSum / Math.max(netSum, 0.1)).toFixed(1), flips } : null;
+    })(),
   };
 });
 
@@ -190,6 +256,23 @@ for (const seed of seeds) {
   await new Promise((r) => setTimeout(r, 4000));
   await page.evaluate(() => window.__ppMode().finishDock());
   await page.waitForFunction('!!window.__commander', { timeout: 120000 });
+  // ★ 高频任务翻转监控（400ms；15s 快照会漏掉 2s 级抖动）
+  await page.evaluate(() => {
+    window.__taskMonFlips = 0;
+    const c = window.__commander, sw = window.__swarm;
+    const prev = new Map();
+    setInterval(() => {
+      for (const s of sw.squads.all()) {
+        if (!s.builders) continue;
+        for (const [uid] of s.members) {
+          const t = c.memberTasks.taskOf(uid);
+          const k = t ? `${t.x},${t.z}` : '-';
+          if (prev.has(uid) && prev.get(uid) !== k) window.__taskMonFlips++;
+          prev.set(uid, k);
+        }
+      }
+    }, 400);
+  });
   const run = async (ms) => {
     const t0 = Date.now();
     while (Date.now() - t0 < ms) await page.evaluate((a, b) => window.__ppRun(a, b), 8, 0.1);
@@ -198,7 +281,7 @@ for (const seed of seeds) {
   for (let k = 0; k < 4; k++) {
     await run(15000);
     const s = await snapPage(page);
-    const B = s.builders.map((b) => `${b.id}:${b.role}[f=${b.focus},tc=${b.taskCover},tt=${b.taskTrench},tn=${b.taskNone}]`).join(' ');
+    const B = s.builders.map((b) => `${b.id}:${b.role}[f=${b.focus},a=${b.assign},tc=${b.taskCover},tt=${b.taskTrench},tn=${b.taskNone}]t=[${b.tasks}]`).join(' ');
     const R = s.ranged.map((r) => `#${r.id}:${r.kind}/${r.src} dP=${r.dPlayer} dF=${r.dFront}`).join(' ');
     const c = s.cmd; const kinds = Object.entries(c.kinds).map(([k, v]) => `${k}:${v}`).join(' ');
     console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} ent=${s.ent} pool=${s.pool} 回收=${s.dbgR}/追踪=${s.dbgT} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
@@ -212,6 +295,8 @@ for (const seed of seeds) {
     console.log(`   事态闸门 frontP=${+s.fg.frontP.toFixed(3)} 允许离舰=${+s.fg.minD.toFixed(1)}m 越界命令=${over}/队 实体停滞=${s.entStillMax}s 到期回落=${s.drops} 保护堆挤=${s.pStack}/锚(对象${s.pObj})`);
     for (const e of s.cmdRear) console.log(`   cmd #${e.squadId} ${e.kind}${e.mission ? '(' + e.mission + ')' : ''} @${+e.tx.toFixed(0)},${+e.tz.toFixed(0)} ${e.source} ttl=${e.ttl} (x${e.n})`);
     console.log(`        工兵: ${B || '(无)'}`);
+    console.log(`        可达 dT均=${s.reach.dTMean}m dTmax=${s.reach.dTMax}m dP均=${s.reach.dPMean}m dPmin=${s.reach.dPMin}m(施工<5m) cd=[${s.cds}] 高频翻转=${s.monFlips}`);
+    if (s.bTrack) console.log(`        转圈 n=${s.bTrack.n} 路径=${s.bTrack.path}m 净移=${s.bTrack.net}m 比=${s.bTrack.ratio} 任务翻转=${s.bTrack.flips}`);
     console.log(`        远程: ${R || '(无)'}`);
     if (k === 3) {
       const st = s.strat;
@@ -224,6 +309,8 @@ for (const seed of seeds) {
       console.log(`   站位 ${bt}`);
       const cc = s.covCheck;
       console.log(`   掩体校验(队长真源) 驻守/防守队=${cc.gar} 成员覆盖=${cc.cov}/${cc.tot}${cc.tot ? ` (${(cc.cov / cc.tot * 100).toFixed(0)}%)` : ''}`);
+      const bt2 = s.bTrack;
+      if (bt2) console.log(`   转圈指数(工兵) n=${bt2.n} 路径=${bt2.path}m 净移=${bt2.net}m 比=${bt2.ratio} 任务翻转=${bt2.flips}`);
     }
   }
   await page.close();

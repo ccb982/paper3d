@@ -166,7 +166,9 @@ export class EngineerCorps {
   }
 
   /** 队级分派：保持已派未建块；否则按 **pri 施工优先级** 挑最近未认领块（限本班工件类）。
-   *  选择链：前线掩体（0）→ 战壕（1）→ 环掩体（2）；同 pri 取最近。 */
+   *  选择链：前线掩体（0）→ 战壕（1）→ 环掩体（2）；同 pri 取最近。
+   *  ★ 2026-09-22 两段挑：先只看本队 50m 内（按 pri），空了才全局按 pri——
+   *    防"全局最低 pri = 63m 外前线件"任务瞬移 → 成员半路折返转圈。 */
   assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.assign.get(squadId);
     if (cur !== undefined && cur < this.pieces.length
@@ -174,16 +176,22 @@ export class EngineerCorps {
       && !this.gated(this.pieces[cur])
       && this.allows(squadId, this.pieces[cur].kind)) return cur;
     const claimed = new Set<number>(this.assign.values());
-    let minPri = Infinity, anyBest = -1, anyD = Infinity;
-    for (let i = 0; i < this.pieces.length; i++) {
-      const q = this.pieces[i];
-      if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
-      if (this.gated(q)) continue;   // ★ 事态闸门：距舰 < 前沿 → 未解锁
-      if (!this.allows(squadId, q.kind)) continue;
-      const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (q.pri < minPri) { minPri = q.pri; anyBest = i; anyD = d; }
-      else if (q.pri === minPri && d < anyD) { anyBest = i; anyD = d; }
-    }
+    const pick = (maxD2: number): number => {
+      let best = -1, bPri = Infinity, bD = Infinity;
+      for (let i = 0; i < this.pieces.length; i++) {
+        const q = this.pieces[i];
+        if (this.built.has(keyOf(q)) || claimed.has(i)) continue;
+        if (this.gated(q)) continue;   // ★ 事态闸门：距舰 < 前沿 → 未解锁
+        if (!this.allows(squadId, q.kind)) continue;
+        const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
+        if (d > maxD2) continue;
+        if (q.pri < bPri) { bPri = q.pri; best = i; bD = d; }
+        else if (q.pri === bPri && d < bD) { best = i; bD = d; }
+      }
+      return best;
+    };
+    let anyBest = pick(50 * 50);
+    if (anyBest < 0) anyBest = pick(Infinity);   // 50m 内无件 → 全局按 pri 兜底
     if (anyBest < 0) return -1;
     this.assign.set(squadId, anyBest);
     return anyBest;
