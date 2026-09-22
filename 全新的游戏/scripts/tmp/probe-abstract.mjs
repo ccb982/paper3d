@@ -109,7 +109,7 @@ const snapPage = (page) => page.evaluate(() => {
     taskNavDbg: sw.memberNavDbg ?? null,
     pass: sw.commander.passTable?.stats ?? null,
     roster: (() => { const r = sw.commander.roster; return r ? { ...r.counts, total: r.dbg.total, gap: r.dbg.gap, gapVal: r.dbg.gapVal } : null; })(),
-    fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, connected: f.dbg.connected, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), claims: [...f.claims].map(([id, s2]) => `#${id}→区${s2}`).join(' '), assigned: f.dbg.assigned }; })(),
+    fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, connected: f.dbg.connected, builders: f.dbg.builders, claimsN: f.dbg.claimsN, spotsN: f.dbg.spotsN, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), claims: [...f.claims].map(([id, s2]) => `#${id}→区${s2}`).join(' '), assigned: f.dbg.assigned }; })(),
     stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
@@ -349,7 +349,7 @@ for (const seed of seeds) {
     const ro = s.roster;
     if (ro) console.log(`   编制(13.1) 盾${ro.shield} 突${ro.assault} 远${ro.ranged} 后${ro.logistics} 工${ro.builder} 总${ro.total} 缺口=${ro.gap}${ro.gapVal ? `(${ro.gapVal})` : ''}`);
     const fo = s.fortify;
-    if (fo) console.log(`   工事(13.3) 扫描=${fo.sweeps} 注入=${fo.injected} 连通=${fo.connected} 认领[${fo.claims}] 安全值=[${fo.safety.map((v) => v === null ? '-' : v).join(',')}] ${fo.assigned}`);
+    if (fo) console.log(`   工事(13.3) 扫描=${fo.sweeps} 队/认领/点=${fo.builders}/${fo.claimsN}/${fo.spotsN} 注入=${fo.injected} 连通=${fo.connected} 安全值=[${fo.safety.map((v) => v === null ? '-' : v).join(',')}] ${fo.assigned}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {

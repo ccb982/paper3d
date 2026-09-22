@@ -418,6 +418,10 @@ export class SwarmCommander {
         }
         this.fortify.dbg.assigned = [...this.fortify.spots].map(([id, p]) =>
           `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
+        // ★ 缺口对照（探针）：队数 vs 认领数 vs spot 数——必须全等，否则"某队没任务"
+        this.fortify.dbg.builders = builders.length;
+        this.fortify.dbg.claimsN = this.fortify.claims.size;
+        this.fortify.dbg.spotsN = this.fortify.spots.size;
         // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
         // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
         let injected = 0;

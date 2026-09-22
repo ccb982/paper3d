@@ -28,7 +28,7 @@ export class FortifyPlanner {
   /** 各队当前施工点 */
   readonly spots = new Map<number, FortifyPick & { sector: number }>();
   private cursor = 0;
-  readonly dbg = { sweeps: 0, injected: 0, connected: 0, sectors: FORTIFY_SECTORS, assigned: '-' };
+  readonly dbg = { sweeps: 0, injected: 0, connected: 0, sectors: FORTIFY_SECTORS, builders: 0, claimsN: 0, spotsN: 0, assigned: '-' };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（环带 [rLo,rHi]；角度 [si,si+1)/8·2π） */
   refreshOne(
@@ -78,7 +78,11 @@ export class FortifyPlanner {
       if (s === null || s <= -1e8) continue;
       return { x, z, score: s };
     }
-    return Number.isFinite(w.score) ? { x: w.x, z: w.z, score: w.score } : null;
+    if (Number.isFinite(w.score)) return { x: w.x, z: w.z, score: w.score };
+    // ★ 最终兜底：扇区中点（评分不可用也返回）——**每队必有目标，spotFor 永不 null**
+    const mid = (a0 + a1) / 2;
+    const rm = (rLo + rHi) / 2;
+    return { x: Math.round((cx + Math.cos(mid) * rm) / 4) * 4, z: Math.round((cz + Math.sin(mid) * rm) / 4) * 4, score: 0 };
   }
 
   /** 统一取点：**仅限本队认领的防区（扇区）**；无认领 → null（不跨区、不帮忙） */
