@@ -22,6 +22,8 @@ export const DANGER = {
   SLOPE_DH,
   /** A* 陡升挡（≡ 执行层；只挡升不挡降）——历史口径：单步瞬时坎 */
   WALL_STEP: EDGE_CLIFF_BAND,
+  /** ★ 绝对墙阈值（悬崖；N0《寻路与导航架构.md》§3.2）：落差 > 此值 → 双向禁（沿用表口径 WALL_DH=3.0） */
+  CLIFF_DH: WALL_DH,
   /** ★ 4m 格步升上限（≈32°；= PROBE_RISE × CELL / PROBE_R）。
    *  寻路必须用这个而不是 WALL_STEP(0.6@瞬时)——40m 尺度上把连续山坡当墙会让 A* 找不到"坡"，
    *  只能直线硬爬 → "爬高地墨迹"（2026-09-23 用户实感修复）。 */

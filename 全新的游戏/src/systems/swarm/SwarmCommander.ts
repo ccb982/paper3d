@@ -27,6 +27,7 @@ import { CommanderSpawn } from './CommanderSpawn';
 import { AnchorSelect } from './CommanderAnchorSelect';
 import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
+import { PassTable } from './PassTable';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -131,6 +132,8 @@ export class SwarmCommander {
   lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ 大队生成/登场队列（自本类拆出：CommanderSpawn；回收名单也在其中） */
   private readonly spawn: CommanderSpawn;
+  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次；《寻路与导航架构.md》§3.0） */
+  readonly passTable = new PassTable();
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
   /** ★ 成员级任务（taskX/Z）唯一入口（施工分块 / 护卫扇区） */
@@ -295,6 +298,7 @@ export class SwarmCommander {
     this.postCache.clear();     // ★ 现场有利位置缓存复位
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.terrainScore.clear();
+    this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（地形纯函数；一次构建，工事不重建）
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
@@ -1119,6 +1123,7 @@ export class SwarmCommander {
     this.battleLine.clear();
     this.postCache.clear();
     this.terrainScore.clear();
+    this.passTable.clear();
   }
 
   private dispatchMission(): void {
