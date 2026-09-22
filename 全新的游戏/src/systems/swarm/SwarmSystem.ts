@@ -757,7 +757,16 @@ export class SwarmSystem {
         const ad = Math.hypot(ax, az);
         if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
         else { dx = tx / td; dz = tz / td; }
-      } else if (td > 2) { dx = tx / td; dz = tz / td; }
+      } else if (td > 2) {
+        // ★ 最后一程（≤15m）：直线可走才直走；**直线被墙/单向边挡 → 回队级锚点**（走廊绕上坡正面）
+        if (this.walkableLine(p.x[i], p.z[i], p.taskX[i], p.taskZ[i])) { dx = tx / td; dz = tz / td; }
+        else {
+          const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
+          const ad = Math.hypot(ax, az);
+          if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
+          else { dx = tx / td; dz = tz / td; }
+        }
+      }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
       const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
