@@ -29,6 +29,7 @@ import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
+import { FortifyPlanner } from './FortifyPlanner';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -137,6 +138,9 @@ export class SwarmCommander {
   readonly passTable = new PassTable();
   /** ★ §13.1 编制比例（占比统计 + 缺口；只读，不改行为） */
   readonly roster = new RosterController();
+  /** ★ §13.3 工事规划（最危险区域选择；工兵循环的第一步） */
+  readonly fortify = new FortifyPlanner();
+  private fortifyAccum = 0;
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
   /** ★ 成员级任务（taskX/Z）唯一入口（施工分块 / 护卫扇区） */
@@ -390,6 +394,14 @@ export class SwarmCommander {
     this.viewPX = playerX;
     this.viewPZ = playerZ;
     this.roster.tick(dt, this.swarm.squads);   // ★ §13.1 编制占比统计（4Hz）
+    // ★ §13.3 工事：选最危险区域（1Hz；评分同源 TerrainScore；粘滞防换区抖动）
+    this.fortifyAccum += dt;
+    if (this.fortifyAccum >= 1) {
+      this.fortifyAccum = 0;
+      if (this.plan) {
+        this.fortify.scan(this.plan.cx, this.plan.cz, 100, (x, z) => this.terrainScore.scoreAt(x, z));
+      }
+    }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
     const now = performance.now() / 1000;
@@ -1135,6 +1147,7 @@ export class SwarmCommander {
     this.postCache.clear();
     this.terrainScore.clear();
     this.passTable.clear();
+    this.fortify.clear();
   }
 
   private dispatchMission(): void {
