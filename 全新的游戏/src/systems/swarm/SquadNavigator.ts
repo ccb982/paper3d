@@ -17,6 +17,7 @@ import { HpaPath } from './HpaPath';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
+import { DANGER } from './SwarmDanger';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -116,7 +117,7 @@ export class SquadNavigator {
         const x = sx + (gx - sx) * t, z = sz + (gz - sz) * t;
         const h = raster.surfaceHeightAt(x, z);
         const role = raster.tileDefAt(x, z).genRole;
-        if (role === 'pit' || h < -1.2) { clear = false; break; }
+        if (role === 'pit' || h < DANGER.PIT_H) { clear = false; break; }
       }
       if (clear) return 'ok';
     }

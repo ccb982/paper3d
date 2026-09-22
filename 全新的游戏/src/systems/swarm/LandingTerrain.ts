@@ -16,6 +16,7 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { DANGER } from './SwarmDanger';
 
 /** ★ 有利位置（落地扫描一次算好；远程驻守 / 工程兵优先施工共用） */
 export interface DefensePost {
@@ -87,7 +88,7 @@ function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): S
       const role = raster.tileDefAt(x, z).genRole;
       // pass = 基本地形（坑/水/过低 → 不可通行）；**墙由遍历时的边上检查处理**
       //（方向无关的"上升检测"会把所有崖底也判死 → 洪泛出不了高台）
-      if (role === 'pit' || role === 'liquid' || hh < -1.2) { pass[i] = 0; stand[i] = 0; continue; }
+      if (role === 'pit' || role === 'liquid' || hh < DANGER.PIT_H) { pass[i] = 0; stand[i] = 0; continue; }
       pass[i] = 1;
       // stand = 可布防（崖边/贴墙不摆工事）
       let cliff = false, wall = false;

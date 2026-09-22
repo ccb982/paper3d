@@ -14,6 +14,7 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { WALL_DH } from './TerrainScore';
+import { DANGER } from './SwarmDanger';
 
 const CELL = 4;
 /** 簇边长（格；8×8 = 32m） */
@@ -417,7 +418,7 @@ export class HpaPath {
     const smp = samplerFor(raster);
     const h = smp.heightAt(raster, x, z);
     const role = smp.roleAt(raster, x, z);
-    const pass = role !== 'pit' && h >= -1.2;   // ★ 水域允许通行（不再挡 liquid）
+    const pass = role !== 'pit' && h >= DANGER.PIT_H;   // ★ 水域允许通行（不再挡 liquid）
     return { h, pass };
   }
 

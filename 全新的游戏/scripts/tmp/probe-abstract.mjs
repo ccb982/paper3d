@@ -282,6 +282,9 @@ for (const seed of seeds) {
     while (Date.now() - t0 < ms) await page.evaluate((a, b) => window.__ppRun(a, b), 8, 0.1);
   };
   console.log(`\n===== seed ${seed} =====`);
+  // ★ P5：验收断言固化（T+60 快照；失败 → 退出码 1 → 回归可用）
+  const gates = [];
+  const gate = (name, ok, detail) => gates.push({ name, ok: !!ok, detail: String(detail) });
   for (let k = 0; k < 4; k++) {
     await run(15000);
     const s = await snapPage(page);
@@ -324,8 +327,27 @@ for (const seed of seeds) {
       console.log(`   掩体校验(队长真源) 驻守/防守队=${cc.gar} 成员覆盖=${cc.cov}/${cc.tot}${cc.tot ? ` (${(cc.cov / cc.tot * 100).toFixed(0)}%)` : ''}`);
       const bt2 = s.bTrack;
       if (bt2) console.log(`   转圈指数(工兵) n=${bt2.n} 路径=${bt2.path}m 净移=${bt2.net}m 比=${bt2.ratio} 任务翻转=${bt2.flips}`);
+      // ---- ★ P5 基线断言（固化清单；seed 4242） ----
+      const chkOk = Object.values(st.chk).every((v) => String(v).startsWith('✓'));
+      gate('四兵种四关分化', chkOk, JSON.stringify(st.chk));
+      gate('parityΔ<0.01', st.dPar < 0.01, `dPar=${st.dPar}`);
+      gate('掩体覆盖=100%', cc.tot > 0 && cc.cov === cc.tot, `${cc.cov}/${cc.tot}`);
+      gate('越界命令=0', over === 0, `over=${over}`);
+      gate('到期回落=0', (s.drops | 0) === 0, `drops=${s.drops}`);
+      gate('调账台账一致', !s.coarse || c.adjusted === s.coarse.ledgerAdj, `adjusted=${c.adjusted} ledger=${s.coarse?.ledgerAdj}`);
+      gate('唯一/引擎>0.5', c.engine > 0 && c.unique / c.engine > 0.5, `${c.unique}/${c.engine}`);
+      gate('队长>0', c.leader > 0, `leader=${c.leader}`);
+      gate('progress事件>0', c.progress > 0, `progress=${c.progress}`);
+      gate('保护堆挤≤2/锚', s.pStack <= 2, `pStack=${s.pStack}`);
+      const nd2 = s.navDbg;
+      if (nd2) gate('重规划计数闭合', nd2.solves === nd2.hpa + nd2.astar + nd2.coarse + nd2.fail,
+        `${nd2.solves}=${nd2.hpa}+${nd2.astar}+${nd2.coarse}+${nd2.fail}`);
     }
   }
+  const okN = gates.filter((g) => g.ok).length;
+  console.log(`\n=== P5 基线断言: ${okN}/${gates.length} ${okN === gates.length ? 'PASS' : 'FAIL'} ===`);
+  for (const g of gates) if (!g.ok) console.log(`  ✗ ${g.name}: ${g.detail}`);
+  if (okN !== gates.length) process.exitCode = 1;
   await page.close();
 }
 await browser.close();

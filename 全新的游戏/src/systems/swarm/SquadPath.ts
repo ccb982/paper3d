@@ -20,6 +20,7 @@ import type { RasterMap } from '../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
 import { samplerFor } from '../../services/map/TerrainSampler';
 import { SLOPE_DH, WALL_DH, SLOPE_COST } from './TerrainScore';
+import { DANGER } from './SwarmDanger';
 
 const CELL = 4;
 /** 单次寻路窗口上限（格；120×120 ≈ 480m，超出即拒绝，走直线兜底） */
@@ -35,7 +36,7 @@ const COST_CLIMB = 1.5;
 const COST_DROP = 0.2;
 /** 相邻格高差超过此值 = 墙（**只挡上升**；下落放行）。
  *  ★ 2026-09-22 与 CharacterBase.EDGE_CLIFF_BAND=0.6 统一（原 0.8 与执行层脱节）。 */
-const WALL_STEP = 0.6;
+const WALL_STEP = DANGER.WALL_STEP;
 /** 深水阈值（米；敌人不涉水） */
 const DEEP_WATER = 0.8;
 const SQRT2 = Math.SQRT2;

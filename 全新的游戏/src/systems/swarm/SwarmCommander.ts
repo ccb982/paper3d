@@ -25,6 +25,8 @@ import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { EngineerCorps, type BuildPiece } from './EngineerCorps';
 import { CommanderSpawn } from './CommanderSpawn';
 import { AnchorSelect } from './CommanderAnchorSelect';
+import { DANGER } from './SwarmDanger';
+import { RESEND } from './SwarmConfig';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -145,7 +147,6 @@ export class SwarmCommander {
   private get engAccum(): number { return this.corps.accum; }
   private set engAccum(v: number) { this.corps.accum = v; }
   private resendAccum = 0;
-  private static readonly RESEND_S = 10;
 
   /** ★ 部署选点（Decide.ts）：状态计数 + 上下文复用对象（每拍赋值，零分配） */
   private readonly decideSt: DecideState = { coverIdx: 0, assaultIdx: 0, screenIdx: 0, flyerIdx: 0 };
@@ -462,7 +463,7 @@ export class SwarmCommander {
     }
     if (this.mission) {
       this.resendAccum += dt;
-      if (this.resendAccum >= SwarmCommander.RESEND_S) {
+      if (this.resendAccum >= RESEND.MISSION_S) {
         this.resendAccum = 0;
         this.dispatchMission();
       }
@@ -976,7 +977,7 @@ export class SwarmCommander {
       const z = pz + Math.sin(a) * r;
       const role = raster.tileDefAt(x, z).genRole;
       const h = raster.surfaceHeightAt(x, z);
-      if (role === 'pit' || (role === 'liquid' && h < -0.8) || h < -1.2) continue;
+      if (role === 'pit' || (role === 'liquid' && h < -0.8) || h < DANGER.PIT_H) continue;
       // 高地加成：相对周边 5m 的抬升
       const elev = h - (raster.surfaceHeightAt(x + 5, z) + raster.surfaceHeightAt(x - 5, z)
         + raster.surfaceHeightAt(x, z + 5) + raster.surfaceHeightAt(x, z - 5)) / 4;
@@ -1125,9 +1126,9 @@ export class SwarmCommander {
     if (!m) return;
     for (const s of this.swarm.squads.all()) {
       if (this.swarm.squads.centroidOf(s.id, _c0)) {
-        this.issueChecked(s.id, _c0.x, _c0.z, m, SwarmCommander.RESEND_S + 5);
+        this.issueChecked(s.id, _c0.x, _c0.z, m, RESEND.MISSION_S + RESEND.TTL_PAD);
       } else {
-        this.swarm.issueOrder(s.id, m, SwarmCommander.RESEND_S + 5);
+        this.swarm.issueOrder(s.id, m, RESEND.MISSION_S + RESEND.TTL_PAD);
       }
     }
   }

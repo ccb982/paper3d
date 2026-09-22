@@ -43,6 +43,7 @@ import { pickSteer } from '../../entity/SteerPick';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
 import { SwarmRecovery } from './SwarmRecovery';
+import { DANGER } from './SwarmDanger';
 import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
@@ -384,7 +385,7 @@ export class SwarmSystem {
       if (raster && p.isAir[i] !== 1) {
         if (
           raster.tileDefAt(p.x[i], p.z[i]).genRole === 'pit' &&
-          raster.surfaceHeightAt(p.x[i], p.z[i]) < -1.2
+          raster.surfaceHeightAt(p.x[i], p.z[i]) < DANGER.PIT_H
         ) {
           const mobIndex = p.mobIndex[i];
           const kx = p.x[i], ky = p.y[i], kz = p.z[i];
@@ -777,8 +778,8 @@ export class SwarmSystem {
         if (this.commander.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
         const role = raster.tileDefAt(hx, hz).genRole;
         const h = raster.surfaceHeightAtFor(hx, hz, hint);
-        if (role === 'pit' && h < -1.2) return true;
-        return h - here > 1.0;   // 连续陡坡（≈40°+）也是墙
+        if (role === 'pit' && h < DANGER.PIT_H) return true;
+        return h - here > DANGER.PROBE_RISE;   // 连续陡坡（≈40°+）也是墙
       };
       const res = pickSteer(
         p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,

@@ -8,6 +8,7 @@
 // ============================================================
 
 import type { RasterMap } from '../../services/map/RasterMap';
+import { DANGER } from './SwarmDanger';
 
 export const FLOW_CELL = 4;
 /** 窗口边长（格；奇数 → 中心对齐） */
@@ -22,8 +23,8 @@ const COST_PIT = 8;
 const COST_LIQUID = 8;
 /** 爬坡代价系数（上坡每米加价） */
 const COST_CLIMB = 1.5;
-/** 判定"崖"的最小高差（米） */
-const CLIFF_DH = 0.5;
+/** 判定"崖"的最小高差（米；单源 SwarmDanger） */
+const CLIFF_DH = DANGER.FLOW_CLIFF_DH;
 
 export class FlowField {
   /** 窗口左上角格坐标（世界/4m 对齐） */

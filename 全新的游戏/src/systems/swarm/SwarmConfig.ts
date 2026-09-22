@@ -99,3 +99,11 @@ export const STUCK = {
   /** 持续时长（秒；连续超时 → 回收） */
   HOLD_S: 25,
 } as const;
+
+/** ★ 指挥层重发/寿命常量（P5 收口：重发常量统一——原 RESEND_S 等散落各写各的） */
+export const RESEND = {
+  /** 大队任务周期重发（秒；T+ 重发保持使命存活） */
+  MISSION_S: 10,
+  /** 使命 TTL 余量（秒；重发间隔 + 余量 = 下发 TTL，防两拍之间掉令） */
+  TTL_PAD: 5,
+} as const;
