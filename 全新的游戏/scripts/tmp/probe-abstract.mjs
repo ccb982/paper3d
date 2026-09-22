@@ -304,7 +304,7 @@ for (const seed of seeds) {
     const nd = s.navDbg, md = s.taskNavDbg;
     if (nd && md) console.log(`   重规划(白名单P4) 队路径=${nd.solves}(HPA${nd.hpa}/A*${nd.astar}/coarse${nd.coarse}/失败${nd.fail}) 任务走廊=${md.solves}(偏离重解${md.deviations}/直行复核${md.rechecks}/失败${md.fails})`);
     const pt = s.pass;
-    if (pt) console.log(`   可行性表(N0) 格=${pt.cells} 边=${pt.edges}(开放${pt.open}/单向${pt.oneWay}/绝对${pt.abs}) 建表=${pt.ms}ms`);
+    if (pt) console.log(`   可行性表(N0) 格=${pt.cells} 深坑=${pt.lethal} 边=${pt.edges}(开放${pt.open}/单向${pt.oneWay}/绝对${pt.abs}) 建表=${pt.ms}ms`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {
