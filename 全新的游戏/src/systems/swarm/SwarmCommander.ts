@@ -29,7 +29,7 @@ import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
-import { FortifyPlanner, FORTIFY_SECTORS } from './FortifyPlanner';
+import { FortifyPlanner, FORTIFY_SECTORS, NEED_DONE } from './FortifyPlanner';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -402,18 +402,18 @@ export class SwarmCommander {
     if (this.fortifyAccum >= 0.5) {   // 2Hz：摊销刷新（每次 1 个扇区 → 全区 ~4s 一轮）
       this.fortifyAccum = 0;
       if (this.stage === 'S1') {
-        const DONE = -0.5;   // ★ 扇区达标线（调参入口；必须在 allDone 前声明）
+        const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事；调参入口）
         // 环带受事态闸门约束：内界 = max(24, 允许离舰 + 8)（门内不许施工）
         const rLo = Math.max(24, this.frontMinD + 8);
         // ★ 前推（§13.4）：**受事态控制 + 棘轮步进**——
         //   ① 8 区全达标（连通）才推进；② 每拍最多 +0.5m（≤1m/s，不跳变）；③ 封顶 frontP×120m（事态允许）
-        const allDone2 = this.fortify.safety.every((v) => Number.isFinite(v) && v >= DONE);
+        const allDone2 = this.fortify.safety.every((v) => Number.isFinite(v) && v < DONE);
         if (allDone2) {
           const targetPush = this.frontP * 120;
           this.pushM = Math.min(targetPush, this.pushM + 0.5);
         }
         const rHi = Math.max(90, rLo + 30) + this.pushM;
-        this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z));
+        this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.fortifyNeed(x, z));
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
         this.fortify.assign(builders.map((s) => s.id), DONE);
@@ -431,7 +431,7 @@ export class SwarmCommander {
             if (n > 0) { lx /= n; lz /= n; }
           }
           const sp = this.fortify.spotFor(
-            s.id, shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z), DONE,
+            s.id, shipX, shipZ, rLo, rHi, (x, z) => this.fortifyNeed(x, z), DONE,
             (x, z) => this.swarm.walkableLine(lx, lz, x, z),   // ★ 队长位→目标可走
           );
           if (sp) this.fortify.spots.set(s.id, sp);
@@ -1142,6 +1142,18 @@ export class SwarmCommander {
       this._wCache = weightsFor(this.postureP, this.battlePosture);
     }
     return this._wCache;
+  }
+
+  /** ★ 工兵要塞需求分（§13 评分体系大改）：防御价值 × 掩体缺口；水/坑/硬边排除（null）
+   *  ——"该守且没掩体"的地方分最高（同源 TerrainScore/UnitStrategy，不另建表） */
+  fortifyNeed(x: number, z: number): number | null {
+    if (this.terrainScore.blockedAt(x, z)) return null;
+    const f = this.terrainScore.featsAt(x, z, this.viewPX, this.viewPZ);
+    if (!f || !f.pass) return null;
+    const val = scoreForUnit('defense', f, this.liveWeights());
+    if (val <= -1e8) return null;
+    const deficit = 1 - Math.min(1, Math.max(0, f.cover) / 2.5);   // COVER_FULL = 2.5
+    return val * deficit;
   }
 
   /** ★ L3 兵种分（重构 P1）：当前态势基权 × 兵种权重 × 合成字段（探针/中立选位用；

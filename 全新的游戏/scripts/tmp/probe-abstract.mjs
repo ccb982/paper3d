@@ -108,6 +108,8 @@ const snapPage = (page) => page.evaluate(() => {
     feasBlocked: sw.feasBlockedSamples ?? [],
     taskNavDbg: sw.memberNavDbg ?? null,
     pass: sw.commander.passTable?.stats ?? null,
+    // ★ 工事清单（真建成的件）：kind@x,z（探针 T+60 打印，评估工事是否合理）
+    builtList: (() => { const c2 = window.__commander; const out = []; let cov = 0, tr = 0; for (const q of c2.corps.pieces) { if (!c2.builtSlots.has(`${q.x},${q.z}`)) continue; if (q.kind === 'cover') cov++; else tr++; out.push(`${q.kind === 'cover' ? 'C' : 'T'}@${q.x | 0},${q.z | 0}`); } return { cov, tr, list: out.slice(0, 28) }; })(),
     roster: (() => { const r = sw.commander.roster; return r ? { ...r.counts, total: r.dbg.total, gap: r.dbg.gap, gapVal: r.dbg.gapVal } : null; })(),
     fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, connected: f.dbg.connected, builders: f.dbg.builders, claimsN: f.dbg.claimsN, spotsN: f.dbg.spotsN, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), claims: [...f.claims].map(([id, s2]) => `#${id}→区${s2}`).join(' '), assigned: f.dbg.assigned }; })(),
     stepDbg: sw.leaderAI?.stepDbg ?? null,
@@ -379,6 +381,8 @@ for (const seed of seeds) {
       console.log(`   掩体校验(队长真源) 驻守/防守队=${cc.gar} 成员覆盖=${cc.cov}/${cc.tot}${cc.tot ? ` (${(cc.cov / cc.tot * 100).toFixed(0)}%)` : ''}`);
       const bt2 = s.bTrack;
       if (bt2) console.log(`   转圈指数(工兵) n=${bt2.n} 路径=${bt2.path}m 净移=${bt2.net}m 比=${bt2.ratio} 任务翻转=${bt2.flips}`);
+      const bl = s.builtList;
+      if (bl) console.log(`   工事清单(真建成) 掩体=${bl.cov} 战壕=${bl.tr} | ${bl.list.join(' ')}`);
       // ---- ★ P5 基线断言（固化清单；seed 4242） ----
       const chkOk = Object.values(st.chk).every((v) => String(v).startsWith('✓'));
       gate('四兵种四关分化', chkOk, JSON.stringify(st.chk));
