@@ -109,7 +109,7 @@ const snapPage = (page) => page.evaluate(() => {
     taskNavDbg: sw.memberNavDbg ?? null,
     pass: sw.commander.passTable?.stats ?? null,
     roster: (() => { const r = sw.commander.roster; return r ? { ...r.counts, total: r.dbg.total, gap: r.dbg.gap, gapVal: r.dbg.gapVal } : null; })(),
-    fortify: sw.commander.fortify?.dbg ?? null,
+    fortify: (() => { const f = sw.commander.fortify; if (!f) return null; return { sweeps: f.dbg.sweeps, injected: f.dbg.injected, safety: f.safety.map((v) => Number.isFinite(v) ? +v.toFixed(1) : null), assigned: f.dbg.assigned }; })(),
     stepDbg: sw.leaderAI?.stepDbg ?? null,
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
@@ -317,7 +317,7 @@ for (const seed of seeds) {
     const ro = s.roster;
     if (ro) console.log(`   编制(13.1) 盾${ro.shield} 突${ro.assault} 远${ro.ranged} 后${ro.logistics} 工${ro.builder} 总${ro.total} 缺口=${ro.gap}${ro.gapVal ? `(${ro.gapVal})` : ''}`);
     const fo = s.fortify;
-    if (fo) console.log(`   工事(13.3) 最危险区=${fo.worst} 扫描=${fo.scans} 换区=${fo.picks} 粘滞=${fo.kept}`);
+    if (fo) console.log(`   工事(13.3) 扫描=${fo.sweeps} 注入=${fo.injected} 安全值=[${fo.safety.map((v) => v === null ? '-' : v).join(',')}] ${fo.assigned}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {

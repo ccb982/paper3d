@@ -396,10 +396,30 @@ export class SwarmCommander {
     this.roster.tick(dt, this.swarm.squads);   // ★ §13.1 编制占比统计（4Hz）
     // ★ §13.3 工事：选最危险区域（1Hz；评分同源 TerrainScore；粘滞防换区抖动）
     this.fortifyAccum += dt;
-    if (this.fortifyAccum >= 1) {
+    if (this.fortifyAccum >= 0.5) {   // 2Hz：摊销刷新（每次 1 个扇区 → 全区 ~4s 一轮）
       this.fortifyAccum = 0;
-      // ★ 环状扫描（围绕**舰船**，包围舰船）：内 24m 外 90m；评分同源 TerrainScore
-      this.fortify.scan(shipX, shipZ, 90, (x, z) => this.terrainScore.scoreAt(x, z), 24, 0, 24);
+      if (this.stage === 'S1') {
+        // 环带受事态闸门约束：内界 = max(24, 允许离舰 + 8)（门内不许施工）
+        const rLo = Math.max(24, this.frontMinD + 8);
+        const rHi = Math.max(90, rLo + 30);
+        this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.terrainScore.scoreAt(x, z));
+        const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
+        builders.sort((a, b) => a.id - b.id);
+        this.fortify.assign(builders.map((s) => s.id), 0);
+        // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
+        // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
+        let injected = 0;
+        for (const [, p] of this.fortify.spots) {
+          const near = this.corps.pieces.some((q) => Math.hypot(q.x - p.x, q.z - p.z) < 8);
+          const busy = this.corps.pieces.some((q) => q.pri <= 1 && !this.corps.built.has(`${q.x},${q.z}`)
+            && Math.hypot(q.x - p.x, q.z - p.z) < 40);
+          if (!near && !busy && injected < 1) {
+            this.corps.pieces.push({ kind: 'cover', x: p.x, z: p.z, ring: 2, pri: 0.5 });
+            injected++;
+            this.fortify.dbg.injected++;
+          }
+        }
+      }
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）

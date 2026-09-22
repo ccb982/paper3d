@@ -1,69 +1,99 @@
 // ============================================================
 // FortifyPlanner —— 工事规划（《敌人管线设计.md》§13.3/§13.4）
 // ============================================================
-// 每队工兵的工作循环（贪心，不全局规划）：
-//   ① 选**最危险区域**（评分最低格，聚类去重）
-//   ② 派一队去修（工兵多队 → 各选各的 = 多线程）
-//   ③ 该区安全度到阈值 → 扩大范围修 / 连通战壕
-//   ④ **直到新任务出现**（威胁/低分格刷新/阶段变化）
-// 评分与贪心寻路同源：直接用 TerrainScore（外部注入 scoreAt 回调）。
+// 固定分区（性能纪律，用户定 2026-09-23）：
+//   · 环状包围舰船 → 固定 **8 个扇区**（不再每队手扫全环）
+//   · 每扇区一个**安全值**（区内最低评分）+ 最危险点
+//   · 摊销刷新：每次只重算 1 个扇区（调用方 2Hz → 全区 ~4s 一轮）
+//   · 分配：每工兵队取**未被认领的最低安全值扇区**（一队一区，不重合）
+//   · 施工点注入 EngineerCorps.pieces（既有分派/施工链接走）；评分达标 → 释放扇区换下一个
+// 评分与贪心寻路同源：直接用 TerrainScore。
 // ============================================================
+
+export const FORTIFY_SECTORS = 8;
 
 export interface FortifyPick {
   x: number;
   z: number;
   score: number;
-  /** 与上一个选点的距离（用于"新任务"抑制：同点抖动不算新任务） */
-  moved: number;
 }
 
 export class FortifyPlanner {
-  /** 当前锁定的最危险区域（sticky：同区评分未抬到阈值前不换） */
-  target: FortifyPick | null = null;
-  /** 探针 */
-  readonly dbg = { scans: 0, picks: 0, kept: 0, worst: '-' as string };
+  /** 每扇区安全值（= 区内最低评分；∞ = 未知/无格） */
+  readonly safety: number[] = Array(FORTIFY_SECTORS).fill(Infinity);
+  /** 每扇区最危险点（安全值对应格） */
+  readonly worst: FortifyPick[] = Array.from({ length: FORTIFY_SECTORS }, () => ({ x: 0, z: 0, score: Infinity }));
+  /** 队→扇区认领（一队一区，不重合） */
+  readonly claims = new Map<number, number>();
+  /** 各队当前施工点 */
+  readonly spots = new Map<number, FortifyPick & { sector: number }>();
+  private cursor = 0;
+  readonly dbg = { sweeps: 0, injected: 0, assigned: '-' };
 
-  /** 找最危险格（4m 网格扫描；scoreAt 未就绪/不可站 → null 跳过）。
-   *  ★ 环状扫描：围绕玩家（包围玩家）——只取 `[rLo, rHi]` 环带内的格。
-   *  @param scoreAt 评分查询（commander.scoreAt；未就绪返回 null）
-   *  @param keepR 同区粘滞半径（米；目标在半径内且未达标 → 不换区）
-   *  @param doneScore 达标线（≥ 此分视为该区已修好 → 允许换区） */
-  scan(
-    cx: number, cz: number, rHi: number,
+  /** 摊销刷新：本次只重算第 cursor 个扇区（环带 [rLo,rHi]；角度 [si,si+1)/8·2π） */
+  refreshOne(
+    cx: number, cz: number, rLo: number, rHi: number,
     scoreAt: (x: number, z: number) => number | null,
-    keepR = 24, doneScore = 0, rLo = 0,
   ): void {
-    this.dbg.scans++;
+    const si = this.cursor;
+    this.cursor = (this.cursor + 1) % FORTIFY_SECTORS;
+    const TAU = Math.PI * 2;
+    const a0 = (si / FORTIFY_SECTORS) * TAU;
+    const a1 = ((si + 1) / FORTIFY_SECTORS) * TAU;
     let best: FortifyPick | null = null;
     for (let dz = -rHi; dz <= rHi; dz += 4) {
       for (let dx = -rHi; dx <= rHi; dx += 4) {
         const d2 = dx * dx + dz * dz;
-        if (d2 > rHi * rHi || d2 < rLo * rLo) continue;   // ★ 环带
-        const x = cx + dx, z = cz + dz;
-        const s = scoreAt(x, z);
+        if (d2 > rHi * rHi || d2 < rLo * rLo) continue;
+        let ang = Math.atan2(dz, dx);
+        if (ang < 0) ang += TAU;
+        if (ang < a0 || ang >= a1) continue;
+        const s = scoreAt(cx + dx, cz + dz);
         if (s === null || s <= -1e8) continue;
-        if (!best || s < best.score) {
-          best = { x, z, score: s, moved: this.target ? Math.hypot(x - this.target.x, z - this.target.z) : 1e9 };
-        }
+        if (!best || s < best.score) best = { x: cx + dx, z: cz + dz, score: s };
       }
     }
-    if (!best) return;
-    // ★ 并行语义：执行轨（修/扩大/连通）与监测轨（找新任务）同跑——
-    //   监测到"明显更危险"（低 0.5 分以上）的新区 → 立即抢占换区；否则保持粘滞（防抖动）。
-    const cur = this.target;
-    const urgent = cur && best.score < cur.score - 0.5;
-    const keep = cur && cur.score < doneScore && best.moved <= keepR && !urgent;
-    if (keep) {
-      this.dbg.kept++;
-      this.dbg.worst = `keep ${cur!.x | 0},${cur!.z | 0} s=${cur!.score.toFixed(2)}`;
-      return;
+    this.worst[si] = best ?? { x: 0, z: 0, score: Infinity };
+    this.safety[si] = best ? best.score : Infinity;
+    this.dbg.sweeps++;
+  }
+
+  /** 分配：每队取"未被认领的最低安全值扇区"；扇区达标（≥doneScore）→ 释放换下一个。
+   *  顺带产出各队施工点（spots）。 */
+  assign(builderIds: readonly number[], doneScore = 0): void {
+    for (const [sid, sec] of [...this.claims]) {
+      if (this.safety[sec] >= doneScore) this.claims.delete(sid);   // 该区已修好 → 释放
     }
-    this.dbg.picks++;
-    this.target = best;
-    this.dbg.worst = `${urgent ? '抢占!' : ''}${best.x | 0},${best.z | 0} s=${best.score.toFixed(2)}`;
+    const used = new Set(this.claims.values());
+    this.spots.clear();
+    for (const sid of builderIds) {
+      let sec = this.claims.get(sid);
+      if (sec === undefined) {
+        sec = undefined;
+        let bs = Infinity;
+        for (let i = 0; i < FORTIFY_SECTORS; i++) {
+          if (used.has(i)) continue;
+          const v = this.safety[i];
+          if (Number.isFinite(v) && v < bs) { bs = v; sec = i; }
+        }
+        if (sec === undefined) break;   // 未认领的有效区已空
+        this.claims.set(sid, sec);
+        used.add(sec);
+      }
+      const w = this.worst[sec];
+      if (Number.isFinite(w.score) && w.score < doneScore) {
+        this.spots.set(sid, { ...w, sector: sec });
+      }
+    }
+    this.dbg.assigned = [...this.spots].map(([id, p]) =>
+      `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
   }
 
   clear(): void {
-    this.target = null;
+    this.claims.clear();
+    this.spots.clear();
+    this.safety.fill(Infinity);
+    for (const w of this.worst) w.score = Infinity;
+    this.cursor = 0;
   }
 }
