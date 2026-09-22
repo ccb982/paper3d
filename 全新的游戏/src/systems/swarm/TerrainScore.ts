@@ -324,9 +324,12 @@ export class TerrainScore {
   featsAt(x: number, z: number, playerX = 0, playerZ = 0): CellFeats | null {
     if (!this.ready || !this.lastPlan) return null;
     const i = this.indexAt(x, z);
-    if (i < 0) return null;
-    const plan = this.lastPlan;
-    // ★ 距离/威胁一律用**格心**算（score[] 烙在格心；用查询点会漂 ±2m 破坏 parity）
+    return i < 0 ? null : this.featsOf(i, playerX, playerZ);
+  }
+
+  /** ★ 按格下标取特征（featsAt / best*By 共用；距离一律用格心算——查询点会漂 ±2m 破坏 parity） */
+  private featsOf(i: number, playerX: number, playerZ: number): CellFeats {
+    const plan = this.lastPlan!;
     const ix = i % SIDE, iz = (i - ix) / SIDE;
     const gx = this.sx + ix * CELL + CELL / 2;
     const gz = this.sz + iz * CELL + CELL / 2;
@@ -350,6 +353,98 @@ export class TerrainScore {
         this.water[i] * WATER_PENALTY -
         (cls === 1 ? SLOPE_PENALTY : 0),
     };
+  }
+
+  /** ★ L3 窗口选格（重构 P1-4）：scorer 逐格打分（Decide 传 scoreForUnit 闭包）；不可站跳过 */
+  bestNearBy(
+    x: number, z: number, radius: number,
+    scorer: (f: CellFeats) => number,
+    playerX = 0, playerZ = 0,
+  ): { x: number; z: number; score: number } | null {
+    if (!this.ready) return null;
+    const ix0 = Math.max(0, Math.floor((x - radius - this.sx) / CELL));
+    const iz0 = Math.max(0, Math.floor((z - radius - this.sz) / CELL));
+    const ix1 = Math.min(SIDE - 1, Math.ceil((x + radius - this.sx) / CELL));
+    const iz1 = Math.min(SIDE - 1, Math.ceil((z + radius - this.sz) / CELL));
+    const r2 = radius * radius;
+    let best: { x: number; z: number; score: number } | null = null;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        if (!this.pass[i]) continue;
+        const bx = this.sx + ix * CELL + CELL / 2;
+        const bz = this.sz + iz * CELL + CELL / 2;
+        if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
+        const sc = scorer(this.featsOf(i, playerX, playerZ));
+        if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };
+      }
+    }
+    return best;
+  }
+
+  /** ★ L3 掩体选格（Decide protect/regroup 用）：掩体条件同 bestCoverNear，排名按 scorer */
+  bestCoverNearBy(
+    x: number, z: number, radius: number, ex: number, ez: number,
+    scorer: (f: CellFeats) => number,
+    playerX = 0, playerZ = 0,
+  ): { x: number; z: number; score: number } | null {
+    if (!this.ready) return null;
+    const ix0 = Math.max(0, Math.floor((x - radius - this.sx) / CELL));
+    const iz0 = Math.max(0, Math.floor((z - radius - this.sz) / CELL));
+    const ix1 = Math.min(SIDE - 1, Math.ceil((x + radius - this.sx) / CELL));
+    const iz1 = Math.min(SIDE - 1, Math.ceil((z + radius - this.sz) / CELL));
+    const r2 = radius * radius;
+    const dx = ex - x, dz = ez - z;
+    const dl = Math.hypot(dx, dz) || 1;
+    void dl;
+    let best: { x: number; z: number; score: number } | null = null;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        if (!this.pass[i]) continue;
+        const bx = this.sx + ix * CELL + CELL / 2;
+        const bz = this.sz + iz * CELL + CELL / 2;
+        if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
+        const ddx = ex - bx, ddz = ez - bz;
+        const ddl = Math.hypot(ddx, ddz) || 1;
+        const px2 = bx + (ddx / ddl) * 3.5, pz2 = bz + (ddz / ddl) * 3.5;
+        const covered = this.trench[i] === 1 || this.wallNear[i] === 1 || this.blockedAt(px2, pz2);
+        if (!covered) continue;
+        const sc = scorer(this.featsOf(i, playerX, playerZ));
+        if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };
+      }
+    }
+    return best;
+  }
+
+  /** ★ L3 战壕选格（Decide 用）：战壕条件同 bestTrenchNear，排名按 scorer（可限定距离带） */
+  bestTrenchNearBy(
+    x: number, z: number, radius: number,
+    scorer: (f: CellFeats) => number,
+    playerX = 0, playerZ = 0,
+    minD = 0, maxD = Infinity,
+  ): { x: number; z: number; score: number } | null {
+    if (!this.ready) return null;
+    const ix0 = Math.max(0, Math.floor((x - radius - this.sx) / CELL));
+    const iz0 = Math.max(0, Math.floor((z - radius - this.sz) / CELL));
+    const ix1 = Math.min(SIDE - 1, Math.ceil((x + radius - this.sx) / CELL));
+    const iz1 = Math.min(SIDE - 1, Math.ceil((z + radius - this.sz) / CELL));
+    const r2 = radius * radius;
+    const min2 = minD * minD, max2 = maxD * maxD;
+    let best: { x: number; z: number; score: number } | null = null;
+    for (let iz = iz0; iz <= iz1; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const i = iz * SIDE + ix;
+        if (this.trench[i] !== 1 || !this.pass[i]) continue;
+        const bx = this.sx + ix * CELL + CELL / 2;
+        const bz = this.sz + iz * CELL + CELL / 2;
+        const d2 = (bx - x) ** 2 + (bz - z) ** 2;
+        if (d2 > r2 || d2 < min2 || d2 > max2) continue;
+        const sc = scorer(this.featsOf(i, playerX, playerZ));
+        if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };
+      }
+    }
+    return best;
   }
 
   /** ★ 半径内最高分战壕格（全兵种战壕偏好；窗口扫描；可限定距离带 [minD, maxD]）

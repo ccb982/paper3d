@@ -12,7 +12,8 @@
 import type { SquadType } from '../../entity/SwarmUnit';
 import type { SquadDoctrine } from './SquadDoctrine';
 import type { DefensePlan } from './LandingTerrain';
-import type { TerrainScore } from './TerrainScore';
+import type { CellFeats, ScoreWeights, TerrainScore } from './TerrainScore';
+import { scoreForUnit } from './UnitStrategy';
 import { canTake, UNIT_TACTICS } from './UnitTactics';
 
 /** 命令字段（与 TacticalOrder 对齐；避免 Decide 依赖整个实体契约） */
@@ -63,6 +64,8 @@ export interface DecideCtx {
   shipX: number;
   shipZ: number;
   frontMinD: number;
+  /** ★ 当前态势权重（L3 scoreFor 基权；commander 每拍下发 liveWeights） */
+  weights: ScoreWeights;
 }
 
 export interface DecideSquad {
@@ -287,10 +290,11 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
   }
   }
 
-  // ---- ★ 读表投影（集中处） ----
-  // 进攻选位：追击中的推进/包抄 → 8m 内最高分格（坡面/近路/高地）
+  // ---- ★ 读表投影（集中处；重构 P1-4：选格一律走 L3 scoreFor 兵种分） ----
+  const wf = (f: CellFeats): number => scoreForUnit(s.type, f, ctx.weights);
+  // 进攻选位：追击中的推进/包抄 → 8m 内该兵种最高分格（坡面/近路/高地）
   if (d.chase && (_out.kind === 'advance' || _out.kind === 'flank')) {
-    const ap = ctx.table.bestNear(_out.target.x, _out.target.z, 8);
+    const ap = ctx.table.bestNearBy(_out.target.x, _out.target.z, 8, wf, ctx.playerX, ctx.playerZ);
     if (ap) _out.target = { x: ap.x, z: ap.z };
   }
   // 防御选位（队长掩体判定）：驻守/集结 → 硬墙后 / 战壕后；**锁定已选位**（靠近则不换，防来回走）
@@ -299,8 +303,10 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     if (held && Math.hypot(_out.target.x - held.x, _out.target.z - held.z) < 8) {
       _out.target = { x: held.x, z: held.z };
     } else {
-      const cov = ctx.table.bestCoverNear(_out.target.x, _out.target.z, 14, ctx.playerX, ctx.playerZ)
-        ?? ctx.table.bestTrenchNear(_out.target.x, _out.target.z, 8);
+      const cov = ctx.table.bestCoverNearBy(
+          _out.target.x, _out.target.z, 14, ctx.playerX, ctx.playerZ, wf, ctx.playerX, ctx.playerZ,
+        )
+        ?? ctx.table.bestTrenchNearBy(_out.target.x, _out.target.z, 8, wf, ctx.playerX, ctx.playerZ);
       if (cov) {
         _out.target = { x: cov.x, z: cov.z };
         ctx.hold.set(s.id, { x: cov.x, z: cov.z });
@@ -314,11 +320,11 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
     && ctx.table.gradientInto(_out.target.x, _out.target.z, _grad)) {
     _out.target = { x: _out.target.x + _grad.x * 2, z: _out.target.z + _grad.z * 2 };
   }
-  // 目标校验：落点不可站（墙/坑水）→ 就近可站最高分格
+  // 目标校验：落点不可站（墙/坑水）→ 就近可站最高分格（校验本身兵种中立）
   const tsc = ctx.table.scoreAt(_out.target.x, _out.target.z);
   if (tsc === null || tsc <= -1e8) {
-    const fix = ctx.table.bestNear(_out.target.x, _out.target.z, 12)
-      ?? ctx.table.bestNear(_out.target.x, _out.target.z, 24);
+    const fix = ctx.table.bestNearBy(_out.target.x, _out.target.z, 12, wf, ctx.playerX, ctx.playerZ)
+      ?? ctx.table.bestNearBy(_out.target.x, _out.target.z, 24, wf, ctx.playerX, ctx.playerZ);
     if (fix) _out.target = { x: fix.x, z: fix.z };
   }
   if (ctx.lineSlot) _out.ttl = Math.min(_out.ttl, 3);   // 队形调整 = 短暂命令

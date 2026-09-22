@@ -171,6 +171,7 @@ export class SwarmCommander {
     hold: new Map(), protectState: new Map(), alert: new Set(), post: new Map(), mission: 'hold',
     builders: [], buildPieces: [], builtSlots: new Set<string>(),
     highPick: null, covers: [], shipX: 0, shipZ: 0, frontMinD: -1,
+    weights: { h: 0, dist: 0, threat: 0, cover: 0, width: 0, choke: 0, near: 0 },
   };
 
   constructor(private readonly swarm: SwarmSystem) {
@@ -830,6 +831,7 @@ export class SwarmCommander {
     ctx.now = performance.now() / 1000;
     ctx.front = front; ctx.buildSlot = buildSlot; ctx.slot = slot;
     ctx.shipX = shipX; ctx.shipZ = shipZ; ctx.frontMinD = this.frontMinD;   // ★ 事态闸门（离舰半径）
+    ctx.weights = this.liveWeights();                                       // ★ L3 scoreFor 基权（P1-4）
     ctx.builders = builders; ctx.buildPieces = this.buildPieces;
     ctx.builtSlots = this.builtSlots; ctx.highPick = highPick; ctx.covers = covers;
     ctx.hold = this.holdPos; ctx.protectState = this.protectState;
