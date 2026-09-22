@@ -17,6 +17,8 @@ export { type SquadType, squadTypeOf };
 
 /** 小队容量上限（同质编队 4~12；《敌人管线设计.md》§3.1） */
 export const SQUAD_MAX = 12;
+/** ★ §13.3：工兵小队上限（每队 3 工兵足够；多了拆新队 = 分区多线程） */
+export const BUILDER_SQUAD_MAX = 3;
 /** 就近并入半径（米）：同质小队质心超出此距离 → 新建 */
 export const SQUAD_JOIN_R = 30;
 
@@ -108,7 +110,8 @@ export class SquadTable {
     let bestD2 = SQUAD_JOIN_R * SQUAD_JOIN_R;
     for (const s of this.squads.values()) {
       if (s.singleton) continue;
-      if (s.type !== type || s.mobKind !== mobKind || s.builders !== canBuild || s.members.size >= SQUAD_MAX) continue;
+      const cap = canBuild ? BUILDER_SQUAD_MAX : SQUAD_MAX;
+      if (s.type !== type || s.mobKind !== mobKind || s.builders !== canBuild || s.members.size >= cap) continue;
       const c = this.centroid(s);
       const d2 = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
       if (d2 < bestD2) { bestD2 = d2; best = s; }

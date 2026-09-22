@@ -36,7 +36,7 @@ import { scoreForUnit } from './UnitStrategy';
 import { setSteerTable } from '../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
-import { SQUAD_MAX, type Squad } from './SquadTable';
+import { SQUAD_MAX, BUILDER_SQUAD_MAX, type Squad } from './SquadTable';
 import type { TacticalOrder, UnitRole, SquadType } from '../../entity/SwarmUnit';
 
 /** 重组/岗位计算用的复用暂存（零分配） */
@@ -565,7 +565,8 @@ export class SwarmCommander {
         if (big === small || big.singleton || big.suicide) continue;
         if (big.type !== small.type || big.mobKind !== small.mobKind
           || big.builders !== small.builders || big.suicide !== small.suicide) continue;
-        if (big.members.size + small.members.size > SQUAD_MAX) continue;
+        const cap = big.builders ? BUILDER_SQUAD_MAX : SQUAD_MAX;   // ★ 工兵队不合并超 3（§13.3）
+        if (big.members.size + small.members.size > cap) continue;
         if (!this.swarm.squads.centroidOf(big.id, _c1)) continue;
         const d = (_c1.x - cSmall.x) ** 2 + (_c1.z - cSmall.z) ** 2;
         if (d < bestD) { bestD = d; best = big; }
