@@ -317,7 +317,9 @@ export class SquadTactics {
     if (path && path.length > 0) {
       for (const p of path) {
         const d2 = (p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz);
-        if (d2 > 16) return p;
+        // ★ 前瞻 ≥8m（> 阵型扩散 + 到位静止半径 4m）：否则锚点在 4m 带内抖动，
+        //   成员在槽位被"到位静止"冻结 → 质心到不了路点 → 有令却全体驻停（2026-09-23 修）
+        if (d2 > 64) return p;
       }
       return path[path.length - 1];
     }
