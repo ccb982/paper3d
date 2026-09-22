@@ -76,7 +76,7 @@ export class FeasibilityPath {
       this.blockedRecent.push({ sx: +sx.toFixed(0), sz: +sz.toFixed(0), gx: +gx.toFixed(0), gz: +gz.toFixed(0) });
       return 'blocked';
     }
-    // 回溯 → 稀疏路点（≤8，起点前列不输出，含精确终点）
+    // 回溯 → 贪心 LOS 拉直（读表校验；防 BFS 阶梯路点导致左右抽风/转圈）
     const cells: number[] = [];
     let c = gk;
     while (c >= 0) {
@@ -84,16 +84,40 @@ export class FeasibilityPath {
       c = parent.get(c)!;
     }
     cells.reverse();
-    const stride = Math.max(1, Math.ceil(cells.length / 8));
-    for (let k = 1; k < cells.length; k += stride) {
-      const cc = cells[k];
-      out.push({
-        x: b.ox * CELL + (cc % side) * CELL + CELL / 2,
-        z: b.oz * CELL + Math.floor(cc / side) * CELL + CELL / 2,
-      });
+    const world = (cc: number): { x: number; z: number } => ({
+      x: b.ox * CELL + (cc % side) * CELL + CELL / 2,
+      z: b.oz * CELL + Math.floor(cc / side) * CELL + CELL / 2,
+    });
+    let anchor = 0;
+    while (anchor < cells.length - 1) {
+      let next = cells.length - 1;
+      while (next > anchor + 1 && !this.lineOk(t, b.ox, b.oz, side, cells[anchor], cells[next])) next--;
+      out.push(world(cells[next]));
+      anchor = next;
     }
-    out.push({ x: gx, z: gz });
+    if (out.length > 0) out[out.length - 1] = { x: gx, z: gz };
     this.dbg.ok++;
     return 'ok';
+  }
+
+  /** 两格中心直线是否可走（Bresenham 逐格读表 canStep；方向感知） */
+  private lineOk(
+    t: PassTable, ox: number, oz: number, side: number, a: number, c: number,
+  ): boolean {
+    let ax = a % side, az = (a - ax) / side;
+    const bx = c % side, bz = (c - bx) / side;
+    const dx = Math.abs(bx - ax), dz = Math.abs(bz - az);
+    const sx = ax < bx ? 1 : -1, sz = az < bz ? 1 : -1;
+    let err = dx - dz;
+    while (ax !== bx || az !== bz) {
+      const e2 = 2 * err;
+      let mx = 0, mz = 0;
+      if (e2 > -dz) { err -= dz; mx = sx; ax += sx; }
+      if (e2 < dx) { err += dx; mz = sz; az += sz; }
+      const wx = (ox + ax - mx) * CELL + CELL / 2;
+      const wz = (oz + az - mz) * CELL + CELL / 2;
+      if (!t.canStep(wx, wz, mx, mz)) return false;
+    }
+    return true;
   }
 }
