@@ -193,7 +193,80 @@ export class SwarmCommander {
 
   /** ★ 对特定小队下覆盖命令（引擎优先级最高，队长不抢） */
   orderSquad(squadId: number, order: TacticalOrder, ttl = 30): void {
-    this.swarm.issueOrder(squadId, order, ttl);
+    if (this.swarm.squads.centroidOf(squadId, _c0)) this.issueChecked(squadId, _c0.x, _c0.z, order, ttl);
+    else this.swarm.issueOrder(squadId, order, ttl);
+  }
+
+  // ============================================================
+  // ★ P2 初级寻路核验门（《敌人管线重构总纲.md》§4-P2，2026-09-22）
+  // ============================================================
+  // 发令前查"命令能不能落地"：可达 → coarse 走廊路点随令附带；
+  // 硬不可达 → 沿 from→tgt 径向缩近 3 档 → alternateTarget 换目标 → 都不行**不发**。
+  // unknown（HPA 簇未建完）→ 放行不附 coarse（防冷启动误杀）。
+  // 验收："发出即不可达命令 = 0/局" 由本门保证（by construction）。
+  readonly coarseDbg = { checked: 0, adjusted: 0, skipped: 0, unknown: 0 };
+
+  /** 发令核验门：全部引擎发令点必须走这里（返回 false = 未发）。 */
+  private issueChecked(
+    squadId: number, fromX: number, fromZ: number, order: TacticalOrder, ttl?: number,
+  ): boolean {
+    // ① 生效目标解析（五轴分工 subTargets 按队覆写——核验必须查覆写后的目标）
+    const sub = order.subTargets?.find((t) => t.squadId === squadId);
+    const eff = sub ?? order.target;
+    // 无目标 / 飞行队（独立空中层走直线）→ 不核验直接放行
+    const squad = this.swarm.squads.get(squadId);
+    if (!eff || squad?.type === 'flyer') {
+      this.swarm.issueOrder(squadId, order, ttl);
+      return true;
+    }
+    this.coarseDbg.checked++;
+    const coarse: { x: number; z: number }[] = [];
+    const res = this.swarm.coarseCheck(fromX, fromZ, eff.x, eff.z, coarse);
+    if (res === 'ok') {
+      this.swarm.issueOrder(squadId, { ...order, coarse }, ttl);
+      return true;
+    }
+    if (res === 'unknown') {
+      this.coarseDbg.unknown++;
+      this.swarm.issueOrder(squadId, order, ttl);   // 簇预热中：放行、不附 coarse
+      return true;
+    }
+    // ② 硬不可达 → 缩近（径向 3 档）：每档复核，首个可达即改目标放行
+    const dx = eff.x - fromX, dz = eff.z - fromZ;
+    const withTgt = (x: number, z: number, c: { x: number; z: number }[]): TacticalOrder => {
+      if (sub) {
+        return {
+          ...order,
+          subTargets: order.subTargets!.map((t) => (t.squadId === squadId ? { ...t, x, z } : t)),
+          coarse: c,
+        };
+      }
+      return { ...order, target: { ...eff, x, z }, coarse: c };
+    };
+    for (const t of [0.75, 0.5, 0.25]) {
+      const ax = fromX + dx * t, az = fromZ + dz * t;
+      if (this.swarm.coarseCheck(fromX, fromZ, ax, az, coarse) === 'ok') {
+        this.coarseDbg.adjusted++;
+        this.swarm.cmdLog.noteAdjustedUnreachable();
+        this.swarm.issueOrder(squadId, withTgt(ax, az, coarse), ttl);
+        this.lastDecision = { squad: squadId, kind: 'shrink_unreachable', at: performance.now() / 1000 };
+        return true;
+      }
+    }
+    // ③ 缩近也不行 → 换目标（最近高地/掩体位）
+    const alt = this.alternateTarget(fromX, fromZ, eff);
+    if ((alt.x !== eff.x || alt.z !== eff.z)
+      && this.swarm.coarseCheck(fromX, fromZ, alt.x, alt.z, coarse) === 'ok') {
+      this.coarseDbg.adjusted++;
+      this.swarm.cmdLog.noteAdjustedUnreachable();
+      this.swarm.issueOrder(squadId, withTgt(alt.x, alt.z, coarse), ttl);
+      this.lastDecision = { squad: squadId, kind: 'retarget_unreachable', at: performance.now() / 1000 };
+      return true;
+    }
+    // ④ 都不行 → 不发（保证"发出即不可达 = 0"；下拍决策自然重试）
+    this.coarseDbg.skipped++;
+    this.lastDecision = { squad: squadId, kind: 'skip_unreachable', at: performance.now() / 1000 };
+    return false;
   }
 
   /** ★ 发信号（五轴「时序」：等 signal 的命令到点生效） */
@@ -1007,7 +1080,7 @@ export class SwarmCommander {
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
       const out = decideTarget(d, s, ctx, st);
-      this.swarm.issueOrder(s.id, {
+      this.issueChecked(s.id, scx, scz, {
         kind: out.kind, target: out.target, roe: out.roe,
         urgency: out.urgency, mission: out.mission || undefined,
         threatX: out.threat?.x, threatZ: out.threat?.z, seq: 0,
@@ -1037,19 +1110,25 @@ export class SwarmCommander {
         if (m.kind !== 'requestSupport' && m.kind !== 'shareContact') continue;
         const helper = this.pickHelper(ratings, m.x, m.z, r.squadId, now);
         if (!helper) continue;
-        this.swarm.issueOrder(helper.squadId, {
+        this.issueChecked(helper.squadId, helper.cx, helper.cz, {
           kind: 'advance', target: { x: m.x, z: m.z }, roe: 'engage', seq: 0,
         }, 6);
         this.supportCd.set(helper.squadId, now + 10);
         this.lastDecision = { squad: helper.squadId, kind: m.kind === 'requestSupport' ? 'support' : 'scout', at: now };
       }
     }
+    // ★ 评级索引（发令核验起点；tacticalTick 内所有 issueChecked 共用）
+    const rateOf = new Map<number, SquadRating>();
+    for (const r of ratings) rateOf.set(r.squadId, r);
     // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体中心 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
     for (const [id, h] of this.coverHolders) {
-      this.swarm.issueOrder(id, {
+      const rr = rateOf.get(id);
+      const order: TacticalOrder = {
         kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
         threatX: playerX, threatZ: playerZ, seq: 0,
-      }, 4);
+      };
+      if (rr) this.issueChecked(id, rr.cx, rr.cz, order, 4);
+      else this.swarm.issueOrder(id, order, 4);
     }
     // ② 逐队：受阻重试/换目标 + 残血撤离（按逐兵种 retreatHp）
     for (const r of ratings) {
@@ -1068,7 +1147,8 @@ export class SwarmCommander {
             this.lastDecision = { squad: r.squadId, kind: 'retry', at: now };
           } else {
             const alt = this.alternateTarget(r.cx, r.cz, tgt);
-            this.swarm.issueOrder(r.squadId, { kind: 'advance', target: alt, roe: 'engage', seq: 0 }, 8);
+            this.issueChecked(r.squadId, r.cx, r.cz,
+              { kind: 'advance', target: alt, roe: 'engage', seq: 0 }, 8);
             this.lastDecision = { squad: r.squadId, kind: 'retarget', at: now };
           }
           pr.at = now; pr.d = d;
@@ -1079,7 +1159,7 @@ export class SwarmCommander {
       if (dct.retreatHp > 0 && r.hpRatio <= dct.retreatHp && st?.order.kind !== 'retreat') {
         const ax = r.cx - playerX, az = r.cz - playerZ;
         const al = Math.hypot(ax, az) || 1;
-        this.swarm.issueOrder(r.squadId, {
+        this.issueChecked(r.squadId, r.cx, r.cz, {
           kind: 'retreat',
           target: { x: r.cx + (ax / al) * 18, z: r.cz + (az / al) * 18 },
           seq: 0,
@@ -1333,7 +1413,11 @@ export class SwarmCommander {
     const m = this.mission;
     if (!m) return;
     for (const s of this.swarm.squads.all()) {
-      this.swarm.issueOrder(s.id, m, SwarmCommander.RESEND_S + 5);
+      if (this.swarm.squads.centroidOf(s.id, _c0)) {
+        this.issueChecked(s.id, _c0.x, _c0.z, m, SwarmCommander.RESEND_S + 5);
+      } else {
+        this.swarm.issueOrder(s.id, m, SwarmCommander.RESEND_S + 5);
+      }
     }
   }
 }

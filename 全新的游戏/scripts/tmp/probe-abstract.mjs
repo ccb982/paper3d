@@ -102,6 +102,7 @@ const snapPage = (page) => page.evaluate(() => {
     ent: window.__ppMode().enemies.length, pool: sw.pool.count,
     dbgR: sw.stuckDbg.recycled, dbgT: sw.stuckDbg.tracked,
     cmd: sw.cmdLog.snap(), cmdRear: sw.cmdLog.latestPerSquad(10), cmdAll: sw.cmdLog.latestPerSquad(80),
+    coarse: { ...sw.commander.coarseDbg, ledgerAdj: sw.cmdLog.adjustedUnreachable | 0 },
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
     drops: sw.orderDrops | 0,
@@ -286,6 +287,8 @@ for (const seed of seeds) {
     const c = s.cmd; const kinds = Object.entries(c.kinds).map(([k, v]) => `${k}:${v}`).join(' ');
     console.log(`T+${(k + 1) * 15}s stage=${s.stage} ${s.posture} p=${s.p} alive=${s.alive} recalled=${s.recalled} ent=${s.ent} pool=${s.pool} 回收=${s.dbgR}/追踪=${s.dbgT} pri=${s.pri} passes=${s.passes} holders=${s.coverHolders}`);
     console.log(`   命令台账 引擎=${c.engine} 队长=${c.leader} 唯一=${c.unique}/${c.total} 比=${c.engine ? (c.unique / c.engine).toFixed(2) : '-'} 种类[${kinds}]`);
+    const cg = s.coarse;
+    if (cg) console.log(`   可达核验(P2) checked=${cg.checked} 调账=${cg.adjusted}(台账${cg.ledgerAdj}) 拦截=${cg.skipped} 预热放行=${cg.unknown}`);
     // ★ 事态闸门核验：任何命令目标不得比允许离舰半径更近（稳步推进、不一上来冲家）
     let over = 0;
     for (const e of s.cmdAll) {
@@ -300,7 +303,7 @@ for (const seed of seeds) {
     console.log(`        远程: ${R || '(无)'}`);
     if (k === 3) {
       const st = s.strat;
-      console.log(`   L3 窗内=${st.n}格 parityΔ=${st.dPar}(快照权重,断言<0.01) 态势陈旧Δ=${st.dFresh}`);
+      console.log(`   L3 窗内=${st.n}格 parityΔ=${st.dPar}(快照权重,断言<0.01) 态势陈旧Δ=${st.dFresh}(陈旧度指标:lastW+player vs 实时liveWeights+实时player,非parity口径,仅观测不断言)`);
       if (st.worst) console.log(`   最差格 ${JSON.stringify(st.worst)} w=${JSON.stringify(st.w)}`);
       console.log(`   冠军格 ${st.heroes}`);
       console.log(`   矩阵(关高掩后) 盾[${st.matrix.defense}] 突[${st.matrix.assault}] 远[${st.matrix.ranged}] 后[${st.matrix.logistics}]`);

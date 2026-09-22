@@ -75,11 +75,45 @@ export class SquadNavigator {
       // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
       state.pathAt = warming ? 0 : now;
       state.pathFailedAt = 0;
+    } else if (state.order.coarse && state.order.coarse.length > 0) {
+      // ★ P2 coarse 软参考兜底：细解（HPA/有界A*）失败 → 沿随令 coarse 走廊走（仍优于直线）
+      state.order.path = state.order.coarse.slice();
+      state.pathGoalX = tgt.x;
+      state.pathGoalZ = tgt.z;
+      state.pathAt = now;
+      state.pathFailedAt = 0;
     } else {
       // ★ 无解 → 清路径走直线（绝不停摆；冷却后再试）
       state.pathFailedAt = now;
       state.order.path = undefined;
     }
+  }
+
+  /** ★ P2 初级寻路核验入口（大队发令前调用；与 ensurePath 共用 HPA 簇缓存）。
+   *  直线走廊粗判（≤64m 零建簇）→ 否则簇级 find；区分 blocked/unknown 防冷启动误杀。 */
+  coarseCheck(
+    sx: number, sz: number, gx: number, gz: number,
+    out: { x: number; z: number }[],
+  ): 'ok' | 'blocked' | 'unknown' {
+    const raster = RasterMap.current;
+    out.length = 0;
+    if (!raster) return 'unknown';
+    const dist = Math.hypot(gx - sx, gz - sz);
+    if (dist < 2) return 'ok';
+    // 直线走廊粗判（4m 采样：仅拦 pit/水域——升向不在此判，避免误杀正常起伏）
+    if (dist <= 64) {
+      const n = Math.ceil(dist / 4);
+      let clear = true;
+      for (let k = 1; k < n; k++) {
+        const t = k / n;
+        const x = sx + (gx - sx) * t, z = sz + (gz - sz) * t;
+        const h = raster.surfaceHeightAt(x, z);
+        const role = raster.tileDefAt(x, z).genRole;
+        if (role === 'pit' || h < -1.2) { clear = false; break; }
+      }
+      if (clear) return 'ok';
+    }
+    return this.hpa.coarseReachable(raster, sx, sz, gx, gz, out);
   }
 
   /** ② L3 实体编队 steer（10Hz 调用）：命令目标（或走廊路点）+ 阵型槽位 → moveTarget。 */

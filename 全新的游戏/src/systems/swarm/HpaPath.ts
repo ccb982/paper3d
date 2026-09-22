@@ -242,6 +242,32 @@ export class HpaPath {
   // 内部
   // ============================================================
 
+  /** ★ P2 初级寻路核验（《敌人管线重构总纲.md》§4-P2）：簇级可达 + 顺产 coarse 走廊路点。
+   *  与 find() 共用簇缓存；输出稀化到 ≤8（走廊级软参考，非逐格路径）。
+   *  @returns ok=可达（out=coarse 路点，末点=精确终点）；
+   *           blocked=硬不可达（out 空）；
+   *           unknown=簇预算未建完（调用方放行、不附 coarse——防冷启动误杀）。 */
+  coarseReachable(
+    raster: RasterMap, sx: number, sz: number, gx: number, gz: number,
+    out: { x: number; z: number }[],
+  ): 'ok' | 'blocked' | 'unknown' {
+    out.length = 0;
+    const full: { x: number; z: number }[] = [];
+    const ok = this.find(raster, sx, sz, gx, gz, full);
+    if (ok) {
+      if (full.length <= 8) {
+        for (const p of full) out.push(p);
+      } else {
+        const step = (full.length - 1) / 7;
+        for (let i = 0; i < 8; i++) out.push(full[Math.round(i * step)]);
+        out[out.length - 1] = full[full.length - 1];
+      }
+      return 'ok';
+    }
+    // find 失败分两类：簇没建完（warming）=未知 → 放行；建完仍无路 =真不可达
+    return this.warming ? 'unknown' : 'blocked';
+  }
+
   private relax(
     to: string, ng: number,
     nodes: Map<string, Node>, gScore: Map<string, number>, fScore: Map<string, number>,

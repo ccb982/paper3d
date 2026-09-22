@@ -111,6 +111,8 @@ export interface TacticalOrder {
   /** ★ 威胁位置（引擎提供；驻守掩体命令里的**玩家位置** → 个体自行绕掩体站位） */
   threatX?: number;
   threatZ?: number;
+  /** ★ 大致路径 coarse（P2 初级寻路副产物；走廊级软参考 ≤8 路点，小队可随时弃换） */
+  coarse?: { x: number; z: number }[];
   seq: number;
 }
 

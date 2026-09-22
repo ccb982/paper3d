@@ -43,6 +43,13 @@ export class CommandLedger {
   byKind = new Map<SquadOrderKind, number>();
   /** 各源累计 */
   bySource = { engine: 0, leader: 0 } as Record<'engine' | 'leader', number>;
+  /** ★ P2：发令核验不可达 → 缩近/换目标的调账次数（总纲验收"adjusted_unreachable 有账"） */
+  adjustedUnreachable = 0;
+
+  /** P2 核验调账：不可达目标被缩近/换目标后才放行 */
+  noteAdjustedUnreachable(): void {
+    this.adjustedUnreachable++;
+  }
 
   record(
     t: number, squadId: number, kind: SquadOrderKind, source: 'engine' | 'leader',
@@ -84,9 +91,16 @@ export class CommandLedger {
   }
 
   /** 汇总快照（输出/断言用） */
-  snap(): { total: number; unique: number; engine: number; leader: number; kinds: Record<string, number> } {
+  snap(): {
+    total: number; unique: number; engine: number; leader: number;
+    kinds: Record<string, number>; adjusted: number;
+  } {
     const kinds: Record<string, number> = {};
     for (const [k, v] of this.byKind) kinds[k] = v;
-    return { total: this.total, unique: this.unique, engine: this.bySource.engine, leader: this.bySource.leader, kinds };
+    return {
+      total: this.total, unique: this.unique,
+      engine: this.bySource.engine, leader: this.bySource.leader,
+      kinds, adjusted: this.adjustedUnreachable,
+    };
   }
 }

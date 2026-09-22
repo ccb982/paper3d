@@ -1088,6 +1088,14 @@ export class SwarmSystem {
     this.tactics.issue(squadId, order, performance.now() / 1000, ttl);
   }
 
+  /** ★ P2 初级寻路核验（大队发令门调用；直通 SquadNavigator/HPA 簇缓存） */
+  coarseCheck(
+    sx: number, sz: number, gx: number, gz: number,
+    out: { x: number; z: number }[],
+  ): 'ok' | 'blocked' | 'unknown' {
+    return this.nav.coarseCheck(sx, sz, gx, gz, out);
+  }
+
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
   private _orderDrops = 0;
   get orderDrops(): number { return this._orderDrops; }
