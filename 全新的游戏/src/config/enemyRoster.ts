@@ -163,13 +163,12 @@ export const ENEMY_ROSTER: EnemySpec[] = [
   {
     id: 'sarkaz_swordsman', name: '萨卡兹大剑手',
     file: '萨卡兹大剑手，较强的杂兵.ftx3.gz',
-    // ★ 2026-09-19 用户定调：改造为**后勤兵**（挖坑、造掩体；行为后续接）
     role: 'logistics', attackType: 'melee',
     // ★ 逐兵种战术：后方集结
     tactics: { engine: { mode: 'regroup', chase: false, retreatHp: 0.55 } },
     ai: SARKAZ_SWORDSMAN_AI,
     hp: 70, defense: 1, attackPower: 6,
-    scale: 2.2, collisionScale: 1.25, pack: 1, weight: 7,
+    scale: 2.2, collisionScale: 1.25, pack: 1, weight: 6,
     drops: [
       { itemId: 'device', chance: 0.6, min: 1, max: 2 },
       { itemId: 'sugar', chance: 0.4, min: 1, max: 1 },
