@@ -13,7 +13,10 @@ import type {
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
 import type { Squad, SquadType } from './SquadTable';
-import { MISSION_EXEC as MISSION_EXEC_TABLE, guardPoint, UNIT_TACTICS } from './UnitTactics';
+import {
+  MISSION_EXEC as MISSION_EXEC_TABLE, guardPoint, UNIT_TACTICS,
+  ensureCovered, standBehindCover, type TerrainCover,
+} from './UnitTactics';
 import { CommandLedger } from './CommandLedger';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
@@ -253,11 +256,13 @@ export class SquadTactics {
     return state.order.target ?? null;
   }
 
-  /** ★ 命令锚（含驻守掩体的**本地站位计算**）：命令提供掩体 + 玩家位置，单位自行绕掩体。
-   *  非 garrison 命令 = 路径/目标原样；garrison = 掩体背玩家侧站位，
-   *  若该点不被遮蔽则沿切线搜索绕掩体，确保掩体真能保护自己。 */
+  /** ★ 命令锚（队长算具体站位）：
+   *  防守（protect）= 护卫点 + 游弋 → ensureCovered 掩体复核（能躲则贴掩体侧，躲不了保持护卫位）；
+   *  驻守（garrison）= target 掩体中心 → 背威胁侧站位 + LOS 复核 + 不挡绕掩体（《敌人管线设计.md》§3.2.1）；
+   *  其余 = 路径/目标原样。 */
   static resolveAnchor(
     state: SquadOrderState, cx: number, cz: number, type?: SquadType, now = 0,
+    cover?: TerrainCover | null,
   ): { x: number; z: number } | null {
     const o = state.order;
     // ★ 保护令（队长站位）：命令只给"被保护对象 + 玩家位置" → 队长算护卫点 + 巡逻游弋
@@ -270,11 +275,15 @@ export class SquadTactics {
       const dl = Math.hypot(dx, dz) || 1;
       const ux = -dz / dl, uz = dx / dl;   // 切向（防线横向）
       const swing = Math.sin(now * 0.5 + state.squadId * 1.3) * (p?.patrolR ?? 4);
-      return { x: g.x + ux * swing, z: g.z + uz * swing };
+      const swung = { x: g.x + ux * swing, z: g.z + uz * swing };
+      // ★ 掩体校验（防守）：护卫点真被挡住才站；不挡 → 小半径找贴掩体侧；都没有 → 保持护卫位
+      return ensureCovered(swung, tx, tz, cover);
     }
     if (o.kind === 'garrison' && o.target) {
-      // ★ 驻守掩体后的**战壕位**：引擎直接给站位（掩体外侧 5m）；个体只执行，不再按玩家绕掩体
-      return o.target;
+      const tx = o.threatX, tz = o.threatZ;
+      // ★ 驻守（队长）：target = 掩体中心（引擎只选保护对象）→ 站位由队长绕掩体自算并复核
+      if (tx === undefined || tz === undefined) return o.target;
+      return standBehindCover(o.target.x, o.target.z, tx, tz, cover);
     }
     return SquadTactics.currentTargetOf(state, cx, cz);
   }
@@ -313,13 +322,13 @@ export class SquadTactics {
    * 分解：命令 + 成员角色桶 → 个体指令（默认矩阵；稳定输出）。
    * 目标点：命令 target → 指令 target（路径滚动由后续执行层按 corridorIdx 推进）。
    */
-  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1, mob?: MobTactics | null): UnitDirective {
+  decompose(squad: Squad, bucket: DirectiveRoleBucket, now: number, memberHpRatio = 1, mob?: MobTactics | null, cover?: TerrainCover | null): UnitDirective {
     const state = this.board.get(squad.id);
     // ★ 五轴。路径：目标沿 path 滚动（队质心前方路点）
     let cx = 0, cz = 0, n = 0;
     for (const m of squad.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
-    const target = state ? SquadTactics.resolveAnchor(state, cx, cz, squad.type, now) : null;
+    const target = state ? SquadTactics.resolveAnchor(state, cx, cz, squad.type, now, cover) : null;
     // ★ 五轴「紧急度」：限速乘子（1 + urgency·0.3，上限 1.5）
     const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。

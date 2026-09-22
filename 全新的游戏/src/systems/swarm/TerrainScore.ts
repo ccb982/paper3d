@@ -17,6 +17,7 @@ import type { RasterMap } from '../../services/map/RasterMap';
 import { samplerFor, type TerrainSampler } from '../../services/map/TerrainSampler';
 import type { BattlePosture } from './Posture';
 import type { DefensePlan } from './LandingTerrain';
+import { hasCoverFrom } from './UnitTactics';
 
 /** 评分格边长（米；★ 4m = 地形块网格，与挖掘同源） */
 const CELL = 4;
@@ -407,8 +408,8 @@ export class TerrainScore {
         if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
         const ddx = ex - bx, ddz = ez - bz;
         const ddl = Math.hypot(ddx, ddz) || 1;
-        const px2 = bx + (ddx / ddl) * 3.5, pz2 = bz + (ddz / ddl) * 3.5;
-        const covered = this.trench[i] === 1 || this.wallNear[i] === 1 || this.blockedAt(px2, pz2);
+        void ddl;
+        const covered = hasCoverFrom(ex, ez, bx, bz, this);   // ★ 掩体校验真源（队长同源：实体LOS+地形）
         if (!covered) continue;
         const sc = scorer(this.featsOf(i, playerX, playerZ));
         if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };
@@ -519,11 +520,8 @@ export class TerrainScore {
         const bx = this.sx + ix * CELL + CELL / 2;
         const bz = this.sz + iz * CELL + CELL / 2;
         if ((bx - x) ** 2 + (bz - z) ** 2 > r2) continue;
-        // 敌侧探针：以本格为原点、朝敌人方向 2m
-        const ddx = ex - bx, ddz = ez - bz;
-        const ddl = Math.hypot(ddx, ddz) || 1;
-        const px2 = bx + (ddx / ddl) * 3.5, pz2 = bz + (ddz / ddl) * 3.5;
-        const covered = this.trench[i] === 1 || this.wallNear[i] === 1 || this.blockedAt(px2, pz2);
+        // ★ 掩体判定换真源：敌人 → 本格真被遮挡吗（实体LOS+地形；队长同源）
+        const covered = hasCoverFrom(ex, ez, bx, bz, this);
         if (!covered) continue;
         const sc = this.score[i] + COVER_BONUS;
         if (!best || sc > best.score) best = { x: bx, z: bz, score: sc };

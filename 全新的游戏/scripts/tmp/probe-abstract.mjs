@@ -159,6 +159,23 @@ const snapPage = (page) => page.evaluate(() => {
       }
       return acc;
     })(),
+    // ★ 掩体校验（队长真源 debugHasCover）：防守/驻守队成员"真被遮挡"比例
+    covCheck: (() => {
+      const px = pm.x, pz = pm.z;
+      let gar = 0, tot = 0, cov = 0;
+      for (const s of sw.squads.all()) {
+        if (s.members.size === 0) continue;
+        const st2 = sw.tactics.board.get(s.id);
+        const kind = st2?.order?.kind ?? '';
+        if (kind !== 'garrison' && kind !== 'protect') continue;
+        gar++;
+        for (const m of s.members.values()) {
+          tot++;
+          if (c.debugHasCover(px, pz, m.x, m.z)) cov++;
+        }
+      }
+      return { gar, tot, cov };
+    })(),
   };
 });
 
@@ -205,6 +222,8 @@ for (const seed of seeds) {
       console.log(`   判定 ${Object.entries(st.chk).map(([k2, v]) => `${k2}=${v}`).join('  ')}`);
       const bt = Object.entries(s.byType).map(([k2, a]) => `${k2}×${a.n}[h̄${a.h} dP̄${a.dP} K̄${a.ch}]`).join(' ');
       console.log(`   站位 ${bt}`);
+      const cc = s.covCheck;
+      console.log(`   掩体校验(队长真源) 驻守/防守队=${cc.gar} 成员覆盖=${cc.cov}/${cc.tot}${cc.tot ? ` (${(cc.cov / cc.tot * 100).toFixed(0)}%)` : ''}`);
     }
   }
   await page.close();

@@ -9,6 +9,7 @@
 // ============================================================
 
 import type { SquadType } from '../../entity/SwarmUnit';
+import { coverBlocksLine } from '../../entity/CoverEntity';
 
 /** 战术归属分类（共用面） */
 export type RoleKind = 'melee' | 'ranged' | 'support' | 'air' | 'mixed';
@@ -149,4 +150,72 @@ export function guardPoint(
   const dx = threatX - siteX, dz = threatZ - siteZ;
   const dl = Math.hypot(dx, dz) || 1;
   return { x: siteX + (dx / dl) * dist, z: siteZ + (dz / dl) * dist };
+}
+
+// ============================================================
+// ★ 掩体校验（队长用·共用真源）：防守/驻守"真被挡住"的唯一判据
+// ============================================================
+
+/** 地形遮蔽查询（TerrainScore 结构满足；null = 无地形层，只查实体掩体） */
+export interface TerrainCover {
+  blockedAt(x: number, z: number): boolean;
+  isTrenchAt(x: number, z: number): boolean;
+  wallNearAt(x: number, z: number): boolean;
+}
+
+/** ★ 掩体校验真源：威胁 → 点的视线是否真被遮挡。
+ *  = 实体掩体 LOS（coverBlocksLine：墙/掩体 slab 相交，含敌我）
+ *  || 地形（端点身处战壕/贴硬墙 + 中线 ~3m 步进撞硬边界） */
+export function hasCoverFrom(
+  tx: number, tz: number, x: number, z: number, blocker?: TerrainCover | null,
+): boolean {
+  if (coverBlocksLine(tx, tz, x, z)) return true;
+  if (!blocker) return false;
+  if (blocker.isTrenchAt(x, z) || blocker.wallNearAt(x, z)) return true;
+  const dx = x - tx, dz = z - tz;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-3) return false;
+  const steps = Math.min(16, Math.max(2, Math.ceil(len / 3)));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    if (blocker.blockedAt(tx + dx * t, tz + dz * t)) return true;
+  }
+  return false;
+}
+
+/** ★ 驻守站位（队长）：掩体背威胁侧初选 → LOS 复核 → 不挡则绕掩体环采样（±30°~180°）；
+ *  都不挡 → 初选兜底（掩体确实挡不住该威胁方向时保底站位） */
+export function standBehindCover(
+  coverX: number, coverZ: number, tx: number, tz: number,
+  blocker?: TerrainCover | null,
+): { x: number; z: number } {
+  const back = coverStandPoint(coverX, coverZ, tx, tz);
+  if (hasCoverFrom(tx, tz, back.x, back.z, blocker)) return back;
+  const a0 = Math.atan2(back.z - coverZ, back.x - coverX);
+  const r = COVER_STAND + 0.8;
+  for (let k = 1; k <= 6; k++) {
+    for (const s of [1, -1] as const) {
+      const a = a0 + s * (k * Math.PI) / 6;
+      const cx = coverX + Math.cos(a) * r;
+      const cz = coverZ + Math.sin(a) * r;
+      if (hasCoverFrom(tx, tz, cx, cz, blocker)) return { x: cx, z: cz };
+    }
+  }
+  return back;
+}
+
+/** ★ 防守站位复核（队长）：护卫点不被遮挡 → 半径内环采样找真遮挡位；
+ *  都没有 → 原点（护卫职责优先于掩体，不为躲而丢线） */
+export function ensureCovered(
+  pick: { x: number; z: number }, tx: number, tz: number,
+  blocker?: TerrainCover | null, radius = 4, samples = 8,
+): { x: number; z: number } {
+  if (hasCoverFrom(tx, tz, pick.x, pick.z, blocker)) return pick;
+  for (let k = 0; k < samples; k++) {
+    const a = (k / samples) * Math.PI * 2;
+    const cx = pick.x + Math.cos(a) * radius;
+    const cz = pick.z + Math.sin(a) * radius;
+    if (hasCoverFrom(tx, tz, cx, cz, blocker)) return { x: cx, z: cz };
+  }
+  return pick;
 }

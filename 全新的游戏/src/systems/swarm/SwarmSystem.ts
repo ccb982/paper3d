@@ -1112,7 +1112,7 @@ export class SwarmSystem {
       let az = state.order.target?.z ?? 0;
       let fx = 1, fz = 0;
       if (this.squads.centroidOf(squad.id, this._centroid)) {
-        const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now);
+        const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, this.commander.terrain);
         if (tgt) {
           ax = tgt.x;
           az = tgt.z;
@@ -1129,6 +1129,7 @@ export class SwarmSystem {
         const hpRatio = info.maxHp > 0 ? info.hp / info.maxHp : 1;
         const directive = this.tactics.decompose(
           squad, bucket, now, hpRatio, hooks.mobTactics?.(squad.mobKind) ?? null,
+          this.commander.terrain,
         );
         // ★ 队长第二指挥（编队位置）：按 uid rank 下发阵型槽位目标（单例不排阵）
         if (!squad.singleton) {

@@ -24,7 +24,7 @@ import { samplerFor } from '../../services/map/TerrainSampler';
 import { decideTarget, type DecideCtx, type DecideState } from './Decide';
 import { EngineerCorps, type BuildPiece } from './EngineerCorps';
 import { MemberTaskBoard } from './MemberTaskBoard';
-import { engineMissionFor } from './UnitTactics';
+import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
 import { setSteerTable } from '../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
@@ -416,6 +416,16 @@ export class SwarmCommander {
   /** ★ 事态闸门（调试/探针读：frontP 单调推进、minD 允许离舰半径） */
   get frontGate(): { frontP: number; minD: number } {
     return { frontP: this.frontP, minD: this.frontMinD };
+  }
+
+  /** ★ 地形表只读视图（队长掩体校验/外部读用；队长经 resolveAnchor 传入） */
+  get terrain(): TerrainScore {
+    return this.terrainScore;
+  }
+
+  /** ★ 调试/探针：掩体校验真源（与队长同源 hasCoverFrom） */
+  debugHasCover(tx: number, tz: number, x: number, z: number): boolean {
+    return hasCoverFrom(tx, tz, x, z, this.terrainScore);
   }
 
   tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
@@ -948,7 +958,7 @@ export class SwarmCommander {
       const coverHold = (s.type === 'ranged' && !s.builders) ? this.coverHolders.get(s.id) : undefined;
       let pt: ProtectTarget | null = null;
       // ★ 配额闸门：cover/site/shooter/post 按锚坐标计数；engineer 按工程队 id 计数（锚随动不误判）
-      if (coverHold && quotaOk(coordKey('cov', coverHold.x, coverHold.z))) pt = { x: coverHold.x, z: coverHold.z, source: 'cover' };   // ★ 远程：驻守掩体后战壕位
+      if (coverHold && quotaOk(coordKey('cov', coverHold.cx, coverHold.cz))) pt = { x: coverHold.cx, z: coverHold.cz, source: 'cover' };   // ★ 远程：驻守掩体（中心；站位由队长绕掩体算）
       else if (escort) {
         const eid = this.escortAssign.get(s.id) ?? -1;
         if (eid >= 0 && quotaOk(`eng:${eid}`)) pt = { x: escort.x, z: escort.z, source: 'engineer' };
@@ -1034,10 +1044,10 @@ export class SwarmCommander {
         this.lastDecision = { squad: helper.squadId, kind: m.kind === 'requestSupport' ? 'support' : 'scout', at: now };
       }
     }
-    // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
+    // ★ 掩体驻守微调（1Hz）：**无条件重发**（掩体中心 + 最新玩家位置）——实时跟随玩家换侧/绕掩体
     for (const [id, h] of this.coverHolders) {
       this.swarm.issueOrder(id, {
-        kind: 'garrison', target: { x: h.x, z: h.z }, roe: 'engage', mission: 'hold',
+        kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
         threatX: playerX, threatZ: playerZ, seq: 0,
       }, 4);
     }
@@ -1131,7 +1141,7 @@ export class SwarmCommander {
     const consider = (x: number, z: number, high: boolean, base = 0): void => {
       const d = Math.hypot(x - px, z - pz);
       if (d < range * 0.5 || d > range * 1.05 || d < minDist) return;
-      const blocked = coverBlocksLine(px, pz, x, z);   // 玩家 → 该点：掩体挡不挡
+      const blocked = hasCoverFrom(px, pz, x, z, this.terrainScore);   // 玩家 → 该点：真被遮挡吗（实体LOS+地形）
       let score = base + -Math.abs(d - ideal) * 0.08;
       if (blocked) score += 3;
       if (high) score += 0.8;
@@ -1179,7 +1189,7 @@ export class SwarmCommander {
       // ★ 优先读地块评分表（全兵种共用；掩体/态势权重已在表内）；表未就绪回落高程探针
       let score = this.terrainScore.scoreAt(x, z) ?? (elev * 0.5);
       if (score <= -1e8) continue;
-      if (coverBlocksLine(px, pz, x, z)) score += 3;
+      if (hasCoverFrom(px, pz, x, z, this.terrainScore)) score += 3;
       if (score > bestScore) { bestScore = score; best = { x, z }; }
     }
     if (best) this.postCache.set(key, { x: best.x, z: best.z, at: nowMs });
