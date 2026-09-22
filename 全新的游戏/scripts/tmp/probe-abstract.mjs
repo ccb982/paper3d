@@ -64,6 +64,8 @@ const snapPage = (page) => page.evaluate(() => {
     fg: sw.commander.frontGate, shX: 30, shZ: 30,
     entStillMax: window.__entStillMax | 0,
     drops: sw.orderDrops | 0,
+    pStack: (() => { let m = 0; const g = new Map(); for (const t of sw.commander.protectAssign.values()) { const k = `${t.x | 0},${t.z | 0}`; const n = (g.get(k) ?? 0) + 1; g.set(k, n); if (n > m) m = n; } return m; })(),
+    pObj: sw.commander.protectAssign.size,
     pri: priBuilt.join(' '), passes: c.digPasses.size,
     builders, ranged, coverHolders: c.coverHolders.size,
   };
@@ -99,7 +101,7 @@ for (const seed of seeds) {
       const d = Math.hypot(e.tx - s.shX, e.tz - s.shZ);
       if (d < s.fg.minD - 0.5) over++;
     }
-    console.log(`   事态闸门 frontP=${+s.fg.frontP.toFixed(3)} 允许离舰=${+s.fg.minD.toFixed(1)}m 越界命令=${over}/队 实体停滞=${s.entStillMax}s 到期回落=${s.drops}`);
+    console.log(`   事态闸门 frontP=${+s.fg.frontP.toFixed(3)} 允许离舰=${+s.fg.minD.toFixed(1)}m 越界命令=${over}/队 实体停滞=${s.entStillMax}s 到期回落=${s.drops} 保护堆挤=${s.pStack}/锚(对象${s.pObj})`);
     for (const e of s.cmdRear) console.log(`   cmd #${e.squadId} ${e.kind}${e.mission ? '(' + e.mission + ')' : ''} @${+e.tx.toFixed(0)},${+e.tz.toFixed(0)} ${e.source} ttl=${e.ttl} (x${e.n})`);
     console.log(`        工兵: ${B || '(无)'}`);
     console.log(`        远程: ${R || '(无)'}`);

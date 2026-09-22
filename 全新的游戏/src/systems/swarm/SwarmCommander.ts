@@ -896,6 +896,16 @@ export class SwarmCommander {
     // ★ 大任务粘性（引擎只在此刻重派：落点/态势/施工阶段切换）
     const missionEpoch = this.postureEpoch * 100000 + this.scoreStamp * 2 + (this.stage === 'S1' ? 0 : 1);
     this.protectAssign.clear();
+    // ★ P3-2 保护配额（重构总纲 §2.5）：同一保护对象 ≤2 队——防"5 队挤 1 锚"堆挤
+    const PROTECT_QUOTA = 2;
+    const pcount = new Map<string, number>();
+    const quotaOk = (key: string): boolean => {
+      const n = pcount.get(key) ?? 0;
+      if (n >= PROTECT_QUOTA) return false;
+      pcount.set(key, n + 1);
+      return true;
+    };
+    const coordKey = (pre: string, x: number, z: number): string => `${pre}:${x | 0},${z | 0}`;
     for (const s of squads) {
       let scx = 0, scz = 0, sn = 0;
       for (const m of s.members.values()) { scx += m.x; scz += m.z; sn++; }
@@ -923,13 +933,31 @@ export class SwarmCommander {
         ? this.escortAnchor(s.id, scx, scz, engCent) : null;
       const coverHold = (s.type === 'ranged' && !s.builders) ? this.coverHolders.get(s.id) : undefined;
       let pt: ProtectTarget | null = null;
-      if (coverHold) pt = { x: coverHold.x, z: coverHold.z, source: 'cover' };   // ★ 远程：驻守掩体后战壕位
-      else if (escort) pt = { x: escort.x, z: escort.z, source: 'engineer' };
-      else if (this.battlePosture === 'assault' && buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
-      else if (buildSite) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
+      // ★ 配额闸门：cover/site/shooter/post 按锚坐标计数；engineer 按工程队 id 计数（锚随动不误判）
+      if (coverHold && quotaOk(coordKey('cov', coverHold.x, coverHold.z))) pt = { x: coverHold.x, z: coverHold.z, source: 'cover' };   // ★ 远程：驻守掩体后战壕位
+      else if (escort) {
+        const eid = this.escortAssign.get(s.id) ?? -1;
+        if (eid >= 0 && quotaOk(`eng:${eid}`)) pt = { x: escort.x, z: escort.z, source: 'engineer' };
+        else {
+          // ★ 本队配对的工程队满额 → 换最近有余量的工程队（重锁粘性配对；都满 → 不配，走常规部署）
+          let alt = -1, bd = Infinity;
+          for (const [id, c] of engCent) {
+            if ((pcount.get(`eng:${id}`) ?? 0) >= PROTECT_QUOTA) continue;
+            const d = (c.x - scx) ** 2 + (c.z - scz) ** 2;
+            if (d < bd) { bd = d; alt = id; }
+          }
+          if (alt >= 0 && quotaOk(`eng:${alt}`)) {
+            const c = engCent.get(alt)!;
+            this.escortAssign.set(s.id, alt);
+            pt = { x: c.x, z: c.z, source: 'engineer' };
+          }
+        }
+      }
+      else if (this.battlePosture === 'assault' && buildSite && quotaOk(coordKey('site', buildSite.x, buildSite.z))) pt = { x: buildSite.x, z: buildSite.z, source: 'shooter' };
+      else if (buildSite && quotaOk(coordKey('site', buildSite.x, buildSite.z))) pt = { x: buildSite.x, z: buildSite.z, source: 'site' };
       else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         const post = this.postAssign.get(s.id);
-        if (post) pt = { x: post.x, z: post.z, source: 'post' };
+        if (post && quotaOk(coordKey('post', post.x, post.z))) pt = { x: post.x, z: post.z, source: 'post' };
       }
       if (pt) this.protectAssign.set(s.id, pt);
       ctx.protect = pt;
