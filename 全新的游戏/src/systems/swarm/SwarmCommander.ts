@@ -442,23 +442,6 @@ export class SwarmCommander {
           injected++;
           this.fortify.dbg.injected++;
         }
-        // ★ 兜底（2Hz）：有区目标但成员**全无任务**（mission 漂移/清任务后）→ 直接写"奔赴本区"任务
-        //   发呆=被卡死回收（用户诊断）→ 绝不允许
-        for (const [sid, p] of this.fortify.spots) {
-          const sq = this.swarm.squads.get(sid);
-          if (!sq || sq.members.size === 0) continue;
-          let noTask = 0, n = 0;
-          for (const uid of sq.members.keys()) { n++; if (!this.memberTasks.taskOf(uid)) noTask++; }
-          if (noTask > 0) {
-            let i = 0;
-            for (const uid of sq.members.keys()) {
-              if (this.memberTasks.taskOf(uid)) continue;   // 已有任务的保留
-              const a = (i++ / n) * Math.PI * 2;
-              this.memberTasks.write(uid, p.x + Math.cos(a) * 2, p.z + Math.sin(a) * 2);
-            }
-            this.memberTasks.own(sid);
-          }
-        }
         // ★ 连通阶段（§13.4）：相邻扇区都达标 → 串 trench 连成一片（每拍 ≤1）
         for (const m of this.fortify.connect(DONE, 1)) {
           const near = this.corps.pieces.some((q) => Math.hypot(q.x - m.x, q.z - m.z) < 8);
@@ -872,20 +855,7 @@ export class SwarmCommander {
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        if (!this.corps.spreadBuilders(s, scx, scz)) {
-          // ★ 无近活 → **奔赴本区目标点**（行军任务；taskNav 绕障）——发呆=送死，绝不允许
-          const fs = this.fortify.spots.get(s.id);
-          if (fs) {
-            let i = 0;
-            for (const uid of s.members.keys()) {
-              const a = (i++ / s.members.size) * Math.PI * 2;
-              this.memberTasks.write(uid, fs.x + Math.cos(a) * 2, fs.z + Math.sin(a) * 2);
-            }
-            this.memberTasks.own(s.id);
-          } else {
-            this.memberTasks.clear(s);
-          }
-        }
+        this.corps.spreadBuilders(s, scx, scz);
       } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         ctx.buildTarget = null;
         // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）

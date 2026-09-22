@@ -350,16 +350,6 @@ export class EngineerCorps {
     }
   }
 
-  /** ★ 无活可干 → **钉在原地**（任务=当前位置；防无任务乱走/绕圈——"工兵傻掉"主因）。
-   *  下一拍有新活会被正常改写。 */
-  private pinInPlace(s: TaskSquad): boolean {
-    for (const [uid, m] of s.members) {
-      this.board.write(uid, Math.round(m.x * 10) / 10, Math.round(m.z * 10) / 10);
-    }
-    this.board.own(s.id);
-    return true;
-  }
-
   /** 直行可达性：从 (x0,z0) 直线到工件是否跨硬墙（每 1.5m 一采样）。
    *  任务目标是直线行走的；中途碰墙会被 steer-escape 抵消 → 原地磨蹭。 */
   private lineBlocked(x0: number, z0: number, x1: number, z1: number): boolean {

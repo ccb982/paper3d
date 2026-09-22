@@ -23,12 +23,12 @@ export class FortifyPlanner {
   readonly safety: number[] = Array(FORTIFY_SECTORS).fill(Infinity);
   /** 每扇区最危险点（安全值对应格） */
   readonly worst: FortifyPick[] = Array.from({ length: FORTIFY_SECTORS }, () => ({ x: 0, z: 0, score: Infinity }));
-  /** 队→扇区认领（一队一区，不重合） */
+  /** 队→扇区认领（一队一区，不重合；**最危险优先，逐个分配**） */
   readonly claims = new Map<number, number>();
   /** 各队当前施工点 */
   readonly spots = new Map<number, FortifyPick & { sector: number }>();
   private cursor = 0;
-  readonly dbg = { sweeps: 0, injected: 0, connected: 0, assigned: '-' };
+  readonly dbg = { sweeps: 0, injected: 0, connected: 0, sectors: FORTIFY_SECTORS, assigned: '-' };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（环带 [rLo,rHi]；角度 [si,si+1)/8·2π） */
   refreshOne(
@@ -81,19 +81,12 @@ export class FortifyPlanner {
     return Number.isFinite(w.score) ? { x: w.x, z: w.z, score: w.score } : null;
   }
 
-  /** 统一取点：按队的认领扇区（无认领 → 最低安全值扇区；都无 → null） */
+  /** 统一取点：**仅限本队认领的防区（扇区）**；无认领 → null（不跨区、不帮忙） */
   spotFor(
     sid: number, cx: number, cz: number, rLo: number, rHi: number,
     scoreAt: (x: number, z: number) => number | null, doneScore: number,
   ): (FortifyPick & { sector: number }) | null {
-    let sec = this.claims.get(sid);
-    if (sec === undefined) {
-      let bs = Infinity;
-      for (let i = 0; i < FORTIFY_SECTORS; i++) {
-        const v = this.safety[i];
-        if (Number.isFinite(v) && v < bs) { bs = v; sec = i; }
-      }
-    }
+    const sec = this.claims.get(sid);
     if (sec === undefined) return null;
     const p = this.targetOf(cx, cz, sec, rLo, rHi, scoreAt, doneScore);
     return p ? { ...p, sector: sec } : null;
