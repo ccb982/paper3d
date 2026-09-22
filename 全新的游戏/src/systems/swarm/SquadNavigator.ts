@@ -61,7 +61,8 @@ export class SquadNavigator {
     if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
     const tgt = state.order.target;
     if (!tgt) return;
-    const hasPath = !!state.order.path && state.order.path.length > 0;
+    const cur = state.corridor ?? state.order.path;
+    const hasPath = !!cur && cur.length > 0;
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     if (hasPath && moved <= NAV.RETARGET_DIST && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
@@ -72,7 +73,7 @@ export class SquadNavigator {
     const feas = this.feas.find(this._centroid.x, this._centroid.z, tgt.x, tgt.z, feasOut);
     if (feas === 'ok') {
       this.dbg.feasOk++;
-      state.order.path = feasOut;
+      state.corridor = feasOut;   // ★ 寻路轨覆盖（命令对象只读）
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       state.pathAt = now;
@@ -83,7 +84,7 @@ export class SquadNavigator {
       // 可行性判死：绝不发不可走的路（清路径 + 冷却；命令门/队长会改派或等 TTL）
       this.dbg.feasBlocked++;
       state.pathFailedAt = now;
-      state.order.path = undefined;
+      state.corridor = undefined;
       return;
     }
     // 'outside'（表外/未就绪）→ 回落旧口径（HPA/有界 A*）
@@ -104,7 +105,7 @@ export class SquadNavigator {
     const warming = dist > 70 && this.hpa.warming;
     if (src === 'hpa' || src === 'astar') {
       this.dbg[src]++;
-      state.order.path = path;
+      state.corridor = path;   // ★ 寻路轨覆盖（命令对象只读）
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
@@ -113,7 +114,7 @@ export class SquadNavigator {
     } else if (state.order.coarse && state.order.coarse.length > 0) {
       // ★ P2 coarse 软参考兜底：细解（HPA/有界A*）失败 → 沿随令 coarse 走廊走（仍优于直线）
       this.dbg.coarse++;
-      state.order.path = state.order.coarse.slice();
+      state.corridor = state.order.coarse.slice();
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       state.pathAt = now;
@@ -122,7 +123,7 @@ export class SquadNavigator {
       // ★ 无解 → 清路径走直线（绝不停摆；冷却后再试）
       this.dbg.fail++;
       state.pathFailedAt = now;
-      state.order.path = undefined;
+      state.corridor = undefined;
     }
   }
 

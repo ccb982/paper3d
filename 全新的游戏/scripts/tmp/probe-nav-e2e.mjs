@@ -65,7 +65,7 @@ for (let k = 0; k < 12; k++) {
       if (!n) return { id: t.id, gone: true, to: '空' };
       const d = Math.hypot(t.tx - x / n, t.tz - z / n);
       const b = sw.tactics.board.get(t.id);
-      return { id: t.id, x: +(x / n).toFixed(1), z: +(z / n).toFixed(1), d: +d.toFixed(0), sym: s.members.size, path: b?.order.path?.length ?? 0, kind: b?.order.kind ?? '-' };
+      return { id: t.id, x: +(x / n).toFixed(1), z: +(z / n).toFixed(1), d: +d.toFixed(0), sym: s.members.size, path: (b?.corridor ?? b?.order.path)?.length ?? 0, kind: b?.order.kind ?? '-' };
     });
     const L = sw.ledger;
     return { rows, blocked: sw.feasDbg.blocked, adj: sw.cmdLog.adjustedUnreachable, L: { kills: L.kills, recalled: L.recalled } };

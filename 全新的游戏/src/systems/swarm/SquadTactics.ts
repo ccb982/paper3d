@@ -76,6 +76,8 @@ export interface SquadOrderState {
   /** ★ P4 寻路轨（队长拆步令）：已完成步数 k / 预计总步数 N（仅步令携带；命令轨不写） */
   stepK?: number;
   stepN?: number;
+  /** ★ 寻路轨走廊（覆盖式；ensurePath/拆步产出）——**命令对象只读，路径只覆盖不改令** */
+  corridor?: { x: number; z: number }[];
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
@@ -280,6 +282,7 @@ export class SquadTactics {
       state.pathGoalZ = prev.pathGoalZ;
       state.pathAt = prev.pathAt;
       state.pathFailedAt = prev.pathFailedAt;
+      state.corridor = prev.corridor;   // ★ 寻路轨走廊随命令延续（覆盖式；命令对象不自带细路径）
       if (!normalized.path && prev.order.path) normalized.path = prev.order.path;
     }
     this.board.issue(state);
@@ -313,13 +316,17 @@ export class SquadTactics {
 
   /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */
   static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number } | null {
-    const path = state.order.path;
+    const path = state.corridor ?? state.order.path;
     if (path && path.length > 0) {
-      for (const p of path) {
-        const d2 = (p.x - cx) * (p.x - cx) + (p.z - cz) * (p.z - cz);
-        // ★ 前瞻 ≥8m（> 阵型扩散 + 到位静止半径 4m）：否则锚点在 4m 带内抖动，
-        //   成员在槽位被"到位静止"冻结 → 质心到不了路点 → 有令却全体驻停（2026-09-23 修）
-        if (d2 > 64) return p;
+      // ★ 先定位最近点（已走过的点不回头），再从其后取第一个 >8m 的前瞻点
+      let near = 0, nd = Infinity;
+      for (let i = 0; i < path.length; i++) {
+        const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+        if (d2 < nd) { nd = d2; near = i; }
+      }
+      for (let i = near; i < path.length; i++) {
+        const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+        if (d2 > 64) return path[i];
       }
       return path[path.length - 1];
     }
