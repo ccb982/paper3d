@@ -859,7 +859,20 @@ export class SwarmCommander {
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        this.corps.spreadBuilders(s, scx, scz);
+        // ★ 位置函数给点 + 路径系统接上：无近件可派 → 奔赴**本区目标点**（taskNav/贪心段绕障）
+        if (!this.corps.spreadBuilders(s, scx, scz)) {
+          const sp = this.fortify.spots.get(s.id);
+          if (sp) {
+            let i = 0;
+            for (const uid of s.members.keys()) {
+              const a = (i++ / s.members.size) * Math.PI * 2;
+              this.memberTasks.write(uid, sp.x + Math.cos(a) * 2, sp.z + Math.sin(a) * 2);
+            }
+            this.memberTasks.own(s.id);
+          } else {
+            this.memberTasks.clear(s);
+          }
+        }
       } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
         ctx.buildTarget = null;
         // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）
