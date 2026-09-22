@@ -186,6 +186,7 @@ export class SwarmCommander {
       mob: () => this.spawnMob,
       mobIndex: () => this.spawnMobIndex,
       builder: () => this.spawnBuilder,
+      gap: () => (this.roster.dbg.gap === '-' ? null : { role: this.roster.dbg.gap, val: this.roster.dbg.gapVal }),
     });
     this.anchors = new AnchorSelect({
       plan: () => this.plan,

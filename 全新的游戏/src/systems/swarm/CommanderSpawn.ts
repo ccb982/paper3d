@@ -16,6 +16,8 @@ export interface SpawnPorts {
   mob: () => ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null;
   mobIndex: () => ((x: number, z: number, mobIndex: number) => void) | null;
   builder: () => ((x: number, z: number) => void) | null;
+  /** ★ §13.1 编制缺口（缺谁补谁；null = 达标/无数据） */
+  gap?: () => { role: string; val: number } | null;
 }
 
 /** 登场间隔（秒/只） */
@@ -95,6 +97,12 @@ export class CommanderSpawn {
         ['shield', 6], ['assault', 10], ['ranged', 6], ['logistics', 4], ['flyer', 4],
       ];
       const comp = base.map(([role, n]) => [role, Math.max(1, n + Math.round((Math.random() - 0.5) * 4))] as [UnitRole, number]);
+      // ★ §13.1 缺口偏置：场上谁占比低，这一队就多出谁（相对缺口 val → 额外 +val*6 只）
+      const gp = this.p.gap?.();
+      if (gp && (gp.role === 'shield' || gp.role === 'assault' || gp.role === 'ranged' || gp.role === 'logistics')) {
+        const idx = comp.findIndex(([r]) => r === gp.role);
+        if (idx >= 0) comp[idx] = [comp[idx][0], comp[idx][1] + Math.max(1, Math.round(gp.val * 6))];
+      }
       for (const [role, n] of comp) for (let i = 0; i < n; i++) entries.push({ role, elite: false, mobIndex: -1 });
       const eliteN = (Math.random() < 0.5 ? 1 : 0) + (Math.random() < 0.2 ? 1 : 0);
       for (let i = 0; i < eliteN; i++) entries.push({ role: 'assault', elite: true, mobIndex: -1 });
