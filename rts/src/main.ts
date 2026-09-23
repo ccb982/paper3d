@@ -22,11 +22,12 @@ import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enem
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
-import type { SwarmTierPort } from './systems/swarm/SwarmTierPort';
 import { ENEMY_BY_ID } from './config/enemyRoster';
-import type { AgentSnapshot } from './systems/swarm/AgentPool';
 import type { SwarmHooks } from './systems/swarm/SwarmSystem';
 import { AGENT_TARGET_SHIP } from './systems/swarm/AgentPool';
+import { aiSystem } from './systems/ai/AISystem';
+import type { BehaviorContext } from './systems/ai/behaviors';
+import { ExplosionFx } from './services/fx/ExplosionFx';
 import { BulletManager } from './services/combat/BulletManager';
 import { CombatSystem } from './systems/combat/CombatSystem';
 import { executeAttack } from './services/combat/Attack';
@@ -146,65 +147,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     entityCount: 0,
     melee: () => {},
   };
-  // ---- ★ L3 实体敌人（tierPort）：代理 ↔ EnemyBase 双向换载体 ----
-  const assetById = new Map(mobAssets.map((m) => [m.id, m.asset]));
-  const byUid = new Map<number, EnemyBase>();
-  const animMap = {
-    states: { idle: { 前: ['前'], 后: ['后'] }, walk: { 前: ['前'], 后: ['后'] }, attack: { 前: ['前'], 后: ['后'] } },
-    fps: { idle: 1, walk: 1, attack: 1 },
-  };
-  const tierPort: SwarmTierPort = {
-    promote: (snap: AgentSnapshot) => {
-      const spec = ENEMY_ROSTER[snap.mobIndex];
-      const asset = spec ? assetById.get(spec.id) : undefined;
-      if (!spec || !asset) return;
-      // ★ 快照字段兜底（缺省/NaN → 用名册上限），否则血条比例 NaN = 空条
-      const snapMax = Number.isFinite(snap.maxHp) && snap.maxHp > 0 ? snap.maxHp : spec.hp;
-      const snapHp = Number.isFinite(snap.hp) && snap.hp > 0 ? snap.hp : snapMax;
-      const enemy = new EnemyBase(entities, scene, asset, {
-        x: snap.x, y: snap.y, z: snap.z, animMap, facing: '前', aiConfig: spec.ai,
-        hp: snapMax, defense: snap.defense, attackPower: spec.attackPower,
-        scale: spec.scale, collisionScale: spec.collisionScale,
-      }, camera);
-      enemy.hydrate(snap);
-      enemy.maxHp = snapMax;
-      enemy.hp = Math.min(snapHp, snapMax);
-      if (snap.uid > 0) byUid.set(snap.uid, enemy);
-    },
-    demote: (enemy: EnemyBase) => {
-      const uid = enemy.swarmUid;
-      byUid.delete(uid);
-      const x = enemy.position.x, y = enemy.position.y, z = enemy.position.z;
-      entities.destroy(enemy.id);
-      const spec = ENEMY_ROSTER[0]!;
-      swarm.spawn({
-        uid, mobIndex: 0, x, y, z, hp: spec.hp, maxHp: spec.hp,
-        defense: spec.defense, attackPower: spec.attackPower, speed: 4.5,
-        meleeDamage: 2, meleeRange: 1.5, scale: spec.scale,
-        tier: 1, aggro: 0, wanderSpeed: 1.2,
-      }, true);
-    },
-  };
-  hooks.tierPort = tierPort;
-  hooks.activeUnits = () => [...byUid.values()];
-  // ★ 命令下发到 L3 实体（原游戏 WorldSpawner.applyOrderToEntity 同款）
-  hooks.onDirective = (uid, order, directive, until) => {
-    const e = byUid.get(uid);
-    if (!e || e.dead) return;
-    e.applyOrder(
-      { kind: order.kind, targetX: order.target?.x ?? 0, targetZ: order.target?.z ?? 0, until, seq: order.seq },
-      {
-        kind: directive.kind, targetX: directive.targetX ?? 0, targetZ: directive.targetZ ?? 0,
-        wardUid: directive.wardUid ?? 0, until: directive.until,
-        fire: 0, speedMul: directive.speedMul, seq: directive.seq,
-      },
-    );
-  };
-  hooks.onLeaderChanged = (uid, isLeader) => {
-    const e = byUid.get(uid);
-    if (e && !e.dead) e.isLeader = isLeader;
-  };
-  hooks.onAgentKilled = (mobIndex, x, y, z) => { void mobIndex; void x; void y; void z; };
+  // ---- ★ L3 实体敌人：走**官方 spawner 通道**（掉落/enemyDefs/animMap 全登记）----
+  const enemies: EnemyBase[] = [];   // 存活 L3 实体（spawner 创建时 push）
 
   // ---- ★ 世界刷怪器（原游戏 WorldSpawner）：指挥器端口的实现载体 ----
   const mobDefs: MobDef[] = mobAssets.map(({ id, asset }) => {
@@ -224,17 +168,21 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     } as MobDef;
   });
   const spawner = new WorldSpawner({
-    enemies: [...byUid.values()],
+    enemies,   // ★ 活数组：spawner 创建实体时 push（hooks/贴地共用）
     enemyDefs: new WeakMap(),
     mobDefs,
     bossEntity: null, bossRun: false, threat: null, spawnChunkKey: 0, scalingInputs: null,
     enemyScale: { hp: 1, atk: 1, def: 0 },
-    player: null, ship: null, entities, swarm, swarmDirector: null,
-    chunks, raster, session: null, scene, camera,
-    drones: [], worldUIManager: null,
+    player: { position: { x: spawn.x, y: 0, z: spawn.z }, hitAnchorY: () => 1.5 },
+    ship: null, entities, swarm, swarmDirector: null,
+    chunks, raster,
+    session: { player: { maxHp: 100, attackPower: 10, defense: 2 }, meta: { day: 1 }, gacha: { totalPulls: 0 } },
+    scene, camera,
+    drones: [], worldUIManager: {},
     testChunk: false, shipDestroyed: false, bossAsset: null,
     showFloatingAt: () => {}, syncSceneBgm: () => {}, returnToBase: () => {},
   } as unknown as SpawnDeps);
+  spawner.refreshEnemyScale();   // ★ 敌强口径（按会话/天数；此处桩会话）
   // ★ 指挥器端口接线（兵力创建/工事全权在指挥层；spawnMob/spawnBuilder/buildCover/digTrench）
   wireCommanderPorts({
     commander: swarm.commander, spawner, raster, mobDefs, entities, scene, chunks,
@@ -242,6 +190,45 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: cam.tx, z: cam.tz }),
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
+  // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
+  hooks.tierPort = spawner;
+  hooks.activeUnits = () => enemies;
+  hooks.onDirective = (uid, order, directive, until) =>
+    spawner.applyOrderToEntity(uid, order, directive, until);
+  hooks.onLeaderChanged = (uid, isLeader) => spawner.setLeaderFlag(uid, isLeader);
+  // ★ 近战伤害（代理侧钩子）：目标=舰船（1）扣舰船血量；玩家（0）暂无实体
+  let shipHp = 1000;
+  hooks.melee = (targetKind, dmg, x, z) => {
+    if (targetKind !== AGENT_TARGET_SHIP) return;
+    if (Math.hypot(x - spawn.x, z - spawn.z) <= SHIP_LENGTH / 2 + 2) shipHp = Math.max(0, shipHp - dmg);
+  };
+  // ★ AI 行为上下文（原 WorldMode.aiCtx）：驱动 L3 实体移动/攻击（aiSystem.updateAll）
+  const explosionFx = new ExplosionFx(scene);
+  const meleeToTargets = (x: number, z: number, range: number, dmg: number): void => {
+    if (Math.hypot(x - spawn.x, z - spawn.z) <= range + SHIP_LENGTH / 2) shipHp = Math.max(0, shipHp - dmg);
+  };
+  const aiCtx: BehaviorContext = {
+    dt: 0, time: 0, target: null,
+    findTarget: () => ({ x: cam.tx, z: cam.tz }),
+    attack: (opts) => {
+      if (opts.type === 'projectile') {
+        const skin = (opts as { bulletSkin?: string }).bulletSkin;
+        const pool = opts.camp === 'enemy' ? (skin === 'fireball' ? enemyBolts : enemyArrows) : playerBullets;
+        executeAttack(entities, pool, opts);
+        return;
+      }
+      if (opts.type === 'aoe') {
+        if (opts.camp === 'enemy') {
+          explosionFx.spawn(opts.x, opts.y, opts.z, opts.radius);
+          meleeToTargets(opts.x, opts.z, opts.radius, opts.damage);
+        }
+        return;
+      }
+      if (opts.type === 'melee' && opts.camp === 'enemy') meleeToTargets(opts.x, opts.z, opts.range, opts.damage);
+    },
+    focusX: cam.tx, focusZ: cam.tz, focusY: 0,
+  };
+  const shipState = { get hp(): number { return shipHp; } };
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -419,12 +406,18 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     // ★ 敌人指挥链推进 + 实体/批量渲染
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
     hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
-    hooks.entityCount = byUid.size;
+    hooks.entityCount = enemies.length;
     hooks.dayT01 = Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天：事态节奏推进
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
     spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距 L3 → 降格回池
-    for (const e of byUid.values()) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
+    // ★ L3 AI 驱动（移动/索敌/攻击；原 WorldMode：aiSystem.updateAll + aiCtx）
+    aiCtx.dt = dt; aiCtx.time += dt;
+    aiCtx.target = aiCtx.findTarget('enemy');
+    aiCtx.focusX = cam.tx; aiCtx.focusZ = cam.tz;
+    aiSystem.updateAll(dt, aiCtx);
+    for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
+    explosionFx.update(dt);
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -439,7 +432,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, l3: byUid };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
