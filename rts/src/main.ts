@@ -189,7 +189,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   wireCommanderPorts({
     commander: swarm.commander, spawner, raster, mobDefs, entities, scene, chunks,
     surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
-    playerPos: () => ({ x: cam.tx, z: cam.tz }),
+    playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
@@ -211,7 +211,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   const aiCtx: BehaviorContext = {
     dt: 0, time: 0, target: null,
-    findTarget: () => ({ x: cam.tx, z: cam.tz }),
+    findTarget: () => ({ x: spawn.x, z: spawn.z }),   // ★ 索敌 = 舰船
     attack: (opts) => {
       if (opts.type === 'projectile') {
         const skin = (opts as { bulletSkin?: string }).bulletSkin;
@@ -228,7 +228,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       }
       if (opts.type === 'melee' && opts.camp === 'enemy') meleeToTargets(opts.x, opts.z, opts.range, opts.damage);
     },
-    focusX: cam.tx, focusZ: cam.tz, focusY: 0,
+    focusX: spawn.x, focusZ: spawn.z, focusY: 0,
   };
   const shipState = { get hp(): number { return shipHp; } };
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
@@ -407,16 +407,16 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     chunks.update(cam.tx, cam.tz, dt, fx, fz);
     // ★ 敌人指挥链推进 + 实体/批量渲染
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
-    hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
+    hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船（相机不再被追）
     hooks.entityCount = enemies.length;
     hooks.dayT01 = Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天：事态节奏推进
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
-    spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距 L3 → 降格回池
+    spawner.tickDemote(dt, spawn.x, spawn.z);     // ★ 远距 L3 → 降格回池（以舰船为基准）
     // ★ L3 AI 驱动（移动/索敌/攻击；原 WorldMode：aiSystem.updateAll + aiCtx）
     aiCtx.dt = dt; aiCtx.time += dt;
     aiCtx.target = aiCtx.findTarget('enemy');
-    aiCtx.focusX = cam.tx; aiCtx.focusZ = cam.tz;
+    aiCtx.focusX = spawn.x; aiCtx.focusZ = spawn.z;
     aiSystem.updateAll(dt, aiCtx);
     for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
     explosionFx.update(dt);
