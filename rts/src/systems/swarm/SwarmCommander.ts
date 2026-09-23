@@ -142,6 +142,13 @@ export class SwarmCommander {
   private frontMinD = -1;
   /** ★ 环形活动区上限（事态函数管；第一波收拢到舰） */
   private frontMaxD = -1;
+  /** ★ 最近一次舰船位（issueChecked 夹环用） */
+  private lastShipX = 0;
+  private lastShipZ = 0;
+  /** ★ 命令夹环计数（探针/调试） */
+  cmdLogRingClamps = 0;
+  /** ★ 越界队（队 id → 首次越界时刻；连续 2s 强制归位） */
+  private readonly outsideSince = new Map<number, number>();
   /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
   private readonly buildIssued = new Map<number, number>();
   /** ★ 前线永不再贴近舰船的余量（米） */
@@ -259,7 +266,26 @@ export class SwarmCommander {
   ): boolean {
     // ① 生效目标解析（五轴分工 subTargets 按队覆写——核验必须查覆写后的目标）
     const sub = order.subTargets?.find((t) => t.squadId === squadId);
-    const eff = sub ?? order.target;
+    let eff = sub ?? order.target;
+    // ★ 事态环形闸门（用户定 2026-09-25）：**一切命令目标径向夹进 [下限, 上限]**（撤退/后撤豁免）
+    const exempt = order.kind === 'retreat' || order.mission === 'rear';
+    if (!exempt && eff && this.frontMinD > 0 && this.frontMaxD > 0 && (this.lastShipX !== 0 || this.lastShipZ !== 0)) {
+      const dxs = eff.x - this.lastShipX, dzs = eff.z - this.lastShipZ;
+      const d = Math.hypot(dxs, dzs);
+      const rMin = this.frontMinD, rMax = this.frontMaxD;
+      // ★ 环形语义：上限=最远允许、下限=最近允许；上限<下限（收拢态）→ **上限主导**（全员收进）
+      const rWant = rMax < rMin
+        ? Math.min(d, Math.max(4, rMax))
+        : Math.min(Math.max(d, rMin), rMax);
+      if (d > 1e-3 && Math.abs(rWant - d) > 0.01) {
+        const nx = this.lastShipX + (dxs / d) * rWant;
+        const nz = this.lastShipZ + (dzs / d) * rWant;
+        eff = { ...eff, x: nx, z: nz };
+        if (sub) order = { ...order, subTargets: order.subTargets!.map((t) => (t.squadId === squadId ? { ...t, x: nx, z: nz } : t)) };
+        else order = { ...order, target: { ...order.target, x: nx, z: nz } };
+        this.cmdLogRingClamps++;
+      }
+    }
     // 无目标 / 飞行队（独立空中层走直线）→ 不核验直接放行
     const squad = this.swarm.squads.get(squadId);
     if (!eff || squad?.type === 'flyer') {
@@ -817,6 +843,7 @@ export class SwarmCommander {
       const duskK = c01((t01Now - 0.55) / 0.25);   // 0.55→0.80 收下限
       this.frontMaxD = ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * waveK;
       this.frontMinD = Math.max(SwarmCommander.SHIP_CLEAR, ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * duskK);
+      this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环基准（issueChecked 用）
       // 前沿点（命令基准）夹在 [下限, 上限] 环内
       const rWant = Math.min(Math.max(ffrontD, this.frontMinD), this.frontMaxD);
       if (ffrontD > 1e-3 && Math.abs(rWant - ffrontD) > 0.01) {
@@ -826,6 +853,33 @@ export class SwarmCommander {
       }
       // ★ 施工闸门：距舰 < 前沿的工件未解锁 → 稳步推进建造线（近→远逐步开）
       this.corps.gate = { x: shipX, z: shipZ, minD: this.frontMinD - 12 };
+      // ★ 事态强制归位（用户定 2026-09-25）：任何队质心落在环外（太近/太远）连续 2s →
+      //   强制发**长寻路令**回环内（目标 = 径向夹到 [下限+10, 上限-10] 的最近点）
+      if (this.frontMinD > 0 && this.frontMaxD > 0) {
+        const nowS = performance.now() / 1000;
+        for (const s of this.swarm.squads.all()) {
+          if (s.members.size === 0) continue;
+          let cx = 0, cz = 0, n = 0;
+          for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+          cx /= n; cz /= n;
+          const d = Math.hypot(cx - shipX, cz - shipZ);
+          const ringValid = this.frontMaxD > this.frontMinD;   // 上限<下限（收拢态）→ 上限主导
+          const tooFar = d > this.frontMaxD + 6;
+          const tooClose = ringValid && d < this.frontMinD - 6;
+          if (!tooFar && !tooClose) { this.outsideSince.delete(s.id); continue; }
+          const t0 = this.outsideSince.get(s.id) ?? nowS;
+          if (nowS - t0 < 2) { this.outsideSince.set(s.id, t0); continue; }
+          const rWant = tooFar ? Math.max(4, this.frontMaxD - 10) : this.frontMinD + 10;
+          const tx = shipX + ((cx - shipX) / (d || 1)) * rWant;
+          const tz = shipZ + ((cz - shipZ) / (d || 1)) * rWant;
+          const lead = s.members.get(s.leaderUid);
+          if (lead) {
+            this.issueChecked(s.id, lead.x, lead.z, { kind: 'advance', target: { x: tx, z: tz }, mission: 'regroup', seq: 0 }, 12);
+            this.lastDecision = { squad: s.id, kind: tooClose ? 'force_out' : 'force_in', at: nowS };
+          }
+          this.outsideSince.delete(s.id);
+        }
+      }
     }
     // ★ 近战类目标：按**姿态 × 兵种配置**的追击开关决定打玩家还是守正面；
     //   施工期盾队前出掩护工事（screen 分支单独处理）
