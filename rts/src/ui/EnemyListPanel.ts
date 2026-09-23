@@ -89,7 +89,13 @@ export class EnemyListPanel {
         sRow.onmouseleave = () => { sRow.style.background = 'transparent'; };
         sRow.onclick = (e) => {
           sopen ? this.expandedSquads.delete(sq.id) : this.expandedSquads.add(sq.id);
-          this.pick(sq.leader, e);
+          // ★ 点队长行 = 选中**全队**（队长 + 队内代理，全员红圈）
+          const handles: EnemyHandle[] = [];
+          for (const uid of sq.members) {
+            const h = this.enemyMgr.find(uid);
+            if (h) handles.push(h);
+          }
+          this.enemyMgr.select(handles, e.shiftKey);
           this.lastBuild = 0;
         };
         frag.appendChild(sRow);
