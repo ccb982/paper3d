@@ -831,17 +831,20 @@ export class SwarmCommander {
         if (dawdling && nowF > rec.cd && !s.builders) {
           rec.cd = nowF + 30;
           const o = this.swarm.tactics.board.get(s.id)?.order;
-          let tx: number, tz: number;
+          const cands: { x: number; z: number }[] = [];
           if (o?.target) {
             const dxo = o.target.x - cx, dzo = o.target.z - cz;
             const dl = Math.hypot(dxo, dzo) || 1;
-            tx = cx + (dxo / dl) * 20; tz = cz + (dzo / dl) * 20;
+            for (const adv of [20, 10, 0]) cands.push({ x: cx + (dxo / dl) * adv, z: cz + (dzo / dl) * adv });
           } else {
             const spot = this.underStrengthSpot(cx, cz, 60);
-            tx = spot ? spot.x : cx + 20; tz = spot ? spot.z : cz;
+            if (spot) cands.push(spot);
           }
-          this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: tx, z: tz }, mission: 'regroup', seq: 0 }, 20);
-          this.lastDecision = { squad: s.id, kind: 'dawdle_push', at: nowF };
+          const pick = this.pickValidTarget(cx, cz, cands);
+          if (pick) {
+            this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+            this.lastDecision = { squad: s.id, kind: 'dawdle_push', at: nowF };
+          }
         }
         rec.x = cx; rec.z = cz; rec.t = nowF; rec.path = 0; rec.rev = 0;
       }
@@ -863,9 +866,14 @@ export class SwarmCommander {
         if (back.d < front.d - 15) {
           const dxo = back.x - shipX, dzo = back.z - shipZ;
           const dl = Math.hypot(dxo, dzo) || 1;
-          this.issueChecked(back.id, back.x, back.z,
-            { kind: 'advance', target: { x: back.x + (dxo / dl) * 15, z: back.z + (dzo / dl) * 15 }, mission: 'regroup', seq: 0 }, 20);
-          this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
+          const cands: { x: number; z: number }[] = [];
+          for (const adv of [15, 25, 35]) cands.push({ x: back.x + (dxo / dl) * adv, z: back.z + (dzo / dl) * adv });
+          const pick = this.pickValidTarget(back.x, back.z, cands);
+          if (pick) {
+            this.issueChecked(back.id, back.x, back.z,
+              { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+            this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
+          }
           break;
         }
       }
@@ -896,16 +904,44 @@ export class SwarmCommander {
             if (dist < nd) { nd = dist; nb = b; }
           }
           if (!nb || nd > 50) continue;   // 扎堆阈值 50m
-          const diff = ((nb.ang - a.ang + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-          const dir = diff >= 0 ? -1 : 1;   // 往邻居反方向推开
-          const na = a.ang + dir * 0.35;
-          const rr = Math.max(20, a.d);
-          this.issueChecked(a.id, a.x, a.z,
-            { kind: 'advance', target: { x: shipX + Math.cos(na) * rr, z: shipZ + Math.sin(na) * rr }, mission: 'regroup', seq: 0 }, 20);
-          this.lastDecision = { squad: a.id, kind: 'tangent_split', at: nowF };
+          // ★ 调整方向（用户定 2026-09-25）：**横向拉开 + 向舰船方向内收**（立卡尔分解，不是角度偏移）
+          const inv = 1 / (a.d || 1);
+          const inX = (shipX - a.x) * inv, inZ = (shipZ - a.z) * inv;   // 向舰单位向量
+          const latX = -inZ, latZ = inX;                                // 横向（垂直于向舰）
+          // 选离邻居更远的横向侧（用叉积判断邻居在哪侧）
+          const side = ((nb.x - a.x) * latX + (nb.z - a.z) * latZ) > 0 ? -1 : 1;
+          const cands: { x: number; z: number }[] = [];
+          for (const lat of [20, 35, 50]) {
+            for (const inw of [20, 10, 0]) {
+              cands.push({ x: a.x + latX * lat * side + inX * inw, z: a.z + latZ * lat * side + inZ * inw });
+              cands.push({ x: a.x + latX * lat * -side + inX * inw, z: a.z + latZ * lat * -side + inZ * inw });
+            }
+          }
+          const pick = this.pickValidTarget(a.x, a.z, cands);
+          if (pick) {
+            this.issueChecked(a.id, a.x, a.z,
+              { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+            this.lastDecision = { squad: a.id, kind: 'tangent_split', at: nowF };
+          }
         }
       }
     }
+  }
+
+  /** ★ 候选落点校验（用户定 2026-09-25）：**事态环内 + 可站 + 直线可走 + 有向可达**；不行就换下一个 */
+  private pickValidTarget(fromX: number, fromZ: number, cands: { x: number; z: number }[]): { x: number; z: number } | null {
+    for (const c of cands) {
+      const d = Math.hypot(c.x - this.lastShipX, c.z - this.lastShipZ);
+      const inRing = this.frontMaxD < this.frontMinD
+        ? d <= this.frontMaxD + 2
+        : (d >= this.frontMinD - 2 && d <= this.frontMaxD + 2);
+      if (!inRing) continue;
+      if (this.terrainScore.scoreAt(c.x, c.z) === null) continue;
+      if (!this.swarm.walkableLine(fromX, fromZ, c.x, c.z)) continue;
+      if (!this.swarm.reachable(fromX, fromZ, c.x, c.z)) continue;
+      return c;
+    }
+    return null;
   }
 
   /** ★ 兵力最稀处（20m 格计数；[20, r] 内、可站、己方最少的格中心） */
