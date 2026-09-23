@@ -9,6 +9,7 @@ import type { ChunkGroundHost } from './services/map/decor/MapEntityDecorBase';
 import { SunCycle } from './services/render/SunCycle';
 import { updateTerrainLighting, updateWallMaterialsLighting } from './services/map/TerrainMaterial';
 import { updateApronLighting } from './services/map/decor/PlatformApron';
+import { OrderBus } from './order/OrderBus';
 
 (globalThis as unknown as Record<string, unknown>).__rtsBoot = 'module-start';
 const q = new URLSearchParams(location.search);
@@ -51,6 +52,7 @@ const raster = new RasterMap(SEED);
 const chunks = new ChunkManager(scene, raster, host);
 chunks.setWaterVisible(true);
 chunks.bootstrap(spawn.x, spawn.z);
+const orders = new OrderBus(scene);   // ★ R1：命令单源（台账+令牌）
 
 // ---- 光照（固定正午；地形吃 baked 光照 uniform）----
 const sun = new SunCycle();
@@ -66,7 +68,16 @@ const keys = new Set<string>();
 addEventListener('keydown', (e) => { keys.add(e.code); if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45); if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45); });
 addEventListener('keyup', (e) => keys.delete(e.code));
 let dragging = false, lastX = 0, lastY = 0;
-renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+renderer.domElement.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  // ★ 玩家手动发令（R1 第一版）：右键=advance、Alt+右键=build、Shift+右键=garrison
+  const rc = new THREE.Raycaster();
+  rc.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  const hit = rc.intersectObjects(scene.children, true)[0];
+  if (!hit) return;
+  const kind = e.altKey ? 'build' : e.shiftKey ? 'garrison' : 'advance';
+  orders.issue({ kind, target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
+});
 renderer.domElement.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
 addEventListener('mouseup', () => { dragging = false; });
 // ★ 双击地面 = 重选出生点（加载窗随之移动）
@@ -125,4 +136,4 @@ function frame(): void {
 frame();
 
 // 调试句柄（探针/控制台）
-(window as unknown as Record<string, unknown>).__rts = { raster, chunks, cam, camera, scene, renderer, spawn };
+(window as unknown as Record<string, unknown>).__rts = { raster, chunks, cam, camera, scene, renderer, spawn, orders };
