@@ -36,6 +36,10 @@ try {
     phase: window.__rts?.phase ?? null,
     drawCalls: window.__rts?.renderer?.info?.render?.calls ?? null,
     triangles: window.__rts?.renderer?.info?.render?.triangles ?? null,
+    fine: window.__rts?.chunks?.meshes?.size ?? null,
+    coarse: window.__rts?.chunks?.coarseMeshes?.size ?? null,
+    vis: window.__rts?.chunks?.terrainVisuals?.size ?? null,
+    cam: window.__rts?.cam ?? null,
   }));
   console.log('B 世界 =', JSON.stringify(world));
   await page.screenshot({ path: '../rts/world.png' });

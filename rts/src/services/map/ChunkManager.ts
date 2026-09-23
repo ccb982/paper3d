@@ -41,7 +41,7 @@ import {
   disposePropRenderers, PROP_LOD_FADE_FAR,
   unregisterPlantGustChunk, resetPlantGust,
 } from './decor/MapEntityDecorBase';
-import { FINE_S_NEAR, FINE_S_FAR } from './FaceBuild';
+import { FINE_S_NEAR } from './FaceBuild';
 import { PHYS_GRID } from './IncrementalGeometry';
 import {
   buildBoss4DChunk, buildBoss4DChunkPhysics, isBoss4DVoidChunk,
@@ -378,11 +378,6 @@ export class ChunkManager {
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
    *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
   private static readonly PARK_RADIUS = 99;
-  /** ★ 弧面双档（2026-09-14 用户定）：**≤60m 0.125m 细弧；≥70m 0.25m 粗弧；
-   *  60~70m 为 10m 滞回带（保持现状，防边界抖动反复重建）**。
-   *  ★ 物理恒用粗档（见 PatchCompute）：档位切换只需换视觉，物理分区不动。 */
-  private static readonly DETAIL_NEAR_DIST = 60;
-  private static readonly DETAIL_FAR_DIST = 70;
 
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
    *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 4 → 销毁 6
@@ -390,12 +385,6 @@ export class ChunkManager {
   private static readonly DESTROY_RADIUS = 99;
   /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
   private parkedKeys = new Set<number>();
-  /** ★ 各 chunk 当前几何档位（8=0.125m / 4=0.25m；几何落地时写入） */
-  private chunkFineS = new Map<number, number>();
-  /** ★ 档位重建在途（防巡检重复入队；几何落地/失败时清除） */
-  private detailPending = new Set<number>();
-  /** ★ 档位重建的【目标档位】（finishStandardChunk 据此选档；落地/失败时清除） */
-  private detailWant = new Map<number, number>();
 
   // ---- ★ 装饰物距离 LOD（2026-09-14）：可拾取小植被 近桶 ⇄ 远桶（低模 blob） ----
   /** 近桶切换距离（米）：此范围内全细节；范围外切低模（PARK 环内仍可见但顶点大减） */
@@ -580,7 +569,7 @@ export class ChunkManager {
   /** 粗块专属模式（航行期）：只走粗块管线，不投细化 */
   private coarseOnly = false;
   /** 粗块半径（±6 = 约 420m 视距；"±6 试试"用户定调） */
-  private static readonly COARSE_RADIUS = 6;
+  private static readonly COARSE_RADIUS = 5;
   /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
    *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
    *  "让飞机飞行的时候前方看得远，侧方不变" */
@@ -593,7 +582,7 @@ export class ChunkManager {
   /** 动态粗块候选（包围盒过滤后的偏移表；方向/延伸变化时重建） */
   private coarseDynamic: { dx: number; dz: number }[] = [];
   /** 每帧最多装配粗块数 */
-  private static readonly COARSE_PER_FRAME = 999;
+  private static readonly COARSE_PER_FRAME = 4;
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;
@@ -1133,79 +1122,8 @@ export class ChunkManager {
     if (cave !== undefined) this.host.setBodyEnabled?.(cave, true);
   }
 
-  /**
-   * ★ 分环双档巡检（2026-09-14）：近环弧面 0.125m、远环 0.25m（滞回带防抖）。
-   *  档位变化 → 整 chunk 重建（enqueue(rebuild) → 标准烘焙 → replaceChunk 全套换新：
-   *  几何/物理/装饰/水）。在途去重走 detailPending。
-   */
-  private updateChunkDetail(px: number, pz: number): void {
-    if (this.meshes.size === 0) return;
-    for (const key of this.meshes.keys()) {
-      if (this.parkedKeys.has(key)) continue;
-      const cz = (key % 8192) - 4096;
-      const cx = Math.floor(key / 8192) - 4096;
-      const d = this.chunkDistToPlayer(cx, cz, px, pz);
-      const cur = this.chunkFineS.get(key) ?? FINE_S_NEAR;
-      // ★ 双阈值 + 10m 滞回：≤60m 细弧；≥70m 粗弧；60~70m 保持现状
-      let want = cur;
-      if (d <= ChunkManager.DETAIL_NEAR_DIST) want = FINE_S_NEAR;
-      else if (d >= ChunkManager.DETAIL_FAR_DIST) want = FINE_S_FAR;
-      if (want === cur) continue;
-      if (this.detailPending.has(key)) continue;
-      this.detailWant.set(key, want);
-      this.detailPending.add(key);
-      // ★ 只换地形（原地换装，装饰不动、不重烘焙）——见 requestDetailRebuild
-      this.requestDetailRebuild(cx, cz, want);
-    }
-  }
-
-  /**
-   * ★ 档位重建（轻量，2026-09-14）：只重算地形几何（顶/壁/水 + 物理分区）并原地换装，
-   *  **装饰层不动、不重烘焙**（复用破坏重建的 applyTerrainPatchInPlace，decorMode='none'；
-   *  `applyGeoInPlace` Tier B 支持顶点布局漂移的整 geometry 替换，Mesh/材质保留）。
-   *  原地换装不可用/失败 → 回退整 chunk 标准重建（detailWant 保留，落地时统一清账）。
-   */
-  private requestDetailRebuild(cx: number, cz: number, want: number): void {
-    const key = chunkKeyOf(cx, cz);
-    const gen = this.bakeGen;
-    const levels = this.raster.levelsOf(cx, cz);
-    const readChunk = (ccx: number, ccz: number) => this.raster.getChunkData(ccx, ccz);
-    terrainPatch
-      .compute({ seed: this.raster.worldSeed, cx, cz, levels: new Uint8Array(levels), fineS: want }, readChunk)
-      .then((geom) => {
-        if (this.bakeGen !== gen) return; // 换代作废
-        if (!this.meshes.has(key) || this.parkedKeys.has(key)) {
-          // 目标已消失（销毁/封存）→ 清账
-          this.detailPending.delete(key);
-          this.detailWant.delete(key);
-          return;
-        }
-        if (!geom) {
-          // Worker 失败 → 回退整块标准重建（detailPending 保留 → 巡检不重复入队）
-          this.enqueueChunk(cx, cz, true);
-          return;
-        }
-        // ★ 物理恒粗档（与视觉档解耦）→ 档位切换物理分区不变，cells 传空跳过 collider 换装
-        const ok = this.applyTerrainPatchInPlace(
-          key, geom.top, geom.wall, geom.water, [],
-          { top: geom.topBounds, wall: geom.wallBounds }, 'none',
-        );
-        if (ok) {
-          this.chunkFineS.set(key, want);
-          const entry = this.terrainVisuals.get(key);
-          if (entry) entry.fineS = want;
-          this.detailPending.delete(key);
-          this.detailWant.delete(key);
-          return;
-        }
-        // 原地换装不可用（无分区宿主等）→ 回退整块标准重建
-        this.enqueueChunk(cx, cz, true);
-      })
-      .catch(() => {
-        this.detailPending.delete(key);
-        if (this.meshes.has(key)) this.enqueueChunk(cx, cz, true);
-      });
-  }
+  /** ★ RTS（2026-09-25）：**细块 LOD 彻底移除**——不再有分环双档/档位重建/整块换新。
+   *  细块统一单档（FINE_S_NEAR），建一次不重建（防"反复删/反复创建"）。 */
 
   /** 玩家点到 chunk 矩形最近点的水平距离（米；点在块内 = 0） */
   private chunkDistToPlayer(cx: number, cz: number, px: number, pz: number): number {
@@ -1227,9 +1145,6 @@ export class ChunkManager {
     }
     this.voidKeys.delete(key);
     this.terrainVisuals.delete(key);
-    this.chunkFineS.delete(key);
-    this.detailPending.delete(key);
-    this.detailWant.delete(key);
     const body = this.bodies.get(key);
     if (body !== undefined) {
       this.host.destroyGround(body);
@@ -1383,7 +1298,6 @@ export class ChunkManager {
   /** ★ 远处全量 chunk 封存/解封/销毁（探索期由 sweepChunks 每 0.5s 调用；
    *  飞行粗块期每帧调用）：按距离降序 + 每拍预算化，防单帧批量 dispose 尖峰 */
   private parkFarChunks(px: number, pz: number): void {
-    this.updateChunkDetail(px, pz); // ★ 分环双档巡检（先于封存：只处理存活网格）
     const pcx = Math.floor(px / CHUNK_SIZE);
     const pcz = Math.floor(pz / CHUNK_SIZE);
     const parkR = ChunkManager.PARK_RADIUS;
@@ -1417,19 +1331,7 @@ export class ChunkManager {
     for (let i = 0; i < unparks.length && i < ChunkManager.UNPARK_PER_SWEEP; i++) {
       this.unparkChunk(unparks[i].key);
     }
-    // 粗块同样按范围剔除（超出粗块环 +1 即销毁重建；同样预算化）
-    let coarseBudget = ChunkManager.UNLOAD_PER_SWEEP;
-    for (const key of [...this.coarseMeshes.keys()]) {
-      if (coarseBudget <= 0) break;
-      const cz = (key % 8192) - 4096;
-      const cx = Math.floor(key / 8192) - 4096;
-      // ★ 各向异性：基准方环 + 航行前向锥内都保留；锥外（含正后方）超出才丢
-      const rdx = cx - pcx, rdz = cz - pcz;
-      if (!this.inCoarseRing(rdx, rdz) && Math.max(Math.abs(rdx), Math.abs(rdz)) > ChunkManager.COARSE_RADIUS + 1) {
-        this.dropCoarse(key);
-        coarseBudget--;
-      }
-    }
+    // ★ RTS（2026-09-25 用户定）：**粗块固定生成、永不剔除**（只建不删，杜绝反复创建/删除）
   }
 
   // ============================================================
@@ -1808,20 +1710,15 @@ export class ChunkManager {
     this.geoInflight.set(key, { cx, cz });
     const levels = this.raster.levelsOf(cx, cz);
     const readChunk = (ccx: number, ccz: number) => this.raster.getChunkData(ccx, ccz);
-    // ★ 构建档位（≤60m 细弧 0.125m / ≥90m 粗弧 0.25m；优先取档位重建的目标档，
-    //   未建过的 chunk 默认近档——只在近环首建）
-    const fineS = this.detailWant.get(key) ?? this.chunkFineS.get(key) ?? FINE_S_NEAR;
+    // ★ RTS：细块单档（FINE_S_NEAR），无档位切换
+    const fineS = FINE_S_NEAR;
     terrainPatch
       // ★ 首建/标准构建：waterMode 缺省 'full'（必须带水面——没有"旧水面"可保持）
       .compute({ seed: this.raster.worldSeed, cx, cz, levels: new Uint8Array(levels), fineS }, readChunk)
       .then((geom) => {
         if (this.bakeGen !== gen) return; // 换代（切风格/dispose）已作废
         if (geom) {
-const key2 = chunkKeyOf(cx, cz);
-          // ★ 几何落地：记账档位 + 解除档位重建在途标记
-          this.chunkFineS.set(key2, fineS);
-          this.detailPending.delete(key2);
-          this.detailWant.delete(key2);
+          const key2 = chunkKeyOf(cx, cz);
           // ★ 首建延迟装饰：chunk 无现存网格时先只上地形，装饰延后（无关紧要）
           const isFirstBuild = !this.meshes.has(key2) && !this.voidKeys.has(key2);
           this.assembleQueue.push({
@@ -1838,21 +1735,14 @@ const key2 = chunkKeyOf(cx, cz);
         this.geoInflight.delete(key);
         try {
           const g = computeTableGeometry(readChunk, this.raster.worldSeed, cx, cz, new Uint8Array(levels), null, null, undefined, false, undefined, fineS);
-          this.chunkFineS.set(key, fineS);
-          this.detailPending.delete(key);
-          this.detailWant.delete(key);
           this.assembleTableChunk(cx, cz, maps, decor, g.top, g.wall, g.water, g.cells, { top: g.topBounds, wall: g.wallBounds });
         } catch (e) {
           console.error(`[ChunkManager] chunk(${cx},${cz}) 同步几何失败，交看门狗重试`, e);
-          this.detailPending.delete(key);
-          this.detailWant.delete(key);
         }
       })
       .catch((e) => {
         console.error(`[ChunkManager] chunk(${cx},${cz}) Worker 几何异常，交看门狗重试`, e);
         this.geoInflight.delete(key);
-        this.detailPending.delete(key);
-        this.detailWant.delete(key);
       });
   }
 
@@ -2347,7 +2237,7 @@ const key2 = chunkKeyOf(cx, cz);
       meshes.push(waterMesh);
     }
     // ★ 原地更新登记（key → mesh 引用；破坏重建走 attr 原地写，不重建 Mesh/材质）
-    this.terrainVisuals.set(chunkKeyOf(cx, cz), { top: topMesh, wall: wallMesh, water: waterMesh, fineS: this.chunkFineS.get(chunkKeyOf(cx, cz)) ?? FINE_S_NEAR });
+    this.terrainVisuals.set(chunkKeyOf(cx, cz), { top: topMesh, wall: wallMesh, water: waterMesh, fineS: FINE_S_NEAR });
 
     const nVT = topG.vertices.length / 3;
     const pv = new Float32Array(topG.vertices.length + wallG.vertices.length);
@@ -3013,7 +2903,7 @@ const key2 = chunkKeyOf(cx, cz);
         const geomP = terrainPatch.compute(
           {
             seed: this.raster.worldSeed, cx, cz, levels, dirty,
-            fineS: this.chunkFineS.get(key) ?? FINE_S_NEAR,
+            fineS: FINE_S_NEAR,
             waterMode: 'none', // ★ 水面永远不阻塞坑洞
           },
           (ccx, ccz) => this.raster.getChunkData(ccx, ccz),

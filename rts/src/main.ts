@@ -57,7 +57,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
     createGroundCells: () => null,
   };
   const chunks = new ChunkManager(scene, raster, host);
-  chunks.setCoarseMode(true);   // ★ 远近两档：粗块先铺远（快）+ 细块随视野近（准）
+  chunks.setCoarseMode(false);   // ★ 探索期：近处细块 + 远景粗块 LOD（coarseOnly=false 才投细化）
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
   const orders = new OrderBus(scene);
