@@ -27,6 +27,7 @@ const probe = () => page.evaluate(() => {
     pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     recycled: sw?.stuckDbg?.recycled ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
+    gain: sw?.commander?.terrainScore?.distGain ? +sw.commander.terrainScore.distGain.toFixed(1) : null,
     nav: sw?.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail } : null,
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
@@ -68,7 +69,11 @@ for (const t of [8000, 20000, 40000, 70000]) {
     });
   }
   if (t === 40000) {
-    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.75); });   // ★ 回撤（commit=0.5，退半程）
+    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.75); });   // ★ 甜甜圈（60/180）
+  }
+  if (t === 70000) {
+    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.95); });   // ★ 总攻（点 0/0）
+    await page.evaluate(() => { window.__rts.navMap.open(null); });   // ★ 打开全览小地图截图
   }
   if (t === 20000) {
     // ★ 快车道验证：相机中心 18m 内 15 伤害（代理直扣）

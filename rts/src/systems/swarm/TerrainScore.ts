@@ -40,7 +40,7 @@ const WALL_COVER_SCORE = 0.8;
 const WATER_PENALTY = 0.6;
 /** ★ 距离项归一化：d/R（0~1）× 此系数 → 与高度/掩体量级可比（否则 180m 距离项碾压一切；
  *  调大 → 距离影响更强：总攻压向舰船更狠、前期更往外展开） */
-const DIST_SCALE = 12;
+export const DIST_SCALE = 12;
 /** ★ 掩体判定加成（敌侧有墙/身处战壕 → 队长选位加分） */
 const COVER_BONUS = 2.0;
 /** 坡面代价（分数扣减 / 路径代价倍率） */
@@ -152,6 +152,8 @@ export class TerrainScore {
   private lastPlan: DefensePlan | null = null;
   private lastBonus: Map<string, number> | null = null;
   private lastW: ScoreWeights | null = null;
+  /** ★ 距离权重时间增益（指挥器每帧写：1 + GAIN·t01） */
+  distGain = 1;
   /** ★ 统一采样器（同域一次采样多处复用） */
   private smp: TerrainSampler | null = null;
 
@@ -231,6 +233,8 @@ export class TerrainScore {
     this.lastPlayerZ = playerZ;
     this.smp = samplerFor(raster);
     this.lastW = weightsFor(p, posture);
+    // ★ 距离系数时间增益（用户定 2026-09-25）：随时事增大 → 日终碾压地形
+    if (this.distGain !== 1) this.lastW = { ...this.lastW, dist: this.lastW.dist * this.distGain };
     this.lastBonus = this.buildBonus(plan, builtCovers);
     for (let iz = 0; iz < SIDE; iz++) {
       for (let ix = 0; ix < SIDE; ix++) this.writeFeature(ix, iz);

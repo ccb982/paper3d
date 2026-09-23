@@ -633,6 +633,8 @@ export class SwarmCommander {
       t01 = Math.min(1, this.rhythmT / SwarmCommander.DAY_RHYTHM_S);
     }
     this.lastT01 = t01;
+    // ★ 距离系数时间增益（用户定 2026-09-25）：t01=0 → ×1；t01=1 → ×(1+24)=×25（碾压地形）
+    this.terrainScore.distGain = 1 + 24 * Math.max(0, Math.min(1, t01));
     // ★ 兵力放行（日节律）：早间只放少量 → 基数 → 第一波/总攻放宽（账本闸门是唯一真源）
     this.swarm.ledger.releaseCap = Math.ceil(this.swarm.ledger.total * releaseAt(t01));
     for (const [id, t] of this.swarm.recentHits) {
@@ -1358,7 +1360,9 @@ export class SwarmCommander {
       this._wKey = key;
       this._wCache = weightsFor(this.postureP, this.battlePosture);
     }
-    return this._wCache;
+    // ★ 距离系数时间增益（用户定 2026-09-25）：随时事增大，日终 ×(1+GAIN) 彻底碾压地形
+    const gain = this.terrainScore.distGain;
+    return gain === 1 ? this._wCache : { ...this._wCache, dist: this._wCache.dist * gain };
   }
 
   /** ★ 工兵要塞需求分（§13 评分体系大改）：防御价值 × 掩体缺口；水/坑/硬边排除（null）
