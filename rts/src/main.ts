@@ -129,6 +129,24 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   });
   const orders = new OrderBus(scene);
 
+  // ---- ★ 名册 → MobDef（buildBatch/刷怪器共用；必须在 buildBatch 之前）----
+  const mobDefs: MobDef[] = mobAssets.map(({ id, asset }) => {
+    const spec = ENEMY_BY_ID.get(id) ?? ENEMY_ROSTER[0]!;
+    return {
+      id: spec.id, name: spec.name, asset,
+      ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
+      scale: spec.scale, collisionScale: spec.collisionScale,
+      pack: spec.pack, weight: spec.weight, drops: spec.drops,
+      groundSink: footSinkRatioOf(asset) * spec.scale + (spec.groundSink ?? 0),
+      isAir: spec.isAir === true,
+      airAltitude: spec.airAltitude ?? 2,
+      billboard: spec.billboard,
+      role: spec.role, attackType: spec.attackType,
+      suicide: spec.suicide, squadMode: spec.squadMode, noDemote: spec.noDemote,
+      elite: spec.elite, canBuild: spec.canBuild, tactics: spec.tactics,
+    } as MobDef;
+  });
+
   // ---- ★ 敌人（R1c 最小接线）：SwarmSystem 指挥链 + 自渲染胶囊（无物理/无战斗） ----
   const swarm = new SwarmSystem();
   // ★ FTX 精细贴图批量渲染（每兵种图集 + InstancedMesh；替代胶囊）
@@ -151,27 +169,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const enemies: EnemyBase[] = [];   // 存活 L3 实体（spawner 创建时 push）
 
   // ---- ★ 世界刷怪器（原游戏 WorldSpawner）：指挥器端口的实现载体 ----
-  const mobDefs: MobDef[] = mobAssets.map(({ id, asset }) => {
-    const spec = ENEMY_BY_ID.get(id) ?? ENEMY_ROSTER[0]!;
-    return {
-      id: spec.id, name: spec.name, asset,
-      ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
-      scale: spec.scale, collisionScale: spec.collisionScale,
-      pack: spec.pack, weight: spec.weight, drops: spec.drops,
-      groundSink: footSinkRatioOf(asset) * spec.scale + (spec.groundSink ?? 0),
-      isAir: spec.isAir === true,
-      airAltitude: spec.airAltitude ?? 2,
-      billboard: spec.billboard,
-      role: spec.role, attackType: spec.attackType,
-      suicide: spec.suicide, squadMode: spec.squadMode, noDemote: spec.noDemote,
-      elite: spec.elite, canBuild: spec.canBuild, tactics: spec.tactics,
-    } as MobDef;
-  });
   const spawner = new WorldSpawner({
     enemies,   // ★ 活数组：spawner 创建实体时 push（hooks/贴地共用）
     enemyDefs: new WeakMap(),
     mobDefs,
-    bossEntity: null, bossRun: false, threat: null, spawnChunkKey: 0, scalingInputs: null,
+    bossEntity: null, bossRun: false, threat: { setThreat: () => {} }, spawnChunkKey: 0, scalingInputs: null,
     enemyScale: { hp: 1, atk: 1, def: 0 },
     player: { position: { x: spawn.x, y: 0, z: spawn.z }, hitAnchorY: () => 1.5 },
     ship: null, entities, swarm, swarmDirector: null,
