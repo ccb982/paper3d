@@ -8,6 +8,7 @@ import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyManager, EnemyHandle } from './EnemyManager';
 import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
 import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
+import { orderCn, directiveCn, sourceCn } from './cn';
 
 const TYPE_LABEL: Record<string, string> = {
   defense: '盾卫', assault: '突击', ranged: '远程', logistics: '后勤', mixed: '混编', flyer: '飞行',
@@ -99,10 +100,10 @@ export class EnemyListPanel {
         const sopen = this.expandedSquads.has(sq.id);
         const ratio = sq.max > 0 ? Math.round((sq.hp / sq.max) * 100) : 100;
         const ord = this.swarm.tactics.board.get(sq.id)?.order;
-        const src = latest.get(sq.id)?.source === 'leader' ? '队长' : latest.has(sq.id) ? '引擎' : '-';
-        const ordTxt = ord ? `${ord.kind}→${ord.target ? `${ord.target.x | 0},${ord.target.z | 0}` : '-'}` : '-';
+        const src = latest.get(sq.id)?.source ? sourceCn(latest.get(sq.id)!.source) : '-';
+        const ordTxt = ord ? `${orderCn(ord.kind)}→(${ord.target ? `${ord.target.x | 0},${ord.target.z | 0}` : '-'})` : '无';
         const sRow = document.createElement('div');
-        sRow.textContent = `${sopen ? '▾' : '▸'} 队长 #${sq.leader} · 队${sq.id} · ${sq.members.length}人 · ${ratio}% | 令[${src}]:${ordTxt}`;
+        sRow.textContent = `${sopen ? '▾' : '▸'} 队长 #${sq.leader} · 第${sq.id}队 · ${sq.members.length}人 · ${ratio}% | 命令[${src}]：${ordTxt}`;
         sRow.style.cssText = `padding:3px 6px 3px 18px;cursor:pointer;border-radius:4px;color:${selected.has(sq.leader) ? '#ffd24a' : '#cfe3f5'};`;
         sRow.onmouseenter = () => { sRow.style.background = 'rgba(110,170,235,0.12)'; };
         sRow.onmouseleave = () => { sRow.style.background = 'transparent'; };
@@ -129,7 +130,7 @@ export class EnemyListPanel {
         for (const h of historyOf(sq.id)) {
           const hRow = document.createElement('div');
           const age = Math.max(0, Math.round(performance.now() / 1000 - h.t));
-          hRow.textContent = `  史[${h.source === 'leader' ? '队长' : '引擎'}] ${h.kind}→${h.tx | 0},${h.tz | 0}${h.mission ? ` ${h.mission}` : ''} (${age}s前)`;
+          hRow.textContent = `  命令历史[${sourceCn(h.source)}] ${orderCn(h.kind)}→(${h.tx | 0}, ${h.tz | 0})${h.mission ? ` ${h.mission}` : ''} （${age}秒前）`;
           hRow.style.cssText = 'padding:1px 6px 1px 26px;color:#7f95ab;font-size:11px;cursor:pointer;';
           hRow.onmouseenter = () => { hRow.style.color = '#cfe3f5'; };
           hRow.onmouseleave = () => { hRow.style.color = '#7f95ab'; };
@@ -142,21 +143,21 @@ export class EnemyListPanel {
           const mRow = document.createElement('div');
           const hpPct = h.maxHp > 0 ? Math.round((h.hp / h.maxHp) * 100) : 100;
           // ★ 队长→成员的个体指令（L3 读实体字段；L2 读池数组）
-          let dirTxt = '-';
-          let okTxt = 'none';
+          let dirTxt = '无';
+          let okTxt = '无';
           if (h.entity) {
             const d = h.entity.directiveKind;
-            dirTxt = d && d !== 'none' ? `${d}→${h.entity.directiveTargetX | 0},${h.entity.directiveTargetZ | 0}` : '-';
-            okTxt = h.entity.orderKind;
+            dirTxt = d && d !== 'none' ? `${directiveCn(d)}→(${h.entity.directiveTargetX | 0}, ${h.entity.directiveTargetZ | 0})` : '无';
+            okTxt = orderCn(h.entity.orderKind);
           } else {
             const pi = idxByUid.get(uid);
             if (pi !== undefined) {
               const dk = directiveFromCode(pool.directiveKind[pi] ?? 0);
-              dirTxt = dk && dk !== 'none' ? `${dk}→${pool.directiveTargetX[pi] | 0},${pool.directiveTargetZ[pi] | 0}` : '-';
-              okTxt = orderFromCode(pool.orderKind[pi] ?? 0);
+              dirTxt = dk && dk !== 'none' ? `${directiveCn(dk)}→(${pool.directiveTargetX[pi] | 0}, ${pool.directiveTargetZ[pi] | 0})` : '无';
+              okTxt = orderCn(orderFromCode(pool.orderKind[pi] ?? 0));
             }
           }
-          mRow.textContent = `${uid === sq.leader ? '★' : '·'} ${h.tier} #${uid} · ${hpPct}% | 令:${okTxt} | 指:${dirTxt}`;
+          mRow.textContent = `${uid === sq.leader ? '★' : '·'} ${h.tier} #${uid} · ${hpPct}% | 队令：${okTxt} | 受令：${dirTxt}`;
           mRow.style.cssText = `padding:2px 6px 2px 34px;cursor:pointer;border-radius:4px;color:${selected.has(uid) ? '#ffd24a' : '#a9c2d8'};`;
           mRow.onmouseenter = () => { mRow.style.background = 'rgba(110,170,235,0.12)'; };
           mRow.onmouseleave = () => { mRow.style.background = 'transparent'; };

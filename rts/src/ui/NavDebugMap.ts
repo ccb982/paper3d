@@ -8,6 +8,7 @@
 import { RasterMap } from '../services/map/RasterMap';
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
+import { orderCn } from './cn';
 
 export class NavDebugMap {
   private readonly root: HTMLDivElement;
@@ -62,7 +63,7 @@ export class NavDebugMap {
     this.baseCtx = this.base.getContext('2d')!;
 
     this.legendEl = document.createElement('div');
-    this.legendEl.textContent = '线=走廊 绿=起点 黄=终点 红=队令 白=队长 灰=令历史 | 滚轮缩放 · 拖拽平移';
+    this.legendEl.textContent = '走廊(彩色线) · 起始点(绿点) · 目标点(黄叉) · 命令目标(红叉) · 队长(白点) · 命令历史(点+文字) | 滚轮缩放 · 拖拽平移';
     this.legendEl.style.cssText = 'padding:6px 4px 0;color:#9fb4c8;font:11px Consolas,monospace;';
 
     this.root.append(head, this.canvas, this.legendEl);
@@ -237,13 +238,13 @@ export class NavDebugMap {
           const age = Math.max(0, Math.round(now / 1000 - h.t));
           g.fillStyle = 'rgba(230,238,245,0.9)';
           g.font = '10px Consolas,monospace';
-          g.fillText(`${h.kind} ${age}s`, hx + 5, hz - 5);
+          g.fillText(`${orderCn(h.kind)} ${age}秒前`, hx + 5, hz - 5);
         }
       }
     }
     this.titleEl.textContent = this.squadId === null
-      ? `全览（${squads.length} 队）· ${Math.round(this.span)}m`
-      : `队${this.squadId} · ${Math.round(this.span)}m · 中心 ${this.cx | 0},${this.cz | 0}`;
+      ? `全览（${squads.length} 队）· 视野 ${Math.round(this.span)}m`
+      : `第${this.squadId}队 · 视野 ${Math.round(this.span)}m · 中心 (${this.cx | 0}, ${this.cz | 0})`;
   }
 
   dispose(): void { this.root.remove(); }
