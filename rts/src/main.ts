@@ -209,6 +209,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
+  // ★ 事态环形夹取：**引擎令 + 队长自主令同门**（SquadTactics.issue 内夹取）
+  swarm.tactics.ringClamp = (x, z) => swarm.commander.clampToRing(x, z);
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
   hooks.tierPort = spawner;
   hooks.activeUnits = () => enemies;
