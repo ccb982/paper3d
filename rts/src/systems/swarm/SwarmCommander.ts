@@ -154,18 +154,25 @@ export class SwarmCommander {
   /** ★ 前线永不再贴近舰船的余量（米） */
   private static readonly SHIP_CLEAR = 16;
 
-  /** ★ 环形一日推进曲线（用户定 2026-09-25）：返回"收拢程度" 0~1
-   *  0=初始宽环 · 1=收到舰船点 · 0.5=回撤到半程
-   *  日程：0.00-0.20 静止(0) → 0.20-0.45 收拢(0→1) → 0.45-0.62 第一波驻留(1)
-   *       → 0.62-0.72 回撤(1→0.5) → 0.72-0.82 半程休整(0.5) → 0.82-1.00 总攻(0.5→1) */
-  static ringCommit(t: number): number {
+  /** ★ 环形一日推进（用户定 2026-09-25）：**宽环 → 大圆 → 甜甜圈 → 点**
+   *  · 初始宽环：(D0min, D0max)（= 前沿 ±80m，环带宽 ≥120m，不窄）
+   *  · 第一波大圆：(0, 90)——较大的圆（内 0=可到舰，外 90=不许跑远）
+   *  · 甜甜圈：(60, 180)——中空环（回撤休整：不许贴舰、也不许离远）
+   *  · 总攻：→ (0, 0) 收缩为一个点
+   *  日程：0.20-0.45 收大圆 / 0.45-0.62 大圆驻留 / 0.62-0.72 变大甜甜圈 /
+   *        0.72-0.82 甜甜圈驻留 / 0.82-0.90 收点 / 0.90-1.00 点驻留 */
+  static ringBounds(t: number, d0min: number, d0max: number): { minD: number; maxD: number } {
     const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
-    if (t < 0.20) return 0;
-    if (t < 0.45) return lerp(0, 1, (t - 0.20) / 0.25);
-    if (t < 0.62) return 1;
-    if (t < 0.72) return lerp(1, 0.5, (t - 0.62) / 0.10);
-    if (t < 0.82) return 0.5;
-    return lerp(0.5, 1, (t - 0.82) / 0.18);
+    const BIG_R = 90;     // 第一波大圆半径（2026-09-25 用户定：130 → 90，缩小外径）
+    const DONUT_IN = 60;  // 甜甜圈内径
+    const DONUT_OUT = 180; // 甜甜圈外径
+    if (t < 0.20) return { minD: d0min, maxD: d0max };
+    if (t < 0.45) { const k = (t - 0.20) / 0.25; return { minD: lerp(d0min, 0, k), maxD: lerp(d0max, BIG_R, k) }; }
+    if (t < 0.62) return { minD: 0, maxD: BIG_R };
+    if (t < 0.72) { const k = (t - 0.62) / 0.10; return { minD: lerp(0, DONUT_IN, k), maxD: lerp(BIG_R, DONUT_OUT, k) }; }
+    if (t < 0.82) return { minD: DONUT_IN, maxD: DONUT_OUT };
+    if (t < 0.90) { const k = (t - 0.82) / 0.08; return { minD: lerp(DONUT_IN, 0, k), maxD: lerp(DONUT_OUT, 0, k) }; }
+    return { minD: 0, maxD: 0 };   // ★ 总攻：一个点，驻留到日终
   }
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
   private readonly supportCd = new Map<number, number>();
@@ -858,15 +865,13 @@ export class SwarmCommander {
       //   上限 frontMaxD：第一波（0.45）收拢到舰（外圈消失 → 兵力可全线压上）
       //   下限 frontMinD：下午（0.80）收拢到舰（内圈消失 → 可贴脸打舰）
       const t01Now = this.lastT01;   // ★ 归一当日进度（tick 每帧写；本块在别的函数里，不能引用局部 t01）
-      // ★ 环形一日推进（用户定 2026-09-25）：**0 → 1（第一波）→ 1/2（回撤休整）→ 1（总攻）** 锯齿
-      const commit = SwarmCommander.ringCommit(t01Now);
-      const scale = 1 - commit;   // 1=收到舰船点；0.5=退到半程；0=初始宽环
-      // ★ 初始**宽环**：以原前沿距离 ffrontD 为中心 ±RING_HALF
-      const RING_HALF = 80;
+      // ★ 环形一日推进（用户定 2026-09-25）：**宽环 → 第一波大圆 → 甜甜圈 → 点**（上下限各自插值，间距保底）
+      const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m
       const D0max = ffrontD + RING_HALF;
       const D0min = Math.max(0, ffrontD - RING_HALF);
-      this.frontMaxD = D0max * scale;
-      this.frontMinD = Math.max(0, D0min * scale);
+      const rb = SwarmCommander.ringBounds(t01Now, D0min, D0max);
+      this.frontMinD = rb.minD;
+      this.frontMaxD = rb.maxD;
       this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环基准（issueChecked 用）
       // 前沿点（命令基准）夹在 [下限, 上限] 环内
       const rWant = Math.min(Math.max(ffrontD, this.frontMinD), this.frontMaxD);
