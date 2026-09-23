@@ -40,6 +40,7 @@ import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/World
 import { wireCommanderPorts } from './modes/world/CommanderWiring';
 import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
+import { EnemyManager } from './ui/EnemyManager';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -231,6 +232,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     focusX: spawn.x, focusZ: spawn.z, focusY: 0,
   };
   const shipState = { get hp(): number { return shipHp; } };
+  // ★ RTS 全体敌人管理器（外接；框选/单击/红圈）
+  const enemyMgr = new EnemyManager({ enemies, swarm, camera, scene });
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -342,12 +345,45 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     keys.add(e.code);
     if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45);
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
+    if (e.code === 'Escape') enemyMgr.clear();
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
+  // ---- ★ 输入：左键=选/框选，中键或 Shift 拖=平移/旋转，右键=发令，WASD=平移 ----
+  const selBox = document.createElement('div');
+  selBox.style.cssText = 'position:fixed;border:1px solid rgba(255,80,60,0.9);background:rgba(255,80,60,0.12);pointer-events:none;z-index:900;display:none;';
+  document.body.appendChild(selBox);
   let dragging = false, lastX = 0, lastY = 0;
-  renderer.domElement.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
-  addEventListener('mouseup', () => { dragging = false; });
+  let boxing = false, boxX0 = 0, boxY0 = 0, boxMoved = 0;
+  renderer.domElement.addEventListener('mousedown', (e) => {
+    if (e.button === 0 && !e.shiftKey) {
+      boxing = true; boxMoved = 0;
+      boxX0 = e.clientX; boxY0 = e.clientY;
+      return;
+    }
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+  });
+  addEventListener('mouseup', (e) => {
+    dragging = false;
+    if (!boxing) return;
+    boxing = false;
+    selBox.style.display = 'none';
+    if (boxMoved < 6) {
+      const h = enemyMgr.pickAt(e.clientX, e.clientY);
+      if (h) enemyMgr.select([h], e.shiftKey);
+      else if (!e.shiftKey) enemyMgr.clear();
+    } else {
+      enemyMgr.select(enemyMgr.pickBox(boxX0, boxY0, e.clientX, e.clientY), e.shiftKey);
+    }
+  });
   addEventListener('mousemove', (e) => {
+    if (boxing) {
+      boxMoved += Math.abs(e.clientX - boxX0) + Math.abs(e.clientY - boxY0);
+      const lx = Math.min(boxX0, e.clientX), ly = Math.min(boxY0, e.clientY);
+      selBox.style.left = `${lx}px`; selBox.style.top = `${ly}px`;
+      selBox.style.width = `${Math.abs(e.clientX - boxX0)}px`; selBox.style.height = `${Math.abs(e.clientY - boxY0)}px`;
+      selBox.style.display = 'block';
+      return;
+    }
     if (!dragging) return;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
@@ -420,6 +456,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     aiSystem.updateAll(dt, aiCtx);
     for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
     explosionFx.update(dt);
+    enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -434,7 +471,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
