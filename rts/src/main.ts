@@ -18,6 +18,8 @@ import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld
 import { EntityManager } from './entity/EntityManager';
 import { addStaticObstacle, removeStaticObstacle } from './services/physics/StaticObstacleRegistry';
 import { CHUNK_SIZE } from './services/map/ChunkGenerator';
+import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enemyRoster';
+import { FtxAsset } from './vendor/player/FtxAsset';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -31,7 +33,7 @@ const R = globalThis as unknown as Record<string, unknown>;
 let raster = new RasterMap(SEED);
 R.__rts = { raster, phase: 'select' };
 
-function startWorld(spawnX: number, spawnZ: number): void {
+function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]): void {
   const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
   const spawn = { x: spawnX, z: spawnZ };
 
@@ -113,6 +115,16 @@ function startWorld(spawnX: number, spawnZ: number): void {
 
   // ---- ★ 敌人（R1c 最小接线）：SwarmSystem 指挥链 + 自渲染胶囊（无物理/无战斗） ----
   const swarm = new SwarmSystem();
+  // ★ FTX 精细贴图批量渲染（每兵种图集 + InstancedMesh；替代胶囊）
+  let batchOn = false;
+  if (mobAssets.length > 0) {
+    try {
+      swarm.buildBatch(scene, mobAssets.map((m) => m.asset));
+      batchOn = true;
+    } catch (e) {
+      console.warn('[rts] buildBatch 失败，回退胶囊', e);
+    }
+  }
   const hooks = {
     playerX: spawn.x, playerZ: spawn.z, shipX: spawn.x, shipZ: spawn.z,
     camForwardX: 0, camForwardZ: 1,
@@ -151,6 +163,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
   const _p = new THREE.Vector3();
   const _axisY = new THREE.Vector3(0, 1, 0);
   const renderAgents = (): void => {
+    if (batchOn) return;   // FTX 批量渲染接管
     const pool = swarm.pool;
     let n = 0;
     for (let i = 0; i < pool.count; i++) {
@@ -244,6 +257,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
     hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
     swarm.update(dt, hooks);
+    swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
     renderAgents();
     feedLight();
     renderer.render(scene, camera);
@@ -254,11 +268,20 @@ function startWorld(spawnX: number, spawnZ: number): void {
   R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship };
 }
 
-// ---- 严格分流：直进 或 先选点（进世界前 await rapier 就绪）----
+// ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
 const enter = (x: number, z: number): void => {
   void (async () => {
     await ensureRapierReady();
-    startWorld(x, z);
+    const mobAssets: EnemyAssetEntry[] = [];
+    for (const spec of ENEMY_ROSTER) {
+      try {
+        mobAssets.push({ id: spec.id, asset: await FtxAsset.load(enemyAssetUrl(spec)) });
+      } catch {
+        console.warn(`[rts] 敌军素材缺失：${spec.id}（本兵种不生成）`);
+      }
+    }
+    console.log(`[rts] 敌军素材 ${mobAssets.length}/${ENEMY_ROSTER.length}`);
+    startWorld(x, z, mobAssets);
   })();
 };
 if (UX !== null && UZ !== null) {
