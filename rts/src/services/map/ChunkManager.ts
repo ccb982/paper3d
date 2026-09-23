@@ -573,6 +573,22 @@ export class ChunkManager {
   /** ★ RTS（2026-09-25 用户定）：**粗块生成上限**——只生成固定世界范围（|cx|,|cz| ≤ 此值）内的粗块，
    *  超出**不生成**（而不是生成后再删）；4 格 = ±240m，与固定世界一致 */
   private static readonly COARSE_LIMIT_RADIUS = 4;
+  /** ★ RTS：**细块同样固定范围**（圆心=出生点，±此值；超出不建、只建不删） */
+  private static readonly FINE_LIMIT_RADIUS = 4;
+  /** 固定世界范围内判定（格坐标） */
+  private inWorldLimit(cx: number, cz: number, r: number): boolean {
+    const wcx = Math.floor(this.worldCX / CHUNK_SIZE), wcz = Math.floor(this.worldCZ / CHUNK_SIZE);
+    return Math.max(Math.abs(cx - wcx), Math.abs(cz - wcz)) <= r;
+  }
+  /** ★ 固定世界中心（出生点；setWorldCenter 注入）——粗块生成上限以此为圆心 */
+  private worldCX = 0;
+  private worldCZ = 0;
+
+  /** ★ 设定固定世界中心（出生点）：粗块生成上限围绕它（±COARSE_LIMIT_RADIUS 格） */
+  setWorldCenter(x: number, z: number): void {
+    this.worldCX = x;
+    this.worldCZ = z;
+  }
   /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
    *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
    *  "让飞机飞行的时候前方看得远，侧方不变" */
@@ -1231,6 +1247,8 @@ export class ChunkManager {
   }
 
   private enqueueChunk(cx: number, cz: number, rebuild: boolean): void {
+    // ★ 细块固定范围：世界外不建（只建不删；防随相机无限扩张）
+    if (!this.inWorldLimit(cx, cz, ChunkManager.FINE_LIMIT_RADIUS)) return;
     const key = chunkKeyOf(cx, cz);
     if (this.queuedKeys.has(key)) return;
     // 已建（可见或虚空，如出生区强制构建）
@@ -1411,8 +1429,8 @@ export class ChunkManager {
       const o = this.coarseDynamic[oi];
       if (!o) continue;
       const cx = pcx + o.dx, cz = pcz + o.dz;
-      // ★ 生成上限：固定世界外的粗块**不生成**（防随相机无限扩张；只建不删）
-      if (Math.max(Math.abs(cx), Math.abs(cz)) > ChunkManager.COARSE_LIMIT_RADIUS) continue;
+      // ★ 生成上限：固定世界（圆心=出生点）外的粗块**不生成**（防随相机无限扩张；只建不删）
+      if (!this.inWorldLimit(cx, cz, ChunkManager.COARSE_LIMIT_RADIUS)) continue;
       const key = chunkKeyOf(cx, cz);
       // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
       if (this.voidKeys.has(key)) continue;
@@ -1565,6 +1583,7 @@ export class ChunkManager {
 
   /** 单个预烘投递（占用/已有缓存检查；命中即投 "只烘不建" 请求） */
   private tryPrefetch(cx: number, cz: number): boolean {
+    if (!this.inWorldLimit(cx, cz, ChunkManager.FINE_LIMIT_RADIUS)) return false;   // ★ 固定范围外不预烘
     const key = chunkKeyOf(cx, cz);
     if (this.meshes.has(key) || this.voidKeys.has(key)) return false;
     if (this.pendingBakes.has(key) || this.queuedKeys.has(key) || this.geoInflight.has(key)) return false;
