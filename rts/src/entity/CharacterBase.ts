@@ -49,6 +49,8 @@ export abstract class CharacterBase extends EntityBase {
   readonly controller: CharacterController;
   /** ★ 无视地形落差行进（载具：爬坡/过坑；开启后不再被 EDGE_CLIFF_BAND 立面阻挡） */
   climbAnyTerrain = false;
+  /** ★ 是否允许爬掩体/可攀工事（用户定 2026-09-25：RTS 先给敌人关掉——行军路过就反复翻→卡） */
+  canClimbCovers = true;
   /** ★ 限制爬崖（敌人等开启）：禁止朝高台立面位移——只能走插值坡/≤EDGE_CLIFF_BAND 小台阶，
    *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
   blockCliffClimb = false;
@@ -285,7 +287,7 @@ export abstract class CharacterBase extends EntityBase {
           // ★ 攀爬候选：顶面可站 + 高差在可攀范围（0.4~CLIMB_MAX）→ 持续顶住则翻上去
           const top = o.y + o.hy;
           const rise = top - p.y;
-          if (o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
+          if (this.canClimbCovers && o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
             const len = Math.hypot(push.dx, push.dz) || 1;
             this.climbCand = { top, ix: -push.dx / len, iz: -push.dz / len };
           }

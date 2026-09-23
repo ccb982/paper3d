@@ -36,6 +36,10 @@ export interface EngineerHost {
 
 /** 战壕挖满遍数 = 目标深度（每遍 ≈0.2m → 5 遍 ≈1.0m；再深受 §6 硬约束封顶） */
 const TRENCH_PASSES = 5;
+/** ★ 施工计时（用户定 2026-09-25）：到位（15m）就计时，计时满即建成 */
+const COVER_TIME_S = 6;
+const TRENCH_TIME_S = 10;
+const WORK_R2 = 15 * 15;
 /** 施工冷却（真秒；每帧递减） */
 const COVER_CD = 3;
 const TRENCH_CD = 4;
@@ -60,6 +64,8 @@ export class EngineerCorps {
     return g.minD > 0 && Math.hypot(q.x - g.x, q.z - g.z) < g.minD;
   }
   readonly passes = new Map<string, number>();
+  /** ★ 施工计时（件 key → 秒；2s 拍累加） */
+  private readonly workT = new Map<string, number>();
   /** 施工焦点（队伍 ↔ pieces 下标） */
   readonly focus = new Map<number, number>();
   /** 队级稳定分派（squadId → pieces 下标） */
@@ -300,9 +306,7 @@ export class EngineerCorps {
     const cover = this.host.cover();
     if (!cover) return;
     for (const s of builders) {
-      const cd = this.cds.get(s.id) ?? 0;
-      if (cd > 0) continue;   // 冷却中（递减已在每帧完成）
-      // ① 焦点续挖：本队正在建的块（成员 ≤6m 且未成）→ 必须继续
+      // ① 焦点续挖（优先；不受冷却限）：本队正在建的块（成员 ≤15m 且未成）→ 必须继续
       let piece: BuildPiece | null = null;
       let fidx = this.focus.get(s.id);
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
@@ -311,11 +315,13 @@ export class EngineerCorps {
         && this.allows(s.id, this.pieces[fidx].kind, this.pieces[fidx].pri)) {
         const q = this.pieces[fidx];
         for (const m of s.members.values()) {
-          if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= 36) { piece = q; break; }
+          if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= WORK_R2) { piece = q; break; }   // ★ 15m 内即可计时
         }
       }
       // ② 就近动工（新焦点）：**pri 小者先**（前线掩体 > 战壕 > 环掩体）→ 挖痕多 → 近（成员 ≤5m）
       if (!piece) {
+        const cd = this.cds.get(s.id) ?? 0;
+        if (cd > 0) continue;   // 冷却中（仅限新焦点）
         let bi = -1, bD = 25, bPass = -1, bPri = Infinity;
         for (const m of s.members.values()) {
           for (let i = 0; i < this.pieces.length; i++) {
@@ -336,28 +342,30 @@ export class EngineerCorps {
         piece = this.pieces[bi];
       }
       if (fidx !== undefined) this.focus.set(s.id, fidx);
+      // ★ 施工计时（用户定 2026-09-25）：到位就计时（每拍 +2s），计时满即建成
+      const k = keyOf(piece);
+      const t = (this.workT.get(k) ?? 0) + 2;
+      this.workT.set(k, t);
       if (piece.kind === 'cover') {
+        if (t < COVER_TIME_S) continue;
         cover(piece.x, piece.z, 'cover');
         this.host.markDirty(piece.x, piece.z, 12);
-        this.built.add(keyOf(piece));
+        this.built.add(k);
+        this.workT.delete(k);
         this.focus.delete(s.id);
         this.cds.set(s.id, COVER_CD);
       } else {
-        const k = keyOf(piece);
-        // 深度硬约束（《工兵架构.md》§6）：坑底不得低于阈值（否则变不可走硬阻挡）→ 到达封顶
         const raster = RasterMap.current;
         if (raster && raster.surfaceHeightAt(piece.x, piece.z) - LAYER < FLOOR_MIN) {
           this.built.add(k);
+          this.workT.delete(k);
           this.focus.delete(s.id);
           this.cds.set(s.id, TRENCH_CD);
           continue;
         }
-        const pass = (this.passes.get(k) ?? 0) + 1;
         this.host.dig()?.(piece.x, piece.z);
         this.host.markDirty(piece.x, piece.z, 16);
-        this.cds.set(s.id, TRENCH_CD);
-        if (pass >= TRENCH_PASSES) { this.built.add(k); this.focus.delete(s.id); }
-        else this.passes.set(k, pass);
+        if (t >= TRENCH_TIME_S) { this.built.add(k); this.workT.delete(k); this.focus.delete(s.id); this.cds.set(s.id, TRENCH_CD); }
       }
     }
   }

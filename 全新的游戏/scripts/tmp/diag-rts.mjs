@@ -28,6 +28,9 @@ const probe = () => page.evaluate(() => {
     pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     recycled: sw?.stuckDbg?.recycled ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
+    drops: sw?.orderDrops ?? null, recycled: sw?.stuckDbg?.recycled ?? null,
+    clamps: c?.cmdLogRingClamps ?? null,
+    decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
     gain: sw?.commander?.terrainScore?.distGain ? +sw.commander.terrainScore.distGain.toFixed(1) : null,
     nav: sw?.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail } : null,
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
@@ -184,6 +187,11 @@ for (const [sid, a] of allTrk) {
   const net = Math.hypot(a[a.length - 1].x - a[0].x, a[a.length - 1].z - a[0].z);
   sums.push(`#${sid} n=${a.length} 路径${path.toFixed(0)}/净${net.toFixed(0)}=${(path / Math.max(net, 0.5)).toFixed(1)} 停滞${stall}/${a.length - 1}`);
 }
+const built = await page.evaluate(() => {
+  const c = window.__rts.swarm.commander;
+  return { built: c.corps.built.size, pieces: c.corps.pieces.length, injected: c.fortify.dbg.injected, sweeps: c.fortify.dbg.sweeps };
+});
+console.log('工事计时', JSON.stringify(built));
 console.log('全队汇总', sums.join(' | '));
 console.log('队轨迹', JSON.stringify({
     sid: trk[0].sid, samples: trk.length, path: +path.toFixed(0), net: +net.toFixed(0),
