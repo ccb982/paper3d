@@ -180,10 +180,51 @@ export class NavDebugMap {
     for (let z = gz0; z <= this.cz + this.span / 2; z += 50) { const [, pz] = p2(0, z); g.beginPath(); g.moveTo(0, pz); g.lineTo(S, pz); g.stroke(); }
 
     const squads = this.squadId === null ? this.swarm.squads.all() : this.swarm.squads.all().filter((s) => s.id === this.squadId);
-    // ★ 舰船位置（蓝圈）
+    // ★ 舰船位置（蓝圈）+ 工事扇区（8 区环带 + 认领队 + 需求值 + 各队 spot）
     if (this.shipAt) {
       const sp = this.shipAt();
       const [sx, sz] = p2(sp.x, sp.z);
+      const sPx = S / this.span;
+      const fort = this.swarm.commander.fortify;
+      const fg = this.swarm.commander.frontGate;
+      const rLo = Math.max(24, (fg?.minD ?? 24) + 8);
+      const rHi = Math.max(90, rLo + 30);
+      const ownerOf = new Map<number, number>();   // sector → squadId
+      for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
+      for (let i = 0; i < 8; i++) {
+        const a0 = (i / 8) * Math.PI * 2, a1 = ((i + 1) / 8) * Math.PI * 2;
+        const owner = ownerOf.get(i);
+        const hue = owner !== undefined ? (owner * 47) % 360 : 210;
+        g.beginPath();
+        g.arc(sx, sz, rHi * sPx, a0, a1);
+        g.arc(sx, sz, rLo * sPx, a1, a0, true);
+        g.closePath();
+        g.fillStyle = owner !== undefined ? `hsla(${hue} 90% 60% 0.18)` : 'rgba(120,160,200,0.10)';
+        g.fill();
+        g.strokeStyle = 'rgba(150,190,230,0.4)';
+        g.lineWidth = 1;
+        g.stroke();
+        const mid = (a0 + a1) / 2;
+        const rm = (rLo + rHi) / 2;
+        const lx = sx + Math.cos(mid) * rm * sPx;
+        const ly = sz + Math.sin(mid) * rm * sPx;
+        g.fillStyle = owner !== undefined ? `hsl(${hue} 90% 70%)` : '#a9c2d8';
+        g.font = '10px Consolas,monospace';
+        g.fillText(`区${i}${owner !== undefined ? `·第${owner}队` : ''}`, lx - 14, ly);
+        const need = fort.safety[i];
+        g.fillStyle = 'rgba(220,232,245,0.8)';
+        g.fillText(Number.isFinite(need) ? `需求${need.toFixed(1)}` : '需求-', lx - 14, ly + 11);
+      }
+      // 各队施工点（spot）
+      for (const [sid, p] of fort.spots) {
+        const [px2, pz2] = p2(p.x, p.z);
+        g.fillStyle = `hsl(${(sid * 47) % 360} 90% 60%)`;
+        g.beginPath(); g.arc(px2, pz2, 3.5, 0, Math.PI * 2); g.fill();
+        g.fillStyle = '#dce8f5';
+        g.font = '10px Consolas,monospace';
+        g.fillText(`第${sid}队`, px2 + 5, pz2 + 3);
+      }
+      // 舰船本体
       g.strokeStyle = '#3399ff';
       g.lineWidth = 2.5;
       g.beginPath(); g.arc(sx, sz, 9, 0, Math.PI * 2); g.stroke();
