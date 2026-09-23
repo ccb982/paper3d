@@ -149,7 +149,10 @@ export class SwarmCommander {
   cmdLogRingClamps = 0;
   /** ★ 越界队（队 id → 首次越界时刻；连续 2s 强制归位） */
   private readonly outsideSince = new Map<number, number>();
-  /** ★ 少发令闸门（用户定 2026-09-25）：队 → 上次发令的事态签名；签名不变且队未重伤 → 只续命不重发 */
+  /** ★ 发令冷却（用户定 2026-09-25）：队 → 上次发令时刻（秒）；短时期内不再给同一队发 */
+  private readonly lastIssueAt = new Map<number, number>();
+  private static readonly ISSUE_COOLDOWN_S = 8;
+  /** 队 → 上次发令的事态签名（签名变 = 事态变动 → 允许立即重发） */
   private readonly cmdKey = new Map<number, string>();
   /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
   private readonly buildIssued = new Map<number, number>();
@@ -271,7 +274,7 @@ export class SwarmCommander {
   /** ★ 对特定小队下覆盖命令（引擎优先级最高，队长不抢） */
   orderSquad(squadId: number, order: TacticalOrder, ttl = 30): void {
     if (this.swarm.squads.centroidOf(squadId, _c0)) this.issueChecked(squadId, _c0.x, _c0.z, order, ttl);
-    else this.swarm.issueOrder(squadId, order, ttl);
+    else this.swarm.issueOrder(squadId, order, ttlLong);
   }
 
   // ============================================================
@@ -302,7 +305,10 @@ export class SwarmCommander {
   private issueChecked(
     squadId: number, fromX: number, fromZ: number, order: TacticalOrder, ttl?: number,
   ): boolean {
-    // ★ 少发令闸门（用户定 2026-09-25）：**只在事态变动或队重伤时重发**；否则只续命（不重登记/不进台账）
+    // ★ 发令冷却（用户定 2026-09-25）：**命令发出去一次，短时期内不再给同一队发**——
+    //   不靠命令时效（引擎令 TTL 拉长存活）；冷却期内同签名同目标 → 直接不发。
+    //   例外：事态变动（stage/posture/环/波次签名变）或队重伤（血比<0.5）→ 允许立即重发。
+    let ttlLong = Math.max(ttl ?? 30, 60);   // 引擎令寿命拉长（命令靠冷却管，不靠时效）
     {
       const cur0 = this.swarm.tactics.board.get(squadId);
       if (cur0 && cur0.source === 'engine' && order.target) {
@@ -311,7 +317,6 @@ export class SwarmCommander {
         const sameKind = cur0.order.kind === order.kind && (cur0.order.mission ?? '') === (order.mission ?? '');
         const sameTgt = cur0.order.target && Math.hypot(cur0.order.target.x - order.target.x, cur0.order.target.z - order.target.z) < 3;
         const sameSituation = this.cmdKey.get(squadId) === key;
-        // 队重伤（血比 <0.5）→ 允许重发
         let ratio = 1;
         const sq = this.swarm.squads.get(squadId);
         if (sq && sq.members.size > 0) {
@@ -320,11 +325,13 @@ export class SwarmCommander {
           ratio = max > 0 ? hp / max : 1;
         }
         const hurt = ratio < 0.5;
-        if (sameKind && sameTgt && sameSituation && !hurt && nowS0 < cur0.until - 5) {
-          cur0.until = nowS0 + (ttl ?? 30);   // 只续命
-          return true;
+        const lastAt = this.lastIssueAt.get(squadId) ?? -1e9;
+        if (sameKind && sameTgt && sameSituation && !hurt
+          && nowS0 - lastAt < SwarmCommander.ISSUE_COOLDOWN_S) {
+          return true;   // ★ 冷却期内：不发（命令按长 TTL 存活，不用续命）
         }
         this.cmdKey.set(squadId, key);
+        this.lastIssueAt.set(squadId, nowS0);
       }
     }
     // ① 生效目标解析（五轴分工 subTargets 按队覆写——核验必须查覆写后的目标）
@@ -343,19 +350,19 @@ export class SwarmCommander {
     // 无目标 / 飞行队（独立空中层走直线）→ 不核验直接放行
     const squad = this.swarm.squads.get(squadId);
     if (!eff || squad?.type === 'flyer') {
-      this.swarm.issueOrder(squadId, order, ttl);
+      this.swarm.issueOrder(squadId, order, ttlLong);
       return true;
     }
     this.coarseDbg.checked++;
     const coarse: { x: number; z: number }[] = [];
     const res = this.swarm.coarseCheck(fromX, fromZ, eff.x, eff.z, coarse);
     if (res === 'ok') {
-      this.swarm.issueOrder(squadId, { ...order, coarse }, ttl);
+      this.swarm.issueOrder(squadId, { ...order, coarse }, ttlLong);
       return true;
     }
     if (res === 'unknown') {
       this.coarseDbg.unknown++;
-      this.swarm.issueOrder(squadId, order, ttl);   // 簇预热中：放行、不附 coarse
+      this.swarm.issueOrder(squadId, order, ttlLong);   // 簇预热中：放行、不附 coarse
       return true;
     }
     // ② 硬不可达 → 缩近（径向 3 档）：每档复核，首个可达即改目标放行
@@ -375,7 +382,7 @@ export class SwarmCommander {
       if (this.swarm.coarseCheck(fromX, fromZ, ax, az, coarse) === 'ok') {
         this.coarseDbg.adjusted++;
         this.swarm.cmdLog.noteAdjustedUnreachable();
-        this.swarm.issueOrder(squadId, withTgt(ax, az, coarse), ttl);
+        this.swarm.issueOrder(squadId, withTgt(ax, az, coarse), ttlLong);
         this.lastDecision = { squad: squadId, kind: 'shrink_unreachable', at: performance.now() / 1000 };
         return true;
       }
@@ -386,7 +393,7 @@ export class SwarmCommander {
       && this.swarm.coarseCheck(fromX, fromZ, alt.x, alt.z, coarse) === 'ok') {
       this.coarseDbg.adjusted++;
       this.swarm.cmdLog.noteAdjustedUnreachable();
-      this.swarm.issueOrder(squadId, withTgt(alt.x, alt.z, coarse), ttl);
+      this.swarm.issueOrder(squadId, withTgt(alt.x, alt.z, coarse), ttlLong);
       this.lastDecision = { squad: squadId, kind: 'retarget_unreachable', at: performance.now() / 1000 };
       return true;
     }
@@ -790,6 +797,105 @@ export class SwarmCommander {
         }
       }
     }
+    // ★ 磨蹭兜底 + 层级符合度（§13.10；1Hz 内部节流）
+    this.fallbackTick(dt, shipX, shipZ);
+  }
+
+  /** ★ 磨蹭兜底 + 层级符合度（§13.10；1Hz 内部节流；用户定 2026-09-25） */
+  private fallbackAccum = 0;
+  private readonly dawdle = new Map<number, { x: number; z: number; t: number; path: number; rev: number; lx: number; lz: number; last: number; cd: number }>();
+
+  private fallbackTick(dt: number, shipX: number, shipZ: number): void {
+    this.fallbackAccum += dt;
+    if (this.fallbackAccum < 1) return;
+    this.fallbackAccum = 0;
+    const nowF = performance.now() / 1000;
+    for (const s of this.swarm.squads.all()) {
+      if (s.members.size === 0) continue;
+      let cx = 0, cz = 0, n = 0;
+      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+      cx /= n; cz /= n;
+      let rec = this.dawdle.get(s.id);
+      if (!rec) { rec = { x: cx, z: cz, t: nowF, path: 0, rev: 0, lx: cx, lz: cz, last: 0, cd: 0 }; this.dawdle.set(s.id, rec); continue; }
+      const d = Math.hypot(cx - rec.lx, cz - rec.lz);
+      rec.path += d;
+      if (d >= 0.3) {
+        const sg = Math.sign(cx - rec.lx);
+        if (rec.last !== 0 && sg !== rec.last) rec.rev++;
+        rec.last = sg;
+      }
+      rec.lx = cx; rec.lz = cz;
+      if (nowF - rec.t >= 30) {
+        const net = Math.hypot(cx - rec.x, cz - rec.z);
+        const dawdling = (net < 3 && rec.path > 15) || rec.rev >= 6;
+        if (dawdling && nowF > rec.cd && !s.builders) {
+          rec.cd = nowF + 30;
+          const o = this.swarm.tactics.board.get(s.id)?.order;
+          let tx: number, tz: number;
+          if (o?.target) {
+            const dxo = o.target.x - cx, dzo = o.target.z - cz;
+            const dl = Math.hypot(dxo, dzo) || 1;
+            tx = cx + (dxo / dl) * 20; tz = cz + (dzo / dl) * 20;
+          } else {
+            const spot = this.underStrengthSpot(cx, cz, 60);
+            tx = spot ? spot.x : cx + 20; tz = spot ? spot.z : cz;
+          }
+          this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: tx, z: tz }, mission: 'regroup', seq: 0 }, 20);
+          this.lastDecision = { squad: s.id, kind: 'dawdle_push', at: nowF };
+        }
+        rec.x = cx; rec.z = cz; rec.t = nowF; rec.path = 0; rec.rev = 0;
+      }
+    }
+    const rankOf = (t: string): number => (t === 'defense' || t === 'assault') ? 0 : (t === 'logistics' ? 1 : (t === 'ranged' ? 2 : 3));
+    const list: { id: number; rank: number; d: number; x: number; z: number }[] = [];
+    for (const s of this.swarm.squads.all()) {
+      if (s.members.size === 0 || s.builders) continue;
+      if (!this.swarm.tactics.board.get(s.id)?.order) continue;
+      let cx = 0, cz = 0, n = 0;
+      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+      cx /= n; cz /= n;
+      list.push({ id: s.id, rank: rankOf(s.type), d: Math.hypot(cx - shipX, cz - shipZ), x: cx, z: cz });
+    }
+    for (const back of list) {
+      if (back.rank < 2) continue;
+      for (const front of list) {
+        if (front.rank !== 0) continue;
+        if (back.d < front.d - 15) {
+          const dxo = back.x - shipX, dzo = back.z - shipZ;
+          const dl = Math.hypot(dxo, dzo) || 1;
+          this.issueChecked(back.id, back.x, back.z,
+            { kind: 'advance', target: { x: back.x + (dxo / dl) * 15, z: back.z + (dzo / dl) * 15 }, mission: 'regroup', seq: 0 }, 20);
+          this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
+          break;
+        }
+      }
+    }
+  }
+
+  /** ★ 兵力最稀处（20m 格计数；[20, r] 内、可站、己方最少的格中心） */
+  private underStrengthSpot(cx: number, cz: number, r: number): { x: number; z: number } | null {
+    const CELL = 20;
+    const cnt = new Map<string, number>();
+    for (const s of this.swarm.squads.all()) {
+      for (const m of s.members.values()) {
+        const k = `${Math.floor(m.x / CELL)},${Math.floor(m.z / CELL)}`;
+        cnt.set(k, (cnt.get(k) ?? 0) + 1);
+      }
+    }
+    let best: { x: number; z: number } | null = null;
+    let bestV = Infinity;
+    for (let dz = -r; dz <= r; dz += CELL) {
+      for (let dx = -r; dx <= r; dx += CELL) {
+        const x = cx + dx, z = cz + dz;
+        const d = Math.hypot(dx, dz);
+        if (d < 20 || d > r) continue;
+        if (this.terrainScore.scoreAt(x, z) === null) continue;
+        const k = `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
+        const v = cnt.get(k) ?? 0;
+        if (v < bestV) { bestV = v; best = { x, z }; }
+      }
+    }
+    return best;
   }
 
   /** ★ 第一波抵舰驻留截止时刻（squadId → 秒；用户定 2026-09-25） */
