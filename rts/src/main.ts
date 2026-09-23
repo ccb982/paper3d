@@ -348,16 +348,23 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'Escape') enemyMgr.clear();
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
-  // ---- ★ 输入：左键=选/框选，中键或 Shift 拖=平移/旋转，右键=发令，WASD=平移 ----
+  // ---- ★ 输入：左键=平移视角（Shift+左=旋转），右键=选/框选，中键=发令，WASD=平移 ----
   const selBox = document.createElement('div');
   selBox.style.cssText = 'position:fixed;border:1px solid rgba(255,80,60,0.9);background:rgba(255,80,60,0.12);pointer-events:none;z-index:900;display:none;';
   document.body.appendChild(selBox);
   let dragging = false, lastX = 0, lastY = 0;
   let boxing = false, boxX0 = 0, boxY0 = 0, boxMoved = 0;
   renderer.domElement.addEventListener('mousedown', (e) => {
-    if (e.button === 0 && !e.shiftKey) {
+    if (e.button === 2) {                      // 右键 = 选/框选
       boxing = true; boxMoved = 0;
       boxX0 = e.clientX; boxY0 = e.clientY;
+      return;
+    }
+    if (e.button === 1) {                      // 中键 = 发令（临时入口，命令面板后续接管）
+      const rc = new THREE.Raycaster();
+      rc.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+      const hit = rc.intersectObjects(scene.children, true)[0];
+      if (hit) orders.issue({ kind: 'advance', target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
       return;
     }
     dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -405,16 +412,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   });
-  // 右键发令（玩家手动令入口）
-  renderer.domElement.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    const rc = new THREE.Raycaster();
-    rc.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
-    const hit = rc.intersectObjects(scene.children, true)[0];
-    if (!hit) return;
-    const kind = e.altKey ? 'build' : e.shiftKey ? 'garrison' : 'advance';
-    orders.issue({ kind, target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
-  });
+  // 右键：只做选/框选（阻止浏览器菜单）
+  renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
   // 双击地面 = 移出生点（加载窗与指挥起点随迁）
   addEventListener('dblclick', (e) => {
     const rc = new THREE.Raycaster();
