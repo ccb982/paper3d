@@ -6,7 +6,7 @@
 // ============================================================
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyManager, EnemyHandle } from './EnemyManager';
-import { orderFromCode, directiveFromCode } from '../systems/swarm/SwarmUnit';
+import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
 import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
 
 const TYPE_LABEL: Record<string, string> = {
