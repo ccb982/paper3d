@@ -20,6 +20,8 @@ export class EnemyListPanel {
   private readonly expandedGroups = new Set<string>();
   private readonly expandedSquads = new Set<number>();
   private lastBuild = 0;
+  /** ★ 点命令 → 打开命令检视地图（main 注入） */
+  onInspectCommand: ((squadId: number, entry?: CommandLogEntry) => void) | null = null;
 
   constructor(
     private readonly swarm: SwarmSystem,
@@ -115,6 +117,12 @@ export class EnemyListPanel {
           this.enemyMgr.select(handles, e.shiftKey);
           this.lastBuild = 0;
         };
+        // ★ [图] 按钮：打开该队当前令的检视地图（不触发选队）
+        const mapBtn = document.createElement('span');
+        mapBtn.textContent = ' [图]';
+        mapBtn.style.cssText = 'color:#8ac8ff;';
+        mapBtn.onclick = (e) => { e.stopPropagation(); this.onInspectCommand?.(sq.id, latest.get(sq.id)); };
+        sRow.appendChild(mapBtn);
         frag.appendChild(sRow);
         if (!sopen) continue;
         // ★ 该队命令历史（引擎/队长来源，具体到点）
@@ -122,7 +130,10 @@ export class EnemyListPanel {
           const hRow = document.createElement('div');
           const age = Math.max(0, Math.round(performance.now() / 1000 - h.t));
           hRow.textContent = `  史[${h.source === 'leader' ? '队长' : '引擎'}] ${h.kind}→${h.tx | 0},${h.tz | 0}${h.mission ? ` ${h.mission}` : ''} (${age}s前)`;
-          hRow.style.cssText = 'padding:1px 6px 1px 26px;color:#7f95ab;font-size:11px;';
+          hRow.style.cssText = 'padding:1px 6px 1px 26px;color:#7f95ab;font-size:11px;cursor:pointer;';
+          hRow.onmouseenter = () => { hRow.style.color = '#cfe3f5'; };
+          hRow.onmouseleave = () => { hRow.style.color = '#7f95ab'; };
+          hRow.onclick = (e) => { e.stopPropagation(); this.onInspectCommand?.(sq.id, h); };
           frag.appendChild(hRow);
         }
         for (const uid of sq.members) {

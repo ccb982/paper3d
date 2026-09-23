@@ -1,63 +1,152 @@
 // ============================================================
-// NavDebugMap —— 寻路可视化小地图（RTS 侧调试 UI，外接）
-//   底图：raster.mapColorAt（地形语义色，2s 重烘）
-//   覆盖：每队寻路走廊（折线）/ 起点(pathFrom) / 终点(pathGoal) / 队令目标 / 队长位置
-//   数据：swarm.tactics.board.get/getPath（只读）
+// NavDebugMap —— 命令检视小地图（RTS 侧调试 UI，外接只读）
+//   打开方式：右侧列表点某条命令 → open(squadId, focus)
+//   视图：滚轮缩放（span 40~600m）+ 拖拽平移；底图=地形语义色（随视图重烘）
+//   覆盖：该队走廊（粗）/ 起点(绿) / 终点(黄叉) / 队令目标(红叉) / 队长(白点)
+//          + 该队命令历史点（灰点连线 + 距今年龄）
 // ============================================================
 import { RasterMap } from '../services/map/RasterMap';
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
+import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
 
 export class NavDebugMap {
+  private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly base: HTMLCanvasElement;
   private readonly baseCtx: CanvasRenderingContext2D;
-  private lastBake = 0;
+  private readonly titleEl: HTMLDivElement;
+  private readonly legendEl: HTMLDivElement;
+  private readonly size = 560;
+  private cx = 0;
+  private cz = 0;
+  private span = 160;
+  private squadId: number | null = null;
+  private dirtyBase = true;
+  private lastBase = 0;
   private lastDraw = 0;
-  visible = true;
+  private dragging = false;
+  private lastX = 0;
+  private lastY = 0;
+  visible = false;
 
   constructor(
     private readonly raster: RasterMap,
     private readonly swarm: SwarmSystem,
-    private readonly size = 240,
-    private readonly half = 240,
   ) {
+    this.root = document.createElement('div');
+    this.root.style.cssText = [
+      'position:fixed', 'left:50%', 'top:50%', 'transform:translate(-50%,-50%)',
+      'z-index:960', 'display:none', 'background:rgba(6,10,16,0.96)',
+      'border:1px solid rgba(110,170,235,0.5)', 'border-radius:10px', 'padding:8px',
+      'box-shadow:0 10px 40px rgba(0,0,0,0.6)',
+    ].join(';');
+    const head = document.createElement('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 4px 8px;color:#dce8f5;font:13px "Microsoft YaHei",sans-serif;';
+    this.titleEl = document.createElement('div');
+    this.titleEl.style.cssText = 'flex:1 1 auto;color:#8ac8ff;font-weight:bold;';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '关闭 (Esc)';
+    closeBtn.style.cssText = 'padding:3px 10px;cursor:pointer;border-radius:6px;color:#dff0ff;background:rgba(26,60,96,0.95);border:1px solid rgba(110,170,235,0.6);';
+    closeBtn.onclick = () => this.close();
+    head.append(this.titleEl, closeBtn);
+
     this.canvas = document.createElement('canvas');
-    this.canvas.width = size;
-    this.canvas.height = size;
-    this.canvas.style.cssText = `position:fixed;left:8px;bottom:8px;width:${size}px;height:${size}px;image-rendering:pixelated;z-index:940;border:1px solid rgba(110,170,235,0.4);border-radius:6px;background:rgba(6,10,16,0.9);`;
+    this.canvas.width = this.size;
+    this.canvas.height = this.size;
+    this.canvas.style.cssText = 'image-rendering:pixelated;border:1px solid rgba(110,170,235,0.3);border-radius:6px;cursor:grab;display:block;';
     this.ctx = this.canvas.getContext('2d')!;
     this.base = document.createElement('canvas');
-    this.base.width = 160;
-    this.base.height = 160;
+    this.base.width = 320;
+    this.base.height = 320;
     this.baseCtx = this.base.getContext('2d')!;
-    document.body.appendChild(this.canvas);
+
+    this.legendEl = document.createElement('div');
+    this.legendEl.textContent = '线=走廊 绿=起点 黄=终点 红=队令 白=队长 灰=令历史 | 滚轮缩放 · 拖拽平移';
+    this.legendEl.style.cssText = 'padding:6px 4px 0;color:#9fb4c8;font:11px Consolas,monospace;';
+
+    this.root.append(head, this.canvas, this.legendEl);
+    document.body.appendChild(this.root);
+
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const f = 1 + Math.sign(e.deltaY) * 0.15;
+      this.span = Math.max(40, Math.min(600, this.span * f));
+      this.dirtyBase = true;
+      this.draw();
+    }, { passive: false });
+    this.canvas.addEventListener('pointerdown', (e) => {
+      this.dragging = true;
+      this.lastX = e.clientX; this.lastY = e.clientY;
+      this.canvas.setPointerCapture(e.pointerId);
+      this.canvas.style.cursor = 'grabbing';
+    });
+    this.canvas.addEventListener('pointermove', (e) => {
+      if (!this.dragging) return;
+      const dx = e.clientX - this.lastX, dy = e.clientY - this.lastY;
+      this.lastX = e.clientX; this.lastY = e.clientY;
+      const mpp = this.span / this.size;
+      this.cx -= dx * mpp;
+      this.cz -= dy * mpp;
+      this.dirtyBase = true;
+      this.draw();
+    });
+    this.canvas.addEventListener('pointerup', () => {
+      this.dragging = false;
+      this.canvas.style.cursor = 'grab';
+    });
   }
 
-  toggle(): void {
-    this.visible = !this.visible;
-    this.canvas.style.display = this.visible ? 'block' : 'none';
+  /** 打开：看某队（squadId=null → 全览）；focus 给定则居中到该点 */
+  open(squadId: number | null, focus?: { x: number; z: number }, span = 160): void {
+    this.squadId = squadId;
+    this.span = span;
+    if (focus) { this.cx = focus.x; this.cz = focus.z; }
+    else if (squadId !== null) {
+      const path = this.swarm.tactics.board.getPath(squadId);
+      const cmd = this.swarm.tactics.board.get(squadId);
+      const t = cmd?.order?.target ?? (path?.pathGoalX !== undefined ? { x: path.pathGoalX, z: path.pathGoalZ! } : null);
+      if (t) { this.cx = t.x; this.cz = t.z; }
+      else {
+        const s = this.swarm.squads.all().find((q) => q.id === squadId);
+        const lead = s?.members.get(s?.leaderUid ?? 0);
+        if (lead) { this.cx = lead.x; this.cz = lead.z; }
+      }
+    } else { this.cx = 0; this.cz = 0; this.span = 480; }
+    this.visible = true;
+    this.dirtyBase = true;
+    this.root.style.display = 'block';
+    this.draw();
+  }
+
+  close(): void {
+    this.visible = false;
+    this.root.style.display = 'none';
+  }
+
+  toggleOverview(): void {
+    if (this.visible && this.squadId === null) this.close();
+    else this.open(null);
   }
 
   update(): void {
     if (!this.visible) return;
     const now = performance.now();
-    if (now - this.lastBake > 2000) { this.bake(); this.lastBake = now; }
-    if (now - this.lastDraw < 100) return;
+    if (now - this.lastDraw < 120) return;
     this.lastDraw = now;
     this.draw();
   }
 
-  /** 地形语义底图（mapColorAt 全彩；±half 米 → 160px） */
   private bake(): void {
-    const N = 160;
+    const N = 320;
     const img = this.baseCtx.createImageData(N, N);
     const d = img.data;
-    const step = (this.half * 2) / N;
+    const mpp = this.span / N;
+    const x0 = this.cx - this.span / 2, z0 = this.cz - this.span / 2;
     for (let iz = 0; iz < N; iz++) {
-      const wz = -this.half + (iz + 0.5) * step;
+      const wz = z0 + (iz + 0.5) * mpp;
       for (let ix = 0; ix < N; ix++) {
-        const wx = -this.half + (ix + 0.5) * step;
+        const wx = x0 + (ix + 0.5) * mpp;
         const packed = this.raster.mapColorAt(wx, wz);
         const i = (iz * N + ix) * 4;
         d[i] = (packed >> 16) & 255;
@@ -70,62 +159,92 @@ export class NavDebugMap {
   }
 
   private draw(): void {
+    const now = performance.now();
+    if (this.dirtyBase && now - this.lastBase > 250) { this.bake(); this.lastBase = now; this.dirtyBase = false; }
     const g = this.ctx;
     const S = this.size;
     g.clearRect(0, 0, S, S);
     g.imageSmoothingEnabled = false;
     g.drawImage(this.base, 0, 0, S, S);
-    const p2 = (x: number, z: number): [number, number] => [((x + this.half) / (2 * this.half)) * S, ((z + this.half) / (2 * this.half)) * S];
+    const p2 = (x: number, z: number): [number, number] => [
+      ((x - (this.cx - this.span / 2)) / this.span) * S,
+      ((z - (this.cz - this.span / 2)) / this.span) * S,
+    ];
+    // 网格（50m）
+    g.strokeStyle = 'rgba(140,190,240,0.15)';
+    const g0 = Math.ceil((this.cx - this.span / 2) / 50) * 50;
+    for (let x = g0; x <= this.cx + this.span / 2; x += 50) { const [px] = p2(x, 0); g.beginPath(); g.moveTo(px, 0); g.lineTo(px, S); g.stroke(); }
+    const gz0 = Math.ceil((this.cz - this.span / 2) / 50) * 50;
+    for (let z = gz0; z <= this.cz + this.span / 2; z += 50) { const [, pz] = p2(0, z); g.beginPath(); g.moveTo(0, pz); g.lineTo(S, pz); g.stroke(); }
 
-    for (const s of this.swarm.squads.all()) {
+    const squads = this.squadId === null ? this.swarm.squads.all() : this.swarm.squads.all().filter((s) => s.id === this.squadId);
+    for (const s of squads) {
       const path = this.swarm.tactics.board.getPath(s.id);
       const cmd = this.swarm.tactics.board.get(s.id);
+      const focused = this.squadId === s.id;
       const col = `hsl(${(s.id * 47) % 360} 90% 60%)`;
-      // 走廊折线
       const corr = path?.corridor;
       if (corr && corr.length > 1) {
         g.strokeStyle = col;
-        g.lineWidth = 1.5;
+        g.lineWidth = focused ? 3 : 1.5;
         g.beginPath();
         const [x0, z0] = p2(corr[0]!.x, corr[0]!.z);
         g.moveTo(x0, z0);
         for (const q of corr) { const [qx, qz] = p2(q.x, q.z); g.lineTo(qx, qz); }
         g.stroke();
       }
-      // 起点（绿点）
       if (path?.pathFromX !== undefined && path?.pathFromZ !== undefined) {
         const [px, pz] = p2(path.pathFromX, path.pathFromZ);
         g.fillStyle = '#39d353';
-        g.beginPath(); g.arc(px, pz, 2.4, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(px, pz, focused ? 5 : 3, 0, Math.PI * 2); g.fill();
       }
-      // 终点（黄叉）
       if (path?.pathGoalX !== undefined && path?.pathGoalZ !== undefined) {
         const [gx, gz] = p2(path.pathGoalX, path.pathGoalZ);
-        g.strokeStyle = '#ffd24a';
-        g.lineWidth = 1.6;
-        g.beginPath(); g.moveTo(gx - 4, gz - 4); g.lineTo(gx + 4, gz + 4); g.moveTo(gx + 4, gz - 4); g.lineTo(gx - 4, gz + 4); g.stroke();
+        g.strokeStyle = '#ffd24a'; g.lineWidth = 2;
+        g.beginPath(); g.moveTo(gx - 7, gz - 7); g.lineTo(gx + 7, gz + 7); g.moveTo(gx + 7, gz - 7); g.lineTo(gx - 7, gz + 7); g.stroke();
       }
-      // 队令目标（红叉）
       const t = cmd?.order?.target;
       if (t) {
         const [tx, tz] = p2(t.x, t.z);
-        g.strokeStyle = '#ff5b4a';
-        g.lineWidth = 1.4;
-        g.beginPath(); g.moveTo(tx - 4, tz); g.lineTo(tx + 4, tz); g.moveTo(tx, tz - 4); g.lineTo(tx, tz + 4); g.stroke();
+        g.strokeStyle = '#ff5b4a'; g.lineWidth = 2;
+        g.beginPath(); g.moveTo(tx - 7, tz); g.lineTo(tx + 7, tz); g.moveTo(tx, tz - 7); g.lineTo(tx, tz + 7); g.stroke();
       }
-      // 队长位置（白点）
       const lead = s.members.get(s.leaderUid);
       if (lead) {
         const [lx, lz] = p2(lead.x, lead.z);
         g.fillStyle = '#ffffff';
-        g.beginPath(); g.arc(lx, lz, 2, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(lx, lz, focused ? 4 : 2.5, 0, Math.PI * 2); g.fill();
+      }
+      // 令历史（灰点连线 + 年龄）
+      if (focused) {
+        const ring = (this.swarm.cmdLog as unknown as { ring?: CommandLogEntry[] }).ring ?? [];
+        const hist: CommandLogEntry[] = [];
+        for (let i = ring.length - 1; i >= 0 && hist.length < 12; i--) if (ring[i]!.squadId === s.id) hist.push(ring[i]!);
+        hist.reverse();
+        g.strokeStyle = 'rgba(200,210,220,0.5)';
+        g.setLineDash([4, 4]);
+        g.beginPath();
+        hist.forEach((h, i) => {
+          const [hx, hz] = p2(h.tx, h.tz);
+          if (i === 0) g.moveTo(hx, hz); else g.lineTo(hx, hz);
+        });
+        g.stroke();
+        g.setLineDash([]);
+        for (const h of hist) {
+          const [hx, hz] = p2(h.tx, h.tz);
+          g.fillStyle = h.source === 'leader' ? '#ffa733' : '#ff5544';
+          g.beginPath(); g.arc(hx, hz, 3, 0, Math.PI * 2); g.fill();
+          const age = Math.max(0, Math.round(now / 1000 - h.t));
+          g.fillStyle = 'rgba(230,238,245,0.9)';
+          g.font = '10px Consolas,monospace';
+          g.fillText(`${h.kind} ${age}s`, hx + 5, hz - 5);
+        }
       }
     }
-    // 图例
-    g.fillStyle = 'rgba(220,232,245,0.85)';
-    g.font = '10px Consolas,monospace';
-    g.fillText('线=走廊 绿=起点 黄=终点 红=队令 白=队长', 6, 12);
+    this.titleEl.textContent = this.squadId === null
+      ? `全览（${squads.length} 队）· ${Math.round(this.span)}m`
+      : `队${this.squadId} · ${Math.round(this.span)}m · 中心 ${this.cx | 0},${this.cz | 0}`;
   }
 
-  dispose(): void { this.canvas.remove(); }
+  dispose(): void { this.root.remove(); }
 }

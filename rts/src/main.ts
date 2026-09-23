@@ -240,6 +240,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name));
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
   const navMap = new NavDebugMap(raster, swarm);
+  enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -351,8 +352,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     keys.add(e.code);
     if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45);
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
-    if (e.code === 'Escape') enemyMgr.clear();
-    if (e.code === 'KeyM') navMap.toggle();
+    if (e.code === 'Escape') { if (navMap.visible) navMap.close(); else enemyMgr.clear(); }
+    if (e.code === 'KeyM') navMap.toggleOverview();
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
   // ---- ★ 输入：左键=平移视角（Shift+左=旋转），右键=选/框选，中键=发令，WASD=平移 ----
