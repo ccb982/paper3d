@@ -14,13 +14,14 @@ import { OrderBus } from './order/OrderBus';
 (globalThis as unknown as Record<string, unknown>).__rtsBoot = 'module-start';
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
-/** ★ 出生点（可改：URL ?x=&z= 或**双击地面**重选；加载窗随出生点移动） */
-const spawn = { x: Number(q.get('x') ?? 120), z: Number(q.get('z') ?? -80) };
-const AREA_R = 80;
+/** ★ 出生点（URL ?x=&z= 或双击地面重选；仅决定指挥/表窗起点） */
+const spawn = { x: Number(q.get('x') ?? 0), z: Number(q.get('z') ?? 0) };
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
+/** ★ 固定世界（一次性加载，±4 chunk ×60m = 480m 见方；不流式创建/销毁） */
+const WORLD_R = 4 * 60 - 20;
 const clampArea = (): void => {
-  cam.tx = clamp(cam.tx, spawn.x - AREA_R, spawn.x + AREA_R);
-  cam.tz = clamp(cam.tz, spawn.z - AREA_R, spawn.z + AREA_R);
+  cam.tx = clamp(cam.tx, -WORLD_R, WORLD_R);
+  cam.tz = clamp(cam.tz, -WORLD_R, WORLD_R);
 };
 
 // ---- 渲染器 / 场景 / 相机 ----

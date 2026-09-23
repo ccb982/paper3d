@@ -238,8 +238,8 @@ export class ChunkManager {
   private static readonly BUILD_BUDGET_MS = 8;
   /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
    *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
-  private static readonly BUILD_RADIUS = 1;
-  private static readonly PREFETCH_RADIUS = 1;
+  private static readonly BUILD_RADIUS = 4;
+  private static readonly PREFETCH_RADIUS = 4;
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
   private static readonly BUILD_INFLIGHT_MAX = 1;
@@ -377,7 +377,7 @@ export class ChunkManager {
   /** ★ 远处 chunk 封存半径（切比雪夫，chunk 数）：> 此距离停止渲染 + 物理停用，
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
    *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
-  private static readonly PARK_RADIUS = 4;
+  private static readonly PARK_RADIUS = 99;
   /** ★ 弧面双档（2026-09-14 用户定）：**≤60m 0.125m 细弧；≥70m 0.25m 粗弧；
    *  60~70m 为 10m 滞回带（保持现状，防边界抖动反复重建）**。
    *  ★ 物理恒用粗档（见 PatchCompute）：档位切换只需换视觉，物理分区不动。 */
@@ -387,7 +387,7 @@ export class ChunkManager {
   /** ★ 封存上限：超过此距离才真正销毁（释放资源、防内存无限累积）；
    *  滞回：构建 ≤2 → 预烘 ≤4 → 封存 4 → 销毁 6
    *  ★ 2026-09-12：8 → 6（封存区最多 48 块，砍掉 ≈70% 封存几何内存；更远留给粗块） */
-  private static readonly DESTROY_RADIUS = 2;
+  private static readonly DESTROY_RADIUS = 99;
   /** 已封存 chunk key（网格已从场景摘除、刚体已停用） */
   private parkedKeys = new Set<number>();
   /** ★ 各 chunk 当前几何档位（8=0.125m / 4=0.25m；几何落地时写入） */
