@@ -235,9 +235,21 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: cam.tx, z: cam.tz }),
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
-  // ★ 指挥器建计划（原游戏落地后 planDefense → PassTable/大队部署/命令链发令）——必须在端口接线后
+  // ★ 指挥器建计划：**敌方登陆点**（距舰 ~160m 的可行方向）——不能在舰旁布防/刷兵
+  const pickEnemyLanding = (): { x: number; z: number } => {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const x = spawn.x + Math.cos(a) * 160;
+      const z = spawn.z + Math.sin(a) * 160;
+      if (swarm.commander.blockedAt(x, z)) continue;
+      if (raster.surfaceHeightAtFor(x, z, 0) < -1.0) continue;
+      return { x, z };
+    }
+    return { x: spawn.x + 160, z: spawn.z };
+  };
+  const landing = pickEnemyLanding();
   try {
-    swarm.commander.planDefense(spawn.x, spawn.z, 80);
+    swarm.commander.planDefense(landing.x, landing.z, 80);
   } catch (e) {
     console.warn('[rts] planDefense 失败（命令链仍可手动）', e);
   }
@@ -274,14 +286,21 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     });
   };
   // ★ 不再手工铺环：兵力全部由指挥器（planDefense → 端口 spawnMob）按**进攻轴向**创建
-  const unitMesh = new THREE.InstancedMesh(
-    new THREE.CapsuleGeometry(0.6, 1.4, 4, 8),
-    new THREE.MeshLambertMaterial({ color: 0xcc4433 }),
-    256,
-  );
-  unitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  unitMesh.frustumCulled = false;
-  scene.add(unitMesh);
+  // ★ 兜底胶囊渲染（仅当 FTX 批量不可用时创建；否则不加入场景——防"红胶囊占位"）
+  const useFallback = !batchOn;
+  const unitMesh = useFallback
+    ? new THREE.InstancedMesh(
+      new THREE.CapsuleGeometry(0.6, 1.4, 4, 8),
+      new THREE.MeshLambertMaterial({ color: 0xcc4433 }),
+      256,
+    )
+    : null;
+  if (unitMesh) {
+    unitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    unitMesh.frustumCulled = false;
+    unitMesh.count = 0;
+    scene.add(unitMesh);
+  }
   scene.add(new THREE.HemisphereLight(0xdfe9f5, 0x4a5a3a, 1.1));
   const dl = new THREE.DirectionalLight(0xffffff, 1.2);
   dl.position.set(0.5, 1, 0.3);
@@ -292,7 +311,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const _p = new THREE.Vector3();
   const _axisY = new THREE.Vector3(0, 1, 0);
   const renderAgents = (): void => {
-    if (batchOn) return;   // FTX 批量渲染接管
+    if (!unitMesh) return;   // FTX 批量渲染接管
     const pool = swarm.pool;
     let n = 0;
     for (let i = 0; i < pool.count; i++) {
