@@ -176,11 +176,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     bossEntity: null, bossRun: false, threat: { setThreat: () => {} }, spawnChunkKey: 0, scalingInputs: null,
     enemyScale: { hp: 1, atk: 1, def: 0 },
     player: { position: { x: spawn.x, y: 0, z: spawn.z }, hitAnchorY: () => 1.5 },
-    ship: null, entities, swarm, swarmDirector: null,
+    ship: null, entities, swarm, swarmDirector: { setThreat: () => {} },
     chunks, raster,
     session: { player: { maxHp: 100, attackPower: 10, defense: 2 }, meta: { day: 1 }, gacha: { totalPulls: 0 } },
     scene, camera,
-    drones: [], worldUIManager: {},
+    drones: [], worldUIManager: { setThreatLabel: () => {} },
     testChunk: false, shipDestroyed: false, bossAsset: null,
     showFloatingAt: () => {}, syncSceneBgm: () => {}, returnToBase: () => {},
   } as unknown as SpawnDeps);
