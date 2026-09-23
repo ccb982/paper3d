@@ -752,7 +752,13 @@ export class SwarmSystem {
     const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
     const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
-    if (isLeader && hasMyTask) {
+    if (isLeader && !hasMyTask) {
+      // ★ 池队长无任务 → **走队级指令锚点**（走廊前瞻；修"队长原地站→全队陪着站"，2026-09-25）
+      const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
+      const ad = Math.hypot(ax, az);
+      if (ad > 2) { dx = ax / ad; dz = az / ad; }
+      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+    } else if (isLeader && hasMyTask) {
       // ★ 队长（干活的）：**长腿走队级指令目标**（走廊锚点+阵型，避局部极小）；近程直走件点
       const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
       const td = Math.hypot(tx, tz);
