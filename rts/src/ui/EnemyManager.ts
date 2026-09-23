@@ -100,6 +100,17 @@ export class EnemyManager {
   clear(): void { this.select(null, false); }
   selected(): EnemyHandle[] { return this.sel; }
 
+  /** 按 uid 找句柄（列表点击用；同 uid 可能已换层 → 优先 L3） */
+  find(uid: number): EnemyHandle | null {
+    let l2: EnemyHandle | null = null;
+    for (const h of this.list()) {
+      if (h.uid !== uid) continue;
+      if (h.tier === 'L3') return h;
+      l2 = h;
+    }
+    return l2;
+  }
+
   /** 每帧：**刷新选中句柄的实时位置/血量**（红圈跟随）→ 死亡/离场自动收敛 */
   update(): void {
     const p = this.swarm.pool;

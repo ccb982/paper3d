@@ -41,6 +41,7 @@ import { wireCommanderPorts } from './modes/world/CommanderWiring';
 import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
 import { EnemyManager } from './ui/EnemyManager';
+import { EnemyListPanel } from './ui/EnemyListPanel';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -234,6 +235,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const shipState = { get hp(): number { return shipHp; } };
   // ★ RTS 全体敌人管理器（外接；框选/单击/红圈）
   const enemyMgr = new EnemyManager({ enemies, swarm, camera, scene });
+  // ★ 右侧敌人列表（兵种 → 队长 → 代理；点击选中出红圈）
+  const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name));
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -456,6 +459,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
     explosionFx.update(dt);
     enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
+    enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -470,7 +474,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
