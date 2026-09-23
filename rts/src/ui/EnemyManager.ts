@@ -100,10 +100,27 @@ export class EnemyManager {
   clear(): void { this.select(null, false); }
   selected(): EnemyHandle[] { return this.sel; }
 
-  /** 每帧：红圈跟随（敌人移动/死亡自动收敛） */
+  /** 每帧：**刷新选中句柄的实时位置/血量**（红圈跟随）→ 死亡/离场自动收敛 */
   update(): void {
+    const p = this.swarm.pool;
+    const idxByUid = new Map<number, number>();
+    for (let i = 0; i < p.count; i++) idxByUid.set(p.swarmUid[i], i);
     const alive = new Set<string>();
-    for (const h of this.list()) alive.add(`${h.tier}:${h.uid}`);
+    for (const h of this.sel) {
+      if (h.entity) {
+        const e = h.entity;
+        if (e.dead) continue;
+        h.x = e.position.x; h.y = e.position.y; h.z = e.position.z;
+        h.hp = e.hp; h.maxHp = e.maxHp;
+        alive.add(`${h.tier}:${h.uid}`);
+      } else {
+        const i = idxByUid.get(h.uid);
+        if (i === undefined || p.hp[i] <= 0) continue;
+        h.x = p.x[i]; h.y = p.y[i]; h.z = p.z[i];
+        h.hp = p.hp[i]; h.maxHp = p.maxHp[i];
+        alive.add(`${h.tier}:${h.uid}`);
+      }
+    }
     const before = this.sel.length;
     this.sel = this.sel.filter((h) => alive.has(`${h.tier}:${h.uid}`));
     if (this.sel.length !== before) this.onChanged?.();
