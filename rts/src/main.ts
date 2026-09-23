@@ -20,6 +20,7 @@ import { addStaticObstacle, removeStaticObstacle } from './services/physics/Stat
 import { CHUNK_SIZE } from './services/map/ChunkGenerator';
 import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enemyRoster';
 import { FtxAsset } from './vendor/player/FtxAsset';
+import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -97,19 +98,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
 
-  // ---- ★ 舰船（RTS：位置基准 + 第二目标；实体登记 fixed 船体碰撞）----
+  // ---- ★ 舰船（RTS：位置基准 + 第二目标；精细程序化模型 + 实体船体碰撞）----
   const shipY = raster.surfaceHeightAtFor(spawn.x, spawn.z, 0);
-  const ship = new THREE.Group();
-  const hullMesh = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 4), new THREE.MeshLambertMaterial({ color: 0x9fb4c8 }));
-  hullMesh.position.y = 1.5;
-  const bridgeMesh = new THREE.Mesh(new THREE.BoxGeometry(3, 2, 2.4), new THREE.MeshLambertMaterial({ color: 0xd8e2ec }));
-  bridgeMesh.position.set(2.5, 4, 0);
-  ship.add(hullMesh, bridgeMesh);
-  ship.position.set(spawn.x, shipY, spawn.z);
-  scene.add(ship);
+  const proc = buildProceduralShip();
+  proc.group.position.set(spawn.x, shipY, spawn.z);
+  scene.add(proc.group);
   entities.create({
-    kind: 'ship', x: spawn.x, y: shipY + 1.5, z: spawn.z,
-    physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 5, hy: 1.5, hz: 2 } } },
+    kind: 'ship', x: spawn.x, y: shipY + 0.8, z: spawn.z,
+    physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: SHIP_LENGTH / 2, hy: 0.8, hz: 1.2 } } },
   });
   const orders = new OrderBus(scene);
 
@@ -265,7 +261,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
