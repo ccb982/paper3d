@@ -94,6 +94,21 @@ function startWorld(spawnX: number, spawnZ: number): void {
   chunks.setCoarseMode(false);   // ★ 探索期：近处细块 + 远景粗块 LOD（coarseOnly=false 才投细化）
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
+
+  // ---- ★ 舰船（RTS：位置基准 + 第二目标；实体登记 fixed 船体碰撞）----
+  const shipY = raster.surfaceHeightAtFor(spawn.x, spawn.z, 0);
+  const ship = new THREE.Group();
+  const hullMesh = new THREE.Mesh(new THREE.BoxGeometry(10, 3, 4), new THREE.MeshLambertMaterial({ color: 0x9fb4c8 }));
+  hullMesh.position.y = 1.5;
+  const bridgeMesh = new THREE.Mesh(new THREE.BoxGeometry(3, 2, 2.4), new THREE.MeshLambertMaterial({ color: 0xd8e2ec }));
+  bridgeMesh.position.set(2.5, 4, 0);
+  ship.add(hullMesh, bridgeMesh);
+  ship.position.set(spawn.x, shipY, spawn.z);
+  scene.add(ship);
+  entities.create({
+    kind: 'ship', x: spawn.x, y: shipY + 1.5, z: spawn.z,
+    physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: 5, hy: 1.5, hz: 2 } } },
+  });
   const orders = new OrderBus(scene);
 
   // ---- ★ 敌人（R1c 最小接线）：SwarmSystem 指挥链 + 自渲染胶囊（无物理/无战斗） ----
@@ -236,7 +251,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier 就绪）----
