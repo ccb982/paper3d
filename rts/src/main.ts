@@ -13,6 +13,7 @@ import { updateTerrainLighting, updateWallMaterialsLighting } from './services/m
 import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { OrderBus } from './order/OrderBus';
 import { SpawnSelect } from './ui/SpawnSelect';
+import { SwarmSystem } from './systems/swarm/SwarmSystem';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -62,6 +63,59 @@ function startWorld(spawnX: number, spawnZ: number): void {
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
   const orders = new OrderBus(scene);
+
+  // ---- ★ 敌人（R1c 最小接线）：SwarmSystem 指挥链 + 自渲染胶囊（无物理/无战斗） ----
+  const swarm = new SwarmSystem();
+  const hooks = {
+    playerX: spawn.x, playerZ: spawn.z, shipX: spawn.x, shipZ: spawn.z,
+    camForwardX: 0, camForwardZ: 1,
+    // ★ 未接 L3 实体管线前：把 entityCount 顶满 → 关"近玩家升格"（否则代理被移除后 promote 空转=蒸发）
+    entityCount: 1e9,
+    melee: () => {},
+  };
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const x = spawn.x + Math.cos(a) * 30, z = spawn.z + Math.sin(a) * 30;
+    const y = raster.surfaceHeightAtFor(x, z, 0);
+    const mob = i % 2;   // 0=原石虫 / 1=整合运动（名册下标）
+    swarm.spawn({
+      mobIndex: mob, x, y, z,
+      hp: mob === 0 ? 22 : 75, maxHp: mob === 0 ? 22 : 75,
+      defense: mob === 0 ? 0 : 3, attackPower: mob === 0 ? 0 : 2,
+      speed: 4.5, meleeDamage: 2, meleeRange: 1.5, scale: 1.6,
+      tier: 1, aggro: 0, wanderSpeed: 1.2,
+    }, true);
+  }
+  const unitMesh = new THREE.InstancedMesh(
+    new THREE.CapsuleGeometry(0.6, 1.4, 4, 8),
+    new THREE.MeshLambertMaterial({ color: 0xcc4433 }),
+    256,
+  );
+  unitMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  unitMesh.frustumCulled = false;
+  scene.add(unitMesh);
+  scene.add(new THREE.HemisphereLight(0xdfe9f5, 0x4a5a3a, 1.1));
+  const dl = new THREE.DirectionalLight(0xffffff, 1.2);
+  dl.position.set(0.5, 1, 0.3);
+  scene.add(dl);
+  const _m4 = new THREE.Matrix4();
+  const _q = new THREE.Quaternion();
+  const _s = new THREE.Vector3(1, 1, 1);
+  const _p = new THREE.Vector3();
+  const _axisY = new THREE.Vector3(0, 1, 0);
+  const renderAgents = (): void => {
+    const pool = swarm.pool;
+    let n = 0;
+    for (let i = 0; i < pool.count; i++) {
+      if (pool.hp[i] <= 0) continue;
+      _p.set(pool.x[i], pool.y[i] + 0.8, pool.z[i]);
+      _q.setFromAxisAngle(_axisY, pool.yaw[i]);
+      _m4.compose(_p, _q, _s);
+      unitMesh.setMatrixAt(n++, _m4);
+    }
+    unitMesh.count = n;
+    unitMesh.instanceMatrix.needsUpdate = true;
+  };
 
   const sun = new SunCycle();
   sun.reset(10);
@@ -139,13 +193,18 @@ function startWorld(spawnX: number, spawnZ: number): void {
     clampArea();
     applyCam();
     chunks.update(cam.tx, cam.tz, dt, fx, fz);
+    // ★ 敌人指挥链推进 + 胶囊渲染
+    hooks.camForwardX = fx; hooks.camForwardZ = fz;
+    hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
+    swarm.update(dt, hooks);
+    renderAgents();
     feedLight();
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm };
 }
 
 // ---- 严格分流：直进 或 先选点 ----

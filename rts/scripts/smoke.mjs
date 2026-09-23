@@ -55,6 +55,8 @@ try {
     fine: window.__rts?.chunks?.meshes?.size ?? null,
     coarse: window.__rts?.chunks?.coarseMeshes?.size ?? null,
     vis: window.__rts?.chunks?.terrainVisuals?.size ?? null,
+    swarmN: window.__rts?.swarm?.pool?.count ?? null,
+    swarmAlive: (() => { const p = window.__rts?.swarm?.pool; if (!p) return null; let n = 0; for (let i = 0; i < p.count; i++) if (p.hp[i] > 0) n++; return n; })(),
     cam: window.__rts?.cam ?? null,
   }));
   console.log('B 世界 =', JSON.stringify(world));

@@ -46,8 +46,34 @@ try {
   await page.evaluate(() => window.__rts.select.setCenter(-200, 170));
   await new Promise((r) => setTimeout(r, 1500));
   await page.screenshot({ path: '../rts/sel2.png' });
-  await page.evaluate(() => window.__rts.select.confirmAt(60, -40));
-  await new Promise((r) => setTimeout(r, 25000));
+await page.evaluate(() => window.__rts.select.confirmAt(60, -40));
+await new Promise((r) => setTimeout(r, 800));
+console.log('B-0 0.8s =', JSON.stringify(await page.evaluate(() => {
+  const sw = window.__rts?.swarm;
+  const n0 = sw?.pool?.count ?? null;
+  let ok = 0;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    try {
+      const r = sw.spawn({ mobIndex: i % 2, x: 60 + Math.cos(a) * 30, y: 0, z: -40 + Math.sin(a) * 30, hp: 50, maxHp: 50, defense: 1, attackPower: 1, speed: 4.5, meleeDamage: 2, meleeRange: 1.5, scale: 1.6, tier: 1, aggro: 0, wanderSpeed: 1.2 }, true);
+      if (r >= 0) ok++;
+    } catch (e) { ok = -999; break; }
+  }
+  return { n0, spawned: ok, n1: sw?.pool?.count ?? null };
+})));
+await new Promise((r) => setTimeout(r, 1500));
+console.log('B-0b 2.3s =', JSON.stringify(await page.evaluate(() => ({ n: window.__rts?.swarm?.pool?.count ?? null }))));
+await new Promise((r) => setTimeout(r, 1500));
+console.log('B0 3s =', JSON.stringify(await page.evaluate(() => {
+  const sw = window.__rts?.swarm;
+  const n0 = sw?.pool?.count ?? null;
+  let ret = null;
+  try {
+    ret = sw.spawn({ mobIndex: 0, x: 60, y: 0, z: -40, hp: 22, maxHp: 22, defense: 0, attackPower: 0, speed: 4.5, meleeDamage: 2, meleeRange: 1.5, scale: 1.6, tier: 1, aggro: 0, wanderSpeed: 1.2 }, true);
+  } catch (e) { ret = 'ERR:' + String(e).slice(0, 120); }
+  return { phase: window.__rts?.phase ?? null, n0, n1: sw?.pool?.count ?? null, ret };
+})));
+await new Promise((r) => setTimeout(r, 22000));
   const world = await page.evaluate(() => ({
     phase: window.__rts?.phase ?? null,
     drawCalls: window.__rts?.renderer?.info?.render?.calls ?? null,
@@ -55,6 +81,8 @@ try {
     fine: window.__rts?.chunks?.meshes?.size ?? null,
     coarse: window.__rts?.chunks?.coarseMeshes?.size ?? null,
     vis: window.__rts?.chunks?.terrainVisuals?.size ?? null,
+    swarmN: window.__rts?.swarm?.pool?.count ?? null,
+    swarmAlive: (() => { const p = window.__rts?.swarm?.pool; if (!p) return null; let n = 0; for (let i = 0; i < p.count; i++) if (p.hp[i] > 0) n++; return n; })(),
     cam: window.__rts?.cam ?? null,
   }));
   console.log('B 世界 =', JSON.stringify(world));
