@@ -1,0 +1,1430 @@
+// ============================================================
+// MapEntityDecorBase —— 地图装饰实体基类（库：声明/规划/物理/阴影/渲染）
+// ============================================================
+// 架构（2026-08-27 基类化整理）：
+//   ┌─ 基类 MapEntityDecorBase：一张装饰实体的全部声明——
+//   │    组归属 / 放置规则 / 渲染方式 / 阴影方式 / 物理碰撞体 / 程序化几何
+//   │    ★ 物理：createColliders 基类统一生成 fixed cuboid
+//   │      （碰撞与阴影共用同一体积：radius/height 单一数据源）
+//   │    ★ 阴影：toShadowVolumes 基类统一算烘焙体积
+//   │      （装饰物高度参与预渲染结构——先放置后烘焙，见 4.5 节）
+//   ├─ 库（注册表）：registerMapDecor(实例) —— 加新装饰 = 注册一个实例
+//   ├─ 规划：planChunkProps（确定性散布，纯函数，零 three）
+//   ├─ 渲染：PropRenderer 注册表 + 内置 instanced（程序化几何）
+//   └─ 宿主：ChunkGroundHost 接口（模式层用 EntityManager 适配，本层不碰 entity）
+// ============================================================
+
+import * as THREE from 'three';
+import { hash2 } from '../TerrainNoise';
+import { tileById, type TileDef } from '../Tiles';
+import { LOD_RANGES } from '../../lod';
+import { compositeFrameToCanvas } from '../../../ui/shared/ftxFrameToCanvas';
+import type { FtxAsset } from '../../../vendor/player/FtxAsset';
+
+/** 装饰物可生长的地块角色 */
+export type PropHostRole = 'ground' | 'platform';
+
+/** 物理碰撞体配置（fixed cuboid；存在 = 可碰撞，可挡人/挡弹） */
+export interface DecorCollider {
+  type: 'cuboid';
+  /** 底面半径（米，基础值；×scale 得实际） */
+  radius: number;
+  /** 高度（米，基础值；×scale 得实际） */
+  height: number;
+}
+
+export interface PropPlacement {
+  /** 可生长的地块 key（空 = 不限，但受 hostRole 约束） */
+  tiles?: string[];
+  /** 可生长角色 */
+  hostRole: PropHostRole[];
+  /** 抖动网格 cell 出现概率（3m cell；400 网格每 chunk） */
+  perCellProb: number;
+  /** 缩放范围（乘数） */
+  scaleRange: [number, number];
+  /** 下沉量（米，防悬浮；0=贴面） */
+  sinkIntoGround?: number;
+  /** 下沉量随机范围（米；存在则覆盖 sinkIntoGround，每实例独立抽取） */
+  sinkRange?: [number, number];
+  /** 出生保护区（世界坐标 + 半径；规划期排除） */
+  keepClear?: { x: number; z: number; r: number }[];
+}
+
+export interface MapEntityDecorConfig {
+  key: string;
+  label: string;
+  /** 所属风格组（多对多；空 = 任意组均可用） */
+  groups: string[];
+  placement: PropPlacement;
+  /** 渲染方式：instanced=程序化几何；plant=纹理卡（交叉面片 + 风摆 UV 扭曲）；billboard 预留 */
+  render: 'instanced' | 'billboard' | 'plant';
+  /** 阴影方式：'disc'=烘焙软影印入光照图 / 'none'=无（阴影体积数据源 = physics） */
+  shadow: 'disc' | 'none';
+  /** 物理碰撞体（存在 = 可碰撞；碰撞与阴影共用同一体积） */
+  physics?: DecorCollider;
+  /** 程序化几何参数（three 依赖只允许出现在渲染适配层，规划层纯函数） */
+  geometry?: { type: string; params: Record<string, number> };
+  /** ★ 几何变体数（缺省 4）：高频小物件（花草）可收窄以减少 InstancedMesh 桶数/draw call */
+  variantCount?: number;
+  /** ★ 距离 LOD（'plant' 渲染器实现）：单网格顶点几何 morph（75→105m 侧面片收拢）
+   *  + 末端雾隐/剔除；ChunkManager 另对超远 chunk 整组隐藏（PROP_HIDE_DIST） */
+  lod?: boolean;
+}
+
+/**
+ * ★ 地图装饰实体基类。
+ * 实例 = 声明（配置数据），基类 = 行为（物理/阴影/渲染的统一实现）。
+ */
+export class MapEntityDecorBase {
+  readonly key: string;
+  readonly label: string;
+  readonly groups: string[];
+  readonly placement: PropPlacement;
+  readonly render: 'instanced' | 'billboard' | 'plant';
+  readonly shadow: 'disc' | 'none';
+  readonly physics?: DecorCollider;
+  readonly geometry?: { type: string; params: Record<string, number> };
+  /** ★ 几何变体数（缺省 INST_VARIANT_COUNT=4；1~2 高频小物件用） */
+  readonly variantCount?: number;
+  /** ★ 距离 LOD 开关（见 MapEntityDecorConfig.lod；当前 'plant' 渲染器实现：几何 morph） */
+  readonly lod?: boolean;
+
+  constructor(cfg: MapEntityDecorConfig) {
+    this.key = cfg.key;
+    this.label = cfg.label;
+    this.groups = cfg.groups;
+    this.placement = cfg.placement;
+    this.render = cfg.render;
+    this.shadow = cfg.shadow;
+    this.physics = cfg.physics;
+    this.geometry = cfg.geometry;
+    this.variantCount = cfg.variantCount;
+    this.lod = cfg.lod;
+  }
+
+  // ============================================================
+  // ★ 物理（基类统一实现）
+  // ============================================================
+
+  get isCollidable(): boolean {
+    return this.physics !== undefined;
+  }
+
+  /**
+   * ★ 生成碰撞体：fixed cuboid（半径/高度 × scale；y 为体积中心）。
+   * 宿主由模式层注入（ChunkGroundHost → EntityManager → rapier）。
+   */
+  createColliders(
+    host: ChunkGroundHost, plans: PlannedProp[], cx: number, cz: number,
+  ): number[] {
+    if (!this.physics) return [];
+    const ids: number[] = [];
+    for (const p of plans) {
+      const r = this.physics.radius * p.scale;
+      const h = this.physics.height * p.scale;
+      const id = host.createPropBody?.(cx * 60 + p.x, p.y + h / 2, cz * 60 + p.z, r, h);
+      if (id !== null && id !== undefined) ids.push(id);
+    }
+    return ids;
+  }
+
+  // ============================================================
+  // ★ 阴影（基类统一实现；烘焙域消费）
+  // ============================================================
+
+  /**
+   * 烘焙阴影体积（世界坐标；供 bakeCompute.stampPropShadows 投影软影）。
+   * 数据源 = physics（碰撞与阴影同一体积——声明一处，两处行为一致）。
+   */
+  toShadowVolumes(plans: PlannedProp[], cx: number, cz: number): PropShadowVolume[] {
+    const ph = this.physics;
+    if (!ph) return [];
+    return plans.map((p) => ({
+      x: p.x + cx * 60,
+      z: p.z + cz * 60,
+      y: p.y,
+      r: ph.radius * p.scale,
+      h: ph.height * p.scale,
+    }));
+  }
+}
+
+/** 烘焙阴影体积（球/柱近似；r 底半径 × h 高度） */
+export interface PropShadowVolume {
+  x: number; z: number; y: number;
+  r: number;
+  h: number;
+}
+
+// ============================================================
+// 库（注册表）
+// ============================================================
+
+const REGISTRY = new Map<string, MapEntityDecorBase>();
+
+/** ★ 扩展点：注册装饰实体（加内容 = 注册一个基类实例） */
+export function registerMapDecor(decor: MapEntityDecorBase): void {
+  if (REGISTRY.has(decor.key)) throw new Error(`[MapEntityDecor] 装饰实体 key 已存在: ${decor.key}`);
+  REGISTRY.set(decor.key, decor);
+}
+
+export function mapDecorByKey(key: string): MapEntityDecorBase | undefined {
+  return REGISTRY.get(key);
+}
+
+export function allMapDecors(): MapEntityDecorBase[] {
+  return [...REGISTRY.values()];
+}
+
+/** 按组取可用装饰实体（组面板消费；空组声明 = 通用；foundation = 兜底通用） */
+export function propsForGroup(groupKey: string): MapEntityDecorBase[] {
+  return [...REGISTRY.values()].filter(
+    (p) => p.groups.length === 0 || p.groups.includes(groupKey) || p.groups.includes(FOUNDATION_PROP_GROUP),
+  );
+}
+
+/** 基石兜底组 key（基石组的装饰实体 = 任何 chunk 都可出现） */
+export const FOUNDATION_PROP_GROUP = 'foundation';
+
+// ============================================================
+// 占位内容（基石组；2026-09-02 曾按"1-7 写实风"移除，2026-09-05 应用户要求
+// 重建——接通装饰实体管线验证链路。放置时机 = 精修层后处理（补丁层数覆盖）
+// 之后的最终视觉面：planChunkProps 贴地采样走 raster.surfaceHeightAt
+//（已减 levelDepthAt，装饰落在坑口沿外的原面/坑底新面）。
+// 后续装饰 = 在此注册实例即可）
+// ============================================================
+
+// ★ 占位·碎石（foundation_pebble）已停用（2026-09-06 用户要求）：
+//   与晶簇同为"石头感"装饰，默认地图里反而稀释了耗尽原石晶体的观感。
+//   geometry 'rock' 保留，需要时可重新注册。
+
+// ★ 能量耗尽原石晶体（2026-09-06 用户新增；09-07 重做几何）：
+//   4 变体 × 每簇 = 主峰 + 环状外张中晶 + 大倾角细针 + 地面碎屑；
+//   晶柱截面 5/6/8 边混排、腰肩两段收尖、尖端偏斜（off-axis）、
+//   逐柱 random spin + 朝外倾斜（splay）→ 每簇形状/朝向都不同
+//   （详见 buildCrystalCluster；变体由规划 variant 选取 → 共享几何缓存分桶）；
+//   ★ 地面为主、总体 ~0.5%（用户定稿）：ground+platform 双角色都长，
+//     地面方格多于高台 → 晶簇多数落在地面平地；perCellProb 0.005。
+registerMapDecor(new MapEntityDecorBase({
+  key: 'depleted_crystal', label: '耗尽原石晶体', groups: [FOUNDATION_PROP_GROUP],
+  placement: {
+    hostRole: ['ground', 'platform'], perCellProb: 0.005,
+    scaleRange: [0.7, 1.5], sinkRange: [0.10, 0.26],
+  },
+  render: 'instanced', shadow: 'disc',
+  physics: { type: 'cuboid', radius: 1.15, height: 2.8 },
+  geometry: { type: 'crystal', params: { color: 0x6f6f6a, noise: 0.12 } },
+}));
+
+// ★ 水泥台座不在本库（独立结构模块 decor/CementPlinth.ts）：
+//   4×4 整格正置铺满高台、顶面进 RasterMap.surfaceHeightAt 叠加层
+//   （角色可站），几何复用下方 buildTrapezoidPlinth。
+
+// ============================================================
+// 规划（地形生成完成后、渲染前调用；纯函数零 three）
+// ============================================================
+
+/** 散布网格：20×20 cell × 3m */
+export const PROP_GRID = 20;
+export const PROP_CELL = 3;
+
+/** 单 chunk 装饰实体上限（预算闸门） */
+export const PROP_BUDGET = 150;
+
+/** 坡度过滤：cell 四点高度极差超过此值不放（装饰物必须能站稳） */
+export const PROP_MAX_SLOPE = 0.8;
+
+export interface PlannedProp {
+  propKey: string;
+  /**
+   * chunk 本地坐标（0~60，相对 chunk 角）——渲染层直接挂进 chunk group
+   * （group.position 已是世界偏移，子对象必须本地坐标，否则整体错位）。
+   * y 为贴地高度（世界高度，group.position.y=0 故本地=世界）。
+   */
+  x: number;
+  z: number;
+  y: number;
+  scale: number;
+  rotY: number;
+  variant: number;
+  /** ★ 下沉深度（米）：挖坑局部重贴地时 newY = surfaceHeightAt - sink（免重排） */
+  sink?: number;
+}
+
+export interface PropPlanContext {
+  seed: number;
+  cx: number;
+  cz: number;
+  /** 本 chunk 生效组（ChunkData.groupKey） */
+  groupKey: string;
+  /** 15×15 地块 id */
+  blockTypes: Uint8Array;
+  /** 贴地高度采样（RasterMap.surfaceHeightAt；规划层只认接口） */
+  surfaceHeightAt(x: number, z: number): number;
+}
+
+/** cell 中心落在哪个地块 */
+function tileAtCell(ctx: PropPlanContext, cellX: number, cellY: number): TileDef {
+  const wx = ctx.cx * 60 + cellX * PROP_CELL + PROP_CELL / 2;
+  const wz = ctx.cz * 60 + cellY * PROP_CELL + PROP_CELL / 2;
+  const bx = Math.floor((wx - ctx.cx * 60) / 4);
+  const bz = Math.floor((wz - ctx.cz * 60) / 4);
+  return tileById(ctx.blockTypes[Math.max(0, Math.min(14, bz)) * 15 + Math.max(0, Math.min(14, bx))]);
+}
+
+/** 四点高度极差（坡度判定；角点按 cell 中心 ±1m） */
+function slopeOf(ctx: PropPlanContext, x: number, z: number): number {
+  const h00 = ctx.surfaceHeightAt(x - 1, z - 1);
+  const h10 = ctx.surfaceHeightAt(x + 1, z - 1);
+  const h01 = ctx.surfaceHeightAt(x - 1, z + 1);
+  const h11 = ctx.surfaceHeightAt(x + 1, z + 1);
+  return Math.max(h00, h10, h01, h11) - Math.min(h00, h10, h01, h11);
+}
+
+/**
+ * ★ 地形生成后散布装饰实体：逐 cell 判定 → 组/地块/角色/坡度过滤 →
+ * 加权抽装饰物 → 贴地 + 下沉。确定性：同 seed 同 chunk 必复现。
+ */
+export function planChunkProps(ctx: PropPlanContext): PlannedProp[] {
+  const out: PlannedProp[] = [];
+  const defs = propsForGroup(ctx.groupKey);
+  if (defs.length === 0) return out;
+
+  // 加权池（主打加成：出现率只看可用池 perCellProb 之和，主打只影响"抽谁"）
+  const FEATURED_BOOST = 3;
+  const featuredKey = defs[Math.floor(hash2(ctx.cx, ctx.cz, ctx.seed + 9601) * defs.length)].key;
+  const weights = new Map<string, number>();
+  for (const p of defs) {
+    weights.set(p.key, p.placement.perCellProb * (p.key === featuredKey ? FEATURED_BOOST : 1));
+  }
+
+  for (let cy = 0; cy < PROP_GRID && out.length < PROP_BUDGET; cy++) {
+    for (let cx = 0; cx < PROP_GRID && out.length < PROP_BUDGET; cx++) {
+      // ★ 世界格坐标（2026-09-07 用户：晶体分布一点也不随机）——此前全用
+      //   chunk 局部格坐标 (cx,cy) 做 hash2 参数，每个 chunk 内部同格序的
+      //   判定处处相同 → 全图同一 20 格×3m 排列无限重复。掺入 chunk 世界
+      //   坐标后每 chunk 布局独立（同 seed 同 chunk 仍确定性复现）。
+      const gxc = ctx.cx * PROP_GRID + cx;
+      const gyc = ctx.cz * PROP_GRID + cy;
+      const r = hash2(gxc * 7 + 1, gyc * 7 + 2, ctx.seed + 9602);
+
+      // ★ 先按地块角色筛"本格可用池"，再以【可用池】perCellProb 之和做出现判定
+      //   （2026-09-14 修正：此前用全量 defs 求和 → 高台格只有晶簇可用时，
+      //    出现率被花草的 perCellProb 一起抬高（晶簇高台出现率 ~20 倍）；
+      //    逐格可用池后各物出现率 = 各自声明值，回到原比例）
+      const tile = tileAtCell(ctx, cx, cy);
+      const eligible = defs.filter((p) => {
+        if (p.placement.tiles && p.placement.tiles.length > 0 && !p.placement.tiles.includes(tile.key)) return false;
+        if (!p.placement.hostRole.includes(tile.genRole as PropHostRole)) return false;
+        return true;
+      });
+      if (eligible.length === 0) continue;
+      let presenceProb = 0;
+      for (const d of eligible) presenceProb += d.placement.perCellProb;
+      if (r >= Math.min(1, presenceProb)) continue;
+
+      const wx = ctx.cx * 60 + (cx + 0.5) * PROP_CELL;
+      const wz = ctx.cz * 60 + (cy + 0.5) * PROP_CELL;
+      const jx = wx + (hash2(gxc, gyc, ctx.seed + 9603) - 0.5) * PROP_CELL * 0.6;
+      const jz = wz + (hash2(gxc, gyc, ctx.seed + 9604) - 0.5) * PROP_CELL * 0.6;
+
+      if (slopeOf(ctx, jx, jz) > PROP_MAX_SLOPE) continue;
+
+       let etotal = 0;
+       for (const d of eligible) etotal += weights.get(d.key)!;
+       let rr = hash2(gxc, gyc, ctx.seed + 9605) * etotal;
+       let pick = eligible[0];
+       for (const d of eligible) {
+         rr -= weights.get(d.key)!;
+         if (rr <= 0) { pick = d; break; }
+       }
+
+       const safe = pick.placement.keepClear ?? [];
+       let blocked = false;
+       for (const z of safe) {
+         const dx = jx - z.x, dz = jz - z.z;
+         if (dx * dx + dz * dz <= z.r * z.r) { blocked = true; break; }
+       }
+       if (blocked) continue;
+
+       const [sMin, sMax] = pick.placement.scaleRange;
+       // ★ 下沉深度（米）：sinkRange 随机抽取（以中值为基准波动）；否则固定 sinkIntoGround
+const sink = pick.placement.sinkRange
+          ? pick.placement.sinkRange[0] +
+            hash2(gxc, gyc, ctx.seed + 9609) * (pick.placement.sinkRange[1] - pick.placement.sinkRange[0])
+          : pick.placement.sinkIntoGround ?? 0;
+        out.push({
+          propKey: pick.key,
+          // ★ 输出转 chunk 本地坐标（渲染层直接挂 chunk group；过滤/坡度/贴地均用世界坐标）
+          x: jx - ctx.cx * 60,
+          z: jz - ctx.cz * 60,
+          y: ctx.surfaceHeightAt(jx, jz) - sink,
+         scale: sMin + hash2(gxc, gyc, ctx.seed + 9606) * (sMax - sMin),
+         rotY: hash2(gxc, gyc, ctx.seed + 9607) * Math.PI * 2,
+         variant: Math.floor(hash2(gxc, gyc, ctx.seed + 9608) * 4),
+         sink,
+       });
+    }
+  }
+  return out;
+}
+
+/**
+ * ★ 烘焙阴影体积汇总（预渲染前调用）：按装饰物分组 → 各实例基类统一换算。
+ */
+export function computePropVolumes(props: PlannedProp[], cx: number, cz: number): PropShadowVolume[] {
+  const out: PropShadowVolume[] = [];
+  const byDef = groupPropsByKey(props);
+  for (const [key, list] of byDef) {
+    const def = mapDecorByKey(key);
+    if (!def) continue;
+    out.push(...def.toShadowVolumes(list, cx, cz));
+  }
+  return out;
+}
+
+/** 按装饰物 key 分组（规划/渲染/物理共用） */
+export function groupPropsByKey(props: PlannedProp[]): Map<string, PlannedProp[]> {
+  const byDef = new Map<string, PlannedProp[]>();
+  for (const p of props) {
+    const arr = byDef.get(p.propKey);
+    if (arr) arr.push(p);
+    else byDef.set(p.propKey, [p]);
+  }
+  return byDef;
+}
+
+// ============================================================
+// 渲染适配层（基类实例经渲染器注册表出网格；three 只允许出现在本层）
+// ============================================================
+
+export interface PropRenderContext {
+  /** 本 chunk 世界坐标（渲染器算世界位置/注册运行时索引用） */
+  cx: number;
+  cz: number;
+  /** ★ 实例 → 装饰计划序号（planChunkProps 输出下标；与 ChunkManager propRegistry.index 对齐） */
+  planIdx?: number[];
+}
+
+export interface PropRenderer {
+  /** 构建实例组；无内容时返回 null（调用方跳过） */
+  build(def: MapEntityDecorBase, instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null;
+  /** 共享资源回收（geometry/material 的 module 级缓存） */
+  dispose?(): void;
+}
+
+const RENDERERS = new Map<string, PropRenderer>();
+
+/** ★ 扩展点：注册某渲染方式（'instanced' 等）的实现 */
+export function registerPropRenderer(type: string, renderer: PropRenderer): void {
+  RENDERERS.set(type, renderer);
+}
+
+/**
+ * ★ 渲染入口（ChunkManager.finishStandardChunk 调用）：
+ * 按实例分组 → 交给对应渲染器 → 挂进 chunk group。
+ */
+export function buildPropLayer(instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null {
+  if (instances.length === 0) return null;
+  const group = new THREE.Group();
+  // ★ ctx.planIdx 与传入的 instances 数组同位对齐 → 每个子列表要重新对齐一次
+  const indexOfInst = ctx?.planIdx ? new Map<PlannedProp, number>() : null;
+  if (indexOfInst) for (let i = 0; i < instances.length; i++) indexOfInst.set(instances[i], i);
+  for (const [key, list] of groupPropsByKey(instances)) {
+    const def = mapDecorByKey(key);
+    if (!def) continue;
+    const renderer = RENDERERS.get(def.render);
+    if (renderer) {
+      const subCtx = indexOfInst
+        ? { ...ctx!, planIdx: list.map((p) => ctx!.planIdx![indexOfInst.get(p)!]) }
+        : ctx;
+      const obj = renderer.build(def, list, subCtx);
+      if (obj) group.add(obj);
+    }
+  }
+  return group.children.length > 0 ? group : null;
+}
+
+// ============================================================
+// 内置 'instanced' 渲染器（占位实现：程序化岩石）
+// ============================================================
+// 共享几何/材质（module 级缓存，chunk 销毁只丢实例矩阵）；
+// 阴影不在此画——装饰物影子已在烘焙时印进光照图（勿重复压暗）。
+
+const SHARED_GEO = new Map<string, THREE.BufferGeometry>();
+const SHARED_MAT = new Map<string, THREE.MeshStandardMaterial>();
+
+/** 确定性顶点噪声位移（同参数恒同几何——跨 chunk 共享才安全） */
+function rockVertexNoise(i: number): number {
+  let h = (Math.imul(i, 374761393) + 1274126177) | 0;
+  h = (h ^ (h >>> 13)) | 0;
+  h = Math.imul(h, 1103515245);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+/** ★ 晶簇每变体确定性 RNG 流（mulberry32；变体种子不同 → 簇形/朝向各异，
+ *   同变体同种子 → chunk 重建几何完全一致，可缓存共享） */
+function crystalRng(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 多边形棱环（cornerR[k] = 逐角半径；spin 绕 +Y 旋）→ [x,y,z]×sides */
+function ringPoints(sides: number, y: number, cornerR: number[], spin: number): number[] {
+  const out: number[] = [];
+  for (let k = 0; k < sides; k++) {
+    const a = (k / sides) * Math.PI * 2 + spin;
+    out.push(Math.cos(a) * cornerR[k], y, Math.sin(a) * cornerR[k]);
+  }
+  return out;
+}
+
+/**
+ * 梯形台座几何（平截四棱台 + 顶面下沉槽）。
+ * 底 = baseHalf 正方形，顶 = topHalf 正方形（侧视梯形）；顶面中间挖一块
+ * 矩形下沉槽（slotDepth 深度，槽沿保留梯形顶面外沿 → 下沉后仍保持平面）。
+ * 顶点/索引手工构造（无噪声，轮廓硬朗）。
+ */
+export function buildTrapezoidPlinth(params: Record<string, number>): THREE.BufferGeometry {
+  const baseHalf = params.baseHalf ?? 1.0;
+  const topHalf = params.topHalf ?? 0.62;
+  const height = params.height ?? 0.55;
+  const slotDepth = params.slotDepth ?? 0.16;
+  const slotHalf = params.slotHalf ?? 0.28; // 下沉槽半宽（占顶面中线）
+
+  const b0 = [-baseHalf, 0, -baseHalf];
+  const b1 = [baseHalf, 0, -baseHalf];
+  const b2 = [baseHalf, 0, baseHalf];
+  const b3 = [-baseHalf, 0, baseHalf];
+  const t0 = [-topHalf, height, -topHalf];
+  const t1 = [topHalf, height, -topHalf];
+  const t2 = [topHalf, height, topHalf];
+  const t3 = [-topHalf, height, topHalf];
+  const s0 = [-slotHalf, height, -slotHalf];
+  const s1 = [slotHalf, height, -slotHalf];
+  const s2 = [slotHalf, height, slotHalf];
+  const s3 = [-slotHalf, height, slotHalf];
+  const d0 = [-slotHalf, height - slotDepth, -slotHalf];
+  const d1 = [slotHalf, height - slotDepth, -slotHalf];
+  const d2 = [slotHalf, height - slotDepth, slotHalf];
+  const d3 = [-slotHalf, height - slotDepth, slotHalf];
+
+  const V: number[] = [];
+  const push = (p: number[]) => V.push(p[0], p[1], p[2]);
+  const I: number[] = [];
+  const quad = (a: number, b: number, c: number, d: number) => I.push(a, b, c, a, c, d);
+
+  const vi = [b0, b1, b2, b3, t0, t1, t2, t3, s0, s1, s2, s3, d0, d1, d2, d3];
+  for (const p of vi) push(p);
+
+  quad(0, 1, 2, 3);       // 底面（法线 -Y：b0→b2→b3 从下看逆时针）
+  quad(4, 5, 1, 0);       // 前斜面（法线 -Z）
+  quad(6, 7, 3, 2);       // 后斜面（法线 +Z）
+  quad(5, 6, 2, 1);       // 右斜面（法线 +X）
+  quad(7, 4, 0, 3);       // 左斜面（法线 -X）
+  quad(8, 9, 5, 4);       // 顶前沿（法线 +Y，俯视可见封顶）
+  quad(9, 10, 6, 5);      // 顶右沿（法线 +Y）
+  quad(10, 11, 7, 6);     // 顶后沿（法线 +Y）
+  quad(11, 8, 4, 7);      // 顶左沿（法线 +Y）
+  quad(13, 12, 15, 14);   // 槽底（法线 +Y）
+  quad(12, 13, 9, 8);      // 槽前壁（法线 +Z 朝槽内：d0,d1,s1,s0）
+  quad(13, 14, 10, 9);     // 槽右壁（法线 -X 朝槽内：d1,d2,s2,s1）
+  quad(14, 15, 11, 10);    // 槽后壁（法线 -Z 朝槽内：d2,d3,s3,s2）
+  quad(15, 12, 8, 11);     // 槽左壁（法线 +X 朝槽内：d3,d0,s0,s3）
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.setIndex(I);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * 能量耗尽原石晶体簇几何（向上水晶柱群 + 低矮底座盘）。
+ * 簇内高矮混排：中央高塔（~3.6m）+ 环状中柱（2~3m）+ 矮柱（0.5~1.5m）
+ * + 地面碎晶（~0.2m）——"很多向上的柱体，有的很高，有的很矮"。
+ * 每柱 = 六棱锥（六槽底环 → 单尖顶，晶面色/棱半径带指针噪声 → 天然晶体歪尖）；
+ * 底座 = 六边低矮扁盘（顶面扇 + 侧壁）接地，柱从盘顶生长。
+ * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
+ */
+/**
+ * ★ 能量耗尽原石晶体簇（多变体程序化生成，2026-09-06 用户要求重做：
+ *   "都是竖直向上、形状相同"→ 要更复杂的几何 + 朝向变化）。
+ * 方案（综合业内程序化晶簇做法——hexagonal prism + tapered shaft +
+ * off-axis 尖端、imaginu 式"中心主晶 + 环状外张倾斜晶"）：
+ *   · 4 个变体（variant 0~3）各自确定性地生成不同簇形；
+ *   · 每簇 = 主峰 + 环状中晶 + 细针 + 地面碎屑；截面 5/6/8 边混排；
+ *   · 每根晶柱：底座环 → (可选)腰肩环 → 顶肩环 → 尖端，两段收尖；
+ *     尖端沿晶柱朝向方向偏斜（off-axis termination）+ 抬升（歪尖手感）；
+ *   · 朝向变化：每根晶柱绕 Y 随机 spin + 沿自身方位朝外倾斜（splay）——
+ *     中晶/细针明显外张、主峰轻微；底座环埋进底盘 + 底端封盖（密封倾斜
+ *     柱的底口，且环先旋 spin 再倾斜再平移，棱边全程直线）。
+ * 非索引三角形（每面独立顶点 → computeVertexNormals 逐面平整 + flatShading 硬棱）。
+ */
+export function buildCrystalCluster(params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const noise = params.noise ?? 0.12;
+  const rng = crystalRng(variant * 97 + 0x9e3779b9);
+  const BR = 1.15;              // 底座半径
+  const BRH = 0.12;             // 底座高（晶柱底基准面，坐盘顶）
+  const BRING = 6;              // 底座边数
+  const V: number[] = [];
+  const emit = (a: number, b: number, c: number) => V.push(a, b, c);
+
+  // ---- 变换工具：spin(y) → lean(朝 out 方向倾斜) → 平移 (px, BRH, pz) ----
+  const _v = new THREE.Vector3();
+  const _up = new THREE.Vector3(0, 1, 0);
+  const _out = new THREE.Vector3();
+  const _axis = new THREE.Vector3();
+  const _off = new THREE.Vector3();
+  const _rot = new THREE.Quaternion();
+  const _qy = new THREE.Quaternion();
+  const _ql = new THREE.Quaternion();
+  const tr = (x: number, y: number, z: number): void => {
+    _v.set(x, y, z).applyQuaternion(_rot).add(_off);
+    emit(_v.x, _v.y, _v.z);
+  };
+
+  /**
+   * 建一根晶柱（局部坐标构建后整体旋/倾/移）。
+   * @param crad 逐角半径（棱边噪声；同 k 各环同值 → 棱直）
+   * @param h 肩高；topFrac 肩环半径比例；waist 腰高份数（null=无腰）
+   * @param apexOff 尖端偏斜量（×r，向 tiltDir 方向）；apexFrac 尖端高出肩的比例
+   */
+  const column = (
+    sides: number, px: number, pz: number,
+    tiltDir: number, lean: number, spin: number,
+    crad: number[], h: number, topFrac: number,
+    waist: number | null, apexOff: number, apexFrac: number,
+  ): void => {
+    _qy.setFromAxisAngle(_up, spin);
+    _out.set(Math.cos(tiltDir), 0, Math.sin(tiltDir));
+    _axis.crossVectors(_up, _out).normalize();
+    _ql.setFromAxisAngle(_axis, lean);          // 向 +out 倾斜
+    _rot.multiplyQuaternions(_ql, _qy);
+    _off.set(px, BRH, pz);
+
+    const rnf = (f: number) => crad.map((r) => r * f);
+    const R0 = ringPoints(sides, 0, crad, 0);                       // 底座环
+    const R2 = ringPoints(sides, h, rnf(topFrac), 0);               // 顶肩环
+    // 腰肩环（topFrac 与 1 之间偏收腰 → 两段收尖）
+    const R1 = waist ? ringPoints(sides, h * waist, rnf(topFrac + (1 - topFrac) * 0.45), 0) : null;
+    const yA = h * (1 + apexFrac);
+    const ax = Math.cos(tiltDir) * apexOff, az = Math.sin(tiltDir) * apexOff;
+
+    // 底端封盖（中心尖略微下沉；密封倾斜柱底口）
+    const yF = -0.03;
+    for (let k = 0; k < sides; k++) {
+      const k1 = (k + 1) % sides;
+      tr(0, yF, 0);
+      tr(R0[k1 * 3], R0[k1 * 3 + 1], R0[k1 * 3 + 2]);
+      tr(R0[k * 3], R0[k * 3 + 1], R0[k * 3 + 2]);
+    }
+    // 侧壁（下环→上环 的四边形；绕向沿用台座已验证朝外序）
+    const lateral = (A: number[], B: number[]): void => {
+      for (let k = 0; k < sides; k++) {
+        const k1 = (k + 1) % sides;
+        tr(A[k * 3], A[k * 3 + 1], A[k * 3 + 2]);
+        tr(B[k * 3], B[k * 3 + 1], B[k * 3 + 2]);
+        tr(B[k1 * 3], B[k1 * 3 + 1], B[k1 * 3 + 2]);
+        tr(A[k * 3], A[k * 3 + 1], A[k * 3 + 2]);
+        tr(B[k1 * 3], B[k1 * 3 + 1], B[k1 * 3 + 2]);
+        tr(A[k1 * 3], A[k1 * 3 + 1], A[k1 * 3 + 2]);
+      }
+    };
+    if (R1) { lateral(R0, R1); lateral(R1, R2); } else { lateral(R0, R2); }
+    // 尖端（R2[k1] R2[k] A → 朝外；沿用原晶柱已验证序）
+    for (let k = 0; k < sides; k++) {
+      const k1 = (k + 1) % sides;
+      tr(R2[k1 * 3], R2[k1 * 3 + 1], R2[k1 * 3 + 2]);
+      tr(R2[k * 3], R2[k * 3 + 1], R2[k * 3 + 2]);
+      tr(ax, yA, az);
+    }
+  };
+
+  // ---- 底座（6 边扁盘：顶面扇 + 侧壁；角半径微抖保持变体差异） ----
+  const topR: number[] = [];
+  const botR: number[] = [];
+  for (let k = 0; k < BRING; k++) {
+    const a = (k / BRING) * Math.PI * 2;
+    const rr = BR * (1 + (rng() - 0.5) * noise);
+    topR.push(Math.cos(a) * rr, BRH, Math.sin(a) * rr);
+    botR.push(Math.cos(a) * rr * 0.98, -0.03, Math.sin(a) * rr * 0.98);
+  }
+  for (let k = 0; k < BRING; k++) {
+    const k1 = (k + 1) % BRING;
+    emit(0, BRH, 0);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
+    emit(botR[k * 3], botR[k * 3 + 1], botR[k * 3 + 2]);
+    emit(topR[k * 3], topR[k * 3 + 1], topR[k * 3 + 2]);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(botR[k * 3], botR[k * 3 + 1], botR[k * 3 + 2]);
+    emit(topR[k1 * 3], topR[k1 * 3 + 1], topR[k1 * 3 + 2]);
+    emit(botR[k1 * 3], botR[k1 * 3 + 1], botR[k1 * 3 + 2]);
+  }
+
+  // ---- 晶簇体（主峰 + 环晶 + 细针 + 碎屑；全部确定性随机） ----
+  const jit = (r: number, _k: number) => r * (1 + (rng() - 0.5) * noise * 1.6);
+
+  // 主峰（1~2 根：中央高塔 + 偶发第二峰）
+  const nBig = 1 + (rng() < 0.45 ? 1 : 0);
+  for (let i = 0; i < nBig; i++) {
+    const big = i === 0;
+    const sides = big ? 6 : (rng() < 0.5 ? 6 : 8);
+    const r = BR * (0.16 + rng() * 0.035) * (big ? 1 : 0.8);
+    const h = (big ? 3.1 : 2.2) + rng() * 0.7;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides,
+      big ? (rng() - 0.5) * 0.16 : (rng() - 0.5) * 0.6,
+      big ? (rng() - 0.5) * 0.16 : (rng() - 0.5) * 0.6,
+      rng() * Math.PI * 2,           // 微倾方位
+      big ? 0.05 + rng() * 0.09 : 0.10 + rng() * 0.14,   // 主峰近直立、第二峰微倾
+      rng() * Math.PI * 2,
+      crad, h, 0.18 + rng() * 0.12,
+      0.5 + rng() * 0.3, r * (0.15 + rng() * 0.5), 0.12 + rng() * 0.12,
+    );
+  }
+
+  // 环状中晶（4~7 根；沿方位外张倾斜——"朝向有变化"主来源）
+  const nRing = 4 + Math.floor(rng() * 4);
+  for (let i = 0; i < nRing; i++) {
+    const a = (i / nRing) * Math.PI * 2 + rng() * 0.5;
+    const rad = 0.45 + rng() * 0.5;                       // 离中心距离
+    const r = 0.09 + rng() * 0.06;
+    const sides = rng() < 0.5 ? 6 : (rng() < 0.5 ? 5 : 8);
+    const h = 0.9 + rng() * 1.5;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.5,       // 朝外倾斜方位（≈自身方位）
+      0.12 + rng() * 0.28,           // 外张 7°~23°
+      rng() * Math.PI * 2,
+      crad, h, 0.2 + rng() * 0.2,
+      rng() < 0.25 ? null : 0.5 + rng() * 0.35,
+      r * (0.1 + rng() * 0.5), 0.1 + rng() * 0.14,
+    );
+  }
+
+  // 细长针晶（3~6 根；大倾角斜插）
+  const nNeedle = 3 + Math.floor(rng() * 4);
+  for (let i = 0; i < nNeedle; i++) {
+    const a = rng() * Math.PI * 2;
+    const rad = 0.5 + rng() * 0.45;
+    const r = 0.04 + rng() * 0.035;
+    const sides = rng() < 0.5 ? 5 : 6;
+    const h = 1.2 + rng() * 1.1;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.4,
+      0.35 + rng() * 0.4,            // 20°~43° 大倾角
+      rng() * Math.PI * 2,
+      crad, h, 0.15 + rng() * 0.15,
+      null, r * (0.05 + rng() * 0.35), 0.08 + rng() * 0.1,
+    );
+  }
+
+  // 地面碎屑（4~6 片矮小歪晶）
+  const nChip = 4 + Math.floor(rng() * 3);
+  for (let i = 0; i < nChip; i++) {
+    const a = rng() * Math.PI * 2;
+    const rad = rng() * 0.95;
+    const r = 0.05 + rng() * 0.05;
+    const sides = 5 + (rng() < 0.5 ? 0 : 1);
+    const h = 0.15 + rng() * 0.25;
+    const crad: number[] = [];
+    for (let k = 0; k < sides; k++) crad.push(jit(r, k));
+    column(
+      sides, Math.cos(a) * rad, Math.sin(a) * rad,
+      a + (rng() - 0.5) * 0.6,
+      0.05 + rng() * 0.18,
+      rng() * Math.PI * 2,
+      crad, h, 0.45 + rng() * 0.3,
+      null, r * (0.05 + rng() * 0.3), 0.08 + rng() * 0.1,
+    );
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(V, 3));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+// ============================================================
+// ★ 采集物纹理卡（'plant'，2026-09-14）：不用模型——FTX 图集贴图直接上屏
+//   · 每 key 一包图集（4 帧，每帧一张植被）；每实例按 variant 抽一帧
+//   · 交叉面片（两个正交竖直面）：任意朝向都有面片正对视角（薄片不"消失"）
+//   · 风摆 UV 扭曲：权重 w = 1 - v（v=0 底边）→ 底边两点固定（根部不漂移），梢部摆
+//   · 几何/材质/纹理按 (key, frame) 共享缓存；实例矩阵与 instanced 同口径
+// ============================================================
+
+/** 装饰 key → 纹理图集（boot 加载后注入；'plant' 渲染器消费） */
+const PROP_ATLAS = new Map<string, FtxAsset>();
+
+/** ★ 注入某装饰 key 的纹理图集（缺省 = 该 key 不生成：失败自动降级为空） */
+export function setPropAtlas(key: string, asset: FtxAsset): void {
+  PROP_ATLAS.set(key, asset);
+}
+
+// ============================================================
+// ★ 子弹扫掠 · 顶部扭曲状态（2026-09-14）
+//   每株一个状态位（强度 0~1 + 随机方向相位），存进 instanceColor.g/b；
+//   CPU 触发（赋满 + 随机相位）→ 逐帧指数衰减 → 顶点着色器读 g/b 混入摆动。
+//   触发源 = ChunkManager.propRegistry（与 E 键采集同一个 LOD1 物品索引），
+//   由 WorldMode 扫描每个角色子弹附近命中采集物后调用 plantGustAt()。
+// ============================================================
+
+interface PlantGustEntry {
+  mesh: THREE.InstancedMesh;
+  /** 每实例 → 装饰计划序号（decor.props 下标；与 propRegistry.index 对齐） */
+  planIdx: number[];
+  /** 每实例当前扭曲强度（0~1） */
+  gust: Float32Array;
+  /** 每实例随机方向相位（0~1） */
+  dir: Float32Array;
+  /** 每实例最近触发时间（ms；冷却判定用） */
+  last: Float32Array;
+  /** 每实例最近采收时间（ms；株级采收冷却——E/子弹共享） */
+  lastDrop: Float32Array;
+  removed: boolean;
+}
+
+/** chunkKey"{cx}|{cz}" → 该 chunk 的植物 mesh 条目（build 时注册 / teardown 注销） */
+const PLANT_GUST_CHUNKS = new Map<string, PlantGustEntry[]>();
+/** 全部条目（跨 chunk 清理散热用；与 PLANT_GUST_CHUNKS 同引用） */
+const ALL_PLANT_GUST: PlantGustEntry[] = [];
+/** 本帧有衰减更新的条目（减少无谓的 instanceColor.needsUpdate） */
+const GUST_DIRTY = new Set<PlantGustEntry>();
+/** ★ 注册某 chunk 的植物 mesh 条目（'plant' 渲染器 build 时调用） */
+export function registerPlantGust(cx: number, cz: number, entry: PlantGustEntry): void {
+  const key = `${cx}|${cz}`;
+  let list = PLANT_GUST_CHUNKS.get(key);
+  if (!list) { list = []; PLANT_GUST_CHUNKS.set(key, list); }
+  list.push(entry);
+  ALL_PLANT_GUST.push(entry);
+}
+
+/** ★ 注销某 chunk 的全部植物条目（teardown 时调用；防残留引用积累） */
+export function unregisterPlantGustChunk(cx: number, cz: number): void {
+  const key = `${cx}|${cz}`;
+  const list = PLANT_GUST_CHUNKS.get(key);
+  if (!list) return;
+  PLANT_GUST_CHUNKS.delete(key);
+  for (const idx of GUST_DIRTY) if (list.includes(idx)) GUST_DIRTY.delete(idx);
+  for (let i = 0; i < ALL_PLANT_GUST.length; i++) {
+    if (list.includes(ALL_PLANT_GUST[i])) {
+      ALL_PLANT_GUST[i].removed = true;
+      ALL_PLANT_GUST.splice(i, 1);
+      i--;
+    }
+  }
+}
+
+/**
+ * ★ 角色子弹命中采集物触发：按 propRegistry 的 (cx, cz, planIndex) 找株、赋满扭曲。
+ * @returns **true = 本次真的摇动了**（冷却通过）；false = 未注册 / 该株冷却中。
+ *   返回值只给「击草音效」用——WorldMode 靠它判断要不要发声，避免每帧狂响。
+ */
+export function plantGustAt(cx: number, cz: number, planIndex: number, now = performance.now()): boolean {
+  const list = PLANT_GUST_CHUNKS.get(`${cx}|${cz}`);
+  if (!list) return false;
+  for (const e of list) {
+    // planIdx 与 propRegistry 同序（build 时按同批 visibleProps 生成）→ 下标一一对应
+    const i = e.planIdx.indexOf(planIndex);
+    if (i < 0) continue;
+    if (now - e.last[i] < PROP_GUST_RETRIGGER_COOLDOWN * 1000) return false;
+    e.gust[i] = 1;
+    // ★ 随机方向：按实例位置 hash（确定性 → 组里各株方向各异、同株重掷也乱）
+    e.dir[i] = hash2(e.mesh.count * 7 + i, planIndex * 13, 4242 + Math.floor(now / 1000) * 31) % 1;
+    e.last[i] = now;
+    GUST_DIRTY.add(e);
+    return true; // 一张 mesh 内 planIdx 唯一
+  }
+  return false;
+}
+
+/** ★ 采收冷却门（E 键 / 子弹共享，2026-09-14）：同株两次掉落至少间隔 cooldownMs。
+ *  返回 true = 本次采收成立（调用方掉落入包 + 采集次数 +1）；false = 冷却中/未注册。 */
+export function plantDropTryClaim(cx: number, cz: number, planIndex: number, cooldownMs: number, now = performance.now()): boolean {
+  const list = PLANT_GUST_CHUNKS.get(`${cx}|${cz}`);
+  if (!list) return false;
+  for (const e of list) {
+    const i = e.planIdx.indexOf(planIndex);
+    if (i < 0) continue;
+    if (now - e.lastDrop[i] < cooldownMs) return false; // ★ 株冷却：同一株短时间内不重复给
+    e.lastDrop[i] = now;
+    return true;
+  }
+  return false;
+}
+
+/** ★ 逐帧衰减（WorldMode explore 阶段调用）；强度过小归零 */
+export function tickPlantGust(dt: number): void {
+  if (GUST_DIRTY.size === 0) return;
+  const k = Math.exp(-Math.LN2 * dt / PROP_GUST_HALF_LIFE);
+  for (const e of GUST_DIRTY) {
+    const n = e.mesh.count;
+    let any = false;
+    for (let i = 0; i < n; i++) {
+      const g = e.gust[i];
+      if (g <= 0) continue;
+      e.gust[i] = g * k;
+      if (e.gust[i] < 0.001) e.gust[i] = 0; // ★ 归零 → 恢复常规 VAT
+      else any = true;
+    }
+    // ★ 写入 instanceColor.g（强度）+ b（方向相位）：着色器读它混入摆动
+    //   （three 的 instanceColor 是 vec3 属性 → 步长 3；r 通道留给帧号不动）
+    if (e.mesh.instanceColor && e.mesh.instanceColor.array.length === n * 3) {
+      const arr = e.mesh.instanceColor.array;
+      for (let i = 0; i < n; i++) {
+        arr[i * 3 + 1] = e.gust[i];
+        arr[i * 3 + 2] = e.dir[i];
+      }
+      e.mesh.instanceColor.needsUpdate = true;
+    }
+    if (!any) GUST_DIRTY.delete(e); // 全归零：脱离逐帧更新
+    if (e.removed) GUST_DIRTY.delete(e);
+  }
+}
+
+/** ★ 模式退出/setPropAtlas 重建时全量清空（防脏条目残留引用） */
+export function resetPlantGust(): void {
+  PLANT_GUST_CHUNKS.clear();
+  ALL_PLANT_GUST.length = 0;
+  GUST_DIRTY.clear();
+}
+
+/** 图集帧 → 合成画布纹理（CPU 合成，与图标管线同款数学；按 key|frame 缓存） */
+const SHARED_PLANT_TEX = new Map<string, THREE.DataArrayTexture>();
+/** 图集 4 帧 → 纹理数组（sampler2DArray；每帧独立图层与 mipmap）。返回 [纹理, 帧数]。 */
+function getPlantTexture(key: string, asset: FtxAsset): { tex: THREE.DataArrayTexture; frames: number } | null {
+  const cached = SHARED_PLANT_TEX.get(key);
+  if (cached) return { tex: cached, frames: Math.min(4, asset.frameCount) };
+  try {
+    const frames = Math.min(4, asset.frameCount);
+    if (frames <= 0) return null;
+    const f0 = asset.getFtxFrame(0);
+    const W = Math.max(1, Math.round(f0?.bbox.w ?? f0?.width ?? 256));
+    const H = Math.max(1, Math.round(f0?.bbox.h ?? f0?.height ?? 256));
+    const layer = W * H * 4;
+    const data = new Uint8Array(layer * frames);
+    for (let f = 0; f < frames; f++) {
+      const canvas = compositeFrameToCanvas(asset, f);
+      const ctx = canvas.getContext('2d')!;
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      // ★ 帧尺寸与基准一致 → 逐行【上下翻转】拷入图层：
+      //   DataArrayTexture 默认不翻转（CanvasTexture 默认 flipY），不翻会整片倒置；
+      //   翻转后 v=0 = 图片底边（根部）——与几何 uv 一致。
+      if (canvas.width === W && canvas.height === H) {
+        const src = img.data;
+        const rowBytes = W * 4;
+        const base = f * layer;
+        for (let y = 0; y < H; y++) {
+          const srcRow = y * rowBytes;
+          const dstRow = base + (H - 1 - y) * rowBytes;
+          data.set(src.subarray(srcRow, srcRow + rowBytes), dstRow);
+        }
+      }
+    }
+    const tex = new THREE.DataArrayTexture(data, W, H, frames);
+    tex.format = THREE.RGBAFormat;
+    tex.type = THREE.UnsignedByteType;
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.wrapS = THREE.ClampToEdgeWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    tex.generateMipmaps = true;
+    tex.userData.decorShared = true;
+    tex.needsUpdate = true;
+    SHARED_PLANT_TEX.set(key, tex);
+    return { tex, frames };
+  } catch (e) {
+    console.warn('[decor] 采集物纹理合成失败:', key, e);
+    return null;
+  }
+}
+
+/** 共享 uniform：一处更新 → 全体风摆同相推进 */
+const PLANT_TIME: { value: number } = { value: 0 };
+
+/** 交叉面片几何（单位宽高；底边 y=0 → 根部对齐地面）
+ *  ★ 竖直分段（默认 8 段）：供 VAT 顶点弯折采样 —— 分段越多，"上部扭动"越平滑（直线剪切 → 弧线弯折）。
+ *  ★ 附加 `aQuad` 属性：0=正面片（保留）、1=侧面片（远距在顶点着色器缓慢收拢）。
+ *  1↔2 级过渡 = 同一网格内的几何 morph（单份贴图 → 无"第二份贴图突然出现"的重影）。 */
+const PLANT_SEG = 8;
+let PLANT_CARD: THREE.BufferGeometry | null = null;
+function getPlantCard(): THREE.BufferGeometry {
+  if (PLANT_CARD) return PLANT_CARD;
+  const pos: number[] = [];
+  const nor: number[] = [];
+  const uv: number[] = [];
+  const quadFlag: number[] = [];
+  const idx: number[] = [];
+  const quad = (ax: number, az: number): void => {
+    const rx = -az, rz = ax; // 面内水平右向量
+    const b = pos.length / 3;
+    // (PLANT_SEG+1) 行 × 2 列顶点（自下而上）
+    for (let iy = 0; iy <= PLANT_SEG; iy++) {
+      const v = iy / PLANT_SEG;
+      for (const sx of [-0.5, 0.5]) {
+        pos.push(rx * sx, v, rz * sx);
+        nor.push(ax, 0, az);
+        uv.push(sx + 0.5, v); // ★ v=0 底边（VAT 采样纵向坐标；根部固定）
+        quadFlag.push(ax === 1 ? 0 : 1);
+      }
+    }
+    for (let iy = 0; iy < PLANT_SEG; iy++) {
+      const r0 = b + iy * 2, r1 = b + (iy + 1) * 2;
+      idx.push(r0, r0 + 1, r1 + 1, r0, r1 + 1, r1);
+    }
+  };
+  quad(1, 0); // 正面片（aQuad=0）
+  quad(0, 1); // 侧面片（aQuad=1；远距收拢）
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aQuad', new THREE.Float32BufferAttribute(quadFlag, 1));
+  g.setIndex(idx);
+  g.computeBoundingSphere();
+  g.userData.decorShared = true;
+  PLANT_CARD = g;
+  return g;
+}
+
+/** ★ VAT（顶点动画纹理）缓存：每 key 一张（离屏预烘焙，非运行时计算）。
+ *  内容 = 上部扭动的顶点偏移场：uv.x = 高度(0 根 → 1 梢)，uv.y = 循环相位；
+ *  RG 两通道 = 世界 X/Z 位移（含 v² 梢强权重），采样后乘幅度加到顶点上。
+ *  —— 摆动的"形状"全部来自这张预烘焙纹理，顶点着色器只做一次采样，纹理本身不变形。 */
+const SHARED_PLANT_VAT = new Map<string, THREE.DataTexture>();
+export const PLANT_VAT_FRAMES = 16;   // 相位帧数（循环）
+export const PLANT_VAT_HEIGHT = 32;   // 高度采样行数
+function getPlantVat(key: string): THREE.DataTexture {
+  const cached = SHARED_PLANT_VAT.get(key);
+  if (cached) return cached;
+  const W = PLANT_VAT_HEIGHT, H = PLANT_VAT_FRAMES;
+  const data = new Uint8Array(W * H * 4);
+  for (let t = 0; t < H; t++) {
+    const ph = (t / H) * Math.PI * 2;
+    for (let h = 0; h < W; h++) {
+      const v = h / (W - 1);
+      const weight = v * v; // ★ 根固梢摆（底边权重 0）
+      // 双频叠加：主摆 + 次级颤（含相位差 → 自然"扭动"）
+      const sx = (Math.sin(ph + v * 1.7) * 0.65 + Math.sin(ph * 2.0 + v * 3.1 + 0.7) * 0.35) * weight;
+      const sz = (Math.sin(ph + 2.1 + v * 2.3) * 0.7 + Math.sin(ph * 1.7 + v * 1.1 + 1.9) * 0.3) * weight;
+      const i = (t * W + h) * 4;
+      data[i] = Math.round((sx * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.round((sz * 0.5 + 0.5) * 255);
+      data[i + 2] = 0;
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.UnsignedByteType);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.RepeatWrapping; // 相位轴循环
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.userData.decorShared = true;
+  tex.needsUpdate = true;
+  SHARED_PLANT_VAT.set(key, tex);
+  return tex;
+}
+
+// ============================================================
+// ★ 子弹扫掠 · 顶部扭曲（2026-09-14）：角色子弹经过可采集植被附近时，
+//   CPU 计算一段"幅度更大、更随机"的梢部摆动，随后指数衰减回常规 VAT。
+//   · 触发源 = ChunkManager.propRegistry（与 E 键采集同一个 LOD1 物品索引）
+//   · 状态以 instanceColor.g = 扭曲强度、instanceColor.b = 随机方向相位 下发
+//   · 扭曲幅度 = uGustAmp（比常规风摆 uSway 大数倍）；随机方向按实例位置 hash
+//   · 顶点着色器把扭曲强度按顶部权重（uv.y²）混合进现有 VAT 摆动
+// ============================================================
+
+/** ★ 子弹扫掠触发半径（米）：角色子弹与采集物水平距离 ≤ 此值 → 触发扭曲 */
+export const PROP_GUST_RADIUS = 1.6;
+/** ★ 扭曲强度衰减半衰期（秒）：指数衰减，视觉上"先猛后缓" */
+export const PROP_GUST_HALF_LIFE = 0.22;
+/** ★ 扭曲幅度（米）：梢部最大额外位移（乘实例尺寸；比 uSway=0.10 大一个量级） */
+export const PROP_GUST_AMP = 0.55;
+/** ★ 每株扭曲重触发冷却（秒）：同一株在冷却期内不重复触发（连续弹幕不抖成筛子） */
+export const PROP_GUST_RETRIGGER_COOLDOWN = 0.12;
+
+/** ★ 植被最远绘制距离（米）：L2 单面片带终点 / 雾隐终点 / ≥此距离不绘制。
+ *  可调（2026-09-14 用户定：扩大 2、3 级 LOD 范围）。 */
+export const PROP_LOD_FADE_FAR = 140;
+/** ★ LOD3 渐隐带宽度（米）：从 FADE_FAR-本值 开始 alpha 渐隐到 FADE_FAR 归零 */
+export const PROP_LOD_FADE_TAIL = 20;
+/** ★ LOD 1↔2 切换距离（米）：交叉面片 → 单面片 的过渡中心（可调；2026-09-14 由 60 增大） */
+export const PROP_LOD_SWITCH_MID = 90;
+/** ★ LOD 1↔2 几何过渡带宽（米）：围绕切换中心，侧面片缓慢收拢（单贴图，无重影） */
+export const PROP_LOD_CROSSFADE = 30;
+
+/** 植被材质（**每 key 一份**；帧选择走实例色 `instanceColor.r` → 纹理数组图层）
+ *  ★ 1 个 InstancedMesh / 采集物 / chunk（替代过去"每帧一个网格"的 4 次绘制）。
+ *  ★ 三级 LOD（逐实例按实例原点距离）：
+ *    · <30m 满风；30–60m 风幅度渐隐（风归零后跳过 VAT 采样）；75→105m 侧面片几何收拢；
+ *    · 120→140m 抖动渐隐；≥140m 顶点带剔除。
+ *  ★ 上部扭动 = VAT（`getPlantVat` 预烘焙；顶点采样偏移，贴图不变形）。
+ *  ★ 不透明管线：边缘 `c.a<0.5` 硬裁切（防"透明描边"），不做 alpha 混合。 */
+const SHARED_PLANT_MAT = new Map<string, THREE.ShaderMaterial>();
+function getPlantMaterial(key: string, tex: THREE.DataArrayTexture, frames: number, lod = true): THREE.ShaderMaterial {
+  const cached = SHARED_PLANT_MAT.get(key);
+  if (cached) return cached;
+  const vat = getPlantVat(key);
+  const CROSS_HALF = PROP_LOD_CROSSFADE / 2;
+  const morphNear = lod ? PROP_LOD_SWITCH_MID - CROSS_HALF : -1; // 未开 lod：不收拢（恒双面片）
+  const morphFar = lod ? PROP_LOD_SWITCH_MID + CROSS_HALF : 0;
+  const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: { value: tex },
+      uFrames: { value: frames },
+      uVat: { value: vat },
+      uTime: PLANT_TIME,
+      uVatPeriod: { value: 2.6 },   // VAT 循环周期（秒）
+      uSway: { value: 0.10 },       // 扭动幅度（米；按实例尺寸同比放大）
+      uGustAmp: { value: PROP_GUST_AMP }, // ★ 子弹扫掠顶部扭曲幅度（比 uSway 大一个量级）
+      uMorphNear: { value: morphNear },
+      uMorphFar: { value: morphFar },
+      uFadeNear: { value: LOD_RANGES[0] },
+      uFadeFar: { value: LOD_RANGES[1] },
+      uHideNear: { value: PROP_LOD_FADE_FAR - PROP_LOD_FADE_TAIL },
+      uHideFar: { value: PROP_LOD_FADE_FAR },
+    },
+    vertexShader: /* glsl */ `
+      attribute float aQuad;
+      uniform sampler2D uVat;
+      uniform float uTime;
+      uniform float uVatPeriod;
+      uniform float uSway;
+      uniform float uGustAmp;
+      uniform float uMorphNear;
+      uniform float uMorphFar;
+      uniform float uHideFar;
+      uniform float uFadeNear;
+      uniform float uFadeFar;
+      varying vec2 vUv;
+      varying float vFrame;
+      varying float vCamDist;
+      void main() {
+        vUv = uv;
+        // ★ 实例帧号（instanceColor.r；setColorAt 写入）
+        vFrame = instanceColor.r;
+        // ★ 距离用【实例原点】算（同实例顶点一致 → 不会切出半边）
+        vec4 inst = modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        float d = length(inst.xz - cameraPosition.xz);
+        vCamDist = d;
+        // ★ 顶点带剔除：≥140m 整株不产生任何片元
+        if (d >= uHideFar) {
+          gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+          return;
+        }
+        // ★ 风幅度随距离渐隐（近段满幅 → uFadeFar 处归零）
+        float wind = 1.0 - smoothstep(uFadeNear, uFadeFar, d);
+        vec2 sway = vec2(0.0);
+        float iScale = 1.0;
+        // ★ 2 级（远处）不用 VAT：风已归零的实例跳过采样（省顶点纹理采样 + hash）
+        if (wind > 0.001) {
+          iScale = (length(instanceMatrix[0].xyz) + length(instanceMatrix[1].xyz) + length(instanceMatrix[2].xyz)) / 3.0;
+          float phase = fract(sin(dot(inst.xz, vec2(12.9898, 78.233))) * 43758.5453);
+          vec2 vat = texture2D(uVat, vec2(uv.y, fract(uTime / uVatPeriod + phase))).rg * 2.0 - 1.0;
+          sway = vat * uSway * iScale * wind;
+          // ★ 子弹扫掠顶部扭曲（2026-09-14）：CPU 经 instanceColor.g/b 下发
+          //   g=扭曲强度（指数衰减，触发后恢复常规 VAT）、b=随机方向相位。
+          //   顶点混合按顶部权重 uv.y²（根部不晃、梢部最猛）——幅度 uGustAmp
+          //   比常规风摆 uSway 大一个量级，方向每株不同 + 随时间再叠加随机转。
+          float gust = instanceColor.g;
+          if (gust > 0.001) {
+            float gph = instanceColor.b * 6.28318;
+            // ★ "更随机"：方向 = 触发相位 + 株 hash 相位 + 随时间旋转（防同向僵摆）
+            float gT = uTime * 3.0;
+            vec2 gdir = vec2(cos(gph + phase * 6.28318 + gT), sin(gph + phase * 6.28318 + gT));
+            sway += gdir * uGustAmp * gust * iScale * uv.y * uv.y * wind;
+          }
+        }
+        // ★ 1↔2 级几何缓慢过渡：侧面片宽度 1→0 收拢
+        float k = smoothstep(uMorphNear, uMorphFar, d);
+        vec3 lp = position;
+        if (aQuad > 0.5) lp.x *= (1.0 - k);
+        vec4 wp = modelMatrix * (instanceMatrix * vec4(lp, 1.0));
+        // ★ 上部扭动：世界 XZ 位移（根部 uv.y=0 → VAT 权重 0 → 底边两点固定）
+        wp.x += sway.x;
+        wp.z += sway.y;
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2DArray uMap;
+      uniform float uFrames;
+      uniform float uHideNear;
+      uniform float uHideFar;
+      varying vec2 vUv;
+      varying float vFrame;
+      varying float vCamDist;
+      void main() {
+        // ★ 帧号 → 纹理数组图层（四帧合并 1 个 draw call 的关键）
+        float fi = clamp(floor(vFrame + 0.5), 0.0, uFrames - 1.0);
+        vec4 c = texture(uMap, vec3(vUv, fi));
+        // ★ ① 硬裁切：贴图边缘的半透明过滤像素直接丢弃（防"透明描边"）
+        if (c.a < 0.5) discard;
+        // ★ ② LOD3 雾隐：末端 120→140m 用【抖动渐隐】（屏空间 hash 阈值，不混合）
+        float a = 1.0 - smoothstep(uHideNear, uHideFar, vCamDist);
+        float dith = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+        if (a <= dith) discard;
+        gl_FragColor = vec4(c.rgb, 1.0);
+      }
+    `,
+    transparent: false, // ★ 不透明管线（末端雾隐用抖动，不混合）：省填充带宽、保早深度
+    side: THREE.DoubleSide,
+    depthWrite: true,
+    depthTest: true,
+  });
+  SHARED_PLANT_MAT.set(key, mat);
+  return mat;
+}
+
+/** 'plant' 渲染器：按帧分桶 → InstancedMesh（交叉面片 + 图集帧贴图 + 风摆） */
+registerPropRenderer('plant', {
+  build(def: MapEntityDecorBase, instances: PlannedProp[], ctx?: PropRenderContext): THREE.Object3D | null {
+    const atlas = PROP_ATLAS.get(def.key);
+    if (!atlas || atlas.frameCount === 0) return null;
+    const size = def.geometry?.params?.size ?? 1;
+    // ★ 着地补偿：贴图底部留白按比例下沉（缺省 15% 高度；可按 key 用 params.groundSink 调）
+    const groundSink = def.geometry?.params?.groundSink ?? 0.15;
+    const frames = Math.min(4, atlas.frameCount);
+    const counts = new Map<number, number>();
+    for (const p of instances) {
+      const f = p.variant % frames;
+      counts.set(f, (counts.get(f) ?? 0) + 1);
+    }
+    const geo = getPlantCard();
+    const m = new THREE.Matrix4();
+    const e = new THREE.Euler();
+    const q = new THREE.Quaternion();
+    const vp = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const col = new THREE.Color();
+    const group = new THREE.Group();
+    group.name = `props:${def.key}`;
+    // ★ 一个 InstancedMesh / 采集物 / chunk：帧选择走 instanceColor.r（纹理数组图层）
+    const built = getPlantTexture(def.key, atlas);
+    if (built) {
+      const mesh = new THREE.InstancedMesh(geo, getPlantMaterial(def.key, built.tex, built.frames, !!def.lod), instances.length);
+      mesh.name = `${def.key}|inst`;
+      mesh.onBeforeRender = () => { PLANT_TIME.value = performance.now() * 0.001; };
+      let idx = 0;
+      for (const p of instances) {
+        e.set(0, p.rotY, 0);
+        q.setFromEuler(e);
+        // ★ 随机浮动：每株在基准大小上再乘 0.8~1.2（位置 hash 确定性 → 重建不跳变）
+        const sc = p.scale * size * (0.8 + 0.4 * hash2(p.x * 13.7, p.z * 7.3, 4242));
+        // ★ 着地补偿：随尺寸按比例下沉（贴图底边留白被同比例放大 → 消除"悬浮感"）
+        vp.set(p.x, p.y - sc * groundSink, p.z);
+        s.set(sc, sc, sc);
+        m.compose(vp, q, s);
+        mesh.setMatrixAt(idx, m);
+        // ★ 帧号写入实例色通道（r = 帧索引；着色器据此选纹理数组图层）
+        const frameIdx = p.variant % frames;
+        col.setRGB(frameIdx, 0, 0);
+        mesh.setColorAt(idx, col);
+        idx++;
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere(); // ★ 实例化包围球（否则边缘实例被错误视锥剔除）
+      // ★ 子弹扫掠注册：每株一个 {planIdx, gust, dir, last, lastDrop}（propRegistry 索引驱动）
+      if (ctx?.cx !== undefined && ctx?.cz !== undefined && ctx?.planIdx) {
+        registerPlantGust(ctx.cx, ctx.cz, {
+          mesh,
+          planIdx: ctx.planIdx.slice(),
+          gust: new Float32Array(instances.length),
+          dir: new Float32Array(instances.length),
+          last: new Float32Array(instances.length),
+          lastDrop: new Float32Array(instances.length),
+          removed: false,
+        });
+      }
+      group.add(mesh);
+    }
+    return group.children.length > 0 ? group : null;
+  },
+  dispose(): void {
+    for (const t of SHARED_PLANT_TEX.values()) t.dispose();
+    SHARED_PLANT_TEX.clear();
+    for (const m of SHARED_PLANT_MAT.values()) m.dispose();
+    SHARED_PLANT_MAT.clear();
+    for (const v of SHARED_PLANT_VAT.values()) v.dispose();
+    SHARED_PLANT_VAT.clear();
+    PLANT_CARD?.dispose();
+    PLANT_CARD = null;
+  },
+});
+
+/**
+ * 共享几何工厂：按 geometry.type 分发——
+ * 'rock'：细分 icosahedron + 顶点噪声 + 压扁（通用）
+ * 'block'：立方体 + 顶点噪声 + 压扁（★ 极简几何风格，Boss 战四维空间用）
+ * 'trapezoid'：平截四棱台（底大方、顶小方 ÷ 梯台）+ 顶面下沉槽
+ * 'crystal'：能量耗尽原石晶体簇（多变体：主峰+环晶+细针+碎屑，倾斜+歪尖）
+ *（《水泥高台上的装饰性实体.json》：侧面梯形 + 顶面一块向下凹且保持平面）
+ */
+function buildSharedGeometry(type: string | undefined, params: Record<string, number>, variant: number): THREE.BufferGeometry {
+  const noise = params.noise ?? 0.35;
+  if (type === 'trapezoid') {
+    return buildTrapezoidPlinth(params);
+  }
+  if (type === 'crystal') {
+    return buildCrystalCluster(params, variant);
+  }
+  if (type === 'block') {
+    const geo = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      const n = rockVertexNoise(i * 7 + 3);
+      const s = 1 + (n - 0.5) * noise * 0.6;
+      pos.setXYZ(i, x * s, y * s * (0.7 + 0.3 * n), z * s);
+    }
+    geo.computeVertexNormals();
+    return geo;
+  }
+  // rock（默认）
+  const geo = new THREE.IcosahedronGeometry(1, 1);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const n = rockVertexNoise(i * 7 + 3);
+    const squash = 0.72 + 0.15 * n;                  // 底部压扁（半球感）
+    const s = 1 + (n - 0.5) * noise;
+    pos.setXYZ(i, x * s, y * s * squash, z * s);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** instanced 装饰变体数（每变体一套确定性簇形） */
+const INST_VARIANT_COUNT = 4;
+
+function getSharedRock(key: string, type: string | undefined, params: Record<string, number>, variant: number): { geo: THREE.BufferGeometry; mat: THREE.MeshStandardMaterial } {
+  // ★ 变体分桶：几何按 `${type}|v${variant}`（每变体一套簇形），材质按 prop key 共享
+  const geoKey = `${type ?? ''}|v${variant}`;
+  let geo = SHARED_GEO.get(geoKey);
+  if (!geo) {
+    geo = buildSharedGeometry(type, params, variant);
+    // ★ 标记共享：ChunkManager.disposeVisual 不得释放（否则每次重建 chunk 都把
+    //   全地图共用的几何/材质 dispose 掉再重传，造成持续抖动与 churn）
+    geo.userData.decorShared = true;
+    SHARED_GEO.set(geoKey, geo);
+  }
+  let mat = SHARED_MAT.get(key);
+  if (!mat) {
+    mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(params.color ?? 0x8a7f74),
+      roughness: 0.95, metalness: 0, flatShading: true,
+      // ★ 植被等程序化几何用逐顶点色；薄叶双面可见（params 显式开启）
+      vertexColors: params.vertexColors === 1,
+      side: params.doubleSide === 1 ? THREE.DoubleSide : THREE.FrontSide,
+    });
+    mat.userData.decorShared = true;
+    SHARED_MAT.set(key, mat);
+  }
+  return { geo, mat };
+}
+
+/** 注册内置 instanced 渲染器（几何按 geometry.type × variant 分发；后续几何类型在此扩展） */
+registerPropRenderer('instanced', {
+  build(def: MapEntityDecorBase, instances: PlannedProp[]): THREE.Object3D | null {
+    const params = def.geometry?.params ?? {};
+    const type = def.geometry?.type ?? '';
+    const matKey = `${def.key}|${type}`;
+    // ★ 按 variant 分桶成多个 InstancedMesh（每组占用自己的一套簇形几何）；
+    //   变体数可由声明收窄（花草 1~2 → 减少 draw call）
+    const VC = Math.max(1, def.variantCount ?? INST_VARIANT_COUNT);
+    const counts = new Map<number, number>();
+    for (const p of instances) {
+      const v = p.variant % VC;
+      counts.set(v, (counts.get(v) ?? 0) + 1);
+    }
+    const m = new THREE.Matrix4();
+    const e = new THREE.Euler();
+    const q = new THREE.Quaternion();
+    const vp = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    const group = new THREE.Group();
+    group.name = `props:${def.key}`;
+    const fill = (mesh: THREE.InstancedMesh, variant: number): void => {
+      let idx = 0;
+      for (const p of instances) {
+        if (p.variant % VC !== variant) continue;
+        e.set(0, p.rotY, 0);
+        q.setFromEuler(e);
+        vp.set(p.x, p.y, p.z);
+        const yScale = 0.85 + 0.15 * ((p.variant % VC) / VC);
+        s.set(p.scale, p.scale * yScale, p.scale);
+        m.compose(vp, q, s);
+        mesh.setMatrixAt(idx++, m);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      // ★ 实例化包围球：默认只按基几何算 → 实例远离原点会被错误视锥剔除（花草/晶体边缘消失）
+      mesh.computeBoundingSphere();
+    };
+    for (const [variant, n] of counts) {
+      const { geo, mat } = getSharedRock(matKey, type, params, variant);
+      const mesh = new THREE.InstancedMesh(geo, mat, n);
+      mesh.name = `${def.key}|v${variant}`;
+      fill(mesh, variant);
+      group.add(mesh);
+    }
+    return group;
+  },
+  dispose(): void {
+    // ★ 仅此处（模式退出）释放共享几何/材质；chunk 重建不得释放
+    for (const geo of SHARED_GEO.values()) geo.dispose();
+    for (const mat of SHARED_MAT.values()) mat.dispose();
+    SHARED_GEO.clear();
+    SHARED_MAT.clear();
+  },
+});
+
+/** 模式退出时释放所有装饰渲染器的共享资源（仅调用一次） */
+export function disposePropRenderers(): void {
+  for (const r of RENDERERS.values()) r.dispose?.();
+}
+
+// ============================================================
+// 宿主接口（模式层适配：EntityManager → rapier；本层不碰 entity）
+// ============================================================
+
+/**
+ * 地面/装饰物刚体宿主接口。
+ * chunk 的碰撞体必须进实体/物理体系（碰撞分发按 userData=id 找实体），
+ * 由模式层注入两个回调即可。
+ */
+export interface ChunkGroundHost {
+  /** 为 chunk 创建 fixed trimesh 地面刚体，返回可销毁的 id */
+  createGround(cx: number, cz: number, vertices: Float32Array, indices: Uint32Array): number;
+  destroyGround(id: number): void;
+  /** 为装饰实体创建 fixed cuboid 碰撞体（世界坐标；返回可销毁的 id，null=不支持） */
+  createPropBody?(x: number, y: number, z: number, r: number, h: number): number | null;
+  /** ★ 分区地面：每 chunk 一个刚体 + grid×grid 个 trimesh 分区 collider（全部同步建） */
+  createGroundCells?(cx: number, cz: number, cells: GroundCellGeom[]): number | null;
+  /** ★ 挖坑增量：只原位换受影响分区的 collider（O(受影响分区)，不重建整 chunk） */
+  updateGroundCell?(id: number, slot: number, vertices: Float32Array, indices: Uint32Array): void;
+  /** ★ 停用/恢复刚体（远处 chunk 封存：停用 = 不参与模拟、保留句柄；回程瞬间恢复） */
+  setBodyEnabled?(id: number, enabled: boolean): void;
+}
+
+/** ★ 地面分区 trimesh（slot = pcz*grid+pcx；每分区含若干 4m 块） */
+export interface GroundCellGeom {
+  slot: number;
+  vertices: Float32Array;
+  indices: Uint32Array;
+}

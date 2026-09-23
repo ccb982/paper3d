@@ -1,0 +1,120 @@
+// ============================================================
+// CollectibleProps.ts —— 可采集植被（草丛/花丛/浆果丛/小树）
+// ============================================================
+// 2026-09-14 新增：地图里的采集元素。
+//   · 声明走 MapEntityDecorBase 既有管线（planChunkProps 确定性散布 +
+//     buildPropLayer 实例化渲染）——注册即自动接入 chunk 加载/卸载/挖坑重贴。
+//   · ★ 全部无 physics：不建 rapier 刚体、不进 StaticObstacleRegistry；
+//     可查询性由 ChunkManager.createDecorColliders 的"全量 propRegistry 登记"提供。
+//   · 采集交互（E 键）见 WorldMode.nearbyCollectible：就近查询 → 入包 + 标记已采。
+//   · 掉落表（COLLECTIBLE_DROPS）是唯一内容出口：加新采集物 = 注册 + 加一行。
+//
+// 密度口径（2026-09-14 修正后）：出现判定按【本格可用池】的 perCellProb 求和，
+// 抽中谁按各自 perCellProb 加权 → 每种装饰的期望密度 = 自身 perCellProb。
+// 花草只长在 ground 角色，晶簇 ground+platform 兼得 → 晶簇出现率不受花草影响
+// （高台格可用池只有晶簇 → 仍为 0.5%/格，与加花草前完全一致）。
+// 本文件总密度 ≈ 0.103/ground 格 → 平均每 chunk 约 40 株植被。
+// ============================================================
+
+import { FOUNDATION_PROP_GROUP, MapEntityDecorBase, registerMapDecor } from './MapEntityDecorBase';
+
+/** 采集掉落：itemId + 数量区间（采集时掷）
+ *  cap —— 每株可被采收的总次数（E 键 / 子弹命中共享）；到 0 → 株消失（走已采标记）。
+ *  cooldown —— 同株相邻两次产出最小间隔（秒；防自动接触 E / 快枪一帧抽干整株）。 */
+export interface CollectibleDrop {
+  itemId: string;
+  min: number;
+  max: number;
+  cap: number;
+  cooldown?: number;
+}
+
+/** 采集物显示名（提示文案用） */
+export const COLLECTIBLE_LABELS: Record<string, string> = {
+  herb_grass: '药草丛',
+  flower_bloom: '野花',
+  berry_bush: '浆果丛',
+  young_tree: '小树',
+};
+
+/** 采集掉落表（key → 产出）
+ *  cap：每株采收次数上限（0 = 不可采）。cooldown 缺省 0.35s。 */
+export const COLLECTIBLE_DROPS: Record<string, CollectibleDrop> = {
+  herb_grass: { itemId: 'herb', min: 1, max: 2, cap: 3, cooldown: 0.35 },
+  flower_bloom: { itemId: 'flower', min: 1, max: 1, cap: 2, cooldown: 0.35 },
+  berry_bush: { itemId: 'berry', min: 1, max: 2, cap: 3, cooldown: 0.35 },
+  young_tree: { itemId: 'wood', min: 1, max: 3, cap: 4, cooldown: 0.45 },
+};
+
+export function isCollectibleKey(key: string): boolean {
+  return key in COLLECTIBLE_DROPS;
+}
+
+export function collectibleDropOf(key: string): CollectibleDrop | null {
+  return COLLECTIBLE_DROPS[key] ?? null;
+}
+
+/** ★ 每株采收次数上限（查询用；无记录 = 不可采，保守返回 0） */
+export function collectibleCapOf(key: string): number {
+  return COLLECTIBLE_DROPS[key]?.cap ?? 0;
+}
+
+export function collectibleLabelOf(key: string): string {
+  return COLLECTIBLE_LABELS[key] ?? key;
+}
+
+// ============================================================
+// 植被声明（全部 foundation 组 = 任意风格 chunk 都可出现；只长在地面角色）
+// ============================================================
+
+/** 药草丛：最常见，低矮细叶 */
+registerMapDecor(new MapEntityDecorBase({
+  key: 'herb_grass', label: '药草丛', groups: [FOUNDATION_PROP_GROUP],
+  placement: {
+    hostRole: ['ground'], perCellProb: 0.050,
+    scaleRange: [0.8, 1.5], sinkRange: [0.02, 0.06],
+  },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.4 } },
+  lod: true,
+}));
+
+/** 野花：花茎 + 彩色花冠（图集 4 帧，每实例抽一帧） */
+registerMapDecor(new MapEntityDecorBase({
+  key: 'flower_bloom', label: '野花', groups: [FOUNDATION_PROP_GROUP],
+  placement: {
+    hostRole: ['ground'], perCellProb: 0.030,
+    scaleRange: [0.8, 1.25], sinkRange: [0.02, 0.05],
+  },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.2 } },
+  lod: true,
+}));
+
+/** 浆果丛：低矮叶球 + 红果 */
+registerMapDecor(new MapEntityDecorBase({
+  key: 'berry_bush', label: '浆果丛', groups: [FOUNDATION_PROP_GROUP],
+  placement: {
+    hostRole: ['ground'], perCellProb: 0.015,
+    scaleRange: [0.9, 1.4], sinkRange: [0.03, 0.08],
+  },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 1.8 } },
+  lod: true,
+}));
+
+/** 小树：稀疏，地标感 */
+registerMapDecor(new MapEntityDecorBase({
+  key: 'young_tree', label: '小树', groups: [FOUNDATION_PROP_GROUP],
+  placement: {
+    hostRole: ['ground'], perCellProb: 0.008,
+    scaleRange: [0.9, 1.6], sinkRange: [0.04, 0.10],
+  },
+  render: 'plant', shadow: 'none',
+  variantCount: 4,
+  geometry: { type: 'plant', params: { size: 4.8, groundSink: 0.1 } },
+  lod: true,
+}));

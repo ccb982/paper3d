@@ -1,0 +1,43 @@
+{
+ "kept": [
+  "import { FtxAsset } from '../../vendor/player/FtxAsset';",
+  "import { EnemyBase } from '../../entity/EnemyBase';",
+  "import { DroneEntity } from '../../entity/DroneEntity';",
+  "import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';",
+  "import { LOD_MAX_DIST } from '../../services/lod';",
+  "import { ROCK_BUG_AI, REUNION_AI, LAOJIE_AI, BOSS_AI } from '../../systems/ai/aiconfig';",
+  "import { SwarmSystem, SWARM, type SwarmHooks } from '../../systems/swarm/SwarmSystem';",
+  "import { Director, INTENT_NONE, INTENT_SHIP, type DirectorHooks, type SpawnOrder } from '../../systems/swarm/Director';",
+  "import { AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot } from '../../systems/swarm/AgentPool';",
+  "import { RELIC_ITEM_CONFIG } from '../../config/relics';"
+ ],
+ "types": {
+  "enemies": null,
+  "enemyDefs": null,
+  "mobDefs": "MobDef[]",
+  "bossEntity": "EnemyBase | null",
+  "bossRun": null,
+  "threat": "ThreatProfile | null",
+  "spawnChunkKey": null,
+  "scalingInputs": null,
+  "enemyScale": "EnemyScale",
+  "groupWarnAccum": null,
+  "groupWarnShown": null,
+  "player": null,
+  "ship": null,
+  "entities": null,
+  "swarm": null,
+  "swarmDirector": null,
+  "chunks": "ChunkManager",
+  "raster": "RasterMap",
+  "session": "GameSession | null",
+  "scene": "THREE.Scene | null",
+  "camera": "THREE.PerspectiveCamera | null",
+  "drones": "DroneEntity[]",
+  "worldUIManager": "WorldUIManager",
+  "testChunk": null,
+  "shipDestroyed": null,
+  "bossAsset": "FtxAsset | Asset | null"
+ },
+ "sig": "private showFloatingAt(x: number, y: number, z: number, text: string, type: 'normal' | 'crit' | 'heal' | 'miss' | 'pickup'): void {"
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RTS</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b1016; }
+      canvas { display: block; }
+      #hud {
+        position: fixed; left: 10px; top: 10px; z-index: 10;
+        color: #cfe3ee; font: 12px/1.6 ui-monospace, Consolas, monospace;
+        background: rgba(10, 16, 22, .65); border: 1px solid rgba(120, 170, 200, .25);
+        border-radius: 6px; padding: 8px 10px; pointer-events: none; white-space: pre;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">RTS 地形骨架
+WASD/方向键 平移 · 滚轮 缩放 · 拖拽 平移 · Shift+拖拽 旋转/俯仰 · [ ] 俯仰</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

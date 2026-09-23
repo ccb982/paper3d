@@ -1,0 +1,317 @@
+// ============================================================
+// SquadTable —— 小队注册表 + 队长 + 状态评级（《实体架构.md》§5.5/§5.8 步骤 5/9）
+// ============================================================
+// 职责：
+//   · 生成时按“同质就近”分配小队（一队一兵种，上限 12；Boss 单例后续由 squadMode 接入）
+//   · 队长唯一：首员即队长；队长阵亡/回收 → 本队接任（最新情报 > 血量 > 靠队心）
+//   · 成员信息（hp/位置/目击）低频同步；**状态评级以血量为主要因素**
+//   · 阵亡：单人只下调评分（不改事件）；**只有全灭才上报**（一次，随后注销）
+// 说明：本表只做数据/选举/评级，不含战术；战术（SquadTactics）后续消费评级。
+// ============================================================
+
+import type { UnitRole } from '../../entity/SwarmUnit';
+import { type SquadType, squadTypeOf } from '../../entity/SwarmUnit';
+
+// 契约层已上移：本文件保留再导出（兼容旧引用）
+export { type SquadType, squadTypeOf };
+
+/** 小队容量上限（同质编队 4~12；《敌人管线设计.md》§3.1） */
+export const SQUAD_MAX = 12;
+/** ★ §13.3：工兵小队上限（每队 3 工兵足够；多了拆新队 = 分区多线程） */
+export const BUILDER_SQUAD_MAX = 3;
+/** 就近并入半径（米）：同质小队质心超出此距离 → 新建 */
+export const SQUAD_JOIN_R = 30;
+
+/** 评级参数（2026-09-19 用户定调：评级主要与队内血量有关） */
+export const RATING = {
+  /** 残血线：全队血量比低于此值 → 无力再战（必须回撤；总攻期由战术层改为“靠后站”） */
+  RETREAT_HP_RATIO: 0.3,
+  /** 崩溃线：低于此值 → broken（基本丧失战力） */
+  BROKEN_HP_RATIO: 0.12,
+  /** 每次阵亡对士气的扣减 */
+  CASUALTY_MORALE_PENALTY: 0.08,
+} as const;
+
+interface MemberInfo {
+  hp: number;
+  maxHp: number;
+  x: number;
+  z: number;
+  /** 最后目击玩家时间（秒；0 = 无情报；步骤 9 通信接线填值） */
+  lastSeenAt: number;
+}
+
+export interface Squad {
+  id: number;
+  /** ★ 同质编队：一队一兵种（mobIndex） */
+  mobKind: number;
+  /** 大编队（当前 = 小队自身；大队合并后续做） */
+  battalionId: number;
+  leaderUid: number;
+  type: SquadType;
+  members: Map<number, MemberInfo>;
+  /** 累计阵亡数（士气扣减用；单人不外报） */
+  casualties: number;
+  /** ★ 步骤 10：小队警觉截止（被击 → 全队免降格/免回收） */
+  alertUntil: number;
+  /** ★ 自爆小队（首员标签决定；队长策略走冲锋档） */
+  suicide: boolean;
+  /** ★ 施工小队（成员具备施工能力；与类型解耦（2026-09-20）） */
+  builders: boolean;
+  /** ★ 单例编制（1 单位 1 小队；不接收同伴也不并入别队） */
+  singleton: boolean;
+}
+
+export interface LeaderChange {
+  uid: number;
+  isLeader: boolean;
+}
+
+/** 小队状态评级（引擎侧信息面；《敌人管线设计.md》§3.5 BattalionView） */
+export interface SquadRating {
+  squadId: number;
+  battalionId: number;
+  at: number;
+  type: SquadType;
+  /** 综合评级 0~1（血量为主） */
+  grade: number;
+  /** ★ 评级主因：全队血量比（Σhp / ΣmaxHp） */
+  hpRatio: number;
+  /** 战力（人数 × 血量比） */
+  power: number;
+  /** 士气/压力（血量比 − 阵亡扣减） */
+  morale: number;
+  status: 'idle' | 'contact' | 'pursuing' | 'retreating' | 'broken';
+  cx: number; cz: number; heading: number;
+  lastSeenX?: number; lastSeenZ?: number; lastSeenAt?: number;
+  threats: number;
+  /** 存活人数（0 = 已全灭 → 小队已注销，不会出现在评级表） */
+  alive: number;
+}
+
+export class SquadTable {
+  private squads = new Map<number, Squad>();
+  private ofUid = new Map<number, number>();
+  private nextId = 1;
+
+  get size(): number { return this.squads.size; }
+
+  get(id: number): Squad | null {
+    return this.squads.get(id) ?? null;
+  }
+
+  /** 生成时分配：**同兵种同属性**就近并入（< SQUAD_MAX），否则新建；首员即队长 */
+  assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false, singleton = false, canBuild = false): Squad {
+    const existing = this.ofUid.get(uid);
+    if (existing !== undefined) return this.squads.get(existing)!;
+    const type = squadTypeOf(role);
+    if (singleton) return this.create(type, mobKind, suicide, true, canBuild);
+    let best: Squad | null = null;
+    let bestD2 = SQUAD_JOIN_R * SQUAD_JOIN_R;
+    for (const s of this.squads.values()) {
+      if (s.singleton) continue;
+      const cap = canBuild ? BUILDER_SQUAD_MAX : SQUAD_MAX;
+      if (s.type !== type || s.mobKind !== mobKind || s.builders !== canBuild || s.members.size >= cap) continue;
+      const c = this.centroid(s);
+      const d2 = (c.x - x) * (c.x - x) + (c.z - z) * (c.z - z);
+      if (d2 < bestD2) { bestD2 = d2; best = s; }
+    }
+    const squad = best ?? this.create(type, mobKind, suicide, false, canBuild);
+    squad.members.set(uid, { hp: 0, maxHp: 0, x, z, lastSeenAt: 0 });
+    this.ofUid.set(uid, squad.id);
+    if (squad.leaderUid === 0) squad.leaderUid = uid;
+    return squad;
+  }
+
+  /** 降格回池兜底：按快照里的原 squadId 重建归属（表丢失/跨模式时用） */
+  adopt(uid: number, squadId: number, battalionId: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false, singleton = false, canBuild = false): Squad {
+    const existing = this.ofUid.get(uid);
+    if (existing !== undefined) return this.squads.get(existing)!;
+    let squad = this.squads.get(squadId);
+    if (!squad) {
+      squad = { id: squadId, battalionId, mobKind, leaderUid: 0, type: squadTypeOf(role), members: new Map(), casualties: 0, alertUntil: 0, suicide, builders: canBuild, singleton };
+      this.squads.set(squadId, squad);
+      if (squadId >= this.nextId) this.nextId = squadId + 1;
+    }
+    squad.members.set(uid, { hp: 0, maxHp: 0, x, z, lastSeenAt: 0 });
+    this.ofUid.set(uid, squad.id);
+    if (squad.leaderUid === 0) squad.leaderUid = uid;
+    return squad;
+  }
+
+  /** ★ 小队重组（§4.6）：把 uid 从原队移入 toSquad——**不触发"全灭上报"**（那不是伤亡）；
+   *  原队空了直接注销；队长空缺按选举补齐。返回队长变更供模式层镜像。 */
+  mergeMember(uid: number, toSquad: Squad): { from: number; leaderChanges: LeaderChange[] } | null {
+    const from = this.squadOf(uid);
+    if (!from || from.id === toSquad.id) return null;
+    from.members.delete(uid);
+    this.ofUid.set(uid, toSquad.id);
+    toSquad.members.set(uid, { hp: 0, maxHp: 0, x: 0, z: 0, lastSeenAt: 0 });
+    const leaderChanges: LeaderChange[] = [];
+    if (from.members.size === 0) {
+      this.squads.delete(from.id);
+      if (from.leaderUid === uid) leaderChanges.push({ uid, isLeader: false });
+    } else if (from.leaderUid === uid) {
+      leaderChanges.push({ uid, isLeader: false });
+      from.leaderUid = this.electLeader(from);
+      leaderChanges.push({ uid: from.leaderUid, isLeader: true });
+    }
+    if (toSquad.leaderUid === 0) {
+      toSquad.leaderUid = uid;
+      leaderChanges.push({ uid, isLeader: true });
+    }
+    return { from: from.id, leaderChanges };
+  }
+
+  /** 成员信息低频同步（hp/位置/目击；选举与评级用） */
+  syncMember(uid: number, hp: number, maxHp: number, x: number, z: number, lastSeenAt: number): void {
+    const m = this.squadOf(uid)?.members.get(uid);
+    if (!m) return;
+    m.hp = hp; m.maxHp = maxHp; m.x = x; m.z = z;
+    if (lastSeenAt > m.lastSeenAt) m.lastSeenAt = lastSeenAt;
+  }
+
+  /** 移除成员（阵亡 killed=true / 回收 killed=false）；队长空缺 → 本队接任；
+   *  返回 wiped=true 表示**全灭**（唯一需要上报的阵亡事件） */
+  remove(uid: number, killed = false): { squadId: number; changes: LeaderChange[]; wiped: boolean } | null {
+    const squad = this.squadOf(uid);
+    if (!squad) return null;
+    squad.members.delete(uid);
+    this.ofUid.delete(uid);
+    if (killed) squad.casualties++;   // ★ 单人阵亡：只下调评分（不改事件）
+    const changes: LeaderChange[] = [];
+    if (squad.members.size === 0) {
+      this.squads.delete(squad.id);
+      if (squad.leaderUid === uid) changes.push({ uid, isLeader: false });
+      return { squadId: squad.id, changes, wiped: true };
+    }
+    if (squad.leaderUid === uid) {
+      changes.push({ uid, isLeader: false });
+      squad.leaderUid = this.electLeader(squad);
+      changes.push({ uid: squad.leaderUid, isLeader: true });
+    }
+    return { squadId: squad.id, changes, wiped: false };
+  }
+
+  /** ★ 状态评级（血量为主；全灭的小队已注销，不会出现在这里） */
+  ratingOf(squadId: number, now: number): SquadRating | null {
+    const squad = this.squads.get(squadId);
+    if (!squad || squad.members.size === 0) return null;
+    let hp = 0, maxHp = 0;
+    for (const m of squad.members.values()) { hp += m.hp; maxHp += m.maxHp; }
+    const hpRatio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 0;
+    const alive = squad.members.size;
+    const morale = Math.max(0, Math.min(1, hpRatio - squad.casualties * RATING.CASUALTY_MORALE_PENALTY));
+    const status: SquadRating['status'] =
+      hpRatio <= RATING.BROKEN_HP_RATIO ? 'broken'
+      : hpRatio <= RATING.RETREAT_HP_RATIO ? 'retreating'
+      : 'idle';
+    const c = this.centroid(squad);
+    // 目击情报（全队最新）
+    let lastSeenAt = 0, lsx: number | undefined, lsz: number | undefined;
+    for (const m of squad.members.values()) {
+      if (m.lastSeenAt > lastSeenAt) { lastSeenAt = m.lastSeenAt; lsx = m.x; lsz = m.z; }
+    }
+    // ★ 步骤 9e：threats = 近期目击的成员数（≤3s；黑板摘要的最小实现）
+    let threats = 0;
+    for (const m of squad.members.values()) {
+      if (m.lastSeenAt > 0 && now - m.lastSeenAt <= 3) threats++;
+    }
+    const rating: SquadRating = {
+      squadId: squad.id,
+      battalionId: squad.battalionId,
+      at: now,
+      type: squad.type,
+      grade: hpRatio * 0.7 + morale * 0.3,   // ★ 血量为主（士气同源）
+      hpRatio,
+      power: alive * hpRatio,
+      morale,
+      status,
+      cx: c.x, cz: c.z, heading: 0,
+      threats,
+      alive,
+    };
+    if (lastSeenAt > 0) { rating.lastSeenX = lsx; rating.lastSeenZ = lsz; rating.lastSeenAt = lastSeenAt; }
+    return rating;
+  }
+
+  /** 全部小队评级（引擎侧 BattalionView 的 squads 面） */
+  ratings(now: number): SquadRating[] {
+    const out: SquadRating[] = [];
+    for (const s of this.squads.values()) {
+      const r = this.ratingOf(s.id, now);
+      if (r) out.push(r);
+    }
+    return out;
+  }
+
+  /** 选举：最新情报 > 血量 > 靠队心（《实体架构.md》§5.5） */
+  private electLeader(squad: Squad): number {
+    const c = this.centroid(squad);
+    let bestUid = 0;
+    let bestScore = -Infinity;
+    for (const [uid, m] of squad.members) {
+      const hasIntel = m.lastSeenAt > 0 ? 1 : 0;
+      const d2 = (m.x - c.x) * (m.x - c.x) + (m.z - c.z) * (m.z - c.z);
+      const score = hasIntel * 1e6 + m.hp * 100 - d2;
+      if (score > bestScore) { bestScore = score; bestUid = uid; }
+    }
+    return bestUid;
+  }
+
+  private centroid(squad: Squad): { x: number; z: number } {
+    let x = 0, z = 0, n = 0;
+    for (const m of squad.members.values()) { x += m.x; z += m.z; n++; }
+    return n > 0 ? { x: x / n, z: z / n } : { x: 0, z: 0 };
+  }
+
+  private create(type: SquadType, mobKind: number, suicide = false, singleton = false, builders = false): Squad {
+    const id = this.nextId++;
+    const squad: Squad = { id, battalionId: id, mobKind, leaderUid: 0, type, members: new Map(), casualties: 0, alertUntil: 0, suicide, builders, singleton };
+    this.squads.set(id, squad);
+    return squad;
+  }
+
+  squadOf(uid: number): Squad | null {
+    const id = this.ofUid.get(uid);
+    return id !== undefined ? this.squads.get(id) ?? null : null;
+  }
+
+  isLeader(uid: number): boolean {
+    return this.squadOf(uid)?.leaderUid === uid;
+  }
+
+  leaderUidOf(uid: number): number {
+    return this.squadOf(uid)?.leaderUid ?? 0;
+  }
+
+  /** ★ 步骤 10：小队警觉（被击传播；全队免降格/免回收） */
+  alert(squadId: number, until: number): void {
+    const s = this.squads.get(squadId);
+    if (s && until > s.alertUntil) s.alertUntil = until;
+  }
+
+  /** ★ 步骤 10：小队是否警觉中 */
+  isAlerted(squadId: number, now: number): boolean {
+    const s = this.squads.get(squadId);
+    return !!s && s.alertUntil > now;
+  }
+
+  /** ★ E4a：队质心写入 out（编队 steer 的本地坐标系基准；零分配） */
+  centroidOf(squadId: number, out: { x: number; z: number }): boolean {
+    const squad = this.squads.get(squadId);
+    if (!squad || squad.members.size === 0) return false;
+    const c = this.centroid(squad);
+    out.x = c.x;
+    out.z = c.z;
+    return true;
+  }
+
+  all(): IterableIterator<Squad> { return this.squads.values(); }
+
+  clear(): void {
+    this.squads.clear();
+    this.ofUid.clear();
+    this.nextId = 1;
+  }
+}

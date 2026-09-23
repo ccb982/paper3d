@@ -1,0 +1,839 @@
+// ============================================================
+// RasterMap —— 光栅化地图（统一空间层，架构 3.10 / 3.8）
+// ============================================================
+// ★ 无限扩张地图（chunk 流式，块状地形）：
+//   - chunk 60×60 米，初始 3×3，玩家移动驱动扩张（updateChunks）
+//   - 地形：chunk → ChunkData（heights/blockTypes/blockHeight/walkable）
+//   - 实体索引：cellKey 全局编码（无限）→ 查询跨 chunk 无界
+//   - 回收：数据环外 + UNLOAD_MARGIN 距离卸载（evictFarChunks，防长距离跑图内存无界）；
+//     被挖过的 levels 入持久层（回程恢复、坑不愈合）；clearAll() 天结束统一回收
+// 消费方：Minimap（地形/黑雾数据）、EntityManager（实体索引/梯形剔除）、
+//         WorldMode（玩家驱动加载 + 地面刚体/视觉网格）
+// ★ 结构上满足 ChunkAppearance.TerrainBakeSource 烘焙契约
+//   （heightAt/surfaceHeightAt/tileDefAt/worldSeed）——外观烘焙经
+//   该窄接口消费本类，依赖倒置，勿在烘焙器内反向耦合本类。
+
+import type { EntityBase } from "../../entity/EntityBase";
+import * as THREE from "three";
+import { tileById, type TileDef } from "./Tiles";
+import { generateChunk, type ChunkData, CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
+import {
+  makeChunkSource,
+  refineChunkSource,
+  sampleSurface,
+  type BlockSource,
+} from "./Refinements";
+import { envelopeLevelAt, PATCH_DEPTH } from "./FaceBuild";
+import { planPlatformAprons, apronBandHeightAt, type ApronEdge } from "./decor/PlatformApron";
+import { planCementPlinths, cementPlinthHeightAt, type CementPlinthTile } from "./decor/CementPlinth";
+
+/** chunkKey（负数安全偏移编码） */
+export function chunkKeyOf(cx: number, cz: number): number {
+  return (cx + 4096) * 8192 + (cz + 4096);
+}
+
+/** 全局 cellKey（1m cell，世界坐标无限；±1e7 范围）——Minimap 黑雾等外部复用 */
+export function cellKeyOf(x: number, z: number): number {
+  return (x + 1e7) * 2e7 + (z + 1e7);
+}
+
+/** ★ 格键 → 世界格坐标（cellKeyOf 的唯一逆运算；持久化稀疏格还原必须用它） */
+export function cellKeyToXZ(k: number): { x: number; z: number } {
+  const z = (k % 2e7) - 1e7;
+  const x = Math.floor(k / 2e7) - 1e7;
+  return { x, z };
+}
+
+export class RasterMap {
+  /** 地形 chunk：chunkKey → ChunkData（块状地形：平地/高台/坑洞） */
+  private chunks = new Map<number, ChunkData>();
+  /** 实体索引：cellKey（全局）→ 实体集合 */
+  private cells = new Map<number, Set<EntityBase>>();
+  /** 实体当前 cell（移块判定） */
+  private cellOf = new Map<EntityBase, number>();
+  /** 玩家所在 chunk（扩张判定缓存） */
+  private lastPcx = 0;
+  private lastPcz = 0;
+  /** ★ per-chunk 精修源缓存（chunkKey → BlockSource）：planRefinements 现
+   *   非空（30% 大落差产坡）→ 每 chunk 只算一次意图，surfaceHeightAt 高频
+   *   采样（角色脚底/影子/烘焙逐顶点）不再逐点重跑 O(225×4) 计划。 */
+  private chunkSourceCache = new Map<number, BlockSource>();
+  /** ★ 围裙周界边计划缓存（chunkKey → ApronEdge[]/null；弹坑挖掘会改基面
+   *   高度影响坡面拒绝判定 → digCells 时对本 chunk+4 邻失效重算） */
+  private apronEdgeCache = new Map<number, ApronEdge[] | null>();
+  /** ★ 水泥台座块计划缓存（chunkKey → CementPlinthTile[]/null；纯块类型+哈希
+   *   决定，不依赖基面高度 → 挖掘无需失效，仅 clearAll 清空） */
+  private plinthTileCache = new Map<number, CementPlinthTile[] | null>();
+  /** ★ 挖坑层数持久层（2026-09-12）：chunk 数据按距离卸载后，被运行时挖过的
+   *  层数在此保留（3.6KB/chunk，仅脏块入表）；回程再加载时原样恢复（坑不愈合）。 */
+  private levelsStore = new Map<number, Uint8Array>();
+  /** ★ 地形记录表（小地图/大地图用）：已生成 chunk 的 blockTypes 快照（225B/块）。
+   *  chunk 视觉/物理/烘焙照常卸载，此表不卸载 → 地图可回放；
+   *  颜色由 tileById 派生（与地形同源）→ 地图永远和生成数据一致。 */
+  private mapRecords = new Map<number, Uint8Array>();
+  /** 被运行时挖过的 chunk（evict 时把 levels 移入 levelsStore） */
+  private dirtyLevelKeys = new Set<number>();
+  /** ★ 采集物已采状态（2026-09-14）：chunkKey → 已采装饰序号集合。
+   *  生存期 = 本次出击（RasterMap 实例）；跨 chunk 卸载保留（回程不复活），
+   *  clearAll（换天/世界重建）清空。序号 = planChunkProps 输出数组下标
+   *  （确定性重算 → 卸载重载后同一株仍是同一下标）。 */
+  private harvestedStore = new Map<number, Set<number>>();
+  /** ★ 采集次数（2026-09-14 采集上限）：chunkKey → 装饰序号 → 已采收次数。
+   *  与 harvestedStore 同生命周期；次数达株 cap 时由 ChunkManager 标记已采消失。 */
+  private propHarvestCounts = new Map<number, Map<number, number>>();
+  /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
+  private static readonly UNLOAD_MARGIN = 2;
+  /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
+  private static readonly DATA_LOAD_PER_FRAME = 6;
+  /** ★ 数据加载前向加权（归一化投影；前向最多提前 ~1.5 环，环距仍是第一序） */
+  private static readonly DATA_FORWARD_BONUS = 1.5;
+  /** 待加载清单（跨 chunk 时重建；逐帧预算消化） */
+  private pendingLoads: { cx: number; cz: number }[] = [];
+  /** 上次排序所用移动方向（中途掉头时对剩余清单重排） */
+  private loadSortX = 0;
+  private loadSortZ = 0;
+  /** 首次调用标记（★ 构造不预生成 chunk——初始 3×3 由首次 updateChunks 统一生成，
+   *   否则预生成的数据不会进入"新增列表"，对应刚体/网格永不创建） */
+  private initialized = false;
+
+  static current: RasterMap | null = null;
+  constructor(private seed = 12345) {
+    RasterMap.current = this;
+    // 初始不预生成：首次 updateChunks（syncChunks）统一生成 3×3（加载半径 2）
+  }
+
+  /** 世界种子（外观 canvas 烘焙的噪声用；同 seed 同地形 → 装饰/噪声也一致） */
+  get worldSeed(): number {
+    return this.seed;
+  }
+
+  // ============ chunk 加载（玩家驱动扩张） ============
+
+  /** 确保单个 chunk 存在（块状地形生成，确定性；挖过的层数从持久层恢复） */
+  private ensureChunk(cx: number, cz: number): void {
+    const key = chunkKeyOf(cx, cz);
+    if (this.chunks.has(key)) return;
+    const cd = generateChunk(this.seed, cx, cz);
+    const lv = this.levelsStore.get(key);
+    if (lv) cd.levels = lv; // ★ 回程恢复挖坑层数（坑不愈合）
+    this.chunks.set(key, cd);
+  }
+
+  /** ★ 距离卸载：数据环外（radius + UNLOAD_MARGIN）释放 chunk 数据，防长距离跑图内存无界增长；
+   *  被挖过的 chunk 先把 levels 移入持久层（回程原样恢复），纯生成块直接丢弃（确定性重生成）。 */
+  private evictFarChunks(
+    pcx: number, pcz: number, keepRadius: number,
+    fwdRadius = 0, nx = 0, nz = 0,
+  ): void {
+    for (const [key, cd] of this.chunks) {
+      const cz = (key % 8192) - 4096;
+      const cx = Math.floor(key / 8192) - 4096;
+      // ★ 前向延伸：锥内数据保留（航行期前方看更远）
+      if (RasterMap.inLoadRing(cx - pcx, cz - pcz, keepRadius, fwdRadius, nx, nz)) continue;
+      if (this.dirtyLevelKeys.has(key)) {
+        this.levelsStore.set(key, cd.levels);
+        this.dirtyLevelKeys.delete(key);
+      }
+      this.mapRecords.set(key, cd.blockTypes); // ★ 留地形记录（地图回放用）
+      this.chunks.delete(key);
+      this.chunkSourceCache.delete(key);
+      this.apronEdgeCache.delete(key);
+      this.plinthTileCache.delete(key);
+    }
+  }
+
+  /** ★ 玩家驱动加载：跨 chunk 时按加载半径扩张，返回本次新增 chunk 列表
+   *   （调用方据此建地面刚体/视觉网格）。加载半径 = 可视(1) + 预加载(1)
+   *  dirX/dirZ = 当前移动方向（可选）：方向上的块优先加载（前向加权） */
+  updateChunks(
+    px: number,
+    pz: number,
+    loadRadius = 2,
+    dirX = 0,
+    dirZ = 0,
+    /** ★ 前向延伸半径（航行期前方看更远；0 = 各向同环） */
+    fwdRadius = 0,
+  ): { cx: number; cz: number }[] {
+    const pcx = Math.floor(px / CHUNK_SIZE);
+    const pcz = Math.floor(pz / CHUNK_SIZE);
+    // 方向单位化（前向锥判定用）
+    const dl = Math.hypot(dirX, dirZ);
+    const nx = dl > 0.05 ? dirX / dl : 0;
+    const nz = dl > 0.05 ? dirZ / dl : 0;
+    const moved = !this.initialized || pcx !== this.lastPcx || pcz !== this.lastPcz;
+    if (moved) {
+      this.initialized = true; // ★ 首次强制加载（数据已就绪，同步刚体/网格）
+      this.lastPcx = pcx;
+      this.lastPcz = pcz;
+      // ★ 重建待加载清单（跨 chunk 一步可能缺 ~15 块 → 逐帧预算生成，防生成尖峰）
+      //   航行前向延伸：包围盒取 max(loadRadius, fwdRadius)，用锥形范围过滤
+      const R = Math.max(loadRadius, fwdRadius);
+      this.pendingLoads.length = 0;
+      for (let cx = pcx - R; cx <= pcx + R; cx++) {
+        for (let cz = pcz - R; cz <= pcz + R; cz++) {
+          if (!this.chunks.has(chunkKeyOf(cx, cz)) && RasterMap.inLoadRing(cx - pcx, cz - pcz, loadRadius, fwdRadius, nx, nz)) {
+            this.pendingLoads.push({ cx, cz });
+          }
+        }
+      }
+      // ★ 距离卸载：环外数据释放（挖过的层数入持久层）——防长距离跑图内存无界增长
+      this.evictFarChunks(pcx, pcz, loadRadius + RasterMap.UNLOAD_MARGIN, fwdRadius, nx, nz);
+    }
+    // ★ 移动方向优先（用户定调）：环距为第一序（近处永远先于远处）、
+    //   归一化前向投影为第二序（同环内方向上的块提前、背面最后）；原地不偏。
+    //   ⚠️ 勿用原始投影加权（|投影| 可到 ±7）——会把"远前方"排到"近处"前面。
+    //   跨区重建时排；中途掉头（方向差 >0.3）对剩余清单重排；站立 → 回到纯环距序。
+    const turned = Math.abs(nx - this.loadSortX) + Math.abs(nz - this.loadSortZ) > 0.3;
+    if ((moved || turned) && this.pendingLoads.length > 1) {
+      this.loadSortX = nx;
+      this.loadSortZ = nz;
+      this.pendingLoads.sort((a, c) => RasterMap.loadScore(
+        a.cx - pcx, a.cz - pcz, nx, nz,
+      ) - RasterMap.loadScore(
+        c.cx - pcx, c.cz - pcz, nx, nz,
+      ));
+    }
+    if (this.pendingLoads.length === 0) return [];
+    // ★ 预算化消费待加载清单（返回本次真正新增，调用方据此接缝重建/构建）
+    const added: { cx: number; cz: number }[] = [];
+    let n = RasterMap.DATA_LOAD_PER_FRAME;
+    while (n-- > 0 && this.pendingLoads.length > 0) {
+      const c = this.pendingLoads.shift()!;
+      if (this.chunks.has(chunkKeyOf(c.cx, c.cz))) continue;
+      this.ensureChunk(c.cx, c.cz);
+      added.push(c);
+    }
+    return added;
+  }
+
+  /** ★ 加载环判定（各向异性）：基准方环 ±loadRadius；fwdRadius>0 时前方锥形延伸 */
+  private static inLoadRing(dx: number, dz: number, loadRadius: number, fwdRadius: number, nx: number, nz: number): boolean {
+    if (Math.max(Math.abs(dx), Math.abs(dz)) <= loadRadius) return true;
+    if (fwdRadius <= loadRadius) return false;
+    const fwd = dx * nx + dz * nz;
+    const lat = Math.abs(-dx * nz + dz * nx);
+    return fwd > 0 && fwd <= fwdRadius && lat <= loadRadius;
+  }
+
+  /** 数据加载评分（越小越先）：角色所在块绝对第一；否则环距 − 归一化前向投影 × 加权 */
+  private static loadScore(dx: number, dz: number, nx: number, nz: number): number {
+    if (dx === 0 && dz === 0) return -1e6;
+    const d = Math.max(Math.abs(dx), Math.abs(dz));
+    return d - ((dx * nx + dz * nz) / d) * RasterMap.DATA_FORWARD_BONUS;
+  }
+
+  /** ★ 天结束统一回收（世界重建；seed 确定性保证每天地形一致） */
+  clearAll(): void {
+    this.chunks.clear();
+    this.cells.clear();
+    this.cellOf.clear();
+    this.chunkSourceCache.clear();
+    this.apronEdgeCache.clear();
+    this.plinthTileCache.clear();
+    this.levelsStore.clear();      // ★ 挖坑层数随世界重建清空（与旧语义一致）
+    this.dirtyLevelKeys.clear();
+    this.mapRecords.clear();       // ★ 地形记录随世界重建清空
+    this.harvestedStore.clear();   // ★ 采集物已采状态随世界重建清空
+    this.propHarvestCounts.clear();// ★ 采集次数随世界重建清空（与已采标识同生命周期）
+    this.pendingLoads.length = 0;
+    this.initialized = false; // 重置强制标记（下次 updateChunks 重建全部）
+  }
+
+  // ============ ★ 世界状态持久化（2026-09-19） ============
+
+  /** ★ 导出世界持久化面（挖坑层数 + 地形记录）——供 WorldStateCache 持久化。
+   *  ★ 2026-09-19 重构：地形记录也存（大地图回放/已探索区域底图，不依赖 chunk 重载）。 */
+  exportPersistState(): {
+    levels: [number, Uint8Array][];
+    mapRecords: [number, Uint8Array][];
+  } {
+    const levels = new Map<number, Uint8Array>();
+    for (const [k, lv] of this.levelsStore) levels.set(k, lv);
+    for (const k of this.dirtyLevelKeys) {
+      const cd = this.chunks.get(k);
+      if (cd) levels.set(k, cd.levels);
+    }
+    // 地形记录：已卸载留档 + 当前在载 chunk 的 blockTypes（合并，键唯一）
+    const records = new Map<number, Uint8Array>();
+    for (const [k, bt] of this.mapRecords) records.set(k, bt);
+    for (const [k, cd] of this.chunks) records.set(k, cd.blockTypes);
+    return { levels: [...levels], mapRecords: [...records] };
+  }
+
+  /** ★ 导入持久化状态（进入世界、chunk 生成前调用）：挖过的坑不愈合 + 地形记录回放；
+   *  ★ 植被不导入（每天重建 → 资源可恢复，2026-09-19 用户定调） */
+  importPersistState(st: {
+    levels: [number, Uint8Array][];
+    mapRecords?: [number, Uint8Array][];
+    harvested?: [number, number[]][];
+    harvestCounts?: [number, [number, number][]][];
+  }): void {
+    for (const [k, lv] of st.levels) {
+      const copy = new Uint8Array(lv);
+      this.levelsStore.set(k, copy);
+      const cd = this.chunks.get(k);
+      if (cd) cd.levels = copy;   // 已加载块同步（正常在生成前调用，此处兜底）
+    }
+    if (st.mapRecords) for (const [k, bt] of st.mapRecords) this.mapRecords.set(k, new Uint8Array(bt)); // ★ 地形记录回放（2026-09-19 修复：原实现漏恢复 → 已探索区全画 flat 棕）
+    if (st.harvested) for (const [k, arr] of st.harvested) this.harvestedStore.set(k, new Set(arr));
+    if (st.harvestCounts) for (const [k, m] of st.harvestCounts) this.propHarvestCounts.set(k, new Map(m));
+  }
+
+  // ============ ★ 采集物已采状态（2026-09-14） ============
+
+  /** 该 chunk 是否有已采记录（快路径：无记录直接跳过过滤） */
+  hasHarvestedAt(cx: number, cz: number): boolean {
+    return this.harvestedStore.has(chunkKeyOf(cx, cz));
+  }
+
+  /** 该 chunk 第 index 个装饰是否已被采集 */
+  isPropHarvested(cx: number, cz: number, index: number): boolean {
+    return this.harvestedStore.get(chunkKeyOf(cx, cz))?.has(index) ?? false;
+  }
+
+  /** 标记采集（序号 = planChunkProps 输出下标） */
+  markPropHarvested(cx: number, cz: number, index: number): void {
+    const key = chunkKeyOf(cx, cz);
+    let set = this.harvestedStore.get(key);
+    if (!set) {
+      set = new Set<number>();
+      this.harvestedStore.set(key, set);
+    }
+    set.add(index);
+  }
+
+  // ============ ★ 采集次数（2026-09-14 · 采集上限） ============
+
+  /** 该株已被采收的次数（0 = 未采过） */
+  propHarvestCountAt(cx: number, cz: number, index: number): number {
+    return this.propHarvestCounts.get(chunkKeyOf(cx, cz))?.get(index) ?? 0;
+  }
+
+  /** 采收次数 +1（株在已采前可多次采收；幂等：重复调用安全累加） */
+  recordPropHarvest(cx: number, cz: number, index: number): void {
+    const key = chunkKeyOf(cx, cz);
+    let counts = this.propHarvestCounts.get(key);
+    if (!counts) {
+      counts = new Map<number, number>();
+      this.propHarvestCounts.set(key, counts);
+    }
+    counts.set(index, (counts.get(index) ?? 0) + 1);
+  }
+
+  // ============ 静态地形（无界采样） ============
+
+  /** 取 chunk 数据（视觉/物理生成用） */
+  getChunkData(cx: number, cz: number): ChunkData | undefined {
+    return this.chunks.get(chunkKeyOf(cx, cz));
+  }
+
+  /** ★ 确保地形数据存在（纯生成，不建视觉/物理；烘焙快照用）。
+   *  生成是确定性纯函数（~亚毫秒）——烘焙前把快照覆盖区数据补齐，
+   *  保证射线永不见"未加载=0"的假邻域 → 烘焙输出与加载顺序无关，
+   *  接缝重建不再需要重烘焙（只重建几何）。 */
+  ensureData(cx: number, cz: number): void {
+    this.ensureChunk(cx, cz);
+  }
+
+  /** 世界高度（格值，无 chunk = 0 占位） */
+  heightAt(x: number, z: number): number {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return 0;
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    return chunk.heights[lz * CHUNK_SIZE + lx] ?? 0;
+  }
+
+  /**
+   * ★ 视觉面一致采样（角色脚底/影子贴地）—— Refinements 唯一真源薄封装。
+   *   语义（2026-08-29 定稿，《地形与渲染管线架构.md》§3）：
+   *   查询点所在米格的四角按【块归属】取高（weld 角点 = 2×2 max 与旧公式
+   *   逐位一致；cliff 硬角点 = 本块自持高度）后三角形插值——与网格渲染
+   *   逐位一致。对角线 (lx,lz+1)-(lx+1,lz)，fx+fz≤1 取 T1；不能用双线性
+   *   （非平面格偏差可达米级 → 角色悬浮/影子切入地形，2026-08-26 实测）。
+   *   ★ 不含石围裙贡献（围裙叠加层见 surfaceHeightAt；围裙几何构建/
+   *   规划必须用本函数防自反馈）。
+   */
+  baseSurfaceHeightAt(x: number, z: number): number {
+    // ★ per-chunk 意图（§8 第四步）：渲染与查询同源 —— 采样按所在 chunk
+    //   应用同意图（chunkSource）；当前 planRefinements 恒空 → 透传。
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    // ★ §14.11 三端同源：渲染几何 / rapier trimesh / 玩法高度采样共读同一张
+    //   levels 覆盖层（包络场 u×D；角色脚底/贴地/clamp 落入坑内）
+    return sampleSurface(this.chunkSource(ccx, ccz), x, z) - this.levelDepthAt(x, z);
+  }
+
+  /**
+   * ★ 游戏贴地总入口 = 基面 + 结构件叠加层（石围裙带顶 + 水泥台座带顶，
+   *   用户 2026-09-06：结构件的参数也交给高度解析——墙裙/台座属于高台本身）。
+   * 角色贴地/台阶/clamp、影子、弹坑挖掘差分等全部经本函数；
+   * 围裙带顶 = 基面 + 0.35，台座带顶 = 基面 + 0.6（槽内 +0.4）
+   * → 角色可走上墙裙、站上台座（EDGE_CLIFF_BAND 压线判定由 CharacterBase 处理）。
+   */
+  surfaceHeightAt(x: number, z: number): number {
+    const base = this.baseSurfaceHeightAt(x, z);
+    const apron = this.apronHeightAt(x, z);
+    if (apron !== null) return apron;
+    const plinth = this.plinthHeightAt(x, z);
+    return plinth ?? base;
+  }
+
+  /** ★ 带"第二层"的贴地采样（2026-09-14 浮空洞顶 / "坑洞 + 顶板封顶"）：
+   *  格子上方有浮空岩板（caveCap）且实体当前高度接近/高于板顶 → 返回板顶；
+   *  否则返回地表（洞底）。角色/敌人贴地与危险探针用本函数——
+   *  在山上走不会掉进洞里；走到入口下坡（y 低于板顶 0.6 以上）后自然切回洞底。 */
+  surfaceHeightAtFor(x: number, z: number, y: number): number {
+    const base = this.surfaceHeightAt(x, z);
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const caps = this.chunks.get(chunkKeyOf(cx, cz))?.caveCap;
+    if (!caps) return base;
+    const bx = Math.max(0, Math.min(BLOCKS_PER_SIDE - 1, Math.floor((x - cx * CHUNK_SIZE) / BLOCK_SIZE)));
+    const bz = Math.max(0, Math.min(BLOCKS_PER_SIDE - 1, Math.floor((z - cz * CHUNK_SIZE) / BLOCK_SIZE)));
+    const cap = caps[bz * BLOCKS_PER_SIDE + bx];
+    if (Number.isFinite(cap) && y >= cap - 0.6) return Math.max(base, cap);
+    return base;
+  }
+
+  /** 水泥台座叠加层：查询点落在某棵台座的 4×4 块带内 → 带顶高度；否则 null */
+  private plinthHeightAt(x: number, z: number): number | null {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const tiles = this.plinthTilesOf(ccx, ccz);
+    if (!tiles) return null;
+    return cementPlinthHeightAt(tiles, x - ccx * CHUNK_SIZE, z - ccz * CHUNK_SIZE);
+  }
+
+  /** 本 chunk 台座块计划（惰性规划 + 缓存；无台座缓存 null 负缓存） */
+  private plinthTilesOf(cx: number, cz: number): CementPlinthTile[] | null {
+    const key = chunkKeyOf(cx, cz);
+    const hit = this.plinthTileCache.get(key);
+    if (hit !== undefined) return hit;
+    const data = this.chunks.get(key);
+    const tiles = data
+      ? planCementPlinths(cx, cz, this.seed, data.blockTypes,
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+      : null;
+    this.plinthTileCache.set(key, tiles);
+    return tiles;
+  }
+
+  /** 石围裙叠加层：查询点落在围裙石框带内 → 带顶高度；否则 null */
+  private apronHeightAt(x: number, z: number): number | null {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const edges = this.apronEdgesOf(ccx, ccz);
+    if (!edges) return null;
+    return apronBandHeightAt(
+      edges, x - ccx * CHUNK_SIZE, z - ccz * CHUNK_SIZE,
+      (lx, lz) => this.baseSurfaceHeightAt(ccx * CHUNK_SIZE + lx, ccz * CHUNK_SIZE + lz),
+    );
+  }
+
+  /** 本 chunk 围裙周界边计划（惰性规划 + 缓存；无围裙缓存 null 负缓存） */
+  private apronEdgesOf(cx: number, cz: number): ApronEdge[] | null {
+    const key = chunkKeyOf(cx, cz);
+    const hit = this.apronEdgeCache.get(key);
+    if (hit !== undefined) return hit;
+    const data = this.chunks.get(key);
+    const edges = data
+      ? planPlatformAprons(cx, cz, this.seed, data.blockTypes, this.blockKeyAtWorld,
+          (lx, lz) => this.baseSurfaceHeightAt(cx * CHUNK_SIZE + lx, cz * CHUNK_SIZE + lz))
+      : null;
+    this.apronEdgeCache.set(key, edges);
+    return edges;
+  }
+
+  /** 世界块坐标 → 地块 key（null = 邻 chunk 未加载；围裙跨 chunk 判定用） */
+  private blockKeyAtWorld = (wx: number, wz: number): string | null => {
+    const cx = Math.floor(wx / 15);
+    const cz = Math.floor(wz / 15);
+    const data = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!data) return null;
+    return tileById(data.blockTypes[(wz - cz * 15) * 15 + (wx - cx * 15)]).key;
+  };
+
+  // ============ ★ §14.11 补丁层数覆盖层（运行时唯一写者 = 子弹命中） ============
+
+  /** chunk 层数表（惰性确保存在；生成器恒 0） */
+  levelsOf(cx: number, cz: number): Uint8Array {
+    this.ensureChunk(cx, cz);
+    return this.chunks.get(chunkKeyOf(cx, cz))!.levels;
+  }
+
+  /** ★ 跨 chunk 层数查询（世界 1m cell 下标；未加载 = 0）——包络场/深度场跨 seam 连续 */
+  private levelAtWorld = (wx: number, wz: number): number => {
+    const ccx = Math.floor(wx / CHUNK_SIZE);
+    const ccz = Math.floor(wz / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return 0;
+    const lx = wx - ccx * CHUNK_SIZE;
+    const lz = wz - ccz * CHUNK_SIZE;
+    return chunk.levels[lz * CHUNK_SIZE + lx] ?? 0;
+  };
+
+  /** 世界点补丁深度（m）：包络场 u × PATCH_DEPTH（坑内=N×D，坑缘 0.5m/层过渡；
+   *  ★ 2026-09-10 跨 chunk：射线入邻块继续读层数 → 角色脚底/碰撞与几何同源连续） */
+  levelDepthAt(x: number, z: number): number {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return 0;
+    return envelopeLevelAt(chunk.levels, CHUNK_SIZE, ccx, ccz, x, z, undefined, this.levelAtWorld) * PATCH_DEPTH;
+  }
+
+  /** 世界坐标所在 1m cell 是否已有补丁层（>0） */
+  isLevelPatched(x: number, z: number): boolean {
+    const ccx = Math.floor(x / CHUNK_SIZE);
+    const ccz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(ccx, ccz));
+    if (!chunk) return false;
+    const lx = Math.floor(x - ccx * CHUNK_SIZE);
+    const lz = Math.floor(z - ccz * CHUNK_SIZE);
+    if (lx < 0 || lz < 0 || lx >= CHUNK_SIZE || lz >= CHUNK_SIZE) return false;
+    return chunk.levels[lz * CHUNK_SIZE + lx] > 0;
+  }
+
+  /**
+   * ★ 命中一枪：footprint 内每个 cell 层数 +1（§14.11 逐格计数，不封顶）。
+   * 返回"是否有可见变化"（决定是否重建）：用包络场在 footprint cell 中心
+   * 的前后差分判定 —— 层数再涨但被几何饱和吸收（无内墙窄坑的硬上限）→ 跳过。
+   */
+  digCells(cx: number, cz: number, cells: { lx: number; lz: number }[]): boolean {
+    const levels = this.levelsOf(cx, cz);
+    if (cells.length === 0) return false;
+    const before = new Uint8Array(levels); // 3.6KB 拷贝，用于差分
+    let changed = false;
+    for (const c of cells) {
+      if (levels[c.lz * CHUNK_SIZE + c.lx] < 255) levels[c.lz * CHUNK_SIZE + c.lx]++;
+    }
+    for (const c of cells) {
+      const wx = cx * CHUNK_SIZE + c.lx + 0.5;
+      const wz = cz * CHUNK_SIZE + c.lz + 0.5;
+      const u0 = envelopeLevelAt(before, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
+      const u1 = envelopeLevelAt(levels, CHUNK_SIZE, cx, cz, wx, wz, undefined, this.levelAtWorld);
+      if (u1 - u0 > 1e-9) { changed = true; break; }
+    }
+    // ★ 标记脏块：距离卸载时把 levels 移入持久层（回程恢复，坑不愈合）
+    this.dirtyLevelKeys.add(chunkKeyOf(cx, cz));
+    // ★ 层数变化 → 基面高度变化 → 围裙坡面拒绝/带顶采样随变 → 失效本 chunk
+    //   与 4 侧邻（围裙坡面采样跨边界 ±0.45m）
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx + 1, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx - 1, cz));
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz + 1));
+    this.apronEdgeCache.delete(chunkKeyOf(cx, cz - 1));
+    return changed;
+  }
+
+  /** ★ per-chunk 构建源（§8 第四步意图分置）：surfaceBlocks 原始源经本 chunk
+   *   的意图 refine。顶面装配（ChunkSurface）、贴地采样（上）共用同一实例
+   *   （渲染=查询同源）。空精修恒透传。 */
+  chunkSource(cx: number, cz: number): BlockSource {
+    const key = chunkKeyOf(cx, cz);
+    let cached = this.chunkSourceCache.get(key);
+    if (!cached) {
+      cached = refineChunkSource(this.surfaceBlocks, this.seed, cx, cz);
+      this.chunkSourceCache.set(key, cached);
+    }
+    return cached;
+  }
+
+  /** 世界阻挡高度（高台立面；射击 rayMarch 用） */
+  blockHeightAt(x: number, z: number): number {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return 0;
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    return chunk.blockHeight[lz * CHUNK_SIZE + lx] ?? 0;
+  }
+
+  /** 世界可通行（坑洞 = false；AI 寻路/移动判定用） */
+  isWalkable(x: number, z: number): boolean {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return true; // 未加载区默认可走（防止边界卡死）
+    const lx = Math.floor(x - cx * CHUNK_SIZE);
+    const lz = Math.floor(z - cz * CHUNK_SIZE);
+    return (chunk.walkable[lz * CHUNK_SIZE + lx] ?? 1) === 1;
+  }
+
+  /**
+   * ★ L6 精修层统一建源（《重构设计》§6：三份 BlockSource 收敛成一份）。
+   * 本类是 chunk 数据的主机持有者 → 建源闭包唯一真源；ChunkSurface / ChunkWalls
+   * 复用同一实例（勿另建源、勿复刻换算）。缺块先 ensureChunk（确定性纯生成，
+   * 亚毫秒）——贴地/烘焙射线永不見"未加载=0"的假邻域（与 ensureData 同一哲学；
+   * 生成的 chunk 本来就在加载环扩张路径上，只是提前生成）。
+   * ★ 意图分置（2026-08-31 §8 第四步）：本源为【原始源】（不做 refine）——
+   * 无界共享源不绑定单一 chunk；per-chunk 意图由 surfaceHeightAt / ChunkSurface /
+   * ChunkWalls 在各自知道 (cx,cz) 的地方经 refineChunkSource 应用。当前
+   * planRefinements 恒空 → 应用即透传，无感知差异。 */
+  readonly surfaceBlocks: BlockSource = makeChunkSource((ccx, ccz) => {
+    this.ensureChunk(ccx, ccz);
+    return this.chunks.get(chunkKeyOf(ccx, ccz));
+  });
+
+  /** 地形颜色（按模板 + 块类型分区着色：高台暖黄/平地冷灰/坑洞深红/斜坡过渡） */
+  /** ★ 地块定义查询（外观 Canvas 烘焙/装饰散布用；未加载回退平地） */
+  tileDefAt(x: number, z: number): TileDef {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const chunk = this.chunks.get(chunkKeyOf(cx, cz));
+    if (!chunk) return tileById(0);
+    const bx = Math.floor((x - cx * CHUNK_SIZE) / 4);
+    const bz = Math.floor((z - cz * CHUNK_SIZE) / 4);
+    return tileById(chunk.blockTypes[bz * 15 + bx]);
+  }
+
+  /** 地表类型 id（未加载返回 BLOCK_FLAT） */
+  terrainTypeAt(x: number, z: number): number {
+    return this.tileDefAt(x, z).id;
+  }
+
+  /** 基准色 RGB（纯净无抖动；小地图消费） */
+  terrainColorAt(x: number, z: number): [number, number, number] {
+    return this.tileDefAt(x, z).baseRgb;
+  }
+
+  /** ★ 小地图/大地图采样：已加载 chunk 读实时数据，已卸载回放地形记录，从未生成 → flat。
+   *  与 tileDefAt 的区别：后者对未加载 chunk 直接返 flat（会被误画）；本方法读记录表。 */
+  mapTileAt(x: number, z: number): TileDef {
+    const cx = Math.floor(x / CHUNK_SIZE);
+    const cz = Math.floor(z / CHUNK_SIZE);
+    const key = chunkKeyOf(cx, cz);
+    const bx = Math.floor((x - cx * CHUNK_SIZE) / 4);
+    const bz = Math.floor((z - cz * CHUNK_SIZE) / 4);
+    const idx = bz * 15 + bx;
+    const chunk = this.chunks.get(key);
+    if (chunk) return tileById(chunk.blockTypes[idx]);
+    const rec = this.mapRecords.get(key);
+    if (rec) return tileById(rec[idx]);
+    return tileById(0);
+  }
+
+  /** ★ 地图色（mapTileAt 的颜色出口；0xRRGGBB 打包便于逐像素写图）
+   *  2026-09-15：走 TileDef.packedRgb（地块级惰性缓存）——原实现每像素都要重跑
+   *  resolveTileLook + hsl2rgb（含分配），是小地图/大地图整幅重绘的主要成本。 */
+  mapColorAt(x: number, z: number): number {
+    return this.mapTileAt(x, z).packedRgb;
+  }
+
+  // ============ 实体索引（全局 cell，无限） ============
+
+  /** 注册（EntityManager.register 调用） */
+  insert(e: EntityBase): void {
+    const key = cellKeyOf(Math.floor(e.position.x), Math.floor(e.position.z));
+    let set = this.cells.get(key);
+    if (!set) {
+      set = new Set();
+      this.cells.set(key, set);
+    }
+    set.add(e);
+    this.cellOf.set(e, key);
+  }
+
+  /** 注销（EntityManager.unregister 调用） */
+  remove(e: EntityBase): void {
+    const key = this.cellOf.get(e);
+    if (key === undefined) return;
+    this.cells.get(key)?.delete(e);
+    this.cellOf.delete(e);
+  }
+
+  /** ★ 集中刷新（EntityBase.update 末尾）：哈希比较，变化才移块 */
+  move(e: EntityBase): void {
+    const newKey = cellKeyOf(
+      Math.floor(e.position.x),
+      Math.floor(e.position.z),
+    );
+    const oldKey = this.cellOf.get(e);
+    if (newKey === oldKey) return;
+    if (oldKey !== undefined) this.cells.get(oldKey)?.delete(e);
+    let set = this.cells.get(newKey);
+    if (!set) {
+      set = new Set();
+      this.cells.set(newKey, set);
+    }
+    set.add(e);
+    this.cellOf.set(e, newKey);
+  }
+
+  clear(): void {
+    this.cells.clear();
+    this.cellOf.clear();
+  }
+
+  // ============ 查询（无界，跨 chunk） ============
+
+  /** 范围查询：圆覆盖 cell → 实体距离过滤 */
+  querySphere(x: number, z: number, r: number): EntityBase[] {
+    const out: EntityBase[] = [];
+    const r2 = r * r;
+    const x0 = Math.floor(x - r);
+    const x1 = Math.floor(x + r);
+    const z0 = Math.floor(z - r);
+    const z1 = Math.floor(z + r);
+    for (let cz = z0; cz <= z1; cz++) {
+      for (let cx = x0; cx <= x1; cx++) {
+        const set = this.cells.get(cellKeyOf(cx, cz));
+        if (!set) continue;
+        for (const e of set) {
+          const dx = e.position.x - x;
+          const dz = e.position.z - z;
+          if (dx * dx + dz * dz <= r2) out.push(e);
+        }
+      }
+    }
+    return out;
+  }
+
+  /** 射线路径查询（DDA 网格采样，瞄准候选集） */
+  queryRay(
+    origin: { x: number; z: number },
+    dir: { x: number; z: number },
+    maxDist: number,
+  ): EntityBase[] {
+    const out: EntityBase[] = [];
+    const seen = new Set<EntityBase>();
+    const x0 = origin.x,
+      z0 = origin.z;
+    const dx = dir.x,
+      dz = dir.z;
+    let tMaxX: number;
+    let tMaxZ: number;
+    if (dx > 0) tMaxX = (Math.floor(x0) + 1 - x0) / dx;
+    else if (dx < 0) tMaxX = (Math.floor(x0) - x0) / dx;
+    else tMaxX = Infinity;
+    if (dz > 0) tMaxZ = (Math.floor(z0) + 1 - z0) / dz;
+    else if (dz < 0) tMaxZ = (Math.floor(z0) - z0) / dz;
+    else tMaxZ = Infinity;
+    const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+    const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+    let x = x0,
+      z = z0,
+      t = 0;
+    const maxSteps = Math.ceil(maxDist) + 2;
+    for (let i = 0; i < maxSteps; i++) {
+      if (t > maxDist) break;
+      const set = this.cells.get(cellKeyOf(Math.floor(x), Math.floor(z)));
+      if (set) {
+        for (const e of set) {
+          if (!seen.has(e)) {
+            seen.add(e);
+            out.push(e);
+          }
+        }
+      }
+      if (tMaxX < tMaxZ) {
+        t = tMaxX;
+        tMaxX += tDeltaX;
+        x += dx > 0 ? 1 : -1;
+      } else {
+        t = tMaxZ;
+        tMaxZ += tDeltaZ;
+        z += dz > 0 ? 1 : -1;
+      }
+    }
+    return out;
+  }
+
+  /** ★ 视锥梯形 4 顶点（世界 xz；调试绘制/查询共用）：
+   *   下边 = 下边界视线与 y=0 交点（近处）；上边 = 上视线水平延伸 maxDist（远处）
+   *   ⚠ 上视线指向天空时（俯视）不能钳到相机位置（退化三角），见 queryFrustum */
+  frustumCorners(
+    camera: THREE.Camera,
+    maxDist = 100,
+  ): { x: number; z: number }[] {
+    camera.updateMatrixWorld();
+    const pts: { x: number; z: number }[] = [];
+    const ndc = [
+      [-1, -1],
+      [1, -1],
+      [1, 1],
+      [-1, 1],
+    ]; // 左下、右下、右上、左上
+    const tmp = new THREE.Vector3();
+    for (const [nx, ny] of ndc) {
+      tmp.set(nx, ny, 1).unproject(camera);
+      const dir = tmp.sub(camera.position).normalize();
+      let px: number;
+      let pz: number;
+      if (Math.abs(dir.y) < 1e-6) {
+        const hl = Math.hypot(dir.x, dir.z);
+        const hx = hl > 1e-6 ? dir.x / hl : 0;
+        const hz = hl > 1e-6 ? dir.z / hl : 0;
+        px = camera.position.x + hx * maxDist;
+        pz = camera.position.z + hz * maxDist;
+      } else {
+        const t = -camera.position.y / dir.y;
+        if (t > 0 && t <= maxDist) {
+          px = camera.position.x + dir.x * t;
+          pz = camera.position.z + dir.z * t;
+        } else {
+          const hl = Math.hypot(dir.x, dir.z);
+          const hx = hl > 1e-6 ? dir.x / hl : 0;
+          const hz = hl > 1e-6 ? dir.z / hl : 0;
+          px = camera.position.x + hx * maxDist;
+          pz = camera.position.z + hz * maxDist;
+        }
+      }
+      pts.push({ x: px, z: pz });
+    }
+    return pts;
+  }
+
+  /** ★ 视锥梯形查询：视锥 4 条角点视线投影到 y=0 → 凸梯形 → 行扫描区间（无界）
+   *   ⚠ 踩坑记录：
+   *   ① dir 必须归一化再乘 t（未归一 → 投影点上万单位外 → 迭代爆炸卡死）
+   *   ② 上边界视线指向天空（t<0）时不能把投影点钳到相机位置——
+   *      那会让四边形退化成三角形（相机+两个近处地面点），只覆盖近处，
+   *      中远距离实体全部漏遍历。正确做法：上视线用【水平方向延伸 maxDist】
+   *      的远处地面点（地面可见区由 far 距离截断）
+   *   ③ 扫描范围钳到相机 ±2×maxDist（防投影异常迭代爆炸） */
+  queryFrustum(camera: THREE.Camera, maxDist = 100): EntityBase[] {
+    const pts = this.frustumCorners(camera, maxDist);
+    let zMin = Infinity,
+      zMax = -Infinity;
+    for (const p of pts) {
+      zMin = Math.min(zMin, p.z);
+      zMax = Math.max(zMax, p.z);
+    }
+    // ★ 防御：扫描范围钳到相机 ±2×maxDist（防任何投影异常导致迭代爆炸）
+    zMin = Math.max(zMin, camera.position.z - maxDist * 2);
+    zMax = Math.min(zMax, camera.position.z + maxDist * 2);
+    const out: EntityBase[] = [];
+    const seen = new Set<EntityBase>();
+    for (let cz = Math.floor(zMin); cz <= Math.ceil(zMax); cz++) {
+      const z = cz + 0.5;
+      const xs: number[] = [];
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        if ((a.z <= z && b.z >= z) || (a.z >= z && b.z <= z)) {
+          const t = (z - a.z) / (b.z - a.z);
+          xs.push(a.x + (b.x - a.x) * t);
+        }
+      }
+      if (xs.length < 2) continue;
+      const x0 = Math.floor(Math.min(xs[0], xs[1]));
+      const x1 = Math.ceil(Math.max(xs[0], xs[1]));
+      for (let cx = x0; cx <= x1; cx++) {
+        const set = this.cells.get(cellKeyOf(cx, cz));
+        if (!set) continue;
+        for (const e of set) {
+          if (!seen.has(e)) {
+            seen.add(e);
+            out.push(e);
+          }
+        }
+      }
+    }
+    return out;
+  }
+}

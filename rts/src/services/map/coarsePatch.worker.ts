@@ -1,0 +1,75 @@
+// ============================================================
+// coarsePatch.worker —— 粗块几何 Worker（地图构建两级的第一级）
+// ============================================================
+// 收 3×3 邻域数据拷贝 → 纯表驱动几何（computeTableGeometry coarse=true：
+// 硬边、纯色顶点色、无 fine/弧边/物理；含液块平 quad 静水）→ 零拷贝回传。
+// 与 terrainPatch.worker（细化）分池，互不抢队列。
+
+import { computeTableGeometry, dropPatchSourceCache, type PatchGeomResult } from "./PatchCompute";
+import type { GroupPalette } from "./TileGroups";
+
+interface CoarseChunkMsg {
+  type: "coarseBuild";
+  id: number;
+  seed: number;
+  cx: number;
+  cz: number;
+  chunks: {
+    ccx: number;
+    ccz: number;
+    heights: Float32Array;
+    blockTypes: Uint8Array;
+  }[];
+  /** 组调色板（粗块底色与细化 uMatBase 同源） */
+  palette?: GroupPalette;
+}
+
+const ctx = self as unknown as {
+  onmessage: ((ev: MessageEvent) => void) | null;
+  postMessage(msg: unknown, transfer?: Transferable[]): void;
+};
+
+function transferOf(r: PatchGeomResult): ArrayBuffer[] {
+  const out: ArrayBuffer[] = [];
+  const push = (a: ArrayBuffer | ArrayBufferView | null) => {
+    if (a && (a as ArrayBufferView).buffer !== undefined) {
+      out.push((a as ArrayBufferView).buffer as ArrayBuffer);
+    } else if (a) out.push(a as ArrayBuffer);
+  };
+  push(r.top.vertices); push(r.top.normals); push(r.top.uvs);
+  push(r.top.colors); push(r.top.patchW); push(r.top.indices);
+  push(r.wall.vertices); push(r.wall.normals); push(r.wall.uvs);
+  push(r.wall.colors); push(r.wall.shade); push(r.wall.patchW); push(r.wall.indices);
+  // ★ 粗块静水（液块平 quad；粗加载/航行期可见）
+  //   粗块路径恒产水面（coarse=true 直接 buildCoarseWater）；waterMode:'none'
+  //   只用于细化破坏重建，此处理论上非空 —— 仍判空以防后续档位组合变化。
+  if (r.water) {
+    push(r.water.vertices); push(r.water.normals); push(r.water.uvs);
+    push(r.water.deep); push(r.water.border); push(r.water.spin); push(r.water.indices);
+  }
+  return out;
+}
+
+ctx.onmessage = (ev: MessageEvent) => {
+  if ((ev.data as { type?: string }).type === "clearCache") {
+    dropPatchSourceCache();
+    return;
+  }
+  const msg = ev.data as CoarseChunkMsg;
+  if (msg.type !== "coarseBuild") return;
+  const chunks = new Map<string, { heights: Float32Array; blockTypes: Uint8Array }>();
+  for (const c of msg.chunks) chunks.set(`${c.ccx},${c.ccz}`, c);
+  const out = computeTableGeometry(
+    (ccx, ccz) => chunks.get(`${ccx},${ccz}`),
+    msg.seed,
+    msg.cx,
+    msg.cz,
+    undefined,
+    null,
+    null,
+    undefined,
+    true,
+    msg.palette,
+  );
+  ctx.postMessage({ type: "result", id: msg.id, ...out }, transferOf(out));
+};

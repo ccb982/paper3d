@@ -1,0 +1,34 @@
+{
+  "pool": {
+    "name": "综合物资池",
+    "description": "全部免费。物资抽到即进背包，遗物抽到即永久生效。保底 10 抽必出遗物。唯一 6★ 普瑞赛斯：基础 2%，50 抽后递增，99 抽必出。"
+  },
+  "_weights": {
+    "note": "★ 2026-09-16 用户定调分档概率（精确命中，非约等）：弹药消耗品 35% / 可装备道具 45% / 遗物 18% / BOSS 2%。总刻度 2000 = 700 + 900 + 360 + 40。分档内每件严格均等。BOSS 那 2% 是**独立优先判定**（GachaOverlay.pull 里的 bossPity 递增管线），不入池权重；这里登记 40 只为让总量刻度自洽、便于校验。",
+    "ammo": { "pct": 35, "items": 2, "each": 350, "total": 700 },
+    "equip": { "pct": 45, "items": 4, "each": 225, "total": 900 },
+    "relic": { "pct": 18, "items": 5, "each": 72, "total": 360 },
+    "boss": { "pct": 2, "total": 40, "independent": true },
+    "scale": 20
+  },
+  "items": [
+    { "id": "gummy_honey_candy", "rarity": 4, "weight": 350 },
+    { "id": "frostnova_spicy_candy", "rarity": 4, "weight": 350 },
+    { "id": "kaltsit_drone", "rarity": 4, "weight": 225 },
+    { "id": "shu_jie_xx", "rarity": 4, "weight": 225 },
+    { "id": "yusheng_mengmengxiang", "rarity": 4, "weight": 225 },
+    { "id": "yuandeng", "rarity": 4, "weight": 225 }
+  ],
+  "boss": {
+    "id": "priestess",
+    "rarity": 6
+  },
+  "outOfRunItems": [
+    { "id": "black_crown", "rarity": 5, "weight": 72 },
+    { "id": "gravel_love", "rarity": 5, "weight": 72 },
+    { "id": "zuzong_launcher", "rarity": 5, "weight": 72 },
+    { "id": "kaltsit_coat", "rarity": 5, "weight": 72 },
+    { "id": "xiyangyang", "rarity": 5, "weight": 72 },
+    { "id": "grudge_hatred", "rarity": 5, "weight": 72 }
+  ]
+}

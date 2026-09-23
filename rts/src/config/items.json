@@ -1,0 +1,548 @@
+{
+  "items": [
+    {
+      "id": "gummy_honey_candy",
+      "name": "古米的蜂蜜糖",
+      "type": "consumable",
+      "description": "古米手制的蜂蜜糖，甜得恰到好处。回复 40 点生命；生命上限 +15、防御 +1（永久累积）",
+      "maxStack": 10,
+      "color": {
+        "h": 0.11,
+        "s": 0.78,
+        "l": 0.62
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.16,
+          "hy": 0.12,
+          "hz": 0.16
+        },
+        "scale": 0.42,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "train",
+          "stats": {
+            "maxHp": 15,
+            "defense": 1
+          }
+        },
+        {
+          "type": "heal",
+          "value": 40
+        }
+      ]
+    },
+    {
+      "id": "frostnova_spicy_candy",
+      "name": "霜星的辣味糖",
+      "type": "consumable",
+      "description": "霜星亲手做的辣味糖，辣到眼睛发酸。攻击力 +2（永久累积）",
+      "maxStack": 10,
+      "color": {
+        "h": 0.02,
+        "s": 0.85,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.16,
+          "hy": 0.12,
+          "hz": 0.16
+        },
+        "scale": 0.42,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "train",
+          "stats": {
+            "attackPower": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "raw_rock",
+      "name": "固原岩",
+      "type": "material",
+      "description": "最基础的岩石材料，经提炼可制成多种器材",
+      "maxStack": 99,
+      "color": {
+        "h": 0.08,
+        "s": 0.3,
+        "l": 0.45
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.2,
+          "hy": 0.15,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "polyester",
+      "name": "聚酸酯",
+      "type": "material",
+      "description": "常见的合成材料，质地细密，用途广泛",
+      "maxStack": 99,
+      "color": {
+        "h": 0.58,
+        "s": 0.55,
+        "l": 0.5
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.2,
+          "hy": 0.14,
+          "hz": 0.16
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "sugar",
+      "name": "糖",
+      "type": "material",
+      "description": "甜甜的日常物资，也是不少配方的基础原料",
+      "maxStack": 99,
+      "color": {
+        "h": 0.09,
+        "s": 0.7,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.18,
+          "hy": 0.14,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "iron_grain",
+      "name": "异铁",
+      "type": "material",
+      "description": "高强度的金属矿石，制造装备的常用原料",
+      "maxStack": 99,
+      "color": {
+        "h": 0.57,
+        "s": 0.35,
+        "l": 0.4
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.2,
+          "hy": 0.16,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "ketone",
+      "name": "酮凝集",
+      "type": "material",
+      "description": "性质稳定的有机材料，可用于多种加工工序",
+      "maxStack": 99,
+      "color": {
+        "h": 0.9,
+        "s": 0.45,
+        "l": 0.5
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.18,
+          "hy": 0.14,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "device",
+      "name": "装置",
+      "type": "material",
+      "description": "精密的基础零件，组装更高阶装备的核心材料",
+      "maxStack": 99,
+      "color": {
+        "h": 0.62,
+        "s": 0.65,
+        "l": 0.45
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.18,
+          "hy": 0.16,
+          "hz": 0.16
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "shu_jie_xx",
+      "name": "黍姐的XX",
+      "type": "equip",
+      "description": "黍姐的神秘防具（离离枯荣×百谷长青）：攻击力+50%、攻击速度+25、防御+5、15%庇护（受到伤害降低）、每秒回复2.5生命、友军每秒回复2.5生命",
+      "maxStack": 1,
+      "stats": {
+        "attackPct": 0.5,
+        "attackSpeed": 25,
+        "defense": 5,
+        "damageReduction": 0.15,
+        "hpRegen": 2.5,
+        "allyRegen": 2.5
+      },
+      "combat": {
+        "kind": "equip",
+        "slot": "armor",
+        "asset": "/fx/黍姐的XX.ftx3.gz",
+        "facing": "front",
+        "offsetX": 0.02,
+        "offsetY": -0.29,
+        "offsetZ": 0.09,
+        "scale": 0.179,
+        "rotateZ": 1.5708
+      },
+      "color": {
+        "h": 0.08,
+        "s": 0.6,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.2,
+          "hy": 0.16,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "equip",
+          "slot": "armor"
+        }
+      ]
+    },
+    {
+      "id": "yuandeng",
+      "name": "逻各斯的圆凳",
+      "type": "equip",
+      "description": "逻各斯的圆凳载具：装备后维维美（连同身上装备）躺乘其上滑行（躺姿不挡准星）。移动速度大幅提升，可爬坡、可过坑。",
+      "maxStack": 1,
+      "stats": {
+        "vehicle": true,
+        "moveSpeedPct": 1
+      },
+      "combat": {
+        "kind": "vehicle",
+        "slot": "vehicle",
+        "asset": "/fx/圆凳.ftx3.gz",
+        "scale": 0.9,
+        "offsetX": 0,
+        "offsetY": 0,
+        "offsetZ": 0
+      },
+      "color": {
+        "h": 0.12,
+        "s": 0.5,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.22,
+          "hy": 0.12,
+          "hz": 0.22
+        },
+        "scale": 0.45,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "equip",
+          "slot": "vehicle"
+        }
+      ]
+    },
+    {
+      "id": "yusheng_mengmengxiang",
+      "name": "鱼生萌萌香",
+      "type": "equip",
+      "description": "遥的演出服头饰（幽隙栖萤）：攻击力+40%；受到治疗时，对周围最多3名敌人造成相当于治疗量200%的伤害",
+      "maxStack": 1,
+      "stats": {
+        "attackPct": 0.4,
+        "healProc": {
+          "ratio": 2,
+          "maxTargets": 3,
+          "radius": 10
+        }
+      },
+      "combat": {
+        "kind": "equip",
+        "slot": "headgear",
+        "asset": "/fx/鱼生萌萌香.ftx3.gz",
+        "facing": "front",
+        "offsetX": 0,
+        "offsetY": 0.32,
+        "offsetZ": 0.09,
+        "scale": 0.4,
+        "rotateZ": 0
+      },
+      "color": {
+        "h": 0.07,
+        "s": 0.6,
+        "l": 0.6
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.2,
+          "hy": 0.16,
+          "hz": 0.18
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "equip",
+          "slot": "headgear"
+        }
+      ]
+    },
+    {
+      "id": "kaltsit_drone",
+      "name": "可露希尔的无人机",
+      "type": "consumable",
+      "description": "放出可露希尔的无人机，盘旋跟随并守护作战区域",
+      "maxStack": 3,
+      "deployable": true,
+      "combat": {
+        "kind": "ally",
+        "allyType": "drone"
+      },
+      "color": {
+        "h": 0.65,
+        "s": 0.55,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.25,
+          "hy": 0.25,
+          "hz": 0.25
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_drone"
+        }
+      ]
+    },
+    {
+      "id": "zuzong",
+      "name": "祖宗",
+      "type": "ammo",
+      "description": "发射后落点生成一个站桩的祖宗，自动攻击附近敌人；激光命中会眩晕敌人（眩晕结束后短暂免疫）",
+      "maxStack": 999,
+      "color": {
+        "h": 0.72,
+        "s": 0.45,
+        "l": 0.45
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.25,
+          "hy": 0.25,
+          "hz": 0.25
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_sentinel"
+        }
+      ]
+    },
+    {
+      "id": "cover",
+      "name": "城墙",
+      "type": "ammo",
+      "description": "发射后落点生成一段带射击孔的城墙：可被摧毁、可攀爬；★ 为范围内墙体持续修复、提高生命上限（跟随玩家生命）并加防御",
+      "maxStack": 999,
+      "color": {
+        "h": 0.0,
+        "s": 0.0,
+        "l": 0.55
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.3,
+          "hy": 0.3,
+          "hz": 0.3
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_cover"
+        }
+      ]
+    },
+    {
+      "id": "tumu_laojie",
+      "name": "墙",
+      "type": "ammo",
+      "description": "发射后落点生成一面实心墙（无射击孔）：可攀爬、可被双方打烂",
+      "maxStack": 999,
+      "color": {
+        "h": 0.08,
+        "s": 0.22,
+        "l": 0.5
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.3,
+          "hy": 0.3,
+          "hz": 0.3
+        },
+        "scale": 0.6,
+        "pickupRadius": 1.5
+      },
+      "effects": [
+        {
+          "type": "summon_cover",
+          "variant": "wall"
+        }
+      ]
+    },
+    {
+      "id": "herb",
+      "name": "草药",
+      "type": "material",
+      "description": "野外采集的药用植物，可用于调配恢复类制剂",
+      "maxStack": 99,
+      "color": {
+        "h": 0.3,
+        "s": 0.55,
+        "l": 0.45
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.12,
+          "hy": 0.1,
+          "hz": 0.12
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "flower",
+      "name": "花",
+      "type": "material",
+      "description": "野外摘取的鲜花，可入药也可调制食物",
+      "maxStack": 99,
+      "color": {
+        "h": 0.93,
+        "s": 0.6,
+        "l": 0.62
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.12,
+          "hy": 0.1,
+          "hz": 0.12
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "berry",
+      "name": "浆果",
+      "type": "material",
+      "description": "酸甜多汁的野果，采集自灌木丛",
+      "maxStack": 99,
+      "color": {
+        "h": 0.97,
+        "s": 0.62,
+        "l": 0.48
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.12,
+          "hy": 0.1,
+          "hz": 0.12
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    },
+    {
+      "id": "wood",
+      "name": "木料",
+      "type": "material",
+      "description": "从树木上取得的硬质木料，建造与加工的基础材料",
+      "maxStack": 99,
+      "color": {
+        "h": 0.08,
+        "s": 0.5,
+        "l": 0.35
+      },
+      "world": {
+        "shape": {
+          "type": "cuboid",
+          "hx": 0.18,
+          "hy": 0.14,
+          "hz": 0.14
+        },
+        "scale": 0.4,
+        "pickupRadius": 1.5
+      },
+      "effects": []
+    }
+  ]
+}

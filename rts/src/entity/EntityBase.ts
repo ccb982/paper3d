@@ -1,0 +1,544 @@
+// ============================================================
+// EntityBase —— 实体基类（所有实体的公共骨架）
+// ============================================================
+// 职责（架构 2.2）：
+//   - 物理联动：经 EntityManager/PhysicsWorld（实体不碰 rapier）
+//   - 动画管线联动：assetRef + FrameAnimator（FrameState 衔接层）
+//   - 渲染管线联动：FXRenderer（FTXQuad/特效网格）
+//   - 更新骨架：① 子类行为 → ② 物理同步 → ③ 动画推进 → ④ 渲染同步
+//   - 生命周期：构造注册 → update 每帧 → dispose（三管线资源全释放）
+//
+// 子类扩展点：
+//   - onUpdate(dt, input, cameraFrame)：行为逻辑（AI/控制/飞行/拾取）
+//   - createRenderer(scene)：渲染器类型（FTXQuad / 特效网格）
+//   - heightOffset()：额外高度偏移（跳跃等）
+//   - onDeath() / onTakeDamage()：生命周期钩子
+
+import * as THREE from 'three';
+import type { Entity, EntityKind } from './Entity';
+import type { EntityManager } from './EntityManager';
+import type { BodyOptions, ColliderShape } from '../services/physics/PhysicsWorld';
+import { levelForDistance } from '../services/lod';
+import type { ShadowFrameSource } from '../services/render/SilhouetteShadow';
+import { type CombatStats, createCombatStats } from './CombatStats';
+import { GroundShadowController, type GroundShadowHost } from '../services/render/GroundShadowController';
+import { EffectSlots } from '../services/fx/EffectSlots';
+import { eventBus } from '../core/EventBus';
+import { FrameAnimatorBase } from '../services/fx/FrameAnimatorBase';
+import type { FrameAssetSource } from '../services/fx/AssetSource';
+import type { FrameState } from '../services/fx/FrameState';
+import type { FxRendererBase } from '../services/render/FxRendererBase';
+import type { InputActions } from '../platform/input/InputActions';
+import type { CameraFrame } from '../services/camera/CameraController';
+import { entityPerf } from './EntityPerf';
+import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/combat/EffectSystem';
+
+/** 物理同步模式：kinematic=位置代码驱动（角色/敌人：setNextKinematicTranslation，
+ *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
+export type PhysicsMode = 'none' | 'kinematic' | 'read';
+
+/** ★ 生命周期状态（《实体架构.md》§9.3）：active → retiring → disposed */
+export type EntityLifeState = 'active' | 'retiring' | 'disposed';
+
+/** ★ 退役原因 = 业务语义的唯一来源（取代 killedByCombat/deathReported）：
+ *  - 'killed'       战斗致死：emit killed（已在伤害管线）/ 掉落 / 死亡动画 / 击杀统计
+ *  - 'demoted'      降格回代理池：先 drain 快照，再释放（不算击杀、不掉落）
+ *  - 'recycled'     远距/超时回收：不算击杀、不掉落
+ *  - 'despawned'    主动移除（导演收手 / 登船收友军）
+ *  - 'mode_cleanup' 模式切换 / 场景卸载
+ *  注意：只影响业务流程口径，不影响资源释放路径。 */
+export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup';
+
+/** ★ 命中点（世界坐标）——伤害管线透传给表现层（受击染料的注入位置）。
+ *  2D 贴片只吃 x/y；3D 判定点带 z 也不影响。 */
+export interface EntityHitPoint {
+  x: number;
+  y: number;
+  z?: number;
+}
+
+export interface EntityBaseOptions {
+  kind: EntityKind;
+  x: number;
+  y: number;
+  z: number;
+  /** 需要物理时传入 */
+  physics?: { type: 'dynamic' | 'kinematic' | 'fixed'; options: BodyOptions };
+  /** 动画资产（有 → 建 FrameAnimator + FrameState） */
+  asset?: FrameAssetSource;
+  /** 初始动画状态（朝向等） */
+  animInitial?: Partial<FrameState>;
+}
+
+const _gsRight = new THREE.Vector3();
+
+export abstract class EntityBase {
+  readonly entity: Entity;
+  /** ★ 阵营标签（player/ally/enemy/neutral；碰撞过滤/伤害判定用，架构 4.3） */
+  camp = 'neutral';
+  /** ★ 位置（世界 x/y/z；空间索引/查询统一入口） */
+  get position(): { x: number; y: number; z: number } {
+    return this.entity.position;
+  }
+  /** ★★ 受击锚点高度（世界 Y）—— 命中特效 / 受击染料的**默认竖直取样点**。
+   *  基类给"脚底 + 1.0m"（≈1.7m 人体的胸口）；有渲染贴片的子类覆写成**贴片高度的 65%**。
+   *  ★ 为什么必须问实体自己：固定 +1.0m 对 3.7m 的敌人落在**大腿**（v≈0.73），
+   *    对 4.8m 的 BOSS 更低 —— 命中药剂/染料会明显"偏低"。 */
+  hitAnchorY(): number {
+    return this.position.y + 1.0;
+  }
+  /** 动画管线（无 asset 时为 null） */
+  readonly anim: FrameAnimatorBase | null;
+  /** 动画状态（渲染管线读取的衔接层） */
+  readonly state: FrameState | null;
+  /** 物理同步模式（子类构造时设定） */
+  physicsMode: PhysicsMode = 'none';
+  /** ★ 可见性（第一人称时隐藏角色自身；setter 同步贴片 mesh.visible，
+   *   渲染跳过只是不更新，mesh 仍挂场景 → 必须直接隐藏） */
+  get visible(): boolean {
+    return this._visible;
+  }
+  set visible(v: boolean) {
+    this._visible = v;
+    if (this.renderer) this.renderer.setVisible(v);
+    // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
+    //   必须立即隐藏，否则留下"幽灵影子"）
+    this.gsCtl.setVisible(v && this.viewLod < 3);
+  }
+  private _visible = true;
+  /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
+  billboard = true;
+
+  /** ★ 碰撞体积（实例基类属性：形状 + 刚体 y 偏移；null = 无碰撞声明）
+   *   子类覆写/构造赋值（角色=胶囊 / 子弹=球 / 物品=球）；物理创建与刚体偏移统一从这里取 */
+  collisionVolume: { shape: ColliderShape; offsetY: number } | null = null;
+
+  /** ★ 小地图展示属性（实体基类提供，Minimap 直接消费；子类可覆写 moving）
+   *   kind = 实体类型（小地图配色）；moving = 移动中（如移动中的物品不显示）；
+   *   hideOnMap = 强制隐藏（如已进舰的访客在世界侧没有存在感） */
+  get minimapInfo(): { kind: string; moving: boolean; hideOnMap?: boolean } {
+    return { kind: this.entity.kind, moving: false };
+  }
+
+  // ============================================================
+  // 贴地剪影影子（架构 8.x 统一机制：所有实体 = 角色同款）
+  // 影子 = 竖立精灵在太阳平行光下的解析仿射投影（脚跟锚定）：
+  //   锚点 = 脚点投影（离地越高整条影子向阳反方向外移）
+  //   影长 = 视觉高 × 投影比（1/tan 仰角），方向与太阳水平分量反向
+  // 子类只需声明：
+  //   ① 覆写 shadowShape：宽 w / 视觉高 h / alpha（null = 无影子）
+  //      - 默认太阳投影模式（h 缺省 = w）
+  //      - len 显式给固定影长 → 走 shadowYaw 定向模式（子弹等自拉伸体，
+  //        椭圆居中于地面投影点，离高仍随太阳位移）
+  //   ② 剪影源默认自动取当前动画帧；非 FTX 资产才需覆写
+  //      getShadowFrameData（如子弹的共享画布）
+  //   ③ 固定长轴模式下覆写 shadowYaw 定向；太阳投影模式不需要
+  // ============================================================
+
+  protected _scene: THREE.Scene | null = null;
+
+  /** ★ 影子形状声明（w=宽；h=视觉高度参与投影；len=固定影长(免投影)；alpha 缺省 0.38） */
+  protected get shadowShape(): { w: number; h?: number; len?: number; alpha?: number } | null {
+    return null;
+  }
+
+  /** ★ 影子朝向（弧度，绕世界 Y；默认 0 不旋转） */
+  protected get shadowYaw(): number {
+    return 0;
+  }
+
+  /** ★ 影子朝向跟踪值（基类从位移差自动更新；运动实体的 shadowYaw 直接返回它） */
+  groundShadowYaw = 0;
+  private _gsLastX = NaN;
+  private _gsLastZ = NaN;
+
+  /** ★ 远距影子强 LOD 裁剪比例（0~1；0 = 不裁）：lod≥1 按实体固定键裁掉该比例，
+   *  lod≥2 全裁。敌人 = 0.8（80% 远距无需影子）；主角/无人机 lodExempt 不受影响 */
+  shadowFarCull = 0;
+
+  /** ★ 贴地剪影影子控制器（组合件：状态/网格/裁剪全在里面；纯搬运自原 syncShadow） */
+  private readonly gsCtl: GroundShadowController;
+
+  /** ★ 每帧影子同步（update 骨架⑦：控制器内做惰性创建 + 剪影更新 + 太阳投影 + LOD/日照渐隐） */
+  private syncShadow(): void {
+    this.gsCtl.sync();
+  }
+
+  /** 贴片右向量（mesh 矩阵 X 基）的地面投影——剪影影子的宽轴 */
+  private rendererGroundBasisX(): { x: number; z: number } | null {
+    const r = this.renderer as unknown as { mesh?: THREE.Mesh } | null;
+    const m = r?.mesh?.matrixWorld;
+    if (!m) return null;
+    _gsRight.set(m.elements[0], 0, m.elements[2]);
+    if (_gsRight.lengthSq() < 1e-6) return null;
+    _gsRight.normalize();
+    return { x: _gsRight.x, z: _gsRight.z };
+  }
+
+  /** ★ LOD 等级（applyViewDistance 每帧更新；0=最高档，越高越远越省）
+   *   子类据此降级表现（受击染料/扭曲等只在高档启用） */
+  viewLod = 0;
+
+  /** ★ 上一帧渲染是否命中视锥（EntityManager.renderAll 写入）。
+   *  视锥外的实体跳过影子计算（viewLod 对视锥外实体是过期值，不可依赖） */
+  inFrustum = false;
+
+  /** ★ 视锥/LOD 豁免（主角/无人机/子弹等关键实体）：
+   *   renderAll 绕过梯形视锥裁剪，且始终 applyViewDistance(0) →
+   *   动画时间轴永不因 LOD≥2 冻结（含 VAT 连续时钟），不受距离/视野影响 */
+  lodExempt = false;
+
+  /** ★ 渲染距离应用（renderAll 每帧传入；★ 实体不持有 LOD 状态——
+   *   内部按距离表算级，联动动画/渲染管线响应。子类可覆写做表现降级） */
+  applyViewDistance(distance: number): void {
+    const lv = levelForDistance(distance);
+    this.viewLod = lv;
+    this.anim?.setLodLevel(lv);       // 动画管线：时间轴暂停/节流
+    this.renderer?.setLodLevel(lv);   // 渲染管线：渐隐（渲染器实现）
+  }
+
+  // ============ 附属特效管线（表现层，跟随实体；属于实体基类） ============
+
+  /** ★ 特效槽（血条/技能特效/受击/光环；与主贴片渲染管线分开）——组合件 EffectSlots */
+  private readonly fx = new EffectSlots();
+
+  /** 挂特效（同名覆盖；跟随实体位置/生命周期由本骨架驱动） */
+  attachEffect(name: string, effect: import('../services/fx/EntityEffect').EntityEffect): void {
+    this.fx.attach(name, effect);
+  }
+
+  /** 卸特效 */
+  detachEffect(name: string): void {
+    this.fx.detach(name);
+  }
+
+  /** 取特效（子类/外部读取状态用） */
+  getEffect<T extends import('../services/fx/EntityEffect').EntityEffect>(name: string): T | undefined {
+    return this.fx.get<T>(name);
+  }
+
+  /** 特效槽每帧驱动（更新骨架内：跟随位置 + 时间轴 + 回收） */
+  private updateEffects(dt: number): void {
+    const p = this.entity.position;
+    this.fx.update(dt, p.x, p.y, p.z);
+  }
+
+  // ============ 生命与战斗属性（伤害管线 modifiers 链，架构 4.1） ============
+  // ★ E5+：战斗数值收进 `CombatStats` 组合件（子弹/物品不再背散落字段）；
+  //   以下同名访问器保持旧读写 API（行为零变化）。
+
+  /** 战斗数值组合件（唯一事实源） */
+  readonly stats: CombatStats = createCombatStats();
+
+  /** 生命值（子类构造可覆写初始值） */
+  get hp(): number { return this.stats.hp; }
+  set hp(v: number) { this.stats.hp = v; }
+  /** 生命上限（HUD/结算显示用；构造后与 hp 同步） */
+  get maxHp(): number { return this.stats.maxHp; }
+  set maxHp(v: number) { this.stats.maxHp = v; }
+  /** 攻击力加成（modifierDefense：damage + attackPower - defense） */
+  get attackPower(): number { return this.stats.attackPower; }
+  set attackPower(v: number) { this.stats.attackPower = v; }
+  /** 防御（减法减伤） */
+  get defense(): number { return this.stats.defense; }
+  set defense(v: number) { this.stats.defense = v; }
+  /** ★ 攻击速度点数（方舟口径：100 为基准；实际间隔 = 基础间隔 × 100 / (100 + attackSpeed)） */
+  get attackSpeed(): number { return this.stats.attackSpeed; }
+  set attackSpeed(v: number) { this.stats.attackSpeed = v; }
+  /** ★ 庇护：受到的伤害降低比例 0-1（modifierDamageReduction 在防御后乘算） */
+  get damageReduction(): number { return this.stats.damageReduction; }
+  set damageReduction(v: number) { this.stats.damageReduction = v; }
+  /** ★ 生命回复速度（每秒回血；模式层每帧结算，卸载装备即失效） */
+  get hpRegen(): number { return this.stats.hpRegen; }
+  set hpRegen(v: number) { this.stats.hpRegen = v; }
+  /** 暴击率 0-1（modifierCrit） */
+  get critRate(): number { return this.stats.critRate; }
+  set critRate(v: number) { this.stats.critRate = v; }
+  /** 暴击倍率 */
+  get critMult(): number { return this.stats.critMult; }
+  set critMult(v: number) { this.stats.critMult = v; }
+  /** 闪避率 0-1（modifierDodge） */
+  get dodgeRate(): number { return this.stats.dodgeRate; }
+  set dodgeRate(v: number) { this.stats.dodgeRate = v; }
+  /** 格挡率 0-1（modifierBlock） */
+  get blockRate(): number { return this.stats.blockRate; }
+  set blockRate(v: number) { this.stats.blockRate = v; }
+  /** 格挡减伤倍率（格挡时伤害 × blockMult） */
+  get blockMult(): number { return this.stats.blockMult; }
+  set blockMult(v: number) { this.stats.blockMult = v; }
+
+  /** ★ 活跃效果列表（EffectSystem 队列；当前仅玩家使用。
+   *  tick 由 WorldMode 每帧显式调用——队友/敌人不参与，无每帧开销） */
+  effects: ActiveEffect[] | null = null;
+  /** ★ 效果基础属性（聚合公式的底；首次挂效果/模式层注入时捕获） */
+  statBase: Partial<Record<EffectStatKey, number>> | null = null;
+  /** ★ 治疗转伤害 proc 配置（EffectSystem 聚合；null = 无。触发逻辑由模式层消费） */
+  healProc: HealProcDef | null = null;
+  /** ★ 累计已治疗量（治疗转伤害的燃料；模式层触发后清零） */
+  healBuffer = 0;
+  /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
+  dead = false;
+
+  // ============ 生命周期（《实体架构.md》§9.3：状态机 + 退役原因） ============
+
+  /** 生命周期状态（active；retire 幂等；dispose 亦幂等） */
+  private _life: EntityLifeState = 'active';
+  /** 退役原因（仅 retiring/disposed 阶段有意义；业务口径都读它） */
+  retireReason: RetireReason | null = null;
+
+  get lifeState(): EntityLifeState {
+    return this._life;
+  }
+
+  /** ★ 统一退役入口（幂等）：标记状态 → 子类业务钩子 → 资源释放。
+   *  ★ 击杀 / 降格 / 回收 / 清场全部经此；业务事件只能从这里（onRetire）发出。 */
+  retire(reason: RetireReason): void {
+    if (this._life !== 'active') return; // ★ 幂等：任何路径重复调用都安全
+    this._life = 'retiring';
+    this.retireReason = reason;
+    this.onRetire(reason);
+    this.dispose();
+  }
+
+  /** ★ 退役业务钩子（子类覆写：击杀统计/槽位联动等；默认无）。
+   *  调用时机 = 资源释放之前；此时位置/数据仍可读。 */
+  protected onRetire(_reason: RetireReason): void {
+    // 默认无
+  }
+
+  /** ★ 受伤（子类可覆写：无敌帧/受击表现；默认扣血 → 0 触发 onDeath）
+   *  hitPoint = 命中点（世界坐标）——仅表现层消费，默认实现忽略 */
+  onTakeDamage(dmg: number, source: EntityBase | null, _hitPoint?: EntityHitPoint): void {
+    if (this.hp <= 0) return;
+    this.hp -= dmg;
+    if (this.hp <= 0) {
+      this.hp = 0;
+      // ★ 击杀事件（CombatDirector 编排击杀定格；玩家死亡也发，导演自行分级）
+      eventBus.emit('killed', { target: this, source });
+      this.onDeath(source);
+    }
+  }
+
+  protected renderer: FxRendererBase | null = null;
+
+  constructor(
+    protected em: EntityManager,
+    opts: EntityBaseOptions,
+  ) {
+    this.entity = em.create({
+      kind: opts.kind,
+      x: opts.x, y: opts.y, z: opts.z,
+      physics: opts.physics,
+    });
+    this.anim = opts.asset ? new FrameAnimatorBase(opts.asset, opts.animInitial) : null;
+    this.state = this.anim ? this.anim.state : null;
+    // ★ 影子控制器（组合件；host 回调惰性读取宿主状态，零分配/行为与原 syncShadow 一致）
+    const host: GroundShadowHost = {
+      scene: () => this._scene,
+      shape: () => this.shadowShape,
+      yaw: () => this.shadowYaw,
+      visible: () => this.visible,
+      inFrustum: () => this.inFrustum,
+      lod: () => this.viewLod,
+      farCull: () => this.shadowFarCull,
+      frameData: () => this.getShadowFrameData(),
+      basisX: () => this.rendererGroundBasisX(),
+      position: () => this.entity.position,
+    };
+    this.gsCtl = new GroundShadowController(host);
+    em.register(this);
+    // ★ 刚体初始位置修正：刚体中心 = 实体脚底 + 偏移（如角色胶囊中心在脚底上方）
+    if (this.entity.rigidBody && this.physicsBodyOffsetY() !== 0) {
+      em.physics?.setPosition(this.entity.rigidBody.handle, opts.x, opts.y + this.physicsBodyOffsetY(), opts.z);
+    }
+  }
+
+  /** 子类实现：创建渲染器（FTXQuad / 特效网格） */
+  protected abstract createRenderer(scene: THREE.Scene): FxRendererBase | null;
+
+  /** 设置场景引用（供不走 attachToScene 流程的实体使用，如子弹池化复用） */
+  setSceneReference(scene: THREE.Scene): void {
+    this._scene = scene;
+  }
+
+  /** 挂到场景（模式层在构造后调用） */
+  attachToScene(scene: THREE.Scene): void {
+    this._scene = scene;
+    this.renderer = this.createRenderer(scene);
+  }
+
+  /**
+   * ★ 剪影源（虚方法）：默认从动画资产自动取当前帧纹理——
+   * 有 FTX 动画的实体零成本获得"影子随动画帧变化"。
+   * 非 FTX 资产（共享画布等）才需覆写。每帧调用，内部按 data 引用去重。
+   * 包装对象跨帧复用（零分配）；真正的去重键是 base.data 引用。
+   */
+  private _gsFd: { base: { width: number; height: number; data: Float32Array } } | null = null;
+  protected getShadowFrameData(): ShadowFrameSource | null {
+    if (!this.anim?.source || !this.state) return null;
+    const pair = this.anim.source.getFramePair(this.state.frameIndex);
+    if (!pair?.base?.image) return null;
+    const data = (pair.base.image as unknown as { data?: Float32Array }).data;
+    if (!data) return null;
+    if (!this._gsFd) this._gsFd = { base: { width: 0, height: 0, data } };
+    this._gsFd.base.width = pair.base.image.width;
+    this._gsFd.base.height = pair.base.image.height;
+    this._gsFd.base.data = data;
+    return this._gsFd;
+  }
+
+  // ============ 更新骨架（★ P3 相位切分：Simulate / Present） ============
+
+  /**
+   * ★ Phase 2 Simulate（玩法相）：子类行为（移动/意图消费）→ 物理同步 → 空间索引移块。
+   *   不做任何表现工作（动画/贴片/特效/影子都归 present）。
+   */
+  simulate(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    const _t = entityPerf.enabled;
+    const _p0 = _t ? performance.now() : 0;
+    this.onUpdate(dt, input, cameraFrame);  // ① 子类行为（移动/位置推进）
+    const _p1 = _t ? performance.now() : 0;
+    this.syncPhysics();                     // ② 物理同步（kinematic→位置驱动；read→位置读回）
+    const _p2 = _t ? performance.now() : 0;
+    this.em.onEntityMoved(this);            // ③ 空间索引移块（保持同帧可见，不推迟到表现相）
+    const _p3 = _t ? performance.now() : 0;
+    entityPerf.behavior += _p1 - _p0;
+    entityPerf.phys += _p2 - _p1;
+    entityPerf.moved += _p3 - _p2;
+
+    // ★ 影子朝向跟踪：从位移差实时更新（shadowYaw 消费；与相机角度无关）
+    if (!isNaN(this._gsLastX)) {
+      const dx = this.entity.position.x - this._gsLastX;
+      const dz = this.entity.position.z - this._gsLastZ;
+      if (Math.hypot(dx, dz) > 0.05) {
+        this.groundShadowYaw = Math.atan2(dx, dz) + Math.PI;
+      }
+    }
+    this._gsLastX = this.entity.position.x;
+    this._gsLastZ = this.entity.position.z;
+  }
+
+  /**
+   * ★ Phase 5 Present（表现相）：动画推进 → 渲染同步 → 附属特效 → 贴地影子。
+   *   ★ 视锥外（上一帧 renderAll 未命中）只在末尾做影子隐藏调度；回到视野下一帧自动恢复。
+   */
+  present(dt: number): void {
+    const _t = entityPerf.enabled;
+    const _p0 = _t ? performance.now() : 0;
+    if (this.inFrustum) {
+      this.anim?.update(dt);                // ④ 动画推进
+    }
+    const _p1 = _t ? performance.now() : 0;
+    if (this.inFrustum) {
+      this.syncRender();                    // ⑤ 渲染同步
+      this.updateEffects(dt);               // ⑥ 附属特效驱动（跟随/时间轴/回收）
+    }
+    const _p2 = _t ? performance.now() : 0;
+    this.syncShadow();                      // ⑦ 贴地剪影影子同步（统一机制）
+    const _p3 = _t ? performance.now() : 0;
+    entityPerf.anim += _p1 - _p0;
+    entityPerf.render += _p2 - _p1;
+    entityPerf.shadow += _p3 - _p2;
+  }
+
+  /** 兼容入口：simulate + present 连跑（旧调用方/单测用；WorldMode 已改显式两相） */
+  update(dt: number, input?: InputActions, cameraFrame?: CameraFrame): void {
+    this.simulate(dt, input, cameraFrame);
+    this.present(dt);
+  }
+
+  /** 子类行为逻辑（覆写） */
+  protected onUpdate(_dt: number, _input?: InputActions, _cameraFrame?: CameraFrame): void {
+    // 默认无行为
+  }
+
+  /** 额外高度偏移（子类覆写：跳跃等） */
+  protected heightOffset(): number {
+    return 0;
+  }
+
+  /** ★ 刚体位置相对实体位置的 y 偏移（脚底系 → 刚体中心）——默认取碰撞体积声明 */
+  protected physicsBodyOffsetY(): number {
+    return this.collisionVolume?.offsetY ?? 0;
+  }
+  /** 刚体中心偏移（公开：模式层贴地钳制等外部同步用） */
+  get bodyOffsetY(): number {
+    return this.physicsBodyOffsetY();
+  }
+
+  private syncPhysics(): void {
+    const rb = this.entity.rigidBody;
+    const physics = this.em.physics;
+    if (!rb || !physics || this.physicsMode === 'none') return;
+    const p = this.entity.position;
+    if (this.physicsMode === 'kinematic') {
+      // ★ 位置 100% 代码驱动（角色：输入/AI 移动 + y 地形由模式层设置）
+      physics.setKinematicPosition(rb.handle, p.x, p.y + this.physicsBodyOffsetY(), p.z);
+    } else if (this.physicsMode === 'read') {
+      // 刚体 → 位置（子弹/物品：纯物理驱动）
+      const gp = physics.getPosition(rb.handle);
+      p.x = gp.x; p.y = gp.y - this.physicsBodyOffsetY(); p.z = gp.z;
+    }
+  }
+
+  private syncRender(): void {
+    if (!this.renderer) return;
+    const p = this.entity.position;
+    this.renderer.setPosition(p.x, p.y + this.heightOffset(), p.z);
+    if (this.state) {
+      this.renderer.setFlip(this.state.flipX, this.state.flipY);
+    }
+  }
+
+  /** 渲染当前帧（模式层 render 阶段遍历调用；不可见时跳过） */
+  render(camera: THREE.Camera): void {
+    if (!this.visible || !this.renderer || !this.state) return;
+    // billboard：2D 贴片永远面向相机（3D 场景）；否则固定朝向（setYaw 由子类控制）
+    if (this.billboard && 'setBillboard' in this.renderer) {
+      (this.renderer as { setBillboard(c: THREE.Camera): void }).setBillboard(camera);
+    }
+    // ★ 流体纹理钩子（子类覆写：受击染料/技能附着的 composite 纹理；null=普通贴片）
+    this.renderer.render(this.state, this.getFluidTexture());
+    // ★ 附属特效渲染（血条/技能/受击——跟随实体，独立于主贴片）
+    this.renderEffects(camera);
+  }
+
+  /** ★ 附属特效渲染入口（子类覆写 render 时复用：如工事只画血条、不画贴片） */
+  protected renderEffects(camera: THREE.Camera): void {
+    this.fx.render(camera);
+  }
+
+  /** ★ 流体纹理钩子（子类覆写返回要喂给贴片的 composite 纹理；默认 null） */
+  protected getFluidTexture(): THREE.Texture | null {
+    return null;
+  }
+
+  // ============ 生命周期 ============
+
+  /** ★ 碰撞回调（实体管线按 userData=实体 id 分发；覆写 = 命中处理）
+   *   other = 碰撞对方实体；null = 静态世界（地面/墙）
+   *   started = 接触开始（true）/ 结束（false） */
+  onCollision(_other: EntityBase | null, _started: boolean): void {
+    // 默认无处理（角色碰撞由物理响应，子弹/伤害逻辑覆写）
+  }
+
+  /** 死亡钩子（子类覆写：掉落/死亡表现/来源记录；默认退役 = killed）
+   *  ★ 不调用 super 的子类 = "不死"（玩家死亡等待复活）；见 Player.onDeath */
+  onDeath(_source: EntityBase | null): void {
+    this.retire('killed');
+  }
+
+  /** 销毁（动画/渲染/管线资源全释放；★ 幂等、不发业务事件——业务在 onRetire/onDeath） */
+  dispose(): void {
+    if (this._life === 'disposed') return;
+    this._life = 'disposed';
+    this.effects = null;
+    this.statBase = null;
+    this.anim?.dispose();
+    this.renderer?.dispose();
+    this.gsCtl.dispose();
+    this.fx.disposeAll();
+    this.em.unregister(this);
+    this.em.destroy(this.entity.id);
+  }
+}

@@ -1,0 +1,387 @@
+// ============================================================
+// ItemManager.ts —— 物品管理（共享业务逻辑层）
+// 无 UI 依赖，只操作 Session 数据。
+// ShipMode 和 WorldMode 共用同一个类，各自实例化。
+// ============================================================
+// 架构：持有 ItemArchetype 缓存（原形层），
+// 所有背包操作委托给 Session 工具函数，
+// useItem 查原形 → 执行效果 → 扣减。
+// ============================================================
+
+import type { GameSession, InventoryGrid } from '../../core/Session';
+import { addItemToGrid, removeItemFromGrid, moveItemBetweenGrids, swapGridCells, findItemInGrid, findEmptySlot, SLOT_COUNT, SLOT_ROWS, SLOT_COLS } from '../../core/Session';
+import { ItemArchetype, type EquipmentStats } from '../../core/ItemArchetype';
+import type { HealProcDef } from '../../services/combat/EffectSystem';
+import { type ItemEffectContext } from '../../core/ItemEffect';
+import { eventBus } from '../../core/EventBus';
+import type { EntityBase } from '../../entity/EntityBase';
+import itemsConfig from '../../config/items.json';
+
+export interface UseItemResult {
+  success: boolean;
+  message?: string;
+  healAmount?: number;
+}
+
+/** ★ 装备属性汇总（数值项全量；healProc 为 proc 配置而非数值，取单件生效） */
+export type EquipmentStatsTotal = Required<Omit<EquipmentStats, 'healProc'>> & { healProc: HealProcDef | null };
+
+export class ItemManager {
+  private archetypes = new Map<string, ItemArchetype>();
+  /** ★ 效果执行用户（世界模式注入玩家实体；buff 类消耗品作用于实体效果队列） */
+  private effectUser: EntityBase | null = null;
+
+  constructor(private session: GameSession) {
+    this.loadArchetypes();
+  }
+
+  /** ★ 注入效果执行用户（WorldMode.enter 调；ShipMode 无实体 → 消耗品 buff 不可用） */
+  setEffectUser(user: EntityBase | null): void {
+    this.effectUser = user;
+  }
+
+  private loadArchetypes(): void {
+    for (const raw of itemsConfig.items) {
+      const arch = new ItemArchetype(raw);
+      this.archetypes.set(arch.id, arch);
+    }
+  }
+
+  /** 获取原形（供 UI 查询颜色/名称/最大堆叠/世界参数） */
+  getArchetype(itemId: string): ItemArchetype | null {
+    return this.archetypes.get(itemId) ?? null;
+  }
+
+  /** 添加物品到指定网格（★ 同层合并：一格一类，数量无上限） */
+  addItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    return addItemToGrid(grid, itemId, count);
+  }
+
+  /** 从指定网格移除物品 */
+  removeItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    return removeItemFromGrid(grid, itemId, count);
+  }
+
+  /** 跨层移动物品（原子回滚；目标自动合并） */
+  moveItem(
+    srcLayer: keyof GameSession['inventories'],
+    dstLayer: keyof GameSession['inventories'],
+    itemId: string,
+    count: number,
+  ): boolean {
+    const src = this.session.inventories[srcLayer] as InventoryGrid;
+    const dst = this.session.inventories[dstLayer] as InventoryGrid;
+    if (!Array.isArray(src) || !Array.isArray(dst)) return false;
+    return moveItemBetweenGrids(src, dst, itemId, count);
+  }
+
+  /** ★ 网格内自由整理：交换两格（空 = 移动；同类 = 合并）——返回是否有变更 */
+  swapCells(
+    layer: keyof GameSession['inventories'],
+    r1: number, c1: number, r2: number, c2: number,
+  ): boolean {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    return swapGridCells(grid, r1, c1, r2, c2);
+  }
+
+  /** 使用物品（核心逻辑：查原形 → 执行效果 → 扣减） */
+  useItem(layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid) || !grid[row]?.[col]) {
+      return { success: false, message: '物品不存在' };
+    }
+
+    const slot = grid[row][col]!;
+    const arch = this.archetypes.get(slot.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    // ★ 可使用类型：消耗品 / 装备（穿戴到装备位）；弹药不可"使用"（由攻击键发射）
+    if (arch.type !== 'consumable' && arch.type !== 'equip') {
+      return { success: false, message: '该物品无法使用' };
+    }
+
+    const ctx: ItemEffectContext = {
+      session: this.session,
+      user: this.effectUser,
+      targetLayer: layer,
+      row,
+      col,
+    };
+
+    const result = arch.use(ctx);
+    if (result.success) {
+      this.removeItem(layer, slot.itemId, 1);
+    }
+    return result;
+  }
+
+  /** 获取网格中所有物品列表（供 UI 渲染） */
+  getItems(layer: keyof GameSession['inventories']): { itemId: string; stackSize: number; row: number; col: number }[] {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const result: { itemId: string; stackSize: number; row: number; col: number }[] = [];
+    if (!Array.isArray(grid)) return result;
+    for (let r = 0; r < grid.length; r++) {
+      for (let c = 0; c < grid[r].length; c++) {
+        const slot = grid[r][c];
+        if (slot) result.push({ itemId: slot.itemId, stackSize: slot.stackSize, row: r, col: c });
+      }
+    }
+    return result;
+  }
+
+  /** 检查是否有足够空间（★ 同层合并语义：已有一格同类 → 恒可入；否则需空格） */
+  hasSpace(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    if (count <= 0) return true;
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return false;
+    if (findItemInGrid(grid, itemId)) return true;
+    return findEmptySlot(grid) !== null;
+  }
+
+  /** 获取物品配置（兼容旧接口，底层已改用 archetype） */
+  getItemConfig(itemId: string) {
+    const arch = this.archetypes.get(itemId);
+    if (!arch) return null;
+    return {
+      id: arch.id,
+      name: arch.name,
+      type: arch.type,
+      description: arch.description,
+      maxStack: arch.maxStack,
+      color: arch.color,
+      deployable: arch.deployable,
+    };
+  }
+
+  /** 指定背包层中某物品的数量（★ 唯一单层计数入口） */
+  countItem(layer: keyof GameSession['inventories'], itemId: string): number {
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    if (!Array.isArray(grid)) return 0;
+    let total = 0;
+    for (const row of grid) {
+      for (const cell of row) {
+        if (cell && cell.itemId === itemId) total += cell.stackSize;
+      }
+    }
+    return total;
+  }
+
+  /** 所有背包层（基地+飞船+玩家）的总数（★ 加工台等跨层场景用） */
+  countTotal(itemId: string): number {
+    let total = 0;
+    for (const layer of Object.keys(this.session.inventories) as (keyof GameSession['inventories'])[]) {
+      total += this.countItem(layer, itemId);
+    }
+    return total;
+  }
+
+  /** 指定层某物品是否满足数量 */
+  hasItem(layer: keyof GameSession['inventories'], itemId: string, count: number): boolean {
+    if (count <= 0) return true;
+    return this.countItem(layer, itemId) >= count;
+  }
+
+  // ==================== ★ 出击槽池（12 格通用混用池：友军/装备任意混放） ====================
+
+  /** 物品是否可部署为友军（items.json deployable 标记） */
+  isDeployable(itemId: string): boolean {
+    return this.archetypes.get(itemId)?.deployable === true;
+  }
+
+  /** 物品是否为可装备（items.json type === 'equip'） */
+  isEquip(itemId: string): boolean {
+    return this.archetypes.get(itemId)?.type === 'equip';
+  }
+
+  /** ★ 物品是否"可点击使用"（**只供背包左键分流用**：consumable / equip）。
+   *  ★ 弹药**不在内**（2026-09-15 用户定调）：弹药由武器发射消耗（如祖宗），
+   *    点背包图标不该把它"用掉"；点弹药 → 打开详情（转移/丢弃）。 */
+  canUse(itemId: string): boolean {
+    const t = this.archetypes.get(itemId)?.type;
+    return t === 'consumable' || t === 'equip';
+  }
+
+  /** 物品所属装备位（weapon/armor/headgear；非装备类返回 null；仅信息展示/贴片锚点用） */
+  equipSlotOf(itemId: string): string | null {
+    return this.archetypes.get(itemId)?.equipSlot ?? null;
+  }
+
+  /** 出击槽池（12 格；(string|null)[]，null = 空槽） */
+  getSlots(): (string | null)[] {
+    return Array.isArray(this.session.player.slots) ? this.session.player.slots : [];
+  }
+
+  /**
+   * ★ 一键装备：把背包格里的「可部署友军 / 可装备」物品放进装备栏第一个空槽。
+   *
+   * 与 putIntoSlot（拖入指定槽位）等价，只是槽位由系统挑第一个空的 ——
+   * 供背包「左键点图标」用：可部署/可装备物品点一下 = 装备，而不是被"使用"消耗掉。
+   *   · 装备栏已满 → 失败并提示「装备栏已满」（**不消耗物品**，避免点一下东西就没了）
+   *   · 非装备/非可部署 → 失败（UI 侧不会走到这里）
+   */
+  equipToFirstFreeSlot(
+    layer: keyof GameSession['inventories'], row: number, col: number,
+  ): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const cell = grid?.[row]?.[col];
+    if (!cell) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(cell.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能装备' };
+
+    // ★ 只在 SLOT_COUNT 范围内找空槽（数组可能更长，避免装到可见格子之外）
+    let idx = -1;
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      if (!slots[i]) { idx = i; break; }
+    }
+    if (idx === -1) return { success: false, message: `装备栏已满（${SLOT_COUNT}/${SLOT_COUNT}）` };
+
+    slots[idx] = cell.itemId;
+    this.removeItem(layer, cell.itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex: idx, itemId: cell.itemId, prev: null });
+    return { success: true, message: `已装备到装备栏 ${idx + 1}` };
+  }
+
+  /** ★ 拖入槽池：源格子物品 → 放入指定空槽（一格一个物品，违规/占位拒绝）。发事件由世界侧生成/同步 */
+  putIntoSlot(slotIndex: number, layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    if (slots[slotIndex]) return { success: false, message: '该槽位已占用' };
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const slot = grid?.[row]?.[col];
+    if (!slot) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(slot.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能放入出击槽' };
+    slots[slotIndex] = slot.itemId;
+    this.removeItem(layer, slot.itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex, itemId: slot.itemId, prev: null });
+    return { success: true, message: `已放入出击槽 ${slotIndex + 1}` };
+  }
+
+  /** ★ 拖出槽池：槽内物品 → 放回玩家背包（失败 = 背包无空位，保持槽内不放回，防丢件） */
+  removeFromSlot(slotIndex: number): boolean {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return false;
+    const itemId = slots[slotIndex];
+    if (!itemId) return false;
+    if (!this.hasSpace('player', itemId, 1)) return false;
+    slots[slotIndex] = null;
+    this.addItem('player', itemId, 1);
+    eventBus.emit('deployment_changed', { slotIndex, itemId: null, prev: itemId });
+    return true;
+  }
+
+  /** ★ 背包物品 ⇄ 已占用出击槽 互换：新物品入槽、旧槽物品回背包。
+   *  ★ 换出物品走 addItemToGrid 自动归类（并入同类堆；无同类才占空格）；
+   *  源格堆叠 >1 且无同类堆、无空格 → 拒绝（防丢件）。空槽 = 走 putIntoSlot。 */
+  swapIntoSlot(slotIndex: number, layer: keyof GameSession['inventories'], row: number, col: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (slotIndex < 0 || slotIndex >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    const prev = slots[slotIndex];
+    if (!prev) return this.putIntoSlot(slotIndex, layer, row, col);
+    const grid = this.session.inventories[layer] as InventoryGrid;
+    const cell = grid?.[row]?.[col];
+    if (!cell) return { success: false, message: '物品不存在' };
+    const arch = this.archetypes.get(cell.itemId);
+    if (!arch) return { success: false, message: '未知物品' };
+    if (!arch.deployable && arch.type !== 'equip') return { success: false, message: '该物品不能放入出击槽' };
+    // ★ 预检：换出物品能否回背包（有同类堆必可；否则需要空格——源格会空出也算）
+    const willFreeCell = cell.stackSize <= 1;
+    if (!findItemInGrid(grid, prev) && !willFreeCell && !findEmptySlot(grid)) {
+      return { success: false, message: '背包无空位放下换出的物品' };
+    }
+    const newId = cell.itemId;
+    if (willFreeCell) {
+      grid[row][col] = null; // 先腾出源格
+      slots[slotIndex] = newId;
+      addItemToGrid(grid, prev, 1); // ★ 自动归类：并入同类堆，否则落空格（含刚腾出的源格）
+    } else {
+      slots[slotIndex] = newId;
+      cell.stackSize -= 1;
+      addItemToGrid(grid, prev, 1); // ★ 自动归类
+    }
+    eventBus.emit('deployment_changed', { slotIndex, itemId: newId, prev });
+    return { success: true, message: `已与槽位 ${slotIndex + 1} 互换` };
+  }
+
+  /** ★ 清空槽位（友军损毁 → 彻底没了：不返还、不生成残骸、不可维修）；
+   *  发事件通知世界侧回收对应实体 */
+  clearSlot(slotIndex: number): boolean {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots) || slotIndex < 0 || slotIndex >= slots.length) return false;
+    const prev = slots[slotIndex];
+    slots[slotIndex] = null;
+    eventBus.emit('deployment_changed', { slotIndex, itemId: null, prev });
+    return true;
+  }
+
+  /** ★ 槽位间移动/交换：目标空 = 移动，目标占用 = 互换。逐槽发事件（世界侧按槽 idempotent 同步） */
+  swapSlots(from: number, to: number): UseItemResult {
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return { success: false, message: '出击槽池未初始化' };
+    if (from < 0 || from >= SLOT_COUNT || to < 0 || to >= SLOT_COUNT) return { success: false, message: '槽位越界' };
+    if (from === to) return { success: false, message: '相同槽位' };
+    const itemFrom = slots[from];
+    if (!itemFrom) return { success: false, message: '源槽为空' };
+    const itemTo = slots[to];
+    slots[from] = itemTo;
+    slots[to] = itemFrom;
+    eventBus.emit('deployment_changed', { slotIndex: from, itemId: itemTo, prev: itemFrom });
+    // ★ 无论目标是否空槽都发第二条：目标空 = 移动需在新槽重生；起收事件定位在源槽、落点在目标槽
+    eventBus.emit('deployment_changed', { slotIndex: to, itemId: itemFrom, prev: itemTo });
+    return { success: true, message: itemTo ? `已互换槽位 ${from + 1} ↔ ${to + 1}` : `已移到槽位 ${to + 1}` };
+  }
+
+  /** ★ 局内装备临时属性：遍历出击槽汇总各装备 stats（卸载/换装即自动消失，与遗物永久加成区分）
+   *   加算：maxHp/attackPower/attackPct/defense/defensePct/attackSpeed/hpRegen/crit系列/moveSpeedPct
+   *   取最高：damageReduction（方舟"庇护"同名效果取最高，不叠加）
+   *   或：vehicle（任一装备为载具即真；消费方 VehicleRide）
+   *   proc：healProc（取最后一件配置者；装备间不叠） */
+  getEquipmentStats(): EquipmentStatsTotal {
+    const out: EquipmentStatsTotal = {
+      maxHp: 0, attackPower: 0, attackPct: 0,
+      defense: 0, defensePct: 0,
+      attackSpeed: 0, damageReduction: 0, hpRegen: 0, allyRegen: 0,
+      critRate: 0, critMult: 0, dodgeRate: 0, blockRate: 0, blockMult: 0,
+      healProc: null,
+      moveSpeedPct: 0, vehicle: false,
+    };
+    const slots = this.session.player.slots;
+    if (!Array.isArray(slots)) return out;
+    for (const id of slots) {
+      if (!id) continue;
+      const s = this.archetypes.get(id)?.stats;
+      if (!s) continue;
+      out.maxHp += s.maxHp ?? 0;
+      out.attackPower += s.attackPower ?? 0;
+      out.attackPct += s.attackPct ?? 0;
+      out.defense += s.defense ?? 0;
+      out.defensePct += s.defensePct ?? 0;
+      out.attackSpeed += s.attackSpeed ?? 0;
+      out.damageReduction = Math.max(out.damageReduction, s.damageReduction ?? 0);
+      out.hpRegen += s.hpRegen ?? 0;
+      out.allyRegen += s.allyRegen ?? 0;
+      out.critRate += s.critRate ?? 0;
+      out.critMult += s.critMult ?? 0;
+      out.dodgeRate += s.dodgeRate ?? 0;
+      out.blockRate += s.blockRate ?? 0;
+      out.blockMult += s.blockMult ?? 0;
+      out.moveSpeedPct += s.moveSpeedPct ?? 0;
+      if (s.vehicle) out.vehicle = true;
+      if (s.healProc) out.healProc = s.healProc;
+    }
+    return out;
+  }
+}
+
+/** ★ 出击槽池规格（背包页面绘制 2 行 × 6 列；装具/友军混用池容积） */
+export { SLOT_COUNT, SLOT_ROWS, SLOT_COLS };

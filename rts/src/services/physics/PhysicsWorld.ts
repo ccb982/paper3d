@@ -1,0 +1,458 @@
+// ============================================================
+// PhysicsWorld —— 物理世界封装（唯一接触 rapier API 的地方）
+// ============================================================
+// 架构 4.9：游戏代码/实体系统不直接碰 rapier，全部走本封装。
+// 提供：刚体创建（按形状）、位置驱动（玩家/运动学）、固定步进、
+// 碰撞事件转发（contact / sensor）、球体查询（爆炸/范围）。
+
+import RAPIER, { ActiveEvents } from '@dimforge/rapier3d';
+import { initRapierWasm } from './rapierWasm';
+
+/**
+ * ★ rapier wasm 初始化（进程内一次性；进入战斗前必须调用）。
+ * 非 compat 版 + 手动实例化（rapierWasm.ts）：
+ *   fetch ?url 资产 → 按导入表映射 bg.js 导出 → instantiate → set_wasm 注入。
+ * （2026-08-28 弃用 compat：base64 内联占主包 1.37MB 且 gzip 压不动；
+ *   vite-plugin-wasm 插件链在生产构建静默失效 → 手动实例化根治，见 rapierWasm.ts）
+ */
+export async function ensureRapierReady(): Promise<void> {
+  await initRapierWasm();
+}
+
+/** ⚠ 关键经验（踩坑记录）：
+ *   rapier 0.14.0 的 createRigidBody 返回值是坏的（wasm 绑定错读）——
+ *   玩家/敌人早期创建碰巧读到小整数（≈索引）才"能玩"，子弹创建时读到
+ *   递增垃圾值（栈内数据）→ Coarena 索引越界 → 刚体找不到。
+ *   ★ 根治：不信任 body.handle，PhysicsWorld 内部自管 id → RigidBody 映射，
+ *     对外接口不变（仍返回 number id），调用方完全无感。 */
+
+/** ★ 碰撞分组位（2026-09-19：射击孔单向 / 掩体穿透用）：
+ *  默认刚体 membership/filter 全 1（与一切交互）；
+ *  城墙 membership = GROUP_WALL，子弹 filter 去掉该位即可"无视墙"。 */
+export const GROUP_WALL = 0x0002;
+/** ★ 玩家造掩体分组（2026-09-19）：玩家/友军子弹可 filter 掉它实现“穿自家掩体” */
+export const GROUP_COVER_PLAYER = 0x0004;
+/** ★ 我方射击孔膜（2026-09-19）：玩家造城墙的孔口贴一层薄膜，
+ *  只挡敌弹（敌弹 filter 含本位）；玩家/友军弹 filter 剔除本位 → 自由穿。 */
+export const GROUP_SLIT_PLAYER = 0x0008;
+
+export type ColliderShape =
+  | { type: 'ball'; radius: number }
+  | { type: 'cuboid'; hx: number; hy: number; hz: number }
+  /** 胶囊（角色用：贴片宽/高更真实）；halfHeight=半高（不含帽），radius=半径，轴=Y */
+  | { type: 'capsule'; halfHeight: number; radius: number }
+  /** ★ 圆柱（舰船等抽象碰撞体）；halfHeight=半高，radius=半径，轴=Y（横放需配 BodyOptions.rotation） */
+  | { type: 'cylinder'; halfHeight: number; radius: number }
+  /** ★ 三角网格（地形用：视觉网格几何直接复用 = 视觉/物理同源）；
+   *   vertices = 扁平 [x,y,z,...]，indices = 三角形索引 */
+  | { type: 'trimesh'; vertices: Float32Array; indices: Uint32Array };
+
+/** ★ 四元数（碰撞体局部旋转；如圆柱轴 Y→Z = 绕 X 转 90°） */
+export interface Quat {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/** 形状 → rapier 碰撞体描述 */
+function makeColliderDesc(shape: ColliderShape): RAPIER.ColliderDesc {
+  switch (shape.type) {
+    case 'ball':
+      return RAPIER.ColliderDesc.ball(shape.radius);
+    case 'cuboid':
+      return RAPIER.ColliderDesc.cuboid(shape.hx, shape.hy, shape.hz);
+    case 'capsule':
+      return RAPIER.ColliderDesc.capsule(shape.halfHeight, shape.radius);
+    case 'cylinder':
+      return RAPIER.ColliderDesc.cylinder(shape.halfHeight, shape.radius);
+    case 'trimesh':
+      return RAPIER.ColliderDesc.trimesh(shape.vertices, shape.indices);
+  }
+}
+
+export interface ExtraCollider {
+  shape: ColliderShape;
+  /** 相对刚体原点的偏移（复合刚体：一簇家具 = 一个刚体 + 多个盒子） */
+  offset: { x: number; y: number; z: number };
+  /** ★ 单体碰撞分组覆写（缺省 = 刚体组；射击孔膜用） */
+  groups?: number;
+}
+
+export interface BodyOptions {
+  shape: ColliderShape;
+  /** 线性阻尼（越大越"黏"，玩家用高阻尼防滑） */
+  linearDamping?: number;
+  /** 是否允许睡眠（默认 true；玩家设 false 保持活跃） */
+  canSleep?: boolean;
+  /** 是否为传感器（无碰撞响应，仅触发事件） */
+  sensor?: boolean;
+  /** ★ 重力缩放（默认 1；子弹 0 = 直线弹道） */
+  gravityScale?: number;
+  /** ★ 碰撞体密度（默认 1；物品调大 → 更重，玩家推不动/不滑远） */
+  density?: number;
+  /** ★ 实体身份标记（entity.id，碰撞事件携带；★ handle 会被 rapier 复用，
+   *   不能用 handle 对应实体——userData 才是稳定身份） */
+  userData?: number;
+  /** ★ 连续碰撞检测（子弹：高速薄目标防隧穿） */
+  ccd?: boolean;
+  /** ★ 复合刚体：在主碰撞体之外追加的碰撞体（各自带局部偏移） */
+  extraColliders?: ExtraCollider[];
+  /** ★ 主碰撞体的局部偏移（复合刚体：主碰撞体也是"某个部件"时用） */
+  shapeOffset?: { x: number; y: number; z: number };
+  /** ★ 恢复系数（反弹：子弹打地面/墙弹起；默认 0 不弹） */
+  restitution?: number;
+  /** ★ 分块地面分区槽位（grid 分区 cell 序）：创建首块时登记进记账，
+   *   后续 setTileCollider 可原位替换（挖坑只重建受影响分区） */
+  tileSlot?: number;
+  /** ★ 碰撞体局部旋转（四元数；圆柱横放用：Y 轴 → Z 轴 = 绕 X 转 90°） */
+  rotation?: Quat;
+  /** ★ 碰撞分组（membership<<16 | filter；缺省 = rapier 默认全交互） */
+  collisionGroups?: number;
+}
+
+export interface CollisionEvent {
+  /** 碰撞双方的实体 id（userData；0/缺失 = 静态世界） */
+  aId: number;
+  bId: number;
+  /** 接触开始（true）/ 结束（false） */
+  started: boolean;
+}
+
+export class PhysicsWorld {
+  private world: RAPIER.World;
+  private eventQueue: RAPIER.EventQueue;
+  private contactHandlers: Array<(e: CollisionEvent) => void> = [];
+  /** ★ 自管刚体映射（绕过 rapier 坏 handle：id → RigidBody，id 不复用） */
+  private bodyById = new Map<number, RAPIER.RigidBody>();
+  private nextBodyId = 1;
+  /** ★ 主碰撞体记账（bodyId → Collider；碰撞分组运行时切换用） */
+  private readonly colliders = new Map<number, RAPIER.Collider>();
+  /** ★ 分区地面 collider 记账（key = bodyId*1024+slot → Collider；grid 分区 cell） */
+  private tileColliders = new Map<number, RAPIER.Collider>();
+
+  constructor(gravity: { x: number; y: number; z: number } = { x: 0, y: -9.8, z: 0 }) {
+    this.world = new RAPIER.World(gravity);
+    this.eventQueue = new RAPIER.EventQueue(true);
+  }
+
+  /** 注册刚体到自管映射（返回稳定 id） */
+  private registerBody(body: RAPIER.RigidBody): number {
+    const id = this.nextBodyId++;
+    this.bodyById.set(id, body);
+    return id;
+  }
+
+  /** 刚体缺失：静默防御（正常销毁后的残余访问是良性的——事件批次内先销毁后查，
+   *   或已删除实体的一帧遗留；防御返回默认值即可，不再告警刷屏） */
+  private getBody(id: number): RAPIER.RigidBody | null {
+    return this.bodyById.get(id) ?? null;
+  }
+
+  /** 创建固定刚体（地面/墙/静态障碍；tileSlot = 分区地面首块登记） */
+  addFixed(
+    position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0,
+    tileSlot?: number, rotation?: Quat,
+    extraColliders?: ExtraCollider[], shapeOffset?: { x: number; y: number; z: number },
+    collisionGroups?: number,
+  ): number {
+    const desc = RAPIER.RigidBodyDesc.fixed().setTranslation(position.x, position.y, position.z);
+    desc.userData = userData; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
+    const body = this.world.createRigidBody(desc);
+    const col = this.attachCollider(body, shape, false, undefined, undefined, rotation, shapeOffset, collisionGroups);
+    // ★ 复合刚体：主碰撞体之外的部件（舰船分段等；各自带局部偏移）
+    if (extraColliders) {
+      for (const c of extraColliders) {
+        this.attachCollider(body, c.shape, false, undefined, undefined, undefined, c.offset, c.groups ?? collisionGroups);
+      }
+    }
+    const id = this.registerBody(body);
+    this.colliders.set(id, col);
+    if (tileSlot !== undefined) this.tileColliders.set(id * 1024 + tileSlot, col);
+    return id;
+  }
+
+  /** 创建运动学刚体（角色/敌人：位置 100% 代码驱动，推挤 dynamic，不受力/重力） */
+  addKinematic(position: { x: number; y: number; z: number }, shape: ColliderShape, userData = 0): number {
+    const desc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(position.x, position.y, position.z);
+    desc.userData = userData;
+    const body = this.world.createRigidBody(desc);
+    this.attachCollider(body, shape);
+    return this.registerBody(body);
+  }
+
+  /** ★ 运动学位置驱动（step 前调用；rapier 自动计算对 dynamic 的推挤） */
+  setKinematicPosition(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) return;
+    body.setNextKinematicTranslation({ x, y, z });
+  }
+
+  /** 创建动态刚体（物品/子弹/掉落物——纯物理，零代码修正） */
+  addDynamic(position: { x: number; y: number; z: number }, opts: BodyOptions): number {
+    const desc = RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(position.x, position.y, position.z)
+      .setLinearDamping(opts.linearDamping ?? 0)
+      .setCanSleep(opts.canSleep ?? true)
+      .setGravityScale(opts.gravityScale ?? 1);
+    if (opts.ccd) {
+      // ★ 连续碰撞检测（子弹高速薄目标防隧穿）
+      desc.setCcdEnabled(true);
+    }
+    desc.userData = opts.userData ?? 0; // ★ 实体身份（碰撞事件携带，见 CollisionEvent）
+    const body = this.world.createRigidBody(desc);
+    const col = this.attachCollider(body, opts.shape, opts.sensor ?? false, opts.density, opts.restitution, opts.rotation, opts.shapeOffset, opts.collisionGroups);
+    if (opts.extraColliders) {
+      for (const c of opts.extraColliders) {
+        this.attachCollider(body, c.shape, opts.sensor ?? false, opts.density, opts.restitution, undefined, c.offset, opts.collisionGroups);
+      }
+    }
+    const id = this.registerBody(body);
+    this.colliders.set(id, col);
+    return id;
+  }
+
+  private attachCollider(
+    body: RAPIER.RigidBody, shape: ColliderShape, sensor = false,
+    density?: number, restitution?: number, rotation?: Quat,
+    offset?: { x: number; y: number; z: number },
+    collisionGroups?: number,
+  ): RAPIER.Collider {
+    const desc = makeColliderDesc(shape);
+    if (rotation) desc.setRotation(rotation); // ★ 碰撞体局部旋转（圆柱横放等）
+    if (offset) desc.setTranslation(offset.x, offset.y, offset.z); // ★ 复合刚体的部件偏移
+    if (collisionGroups !== undefined) desc.setCollisionGroups(collisionGroups); // ★ 碰撞分组
+    if (sensor) desc.setSensor(true);
+    if (density !== undefined) desc.setDensity(density);
+    if (restitution !== undefined) desc.setRestitution(restitution);
+    // ★ 碰撞事件（默认 NONE → 事件从不产生；子弹命中/拾取/碰撞分发全部依赖）
+    desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
+    return this.world.createCollider(desc, body);
+  }
+
+  /**
+   * ★ 分区地面原位换 collider（挖坑增量核心，同步）：同刚体内移除旧 slot collider、
+   * 建新 trimesh collider。O(受影响分区) —— 不重建整 chunk 地面。
+   * key = bodyId*1024+slot（slot ≤ 255 < 1024；bodyId 全局自增不复用）。
+   */
+  setTileCollider(bodyId: number, slot: number, vertices: Float32Array, indices: Uint32Array): void {
+    const body = this.getBody(bodyId);
+    if (!body) return;
+    const key = bodyId * 1024 + slot;
+    const old = this.tileColliders.get(key);
+    if (old) {
+      this.world.removeCollider(old, true);
+      this.tileColliders.delete(key);
+    }
+    const desc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+    desc.setActiveEvents(ActiveEvents.COLLISION_EVENTS);
+    this.tileColliders.set(key, this.world.createCollider(desc, body));
+  }
+
+  /** 强制设刚体位置（初始位置修正/边界同步） */
+  setPosition(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setTranslation({ x, y, z }, true);
+  }
+
+  /** ★ 设置刚体主碰撞体的碰撞分组（membership<<16 | filter；子弹"无视墙"用） */
+  setCollisionGroups(id: number, groups: number): void {
+    this.colliders.get(id)?.setCollisionGroups(groups);
+  }
+
+  /** ★ 强制设刚体姿态（fixed 刚体随实体姿态同步：舰船圆柱碰撞体随航向/俯仰） */
+  setRotation(id: number, rotation: Quat): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setRotation(rotation, true);
+  }
+
+  /** ★ 停用/恢复刚体（远处 chunk 封存：停用 = 不参与模拟，保留对象/句柄 → 回程瞬间恢复） */
+  setBodyEnabled(id: number, enabled: boolean): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setEnabled(enabled);
+  }
+
+  /** ★ 运行时改碰撞球半径（子弹"安全出膛"：出生小体积 → 飞行一段距离恢复判定体积；
+   *  仅球体；非球/无碰撞体静默跳过） */
+  setBallRadius(id: number, radius: number): void {
+    const body = this.getBody(id);
+    if (!body || body.numColliders() <= 0) return;
+    body.collider(0).setShape(new RAPIER.Ball(radius));
+  }
+
+  /** ★ 移除刚体（实体销毁联动：不移除 = 物理世界泄漏膨胀） */
+  removeBody(id: number): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    // ★ 名下分区 collider 记账清理（removeRigidBody 会带走 collider，这里只清映射）
+    for (const key of [...this.tileColliders.keys()]) {
+      if (Math.floor(key / 1024) === id) this.tileColliders.delete(key);
+    }
+    this.world.removeRigidBody(body);
+    this.bodyById.delete(id);
+  }
+
+  /** 读取刚体位置（同步到实体时用） */
+  getPosition(id: number): { x: number; y: number; z: number } {
+    const body = this.getBody(id);
+    if (!body) { return { x: 0, y: 0, z: 0 }; }
+    return body.translation();
+  }
+
+  /** 读刚体质量（推挤强度按质量衰减：隔墙这种大件应该"推不太动"） */
+  getMass(id: number): number {
+    const body = this.getBody(id);
+    return body ? body.mass() : 0;
+  }
+
+  /** 读刚体姿态（同步 mesh 用） */
+  getRotation(id: number): Quat {
+    const body = this.getBody(id);
+    if (!body) return { x: 0, y: 0, z: 0, w: 1 };
+    const r = body.rotation();
+    return { x: r.x, y: r.y, z: r.z, w: r.w };
+  }
+
+  /** ★ 物理步长（房间用固定 1/60 累加；默认 rapier 也是 1/60） */
+  setTimestep(dt: number): void {
+    this.world.timestep = dt;
+  }
+
+  /** ★ 在指定点沿方向施冲量（房间"推家具"用：不产生力矩，家具平移不翻倒） */
+  applyImpulseAtCenter(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) return;
+    body.applyImpulse({ x, y, z }, true);
+  }
+
+  /** 唤醒刚体（被推动时必须醒着，否则冲量被 sleep 吃掉） */
+  wake(id: number): void {
+    this.getBody(id)?.wakeUp();
+  }
+
+  /** 设刚体速度（子弹发射） */
+  setLinearVelocity(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.setLinvel({ x, y, z }, true);
+  }
+
+  /** 读刚体速度 */
+  getLinearVelocity(id: number): { x: number; y: number; z: number } {
+    const body = this.getBody(id);
+    if (!body) { return { x: 0, y: 0, z: 0 }; }
+    return body.linvel();
+  }
+
+  /** 施力（击退/爆炸冲击） */
+  applyImpulse(id: number, x: number, y: number, z: number): void {
+    const body = this.getBody(id);
+    if (!body) { return; }
+    body.applyImpulse({ x, y, z }, true);
+  }
+
+  /** 固定步长物理步进（1/60）+ 碰撞事件派发
+   *   ★ 关键：drain 回调中只收集事件，step 返回后才派发——
+   *     回调中 removeBody/addBody 会破坏正在迭代的 narrow-phase 数据
+   *     （wasm 内存损坏 → 后续创建刚体返回垃圾 handle） */
+  step(): void {
+    this.world.step(this.eventQueue);
+
+    // 收集（回调中禁止修改物理世界；★ 事件携带 userData（实体 id）而非 handle——
+    //  handle 会被 rapier 复用，延迟派发时按 handle 查会误伤新实体）
+    const events: CollisionEvent[] = [];
+    this.eventQueue.drainCollisionEvents((c1, c2, started) => {
+      // 刚体可能已在上次派发中移除 → 判空
+      const col1 = this.world.getCollider(c1);
+      const col2 = this.world.getCollider(c2);
+      if (!col1 || !col2) return;
+      events.push({
+        aId: (col1.parent()?.userData ?? 0) as number,
+        bId: (col2.parent()?.userData ?? 0) as number,
+        started,
+      });
+    });
+
+    // step 结束后统一派发（此阶段可安全修改世界）
+    for (const e of events) {
+      for (const h of this.contactHandlers) h(e);
+    }
+  }
+
+  /** ★ 射线查询（玩家瞄准落点：摄像机沿准星发线 → 目标/地面交点；
+   *   返回命中实体的 userData（实体 id）+ 落点；null = 无命中） */
+  castRay(
+    origin: { x: number; y: number; z: number },
+    dir: { x: number; y: number; z: number },
+    maxToi = 200,
+    excludeBodyId?: number,
+  ): { handle: number; point: { x: number; y: number; z: number } } | null {
+    const excl = excludeBodyId !== undefined ? (this.getBody(excludeBodyId) ?? undefined) : undefined;
+    const ray = new RAPIER.Ray({ x: origin.x, y: origin.y, z: origin.z }, { x: dir.x, y: dir.y, z: dir.z });
+    const hit = this.world.castRay(ray, maxToi, true, undefined, undefined, undefined, excl);
+    if (!hit) return null;
+    const t = hit.timeOfImpact;
+    const parent = hit.collider.parent();
+    return {
+      handle: parent ? (parent.userData as number) : -1, // ★ 实体 id（userData）
+      point: { x: origin.x + dir.x * t, y: origin.y + dir.y * t, z: origin.z + dir.z * t },
+    };
+  }
+
+  /** 球体查询（爆炸范围/范围效果） → 命中的实体 id（userData）列表 */
+  querySphere(center: { x: number; y: number; z: number }, radius: number): number[] {
+    const hits: number[] = [];
+    const shape = new RAPIER.Ball(radius);
+    const rot = new RAPIER.Quaternion(0, 0, 0, 1);
+    let exclude: RAPIER.Collider | undefined = undefined;
+    // intersectionWithShape 返回单个 collider → 循环排除收集全部
+    for (let i = 0; i < 64; i++) {
+      const c = this.world.intersectionWithShape(center, rot, shape, undefined, undefined, exclude, undefined);
+      if (!c) break;
+      const parent = c.parent();
+      if (parent) hits.push(parent.userData as number); // ★ 实体 id（userData）
+      exclude = c;
+    }
+    return hits;
+  }
+
+  /**
+   * ★ 静态障碍查询（运动学角色手动推挤用，架构 4.9）：
+   * 只返回 cuboid 障碍（装饰物等 fixed 碰撞体）的 id/位置/半径/半高——
+   *   trimesh（halfExtents=0）与 capsule/ball（角色/物品，走角色间推挤）自动排除。
+   * 半径/高度直接读 rapier 实际碰撞体（含 scale），不依赖任何外部注册表。
+   */
+  queryStaticObstacles(
+    center: { x: number; y: number; z: number }, radius: number,
+  ): { id: number; x: number; z: number; y: number; r: number; hy: number }[] {
+    const hits: { id: number; x: number; z: number; y: number; r: number; hy: number }[] = [];
+    const shape = new RAPIER.Ball(radius);
+    const rot = new RAPIER.Quaternion(0, 0, 0, 1);
+    let exclude: RAPIER.Collider | undefined = undefined;
+    for (let i = 0; i < 64; i++) {
+      const c = this.world.intersectionWithShape(center, rot, shape, undefined, undefined, exclude, undefined);
+      if (!c) break;
+      const parent = c.parent();
+      if (parent) {
+        const ext = c.halfExtents();
+        // ★ 防御：halfExtents 仅 cuboid 有效（capsule/ball/trimesh 返回 null 或 0）
+        if (ext && ext.x > 0 && ext.y > 0) {
+          const t = parent.translation();
+          if (!t) { exclude = c; continue; } // 刚体已被移除的残留碰撞体
+          hits.push({ id: parent.userData as number, x: t.x, z: t.z, y: t.y, r: Math.max(ext.x, ext.z), hy: ext.y });
+        }
+      }
+      exclude = c;
+    }
+    return hits;
+  }
+
+  /** 碰撞事件监听（阵营过滤在游戏层做） */
+  onCollision(handler: (e: CollisionEvent) => void): void {
+    this.contactHandlers.push(handler);
+  }
+
+}
