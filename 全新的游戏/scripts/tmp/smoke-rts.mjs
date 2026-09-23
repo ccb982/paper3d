@@ -20,6 +20,22 @@ const sel = await page.evaluate(() => ({
 }));
 console.log('A 选点页 =', JSON.stringify(sel));
 await page.screenshot({ path: '../rts/sel.png' });
+// ★ 换种子实时切换（输入框改值 → applySeed）
+await page.evaluate(() => {
+  const inp = document.querySelector('input');
+  if (inp) inp.value = '99';
+  window.__rts.select.applySeed();
+});
+await new Promise((r) => setTimeout(r, 2500));
+const seed2 = await page.evaluate(() => window.__rts?.raster?.worldSeed ?? null);
+console.log('换图后 seed =', seed2);
+await page.screenshot({ path: '../rts/sel-seed99.png' });
+await page.evaluate(() => {
+  const inp = document.querySelector('input');
+  if (inp) inp.value = '4242';
+  window.__rts.select.applySeed();
+});
+await new Promise((r) => setTimeout(r, 2500));
 try {
   const diag = await page.evaluate(() => ({
     phase: window.__rts?.phase ?? null,

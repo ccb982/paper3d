@@ -23,7 +23,7 @@ const WORLD_R = 4 * 60 - 20;
 const R = globalThis as unknown as Record<string, unknown>;
 
 // ---- 阶段 A 起点：只建数据层（无 3D）----
-const raster = new RasterMap(SEED);
+let raster = new RasterMap(SEED);
 R.__rts = { raster, phase: 'select' };
 
 function startWorld(spawnX: number, spawnZ: number): void {
@@ -42,8 +42,8 @@ function startWorld(spawnX: number, spawnZ: number): void {
 
   const cam = { tx: spawn.x, tz: spawn.z, dist: 150, yaw: Math.PI * 0.25, pitch: 0.95 };
   const clampArea = (): void => {
-    cam.tx = clamp(cam.tx, -WORLD_R, WORLD_R);
-    cam.tz = clamp(cam.tz, -WORLD_R, WORLD_R);
+    cam.tx = clamp(cam.tx, spawn.x - WORLD_R, spawn.x + WORLD_R);   // ★ 固定世界以**出生点**为圆心
+    cam.tz = clamp(cam.tz, spawn.z - WORLD_R, spawn.z + WORLD_R);
   };
   const applyCam = (): void => {
     const ch = Math.cos(cam.pitch) * cam.dist;
@@ -57,6 +57,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
     createGroundCells: () => null,
   };
   const chunks = new ChunkManager(scene, raster, host);
+  chunks.setWorldCenter(spawn.x, spawn.z);   // ★ 生成区域中心 = 出生点
   chunks.setCoarseMode(false);   // ★ 探索期：近处细块 + 远景粗块 LOD（coarseOnly=false 才投细化）
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
@@ -154,4 +155,10 @@ if (UX !== null && UZ !== null) {
   const sel = new SpawnSelect(raster, WORLD_R);
   R.__rts = { raster, phase: 'select', select: sel };
   sel.onConfirm = (x, z) => startWorld(x, z);
+  // ★ 实时换图：新种子 → 新 RasterMap → 小地图重绘（仍留在阶段 A，无 3D）
+  sel.onSeed = (s) => {
+    raster = new RasterMap(s);
+    sel.setRaster(raster);
+    R.__rts = { raster, phase: 'select', select: sel };
+  };
 }

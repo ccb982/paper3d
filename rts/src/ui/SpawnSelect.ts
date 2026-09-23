@@ -11,13 +11,17 @@ const DARK: [number, number, number] = [10, 14, 22];
 export class SpawnSelect {
   spawn: { x: number; z: number } | null = null;
   onConfirm: ((x: number, z: number) => void) | null = null;
+  /** ★ 换种子（主入口负责 new RasterMap 后回调 setRaster） */
+  onSeed: ((seed: number) => void) | null = null;
 
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private readonly coordEl: HTMLDivElement;
   private readonly confirmBtn: HTMLButtonElement;
-  private readonly raster: RasterMap;
+  private readonly titleEl: HTMLDivElement;
+  private readonly seedInput: HTMLInputElement;
+  private raster: RasterMap;
   private readonly box: number;
   private readonly off = 320;                 // 离屏像素（固定；放大上屏）
   private readonly img: ImageData;
@@ -47,6 +51,7 @@ export class SpawnSelect {
       'user-select:none',
     ].join(';');
     const title = document.createElement('div');
+    this.titleEl = title;
     title.textContent = `选择出生点（种子 ${raster.worldSeed}）——拖动平移 · 滚轮缩放 · 单击落点`;
     title.style.cssText = 'font-size:16px;color:#8ac8ff;letter-spacing:2px;';
 
@@ -73,7 +78,19 @@ export class SpawnSelect {
     home.textContent = '回原点';
     home.style.cssText = this.confirmBtn.style.cssText;
     home.addEventListener('click', () => { this.cx = 0; this.cz = 0; this.render(); });
-    bar.append(this.coordEl, home, this.confirmBtn);
+    // ★ 种子输入 + 实时换图
+    this.seedInput = document.createElement('input');
+    this.seedInput.type = 'number';
+    this.seedInput.value = String(raster.worldSeed);
+    this.seedInput.style.cssText = 'width:96px;padding:5px 8px;border-radius:6px;border:1px solid rgba(110,170,235,0.5);background:rgba(12,22,34,0.95);color:#dff0ff;font:13px ui-monospace,Consolas,monospace;';
+    this.seedInput.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter') { e.stopPropagation(); this.applySeed(); }
+    });
+    const seedBtn = document.createElement('button');
+    seedBtn.textContent = '换图';
+    seedBtn.style.cssText = this.confirmBtn.style.cssText;
+    seedBtn.addEventListener('click', () => this.applySeed());
+    bar.append(this.coordEl, home, this.seedInput, seedBtn, this.confirmBtn);
     this.root.append(title, this.canvas, bar);
     document.body.appendChild(this.root);
 
@@ -112,6 +129,23 @@ export class SpawnSelect {
   }
 
   private onKey = (e: KeyboardEvent): void => { if (e.code === 'Enter') this.confirm(); };
+
+  /** ★ 换图：取输入框种子 → 交给主入口（new RasterMap）→ setRaster 重绘 */
+  applySeed(): void {
+    const s = Number(this.seedInput.value);
+    if (!Number.isFinite(s)) return;
+    this.onSeed?.(s);
+  }
+
+  /** ★ 主入口换好新 RasterMap 后回调：重置视图/选点，实时重绘 */
+  setRaster(r: RasterMap): void {
+    this.raster = r;
+    this.cx = 0; this.cz = 0; this.spanM = 480;
+    this.spawn = null;
+    this.confirmBtn.disabled = true;
+    this.titleEl.textContent = `选择出生点（种子 ${r.worldSeed}）——拖动平移 · 滚轮缩放 · 单击落点`;
+    this.render();
+  }
 
   private renderThrottled(): void {
     const now = performance.now();
