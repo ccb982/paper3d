@@ -1,138 +1,125 @@
-# RTS 架构（新项目总纲）
+# RTS 架构（新项目总纲 · 2026-09-25 更新）
 
-> 2026-09-24 立项。目标：把"蜂群引擎"从**自走 AI** 改造成**可手动指挥的 RTS**，
-> 手动令与 AI 令**同一词表、同一链路**；引擎/玩家/小队长三源命令**全部可视化**。
-> 地图生成与破坏管线**沿用**既有实现；掉落/背包**不移植**。
+> 2026-09-24 立项；2026-09-25 第二轮更新（敌人全链路 + 事态环形 + 交互/可视化成型）。
+> 目标：把"蜂群引擎"从**自走 AI** 改造成**可手动指挥的 RTS**；手动令与 AI 令**同一词表、同一链路**；
+> 引擎/玩家/小队长三源命令**全部可视化**。地图生成与破坏管线**沿用**既有实现；掉落/背包**不移植**。
 
 ---
 
-## 0. 验收口径（用户定）
+## 0. 验收口径
 
-1. **先能玩，再聪明**：能走、能打、能造 → 之后才谈"惊讶感"（埋伏/地形选面/受击生长）。
-2. **命令单源**：玩家手动发令 = 蜂群引擎发令 = 同一 `SquadOrder` 类型 + 同一 `issueChecked` 门检。
-3. **三源可视**：引擎令 / 小队长令 / 玩家令 全程可看见（3D 令牌 + 台账面板）。
-4. **地形即底座**：AI 与手工都读同一张地形账本（PassTable/特征分），不允许"AI 自己另算一套"。
+1. **先能玩，再聪明**：能走、能打、能造 → 之后才谈"惊讶感"。
+2. **命令单源**：玩家手动令 = 蜂群引擎令 = 同一 `SquadOrder` + 同一 `issueChecked` 门检。
+3. **三源可视**：引擎/小队长/玩家命令全程可看（列表 + 检视地图 + AI 记录器）。
+4. **地形即底座**：AI 与手工都读同一张地形账本（PassTable/特征分）。
+5. **事态函数硬约束**：活动区是**环**（上限/下限），命令与部队都必须服从。
 
 ---
 
 ## 1. 项目形态
 
-- **技术栈**：沿用 Web（Three.js + TS + Vite + puppet 探针体系）；不换引擎。
-- **视角**：**2.5D 俯视为主**（RTS 标准：平移/旋转/缩放/边缘滚动/框选）；
-  可调至**近水平视角**（观察战斗细节），相机自由、**不绑定主角**（本项目无玩家实体）。
-- **胜负**：玩家 = 指挥官（只发令）；敌方 = 蜂群引擎（同词表）。
-- **不做**：掉落物、背包、拾取、主角操控（原游戏系统不迁移）。
+- Web（Three.js + TS + Vite）；不换引擎；rapier 物理。
+- 相机：2.5D 俯视为主，可压近水平；不绑定主角。
+- 玩家 = 指挥官（发令）；敌方 = 蜂群引擎（同词表）。
+- 不做：掉落/背包/拾取/主角操控。
 
-## 2. 目录与模块边界（拟）
+## 2. 现状（已完成，均有自测）
 
-```
-rts/
-  src/
-    core/        # 循环/时钟/事件总线/存档（最小）
-    terrain/     # ★ 沿用：栅格单一真源、0.25m 物理、LOD 滞回、TerrainPatch 破坏、流体
-    nav/         # ★ 沿用：PassTable 五值/边型、FeasibilityPath(BFS+LOS)、贪心短跳、坡面执行
-    order/       # 命令单源：SquadOrder / 词表 / issueChecked 门检 / 台账 cmdLog
-    ai/          # 蜂群引擎：编制/指挥链/工事规划/事态闸门（沿用 swarm 子系统）
-    units/       # 小队/成员/编队/兵种（兵种表来自 enemyRoster 精简版）
-    ui/          # ★ 新：RTS 相机、选择、命令面板、可视化层（令牌/走廊/台账）
-    dbg/         # 探针：abstract / snap / scene（沿用并扩展命令可视化断言）
-```
+### 2.1 地形（沿用 + 一次性加载改造）
+- 管线整包移植：`services/map/**`（ChunkManager/RasterMap/ChunkGenerator/…）+ 5 个 worker + 流体。
+- **一次性加载**：`BUILD/PREFETCH` 覆盖固定世界（±4 chunk=480m），`PARK/DESTROY=99`（**只建不删**）。
+- **粗细两档**：近=细块（随视野），远=粗块（固定世界内、只建不删）；**细块无 LOD 切换**（单档 FINE_S_NEAR）。
+- 选点阶段：2D 小地图（`ui/SpawnSelect.ts`，可拖动/缩放/换种子，`mapColorAt` 全彩无雾，按视野生成数据）。
+- 破坏 → PassTable **脏区重建**：待做（当前表一次性）。
 
-## 3. 命令系统（本项目第一优先）
+### 2.2 实体与敌人（完整移植）
+- `EntityManager` + rapier `PhysicsWorld` + 真实 `ChunkGroundHost`（trimesh 分区/原位换 collider/封存）。
+- `CharacterFxManager`（FTX 帧动画）+ `SwarmBatch`（代理 InstancedMesh 贴片，含 groundSink）+ `HealthBar`。
+- `WorldSpawner`（官方 tierPort：promote/demote、掉落/enemyDefs/animMap 登记）+ `wireCommanderPorts`。
+- **升格判据 = 视野**：`SwarmHooks.inView(x,z)`（RTS=相机视锥±15% 且 <220m；原游戏=玩家视野）；降格 `tickDemote` 以相机焦点为基准。
+- AI 驱动：`aiSystem.updateAll(dt, aiCtx)`（移动/索敌/攻击；`aiCtx.attack` 路由 melee/aoe/projectile）。
+- 舰船：`buildProceduralShip` 精细模型 + fixed 船体碰撞 + **常显大蓝圈**（脉冲）。
 
-### 3.1 命令单源
+### 2.3 战斗
+- `BulletManager`×3（敌箭/敌法球/玩家弹）+ `CombatSystem.resolveBulletHit` + `onAgentRanged` 真弹道。
+- `ExplosionFx`（AOE）；死亡动画走 `CharacterBase.deathFx`。
+- **快车道 `rts/FastLane.ts`**：代理直扣（`nearestAgentIndex+damageAgent`，倒序防 swap）+ 实体走伤害管线；`K`=中心 18m/15 伤害（测试口）。
 
-```ts
-interface SquadOrder {
-  kind: 'advance'|'flank'|'garrison'|'protect'|'build'|'retreat'|'regroup'|'focus'|'bound';
-  target: { x: number; z: number };
-  mission?: string;           // build/guard/patrol...
-  anchor?: { x: number; z: number };
-  seq: number;
-  ttl: number;                // 秒；使命型给寿命下限
-  source: 'engine'|'leader'|'player';   // ★ 新增：三源标签（可视化/优先级用）
-  roe?: 'engage'|'hold'|'holdFire';     // ★ 新增：交战规则（埋伏要用 holdFire）
-}
-```
-
-- 门检：一切令走 `issueChecked`（可达核验/调账/台账），**玩家令不例外**。
-- 优先级：`player > engine > leader`；玩家令默认**不被 TTL 回落**（除非玩家再令）。
-- 覆盖：新令覆盖旧令（命令对象只读；路径在寻路轨 `state.corridor`，覆盖式）。
-
-### 3.2 手动发令（拆解蜂群指令为操作）
-
-| 玩家操作 | 产出命令 | 词表项 |
+### 2.4 RTS 交互与可视化
+| 模块 | 文件 | 说明 |
 |---|---|---|
-| 右键点地 | move/advance 到点（保阵型） | `advance` |
-| 右键点敌 | focus/追击 | `focus` |
-| A 键 + 点地 | 攻击移动（遇敌接战） | `advance`+roe engage |
-| S 键 | 驻守当前点 | `garrison` |
-| P 键 + 点友军 | 护卫（工兵/射手） | `protect` |
-| B 键 + 点地 | 建造/挖掘到点 | `build` |
-| F 键 + 方向 | 侧翼/包抄 | `flank` |
-| R 键 | 撤退（回集结圈） | `retreat` |
-| G 键 | 集结/重整 | `regroup` |
+| 命令单源 | `order/OrderBus.ts` | `SquadOrder{kind,target,mission,anchor,seq,ttl,source,roe}`；令牌（红=引擎/橙=队长/蓝=玩家）；`onIssue` 供记录 |
+| 敌人管理 | `ui/EnemyManager.ts` | 统一句柄（L3 实体+L2 池）；单击/框选/Shift 加选/Esc；**红圈**每帧跟随 |
+| 敌人列表 | `ui/EnemyListPanel.ts` | 兵种→队长→代理三级树；显示队令[来源]+令历史+成员受令；点队=全队红圈 |
+| 检视地图 | `ui/NavDebugMap.ts` | 点列表命令→弹窗；地形语义底图+走廊/起始点/目标点/队令/历史；**8 扇区环带+认领队+需求+上下限圈**；滚轮缩放/拖拽 |
+| 时间轴 | `ui/Timeline.ts` | 06:00–18:00 拖动=绝对进度（`scrubDay`）；第一波/总攻标记；拖动→小地图/列表立即重绘 |
+| AI 记录器 | `debug/AiTrace.ts` | 命令/指令/寻路/生死事件流；`dump()` JSONL、`digest()` 中文摘要、`Y` 下载、`U` 控制台 |
+| 选点小地图 | `ui/SpawnSelect.ts` | 开局选点；可换种子实时重绘 |
 
-- 选择：单位框选 / 小队点选 / 双击选同类；命令面板按钮 = 同一词表（键鼠与面板等价）。
-- 蜂群引擎的"拆步"保留：队长把队级令拆成**小队长令**（锚点+阵型），玩家可见。
+### 2.5 输入
+- 左键=平移（Shift+左=旋转）、**右键=选/框选**、中键=发令（临时）、滚轮缩放、WASD 平移、`[ ]` 俯仰、`M` 全览地图、`Y/U` 记录器、`K` 快车道测试。
 
-### 3.3 命令可视化（硬需求）
+## 3. 命令系统（单源）
 
-1. **3D 令牌**：每队头顶/脚下显示当前令（图标+颜色+目标连线）：
-   - 颜色：引擎=红、小队长=橙、玩家=蓝（可调）；
-   - 图标：advance→箭头、garrison→盾、build→锤、protect→护罩、holdFire→闭眼/虚线。
-2. **目标标记**：点地面（命中圈）、目标连线段（虚线）、优先级/来源标签。
-3. **走廊层（调试开关）**：`state.corridor` 折线 + 锚点（>8m 前瞻点）+ 贪心跳点。
-4. **台账面板**：`cmdLog` 已有字段（引擎/队长/唯一比/进度/种类）→ UI 表格；显示每条令的 source/kind/target/ttl/seq/结果（到点/完成/失败）。
-5. **小队长令可视化**：拆步事件（发步/到点/完成/选格失败）+ 成员跟随状态；一眼能看出"队长在干什么"。
-6. **断言化**：探针新增 gate——"每条引擎令在 UI 有对应令牌""玩家令 100% 进台账""三源颜色不串"。
+- 一切令走 `issueChecked`（可达核验/调账/台账）。
+- **事态环形闸门**：命令目标径向夹进 `[下限, 上限]`（撤退/`rear` 豁免），计数 `cmdLogRingClamps`。
+- 优先级：`player > engine > leader`；玩家令不被 TTL 回落。
+- 路径在寻路轨 `state.corridor`（覆盖式），命令对象只读。
 
----
+## 4. 事态函数 = 环形活动区（2026-09-25 定稿）
 
-## 4. 地形与破坏（沿用，不改口径）
+- **上限 `frontMaxD`**（最远允许）：`0.20→0.45` 收拢到舰 → 第一波可全线压上。
+- **下限 `frontMinD`**（最近允许）：`0.55→0.80` 收拢到舰 → 下午可贴脸。
+- **收拢态**（上限<下限）→ **上限主导**：全员必须收进舰旁。
+- **硬约束**：
+  1. `issueChecked` 夹环（上面）；
+  2. 每拍巡检队质心，越界（太近/太远）连续 2s → **强制长寻路令**回环内（`force_in/force_out`）。
+- 单源 getter `fortifyBand{rLo,rHi,minD,maxD,frontP,pushM}`（引擎 tick/小地图/时间轴共用）。
+- 施工带 `rHi ≤ 上限`；第一波起停止新增施工（既有件收尾 → S1→S2）。
 
-- 沿用单一栅格真源 / 0.25m 物理恒定 / 视觉细粗弧 10m 滞回 / 3-worker 破坏（同 chunk 120ms 节流、断裂回主线程字节一致）/ 流体共享步进。
-- **唯一要补的缝**：地形破坏 → `PassTable` **脏区局部重建**（只重算受影响 chunk；当前是"建一次"口径）。
-- 表口径冻结（与旧项目一致）：五值（自身高度+四向边可走/净落差）；边型 ABS/DOWN(单向硬边)/OPEN；深坑=PIT_H；水可走+催促上岸；**坡是正常通路**。
+## 5. 工兵 = 区域任务（引擎只派区）
 
-## 5. 寻路与执行（沿用 + 收口）
+- 引擎把**区（扇区）**派给队；区内活由队自循环。
+- `spot` **粘性**（本区未建件还在且可达就不重取）；`buildIssued` 记录派件下标 → **只在无令/玩家令/件变化/将到期时换令**（不再反复下"前进"）。
+- 第一波抵舰驻留：进攻队进 70m → 转「驻守」45s；血比<0.45 → 撤退；到期回正常决策。
 
-- 命令门 + 大队：`FeasibilityPath`（表图 BFS + LOS 拉直；有向可达，**允许绕障/出扇区**）。
-- 队长移动：LOS 10m 短跳 + 贪心校验（推进+安全）；无推进/振荡 → **LOS 长路径脱困**；位移/TTL 重算，覆盖式。
-- 最后一程：直线被挡 → 回锚点（走廊绕）。
-- 执行层：坡面优化（上坡走**坡正面**/fall line）；只做 ≤0.6 小硬边 + 爬掩体；不否决坡。
-- 成员：只认队长（朝队长 + 局部 steer，5/8m 滞回）；成员任务不驱动移动。
+## 6. 里程碑
 
-## 6. AI（蜂群引擎迁移）
-
-- **三级命令闭合**：引擎（意图）→ 队长（拆步/寻路轨）→ 成员（跟随/施工）。
-- **编制**：小队表/占比/缺口偏置；工兵队 ≤3、队数 ≤8；**工兵 = canBuild 兵种**（RTS 里即 worker）。
-- **工事环**：need（防御价值×掩体缺口）→ 8 扇区峰值/认领/抢占 → 位置函数（缺→峰值点；不缺→弧线链）→ 注入件（=assign/focus）→ 施工 → 掩体校验（已保护不再造）→ 第二波。
-- **事态闸门**：frontP 单调棘轮（每拍 ≤0.5m）；取点不得进闸门内界。
-- **行为层（后置，验收"哇点"）**：埋伏（占点+holdFire+扇形触发）、按地形选进攻面、受击生长（朝受击方向延壕/加掩）。**一律地形条件驱动 + 少量显式状态**，不追求纯涌现。
-
-## 7. 里程碑
-
-| 期 | 内容 | 验收 |
+| 期 | 内容 | 状态 |
 |---|---|---|
-| **R0 相机与选择** | 2.5D 俯视相机（平移/旋转/缩放/边缘滚动/框选）、可选近水平视角；无主角绑定 | 手感顺、帧率达标 |
-| **R1 命令单源 + 手动发令** | `SquadOrder`（source/roe）、`issueChecked` 全走、命令面板/快捷键 | 手动令 100% 进台账；与引擎令同链路 |
-| **R2 命令可视化** | 3D 令牌+目标连线+卡片台账+小队长拆步显示+走廊层 | 三源一眼可辨；断言固化 |
-| **R3 地形/破坏迁移** | 搬迁 terrain/nav 模块 + **脏区重建** | parity/确定性断言通过；破坏后表正确 |
-| **R4 蜂群引擎接入** | 编制/指挥链/工事环在 RTS 里跑通 | 旧基线（11 项）等价通过 |
-| **R5 聪明行为** | 埋伏 / 地形选面 / 受击生长 | demo 片段：能被"看懂"的智能 |
+| R0 相机/选点/地形一次性 | 2.5D 相机、选点小地图、固定世界只建不删 | ✅ |
+| R1 命令单源 + 令牌 | OrderBus/三源令牌 | ✅ |
+| R2 实体管线 | rapier/EntityManager/ChunkGroundHost/舰船/FTX/血条/L3 闭环 | ✅ |
+| R3 AI 驱动 + 战斗 | aiSystem/弹道/命中/爆炸/近战扣舰 | ✅ |
+| R5 选择与列表 | EnemyManager/EnemyListPanel/红圈 | ✅ |
+| R7-R8 检视地图 + 记录器 | NavDebugMap/AiTrace | ✅ |
+| R9-R13 引擎改造 | 区域任务/视野升格/快车道/环形活动区/时间轴/硬约束 | ✅ |
+| **R14 发令闭环** | 选中 → 下命令（移动/攻击/驻守/建造），走同一 `issueChecked` | ⬜ 下一步 |
+| **R15 行为体检** | 行军到达率/卡死率/工事完成率基线 | ⬜ |
+| **R16 蜂群优化** | 队长决策与寻路调优（终目标） | ⬜ |
+
+## 7. 目录（rts/src）
+
+```
+order/      命令单源（OrderBus）
+rts/        快车道（FastLane）
+ui/         相机/选点/敌人管理/列表/检视地图/时间轴/cn 中文化
+debug/      AiTrace 记录器
+systems/    swarm（引擎：指挥/工事/寻路）、spawn（WorldSpawner）、ai、combat、world（CharacterClamp）
+entity/     实体基类/敌人/舰船/角色
+services/   map（地形管线）、render、fx、physics、ui（原项目小地图等）
+modes/world/CommanderWiring（指挥器端口接线）
+```
 
 ## 8. 非目标与风险
 
-- 非目标：掉落/背包/主角；联网；存档兼容旧游戏。
-- 风险 1：地形/寻路模块搬迁（耦合 WorldMode/资源路径）→ 先做**接口清单**再搬，禁止边搬边改。
-- 风险 2：可视化拖性能 → 令牌用实例化批渲染 + 只在缩放档显示细节。
-- 风险 3：又想"完美涌现" → 验收标准锚定"能玩/能看懂"，不许回退。
+- 非目标：掉落/背包/主角；联网；旧存档兼容。
+- 风险：桩依赖（session/director/UI）逐个清账中；环形硬约束与寻路失败的交互（force 令可能反复）需观测；L3 容量 36 与大战场的取舍。
 
-## 9. 复用清单（先搬这些）
+## 9. 复用清单（已接）
 
-- `PassTable` / `FeasibilityPath` / `SquadNavigator`（LOS 10m+脱困）/ `SwarmSystem.move`（坡正面+最后一程）
-- `FortifyPlanner` / `EngineerCorps` / `RosterController` / `CommanderSpawn` / `SwarmCommander`（命令+台账）
-- `SwarmDanger`（危险单源）/ `TerrainScore`（特征与评分）/ `TerrainSemantics`
+- `PassTable` / `FeasibilityPath` / `SquadNavigator` / `SwarmSystem.move`（坡正面+最后一程）
+- `FortifyPlanner` / `EngineerCorps` / `RosterController` / `CommanderSpawn` / `SwarmCommander`
+- `SwarmDanger` / `TerrainScore` / `TerrainSemantics`
 - 地形渲染与破坏：`ChunkManager` / `TerrainPatch` / `Tiles` / `TerrainMaterial` / 流体
-- 探针：`probe-abstract`（基线）/ `probe-eng-snap`（快照）/ `probe-scene`（ASCII 地形图）
+- 探针/诊断：`diag-rts`（自测脚本）；原项目 `probe-abstract` 等
