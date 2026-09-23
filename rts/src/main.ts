@@ -211,6 +211,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
   // ★ 事态环形夹取：**引擎令 + 队长自主令同门**（SquadTactics.issue 内夹取）
   swarm.tactics.ringClamp = (x, z) => swarm.commander.clampToRing(x, z);
+  swarm.tactics.waterFix = (x, z) => swarm.commander.fixWaterTarget(x, z);   // ★ 落水目标 → 岸上可站点（队长令同门）
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
   hooks.tierPort = spawner;
   hooks.activeUnits = () => enemies;

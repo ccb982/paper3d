@@ -233,6 +233,8 @@ export class SquadTactics {
   readonly board = new SquadBlackboard();
   /** ★ 事态环形夹取（模式层注入；引擎令与队长令同门）——撤退/rear 由注入方豁免 */
   ringClamp: ((x: number, z: number) => { x: number; z: number }) | null = null;
+  /** ★ 目标落水修正（模式层注入；与引擎同门） */
+  waterFix: ((x: number, z: number) => { x: number; z: number }) | null = null;
   /** ★ 命令台账（唯一写口 = issue()；回答"大规模操作是不是引擎下的命令"） */
   readonly ledger = new CommandLedger();
   private seq = 1;
@@ -250,6 +252,10 @@ export class SquadTactics {
     if (this.ringClamp && o.target && o.kind !== 'retreat' && o.mission !== 'rear') {
       const c = this.ringClamp(o.target.x, o.target.z);
       o.target = { x: c.x, z: c.z };
+    }
+    if (this.waterFix && o.target && o.kind !== 'retreat' && o.mission !== 'rear') {
+      const w = this.waterFix(o.target.x, o.target.z);
+      o.target = { x: w.x, z: w.z };
     }
     // ★ P4 命令三件套（目标锚 + 战术意图）：引擎未显式给 → 由目标/kind+mission 推导
     if (!o.anchor) {

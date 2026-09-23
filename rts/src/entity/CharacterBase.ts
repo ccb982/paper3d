@@ -250,8 +250,11 @@ export abstract class CharacterBase extends EntityBase {
         other.hz,
       );
       if (!sep) continue;
-      p.x += sep.ax;
-      p.z += sep.az;
+      // ★ 水中降低分离推挤（用户定 2026-09-25：防被挤出岸线振荡）
+      const wet = RasterMap.current?.tileDefAt(p.x, p.z).genRole === 'liquid';
+      const sepK = wet ? 0.3 : 1;
+      p.x += sep.ax * sepK;
+      p.z += sep.az * sepK;
       op.x += sep.bx;
       op.z += sep.bz;
     }
@@ -289,7 +292,12 @@ export abstract class CharacterBase extends EntityBase {
           const rise = top - p.y;
           if (this.canClimbCovers && o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
             const len = Math.hypot(push.dx, push.dz) || 1;
-            this.climbCand = { top, ix: -push.dx / len, iz: -push.dz / len };
+            const ix = -push.dx / len, iz = -push.dz / len;   // 指向掩体（推挤反方向）
+            // ★ 沿路才爬（用户定 2026-09-25）：只有期望方向朝掩体（掩体在路上）才触发爬，防行军路过反复翻
+            const md = this.controller.moveDir;
+            const want = Math.hypot(md.x, md.y) || 1;
+            const into = (md.x * ix + md.y * iz) / want;
+            if (into > 0.6) this.climbCand = { top, ix, iz };
           }
         }
         continue;

@@ -286,6 +286,22 @@ export class SwarmCommander {
   // 验收："发出即不可达命令 = 0/局" 由本门保证（by construction）。
   readonly coarseDbg = { checked: 0, adjusted: 0, skipped: 0, unknown: 0 };
 
+  /** ★ 目标落水修正（用户定 2026-09-25）：点在水域 → 找最近**非水且可站**点（r=4..24m, 16 向） */
+  fixWaterTarget(x: number, z: number): { x: number; z: number } {
+    if (!this.terrainScore.isWaterAt(x, z)) return { x, z };
+    for (let r = 4; r <= 24; r += 4) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * Math.PI * 2;
+        const cx = Math.round((x + Math.cos(a) * r) / 2) * 2;
+        const cz = Math.round((z + Math.sin(a) * r) / 2) * 2;
+        if (this.terrainScore.isWaterAt(cx, cz)) continue;
+        if (this.terrainScore.scoreAt(cx, cz) === null) continue;
+        return { x: cx, z: cz };
+      }
+    }
+    return { x, z };
+  }
+
   /** ★ 环形夹取（公开给 SquadTactics/队长令同门）：径向夹进 [下限, 上限]；
    *  未启用/未就绪 → 原样返回；收拢态（上限<下限）→ 上限主导（收拢到 0=舰船点） */
   clampToRing(x: number, z: number): { x: number; z: number } {
@@ -345,6 +361,15 @@ export class SwarmCommander {
         eff = { ...eff, x: c.x, z: c.z };
         if (sub) order = { ...order, subTargets: order.subTargets!.map((t) => (t.squadId === squadId ? { ...t, x: c.x, z: c.z } : t)) };
         else order = { ...order, target: { ...order.target, x: c.x, z: c.z } };
+      }
+    }
+    // ★ 目标落水 → 最近岸上可站点（用户定 2026-09-25；撤退/rear 豁免）
+    if (!exempt && eff) {
+      const w = this.fixWaterTarget(eff.x, eff.z);
+      if (w.x !== eff.x || w.z !== eff.z) {
+        eff = { ...eff, x: w.x, z: w.z };
+        if (sub) order = { ...order, subTargets: order.subTargets!.map((t) => (t.squadId === squadId ? { ...t, x: w.x, z: w.z } : t)) };
+        else order = { ...order, target: { ...order.target, x: w.x, z: w.z } };
       }
     }
     // 无目标 / 飞行队（独立空中层走直线）→ 不核验直接放行

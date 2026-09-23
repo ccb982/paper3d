@@ -1142,6 +1142,8 @@ export class SwarmSystem {
       {
         const c = this.commander.clampToRing(ax, az);
         ax = c.x; az = c.z;
+        const w = this.commander.fixWaterTarget(ax, az);   // ★ 锚点落水 → 岸上可站点
+        ax = w.x; az = w.z;
       }
       if (hasC) {
         const adx = ax - this._centroid.x, adz = az - this._centroid.z;

@@ -381,8 +381,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.camp = 'enemy';
     // ★ 2026-09-14 用户定调：敌人只能从插值坡上高台（禁止贴墙瞬移攀爬）
     this.blockCliffClimb = true;
-    // ★ 敌人先不爬掩体（RTS：行军路过掩体反复翻→卡；TODO：后续改'沿路才爬'）
-    this.canClimbCovers = false;
+    // ★ 爬掩体开启，但有'沿路才爬'门控（CharacterBase：期望方向朝掩体才触发）
     // ★ 空中层（2026-09-18）：飞行单位 —— 悬停 + 不贴地 + 无视地形落差/危险地形。
     //   climbAnyTerrain 关掉 CharacterBase 的立面阻挡（飞在空中不该被墙挡住）；
     //   y 由 WorldMode.clampCharacter 的飞行分支统一驱动。
