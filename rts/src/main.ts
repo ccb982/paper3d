@@ -37,6 +37,8 @@ import { Asset, type HitEffectShapeExport } from './vendor/player';
 import { CharacterFxManager } from './services/fx/CharacterFxManager';
 import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/WorldSpawner';
 import { wireCommanderPorts } from './modes/world/CommanderWiring';
+import { footSinkRatioOf } from './services/fx/FootAnchor';
+import { CharacterClamp } from './systems/world/CharacterClamp';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -132,7 +134,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   let batchOn = false;
   if (mobAssets.length > 0) {
     try {
-      swarm.buildBatch(scene, mobAssets.map((m) => m.asset));
+      swarm.buildBatch(scene, mobAssets.map((m) => m.asset), mobDefs.map((d) => d.groundSink));
       batchOn = true;
     } catch (e) {
       console.warn('[rts] buildBatch 失败，回退胶囊', e);
@@ -212,7 +214,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
       scale: spec.scale, collisionScale: spec.collisionScale,
       pack: spec.pack, weight: spec.weight, drops: spec.drops,
-      groundSink: spec.groundSink ?? 0,
+      groundSink: footSinkRatioOf(asset) * spec.scale + (spec.groundSink ?? 0),
       isAir: spec.isAir === true,
       airAltitude: spec.airAltitude ?? 2,
       billboard: spec.billboard,
@@ -240,6 +242,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: cam.tx, z: cam.tz }),
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
+  // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
+  const charClamp = new CharacterClamp({
+    raster,
+    player: null as unknown as Parameters<typeof CharacterClamp.prototype.update>[0],
+    clampVehicle: () => {},
+    platformTopAt: () => null,
+  });
+  const t0Ms = performance.now();
   // ★ 指挥器建计划：**敌方登陆点**（距舰 ~160m 的可行方向）——不能在舰旁布防/刷兵
   const pickEnemyLanding = (): { x: number; z: number } => {
     for (let k = 0; k < 16; k++) {
@@ -410,8 +420,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
     hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
     hooks.entityCount = byUid.size;
+    hooks.dayT01 = Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天：事态节奏推进
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
+    spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距 L3 → 降格回池
+    for (const e of byUid.values()) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
