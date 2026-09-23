@@ -85,8 +85,23 @@ renderer.domElement.addEventListener('contextmenu', (e) => {
   const kind = e.altKey ? 'build' : e.shiftKey ? 'garrison' : 'advance';
   orders.issue({ kind, target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
 });
-renderer.domElement.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
-addEventListener('mouseup', () => { dragging = false; });
+let downX = 0, downY = 0;
+renderer.domElement.addEventListener('mousedown', (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; downX = e.clientX; downY = e.clientY; });
+addEventListener('mouseup', (e) => {
+  dragging = false;
+  // ★ 选点阶段：点击（非拖拽）地面 = 确定出生点 → 进正式视角（地形已一次性加载）
+  if (ui.phase === 'select' && Math.hypot(e.clientX - downX, e.clientY - downY) < 6) {
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+    const hit = rc.intersectObjects(scene.children, true)[0];
+    if (hit) {
+      spawn.x = hit.point.x; spawn.z = hit.point.z;
+      ui.phase = 'play';
+      cam.tx = spawn.x; cam.tz = spawn.z; cam.dist = 150; cam.pitch = 0.95;
+      clampArea();
+    }
+  }
+});
 // ★ 双击地面 = 重选出生点（加载窗随之移动）
 addEventListener('dblclick', (e) => {
   const rc = new THREE.Raycaster();
