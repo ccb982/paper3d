@@ -156,15 +156,17 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const spec = ENEMY_ROSTER[snap.mobIndex];
       const asset = spec ? assetById.get(spec.id) : undefined;
       if (!spec || !asset) return;
+      // ★ 快照字段兜底（缺省/NaN → 用名册上限），否则血条比例 NaN = 空条
+      const snapMax = Number.isFinite(snap.maxHp) && snap.maxHp > 0 ? snap.maxHp : spec.hp;
+      const snapHp = Number.isFinite(snap.hp) && snap.hp > 0 ? snap.hp : snapMax;
       const enemy = new EnemyBase(entities, scene, asset, {
         x: snap.x, y: snap.y, z: snap.z, animMap, facing: '前', aiConfig: spec.ai,
-        // ★ 血条在构造时快照 maxHp → 这里先给**满血上限**（真实 hp 构造后灌），否则比例恒 0
-        hp: Math.max(1, snap.maxHp), defense: snap.defense, attackPower: spec.attackPower,
+        hp: snapMax, defense: snap.defense, attackPower: spec.attackPower,
         scale: spec.scale, collisionScale: spec.collisionScale,
       }, camera);
       enemy.hydrate(snap);
-      enemy.maxHp = Math.max(1, snap.maxHp);
-      enemy.hp = Math.max(1, Math.min(snap.hp, snap.maxHp));
+      enemy.maxHp = snapMax;
+      enemy.hp = Math.min(snapHp, snapMax);
       if (snap.uid > 0) byUid.set(snap.uid, enemy);
     },
     demote: (enemy: EnemyBase) => {

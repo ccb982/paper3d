@@ -73,9 +73,13 @@ export class HealthBar implements EntityEffect {
     this.group.position.set(x, y + this.offsetY, z);
     // ★ 上限每帧从实体读（含"构造后才写入 maxHp"的升格路径 / 上限被 buff 改动）
     const maxHp = this.target.maxHp > 0 ? this.target.maxHp : this.maxHp;
-    const ratio = maxHp > 0 ? Math.max(0, Math.min(1, this.target.hp / maxHp)) : 0;
-    this.fg.scale.x = ratio;
-    this.fg.visible = ratio > 0;
+    // ★ 上限兜底：构造时若 maxHp 非法（NaN/0），每帧自愈重读实体上限
+    if (!(this.maxHp > 0) && this.target.maxHp > 0) this.maxHp = this.target.maxHp;
+    const ratio = this.maxHp > 0 && Number.isFinite(this.target.hp)
+      ? Math.max(0, Math.min(1, this.target.hp / this.maxHp))
+      : 1;   // ★ 上限未知 → 满条（防"创建时空条"）
+    this.fg.scale.x = Number.isFinite(ratio) ? ratio : 1;
+    this.fg.visible = this.fg.scale.x > 0;
     return false; // 常驻（随实体销毁）
   }
 

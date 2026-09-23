@@ -320,7 +320,10 @@ export class SwarmBatch {
           _m.compose(_p, _q, _s);
           barMesh!.setMatrixAt(bi, _m);
           const mx = pool.maxHp[i];
-          barRatio!.setX(bi, mx > 0 ? Math.max(0, Math.min(1, pool.hp[i] / mx)) : 0);
+          const hpv = pool.hp[i];
+          // ★ 兜底：maxHp 未写（0/NaN）→ 显示满条而不是空条（否则"创建时血条全空"）
+          const ratio = mx > 0 && Number.isFinite(hpv) ? Math.max(0, Math.min(1, hpv / mx)) : 1;
+          barRatio!.setX(bi, ratio);
         }
       }
     }
