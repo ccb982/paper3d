@@ -238,8 +238,8 @@ export class ChunkManager {
   private static readonly BUILD_BUDGET_MS = 8;
   /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
    *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
-  private static readonly BUILD_RADIUS = 4;
-  private static readonly PREFETCH_RADIUS = 4;
+  private static readonly BUILD_RADIUS = 16;
+  private static readonly PREFETCH_RADIUS = 16;
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
   private static readonly BUILD_INFLIGHT_MAX = 1;
