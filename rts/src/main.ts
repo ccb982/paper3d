@@ -38,6 +38,7 @@ import { Asset, type HitEffectShapeExport } from './vendor/player';
 import { CharacterFxManager } from './services/fx/CharacterFxManager';
 import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/WorldSpawner';
 import { wireCommanderPorts } from './modes/world/CommanderWiring';
+import { buildEnemyCover } from './modes/world/EnemyCoverBuild';
 import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
 import { EnemyManager } from './ui/EnemyManager';
@@ -209,6 +210,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
+  // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
+  swarm.commander.buildCover = (x, z, v) =>
+    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.commander.defensePlan, { x: spawn.x, z: spawn.z });
   // ★ 事态环形夹取：**引擎令 + 队长自主令同门**（SquadTactics.issue 内夹取）
   swarm.tactics.ringClamp = (x, z) => swarm.commander.clampToRing(x, z);
   swarm.tactics.waterFix = (x, z) => swarm.commander.fixWaterTarget(x, z);   // ★ 落水目标 → 岸上可站点（队长令同门）

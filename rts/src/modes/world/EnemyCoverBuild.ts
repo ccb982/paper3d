@@ -20,9 +20,13 @@ export function buildEnemyCover(
   z: number,
   variant: 'cover' | 'wall',
   plan: DefensePlan | null,
+  /** ★ 朝向覆盖（用户定 2026-09-25：RTS 里威胁来自舰船 → 正面朝舰；缺省用 plan 来向） */
+  face?: { x: number; z: number },
 ): void {
-  // 正面 +Z 朝向玩家来向（射击孔面向来敌）
-  const heading = plan ? Math.atan2(plan.approachX, plan.approachZ) : 0;
+  // 正面 +Z 朝向来敌（射击孔面向来敌）
+  const heading = face
+    ? Math.atan2(face.x - x, face.z - z)
+    : (plan ? Math.atan2(plan.approachX, plan.approachZ) : 0);
   new EnemyCoverEntity(entities, scene, {
     x, y, z,
     heading,
