@@ -42,6 +42,7 @@ import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
 import { EnemyManager } from './ui/EnemyManager';
 import { EnemyListPanel } from './ui/EnemyListPanel';
+import { NavDebugMap } from './ui/NavDebugMap';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -237,6 +238,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const enemyMgr = new EnemyManager({ enemies, swarm, camera, scene });
   // ★ 右侧敌人列表（兵种 → 队长 → 代理；点击选中出红圈）
   const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name));
+  // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
+  const navMap = new NavDebugMap(raster, swarm);
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -349,6 +352,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45);
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
     if (e.code === 'Escape') enemyMgr.clear();
+    if (e.code === 'KeyM') navMap.toggle();
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
   // ---- ★ 输入：左键=平移视角（Shift+左=旋转），右键=选/框选，中键=发令，WASD=平移 ----
@@ -460,6 +464,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     explosionFx.update(dt);
     enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
     enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
+    navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -474,7 +479,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
