@@ -25,6 +25,18 @@ import { EnemyBase } from './entity/EnemyBase';
 import type { SwarmTierPort } from './systems/swarm/SwarmTierPort';
 import { ENEMY_BY_ID } from './config/enemyRoster';
 import type { AgentSnapshot } from './systems/swarm/AgentPool';
+import type { SwarmHooks } from './systems/swarm/SwarmSystem';
+import { AGENT_TARGET_SHIP } from './systems/swarm/AgentPool';
+import { BulletManager } from './services/combat/BulletManager';
+import { CombatSystem } from './systems/combat/CombatSystem';
+import { executeAttack } from './services/combat/Attack';
+import { createSolidBulletAsset, createArrowAsset, createFireballAsset } from './services/fx/SolidBulletAsset';
+import { AGENT_SOURCE } from './systems/spawn/WorldSpawner';
+import { scatterDir } from './services/combat/Scatter';
+import { Asset, type HitEffectShapeExport } from './vendor/player';
+import { CharacterFxManager } from './services/fx/CharacterFxManager';
+import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/WorldSpawner';
+import { wireCommanderPorts } from './modes/world/CommanderWiring';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -38,7 +50,7 @@ const R = globalThis as unknown as Record<string, unknown>;
 let raster = new RasterMap(SEED);
 R.__rts = { raster, phase: 'select' };
 
-function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]): void {
+function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[], hitEffects: HitEffectShapeExport[]): void {
   const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
   const spawn = { x: spawnX, z: spawnZ };
 
@@ -50,6 +62,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
 
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xcfe3ee, 300, 1100);
+  CharacterFxManager.init(scene, renderer);   // ★ L3 实体 FTX 渲染管理器（EnemyBase 等）
   const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 8000);
 
   const cam = { tx: spawn.x, tz: spawn.z, dist: 150, yaw: Math.PI * 0.25, pitch: 0.95 };
@@ -125,7 +138,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       console.warn('[rts] buildBatch 失败，回退胶囊', e);
     }
   }
-  const hooks = {
+  const hooks: SwarmHooks = {
     playerX: spawn.x, playerZ: spawn.z, shipX: spawn.x, shipZ: spawn.z,
     camForwardX: 0, camForwardZ: 1,
     entityCount: 0,
@@ -167,19 +180,100 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   hooks.tierPort = tierPort;
   hooks.activeUnits = () => [...byUid.values()];
-  for (let i = 0; i < 12; i++) {
-    const a = (i / 12) * Math.PI * 2;
-    const x = spawn.x + Math.cos(a) * 30, z = spawn.z + Math.sin(a) * 30;
-    const y = raster.surfaceHeightAtFor(x, z, 0);
-    const mob = i % 2;   // 0=原石虫 / 1=整合运动（名册下标）
-    swarm.spawn({
-      mobIndex: mob, x, y, z,
-      hp: mob === 0 ? 22 : 75, maxHp: mob === 0 ? 22 : 75,
-      defense: mob === 0 ? 0 : 3, attackPower: mob === 0 ? 0 : 2,
-      speed: 4.5, meleeDamage: 2, meleeRange: 1.5, scale: 1.6,
-      tier: 1, aggro: 0, wanderSpeed: 1.2,
-    }, true);
+  // ★ 命令下发到 L3 实体（原游戏 WorldSpawner.applyOrderToEntity 同款）
+  hooks.onDirective = (uid, order, directive, until) => {
+    const e = byUid.get(uid);
+    if (!e || e.dead) return;
+    e.applyOrder(
+      { kind: order.kind, targetX: order.target?.x ?? 0, targetZ: order.target?.z ?? 0, until, seq: order.seq },
+      {
+        kind: directive.kind, targetX: directive.targetX ?? 0, targetZ: directive.targetZ ?? 0,
+        wardUid: directive.wardUid ?? 0, until: directive.until,
+        fire: 0, speedMul: directive.speedMul, seq: directive.seq,
+      },
+    );
+  };
+  hooks.onLeaderChanged = (uid, isLeader) => {
+    const e = byUid.get(uid);
+    if (e && !e.dead) e.isLeader = isLeader;
+  };
+  hooks.onAgentKilled = (mobIndex, x, y, z) => { void mobIndex; void x; void y; void z; };
+
+  // ---- ★ 世界刷怪器（原游戏 WorldSpawner）：指挥器端口的实现载体 ----
+  const mobDefs: MobDef[] = mobAssets.map(({ id, asset }) => {
+    const spec = ENEMY_BY_ID.get(id) ?? ENEMY_ROSTER[0]!;
+    return {
+      id: spec.id, name: spec.name, asset,
+      ai: spec.ai, hp: spec.hp, defense: spec.defense, attackPower: spec.attackPower,
+      scale: spec.scale, collisionScale: spec.collisionScale,
+      pack: spec.pack, weight: spec.weight, drops: spec.drops,
+      groundSink: spec.groundSink ?? 0,
+      isAir: spec.isAir === true,
+      airAltitude: spec.airAltitude ?? 2,
+      billboard: spec.billboard,
+      role: spec.role, attackType: spec.attackType,
+      suicide: spec.suicide, squadMode: spec.squadMode, noDemote: spec.noDemote,
+      elite: spec.elite, canBuild: spec.canBuild, tactics: spec.tactics,
+    } as MobDef;
+  });
+  const spawner = new WorldSpawner({
+    enemies: [...byUid.values()],
+    enemyDefs: new WeakMap(),
+    mobDefs,
+    bossEntity: null, bossRun: false, threat: null, spawnChunkKey: 0, scalingInputs: null,
+    enemyScale: { hp: 1, atk: 1, def: 0 },
+    player: null, ship: null, entities, swarm, swarmDirector: null,
+    chunks, raster, session: null, scene, camera,
+    drones: [], worldUIManager: null,
+    testChunk: false, shipDestroyed: false, bossAsset: null,
+    showFloatingAt: () => {}, syncSceneBgm: () => {}, returnToBase: () => {},
+  } as unknown as SpawnDeps);
+  // ★ 指挥器端口接线（兵力创建/工事全权在指挥层；spawnMob/spawnBuilder/buildCover/digTrench）
+  wireCommanderPorts({
+    commander: swarm.commander, spawner, raster, mobDefs, entities, scene, chunks,
+    surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
+    playerPos: () => ({ x: cam.tx, z: cam.tz }),
+  });
+  hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
+  // ★ 指挥器建计划（原游戏落地后 planDefense → PassTable/大队部署/命令链发令）——必须在端口接线后
+  try {
+    swarm.commander.planDefense(spawn.x, spawn.z, 80);
+  } catch (e) {
+    console.warn('[rts] planDefense 失败（命令链仍可手动）', e);
   }
+
+  // ---- ★ 子弹 / 战斗管线（敌箭/敌法球/玩家弹池 + 唯一命中结算）----
+  let combat: CombatSystem;
+  const playerBullets = new BulletManager(entities, scene, createSolidBulletAsset(), 10, renderer, hitEffects, (p) => combat.resolveBulletHit(p));
+  const enemyArrows = new BulletManager(entities, scene, createArrowAsset(), 8, renderer, hitEffects, (p) => combat.resolveBulletHit(p), { baseWidth: 0.28 });
+  const enemyBolts = new BulletManager(entities, scene, createFireballAsset(), 6, renderer, hitEffects, (p) => combat.resolveBulletHit(p));
+  combat = new CombatSystem({
+    physics, swarm, bullets: playerBullets, chunks,
+    spawnSentinelAt: () => {},
+    spawnItemDrops: () => {},
+    agitateWaterNear: () => {},
+    showAgentDamage: () => {},
+  });
+  // ★ 敌方远程出口：代理/实体射击 → 真弹道（箭/法球按 skin 选池；命中由 CombatSystem 唯一结算）
+  hooks.onAgentRanged = (tk, dmg, x, z, tx, tz, skin, speed, life, spread) => {
+    const oy = raster.surfaceHeightAtFor(x, z, 0) + 1.0;
+    const aimY = tk === AGENT_TARGET_SHIP ? shipY + 2 : oy + 1.7;
+    let dx = tx - x, dy = aimY - oy, dz = tz - z;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    dx /= len; dy /= len; dz /= len;
+    if (spread > 0) {
+      const s = { x: dx, y: dy, z: dz };
+      scatterDir(s, spread);
+      dx = s.x; dy = s.y; dz = s.z;
+    }
+    executeAttack(entities, skin === 1 ? enemyBolts : enemyArrows, {
+      type: 'projectile', source: AGENT_SOURCE,
+      x: x + dx * 0.7, y: oy + dy * 0.7, z: z + dz * 0.7,
+      dirX: dx, dirY: dy, dirZ: dz,
+      speed, camp: 'enemy', lifetime: life, damage: dmg,
+    });
+  };
+  // ★ 不再手工铺环：兵力全部由指挥器（planDefense → 端口 spawnMob）按**进攻轴向**创建
   const unitMesh = new THREE.InstancedMesh(
     new THREE.CapsuleGeometry(0.6, 1.4, 4, 8),
     new THREE.MeshLambertMaterial({ color: 0xcc4433 }),
@@ -294,8 +388,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.entityCount = byUid.size;
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
-    entities.update(dt);
+    entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
+    playerBullets.update(dt, camera);
+    enemyArrows.update(dt, camera);
+    enemyBolts.update(dt, camera);
+    CharacterFxManager.update(dt, camera);   // ★ 实体 FTX 帧动画/渲染推进
+    entities.renderAll(camera);   // ★ 实体渲染阶段（视锥+LOD+贴片/血条/附属特效）
     renderAgents();
     feedLight();
     renderer.render(scene, camera);
@@ -303,7 +402,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, l3: byUid };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
@@ -319,7 +418,14 @@ const enter = (x: number, z: number): void => {
       }
     }
     console.log(`[rts] 敌军素材 ${mobAssets.length}/${ENEMY_ROSTER.length}`);
-    startWorld(x, z, mobAssets);
+    let hitEffects: HitEffectShapeExport[] = [];
+    try {
+      const hitAsset = await Asset.load(encodeURI('/fx/bullets/主角子弹击中特效.scene.zip'));
+      hitEffects = hitAsset.hitEffects;
+    } catch {
+      console.warn('[rts] 命中特效素材缺失（弹道仍可用）');
+    }
+    startWorld(x, z, mobAssets, hitEffects);
   })();
 };
 if (UX !== null && UZ !== null) {

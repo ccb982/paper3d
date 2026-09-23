@@ -82,11 +82,46 @@ await new Promise((r) => setTimeout(r, 22000));
     coarse: window.__rts?.chunks?.coarseMeshes?.size ?? null,
     vis: window.__rts?.chunks?.terrainVisuals?.size ?? null,
     swarmN: window.__rts?.swarm?.pool?.count ?? null,
+    l3: window.__rts?.l3?.size ?? null,
+    l3first: (() => {
+      const m = window.__rts?.l3; if (!m || m.size === 0) return null;
+      const e = m.values().next().value;
+      const r = e.renderer; const mesh = r?.mesh;
+      const u = mesh?.material?.uniforms;
+      return {
+        x: +e.position.x.toFixed(1), y: +e.position.y.toFixed(1), z: +e.position.z.toFixed(1), hp: e.hp,
+        hasR: !!r, hasMesh: !!mesh, vis: mesh?.visible ?? null,
+        tex: !!u?.uBaseTexture?.value, alpha: u?.uFadeAlpha?.value ?? null,
+        scale: mesh?.scale ? { x: +mesh.scale.x.toFixed(2), y: +mesh.scale.y.toFixed(2) } : null,
+      };
+    })(),
     swarmAlive: (() => { const p = window.__rts?.swarm?.pool; if (!p) return null; let n = 0; for (let i = 0; i < p.count; i++) if (p.hp[i] > 0) n++; return n; })(),
     cam: window.__rts?.cam ?? null,
   }));
-  console.log('B 世界 =', JSON.stringify(world));
-  await page.screenshot({ path: '../rts/world.png' });
+console.log('B 世界 =', JSON.stringify(world));
+await page.screenshot({ path: '../rts/world.png' });
+// ★ 近距离对准第一只 L3 敌人截图（验证 FTX 贴片渲染）
+await page.evaluate(() => {
+  const m = window.__rts?.l3; if (!m || m.size === 0) return;
+  const e = m.values().next().value;
+  const cam = window.__rts.cam;
+  cam.tx = e.position.x; cam.tz = e.position.z; cam.dist = 22; cam.pitch = 0.75;
+});
+await new Promise((r) => setTimeout(r, 2000));
+console.log('近距诊断 =', JSON.stringify(await page.evaluate(() => {
+  const m = window.__rts?.l3; if (!m || m.size === 0) return null;
+  const e = m.values().next().value;
+  const mesh = e.renderer?.mesh;
+  const cam = window.__rts.camera;
+  const v = mesh.position.clone().project(cam);
+  return {
+    mesh: { x: +mesh.position.x.toFixed(1), y: +mesh.position.y.toFixed(1), z: +mesh.position.z.toFixed(1) },
+    ndc: { x: +v.x.toFixed(2), y: +v.y.toFixed(2), z: +v.z.toFixed(2) },
+    meshVis: mesh.visible, entVis: e.visible, inScene: !!mesh.parent,
+    camPos: { x: +cam.position.x.toFixed(0), y: +cam.position.y.toFixed(0), z: +cam.position.z.toFixed(0) },
+  };
+})));
+await page.screenshot({ path: '../rts/world-close.png' });
 } catch (err) {
   console.log('SMOKE ERROR =', String(err).slice(0, 300));
 }
