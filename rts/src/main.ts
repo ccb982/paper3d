@@ -19,6 +19,8 @@ const spawn = { x: Number(q.get('x') ?? 0), z: Number(q.get('z') ?? 0) };
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
 /** ★ 固定世界（一次性加载，±4 chunk ×60m = 480m 见方；不流式创建/销毁） */
 const WORLD_R = 4 * 60 - 20;
+/** ★ 开局=选点阶段（整图俯视，点地面定出生点） */
+const ui = { phase: 'select' as 'select' | 'play' };
 const clampArea = (): void => {
   cam.tx = clamp(cam.tx, -WORLD_R, WORLD_R);
   cam.tz = clamp(cam.tz, -WORLD_R, WORLD_R);
@@ -36,7 +38,7 @@ scene.fog = new THREE.Fog(0xcfe3ee, 300, 1100);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.3, 8000);
 
 /** RTS 相机（俯视为主，可压到近水平） */
-const cam = { tx: spawn.x, tz: spawn.z, dist: 150, yaw: Math.PI * 0.25, pitch: 0.95, overview: false };
+const cam = { tx: 0, tz: 0, dist: 620, yaw: Math.PI * 0.25, pitch: 1.45 };
 function applyCam(): void {
   const ch = Math.cos(cam.pitch) * cam.dist;
   camera.position.set(cam.tx + Math.sin(cam.yaw) * ch, Math.sin(cam.pitch) * cam.dist, cam.tz + Math.cos(cam.yaw) * ch);
@@ -70,13 +72,6 @@ addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45);
   if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
-  // ★ V = 整图概览/返回（概览里双击地面即选出生点）
-  if (e.code === 'KeyV') {
-    cam.overview = !cam.overview;
-    if (cam.overview) { cam.tx = 0; cam.tz = 0; cam.dist = 620; cam.pitch = 1.45; }
-    else { cam.tx = spawn.x; cam.tz = spawn.z; cam.dist = 150; cam.pitch = 0.95; }
-    clampArea();
-  }
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 let dragging = false, lastX = 0, lastY = 0;
