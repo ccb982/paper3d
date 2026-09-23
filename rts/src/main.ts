@@ -44,6 +44,7 @@ import { EnemyManager } from './ui/EnemyManager';
 import { EnemyListPanel } from './ui/EnemyListPanel';
 import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
+import { FastLane } from './rts/FastLane';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -127,6 +128,17 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const proc = buildProceduralShip();
   proc.group.position.set(spawn.x, shipY, spawn.z);
   scene.add(proc.group);
+  // ★ 舰船位置常显标记：大蓝圈（+脉冲），任何时刻一眼可见
+  const shipRingMat = new THREE.MeshBasicMaterial({ color: 0x3399ff, transparent: true, opacity: 0.85, depthWrite: false, side: THREE.DoubleSide });
+  const shipRing = new THREE.Mesh(new THREE.RingGeometry(7.0, 8.4, 48), shipRingMat);
+  shipRing.rotation.x = -Math.PI / 2;
+  shipRing.position.set(spawn.x, shipY + 0.12, spawn.z);
+  shipRing.renderOrder = 21;
+  const shipRing2 = new THREE.Mesh(new THREE.RingGeometry(4.6, 5.0, 40), shipRingMat.clone());
+  shipRing2.rotation.x = -Math.PI / 2;
+  shipRing2.position.set(spawn.x, shipY + 0.12, spawn.z);
+  shipRing2.renderOrder = 21;
+  scene.add(shipRing, shipRing2);
   entities.create({
     kind: 'ship', x: spawn.x, y: shipY + 0.8, z: spawn.z,
     physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: SHIP_LENGTH / 2, hy: 0.8, hz: 1.2 } } },
@@ -235,15 +247,26 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     focusX: spawn.x, focusZ: spawn.z, focusY: 0,
   };
   const shipState = { get hp(): number { return shipHp; } };
+  // ★ 升格判据（用户定）：**相机视野内** → L3 实体；离开视野由 tickDemote 降格
+  const _pv = new THREE.Vector3();
+  hooks.inView = (x: number, z: number) => {
+    const y = raster.surfaceHeightAtFor(x, z, 0) + 1.2;
+    _pv.set(x, y, z).project(camera);
+    if (_pv.z > 1 || _pv.x < -1.15 || _pv.x > 1.15 || _pv.y < -1.15 || _pv.y > 1.15) return false;
+    const d = Math.hypot(camera.position.x - x, camera.position.z - z);
+    return d < 220;
+  };
   // ★ RTS 全体敌人管理器（外接；框选/单击/红圈）
   const enemyMgr = new EnemyManager({ enemies, swarm, camera, scene });
   // ★ 右侧敌人列表（兵种 → 队长 → 代理；点击选中出红圈）
   const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name));
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
-  const navMap = new NavDebugMap(raster, swarm);
+  const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }));
   enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
   // ★ AI 可读记录器（命令/指令/寻路/生死；Y=下载 JSONL，U=控制台打印中文摘要）
   const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders);
+  // ★ 快车道结算（代理直扣 / 实体走管线）；K = 对相机中心 18m 内造成 15 伤害（演示/测试口）
+  const fastLane = new FastLane(swarm, enemies);
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -359,6 +382,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'KeyM') navMap.toggleOverview();
     if (e.code === 'KeyY') aiTrace.download();
     if (e.code === 'KeyU') console.log(aiTrace.digest(150));
+    if (e.code === 'KeyK') {
+      const r = fastLane.damageArea(cam.tx, cam.tz, 18, 15);
+      console.log(`[快车道] 区域伤害 15：代理 ${r.agents} · 实体 ${r.entities}`);
+    }
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
   // ---- ★ 输入：左键=平移视角（Shift+左=旋转），右键=选/框选，中键=发令，WASD=平移 ----
@@ -460,7 +487,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.dayT01 = Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天：事态节奏推进
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
-    spawner.tickDemote(dt, spawn.x, spawn.z);     // ★ 远距 L3 → 降格回池（以舰船为基准）
+    spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池（以相机焦点为基准）
     // ★ L3 AI 驱动（移动/索敌/攻击；原 WorldMode：aiSystem.updateAll + aiCtx）
     aiCtx.dt = dt; aiCtx.time += dt;
     aiCtx.target = aiCtx.findTarget('enemy');
@@ -468,6 +495,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     aiSystem.updateAll(dt, aiCtx);
     for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
     explosionFx.update(dt);
+    // ★ 舰船大蓝圈脉冲（常显）
+    const pulse = 1 + Math.sin(performance.now() / 1000 * 1.6) * 0.06;
+    shipRing.scale.setScalar(pulse);
+    shipRing2.scale.setScalar(2 - pulse);
+    shipRingMat.opacity = 0.65 + Math.sin(performance.now() / 1000 * 1.6) * 0.2;
     enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
     enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
     navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
@@ -486,7 +518,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

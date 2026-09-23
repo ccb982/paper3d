@@ -34,6 +34,7 @@ export class NavDebugMap {
   constructor(
     private readonly raster: RasterMap,
     private readonly swarm: SwarmSystem,
+    private readonly shipAt?: () => { x: number; z: number },
   ) {
     this.root = document.createElement('div');
     this.root.style.cssText = [
@@ -179,6 +180,17 @@ export class NavDebugMap {
     for (let z = gz0; z <= this.cz + this.span / 2; z += 50) { const [, pz] = p2(0, z); g.beginPath(); g.moveTo(0, pz); g.lineTo(S, pz); g.stroke(); }
 
     const squads = this.squadId === null ? this.swarm.squads.all() : this.swarm.squads.all().filter((s) => s.id === this.squadId);
+    // ★ 舰船位置（蓝圈）
+    if (this.shipAt) {
+      const sp = this.shipAt();
+      const [sx, sz] = p2(sp.x, sp.z);
+      g.strokeStyle = '#3399ff';
+      g.lineWidth = 2.5;
+      g.beginPath(); g.arc(sx, sz, 9, 0, Math.PI * 2); g.stroke();
+      g.fillStyle = 'rgba(80,170,255,0.9)';
+      g.font = '10px Consolas,monospace';
+      g.fillText('舰船', sx + 11, sz + 3);
+    }
     for (const s of squads) {
       const path = this.swarm.tactics.board.get(s.id);   // ★ 走廊/起终点在命令状态（寻路轨覆盖式）
       const cmd = path;

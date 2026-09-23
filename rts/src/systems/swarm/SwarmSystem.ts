@@ -70,6 +70,9 @@ export interface SwarmHooks {
   tierPort?: SwarmTierPort;
   /** 代理近战结算（targetKind：0=玩家 / 1=舰船 / 2=祖宗；x/z = 代理位置——祖宗结算定位用） */
   melee: (targetKind: number, dmg: number, x: number, z: number) => void;
+  /** ★ 升格可见性钩子（2026-09-25 用户定："玩家视野内变实体"）：给了就用它判升格；
+   *  未给 → 回退原口径（离焦点 playerX/Z < L3_RADIUS）。降格由模式层 tickDemote 判。 */
+  inView?: (x: number, z: number) => boolean;
   /** ★ 祖宗嘲讽：查询 (x,z) 嘲讽圈内最近的祖宗位置（null = 圈外；返回对象会被复用） */
   nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
@@ -410,8 +413,9 @@ export class SwarmSystem {
         continue;
       }
 
-      // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
-      if (dFocus2 < nearR2 && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
+      // ---- 升格（可见性/近焦点 + 实体空位 + 帧预算）----
+      const visible = hooks.inView ? hooks.inView(p.x[i], p.z[i]) : dFocus2 < nearR2;
+      if (visible && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
         const snap = p.snapshot(i);
         this.removeAgent(i, false);   // ★ 升格 = 换载体：保留小队归属/队长
         hooks.tierPort?.promote(snap);

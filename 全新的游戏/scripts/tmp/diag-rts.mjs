@@ -52,9 +52,38 @@ const probe = () => page.evaluate(() => {
   };
   } catch (e) { return { err: String(e).slice(0, 200) }; }
 });
+let elapsed = 0;
 for (const t of [8000, 20000, 40000, 70000]) {
-  await new Promise((r) => setTimeout(r, t === 8000 ? 8000 : t - (t === 20000 ? 8000 : t === 40000 ? 20000 : 40000)));
+  await new Promise((r) => setTimeout(r, t - elapsed));
+  elapsed = t;
   console.log(`T+${t / 1000}s`, JSON.stringify(await probe()));
+  if (t === 8000) {
+    // ★ 相机对准人数最多的队（验证"视野内升格"）
+    await page.evaluate(() => {
+      const w = window.__rts; const sw = w.swarm;
+      let best = null, bn = 0;
+      for (const s of sw.squads.all()) if (s.members.size > bn) { bn = s.members.size; best = s; }
+      if (!best) return;
+      let cx = 0, cz = 0, n = 0;
+      for (const m of best.members.values()) { cx += m.x; cz += m.z; n++; }
+      w.cam.tx = cx / n; w.cam.tz = cz / n; w.cam.dist = 120;
+    });
+  }
+  if (t === 20000) {
+    // ★ 快车道验证：相机中心 18m 内 15 伤害（代理直扣）
+    const r = await page.evaluate(() => {
+      const w = window.__rts;
+      return w.fastLane.damageArea(w.cam.tx, w.cam.tz, 18, 15);
+    });
+    console.log('快车道伤害 =', JSON.stringify(r));
+    // ★ 快车道·代理致死验证（对池代理位置 999 伤害）
+    const kill = await page.evaluate(() => {
+      const w = window.__rts; const p = w.swarm.pool;
+      if (p.count === 0) return null;
+      return { at: [p.x[0] | 0, p.z[0] | 0], r: w.fastLane.damageArea(p.x[0], p.z[0], 4, 999) };
+    });
+    console.log('快车道致死 =', JSON.stringify(kill));
+  }
 }
 await page.screenshot({ path: '../rts/diag-world.png' });
 console.log('errors =', errs.length ? errs.slice(0, 4).join('\n') : '(none)');
