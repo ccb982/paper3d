@@ -43,6 +43,7 @@ import { CharacterClamp } from './systems/world/CharacterClamp';
 import { EnemyManager } from './ui/EnemyManager';
 import { EnemyListPanel } from './ui/EnemyListPanel';
 import { NavDebugMap } from './ui/NavDebugMap';
+import { AiTrace } from './debug/AiTrace';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -241,6 +242,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
   const navMap = new NavDebugMap(raster, swarm);
   enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
+  // ★ AI 可读记录器（命令/指令/寻路/生死；Y=下载 JSONL，U=控制台打印中文摘要）
+  const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders);
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -354,6 +357,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
     if (e.code === 'Escape') { if (navMap.visible) navMap.close(); else enemyMgr.clear(); }
     if (e.code === 'KeyM') navMap.toggleOverview();
+    if (e.code === 'KeyY') aiTrace.download();
+    if (e.code === 'KeyU') console.log(aiTrace.digest(150));
   });
   addEventListener('keyup', (e) => keys.delete(e.code));
   // ---- ★ 输入：左键=平移视角（Shift+左=旋转），右键=选/框选，中键=发令，WASD=平移 ----
@@ -466,6 +471,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
     enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
     navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
+    aiTrace.update(dt);     // ★ AI 可读记录（2Hz 变化采样）
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -480,7 +486,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

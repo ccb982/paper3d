@@ -22,6 +22,8 @@ export class OrderBus {
   readonly log: SquadOrder[] = [];
   private seq = 1;
   private readonly group = new THREE.Group();
+  /** ★ 发令回调（AiTrace/UI 消费；玩家与引擎同源） */
+  onIssue: ((o: SquadOrder) => void) | null = null;
   constructor(scene: THREE.Scene) { scene.add(this.group); }
 
   /** 发令：进台账 + 落 3D 令牌（一切令走这里——引擎/队长/玩家同源） */
@@ -30,6 +32,7 @@ export class OrderBus {
     this.log.push(ord);
     if (this.log.length > 200) this.log.shift();
     this.marker(ord);
+    this.onIssue?.(ord);
     return ord;
   }
 
