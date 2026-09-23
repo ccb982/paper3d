@@ -14,6 +14,10 @@ import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { OrderBus } from './order/OrderBus';
 import { SpawnSelect } from './ui/SpawnSelect';
 import { SwarmSystem } from './systems/swarm/SwarmSystem';
+import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
+import { EntityManager } from './entity/EntityManager';
+import { addStaticObstacle, removeStaticObstacle } from './services/physics/StaticObstacleRegistry';
+import { CHUNK_SIZE } from './services/map/ChunkGenerator';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -52,12 +56,40 @@ function startWorld(spawnX: number, spawnZ: number): void {
     camera.lookAt(cam.tx, 0, cam.tz);
   };
 
+  // ---- ★ 实体管线（完整移植）：rapier 物理 + EntityManager + 真实 ChunkGroundHost ----
+  const physics = new PhysicsWorld();
+  const entities = new EntityManager(physics, raster);
   const host: ChunkGroundHost = {
-    createGround: () => -1,
-    destroyGround: () => {},
-    createGroundCells: () => null,
-  };
-  const chunks = new ChunkManager(scene, raster, host);
+    createGround: (cx, cz, vertices, indices) => entities.create({
+      kind: 'ground', x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+      physics: { type: 'fixed', options: { shape: { type: 'trimesh', vertices, indices } } },
+    }).id,
+    destroyGround: (id) => { removeStaticObstacle(id); entities.destroy(id); },
+    createGroundCells: (cx, cz, cells) => {
+      if (cells.length === 0) return null;
+      const first = cells[0];
+      const e = entities.create({
+        kind: 'ground', x: cx * CHUNK_SIZE + CHUNK_SIZE / 2, y: 0, z: cz * CHUNK_SIZE + CHUNK_SIZE / 2,
+        physics: { type: 'fixed', options: { shape: { type: 'trimesh', vertices: first.vertices, indices: first.indices }, tileSlot: first.slot } },
+      });
+      const rb = e.rigidBody;
+      if (rb) for (let i = 1; i < cells.length; i++) physics.setTileCollider(rb.handle, cells[i].slot, cells[i].vertices, cells[i].indices);
+      return e.id;
+    },
+    updateGroundCell: (id, slot, vertices, indices) => {
+      const rb = entities.get(id)?.rigidBody;
+      if (rb) physics.setTileCollider(rb.handle, slot, vertices, indices);
+    },
+    setBodyEnabled: (id, enabled) => physics.setBodyEnabled(id, enabled),
+    createPropBody: (x, y, z, r, h) => {
+      const id = entities.create({
+        kind: 'decoration', x, y, z,
+        physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: r, hy: h / 2, hz: r } } },
+      }).id;
+      addStaticObstacle(id, x, y, z, r, h / 2);
+      return id;
+    },
+  };  const chunks = new ChunkManager(scene, raster, host);
   chunks.setWorldCenter(spawn.x, spawn.z);   // ★ 生成区域中心 = 出生点
   chunks.setCoarseMode(false);   // ★ 探索期：近处细块 + 远景粗块 LOD（coarseOnly=false 才投细化）
   chunks.setWaterVisible(true);
@@ -204,16 +236,22 @@ function startWorld(spawnX: number, spawnZ: number): void {
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities };
 }
 
-// ---- 严格分流：直进 或 先选点 ----
+// ---- 严格分流：直进 或 先选点（进世界前 await rapier 就绪）----
+const enter = (x: number, z: number): void => {
+  void (async () => {
+    await ensureRapierReady();
+    startWorld(x, z);
+  })();
+};
 if (UX !== null && UZ !== null) {
-  startWorld(Number(UX), Number(UZ));
+  enter(Number(UX), Number(UZ));
 } else {
   const sel = new SpawnSelect(raster, WORLD_R);
   R.__rts = { raster, phase: 'select', select: sel };
-  sel.onConfirm = (x, z) => startWorld(x, z);
+  sel.onConfirm = (x, z) => enter(x, z);
   // ★ 实时换图：新种子 → 新 RasterMap → 小地图重绘（仍留在阶段 A，无 3D）
   sel.onSeed = (s) => {
     raster = new RasterMap(s);
