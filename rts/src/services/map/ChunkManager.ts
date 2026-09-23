@@ -570,6 +570,9 @@ export class ChunkManager {
   private coarseOnly = false;
   /** 粗块半径（±6 = 约 420m 视距；"±6 试试"用户定调） */
   private static readonly COARSE_RADIUS = 5;
+  /** ★ RTS（2026-09-25 用户定）：**粗块生成上限**——只生成固定世界范围（|cx|,|cz| ≤ 此值）内的粗块，
+   *  超出**不生成**（而不是生成后再删）；4 格 = ±240m，与固定世界一致 */
+  private static readonly COARSE_LIMIT_RADIUS = 4;
   /** ★ 航行前向延伸（2026-09-13 用户定调）：飞行时**前方**粗块半径 6 → 12，
    *  侧/后不变（粗块加载极快，代价可接受）；落地 setCoarseMode(false) 自动恢复。
    *  "让飞机飞行的时候前方看得远，侧方不变" */
@@ -1408,6 +1411,8 @@ export class ChunkManager {
       const o = this.coarseDynamic[oi];
       if (!o) continue;
       const cx = pcx + o.dx, cz = pcz + o.dz;
+      // ★ 生成上限：固定世界外的粗块**不生成**（防随相机无限扩张；只建不删）
+      if (Math.max(Math.abs(cx), Math.abs(cz)) > ChunkManager.COARSE_LIMIT_RADIUS) continue;
       const key = chunkKeyOf(cx, cz);
       // ★ 细→粗降级：已封存的细化块（视觉已摘除）允许粗块接管，避免"走过就空"
       if (this.voidKeys.has(key)) continue;
