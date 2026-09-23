@@ -235,14 +235,14 @@ export class ChunkManager {
   private queue: { cx: number; cz: number; rebuild: boolean }[] = [];
   private queuedKeys = new Set<number>();
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
-  private static readonly BUILD_BUDGET_MS = 8;
+  private static readonly BUILD_BUDGET_MS = 1000;
   /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
    *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
   private static readonly BUILD_RADIUS = 16;
   private static readonly PREFETCH_RADIUS = 16;
   /** ★ 烘焙在途上限（构建请求）：防跨区/接缝批量时把多个烘焙任务同时塞进 worker
    *  ★ 2026-09-11：2 → 1（用户定调"减少同时计算 chunk 的数量"）——同一时刻只算一块 */
-  private static readonly BUILD_INFLIGHT_MAX = 1;
+  private static readonly BUILD_INFLIGHT_MAX = 8;
   /** ★ 降落冲刺（WorldMode 进近）：窗口内放开**首建节流 + 在途闸门**（让细化立刻
    *  开工）；装配预算不放开（3/帧无冷却会造成帧时间尖刺 → 镜头抖动，用户反馈）。 */
   private static readonly RUSH_SECONDS = 30;
@@ -358,9 +358,9 @@ export class ChunkManager {
   }[] = [];
   /** 装配预算：几何就绪的 chunk 每帧最多 N 个（平滑 BufferGeometry/物理开销）
    *  ★ 2026-09：1 个/帧 + 耗时冷却（见 update）——单块装配超预算时，下一块推迟交付 */
-  private static readonly ASSEMBLE_PER_FRAME = 1;
+  private static readonly ASSEMBLE_PER_FRAME = 999;
   /** 单块装配耗时预算（ms）：本次超过多少，下一块就等同等时间再装（把尖峰摊到后续帧） */
-  private static readonly ASSEMBLE_BUDGET_MS = 8;
+  private static readonly ASSEMBLE_BUDGET_MS = 100000;
   /** 装配冷却截止时刻（performance.now；update 内消费） */
   private assembleCooldownUntil = 0;
   /** ★ 本帧装配耗时（ms；0 = 本帧未装配。WorldMode 读入 HUD，定位交付尖峰） */
@@ -368,12 +368,12 @@ export class ChunkManager {
   /** 装饰补挂冷却截止时刻（同上） */
   private decorCooldownUntil = 0;
   /** ★ 首建交付节拍（用户定调：700ms 交一块；挖坑重建不受限、优先放行） */
-  private static readonly BUILD_RATE_MIN_INTERVAL_MS = 700;
+  private static readonly BUILD_RATE_MIN_INTERVAL_MS = 0;
   /** 上一块首建交付时刻（performance.now；节拍依据） */
   private lastBuildStamp = 0;
   /** 预烘积压上限：待装配队列达到此长度暂停预烘（保住提前量的同时防内存/worker 过载）
    *  ★ 2026-09-11：12 → 6（配合 700ms 节拍，减少"算好堆着"的数量） */
-  private static readonly PREFETCH_BACKLOG_MAX = 6;
+  private static readonly PREFETCH_BACKLOG_MAX = 999;
   /** ★ 远处 chunk 封存半径（切比雪夫，chunk 数）：> 此距离停止渲染 + 物理停用，
    *  但保留网格/碰撞体/装饰实体（回程瞬间恢复，零重建）；< 此距离自动解封。
    *  ★ 2026-09-12：6 → 5 → **4**（细化环收窄：可视/封存/内存三降；远景由粗块 LOD 接） */
@@ -413,9 +413,9 @@ export class ChunkManager {
   // 以 chunkKey 为 key 去重（多坑连射只保留一个任务，补挂时取最新 levels 重计划）
   private pendingDecorJobs = new Map<number, { cx: number; cz: number; maps: ChunkMaps; mode: 'full' | 'props' }>();
   /** 每帧补挂装饰预算（个）—— 延后补挂同一 chunk 的 planDecor+buildDecorLayer+colliders */
-  private static readonly DECOR_PER_FRAME = 1;
+  private static readonly DECOR_PER_FRAME = 999;
   /** 装饰补挂耗时预算（ms）：超出则下一块推迟（与装配同款冷却） */
-  private static readonly DECOR_BUDGET_MS = 6;
+  private static readonly DECOR_BUDGET_MS = 100000;
 
   // ---- ★ 装饰脏区局部重贴地（2026-09-10）：挖坑不再整 chunk 重排装饰 ----
   /** 最近一次构建的装饰计划（挖坑影响判定 + 道具 y 重贴地数据源） */
@@ -433,9 +433,9 @@ export class ChunkManager {
    *  同步 cooking 尖峰（§17.8 的教训是 225 个 4m 小块逐帧 1 块 → 延迟过大，
    *  此处 9 分区 + 3/帧，最坏 3 帧，物理滞后可忽略） */
   private groundCellQueue = new Map<number, { bodyId: number; slot: number; vertices: Float32Array; indices: Uint32Array }>();
-  private static readonly GROUND_CELL_PER_FRAME = 3;
+  private static readonly GROUND_CELL_PER_FRAME = 999;
   /** 物理分区原位换耗时预算（ms）：超出即停（防多分区同步 cooking 尖峰） */
-  private static readonly GROUND_CELL_BUDGET_MS = 3;
+  private static readonly GROUND_CELL_BUDGET_MS = 100000;
 
   /**
    * ★ 远期 chunk 物理分区延迟建（2026-09-15，针对实测 5.5~5.7ms/个的 collider）：
@@ -593,7 +593,7 @@ export class ChunkManager {
   /** 动态粗块候选（包围盒过滤后的偏移表；方向/延伸变化时重建） */
   private coarseDynamic: { dx: number; dz: number }[] = [];
   /** 每帧最多装配粗块数 */
-  private static readonly COARSE_PER_FRAME = 3;
+  private static readonly COARSE_PER_FRAME = 999;
   /** ★ 粗块请求顺序（移动方向优先；方向稳定时复用上次排序，避免每帧重排） */
   private coarseOrder: number[] | null = null;
   private coarseOrderScore: Float32Array | null = null;

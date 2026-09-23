@@ -84,7 +84,7 @@ export class RasterMap {
   /** ★ 距离卸载外扩边距：数据环 radius + 此值之外的 chunk 释放（回程确定性重生成） */
   private static readonly UNLOAD_MARGIN = 2;
   /** ★ 数据加载预算：跨 chunk 一步最多同步生成 N 块（余量下帧继续，防生成尖峰） */
-  private static readonly DATA_LOAD_PER_FRAME = 6;
+  private static readonly DATA_LOAD_PER_FRAME = 999;
   /** ★ 数据加载前向加权（归一化投影；前向最多提前 ~1.5 环，环距仍是第一序） */
   private static readonly DATA_FORWARD_BONUS = 1.5;
   /** 待加载清单（跨 chunk 时重建；逐帧预算消化） */
