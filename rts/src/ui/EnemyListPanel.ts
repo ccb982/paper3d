@@ -49,6 +49,12 @@ export class EnemyListPanel {
     if (h) this.enemyMgr.select([h], e.shiftKey);
   }
 
+  /** ★ 立即重建（时间轴拖动等外部事件；绕过节流） */
+  refreshNow(): void {
+    this.lastBuild = 0;
+    this.refresh();
+  }
+
   /** 2Hz 重建（保留展开状态 + 选中高亮） */
   refresh(): void {
     const now = performance.now();

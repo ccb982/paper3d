@@ -27,6 +27,7 @@ const probe = () => page.evaluate(() => {
     pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     recycled: sw?.stuckDbg?.recycled ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
+    band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
     plan: !!c?.plan,
     squads,
@@ -58,16 +59,15 @@ for (const t of [8000, 20000, 40000, 70000]) {
   elapsed = t;
   console.log(`T+${t / 1000}s`, JSON.stringify(await probe()));
   if (t === 8000) {
-    // ★ 相机对准人数最多的队（验证"视野内升格"）
+    // ★ 快进到总攻时段（t01=0.9）+ 相机对准舰船，验证"下午闸门收拢/第一波抵舰驻留"
     await page.evaluate(() => {
-      const w = window.__rts; const sw = w.swarm;
-      let best = null, bn = 0;
-      for (const s of sw.squads.all()) if (s.members.size > bn) { bn = s.members.size; best = s; }
-      if (!best) return;
-      let cx = 0, cz = 0, n = 0;
-      for (const m of best.members.values()) { cx += m.x; cz += m.z; n++; }
-      w.cam.tx = cx / n; w.cam.tz = cz / n; w.cam.dist = 120;
+      const w = window.__rts;
+      w.swarm.commander.scrubDay(0.5);   // ★ 第一波时段（上限应收到舰）
+      w.cam.tx = 60; w.cam.tz = -40; w.cam.dist = 200; w.cam.pitch = 1.2;
     });
+  }
+  if (t === 40000) {
+    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.9); });   // ★ 下午（下限也收到舰）
   }
   if (t === 20000) {
     // ★ 快车道验证：相机中心 18m 内 15 伤害（代理直扣）

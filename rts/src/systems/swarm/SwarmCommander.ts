@@ -110,6 +110,20 @@ export class SwarmCommander {
   private finalSent = false;
   /** ★ 调试/测试：日程进度覆盖（0~1；<0 = 关闭覆盖，用太阳钟） */
   debugDayT01 = -1;
+  /** ★ 最近一次归一化当日进度（时间轴 UI 读） */
+  lastT01 = 0;
+
+  /** ★ 时间轴拖动（调试/演示）：**绝对**设置当日进度（绕过相对归一 t01Base），事态/命令随之重算 */
+  scrubDay(v: number): void {
+    this.t01Base = 0;
+    this.debugDayT01 = Math.max(0, Math.min(1, v));
+  }
+
+  /** ★ 恢复实时时钟（清拖动覆盖） */
+  followRealtime(): void {
+    this.debugDayT01 = -1;
+    this.t01Base = -1;
+  }
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
   /** ★ 战役级闭环（1Hz）：小队评级/求援/受阻 → 大队改派（自下而上的反馈闭环） */
@@ -126,6 +140,8 @@ export class SwarmCommander {
   private postureEpoch = 0;
   /** ★ 事态闸门解析出的**允许离舰最小半径**（本次部署拍；-1 = 无闸） */
   private frontMinD = -1;
+  /** ★ 环形活动区上限（事态函数管；第一波收拢到舰） */
+  private frontMaxD = -1;
   /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
   private readonly buildIssued = new Map<number, number>();
   /** ★ 前线永不再贴近舰船的余量（米） */
@@ -148,9 +164,11 @@ export class SwarmCommander {
 
   /** ★ 施工带（事态函数口径，单源）：rLo=允许离舰+8、rHi=90 或 rLo+30，再加前推棘轮 pushM。
    *  引擎 tick 与小地图/探针共用——防"两处重算、漏 pushM"（2026-09-25 修） */
-  get fortifyBand(): { rLo: number; rHi: number; minD: number; frontP: number; pushM: number } {
+  get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
     const rLo = Math.max(24, this.frontMinD + 8);
-    return { rLo, rHi: Math.max(90, rLo + 30) + this.pushM, minD: this.frontMinD, frontP: this.frontP, pushM: this.pushM };
+    const rHiBase = Math.max(90, rLo + 30) + this.pushM;
+    const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;   // ★ 施工外圈不越活动上限
+    return { rLo, rHi, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
   }
   private fortifyAccum = 0;
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
@@ -478,7 +496,11 @@ export class SwarmCommander {
         this.fortify.dbg.spotsN = this.fortify.spots.size;
         // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
         // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
+        // ★ 第一波时段起（≥0.45）**停止新增施工**：既有件收尾 → S1→S2 → 闸门放开（下午能打到舰船）
+        //   ⚠ 用参数 dayT01（t01 归一值在后面才算，不能在此引用——2026-09-25 TDZ 教训）
+        const assaultTime = dayT01 >= 0.45;
         let injected = 0;
+        if (!assaultTime) {
         // ★ 设计（用户定）：引擎把**区域任务**派给队 → 队在该区域**持续干**（永远不缺活）。
         //   本区（40m 内）无未建件 → 立刻补一件；已建点 8m 内不再重复（扇区内随机另选点）。
         for (const [sid, p] of this.fortify.spots) {
@@ -531,6 +553,7 @@ export class SwarmCommander {
           injected++;
           this.fortify.dbg.injected++;
         }
+        }
         // ★ 连通阶段（§13.4）：相邻扇区都达标 → 串 trench 连成一片（每拍 ≤1）
         for (const m of this.fortify.connect(DONE, 1)) {
           const near = this.corps.pieces.some((q) => Math.hypot(q.x - m.x, q.z - m.z) < 8);
@@ -556,6 +579,7 @@ export class SwarmCommander {
     } else {
       t01 = Math.min(1, this.rhythmT / SwarmCommander.DAY_RHYTHM_S);
     }
+    this.lastT01 = t01;
     // ★ 兵力放行（日节律）：早间只放少量 → 基数 → 第一波/总攻放宽（账本闸门是唯一真源）
     this.swarm.ledger.releaseCap = Math.ceil(this.swarm.ledger.total * releaseAt(t01));
     for (const [id, t] of this.swarm.recentHits) {
@@ -653,7 +677,41 @@ export class SwarmCommander {
         this.lastDecision = { squad: -1, kind: 'final', at: now };
       }
     }
+    // ★ 第一波抵舰驻留（用户定 2026-09-25）：进攻队抵达舰船 70m 内 → 转「驻守」45s；
+    //   期间血比 <0.45 = 被打退 → 撤退；到期 → 交回正常决策（下一拍可再攻）
+    if (this.wave1Sent && this.plan) {
+      for (const s of this.swarm.squads.all()) {
+        if (s.builders || s.members.size === 0) continue;
+        const o = this.swarm.tactics.board.get(s.id)?.order;
+        if (!o) continue;
+        let cx = 0, cz = 0, hp = 0, max = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; hp += m.hp; max += m.maxHp; n++; }
+        cx /= n; cz /= n;
+        const dShip = Math.hypot(cx - shipX, cz - shipZ);
+        const ratio = max > 0 ? hp / max : 1;
+        const holdT = this.holdUntil.get(s.id) ?? 0;
+        const attacking = o.kind === 'advance' || o.kind === 'flank' || o.kind === 'focus';
+        if (attacking && dShip < 70 && now >= holdT) {
+          this.holdUntil.set(s.id, now + 45);
+          const lead = s.members.get(s.leaderUid);
+          if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'garrison', target: { x: cx, z: cz }, mission: 'guard', seq: 0 }, 45);
+          continue;
+        }
+        if (o.kind === 'garrison') {
+          if (ratio < 0.45) {
+            this.holdUntil.delete(s.id);
+            const lead = s.members.get(s.leaderUid);
+            if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'retreat', target: { x: shipX + 200, z: shipZ }, mission: 'rear', seq: 0 }, 20);
+          } else if (now >= holdT) {
+            this.holdUntil.delete(s.id);   // 驻留到期 → 交回正常决策
+          }
+        }
+      }
+    }
   }
+
+  /** ★ 第一波抵舰驻留截止时刻（squadId → 秒；用户定 2026-09-25） */
+  private readonly holdUntil = new Map<number, number>();
 
   /** ★★ 引擎保护配置（本拍）：各队保护对象 + 来源（护工/射手/工地/岗位/掩体）——保护对象由大队定 */
   readonly protectAssign = new Map<number, ProtectTarget>();
@@ -749,11 +807,20 @@ export class SwarmCommander {
     //   命令/前线/施工一律不得越过「允许离舰半径」，该半径随 PostureFn.frontP 单调收拢到 SHIP_CLEAR；
     //   施工期（S1）封顶 0.35 —— 造掩体战壕阶段基本留守初始前沿，总攻才逐步贴近。
     {
-      const effFrontP = this.stage === 'S1' ? Math.min(this.frontP, 0.35) : this.frontP;
       const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
-      this.frontMinD = Math.max(SwarmCommander.SHIP_CLEAR, ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * effFrontP);
-      if (ffrontD > 1e-3 && ffrontD < this.frontMinD - 0.01) {
-        const k = this.frontMinD / ffrontD;
+      // ★ 环形活动区（用户定 2026-09-25）：事态函数管**上下限**——
+      //   上限 frontMaxD：第一波（0.45）收拢到舰（外圈消失 → 兵力可全线压上）
+      //   下限 frontMinD：下午（0.80）收拢到舰（内圈消失 → 可贴脸打舰）
+      const c01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
+      const t01Now = this.lastT01;   // ★ 归一当日进度（tick 每帧写；本块在别的函数里，不能引用局部 t01）
+      const waveK = c01((t01Now - 0.20) / 0.25);   // 0.20→0.45 收上限
+      const duskK = c01((t01Now - 0.55) / 0.25);   // 0.55→0.80 收下限
+      this.frontMaxD = ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * waveK;
+      this.frontMinD = Math.max(SwarmCommander.SHIP_CLEAR, ffrontD + (SwarmCommander.SHIP_CLEAR - ffrontD) * duskK);
+      // 前沿点（命令基准）夹在 [下限, 上限] 环内
+      const rWant = Math.min(Math.max(ffrontD, this.frontMinD), this.frontMaxD);
+      if (ffrontD > 1e-3 && Math.abs(rWant - ffrontD) > 0.01) {
+        const k = rWant / ffrontD;
         front.x = shipX + (front0.x - shipX) * k;
         front.z = shipZ + (front0.z - shipZ) * k;
       }

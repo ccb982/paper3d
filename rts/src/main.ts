@@ -45,6 +45,7 @@ import { EnemyListPanel } from './ui/EnemyListPanel';
 import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
 import { FastLane } from './rts/FastLane';
+import { Timeline } from './ui/Timeline';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -267,6 +268,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders);
   // ★ 快车道结算（代理直扣 / 实体走管线）；K = 对相机中心 18m 内造成 15 伤害（演示/测试口）
   const fastLane = new FastLane(swarm, enemies);
+  // ★ 时间轴（拖动 = 绝对当日进度；事态/闸门/命令随之重算）
+  const timeline = new Timeline(swarm.commander);
+  timeline.onChange = () => { navMap.redrawNow(); enemyPanel.refreshNow(); };   // ★ 时间轴一动：小地图/列表立即重绘
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
     raster,
@@ -484,7 +488,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
     hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船（相机不再被追）
     hooks.entityCount = enemies.length;
-    hooks.dayT01 = Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天：事态节奏推进
+    hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天；测试可 __dayOverride 覆盖
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
     spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池（以相机焦点为基准）
@@ -504,6 +508,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
     navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
     aiTrace.update(dt);     // ★ AI 可读记录（2Hz 变化采样）
+    timeline.refresh();     // ★ 时间轴（2Hz）
     entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
     physics.step();
     playerBullets.update(dt, camera);
@@ -518,7 +523,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

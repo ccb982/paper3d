@@ -139,6 +139,15 @@ export class NavDebugMap {
     this.draw();
   }
 
+  /** ★ 立即重绘（时间轴拖动等外部事件；绕过节流） */
+  redrawNow(): void {
+    if (!this.visible) return;
+    this.dirtyBase = true;
+    this.lastBase = 0;
+    this.lastDraw = 0;
+    this.draw();
+  }
+
   private bake(): void {
     const N = 320;
     const img = this.baseCtx.createImageData(N, N);
@@ -189,7 +198,7 @@ export class NavDebugMap {
       const band = this.swarm.commander.fortifyBand;   // ★ 单源（含 pushM/前推棘轮）
       const rLo = band.rLo;
       const rHi = band.rHi;
-      // ★ 事态函数：允许离舰半径（虚线圈）+ 施工带（rLo~rHi）
+      // ★ 事态函数：环形活动区上下限（下限=允许离舰 / 上限=第一波收拢到舰）
       if (Number.isFinite(band.minD) && band.minD > 0) {
         g.setLineDash([5, 5]);
         g.strokeStyle = 'rgba(255,210,90,0.9)';
@@ -198,7 +207,17 @@ export class NavDebugMap {
         g.setLineDash([]);
         g.fillStyle = 'rgba(255,210,90,0.95)';
         g.font = '10px Consolas,monospace';
-        g.fillText(`允许离舰 ${band.minD.toFixed(0)}m（frontP ${band.frontP.toFixed(2)}）`, sx - 60, sz - band.minD * sPx - 4);
+        g.fillText(`下限 ${band.minD.toFixed(0)}m（frontP ${band.frontP.toFixed(2)}）`, sx - 60, sz - band.minD * sPx - 4);
+      }
+      if (Number.isFinite(band.maxD) && band.maxD > 0) {
+        g.setLineDash([2, 6]);
+        g.strokeStyle = 'rgba(90,220,255,0.9)';
+        g.lineWidth = 1.5;
+        g.beginPath(); g.arc(sx, sz, band.maxD * sPx, 0, Math.PI * 2); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = 'rgba(90,220,255,0.95)';
+        g.font = '10px Consolas,monospace';
+        g.fillText(`上限 ${band.maxD.toFixed(0)}m`, sx - 30, sz - band.maxD * sPx - 4);
       }
       const ownerOf = new Map<number, number>();   // sector → squadId
       for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
