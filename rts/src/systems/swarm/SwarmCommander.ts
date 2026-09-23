@@ -143,7 +143,15 @@ export class SwarmCommander {
   /** ★ §13.3 工事规划（最危险区域选择；工兵循环的第一步） */
   readonly fortify = new FortifyPlanner();
   /** ★ §13.4 前推里程（棘轮：只增；每拍 +≤0.5m，封顶 frontP 允许值×120m） */
+  /** ★ 前推棘轮里程（事态控制；每拍 ≤0.5m） */
   private pushM = 0;
+
+  /** ★ 施工带（事态函数口径，单源）：rLo=允许离舰+8、rHi=90 或 rLo+30，再加前推棘轮 pushM。
+   *  引擎 tick 与小地图/探针共用——防"两处重算、漏 pushM"（2026-09-25 修） */
+  get fortifyBand(): { rLo: number; rHi: number; minD: number; frontP: number; pushM: number } {
+    const rLo = Math.max(24, this.frontMinD + 8);
+    return { rLo, rHi: Math.max(90, rLo + 30) + this.pushM, minD: this.frontMinD, frontP: this.frontP, pushM: this.pushM };
+  }
   private fortifyAccum = 0;
   /** ★ 工兵施工链（《工兵架构.md》）：阶段/施工目标表/调度/挖建全在 EngineerCorps */
   readonly corps: EngineerCorps;
@@ -405,8 +413,6 @@ export class SwarmCommander {
       this.fortifyAccum = 0;
       if (this.stage === 'S1') {
         const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事；调参入口）
-        // 环带受事态闸门约束：内界 = max(24, 允许离舰 + 8)（门内不许施工）
-        const rLo = Math.max(24, this.frontMinD + 8);
         // ★ 前推（§13.4）：**受事态控制 + 棘轮步进**——
         //   ① 8 区全达标（连通）才推进；② 每拍最多 +0.5m（≤1m/s，不跳变）；③ 封顶 frontP×120m（事态允许）
         const allDone2 = this.fortify.safety.every((v) => Number.isFinite(v) && v < DONE);
@@ -414,7 +420,7 @@ export class SwarmCommander {
           const targetPush = this.frontP * 120;
           this.pushM = Math.min(targetPush, this.pushM + 0.5);
         }
-        const rHi = Math.max(90, rLo + 30) + this.pushM;
+        const { rLo, rHi } = this.fortifyBand;   // ★ 单源（含 pushM；小地图同口径）
         this.fortify.refreshOne(shipX, shipZ, rLo, rHi, (x, z) => this.fortifyNeed(x, z));
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);

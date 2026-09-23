@@ -186,9 +186,20 @@ export class NavDebugMap {
       const [sx, sz] = p2(sp.x, sp.z);
       const sPx = S / this.span;
       const fort = this.swarm.commander.fortify;
-      const fg = this.swarm.commander.frontGate;
-      const rLo = Math.max(24, (fg?.minD ?? 24) + 8);
-      const rHi = Math.max(90, rLo + 30);
+      const band = this.swarm.commander.fortifyBand;   // ★ 单源（含 pushM/前推棘轮）
+      const rLo = band.rLo;
+      const rHi = band.rHi;
+      // ★ 事态函数：允许离舰半径（虚线圈）+ 施工带（rLo~rHi）
+      if (Number.isFinite(band.minD) && band.minD > 0) {
+        g.setLineDash([5, 5]);
+        g.strokeStyle = 'rgba(255,210,90,0.9)';
+        g.lineWidth = 1.5;
+        g.beginPath(); g.arc(sx, sz, band.minD * sPx, 0, Math.PI * 2); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = 'rgba(255,210,90,0.95)';
+        g.font = '10px Consolas,monospace';
+        g.fillText(`允许离舰 ${band.minD.toFixed(0)}m（frontP ${band.frontP.toFixed(2)}）`, sx - 60, sz - band.minD * sPx - 4);
+      }
       const ownerOf = new Map<number, number>();   // sector → squadId
       for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
       for (let i = 0; i < 8; i++) {
@@ -224,13 +235,15 @@ export class NavDebugMap {
         g.font = '10px Consolas,monospace';
         g.fillText(`第${sid}队`, px2 + 5, pz2 + 3);
       }
-      // 舰船本体
+      // 舰船本体（蓝圈 + 名）
       g.strokeStyle = '#3399ff';
       g.lineWidth = 2.5;
       g.beginPath(); g.arc(sx, sz, 9, 0, Math.PI * 2); g.stroke();
       g.fillStyle = 'rgba(80,170,255,0.9)';
       g.font = '10px Consolas,monospace';
       g.fillText('舰船', sx + 11, sz + 3);
+      g.fillStyle = 'rgba(220,232,245,0.85)';
+      g.fillText(`施工带 ${rLo.toFixed(0)}~${rHi.toFixed(0)}m（前推+${band.pushM.toFixed(0)}m）`, sx + 8, sz + rHi * sPx + 12);
     }
     for (const s of squads) {
       const path = this.swarm.tactics.board.get(s.id);   // ★ 走廊/起终点在命令状态（寻路轨覆盖式）
