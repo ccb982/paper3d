@@ -6,6 +6,8 @@
 // ============================================================
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyManager, EnemyHandle } from './EnemyManager';
+import { orderFromCode, directiveFromCode } from '../systems/swarm/SwarmUnit';
+import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
 
 const TYPE_LABEL: Record<string, string> = {
   defense: '盾卫', assault: '突击', ranged: '远程', logistics: '后勤', mixed: '混编', flyer: '飞行',
@@ -50,6 +52,18 @@ export class EnemyListPanel {
     if (now - this.lastBuild < 500) return;
     this.lastBuild = now;
     const selected = new Set(this.enemyMgr.selected().map((h: EnemyHandle) => h.uid));
+    // ★ 命令台账：每队最新令（引擎/队长来源）+ 历史（ring 尾部 3 条）
+    const pool = this.swarm.pool;
+    const idxByUid = new Map<number, number>();
+    for (let i = 0; i < pool.count; i++) idxByUid.set(pool.swarmUid[i], i);
+    const latest = new Map<number, CommandLogEntry>();
+    for (const e of this.swarm.cmdLog.latestPerSquad(300)) latest.set(e.squadId, e);
+    const ring = (this.swarm.cmdLog as unknown as { ring?: CommandLogEntry[] }).ring ?? [];
+    const historyOf = (sid: number, n = 3): CommandLogEntry[] => {
+      const out: CommandLogEntry[] = [];
+      for (let i = ring.length - 1; i >= 0 && out.length < n; i--) if (ring[i]!.squadId === sid) out.push(ring[i]!);
+      return out.reverse();
+    };
     const groups = new Map<string, { squads: { id: number; leader: number; members: number[]; hp: number; max: number }[] }>();
     for (const s of this.swarm.squads.all()) {
       const gname = this.names[s.mobKind] ?? TYPE_LABEL[s.type] ?? `#${s.mobKind}`;
@@ -82,8 +96,11 @@ export class EnemyListPanel {
       for (const sq of g.squads) {
         const sopen = this.expandedSquads.has(sq.id);
         const ratio = sq.max > 0 ? Math.round((sq.hp / sq.max) * 100) : 100;
+        const ord = this.swarm.tactics.board.get(sq.id)?.order;
+        const src = latest.get(sq.id)?.source === 'leader' ? '队长' : latest.has(sq.id) ? '引擎' : '-';
+        const ordTxt = ord ? `${ord.kind}→${ord.target ? `${ord.target.x | 0},${ord.target.z | 0}` : '-'}` : '-';
         const sRow = document.createElement('div');
-        sRow.textContent = `${sopen ? '▾' : '▸'} 队长 #${sq.leader} · 队${sq.id} · ${sq.members.length}人 · ${ratio}%`;
+        sRow.textContent = `${sopen ? '▾' : '▸'} 队长 #${sq.leader} · 队${sq.id} · ${sq.members.length}人 · ${ratio}% | 令[${src}]:${ordTxt}`;
         sRow.style.cssText = `padding:3px 6px 3px 18px;cursor:pointer;border-radius:4px;color:${selected.has(sq.leader) ? '#ffd24a' : '#cfe3f5'};`;
         sRow.onmouseenter = () => { sRow.style.background = 'rgba(110,170,235,0.12)'; };
         sRow.onmouseleave = () => { sRow.style.background = 'transparent'; };
@@ -100,12 +117,35 @@ export class EnemyListPanel {
         };
         frag.appendChild(sRow);
         if (!sopen) continue;
+        // ★ 该队命令历史（引擎/队长来源，具体到点）
+        for (const h of historyOf(sq.id)) {
+          const hRow = document.createElement('div');
+          const age = Math.max(0, Math.round(performance.now() / 1000 - h.t));
+          hRow.textContent = `  史[${h.source === 'leader' ? '队长' : '引擎'}] ${h.kind}→${h.tx | 0},${h.tz | 0}${h.mission ? ` ${h.mission}` : ''} (${age}s前)`;
+          hRow.style.cssText = 'padding:1px 6px 1px 26px;color:#7f95ab;font-size:11px;';
+          frag.appendChild(hRow);
+        }
         for (const uid of sq.members) {
           const h = this.enemyMgr.find(uid);
           if (!h) continue;
           const mRow = document.createElement('div');
           const hpPct = h.maxHp > 0 ? Math.round((h.hp / h.maxHp) * 100) : 100;
-          mRow.textContent = `${uid === sq.leader ? '★' : '·'} ${h.tier} #${uid} · ${hpPct}%`;
+          // ★ 队长→成员的个体指令（L3 读实体字段；L2 读池数组）
+          let dirTxt = '-';
+          let okTxt = 'none';
+          if (h.entity) {
+            const d = h.entity.directiveKind;
+            dirTxt = d && d !== 'none' ? `${d}→${h.entity.directiveTargetX | 0},${h.entity.directiveTargetZ | 0}` : '-';
+            okTxt = h.entity.orderKind;
+          } else {
+            const pi = idxByUid.get(uid);
+            if (pi !== undefined) {
+              const dk = directiveFromCode(pool.directiveKind[pi] ?? 0);
+              dirTxt = dk && dk !== 'none' ? `${dk}→${pool.directiveTargetX[pi] | 0},${pool.directiveTargetZ[pi] | 0}` : '-';
+              okTxt = orderFromCode(pool.orderKind[pi] ?? 0);
+            }
+          }
+          mRow.textContent = `${uid === sq.leader ? '★' : '·'} ${h.tier} #${uid} · ${hpPct}% | 令:${okTxt} | 指:${dirTxt}`;
           mRow.style.cssText = `padding:2px 6px 2px 34px;cursor:pointer;border-radius:4px;color:${selected.has(uid) ? '#ffd24a' : '#a9c2d8'};`;
           mRow.onmouseenter = () => { mRow.style.background = 'rgba(110,170,235,0.12)'; };
           mRow.onmouseleave = () => { mRow.style.background = 'transparent'; };
