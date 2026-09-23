@@ -281,6 +281,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     platformTopAt: () => null,
   });
   const t0Ms = performance.now();
+  // ★ 加速（用户定 2026-09-25）：只跑 AI 性能开销小；dt 缩放，日进度走**模拟时钟**
+  let speed = 1;
+  let simT = 0;
+  R.__setSpeed = (v: number): void => { speed = Math.max(1, Math.min(100, v)); };
   // ★ 指挥器建计划：**敌方登陆点**（距舰 ~160m 的可行方向）——不能在舰旁布防/刷兵
   const pickEnemyLanding = (): { x: number; z: number } => {
     for (let k = 0; k < 16; k++) {
@@ -295,7 +299,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   const landing = pickEnemyLanding();
   try {
-    swarm.commander.planDefense(landing.x, landing.z, 80);
+    // ★ 建表半径必须**覆盖舰船**（长行军目标=舰；否则目标在表外 → 长寻路回落失败）
+    const tableR = Math.min(240, Math.ceil(Math.hypot(landing.x - spawn.x, landing.z - spawn.z)) + 60);
+    swarm.commander.planDefense(landing.x, landing.z, tableR);
   } catch (e) {
     console.warn('[rts] planDefense 失败（命令链仍可手动）', e);
   }
@@ -388,6 +394,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'KeyM') navMap.toggleOverview();
     if (e.code === 'KeyY') aiTrace.download();
     if (e.code === 'KeyU') console.log(aiTrace.digest(150));
+    if (e.code === 'Comma') speed = Math.max(1, speed / 2);
+    if (e.code === 'Period') speed = Math.min(100, speed * 2);
     if (e.code === 'KeyK') {
       const r = fastLane.damageArea(cam.tx, cam.tz, 18, 15);
       console.log(`[快车道] 区域伤害 15：代理 ${r.agents} · 实体 ${r.entities}`);
@@ -471,10 +479,42 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   });
 
   let last = performance.now();
+  /** ★ 单个模拟子步（加速用；每步 ≤0.05s）：AI/指挥/实体模拟/子弹——不含渲染/表现 */
+  const simStep = (h: number): void => {
+    const fx2 = Math.sin(cam.yaw), fz2 = Math.cos(cam.yaw);
+    hooks.camForwardX = fx2; hooks.camForwardZ = fz2;
+    hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船
+    hooks.entityCount = enemies.length;
+    hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720000);
+    swarm.update(h, hooks);
+    spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池
+    aiCtx.dt = h; aiCtx.time += h;
+    aiCtx.target = aiCtx.findTarget('enemy');
+    aiCtx.focusX = spawn.x; aiCtx.focusZ = spawn.z;
+    aiSystem.updateAll(h, aiCtx);
+    for (const e of enemies) charClamp.update(e, h);   // ★ 贴地/悬停/掉坑结算
+    explosionFx.update(h);
+    entities.simulate(h);                      // ★ 实体模拟相（移动/AI/物理同步）
+    physics.step();
+    playerBullets.update(h, camera);
+    enemyArrows.update(h, camera);
+    enemyBolts.update(h, camera);
+  };
+
   const frame = (): void => {
     const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dtR = Math.min(0.05, (now - last) / 1000);
     last = now;
+    // ★ 加速（用户定：最高 100×）：**子步进**（每步 ≤0.05s，防高倍速炸物理/AI）
+    let rem = Math.min(dtR * speed, 5);   // 每帧最多 5s 模拟
+    let guard = 0;
+    while (rem > 1e-4 && guard++ < 200) {
+      const h = Math.min(0.05, rem);
+      simStep(h);
+      rem -= h;
+      simT += h;
+    }
+    const dt = dtR;   // 渲染/表现相用实时 dt
     const sp = cam.dist * 0.8 * dt;
     const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
     const rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
@@ -485,22 +525,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (keys.has('KeyD') || keys.has('ArrowRight')) { cam.tx += rx * sp; cam.tz += rz * sp; }
     clampArea();
     applyCam();
-    chunks.update(cam.tx, cam.tz, dt, fx, fz);
-    // ★ 敌人指挥链推进 + 实体/批量渲染
-    hooks.camForwardX = fx; hooks.camForwardZ = fz;
-    hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船（相机不再被追）
-    hooks.entityCount = enemies.length;
-    hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, (performance.now() - t0Ms) / 720000);   // ★ 12 分钟一天；测试可 __dayOverride 覆盖
-    swarm.update(dt, hooks);
+    chunks.update(cam.tx, cam.tz, dtR, fx, fz);   // 地形流式：实时 dt
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
-    spawner.tickDemote(dt, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池（以相机焦点为基准）
-    // ★ L3 AI 驱动（移动/索敌/攻击；原 WorldMode：aiSystem.updateAll + aiCtx）
-    aiCtx.dt = dt; aiCtx.time += dt;
-    aiCtx.target = aiCtx.findTarget('enemy');
-    aiCtx.focusX = spawn.x; aiCtx.focusZ = spawn.z;
-    aiSystem.updateAll(dt, aiCtx);
-    for (const e of enemies) charClamp.update(e, dt);   // ★ 贴地/悬停/掉坑结算
-    explosionFx.update(dt);
     // ★ 舰船大蓝圈脉冲（常显）
     const pulse = 1 + Math.sin(performance.now() / 1000 * 1.6) * 0.06;
     shipRing.scale.setScalar(pulse);
@@ -511,12 +537,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
     aiTrace.update(dt);     // ★ AI 可读记录（2Hz 变化采样）
     timeline.refresh();     // ★ 时间轴（2Hz）
-    entities.update(dt, undefined, { forward: { x: fx, z: fz }, right: { x: rx, z: rz } });
-    physics.step();
-    playerBullets.update(dt, camera);
-    enemyArrows.update(dt, camera);
-    enemyBolts.update(dt, camera);
-    CharacterFxManager.update(dt, camera);   // ★ 实体 FTX 帧动画/渲染推进
+    entities.present(dtR);   // ★ 表现相（实时；渲染同步/动画）
+    CharacterFxManager.update(dtR, camera);   // ★ 实体 FTX 帧动画/渲染推进
     entities.renderAll(camera);   // ★ 实体渲染阶段（视锥+LOD+贴片/血条/附属特效）
     renderAgents();
     feedLight();
@@ -525,7 +547,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, get speed(): number { return speed; } };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

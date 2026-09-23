@@ -83,6 +83,9 @@ export interface SquadOrderState {
   pathFromZ?: number;
   /** ★ 阶段二：求解时的代价代次（TerrainScore.scoreStamp；掩体增删 → 代次变 → 重算一次偏好） */
   costStamp?: number;
+  /** ★ 锚点滞回（用户定 2026-09-25）：上一前瞻锚点；新锚点 <6m 抖动 → 沿用旧锚（防振荡） */
+  anchorX?: number;
+  anchorZ?: number;
 }
 
 /** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
@@ -321,11 +324,19 @@ export class SquadTactics {
         const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
         if (d2 < nd) { nd = d2; near = i; }
       }
+      let tgtPt: { x: number; z: number } | null = null;
       for (let i = near; i < path.length; i++) {
         const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-        if (d2 > 64) return path[i];
+        if (d2 > 64) { tgtPt = path[i]; break; }
       }
-      return path[path.length - 1];
+      if (!tgtPt) tgtPt = path[path.length - 1];
+      // ★ 锚点滞回（用户定 2026-09-25）：新锚点与旧锚 <6m（抖动）→ 沿用旧锚，防振荡
+      if (state.anchorX !== undefined && state.anchorZ !== undefined) {
+        const dd = Math.hypot(tgtPt.x - state.anchorX, tgtPt.z - state.anchorZ);
+        if (dd < 6) return { x: state.anchorX, z: state.anchorZ };
+      }
+      state.anchorX = tgtPt.x; state.anchorZ = tgtPt.z;
+      return tgtPt;
     }
     return state.order.target ?? null;
   }

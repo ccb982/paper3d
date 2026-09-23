@@ -149,6 +149,8 @@ export class SwarmCommander {
   cmdLogRingClamps = 0;
   /** ★ 越界队（队 id → 首次越界时刻；连续 2s 强制归位） */
   private readonly outsideSince = new Map<number, number>();
+  /** ★ 少发令闸门（用户定 2026-09-25）：队 → 上次发令的事态签名；签名不变且队未重伤 → 只续命不重发 */
+  private readonly cmdKey = new Map<number, string>();
   /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
   private readonly buildIssued = new Map<number, number>();
   /** ★ 前线永不再贴近舰船的余量（米） */
@@ -300,6 +302,31 @@ export class SwarmCommander {
   private issueChecked(
     squadId: number, fromX: number, fromZ: number, order: TacticalOrder, ttl?: number,
   ): boolean {
+    // ★ 少发令闸门（用户定 2026-09-25）：**只在事态变动或队重伤时重发**；否则只续命（不重登记/不进台账）
+    {
+      const cur0 = this.swarm.tactics.board.get(squadId);
+      if (cur0 && cur0.source === 'engine' && order.target) {
+        const nowS0 = performance.now() / 1000;
+        const key = `${this.stage}|${this.battlePosture}|${Math.round(this.frontMinD / 10)}|${Math.round(this.frontMaxD / 10)}|${this.wave1Sent ? 1 : 0}|${this.finalSent ? 1 : 0}`;
+        const sameKind = cur0.order.kind === order.kind && (cur0.order.mission ?? '') === (order.mission ?? '');
+        const sameTgt = cur0.order.target && Math.hypot(cur0.order.target.x - order.target.x, cur0.order.target.z - order.target.z) < 3;
+        const sameSituation = this.cmdKey.get(squadId) === key;
+        // 队重伤（血比 <0.5）→ 允许重发
+        let ratio = 1;
+        const sq = this.swarm.squads.get(squadId);
+        if (sq && sq.members.size > 0) {
+          let hp = 0, max = 0;
+          for (const m of sq.members.values()) { hp += m.hp; max += m.maxHp; }
+          ratio = max > 0 ? hp / max : 1;
+        }
+        const hurt = ratio < 0.5;
+        if (sameKind && sameTgt && sameSituation && !hurt && nowS0 < cur0.until - 5) {
+          cur0.until = nowS0 + (ttl ?? 30);   // 只续命
+          return true;
+        }
+        this.cmdKey.set(squadId, key);
+      }
+    }
     // ① 生效目标解析（五轴分工 subTargets 按队覆写——核验必须查覆写后的目标）
     const sub = order.subTargets?.find((t) => t.squadId === squadId);
     let eff = sub ?? order.target;
@@ -898,8 +925,18 @@ export class SwarmCommander {
           const tooFar = d > this.frontMaxD + 6;
           const tooClose = ringValid && d < this.frontMinD - 6;
           if (!tooFar && !tooClose) { this.outsideSince.delete(s.id); continue; }
+          // ★ 防"反复发命令"（用户定 2026-09-25）：**命令目标已合规** → 队正在路上，不再强制重发
+          const cur = this.swarm.tactics.board.get(s.id);
+          const ct = cur?.order?.target;
+          if (ct) {
+            const cd = Math.hypot(ct.x - shipX, ct.z - shipZ);
+            const cCompliant = this.frontMaxD < this.frontMinD
+              ? cd <= this.frontMaxD + 6
+              : cd >= this.frontMinD - 6 && cd <= this.frontMaxD + 6;
+            if (cCompliant) { this.outsideSince.delete(s.id); continue; }
+          }
           const t0 = this.outsideSince.get(s.id) ?? nowS;
-          if (nowS - t0 < 2) { this.outsideSince.set(s.id, t0); continue; }
+          if (nowS - t0 < 3) { this.outsideSince.set(s.id, t0); continue; }
           const rWant = tooFar ? Math.max(2, this.frontMaxD - 10) : this.frontMinD + 10;
           const tx = shipX + ((cx - shipX) / (d || 1)) * rWant;
           const tz = shipZ + ((cz - shipZ) / (d || 1)) * rWant;

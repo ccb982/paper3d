@@ -209,7 +209,15 @@ export class NavDebugMap {
         g.font = '10px Consolas,monospace';
         g.fillText(`下限 ${band.minD.toFixed(0)}m（frontP ${band.frontP.toFixed(2)}）`, sx - 60, sz - band.minD * sPx - 4);
       }
-      if (Number.isFinite(band.maxD) && band.maxD > 0) {
+      if (band.maxD < 0.5 && band.minD < 0.5 && band.minD >= 0) {
+        // ★ 总攻收拢为点：在舰船处画实心点 + 状态
+        g.fillStyle = 'rgba(255,120,90,0.95)';
+        g.beginPath(); g.arc(sx, sz, 5, 0, Math.PI * 2); g.fill();
+        g.fillStyle = 'rgba(255,180,150,0.95)';
+        g.font = '10px Consolas,monospace';
+        g.fillText('环=点（总攻收拢）', sx + 10, sz - 8);
+      }
+      if (Number.isFinite(band.maxD) && band.maxD > 0.5) {
         g.setLineDash([2, 6]);
         g.strokeStyle = 'rgba(90,220,255,0.9)';
         g.lineWidth = 1.5;
@@ -221,7 +229,8 @@ export class NavDebugMap {
       }
       const ownerOf = new Map<number, number>();   // sector → squadId
       for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
-      for (let i = 0; i < 8; i++) {
+      const bandValid = rHi > rLo + 1;   // ★ 环退化（收拢为点/小圆内）→ 不画扇区带
+      for (let i = 0; bandValid && i < 8; i++) {
         const a0 = (i / 8) * Math.PI * 2, a1 = ((i + 1) / 8) * Math.PI * 2;
         const owner = ownerOf.get(i);
         const hue = owner !== undefined ? (owner * 47) % 360 : 210;
@@ -262,7 +271,9 @@ export class NavDebugMap {
       g.font = '10px Consolas,monospace';
       g.fillText('舰船', sx + 11, sz + 3);
       g.fillStyle = 'rgba(220,232,245,0.85)';
-      g.fillText(`施工带 ${rLo.toFixed(0)}~${rHi.toFixed(0)}m（前推+${band.pushM.toFixed(0)}m）`, sx + 8, sz + rHi * sPx + 12);
+      const scalePct = Math.round((rHi / Math.max(1, band.maxD || 1)) * 0);   // 占位（下方直接给文本）
+      void scalePct;
+      g.fillText(`施工带 ${bandValid ? `${rLo.toFixed(0)}~${rHi.toFixed(0)}` : '—（收拢）'}m · 前推+${band.pushM.toFixed(0)}m · 下限${band.minD.toFixed(0)}/上限${band.maxD.toFixed(0)}`, sx + 8, sz + Math.max(rHi, 20) * sPx + 12);
     }
     for (const s of squads) {
       const path = this.swarm.tactics.board.get(s.id);   // ★ 走廊/起终点在命令状态（寻路轨覆盖式）

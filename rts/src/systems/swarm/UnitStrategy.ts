@@ -7,8 +7,12 @@
 // 消费方（总纲 P1-2/3/4 逐点切）：SteerPick 候选打分 / SquadPath 路径代价 / Decide 选格。
 // ============================================================
 
-import { FEAT_SCALE, type CellFeats, type ScoreWeights } from './TerrainScore';
+import { FEAT_SCALE, DIST_SCALE, type CellFeats, type ScoreWeights } from './TerrainScore';
 import type { SquadType } from '../../entity/SwarmUnit';
+
+/** ★ 距离混合调参（用户定 2026-09-25）：近舰距离权重放大 / 地形权重衰减（远舰反之） */
+const NEAR_DIST_BOOST = 8;
+const NEAR_TERRAIN_DAMP = 0.35;
 
 /** 兵种特征权重乘子（缺省 1；《设计》§1.4 矩阵：
  *  盾=隘口/掩体/宽度大优先 · 突=压向玩家(threat×)·接受低掩体 · 远程=高地+掩体+射程带 ·
@@ -37,13 +41,18 @@ const AWAY_W = 0.06;
 export function scoreForUnit(type: SquadType, f: CellFeats | null, base: ScoreWeights): number {
   if (!f || !f.pass) return -1e9;
   const m = MUL[type] ?? MUL.mixed;
+  // ★ 评分动态化（用户定 2026-09-25）：**地形分与距离分不固定相加**——
+  //   近舰（k→1）距离权重 > 地形权重（守家）；远舰（k→0）地形权重 > 距离权重（野战）。
+  const k = Math.max(0, Math.min(1, 1 - f.shipD / DIST_SCALE));
+  const distBoost = 1 + (NEAR_DIST_BOOST - 1) * k;          // 距离项：近舰放大
+  const terrainDamp = 1 - (1 - NEAR_TERRAIN_DAMP) * k;      // 地形项：近舰衰减
   let s =
-    base.h * m.h * f.h +
-    base.dist * m.dist * f.shipD +
-    base.threat * m.threat * f.threatN +
-    base.cover * m.cover * f.cover +
-    (base.width * m.width * f.width + base.choke * m.choke * f.choke) * FEAT_SCALE +
-    base.near * m.near * f.nearF;
+    base.h * m.h * f.h * terrainDamp +
+    base.dist * m.dist * f.shipD * distBoost +
+    base.threat * m.threat * f.threatN * terrainDamp +
+    base.cover * m.cover * f.cover * terrainDamp +
+    (base.width * m.width * f.width + base.choke * m.choke * f.choke) * FEAT_SCALE * terrainDamp +
+    base.near * m.near * f.nearF * terrainDamp;
   if (m.band > 0) {
     const over = f.playerD < BAND_LO ? BAND_LO - f.playerD : f.playerD > BAND_HI ? f.playerD - BAND_HI : 0;
     s -= over * BAND_W * m.band;

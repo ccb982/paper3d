@@ -83,6 +83,7 @@ export class Timeline {
     this.infoEl.textContent =
       `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${this.commander.stage}/${this.commander.battlePosture}`
       + ` · frontP=${band.frontP.toFixed(2)} · 下限=${band.minD > 0 ? band.minD.toFixed(0) : '-'}m`
-      + ` · 上限=${band.maxD > 0 ? band.maxD.toFixed(0) : '-'}m · 前推+${band.pushM.toFixed(0)}m`;
+      + ` · 上限=${band.maxD > 0 ? band.maxD.toFixed(0) : '-'}m · 前推+${band.pushM.toFixed(0)}m`
+      + ` · 速度×${(globalThis as unknown as { __rts?: { speed?: number } }).__rts?.speed ?? 1}（, / . 调速）`;
   }
 }

@@ -32,6 +32,9 @@ export const NAV = {
   REFRESH_S: 12,
   /** 求解失败冷却（秒；防每拍重试） */
   FAIL_COOLDOWN_S: 3,
+  /** ★ 长短寻路分界（米；用户定 2026-09-25）：> 此值=长行军→长寻路（FeasibilityPath 全走廊）；
+   *  ≤ 此值=交战/巡逻/驻守/就近施工→短寻路（LOS 10m 贪心短跳） */
+  LONG_PATH_DIST: 40,
 } as const;
 
 /** 单例小队不排阵型（Boss/高威胁：目标点即自身位） */
@@ -84,10 +87,16 @@ export class SquadNavigator {
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     const stamp = this.stampFn?.() ?? 0;
     // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
-    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= 6 && now - state.pathAt <= NAV.REFRESH_S) return;
+    // ★ 长行军走廊少重算（6→12m）：防'每 6m 重算→锚点抖→振荡'（用户定 2026-09-25）
+    const longTgt0 = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z) > NAV.LONG_PATH_DIST;
+    const fromLim = longTgt0 ? 12 : 6;
+    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= fromLim && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
-    // ★ 队长走廊：LOS 10m 短路 + 贪心校验（一次一跳、滚动重算；不求最优）——队长侧
-    if (this.weighted && this.feas.readyFor()) {
+    // ★ 长短寻路分工（用户定 2026-09-25）：长行军（>LONG_PATH_DIST）→ **长寻路**（BFS 全走廊）；
+    //   短程（交战/巡逻/驻守/就近施工）→ 短跳（LOS 10m 贪心）
+    const dTgt0 = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+    const longHaul = dTgt0 > NAV.LONG_PATH_DIST;
+    if (this.weighted && this.feas.readyFor() && !longHaul) {
       // ★ 困难检测（用户定 2026-09-23）：4s 内距目标没净推进 6m（贴墙振荡）→ 走 LOS 长路径脱困
       const dTgt = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
       const esc = this.esc.get(squad.id);
