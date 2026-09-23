@@ -1138,6 +1138,11 @@ export class SwarmSystem {
         const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, this.commander.terrain);
         if (tgt) { ax = tgt.x; az = tgt.z; }
       }
+      // ★ 落点强约束（用户定 2026-09-25）：锚点/站位计算结果也必须在事态环内
+      {
+        const c = this.commander.clampToRing(ax, az);
+        ax = c.x; az = c.z;
+      }
       if (hasC) {
         const adx = ax - this._centroid.x, adz = az - this._centroid.z;
         const al = Math.hypot(adx, adz);
