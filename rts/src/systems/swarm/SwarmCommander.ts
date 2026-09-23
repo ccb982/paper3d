@@ -848,9 +848,12 @@ export class SwarmCommander {
       const waveK = c01((t01Now - 0.20) / 0.25);   // 0.20→0.45 收上限
       const duskK = c01((t01Now - 0.55) / 0.25);   // 0.55→0.80 收下限
       const collapse = 0;   // ★ 收拢目标 = **舰船本体（点）**：上限/下限最终都收到 0（用户定 2026-09-25）
-      const D0 = Math.max(ffrontD, 320);   // ★ 初始上下限距离（用户定：别太近——初始环在 320m 起）
-      this.frontMaxD = D0 + (collapse - D0) * waveK;
-      this.frontMinD = Math.max(0, D0 + (collapse - D0) * duskK);
+      // ★ 初始**宽环**（用户定：环宽一点、中心回原位）——以原前沿距离 ffrontD 为中心，±RING_HALF
+      const RING_HALF = 80;
+      const D0max = ffrontD + RING_HALF;
+      const D0min = Math.max(0, ffrontD - RING_HALF);
+      this.frontMaxD = D0max + (collapse - D0max) * waveK;
+      this.frontMinD = Math.max(0, D0min + (collapse - D0min) * duskK);
       this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环基准（issueChecked 用）
       // 前沿点（命令基准）夹在 [下限, 上限] 环内
       const rWant = Math.min(Math.max(ffrontD, this.frontMinD), this.frontMaxD);
