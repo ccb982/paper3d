@@ -21,6 +21,10 @@ import { CHUNK_SIZE } from './services/map/ChunkGenerator';
 import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enemyRoster';
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
+import { EnemyBase } from './entity/EnemyBase';
+import type { SwarmTierPort } from './systems/swarm/SwarmTierPort';
+import { ENEMY_BY_ID } from './config/enemyRoster';
+import type { AgentSnapshot } from './systems/swarm/AgentPool';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -124,10 +128,45 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const hooks = {
     playerX: spawn.x, playerZ: spawn.z, shipX: spawn.x, shipZ: spawn.z,
     camForwardX: 0, camForwardZ: 1,
-    // ★ 未接 L3 实体管线前：把 entityCount 顶满 → 关"近玩家升格"（否则代理被移除后 promote 空转=蒸发）
-    entityCount: 1e9,
+    entityCount: 0,
     melee: () => {},
   };
+  // ---- ★ L3 实体敌人（tierPort）：代理 ↔ EnemyBase 双向换载体 ----
+  const assetById = new Map(mobAssets.map((m) => [m.id, m.asset]));
+  const byUid = new Map<number, EnemyBase>();
+  const animMap = {
+    states: { idle: { 前: ['前'], 后: ['后'] }, walk: { 前: ['前'], 后: ['后'] }, attack: { 前: ['前'], 后: ['后'] } },
+    fps: { idle: 1, walk: 1, attack: 1 },
+  };
+  const tierPort: SwarmTierPort = {
+    promote: (snap: AgentSnapshot) => {
+      const spec = ENEMY_ROSTER[snap.mobIndex];
+      const asset = spec ? assetById.get(spec.id) : undefined;
+      if (!spec || !asset) return;
+      const enemy = new EnemyBase(entities, scene, asset, {
+        x: snap.x, y: snap.y, z: snap.z, animMap, facing: '前', aiConfig: spec.ai,
+        hp: snap.hp, defense: snap.defense, attackPower: spec.attackPower,
+        scale: spec.scale, collisionScale: spec.collisionScale,
+      }, camera);
+      enemy.hydrate(snap);
+      if (snap.uid > 0) byUid.set(snap.uid, enemy);
+    },
+    demote: (enemy: EnemyBase) => {
+      const uid = enemy.swarmUid;
+      byUid.delete(uid);
+      const x = enemy.position.x, y = enemy.position.y, z = enemy.position.z;
+      entities.destroy(enemy.id);
+      const spec = ENEMY_ROSTER[0]!;
+      swarm.spawn({
+        uid, mobIndex: 0, x, y, z, hp: spec.hp, maxHp: spec.hp,
+        defense: spec.defense, attackPower: spec.attackPower, speed: 4.5,
+        meleeDamage: 2, meleeRange: 1.5, scale: spec.scale,
+        tier: 1, aggro: 0, wanderSpeed: 1.2,
+      }, true);
+    },
+  };
+  hooks.tierPort = tierPort;
+  hooks.activeUnits = () => [...byUid.values()];
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
     const x = spawn.x + Math.cos(a) * 30, z = spawn.z + Math.sin(a) * 30;
@@ -249,11 +288,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     clampArea();
     applyCam();
     chunks.update(cam.tx, cam.tz, dt, fx, fz);
-    // ★ 敌人指挥链推进 + 胶囊渲染
+    // ★ 敌人指挥链推进 + 实体/批量渲染
     hooks.camForwardX = fx; hooks.camForwardZ = fz;
     hooks.playerX = cam.tx; hooks.playerZ = cam.tz;
+    hooks.entityCount = byUid.size;
     swarm.update(dt, hooks);
     swarm.syncRender(camera, cam.tx, cam.tz);   // ★ FTX 批量渲染同步（每帧）
+    entities.update(dt);
+    physics.step();
     renderAgents();
     feedLight();
     renderer.render(scene, camera);
