@@ -27,6 +27,7 @@ const probe = () => page.evaluate(() => {
     pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     recycled: sw?.stuckDbg?.recycled ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
+    nav: sw?.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail } : null,
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
     plan: !!c?.plan,
@@ -62,12 +63,12 @@ for (const t of [8000, 20000, 40000, 70000]) {
     // ★ 快进到总攻时段（t01=0.9）+ 相机对准舰船，验证"下午闸门收拢/第一波抵舰驻留"
     await page.evaluate(() => {
       const w = window.__rts;
-      w.swarm.commander.scrubDay(0.5);   // ★ 第一波时段（上限应收到舰）
+      w.swarm.commander.scrubDay(0.5);   // ★ 第一波（commit=1，收到舰）
       w.cam.tx = 60; w.cam.tz = -40; w.cam.dist = 200; w.cam.pitch = 1.2;
     });
   }
   if (t === 40000) {
-    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.9); });   // ★ 下午（下限也收到舰）
+    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.75); });   // ★ 回撤（commit=0.5，退半程）
   }
   if (t === 20000) {
     // ★ 快车道验证：相机中心 18m 内 15 伤害（代理直扣）

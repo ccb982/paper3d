@@ -153,6 +153,20 @@ export class SwarmCommander {
   private readonly buildIssued = new Map<number, number>();
   /** ★ 前线永不再贴近舰船的余量（米） */
   private static readonly SHIP_CLEAR = 16;
+
+  /** ★ 环形一日推进曲线（用户定 2026-09-25）：返回"收拢程度" 0~1
+   *  0=初始宽环 · 1=收到舰船点 · 0.5=回撤到半程
+   *  日程：0.00-0.20 静止(0) → 0.20-0.45 收拢(0→1) → 0.45-0.62 第一波驻留(1)
+   *       → 0.62-0.72 回撤(1→0.5) → 0.72-0.82 半程休整(0.5) → 0.82-1.00 总攻(0.5→1) */
+  static ringCommit(t: number): number {
+    const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
+    if (t < 0.20) return 0;
+    if (t < 0.45) return lerp(0, 1, (t - 0.20) / 0.25);
+    if (t < 0.62) return 1;
+    if (t < 0.72) return lerp(1, 0.5, (t - 0.62) / 0.10);
+    if (t < 0.82) return 0.5;
+    return lerp(0.5, 1, (t - 0.82) / 0.18);
+  }
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
   private readonly supportCd = new Map<number, number>();
   /** 最近一次大队决策（调试/测试读取） */
@@ -843,17 +857,16 @@ export class SwarmCommander {
       // ★ 环形活动区（用户定 2026-09-25）：事态函数管**上下限**——
       //   上限 frontMaxD：第一波（0.45）收拢到舰（外圈消失 → 兵力可全线压上）
       //   下限 frontMinD：下午（0.80）收拢到舰（内圈消失 → 可贴脸打舰）
-      const c01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
       const t01Now = this.lastT01;   // ★ 归一当日进度（tick 每帧写；本块在别的函数里，不能引用局部 t01）
-      const waveK = c01((t01Now - 0.20) / 0.25);   // 0.20→0.45 收上限
-      const duskK = c01((t01Now - 0.55) / 0.25);   // 0.55→0.80 收下限
-      const collapse = 0;   // ★ 收拢目标 = **舰船本体（点）**：上限/下限最终都收到 0（用户定 2026-09-25）
-      // ★ 初始**宽环**（用户定：环宽一点、中心回原位）——以原前沿距离 ffrontD 为中心，±RING_HALF
+      // ★ 环形一日推进（用户定 2026-09-25）：**0 → 1（第一波）→ 1/2（回撤休整）→ 1（总攻）** 锯齿
+      const commit = SwarmCommander.ringCommit(t01Now);
+      const scale = 1 - commit;   // 1=收到舰船点；0.5=退到半程；0=初始宽环
+      // ★ 初始**宽环**：以原前沿距离 ffrontD 为中心 ±RING_HALF
       const RING_HALF = 80;
       const D0max = ffrontD + RING_HALF;
       const D0min = Math.max(0, ffrontD - RING_HALF);
-      this.frontMaxD = D0max + (collapse - D0max) * waveK;
-      this.frontMinD = Math.max(0, D0min + (collapse - D0min) * duskK);
+      this.frontMaxD = D0max * scale;
+      this.frontMinD = Math.max(0, D0min * scale);
       this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环基准（issueChecked 用）
       // 前沿点（命令基准）夹在 [下限, 上限] 环内
       const rWant = Math.min(Math.max(ffrontD, this.frontMinD), this.frontMaxD);
