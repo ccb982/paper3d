@@ -126,6 +126,8 @@ export class SwarmCommander {
   private postureEpoch = 0;
   /** ★ 事态闸门解析出的**允许离舰最小半径**（本次部署拍；-1 = 无闸） */
   private frontMinD = -1;
+  /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
+  private readonly buildIssued = new Map<number, number>();
   /** ★ 前线永不再贴近舰船的余量（米） */
   private static readonly SHIP_CLEAR = 16;
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
@@ -417,10 +419,18 @@ export class SwarmCommander {
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
         this.fortify.assign(builders.map((s) => s.id), DONE);
-        // ★ 统一取点（用户定）：未达标 → 最危险点；已达标 → 扇区内随机位置。
-        //   所有工兵队每拍都有目标（引擎派区、队持续干到调走）——不空闲 = 不被回收。
-        this.fortify.spots.clear();
+        // ★ 区域任务（用户定 2026-09-25）：引擎**只派区**，区内活由工兵自己循环——
+        //   spot **粘性**（本区自己的未建件还在就不重取）；命令只在"件变化/将到期"时换
+        const aliveIds = new Set(builders.map((s) => s.id));
+        for (const sid of [...this.fortify.spots.keys()]) if (!aliveIds.has(sid)) this.fortify.spots.delete(sid);
+        for (const sid of [...this.buildIssued.keys()]) if (!aliveIds.has(sid)) this.buildIssued.delete(sid);
         for (const s of builders) {
+          const prev = this.fortify.spots.get(s.id);
+          const lead0 = s.members.get(s.leaderUid);
+          const still = prev && lead0 && this.corps.pieces.some((q) => !this.corps.built.has(`${q.x},${q.z}`)
+            && !this.corps.gated(q) && Math.hypot(q.x - prev.x, q.z - prev.z) < 8)
+            && this.swarm.reachable(lead0.x, lead0.z, prev.x, prev.z);   // ★ 粘性也要可达（否则换点）
+          if (still) continue;
           // ★ 可达性校验起点 = **队长位置**（用户在 2026-09-23 定）；队长缺失才退回质心
           const lead = s.members.get(s.leaderUid);
           let lx = 0, lz = 0;
@@ -438,15 +448,23 @@ export class SwarmCommander {
         }
         this.fortify.dbg.assigned = [...this.fortify.spots].map(([id, p]) =>
           `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
-        // ★ 引擎发令：工兵队 → **位置函数的输出点**（"到底去哪"= spotFor；队级走廊出 LOS 路点）
-        //   注入件也落在同一点 → 命令点 = 函数点 = 件点，三者一致
+        // ★ 引擎发令（区域任务）：**只在必要时刻换令**——无令/玩家令/件变了/将到期；
+        //   其余时间工兵队按本区任务自循环（不反复下发"前进"）
+        const nowS = performance.now() / 1000;
         for (const [sid, p] of this.fortify.spots) {
           const sq = this.swarm.squads.get(sid);
           if (!sq) continue;
           const lead = sq.members.get(sq.leaderUid);
           if (!lead) continue;
+          const aidx = this.corps.assign.get(sid) ?? -1;
+          const cur = this.swarm.tactics.board.get(sid);
+          const expiredSoon = !cur || cur.until < nowS + 3;
+          const playerOwned = cur?.source === 'player';
+          const pieceChanged = this.buildIssued.get(sid) !== aidx;
+          if (!expiredSoon && !playerOwned && !pieceChanged) continue;
+          this.buildIssued.set(sid, aidx);
           this.issueChecked(sid, lead.x, lead.z,
-            { kind: 'advance', target: { x: p.x, z: p.z }, mission: 'build', seq: 0 }, 8);
+            { kind: 'advance', target: { x: p.x, z: p.z }, mission: 'build', seq: 0 }, 30);
         }
         // ★ 缺口对照（探针）：队数 vs 认领数 vs spot 数——必须全等，否则"某队没任务"
         this.fortify.dbg.builders = builders.length;

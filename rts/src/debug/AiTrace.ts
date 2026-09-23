@@ -41,6 +41,7 @@ export class AiTrace {
   private readonly cap = 12000;
   private accum = 0;
   private readonly lastSquad = new Map<number, string>();
+  private readonly lastPath = new Map<number, string>();
   private readonly lastDir = new Map<number, string>();
   private unsubs: (() => void)[] = [];
 
@@ -105,14 +106,19 @@ export class AiTrace {
             seq: o.seq, mission: (o as { mission?: string }).mission, reach,
           });
         }
-        if (path) {
-          this.push({
-            t, ev: 'path', squad: s.id,
-            from: path.pathFromX !== undefined ? [+path.pathFromX.toFixed(1), +path.pathFromZ!.toFixed(1)] : undefined,
-            goal: path.pathGoalX !== undefined ? [+path.pathGoalX.toFixed(1), +path.pathGoalZ!.toFixed(1)] : undefined,
-            pts: path.corridor?.length ?? 0, stepK: path.stepK, stepN: path.stepN,
-            mission: path.pathFailedAt ? '失败冷却' : 'ok',
-          });
+        if (cmd) {
+          // ★ 寻路结果独立采样（走廊/起终点/失败冷却变化才记；4m 量化防抖）
+          const psig = `${cmd.pathFromX ?? -1 | 0},${cmd.pathFromZ ?? -1 | 0}|${cmd.pathGoalX ?? -1 | 0},${cmd.pathGoalZ ?? -1 | 0}|${cmd.corridor?.length ?? 0}|${cmd.stepK ?? -1}/${cmd.stepN ?? -1}|${cmd.pathFailedAt ? 1 : 0}`;
+          if (this.lastPath.get(s.id) !== psig) {
+            this.lastPath.set(s.id, psig);
+            this.push({
+              t, ev: 'path', squad: s.id,
+              from: cmd.pathFromX !== undefined ? [+cmd.pathFromX.toFixed(1), +cmd.pathFromZ!.toFixed(1)] : undefined,
+              goal: cmd.pathGoalX !== undefined ? [+cmd.pathGoalX.toFixed(1), +cmd.pathGoalZ!.toFixed(1)] : undefined,
+              pts: cmd.corridor?.length ?? 0, stepK: cmd.stepK, stepN: cmd.stepN,
+              mission: cmd.pathFailedAt ? '失败冷却' : 'ok',
+            });
+          }
         }
       }
     }
@@ -125,7 +131,7 @@ export class AiTrace {
       if (e.dead) continue;
       const uid = e.swarmUid;
       seen.add(uid);
-      const sig = `${e.directiveKind}|${e.directiveTargetX | 0},${e.directiveTargetZ | 0}`;
+      const sig = `${e.directiveKind}|${Math.round(e.directiveTargetX / 8)},${Math.round(e.directiveTargetZ / 8)}`;
       if (this.lastDir.get(uid) !== sig) {
         this.lastDir.set(uid, sig);
         this.push({
@@ -137,7 +143,7 @@ export class AiTrace {
     for (const [uid, i] of idxByUid) {
       if (seen.has(uid)) continue;
       const kind = directiveFromCode(pool.directiveKind[i] ?? 0);
-      const sig = `${kind}|${pool.directiveTargetX[i] | 0},${pool.directiveTargetZ[i] | 0}`;
+      const sig = `${kind}|${Math.round(pool.directiveTargetX[i] / 8)},${Math.round(pool.directiveTargetZ[i] / 8)}`;
       if (this.lastDir.get(uid) !== sig) {
         this.lastDir.set(uid, sig);
         const sq = this.swarm.squads.squadOf(uid);

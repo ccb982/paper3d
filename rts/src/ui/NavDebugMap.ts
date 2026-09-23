@@ -180,8 +180,8 @@ export class NavDebugMap {
 
     const squads = this.squadId === null ? this.swarm.squads.all() : this.swarm.squads.all().filter((s) => s.id === this.squadId);
     for (const s of squads) {
-      const path = this.swarm.tactics.board.getPath(s.id);
-      const cmd = this.swarm.tactics.board.get(s.id);
+      const path = this.swarm.tactics.board.get(s.id);   // ★ 走廊/起终点在命令状态（寻路轨覆盖式）
+      const cmd = path;
       const focused = this.squadId === s.id;
       const col = `hsl(${(s.id * 47) % 360} 90% 60%)`;
       const corr = path?.corridor;

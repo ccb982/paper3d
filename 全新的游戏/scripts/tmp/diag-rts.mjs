@@ -24,7 +24,7 @@ const probe = () => page.evaluate(() => {
     if (++n >= 4) break;
   }
   return {
-    pool: sw?.pool?.count ?? null, l3: w?.l3?.size ?? null,
+    pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     recycled: sw?.stuckDbg?.recycled ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
@@ -32,16 +32,22 @@ const probe = () => page.evaluate(() => {
     squads,
     agents: (() => {
       const p = sw.pool; const out = [];
-      for (let i = 0; i < p.count && out.length < 3; i++) {
+      for (let i = 0; i < p.count && out.length < 2; i++) {
         out.push({
           uid: p.swarmUid[i], x: +p.x[i].toFixed(1), z: +p.z[i].toFixed(1), hp: p.hp[i],
           task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
           dirTgt: `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}`,
           spd: +p.curSpeed[i].toFixed(2), mul: p.directiveSpeedMul[i],
-          blocked: w.commander.blockedAt(p.x[i], p.z[i]),
+          blocked: sw.commander.blockedAt(p.x[i], p.z[i]),
         });
       }
       return out;
+    })(),
+    trace: (() => {
+      const t = w?.aiTrace; if (!t) return null;
+      const dump = t.dump();
+      const cnt = (ev) => dump.split('\n').filter((l) => l.includes(`"ev":"${ev}"`)).length;
+      return { orders: cnt('order'), dirs: cnt('directive'), paths: cnt('path'), kills: cnt('kill'), digest: t.digest(6) };
     })(),
   };
   } catch (e) { return { err: String(e).slice(0, 200) }; }
