@@ -870,6 +870,42 @@ export class SwarmCommander {
         }
       }
     }
+    // D. 切向检测（用户定 2026-09-25）：同种兵小队扎堆（<50m）→ 沿环**切向**拉开（角度±0.35rad，半径不变）
+    {
+      const byKind = new Map<number, { id: number; x: number; z: number; ang: number; d: number }[]>();
+      for (const s of this.swarm.squads.all()) {
+        if (s.members.size === 0) continue;
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        cx /= n; cz /= n;
+        const dx = cx - shipX, dz = cz - shipZ;
+        const d = Math.hypot(dx, dz);
+        const ang = Math.atan2(dz, dx);
+        let arr = byKind.get(s.mobKind);
+        if (!arr) { arr = []; byKind.set(s.mobKind, arr); }
+        arr.push({ id: s.id, x: cx, z: cz, ang, d });
+      }
+      for (const arr of byKind.values()) {
+        if (arr.length < 2) continue;
+        for (const a of arr) {
+          let nd = Infinity;
+          let nb: typeof a | null = null;
+          for (const b of arr) {
+            if (b.id === a.id) continue;
+            const dist = Math.hypot(b.x - a.x, b.z - a.z);
+            if (dist < nd) { nd = dist; nb = b; }
+          }
+          if (!nb || nd > 50) continue;   // 扎堆阈值 50m
+          const diff = ((nb.ang - a.ang + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+          const dir = diff >= 0 ? -1 : 1;   // 往邻居反方向推开
+          const na = a.ang + dir * 0.35;
+          const rr = Math.max(20, a.d);
+          this.issueChecked(a.id, a.x, a.z,
+            { kind: 'advance', target: { x: shipX + Math.cos(na) * rr, z: shipZ + Math.sin(na) * rr }, mission: 'regroup', seq: 0 }, 20);
+          this.lastDecision = { squad: a.id, kind: 'tangent_split', at: nowF };
+        }
+      }
+    }
   }
 
   /** ★ 兵力最稀处（20m 格计数；[20, r] 内、可站、己方最少的格中心） */
