@@ -39,7 +39,7 @@ const TRENCH_PASSES = 5;
 /** ★ 施工计时（用户定 2026-09-25）：到位（15m）就计时，计时满即建成 */
 const COVER_TIME_S = 6;
 const TRENCH_TIME_S = 10;
-const WORK_R2 = 15 * 15;
+const WORK_R2 = 40 * 40;   // ★ 到位半径（40m：工兵抵近即可开工；避免'永远到不了 15m 内'）
 /** 施工冷却（真秒；每帧递减） */
 const COVER_CD = 3;
 const TRENCH_CD = 4;
@@ -308,7 +308,7 @@ export class EngineerCorps {
     for (const s of builders) {
       // ① 焦点续挖（优先；不受冷却限）：本队正在建的块（成员 ≤15m 且未成）→ 必须继续
       let piece: BuildPiece | null = null;
-      let fidx = this.focus.get(s.id);
+      let fidx = this.focus.get(s.id) ?? this.assign.get(s.id);   // ★ focus 缺失回退 assign（派件即可开工）
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
         && !this.built.has(keyOf(this.pieces[fidx]))
         && !this.gated(this.pieces[fidx])
@@ -322,7 +322,7 @@ export class EngineerCorps {
       if (!piece) {
         const cd = this.cds.get(s.id) ?? 0;
         if (cd > 0) continue;   // 冷却中（仅限新焦点）
-        let bi = -1, bD = 25, bPass = -1, bPri = Infinity;
+        let bi = -1, bD = 144, bPass = -1, bPri = Infinity;   // ★ 新焦点扫描 12m（原 5m）
         for (const m of s.members.values()) {
           for (let i = 0; i < this.pieces.length; i++) {
             const q = this.pieces[i];
@@ -330,7 +330,7 @@ export class EngineerCorps {
             if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不挖）
             if (!this.allows(s.id, q.kind, q.pri)) continue;
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
-            if (d > 25) continue;
+            if (d > 144) continue;   // ★ 12m
             const pass = this.passes.get(keyOf(q)) ?? 0;
             if (q.pri < bPri || (q.pri === bPri && (pass > bPass || (pass === bPass && d < bD)))) {
               bPri = q.pri; bPass = pass; bi = i; bD = d;
