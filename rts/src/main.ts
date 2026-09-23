@@ -158,10 +158,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       if (!spec || !asset) return;
       const enemy = new EnemyBase(entities, scene, asset, {
         x: snap.x, y: snap.y, z: snap.z, animMap, facing: '前', aiConfig: spec.ai,
-        hp: snap.hp, defense: snap.defense, attackPower: spec.attackPower,
+        // ★ 血条在构造时快照 maxHp → 这里先给**满血上限**（真实 hp 构造后灌），否则比例恒 0
+        hp: Math.max(1, snap.maxHp), defense: snap.defense, attackPower: spec.attackPower,
         scale: spec.scale, collisionScale: spec.collisionScale,
       }, camera);
       enemy.hydrate(snap);
+      enemy.maxHp = Math.max(1, snap.maxHp);
+      enemy.hp = Math.max(1, Math.min(snap.hp, snap.maxHp));
       if (snap.uid > 0) byUid.set(snap.uid, enemy);
     },
     demote: (enemy: EnemyBase) => {
