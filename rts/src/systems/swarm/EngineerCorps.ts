@@ -41,8 +41,8 @@ const COVER_TIME_S = 6;
 const TRENCH_TIME_S = 10;
 const WORK_R2 = 40 * 40;   // ★ 到位半径（40m：工兵抵近即可开工；避免'永远到不了 15m 内'）
 /** 施工冷却（真秒；每帧递减） */
-const COVER_CD = 3;
-const TRENCH_CD = 4;
+const COVER_CD = 0;   // ★ 去掉施工冷却（用户定 2026-09-25：RTS 未接每帧递减 → 冷却永不消，造完一次就再也造不了）
+const TRENCH_CD = 0;   // ★ 同上：去掉冷却
 /** 坑底硬阈值（低于此高度不可走 → 禁止再挖） */
 const FLOOR_MIN = -1.2;
 const LAYER = 0.2;
