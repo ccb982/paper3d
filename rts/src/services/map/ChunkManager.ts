@@ -1632,6 +1632,8 @@ export class ChunkManager {
    * @param bakeOnly 预烘焙：只烘进缓存，不建网格（进入构建环时缓存命中即建）
    */
   private requestStandardBake(cx: number, cz: number, bakeOnly = false): void {
+    // ★ 唯一生成闸门：细块固定范围外**一律不烘不建**（所有调用路径都过这里）
+    if (!this.inWorldLimit(cx, cz, ChunkManager.FINE_LIMIT_RADIUS)) return;
     const key = chunkKeyOf(cx, cz);
     const existing = this.pendingBakes.get(key);
     if (existing) {
@@ -1787,6 +1789,9 @@ export class ChunkManager {
     cells?: PatchGroundCell[],
     bounds?: { top: GeomBounds; wall: GeomBounds },
   ): void {
+    // ★ 范围闸门（唯一装配点：所有生成路径最终都到这里）+ 细块就位必取代粗块
+    if (!this.inWorldLimit(cx, cz, ChunkManager.FINE_LIMIT_RADIUS)) return;
+    this.dropCoarse(chunkKeyOf(cx, cz));
     const key = chunkKeyOf(cx, cz);
     const cfg = this.buildTerrainMeshes(cx, cz, maps, topG, wallG, waterG ?? undefined, bounds);
     const group = new THREE.Group();
@@ -1821,6 +1826,9 @@ export class ChunkManager {
     bounds?: { top: GeomBounds; wall: GeomBounds },
     decorMode: 'none' | 'props' | 'full' = 'full',
   ): void {
+    // ★ 范围闸门 + 细块就位必取代粗块（与 assembleTableChunk 同口径）
+    if (!this.inWorldLimit(cx, cz, ChunkManager.FINE_LIMIT_RADIUS)) return;
+    this.dropCoarse(chunkKeyOf(cx, cz));
     const key = chunkKeyOf(cx, cz);
     if (this.meshes.has(key)) {
       // ★ 挖坑增量：视觉原地写 + 受影响物理分区原位换；失败回退全量换装
