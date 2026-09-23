@@ -57,6 +57,7 @@ function startWorld(spawnX: number, spawnZ: number): void {
     createGroundCells: () => null,
   };
   const chunks = new ChunkManager(scene, raster, host);
+  chunks.setCoarseMode(true);   // ★ 远近两档：粗块先铺远（快）+ 细块随视野近（准）
   chunks.setWaterVisible(true);
   chunks.bootstrap(spawn.x, spawn.z);
   const orders = new OrderBus(scene);
@@ -129,8 +130,9 @@ function startWorld(spawnX: number, spawnZ: number): void {
     const sp = cam.dist * 0.8 * dt;
     const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
     const rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
-    if (keys.has('KeyW') || keys.has('ArrowUp')) { cam.tx += fx * sp; cam.tz += fz * sp; }
-    if (keys.has('KeyS') || keys.has('ArrowDown')) { cam.tx -= fx * sp; cam.tz -= fz * sp; }
+    // ★ W/S 修正：W = 朝屏幕上方（视线方向）前进
+    if (keys.has('KeyW') || keys.has('ArrowUp')) { cam.tx -= fx * sp; cam.tz -= fz * sp; }
+    if (keys.has('KeyS') || keys.has('ArrowDown')) { cam.tx += fx * sp; cam.tz += fz * sp; }
     if (keys.has('KeyA') || keys.has('ArrowLeft')) { cam.tx -= rx * sp; cam.tz -= rz * sp; }
     if (keys.has('KeyD') || keys.has('ArrowRight')) { cam.tx += rx * sp; cam.tz += rz * sp; }
     clampArea();
