@@ -20,6 +20,8 @@ import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { validateOrder } from './OrderValidator';
 import { selectComposite } from './Composites';
 import { Protect } from './Protect';
+import { AttackQueues } from './AttackQueues';
+import { TimerManager } from './TimerManager';
 import { EngineCore } from './EngineCore';
 
 export interface LiveSquad {
@@ -43,6 +45,8 @@ export interface LiveView {
   emit?(order: SquadOrder): void;
   /** 玩家是否在打某小队（被打反应：引擎告知队长玩家位置；0 = 无） */
   playerAttacking?(): number;
+  /** 全体敌方单位（含代理；uid/位置）——攻击队列 + 统一计时消费；缺省 → 不跑 */
+  enemies?(): { uid: number; x: number; z: number }[];
 }
 
 export class EngineBridge {
@@ -55,6 +59,11 @@ export class EngineBridge {
   readonly engineer: EngineerManager;
   readonly writer = new OrderWriter(new SquadOrderStore());
   readonly protect = new Protect();
+  readonly queues = new AttackQueues();
+  readonly timers: TimerManager;
+  /** 开火射程（米；canFire 判定） */
+  fireRange = 25;
+  private lastSlow = -1e9;
   readonly dbg = { ticks: 0, shadow: true, ringMin: 0, ringMax: 60, issued: 0, last: '' };
   /** 影子模式：只算不发（默认 true；`?swarm=new` 实机时可关） */
   shadow = true;
@@ -63,6 +72,18 @@ export class EngineBridge {
 
   constructor(private readonly live: LiveView) {
     this.sectors.build(4);   // 默认四扇区（引擎初始化）
+    this.timers = new TimerManager({
+      roster: () => (this.live.enemies?.() ?? []).map((e) => e.uid),
+      posOf: (uid) => {
+        const e = (this.live.enemies?.() ?? []).find((x) => x.uid === uid);
+        return e ? { x: e.x, z: e.z } : null;
+      },
+      exemptOf: () => null,
+      onExpire: (uid, why) => {
+        // 影子模式只记账；实机由引擎 removeAgent 接管（接线时替换）
+        this.dbg.last = `expire#${uid}:${why}`;
+      },
+    });
     this.melee = new MeleeManager(this.squads);
     this.ranged = new RangedManager(this.squads);
     this.flyer = new FlyerManager(this.squads);
@@ -97,6 +118,29 @@ export class EngineBridge {
     return ok;
   }
 
+  /** ★ 玩家**引擎级命令**（用户定）：对全体在册小队下同一令（如"全体防御此点"）。
+   *  仍只给队长（铁律 1）；每队独立过唯一发令器（player 旁路）。返回成功队数。 */
+  playerOrderAll(kind: SquadOrder['kind'], target: { x: number; z: number }): number {
+    let n = 0;
+    for (const rec of [...this.squads.all()]) {
+      if (this.playerOrder(rec.id, kind, target)) n++;
+    }
+    this.dbg.last = `playerAll ${kind} →${n}队`;
+    return n;
+  }
+
+  /** ★ 玩家**范围命令**（用户定）：对 target 半径 r 内的小队下令（圈选/点区域）。 */
+  playerOrderNear(kind: SquadOrder['kind'], target: { x: number; z: number }, r: number): number {
+    let n = 0;
+    for (const rec of [...this.squads.all()]) {
+      const p = this.pos.squad(rec.id);
+      if (!p) continue;
+      if (Math.hypot(p.x - target.x, p.z - target.z) <= r && this.playerOrder(rec.id, kind, target)) n++;
+    }
+    this.dbg.last = `playerNear ${kind} r=${r} →${n}队`;
+    return n;
+  }
+
   private perceive(now: number): void {
     const p = this.live.player();
     if (p) this.pos.setPlayer(p.x, p.z);
@@ -112,6 +156,29 @@ export class EngineBridge {
     }
     // 防区归位（队长位置单源）
     this.sectors.tick((id) => this.pos.squad(id), this.pos.player()?.x ?? 0, this.pos.player()?.z ?? 0, [...this.squads.all()].map((r) => r.id));
+    // ★ 1Hz 慢拍：攻击队列（最近实体入队/去重/开火检验+闩锁）+ 统一计时（卡死窗口/计时销毁）
+    if (now - this.lastSlow >= 1) {
+      this.lastSlow = now;
+      const p = this.pos.player();
+      if (p) this.queues.setOwner('player', p.x, p.z);
+      const sh = this.pos.ship();
+      if (sh) this.queues.setOwner('ship', sh.x, sh.z);
+      const ents = this.live.enemies?.() ?? [];
+      this.queues.update(ents, (uid) => this.canFire(uid, ents), this.timers);
+      this.timers.tick(now);
+    }
+  }
+
+  /** 开火检验（射程/ROE；影子模式只判距离） */
+  private canFire(uid: number, ents: readonly { uid: number; x: number; z: number }[]): boolean {
+    let e: { uid: number; x: number; z: number } | null = null;
+    for (const x of ents) if (x.uid === uid) { e = x; break; }
+    if (!e) return false;
+    const p = this.pos.player();
+    const s = this.pos.ship();
+    const dp = p ? Math.hypot(e.x - p.x, e.z - p.z) : Infinity;
+    const ds = s ? Math.hypot(e.x - s.x, e.z - s.z) : Infinity;
+    return Math.min(dp, ds) <= this.fireRange;
   }
 
   private situation(): void {

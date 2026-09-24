@@ -49,6 +49,8 @@ import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
 import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
+import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
+import type { SquadOrder } from './systems/swarm/engine/contracts';
 import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
 
 const q = new URLSearchParams(location.search);
@@ -248,8 +250,27 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         }
         return out;
       },
+      enemies: () => {
+        const out: { uid: number; x: number; z: number }[] = [];
+        for (const e of enemies) out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z });
+        const pool = swarm.pool;
+        for (let i = 0; i < pool.count; i++) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
+        return out;
+      },
     });
   }
+  // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
+  const cmdPanel = new CommandPanel();
+  cmdPanel.onOrder = (kind, target, scope) => {
+    const k = kind as SquadOrder['kind'];
+    let n = 0;
+    if (scope === 'all') n = shadowBridge?.playerOrderAll(k, target) ?? 0;
+    else if (scope === 'selected') {
+      for (const id of cmdPanel.selectedIds()) if (shadowBridge?.playerOrder(id, k, target)) n++;
+    } else n = shadowBridge?.playerOrderNear(k, target, 60) ?? 0;
+    orders.issue({ kind: kind as never, target, source: 'player', roe: 'engage', ttl: 6 });
+    cmdPanel.lastText = `${kind} → ${n} 队已接令（${scope}）`;
+  };
   // ★ AI 行为上下文（原 WorldMode.aiCtx）：驱动 L3 实体移动/攻击（aiSystem.updateAll）
   const explosionFx = new ExplosionFx(scene);
   const meleeToTargets = (x: number, z: number, range: number, dmg: number): void => {
@@ -488,7 +509,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const rc = new THREE.Raycaster();
       rc.setFromCamera(new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
       const hit = rc.intersectObjects(scene.children, true)[0];
-      if (hit) orders.issue({ kind: 'advance', target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
+      if (hit) {
+        cmdPanel.setTarget(hit.point.x, hit.point.z);
+        orders.issue({ kind: 'advance', target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
+        // ★ 玩家手动命令（重写 P3；用户定）：新引擎经唯一发令器 + player 旁路 → **只给队长**
+        //   （60m 内的小队收令；影子模式只记账，`?swarm=new` 时可在 __rts.newEngine() 看到）
+        shadowBridge?.playerOrderNear('act', { x: hit.point.x, z: hit.point.z }, 60);
+      }
       return;
     }
     dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -563,6 +590,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720000);
     swarm.update(h, hooks);
     shadowBridge?.tick(h, simT / 1000);   // ★ 新引擎影子拍（?swarm=new；只算不发）
+    if (shadowBridge) {
+      const list: PanelSquad[] = [];
+      for (const r of shadowBridge.squads.all()) list.push({ id: r.id, role: r.role, alive: r.alive, selected: false });
+      cmdPanel.setSquads(list);
+    }
     spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池
     aiCtx.dt = h; aiCtx.time += h;
     aiCtx.target = aiCtx.findTarget('enemy');
@@ -635,6 +667,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       engineer: { ...shadowBridge!.engineer.dbg },
       writer: { ...shadowBridge!.writer.dbg },
       protect: { ...shadowBridge!.protect.dbg },
+      queues: { ...shadowBridge!.queues.dbg },
+      timers: { ...shadowBridge!.timers.dbg },
       pos: { ...shadowBridge!.pos.dbg },
       sectors: { ...shadowBridge!.sectors.dbg },
     }) : null };

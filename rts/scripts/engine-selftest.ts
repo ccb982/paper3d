@@ -505,5 +505,60 @@ console.log('[13] SquadCore 队长核心（接令/距离分流/汇报）');
   ok(core.current()?.source === 'player', '玩家令可被队长接收（同源）');
 }
 
+// ---------- 玩家手动命令（小队 / 引擎级 / 范围） ----------
+console.log('[14] 玩家手动命令');
+{
+  const emitted: SquadOrder[] = [];
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 100, z: 0 }),
+    squads: () => [
+      { id: 1, role: 'melee' as const, x: 10, z: 0, alive: 8 },
+      { id: 2, role: 'melee' as const, x: 200, z: 0, alive: 6 },
+      { id: 3, role: 'ranged' as const, x: 12, z: 0, alive: 5 },
+    ],
+    emit: (o: SquadOrder) => emitted.push(o),
+  };
+  const br = new EngineBridge(live);
+  br.shadow = false;
+  br.tick(0.6, 1);
+  ok(br.playerOrder(1, 'garrison', { x: 5, z: 5 }), '玩家小队命令（指定队）');
+  ok(br.writer.store.get(1)!.order.source === 'player', '来源=玩家（旁路稳定门）');
+  const n = br.playerOrderAll('defend', { x: 0, z: 0 });
+  ok(n === 3, `玩家引擎级命令（全体 ${n}/3 队）`);
+  let allDefend = true;
+  for (const r of br.squads.all()) if (br.writer.store.get(r.id)!.order.kind !== 'defend') allDefend = false;
+  ok(allDefend, '全体收到防御令');
+  const m = br.playerOrderNear('regroup', { x: 0, z: 0 }, 50);
+  ok(m === 2, `范围命令只覆盖近队（${m}/3）`);
+  ok(br.writer.store.get(2)!.order.kind === 'defend', '远处队未被范围命令覆盖');
+  ok(emitted.length >= 3, '实机模式 emit 下发');
+}
+
+// ---------- 接线补全：攻击队列 + 统一计时 ----------
+console.log('[15] 接线补全（攻击队列 1Hz + 统一计时挂相位）');
+{
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 100, z: 0 }),
+    squads: () => [{ id: 1, role: 'melee' as const, x: 10, z: 0, alive: 8 }],
+    enemies: () => [
+      { uid: 1, x: 10, z: 0 },
+      { uid: 2, x: 90, z: 0 },
+      { uid: 3, x: 85, z: 0 },   // 舰船 15m 内 → 在射程
+      { uid: 4, x: 500, z: 500 },
+    ],
+  };
+  const br = new EngineBridge(live);
+  br.tick(0.6, 1);
+  ok(br.queues.dbg.members === 4, '攻击队列已入队（4 敌）');
+  ok(br.queues.ownerOfUid(1) === 'player' && br.queues.ownerOfUid(2) === 'ship', '最近实体入队（去重）');
+  ok(br.timers.canFire(1) && br.timers.canFire(2) && br.timers.canFire(3), '射程内开火闩锁置位');
+  ok(br.timers.canFire(4) === false, '超射程不开火');
+  let t = 1;
+  for (let i = 0; i < 30; i++) { t += 1; br.tick(1.0, t); }
+  ok(br.timers.dbg.expiredTotal >= 1 || br.dbg.last.includes('expire'), '静止实体到期（统一计时生效）');
+}
+
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);
 if (fail > 0) process.exit(1);
