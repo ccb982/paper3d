@@ -94,7 +94,7 @@ export class SwarmCommander {
   /** ★ 实时玩家位置（tick 刷新；scoreTypeAt/SteerPick 兵种分用——比 rebuild 烙进 score 的新） */
   private viewPX = 0;
   private viewPZ = 0;
-  /** ★ 权重缓存（postureP/posture 变才重算；SteerPick 16 向热路径免重复 weightsFor） */
+  /** ★ 权重缓存（postureP/posture 变才重算；SteerPick 8 向热路径免重复 weightsFor） */
   private _wKey = '';
   private _wCache: ReturnType<typeof weightsFor> | null = null;
   postureSchedule = 0;

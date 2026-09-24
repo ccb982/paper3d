@@ -147,7 +147,10 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 - **区域任务（用户定 2026-09-24）**：**引擎只给工兵小队分区**（`fortify.claims`，8 扇区、需求最高优先）+ 需求/环带/可达**数据**（`fortifyPort`）；`buildIssued` 记录派件下标 → 只在无令/玩家令/件变化/将到期时换令。
 - **派件归属（用户定 2026-09-24）**：**队长层 `EngineerDispatch` 派件**——用**建造位置查询函数**（`FortifyPlanner.targetOf`：**危险点（峰值需求 ≥ NEED_DONE）优先 → 否则扇区内弧链随机可达点**）；本队未建件沿用（spot 粘性 <8m+可达）→ 否则注入新件（掩体优先，已护转壕；去重 12m/8m + 扇区重采样；每 0.5s ≤1 件；**第一波（生效日 ≥0.45）停止新增施工**）。
 - **成员任务归属**：`taskX/Z`（围块施工/护卫扇区/行军队列）同由 `EngineerDispatch` 分派（build → 本队 spot=件点；guard/patrol → 命令 `anchor` 保护对象）；被击 8s / 非施工使命 / 非工兵 → 清任务。
-- **施工计时（用户定）**：抵近 **40m** 即开工；每 2s 拍 +2s；**掩体 6s / 战壕 10s 计时满即建成**；**无冷却**（RTS 未接每帧递减，已去掉）。
+- **工兵工作方式（用户定 2026-09-24；唯一口径）**：
+  1. **件的位置只由队长层派件决定**——`EngineerDispatch` → `FortifyPlanner.targetOf`（**危险点优先 → 否则扇区弧链随机可达点**）；引擎只给分区（claims）/需求/环带/可达数据。
+  2. 工兵只负责**寻路到件**（队令目标=件点，可达即派）——**没有"扫描半径"概念**（原 `construct` 的就近扫描段已删）。
+  3. **到件 3m 内才开工计时**（`WORK_R2=3m`）；每 2s 拍 +2s；**掩体 6s / 战壕 10s 满即建成**；建成清 focus → 等队长层派下一件。
 - **掩体校验**：点已被掩体保护（cover≥1）→ 不再重复造；非总攻转战壕、总攻跳过。
 - **连通/前推**：8 区全达标才前推（棘轮 ≤0.5m/拍，封顶 frontP×120m）；施工带 rHi ≤ 环上限。
 
@@ -207,7 +210,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 水 | **正常地块**；仅建表软降分 −0.6 | `TerrainScore.WATER_PENALTY` |
 | 承诺反向保护 | dot(held, desired) ≤ -0.2 → 重选 | `SteerPick.pickSteer` |
 | 掩体惩罚 / 翻越冷却 | W_COVER 1.2 / 1.2s | `SteerPick` / `CharacterBase.CLIMB_CD_MS` |
-| 施工计时 | 掩体 6s / 战壕 10s / 开工 40m | `EngineerCorps` |
+| 施工计时 / 开工距离 | 掩体 6s / 战壕 10s；**到件 3m 内**才计时（无扫描半径） | `EngineerCorps.WORK_R2` |
 | 距离时间增益 | `1+24·t01` | `SwarmCommander.tick` |
 | 升格视野 | 视锥±15% 且 <220m | `main.hooks.inView` |
 | 成员指令门 | 走 8m / 卡 4 **游戏分钟**（净<3m）/ 硬顶 15 / 反向 dot<-0.2 | `SwarmConfig.DIRECTIVE_GATE` |

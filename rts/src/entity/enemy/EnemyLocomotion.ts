@@ -1,14 +1,14 @@
 // ============================================================
 // EnemyLocomotion —— 敌人移动器（E5 组合件；★ 与代理同源：SteerPick 候选选择）
 // ============================================================
-// 本文件不再"硬转向"：危险地形只作为**硬否决**，方向由 16 向候选 softmax 选出
+// 本文件不再"硬转向"：危险地形只作为**硬否决**，方向由 8 向候选 softmax 选出
 // （含承诺窗/转向惯性；与代理执行层同一套 `pickSteer`，两载体同内核）。
 // 地形判定：坑 / h<-1.2 = 禁止；**水=正常地块**（提前豁免，含深水）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { pickSteer, getSteerTable } from '../SteerPick';
-import { fallLineBlend } from '../TerrainAssist';
+import { fallLineBlend, dangerPointAt } from '../TerrainAssist';
 
 /** 地形辅助 scratch（零分配） */
 const _d = { x: 0, z: 0 };
@@ -65,19 +65,11 @@ export class EnemyLocomotion {
     return { move: true, x: res.x, z: res.z };
   }
 
-  /** ★ 点危险判定：坑 / 过低 / 连续陡坡（≈40°+）；**水域放行** */
+  /** ★ 点危险判定：坑 / 过低 / 立面（非坡硬边 > 台阶）——共享内核 `dangerPointAt` */
   private isDangerPoint(
     raster: RasterMap | null, x: number, z: number,
     px: number, pz: number, py: number,
   ): boolean {
-    if (!raster) return false;
-    const role = raster.tileDefAt(x, z).genRole;
-    // ★ 水=正常地块（用户定 2026-09-24）：**提前豁免**（含深水；原来 h<-1.2 先把深水判死 → L3 进不了水/原地转圈）
-    if (role === 'liquid') return false;
-    const h = raster.surfaceHeightAtFor(x, z, py);
-    if (role === 'pit') return true;
-    if (h < -1.2) return true;
-    // ★ N1：坡是正常通路（不否决）。离散硬边/悬崖已由可行性表拦在走廊外。
-    return false;
+    return raster ? dangerPointAt(raster, x, z, px, pz, py) : false;
   }
 }

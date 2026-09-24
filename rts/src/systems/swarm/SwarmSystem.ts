@@ -41,6 +41,7 @@ import {
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import { pickSteer } from '../../entity/SteerPick';
+import { dangerPointAt } from '../../entity/TerrainAssist';
 import { fallLineBlend } from '../../entity/TerrainAssist';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
@@ -828,11 +829,7 @@ export class SwarmSystem {
         if (!raster) return false;
         if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
         if (this.commander.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
-        const role = raster.tileDefAt(hx, hz).genRole;
-        const h = raster.surfaceHeightAtFor(hx, hz, hint);
-        if (role === 'pit' && h < DANGER.PIT_H) return true;
-        // ★ N1：坡是正常通路（不否决；坡度只减速）。离散硬边/悬崖已由可行性表拦在走廊外。
-        return false;
+        return dangerPointAt(raster, hx, hz, p.x[i], p.z[i], hint);   // 坑/过低/立面（共享内核）
       };
       const res = pickSteer(
         p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,

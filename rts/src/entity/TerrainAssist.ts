@@ -9,6 +9,9 @@
 // 依赖：entity/SteerPick 的 SteerTable（模式层桥；实体不依赖 systems）。
 
 import type { SteerTable } from './SteerPick';
+import { RasterMap } from '../services/map/RasterMap';
+import { finalRuling, EDGE_CLIFF_BAND } from '../services/map/Refinements';
+import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../services/map/ChunkGenerator';
 
 /** ★ 上岸爬岸上限（米）：从水里爬上陆地允许的最大抬升（> EDGE_CLIFF_BAND 的岸坎也能爬出；
  *  仅"当前在水里"时生效——陆地单位仍受 0.6m 台阶限制） */
@@ -21,6 +24,30 @@ export const CLIMB_SLOPE_MIN = 0.5;
 export const CLIMB_PATH_MS = 1500;
 /** ★ 爬坡减速（用户定 2026-09-24）：爬坡态速度乘子（L3 程序化爬坡 + L2 上坡共用口径） */
 export const CLIMB_SPEED_MUL = 0.55;
+
+/** ★ 危险点判定（L2 代理 / L3 实体同内核；用户定 2026-09-24）：
+ *  坑 / 过低 = 危险；**立面**（比脚下高 > 台阶豁免且**非坡面 weld**）= 危险
+ *  → 8 向候选会选低处/侧向就近绕（治"顶着坡侧壁站住不会绕"）；水/坡面放行。 */
+export function dangerPointAt(
+  raster: RasterMap, x: number, z: number, fromX: number, fromZ: number, fromY: number,
+): boolean {
+  const role = raster.tileDefAt(x, z).genRole;
+  if (role === 'liquid') return false;              // 水=正常地块（提前豁免，含深水）
+  const h = raster.surfaceHeightAtFor(x, z, fromY);
+  if (role === 'pit') return true;
+  if (h < -1.2) return true;
+  const wet = raster.tileDefAt(fromX, fromZ).genRole === 'liquid';
+  const rise = h - raster.surfaceHeightAtFor(fromX, fromZ, fromY);
+  if (rise > (wet ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND)) {
+    // ★ 查"脚下块 → 候选方向"这条边（原来查候选点自己的块=查错边 → 硬边误判成坡 → 飞檐走壁）
+    const ux = x - fromX, uz = z - fromZ;
+    const dIdx = (Math.abs(ux) >= Math.abs(uz) ? (ux > 0 ? 0 : 1) : (uz > 0 ? 2 : 3)) as 0 | 1 | 2 | 3;
+    const fbx = Math.floor(fromX / BLOCK_SIZE), fbz = Math.floor(fromZ / BLOCK_SIZE);
+    const src = raster.chunkSource(Math.floor(fbx / BLOCKS_PER_SIDE), Math.floor(fbz / BLOCKS_PER_SIDE));
+    if (finalRuling(src, fbx, fbz, dIdx) !== 'weld') return true;   // 硬边立面 → 危险（绕）
+  }
+  return false;
+}
 
 /** 坡正面混合：把期望方向 (dx,dz) 按需向最陡上升方向混合（写 out） */
 export function fallLineBlend(

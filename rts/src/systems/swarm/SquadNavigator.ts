@@ -349,7 +349,7 @@ export class SquadNavigator {
     for (const r of [10, 6]) {   // ★ LOS 10m 短路（主）/ 6m（窄地形回落）
       let best: { x: number; z: number } | null = null;
       let bestS = 0;
-      for (let k = 0; k < 16; k++) {
+      for (let k = 0; k < 16; k++) {   // 16 向（精度保留；反向由 SteerPick 禁令管）
         const a = (k * Math.PI) / 8;
         const dxn = Math.cos(a), dzn = Math.sin(a);
         const x = cx + dxn * r;

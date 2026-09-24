@@ -215,8 +215,13 @@ export class EngineerCorps {
     if (this.stage !== 'S1') return;
     const cover = this.host.cover();
     if (!cover) return;
+    // ★ 工兵工作方式（用户定 2026-09-24；《工兵架构.md》§施工）：
+    //   ① 件的位置**只由队长层派件**（`EngineerDispatch` → `FortifyPlanner.targetOf`：
+    //      危险点优先 → 否则扇区弧链随机可达点）；引擎只给分区/需求/环带数据。
+    //   ② 工兵只负责**寻路到件**（队令目标=件点，可达即派）；**没有"扫描半径"概念**。
+    //   ③ 到件 **3m 内**才开工计时（每 2s 拍 +2s；掩体 6s / 战壕 10s 满即建成）。
     for (const s of builders) {
-      // ① 焦点续挖（优先；不受冷却限）：本队正在建的块（成员 ≤15m 且未成）→ 必须继续
+      // ① 焦点续挖（优先；不受冷却限）：本队正在建的块（成员 ≤3m 且未成）→ 必须继续
       let piece: BuildPiece | null = null;
       let fidx = this.focus.get(s.id) ?? this.assign.get(s.id);   // ★ focus 缺失回退 assign（派件即可开工）
       if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
@@ -228,31 +233,9 @@ export class EngineerCorps {
           if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= WORK_R2) { piece = q; break; }   // ★ 3m 内才计时
         }
       }
-      // ② 就近动工（新焦点）：**pri 小者先**（前线掩体 > 战壕 > 环掩体）→ 挖痕多 → 近（成员 ≤5m）
-      if (!piece) {
-        const cd = this.cds.get(s.id) ?? 0;
-        if (cd > 0) continue;   // 冷却中（仅限新焦点）
-        let bi = -1, bD = 9, bPass = -1, bPri = Infinity;   // ★ 新焦点扫描 3m（用户定 2026-09-24）
-        for (const m of s.members.values()) {
-          for (let i = 0; i < this.pieces.length; i++) {
-            const q = this.pieces[i];
-            if (this.built.has(keyOf(q))) continue;
-            if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不挖）
-            if (!this.allows(s.id, q.kind, q.pri)) continue;
-            const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
-            if (d > 9) continue;   // ★ 3m
-            const pass = this.passes.get(keyOf(q)) ?? 0;
-            if (q.pri < bPri || (q.pri === bPri && (pass > bPass || (pass === bPass && d < bD)))) {
-              bPri = q.pri; bPass = pass; bi = i; bD = d;
-            }
-          }
-        }
-        if (bi < 0) continue;
-        fidx = bi;
-        piece = this.pieces[bi];
-      }
       if (fidx !== undefined) this.focus.set(s.id, fidx);
-      // ★ 施工计时（用户定 2026-09-25）：到位就计时（每拍 +2s），计时满即建成
+      if (!piece) continue;   // 未到件（>3m）/无件 → 继续寻路去件（件由队长层派，寻路归队）
+      // ★ 施工计时（用户定 2026-09-25）：到件 3m 内就计时（每拍 +2s），计时满即建成
       const k = keyOf(piece);
       const t = (this.workT.get(k) ?? 0) + 2;
       this.workT.set(k, t);
