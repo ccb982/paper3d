@@ -114,18 +114,6 @@ export class FortifyPlanner {
     return null;
   }
 
-  /** 统一取点：**仅限本队认领的防区**；无认领 → null */
-  spotFor(
-    sid: number, cx: number, cz: number, rLo: number, rHi: number,
-    needAt: (x: number, z: number) => number | null, doneScore: number,
-    canReach?: (x: number, z: number) => boolean,
-  ): (FortifyPick & { sector: number }) | null {
-    const sec = this.claims.get(sid);
-    if (sec === undefined) return null;
-    const p = this.targetOf(cx, cz, sec, rLo, rHi, needAt, doneScore, canReach);
-    return p ? { ...p, sector: sec } : null;
-  }
-
   /** 分配：**需求最高优先逐个分配**（一队一区）；仅阵亡释放；更缺的未占区（差 ≥ MARGIN）可抢占 */
   assign(builderIds: readonly number[], doneScore = 0): void {
     const alive = new Set(builderIds);

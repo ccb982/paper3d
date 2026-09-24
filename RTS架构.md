@@ -18,7 +18,7 @@
 |---|---|---|
 | 战略 | 事态函数/环形活动区/波次节奏 | `SwarmCommander`（frontP/ringBounds/波次） |
 | 战术 | 兵种角色纵深、队间分布（切向/扎堆/层级）、兜底 | `BattleLine`、`fallbackTick`（dawdle/tangent/rank_fix） |
-| 队级 | 命令拆步、走廊、锚点、编队槽位 | `SquadTactics`、`SquadNavigator`、`Formation` |
+| 队级 | **成员调遣（唯一写口）**：长寻路/走廊、锚点、编队槽位、命令保护 | `SquadDispatch`、`SquadTactics`、`SquadNavigator`、`Formation` |
 | 个体 | 移动/施工/攻击 | `SwarmSystem.move`、`EngineerCorps`、`EnemyBrain` |
 | 底座 | 地形/实体/渲染/物理 | `PassTable`、`EntityManager`、`CharacterFxManager`、`PhysicsWorld` |
 
@@ -34,6 +34,8 @@ ui/Timeline.ts             时间轴（06:00-18:00 拖动=绝对进度；,/. 调
 ui/SpawnSelect.ts          开局小地图选点（可换种子）
 debug/AiTrace.ts           AI 可读记录（JSONL/中文摘要）
 systems/swarm/            蜂群引擎（Commander/Tactics/Navigator/Fortify/Engineer/…）
+systems/swarm/SquadDispatch.ts  队长层成员分派唯一写口（寻路/锚点/阵型/命令保护）
+systems/swarm/EngineerDispatch.ts 队长层工兵成员任务（围块/护卫扇区/行军队列）
 systems/spawn/WorldSpawner.ts  刷怪 + 官方 tierPort（promote/demote）
 systems/ai/               行为状态机（AISystem + behaviors）
 systems/combat/           弹道/命中结算
@@ -75,8 +77,10 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 ## 5. 指挥与命令
 
 - **单源**：`SquadOrder{kind,target,mission,anchor,seq,ttl,source,roe}`；一切令走 `issueChecked`（可达核验/调账/台账）。
-- **发令冷却（替代时效）**：同队 **8s** 内同签名同目标不再发；引擎令 TTL≥60s 存活；例外：事态签名变 / 队血比<0.5。
-- **四类介入**（§0）：事态变动 / 重伤 / 扎堆 / 磨蹭——各自 30s 队级冷却。
+- **发令冷却（替代时效）**：同队 **8 游戏分钟**内同签名同目标不再发；引擎令 TTL≥60 游戏分钟存活；例外：事态签名变 / 队血比<0.5。
+- **四类介入**（§0）：事态变动 / 重伤 / 扎堆 / 磨蹭——各自 30 游戏分钟队级冷却。
+- **成员分派归属（用户定 2026-09-24）**：**只有队长和蜂群引擎发命令**；成员只执行队长的长寻路或听队长调遣。`SquadDispatch` = 队长层成员分派**唯一写口**（寻路/锚点/阵型/门/池列+`onDirective`）；引擎（`SwarmSystem.applyOrders`）只做命令轨（到期/`isActive`）后交队长，不再写成员指令。
+- **命令保护 `OrderGate`（用户定 2026-09-24）**：队长令（`SquadTactics.tick`）与成员指令（`applyOrders` 2Hz 重算）过同一道门——**只有"走出足够距离"或"久无有效推进（卡住）"才接新目标**；否则保持记忆目标。反向拉扯拒绝（候选方向 vs 记忆方向点积）；卡住换向优先**没下过的方向**（历史方向 ±55° 偏转）。成员门：走 8m / 卡 4 游戏分钟（净<3m）/ 硬顶 15 游戏分钟；队长门：走 20m / 卡 8 游戏分钟 / 硬顶 20 游戏分钟（`SwarmConfig.DIRECTIVE_GATE / LEADER_GATE`，`OrderGate.dbg` 计数可查）。
 - **兜底动作**（`fallbackTick` 1Hz）：
   - 磨蹭 → 沿队令方向**向前 20m**；无令 → **兵力最稀处**（20m 格计数，<60m）；
   - 扎堆（同 mobKind <50m）→ **横向拉开 20/35/50m + 向舰内收 20/10/0m**（离邻居远侧优先）；
@@ -102,7 +106,9 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 
 ## 8. 工兵
 
-- **区域任务**：引擎只派区（扇区）；`spot` **粘性**（本区未建件还在且可达就不重取）；`buildIssued` 记录派件下标 → 只在无令/玩家令/件变化/将到期时换令。
+- **区域任务（用户定 2026-09-24）**：**引擎只给工兵小队分区**（`fortify.claims`，8 扇区、需求最高优先）+ 需求/环带/可达**数据**（`fortifyPort`）；`buildIssued` 记录派件下标 → 只在无令/玩家令/件变化/将到期时换令。
+- **派件归属（用户定 2026-09-24）**：**队长层 `EngineerDispatch` 派件**——用**建造位置查询函数**（`FortifyPlanner.targetOf`：**危险点（峰值需求 ≥ NEED_DONE）优先 → 否则扇区内弧链随机可达点**）；本队未建件沿用（spot 粘性 <8m+可达）→ 否则注入新件（掩体优先，已护转壕；去重 12m/8m + 扇区重采样；每 0.5s ≤1 件；**第一波（生效日 ≥0.45）停止新增施工**）。
+- **成员任务归属**：`taskX/Z`（围块施工/护卫扇区/行军队列）同由 `EngineerDispatch` 分派（build → 本队 spot=件点；guard/patrol → 命令 `anchor` 保护对象）；被击 8s / 非施工使命 / 非工兵 → 清任务。
 - **施工计时（用户定）**：抵近 **40m** 即开工；每 2s 拍 +2s；**掩体 6s / 战壕 10s 计时满即建成**；**无冷却**（RTS 未接每帧递减，已去掉）。
 - **掩体校验**：点已被掩体保护（cover≥1）→ 不再重复造；非总攻转战壕、总攻跳过。
 - **连通/前推**：8 区全达标才前推（棘轮 ≤0.5m/拍，封顶 frontP×120m）；施工带 rHi ≤ 环上限。
@@ -123,18 +129,38 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 1Hz | `fallbackTick`（磨蹭/扎堆/层级）、`tacticalTick`（战役闭环） |
 | 变速 | `,/.` 调速 1~100×（子步进 ≤0.05s/步；dayT01 走模拟时钟） |
 
+### 10.1 命令侧时间尺度（用户定 2026-09-24）
+
+> **下命令侧的时间比现实快 5 倍**（游戏内 5 秒 = 现实 1 秒）。代码换算口：`SwarmConfig.GAME_SEC = 0.2` / `GAME_MIN = 12`（1 游戏分钟 = 12 实秒）。
+
+**只换算命令/规划层**（蜂群引擎发令 + 队长/成员命令）：
+
+| 项 | 单位 |
+|---|---|
+| 成员指令门 / 队长令门（hold/force/persist） | 游戏分钟（`DIRECTIVE_GATE` / `LEADER_GATE`） |
+| 命令 TTL（引擎令/指令/队长令/默认/使命下限） | 游戏分钟（`ttlLong` / `DIRECTIVE_TTL` / `LEADER_TTL` / `ORDER_TTL_DEFAULT` / `MISSION_TTL_FLOOR`） |
+| 发令冷却 / 兜底冷却 / 使命重发 | 游戏分钟（`ISSUE_COOLDOWN_S` / `fallbackTick` / `RESEND`） |
+
+**其他一律保持原实秒值**：日钟（`simT/720000`）、施工计时（掩体 6s/战壕 10s）、战斗（攻击冷却/挥击/撤退/狂暴）、寻路重算（12s）、A* 缓存（20s）、卡死回收（25s）、警戒窗口（6~20s）。
+
+- 已知混合时钟：计时用 `performance.now()`（实秒），tick 节拍用模拟时间（`dt` 累加）→ 1× 下等价；高倍速时命令计时相对游戏时钟变短（后续可统一到模拟时钟）。
+
 ## 11. 关键参数（集中调参口）
 
 | 参数 | 值 | 位置 |
 |---|---|---|
 | 环：大圆/甜甜圈 | 90 / (60,180) | `SwarmCommander.ringBounds` |
-| 发令冷却 / 兜底冷却 | 8s / 30s | `ISSUE_COOLDOWN_S` / `fallbackTick` |
+| 发令冷却 / 兜底冷却 | 8 / 30 **游戏分钟** | `ISSUE_COOLDOWN_S` / `fallbackTick` |
+| 命令 TTL | 引擎令 ≥60 / 指令 6 / 队长令 4 **游戏分钟** | `ttlLong` / `DIRECTIVE_TTL` / `LEADER_TTL` |
+| 使命重发 / TTL 余量 | 10 / 5 **游戏分钟** | `RESEND` |
 | 扎堆阈值 / 横纵步长 | 50m / 20·35·50 + 20·10·0 | `fallbackTick` |
 | 层级越位 / 修正 | >15m / 拉后 15m | `fallbackTick` |
 | 长短寻路分界 | 40m | `SquadNavigator.NAV.LONG_PATH_DIST` |
 | 施工计时 | 掩体 6s / 战壕 10s / 开工 40m | `EngineerCorps` |
 | 距离时间增益 | `1+24·t01` | `SwarmCommander.tick` |
 | 升格视野 | 视锥±15% 且 <220m | `main.hooks.inView` |
+| 成员指令门 | 走 8m / 卡 4 **游戏分钟**（净<3m）/ 硬顶 15 / 反向 dot<-0.2 | `SwarmConfig.DIRECTIVE_GATE` |
+| 队长令门 | 走 20m / 卡 8 **游戏分钟**（净<4m）/ 硬顶 20 / 反向 dot<-0.3 | `SwarmConfig.LEADER_GATE` |
 
 ## 12. 里程碑
 
@@ -146,6 +172,11 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | R16 蜂群优化 | 队长决策与寻路调优 | ⬜ |
 | R17 战术层级/队形/兜底 | 已实施大半（扎堆/磨蹭/层级/施工计时）；剩"沿路才爬掩体" | ⚠️ |
 | R30 验证防线 | tsconfig 全量检查 + arch-guard + smoke/probe 基线断言（各 6 项，失败退出码 1） | ✅ 2026-09-24 |
+| R31 命令保护 | `OrderGate` 时间+距离+记忆（成员指令 / 队长令）：指令变化 -60%、反向拉扯 -31%、绕圈比 5.7→3.3 | ✅ 2026-09-24 |
+| R32 分派收编 | 成员指令写口从引擎移到队长层 `SquadDispatch`（引擎只发队令+兜底；SwarmSystem 1274→1193） | ✅ 2026-09-24 |
+| R33 工兵收编 | 引擎只分区；成员任务 `taskX/Z` 移到队长层 `EngineerDispatch`（被击/非施工使命清任务） | ✅ 2026-09-24 |
+| R34 派件收编 | 派件也归队长：位置查询（危险点优先→弧链随机可达点）+ 沿用/注入件 + assign/focus；引擎只给数据端口 | ✅ 2026-09-24 |
+| R35 命令侧时间 | 下命令侧比现实快 5 倍 → 只有引擎发令/队长/成员命令计时按**游戏分钟**（`GAME_MIN=12` 实秒）；其余保持实秒 | ✅ 2026-09-24 |
 | §16 涉水/山地 | 目标落水→岸上点；短跳自适应；拉直防贴崖 | ⬜ |
 
 ## 12.5 验证防线（四关 · 2026-09-24 建立）

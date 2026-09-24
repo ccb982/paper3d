@@ -29,7 +29,9 @@ import { DANGER } from './SwarmDanger';
 import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
-import { FortifyPlanner, FORTIFY_SECTORS, NEED_DONE } from './FortifyPlanner';
+import { FortifyPlanner, NEED_DONE } from './FortifyPlanner';
+import { GAME_MIN } from './SwarmConfig';
+import type { FortifyPort } from './EngineerDispatch';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
@@ -144,6 +146,8 @@ export class SwarmCommander {
   private frontMaxD = -1;
   /** ★ 最近一次舰船位（issueChecked 夹环用） */
   private lastShipX = 0;
+  /** ★ 原始当日进度（hooks.dayT01；第一波 ≥0.45 起停止新增施工——队长层派件读） */
+  private lastDayRaw = -1;
   private lastShipZ = 0;
   /** ★ 命令夹环计数（探针/调试） */
   cmdLogRingClamps = 0;
@@ -151,7 +155,7 @@ export class SwarmCommander {
   private readonly outsideSince = new Map<number, number>();
   /** ★ 发令冷却（用户定 2026-09-25）：队 → 上次发令时刻（秒）；短时期内不再给同一队发 */
   private readonly lastIssueAt = new Map<number, number>();
-  private static readonly ISSUE_COOLDOWN_S = 8;
+  private static readonly ISSUE_COOLDOWN_S = 8 * GAME_MIN;   // 游戏分钟
   /** 队 → 上次发令的事态签名（签名变 = 事态变动 → 允许立即重发） */
   private readonly cmdKey = new Map<number, string>();
   /** ★ 区域任务（用户定）：上次发令时该队的施工件下标（件不变 → 不重复下命令） */
@@ -247,7 +251,7 @@ export class SwarmCommander {
       markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
       cover: () => this.buildCover,
       dig: () => this.digTrench,
-    }, this.memberTasks);
+    });
     this.spawn = new CommanderSpawn({
       plan: () => this.plan,
       mob: () => this.spawnMob,
@@ -272,7 +276,7 @@ export class SwarmCommander {
   }
 
   /** ★ 对特定小队下覆盖命令（引擎优先级最高，队长不抢） */
-  orderSquad(squadId: number, order: TacticalOrder, ttl = 30): void {
+  orderSquad(squadId: number, order: TacticalOrder, ttl = 30 * GAME_MIN): void {
     if (this.swarm.squads.centroidOf(squadId, _c0)) this.issueChecked(squadId, _c0.x, _c0.z, order, ttl);
     else this.swarm.issueOrder(squadId, order, Math.max(ttl, 60));
   }
@@ -324,7 +328,7 @@ export class SwarmCommander {
     // ★ 发令冷却（用户定 2026-09-25）：**命令发出去一次，短时期内不再给同一队发**——
     //   不靠命令时效（引擎令 TTL 拉长存活）；冷却期内同签名同目标 → 直接不发。
     //   例外：事态变动（stage/posture/环/波次签名变）或队重伤（血比<0.5）→ 允许立即重发。
-    let ttlLong = Math.max(ttl ?? 30, 60);   // 引擎令寿命拉长（命令靠冷却管，不靠时效）
+    let ttlLong = Math.max(ttl ?? 30 * GAME_MIN, 60 * GAME_MIN);   // 引擎令寿命 ≥60 游戏分钟（命令靠冷却管，不靠时效）
     {
       const cur0 = this.swarm.tactics.board.get(squadId);
       if (cur0 && cur0.source === 'engine' && order.target) {
@@ -534,6 +538,7 @@ export class SwarmCommander {
   }
 
   tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
+    this.lastDayRaw = this.debugDayT01 >= 0 ? this.debugDayT01 : dayT01;   // ★ 生效日进度（时间轴拖动同口径）
     this.viewPX = playerX;
     this.viewPZ = playerZ;
     this.roster.tick(dt, this.swarm.squads);   // ★ §13.1 编制占比统计（4Hz）
@@ -555,33 +560,10 @@ export class SwarmCommander {
         const builders = [...this.swarm.squads.all()].filter((s) => s.builders && s.members.size > 0);
         builders.sort((a, b) => a.id - b.id);
         this.fortify.assign(builders.map((s) => s.id), DONE);
-        // ★ 区域任务（用户定 2026-09-25）：引擎**只派区**，区内活由工兵自己循环——
-        //   spot **粘性**（本区自己的未建件还在就不重取）；命令只在"件变化/将到期"时换
+        // ★ 区域任务（用户定 2026-09-24）：引擎**只派区**（claims）——位置查询/派件/成员任务在队长层
         const aliveIds = new Set(builders.map((s) => s.id));
         for (const sid of [...this.fortify.spots.keys()]) if (!aliveIds.has(sid)) this.fortify.spots.delete(sid);
         for (const sid of [...this.buildIssued.keys()]) if (!aliveIds.has(sid)) this.buildIssued.delete(sid);
-        for (const s of builders) {
-          const prev = this.fortify.spots.get(s.id);
-          const lead0 = s.members.get(s.leaderUid);
-          const still = prev && lead0 && this.corps.pieces.some((q) => !this.corps.built.has(`${q.x},${q.z}`)
-            && !this.corps.gated(q) && Math.hypot(q.x - prev.x, q.z - prev.z) < 8)
-            && this.swarm.reachable(lead0.x, lead0.z, prev.x, prev.z);   // ★ 粘性也要可达（否则换点）
-          if (still) continue;
-          // ★ 可达性校验起点 = **队长位置**（用户在 2026-09-23 定）；队长缺失才退回质心
-          const lead = s.members.get(s.leaderUid);
-          let lx = 0, lz = 0;
-          if (lead) { lx = lead.x; lz = lead.z; }
-          else {
-            let n = 0;
-            for (const m of s.members.values()) { lx += m.x; lz += m.z; n++; }
-            if (n > 0) { lx /= n; lz /= n; }
-          }
-          const sp = this.fortify.spotFor(
-            s.id, shipX, shipZ, rLo, rHi, (x, z) => this.fortifyNeed(x, z), DONE,
-            (x, z) => this.swarm.walkableLine(lx, lz, x, z) && this.swarm.reachable(lx, lz, x, z),   // ★ 队长位→目标：LOS 粗筛 + 有向可达（可绕障/出扇区）
-          );
-          if (sp) this.fortify.spots.set(s.id, sp);
-        }
         this.fortify.dbg.assigned = [...this.fortify.spots].map(([id, p]) =>
           `#${id}→区${p.sector}:${p.x | 0},${p.z | 0}(${p.score.toFixed(1)})`).join(' ');
         // ★ 引擎发令（区域任务）：**只在必要时刻换令**——无令/玩家令/件变了/将到期；
@@ -594,78 +576,18 @@ export class SwarmCommander {
           if (!lead) continue;
           const aidx = this.corps.assign.get(sid) ?? -1;
           const cur = this.swarm.tactics.board.get(sid);
-          const expiredSoon = !cur || cur.until < nowS + 3;
+          const expiredSoon = !cur || cur.until < nowS + 3 * GAME_MIN;
           const playerOwned = cur?.source === 'player';
           const pieceChanged = this.buildIssued.get(sid) !== aidx;
           if (!expiredSoon && !playerOwned && !pieceChanged) continue;
           this.buildIssued.set(sid, aidx);
           this.issueChecked(sid, lead.x, lead.z,
-            { kind: 'advance', target: { x: p.x, z: p.z }, mission: 'build', seq: 0 }, 30);
+            { kind: 'advance', target: { x: p.x, z: p.z }, mission: 'build', seq: 0 }, 30 * GAME_MIN);
         }
         // ★ 缺口对照（探针）：队数 vs 认领数 vs spot 数——必须全等，否则"某队没任务"
         this.fortify.dbg.builders = builders.length;
         this.fortify.dbg.claimsN = this.fortify.claims.size;
         this.fortify.dbg.spotsN = this.fortify.spots.size;
-        // 注入施工件（8m 去重；每拍 ≤1 件防刷）→ 既有分派/施工链接走
-        // ★ 本地计划优先：40m 内还有未建的前线掩体/战壕（pri≤1）→ 先让既有链做，不抢
-        // ★ 第一波时段起（≥0.45）**停止新增施工**：既有件收尾 → S1→S2 → 闸门放开（下午能打到舰船）
-        //   ⚠ 用参数 dayT01（t01 归一值在后面才算，不能在此引用——2026-09-25 TDZ 教训）
-        const assaultTime = dayT01 >= 0.45;
-        let injected = 0;
-        if (!assaultTime) {
-        // ★ 设计（用户定）：引擎把**区域任务**派给队 → 队在该区域**持续干**（永远不缺活）。
-        //   本区（40m 内）无未建件 → 立刻补一件；已建点 8m 内不再重复（扇区内随机另选点）。
-        for (const [sid, p] of this.fortify.spots) {
-          if (injected >= 1 || this.fortify.dbg.injected >= 200) break;
-          // ★ 件按扇区：只看**本队本扇区 spot 近旁（<8m）**已有的未建件（= 本队自己的件）；
-          //   没有 → 在 spot 处补一件（绝不扫"最近件"，否则两队抢一件）
-          let own = -1;
-          for (let i = 0; i < this.corps.pieces.length; i++) {
-            const q = this.corps.pieces[i];
-            if (this.corps.built.has(`${q.x},${q.z}`) || this.corps.gated(q)) continue;
-            if (Math.hypot(q.x - p.x, q.z - p.z) < 8) { own = i; break; }
-          }
-          if (own >= 0) {
-            this.corps.assign.set(sid, own);
-            this.corps.focus.set(sid, own);
-            continue;
-          }
-          // ★ 先造掩体 + 掩体校验（用户定 2026-09-24）：点**未被掩体保护**（cover<1）→ 造掩体优先；
-          //   已被保护 → 不再重复造掩体：非总攻转挖战壕、总攻直接跳过。掩体去重 12m（防叠）、战壕 8m（成线）
-          const f2 = this.terrainScore.featsAt(p.x, p.z, this.viewPX, this.viewPZ);
-          const sheltered = !!f2 && f2.cover >= 1;   // 已被掩体保护
-          const wantKind: 'cover' | 'trench' | null = !sheltered ? 'cover'
-            : (this.battlePosture === 'assault' ? null : 'trench');
-          if (wantKind === null) continue;
-          const dedupR = wantKind === 'cover' ? 12 : 8;
-          let sx2 = p.x, sz2 = p.z;
-          if (this.corps.pieces.some((q) => Math.hypot(q.x - sx2, q.z - sz2) < dedupR)) {
-            // ★ 第二波修复（2026-09-24）：8m 去重命中（第一波已建点在弧链上）→ 扇区内**重采样**：
-            //   用要塞需求 fortifyNeed 校验（不是通用 scoreAt），12 次尝试仍不成就跳过本拍
-            let found = false;
-            const a0 = (p.sector / FORTIFY_SECTORS) * Math.PI * 2;
-            const a1 = ((p.sector + 1) / FORTIFY_SECTORS) * Math.PI * 2;
-            for (let t = 0; t < 12 && !found; t++) {
-              const a = a0 + Math.random() * (a1 - a0);
-              const rr = rLo + Math.random() * (rHi - rLo);
-              const cx2 = Math.round((shipX + Math.cos(a) * rr) / 4) * 4;
-              const cz2 = Math.round((shipZ + Math.sin(a) * rr) / 4) * 4;
-              if (this.fortifyNeed(cx2, cz2) === null) continue;
-              if (this.corps.pieces.some((q) => Math.hypot(q.x - cx2, q.z - cz2) < dedupR)) continue;
-              sx2 = cx2; sz2 = cz2;
-              found = true;
-            }
-            if (!found) continue;
-          }
-          this.corps.pieces.push({ kind: wantKind, x: sx2, z: sz2, ring: 2, pri: 3 });
-          // ★ 统一派件源（用户定 2026-09-23）：注入件 = 该队的 assign/focus（三点一致：位置函数点=件点=队的目标）
-          const idx3 = this.corps.pieces.length - 1;
-          this.corps.assign.set(sid, idx3);
-          this.corps.focus.set(sid, idx3);
-          injected++;
-          this.fortify.dbg.injected++;
-        }
-        }
         // ★ 连通阶段（§13.4）：相邻扇区都达标 → 串 trench 连成一片（每拍 ≤1）
         for (const m of this.fortify.connect(DONE, 1)) {
           const near = this.corps.pieces.some((q) => Math.hypot(q.x - m.x, q.z - m.z) < 8);
@@ -808,14 +730,14 @@ export class SwarmCommander {
         if (attacking && dShip < 70 && now >= holdT) {
           this.holdUntil.set(s.id, now + 45);
           const lead = s.members.get(s.leaderUid);
-          if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'garrison', target: { x: cx, z: cz }, mission: 'guard', seq: 0 }, 45);
+          if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'garrison', target: { x: cx, z: cz }, mission: 'guard', seq: 0 }, 45 * GAME_MIN);
           continue;
         }
         if (o.kind === 'garrison') {
           if (ratio < 0.45) {
             this.holdUntil.delete(s.id);
             const lead = s.members.get(s.leaderUid);
-            if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'retreat', target: { x: shipX + 200, z: shipZ }, mission: 'rear', seq: 0 }, 20);
+            if (lead) this.issueChecked(s.id, lead.x, lead.z, { kind: 'retreat', target: { x: shipX + 200, z: shipZ }, mission: 'rear', seq: 0 }, 20 * GAME_MIN);
           } else if (now >= holdT) {
             this.holdUntil.delete(s.id);   // 驻留到期 → 交回正常决策
           }
@@ -850,11 +772,11 @@ export class SwarmCommander {
         rec.last = sg;
       }
       rec.lx = cx; rec.lz = cz;
-      if (nowF - rec.t >= 30) {
+      if (nowF - rec.t >= 30 * GAME_MIN) {
         const net = Math.hypot(cx - rec.x, cz - rec.z);
         const dawdling = (net < 3 && rec.path > 15) || rec.rev >= 6;
         if (dawdling && nowF > rec.cd && !s.builders) {
-          rec.cd = nowF + 30;
+          rec.cd = nowF + 30 * GAME_MIN;
           const o = this.swarm.tactics.board.get(s.id)?.order;
           const cands: { x: number; z: number }[] = [];
           if (o?.target) {
@@ -867,7 +789,7 @@ export class SwarmCommander {
           }
           const pick = this.pickValidTarget(cx, cz, cands);
           if (pick) {
-            this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+            this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20 * GAME_MIN);
             this.lastDecision = { squad: s.id, kind: 'dawdle_push', at: nowF };
           }
         }
@@ -1010,6 +932,36 @@ export class SwarmCommander {
   private readonly builderRoles = new Map<number, 'cover' | 'trench' | 'any'>();
   /** ★ 引擎大任务（粘性：squadId → { mission, epoch }；只在落点/态势/阶段切换时重派） */
   private readonly missionAssign = new Map<number, { mission: string; epoch: number }>();
+  /** ★ 引擎给该队的**粘性使命**（build/guard/patrol…；队长层工兵分派读它——订单 mission 会被兜底令覆盖） */
+  missionOf(squadId: number): string | null {
+    return this.missionAssign.get(squadId)?.mission ?? null;
+  }
+
+  /** ★ 队长层工兵派件端口（用户定 2026-09-24）：引擎只给分区/环带/需求/可达**数据**；
+   *  位置查询（危险点优先 → 否则弧链随机可达点）与派件（assign/focus/注入）都在队长层。 */
+  fortifyPort(): FortifyPort {
+    return {
+      sectorOf: (id) => this.fortify.claims.get(id) ?? null,
+      band: () => { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; },
+      ship: () => ({ x: this.lastShipX, z: this.lastShipZ }),
+      needAt: (x, z) => this.fortifyNeed(x, z),
+      canReach: (id, x, z) => {
+        const s = this.swarm.squads.get(id);
+        const lead = s?.members.get(s.leaderUid);
+        if (!lead) return false;
+        return this.swarm.walkableLine(lead.x, lead.z, x, z) && this.swarm.reachable(lead.x, lead.z, x, z);
+      },
+      sheltered: (x, z) => {
+        const f = this.terrainScore.featsAt(x, z, this.viewPX, this.viewPZ);
+        return !!f && f.cover >= 1;
+      },
+      assault: () => this.battlePosture === 'assault',
+      noNewBuild: () => this.lastDayRaw >= 0.45,
+      spotOf: (id) => this.fortify.spots.get(id) ?? null,
+      setSpot: (id, p) => { this.fortify.spots.set(id, p); },
+      clearSpot: (id) => { this.fortify.spots.delete(id); },
+    };
+  }
 
   /** ★ 小队自动重组（§4.6）：同键"不满半"小队 → 并入最近同键队 */
   private mergeTick(now: number): void {
@@ -1145,7 +1097,7 @@ export class SwarmCommander {
           const tz = shipZ + ((cz - shipZ) / (d || 1)) * rWant;
           const lead = s.members.get(s.leaderUid);
           if (lead) {
-            this.issueChecked(s.id, lead.x, lead.z, { kind: 'advance', target: { x: tx, z: tz }, mission: 'regroup', seq: 0 }, 12);
+            this.issueChecked(s.id, lead.x, lead.z, { kind: 'advance', target: { x: tx, z: tz }, mission: 'regroup', seq: 0 }, 12 * GAME_MIN);
             this.lastDecision = { squad: s.id, kind: tooClose ? 'force_out' : 'force_in', at: nowS };
           }
           this.outsideSince.delete(s.id);
@@ -1332,37 +1284,12 @@ export class SwarmCommander {
       }
       if (pt) this.protectAssign.set(s.id, pt);
       ctx.protect = pt;
-      // ★ 施工块稳定分派（施工大任务下才有目标；成员再分到不同块 → 并行施工）
+      // ★ 施工块稳定分派（施工大任务下才有目标）；成员任务由**队长层** EngineerDispatch 分派
       if (ma.mission === 'build' && this.stage === 'S1') {
         const idx = this.buildAssign.get(s.id);
         ctx.buildTarget = idx !== undefined && idx >= 0 ? this.buildPieces[idx] : buildSlot;
-        // ★ 位置函数给点 + 路径系统接上：无近件可派 → 奔赴**本区目标点**（taskNav/贪心段绕障）
-        if (!this.corps.spreadBuilders(s, scx, scz)) {
-          const sp = this.fortify.spots.get(s.id);
-          if (sp) {
-            let i = 0;
-            for (const uid of s.members.keys()) {
-              const a = (i++ / s.members.size) * Math.PI * 2;
-              this.memberTasks.write(uid, sp.x + Math.cos(a) * 2, sp.z + Math.sin(a) * 2);
-            }
-            this.memberTasks.own(s.id);
-          } else {
-            this.memberTasks.clear(s);
-          }
-        }
-      } else if (ma.mission === 'guard' || ma.mission === 'patrol') {
-        ctx.buildTarget = null;
-        // ★ 护卫/巡逻扇区（成员级）：被击/无保护对象 → 清任务（交给动态反击/巡逻令）
-        if (this.alertSet.has(s.id) || !ctx.protect) this.memberTasks.clear(s);
-        // ★ 工兵的保护动作 = 造工事（有未建掩体 → 施工；没有 → 交队长站位/执行）
-        else if (s.builders) {
-          if (!this.corps.spreadBuilders(s, ctx.protect.x, ctx.protect.z)) this.memberTasks.clear(s);
-        }
-        // ★ 其余保护队：清成员任务 → 保护令（对象+玩家位置）+ 队长站位 + 编队槽执行（代理/队长自身）
-        else this.memberTasks.clear(s);
       } else {
         ctx.buildTarget = null;
-        this.memberTasks.clear(s);
       }
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
@@ -1371,6 +1298,9 @@ export class SwarmCommander {
         kind: out.kind, target: out.target, roe: out.roe,
         urgency: out.urgency, mission: out.mission || undefined,
         threatX: out.threat?.x, threatZ: out.threat?.z, seq: 0,
+        // ★ 工作区（队长层工兵分派的参考点）：保护对象/工地/岗位 → EngineerDispatch 读 anchor
+        anchor: (ma.mission === 'build' || ma.mission === 'guard' || ma.mission === 'patrol') && pt
+          ? { x: pt.x, z: pt.z } : undefined,
       }, out.ttl);
     }
     // ⑤ 施工（逐步拼装，仅 S1；挖建执行在 EngineerCorps）
@@ -1414,8 +1344,8 @@ export class SwarmCommander {
         kind: 'garrison', target: { x: h.cx, z: h.cz }, roe: 'engage', mission: 'hold',
         threatX: playerX, threatZ: playerZ, seq: 0,
       };
-      if (rr) this.issueChecked(id, rr.cx, rr.cz, order, 4);
-      else this.swarm.issueOrder(id, order, 4);
+      if (rr) this.issueChecked(id, rr.cx, rr.cz, order, 4 * GAME_MIN);
+      else this.swarm.issueOrder(id, order, 4 * GAME_MIN);
     }
     // ② 逐队：受阻重试/换目标 + 残血撤离（按逐兵种 retreatHp）
     for (const r of ratings) {

@@ -5,6 +5,13 @@
 // 从 SwarmSystem 外置（护栏行数）；原路径 re-export 兼容旧引用。
 // ============================================================
 
+/** ★ 命令侧时间尺度（用户定 2026-09-24）：**下命令侧的时间比现实快 5 倍**
+ *  （游戏内 5 秒 = 现实 1 秒）→ 1 游戏分钟 = 12 实秒（`GAME_MIN`）。
+ *  约定：**只有命令/规划层计时**（队长令/成员指令门、命令 TTL、发令冷却、使命重发）用 `GAME_MIN`；
+ *        日钟/施工/战斗/寻路/回收等其他计时一律保持原实秒值。 */
+export const GAME_SEC = 0.2;
+export const GAME_MIN = 12;
+
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
   /** L3 实体层：升格半径 / 实体上限 */
@@ -102,8 +109,21 @@ export const STUCK = {
 
 /** ★ 指挥层重发/寿命常量（P5 收口：重发常量统一——原 RESEND_S 等散落各写各的） */
 export const RESEND = {
-  /** 大队任务周期重发（秒；T+ 重发保持使命存活） */
-  MISSION_S: 10,
-  /** 使命 TTL 余量（秒；重发间隔 + 余量 = 下发 TTL，防两拍之间掉令） */
-  TTL_PAD: 5,
+  /** 大队任务周期重发（游戏分钟；T+ 重发保持使命存活） */
+  MISSION_S: 10 * GAME_MIN,
+  /** 使命 TTL 余量（游戏分钟；重发间隔 + 余量 = 下发 TTL，防两拍之间掉令） */
+  TTL_PAD: 5 * GAME_MIN,
+} as const;
+
+/** ★ 命令保护（用户定 2026-09-24）：时间+距离保护 + 命令记忆（OrderGate 消费）
+ *  成员指令：走 8m 或卡 4 **游戏分钟**（净<3m）才换目标；反向拉扯拒绝；卡住偏 55° 找没下过的方向 */
+export const DIRECTIVE_GATE = {
+  minMove: 8, retarget: 8, holdS: 4 * GAME_MIN, netMin: 3, forceS: 15 * GAME_MIN,
+  arriveR: 3, persistS: 3 * GAME_MIN, stableM: 2, reverseDot: -0.2, histN: 3, biasDeg: 55,
+} as const;
+
+/** ★ 队长自主令：走 20m 或卡 8 **游戏分钟**（净<4m）才换目标；其余同上 */
+export const LEADER_GATE = {
+  minMove: 20, retarget: 15, holdS: 8 * GAME_MIN, netMin: 4, forceS: 20 * GAME_MIN,
+  arriveR: 6, persistS: 3 * GAME_MIN, stableM: 2, reverseDot: -0.3, histN: 3, biasDeg: 50,
 } as const;

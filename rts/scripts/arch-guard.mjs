@@ -27,7 +27,6 @@ const KNOWN_BIG = new Set([
   'services/map/TerrainMaterial.ts',
   'vendor/player/fluid/FluidSolver.ts',
   'systems/swarm/SwarmCommander.ts',     // 蜂群收口期债务：环形/夹环/兜底/涉水都在这里
-  'systems/swarm/SwarmSystem.ts',
 ]);
 
 const errors = [];

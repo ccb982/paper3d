@@ -24,14 +24,14 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
-import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
+import { SquadTactics, roleBucket, SquadLeaderAI } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
-import { formationOffset } from './Formation';
+import { SquadDispatch } from './SquadDispatch';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
-  roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
+  roleFromCode, orderFromCode, directiveFromCode,
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
@@ -95,8 +95,6 @@ const _flow = { x: 0, z: 0 };
 const _atomDir = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
-/** ★ 成员 uid scratch（编队槽位 rank 基准；容量复用，零分配） */
-const _memberUids: number[] = [];
 export class SwarmSystem {
   /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
   readonly ledger = new SwarmLedger();
@@ -121,6 +119,9 @@ export class SwarmSystem {
   readonly tactics = new SquadTactics();
   /** ★ 步骤 9b：分解节拍（2Hz） */
   private tacticsAccum = 0;
+  /** ★ 队长层成员分派（成员指令唯一写口；命令保护在层内；用户定 2026-09-24 收编） */
+  private readonly dispatch: SquadDispatch;
+  get dirGateDbg(): typeof this.dispatch.dbg { return this.dispatch.dbg; }
   /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
   readonly leaderAI = new SquadLeaderAI();
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
@@ -142,7 +143,6 @@ export class SwarmSystem {
     (x, z) => this.commander.pathMulAt(x, z),
   );
   /** 编队锚点量算复用对象（零分配） */
-  private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
@@ -180,6 +180,20 @@ export class SwarmSystem {
       recentHits: this.recentHits,
       removeAgent: (i, killed, report) => this.removeAgent(i, killed, report),
       noteRecall: (n) => this.ledger.noteRecall(n),
+    });
+    // ★ 队长层成员分派（引擎不再写成员指令/成员任务；引擎只做命令轨 → 交队长调遣）
+    this.dispatch = new SquadDispatch({
+      pool: this.pool,
+      squads: this.squads,
+      tactics: this.tactics,
+      nav: this.nav,
+      world: this.commander,
+      corps: this.commander.corps,
+      memberTasks: this.commander.memberTasks,
+      alerted: (id) => performance.now() / 1000 - (this.recentHits.get(id) ?? -1e9) <= AUTONOMY.SQUAD_ALERT_S,
+      missionOf: (id) => this.commander.missionOf(id),
+      fortify: this.commander.fortify,
+      fortifyPort: this.commander.fortifyPort(),
     });
   }
 
@@ -1109,7 +1123,9 @@ export class SwarmSystem {
   get orderDrops(): number { return this._orderDrops; }
 
   /** ★ 步骤 9b：把小队命令分解成个体指令（池写列；实体经 onDirective 推送） */
+  /** ★ 命令轨（引擎）：到期/未激活 → 不下发；其余交**队长层**调遣（SquadDispatch） */
   private applyOrders(now: number, hooks: SwarmHooks): void {
+    const seenUids = new Set<number>();
     for (const squad of this.squads.all()) {
       const state = this.tactics.board.get(squad.id);
       if (!state) continue;
@@ -1120,76 +1136,9 @@ export class SwarmSystem {
       }
       // ★ 五轴时序/信号：未到生效时刻/未发信号 → 本拍不下发（旧指令自然过期）
       if (!this.tactics.board.isActive(state, now)) continue;
-      // ★ 小队寻路：命令目标不可直达 → 求走廊 waypoint（实体 steer / 代理指令共用）
-      this.nav.ensurePath(this.squads, squad, state, now);
-      const bucket = squadBucket(squad.type);
-      // ★ 编队锚点（与 steerL3 同口径）：命令当前路点 + 前进方向；
-      //   ★ P4 寻路轨优先：队长步令在身 → 锚点 = 当前步（软参考；过期/无步回退命令锚）
-      let ax = state.order.target?.x ?? 0;
-      let az = state.order.target?.z ?? 0;
-      let fx = 1, fz = 0;
-      const hasC = this.squads.centroidOf(squad.id, this._centroid);
-      const stepState = this.tactics.board.getPath(squad.id);
-      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
-      if (stepTgt) {
-        ax = stepTgt.x;
-        az = stepTgt.z;
-      } else if (hasC) {
-        const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, this.commander.terrain);
-        if (tgt) { ax = tgt.x; az = tgt.z; }
-      }
-      // ★ 落点强约束（用户定 2026-09-25）：锚点/站位计算结果也必须在事态环内
-      {
-        const c = this.commander.clampToRing(ax, az);
-        ax = c.x; az = c.z;
-        const w = this.commander.fixWaterTarget(ax, az);   // ★ 锚点落水 → 岸上可站点
-        ax = w.x; az = w.z;
-      }
-      if (hasC) {
-        const adx = ax - this._centroid.x, adz = az - this._centroid.z;
-        const al = Math.hypot(adx, adz);
-        if (al > 1e-3) { fx = adx / al; fz = adz / al; }
-      }
-      // ★ 槽位 rank 基准 = 全员 uid（L3 + 代理同口径，跨 LOD 不换位）
-      _memberUids.length = 0;
-      for (const uid of squad.members.keys()) _memberUids.push(uid);
-      for (const [uid, info] of squad.members) {
-        // ★ 队长管队内：按每个成员的血量分解（残血 → fallback）
-        const hpRatio = info.maxHp > 0 ? info.hp / info.maxHp : 1;
-        const directive = this.tactics.decompose(
-          squad, bucket, now, hpRatio, hooks.mobTactics?.(squad.mobKind) ?? null,
-          this.commander.terrain,
-        );
-        // ★ 队长第二指挥（编队位置）：按 uid rank 下发阵型槽位目标（单例不排阵）
-        if (!squad.singleton) {
-          let rank = 0;
-          for (const m of _memberUids) if (m < uid) rank++;
-          const off = formationOffset(squad.type, rank);
-          directive.targetX = ax + fx * off.fx - fz * off.fz;
-          directive.targetZ = az + fz * off.fx + fx * off.fz;
-        }
-        let found = false;
-        for (let i = 0; i < this.pool.count; i++) {
-          if (this.pool.swarmUid[i] !== uid) continue;
-          this.pool.orderKind[i] = orderCode(state.order.kind);
-          this.pool.orderTargetX[i] = ax;
-          this.pool.orderTargetZ[i] = az;
-          this.pool.orderUntil[i] = state.until;
-          this.pool.orderSeq[i] = state.order.seq;
-          this.pool.directiveKind[i] = directiveCode(directive.kind);
-          this.pool.directiveTargetX[i] = directive.targetX ?? 0;
-          this.pool.directiveTargetZ[i] = directive.targetZ ?? 0;
-          this.pool.directiveWard[i] = directive.wardUid ?? 0;
-          this.pool.directiveUntil[i] = directive.until;
-          this.pool.directiveFire[i] = fireCode(directive.fire);
-          this.pool.directiveSpeedMul[i] = directive.speedMul;
-          this.pool.directiveSeq[i] = directive.seq;
-          found = true;
-          break;
-        }
-        if (!found) hooks.onDirective?.(uid, state.order, directive, state.until);
-      }
+      this.dispatch.run(squad, state, now, hooks, seenUids);
     }
+    this.dispatch.prune(seenUids);
   }
 
   /** 调试/统计：层级计数 */

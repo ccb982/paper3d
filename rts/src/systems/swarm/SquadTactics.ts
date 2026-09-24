@@ -18,6 +18,8 @@ import {
   ensureCovered, standBehindCover, type TerrainCover,
 } from './UnitTactics';
 import { CommandLedger } from './CommandLedger';
+import { OrderGate } from './OrderGate';
+import { LEADER_GATE, GAME_MIN } from './SwarmConfig';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -88,16 +90,16 @@ export interface SquadOrderState {
   anchorZ?: number;
 }
 
-/** 命令 TTL（默认；大队任务更长，覆盖命令更短） */
-export const ORDER_TTL_DEFAULT = 30;
+/** 命令 TTL（默认，**游戏分钟**；大队任务更长，覆盖命令更短） */
+export const ORDER_TTL_DEFAULT = 30 * GAME_MIN;
 /** ★ 使命化 TTL 下限（重构总纲 P3-1；2026-09-22）：分钟级使命/驻守令寿命下限。
  *  基线观测（seed 4242）：正常 2s 决策拍下到期回落=0——"闪烁"主因是重发噪声（P3-3 节流），
  *  本下限是**断供保险**：决策拍断供/帧抖动 >3s 也不掉令，使命寿命与使命匹配。 */
-export const MISSION_TTL_FLOOR = 30;
+export const MISSION_TTL_FLOOR = 30 * GAME_MIN;
 /** 驻守型（分钟级）使命：build/guard/patrol/rear + 默认 hold（含掩体驻守/岗位） */
 const LONG_LIVED_MISSIONS = new Set(['build', 'guard', 'patrol', 'rear', 'hold']);
-/** 个体指令 TTL（弱权限：短 TTL） */
-export const DIRECTIVE_TTL = 6;
+/** 个体指令 TTL（弱权限：短 TTL；**游戏分钟**） */
+export const DIRECTIVE_TTL = 6 * GAME_MIN;
 
 /** 两个目标点是否近似同点（路径缓存沿用判据） */
 function sameTarget(
@@ -525,8 +527,8 @@ export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
   suicide:   { engageR: 34, press: true,  standoff: 0,  retreatHp: 0,    retreatDist: 0 },
 };
 
-/** 命令 TTL（秒） */
-export const LEADER_TTL = 4;
+/** 命令 TTL（**游戏分钟**） */
+export const LEADER_TTL = 4 * GAME_MIN;
 
 /** ★ 队长 AI 需要的评级面（结构化最小子集；避免引入 SquadRating 全量字段） */
 export type LeaderRating = {
@@ -539,6 +541,11 @@ export class SquadLeaderAI {
   private accum = 0;
   /** ★ 接敌滞回（squadId → 上一拍是否已接敌）：避免在 engageR 边界来回切 → 左右摆 */
   private readonly engaged = new Map<number, boolean>();
+  /** ★ 队长自主令命令保护（时间+距离+记忆；用户定 2026-09-24） */
+  private readonly leaderGate = new OrderGate(LEADER_GATE);
+  get leaderGateDbg(): { decide: number; commit: number; keep: number; stuck: number; bias: number } {
+    return this.leaderGate.dbg;
+  }
 
 
   tick(
@@ -557,7 +564,9 @@ export class SquadLeaderAI {
     this.accum += dt;
     if (this.accum < 1) return;
     this.accum = 0;
+    const seen = new Set<number>();
     for (const s of squads.all()) {
+      seen.add(s.id);
       const cur = tactics.board.get(s.id);
       // 引擎命令优先：未过期的引擎命令 → 队长不抢命令轨；但按意图拆步（寻路轨）推进
       if (cur && cur.source === 'engine' && now < cur.until) continue;
@@ -580,9 +589,11 @@ export class SquadLeaderAI {
         this.requestSupport(s.id, r.cx, r.cz, squads, tactics, now);
         const ax = r.cx - px, az = r.cz - pz;
         const len = Math.hypot(ax, az) || 1;
+        const g = this.leaderGate.decide(s.id, 'retreat',
+          r.cx + (ax / len) * strat.retreatDist, r.cz + (az / len) * strat.retreatDist, r.cx, r.cz, now);
         tactics.issue(s.id, {
           kind: 'retreat',
-          target: { x: r.cx + (ax / len) * strat.retreatDist, z: r.cz + (az / len) * strat.retreatDist },
+          target: { x: g.x, z: g.z },
           seq: 0,
         }, now, LEADER_TTL, 'leader');
         continue;
@@ -603,18 +614,22 @@ export class SquadLeaderAI {
       }
       if (strat.press) {
         // 压迫式：直扑玩家（突击/防御/飞行/自爆）
-        tactics.issue(s.id, { kind: 'advance', target: { x: px, z: pz }, seq: 0 }, now, LEADER_TTL, 'leader');
+        const g = this.leaderGate.decide(s.id, 'advance', px, pz, r.cx, r.cz, now);
+        tactics.issue(s.id, { kind: 'advance', target: { x: g.x, z: g.z }, seq: 0 }, now, LEADER_TTL, 'leader');
       } else {
         // 保持距离：站到“射程环”上（玩家 → 队伍方向 × standoff）
         const ax = r.cx - px, az = r.cz - pz;
         const len = Math.hypot(ax, az) || 1;
+        const g = this.leaderGate.decide(s.id, 'advance',
+          px + (ax / len) * strat.standoff, pz + (az / len) * strat.standoff, r.cx, r.cz, now);
         tactics.issue(s.id, {
           kind: 'advance',
-          target: { x: px + (ax / len) * strat.standoff, z: pz + (az / len) * strat.standoff },
+          target: { x: g.x, z: g.z },
           seq: 0,
         }, now, LEADER_TTL, 'leader');
       }
     }
+    this.leaderGate.prune(seen);
   }
 
   /** ★ 步骤 9e：向最近的其他小队发求援（引擎中转；同 from+to 自动去重） */

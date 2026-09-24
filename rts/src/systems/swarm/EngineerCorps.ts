@@ -1,16 +1,17 @@
 // ============================================================
 // EngineerCorps —— 工兵施工链（唯一权威：《工兵架构.md》）
 // ============================================================
-// 职责：施工目标表（buildPieces）/ 阶段（S0-S2）/ 队级分派（环带作业）/
-//       成员分块（MemberTaskBoard）/ 施工执行（挖战壕·造掩体）/ 总攻弃壕。
-// 权力边界：只写成员任务与工事端口；**不下发小队命令**（指挥在 SwarmCommander）。
+// 职责：施工目标表（buildPieces）/ 阶段（S0-S2）/ 队级派件（环带作业）/
+//       施工执行（挖战壕·造掩体）/ 总攻弃壕。
+// 权力边界（用户定 2026-09-24）：引擎给工兵小队**分区/派件**，非必要不管；
+//   成员分块（taskX/Z）在队长层 `EngineerDispatch`；**不下发小队命令**（指挥在 SwarmCommander）。
 // 方向纪律：防线方向只在落地/换落点时由 DefensePlan 确定，不随玩家/危机度重排。
 // 深度纪律：战壕坑底不得低于 -1.2m（不可走硬阈值）→ 到达即封顶（《工兵架构.md》§6）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
 import type { DefensePlan } from './LandingTerrain';
-import type { MemberTaskBoard, TaskSquad } from './MemberTaskBoard';
+import type { TaskSquad } from './MemberTaskBoard';
 
 /** 施工目标块；pri = 施工优先级（**越小越先**：《工兵架构.md》§4） */
 export interface BuildPiece {
@@ -78,10 +79,7 @@ export class EngineerCorps {
   /** ★ 战壕暂停开挖（总攻期等）：**只停派活，不删件**（用户定调：战壕件从不作废） */
   private trenchPaused = false;
 
-  constructor(
-    private readonly host: EngineerHost,
-    private readonly board: MemberTaskBoard,
-  ) {}
+  constructor(private readonly host: EngineerHost) {}
 
   /** 由 DefensePlan 重生成施工目标表（落地/换落点唯一入口） */
   regenerate(plan: DefensePlan): void {
@@ -168,7 +166,7 @@ export class EngineerCorps {
 
   /** 该队是否可施工该类工件（分工过滤 + 暂停过滤）。
    *  ★ `pri >= 3`（fortify 注入的"补评分件"）**不受分工限制**——谁近谁做，防战壕班空转。 */
-  private allows(squadId: number, kind: 'cover' | 'trench', pri?: number): boolean {
+  allows(squadId: number, kind: 'cover' | 'trench', pri?: number): boolean {
     if (!this.canWork(kind)) return false;
     if (pri !== undefined && pri >= 3) return true;
     const r = this.roles.get(squadId) ?? 'any';
@@ -206,98 +204,6 @@ export class EngineerCorps {
     if (anyBest < 0) return -1;
     this.assign.set(squadId, anyBest);
     return anyBest;
-  }
-
-  /** 成员分块（工程并行）：把本队成员分到附近未认领块 → 直写任务目标。
-   *  @returns true = 已派/已持有工件任务；false = 附近无可用工件（调用方转站岗） */
-  spreadBuilders(s: TaskSquad, cx: number, cz: number): boolean {
-    // 战壕工组：已派块是**未建战壕** → 全员按静态环列围住挖到成（不散开抢掩体 → 战壕必成型）
-    const aidx = this.assign.get(s.id);
-    if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
-      const aq = this.pieces[aidx];
-      if (aq.kind === 'trench' && this.allows(s.id, aq.kind, aq.pri) && !this.built.has(keyOf(aq))) {
-        let k0 = 0;
-        for (const uid of s.members.keys()) {
-          const a = (k0++ / s.members.size) * Math.PI * 2;
-          this.board.write(uid, aq.x + Math.cos(a), aq.z + Math.sin(a));
-        }
-        this.board.own(s.id);
-        return true;
-      }
-    }
-    // ★ 注入件（pri≥3 = 要塞位置函数输出）→ **直接作焦点**：队长任务（订单目标=件点）已足够，
-    //   队友跟队长过来即可；**不写成员任务**（成员任务不驱动移动，construct 只认 5m 近身）
-    if (aidx !== undefined && aidx >= 0 && aidx < this.pieces.length) {
-      const aq = this.pieces[aidx];
-      if (aq.pri >= 3 && this.allows(s.id, aq.kind, aq.pri)
-        && !this.built.has(keyOf(aq)) && !this.gated(aq)) {
-        this.focus.set(s.id, aidx);
-        return true;
-      }
-    }
-    // 焦点驻守：本队正在建的块 → 全员按**静态环列**围到焦点块（无随机抖动）→ 到点站定等挖
-    const fidx = this.focus.get(s.id);
-    if (fidx !== undefined && fidx >= 0 && fidx < this.pieces.length
-      && this.allows(s.id, this.pieces[fidx].kind, this.pieces[fidx].pri)
-      && !this.built.has(keyOf(this.pieces[fidx]))
-      && !this.gated(this.pieces[fidx])) {
-      const q = this.pieces[fidx];
-      let i = 0;
-      for (const uid of s.members.keys()) {
-        const a = (i++ / s.members.size) * Math.PI * 2;
-        this.board.write(uid, q.x + Math.cos(a), q.z + Math.sin(a));
-      }
-      this.board.own(s.id);
-      return true;
-    }
-    let near: number[] = [];
-    let nearest = -1, nearestD = Infinity;
-    for (let i = 0; i < this.pieces.length; i++) {
-      const q = this.pieces[i];
-      if (this.built.has(keyOf(q))) continue;
-      if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不派）
-      if (!this.allows(s.id, q.kind)) continue;
-      const d2 = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-      if (d2 > 90 * 90) continue;
-      if (this.lineBlocked(cx, cz, q.x, q.z)) continue;   // 直行遇墙 → 跳过（会原地磨蹭）
-      if (d2 < nearestD) { nearestD = d2; nearest = i; }
-      if (d2 <= 40 * 40 && near.length < 3) near.push(i);
-    }
-    // 40m 内无可达块 → 取**直线可达**的全局最近块（防止把目标派到墙对面）
-    if (near.length === 0 && nearest >= 0) near = [nearest];
-    if (near.length === 0) {
-      // 兜底：直线全被墙挡 → 目标挂到本队已派块（工程队始终有"走向工件"的行军任务）
-      const idx = this.assign.get(s.id);
-      if (idx === undefined || idx < 0 || idx >= this.pieces.length) return false;
-      if (this.built.has(keyOf(this.pieces[idx])) || this.gated(this.pieces[idx])
-        || !this.allows(s.id, this.pieces[idx].kind, this.pieces[idx].pri)) return false;
-      const q = this.pieces[idx];
-      for (const uid of s.members.keys()) {
-        this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
-      }
-      this.board.own(s.id);
-      return true;
-    }
-    // 成员分块：目标仍为有效可达块就**不重写**（到点静立 → 修全天转圈）
-    const claimed = new Set<number>();
-    for (const uid of s.members.keys()) {
-      const cur = this.board.taskOf(uid);
-      if (cur && this.keepsTask(cur.x, cur.z, near)) continue;
-      let bi = -1, bD = Infinity;
-      for (let k2 = 0; k2 < near.length; k2++) {
-        const qi = near[k2];
-        if (claimed.has(qi)) continue;
-        const q = this.pieces[qi];
-        const d = (q.x - cx) ** 2 + (q.z - cz) ** 2;
-        if (d < bD) { bD = d; bi = qi; }
-      }
-      if (bi < 0) bi = near[0];
-      claimed.add(bi);
-      const q = this.pieces[bi];
-      this.board.write(uid, Math.round(q.x * 10) / 10, Math.round(q.z * 10) / 10);
-    }
-    this.board.own(s.id);
-    return true;
   }
 
   /** 施工（2s 拍调用；逐步拼装，仅 S1）：认准一块挖/建到成 → 战壕肉眼可见 */
@@ -372,7 +278,7 @@ export class EngineerCorps {
 
   /** 直行可达性：从 (x0,z0) 直线到工件是否跨硬墙（每 1.5m 一采样）。
    *  任务目标是直线行走的；中途碰墙会被 steer-escape 抵消 → 原地磨蹭。 */
-  private lineBlocked(x0: number, z0: number, x1: number, z1: number): boolean {
+  lineBlocked(x0: number, z0: number, x1: number, z1: number): boolean {
     const dx = x1 - x0, dz = z1 - z0;
     const d = Math.hypot(dx, dz);
     const n = Math.ceil(d / 1.5);
@@ -384,12 +290,4 @@ export class EngineerCorps {
     return false;
   }
 
-  /** 当前任务仍是"候选可达未建块" → 保持（到达也不重写，建完才换下块 → 杜绝转圈） */
-  private keepsTask(tx: number, tz: number, near: number[]): boolean {
-    for (const qi of near) {
-      const q = this.pieces[qi];
-      if (Math.hypot(q.x - tx, q.z - tz) <= 0.6) return true;
-    }
-    return false;
-  }
 }
