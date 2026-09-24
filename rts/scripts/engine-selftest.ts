@@ -31,6 +31,7 @@ import { SectorManager } from '../src/systems/swarm/engine/SectorManager.ts';
 import { EngineCore } from '../src/systems/swarm/engine/EngineCore.ts';
 import { EngineBridge } from '../src/systems/swarm/engine/EngineBridge.ts';
 import { SquadCore } from '../src/systems/swarm/squad/SquadCore.ts';
+import { decideChain } from '../src/systems/swarm/engine/DecisionChain.ts';
 import type { SquadReport } from '../src/systems/swarm/engine/contracts.ts';
 import type { SquadOrder } from '../src/systems/swarm/engine/contracts.ts';
 import { STUCK } from '../src/systems/swarm/SwarmConfig.ts';
@@ -558,6 +559,30 @@ console.log('[15] 接线补全（攻击队列 1Hz + 统一计时挂相位）');
   let t = 1;
   for (let i = 0; i < 30; i++) { t += 1; br.tick(1.0, t); }
   ok(br.timers.dbg.expiredTotal >= 1 || br.dbg.last.includes('expire'), '静止实体到期（统一计时生效）');
+}
+
+// ---------- DecisionChain 显式优先链 ----------
+console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
+{
+  const base = {
+    playerOrder: false, hpRatio: 1, atRingMax: false, underAttack: false,
+    intervention: null, routine: { x: 10, z: 0 }, px: 0, pz: 0,
+  };
+  ok(decideChain({ ...base, playerOrder: true }) === null, '① 玩家令在身 → 引擎不产令');
+  const w = decideChain({ ...base, hpRatio: 0.4 });
+  ok(w?.source === 'wounded' && w.kind === 'march' && w.target?.x === 0, '② 重伤 → 撤回基准点');
+  const s1 = decideChain({ ...base, atRingMax: true });
+  ok(s1?.source === 'situation' && s1.kind === 'defend', '③ 到上限 → 防御');
+  const s2 = decideChain({ ...base, underAttack: true });
+  ok(s2?.kind === 'protect', '③ 被打 → 保护');
+  const iv = decideChain({ ...base, intervention: { x: 99, z: 0 } });
+  ok(iv?.source === 'intervention' && iv.target?.x === 99, '④ 干预优先于常规');
+  const rt = decideChain(base);
+  ok(rt?.source === 'routine' && rt.kind === 'act', '⑤ 常规部署');
+  ok(decideChain({ ...base, routine: null }) === null, '全不成立 → null（保持现状）');
+  // 优先级：重伤 > 事态 > 干预
+  ok(decideChain({ ...base, hpRatio: 0.2, atRingMax: true, intervention: { x: 1, z: 1 } })?.source === 'wounded', '重伤压过事态/干预');
+  ok(decideChain({ ...base, atRingMax: true, intervention: { x: 1, z: 1 } })?.source === 'situation', '事态压过干预');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

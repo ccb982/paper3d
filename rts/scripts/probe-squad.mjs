@@ -17,7 +17,7 @@ const browser = await puppeteer.launch({
   executablePath: CHROME_PATH, headless: 'new', protocolTimeout: 3e5, args: ['--no-sandbox'],
 });
 const page = await browser.newPage();
-await page.goto(`${RTS_URL}?seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction(() => window.__rts?.phase === 'world' && window.__rts?.swarm, { timeout: 240000, polling: 500 });
 await new Promise((r) => setTimeout(r, 15000));
 
@@ -118,4 +118,16 @@ for (const k of stalls.slice(0, 6)) {
   console.log('  ---');
 }
 console.log('最近卡死现场:', samples[samples.length - 1].stuckLast || '(无)');
+
+// ★ 新引擎（?swarm=new）健全性（重写 P4；G9 调试口契约）
+{
+  const url = page.url();
+  if (url.includes('swarm=new')) {
+    const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+    const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
+    console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
+    if (!okNe) process.exitCode = 1;
+  }
+}
+
 await browser.close();

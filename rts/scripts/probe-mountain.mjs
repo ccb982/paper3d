@@ -311,5 +311,17 @@ console.log(`池 ${final.pool} · L3 ${final.l3} · orderDrops ${final.orderDrop
 const pageErrs = errs.filter((e) => e.startsWith('[pageerror]'));
 console.log('errors =', errs.length ? errs.slice(0, 4).join('\n') : '(none)');
 await page.screenshot({ path: 'diag-mountain.png' });
+
+// ★ 新引擎（?swarm=new）健全性（重写 P4；G9 调试口契约）
+{
+  const url = page.url();
+  if (url.includes('swarm=new')) {
+    const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+    const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
+    console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
+    if (!okNe) process.exitCode = 1;
+  }
+}
+
 await browser.close();
 if (pageErrs.length) process.exitCode = 1;

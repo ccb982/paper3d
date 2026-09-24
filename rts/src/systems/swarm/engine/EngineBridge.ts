@@ -18,7 +18,7 @@ import { FlyerManager } from './FlyerManager';
 import { EngineerManager } from './EngineerManager';
 import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { validateOrder } from './OrderValidator';
-import { selectComposite } from './Composites';
+import { decideChain } from './DecisionChain';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -211,6 +211,7 @@ export class EngineBridge {
   private write(now: number): void {
     const p = this.pos.player();
     if (!p) return;
+    const hitId = this.live.playerAttacking?.() ?? 0;
     const sibsOf = (role: MobRole, self: number) => {
       const out: { id: number; role: string; x: number; z: number }[] = [];
       const mgr = role === 'melee' ? this.melee : role === 'ranged' ? this.ranged : role === 'flyer' ? this.flyer : this.engineer;
@@ -221,15 +222,30 @@ export class EngineBridge {
     for (const rec of [...this.squads.all()]) {
       const mgr = rec.role === 'melee' ? this.melee : rec.role === 'ranged' ? this.ranged : rec.role === 'flyer' ? this.flyer : this.engineer;
       const t = mgr.targets.get(rec.id);
-      if (!t) continue;
-      const v = validateOrder(rec.id, t.x, t.z, {
+      const sp = this.pos.squad(rec.id);
+      // ★ 显式优先链（单源决策）：玩家>重伤>事态>干预>常规（不靠调用顺序）
+      const cur = this.writer.store.get(rec.id);
+      const dec = decideChain({
+        playerOrder: cur !== undefined && cur.order.source === 'player',
+        hpRatio: 1,
+        atRingMax: this.dbg.ringMax > 0 && sp !== null && Math.hypot(sp.x - p.x, sp.z - p.z) >= this.dbg.ringMax,
+        underAttack: hitId === rec.id || this.protect.linkOf(rec.id) !== undefined,
+        intervention: null,
+        routine: t ?? null,
+        px: p.x,
+        pz: p.z,
+      });
+      if (!dec) continue;   // 玩家令在身 / 无决策 → 引擎不产令
+      // 防御=守原地（target 为空时用当前位置）
+      const tx = dec.target ? dec.target.x : sp?.x ?? p.x;
+      const tz = dec.target ? dec.target.z : sp?.z ?? p.z;
+      const v = validateOrder(rec.id, tx, tz, {
         px: p.x, pz: p.z, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax,
         role: rec.role, siblings: sibsOf(rec.role, rec.id), canReach: this.live.canReach,
       });
       if (!v.ok) continue;
-      const kind = selectComposite({ d: Math.hypot(v.x - p.x, v.z - p.z), ringMax: this.dbg.ringMax, hasProtect: this.protect.linkOf(rec.id) !== undefined });
       const order: SquadOrder = {
-        kind, source: 'engine', target: { x: v.x, z: v.z },
+        kind: dec.kind, source: 'engine', target: { x: v.x, z: v.z },
         anchor: this.protect.linkOf(rec.id)?.anchor,
         roe: 'engage', seq: 0, ttl: 0,
       };
