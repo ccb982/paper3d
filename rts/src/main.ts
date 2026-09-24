@@ -623,7 +623,21 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; } };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+    /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
+    newEngine: shadowBridge ? () => ({
+      ticks: shadowBridge!.dbg.ticks,
+      shadow: shadowBridge!.shadow,
+      squads: { ...shadowBridge!.squads.dbg },
+      melee: { ...shadowBridge!.melee.dbg },
+      ranged: { ...shadowBridge!.ranged.dbg },
+      flyer: { ...shadowBridge!.flyer.dbg },
+      engineer: { ...shadowBridge!.engineer.dbg },
+      writer: { ...shadowBridge!.writer.dbg },
+      protect: { ...shadowBridge!.protect.dbg },
+      pos: { ...shadowBridge!.pos.dbg },
+      sectors: { ...shadowBridge!.sectors.dbg },
+    }) : null };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

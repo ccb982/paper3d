@@ -62,6 +62,7 @@ export class EngineBridge {
   private readonly core: EngineCore;
 
   constructor(private readonly live: LiveView) {
+    this.sectors.build(4);   // 默认四扇区（引擎初始化）
     this.melee = new MeleeManager(this.squads);
     this.ranged = new RangedManager(this.squads);
     this.flyer = new FlyerManager(this.squads);

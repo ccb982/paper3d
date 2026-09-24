@@ -226,6 +226,17 @@ const checks = [
   ['寻路已产出', (last.trace?.paths ?? 0) > 0],
   ['工事建成 > 0', built.built > 0],
 ];
+// ★ 新引擎（?swarm=new）：调试口契约 + 健全性（重写 P4；G9）
+const wantNew = RTS_URL.includes('swarm=new');
+const ne = wantNew ? await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null) : null;
+if (wantNew) {
+  checks.push(
+    ['新引擎在跑（ticks>0）', !!ne && ne.ticks > 0],
+    ['新引擎小队已登记', !!ne && ne.squads.count > 0],
+    ['唯一发令器有台账', !!ne && ne.writer.issued + ne.writer.kept > 0],
+    ['位置单源有玩家+舰船', !!ne && ne.pos.player === true && ne.pos.ship === true],
+  );
+}
 const pass = checks.filter(([, ok]) => ok).length;
 for (const [name, ok] of checks) if (!ok) console.error(`  FAIL  ${name}`);
 console.log(`基线断言: ${pass}/${checks.length} ${pass === checks.length ? 'PASS' : 'FAIL'}`);
