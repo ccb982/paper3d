@@ -2,8 +2,8 @@
 // SteerPick —— 执行层移动方向选择（16 向 + hold；★ 禁止向量合成）
 // ============================================================
 // 每决策拍：候选方向逐个打分 → softmax 抽样 → 选定后**承诺 0.3s**（到期才重选）。
-//   打分特征：朝期望方向（路径/指令，cos 夹角）、表分（邻域地形价值）、人群惩罚（与分离反向）；
-//   硬否决：危险地形（墙/坑/水）——分离/避障**不产生方向**，只做惩罚与否决。
+//   打分特征：朝期望方向（路径/指令，cos 夹角）、表分（邻域地形价值）、人群惩罚（与分离反向）、掩体脚印惩罚；
+//   硬否决：危险地形（墙/坑）——分离/避障**不产生方向**，只做惩罚与否决；水=正常地块（不否决）。
 // 状态（承诺方向/到期）由调用方持有（复用 AgentPool.safeDirX/safeDirZ/hazardTimer）。
 // 输出用模块单例对象（零分配热点路径）。
 // ============================================================
@@ -15,6 +15,17 @@ export interface SteerTable {
   scoreTypeAt?(type: string, x: number, z: number): number | null;
   /** ★ 水域查询（可选）：在水中时提高"上岸"方向的权重 */
   isWaterAt?(x: number, z: number): boolean;
+  /** ★ 爬山/涉水基础方法（可选；TerrainAssist 消费）：坡梯度 / 直线可走 / 硬边界 / 掩体脚印 */
+  slopeGradAt?(x: number, z: number): { gx: number; gz: number; mag: number };
+  walkableLine?(ax: number, az: number, bx: number, bz: number): boolean;
+  blockedAt?(x: number, z: number): boolean;
+  coverAt?(x: number, z: number): boolean;
+  heightAt?(x: number, z: number): number;
+}
+
+/** 取全局表桥（实体侧 TerrainAssist 用；未接入 → null） */
+export function getSteerTable(): SteerTable | null {
+  return globalTable;
 }
 
 export interface SteerOut {
@@ -33,6 +44,13 @@ export function setSteerTable(t: SteerTable | null): void {
 
 /** 复用输出（零分配） */
 export const steerOut: SteerOut = { x: 0, z: 0, hold: false, until: 0 };
+
+/** ★ 探针（诊断用）：最近一次打分明细 */
+export const steerScores = new Float32Array(16);
+export const steerDbg = {
+  desiredX: 0, desiredZ: 0, insideBlocked: false, heldValid: false,
+  bestK: -1, pickK: -1, heldK: -1, any: false, ret: 'none' as 'pick' | 'commit' | 'hyst' | 'hold' | 'none',
+};
 
 /** 候选方向数（16 向） */
 const DIR_N = 16;
@@ -54,8 +72,9 @@ const W_TABLE = 0.8;
 const W_AVOID = 1.0;
 /** ★ 已在硬边界里时的逃离权重（优先选可走方向） */
 const ESCAPE_W = 1.4;
-/** ★ 在水里时的"上岸"权重（允许站水里，只是更想上岸） */
-const W_SHORE = 1.0;
+
+/** ★ 掩体脚印惩罚（过掩体优化：优先绕行；沿路且对齐时仍可顶上去爬） */
+const W_COVER = 1.2;
 /** 表分归一（分数量级 ±6） */
 const TABLE_NORM = 6;
 
@@ -93,7 +112,7 @@ export function pickSteer(
   const ax = al > 1e-4 ? avoidX / al : 0;
   const az = al > 1e-4 ? avoidZ / al : 0;
   const aMag = Math.min(1, al);
-  const inWater = tbl?.isWaterAt ? tbl.isWaterAt(x, z) : false;
+
   // ★ 上一方向（承诺中且未被否决 → 作为转向惯性/迟滞基准）
   const heldValid = (heldX !== 0 || heldZ !== 0)
     && !danger(x + heldX * PROBE, z + heldZ * PROBE);
@@ -101,6 +120,9 @@ export function pickSteer(
   let any = false;
   let sum = 0;
   let bestS = -Infinity;
+  steerDbg.desiredX = desiredX; steerDbg.desiredZ = desiredZ;
+  steerDbg.insideBlocked = insideBlocked; steerDbg.heldValid = heldValid;
+  steerDbg.bestK = -1; steerDbg.pickK = -1; steerDbg.heldK = -1; steerDbg.ret = 'none';
   for (let k = 0; k < DIR_N; k++) {
     const a = (k / DIR_N) * Math.PI * 2;
     const cx = Math.cos(a), cz = Math.sin(a);
@@ -115,36 +137,40 @@ export function pickSteer(
         ? tbl.scoreTypeAt(unitType, x + cx * PROBE, z + cz * PROBE)
         : tbl.scoreAt(x + cx * PROBE, z + cz * PROBE);
       if (ts !== null) s += W_TABLE * Math.max(-1, Math.min(1, ts / TABLE_NORM));
-      // ★ 水中：往岸上走的权重（允许站水里，只是更想上岸）
-      if (inWater && tbl.isWaterAt) {
-        s += tbl.isWaterAt(x + cx * PROBE, z + cz * PROBE) ? -W_SHORE : W_SHORE;
-      }
+      // ★ 过掩体优化：候选点落在掩体脚印 → 惩罚（优先绕行，不硬否）
+      if (tbl.coverAt && tbl.coverAt(x + cx * PROBE, z + cz * PROBE)) s -= W_COVER;
     }
     if (aMag > 0.05) s -= W_AVOID * aMag * Math.max(0, cx * ax + cz * az);
     if (heldValid) s += W_TURN * (cx * heldX + cz * heldZ);   // ★ 转向惯性（同向加分）
     _scores[k] = s;
+    steerScores[k] = s;
     any = true;
-    if (s > bestS) bestS = s;
+    if (s > bestS) { bestS = s; steerDbg.bestK = k; }
     sum += Math.exp(s / TEMP);
   }
   if (!any) {
     steerOut.x = 0; steerOut.z = 0; steerOut.hold = true; steerOut.until = 0;
+    steerDbg.ret = 'hold';
     return steerOut;
   }
   // ★ 承诺：未到期且承诺方向未被否决 → 保持（不再抽样）；在禁区里不承诺，立刻逃离
-  if (!insideBlocked && heldValid) {
-    if (heldUntil > now) {
-      steerOut.x = heldX; steerOut.z = heldZ; steerOut.hold = false; steerOut.until = heldUntil;
-      return steerOut;
-    }
-    // ★ 迟滞：承诺到期后，旧方向只要不差（≥最佳/1.12）就续用 → 抑制左右摆
+  // ★ 2026-09-24：承诺/迟滞**不保护与期望相反的方向**（否则"下令往西却一直承诺往东"——水/穿湖不动的元凶）
+  const heldAlign = heldX * ux + heldZ * uz;
+  if (!insideBlocked && heldValid && heldAlign > -0.2) {
     const hi = Math.round(
       (((Math.atan2(heldZ, heldX) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2)) * DIR_N,
     ) % DIR_N;
+    if (heldUntil > now) {
+      steerOut.x = heldX; steerOut.z = heldZ; steerOut.hold = false; steerOut.until = heldUntil;
+      steerDbg.ret = 'commit'; steerDbg.heldK = hi;
+      return steerOut;
+    }
+    // ★ 迟滞：承诺到期后，旧方向只要不差（≥最佳/1.12）就续用 → 抑制左右摆
     const hs = _scores[hi];
     if (hs > -Infinity && hs * SWITCH_MARGIN >= bestS) {
       steerOut.x = _cx[hi]; steerOut.z = _cz[hi]; steerOut.hold = false;
       steerOut.until = now + COMMIT_S;
+      steerDbg.ret = 'hyst'; steerDbg.heldK = hi;
       return steerOut;
     }
   }
@@ -160,5 +186,6 @@ export function pickSteer(
   }
   steerOut.x = _cx[pick]; steerOut.z = _cz[pick];
   steerOut.hold = false; steerOut.until = now + COMMIT_S;
+  steerDbg.ret = 'pick'; steerDbg.pickK = pick;
   return steerOut;
 }

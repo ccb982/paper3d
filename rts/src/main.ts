@@ -47,6 +47,8 @@ import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
+import { GAME_MIN } from './systems/swarm/SwarmConfig';
+import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -215,7 +217,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.commander.defensePlan, { x: spawn.x, z: spawn.z });
   // ★ 事态环形夹取：**引擎令 + 队长自主令同门**（SquadTactics.issue 内夹取）
   swarm.tactics.ringClamp = (x, z) => swarm.commander.clampToRing(x, z);
-  swarm.tactics.waterFix = (x, z) => swarm.commander.fixWaterTarget(x, z);   // ★ 落水目标 → 岸上可站点（队长令同门）
+
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
   hooks.tierPort = spawner;
   hooks.activeUnits = () => enemies;
@@ -390,9 +392,47 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     updateApronLighting(sun.current);
   };
 
+  // ★ 手动放敌人接口（用户定 2026-09-24，调试）：B 切换放置模式 → 左键点地放一窝（**可放水里**）；
+  //   右键点地 = 强制移动令（玩家源，选中队全员 advance）——用于手测"掉水里能不能出来"
+  let placeMode = false;
+  const placeHint = document.createElement('div');
+  placeHint.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);padding:4px 10px;background:rgba(20,28,40,0.85);color:#9fe3ff;font:12px Consolas,monospace;border:1px solid rgba(90,160,220,0.6);border-radius:4px;display:none;z-index:901;pointer-events:none;';
+  document.body.appendChild(placeHint);
+  const groundAt = (cx: number, cy: number): { x: number; z: number } | null => {
+    const rc = new THREE.Raycaster();
+    rc.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
+    const hit = rc.intersectObjects(scene.children, true)[0];
+    return hit ? { x: hit.point.x, z: hit.point.z } : null;
+  };
+  /** ★ 手动放置一窝敌兵（force：可放水里/坑里；调试接口，探针同口） */
+  const placeEnemyAt = (x: number, z: number): boolean => {
+    const def = mobDefs.find((d) => d.canBuild !== true && d.isAir !== true) ?? mobDefs[0];
+    return def ? spawner.spawnOne(def, x, 0, z, undefined, -1, true) : false;
+  };
+  /** ★ 强制移动令（玩家源；选中队全体 advance）→ 返回发令队数（调试接口，探针同口） */
+  const forceMoveSelectionTo = (x: number, z: number): number => {
+    const seen = new Set<number>();
+    const nowS = performance.now() / 1000;
+    for (const hh of enemyMgr.selected()) {
+      const sq = swarm.squads.squadOf(hh.uid);
+      if (!sq || seen.has(sq.id)) continue;
+      seen.add(sq.id);
+      swarm.tactics.issue(sq.id,
+        { kind: 'advance', target: { x, z }, anchor: { x, z }, roe: 'engage', seq: 0 },
+        nowS, 30 * GAME_MIN, 'player');
+      orders.issue({ kind: 'advance', target: { x, z }, source: 'player', roe: 'engage', ttl: 30 * GAME_MIN });
+    }
+    return seen.size;
+  };
   const keys = new Set<string>();
   addEventListener('keydown', (e) => {
     keys.add(e.code);
+    if (e.code === 'KeyB') {
+      placeMode = !placeMode;
+      placeHint.style.display = placeMode ? 'block' : 'none';
+      placeHint.textContent = '放置模式：左键点地放敌兵（可放水里）· 右键点地=强制移动令 · 再按 B 退出';
+      renderer.domElement.style.cursor = placeMode ? 'crosshair' : '';
+    }
     if (e.code === 'BracketLeft') cam.pitch = clamp(cam.pitch + 0.08, 0.12, 1.45);
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
     if (e.code === 'Escape') { if (navMap.visible) navMap.close(); else enemyMgr.clear(); }
@@ -414,6 +454,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   let dragging = false, lastX = 0, lastY = 0;
   let boxing = false, boxX0 = 0, boxY0 = 0, boxMoved = 0;
   renderer.domElement.addEventListener('mousedown', (e) => {
+    if (placeMode && e.button === 0) {         // ★ 放置模式：左键点地放一窝（force：可放水里/坑里）
+      const g = groundAt(e.clientX, e.clientY);
+      if (g) placeEnemyAt(g.x, g.z);
+      return;
+    }
     if (e.button === 2) {                      // 右键 = 选/框选
       boxing = true; boxMoved = 0;
       boxX0 = e.clientX; boxY0 = e.clientY;
@@ -436,6 +481,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (boxMoved < 6) {
       const h = enemyMgr.pickAt(e.clientX, e.clientY);
       if (h) enemyMgr.select([h], e.shiftKey);
+      else if (enemyMgr.selected().length > 0) {
+        // ★ 强制移动令（玩家源，调试/手测）：右键点地 → 选中队全体 advance（玩家令优先，引擎不覆盖）
+        const g = groundAt(e.clientX, e.clientY);
+        if (g) forceMoveSelectionTo(g.x, g.z);
+      }
       else if (!e.shiftKey) enemyMgr.clear();
     } else {
       enemyMgr.select(enemyMgr.pickBox(boxX0, boxY0, e.clientX, e.clientY), e.shiftKey);
@@ -495,7 +545,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池
     aiCtx.dt = h; aiCtx.time += h;
     aiCtx.target = aiCtx.findTarget('enemy');
-    aiCtx.focusX = spawn.x; aiCtx.focusZ = spawn.z;
+    aiCtx.focusX = cam.tx; aiCtx.focusZ = cam.tz;   // ★ AI 激活焦点=相机（RTS 调试：看哪哪活；原=舰船 → 远处手放敌人休眠）
     aiSystem.updateAll(h, aiCtx);
     for (const e of enemies) charClamp.update(e, h);   // ★ 贴地/悬停/掉坑结算
     explosionFx.update(h);
@@ -552,7 +602,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, get speed(): number { return speed; } };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; } };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----

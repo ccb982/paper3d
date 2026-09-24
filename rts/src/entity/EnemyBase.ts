@@ -135,6 +135,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   get fireHold(): boolean { return this.brain.fireHold; }
   /** ★ E5：本段移动原子下标（255 = 无覆盖） */
   get atomMove(): number { return this.brain.atomMove; }
+  /** 探针：移动器承诺方向（诊断用） */
+  get locomotionHeld(): { x: number; z: number; until: number } { return this.locomotion.heldDbg; }
   /** ★ E5：是否眩晕中（行为器判定） */
   get isStunned(): boolean { return this.brain.isStunned; }
 
@@ -521,7 +523,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       this.controller.moveDir.y = 0;
       return;
     }
-    this.controller.moveToward(r.x, r.z, dt, speed);
+    this.controller.moveToward(r.x, r.z, dt, speed);   // ★ 水=正常地块（无限速）
     // 贴片朝向 = 移动方向（绕 Y 旋转：+z 指向移动方向）
     if (Math.abs(r.x) > 0.001 || Math.abs(r.z) > 0.001) {
       this.presentation.yawBase = Math.atan2(r.x, r.z);

@@ -40,6 +40,7 @@ import {
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import { pickSteer } from '../../entity/SteerPick';
+import { fallLineBlend } from '../../entity/TerrainAssist';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
 import { SwarmRecovery } from './SwarmRecovery';
@@ -95,6 +96,7 @@ const _flow = { x: 0, z: 0 };
 const _atomDir = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
+const _dir = { x: 0, z: 0 };   // ★ 地形辅助 scratch（坡正面混合；零分配）
 export class SwarmSystem {
   /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
   readonly ledger = new SwarmLedger();
@@ -119,7 +121,7 @@ export class SwarmSystem {
   readonly tactics = new SquadTactics();
   /** ★ 步骤 9b：分解节拍（2Hz） */
   private tacticsAccum = 0;
-  /** ★ 队长层成员分派（成员指令唯一写口；命令保护在层内；用户定 2026-09-24 收编） */
+  /** ★ 队长层成员分派（成员指令唯一写口；用户定 2026-09-24 收编） */
   private readonly dispatch: SquadDispatch;
   get dirGateDbg(): typeof this.dispatch.dbg { return this.dispatch.dbg; }
   /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
@@ -809,19 +811,10 @@ export class SwarmSystem {
       dx = _atomDir.x;
       dz = _atomDir.z;
     }
-    // ★ 坡面优化（用户定 2026-09-24）：上坡必须**从坡正面**（沿梯度/fall line 直上，不斜切横穿）——
-    //   期望方向含上坡分量且局部坡显著 → 向"最陡上升方向"混合（飞行层豁免）
-    if ((dx !== 0 || dz !== 0) && p.isAir[i] !== 1) {
-      const g = this.commander.slopeGradAt(p.x[i], p.z[i]);
-      if (g.mag > 0.18) {
-        const up = dx * g.gx + dz * g.gz;
-        if (up > 0.15) {   // 正在上坡 → 贴坡正面走
-          dx = dx * 0.4 + g.gx * 0.6;
-          dz = dz * 0.4 + g.gz * 0.6;
-          const l = Math.hypot(dx, dz) || 1;
-          dx /= l; dz /= l;
-        }
-      }
+    // ★ 爬山（共享基础方法 TerrainAssist；L2/L3 同内核）：坡正面混合（水=正常地块，无特殊）
+    if (p.isAir[i] !== 1) {
+      fallLineBlend(this.commander, p.x[i], p.z[i], dx, dz, _dir);
+      dx = _dir.x; dz = _dir.z;
     }
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
     const inside = this.commander.blockedAt(p.x[i], p.z[i]);
@@ -850,7 +843,7 @@ export class SwarmSystem {
       );
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 执行层：限速（默认 1）
+        const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 水=正常地块（无限速）
         p.x[i] += res.x * sp;
         p.z[i] += res.z * sp;
         p.yaw[i] = Math.atan2(res.x, res.z);
@@ -858,15 +851,13 @@ export class SwarmSystem {
     }
     // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
     if (_sep.x !== 0 || _sep.z !== 0) {
-      p.x[i] += _sep.x;
-      p.z[i] += _sep.z;
+      p.x[i] += _sep.x; p.z[i] += _sep.z;
     }
   }
 
   // ============================================================
   // 攻击槽 / 移除清理
   // ============================================================
-
   /** 占槽：取离自己最近的空扇区（无空位 → -1，直走目标） */
   private claimSlot(i: number, tk: number, gx: number, gz: number, px: number, pz: number): number {
     const owners = this.slotOwner[tk];

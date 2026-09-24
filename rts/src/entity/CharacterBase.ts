@@ -20,6 +20,7 @@ import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
+import { SHORE_CLIMB_MAX } from "./TerrainAssist";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
@@ -73,11 +74,15 @@ export abstract class CharacterBase extends EntityBase {
   private static readonly CLIMB_HOLD = 0.25;
   /** 攀爬时长（秒） */
   private static readonly CLIMB_TIME = 0.45;
+  /** ★ 过掩体优化：翻越后冷却（毫秒；防来回翻） */
+  private static readonly CLIMB_CD_MS = 1200;
   private climbT = -1;
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
   private climbToX = 0; private climbToY = 0; private climbToZ = 0;
   private climbContactT = 0;
   private climbCand: { top: number; ix: number; iz: number } | null = null;
+  /** ★ 过掩体优化：翻越后冷却（毫秒时间戳；防"翻过去又被推回来"来回翻） */
+  private climbCdUntil = 0;
   /** ★ 是否正在攀爬（CharacterClamp 跳过贴地，避免抢位置） */
   get isClimbing(): boolean { return this.climbT >= 0; }
 
@@ -139,6 +144,10 @@ export abstract class CharacterBase extends EntityBase {
     //   实现"跳跃无向墙壁速度"。
     let dx = dir.x * speed * dt;
     let dz = dir.y * speed * dt;
+    // ★ 涉水优化（用户定 2026-09-24）：**在水中 → 允许爬岸**（≤SHORE_CLIMB_MAX），
+    //   治"掉水里卡死在岸边"（岸坎 >0.6m 时原逻辑把水平位移清零 → 永远出不来）
+    const wetHere = RasterMap.current?.tileDefAt(prevX, prevZ).genRole === 'liquid';
+    const stepLimit = wetHere ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
     // ★ 立面阻挡：boss4D 玩家（requireRealLanding）与受限爬崖单位（blockCliffClimb，
     //   敌人）共用——朝壁方向位移分量清零；blockCliffClimb 单位放行"插值坡"
     //   （陡升但仍在延续 = 坡），requireRealLanding 保持原严格逻辑（>0.5 即挡）
@@ -154,7 +163,7 @@ export abstract class CharacterBase extends EntityBase {
         const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
           const h1 = raster.surfaceHeightAtFor(sx, sz, p0.y);
           const rise = h1 - gyHere;
-          if (rise <= EDGE_CLIFF_BAND) return false;
+          if (rise <= stepLimit) return false;   // 水中 → 爬岸上限放宽到 SHORE_CLIMB_MAX
           if (!this.blockCliffClimb) return true; // boss4D 玩家：原逻辑
           const h2 = raster.surfaceHeightAtFor(sx + ux * 0.8, sz + uz * 0.8, p0.y);
           return h2 - h1 < rise * 0.5;
@@ -179,7 +188,7 @@ export abstract class CharacterBase extends EntityBase {
       //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.6) 以上 → 回退，
       //   0.6 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
-      if (!this.climbAnyTerrain && gy - p.y > EDGE_CLIFF_BAND) {
+      if (!this.climbAnyTerrain && gy - p.y > stepLimit) {
         p.x = prevX;
         p.z = prevZ;
       }
@@ -199,8 +208,9 @@ export abstract class CharacterBase extends EntityBase {
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     this.separateFromStatics();
-    // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去
-    if (this.climbCand && !this.controller.isAirborne() && !this.airborne) {
+    // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去；★ 过掩体优化：翻完加冷却，防反复翻/来回翻
+    if (this.climbCand && !this.controller.isAirborne() && !this.airborne
+      && performance.now() >= this.climbCdUntil) {
       this.climbContactT += dt;
       if (this.climbContactT >= CharacterBase.CLIMB_HOLD) this.beginClimb(this.climbCand);
     } else {
@@ -250,11 +260,8 @@ export abstract class CharacterBase extends EntityBase {
         other.hz,
       );
       if (!sep) continue;
-      // ★ 水中降低分离推挤（用户定 2026-09-25：防被挤出岸线振荡）
-      const wet = RasterMap.current?.tileDefAt(p.x, p.z).genRole === 'liquid';
-      const sepK = wet ? 0.3 : 1;
-      p.x += sep.ax * sepK;
-      p.z += sep.az * sepK;
+      p.x += sep.ax;   // ★ 水=正常地块（无水中分离折减）
+      p.z += sep.az;
       op.x += sep.bx;
       op.z += sep.bz;
     }
@@ -350,6 +357,7 @@ export abstract class CharacterBase extends EntityBase {
       p.y = this.climbToY;
       this.climbT = -1;
       this.controller.onFloor = true;
+      this.climbCdUntil = performance.now() + CharacterBase.CLIMB_CD_MS;   // 过掩体：翻完冷却
     }
   }
 

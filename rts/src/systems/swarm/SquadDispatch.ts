@@ -28,7 +28,7 @@ import type { TerrainCover } from './UnitTactics';
 
 export interface DispatchWorld {
   clampToRing(x: number, z: number): { x: number; z: number };
-  fixWaterTarget(x: number, z: number): { x: number; z: number };
+
   terrain: TerrainCover | null;
 }
 
@@ -74,6 +74,9 @@ export class SquadDispatch {
   /** 队长调遣：一次队令 → 全队成员指令（2Hz 由系统驱动；seen 供记忆表清理） */
   run(squad: Squad, state: SquadOrderState, now: number, hooks: DispatchHooks, seen: Set<number>): void {
     const { pool, squads, tactics, nav, world } = this.deps;
+    // ★ 命令纪元（成员指令记忆的作废键）：命令目标（8m 粗哈希）变 = 新命令 → 记忆作废
+    const ot = state.order.target;
+    const epoch = ot ? Math.round(ot.x / 8) * 100003 + Math.round(ot.z / 8) : 0;
     nav.ensurePath(squads, squad, state, now);
     const bucket = squadBucket(squad.type);
     let ax = state.order.target?.x ?? 0;
@@ -91,9 +94,7 @@ export class SquadDispatch {
     }
     {
       const c = world.clampToRing(ax, az);
-      ax = c.x; az = c.z;
-      const w = world.fixWaterTarget(ax, az);
-      ax = w.x; az = w.z;
+      ax = c.x; az = c.z;   // ★ 水=正常地块（用户定 2026-09-24）：去掉落水修正
     }
     if (hasC) {
       const adx = ax - this._centroid.x, adz = az - this._centroid.z;

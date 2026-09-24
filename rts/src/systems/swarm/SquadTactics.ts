@@ -236,7 +236,7 @@ export class SquadTactics {
   /** ★ 事态环形夹取（模式层注入；引擎令与队长令同门）——撤退/rear 由注入方豁免 */
   ringClamp: ((x: number, z: number) => { x: number; z: number }) | null = null;
   /** ★ 目标落水修正（模式层注入；与引擎同门） */
-  waterFix: ((x: number, z: number) => { x: number; z: number }) | null = null;
+
   /** ★ 命令台账（唯一写口 = issue()；回答"大规模操作是不是引擎下的命令"） */
   readonly ledger = new CommandLedger();
   private seq = 1;
@@ -255,10 +255,7 @@ export class SquadTactics {
       const c = this.ringClamp(o.target.x, o.target.z);
       o.target = { x: c.x, z: c.z };
     }
-    if (this.waterFix && o.target && o.kind !== 'retreat' && o.mission !== 'rear') {
-      const w = this.waterFix(o.target.x, o.target.z);
-      o.target = { x: w.x, z: w.z };
-    }
+
     // ★ P4 命令三件套（目标锚 + 战术意图）：引擎未显式给 → 由目标/kind+mission 推导
     if (!o.anchor) {
       const base = o.target ?? (o.path && o.path.length > 0 ? o.path[o.path.length - 1] : undefined);
@@ -568,8 +565,8 @@ export class SquadLeaderAI {
     for (const s of squads.all()) {
       seen.add(s.id);
       const cur = tactics.board.get(s.id);
-      // 引擎命令优先：未过期的引擎命令 → 队长不抢命令轨；但按意图拆步（寻路轨）推进
-      if (cur && cur.source === 'engine' && now < cur.until) continue;
+      // 引擎/玩家命令优先：未过期的引擎或玩家命令 → 队长不抢命令轨；但按意图拆步（寻路轨）推进
+      if (cur && (cur.source === 'engine' || cur.source === 'player') && now < cur.until) continue;
       const r = squads.ratingOf(s.id, now);
       if (!r) continue;
       const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];

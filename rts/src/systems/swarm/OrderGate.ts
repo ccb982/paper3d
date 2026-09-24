@@ -32,6 +32,8 @@ export interface GateCfg {
 
 interface Memo {
   kind: string;
+  /** ★ 命令纪元（命令目标粗哈希；变了 = 新命令 → 记忆作废、立即接新目标） */
+  epoch: number;
   tx: number;
   tz: number;
   px: number;
@@ -57,12 +59,13 @@ export class OrderGate {
   constructor(private readonly cfg: GateCfg) {}
 
   decide(
-    key: number, kind: string, cx: number, cz: number, px: number, pz: number, now: number,
+    key: number, kind: string, cx: number, cz: number, px: number, pz: number, now: number, epoch = 0,
   ): { x: number; z: number } {
     const c = this.cfg;
     this.dbg.decide++;
     const memo = this.m.get(key);
-    if (!memo || memo.kind !== kind) return this.commit(key, kind, cx, cz, px, pz, now, false);
+    // ★ 新命令（纪元变）→ 记忆作废（否则"玩家/引擎改目标后，成员还走旧目标"——治水不能通行）
+    if (!memo || memo.kind !== kind || memo.epoch !== epoch) return this.commit(key, kind, cx, cz, px, pz, now, false, undefined, epoch);
     if (Math.hypot(cx - memo.tx, cz - memo.tz) < c.retarget) { this.dbg.jitter++; return this.keep(memo); }
 
     const dArrive = Math.hypot(px - memo.tx, pz - memo.tz);
@@ -120,7 +123,7 @@ export class OrderGate {
 
   private commit(
     key: number, kind: string, cx: number, cz: number, px: number, pz: number, now: number,
-    bias: boolean, prev?: Memo,
+    bias: boolean, prev?: Memo, epoch = 0,
   ): { x: number; z: number } {
     this.dbg.commit++;
     let tx = cx, tz = cz;
@@ -133,7 +136,7 @@ export class OrderGate {
     const ang = Math.atan2(dz, dx);
     const hist = [...(prev?.hist ?? []), ang].slice(-this.cfg.histN);
     this.m.set(key, {
-      kind, tx, tz, px, pz, t: now, d0: Math.hypot(dx, dz),
+      kind, epoch, tx, tz, px, pz, t: now, d0: Math.hypot(dx, dz),
       dirX: dx / dl, dirZ: dz / dl, hist,
       pendSince: 0, pendX: tx, pendZ: tz,
     });

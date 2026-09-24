@@ -333,7 +333,8 @@ export class SquadNavigator {
   ): { x: number; z: number } | null {
     const dNow = Math.hypot(tx - cx, tz - cz);
     if (dNow < 2.5) return null;   // 已到：不需要段
-    const W_ADV = 1, W_SAFE = 4, W_DIR = 3;
+    const W_ADV = 1, W_SAFE = 4, W_DIR = 3, W_RISE = 2;   // ★ W_RISE：短跳爬升加价（偏好缓线/绕缓坡）
+    const hHere = this.feas.heightAt(cx, cz);
     const prev = this.hopDir.get(sid);
     const sameGoal = prev && prev.gx === tx && prev.gz === tz && now - prev.at < 5000;
     const lx = sameGoal ? prev!.dx : 0, lz = sameGoal ? prev!.dz : 0;
@@ -349,7 +350,9 @@ export class SquadNavigator {
         const adv = dNow - Math.hypot(tx - x, tz - z);
         if (adv <= 0.5) continue;   // 必须更近
         const mul = this.pathMul?.(type, x, z) ?? 1;   // 0.6~1.5；越小=掩体/战壕越足
-        const s = W_ADV * adv + W_SAFE * (1 - mul) + W_DIR * (dxn * lx + dzn * lz);
+        const hC = this.feas.heightAt(x, z);
+        const rise = Number.isFinite(hHere) && Number.isFinite(hC) ? Math.max(0, hC - hHere) : 0;
+        const s = W_ADV * adv + W_SAFE * (1 - mul) + W_DIR * (dxn * lx + dzn * lz) - W_RISE * rise;
         if (s > bestS) { bestS = s; best = { x, z }; }
       }
       if (best) {

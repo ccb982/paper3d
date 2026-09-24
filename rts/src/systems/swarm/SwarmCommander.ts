@@ -36,7 +36,7 @@ import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
 import { scoreForUnit } from './UnitStrategy';
 import { setSteerTable } from '../../entity/SteerPick';
-import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../entity/CoverEntity';
+import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../entity/CoverEntity';
 import type { SquadRating } from './SquadTable';
 import { SQUAD_MAX, BUILDER_SQUAD_MAX, type Squad } from './SquadTable';
 import type { TacticalOrder, UnitRole, SquadType } from '../../entity/SwarmUnit';
@@ -290,22 +290,6 @@ export class SwarmCommander {
   // 验收："发出即不可达命令 = 0/局" 由本门保证（by construction）。
   readonly coarseDbg = { checked: 0, adjusted: 0, skipped: 0, unknown: 0 };
 
-  /** ★ 目标落水修正（用户定 2026-09-25）：点在水域 → 找最近**非水且可站**点（r=4..24m, 16 向） */
-  fixWaterTarget(x: number, z: number): { x: number; z: number } {
-    if (!this.terrainScore.isWaterAt(x, z)) return { x, z };
-    for (let r = 4; r <= 24; r += 4) {
-      for (let k = 0; k < 16; k++) {
-        const a = (k / 16) * Math.PI * 2;
-        const cx = Math.round((x + Math.cos(a) * r) / 2) * 2;
-        const cz = Math.round((z + Math.sin(a) * r) / 2) * 2;
-        if (this.terrainScore.isWaterAt(cx, cz)) continue;
-        if (this.terrainScore.scoreAt(cx, cz) === null) continue;
-        return { x: cx, z: cz };
-      }
-    }
-    return { x, z };
-  }
-
   /** ★ 环形夹取（公开给 SquadTactics/队长令同门）：径向夹进 [下限, 上限]；
    *  未启用/未就绪 → 原样返回；收拢态（上限<下限）→ 上限主导（收拢到 0=舰船点） */
   clampToRing(x: number, z: number): { x: number; z: number } {
@@ -329,6 +313,11 @@ export class SwarmCommander {
     //   不靠命令时效（引擎令 TTL 拉长存活）；冷却期内同签名同目标 → 直接不发。
     //   例外：事态变动（stage/posture/环/波次签名变）或队重伤（血比<0.5）→ 允许立即重发。
     let ttlLong = Math.max(ttl ?? 30 * GAME_MIN, 60 * GAME_MIN);   // 引擎令寿命 ≥60 游戏分钟（命令靠冷却管，不靠时效）
+    // ★ 玩家令优先（R14 最小接线，2026-09-24）：玩家令在身且未过期 → 引擎不覆盖（撤销/覆盖归玩家）
+    {
+      const curP = this.swarm.tactics.board.get(squadId);
+      if (curP && curP.source === 'player' && performance.now() / 1000 < curP.until) return true;
+    }
     {
       const cur0 = this.swarm.tactics.board.get(squadId);
       if (cur0 && cur0.source === 'engine' && order.target) {
@@ -367,15 +356,7 @@ export class SwarmCommander {
         else order = { ...order, target: { ...order.target, x: c.x, z: c.z } };
       }
     }
-    // ★ 目标落水 → 最近岸上可站点（用户定 2026-09-25；撤退/rear 豁免）
-    if (!exempt && eff) {
-      const w = this.fixWaterTarget(eff.x, eff.z);
-      if (w.x !== eff.x || w.z !== eff.z) {
-        eff = { ...eff, x: w.x, z: w.z };
-        if (sub) order = { ...order, subTargets: order.subTargets!.map((t) => (t.squadId === squadId ? { ...t, x: w.x, z: w.z } : t)) };
-        else order = { ...order, target: { ...order.target, x: w.x, z: w.z } };
-      }
-    }
+    // ★ 水=正常地块（用户定 2026-09-24）：去掉"目标落水→挪到岸上"的修正
     // 无目标 / 飞行队（独立空中层走直线）→ 不核验直接放行
     const squad = this.swarm.squads.get(squadId);
     if (!eff || squad?.type === 'flyer') {
@@ -1506,6 +1487,21 @@ export class SwarmCommander {
     return this.terrainScore.blockedAt(x, z);
   }
 
+  /** ★ 掩体脚印（过掩体优化：SteerPick 候选惩罚 / TerrainAssist） */
+  coverAt(x: number, z: number): boolean {
+    return coverAtEntity(x, z);
+  }
+
+  /** ★ 直线可走（SteerTable 桥；TerrainAssist 出水方向用） */
+  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
+    return this.swarm.walkableLine(ax, az, bx, bz);
+  }
+
+  /** ★ 表高（SteerTable 桥；出水爬岸判定用） */
+  heightAt(x: number, z: number): number {
+    return this.passTable.heightAt(x, z);
+  }
+
   /** ★ 局部坡度梯度（执行层坡面优化：上坡必须**从坡正面**=沿梯度/fall line 直上）
    *  ±2m 中心差分 → 单位化梯度（gx,gz 指向最陡上升方向）+ 坡度幅值 mag；表未就绪 → {0,0,0} */
   slopeGradAt(x: number, z: number): { gx: number; gz: number; mag: number } {
@@ -1513,6 +1509,8 @@ export class SwarmCommander {
     if (!t || !t.ready) return { gx: 0, gz: 0, mag: 0 };
     const gx = (t.heightAt(x + 2, z) - t.heightAt(x - 2, z)) / 4;
     const gz = (t.heightAt(x, z + 2) - t.heightAt(x, z - 2)) / 4;
+    // ★ 表外 → heightAt=NaN：返回零梯度（防 NaN 污染执行层期望方向）
+    if (!Number.isFinite(gx) || !Number.isFinite(gz)) return { gx: 0, gz: 0, mag: 0 };
     const mag = Math.hypot(gx, gz);
     if (mag < 1e-4) return { gx: 0, gz: 0, mag: 0 };
     return { gx: gx / mag, gz: gz / mag, mag };

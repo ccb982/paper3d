@@ -813,6 +813,8 @@ export class WorldSpawner implements SwarmTierPort {
     x: number, _y: number, z: number,
     intent: number = INTENT_NONE,
     assaultIndex = -1,
+    /** ★ 手动放置接口（调试）：true = 忽略"水/坑不可站"与存活上限（可放水里） */
+    force = false,
   ): boolean {
     let any = false;
     for (let k = 0; k < def.pack; k++) {
@@ -824,7 +826,7 @@ export class WorldSpawner implements SwarmTierPort {
         sx = x + Math.cos(ang) * dist;
         sz = z + Math.sin(ang) * dist;
       }
-      if (this.spawnSingle(def, sx, _y, sz, intent, assaultIndex)) any = true;
+      if (this.spawnSingle(def, sx, _y, sz, intent, assaultIndex, force)) any = true;
     }
     return any;
   }
@@ -835,12 +837,13 @@ export class WorldSpawner implements SwarmTierPort {
     x: number, _y: number, z: number,
     intent: number = INTENT_NONE,
     assaultIndex = -1,
+    force = false,
   ): boolean {
     if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
     const mobIndex = this.deps.mobDefs.indexOf(def);
     if (mobIndex < 0) return false;
-    // ★ 上限检查（每只都查；实体 + 代理合计）
-    if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
+    // ★ 上限检查（每只都查；实体 + 代理合计）；手动放置（force）不受上限
+    if (!force && this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
     const stats = this.mobAgentStats(def);
     // ★ 敌人数值增强（EnemyScaling：基础随角色增强 + 天数/抽卡；硬下限防一下秒）
     const base = this.deps.scalingInputs ?? { day: 1, totalPulls: 0, refHp: 100, refAtk: 10, refDef: 2 };
@@ -854,11 +857,11 @@ export class WorldSpawner implements SwarmTierPort {
     // ★ 落点可站（坑/水/过低跳过）；空中层豁免（悬停）
     const air = def.isAir === true;
     const role = this.deps.raster.tileDefAt(x, z).genRole;
-    if (!air && (role === 'pit' || role === 'liquid')) return false;
+    if (!force && !air && (role === 'pit' || role === 'liquid')) return false;
     const sy = air
       ? this.deps.raster.surfaceHeightAtFor(x, z, 1e9)
       : this.deps.raster.surfaceHeightAt(x, z);
-    if (!air && sy < -1.2) return false;
+    if (!force && !air && sy < -1.2) return false;
     const idx = this.deps.swarm.spawn({
       mobIndex,
       x, y: air ? sy + def.airAltitude : sy, z,
@@ -884,7 +887,7 @@ export class WorldSpawner implements SwarmTierPort {
       shotSpeed: stats.shotSpeed,
       shotLife: stats.shotLife,
       singleton: def.squadMode === 'singleton',
-    });
+    }, force);
     return idx >= 0;   // ★ 账本由引擎 spawn() 自增（唯一生成口）
   }
 

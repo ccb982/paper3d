@@ -114,6 +114,19 @@ export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/Worl
 
 /** ★ 线段 (ax,az)→(bx,bz) 是否被某座墙挡住（远程选位的"掩体真的挡子弹吗"校验）。
  *  实现：把线段变换到墙局部坐标，与矩形 [-W/2,W/2]×[-T/2,T/2] 做 slab 相交。 */
+/** ★ 点是否在掩体脚印内（+margin）——过掩体优化：SteerPick 惩罚 / 绕行判定 */
+export function coverAt(x: number, z: number, margin = 0.2): boolean {
+  for (const c of _coverRegistry) {
+    const p = c.position;
+    const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);   // 厚轴
+    const rgtX = fwdZ, rgtZ = -fwdX;                                // 宽轴
+    const u = (x - p.x) * rgtX + (z - p.z) * rgtZ;
+    const v = (x - p.x) * fwdX + (z - p.z) * fwdZ;
+    if (Math.abs(u) <= COVER_W / 2 + margin && Math.abs(v) <= COVER_T / 2 + margin) return true;
+  }
+  return false;
+}
+
 export function coverBlocksLine(ax: number, az: number, bx: number, bz: number): boolean {
   for (const c of _coverRegistry) {
     const p = c.position;

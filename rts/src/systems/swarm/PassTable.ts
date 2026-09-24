@@ -43,6 +43,8 @@ export class PassTable {
   private drop = new Float32Array(0);
   /** 深坑格（摔死坑；边全禁，便于探针/诊断） */
   private lethal = new Uint8Array(0);
+  /** 水域格（可走；寻路加价用） */
+  private water = new Uint8Array(0);
   ready = false;
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
@@ -59,11 +61,13 @@ export class PassTable {
       this.drop = new Float32Array(n * 4);
       this.h = new Float32Array(n);
       this.lethal = new Uint8Array(n);
+      this.water = new Uint8Array(n);
     } else {
       this.can.fill(0);
       this.drop.fill(0);
       this.h.fill(0);
       this.lethal.fill(0);
+      this.water.fill(0);
     }
     const st = this.stats;
     st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0; st.lethal = 0;
@@ -77,7 +81,9 @@ export class PassTable {
         const wz = this.oz + iz * CELL + CELL / 2;
         const hh = sh(wx, wz);
         this.h[i] = hh;
-        if (raster.tileDefAt(wx, wz).genRole === 'pit' && hh < DANGER.PIT_H) {
+        const role = raster.tileDefAt(wx, wz).genRole;
+        if (role === 'liquid') this.water[i] = 1;
+        if (role === 'pit' && hh < DANGER.PIT_H) {
           this.lethal[i] = 1;
           st.lethal++;
         }
@@ -207,6 +213,12 @@ export class PassTable {
     return i < 0 ? NaN : this.h[i];
   }
 
+  /** 水域格（可走；寻路加价） */
+  waterAt(x: number, z: number): boolean {
+    const i = this.cellAt(x, z);
+    return i >= 0 && this.water[i] === 1;
+  }
+
   clear(): void {
     this.ready = false;
     this.side = 0;
@@ -214,5 +226,6 @@ export class PassTable {
     this.drop = new Float32Array(0);
     this.h = new Float32Array(0);
     this.lethal = new Uint8Array(0);
+    this.water = new Uint8Array(0);
   }
 }

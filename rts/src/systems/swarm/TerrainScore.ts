@@ -37,12 +37,14 @@ const TRENCH_SCORE = 1.2;
 /** ★ 紧贴硬墙的可站格 → 掩体加成（硬墙当掩体；不挡站位的墙给邻格加分） */
 const WALL_COVER_SCORE = 0.8;
 /** ★ 水中不适惩罚（允许站水里，但不如岸上；移动端再加"上岸权重"） */
-const WATER_PENALTY = 0.6;
+
 /** ★ 距离项归一化：d/R（0~1）× 此系数 → 与高度/掩体量级可比（否则 180m 距离项碾压一切；
  *  调大 → 距离影响更强：总攻压向舰船更狠、前期更往外展开） */
 export const DIST_SCALE = 12;
 /** ★ 掩体判定加成（敌侧有墙/身处战壕 → 队长选位加分） */
 const COVER_BONUS = 2.0;
+/** ★ 水软降分（用户定 2026-09-24）：**只在建表阶段**给水域格减分（可站可通行；不限速/不改向/不否决） */
+const WATER_PENALTY = 0.6;
 /** 坡面代价（分数扣减 / 路径代价倍率） */
 const SLOPE_PENALTY = 0.6;
 export const SLOPE_COST = 1.6;
@@ -133,7 +135,7 @@ export class TerrainScore {
   private readonly featCover = new Float32Array(SIDE * SIDE);
   /** ★ 紧贴硬墙（陡差 >0.8×WALL_DH 的可站格；硬墙当掩体判定用） */
   private readonly wallNear = new Uint8Array(SIDE * SIDE);
-  /** ★ 水域格（可站；分数 -WATER_PENALTY，移动端在岸上时优先上岸） */
+  /** ★ 水域格（**正常地块**：可站可通行；建表时软降分 `WATER_PENALTY`） */
   private readonly water = new Uint8Array(SIDE * SIDE);
   /** ★ 挖掘标记格（显式挖过的格；阈值放宽到 0.12m；跨重建保留） */
   private readonly dug = new Uint8Array(SIDE * SIDE);
@@ -355,7 +357,7 @@ export class TerrainScore {
       constTerm:
         this.wallNear[i] * WALL_COVER_SCORE +
         this.trench[i] * TRENCH_SCORE -
-        this.water[i] * WATER_PENALTY -
+        this.water[i] * WATER_PENALTY -    // ★ 建表阶段水软降分
         (cls === 1 ? SLOPE_PENALTY : 0),
     };
   }
@@ -576,7 +578,8 @@ export class TerrainScore {
       const dt = Math.hypot(x - this.lastPlayerX, z - this.lastPlayerZ);
       s += w.threat * (dt / R) * DIST_SCALE;
     }
-    if (this.water[i] === 1) s -= WATER_PENALTY;                 // 水中不适（软惩罚）
+    // ★ 水=正常地块（用户定 2026-09-24）：**只在建表阶段软降分**（不否决/不限速/不改向）
+    if (this.water[i] === 1) s -= WATER_PENALTY;
     this.score[i] = s;
   }
 

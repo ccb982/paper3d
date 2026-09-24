@@ -23,6 +23,14 @@ export class FeasibilityPath {
   readonly dbg = { calls: 0, ok: 0, blocked: 0, outside: 0 };
   /** 最近被拒样本（诊断：真不可达 vs 表/BFS 口径错） */
   readonly blockedRecent: { sx: number; sz: number; gx: number; gz: number }[] = [];
+  /** ★ 加权搜索 scratch（dist/gen 按表尺寸复用；二叉堆复用数组）
+   *  dist 必须 f64：惰性删除比较 `popCost > dist[cur]` 若 f32 舍入会误杀有效节点（假 blocked） */
+  private dist = new Float64Array(0);
+  private gen = new Uint32Array(0);
+  private stamp = 0;
+  private readonly hKey: number[] = [];
+  private readonly hCost: number[] = [];
+  private popCost = 0;
 
   setTable(t: PassTable | null): void {
     this.table = t;
@@ -31,6 +39,51 @@ export class FeasibilityPath {
   /** 表是否就绪（阶段二加权路的前置判断用） */
   readyFor(): boolean {
     return !!this.table && this.table.ready;
+  }
+
+  /** 表高（短跳坡度加价用；表外/未就绪 → NaN） */
+  heightAt(x: number, z: number): number {
+    const t = this.table;
+    return t && t.ready ? t.heightAt(x, z) : NaN;
+  }
+
+  private hPush(k: number, c: number): void {
+    const K = this.hKey, C = this.hCost;
+    K.push(k); C.push(c);
+    let i = K.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (C[p] <= C[i]) break;
+      const tk = K[p], tc = C[p];
+      K[p] = K[i]; C[p] = C[i];
+      K[i] = tk; C[i] = tc;
+      i = p;
+    }
+  }
+
+  private hPop(): number {
+    const K = this.hKey, C = this.hCost;
+    const top = K[0];
+    this.popCost = C[0];
+    const lastK = K.pop()!;
+    const lastC = C.pop()!;
+    const n = K.length;
+    if (n > 0) {
+      K[0] = lastK; C[0] = lastC;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1, r = l + 1;
+        let m = i;
+        if (l < n && C[l] < C[m]) m = l;
+        if (r < n && C[r] < C[m]) m = r;
+        if (m === i) break;
+        const tk = K[m], tc = C[m];
+        K[m] = K[i]; C[m] = C[i];
+        K[i] = tk; C[i] = tc;
+        i = m;
+      }
+    }
+    return top;
   }
 
   /** 线段可走（2m 采样；有向边位）——贪心段候选过滤用 */
@@ -76,24 +129,50 @@ export class FeasibilityPath {
     const sk = key(scx, scz);
     const gk = key(gcx, gcz);
     if (sk === gk) { out.push({ x: gx, z: gz }); this.dbg.ok++; return 'ok'; }
+    // ★ 爬山/涉水优化（2026-09-24）：恒权 BFS → **坡度/涉水加权 Dijkstra**（可达性语义不变）：
+    //   上坡（drop>0）加价 0.6/米 → 偏好缓坡/垭口；涉水格加价 0.35（可走，只是稍贵）；斜向 ×1.414。
+    const n = side * side;
+    if (this.dist.length !== n) {
+      this.dist = new Float64Array(n);
+      this.gen = new Uint32Array(n);
+    }
+    const dist = this.dist, gen = this.gen, stamp = ++this.stamp;
+    // A* 启发（八向 octile；最小步价 1 → 可采纳，不改变最优性/可达性）
+    const hOf = (k: number): number => {
+      const cx = b.ox + (k % side), cz = b.oz + Math.floor(k / side);
+      const ax = Math.abs(cx - gcx), az = Math.abs(cz - gcz);
+      return Math.max(ax, az) + 0.4142 * Math.min(ax, az);
+    };
     const parent = new Map<number, number>();
-    const queue: number[] = [sk];
+    this.hKey.length = 0;
+    this.hCost.length = 0;
+    gen[sk] = stamp;
+    dist[sk] = 0;
     parent.set(sk, -1);
-    let head = 0;
+    this.hPush(sk, hOf(sk));
     let found = false;
-    while (head < queue.length) {
-      const cur = queue[head++];
+    while (this.hKey.length > 0) {
+      const cur = this.hPop();
+      if (this.popCost - hOf(cur) > dist[cur] + 1e-9) continue;   // 惰性删除：过期堆项
       if (cur === gk) { found = true; break; }
       const cx = b.ox + (cur % side), cz = b.oz + Math.floor(cur / side);
       const wx = cx * CELL + CELL / 2, wz = cz * CELL + CELL / 2;
+      const cc = dist[cur];
       for (const [dx, dz] of DIRS) {
         const nx = cx + dx, nz = cz + dz;
         if (!inWin(nx, nz)) continue;
-        const nk = (nz - b.oz) * side + (nx - b.ox);
-        if (parent.has(nk)) continue;
         if (!t.canStep(wx, wz, dx, dz)) continue;   // 有向边位：绝对墙/单向逆穿在此拒绝
-        parent.set(nk, cur);
-        queue.push(nk);
+        const nk = (nz - b.oz) * side + (nx - b.ox);
+        let c = (dx !== 0 && dz !== 0) ? 1.414 : 1;
+        const drop = t.dropAt(wx, wz, dx, dz);
+        if (drop > 0) c += drop * 0.6;   // 上坡加价（爬坡偏好缓线）；★ 水=正常地块（无涉水加价）
+        const nd = cc + c;
+        if (gen[nk] !== stamp || nd < dist[nk]) {
+          gen[nk] = stamp;
+          dist[nk] = nd;
+          parent.set(nk, cur);
+          this.hPush(nk, nd + hOf(nk));
+        }
       }
     }
     if (!found) {
