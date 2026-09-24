@@ -87,6 +87,8 @@ export interface SquadOrderState {
   costStamp?: number;
   /** ★ 锚点滞回（用户定 2026-09-25）：上一前瞻锚点；新锚点 <6m 抖动 → 沿用旧锚（防振荡） */
   anchorX?: number;
+  /** ★ 锚点的爬坡标记（用户定：锚点滞回时 climb 必须一起带——否则爬坡态永不触发） */
+  anchorClimb?: boolean;
   anchorZ?: number;
 }
 
@@ -357,9 +359,9 @@ export class SquadTactics {
         const ot = state.order.target;
         const isGoal = !!ot && Math.hypot(tgtPt.x - ot.x, tgtPt.z - ot.z) < 1.5;
         const dd = Math.hypot(tgtPt.x - state.anchorX, tgtPt.z - state.anchorZ);
-        if (!isGoal && dd < 6) return { x: state.anchorX, z: state.anchorZ };
+        if (!isGoal && dd < 6) return { x: state.anchorX, z: state.anchorZ, climb: state.anchorClimb };
       }
-      state.anchorX = tgtPt.x; state.anchorZ = tgtPt.z;
+      state.anchorX = tgtPt.x; state.anchorZ = tgtPt.z; state.anchorClimb = tgtPt.climb;
       return tgtPt;
     }
     return state.order.target ?? null;
