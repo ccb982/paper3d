@@ -5,6 +5,11 @@
 // 从 SwarmSystem 外置（护栏行数）；原路径 re-export 兼容旧引用。
 // ============================================================
 
+/** ★ 重写开关（P0 冻结；《蜂群重写计划.md》§5）：`?swarm=new` 启用新架构，默认旧路径——
+ *  一键回退：探针/UI 不改代码即可切回。四期迁移完成后本开关连同旧路径一起删。 */
+export const REWRITE_ON: boolean =
+  typeof location !== 'undefined' && new URLSearchParams(location.search).get('swarm') === 'new';
+
 /** ★ 命令侧时间尺度（用户定 2026-09-24）：**下命令侧的时间比现实快 5 倍**
  *  （游戏内 5 秒 = 现实 1 秒）→ 1 游戏分钟 = 12 实秒（`GAME_MIN`）。
  *  约定：**只有命令/规划层计时**（队长令/成员指令门、命令 TTL、发令冷却、使命重发）用 `GAME_MIN`；

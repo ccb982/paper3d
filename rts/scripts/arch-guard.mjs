@@ -197,10 +197,50 @@ if (fs.existsSync(enemyDir) && rosterFiles.length) {
   if (airIds.length) console.log(`[arch-guard] 空中层 ${airIds.length} 种：${airIds.join(', ')}`);
 }
 
+// ---------- ⑤ 重写铁律 G1~G9（只查新目录；旧代码按 P1~P4 逐期搬入） ----------
+// 《蜂群重写计划.md》§5.1：新模块从第一天起必须满足；旧路径迁移期豁免。
+const NEW_DIRS = ['systems/swarm/engine/', 'systems/swarm/squad/', 'systems/swarm/nav/', 'entity/base/'];
+const newFiles = [...srcOf].filter(([r]) => NEW_DIRS.some((d) => r.startsWith(d)));
+if (newFiles.length) {
+  /** G1 引擎发令：只有 engine/ 能 issueChecked/issueOrder */
+  const ENGINE_ISSUE = /\.(?:issueChecked|issueOrder)\(/;
+  /** G2 队令单写口：orderStore/orders 的 set/write 只许 engine/OrderWriter.ts */
+  const STORE_WRITE = /(?:orderStore|orders)\.(?:set|write)\s*\(/;
+  /** G3 成员指令：directive 列只许 squad/（队长层）写 */
+  const DIRECTIVE_WRITE = /directive\w*\s*\[[^\]]*\]\s*=/;
+  /** G4 信息单源：世界位置只许 engine/ 读（禁直读 spawn/hooks） */
+  const WORLD_READ = /(?:hooks\.(?:playerX|playerZ|shipX|shipZ)|spawn\.[xz]\b)/;
+  /** G5 保护锚专用：squad/ 不得写 anchor */
+  const ANCHOR_WRITE = /\banchor\s*[:=]/;
+  /** G6 时间尺度：engine/ 与 squad/ 禁裸 performance.now()（now 从 tick 参数传入） */
+  const NOW_CALL = /performance\.now\(\)/;
+  /** G7 寻路不改地形：nav/ 禁写地形表列 */
+  const TABLE_WRITE = /(?:weld|climb|dropAt)\s*\[[^\]]*\]\s*=/;
+  for (const [r, s] of newFiles) {
+    const c = codeOf(s);
+    const inEngine = r.startsWith('systems/swarm/engine/');
+    const inSquad = r.startsWith('systems/swarm/squad/');
+    const inNav = r.startsWith('systems/swarm/nav/');
+    if (!inEngine && ENGINE_ISSUE.test(c)) errors.push(`G1 ${r}: 只有 engine/ 能发令（issueChecked/issueOrder）`);
+    if (r !== 'systems/swarm/engine/OrderWriter.ts' && STORE_WRITE.test(c)) errors.push(`G2 ${r}: 队令单写口只许 engine/OrderWriter.ts`);
+    if (!inSquad && DIRECTIVE_WRITE.test(c)) errors.push(`G3 ${r}: 成员指令（directive 列）只许 squad/ 写`);
+    if (!inEngine && WORLD_READ.test(c)) errors.push(`G4 ${r}: 世界位置由引擎提供（禁直读 spawn/hooks）`);
+    if (inSquad && ANCHOR_WRITE.test(c)) errors.push(`G5 ${r}: 保护锚（anchor）只属于引擎的保护令`);
+    if ((inEngine || inSquad) && NOW_CALL.test(c)) errors.push(`G6 ${r}: 命令/规划层禁裸 performance.now()（now 从参数传入）`);
+    if (inNav && TABLE_WRITE.test(c)) errors.push(`G7 ${r}: nav/ 只读地形表，禁写裁决/高度`);
+    const n = s.split('\n').length;
+    if (n > 800) errors.push(`G8 ${r} = ${n} 行（重写目标 ≤800）`);
+    if (/(?:Manager|AttackQueues|TimerManager)\.ts$/.test(r) && !/readonly dbg\b/.test(c)) {
+      errors.push(`G9 ${r}: 管理器必须暴露 readonly dbg（探针/UI 契约）`);
+    }
+  }
+}
+
 // ---------- 输出 ----------
 const total = files.reduce((n, p) => n + fs.readFileSync(p, 'utf8').split('\n').length, 0);
 console.log(`[arch-guard] ${files.length} 个 TS 文件 / ${total} 行`);
 console.log(`[arch-guard] 命令写点 ${boardWriters.length} 处（board.issue）/ 大文件 ${big.length} 个`);
+console.log(`[arch-guard] 重写新目录 ${newFiles.length} 文件（G1~G9 生效）`);
 console.log(`[arch-guard] 遗物 ${relicIds.size} 件 / 图标 ${iconIds.size} / 池内 ${poolIds.size}`);
 console.log(`[arch-guard] 敌军 ${rosterFiles.length} 种（名册真源 config/enemyRoster.ts）`);
 for (const w of warns) console.warn(`  warn  ${w}`);
