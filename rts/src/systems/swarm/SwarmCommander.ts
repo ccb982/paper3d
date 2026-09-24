@@ -30,7 +30,7 @@ import { RESEND } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
 import { FortifyPlanner, NEED_DONE } from './FortifyPlanner';
-import { GAME_MIN } from './SwarmConfig';
+import { ORDER_STABLE, GAME_MIN } from './SwarmConfig';
 import type { FortifyPort } from './EngineerDispatch';
 import { MemberTaskBoard } from './MemberTaskBoard';
 import { engineMissionFor, hasCoverFrom } from './UnitTactics';
@@ -184,6 +184,21 @@ export class SwarmCommander {
     return { minD: 0, maxD: 0 };   // ★ 总攻：一个点，驻留到日终
   }
   private readonly progress = new Map<number, { d: number; at: number; stall: number }>();
+  /** ★ 队形纠正"在飞"标记（用户定 2026-09-24）：层级越位/扎堆纠正**一次一条**，
+   *  条件解除（不再越位/不再扎堆）才允许下次纠正——原每拍都发 = 命令风暴源。 */
+  private readonly rankFix = new Map<number, boolean>();
+  private readonly clumpFix = new Map<number, boolean>();
+
+  /** ★ 命令稳定门：现令进度追踪（发令时记 d0；进度 = 1 − 当前距/d0；无净推进计时 → 长时间静止） */
+  private readonly orderProg = new Map<number, { tx: number; tz: number; d0: number; lastD: number; lastAt: number }>();
+  /** 稳定门计数（探针可查：kept = 因未过半且没卡而保持现令的次数；last = 最近被拦的"现令→新令"差异） */
+  readonly stableDbg = { kept: 0, last: '' };
+
+  /** ★ 命令稳定门：发令后记进度基准（d0 = 发令点 → 目标距离） */
+  private noteIssued(squadId: number, tx: number, tz: number, fromX: number, fromZ: number): void {
+    const d0 = Math.hypot(fromX - tx, fromZ - tz);
+    this.orderProg.set(squadId, { tx, tz, d0, lastD: d0, lastAt: performance.now() / 1000 });
+  }
   private readonly supportCd = new Map<number, number>();
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
@@ -339,6 +354,24 @@ export class SwarmCommander {
           && nowS0 - lastAt < SwarmCommander.ISSUE_COOLDOWN_S) {
           return true;   // ★ 冷却期内：不发（命令按长 TTL 存活，不用续命）
         }
+        // ★ 命令稳定门（用户定 2026-09-24）：**换令**（kind/目标变）需 ①现令进度 ≥50% 或 ②长时间静止
+        //   （无净推进 ≥STUCK_S）——否则保持现令。重伤（hurt）豁免（紧急撤退不被拖）。
+        if (!(sameKind && sameTgt) && !hurt) {
+          const t1 = cur0.order.target!;
+          const trk = this.orderProg.get(squadId);
+          if (trk && trk.tx === t1.x && trk.tz === t1.z) {
+            const dNow = this.swarm.squads.centroidOf(squadId, _c0)
+              ? Math.hypot(_c0.x - t1.x, _c0.z - t1.z) : trk.lastD;
+            if (dNow < trk.lastD - 1) { trk.lastD = dNow; trk.lastAt = nowS0; }
+            const prog = trk.d0 > 1 ? 1 - dNow / trk.d0 : 1;
+            if (prog < ORDER_STABLE.PROGRESS && nowS0 - trk.lastAt < ORDER_STABLE.STUCK_S) {
+              this.stableDbg.kept++;
+              this.stableDbg.last = `#${squadId} ${cur0.order.kind}/${cur0.order.mission ?? '-'}@${t1.x | 0},${t1.z | 0}`
+                + ` 进${(prog * 100) | 0}% 静${(nowS0 - trk.lastAt) | 0}s → ${order.kind}/${order.mission ?? '-'}@${order.target ? `${order.target.x | 0},${order.target.z | 0}` : '-'}`;
+              return true;   // 命令未过半且没长时间静止 → 保持现令（不发新令）
+            }
+          }
+        }
         this.cmdKey.set(squadId, key);
         this.lastIssueAt.set(squadId, nowS0);
       }
@@ -361,6 +394,7 @@ export class SwarmCommander {
     const squad = this.swarm.squads.get(squadId);
     if (!eff || squad?.type === 'flyer') {
       this.swarm.issueOrder(squadId, order, ttlLong);
+      if (eff) this.noteIssued(squadId, eff.x, eff.z, fromX, fromZ);
       return true;
     }
     this.coarseDbg.checked++;
@@ -368,11 +402,13 @@ export class SwarmCommander {
     const res = this.swarm.coarseCheck(fromX, fromZ, eff.x, eff.z, coarse);
     if (res === 'ok') {
       this.swarm.issueOrder(squadId, { ...order, coarse }, ttlLong);
+      this.noteIssued(squadId, eff.x, eff.z, fromX, fromZ);
       return true;
     }
     if (res === 'unknown') {
       this.coarseDbg.unknown++;
       this.swarm.issueOrder(squadId, order, ttlLong);   // 簇预热中：放行、不附 coarse
+      this.noteIssued(squadId, eff.x, eff.z, fromX, fromZ);
       return true;
     }
     // ② 硬不可达 → 缩近（径向 3 档）：每档复核，首个可达即改目标放行
@@ -393,6 +429,7 @@ export class SwarmCommander {
         this.coarseDbg.adjusted++;
         this.swarm.cmdLog.noteAdjustedUnreachable();
         this.swarm.issueOrder(squadId, withTgt(ax, az, coarse), ttlLong);
+        this.noteIssued(squadId, ax, az, fromX, fromZ);
         this.lastDecision = { squad: squadId, kind: 'shrink_unreachable', at: performance.now() / 1000 };
         return true;
       }
@@ -404,6 +441,7 @@ export class SwarmCommander {
       this.coarseDbg.adjusted++;
       this.swarm.cmdLog.noteAdjustedUnreachable();
       this.swarm.issueOrder(squadId, withTgt(alt.x, alt.z, coarse), ttlLong);
+      this.noteIssued(squadId, alt.x, alt.z, fromX, fromZ);
       this.lastDecision = { squad: squadId, kind: 'retarget_unreachable', at: performance.now() / 1000 };
       return true;
     }
@@ -789,20 +827,24 @@ export class SwarmCommander {
     }
     for (const back of list) {
       if (back.rank < 2) continue;
+      let violated = false;
       for (const front of list) {
         if (front.rank !== 0) continue;
-        if (back.d < front.d - 15) {
-          const dxo = back.x - shipX, dzo = back.z - shipZ;
-          const dl = Math.hypot(dxo, dzo) || 1;
-          const cands: { x: number; z: number }[] = [];
-          for (const adv of [15, 25, 35]) cands.push({ x: back.x + (dxo / dl) * adv, z: back.z + (dzo / dl) * adv });
-          const pick = this.pickValidTarget(back.x, back.z, cands);
-          if (pick) {
-            this.issueChecked(back.id, back.x, back.z,
-              { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
-            this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
-          }
-          break;
+        if (back.d < front.d - 15) { violated = true; break; }
+      }
+      if (!violated) { this.rankFix.delete(back.id); continue; }   // 解除 → 允许下次纠正
+      if (this.rankFix.get(back.id)) continue;                     // 纠正令在飞 → 不重发
+      {
+        const dxo = back.x - shipX, dzo = back.z - shipZ;
+        const dl = Math.hypot(dxo, dzo) || 1;
+        const cands: { x: number; z: number }[] = [];
+        for (const adv of [15, 25, 35]) cands.push({ x: back.x + (dxo / dl) * adv, z: back.z + (dzo / dl) * adv });
+        const pick = this.pickValidTarget(back.x, back.z, cands);
+        if (pick) {
+          this.rankFix.set(back.id, true);
+          this.issueChecked(back.id, back.x, back.z,
+            { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+          this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
         }
       }
     }
@@ -831,7 +873,8 @@ export class SwarmCommander {
             const dist = Math.hypot(b.x - a.x, b.z - a.z);
             if (dist < nd) { nd = dist; nb = b; }
           }
-          if (!nb || nd > 50) continue;   // 扎堆阈值 50m
+          if (!nb || nd > 50) { this.clumpFix.delete(a.id); continue; }   // 解除 → 允许下次纠正
+          if (this.clumpFix.get(a.id)) continue;                          // 纠正令在飞 → 不重发
           // ★ 调整方向（用户定 2026-09-25）：**横向拉开 + 向舰船方向内收**（立卡尔分解，不是角度偏移）
           const inv = 1 / (a.d || 1);
           const inX = (shipX - a.x) * inv, inZ = (shipZ - a.z) * inv;   // 向舰单位向量
@@ -847,6 +890,7 @@ export class SwarmCommander {
           }
           const pick = this.pickValidTarget(a.x, a.z, cands);
           if (pick) {
+            this.clumpFix.set(a.id, true);
             this.issueChecked(a.id, a.x, a.z,
               { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
             this.lastDecision = { squad: a.id, kind: 'tangent_split', at: nowF };

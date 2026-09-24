@@ -115,6 +115,16 @@ function addPatrolSwing(
   const sw = Math.sin(now * PATROL_OMEGA + phase) * amp;
   return { x: x + (-dz / dl) * sw, z: z + (dx / dl) * sw };
 }
+/** ★ 最近的掩体（稳定选择；用户定 2026-09-24：驻守掩体不再每拍轮转——原 `coverIdx++ % len` 每拍换点=命令风暴） */
+function nearestCover(covers: readonly { x: number; z: number }[], cx: number, cz: number): { x: number; z: number } | null {
+  let best: { x: number; z: number } | null = null, bd = Infinity;
+  for (const c of covers) {
+    const d = (c.x - cx) * (c.x - cx) + (c.z - cz) * (c.z - cz);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+
 /** 部署选点（读表投影全部在此；返回复用对象，调用方立即消费） */
 export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, st: DecideState): DecideOut {
   const plan = ctx.plan;
@@ -201,8 +211,7 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
       if (n > 0) { cx /= n; cz /= n; }
       const cov = d.preferCover && !ctx.lineSlot
-        ? (ctx.post.get(s.id)
-          ?? (ctx.covers.length > 0 ? ctx.covers[st.coverIdx++ % ctx.covers.length] : null))
+        ? (ctx.post.get(s.id) ?? nearestCover(ctx.covers, cx, cz))
         : null;
       let hx: number, hz: number;
       if (cov) {
@@ -223,9 +232,9 @@ export function decideTarget(d: SquadDoctrine, s: DecideSquad, ctx: DecideCtx, s
       const far = n === 0 || Math.hypot(cx - hx, cz - hz) > (wasProtect ? 9 : 4);
       ctx.protectState.set(s.id, !far);
       _out.kind = far ? 'advance' : 'protect';
-      const pr = UNIT_TACTICS[s.type].patrolR;
-      _out.target = far ? { x: hx, z: hz }
-        : addPatrolSwing(hx, hz, ctx.playerX, ctx.playerZ, pr, s.id * 1.3, ctx.now);
+      // ★ 命令目标 = 稳定驻守点（用户定 2026-09-24）：游弋摆动归**执行层**（`resolveAnchor` 已做），
+      //   不进命令签名——原 sin 摆动每拍改目标 → 命令风暴 + 跨 far 滞回致 kind advance↔protect 翻。
+      _out.target = { x: hx, z: hz };
       _out.urgency = far ? 1 : 0;
       _out.ttl = far ? 8 : 6;
       break;

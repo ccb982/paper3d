@@ -122,6 +122,10 @@ export const DIRECTIVE_GATE = {
   arriveR: 3, persistS: 3 * GAME_MIN, stableM: 2, reverseDot: -0.2, histN: 3, biasDeg: 55,
 } as const;
 
+/** ★ 命令稳定门（用户定 2026-09-24）：**换令**（kind/目标变）需"现令进度 ≥PROGRESS 或 长时间静止（无净推进 ≥STUCK_S 实秒）"。
+ *  治"mission/target 微变即重发"——常规命令至少维持到过半或卡住。 */
+export const ORDER_STABLE = { PROGRESS: 0.5, STUCK_S: 25 } as const;
+
 /** ★ 队长自主令：走 20m 或卡 8 **游戏分钟**（净<4m）才换目标；其余同上 */
 export const LEADER_GATE = {
   minMove: 20, retarget: 15, holdS: 8 * GAME_MIN, netMin: 4, forceS: 20 * GAME_MIN,
