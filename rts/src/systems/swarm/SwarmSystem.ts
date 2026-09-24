@@ -844,7 +844,15 @@ export class SwarmSystem {
       );
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 水=正常地块（无限速）
+        let sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 水=正常地块（无限速）
+        // ★ 爬坡减速（用户定 2026-09-24）：期望方向朝上坡 → 速度 ×（1 − 0.6·上坡分量，下限 0.5）
+        if (p.isAir[i] !== 1) {
+          const g = this.commander.slopeGradAt(p.x[i], p.z[i]);
+          if (Number.isFinite(g.mag) && g.mag > 0.05) {
+            const up = res.x * g.gx + res.z * g.gz;
+            if (up > 0) sp *= Math.max(0.5, 1 - up * 0.6);
+          }
+        }
         p.x[i] += res.x * sp;
         p.z[i] += res.z * sp;
         p.yaw[i] = Math.atan2(res.x, res.z);

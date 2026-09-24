@@ -114,7 +114,13 @@ export class NavDebugMap {
         const lead = s?.members.get(s?.leaderUid ?? 0);
         if (lead) { this.cx = lead.x; this.cz = lead.z; }
       }
-    } else { this.cx = 0; this.cz = 0; this.span = 480; }
+    } else {
+      // ★ 全览居中 = **舰船**（用户定 2026-09-24）：世界以出生点（舰船）为圆心建；
+      //   原来居中世界原点 (0,0) → 舰船偏离正中。
+      const sp = this.shipAt?.();
+      this.cx = sp?.x ?? 0; this.cz = sp?.z ?? 0;
+      this.span = 480;
+    }
     this.visible = true;
     this.dirtyBase = true;
     this.root.style.display = 'block';
@@ -133,6 +139,11 @@ export class NavDebugMap {
 
   update(): void {
     if (!this.visible) return;
+    // ★ 全览跟随舰船（换落点/移动后仍居中）
+    if (this.squadId === null) {
+      const sp = this.shipAt?.();
+      if (sp) { this.cx = sp.x; this.cz = sp.z; }
+    }
     const now = performance.now();
     if (now - this.lastDraw < 120) return;
     this.lastDraw = now;

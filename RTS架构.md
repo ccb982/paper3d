@@ -199,6 +199,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 上坡横平竖直 | 斜向仅平/下坡（A\*/拉直/短跳三处同规矩）；斜向落差取陡轴 | `FeasibilityPath` / `PassTable.dropAt` |
 | 硬边台阶豁免 | 0.6m（与移动层 `EDGE_CLIFF_BAND` 同源）；> 0.6 上墙/下可行 | `PassTable.edge` |
 | 跟随停步 / 远跟阈值 | 5~8m 滞回 / >12m 且直线被挡 → 走廊前瞻 4m | `Follow.followDir` |
+| 爬坡减速 | L3 爬坡态 ×0.55；L2 上坡 ×(1−0.6·上坡分量) 下限 0.5 | `TerrainAssist.CLIMB_SPEED_MUL` / `SwarmSystem.move` |
 | 成员目标基准 | **队长 + 槽位偏移**（无质心）；队长走锚点 | `SquadDispatch` / `SquadNavigator` |
 | 短跳爬升加价 | 2/米（W_RISE） | `SquadNavigator.greedyStep` |
 | 坡正面拉直门槛 | up>0.45 且 mag>0.22（0.65 路径/0.35 梯度） | `entity/TerrainAssist.fallLineBlend` |

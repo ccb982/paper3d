@@ -19,6 +19,8 @@ export const SHORE_CLIMB_MAX = 2.5;
 export const CLIMB_SLOPE_MIN = 0.5;
 /** 爬坡态单次续期时长（毫秒；到顶/坡度变缓即退出，超时兜底退出） */
 export const CLIMB_PATH_MS = 1500;
+/** ★ 爬坡减速（用户定 2026-09-24）：爬坡态速度乘子（L3 程序化爬坡 + L2 上坡共用口径） */
+export const CLIMB_SPEED_MUL = 0.55;
 
 /** 坡正面混合：把期望方向 (dx,dz) 按需向最陡上升方向混合（写 out） */
 export function fallLineBlend(

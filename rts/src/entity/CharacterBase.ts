@@ -20,7 +20,7 @@ import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
-import { SHORE_CLIMB_MAX, CLIMB_SLOPE_MIN, CLIMB_PATH_MS } from "./TerrainAssist";
+import { SHORE_CLIMB_MAX, CLIMB_SLOPE_MIN, CLIMB_PATH_MS, CLIMB_SPEED_MUL } from "./TerrainAssist";
 import { finalRuling, type EdgeRuling } from "../services/map/Refinements";
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from "../services/map/ChunkGenerator";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
@@ -178,7 +178,7 @@ export abstract class CharacterBase extends EntityBase {
             this.climbDirX = dxs / l; this.climbDirZ = dzs / l;
           }
           climbing = nowMs < this.climbPathUntil;
-          if (climbing) { dx = this.climbDirX * speed * dt; dz = this.climbDirZ * speed * dt; }
+          if (climbing) { dx = this.climbDirX * speed * CLIMB_SPEED_MUL * dt; dz = this.climbDirZ * speed * CLIMB_SPEED_MUL * dt; }
         } else if (grad >= CLIMB_SLOPE_MIN) {
           const ux = gx / grad, uz = gz / grad;
           // ★ 只对**坡面**（地形表 weld）程序化爬升；硬边（cliff）= 墙（不爬）
@@ -196,7 +196,7 @@ export abstract class CharacterBase extends EntityBase {
             dz -= uz * speed * dt * 0.6;
           }
           climbing = nowMs < this.climbPathUntil;
-          if (climbing) { dx = this.climbDirX * speed * dt; dz = this.climbDirZ * speed * dt; }
+          if (climbing) { dx = this.climbDirX * speed * CLIMB_SPEED_MUL * dt; dz = this.climbDirZ * speed * CLIMB_SPEED_MUL * dt; }
         } else {
           this.climbPathUntil = 0;
         }
