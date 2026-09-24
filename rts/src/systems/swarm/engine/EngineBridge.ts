@@ -41,8 +41,8 @@ export interface LiveView {
   squads(): LiveSquad[];
   /** 长寻路可达检测（实机注入；无 → 跳过 ③） */
   canReach?(x: number, z: number): boolean;
-  /** 下发回调（实机模式用：交给旧执行链；影子模式不调）——带 squadId（哪队） */
-  emit?(squadId: number, order: SquadOrder): void;
+  /** 下发回调（实机模式用：交给旧执行链；影子模式不调）——带 squadId（哪队）+ now（实秒） */
+  emit?(squadId: number, order: SquadOrder, now: number): void;
   /** 玩家是否在打某小队（被打反应：引擎告知队长玩家位置；0 = 无） */
   playerAttacking?(): number;
   /** 全体敌方单位（含代理；uid/位置）——攻击队列 + 统一计时消费；缺省 → 不跑 */
@@ -97,8 +97,12 @@ export class EngineBridge {
     });
   }
 
+  /** 当前实秒（emit 给旧板写 TTL 用；每帧刷新） */
+  private nowS = 0;
+
   /** 每帧（dt/now 实秒） */
   tick(dt: number, now: number): void {
+    this.nowS = now;
     this.core.tick(dt, now);
   }
 
@@ -114,7 +118,7 @@ export class EngineBridge {
       ttl: 0,
     };
     const ok = this.writer.issue(squadId, order, { now: this.dbg.ticks, player: true });
-    if (ok && !this.shadow) this.live.emit?.(squadId, order);
+    if (ok && !this.shadow) this.live.emit?.(squadId, order, this.nowS);
     return ok;
   }
 
@@ -255,7 +259,7 @@ export class EngineBridge {
       // 唯一发令器（G1）：影子模式也走（只写本地 store，不发实机）
       if (this.writer.issue(rec.id, order, { now })) {
         issued++;
-        if (!this.shadow) this.live.emit?.(rec.id, order);
+        if (!this.shadow) this.live.emit?.(rec.id, order, now);
       }
     }
     this.dbg.issued = issued;

@@ -26,7 +26,7 @@ import { EngineerCorps, type BuildPiece } from './EngineerCorps';
 import { CommanderSpawn } from './CommanderSpawn';
 import { AnchorSelect } from './CommanderAnchorSelect';
 import { DANGER } from './SwarmDanger';
-import { RESEND } from './SwarmConfig';
+import { RESEND, REWRITE_ON } from './SwarmConfig';
 import { PassTable } from './PassTable';
 import { RosterController } from './RosterController';
 import { FortifyPlanner, NEED_DONE } from './FortifyPlanner';
@@ -1366,6 +1366,9 @@ const PROTECT_QUOTA = 2;
    *  写：覆盖该队的引擎命令（改派抽援 / 重算路径 / 换目标 / 残血撤离）
    *  规则集中在此；态势与兵种配置仍作兜底。 */
   private tacticalTick(dt: number, playerX: number, playerZ: number): void {
+    // ★ 重写（用户定）：新链开启时**旧指挥官不再发战斗令**（新引擎 = 唯一发令器）；
+    //   工事（分区/派件）、编制、姿态、查询面照旧。旧链 = `?swarm=old`。
+    if (REWRITE_ON) return;
     if (!this.plan) return;
     this.tacticalAccum += dt;
     if (this.tacticalAccum < 1) return;
@@ -1724,6 +1727,8 @@ const PROTECT_QUOTA = 2;
   }
 
   private dispatchMission(): void {
+    // ★ 重写（用户定）：新链开启时旧大队任务不发（使命归新引擎 DecisionChain/复合）
+    if (REWRITE_ON) return;
     const m = this.mission;
     if (!m) return;
     for (const s of this.swarm.squads.all()) {

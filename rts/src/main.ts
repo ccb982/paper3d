@@ -257,6 +257,23 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         for (let i = 0; i < pool.count; i++) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
         return out;
       },
+      // ★ 正式启用（用户定）：新引擎决策 → 旧执行链（队长消费）。
+      //   命令映射：act/march→advance、defend/garrison→garrison、protect→protect、patrol→flank。
+      //   工兵照旧：新引擎不给工兵发移动令（工事由旧指挥官派件、工兵内部决策）。
+      emit: (squadId, order, now) => {
+        const kindMap: Record<string, string> = {
+          act: 'advance', march: 'advance', defend: 'garrison',
+          garrison: 'garrison', protect: 'protect', patrol: 'flank',
+        };
+        swarm.tactics.issue(squadId, {
+          kind: (kindMap[order.kind] ?? 'advance') as never,
+          target: { x: order.target.x, z: order.target.z },
+          mission: 'engine',
+          anchor: order.anchor,
+          seq: 0,
+          roe: order.roe,
+        } as never, now, 6, 'engine');
+      },
     });
     // ★ 正式启用（用户定 2026-09-25：**正常就用新链**）：默认 shadow=false（新引擎真下发）；
     //   `?shadow=1` 只跑影子（新引擎只算不发，用于对照/调试）
