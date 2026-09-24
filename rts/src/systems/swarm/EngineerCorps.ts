@@ -179,9 +179,10 @@ export class EngineerCorps {
    *    防"全局最低 pri = 63m 外前线件"任务瞬移 → 成员半路折返转圈。 */
   assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.assign.get(squadId);
+    // ★ 粘性（用户定 2026-09-24）：已派未建块**保持**——闸门只管"新派"，不夺已派件
+    //   （原 `!gated(cur)` 会让环推进时把在途件判丢 → 重挑 → 目标瞬移百米 + 半路折返）
     if (cur !== undefined && cur < this.pieces.length
       && !this.built.has(keyOf(this.pieces[cur]))
-      && !this.gated(this.pieces[cur])
       && this.allows(squadId, this.pieces[cur].kind, this.pieces[cur].pri)) return cur;
     const claimed = new Set<number>(this.assign.values());
     const pick = (maxD2: number): number => {

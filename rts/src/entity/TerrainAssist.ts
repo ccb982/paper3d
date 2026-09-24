@@ -14,6 +14,12 @@ import type { SteerTable } from './SteerPick';
  *  仅"当前在水里"时生效——陆地单位仍受 0.6m 台阶限制） */
 export const SHORE_CLIMB_MAX = 2.5;
 
+/** ★ 坡面程序化爬升（用户定 2026-09-24）：坡面**不许驻留**（要么上要么下）——
+ *  坡度 ≥ 此值判"在坡面上"（米/米）；限制爬崖单位在坡面上期望朝上时进入爬坡态（定速直推）。 */
+export const CLIMB_SLOPE_MIN = 0.5;
+/** 爬坡态单次续期时长（毫秒；到顶/坡度变缓即退出，超时兜底退出） */
+export const CLIMB_PATH_MS = 1500;
+
 /** 坡正面混合：把期望方向 (dx,dz) 按需向最陡上升方向混合（写 out） */
 export function fallLineBlend(
   tbl: SteerTable | null, x: number, z: number, dx: number, dz: number, out: { x: number; z: number },

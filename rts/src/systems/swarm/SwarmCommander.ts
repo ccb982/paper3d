@@ -193,6 +193,8 @@ export class SwarmCommander {
   private readonly orderProg = new Map<number, { tx: number; tz: number; d0: number; lastD: number; lastAt: number }>();
   /** 稳定门计数（探针可查：kept = 因未过半且没卡而保持现令的次数；last = 最近被拦的"现令→新令"差异） */
   readonly stableDbg = { kept: 0, last: '' };
+  /** 同兵种目标散开计数（探针可查） */
+  readonly spreadDbg = { n: 0 };
 
   /** ★ 命令稳定门：发令后记进度基准（d0 = 发令点 → 目标距离） */
   private noteIssued(squadId: number, tx: number, tz: number, fromX: number, fromZ: number): void {
@@ -1245,7 +1247,10 @@ export class SwarmCommander {
     const missionEpoch = this.postureEpoch * 100000 + this.scoreStamp * 2 + (this.stage === 'S1' ? 0 : 1);
     this.protectAssign.clear();
     // ★ P3-2 保护配额（重构总纲 §2.5）：同一保护对象 ≤2 队——防"5 队挤 1 锚"堆挤
-    const PROTECT_QUOTA = 2;
+      /** ★ 同兵种目标间距（用户定 2026-09-24）：发布时同 mobKind 各队目标 < 此值 → 横向散开
+   *  （"真正的战斗各士兵是很大散布的"）；只对自由选点（advance、非保护/施工/驻守）生效。 */
+const SQ_TARGET_SPREAD = 40;
+const PROTECT_QUOTA = 2;
     const pcount = new Map<string, number>();
     const quotaOk = (key: string): boolean => {
       const n = pcount.get(key) ?? 0;
@@ -1254,6 +1259,8 @@ export class SwarmCommander {
       return true;
     };
     const coordKey = (pre: string, x: number, z: number): string => `${pre}:${x | 0},${z | 0}`;
+    // ★ 同兵种目标间距校验（用户定 2026-09-24）：本拍已发布目标按 mobKind 记录
+    const spreadByKind = new Map<number, { x: number; z: number }[]>();
     for (const s of squads) {
       let scx = 0, scz = 0, sn = 0;
       for (const m of s.members.values()) { scx += m.x; scz += m.z; sn++; }
@@ -1319,6 +1326,24 @@ export class SwarmCommander {
       // ★ 线位只在"刚整队"那一拍生效；★ 正在攻击（chase）的队**不受队列影响**
       ctx.lineSlot = lineFresh && !d.chase ? this.battleLine.get(s.id) : null;
       const out = decideTarget(d, s, ctx, st);
+      // ★ 同兵种目标间距（用户定 2026-09-24）：自由选点且与同 mobKind 已定目标 < SQ_TARGET_SPREAD
+      //   → 横向（垂直于"队→目标"）散开候选，过四校验取首个；无解则保留原点
+      if (!pt && ma.mission !== 'build' && ma.mission !== 'guard' && ma.mission !== 'patrol' && out.kind === 'advance') {
+        const arr = spreadByKind.get(s.mobKind) ?? [];
+        if (arr.some((a) => Math.hypot(out.target.x - a.x, out.target.z - a.z) < SQ_TARGET_SPREAD)) {
+          const dxo = out.target.x - scx, dzo = out.target.z - scz;
+          const dl = Math.hypot(dxo, dzo) || 1;
+          const latX = -dzo / dl, latZ = dxo / dl;
+          const cands: { x: number; z: number }[] = [];
+          for (const lat of [SQ_TARGET_SPREAD, SQ_TARGET_SPREAD * 1.6]) {
+            for (const sg of [1, -1]) cands.push({ x: out.target.x + latX * lat * sg, z: out.target.z + latZ * lat * sg });
+          }
+          const pick = this.pickValidTarget(scx, scz, cands);
+          if (pick) { out.target = { x: pick.x, z: pick.z }; this.spreadDbg.n++; }
+        }
+        arr.push({ x: out.target.x, z: out.target.z });
+        spreadByKind.set(s.mobKind, arr);
+      }
       this.issueChecked(s.id, scx, scz, {
         kind: out.kind, target: out.target, roe: out.roe,
         urgency: out.urgency, mission: out.mission || undefined,

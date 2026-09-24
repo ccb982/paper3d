@@ -227,6 +227,8 @@ export interface SteerIntent {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
+  /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24）：到目标点必须程序化爬坡 */
+  climb?: boolean;
 }
 
 /** ★ 实体侧数据面（EnemyBase 实现；玩家/友军不实现） */
@@ -262,7 +264,7 @@ export interface SwarmUnit {
   /** 空中悬停高度（米，相对地表；地面恒 0） */
   readonly altitude: number;
   /** 移动目标点（世界坐标；编队槽位/寻路下发，hold 语义；null = 无目标） */
-  moveTarget: { x: number; y: number; z: number } | null;
+  moveTarget: { x: number; y: number; z: number; climb?: boolean } | null;
   /** ★ 编队移动速度（m/s；steer 下发速度的兜底；随快照跨 LOD） */
   moveSpeed: number;
   /** 攻击类型 */

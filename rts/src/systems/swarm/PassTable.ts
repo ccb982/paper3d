@@ -19,6 +19,8 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../services/map/Refinements';
+/** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
+const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../services/map/ChunkGenerator';
 import { DANGER } from './SwarmDanger';
 
@@ -46,6 +48,8 @@ export class PassTable {
   private lethal = new Uint8Array(0);
   /** 水域格（可走；寻路加价用） */
   private water = new Uint8Array(0);
+  /** ★ 爬坡位（用户定 2026-09-24）：weld（坡面）且该向净升 > CLIMB_MARK_RISE → 必须"程序化爬坡" */
+  private climb = new Uint8Array(0);
   ready = false;
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
@@ -64,12 +68,14 @@ export class PassTable {
       this.h = new Float32Array(n);
       this.lethal = new Uint8Array(n);
       this.water = new Uint8Array(n);
+      this.climb = new Uint8Array(n * 4);
     } else {
       this.can.fill(0);
       this.drop.fill(0);
       this.h.fill(0);
       this.lethal.fill(0);
       this.water.fill(0);
+      this.climb.fill(0);
     }
     const st = this.stats;
     st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0; st.lethal = 0;
@@ -98,16 +104,20 @@ export class PassTable {
         const i = iz * this.side + ix;
         if (ix + 1 < this.side) {
           const j = i + 1;
-          const [fwd, rev, dropQ, kind] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
+          const [fwd, rev, dropQ, kind, cf, cr] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
           this.setDir(i, DIR_E, fwd, dropQ);
           this.setDir(j, DIR_W, rev, -dropQ);
+          this.climb[i * 4 + DIR_E] = cf ? 1 : 0;
+          this.climb[j * 4 + DIR_W] = cr ? 1 : 0;
           this.count(kind);
         }
         if (iz + 1 < this.side) {
           const k = i + this.side;
-          const [fwd, rev, dropQ, kind] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
+          const [fwd, rev, dropQ, kind, cf, cr] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
           this.setDir(i, DIR_S, fwd, dropQ);
           this.setDir(k, DIR_N, rev, -dropQ);
+          this.climb[i * 4 + DIR_S] = cf ? 1 : 0;
+          this.climb[k * 4 + DIR_N] = cr ? 1 : 0;
           this.count(kind);
         }
       }
@@ -116,14 +126,15 @@ export class PassTable {
     st.ms = +(performance.now() - t0).toFixed(1);
   }
 
-  /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向)]
+  /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向),
+   *  正向爬坡位, 反向爬坡位]（爬坡位 = weld 且净升 > CLIMB_MARK_RISE；用户定 2026-09-24）
    *  ★ 裁决 = 地形表（weld=坡 → 普通可行；cliff=硬边 → 特殊处理）。 */
   private edge(
     raster: RasterMap, ix: number, iz: number,
     i: number, j: number, hA: number, hB: number, dir: 0 | 1 | 2 | 3,
-  ): [boolean, boolean, number, number] {
+  ): [boolean, boolean, number, number, boolean, boolean] {
     // 深坑边缘 = 绝对墙（摔死坑；始终不可行，双向禁）
-    if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1];
+    if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1, false, false];
     const net = hB - hA;
     // ★ 地形表裁决（与渲染同源）：4m 格 = 4m 块，直接问该块边
     const bx = Math.floor(this.ox / BLOCK_SIZE) + ix * BLOCKS_PER_CELL;
@@ -132,14 +143,16 @@ export class PassTable {
       raster.chunkSource(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE)),
       bx, bz, dir,
     );
-    // 坡面（weld）= 普通可行边（用户定：不特殊处理，双向可走）
-    if (ruling === 'weld') return [true, true, net, 0];
+    // 坡面（weld）= 普通可行边（用户定：不特殊处理，双向可走）——净升 > 阈值 = 爬坡位
+    if (ruling === 'weld') {
+      return [true, true, net, 0, net > CLIMB_MARK_RISE, -net > CLIMB_MARK_RISE];
+    }
     // 硬边（cliff）：≤ 台阶豁免（与移动层同源常量）→ 可走（平地地块间零落差也走这里）
-    if (Math.abs(net) <= EDGE_CLIFF_BAND) return [true, true, net, 0];
+    if (Math.abs(net) <= EDGE_CLIFF_BAND) return [true, true, net, 0, false, false];
     // 硬边大落差：**上不可行（墙）、下可行**
     const fwd = net < 0;   // i→j 向下 → 可走；向上 → 不可行
     const rev = net > 0;
-    return [fwd, rev, net, 2];
+    return [fwd, rev, net, 2, false, false];
   }
 
   private setDir(i: number, d: number, ok: boolean, dropM: number): void {
@@ -178,6 +191,18 @@ export class PassTable {
     if (dz > 0 && this.can[b + DIR_S] === 0) return false;
     if (dz < 0 && this.can[b + DIR_N] === 0) return false;
     return true;
+  }
+
+  /** ★ 爬坡位（用户定 2026-09-24）：该向是否"必须程序化爬坡"（坡面且净升 > 阈值） */
+  climbAt(x: number, z: number, dx: number, dz: number): boolean {
+    const i = this.cellAt(x, z);
+    if (i < 0) return false;
+    const b = i * 4;
+    if (dx > 0 && this.climb[b + DIR_E] === 1) return true;
+    if (dx < 0 && this.climb[b + DIR_W] === 1) return true;
+    if (dz > 0 && this.climb[b + DIR_S] === 1) return true;
+    if (dz < 0 && this.climb[b + DIR_N] === 1) return true;
+    return false;
   }
 
   /** 净落差（米；dx,dz 为方向）——供代价/减速读；表外/未就绪 → 0

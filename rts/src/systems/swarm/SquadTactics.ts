@@ -79,7 +79,7 @@ export interface SquadOrderState {
   stepK?: number;
   stepN?: number;
   /** ★ 寻路轨走廊（覆盖式；ensurePath/拆步产出）——**命令对象只读，路径只覆盖不改令** */
-  corridor?: { x: number; z: number }[];
+  corridor?: { x: number; z: number; climb?: boolean }[];
   /** ★ 寻路轨：最近一次求解时的质心位（位移 >12m → 从当前位置重算；"目标不变、路径常新"） */
   pathFromX?: number;
   pathFromZ?: number;
@@ -323,7 +323,7 @@ export class SquadTactics {
    *  消费：队长锚点 / 掉队成员"长寻路找队长"（沿同一走廊）。 */
   static corridorAhead(
     state: SquadOrderState | null | undefined, cx: number, cz: number, look: number,
-  ): { x: number; z: number } | null {
+  ): { x: number; z: number; climb?: boolean } | null {
     const path = state?.corridor ?? state?.order.path;
     if (!path || path.length === 0) return null;
     let near = 0, nd = Infinity;
@@ -339,7 +339,7 @@ export class SquadTactics {
   }
 
   /** ★ 五轴「路径」：取当前应赴的路点（前方第一个 >8m 的点；都近 = 末点；带锚点滞回） */
-  static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number } | null {
+  static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
     const tgtPt = SquadTactics.corridorAhead(state, cx, cz, 8);
     if (tgtPt) {
       // ★ 锚点滞回（用户定 2026-09-25）：新锚点与旧锚 <6m（抖动）→ 沿用旧锚，防振荡
@@ -360,7 +360,7 @@ export class SquadTactics {
   static resolveAnchor(
     state: SquadOrderState, cx: number, cz: number, type?: SquadType, now = 0,
     cover?: TerrainCover | null,
-  ): { x: number; z: number } | null {
+  ): { x: number; z: number; climb?: boolean } | null {
     const o = state.order;
     // ★ 保护令（队长站位）：命令只给"被保护对象 + 玩家位置" → 队长算护卫点 + 巡逻游弋
     if (o.kind === 'protect' && o.target) {

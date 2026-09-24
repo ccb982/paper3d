@@ -13,9 +13,9 @@ for (let i = 0; i < 30; i += 3) {
     const uniq = lg.recent(400).filter((e) => e.n === 1);
     const per = new Map(); for (const e of uniq) per.set(e.squadId, (per.get(e.squadId) ?? 0) + 1);
     const top = [...per.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `#${k}:${v}`);
-    return { kept: c.stableDbg.kept, uniqN: lg.unique, last: c.stableDbg.last, top: top.join(' ') };
+    return { kept: c.stableDbg.kept, uniqN: lg.unique, last: c.stableDbg.last, top: top.join(' '), spread: c.spreadDbg?.n ?? null };
   });
-  seen.push(`[${i + 3}s] kept=${s.kept} 累计唯一令=${s.uniqN} | 最近被拦: ${s.last}`);
+  seen.push(`[${i + 3}s] kept=${s.kept} 散开=${s.spread} 累计唯一令=${s.uniqN} | 最近被拦: ${s.last}`);
 }
 console.log(seen.join('\n'));
 await browser.close();

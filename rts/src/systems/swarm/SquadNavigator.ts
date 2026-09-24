@@ -319,15 +319,17 @@ export class SquadNavigator {
         const sx = bx + fx * off.fx - fz * off.fz;
         const sz = bz + fz * off.fx + fx * off.fz;
         u.formSlot = rank;
+        const needClimb = (tgt as { climb?: boolean }).climb === true;   // ★ 寻路明确标注的爬坡位（用户定 2026-09-24）
         const mt = u.moveTarget;
-        if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; }
-        else u.moveTarget = { x: sx, y: 0, z: sz };
+        if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }
+        else u.moveTarget = { x: sx, y: 0, z: sz, climb: needClimb };
         u.controlSource = 'swarm';
         u.applySteer({
           dirX: fx, dirZ: fz,
           speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5,
           source: 'formation',
           targetX: sx, targetY: 0, targetZ: sz,
+          climb: needClimb,
         });
       }
     }

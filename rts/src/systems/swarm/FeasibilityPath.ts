@@ -12,6 +12,9 @@ import type { PassTable } from './PassTable';
 
 const CELL = 4;
 
+/** ★ 最近一次 lineOk 段是否含爬坡位（模块级 scratch；避免分配） */
+let _segClimb = false;
+
 const DIRS: readonly (readonly [number, number])[] = [
   [1, 0], [-1, 0], [0, 1], [0, -1],
   [1, 1], [1, -1], [-1, 1], [-1, -1],
@@ -113,10 +116,11 @@ export class FeasibilityPath {
     return true;
   }
 
-  /** 可行性 BFS（8 向；有向边位）。ok → out 填稀疏走廊（≤8 路点，含精确终点）。 */
+  /** 可行性 BFS（8 向；有向边位）。ok → out 填稀疏走廊（≤8 路点，含精确终点）。
+   *  ★ 爬坡位（用户定 2026-09-24）：路点带 `climb` = "到此点必须程序化爬坡"（坡面净升超阈值）。 */
   find(
     sx: number, sz: number, gx: number, gz: number,
-    out: { x: number; z: number }[],
+    out: { x: number; z: number; climb?: boolean }[],
   ): 'ok' | 'blocked' | 'outside' {
     out.length = 0;
     this.dbg.calls++;
@@ -210,7 +214,9 @@ export class FeasibilityPath {
     while (anchor < cells.length - 1) {
       let next = cells.length - 1;
       while (next > anchor + 1 && !this.lineOk(t, b.ox, b.oz, side, cells[anchor], cells[next])) next--;
-      out.push(world(cells[next]));
+      const wp = world(cells[next]) as { x: number; z: number; climb?: boolean };
+      wp.climb = _segClimb;   // ★ 该段是否含爬坡位（lineOk 内顺带检测）
+      out.push(wp);
       anchor = next;
     }
     if (out.length > 0) out[out.length - 1] = { x: gx, z: gz };
@@ -222,6 +228,7 @@ export class FeasibilityPath {
   private lineOk(
     t: PassTable, ox: number, oz: number, side: number, a: number, c: number,
   ): boolean {
+    _segClimb = false;
     let ax = a % side, az = (a - ax) / side;
     const bx = c % side, bz = (c - bx) / side;
     const dx = Math.abs(bx - ax), dz = Math.abs(bz - az);
@@ -235,6 +242,7 @@ export class FeasibilityPath {
       const wx = (ox + ax - mx) * CELL + CELL / 2;
       const wz = (oz + az - mz) * CELL + CELL / 2;
       if (!t.canStep(wx, wz, mx, mz)) return false;
+      if (!_segClimb && t.climbAt(wx, wz, mx, mz)) _segClimb = true;   // ★ 顺带标爬坡位
       // ★ 上坡必须横平竖直：斜向步只许平/下坡（拉直不得在上坡段切斜线）
       if (mx !== 0 && mz !== 0) {
         const h0 = t.heightAt(wx, wz);
