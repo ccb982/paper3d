@@ -110,7 +110,7 @@ export class NavDebugMap {
       const t = cmd?.order?.target ?? (path?.pathGoalX !== undefined ? { x: path.pathGoalX, z: path.pathGoalZ! } : null);
       if (t) { this.cx = t.x; this.cz = t.z; }
       else {
-        const s = this.swarm.squads.all().find((q) => q.id === squadId);
+        const s = this.swarm.squads.get(squadId);
         const lead = s?.members.get(s?.leaderUid ?? 0);
         if (lead) { this.cx = lead.x; this.cz = lead.z; }
       }
@@ -188,7 +188,8 @@ export class NavDebugMap {
     const gz0 = Math.ceil((this.cz - this.span / 2) / 50) * 50;
     for (let z = gz0; z <= this.cz + this.span / 2; z += 50) { const [, pz] = p2(0, z); g.beginPath(); g.moveTo(0, pz); g.lineTo(S, pz); g.stroke(); }
 
-    const squads = this.squadId === null ? this.swarm.squads.all() : this.swarm.squads.all().filter((s) => s.id === this.squadId);
+    const one = this.squadId === null ? null : this.swarm.squads.get(this.squadId);
+    const squads = one ? [one] : this.swarm.squads.all();
     // ★ 舰船位置（蓝圈）+ 工事扇区（8 区环带 + 认领队 + 需求值 + 各队 spot）
     if (this.shipAt) {
       const sp = this.shipAt();
@@ -329,7 +330,7 @@ export class NavDebugMap {
         g.setLineDash([]);
         for (const h of hist) {
           const [hx, hz] = p2(h.tx, h.tz);
-          g.fillStyle = h.source === 'leader' ? '#ffa733' : '#ff5544';
+          g.fillStyle = h.source === 'player' ? '#3399ff' : h.source === 'leader' ? '#ffa733' : '#ff5544';
           g.beginPath(); g.arc(hx, hz, 3, 0, Math.PI * 2); g.fill();
           const age = Math.max(0, Math.round(now / 1000 - h.t));
           g.fillStyle = 'rgba(230,238,245,0.9)';
@@ -339,7 +340,7 @@ export class NavDebugMap {
       }
     }
     this.titleEl.textContent = this.squadId === null
-      ? `全览（${squads.length} 队）· 视野 ${Math.round(this.span)}m`
+      ? `全览（${this.swarm.squads.size} 队）· 视野 ${Math.round(this.span)}m`
       : `第${this.squadId}队 · 视野 ${Math.round(this.span)}m · 中心 (${this.cx | 0}, ${this.cz | 0})`;
   }
 

@@ -18,7 +18,7 @@ export interface CommandLogEntry {
   t: number;
   squadId: number;
   kind: SquadOrderKind;
-  source: 'engine' | 'leader';
+  source: 'engine' | 'leader' | 'player';
   tx: number;
   tz: number;
   /** 任务名（mission；build/guard/hold/assault/flank/rear…） */
@@ -34,7 +34,7 @@ export class CommandLedger {
   /** 环形缓冲（只保留最近命令，诊断用） */
   private ring: CommandLogEntry[] = [];
   /** 同签名去重（队+kind+mission+源+目标 4m） */
-  private last = new Map<number, { kind: SquadOrderKind; tx: number; tz: number; mission: string; source: 'engine' | 'leader'; t: number; n: number }>();
+  private last = new Map<number, { kind: SquadOrderKind; tx: number; tz: number; mission: string; source: 'engine' | 'leader' | 'player'; t: number; n: number }>();
   /** 累计命令数（含重发） */
   total = 0;
   /** 累计唯一命令数 */
@@ -42,7 +42,7 @@ export class CommandLedger {
   /** 各 kind 累计（含重发） */
   byKind = new Map<SquadOrderKind, number>();
   /** 各源累计 */
-  bySource = { engine: 0, leader: 0 } as Record<'engine' | 'leader', number>;
+  bySource = { engine: 0, leader: 0, player: 0 } as Record<'engine' | 'leader' | 'player', number>;
   /** ★ P2：发令核验不可达 → 缩近/换目标的调账次数（总纲验收"adjusted_unreachable 有账"） */
   adjustedUnreachable = 0;
   /** ★ P4：队长 progress(k/N) 上报次数（总纲验收"progress 事件出现"） */
@@ -63,7 +63,7 @@ export class CommandLedger {
   }
 
   record(
-    t: number, squadId: number, kind: SquadOrderKind, source: 'engine' | 'leader',
+    t: number, squadId: number, kind: SquadOrderKind, source: 'engine' | 'leader' | 'player',
     tx: number, tz: number, mission: string | undefined, ttl: number,
   ): void {
     this.total++;
@@ -103,14 +103,14 @@ export class CommandLedger {
 
   /** 汇总快照（输出/断言用） */
   snap(): {
-    total: number; unique: number; engine: number; leader: number;
+    total: number; unique: number; engine: number; leader: number; player: number;
     kinds: Record<string, number>; adjusted: number; progress: number;
   } {
     const kinds: Record<string, number> = {};
     for (const [k, v] of this.byKind) kinds[k] = v;
     return {
       total: this.total, unique: this.unique,
-      engine: this.bySource.engine, leader: this.bySource.leader,
+      engine: this.bySource.engine, leader: this.bySource.leader, player: this.bySource.player,
       kinds, adjusted: this.adjustedUnreachable, progress: this.progressCount,
     };
   }

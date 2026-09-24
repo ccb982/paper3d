@@ -5,7 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "guard": "node scripts/arch-guard.mjs",
+    "check": "npm run typecheck && npm run guard",
+    "smoke": "node scripts/smoke.mjs",
+    "probe": "node scripts/probe-rts.mjs",
+    "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +21,7 @@
   "devDependencies": {
     "@types/earcut": "^3.0.0",
     "@types/three": "^0.170.0",
+    "puppeteer-core": "^25.12.0",
     "typescript": "~5.5.3",
     "vite": "^5.4.0",
     "vite-plugin-top-level-await": "^1.6.0",

@@ -59,8 +59,8 @@ export interface SquadOrderState {
   issuedAt: number;
   /** 截止（秒；到期回落本地自主） */
   until: number;
-  /** ★ 命令来源（引擎命令优先；队长只在无引擎命令时自主发令） */
-  source: 'engine' | 'leader';
+  /** ★ 命令来源（引擎命令优先；队长只在无引擎命令时自主发令；玩家令经 OrderBus 同链） */
+  source: 'engine' | 'leader' | 'player';
   /** ★ 五轴「时序」：生效时刻（秒；startAfter 延迟发动） */
   notBefore: number;
   /** ★ 五轴「信号」：需等信号 id（undefined = 无需） */
@@ -243,7 +243,7 @@ export class SquadTactics {
    * 发令（引擎/测试入口）：参数校验 + 缺参降级（《实体架构.md》§5.11）。
    * 保护缺护卫对象、偷袭缺路径都不会发生——降级为可执行命令。
    */
-  issue(squadId: number, order: TacticalOrder, now: number, ttl = ORDER_TTL_DEFAULT, source: 'engine' | 'leader' = 'engine'): void {
+  issue(squadId: number, order: TacticalOrder, now: number, ttl = ORDER_TTL_DEFAULT, source: 'engine' | 'leader' | 'player' = 'engine'): void {
     const o: TacticalOrder = { ...order };
     // ★ 五轴「分工」：子目标按 squadId 分派（比总目标优先）
     const sub = o.subTargets?.find((t) => t.squadId === squadId);

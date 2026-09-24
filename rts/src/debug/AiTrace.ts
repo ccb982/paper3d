@@ -85,7 +85,7 @@ export class AiTrace {
       const cmd = this.swarm.tactics.board.get(s.id);
       const path = this.swarm.tactics.board.getPath(s.id);
       const o = cmd?.order;
-      const sig = o ? `${o.kind}|${o.target?.x | 0},${o.target?.z | 0}|${o.seq}|${cmd!.source}` : 'none';
+      const sig = o ? `${o.kind}|${(o.target?.x ?? 0) | 0},${(o.target?.z ?? 0) | 0}|${o.seq}|${cmd!.source}` : 'none';
       if (this.lastSquad.get(s.id) !== sig) {
         this.lastSquad.set(s.id, sig);
         if (o) {

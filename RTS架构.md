@@ -145,7 +145,23 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | R15 行为体检 | 到达率/卡死率/工事完成率基线 | ⬜ |
 | R16 蜂群优化 | 队长决策与寻路调优 | ⬜ |
 | R17 战术层级/队形/兜底 | 已实施大半（扎堆/磨蹭/层级/施工计时）；剩"沿路才爬掩体" | ⚠️ |
+| R30 验证防线 | tsconfig 全量检查 + arch-guard + smoke/probe 基线断言（各 6 项，失败退出码 1） | ✅ 2026-09-24 |
 | §16 涉水/山地 | 目标落水→岸上点；短跳自适应；拉直防贴崖 | ⬜ |
+
+## 12.5 验证防线（四关 · 2026-09-24 建立）
+
+> 改动后依次过：`npm run typecheck` → `npm run guard` → `npm run smoke` / `npm run probe`（需 dev server 已启动）→ 文档标 ✅/⏳。
+> 旧项目 `scripts/tmp/diag-rts.mjs` 为历史探针（依赖旧项目 puppeteer-core），rts 内已自带等价探针。
+
+| 关 | 命令 | 内容 | 失败口径 |
+|---|---|---|---|
+| 类型 | `npm run typecheck` | `tsc --noEmit`，`include: ["src"]` **全量源码**（含迁移残骸） | 非 0 退出 |
+| 架构 | `npm run guard` | ①文件膨胀（1200 软限/3800 硬顶，KNOWN_BIG 只警告）②命令单源（`board.issue` 唯一写口；`issueOrder` 只从蜂群引擎出）③迁移不回潮（main.ts 不得重长刷怪函数；索敌候选须活对象）④配置真源（遗物三处/BGM 表与类型/敌军名册素材与掉落/isAir 配对） | 非 0 退出 |
+| 冒烟 | `npm run smoke` | 选点页 → 换种子 99 → 换回 → 确认进世界；断言 phase/池/存活/绘制/无 pageerror | 6 项全过，否则退出 1 |
+| 行为 | `npm run probe` | seed 4242 直进世界，T+8/20/40/70 采样（阶段/环/命令/寻路/工事/轨迹比）+ 基线断言 | 6 项全过，否则退出 1 |
+| 合并 | `npm run check` | typecheck + guard（本地快速关） | 非 0 退出 |
+
+环境变量：`RTS_URL`（默认 `http://localhost:5175/`）、`CHROME_PATH`、`SEED`。
 
 ## 13. 词汇表（UI 中英码对照）
 

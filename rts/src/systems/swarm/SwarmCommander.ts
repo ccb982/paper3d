@@ -274,7 +274,7 @@ export class SwarmCommander {
   /** ★ 对特定小队下覆盖命令（引擎优先级最高，队长不抢） */
   orderSquad(squadId: number, order: TacticalOrder, ttl = 30): void {
     if (this.swarm.squads.centroidOf(squadId, _c0)) this.issueChecked(squadId, _c0.x, _c0.z, order, ttl);
-    else this.swarm.issueOrder(squadId, order, ttlLong);
+    else this.swarm.issueOrder(squadId, order, Math.max(ttl, 60));
   }
 
   // ============================================================
