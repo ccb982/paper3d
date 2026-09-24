@@ -40,7 +40,8 @@ const TRENCH_PASSES = 5;
 /** ★ 施工计时（用户定 2026-09-25）：到位（15m）就计时，计时满即建成 */
 const COVER_TIME_S = 6;
 const TRENCH_TIME_S = 10;
-const WORK_R2 = 40 * 40;   // ★ 到位半径（40m：工兵抵近即可开工；避免'永远到不了 15m 内'）
+const WORK_R2 = 3 * 3;   // ★ 施工能力距离（用户定 2026-09-24）：**必须到件 3m 以内**才开工计时
+                         //   （原 40m：远距离也能计时 → "站着施工"其实是在远处发呆 → 卡死回收 25%）
 /** 施工冷却（真秒；每帧递减） */
 const COVER_CD = 0;   // ★ 去掉施工冷却（用户定 2026-09-25：RTS 未接每帧递减 → 冷却永不消，造完一次就再也造不了）
 const TRENCH_CD = 0;   // ★ 同上：去掉冷却
@@ -179,10 +180,12 @@ export class EngineerCorps {
    *    防"全局最低 pri = 63m 外前线件"任务瞬移 → 成员半路折返转圈。 */
   assignBuild(squadId: number, cx: number, cz: number): number {
     const cur = this.assign.get(squadId);
-    // ★ 粘性（用户定 2026-09-24）：已派未建块**保持**——闸门只管"新派"，不夺已派件
-    //   （原 `!gated(cur)` 会让环推进时把在途件判丢 → 重挑 → 目标瞬移百米 + 半路折返）
+    // ★ 粘性（用户定 2026-09-24）：已派未建块保持——但**被闸门锁住（未解锁）的件必须丢**：
+    //   construct 会跳过未解锁件（"未解锁不挖"）→ 粘着它 = 站着不挖 → 25s 卡死回收
+    //   （实测：粘住锁定件时卡死回收 13.3/分钟、占新增 25%）。
     if (cur !== undefined && cur < this.pieces.length
       && !this.built.has(keyOf(this.pieces[cur]))
+      && !this.gated(this.pieces[cur])
       && this.allows(squadId, this.pieces[cur].kind, this.pieces[cur].pri)) return cur;
     const claimed = new Set<number>(this.assign.values());
     const pick = (maxD2: number): number => {
@@ -222,14 +225,14 @@ export class EngineerCorps {
         && this.allows(s.id, this.pieces[fidx].kind, this.pieces[fidx].pri)) {
         const q = this.pieces[fidx];
         for (const m of s.members.values()) {
-          if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= WORK_R2) { piece = q; break; }   // ★ 15m 内即可计时
+          if ((m.x - q.x) ** 2 + (m.z - q.z) ** 2 <= WORK_R2) { piece = q; break; }   // ★ 3m 内才计时
         }
       }
       // ② 就近动工（新焦点）：**pri 小者先**（前线掩体 > 战壕 > 环掩体）→ 挖痕多 → 近（成员 ≤5m）
       if (!piece) {
         const cd = this.cds.get(s.id) ?? 0;
         if (cd > 0) continue;   // 冷却中（仅限新焦点）
-        let bi = -1, bD = 144, bPass = -1, bPri = Infinity;   // ★ 新焦点扫描 12m（原 5m）
+        let bi = -1, bD = 9, bPass = -1, bPri = Infinity;   // ★ 新焦点扫描 3m（用户定 2026-09-24）
         for (const m of s.members.values()) {
           for (let i = 0; i < this.pieces.length; i++) {
             const q = this.pieces[i];
@@ -237,7 +240,7 @@ export class EngineerCorps {
             if (this.gated(q)) continue;   // ★ 事态闸门（未解锁不挖）
             if (!this.allows(s.id, q.kind, q.pri)) continue;
             const d = (m.x - q.x) ** 2 + (m.z - q.z) ** 2;
-            if (d > 144) continue;   // ★ 12m
+            if (d > 9) continue;   // ★ 3m
             const pass = this.passes.get(keyOf(q)) ?? 0;
             if (q.pri < bPri || (q.pri === bPri && (pass > bPass || (pass === bPass && d < bD)))) {
               bPri = q.pri; bPass = pass; bi = i; bD = d;
