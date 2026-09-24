@@ -27,7 +27,7 @@ import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, roleBucket, SquadLeaderAI } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { SquadDispatch } from './SquadDispatch';
-import { followDir, leaderDir, followStopR } from './Follow';
+import { followDir, leaderDir, followStopR } from './squad/Follow';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
@@ -47,7 +47,7 @@ import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { MemberTaskNav } from './MemberTaskNav';
 import { SwarmRecovery } from './SwarmRecovery';
 import { DANGER } from './SwarmDanger';
-import type { PassTable } from './PassTable';
+import type { PassTable } from './nav/PassTable';
 import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';

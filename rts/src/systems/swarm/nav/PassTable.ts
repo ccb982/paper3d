@@ -17,12 +17,12 @@
 // 运行时不采样，只读边值（O(1)）。
 // ============================================================
 
-import { RasterMap } from '../../services/map/RasterMap';
-import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../services/map/Refinements';
+import { RasterMap } from '../../../services/map/RasterMap';
+import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../../services/map/Refinements';
 /** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
 const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
-import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../services/map/ChunkGenerator';
-import { DANGER } from './SwarmDanger';
+import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../../services/map/ChunkGenerator';
+import { DANGER } from '../SwarmDanger';
 
 const CELL = 4;
 /** 格↔块换算（CELL = BLOCK_SIZE = 4 → 1:1 对齐） */

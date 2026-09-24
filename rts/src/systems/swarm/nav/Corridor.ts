@@ -16,11 +16,11 @@
 // 失败（窗口越界 / 无解 / 迭代超限）→ 返回 false，调用方回落直线（绝不停摆）。
 // ============================================================
 
-import type { RasterMap } from '../../services/map/RasterMap';
-import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
-import { samplerFor } from '../../services/map/TerrainSampler';
-import { SLOPE_DH, WALL_DH, SLOPE_COST } from './TerrainScore';
-import { DANGER } from './SwarmDanger';
+import type { RasterMap } from '../../../services/map/RasterMap';
+import { CHUNK_SIZE } from '../../../services/map/ChunkGenerator';
+import { samplerFor } from '../../../services/map/TerrainSampler';
+import { SLOPE_DH, WALL_DH, SLOPE_COST } from '../TerrainScore';
+import { DANGER } from '../SwarmDanger';
 import type { PassTable } from './PassTable';
 
 const CELL = 4;

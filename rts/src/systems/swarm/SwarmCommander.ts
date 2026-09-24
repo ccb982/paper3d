@@ -27,7 +27,7 @@ import { CommanderSpawn } from './CommanderSpawn';
 import { AnchorSelect } from './CommanderAnchorSelect';
 import { DANGER } from './SwarmDanger';
 import { RESEND, REWRITE_ON } from './SwarmConfig';
-import { PassTable } from './PassTable';
+import { PassTable } from './nav/PassTable';
 import { RosterController } from './RosterController';
 import { FortifyPlanner, NEED_DONE } from './FortifyPlanner';
 import { ORDER_STABLE, GAME_MIN } from './SwarmConfig';

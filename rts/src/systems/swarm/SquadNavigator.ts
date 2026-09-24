@@ -12,14 +12,14 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import { formationOffset } from './Formation';
-import { SquadPathFinder } from './SquadPath';
+import { SquadPathFinder } from './nav/Corridor';
 import { HpaPath } from './HpaPath';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
 import { DANGER } from './SwarmDanger';
-import { FeasibilityPath } from './FeasibilityPath';
-import type { PassTable } from './PassTable';
+import { FeasibilityPath } from './nav/LongPath';
+import type { PassTable } from './nav/PassTable';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;

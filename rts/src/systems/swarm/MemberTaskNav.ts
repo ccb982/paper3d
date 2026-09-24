@@ -11,9 +11,9 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
-import { SquadPathFinder } from './SquadPath';
-import { FeasibilityPath } from './FeasibilityPath';
-import type { PassTable } from './PassTable';
+import { SquadPathFinder } from './nav/Corridor';
+import { FeasibilityPath } from './nav/LongPath';
+import type { PassTable } from './nav/PassTable';
 
 export class MemberTaskNav {
   private readonly finder = new SquadPathFinder();

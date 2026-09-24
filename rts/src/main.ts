@@ -49,8 +49,9 @@ import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
 import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
+import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
-import type { SquadOrder } from './systems/swarm/engine/contracts';
+import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
 import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
 
 const q = new URLSearchParams(location.search);
@@ -233,8 +234,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (targetKind !== AGENT_TARGET_SHIP) return;
     if (Math.hypot(x - spawn.x, z - spawn.z) <= SHIP_LENGTH / 2 + 2) shipHp = Math.max(0, shipHp - dmg);
   };
-  // ★ 新引擎影子接线（重写 P3；`?swarm=new` 时只算不发，与旧路径对照）
+  // ★ 新引擎接线（重写 P3/P4）：默认真下发；`?shadow=1` 只算不发；`?swarm=old` 回退旧链
   let shadowBridge: EngineBridge | null = null;
+  let squadCores: SquadRegistry | null = null;
   if (REWRITE_ON) {
     shadowBridge = new EngineBridge({
       player: () => ({ x: hooks.playerX, z: hooks.playerZ }),
@@ -244,9 +246,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         for (const sq of swarm.squads.all()) {
           const def = mobDefs[sq.mobKind] as { role?: string; isAir?: boolean } | undefined;
           const role = sq.builders ? 'engineer' : def?.isAir ? 'flyer' : def?.role === 'ranged' ? 'ranged' : 'melee';
-          const c = { x: 0, z: 0 };
-          swarm.squads.centroidOf(sq.id, c);
-          out.push({ id: sq.id, role, x: c.x, z: c.z, alive: Math.max(0, sq.members.size - sq.casualties) });
+          // ★ 铁律：无质心——引擎取**队长位置**（队长没了才回退质心）
+          const lead = sq.members.get(sq.leaderUid);
+          let lx = 0, lz = 0;
+          if (lead) { lx = lead.x; lz = lead.z; }
+          else { const c = { x: 0, z: 0 }; swarm.squads.centroidOf(sq.id, c); lx = c.x; lz = c.z; }
+          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties) });
         }
         return out;
       },
@@ -273,11 +278,44 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           seq: 0,
           roe: order.roe,
         } as never, now, 6, 'engine');
+        squadCores?.accept(squadId, order);   // ★ P2：队长核接令（分流/汇报）
       },
     });
     // ★ 正式启用（用户定 2026-09-25：**正常就用新链**）：默认 shadow=false（新引擎真下发）；
     //   `?shadow=1` 只跑影子（新引擎只算不发，用于对照/调试）
     shadowBridge.shadow = new URLSearchParams(location.search).get('shadow') === '1';
+    // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
+    const leaderPosOf = (id: number): { x: number; z: number } | null => {
+      const sq = swarm.squads.get(id);
+      const lead = sq?.members.get(sq.leaderUid);
+      return lead ? { x: lead.x, z: lead.z } : null;
+    };
+    const roleOf = (id: number): 'engineer' | 'flyer' | 'ranged' | 'melee' => {
+      const sq = swarm.squads.get(id);
+      const def = sq ? mobDefs[sq.mobKind] as { role?: string; isAir?: boolean } | undefined : undefined;
+      return sq?.builders ? 'engineer' : def?.isAir ? 'flyer' : def?.role === 'ranged' ? 'ranged' : 'melee';
+    };
+    squadCores = new SquadRegistry(
+      (id) => ({
+        longPath: (x, z) => {
+          const p = leaderPosOf(id);
+          if (!p) return -1;
+          const d = Math.hypot(x - p.x, z - p.z);
+          if (d <= 40) return d;
+          return swarm.walkableLine(p.x, p.z, x, z) ? d : -1;   // 长寻路可行性（走廊核验在旧板）
+        },
+        canHop: (x, z) => {
+          const p = leaderPosOf(id);
+          return !!p && swarm.walkableLine(p.x, p.z, x, z);
+        },
+      }),
+      roleOf,
+      (r: SquadReport, now: number) => shadowBridge?.squads.report(r, now),
+      (id: number) => {
+        const sq = swarm.squads.get(id);
+        return sq ? Math.max(0, sq.members.size - sq.casualties) : 0;
+      },
+    );
   }
   // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
   const cmdPanel = new CommandPanel();
@@ -609,7 +647,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.entityCount = enemies.length;
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720000);
     swarm.update(h, hooks);
-    shadowBridge?.tick(h, simT / 1000);   // ★ 新引擎影子拍（?swarm=new；只算不发）
+    shadowBridge?.tick(h, simT / 1000);   // ★ 新引擎拍（默认真下发；?shadow=1 只算不发）
+    squadCores?.tick(h, simT / 1000, (id) => {   // ★ P2：队长核推进（队长位置单源）
+      const sq = swarm.squads.get(id);
+      const lead = sq?.members.get(sq.leaderUid);
+      return lead ? { x: lead.x, z: lead.z } : null;
+    });
     if (shadowBridge) {
       const list: PanelSquad[] = [];
       for (const r of shadowBridge.squads.all()) list.push({ id: r.id, role: r.role, alive: r.alive, selected: false });

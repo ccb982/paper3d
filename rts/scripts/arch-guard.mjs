@@ -231,7 +231,8 @@ if (newFiles.length) {
     if (!inEngine && WORLD_READ.test(c)) errors.push(`G4 ${r}: 世界位置由引擎提供（禁直读 spawn/hooks）`);
     if (inSquad && ANCHOR_WRITE.test(c)) errors.push(`G5 ${r}: 保护锚（anchor）只属于引擎的保护令`);
     if ((inEngine || inSquad) && NOW_CALL.test(c)) errors.push(`G6 ${r}: 命令/规划层禁裸 performance.now()（now 从参数传入）`);
-    if (inNav && TABLE_WRITE.test(c)) errors.push(`G7 ${r}: nav/ 只读地形表，禁写裁决/高度`);
+    // ★ 表构建器 PassTable.ts 是表的所有者（建表即写表列）；G7 约束的是**寻路算法**不改地形
+    if (inNav && r !== 'systems/swarm/nav/PassTable.ts' && TABLE_WRITE.test(c)) errors.push(`G7 ${r}: nav/ 只读地形表，禁写裁决/高度`);
     const n = s.split('\n').length;
     if (n > 800) errors.push(`G8 ${r} = ${n} 行（重写目标 ≤800）`);
     if (/(?:Manager|AttackQueues|TimerManager)\.ts$/.test(r) && !/readonly dbg\b/.test(c) && !/extends\s+RoleManager\b/.test(c)) {
