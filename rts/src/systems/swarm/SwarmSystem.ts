@@ -27,7 +27,7 @@ import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, roleBucket, SquadLeaderAI } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { SquadDispatch } from './SquadDispatch';
-import { followDir } from './Follow';
+import { followDir, leaderDir, followStopR } from './Follow';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
@@ -770,11 +770,10 @@ export class SwarmSystem {
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
     const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
     if (isLeader && !hasMyTask) {
-      // ★ 池队长无任务 → **走队级指令锚点**（走廊前瞻；修"队长原地站→全队陪着站"，2026-09-25）
-      const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
-      const ad = Math.hypot(ax, az);
-      if (ad > 2) { dx = ax / ad; dz = az / ad; }
-      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+      // ★ 池队长无任务 → 走队级指令锚点；到位校验见 leaderDir（防"槽位到位离目标远"冻住）
+      const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
+        p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
+      if (ld) { dx = ld.x; dz = ld.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (isLeader && hasMyTask) {
       // ★ 队长（干活的）：**长腿走队级指令目标**（走廊锚点+阵型，避局部极小）；近程直走件点
       const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
@@ -798,8 +797,9 @@ export class SwarmSystem {
     } else if (lead) {
       // ★ 成员跟队长（用户定 2026-09-24）：近=直线；掉队且直线被挡 → 长寻路沿走廊绕（Follow）
       //   双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
+      const stopR = followStopR(p.atomMove[i] === 255, lead.x, lead.z, p.orderTargetX[i], p.orderTargetZ[i]);
       const fd = followDir(this.tactics, squad!.id, p.x[i], p.z[i], lead.x, lead.z,
-        p.atomMove[i] === 255 ? 8 : 5, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
+        stopR, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
       if (fd) { dx = fd.x; dz = fd.z; }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (p.atomMove[i] !== 255) {

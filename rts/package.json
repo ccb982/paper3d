@@ -13,6 +13,7 @@
     "probe:mountain": "node scripts/probe-mountain.mjs",
     "probe:cmd": "node scripts/probe-cmd.mjs",
     "probe:dir": "node scripts/probe-dir.mjs",
+    "probe:squad": "node scripts/probe-squad.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },

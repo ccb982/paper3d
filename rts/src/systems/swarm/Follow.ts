@@ -13,6 +13,23 @@ export interface FollowDir {
   z: number;
 }
 
+/** 队长（无任务）方向：先到指令锚点；离锚（队级目标）仍远 → 不停、直接朝锚；null = 真到位。
+ *  ★ 到位校验（用户定 2026-09-24）：防"槽位到位、离队令目标还远"冻住全队。 */
+export function leaderDir(
+  dx: number, dz: number, ox: number, oz: number,
+): FollowDir | null {
+  const ad = Math.hypot(dx, dz);
+  if (ad > 2) return { x: dx / ad, z: dz / ad };
+  const od = Math.hypot(ox, oz);
+  if (od > 8) return { x: ox / od, z: oz / od };
+  return null;
+}
+
+/** 跟班停步半径：队长未真到位（离锚 >8m）→ 压到 2m；否则动 5m / 停 8m 滞回 */
+export function followStopR(stopped: boolean, leadX: number, leadZ: number, ox: number, oz: number): number {
+  return Math.hypot(leadX - ox, leadZ - oz) > 8 ? 2 : (stopped ? 8 : 5);
+}
+
 /** 跟队长方向；null = 已到位（应停）。stopR = 停步半径（滞回由调用方给） */
 export function followDir(
   tactics: SquadTactics,
