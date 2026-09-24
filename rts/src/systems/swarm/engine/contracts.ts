@@ -46,12 +46,18 @@ export interface SquadOrder {
   target: { x: number; z: number };
   /** 保护锚（仅 protect 用；铁律 G5：锚只属于保护令） */
   anchor?: { x: number; z: number };
+  /** ★ 防御对象（仅 defend 用；可空 = 守原地）——命令格式灵活：位移给 target，防御给 object */
+  object?: { x: number; z: number };
   roe: Roe;
   seq: number;
   /** TTL（游戏分钟；命令/规划层用 GAME_MIN） */
   ttl: number;
   mission?: string;
 }
+// ★ 命令格式（用户定）：**作用对象只有队长**（引擎只指挥队长；成员一律跟队长走）。
+//   · 位移命令：径向+切向同时发力得 target → 长寻路检测 → 下发（见 Displacement.composeMove）
+//   · 防御命令：可只给 object（防御对象），也可只给 kind（守原地）
+//   · 扩展新复合命令 = 加可选字段，不改既有语义（契约向后兼容）
 
 /** 命令生命周期（显式；换令条件集中判定） */
 export type OrderPhase = 'issued' | 'executing' | 'done' | 'dropped';

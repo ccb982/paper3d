@@ -35,7 +35,7 @@ export class TimerManager {
   private readonly deadlines = new Map<number, { at: number; why: string }>();
   private readonly fireLatch = new Set<number>();
   /** 探针契约（G9）：每次 tick 重置计数；latched = 累计闩锁数 */
-  readonly dbg = { tracked: 0, exempt: 0, window: 0, expired: 0, latched: 0, last: '' };
+  readonly dbg = { tracked: 0, exempt: 0, window: 0, expired: 0, expiredTotal: 0, latched: 0, last: '' };
 
   constructor(private readonly h: TimerHost) {}
 
@@ -53,6 +53,7 @@ export class TimerManager {
       this.deadlines.delete(uid);
       this.forget(uid);
       dbg.expired++;
+      dbg.expiredTotal++;
       dbg.last = `despawn#${uid}:${d.why}`;
       this.h.onExpire(uid, d.why);
     }
@@ -92,6 +93,7 @@ export class TimerManager {
         dbg.last = `stuck#${uid} bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`;
         this.forget(uid);
         dbg.expired++;
+        dbg.expiredTotal++;
         this.h.onExpire(uid, 'stuck');
       }
     }

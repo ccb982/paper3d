@@ -202,8 +202,8 @@ if (fs.existsSync(enemyDir) && rosterFiles.length) {
 const NEW_DIRS = ['systems/swarm/engine/', 'systems/swarm/squad/', 'systems/swarm/nav/', 'entity/base/'];
 const newFiles = [...srcOf].filter(([r]) => NEW_DIRS.some((d) => r.startsWith(d)));
 if (newFiles.length) {
-  /** G1 引擎发令：只有 engine/ 能 issueChecked/issueOrder */
-  const ENGINE_ISSUE = /\.(?:issueChecked|issueOrder)\(/;
+  /** G1 单一发令器：所有引擎命令只经 OrderWriter 下发 */
+  const ENGINE_ISSUE = /\.(?:issueChecked|issueOrder|issue)\(/;
   /** G2 队令单写口：orderStore/orders 的 set/write 只许 engine/OrderWriter.ts */
   const STORE_WRITE = /(?:orderStore|orders)\.(?:set|write)\s*\(/;
   /** G3 成员指令：directive 列只许 squad/（队长层）写 */
@@ -221,7 +221,10 @@ if (newFiles.length) {
     const inEngine = r.startsWith('systems/swarm/engine/');
     const inSquad = r.startsWith('systems/swarm/squad/');
     const inNav = r.startsWith('systems/swarm/nav/');
-    if (!inEngine && ENGINE_ISSUE.test(c)) errors.push(`G1 ${r}: 只有 engine/ 能发令（issueChecked/issueOrder）`);
+    // G1 单一发令器（用户定）：所有引擎命令只经 OrderWriter 下发
+    if (r !== 'systems/swarm/engine/OrderWriter.ts' && ENGINE_ISSUE.test(c)) {
+      errors.push(`G1 ${r}: 命令必须经唯一发令器 engine/OrderWriter.ts 下发（issueChecked/issueOrder/issue）`);
+    }
     if (r !== 'systems/swarm/engine/OrderWriter.ts' && STORE_WRITE.test(c)) errors.push(`G2 ${r}: 队令单写口只许 engine/OrderWriter.ts`);
     if (!inSquad && DIRECTIVE_WRITE.test(c)) errors.push(`G3 ${r}: 成员指令（directive 列）只许 squad/ 写`);
     if (!inEngine && WORLD_READ.test(c)) errors.push(`G4 ${r}: 世界位置由引擎提供（禁直读 spawn/hooks）`);
@@ -230,8 +233,8 @@ if (newFiles.length) {
     if (inNav && TABLE_WRITE.test(c)) errors.push(`G7 ${r}: nav/ 只读地形表，禁写裁决/高度`);
     const n = s.split('\n').length;
     if (n > 800) errors.push(`G8 ${r} = ${n} 行（重写目标 ≤800）`);
-    if (/(?:Manager|AttackQueues|TimerManager)\.ts$/.test(r) && !/readonly dbg\b/.test(c)) {
-      errors.push(`G9 ${r}: 管理器必须暴露 readonly dbg（探针/UI 契约）`);
+    if (/(?:Manager|AttackQueues|TimerManager)\.ts$/.test(r) && !/readonly dbg\b/.test(c) && !/extends\s+RoleManager\b/.test(c)) {
+      errors.push(`G9 ${r}: 管理器必须暴露 readonly dbg（探针/UI 契约；继承 RoleManager 亦可）`);
     }
   }
 }

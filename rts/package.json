@@ -15,7 +15,8 @@
     "probe:dir": "node scripts/probe-dir.mjs",
     "probe:squad": "node scripts/probe-squad.mjs",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:engine": "esbuild scripts/engine-selftest.ts --bundle --platform=node --format=esm --outfile=scripts/.engine-selftest.mjs && node scripts/.engine-selftest.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d": "^0.20.0",
