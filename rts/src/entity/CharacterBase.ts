@@ -20,7 +20,8 @@ import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
-import { SHORE_CLIMB_MAX, CLIMB_SLOPE_MIN, CLIMB_PATH_MS, CLIMB_SPEED_MUL } from "./TerrainAssist";
+import { SHORE_CLIMB_MAX } from "./TerrainAssist";
+import { CharacterCore, type TerrainProbe } from "./base/CharacterCore";
 import { finalRuling, type EdgeRuling } from "../services/map/Refinements";
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from "../services/map/ChunkGenerator";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
@@ -81,11 +82,34 @@ export abstract class CharacterBase extends EntityBase {
   private climbT = -1;
   /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24；EnemyBase 由 steer 写入） */
   climbOrdered = false;
-  /** ★ 坡面程序化爬升（用户定 2026-09-24）：坡面上不许驻留（要么上要么下）——
-   *  期望朝上 → 爬坡态（定速沿坡面梯度直推、免立面阻挡、减分离）；到顶/超时退出。 */
-  private climbPathUntil = 0;
-  private climbDirX = 0;
-  private climbDirZ = 0;
+  /** ★ 重写 P1：推进/爬坡/立面/贴地统一走 CharacterCore（L2/L3 同内核） */
+  private readonly core = new CharacterCore();
+  /** ★ 地形探针（实体层注入；不依赖 systems） */
+  private readonly probe: TerrainProbe = {
+    heightAt: (x, z, y) => RasterMap.current?.surfaceHeightAtFor(x, z, y) ?? 0,
+    wetAt: (x, z) => RasterMap.current?.tileDefAt(x, z).genRole === 'liquid',
+    slopeGradAt: (x, z) => {
+      const raster = RasterMap.current;
+      if (!raster) return null;
+      const y = this.entity.position.y;
+      const hx0 = raster.surfaceHeightAtFor(x - 1, z, y);
+      const hx1 = raster.surfaceHeightAtFor(x + 1, z, y);
+      const hz0 = raster.surfaceHeightAtFor(x, z - 1, y);
+      const hz1 = raster.surfaceHeightAtFor(x, z + 1, y);
+      const gx = (hx1 - hx0) * 0.5;
+      const gz = (hz1 - hz0) * 0.5;
+      return { gx, gz, mag: Math.hypot(gx, gz) };
+    },
+    isWeldEdge: (x, z, dx, dz) => {
+      const raster = RasterMap.current;
+      if (!raster) return false;
+      const bx = Math.floor(x / BLOCK_SIZE);
+      const bz = Math.floor(z / BLOCK_SIZE);
+      const dIdx = (Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 0 : 1) : (dz > 0 ? 2 : 3)) as 0 | 1 | 2 | 3;
+      const src = raster.chunkSource(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE));
+      return finalRuling(src, bx, bz, dIdx) === 'weld';
+    },
+  };
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
   private climbToX = 0; private climbToY = 0; private climbToZ = 0;
   private climbContactT = 0;
@@ -151,87 +175,25 @@ export abstract class CharacterBase extends EntityBase {
     //   角色始终与壁保留 clearance 距离（碰撞盒边缘外 m）。
     //   检查只看地形高差、与跳跃离地高度无关 → 跳跃中朝壁的速度分量同样被消，
     //   实现"跳跃无向墙壁速度"。
-    let dx = dir.x * speed * dt;
-    let dz = dir.y * speed * dt;
-    // ★ 坡面程序化爬升（用户定 2026-09-24；仅限制爬崖单位=敌人）：
-    //   · 坡度 ≥ CLIMB_SLOPE_MIN 且期望方向朝上坡 → 进爬坡态：定速沿坡面梯度（fall line）直推
-    //   · 不朝上坡（下行/站桩）→ 给下坡小推力，**不许在坡面驻留**
-    //   · 爬坡态免立面阻挡、跳过人群分离（防坡面扎堆推挤卡死）
-    let climbing = false;
-    {
-      const raster = RasterMap.current;
-      const nowMs = performance.now();
-      if (this.blockCliffClimb && raster && !this.controller.isAirborne()) {
-        const cy = this.entity.position.y;
-        const hx0 = raster.surfaceHeightAtFor(prevX - 1, prevZ, cy);
-        const hx1 = raster.surfaceHeightAtFor(prevX + 1, prevZ, cy);
-        const hz0 = raster.surfaceHeightAtFor(prevX, prevZ - 1, cy);
-        const hz1 = raster.surfaceHeightAtFor(prevX, prevZ + 1, cy);
-        const gx = (hx1 - hx0) * 0.5, gz = (hz1 - hz0) * 0.5;
-        const grad = Math.hypot(gx, gz);
-        if (this.climbOrdered) {
-          // ★ 寻路标注：明确要求爬坡（不管坡度阈值；方向=朝指令目标）
-          const dxs = dir.x * speed * dt, dzs = dir.y * speed * dt;
-          if (dxs !== 0 || dzs !== 0) {
-            this.climbPathUntil = nowMs + CLIMB_PATH_MS;
-            const l = Math.hypot(dxs, dzs) || 1;
-            this.climbDirX = dxs / l; this.climbDirZ = dzs / l;
-          }
-          climbing = nowMs < this.climbPathUntil;
-          if (climbing) { dx = this.climbDirX * speed * CLIMB_SPEED_MUL * dt; dz = this.climbDirZ * speed * CLIMB_SPEED_MUL * dt; }
-        } else if (grad >= CLIMB_SLOPE_MIN) {
-          const ux = gx / grad, uz = gz / grad;
-          // ★ 只对**坡面**（地形表 weld）程序化爬升；硬边（cliff）= 墙（不爬）
-          const bx = Math.floor(prevX / BLOCK_SIZE), bz = Math.floor(prevZ / BLOCK_SIZE);
-          const dIdx = (Math.abs(ux) >= Math.abs(uz) ? (ux > 0 ? 0 : 1) : (uz > 0 ? 2 : 3)) as 0 | 1 | 2 | 3;
-          const src = raster.chunkSource(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE));
-          const ruling: EdgeRuling = finalRuling(src, bx, bz, dIdx);
-          if (ruling !== 'weld') {
-            this.climbPathUntil = 0;
-          } else if (dir.x * ux + dir.y * uz > 0.25) {
-            this.climbPathUntil = nowMs + CLIMB_PATH_MS;
-            this.climbDirX = ux; this.climbDirZ = uz;
-          } else if (this.climbPathUntil < nowMs) {
-            dx -= ux * speed * dt * 0.6;   // 站桩/下行：下坡小推力（要么上要么下）
-            dz -= uz * speed * dt * 0.6;
-          }
-          climbing = nowMs < this.climbPathUntil;
-          if (climbing) { dx = this.climbDirX * speed * CLIMB_SPEED_MUL * dt; dz = this.climbDirZ * speed * CLIMB_SPEED_MUL * dt; }
-        } else {
-          this.climbPathUntil = 0;
-        }
-      }
-    }
-    // ★ 涉水优化（用户定 2026-09-24）：**在水中 → 允许爬岸**（≤SHORE_CLIMB_MAX），
-    //   治"掉水里卡死在岸边"（岸坎 >0.6m 时原逻辑把水平位移清零 → 永远出不来）
-    const wetHere = RasterMap.current?.tileDefAt(prevX, prevZ).genRole === 'liquid';
-    const stepLimit = wetHere ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
-    // ★ 立面阻挡：boss4D 玩家（requireRealLanding）与受限爬崖单位（blockCliffClimb，
-    //   敌人）共用——朝壁方向位移分量清零；blockCliffClimb 单位放行"插值坡"
-    //   （陡升但仍在延续 = 坡），requireRealLanding 保持原严格逻辑（>0.5 即挡）
-    if (!climbing && !this.climbAnyTerrain && (this.controller.requireRealLanding || this.blockCliffClimb)) {
-      const raster = RasterMap.current;
-      const p0 = this.entity.position;
-      // ★ 第二层高度（浮空洞顶）：按自身高度选层（山上的敌/玩家不会误判洞为崖）
-      const gyHere = raster?.surfaceHeightAtFor(p0.x, p0.z, p0.y) ?? 0;
-      if (raster) {
-        const ext = shapeExtents(this.collisionVolume.shape);
-        const m = 0.1; // 贴壁保留距离
-        /** 该采样点是否"墙"（陡升 > 台阶豁免，且再远 0.8m 不再延续） */
-        const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
-          const h1 = raster.surfaceHeightAtFor(sx, sz, p0.y);
-          const rise = h1 - gyHere;
-          if (rise <= stepLimit) return false;   // 水中 → 爬岸上限放宽到 SHORE_CLIMB_MAX
-          if (!this.blockCliffClimb) return true; // boss4D 玩家：原逻辑
-          const h2 = raster.surfaceHeightAtFor(sx + ux * 0.8, sz + uz * 0.8, p0.y);
-          return h2 - h1 < rise * 0.5;
-        };
-        if (dx > 0 && isWall(p0.x + ext.hx + m, p0.z, 1, 0)) dx = 0;
-        else if (dx < 0 && isWall(p0.x - ext.hx - m, p0.z, -1, 0)) dx = 0;
-        if (dz > 0 && isWall(p0.x, p0.z + ext.hz + m, 0, 1)) dz = 0;
-        else if (dz < 0 && isWall(p0.x, p0.z - ext.hz - m, 0, -1)) dz = 0;
-      }
-    }
+    // ★ 重写 P1：推进/爬坡/立面 统一走 CharacterCore（L2/L3 同内核；地形经 TerrainProbe 注入）
+    const vol = shapeExtents(this.collisionVolume.shape);
+    const step = this.core.step(
+      {
+        x: prevX, y: this.entity.position.y, z: prevZ, dt,
+        dirX: dir.x, dirZ: dir.y, speed,
+        climbOrdered: this.climbOrdered,
+        blockCliffClimb: this.blockCliffClimb,
+        climbAnyTerrain: this.climbAnyTerrain,
+        hx: vol.hx, hz: vol.hz,
+        suspended: false,
+      },
+      this.probe,
+      performance.now() / 1000,
+    );
+    const dx = step.dx;
+    const dz = step.dz;
+    const climbing = step.climbing;
+    const stepLimit = this.probe.wetAt(prevX, prevZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
     this.entity.position.x += dx;
     this.entity.position.z += dz;
     const p = this.entity.position;
