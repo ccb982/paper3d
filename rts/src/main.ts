@@ -50,6 +50,7 @@ import { Timeline } from './ui/Timeline';
 import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
+import { createSquadNav } from './systems/swarm/squad/MarchAction';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
 import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
 import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
@@ -251,7 +252,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           let lx = 0, lz = 0;
           if (lead) { lx = lead.x; lz = lead.z; }
           else { const c = { x: 0, z: 0 }; swarm.squads.centroidOf(sq.id, c); lx = c.x; lz = c.z; }
-          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties) });
+          let sh = 0, sm = 0;
+          for (const m of sq.members.values()) { sh += m.hp; sm += m.maxHp; }
+          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties), hpRatio: sm > 0 ? sh / sm : 1 });
         }
         return out;
       },
@@ -298,19 +301,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       return sq?.builders ? 'engineer' : def?.isAir ? 'flyer' : def?.role === 'ranged' ? 'ranged' : 'melee';
     };
     squadCores = new SquadRegistry(
-      (id) => ({
-        longPath: (x, z) => {
-          const p = leaderPosOf(id);
-          if (!p) return -1;
-          const d = Math.hypot(x - p.x, z - p.z);
-          if (d <= 40) return d;
-          return swarm.walkableLine(p.x, p.z, x, z) ? d : -1;   // 长寻路可行性（走廊核验在旧板）
-        },
-        canHop: (x, z) => {
-          const p = leaderPosOf(id);
-          return !!p && swarm.walkableLine(p.x, p.z, x, z);
-        },
-      }),
+      (id) => createSquadNav({ leaderPos: leaderPosOf, walkableLine: (a, b, c2, d2) => swarm.walkableLine(a, b, c2, d2) }, id),
       roleOf,
       (r: SquadReport, now: number) => shadowBridge?.squads.report(r, now),
       (id: number) => {

@@ -566,11 +566,12 @@ console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
 {
   const base = {
     playerOrder: false, hpRatio: 1, atRingMax: false, underAttack: false,
-    intervention: null, routine: { x: 10, z: 0 }, px: 0, pz: 0,
+    intervention: null, routine: { x: 10, z: 0 }, retreat: { x: -30, z: -30 },
   };
   ok(decideChain({ ...base, playerOrder: true }) === null, '① 玩家令在身 → 引擎不产令');
   const w = decideChain({ ...base, hpRatio: 0.4 });
-  ok(w?.source === 'wounded' && w.kind === 'march' && w.target?.x === 0, '② 重伤 → 撤回基准点');
+  ok(w?.source === 'wounded' && w.kind === 'march' && w.target?.x === -30 && w.target?.z === -30, '② 整队危急 → 向**后**撤（远离战场）');
+  ok(decideChain({ ...base, hpRatio: 0.4, retreat: null }) === null, '② 无后撤点 → 不产令（保持现状）');
   const s1 = decideChain({ ...base, atRingMax: true });
   ok(s1?.source === 'situation' && s1.kind === 'defend', '③ 到上限 → 防御');
   const s2 = decideChain({ ...base, underAttack: true });

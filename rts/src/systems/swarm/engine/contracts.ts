@@ -89,6 +89,8 @@ export interface SquadReport {
   progress?: number;
   /** 静止时长（实秒；队长自报；稳定门用） */
   stillS?: number;
+  /** 整队血量比 Σhp/ΣmaxHp（0~1；重伤撤回判定用——**整队危急**才撤，用户定） */
+  hpRatio?: number;
 }
 
 // ---------- 实体侧契约（能力 / 升降格汇报） ----------

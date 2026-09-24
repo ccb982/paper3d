@@ -10,6 +10,7 @@
 // ============================================================
 
 import type { AtomicKind, MobRole, OrderPhase, SquadOrder, SquadReport } from '../engine/contracts';
+import { onArriveAtom } from './Abilities';
 
 /** 距离分流阈值（米；用户定：行军=距离长→长寻路，行动=距离短→短跳） */
 export const MARCH_DIST = 40;
@@ -91,7 +92,7 @@ export class SquadCore {
         this.dbg.done++;
         this.dbg.last = `#${this.id} done ${o.kind}`;
       }
-      this.atom = o.kind === 'patrol' || o.kind === 'defend' || o.kind === 'protect' ? 'patrol' : 'garrison';
+      this.atom = onArriveAtom(o.kind);   // ★ 稳定层（squad/Abilities）：到位驻留口径单源
       this.report();
       return;
     }

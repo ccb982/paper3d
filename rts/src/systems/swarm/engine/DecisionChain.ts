@@ -25,9 +25,9 @@ export interface DecisionInput {
   intervention: { x: number; z: number } | null;
   /** 常规部署目标（兵种管理器分配；null=无） */
   routine: { x: number; z: number } | null;
-  /** 撤退基准（玩家/舰船位置） */
-  px: number;
-  pz: number;
+  /** ★ 撤退点（向**后**：远离战场——本队扇区中心外圈；用户定）。
+   *  为 null = 无后撤点（不撤，保持现状）。 */
+  retreat: { x: number; z: number } | null;
 }
 
 export interface Decision {
@@ -42,9 +42,10 @@ export interface Decision {
 export function decideChain(inp: DecisionInput): Decision | null {
   // ① 玩家令在身：引擎不产令（玩家令优先）
   if (inp.playerOrder) return null;
-  // ② 重伤：撤回基准点
+  // ② 重伤（整队血量比 < 0.5）：向**后**撤——远离战场（扇区中心外圈；用户定）
   if (inp.hpRatio < 0.5) {
-    return { source: 'wounded', kind: 'march', target: { x: inp.px, z: inp.pz }, reason: `hp=${inp.hpRatio.toFixed(2)}` };
+    if (!inp.retreat) return null;   // 无后撤点 → 不产令（保持现状）
+    return { source: 'wounded', kind: 'march', target: inp.retreat, reason: `hp=${inp.hpRatio.toFixed(2)}` };
   }
   // ③ 事态介入：到上限 → 防御；被打 → 保护
   if (inp.atRingMax) return { source: 'situation', kind: 'defend', target: null, reason: '到事态上限' };

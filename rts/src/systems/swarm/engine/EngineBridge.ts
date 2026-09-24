@@ -30,6 +30,8 @@ export interface LiveSquad {
   x: number;
   z: number;
   alive: number;
+  /** 整队血量比 Σhp/ΣmaxHp（重伤撤回判定用） */
+  hpRatio?: number;
 }
 
 export interface LiveView {
@@ -155,7 +157,7 @@ export class EngineBridge {
       if (!this.squads.get(sq.id)) this.squads.register(sq.id, sq.role, sq.alive, now);
       this.pos.setSquad(sq.id, sq.x, sq.z);
       this.squads.report(
-        { squadId: sq.id, x: sq.x, z: sq.z, alive: sq.alive, atom: 'act', phase: 'executing' },
+        { squadId: sq.id, x: sq.x, z: sq.z, alive: sq.alive, atom: 'act', phase: 'executing', hpRatio: sq.hpRatio },
         now,
       );
       // ★ 队长自报进度/静止 → 稳定门（引擎只记录，不逐拍指挥）
@@ -236,15 +238,20 @@ export class EngineBridge {
       const sp = this.pos.squad(rec.id);
       // ★ 显式优先链（单源决策）：玩家>重伤>事态>干预>常规（不靠调用顺序）
       const cur = this.writer.store.get(rec.id);
+      // ★ 后撤点（用户定：撤退=向后远离战场）：本队扇区中心 + 事态上限外 20m
+      const sec = this.sectors.sectorOf(rec.id);
+      const ringC = this.pos.ship() ?? p;
+      const retreat = sec >= 0
+        ? this.sectors.centerOf(sec, ringC.x, ringC.z, Math.max(this.dbg.ringMax, 120) + 20)
+        : null;
       const dec = decideChain({
         playerOrder: cur !== undefined && cur.order.source === 'player',
-        hpRatio: 1,
+        hpRatio: rec.hpRatio,   // ★ 整队血量比（Σhp/ΣmaxHp）：整队危急才重伤撤回（用户定）
         atRingMax: this.dbg.ringMax > 0 && sp !== null && Math.hypot(sp.x - p.x, sp.z - p.z) >= this.dbg.ringMax,
         underAttack: hitId === rec.id || this.protect.linkOf(rec.id) !== undefined,
         intervention: null,
         routine: t ?? null,
-        px: p.x,
-        pz: p.z,
+        retreat,
       });
       if (!dec) continue;   // 玩家令在身 / 无决策 → 引擎不产令
       // 防御=守原地（target 为空时用当前位置）

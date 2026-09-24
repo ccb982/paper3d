@@ -19,9 +19,10 @@ export interface SquadRecord {
   z: number;
   atom: AtomicKind;
   phase: OrderPhase;
-  /** 队长自报：命令进度 0~1 / 静止时长（实秒） */
+  /** 队长自报：命令进度 0~1 / 静止时长（实秒）/ 整队血量比 */
   progress: number;
   stillS: number;
+  hpRatio: number;
   lastReport: number;
   /** 累计汇报数（探针/调试） */
   reports: number;
@@ -40,7 +41,7 @@ export class SquadManager {
     const rec: SquadRecord = {
       id, role, alive,
       x: 0, z: 0, atom: 'act', phase: 'issued',
-      progress: 0, stillS: 0,
+      progress: 0, stillS: 0, hpRatio: 1,
       lastReport: now, reports: 0,
     };
     this.recs.set(id, rec);
@@ -64,6 +65,7 @@ export class SquadManager {
     rec.phase = r.phase;
     if (r.progress !== undefined) rec.progress = r.progress;
     if (r.stillS !== undefined) rec.stillS = r.stillS;
+    if (r.hpRatio !== undefined) rec.hpRatio = r.hpRatio;
     rec.lastReport = now;
     rec.reports++;
     this.dbg.last = `#${r.squadId} ${r.atom}/${r.phase} alive=${r.alive} @${r.x.toFixed(0)},${r.z.toFixed(0)}`;
