@@ -325,6 +325,8 @@ export class SwarmCommander {
   /** 发令核验门：全部引擎发令点必须走这里（返回 false = 未发）。 */
   private issueChecked(
     squadId: number, fromX: number, fromZ: number, order: TacticalOrder, ttl?: number,
+    /** ★ 干预令（用户定 2026-09-24）：扎堆/越位/磨蹭/同兵种散开——**绕过换令稳定门** */
+    intervention = false,
   ): boolean {
     // ★ 发令冷却（用户定 2026-09-25）：**命令发出去一次，短时期内不再给同一队发**——
     //   不靠命令时效（引擎令 TTL 拉长存活）；冷却期内同签名同目标 → 直接不发。
@@ -358,7 +360,8 @@ export class SwarmCommander {
         }
         // ★ 命令稳定门（用户定 2026-09-24）：**换令**（kind/目标变）需 ①现令进度 ≥50% 或 ②长时间静止
         //   （无净推进 ≥STUCK_S）——否则保持现令。重伤（hurt）豁免（紧急撤退不被拖）。
-        if (!(sameKind && sameTgt) && !hurt) {
+        //   ★ 干预令（intervention）旁路：扎堆/越位/磨蹭/同兵种散开是引擎职责，不能被稳定门拦。
+        if (!intervention && !(sameKind && sameTgt) && !hurt) {
           const t1 = cur0.order.target!;
           const trk = this.orderProg.get(squadId);
           if (trk && trk.tx === t1.x && trk.tz === t1.z) {
@@ -810,7 +813,7 @@ export class SwarmCommander {
           }
           const pick = this.pickValidTarget(cx, cz, cands);
           if (pick) {
-            this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20 * GAME_MIN);
+            this.issueChecked(s.id, cx, cz, { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20 * GAME_MIN, true);
             this.lastDecision = { squad: s.id, kind: 'dawdle_push', at: nowF };
           }
         }
@@ -845,7 +848,7 @@ export class SwarmCommander {
         if (pick) {
           this.rankFix.set(back.id, true);
           this.issueChecked(back.id, back.x, back.z,
-            { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+            { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20, true);
           this.lastDecision = { squad: back.id, kind: 'rank_fix', at: nowF };
         }
       }
@@ -894,7 +897,7 @@ export class SwarmCommander {
           if (pick) {
             this.clumpFix.set(a.id, true);
             this.issueChecked(a.id, a.x, a.z,
-              { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20);
+              { kind: 'advance', target: { x: pick.x, z: pick.z }, mission: 'regroup', seq: 0 }, 20, true);
             this.lastDecision = { squad: a.id, kind: 'tangent_split', at: nowF };
           }
         }
@@ -1328,6 +1331,7 @@ const PROTECT_QUOTA = 2;
       const out = decideTarget(d, s, ctx, st);
       // ★ 同兵种目标间距（用户定 2026-09-24）：自由选点且与同 mobKind 已定目标 < SQ_TARGET_SPREAD
       //   → 横向（垂直于"队→目标"）散开候选，过四校验取首个；无解则保留原点
+      let spreadHit = false;
       if (!pt && ma.mission !== 'build' && ma.mission !== 'guard' && ma.mission !== 'patrol' && out.kind === 'advance') {
         const arr = spreadByKind.get(s.mobKind) ?? [];
         if (arr.some((a) => Math.hypot(out.target.x - a.x, out.target.z - a.z) < SQ_TARGET_SPREAD)) {
@@ -1339,7 +1343,7 @@ const PROTECT_QUOTA = 2;
             for (const sg of [1, -1]) cands.push({ x: out.target.x + latX * lat * sg, z: out.target.z + latZ * lat * sg });
           }
           const pick = this.pickValidTarget(scx, scz, cands);
-          if (pick) { out.target = { x: pick.x, z: pick.z }; this.spreadDbg.n++; }
+          if (pick) { out.target = { x: pick.x, z: pick.z }; this.spreadDbg.n++; spreadHit = true; }
         }
         arr.push({ x: out.target.x, z: out.target.z });
         spreadByKind.set(s.mobKind, arr);
@@ -1351,7 +1355,7 @@ const PROTECT_QUOTA = 2;
         // ★ 工作区（队长层工兵分派的参考点）：保护对象/工地/岗位 → EngineerDispatch 读 anchor
         anchor: (ma.mission === 'build' || ma.mission === 'guard' || ma.mission === 'patrol') && pt
           ? { x: pt.x, z: pt.z } : undefined,
-      }, out.ttl);
+      }, out.ttl, spreadHit);
     }
     // ⑤ 施工（逐步拼装，仅 S1；挖建执行在 EngineerCorps）
     this.corps.construct(builders);

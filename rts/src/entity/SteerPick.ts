@@ -143,7 +143,9 @@ export function pickSteer(
       if (tbl.coverAt && tbl.coverAt(x + cx * PROBE, z + cz * PROBE)) s -= W_COVER;
     }
     if (aMag > 0.05) s -= W_AVOID * aMag * Math.max(0, cx * ax + cz * az);
-    if (heldValid) s += W_TURN * (cx * heldX + cz * heldZ);   // ★ 转向惯性（同向加分）
+    // ★ 转向惯性（同向加分）：**上帧方向被挡（heldValid=false）时也加**——否则左右两侧候选
+    //   完全对称 → 每拍在"左绕/右绕"间翻面 = 集体转圈（用户 2026-09-24 报）
+    if (heldX !== 0 || heldZ !== 0) s += W_TURN * (cx * heldX + cz * heldZ);
     _scores[k] = s;
     steerScores[k] = s;
     any = true;
