@@ -48,6 +48,8 @@ export interface SquadOrder {
   anchor?: { x: number; z: number };
   /** ★ 防御对象（仅 defend 用；可空 = 守原地）——命令格式灵活：位移给 target，防御给 object */
   object?: { x: number; z: number };
+  /** ★ 威胁点 P（仅 protect/garrison 用；引擎单源提供，队长据此算阻挡/掩体站位） */
+  threat?: { x: number; z: number };
   roe: Roe;
   seq: number;
   /** TTL（游戏分钟；命令/规划层用 GAME_MIN） */

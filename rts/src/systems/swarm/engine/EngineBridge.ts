@@ -113,6 +113,7 @@ export class EngineBridge {
       kind,
       source: 'player',
       target,
+      threat: this.pos.player() ?? undefined,
       roe: 'engage',
       seq: 0,
       ttl: 0,
@@ -257,6 +258,7 @@ export class EngineBridge {
       const order: SquadOrder = {
         kind: dec.kind, source: 'engine', target: { x: v.x, z: v.z },
         anchor: this.protect.linkOf(rec.id)?.anchor,
+        threat: { x: p.x, z: p.z },   // ★ P 点（引擎单源）：队长算阻挡/掩体站位用
         roe: 'engage', seq: 0, ttl: 0,
       };
       // 唯一发令器（G1）：影子模式也走（只写本地 store，不发实机）

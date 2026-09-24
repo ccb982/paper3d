@@ -275,6 +275,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           target: { x: order.target.x, z: order.target.z },
           mission: 'engine',
           anchor: order.anchor,
+          threatX: order.threat?.x,
+          threatZ: order.threat?.z,
           seq: 0,
           roe: order.roe,
         } as never, now, 6, 'engine');
