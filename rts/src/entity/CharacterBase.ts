@@ -22,8 +22,7 @@ import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
 import { CharacterCore, type TerrainProbe } from "./base/CharacterCore";
-import { finalRuling, type EdgeRuling } from "../services/map/Refinements";
-import { BLOCK_SIZE, BLOCKS_PER_SIDE } from "../services/map/ChunkGenerator";
+import { createRasterProbe } from "./base/RasterProbe";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
@@ -84,32 +83,8 @@ export abstract class CharacterBase extends EntityBase {
   climbOrdered = false;
   /** ★ 重写 P1：推进/爬坡/立面/贴地统一走 CharacterCore（L2/L3 同内核） */
   private readonly core = new CharacterCore();
-  /** ★ 地形探针（实体层注入；不依赖 systems） */
-  private readonly probe: TerrainProbe = {
-    heightAt: (x, z, y) => RasterMap.current?.surfaceHeightAtFor(x, z, y) ?? 0,
-    wetAt: (x, z) => RasterMap.current?.tileDefAt(x, z).genRole === 'liquid',
-    slopeGradAt: (x, z) => {
-      const raster = RasterMap.current;
-      if (!raster) return null;
-      const y = this.entity.position.y;
-      const hx0 = raster.surfaceHeightAtFor(x - 1, z, y);
-      const hx1 = raster.surfaceHeightAtFor(x + 1, z, y);
-      const hz0 = raster.surfaceHeightAtFor(x, z - 1, y);
-      const hz1 = raster.surfaceHeightAtFor(x, z + 1, y);
-      const gx = (hx1 - hx0) * 0.5;
-      const gz = (hz1 - hz0) * 0.5;
-      return { gx, gz, mag: Math.hypot(gx, gz) };
-    },
-    isWeldEdge: (x, z, dx, dz) => {
-      const raster = RasterMap.current;
-      if (!raster) return false;
-      const bx = Math.floor(x / BLOCK_SIZE);
-      const bz = Math.floor(z / BLOCK_SIZE);
-      const dIdx = (Math.abs(dx) >= Math.abs(dz) ? (dx > 0 ? 0 : 1) : (dz > 0 ? 2 : 3)) as 0 | 1 | 2 | 3;
-      const src = raster.chunkSource(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE));
-      return finalRuling(src, bx, bz, dIdx) === 'weld';
-    },
-  };
+  /** ★ 地形探针（两载体共用一份：`entity/base/RasterProbe`；重写 P1） */
+  private readonly probe: TerrainProbe = createRasterProbe(() => this.entity.position.y);
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
   private climbToX = 0; private climbToY = 0; private climbToZ = 0;
   private climbContactT = 0;

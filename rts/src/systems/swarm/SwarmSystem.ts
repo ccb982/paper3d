@@ -841,18 +841,10 @@ export class SwarmSystem {
       );
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        let sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 水=正常地块（无限速）
-        // ★ 爬坡减速（用户定 2026-09-24）：期望方向朝上坡 → 速度 ×（1 − 0.6·上坡分量，下限 0.5）
-        if (p.isAir[i] !== 1) {
-          const g = this.commander.slopeGradAt(p.x[i], p.z[i]);
-          if (Number.isFinite(g.mag) && g.mag > 0.05) {
-            const up = res.x * g.gx + res.z * g.gz;
-            if (up > 0) sp *= Math.max(0.5, 1 - up * 0.6);
-          }
-        }
-        p.x[i] += res.x * sp;
-        p.z[i] += res.z * sp;
-        p.yaw[i] = Math.atan2(res.x, res.z);
+        // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
+        const step = p.stepAgent(i, res.x, res.z, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
+        p.x[i] += step.dx; p.z[i] += step.dz;
+        if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
       }
     }
     // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----

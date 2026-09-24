@@ -220,6 +220,9 @@ export class EngineBridge {
     };
     let issued = 0;
     for (const rec of [...this.squads.all()]) {
+      // ★ 工兵暂不接管（用户定：先保证正常）：工事/派件仍走旧指挥官路径，
+      //   否则新引擎的"保持站位"令会盖掉派件（实测工事建成 0）
+      if (rec.role === 'engineer') continue;
       const mgr = rec.role === 'melee' ? this.melee : rec.role === 'ranged' ? this.ranged : rec.role === 'flyer' ? this.flyer : this.engineer;
       const t = mgr.targets.get(rec.id);
       const sp = this.pos.squad(rec.id);

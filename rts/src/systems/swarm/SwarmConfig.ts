@@ -5,10 +5,10 @@
 // 从 SwarmSystem 外置（护栏行数）；原路径 re-export 兼容旧引用。
 // ============================================================
 
-/** ★ 重写开关（P0 冻结；《蜂群重写计划.md》§5）：`?swarm=new` 启用新架构，默认旧路径——
- *  一键回退：探针/UI 不改代码即可切回。四期迁移完成后本开关连同旧路径一起删。 */
+/** ★ 重写开关（用户定 2026-09-25：**正常就用新链**）：默认启用新架构；
+ *  `?swarm=old` 一键回退旧路径（迁移收尾期保留）；`?shadow=1` 只跑影子（新引擎只算不发）。 */
 export const REWRITE_ON: boolean =
-  typeof location !== 'undefined' && new URLSearchParams(location.search).get('swarm') === 'new';
+  typeof location !== 'undefined' && new URLSearchParams(location.search).get('swarm') !== 'old';
 
 /** ★ 命令侧时间尺度（用户定 2026-09-24）：**下命令侧的时间比现实快 5 倍**
  *  （游戏内 5 秒 = 现实 1 秒）→ 1 游戏分钟 = 12 实秒（`GAME_MIN`）。

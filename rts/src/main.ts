@@ -258,8 +258,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         return out;
       },
     });
-    // ★ 正式启用开关（用户定）：`?swarm=new&live=1` → shadow=false（新引擎真下发到旧执行链）
-    if (new URLSearchParams(location.search).get('live') === '1') shadowBridge.shadow = false;
+    // ★ 正式启用（用户定 2026-09-25：**正常就用新链**）：默认 shadow=false（新引擎真下发）；
+    //   `?shadow=1` 只跑影子（新引擎只算不发，用于对照/调试）
+    shadowBridge.shadow = new URLSearchParams(location.search).get('shadow') === '1';
   }
   // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
   const cmdPanel = new CommandPanel();

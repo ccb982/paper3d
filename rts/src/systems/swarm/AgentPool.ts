@@ -7,6 +7,8 @@
 
 import type { SwarmSnapshot, UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity/SwarmUnit';
+import { CharacterCore, type StepResult } from '../../entity/base/CharacterCore';
+import { createRasterProbe } from '../../entity/base/RasterProbe';
 
 /** 池容量（= 全图存活上限 200 + 缓冲；《敌人管线设计.md》§8） */
 export const AGENT_CAPACITY = 256;
@@ -152,6 +154,29 @@ export interface AgentSnapshot extends SwarmSnapshot {
 
 export class AgentPool {
   count = 0;
+
+  /** ★ 重写 P1：两载体同内核——每只代理一个 CharacterCore（爬坡态须每只独立；零分配复用） */
+  readonly core: CharacterCore[] = Array.from({ length: AGENT_CAPACITY }, () => new CharacterCore());
+  /** 探针选层提示（stepAgent 每拍刷新；与 L3 共用同一份探针实现 `entity/base/RasterProbe`） */
+  private coreHintY = 0;
+  private readonly coreProbe = createRasterProbe(() => this.coreHintY);
+
+  /** ★ 重写 P1：推进一只代理（两载体同内核；与 L3 `CharacterBase` 同口径）。
+   *  方向决策/分离/寻路在外，本方法只做推进/爬坡/立面/贴地。 */
+  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number): StepResult {
+    this.coreHintY = this.y[i];
+    const air = this.isAir[i] === 1;
+    const hs = Math.max(0.2, this.scale[i] * 0.5);
+    return this.core[i].step({
+      x: this.x[i], y: this.y[i], z: this.z[i], dt,
+      dirX, dirZ, speed,
+      climbOrdered: false,          // L2 无寻路标注（坡面程序化爬坡兜底）
+      blockCliffClimb: !air,
+      climbAnyTerrain: air,
+      hx: hs, hz: hs,
+      suspended: false,
+    }, this.coreProbe, nowS);
+  }
 
   // ---- 位置/朝向 ----
   readonly x = new Float32Array(AGENT_CAPACITY);

@@ -227,7 +227,7 @@ const checks = [
   ['工事建成 > 0', built.built > 0],
 ];
 // ★ 新引擎（?swarm=new）：调试口契约 + 健全性（重写 P4；G9）
-const wantNew = RTS_URL.includes('swarm=new');
+const wantNew = !RTS_URL.includes('swarm=old');   // 默认新链（?swarm=old 才回退）
 const ne = wantNew ? await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null) : null;
 if (wantNew) {
   checks.push(
