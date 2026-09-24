@@ -157,6 +157,9 @@ export class EngineBridge {
         { squadId: sq.id, x: sq.x, z: sq.z, alive: sq.alive, atom: 'act', phase: 'executing' },
         now,
       );
+      // ★ 队长自报进度/静止 → 稳定门（引擎只记录，不逐拍指挥）
+      const rec = this.squads.get(sq.id);
+      if (rec) this.writer.advance(sq.id, rec.progress, rec.stillS);
     }
     // 防区归位（队长位置单源）
     this.sectors.tick((id) => this.pos.squad(id), this.pos.player()?.x ?? 0, this.pos.player()?.z ?? 0, [...this.squads.all()].map((r) => r.id));

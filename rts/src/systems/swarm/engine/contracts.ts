@@ -83,6 +83,10 @@ export interface SquadReport {
   atom: AtomicKind;
   /** 命令阶段（引擎只记录，不逐拍指挥） */
   phase: OrderPhase;
+  /** 命令进度 0~1（队长自报；稳定门用） */
+  progress?: number;
+  /** 静止时长（实秒；队长自报；稳定门用） */
+  stillS?: number;
 }
 
 // ---------- 实体侧契约（能力 / 升降格汇报） ----------

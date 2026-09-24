@@ -11,7 +11,7 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
-import { formationOffset } from './Formation';
+import { formationOffset } from './squad/Formation';
 import { SquadPathFinder } from './nav/Corridor';
 import { HpaPath } from './HpaPath';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';

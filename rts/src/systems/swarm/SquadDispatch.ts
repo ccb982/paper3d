@@ -13,7 +13,7 @@ import type { AgentPool } from './AgentPool';
 import type { Squad, SquadTable } from './SquadTable';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
 import type { SquadNavigator } from './SquadNavigator';
-import { formationOffset } from './Formation';
+import { formationOffset } from './squad/Formation';
 import { OrderGate } from './OrderGate';
 import { DIRECTIVE_GATE } from './SwarmConfig';
 import { EngineerDispatch, type FortifyPort } from './EngineerDispatch';
