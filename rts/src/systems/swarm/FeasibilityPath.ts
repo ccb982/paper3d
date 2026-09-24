@@ -101,6 +101,12 @@ export class FeasibilityPath {
       const sz = Math.abs(dz) < 0.4 ? 0 : (dz > 0 ? 1 : -1);
       if (sx !== 0 || sz !== 0) {
         if (!t.canStep(px, pz, sx, sz)) return false;
+        // ★ 上坡必须横平竖直：斜向采样步只许平/下坡
+        if (sx !== 0 && sz !== 0) {
+          const h0 = t.heightAt(px, pz);
+          const h1 = t.heightAt(x, z);
+          if (h1 > h0) return false;
+        }
       }
       px = x; pz = z;
     }
@@ -162,6 +168,13 @@ export class FeasibilityPath {
         const nx = cx + dx, nz = cz + dz;
         if (!inWin(nx, nz)) continue;
         if (!t.canStep(wx, wz, dx, dz)) continue;   // 有向边位：绝对墙/单向逆穿在此拒绝
+        // ★ 上坡必须横平竖直（用户定 2026-09-24）：斜向只许平/下坡——
+        //   表只校 E/W/S/N 四向边；斜向"两轴都开"不等于斜线本身可走（可能切到折面/脊）。
+        if (dx !== 0 && dz !== 0) {
+          const h0 = t.heightAt(wx, wz);
+          const h1 = t.heightAt(wx + dx * CELL, wz + dz * CELL);
+          if (h1 > h0) continue;
+        }
         const nk = (nz - b.oz) * side + (nx - b.ox);
         let c = (dx !== 0 && dz !== 0) ? 1.414 : 1;
         const drop = t.dropAt(wx, wz, dx, dz);
@@ -222,6 +235,12 @@ export class FeasibilityPath {
       const wx = (ox + ax - mx) * CELL + CELL / 2;
       const wz = (oz + az - mz) * CELL + CELL / 2;
       if (!t.canStep(wx, wz, mx, mz)) return false;
+      // ★ 上坡必须横平竖直：斜向步只许平/下坡（拉直不得在上坡段切斜线）
+      if (mx !== 0 && mz !== 0) {
+        const h0 = t.heightAt(wx, wz);
+        const h1 = t.heightAt(wx + mx * CELL, wz + mz * CELL);
+        if (h1 > h0) return false;
+      }
     }
     return true;
   }

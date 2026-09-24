@@ -5,25 +5,26 @@
 //   ① 自身高度 h
 //   ②③④⑤ 四向边（E/W/S/N）各记：可走 0/1 + 净落差（米，带符号）
 //
-// 边型（建表时按 0.8m 采样窗落差 + 深坑 判死；方向感知）：
-//   · 深坑边缘（role=pit 且 h < PIT_H=-1.2，摔死坑）→ 绝对墙（双向禁）
-//   · 落差 > CLIFF_DH(3.0)                          → 绝对墙（双向禁）
-//   · WALL_STEP(0.6) < 落差 ≤ 3.0                   → 特殊墙（只可下落、不可上升）
-//   · 其余（含浅坑/战壕/水）                        → 可走（水另走软代价 + 催促上岸）
+// ★ 边型 = **地形表裁决**（用户定 2026-09-24；《地形与渲染管线架构.md》weld/cliff）：
+//   · 坡面（weld：水/坑无条件焊 + 30% 大落差产坡 + smoothDirs）→ **普通可行边**（双向，不特殊处理）
+//   · 硬边（cliff）特殊处理：
+//       - 深坑边缘（摔死坑）        → 绝对墙（双向禁，始终不可行）
+//       - |落差| ≤ EDGE_CLIFF_BAND  → 可走（平地地块间也都是硬边，零落差必须能走）
+//       - 落差 > 豁免 → **上不可行（墙）、下可行**
+//   裁决源 = 渲染同源（RasterMap.chunkSource 的 refined BlockSource → finalRuling），4m 块 = 4m 格对齐。
 //
 // 预计算：chunk 生成/落地时顺产，一次构建；工事/挖掘不重建。
 // 运行时不采样，只读边值（O(1)）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../services/map/Refinements';
+import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../services/map/ChunkGenerator';
 import { DANGER } from './SwarmDanger';
 
 const CELL = 4;
-/** 边采样步长（米；细分找离散落差用） */
-const DS = 0.4;
-/** 离散落差判定：最大单步落差 > 3×典型单步(中位) + 0.15，即"某一步明显跳"（连续坡不算——坡是正常通路） */
-const STEP_RATIO = 3;
-const STEP_BIAS = 0.15;
+/** 格↔块换算（CELL = BLOCK_SIZE = 4 → 1:1 对齐） */
+const BLOCKS_PER_CELL = BLOCK_SIZE / CELL;
 /** 方向索引：E/W/S/N */
 const DIR_E = 0, DIR_W = 1, DIR_S = 2, DIR_N = 3;
 /** 方向向量（与索引同序） */
@@ -52,8 +53,9 @@ export class PassTable {
   /** 建表（一次；活动窗口与 TerrainScore 同网格）。切工事/挖掘不重建。 */
   build(raster: RasterMap, cx: number, cz: number, r: number): void {
     const t0 = performance.now();
-    this.ox = cx - r;
-    this.oz = cz - r;
+    // ★ 格对齐块格（4m=块）：格心即块心 → 高度/角色/裁决与地形表 1:1（用户定 2026-09-24）
+    this.ox = Math.floor((cx - r) / CELL) * CELL;
+    this.oz = Math.floor((cz - r) / CELL) * CELL;
     this.side = Math.floor((r * 2) / CELL) + 1;
     const n = this.side * this.side;
     if (this.can.length !== n * 4) {
@@ -96,14 +98,14 @@ export class PassTable {
         const i = iz * this.side + ix;
         if (ix + 1 < this.side) {
           const j = i + 1;
-          const [fwd, rev, dropQ, kind] = this.edge(sh, i, j, this.h[i], this.h[j]);
+          const [fwd, rev, dropQ, kind] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
           this.setDir(i, DIR_E, fwd, dropQ);
           this.setDir(j, DIR_W, rev, -dropQ);
           this.count(kind);
         }
         if (iz + 1 < this.side) {
           const k = i + this.side;
-          const [fwd, rev, dropQ, kind] = this.edge(sh, i, k, this.h[i], this.h[k]);
+          const [fwd, rev, dropQ, kind] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
           this.setDir(i, DIR_S, fwd, dropQ);
           this.setDir(k, DIR_N, rev, -dropQ);
           this.count(kind);
@@ -114,46 +116,29 @@ export class PassTable {
     st.ms = +(performance.now() - t0).toFixed(1);
   }
 
-  /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向)] */
+  /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向)]
+   *  ★ 裁决 = 地形表（weld=坡 → 普通可行；cliff=硬边 → 特殊处理）。 */
   private edge(
-    sh: (x: number, z: number) => number,
-    i: number, j: number, hA: number, hB: number,
+    raster: RasterMap, ix: number, iz: number,
+    i: number, j: number, hA: number, hB: number, dir: 0 | 1 | 2 | 3,
   ): [boolean, boolean, number, number] {
-    // 深坑边缘 = 绝对墙（摔死坑；双向禁）
+    // 深坑边缘 = 绝对墙（摔死坑；始终不可行，双向禁）
     if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1];
-    const ix = i % this.side, iz = (i - ix) / this.side;
-    const jx = j % this.side, jz = (j - jx) / this.side;
-    const ax = this.ox + ix * CELL + CELL / 2;
-    const az = this.oz + iz * CELL + CELL / 2;
-    const bx = this.ox + jx * CELL + CELL / 2;
-    const bz = this.oz + jz * CELL + CELL / 2;
-    const len = Math.hypot(bx - ax, bz - az);
-    const steps = Math.max(1, Math.round(len / DS));
-    const hA0 = hA;
-    let prevH = hA;
-    let maxAbs = 0;
-    let jump = 0;   // 最大单步落差（带符号：正 = A→B 升）
-    const absD: number[] = [];
-    for (let k = 1; k <= steps; k++) {
-      const t = k / steps;
-      const hh = sh(ax + (bx - ax) * t, az + (bz - az) * t);
-      const d = hh - prevH;
-      const ad = d < 0 ? -d : d;
-      if (ad > maxAbs) maxAbs = ad;
-      if (ad > (jump < 0 ? -jump : jump)) jump = d;
-      absD.push(ad);
-      prevH = hh;
-    }
-    const net = prevH - hA0;
-    if (maxAbs > DANGER.CLIFF_DH) return [false, false, net, 1];   // 悬崖：绝对墙（双向禁）
-    // ★ 坡是正常通路（不处理）：仅"离散落差"（某一步明显跳）判硬边 → 只可下
-    absD.sort((a, b) => a - b);
-    const med = absD[absD.length >> 1] ?? 0;
-    const discrete = Math.abs(jump) > DANGER.WALL_STEP
-      && Math.abs(jump) > med * STEP_RATIO + STEP_BIAS;
-    if (!discrete) return [true, true, net, 0];
-    const fwd = jump < 0;    // 最大落差是向下 → A→B 可走（只可下）
-    const rev = jump > 0;
+    const net = hB - hA;
+    // ★ 地形表裁决（与渲染同源）：4m 格 = 4m 块，直接问该块边
+    const bx = Math.floor(this.ox / BLOCK_SIZE) + ix * BLOCKS_PER_CELL;
+    const bz = Math.floor(this.oz / BLOCK_SIZE) + iz * BLOCKS_PER_CELL;
+    const ruling: EdgeRuling = finalRuling(
+      raster.chunkSource(Math.floor(bx / BLOCKS_PER_SIDE), Math.floor(bz / BLOCKS_PER_SIDE)),
+      bx, bz, dir,
+    );
+    // 坡面（weld）= 普通可行边（用户定：不特殊处理，双向可走）
+    if (ruling === 'weld') return [true, true, net, 0];
+    // 硬边（cliff）：≤ 台阶豁免（与移动层同源常量）→ 可走（平地地块间零落差也走这里）
+    if (Math.abs(net) <= EDGE_CLIFF_BAND) return [true, true, net, 0];
+    // 硬边大落差：**上不可行（墙）、下可行**
+    const fwd = net < 0;   // i→j 向下 → 可走；向上 → 不可行
+    const rev = net > 0;
     return [fwd, rev, net, 2];
   }
 
@@ -195,11 +180,17 @@ export class PassTable {
     return true;
   }
 
-  /** 净落差（米；dx,dz 为方向）——供代价/减速读；表外/未就绪 → 0 */
+  /** 净落差（米；dx,dz 为方向）——供代价/减速读；表外/未就绪 → 0
+   *  ★ 斜向：取两轴中更陡的一轴（原来只读 E/W → 上坡惩罚漏算，斜向上坡被低估） */
   dropAt(x: number, z: number, dx: number, dz: number): number {
     const i = this.cellAt(x, z);
     if (i < 0) return 0;
     const b = i * 4;
+    if (dx !== 0 && dz !== 0) {
+      const a = dx > 0 ? this.drop[b + DIR_E] : this.drop[b + DIR_W];
+      const c = dz > 0 ? this.drop[b + DIR_S] : this.drop[b + DIR_N];
+      return Math.abs(a) >= Math.abs(c) ? a : c;
+    }
     if (dx > 0) return this.drop[b + DIR_E];
     if (dx < 0) return this.drop[b + DIR_W];
     if (dz > 0) return this.drop[b + DIR_S];

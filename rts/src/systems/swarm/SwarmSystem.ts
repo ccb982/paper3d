@@ -27,6 +27,7 @@ import { SquadTable, type SquadRating } from './SquadTable';
 import { SquadTactics, roleBucket, SquadLeaderAI } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { SquadDispatch } from './SquadDispatch';
+import { followDir } from './Follow';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
@@ -795,11 +796,11 @@ export class SwarmSystem {
       }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
-      const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
-      const td = Math.hypot(tx, tz);
-      // 双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
-      const stopped = p.atomMove[i] === 255;
-      if (td > (stopped ? 8 : 5)) { dx = tx / td; dz = tz / td; }
+      // ★ 成员跟队长（用户定 2026-09-24）：近=直线；掉队且直线被挡 → 长寻路沿走廊绕（Follow）
+      //   双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
+      const fd = followDir(this.tactics, squad!.id, p.x[i], p.z[i], lead.x, lead.z,
+        p.atomMove[i] === 255 ? 8 : 5, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
+      if (fd) { dx = fd.x; dz = fd.z; }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];

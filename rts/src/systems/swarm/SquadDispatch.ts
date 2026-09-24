@@ -79,28 +79,31 @@ export class SquadDispatch {
     const epoch = ot ? Math.round(ot.x / 8) * 100003 + Math.round(ot.z / 8) : 0;
     nav.ensurePath(squads, squad, state, now);
     const bucket = squadBucket(squad.type);
+    // ★ 无质心（用户定 2026-09-24）：一切按**队长**——队长走走廊锚点，成员围队长跟。
+    const leadInfo = squad.members.get(squad.leaderUid);
     let ax = state.order.target?.x ?? 0;
     let az = state.order.target?.z ?? 0;
     let fx = 1, fz = 0;
-    const hasC = squads.centroidOf(squad.id, this._centroid);
     const stepState = tactics.board.getPath(squad.id);
     const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
     if (stepTgt) {
       ax = stepTgt.x;
       az = stepTgt.z;
-    } else if (hasC) {
-      const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, world.terrain);
+    } else if (leadInfo) {
+      const tgt = SquadTactics.resolveAnchor(state, leadInfo.x, leadInfo.z, squad.type, now, world.terrain);
       if (tgt) { ax = tgt.x; az = tgt.z; }
     }
     {
       const c = world.clampToRing(ax, az);
       ax = c.x; az = c.z;   // ★ 水=正常地块（用户定 2026-09-24）：去掉落水修正
     }
-    if (hasC) {
-      const adx = ax - this._centroid.x, adz = az - this._centroid.z;
+    if (leadInfo) {
+      const adx = ax - leadInfo.x, adz = az - leadInfo.z;
       const al = Math.hypot(adx, adz);
       if (al > 1e-3) { fx = adx / al; fz = adz / al; }
     }
+    const mx = leadInfo ? leadInfo.x : ax;   // 成员围绕队长（"只要跟随队长"）
+    const mz = leadInfo ? leadInfo.z : az;
     _uids.length = 0;
     for (const uid of squad.members.keys()) _uids.push(uid);
     for (const [uid, info] of squad.members) {
@@ -112,8 +115,13 @@ export class SquadDispatch {
         let rank = 0;
         for (const m of _uids) if (m < uid) rank++;
         const off = formationOffset(squad.type, rank);
-        directive.targetX = ax + fx * off.fx - fz * off.fz;
-        directive.targetZ = az + fz * off.fx + fx * off.fz;
+        if (uid === squad.leaderUid) {
+          directive.targetX = ax;   // 队长走走廊锚点（长寻路）
+          directive.targetZ = az;
+        } else {
+          directive.targetX = mx + fx * off.fx - fz * off.fz;   // 成员围队长
+          directive.targetZ = mz + fz * off.fx + fx * off.fz;
+        }
       }
       seen.add(uid);
       let found = false;

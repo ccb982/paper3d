@@ -68,7 +68,7 @@ export class SquadNavigator {
    *  自然就是可行路，不需要后向 LOS/BFS 优先。贪心全无推进才回落表图 BFS。 */
   weighted = true;
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
-  private readonly _centroid = { x: 0, z: 0 };
+  private readonly _from = { x: 0, z: 0 };
 
   /** ① 命令目标不可直达 → 求走廊 waypoint（全队共用）。
    *  重算触发：无路径 / 目标位移 > RETARGET_DIST / 超时；失败有冷却并回落直线。 */
@@ -79,44 +79,46 @@ export class SquadNavigator {
     const cur = state.corridor ?? state.order.path;
     const hasPath = !!cur && cur.length > 0;
     const raster = RasterMap.current;
-    if (!raster || !squads.centroidOf(squad.id, this._centroid)) return;
+    const lead = squad.members.get(squad.leaderUid);   // ★ 无质心（用户定 2026-09-24）：路从队长算
+    if (!raster || !lead) return;
+    this._from.x = lead.x; this._from.z = lead.z;
     // ★ 大修②：目标不变、路径常新——质心离上次求解位 >12m 或超时 → 从当前位置重算（覆盖）
     const movedFrom = Math.hypot(
-      this._centroid.x - (state.pathFromX ?? 0), this._centroid.z - (state.pathFromZ ?? 0),
+      this._from.x - (state.pathFromX ?? 0), this._from.z - (state.pathFromZ ?? 0),
     );
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     const stamp = this.stampFn?.() ?? 0;
     // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
     // ★ 长行军走廊少重算（6→12m）：防'每 6m 重算→锚点抖→振荡'（用户定 2026-09-25）
-    const longTgt0 = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z) > NAV.LONG_PATH_DIST;
+    const longTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z) > NAV.LONG_PATH_DIST;
     const fromLim = longTgt0 ? 12 : 6;
     if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= fromLim && now - state.pathAt <= NAV.REFRESH_S) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
     // ★ 长短寻路分工（用户定 2026-09-25）：长行军（>LONG_PATH_DIST）→ **长寻路**（BFS 全走廊）；
     //   短程（交战/巡逻/驻守/就近施工）→ 短跳（LOS 10m 贪心）
-    const dTgt0 = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+    const dTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
     const longHaul = dTgt0 > NAV.LONG_PATH_DIST;
     if (this.weighted && this.feas.readyFor() && !longHaul) {
       // ★ 困难检测（用户定 2026-09-23）：4s 内距目标没净推进 6m（贴墙振荡）→ 走 LOS 长路径脱困
-      const dTgt = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+      const dTgt = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
       const esc = this.esc.get(squad.id);
       const sameGoal = esc && esc.gx === tgt.x && esc.gz === tgt.z;
       const stuck = sameGoal && now - esc!.at > 4000 && dTgt > esc!.d - 6;
       if (stuck) {
-        this.esc.set(squad.id, { x: this._centroid.x, z: this._centroid.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
+        this.esc.set(squad.id, { x: this._from.x, z: this._from.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
         this.dbg.escape++;
       } else {
-        const best = this.greedyStep(squad.id, squad.type, this._centroid.x, this._centroid.z, tgt.x, tgt.z, now);
+        const best = this.greedyStep(squad.id, squad.type, this._from.x, this._from.z, tgt.x, tgt.z, now);
         if (best) {
           // 真实推进（目标距缩短 >6m）或换目标才重锚；振荡时锚点不动 → 4s 后触发脱困
           if (!sameGoal || dTgt < esc!.d - 6) {
-            this.esc.set(squad.id, { x: this._centroid.x, z: this._centroid.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
+            this.esc.set(squad.id, { x: this._from.x, z: this._from.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
           }
           state.corridor = [best, { x: tgt.x, z: tgt.z }];   // 覆盖式：段点 + 终目标
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
-          state.pathFromX = this._centroid.x;
-          state.pathFromZ = this._centroid.z;
+          state.pathFromX = this._from.x;
+          state.pathFromZ = this._from.z;
           state.costStamp = stamp;
           state.pathAt = now;
           state.pathFailedAt = 0;
@@ -128,15 +130,15 @@ export class SquadNavigator {
     }
     // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
     const feasOut: { x: number; z: number }[] = [];
-    const feas = this.feas.find(this._centroid.x, this._centroid.z, tgt.x, tgt.z, feasOut);
+    const feas = this.feas.find(this._from.x, this._from.z, tgt.x, tgt.z, feasOut);
     if (feas === 'ok') {
       this.dbg.feasOk++;
       // 贪心无推进时回落：表图 BFS 可行走廊（覆盖式；命令对象只读）
       state.corridor = feasOut;
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
-      state.pathFromX = this._centroid.x;
-      state.pathFromZ = this._centroid.z;
+      state.pathFromX = this._from.x;
+      state.pathFromZ = this._from.z;
       state.pathAt = now;
       state.pathFailedAt = 0;
       return;
@@ -152,7 +154,7 @@ export class SquadNavigator {
     this.dbg.solves++;   // ★ P4：白名单探针（真正进入求解；早退不计）
     const path: { x: number; z: number }[] = [];
     // ★ 长距离优先 HPA*（全局、绕大障碍）；失败 → 有界 A*（SquadPath）→ 直线
-    const dist = Math.hypot(tgt.x - this._centroid.x, tgt.z - this._centroid.z);
+    const dist = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
     const isFlyer = (squad.type as string) === 'flyer';
     // ★ 飞行不走地面折扣；地面 = 掩体折扣 × 该队兵种亲和（P1-3）
     const mul = (!isFlyer && this.pathMul)
@@ -161,16 +163,16 @@ export class SquadNavigator {
     this.hpa.pathMul = mul ?? null;
     // 一次求解必落一路（hpa/astar/coarse/fail；计数闭合 可断言）
     let src: 'hpa' | 'astar' | 'coarse' | 'fail' = 'fail';
-    if (dist > 70 && this.hpa.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path)) src = 'hpa';
-    else if (this.pathFinder.find(raster, this._centroid.x, this._centroid.z, tgt.x, tgt.z, path, mul)) src = 'astar';
+    if (dist > 70 && this.hpa.find(raster, this._from.x, this._from.z, tgt.x, tgt.z, path)) src = 'hpa';
+    else if (this.pathFinder.find(raster, this._from.x, this._from.z, tgt.x, tgt.z, path, mul)) src = 'astar';
     const warming = dist > 70 && this.hpa.warming;
     if (src === 'hpa' || src === 'astar') {
       this.dbg[src]++;
       state.corridor = path;   // ★ 寻路轨覆盖（命令对象只读）
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
-      state.pathFromX = this._centroid.x;
-      state.pathFromZ = this._centroid.z;
+      state.pathFromX = this._from.x;
+      state.pathFromZ = this._from.z;
       // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
       state.pathAt = warming ? 0 : now;
       state.pathFailedAt = 0;
@@ -180,8 +182,8 @@ export class SquadNavigator {
       state.corridor = state.order.coarse.slice();
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
-      state.pathFromX = this._centroid.x;
-      state.pathFromZ = this._centroid.z;
+      state.pathFromX = this._from.x;
+      state.pathFromZ = this._from.z;
       state.pathAt = now;
       state.pathFailedAt = 0;
     } else {
@@ -247,19 +249,20 @@ export class SquadNavigator {
         for (const u of members) u.applySteer(null);
         continue;
       }
-      if (!squads.centroidOf(sid, this._centroid)) continue;
-      // ★ P4 寻路轨优先：队长步令在身 → 编队锚点 = 当前步（过期/无步回退命令锚）
-      const stepState = tactics.board.getPath(sid);
-      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
-      const tgt = stepTgt ?? SquadTactics.currentTargetOf(state, this._centroid.x, this._centroid.z);
-      if (!tgt) continue;
       const squad = squads.get(sid);
       if (!squad) {
         for (const u of members) u.applySteer(null);
         continue;
       }
-      const dx = tgt.x - this._centroid.x;
-      const dz = tgt.z - this._centroid.z;
+      const lead = squad.members.get(squad.leaderUid);   // ★ 无质心：一切按队长
+      if (!lead) continue;
+      // ★ P4 寻路轨优先：队长步令在身 → 编队锚点 = 当前步（过期/无步回退命令锚）
+      const stepState = tactics.board.getPath(sid);
+      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
+      const tgt = stepTgt ?? SquadTactics.currentTargetOf(state, lead.x, lead.z);
+      if (!tgt) continue;
+      const dx = tgt.x - lead.x;
+      const dz = tgt.z - lead.z;
       const len = Math.hypot(dx, dz);
       const fx = len > 1e-3 ? dx / len : 1;
       const fz = len > 1e-3 ? dz / len : 0;
@@ -310,8 +313,11 @@ export class SquadNavigator {
         let rank = 0;
         for (const uid of squad.members.keys()) if (uid < u.swarmUid) rank++;
         const off = singleton ? _zeroSlot : formationOffset(type, rank);
-        const sx = tgt.x + fx * off.fx - fz * off.fz;
-        const sz = tgt.z + fz * off.fx + fx * off.fz;
+        const isLead = u.swarmUid === squad.leaderUid;
+        const bx = isLead ? tgt.x : lead.x;   // ★ 队长走锚点；成员围队长（"只要跟随队长"）
+        const bz = isLead ? tgt.z : lead.z;
+        const sx = bx + fx * off.fx - fz * off.fz;
+        const sz = bz + fz * off.fx + fx * off.fz;
         u.formSlot = rank;
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; }

@@ -78,14 +78,18 @@ export class OrderGate {
     let allow = dMove >= c.minMove || stuck || hard;
     let via = dMove >= c.minMove ? 'move' : stuck ? 'stuck' : hard ? 'hard' : '';
     if (!allow && dArrive <= c.arriveR) {
-      if (Math.hypot(cx - memo.pendX, cz - memo.pendZ) <= c.stableM) {
+      // ★ 已到位 + 新目标明显更远（> retarget）→ 立即接新目标（防"到位即冻结"死锁：
+      //   队长到点 2m 内停步 → 旧规则要候选稳定 persistS(36 实秒) 才换 → 先撞 25s 卡死回收）
+      if (Math.hypot(cx - memo.tx, cz - memo.tz) > c.retarget) {
+        allow = true; via = 'persist';
+      } else if (Math.hypot(cx - memo.pendX, cz - memo.pendZ) <= c.stableM) {
         if (memo.pendSince === 0) memo.pendSince = now;
       } else {
         memo.pendSince = now;
         memo.pendX = cx;
         memo.pendZ = cz;
       }
-      if (now - memo.pendSince >= c.persistS) { allow = true; via = 'persist'; }
+      if (!allow && now - memo.pendSince >= c.persistS) { allow = true; via = 'persist'; }
     } else if (allow) {
       memo.pendSince = 0;
     }

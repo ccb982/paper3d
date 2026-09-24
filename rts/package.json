@@ -10,6 +10,7 @@
     "check": "npm run typecheck && npm run guard",
     "smoke": "node scripts/smoke.mjs",
     "probe": "node scripts/probe-rts.mjs",
+    "probe:mountain": "node scripts/probe-mountain.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },

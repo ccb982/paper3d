@@ -319,22 +319,29 @@ export class SquadTactics {
       o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, effTtl);
   }
 
-  /** ★ 五轴「路径」：取当前应赴的路点（队质心前方第一个 >4m 的点；都近 = 末点） */
+  /** ★ 走廊前瞻点（无状态；look 米）：最近点之后第一个 >look 的点；无 → 末点；无路 → null。
+   *  消费：队长锚点 / 掉队成员"长寻路找队长"（沿同一走廊）。 */
+  static corridorAhead(
+    state: SquadOrderState | null | undefined, cx: number, cz: number, look: number,
+  ): { x: number; z: number } | null {
+    const path = state?.corridor ?? state?.order.path;
+    if (!path || path.length === 0) return null;
+    let near = 0, nd = Infinity;
+    for (let i = 0; i < path.length; i++) {
+      const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+      if (d2 < nd) { nd = d2; near = i; }
+    }
+    for (let i = near; i < path.length; i++) {
+      const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+      if (d2 > look * look) return path[i];
+    }
+    return path[path.length - 1];
+  }
+
+  /** ★ 五轴「路径」：取当前应赴的路点（前方第一个 >8m 的点；都近 = 末点；带锚点滞回） */
   static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number } | null {
-    const path = state.corridor ?? state.order.path;
-    if (path && path.length > 0) {
-      // ★ 先定位最近点（已走过的点不回头），再从其后取第一个 >8m 的前瞻点
-      let near = 0, nd = Infinity;
-      for (let i = 0; i < path.length; i++) {
-        const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-        if (d2 < nd) { nd = d2; near = i; }
-      }
-      let tgtPt: { x: number; z: number } | null = null;
-      for (let i = near; i < path.length; i++) {
-        const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-        if (d2 > 64) { tgtPt = path[i]; break; }
-      }
-      if (!tgtPt) tgtPt = path[path.length - 1];
+    const tgtPt = SquadTactics.corridorAhead(state, cx, cz, 8);
+    if (tgtPt) {
       // ★ 锚点滞回（用户定 2026-09-25）：新锚点与旧锚 <6m（抖动）→ 沿用旧锚，防振荡
       if (state.anchorX !== undefined && state.anchorZ !== undefined) {
         const dd = Math.hypot(tgtPt.x - state.anchorX, tgtPt.z - state.anchorZ);
