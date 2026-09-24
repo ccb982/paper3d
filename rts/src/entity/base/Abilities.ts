@@ -9,10 +9,10 @@
 // ============================================================
 
 import type { AbilityId, AbilityRequest } from './contracts';
-import { CLIMB_PATH_MS, CLIMB_SPEED_MUL } from '../TerrainAssist';
+import { CLIMB_SPEED_MUL } from '../TerrainAssist';
+import { CLIMB_TIMEOUT_S } from './CharacterCore';
 
-/** 爬坡单次续期（实秒；与 TerrainAssist.CLIMB_PATH_MS 同源） */
-export const CLIMB_TIMEOUT_S = CLIMB_PATH_MS / 1000;
+export { CLIMB_TIMEOUT_S };
 
 export interface AbilityInput {
   /** 实秒（能力/物理计时——不走 GAME_MIN） */
