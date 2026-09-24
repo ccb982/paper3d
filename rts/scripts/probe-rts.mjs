@@ -211,6 +211,51 @@ if (trk.length > 4) {
     head: trk.slice(0, 6).map((e) => `${e.t}:${e.x},${e.z}c${e.corr}${e.ok}@${e.otx},${e.otz}`),
     tail: trk.slice(-4).map((e) => `${e.t}:${e.x},${e.z}c${e.corr}${e.ok}@${e.otx},${e.otz}`),
   }));
+
+  // ---------- ★ §6 验收指标（量化；《蜂群重写计划.md》） ----------
+  const m6 = await page.evaluate(() => {
+    const w = window.__rts; const sw = w?.swarm;
+    const g = sw?.dirGateDbg ?? null;
+    const byRole = new Map();
+    if (sw) for (const s of sw.squads.all()) {
+      if (s.builders) continue;   // 工兵照旧（分区/派件走旧路径）——间距指标只量新引擎管的兵种
+      const lead = s.members.get(s.leaderUid);
+      if (!lead) continue;        // 无队长（死队/未同步）→ 位置为 0,0，不是真重合
+      const st = sw.tactics.board.get(s.id);
+      const t = st?.order?.target;
+      if (!t || (t.x === 0 && t.z === 0)) continue;
+      const role = String(s.type ?? 'melee');
+      if (!byRole.has(role)) byRole.set(role, []);
+      byRole.get(role).push({ id: s.id, x: t.x, z: t.z });
+    }
+    let minSame = null, pair = '';
+    for (const [role, arr] of byRole) {
+      for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+        const d = Math.hypot(arr[i].x - arr[j].x, arr[i].z - arr[j].z);
+        if (minSame === null || d < minSame) { minSame = d; pair = `${role} #${arr[i].id}/#${arr[j].id}`; }
+      }
+    }
+    return {
+      keep: g?.keep ?? null, commit: g?.commit ?? null, decide: g?.decide ?? null,
+      idle: g?.idle ?? null, arriveWait: g?.arriveWait ?? null,
+      minSame: minSame === null ? null : +minSame.toFixed(1), pair,
+      recycled: sw?.stuckDbg?.recycled ?? null,
+    };
+  });
+  const durMin = 62 / 60;   // 采样窗 8s→70s（≈62 模拟秒）
+  const intercept = (m6.keep !== null && (m6.commit + m6.keep) > 0) ? (m6.keep / (m6.commit + m6.keep)) * 100 : null;
+  const idlePct = m6.decide ? ((m6.idle + m6.arriveWait) / m6.decide) * 100 : null;
+  const recyMin = m6.recycled !== null ? m6.recycled / durMin : null;
+  const rows = [
+    ['成员门拦截 ≥90%', intercept === null ? '-' : intercept.toFixed(1) + '%', intercept !== null && intercept >= 90],
+    ['成员空转 <5%', idlePct === null ? '-' : idlePct.toFixed(1) + '%', idlePct !== null && idlePct < 5],
+    ['同兵种目标间距 ≥40m', m6.minSame === null ? '-' : m6.minSame + 'm ' + m6.pair, m6.minSame !== null && m6.minSame >= 40],
+    ['卡死回收 ≤10/min', recyMin === null ? '-' : recyMin.toFixed(1) + '/min', recyMin !== null && recyMin <= 10],
+    ['cmdChanges ≤5', String(cmdChanges), cmdChanges !== null && cmdChanges <= 5],
+  ];
+  console.log('');
+  console.log('★ §6 验收指标（量化）');
+  for (const [name, val, okr] of rows) console.log(`  ${okr ? 'PASS' : 'FAIL'} ${name}: ${val}`);
 }
 await page.screenshot({ path: 'diag-world.png' });
 const pageErrs = errs.filter((e) => e.startsWith('[pageerror]'));

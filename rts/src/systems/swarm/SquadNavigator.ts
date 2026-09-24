@@ -15,6 +15,7 @@ import { formationOffset } from './squad/Formation';
 import { SquadPathFinder } from './nav/Corridor';
 import { HpaPath } from './HpaPath';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
+import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
 import { DANGER } from './SwarmDanger';
@@ -259,7 +260,7 @@ export class SquadNavigator {
       // ★ P4 寻路轨优先：队长步令在身 → 编队锚点 = 当前步（过期/无步回退命令锚）
       const stepState = tactics.board.getPath(sid);
       const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
-      const tgt = stepTgt ?? SquadTactics.currentTargetOf(state, lead.x, lead.z);
+      const tgt = stepTgt ?? currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
       const dx = tgt.x - lead.x;
       const dz = tgt.z - lead.z;

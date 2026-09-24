@@ -50,6 +50,7 @@ import { Timeline } from './ui/Timeline';
 import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
+import { setLiveOrderSource } from './systems/swarm/squad/Anchor';
 import { createSquadNav } from './systems/swarm/squad/MarchAction';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
 import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
@@ -273,9 +274,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           act: 'advance', march: 'advance', defend: 'garrison',
           garrison: 'garrison', protect: 'protect', patrol: 'flank',
         };
+        // ★ 语义映射（旧板）：protect 的 target = **被保护点 G**（引擎侧 G 在 anchor；
+        //   引擎的 target 只是调整点/自身位置）——直通会丢 G（实测保护令站位失效）
+        const mt = order.kind === 'protect' && order.anchor ? order.anchor : order.target;
         swarm.tactics.issue(squadId, {
           kind: (kindMap[order.kind] ?? 'advance') as never,
-          target: { x: order.target.x, z: order.target.z },
+          target: { x: mt.x, z: mt.z },
           mission: 'engine',
           anchor: order.anchor,
           threatX: order.threat?.x,
@@ -300,6 +304,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const def = sq ? mobDefs[sq.mobKind] as { role?: string; isAir?: boolean } | undefined : undefined;
       return sq?.builders ? 'engineer' : def?.isAir ? 'flyer' : def?.role === 'ranged' ? 'ranged' : 'melee';
     };
+    // ★ P4：队长目标/站位**直读新 store**（唯一真源）；旧板只作走廊/滞回缓存
+    setLiveOrderSource((id: number) => {
+      const cur = shadowBridge?.writer.store.get(id);
+      return cur
+        ? { kind: cur.order.kind, target: cur.order.target, anchor: cur.order.anchor, threat: cur.order.threat }
+        : null;
+    });
     squadCores = new SquadRegistry(
       (id) => createSquadNav({ leaderPos: leaderPosOf, walkableLine: (a, b, c2, d2) => swarm.walkableLine(a, b, c2, d2) }, id),
       roleOf,

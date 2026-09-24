@@ -222,10 +222,16 @@ export class EngineBridge {
     const p = this.pos.player();
     if (!p) return;
     const hitId = this.live.playerAttacking?.() ?? 0;
+    /** ★ 同拍顺序校验：本拍已校验过的目标参与后续兄弟的间距计算
+     *  （防"对称同时调整"——两队各看对方未调整目标 → 一起挪到重合，实测间距 1.8m） */
+    const fixedTgt = new Map<number, { x: number; z: number }>();
     const sibsOf = (role: MobRole, self: number) => {
       const out: { id: number; role: string; x: number; z: number }[] = [];
       const mgr = role === 'melee' ? this.melee : role === 'ranged' ? this.ranged : role === 'flyer' ? this.flyer : this.engineer;
-      for (const [id, t] of mgr.targets) if (id !== self) out.push({ id, role, x: t.x, z: t.z });
+      for (const [id, t] of mgr.targets) if (id !== self) {
+        const fx = fixedTgt.get(id);
+        out.push({ id, role, x: fx?.x ?? t.x, z: fx?.z ?? t.z });
+      }
       return out;
     };
     let issued = 0;
@@ -254,14 +260,15 @@ export class EngineBridge {
         retreat,
       });
       if (!dec) continue;   // 玩家令在身 / 无决策 → 引擎不产令
-      // 防御=守原地（target 为空时用当前位置）
-      const tx = dec.target ? dec.target.x : sp?.x ?? p.x;
-      const tz = dec.target ? dec.target.z : sp?.z ?? p.z;
+      // 防御=守原地（target 为空时用**该队自身位置**；不是玩家位置——否则多队叠在同一目标=间距 0）
+      const tx = dec.target ? dec.target.x : sp?.x ?? rec.x;
+      const tz = dec.target ? dec.target.z : sp?.z ?? rec.z;
       const v = validateOrder(rec.id, tx, tz, {
         px: p.x, pz: p.z, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax,
         role: rec.role, siblings: sibsOf(rec.role, rec.id), canReach: this.live.canReach,
       });
       if (!v.ok) continue;
+      fixedTgt.set(rec.id, { x: v.x, z: v.z });
       const order: SquadOrder = {
         kind: dec.kind, source: 'engine', target: { x: v.x, z: v.z },
         anchor: this.protect.linkOf(rec.id)?.anchor,

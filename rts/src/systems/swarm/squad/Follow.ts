@@ -7,6 +7,7 @@
 //   依赖铁律：只读 SquadTactics/走廊（无状态、零分配）。
 
 import { SquadTactics } from '../SquadTactics';
+import { corridorAhead } from './Anchor';
 
 export interface FollowDir {
   x: number;
@@ -46,7 +47,7 @@ export function followDir(
   if (td <= stopR) return null;
   // ★ 掉队/被挡 → 沿走廊前瞻点走（长寻路；走廊即队长的长路）
   if (td > 12 && !walkable(px, pz, lx, lz)) {
-    const ahead = SquadTactics.corridorAhead(tactics.board.get(squadId), px, pz, 4);
+    const ahead = corridorAhead(tactics.board.get(squadId), px, pz, 4);
     if (ahead) {
       const ax = ahead.x - px, az = ahead.z - pz;
       const al = Math.hypot(ax, az);

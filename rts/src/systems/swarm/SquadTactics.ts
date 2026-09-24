@@ -19,6 +19,7 @@ import {
 } from './UnitTactics';
 import { CommandLedger } from './CommandLedger';
 import { OrderGate } from './OrderGate';
+import { resolveAnchor } from './squad/Anchor';
 import { LEADER_GATE, GAME_MIN } from './SwarmConfig';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
@@ -321,83 +322,8 @@ export class SquadTactics {
       o.target?.x ?? 0, o.target?.z ?? 0, normalized.mission, effTtl);
   }
 
-  /** ★ 走廊前瞻点（无状态；look 米）：最近点之后第一个 >look 的点；无 → 末点；无路 → null。
-   *  消费：队长锚点 / 掉队成员"长寻路找队长"（沿同一走廊）。 */
-  static corridorAhead(
-    state: SquadOrderState | null | undefined, cx: number, cz: number, look: number,
-  ): { x: number; z: number; climb?: boolean } | null {
-    const path = state?.corridor ?? state?.order.path;
-    if (!path || path.length === 0) return null;
-    let near = 0, nd = Infinity;
-    for (let i = 0; i < path.length; i++) {
-      const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-      if (d2 < nd) { nd = d2; near = i; }
-    }
-    for (let i = near; i < path.length; i++) {
-      const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-      if (d2 > look * look) return path[i];
-    }
-    return path[path.length - 1];
-  }
 
   /** ★ 五轴「路径」：取当前应赴的路点（前方第一个 >8m 的点；都近 = 末点；带锚点滞回） */
-  static currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
-    const tgtPt = SquadTactics.corridorAhead(state, cx, cz, 8);
-    if (tgtPt) {
-      // ★ 末程回落（用户定 2026-09-24）：**走廊终点 ≠ 队令目标**且目标已近（<15m）→ 以队令目标为准
-      //   （治"走廊/粗判收缩后终点差几米 → 全队停在目标几米外 → 卡死回收"；实测队#1 差 5.8m）
-      const ot0 = state.order.target;
-      if (ot0 && Math.hypot(ot0.x - cx, ot0.z - cz) < 15
-        && Math.hypot(tgtPt.x - ot0.x, tgtPt.z - ot0.z) > 1.5) {
-        state.anchorX = ot0.x; state.anchorZ = ot0.z;
-        return { x: ot0.x, z: ot0.z };
-      }
-      // ★ 锚点滞回（用户定 2026-09-25）：新锚点与旧锚 <6m（抖动）→ 沿用旧锚，防振荡
-      //   ★ 但候选 = **队令目标**（最后一点）时必须收敛——否则锚冻在旧点 2~6m 外，
-      //     队长"到位即停"→ 全队停在离目标几米处被卡死回收（实测队#1：36s 只走 15m）。
-      if (state.anchorX !== undefined && state.anchorZ !== undefined) {
-        const ot = state.order.target;
-        const isGoal = !!ot && Math.hypot(tgtPt.x - ot.x, tgtPt.z - ot.z) < 1.5;
-        const dd = Math.hypot(tgtPt.x - state.anchorX, tgtPt.z - state.anchorZ);
-        if (!isGoal && dd < 6) return { x: state.anchorX, z: state.anchorZ, climb: state.anchorClimb };
-      }
-      state.anchorX = tgtPt.x; state.anchorZ = tgtPt.z; state.anchorClimb = tgtPt.climb;
-      return tgtPt;
-    }
-    return state.order.target ?? null;
-  }
-
-  /** ★ 命令锚（队长算具体站位）：
-   *  防守（protect）= 护卫点 + 游弋 → ensureCovered 掩体复核（能躲则贴掩体侧，躲不了保持护卫位）；
-   *  驻守（garrison）= target 掩体中心 → 背威胁侧站位 + LOS 复核 + 不挡绕掩体（《敌人管线设计.md》§3.2.1）；
-   *  其余 = 路径/目标原样。 */
-  static resolveAnchor(
-    state: SquadOrderState, cx: number, cz: number, type?: SquadType, now = 0,
-    cover?: TerrainCover | null,
-  ): { x: number; z: number; climb?: boolean } | null {
-    const o = state.order;
-    // ★ 保护令（队长站位）：命令只给"被保护对象 + 玩家位置" → 队长算护卫点 + 巡逻游弋
-    if (o.kind === 'protect' && o.target) {
-      const tx = o.threatX, tz = o.threatZ;
-      if (tx === undefined || tz === undefined) return o.target;
-      const p = type ? UNIT_TACTICS[type] : null;
-      const g = guardPoint(o.target.x, o.target.z, tx, tz, p?.guardDist ?? 8);
-      const dx = tx - o.target.x, dz = tz - o.target.z;
-      const dl = Math.hypot(dx, dz) || 1;
-      const ux = -dz / dl, uz = dx / dl;   // 切向（防线横向）
-      const swing = Math.sin(now * 0.5 + state.squadId * 1.3) * (p?.patrolR ?? 4);
-      const swung = { x: g.x + ux * swing, z: g.z + uz * swing };
-      // ★ 掩体校验（防守）：护卫点真被挡住才站；不挡 → 小半径找贴掩体侧；都没有 → 保持护卫位
-      return ensureCovered(swung, tx, tz, cover);
-    }
-    if (o.kind === 'garrison' && o.target) {
-      const tx = o.threatX, tz = o.threatZ;
-      // ★ 驻守（队长）：target = 掩体中心（引擎只选保护对象）→ 站位由队长绕掩体自算并复核
-      if (tx === undefined || tz === undefined) return o.target;
-      return standBehindCover(o.target.x, o.target.z, tx, tz, cover);
-    }
-    return SquadTactics.currentTargetOf(state, cx, cz);
-  }
 
   /** 缺参降级：绝不发无法执行的命令 */
   static normalize(order: TacticalOrder): TacticalOrder {
@@ -439,7 +365,7 @@ export class SquadTactics {
     let cx = 0, cz = 0, n = 0;
     for (const m of squad.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
-    const target = state ? SquadTactics.resolveAnchor(state, cx, cz, squad.type, now, cover) : null;
+    const target = state ? resolveAnchor(state, cx, cz, squad.type, now, cover) : null;
     // ★ 五轴「紧急度」：限速乘子（1 + urgency·0.3，上限 1.5）
     const urgeMul = 1 + Math.min(0.5, Math.max(0, state?.order.urgency ?? 0) * 0.3);
     // ★ 队长管队内（用户定调）：个体残血 → 不跟大队硬拼，自主 `fallback` 撤出（引擎不管、队长管）。

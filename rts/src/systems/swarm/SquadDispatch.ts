@@ -12,6 +12,7 @@
 import type { AgentPool } from './AgentPool';
 import type { Squad, SquadTable } from './SquadTable';
 import { SquadTactics, type SquadOrderState } from './SquadTactics';
+import { resolveAnchor } from './squad/Anchor';
 import type { SquadNavigator } from './SquadNavigator';
 import { formationOffset } from './squad/Formation';
 import { OrderGate } from './OrderGate';
@@ -90,7 +91,7 @@ export class SquadDispatch {
       ax = stepTgt.x;
       az = stepTgt.z;
     } else if (leadInfo) {
-      const tgt = SquadTactics.resolveAnchor(state, leadInfo.x, leadInfo.z, squad.type, now, world.terrain);
+      const tgt = resolveAnchor(state, leadInfo.x, leadInfo.z, squad.type, now, world.terrain);
       if (tgt) { ax = tgt.x; az = tgt.z; }
     }
     {
