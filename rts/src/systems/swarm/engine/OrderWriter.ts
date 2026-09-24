@@ -50,7 +50,7 @@ export class OrderWriter {
   /** 探针契约（G9） */
   readonly dbg = { issued: 0, kept: 0, bypass: 0, last: '' };
 
-  constructor(private readonly store: SquadOrderStore) {}
+  constructor(readonly store: SquadOrderStore) {}
 
   /** 发令：过稳定门 → 写唯一写口。返回 true = 已下发 */
   issue(id: number, order: SquadOrder, ctx: WriterCtx): boolean {

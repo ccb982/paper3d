@@ -203,7 +203,8 @@ const NEW_DIRS = ['systems/swarm/engine/', 'systems/swarm/squad/', 'systems/swar
 const newFiles = [...srcOf].filter(([r]) => NEW_DIRS.some((d) => r.startsWith(d)));
 if (newFiles.length) {
   /** G1 单一发令器：所有引擎命令只经 OrderWriter 下发 */
-  const ENGINE_ISSUE = /\.(?:issueChecked|issueOrder|issue)\(/;
+  // 允许经唯一发令器调用（writer.issue）；禁止绕过写口直呼
+  const ENGINE_ISSUE = /\.(?:issueChecked|issueOrder)\(|(?<!writer)\.issue\(/;
   /** G2 队令单写口：orderStore/orders 的 set/write 只许 engine/OrderWriter.ts */
   const STORE_WRITE = /(?:orderStore|orders)\.(?:set|write)\s*\(/;
   /** G3 成员指令：directive 列只许 squad/（队长层）写 */

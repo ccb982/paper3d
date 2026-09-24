@@ -12,32 +12,19 @@
 export const SPREAD = {
   /** 同兵种目标最小间距（米） */
   MIN: 40,
-  /** 迭代遍数（三遍收敛） */
-  PASSES: 3,
+  /** 迭代遍数（切向极坐标收敛较慢，八遍足够） */
+  PASSES: 8,
 } as const;
 
-/** 极坐标滑动：绕中心转 dθ=push/r，半径不变；绕向 = 背离对方（由对方所在侧决定） */
+/** 极坐标滑动：绕中心按角差 dAng 转动（半径严格不变；side=±1 决定绕向） */
 function polarSlide(
   out: SpreadFix[], idx: number, center: { x: number; z: number },
-  otherX: number, otherZ: number, push: number,
+  ang: number, side: number, dAng: number,
 ): void {
   const p = out[idx];
-  const rx = p.x - center.x;
-  const rz = p.z - center.z;
-  const r = Math.hypot(rx, rz);
-  if (r < 1e-3) {
-    // 在圆心上：退化为沿"离开对方"的直线推
-    const dx = p.x - otherX;
-    const dz = p.z - otherZ;
-    const d = Math.hypot(dx, dz) || 1;
-    p.x += (dx / d) * push;
-    p.z += (dz / d) * push;
-    return;
-  }
-  const th = Math.atan2(rz, rx);
-  const cross = rx * (otherZ - p.z) - rz * (otherX - p.x);   // 对方在自己哪一侧
-  const s = cross >= 0 ? 1 : -1;
-  const th2 = th - (push / r) * s;   // 往"对方的反侧"转（双方各自背离）
+  const r = Math.hypot(p.x - center.x, p.z - center.z);
+  if (r < 1e-3) return;
+  const th2 = ang - side * dAng;   // 双方各自背离（side 相反）
   p.x = center.x + Math.cos(th2) * r;
   p.z = center.z + Math.sin(th2) * r;
 }
@@ -77,8 +64,29 @@ export function spreadFix(
         const push = (min - d) / 2;
         if (center) {
           // ★ 极坐标切向：**半径严格不变，只改角**（径向=前近/拉开，切向=间距）
-          polarSlide(out, i, center, out[j].x, out[j].z, push);
-          polarSlide(out, j, center, out[i].x, out[i].z, push);
+          // 直接算"弦长 = min"所需角差（弧长近似会收敛过慢）
+          const r1 = Math.hypot(out[i].x - center.x, out[i].z - center.z);
+          const r2 = Math.hypot(out[j].x - center.x, out[j].z - center.z);
+          if (r1 < 1e-3 || r2 < 1e-3) {
+            const dl = d > 1e-3 ? d : 1e-3;
+            const ux = d > 1e-3 ? relx / dl : 1;
+            const uz = d > 1e-3 ? relz / dl : 0;
+            out[i].x -= ux * push;
+            out[i].z -= uz * push;
+            out[j].x += ux * push;
+            out[j].z += uz * push;
+          } else {
+            const rAvg = (r1 + r2) * 0.5;
+            const want = 2 * Math.asin(Math.min(1, min / (2 * rAvg)));
+            const a1 = Math.atan2(out[i].z - center.z, out[i].x - center.x);
+            const a2 = Math.atan2(out[j].z - center.z, out[j].x - center.x);
+            let cur = Math.abs(a1 - a2);
+            if (cur > Math.PI) cur = Math.PI * 2 - cur;
+            const dAng = Math.max(0, want - cur) * 0.5;
+            const tie = pts[i].id < pts[j].id ? 1 : -1;
+            polarSlide(out, i, center, a1, tie, dAng);
+            polarSlide(out, j, center, a2, -tie, dAng);
+          }
         } else {
           const dl = d > 1e-3 ? d : 1e-3;
           const ux = d > 1e-3 ? relx / dl : 1;

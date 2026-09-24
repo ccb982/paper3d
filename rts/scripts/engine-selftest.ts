@@ -27,6 +27,11 @@ import { selectComposite } from '../src/systems/swarm/engine/Composites.ts';
 import { composeMove } from '../src/systems/swarm/engine/Displacement.ts';
 import { OrderWriter, SquadOrderStore } from '../src/systems/swarm/engine/OrderWriter.ts';
 import { AttackQueues } from '../src/systems/swarm/engine/AttackQueues.ts';
+import { SectorManager } from '../src/systems/swarm/engine/SectorManager.ts';
+import { EngineCore } from '../src/systems/swarm/engine/EngineCore.ts';
+import { EngineBridge } from '../src/systems/swarm/engine/EngineBridge.ts';
+import { SquadCore } from '../src/systems/swarm/squad/SquadCore.ts';
+import type { SquadReport } from '../src/systems/swarm/engine/contracts.ts';
 import type { SquadOrder } from '../src/systems/swarm/engine/contracts.ts';
 import { STUCK } from '../src/systems/swarm/SwarmConfig.ts';
 
@@ -368,6 +373,136 @@ console.log('[9] AttackQueues 攻击队列（1Hz + 最近实体去重 + 开火�
   q.update([{ uid: 1, x: 10, z: 0 }], () => true, latch);
   ok(latch.canFire(3) === false, '离场者撤许可');
   ok(q.dbg.members === 1, 'dbg.members 更新');
+}
+
+// ---------- SectorManager ----------
+console.log('[10] SectorManager 扇形防区');
+{
+  const sec = new SectorManager();
+  sec.build(4);   // 0° 90° 180° 270°
+  const leaders = new Map<number, { x: number; z: number }>([
+    [1, { x: 10, z: 0 }],    // 0° → 扇区 0
+    [2, { x: 0, z: 10 }],    // 90° → 扇区 1
+    [3, { x: 0, z: -10 }],   // 270° → 扇区 3
+  ]);
+  sec.tick((id) => leaders.get(id) ?? null, 0, 0, [1, 2, 3]);
+  ok(sec.sectorOf(1) === 0 && sec.sectorOf(2) === 1 && sec.sectorOf(3) === 3, '各队归到最近扇区');
+  const empty = sec.emptySectors();
+  ok(empty.length === 1 && empty[0] === 2, '空区统计');
+  ok(sec.refillOf(2, 1) === 1, '空区补派数');
+  ok(sec.refillOf(0, 1) === 0, '有队不补派');
+  sec.setSafety(0, 0.9);
+  sec.setSafety(1, 0.2);
+  const safe = sec.safeSectors(0.8);
+  ok(safe.length === 1 && safe[0] === 0, '很安全的区（调区依据）');
+  const c = sec.centerOf(0, 0, 0, 30);
+  ok(Math.abs(c.x - 30) < 0.01 && Math.abs(c.z) < 0.01, '扇区中心点（调区目标）');
+}
+
+// ---------- EngineCore ----------
+console.log('[11] EngineCore 相位 tick');
+{
+  const order: string[] = [];
+  const core = new EngineCore({
+    perceive: () => order.push('perceive'),
+    situation: () => order.push('situation'),
+    decide: () => order.push('decide'),
+    write: () => order.push('write'),
+    debug: () => order.push('debug'),
+  });
+  core.tick(0.6, 1);
+  ok(order.join(',') === 'perceive,situation,decide,write,debug', '固定相位顺序');
+  ok(core.dbg.ticks === 1, '2Hz 节拍触发一次');
+  core.tick(0.1, 1.1);
+  ok(core.dbg.ticks === 1, '未到节拍不触发');
+  core.tick(0.5, 1.6);
+  ok(core.dbg.ticks === 2, '累计到节拍再触发');
+  core.setHz(1);
+  ok(core.dbg.hz === 1, '节拍可调');
+}
+
+// ---------- EngineBridge（影子模式） ----------
+console.log('[12] EngineBridge 实机接线桥（影子模式）');
+{
+  const emitted: SquadOrder[] = [];
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [
+      { id: 1, role: 'melee' as const, x: 50, z: 0, alive: 8 },
+      { id: 2, role: 'melee' as const, x: 55, z: 0, alive: 6 },   // 与 1 同兵种太近 → 应被切向错开
+      { id: 3, role: 'ranged' as const, x: 90, z: 0, alive: 5 },
+    ],
+    emit: (o: SquadOrder) => emitted.push(o),
+  };
+  const bridge = new EngineBridge(live);
+  bridge.dbg.ringMax = 60;
+  bridge.tick(0.6, 1);   // 2Hz → 触发一拍
+  ok(bridge.dbg.ticks === 1, '桥接节拍触发');
+  ok(bridge.squads.dbg.count === 3, '小队已登记（perceive）');
+  ok(bridge.pos.squad(1)?.x === 50, '位置进单源 Positions');
+  ok(bridge.melee.dbg.assigned === 2 && bridge.ranged.dbg.assigned === 1, '四管理器各拿各的（decide）');
+  // 影子模式：命令只进本地 store，不 emit
+  ok(emitted.length === 0, '影子模式不发实机命令');
+  ok(bridge.writer.dbg.issued >= 1, '命令经唯一发令器下发（本地）');
+  // 近战 2 队同兵种太近 → 下发目标（校验后）应被切向错开（间距 ≥40）
+  const o1 = bridge.writer.store.get(1)!.order.target;
+  const o2 = bridge.writer.store.get(2)!.order.target;
+  const a1 = Math.atan2(o1.z, o1.x);
+  const a2 = Math.atan2(o2.z, o2.x);
+  let da = Math.abs(a1 - a2);
+  if (da > Math.PI) da = Math.PI * 2 - da;
+  const rAvg = (Math.hypot(o1.x, o1.z) + Math.hypot(o2.x, o2.z)) * 0.5;
+  // 注：径向不变是硬约束——共线同侧时弦长上限 = r1+r2，弧长近似会略低于 40
+  ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
+  // 环夹取：90 → 60（环上限）
+  const t3 = bridge.ranged.targets.get(3)!;
+  ok(Math.hypot(t3.x, t3.z) <= 60.01, '远程目标夹进环（≤60）');
+  // 实机模式：emit 真下发
+  bridge.shadow = false;
+  bridge.tick(0.6, 2.2);
+  ok(emitted.length >= 1, '实机模式 emit 下发');
+  ok(bridge.writer.dbg.issued >= 1, '发令器台账');
+  // 玩家命令：随随便便就能下（同一发令器 + player 旁路 + 只给队长）
+  const pOk = bridge.playerOrder(1, 'regroup', { x: 5, z: 5 });
+  ok(pOk && bridge.writer.store.get(1)!.order.source === 'player', '玩家命令经唯一发令器直达队长');
+  ok(bridge.writer.store.get(1)!.order.kind === 'regroup', '玩家命令内容生效');
+  // 被打反应：玩家打 3 队 → 登记保护（保护者=最近的其他队）
+  const live2 = { ...live, playerAttacking: () => 3 };
+  const b2 = new EngineBridge(live2);
+  b2.tick(0.6, 1);
+  ok(b2.protect.dbg.links === 1, '玩家打小队 → 引擎登记保护关系');
+}
+
+// ---------- SquadCore（队长侧） ----------
+console.log('[13] SquadCore 队长核心（接令/距离分流/汇报）');
+{
+  const reports: SquadReport[] = [];
+  const core = new SquadCore(1, 'melee', {
+    nav: {
+      longPath: (x, z) => (x > 200 ? -1 : Math.hypot(x, z) + 10),
+      canHop: () => true,
+    },
+    report: (r) => reports.push(r),
+    alive: () => 8,
+  });
+  core.accept({ kind: 'act', source: 'engine', target: { x: 100, z: 0 }, roe: 'engage', seq: 1, ttl: 0 });
+  core.tick(0.5);
+  ok(core.atom === 'march', '距离长（100 > 40）→ 行军（长寻路）');
+  ok(core.dbg.long === 1, '长寻路被调用');
+  ok(reports.length === 1 && reports[0].squadId === 1 && reports[0].atom === 'march', '汇报走唯一接收器');
+  core.x = 80;
+  core.tick(0.5);
+  ok(core.atom === 'act', '距离短（20 ≤ 40）→ 行动（短跳）');
+  ok(core.dbg.short === 1, '短跳被调用');
+  core.x = 99.5;
+  core.tick(0.5);
+  ok(core.phase === 'done' && core.dbg.done === 1, '到位 → done');
+  core.accept({ kind: 'march', source: 'player', target: { x: 300, z: 0 }, roe: 'engage', seq: 2, ttl: 0 });
+  const before = reports.length;
+  core.tick(0.5);
+  ok(reports.length === before + 1 && core.dbg.long === 1, '长寻路不可达 → 不推进（仍汇报，等引擎换点）');
+  ok(core.current()?.source === 'player', '玩家令可被队长接收（同源）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

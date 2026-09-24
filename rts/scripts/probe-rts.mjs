@@ -21,7 +21,7 @@ await page.setViewport({ width: 1280, height: 720 });
 const errs = [];
 page.on('pageerror', (e) => errs.push('[pageerror] ' + String(e).slice(0, 200)));
 page.on('console', (m) => { if (m.type() === 'error') errs.push('[console] ' + m.text().slice(0, 160)); });
-await page.goto(`${RTS_URL}?seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 
 const probe = () => page.evaluate(() => {
   try {

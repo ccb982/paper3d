@@ -47,7 +47,8 @@ import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
-import { GAME_MIN } from './systems/swarm/SwarmConfig';
+import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
+import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
 
 const q = new URLSearchParams(location.search);
@@ -230,6 +231,25 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (targetKind !== AGENT_TARGET_SHIP) return;
     if (Math.hypot(x - spawn.x, z - spawn.z) <= SHIP_LENGTH / 2 + 2) shipHp = Math.max(0, shipHp - dmg);
   };
+  // ★ 新引擎影子接线（重写 P3；`?swarm=new` 时只算不发，与旧路径对照）
+  let shadowBridge: EngineBridge | null = null;
+  if (REWRITE_ON) {
+    shadowBridge = new EngineBridge({
+      player: () => ({ x: hooks.playerX, z: hooks.playerZ }),
+      ship: () => ({ x: hooks.shipX, z: hooks.shipZ }),
+      squads: () => {
+        const out: LiveSquad[] = [];
+        for (const sq of swarm.squads.all()) {
+          const def = mobDefs[sq.mobKind] as { role?: string; isAir?: boolean } | undefined;
+          const role = sq.builders ? 'engineer' : def?.isAir ? 'flyer' : def?.role === 'ranged' ? 'ranged' : 'melee';
+          const c = { x: 0, z: 0 };
+          swarm.squads.centroidOf(sq.id, c);
+          out.push({ id: sq.id, role, x: c.x, z: c.z, alive: Math.max(0, sq.members.size - sq.casualties) });
+        }
+        return out;
+      },
+    });
+  }
   // ★ AI 行为上下文（原 WorldMode.aiCtx）：驱动 L3 实体移动/攻击（aiSystem.updateAll）
   const explosionFx = new ExplosionFx(scene);
   const meleeToTargets = (x: number, z: number, range: number, dmg: number): void => {
@@ -542,6 +562,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.entityCount = enemies.length;
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720000);
     swarm.update(h, hooks);
+    shadowBridge?.tick(h, simT / 1000);   // ★ 新引擎影子拍（?swarm=new；只算不发）
     spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池
     aiCtx.dt = h; aiCtx.time += h;
     aiCtx.target = aiCtx.findTarget('enemy');
@@ -602,7 +623,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; } };
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; } };
 }
 
 // ---- 严格分流：直进 或 先选点（进世界前 await rapier + 敌军素材）----
