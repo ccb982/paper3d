@@ -255,6 +255,9 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - PassTable 只经 `finalRuling` 读取；一次构建，工事/挖掘**不重建**（动态破坏走 HoleMask；战壕 ≠ pit）。
 - 寻路**只读 PassTable**；安全偏好读 TerrainSemantics（经 `riskAt` 注入），**可行性优先于偏好**。
 
+- **上坡（基类，用户定 2026-09-25）**：**上坡半径内必须正对坡面**——`uphillNormal(x,z,R=5)` 取法线；
+  想上坡先对准法线，`dot≥0.8` 才进入程序化爬坡（定速沿法线）；未正对只转向；显式爬坡令同按法线。
+  实现 = `entity/base/CharacterCore`（L2/L3 同内核）；旧的 `fallLineBlend` 混合已从 L2 撤除。
 - **PassTable（可行性表 · 敌人消费收敛层，只读）**：五值（自身高度 + 四向边 可走/净落差）；**边型 = 地形表裁决**（`weld/cliff`，与渲染同源）；格对齐块格（4m）；`weld`（坡）= 双向可行 + 每边存 `climb` 位（净升 >0.6）；`cliff` 落差 ≤`EDGE_CLIFF_BAND=0.6` 可走、>0.6 **上墙下可行**；坑（地块类型 `pit`）**目标口径一律墙**（现状仅致死坑 `pit && h<−1.2` 双向禁）。
 - **LongPath（坡度加权 A\*）**：八向 octile；**上坡 +0.6/m**（偏好缓坡/垭口）；**上坡横平竖直**（斜向仅平/下坡）；输出走廊路点带 `climb` 标注。
 - **短寻路（`nav/LocalStep`，S1）**：有限窗口 Dijkstra（半径 24m；语义风险偏好；终点精确 ≤1.5m；无解 → null）；仅直线不可走时启用。

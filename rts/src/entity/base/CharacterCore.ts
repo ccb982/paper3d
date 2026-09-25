@@ -3,15 +3,16 @@
 // ============================================================
 // L2 代理与 L3 实体共用一套推进语义（用户定：地形/爬坡是每个实体都有的基础方法）：
 //   ① 期望位移（dir × speed × dt）
-//   ② 程序化爬坡：寻路标注 climb 或 坡度 ≥ CLIMB_SLOPE_MIN 且是坡面(weld) 且朝上
-//      → 定速沿梯度直推（CLIMB_SPEED_MUL）；坡面不许驻留（站桩给下坡小推力）
+//   ② 上坡（重写 2026-09-25：**上坡半径 + 必须正对坡面**）：`uphillNormal(x,z,CLIMB_FACE_R)` 找到坡面法线；
+//      想上坡 → 先对准法线，dot ≥ CLIMB_FACE_DOT 才进入爬坡态（定速沿法线 CLIMB_SPEED_MUL）；
+//      显式爬坡令（climbOrdered）同样按法线；坡面不许驻留（无上坡意图给下坡小推力）
 //   ③ 立面阻挡：逐分量清零（陡升 > 台阶豁免 且不延续 = 墙；水中放宽到 SHORE_CLIMB_MAX）
 //   ④ 贴地：位移后落差 > 台阶 → 回退（0.6 小台阶交给上层限速踏过）
 // 地形访问全部经 TerrainProbe 注入（实体层不依赖 systems；代理侧同一份）。
 // 时间一律用**实秒**（now 从参数传入，不内部取钟）。
 // ============================================================
 
-import { CLIMB_SLOPE_MIN, CLIMB_SPEED_MUL, SHORE_CLIMB_MAX } from '../TerrainAssist';
+import { CLIMB_SLOPE_MIN, CLIMB_SPEED_MUL, CLIMB_FACE_R, CLIMB_FACE_DOT, SHORE_CLIMB_MAX } from '../TerrainAssist';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 
 /** 爬坡单次续期（实秒；与 TerrainAssist.CLIMB_PATH_MS 同源） */
@@ -27,6 +28,8 @@ export interface TerrainProbe {
   slopeGradAt(x: number, z: number): { gx: number; gz: number; mag: number } | null;
   /** "脚下块→该方向"的边是否坡面（weld） */
   isWeldEdge(x: number, z: number, dirX: number, dirZ: number): boolean;
+  /** ★ 上坡半径内最近坡面的**正对方向**（单位向量；无坡 → null）——上坡必须正对坡面（用户定 2026-09-25） */
+  uphillNormal?(x: number, z: number, r: number): { ux: number; uz: number } | null;
 }
 
 export interface StepInput {
@@ -95,35 +98,33 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 程序化爬坡（寻路标注优先；否则按坡度判坡面） ----
+    // ---- 上坡优化（重写 2026-09-25：**上坡半径 + 必须正对坡面**） ----
+    //   坡半径内（probe.uphillNormal ≤ CLIMB_FACE_R）：想上坡必须先对准坡法线——
+    //   · 已正对（dot ≥ CLIMB_FACE_DOT）→ 进入爬坡态（定速沿法线直推）；
+    //   · 未正对 → 只把方向转向坡面（不进入爬坡态，逐步对准）；
+    //   · 有显式爬坡令（climbOrdered）→ 仍按法线爬（正对规则不被旁路）；
+    //   · 坡面不许驻留：无上坡意图时给下坡小推力。
     if (inp.blockCliffClimb && !inp.climbAnyTerrain) {
-      if (inp.climbOrdered) {
-        if (dx !== 0 || dz !== 0) {
+      const dl0 = Math.hypot(inp.dirX, inp.dirZ) || 1;
+      const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R) : null;
+      const upDot = face ? (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0 : 0;
+      if (face && (upDot > 0.1 || inp.climbOrdered)) {
+        const dot = Math.max(0, (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0);
+        if (dot >= CLIMB_FACE_DOT || inp.climbOrdered) {
           this.climbUntil = nowS + CLIMB_TIMEOUT_S;
-          const l = Math.hypot(dx, dz) || 1;
-          this.climbDirX = dx / l;
-          this.climbDirZ = dz / l;
+          this.climbDirX = face.ux;
+          this.climbDirZ = face.uz;
         }
-        out.climbing = nowS < this.climbUntil;
+        // 方向对准坡面法线（未正对时 = 转身对准；正对时 = 法线直推）
+        dx = face.ux * inp.speed * inp.dt;
+        dz = face.uz * inp.speed * inp.dt;
+        out.climbing = dot >= CLIMB_FACE_DOT || (inp.climbOrdered && nowS < this.climbUntil);
+      } else if (face && this.climbUntil < nowS) {
+        dx = -face.ux * inp.speed * inp.dt * 0.6;   // 坡面不许驻留（无上坡意图 → 下坡小推力）
+        dz = -face.uz * inp.speed * inp.dt * 0.6;
+        this.climbUntil = 0;
       } else {
-        const g = probe.slopeGradAt(inp.x, inp.z);
-        if (g && g.mag >= CLIMB_SLOPE_MIN && probe.isWeldEdge(inp.x, inp.z, g.gx, g.gz)) {
-          const ux = g.gx / g.mag;
-          const uz = g.gz / g.mag;
-          const up = inp.dirX * ux + inp.dirZ * uz;
-          if (up > 0.25) {
-            this.climbUntil = nowS + CLIMB_TIMEOUT_S;
-            this.climbDirX = ux;
-            this.climbDirZ = uz;
-          } else if (this.climbUntil < nowS) {
-            // 坡面不许驻留：站桩/下行给下坡小推力（要么上要么下）
-            dx -= ux * inp.speed * inp.dt * 0.6;
-            dz -= uz * inp.speed * inp.dt * 0.6;
-          }
-          out.climbing = nowS < this.climbUntil;
-        } else {
-          this.climbUntil = 0;
-        }
+        this.climbUntil = 0;
       }
       if (out.climbing) {
         dx = this.climbDirX * inp.speed * CLIMB_SPEED_MUL * inp.dt;

@@ -368,18 +368,25 @@ console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 /
     wetAt: () => false,
     slopeGradAt: () => (weld ? { gx: 1, gz: 0, mag: 1 } : null),
     isWeldEdge: () => weld,
+    uphillNormal: () => (weld ? { ux: 1, uz: 0 } : null),   // ★ 上坡半径内的坡面法线
   });
-  const run = (probe: ReturnType<typeof mkProbe>) => {
+  const run = (probe: ReturnType<typeof mkProbe>, dirX = 1, dirZ = 0) => {
     const core = new CharacterCore();
     return core.step({
-      x: 0, y: 0, z: 0, dt: 0.1, dirX: 1, dirZ: 0, speed: 2,
+      x: 0, y: 0, z: 0, dt: 0.1, dirX, dirZ, speed: 2,
       climbOrdered: false, blockCliffClimb: true, climbAnyTerrain: false,
       hx: 0.4, hz: 0.4, suspended: false,
     }, probe as never, 0);
   };
   ok(run(mkProbe(false, 2)).dx === 0, '硬边大落差：墙（只下不上）');
-  ok(run(mkProbe(true, 2)).dx > 0, '坡(weld)：允许（程序化爬坡通道）');
   ok(run(mkProbe(false, 0.5)).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
+  // ★ 上坡重写：坡半径内必须正对
+  const face = run(mkProbe(true, 2), 1, 0);
+  ok(face.dx > 0 && face.climbing === true, '正对坡面 → 进入程序化爬坡（沿法线）');
+  const off = run(mkProbe(true, 2), 0.707, 0.707);
+  ok(off.dx > 0 && Math.abs(off.dz) < 1e-6 && off.climbing === false, '未正对（45°）→ 先转向坡面、不爬');
+  const far = run(mkProbe(false, 2), 0.707, 0.707);   // 无坡（法线 null）→ 硬边墙照旧
+  ok(far.dx === 0, '无坡硬边：仍按墙处理');
 }
 
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------

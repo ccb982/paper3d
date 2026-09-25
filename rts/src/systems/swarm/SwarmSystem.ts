@@ -43,7 +43,7 @@ import {
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 import { pickSteer } from '../../entity/SteerPick';
 import { dangerPointAt } from '../../entity/TerrainAssist';
-import { fallLineBlend } from '../../entity/TerrainAssist';
+
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
@@ -773,11 +773,6 @@ export class SwarmSystem {
       atomDirection(atom, tx, tz, _atomDir);
       dx = _atomDir.x;
       dz = _atomDir.z;
-    }
-    // ★ 爬山（共享基础方法 TerrainAssist；L2/L3 同内核）：坡正面混合（水=正常地块，无特殊）
-    if (p.isAir[i] !== 1 && !edgeMode) {
-      fallLineBlend(this.data, p.x[i], p.z[i], dx, dz, _dir);
-      dx = _dir.x; dz = _dir.z;
     }
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
     const inside = this.data.blockedAt(p.x[i], p.z[i]);
