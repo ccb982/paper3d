@@ -3,7 +3,7 @@
 // ============================================================
 // 队长只做三件事：
 //   ① 接令：命令唯一来源 = SquadOrderStore（引擎/玩家同源）
-//   ② 复合→原子：`squad/AtomicSelect` 条件表选 **行军/行动/驻守/巡逻**；
+//   ② 复合→原子：`squad/CommandLang` 解释器选 **行军/行动/驻守/巡逻**；
 //      走廊锚点 → 队长走；成员**围队长**（阵型槽位）——队长不给代理下战术命令
 //   ③ 汇报：唯一接收器 SquadManager.report（进度/位置/原子/阶段）
 // 纯逻辑（寻路/指令落地由端口注入）→ 可独立自检。
@@ -18,10 +18,10 @@ import { onArriveAtom } from './Abilities';
 import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
 import { formationOffset } from './Formation';
 import { decompose } from './Decompose';
-import { selectAtomic, MARCH_DIST, ARRIVE_R } from './AtomicSelect';
+import { interpretLeader, MARCH_DIST, ARRIVE_R } from './CommandLang';
 
-// 距离分流阈值单源在 AtomicSelect（兼容旧引用：再导出）
-export { MARCH_DIST, ARRIVE_R } from './AtomicSelect';
+// 距离分流阈值单源在 CommandLang（兼容旧引用：再导出）
+export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 
 export interface SquadNav {
   /** 长寻路：返回路径长度（米）；-1 = 不可达 */
@@ -80,7 +80,7 @@ export class SquadCore {
   private lastZ = 0;
   /** 指令序号（队内单调） */
   private seq = 1;
-  /** 是否已 drive 过（原子由 selectAtomic 决定；tick 只在从未 drive 时按距离兜底） */
+  /** 是否已 drive 过（原子由 interpretLeader 决定；tick 只在从未 drive 时按距离兜底） */
   private hasDrive = false;
 
   constructor(readonly id: number, readonly role: MobRole, private readonly ports: SquadPorts) {}
@@ -124,8 +124,8 @@ export class SquadCore {
       port.ensurePath(st, squad, now);   // 寻路轨：队长走廊（长行军 A* / 短跳贪心）
       anchor = port.leaderTarget(st, squad, lx, lz, now);
     }
-    // ② 复合 → 原子（条件表 = `squad/AtomicSelect.ts`；protect 用 blockCheck 调整点）
-    const sel = selectAtomic(st, lx, lz, anchor);
+    // ② 复合 → 原子（解释器 = `squad/CommandLang.ts`；protect 用 blockCheck 调整点）
+    const sel = interpretLeader(st, lx, lz, anchor);
     // ③ protect：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
     if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
       st.order.target = { x: sel.x, z: sel.z };
@@ -194,7 +194,7 @@ export class SquadCore {
       this.report();
       return;
     }
-    // 从未 drive（自检/降级）时按距离兜底；实机原子由 drive 的 selectAtomic 决定
+    // 从未 drive（自检/降级）时按距离兜底；实机原子由 drive 的 interpretLeader 决定
     if (!this.hasDrive) {
       if (d > MARCH_DIST) {
         this.atom = 'march';

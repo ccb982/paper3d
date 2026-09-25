@@ -30,10 +30,10 @@
 
 ```
 systems/swarm/
-  engine/   EngineCore EngineBridge OrderWriter OrderValidator DecisionChain Composites Displacement
+  engine/   EngineCore EngineBridge OrderWriter OrderValidator DecisionChain CommandLang
             Protect AttackQueues TimerManager Positions SquadManager SquadView SectorManager
             RoleManager+四兵种(Melee/Ranged/Flyer/Engineer)Manager Spread contracts
-  squad/    SquadCore SquadRegistry AtomicSelect State Decompose Anchor Follow Formation Abilities MarchAction
+  squad/    SquadCore SquadRegistry CommandLang State Decompose Anchor Follow Formation Abilities MarchAction
   data/     SwarmData（地形/表/L1/L2/事态环/t01/工事数据/编制与生成执行）
   nav/      PassTable LongPath Corridor（含 ShortHop 短跳）
   根        SwarmSystem（代理移动/渲染/LOD）、AgentPool、SquadTable、TerrainScore/TerrainSemantics/HoleMask/HoleTable、
@@ -79,7 +79,8 @@ perceive → situation → decide(单源) → write → debug
 
 ### 2.4 复合与统一校验
 - **复合选择（`DecisionChain`）**：到环上限 → `defend`；有保护关系/被打 → `protect`；否则 `act`。
-  **复合 → 原子**的条件表在 `squad/AtomicSelect.ts`（队长层唯一实现，见 §3.2）。
+  **复合 → 原子**的解释器在 `squad/CommandLang.ts`（队长层唯一实现，见 §3.2）；
+  引擎侧命令语法/解释器在 `engine/CommandLang.ts`（见 §2.10）。
 - **发令统一校验链（`OrderValidator.ts`，一处实现、不许旁路）**：
   ① **事态范围**：目标夹进 `[ringMin, ringMax]`；到上限 → `suggest='defend'`；
   ② **密度**：同兵种目标 <`SPREAD.MIN=40m` → **切向 θ 散开（径向 r 严格不变）**；工兵不参与；
@@ -120,6 +121,17 @@ perceive → situation → decide(单源) → write → debug
 
 ---
 
+### 2.10 引擎命令语言（`engine/CommandLang.ts`）
+```
+sentence  := composite { modifier }
+composite := 'protect' '(' G ',' P ')'          // G=被保护队长位，P=威胁(玩家)位
+           | 'act'     '(' target ')'            // 行动：去某点
+           | 'defend'  [ '(' object ')' ]       // 防御：守对象；缺省 = 守原地
+modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
+```
+- 引擎只发**复合句**；`wellFormed`（良构：缺操作数/非法修饰 → 发令前拦下）→ `interpretEngine`（解释为意图 `op=block/move/hold`）→ `OrderWriter` 发布（G1/G2 不变）。
+- `protect` 双点原样下发（G/P）；队长自主 `blockCheck` 选原子（§3.2）。**引擎不逐拍指挥、不算锚**。
+
 ## 3. 队长层（执行 `squad/`）
 
 ### 3.1 SquadCore —— 队长三件事
@@ -131,12 +143,19 @@ perceive → situation → decide(单源) → write → debug
 - `accept(order)` → 建执行态（`State.stateFromOrder`，同令沿用路径缓存）；`drive(squad, now, port)` 每帧执行：
   1. `port.ensurePath(state, squad, now)`（长/短寻路写入走廊；protect 除外）；
   2. `port.leaderTarget(...)`（`resolveAnchor`：保护护卫点+游曳 / 驻守绕掩体 / 走廊前瞻）；
-  3. **`selectAtomic`**（§3.2）→ 原子与目标；**protect 未挡住 → 执行态目标覆盖为调整点 → 重解走廊**（调整点即寻路目标，到点再校验）；
+  3. **`interpretLeader`**（§3.2）→ 原子与目标；**protect 未挡住 → 执行态目标覆盖为调整点 → 重解走廊**（调整点即寻路目标，到点再校验）；
   4. `port.clampRing`（事态环硬约束）；
   5. 成员调遣：`Decompose`（角色矩阵）+ 开火门（`fireAllowed`）+ **围队长**（队长走原子目标；成员 = 队长+阵型槽位）→ `port.applyDirective`（唯一落地口：池列 / L3 `onDirective`）。
 - `tick(dt)`：进度（起始距离收敛比）/静止计时/阶段（到位 `done` → `onArriveAtom` 驻留口径）；原子由 drive 决定（自检降级时按距离兜底）。
 
-### 3.2 复合命令 → 原子能力（唯一条件表 `AtomicSelect.ts`）
+### 3.2 队长命令语言（解释器 `squad/CommandLang.ts`）
+```
+sentence := composite            // 输入：引擎复合句 protect / act / defend（patrol = 原子直令）
+atom     := 'patrol' | 'garrison' | 'march' | 'act'
+choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = 依据，探针可读）
+```
+> 复合句在此**解释成原子句**；原子句 + 角色桶再由 `Decompose` 编译成成员指令。逐层一门语言。
+
 | 复合（引擎→队长） | 条件 | 原子 | 目标点 |
 |---|---|---|---|
 | **protect**（G=被保护队长位，P=玩家位） | `blockCheck(P,B,G,'block')` **已挡住** | `garrison` | 原地（保持阻挡，不挪窝） |
@@ -256,7 +275,7 @@ perceive → situation → decide(单源) → write → debug
 | 卡死回收 | 包围盒<4m 持续 25s（驻守/交火豁免） | `SwarmConfig.STUCK` |
 | 工兵施工 | 到件 3m；掩体 6s / 战壕 10s（2s/遍×5） | `EngineerManager` |
 | 施工带 / 需求线 | `rLo=max(24,frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM,frontMaxD)`；`NEED_DONE=0.6` | `SwarmData` |
-| 长短寻路分界 | 40m | `AtomicSelect.MARCH_DIST` / `NAV.LONG_PATH_DIST` |
+| 长短寻路分界 | 40m | `CommandLang.MARCH_DIST` / `NAV.LONG_PATH_DIST` |
 | 长寻路加权 | 上坡 +0.6/m；斜向 ×1.414（上坡仅四向） | `FeasibilityPath` |
 | 短跳 | 10m→6m；爬升 +2/m；推进>0.5m | `ShortHop` |
 | 硬边台阶豁免 | 0.6m；>0.6 上墙/下可行 | `PassTable.edge` |
@@ -318,7 +337,7 @@ perceive → situation → decide(单源) → write → debug
 | **R48 能力回流** | 抵舰驻留迁波次决策源；磨蹭纠正/守点粘性按用户要求删除 | ✅ |
 | **R49 波次迁入** | 波次判定 + 兵力放行迁 `EngineBridge`；t01 回退自动复位 | ✅ |
 | **R50 数据面归位** | `SwarmCommander` → `data/SwarmData`（无指挥语义）；`swarm.commander` 全改 `swarm.data` | ✅ |
-| **R51 复合→原子下放** | `squad/AtomicSelect` 条件表；引擎 `Protect` 只给 G/P；自检 153/153 | ✅ |
+| **R51 复合→原子下放** | `squad/CommandLang` 解释器；引擎 `Protect` 只给 G/P；自检 153/153 | ✅ |
 | 待办 | 收拢态间距口径 / cmdChanges 调优 / legacy `WorldMode.ts`（3558 行旧模式）清理 / §16 山地优化 | ⬜ |
 
 ---

@@ -1,30 +1,28 @@
 // ============================================================
-// squad/AtomicSelect —— 复合命令 → 原子能力（队长层；**条件→原子 显式表**）
+// squad/CommandLang —— 队长命令语言（语法 + 解释器；用户定 2026-09-25）
 // ============================================================
-// 复合（引擎→队长）：protect / act / defend（`engine/Composites.ts`）
-// 原子（队长自选）：patrol / garrison / march / act
+// 队长收**引擎复合句**（`engine/CommandLang.ts`），按本文件语法**解释成原子句**；
+// 再由 `Decompose` 把原子句 + 角色桶编译成**成员指令**。逐层一门语言，规则单源。
 //
-// 选择规则（唯一实现，一处可查；改规则只改这里）：
+// EBNF（队长命令语法）：
+//   sentence  := composite            // 输入：引擎复合句 protect / act / defend（patrol = 原子直令）
+//   atom      := 'patrol' | 'garrison' | 'march' | 'act'
+//   choice    := atom '(' point ')'   // 解释结果：原子 + 目标点（why = 依据，探针可读）
 //
-//   protect（保护：G=被保护队长位，P=玩家威胁位）——基类 `blockCheck(P,B,G,'block')`：
-//     · 已挡住（ok）           → **garrison**（原地驻守，保持阻挡；不挪窝）
-//     · 离 P 太远（dP > band） → **march**（长寻路到调整点 ax,az）
-//     · 其余（偏了/不在带内）  → **act**（短跳到调整点 ax,az）
-//     目标 = blockCheck 调整点（P→G 线上、离 P 为 STANDOFF）；**到点再校验**（收敛）。
-//     （调整点即寻路目标——用户定 2026-09-24）
+// 解释器 `interpretLeader(state, lx, lz, anchor)` 产生式（唯一实现，改规则只改这里）：
 //
-//   act（去某点；含 march 原子直令）——按到锚点距离：
-//     · d > MARCH_DIST(40)     → **march**（长寻路）
-//     · ARRIVE_R < d ≤ 40      → **act**（短跳 LOS 贪心）
-//     · d ≤ ARRIVE_R(1.5)      → **garrison**（到位驻守；巡逻游弋归 resolveAnchor）
+//   protect（G=被保护队长位，P=威胁位）——基类 `blockCheck(P,B,G,'block')`：
+//     · 已挡住（ok）           → garrison（原地驻守，保持阻挡）
+//     · 离 P 太远（dP > band） → march（长寻路到调整点 ax,az）
+//     · 其余（偏了/不在带内）  → act（短跳到调整点 ax,az）
+//     · 无 P（降级）           → 到 G 的距离三分（march / act / garrison）
 //
-//   defend（守对象/守原地；站位锚先过 resolveAnchor：驻守绕掩体/反斜/掩体复核）：
-//     · 同 act 的距离三分（march / act / garrison）
-//     · 无对象（守原地）：锚 = 自身位 → 直接 garrison
+//   act / defend / patrol（站位锚先过 resolveAnchor：驻守绕掩体/反斜/掩体复核）：
+//     · d > MARCH_DIST(40)     → march（长寻路）
+//     · ARRIVE_R < d ≤ 40      → act（短跳 LOS 贪心）
+//     · d ≤ ARRIVE_R(1.5)      → garrison（到位驻守）
 //
-//   patrol（原子直令，玩家/引擎罕见）：同 act（到位后由 `onArriveAtom` 定驻留口径）
-//
-// 注：blockCheck 是**基类功能**（entity/base/Blocking）；本文件只做"条件→原子"选择，
+// 注：blockCheck 是**基类功能**（entity/base/Blocking）；本文件只做"条件→原子"解释，
 //     不写行为逻辑；寻路/执行分别由 SquadCore（端口 ensurePath）与执行层承担。
 // ============================================================
 
@@ -47,8 +45,8 @@ export interface AtomicChoice {
   why: string;
 }
 
-/** 复合命令 + 现场 → 原子能力（唯一选择表；见文件头规则） */
-export function selectAtomic(
+/** 解释器：复合句 + 现场 → 原子句（唯一产生式；见文件头） */
+export function interpretLeader(
   state: SquadOrderState,
   lx: number,
   lz: number,
@@ -56,7 +54,7 @@ export function selectAtomic(
   anchor: { x: number; z: number } | null,
 ): AtomicChoice {
   const o = state.order;
-  // ---- protect：blockCheck（P=threat，B=自己，G=board 语义的 target=被保护点） ----
+  // ---- protect：blockCheck（P=threat，B=自己，G=target=被保护点） ----
   if (o.kind === 'protect') {
     const G = o.target;
     const P = o.threatX !== undefined ? { x: o.threatX, z: o.threatZ ?? 0 } : null;

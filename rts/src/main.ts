@@ -11,7 +11,6 @@ import type { ChunkGroundHost } from './services/map/decor/MapEntityDecorBase';
 import { SunCycle } from './services/render/SunCycle';
 import { updateTerrainLighting, updateWallMaterialsLighting } from './services/map/TerrainMaterial';
 import { updateApronLighting } from './services/map/decor/PlatformApron';
-import { OrderBus } from './order/OrderBus';
 import { SpawnSelect } from './ui/SpawnSelect';
 import { SwarmSystem } from './systems/swarm/SwarmSystem';
 import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
@@ -156,7 +155,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     kind: 'ship', x: spawn.x, y: shipY + 0.8, z: spawn.z,
     physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: SHIP_LENGTH / 2, hy: 0.8, hz: 1.2 } } },
   });
-  const orders = new OrderBus(scene);
 
   // ---- ★ 名册 → MobDef（buildBatch/刷怪器共用；必须在 buildBatch 之前）----
   const mobDefs: MobDef[] = mobAssets.map(({ id, asset }) => {
@@ -385,7 +383,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     else if (scope === 'selected') {
       for (const id of cmdPanel.selectedIds()) if (shadowBridge?.playerOrder(id, k, target)) n++;
     } else n = shadowBridge?.playerOrderNear(k, target, 60) ?? 0;
-    orders.issue({ kind: kind as never, target, source: 'player', roe: 'engage', ttl: 6 });
     cmdPanel.lastText = `${kind} → ${n} 队已接令（${scope}）`;
   };
   // ★ AI 行为上下文（原 WorldMode.aiCtx）：驱动 L3 实体移动/攻击（aiSystem.updateAll）
@@ -432,7 +429,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }), engineView ?? undefined);
   enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
   // ★ AI 可读记录器（命令/指令/寻路/生死；Y=下载 JSONL，U=控制台打印中文摘要）
-  const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders, engineView ?? undefined);
+  const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), engineView ?? undefined);
   // ★ 快车道结算（代理直扣 / 实体走管线）；K = 对相机中心 18m 内造成 15 伤害（演示/测试口）
   const fastLane = new FastLane(swarm, enemies);
   // ★ 时间轴（拖动 = 绝对当日进度；事态/闸门/命令随之重算）
@@ -576,7 +573,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       if (!sq || seen.has(sq.id)) continue;
       seen.add(sq.id);
       shadowBridge?.playerOrder(sq.id, 'act', { x, z });   // 玩家源 → 同链（只给队长）
-      orders.issue({ kind: 'advance', target: { x, z }, source: 'player', roe: 'engage', ttl: 30 * GAME_MIN });
     }
     return seen.size;
   };
@@ -626,7 +622,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const hit = rc.intersectObjects(scene.children, true)[0];
       if (hit) {
         cmdPanel.setTarget(hit.point.x, hit.point.z);
-        orders.issue({ kind: 'advance', target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
         // ★ 玩家手动命令（重写 P3；用户定）：新引擎经唯一发令器 + player 旁路 → **只给队长**
         //   （60m 内的小队收令；可在 __rts.newEngine() 看到）
         shadowBridge?.playerOrderNear('act', { x: hit.point.x, z: hit.point.z }, 60);
@@ -784,7 +779,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

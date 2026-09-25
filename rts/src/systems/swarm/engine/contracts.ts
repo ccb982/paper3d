@@ -15,7 +15,7 @@ export type CompositeKind = 'protect' | 'act' | 'defend';
 /** 原子能力（小队能力四件套；march=距离长→长寻路，act=距离短→短跳） */
 export type AtomicKind = 'patrol' | 'garrison' | 'march' | 'act';
 
-// ★ 复合 → 原子 的**条件表**在 `squad/AtomicSelect.ts`（唯一实现；引擎只选复合，队长选原子）。
+// ★ 复合 → 原子 的**解释器**在 `squad/CommandLang.ts`（唯一实现；引擎只选复合，队长解原子）。
 
 // ---------- 命令（引擎→队长 / 队长→自己 / 玩家） ----------
 
@@ -40,7 +40,7 @@ export interface SquadOrder {
   mission?: string;
 }
 // ★ 命令格式（用户定）：**作用对象只有队长**（引擎只指挥队长；成员一律跟队长走）。
-//   · 位移命令：径向+切向同时发力得 target → 长寻路检测 → 下发（见 Displacement.composeMove）
+//   · 位移命令：径向+切向 → target 过 OrderValidator（①环内②密度③可达）→ 下发（Spread 只解 θ）
 //   · 防御命令：可只给 object（防御对象），也可只给 kind（守原地）
 //   · 扩展新复合命令 = 加可选字段，不改既有语义（契约向后兼容）
 

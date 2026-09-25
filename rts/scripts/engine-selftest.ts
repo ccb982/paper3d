@@ -18,7 +18,8 @@ import { FlyerManager } from '../src/systems/swarm/engine/FlyerManager.ts';
 import { EngineerManager } from '../src/systems/swarm/engine/EngineerManager.ts';
 import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerManager.ts';
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
-import { selectAtomic } from '../src/systems/swarm/squad/AtomicSelect.ts';
+import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
+import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
@@ -210,31 +211,53 @@ console.log('[5] Protect 保护命令（引擎只给 G/P 双点）');
 }
 
 // ---------- 复合 → 原子（队长层条件表） ----------
-console.log('[5b] AtomicSelect 复合→原子（条件表）');
+console.log('[5b] CommandLang 复合→原子（解释器）');
 {
-  const mk = (over: Partial<Parameters<typeof selectAtomic>[0]['order']>) => ({
+  const mk = (over: Partial<Parameters<typeof interpretLeader>[0]['order']>) => ({
     squadId: 1, issuedAt: 0, until: 0, source: 'engine' as const, notBefore: 0,
     pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,
     order: { kind: 'protect' as const, target: { x: 8, z: 0 }, threatX: 0, threatZ: 0, ...over },
   });
   // protect：P(0,0) G(8,0) B 在线上 standoff 带内 → 已挡住 → 驻守原地
-  const on = selectAtomic(mk({}) as never, 6, 0, null);
+  const on = interpretLeader(mk({}) as never, 6, 0, null);
   ok(on.atom === 'garrison' && on.x === 6, 'protect：已挡住 → 驻守（不挪窝）');
   // protect：B 偏到 (6,6) → 未挡住 → 行动到调整点（P→G 线上）
-  const off = selectAtomic(mk({}) as never, 6, 6, null);
+  const off = interpretLeader(mk({}) as never, 6, 6, null);
   ok(off.atom === 'act' && Math.abs(off.z) < 0.01, 'protect：偏了 → 行动到调整点（线上）');
   // protect：B 太远 (40,0)（P 距 40 > 带）→ 行军
-  const far = selectAtomic(mk({}) as never, 40, 0, null);
+  const far = interpretLeader(mk({}) as never, 40, 0, null);
   ok(far.atom === 'march', 'protect：离 P 太远 → 行军');
   // act：距离三分
   const act = { ...mk({ kind: 'act' as never, target: { x: 100, z: 0 } }) };
-  ok(selectAtomic(act as never, 0, 0, null).atom === 'march', 'act：>40 → 行军');
-  ok(selectAtomic(act as never, 80, 0, null).atom === 'act', 'act：20 → 行动');
-  ok(selectAtomic(act as never, 99.5, 0, null).atom === 'garrison', 'act：到位 → 驻守');
+  ok(interpretLeader(act as never, 0, 0, null).atom === 'march', 'act：>40 → 行军');
+  ok(interpretLeader(act as never, 80, 0, null).atom === 'act', 'act：20 → 行动');
+  ok(interpretLeader(act as never, 99.5, 0, null).atom === 'garrison', 'act：到位 → 驻守');
 }
 
-// ---------- Spread / OrderValidator / Composites ----------
-console.log('[6] 同兵种散开 + 发令统一校验链 + 复合选择');
+// ---------- 引擎命令语言（语法 + 解释器） ----------
+console.log('[5c] CommandLang 引擎复合句（良构 + 解释器）');
+{
+  const base = {
+    kind: 'protect' as const, source: 'engine' as const, roe: 'engage' as const, seq: 0, ttl: 0,
+    target: { x: 0, z: 0 }, anchor: { x: 8, z: 0 }, threat: { x: 0, z: 0 },
+  };
+  ok(wellFormed(base) === null, 'protect：G/P 齐全 → 良构');
+  ok(wellFormed({ ...base, anchor: undefined }) !== null, 'protect：缺 G → 拦下');
+  ok(wellFormed({ ...base, threat: undefined }) !== null, 'protect：缺 P → 拦下');
+  ok(wellFormed({ ...base, kind: 'act' as never, target: undefined as never }) !== null, 'act：缺 target → 拦下');
+  ok(wellFormed({ ...base, roe: 'bad' as never }) !== null, '非法 roe → 拦下');
+  const itP = interpretEngine(base);
+  ok(itP.op === 'block' && itP.anchor!.x === 8 && itP.threat!.x === 0, 'protect → block（双点原样）');
+  const itA = interpretEngine({ ...base, kind: 'act' as never, target: { x: 12, z: 3 } });
+  ok(itA.op === 'move' && itA.target.x === 12, 'act → move(target)');
+  const itD = interpretEngine({ ...base, kind: 'defend' as never, object: { x: 5, z: 5 } });
+  ok(itD.op === 'hold' && itD.target.x === 5, 'defend → hold(object)');
+  const itD2 = interpretEngine({ ...base, kind: 'defend' as never, target: { x: 7, z: 7 } });
+  ok(itD2.op === 'hold' && itD2.target.z === 7, 'defend 无对象 → hold(原地 target)');
+}
+
+// ---------- Spread / OrderValidator ----------
+console.log('[6] 同兵种散开 + 发令统一校验链');
 {
   // Spread（切向）：同兵种两点在径向上滑开，径向距离不变；异兵种不约束
   const fixed = spreadFix([

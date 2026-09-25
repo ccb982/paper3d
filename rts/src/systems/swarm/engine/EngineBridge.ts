@@ -3,7 +3,7 @@
 // ============================================================
 // 把新引擎接到实机（**不破坏旧路径**）：
 //   · 影子模式（shadow=true，默认）：新引擎**只读 + 只算 + 只记**——用 dbg 与旧路径对照
-//   · 实机模式（shadow=false）：write 相位经 OrderWriter 真下发（emit 回调交给旧 OrderBus）
+//   · 实机模式（shadow=false）：write 相位经 OrderWriter 真下发（emit 回调 → 队长核 accept）
 // 实机状态由 LiveView 注入（main.ts 适配；引擎不直读世界，G4）；
 // 发令唯一出口 OrderWriter（G1），汇报唯一接收器 SquadManager（铁律 7）。
 // ============================================================
@@ -22,6 +22,7 @@ import { validateOrder } from './OrderValidator';
 import { decideChain, type Decision } from './DecisionChain';
 import type { SpreadPt } from './Spread';
 import { releaseAt } from '../PostureFn';
+import { wellFormed, interpretEngine } from './CommandLang';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -381,10 +382,21 @@ export class EngineBridge {
         if (q.cur && !this.shadow) { this.live.emit?.(q.rec.id, q.cur.order, now); refreshed++; }
         continue;
       }
-      const order: SquadOrder = {
+      const link = this.protect.linkOf(q.rec.id);
+      // ★ 引擎命令语言：复合句（语法）→ 良构校验 → 解释器 → 唯一发令器（用户定 2026-09-25）
+      const sentence: SquadOrder = {
         kind: q.dec.kind, source: 'engine', target: { x: v.x, z: v.z },
-        anchor: this.protect.linkOf(q.rec.id)?.anchor,
+        anchor: q.dec.kind === 'protect' ? (link?.anchor ?? { x: v.x, z: v.z }) : undefined,
         threat: { x: p.x, z: p.z },   // ★ P 点（引擎单源）：队长算阻挡/掩体站位用
+        roe: 'engage', seq: 0, ttl: 0,
+        mission: q.mission,
+      };
+      const bad = wellFormed(sentence);
+      if (bad) { this.dbg.last = `bad:${bad}`; continue; }
+      const it = interpretEngine(sentence);
+      const order: SquadOrder = {
+        kind: it.kind, source: 'engine', target: it.target,
+        anchor: it.anchor, threat: it.threat,
         roe: 'engage', seq: 0, ttl: 0,
         mission: q.mission,
       };

@@ -7,7 +7,6 @@
 import { eventBus } from '../core/EventBus';
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyBase } from '../entity/EnemyBase';
-import type { OrderBus, SquadOrder } from '../order/OrderBus';
 import type { SquadView, SquadViewPort } from '../systems/swarm/engine/SquadView';
 import { orderCn, directiveCn, sourceCn } from '../ui/cn';
 import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
@@ -44,6 +43,8 @@ export class AiTrace {
   private readonly lastSquad = new Map<number, string>();
   private readonly lastPath = new Map<number, string>();
   private readonly lastDir = new Map<number, string>();
+  /** 玩家命令去重（唯一台账 = OrderWriter 环；只读视图轮询） */
+  private readonly lastPlayer = new Set<string>();
   private unsubs: (() => void)[] = [];
 
   constructor(
@@ -51,7 +52,6 @@ export class AiTrace {
     private readonly enemies: EnemyBase[],
     private readonly seed: number,
     private readonly names: readonly string[],
-    orderBus?: OrderBus,
     /** ★ 引擎只读视图（替代旧镜像板） */
     private readonly view?: SquadViewPort,
   ) {
@@ -62,12 +62,6 @@ export class AiTrace {
     this.unsubs.push(eventBus.on('enemy_removed', (p: { uid: number; reason?: string }) => {
       this.push({ t: this.now(), ev: 'gone', uid: p.uid, mission: p.reason });
     }));
-    if (orderBus) orderBus.onIssue = (o: SquadOrder) => {
-      this.push({
-        t: this.now(), ev: 'player', source: 'player', kind: o.kind,
-        tx: +o.target.x.toFixed(1), tz: +o.target.z.toFixed(1), seq: o.seq, mission: o.mission,
-      });
-    };
   }
 
   private now(): number { return +(performance.now() / 1000).toFixed(2); }
@@ -83,6 +77,19 @@ export class AiTrace {
     if (this.accum < 0.5) return;
     this.accum = 0;
     const t = this.now();
+    // ---- 玩家命令（唯一台账 = OrderWriter 环；本记录器只读）----
+    if (this.view) {
+      for (const c of this.view.recentCommands(16)) {
+        if (c.source !== 'player') continue;
+        const key = `${c.at}|${c.squadId}`;
+        if (this.lastPlayer.has(key)) continue;
+        this.lastPlayer.add(key);
+        this.push({
+          t, ev: 'player', source: 'player', squad: c.squadId, kind: c.kind,
+          tx: +c.tx.toFixed(1), tz: +c.tz.toFixed(1), mission: c.mission,
+        });
+      }
+    }
     // ---- 队级：命令 + 寻路结果 ----
     const vmap = new Map<number, SquadView>();
     if (this.view) for (const v of this.view.squads()) vmap.set(v.id, v);
