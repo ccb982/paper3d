@@ -290,7 +290,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       ledgerTotal: () => swarm.ledger.total,
       setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
       spawnBattalion: (instant: boolean) => swarm.data.spawnBattalion(instant),
-      /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判 */
+      /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判。
+       *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：豁免名单**只减不增**；被收回 = 出了问题（修行为，不修判官）★★ */
       exemptOf: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;

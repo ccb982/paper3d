@@ -715,7 +715,8 @@ export class SwarmSystem {
     return this.fireGate(uid);
   }
 
-  /** ★ 统一计时销毁（新引擎 TimerManager.onExpire 回调）：回收代理（归编制）。返回是否找到。 */
+  /** ★ 统一计时销毁（新引擎 TimerManager.onExpire 回调）：回收代理（归编制）。返回是否找到。
+   *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：此路不得绕过/弱化；被收回 = 出了问题（修行为，不修判官）★★ */
   recycleByUid(uid: number): boolean {
     const p = this.pool;
     for (let i = p.count - 1; i >= 0; i--) {
