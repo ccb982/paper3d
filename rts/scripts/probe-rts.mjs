@@ -49,6 +49,17 @@ const probe = () => page.evaluate(() => {
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     plan: !!c?.plan,
     squads,
+    /** ★ 销毁率采样（用户定 2026-09-25）：账本离场 + 新引擎计时销毁判决（累计值，窗口差分算率） */
+    destroy: {
+      spawned: sw?.ledger?.spawned ?? null,
+      alive: sw?.ledger?.alive ?? null,
+      kills: sw?.ledger?.kills ?? null,
+      recalled: sw?.ledger?.recalled ?? null,
+      removed: sw?.ledger?.removed ?? null,
+      timerTotal: w?.shadowBridge?.timers?.dbg?.expiredTotal ?? null,
+      timerStuck: w?.shadowBridge?.timers?.dbg?.stuckTotal ?? null,
+      timerLife: w?.shadowBridge?.timers?.dbg?.lifeTotal ?? null,
+    },
     agents: (() => {
       const p = sw.pool; const out = [];
       for (let i = 0; i < p.count && out.length < 2; i++) {
@@ -116,11 +127,11 @@ for (const t of [8000, 20000, 40000, 70000]) {
   const s = await probe();
   samples.push(s);
   console.log(`T+${t / 1000}s`, JSON.stringify(s));
-  if (t === 8000) {
-    // ★ 快进到第一波时段（t01=0.5）+ 相机对准舰船，验证"下午闸门收拢/第一波抵舰驻留"
+  if (t === 40000) {
+    // ★ S1 施工窗：0~68s 不拨日程（工兵 ~2m/s 到件 + 6s/10s 施工；实测 T+65 建成）→ 68s 第一波；70s 总攻
     await page.evaluate(() => {
       const w = window.__rts;
-      w.swarm.commander.scrubDay(0.5);   // ★ 第一波（commit=1，收到舰）
+      setTimeout(() => w.swarm.commander.scrubDay(0.5), 28000);   // T+68：第一波（收到舰）
       w.cam.tx = 60; w.cam.tz = -40; w.cam.dist = 200; w.cam.pitch = 1.2;
     });
   }
@@ -158,9 +169,6 @@ for (const t of [8000, 20000, 40000, 70000]) {
       return { at: [p.x[0] | 0, p.z[0] | 0], r: w.fastLane.damageArea(p.x[0], p.z[0], 4, 999) };
     });
     console.log('快车道致死 =', JSON.stringify(kill));
-  }
-  if (t === 40000) {
-    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.75); });   // ★ 甜甜圈（60/180）
   }
   if (t === 70000) {
     await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.95); });   // ★ 总攻（点 0/0）
@@ -241,20 +249,34 @@ if (trk.length > 4) {
       keep: g?.keep ?? null, commit: g?.commit ?? null, decide: g?.decide ?? null,
       idle: g?.idle ?? null, arriveWait: g?.arriveWait ?? null,
       minSame: minSame === null ? null : +minSame.toFixed(1), pair,
-      recycled: sw?.stuckDbg?.recycled ?? null,
     };
   });
   const durMin = 62 / 60;   // 采样窗 8s→70s（≈62 模拟秒）
   const intercept = (m6.keep !== null && (m6.commit + m6.keep) > 0) ? (m6.keep / (m6.commit + m6.keep)) * 100 : null;
   const idlePct = m6.decide ? ((m6.idle + m6.arriveWait) / m6.decide) * 100 : null;
-  const recyMin = m6.recycled !== null ? m6.recycled / durMin : null;
+  // ★ 销毁率（窗口差分；用户定 2026-09-25）：账本离场 = 击杀/回收/其他；计时销毁 = TimerManager 判决（卡死/寿命）
+  const dA = samples[0]?.destroy ?? null;
+  const dB = samples[samples.length - 1]?.destroy ?? null;
+  const dd = (a, b) => (a === null || a === undefined || b === null || b === undefined) ? null : b - a;
+  const dKill = dd(dA?.kills, dB?.kills), dRecall = dd(dA?.recalled, dB?.recalled), dRemoved = dd(dA?.removed, dB?.removed);
+  const dTimer = dd(dA?.timerTotal, dB?.timerTotal), dTStuck = dd(dA?.timerStuck, dB?.timerStuck), dTLife = dd(dA?.timerLife, dB?.timerLife);
+  const destroyRate = (dKill !== null && dRecall !== null && dRemoved !== null)
+    ? (dKill + dRecall + dRemoved) / durMin : null;
+  const timerRate = dTimer === null ? null : dTimer / durMin;
+  const stuckRate = dTStuck === null ? null : dTStuck / durMin;
   const rows = [
     ['成员门拦截 ≥90%', intercept === null ? '-' : intercept.toFixed(1) + '%', intercept !== null && intercept >= 90],
     ['成员空转 <5%', idlePct === null ? '-' : idlePct.toFixed(1) + '%', idlePct !== null && idlePct < 5],
     ['同兵种目标间距 ≥40m', m6.minSame === null ? '-' : m6.minSame + 'm ' + m6.pair, m6.minSame !== null && m6.minSame >= 40],
-    ['卡死回收 ≤10/min', recyMin === null ? '-' : recyMin.toFixed(1) + '/min', recyMin !== null && recyMin <= 10],
+    ['卡死回收 ≤10/min', stuckRate === null ? '-' : stuckRate.toFixed(1) + '/min', stuckRate !== null && stuckRate <= 10],
     ['cmdChanges ≤5', String(cmdChanges), cmdChanges !== null && cmdChanges <= 5],
+    ['销毁率（信息）', destroyRate === null ? '-' : `${destroyRate.toFixed(1)}/min（杀 ${dKill} / 回收 ${dRecall} / 他 ${dRemoved}）`, true],
+    ['计时销毁（信息）', timerRate === null ? '-' : `${timerRate.toFixed(1)}/min（卡死 ${dTStuck} / 寿命 ${dTLife}）`, true],
   ];
+  if (destroyRate !== null || timerRate !== null) {
+    const alive = dB?.alive, spawned = dB?.spawned;
+    console.log(`销毁率: 场内存活=${alive ?? '-'} 累计生成=${spawned ?? '-'} ｜ 离场=${destroyRate === null ? '-' : destroyRate.toFixed(1) + '/min'} ｜ 计时判决=${timerRate === null ? '-' : timerRate.toFixed(1) + '/min'}`);
+  }
   console.log('');
   console.log('★ §6 验收指标（量化）');
   for (const [name, val, okr] of rows) console.log(`  ${okr ? 'PASS' : 'FAIL'} ${name}: ${val}`);

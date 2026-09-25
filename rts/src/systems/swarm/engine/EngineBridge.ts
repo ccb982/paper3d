@@ -61,6 +61,10 @@ export interface LiveView {
   attackables?(): { uid: number; x: number; z: number }[];
   /** ★ 工兵数据/落地端口（建造位置查询/施工落地）：缺省 → 工兵保持站位 */
   engineer?(): EngineerPort | null;
+  /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
+  exemptOf?(uid: number): string | null;
+  /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
+  retire?(uid: number, why: string): boolean;
 }
 
 export class EngineBridge {
@@ -92,10 +96,11 @@ export class EngineBridge {
         const e = (this.live.enemies?.() ?? []).find((x) => x.uid === uid);
         return e ? { x: e.x, z: e.z } : null;
       },
-      exemptOf: () => null,
+      exemptOf: (uid) => this.live.exemptOf?.(uid) ?? null,
       onExpire: (uid, why) => {
-        // 影子模式只记账；实机由引擎 removeAgent 接管（接线时替换）
-        this.dbg.last = `expire#${uid}:${why}`;
+        // ★ 消费（用户定）：计时销毁/卡死判决 → 真回收/退役（实体 retire / 代理回收）
+        const hit = this.live.retire?.(uid, why) ?? false;
+        this.dbg.last = `expire#${uid}:${why}${hit ? '' : '(gone)'}`;
       },
     });
     this.melee = new MeleeManager(this.squads);
@@ -312,6 +317,7 @@ export class EngineBridge {
           siblings.push({ id, role: q.rec.role, x: t.x, z: t.z });
         }
       }
+      // ★ 事态环 = 全场硬约束（所有兵种都在环内；工兵也不例外——件在带内、目标夹环）
       const v = validateOrder(q.rec.id, q.tx, q.tz, {
         px: p.x, pz: p.z, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax,
         role: q.rec.role, siblings, canReach: this.live.canReach,

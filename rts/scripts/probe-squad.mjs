@@ -68,8 +68,8 @@ for (let t = 0; t < N; t++) {
       lead: sq.leaderUid,
       mem,
       led: sw.ledger.snapshot(),
-      stuckLast: sw.stuckDbg.last,
-      recycled: sw.stuckDbg.recycled,
+      stuckLast: window.__rts?.shadowBridge?.timers?.dbg?.last ?? '-',
+      recycled: window.__rts?.shadowBridge?.timers?.dbg?.stuckTotal ?? 0,
     };
   }, sid);
   if (!s) { console.log('小队消失'); break; }
@@ -101,7 +101,7 @@ for (let k = 0; k < samples.length; k++) {
   }
 }
 console.log(`\n样本 ${samples.length}（${(samples.length * 0.5).toFixed(0)}s）· 队质心路径 ${path.toFixed(0)}m · 停滞段 ${stalls.length}`);
-console.log(`回收：ledger recalled ${samples[samples.length - 1].led.recalled - samples[0].led.recalled}（stuckDbg 累计见现场）`);
+console.log(`回收：ledger recalled ${samples[samples.length - 1].led.recalled - samples[0].led.recalled}（计时器卡死累计 ${samples[samples.length - 1].recycled}）`);
 console.log('\n成员：uid 样本 平均速 平均指令距 任务% 挡格% 位移m');
 for (const [uid, a] of memStat) {
   console.log(`  ${uid} ${a.n} ${(a.spd / a.n).toFixed(2)} ${(a.dt / a.n).toFixed(1)} ${((a.task / a.n) * 100).toFixed(0)}% ${((a.blk / a.n) * 100).toFixed(0)}% ${a.move.toFixed(0)}`);

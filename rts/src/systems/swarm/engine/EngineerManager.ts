@@ -76,6 +76,8 @@ export class EngineerManager extends RoleManager {
   private readonly work = new Map<number, number>();
   /** 各队战壕已挖遍数 */
   private readonly digs = new Map<number, number>();
+  /** 已完成过一件的队（首件豁免"第一波后停新增"——落地班底必派一件；之后停） */
+  private readonly builtOnce = new Set<number>();
   /** 已建件（key = "x,z"） */
   private readonly built = new Set<string>();
   private lastNow = -1;
@@ -140,17 +142,19 @@ export class EngineerManager extends RoleManager {
       let spot = this.spots.get(id);
       if (spot) {
         const k = keyOf(spot);
-        // 已建成 / 地形已不可用（挖填变化）→ 丢弃，下一件
-        if (this.built.has(k) || port.needAt(spot.x, spot.z) === null) {
+        const d = Math.hypot(spot.x - ship.x, spot.z - ship.z);
+        // 已建成 / 地形不可用 / **出带（环收拢后件被夹环 → 人到不了）** → 丢弃重取
+        if (this.built.has(k) || port.needAt(spot.x, spot.z) === null
+          || d < band.rLo - 1 || d > band.rHi + 1) {
           this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
           spot = undefined;
         }
       }
-      if (!spot && !port.noNewBuild()) {
+      if (!spot && (!port.noNewBuild() || !this.builtOnce.has(id))) {
         const sec = port.sectorOf(id);
         if (sec >= 0) {
           const pick = port.pickSpot(sec, band.rLo, band.rHi, (x, z) => port.canReach(id, x, z));
-          // ★ 件必须落在施工带内（环夹取会挪目标 → 到不了件）；带外（查询兜底螺旋）宁可不派
+          // ★ 件必须落在施工带内（= 环 ∩ 施工带；环夹取会挪目标 → 到不了件）；带外宁可不派
           if (pick) {
             const d = Math.hypot(pick.x - ship.x, pick.z - ship.z);
             if (d >= band.rLo - 1 && d <= band.rHi + 1) {
@@ -178,6 +182,7 @@ export class EngineerManager extends RoleManager {
             port.cover(spot.x, spot.z, 'cover');
             port.markDirty(spot.x, spot.z, 12);
             this.built.add(keyOf(spot));
+            this.builtOnce.add(id);
             this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
             this.dbg.last = `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`;
           }
@@ -193,6 +198,7 @@ export class EngineerManager extends RoleManager {
           this.digs.set(id, digs);
           if (!canDig || t >= ENGINEER_POLICY.TRENCH_TIME_S || digs >= ENGINEER_POLICY.MAX_DIGS) {
             this.built.add(keyOf(spot));
+            this.builtOnce.add(id);
             this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
             this.dbg.last = `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
           }
@@ -215,6 +221,7 @@ export class EngineerManager extends RoleManager {
     this.spots.clear();
     this.work.clear();
     this.digs.clear();
+    this.builtOnce.clear();
     this.built.clear();
     this.lastNow = -1;
     this.fortDbg.spots = 0; this.fortDbg.working = 0; this.fortDbg.idle = 0; this.fortDbg.built = 0; this.fortDbg.maxWork = 0;

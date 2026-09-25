@@ -244,7 +244,11 @@ while (!stop) {
       wall: performance.now() / 1000, units, t0: w.__mt.t0, detail,
       simT: (w.hooks?.dayT01 ?? 0) * 720000,
       led: sw.ledger.snapshot(),
-      stuck: { recycled: sw.stuckDbg.recycled, last: sw.stuckDbg.last, tracked: sw.stuckDbg.tracked, exempt: sw.stuckDbg.exempt },
+      // ★ 卡死/计时销毁：新引擎 TimerManager 累计（旧 SwarmRecovery.stuckDbg 已删）
+      stuck: (() => {
+        const tb = w.shadowBridge?.timers?.dbg ?? null;
+        return { recycled: tb?.stuckTotal ?? 0, expired: tb?.expiredTotal ?? 0, last: tb?.last ?? '', tracked: tb?.tracked ?? 0, exempt: tb?.exempt ?? 0 };
+      })(),
       pool: sw.pool.count, l3: w.enemies.length, speed: w.speed, orderDrops: sw.orderDrops,
       nav: sw.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail, escape: sw.navDbg.escape } : null,
       gate: sw.dirGateDbg ? { ...sw.dirGateDbg } : null,
@@ -253,10 +257,8 @@ while (!stop) {
   if (!t0) t0 = s.simT;
   simT = s.simT - t0;
   if (kills0 === null) { kills0 = s.led.kills; recalled0 = s.led.recalled; removed0 = s.led.removed; }
-  if (s.stuck.recycled > 0) {
-    stuckTotal += s.stuck.recycled;
-    if (s.stuck.last && s.stuck.last !== lastStuckStr) { stuckReasons.push(s.stuck.last); lastStuckStr = s.stuck.last; }
-  }
+  if ((s.stuck.recycled ?? 0) > stuckTotal) stuckTotal = s.stuck.recycled;
+  if (s.stuck.last && s.stuck.last !== lastStuckStr) { stuckReasons.push(s.stuck.last); lastStuckStr = s.stuck.last; }
   for (const u of s.units) {
     const st = state.get(u.uid);
     if (u.gone) { if (!st.gone) st.gone = simT; continue; }
@@ -300,7 +302,7 @@ console.log('════════════════ 山地强制行军
 console.log(`地形：低(${best.lx},${best.lz}) ${best.lh}m → 高原舰船(${best.px},${best.pz}) ${best.ph}m · 直线距离 ${best.d}m · 高差 ${best.dh}m`);
 console.log(`投放 ${setup.placed} · 到达 ${arrived.length} · 回收消失 ${gone.length} · 超时未到 ${lost.length}`);
 if (arrT.length) console.log(`到达用时(模拟秒)：最快 ${arrT[0].toFixed(0)} · 中位 ${med.toFixed(0)} · 最慢 ${arrT[arrT.length - 1].toFixed(0)}`);
-console.log(`卡死回收(stuckDbg 累计) ${stuckTotal} · 账本 recalled ${final.led.recalled - recalled0} · removed ${final.led.removed - removed0} · kills ${final.led.kills - kills0}`);
+console.log(`卡死回收(计时器累计) ${stuckTotal} · 账本 recalled ${final.led.recalled - recalled0} · removed ${final.led.removed - removed0} · kills ${final.led.kills - kills0}`);
 if (stuckReasons.length) { console.log('回收现场：'); for (const r of stuckReasons.slice(0, 8)) console.log('  ' + r); }
 console.log('逐只：');
 for (const v of vals) {

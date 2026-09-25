@@ -41,6 +41,8 @@ export interface DispatchDeps {
   nav: SquadNavigator;
   world: DispatchWorld;
   alerted(squadId: number): boolean;
+  /** ★ 引擎开火闩锁（AttackQueues/TimerManager）：false → 本拍指令软禁火（fire=hold） */
+  fireAllowed(uid: number): boolean;
 }
 
 const _uids: number[] = [];
@@ -92,6 +94,8 @@ export class SquadDispatch {
       const directive = tactics.decompose(
         squad, bucket, now, hpRatio, hooks.mobTactics?.(squad.mobKind) ?? null, world.terrain,
       );
+      // ★ 开火闩锁（新引擎）：许可未置/被撤 → 软禁火（fire=hold；原子仍可执行）
+      if (!this.deps.fireAllowed(uid)) directive.fire = 'hold';
       if (!squad.singleton) {
         let rank = 0;
         for (const m of _uids) if (m < uid) rank++;

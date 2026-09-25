@@ -44,7 +44,6 @@ import { pickSteer } from '../../entity/SteerPick';
 import { dangerPointAt } from '../../entity/TerrainAssist';
 import { fallLineBlend } from '../../entity/TerrainAssist';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
-import { SwarmRecovery } from './SwarmRecovery';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
 import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
@@ -169,14 +168,6 @@ export class SwarmSystem {
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
     });
-    this.recovery = new SwarmRecovery({
-      pool: this.pool,
-      squads: this.squads,
-      tactics: this.tactics,
-      recentHits: this.recentHits,
-      removeAgent: (i, killed, report) => this.removeAgent(i, killed, report),
-      noteRecall: (n) => this.ledger.noteRecall(n),
-    });
     // ★ 队长层成员分派（引擎不再写成员指令/成员任务；引擎只做命令轨 → 交队长调遣）
     this.dispatch = new SquadDispatch({
       pool: this.pool,
@@ -185,6 +176,7 @@ export class SwarmSystem {
       nav: this.nav,
       world: this.commander,
       alerted: (id) => performance.now() / 1000 - (this.recentHits.get(id) ?? -1e9) <= AUTONOMY.SQUAD_ALERT_S,
+      fireAllowed: (uid) => this.fireAllowed(uid),
     });
   }
 
@@ -336,12 +328,8 @@ export class SwarmSystem {
       this.applyOrders(now, hooks);
     }
 
-    // ★ 卡死回收（1Hz；用户定调：驻守/到位/交战豁免 → 其余"长时间不挪窝"回收）
-    this.stuckAccum += dt;
-    if (this.stuckAccum >= STUCK.CHECK_S) {
-      this.stuckAccum = 0;
-      this.recovery.tick(now, hooks.activeUnits);
-    }
+    // ★ 卡死回收已收编进新引擎 `engine/TimerManager`（1Hz；驻守/交战豁免 → 净活动范围回收）
+    //   ——旧 SwarmRecovery 已删除；计时销毁/卡死判决与开火闩锁同源（EngineBridge 驱动）。
 
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
     if (now >= this.counterUntil) {
@@ -732,12 +720,28 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
-  private stuckAccum = 0;
-  /** ★ 卡死回收（自本类拆出：SwarmRecovery；代理 + L3 实体统一口径） */
-  private readonly recovery: SwarmRecovery;
-  /** 调试计数（每次回收拍重置；转发 SwarmRecovery.dbg） */
-  get stuckDbg(): { exempt: number; window: number; tracked: number; recycled: number; last: string } {
-    return this.recovery.dbg;
+  /** ★ 开火闩锁（新引擎 AttackQueues→TimerManager 置/撤；执行层只读）：缺省全放行 */
+  private fireGate: (uid: number) => boolean = () => true;
+
+  /** 接线（main.ts）：引擎开火许可 → 成员指令开火门 */
+  setFireGate(fn: ((uid: number) => boolean) | null): void {
+    this.fireGate = fn ?? (() => true);
+  }
+
+  fireAllowed(uid: number): boolean {
+    return this.fireGate(uid);
+  }
+
+  /** ★ 统一计时销毁（新引擎 TimerManager.onExpire 回调）：回收代理（归编制）。返回是否找到。 */
+  recycleByUid(uid: number): boolean {
+    const p = this.pool;
+    for (let i = p.count - 1; i >= 0; i--) {
+      if (p.swarmUid[i] !== uid) continue;
+      this.removeAgent(i, true, false);   // 非击杀离场（unregister=true, killed=false）
+      this.ledger.noteRecall(1);          // 归还编制
+      return true;
+    }
+    return false;
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
@@ -1120,8 +1124,6 @@ export class SwarmSystem {
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
     this.commander.clear();
-    this.recovery.clear();
-    this.stuckAccum = 0;
     this.recentHits.clear();
     this.counterUntil = 0;
     this.lastPlayerX = 0;

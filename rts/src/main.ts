@@ -47,7 +47,7 @@ import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
-import { GAME_MIN } from './systems/swarm/SwarmConfig';
+import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
 import { setLiveOrderSource } from './systems/swarm/squad/Anchor';
@@ -280,6 +280,30 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       },
       /** ★ 工兵端口（新引擎全权）：建造位置查询（危险点/扇区弧链随机可达点）+ 施工落地 */
       engineer: () => swarm.commander.engineerPort(),
+      /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判 */
+      exemptOf: (uid: number) => {
+        const sq = swarm.squads.squadOf(uid);
+        if (!sq) return null;
+        const st = swarm.tactics.board.get(sq.id);
+        if (st?.order.kind === 'garrison') return 'garrison';
+        const nowS = performance.now() / 1000;
+        const hitAt = swarm.recentHits.get(sq.id);
+        if (hitAt !== undefined && nowS - hitAt <= AUTONOMY.SQUAD_ALERT_S) return 'hit';
+        const p = swarm.pool;
+        for (let i = 0; i < p.count; i++) {
+          if (p.swarmUid[i] === uid && p.noDemoteUntil[i] > nowS) return 'combat';
+        }
+        return null;
+      },
+      /** ★ 计时销毁/卡死判决落地（用户定）：L3 实体 retire / L2 代理回收（归还编制） */
+      retire: (uid: number, why: string) => {
+        for (const e of enemies) {
+          if (e.swarmUid !== uid) continue;
+          e.retire(why === 'stuck' ? 'recycled' : 'despawned');
+          return true;
+        }
+        return swarm.recycleByUid(uid);
+      },
       // ★ 新引擎决策 → 旧执行链（队长消费）。
       //   命令映射：act/march→advance、defend/garrison→garrison、protect→protect、patrol→flank。
       emit: (squadId, order, now) => {
@@ -322,6 +346,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         ? { kind: cur.order.kind, target: cur.order.target, anchor: cur.order.anchor, threat: cur.order.threat }
         : null;
     });
+    // ★ 开火闩锁（新引擎 AttackQueues→TimerManager 置/撤）→ 成员指令开火门（软禁火）
+    swarm.setFireGate((uid: number) => shadowBridge?.timers.canFire(uid) ?? true);
     squadCores = new SquadRegistry(
       (id) => createSquadNav({ leaderPos: leaderPosOf, walkableLine: (a, b, c2, d2) => swarm.walkableLine(a, b, c2, d2) }, id),
       roleOf,
