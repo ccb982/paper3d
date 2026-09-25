@@ -47,6 +47,7 @@ import { AiTrace } from './debug/AiTrace';
 import { simNow, setSimNow } from './services/SimClock';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
+import { CopyInfoPanel } from './ui/CopyInfoPanel';
 import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { squadViews, type SquadViewPort } from './systems/swarm/engine/SquadView';
@@ -467,6 +468,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     return { x: spawn.x + 160, z: spawn.z };
   };
   const landing = pickEnemyLanding();
+  // ★ 复制信息面板（调试：seed + 舰落点 + 敌落点 + 相机；一键复制）
+  const copyInfo = new CopyInfoPanel(() => ({
+    seed: SEED, ship: { x: spawn.x, z: spawn.z }, landing, cam: { x: cam.tx, z: cam.tz },
+  }));
   try {
     // ★ 建表半径必须**覆盖舰船**（长行军目标=舰；否则目标在表外 → 长寻路回落失败）
     const tableR = Math.min(240, Math.ceil(Math.hypot(landing.x - spawn.x, landing.z - spawn.z)) + 60);
@@ -791,7 +796,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

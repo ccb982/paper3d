@@ -29,7 +29,6 @@
 
 import { tileById, type TileGenRole } from "./Tiles";
 import { CHUNK_SIZE, BLOCK_SIZE, BLOCKS_PER_SIDE } from "./ChunkGenerator";
-import { APRON_ANCHOR_P, apronAnchorRoll } from "./decor/ApronAnchor";
 
 // ============================================================
 // 裁决结论与常量（精修层内部默认引擎；与移动层 stepHeight 同源）
@@ -519,142 +518,26 @@ function blockKey(bx: number, bz: number): string {
 }
 
 /**
- * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《地形与渲染管线架构.md》§3.3）。
- * 只做【边裁决】优化（30% 大落差产坡），不碰地块几何高度。
- */
-/**
- * ★ 依据 seed 与 chunk 坐标生成精修意图（per-chunk：《重构设计》§8 第四步）。
- * 2026-08-31 重构：只做【边裁决】优化（30% 大落差产坡），不碰地块几何高度
- * ——高度仍由 L4 assignHeights 定死；此处仅把合格边的裁决从默认 cliff 提升为
- * weld（产生坡，方便角色跳/踏上高台）。
+ * ★ 精修意图生成（2026-09-25 用户定版）：**透传（不再产坡）**。
  *
- * 规则（用户 2026-08-31 定版）：
- *   - 作用边：两端 genRole 均 ∈ {ground, platform}，且默认 edgeRuling 为
- *     cliff 的非 hard 边（「只在默认 cliff 边掷骰」）；hard/已 smooth 边跳过。
- *   - 高差门槛：|hH − hL| > 0.5（配合角色空格跳跃高度 0.6 → 可跳上）。
- *   - ★ 石围裙保护（用户 2026-09-05：围裙四条边不要有坡面）：围裙相关块
- *     （沙土高台锚点 / 其东·南潜在被并块）的周界边一律跳过产坡骰，保持
- *     cliff——石环压边只能落在垂直坎上。判定与装饰期共享（decor/ApronAnchor，
- *     世界块坐标+种子绑定）→ 主线程/Worker、相邻 chunk 恒同判，
- *     finalRuling 对称性不破坏。保守扩大：潜在被并块即使最终未配对也压坡，
- *     无副作用。
- *   - 概率：对【无向】共享边做确定性 hash(seed, A, B) → 30% 掷点，命中 → weld。
- *   - 对称：对同一条共享边，本块与邻块各自补各自方向的 override（同一 hash
- *     保证两侧同判）+ 一个 weld 方向只在本 chunk 的构建 src 里生效 →
- *     finalRuling 天然对称（唯一判点不变式不破坏）。
- *   - 确定性：hash 只依赖 seed 与两块的(世界块坐标)，主线程/Worker 快照同源。
+ * 架构口径：**坡（weld）只能来自"插值边"**——TileDef.edgePolicy:'smooth'、
+ * smoothDirs 声明、水/坑向周围插值等**显式 opt-in**（见 `edgeRuling`）；
+ * **硬边（cliff）永远是墙**，不得被随机规则改写成坡。
+ *
+ * 2026-09-25 删除旧规则「30% 大落差产坡」：它把默认 cliff 边（|Δh|>0.5，无上限）
+ * 以 30% 概率钉成 weld——在 4m 格上制造 2~9m 高的"假坡"（weld 斜坡带仅 ~1.33m 宽，
+ * 几何不可能），寻路/敌人据此"从硬边爬上高原"。删除后：
+ *   · weld 只来自插值边；cliff 恒为硬边（≤0.6m 台阶豁免在消费侧保留）；
+ *   · 石围裙保护随掷骰一并删除（不再有坡可保护；围裙边自然保持 cliff）。
  */
-
-/**
- * 该块是否围裙锚点（platform_sand + 共享掷点命中）。
- */
-function isApronAnchorBlock(
-  src: BlockSource,
-  wbx: number,
-  wbz: number,
-  seed: number,
-): boolean {
-  const b = src.blockAt(wbx, wbz);
-  if (!b || tileById(b.id).key !== "platform_sand") return false;
-  return apronAnchorRoll(wbx, wbz, seed) < APRON_ANCHOR_P;
-}
-
-/**
- * 该块是否「围裙相关」（周界边必须保持 cliff）：
- * 自身是锚点，或自身是 platform_sand 且西/北邻是锚点（锚点并块只向东/南）。
- */
-function apronGuarded(
-  src: BlockSource,
-  wbx: number,
-  wbz: number,
-  seed: number,
-): boolean {
-  const b = src.blockAt(wbx, wbz);
-  if (!b || tileById(b.id).key !== "platform_sand") return false;
-  if (isApronAnchorBlock(src, wbx, wbz, seed)) return true;
-  return (
-    isApronAnchorBlock(src, wbx - 1, wbz, seed) ||
-    isApronAnchorBlock(src, wbx, wbz - 1, seed)
-  );
-}
-
 export function planRefinements(
   seed: number,
   cx: number,
   cz: number,
   src: BlockSource,
 ): Refinements {
-  let ref: Refinements = EMPTY_REFINEMENTS;
-  const bx0 = cx * BLOCKS_PER_SIDE;
-  const bz0 = cz * BLOCKS_PER_SIDE;
-  const dirs: (0 | 1 | 2 | 3)[] = [0, 1, 2, 3];
-  for (let ibx = 0; ibx < BLOCKS_PER_SIDE; ibx++) {
-    for (let ibz = 0; ibz < BLOCKS_PER_SIDE; ibz++) {
-      const bx = bx0 + ibx;
-      const bz = bz0 + ibz;
-      for (const dir of dirs) {
-        const dx = dir === 0 ? 1 : dir === 1 ? -1 : 0;
-        const dz = dir === 2 ? 1 : dir === 3 ? -1 : 0;
-        const nb = src.blockAt(bx + dx, bz + dz);
-        const a = src.blockAt(bx, bz);
-        if (!a || !nb) continue; // 邻块缺数据 → 由邻块场景处理
-        const ta = tileById(a.id);
-        const tnb = tileById(nb.id);
-        // 端角色须均为 ground/platform
-        const ra = ta.genRole;
-        const rb = tnb.genRole;
-        const inSet = (r: TileGenRole) => r === "ground" || r === "platform";
-        if (!inSet(ra) || !inSet(rb)) continue;
-        // 默认裁决非 cliff，或任一侧 hard → 不掷骰（只在默认 cliff 边）
-        if (edgeRuling(a, nb, dir) !== "cliff") continue;
-        if (
-          ta.physics.edgePolicy === "hard" ||
-          tnb.physics.edgePolicy === "hard"
-        )
-          continue;
-        // 高差门槛
-        const gap = Math.abs(a.h - nb.h);
-        if (gap <= 0.5) continue;
-        // ★ 石围裙保护：围裙相关块（锚点/潜在被并块）的边保持 cliff
-        if (
-          apronGuarded(src, bx, bz, seed) ||
-          apronGuarded(src, bx + dx, bz + dz, seed)
-        )
-          continue;
-        // 确定性 30% 掷点（无向共享边 hash → 两侧同判）
-        if (edgeHash(seed, bx, bz, bx + dx, bz + dz) >= 0.3) continue;
-        ref = overrideEdge(ref, bx, bz, dir, "weld");
-      }
-    }
-  }
-  return ref;
-}
-
-/** 无向共享边的确定性 hash（对两块坐标排序 → 主/worker、两侧块同值） */
-function edgeHash(
-  seed: number,
-  b1x: number,
-  b1z: number,
-  b2x: number,
-  b2z: number,
-): number {
-  let ax = b1x,
-    az = b1z,
-    bx = b2x,
-    bz = b2z;
-  if (ax > bx || (ax === bx && az > bz)) {
-    const tx = ax,
-      tz = az;
-    ax = bx;
-    az = bz;
-    bx = tx;
-    bz = tz;
-  }
-  let x = seed ^ (ax * 73856093) ^ (az * 19349663) ^ (bx * 83492791) ^ (bz * 22468219);
-  x = Math.imul(x ^ (x >>> 15), 0x2c1b3c6d);
-  x = Math.imul(x ^ (x >>> 12), 0x297a2d39);
-  x ^= x >>> 15;
-  return (x >>> 0) / 4294967296;
+  void seed; void cx; void cz; void src;
+  return EMPTY_REFINEMENTS;
 }
 
 /**

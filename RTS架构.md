@@ -255,6 +255,10 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - PassTable 只经 `finalRuling` 读取；一次构建，工事/挖掘**不重建**（动态破坏走 HoleMask；战壕 ≠ pit）。
 - 寻路**只读 PassTable**；安全偏好读 TerrainSemantics（经 `riskAt` 注入），**可行性优先于偏好**。
 
+- **高精度定位（待实施，用户定 2026-09-25）**：4m 格「同 (x,z) = 同地」忽略 y/层 → 崖底被判「已在崖顶」；
+  设计 = H2 **y 感知层**（cell+layer 判等/到达/取点，`surfaceHeightAtFor` 选层）+ H1 队长附近 **1m 局部高精度** + H3 1m 语义取点；
+  **实现归属 = 实体基类**（`TerrainProbe.layerAt` + `CharacterCore.canShift`，L2/L3 同内核自动同款；nav/Anchor 只经端口消费）；见《寻路重写方案.md》§4.4.5。
+- **待实施（2026-09-25 用户报告）**：① **位移绕过**——人群分离/障碍推出/贴地（`CharacterClamp`）未过台阶校验 → 敌人可"借推力卡上硬边"；规则 = 所有水平位移统一过 `canShift`、贴地前置校验（见《寻路重写方案.md》§4.4.4A）；② **寻路成本无"坡优先"**——weld 坡与 ≤0.6m 台阶硬边同价 → A* 选最短"爬墙"路（§4.4.4B，待定点验证 + 移动质量成本）。
 - **上坡（基类，用户定 2026-09-25）**：**上坡半径内必须正对坡面**——`uphillNormal(x,z,R=5)` 取法线；
   想上坡先对准法线，`dot≥0.8` 才进入程序化爬坡（定速沿法线）；未正对只转向；显式爬坡令同按法线。
   实现 = `entity/base/CharacterCore`（L2/L3 同内核）；旧的 `fallLineBlend` 混合已从 L2 撤除。
