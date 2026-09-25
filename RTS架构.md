@@ -188,8 +188,8 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 - **地形与表**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路）+ `TerrainScore`（`rebuild` 每帧；`distGain=1+24·t01`）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
 - **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/terrain/pathStamp`。
-- **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（宽环±80 → 0.45 大圆 90 → 0.62 甜甜圈 60/180 → 0.82 收 → 0.90 点）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
-- **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` 危险点优先→扇区弧链随机可达点）；`pushM` 前推棘轮（8 区全达标 +0.5m/拍，封顶 `frontP×120m`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
+- **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（**p 驱动**：**外圈大圈一直收缩只减不增**：D0max → 大圆 90 → 缓缩 80 → 0；**内圈小圈先收缩 → 第一波后立即增大（甜甜圈 60，p 0.45-0.55）→ 再收缩**；总攻 p≥0.80 时已是 (0,0) 点）；环 1Hz 更新；**时间轴可自由快进/倒退**（`scrubDay`/`followRealtime` 重置姿态状态 → 环可反向）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
+- **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` 危险点优先→扇区弧链随机可达点）；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
 - **编制与生成执行**：`RosterController`（占比/缺口 4Hz）；`CommanderSpawn`（`deploy/battalion(instant)/drain/reset` + 回收名单）；生成端口（`spawnMob/spawnMobIndex/spawnBuilder/buildCover/digTrench`）由 main/CommanderWiring 注入；`planDefense`（建计划 + 表 + 复位 + 开局班底）。
 - **地形破坏入口**：`noteTerrainDig/markTerrainDirty`（`ChunkManager.onTerrainDig` 中央钩子；子弹/战壕都过）→ 掩码窗扫 + TerrainScore 局部重算 + 采样缓存失效。
 
@@ -224,7 +224,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - **派件**：每拍摊销 1 区刷新；任期内沿用（未建 + 需求有效）；建成/失效/出带 → 重取；**件必须在施工带内**（环夹取会挪目标）；**首件豁免**"第一波停新增"（落地班底必派一件，完成一件后停）。
 - **施工**：队长到件 **3m 内**计时（实秒）；**掩体 6s / 战壕 10s**（每 2s 挖 1 遍 ≤5 遍；坑底 −1.2m 封顶）；**总攻只修掩体**（战壕暂停）。
 - **不入攻击队列**：`LiveView.attackables` 过滤工兵编制；统一计时仍看全体。
-- **前推/连通**：8 区全达标 → `pushM` 棘轮（≤0.5m/拍，封顶 `frontP×120m`）；施工带 `rHi ≤ 环上限`。
+- **前推/连通**：8 区全达标 → `pushM` 棘轮（≤1m/拍=2m/s，封顶 `frontP×120m`）；施工带 `rHi ≤ 环上限`；**总攻收缩为点**。
 
 ---
 
@@ -263,7 +263,8 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 | 参数 | 值 | 位置 |
 |---|---|---|
-| 环：宽环/大圆/甜甜圈/点 | ±80 / 90 / (60,180) / (0,0) | `SwarmData.ringBounds` |
+| 环：外圈（大圈） | D0max → 90 → 80 → 0（一直收缩，只减不增） | `SwarmData.ringBounds`（p 驱动，1Hz） |
+| 环：内圈（小圈） | D0min → 0（收缩）→ 60（第一波后立即增大）→ 0（再收缩） | 同上 |
 | 波次 / 放行 | 第一波 0.45 / 总攻 0.80；releaseAt 0.20→0.50→0.75→0.95→1.00 | `EngineBridge` / `PostureFn.releaseAt` |
 | 抵舰驻留 | 抵舰 70m → 驻守 45s；血比<0.45 后撤 | `EngineBridge.write` |
 | 引擎节拍 | 2Hz（相位 tick） | `EngineCore.hz` |
@@ -274,7 +275,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 开火射程（闩锁） | 25m | `EngineBridge.fireRange` |
 | 卡死回收 | 包围盒<4m 持续 25s（驻守/交火豁免） | `SwarmConfig.STUCK` |
 | 工兵施工 | 到件 3m；掩体 6s / 战壕 10s（2s/遍×5） | `EngineerManager` |
-| 施工带 / 需求线 | `rLo=max(24,frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM,frontMaxD)`；`NEED_DONE=0.6` | `SwarmData` |
+| 施工带 / 需求线 | `rLo=max(24,frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM,frontMaxD)`；总攻 (0,0)；前推 2m/s；`NEED_DONE=0.6` | `SwarmData` |
 | 长短寻路分界 | 40m | `CommandLang.MARCH_DIST` / `NAV.LONG_PATH_DIST` |
 | 长寻路加权 | 上坡 +0.6/m；斜向 ×1.414（上坡仅四向） | `FeasibilityPath` |
 | 短跳 | 10m→6m；爬升 +2/m；推进>0.5m | `ShortHop` |

@@ -100,8 +100,9 @@ const FRONT_BY_POSTURE: Record<BattlePosture, number> = {
   assault: 0.95,
   withdraw: 0.15,   // 撤退重组的"前沿锚"回落许可（但 frontP 单调，此处只影响目标值不再起作用）
 };
-/** 前沿放行的逼近时间常数（越大越"稳步"；63% 到达耗时） */
-const FRONT_TAU = 40;
+/** 前沿放行的逼近时间常数（越大越"稳步"；63% 到达耗时）
+ *  ★ 2026-09-25 用户定：40 → 18（第一波前压时间太长，加快放行） */
+const FRONT_TAU = 18;
 
 export class PostureFn {
   private prov = 0;

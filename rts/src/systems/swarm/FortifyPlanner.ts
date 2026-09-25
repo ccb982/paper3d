@@ -28,6 +28,8 @@ export class FortifyPlanner {
   readonly safety: number[] = Array(FORTIFY_SECTORS).fill(-Infinity);
   /** 每扇区峰值需求点 */
   readonly worst: FortifyPick[] = Array.from({ length: FORTIFY_SECTORS }, () => ({ x: 0, z: 0, score: -Infinity }));
+  /** ★ 每扇区是否已扫描（区分"未扫描"与"扫描后无可行点"——后者不阻塞前推） */
+  readonly scanned: boolean[] = Array(FORTIFY_SECTORS).fill(false);
   /** 队→扇区认领（一队一区，不重合；**需求最高优先，逐个分配**） */
   readonly claims = new Map<number, number>();
   /** 各队当前施工点 */
@@ -42,6 +44,7 @@ export class FortifyPlanner {
   ): void {
     const si = this.cursor;
     this.cursor = (this.cursor + 1) % FORTIFY_SECTORS;
+    this.scanned[si] = true;
     const TAU = Math.PI * 2;
     const a0 = (si / FORTIFY_SECTORS) * TAU;
     const a1 = ((si + 1) / FORTIFY_SECTORS) * TAU;
@@ -176,6 +179,7 @@ export class FortifyPlanner {
     this.spots.clear();
     this.safety.fill(-Infinity);
     for (const w of this.worst) w.score = -Infinity;
+    this.scanned.fill(false);
     this.cursor = 0;
   }
 }

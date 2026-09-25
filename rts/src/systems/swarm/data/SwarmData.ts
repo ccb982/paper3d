@@ -92,12 +92,17 @@ export class SwarmData {
   scrubDay(v: number): void {
     this.t01Base = 0;
     this.debugDayT01 = Math.max(0, Math.min(1, v));
+    // ★ 自由快进/倒退（用户定）：拖动即**重算姿态状态**（解总攻锁/清挑衅/闸门归零）→ 事态/环可反向
+    this.postureFn.reset(this.lastNowS);
+    this.ringClock = 1;   // ★ 拖动即重算事态环（下一拍）
   }
 
   /** ★ 恢复实时时钟（清拖动覆盖） */
   followRealtime(): void {
     this.debugDayT01 = -1;
     this.t01Base = -1;
+    this.postureFn.reset(this.lastNowS);
+    this.ringClock = 1;   // ★ 恢复实时即重算事态环（下一拍）
   }
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
@@ -113,6 +118,10 @@ export class SwarmData {
   private frontMinD = -1;
   /** ★ 环形活动区上限（事态函数管；第一波收拢到舰） */
   private frontMaxD = -1;
+  /** ★ 事态环节拍（用户定：范围**按秒更新**，不随模拟子步/帧抖动） */
+  private ringClock = 1;
+  /** 最近一拍实秒（scrub/恢复实时重置姿态用） */
+  private lastNowS = 0;
   /** ★ 最近一次舰船位（环夹取基准；引擎/队长核同口径） */
   private lastShipX = 0;
   /** ★ 原始当日进度（hooks.dayT01；第一波 ≥0.45 起停止新增施工——队长层派件读） */
@@ -123,25 +132,35 @@ export class SwarmData {
   /** ★ 前线永不再贴近舰船的余量（米） */
   private static readonly SHIP_CLEAR = 16;
 
-  /** ★ 环形一日推进（用户定 2026-09-25）：**宽环 → 大圆 → 甜甜圈 → 点**
-   *  · 初始宽环：(D0min, D0max)（= 前沿 ±80m，环带宽 ≥120m，不窄）
-   *  · 第一波大圆：(0, 90)——较大的圆（内 0=可到舰，外 90=不许跑远）
-   *  · 甜甜圈：(60, 180)——中空环（回撤休整：不许贴舰、也不许离远）
-   *  · 总攻：→ (0, 0) 收缩为一个点
-   *  日程：0.20-0.45 收大圆 / 0.45-0.62 大圆驻留 / 0.62-0.72 变大甜甜圈 /
-   *        0.72-0.82 甜甜圈驻留 / 0.82-0.90 收点 / 0.90-1.00 点驻留 */
-  static ringBounds(t: number, d0min: number, d0max: number): { minD: number; maxD: number } {
+  /** ★ 环形一日推进（用户定 2026-09-25，**p 驱动**）：
+   *  · **外圈（大圈 / maxD）：一直收缩**——只减不增，不再外扩（旧 180 休整外径已删）
+   *  · **内圈（小圈 / minD）：先收缩 → 再增大（甜甜圈 60）→ 最后再收缩**
+   *  · **总攻（p ≥ 0.80）时已是 (0,0) 一个点**
+   *  · 形状由**事态 p**驱动（挑衅加速 → 环同步加速）；**时间轴可自由快进/倒退**：
+   *    拖动/恢复实时会重置姿态状态 → p 回退 → 环可反向（无棘轮、无总攻锁覆盖） */
+  static ringBounds(p: number, d0min: number, d0max: number): { minD: number; maxD: number } {
     const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
-    const BIG_R = 90;     // 第一波大圆半径（2026-09-25 用户定：130 → 90，缩小外径）
-    const DONUT_IN = 60;  // 甜甜圈内径
-    const DONUT_OUT = 180; // 甜甜圈外径
-    if (t < 0.20) return { minD: d0min, maxD: d0max };
-    if (t < 0.45) { const k = (t - 0.20) / 0.25; return { minD: lerp(d0min, 0, k), maxD: lerp(d0max, BIG_R, k) }; }
-    if (t < 0.62) return { minD: 0, maxD: BIG_R };
-    if (t < 0.72) { const k = (t - 0.62) / 0.10; return { minD: lerp(0, DONUT_IN, k), maxD: lerp(BIG_R, DONUT_OUT, k) }; }
-    if (t < 0.82) return { minD: DONUT_IN, maxD: DONUT_OUT };
-    if (t < 0.90) { const k = (t - 0.82) / 0.08; return { minD: lerp(DONUT_IN, 0, k), maxD: lerp(DONUT_OUT, 0, k) }; }
-    return { minD: 0, maxD: 0 };   // ★ 总攻：一个点，驻留到日终
+    const BIG_R = 90;      // 大圆半径（第一波）
+    const DONUT_IN = 60;   // 甜甜圈内径（小圈峰值）
+    const OUT_AT_DONUT = 80; // 甜甜圈段外圈（缓缩后的值；始终 > 内圈）
+    const P_ASSAULT = 0.80;
+    const pk = Math.max(0, Math.min(1, p));
+    // ---- 内圈（小圈）：收缩 → 增大 → 再收缩 ----
+    let minD: number;
+    if (pk < 0.25) minD = d0min;
+    else if (pk < 0.45) minD = lerp(d0min, 0, (pk - 0.25) / 0.20);           // 先收缩
+    else if (pk < 0.55) minD = lerp(0, DONUT_IN, (pk - 0.45) / 0.10);        // ★ 第一波后立即增大（后撤；用户定：原 0.62 太晚）
+    else if (pk < 0.72) minD = DONUT_IN;
+    else if (pk < P_ASSAULT) minD = lerp(DONUT_IN, 0, (pk - 0.72) / (P_ASSAULT - 0.72));  // 最后再收缩
+    else minD = 0;
+    // ---- 外圈（大圈）：一直收缩（只减不增） ----
+    let maxD: number;
+    if (pk < 0.25) maxD = d0max;
+    else if (pk < 0.45) maxD = lerp(d0max, BIG_R, (pk - 0.25) / 0.20);
+    else if (pk < 0.72) maxD = lerp(BIG_R, OUT_AT_DONUT, (pk - 0.45) / 0.27);
+    else if (pk < P_ASSAULT) maxD = lerp(OUT_AT_DONUT, 0, (pk - 0.72) / (P_ASSAULT - 0.72));
+    else maxD = 0;
+    return { minD, maxD };
   }
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
@@ -158,8 +177,12 @@ export class SwarmData {
   private pushM = 0;
 
   /** ★ 施工带（事态函数口径，单源）：rLo=允许离舰+8、rHi=90 或 rLo+30，再加前推棘轮 pushM。
+   *  · **总攻（assault）→ 扇形工兵防区随环收缩为一个点 (0,0)**（用户定 2026-09-25）
    *  引擎 tick 与小地图/探针共用——防"两处重算、漏 pushM"（2026-09-25 修） */
   get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
+    if (this.battlePosture === 'assault') {
+      return { rLo: 0, rHi: 0, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
+    }
     const rLo = Math.max(24, this.frontMinD + 8);
     const rHiBase = Math.max(90, rLo + 30) + this.pushM;
     const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;   // ★ 施工外圈不越活动上限
@@ -274,6 +297,7 @@ export class SwarmData {
   }
 
   tick(dt: number, now: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
+    this.lastNowS = now;
     this.lastDayRaw = this.debugDayT01 >= 0 ? this.debugDayT01 : dayT01;   // ★ 生效日进度（时间轴拖动同口径）
     this.viewPX = playerX;
     this.viewPZ = playerZ;
@@ -285,8 +309,10 @@ export class SwarmData {
       if (this.stage === 'S1' && this.lastDayRaw >= 0.45) this.stage = 'S2';   // 第一波后停新增（就绪）
       const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事）
       // ★ 前推（§13.4）：8 区全达标才推进；每拍 ≤0.5m；封顶 frontP×120m（事态允许）
-      const allDone = this.fortify.safety.every((v) => Number.isFinite(v) && v < DONE);
-      if (allDone) this.pushM = Math.min(this.frontP * 120, this.pushM + 0.5);
+      // ★ 未扫描 → 不算达标；已扫描但**无可行点**（-∞，如海面）→ 视为达标（不可施工，不阻塞前推）
+      const allDone = this.fortify.safety.every((v, i) => this.fortify.scanned[i] && (!Number.isFinite(v) || v < DONE));
+      // ★ 总攻不推（施工带已收缩为点）；其余达标即推，2m/s（用户定：前压提速）
+      if (allDone && this.battlePosture !== 'assault') this.pushM = Math.min(this.frontP * 120, this.pushM + 1.0);
       this.fortify.dbg.builders = [...this.swarm.squads.all()].filter((s) => s.builders).length;
       this.fortify.dbg.claimsN = this.fortify.claims.size;
       this.fortify.dbg.spotsN = this.fortify.spots.size;
@@ -377,7 +403,12 @@ export class SwarmData {
         }
       }
     }
-    this.ringTick(shipX, shipZ);
+    // ★ 事态环（1Hz；用户定）：范围按秒更新——避免每子步抖动引发夹环改令
+    this.ringClock += dt;
+    if (this.ringClock >= 1) {
+      this.ringClock = 0;
+      this.ringTick(shipX, shipZ);
+    }
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
     this.spawn.drain(dt);
     // ★ 波次判定/兵力放行已迁新引擎（`EngineBridge.situation`：t01 + releaseAt → setReleaseCap/spawnBattalion）
@@ -417,13 +448,14 @@ export class SwarmData {
     };
   }
 
-  /** ★ 环形活动区（事态函数单源；每帧）：宽环 → 第一波大圆 → 甜甜圈 → 点；夹环基准 = 舰船 */
+  /** ★ 环形活动区（事态函数单源；**1Hz**）：宽环 → 大圆 → 外圈放宽 → 点；夹环基准 = 舰船 */
   private ringTick(shipX: number, shipZ: number): void {
     if (!this.plan) return;
     const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
     const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
     const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m
-    const rb = SwarmData.ringBounds(this.lastT01, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
+    // ★ 纯 p 函数（用户定：时间轴可自由快进/倒退 → 环随之收缩/回涨，不设棘轮）
+    const rb = SwarmData.ringBounds(this.postureP, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
     this.frontMinD = rb.minD;
     this.frontMaxD = rb.maxD;
     this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环/工事基准（单源）

@@ -242,7 +242,7 @@ while (!stop) {
     }
     return {
       wall: performance.now() / 1000, units, t0: w.__mt.t0, detail,
-      simT: (w.hooks?.dayT01 ?? 0) * 720000,
+      simT: w.simT ?? (w.hooks?.dayT01 ?? 0) * 720,
       led: sw.ledger.snapshot(),
       // ★ 卡死/计时销毁：新引擎 TimerManager 累计（旧 SwarmRecovery.stuckDbg 已删）
       stuck: (() => {
