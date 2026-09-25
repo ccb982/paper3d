@@ -38,7 +38,7 @@ for (let t = 0; t < N; t++) {
   const s = await page.evaluate((sid) => {
     const w = window.__rts; const sw = w.swarm;
     const sq = sw.squads.get(sid); if (!sq) return null;
-    const st = sw.tactics.board.get(sid);
+    const st = (w.engineView?.squads() ?? []).find((v) => v.id === sid);
     const p = sw.pool;
     const mem = [];
     for (const [uid, m] of sq.members) {
@@ -60,7 +60,7 @@ for (let t = 0; t < N; t++) {
     }
     return {
       wall: +(performance.now() / 1000).toFixed(1),
-      order: st ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.source}` : '-',
+      order: st?.order ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.order.source}` : '-',
       corr: st?.corridor ? st.corridor.slice(0, 4).map((q) => `${q.x | 0},${q.z | 0}${q.climb ? '⛰' : ''}`).join('>') : '-',
       corrN: st?.corridor?.length ?? -1,
       pathFrom: st ? `${st.pathFromX | 0},${st.pathFromZ | 0}` : '-',

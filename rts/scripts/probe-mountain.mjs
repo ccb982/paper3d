@@ -222,7 +222,7 @@ while (!stop) {
         continue;
       }
       const sq = sw.squads.squadOf(uid);
-      const st = sq ? sw.tactics.board.get(sq.id) : undefined;
+      const st = sq ? (w.engineView?.squads() ?? []).find((v) => v.id === sq.id) : undefined;
       let li = -1; if (sq) for (let j = 0; j < p.count; j++) if (p.swarmUid[j] === sq.leaderUid) { li = j; break; }
       detail.push({
         uid, sq: sq?.id ?? -1, x: +p.x[i].toFixed(0), z: +p.z[i].toFixed(0),
@@ -232,7 +232,7 @@ while (!stop) {
         oTgt: `${p.orderTargetX[i] | 0},${p.orderTargetZ[i] | 0}`,
         task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
         blk: sw.commander.blockedAt(p.x[i], p.z[i]) ? 1 : 0, tier: p.tier[i], mAcc: +p.moveAcc[i].toFixed(2),
-        order: st ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.source} 剩${(st.until - performance.now() / 1000).toFixed(0)}s` : '-',
+        order: st?.order ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.order.source} 剩${(st.until - performance.now() / 1000).toFixed(0)}s` : '-',
         corr: st?.corridor?.length ?? -1,
         corrPts: st?.corridor ? st.corridor.slice(0, 6).map((q) => `${q.x | 0},${q.z | 0}`).join('>') : '-',
         anch: st ? `${st.anchorX !== undefined ? st.anchorX | 0 : '-'},${st.anchorZ !== undefined ? st.anchorZ | 0 : '-'}` : '-',

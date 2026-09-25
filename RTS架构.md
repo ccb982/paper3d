@@ -54,7 +54,7 @@ systems/swarm/squad/       队长层：SquadCore 接令/距离分流/汇报（�
 systems/swarm/            地形/工事数据/寻路/刷怪（Commander 只剩事态环/波次/地形表/L1-L2/工事数据查询；战斗+工兵指挥链已删）
 systems/swarm/squad/SquadCore.ts 队长核（**唯一执行层**）：接令→寻路→锚点→成员调遣（applyDirectivePort）→汇报
 systems/swarm/squad/State.ts     队长执行态（路径缓存/锚点滞回）；Decompose.ts 分解矩阵（自旧黑板归位）
-systems/swarm/SquadTactics.ts    仅 UI/探针**只读镜像板**（现令/走廊/台账；执行链不读）
+systems/swarm/engine/SquadView.ts UI/探针**只读视图**（引擎令+汇报+队长核执行态；旧镜像板已删）
 systems/swarm/FortifyPlanner.ts 建造位置查询（危险点优先 → 扇区弧链随机可达点；新引擎经 engineerPort 消费）
 systems/spawn/WorldSpawner.ts  刷怪 + 官方 tierPort（promote/demote）
 systems/ai/               行为状态机（AISystem + behaviors）
@@ -250,7 +250,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | R44 山地探针 | `probe:mountain`（扫地形挑高原↔低地 → 舰船搬高原 → 低地放敌 → 强制移动令 → 到达/回收/计时）；seed1 130m/+17m：L2 3/12 到达、9/12 到 13~17m 被回收；L3 全员 13~26m | ✅ 2026-09-24 |
 | R45 命令稳定门 | 换令稳定门（进度≥50% / 静止≥25s）；驻守轮换改最近掩体 / 游弋归执行层 / 越位扎堆一次纠正；实测 cmdChanges 37→5 | ✅ 2026-09-24 |
 | R46 单写口收口 | **旧战斗指挥链删除**（`tacticalTick`/`dispatchMission`/`fallbackTick`/抵舰驻留/强制归位/`SquadLeaderAI`；`?swarm=old` 移除）+ 唯一发令器**执行板续期** + 玩家令 TTL 30 游戏分钟 + 切向散开精确解（余弦定理，r 严格不变）；自检 148/148 | ✅ 2026-09-25 |
-| R47 执行层换装 | **队长核接管**：`SquadCore.drive`（寻路→锚点→分解→成员调遣）+ `State/Decompose` 归位；`SquadDispatch/OrderGate` 删除；`SquadTactics` 降为 UI 只读镜像；`SwarmSystem.applyOrders/dirGateDbg` 删除；执行层读核态走廊；开火闩锁/计时回收落地 | ✅ 2026-09-25 |
+| R47 执行层换装 | **队长核接管**：`SquadCore.drive`（寻路→锚点→分解→成员调遣）+ `State/Decompose` 归位；`SquadDispatch/OrderGate/SquadTactics/CommandLedger` 删除；UI/探针改读 `engine/SquadView`（唯一只读口）；`SwarmSystem.applyOrders/dirGateDbg` 删除；执行层读核态走廊；开火闩锁/计时回收落地 | ✅ 2026-09-25 |
 | §16 山地 | 短跳半径/角度自适应；台阶段落差聚合；拉直防贴崖；**舰船/落点周围强制产坡**（保舰船可达，待定）；`TerrainScore.cls` 标定对齐（坡不扣分、硬边才扣，待定） | ⬜ |
 
 ## 12.5 验证防线（四关 · 2026-09-24 建立）

@@ -3,7 +3,7 @@
 // ============================================================
 // 真源：引擎 `engine/OrderWriter` 的 SquadOrder（命令轨）；
 // 本文件 = 队长执行态（路径缓存/锚点滞回/生命周期）——由 squad/SquadCore 持有与推进。
-// 旧黑板（SquadTactics）仅作 UI/探针的**只读镜像**，不再消费于执行链。
+// UI/探针只读口 = `engine/SquadView`（旧黑板 SquadTactics 已删）。
 // ============================================================
 
 import type { SquadIntent, SquadOrderKind, TacticalOrder } from '../../../entity/SwarmUnit';

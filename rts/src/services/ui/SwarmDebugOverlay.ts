@@ -13,6 +13,13 @@ import * as THREE from 'three';
 import { DIRECTIVE_CODES, directiveCode } from '../../entity/SwarmUnit';
 import type { EnemyBase } from '../../entity/EnemyBase';
 import type { SwarmSystem } from '../../systems/swarm/SwarmSystem';
+import type { SquadViewPort } from '../../systems/swarm/engine/SquadView';
+
+/** ★ 引擎只读视图（main 注入；替代旧镜像板） */
+let squadViewOf: SquadViewPort | null = null;
+export function setSwarmDebugView(v: SquadViewPort | null): void {
+  squadViewOf = v;
+}
 
 export interface SwarmDbgUnit {
   x: number; y: number; z: number;
@@ -84,15 +91,16 @@ export function updateSwarmDebug(dbg: SwarmDebugOverlay, host: SwarmDbgHost): vo
   }
   const squads = dbg.squadsBuf;
   squads.length = 0;
+  const vmap = new Map<number, string>();
+  if (squadViewOf) for (const v of squadViewOf.squads()) vmap.set(v.id, v.order?.kind ?? '-');
   for (const s of swarm.squads.all()) {
-    const order = swarm.tactics.board.get(s.id);
     let cx = 0, cz = 0, n = 0;
     for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
     if (n > 0) { cx /= n; cz /= n; }
     squads.push({
       id: s.id, type: s.type, mobName: host.mobName?.(s.mobKind) ?? '',
       leaderUid: s.leaderUid,
-      order: order ? order.order.kind : '-',
+      order: vmap.get(s.id) ?? '-',
       cx, cy: host.groundAt(cx, cz), cz, alive: s.members.size,
     });
   }

@@ -7,7 +7,7 @@
 // ============================================================
 import { RasterMap } from '../services/map/RasterMap';
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
-import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
+import type { CommandEntry, SquadView, SquadViewPort } from '../systems/swarm/engine/SquadView';
 import { orderCn } from './cn';
 
 export class NavDebugMap {
@@ -35,6 +35,8 @@ export class NavDebugMap {
     private readonly raster: RasterMap,
     private readonly swarm: SwarmSystem,
     private readonly shipAt?: () => { x: number; z: number },
+    /** ★ 引擎只读视图（替代旧镜像板） */
+    private readonly view?: SquadViewPort,
   ) {
     this.root = document.createElement('div');
     this.root.style.cssText = [
@@ -105,8 +107,8 @@ export class NavDebugMap {
     this.span = span;
     if (focus) { this.cx = focus.x; this.cz = focus.z; }
     else if (squadId !== null) {
-      const cmd = this.swarm.tactics.board.get(squadId);
-      const t = cmd?.order?.target ?? (cmd?.pathGoalX !== undefined ? { x: cmd.pathGoalX, z: cmd.pathGoalZ! } : null);
+      const v = this.view?.squads().find((q) => q.id === squadId);
+      const t = v?.order?.target ?? (v?.pathGoalX !== undefined ? { x: v.pathGoalX, z: v.pathGoalZ } : null);
       if (t) { this.cx = t.x; this.cz = t.z; }
       else {
         const s = this.swarm.squads.get(squadId);
@@ -286,8 +288,10 @@ export class NavDebugMap {
       void scalePct;
       g.fillText(`施工带 ${bandValid ? `${rLo.toFixed(0)}~${rHi.toFixed(0)}` : '—（收拢）'}m · 前推+${band.pushM.toFixed(0)}m · 下限${band.minD.toFixed(0)}/上限${band.maxD.toFixed(0)}`, sx + 8, sz + Math.max(rHi, 20) * sPx + 12);
     }
+    const vmap = new Map<number, SquadView>();
+    if (this.view) for (const v of this.view.squads()) vmap.set(v.id, v);
     for (const s of squads) {
-      const path = this.swarm.tactics.board.get(s.id);   // ★ 走廊/起终点在命令状态（寻路轨覆盖式）
+      const path = vmap.get(s.id) ?? null;   // ★ 走廊/起终点在队长核执行态（寻路轨覆盖式）
       const cmd = path;
       const focused = this.squadId === s.id;
       const col = `hsl(${(s.id * 47) % 360} 90% 60%)`;
@@ -325,9 +329,9 @@ export class NavDebugMap {
       }
       // 令历史（灰点连线 + 年龄）
       if (focused) {
-        const ring = (this.swarm.cmdLog as unknown as { ring?: CommandLogEntry[] }).ring ?? [];
-        const hist: CommandLogEntry[] = [];
-        for (let i = ring.length - 1; i >= 0 && hist.length < 12; i--) if (ring[i]!.squadId === s.id) hist.push(ring[i]!);
+        const ring = this.view?.recentCommands(64) ?? [];
+        const hist: CommandEntry[] = [];
+        for (const h of ring) if (h.squadId === s.id && hist.length < 12) hist.push(h);
         hist.reverse();
         g.strokeStyle = 'rgba(200,210,220,0.5)';
         g.setLineDash([4, 4]);
@@ -342,7 +346,7 @@ export class NavDebugMap {
           const [hx, hz] = p2(h.tx, h.tz);
           g.fillStyle = h.source === 'player' ? '#3399ff' : h.source === 'leader' ? '#ffa733' : '#ff5544';
           g.beginPath(); g.arc(hx, hz, 3, 0, Math.PI * 2); g.fill();
-          const age = Math.max(0, Math.round(now / 1000 - h.t));
+          const age = Math.max(0, Math.round(now / 1000 - h.at));
           g.fillStyle = 'rgba(230,238,245,0.9)';
           g.font = '10px Consolas,monospace';
           g.fillText(`${orderCn(h.kind)} ${age}秒前`, hx + 5, hz - 5);

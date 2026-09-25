@@ -62,17 +62,14 @@ for (const f of big) {
   if (f.n > HARD_CAP) errors.push(`硬天花板 ${f.rel} = ${f.n} 行（>${HARD_CAP}，先拆再写）`);
 }
 
-// ---------- ② 命令单源 ----------
-// board.issue 是命令黑板唯一写口（《敌人管线重构总纲》§5 验收"命令原地修改=0"）
+// ---------- ② 命令单源（旧黑板已删；回潮防护） ----------
+// 命令单源现由 G1/G2 保证（engine/OrderWriter 唯一写口）；旧 board.issue / issueOrder 不允许回潮
 const boardWriters = [...srcOf].filter(([, s]) => /\.board\.issue\(/.test(codeOf(s))).map(([r]) => r);
-if (boardWriters.length !== 1 || boardWriters[0] !== 'systems/swarm/SquadTactics.ts') {
-  errors.push(`命令单源：board.issue 写点应唯一（systems/swarm/SquadTactics.ts），实际 ${boardWriters.join(', ') || '无'}`);
+if (boardWriters.length > 0) {
+  errors.push(`命令单源：旧 board.issue 回潮（${boardWriters.join(', ')}）——命令只经 engine/OrderWriter`);
 }
-// 引擎发令只从 Commander（issueChecked/兜底）与 System（issueOrder API）出；其余文件不得直呼
-const ENGINE_ISSUE_FILES = new Set(['systems/swarm/SwarmCommander.ts', 'systems/swarm/SwarmSystem.ts']);
 for (const [r, s] of srcOf) {
-  if (ENGINE_ISSUE_FILES.has(r)) continue;
-  if (/\.issueOrder\(/.test(codeOf(s))) errors.push(`命令单源：${r} 直接调 issueOrder（引擎发令应走 SwarmCommander.issueChecked）`);
+  if (/\.issueOrder\(/.test(codeOf(s))) errors.push(`命令单源：${r} 调旧 issueOrder（已删；应走 engine/OrderWriter）`);
 }
 
 // ---------- ③ 迁移不回潮 ----------

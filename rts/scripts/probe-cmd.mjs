@@ -10,12 +10,12 @@ const seen = [];
 for (let i = 0; i < 30; i += 3) {
   await new Promise(r => setTimeout(r, 3000));
   const s = await page.evaluate(() => {
-    const c = window.__rts.swarm.commander; const lg = c.swarm.cmdLog;
+    const w = window.__rts;
     const ne = globalThis.__rts?.newEngine?.() ?? null;
-    const uniq = lg.recent(400).filter((e) => e.n === 1);
-    const per = new Map(); for (const e of uniq) per.set(e.squadId, (per.get(e.squadId) ?? 0) + 1);
+    const recent = w.engineView?.recentCommands(400) ?? [];
+    const per = new Map(); for (const e of recent) per.set(e.squadId, (per.get(e.squadId) ?? 0) + 1);
     const top = [...per.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `#${k}:${v}`);
-    return { kept: ne?.writer?.kept ?? 0, uniqN: lg.unique, last: ne?.writer?.last ?? '', top: top.join(' '), spread: ne?.spread ?? 0 };
+    return { kept: ne?.writer?.kept ?? 0, uniqN: recent.length, last: ne?.writer?.last ?? '', top: top.join(' '), spread: ne?.spread ?? 0 };
   });
   seen.push(`[${i + 3}s] kept=${s.kept} 散开=${s.spread} 累计唯一令=${s.uniqN} | 最近被拦: ${s.last}`);
 }

@@ -49,6 +49,8 @@ export interface WriterCtx {
 export class OrderWriter {
   /** 探针契约（G9） */
   readonly dbg = { issued: 0, kept: 0, bypass: 0, last: '' };
+  /** ★ 命令历史环（UI/探针只读；最近 256 条） */
+  private readonly hist: { at: number; squadId: number; kind: string; source: string; tx: number; tz: number; mission?: string }[] = [];
 
   constructor(readonly store: SquadOrderStore) {}
 
@@ -84,7 +86,30 @@ export class OrderWriter {
     });
     this.dbg.issued++;
     this.dbg.last = `issue#${id} ${order.kind} →${order.target.x.toFixed(0)},${order.target.z.toFixed(0)}`;
+    this.hist.push({
+      at: ctx.now, squadId: id, kind: order.kind, source: order.source,
+      tx: order.target.x, tz: order.target.z, mission: order.mission,
+    });
+    if (this.hist.length > 256) this.hist.shift();
     return true;
+  }
+
+  /** 最近 n 条命令（UI/探针；新→旧序） */
+  recent(n: number): readonly { at: number; squadId: number; kind: string; source: string; tx: number; tz: number; mission?: string }[] {
+    return this.hist.slice(Math.max(0, this.hist.length - n)).reverse();
+  }
+
+  /** 每队最新一条（仅保留 windowS 秒内） */
+  latestPerSquad(windowS: number): Map<number, { at: number; squadId: number; kind: string; source: string; tx: number; tz: number; mission?: string }> {
+    const out = new Map<number, { at: number; squadId: number; kind: string; source: string; tx: number; tz: number; mission?: string }>();
+    const last = this.hist[this.hist.length - 1];
+    const now = last ? last.at : 0;
+    for (let i = this.hist.length - 1; i >= 0; i--) {
+      const e = this.hist[i];
+      if (now - e.at > windowS) break;
+      if (!out.has(e.squadId)) out.set(e.squadId, e);
+    }
+    return out;
   }
 
   /** 每拍推进（队长汇报进度/静止；由引擎调） */

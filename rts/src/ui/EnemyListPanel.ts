@@ -7,7 +7,7 @@
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyManager, EnemyHandle } from './EnemyManager';
 import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
-import type { CommandLogEntry } from '../systems/swarm/CommandLedger';
+import type { CommandEntry, SquadViewPort } from '../systems/swarm/engine/SquadView';
 import { orderCn, directiveCn, sourceCn } from './cn';
 
 const TYPE_LABEL: Record<string, string> = {
@@ -22,12 +22,14 @@ export class EnemyListPanel {
   private readonly expandedSquads = new Set<number>();
   private lastBuild = 0;
   /** ★ 点命令 → 打开命令检视地图（main 注入） */
-  onInspectCommand: ((squadId: number, entry?: CommandLogEntry) => void) | null = null;
+  onInspectCommand: ((squadId: number, entry?: CommandEntry) => void) | null = null;
 
   constructor(
     private readonly swarm: SwarmSystem,
     private readonly enemyMgr: EnemyManager,
     private readonly names: readonly string[],
+    /** ★ 引擎只读视图（替代旧镜像板） */
+    private readonly view: SquadViewPort,
   ) {
     this.root = document.createElement('div');
     this.root.style.cssText = [
@@ -65,14 +67,15 @@ export class EnemyListPanel {
     const pool = this.swarm.pool;
     const idxByUid = new Map<number, number>();
     for (let i = 0; i < pool.count; i++) idxByUid.set(pool.swarmUid[i], i);
-    const latest = new Map<number, CommandLogEntry>();
-    for (const e of this.swarm.cmdLog.latestPerSquad(300)) latest.set(e.squadId, e);
-    const ring = (this.swarm.cmdLog as unknown as { ring?: CommandLogEntry[] }).ring ?? [];
-    const historyOf = (sid: number, n = 3): CommandLogEntry[] => {
-      const out: CommandLogEntry[] = [];
-      for (let i = ring.length - 1; i >= 0 && out.length < n; i--) if (ring[i]!.squadId === sid) out.push(ring[i]!);
+    const latest = new Map<number, CommandEntry>(this.view.latestCommandPerSquad(300));
+    const ring = this.view.recentCommands(64);
+    const historyOf = (sid: number, n = 3): CommandEntry[] => {
+      const out: CommandEntry[] = [];
+      for (let i = 0; i < ring.length && out.length < n; i++) if (ring[i]!.squadId === sid) out.push(ring[i]!);
       return out.reverse();
     };
+    const viewOf = new Map<number, ReturnType<SquadViewPort['squads']>[number]>();
+    for (const v of this.view.squads()) viewOf.set(v.id, v);
     const groups = new Map<string, { squads: { id: number; leader: number; members: number[]; hp: number; max: number }[] }>();
     for (const s of this.swarm.squads.all()) {
       const gname = this.names[s.mobKind] ?? TYPE_LABEL[s.type] ?? `#${s.mobKind}`;
@@ -105,7 +108,7 @@ export class EnemyListPanel {
       for (const sq of g.squads) {
         const sopen = this.expandedSquads.has(sq.id);
         const ratio = sq.max > 0 ? Math.round((sq.hp / sq.max) * 100) : 100;
-        const ord = this.swarm.tactics.board.get(sq.id)?.order;
+        const ord = viewOf.get(sq.id)?.order;
         const src = latest.get(sq.id)?.source ? sourceCn(latest.get(sq.id)!.source) : '-';
         const ordTxt = ord ? `${orderCn(ord.kind)}→(${ord.target ? `${ord.target.x | 0},${ord.target.z | 0}` : '-'})` : '无';
         const sRow = document.createElement('div');
@@ -135,7 +138,7 @@ export class EnemyListPanel {
         // ★ 该队命令历史（引擎/队长来源，具体到点）
         for (const h of historyOf(sq.id)) {
           const hRow = document.createElement('div');
-          const age = Math.max(0, Math.round(performance.now() / 1000 - h.t));
+          const age = Math.max(0, Math.round(performance.now() / 1000 - h.at));
           hRow.textContent = `  命令历史[${sourceCn(h.source)}] ${orderCn(h.kind)}→(${h.tx | 0}, ${h.tz | 0})${h.mission ? ` ${h.mission}` : ''} （${age}秒前）`;
           hRow.style.cssText = 'padding:1px 6px 1px 26px;color:#7f95ab;font-size:11px;cursor:pointer;';
           hRow.onmouseenter = () => { hRow.style.color = '#cfe3f5'; };

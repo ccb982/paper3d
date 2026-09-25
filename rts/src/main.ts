@@ -49,9 +49,12 @@ import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
 import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
+import { squadViews, type SquadViewPort } from './systems/swarm/engine/SquadView';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
 import { setLiveOrderSource, resolveAnchor } from './systems/swarm/squad/Anchor';
 import { createSquadNav } from './systems/swarm/squad/MarchAction';
+import { setSwarmDebugView } from './services/ui/SwarmDebugOverlay';
+import { setSwarmTraceView } from './services/ui/SwarmTrace';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
 import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
 import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
@@ -238,6 +241,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   // ★ 新引擎接线（重写 P4）：**唯一指挥链**——旧链已删，无回退开关
   let shadowBridge: EngineBridge | null = null;
+  let engineView: SquadViewPort | null = null;
   let squadCores: SquadRegistry | null = null;
   {
     shadowBridge = new EngineBridge({
@@ -284,8 +288,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       exemptOf: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
-        const st = swarm.tactics.board.get(sq.id);
-        if (st?.order.kind === 'garrison') return 'garrison';
+        if (swarm.orderKindOf(sq.id) === 'garrison') return 'garrison';
         const nowS = performance.now() / 1000;
         const hitAt = swarm.recentHits.get(sq.id);
         if (hitAt !== undefined && nowS - hitAt <= AUTONOMY.SQUAD_ALERT_S) return 'hit';
@@ -304,28 +307,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         }
         return swarm.recycleByUid(uid);
       },
-      // ★ 新引擎决策 → 旧执行链（队长消费）。
-      //   命令映射：act/march→advance、defend/garrison→garrison、protect→protect、patrol→flank。
+      // ★ 引擎决策 → 队长核（**唯一执行层**）；UI/探针走 engineView（不再有镜像板）
       emit: (squadId, order, now) => {
-        const kindMap: Record<string, string> = {
-          act: 'advance', march: 'advance', defend: 'garrison',
-          garrison: 'garrison', protect: 'protect', patrol: 'flank',
-        };
-        // ★ 语义映射（旧板）：protect 的 target = **被保护点 G**（引擎侧 G 在 anchor；
-        //   引擎的 target 只是调整点/自身位置）——直通会丢 G（实测保护令站位失效）
-        const mt = order.kind === 'protect' && order.anchor ? order.anchor : order.target;
-        // ★ 旧板 TTL 用**执行侧时钟**（`applyOrders` 比较 performance.now；simT 有页面装载偏移 → 会秒掉令）
-        swarm.tactics.issue(squadId, {
-          kind: (kindMap[order.kind] ?? 'advance') as never,
-          target: { x: mt.x, z: mt.z },
-          mission: 'engine',
-          anchor: order.anchor,
-          threatX: order.threat?.x,
-          threatZ: order.threat?.z,
-          seq: 0,
-          roe: order.roe,
-        } as never, performance.now() / 1000, 6, 'engine');
-        squadCores?.accept(squadId, order, now);   // ★ P2/P4：队长核接令（导航+调遣）
+        squadCores?.accept(squadId, order, now);   // ★ P4：队长核接令（导航+调遣）
       },
     });
     // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
@@ -376,6 +360,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       shadowBridge?.writer.release(id);
       shadowBridge?.squads.remove(id);
     });
+    // ★ UI/探针只读视图（引擎令 + 汇报 + 队长核执行态；替代旧镜像板）
+    engineView = {
+      squads: () => (shadowBridge ? squadViews(shadowBridge.writer, shadowBridge.squads, (id) => squadCores?.stateOf(id) ?? null) : []),
+      recentCommands: (n: number) => shadowBridge?.writer.recent(n) ?? [],
+      latestCommandPerSquad: (w: number) => shadowBridge?.writer.latestPerSquad(w) ?? new Map(),
+    };
+    setSwarmDebugView(engineView);
+    setSwarmTraceView(engineView);
   }
   // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
   const cmdPanel = new CommandPanel();
@@ -428,12 +420,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ RTS 全体敌人管理器（外接；框选/单击/红圈）
   const enemyMgr = new EnemyManager({ enemies, swarm, camera, scene });
   // ★ 右侧敌人列表（兵种 → 队长 → 代理；点击选中出红圈）
-  const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name));
+  const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name), engineView!);
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
-  const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }));
+  const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }), engineView ?? undefined);
   enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
   // ★ AI 可读记录器（命令/指令/寻路/生死；Y=下载 JSONL，U=控制台打印中文摘要）
-  const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders);
+  const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), orders, engineView ?? undefined);
   // ★ 快车道结算（代理直扣 / 实体走管线）；K = 对相机中心 18m 内造成 15 伤害（演示/测试口）
   const fastLane = new FastLane(swarm, enemies);
   // ★ 时间轴（拖动 = 绝对当日进度；事态/闸门/命令随之重算）
@@ -576,9 +568,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const sq = swarm.squads.squadOf(hh.uid);
       if (!sq || seen.has(sq.id)) continue;
       seen.add(sq.id);
-      swarm.tactics.issue(sq.id,
-        { kind: 'advance', target: { x, z }, anchor: { x, z }, roe: 'engage', seq: 0 },
-        nowS, 30 * GAME_MIN, 'player');
+      shadowBridge?.playerOrder(sq.id, 'act', { x, z });   // 玩家源 → 同链（只给队长）
       orders.issue({ kind: 'advance', target: { x, z }, source: 'player', roe: 'engage', ttl: 30 * GAME_MIN });
     }
     return seen.size;
@@ -721,8 +711,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const lead = sq?.members.get(sq.leaderUid);
       return lead ? { x: lead.x, z: lead.z } : null;
     });
-    // ★ 执行态 → 镜像板（UI/探针只读；执行链不读镜像）
-    if (squadCores) for (const [id, st] of squadCores.states()) swarm.tactics.board.mirror(id, st);
+    // ★ 执行态 → 视图由 engineView 按需读取（镜像板已删）
     if (shadowBridge) {
       const list: PanelSquad[] = [];
       for (const r of shadowBridge.squads.all()) list.push({ id: r.id, role: r.role, alive: r.alive, selected: false });
@@ -788,7 +777,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, orders, swarm, physics, entities, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

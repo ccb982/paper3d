@@ -8,6 +8,7 @@ import { eventBus } from '../core/EventBus';
 import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyBase } from '../entity/EnemyBase';
 import type { OrderBus, SquadOrder } from '../order/OrderBus';
+import type { SquadView, SquadViewPort } from '../systems/swarm/engine/SquadView';
 import { orderCn, directiveCn, sourceCn } from '../ui/cn';
 import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
 
@@ -51,6 +52,8 @@ export class AiTrace {
     private readonly seed: number,
     private readonly names: readonly string[],
     orderBus?: OrderBus,
+    /** ★ 引擎只读视图（替代旧镜像板） */
+    private readonly view?: SquadViewPort,
   ) {
     this.push({ t: this.now(), ev: 'boot', mission: `seed=${seed} 兵种=${names.join('/')}` });
     this.unsubs.push(eventBus.on('enemy_killed', (p: { uid: number; x: number; z: number }) => {
@@ -81,10 +84,12 @@ export class AiTrace {
     this.accum = 0;
     const t = this.now();
     // ---- 队级：命令 + 寻路结果 ----
+    const vmap = new Map<number, SquadView>();
+    if (this.view) for (const v of this.view.squads()) vmap.set(v.id, v);
     for (const s of this.swarm.squads.all()) {
-      const cmd = this.swarm.tactics.board.get(s.id);
+      const cmd = vmap.get(s.id) ?? null;
       const o = cmd?.order;
-      const sig = o ? `${o.kind}|${(o.target?.x ?? 0) | 0},${(o.target?.z ?? 0) | 0}|${o.seq}|${cmd!.source}` : 'none';
+      const sig = o ? `${o.kind}|${(o.target?.x ?? 0) | 0},${(o.target?.z ?? 0) | 0}|${o.seq}|${o.source}` : 'none';
       if (this.lastSquad.get(s.id) !== sig) {
         this.lastSquad.set(s.id, sig);
         if (o) {
@@ -99,7 +104,7 @@ export class AiTrace {
             reach = !!lead && !!o.target && navAny?.feas?.find(lead.x, lead.z, o.target.x, o.target.z, out) === 'ok';
           } catch { reach = false; }
           this.push({
-            t, ev: 'order', squad: s.id, source: cmd!.source, kind: o.kind,
+            t, ev: 'order', squad: s.id, source: o.source, kind: o.kind,
             tx: o.target ? +o.target.x.toFixed(1) : undefined,
             tz: o.target ? +o.target.z.toFixed(1) : undefined,
             seq: o.seq, mission: (o as { mission?: string }).mission, reach,

@@ -14,6 +14,13 @@
 
 import type { SwarmSystem } from '../../systems/swarm/SwarmSystem';
 import { RasterMap } from '../../services/map/RasterMap';
+import type { SquadViewPort } from '../../systems/swarm/engine/SquadView';
+
+/** ★ 引擎只读视图（main 注入；旧镜像板已删） */
+let squadViewOf: SquadViewPort | null = null;
+export function setSwarmTraceView(v: SquadViewPort | null): void {
+  squadViewOf = v;
+}
 
 const SAMPLE_DT = 1;         // 采样周期（秒）
 const CAP_S = 720;           // 每单位/每队保留最近 N 秒（> 一天 DAY_SECONDS=900 的一半）
@@ -67,14 +74,21 @@ export class SwarmTrace {
       rec.pts.push(Math.round(this.t), Math.round(pool.x[i]), Math.round(pool.z[i]));
       if (rec.pts.length > CAP_S * 3) rec.pts.splice(0, rec.pts.length - CAP_S * 3);
     }
+    const vmap = new Map<number, { kind: string; mission: string; tx: number; tz: number; src: string }>();
+    if (squadViewOf) for (const v of squadViewOf.squads()) {
+      vmap.set(v.id, {
+        kind: v.order?.kind ?? '-', mission: v.order?.mission ?? '-',
+        tx: Math.round(v.order?.target.x ?? 0), tz: Math.round(v.order?.target.z ?? 0),
+        src: v.order?.source ?? '-',
+      });
+    }
     for (const s of swarm.squads.all()) {
-      const st = swarm.tactics.board.get(s.id);
-      const o = st?.order;
+      const o = vmap.get(s.id);
       let arr = this.squads.get(s.id);
       if (!arr) { arr = []; this.squads.set(s.id, arr); }
       arr.push({
         t: Math.round(this.t), kind: o?.kind ?? '-', mission: o?.mission ?? '-',
-        tx: Math.round(o?.target?.x ?? 0), tz: Math.round(o?.target?.z ?? 0), src: st?.source ?? '-',
+        tx: o?.tx ?? 0, tz: o?.tz ?? 0, src: o?.src ?? '-',
       });
       if (arr.length > CAP_S) arr.shift();
     }

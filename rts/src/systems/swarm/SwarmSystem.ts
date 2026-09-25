@@ -24,7 +24,6 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type Squad, type SquadRating } from './SquadTable';
-import { SquadTactics, roleBucket } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { followDir, leaderDir, followStopR } from './squad/Follow';
 import type { SquadOrderState } from './squad/State';
@@ -32,7 +31,7 @@ import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
-  roleFromCode, orderFromCode, directiveFromCode, orderCode, directiveCode, fireCode,
+  roleFromCode, orderFromCode, directiveFromCode, orderCode, directiveCode, fireCode, roleBucket,
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
@@ -107,8 +106,6 @@ export class SwarmSystem {
   readonly pool = new AgentPool();
   /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
   readonly squads = new SquadTable();
-  /** ★ 命令台账（诊断面：引擎下了什么命令；唯一写口 = tactics.issue） */
-  get cmdLog() { return this.tactics.ledger; }
   /** ★ 稳定 uid 分配器（spawn/demote 缺省分配；升降格往返不变） */
   private nextUid = 1;
   /** ★ 队长变更待广播（帧末统一回调，避免循环内跨层） */
@@ -117,8 +114,6 @@ export class SwarmSystem {
   private readonly pendingWiped: number[] = [];
   /** ★ 步骤 9：成员状态同步节拍（4Hz） */
   private ratingAccum = 0;
-  /** ★ 步骤 9b：小队黑板（**仅 UI/探针只读镜像**；执行真源 = squad/SquadCore） */
-  readonly tactics = new SquadTactics();
   /** ★ 执行态单源（队长核；main 接线）：执行层读走廊/锚点用 */
   private squadStateOf: ((id: number) => SquadOrderState | null) | null = null;
   /** ★ 队注销回调（全灭/收编）：main 接线清队长核/引擎 store */
@@ -891,7 +886,6 @@ export class SwarmSystem {
       this.syncLeaderFlags(res.squadId);
       if (res.wiped) {
         this.pendingWiped.push(res.squadId);
-        this.tactics.board.dropSquad(res.squadId);   // 黑板镜像清
         this.squadGone?.(res.squadId);               // 队长核/引擎 store 清（main 接线）
       }
     }
@@ -993,7 +987,6 @@ export class SwarmSystem {
     this.syncLeaderFlags(res.squadId);
     if (res.wiped) {
       this.pendingWiped.push(res.squadId);
-      this.tactics.board.dropSquad(res.squadId);
       this.squadGone?.(res.squadId);
     }
   }
@@ -1019,11 +1012,6 @@ export class SwarmSystem {
   /** ★ 步骤 9：引擎侧信息面（BattalionView 的 squads 面；战术后续消费） */
   ratings(): SquadRating[] {
     return this.squads.ratings(performance.now() / 1000);
-  }
-
-  /** ★ 步骤 9b：发令（引擎/测试入口；参数校验+缺参降级在 SquadTactics 内） */
-  issueOrder(squadId: number, order: TacticalOrder, ttl?: number): void {
-    this.tactics.issue(squadId, order, performance.now() / 1000, ttl);
   }
 
   /** ★ P2 初级寻路核验（大队发令门调用；直通 SquadNavigator/HPA 簇缓存） */
@@ -1099,6 +1087,11 @@ export class SwarmSystem {
     this.squadStateOf = fn;
   }
 
+  /** 该队现令 kind（执行态单源；卡死豁免/查询用） */
+  orderKindOf(id: number): string | null {
+    return this.squadStateOf?.(id)?.order.kind ?? null;
+  }
+
   /** ★ main 接线：队注销（清队长核 + 引擎 store） */
   setSquadGone(fn: ((id: number) => void) | null): void {
     this.squadGone = fn;
@@ -1125,9 +1118,9 @@ export class SwarmSystem {
 
   /** 运行时状态清空（不含账本；clear 与 recallAll 共用） */
   private resetRuntime(): void {
+    for (const s of this.squads.all()) this.squadGone?.(s.id);   // 队长核/引擎 store 清
     this.pool.clear();
     this.squads.clear();
-    this.tactics.clear();
     this.nextUid = 1;
     this.leaderChanges.length = 0;
     this.pendingWiped.length = 0;

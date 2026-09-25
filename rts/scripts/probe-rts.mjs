@@ -26,11 +26,12 @@ await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60
 const probe = () => page.evaluate(() => {
   try {
     const w = window.__rts; const sw = w?.swarm; const c = sw?.commander;
+  const views = new Map((w?.engineView?.squads() ?? []).map((v) => [v.id, v]));
   const squads = [];
   let n = 0;
   for (const s of sw.squads.all()) {
-    const st = sw.tactics.board.get(s.id);
-    const o = st?.order;
+    const v = views.get(s.id);
+    const o = v?.order;
     let cx = 0, cz = 0, m = 0;
     for (const mm of s.members.values()) { cx += mm.x; cz += mm.z; m++; }
     squads.push(`#${s.id}${s.builders ? 'B' : ''} n=${m} 位${(cx / m).toFixed(0)},${(cz / m).toFixed(0)} 令=${o?.kind ?? '-'}→${o?.target ? `${o.target.x | 0},${o.target.z | 0}` : '-'}`);
@@ -39,7 +40,7 @@ const probe = () => page.evaluate(() => {
   return {
     pool: sw?.pool?.count ?? null, l3: w?.enemies?.length ?? null,
     squadsN: sw?.squads?.size ?? null,
-    recycled: sw?.stuckDbg?.recycled ?? null,
+    recycled: w?.shadowBridge?.timers?.dbg?.stuckTotal ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
     drops: sw?.orderDrops ?? null,
     clamps: c?.cmdLogRingClamps ?? null,
@@ -96,10 +97,11 @@ await page.evaluate(() => {
       a.push({ t: +(performance.now() / 1000).toFixed(1), x: +(cx / n).toFixed(1), z: +(cz / n).toFixed(1) });
     }
     // 行军队（advance 令 + 目标最远）
+    const views = new Map((w.engineView?.squads() ?? []).map((v) => [v.id, v]));
     let best = null, bd = -1;
     for (const s of w.swarm.squads.all()) {
-      const st = w.swarm.tactics.board.get(s.id); const o = st?.order;
-      if (!o || o.kind !== 'advance' || !o.target) continue;
+      const o = views.get(s.id)?.order;
+      if (!o || (o.kind !== 'advance' && o.kind !== 'act' && o.kind !== 'march') || !o.target) continue;
       let cx = 0, cz = 0, n = 0;
       for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
       if (n === 0) continue;
@@ -109,13 +111,13 @@ await page.evaluate(() => {
     if (!best) return;
     let cx = 0, cz = 0, n = 0;
     for (const m of best.members.values()) { cx += m.x; cz += m.z; n++; }
-    const st = w.swarm.tactics.board.get(best.id);
+    const bv = views.get(best.id);
     window.__squadTrk.push({
       t: +(performance.now() / 1000).toFixed(1), sid: best.id,
       x: +(cx / n).toFixed(1), z: +(cz / n).toFixed(1), n,
-      corr: st?.corridor?.length ?? 0,
-      ok: st?.order?.kind ?? '-',
-      otx: st?.order?.target?.x | 0, otz: st?.order?.target?.z | 0,
+      corr: bv?.corridor?.length ?? 0,
+      ok: bv?.order?.kind ?? '-',
+      otx: bv?.order?.target?.x | 0, otz: bv?.order?.target?.z | 0,
     });
   }, 500);
 });
@@ -141,7 +143,7 @@ for (const t of [8000, 20000, 40000, 70000]) {
       const s = sw.squads.get(1); if (!s) return null;
       const uid = s.leaderUid;
       let i = -1; for (let k = 0; k < p.count; k++) if (p.swarmUid[k] === uid) { i = k; break; }
-      const st = sw.tactics.board.get(1);
+      const st = (w.engineView?.squads() ?? []).find((v) => v.id === 1);
       return {
         leaderUid: uid, inPool: i >= 0,
         task: i >= 0 ? `${p.taskX[i] | 0},${p.taskZ[i] | 0}` : null,
@@ -150,7 +152,7 @@ for (const t of [8000, 20000, 40000, 70000]) {
         pos: i >= 0 ? `${p.x[i].toFixed(1)},${p.z[i].toFixed(1)}` : null,
         spd: i >= 0 ? +p.curSpeed[i].toFixed(2) : null, mul: i >= 0 ? +p.directiveSpeedMul[i].toFixed(2) : null,
         blocked: i >= 0 ? sw.commander.blockedAt(p.x[i], p.z[i]) : null,
-        order: st ? `${st.order.kind}@${st.order.target?.x | 0},${st.order.target?.z | 0}` : null,
+        order: st?.order ? `${st.order.kind}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'}` : null,
         corr: st?.corridor?.map((q) => `${q.x | 0},${q.z | 0}`).join('→') ?? null,
         pathFrom: `${st?.pathFromX | 0},${st?.pathFromZ | 0}`,
       };
@@ -226,16 +228,13 @@ if (trk.length > 4) {
   const m6 = await page.evaluate(() => {
     const w = window.__rts; const sw = w?.swarm;
     const byRole = new Map();
-    if (sw) for (const s of sw.squads.all()) {
-      if (s.builders) continue;   // 工兵走 EngineerManager（间距指标只量战斗兵种）
-      const lead = s.members.get(s.leaderUid);
-      if (!lead) continue;        // 无队长（死队/未同步）→ 位置为 0,0，不是真重合
-      const st = sw.tactics.board.get(s.id);
-      const t = st?.order?.target;
+    for (const v of w?.engineView?.squads() ?? []) {
+      if (v.role === 'engineer') continue;   // 工兵走 EngineerManager（间距指标只量战斗兵种）
+      const t = v.order?.target;
       if (!t || (t.x === 0 && t.z === 0)) continue;
-      const role = String(s.type ?? 'melee');
+      const role = String(v.role ?? 'melee');
       if (!byRole.has(role)) byRole.set(role, []);
-      byRole.get(role).push({ id: s.id, x: t.x, z: t.z });
+      byRole.get(role).push({ id: v.id, x: t.x, z: t.z });
     }
     let minSame = null, pair = '';
     for (const [role, arr] of byRole) {
