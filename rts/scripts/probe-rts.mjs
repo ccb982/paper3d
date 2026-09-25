@@ -59,14 +59,13 @@ const probe = () => page.evaluate(() => {
       removed: sw?.ledger?.removed ?? null,
       timerTotal: w?.shadowBridge?.timers?.dbg?.expiredTotal ?? null,
       timerStuck: w?.shadowBridge?.timers?.dbg?.stuckTotal ?? null,
-      timerLife: w?.shadowBridge?.timers?.dbg?.lifeTotal ?? null,
     },
     agents: (() => {
       const p = sw.pool; const out = [];
       for (let i = 0; i < p.count && out.length < 2; i++) {
         out.push({
           uid: p.swarmUid[i], x: +p.x[i].toFixed(1), z: +p.z[i].toFixed(1), hp: p.hp[i],
-          task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
+          task: '-',
           dirTgt: `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}`,
           spd: +p.curSpeed[i].toFixed(2), mul: p.directiveSpeedMul[i],
           blocked: sw.data.blockedAt(p.x[i], p.z[i]),
@@ -146,7 +145,7 @@ for (const t of [8000, 20000, 40000, 70000, 90000]) {
       const st = (w.engineView?.squads() ?? []).find((v) => v.id === 1);
       return {
         leaderUid: uid, inPool: i >= 0,
-        task: i >= 0 ? `${p.taskX[i] | 0},${p.taskZ[i] | 0}` : null,
+        task: null,
         dirTgt: i >= 0 ? `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}` : null,
         dKind: i >= 0 ? p.directiveKind[i] : null,
         pos: i >= 0 ? `${p.x[i].toFixed(1)},${p.z[i].toFixed(1)}` : null,
@@ -258,12 +257,12 @@ if (trk.length > 4) {
   });
   const durMin = 62 / 60;   // 采样窗 8s→70s（≈62 模拟秒）
   const idlePct = m6.decided ? (m6.idle / m6.decided) * 100 : null;
-  // ★ 销毁率（窗口差分；用户定 2026-09-25）：账本离场 = 击杀/回收/其他；计时销毁 = TimerManager 判决（卡死/寿命）
+  // ★ 销毁率（窗口差分；用户定 2026-09-25）：账本离场 = 击杀/回收/其他；计时判决 = TimerManager 卡死回收
   const dA = samples[0]?.destroy ?? null;
   const dB = samples[samples.length - 1]?.destroy ?? null;
   const dd = (a, b) => (a === null || a === undefined || b === null || b === undefined) ? null : b - a;
   const dKill = dd(dA?.kills, dB?.kills), dRecall = dd(dA?.recalled, dB?.recalled), dRemoved = dd(dA?.removed, dB?.removed);
-  const dTimer = dd(dA?.timerTotal, dB?.timerTotal), dTStuck = dd(dA?.timerStuck, dB?.timerStuck), dTLife = dd(dA?.timerLife, dB?.timerLife);
+  const dTimer = dd(dA?.timerTotal, dB?.timerTotal), dTStuck = dd(dA?.timerStuck, dB?.timerStuck);
   const destroyRate = (dKill !== null && dRecall !== null && dRemoved !== null)
     ? (dKill + dRecall + dRemoved) / durMin : null;
   const timerRate = dTimer === null ? null : dTimer / durMin;
@@ -274,7 +273,7 @@ if (trk.length > 4) {
     ['卡死回收 ≤10/min', stuckRate === null ? '-' : stuckRate.toFixed(1) + '/min', stuckRate !== null && stuckRate <= 10],
     ['cmdChanges ≤5', String(cmdChanges), cmdChanges !== null && cmdChanges <= 5],
     ['销毁率（信息）', destroyRate === null ? '-' : `${destroyRate.toFixed(1)}/min（杀 ${dKill} / 回收 ${dRecall} / 他 ${dRemoved}）`, true],
-    ['计时销毁（信息）', timerRate === null ? '-' : `${timerRate.toFixed(1)}/min（卡死 ${dTStuck} / 寿命 ${dTLife}）`, true],
+    ['计时销毁（信息）', timerRate === null ? '-' : `${timerRate.toFixed(1)}/min（卡死 ${dTStuck}）`, true],
   ];
   if (destroyRate !== null || timerRate !== null) {
     const alive = dB?.alive, spawned = dB?.spawned;

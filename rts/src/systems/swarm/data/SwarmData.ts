@@ -39,17 +39,6 @@ const FLOOR_MIN = -1.2;
 const PATH_AFF_N = 8;
 const PATH_AFF_W = 0.25;
 
-/** ★ 引擎保护配置：保护对象（锚）+ 来源（护工/射手/工地/岗位） */
-/** ★ 引擎侧信息面（《RTS架构.md》§3.5）：战术决策的输入 */
-export interface BattalionView {
-  squads: SquadRating[];
-  playerX: number;
-  playerZ: number;
-  shipX: number;
-  shipZ: number;
-  now: number;
-}
-
 export class SwarmData {
   /** ★ S0 勘察：地形检测产出的防守布置 */
   private plan: DefensePlan | null = null;
@@ -208,7 +197,7 @@ export class SwarmData {
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
    *  展开轴 = 扫描走廊轴（落地一次）；**掩体一律朝舰船（落点中心）侧 +5m、战壕留在原位**；
    *  此后不随玩家移动/危机度动态重排（《RTS架构.md》§3/§4，用户定调 2026-09-21）。 */
-  planDefense(cx: number, cz: number, radius = 80): DefensePlan | null {
+  planDefense(cx: number, cz: number, radius = 80, now = 0): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
@@ -228,7 +217,7 @@ export class SwarmData {
     this.hitSeen.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
-    this.postureFn.reset(performance.now() / 1000);
+    this.postureFn.reset(now);
     this.battlePosture = 'fortify';
     // ★ 兵力创建（全权在本层，编成/放置见 CommanderSpawn）：
     //   · 回收名单 → 按名单**逐步回场**（数量/兵种照旧）
@@ -256,19 +245,7 @@ export class SwarmData {
     this.plan = plan;
   }
 
-  /** ★ 引擎侧信息面（战术决策的输入；每拍现取，零缓存） */
-  view(playerX: number, playerZ: number, shipX: number, shipZ: number): BattalionView {
-    return {
-      squads: this.swarm.ratings(),
-      playerX,
-      playerZ,
-      shipX,
-      shipZ,
-      now: performance.now() / 1000,
-    };
-  }
-
-  /** ★ 每帧：大队任务周期重发（TTL 保持）+ 部署维护
+  /** ★ 每帧：事态/环/地形表/工事数据/生成队列（数据面 tick）
    *  @param dayT01 当日进度 0~1（太阳钟：6:00=0 / 18:00=1；<0 = 无输入 → 内部兜底钟） */
   /** ★ 事态闸门（调试/探针读：frontP 单调推进、minD 允许离舰半径） */
   get frontGate(): { frontP: number; minD: number } {
@@ -296,7 +273,7 @@ export class SwarmData {
     return hasCoverFrom(tx, tz, x, z, this.terrainScore);
   }
 
-  tick(dt: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
+  tick(dt: number, now: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
     this.lastDayRaw = this.debugDayT01 >= 0 ? this.debugDayT01 : dayT01;   // ★ 生效日进度（时间轴拖动同口径）
     this.viewPX = playerX;
     this.viewPZ = playerZ;
@@ -316,7 +293,6 @@ export class SwarmData {
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
-    const now = performance.now() / 1000;
     this.rhythmT += dt;
     // ★ 节奏口径：从落地起算 → 黄昏（18:00）到达 1；落地即黄昏/夜晚 → 直接进入总攻节奏
     const dRaw = this.debugDayT01 >= 0 ? this.debugDayT01 : dayT01;
@@ -461,7 +437,7 @@ export class SwarmData {
   /** ★ 远程有利位置（制高点 / 掩体后；含"掩体真的挡子弹"校验）。
    *  规则：距离在 [0.5R, 1.05R]（能射到且不贴脸）且 **≥ minDist**（边撤边打时要求更远）；
    *  掩体挡住玩家视线加分；越接近理想站位（0.8R）越好；无合适点 → null（原地射击）。 */
-  rangedPost(px: number, pz: number, range: number, minDist = 0): { x: number; z: number } | null {
+  rangedPost(px: number, pz: number, range: number, minDist = 0, now = 0): { x: number; z: number } | null {
     const plan = this.plan;
     if (!plan || range <= 0) return null;
     const ideal = range * RANGED.PREFER_RATIO;
@@ -497,16 +473,16 @@ export class SwarmData {
     if (best) return best;
     // ★ 扫描产物/掩体都不在射程带内（玩家跑远了）→ **现场找位**：
     //   以玩家为圆心、0.8R 为半径环采样（高地优先 / 掩体加成 / 可站）
-    return this.terrainPost(px, pz, range);
+    return this.terrainPost(px, pz, range, now);
   }
 
   /** ★ 现场有利位置（无扫描产物时）：玩家周围射程环采样 + 1.5s 缓存（多小队共用） */
   private readonly postCache = new Map<string, { x: number; z: number; at: number }>();
-  private terrainPost(px: number, pz: number, range: number): { x: number; z: number } | null {
+  private terrainPost(px: number, pz: number, range: number, now = 0): { x: number; z: number } | null {
     const raster = RasterMap.current;
     if (!raster) return null;
     const key = `${Math.floor(px / 16)},${Math.floor(pz / 16)},${Math.round(range)}`;
-    const nowMs = performance.now();
+    const nowMs = now * 1000;
     const hit = this.postCache.get(key);
     if (hit && nowMs - hit.at < 1500) return { x: hit.x, z: hit.z };
     const r = range * RANGED.PREFER_RATIO;
@@ -533,8 +509,8 @@ export class SwarmData {
   }
 
   /** ★ 调试/测试：强制切态势（覆盖态势函数自动转移；总攻同样锁定） */
-  setPosture(p: BattlePosture): void {
-    this.postureFn.force(p, performance.now() / 1000);
+  setPosture(p: BattlePosture, now = 0): void {
+    this.postureFn.force(p, now);
     this.battlePosture = p;
     this.aliveAtPosture = p === 'assault' ? this.swarm.ledger.alive : 0;
   }
@@ -668,12 +644,12 @@ export class SwarmData {
   }
 
   /** 清理（退出模式） */
-  clear(): void {
+  clear(now = 0): void {
     this.plan = null;
     this.stage = 'S0';
     this.spawn.clear();
     this.holeTable.clear();
-    this.postureFn.reset(performance.now() / 1000);
+    this.postureFn.reset(now);
     this.battlePosture = 'fortify';
     this.aliveAtPosture = 0;
     this.rhythmT = 0;

@@ -306,7 +306,7 @@ export class SwarmSystem {
     }
 
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
-    this.data.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
+    this.data.tick(dt, now, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
     // ★ 队长层调遣（squad/SquadCore.drive）由 main 每帧驱动（成员指令唯一写口 = applyDirective）
 
@@ -423,7 +423,7 @@ export class SwarmSystem {
       this.steerAccum = 0;
       if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
       this.nav.steerEntities(hooks.activeUnits?.(), this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
-        (x, z, r) => this.data.rangedPost(x, z, r));
+        (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
@@ -628,7 +628,7 @@ export class SwarmSystem {
       }
       // ★ 远程不追打（让位本地移动 atomMove=255，否则原子覆盖仍按 directiveTarget 走向玩家）
       if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
-        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.data.rangedPost(x, z, r));
+        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
         destX = t ? t.x : px;
         destZ = t ? t.z : pz;
         p.fromFlow[i] = 0;
@@ -735,12 +735,12 @@ export class SwarmSystem {
     entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     let dx = p.dirX[i], dz = p.dirZ[i];
     // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
-    //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员任务（taskX/Z）不再驱动移动。
+    //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
     const squad = this.squads.squadOf(p.swarmUid[i]);
     const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
     if (isLeader) {
-      // ★ 队长（无成员任务概念；旧 taskX/Z 链已销毁）→ 走队级指令锚点；到位校验见 leaderDir
+      // ★ 队长 → 走队级指令锚点；到位校验见 leaderDir
       const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
         p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
       if (ld) { dx = ld.x; dz = ld.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }

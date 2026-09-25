@@ -194,9 +194,9 @@ if (fs.existsSync(enemyDir) && rosterFiles.length) {
   if (airIds.length) console.log(`[arch-guard] 空中层 ${airIds.length} 种：${airIds.join(', ')}`);
 }
 
-// ---------- ⑤ 重写铁律 G1~G9（只查新目录；旧代码按 P1~P4 逐期搬入） ----------
-// 《蜂群重写计划.md》§5.1：新模块从第一天起必须满足；旧路径迁移期豁免。
-const NEW_DIRS = ['systems/swarm/engine/', 'systems/swarm/squad/', 'systems/swarm/nav/', 'entity/base/'];
+// ---------- ⑤ 重写铁律 G1~G9（只查新目录；重写已完成） ----------
+// 新模块（engine/squad/nav/data/entity-base）从第一天起必须满足铁律；旧路径已删。
+const NEW_DIRS = ['systems/swarm/engine/', 'systems/swarm/squad/', 'systems/swarm/nav/', 'systems/swarm/data/', 'entity/base/'];
 const newFiles = [...srcOf].filter(([r]) => NEW_DIRS.some((d) => r.startsWith(d)));
 if (newFiles.length) {
   /** G1 单一发令器：所有引擎命令只经 OrderWriter 下发 */

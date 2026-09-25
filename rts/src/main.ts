@@ -466,7 +466,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   try {
     // ★ 建表半径必须**覆盖舰船**（长行军目标=舰；否则目标在表外 → 长寻路回落失败）
     const tableR = Math.min(240, Math.ceil(Math.hypot(landing.x - spawn.x, landing.z - spawn.z)) + 60);
-    swarm.data.planDefense(landing.x, landing.z, tableR);
+    swarm.data.planDefense(landing.x, landing.z, tableR, performance.now() / 1000);
   } catch (e) {
     console.warn('[rts] planDefense 失败（命令链仍可手动）', e);
   }

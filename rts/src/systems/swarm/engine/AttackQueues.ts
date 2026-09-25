@@ -49,13 +49,6 @@ export class AttackQueues {
     this.dbg.queues = this.owners.length;
   }
 
-  removeOwner(kind: QueueOwner): void {
-    const i = this.owners.findIndex((o) => o.kind === kind);
-    if (i >= 0) this.owners.splice(i, 1);
-    this.members.delete(kind);
-    this.dbg.queues = this.owners.length;
-  }
-
   /** 1Hz 更新：最近实体入队（去重）+ 开火检验 → 许可闩锁 */
   update(entities: readonly QueueEntity[], canFire: (uid: number) => boolean, latch: FireLatch): void {
     const dbg = this.dbg;
@@ -99,11 +92,12 @@ export class AttackQueues {
     dbg.last = `q=${this.owners.length} n=${entities.length} allow+${dbg.allowed} -${dbg.revoked} move=${dbg.moved}`;
   }
 
-  /** 查询：某敌人在哪个队列（去重结果） */
+  /** 调试查询：某敌人在哪个队列（去重结果；自检/探针只读） */
   ownerOfUid(uid: number): QueueOwner | null {
     return this.ownerOf.get(uid) ?? null;
   }
 
+  /** 调试查询：队列成员（自检/探针只读） */
   membersOf(kind: QueueOwner): readonly number[] {
     return this.members.get(kind) ?? [];
   }

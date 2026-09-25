@@ -21,11 +21,8 @@ import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { selectAtomic } from '../src/systems/swarm/squad/AtomicSelect.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
-import { selectComposite } from '../src/systems/swarm/engine/Composites.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
-import { selectComposite } from '../src/systems/swarm/engine/Composites.ts';
-import { composeMove } from '../src/systems/swarm/engine/Displacement.ts';
 import { OrderWriter, SquadOrderStore } from '../src/systems/swarm/engine/OrderWriter.ts';
 import { AttackQueues } from '../src/systems/swarm/engine/AttackQueues.ts';
 import { SectorManager } from '../src/systems/swarm/engine/SectorManager.ts';
@@ -128,14 +125,6 @@ console.log('[3] 四兵种管理器');
   ranged.assign({ pos, ringMin: 5, ringMax: 20, now: 0 });
   ok(Math.abs(Math.hypot(ranged.targets.get(12)!.x, ranged.targets.get(12)!.z) - 18) < 0.01, '远程环内不夹（18 已在带内）');
   // 刷怪执行
-  let spawned = 0;
-  eng.requestSpawn(2, (role) => {
-    spawned++;
-    ok(role === 'engineer', '刷怪回调兵种正确');
-  });
-  ok(spawned === 2 && eng.dbg.spawned === 2, '工兵刷怪 2 队');
-  eng.assignSector(0, 14);
-  ok(eng.sectorOf(14) === 0, '工兵分区登记');
   ok(eng.assign(ctx) === 1, '工兵分配（保持站位）');
 }
 
@@ -182,14 +171,6 @@ console.log('[4] TimerManager 统一计时');
   for (let i = 0; i < STUCK.HOLD_S + 3; i++) tm.tick(++t);
   ok(!expired.includes('4:stuck') && tm.dbg.exempt > 0, '驻守豁免');
   exempt.delete(4);
-  // 计时销毁
-  expired.length = 0;
-  live.set(5, { x: 0, z: 0 });
-  tm.setDeadline(5, t + 2, 'lifetime');
-  tm.tick(++t);
-  tm.tick(++t);
-  tm.tick(++t);
-  ok(expired.includes('5:lifetime'), '计时销毁到点触发');
   // 开火闩锁
   tm.allowFire(5, true);
   ok(tm.canFire(5), '开火许可置位');
@@ -300,53 +281,6 @@ console.log('[6] 同兵种散开 + 发令统一校验链 + 复合选择');
     canReach: () => false,
   });
   ok(!v4.ok && !v4.reachable, '③ 不可达 → 不发令');
-  // 复合选择
-  ok(selectComposite({ d: 30, ringMax: 30, hasProtect: false }) === 'defend', '到上限 → 防御');
-  ok(selectComposite({ d: 10, ringMax: 30, hasProtect: true }) === 'protect', '环内+保护关系 → 保护');
-  ok(selectComposite({ d: 10, ringMax: 30, hasProtect: false }) === 'act', '环内 → 行动');
-}
-
-// ---------- Displacement 位移命令 ----------
-console.log('[7] 位移命令（径向+切向同时发力 → 长寻路检测）');
-{
-  // 径向：当前 (50,0) → 目标半径 20（前近）
-  const m1 = composeMove({
-    x: 50, z: 0, cx: 0, cz: 0, rTarget: 20, ringMin: 0, ringMax: 0,
-    siblings: [], role: 'melee', id: 1,
-  });
-  ok(Math.abs(Math.hypot(m1.x, m1.z) - 20) < 0.01 && m1.radial && m1.ok, '径向前近：50 → 20');
-  // 径向 + 切向同时：本队 (50,0)，兄弟 (50,8) → r 都到 20，切向再散开
-  const m2 = composeMove({
-    x: 50, z: 0, cx: 0, cz: 0, rTarget: 20, ringMin: 0, ringMax: 0,
-    siblings: [{ id: 2, role: 'melee', x: 50, z: 8 }], role: 'melee', id: 1,
-  });
-  ok(m2.radial && m2.tangential, '径向+切向同时发力（两个标记都亮）');
-  ok(Math.abs(Math.hypot(m2.x, m2.z) - 20) < 0.01, '合成后仍在目标半径 20 上');
-  // 环夹取
-  const m3 = composeMove({
-    x: 50, z: 0, cx: 0, cz: 0, rTarget: 50, ringMin: 0, ringMax: 30,
-    siblings: [], role: 'melee', id: 1,
-  });
-  ok(Math.abs(Math.hypot(m3.x, m3.z) - 30) < 0.01, '环夹取：50 → 30');
-  // 长寻路检测：目标不可达 → 缩近一档后可达
-  let calls = 0;
-  const m4 = composeMove({
-    x: 50, z: 0, cx: 0, cz: 0, rTarget: 50, ringMin: 0, ringMax: 0,
-    siblings: [], role: 'melee', id: 1, pullback: 20,
-    canReach: (x, z) => {
-      calls++;
-      return Math.hypot(x, z) <= 30;   // 30m 内才可达
-    },
-  });
-  ok(m4.ok && m4.reachable && Math.abs(Math.hypot(m4.x, m4.z) - 30) < 0.01, '长寻路检测：不可达 → 缩近到 30');
-  ok(calls >= 2, '检测被真实调用（先原目标再缩近档）');
-  // 完全不可达 → ok=false
-  const m5 = composeMove({
-    x: 50, z: 0, cx: 0, cz: 0, rTarget: 50, ringMin: 0, ringMax: 0,
-    siblings: [], role: 'melee', id: 1,
-    canReach: () => false,
-  });
-  ok(!m5.ok, '始终不可达 → 不下发');
 }
 
 // ---------- OrderWriter ----------

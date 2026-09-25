@@ -281,9 +281,6 @@ export interface SwarmSnapshot {
   role?: UnitRole;
   moveTargetX?: number;
   moveTargetY?: number;
-  /** ★ 成员级任务目标（工程分块 / 护卫扇区；跨 LOD 保留） */
-  taskX?: number;
-  taskZ?: number;
   moveTargetZ?: number;
   /** ★ 编队移动速度（m/s；代理侧 = AgentSnapshot.speed 同源） */
   moveSpeed?: number;

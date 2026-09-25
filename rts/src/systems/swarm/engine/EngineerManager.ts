@@ -68,8 +68,6 @@ export interface EngineerPort {
 const keyOf = (p: { x: number; z: number }): string => `${p.x},${p.z}`;
 
 export class EngineerManager extends RoleManager {
-  /** 引擎给的分区数据（sectorId → 该区工兵小队） */
-  private readonly sectors = new Map<number, number[]>();
   /** 各队当前施工点（件） */
   private readonly spots = new Map<number, { x: number; z: number }>();
   /** 各队施工计时（秒） */
@@ -90,22 +88,6 @@ export class EngineerManager extends RoleManager {
     private readonly portOf: () => EngineerPort | null = () => null,
   ) {
     super('engineer', mgr);
-  }
-
-  /** 分区登记（引擎的防区决策结果；本管理器只存不算） */
-  assignSector(sectorId: number, squadId: number): void {
-    const arr = this.sectors.get(sectorId);
-    if (arr) {
-      if (!arr.includes(squadId)) arr.push(squadId);
-    } else {
-      this.sectors.set(sectorId, [squadId]);
-    }
-    this.dbg.last = `sector#${sectorId}<-${squadId}`;
-  }
-
-  sectorOf(squadId: number): number {
-    for (const [sid, arr] of this.sectors) if (arr.includes(squadId)) return sid;
-    return -1;
   }
 
   /** 工兵目标分配 + 施工推进：派件（位置查询）→ 到件计时 → 落地 */
@@ -217,7 +199,6 @@ export class EngineerManager extends RoleManager {
 
   override clear(): void {
     super.clear();
-    this.sectors.clear();
     this.spots.clear();
     this.work.clear();
     this.digs.clear();

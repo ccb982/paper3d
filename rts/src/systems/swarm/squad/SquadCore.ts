@@ -80,8 +80,8 @@ export class SquadCore {
   private lastZ = 0;
   /** 指令序号（队内单调） */
   private seq = 1;
-  /** 本拍是否已 drive（原子由 selectAtomic 决定；tick 不覆盖） */
-  private driven = false;
+  /** 是否已 drive 过（原子由 selectAtomic 决定；tick 只在从未 drive 时按距离兜底） */
+  private hasDrive = false;
 
   constructor(readonly id: number, readonly role: MobRole, private readonly ports: SquadPorts) {}
 
@@ -138,7 +138,7 @@ export class SquadCore {
     const c = port.clampRing(ax, az);
     ax = c.x; az = c.z;
     this.atom = sel.atom;   // 原子自报（tick 不再按距离覆盖）
-    this.driven = true;
+    this.hasDrive = true;
     // ⑤ 成员调遣：分解矩阵 + 开火门 + 围队长（队长走原子目标）
     const bucket = squadBucket(squad.type);
     const uids: number[] = [];
@@ -194,8 +194,8 @@ export class SquadCore {
       this.report();
       return;
     }
-    // 无 drive（自检/降级）时按距离兜底；实机原子由 drive 的 selectAtomic 决定
-    if (!this.driven) {
+    // 从未 drive（自检/降级）时按距离兜底；实机原子由 drive 的 selectAtomic 决定
+    if (!this.hasDrive) {
       if (d > MARCH_DIST) {
         this.atom = 'march';
         if (this.ports.nav.longPath(o.target.x, o.target.z) > 0) this.dbg.long++;
@@ -204,7 +204,6 @@ export class SquadCore {
         if (this.ports.nav.canHop(o.target.x, o.target.z)) this.dbg.short++;
       }
     }
-    this.driven = false;
     this.phase = 'executing';
     this.report();
   }

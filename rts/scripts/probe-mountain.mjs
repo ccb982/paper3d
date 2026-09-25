@@ -230,7 +230,7 @@ while (!stop) {
         dKind: p.directiveKind[i], dTgt: +Math.hypot(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i]).toFixed(1),
         dAbs: `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}`,
         oTgt: `${p.orderTargetX[i] | 0},${p.orderTargetZ[i] | 0}`,
-        task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
+        task: '-',
         blk: sw.data.blockedAt(p.x[i], p.z[i]) ? 1 : 0, tier: p.tier[i], mAcc: +p.moveAcc[i].toFixed(2),
         order: st?.order ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.order.source} 剩${(st.until - performance.now() / 1000).toFixed(0)}s` : '-',
         corr: st?.corridor?.length ?? -1,

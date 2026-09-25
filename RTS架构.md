@@ -78,14 +78,13 @@ perceive → situation → decide(单源) → write → debug
 > 规则集中一处（`DecisionChain.ts`），**不靠调用顺序**；`kind` 只产 `act/march/garrison/defend/protect`。
 
 ### 2.4 复合与统一校验
-- **复合表（`Composites.ts`，数据化）**：`protect{atoms:patrol+garrison+act, ring 4~30}` / `act{march+act}` / `defend{garrison+patrol+act, ring 0~60}`；
-  `selectComposite`：到环上限→defend；有保护关系→protect；否则 act。
+- **复合选择（`DecisionChain`）**：到环上限 → `defend`；有保护关系/被打 → `protect`；否则 `act`。
+  **复合 → 原子**的条件表在 `squad/AtomicSelect.ts`（队长层唯一实现，见 §3.2）。
 - **发令统一校验链（`OrderValidator.ts`，一处实现、不许旁路）**：
   ① **事态范围**：目标夹进 `[ringMin, ringMax]`；到上限 → `suggest='defend'`；
   ② **密度**：同兵种目标 <`SPREAD.MIN=40m` → **切向 θ 散开（径向 r 严格不变）**；工兵不参与；
   ③ **可达**：`canReach` 注入核验（不可达 → 不发/调用方缩近）。
 - **Spread（`Spread.ts`）**：极坐标、**只解 θ**；目标角差用**余弦定理精确解**（弦长=min）；几何不可满足（min≥r1+r2）→ θ 拉满 π（**无径向推力**）；点按 id 定序 → 各队各自校验也收敛到同一全局解。
-- **Displacement（`Displacement.ts`）**：位移命令 = **径向分量（前近/拉开）+ 切向分量（间距）** → 目标点 → 长寻路检测；不可达逐档缩近（20m×3）。
 
 ### 2.5 OrderWriter —— 唯一发令器（G1/G2）
 - 唯一写口 `SquadOrderStore`（**只有本文件能写**）。
@@ -102,9 +101,9 @@ perceive → situation → decide(单源) → write → debug
 - **开火许可 = 闩锁态**（`TimerManager.allowFire/canFire`）：一旦允许 → 持续开火，直到许可被去除；离场自动撤。
 - **计时销毁（`TimerManager`，1Hz）**：
   - 卡死窗口：包围盒 <`BBOX_R=4m` 持续 `HOLD_S=25s` → 回收；**豁免**：驻守命令 / 交火（被击 8s / `noDemoteUntil`）；
-  - 寿命 deadline → despawn；开火闩锁存储。
-  - `onExpire` 落地（LiveView.retire）：L3 `retire('recycled'|'despawned')` / L2 `SwarmSystem.recycleByUid`（归还编制）。
-  - 探针：`stuckTotal / lifeTotal / latched / tracked / exempt / last`。
+  - **计时销毁（寿命 despawn）= 实体基类能力**（`entity/base/Abilities` 的 `despawn` 状态机），本管理器不重复；
+  - `onExpire` 落地（LiveView.retire）：L3 `retire('recycled')` / L2 `SwarmSystem.recycleByUid`（归还编制）；
+  - 探针：`stuckTotal / expiredTotal / latched / tracked / exempt / last`。
 
 ### 2.8 单源数据与视图
 - `Positions`：玩家/舰船/各队队长位置**只此一处**（`setPlayer/setShip/setSquad/squad/nearestSquad/squadOf`）。
@@ -271,7 +270,7 @@ perceive → situation → decide(单源) → write → debug
 | 关 | 命令 | 内容 | 失败口径 |
 |---|---|---|---|
 | 类型 | `npm run typecheck` | `tsc --noEmit`（src 全量） | 非 0 退出 |
-| 架构 | `npm run guard` | ①文件膨胀（1200 软/3800 硬）②命令单源回潮防护（`board.issue`/`issueOrder` 不得再现）③迁移不回潮 ④配置真源 ⑤**G1~G9**（只查新目录） | 非 0 退出 |
+| 架构 | `npm run guard` | ①文件膨胀（1200 软/3800 硬）②命令单源回潮防护（`board.issue`/`issueOrder` 不得再现）③迁移不回潮 ④配置真源 ⑤**G1~G9**（engine/squad/nav/**data**/entity-base） | 非 0 退出 |
 | 冒烟 | `npm run smoke` | 选点页→换种子→进世界；6 项断言 | 6/6，否则退出 1 |
 | 行为 | `npm run probe` | seed 4242，T+8/20/40/70 采样（阶段/环/命令/寻路/工事/销毁率/轨迹）+ 基线断言 **10/10** | 10/10，否则退出 1 |
 | 自检 | `npm run test:engine` | 纯模块自检（引擎/队长/校验链/工事/计时/闩锁）**153/153** | 全过 |
@@ -336,8 +335,8 @@ perceive → situation → decide(单源) → write → debug
 ## 16. 已知问题与待办
 
 1. **收拢态间距**：总攻环收拢为点时，同兵种 40m 间距几何不可满足（弦长上限 2r）——需定"指标口径"（非收拢态判定）。
-2. **cmdChanges 6**：删守点粘性后守点目标随自身漂移，差 1 到 ≤5；可用"守点节流/换令条件"微调。
-3. **legacy `modes/WorldMode.ts`**（3558 行）：旧模式，不在 rts 主入口；其调试覆盖层经注入视图显示（拿不到则显示 `-`）；可整文件删除。
-4. **§16 山地**：短跳半径/角度自适应、台阶段落差聚合、拉直防贴崖、舰船/落点周围强制产坡（待定）、`TerrainScore.cls` 标定对齐（待定）。
-5. **高倍速混合时钟**：命令计时用实秒（`performance.now`），100× 时相对游戏时钟变短；后续可统一到模拟时钟。
-6. **guard 已知债务**：`WorldMode/ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 六个非蜂群大文件（与本次重写无关）。
+2. **cmdChanges 6~7**：删守点粘性后守点目标随自身漂移，略高于 ≤5；可用"守点节流/换令条件"微调。
+3. **§16 山地**：短跳半径/角度自适应、台阶段落差聚合、拉直防贴崖、舰船/落点周围强制产坡（待定）、`TerrainScore.cls` 标定对齐（待定）。
+4. **高倍速混合时钟**：命令计时用实秒（`performance.now`），100× 时相对游戏时钟变短；后续可统一到模拟时钟。
+5. **guard 已知债务**：`ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 五个非蜂群大文件（与本次重写无关）。
+6. **可选拆分**：`SwarmSystem`（1151）/`SwarmData`（692）/`EngineBridge`（415）/`main`（843）为"大而不乱"的文件，按需再拆。

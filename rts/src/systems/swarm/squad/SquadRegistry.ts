@@ -20,6 +20,8 @@ export interface RegistryDrive extends SquadDrivePorts {
 export class SquadRegistry {
   private readonly cores = new Map<number, SquadCore>();
   private nowS = 0;
+  /** ★ 队长驱动节拍（10Hz；汇报/推进仍每帧） */
+  private lastDrive = -1e9;
   /** 探针契约（G9） */
   readonly dbg = { n: 0, accepted: 0, reports: 0, last: '' };
 
@@ -61,12 +63,16 @@ export class SquadRegistry {
   /** 每帧：刷新队长位置（信息单源）→ 驱动（导航/调遣）→ 推进（汇报） */
   tick(dt: number, now: number, posOf: (id: number) => { x: number; z: number } | null): void {
     this.nowS = now;
+    const doDrive = now - this.lastDrive >= 0.1;   // ★ 驱动节流 10Hz（decompose/寻路端口开销）
+    if (doDrive) this.lastDrive = now;
     for (const c of this.cores.values()) {
       const p = posOf(c.id);
       if (!p) continue;
       c.x = p.x; c.z = p.z;
-      const sq = this.drive.squadOf(c.id);
-      if (sq) c.drive(sq, now, this.drive);
+      if (doDrive) {
+        const sq = this.drive.squadOf(c.id);
+        if (sq) c.drive(sq, now, this.drive);
+      }
       c.tick(dt);
     }
   }
@@ -75,13 +81,6 @@ export class SquadRegistry {
 
   /** 执行态（执行层读走廊/锚点；唯一来源 = 队长核） */
   stateOf(id: number): SquadOrderState | null { return this.cores.get(id)?.state ?? null; }
-
-  /** 全队执行态（UI/探针镜像用） */
-  states(): IterableIterator<[number, SquadOrderState]> {
-    const out: [number, SquadOrderState][] = [];
-    for (const [id, c] of this.cores) if (c.state) out.push([id, c.state]);
-    return out.values();
-  }
 
   drop(id: number): void { this.cores.delete(id); this.dbg.n = this.cores.size; }
 }

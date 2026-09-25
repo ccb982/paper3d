@@ -26,7 +26,7 @@ export abstract class RoleManager {
   protected readonly squads = new Set<number>();
   /** 本兵种当前分配结果（squadId → 目标点；引擎/校验链消费） */
   readonly targets = new Map<number, Target>();
-  readonly dbg = { squads: 0, assigned: 0, spawning: 0, spawned: 0, last: '' };
+  readonly dbg = { squads: 0, assigned: 0, last: '' };
 
   constructor(readonly role: MobRole, protected readonly mgr: SquadManager) {}
 
@@ -57,15 +57,6 @@ export abstract class RoleManager {
     if (d >= lo && d <= hi) return { x: s.x, z: s.z };
     const k = (d < lo ? lo : hi) / d;
     return { x: p.x + dx * k, z: p.z + dz * k };
-  }
-
-  /** 刷怪执行（引擎决策"要多少/何时" → 本管理器生成投放；onSpawn 由引擎注入） */
-  requestSpawn(n: number, onSpawn?: (role: MobRole) => void): void {
-    if (n <= 0) return;
-    this.dbg.spawning = n;
-    for (let i = 0; i < n; i++) onSpawn?.(this.role);
-    this.dbg.spawned += n;
-    this.dbg.last = `spawn+${n}`;
   }
 
   clear(): void {

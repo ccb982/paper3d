@@ -15,24 +15,7 @@ export type CompositeKind = 'protect' | 'act' | 'defend';
 /** 原子能力（小队能力四件套；march=距离长→长寻路，act=距离短→短跳） */
 export type AtomicKind = 'patrol' | 'garrison' | 'march' | 'act';
 
-export interface CompositeSpec {
-  readonly kind: CompositeKind;
-  /** 组成原子（优先级序；小队按事态选用） */
-  readonly atoms: readonly AtomicKind[];
-  /** 活动环（米；相对锚点）：目标必须夹进 [ringMin, ringMax]；0=不限制 */
-  readonly ringMin: number;
-  readonly ringMax: number;
-}
-
-/** 复合命令表（数据化；新增复合命令 = 加一条，不改原子层） */
-export const COMPOSITES: Readonly<Record<CompositeKind, CompositeSpec>> = {
-  /** 保护 = 巡逻 + 驻守 + 行动（守护锚点：如"近战保护工兵"） */
-  protect: { kind: 'protect', atoms: ['patrol', 'garrison', 'act'], ringMin: 4, ringMax: 30 },
-  /** 行动 = 行军 + 行动（去某点干活/接敌；距离自动选长/短寻路） */
-  act: { kind: 'act', atoms: ['march', 'act'], ringMin: 0, ringMax: 0 },
-  /** 防御 = 驻守 + 巡逻 + 行动（守区） */
-  defend: { kind: 'defend', atoms: ['garrison', 'patrol', 'act'], ringMin: 0, ringMax: 60 },
-};
+// ★ 复合 → 原子 的**条件表**在 `squad/AtomicSelect.ts`（唯一实现；引擎只选复合，队长选原子）。
 
 // ---------- 命令（引擎→队长 / 队长→自己 / 玩家） ----------
 

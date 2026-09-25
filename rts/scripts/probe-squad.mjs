@@ -49,12 +49,12 @@ for (let t = 0; t < N; t++) {
           uid, x: +p.x[i].toFixed(1), z: +p.z[i].toFixed(1), tier: p.tier[i],
           spd: +p.curSpeed[i].toFixed(2), mul: p.directiveSpeedMul[i], atom: p.atomMove[i],
           dk: p.directiveKind[i], dt: +Math.hypot(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i]).toFixed(1),
-          task: p.taskX[i] !== 0 || p.taskZ[i] !== 0 ? 1 : 0,
+
           blk: sw.data.blockedAt(p.x[i], p.z[i]) ? 1 : 0,
         };
       } else {
         const e = w.enemies.find((q) => q.swarmUid === uid && !q.dead);
-        d = e ? { uid, x: +e.position.x.toFixed(1), z: +e.position.z.toFixed(1), tier: 'L3', spd: 0, mul: 0, atom: -1, dk: 0, dt: 0, task: 0, blk: 0 } : { uid, gone: 1 };
+        d = e ? { uid, x: +e.position.x.toFixed(1), z: +e.position.z.toFixed(1), tier: 'L3', spd: 0, mul: 0, atom: -1, dk: 0, dt: 0, blk: 0 } : { uid, gone: 1 };
       }
       mem.push(d);
     }
@@ -94,8 +94,8 @@ for (let k = 0; k < samples.length; k++) {
   prevC = { x: cx, z: cz };
   for (const m of alive) {
     let a = memStat.get(m.uid);
-    if (!a) { a = { n: 0, spd: 0, dt: 0, task: 0, blk: 0, gone: false, last: null, move: 0 }; memStat.set(m.uid, a); }
-    a.n++; a.spd += m.spd; a.dt += m.dt; a.task += m.task; a.blk += m.blk;
+    if (!a) { a = { n: 0, spd: 0, dt: 0, blk: 0, gone: false, last: null, move: 0 }; memStat.set(m.uid, a); }
+    a.n++; a.spd += m.spd; a.dt += m.dt; a.blk += m.blk;
     if (a.last) a.move += Math.hypot(m.x - a.last.x, m.z - a.last.z);
     a.last = m;
   }
@@ -104,7 +104,7 @@ console.log(`\n样本 ${samples.length}（${(samples.length * 0.5).toFixed(0)}s�
 console.log(`回收：ledger recalled ${samples[samples.length - 1].led.recalled - samples[0].led.recalled}（计时器卡死累计 ${samples[samples.length - 1].recycled}）`);
 console.log('\n成员：uid 样本 平均速 平均指令距 任务% 挡格% 位移m');
 for (const [uid, a] of memStat) {
-  console.log(`  ${uid} ${a.n} ${(a.spd / a.n).toFixed(2)} ${(a.dt / a.n).toFixed(1)} ${((a.task / a.n) * 100).toFixed(0)}% ${((a.blk / a.n) * 100).toFixed(0)}% ${a.move.toFixed(0)}`);
+  console.log(`  ${uid} ${a.n} ${(a.spd / a.n).toFixed(2)} ${(a.dt / a.n).toFixed(1)} ${((a.blk / a.n) * 100).toFixed(0)}% ${a.move.toFixed(0)}`);
 }
 console.log('\n停滞段现场（每段首尾各 1 拍）：');
 for (const k of stalls.slice(0, 6)) {
@@ -112,7 +112,7 @@ for (const k of stalls.slice(0, 6)) {
     const s = samples[idx];
     if (!s) continue;
     const alive = s.mem.filter((m) => !m.gone);
-    const mem = alive.slice(0, 3).map((m) => `${m.uid}(${m.x},${m.z}) 速${m.spd} 指令${m.dk}距${m.dt} 任务${m.task} 挡${m.blk}`).join(' | ');
+    const mem = alive.slice(0, 3).map((m) => `${m.uid}(${m.x},${m.z}) 速${m.spd} 指令${m.dk}距${m.dt} 挡${m.blk}`).join(' | ');
     console.log(`  [${idx}] 令 ${s.order} | 走廊${s.corrN} [${s.corr}] 锚${s.anch} 起点${s.pathFrom} | ${mem}`);
   }
   console.log('  ---');

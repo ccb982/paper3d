@@ -1,10 +1,10 @@
 // ============================================================
 // engine/TimerManager —— 统一实体计时管理器（重写 P1；用户定 2026-09-24）
 // ============================================================
-// 用户口径：**计时销毁所有实体都做** → 提取专门管理器，一处管理全部实体计时：
+// 用户口径：**卡死窗口 + 开火许可闩锁**由本管理器统一管理（1Hz）。
 //   · 卡死窗口（净活动范围包围盒；语义与 STUCK 完全一致——从严，不改口径）
-//   · 计时销毁 / 寿命（deadline → onExpire；含 despawn 类）
 //   · 开火许可闩锁（AttackQueues 置/撤；允许后持续开火直到许可去除）
+//   · 计时销毁（寿命 despawn）= **实体基类能力**（`entity/base/Abilities` 的 despawn 状态机），不在此重复。
 // 实体只"上报/被查询"，不自己开表；本管理器是引擎侧（实体层不依赖 systems）。
 // 探针契约：readonly dbg（G9）。
 // ============================================================
@@ -32,14 +32,13 @@ interface StuckWin {
 
 export class TimerManager {
   private readonly stuck = new Map<number, StuckWin>();
-  private readonly deadlines = new Map<number, { at: number; why: string }>();
   private readonly fireLatch = new Set<number>();
-  /** 探针契约（G9）：每次 tick 重置计数；latched/expiredTotal/stuckTotal/lifeTotal = 累计 */
-  readonly dbg = { tracked: 0, exempt: 0, window: 0, expired: 0, expiredTotal: 0, stuckTotal: 0, lifeTotal: 0, latched: 0, last: '' };
+  /** 探针契约（G9）：每次 tick 重置计数；latched/expiredTotal/stuckTotal = 累计 */
+  readonly dbg = { tracked: 0, exempt: 0, window: 0, expired: 0, expiredTotal: 0, stuckTotal: 0, latched: 0, last: '' };
 
   constructor(private readonly h: TimerHost) {}
 
-  /** 1Hz：寿命到期检查 + 卡死窗口推进（now = 实秒） */
+  /** 1Hz：卡死窗口推进（now = 实秒） */
   tick(now: number): void {
     const dbg = this.dbg;
     dbg.tracked = 0;
@@ -47,19 +46,7 @@ export class TimerManager {
     dbg.window = 0;
     dbg.expired = 0;
 
-    // ---- 计时销毁 / 寿命 ----
-    for (const [uid, d] of this.deadlines) {
-      if (now < d.at) continue;
-      this.deadlines.delete(uid);
-      this.forget(uid);
-      dbg.expired++;
-      dbg.expiredTotal++;
-      dbg.lifeTotal++;
-      dbg.last = `despawn#${uid}:${d.why}`;
-      this.h.onExpire(uid, d.why);
-    }
-
-    // ---- 卡死窗口（口径（卡死回收已并入本管理器）：包围盒 > BBOX_R 即逃逸重开；连续 HOLD_S → 回收） ----
+    // ---- 卡死窗口（包围盒 > BBOX_R 即逃逸重开；连续 HOLD_S → 回收） ----
     for (const uid of this.h.roster()) {
       const p = this.h.posOf(uid);
       if (!p) {
@@ -102,11 +89,6 @@ export class TimerManager {
     if (this.stuck.size > 4096) this.stuck.clear();   // 防漏（同旧口径）
   }
 
-  /** 计时销毁登记（at = 实秒时刻；重复登记覆盖） */
-  setDeadline(uid: number, at: number, why: string): void {
-    this.deadlines.set(uid, { at, why });
-  }
-
   /** 开火许可闩锁：true=允许（持续开火，直到撤除）；false=撤除 */
   allowFire(uid: number, on: boolean): void {
     if (on) {
@@ -129,16 +111,14 @@ export class TimerManager {
     return rec !== undefined && rec.t >= STUCK.HOLD_S;
   }
 
-  /** 离场清理（卡死窗口 / 寿命 / 开火闩锁） */
+  /** 离场清理（卡死窗口 / 开火闩锁） */
   forget(uid: number): void {
     this.stuck.delete(uid);
-    this.deadlines.delete(uid);
     this.fireLatch.delete(uid);
   }
 
   clear(): void {
     this.stuck.clear();
-    this.deadlines.clear();
     this.fireLatch.clear();
   }
 }
