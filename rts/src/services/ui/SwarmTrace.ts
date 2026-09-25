@@ -92,7 +92,7 @@ export class SwarmTrace {
       });
       if (arr.length > CAP_S) arr.shift();
     }
-    const c = swarm.commander as unknown as {
+    const c = swarm.data as unknown as {
       stage?: string; battlePosture?: string; postureP?: number;
       builtSlots?: { size: number }; buildPieces?: unknown[]; digPasses?: { size: number };
       holeTable?: { holes: readonly { cells: number; maxDepth: number }[]; covers: readonly unknown[] };

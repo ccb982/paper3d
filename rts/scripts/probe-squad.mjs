@@ -50,7 +50,7 @@ for (let t = 0; t < N; t++) {
           spd: +p.curSpeed[i].toFixed(2), mul: p.directiveSpeedMul[i], atom: p.atomMove[i],
           dk: p.directiveKind[i], dt: +Math.hypot(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i]).toFixed(1),
           task: p.taskX[i] !== 0 || p.taskZ[i] !== 0 ? 1 : 0,
-          blk: sw.commander.blockedAt(p.x[i], p.z[i]) ? 1 : 0,
+          blk: sw.data.blockedAt(p.x[i], p.z[i]) ? 1 : 0,
         };
       } else {
         const e = w.enemies.find((q) => q.swarmUid === uid && !q.dead);

@@ -21,6 +21,7 @@ import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { validateOrder } from './OrderValidator';
 import { decideChain, type Decision } from './DecisionChain';
 import type { SpreadPt } from './Spread';
+import { releaseAt } from '../PostureFn';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -65,6 +66,16 @@ export interface LiveView {
   exemptOf?(uid: number): string | null;
   /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
   retire?(uid: number, why: string): boolean;
+  /** ★ 第一波已发（波次决策源：抵舰驻留） */
+  wave1?(): boolean;
+  /** ★ 归一当日进度 0~1（落地起算；指挥官数据面提供） */
+  t01?(): number;
+  /** ★ 兵力计划总数（账本；放行闸门用） */
+  ledgerTotal?(): number;
+  /** ★ 写兵力放行上限（账本闸门真源仍在账本） */
+  setReleaseCap?(cap: number): void;
+  /** ★ 生成大队（波次执行口；instant=整编一次性压上） */
+  spawnBattalion?(instant: boolean): boolean;
 }
 
 export class EngineBridge {
@@ -82,6 +93,12 @@ export class EngineBridge {
   /** 开火射程（米；canFire 判定） */
   fireRange = 25;
   private lastSlow = -1e9;
+  /** ★ 驻留窗口（第一波抵舰） */
+  private readonly holdUntil = new Map<number, number>();
+  /** ★ 波次/放行（决策源；用户定 2026-09-25 自指挥官迁入） */
+  private wave1Sent = false;
+  private finalSent = false;
+  private lastT01 = -1;
   readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, last: '' };
   /** 影子模式：只算不发（默认 false = 真下发；旧链已删，影子仅调试用） */
   shadow = false;
@@ -109,7 +126,7 @@ export class EngineBridge {
     this.engineer = new EngineerManager(this.squads, () => this.live.engineer?.() ?? null);
     this.core = new EngineCore({
       perceive: (now) => this.perceive(now),
-      situation: () => this.situation(),
+      situation: (now) => this.situation(now),
       decide: (now) => this.decide(now),
       write: (now) => this.write(now),
       debug: () => this.debug(),
@@ -211,7 +228,7 @@ export class EngineBridge {
     return Math.min(dp, ds) <= this.fireRange;
   }
 
-  private situation(): void {
+  private situation(now: number): void {
     const p = this.pos.player();
     if (!p) return;
     // 保护关系：玩家打某小队 → 登记保护（用最近的其他队当保护者）
@@ -224,6 +241,27 @@ export class EngineBridge {
       }
     }
     this.protect.refresh(this.pos.squadOf, p.x, p.z);
+    // ★ 波次/兵力放行（决策源；自指挥官迁入）：t01 回退（换落点/新一日）→ 波次复位
+    const t01 = this.live.t01?.() ?? 0;
+    if (t01 < this.lastT01 - 0.2) { this.wave1Sent = false; this.finalSent = false; }
+    this.lastT01 = t01;
+    const total = this.live.ledgerTotal?.() ?? 0;
+    this.live.setReleaseCap?.(Math.ceil(total * releaseAt(t01)));
+    if (!this.wave1Sent && t01 >= 0.45) {
+      this.wave1Sent = true;
+      this.live.spawnBattalion?.(false);
+      this.dbg.last = 'wave1';
+    }
+    if (!this.finalSent && t01 >= 0.80) {
+      this.finalSent = true;
+      this.live.spawnBattalion?.(true);
+      this.dbg.last = 'final';
+    }
+  }
+
+  /** ★ 第一波已发（波次决策源状态；main → LiveView.wave1） */
+  get wave1Active(): boolean {
+    return this.wave1Sent;
   }
 
   private decide(now: number): void {
@@ -284,21 +322,37 @@ export class EngineBridge {
         routine: t ?? null,
         retreat,
       });
-      if (!dec) {
+      // ★ 第一波抵舰驻留（波次决策源；用户定 2026-09-25 迁入）：抵舰 70m 内进攻令 → 驻守 45s；
+      //   期间血比 <0.45 → 后撤；到期交回常规。玩家令在身不覆盖。
+      let force: Decision | null = null;
+      const playerOwned = cur !== undefined && cur.order.source === 'player';
+      if (!playerOwned && (this.live.wave1?.() ?? false)) {
+        const sh = this.pos.ship();
+        const dShip = sh && sp ? Math.hypot(sp.x - sh.x, sp.z - sh.z) : Infinity;
+        const hold = this.holdUntil.get(rec.id) ?? 0;
+        const curKind = cur?.order.kind;
+        const attacking = curKind === 'act' || curKind === 'march';
+        if (attacking && dShip < 70 && now >= hold) {
+          this.holdUntil.set(rec.id, now + 45);
+          force = { source: 'situation', kind: 'defend', target: null, reason: '抵舰驻留' };
+        } else if (curKind === 'defend' && hold > 0) {
+          if ((rec.hpRatio ?? 1) < 0.45) {
+            this.holdUntil.delete(rec.id);
+            if (retreat) force = { source: 'wounded', kind: 'march', target: retreat, reason: '驻留被打退' };
+          } else if (now >= hold) {
+            this.holdUntil.delete(rec.id);   // 到期 → 交回常规决策
+          }
+        }
+      }
+      const final = force ?? dec;
+      if (!final) {
         if (cur) held.set(rec.id, cur.order.target);
         continue;
       }
       // 防御=守原地（target 为空时用**该队自身位置**；不是玩家位置——否则多队叠在同一目标=间距 0）
-      let tx = dec.target ? dec.target.x : sp?.x ?? rec.x;
-      let tz = dec.target ? dec.target.z : sp?.z ?? rec.z;
-      // ★ 守点粘性（防"目标=自身位置"每拍漂移 → cmdChanges 风暴）：现令也是 defend 且旧守点还在附近 → 沿用
-      if (dec.kind === 'defend' && cur && cur.order.kind === 'defend') {
-        const hx = sp?.x ?? rec.x, hz = sp?.z ?? rec.z;
-        if (Math.hypot(cur.order.target.x - hx, cur.order.target.z - hz) <= 10) {
-          tx = cur.order.target.x; tz = cur.order.target.z;
-        }
-      }
-      pending.push({ rec, cur, dec, tx, tz });
+      const tx = final.target ? final.target.x : sp?.x ?? rec.x;
+      const tz = final.target ? final.target.z : sp?.z ?? rec.z;
+      pending.push({ rec, cur, dec: final, tx, tz });
     }
     // ---- pass ②：统一校验链（①环 ②同兵种密度=本拍真实目标全局解 ③可达）→ 唯一发令器 ----
     let issued = 0, refreshed = 0;

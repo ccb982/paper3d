@@ -18,6 +18,7 @@ import { FlyerManager } from '../src/systems/swarm/engine/FlyerManager.ts';
 import { EngineerManager } from '../src/systems/swarm/engine/EngineerManager.ts';
 import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerManager.ts';
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
+import { selectAtomic } from '../src/systems/swarm/squad/AtomicSelect.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
 import { selectComposite } from '../src/systems/swarm/engine/Composites.ts';
@@ -200,7 +201,7 @@ console.log('[4] TimerManager 统一计时');
 }
 
 // ---------- Protect ----------
-console.log('[5] Protect 保护命令');
+console.log('[5] Protect 保护命令（引擎只给 G/P 双点）');
 {
   const pos = new Positions();
   const protect = new Protect();
@@ -211,13 +212,12 @@ console.log('[5] Protect 保护命令');
   ok(protect.dbg.links === 1, '保护关系登记');
   protect.refresh(pos.squadOf, 0, 0);
   const l = protect.linkOf(22);
-  ok(l !== null && l.last !== null && l.last.ok, '双点下发 + 阻挡校验通过（三点一线）');
-  ok(l?.gx === 8 && l?.px === 0, 'G/P 双点已提供');
-  // 保护者偏离 → 不 ok，给调整点
+  ok(l?.gx === 8 && l?.px === 0, 'G/P 双点已提供（信息单源）');
+  ok(l?.anchor.x === 8 && l?.anchor.z === 0, '保护锚 = G（引擎下发；不代算调整点）');
+  // 保护者偏离 → 双点照旧（队长自算阻挡）
   pos.setSquad(22, 5, 6);
   protect.refresh(pos.squadOf, 0, 0);
-  ok(protect.linkOf(22)?.last?.ok === false, '偏离 → 未挡住');
-  ok(protect.linkOf(22)?.last?.atom === 'act', '给出行动建议');
+  ok(protect.linkOf(22)?.anchor.x === 8, '偏离也照发 G（队长自主校验）');
   const spec = protect.orderSpecOf(22);
   ok(spec?.kind === 'protect' && spec.anchor.x === 8, '保护令草案带锚（G5）');
   // 被保护队丢失 → stale
@@ -226,6 +226,30 @@ console.log('[5] Protect 保护命令');
   ok(protect.dbg.stale === 1, '目标丢失 → stale');
   protect.release(22);
   ok(protect.dbg.links === 0, '解除保护关系');
+}
+
+// ---------- 复合 → 原子（队长层条件表） ----------
+console.log('[5b] AtomicSelect 复合→原子（条件表）');
+{
+  const mk = (over: Partial<Parameters<typeof selectAtomic>[0]['order']>) => ({
+    squadId: 1, issuedAt: 0, until: 0, source: 'engine' as const, notBefore: 0,
+    pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,
+    order: { kind: 'protect' as const, target: { x: 8, z: 0 }, threatX: 0, threatZ: 0, ...over },
+  });
+  // protect：P(0,0) G(8,0) B 在线上 standoff 带内 → 已挡住 → 驻守原地
+  const on = selectAtomic(mk({}) as never, 6, 0, null);
+  ok(on.atom === 'garrison' && on.x === 6, 'protect：已挡住 → 驻守（不挪窝）');
+  // protect：B 偏到 (6,6) → 未挡住 → 行动到调整点（P→G 线上）
+  const off = selectAtomic(mk({}) as never, 6, 6, null);
+  ok(off.atom === 'act' && Math.abs(off.z) < 0.01, 'protect：偏了 → 行动到调整点（线上）');
+  // protect：B 太远 (40,0)（P 距 40 > 带）→ 行军
+  const far = selectAtomic(mk({}) as never, 40, 0, null);
+  ok(far.atom === 'march', 'protect：离 P 太远 → 行军');
+  // act：距离三分
+  const act = { ...mk({ kind: 'act' as never, target: { x: 100, z: 0 } }) };
+  ok(selectAtomic(act as never, 0, 0, null).atom === 'march', 'act：>40 → 行军');
+  ok(selectAtomic(act as never, 80, 0, null).atom === 'act', 'act：20 → 行动');
+  ok(selectAtomic(act as never, 99.5, 0, null).atom === 'garrison', 'act：到位 → 驻守');
 }
 
 // ---------- Spread / OrderValidator / Composites ----------

@@ -1,36 +1,37 @@
 // ============================================================
-// SwarmCommander —— 蜂群指挥器（引擎侧：大队任务 / 小队覆盖 / BattalionView）
+// data/SwarmData —— 蜂群数据面（**无指挥语义**；重写 P4 归位）
 // ============================================================
-// 《实体架构.md》§5.11 命令层级：
-//   大队任务 BattalionMission（path + target，全队基线）
-//   → 小队覆盖 SquadOrder（引擎可对特定小队覆盖；subTargets 按 squadId 分派）
-//   → 队长个体指令（SquadTactics 分解 → 原子执行）
-// 输入面 BattalionView（各队评级 + 全局玩家/舰船位置）；战术决策（F3+）后续消费本层。
+// 职责（只做数据/查询/端口，不做决策、不发令）：
+//   · 地形与表：DefensePlan / TerrainScore / L1 语义 / L2 工事（HoleMask/HoleTable）/ PassTable
+//   · 事态与环：PostureFn（p/frontP）+ 环形活动区（ringBounds/clampToRing）+ t01 时钟
+//   · 工事数据：FortifyPlanner（需求/分区）+ 施工带（fortifyBand）+ 阶段 S1/S2
+//   · 编制与生成执行：CommanderSpawn + RosterController + 生成端口（模式层注入）
+// 消费方：新引擎（经 main/LiveView 单源读取）、队长核端口、导航/SteerPick 表桥、UI/探针只读。
 // ============================================================
 
-import { RasterMap } from '../../services/map/RasterMap';
-import type { SwarmSystem } from './SwarmSystem';
-import { analyzeLandingTerrain, type DefensePlan } from './LandingTerrain';
-import type { BattlePosture } from './Posture';
-import { PostureFn, releaseAt } from './PostureFn';
-import { RANGED } from './RangedTactics';
-import { TerrainScore, weightsFor } from './TerrainScore';
-import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from './TerrainSemantics';
-import { HoleMask } from './HoleMask';
-import { HoleTable } from './HoleTable';
-import { samplerFor } from '../../services/map/TerrainSampler';
-import { CommanderSpawn } from './CommanderSpawn';
-import { DANGER } from './SwarmDanger';
-import { PassTable } from './nav/PassTable';
-import { RosterController } from './RosterController';
-import { FortifyPlanner, NEED_DONE } from './FortifyPlanner';
-import type { EngineerPort } from './engine/EngineerManager';
-import { hasCoverFrom } from './UnitTactics';
-import { scoreForUnit } from './UnitStrategy';
-import { setSteerTable } from '../../entity/SteerPick';
-import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../entity/CoverEntity';
-import type { SquadRating } from './SquadTable';
-import type { UnitRole, SquadType, MobTactics } from '../../entity/SwarmUnit';
+import { RasterMap } from '../../../services/map/RasterMap';
+import type { SwarmSystem } from '../SwarmSystem';
+import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
+import type { BattlePosture } from '../Posture';
+import { PostureFn } from '../PostureFn';
+import { RANGED } from '../RangedTactics';
+import { TerrainScore, weightsFor } from '../TerrainScore';
+import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from '../TerrainSemantics';
+import { HoleMask } from '../HoleMask';
+import { HoleTable } from '../HoleTable';
+import { samplerFor } from '../../../services/map/TerrainSampler';
+import { CommanderSpawn } from '../CommanderSpawn';
+import { DANGER } from '../SwarmDanger';
+import { PassTable } from '../nav/PassTable';
+import { RosterController } from '../RosterController';
+import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
+import type { EngineerPort } from '../engine/EngineerManager';
+import { hasCoverFrom } from '../UnitTactics';
+import { scoreForUnit } from '../UnitStrategy';
+import { setSteerTable } from '../../../entity/SteerPick';
+import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../../entity/CoverEntity';
+import type { SquadRating } from '../SquadTable';
+import type { UnitRole, SquadType, MobTactics } from '../../../entity/SwarmUnit';
 
 /** ★ 坑底硬阈值（低于此高度不可走 → 禁止再挖；与 EngineerManager 端口同口径） */
 const FLOOR_MIN = -1.2;
@@ -49,7 +50,7 @@ export interface BattalionView {
   now: number;
 }
 
-export class SwarmCommander {
+export class SwarmData {
   /** ★ S0 勘察：地形检测产出的防守布置 */
   private plan: DefensePlan | null = null;
   /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《敌人管线设计.md》§1；落地/换落点重算） */
@@ -93,9 +94,6 @@ export class SwarmCommander {
   /** 挑衅采样：最近命中戳（防重复计）+ 击杀差分 */
   private readonly hitSeen = new Map<number, number>();
   private lastKills = 0;
-  /** 单日节律增兵：第一波 / 总攻 是否已增兵 */
-  private wave1Sent = false;
-  private finalSent = false;
   /** ★ 调试/测试：日程进度覆盖（0~1；<0 = 关闭覆盖，用太阳钟） */
   debugDayT01 = -1;
   /** ★ 最近一次归一化当日进度（时间轴 UI 读） */
@@ -224,11 +222,9 @@ export class SwarmCommander {
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
     this.spawn.reset();
     this.pushM = 0;   // ★ 前推里程复位（换落点）
-    // ★ 单日节律复位（§3.5）：日程从落地重新走，波次标记/挑衅采样清零
+    // ★ 单日节律复位（§3.5）：日程从落地重新走，挑衅采样清零（波次标记在引擎，t01 回退自动复位）
     this.rhythmT = 0;
     this.t01Base = -1;
-    this.wave1Sent = false;
-    this.finalSent = false;
     this.hitSeen.clear();
     setSteerTable(null);
     this.lastKills = this.swarm.ledger.kills;
@@ -331,13 +327,12 @@ export class SwarmCommander {
         ? 1
         : Math.min(1, Math.max(0, (dRaw - this.t01Base) / (1 - this.t01Base)));
     } else {
-      t01 = Math.min(1, this.rhythmT / SwarmCommander.DAY_RHYTHM_S);
+      t01 = Math.min(1, this.rhythmT / SwarmData.DAY_RHYTHM_S);
     }
     this.lastT01 = t01;
     // ★ 距离系数时间增益（用户定 2026-09-25）：t01=0 → ×1；t01=1 → ×(1+24)=×25（碾压地形）
     this.terrainScore.distGain = 1 + 24 * Math.max(0, Math.min(1, t01));
-    // ★ 兵力放行（日节律）：早间只放少量 → 基数 → 第一波/总攻放宽（账本闸门是唯一真源）
-    this.swarm.ledger.releaseCap = Math.ceil(this.swarm.ledger.total * releaseAt(t01));
+    // ★ 兵力放行/波次已迁新引擎（EngineBridge.situation）；本层只算事态与环
     for (const [id, t] of this.swarm.recentHits) {
       if (this.hitSeen.get(id) !== t) { this.hitSeen.set(id, t); this.postureFn.provoke(0.01); }
     }
@@ -409,22 +404,8 @@ export class SwarmCommander {
     this.ringTick(shipX, shipZ);
     // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
     this.spawn.drain(dt);
-    // ★ 单日节律增兵（§3.5）：第一波（t01≥0.45）与总攻（t01≥0.80）各来一个大队；
-    //   开局班底 + 逐步补满的基数是常备，两个波峰才是"大量增兵"（BATTALION_MAX 兜底）
-    if (this.plan && this.stage !== 'S0') {
-      if (!this.wave1Sent && t01 >= 0.45) {
-        this.wave1Sent = true;
-        this.spawnBattalion();
-        this.lastDecision = { squad: -1, kind: 'wave1', at: now };
-      }
-      if (!this.finalSent && t01 >= 0.80) {
-        this.finalSent = true;
-        this.spawnBattalion(true);   // 总攻：整编一次性压上
-        this.lastDecision = { squad: -1, kind: 'final', at: now };
-      }
-    }
-    // ★ 第一波抵舰驻留 / 磨蹭兜底 / 层级越位 / 扎堆切向 = 旧战斗指挥链（已删）
-    //   若需保留这些战术：迁入新引擎 DecisionChain 的 intervention 槽（见《蜂群重写计划.md》P4）
+    // ★ 波次判定/兵力放行已迁新引擎（`EngineBridge.situation`：t01 + releaseAt → setReleaseCap/spawnBattalion）
+    //   本层只留生成执行（CommanderSpawn）与地形/工事数据。
   }
 
   /** ★ 工兵数据/落地端口（新引擎 EngineerManager 消费；旧工事指挥链已销毁）：
@@ -466,7 +447,7 @@ export class SwarmCommander {
     const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
     const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
     const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m
-    const rb = SwarmCommander.ringBounds(this.lastT01, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
+    const rb = SwarmData.ringBounds(this.lastT01, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
     this.frontMinD = rb.minD;
     this.frontMaxD = rb.maxD;
     this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环/工事基准（单源）
@@ -697,8 +678,6 @@ export class SwarmCommander {
     this.aliveAtPosture = 0;
     this.rhythmT = 0;
     this.t01Base = -1;
-    this.wave1Sent = false;
-    this.finalSent = false;
     this.debugDayT01 = -1;
     this.hitSeen.clear();
     this.postureP = 0;

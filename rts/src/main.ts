@@ -216,14 +216,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   spawner.refreshEnemyScale();   // ★ 敌强口径（按会话/天数；此处桩会话）
   // ★ 指挥器端口接线（兵力创建/工事全权在指挥层；spawnMob/spawnBuilder/buildCover/digTrench）
   wireCommanderPorts({
-    commander: swarm.commander, spawner, raster, mobDefs, entities, scene, chunks,
+    data: swarm.data, spawner, raster, mobDefs, entities, scene, chunks,
     surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
     playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
   hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
-  swarm.commander.buildCover = (x, z, v) =>
-    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.commander.defensePlan, { x: spawn.x, z: spawn.z });
+  swarm.data.buildCover = (x, z, v) =>
+    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, { x: spawn.x, z: spawn.z });
   // ★ 事态环形夹取：**引擎令 + 队长令同门**——新引擎 OrderValidator ① + 队长核 clampRing 端口
   //   （旧 `tactics.ringClamp` 写口已删；环是单源：commander.clampToRing）
 
@@ -283,7 +283,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         return out;
       },
       /** ★ 工兵端口（新引擎全权）：建造位置查询（危险点/扇区弧链随机可达点）+ 施工落地 */
-      engineer: () => swarm.commander.engineerPort(),
+      engineer: () => swarm.data.engineerPort(),
+      /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
+      wave1: () => shadowBridge?.wave1Active ?? false,
+      /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
+      t01: () => swarm.data.lastT01,
+      ledgerTotal: () => swarm.ledger.total,
+      setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
+      spawnBattalion: (instant: boolean) => swarm.data.spawnBattalion(instant),
       /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判 */
       exemptOf: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
@@ -344,9 +351,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       {
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
-        leaderTarget: (state, squad, lx, lz, now) => resolveAnchor(state, lx, lz, squad.type, now, swarm.commander.terrain),
-        clampRing: (x, z) => swarm.commander.clampToRing(x, z),
-        terrain: () => swarm.commander.terrain,
+        leaderTarget: (state, squad, lx, lz, now) => resolveAnchor(state, lx, lz, squad.type, now, swarm.data.terrain),
+        clampRing: (x, z) => swarm.data.clampToRing(x, z),
+        terrain: () => swarm.data.terrain,
         mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,
         applyDirective: (uid, order, dir, until, ax, az) => swarm.applyDirectivePort(uid, order, dir, until, ax, az),
@@ -429,7 +436,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 快车道结算（代理直扣 / 实体走管线）；K = 对相机中心 18m 内造成 15 伤害（演示/测试口）
   const fastLane = new FastLane(swarm, enemies);
   // ★ 时间轴（拖动 = 绝对当日进度；事态/闸门/命令随之重算）
-  const timeline = new Timeline(swarm.commander);
+  const timeline = new Timeline(swarm.data);
   timeline.onChange = () => { navMap.redrawNow(); enemyPanel.refreshNow(); };   // ★ 时间轴一动：小地图/列表立即重绘
   // ★ 贴地/悬停/掉坑结算（原 WorldMode：玩家 + 每个敌人实体每帧）
   const charClamp = new CharacterClamp({
@@ -449,7 +456,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       const a = (k / 16) * Math.PI * 2;
       const x = spawn.x + Math.cos(a) * 160;
       const z = spawn.z + Math.sin(a) * 160;
-      if (swarm.commander.blockedAt(x, z)) continue;
+      if (swarm.data.blockedAt(x, z)) continue;
       if (raster.surfaceHeightAtFor(x, z, 0) < -1.0) continue;
       return { x, z };
     }
@@ -459,7 +466,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   try {
     // ★ 建表半径必须**覆盖舰船**（长行军目标=舰；否则目标在表外 → 长寻路回落失败）
     const tableR = Math.min(240, Math.ceil(Math.hypot(landing.x - spawn.x, landing.z - spawn.z)) + 60);
-    swarm.commander.planDefense(landing.x, landing.z, tableR);
+    swarm.data.planDefense(landing.x, landing.z, tableR);
   } catch (e) {
     console.warn('[rts] planDefense 失败（命令链仍可手动）', e);
   }
@@ -699,7 +706,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     swarm.update(h, hooks);
     // ★ 事态环单源（用户定）：新引擎 OrderValidator ① 用指挥官（PostureFn）的环——不是自带默认值
     if (shadowBridge) {
-      const rg = swarm.commander.ring;
+      const rg = swarm.data.ring;
       shadowBridge.dbg.ringMin = rg.minD >= 0 ? rg.minD : 0;
       shadowBridge.dbg.ringMax = rg.maxD >= 0 ? rg.maxD : 0;
     }

@@ -10,7 +10,7 @@
 // 输出用模块单例对象（零分配热点路径）。
 // ============================================================
 
-/** 表只读接口（SwarmCommander 实现；避免 entity 层依赖） */
+/** 表只读接口（data/SwarmData 实现；避免 entity 层依赖） */
 export interface SteerTable {
   scoreAt(x: number, z: number): number | null;
   /** ★ L3 兵种分（可选；重构 P1-2）：有则 8 向候选按该兵种打分，无则回退 scoreAt */

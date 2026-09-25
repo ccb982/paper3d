@@ -759,7 +759,7 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
     this.swarmHooks.mobTactics = (mi) => this.mobDefs[mi]?.tactics ?? null;   // ★ 逐兵种战术表
     // ★ 蜂群指挥器端口（兵力/工事全权在指挥层；地形扫描延后到 finishDock 真实落点，enter 时舰位在水面会扫空）
-    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
+    wireCommanderPorts({ data: this.swarm.data, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
@@ -796,7 +796,7 @@ export class WorldMode implements IGameMode {
       // ★ 控制台测试入口（验证命令链）：
       //   __swarm.issueOrder(squadId, { kind:'advance', target:{x,z}, seq:1 })
       (window as unknown as { __swarm?: unknown }).__swarm = this.swarm;
-      (window as unknown as { __commander?: unknown }).__commander = this.swarm.commander;
+      (window as unknown as { __commander?: unknown }).__commander = this.swarm.data;
     }
     // ★ 敌人轨迹快照（?swarmtrace=1）：1Hz 记录每只敌人走位 + 每队命令 + 工程进度
     if (location.search.includes('swarmtrace')) {
@@ -1411,7 +1411,7 @@ export class WorldMode implements IGameMode {
       this.swarm.update(dt, hooks);
       this.updateSwarmDbg(dt);
       this.swarmTrace?.sample(dt, this.swarm, pp.x, pp.y);   // pp = 地面坐标 (x, y=z)
-      const cmdr = this.swarm.commander;
+      const cmdr = this.swarm.data;
       this.tableViewer?.tick(cmdr.semantics, this.raster, cmdr.holeMask, cmdr.holeTable, dt);
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
@@ -1420,7 +1420,7 @@ export class WorldMode implements IGameMode {
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
       // ---- ★ 攻势播报（M3.5：节奏唯一来源 = PostureFn；这里只把姿态变化播给 UI） ----
-      this.swarmDirector.announce(this.swarm.commander.battlePosture, this.swarm.commander.postureP);
+      this.swarmDirector.announce(this.swarm.data.battlePosture, this.swarm.data.postureP);
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);
@@ -2837,7 +2837,7 @@ export class WorldMode implements IGameMode {
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
     // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；展开轴=扫描走廊（掩体朝舰船，战壕脚底下）
-    this.swarm.commander.planDefense(sp.x, sp.z, 80);
+    this.swarm.data.planDefense(sp.x, sp.z, 80);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;

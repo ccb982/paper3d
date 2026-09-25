@@ -209,7 +209,8 @@ if (newFiles.length) {
   /** G4 信息单源：世界位置只许 engine/ 读（禁直读 spawn/hooks） */
   const WORLD_READ = /(?:hooks\.(?:playerX|playerZ|shipX|shipZ)|spawn\.[xz]\b)/;
   /** G5 保护锚专用：squad/ 不得写 anchor */
-  const ANCHOR_WRITE = /\banchor\s*[:=]/;
+  // G5 只查**写保护锚**（属性赋值 `.anchor =`）；局部变量/参数名 `anchor:` 是读取解析，不算
+  const ANCHOR_WRITE = /\.anchor\s*[:=]/;
   /** G6 时间尺度：engine/ 与 squad/ 禁裸 performance.now()（now 从 tick 参数传入） */
   const NOW_CALL = /performance\.now\(\)/;
   /** G7 寻路不改地形：nav/ 禁写地形表列 */

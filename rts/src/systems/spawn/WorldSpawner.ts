@@ -264,7 +264,7 @@ export class WorldSpawner implements SwarmTierPort {
     this.deps.swarm.recallAll();
     const out: { mobIndex: number; role: UnitRole; count: number }[] = [];
     for (const [mobIndex, r] of roster) out.push({ mobIndex, role: r.role, count: r.count });
-    this.deps.swarm.commander.setRecalledRoster(out);
+    this.deps.swarm.data.setRecalledRoster(out);
   }
 
   /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */

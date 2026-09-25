@@ -149,7 +149,7 @@ const setup = await page.evaluate(({ px, pz, lx, lz, nest, camFar }) => {
   window.__camFar = camFar;
   const w = window.__rts;
   w.swarm.ledger.canSpawn = () => false;          // ★ 饿死引擎（手动放置走 force 不受限）
-  w.swarm.commander.clampToRing = (x, z) => ({ x, z });   // ★ 关事态环夹取（隔离山地寻路）
+  w.swarm.data.clampToRing = (x, z) => ({ x, z });   // ★ 关事态环夹取（隔离山地寻路）
   w.spawn.x = px; w.spawn.z = pz;
   if (window.__camFar) { w.cam.tx = px + 210; w.cam.tz = pz + 210; w.cam.dist = 60; w.cam.pitch = 1.05; }
   else { w.cam.tx = px; w.cam.tz = pz; w.cam.dist = 240; w.cam.pitch = 1.05; }
@@ -231,7 +231,7 @@ while (!stop) {
         dAbs: `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}`,
         oTgt: `${p.orderTargetX[i] | 0},${p.orderTargetZ[i] | 0}`,
         task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
-        blk: sw.commander.blockedAt(p.x[i], p.z[i]) ? 1 : 0, tier: p.tier[i], mAcc: +p.moveAcc[i].toFixed(2),
+        blk: sw.data.blockedAt(p.x[i], p.z[i]) ? 1 : 0, tier: p.tier[i], mAcc: +p.moveAcc[i].toFixed(2),
         order: st?.order ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.order.source} 剩${(st.until - performance.now() / 1000).toFixed(0)}s` : '-',
         corr: st?.corridor?.length ?? -1,
         corrPts: st?.corridor ? st.corridor.slice(0, 6).map((q) => `${q.x | 0},${q.z | 0}`).join('>') : '-',

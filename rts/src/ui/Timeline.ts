@@ -3,7 +3,7 @@
 //   拖动 = **绝对**设置当日进度（06:00→18:00，0~1）：事态函数/闸门/引擎令随之重算
 //   标记：0.45 第一波 · 0.80 总攻；勾选「跟随实时」恢复自然时钟
 // ============================================================
-import type { SwarmCommander } from '../systems/swarm/SwarmCommander';
+import type { SwarmData } from '../systems/swarm/data/SwarmData';
 
 export class Timeline {
   /** ★ 时间变化回调（小地图/列表立即重绘用） */
@@ -14,7 +14,7 @@ export class Timeline {
   private readonly follow: HTMLInputElement;
   private lastRefresh = 0;
 
-  constructor(private readonly commander: SwarmCommander) {
+  constructor(private readonly data: SwarmData) {
     this.root = document.createElement('div');
     this.root.style.cssText = [
       'position:fixed', 'left:50%', 'bottom:10px', 'transform:translateX(-50%)',
@@ -34,7 +34,7 @@ export class Timeline {
     this.follow = document.createElement('input');
     this.follow.type = 'checkbox';
     this.follow.checked = true;
-    this.follow.onchange = () => { if (this.follow.checked) { this.commander.followRealtime(); this.onChange?.(); } };
+    this.follow.onchange = () => { if (this.follow.checked) { this.data.followRealtime(); this.onChange?.(); } };
     followLab.append(this.follow, document.createTextNode('跟随实时'));
     head.append(title, this.infoEl, followLab);
 
@@ -46,7 +46,7 @@ export class Timeline {
     this.slider.style.cssText = 'width:100%;margin-top:4px;accent-color:#3399ff;';
     this.slider.oninput = () => {
       this.follow.checked = false;
-      this.commander.scrubDay(Number(this.slider.value) / 1000);
+      this.data.scrubDay(Number(this.slider.value) / 1000);
       this.sync();
       this.onChange?.();
     };
@@ -70,7 +70,7 @@ export class Timeline {
     const now = performance.now();
     if (now - this.lastRefresh < 500) return;
     this.lastRefresh = now;
-    if (this.follow.checked) this.slider.value = String(Math.round(this.commander.lastT01 * 1000));
+    if (this.follow.checked) this.slider.value = String(Math.round(this.data.lastT01 * 1000));
     this.sync();
   }
 
@@ -79,9 +79,9 @@ export class Timeline {
     const hour = 6 + v * 12;
     const hh = Math.floor(hour);
     const mm = Math.floor((hour - hh) * 60);
-    const band = this.commander.fortifyBand;
+    const band = this.data.fortifyBand;
     this.infoEl.textContent =
-      `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${this.commander.stage}/${this.commander.battlePosture}`
+      `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${this.data.stage}/${this.data.battlePosture}`
       + ` · frontP=${band.frontP.toFixed(2)} · 下限=${band.minD > 0 ? band.minD.toFixed(0) : '-'}m`
       + ` · 上限=${band.maxD > 0 ? band.maxD.toFixed(0) : '-'}m · 前推+${band.pushM.toFixed(0)}m`
       + ` · 速度×${(globalThis as unknown as { __rts?: { speed?: number } }).__rts?.speed ?? 1}（, / . 调速）`;

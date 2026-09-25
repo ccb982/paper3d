@@ -3,8 +3,8 @@
 // ============================================================
 // 队长只做三件事：
 //   ① 接令：命令唯一来源 = SquadOrderStore（引擎/玩家同源）
-//   ② 导航+调遣：按距离选 **行军**（长寻路）/ **行动**（短跳）；走廊锚点 → 队长走；
-//      成员**围队长**（阵型槽位）——队长不给代理下命令，成员一律跟队长走
+//   ② 复合→原子：`squad/AtomicSelect` 条件表选 **行军/行动/驻守/巡逻**；
+//      走廊锚点 → 队长走；成员**围队长**（阵型槽位）——队长不给代理下战术命令
 //   ③ 汇报：唯一接收器 SquadManager.report（进度/位置/原子/阶段）
 // 纯逻辑（寻路/指令落地由端口注入）→ 可独立自检。
 // ============================================================
@@ -18,11 +18,10 @@ import { onArriveAtom } from './Abilities';
 import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
 import { formationOffset } from './Formation';
 import { decompose } from './Decompose';
+import { selectAtomic, MARCH_DIST, ARRIVE_R } from './AtomicSelect';
 
-/** 距离分流阈值（米；用户定：行军=距离长→长寻路，行动=距离短→短跳） */
-export const MARCH_DIST = 40;
-/** 到位半径（米） */
-export const ARRIVE_R = 1.5;
+// 距离分流阈值单源在 AtomicSelect（兼容旧引用：再导出）
+export { MARCH_DIST, ARRIVE_R } from './AtomicSelect';
 
 export interface SquadNav {
   /** 长寻路：返回路径长度（米）；-1 = 不可达 */
@@ -81,6 +80,8 @@ export class SquadCore {
   private lastZ = 0;
   /** 指令序号（队内单调） */
   private seq = 1;
+  /** 本拍是否已 drive（原子由 selectAtomic 决定；tick 不覆盖） */
+  private driven = false;
 
   constructor(readonly id: number, readonly role: MobRole, private readonly ports: SquadPorts) {}
 
@@ -103,7 +104,7 @@ export class SquadCore {
     return this.order;
   }
 
-  /** 队长驱动（每帧；执行层调遣——走廊锚点 + 成员围队长 + 指令落地） */
+  /** 队长驱动（每帧；执行层调遣——复合→原子 + 走廊锚点 + 成员围队长 + 指令落地） */
   drive(squad: Squad, now: number, port: SquadDrivePorts): void {
     const o = this.order;
     if (!o) return;
@@ -117,22 +118,35 @@ export class SquadCore {
     if (st.until > 0 && now > st.until && st.source !== 'player') return;
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
-    // ① 寻路轨：队长走廊（长行军 A* / 短跳贪心；覆盖式写入 st）
-    port.ensurePath(st, squad, now);
-    // ② 队长锚点（保护/驻守站位 + 走廊前瞻 + 环夹取）
-    const at = port.leaderTarget(st, squad, lx, lz, now);
-    let ax = at?.x ?? o.target.x;
-    let az = at?.z ?? o.target.z;
+    // ① 站位锚（defend/act/patrol 经 resolveAnchor；protect 走 blockCheck 调整点，不用锚）
+    let anchor: { x: number; z: number } | null = null;
+    if (st.order.kind !== 'protect') {
+      port.ensurePath(st, squad, now);   // 寻路轨：队长走廊（长行军 A* / 短跳贪心）
+      anchor = port.leaderTarget(st, squad, lx, lz, now);
+    }
+    // ② 复合 → 原子（条件表 = `squad/AtomicSelect.ts`；protect 用 blockCheck 调整点）
+    const sel = selectAtomic(st, lx, lz, anchor);
+    // ③ protect：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
+    if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
+      st.order.target = { x: sel.x, z: sel.z };
+      port.ensurePath(st, squad, now);
+    }
+    // ④ 队长目标（protect 已挡住 → 原地驻守；其余 = 原子目标）→ 环夹取
+    let ax = sel.x;
+    let az = sel.z;
+    if (sel.atom === 'garrison' && st.order.kind === 'protect') { ax = lx; az = lz; }
     const c = port.clampRing(ax, az);
     ax = c.x; az = c.z;
-    // ③ 成员调遣：分解矩阵 + 开火门 + 围队长（队长走锚点）
+    this.atom = sel.atom;   // 原子自报（tick 不再按距离覆盖）
+    this.driven = true;
+    // ⑤ 成员调遣：分解矩阵 + 开火门 + 围队长（队长走原子目标）
     const bucket = squadBucket(squad.type);
     const uids: number[] = [];
     for (const uid of squad.members.keys()) uids.push(uid);
     const fl = Math.hypot(ax - lx, az - lz);
     const fx = fl > 1e-3 ? (ax - lx) / fl : 1;
     const fz = fl > 1e-3 ? (az - lz) / fl : 0;
-    const atTarget = at ? { x: ax, z: az } : null;
+    const atTarget = { x: ax, z: az };
     let rank = 0;
     for (const uid of uids) {
       const info = squad.members.get(uid);
@@ -180,15 +194,17 @@ export class SquadCore {
       this.report();
       return;
     }
-    if (d > MARCH_DIST) {
-      // 行军：长寻路（不可达 → 原地待报，引擎换点/缩近）
-      this.atom = 'march';
-      if (this.ports.nav.longPath(o.target.x, o.target.z) > 0) this.dbg.long++;
-    } else {
-      // 行动：短跳（LOS 直线）
-      this.atom = 'act';
-      if (this.ports.nav.canHop(o.target.x, o.target.z)) this.dbg.short++;
+    // 无 drive（自检/降级）时按距离兜底；实机原子由 drive 的 selectAtomic 决定
+    if (!this.driven) {
+      if (d > MARCH_DIST) {
+        this.atom = 'march';
+        if (this.ports.nav.longPath(o.target.x, o.target.z) > 0) this.dbg.long++;
+      } else {
+        this.atom = 'act';
+        if (this.ports.nav.canHop(o.target.x, o.target.z)) this.dbg.short++;
+      }
     }
+    this.driven = false;
     this.phase = 'executing';
     this.report();
   }

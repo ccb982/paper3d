@@ -29,7 +29,7 @@ import { followDir, leaderDir, followStopR } from './squad/Follow';
 import type { SquadOrderState } from './squad/State';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
-import { SwarmCommander } from './SwarmCommander';
+import { SwarmData } from './data/SwarmData';
 import {
   roleFromCode, orderFromCode, directiveFromCode, orderCode, directiveCode, fireCode, roleBucket,
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
@@ -119,7 +119,7 @@ export class SwarmSystem {
   /** ★ 队注销回调（全灭/收编）：main 接线清队长核/引擎 store */
   private squadGone: ((id: number) => void) | null = null;
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
-  readonly commander = new SwarmCommander(this);
+  readonly data = new SwarmData(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
   readonly recentHits = new Map<number, number>();
   /** ★ 步骤 10：倾盆而出截止（秒；0 = 未触发） */
@@ -151,7 +151,7 @@ export class SwarmSystem {
   private tokenUsed = [0, 0, 0];
 
   constructor() {
-    this.nav.pathMul = (type, x, z) => this.commander.pathMulFor(type, x, z);   // ★ 掩体折扣 × 兵种亲和（P1-3）
+    this.nav.pathMul = (type, x, z) => this.data.pathMulFor(type, x, z);   // ★ 掩体折扣 × 兵种亲和（P1-3）
     // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
     //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种。
     //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。
@@ -306,7 +306,7 @@ export class SwarmSystem {
     }
 
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
-    this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
+    this.data.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
     // ★ 队长层调遣（squad/SquadCore.drive）由 main 每帧驱动（成员指令唯一写口 = applyDirective）
 
@@ -423,7 +423,7 @@ export class SwarmSystem {
       this.steerAccum = 0;
       if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
       this.nav.steerEntities(hooks.activeUnits?.(), this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
-        (x, z, r) => this.commander.rangedPost(x, z, r));
+        (x, z, r) => this.data.rangedPost(x, z, r));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
@@ -628,7 +628,7 @@ export class SwarmSystem {
       }
       // ★ 远程不追打（让位本地移动 atomMove=255，否则原子覆盖仍按 directiveTarget 走向玩家）
       if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
-        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.commander.rangedPost(x, z, r));
+        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.data.rangedPost(x, z, r));
         destX = t ? t.x : px;
         destZ = t ? t.z : pz;
         p.fromFlow[i] = 0;
@@ -764,11 +764,11 @@ export class SwarmSystem {
     }
     // ★ 爬山（共享基础方法 TerrainAssist；L2/L3 同内核）：坡正面混合（水=正常地块，无特殊）
     if (p.isAir[i] !== 1) {
-      fallLineBlend(this.commander, p.x[i], p.z[i], dx, dz, _dir);
+      fallLineBlend(this.data, p.x[i], p.z[i], dx, dz, _dir);
       dx = _dir.x; dz = _dir.z;
     }
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
-    const inside = this.commander.blockedAt(p.x[i], p.z[i]);
+    const inside = this.data.blockedAt(p.x[i], p.z[i]);
     if (dx !== 0 || dz !== 0 || inside) {
       p.hazardTimer[i] -= dt;
       const raster = RasterMap.current;
@@ -777,14 +777,14 @@ export class SwarmSystem {
       const dangerAt = (hx: number, hz: number): boolean => {
         if (!raster) return false;
         if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
-        if (this.commander.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
+        if (this.data.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
         return dangerPointAt(raster, hx, hz, p.x[i], p.z[i], hint);   // 坑/过低/立面（共享内核）
       };
       const res = pickSteer(
         p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
         p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], performance.now() / 1000,
-        this.commander.blockedAt(p.x[i], p.z[i]),
-        dangerAt, this.commander,
+        this.data.blockedAt(p.x[i], p.z[i]),
+        dangerAt, this.data,
         p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
         this.squads.squadOf(p.swarmUid[i])?.type,   // ★ L3 兵种分（重构 P1-2；mixed=兵种中立）
       );
@@ -1039,7 +1039,7 @@ export class SwarmSystem {
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
-    this.nav.stampFn = () => this.commander.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
+    this.nav.stampFn = () => this.data.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
   }
 
   /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */
@@ -1125,7 +1125,7 @@ export class SwarmSystem {
     this.leaderChanges.length = 0;
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
-    this.commander.clear();
+    this.data.clear();
     this.recentHits.clear();
     this.counterUntil = 0;
     this.lastPlayerX = 0;

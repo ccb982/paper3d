@@ -125,7 +125,7 @@ export function updateSwarmDebug(dbg: SwarmDebugOverlay, host: SwarmDbgHost): vo
     info.push(`实体 d=${Math.sqrt(bestED).toFixed(1)}m AI=${bestE.aiStateMachine?.currentState ?? '-'} 禁火=${bestE.fireHold} 指令=${bestE.directiveKind} 命令=${bestE.orderKind}`);
   }
   // ★ M2：态势函数一行（p = schedule + provocation；日程 = 太阳钟）
-  info.push(swarm.commander.postureInfo());
+  info.push(swarm.data.postureInfo());
   dbg.update(host.camera, units, squads, info);
 
   // ---- 可复制面板文本：小队（属性/队长/命令）+ 指令聚合 ----

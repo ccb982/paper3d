@@ -207,8 +207,8 @@ export class NavDebugMap {
       const sp = this.shipAt();
       const [sx, sz] = p2(sp.x, sp.z);
       const sPx = S / this.span;
-      const fort = this.swarm.commander.fortify;
-      const band = this.swarm.commander.fortifyBand;   // ★ 单源（含 pushM/前推棘轮）
+      const fort = this.swarm.data.fortify;
+      const band = this.swarm.data.fortifyBand;   // ★ 单源（含 pushM/前推棘轮）
       const rLo = band.rLo;
       const rHi = band.rHi;
       // ★ 事态函数：环形活动区上下限（下限=允许离舰 / 上限=第一波收拢到舰）

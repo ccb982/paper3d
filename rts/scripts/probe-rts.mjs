@@ -25,7 +25,7 @@ await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60
 
 const probe = () => page.evaluate(() => {
   try {
-    const w = window.__rts; const sw = w?.swarm; const c = sw?.commander;
+    const w = window.__rts; const sw = w?.swarm; const c = sw?.data;
   const views = new Map((w?.engineView?.squads() ?? []).map((v) => [v.id, v]));
   const squads = [];
   let n = 0;
@@ -45,7 +45,7 @@ const probe = () => page.evaluate(() => {
     drops: sw?.orderDrops ?? null,
     clamps: c?.cmdLogRingClamps ?? null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
-    gain: sw?.commander?.terrainScore?.distGain ? +sw.commander.terrainScore.distGain.toFixed(1) : null,
+    gain: sw?.data?.terrainScore?.distGain ? +sw.data.terrainScore.distGain.toFixed(1) : null,
     nav: sw?.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail } : null,
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     plan: !!c?.plan,
@@ -69,7 +69,7 @@ const probe = () => page.evaluate(() => {
           task: `${p.taskX[i] | 0},${p.taskZ[i] | 0}`,
           dirTgt: `${p.directiveTargetX[i] | 0},${p.directiveTargetZ[i] | 0}`,
           spd: +p.curSpeed[i].toFixed(2), mul: p.directiveSpeedMul[i],
-          blocked: sw.commander.blockedAt(p.x[i], p.z[i]),
+          blocked: sw.data.blockedAt(p.x[i], p.z[i]),
         });
       }
       return out;
@@ -123,7 +123,7 @@ await page.evaluate(() => {
 });
 const samples = [];
 let elapsed = 0;
-for (const t of [8000, 20000, 40000, 70000]) {
+for (const t of [8000, 20000, 40000, 70000, 90000]) {
   await new Promise((r) => setTimeout(r, t - elapsed));
   elapsed = t;
   const s = await probe();
@@ -133,7 +133,7 @@ for (const t of [8000, 20000, 40000, 70000]) {
     // ★ S1 施工窗：0~68s 不拨日程（工兵 ~2m/s 到件 + 6s/10s 施工；实测 T+65 建成）→ 68s 第一波；70s 总攻
     await page.evaluate(() => {
       const w = window.__rts;
-      setTimeout(() => w.swarm.commander.scrubDay(0.5), 28000);   // T+68：第一波（收到舰）
+      setTimeout(() => w.swarm.data.scrubDay(0.5), 28000);   // T+68：第一波（收到舰）
       w.cam.tx = 60; w.cam.tz = -40; w.cam.dist = 200; w.cam.pitch = 1.2;
     });
   }
@@ -151,7 +151,7 @@ for (const t of [8000, 20000, 40000, 70000]) {
         dKind: i >= 0 ? p.directiveKind[i] : null,
         pos: i >= 0 ? `${p.x[i].toFixed(1)},${p.z[i].toFixed(1)}` : null,
         spd: i >= 0 ? +p.curSpeed[i].toFixed(2) : null, mul: i >= 0 ? +p.directiveSpeedMul[i].toFixed(2) : null,
-        blocked: i >= 0 ? sw.commander.blockedAt(p.x[i], p.z[i]) : null,
+        blocked: i >= 0 ? sw.data.blockedAt(p.x[i], p.z[i]) : null,
         order: st?.order ? `${st.order.kind}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'}` : null,
         corr: st?.corridor?.map((q) => `${q.x | 0},${q.z | 0}`).join('→') ?? null,
         pathFrom: `${st?.pathFromX | 0},${st?.pathFromZ | 0}`,
@@ -173,13 +173,13 @@ for (const t of [8000, 20000, 40000, 70000]) {
     console.log('快车道致死 =', JSON.stringify(kill));
   }
   if (t === 70000) {
-    await page.evaluate(() => { window.__rts.swarm.commander.scrubDay(0.95); });   // ★ 总攻（点 0/0）
+    await page.evaluate(() => { window.__rts.swarm.data.scrubDay(0.95); });   // ★ 总攻（点 0/0）
     await page.evaluate(() => { window.__rts.navMap.open(null); });   // ★ 打开全览小地图截图
   }
 }
 // ★ 工事计时（断言也读）：新引擎 EngineerManager（旧工事链已销毁）
 const built = await page.evaluate(() => {
-  const c = window.__rts.swarm.commander;
+  const c = window.__rts.swarm.data;
   const ne = globalThis.__rts?.newEngine?.() ?? null;
   const eng = ne?.engineer ?? {};
   return { built: eng.built ?? 0, spots: eng.spots ?? 0, working: eng.working ?? 0, sweeps: c.fortify.dbg.sweeps };
