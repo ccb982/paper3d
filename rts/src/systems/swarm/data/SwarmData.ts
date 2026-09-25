@@ -422,12 +422,8 @@ export class SwarmData {
       band: () => { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; },
       ship: () => ({ x: this.lastShipX, z: this.lastShipZ }),
       needAt: (x, z) => this.fortifyNeed(x, z),
-      canReach: (id, x, z) => {
-        const s = this.swarm.squads.get(id);
-        const lead = s?.members.get(s.leaderUid);
-        if (!lead) return false;
-        return this.swarm.walkableLine(lead.x, lead.z, x, z) && this.swarm.reachable(lead.x, lead.z, x, z);
-      },
+      // ★ 取件门（用户定 2026-09-25）：长途 BFS；短程 LOS 快筛——唯一实现在 `SwarmSystem.reachFrom`
+      canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),
       assault: () => this.battlePosture === 'assault',
       noNewBuild: () => this.lastDayRaw >= 0.45,
       doneScore: () => NEED_DONE,
@@ -436,8 +432,7 @@ export class SwarmData {
       refreshSector: (cx, cz, rLo, rHi) =>
         this.fortify.refreshOne(cx, cz, rLo, rHi, (x, z) => this.fortifyNeed(x, z)),
       pickSpot: (sec, rLo, rHi, canReach) =>
-        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi,
-          (x, z) => this.fortifyNeed(x, z), NEED_DONE, canReach),
+        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach),
       canDig: (x, z) => {
         const raster = RasterMap.current;
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;

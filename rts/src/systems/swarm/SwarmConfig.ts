@@ -12,6 +12,9 @@
 export const GAME_SEC = 0.2;
 export const GAME_MIN = 12;
 
+/** ★ 可达核验（用户定 2026-09-25）：长途用 **BFS**（可行路径）；≤ 此距离用 **LOS 快筛**（LOS 或 BFS 任一） */
+export const REACH_SHORT_LOS_R = 20;
+
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
   /** L3 实体层：升格半径 / 实体上限 */

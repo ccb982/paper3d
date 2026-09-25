@@ -6,15 +6,23 @@
 //     need(x) = scoreForUnit('defense', feats) × (1 − cover/COVER_FULL)
 //     水/坑/硬边（blockedAt）直接排除 → 治"被极负分吸走成簇"
 //   · 固定 8 扇区（环状包围舰船；摊销刷新：每次 1 区）
-//   · 每扇区记 **峰值需求** + 对应点（peak）；需求 ≥ NEED_DONE = 该区仍缺工事
+//   · 每扇区记 **峰值需求** + **需求降序候选表**（都在扇区内 ∧ 带内）；需求 ≥ NEED_DONE = 该区仍缺工事
 //   · 分配：**需求最高优先逐个分配**（一队一区、不重合）；粘性；更缺的未占区可抢占
-//   · 目标函数（工兵专属）：缺 → 峰值点；不缺 → 扇区**弧线链采样**（约 12m 间距，天然成圈可连）
 //   · 连通：相邻扇区均不缺 → 中点串战壕
+//
+// ★★ 施工目标获取契约（用户设计 2026-09-25；本文件是唯一口径）★★
+//   输入：队所属扇区 sec（认领层给）· 当前带 [rLo,rHi] · 可达判定
+//   输出：**扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高** 的点；高位不可达 → **扇区内次高可达**；
+//         全不可达 → **null**（无件，交给认领/机动/无件期，不许越界兜底）
+//   纪律：**绝不出扇区、绝不出带**（废止 2026-09-23"允许出扇区"旧兜底）；
+//         确定性（不掷随机数）；返回前以**当前带/扇区**复检（候选是摊销刷新的）。
 // ============================================================
 
 export const FORTIFY_SECTORS = 8;
 /** 扇区需求达标线（need < 此值 = 该区已够工事；调参入口） */
 export const NEED_DONE = 0.6;
+/** 每扇区保留的候选点数（需求降序；供"次高可达"回退；上限 = 摊销成本封顶） */
+export const CAND_K = 24;
 
 export interface FortifyPick {
   x: number;
@@ -30,6 +38,8 @@ export class FortifyPlanner {
   readonly worst: FortifyPick[] = Array.from({ length: FORTIFY_SECTORS }, () => ({ x: 0, z: 0, score: -Infinity }));
   /** ★ 每扇区是否已扫描（区分"未扫描"与"扫描后无可行点"——后者不阻塞前推） */
   readonly scanned: boolean[] = Array(FORTIFY_SECTORS).fill(false);
+  /** ★ 每扇区候选点（需求降序；仅扇区内 ∧ 带内；targetOf 逐个试可达） */
+  readonly candidates: FortifyPick[][] = Array.from({ length: FORTIFY_SECTORS }, () => []);
   /** 队→扇区认领（一队一区，不重合；**需求最高优先，逐个分配**） */
   readonly claims = new Map<number, number>();
   /** 各队当前施工点 */
@@ -37,7 +47,8 @@ export class FortifyPlanner {
   private cursor = 0;
   readonly dbg = { sweeps: 0, injected: 0, connected: 0, sectors: FORTIFY_SECTORS, builders: 0, claimsN: 0, spotsN: 0, assigned: '-' };
 
-  /** 摊销刷新：本次只重算第 cursor 个扇区（环带 [rLo,rHi]；角度 [si,si+1)/8·2π） */
+  /** 摊销刷新：本次只重算第 cursor 个扇区（**扇区内 ∧ 带内**；角度 [si,si+1)/8·2π）
+   *  产出：`worst[si]`（峰值点）· `safety[si]`（峰值分）· `candidates[si]`（需求降序候选，≤CAND_K） */
   refreshOne(
     cx: number, cz: number, rLo: number, rHi: number,
     needAt: (x: number, z: number) => number | null,
@@ -48,7 +59,8 @@ export class FortifyPlanner {
     const TAU = Math.PI * 2;
     const a0 = (si / FORTIFY_SECTORS) * TAU;
     const a1 = ((si + 1) / FORTIFY_SECTORS) * TAU;
-    let best: FortifyPick | null = null;
+    const list = this.candidates[si];
+    list.length = 0;
     for (let dz = -rHi; dz <= rHi; dz += 4) {
       for (let dx = -rHi; dx <= rHi; dx += 4) {
         const d2 = dx * dx + dz * dz;
@@ -56,65 +68,53 @@ export class FortifyPlanner {
         let ang = Math.atan2(dz, dx);
         if (ang < 0) ang += TAU;
         if (ang < a0 || ang >= a1) continue;
-        const s = needAt(cx + dx, cz + dz);
-        if (s === null) continue;
-        if (!best || s > best.score) best = { x: cx + dx, z: cz + dz, score: s };   // ★ 最高需求
+        const sc = needAt(cx + dx, cz + dz);
+        if (sc === null) continue;
+        FortifyPlanner.insertCandidate(list, { x: cx + dx, z: cz + dz, score: sc });
       }
     }
-    this.worst[si] = best ?? { x: 0, z: 0, score: -Infinity };
+    const best = list[0] as FortifyPick | undefined;
+    this.worst[si] = best ? { x: best.x, z: best.z, score: best.score } : { x: 0, z: 0, score: -Infinity };
     this.safety[si] = best ? best.score : -Infinity;
     this.dbg.sweeps++;
   }
 
-  /** ★ 统一目标函数（工兵专属）：
-   *  该区**仍缺**（峰值需求 ≥ NEED_DONE）→ 峰值点；**不缺** → 扇区**弧线链采样**（12m 间距，天然成圈可连）。
-   *  选点必须过道路可行性（canReach：从队长位直达可走）。 */
+  /** 需求降序插入（同分保序；超 CAND_K 截尾） */
+  private static insertCandidate(list: FortifyPick[], c: FortifyPick): void {
+    if (list.length >= CAND_K && c.score <= (list[list.length - 1] as FortifyPick).score) return;
+    let i = list.length;
+    while (i > 0 && (list[i - 1] as FortifyPick).score < c.score) i--;
+    list.splice(i, 0, c);
+    if (list.length > CAND_K) list.pop();
+  }
+
+  /** ★ 施工目标获取（唯一口径；见文件头契约）：
+   *  候选 = refreshOne 预排的**扇区内 ∧ 带内**需求降序表；返回前以**当前带/扇区**复检。
+   *  ① 需求 ≥ doneScore 的可达最高位；② 否则扇区内可达的次高；③ 全不可达 → null。 */
   targetOf(
     cx: number, cz: number, sec: number, rLo: number, rHi: number,
-    needAt: (x: number, z: number) => number | null, doneScore: number,
+    doneScore: number,
     canReach?: (x: number, z: number) => boolean,
   ): FortifyPick | null {
-    const w = this.worst[sec];
-    if (Number.isFinite(w.score) && w.score >= doneScore
-      && (!canReach || canReach(w.x, w.z))) {
-      return { x: w.x, z: w.z, score: w.score };
-    }
-    // 弧线链采样：扇区中弧半径 ~ (rLo+rHi)/2，±6m 抖动；沿弧每 12m 取点
+    const list = this.candidates[sec];
+    if (!list || list.length === 0) return null;
     const TAU = Math.PI * 2;
     const a0 = (sec / FORTIFY_SECTORS) * TAU;
-    const a1 = ((sec + 1) / FORTIFY_SECTORS) * TAU;
-    const rm = (rLo + rHi) / 2;
-    const arcLen = rm * (a1 - a0);
-    const steps = Math.max(1, Math.round(arcLen / 12));
-    for (let k = 0; k < steps; k++) {
-      const a = a0 + ((k + 0.5) / steps) * (a1 - a0) + (Math.random() - 0.5) * 0.12;
-      const rr = Math.max(rLo, Math.min(rHi, rm + (Math.random() - 0.5) * 12));   // ★ 夹在环带内（不进闸门内界）
-      const x = Math.round((cx + Math.cos(a) * rr) / 4) * 4;
-      const z = Math.round((cz + Math.sin(a) * rr) / 4) * 4;
-      const s = needAt(x, z);
-      if (s === null) continue;
-      if (canReach && !canReach(x, z)) continue;
-      return { x, z, score: s };
+    const a1 = (sec + 1 === FORTIFY_SECTORS) ? TAU : ((sec + 1) / FORTIFY_SECTORS) * TAU;
+    let fallback: FortifyPick | null = null;
+    for (const c of list) {
+      // ★ 复检①：当前带内（候选是摊销刷新的，带会动）
+      const d = Math.hypot(c.x - cx, c.z - cz);
+      if (d < rLo - 1 || d > rHi + 1) continue;
+      // ★ 复检②：本扇区角度内（保证"在扇区之内"）
+      let ang = Math.atan2(c.z - cz, c.x - cx);
+      if (ang < 0) ang += TAU;
+      if (ang < a0 || ang >= a1) continue;
+      if (canReach && !canReach(c.x, c.z)) continue;
+      if (c.score >= doneScore) return { x: c.x, z: c.z, score: c.score };
+      if (!fallback) fallback = { x: c.x, z: c.z, score: c.score };
     }
-    if (Number.isFinite(w.score) && (!canReach || canReach(w.x, w.z))) return { x: w.x, z: w.z, score: w.score };
-    // ★ 兜底（用户定 2026-09-23：**取点/寻路允许出扇区**）：以中弧点为中心螺旋外扩，
-    //   找"合法需求 + 可达"的点（可越出本扇区/环带）；找不到 → null（宁可不发令，也不发不可达目标）
-    const mid = (a0 + a1) / 2;
-    const mx0 = cx + Math.cos(mid) * rm, mz0 = cz + Math.sin(mid) * rm;
-    for (let r = 0; r <= rHi + 60; r += 4) {
-      const n = r === 0 ? 1 : Math.max(8, Math.round((Math.PI * 2 * r) / 8));
-      for (let k = 0; k < n; k++) {
-        const a = (k / n) * TAU;
-        const x = Math.round((mx0 + Math.cos(a) * r) / 4) * 4;
-        const z = Math.round((mz0 + Math.sin(a) * r) / 4) * 4;
-        if (Math.hypot(x - cx, z - cz) < rLo) continue;   // ★ 允许出扇区，但**不许进闸门内界**（防冲家）
-        const s = needAt(x, z);
-        if (s === null) continue;
-        if (canReach && !canReach(x, z)) continue;
-        return { x, z, score: s };
-      }
-    }
-    return null;
+    return fallback;
   }
 
   /** 分配：**需求最高优先逐个分配**（一队一区）；仅阵亡释放；更缺的未占区（差 ≥ MARGIN）可抢占 */
@@ -179,6 +179,7 @@ export class FortifyPlanner {
     this.spots.clear();
     this.safety.fill(-Infinity);
     for (const w of this.worst) w.score = -Infinity;
+    for (const l of this.candidates) l.length = 0;
     this.scanned.fill(false);
     this.cursor = 0;
   }

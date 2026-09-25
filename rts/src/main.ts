@@ -290,6 +290,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       ledgerTotal: () => swarm.ledger.total,
       setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
       spawnBattalion: (instant: boolean) => swarm.data.spawnBattalion(instant),
+      /** ★ 发令可达核验（OrderValidator ③；用户定 2026-09-25）：长途 BFS / 短程 LOS——与取件门同源 */
+      canReach: (id: number, x: number, z: number) => swarm.reachFrom(id, x, z),
       /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判。
        *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：豁免名单**只减不增**；被收回 = 出了问题（修行为，不修判官）★★ */
       exemptOf: (uid: number) => {

@@ -46,7 +46,7 @@ import { fallLineBlend } from '../../entity/TerrainAssist';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
-import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
+import {SWARM, AUTONOMY, STUCK, REACH_SHORT_LOS_R } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
 
@@ -1032,10 +1032,24 @@ export class SwarmSystem {
     return this.nav.feas.walkableLine(ax, az, bx, bz);
   }
 
-  /** ★ 有向可达（表图 BFS；可绕障——**允许绕出扇区**）——取点校验用（先 walkableLine 粗筛再调这个） */
+  /** ★ 有向可达（表图 BFS；可绕障——**允许绕出扇区**） */
   reachable(ax: number, az: number, bx: number, bz: number): boolean {
     const out: { x: number; z: number }[] = [];
     return this.nav.feas.find(ax, az, bx, bz, out) === 'ok';
+  }
+
+  /** ★ 队长可达核验（**唯一口径**；用户定 2026-09-25）：
+   *  · 长途（> REACH_SHORT_LOS_R）→ **BFS**（可行路径；可绕障）
+   *  · 短程 → **LOS 快筛**（直线可走即过；否则再 BFS 兜底）
+   *  取件门（`engineerPort.canReach`）与发令 ③（`OrderValidator.canReach`）共用本实现。 */
+  reachFrom(id: number, x: number, z: number): boolean {
+    const sq = this.squads.get(id);
+    const lead = sq?.members.get(sq.leaderUid);
+    if (!lead) return false;
+    if (Math.hypot(x - lead.x, z - lead.z) <= REACH_SHORT_LOS_R) {
+      return this.walkableLine(lead.x, lead.z, x, z) || this.reachable(lead.x, lead.z, x, z);
+    }
+    return this.reachable(lead.x, lead.z, x, z);
   }
 
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */

@@ -19,6 +19,7 @@ import { EngineerManager } from '../src/systems/swarm/engine/EngineerManager.ts'
 import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerManager.ts';
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
+import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
@@ -254,6 +255,36 @@ console.log('[5c] CommandLang 引擎复合句（良构 + 解释器）');
   ok(itD.op === 'hold' && itD.target.x === 5, 'defend → hold(object)');
   const itD2 = interpretEngine({ ...base, kind: 'defend' as never, target: { x: 7, z: 7 } });
   ok(itD2.op === 'hold' && itD2.target.z === 7, 'defend 无对象 → hold(原地 target)');
+}
+
+// ---------- 施工目标获取契约（FortifyPlanner.targetOf） ----------
+console.log('[5d] FortifyPlanner 取点契约（扇区内 ∧ 带内 ∧ 可达 ∧ 次高回退）');
+{
+  const fp = new FortifyPlanner();
+  const cx = 0, cz = 0, rLo = 20, rHi = 44;
+  const needAt = (x: number): number => 1 + (x + 100) * 0.001;   // 全有效；x 越大分越高
+  for (let i = 0; i < FORTIFY_SECTORS; i++) fp.refreshOne(cx, cz, rLo, rHi, needAt);
+  ok(fp.safety[0] === (fp.candidates[0][0] as { score: number }).score, '峰值分 = 候选首位分（单源）');
+  const pick = fp.targetOf(cx, cz, 0, rLo, rHi, 0.6, () => true) as { x: number; z: number; score: number };
+  const ang = (Math.atan2(pick.z, pick.x) + Math.PI * 2) % (Math.PI * 2);
+  const d = Math.hypot(pick.x, pick.z);
+  ok(ang >= 0 && ang < Math.PI / 4, '取点在扇区内（角度 [0,45°)）');
+  ok(d >= rLo - 1 && d <= rHi + 1, '取点在带内（半径）');
+  // 高位不可达 → 扇区内次高可达
+  const topX = pick.x;
+  const second = fp.targetOf(cx, cz, 0, rLo, rHi, 0.6, (x) => x < topX - 1e-6) as { x: number; z: number };
+  const sAng = (Math.atan2(second.z, second.x) + Math.PI * 2) % (Math.PI * 2);
+  ok(second.x < topX && sAng >= 0 && sAng < Math.PI / 4, '高位不可达 → 次高可达（仍在扇区内）');
+  // 带内全不可达 → null（**不许出带兜底**；带外可达也不许返回）
+  ok(fp.targetOf(cx, cz, 0, rLo, rHi, 0.6, (x, z) => Math.hypot(x, z) > rHi) === null, '带内全不可达 → null（无越界兜底）');
+  // 仅扇区外可达 → null（**不许出扇区**）
+  ok(fp.targetOf(cx, cz, 0, rLo, rHi, 0.6, (_x, z) => {
+    let a2 = Math.atan2(z, _x); if (a2 < 0) a2 += Math.PI * 2;
+    return a2 >= Math.PI / 4;
+  }) === null, '仅扇区外可达 → null（不许出扇区）');
+  // 未刷新扇区：无候选 → null
+  const fp2 = new FortifyPlanner();
+  ok(fp2.targetOf(cx, cz, 2, rLo, rHi, 0.6, () => true) === null, '未刷新扇区 → null（不猜点）');
 }
 
 // ---------- Spread / OrderValidator ----------

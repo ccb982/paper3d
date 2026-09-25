@@ -52,7 +52,8 @@ export interface LiveView {
   /** 各小队（队长位置 + 兵种 + 存活） */
   squads(): LiveSquad[];
   /** 长寻路可达检测（实机注入；无 → 跳过 ③） */
-  canReach?(x: number, z: number): boolean;
+  /** 可达核验（发令 ③；用户定 2026-09-25：带队 id——长途 BFS / 短程 LOS） */
+  canReach?(id: number, x: number, z: number): boolean;
   /** 下发回调（实机模式用：交给旧执行链；影子模式不调）——带 squadId（哪队）+ now（实秒） */
   emit?(squadId: number, order: SquadOrder, now: number): void;
   /** 玩家是否在打某小队（被打反应：引擎告知队长玩家位置；0 = 无） */
@@ -375,7 +376,8 @@ export class EngineBridge {
       // ★ 事态环 = 全场硬约束（所有兵种都在环内；工兵也不例外——件在带内、目标夹环）
       const v = validateOrder(q.rec.id, q.tx, q.tz, {
         px: p.x, pz: p.z, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax,
-        role: q.rec.role, siblings, canReach: this.live.canReach,
+        role: q.rec.role, siblings,
+        canReach: this.live.canReach ? (x2, z2) => this.live.canReach!(q.rec.id, x2, z2) : undefined,
       });
       if (v.spread) this.dbg.spread++;
       if (!v.ok) {

@@ -97,7 +97,7 @@ perceive → situation → decide(单源) → write → debug
 - **发令统一校验链（`OrderValidator.ts`，一处实现、不许旁路）**：
   ① **事态范围**：目标夹进 `[ringMin, ringMax]`；到上限 → `suggest='defend'`；
   ② **密度**：同兵种目标 <`SPREAD.MIN=40m` → **切向 θ 散开（径向 r 严格不变）**；工兵不参与；
-  ③ **可达**：`canReach` 注入核验（不可达 → 不发/调用方缩近）。
+  ③ **可达**：`canReach` 注入核验（**长途 BFS / 短程 LOS 快筛**；`SwarmSystem.reachFrom` 唯一实现；不可达 → 不发/调用方缩近）。
 - **Spread（`Spread.ts`）**：极坐标、**只解 θ**；目标角差用**余弦定理精确解**（弦长=min）；几何不可满足（min≥r1+r2）→ θ 拉满 π（**无径向推力**）；点按 id 定序 → 各队各自校验也收敛到同一全局解。
 
 ### 2.5 OrderWriter —— 唯一发令器（G1/G2）
@@ -202,7 +202,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - **地形与表**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路）+ `TerrainScore`（`rebuild` 每帧；`distGain=1+24·t01`）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
 - **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/terrain/pathStamp`。
 - **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（**p 驱动**：**外圈大圈一直收缩只减不增**：D0max → 大圆 90 → 缓缩 80 → 0；**内圈小圈先收缩 → 第一波后立即增大（甜甜圈 60，p 0.45-0.55）→ 再收缩**；总攻 p≥0.80 时已是 (0,0) 点）；环 1Hz 更新；**时间轴可自由快进/倒退**（`scrubDay`/`followRealtime` 重置姿态状态 → 环可反向）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
-- **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` 危险点优先→扇区弧链随机可达点）；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
+- **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` **扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**（候选=需求降序表；高位不可达→次高可达；全不可达→null；**绝不出扇区/带**，确定性不掷随机数））；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
 - **编制与生成执行**：`RosterController`（占比/缺口 4Hz）；`CommanderSpawn`（`deploy/battalion(instant)/drain/reset` + 回收名单）；生成端口（`spawnMob/spawnMobIndex/spawnBuilder/buildCover/digTrench`）由 main/CommanderWiring 注入；`planDefense`（建计划 + 表 + 复位 + 开局班底）。
 - **地形破坏入口**：`noteTerrainDig/markTerrainDirty`（`ChunkManager.onTerrainDig` 中央钩子；子弹/战壕都过）→ 掩码窗扫 + TerrainScore 局部重算 + 采样缓存失效。
 
@@ -233,7 +233,8 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 ## 7. 工兵（`engine/EngineerManager` 全权）
 
-- **位置查询（唯一口径）**：`FortifyPlanner.targetOf`（危险点优先 → 扇区弧链随机可达点）；经 `SwarmData.engineerPort()` 消费（数据：分区/需求/环带/可达/落地端口）。
+- **取件门**：`engineerPort.canReach = SwarmSystem.reachFrom`（长途 BFS / 短程 LOS；唯一口径）。
+- **位置查询（唯一口径）**：`FortifyPlanner.targetOf`（**扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**；高位不可达→扇区内次高可达；全不可达→null，绝不越界）；经 `SwarmData.engineerPort()` 消费（数据：分区/需求/环带/可达/落地端口）。
 - **派件**：每拍摊销 1 区刷新；任期内沿用（未建 + 需求有效）；建成/失效/出带 → 重取；**件必须在施工带内**（环夹取会挪目标）；**首件豁免**"第一波停新增"（落地班底必派一件，完成一件后停）。
 - **施工**：队长到件 **3m 内**计时（实秒）；**掩体 6s / 战壕 10s**（每 2s 挖 1 遍 ≤5 遍；坑底 −1.2m 封顶）；**总攻只修掩体**（战壕暂停）。
 - **不入攻击队列**：`LiveView.attackables` 过滤工兵编制；统一计时仍看全体。
@@ -290,6 +291,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 工兵施工 | 到件 3m；掩体 6s / 战壕 10s（2s/遍×5） | `EngineerManager` |
 | 施工带 / 需求线 | `rLo=max(24,frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM,frontMaxD)`；总攻 (0,0)；前推 2m/s；`NEED_DONE=0.6` | `SwarmData` |
 | 长短寻路分界 | 40m | `CommandLang.MARCH_DIST` / `NAV.LONG_PATH_DIST` |
+| 可达核验：短程 LOS 快筛 | 20m | `SwarmConfig.REACH_SHORT_LOS_R`（长途一律 BFS） |
 | 长寻路加权 | 上坡 +0.6/m；斜向 ×1.414（上坡仅四向） | `FeasibilityPath` |
 | 短跳 | 10m→6m；爬升 +2/m；推进>0.5m | `ShortHop` |
 | 硬边台阶豁免 | 0.6m；>0.6 上墙/下可行 | `PassTable.edge` |
@@ -373,3 +375,4 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 4. ~~高倍速混合时钟~~（已修 2026-09-25）：玩法计时统一到 `services/SimClock`，10×/100× 行动与下命令同步加速。
 5. **guard 已知债务**：`ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 五个非蜂群大文件（与本次重写无关）。
 6. **可选拆分**：`SwarmSystem`（1151）/`SwarmData`（692）/`EngineBridge`（415）/`main`（843）为"大而不乱"的文件，按需再拆。
+7. **寻路重写（待裁决）**：长寻路=通行优先的 Route 服务（逐段可执行、无路报 blocked，绝不回落直线）；短寻路=地形语义引导的 LocalStep（有限窗口完备、无死循环）。方案见 **《寻路重写方案.md》**，批准后按 S1→S4 逐步实施。
