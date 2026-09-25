@@ -6,7 +6,7 @@
 //   可行走廊）的前瞻点绕行——不另起炉灶、不花每帧 A*。
 //   依赖铁律：只读 SquadTactics/走廊（无状态、零分配）。
 
-import { SquadTactics } from '../SquadTactics';
+import type { SquadOrderState } from './State';
 import { corridorAhead } from './Anchor';
 
 export interface FollowDir {
@@ -33,8 +33,7 @@ export function followStopR(stopped: boolean, leadX: number, leadZ: number, ox: 
 
 /** 跟队长方向；null = 已到位（应停）。stopR = 停步半径（滞回由调用方给） */
 export function followDir(
-  tactics: SquadTactics,
-  squadId: number,
+  state: SquadOrderState | null,
   px: number,
   pz: number,
   lx: number,
@@ -47,7 +46,7 @@ export function followDir(
   if (td <= stopR) return null;
   // ★ 掉队/被挡 → 沿走廊前瞻点走（长寻路；走廊即队长的长路）
   if (td > 12 && !walkable(px, pz, lx, lz)) {
-    const ahead = corridorAhead(tactics.board.get(squadId), px, pz, 4);
+    const ahead = corridorAhead(state, px, pz, 4);
     if (ahead) {
       const ax = ahead.x - px, az = ahead.z - pz;
       const al = Math.hypot(ax, az);

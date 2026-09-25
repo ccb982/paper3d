@@ -34,7 +34,7 @@
 |---|---|---|
 | 战略 | 事态函数/环形活动区/波次节奏 | `SwarmCommander`（frontP/ringBounds/波次） |
 | 战术 | 兵种角色纵深、队间分布（切向/扎堆/层级）、兜底 | `BattleLine`、`fallbackTick`（dawdle/tangent/rank_fix） |
-| 队级 | **成员调遣（唯一写口）**：长寻路/走廊、锚点、编队槽位、命令保护 | `SquadDispatch`、`SquadTactics`、`SquadNavigator`、`Formation` |
+| 队级 | **队长层（唯一执行）**：接令 → 长寻路/走廊 → 锚点 → 成员调遣（围队长）→ 汇报 | `squad/SquadCore`、`SquadNavigator`、`Anchor`、`Formation`、`Decompose` |
 | 个体 | 移动/施工/攻击 | `SwarmSystem.move`、`EngineerCorps`、`EnemyBrain` |
 | 底座 | 地形/实体/渲染/物理 | `PassTable`、`EntityManager`、`CharacterFxManager`、`PhysicsWorld` |
 
@@ -52,7 +52,9 @@ debug/AiTrace.ts           AI 可读记录（JSONL/中文摘要）
 systems/swarm/engine/      蜂群引擎（唯一指挥链）：EngineCore 相位 tick（perceive→situation→decide→write）/ 四兵种管理器（含 **EngineerManager：建造位置查询+施工计时+落地**）/ OrderWriter 唯一发令 / SquadManager 汇报 / OrderValidator+Spread / Protect / AttackQueues
 systems/swarm/squad/       队长层：SquadCore 接令/距离分流/汇报（只导航，不给代理下命令）；Anchor/Formation/Abilities
 systems/swarm/            地形/工事数据/寻路/刷怪（Commander 只剩事态环/波次/地形表/L1-L2/工事数据查询；战斗+工兵指挥链已删）
-systems/swarm/SquadDispatch.ts  队长层成员分派唯一写口（寻路/锚点/阵型/命令保护）
+systems/swarm/squad/SquadCore.ts 队长核（**唯一执行层**）：接令→寻路→锚点→成员调遣（applyDirectivePort）→汇报
+systems/swarm/squad/State.ts     队长执行态（路径缓存/锚点滞回）；Decompose.ts 分解矩阵（自旧黑板归位）
+systems/swarm/SquadTactics.ts    仅 UI/探针**只读镜像板**（现令/走廊/台账；执行链不读）
 systems/swarm/FortifyPlanner.ts 建造位置查询（危险点优先 → 扇区弧链随机可达点；新引擎经 engineerPort 消费）
 systems/spawn/WorldSpawner.ts  刷怪 + 官方 tierPort（promote/demote）
 systems/ai/               行为状态机（AISystem + behaviors）
@@ -94,21 +96,22 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 0.88-1.00 | 点 `(0, 0)` | 驻留 |
 
 **硬约束（全链）**：
-1. `clampToRing` 单源：引擎令（`issueChecked`）+ 队长令（`SquadTactics.ringClamp`）+ **锚点/站位**（`applyOrders` 内对 resolveAnchor 结果）全部夹环；撤退/`rear` 豁免。
+1. `clampToRing` 单源：引擎令（`OrderValidator`①）+ 队长核（`SquadCore` port.clampRing）+ **锚点/站位**（resolveAnchor 结果）全部夹环；撤退/`rear` 豁免。
 2. 越界强制归位：队质心越界连续 2s → 强制长寻路令回环内（`force_in/out`）；**命令目标已合规则不重发**。
 3. 第一波时段起停止新增施工（既有件收尾）。
 
 ## 5. 指挥与命令
 
-- **单源**：`SquadOrder{kind,target,mission,anchor,seq,ttl,source,roe}`；一切令走 `issueChecked`（可达核验/调账/台账）。
+- **单源**：`SquadOrder{kind,target,mission,anchor,seq,ttl,source,roe}`；一切令走引擎 `OrderWriter`（`OrderValidator` 校验链：环内/密度/可达）。
 - **发令冷却（替代时效）**：同队 **8 游戏分钟**内同签名同目标不再发；引擎令 TTL≥60 游戏分钟存活；例外：事态签名变 / 队血比<0.5。
 - **四类介入**（§0）：事态变动 / 重伤 / 扎堆 / 磨蹭——各自 30 游戏分钟队级冷却。
-- **成员分派归属（用户定 2026-09-24）**：**只有队长和蜂群引擎发命令**；成员只执行队长的长寻路或听队长调遣。`SquadDispatch` = 队长层成员分派**唯一写口**（寻路/锚点/阵型/门/池列+`onDirective`）；引擎（`SwarmSystem.applyOrders`）只做命令轨（到期/`isActive`）后交队长，不再写成员指令。
+- **成员分派归属（2026-09-25 换装定稿）**：**只有队长和蜂群引擎发命令**；成员只跟队长走。`squad/SquadCore.drive` = 队长层**唯一执行**（寻路/锚点/阵型/指令落地 `swarm.applyDirectivePort`：池列 + L3 `onDirective`）；引擎只发队令（`OrderWriter` / `EngineBridge`）。
+- **成员指令门 `OrderGate` 已删**：成员目标 = **队长 + 槽位偏移**（相对队形，天然平滑），不再需要"绝对目标换令门"。
 - **玩家令优先（R14 前置最小接线，2026-09-24）**：引擎发令门（`issueChecked`）与队长自主令遇**未过期玩家令**一律不覆盖；玩家令 TTL 30 游戏分钟。UI：**右键点地 = 强制移动令**（选中队全员 `advance`，`source='player'` + `OrderBus` 蓝令牌）。
 - **手动放敌（调试接口，2026-09-24）**：`B` 切换放置模式 → **左键点地放一窝**（`WorldSpawner.spawnOne(..., force=true)`：忽略水/坑不可站与存活上限，**可放水里/坑里**）；用于手测"掉水里能不能出来"。探针同口：`__rts.placeEnemyAt(x,z)` / `__rts.forceMoveSelectionTo(x,z)`。
-- **命令保护 `OrderGate`（用户定 2026-09-24）**：队长令（`SquadTactics.tick`）与成员指令（`applyOrders` 2Hz 重算）过同一道门——**只有"走出足够距离"或"久无有效推进（卡住）"才接新目标**；否则保持记忆目标。反向拉扯拒绝（候选方向 vs 记忆方向点积）；卡住换向优先**没下过的方向**（历史方向 ±55° 偏转）。成员门：走 8m / 卡 4 游戏分钟（净<3m）/ 硬顶 15 游戏分钟；队长门：走 20m / 卡 8 游戏分钟 / 硬顶 20 游戏分钟（`SwarmConfig.DIRECTIVE_GATE / LEADER_GATE`，`OrderGate.dbg` 计数可查）。
+- **命令保护 `OrderGate`（已删，2026-09-25）**：旧"成员指令门/队长令门"随执行层换装移除；现由 `OrderWriter` 稳定门（进度≥50%/静止≥25s）+ 成员围队长（相对槽位）取代。
 - **"到位 + 远目标"立即接（R43 修）**：已到旧目标（`dArrive ≤ arriveR`）且新目标远于 `retarget`（成员 8m / 队长 15m）→ **立即接**，不再等候选稳定 `persistS`（36 实秒 > 卡死窗口 25s → 队长到点冻结 → 全队冻结 → 先被回收）。
-- **换令稳定门（R45 用户定 2026-09-24）**：引擎发令口（`issueChecked`）**换令**（kind/目标与现令不同）需 **①现令进度 ≥50%** 或 **②长时间静止**（无净推进 ≥25 实秒）——否则保持现令（`ORDER_STABLE`，`stableDbg.kept/last` 可查）。同签名重发/玩家令/重伤（血比<0.5）照旧。
+- **换令稳定门（R45 用户定 2026-09-24）**：引擎发令口（`OrderWriter`）**换令**（kind/目标与现令不同）需 **①现令进度 ≥50%** 或 **②长时间静止**（无净推进 ≥25 实秒）——否则保持现令（`ORDER_STABLE`，`writer.dbg.kept/last` 可查）。同签名重发/玩家令/重伤（血比<0.5）照旧。
 - **命令风暴根因与修（R45）**：引擎 1Hz 决策每拍重算目标/使命，原来任何字段差都算新令。已修：①驻守掩体 `coverIdx++ % len` 轮转（每拍换掩体）→ 改**最近掩体**；②`addPatrolSwing` 游弋摆动**写进命令**（每拍动 + 跨 far 滞回致 kind 翻）→ 命令只发**稳定驻守点**，摆动归执行层 `resolveAnchor`；③层级越位/扎堆纠正**每拍重发** → 改"**一次纠正 + 条件解除才允许再发**"（`rankFix/clumpFix`）。**实测：探针 `cmdChanges` 37 → 5（同窗口）**。
 - **同兵种目标间距（用户定 2026-09-24）**：新引擎发令统一校验链 ②（`OrderValidator` + `Spread`）：同兵种目标 < `MIN=40m` → **只改切向 θ（极坐标，半径严格不变）**，目标点 = 径向 r（兵种策略）⊗ 切向 θ（间距）；几何不可满足（r<20m）→ θ 拉满 π。异兵种不约束。
 - **施工件粘性（R45 修）**：`assignBuild` 已派未建件**保持**——事态闸门只管"新派"，不夺已派件（原 `!gated(cur)` 会让环推进把在途件判丢 → 重挑 → 目标瞬移百米 + 半路折返）。
@@ -129,7 +132,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 - **共享基础方法（用户定 2026-09-24）**：爬山是 **L2 代理与 L3 实体共用**的 `entity/TerrainAssist`（坡正面混合 + 上岸爬岸常量）——两载体同内核、同参数，不再各写各的。
 - **执行层**：上坡走**坡正面**（fall line 混合）——**仅"明显爬坡"才拉直**（`up>0.45` 且 `mag>0.22`；混合 0.65 路径/0.35 梯度），横切缓坡不再被拉成直爬；最后一程直线被挡 → 回锚点（走廊绕）。
 - **无质心 · 一切按队长（用户定 2026-09-24）**：锚点前瞻、编队朝向、寻路起点/触发（`SquadNavigator.ensurePath`）、L3 编队槽位（`steerEntities`）**全部从队长算**（`centroidOf` 不再参与跟随链）；**成员指令目标 = 队长 + 槽位偏移**，队长自己走走廊锚点——治"质心恒落后 ~8m → 锚点不前进 → 队长到位即停 → 全队冻结"。
-- **成员跟队长 + 长寻路找队长（`Follow.ts`）**：近 = 直线走向队长（5~8m 滞回停）；**掉队 >12m 且直线被挡**（崖/墙）→ 沿队走廊前瞻点（`SquadTactics.corridorAhead`，队长正在走的同一条长路）绕行——不另起炉灶、不每帧 A\*。
+- **成员跟队长 + 长寻路找队长（`squad/Follow.ts`）**：近 = 直线走向队长（5~8m 滞回停）；**掉队 >12m 且直线被挡**（崖/墙）→ 沿队走廊前瞻点（`squad/Anchor.corridorAhead`，队长正在走的同一条长路）绕行——不另起炉灶、不每帧 A\*。
 - **锚点**：`currentTargetOf` 最近点后 **>8m 前瞻** + **锚点滞回**（新锚<6m 沿用旧锚）；长行军重算阈值 12m（短程 6m）。
 - **水=正常地块（用户定 2026-09-24，彻底放开）**：涉水加价（A\* +0.35）/上岸权重（W_SHORE）/涉水限速 ×0.75/水中分离 ×0.3/出水逃逸/落水目标修正（`fixWaterTarget`）**全部去掉**——水可站可通行、同速同向。**唯一软处理**：建表阶段 `TerrainScore` 给水域格 **−0.6 软降分**（`WATER_PENALTY`；只影响选位偏好，不否决/不限速/不改向）。
 - **上岸爬岸（保留，唯一水特例）**：**当前在水中**时，执行层台阶上限由 0.6m 放宽到 **`SHORE_CLIMB_MAX=2.5m`**（立面阻挡 + 位移回退同步放宽）——防"被岸坎挡住出不来"；陆地单位仍受 0.6m 限制。
@@ -159,7 +162,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 
 ## 9. 战斗与快车道
 
-- **开火闩锁（引擎消费；2026-09-25）**：`AttackQueues` 1Hz 就近入队 + 开火检验（射程≤25m）→ `TimerManager` 闩锁；`SquadDispatch` 写成员指令前读锁，未许可 → **软禁火**（`fire='hold'`，原子仍可执行）；许可后持续开火直到撤除。工兵不入队。
+- **开火闩锁（引擎消费；2026-09-25）**：`AttackQueues` 1Hz 就近入队 + 开火检验（射程≤25m）→ `TimerManager` 闩锁；`squad/SquadCore` 写成员指令前读锁（port.fireAllowed），未许可 → **软禁火**（`fire='hold'`，原子仍可执行）；许可后持续开火直到撤除。工兵不入队。
 - **统一计时销毁（引擎执行；2026-09-25）**：`TimerManager` 1Hz 卡死窗口（包围盒<4m 持续 25s；**驻守/交战豁免**）→ `retire` 落地：L3 `retire('recycled')` / L2 `recycleByUid`（归还编制）；寿命 deadline → `despawned`。**旧 `SwarmRecovery` 已删除**（探针读 `newEngine().timers`）。
 - **真弹道**：敌箭/敌法球/玩家弹三池 + `CombatSystem.resolveBulletHit`（敌人/静态世界分类结算）+ `ExplosionFx`。
 - **快车道 `FastLane`**：代理直扣（`nearestAgentIndex`+`damageAgent`，倒序防 swap）；实体走伤害管线；屏幕外一律快车道。
@@ -171,8 +174,8 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 
 | 频率 | 内容 |
 |---|---|
-| 每帧 | `swarm.update`→`syncRender`→`tickDemote`→`aiSystem.updateAll`→`charClamp`→`explosionFx`→`entities.simulate/present/renderAll`→子弹池→`CharacterFxManager` |
-| 2Hz | `applyOrders`（命令分解/寻路）、列表刷新、时间轴刷新、AiTrace 采样 |
+| 每帧 | 队长核 `SquadCore.drive`（寻路+锚点+成员调遣）、`swarm.update`（移动/模拟）、`syncRender`、`tickDemote`、`aiSystem.updateAll`、`charClamp`、`explosionFx`、`entities.simulate/present/renderAll`、子弹池、`CharacterFxManager` |
+| 2Hz | 列表刷新、时间轴刷新、AiTrace 采样 |
 | 2Hz | **新引擎相位 tick**（`EngineBridge.tick`：perceive→situation→decide→write；OrderWriter 唯一发令 + 执行板续期） |
 | 1Hz | 新引擎慢拍：攻击队列（入队/去重/开火闩锁）+ 统一实体计时（卡死窗口/计时销毁） |
 | 变速 | `,/.` 调速 1~100×（子步进 ≤0.05s/步；dayT01 走模拟时钟） |
@@ -185,7 +188,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 
 | 项 | 单位 |
 |---|---|
-| 成员指令门 / 队长令门（hold/force/persist） | 游戏分钟（`DIRECTIVE_GATE` / `LEADER_GATE`） |
+| 成员指令门 / 队长令门 | ~~已删（OrderGate 随执行层换装移除）~~ | — |
 | 命令 TTL（引擎令/指令/队长令/默认/使命下限） | 游戏分钟（`ttlLong` / `DIRECTIVE_TTL` / `LEADER_TTL` / `ORDER_TTL_DEFAULT` / `MISSION_TTL_FLOOR`） |
 | 发令冷却 / 兜底冷却 / 使命重发 | 游戏分钟（`ISSUE_COOLDOWN_S` / `fallbackTick` / `RESEND`） |
 
@@ -208,7 +211,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 硬边台阶豁免 | 0.6m（与移动层 `EDGE_CLIFF_BAND` 同源）；> 0.6 上墙/下可行 | `PassTable.edge` |
 | 跟随停步 / 远跟阈值 | 5~8m 滞回 / >12m 且直线被挡 → 走廊前瞻 4m | `Follow.followDir` |
 | 爬坡减速 | L3 爬坡态 ×0.55；L2 上坡 ×(1−0.6·上坡分量) 下限 0.5 | `TerrainAssist.CLIMB_SPEED_MUL` / `SwarmSystem.move` |
-| 成员目标基准 | **队长 + 槽位偏移**（无质心）；队长走锚点 | `SquadDispatch` / `SquadNavigator` |
+| 成员目标基准 | **队长 + 槽位偏移**（无质心）；队长走锚点 | `squad/SquadCore` / `SquadNavigator` |
 | 短跳爬升加价 | 2/米（W_RISE） | `SquadNavigator.greedyStep` |
 | 坡正面拉直门槛 | up>0.45 且 mag>0.22（0.65 路径/0.35 梯度） | `entity/TerrainAssist.fallLineBlend` |
 | 上岸爬岸上限 | 2.5m（仅"当前在水中"生效；陆地仍 0.6m） | `entity/TerrainAssist.SHORE_CLIMB_MAX` |
@@ -218,7 +221,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 施工计时 / 开工距离 | 掩体 6s / 战壕 10s；**到件 3m 内**才计时（无扫描半径） | `EngineerCorps.WORK_R2` |
 | 距离时间增益 | `1+24·t01` | `SwarmCommander.tick` |
 | 升格视野 | 视锥±15% 且 <220m | `main.hooks.inView` |
-| 成员指令门 | 走 8m / 卡 4 **游戏分钟**（净<3m）/ 硬顶 15 / 反向 dot<-0.2 | `SwarmConfig.DIRECTIVE_GATE` |
+| 成员指令门 | ~~已删（OrderGate 移除；成员围队长）~~ | — |
 | 队长令门 | ~~已删（`SquadLeaderAI` 删除；队长只导航+汇报）~~ | ~~`SwarmConfig.LEADER_GATE`~~ |
 
 ## 12. 里程碑
@@ -247,6 +250,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | R44 山地探针 | `probe:mountain`（扫地形挑高原↔低地 → 舰船搬高原 → 低地放敌 → 强制移动令 → 到达/回收/计时）；seed1 130m/+17m：L2 3/12 到达、9/12 到 13~17m 被回收；L3 全员 13~26m | ✅ 2026-09-24 |
 | R45 命令稳定门 | 换令稳定门（进度≥50% / 静止≥25s）；驻守轮换改最近掩体 / 游弋归执行层 / 越位扎堆一次纠正；实测 cmdChanges 37→5 | ✅ 2026-09-24 |
 | R46 单写口收口 | **旧战斗指挥链删除**（`tacticalTick`/`dispatchMission`/`fallbackTick`/抵舰驻留/强制归位/`SquadLeaderAI`；`?swarm=old` 移除）+ 唯一发令器**执行板续期** + 玩家令 TTL 30 游戏分钟 + 切向散开精确解（余弦定理，r 严格不变）；自检 148/148 | ✅ 2026-09-25 |
+| R47 执行层换装 | **队长核接管**：`SquadCore.drive`（寻路→锚点→分解→成员调遣）+ `State/Decompose` 归位；`SquadDispatch/OrderGate` 删除；`SquadTactics` 降为 UI 只读镜像；`SwarmSystem.applyOrders/dirGateDbg` 删除；执行层读核态走廊；开火闩锁/计时回收落地 | ✅ 2026-09-25 |
 | §16 山地 | 短跳半径/角度自适应；台阶段落差聚合；拉直防贴崖；**舰船/落点周围强制产坡**（保舰船可达，待定）；`TerrainScore.cls` 标定对齐（坡不扣分、硬边才扣，待定） | ⬜ |
 
 ## 12.5 验证防线（四关 · 2026-09-24 建立）

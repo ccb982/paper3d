@@ -50,7 +50,7 @@ import { Timeline } from './ui/Timeline';
 import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
-import { setLiveOrderSource } from './systems/swarm/squad/Anchor';
+import { setLiveOrderSource, resolveAnchor } from './systems/swarm/squad/Anchor';
 import { createSquadNav } from './systems/swarm/squad/MarchAction';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
 import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
@@ -221,8 +221,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
   swarm.commander.buildCover = (x, z, v) =>
     buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.commander.defensePlan, { x: spawn.x, z: spawn.z });
-  // ★ 事态环形夹取：**引擎令 + 队长自主令同门**（SquadTactics.issue 内夹取）
-  swarm.tactics.ringClamp = (x, z) => swarm.commander.clampToRing(x, z);
+  // ★ 事态环形夹取：**引擎令 + 队长令同门**——新引擎 OrderValidator ① + 队长核 clampRing 端口
+  //   （旧 `tactics.ringClamp` 写口已删；环是单源：commander.clampToRing）
 
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
   hooks.tierPort = spawner;
@@ -325,7 +325,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           seq: 0,
           roe: order.roe,
         } as never, performance.now() / 1000, 6, 'engine');
-        squadCores?.accept(squadId, order);   // ★ P2：队长核接令（分流/汇报）
+        squadCores?.accept(squadId, order, now);   // ★ P2/P4：队长核接令（导航+调遣）
       },
     });
     // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
@@ -356,7 +356,26 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const sq = swarm.squads.get(id);
         return sq ? Math.max(0, sq.members.size - sq.casualties) : 0;
       },
+      // ★ 队长核驱动端口（执行层落地；成员指令唯一写口 = swarm.applyDirectivePort）
+      {
+        squadOf: (id: number) => swarm.squads.get(id) ?? null,
+        ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
+        leaderTarget: (state, squad, lx, lz, now) => resolveAnchor(state, lx, lz, squad.type, now, swarm.commander.terrain),
+        clampRing: (x, z) => swarm.commander.clampToRing(x, z),
+        terrain: () => swarm.commander.terrain,
+        mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,
+        fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,
+        applyDirective: (uid, order, dir, until, ax, az) => swarm.applyDirectivePort(uid, order, dir, until, ax, az),
+      },
     );
+    // ★ 执行态单源（队长核）：SwarmSystem 的 steer/follow/寻路读这里；旧黑板只作 UI 镜像
+    swarm.setSquadStateSource((id: number) => squadCores?.stateOf(id) ?? null);
+    // ★ 队注销：清队长核 + 引擎 store + 汇报记录
+    swarm.setSquadGone((id: number) => {
+      squadCores?.drop(id);
+      shadowBridge?.writer.release(id);
+      shadowBridge?.squads.remove(id);
+    });
   }
   // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
   const cmdPanel = new CommandPanel();
@@ -697,11 +716,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     // ★ 引擎时钟 = **实秒**（命令计时/施工计时按实秒口径；不是 simT 的千分之一）
     const nowS = performance.now() / 1000;
     shadowBridge?.tick(h, nowS);   // ★ 新引擎拍（唯一指挥链）
-    squadCores?.tick(h, nowS, (id) => {   // ★ P2：队长核推进（队长位置单源）
+    squadCores?.tick(h, nowS, (id) => {   // ★ P2/P4：队长核推进（导航+调遣+汇报）
       const sq = swarm.squads.get(id);
       const lead = sq?.members.get(sq.leaderUid);
       return lead ? { x: lead.x, z: lead.z } : null;
     });
+    // ★ 执行态 → 镜像板（UI/探针只读；执行链不读镜像）
+    if (squadCores) for (const [id, st] of squadCores.states()) swarm.tactics.board.mirror(id, st);
     if (shadowBridge) {
       const list: PanelSquad[] = [];
       for (const r of shadowBridge.squads.all()) list.push({ id: r.id, role: r.role, alive: r.alive, selected: false });

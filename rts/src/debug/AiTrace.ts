@@ -83,7 +83,6 @@ export class AiTrace {
     // ---- 队级：命令 + 寻路结果 ----
     for (const s of this.swarm.squads.all()) {
       const cmd = this.swarm.tactics.board.get(s.id);
-      const path = this.swarm.tactics.board.getPath(s.id);
       const o = cmd?.order;
       const sig = o ? `${o.kind}|${(o.target?.x ?? 0) | 0},${(o.target?.z ?? 0) | 0}|${o.seq}|${cmd!.source}` : 'none';
       if (this.lastSquad.get(s.id) !== sig) {
@@ -108,14 +107,14 @@ export class AiTrace {
         }
         if (cmd) {
           // ★ 寻路结果独立采样（走廊/起终点/失败冷却变化才记；4m 量化防抖）
-          const psig = `${cmd.pathFromX ?? -1 | 0},${cmd.pathFromZ ?? -1 | 0}|${cmd.pathGoalX ?? -1 | 0},${cmd.pathGoalZ ?? -1 | 0}|${cmd.corridor?.length ?? 0}|${cmd.stepK ?? -1}/${cmd.stepN ?? -1}|${cmd.pathFailedAt ? 1 : 0}`;
+          const psig = `${cmd.pathFromX ?? -1 | 0},${cmd.pathFromZ ?? -1 | 0}|${cmd.pathGoalX ?? -1 | 0},${cmd.pathGoalZ ?? -1 | 0}|${cmd.corridor?.length ?? 0}|${cmd.pathFailedAt ? 1 : 0}`;
           if (this.lastPath.get(s.id) !== psig) {
             this.lastPath.set(s.id, psig);
             this.push({
               t, ev: 'path', squad: s.id,
               from: cmd.pathFromX !== undefined ? [+cmd.pathFromX.toFixed(1), +cmd.pathFromZ!.toFixed(1)] : undefined,
               goal: cmd.pathGoalX !== undefined ? [+cmd.pathGoalX.toFixed(1), +cmd.pathGoalZ!.toFixed(1)] : undefined,
-              pts: cmd.corridor?.length ?? 0, stepK: cmd.stepK, stepN: cmd.stepN,
+              pts: cmd.corridor?.length ?? 0,
               mission: cmd.pathFailedAt ? '失败冷却' : 'ok',
             });
           }

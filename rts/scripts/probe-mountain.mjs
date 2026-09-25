@@ -251,7 +251,6 @@ while (!stop) {
       })(),
       pool: sw.pool.count, l3: w.enemies.length, speed: w.speed, orderDrops: sw.orderDrops,
       nav: sw.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail, escape: sw.navDbg.escape } : null,
-      gate: sw.dirGateDbg ? { ...sw.dirGateDbg } : null,
     };
   });
   if (!t0) t0 = s.simT;

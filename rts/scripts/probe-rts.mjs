@@ -225,10 +225,9 @@ if (trk.length > 4) {
   // ---------- ★ §6 验收指标（量化；《蜂群重写计划.md》） ----------
   const m6 = await page.evaluate(() => {
     const w = window.__rts; const sw = w?.swarm;
-    const g = sw?.dirGateDbg ?? null;
     const byRole = new Map();
     if (sw) for (const s of sw.squads.all()) {
-      if (s.builders) continue;   // 工兵照旧（分区/派件走旧路径）——间距指标只量新引擎管的兵种
+      if (s.builders) continue;   // 工兵走 EngineerManager（间距指标只量战斗兵种）
       const lead = s.members.get(s.leaderUid);
       if (!lead) continue;        // 无队长（死队/未同步）→ 位置为 0,0，不是真重合
       const st = sw.tactics.board.get(s.id);
@@ -245,15 +244,21 @@ if (trk.length > 4) {
         if (minSame === null || d < minSame) { minSame = d; pair = `${role} #${arr[i].id}/#${arr[j].id}`; }
       }
     }
+    // ★ 成员空转（不读旧 OrderGate）：有指令但目标≈自身 <1.5m 的成员占比
+    let idle = 0, decided = 0;
+    const p = sw?.pool;
+    if (p) for (let i = 0; i < p.count; i++) {
+      if (p.directiveKind[i] === 0) continue;   // 'none'：无指令
+      decided++;
+      if (Math.hypot(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i]) < 1.5) idle++;
+    }
     return {
-      keep: g?.keep ?? null, commit: g?.commit ?? null, decide: g?.decide ?? null,
-      idle: g?.idle ?? null, arriveWait: g?.arriveWait ?? null,
+      idle, decided,
       minSame: minSame === null ? null : +minSame.toFixed(1), pair,
     };
   });
   const durMin = 62 / 60;   // 采样窗 8s→70s（≈62 模拟秒）
-  const intercept = (m6.keep !== null && (m6.commit + m6.keep) > 0) ? (m6.keep / (m6.commit + m6.keep)) * 100 : null;
-  const idlePct = m6.decide ? ((m6.idle + m6.arriveWait) / m6.decide) * 100 : null;
+  const idlePct = m6.decided ? (m6.idle / m6.decided) * 100 : null;
   // ★ 销毁率（窗口差分；用户定 2026-09-25）：账本离场 = 击杀/回收/其他；计时销毁 = TimerManager 判决（卡死/寿命）
   const dA = samples[0]?.destroy ?? null;
   const dB = samples[samples.length - 1]?.destroy ?? null;
@@ -265,7 +270,6 @@ if (trk.length > 4) {
   const timerRate = dTimer === null ? null : dTimer / durMin;
   const stuckRate = dTStuck === null ? null : dTStuck / durMin;
   const rows = [
-    ['成员门拦截 ≥90%', intercept === null ? '-' : intercept.toFixed(1) + '%', intercept !== null && intercept >= 90],
     ['成员空转 <5%', idlePct === null ? '-' : idlePct.toFixed(1) + '%', idlePct !== null && idlePct < 5],
     ['同兵种目标间距 ≥40m', m6.minSame === null ? '-' : m6.minSame + 'm ' + m6.pair, m6.minSame !== null && m6.minSame >= 40],
     ['卡死回收 ≤10/min', stuckRate === null ? '-' : stuckRate.toFixed(1) + '/min', stuckRate !== null && stuckRate <= 10],

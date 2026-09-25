@@ -14,7 +14,7 @@ import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import { formationOffset } from './squad/Formation';
 import { SquadPathFinder } from './nav/Corridor';
 import { HpaPath } from './HpaPath';
-import { SquadTactics, type SquadOrderState } from './SquadTactics';
+import type { SquadOrderState } from './squad/State';
 import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
@@ -230,7 +230,7 @@ export class SquadNavigator {
   steerEntities(
     units: readonly SwarmCarrier[] | undefined,
     squads: SquadTable,
-    tactics: SquadTactics,
+    stateOf: (sid: number) => SquadOrderState | null,
     now: number,
     /** ★ 远程有利位置提供者（制高/掩体后；由指挥器实现；minDist = 边撤边打要求更远） */
     rangedPost?: (x: number, z: number, range: number, minDist?: number) => { x: number; z: number } | null,
@@ -245,8 +245,9 @@ export class SquadNavigator {
       arr.push(u);
     }
     for (const [sid, members] of bySquad) {
-      const state = tactics.board.get(sid);
-      if (!state || (state.until > 0 && now > state.until) || !tactics.board.isActive(state, now)) {
+      const state = stateOf(sid);
+      const active = !!state && (state.until <= 0 || now <= state.until) && now >= state.notBefore;
+      if (!active || !state) {
         for (const u of members) u.applySteer(null);
         continue;
       }
@@ -257,10 +258,7 @@ export class SquadNavigator {
       }
       const lead = squad.members.get(squad.leaderUid);   // ★ 无质心：一切按队长
       if (!lead) continue;
-      // ★ P4 寻路轨优先：队长步令在身 → 编队锚点 = 当前步（过期/无步回退命令锚）
-      const stepState = tactics.board.getPath(sid);
-      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
-      const tgt = stepTgt ?? currentTargetOf(state, lead.x, lead.z);
+      const tgt = currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
       const dx = tgt.x - lead.x;
       const dz = tgt.z - lead.z;

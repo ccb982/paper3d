@@ -229,7 +229,7 @@ if (newFiles.length) {
     if (r !== 'systems/swarm/engine/OrderWriter.ts' && STORE_WRITE.test(c)) errors.push(`G2 ${r}: 队令单写口只许 engine/OrderWriter.ts`);
     if (!inSquad && DIRECTIVE_WRITE.test(c)) errors.push(`G3 ${r}: 成员指令（directive 列）只许 squad/ 写`);
     if (!inEngine && WORLD_READ.test(c)) errors.push(`G4 ${r}: 世界位置由引擎提供（禁直读 spawn/hooks）`);
-    if (inSquad && ANCHOR_WRITE.test(c)) errors.push(`G5 ${r}: 保护锚（anchor）只属于引擎的保护令`);
+    if (inSquad && r !== 'systems/swarm/squad/State.ts' && ANCHOR_WRITE.test(c)) errors.push(`G5 ${r}: 保护锚（anchor）只属于引擎的保护令`);
     if ((inEngine || inSquad) && NOW_CALL.test(c)) errors.push(`G6 ${r}: 命令/规划层禁裸 performance.now()（now 从参数传入）`);
     // ★ 表构建器 PassTable.ts 是表的所有者（建表即写表列）；G7 约束的是**寻路算法**不改地形
     if (inNav && r !== 'systems/swarm/nav/PassTable.ts' && TABLE_WRITE.test(c)) errors.push(`G7 ${r}: nav/ 只读地形表，禁写裁决/高度`);

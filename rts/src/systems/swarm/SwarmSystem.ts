@@ -23,16 +23,16 @@ import {
 import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
-import { SquadTable, type SquadRating } from './SquadTable';
+import { SquadTable, type Squad, type SquadRating } from './SquadTable';
 import { SquadTactics, roleBucket } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
-import { SquadDispatch } from './SquadDispatch';
 import { followDir, leaderDir, followStopR } from './squad/Follow';
+import type { SquadOrderState } from './squad/State';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmCommander } from './SwarmCommander';
 import {
-  roleFromCode, orderFromCode, directiveFromCode,
+  roleFromCode, orderFromCode, directiveFromCode, orderCode, directiveCode, fireCode,
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
@@ -117,13 +117,12 @@ export class SwarmSystem {
   private readonly pendingWiped: number[] = [];
   /** ★ 步骤 9：成员状态同步节拍（4Hz） */
   private ratingAccum = 0;
-  /** ★ 步骤 9b：小队黑板 + 命令分解（同质默认矩阵） */
+  /** ★ 步骤 9b：小队黑板（**仅 UI/探针只读镜像**；执行真源 = squad/SquadCore） */
   readonly tactics = new SquadTactics();
-  /** ★ 步骤 9b：分解节拍（2Hz） */
-  private tacticsAccum = 0;
-  /** ★ 队长层成员分派（成员指令唯一写口；用户定 2026-09-24 收编） */
-  private readonly dispatch: SquadDispatch;
-  get dirGateDbg(): typeof this.dispatch.dbg { return this.dispatch.dbg; }
+  /** ★ 执行态单源（队长核；main 接线）：执行层读走廊/锚点用 */
+  private squadStateOf: ((id: number) => SquadOrderState | null) | null = null;
+  /** ★ 队注销回调（全灭/收编）：main 接线清队长核/引擎 store */
+  private squadGone: ((id: number) => void) | null = null;
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
   readonly commander = new SwarmCommander(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
@@ -133,6 +132,8 @@ export class SwarmSystem {
   /** ★ 步骤 6：上帧玩家位置（被击升格的 L3 范围判定） */
   private lastPlayerX = 0;
   private lastPlayerZ = 0;
+  /** ★ 最近一帧 hooks（队长核 applyDirective → L3 onDirective 用） */
+  private lastHooks: SwarmHooks | null = null;
   /** ★ E4a 编队 steer / HPA 预热节拍（10Hz） */
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
@@ -167,16 +168,6 @@ export class SwarmSystem {
       if (p.uid <= 0) return;
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
-    });
-    // ★ 队长层成员分派（引擎不再写成员指令/成员任务；引擎只做命令轨 → 交队长调遣）
-    this.dispatch = new SquadDispatch({
-      pool: this.pool,
-      squads: this.squads,
-      tactics: this.tactics,
-      nav: this.nav,
-      world: this.commander,
-      alerted: (id) => performance.now() / 1000 - (this.recentHits.get(id) ?? -1e9) <= AUTONOMY.SQUAD_ALERT_S,
-      fireAllowed: (uid) => this.fireAllowed(uid),
     });
   }
 
@@ -303,6 +294,7 @@ export class SwarmSystem {
       ]);
     }
     const now = performance.now() / 1000;
+    this.lastHooks = hooks;
     this.lastPlayerX = hooks.playerX;
     this.lastPlayerZ = hooks.playerZ;
 
@@ -321,12 +313,7 @@ export class SwarmSystem {
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
     this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
-    // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
-    this.tacticsAccum += dt;
-    if (this.tacticsAccum >= 0.5) {
-      this.tacticsAccum = 0;
-      this.applyOrders(now, hooks);
-    }
+    // ★ 队长层调遣（squad/SquadCore.drive）由 main 每帧驱动（成员指令唯一写口 = applyDirective）
 
     // ★ 卡死回收已收编进新引擎 `engine/TimerManager`（1Hz；驻守/交战豁免 → 净活动范围回收）
     //   ——旧 SwarmRecovery 已删除；计时销毁/卡死判决与开火闩锁同源（EngineBridge 驱动）。
@@ -440,7 +427,7 @@ export class SwarmSystem {
     if (this.steerAccum >= 1 / SWARM.STEER_HZ) {
       this.steerAccum = 0;
       if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
-      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, this.tactics, now,
+      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
         (x, z, r) => this.commander.rangedPost(x, z, r));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
@@ -766,7 +753,7 @@ export class SwarmSystem {
       // ★ 成员跟队长（用户定 2026-09-24）：近=直线；掉队且直线被挡 → 长寻路沿走廊绕（Follow）
       //   双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
       const stopR = followStopR(p.atomMove[i] === 255, lead.x, lead.z, p.orderTargetX[i], p.orderTargetZ[i]);
-      const fd = followDir(this.tactics, squad!.id, p.x[i], p.z[i], lead.x, lead.z,
+      const fd = followDir(this.squadStateOf?.(squad!.id) ?? null, p.x[i], p.z[i], lead.x, lead.z,
         stopR, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
       if (fd) { dx = fd.x; dz = fd.z; }
       else { dx = 0; dz = 0; p.atomMove[i] = 255; }
@@ -904,7 +891,8 @@ export class SwarmSystem {
       this.syncLeaderFlags(res.squadId);
       if (res.wiped) {
         this.pendingWiped.push(res.squadId);
-        this.tactics.board.dropSquad(res.squadId);   // ★ 全灭 → 黑板同步清
+        this.tactics.board.dropSquad(res.squadId);   // 黑板镜像清
+        this.squadGone?.(res.squadId);               // 队长核/引擎 store 清（main 接线）
       }
     }
   }
@@ -1006,6 +994,7 @@ export class SwarmSystem {
     if (res.wiped) {
       this.pendingWiped.push(res.squadId);
       this.tactics.board.dropSquad(res.squadId);
+      this.squadGone?.(res.squadId);
     }
   }
 
@@ -1075,23 +1064,44 @@ export class SwarmSystem {
   private _orderDrops = 0;
   get orderDrops(): number { return this._orderDrops; }
 
-  /** ★ 步骤 9b：把小队命令分解成个体指令（池写列；实体经 onDirective 推送） */
-  /** ★ 命令轨（引擎）：到期/未激活 → 不下发；其余交**队长层**调遣（SquadDispatch） */
-  private applyOrders(now: number, hooks: SwarmHooks): void {
-    const seenUids = new Set<number>();
-    for (const squad of this.squads.all()) {
-      const state = this.tactics.board.get(squad.id);
-      if (!state) continue;
-      if (state.until > 0 && now > state.until) {
-        this._orderDrops++;   // ★ P3 观测：命令到期回落本地（使命 TTL 使命化前后对比）
-        this.tactics.board.dropSquad(squad.id);   // 命令到期 → 回落本地自主
-        continue;
-      }
-      // ★ 五轴时序/信号：未到生效时刻/未发信号 → 本拍不下发（旧指令自然过期）
-      if (!this.tactics.board.isActive(state, now)) continue;
-      this.dispatch.run(squad, state, now, hooks, seenUids);
+  /** ★ 队长核端口：寻路求解（执行态走廊写入；长短由 ensurePath 内部分流） */
+  ensurePathFor(state: SquadOrderState, squad: Squad, now: number): void {
+    this.nav.ensurePath(this.squads, squad, state, now);
+  }
+
+  /** ★ 队长核端口：成员指令**唯一落地口**（池列写口 / L3 onDirective） */
+  applyDirectivePort(
+    uid: number, order: TacticalOrder, directive: UnitDirective, until: number, ax: number, az: number,
+  ): void {
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) {
+      if (p.swarmUid[i] !== uid) continue;
+      p.orderKind[i] = orderCode(order.kind);
+      p.orderTargetX[i] = ax;
+      p.orderTargetZ[i] = az;
+      p.orderUntil[i] = until;
+      p.orderSeq[i] = order.seq;
+      p.directiveKind[i] = directiveCode(directive.kind);
+      p.directiveTargetX[i] = directive.targetX ?? 0;
+      p.directiveTargetZ[i] = directive.targetZ ?? 0;
+      p.directiveWard[i] = directive.wardUid ?? 0;
+      p.directiveUntil[i] = directive.until;
+      p.directiveFire[i] = fireCode(directive.fire);
+      p.directiveSpeedMul[i] = directive.speedMul;
+      p.directiveSeq[i] = directive.seq;
+      return;
     }
-    this.dispatch.prune(seenUids);
+    this.lastHooks?.onDirective?.(uid, order, directive, until);
+  }
+
+  /** ★ main 接线：执行态单源（队长核） */
+  setSquadStateSource(fn: ((id: number) => SquadOrderState | null) | null): void {
+    this.squadStateOf = fn;
+  }
+
+  /** ★ main 接线：队注销（清队长核 + 引擎 store） */
+  setSquadGone(fn: ((id: number) => void) | null): void {
+    this.squadGone = fn;
   }
 
   /** 调试/统计：层级计数 */
@@ -1122,7 +1132,6 @@ export class SwarmSystem {
     this.leaderChanges.length = 0;
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
-    this.tacticsAccum = 0;
     this.commander.clear();
     this.recentHits.clear();
     this.counterUntil = 0;

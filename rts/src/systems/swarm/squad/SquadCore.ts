@@ -1,16 +1,23 @@
 // ============================================================
-// squad/SquadCore.ts —— 队长核心（重写 P2；铁律 1）
+// squad/SquadCore.ts —— 队长核心（重写 P2/P4；铁律 1）
 // ============================================================
 // 队长只做三件事：
-//   ① 接令：命令唯一来源 = SquadOrderStore（只给队长；引擎/玩家同源）
-//   ② 导航：按距离选 **行军**（长寻路）/ **行动**（短跳）——原子能力四件套的推进器
+//   ① 接令：命令唯一来源 = SquadOrderStore（引擎/玩家同源）
+//   ② 导航+调遣：按距离选 **行军**（长寻路）/ **行动**（短跳）；走廊锚点 → 队长走；
+//      成员**围队长**（阵型槽位）——队长不给代理下命令，成员一律跟队长走
 //   ③ 汇报：唯一接收器 SquadManager.report（进度/位置/原子/阶段）
-// 队长**不给代理下命令**——成员一律跟队长走。
-// 纯逻辑（寻路/汇报由端口注入）→ 可独立自检。
+// 纯逻辑（寻路/指令落地由端口注入）→ 可独立自检。
 // ============================================================
 
+import type { MobTactics, TacticalOrder, UnitDirective } from '../../../entity/SwarmUnit';
+import { squadBucket } from '../../../entity/SwarmUnit';
 import type { AtomicKind, MobRole, OrderPhase, SquadOrder, SquadReport } from '../engine/contracts';
+import type { Squad } from '../SquadTable';
+import type { TerrainCover } from '../UnitTactics';
 import { onArriveAtom } from './Abilities';
+import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
+import { formationOffset } from './Formation';
+import { decompose } from './Decompose';
 
 /** 距离分流阈值（米；用户定：行军=距离长→长寻路，行动=距离短→短跳） */
 export const MARCH_DIST = 40;
@@ -22,6 +29,22 @@ export interface SquadNav {
   longPath(x: number, z: number): number;
   /** 短跳：LOS 直线可行 */
   canHop(x: number, z: number): boolean;
+}
+
+/** 队长驱动端口（执行落地；由接线层注入） */
+export interface SquadDrivePorts {
+  /** 长/短寻路求解（走廊写入 state） */
+  ensurePath(state: SquadOrderState, squad: Squad, now: number): void;
+  /** 队长站位锚（保护/驻守/巡逻 + 走廊前瞻；由接线层提供 resolveAnchor） */
+  leaderTarget(state: SquadOrderState, squad: Squad, lx: number, lz: number, now: number): { x: number; z: number; climb?: boolean } | null;
+  /** 事态环夹取（队长目标/指令目标同门） */
+  clampRing(x: number, z: number): { x: number; z: number };
+  terrain(): TerrainCover | null;
+  mobTactics(mobIndex: number): MobTactics | null;
+  /** 开火闩锁（引擎）：false → 软禁火（fire=hold） */
+  fireAllowed(uid: number): boolean;
+  /** 成员指令落地（池列 / L3 onDirective）；ax/az = 队长锚点（orderTarget 列） */
+  applyDirective(uid: number, order: TacticalOrder, directive: UnitDirective, until: number, ax: number, az: number): void;
 }
 
 export interface SquadPorts {
@@ -46,18 +69,25 @@ export class SquadCore {
   /** 探针契约（G9） */
   readonly dbg = { orders: 0, long: 0, short: 0, done: 0, last: '' };
 
+  /** 本队执行态（路径缓存/锚点滞回；真源=引擎令） */
+  state: SquadOrderState | null = null;
+  /** 最近一次接令（待建态） */
+  private pending: SquadOrder | null = null;
   private order: SquadOrder | null = null;
   /** 接令时到目标的距离（进度分母；队长自报） */
   private d0 = 0;
   /** 上一拍位置（静止计时用） */
   private lastX = 0;
   private lastZ = 0;
+  /** 指令序号（队内单调） */
+  private seq = 1;
 
   constructor(readonly id: number, readonly role: MobRole, private readonly ports: SquadPorts) {}
 
   /** 接令（引擎/玩家 → 队长；只给队长，成员不接令） */
-  accept(order: SquadOrder): void {
+  accept(order: SquadOrder, now = 0): void {
     this.order = order;
+    this.pending = order;
     this.phase = 'issued';
     this.progress = 0;
     this.stillS = 0;
@@ -66,10 +96,64 @@ export class SquadCore {
     this.lastZ = this.z;
     this.dbg.orders++;
     this.dbg.last = `#${this.id} ${order.kind}→${order.target.x.toFixed(0)},${order.target.z.toFixed(0)}`;
+    void now;
   }
 
   current(): SquadOrder | null {
     return this.order;
+  }
+
+  /** 队长驱动（每帧；执行层调遣——走廊锚点 + 成员围队长 + 指令落地） */
+  drive(squad: Squad, now: number, port: SquadDrivePorts): void {
+    const o = this.order;
+    if (!o) return;
+    if (this.pending) {
+      this.state = stateFromOrder(this.id, o, this.state, now, ORDER_TTL_DEFAULT);
+      this.pending = null;
+    }
+    const st = this.state;
+    if (!st) return;
+    // ★ 玩家令优先：store 侧已保证（引擎不覆盖）；此处只看执行态是否过期
+    if (st.until > 0 && now > st.until && st.source !== 'player') return;
+    const lead = squad.members.get(squad.leaderUid);
+    const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
+    // ① 寻路轨：队长走廊（长行军 A* / 短跳贪心；覆盖式写入 st）
+    port.ensurePath(st, squad, now);
+    // ② 队长锚点（保护/驻守站位 + 走廊前瞻 + 环夹取）
+    const at = port.leaderTarget(st, squad, lx, lz, now);
+    let ax = at?.x ?? o.target.x;
+    let az = at?.z ?? o.target.z;
+    const c = port.clampRing(ax, az);
+    ax = c.x; az = c.z;
+    // ③ 成员调遣：分解矩阵 + 开火门 + 围队长（队长走锚点）
+    const bucket = squadBucket(squad.type);
+    const uids: number[] = [];
+    for (const uid of squad.members.keys()) uids.push(uid);
+    const fl = Math.hypot(ax - lx, az - lz);
+    const fx = fl > 1e-3 ? (ax - lx) / fl : 1;
+    const fz = fl > 1e-3 ? (az - lz) / fl : 0;
+    const atTarget = at ? { x: ax, z: az } : null;
+    let rank = 0;
+    for (const uid of uids) {
+      const info = squad.members.get(uid);
+      if (!info) continue;
+      const hpRatio = info.maxHp > 0 ? info.hp / info.maxHp : 1;
+      const dir = decompose(squad, st, bucket, now, hpRatio, () => this.seq++,
+        atTarget, port.mobTactics(squad.mobKind));
+      if (!port.fireAllowed(uid)) dir.fire = 'hold';
+      if (!squad.singleton) {
+        if (uid === squad.leaderUid) {
+          dir.targetX = ax;
+          dir.targetZ = az;
+        } else {
+          const off = formationOffset(squad.type, rank);
+          dir.targetX = lx + fx * off.fx - fz * off.fz;
+          dir.targetZ = lz + fz * off.fx + fx * off.fz;
+        }
+      }
+      rank++;
+      port.applyDirective(uid, st.order, dir, st.until, ax, az);
+    }
   }
 
   /** 每拍推进：按距离选 行军/行动 → 到位 → 汇报（引擎只记录，不逐拍指挥） */

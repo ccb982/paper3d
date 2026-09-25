@@ -105,9 +105,8 @@ export class NavDebugMap {
     this.span = span;
     if (focus) { this.cx = focus.x; this.cz = focus.z; }
     else if (squadId !== null) {
-      const path = this.swarm.tactics.board.getPath(squadId);
       const cmd = this.swarm.tactics.board.get(squadId);
-      const t = cmd?.order?.target ?? (path?.pathGoalX !== undefined ? { x: path.pathGoalX, z: path.pathGoalZ! } : null);
+      const t = cmd?.order?.target ?? (cmd?.pathGoalX !== undefined ? { x: cmd.pathGoalX, z: cmd.pathGoalZ! } : null);
       if (t) { this.cx = t.x; this.cz = t.z; }
       else {
         const s = this.swarm.squads.get(squadId);

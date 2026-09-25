@@ -4,7 +4,7 @@
 //   采样 500ms × 120（60s）；统计每成员：
 //     · kind 变化次数 / 目标变化次数与跳距（m）
 //     · 空转（目标 ≈ 自身位置 < 1.5m）、反向（目标在移动方向背面）、kind 翻转
-//   按兵种（squad.type）聚合输出；附 OrderGate 计数（dirGateDbg）
+//   按兵种（squad.type）聚合输出（成员指令门 OrderGate 已删：跟队长不由门控制）
 // ============================================================
 import puppeteer from 'puppeteer-core';
 
@@ -69,13 +69,11 @@ for (let s = 0; s < N; s++) {
     }
   }
 }
-const gate = await page.evaluate(() => ({ ...window.__rts.swarm.dirGateDbg }));
 console.log('\n兵种       样本  指令kind变  目标变  平均跳距  空转%  反向%  >20m跳%  限速%');
 for (const [t, a] of [...stat.entries()].sort((x, y) => y[1].samples - x[1].samples)) {
   const pc = (v) => ((v / Math.max(1, a.samples)) * 100).toFixed(1);
   console.log(`${t.padEnd(10)} ${String(a.samples).padStart(5)} ${String(a.kindChg).padStart(8)} ${String(a.tgtChg).padStart(7)} ${(a.jump / Math.max(1, a.jumpN)).toFixed(1).padStart(8)} ${pc(a.noop).padStart(6)} ${pc(a.rev).padStart(6)} ${pc(a.flip).padStart(8)} ${pc(a.mulLt1).padStart(6)}`);
 }
-console.log('\nOrderGate(成员指令门):', JSON.stringify(gate));
 
 // ★ 新引擎（唯一指挥链）健全性（重写 P4；G9 调试口契约）
 {

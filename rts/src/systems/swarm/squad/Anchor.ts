@@ -9,7 +9,7 @@
 
 import { guardPoint, UNIT_TACTICS, ensureCovered, standBehindCover, type TerrainCover } from '../UnitTactics';
 import type { SquadType } from '../../../entity/SwarmUnit';
-import type { SquadOrderState } from '../SquadTactics';
+import type { SquadOrderState } from './State';
 
 /** 活令（新 store 的单源视图；kind/G/P） */
 export interface LiveOrder {
