@@ -14,6 +14,12 @@
 2. **微观无序（队自决）**：各队自主寻路/走位/队形；允许绕、散、慢；不要求步调一致。
 3. **引擎只在四类时刻介入**：① 事态变动 ② 队重伤（整队血比<0.5）③ 扎堆（同兵种目标<40m，发令时切向散开）④ 磨蹭/到环上限；
    其余时间**少发令**。验收看宏观：全队**离舰距离均值单调下降**；局部乱不扣分。
+   - **命令使用设计（用户定 2026-09-25）**：
+     · **用命令（执行侧）= 按距离选寻路**（>40m 长=可行性表路线 / ≤40m 短=LocalStep）→ 沿路点走 → 到达即止；
+       失败冷却重试、**不发不可保证的路**；不打断保障 = 锁存 + 重规划仅 4 事件。
+     · **下命令（发令侧）= 引擎少发令**：只在"① 事态变更且不在范围 → 长寻路 / ② 危机 → 回撤 / ③ 扎堆 → 拉开"三时刻；
+       长寻路非引擎专属（队长派件也可，如工兵进防区）；令尽后小队**自决**（短寻路、在无序中向舰推进）。
+     · 详见《寻路重写方案.md》§4.4（执行契约）/ §4.4.2（下命令方案，8 维待裁决）。
 
 ### 0.1 收回机制铁律（不可动；用户定 2026-09-25）
 - **卡死判决 / 寿命销毁 / 收回落地**（`TimerManager` → `retire` / `recycleByUid`）**一律不得弱化、不得放宽豁免、不得绕过或删除**。
@@ -48,7 +54,7 @@ systems/swarm/
             RoleManager+四兵种(Melee/Ranged/Flyer/Engineer)Manager Spread contracts
   squad/    SquadCore SquadRegistry CommandLang State Decompose Anchor Follow Formation Abilities MarchAction
   data/     SwarmData（地形/表/L1/L2/事态环/t01/工事数据/编制与生成执行）
-  nav/      PassTable LongPath Corridor（含 ShortHop 短跳）
+  nav/      PassTable LongPath LocalStep（短寻路；Corridor/ShortHop 旧加权链已退出主链）
   根        SwarmSystem（代理移动/渲染/LOD）、AgentPool、SquadTable、TerrainScore/TerrainSemantics/HoleMask/HoleTable、
             PostureFn、FortifyPlanner、CommanderSpawn、SwarmLedger、SwarmBatch、SwarmConfig、SwarmDanger、UnitTactics/UnitStrategy
 ```
@@ -190,7 +196,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - `Follow.ts`：`leaderDir`（锚点优先，离队令目标 >8m 不停）、`followStopR`（队长未到位 2m；否则动 5m/停 8m 滞回）、`followDir`（近=直线；掉队 >12m 且直线被挡 → 沿队走廊前瞻 4m）。
 - `Formation.ts`：楔形/线列槽位（按兵种），同槽冲突走横向车道。
 - `Abilities.ts`：到位驻留口径（`patrol/defend/protect → patrol`，否则 `garrison`）。
-- `MarchAction.ts`：`createSquadNav`（长寻路=可行性路径长度；短跳=`walkableLine`）。
+- `MarchAction.ts`：`createSquadNav`（**仅降级兜底**：自检/未 drive 时的距离分流计数；实机执行侧=按距离选寻路 LocalStep/可行性表）。
 - `SquadRegistry.ts`：每队一个 SquadCore；`accept/tick/stateOf/states/drop`；驱动端口（`squadOf/ensurePath/leaderTarget/clampRing/terrain/mobTactics/fireAllowed/applyDirective`）由 main 注入。
 
 ---
@@ -251,11 +257,15 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 - **PassTable（可行性表 · 敌人消费收敛层，只读）**：五值（自身高度 + 四向边 可走/净落差）；**边型 = 地形表裁决**（`weld/cliff`，与渲染同源）；格对齐块格（4m）；`weld`（坡）= 双向可行 + 每边存 `climb` 位（净升 >0.6）；`cliff` 落差 ≤`EDGE_CLIFF_BAND=0.6` 可走、>0.6 **上墙下可行**；坑（地块类型 `pit`）**目标口径一律墙**（现状仅致死坑 `pit && h<−1.2` 双向禁）。
 - **LongPath（坡度加权 A\*）**：八向 octile；**上坡 +0.6/m**（偏好缓坡/垭口）；**上坡横平竖直**（斜向仅平/下坡）；输出走廊路点带 `climb` 标注。
-- **短跳（ShortHop/贪心）**：LOS 10m（窄地形 6m）；推进 >0.5m 硬门槛；`W_SAFE=4×(1−pathMul)`；**爬升加价 2/m**；惯性 5s 同向加分。
-- **分工（用户定）**：**长行军=长寻路**（`LONG_PATH_DIST=40m`）；短程（交战/巡逻/驻守/就近施工）=短寻路；`ensurePath` 触发 = 无路径 / 目标位移 >24m / 12s 超时 / 失败冷却 3s。
+- **短寻路（`nav/LocalStep`，S1）**：有限窗口 Dijkstra（半径 24m；语义风险偏好；终点精确 ≤1.5m；无解 → null）；仅直线不可走时启用。
+- **分工（用户定）= 按距离**：>40m=长寻路（可行性表路线，加密 ≤10m + 逐段 climb）/ ≤40m=短寻路（LocalStep）；
+  长寻路非引擎专属（队长派件也可）。`ensurePath` 触发（S3b）= 目标位移 >24m / 净推进停滞 3s / 表代次变 / 无路径；失败冷却 3s。
 - **走廊**：`SquadNavigator.ensurePath` 写入**队长核执行态**（`state.corridor`），`Anchor.currentTargetOf` 沿线滚动；L3 编队 steer 与代理跟随同源。
 - **执行层**：上坡走坡正面（明显爬坡才拉直：`up>0.45 && mag>0.22`；0.65 路径/0.35 梯度）；爬坡态定速直推、免立面、跳过分离；**坡面不许驻留**；水中上岸台阶放宽 `SHORE_CLIMB_MAX=2.5m`（陆地仍 0.6m）；水=正常地块（仅建表软降分 −0.6）。
 - **无质心**：锚点前瞻/编队朝向/寻路起点/实体槽位全部按**队长**；成员 = 队长 + 槽位偏移。
+- **方案 A（已实装 2026-09-25）：移动消费格边图**——`nav/EdgeFollow`：路线→去重格序列→执行步=**轴对齐单步**（`canStep` 校验；
+  斜向格分解两拍）；格边模式跳过 16 向软转向/坡混合，分离保留；L2/L3、队长/成员同款（成员=贪心格边步跟队长）。
+  （原结构性问题：移动=连续向量 vs 寻路=离散格边图 → 规划可达但执行走不了；见《寻路重写方案.md》§4.4.3。）
 
 ---
 
@@ -321,7 +331,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 长短寻路分界 | 40m | `CommandLang.MARCH_DIST` / `NAV.LONG_PATH_DIST` |
 | 可达核验：短程 LOS 快筛 | 20m | `SwarmConfig.REACH_SHORT_LOS_R`（长途一律 BFS） |
 | 长寻路加权 | 上坡 +0.6/m；斜向 ×1.414（上坡仅四向） | `FeasibilityPath` |
-| 短跳 | 10m→6m；爬升 +2/m；推进>0.5m | `ShortHop` |
+| 短寻路 | 窗口 24m；语义风险；终点精确；无解 null | `LocalStep` |
 | 硬边台阶豁免 | 0.6m；>0.6 上墙/下可行 | `PassTable.edge` |
 | LOD | L3 45/36、L2 120、L1 190、降格 55 | `SwarmConfig.SWARM` |
 | 掩体校验 | STANDOFF 7 / TOL 3.5 / NEAR 2.5 / FAR 3.5 / GAP 1.2 / HIDE 2.5 | `entity/base/Blocking.PROTECT` |

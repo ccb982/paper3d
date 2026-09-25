@@ -121,10 +121,14 @@ export class SquadCore {
     // ① 站位锚（defend/act/patrol 经 resolveAnchor；protect 走 blockCheck 调整点，不用锚）
     let anchor: { x: number; z: number } | null = null;
     if (st.order.kind !== 'protect') {
-      port.ensurePath(st, squad, now);   // 寻路轨：队长走廊（长行军 A* / 短跳贪心）
+      // ★ 使用契约（《寻路重写方案.md》§4.4）：队长=唯一路线消费者；
+      //   重规划仅 4 事件（目标变/停滞3s/表代次/到达）+ 目标锁存（S3b 已实装）；
+      //   令尽后自决（短寻路向舰）= 下命令方案待设计（§4.4.2）
+      port.ensurePath(st, squad, now);   // 寻路轨：长=可行性表路线（S2）/ 短=LocalStep（S1）
       anchor = port.leaderTarget(st, squad, lx, lz, now);
     }
     // ② 复合 → 原子（解释器 = `squad/CommandLang.ts`；protect 用 blockCheck 调整点）
+    //   ★ 命令使用设计（方案 §4.4.2）：引擎令与自决**同一条执行链**；令尽后自主（短寻路向舰，S3 立项）
     const sel = interpretLeader(st, lx, lz, anchor);
     // ③ protect：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
     if (st.order.kind === 'protect' && sel.atom !== 'garrison') {

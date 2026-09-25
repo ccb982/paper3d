@@ -738,24 +738,32 @@ export class SwarmSystem {
     this.grid.separation(p, i, _sep);
     entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
     let dx = p.dirX[i], dz = p.dirZ[i];
+    let edgeMode = false;   // ★ 方案 A：格边步模式（轴对齐 + canStep；跳过软转向/坡混合）
     // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
     //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
     const squad = this.squads.squadOf(p.swarmUid[i]);
     const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
     if (isLeader) {
-      // ★ 队长 → 走队级指令锚点；到位校验见 leaderDir
+      // ★ 队长 → 指令锚点（唯一路线消费者）。方案 A：有走廊 → **格边步**（与规划同口径）
       const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
         p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
-      if (ld) { dx = ld.x; dz = ld.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+      if (ld) {
+        const st = squad ? this.squadStateOf?.(squad.id) ?? null : null;
+        const e = this.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
+        if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
+        else { dx = ld.x; dz = ld.z; }
+      } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
-      // ★ 成员跟队长（用户定 2026-09-24）：近=直线；掉队且直线被挡 → 长寻路沿走廊绕（Follow）
-      //   双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
+      // ★ 成员跟队长（滞回消抖；掉队沿走廊）；方案 A：目标距离>格 → 格边贪心步
       const stopR = followStopR(p.atomMove[i] === 255, lead.x, lead.z, p.orderTargetX[i], p.orderTargetZ[i]);
       const fd = followDir(this.squadStateOf?.(squad!.id) ?? null, p.x[i], p.z[i], lead.x, lead.z,
         stopR, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
-      if (fd) { dx = fd.x; dz = fd.z; }
-      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+      if (fd) {
+        const e = this.nav.edgeGreedy(p.x[i], p.z[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
+        if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
+        else { dx = fd.x; dz = fd.z; }
+      } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (p.atomMove[i] !== 255) {
       const atom = MOVE_ATOMS[p.atomMove[i]];
       let tx = p.directiveTargetX[i] - p.x[i];
@@ -767,13 +775,19 @@ export class SwarmSystem {
       dz = _atomDir.z;
     }
     // ★ 爬山（共享基础方法 TerrainAssist；L2/L3 同内核）：坡正面混合（水=正常地块，无特殊）
-    if (p.isAir[i] !== 1) {
+    if (p.isAir[i] !== 1 && !edgeMode) {
       fallLineBlend(this.data, p.x[i], p.z[i], dx, dz, _dir);
       dx = _dir.x; dz = _dir.z;
     }
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
     const inside = this.data.blockedAt(p.x[i], p.z[i]);
     if (dx !== 0 || dz !== 0 || inside) {
+      if (edgeMode) {
+        // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
+        const step = p.stepAgent(i, dx, dz, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
+        p.x[i] += step.dx; p.z[i] += step.dz;
+        if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
+      } else {
       p.hazardTimer[i] -= dt;
       const raster = RasterMap.current;
       const hint = p.y[i];
@@ -798,6 +812,7 @@ export class SwarmSystem {
         const step = p.stepAgent(i, res.x, res.z, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
         p.x[i] += step.dx; p.z[i] += step.dz;
         if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
+      }
       }
     }
     // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----

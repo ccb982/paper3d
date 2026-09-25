@@ -18,7 +18,7 @@ export interface SquadOrderState {
   /** 截止（秒；到期回落本地自主） */
   until: number;
   /** 命令来源（引擎命令优先；玩家令同链） */
-  source: 'engine' | 'leader' | 'player';
+  source: 'engine' | 'player';
   /** 生效时刻（秒；startAfter 延迟发动） */
   notBefore: number;
   /** 等信号 id（undefined = 无需） */
@@ -37,11 +37,16 @@ export interface SquadOrderState {
   pathFromZ?: number;
   /** 求解时的代价代次（掩体增删 → 代次变 → 重算偏好） */
   costStamp?: number;
-  /** 锚点滞回：上一前瞻锚点（新锚 <6m 抖动 → 沿用） */
+  /** ★ 目标锁存（S3b）：当前锁定路点（到达/路线重算前不换，防两点间翻转） */
   anchorX?: number;
   anchorZ?: number;
-  /** 锚点的爬坡标记（滞回时必须一起带） */
+  /** 锚点的爬坡标记（锁存时必须一起带） */
   anchorClimb?: boolean;
+  /** ★ 锁存代次 = 求解时刻 pathAt（路线重算 → 代次变 → 锁存失效） */
+  latchAt?: number;
+  /** ★ 净推进停滞检测（S3b）：最近一次"有进展"的时刻与当时距目标距离（3s 无进展 → 重算） */
+  stallAt?: number;
+  stallD?: number;
 }
 
 /** 命令 TTL（默认，游戏分钟） */
@@ -155,6 +160,12 @@ export function stateFromOrder(squadId: number, order: SquadOrder, prev: SquadOr
     st.corridor = prev.corridor;
     st.pathFromX = prev.pathFromX;
     st.pathFromZ = prev.pathFromZ;
+    st.anchorX = prev.anchorX;
+    st.anchorZ = prev.anchorZ;
+    st.anchorClimb = prev.anchorClimb;
+    st.latchAt = prev.latchAt;
+    st.stallAt = prev.stallAt;
+    st.stallD = prev.stallD;
     st.costStamp = prev.costStamp;
   }
   return st;

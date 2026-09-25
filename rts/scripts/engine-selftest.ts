@@ -23,6 +23,7 @@ import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPla
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore } from '../src/entity/base/CharacterCore.ts';
+import { edgeStepRoute, edgeStepGreedy, cellsOfRoute, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
@@ -242,22 +243,19 @@ console.log('[5b] CommandLang 复合→原子（解释器）');
 console.log('[5c] CommandLang 引擎复合句（良构 + 解释器）');
 {
   const base = {
-    kind: 'protect' as const, source: 'engine' as const, roe: 'engage' as const, seq: 0, ttl: 0,
+    kind: 'protect' as const, source: 'engine' as const, seq: 0, ttl: 0,
     target: { x: 0, z: 0 }, anchor: { x: 8, z: 0 }, threat: { x: 0, z: 0 },
   };
   ok(wellFormed(base) === null, 'protect：G/P 齐全 → 良构');
   ok(wellFormed({ ...base, anchor: undefined }) !== null, 'protect：缺 G → 拦下');
   ok(wellFormed({ ...base, threat: undefined }) !== null, 'protect：缺 P → 拦下');
   ok(wellFormed({ ...base, kind: 'act' as never, target: undefined as never }) !== null, 'act：缺 target → 拦下');
-  ok(wellFormed({ ...base, roe: 'bad' as never }) !== null, '非法 roe → 拦下');
   const itP = interpretEngine(base);
   ok(itP.op === 'block' && itP.anchor!.x === 8 && itP.threat!.x === 0, 'protect → block（双点原样）');
   const itA = interpretEngine({ ...base, kind: 'act' as never, target: { x: 12, z: 3 } });
   ok(itA.op === 'move' && itA.target.x === 12, 'act → move(target)');
-  const itD = interpretEngine({ ...base, kind: 'defend' as never, object: { x: 5, z: 5 } });
-  ok(itD.op === 'hold' && itD.target.x === 5, 'defend → hold(object)');
-  const itD2 = interpretEngine({ ...base, kind: 'defend' as never, target: { x: 7, z: 7 } });
-  ok(itD2.op === 'hold' && itD2.target.z === 7, 'defend 无对象 → hold(原地 target)');
+  const itD = interpretEngine({ ...base, kind: 'defend' as never, target: { x: 7, z: 7 } });
+  ok(itD.op === 'hold' && itD.target.z === 7, 'defend → hold(target)');
 }
 
 // ---------- 施工目标获取契约（FortifyPlanner.targetOf） ----------
@@ -384,6 +382,29 @@ console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 /
   ok(run(mkProbe(false, 0.5)).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
 }
 
+// ---------- 方案 A：格边跟随（移动消费格边图） ----------
+console.log('[5h] EdgeFollow 格边跟随（方案 A：轴对齐 + canStep；斜向分解；无路 null）');
+{
+  const mk = (blocked: Set<string> = new Set()) => ({
+    canStep: (x: number, z: number, dx: number, dz: number) => {
+      const c = cellOf(x, z);
+      return !blocked.has(`${c.cx},${c.cz}>${dx},${dz}`);
+    },
+  });
+  const cells = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 2 }, { x: 6, z: 6 }]);
+  ok(cells.length === 3 && cells[1].cx === 1 && cells[2].cz === 1, '路线 → 去重格序列');
+  const s1 = edgeStepRoute(mk(), 2, 2, cells);
+  ok(!!s1 && s1.dx === 1 && s1.dz === 0, '沿路线：轴对齐走一格（东）');
+  ok(edgeStepRoute(mk(new Set(['0,0>1,0'])), 2, 2, cells) === null, '首段被禁 → null（不硬穿）');
+  const diag = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 6 }]);
+  const s2 = edgeStepRoute(mk(), 2, 2, diag);
+  ok(!!s2 && ((s2.dx === 1 && s2.dz === 0) || (s2.dx === 0 && s2.dz === 1)), '斜向格 → 分解为轴对齐单步');
+  const s3 = edgeStepGreedy(mk(), 2, 2, 10, 6);
+  ok(!!s3 && s3.dx === 1 && s3.dz === 0, '贪心跟随：大分量轴优先');
+  ok(edgeStepGreedy(mk(), 2, 2, 3, 3) === null, '同格 → null（交软跟随）');
+  ok(edgeStepRoute(mk(), 6, 6, cells) === null, '已到路线末尾 → null');
+}
+
 // ---------- Spread / OrderValidator ----------
 console.log('[6] 同兵种散开 + 发令统一校验链');
 {
@@ -440,7 +461,7 @@ console.log('[8] OrderWriter 唯一发令器');
   const store = new SquadOrderStore();
   const w = new OrderWriter(store);
   const mk = (kind: SquadOrder['kind'], x: number, z: number): SquadOrder => ({
-    kind, source: 'engine', target: { x, z }, roe: 'engage', seq: 1, ttl: 10,
+    kind, source: 'engine', target: { x, z }, seq: 1, ttl: 10,
   });
   ok(w.issue(1, mk('act', 10, 0), { now: 0 }), '首次发令成功');
   ok(store.get(1) !== undefined, '写入唯一写口（SquadOrderStore）');
@@ -452,10 +473,9 @@ console.log('[8] OrderWriter 唯一发令器');
   w.advance(1, 0.1, 30);
   ok(w.issue(1, mk('protect', 5, 0), { now: 4 }), '静止 ≥25s → 允许换令');
   w.advance(1, 0.1, 0);
-  ok(w.issue(1, mk('act', 99, 0), { now: 5, intervention: true }), '干预令旁路稳定门');
   ok(w.issue(1, mk('act', 77, 0), { now: 6, player: true }), '玩家令旁路');
   ok(w.issue(1, mk('act', 55, 0), { now: 7, wounded: true }), '重伤旁路');
-  ok(w.dbg.bypass >= 3, 'dbg.bypass 计数');
+  ok(w.dbg.bypass >= 2, 'dbg.bypass 计数');
 }
 
 // ---------- AttackQueues ----------
@@ -607,7 +627,7 @@ console.log('[13] SquadCore 队长核心（接令/距离分流/汇报）');
     report: (r) => reports.push(r),
     alive: () => 8,
   });
-  core.accept({ kind: 'act', source: 'engine', target: { x: 100, z: 0 }, roe: 'engage', seq: 1, ttl: 0 });
+  core.accept({ kind: 'act', source: 'engine', target: { x: 100, z: 0 }, seq: 1, ttl: 0 });
   core.tick(0.5);
   ok(core.atom === 'march', '距离长（100 > 40）→ 行军（长寻路）');
   ok(core.dbg.long === 1, '长寻路被调用');
@@ -619,7 +639,7 @@ console.log('[13] SquadCore 队长核心（接令/距离分流/汇报）');
   core.x = 99.5;
   core.tick(0.5);
   ok(core.phase === 'done' && core.dbg.done === 1, '到位 → done');
-  core.accept({ kind: 'march', source: 'player', target: { x: 300, z: 0 }, roe: 'engage', seq: 2, ttl: 0 });
+  core.accept({ kind: 'march', source: 'player', target: { x: 300, z: 0 }, seq: 2, ttl: 0 });
   const before = reports.length;
   core.tick(0.5);
   ok(reports.length === before + 1 && core.dbg.long === 1, '长寻路不可达 → 不推进（仍汇报，等引擎换点）');
@@ -686,7 +706,7 @@ console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
 {
   const base = {
     playerOrder: false, hpRatio: 1, atRingMax: false, underAttack: false,
-    intervention: null, routine: { x: 10, z: 0 }, retreat: { x: -30, z: -30 },
+    routine: { x: 10, z: 0 }, retreat: { x: -30, z: -30 },
   };
   ok(decideChain({ ...base, playerOrder: true }) === null, '① 玩家令在身 → 引擎不产令');
   const w = decideChain({ ...base, hpRatio: 0.4 });
@@ -696,14 +716,11 @@ console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
   ok(s1?.source === 'situation' && s1.kind === 'defend', '③ 到上限 → 防御');
   const s2 = decideChain({ ...base, underAttack: true });
   ok(s2?.kind === 'protect', '③ 被打 → 保护');
-  const iv = decideChain({ ...base, intervention: { x: 99, z: 0 } });
-  ok(iv?.source === 'intervention' && iv.target?.x === 99, '④ 干预优先于常规');
   const rt = decideChain(base);
   ok(rt?.source === 'routine' && rt.kind === 'act', '⑤ 常规部署');
   ok(decideChain({ ...base, routine: null }) === null, '全不成立 → null（保持现状）');
-  // 优先级：重伤 > 事态 > 干预
-  ok(decideChain({ ...base, hpRatio: 0.2, atRingMax: true, intervention: { x: 1, z: 1 } })?.source === 'wounded', '重伤压过事态/干预');
-  ok(decideChain({ ...base, atRingMax: true, intervention: { x: 1, z: 1 } })?.source === 'situation', '事态压过干预');
+  // 优先级：重伤 > 事态
+  ok(decideChain({ ...base, hpRatio: 0.2, atRingMax: true })?.source === 'wounded', '重伤压过事态');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

@@ -344,7 +344,7 @@ export class NavDebugMap {
         g.setLineDash([]);
         for (const h of hist) {
           const [hx, hz] = p2(h.tx, h.tz);
-          g.fillStyle = h.source === 'player' ? '#3399ff' : h.source === 'leader' ? '#ffa733' : '#ff5544';
+          g.fillStyle = h.source === 'player' ? '#3399ff' : '#ff5544';
           g.beginPath(); g.arc(hx, hz, 3, 0, Math.PI * 2); g.fill();
           const age = Math.max(0, Math.round(now / 1000 - h.at));
           g.fillStyle = 'rgba(230,238,245,0.9)';

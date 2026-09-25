@@ -7,9 +7,8 @@
 //   sentence  := composite { modifier }
 //   composite := 'protect' '(' G ',' P ')'          // 保护：G=被保护队长位，P=威胁(玩家)位
 //              | 'act'     '(' target ')'            // 行动：去某点
-//              | 'defend'  [ '(' object ')' ]       // 防御：守对象；缺省 = 守原地
-//   modifier  := 'roe' '=' ( 'engage' | 'hold' | 'holdFire' )
-//              | 'mission' '=' ident
+//              | 'defend'  '(' target ')'            // 防御：守 target（原地 = target 即自身位）
+//   modifier  := 'mission' '=' ident
 //              | 'ttl' '=' number                   // 游戏分钟（0 = 不过期）
 //              | 'seq' '=' number
 //              | 'source' '=' ( 'engine' | 'player' )
@@ -24,7 +23,7 @@
 // 消费：`EngineBridge.write`（良构 → 解释 → OrderWriter 发布）；探针/自检只读。
 // ============================================================
 
-import type { CompositeKind, Roe, SquadOrder } from './contracts';
+import type { CompositeKind, SquadOrder } from './contracts';
 
 /** 引擎意图（解释结果；队长据此执行） */
 export interface EngineIntent {
@@ -39,7 +38,6 @@ export interface EngineIntent {
 }
 
 const KINDS: readonly SquadOrder['kind'][] = ['protect', 'act', 'defend'];
-const ROES: readonly Roe[] = ['engage', 'hold', 'holdFire'];
 
 /** 语法良构校验：返回 null = 通过；否则错误串（发令前拦下） */
 export function wellFormed(s: Partial<SquadOrder>): string | null {
@@ -49,7 +47,6 @@ export function wellFormed(s: Partial<SquadOrder>): string | null {
     if (!s.anchor) return 'protect 缺保护锚 G（anchor）';
     if (!s.threat) return 'protect 缺威胁点 P（threat）';
   }
-  if (s.roe !== undefined && !ROES.includes(s.roe)) return `非法 roe：${String(s.roe)}`;
   if (s.ttl !== undefined && (!Number.isFinite(s.ttl) || s.ttl < 0)) return `非法 ttl：${String(s.ttl)}`;
   return null;
 }
@@ -66,7 +63,7 @@ export function interpretEngine(s: SquadOrder): EngineIntent {
         target: { x: s.target.x, z: s.target.z },
       };
     case 'defend': {
-      const t = s.object ?? s.target;
+      const t = s.target;
       return { kind: 'defend', op: 'hold', target: { x: t.x, z: t.z } };
     }
     case 'act':

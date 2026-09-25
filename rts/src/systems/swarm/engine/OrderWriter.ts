@@ -38,8 +38,6 @@ export class SquadOrderStore {
 export interface WriterCtx {
   /** 本拍（实秒） */
   now: number;
-  /** 干预令旁路稳定门（扎堆/越位/磨蹭/散开） */
-  intervention?: boolean;
   /** 玩家令（最高优先） */
   player?: boolean;
   /** 重伤（<0.5 血量） */
@@ -58,7 +56,7 @@ export class OrderWriter {
   issue(id: number, order: SquadOrder, ctx: WriterCtx): boolean {
     const cur = this.store.get(id);
     if (cur) {
-      const bypass = ctx.intervention || ctx.player || ctx.wounded;
+      const bypass = ctx.player || ctx.wounded;
       if (bypass) {
         this.dbg.bypass++;
       } else {

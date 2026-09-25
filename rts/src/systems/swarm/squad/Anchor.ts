@@ -50,7 +50,9 @@ export function corridorAhead(
   return path[path.length - 1];
 }
 
-/** ★ 沿路由推进（S3a）：**下一个未到达的路点**——从最近路点向后找第一个距离 >adv 的点；
+/** ★ 沿路由推进（S3a）：**下一个未到达的路点**——**目标锁存（S3b 已实装）**：选定后锁定到
+ *  "到达/段失效"才推进，禁止每拍在两点间翻转（《寻路重写方案.md》§4.4）。
+ *  ——从最近路点向后找第一个距离 >adv 的点；
  *  都 ≤adv → 末点（终点=目标）。**绝不跳过中间绕行点**（原 look 前瞻会把绕行点吃掉 → 直线撞崖）。 */
 export function routeNext(
   state: SquadOrderState | null | undefined, cx: number, cz: number, adv: number,
@@ -69,10 +71,23 @@ export function routeNext(
   return path[path.length - 1];
 }
 
-/** ★ 五轴「路径」：取当前应赴的路点 = **沿路由的下一个路点**（S3a：路由驱动，不跳绕行点）。 */
+/** ★ 五轴「路径」：取当前应赴的路点 = **沿路由的下一个路点**（S3a）+ **目标锁存**（S3b）。
+ *  锁存规则：选定路点后，直到"到达（≤ADV）"或"路线重算（pathAt 代次变）"才推进/换点——
+ *  位置/求解每拍变化不再造成两点间翻转（对 4 事件重规划 + 非必要不打断）。 */
+const LATCH_ADV = 2;   // 路点推进阈值（米）
 export function currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
-  const nxt = routeNext(state, cx, cz, 2);
-  if (nxt) return nxt;
+  const gen = state.pathAt;
+  if (state.latchAt === gen && state.anchorX !== undefined && state.anchorZ !== undefined) {
+    if (Math.hypot(state.anchorX - cx, state.anchorZ - cz) > LATCH_ADV) {
+      return { x: state.anchorX, z: state.anchorZ, climb: state.anchorClimb };   // ★ 锁存：不换点
+    }
+  }
+  const nxt = routeNext(state, cx, cz, LATCH_ADV);
+  if (nxt) {
+    state.anchorX = nxt.x; state.anchorZ = nxt.z; state.anchorClimb = nxt.climb;
+    state.latchAt = gen;
+    return nxt;
+  }
   return goalOf(state);
 }
 

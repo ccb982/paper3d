@@ -22,6 +22,7 @@ import { DANGER } from './SwarmDanger';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
+import { edgeStepRoute, edgeStepGreedy, cellsOfRoute } from './nav/EdgeFollow';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -34,8 +35,10 @@ export const NAV = {
   REFRESH_S: 12,
   /** 求解失败冷却（秒；防每拍重试） */
   FAIL_COOLDOWN_S: 3,
+  /** ★ 净推进停滞阈值（秒；S3b：距目标 3s 未缩短 ≥2m → 重算；替代位移/TTL 轮询） */
+  STALL_S: 3,
   /** ★ 长短寻路分界（米；用户定 2026-09-25）：> 此值=长行军→长寻路（FeasibilityPath 全走廊）；
-   *  ≤ 此值=交战/巡逻/驻守/就近施工→短寻路（LOS 10m 贪心短跳） */
+   *  ≤ 此值=交战/巡逻/驻守/就近施工→短寻路（LocalStep 局部绕障） */
   LONG_PATH_DIST: 40,
 } as const;
 
@@ -64,6 +67,21 @@ export class SquadNavigator {
     this.pathFinder.setTable(t);   // ★ 阶段二：加权 A* 边判定也读表（可行性+权重同底座）
   }
 
+  /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number): { dx: number; dz: number } | null {
+    const g = this.localGrid();
+    const path = state?.corridor ?? state?.order.path;
+    if (!g || !path || path.length === 0) return null;
+    return edgeStepRoute(g, x, z, cellsOfRoute(path));
+  }
+
+  /** ★ 方案 A：贪心格边步（成员跟队长 / 无路线；同格 → null 交软跟随） */
+  edgeGreedy(x: number, z: number, tx: number, tz: number): { dx: number; dz: number } | null {
+    const g = this.localGrid();
+    if (!g) return null;
+    return edgeStepGreedy(g, x, z, tx, tz);
+  }
+
   /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
   private localGrid(): LocalGrid | null {
     const t = this.table;
@@ -88,8 +106,11 @@ export class SquadNavigator {
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   private readonly _from = { x: 0, z: 0 };
 
-  /** ① 命令目标不可直达 → 求走廊 waypoint（全队共用）。
-   *  重算触发：无路径 / 目标位移 > RETARGET_DIST / 超时；失败有冷却并回落直线。 */
+  /** ① 命令目标 → 路线（全队共用；**用命令=按距离选寻路**：>40m 长=可行性表 S2 / ≤40m 短=LocalStep S1）。
+   *  ★ 执行侧最小契约（用户定 2026-09-25 /《寻路重写方案.md》§4.4）：
+   *    距离选路 → 沿路点走 → 到达即止；失败冷却重试；**不发不可保证的路**（无直线兜底）。
+   *  ★ 不打断保障（S3b）：重算仅 4 事件（目标变/停滞3s/表代次/到达）；其余保持路线不动。
+   *  ★ 不做（已回滚）：逐格择向 / climb 强制下发 / 原子单源——执行侧不堆机制。 */
   ensurePath(squads: SquadTable, squad: Squad, state: SquadOrderState, now: number): void {
     if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
     const tgt = state.order.target;
@@ -100,18 +121,22 @@ export class SquadNavigator {
     const lead = squad.members.get(squad.leaderUid);   // ★ 无质心（用户定 2026-09-24）：路从队长算
     if (!raster || !lead) return;
     this._from.x = lead.x; this._from.z = lead.z;
-    // ★ 大修②：目标不变、路径常新——质心离上次求解位 >12m 或超时 → 从当前位置重算（覆盖）
-    const movedFrom = Math.hypot(
-      this._from.x - (state.pathFromX ?? 0), this._from.z - (state.pathFromZ ?? 0),
-    );
+    // ★ S3b 使用契约（《寻路重写方案.md》§4.4）：**重规划仅 4 事件**，其余保持路线不动
+    //   ① 目标位移 > RETARGET_DIST  ② 净推进停滞 > STALL_S（距目标 3s 未缩短 ≥2m）
+    //   ③ 表代次变化（掩体/地形）   ④ 到达（上层判定，无需路径）
+    const dNow = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
     const moved = Math.hypot(tgt.x - state.pathGoalX, tgt.z - state.pathGoalZ);
     const stamp = this.stampFn?.() ?? 0;
-    // ★ 掩体构建**不强制**重规划：下一次自然重算（位移>12m / TTL）自动用改动后的掩体/战壕表
-    // ★ 长行军走廊少重算（6→12m）：防'每 6m 重算→锚点抖→振荡'（用户定 2026-09-25）
-    const longTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z) > NAV.LONG_PATH_DIST;
-    const fromLim = longTgt0 ? 12 : 6;
-    if (hasPath && moved <= NAV.RETARGET_DIST && movedFrom <= fromLim && now - state.pathAt <= NAV.REFRESH_S) return;
+    const stampChanged = state.costStamp !== stamp;
+    if (state.stallAt === undefined || dNow < (state.stallD ?? Infinity) - 2) {
+      state.stallAt = now;
+      state.stallD = dNow;
+    }
+    const stalled = hasPath && now - (state.stallAt ?? now) > NAV.STALL_S;
+    if (hasPath && moved <= NAV.RETARGET_DIST && !stampChanged && !stalled) return;
     if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
+    // ★ 长短归属（用户定 2026-09-25）：**按距离**（>40m 长 / ≤40m 短）；长寻路非引擎专属——
+    //   队长派件也可走长寻路（如工兵被派到防区）。
     // ★ 长短寻路分工（用户定 2026-09-25）：长行军（>LONG_PATH_DIST）→ **长寻路**（BFS 全走廊）；
     //   短程（交战/巡逻/驻守/就近施工）→ 短跳（LOS 10m 贪心）
     const dTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
@@ -135,6 +160,7 @@ export class SquadNavigator {
           state.costStamp = stamp;
           state.pathAt = now;
           state.pathFailedAt = 0;
+          state.stallAt = now; state.stallD = dNow;
           this.dbg.seg++;
           this.dbg.localOk++;
           return;
@@ -147,7 +173,7 @@ export class SquadNavigator {
     const feas = this.feas.find(this._from.x, this._from.z, tgt.x, tgt.z, feasOut);
     if (feas === 'ok') {
       this.dbg.feasOk++;
-      // 贪心无推进时回落：表图 BFS 可行走廊（覆盖式；命令对象只读）
+      // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
@@ -155,6 +181,8 @@ export class SquadNavigator {
       state.pathFromZ = this._from.z;
       state.pathAt = now;
       state.pathFailedAt = 0;
+      state.costStamp = stamp;                 // ★ S3b：代次记账（否则每拍都判"代次变"）
+      state.stallAt = now; state.stallD = dNow;
       return;
     }
     if (feas === 'blocked') {
@@ -296,12 +324,17 @@ export class SquadNavigator {
         const sz = bz + fz * off.fx + fx * off.fz;
         u.formSlot = rank;
         const needClimb = (tgt as { climb?: boolean }).climb === true;   // ★ 寻路明确标注的爬坡位（用户定 2026-09-24）
+        // ★ 方案 A：L3 同款格边步（队长沿走廊 / 成员贪心跟队长）
+        let sdx = fx, sdz = fz;
+        const upos0 = u.position;
+        const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z) : this.edgeGreedy(upos0.x, upos0.z, sx, sz);
+        if (e3) { sdx = e3.dx; sdz = e3.dz; }
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }
         else u.moveTarget = { x: sx, y: 0, z: sz, climb: needClimb };
         u.controlSource = 'swarm';
         u.applySteer({
-          dirX: fx, dirZ: fz,
+          dirX: sdx, dirZ: sdz,
           speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5,
           source: 'formation',
           targetX: sx, targetY: 0, targetZ: sz,

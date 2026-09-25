@@ -153,7 +153,6 @@ export class EngineBridge {
       source: 'player',
       target,
       threat: this.pos.player() ?? undefined,
-      roe: 'engage',
       seq: 0,
       ttl: PLAYER_ORDER_TTL,
     };
@@ -278,6 +277,9 @@ export class EngineBridge {
     this.engineer.assign(ctx);
   }
 
+  /** write —— 发令。★ 命令使用设计（《RTS架构.md》§0.3 / 方案 §4.4.2）：引擎**少发令**——
+   *  只在 ①事态变更且不在范围（长寻路）②危机回撤 ③扎堆拉开 三类时刻介入；
+   *  同签名重发被 kept 去重；非必要不打断（重规划仅 4 事件，S3b）。 */
   private write(now: number): void {
     const p = this.pos.player();
     if (!p) return;
@@ -320,7 +322,6 @@ export class EngineBridge {
         hpRatio: rec.hpRatio,   // ★ 整队血量比（Σhp/ΣmaxHp）：整队危急才重伤撤回（用户定）
         atRingMax: this.dbg.ringMax > 0 && sp !== null && Math.hypot(sp.x - p.x, sp.z - p.z) >= this.dbg.ringMax,
         underAttack: hitId === rec.id || this.protect.linkOf(rec.id) !== undefined,
-        intervention: null,
         routine: t ?? null,
         retreat,
       });
@@ -390,7 +391,7 @@ export class EngineBridge {
         kind: q.dec.kind, source: 'engine', target: { x: v.x, z: v.z },
         anchor: q.dec.kind === 'protect' ? (link?.anchor ?? { x: v.x, z: v.z }) : undefined,
         threat: { x: p.x, z: p.z },   // ★ P 点（引擎单源）：队长算阻挡/掩体站位用
-        roe: 'engage', seq: 0, ttl: 0,
+        seq: 0, ttl: 0,
         mission: q.mission,
       };
       const bad = wellFormed(sentence);
@@ -399,7 +400,7 @@ export class EngineBridge {
       const order: SquadOrder = {
         kind: it.kind, source: 'engine', target: it.target,
         anchor: it.anchor, threat: it.threat,
-        roe: 'engage', seq: 0, ttl: 0,
+        seq: 0, ttl: 0,
         mission: q.mission,
       };
       // ★ 执行板续期（重写 P4；用户定）：旧指挥链已删——唯一发令器每拍把**当前令**同步到执行板，

@@ -167,7 +167,7 @@ export class AgentPool {
     return this.core[i].step({
       x: this.x[i], y: this.y[i], z: this.z[i], dt,
       dirX, dirZ, speed,
-      climbOrdered: false,          // L2 无寻路标注（坡面程序化爬坡兜底）
+      climbOrdered: false,          // ★ 执行侧不做 climb 强制下发（S3d 回滚）；L2 爬坡=坡面自动（B3 表判墙保证 weld 才可爬）
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       hx: hs, hz: hs,

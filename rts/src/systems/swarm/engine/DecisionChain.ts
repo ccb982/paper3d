@@ -10,7 +10,7 @@
 // 纯函数（不靠调用顺序，不隐式耦合）→ 可独立自检。
 // ============================================================
 
-export type DecisionSource = 'player' | 'wounded' | 'situation' | 'intervention' | 'routine';
+export type DecisionSource = 'player' | 'wounded' | 'situation' | 'routine';
 
 export interface DecisionInput {
   /** 玩家令在身（未过期） */
@@ -21,8 +21,6 @@ export interface DecisionInput {
   atRingMax: boolean;
   /** 该队被打（玩家/威胁在打它） */
   underAttack: boolean;
-  /** 干预纠正目标（扎堆/越位/磨蹭；null=无） */
-  intervention: { x: number; z: number } | null;
   /** 常规部署目标（兵种管理器分配；null=无） */
   routine: { x: number; z: number } | null;
   /** ★ 撤退点（向**后**：远离战场——本队扇区中心外圈；用户定）。
@@ -51,7 +49,6 @@ export function decideChain(inp: DecisionInput): Decision | null {
   if (inp.atRingMax) return { source: 'situation', kind: 'defend', target: null, reason: '到事态上限' };
   if (inp.underAttack) return { source: 'situation', kind: 'protect', target: null, reason: '被打' };
   // ④ 干预：扎堆/越位/磨蹭的纠正
-  if (inp.intervention) return { source: 'intervention', kind: 'act', target: inp.intervention, reason: '干预' };
   // ⑤ 常规部署
   if (inp.routine) return { source: 'routine', kind: 'act', target: inp.routine, reason: '常规' };
   return null;

@@ -12,4 +12,4 @@ export const DIRECTIVE_CN: Record<string, string> = {
 
 export const orderCn = (k?: string): string => (k ? ORDER_CN[k] ?? k : '无');
 export const directiveCn = (k?: string): string => (k ? DIRECTIVE_CN[k] ?? k : '无');
-export const sourceCn = (s: string): string => (s === 'engine' ? '引擎' : s === 'leader' ? '队长' : s === 'player' ? '玩家' : s);
+export const sourceCn = (s: string): string => (s === 'engine' ? '引擎' : s === 'player' ? '玩家' : s);

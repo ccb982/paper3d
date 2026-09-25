@@ -97,12 +97,11 @@ export type DirectiveKind =
 /** ★ P4 战术意图（命令三件套之一；引擎填，队长按它 argmax scoreFor 拆步） */
 export type SquadIntent = 'attack' | 'hold' | 'guard' | 'build' | 'patrol' | 'withdraw' | 'regroup';
 
-/** 通用五轴命令（引擎侧外壳；路径/目标/ROE/队形/时序+分工） */
+/** 通用五轴命令（引擎侧外壳；路径/目标/队形/时序+分工） */
 export interface TacticalOrder {
   kind: SquadOrderKind;
   path?: { x: number; z: number }[];
   target?: { x: number; z: number; r?: number };
-  roe?: 'engage' | 'holdFire' | 'fireOnArrival' | 'focusOnly';
   formation?: 'column' | 'line' | 'loose' | 'wings';
   startAfter?: number;
   signal?: number;

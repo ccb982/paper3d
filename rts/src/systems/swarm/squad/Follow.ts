@@ -46,6 +46,7 @@ export function followDir(
   if (td <= stopR) return null;
   // ★ 掉队/被挡 → 沿走廊前瞻点走（长寻路；走廊即队长的长路）
   if (td > 12 && !walkable(px, pz, lx, lz)) {
+    // ★ 使用契约（§4.4）：成员只跟队长；掉队沿用**同一条路线**（routeNext 语义，S3 收口）
     const ahead = corridorAhead(state, px, pz, 4);
     if (ahead) {
       const ax = ahead.x - px, az = ahead.z - pz;

@@ -83,7 +83,6 @@ export function decompose(
     return dir;
   }
   const kind: DirectiveKind = state ? DEFAULT_DIRECTIVE[state.order.kind][bucket] : 'regroup';
-  const roe = state?.order.roe;
   let fire: 'free' | 'hold' | 'moving' =
     kind === 'sneak' || kind === 'fallback' ? 'hold' : 'free';
   const exec = state?.order.mission
@@ -92,11 +91,6 @@ export function decompose(
   if (exec) {
     if (exec.fire === 'hold') fire = 'hold';
     speedMul *= exec.speedMul;
-  }
-  if (roe === 'holdFire') fire = 'hold';
-  else if (roe === 'fireOnArrival' && target) {
-    const dist = Math.hypot(target.x - cx, target.z - cz);
-    if (dist > 12) fire = 'hold';
   }
   const dir: UnitDirective = { kind, until: now + DIRECTIVE_TTL, fire, speedMul, seq: nextSeq() };
   if (target) { dir.targetX = target.x; dir.targetZ = target.z; }
