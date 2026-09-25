@@ -227,7 +227,7 @@ export class WorldMode implements IGameMode {
   /** ★ 地图上所有杂兵（按 chunk 波次生成，逐个独立 AI） */
   enemies: EnemyBase[] = [];
 
-  /** ★ 蜂群系统（《敌人管线设计.md》）：远层代理 + 升/降格 + 批量渲染 */
+  /** ★ 蜂群系统（《RTS架构.md》）：远层代理 + 升/降格 + 批量渲染 */
   private swarm = new SwarmSystem();
   /** 蜂群每帧回调（复用对象，避免每帧分配） */
   private swarmHooks: SwarmHooks = {
@@ -413,7 +413,7 @@ export class WorldMode implements IGameMode {
   private sentinelFluidAccum = 0;
   /** ★ 治疗转伤害 proc 命中候选缓冲（复用防每帧分配） */
   private _healProcTargets: EnemyBase[] = [];
-  /** ★ 玩家专属每帧管线（效果队列/属性刷新/复活倒计时；《实体架构.md》§7） */
+  /** ★ 玩家专属每帧管线（效果队列/属性刷新/复活倒计时；《RTS架构.md》§7） */
   private playerPipeline!: PlayerPipeline;
   /** ★ 遗物属性脏标记（死亡/击杀等事件可能改变遗物结算；每帧最多重算一次） */
   private statsDirty = false;
@@ -429,7 +429,7 @@ export class WorldMode implements IGameMode {
   private playerStatsUnsub?: () => void;
   /** ★ 舰船受击订阅（UI 明显报警：横幅+红屏+状态条闪红；天气来自 damageShip 事件） */
   private shipDamagedUnsub?: () => void;
-  /** ★ 入水表现系统（入水波动 + 涉水循环轨；《实体架构.md》§9.5 模式层下沉） */
+  /** ★ 入水表现系统（入水波动 + 涉水循环轨；《RTS架构.md》§9.5 模式层下沉） */
   private waterFx!: WaterFx;
   /** ★ 角色贴地 / 悬停 / 掉坑结算系统（同上） */
   private charClamp!: CharacterClamp;
@@ -644,7 +644,7 @@ export class WorldMode implements IGameMode {
     // ★ 航行期：角色隐藏 + 操作锁（停靠时落到安全出生点接管）
     this.player.controlLocked = true;
 
-    // ★ 玩家专属每帧管线（《实体架构.md》§7）：效果/属性/复活收口，模式层只注入依赖
+    // ★ 玩家专属每帧管线（《RTS架构.md》§7）：效果/属性/复活收口，模式层只注入依赖
     //   （依赖项惰性求值：worldUIManager/ship 等稍后才建，闭包在调用时才读）
     this.playerPipeline = new PlayerPipeline({
       player: this.player,
@@ -747,7 +747,7 @@ export class WorldMode implements IGameMode {
     for (const [key, asset] of Object.entries(ctx.plantAssets ?? {})) {
       setPropAtlas(key, asset);
     }
-    // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《敌人管线设计.md》§6）
+    // ★ 蜂群批量渲染（每兵种图集 + InstancedMesh；《RTS架构.md》§6）
     //   ★ 必须传接地补偿：L2 代理与 L3 实体口径不同会让"远看接地、近看悬空"
     this.swarm.buildBatch(
       this.scene!,
@@ -1399,7 +1399,7 @@ export class WorldMode implements IGameMode {
     // ---- AI / 波次：仅探索阶段（航行期不刷怪、不打船） ----
     if (this.phase === 'explore') {
       aiSystem.updateAll(dt, this.aiCtx);
-      // ---- ★ 蜂群（《敌人管线设计.md》）：远层代理升/降格 + 降频决策/移动 ----
+      // ---- ★ 蜂群（《RTS架构.md》）：远层代理升/降格 + 降频决策/移动 ----
       const camF = this.cameraCtrl.getFrame().forward;
       const hooks = this.swarmHooks;
       hooks.playerX = pp.x; hooks.playerZ = pp.y;

@@ -1,12 +1,12 @@
 // ============================================================
-// SquadTable —— 小队注册表 + 队长 + 状态评级（《实体架构.md》§5.5/§5.8 步骤 5/9）
+// SquadTable —— 小队注册表 + 队长 + 状态评级（《RTS架构.md》§5.5/§5.8 步骤 5/9）
 // ============================================================
 // 职责：
 //   · 生成时按“同质就近”分配小队（一队一兵种，上限 12；Boss 单例后续由 squadMode 接入）
 //   · 队长唯一：首员即队长；队长阵亡/回收 → 本队接任（最新情报 > 血量 > 靠队心）
 //   · 成员信息（hp/位置/目击）低频同步；**状态评级以血量为主要因素**
 //   · 阵亡：单人只下调评分（不改事件）；**只有全灭才上报**（一次，随后注销）
-// 说明：本表只做数据/选举/评级，不含战术；战术（SquadTactics）后续消费评级。
+// 说明：本表只做数据/选举/评级，不含战术；战术（squad/SquadCore）消费评级。
 // ============================================================
 
 import type { UnitRole } from '../../entity/SwarmUnit';
@@ -15,7 +15,7 @@ import { type SquadType, squadTypeOf } from '../../entity/SwarmUnit';
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type SquadType, squadTypeOf };
 
-/** 小队容量上限（同质编队 4~12；《敌人管线设计.md》§3.1） */
+/** 小队容量上限（同质编队 4~12；《RTS架构.md》§3.1） */
 export const SQUAD_MAX = 12;
 /** ★ §13.3：工兵小队上限（每队 3 工兵足够；多了拆新队 = 分区多线程） */
 export const BUILDER_SQUAD_MAX = 3;
@@ -67,7 +67,7 @@ export interface LeaderChange {
   isLeader: boolean;
 }
 
-/** 小队状态评级（引擎侧信息面；《敌人管线设计.md》§3.5 BattalionView） */
+/** 小队状态评级（引擎侧信息面；《RTS架构.md》§3.5 BattalionView） */
 export interface SquadRating {
   squadId: number;
   battalionId: number;
@@ -245,7 +245,7 @@ export class SquadTable {
     return out;
   }
 
-  /** 选举：最新情报 > 血量 > 靠队心（《实体架构.md》§5.5） */
+  /** 选举：最新情报 > 血量 > 靠队心（《RTS架构.md》§5.5） */
   private electLeader(squad: Squad): number {
     const c = this.centroid(squad);
     let bestUid = 0;

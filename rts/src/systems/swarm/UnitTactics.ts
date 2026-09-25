@@ -126,7 +126,7 @@ export const PROTECT_ACTION: Record<SquadType, ProtectAction> = {
   mixed:     'intercept',
 };
 
-/** 保护动作解析：施工兵种优先 = 造工事（《工兵架构.md》§8） */
+/** 保护动作解析：施工兵种优先 = 造工事（《RTS架构.md》§8） */
 export function protectActionFor(type: SquadType, isBuilder: boolean): ProtectAction {
   return isBuilder ? 'build' : PROTECT_ACTION[type];
 }

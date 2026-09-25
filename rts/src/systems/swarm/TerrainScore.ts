@@ -209,7 +209,7 @@ export class TerrainScore {
     return c === 1 ? SLOPE_COST : 1;
   }
 
-  /** ★★ 掩体/战壕寻路折扣（0.6~1；《敌人管线设计.md》§5）：遮蔽越多越便宜 →
+  /** ★★ 掩体/战壕寻路折扣（0.6~1；《RTS架构.md》§5）：遮蔽越多越便宜 →
    *  拆解路径时"尽可能走掩体多的路线"（用户定调 2026-09-21）。SquadPath 逐格乘算。 */
   pathMulAt(x: number, z: number): number {
     const i = this.indexAt(x, z);

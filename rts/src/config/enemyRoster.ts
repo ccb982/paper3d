@@ -62,7 +62,7 @@ export interface EnemySpec {
    *  —— 不参与地面寻路（不看流场/不绕坑/不涉水）、不会掉坑判死、
    *  以 `airAltitude`（相对地表）悬停，并带轻微上下浮动。
    *  两条渲染路径都按此抬升：L2 代理（`SwarmBatch.sync`）与 L3 实体（`WorldMode.clampCharacter`）。
-   *  见《实体架构.md》§7。 */
+   *  见《RTS架构.md》§7。 */
   isAir?: boolean;
   /** 空中悬停高度（米，**相对地表**；缺省引擎兜底 `AIR_ALTITUDE_DEFAULT`，见 AgentPool）。
    *  仅 `isAir` 有效。 */

@@ -40,7 +40,7 @@ const PATH_AFF_N = 8;
 const PATH_AFF_W = 0.25;
 
 /** ★ 引擎保护配置：保护对象（锚）+ 来源（护工/射手/工地/岗位） */
-/** ★ 引擎侧信息面（《敌人管线设计.md》§3.5）：战术决策的输入 */
+/** ★ 引擎侧信息面（《RTS架构.md》§3.5）：战术决策的输入 */
 export interface BattalionView {
   squads: SquadRating[];
   playerX: number;
@@ -53,7 +53,7 @@ export interface BattalionView {
 export class SwarmData {
   /** ★ S0 勘察：地形检测产出的防守布置 */
   private plan: DefensePlan | null = null;
-  /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《敌人管线设计.md》§1；落地/换落点重算） */
+  /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《RTS架构.md》§1；落地/换落点重算） */
   readonly semantics = new TerrainSemantics();
   readonly holeMask = new HoleMask();   // ★ 独立破坏掩码（与 L1 语义表解耦）
   /** ★★ 敌用动态坑洞公式表（掩码 → 深×近打分；2Hz 持续重排） */
@@ -124,7 +124,7 @@ export class SwarmData {
   private frontMinD = -1;
   /** ★ 环形活动区上限（事态函数管；第一波收拢到舰） */
   private frontMaxD = -1;
-  /** ★ 最近一次舰船位（issueChecked 夹环用） */
+  /** ★ 最近一次舰船位（环夹取基准；引擎/队长核同口径） */
   private lastShipX = 0;
   /** ★ 原始当日进度（hooks.dayT01；第一波 ≥0.45 起停止新增施工——队长层派件读） */
   private lastDayRaw = -1;
@@ -158,7 +158,7 @@ export class SwarmData {
   lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ 大队生成/登场队列（自本类拆出：CommanderSpawn；回收名单也在其中） */
   private readonly spawn: CommanderSpawn;
-  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次；《寻路与导航架构.md》§3.0） */
+  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次；《RTS架构.md》§3.0） */
   readonly passTable = new PassTable();
   /** ★ §13.1 编制比例（占比统计 + 缺口；只读，不改行为） */
   readonly roster = new RosterController();
@@ -190,7 +190,7 @@ export class SwarmData {
     });
   }
 
-  /** ★ 环形夹取（公开给 SquadTactics/队长令同门）：径向夹进 [下限, 上限]；
+  /** ★ 环形夹取（公开给队长核（port.clampRing））：径向夹进 [下限, 上限]；
    *  未启用/未就绪 → 原样返回；收拢态（上限<下限）→ 上限主导（收拢到 0=舰船点） */
   clampToRing(x: number, z: number): { x: number; z: number } {
     if (this.frontMinD < 0 || this.frontMaxD < 0) return { x, z };
@@ -207,7 +207,7 @@ export class SwarmData {
 
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
    *  展开轴 = 扫描走廊轴（落地一次）；**掩体一律朝舰船（落点中心）侧 +5m、战壕留在原位**；
-   *  此后不随玩家移动/危机度动态重排（《工兵架构.md》§3/§4，用户定调 2026-09-21）。 */
+   *  此后不随玩家移动/危机度动态重排（《RTS架构.md》§3/§4，用户定调 2026-09-21）。 */
   planDefense(cx: number, cz: number, radius = 80): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;

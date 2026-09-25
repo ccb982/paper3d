@@ -37,7 +37,7 @@ import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/comba
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
 export type PhysicsMode = 'none' | 'kinematic' | 'read';
 
-/** ★ 生命周期状态（《实体架构.md》§9.3）：active → retiring → disposed */
+/** ★ 生命周期状态（《RTS架构.md》§9.3）：active → retiring → disposed */
 export type EntityLifeState = 'active' | 'retiring' | 'disposed';
 
 /** ★ 退役原因 = 业务语义的唯一来源（取代 killedByCombat/deathReported）：
@@ -279,7 +279,7 @@ export abstract class EntityBase {
   /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
   dead = false;
 
-  // ============ 生命周期（《实体架构.md》§9.3：状态机 + 退役原因） ============
+  // ============ 生命周期（《RTS架构.md》§9.3：状态机 + 退役原因） ============
 
   /** 生命周期状态（active；retire 幂等；dispose 亦幂等） */
   private _life: EntityLifeState = 'active';

@@ -82,7 +82,7 @@ export interface MobDef {
   isAir: boolean;
   /** 悬停高度（米，相对地表）；`isAir` 为假时无意义 */
   airAltitude: number;
-  /** ★ v2 兵种角色（大编队配比依据；缺省 = grunt，行为不变；《实体架构.md》§5.3） */
+  /** ★ v2 兵种角色（大编队配比依据；缺省 = grunt，行为不变；《RTS架构.md》§5.3） */
   role?: UnitRole;
   /** ★ v2 攻击类型（缺省 = melee，行为不变） */
   attackType?: UnitAttackType;
@@ -526,7 +526,7 @@ export class WorldSpawner implements SwarmTierPort {
     return this.deps.mobDefs[this.deps.mobDefs.length - 1];
   }
 
-  /** ★ 远距实体降格（《敌人管线设计.md》§6）：实体超出 DEMOTE_RADIUS →
+  /** ★ 远距实体降格（《RTS架构.md》§6）：实体超出 DEMOTE_RADIUS →
    *  数据快照回代理池 + 销毁实体（远层继续用廉价代理维护，不再硬销毁）。
    *  远距硬回收由 SwarmSystem 的 L1_RADIUS 统一执行（代理池侧）。 */
   demoteFarEnemies(px: number, pz: number): void {
@@ -804,7 +804,7 @@ export class WorldSpawner implements SwarmTierPort {
   }
 
 
-  /** ★ 生成一"窝"杂兵（《敌人管线设计.md》：全部先入蜂群代理池，近处自动升格为实体）。
+  /** ★ 生成一"窝"杂兵（《RTS架构.md》：全部先入蜂群代理池，近处自动升格为实体）。
    *   以落点为中心放 def.pack 只（原石虫 = 一整窝），同伴围绕中心 ±1.6m 散布。
    *   ★ 当日兵力计划（引擎账本 total）在此消耗；额度满 → spawn 返回 -1，本窝停止。
    *   ★ 小 Boss / 精英（singleton / elite）与杂兵同路（正常入账）。 */

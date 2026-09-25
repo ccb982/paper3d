@@ -6,7 +6,7 @@
 // ★ 兼容：EntityBase 保留同名 getter/setter 转发（读写 API 零变化，行为零变化）。
 // ============================================================
 
-/** 战斗数值（伤害管线 modifiers 链的输入面；《实体架构.md》§4.1） */
+/** 战斗数值（伤害管线 modifiers 链的输入面；《RTS架构.md》§4.1） */
 export interface CombatStats {
   /** 生命值 */
   hp: number;

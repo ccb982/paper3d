@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmConfig —— 蜂群参数（《敌人管线设计.md》§8：参数集中可调）
+// SwarmConfig —— 蜂群参数（《RTS架构.md》§8：参数集中可调）
 // ============================================================
 // SWARM    分层/回收/战斗节拍；AUTONOMY 自主 LOD/大队警戒。
 // 从 SwarmSystem 外置（护栏行数）；原路径 re-export 兼容旧引用。
@@ -29,7 +29,7 @@ export const SWARM = {
   THINK_HZ: [0, 2, 5],
   /** 移动积分频率（Hz）：索引 = tier（1/2） */
   MOVE_HZ: [0, 10, 20],
-  /** ★ E4a：L3 实体编队 steer 下发频率（Hz；《实体架构.md》§9.4） */
+  /** ★ E4a：L3 实体编队 steer 下发频率（Hz；《RTS架构.md》§9.4） */
   STEER_HZ: 10,
   /** 近战额外射程余量（米；进入即停下挥击） */
   MELEE_PAD: 0.4,
@@ -65,7 +65,7 @@ export const SWARM = {
   RAGE_SPEED: 1.25,
   RAGE_SECONDS: 5,
   RAGE_RADIUS: 12,
-  /** ★ 无命令自主交战保底半径（米；《实体架构.md》§5.12） */
+  /** ★ 无命令自主交战保底半径（米；《RTS架构.md》§5.12） */
   AUTONOMY_ENGAGE_R: 16,
   /** 警戒场：持续时间 / 反应延迟区间 / 察觉时刷出的半径 / 挥击时刷出的半径 */
   ALERT_SECONDS: 6,
@@ -75,7 +75,7 @@ export const SWARM = {
   ALERT_PAINT_RADIUS_ATTACK: 10,
 } as const;
 
-/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《实体架构.md》§5.10；集中可调） */
+/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《RTS架构.md》§5.10；集中可调） */
 export const AUTONOMY = {
   /** 单位被击免降格窗口（秒） */
   UNIT_HOLD_S: 6,
@@ -107,27 +107,6 @@ export const STUCK = {
   HOLD_S: 25,
 } as const;
 
-/** ★ 指挥层重发/寿命常量（P5 收口：重发常量统一——原 RESEND_S 等散落各写各的） */
-export const RESEND = {
-  /** 大队任务周期重发（游戏分钟；T+ 重发保持使命存活） */
-  MISSION_S: 10 * GAME_MIN,
-  /** 使命 TTL 余量（游戏分钟；重发间隔 + 余量 = 下发 TTL，防两拍之间掉令） */
-  TTL_PAD: 5 * GAME_MIN,
-} as const;
-
-/** ★ 命令保护（用户定 2026-09-24）：时间+距离保护 + 命令记忆（OrderGate 消费）
- *  成员指令：走 8m 或卡 4 **游戏分钟**（净<3m）才换目标；反向拉扯拒绝；卡住偏 55° 找没下过的方向 */
-export const DIRECTIVE_GATE = {
-  minMove: 8, retarget: 8, holdS: 4 * GAME_MIN, netMin: 3, forceS: 15 * GAME_MIN,
-  arriveR: 3, persistS: 3 * GAME_MIN, stableM: 2, reverseDot: -0.2, histN: 3, biasDeg: 55,
-} as const;
-
 /** ★ 命令稳定门（用户定 2026-09-24）：**换令**（kind/目标变）需"现令进度 ≥PROGRESS 或 长时间静止（无净推进 ≥STUCK_S 实秒）"。
  *  治"mission/target 微变即重发"——常规命令至少维持到过半或卡住。 */
 export const ORDER_STABLE = { PROGRESS: 0.5, STUCK_S: 25 } as const;
-
-/** ★ 队长自主令：走 20m 或卡 8 **游戏分钟**（净<4m）才换目标；其余同上 */
-export const LEADER_GATE = {
-  minMove: 20, retarget: 15, holdS: 8 * GAME_MIN, netMin: 4, forceS: 20 * GAME_MIN,
-  arriveR: 6, persistS: 3 * GAME_MIN, stableM: 2, reverseDot: -0.3, histN: 3, biasDeg: 50,
-} as const;

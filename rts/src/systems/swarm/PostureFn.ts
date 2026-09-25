@@ -1,5 +1,5 @@
 // ============================================================
-// PostureFn —— 连续态势函数（M2；《敌人管线设计.md》§2/§3.5）
+// PostureFn —— 连续态势函数（M2；《RTS架构.md》§2/§3.5）
 // ============================================================
 // p = clamp(schedule(t) + provocation, 0, 1)
 //   schedule：单日节律（时间主导：0.45 第一波 / 0.80 总攻）
@@ -91,7 +91,7 @@ export interface PostureState {
 }
 
 /** ★ 稳步推进：各姿态的**离舰前沿放行上限**（fortify 起手顶多放开一点；总攻才贴近船）
- *  frontP 只增长、单调向目标值逼近 —— 事态再落也不再回拉阵地（《敌人管线设计.md》§3.9） */
+ *  frontP 只增长、单调向目标值逼近 —— 事态再落也不再回拉阵地（《RTS架构.md》§3.9） */
 const FRONT_BY_POSTURE: Record<BattlePosture, number> = {
   fortify: 0.00,
   patrol: 0.15,

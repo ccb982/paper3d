@@ -86,7 +86,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private readonly brain = new EnemyBrain();
 
   // ============================================================
-  // ★ 蜂群预留字段（《实体架构.md》§5.3；v2 由 SwarmTierPort 填值）
+  // ★ 蜂群预留字段（《RTS架构.md》§5.3；v2 由 SwarmTierPort 填值）
   //   当前全部为默认值（散兵/未编队/地面/近战）→ 行为零变化。
   // ============================================================
   /** 稳定 uid（升格/降格往返不变；替代裸 index） */
@@ -171,7 +171,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   /** ★ E4a：steer 消费内的 moveBy 重入豁免（本地 AI 走 moveBy 一律被拦） */
   private applyingSteer = false;
 
-  /** ★ 编队控制中（swarm 且 steer 新鲜）：本地 AI 只保留战斗决策（《实体架构.md》§9.4） */
+  /** ★ 编队控制中（swarm 且 steer 新鲜）：本地 AI 只保留战斗决策（《RTS架构.md》§9.4） */
   get swarmControlled(): boolean {
     return this.controlSource === 'swarm' && this.hasFreshSteer;
   }

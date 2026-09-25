@@ -58,7 +58,7 @@ export abstract class CharacterBase extends EntityBase {
    *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
   blockCliffClimb = false;
 
-  // ---- ★ 空中层（2026-09-18；《实体架构.md》§7）----
+  // ---- ★ 空中层（2026-09-18；《RTS架构.md》§7）----
   /** 飞行单位：悬停在「地表高 + airAltitude」，不贴地、不受地形落差阻挡、不吃掉坑判死。
    *  ★ y 的唯一驱动点是 `WorldMode.clampCharacter`（它会优先处理飞行分支）；
    *    开启者在 EnemyBase 构造里按名册 `isAir` 设置，并同时打开 `climbAnyTerrain`。 */

@@ -59,7 +59,7 @@ export class TimerManager {
       this.h.onExpire(uid, d.why);
     }
 
-    // ---- 卡死窗口（口径同 SwarmRecovery：包围盒 > BBOX_R 即逃逸重开；连续 HOLD_S → 回收） ----
+    // ---- 卡死窗口（口径（卡死回收已并入本管理器）：包围盒 > BBOX_R 即逃逸重开；连续 HOLD_S → 回收） ----
     for (const uid of this.h.roster()) {
       const p = this.h.posOf(uid);
       if (!p) {

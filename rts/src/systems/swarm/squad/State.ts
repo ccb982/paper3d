@@ -1,9 +1,9 @@
 // ============================================================
-// squad/State —— 执行层命令状态（重写 P4；旧 SquadTactics 类型归位）
+// squad/State —— 执行层命令状态（重写 P4；队长层）
 // ============================================================
 // 真源：引擎 `engine/OrderWriter` 的 SquadOrder（命令轨）；
 // 本文件 = 队长执行态（路径缓存/锚点滞回/生命周期）——由 squad/SquadCore 持有与推进。
-// UI/探针只读口 = `engine/SquadView`（旧黑板 SquadTactics 已删）。
+// UI/探针只读口 = `engine/SquadView`（旧黑板已删）。
 // ============================================================
 
 import type { SquadIntent, SquadOrderKind, TacticalOrder } from '../../../entity/SwarmUnit';

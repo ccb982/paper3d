@@ -4,7 +4,7 @@
 //   近：直线走向队长；到位（5~8m 滞回）即停。
 //   远且直线被挡（崖/墙/单向边）→ **长寻路找队长**：沿队走廊（队长正在走的同一条
 //   可行走廊）的前瞻点绕行——不另起炉灶、不花每帧 A*。
-//   依赖铁律：只读 SquadTactics/走廊（无状态、零分配）。
+//   依赖铁律：只读队长执行态走廊（无状态、零分配）。
 
 import type { SquadOrderState } from './State';
 import { corridorAhead } from './Anchor';

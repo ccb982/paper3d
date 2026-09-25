@@ -1,5 +1,5 @@
 // ============================================================
-// AgentPool —— 蜂群代理池（SoA 定长数组；《敌人管线设计.md》§4/§5.5）
+// AgentPool —— 蜂群代理池（SoA 定长数组；《RTS架构.md》§4/§5.5）
 // ============================================================
 // 远层敌人（L1/L2）的唯一载体：定长 Float32Array/TypedArray 热字段，
 // swap-remove 删除，全程零分配；升格为 L3 实体 / 降格回池都走快照拷贝。
@@ -10,7 +10,7 @@ import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity
 import { CharacterCore, type StepResult } from '../../entity/base/CharacterCore';
 import { createRasterProbe } from '../../entity/base/RasterProbe';
 
-/** 池容量（= 全图存活上限 200 + 缓冲；《敌人管线设计.md》§8） */
+/** 池容量（= 全图存活上限 200 + 缓冲；《RTS架构.md》§8） */
 export const AGENT_CAPACITY = 256;
 
 /** ★ 空中层默认悬停高度（米，**相对地表**）——名册（`EnemySpec.airAltitude`）未给时的兜底。
@@ -231,7 +231,7 @@ export class AgentPool {
   /** 游荡偏向强度（威胁度驱动） */
   readonly bias = new Float32Array(AGENT_CAPACITY);
 
-  // ---- P5：空中层（2026-09-18；《实体架构.md》§7）----
+  // ---- P5：空中层（2026-09-18；《RTS架构.md》§7）----
   /** 是否飞行单位（1 = 独立空中层：不贴地、不绕坑/水、不掉坑判死、直线导航） */
   readonly isAir = new Uint8Array(AGENT_CAPACITY);
   /** 悬停高度（米，**相对地表**；仅 isAir=1 有效；≤0 = 按地面单位处理） */

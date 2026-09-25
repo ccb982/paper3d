@@ -1,10 +1,10 @@
 // ============================================================
-// CommanderSpawn —— 大队生成 / 逐步登场队列（自 SwarmCommander 拆出，控行数）
+// CommanderSpawn —— 大队生成 / 逐步登场队列（生成执行；数据面 data/SwarmData 持有）
 // ============================================================
 //   · 编成来源：起飞回收名单优先（兵种/数量照旧），否则标准配比（±2 随机 + 概率精英）
 //   · 放置：优先地形分析产出的可站锚点（掩体位/高地/战壕线），不足回退来向楔形环
 //   · instant = 一次性上整编队（总攻/落地）；否则入队列由 drain 逐只滴灌
-// 生成端口（spawnMob/spawnMobIndex/spawnBuilder）真源仍在 SwarmCommander，按需现取。
+// 生成端口（spawnMob/spawnMobIndex/spawnBuilder）真源在 data/SwarmData，按需现取。
 // ============================================================
 
 import type { DefensePlan } from './LandingTerrain';

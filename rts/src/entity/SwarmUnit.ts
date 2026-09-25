@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmUnit —— 蜂群单位数据面 / 载体契约（《实体架构.md》§5.3 / §9.4）
+// SwarmUnit —— 蜂群单位数据面 / 载体契约（《RTS架构.md》§5.3 / §9.4）
 // ============================================================
 // ★ 铁律：entity/ 不引 systems/swarm/ —— 本文件是实体侧的唯一类型面，
 //   systems/swarm 的 AgentSnapshot 以本文件 SwarmSnapshot 为基（systems→entity 合法）。
@@ -25,7 +25,7 @@ export type DeployMode =
   | 'regroup'    // 后方集结（后勤等）
   | 'build';     // 施工（施工兵种）
 
-/** 引擎侧战术部署（逐兵种覆盖；《敌人管线设计.md》§3.2） */
+/** 引擎侧战术部署（逐兵种覆盖；《RTS架构.md》§3.2） */
 export interface EngineTactics {
   /** 部署模式（缺省 = 按小队属性） */
   mode?: DeployMode;
@@ -41,7 +41,7 @@ export interface EngineTactics {
   screenDist?: number;
 }
 
-/** 队内战术（逐兵种覆盖；《敌人管线设计.md》§3.3） */
+/** 队内战术（逐兵种覆盖；《RTS架构.md》§3.3） */
 export interface UnitTactics {
   /** 低血（≤30%）行为：fallback=撤出（通用）/ fight=继续战斗 */
   lowHp?: 'fallback' | 'fight';
@@ -82,7 +82,7 @@ export function attackFromCode(c: number): UnitAttackType {
 }
 
 // ============================================================
-// ★ 步骤 9b：命令与个体指令（载体契约；《实体架构.md》§5.11）
+// ★ 步骤 9b：命令与个体指令（载体契约；《RTS架构.md》§5.11）
 // ============================================================
 
 /** 小队整体命令（mode；引擎→队长→全队） */

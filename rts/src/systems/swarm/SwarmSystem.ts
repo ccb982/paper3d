@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmSystem —— 蜂群调度器（《敌人管线设计.md》§41/§5.5；P1 数据层）
+// SwarmSystem —— 蜂群调度器（《RTS架构.md》§41/§5.5；P1 数据层）
 // ============================================================
 // 职责：
 //   · 代理池 + 人群网格 + 批量渲染的唯一持有者与驱动者
@@ -104,7 +104,7 @@ export class SwarmSystem {
   /** ★ 非击杀离场订阅（recycled/despawned：账本存活 −1） */
   private readonly removedUnsub: () => void;
   readonly pool = new AgentPool();
-  /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
+  /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《RTS架构.md》§5.5） */
   readonly squads = new SquadTable();
   /** ★ 稳定 uid 分配器（spawn/demote 缺省分配；升降格往返不变） */
   private nextUid = 1;
@@ -311,7 +311,7 @@ export class SwarmSystem {
     // ★ 队长层调遣（squad/SquadCore.drive）由 main 每帧驱动（成员指令唯一写口 = applyDirective）
 
     // ★ 卡死回收已收编进新引擎 `engine/TimerManager`（1Hz；驻守/交战豁免 → 净活动范围回收）
-    //   ——旧 SwarmRecovery 已删除；计时销毁/卡死判决与开火闩锁同源（EngineBridge 驱动）。
+    //   ——计时销毁/卡死判决与开火闩锁同源（EngineBridge 驱动）。
 
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
     if (now >= this.counterUntil) {

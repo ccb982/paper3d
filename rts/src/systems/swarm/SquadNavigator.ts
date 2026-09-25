@@ -6,7 +6,7 @@
 //      （写入 order.path；实体 steer 与代理指令共用，一次求解全队复用）
 //   ② steerEntities：编队槽位 → moveTarget → applySteer
 //      （有有效命令才接管；命令结束/超时一律释放 → 实体回落 local）
-// 依赖：SquadTable / SquadTactics（数据面）、SquadPath（算法）、RasterMap（地形）。
+// 依赖：SquadTable / 队长核执行态、SquadPath（算法）、RasterMap（地形）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';

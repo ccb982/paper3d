@@ -121,7 +121,7 @@ export interface MobRangedParams {
   skin?: string;
 }
 
-/** ★ 无命令自主交战保底半径（米；与《实体架构.md》§5.12 同口径）：
+/** ★ 无命令自主交战保底半径（米；与《RTS架构.md》§5.12 同口径）：
  *  实体无指令时视野不低于此值（各兵种 aggro 只能更大）——防“贴脸也不打” */
 export const ENEMY_ENGAGE_FLOOR = 16;
 
