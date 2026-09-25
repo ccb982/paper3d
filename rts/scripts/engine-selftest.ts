@@ -20,6 +20,9 @@ import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerM
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
+import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
+import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
+import { CharacterCore } from '../src/entity/base/CharacterCore.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
@@ -285,6 +288,100 @@ console.log('[5d] FortifyPlanner 取点契约（扇区内 ∧ 带内 ∧ 可达 
   // 未刷新扇区：无候选 → null
   const fp2 = new FortifyPlanner();
   ok(fp2.targetOf(cx, cz, 2, rLo, rHi, 0.6, () => true) === null, '未刷新扇区 → null（不猜点）');
+}
+
+// ---------- 短寻路 LocalStep（S1 新契约） ----------
+console.log('[5e] LocalStep 短寻路（语义安全→可行性；终点精确；无解 null；爬坡显式）');
+{
+  type G = Parameters<typeof localStep>[0];
+  const mk = (over: Partial<G> = {}): G => ({
+    canStep: () => true,
+    climbAt: () => false,
+    dropAt: () => 0,
+    waterAt: () => false,
+    heightAt: () => 0,
+    riskAt: () => 0,
+    ...over,
+  });
+  // ① 开阔：按 ≤SEG_MAX 推进；迭代可精确到目标
+  const open = mk();
+  const st1 = localStep(open, 0, 0, 30, 0);
+  ok(!!st1 && st1.next.x <= 10.01 && st1.next.x > 5 && Math.abs(st1.next.z) <= 2.1, '开阔：推进（≤SEG_MAX，方向正确）');
+  ok(!!st1 && st1.climb === false, '开阔：无爬坡标注');
+  let cx = 0, cz = 0, iter = 0;
+  for (; iter < 12; iter++) { const st = localStep(open, cx, cz, 30, 0); if (!st) break; cx = st.next.x; cz = st.next.z; }
+  ok(iter < 12 && Math.hypot(30 - cx, cz) <= 1.5, '迭代可达：终点精确（≤ARRIVE）');
+  // ② 中间墙（x≈12、|z|≤20 禁穿）→ 绕行（不硬撞）
+  const wall = mk({
+    canStep: (x, z, dx) => {
+      const nx = x + dx * 4;
+      if (dx > 0 && x < 12 && nx >= 12 && Math.abs(z) <= 20) return false;
+      if (dx < 0 && x >= 12 && nx < 12 && Math.abs(z) <= 20) return false;
+      return true;
+    },
+  });
+  const det = localStep(wall, 0, 0, 30, 0);
+  ok(!!det && Math.abs(det.next.z) > 0.5, '遇墙：绕行（有横向分量）');
+  // ③ 四周围死 → 无解 null
+  const box = mk({ canStep: (x, z) => !(x > -8 && x < 8 && z > -8 && z < 8) });
+  ok(localStep(box, 0, 0, 30, 0) === null, '无解 → null（不近似、不打转）');
+  // ④ 爬坡显式（第一跳即跨爬坡位 → 结果标 climb；段校验同样标）
+  const climbG = mk({ climbAt: (x, _z, dx) => dx > 0 && x >= 2 && x < 12 });
+  const stC = localStep(climbG, 0, 0, 30, 0);
+  ok(!!stC && stC.climb === true, '爬坡：结果显式标注 climb=true');
+  ok(canSegment(climbG, 0, 0, 12, 0).climb === true, '爬坡：段校验显式标注 climb');
+  // ⑤ 斜向禁上坡（canSegment 否决）
+  const uphill = mk({ heightAt: (x) => x * 0.5 });
+  ok(canSegment(uphill, 0, 0, 4, 4).ok === false, '斜向禁上坡（段校验否决）');
+  // ⑥ 语义风险：两点之间有高险带（x∈(4,12) 且 |z|<6）→ 绕开（偏好、非硬禁）
+  const risky = mk({ riskAt: (x, z) => (x > 4 && x < 12 && Math.abs(z) < 6 ? 10 : 0) });
+  const stR = localStep(risky, 0, 0, 20, 0);
+  ok(!!stR && Math.abs(stR.next.z) > 1, '语义风险：绕开高险带（偏好生效）');
+  // ⑦ 不可走段 → canSegment 否决
+  const blocked = mk({ canStep: () => false });
+  ok(canSegment(blocked, 0, 0, 4, 0).ok === false && localStep(blocked, 0, 0, 30, 0) === null, '不可走：段校验否决 → null');
+}
+
+// ---------- 锚点/前瞻（S3a：路由驱动，不跳绕行点） ----------
+console.log('[5f] Anchor 路由推进（S3a）');
+{
+  const mk = (path: { x: number; z: number; climb?: boolean }[] | undefined) => ({
+    squadId: 1, issuedAt: 0, until: 0, source: 'engine' as const, notBefore: 0,
+    pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,
+    order: { kind: 'act' as const, target: { x: 167, z: 15 }, path },
+    corridor: path,
+  });
+  const st = mk([{ x: 174, z: 22 }, { x: 167, z: 15 }]);
+  const n1 = currentTargetOf(st as never, 172, 26);
+  ok(!!n1 && Math.abs(n1.x - 174) < 0.01 && Math.abs(n1.z - 22) < 0.01, 'S3a：取下一个绕行点（不被目标吃掉）');
+  const n2 = currentTargetOf(st as never, 174.5, 21.5);
+  ok(!!n2 && Math.abs(n2.x - 167) < 0.01 && Math.abs(n2.z - 15) < 0.01, 'S3a：到绕行点后推进到终点');
+  const n3 = currentTargetOf(st as never, 167.2, 15.2);
+  ok(!!n3 && Math.abs(n3.x - 167) < 0.01 && Math.abs(n3.z - 15) < 0.01, 'S3a：末点=目标（精确）');
+  const n4 = currentTargetOf(mk(undefined) as never, 0, 0);
+  ok(!!n4 && n4.x === 167 && n4.z === 15, 'S3a：无路由 → 队令目标');
+}
+
+// ---------- 移动内核按表判墙（B3） ----------
+console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 / 小落差可走）');
+{
+  const mkProbe = (weld: boolean, rise: number) => ({
+    heightAt: (x: number) => (x >= 0.5 ? rise : 0),
+    wetAt: () => false,
+    slopeGradAt: () => (weld ? { gx: 1, gz: 0, mag: 1 } : null),
+    isWeldEdge: () => weld,
+  });
+  const run = (probe: ReturnType<typeof mkProbe>) => {
+    const core = new CharacterCore();
+    return core.step({
+      x: 0, y: 0, z: 0, dt: 0.1, dirX: 1, dirZ: 0, speed: 2,
+      climbOrdered: false, blockCliffClimb: true, climbAnyTerrain: false,
+      hx: 0.4, hz: 0.4, suspended: false,
+    }, probe as never, 0);
+  };
+  ok(run(mkProbe(false, 2)).dx === 0, '硬边大落差：墙（只下不上）');
+  ok(run(mkProbe(true, 2)).dx > 0, '坡(weld)：允许（程序化爬坡通道）');
+  ok(run(mkProbe(false, 0.5)).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
 }
 
 // ---------- Spread / OrderValidator ----------

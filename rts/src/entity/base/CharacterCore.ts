@@ -137,13 +137,12 @@ export class CharacterCore {
     if (!out.climbing && !inp.climbAnyTerrain && inp.blockCliffClimb) {
       const yHere = probe.heightAt(inp.x, inp.z, inp.y);
       const m = 0.1;
-      /** 该采样点是否"墙"（陡升 > 台阶豁免，且再远 0.8m 不再延续 = 非坡） */
+      /** 该采样点是否"墙"（B3，用户定 2026-09-25）：陡升 > 台阶豁免 **且该向不是坡(weld)**。
+       *  坡 = 可爬通道（程序化爬坡）；硬边大落差 = 墙（只下不上）。不再用"连续上升即非墙"猜。 */
       const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
         const h1 = probe.heightAt(sx, sz, inp.y);
-        const rise = h1 - yHere;
-        if (rise <= stepLimit) return false;
-        const h2 = probe.heightAt(sx + ux * 0.8, sz + uz * 0.8, inp.y);
-        return h2 - h1 < rise * 0.5;
+        if (h1 - yHere <= stepLimit) return false;
+        return !probe.isWeldEdge(inp.x, inp.z, ux, uz);
       };
       if (dx > 0 && isWall(inp.x + inp.hx + m, inp.z, 1, 0)) { dx = 0; out.blocked = true; }
       else if (dx < 0 && isWall(inp.x - inp.hx - m, inp.z, -1, 0)) { dx = 0; out.blocked = true; }

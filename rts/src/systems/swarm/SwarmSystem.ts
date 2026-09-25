@@ -8,6 +8,7 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { simNow } from '../../services/SimClock';
+import { Sem } from './TerrainSemantics';
 import { entityPerf } from '../../entity/EntityPerf';
 import { eventBus } from '../../core/EventBus';
 import { SwarmLedger } from './SwarmLedger';
@@ -422,7 +423,8 @@ export class SwarmSystem {
     this.steerAccum += dt;
     if (this.steerAccum >= 1 / SWARM.STEER_HZ) {
       this.steerAccum = 0;
-      if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
+      // ★ S2：HPA 已退出长寻路主链（只用可行性表）——不再预热（方法留至 S4 删除）
+      void raster;
       this.nav.steerEntities(hooks.activeUnits?.(), this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
         (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
     }
@@ -1056,6 +1058,21 @@ export class SwarmSystem {
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
     this.nav.stampFn = () => this.data.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
+    // ★ S1：短寻路语义风险（地形语义 → 偏好安全；"不要求很安全"）
+    this.nav.riskAt = (x, z) => this.semRisk(x, z);
+  }
+
+  /** ★ S1：短寻路语义风险（正值=更危险；负值=偏好）。来源 = L1 地形语义表（只读） */
+  private semRisk(x: number, z: number): number {
+    const c = this.data.semantics.classAt(x, z);
+    switch (c) {
+      case Sem.Cliff: case Sem.Pit: return 2.0;     // 陡壁/坑：强避（表若允许也不去）
+      case Sem.Water: return 0.6;                   // 水：小罚
+      case Sem.Hollow: return 0.3;                  // 低谷：小罚
+      case Sem.Open: case Sem.HighGround: return -0.3;   // 开阔/高地：小奖
+      case Sem.Concealed: return -0.5;              // 隐蔽接近：偏好
+      default: return 0;
+    }
   }
 
   /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */

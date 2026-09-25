@@ -21,6 +21,7 @@ import { shouldKite, kitePoint } from './RangedTactics';
 import { DANGER } from './SwarmDanger';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
+import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -48,18 +49,34 @@ export class SquadNavigator {
   /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
   private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, escape: 0 };
+  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
-  /** ★ 上一跳方向（惯性，防贴墙沿线来回摆）：同目标 5s 内给同向候选加分——"选一个就不反悔" */
-  private readonly hopDir = new Map<number, { dx: number; dz: number; gx: number; gz: number; at: number }>();
-  /** ★ 脱困锚点（困难检测）：4s 内距目标没净推进 6m（贴墙振荡/卡住）→ 切 LOS 长路径（BFS 绕障）脱离 */
-  private readonly esc = new Map<number, { x: number; z: number; at: number; d: number; gx: number; gz: number }>();
+  /** ★ S1：短寻路网格（生产 = PassTable） */
+  private table: PassTable | null = null;
+  /** ★ S1：语义风险注入（上层给地形语义；null = 无安全偏好） */
+  riskAt: ((x: number, z: number) => number) | null = null;
 
   /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
   setPathTable(t: PassTable | null): void {
+    this.table = t;
     this.feas.setTable(t);
     this.pathFinder.setTable(t);   // ★ 阶段二：加权 A* 边判定也读表（可行性+权重同底座）
+  }
+
+  /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
+  private localGrid(): LocalGrid | null {
+    const t = this.table;
+    if (!t || !t.ready) return null;
+    const risk = this.riskAt;
+    return {
+      canStep: (x, z, dx, dz) => t.canStep(x, z, dx, dz),
+      climbAt: (x, z, dx, dz) => t.climbAt(x, z, dx, dz),
+      dropAt: (x, z, dx, dz) => t.dropAt(x, z, dx, dz),
+      waterAt: (x, z) => t.waterAt(x, z),
+      heightAt: (x, z) => t.heightAt(x, z),
+      riskAt: risk ? (x, z) => risk(x, z) : () => 0,
+    };
   }
 
   /** ★ 阶段二：偏好重算（掩体代次变化触发一次；由 commander 注入） */
@@ -100,22 +117,17 @@ export class SquadNavigator {
     const dTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
     const longHaul = dTgt0 > NAV.LONG_PATH_DIST;
     if (this.weighted && this.feas.readyFor() && !longHaul) {
-      // ★ 困难检测（用户定 2026-09-23）：4s 内距目标没净推进 6m（贴墙振荡）→ 走 LOS 长路径脱困
-      const dTgt = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
-      const esc = this.esc.get(squad.id);
-      const sameGoal = esc && esc.gx === tgt.x && esc.gz === tgt.z;
-      const stuck = sameGoal && now - esc!.at > 4000 && dTgt > esc!.d - 6;
-      if (stuck) {
-        this.esc.set(squad.id, { x: this._from.x, z: this._from.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
-        this.dbg.escape++;
-      } else {
-        const best = this.greedyStep(squad.id, squad.type, this._from.x, this._from.z, tgt.x, tgt.z, now);
-        if (best) {
-          // 真实推进（目标距缩短 >6m）或换目标才重锚；振荡时锚点不动 → 4s 后触发脱困
-          if (!sameGoal || dTgt < esc!.d - 6) {
-            this.esc.set(squad.id, { x: this._from.x, z: this._from.z, at: now, d: dTgt, gx: tgt.x, gz: tgt.z });
-          }
-          state.corridor = [best, { x: tgt.x, z: tgt.z }];   // 覆盖式：段点 + 终目标
+      // ★ S1：短寻路 = localStep（两阶段：语义安全引导 → 可行性校验；终点精确；无解 null）
+      //   用户口径：路径无需最短；目标点不许走偏；上坡显式（climb 标注）
+      const g = this.localGrid();
+      if (g) {
+        const step = localStep(g, this._from.x, this._from.z, tgt.x, tgt.z);
+        if (step) {
+          const tail = canSegment(g, step.next.x, step.next.z, tgt.x, tgt.z);
+          state.corridor = [
+            { x: step.next.x, z: step.next.z, climb: step.climb },
+            { x: tgt.x, z: tgt.z, climb: tail.ok ? tail.climb : false },   // 末段爬坡标注
+          ];
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
           state.pathFromX = this._from.x;
@@ -124,9 +136,10 @@ export class SquadNavigator {
           state.pathAt = now;
           state.pathFailedAt = 0;
           this.dbg.seg++;
+          this.dbg.localOk++;
           return;
         }
-        // 贪心无推进（全半径无解）→ 本拍不发新路，回落可行性 BFS 兜底
+        this.dbg.localNull++;   // 无解：不原地打转 → 回落可行性 BFS（长寻路兜底）/ 冷却
       }
     }
     // ★ N1 阶段一：可行性寻路出走廊（恒权 · 有向；WeightedPath 暂时旁路）
@@ -151,48 +164,12 @@ export class SquadNavigator {
       state.corridor = undefined;
       return;
     }
-    // 'outside'（表外/未就绪）→ 回落旧口径（HPA/有界 A*）
-    this.dbg.solves++;   // ★ P4：白名单探针（真正进入求解；早退不计）
-    const path: { x: number; z: number }[] = [];
-    // ★ 长距离优先 HPA*（全局、绕大障碍）；失败 → 有界 A*（SquadPath）→ 直线
-    const dist = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
-    const isFlyer = (squad.type as string) === 'flyer';
-    // ★ 飞行不走地面折扣；地面 = 掩体折扣 × 该队兵种亲和（P1-3）
-    const mul = (!isFlyer && this.pathMul)
-      ? (x: number, z: number) => this.pathMul!(squad.type, x, z)
-      : undefined;
-    this.hpa.pathMul = mul ?? null;
-    // 一次求解必落一路（hpa/astar/coarse/fail；计数闭合 可断言）
-    let src: 'hpa' | 'astar' | 'coarse' | 'fail' = 'fail';
-    if (dist > 70 && this.hpa.find(raster, this._from.x, this._from.z, tgt.x, tgt.z, path)) src = 'hpa';
-    else if (this.pathFinder.find(raster, this._from.x, this._from.z, tgt.x, tgt.z, path, mul)) src = 'astar';
-    const warming = dist > 70 && this.hpa.warming;
-    if (src === 'hpa' || src === 'astar') {
-      this.dbg[src]++;
-      state.corridor = path;   // ★ 寻路轨覆盖（命令对象只读）
-      state.pathGoalX = tgt.x;
-      state.pathGoalZ = tgt.z;
-      state.pathFromX = this._from.x;
-      state.pathFromZ = this._from.z;
-      // ★ HPA 簇预热中：下一拍立刻重试（先用有界 A* 的路径顶上，绝不停摆）
-      state.pathAt = warming ? 0 : now;
-      state.pathFailedAt = 0;
-    } else if (state.order.coarse && state.order.coarse.length > 0) {
-      // ★ P2 coarse 软参考兜底：细解（HPA/有界A*）失败 → 沿随令 coarse 走廊走（仍优于直线）
-      this.dbg.coarse++;
-      state.corridor = state.order.coarse.slice();
-      state.pathGoalX = tgt.x;
-      state.pathGoalZ = tgt.z;
-      state.pathFromX = this._from.x;
-      state.pathFromZ = this._from.z;
-      state.pathAt = now;
-      state.pathFailedAt = 0;
-    } else {
-      // ★ 无解 → 清路径走直线（绝不停摆；冷却后再试）
-      this.dbg.fail++;
-      state.pathFailedAt = now;
-      state.corridor = undefined;
-    }
+    // ★ S2（用户定 2026-09-25）：**长寻路只用可行性表**——表外/未就绪 → 不发不可保证的路。
+    //   HPA*/加权有向 A*/coarse 软参考/直线兜底**全部退出主链**（S4 清理；宁停不猜，抵达优先）。
+    this.dbg.solves++;
+    this.dbg.fail++;
+    state.pathFailedAt = now;
+    state.corridor = undefined;
   }
 
   /** ★ P2 初级寻路核验入口（大队发令前调用；与 ensurePath 共用 HPA 簇缓存）。
@@ -332,44 +309,6 @@ export class SquadNavigator {
         });
       }
     }
-  }
-
-  /** ★ LOS 10m 短路 + 贪心校验：候选 = LOS 可走 + 更近（推进>0.5m）+ 更安全 + **惯性同向**（选一个不反悔） */
-  private greedyStep(
-    sid: number, type: string, cx: number, cz: number, tx: number, tz: number, now: number,
-  ): { x: number; z: number } | null {
-    const dNow = Math.hypot(tx - cx, tz - cz);
-    if (dNow < 2.5) return null;   // 已到：不需要段
-    const W_ADV = 1, W_SAFE = 4, W_DIR = 3, W_RISE = 2;   // ★ W_RISE：短跳爬升加价（偏好缓线/绕缓坡）
-    const hHere = this.feas.heightAt(cx, cz);
-    const prev = this.hopDir.get(sid);
-    const sameGoal = prev && prev.gx === tx && prev.gz === tz && now - prev.at < 5000;
-    const lx = sameGoal ? prev!.dx : 0, lz = sameGoal ? prev!.dz : 0;
-    for (const r of [10, 6]) {   // ★ LOS 10m 短路（主）/ 6m（窄地形回落）
-      let best: { x: number; z: number } | null = null;
-      let bestS = 0;
-      for (let k = 0; k < 16; k++) {   // 16 向（精度保留；反向由 SteerPick 禁令管）
-        const a = (k * Math.PI) / 8;
-        const dxn = Math.cos(a), dzn = Math.sin(a);
-        const x = cx + dxn * r;
-        const z = cz + dzn * r;
-        if (!this.feas.walkableLine(cx, cz, x, z)) continue;
-        const adv = dNow - Math.hypot(tx - x, tz - z);
-        if (adv <= 0.5) continue;   // 必须更近
-        const mul = this.pathMul?.(type, x, z) ?? 1;   // 0.6~1.5；越小=掩体/战壕越足
-        const hC = this.feas.heightAt(x, z);
-        const rise = Number.isFinite(hHere) && Number.isFinite(hC) ? Math.max(0, hC - hHere) : 0;
-        const s = W_ADV * adv + W_SAFE * (1 - mul) + W_DIR * (dxn * lx + dzn * lz) - W_RISE * rise;
-        if (s > bestS) { bestS = s; best = { x, z }; }
-      }
-      if (best) {
-        const bx = best.x - cx, bz = best.z - cz;
-        const bl = Math.hypot(bx, bz) || 1;
-        this.hopDir.set(sid, { dx: bx / bl, dz: bz / bl, gx: tx, gz: tz, at: now });
-        return best;
-      }
-    }
-    return null;
   }
 
   /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */

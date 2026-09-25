@@ -9,6 +9,7 @@
 // ============================================================
 
 import type { PassTable } from './PassTable';
+import { LOCAL } from './LocalStep';   // ★ S2：段长口径与短寻路同源（≤LOCAL.SEG_MAX）
 
 const CELL = 4;
 
@@ -220,8 +221,49 @@ export class FeasibilityPath {
       anchor = next;
     }
     if (out.length > 0) out[out.length - 1] = { x: gx, z: gz };
+    // ★ S2（用户定 2026-09-25）：**加密**——每段 ≤LOCAL.SEG_MAX，逐段过表（可执行）+ 逐段 climb，
+    //   执行层（Anchor.routeNext）按 ≤10m 路点推进即可逐步绕行；不加密则远路点会被"直线化"。
+    if (out.length > 0 && LOCAL.SEG_MAX > 0) {
+      const dense: { x: number; z: number; climb?: boolean }[] = [];
+      let ax = sx, az = sz;
+      for (const wp of out) {
+        const d = Math.hypot(wp.x - ax, wp.z - az);
+        const n = Math.max(1, Math.ceil(d / LOCAL.SEG_MAX));
+        let px = ax, pz = az;
+        for (let k = 1; k <= n; k++) {
+          const q = k / n;
+          const x = ax + (wp.x - ax) * q, z = az + (wp.z - az) * q;
+          dense.push({ x, z, climb: this.climbAlong(px, pz, x, z) });
+          px = x; pz = z;
+        }
+        ax = wp.x; az = wp.z;
+      }
+      const tailClimb = dense.length > 0 ? dense[dense.length - 1]!.climb : false;
+      out.length = 0;
+      for (const p of dense) out.push(p);
+      if (out.length > 0) out[out.length - 1] = { x: gx, z: gz, climb: tailClimb };
+    }
     this.dbg.ok++;
     return 'ok';
+  }
+
+  /** ★ S2：沿段爬坡标注（2m 采样；与 canSegment 同口径）——进入该点所经段是否需程序化爬坡 */
+  private climbAlong(ax: number, az: number, bx: number, bz: number): boolean {
+    const t = this.table;
+    if (!t || !t.ready) return false;
+    const d = Math.hypot(bx - ax, bz - az);
+    const n = Math.max(1, Math.ceil(d / 2));
+    let px = ax, pz = az;
+    for (let k = 1; k <= n; k++) {
+      const q = k / n;
+      const x = ax + (bx - ax) * q, z = az + (bz - az) * q;
+      const dx = x - px, dz = z - pz;
+      const sx = Math.abs(dx) < 0.4 ? 0 : (dx > 0 ? 1 : -1);
+      const sz = Math.abs(dz) < 0.4 ? 0 : (dz > 0 ? 1 : -1);
+      if ((sx !== 0 || sz !== 0) && t.climbAt(px, pz, sx, sz)) return true;
+      px = x; pz = z;
+    }
+    return false;
   }
 
   /** 两格中心直线是否可走（Bresenham 逐格读表 canStep；方向感知） */

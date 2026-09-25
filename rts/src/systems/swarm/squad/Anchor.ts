@@ -1,7 +1,7 @@
 // ============================================================
 // squad/Anchor —— 队长目标/站位解析（重写 P2/P4 归位；算法沿用现有）
 // ============================================================
-// 队长的**执行层**：走廊前瞻（corridorAhead）/ 队令目标（goalOf）/ 当前应赴路点
+// 队长的**执行层**：走廊推进（routeNext，S3a）/ 队令目标（goalOf）/ 当前应赴路点
 // （currentTargetOf）/ 站位锚（resolveAnchor：保护护卫点 + 驻守绕掩体 + 巡逻游弋）。
 // 算法一字不改（《蜂群重写计划.md》§3：寻路/掩体沿用现有）；本文件只做**归属归位**：
 // 目标真源 = 新 store（`setLiveOrderSource` 注入；旧板只作走廊/滞回缓存）。
@@ -50,27 +50,29 @@ export function corridorAhead(
   return path[path.length - 1];
 }
 
-/** ★ 五轴「路径」：取当前应赴的路点（前方第一个 >8m 的点；都近 = 末点；带锚点滞回） */
-export function currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
-  const tgtPt = corridorAhead(state, cx, cz, 8);
-  if (tgtPt) {
-    // ★ 末程回落（用户定 2026-09-24）：**走廊终点 ≠ 队令目标**且目标已近（<15m）→ 以队令目标为准
-    const ot0 = goalOf(state);
-    if (ot0 && Math.hypot(ot0.x - cx, ot0.z - cz) < 15
-      && Math.hypot(tgtPt.x - ot0.x, tgtPt.z - ot0.z) > 1.5) {
-      state.anchorX = ot0.x; state.anchorZ = ot0.z;
-      return { x: ot0.x, z: ot0.z };
-    }
-    // ★ 锚点滞回（用户定 2026-09-25）：新锚点与旧锚 <6m（抖动）→ 沿用旧锚，防振荡
-    if (state.anchorX !== undefined && state.anchorZ !== undefined) {
-      const ot = goalOf(state);
-      const isGoal = !!ot && Math.hypot(tgtPt.x - ot.x, tgtPt.z - ot.z) < 1.5;
-      const dd = Math.hypot(tgtPt.x - state.anchorX, tgtPt.z - state.anchorZ);
-      if (!isGoal && dd < 6) return { x: state.anchorX, z: state.anchorZ, climb: state.anchorClimb };
-    }
-    state.anchorX = tgtPt.x; state.anchorZ = tgtPt.z; state.anchorClimb = tgtPt.climb;
-    return tgtPt;
+/** ★ 沿路由推进（S3a）：**下一个未到达的路点**——从最近路点向后找第一个距离 >adv 的点；
+ *  都 ≤adv → 末点（终点=目标）。**绝不跳过中间绕行点**（原 look 前瞻会把绕行点吃掉 → 直线撞崖）。 */
+export function routeNext(
+  state: SquadOrderState | null | undefined, cx: number, cz: number, adv: number,
+): { x: number; z: number; climb?: boolean } | null {
+  const path = state?.corridor ?? state?.order.path;
+  if (!path || path.length === 0) return null;
+  let near = 0, nd = Infinity;
+  for (let i = 0; i < path.length; i++) {
+    const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+    if (d2 < nd) { nd = d2; near = i; }
   }
+  for (let i = near; i < path.length; i++) {
+    const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
+    if (d2 > adv * adv) return path[i];
+  }
+  return path[path.length - 1];
+}
+
+/** ★ 五轴「路径」：取当前应赴的路点 = **沿路由的下一个路点**（S3a：路由驱动，不跳绕行点）。 */
+export function currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
+  const nxt = routeNext(state, cx, cz, 2);
+  if (nxt) return nxt;
   return goalOf(state);
 }
 

@@ -1,5 +1,18 @@
 // ============================================================
-// PassTable —— 可行性表（迷宫抽象；《RTS架构.md》§3.0/§3.1）
+// PassTable —— 可行性表（**敌人消费收敛层**；《RTS架构.md》§6.0）
+// ============================================================
+// ★ 表管线（真相源 → 消费层；用户定 2026-09-25）：
+//   地形生成（Tiles 地块类型 + ChunkGenerator 高度场）
+//     → Refinements.finalRuling（边裁决唯一出口：weld=坡 / cliff=硬边；水全向/30%产坡/围裙）
+//     → **本表 = 敌人消费收敛**：每格 高度 + 四向有向边（can/drop/climb）+ 水 + 坑墙
+//     → 寻路（LocalStep/Route 只读本表）/ 移动内核（CharacterCore 经 TerrainProbe）
+//   · 地形语义表（TerrainSemantics）是**另一条消费线**（战术偏好；不决定能不能走）。
+//   · 动态破坏（HoleMask/HoleTable：挖掘/战壕）**不是地块类型**，与本表的坑（pit）无关。
+// ★ 消费语义（不是改地形裁决）：
+//   · weld（坡）  → 双向可行；净升 > 阈值 → 每边 `climb` 位（执行层必须走程序化爬坡）
+//   · cliff（硬边）→ |净落差| ≤ EDGE_CLIFF_BAND(0.6) 可走（小落差无视）；> 0.6 **只下不上**
+//   · 坑（地块类型 pit）→ **墙**（目标口径；现状：致死坑双向禁，非致死坑待实施）
+// ★ 纪律：只经 `finalRuling` 读取（不自行改判）；E/S 计算 + W/N 镜像 → 两侧对应边对称。
 // ============================================================
 // 地形高度的**纯函数**；每格记满**五个值**（用户定）：
 //   ① 自身高度 h
@@ -8,7 +21,7 @@
 // ★ 边型 = **地形表裁决**（用户定 2026-09-24；《地形与渲染管线架构.md》weld/cliff）：
 //   · 坡面（weld：水/坑无条件焊 + 30% 大落差产坡 + smoothDirs）→ **普通可行边**（双向，不特殊处理）
 //   · 硬边（cliff）特殊处理：
-//       - 深坑边缘（摔死坑）        → 绝对墙（双向禁，始终不可行）
+//       - 坑（**地块类型 pit**；≠战壕）→ 绝对墙（双向禁；weld 也当墙——用户定 2026-09-25）
 //       - |落差| ≤ EDGE_CLIFF_BAND  → 可走（平地地块间也都是硬边，零落差必须能走）
 //       - 落差 > 豁免 → **上不可行（墙）、下可行**
 //   裁决源 = 渲染同源（RasterMap.chunkSource 的 refined BlockSource → finalRuling），4m 块 = 4m 格对齐。
@@ -22,7 +35,6 @@ import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../../services
 /** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
 const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../../services/map/ChunkGenerator';
-import { DANGER } from '../SwarmDanger';
 
 const CELL = 4;
 /** 格↔块换算（CELL = BLOCK_SIZE = 4 → 1:1 对齐） */
@@ -44,12 +56,15 @@ export class PassTable {
   private can = new Uint8Array(0);
   /** ②-⑤ 四向边净落差（n*4；米，带符号：正 = 该向升高） */
   private drop = new Float32Array(0);
-  /** 深坑格（摔死坑；边全禁，便于探针/诊断） */
+  /** 坑格（**地块类型 pit** 一律墙；边全禁，便于探针/诊断） */
   private lethal = new Uint8Array(0);
   /** 水域格（可走；寻路加价用） */
   private water = new Uint8Array(0);
   /** ★ 爬坡位（用户定 2026-09-24）：weld（坡面）且该向净升 > CLIMB_MARK_RISE → 必须"程序化爬坡" */
   private climb = new Uint8Array(0);
+  /** ★ 坡边显式标注（B1，用户定 2026-09-25）：该向边 = weld（坡）→ 1；cliff（硬边）→ 0。
+   *  E/S 计算、W/N 镜像（两侧对应边同值）——寻路/移动不再靠坡度/落差猜。 */
+  private weld = new Uint8Array(0);
   ready = false;
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
@@ -69,6 +84,7 @@ export class PassTable {
       this.lethal = new Uint8Array(n);
       this.water = new Uint8Array(n);
       this.climb = new Uint8Array(n * 4);
+      this.weld = new Uint8Array(n * 4);
     } else {
       this.can.fill(0);
       this.drop.fill(0);
@@ -76,6 +92,7 @@ export class PassTable {
       this.lethal.fill(0);
       this.water.fill(0);
       this.climb.fill(0);
+      this.weld.fill(0);
     }
     const st = this.stats;
     st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0; st.lethal = 0;
@@ -91,7 +108,9 @@ export class PassTable {
         this.h[i] = hh;
         const role = raster.tileDefAt(wx, wz).genRole;
         if (role === 'liquid') this.water[i] = 1;
-        if (role === 'pit' && hh < DANGER.PIT_H) {
+        // ★ 坑（**地块类型 pit**，不是战壕）→ 一律墙（用户定 2026-09-25）：
+        //   边全禁（绝对墙），与移动/SteerPick 的 blockedAt（pit=硬格）同口径。
+        if (role === 'pit') {
           this.lethal[i] = 1;
           st.lethal++;
         }
@@ -104,20 +123,24 @@ export class PassTable {
         const i = iz * this.side + ix;
         if (ix + 1 < this.side) {
           const j = i + 1;
-          const [fwd, rev, dropQ, kind, cf, cr] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
+          const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
           this.setDir(i, DIR_E, fwd, dropQ);
           this.setDir(j, DIR_W, rev, -dropQ);
           this.climb[i * 4 + DIR_E] = cf ? 1 : 0;
           this.climb[j * 4 + DIR_W] = cr ? 1 : 0;
+          this.weld[i * 4 + DIR_E] = wf ? 1 : 0;
+          this.weld[j * 4 + DIR_W] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
           this.count(kind);
         }
         if (iz + 1 < this.side) {
           const k = i + this.side;
-          const [fwd, rev, dropQ, kind, cf, cr] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
+          const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
           this.setDir(i, DIR_S, fwd, dropQ);
           this.setDir(k, DIR_N, rev, -dropQ);
           this.climb[i * 4 + DIR_S] = cf ? 1 : 0;
           this.climb[k * 4 + DIR_N] = cr ? 1 : 0;
+          this.weld[i * 4 + DIR_S] = wf ? 1 : 0;
+          this.weld[k * 4 + DIR_N] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
           this.count(kind);
         }
       }
@@ -127,14 +150,14 @@ export class PassTable {
   }
 
   /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向),
-   *  正向爬坡位, 反向爬坡位]（爬坡位 = weld 且净升 > CLIMB_MARK_RISE；用户定 2026-09-24）
+   *  正向爬坡位, 反向爬坡位, **坡(weld)边**]（爬坡位 = weld 且净升 > CLIMB_MARK_RISE）
    *  ★ 裁决 = 地形表（weld=坡 → 普通可行；cliff=硬边 → 特殊处理）。 */
   private edge(
     raster: RasterMap, ix: number, iz: number,
     i: number, j: number, hA: number, hB: number, dir: 0 | 1 | 2 | 3,
-  ): [boolean, boolean, number, number, boolean, boolean] {
-    // 深坑边缘 = 绝对墙（摔死坑；始终不可行，双向禁）
-    if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1, false, false];
+  ): [boolean, boolean, number, number, boolean, boolean, boolean] {
+    // 坑（地块类型）= 绝对墙（始终不可行，双向禁）
+    if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1, false, false, false];
     const net = hB - hA;
     // ★ 地形表裁决（与渲染同源）：4m 格 = 4m 块，直接问该块边
     const bx = Math.floor(this.ox / BLOCK_SIZE) + ix * BLOCKS_PER_CELL;
@@ -145,14 +168,14 @@ export class PassTable {
     );
     // 坡面（weld）= 普通可行边（用户定：不特殊处理，双向可走）——净升 > 阈值 = 爬坡位
     if (ruling === 'weld') {
-      return [true, true, net, 0, net > CLIMB_MARK_RISE, -net > CLIMB_MARK_RISE];
+      return [true, true, net, 0, net > CLIMB_MARK_RISE, -net > CLIMB_MARK_RISE, true];
     }
     // 硬边（cliff）：≤ 台阶豁免（与移动层同源常量）→ 可走（平地地块间零落差也走这里）
-    if (Math.abs(net) <= EDGE_CLIFF_BAND) return [true, true, net, 0, false, false];
+    if (Math.abs(net) <= EDGE_CLIFF_BAND) return [true, true, net, 0, false, false, false];
     // 硬边大落差：**上不可行（墙）、下可行**
     const fwd = net < 0;   // i→j 向下 → 可走；向上 → 不可行
     const rev = net > 0;
-    return [fwd, rev, net, 2, false, false];
+    return [fwd, rev, net, 2, false, false, false];
   }
 
   private setDir(i: number, d: number, ok: boolean, dropM: number): void {
@@ -191,6 +214,18 @@ export class PassTable {
     if (dz > 0 && this.can[b + DIR_S] === 0) return false;
     if (dz < 0 && this.can[b + DIR_N] === 0) return false;
     return true;
+  }
+
+  /** ★ 坡边（B1，用户定 2026-09-25）：该向边是否 weld（坡）——两侧对应边同值；只读 */
+  weldAt(x: number, z: number, dx: number, dz: number): boolean {
+    const i = this.cellAt(x, z);
+    if (i < 0) return false;
+    const b = i * 4;
+    if (dx > 0 && this.weld[b + DIR_E] === 1) return true;
+    if (dx < 0 && this.weld[b + DIR_W] === 1) return true;
+    if (dz > 0 && this.weld[b + DIR_S] === 1) return true;
+    if (dz < 0 && this.weld[b + DIR_N] === 1) return true;
+    return false;
   }
 
   /** ★ 爬坡位（用户定 2026-09-24）：该向是否"必须程序化爬坡"（坡面且净升 > 阈值） */
@@ -243,5 +278,7 @@ export class PassTable {
     this.h = new Float32Array(0);
     this.lethal = new Uint8Array(0);
     this.water = new Uint8Array(0);
+    this.climb = new Uint8Array(0);
+    this.weld = new Uint8Array(0);
   }
 }

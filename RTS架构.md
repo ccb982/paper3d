@@ -221,7 +221,35 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 ## 6. 寻路（`nav/` + `SquadNavigator`）
 
-- **PassTable（可行性表 · 真源）**：五值（自身高度 + 四向边 可走/净落差）；**边型 = 地形表裁决**（`weld/cliff`，与渲染同源）；格对齐块格（4m）；`weld`（坡/水/坑焊）= 普通可行边；`cliff` 落差 ≤`EDGE_CLIFF_BAND=0.6` 可走、>0.6 **上墙下可行**；深坑（`pit && h<−1.2`）双向禁；**每边存 climb 位**（坡面且净升 >0.6）。
+### 6.0 表管线（真相源 → 可行性表 → 语义表；用户定 2026-09-25）
+```
+地形生成（真相源；静态）
+  Tiles（地块类型：平地/高台/水/坑·装饰）+ ChunkGenerator（高度场）
+        │
+        ▼
+  Refinements.finalRuling —— 边裁决唯一出口（weld=坡 / cliff=硬边）
+        │                   （水全向插值 / 30% 大落差产坡 / 围裙保护）
+        ├────────► 渲染/几何/物理（坡面/立面）——同源
+        ▼
+可行性表 PassTable（**敌人消费收敛层**：只读、静态、一次构建）
+  · 每格：高度 + 四向有向边（can/drop/climb）+ 水域 + 坑墙
+  · 消费语义：weld=坡（双向；上坡标 climb → 程序化爬坡）
+              cliff ≤0.6m 可走（无视小落差）；>0.6m **只下不上**
+              坑（**地块类型 pit**，不是战壕）→ 墙（目标口径）
+        ├──► 寻路（LocalStep / Route —— 只读 PassTable）
+        └──► 移动内核（CharacterCore 经 TerrainProbe）
+
+地形语义表 TerrainSemantics（消费层·战术偏好；与可行性**正交**）
+  · 高地/低谷/迎背坡/关口/走廊/开阔/隐蔽/陡壁/水/坑
+  · 只影响"偏好"（短寻路 risk / TerrainScore 评分），**不决定能不能走**
+
+动态破坏 HoleMask / HoleTable（工兵挖掘/战壕；**不是地块类型**，与 pit 无关）
+```
+- **铁律**：地形裁决**只在真相源**（Tiles/ChunkGenerator/Refinements）——敌人侧不改裁决，只消费。
+- PassTable 只经 `finalRuling` 读取；一次构建，工事/挖掘**不重建**（动态破坏走 HoleMask；战壕 ≠ pit）。
+- 寻路**只读 PassTable**；安全偏好读 TerrainSemantics（经 `riskAt` 注入），**可行性优先于偏好**。
+
+- **PassTable（可行性表 · 敌人消费收敛层，只读）**：五值（自身高度 + 四向边 可走/净落差）；**边型 = 地形表裁决**（`weld/cliff`，与渲染同源）；格对齐块格（4m）；`weld`（坡）= 双向可行 + 每边存 `climb` 位（净升 >0.6）；`cliff` 落差 ≤`EDGE_CLIFF_BAND=0.6` 可走、>0.6 **上墙下可行**；坑（地块类型 `pit`）**目标口径一律墙**（现状仅致死坑 `pit && h<−1.2` 双向禁）。
 - **LongPath（坡度加权 A\*）**：八向 octile；**上坡 +0.6/m**（偏好缓坡/垭口）；**上坡横平竖直**（斜向仅平/下坡）；输出走廊路点带 `climb` 标注。
 - **短跳（ShortHop/贪心）**：LOS 10m（窄地形 6m）；推进 >0.5m 硬门槛；`W_SAFE=4×(1−pathMul)`；**爬升加价 2/m**；惯性 5s 同向加分。
 - **分工（用户定）**：**长行军=长寻路**（`LONG_PATH_DIST=40m`）；短程（交战/巡逻/驻守/就近施工）=短寻路；`ensurePath` 触发 = 无路径 / 目标位移 >24m / 12s 超时 / 失败冷却 3s。
