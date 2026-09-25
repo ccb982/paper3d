@@ -77,15 +77,12 @@ for (const [t, a] of [...stat.entries()].sort((x, y) => y[1].samples - x[1].samp
 }
 console.log('\nOrderGate(成员指令门):', JSON.stringify(gate));
 
-// ★ 新引擎（?swarm=new）健全性（重写 P4；G9 调试口契约）
+// ★ 新引擎（唯一指挥链）健全性（重写 P4；G9 调试口契约）
 {
-  const url = page.url();
-  if (url.includes('swarm=new')) {
-    const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
-    const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
-    console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
-    if (!okNe) process.exitCode = 1;
-  }
+  const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+  const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
+  console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
+  if (!okNe) process.exitCode = 1;
 }
 
 await browser.close();

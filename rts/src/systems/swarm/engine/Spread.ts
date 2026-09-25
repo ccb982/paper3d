@@ -45,18 +45,19 @@ export interface SpreadFix {
 }
 
 /** 校验并修正同兵种目标点：返回修正后的点（异兵种互不约束）
- *  center：径向中心（玩家/飞船位置；给 → 切向推开保径向距离，不给 → 沿连线推开） */
+ *  center：径向中心（玩家/飞船位置；给 → 切向推开保径向距离，不给 → 沿连线推开）
+ *  ★ id 定序：与输入顺序无关 → 各队各自校验也能得到同一全局解（确定性、可复现） */
 export function spreadFix(
   pts: readonly SpreadPt[],
   center: { x: number; z: number } | null = null,
   min: number = SPREAD.MIN,
 ): SpreadFix[] {
-  const out: SpreadFix[] = pts.map((p) => ({ id: p.id, x: p.x, z: p.z, moved: 0 }));
-  const n = pts.length;
+  const out = pts.map((p) => ({ ...p, moved: 0 })).sort((a, b) => a.id - b.id);
+  const n = out.length;
   for (let pass = 0; pass < SPREAD.PASSES; pass++) {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
-        if (pts[i].role !== pts[j].role) continue;   // 只约束同兵种
+        if (out[i].role !== out[j].role) continue;   // 只约束同兵种
         const relx = out[j].x - out[i].x;
         const relz = out[j].z - out[i].z;
         const d = Math.hypot(relx, relz);
@@ -64,7 +65,6 @@ export function spreadFix(
         const push = (min - d) / 2;
         if (center) {
           // ★ 极坐标切向：**半径严格不变，只改角**（径向=前近/拉开，切向=间距）
-          // 直接算"弦长 = min"所需角差（弧长近似会收敛过慢）
           const r1 = Math.hypot(out[i].x - center.x, out[i].z - center.z);
           const r2 = Math.hypot(out[j].x - center.x, out[j].z - center.z);
           if (r1 < 1e-3 || r2 < 1e-3) {
@@ -75,17 +75,28 @@ export function spreadFix(
             out[i].z -= uz * push;
             out[j].x += ux * push;
             out[j].z += uz * push;
+            out[i].moved += push;
+            out[j].moved += push;
           } else {
-            const rAvg = (r1 + r2) * 0.5;
-            const want = 2 * Math.asin(Math.min(1, min / (2 * rAvg)));
+            // ★ 目标角差（余弦定理，弦长 = min）——**只解 θ，半径严格不变**（行进目标点 = 径向 r ⊗ 切向 θ）。
+            //   几何不可满足（min ≥ r1+r2，即目标点都在 min/2 环内）→ θ 差拉满 π（能散多大散多大，
+            //   不引入径向推力/不越环）。此时弦长上限 = r1+r2，属物理上限，由兵种策略的 r 负责。
+            const want = min >= r1 + r2
+              ? Math.PI
+              : Math.acos(Math.max(-1, Math.min(1,
+                (r1 * r1 + r2 * r2 - min * min) / (2 * r1 * r2))));
             const a1 = Math.atan2(out[i].z - center.z, out[i].x - center.x);
             const a2 = Math.atan2(out[j].z - center.z, out[j].x - center.x);
             let cur = Math.abs(a1 - a2);
             if (cur > Math.PI) cur = Math.PI * 2 - cur;
             const dAng = Math.max(0, want - cur) * 0.5;
-            const tie = pts[i].id < pts[j].id ? 1 : -1;
-            polarSlide(out, i, center, a1, tie, dAng);
-            polarSlide(out, j, center, a2, -tie, dAng);
+            if (dAng > 1e-6) {
+              const tie = out[i].id < out[j].id ? 1 : -1;
+              polarSlide(out, i, center, a1, tie, dAng);
+              polarSlide(out, j, center, a2, -tie, dAng);
+              out[i].moved += dAng * r1;
+              out[j].moved += dAng * r2;
+            }
           }
         } else {
           const dl = d > 1e-3 ? d : 1e-3;
@@ -95,9 +106,9 @@ export function spreadFix(
           out[i].z -= uz * push;
           out[j].x += ux * push;
           out[j].z += uz * push;
+          out[i].moved += push;
+          out[j].moved += push;
         }
-        out[i].moved += push;
-        out[j].moved += push;
       }
     }
   }

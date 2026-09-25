@@ -438,6 +438,7 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   };
   const bridge = new EngineBridge(live);
   bridge.dbg.ringMax = 60;
+  bridge.shadow = true;   // ★ 影子模式仅调试用（默认 false = 真下发）；本用例显式开启
   bridge.tick(0.6, 1);   // 2Hz → 触发一拍
   ok(bridge.dbg.ticks === 1, '桥接节拍触发');
   ok(bridge.squads.dbg.count === 3, '小队已登记（perceive）');
@@ -454,8 +455,11 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   let da = Math.abs(a1 - a2);
   if (da > Math.PI) da = Math.PI * 2 - da;
   const rAvg = (Math.hypot(o1.x, o1.z) + Math.hypot(o2.x, o2.z)) * 0.5;
-  // 注：径向不变是硬约束——共线同侧时弦长上限 = r1+r2，弧长近似会略低于 40
+  // ★ 行进目标点 = 径向 r（兵种策略）⊗ 切向 θ（同兵种间距）：只解 θ、r 严格不变。
+  //   r=12 < MIN/2 → 弦长上限 = r1+r2 = 24m，切向拉满 π → 弧长 π·12 ≈ 37.7m（本用例断言 ≥35）。
   ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
+  ok(Math.abs(Math.hypot(o1.x, o1.z) - 12) < 0.01 && Math.abs(Math.hypot(o2.x, o2.z) - 12) < 0.01,
+    '切向散开不改径向（r 严格不变）');
   // 环夹取：90 → 60（环上限）
   const t3 = bridge.ranged.targets.get(3)!;
   ok(Math.hypot(t3.x, t3.z) <= 60.01, '远程目标夹进环（≤60）');
@@ -468,6 +472,13 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   const pOk = bridge.playerOrder(1, 'regroup', { x: 5, z: 5 });
   ok(pOk && bridge.writer.store.get(1)!.order.source === 'player', '玩家命令经唯一发令器直达队长');
   ok(bridge.writer.store.get(1)!.order.kind === 'regroup', '玩家命令内容生效');
+  ok(bridge.writer.store.get(1)!.order.ttl === 30 * 12, '玩家令 TTL = 30 游戏分钟');
+  // ★ 执行板续期（旧链已删）：玩家令在身 → 决策为空，但执行板每拍仍同步现令（不掉令）
+  bridge.tick(0.6, 2.8);
+  ok(bridge.dbg.refreshed >= 1, '执行板续期计数（无新令也不丢执行令）');
+  // ★ 玩家令 TTL 到期 → 释放，交回引擎（不能永久锁死该队）
+  bridge.tick(0.6, 2.8 + 30 * 12 + 1);
+  ok(bridge.writer.store.get(1)?.order.source === 'engine', '玩家令到期 → 交回引擎决策');
   // 被打反应：玩家打 3 队 → 登记保护（保护者=最近的其他队）
   const live2 = { ...live, playerAttacking: () => 3 };
   const b2 = new EngineBridge(live2);

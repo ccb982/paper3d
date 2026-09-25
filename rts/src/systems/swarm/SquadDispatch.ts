@@ -17,10 +17,6 @@ import type { SquadNavigator } from './SquadNavigator';
 import { formationOffset } from './squad/Formation';
 import { OrderGate } from './OrderGate';
 import { DIRECTIVE_GATE } from './SwarmConfig';
-import { EngineerDispatch, type FortifyPort } from './EngineerDispatch';
-import type { EngineerCorps } from './EngineerCorps';
-import type { MemberTaskBoard } from './MemberTaskBoard';
-import type { FortifyPlanner } from './FortifyPlanner';
 import {
   squadBucket, orderCode, directiveCode, fireCode,
   type MobTactics, type TacticalOrder, type UnitDirective,
@@ -44,13 +40,7 @@ export interface DispatchDeps {
   tactics: SquadTactics;
   nav: SquadNavigator;
   world: DispatchWorld;
-  /** 工兵派件 + 成员任务（队长层；引擎只分区给数据） */
-  corps: EngineerCorps;
-  memberTasks: MemberTaskBoard;
   alerted(squadId: number): boolean;
-  missionOf(squadId: number): string | null;
-  fortify: FortifyPlanner;
-  fortifyPort: FortifyPort;
 }
 
 const _uids: number[] = [];
@@ -58,19 +48,9 @@ const _uids: number[] = [];
 export class SquadDispatch {
   private readonly gate = new OrderGate(DIRECTIVE_GATE);
   private readonly _centroid = { x: 0, z: 0 };
-  private readonly engineer: EngineerDispatch;
   readonly dbg = this.gate.dbg;
 
-  constructor(private readonly deps: DispatchDeps) {
-    this.engineer = new EngineerDispatch({
-      corps: deps.corps,
-      board: deps.memberTasks,
-      alerted: deps.alerted,
-      missionOf: deps.missionOf,
-      fortify: deps.fortify,
-      port: deps.fortifyPort,
-    });
-  }
+  constructor(private readonly deps: DispatchDeps) {}
 
   /** 队长调遣：一次队令 → 全队成员指令（2Hz 由系统驱动；seen 供记忆表清理） */
   run(squad: Squad, state: SquadOrderState, now: number, hooks: DispatchHooks, seen: Set<number>): void {
@@ -160,8 +140,6 @@ export class SquadDispatch {
         hooks.onDirective?.(uid, state.order, directive, state.until);
       }
     }
-    // ★ 工兵成员任务（队长层分派；引擎只给分区/派件/分工）
-    this.engineer.run(squad, state, now);
   }
 
   prune(seen: Set<number>): void {

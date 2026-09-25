@@ -24,7 +24,7 @@ import { CrowdGrid } from './CrowdGrid';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type SquadRating } from './SquadTable';
-import { SquadTactics, roleBucket, SquadLeaderAI } from './SquadTactics';
+import { SquadTactics, roleBucket } from './SquadTactics';
 import { SquadNavigator } from './SquadNavigator';
 import { SquadDispatch } from './SquadDispatch';
 import { followDir, leaderDir, followStopR } from './squad/Follow';
@@ -44,7 +44,6 @@ import { pickSteer } from '../../entity/SteerPick';
 import { dangerPointAt } from '../../entity/TerrainAssist';
 import { fallLineBlend } from '../../entity/TerrainAssist';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
-import { MemberTaskNav } from './MemberTaskNav';
 import { SwarmRecovery } from './SwarmRecovery';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
@@ -126,8 +125,6 @@ export class SwarmSystem {
   /** ★ 队长层成员分派（成员指令唯一写口；用户定 2026-09-24 收编） */
   private readonly dispatch: SquadDispatch;
   get dirGateDbg(): typeof this.dispatch.dbg { return this.dispatch.dbg; }
-  /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
-  readonly leaderAI = new SquadLeaderAI();
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
   readonly commander = new SwarmCommander(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
@@ -141,11 +138,6 @@ export class SwarmSystem {
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
-  /** ★ 成员任务绕墙走廊（基础寻路保证：任务目标直行撞墙 → A* 绕行，绝不原地磨蹭） */
-  private readonly taskNav = new MemberTaskNav(
-    (x, z) => this.commander.blockedAt(x, z),
-    (x, z) => this.commander.pathMulAt(x, z),
-  );
   /** 编队锚点量算复用对象（零分配） */
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
@@ -192,12 +184,7 @@ export class SwarmSystem {
       tactics: this.tactics,
       nav: this.nav,
       world: this.commander,
-      corps: this.commander.corps,
-      memberTasks: this.commander.memberTasks,
       alerted: (id) => performance.now() / 1000 - (this.recentHits.get(id) ?? -1e9) <= AUTONOMY.SQUAD_ALERT_S,
-      missionOf: (id) => this.commander.missionOf(id),
-      fortify: this.commander.fortify,
-      fortifyPort: this.commander.fortifyPort(),
     });
   }
 
@@ -339,9 +326,6 @@ export class SwarmSystem {
       }
     }
 
-    // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退；★ P4：引擎命令在身 → 拆步推进）
-    this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now,
-      (t, x, z) => this.commander.scoreForType(t, x, z, hooks.playerX, hooks.playerZ));
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
     this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
@@ -769,32 +753,11 @@ export class SwarmSystem {
     const squad = this.squads.squadOf(p.swarmUid[i]);
     const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
     const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
-    const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
-    if (isLeader && !hasMyTask) {
-      // ★ 池队长无任务 → 走队级指令锚点；到位校验见 leaderDir（防"槽位到位离目标远"冻住）
+    if (isLeader) {
+      // ★ 队长（无成员任务概念；旧 taskX/Z 链已销毁）→ 走队级指令锚点；到位校验见 leaderDir
       const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
         p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
       if (ld) { dx = ld.x; dz = ld.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    } else if (isLeader && hasMyTask) {
-      // ★ 队长（干活的）：**长腿走队级指令目标**（走廊锚点+阵型，避局部极小）；近程直走件点
-      const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
-      const td = Math.hypot(tx, tz);
-      if (td > 15) {
-        const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
-        const ad = Math.hypot(ax, az);
-        if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
-        else { dx = tx / td; dz = tz / td; }
-      } else if (td > 2) {
-        // ★ 最后一程（≤15m）：直线可走才直走；**直线被墙/单向边挡 → 回队级锚点**（走廊绕上坡正面）
-        if (this.walkableLine(p.x[i], p.z[i], p.taskX[i], p.taskZ[i])) { dx = tx / td; dz = tz / td; }
-        else {
-          const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
-          const ad = Math.hypot(ax, az);
-          if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
-          else { dx = tx / td; dz = tz / td; }
-        }
-      }
-      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
       // ★ 成员跟队长（用户定 2026-09-24）：近=直线；掉队且直线被挡 → 长寻路沿走廊绕（Follow）
       //   双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
@@ -1080,8 +1043,6 @@ export class SwarmSystem {
 
   /** ★ P4 白名单探针：队路径重规划计数 */
   get navDbg(): SquadNavigator['dbg'] { return this.nav.dbg; }
-  /** ★ P4 白名单探针：任务走廊重规划计数 */
-  get memberNavDbg(): MemberTaskNav['dbg'] { return this.taskNav.dbg; }
 
   /** ★ 可行性直达检查（工兵选点等）：直线可走（读表） */
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
@@ -1097,7 +1058,6 @@ export class SwarmSystem {
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
-    this.taskNav.setPathTable(t);   // ★ 任务走廊薄层化（可行性寻路）
     this.nav.stampFn = () => this.commander.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
   }
 
@@ -1159,7 +1119,6 @@ export class SwarmSystem {
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
     this.tacticsAccum = 0;
-    this.leaderAI.clear();
     this.commander.clear();
     this.recovery.clear();
     this.stuckAccum = 0;

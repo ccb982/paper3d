@@ -119,15 +119,12 @@ for (const k of stalls.slice(0, 6)) {
 }
 console.log('最近卡死现场:', samples[samples.length - 1].stuckLast || '(无)');
 
-// ★ 新引擎（?swarm=new）健全性（重写 P4；G9 调试口契约）
+// ★ 新引擎（唯一指挥链）健全性（重写 P4；G9 调试口契约）
 {
-  const url = page.url();
-  if (url.includes('swarm=new')) {
-    const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
-    const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
-    console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
-    if (!okNe) process.exitCode = 1;
-  }
+  const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+  const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
+  console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
+  if (!okNe) process.exitCode = 1;
 }
 
 await browser.close();

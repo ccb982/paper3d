@@ -167,10 +167,12 @@ for (const t of [8000, 20000, 40000, 70000]) {
     await page.evaluate(() => { window.__rts.navMap.open(null); });   // ★ 打开全览小地图截图
   }
 }
-// ★ 工事计时（断言也读）
+// ★ 工事计时（断言也读）：新引擎 EngineerManager（旧工事链已销毁）
 const built = await page.evaluate(() => {
   const c = window.__rts.swarm.commander;
-  return { built: c.corps.built.size, pieces: c.corps.pieces.length, injected: c.fortify.dbg.injected, sweeps: c.fortify.dbg.sweeps };
+  const ne = globalThis.__rts?.newEngine?.() ?? null;
+  const eng = ne?.engineer ?? {};
+  return { built: eng.built ?? 0, spots: eng.spots ?? 0, working: eng.working ?? 0, sweeps: c.fortify.dbg.sweeps };
 });
 console.log('工事计时', JSON.stringify(built));
 // ★ 队轨迹分析
@@ -271,17 +273,14 @@ const checks = [
   ['寻路已产出', (last.trace?.paths ?? 0) > 0],
   ['工事建成 > 0', built.built > 0],
 ];
-// ★ 新引擎（?swarm=new）：调试口契约 + 健全性（重写 P4；G9）
-const wantNew = !RTS_URL.includes('swarm=old');   // 默认新链（?swarm=old 才回退）
-const ne = wantNew ? await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null) : null;
-if (wantNew) {
-  checks.push(
-    ['新引擎在跑（ticks>0）', !!ne && ne.ticks > 0],
-    ['新引擎小队已登记', !!ne && ne.squads.count > 0],
-    ['唯一发令器有台账', !!ne && ne.writer.issued + ne.writer.kept > 0],
-    ['位置单源有玩家+舰船', !!ne && ne.pos.player === true && ne.pos.ship === true],
-  );
-}
+// ★ 新引擎（唯一指挥链）：调试口契约 + 健全性（重写 P4；G9）
+const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+checks.push(
+  ['新引擎在跑（ticks>0）', !!ne && ne.ticks > 0],
+  ['新引擎小队已登记', !!ne && ne.squads.count > 0],
+  ['唯一发令器有台账', !!ne && ne.writer.issued + ne.writer.kept > 0],
+  ['位置单源有玩家+舰船', !!ne && ne.pos.player === true && ne.pos.ship === true],
+);
 const pass = checks.filter(([, ok]) => ok).length;
 for (const [name, ok] of checks) if (!ok) console.error(`  FAIL  ${name}`);
 console.log(`基线断言: ${pass}/${checks.length} ${pass === checks.length ? 'PASS' : 'FAIL'}`);

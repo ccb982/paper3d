@@ -12,15 +12,14 @@ import type {
   DirectiveKind, SquadOrderKind, TacticalOrder, UnitDirective, MobTactics, SquadIntent,
 } from '../../entity/SwarmUnit';
 import { type DirectiveRoleBucket, roleBucket, squadBucket } from '../../entity/SwarmUnit';
-import type { Squad, SquadType } from './SquadTable';
+import type { Squad } from './SquadTable';
 import {
   MISSION_EXEC as MISSION_EXEC_TABLE, guardPoint, UNIT_TACTICS,
   ensureCovered, standBehindCover, type TerrainCover,
 } from './UnitTactics';
 import { CommandLedger } from './CommandLedger';
-import { OrderGate } from './OrderGate';
 import { resolveAnchor } from './squad/Anchor';
-import { LEADER_GATE, GAME_MIN } from './SwarmConfig';
+import { GAME_MIN } from './SwarmConfig';
 
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type DirectiveRoleBucket, roleBucket, squadBucket };
@@ -439,178 +438,6 @@ export interface SquadMessage {
   until: number;
 }
 
-/** ★ 队长策略（按小队属性；2026-09-19 用户定调：不同属性不同策略） */
-export interface LeaderStrategy {
-  /** 接敌半径（米；队质心距玩家 → 进入策略） */
-  engageR: number;
-  /** 压迫式进攻（true = 直扑玩家；false = 站到射程环上保持距离） */
-  press: boolean;
-  /** 非压迫档的站位距离（米；玩家 → 队伍方向，保持此距） */
-  standoff: number;
-  /** 残血撤退阈值（hpRatio；0 = 不撤，如自爆） */
-  retreatHp: number;
-  /** 撤退集结距离（米；背离玩家） */
-  retreatDist: number;
-}
+// ★ 队长自主发令（旧链）已删（用户定 2026-09-25）：队长只导航 + 汇报（squad/SquadCore）；
+//   战斗队决策唯一来源 = 新引擎（engine/OrderWriter）。
 
-/** ★ 队长策略表（后续战术重写只改本表 / SquadLeaderAI） */
-export const LEADER_STRATEGY: Record<SquadType | 'suicide', LeaderStrategy> = {
-  /** 突击：直扑贴身 */
-  assault:   { engageR: 22, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
-  /** 防御：稳推进（接敌略近、**死守不退**：通用低血后撤不适用） */
-  defense:   { engageR: 18, press: true,  standoff: 2,  retreatHp: 0,    retreatDist: 14 },
-  /** 远程：远距开火 + 保持射程环（不追脸；射程 50m+ → 站 45m 环） */
-  ranged:    { engageR: 55, press: false, standoff: 45, retreatHp: 0.35, retreatDist: 22 },
-  /** 后勤：缩后（不接敌，保持更远站位） */
-  logistics: { engageR: 18, press: false, standoff: 10, retreatHp: 0.55, retreatDist: 24 },
-  /** 飞行：直扑 */
-  flyer:     { engageR: 24, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
-  /** 混编：折中 */
-  mixed:     { engageR: 20, press: true,  standoff: 0,  retreatHp: 0.30, retreatDist: 18 },
-  /** 自爆：冲锋（不撤；冲得最积极） */
-  suicide:   { engageR: 34, press: true,  standoff: 0,  retreatHp: 0,    retreatDist: 0 },
-};
-
-/** 命令 TTL（**游戏分钟**） */
-export const LEADER_TTL = 4 * GAME_MIN;
-
-/** ★ 队长 AI 需要的评级面（结构化最小子集；避免引入 SquadRating 全量字段） */
-export type LeaderRating = {
-  hpRatio: number; cx: number; cz: number;
-  lastSeenX?: number; lastSeenZ?: number; lastSeenAt?: number;
-};
-
-/** ★ 队长自主发令器（1Hz）：引擎命令优先（不抢命令轨）；★ P4：引擎命令在身时走拆步（寻路轨）。 */
-export class SquadLeaderAI {
-  private accum = 0;
-  /** ★ 接敌滞回（squadId → 上一拍是否已接敌）：避免在 engageR 边界来回切 → 左右摆 */
-  private readonly engaged = new Map<number, boolean>();
-  /** ★ 队长自主令命令保护（时间+距离+记忆；用户定 2026-09-24） */
-  private readonly leaderGate = new OrderGate(LEADER_GATE);
-  get leaderGateDbg(): { decide: number; commit: number; keep: number; stuck: number; bias: number } {
-    return this.leaderGate.dbg;
-  }
-
-
-  tick(
-    dt: number,
-    squads: {
-      all(): IterableIterator<Squad>;
-      ratingOf(id: number, now: number): LeaderRating | null;
-    },
-    tactics: SquadTactics,
-    px: number,
-    pz: number,
-    now: number,
-    /** ★ P4 拆步打分（L3 兵种分；commander.scoreForType 透传） */
-    scoreStep?: (type: SquadType, x: number, z: number) => number,
-  ): void {
-    this.accum += dt;
-    if (this.accum < 1) return;
-    this.accum = 0;
-    const seen = new Set<number>();
-    for (const s of squads.all()) {
-      seen.add(s.id);
-      const cur = tactics.board.get(s.id);
-      // 引擎/玩家命令优先：未过期的引擎或玩家命令 → 队长不抢命令轨；但按意图拆步（寻路轨）推进
-      if (cur && (cur.source === 'engine' || cur.source === 'player') && now < cur.until) continue;
-      const r = squads.ratingOf(s.id, now);
-      if (!r) continue;
-      const strat = s.suicide ? LEADER_STRATEGY.suicide : LEADER_STRATEGY[s.type];
-      const d = Math.hypot(r.cx - px, r.cz - pz);
-      // ★ 2026-09-21：跨队决策**上收大队**——队长不再消费/响应小队间消息
-      //   （求援/共享目击由 SwarmCommander.tacticalTick 裁决并改派；此处只管本队）
-      // ★ 队长看队内具体状态：过半成员残血 → 全队撤（即使队均血量还行）
-      let low = 0, alive = 0;
-      for (const m of s.members.values()) {
-        alive++;
-        if (m.maxHp > 0 && m.hp / m.maxHp <= MEMBER_FALLBACK_HP) low++;
-      }
-      const squadBroken = alive > 0 && low * 2 >= alive;
-      // ① 残血撤退（自爆档不撤；队均低血 或 过半残血）
-      if (strat.retreatHp > 0 && d < 40 && (r.hpRatio <= strat.retreatHp || squadBroken)) {
-        // ★ 步骤 9e：危急 → 向最近的其他小队发 `requestSupport`（引擎中转）
-        this.requestSupport(s.id, r.cx, r.cz, squads, tactics, now);
-        const ax = r.cx - px, az = r.cz - pz;
-        const len = Math.hypot(ax, az) || 1;
-        const g = this.leaderGate.decide(s.id, 'retreat',
-          r.cx + (ax / len) * strat.retreatDist, r.cz + (az / len) * strat.retreatDist, r.cx, r.cz, now);
-        tactics.issue(s.id, {
-          kind: 'retreat',
-          target: { x: g.x, z: g.z },
-          seq: 0,
-        }, now, LEADER_TTL, 'leader');
-        continue;
-      }
-      // ② 接敌（★ 滞回：进入用 0.85×R、退出用 1.15×R，防边界来回切）
-      const engaged = this.engaged.get(s.id) === true;
-      if (d >= strat.engageR * (engaged ? 1.15 : 0.85)) { this.engaged.set(s.id, false); continue; }
-      this.engaged.set(s.id, true);
-      // ★ 步骤 9e：有新鲜目击 → 向最近的其他小队共享（shareContact）
-      if (r.lastSeenAt !== undefined && now - r.lastSeenAt <= 3 && r.lastSeenX !== undefined && r.lastSeenZ !== undefined) {
-        const near = this.nearestOther(s.id, r.cx, r.cz, squads);
-        if (near >= 0) {
-          tactics.board.send({
-            kind: 'shareContact', fromSquadId: s.id, toSquadId: near,
-            x: r.lastSeenX, z: r.lastSeenZ, until: now + 3,
-          });
-        }
-      }
-      if (strat.press) {
-        // 压迫式：直扑玩家（突击/防御/飞行/自爆）
-        const g = this.leaderGate.decide(s.id, 'advance', px, pz, r.cx, r.cz, now);
-        tactics.issue(s.id, { kind: 'advance', target: { x: g.x, z: g.z }, seq: 0 }, now, LEADER_TTL, 'leader');
-      } else {
-        // 保持距离：站到“射程环”上（玩家 → 队伍方向 × standoff）
-        const ax = r.cx - px, az = r.cz - pz;
-        const len = Math.hypot(ax, az) || 1;
-        const g = this.leaderGate.decide(s.id, 'advance',
-          px + (ax / len) * strat.standoff, pz + (az / len) * strat.standoff, r.cx, r.cz, now);
-        tactics.issue(s.id, {
-          kind: 'advance',
-          target: { x: g.x, z: g.z },
-          seq: 0,
-        }, now, LEADER_TTL, 'leader');
-      }
-    }
-    this.leaderGate.prune(seen);
-  }
-
-  /** ★ 步骤 9e：向最近的其他小队发求援（引擎中转；同 from+to 自动去重） */
-  private requestSupport(
-    squadId: number, cx: number, cz: number,
-    squads: { all(): IterableIterator<Squad>; ratingOf(id: number, now: number): { hpRatio: number; cx: number; cz: number } | null },
-    tactics: SquadTactics,
-    now: number,
-  ): void {
-    const near = this.nearestOther(squadId, cx, cz, squads);
-    if (near < 0) return;
-    tactics.board.send({
-      kind: 'requestSupport', fromSquadId: squadId, toSquadId: near,
-      x: cx, z: cz, until: now + 4,
-    });
-  }
-
-  /** 最近的其他小队 id（无 = -1） */
-  private nearestOther(
-    squadId: number, cx: number, cz: number,
-    squads: { all(): IterableIterator<Squad>; ratingOf(id: number, now: number): { hpRatio: number; cx: number; cz: number } | null },
-  ): number {
-    let best = -1;
-    let bestD2 = Infinity;
-    for (const o of squads.all()) {
-      if (o.id === squadId) continue;
-      let ox = 0, oz = 0, n = 0;
-      for (const m of o.members.values()) { ox += m.x; oz += m.z; n++; }
-      if (n === 0) continue;
-      ox /= n; oz /= n;
-      const d2 = (ox - cx) * (ox - cx) + (oz - cz) * (oz - cz);
-      if (d2 < bestD2) { bestD2 = d2; best = o.id; }
-    }
-    return best;
-  }
-
-  clear(): void {
-    this.accum = 0;
-  }
-}

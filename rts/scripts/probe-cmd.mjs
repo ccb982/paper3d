@@ -11,24 +11,22 @@ for (let i = 0; i < 30; i += 3) {
   await new Promise(r => setTimeout(r, 3000));
   const s = await page.evaluate(() => {
     const c = window.__rts.swarm.commander; const lg = c.swarm.cmdLog;
+    const ne = globalThis.__rts?.newEngine?.() ?? null;
     const uniq = lg.recent(400).filter((e) => e.n === 1);
     const per = new Map(); for (const e of uniq) per.set(e.squadId, (per.get(e.squadId) ?? 0) + 1);
     const top = [...per.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `#${k}:${v}`);
-    return { kept: c.stableDbg.kept, uniqN: lg.unique, last: c.stableDbg.last, top: top.join(' '), spread: c.spreadDbg?.n ?? null };
+    return { kept: ne?.writer?.kept ?? 0, uniqN: lg.unique, last: ne?.writer?.last ?? '', top: top.join(' '), spread: ne?.spread ?? 0 };
   });
   seen.push(`[${i + 3}s] kept=${s.kept} 散开=${s.spread} 累计唯一令=${s.uniqN} | 最近被拦: ${s.last}`);
 }
 console.log(seen.join('\n'));
 
-// ★ 新引擎（?swarm=new）健全性（重写 P4；G9 调试口契约）
+// ★ 新引擎（唯一指挥链）健全性（重写 P4；G9 调试口契约）
 {
-  const url = page.url();
-  if (url.includes('swarm=new')) {
-    const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
-    const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
-    console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
-    if (!okNe) process.exitCode = 1;
-  }
+  const ne = await page.evaluate(() => globalThis.__rts?.newEngine?.() ?? null);
+  const okNe = !!ne && ne.ticks > 0 && ne.squads.count > 0 && ne.writer.issued + ne.writer.kept > 0;
+  console.log(`新引擎健全性: ${okNe ? 'PASS' : 'FAIL'} ` + (ne ? JSON.stringify({ ticks: ne.ticks, squads: ne.squads.count, writer: ne.writer }) : '(无 newEngine 调试口)'));
+  if (!okNe) process.exitCode = 1;
 }
 
 await browser.close();

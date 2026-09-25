@@ -47,7 +47,7 @@ import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
-import { GAME_MIN, REWRITE_ON } from './systems/swarm/SwarmConfig';
+import { GAME_MIN } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
 import { setLiveOrderSource } from './systems/swarm/squad/Anchor';
@@ -236,10 +236,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (targetKind !== AGENT_TARGET_SHIP) return;
     if (Math.hypot(x - spawn.x, z - spawn.z) <= SHIP_LENGTH / 2 + 2) shipHp = Math.max(0, shipHp - dmg);
   };
-  // ★ 新引擎接线（重写 P3/P4）：默认真下发；`?shadow=1` 只算不发；`?swarm=old` 回退旧链
+  // ★ 新引擎接线（重写 P4）：**唯一指挥链**——旧链已删，无回退开关
   let shadowBridge: EngineBridge | null = null;
   let squadCores: SquadRegistry | null = null;
-  if (REWRITE_ON) {
+  {
     shadowBridge = new EngineBridge({
       player: () => ({ x: hooks.playerX, z: hooks.playerZ }),
       ship: () => ({ x: hooks.shipX, z: hooks.shipZ }),
@@ -266,9 +266,22 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         for (let i = 0; i < pool.count; i++) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
         return out;
       },
-      // ★ 正式启用（用户定）：新引擎决策 → 旧执行链（队长消费）。
+      /** ★ 工兵不入攻击队列（用户定 2026-09-25）：只筛掉工兵编制的单位；统一计时仍看全体 */
+      attackables: () => {
+        const eng = new Set<number>();
+        for (const sq of swarm.squads.all()) if (sq.builders) for (const uid of sq.members.keys()) eng.add(uid);
+        const out: { uid: number; x: number; z: number }[] = [];
+        for (const e of enemies) if (!eng.has(e.swarmUid)) out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z });
+        const pool = swarm.pool;
+        for (let i = 0; i < pool.count; i++) {
+          if (!eng.has(pool.swarmUid[i])) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
+        }
+        return out;
+      },
+      /** ★ 工兵端口（新引擎全权）：建造位置查询（危险点/扇区弧链随机可达点）+ 施工落地 */
+      engineer: () => swarm.commander.engineerPort(),
+      // ★ 新引擎决策 → 旧执行链（队长消费）。
       //   命令映射：act/march→advance、defend/garrison→garrison、protect→protect、patrol→flank。
-      //   工兵照旧：新引擎不给工兵发移动令（工事由旧指挥官派件、工兵内部决策）。
       emit: (squadId, order, now) => {
         const kindMap: Record<string, string> = {
           act: 'advance', march: 'advance', defend: 'garrison',
@@ -277,6 +290,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         // ★ 语义映射（旧板）：protect 的 target = **被保护点 G**（引擎侧 G 在 anchor；
         //   引擎的 target 只是调整点/自身位置）——直通会丢 G（实测保护令站位失效）
         const mt = order.kind === 'protect' && order.anchor ? order.anchor : order.target;
+        // ★ 旧板 TTL 用**执行侧时钟**（`applyOrders` 比较 performance.now；simT 有页面装载偏移 → 会秒掉令）
         swarm.tactics.issue(squadId, {
           kind: (kindMap[order.kind] ?? 'advance') as never,
           target: { x: mt.x, z: mt.z },
@@ -286,13 +300,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           threatZ: order.threat?.z,
           seq: 0,
           roe: order.roe,
-        } as never, now, 6, 'engine');
+        } as never, performance.now() / 1000, 6, 'engine');
         squadCores?.accept(squadId, order);   // ★ P2：队长核接令（分流/汇报）
       },
     });
-    // ★ 正式启用（用户定 2026-09-25：**正常就用新链**）：默认 shadow=false（新引擎真下发）；
-    //   `?shadow=1` 只跑影子（新引擎只算不发，用于对照/调试）
-    shadowBridge.shadow = new URLSearchParams(location.search).get('shadow') === '1';
     // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
     const leaderPosOf = (id: number): { x: number; z: number } | null => {
       const sq = swarm.squads.get(id);
@@ -575,7 +586,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         cmdPanel.setTarget(hit.point.x, hit.point.z);
         orders.issue({ kind: 'advance', target: { x: hit.point.x, z: hit.point.z }, source: 'player', roe: 'engage', ttl: 6 });
         // ★ 玩家手动命令（重写 P3；用户定）：新引擎经唯一发令器 + player 旁路 → **只给队长**
-        //   （60m 内的小队收令；影子模式只记账，`?swarm=new` 时可在 __rts.newEngine() 看到）
+        //   （60m 内的小队收令；可在 __rts.newEngine() 看到）
         shadowBridge?.playerOrderNear('act', { x: hit.point.x, z: hit.point.z }, 60);
       }
       return;
@@ -651,8 +662,16 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     hooks.entityCount = enemies.length;
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720000);
     swarm.update(h, hooks);
-    shadowBridge?.tick(h, simT / 1000);   // ★ 新引擎拍（默认真下发；?shadow=1 只算不发）
-    squadCores?.tick(h, simT / 1000, (id) => {   // ★ P2：队长核推进（队长位置单源）
+    // ★ 事态环单源（用户定）：新引擎 OrderValidator ① 用指挥官（PostureFn）的环——不是自带默认值
+    if (shadowBridge) {
+      const rg = swarm.commander.ring;
+      shadowBridge.dbg.ringMin = rg.minD >= 0 ? rg.minD : 0;
+      shadowBridge.dbg.ringMax = rg.maxD >= 0 ? rg.maxD : 0;
+    }
+    // ★ 引擎时钟 = **实秒**（命令计时/施工计时按实秒口径；不是 simT 的千分之一）
+    const nowS = performance.now() / 1000;
+    shadowBridge?.tick(h, nowS);   // ★ 新引擎拍（唯一指挥链）
+    squadCores?.tick(h, nowS, (id) => {   // ★ P2：队长核推进（队长位置单源）
       const sq = swarm.squads.get(id);
       const lead = sq?.members.get(sq.leaderUid);
       return lead ? { x: lead.x, z: lead.z } : null;
@@ -727,11 +746,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,
       shadow: shadowBridge!.shadow,
+      spread: shadowBridge!.dbg.spread,
+      refreshed: shadowBridge!.dbg.refreshed,
       squads: { ...shadowBridge!.squads.dbg },
       melee: { ...shadowBridge!.melee.dbg },
       ranged: { ...shadowBridge!.ranged.dbg },
       flyer: { ...shadowBridge!.flyer.dbg },
-      engineer: { ...shadowBridge!.engineer.dbg },
+      engineer: { ...shadowBridge!.engineer.dbg, ...shadowBridge!.engineer.fortDbg },
       writer: { ...shadowBridge!.writer.dbg },
       protect: { ...shadowBridge!.protect.dbg },
       queues: { ...shadowBridge!.queues.dbg },

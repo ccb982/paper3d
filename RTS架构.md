@@ -52,9 +52,11 @@ ui/NavDebugMap.ts          命令检视地图（走廊/起终点/扇区/上下�
 ui/Timeline.ts             时间轴（06:00-18:00 拖动=绝对进度；,/. 调速 1~100×）
 ui/SpawnSelect.ts          开局小地图选点（可换种子）
 debug/AiTrace.ts           AI 可读记录（JSONL/中文摘要）
-systems/swarm/            蜂群引擎（Commander/Tactics/Navigator/Fortify/Engineer/…）
+systems/swarm/engine/      蜂群引擎（唯一指挥链）：EngineCore 相位 tick（perceive→situation→decide→write）/ 四兵种管理器（含 **EngineerManager：建造位置查询+施工计时+落地**）/ OrderWriter 唯一发令 / SquadManager 汇报 / OrderValidator+Spread / Protect / AttackQueues
+systems/swarm/squad/       队长层：SquadCore 接令/距离分流/汇报（只导航，不给代理下命令）；Anchor/Formation/Abilities
+systems/swarm/            地形/工事数据/寻路/刷怪（Commander 只剩事态环/波次/地形表/L1-L2/工事数据查询；战斗+工兵指挥链已删）
 systems/swarm/SquadDispatch.ts  队长层成员分派唯一写口（寻路/锚点/阵型/命令保护）
-systems/swarm/EngineerDispatch.ts 队长层工兵成员任务（围块/护卫扇区/行军队列）
+systems/swarm/FortifyPlanner.ts 建造位置查询（危险点优先 → 扇区弧链随机可达点；新引擎经 engineerPort 消费）
 systems/spawn/WorldSpawner.ts  刷怪 + 官方 tierPort（promote/demote）
 systems/ai/               行为状态机（AISystem + behaviors）
 systems/combat/           弹道/命中结算
@@ -111,14 +113,13 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 - **"到位 + 远目标"立即接（R43 修）**：已到旧目标（`dArrive ≤ arriveR`）且新目标远于 `retarget`（成员 8m / 队长 15m）→ **立即接**，不再等候选稳定 `persistS`（36 实秒 > 卡死窗口 25s → 队长到点冻结 → 全队冻结 → 先被回收）。
 - **换令稳定门（R45 用户定 2026-09-24）**：引擎发令口（`issueChecked`）**换令**（kind/目标与现令不同）需 **①现令进度 ≥50%** 或 **②长时间静止**（无净推进 ≥25 实秒）——否则保持现令（`ORDER_STABLE`，`stableDbg.kept/last` 可查）。同签名重发/玩家令/重伤（血比<0.5）照旧。
 - **命令风暴根因与修（R45）**：引擎 1Hz 决策每拍重算目标/使命，原来任何字段差都算新令。已修：①驻守掩体 `coverIdx++ % len` 轮转（每拍换掩体）→ 改**最近掩体**；②`addPatrolSwing` 游弋摆动**写进命令**（每拍动 + 跨 far 滞回致 kind 翻）→ 命令只发**稳定驻守点**，摆动归执行层 `resolveAnchor`；③层级越位/扎堆纠正**每拍重发** → 改"**一次纠正 + 条件解除才允许再发**"（`rankFix/clumpFix`）。**实测：探针 `cmdChanges` 37 → 5（同窗口）**。
-- **同兵种目标间距校验（R45 用户定 2026-09-24）**：引擎**发布时**按 `mobKind` 校验各队目标间距——同兵种目标 < `SQ_TARGET_SPREAD`(40m) → 沿"队→目标"横向散开候选（过环内/可站/直线/可达四校验取首个）；只对**自由选点**（advance、非保护/施工/驻守）生效（`spreadDbg.n` 可查）。"真正战斗各士兵是很大散布的"。
+- **同兵种目标间距（用户定 2026-09-24）**：新引擎发令统一校验链 ②（`OrderValidator` + `Spread`）：同兵种目标 < `MIN=40m` → **只改切向 θ（极坐标，半径严格不变）**，目标点 = 径向 r（兵种策略）⊗ 切向 θ（间距）；几何不可满足（r<20m）→ θ 拉满 π。异兵种不约束。
 - **施工件粘性（R45 修）**：`assignBuild` 已派未建件**保持**——事态闸门只管"新派"，不夺已派件（原 `!gated(cur)` 会让环推进把在途件判丢 → 重挑 → 目标瞬移百米 + 半路折返）。
-- **仍待修**：护工锚=工程队实时质心（目标漂移）、`EngineerDispatch` 弧链随机派件（设计内：件跳但被稳定门拦到过半）、`protect↔advance` 状态翻转无滞回。
-- **兜底动作**（`fallbackTick` 1Hz）：
-  - 磨蹭 → 沿队令方向**向前 20m**；无令 → **兵力最稀处**（20m 格计数，<60m）；
-  - 扎堆（同 mobKind <50m）→ **横向拉开 20/35/50m + 向舰内收 20/10/0m**（离邻居远侧优先）；
-  - 层级越位（远程比前排更靠敌 >15m）→ 后排队**拉后 15m**（`rank_fix`）；
-  - 所有候选过 **四校验**：环内 + 可站(`scoreAt`) + 直线可走(`walkableLine`) + 有向可达(`reachable`)，不行换下一个。
+- **仍待修**：护工锚=工程队实时质心（目标漂移）、`EngineerDispatch` 弧链随机派件（设计内：件跳但被稳定门拦到过半）。
+- **旧战斗指挥链已删（2026-09-25 用户定）**：`tacticalTick`（战役闭环）/`dispatchMission`（大队任务）/`fallbackTick`（磨蹭/扎堆/层级）/第一波抵舰驻留/事态强制归位/`SquadLeaderAI`（队长自主令）**全部删除，无回退开关**（`?swarm=old` 已移除）。`SwarmCommander` 只保留：事态/环/波次/编制/工事分区/施工/地形表/L1-L2 表；**战斗队只由新引擎发令**。
+  - **唯一发令器每拍续期**：旧链删除后，`EngineBridge.write` 每拍把 store 现令 emit 到执行板（否则旧板 TTL 到期 → 执行层丢令）；新令/被拦/玩家令/无决策都续。
+  - **玩家令 TTL**：30 游戏分钟（`EngineBridge.PLAYER_ORDER_TTL`）；到期自动释放、交回引擎（防永久锁死）。
+  - **能力缺口（P4 待迁）**：磨蹭/层级越位/扎堆切向纠正 → 迁移目标 = `DecisionChain.intervention` 槽；第一波抵舰驻留 → 波次决策源（现均无实现，属已知缺口）。
 
 ## 6. 寻路
 
@@ -147,17 +148,17 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 - **层级符合度（队形识别）**：成员位置沿队前进方向**投影纵深序**；应有序=角色 rank；指标=逆序对 + 前缘占用；越界→局部调整（不全队重排）。
 - **槽位**：`formationOffset(squadType, rank)`；同槽冲突走横向车道。
 
-## 8. 工兵
+## 8. 工兵（2026-09-25 收编进新引擎）
 
-- **区域任务（用户定 2026-09-24）**：**引擎只给工兵小队分区**（`fortify.claims`，8 扇区、需求最高优先）+ 需求/环带/可达**数据**（`fortifyPort`）；`buildIssued` 记录派件下标 → 只在无令/玩家令/件变化/将到期时换令。
-- **派件归属（用户定 2026-09-24）**：**队长层 `EngineerDispatch` 派件**——用**建造位置查询函数**（`FortifyPlanner.targetOf`：**危险点（峰值需求 ≥ NEED_DONE）优先 → 否则扇区内弧链随机可达点**）；本队未建件沿用（spot 粘性 <8m+可达）→ 否则注入新件（掩体优先，已护转壕；去重 12m/8m + 扇区重采样；每 0.5s ≤1 件；**第一波（生效日 ≥0.45）停止新增施工**）。
-- **成员任务归属**：`taskX/Z`（围块施工/护卫扇区/行军队列）同由 `EngineerDispatch` 分派（build → 本队 spot=件点；guard/patrol → 命令 `anchor` 保护对象）；被击 8s / 非施工使命 / 非工兵 → 清任务。
-- **工兵工作方式（用户定 2026-09-24；唯一口径）**：
-  1. **件的位置只由队长层派件决定**——`EngineerDispatch` → `FortifyPlanner.targetOf`（**危险点优先 → 否则扇区弧链随机可达点**）；引擎只给分区（claims）/需求/环带/可达数据。
-  2. 工兵只负责**寻路到件**（队令目标=件点，可达即派）——**没有"扫描半径"概念**（原 `construct` 的就近扫描段已删）。
-  3. **到件 3m 内才开工计时**（`WORK_R2=3m`）；每 2s 拍 +2s；**掩体 6s / 战壕 10s 满即建成**；建成清 focus → 等队长层派下一件。
-- **掩体校验**：点已被掩体保护（cover≥1）→ 不再重复造；非总攻转战壕、总攻跳过。
-- **连通/前推**：8 区全达标才前推（棘轮 ≤0.5m/拍，封顶 frontP×120m）；施工带 rHi ≤ 环上限。
+> **旧工事链已销毁**：`EngineerCorps` / `EngineerDispatch` / `CommanderAnchorSelect` / `Decide` / `BattleLine` / `MemberTaskBoard` / `MemberTaskNav` / `SquadDoctrine`（部署表）全部删除；
+> 工兵由 **`engine/EngineerManager`** 全权（用户定）：位置查询 → 发令 → 到件计时 → 落地，一环不缺。
+
+- **位置查询（唯一口径）**：`FortifyPlanner.targetOf` = **危险点（峰值需求 ≥ NEED_DONE）优先 → 否则扇区内弧链随机可达点**；由新引擎经 `commander.engineerPort()` 消费（数据侧：分区/需求/环带/可达/落地端口）。
+- **件必须在施工带内**：`[rLo, rHi] = fortifyBand`（含前推棘轮 pushM；rHi ≤ 环上限）——带外（查询螺旋兜底）宁可不派，防"环夹取挪目标 → 到不了件"。
+- **派件节拍**：每拍 1 区摊销刷新（全区 ~4s）；任期内沿用（未建 + 需求仍有效）；建成/失效 → 下一拍重取；**第一波（生效日 ≥0.45）停止新增**。
+- **施工**：队长到件 **3m 内**才计时（实秒；`ctx.now` 差）；**掩体 6s / 战壕 10s**（战壕每 2s 挖 1 遍 ≤5 遍，坑底硬阈值 −1.2m 封顶）；总攻只修掩体（战壕暂停）。
+- **不入攻击队列**（用户定）：`live.attackables` 过滤工兵编制；统一计时仍看全体。
+- **掩体校验**：点已被掩体保护（cover≥1）→ 由需求函数自然降分；连通/前推（8 区全达标 → 棘轮 ≤0.5m/拍）保留。
 
 ## 9. 战斗与快车道
 
@@ -173,7 +174,8 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 |---|---|
 | 每帧 | `swarm.update`→`syncRender`→`tickDemote`→`aiSystem.updateAll`→`charClamp`→`explosionFx`→`entities.simulate/present/renderAll`→子弹池→`CharacterFxManager` |
 | 2Hz | `applyOrders`（命令分解/寻路）、列表刷新、时间轴刷新、AiTrace 采样 |
-| 1Hz | `fallbackTick`（磨蹭/扎堆/层级）、`tacticalTick`（战役闭环） |
+| 2Hz | **新引擎相位 tick**（`EngineBridge.tick`：perceive→situation→decide→write；OrderWriter 唯一发令 + 执行板续期） |
+| 1Hz | 新引擎慢拍：攻击队列（入队/去重/开火闩锁）+ 统一实体计时（卡死窗口/计时销毁） |
 | 变速 | `,/.` 调速 1~100×（子步进 ≤0.05s/步；dayT01 走模拟时钟） |
 
 ### 10.1 命令侧时间尺度（用户定 2026-09-24）
@@ -197,11 +199,10 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 参数 | 值 | 位置 |
 |---|---|---|
 | 环：大圆/甜甜圈 | 90 / (60,180) | `SwarmCommander.ringBounds` |
-| 发令冷却 / 兜底冷却 | 8 / 30 **游戏分钟** | `ISSUE_COOLDOWN_S` / `fallbackTick` |
-| 命令 TTL | 引擎令 ≥60 / 指令 6 / 队长令 4 **游戏分钟** | `ttlLong` / `DIRECTIVE_TTL` / `LEADER_TTL` |
-| 使命重发 / TTL 余量 | 10 / 5 **游戏分钟** | `RESEND` |
-| 扎堆阈值 / 横纵步长 | 50m / 20·35·50 + 20·10·0 | `fallbackTick` |
-| 层级越位 / 修正 | >15m / 拉后 15m | `fallbackTick` |
+| 发令冷却 | 8 **游戏分钟**（仅工事链 `issueChecked`） | `ISSUE_COOLDOWN_S` |
+| 命令 TTL | 引擎令 ≥60 / 指令 6 / 玩家令 30 **游戏分钟** | `ttlLong` / `DIRECTIVE_TTL` / `EngineBridge.PLAYER_ORDER_TTL` |
+| 使命重发 / TTL 余量 | 10 / 5 **游戏分钟** | `RESEND`（引擎令已不重发：唯一发令器每拍续期） |
+| 同兵种目标间距 | ≥40m（极坐标切向，r 不变；不可满足 θ→π） | `engine/Spread.MIN` |
 | 长短寻路分界 | 40m | `SquadNavigator.NAV.LONG_PATH_DIST` |
 | 长寻路加权 | 上坡 +0.6/米 · 斜向 ×1.414（水无加价） | `FeasibilityPath.find` |
 | 上坡横平竖直 | 斜向仅平/下坡（A\*/拉直/短跳三处同规矩）；斜向落差取陡轴 | `FeasibilityPath` / `PassTable.dropAt` |
@@ -219,7 +220,7 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | 距离时间增益 | `1+24·t01` | `SwarmCommander.tick` |
 | 升格视野 | 视锥±15% 且 <220m | `main.hooks.inView` |
 | 成员指令门 | 走 8m / 卡 4 **游戏分钟**（净<3m）/ 硬顶 15 / 反向 dot<-0.2 | `SwarmConfig.DIRECTIVE_GATE` |
-| 队长令门 | 走 20m / 卡 8 **游戏分钟**（净<4m）/ 硬顶 20 / 反向 dot<-0.3 | `SwarmConfig.LEADER_GATE` |
+| 队长令门 | ~~已删（`SquadLeaderAI` 删除；队长只导航+汇报）~~ | ~~`SwarmConfig.LEADER_GATE`~~ |
 
 ## 12. 里程碑
 
@@ -245,6 +246,8 @@ modes/world/CommanderWiring.ts 指挥器端口接线
 | R42 上坡横平竖直 | 长寻路/拉直/短跳：斜向仅平/下坡；`dropAt` 斜向取陡轴；低→峰走廊 9→22 点四向阶梯（下坡仍 6 点直线） | ✅ 2026-09-24 |
 | R43 去质心·跟队长 | 锚点/编队/寻路起点/实体槽位全按**队长**；成员围队长；掉队+直线被挡 → 沿走廊长寻路找队长（`Follow.ts`）；`OrderGate` "到位+远目标"立即接（解队长冻结） | ✅ 2026-09-24 |
 | R44 山地探针 | `probe:mountain`（扫地形挑高原↔低地 → 舰船搬高原 → 低地放敌 → 强制移动令 → 到达/回收/计时）；seed1 130m/+17m：L2 3/12 到达、9/12 到 13~17m 被回收；L3 全员 13~26m | ✅ 2026-09-24 |
+| R45 命令稳定门 | 换令稳定门（进度≥50% / 静止≥25s）；驻守轮换改最近掩体 / 游弋归执行层 / 越位扎堆一次纠正；实测 cmdChanges 37→5 | ✅ 2026-09-24 |
+| R46 单写口收口 | **旧战斗指挥链删除**（`tacticalTick`/`dispatchMission`/`fallbackTick`/抵舰驻留/强制归位/`SquadLeaderAI`；`?swarm=old` 移除）+ 唯一发令器**执行板续期** + 玩家令 TTL 30 游戏分钟 + 切向散开精确解（余弦定理，r 严格不变）；自检 148/148 | ✅ 2026-09-25 |
 | §16 山地 | 短跳半径/角度自适应；台阶段落差聚合；拉直防贴崖；**舰船/落点周围强制产坡**（保舰船可达，待定）；`TerrainScore.cls` 标定对齐（坡不扣分、硬边才扣，待定） | ⬜ |
 
 ## 12.5 验证防线（四关 · 2026-09-24 建立）
