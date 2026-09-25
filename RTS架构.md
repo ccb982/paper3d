@@ -244,7 +244,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
   - 命令 TTL：引擎令 ≥60 / 指令 6 / 玩家令 30 **游戏分钟**；换令稳定门 进度≥50% 或 静止≥25 实秒。
 - **其余一律实秒**：日钟（`simT/720000`）、施工（6s/10s）、战斗冷却、寻路重算 12s、卡死回收 25s、警戒 6~20s。
 - **引擎时钟**：main 传 `performance.now()/1000`（实秒；不再是 simT 的千分之一）。
-- 已知混合：高倍速时命令计时相对游戏时钟变短（`performance.now` 实秒），后续可统一到模拟时钟。
+- 玩法计时统一 **`services/SimClock`**（模拟时钟单源；`performance.now` 只留给性能测量/渲染动画）：倍速时行动/下命令/免降格/撤退/警觉/工事占用/卡死豁免全部同步。
 
 ---
 
@@ -255,7 +255,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 每帧 | `data.tick`（地形表/事态环/工事数据/生成队列）→ `swarm.update`（代理移动/流场/LOD/回收）→ **引擎 tick（2Hz 相位）** → **队长核 tick（drive+汇报）** → `tickDemote` → `aiSystem.updateAll` → `charClamp` → `explosionFx` → `entities.simulate/present/renderAll` → 子弹池 → `CharacterFxManager` → 渲染 |
 | 引擎内 1Hz | 攻击队列（入队/去重/开火检验+闩锁）+ 统一计时（卡死窗口/寿命） |
 | 2Hz | 列表刷新、时间轴刷新、AiTrace 采样 |
-| 变速 | `,/.` 调速 1~100×（子步进 ≤0.05s/步；日钟走模拟时钟） |
+| 变速 | 档位 1/2/5/10/20/50/100×（Timeline 按钮 / `,`/`.` / `__setSpeed` 同源；子步进 ≤0.05s/步；全部玩法计时走 SimClock） |
 
 ---
 
@@ -357,6 +357,6 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 1. **收拢态间距**：总攻环收拢为点时，同兵种 40m 间距几何不可满足（弦长上限 2r）——需定"指标口径"（非收拢态判定）。
 2. **cmdChanges 6~7**：删守点粘性后守点目标随自身漂移，略高于 ≤5；可用"守点节流/换令条件"微调。
 3. **§16 山地**：短跳半径/角度自适应、台阶段落差聚合、拉直防贴崖、舰船/落点周围强制产坡（待定）、`TerrainScore.cls` 标定对齐（待定）。
-4. **高倍速混合时钟**：命令计时用实秒（`performance.now`），100× 时相对游戏时钟变短；后续可统一到模拟时钟。
+4. ~~高倍速混合时钟~~（已修 2026-09-25）：玩法计时统一到 `services/SimClock`，10×/100× 行动与下命令同步加速。
 5. **guard 已知债务**：`ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 五个非蜂群大文件（与本次重写无关）。
 6. **可选拆分**：`SwarmSystem`（1151）/`SwarmData`（692）/`EngineBridge`（415）/`main`（843）为"大而不乱"的文件，按需再拆。

@@ -7,6 +7,7 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { simNow } from '../../services/SimClock';
 import { entityPerf } from '../../entity/EntityPerf';
 import { eventBus } from '../../core/EventBus';
 import { SwarmLedger } from './SwarmLedger';
@@ -288,7 +289,7 @@ export class SwarmSystem {
         { x: hooks.shipX, z: hooks.shipZ },
       ]);
     }
-    const now = performance.now() / 1000;
+    const now = simNow();   // ★ 模拟时钟（倍速同步）
     this.lastHooks = hooks;
     this.lastPlayerX = hooks.playerX;
     this.lastPlayerZ = hooks.playerZ;
@@ -782,7 +783,7 @@ export class SwarmSystem {
       };
       const res = pickSteer(
         p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
-        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], performance.now() / 1000,
+        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], simNow(),   // ★ 模拟时钟（倍速同步）
         this.data.blockedAt(p.x[i], p.z[i]),
         dangerAt, this.data,
         p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
@@ -909,7 +910,7 @@ export class SwarmSystem {
       this.pool.hp[i] -= final;
       this.pool.flash[i] = 1; // ★ P3：受击白闪
       // ★ 步骤 10：被击 → 单位免降格 + 小队警觉 + 大队警觉累积
-      const now = performance.now() / 1000;
+      const now = simNow();   // ★ 模拟时钟（倍速同步）
       this.pool.noDemoteUntil[i] = now + AUTONOMY.UNIT_HOLD_S;
       this.noteHit(this.pool.squadId[i], now);
       // ★ 步骤 6：被击升格（限 L3 范围）：近处代理挨打 → 本帧立即升格（下一帧生效）
@@ -957,7 +958,7 @@ export class SwarmSystem {
 
   /** ★ P4 狂暴（同伴阵亡：附近代理短时加速，冲上去拼命） */
   enrageAt(x: number, z: number, radius: number, seconds: number): void {
-    const now = performance.now() / 1000;
+    const now = simNow();   // ★ 模拟时钟（倍速同步）
     const r2 = radius * radius;
     const p = this.pool;
     for (let i = 0; i < p.count; i++) {
@@ -970,7 +971,7 @@ export class SwarmSystem {
 
   /** 刷警戒（玩家开火 / 爆炸等；共享感知入口） */
   alertAt(x: number, z: number, radius: number, seconds: number): void {
-    this.flow.paintAlert(x, z, radius, performance.now() / 1000, seconds);
+    this.flow.paintAlert(x, z, radius, simNow(), seconds);
   }
 
   /** ★ 步骤 9：实体成员同步（模式层 0.25s 节拍喂入；实体不在池内，池侧同步覆盖不到） */

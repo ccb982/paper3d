@@ -211,7 +211,7 @@ export class FlowField {
     }
   }
 
-  /** 该点是否处于警戒状态（now = performance.now()/1000） */
+  /** 该点是否处于警戒状态（now = 模拟时钟秒；倍速同步） */
   isAlerted(x: number, z: number, now: number): boolean {
     if (!this.hasField) return false;
     const idx = this.cellIndex(x, z);

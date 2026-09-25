@@ -17,6 +17,7 @@
 
 import { L1_R, type TerrainSemantics } from './TerrainSemantics';
 import { HoleMask, MASK_SIDE } from './HoleMask';
+import { simNow } from '../../services/SimClock';
 
 /** 打分门槛：深度低于此值，任何坑都不是有效坑洞（分恒 0） */
 export const HOLE_MIN_DEPTH = 0.30;
@@ -78,7 +79,8 @@ export interface Hole {
 }
 
 function perfNow(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+  // ★ 工事占用计时 = 模拟时钟（毫秒；倍速同步）
+  return simNow() * 1000;
 }
 
 export class HoleTable {

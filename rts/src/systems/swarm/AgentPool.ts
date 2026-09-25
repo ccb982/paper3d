@@ -313,7 +313,7 @@ export class AgentPool {
   // ---- P4：导演意图 / 士气 ----
   /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
   readonly intent = new Uint8Array(AGENT_CAPACITY);
-  /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，performance.now/1000） */
+  /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，模拟时钟 SimClock） */
   readonly retreatUntil = new Float32Array(AGENT_CAPACITY);
   readonly nextRetreatAt = new Float32Array(AGENT_CAPACITY);
   readonly rageUntil = new Float32Array(AGENT_CAPACITY);

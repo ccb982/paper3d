@@ -38,6 +38,22 @@ export class Timeline {
     followLab.append(this.follow, document.createTextNode('跟随实时'));
     head.append(title, this.infoEl, followLab);
 
+    // ★ 倍速档位按钮（1×~100×；10× 一键直达——与 `,`/`.`、__setSpeed 同源）
+    const spd = document.createElement('div');
+    spd.style.cssText = 'display:flex;gap:4px;margin-top:4px;';
+    const speeds = (globalThis as unknown as { __speeds?: number[] }).__speeds ?? [1, 2, 5, 10, 20, 50, 100];
+    for (const v of speeds) {
+      const b = document.createElement('button');
+      b.textContent = `${v}×`;
+      b.style.cssText = 'flex:1 1 0;padding:1px 0;font:11px Consolas,monospace;color:#dce8f5;'
+        + 'background:rgba(40,70,110,0.6);border:1px solid rgba(110,170,235,0.35);border-radius:4px;cursor:pointer;';
+      b.onclick = () => {
+        (globalThis as unknown as { __setSpeed?: (x: number) => void }).__setSpeed?.(v);
+        this.sync();
+      };
+      spd.appendChild(b);
+    }
+
     this.slider = document.createElement('input');
     this.slider.type = 'range';
     this.slider.min = '0';
@@ -60,7 +76,7 @@ export class Timeline {
       return s;
     };
     marks.append(mk(45, '▲第一波'), mk(80, '▲总攻'));
-    this.root.append(head, this.slider, marks);
+    this.root.append(head, spd, this.slider, marks);
     document.body.appendChild(this.root);
     this.sync();
   }
@@ -84,6 +100,6 @@ export class Timeline {
       `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${this.data.stage}/${this.data.battlePosture}`
       + ` · frontP=${band.frontP.toFixed(2)} · 下限=${band.minD > 0 ? band.minD.toFixed(0) : '-'}m`
       + ` · 上限=${band.maxD > 0 ? band.maxD.toFixed(0) : '-'}m · 前推+${band.pushM.toFixed(0)}m`
-      + ` · 速度×${(globalThis as unknown as { __rts?: { speed?: number } }).__rts?.speed ?? 1}（, / . 调速）`;
+      + ` · 速度×${(globalThis as unknown as { __rts?: { speed?: number } }).__rts?.speed ?? 1}（按钮 / , / . 调速）`;
   }
 }

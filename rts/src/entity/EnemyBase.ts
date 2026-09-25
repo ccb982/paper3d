@@ -39,6 +39,7 @@ import { ENEMY_ENGAGE_FLOOR } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
 import { RasterMap } from '../services/map/RasterMap';
 import { eventBus } from '../core/EventBus';
+import { simNow } from '../services/SimClock';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -230,7 +231,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
 
   /** ★ 被击（步骤 10 自主 LOD）：单位级免降格窗口 + 广播（小队/大队警觉由 WorldMode 转交 swarm） */
   override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
-    this.noDemoteUntil = performance.now() / 1000 + UNIT_HIT_HOLD_S;
+    this.noDemoteUntil = simNow() + UNIT_HIT_HOLD_S;   // ★ 模拟时钟（倍速同步）
     eventBus.emit('enemy_hit', { squadId: this.squadId });
     super.onTakeDamage(dmg, source, hitPoint);
   }

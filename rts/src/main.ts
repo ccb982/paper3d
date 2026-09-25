@@ -44,6 +44,7 @@ import { EnemyManager } from './ui/EnemyManager';
 import { EnemyListPanel } from './ui/EnemyListPanel';
 import { NavDebugMap } from './ui/NavDebugMap';
 import { AiTrace } from './debug/AiTrace';
+import { simNow, setSimNow } from './services/SimClock';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
 import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
@@ -294,7 +295,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
         if (swarm.orderKindOf(sq.id) === 'garrison') return 'garrison';
-        const nowS = performance.now() / 1000;
+        const nowS = simNow();
         const hitAt = swarm.recentHits.get(sq.id);
         if (hitAt !== undefined && nowS - hitAt <= AUTONOMY.SQUAD_ALERT_S) return 'hit';
         const p = swarm.pool;
@@ -446,7 +447,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 加速（用户定 2026-09-25）：只跑 AI 性能开销小；dt 缩放，日进度走**模拟时钟**
   let speed = 1;
   let simT = 0;
+  /** ★ 倍速档位（10× 一键直达；Timeline 按钮/`,`/`.` 同源） */
+  const SPEEDS = [1, 2, 5, 10, 20, 50, 100];
   R.__setSpeed = (v: number): void => { speed = Math.max(1, Math.min(100, v)); };
+  R.__speeds = SPEEDS;
   // ★ 指挥器建计划：**敌方登陆点**（距舰 ~160m 的可行方向）——不能在舰旁布防/刷兵
   const pickEnemyLanding = (): { x: number; z: number } => {
     for (let k = 0; k < 16; k++) {
@@ -567,7 +571,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   /** ★ 强制移动令（玩家源；选中队全体 advance）→ 返回发令队数（调试接口，探针同口） */
   const forceMoveSelectionTo = (x: number, z: number): number => {
     const seen = new Set<number>();
-    const nowS = performance.now() / 1000;
     for (const hh of enemyMgr.selected()) {
       const sq = swarm.squads.squadOf(hh.uid);
       if (!sq || seen.has(sq.id)) continue;
@@ -591,8 +594,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'KeyM') navMap.toggleOverview();
     if (e.code === 'KeyY') aiTrace.download();
     if (e.code === 'KeyU') console.log(aiTrace.digest(150));
-    if (e.code === 'Comma') speed = Math.max(1, speed / 2);
-    if (e.code === 'Period') speed = Math.min(100, speed * 2);
+    if (e.code === 'Comma' || e.code === 'Period') {
+      const i = SPEEDS.indexOf(speed);
+      const step = e.code === 'Period' ? 1 : -1;
+      const j = i < 0 ? SPEEDS.findIndex((v) => v >= speed) : i + step;
+      speed = SPEEDS[Math.max(0, Math.min(SPEEDS.length - 1, j))] ?? speed;
+    }
     if (e.code === 'KeyK') {
       const r = fastLane.damageArea(cam.tx, cam.tz, 18, 15);
       console.log(`[快车道] 区域伤害 15：代理 ${r.agents} · 实体 ${r.entities}`);
@@ -693,6 +700,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   let last = performance.now();
   /** ★ 单个模拟子步（加速用；每步 ≤0.05s）：AI/指挥/实体模拟/子弹——不含渲染/表现 */
   const simStep = (h: number): void => {
+    setSimNow(simT);   // ★ 模拟时钟单源（玩法计时全读它 → 倍速同步加速）
     const fx2 = Math.sin(cam.yaw), fz2 = Math.cos(cam.yaw);
     hooks.camForwardX = fx2; hooks.camForwardZ = fz2;
     hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船
@@ -706,8 +714,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       shadowBridge.dbg.ringMin = rg.minD >= 0 ? rg.minD : 0;
       shadowBridge.dbg.ringMax = rg.maxD >= 0 ? rg.maxD : 0;
     }
-    // ★ 引擎时钟 = **实秒**（命令计时/施工计时按实秒口径；不是 simT 的千分之一）
-    const nowS = performance.now() / 1000;
+    // ★ 引擎时钟 = **模拟时钟**（行动/下命令随倍速同步；10× 时 2Hz 拍也×10）
+    const nowS = simT;
     shadowBridge?.tick(h, nowS);   // ★ 新引擎拍（唯一指挥链）
     squadCores?.tick(h, nowS, (id) => {   // ★ P2/P4：队长核推进（导航+调遣+汇报）
       const sq = swarm.squads.get(id);
