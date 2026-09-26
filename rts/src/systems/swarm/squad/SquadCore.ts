@@ -25,6 +25,8 @@ export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 
 /** 队长驱动端口（执行落地；由接线层注入） */
 export interface SquadDrivePorts {
+  /** ★ 巡逻点查询（用户口径 2026-09-25：查询可行移动目标点 → 短寻路来回走）；无可行点 → null */
+  patrolNext?(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
   /** 长/短寻路求解（走廊写入 state） */
   ensurePath(state: SquadOrderState, squad: Squad, now: number): void;
   /** 队长站位锚（保护/驻守/巡逻 + 走廊前瞻；由接线层提供 resolveAnchor） */
@@ -72,6 +74,10 @@ export class SquadCore {
   private lastZ = 0;
   /** 指令序号（队内单调） */
   private seq = 1;
+  /** ★ 巡逻（自维持）：锚点（引擎令目标，捕获一次）/ 当前腿目标 / 腿方向（±1 来回） */
+  private patrolAnchor: { x: number; z: number } | null = null;
+  private patrolGoal: { x: number; z: number } | null = null;
+  private patrolLeg = 1;
   /** 是否已 drive 过（原子由 interpretLeader 决定；tick 只在从未 drive 时按距离兜底） */
   private hasDrive = false;
 
@@ -103,6 +109,9 @@ export class SquadCore {
     if (this.pending) {
       this.state = stateFromOrder(this.id, o, this.state, now, ORDER_TTL_DEFAULT);
       this.pending = null;
+      this.patrolAnchor = null;   // ★ 新令 → 巡逻锚点重新捕获（防旧巡逻点污染）
+      this.patrolGoal = null;
+      this.patrolLeg = 1;
     }
     const st = this.state;
     if (!st) return;
@@ -110,6 +119,22 @@ export class SquadCore {
     if (st.until > 0 && now > st.until && st.source !== 'player') return;
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
+    // ★ 巡逻（用户定 2026-09-25）：引擎**一条令**，小队**自维持**——到达本腿 → 查询下一个可行点 → 短寻路来回
+    if (st.order.kind !== 'protect' && st.order.mission === 'patrol') {
+      if (!this.patrolAnchor) {
+        this.patrolAnchor = { x: st.order.target?.x ?? lx, z: st.order.target?.z ?? lz };   // 引擎令目标 = 锚点（一次）
+      }
+      const ax0 = this.patrolAnchor.x;
+      const az0 = this.patrolAnchor.z;
+      let pg = this.patrolGoal;
+      if (!pg || Math.hypot(pg.x - lx, pg.z - lz) <= ARRIVE_R) {
+        const R = 18;   // 巡逻半径（米；锚点附近来回）
+        pg = port.patrolNext?.(lx, lz, ax0, az0, R, this.patrolLeg) ?? { x: ax0, z: az0 };
+        this.patrolGoal = pg;
+        this.patrolLeg = -this.patrolLeg;
+      }
+      st.order.target = { x: pg.x, z: pg.z };   // 执行副本覆盖（引擎令=锚点不动）
+    }
     // ① 站位锚（defend/act/patrol 经 resolveAnchor；protect 走 blockCheck 调整点，不用锚）
     let anchor: { x: number; z: number } | null = null;
     if (st.order.kind !== 'protect') {

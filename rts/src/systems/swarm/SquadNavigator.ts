@@ -67,6 +67,25 @@ export class SquadNavigator {
     this.pathFinder.setTable(t);   // ★ 阶段二：加权 A* 边判定也读表（可行性+权重同底座）
   }
 
+  /** ★ 巡逻点查询（用户口径：查询**可行**的移动目标点 → 短寻路来回走）：
+   *  以锚点为中心、半径 r 的圆周上采样候选；回首选**从当前位置可行（BFS 可达）**的点；
+   *  `leg`（±1）决定以"侧向"为基准扫圈 → 来回走。无可行点 → null（原地待命）。 */
+  patrolNext(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null {
+    const g = this.localGrid();
+    if (!g) return null;
+    const TAU = Math.PI * 2;
+    const base = Math.atan2(z - az, x - ax) + (leg >= 0 ? Math.PI / 2 : -Math.PI / 2);
+    const out: { x: number; z: number }[] = [];
+    for (let k = 0; k < 8; k++) {
+      const a = base + (k / 8) * TAU;
+      const px = ax + Math.cos(a) * r, pz = az + Math.sin(a) * r;
+      out.length = 0;
+      if (this.feas.find(x, z, px, pz, out) !== 'ok') continue;   // ★ 可行性校验（同一条链：BFS 可达）
+      return { x: px, z: pz };
+    }
+    return null;
+  }
+
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
   edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
     const g = this.localGrid();

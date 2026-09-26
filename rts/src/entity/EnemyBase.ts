@@ -514,8 +514,9 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度）
    *   ★ 防掉坑：移动前探测前方地形，坑洞/悬崖/水面前提前停下转向 */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
-    // ★ E4a：编队控制中本地 AI 不再自行选路（steer 消费经 applyingSteer 豁免）
-    if (this.swarmControlled && !this.applyingSteer) return;
+    // ★ 收敛（用户定 2026-09-25）：**移动只走统一链**——只有 steer 消费（applyingSteer）允许位移；
+    //   本地 AI / EnemyBrain / AI behaviors 一律不得自行移动（选路/移动统一由引擎→队长→格边/短长寻路）。
+    if (!this.applyingSteer) return;
     // ★ E5：危险地形绕行由 EnemyLocomotion 解析（纯搬运）
     const r = this.locomotion.resolve(
       this.entity.position.x, this.entity.position.y, this.entity.position.z,

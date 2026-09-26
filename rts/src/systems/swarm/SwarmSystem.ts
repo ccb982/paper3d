@@ -1088,6 +1088,11 @@ export class SwarmSystem {
   get orderDrops(): number { return this._orderDrops; }
 
   /** ★ 队长核端口：寻路求解（执行态走廊写入；长短由 ensurePath 内部分流） */
+  /** ★ 巡逻点查询（队长核端口；实现 = nav.patrolNext） */
+  patrolNext(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null {
+    return this.nav.patrolNext(x, z, ax, az, r, leg);
+  }
+
   ensurePathFor(state: SquadOrderState, squad: Squad, now: number): void {
     let y = this.unitY.get(squad.leaderUid) ?? 0;
     const p = this.pool;

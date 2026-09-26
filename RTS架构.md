@@ -151,6 +151,19 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
 - 引擎只发**复合句**；`wellFormed`（良构：缺操作数/非法修饰 → 发令前拦下）→ `interpretEngine`（解释为意图 `op=block/move/hold`）→ `OrderWriter` 发布（G1/G2 不变）。
 - `protect` 双点原样下发（G/P）；队长自主 `blockCheck` 选原子（§3.2）。**引擎不逐拍指挥、不算锚**。
 
+### 2.10b 原子与行为（用户定 2026-09-25）
+- **原子只有两个**：**长寻路（march）** 与 **短寻路（act）**——移动世界里的全部原语。
+- **一切行为（驻守/巡逻/保护/撤退/远程选位…）都是循环**：
+  ```
+  loop { 目标点 = 取目标函数(现场)   // 必须返回"可行"目标点（三张表校验）
+         移动到目标点：短寻路（近）或 长寻路（远） }
+  ```
+- **取目标函数（每行为一个）**：如工兵 `FortifyPlanner.targetOf`（可行建造点，模板）、
+  巡逻 `patrolNext`（锚点附近可行点）、保护 `blockCheck` 调整点、驻守=守点/掩体点、撤退=后撤点。
+- **禁止**：为某行为写独立移动实现；行为只准"取目标 + 两个原子移动"。
+- 注：代码里的 `AtomicKind`（patrol/garrison/march/act）是历史命名——概念上只有 march/act 两个原子，
+  patrol/garrison 属"行为循环"。
+
 ### 2.11 三张表原则（用户定 2026-09-25）
 **只有三张表**：**地形语义表**（偏好/评分基础）· **可行性表**（硬通行唯一来源）· **战壕掩体表**（动态工事：参与评分；工兵建成即更新）。
 `TerrainScore` 计划**废除**（越权的第四套网格）：① 硬通行（`blockedAt`/`pickSteer` 硬格）→ 可行性表同源；② 评分面 → 语义表 + 掩体表纯函数。详见《寻路重写方案.md》§4.4.6。
@@ -171,7 +184,7 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
   5. 成员调遣：`Decompose`（角色矩阵）+ 开火门（`fireAllowed`）+ **围队长**（队长走原子目标；成员 = 队长+阵型槽位）→ `port.applyDirective`（唯一落地口：池列 / L3 `onDirective`）。
 - `tick(dt)`：进度（起始距离收敛比）/静止计时/阶段（到位 `done` → `onArriveAtom` 驻留口径）；原子由 drive 决定（自检降级时按距离兜底）。
 
-### 3.2 队长命令语言（解释器 `squad/CommandLang.ts`）
+### 3.2 队长命令语言（解释器 `squad/CommandLang.ts`；**原子=长/短寻路**，见 §2.10b）
 ```
 sentence := composite            // 输入：引擎复合句 protect / act / defend（patrol = 原子直令）
 atom     := 'patrol' | 'garrison' | 'march' | 'act'

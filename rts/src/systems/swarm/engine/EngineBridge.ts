@@ -355,7 +355,12 @@ export class EngineBridge {
       // 防御=守原地（target 为空时用**该队自身位置**；不是玩家位置——否则多队叠在同一目标=间距 0）
       const tx = final.target ? final.target.x : sp?.x ?? rec.x;
       const tz = final.target ? final.target.z : sp?.z ?? rec.z;
-      pending.push({ rec, cur, dec: final, tx, tz });
+      // ★ 巡逻（用户定 2026-09-25）：**引擎只发一条**——常规部署且**已到岗**、无威胁 → mission='patrol'，
+      //   之后小队自维持巡逻（引擎不逐拍指挥；同签名重发被 kept 去重）
+      const arrived = sp !== null && Math.hypot(sp.x - tx, sp.z - tz) <= 8;
+      const patrol = final.source === 'routine' && arrived
+        && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined;
+      pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined });
     }
     // ---- pass ②：统一校验链（①环 ②同兵种密度=本拍真实目标全局解 ③可达）→ 唯一发令器 ----
     let issued = 0, refreshed = 0;
