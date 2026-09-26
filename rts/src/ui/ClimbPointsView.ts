@@ -46,7 +46,7 @@ export class ClimbPointsView {
     this.rebuild(runs);
   }
 
-  private rebuild(runs: readonly { x: number; z: number; ux: number; uz: number; width: number }[]): void {
+  private rebuild(runs: readonly { x: number; z: number; ux: number; uz: number; width: number; rise: number }[]): void {
     // 清旧
     for (const c of [...this.group.children]) {
       this.group.remove(c);

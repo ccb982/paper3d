@@ -232,7 +232,7 @@ export class FeasibilityPath {
     // ★ S2（用户定 2026-09-25）：**加密**——每段 ≤LOCAL.SEG_MAX，逐段过表（可执行）+ 逐段 climb，
     //   执行层（Anchor.routeNext）按 ≤10m 路点推进即可逐步绕行；不加密则远路点会被"直线化"。
     if (out.length > 0 && LOCAL.SEG_MAX > 0) {
-      const dense: { x: number; z: number; climb?: boolean }[] = [];
+      const dense: { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number } }[] = [];
       let ax = sx, az = sz;
       for (const wp of out) {
         const d = Math.hypot(wp.x - ax, wp.z - az);
@@ -241,7 +241,13 @@ export class FeasibilityPath {
         for (let k = 1; k <= n; k++) {
           const q = k / n;
           const x = ax + (wp.x - ax) * q, z = az + (wp.z - az) * q;
-          dense.push({ x, z, climb: this.climbAlong(px, pz, x, z) });
+          // ★ 加密终点沿用源路点的 climb/climbPt（viaClimbPoints 插的跨坡点带凭证点；
+          //   climbAlong 只回标志，若在新对象上重算会把 climbPt 丢掉 → 凭证点丢失）
+          if (k === n && wp.climb === true) {
+            dense.push({ x, z, climb: true, climbPt: (wp as { climbPt?: { x: number; z: number; ux: number; uz: number } }).climbPt });
+          } else {
+            dense.push({ x, z, climb: this.climbAlong(px, pz, x, z) });
+          }
           px = x; pz = z;
         }
         ax = wp.x; az = wp.z;

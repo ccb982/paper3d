@@ -383,7 +383,7 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
       hx: 0.4, hz: 0.4, suspended: false,
     }, probe as never, 0);
   };
-  ok(run(mkProbe(false, 2), false).dx === 0, '硬边大落差：墙（只下不上）');
+  ok(run(mkProbe(false, 2), false).dx <= 0, '硬边大落差：墙（只下不上；贴壁修正可外推）');
   ok(run(mkProbe(false, 0.5), false).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
   // ★ 凭证式上坡（用户定）：人在上坡点 + 持凭证 → 方可沿法线爬
   const cred = run(mkProbe(true, 2), true);

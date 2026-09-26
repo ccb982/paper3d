@@ -162,7 +162,7 @@ export class AgentPool {
 
   /** ★ 重写 P1：推进一只代理（两载体同内核；与 L3 `CharacterBase` 同口径）。
    *  方向决策/分离/寻路在外，本方法只做推进/爬坡/立面/贴地。 */
-  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number, climbOrdered = false): StepResult {
+  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number, climbOrdered = false, climbPt?: { x: number; z: number; ux: number; uz: number }): StepResult {
     this.coreHintY = this.y[i];
     const air = this.isAir[i] === 1;
     const hs = Math.max(0.2, this.scale[i] * 0.5);
@@ -170,6 +170,7 @@ export class AgentPool {
       x: this.x[i], y: this.y[i], z: this.z[i], dt,
       dirX, dirZ, speed,
       climbOrdered,
+      climbPt,
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       hx: hs, hz: hs,

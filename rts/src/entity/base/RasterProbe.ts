@@ -42,5 +42,6 @@ export function createRasterProbe(hintY: () => number): TerrainProbe {
     /** ★ 顶层地表（脱埋用；直读顶层，不做 y 感知选层） */
     topAt: (x, z) => RasterMap.current?.surfaceHeightAt(x, z) ?? NaN,
     climbPoint: (x, z, dx, dz) => getSteerTable()?.climbRunAt?.(x, z, dx, dz) ?? null,
+    canStep: (x, z, dx, dz) => getSteerTable()?.canStep?.(x, z, dx, dz) ?? true,
   };
 }

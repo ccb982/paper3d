@@ -28,7 +28,7 @@ export interface DriveHost {
   readonly data: SwarmData;
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
-  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; climb: boolean; done: boolean } | null;
+  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number }; done: boolean } | null;
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
@@ -44,7 +44,8 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
   let dx = p.dirX[i], dz = p.dirZ[i];
   let edgeMode = false;   // ★ 方案 A：格边步模式（轴对齐 + canStep；跳过软转向/坡混合）
-  let cred = false;       // ★ 爬坡凭证（队长=路线★；成员=本步跨坡边）
+  let cred = false;       // ★ 爬坡凭证（挂在寻路上：state.climbCred）
+  let credPt: { x: number; z: number; ux: number; uz: number; rise?: number } | undefined;   // ★ 凭证点
   // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
   //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
   const squad = host.squads.squadOf(p.swarmUid[i]);
@@ -55,8 +56,9 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
     if (ld) {
       const st = squad ? host.squadStateOf(squad.id) : null;
+      if (st?.climbCred) { cred = true; credPt = st.climbCred; }
       const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
-      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; cred = e.climb === true; }
+      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
       else {
         // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
         const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
@@ -66,10 +68,12 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   } else if (squad) {
     // ★ 架构底线（用户定 2026-09-26）：**成员的移动同样来自长短寻路**——**定时对队长位置做一次
     //   长寻路**（每人一条缓存路线），沿其走格边步；无解/到位 → 停。
+    const stM = host.squadStateOf(squad.id);
+    if (stM?.climbCred) { cred = true; credPt = stM.climbCred; }   // ★ 成员同源：凭证挂在小队寻路上
     const lead = squad.members.get(squad.leaderUid);
     const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
     if (ms && !ms.done) {
-      dx = ms.dx; dz = ms.dz; edgeMode = true; cred = ms.climb;
+      dx = ms.dx; dz = ms.dz; edgeMode = true;
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
   // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
@@ -78,7 +82,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     if (edgeMode) {
       // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
       const spd = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
-      const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred);
+      const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred, credPt);
       p.x[i] += step.dx; p.z[i] += step.dz;
       if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
     } else {
@@ -103,7 +107,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
         // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
         const spd2 = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
-        const step = p.stepAgent(i, res.x, res.z, spd2, dt, performance.now() / 1000, cred);
+        const step = p.stepAgent(i, res.x, res.z, spd2, dt, performance.now() / 1000, cred, credPt);
         p.x[i] += step.dx; p.z[i] += step.dz;
         if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
       }

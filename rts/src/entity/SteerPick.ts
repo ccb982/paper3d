@@ -24,7 +24,9 @@ export interface SteerTable {
   coverAt?(x: number, z: number): boolean;
   heightAt?(x: number, z: number): number;
   /** ★ 上坡点（表预处理；可爬坡边的连续段中心、坡面前 1m） */
-  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null;
+  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null;
+  /** ★ 可行性表查询（实体层硬墙斥力用；生产 = PassTable.canStep） */
+  canStep?(x: number, z: number, dx: number, dz: number): boolean;
 }
 
 /** 取全局表桥（实体侧 TerrainAssist 用；未接入 → null） */

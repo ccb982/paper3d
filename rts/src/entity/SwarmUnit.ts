@@ -228,6 +228,8 @@ export interface SteerIntent {
   targetZ?: number;
   /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24）：到目标点必须程序化爬坡 */
   climb?: boolean;
+  /** ★ 凭证自带的上坡点（爬坡执行与此点比对；与朝向无关） */
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number };
 }
 
 /** ★ 实体侧数据面（EnemyBase 实现；玩家/友军不实现） */

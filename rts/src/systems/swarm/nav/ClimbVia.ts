@@ -21,12 +21,14 @@ export interface ViaPt {
   x: number;
   z: number;
   climb?: boolean;
+  /** ★ 凭证自带的上坡点（爬坡执行与此点比对；与朝向无关） */
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number };
 }
 
 /** 段上第一处"跨可爬坡边"：返回该坡的上坡点(前1m)/跨坡点(边中点)/越过点(继续扫描用) */
 function scanClimb(
   t: PassTable, ax: number, az: number, bx: number, bz: number,
-): { run: { x: number; z: number; ux: number; uz: number; width: number }; cross: { x: number; z: number }; after: { x: number; z: number } } | null {
+): { run: { x: number; z: number; ux: number; uz: number; width: number; rise: number }; cross: { x: number; z: number }; after: { x: number; z: number } } | null {
   const d = Math.hypot(bx - ax, bz - az);
   const n = Math.max(1, Math.ceil(d / STEP));
   let px = ax, pz = az;
@@ -62,9 +64,12 @@ export function viaClimbPoints(
     while (guard++ < 6) {
       const hit = scanClimb(t, cur.x, cur.z, q.x, q.z);
       if (!hit) break;
-      // ① 中间上坡点（该连续坡段中心、坡面前 2m）② 跨坡点（★）
+      // ① 中间上坡点（该连续坡段中心、坡面前 2m）② 跨坡点（★ + 凭证点）
       res.push({ x: hit.run.x, z: hit.run.z });
-      res.push({ x: hit.cross.x, z: hit.cross.z, climb: true });
+      res.push({
+        x: hit.cross.x, z: hit.cross.z, climb: true,
+        climbPt: { x: hit.run.x, z: hit.run.z, ux: hit.run.ux, uz: hit.run.uz, rise: hit.run.rise },
+      });
       cur = hit.after;
     }
     res.push(q);

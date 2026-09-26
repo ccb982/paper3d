@@ -479,7 +479,11 @@ export class SwarmData {
   };
 
   /** ★ 坡面方位（表标注；上坡函数用）：weld+climb 位 → 轴向法线 + 边中点 */
-  climbRunAt(x: number, z: number, dx = 0, dz = 0): { x: number; z: number; ux: number; uz: number; width: number } | null {
+  canStep(x: number, z: number, dx: number, dz: number): boolean {
+    return this.passTable.canStep(x, z, dx, dz);
+  }
+
+  climbRunAt(x: number, z: number, dx = 0, dz = 0): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
     return this.passTable.climbRunAt(x, z, dx, dz);
   }
 

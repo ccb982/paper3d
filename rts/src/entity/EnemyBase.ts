@@ -182,10 +182,12 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     if (!intent) {
       this.steerState.source = 'none';
       this.climbOrdered = false;   // 凭证随 steer 清除
+      this.climbPt = undefined;
       return;
     }
     Object.assign(this.steerState, intent);
     this.climbOrdered = intent.climb === true;   // ★ 爬坡凭证（路线发放）
+    this.climbPt = intent.climbPt;               // ★ 凭证点（爬坡执行比对用）
     this.steerFreshUntil = performance.now() / 1000 + EnemyBase.STEER_TTL;
     // ★ E4a：收到 steer = 控制权交给 swarm（超时回落由 applySteerMovement 执行）
     this.controlSource = 'swarm';

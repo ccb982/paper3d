@@ -70,7 +70,7 @@ export class PassTable {
   /** ★★ 上坡位置预处理（用户定 2026-09-26）：每条可爬边的**连续段**（按坡宽）→
    *  段中心、坡面前 CLIMB_MARGIN 米（低侧法线）标"上坡点"。寻路上高台**只能经这些点**。 */
   /** ★ 上坡点表（构建期预处理；寻路/执行/可视化读） */
-  climbRuns: { x: number; z: number; ux: number; uz: number; width: number }[] = [];
+  climbRuns: { x: number; z: number; ux: number; uz: number; width: number; rise: number }[] = [];
   private climbRun = new Int16Array(0);   // per(cell*4+dir) → climbRuns 下标；-1 = 非上坡点
   ready = false;
   /** 建表统计（探针） */
@@ -241,6 +241,7 @@ export class PassTable {
           this.climbRuns.push({
             x: ccx + ux * (CELL / 2 - CLIMB_MARGIN), z: ccz + uz * (CELL / 2 - CLIMB_MARGIN),
             ux, uz, width: cells.length,
+            rise: Math.max(...cells.map((ci) => this.drop[ci * 4 + d])),
           });
         }
       }
@@ -248,7 +249,7 @@ export class PassTable {
   }
 
   /** ★ 上坡点查询（该格所属**连续坡**的上坡点：段中心、坡面前 CLIMB_MARGIN；无 → null） */
-  climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null {
+  climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
     if (!this.ready) return null;
     const c = this.cellAt(x, z);
     if (c < 0) return null;
@@ -263,9 +264,9 @@ export class PassTable {
   }
 
   /** ★ 最近上坡点（宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
-  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number } | null {
+  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
     if (!this.ready) return null;
-    let best: { x: number; z: number; ux: number; uz: number; width: number } | null = null;
+    let best: { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null = null;
     let bestScore = -Infinity;
     for (const r of this.climbRuns) {
       const d = Math.hypot(r.x - x, r.z - z);

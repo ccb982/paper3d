@@ -22,6 +22,10 @@ export const UNBURY_DEPTH = 1.2;
 
 /** ★ 上坡点到位容差（米；凭证式上坡：人须在此邻域内才认"在上坡点"） */
 const CLIMB_POINT_TOL = 1.2;
+/** ★ 高落差硬壁斥力（用户定 2026-09-26）：生效半径（米，外为 0）/ 采样档（米）/ 推力（速度占比） */
+const WALL_REPEL_R = 2.0;
+const WALL_REPEL_D = [0.6, 1.2, 1.8] as const;
+const WALL_PUSH = 0.6;
 
 /** ★ 脱埋贴地（两载体同口径）：y 感知选层；若停在"顶层地表之下 ≥UNBURY_DEPTH"的空腔
  *  → 抬到顶层，走出体内。 */
@@ -58,8 +62,10 @@ export interface TerrainProbe {
   layerAt(x: number, z: number, y: number): number;
   /** ★ 顶层地表（脱埋用；无 → 不做脱埋） */
   topAt?(x: number, z: number): number;
+  /** ★ 可行性表查询（可选；生产 = PassTable.canStep）：该向边是否可行（硬墙/坑/单向=不可行） */
+  canStep?(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ 上坡点（表预处理；连续性段中心、坡面前 2m）——凭证式上坡的"点位" */
-  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null;
+  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null;
 }
 
 export interface StepInput {
@@ -74,6 +80,8 @@ export interface StepInput {
   speed: number;
   /** ★ 爬坡凭证（路线发放：climb=true → 队长/代理的 climb 令）；无凭证不得爬 */
   climbOrdered?: boolean;
+  /** ★ 凭证自带的**上坡点**（路线里插的点）；内核据此判"在坡点"（与朝向无关） */
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number };
   /** 限制爬崖（敌人）：立面阻挡（坡面 weld 放行） */
   blockCliffClimb: boolean;
   /** 无视地形落差（载具/飞行） */
@@ -127,24 +135,18 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 凭证式上坡（用户定 2026-09-26）：**人在上坡点 + 持凭证** → 沿表法线定速爬；
-    //      无凭证 / 不在点上：一律不爬（无自主上坡）。（墙检/贴地见此态放行。）
+    // ---- 凭证式上坡（用户定）：凭证由**路线**持有（寻路走完才回收）；
+    //      人在上坡点 + 持凭证 → 沿法线定速爬。无凭证不爬（无自主）。
     if (inp.blockCliffClimb && !inp.climbAnyTerrain && inp.climbOrdered) {
-      const run = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null;
+      const run = inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null);
       if (run) {
         const tx = -run.uz, tz = run.ux;
-        const tOff = (inp.x - run.x) * tx + (inp.z - run.z) * tz;      // 切向偏（横向）
+        const tOff = (inp.x - run.x) * tx + (inp.z - run.z) * tz;       // 切向偏（横向）
         const sOff = (inp.x - run.x) * run.ux + (inp.z - run.z) * run.uz; // 沿法线（<0 = 还没到点）
         if (Math.abs(tOff) <= CLIMB_POINT_TOL && sOff >= -CLIMB_POINT_TOL) {
           out.climbing = true;
           dx = run.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
           dz = run.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-        } else {
-          // 持凭证但未到上坡点 → 先去坡点（仅凭路线凭证；无凭证一律不动/不爬）
-          const gx = run.x - inp.x, gz = run.z - inp.z;
-          const gl = Math.hypot(gx, gz) || 1;
-          dx = (gx / gl) * inp.speed * inp.dt;
-          dz = (gz / gl) * inp.speed * inp.dt;
         }
       }
     }
@@ -166,6 +168,29 @@ export class CharacterCore {
       else if (dx < 0 && isWall(inp.x - inp.hx - m, inp.z, -1, 0)) { dx = 0; out.blocked = true; }
       if (dz > 0 && isWall(inp.x, inp.z + inp.hz + m, 0, 1)) { dz = 0; out.blocked = true; }
       else if (dz < 0 && isWall(inp.x, inp.z - inp.hz - m, 0, -1)) { dz = 0; out.blocked = true; }
+
+      // ---- 硬墙斥力（用户定 2026-09-26）：**依据可行性表**——四向边若**不可行**
+      //   （PassTable.canStep=false：硬墙/坑/单向），按"离该格边的距离"给远离推力（近大远小）。
+      //   与前进叠加、不反向抵消；攀爬/坡面（可行边）不受影响。
+      if (probe.canStep) {
+        const CELL = 4;   // 与 PassTable 同格（4m）
+        const cx = Math.floor(inp.x / CELL) * CELL + CELL / 2;
+        const cz = Math.floor(inp.z / CELL) * CELL + CELL / 2;
+        let rx = 0, rz = 0;
+        const wOf = (dist: number): number => {
+          const w = (WALL_REPEL_R - dist) / WALL_REPEL_R;
+          return w > 0 ? w : 0;
+        };
+        if (!probe.canStep(inp.x, inp.z, 1, 0)) rx -= wOf(cx + CELL / 2 - inp.x);
+        if (!probe.canStep(inp.x, inp.z, -1, 0)) rx += wOf(inp.x - (cx - CELL / 2));
+        if (!probe.canStep(inp.x, inp.z, 0, 1)) rz -= wOf(cz + CELL / 2 - inp.z);
+        if (!probe.canStep(inp.x, inp.z, 0, -1)) rz += wOf(inp.z - (cz - CELL / 2));
+        if (rx !== 0 || rz !== 0) {
+          const rl = Math.hypot(rx, rz);
+          dx += (rx / rl) * inp.speed * inp.dt * WALL_PUSH;
+          dz += (rz / rl) * inp.speed * inp.dt * WALL_PUSH;
+        }
+      }
     }
 
     // ---- 贴地/脱埋（上坡由此自然发生：weld 坡面允许沿面上升；无"爬坡态"） ----

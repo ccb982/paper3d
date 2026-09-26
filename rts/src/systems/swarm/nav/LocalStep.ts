@@ -45,7 +45,7 @@ export interface LocalGrid {
    *  由上层注入（地形语义 + 掩体表 + 事态×舰距加权，唯一实现 TerrainScoring.scoreAt） */
   scoreAt?(x: number, z: number): number | null;
   /** ★ 上坡点（可选；生产 = PassTable.climbRunAt）：可爬坡边 → 段中心上坡点（坡面前 1m） */
-  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null;
+  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null;
 }
 
 export interface SegmentCheck {
