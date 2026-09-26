@@ -165,10 +165,14 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
 - **小队分配（用户定 2026-09-26，待实施）**：近战/远程管理器**知道全局小队数与各队位置**——
   “哪队去哪”必须是**综合考虑的全局分配**（可数量、位置、同兵种间距、可达性、任务优先级），
   不是只在小队目标上加一个切向间距修正（现状 `Spread.spreadFix` 只做后者，属临时口径）。
-- **上坡（收敛 2026-09-26）**：上坡点/落点 = 可行性表构建期预处理（连续坡段中心、坡面前 2m / 坡面后 1.5m、带坡宽/rise）；
-  长寻路与 S1 短寻路共享 `nav/ClimbVia` 插"上坡点→跨坡点★"；**凭证挂寻路、按小队持有**（`state.climbCred`；
-  发路线发放、到目标接下一寻路才回收）；执行 `CharacterCore`：**聚坡下（坡宽带内）+ 本格表里有可爬边（硬边防线）→ 沿法线爬，到落点才算爬过**；
-  **防卡地里**（爬升态取上层表面）；硬墙斥力依 `canStep`。成员移动 = 定时对队长长寻路（同一条路）。
+- **上坡（最终收敛 2026-09-26）**：上坡点/落点 = 可行性表构建期预处理（连续坡段中心、坡面前 2m / 坡面后 1.5m、带坡宽/rise）；
+  长寻路与 S1 短寻路共享 `nav/ClimbVia` 插"上坡点→跨坡点★"；**凭证挂寻路、按小队持有**（`state.climbCred`；发路线发放、到目标接下一寻路才回收）；
+  执行 `CharacterCore`：**① 强制走位三点式**——未起爬时 退出坡面 → 坡底横移对齐 → 正向进点；
+  **② 起爬必须在爬坡点**（≤`CLIMB_START_R=0.6m`，此时才查**硬边防线**=本格有该向可爬边）；
+  **③ 爬升承诺 ClimbCommit**——一旦起爬锁存本次坡+落点，凭证丢失/steer 过期/零限速/停步/眩晕均不得中断，直到**落点**才结束（自主最低速 `CLIMB_MIN_SPEED=2.5`）；
+  **④ 防卡地里**（爬升态取上层表面）；**⑤ 硬墙斥力**依 `canStep`（出自"不卡墙"版本，保留）。
+  **精确记录**：`__rts.climbStats`（core/route/trace）——起爬点实测距（`startDistMax`/`badStarts`）、会话/到落点/弃约、强制走位帧数。
+  成员移动 = 定时对队长长寻路（同一条路）。
 - 收口（2026-09-26）：类型 `MoveAtom = 'march' | 'act'`（两个原子）；`SquadMode = MoveAtom | 'patrol' | 'garrison'`
   （运行模式；patrol/garrison 属行为循环驻留）。`engine/contracts.ts` 单源。
 
@@ -245,7 +249,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - **移动纪律（禁止向量合成）**：`SteerPick` 16 向候选 + 硬否决（表 blockedAt/陡坡）→ 打分（`W_PATH 1.6·cos` + `W_TABLE 0.8` + `W_TURN 0.7` + 避让惩罚 − 水/掩体惩罚）→ softmax(0.18) 抽样 → 承诺 0.5s；`move()`：队长走 `leaderDir`（锚点/队令目标）；成员走 `followDir`（追队长/走廊）；承诺反向保护（`dot(held,desired) ≤ −0.2` 重选）。
 - **LOD**：L3 ≤45m（上限 36）/ L2 ≤120 / L1 ≤190 / 降格 55m；决策 2/5Hz、移动 10/20Hz、L3 编队 steer 10Hz；升格=视野（相机视锥±15% 且 <220m）；升降格走 `SwarmTierPort`（无损）。
 - **实体三件套**：`EnemyBase`（载体）+ `EnemyBrain`（战斗原子/开火）+ `EnemyPresentation`（表现）+ `EnemyLocomotion`（危险绕行）。
-- **基类（两载体同内核）**：`entity/base/CharacterCore`（推进/程序化爬坡/立面阻挡/贴地回退，`TerrainProbe` 注入）+ `Locomotion`（统一出口）+ `Abilities`（爬坡/爬掩体/脱困/计时销毁状态机）+ `Blocking`（阻挡校验）+ `RasterProbe`（地形探针共用）；`TerrainAssist`（坡正面混合 + 上岸爬岸，L2/L3 同参数）。
+- **基类（两载体同内核）**：`entity/base/CharacterCore`（推进/上坡三点式+承诺/立面阻挡/贴地回退/脱埋，`TerrainProbe` 注入）+ `RasterProbe`（地形探针共用）+ `SteerPick`（`SteerTable` 表桥）。旧 `Locomotion/Abilities/contracts/Climb` 已删（收敛 2026-09-26）。
 - **退役口径**：`killed / demoted / recycled / despawned / mode_cleanup`；唯一伤亡通道 `SwarmLedger.reportCasualty`；非击杀离场 `noteRecall/noteRemoved`。
 
 ---
@@ -284,16 +288,15 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
   设计 = H2 **y 感知层**（cell+layer 判等/到达/取点，`surfaceHeightAtFor` 选层）+ H1 队长附近 **1m 局部高精度** + H3 1m 语义取点；
   **实现归属 = 实体基类**（`TerrainProbe.layerAt` + `CharacterCore.canShift`，L2/L3 同内核自动同款；nav/Anchor 只经端口消费）；见《寻路重写方案.md》§4.4.5。
 - **待实施（2026-09-25 用户报告）**：① **位移绕过**——人群分离/障碍推出/贴地（`CharacterClamp`）未过台阶校验 → 敌人可"借推力卡上硬边"；规则 = 所有水平位移统一过 `canShift`、贴地前置校验（见《寻路重写方案.md》§4.4.4A）；② **寻路成本无"坡优先"**——weld 坡与 ≤0.6m 台阶硬边同价 → A* 选最短"爬墙"路（§4.4.4B，待定点验证 + 移动质量成本）。
-- **上坡（基类，用户定 2026-09-25）**：**上坡半径内必须正对坡面**——`uphillNormal(x,z,R=5)` 取法线；
-  想上坡先对准法线，`dot≥0.8` 才进入程序化爬坡（定速沿法线）；未正对只转向；显式爬坡令同按法线。
-  实现 = `entity/base/CharacterCore`（L2/L3 同内核）；旧的 `fallLineBlend` 混合已从 L2 撤除。
+- **上坡（历史口径，已废）**：旧的 `uphillNormal(x,z,R=5)`+`dot≥0.8` 正对坡面口径**已废**；
+  现行 = §2.10b「强制走位三点式 + 起爬必在爬坡点 + ClimbCommit 到落点」。
 - **PassTable（可行性表 · 敌人消费收敛层，只读）**：五值（自身高度 + 四向边 可走/净落差）；**边型 = 地形表裁决**（`weld/cliff`，与渲染同源）；格对齐块格（4m）；`weld`（坡）= 双向可行 + 每边存 `climb` 位（净升 >0.6）；`cliff` 落差 ≤`EDGE_CLIFF_BAND=0.6` 可走、>0.6 **上墙下可行**；坑（地块类型 `pit`）**目标口径一律墙**（现状仅致死坑 `pit && h<−1.2` 双向禁）。
 - **LongPath（坡度加权 A\*）**：八向 octile；**上坡 +0.6/m**（偏好缓坡/垭口）；**上坡横平竖直**（斜向仅平/下坡）；输出走廊路点带 `climb` 标注。
 - **短寻路（`nav/LocalStep`，S1）**：有限窗口 Dijkstra（半径 24m；语义风险偏好；终点精确 ≤1.5m；无解 → null）；仅直线不可走时启用。
 - **分工（用户定）= 按距离**：>40m=长寻路（可行性表路线，加密 ≤10m + 逐段 climb）/ ≤40m=短寻路（LocalStep）；
   长寻路非引擎专属（队长派件也可）。`ensurePath` 触发（S3b）= 目标位移 >24m / 净推进停滞 3s / 表代次变 / 无路径；失败冷却 3s。
 - **走廊**：`SquadNavigator.ensurePath` 写入**队长核执行态**（`state.corridor`），`Anchor.currentTargetOf` 沿线滚动；L3 编队 steer 与代理跟随同源。
-- **执行层**：上坡走坡正面（明显爬坡才拉直：`up>0.45 && mag>0.22`；0.65 路径/0.35 梯度）；爬坡态定速直推、免立面、跳过分离；**坡面不许驻留**；水中上岸台阶放宽 `SHORE_CLIMB_MAX=2.5m`（陆地仍 0.6m）；水=正常地块（仅建表软降分 −0.6）。
+- **执行层**：上坡 = §2.10b 最终口径（三点式强制走位 + 起爬必在坡点 + 承诺到落点）；爬坡态免立面/免回退/不被限速压死；水中上岸台阶放宽 `SHORE_CLIMB_MAX=2.5m`（陆地仍 0.6m）；水=正常地块（仅建表软降分 −0.6）。
 - **无质心**：编队朝向/寻路起点/实体槽位全部按**队长**；成员 = 队长 + 槽位偏移。
 - **统一移动形式（用户定 2026-09-25）**：保护/驻守/撤退/远程选位/风筝/掉队 = **先给目标点**，再走同一条寻路链
   （短/长寻路 + 可行性校验）；**禁止旁路独立实现**（锚点层已删）。见《寻路重写方案.md》§4.4.7。

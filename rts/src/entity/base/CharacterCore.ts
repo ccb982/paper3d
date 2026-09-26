@@ -24,6 +24,16 @@ export const UNBURY_DEPTH = 1.2;
 const CLIMB_POINT_TOL = 1.2;
 /** ★ 坡前起爬带（米；在坡点法线前方此范围内即可起爬——"聚在坡下就能爬"） */
 const BASE_NEAR = 2.5;
+/** ★ 爬升自主速下限（用户定 2026-09-26）：承诺期内停步/零限速不得压死爬坡 */
+const CLIMB_MIN_SPEED = 2.5;
+/** ★ 起爬点半径（用户定 2026-09-26）：**爬坡必须从爬坡点起步**，到点才起 */
+const CLIMB_START_R = 0.6;
+/** ★ 起爬精确记录（用户定）：最近 48 次会话（起点/点位/实测距/结局） */
+export const CLIMB_TRACE: {
+  id: number; t: number; phase: string; x: number; z: number; y?: number;
+  px: number; pz: number; d: number; tOff: number; sOff: number; frames: number;
+}[] = [];
+let CLIMB_SEQ = 0;
 /** ★ 高落差硬壁斥力（用户定 2026-09-26）：生效半径（米，外为 0）/ 采样档（米）/ 推力（速度占比） */
 const WALL_REPEL_R = 2.0;
 const WALL_REPEL_D = [0.6, 1.2, 1.8] as const;
@@ -110,7 +120,30 @@ export interface StepResult {
   unburied: boolean;
 }
 
+/** ★ 上坡流程计数（用户定 2026-09-26；探针读数用） */
+export const CLIMB_STATS = {
+  cred: 0,        // 凭证抵达核心（climbOrdered 帧）
+  noRun: 0,       // 有凭证但查不到坡带
+  run: 0,         // 查到坡带
+  guardFail: 0,   // 硬性防线不过（本格无 climb 位）
+  climbSteps: 0,  // 执行上升帧
+  units: 0,       // 曾进入爬升态的核数
+  sessions: 0,    // 起爬会话（提交）数
+  approach: 0,    // 强制走位帧（退出/横移/进点）
+  badStarts: 0,   // 起爬点偏离 > 起爬半径（应恒 0）
+  startDistMax: 0, // 实测起爬距最大值
+  landed: 0,      // 到落点完成会话数
+  abandoned: 0,   // 被拉离现场弃约数
+};
+
 export class CharacterCore {
+  private everClimbed = false;
+  /** ★ 爬升承诺（用户定 2026-09-26）：一旦起爬 → 锁存本次坡+落点，不受凭证丢失/steer 过期/限速/到达停步影响，直到落点。 */
+  private session: {
+    run: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
+    lx: number; lz: number;
+    tr: { id: number; t: number; phase: string; x: number; z: number; y?: number; px: number; pz: number; d: number; tOff: number; sOff: number; frames: number };
+  } | null = null;
   /** 结果复用（零分配） */
   private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false };
 
@@ -137,29 +170,83 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 凭证式上坡（用户定）：**在坡点宽带内（聚在坡下）→ 沿法线升到落点**；
-    //      硬性防线：**本格在可行性表里必须有该向可爬边（climb 位）**，否则不升（禁硬边上爬）。
-    if (inp.blockCliffClimb && !inp.climbAnyTerrain && inp.climbOrdered) {
-      const run = inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null);
+    // ---- 凭证式上坡（用户定 2026-09-26 最终口径）：
+    //   一旦起爬 → **承诺（ClimbCommit）**：锁存本次坡+落点，凭证丢失/steer 过期/限速/停步均不得中断，直到落点；
+    //   未起爬时 **强制走位三点式**：①退出坡面 → ②坡底横移对齐 → ③正向进点；
+    //   **起爬必须在爬坡点（≤CLIMB_START_R=0.6m）**，此时才查硬性防线（本格有 climb 位，禁硬边上爬）；
+    //   精确记录：CLIMB_TRACE（起点坐标/点位/实测距/结局）。
+    const committed = this.session !== null;
+    if (committed && inp.climbAnyTerrain) { this.session = null; CLIMB_STATS.abandoned++; }   // 切到自由爬坡 → 弃约
+    if (!inp.climbAnyTerrain && (committed || (inp.blockCliffClimb && inp.climbOrdered))) {
+      const run = committed ? this.session!.run
+        : (inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
+      if (!committed) { CLIMB_STATS.cred++; if (!run) CLIMB_STATS.noRun++; }
       if (run) {
         const tx = -run.uz, tz = run.ux;
         const tOff = (inp.x - run.x) * tx + (inp.z - run.z) * tz;
         const sOff = (inp.x - run.x) * run.ux + (inp.z - run.z) * run.uz;
         const rw = (run as { w?: number; width?: number }).w ?? (run as { width?: number }).width ?? 3;
         const halfSpan = Math.max(CLIMB_POINT_TOL, Math.min(6, rw * 2));
-        const atBase = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR;
-        const lx = run.lx ?? run.x + run.ux * 3.5;
-        const lz = run.lz ?? run.z + run.uz * 3.5;
+        const lx = committed ? this.session!.lx : (run.lx ?? run.x + run.ux * 3.5);
+        const lz = committed ? this.session!.lz : (run.lz ?? run.z + run.uz * 3.5);
         const landY = probe.heightAt(lx, lz, inp.y);
         const atLand = Math.hypot(inp.x - lx, inp.z - lz) <= 1.0
           && (!Number.isFinite(landY) || inp.y >= landY - 0.6);
-        // ★ 硬边防线（用户定）：本格必须有该向可爬边（表 climb 位）——否则不升
-        const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
-        const climbable = own !== null;
-        if (!atLand && atBase && climbable) {
-          out.climbing = true;
-          dx = run.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-          dz = run.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+        // ★ 承诺续爬（不可中断）：不再复核 atBase/硬边；
+        //   仅在被明显拉离现场（回收/传送）时弃约。到落点 = 完成。
+        if (committed) {
+          const tr = this.session!.tr;
+          tr.frames++;
+          const far = sOff < -(BASE_NEAR + 8) || Math.abs(tOff) > halfSpan + 8;
+          if (far) { this.session = null; CLIMB_STATS.abandoned++; tr.phase = 'abandoned'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
+          else if (atLand) { this.session = null; CLIMB_STATS.landed++; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
+          else {
+            out.climbing = true;
+            CLIMB_STATS.climbSteps++;
+            const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;   // 自主速：停步限速不能压死爬坡
+            dx = run.ux * sp * CLIMB_SPEED_MUL * inp.dt;
+            dz = run.uz * sp * CLIMB_SPEED_MUL * inp.dt;
+          }
+        } else {
+          // ★★ 强制走位（用户定 2026-09-26）：**爬坡必须从爬坡点起步**——三点式：
+          //   ① 退出坡面（深入/贴面且未对齐 → 沿 -n 后退）
+          //   ② 沿坡底横移对齐（|tOff|>0.35 → 沿 ∓t 移到点的法线上）
+          //   ③ 正向进点（对齐后沿 +n 进点）→ 到点（硬边防线）起步。
+          CLIMB_STATS.run++;
+          const dPt = Math.hypot(inp.x - run.x, inp.z - run.z);
+          if (!atLand) {
+            const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
+            const deep = sOff > 0.3;
+            const hugMis = Math.abs(tOff) > 1.0 && sOff > -1.0;
+            if (deep || hugMis) {                       // ① 退出
+              out.climbing = true; CLIMB_STATS.approach++;
+              dx = -run.ux * sp * inp.dt; dz = -run.uz * sp * inp.dt;
+            } else if (Math.abs(tOff) > 0.35) {         // ② 横移对齐
+              const s = tOff > 0 ? -1 : 1;
+              out.climbing = true; CLIMB_STATS.approach++;
+              dx = s * tx * sp * inp.dt; dz = s * tz * sp * inp.dt;
+            } else if (dPt > CLIMB_START_R) {           // ③ 正向进点
+              out.climbing = true; CLIMB_STATS.approach++;
+              dx = run.ux * sp * inp.dt; dz = run.uz * sp * inp.dt;
+            } else {                                    // ④ 在点：硬边防线→起步
+              const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
+              if (own !== null) {
+                const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
+                  px: run.x, pz: run.z, d: dPt, tOff, sOff, frames: 0 };
+                CLIMB_TRACE.push(tr);
+                if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
+                this.session = { run, lx, lz, tr };
+                CLIMB_STATS.sessions++;
+                CLIMB_STATS.startDistMax = Math.max(CLIMB_STATS.startDistMax, dPt);
+                if (dPt > CLIMB_START_R + 0.05) CLIMB_STATS.badStarts++;
+                out.climbing = true;
+                CLIMB_STATS.climbSteps++;
+                if (!this.everClimbed) { this.everClimbed = true; CLIMB_STATS.units++; }
+                dx = run.ux * sp * CLIMB_SPEED_MUL * inp.dt;
+                dz = run.uz * sp * CLIMB_SPEED_MUL * inp.dt;
+              } else CLIMB_STATS.guardFail++;
+            }
+          }
         }
       }
     }

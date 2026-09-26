@@ -21,6 +21,8 @@ import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enem
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
+import { CLIMB_STATS, CLIMB_TRACE } from './entity/base/CharacterCore';
+import { CLIMB_ROUTE_STATS } from './systems/swarm/SquadNavigator';
 import { ENEMY_BY_ID } from './config/enemyRoster';
 import type { SwarmHooks } from './systems/swarm/SwarmSystem';
 import { AGENT_TARGET_SHIP } from './systems/swarm/AgentPool';
@@ -805,7 +807,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, climbView, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, climbView, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

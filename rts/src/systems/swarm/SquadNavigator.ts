@@ -44,6 +44,9 @@ const MEMBER_ROUTE_S = 2.5;
 const MEMBER_ROUTE_MOVE = 8;
 const MEMBER_ARRIVE_R = 1.5;
 
+/** ★ 上坡凭证计数（路线侧） */
+export const CLIMB_ROUTE_STATS = { issued: 0, cleared: 0 };
+
 export class SquadNavigator {
   /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
@@ -264,6 +267,7 @@ export class SquadNavigator {
             ? viaClimbPoints(this.table, this._from.x, this._from.z, seg)
             : seg;
           state.climbCred = this.credOf(state.corridor);   // ★ 发路线→发凭证（下一个寻路才回收）
+          if (state.climbCred) CLIMB_ROUTE_STATS.issued++;
           state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
@@ -288,6 +292,7 @@ export class SquadNavigator {
       // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
       state.climbCred = this.credOf(feasOut);   // ★ 发路线→发凭证（下一个寻路才回收）
+      if (state.climbCred) CLIMB_ROUTE_STATS.issued++;
       state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
@@ -304,6 +309,7 @@ export class SquadNavigator {
       this.dbg.feasBlocked++;
       state.pathFailedAt = now;
       state.corridor = undefined;
+      if (state.climbCred) CLIMB_ROUTE_STATS.cleared++;
       state.climbCred = undefined;
       state.followIdx = undefined;
       return;

@@ -391,7 +391,9 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
   const noCred = run(mkProbe(true, 2), false);
   ok(noCred.climbing === false, '无凭证 → 不爬（没有自主上坡）');
   const offPoint = run(mkProbe(true, 2, [5, 0]), true);
-  ok(offPoint.climbing === false, '持凭证但不在上坡点 → 不爬');
+  ok(offPoint.dx > 0 && offPoint.climbing === true, '持凭证但不在上坡点 → 强制走位进点（沿 +n，不直爬）');
+  const nearPoint = run(mkProbe(true, 2, [0.4, 0]), true);
+  ok(nearPoint.dx > 0 && nearPoint.climbing === true, '已在点（≤0.6m）→ 起步');
 }
 
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------
