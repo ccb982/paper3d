@@ -17,7 +17,7 @@
 //     · 其余（偏了/不在带内）  → act（短跳到调整点 ax,az）
 //     · 无 P（降级）           → 到 G 的距离三分（march / act / garrison）
 //
-//   act / defend / patrol（站位锚先过 resolveAnchor：驻守绕掩体/反斜/掩体复核）：
+//   act / defend / patrol（**去哪就去哪**：队长目标 = 下一路点 / 队令目标）：
 //     · d > MARCH_DIST(40)     → march（长寻路）
 //     · ARRIVE_R < d ≤ 40      → act（短跳 LOS 贪心）
 //     · d ≤ ARRIVE_R(1.5)      → garrison（到位驻守）
@@ -50,7 +50,7 @@ export function interpretLeader(
   state: SquadOrderState,
   lx: number,
   lz: number,
-  /** 站位锚（defend/act 由 resolveAnchor 解析；protect 不需要，传 null） */
+  /** 队长目标（defend/act = 下一路点/队令目标；protect 不需要，传 null） */
   anchor: { x: number; z: number } | null,
 ): AtomicChoice {
   const o = state.order;

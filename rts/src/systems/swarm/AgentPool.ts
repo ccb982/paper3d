@@ -7,7 +7,9 @@
 
 import type { SwarmSnapshot, UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity/SwarmUnit';
-import { CharacterCore, type StepResult } from '../../entity/base/CharacterCore';
+import { CharacterCore, canShift, type StepResult } from '../../entity/base/CharacterCore';
+import { SHORE_CLIMB_MAX } from '../../entity/TerrainAssist';
+import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 import { createRasterProbe } from '../../entity/base/RasterProbe';
 
 /** 池容量（= 全图存活上限 200 + 缓冲；《RTS架构.md》§8） */
@@ -173,6 +175,14 @@ export class AgentPool {
       hx: hs, hz: hs,
       suspended: false,
     }, this.coreProbe, nowS);
+  }
+
+  /** ★ 高精度位移闸门（H2，用户定 2026-09-25）：推挤也不能跨层/越台阶；不合格 → 取消本次推挤 */
+  shiftAgent(i: number, dx: number, dz: number): boolean {
+    const lim = this.coreProbe.wetAt(this.x[i], this.z[i]) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+    if (!canShift(this.coreProbe, this.x[i], this.z[i], this.y[i], this.x[i] + dx, this.z[i] + dz, lim)) return false;
+    this.x[i] += dx; this.z[i] += dz;
+    return true;
   }
 
   // ---- 位置/朝向 ----

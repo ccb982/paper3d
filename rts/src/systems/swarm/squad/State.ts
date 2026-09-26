@@ -37,13 +37,6 @@ export interface SquadOrderState {
   pathFromZ?: number;
   /** 求解时的代价代次（掩体增删 → 代次变 → 重算偏好） */
   costStamp?: number;
-  /** ★ 目标锁存（S3b）：当前锁定路点（到达/路线重算前不换，防两点间翻转） */
-  anchorX?: number;
-  anchorZ?: number;
-  /** 锚点的爬坡标记（锁存时必须一起带） */
-  anchorClimb?: boolean;
-  /** ★ 锁存代次 = 求解时刻 pathAt（路线重算 → 代次变 → 锁存失效） */
-  latchAt?: number;
   /** ★ 净推进停滞检测（S3b）：最近一次"有进展"的时刻与当时距目标距离（3s 无进展 → 重算） */
   stallAt?: number;
   stallD?: number;
@@ -160,10 +153,6 @@ export function stateFromOrder(squadId: number, order: SquadOrder, prev: SquadOr
     st.corridor = prev.corridor;
     st.pathFromX = prev.pathFromX;
     st.pathFromZ = prev.pathFromZ;
-    st.anchorX = prev.anchorX;
-    st.anchorZ = prev.anchorZ;
-    st.anchorClimb = prev.anchorClimb;
-    st.latchAt = prev.latchAt;
     st.stallAt = prev.stallAt;
     st.stallD = prev.stallD;
     st.costStamp = prev.costStamp;

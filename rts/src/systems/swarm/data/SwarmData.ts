@@ -543,8 +543,11 @@ export class SwarmData {
   }
 
   /** ★ 硬边界查询（墙面/坑水；表未就绪 → false）：移动/寻路的危险地形判定 */
+  /** ★ 硬通行（三张表原则，用户定 2026-09-25）：只认**地形真相**——坑（地块类型）恒为墙；
+   *  不再经 TerrainScore（它是越权的第四套网格，曾把平地判 blocked → 站桩卡死）。
+   *  水=可走（偏好另算）；挖深的普通地块不算硬格。 */
   blockedAt(x: number, z: number): boolean {
-    return this.terrainScore.blockedAt(x, z);
+    return RasterMap.current?.tileDefAt(x, z).genRole === 'pit';
   }
 
   /** ★ 掩体脚印（过掩体优化：SteerPick 候选惩罚 / TerrainAssist） */

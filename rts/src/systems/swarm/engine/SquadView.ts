@@ -44,9 +44,6 @@ export interface SquadView {
   pathFromZ: number;
   pathAt: number;
   pathFailedAt: number;
-  anchorX?: number;
-  anchorZ?: number;
-  anchorClimb?: boolean;
 }
 
 /** 命令历史条目（OrderWriter 环） */
@@ -98,9 +95,6 @@ export function squadViews(
       pathFromZ: core?.pathFromZ ?? 0,
       pathAt: core?.pathAt ?? 0,
       pathFailedAt: core?.pathFailedAt ?? 0,
-      anchorX: core?.anchorX,
-      anchorZ: core?.anchorZ,
-      anchorClimb: core?.anchorClimb,
     });
   }
   return out;

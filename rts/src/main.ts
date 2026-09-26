@@ -52,7 +52,7 @@ import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { squadViews, type SquadViewPort } from './systems/swarm/engine/SquadView';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
-import { setLiveOrderSource, resolveAnchor } from './systems/swarm/squad/Anchor';
+import { setLiveOrderSource, currentTargetOf } from './systems/swarm/squad/Anchor';
 import { createSquadNav } from './systems/swarm/squad/MarchAction';
 import { setSwarmDebugView } from './services/ui/SwarmDebugOverlay';
 import { setSwarmTraceView } from './services/ui/SwarmTrace';
@@ -354,7 +354,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       {
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
-        leaderTarget: (state, squad, lx, lz, now) => resolveAnchor(state, lx, lz, squad.type, now, swarm.data.terrain),
+        // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
+        leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
         terrain: () => swarm.data.terrain,
         mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,

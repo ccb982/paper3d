@@ -15,7 +15,12 @@ export const EDGE_CELL = 4;
 /** 只读格边端口（生产 = PassTable；自检 = 合成图） */
 export interface EdgeGrid {
   canStep(x: number, z: number, dx: number, dz: number): boolean;
+  /** ★ H2：格地表高（层判等用；生产 = PassTable.heightAt） */
+  heightAt(x: number, z: number): number;
 }
+
+/** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
+export const EDGE_LAYER_TOL = 0.6;
 
 export interface CellRef {
   cx: number;
@@ -53,26 +58,36 @@ function axisStep(g: EdgeGrid, x: number, z: number, ddx: number, ddz: number): 
   return null;
 }
 
-/** ★ 路线格边跟随：从精确位置沿**规划的格序列**走一格（轴对齐 + canStep）。
- *  当前格不在路线里 → 走向路线里最近的格（回到路上）；已到路线末尾 → null。 */
+/** ★ 路线格边跟随（H2 层感知）：从精确位置沿**规划的格序列**走一格（轴对齐 + canStep）。
+ *  · 当前格在路线里但**层不匹配**（如崖底 vs 崖顶同格）→ 返回 null（**不判"在路线上"**）；
+ *  · 当前格不在路线里 → 走向最近的**同层**路线格；
+ *  · 已到路线末尾 → null。 */
 export function edgeStepRoute(
-  g: EdgeGrid, x: number, z: number, cells: readonly CellRef[],
+  g: EdgeGrid, x: number, z: number, y: number, cells: readonly CellRef[],
 ): { dx: number; dz: number } | null {
   if (cells.length === 0) return null;
   const cur = cellOf(x, z);
+  const sameLayer = (c: CellRef): boolean =>
+    Math.abs(g.heightAt(c.cx * EDGE_CELL + EDGE_CELL / 2, c.cz * EDGE_CELL + EDGE_CELL / 2) - y) <= EDGE_LAYER_TOL;
   let idx = -1;
   for (let i = 0; i < cells.length; i++) {
     const c = cells[i] as CellRef;
-    if (c.cx === cur.cx && c.cz === cur.cz) { idx = i; break; }
+    if (c.cx === cur.cx && c.cz === cur.cz) {
+      if (!sameLayer(c)) return null;   // ★ H2：同格不同层 = 不在这一层（不判在路线里）
+      idx = i;
+      break;
+    }
   }
   if (idx < 0) {
-    // 离路：走向最近的路线格
-    let bi = 0, bd = Infinity;
+    // 离路：走向最近的**同层**路线格
+    let bi = -1, bd = Infinity;
     for (let i = 0; i < cells.length; i++) {
       const c = cells[i] as CellRef;
+      if (!sameLayer(c)) continue;
       const d = Math.hypot(c.cx - cur.cx, c.cz - cur.cz);
       if (d < bd) { bd = d; bi = i; }
     }
+    if (bi < 0) return null;            // 无同层路线格 → 交上层重算
     idx = bi;
   }
   const next = cells[idx + 1];
@@ -80,12 +95,16 @@ export function edgeStepRoute(
   return axisStep(g, x, z, next.cx - cur.cx, next.cz - cur.cz);
 }
 
-/** ★ 贪心格边跟随（成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep；大分量优先）。 */
+/** ★ 贪心格边跟随（H2 层感知；成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep）。 */
 export function edgeStepGreedy(
-  g: EdgeGrid, x: number, z: number, tx: number, tz: number,
+  g: EdgeGrid, x: number, z: number, y: number, tx: number, tz: number,
 ): { dx: number; dz: number } | null {
   const cur = cellOf(x, z);
   const tgt = cellOf(tx, tz);
-  if (cur.cx === tgt.cx && cur.cz === tgt.cz) return null;   // 同格：软跟随处理
+  if (cur.cx === tgt.cx && cur.cz === tgt.cz) {
+    // ★ H2：同格还必须同层；层不符（如崖底 vs 崖顶）→ 不判"已到位"，交软跟随/重算
+    const h = g.heightAt(cur.cx * EDGE_CELL + EDGE_CELL / 2, cur.cz * EDGE_CELL + EDGE_CELL / 2);
+    if (Math.abs(h - y) <= EDGE_LAYER_TOL) return null;
+  }
   return axisStep(g, x, z, tgt.cx - cur.cx, tgt.cz - cur.cz);
 }

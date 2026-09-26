@@ -64,7 +64,7 @@ for (let t = 0; t < N; t++) {
       corr: st?.corridor ? st.corridor.slice(0, 4).map((q) => `${q.x | 0},${q.z | 0}${q.climb ? '⛰' : ''}`).join('>') : '-',
       corrN: st?.corridor?.length ?? -1,
       pathFrom: st ? `${st.pathFromX | 0},${st.pathFromZ | 0}` : '-',
-      anch: st ? `${st.anchorX | 0},${st.anchorZ | 0}` : '-',
+      anch: '-',
       lead: sq.leaderUid,
       mem,
       led: sw.ledger.snapshot(),

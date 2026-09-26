@@ -21,7 +21,7 @@ import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
-import { CharacterCore, type TerrainProbe } from "./base/CharacterCore";
+import { CharacterCore, canShift, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 
@@ -197,12 +197,18 @@ export abstract class CharacterBase extends EntityBase {
         !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;
     }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
+    const _pX = p.x, _pZ = p.z;   // ★ H2：推挤前位置（层守卫基准）
     const _c1 = _ct ? performance.now() : 0;
     if (!climbing) this.separateFromOthers();   // 爬坡态跳过分离（防坡面扎堆互推卡死）
     const _c2 = _ct ? performance.now() : 0;
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     this.separateFromStatics();
+    // ★ H2 层守卫：推挤不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
+    if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain) {
+      const lim = this.probe.wetAt(_pX, _pZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+      if (!canShift(this.probe, _pX, _pZ, p.y, p.x, p.z, lim)) { p.x = _pX; p.z = _pZ; }
+    }
     // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去；★ 过掩体优化：翻完加冷却，防反复翻/来回翻
     if (this.climbCand && !this.controller.isAirborne() && !this.airborne
       && performance.now() >= this.climbCdUntil) {

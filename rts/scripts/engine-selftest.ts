@@ -22,7 +22,7 @@ import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
-import { CharacterCore } from '../src/entity/base/CharacterCore.ts';
+import { CharacterCore, canShift } from '../src/entity/base/CharacterCore.ts';
 import { edgeStepRoute, edgeStepGreedy, cellsOfRoute, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
@@ -369,6 +369,7 @@ console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 /
     slopeGradAt: () => (weld ? { gx: 1, gz: 0, mag: 1 } : null),
     isWeldEdge: () => weld,
     uphillNormal: () => (weld ? { ux: 1, uz: 0 } : null),   // ★ 上坡半径内的坡面法线
+    layerAt: (x: number) => (x >= 0.5 ? rise : 0),        // ★ H2：层高
   });
   const run = (probe: ReturnType<typeof mkProbe>, dirX = 1, dirZ = 0) => {
     const core = new CharacterCore();
@@ -392,24 +393,39 @@ console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 /
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------
 console.log('[5h] EdgeFollow 格边跟随（方案 A：轴对齐 + canStep；斜向分解；无路 null）');
 {
-  const mk = (blocked: Set<string> = new Set()) => ({
+  const mk = (blocked: Set<string> = new Set(), h = 0) => ({
     canStep: (x: number, z: number, dx: number, dz: number) => {
       const c = cellOf(x, z);
       return !blocked.has(`${c.cx},${c.cz}>${dx},${dz}`);
     },
+    heightAt: () => h,   // ★ H2：层高（默认同层）
   });
   const cells = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 2 }, { x: 6, z: 6 }]);
   ok(cells.length === 3 && cells[1].cx === 1 && cells[2].cz === 1, '路线 → 去重格序列');
-  const s1 = edgeStepRoute(mk(), 2, 2, cells);
+  const s1 = edgeStepRoute(mk(), 2, 2, 0, cells);
   ok(!!s1 && s1.dx === 1 && s1.dz === 0, '沿路线：轴对齐走一格（东）');
-  ok(edgeStepRoute(mk(new Set(['0,0>1,0'])), 2, 2, cells) === null, '首段被禁 → null（不硬穿）');
+  ok(edgeStepRoute(mk(new Set(['0,0>1,0'])), 2, 2, 0, cells) === null, '首段被禁 → null（不硬穿）');
   const diag = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 6 }]);
-  const s2 = edgeStepRoute(mk(), 2, 2, diag);
+  const s2 = edgeStepRoute(mk(), 2, 2, 0, diag);
   ok(!!s2 && ((s2.dx === 1 && s2.dz === 0) || (s2.dx === 0 && s2.dz === 1)), '斜向格 → 分解为轴对齐单步');
-  const s3 = edgeStepGreedy(mk(), 2, 2, 10, 6);
+  const s3 = edgeStepGreedy(mk(), 2, 2, 0, 10, 6);
   ok(!!s3 && s3.dx === 1 && s3.dz === 0, '贪心跟随：大分量轴优先');
-  ok(edgeStepGreedy(mk(), 2, 2, 3, 3) === null, '同格 → null（交软跟随）');
-  ok(edgeStepRoute(mk(), 6, 6, cells) === null, '已到路线末尾 → null');
+  ok(edgeStepGreedy(mk(), 2, 2, 0, 3, 3) === null, '同格 → null（交软跟随）');
+  ok(edgeStepRoute(mk(), 6, 6, 0, cells) === null, '已到路线末尾 → null');
+  // ★ H2：同 (x,z) 不同层（崖底 vs 崖顶）→ 不判"在路线/已到位"
+  ok(edgeStepRoute(mk(new Set(), 5), 2, 2, 0, cells) === null, 'H2：同格不同层 → 不判在路线（崖底≠崖顶）');
+}
+
+// ---------- H2：跨层位移闸门 ----------
+console.log('[5i] canShift 跨层位移闸门（H2：推挤/步进/贴地同规则）');
+{
+  const probeAt = (hAt: (x: number) => number) => ({
+    heightAt: (x: number) => hAt(x), wetAt: () => false,
+    slopeGradAt: () => null, isWeldEdge: () => false, layerAt: (x: number) => hAt(x),
+  });
+  ok(canShift(probeAt((x) => (x >= 2 ? 0.4 : 0)) as never, 0, 0, 0, 4, 0, 0.6) === true, '上升 0.4m ≤ 台阶 → 允许');
+  ok(canShift(probeAt((x) => (x >= 2 ? 2 : 0)) as never, 0, 0, 0, 4, 0, 0.6) === false, '上升 2m > 台阶 → 禁止（不借位移越层）');
+  ok(canShift(probeAt((x) => (x >= 2 ? -3 : 0)) as never, 0, 0, 0, 4, 0, 0.6) === true, '下降 → 允许');
 }
 
 // ---------- Spread / OrderValidator ----------

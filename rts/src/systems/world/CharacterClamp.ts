@@ -9,6 +9,7 @@
 // ============================================================
 
 import type { CharacterBase } from '../../entity/CharacterBase';
+import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { eventBus } from '../../core/EventBus';
 import { AIR_BOB_AMP, AIR_BOB_RATE } from '../swarm/AgentPool';
@@ -57,6 +58,8 @@ export class CharacterClamp {
     const raster = this.deps.raster;
     // ★ 第二层高度（浮空洞顶）：在山上走站洞顶、进洞后站洞底（surfaceHeightAtFor）
     let targetY = raster.surfaceHeightAtFor(p.x, p.z, p.y);
+    // ★ H2 层守卫：贴地不得把单位抬上台阶/崖（跳跃/攀爬除外）——防「借推力/越界被贴到上层」
+    if (!e.isClimbing && !e.controller.isAirborne() && targetY - p.y > EDGE_CLIFF_BAND) targetY = p.y;
     // ★ 平台顶（舰船甲板 / 掩体顶）：脚底已接近顶面（≥ 顶 - 1.6m）→ 以顶面为地面；
     //   否则保持地形（防止平台下/远处角色被抬穿实体）
     const deck = this.deps.platformTopAt?.(p.x, p.z) ?? null;

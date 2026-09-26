@@ -23,6 +23,7 @@ export function createRasterProbe(hintY: () => number): TerrainProbe {
   };
   return {
     heightAt: (x, z, y) => RasterMap.current?.surfaceHeightAtFor(x, z, y) ?? 0,
+    layerAt: (x, z, y) => RasterMap.current?.surfaceHeightAtFor(x, z, y) ?? 0,   // ★ H2：层高单源
     wetAt: (x, z) => RasterMap.current?.tileDefAt(x, z).genRole === 'liquid',
     slopeGradAt: (x, z) => {
       const raster = RasterMap.current;

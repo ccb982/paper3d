@@ -235,7 +235,7 @@ while (!stop) {
         order: st?.order ? `${st.order.kind}/${st.order.mission ?? '-'}@${st.order.target ? `${st.order.target.x | 0},${st.order.target.z | 0}` : '-'} ${st.order.source} 剩${(st.until - performance.now() / 1000).toFixed(0)}s` : '-',
         corr: st?.corridor?.length ?? -1,
         corrPts: st?.corridor ? st.corridor.slice(0, 6).map((q) => `${q.x | 0},${q.z | 0}`).join('>') : '-',
-        anch: st ? `${st.anchorX !== undefined ? st.anchorX | 0 : '-'},${st.anchorZ !== undefined ? st.anchorZ | 0 : '-'}` : '-',
+        anch: '-',
         pathFrom: st ? `${st.pathFromX | 0},${st.pathFromZ | 0}` : '-',
         lead: li >= 0 ? `(${p.x[li] | 0},${p.z[li] | 0}) 指${p.directiveTargetX[li] | 0},${p.directiveTargetZ[li] | 0} 速${p.curSpeed[li].toFixed(1)} atom${p.atomMove[li]}` : '-',
       });

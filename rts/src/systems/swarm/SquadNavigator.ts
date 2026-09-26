@@ -68,18 +68,18 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
-  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number): { dx: number; dz: number } | null {
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
     const path = state?.corridor ?? state?.order.path;
     if (!g || !path || path.length === 0) return null;
-    return edgeStepRoute(g, x, z, cellsOfRoute(path));
+    return edgeStepRoute(g, x, z, y, cellsOfRoute(path));
   }
 
   /** ★ 方案 A：贪心格边步（成员跟队长 / 无路线；同格 → null 交软跟随） */
-  edgeGreedy(x: number, z: number, tx: number, tz: number): { dx: number; dz: number } | null {
+  edgeGreedy(x: number, z: number, y: number, tx: number, tz: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
     if (!g) return null;
-    return edgeStepGreedy(g, x, z, tx, tz);
+    return edgeStepGreedy(g, x, z, y, tx, tz);
   }
 
   /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
@@ -111,7 +111,7 @@ export class SquadNavigator {
    *    距离选路 → 沿路点走 → 到达即止；失败冷却重试；**不发不可保证的路**（无直线兜底）。
    *  ★ 不打断保障（S3b）：重算仅 4 事件（目标变/停滞3s/表代次/到达）；其余保持路线不动。
    *  ★ 不做（已回滚）：逐格择向 / climb 强制下发 / 原子单源——执行侧不堆机制。 */
-  ensurePath(squads: SquadTable, squad: Squad, state: SquadOrderState, now: number): void {
+  ensurePath(squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0): void {
     if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
     const tgt = state.order.target;
     if (!tgt) return;
@@ -121,6 +121,26 @@ export class SquadNavigator {
     const lead = squad.members.get(squad.leaderUid);   // ★ 无质心（用户定 2026-09-24）：路从队长算
     if (!raster || !lead) return;
     this._from.x = lead.x; this._from.z = lead.z;
+    // ★ H2（用户定 2026-09-25）：起点按**层**取格——单位 y 与所在格高不符（崖底被算在崖顶格）时，
+    //   改从 5×5 邻域内"同层格"起步（否则 find 会判"同格/已在目标层"→ 路线失真、单位顶着崖壁）。
+    if (this.table) {
+      const h0 = this.table.heightAt(this._from.x, this._from.z);
+      if (Number.isFinite(h0) && h0 - leaderY > 0.6) {
+        const baseX = Math.floor(this._from.x / 4), baseZ = Math.floor(this._from.z / 4);
+        let best: { x: number; z: number } | null = null;
+        let bd = Infinity;
+        for (let dz2 = -2; dz2 <= 2; dz2++) {
+          for (let dx2 = -2; dx2 <= 2; dx2++) {
+            const cx = (baseX + dx2) * 4 + 2, cz = (baseZ + dz2) * 4 + 2;
+            const h = this.table.heightAt(cx, cz);
+            if (!Number.isFinite(h) || Math.abs(h - leaderY) > 0.6) continue;
+            const d2 = Math.hypot(cx - this._from.x, cz - this._from.z);
+            if (d2 < bd) { bd = d2; best = { x: cx, z: cz }; }
+          }
+        }
+        if (best) { this._from.x = best.x; this._from.z = best.z; }
+      }
+    }
     // ★ S3b 使用契约（《寻路重写方案.md》§4.4）：**重规划仅 4 事件**，其余保持路线不动
     //   ① 目标位移 > RETARGET_DIST  ② 净推进停滞 > STALL_S（距目标 3s 未缩短 ≥2m）
     //   ③ 表代次变化（掩体/地形）   ④ 到达（上层判定，无需路径）
@@ -273,38 +293,30 @@ export class SquadNavigator {
       const type = squad.type;
       const singleton = squad.singleton;
       for (const u of members) {
-        // ★ 远程：不追打——玩家逼近 → 边撤边打；否则优先占制高/掩体后（覆盖编队槽位）
+        // ★ 远程：**统一形式（用户定 2026-09-25）**——选位/风筝只**产出一个目标点**，
+        //   移动走同一条链（`edgeGreedy` 格边步 + 可行性）；不可达/未到位 → 站住打。禁止旁路直推。
         if (rangedPost && u.attackType === 'ranged') {
           const up = u.position;
           const dT = Math.hypot(tgt.x - up.x, tgt.z - up.z);
           const speed = u.moveSpeed > 0 ? u.moveSpeed : 2.5;
-          if (shouldKite(dT, NAV_RANGE)) {
-            // ★ 边撤边打 = 优先换到"更远 + 有掩体/高地"的位置；没有才沿径向后撤
-            const kp = rangedPost(up.x, up.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE);
-            const kx = kp.x - up.x, kz = kp.z - up.z;
-            const kl = Math.hypot(kx, kz) || 1;
-            u.controlSource = 'swarm';
-            u.applySteer({
-              dirX: kx / kl, dirZ: kz / kl, speed,
-              source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
-            });
-            continue;
+          const kp = shouldKite(dT, NAV_RANGE)
+            ? (rangedPost(up.x, up.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE))
+            : rangedPost(up.x, up.z, NAV_RANGE);
+          if (kp) {
+            const e = this.edgeGreedy(up.x, up.z, up.y, kp.x, kp.z);
+            if (e) {
+              const mt = u.moveTarget;
+              if (mt) { mt.x = kp.x; mt.y = 0; mt.z = kp.z; }
+              else u.moveTarget = { x: kp.x, y: 0, z: kp.z };
+              u.controlSource = 'swarm';
+              u.applySteer({
+                dirX: e.dx, dirZ: e.dz, speed,
+                source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
+              });
+              continue;
+            }
           }
-          const post = rangedPost(up.x, up.z, NAV_RANGE);
-          if (post) {
-            const dx = post.x - up.x, dz = post.z - up.z;
-            const dl = Math.hypot(dx, dz) || 1;
-            const mt = u.moveTarget;
-            if (mt) { mt.x = post.x; mt.y = 0; mt.z = post.z; }
-            else u.moveTarget = { x: post.x, y: 0, z: post.z };
-            u.controlSource = 'swarm';
-            u.applySteer({
-              dirX: dx / dl, dirZ: dz / dl, speed,
-              source: 'formation', targetX: post.x, targetY: 0, targetZ: post.z,
-            });
-            continue;
-          }
-          // ★ 已在理想射程位：站住打（不追、不随编队前压）
+          // ★ 已在理想射程位（或目标点不可达/同格同层）：站住打（不追、不随编队前压）
           {
             const mt = u.moveTarget;
             if (mt) { mt.x = up.x; mt.y = 0; mt.z = up.z; }
@@ -327,7 +339,7 @@ export class SquadNavigator {
         // ★ 方案 A：L3 同款格边步（队长沿走廊 / 成员贪心跟队长）
         let sdx = fx, sdz = fz;
         const upos0 = u.position;
-        const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z) : this.edgeGreedy(upos0.x, upos0.z, sx, sz);
+        const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
         if (e3) { sdx = e3.dx; sdz = e3.dz; }
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }

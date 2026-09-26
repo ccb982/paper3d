@@ -20,6 +20,17 @@ import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 /** 爬坡单次续期（实秒；与 TerrainAssist.CLIMB_PATH_MS 同源） */
 export const CLIMB_TIMEOUT_S = 1.5;
 
+/** ★ 跨层位移校验（H2 单源，用户定 2026-09-25）：从 (fx,fz,fy) 移到 (tx,tz) 是否允许——
+ *  目的地按**当前层**取地表高；上升 > stepLimit → 不允许（自身步进/推挤/贴地共用）。 */
+export function canShift(
+  probe: TerrainProbe, fx: number, fz: number, fy: number, tx: number, tz: number, stepLimit: number,
+): boolean {
+  const h0 = probe.layerAt(fx, fz, fy);
+  const h1 = probe.layerAt(tx, tz, fy);
+  if (!Number.isFinite(h0) || !Number.isFinite(h1)) return true;
+  return h1 - h0 <= stepLimit;
+}
+
 /** 地形探针（实体层注入；实现方：L3 走 RasterMap、L2 走表桥） */
 export interface TerrainProbe {
   /** 地表高（带自身高度选层） */
@@ -32,6 +43,8 @@ export interface TerrainProbe {
   isWeldEdge(x: number, z: number, dirX: number, dirZ: number): boolean;
   /** ★ 上坡半径内最近坡面的**正对方向**（单位向量；无坡 → null）——上坡必须正对坡面（用户定 2026-09-25） */
   uphillNormal?(x: number, z: number, r: number): { ux: number; uz: number } | null;
+  /** ★ 高精度层（H2 单源，用户定 2026-09-25）：该点在当前脚底高度附近的**地表层高**（y 感知选层） */
+  layerAt(x: number, z: number, y: number): number;
 }
 
 export interface StepInput {

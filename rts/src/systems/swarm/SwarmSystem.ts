@@ -135,6 +135,7 @@ export class SwarmSystem {
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
+  private readonly unitY = new Map<number, number>();   // ★ H2：L3 队长 y 缓存（steer 每拍刷新）
   /** 编队锚点量算复用对象（零分配） */
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
@@ -425,7 +426,9 @@ export class SwarmSystem {
       this.steerAccum = 0;
       // ★ S2：HPA 已退出长寻路主链（只用可行性表）——不再预热（方法留至 S4 删除）
       void raster;
-      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
+      const _units = hooks.activeUnits?.();
+      if (_units) for (const u of _units) if (u.carrier === 'entity' && u.activation === 'active') this.unitY.set(u.swarmUid, u.position.y);
+      this.nav.steerEntities(_units, this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
         (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
@@ -750,7 +753,7 @@ export class SwarmSystem {
         p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
       if (ld) {
         const st = squad ? this.squadStateOf?.(squad.id) ?? null : null;
-        const e = this.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
+        const e = this.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
         else { dx = ld.x; dz = ld.z; }
       } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
@@ -760,7 +763,7 @@ export class SwarmSystem {
       const fd = followDir(this.squadStateOf?.(squad!.id) ?? null, p.x[i], p.z[i], lead.x, lead.z,
         stopR, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
       if (fd) {
-        const e = this.nav.edgeGreedy(p.x[i], p.z[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
+        const e = this.nav.edgeGreedy(p.x[i], p.z[i], p.y[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
         else { dx = fd.x; dz = fd.z; }
       } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
@@ -811,9 +814,8 @@ export class SwarmSystem {
       }
     }
     // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
-    if (_sep.x !== 0 || _sep.z !== 0) {
-      p.x[i] += _sep.x; p.z[i] += _sep.z;
-    }
+    // ★ H2：分离推挤过位移闸门（不得借推力跨层/越悬崖）
+    if (_sep.x !== 0 || _sep.z !== 0) p.shiftAgent(i, _sep.x, _sep.z);
   }
 
   // ============================================================
@@ -1097,7 +1099,10 @@ export class SwarmSystem {
 
   /** ★ 队长核端口：寻路求解（执行态走廊写入；长短由 ensurePath 内部分流） */
   ensurePathFor(state: SquadOrderState, squad: Squad, now: number): void {
-    this.nav.ensurePath(this.squads, squad, state, now);
+    let y = this.unitY.get(squad.leaderUid) ?? 0;
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === squad.leaderUid) { y = p.y[i]; break; }
+    this.nav.ensurePath(this.squads, squad, state, now, y);
   }
 
   /** ★ 队长核端口：成员指令**唯一落地口**（池列写口 / L3 onDirective） */
