@@ -152,7 +152,8 @@ console.log('[进世界] 就绪');
 const setup = await page.evaluate(({ px, pz, lx, lz, nest, camFar }) => {
   window.__camFar = camFar;
   const w = window.__rts;
-  w.swarm.ledger.canSpawn = () => false;          // ★ 饿死引擎（手动放置走 force 不受限）
+  w.swarm.ledger.canSpawn = () => false;          // 饿死引擎
+  if (w.shadowBridge) w.shadowBridge.directMode = true;   // ★ 直控模式：只执行玩家指令（登山验收）          // ★ 饿死引擎（手动放置走 force 不受限）
   w.swarm.data.clampToRing = (x, z) => ({ x, z });   // ★ 关事态环夹取（隔离山地寻路）
   w.spawn.x = px; w.spawn.z = pz;
   if (window.__camFar) { w.cam.tx = px + 210; w.cam.tz = pz + 210; w.cam.dist = 60; w.cam.pitch = 1.05; }
@@ -166,13 +167,28 @@ const setup = await page.evaluate(({ px, pz, lx, lz, nest, camFar }) => {
   }
   const fresh = w.enemyMgr.list().filter((h) => !before.has(h.uid));
   w.__mt = { uids: fresh.map((h) => h.uid), t0: performance.now() / 1000 };
-  w.enemyMgr.select(fresh, false);
-  const squads = w.forceMoveSelectionTo(px, pz);
   const tiers = fresh.reduce((a, h) => { a[h.tier] = (a[h.tier] ?? 0) + 1; return a; }, {});
-  return { placed: fresh.length, nests, squads, tiers, uids: fresh.map((h) => h.uid), speed: w.speed };
+  return { placed: fresh.length, nests, tiers, uids: fresh.map((h) => h.uid), speed: w.speed };
 }, { px: best.px, pz: best.pz, lx: best.lx, lz: best.lz, nest: NEST, camFar: CAMFAR });
-console.log(`[布场] 低地(${best.lx},${best.lz}) 投放 ${setup.placed} 只（${setup.nests} 窝 · ${JSON.stringify(setup.tiers)}）· 发令队数 ${setup.squads} · 目标舰船(${best.px},${best.pz})`);
-if (setup.placed === 0 || setup.squads === 0) { console.log('布场失败'); await browser.close(); process.exit(1); }
+console.log(`[布场] 低地(${best.lx},${best.lz}) 投放 ${setup.placed} 只（${setup.nests} 窝 · ${JSON.stringify(setup.tiers)}）· 发令队数 ${setup.squads}(All ${setup.ordered}) · 目标舰船(${best.px},${best.pz})`);
+if (setup.placed === 0) { console.log('布场失败'); await browser.close(); process.exit(1); }
+// ★ 等注册（引擎关闭时，小队靠队长汇报进册）→ 再对**每个新队**逐队发 march（直控验收）
+await new Promise((r) => setTimeout(r, 3000));
+const issued = await page.evaluate(async ({ px, pz }) => {
+  const w = window.__rts;
+  const uids = new Set(w.__mt.uids);
+  const fresh = w.enemyMgr.list().filter((h) => uids.has(h.uid));
+  w.enemyMgr.select(fresh, false);
+  const sq = w.forceMoveSelectionTo(px, pz);
+  // ★ 连发 4 次（0.8s 间隔）：让**后注册**的小队也收到令（引擎关时注册有先后）
+  const counts = [];
+  for (let k = 0; k < 4; k++) {
+    counts.push(w.shadowBridge?.playerOrderAll?.('march', { x: px, z: pz }) ?? 0);
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return { selectSquads: sq, counts };
+}, { px: best.px, pz: best.pz });
+console.log(`[发令] forceMove 队=${issued.selectSquads} · All×4=${JSON.stringify(issued.counts)}`);
 
 const speedNow = await page.evaluate((speed) => {
   let s = 1;

@@ -80,14 +80,14 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
-  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number; climb: boolean } | null {
     const g = this.localGrid();
     if (!g) return null;
     const c = this.routeCursor(state, x, z, y);
     if (!c) return null;
     const st = axisStepToward(g, x, z, c.x - x, c.z - z);
     if (!st) return null;   // 步不出：调用方做"路线修正"（朝当前路点软走），**不得朝最终目标直线**
-    return { dx: st.dx, dz: st.dz, climb: c.climb === true || g.climbAt(x, z, st.dx, st.dz) } as { dx: number; dz: number };
+    return { dx: st.dx, dz: st.dz, climb: c.climb === true || g.climbAt(x, z, st.dx, st.dz) };
   }
 
   /** ★ 路线游标（用户定 2026-09-26）：沿走廊**单调锁存**推进的当前路点——
@@ -352,13 +352,20 @@ export class SquadNavigator {
         const sx = bx + fx * off.fx - fz * off.fz;
         const sz = bz + fz * off.fx + fx * off.fz;
         u.formSlot = rank;
-        const needClimb = (tgt as { climb?: boolean }).climb === true;   // ★ 寻路明确标注的爬坡位（用户定 2026-09-24）
+        // ★ 显式爬坡（用户定 2026-09-26）：climb 令 = 目标★ 或 **当前路段★**（队长，来自路线游标）
+        //   或 **本步跨可爬坡边**（成员，climbAt）——代理/队长同一条：路段★→climb 令→内核沿法线爬。
+        let needClimb = (tgt as { climb?: boolean }).climb === true;
         // ★ 方案 A：L3 同款格边步（队长沿走廊 / 成员贪心跟队长）
         let sdx = fx, sdz = fz;
         const upos0 = u.position;
         const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
-        if (e3) { sdx = e3.dx; sdz = e3.dz; }
-        else if (isLead) {
+        if (e3) {
+          sdx = e3.dx; sdz = e3.dz;
+          if (isLead) needClimb = needClimb || (e3 as { climb?: boolean }).climb === true;
+          else needClimb = needClimb || (this.table?.climbAt(upos0.x, upos0.z, e3.dx, e3.dz) ?? false);
+        } else if (isLead) {
+          const rc = this.routeCursor(state, upos0.x, upos0.z, upos0.y);
+          if (rc?.climb === true) needClimb = true;                      // 当前路点段需爬
           const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
           if (rd) { sdx = rd.x; sdz = rd.z; }
         }

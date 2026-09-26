@@ -39,6 +39,8 @@ export function createRasterProbe(hintY: () => number): TerrainProbe {
       return { gx, gz, mag: Math.hypot(gx, gz) };
     },
     isWeldEdge: (x, z, dx, dz) => weldAt(x, z, dx, dz),
+    /** ★ 顶层地表（脱埋用；直读顶层，不做 y 感知选层） */
+    topAt: (x, z) => RasterMap.current?.surfaceHeightAt(x, z) ?? NaN,
     /** ★ 上坡半径内最近坡面的正对方向（16 向采样；须为 weld 坡面且有正上升） */
     uphillNormal: (x, z, r, dirX = 0, dirZ = 0) => {
       // ★ 坡面方位（用户定 2026-09-26）：优先读**表标注**（weld+climb 位 = 坡的轴向与边中点；

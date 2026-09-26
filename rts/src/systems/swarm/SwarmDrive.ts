@@ -43,6 +43,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
   let dx = p.dirX[i], dz = p.dirZ[i];
   let edgeMode = false;   // ★ 方案 A：格边步模式（轴对齐 + canStep；跳过软转向/坡混合）
+  let climbIntent = false;   // ★ 显式爬坡令（路段★/本步跨坡边；代理/队长同一条）
   // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
   //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
   const squad = host.squads.squadOf(p.swarmUid[i]);
@@ -55,7 +56,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     if (ld) {
       const st = squad ? host.squadStateOf(squad.id) : null;
       const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
-      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
+      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; climbIntent = e.climb === true; }
       else {
         // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
         const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
@@ -69,8 +70,10 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       stopR, (a, b, c2, d2) => host.walkableLine(a, b, c2, d2));
     if (fd) {
       const e = host.nav.edgeGreedy(p.x[i], p.z[i], p.y[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
-      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
-      else { dx = fd.x; dz = fd.z; }
+      if (e) {
+        dx = e.dx; dz = e.dz; edgeMode = true;
+        climbIntent = host.data.passTable.climbAt(p.x[i], p.z[i], e.dx, e.dz);   // 成员：本步跨可爬坡边
+      } else { dx = fd.x; dz = fd.z; }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
   // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
@@ -78,7 +81,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   if (dx !== 0 || dz !== 0 || inside) {
     if (edgeMode) {
       // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
-      const step = p.stepAgent(i, dx, dz, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
+      const step = p.stepAgent(i, dx, dz, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000, climbIntent);
       p.x[i] += step.dx; p.z[i] += step.dz;
       if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
     } else {
@@ -102,7 +105,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       if (!res.hold) {
         p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
         // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
-        const step = p.stepAgent(i, res.x, res.z, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
+        const step = p.stepAgent(i, res.x, res.z, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000, climbIntent);
         p.x[i] += step.dx; p.z[i] += step.dz;
         if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
       }

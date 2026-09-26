@@ -63,6 +63,8 @@ const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
 const UX = q.get('x');
 const UZ = q.get('z');
+/** ★ 直控模式（?direct=1）：关引擎发令，只走玩家指令 */
+const DIRECT = q.get('direct') === '1';
 /** ★ 固定世界（±4 chunk ×60m = 480m 见方；地形一次性加载） */
 const WORLD_R = 4 * 60 - 20;
 const R = globalThis as unknown as Record<string, unknown>;
@@ -321,6 +323,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         squadCores?.accept(squadId, order, now);   // ★ P4：队长核接令（导航+调遣）
       },
     });
+    shadowBridge.directMode = DIRECT;   // ★ ?direct=1：关蜂群引擎（只执行玩家指令）
     // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
     const leaderPosOf = (id: number): { x: number; z: number } | null => {
       const sq = swarm.squads.get(id);

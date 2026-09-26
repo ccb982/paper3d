@@ -18,28 +18,11 @@
 // 时间一律用**实秒**（now 从参数传入，不内部取钟）。
 // ============================================================
 
-import { CLIMB_SLOPE_MIN, CLIMB_SPEED_MUL, CLIMB_FACE_R, SHORE_CLIMB_MAX } from '../TerrainAssist';
+import { SHORE_CLIMB_MAX } from '../TerrainAssist';
+import { climbIntent, climbStrict, groundResolve, type ClimbInput } from './Climb';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
-import { RasterMap } from '../../services/map/RasterMap';
 
 export const CLIMB_TIMEOUT_S = 1.5;
-
-/** ★ 脱埋深度（米；用户定 2026-09-26）：脚底比**顶层地表**低 ≥ 此值 = 被楔在坡体/结构内部 */
-export const UNBURY_DEPTH = 1.2;
-
-/** ★ 脱埋贴地（两载体同口径）：y 感知选层；若停在"顶层地表之下 ≥UNBURY_DEPTH"的空腔
- *  （坡背空腔/结构体内部——y 提示选层会停在底层）→ 抬到顶层，走出体内。
- *  注：当前战场无"可站顶板（隧道）"空间；若未来出现，按层语义另开口径。 */
-export function unbuyGroundY(x: number, z: number, y: number): number {
-  const r = RasterMap.current;
-  if (!r) return y;
-  const gy = r.surfaceHeightAtFor(x, z, y);
-  const top = r.surfaceHeightAt(x, z);
-  return Number.isFinite(top) && top - gy > UNBURY_DEPTH ? top : gy;
-}
-
-/** 上坡意图阈值（方向·法线 dot；> 此值 = 想上坡） */
-const CLIMB_INTENT_DOT = 0.1;
 
 /** ★ 跨层位移校验（H2 单源，用户定 2026-09-25）：从 (fx,fz,fy) 移到 (tx,tz) 是否允许——
  *  目的地按**当前层**取地表高；上升 > stepLimit → 不允许（自身步进/推挤/贴地共用）。 */
@@ -67,6 +50,8 @@ export interface TerrainProbe {
     { ux: number; uz: number; mx?: number; mz?: number; rise?: number } | null;
   /** ★ 高精度层（H2 单源，用户定 2026-09-25）：该点在当前脚底高度附近的**地表层高**（y 感知选层） */
   layerAt(x: number, z: number, y: number): number;
+  /** ★ 顶层地表（脱埋用；无 → 不做脱埋） */
+  topAt?(x: number, z: number): number;
 }
 
 export interface StepInput {
@@ -103,11 +88,13 @@ export interface StepResult {
   blocked: boolean;
   /** 大落差回退（贴地失败） */
   reverted: boolean;
+  /** ★ 本拍发生脱埋吸附（y 已抬到顶层；调用方应直接采用 gy 并跳过回退） */
+  unburied: boolean;
 }
 
 export class CharacterCore {
   /** 结果复用（零分配） */
-  private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false };
+  private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false };
 
   /** 是否处于爬坡态（表现层/减速用） */
   get climbing(): boolean {
@@ -120,6 +107,7 @@ export class CharacterCore {
     out.blocked = false;
     out.reverted = false;
     out.climbing = false;
+    out.unburied = false;
     let dx = 0;
     let dz = 0;
     if (inp.suspended) {
@@ -131,29 +119,14 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 上坡（就地模型，2026-09-26；两载体同内核） ----
-    //   坡面 = 本格自己的表标注坡面边（`uphillNormal`；**坡很宽，处处可爬，不绕边中点**）：
-    //     ① 想上坡（显式爬坡令 ‖ 方向朝坡）→ 就地沿法线定速爬升（爬坡态跳过墙检，坡度由表保证）；
-    //     ② 不想上坡但人在坡面上 → 下坡小推（坡面不许驻留）。
-    if (inp.blockCliffClimb && !inp.climbAnyTerrain) {
-      const dl0 = Math.hypot(inp.dirX, inp.dirZ) || 1;
-      const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
-      if (face) {
-        const dot = (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0;
-        const wantsUp = inp.climbOrdered || dot > CLIMB_INTENT_DOT;
-        if (wantsUp) {
-          out.climbing = true;
-          dx = face.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-          dz = face.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-        } else {
-          const sg = probe.slopeGradAt ? probe.slopeGradAt(inp.x, inp.z) : null;
-          if (sg && sg.mag >= CLIMB_SLOPE_MIN) {
-            dx = -face.ux * inp.speed * inp.dt * 0.6;
-            dz = -face.uz * inp.speed * inp.dt * 0.6;
-          }
-        }
-      }
-    }
+    // ---- 显式爬坡（专用件 entity/base/Climb；规则只此一处） ----
+    const clInp: ClimbInput = {
+      x: inp.x, z: inp.z, y: inp.y, dt: inp.dt, dirX: inp.dirX, dirZ: inp.dirZ, speed: inp.speed,
+      climbOrdered: inp.climbOrdered, blockCliffClimb: inp.blockCliffClimb, climbAnyTerrain: inp.climbAnyTerrain,
+    };
+    const clOut = { dx, dz, climbing: false };
+    climbIntent(probe, clInp, clOut);
+    dx = clOut.dx; dz = clOut.dz; out.climbing = clOut.climbing;
 
     // ---- 立面阻挡（逐分量清零；坡面/水中豁免） ----
     const wetHere = probe.wetAt(inp.x, inp.z);
@@ -174,27 +147,29 @@ export class CharacterCore {
       else if (dz < 0 && isWall(inp.x, inp.z - inp.hz - m, 0, -1)) { dz = 0; out.blocked = true; }
     }
 
-    // ---- 严格爬坡（基类共用，用户定 2026-09-26）：被墙挡住且朝路上有本格坡面边 → 就地爬 ----
-    //   （坡很宽、处处可爬；**不许**绕边中点，也不许贴着坡脚/侧壁蹭。）
-    if (out.blocked && !out.climbing && inp.blockCliffClimb && !inp.climbAnyTerrain) {
-      const f2 = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
-      if (f2) {
-        out.climbing = true;
-        dx = f2.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-        dz = f2.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-      }
+    // ---- 严格爬坡（Climb.climbStrict：被墙挡住且朝路上有本格坡面边 → 就地爬） ----
+    clOut.dx = dx; clOut.dz = dz; clOut.climbing = out.climbing;
+    if (climbStrict(probe, clInp, clOut, out.blocked)) {
+      dx = clOut.dx; dz = clOut.dz; out.climbing = clOut.climbing;
     }
 
-    // ---- 贴地：大落差回退（0.6 以下小台阶由上层限速踏过） ----
-    const gy = probe.heightAt(inp.x + dx, inp.z + dz, inp.y);
-    if (!out.climbing && !inp.climbAnyTerrain && gy - inp.y > stepLimit) {
+    // ---- 贴地/脱埋（Climb.groundResolve：埋在顶层下 ≥1.2m → 吸附顶层，不当墙回退） ----
+    // 坡道格（目的地有本格坡面边）不触发脱埋吸附（防坡道上误吸顶）
+    const onRamp = !!probe.uphillNormal?.(inp.x + dx, inp.z + dz, 5, inp.dirX, inp.dirZ);
+    const gr = groundResolve(probe, inp.x + dx, inp.z + dz, inp.y, onRamp);
+    if (gr.unburied) {
+      out.unburied = true;
+      out.blocked = false;
+      dx = 0;
+      dz = 0;   // 本拍只做竖直吸附（防水平穿模）；下一拍正常走
+    } else if (!out.climbing && !inp.climbAnyTerrain && gr.y - inp.y > stepLimit) {
       dx = 0;
       dz = 0;
       out.reverted = true;
     }
     out.dx = dx;
     out.dz = dz;
-    out.gy = gy;
+    out.gy = gr.y;
     return out;
   }
 }

@@ -162,19 +162,20 @@ export class AgentPool {
 
   /** ★ 重写 P1：推进一只代理（两载体同内核；与 L3 `CharacterBase` 同口径）。
    *  方向决策/分离/寻路在外，本方法只做推进/爬坡/立面/贴地。 */
-  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number): StepResult {
+  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number, climbOrdered = false): StepResult {
     this.coreHintY = this.y[i];
     const air = this.isAir[i] === 1;
     const hs = Math.max(0.2, this.scale[i] * 0.5);
     const r = this.core[i].step({
       x: this.x[i], y: this.y[i], z: this.z[i], dt,
       dirX, dirZ, speed,
-      climbOrdered: false,   // ★ L2 无需显式标注：上坡由基类几何规则（半径+正对坡面）自动处理
+      climbOrdered,          // ★ 显式爬坡令（路段★/本步跨坡边）；false 时仍由基类几何规则兜底
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       hx: hs, hz: hs,
       suspended: false,
     }, this.coreProbe, nowS);
+    if (r.unburied) this.y[i] = r.gy;   // ★ 脱埋吸附（逻辑 y 抬到顶层；L3 同口径）
     return r;
   }
 

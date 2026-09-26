@@ -104,6 +104,9 @@ export class EngineBridge {
   readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, last: '' };
   /** 影子模式：只算不发（默认 false = 真下发；旧链已删，影子仅调试用） */
   shadow = false;
+  /** ★ 直控模式（用户定 2026-09-26）：**关蜂群引擎 decide/write**——只执行玩家指令、
+   *  无否定权（不校验/不夹环/不重决策；玩家令本就旁路）。登高等纯寻路验收专用。 */
+  directMode = false;
 
   private readonly core: EngineCore;
 
@@ -266,6 +269,7 @@ export class EngineBridge {
   }
 
   private decide(now: number): void {
+    if (this.directMode) return;   // ★ 直控模式：不决策
     const ctx = { pos: this.pos, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax, now };
     this.melee.sync();
     this.ranged.sync();
@@ -281,6 +285,7 @@ export class EngineBridge {
    *  只在 ①事态变更且不在范围（长寻路）②危机回撤 ③扎堆拉开 三类时刻介入；
    *  同签名重发被 kept 去重；非必要不打断（重规划仅 4 事件，S3b）。 */
   private write(now: number): void {
+    if (this.directMode) return;   // ★ 直控模式：不发令/不校验/不释放 TTL
     const p = this.pos.player();
     if (!p) return;
     const hitId = this.live.playerAttacking?.() ?? 0;

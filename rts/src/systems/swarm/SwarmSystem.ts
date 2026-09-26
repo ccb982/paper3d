@@ -22,7 +22,7 @@ import {
   type AgentSnapshot,
 } from './AgentPool';
 import { CrowdGrid } from './CrowdGrid';
-import { unbuyGroundY } from '../../entity/base/CharacterCore';
+import { groundResolveRaster } from '../../entity/base/Climb';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type Squad, type SquadRating } from './SquadTable';
@@ -464,7 +464,7 @@ export class SwarmSystem {
     // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
     this.batch.sync(
       this.pool,
-      (x, z, y) => unbuyGroundY(x, z, y),   // ★ 脱埋贴地（与 L3 同口径）
+      (x, z, y) => groundResolveRaster(x, z, y).y,   // ★ 贴地/脱埋（Climb 专用件；与 L3 同口径）
       camera, focusX, focusZ,
       undefined, // maxDist：走默认（LOD_MAX_DIST）
       performance.now() / 1000,
