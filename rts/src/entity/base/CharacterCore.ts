@@ -95,6 +95,8 @@ export interface StepResult {
 export class CharacterCore {
   /** 结果复用（零分配） */
   private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false };
+  /** ★ 爬坡锁存（Climb 专用件用；防坡顶唇口/跨帧打断） */
+  private readonly climbLatch = { until: 0, dx: 0, dz: 0 };
 
   /** 是否处于爬坡态（表现层/减速用） */
   get climbing(): boolean {
@@ -125,7 +127,7 @@ export class CharacterCore {
       climbOrdered: inp.climbOrdered, blockCliffClimb: inp.blockCliffClimb, climbAnyTerrain: inp.climbAnyTerrain,
     };
     const clOut = { dx, dz, climbing: false };
-    climbIntent(probe, clInp, clOut);
+    climbIntent(probe, clInp, clOut, this.climbLatch, nowS);
     dx = clOut.dx; dz = clOut.dz; out.climbing = clOut.climbing;
 
     // ---- 立面阻挡（逐分量清零；坡面/水中豁免） ----
@@ -149,7 +151,7 @@ export class CharacterCore {
 
     // ---- 严格爬坡（Climb.climbStrict：被墙挡住且朝路上有本格坡面边 → 就地爬） ----
     clOut.dx = dx; clOut.dz = dz; clOut.climbing = out.climbing;
-    if (climbStrict(probe, clInp, clOut, out.blocked)) {
+    if (climbStrict(probe, clInp, clOut, out.blocked, this.climbLatch, nowS)) {
       dx = clOut.dx; dz = clOut.dz; out.climbing = clOut.climbing;
     }
 

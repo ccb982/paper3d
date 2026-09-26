@@ -7,6 +7,8 @@
 //     · 只做切向位移（不推法线）：绝不进坡体、不撞坡的**侧壁**（治"卡在坡面侧壁"）；
 //     · 到位判定 = 切向偏置 |t| ≤ CLIMB_ALIGN_TOL。
 //   【第二步·爬升】已到位（或已正对）→ 沿表标注**法线**定速爬（爬坡态跳过墙检，坡度由表保证）。
+//   ★ **爬坡锁存**：开始爬就锁存方向/时限——坡顶唇口本格坡面标注消失时，只要显式爬坡令还在，
+//      就沿锁存方向继续爬（防“最后一米”被逐帧决策打断）。
 // 另有：
 //   · 坡面不许驻留：不想上坡但人在坡面上（局部坡度 ≥ CLIMB_SLOPE_MIN）→ 下坡小推；
 //   · 被墙挡住且**已到位**、朝路上有本格坡面边 → 就地爬（严格；防侧壁蹭）；
@@ -24,6 +26,17 @@ const CLIMB_INTENT_DOT = 0.1;
 export const CLIMB_ALIGN_TOL = 1.2;
 /** 坡面下方中心的低侧退距（米；= 半格 → 低侧格心） */
 const BASE_CENTER_BACK = 2;
+/** ★ 爬坡锁存时长（秒）：坡顶唇口/跨帧决策中断时沿锁存方向继续爬 */
+export const CLIMB_LATCH_S = 1.5;
+
+/** ★ 爬坡锁存（由 CharacterCore 持有；本件无状态） */
+export interface ClimbLatch {
+  /** 锁存截止（实秒） */
+  until: number;
+  /** 锁存爬向（单位向量；法线） */
+  dx: number;
+  dz: number;
+}
 
 /** ★ 脱埋深度（米）：脚底比顶层地表低 ≥ 此值 = 被楔在坡体/结构内部 */
 export const UNBURY_DEPTH = 1.2;
@@ -51,11 +64,19 @@ export interface ClimbOut {
 }
 
 /** ①② 两步爬坡意图（墙检**之前**调用；可能直接改写 dx/dz 并置 climbing/approaching） */
-export function climbIntent(probe: TerrainProbe, inp: ClimbInput, out: ClimbOut): void {
+export function climbIntent(probe: TerrainProbe, inp: ClimbInput, out: ClimbOut, latch: ClimbLatch, nowS: number): void {
   if (!inp.blockCliffClimb || inp.climbAnyTerrain) return;
   const dl0 = Math.hypot(inp.dirX, inp.dirZ) || 1;
   const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
-  if (!face) return;
+  if (!face) {
+    // ★ 坡顶唇口/跨帧：本格坡面标注消失，但显式爬坡令还在且锁存未过期 → 沿锁存方向继续爬
+    if (inp.climbOrdered && latch.until > nowS) {
+      out.climbing = true;
+      out.dx = latch.dx * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+      out.dz = latch.dz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+    }
+    return;
+  }
   const dot = (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0;
   const wantsUp = inp.climbOrdered || dot > CLIMB_INTENT_DOT;
   if (!wantsUp) {
@@ -67,6 +88,10 @@ export function climbIntent(probe: TerrainProbe, inp: ClimbInput, out: ClimbOut)
     }
     return;
   }
+  // 锁存（开始爬：方向/时限）
+  latch.until = nowS + CLIMB_LATCH_S;
+  latch.dx = face.ux;
+  latch.dz = face.uz;
   // 【第一步】到位：坡面正下方中心 = 边中点沿法线退回低侧半格
   const bcx = (face.mx ?? inp.x) - face.ux * BASE_CENTER_BACK;
   const bcz = (face.mz ?? inp.z) - face.uz * BASE_CENTER_BACK;
@@ -89,14 +114,28 @@ export function climbIntent(probe: TerrainProbe, inp: ClimbInput, out: ClimbOut)
 
 /** 【第二步·严格】被墙挡住且**已到位**、朝路上有本格坡面边 → 就地爬。
  *  （第一步·到位过程中**不接管**——否则会在侧壁就地爬，正是要治的病。） */
-export function climbStrict(probe: TerrainProbe, inp: ClimbInput, out: ClimbOut, blocked: boolean): boolean {
+export function climbStrict(
+  probe: TerrainProbe, inp: ClimbInput, out: ClimbOut, blocked: boolean, latch: ClimbLatch, nowS: number,
+): boolean {
   if (!blocked || out.climbing || out.approaching || !inp.blockCliffClimb || inp.climbAnyTerrain) return false;
   const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
-  if (!face) return false;
-  out.climbing = true;
-  out.dx = face.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-  out.dz = face.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-  return true;
+  if (face) {
+    latch.until = nowS + CLIMB_LATCH_S;
+    latch.dx = face.ux;
+    latch.dz = face.uz;
+    out.climbing = true;
+    out.dx = face.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+    out.dz = face.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+    return true;
+  }
+  // 坡顶唇口：本格坡面消失但显式爬坡令 + 锁存 → 沿锁存继续爬
+  if (inp.climbOrdered && latch.until > nowS) {
+    out.climbing = true;
+    out.dx = latch.dx * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+    out.dz = latch.dz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+    return true;
+  }
+  return false;
 }
 
 /** ④ 脱埋贴地（y 吸附；probe 口径）：正常 = y 感知层高；埋在顶层下 ≥UNBURY_DEPTH
