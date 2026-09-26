@@ -203,7 +203,7 @@ export class PassTable {
   /** ★★ 上坡位置预处理（用户定 2026-09-26）：**按连续坡的宽度**取上坡点——
    *  对每条**可爬坡边**，沿其**切向**找连续段（同朝向的整条坡 = 一段，宽度=段内格数），
    *  取**段中心**，在**坡面前 CLIMB_MARGIN 米**（低侧法线）标上坡点；不同朝向各自成段。
-   *  寻路上高台只能经这些上坡点（`climbRunAt` / `nearestClimbPoint`）。 */
+   *  寻路上高台只能经这些上坡点（`climbRunAt`）。 */
   private buildClimbRuns(): void {
     const n = this.side * this.side;
     this.climbRun = new Int16Array(n * 4).fill(-1);
@@ -264,20 +264,6 @@ export class PassTable {
     if (k < 0 && dz > 0) k = pick(DIR_S);
     if (k < 0 && dz < 0) k = pick(DIR_N);
     return k < 0 ? null : (this.climbRuns[k] ?? null);
-  }
-
-  /** ★ 最近上坡点（宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
-  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null {
-    if (!this.ready) return null;
-    let best: { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null = null;
-    let bestScore = -Infinity;
-    for (const r of this.climbRuns) {
-      const d = Math.hypot(r.x - x, r.z - z);
-      if (d > maxR) continue;
-      const score = Math.min(r.width, 4) * 1.5 - d * 0.05;
-      if (score > bestScore) { bestScore = score; best = r; }
-    }
-    return best;
   }
 
   /** 窗口界（格坐标；可行性寻路 BFS 用） */

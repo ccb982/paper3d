@@ -82,18 +82,12 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
-  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
     if (!g) return null;
     const c = this.routeCursor(state, x, z, y);
     if (!c) return null;
-    const st = axisStepToward(g, x, z, c.x - x, c.z - z);
-    if (!st) return null;   // 步不出：调用方做"路线修正"（朝当前路点软走），**不得朝最终目标直线**
-    const stepClimb = g.climbAt(x, z, st.dx, st.dz);
-    // ★ 凭证点：路点自带优先；本步跨坡边 → 查该坡点（方向即步向，过滤必中）
-    const run = (c.climb === true || stepClimb) && this.table ? this.table.climbRunAt(x, z, st.dx, st.dz) : null;
-    const climbPt = c.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined);
-    return { dx: st.dx, dz: st.dz, climb: c.climb === true || stepClimb, climbPt };
+    return axisStepToward(g, x, z, c.x - x, c.z - z);   // 步不出 → 调用方路线修正
   }
 
   /** ★ 路线游标（用户定 2026-09-26）：沿走廊**单调锁存**推进的当前路点——
@@ -142,8 +136,8 @@ export class SquadNavigator {
   memberStep(
     uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
     state?: SquadOrderState | null,
-  ): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number }; done: boolean } | null {
-    if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, climb: false, done: true };
+  ): { dx: number; dz: number; done: boolean } | null {
+    if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, done: true };
     let memo = this.memberRoutes.get(uid);
     const stale = !memo || now - memo.at >= MEMBER_ROUTE_S || Math.hypot(lx - memo.gx, lz - memo.gz) > MEMBER_ROUTE_MOVE;
     if (stale) {
@@ -158,9 +152,7 @@ export class SquadNavigator {
     if (!rp) return null;
     const e = this.edgeGreedy(x, z, y, rp.x, rp.z);
     if (!e) return null;   // 步不出 → 上层停（等下一拍/重算）
-    const run = (rp.climb === true) && this.table ? this.table.climbRunAt(x, z, e.dx, e.dz) : null;
-    const climbPt = rp.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined);
-    return { dx: e.dx, dz: e.dz, climb: rp.climb === true, climbPt, done: false };
+    return { dx: e.dx, dz: e.dz, done: false };
   }
 
   /** ★ 从路线取凭证（第一条爬坡路点的凭证点；无 → 回收） */
