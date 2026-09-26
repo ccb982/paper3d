@@ -126,6 +126,10 @@ export const CLIMB_STATS = {
   cred: 0,        // 凭证抵达核心（climbOrdered 帧）
   noRun: 0,       // 有凭证但查不到坡带
   run: 0,         // 查到坡带
+  near: 0,        // 在点 6m 内（聚集区）
+  nearDeep: 0,    // 聚集区：卡在坡面/贴面未对齐（退出分支）
+  nearAlign: 0,   // 聚集区：横移对齐中
+  nearGo: 0,      // 聚集区：正向进点中
   guardFail: 0,   // 硬性防线不过（本格无 climb 位）
   climbSteps: 0,  // 执行上升帧
   units: 0,       // 曾进入爬升态的核数
@@ -222,12 +226,18 @@ export class CharacterCore {
           //   ③ 正向进点（对齐后沿 +n 进点）→ 到点（硬边防线）起步。
           CLIMB_STATS.run++;
           const dPt = Math.hypot(inp.x - run.x, inp.z - run.z);
+          if (dPt <= 6) {
+            CLIMB_STATS.near++;
+            if (Math.abs(tOff) > 0.35) CLIMB_STATS.nearAlign++;
+            else if (dPt > CLIMB_START_R) CLIMB_STATS.nearGo++;
+          }
           if (!atLand) {
             const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
             const deep = sOff > 0.3;
             const hugMis = Math.abs(tOff) > 1.0 && sOff > -1.0;
             if (deep || hugMis) {                       // ① 退出
               out.climbing = true; CLIMB_STATS.approach++;
+              CLIMB_STATS.nearDeep++;
               dx = -run.ux * sp * inp.dt; dz = -run.uz * sp * inp.dt;
             } else if (Math.abs(tOff) > 0.35) {         // ② 横移对齐
               const s = tOff > 0 ? -1 : 1;

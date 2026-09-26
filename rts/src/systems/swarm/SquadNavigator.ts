@@ -45,7 +45,7 @@ const MEMBER_ROUTE_MOVE = 8;
 const MEMBER_ARRIVE_R = 1.5;
 
 /** ★ 上坡凭证计数（路线侧） */
-export const CLIMB_ROUTE_STATS = { issued: 0, cleared: 0 };
+export const CLIMB_ROUTE_STATS = { issued: 0, cleared: 0, kept: 0 };
 
 export class SquadNavigator {
   /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
@@ -139,7 +139,7 @@ export class SquadNavigator {
   memberStep(
     uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
     state?: SquadOrderState | null,
-  ): { dx: number; dz: number; done: boolean } | null {
+  ): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, done: true };
     let memo = this.memberRoutes.get(uid);
     const stale = !memo || now - memo.at >= MEMBER_ROUTE_S || Math.hypot(lx - memo.gx, lz - memo.gz) > MEMBER_ROUTE_MOVE;
@@ -155,6 +155,15 @@ export class SquadNavigator {
     if (!rp) return null;
     const e = this.edgeGreedy(x, z, y, rp.x, rp.z);
     if (!e) return null;   // 步不出 → 上层停（等下一拍/重算）
+    // ★ 成员自己路线的凭证（用户定 2026-09-26）：**代理寻路追队长时也可得到凭证**——
+    //   路径含跨坡点 ∧ 在低侧(sOff≤-0.5) ∧ 距≤10m（仅近点生效，防远处直线强拉）；
+    //   与小队凭证并存（两条来源，取先到者）。
+    const c = this.credOf(memo && memo.path.length ? memo.path : undefined);
+    if (c) {
+      const sOff = (x - c.x) * c.ux + (z - c.z) * c.uz;
+      const d = Math.hypot(x - c.x, z - c.z);
+      if (sOff <= -0.5 && d <= 10) return { dx: e.dx, dz: e.dz, done: false, climb: true, climbPt: c };
+    }
     return { dx: e.dx, dz: e.dz, done: false };
   }
 
@@ -200,10 +209,30 @@ export class SquadNavigator {
    *    距离选路 → 沿路点走 → 到达即止；失败冷却重试；**不发不可保证的路**（无直线兜底）。
    *  ★ 不打断保障（S3b）：重算仅 4 事件（目标变/停滞3s/表代次/到达）；其余保持路线不动。
    *  ★ 不做（已回滚）：逐格择向 / climb 强制下发 / 原子单源——执行侧不堆机制。 */
+  /** ★ 凭证生命周期（用户定 2026-09-26）：**全小队持有**；新路有坡点 → 换票；
+   *  无坡点 → 保留（队长过坡/成员在后换路时不得丢票）；只有"到达目标、接上下一条寻路"才回收。 */
+  private applyCred(state: SquadOrderState, path: { x: number; z: number; climb?: boolean }[] | undefined, arrived: boolean): void {
+    const c = this.credOf(path);
+    if (c) {
+      state.climbCred = c;
+      CLIMB_ROUTE_STATS.issued++;
+      return;
+    }
+    if (arrived) {
+      if (state.climbCred) CLIMB_ROUTE_STATS.cleared++;
+      state.climbCred = undefined;
+      return;
+    }
+    if (state.climbCred) CLIMB_ROUTE_STATS.kept++;
+  }
+
   ensurePath(squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0): void {
     if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
     const tgt = state.order.target;
     if (!tgt) return;
+    // ★ 到达判定（用于凭证回收）：上一次路线的目标点已被走到
+    const arrivedNow = state.pathGoalX !== undefined && state.pathGoalZ !== undefined
+      && Math.hypot(this._from.x - state.pathGoalX, this._from.z - state.pathGoalZ) <= 2.0;
     const cur = state.corridor ?? state.order.path;
     const hasPath = !!cur && cur.length > 0;
     const raster = RasterMap.current;
@@ -266,8 +295,7 @@ export class SquadNavigator {
           state.corridor = (this.table && this.table.ready)
             ? viaClimbPoints(this.table, this._from.x, this._from.z, seg)
             : seg;
-          state.climbCred = this.credOf(state.corridor);   // ★ 发路线→发凭证（下一个寻路才回收）
-          if (state.climbCred) CLIMB_ROUTE_STATS.issued++;
+          this.applyCred(state, state.corridor, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
           state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
@@ -291,8 +319,7 @@ export class SquadNavigator {
       this.dbg.feasOk++;
       // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
-      state.climbCred = this.credOf(feasOut);   // ★ 发路线→发凭证（下一个寻路才回收）
-      if (state.climbCred) CLIMB_ROUTE_STATS.issued++;
+      this.applyCred(state, feasOut, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
       state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
@@ -409,10 +436,12 @@ export class SquadNavigator {
         let needClimb = state?.climbCred !== undefined;
         let needClimbPt = state?.climbCred;
         if (!isLead) {
-          // ★ 成员路线缓存（定时对队长长寻路）——目标点从这里来；凭证同上（小队寻路持有）
+          // ★ 成员路线缓存（定时对队长长寻路）——目标点从这里来；
+          //   凭证：成员自己路线带来的 **与小队凭证并存**（两条来源）。
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
           else { sx = upos0.x; sz = upos0.z; }
+          if (ms?.climb && ms.climbPt) { needClimb = true; needClimbPt = ms.climbPt; }
         }
         u.formSlot = rank;
         // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住

@@ -28,7 +28,7 @@ export interface DriveHost {
   readonly data: SwarmData;
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
-  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; done: boolean } | null;
+  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null;
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
@@ -72,6 +72,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     if (stM?.climbCred) { cred = true; credPt = stM.climbCred; }   // ★ 成员同源：凭证挂在小队寻路上
     const lead = squad.members.get(squad.leaderUid);
     const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
+    if (ms?.climb && ms.climbPt) { cred = true; credPt = ms.climbPt; }   // ★ 成员自己路线的凭证（与小队凭证并存）
     if (ms && !ms.done) {
       dx = ms.dx; dz = ms.dz; edgeMode = true;
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
