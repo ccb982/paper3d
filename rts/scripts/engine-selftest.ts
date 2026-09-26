@@ -23,7 +23,7 @@ import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPla
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift } from '../src/entity/base/CharacterCore.ts';
-import { edgeStepRoute, edgeStepGreedy, cellsOfRoute, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
+import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
@@ -400,20 +400,23 @@ console.log('[5h] EdgeFollow 格边跟随（方案 A：轴对齐 + canStep；斜
     },
     heightAt: () => h,   // ★ H2：层高（默认同层）
   });
-  const cells = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 2 }, { x: 6, z: 6 }]);
-  ok(cells.length === 3 && cells[1].cx === 1 && cells[2].cz === 1, '路线 → 去重格序列');
-  const s1 = edgeStepRoute(mk(), 2, 2, 0, cells);
-  ok(!!s1 && s1.dx === 1 && s1.dz === 0, '沿路线：轴对齐走一格（东）');
-  ok(edgeStepRoute(mk(new Set(['0,0>1,0'])), 2, 2, 0, cells) === null, '首段被禁 → null（不硬穿）');
-  const diag = cellsOfRoute([{ x: 2, z: 2 }, { x: 6, z: 6 }]);
-  const s2 = edgeStepRoute(mk(), 2, 2, 0, diag);
-  ok(!!s2 && ((s2.dx === 1 && s2.dz === 0) || (s2.dx === 0 && s2.dz === 1)), '斜向格 → 分解为轴对齐单步');
-  const s3 = edgeStepGreedy(mk(), 2, 2, 0, 10, 6);
-  ok(!!s3 && s3.dx === 1 && s3.dz === 0, '贪心跟随：大分量轴优先');
-  ok(edgeStepGreedy(mk(), 2, 2, 0, 3, 3) === null, '同格 → null（交软跟随）');
-  ok(edgeStepRoute(mk(), 6, 6, 0, cells) === null, '已到路线末尾 → null');
-  // ★ H2：同 (x,z) 不同层（崖底 vs 崖顶）→ 不判"在路线/已到位"
-  ok(edgeStepRoute(mk(new Set(), 5), 2, 2, 0, cells) === null, 'H2：同格不同层 → 不判在路线（崖底≠崖顶）');
+  // ★ 轴步原语（活件：路线游标跟随 / 成员贪心共用）
+  const s1 = axisStepToward(mk(), 2, 2, 10, 3);
+  ok(!!s1 && s1.dx === 1 && s1.dz === 0, '轴步：x 分量主导 → 走东一格');
+  const s2 = axisStepToward(mk(new Set(['0,0>1,0'])), 2, 2, 10, 3);
+  ok(!!s2 && s2.dx === 0 && s2.dz === 1, 'x 轴被禁 → 退而走 z 轴');
+  ok(axisStepToward(mk(new Set(['0,0>1,0', '0,0>0,1'])), 2, 2, 10, 3) === null, '两轴都禁 → null（不硬穿）');
+  const s4 = axisStepToward(mk(), 2, 2, 3, 10);
+  ok(!!s4 && s4.dx === 0 && s4.dz === 1, 'z 分量主导 → 走南一格');
+  const s5 = axisStepToward(mk(), 2, 2, 6, 6);
+  ok(!!s5 && ((s5.dx === 1 && s5.dz === 0) || (s5.dx === 0 && s5.dz === 1)), '斜向 → 分解为轴对齐单步');
+  const s6 = edgeStepGreedy(mk(), 2, 2, 0, 3, 3);
+  ok(s6 === null, '贪心：同格 → null（交软跟随）');
+  // ★ 坡面轴优先（用户定 2026-09-26）：可爬坡轴不被“分量更大”抢走
+  const mkClimb = { ...mk(), climbAt: (_x: number, _z: number, _dx: number, dz: number) => dz !== 0 };
+  const s7 = axisStepToward(mkClimb, 2, 2, 10, 3);
+  ok(!!s7 && s7.dx === 0 && s7.dz === 1, '坡面轴优先：z 可爬 → 先走 z（哪怕 x 分量更大）');
+  ok(axisStepToward(mk(), 2, 2, 0, 0) === null, '目标=自身 → null');
 }
 
 // ---------- H2：跨层位移闸门 ----------

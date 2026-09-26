@@ -12,17 +12,14 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import { formationOffset } from './squad/Formation';
-import { SquadPathFinder } from './nav/Corridor';
-import { HpaPath } from './HpaPath';
 import type { SquadOrderState } from './squad/State';
 import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
-import { DANGER } from './SwarmDanger';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
-import { edgeStepRoute, edgeStepGreedy, cellsOfRoute, axisStepToward, EDGE_LAYER_TOL } from './nav/EdgeFollow';
+import { edgeStepGreedy, axisStepToward, EDGE_LAYER_TOL } from './nav/EdgeFollow';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -46,13 +43,10 @@ export const NAV = {
 const _zeroSlot = { fx: 0, fz: 0 };
 
 export class SquadNavigator {
-  private readonly pathFinder = new SquadPathFinder();
   /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
-  /** ★ HPA* 全局寻路（长距优先；失败回落有界 A* / 直线） */
-  private readonly hpa = new HpaPath();
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, hpa: 0, astar: 0, coarse: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
+  readonly dbg = { solves: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
   /** ★ S1：短寻路网格（生产 = PassTable） */
@@ -64,7 +58,6 @@ export class SquadNavigator {
   setPathTable(t: PassTable | null): void {
     this.table = t;
     this.feas.setTable(t);
-    this.pathFinder.setTable(t);   // ★ 阶段二：加权 A* 边判定也读表（可行性+权重同底座）
   }
 
   /** ★ 巡逻点查询（用户口径：查询**可行**的移动目标点 → 短寻路来回走）：
@@ -275,37 +268,6 @@ export class SquadNavigator {
     state.followIdx = undefined;
   }
 
-  /** ★ P2 初级寻路核验入口（大队发令前调用；与 ensurePath 共用 HPA 簇缓存）。
-   *  直线走廊粗判（≤64m 零建簇）→ 否则簇级 find；区分 blocked/unknown 防冷启动误杀。 */
-  coarseCheck(
-    sx: number, sz: number, gx: number, gz: number,
-    out: { x: number; z: number }[],
-  ): 'ok' | 'blocked' | 'unknown' {
-    const raster = RasterMap.current;
-    out.length = 0;
-    if (!raster) return 'unknown';
-    const dist = Math.hypot(gx - sx, gz - sz);
-    if (dist < 2) return 'ok';
-    // ★ N1 阶段一：可行性寻路优先（读表 · 代价恒 1 · 有向边）；表外/未就绪 → 'outside' 回落旧口径
-    const feas = this.feas.find(sx, sz, gx, gz, out);
-    if (feas === 'ok') return 'ok';
-    if (feas === 'blocked') return 'blocked';
-    // 直线走廊粗判（4m 采样：仅拦 pit/水域——升向不在此判，避免误杀正常起伏）
-    if (dist <= 64) {
-      const n = Math.ceil(dist / 4);
-      let clear = true;
-      for (let k = 1; k < n; k++) {
-        const t = k / n;
-        const x = sx + (gx - sx) * t, z = sz + (gz - sz) * t;
-        const h = raster.surfaceHeightAt(x, z);
-        const role = raster.tileDefAt(x, z).genRole;
-        if (role === 'pit' || h < DANGER.PIT_H) { clear = false; break; }
-      }
-      if (clear) return 'ok';
-    }
-    return this.hpa.coarseReachable(raster, sx, sz, gx, gz, out);
-  }
-
   /** ② L3 实体编队 steer（10Hz 调用）：命令目标（或走廊路点）+ 阵型槽位 → moveTarget。 */
   steerEntities(
     units: readonly SwarmCarrier[] | undefined,
@@ -415,13 +377,7 @@ export class SquadNavigator {
     }
   }
 
-  /** ★ 每帧预热 HPA 簇（开销摊到多帧；长路径查询时已基本命中缓存） */
-  warm(raster: RasterMap, x: number, z: number): void {
-    this.hpa.warmup(raster, x, z, 2);
-  }
-
   clear(): void {
     this.unitsBySquad.clear();
-    this.hpa.clear();
   }
 }

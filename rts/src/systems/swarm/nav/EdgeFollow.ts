@@ -34,17 +34,6 @@ export function cellOf(x: number, z: number): CellRef {
   return { cx: Math.floor(x / EDGE_CELL), cz: Math.floor(z / EDGE_CELL) };
 }
 
-/** 世界点序列（路线）→ 去重后的全局格序列 */
-export function cellsOfRoute(route: readonly { x: number; z: number }[]): CellRef[] {
-  const out: CellRef[] = [];
-  for (const p of route) {
-    const c = cellOf(p.x, p.z);
-    const last = out[out.length - 1];
-    if (!last || last.cx !== c.cx || last.cz !== c.cz) out.push(c);
-  }
-  return out;
-}
-
 /** 轴对齐单步（canStep 校验；两轴都需走时按"先大分量、后小分量"给一步；都被禁 → null） */
 export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, ddz: number): { dx: number; dz: number } | null {
   const sx = ddx === 0 ? 0 : (ddx > 0 ? 1 : -1);
@@ -62,43 +51,6 @@ export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, d
     return { dx, dz };
   }
   return null;
-}
-
-/** ★ 路线格边跟随（H2 层感知）：从精确位置沿**规划的格序列**走一格（轴对齐 + canStep）。
- *  · 当前格在路线里但**层不匹配**（如崖底 vs 崖顶同格）→ 返回 null（**不判"在路线上"**）；
- *  · 当前格不在路线里 → 走向最近的**同层**路线格；
- *  · 已到路线末尾 → null。 */
-export function edgeStepRoute(
-  g: EdgeGrid, x: number, z: number, y: number, cells: readonly CellRef[],
-): { dx: number; dz: number } | null {
-  if (cells.length === 0) return null;
-  const cur = cellOf(x, z);
-  const sameLayer = (c: CellRef): boolean =>
-    Math.abs(g.heightAt(c.cx * EDGE_CELL + EDGE_CELL / 2, c.cz * EDGE_CELL + EDGE_CELL / 2) - y) <= EDGE_LAYER_TOL;
-  let idx = -1;
-  for (let i = 0; i < cells.length; i++) {
-    const c = cells[i] as CellRef;
-    if (c.cx === cur.cx && c.cz === cur.cz) {
-      if (!sameLayer(c)) return null;   // ★ H2：同格不同层 = 不在这一层（不判在路线里）
-      idx = i;
-      break;
-    }
-  }
-  if (idx < 0) {
-    // 离路：走向最近的**同层**路线格
-    let bi = -1, bd = Infinity;
-    for (let i = 0; i < cells.length; i++) {
-      const c = cells[i] as CellRef;
-      if (!sameLayer(c)) continue;
-      const d = Math.hypot(c.cx - cur.cx, c.cz - cur.cz);
-      if (d < bd) { bd = d; bi = i; }
-    }
-    if (bi < 0) return null;            // 无同层路线格 → 交上层重算
-    idx = bi;
-  }
-  const next = cells[idx + 1];
-  if (!next) return null;                          // 已到路线末尾
-  return axisStepToward(g, x, z, next.cx - cur.cx, next.cz - cur.cz);
 }
 
 /** ★ 贪心格边跟随（H2 层感知；成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep）。 */

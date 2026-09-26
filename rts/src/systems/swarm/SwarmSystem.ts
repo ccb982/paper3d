@@ -27,7 +27,7 @@ import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
 import { SquadTable, type Squad, type SquadRating } from './SquadTable';
 import { SquadNavigator } from './SquadNavigator';
-import { followDir, leaderDir, followStopR } from './squad/Follow';
+import { driveAgent, type DriveHost } from './SwarmDrive';
 import type { SquadOrderState } from './squad/State';
 import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
@@ -41,8 +41,6 @@ import {
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
-import { pickSteer } from '../../entity/SteerPick';
-import { dangerPointAt } from '../../entity/TerrainAssist';
 
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
@@ -92,7 +90,6 @@ export interface SwarmHooks {
   ) => void;
 }
 
-const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
@@ -139,6 +136,17 @@ export class SwarmSystem {
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
+
+  /** ★ 移动执行宿主（SwarmDrive 拆出；构造时建一次，零分配引用） */
+  private readonly driveHost: DriveHost = {
+    pool: this.pool,
+    squads: this.squads,
+    nav: this.nav,
+    data: this.data,
+    grid: this.grid,
+    squadStateOf: (id) => this.squadStateOf?.(id) ?? null,
+    walkableLine: (ax, az, bx, bz) => this.walkableLine(ax, az, bx, bz),
+  };
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
   private flow = new FlowField();
@@ -415,7 +423,7 @@ export class SwarmSystem {
       if (p.moveAcc[i] >= moveGap) {
         const step = p.moveAcc[i];
         p.moveAcc[i] = 0;
-        this.move(i, step);
+        driveAgent(this.driveHost, i, step);
       }
     }
     const t2 = _te ? performance.now() : 0;
@@ -733,85 +741,6 @@ export class SwarmSystem {
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
-  private move(i: number, dt: number): void {
-    const p = this.pool;
-    // ---- 人群分离：本拍只算一次（方向决策里当"反向惩罚"，移动后做一次物理外推） ----
-    const t0 = entityPerf.enabled ? performance.now() : 0;
-    this.grid.separation(p, i, _sep);
-    entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
-    let dx = p.dirX[i], dz = p.dirZ[i];
-    let edgeMode = false;   // ★ 方案 A：格边步模式（轴对齐 + canStep；跳过软转向/坡混合）
-    // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
-    //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
-    const squad = this.squads.squadOf(p.swarmUid[i]);
-    const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
-    const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
-    if (isLeader) {
-      // ★ 队长 → 指令锚点（唯一路线消费者）。方案 A：有走廊 → **格边步**（与规划同口径）
-      const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
-        p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
-      if (ld) {
-        const st = squad ? this.squadStateOf?.(squad.id) ?? null : null;
-        const e = this.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
-        if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
-        else {
-          // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
-          const rd = this.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
-          if (rd) { dx = rd.x; dz = rd.z; } else { dx = ld.x; dz = ld.z; }
-        }
-      } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    } else if (lead) {
-      // ★ 成员跟队长（滞回消抖；掉队沿走廊）；方案 A：目标距离>格 → 格边贪心步
-      const stopR = followStopR(p.atomMove[i] === 255, lead.x, lead.z, p.orderTargetX[i], p.orderTargetZ[i]);
-      const fd = followDir(this.squadStateOf?.(squad!.id) ?? null, p.x[i], p.z[i], lead.x, lead.z,
-        stopR, (a, b, c2, d2) => this.walkableLine(a, b, c2, d2));
-      if (fd) {
-        const e = this.nav.edgeGreedy(p.x[i], p.z[i], p.y[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
-        if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
-        else { dx = fd.x; dz = fd.z; }
-      } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
-    // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
-    const inside = this.data.blockedAt(p.x[i], p.z[i]);
-    if (dx !== 0 || dz !== 0 || inside) {
-      if (edgeMode) {
-        // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
-        const step = p.stepAgent(i, dx, dz, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
-        p.x[i] += step.dx; p.z[i] += step.dz;
-        if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
-      } else {
-      p.hazardTimer[i] -= dt;
-      const raster = RasterMap.current;
-      const hint = p.y[i];
-      const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
-      const dangerAt = (hx: number, hz: number): boolean => {
-        if (!raster) return false;
-        if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
-        if (this.data.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
-        return dangerPointAt(raster, hx, hz, p.x[i], p.z[i], hint);   // 坑/过低/立面（共享内核）
-      };
-      const res = pickSteer(
-        p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
-        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], simNow(),   // ★ 模拟时钟（倍速同步）
-        this.data.blockedAt(p.x[i], p.z[i]),
-        dangerAt, this.data,
-        p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
-        this.squads.squadOf(p.swarmUid[i])?.type,   // ★ L3 兵种分（重构 P1-2；mixed=兵种中立）
-      );
-      if (!res.hold) {
-        p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
-        const step = p.stepAgent(i, res.x, res.z, p.curSpeed[i] * p.directiveSpeedMul[i], dt, performance.now() / 1000);
-        p.x[i] += step.dx; p.z[i] += step.dz;
-        if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
-      }
-      }
-    }
-    // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
-    // ★ H2：分离推挤过位移闸门（不得借推力跨层/越悬崖）
-    if (_sep.x !== 0 || _sep.z !== 0) p.shiftAgent(i, _sep.x, _sep.z);
-  }
-
   // ============================================================
   // 攻击槽 / 移除清理
   // ============================================================
@@ -1022,14 +951,6 @@ export class SwarmSystem {
   /** ★ 步骤 9：引擎侧信息面（BattalionView 的 squads 面；战术后续消费） */
   ratings(): SquadRating[] {
     return this.squads.ratings(performance.now() / 1000);
-  }
-
-  /** ★ P2 初级寻路核验（大队发令门调用；直通 SquadNavigator/HPA 簇缓存） */
-  coarseCheck(
-    sx: number, sz: number, gx: number, gz: number,
-    out: { x: number; z: number }[],
-  ): 'ok' | 'blocked' | 'unknown' {
-    return this.nav.coarseCheck(sx, sz, gx, gz, out);
   }
 
   /** ★ P4 白名单探针：队路径重规划计数 */
