@@ -13,7 +13,7 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { samplerFor } from '../../services/map/TerrainSampler';
-import { WALL_DH } from './TerrainScore';
+import { WALL_DH } from './TerrainScoring';
 import { DANGER } from './SwarmDanger';
 
 const CELL = 4;

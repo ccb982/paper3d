@@ -11,7 +11,7 @@
 // ============================================================
 
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
-import { WALL_DH, SLOPE_DH } from './TerrainScore';
+import { WALL_DH, SLOPE_DH } from './TerrainScoring';
 
 export const DANGER = {
   /** 执行层可上台阶上限（米；Refinements.EDGE_CLIFF_BAND 直连） */

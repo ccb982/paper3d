@@ -7,7 +7,7 @@
 // 消费方（总纲 P1-2/3/4 逐点切）：SteerPick 候选打分 / SquadPath 路径代价 / Decide 选格。
 // ============================================================
 
-import { FEAT_SCALE, DIST_SCALE, type CellFeats, type ScoreWeights } from './TerrainScore';
+import { FEAT_SCALE, DIST_SCALE, type CellFeats, type ScoreWeights } from './TerrainScoring';
 import type { SquadType } from '../../entity/SwarmUnit';
 
 /** ★ 距离混合调参（用户定 2026-09-25）：近舰距离权重放大 / 地形权重衰减（远舰反之） */

@@ -19,7 +19,7 @@
 import type { RasterMap } from '../../../services/map/RasterMap';
 import { CHUNK_SIZE } from '../../../services/map/ChunkGenerator';
 import { samplerFor } from '../../../services/map/TerrainSampler';
-import { SLOPE_DH, WALL_DH, SLOPE_COST } from '../TerrainScore';
+import { SLOPE_DH, WALL_DH, SLOPE_COST } from '../TerrainScoring';
 import { DANGER } from '../SwarmDanger';
 import type { PassTable } from './PassTable';
 

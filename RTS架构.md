@@ -55,7 +55,7 @@ systems/swarm/
   squad/    SquadCore SquadRegistry CommandLang State Decompose Anchor Follow Formation Abilities MarchAction
   data/     SwarmData（地形/表/L1/L2/事态环/t01/工事数据/编制与生成执行）
   nav/      PassTable LongPath LocalStep（短寻路；Corridor/ShortHop 旧加权链已退出主链）
-  根        SwarmSystem（代理移动/渲染/LOD）、AgentPool、SquadTable、TerrainScore/TerrainSemantics/HoleMask/HoleTable、
+  根        SwarmSystem（代理移动/渲染/LOD）、AgentPool、SquadTable、TerrainScoring/TerrainSemantics/HoleMask/HoleTable、
             PostureFn、FortifyPlanner、CommanderSpawn、SwarmLedger、SwarmBatch、SwarmConfig、SwarmDanger、UnitTactics/UnitStrategy
 ```
 
@@ -159,14 +159,15 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
          移动到目标点：短寻路（近）或 长寻路（远） }
   ```
 - **取目标函数（每行为一个）**：如工兵 `FortifyPlanner.targetOf`（可行建造点，模板）、
-  巡逻 `patrolNext`（锚点附近可行点）、保护 `blockCheck` 调整点、驻守=守点/掩体点、撤退=后撤点。
+  巡逻 `patrolNext`（锚点附近可行点）、保护 `blockCheck` 调整点 **+ 掩体校正**（保证**被保护目标真被挡**）、
+  驻守=守点 **+ 掩体校正**（保证**自己真被挡**）、撤退=后撤点。
 - **禁止**：为某行为写独立移动实现；行为只准"取目标 + 两个原子移动"。
 - 注：代码里的 `AtomicKind`（patrol/garrison/march/act）是历史命名——概念上只有 march/act 两个原子，
   patrol/garrison 属"行为循环"。
 
 ### 2.11 三张表原则（用户定 2026-09-25）
 **只有三张表**：**地形语义表**（偏好/评分基础）· **可行性表**（硬通行唯一来源）· **战壕掩体表**（动态工事：参与评分；工兵建成即更新）。
-`TerrainScore` 计划**废除**（越权的第四套网格）：① 硬通行（`blockedAt`/`pickSteer` 硬格）→ 可行性表同源；② 评分面 → 语义表 + 掩体表纯函数。详见《寻路重写方案.md》§4.4.6。
+`TerrainScore` **已废除**（越权的第四套网格，2026-09-26）：① 硬通行（`blockedAt`/`pickSteer` 硬格）→ 地形真相（坑=墙）+ 与寻路同口径陡差；② 评分面 → `TerrainScoring.ts` **查询时纯函数**（语义表可站/宽度/隘口/坡 + 可行性表高度 + 掩体表战壕/bonus + raster 高度）。详见《寻路重写方案.md》§4.4.6。
 
 ## 3. 队长层（执行 `squad/`）
 
@@ -222,12 +223,12 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 > **纯数据/查询/端口，无指挥语义**；引擎/队长核/导航/UI/探针只读消费。文件头写明 owner。
 
-- **地形与表**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路）+ `TerrainScore`（`rebuild` 每帧；`distGain=1+24·t01`）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
+- **地形与表**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路）+ `TerrainScoring`（查询时评分纯函数；`SwarmData.scoringSrc` 每拍注入三张表句柄 + 权重 + 玩家位；`distGain=1+24·t01` 并入 dist 权重）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
 - **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/terrain/pathStamp`。
 - **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（**p 驱动**：**外圈大圈一直收缩只减不增**：D0max → 大圆 90 → 缓缩 80 → 0；**内圈小圈先收缩 → 第一波后立即增大（甜甜圈 60，p 0.45-0.55）→ 再收缩**；总攻 p≥0.80 时已是 (0,0) 点）；环 1Hz 更新；**时间轴可自由快进/倒退**（`scrubDay`/`followRealtime` 重置姿态状态 → 环可反向）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
 - **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` **扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**（候选=需求降序表；高位不可达→次高可达；全不可达→null；**绝不出扇区/带**，确定性不掷随机数））；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
 - **编制与生成执行**：`RosterController`（占比/缺口 4Hz）；`CommanderSpawn`（`deploy/battalion(instant)/drain/reset` + 回收名单）；生成端口（`spawnMob/spawnMobIndex/spawnBuilder/buildCover/digTrench`）由 main/CommanderWiring 注入；`planDefense`（建计划 + 表 + 复位 + 开局班底）。
-- **地形破坏入口**：`noteTerrainDig/markTerrainDirty`（`ChunkManager.onTerrainDig` 中央钩子；子弹/战壕都过）→ 掩码窗扫 + TerrainScore 局部重算 + 采样缓存失效。
+- **地形破坏入口**：`noteTerrainDig/markTerrainDirty`（`ChunkManager.onTerrainDig` 中央钩子；子弹/战壕都过）→ 掩码窗扫（`HoleMask.refresh`，挖过即战壕·评分查询时直读）+ 采样缓存失效。
 
 ---
 
@@ -264,7 +265,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 地形语义表 TerrainSemantics（消费层·战术偏好；与可行性**正交**）
   · 高地/低谷/迎背坡/关口/走廊/开阔/隐蔽/陡壁/水/坑
-  · 只影响"偏好"（短寻路 risk / TerrainScore 评分），**不决定能不能走**
+  · 只影响"偏好"（短寻路 risk / TerrainScoring 评分），**不决定能不能走**
 
 动态破坏 HoleMask / HoleTable（工兵挖掘/战壕；**不是地块类型**，与 pit 无关）
 ```
@@ -435,7 +436,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 1. **收拢态间距**：总攻环收拢为点时，同兵种 40m 间距几何不可满足（弦长上限 2r）——需定"指标口径"（非收拢态判定）。
 2. **cmdChanges 6~7**：删守点粘性后守点目标随自身漂移，略高于 ≤5；可用"守点节流/换令条件"微调。
-3. **§16 山地**：短跳半径/角度自适应、台阶段落差聚合、拉直防贴崖、舰船/落点周围强制产坡（待定）、`TerrainScore.cls` 标定对齐（待定）。
+3. **§16 山地**：短跳半径/角度自适应、台阶段落差聚合、拉直防贴崖、舰船/落点周围强制产坡（待定）、~~`TerrainScore.cls` 标定对齐~~（已随 TerrainScore 删除终结）。
 4. ~~高倍速混合时钟~~（已修 2026-09-25）：玩法计时统一到 `services/SimClock`，10×/100× 行动与下命令同步加速。
 5. **guard 已知债务**：`ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 五个非蜂群大文件（与本次重写无关）。
 6. **可选拆分**：`SwarmSystem`（1151）/`SwarmData`（692）/`EngineBridge`（415）/`main`（843）为"大而不乱"的文件，按需再拆。

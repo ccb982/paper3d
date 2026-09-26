@@ -47,6 +47,23 @@ export interface AtomicChoice {
   why: string;
 }
 
+/** 掩体校正：目标点周围（8 向 ×3m/6m）找**真有掩体**的点（用户定 2026-09-25：
+ *  保护=被保护目标真被挡；驻守=自己真被挡）。无 → null（保持原点）。 */
+function coveredNear(
+  px: number, pz: number, x: number, z: number,
+  cover: (tx: number, tz: number, x: number, z: number) => boolean,
+): { x: number; z: number } | null {
+  if (cover(px, pz, x, z)) return { x, z };
+  for (const r of [3, 6]) {
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const cx = x + Math.cos(a) * r, cz = z + Math.sin(a) * r;
+      if (cover(px, pz, cx, cz)) return { x: cx, z: cz };
+    }
+  }
+  return null;
+}
+
 /** 解释器：复合句 + 现场 → 原子句（唯一产生式；见文件头） */
 export function interpretLeader(
   state: SquadOrderState,
@@ -54,6 +71,8 @@ export function interpretLeader(
   lz: number,
   /** 队长目标（defend/act = 下一路点/队令目标；protect 不需要，传 null） */
   anchor: { x: number; z: number } | null,
+  /** ★ 掩体检测（可选；保护/驻守取目标用）：(x,z) 是否被 (tx,tz) 方向的掩体挡住 */
+  cover?: (tx: number, tz: number, x: number, z: number) => boolean,
 ): AtomicChoice {
   const o = state.order;
   // ---- protect：blockCheck（P=threat，B=自己，G=target=被保护点） ----
@@ -62,6 +81,14 @@ export function interpretLeader(
     const P = o.threatX !== undefined ? { x: o.threatX, z: o.threatZ ?? 0 } : null;
     if (G && P) {
       const b = blockCheck(P.x, P.z, lx, lz, G.x, G.z, undefined, 'block');
+      const base = b.ok ? { x: lx, z: lz } : { x: b.ax, z: b.az };
+      // ★ 掩体校正（用户定）：保证被保护目标真被挡——底线挡住 + 有掩体
+      if (cover) {
+        const c = coveredNear(P.x, P.z, base.x, base.z, cover);
+        if (c && (Math.abs(c.x - base.x) > 1e-3 || Math.abs(c.z - base.z) > 1e-3)) {
+          return { atom: 'act', x: c.x, z: c.z, why: `block+cover off=${b.off.toFixed(1)}` };
+        }
+      }
       if (b.ok) return { atom: 'garrison', x: lx, z: lz, why: `block OK off=${b.off.toFixed(1)}` };
       return { atom: b.atom, x: b.ax, z: b.az, why: `block off=${b.off.toFixed(1)}→${b.atom}` };
     }
@@ -72,7 +99,12 @@ export function interpretLeader(
     return { atom: 'garrison', x: t.x, z: t.z, why: 'protect(no P) arrived' };
   }
   // ---- act / defend / patrol：到锚点距离三分 ----
-  const t = anchor ?? o.target ?? { x: lx, z: lz };
+  let t = anchor ?? o.target ?? { x: lx, z: lz };
+  // ★ 驻守掩体校正（用户定）：有威胁点时，先找"自己有掩体"的点（真被挡住）
+  if (cover && o.threatX !== undefined) {
+    const c = coveredNear(o.threatX, o.threatZ ?? 0, t.x, t.z, cover);
+    if (c) t = c;
+  }
   const d = Math.hypot(t.x - lx, t.z - lz);
   if (d > MARCH_DIST) return { atom: 'march', x: t.x, z: t.z, why: `${o.kind} d=${d | 0}` };
   if (d > ARRIVE_R) return { atom: 'act', x: t.x, z: t.z, why: `${o.kind} d=${d | 0}` };

@@ -353,10 +353,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
         patrolNext: (x, z, ax, az, r, leg) => swarm.patrolNext(x, z, ax, az, r, leg),
+        coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
         leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
-        terrain: () => swarm.data.terrain,
         mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,
         applyDirective: (uid, order, dir, until, ax, az) => swarm.applyDirectivePort(uid, order, dir, until, ax, az),

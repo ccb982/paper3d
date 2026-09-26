@@ -13,7 +13,6 @@ import type { MobTactics, TacticalOrder, UnitDirective } from '../../../entity/S
 import { squadBucket } from '../../../entity/SwarmUnit';
 import type { AtomicKind, MobRole, OrderPhase, SquadOrder, SquadReport } from '../engine/contracts';
 import type { Squad } from '../SquadTable';
-import type { TerrainCover } from '../UnitTactics';
 import { onArriveAtom } from './Abilities';
 import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
 import { formationOffset } from './Formation';
@@ -27,13 +26,14 @@ export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 export interface SquadDrivePorts {
   /** ★ 巡逻点查询（用户口径 2026-09-25：查询可行移动目标点 → 短寻路来回走）；无可行点 → null */
   patrolNext?(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
+  /** ★ 掩体检测（保护/驻守取目标用）：(x,z) 是否被 (tx,tz) 方向的掩体挡住 */
+  coverFrom?(tx: number, tz: number, x: number, z: number): boolean;
   /** 长/短寻路求解（走廊写入 state） */
   ensurePath(state: SquadOrderState, squad: Squad, now: number): void;
   /** 队长站位锚（保护/驻守/巡逻 + 走廊前瞻；由接线层提供 resolveAnchor） */
   leaderTarget(state: SquadOrderState, squad: Squad, lx: number, lz: number, now: number): { x: number; z: number; climb?: boolean } | null;
   /** 事态环夹取（队长目标/指令目标同门） */
   clampRing(x: number, z: number): { x: number; z: number };
-  terrain(): TerrainCover | null;
   mobTactics(mobIndex: number): MobTactics | null;
   /** 开火闩锁（引擎）：false → 软禁火（fire=hold） */
   fireAllowed(uid: number): boolean;
@@ -146,7 +146,7 @@ export class SquadCore {
     }
     // ② 复合 → 原子（解释器 = `squad/CommandLang.ts`；protect 用 blockCheck 调整点）
     //   ★ 命令使用设计（方案 §4.4.2）：引擎令与自决**同一条执行链**；令尽后自主（短寻路向舰，S3 立项）
-    const sel = interpretLeader(st, lx, lz, anchor);
+    const sel = interpretLeader(st, lx, lz, anchor, port.coverFrom);
     // ③ protect：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
     if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
       st.order.target = { x: sel.x, z: sel.z };

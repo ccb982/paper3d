@@ -45,7 +45,7 @@ const probe = () => page.evaluate(() => {
     drops: sw?.orderDrops ?? null,
     clamps: c?.cmdLogRingClamps ?? null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
-    gain: sw?.data?.terrainScore?.distGain ? +sw.data.terrainScore.distGain.toFixed(1) : null,
+    gain: sw?.data?.distGain ? +sw.data.distGain.toFixed(1) : null,
     nav: sw?.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail } : null,
     band: c?.fortifyBand ? { minD: +c.fortifyBand.minD.toFixed(1), maxD: +c.fortifyBand.maxD.toFixed(1), frontP: +c.fortifyBand.frontP.toFixed(2) } : null,
     plan: !!c?.plan,
