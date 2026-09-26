@@ -11,9 +11,8 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
-import { formationOffset } from './squad/Formation';
 import type { SquadOrderState } from './squad/State';
-import { currentTargetOf } from './squad/Anchor';
+import { currentTargetOf, routeNextPath } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
 import { FeasibilityPath } from './nav/LongPath';
@@ -40,8 +39,10 @@ export const NAV = {
   LONG_PATH_DIST: 40,
 } as const;
 
-/** 单例小队不排阵型（Boss/高威胁：目标点即自身位） */
-const _zeroSlot = { fx: 0, fz: 0 };
+/** ★ 成员到队长长寻路：重算周期（秒）/ 队长位移超限（米）/ 到位半径（米；到位即停） */
+const MEMBER_ROUTE_S = 2.5;
+const MEMBER_ROUTE_MOVE = 8;
+const MEMBER_ARRIVE_R = 1.5;
 
 export class SquadNavigator {
   /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
@@ -127,6 +128,33 @@ export class SquadNavigator {
     const rx = rp.x - x, rz = rp.z - z;
     const rl = Math.hypot(rx, rz);
     return rl > 1e-3 ? { x: rx / rl, z: rz / rl } : null;
+  }
+
+  /** ★ 成员路线缓存（用户定 2026-09-26）：**定时（或队长位移超限）对队长位置做一次长寻路**；
+   *  路只在缓存里，供"沿路走格边步"用（全部移动来自长短寻路）。 */
+  private readonly memberRoutes = new Map<number, { path: { x: number; z: number; climb?: boolean }[]; at: number; gx: number; gz: number }>();
+
+  /** 成员沿"自己的到队长路线"走一步（L2/L3 共用）：返回 {dx,dz,climb,done}；无解 → null（停） */
+  memberStep(
+    uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
+    state?: SquadOrderState | null,
+  ): { dx: number; dz: number; climb: boolean; done: boolean } | null {
+    if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, climb: false, done: true };
+    let memo = this.memberRoutes.get(uid);
+    const stale = !memo || now - memo.at >= MEMBER_ROUTE_S || Math.hypot(lx - memo.gx, lz - memo.gz) > MEMBER_ROUTE_MOVE;
+    if (stale) {
+      const out: { x: number; z: number; climb?: boolean }[] = [];
+      const res = this.feas.readyFor() ? this.feas.find(x, z, lx, lz, out) : 'outside';
+      memo = { path: res === 'ok' ? out : [], at: now, gx: lx, gz: lz };
+      this.memberRoutes.set(uid, memo);
+    }
+    // ★ 自己的到队长路线；失败/表外 → **回退小队走廊**（同一条长寻路，仍属长短寻路）
+    let rp = memo && memo.path.length ? routeNextPath(memo.path, x, z, 2) : null;
+    if (!rp && state) rp = routeNextPath(state.corridor ?? state.order.path, x, z, 2);
+    if (!rp) return null;
+    const e = this.edgeGreedy(x, z, y, rp.x, rp.z);
+    if (!e) return null;   // 步不出 → 上层停（等下一拍/重算）
+    return { dx: e.dx, dz: e.dz, climb: rp.climb === true, done: false };
   }
 
   /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
@@ -350,27 +378,27 @@ export class SquadNavigator {
             continue;
           }
         }
-        // ★ 槽位 rank = 全员 uid（与 applyOrders 同口径：L3 + 代理跨 LOD 不换位）
+        // ★ 架构底线（用户定 2026-09-26）：**代理与队长的所有移动都来自长短寻路**——
+        //   成员沿**同一走廊**：无状态 routeNext 求"己身的下一路点"（不追队长位置；无走廊 → 停）。
         let rank = 0;
         for (const uid of squad.members.keys()) if (uid < u.swarmUid) rank++;
-        const off = singleton ? _zeroSlot : formationOffset(type, rank);
         const isLead = u.swarmUid === squad.leaderUid;
-        const bx = isLead ? tgt.x : lead.x;   // ★ 队长走锚点；成员围队长（"只要跟随队长"）
-        const bz = isLead ? tgt.z : lead.z;
-        const sx = bx + fx * off.fx - fz * off.fz;
-        const sz = bz + fz * off.fx + fx * off.fz;
-        u.formSlot = rank;
-        // ★ 显式爬坡（用户定 2026-09-26）：climb 令 = 目标★ 或 **当前路段★**（队长，来自路线游标）
-        //   或 **本步跨可爬坡边**（成员，climbAt）——代理/队长同一条：路段★→climb 令→内核沿法线爬。
-        let needClimb = (tgt as { climb?: boolean }).climb === true;
-        // ★ 方案 A：L3 同款格边步（队长沿走廊 / 成员贪心跟队长）
-        let sdx = fx, sdz = fz;
         const upos0 = u.position;
+        let sx = tgt.x, sz = tgt.z;
+        let needClimb = (tgt as { climb?: boolean }).climb === true;
+        if (!isLead) {
+          // ★ 成员路线缓存（定时对队长长寻路）——目标点/凭证都从这里来
+          const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
+          if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; needClimb = ms.climb; }
+          else { sx = upos0.x; sz = upos0.z; needClimb = false; }
+        }
+        u.formSlot = rank;
+        // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住
+        let sdx = 0, sdz = 0;
         const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
         if (e3) {
           sdx = e3.dx; sdz = e3.dz;
           if (isLead) needClimb = needClimb || (e3 as { climb?: boolean }).climb === true;
-          else needClimb = needClimb || (this.table?.climbAt(upos0.x, upos0.z, e3.dx, e3.dz) ?? false);
         } else if (isLead) {
           const rc = this.routeCursor(state, upos0.x, upos0.z, upos0.y);
           if (rc?.climb === true) needClimb = true;                      // 当前路点段需爬

@@ -145,6 +145,7 @@ export class SwarmSystem {
     data: this.data,
     grid: this.grid,
     squadStateOf: (id) => this.squadStateOf?.(id) ?? null,
+    memberStep: (uid, x, z, y, lx, lz, now, st) => this.nav.memberStep(uid, x, z, y, lx, lz, now, st),
     walkableLine: (ax, az, bx, bz) => this.walkableLine(ax, az, bx, bz),
   };
   private batch: SwarmBatch | null = null;

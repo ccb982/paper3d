@@ -14,7 +14,7 @@ import type { SquadTable } from './SquadTable';
 import type { SquadNavigator } from './SquadNavigator';
 import type { SquadOrderState } from './squad/State';
 import type { SwarmData } from './data/SwarmData';
-import { followDir, leaderDir, followStopR } from './squad/Follow';
+import { leaderDir } from './squad/Follow';
 import { pickSteer } from '../../entity/SteerPick';
 import { dangerPointAt } from '../../entity/TerrainAssist';
 import { RasterMap } from '../../services/map/RasterMap';
@@ -28,6 +28,7 @@ export interface DriveHost {
   readonly data: SwarmData;
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
+  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; climb: boolean; done: boolean } | null;
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
@@ -48,7 +49,6 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
   const squad = host.squads.squadOf(p.swarmUid[i]);
   const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
-  const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
   if (isLeader) {
     // ★ 队长 → 指令锚点（唯一路线消费者）。方案 A：有走廊 → **格边步**（与规划同口径）
     const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
@@ -63,17 +63,13 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
         if (rd) { dx = rd.x; dz = rd.z; } else { dx = ld.x; dz = ld.z; }
       }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-  } else if (lead) {
-    // ★ 成员跟队长（滞回消抖；掉队沿走廊）；方案 A：目标距离>格 → 格边贪心步
-    const stopR = followStopR(p.atomMove[i] === 255, lead.x, lead.z, p.orderTargetX[i], p.orderTargetZ[i]);
-    const fd = followDir(host.squadStateOf(squad!.id), p.x[i], p.z[i], lead.x, lead.z,
-      stopR, (a, b, c2, d2) => host.walkableLine(a, b, c2, d2));
-    if (fd) {
-      const e = host.nav.edgeGreedy(p.x[i], p.z[i], p.y[i], lead.x, lead.z);   // ★ 方案 A：成员跟队长=格边步
-      if (e) {
-        dx = e.dx; dz = e.dz; edgeMode = true;
-        cred = host.data.passTable.climbAt(p.x[i], p.z[i], e.dx, e.dz);   // 成员：本步跨坡边
-      } else { dx = fd.x; dz = fd.z; }
+  } else if (squad) {
+    // ★ 架构底线（用户定 2026-09-26）：**成员的移动同样来自长短寻路**——**定时对队长位置做一次
+    //   长寻路**（每人一条缓存路线），沿其走格边步；无解/到位 → 停。
+    const lead = squad.members.get(squad.leaderUid);
+    const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
+    if (ms && !ms.done) {
+      dx = ms.dx; dz = ms.dz; edgeMode = true; cred = ms.climb;
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
   // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离

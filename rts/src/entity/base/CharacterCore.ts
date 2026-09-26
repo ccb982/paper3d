@@ -139,6 +139,12 @@ export class CharacterCore {
           out.climbing = true;
           dx = run.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
           dz = run.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+        } else {
+          // 持凭证但未到上坡点 → 先去坡点（仅凭路线凭证；无凭证一律不动/不爬）
+          const gx = run.x - inp.x, gz = run.z - inp.z;
+          const gl = Math.hypot(gx, gz) || 1;
+          dx = (gx / gl) * inp.speed * inp.dt;
+          dz = (gz / gl) * inp.speed * inp.dt;
         }
       }
     }

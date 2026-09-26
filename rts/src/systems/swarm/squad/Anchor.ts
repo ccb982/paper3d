@@ -34,10 +34,11 @@ export function goalOf(state: SquadOrderState): { x: number; z: number } | null 
  *  "到达/段失效"才推进，禁止每拍在两点间翻转（《寻路重写方案.md》§4.4）。
  *  ——从最近路点向后找第一个距离 >adv 的点；
  *  都 ≤adv → 末点（终点=目标）。**绝不跳过中间绕行点**（原 look 前瞻会把绕行点吃掉 → 直线撞崖）。 */
-export function routeNext(
-  state: SquadOrderState | null | undefined, cx: number, cz: number, adv: number,
+/** ★ 沿**任意路点序列**的下一个未到达路点（纯函数；成员自路线缓存也用） */
+export function routeNextPath(
+  path: readonly { x: number; z: number; climb?: boolean }[] | null | undefined,
+  cx: number, cz: number, adv: number,
 ): { x: number; z: number; climb?: boolean } | null {
-  const path = state?.corridor ?? state?.order.path;
   if (!path || path.length === 0) return null;
   let near = 0, nd = Infinity;
   for (let i = 0; i < path.length; i++) {
@@ -49,6 +50,12 @@ export function routeNext(
     if (d2 > adv * adv) return path[i];
   }
   return path[path.length - 1];
+}
+
+export function routeNext(
+  state: SquadOrderState | null | undefined, cx: number, cz: number, adv: number,
+): { x: number; z: number; climb?: boolean } | null {
+  return routeNextPath(state?.corridor ?? state?.order.path, cx, cz, adv);
 }
 
 /** ★ 队长目标（唯一口径，简化 2026-09-25：**去哪就去哪**，无锚点/无锁存）：
