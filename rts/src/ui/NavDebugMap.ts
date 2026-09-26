@@ -286,18 +286,7 @@ export class NavDebugMap {
           g.lineTo(sx + Math.cos(a) * r, sz + Math.sin(a) * r); g.stroke();
         }
       }
-      const ownerOf = new Map<number, number>();   // sector → squadId
-      for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
       const bandValid = rHi > rLo + 1;   // ★ 环退化（收拢为点/小圆内）→ 不画扇区带
-      // 各队施工点（spot）
-      for (const [sid, p] of fort.spots) {
-        const [px2, pz2] = p2(p.x, p.z);
-        g.fillStyle = `hsl(${(sid * 47) % 360} 90% 60%)`;
-        g.beginPath(); g.arc(px2, pz2, 3.5, 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#dce8f5';
-        g.font = '10px Consolas,monospace';
-        g.fillText(`第${sid}队`, px2 + 5, pz2 + 3);
-      }
       // 舰船本体（蓝圈 + 名）
       g.strokeStyle = '#3399ff';
       g.lineWidth = 2.5;

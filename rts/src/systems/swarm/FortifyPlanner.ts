@@ -7,8 +7,8 @@
 //     水/坑/硬边（blockedAt）直接排除 → 治"被极负分吸走成簇"
 //   · 固定 8 扇区（环状包围舰船；摊销刷新：每次 1 区）
 //   · 每扇区记 **峰值需求** + **需求降序候选表**（都在扇区内 ∧ 带内）；需求 ≥ NEED_DONE = 该区仍缺工事
-//   · 分配：**需求最高优先逐个分配**（一队一区、不重合）；粘性；更缺的未占区可抢占
-//   · 连通：相邻扇区均不缺 → 中点串战壕
+//   ★ 旧“一队一区认领（claims/assign）”**已删**（用户定 2026-09-26）：队→扇区改由
+//   **大队管理器**（`tactics/BattalionManager.deployPlan`）给定；本文件只保留**建造位置查询**与需求数据。
 //
 // ★★ 施工目标获取契约（用户设计 2026-09-25；本文件是唯一口径）★★
 //   输入：队所属扇区 sec（认领层给）· 当前带 [rLo,rHi] · 可达判定
@@ -40,12 +40,8 @@ export class FortifyPlanner {
   readonly scanned: boolean[] = Array(FORTIFY_SECTORS).fill(false);
   /** ★ 每扇区候选点（需求降序；仅扇区内 ∧ 带内；targetOf 逐个试可达） */
   readonly candidates: FortifyPick[][] = Array.from({ length: FORTIFY_SECTORS }, () => []);
-  /** 队→扇区认领（一队一区，不重合；**需求最高优先，逐个分配**） */
-  readonly claims = new Map<number, number>();
-  /** 各队当前施工点 */
-  readonly spots = new Map<number, FortifyPick & { sector: number }>();
   private cursor = 0;
-  readonly dbg = { sweeps: 0, injected: 0, connected: 0, sectors: FORTIFY_SECTORS, builders: 0, claimsN: 0, spotsN: 0, assigned: '-' };
+  readonly dbg = { sweeps: 0, sectors: FORTIFY_SECTORS, builders: 0, assigned: '-' };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（**扇区内 ∧ 带内**；角度 [si,si+1)/8·2π）
    *  产出：`worst[si]`（峰值点）· `safety[si]`（峰值分）· `candidates[si]`（需求降序候选，≤CAND_K） */
@@ -95,6 +91,8 @@ export class FortifyPlanner {
     cx: number, cz: number, sec: number, rLo: number, rHi: number,
     doneScore: number,
     canReach?: (x: number, z: number) => boolean,
+    /** ★ 新（2026-09-26）：排除集（已预约/已建/黑名单点）——防多队同点 */
+    exclude?: (x: number, z: number) => boolean,
   ): FortifyPick | null {
     const list = this.candidates[sec];
     if (!list || list.length === 0) return null;
@@ -111,72 +109,14 @@ export class FortifyPlanner {
       if (ang < 0) ang += TAU;
       if (ang < a0 || ang >= a1) continue;
       if (canReach && !canReach(c.x, c.z)) continue;
+      if (exclude && exclude(c.x, c.z)) continue;
       if (c.score >= doneScore) return { x: c.x, z: c.z, score: c.score };
       if (!fallback) fallback = { x: c.x, z: c.z, score: c.score };
     }
     return fallback;
   }
 
-  /** 分配：**需求最高优先逐个分配**（一队一区）；仅阵亡释放；更缺的未占区（差 ≥ MARGIN）可抢占 */
-  assign(builderIds: readonly number[], doneScore = 0): void {
-    const alive = new Set(builderIds);
-    for (const [sid] of [...this.claims]) {
-      if (!alive.has(sid)) this.claims.delete(sid);
-    }
-    const used0 = new Set(this.claims.values());
-    const MARGIN = 0.8;
-    for (const [sid, sec] of [...this.claims]) {
-      let bestSec = -1;
-      let bestV = this.safety[sec] + MARGIN;   // 需**高**于现区 +余量
-      for (let i = 0; i < FORTIFY_SECTORS; i++) {
-        if (used0.has(i)) continue;
-        const v = this.safety[i];
-        if (Number.isFinite(v) && v > bestV) { bestV = v; bestSec = i; }
-      }
-      if (bestSec >= 0) {
-        used0.delete(sec);
-        used0.add(bestSec);
-        this.claims.set(sid, bestSec);
-      }
-    }
-    for (const sid of builderIds) {
-      if (this.claims.has(sid)) continue;
-      let bestSec = -1;
-      let bestV = -Infinity;
-      for (let i = 0; i < FORTIFY_SECTORS; i++) {
-        if (used0.has(i)) continue;
-        const v = this.safety[i];
-        if (Number.isFinite(v) && v > bestV) { bestV = v; bestSec = i; }
-      }
-      if (bestSec < 0) {
-        for (let i = 0; i < FORTIFY_SECTORS; i++) if (!used0.has(i)) { bestSec = i; break; }
-      }
-      if (bestSec < 0) break;
-      this.claims.set(sid, bestSec);
-      used0.add(bestSec);
-    }
-    void doneScore;
-  }
-
-  /** ★ 连通阶段：相邻扇区**均不缺**（需求 < NEED_DONE）→ 中点注入连接战壕 */
-  connect(doneScore = 0, cap = 1): { x: number; z: number }[] {
-    const out: { x: number; z: number }[] = [];
-    for (let i = 0; i < FORTIFY_SECTORS && out.length < cap; i++) {
-      const j = (i + 1) % FORTIFY_SECTORS;
-      if (!Number.isFinite(this.safety[i]) || !Number.isFinite(this.safety[j])) continue;
-      if (this.safety[i] >= doneScore || this.safety[j] >= doneScore) continue;
-      const a = this.worst[i];
-      const b = this.worst[j];
-      if (!Number.isFinite(a.score) || !Number.isFinite(b.score)) continue;
-      if (Math.hypot(a.x - b.x, a.z - b.z) > 40) continue;
-      out.push({ x: Math.round((a.x + b.x) / 8) * 4, z: Math.round((a.z + b.z) / 8) * 4 });
-    }
-    return out;
-  }
-
   clear(): void {
-    this.claims.clear();
-    this.spots.clear();
     this.safety.fill(-Infinity);
     for (const w of this.worst) w.score = -Infinity;
     for (const l of this.candidates) l.length = 0;

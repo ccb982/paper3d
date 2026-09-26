@@ -811,5 +811,63 @@ console.log('[5j] SectorBuilder / BattalionManager（用户定 2026-09-26）');
   ok([...gaps.values()].every((g) => [...g.values()].every((n) => n >= 0)), '缺口表（扇区×兵种，供随打随补）非负');
 }
 
+// ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
+console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看门狗 / 补兵）');
+{
+  // ① 建造位置查询：exclude 跳过被预约/拉黑的点（防多队同点）
+  const fp = new FortifyPlanner();
+  const cands = [{ x: 12, z: 0, score: 0.9 }, { x: 14, z: 0, score: 0.8 }, { x: 16, z: 0, score: 0.7 }];
+  for (const c of cands) fp.candidates[0]!.push({ ...c });
+  fp.scanned[0] = true;
+  const first = fp.targetOf(0, 0, 0, 0, 30, 0.5);
+  ok(first?.x === 12, '查询：扇区内需求最高可达点');
+  const excluded = fp.targetOf(0, 0, 0, 0, 30, 0.5, undefined, (x) => x === 12);
+  ok(excluded?.x === 14, '查询：exclude（预约/黑名单）跳过已占点 → 不再多队同点');
+
+  // ② 工兵管理器：预约唯一 + 看门狗拉黑换点 + 补兵请求
+  const sm = new SquadManager();
+  sm.register(21, 'engineer', 1, 0);
+  sm.register(22, 'engineer', 1, 0);
+  const pos = new Positions();
+  pos.setSquad(21, 50, 50);
+  pos.setSquad(22, 50, 50);
+  let spawnReq = 0;
+  const wiped = new Set<number>();
+  const pool = [{ x: 12, z: 0, score: 0.9 }, { x: 14, z: 0, score: 0.8 }];
+  const port = {
+    band: () => ({ rLo: 0, rHi: 30 }),
+    ship: () => ({ x: 0, z: 0 }),
+    needAt: () => 1,
+    canReach: () => true,
+    assault: () => false,
+    noNewBuild: () => false,
+    aliveOfSquad: (id: number) => (wiped.has(id) ? 0 : 1),
+    refreshSector: () => {},
+    pickSpot: (_sec: number, _lo: number, _hi: number, _reach: (x: number, z: number) => boolean, exclude?: (x: number, z: number) => boolean) =>
+      pool.find((p) => !(exclude?.(p.x, p.z) ?? false)) ?? null,
+    canDig: () => true,
+    cover: () => {},
+    dig: () => {},
+    markDirty: () => {},
+    requestSpawn: () => { spawnReq++; return true; },
+  };
+  const eng2 = new EngineerManager(sm, () => port as never);
+  eng2.sync();
+  const ctx2 = { pos, ringMin: 0, ringMax: 0, now: 0 };
+  eng2.assign(ctx2);
+  const t21 = eng2.targets.get(21)!, t22 = eng2.targets.get(22)!;
+  ok(t21 && t22 && !(t21.x === t22.x && t21.z === t22.z), '★ 分区：两队不同区拿不同件（不重合）');
+  ok(eng2.fortDbg.spawned === 0, '有活队时不补兵（不微操队员）');
+  // ★ 补队：分区小队全灭 → 补一支新小队（3 只成队）
+  wiped.add(22);
+  ctx2.now = 2;
+  eng2.assign(ctx2);
+  ok(spawnReq >= 3 && eng2.fortDbg.spawned >= 3, '★ 小队没了 → 补一支新小队（3 只成队）');
+  // 看门狗：队长原地不动 30s → 拉黑换点
+  for (let s = 3; s <= 33; s++) { ctx2.now = s; eng2.assign(ctx2); }
+  ok(eng2.fortDbg.unreach > 0, '★ 到件看门狗：超时未到 → 判不可达、拉黑换点');
+  ok(eng2.fortDbg.last.includes('拉黑') || eng2.fortDbg.unreach > 0, '看门狗留痕（fortDbg.unreach/last）');
+}
+
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);
 if (fail > 0) process.exit(1);

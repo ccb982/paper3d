@@ -313,8 +313,6 @@ export class SwarmData {
       // ★ 总攻不推（施工带已收缩为点）；其余达标即推，2m/s（用户定：前压提速）
       if (allDone && this.battlePosture !== 'assault') this.pushM = Math.min(this.frontP * 120, this.pushM + 1.0);
       this.fortify.dbg.builders = [...this.swarm.squads.all()].filter((s) => s.builders).length;
-      this.fortify.dbg.claimsN = this.fortify.claims.size;
-      this.fortify.dbg.spotsN = this.fortify.spots.size;
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
@@ -431,18 +429,22 @@ export class SwarmData {
       canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),
       assault: () => this.battlePosture === 'assault',
       noNewBuild: () => this.lastDayRaw >= 0.45,
-      doneScore: () => NEED_DONE,
-      sectorOf: (id) => this.fortify.claims.get(id) ?? -1,
-      assignClaims: (ids) => this.fortify.assign(ids, NEED_DONE),
+      aliveOfSquad: (id) => this.swarm.squads.get(id)?.members.size ?? 0,
       refreshSector: (cx, cz, rLo, rHi) =>
         this.fortify.refreshOne(cx, cz, rLo, rHi, (x, z) => this.fortifyNeed(x, z)),
-      pickSpot: (sec, rLo, rHi, canReach) =>
-        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach),
+      pickSpot: (sec, rLo, rHi, canReach, exclude) =>
+        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude),
       canDig: (x, z) => {
         const raster = RasterMap.current;
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
       },
       cover: (x, z, v) => this.buildCover?.(x, z, v),
+      // ★ 补兵（用户定 2026-09-26）：工兵缺员 → 请求生成施工兵（生成口真源在 CommanderSpawn）
+      requestSpawn: (role, x, z) => {
+        if (role !== 'builder' || !this.spawnBuilder) return false;
+        this.spawnBuilder(x, z);
+        return true;
+      },
       dig: (x, z) => this.digTrench?.(x, z),
       markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
     };
