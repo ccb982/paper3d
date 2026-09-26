@@ -221,13 +221,6 @@ export class FeasibilityPath {
       anchor = next;
     }
     if (out.length > 0) out[out.length - 1] = { x: gx, z: gz };
-    // ★ 长寻路遇坡严格上坡（用户定 2026-09-26）：路线每跨一条**可爬坡边**，先插**坡面边中点**
-    //   （climb=true）——执行层先到中点正对坡面、再程序化爬升；不再贴着坡脚/侧壁蹭。
-    {
-      const withClimbs = this.addClimbWaypoints(t, sx, sz, out);
-      out.length = 0;
-      for (const q of withClimbs) out.push(q);
-    }
     // ★ S2（用户定 2026-09-25）：**加密**——每段 ≤LOCAL.SEG_MAX，逐段过表（可执行）+ 逐段 climb，
     //   执行层（Anchor.routeNext）按 ≤10m 路点推进即可逐步绕行；不加密则远路点会被"直线化"。
     if (out.length > 0 && LOCAL.SEG_MAX > 0) {
@@ -252,36 +245,6 @@ export class FeasibilityPath {
     }
     this.dbg.ok++;
     return 'ok';
-  }
-
-  /** ★ 长寻路坡面几何（用户定 2026-09-26）：沿段逐格（4m 轴步）走，跨**可爬坡边**
-   *  （表 climb 位）时，在该边**中点**前插一个 climb=true 路点——执行层严格正对坡面上。 */
-  private addClimbWaypoints(
-    t: PassTable, sx: number, sz: number,
-    pts: readonly { x: number; z: number; climb?: boolean }[],
-  ): { x: number; z: number; climb?: boolean }[] {
-    const res: { x: number; z: number; climb?: boolean }[] = [];
-    let px = sx, pz = sz;
-    for (const q of pts) {
-      let cx = Math.floor(px / CELL), cz = Math.floor(pz / CELL);
-      const tx = Math.floor(q.x / CELL), tz = Math.floor(q.z / CELL);
-      let guard = 0;
-      while ((cx !== tx || cz !== tz) && guard++ < 64) {
-        const ddx = tx - cx, ddz = tz - cz;
-        const sx2 = ddx === 0 ? 0 : ddx > 0 ? 1 : -1;
-        const sz2 = ddz === 0 ? 0 : ddz > 0 ? 1 : -1;
-        const useX = Math.abs(ddx) >= Math.abs(ddz);
-        const mvx = useX ? sx2 : 0, mvz = useX ? 0 : sz2;
-        const ccx = cx * CELL + CELL / 2, ccz = cz * CELL + CELL / 2;
-        if ((mvx !== 0 || mvz !== 0) && t.climbAt(ccx, ccz, mvx, mvz)) {
-          res.push({ x: ccx + mvx * (CELL / 2), z: ccz + mvz * (CELL / 2), climb: true });
-        }
-        cx += mvx; cz += mvz;
-      }
-      res.push(q);
-      px = q.x; pz = q.z;
-    }
-    return res;
   }
 
   /** ★ S2：沿段爬坡标注（2m 采样；与 canSegment 同口径）——进入该点所经段是否需程序化爬坡 */

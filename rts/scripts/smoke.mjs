@@ -1,4 +1,5 @@
 // ============================================================
+// ★ 标准测试位（用户定）：seed=4242 ship=-17,-267 landing=131,-206 cam=31,-242
 // smoke —— RTS 冒烟（严格两阶段：选点页 → 换种子 → 确认 → 世界加载）
 // 用法：npm run smoke（前置：dev server；环境：RTS_URL / CHROME_PATH / SEED）
 // 失败退出码 = 1
@@ -23,7 +24,7 @@ const checks = [];
 let selInfo = { phase: null, hasSelect: false, canvases: 0 };
 let world = { phase: null, swarmN: null, swarmAlive: null, drawCalls: null };
 try {
-  await page.goto(`${RTS_URL}?seed=${SEED}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.goto(`${RTS_URL}?seed=${SEED}&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForFunction(() => window.__rts?.phase === 'select' && !!window.__rts?.select, { timeout: 180000, polling: 500 });
   selInfo = await page.evaluate(() => ({
     phase: window.__rts?.phase ?? null,

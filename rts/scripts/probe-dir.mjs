@@ -1,4 +1,5 @@
 // ============================================================
+// ★ 标准测试位（用户定）：seed=4242 ship=-17,-267 landing=131,-206 cam=31,-242
 // probe-dir —— 队内指挥（成员指令）追踪：按兵种统计变化频率 + "无脑"模式
 // 用法：npm run probe:dir（前置 dev server）
 //   采样 500ms × 120（60s）；统计每成员：
@@ -17,7 +18,7 @@ const browser = await puppeteer.launch({
   executablePath: CHROME_PATH, headless: 'new', protocolTimeout: 3e5, args: ['--no-sandbox'],
 });
 const page = await browser.newPage();
-await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction(() => window.__rts?.phase === 'world' && window.__rts?.swarm, { timeout: 240000, polling: 500 });
 console.log(`[装载] 采样 ${N}×500ms…`);
 

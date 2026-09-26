@@ -190,61 +190,35 @@ export class PassTable {
     else this.stats.open++;
   }
 
-  /** ★★ 坡面方位（用户定 2026-09-26）：可爬坡面 = weld 且该向净升 > 阈值（climb 位）。
-   *  方位来自地形裁决（finalRuling→weld），**不用高度采样猜**。返回法线 (ux,uz)（轴对齐，
-   *  决定"正对"方向）/ 坡面**边中点** (mx,mz)（未到坡面先走这里）/ 净升 rise。
-   *  选取（词典序，无魔法权重）：**本格直用**；否则邻域（±1 格；给出 desired 时 ±2）
-   *  按"正对 align > 近 dist > 净升 rise"取最优；无朝坡候选 → null。 */
+  /** ★★ 坡面方位（用户定 2026-09-26）：**只认本格**的可爬坡面边（climb 位 = weld 且净升 > 阈值）。
+   *  方位来自地形裁决（finalRuling→weld），不用高度采样猜。返回法线 (ux,uz)（轴对齐，"正对"方向）
+   *  与净升 rise。用户口径：**坡很宽、处处可爬**——站在坡面任一格都能就地爬，不绕边中点/不蹭侧壁。
+   *  desired 给定时只取朝坡（align>0）中最正对、其次净升最高的边；无 → null。 */
   climbFaceAt(
     x: number, z: number, desiredX = 0, desiredZ = 0,
   ): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
     if (!this.ready) return null;
-    const c0 = this.cellAt(x, z);
-    if (c0 < 0) return null;
-    const ix0 = c0 % this.side, iz0 = (c0 - ix0) / this.side;
+    const i0 = this.cellAt(x, z);
+    if (i0 < 0) return null;
     const dl = Math.hypot(desiredX, desiredZ);
     const wantDir = dl > 1e-3;
-    /** 该格的坡面（同格多向 → 正对优先、其次净升；wantDir 时只认朝坡） */
-    const faceOf = (ix: number, iz: number): { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null => {
-      if (ix < 0 || iz < 0 || ix >= this.side || iz >= this.side) return null;
-      const i = iz * this.side + ix;
-      const cx = this.ox + ix * CELL + CELL / 2;
-      const cz = this.oz + iz * CELL + CELL / 2;
-      let best: { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null = null;
-      for (let dir = 0; dir < 4; dir++) {
-        if (this.climb[i * 4 + dir] !== 1) continue;   // climb 位 = weld 且净升 > 阈值
-        const ux = DVX[dir], uz = DVZ[dir];
-        const align = wantDir ? (desiredX * ux + desiredZ * uz) / dl : 0;
-        if (wantDir && align <= 0) continue;           // 只认朝坡的候选
-        const rise = this.drop[i * 4 + dir];
-        if (!best || align > best.align + 1e-6
-          || (Math.abs(align - best.align) <= 1e-6 && rise > best.rise)) {
-          best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2), align };
-        }
-      }
-      return best;
-    };
-    const own = faceOf(ix0, iz0);
-    if (own) return { ux: own.ux, uz: own.uz, rise: own.rise, mx: own.mx, mz: own.mz };
-    const R = wantDir ? 2 : 1;
-    let best: { ux: number; uz: number; rise: number; mx: number; mz: number } | null = null;
-    let bAlign = -Infinity, bDist = Infinity, bRise = -Infinity;
-    for (let dz = -R; dz <= R; dz++) {
-      for (let dx = -R; dx <= R; dx++) {
-        if (dx === 0 && dz === 0) continue;
-        const d = Math.hypot(dx, dz);
-        const f = faceOf(ix0 + dx, iz0 + dz);
-        if (!f) continue;
-        const better = f.align > bAlign + 1e-6
-          || (Math.abs(f.align - bAlign) <= 1e-6 && d < bDist - 1e-6)
-          || (Math.abs(f.align - bAlign) <= 1e-6 && Math.abs(d - bDist) <= 1e-6 && f.rise > bRise);
-        if (better) {
-          best = { ux: f.ux, uz: f.uz, rise: f.rise, mx: f.mx, mz: f.mz };
-          bAlign = f.align; bDist = d; bRise = f.rise;
-        }
+    const ix = i0 % this.side, iz = (i0 - ix) / this.side;
+    const cx = this.ox + ix * CELL + CELL / 2;
+    const cz = this.oz + iz * CELL + CELL / 2;
+    let best: { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null = null;
+    for (let dir = 0; dir < 4; dir++) {
+      if (this.climb[i0 * 4 + dir] !== 1) continue;
+      const ux = DVX[dir], uz = DVZ[dir];
+      const align = wantDir ? (desiredX * ux + desiredZ * uz) / dl : 0;
+      if (wantDir && align <= 0) continue;
+      const rise = this.drop[i0 * 4 + dir];
+      if (!best || align > best.align + 1e-6
+        || (Math.abs(align - best.align) <= 1e-6 && rise > best.rise)) {
+        best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2), align };
       }
     }
-    return best;
+    if (!best) return null;
+    return { ux: best.ux, uz: best.uz, rise: best.rise, mx: best.mx, mz: best.mz };
   }
 
   /** 窗口界（格坐标；可行性寻路 BFS 用） */

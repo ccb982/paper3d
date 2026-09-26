@@ -8,8 +8,9 @@
 //        · 想上坡（climbOrdered ‖ 方向朝坡）→ 未到坡面先走**边中点**（正对方位）；到坡面沿法线定速爬；
 //        · 不想上坡但人在坡面上（局部坡度 ≥ CLIMB_SLOPE_MIN）→ 下坡小推（坡面不许驻留）。
 //   ③ 立面阻挡：逐分量清零（陡升 > 台阶豁免 且不延续 = 墙；水中放宽到 SHORE_CLIMB_MAX）
-//      ★ 严格爬坡（用户定 2026-09-26，所有实体基类共用）：被墙挡住且**朝路上有可爬坡面**
-//        → 正对坡面（未到先走边中点；到了沿法线程序化爬升）——不许贴着坡脚/侧壁蹭。
+//      ★ 严格爬坡（用户定 2026-09-26，所有实体基类共用）：**坡很宽、处处可爬**——
+//        只要本格的坡面边朝路上（表标注），就地沿法线爬升（不绕边中点/不蹭侧壁）；
+//        被墙挡住且朝路上有坡面边 → 同一条：就地正对爬。
 //   ④ 贴地：位移后落差 > 台阶 → 回退（0.6 小台阶交给上层限速踏过）
 //   ★ 待实装（2026-09-25 用户定）：**高精度层语义（H2）+ 跨层位移校验 canShift**——
 //     所有位移（自身/推挤/贴地）统一过它；TerrainProbe.layerAt 为单源；L2/L3 同款。见《寻路重写方案.md》§4.4.5。
@@ -39,8 +40,6 @@ export function unbuyGroundY(x: number, z: number, y: number): number {
 
 /** 上坡意图阈值（方向·法线 dot；> 此值 = 想上坡） */
 const CLIMB_INTENT_DOT = 0.1;
-/** 到坡面判定（米）：与边中点距离 ≤ 此值 = 已在坡面（爬）；否则先走过去（正对方位） */
-const CLIMB_FACE_REACH = 2.5;
 
 /** ★ 跨层位移校验（H2 单源，用户定 2026-09-25）：从 (fx,fz,fy) 移到 (tx,tz) 是否允许——
  *  目的地按**当前层**取地表高；上升 > stepLimit → 不允许（自身步进/推挤/贴地共用）。 */
@@ -132,9 +131,9 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 上坡（单一模型，2026-09-26 重构；两载体同内核） ----
-    //   坡面方位 = 表标注（法线 n + 边中点 m）；只有两条规则：
-    //     ① 想上坡（显式爬坡令 ‖ 方向朝坡）→ 未到坡面先走边中点（正对方位）；到坡面沿法线定速爬；
+    // ---- 上坡（就地模型，2026-09-26；两载体同内核） ----
+    //   坡面 = 本格自己的表标注坡面边（`uphillNormal`；**坡很宽，处处可爬，不绕边中点**）：
+    //     ① 想上坡（显式爬坡令 ‖ 方向朝坡）→ 就地沿法线定速爬升（爬坡态跳过墙检，坡度由表保证）；
     //     ② 不想上坡但人在坡面上 → 下坡小推（坡面不许驻留）。
     if (inp.blockCliffClimb && !inp.climbAnyTerrain) {
       const dl0 = Math.hypot(inp.dirX, inp.dirZ) || 1;
@@ -142,18 +141,7 @@ export class CharacterCore {
       if (face) {
         const dot = (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0;
         const wantsUp = inp.climbOrdered || dot > CLIMB_INTENT_DOT;
-        const mx = face.mx !== undefined ? face.mx - inp.x : 0;
-        const mz = face.mz !== undefined ? face.mz - inp.z : 0;
-        const ml = Math.hypot(mx, mz);
-        const midAhead = mx * inp.dirX + mz * inp.dirZ > 0;
-        if (wantsUp && midAhead && ml > CLIMB_FACE_REACH) {
-          // 未到坡面：先沿坡底走到**坡面边中点**（正对方位；普通移动，受墙检）
-          dx = (mx / ml) * inp.speed * inp.dt;
-          dz = (mz / ml) * inp.speed * inp.dt;
-        } else if (wantsUp && !midAhead && ml > CLIMB_FACE_REACH) {
-          // 中点已在身后（已越过坡面）→ 正常走，不回头、不爬
-        } else if (wantsUp) {
-          // 已在坡面（或表未给中点）→ 爬坡态：沿法线定速（跳过墙检，坡度由表保证）
+        if (wantsUp) {
           out.climbing = true;
           dx = face.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
           dz = face.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
@@ -186,24 +174,14 @@ export class CharacterCore {
       else if (dz < 0 && isWall(inp.x, inp.z - inp.hz - m, 0, -1)) { dz = 0; out.blocked = true; }
     }
 
-    // ---- 严格爬坡（基类共用，用户定 2026-09-26）：被墙挡住 → 路上有坡就正对爬上去 ----
-    //   规则：期望方向被墙挡（out.blocked）且**朝路上有可爬坡面**（表标注法线+边中点）——
-    //   未到坡面先走边中点（正对方位）；到坡面沿法线程序化爬升。代理/队长/实体同此一条。
+    // ---- 严格爬坡（基类共用，用户定 2026-09-26）：被墙挡住且朝路上有本格坡面边 → 就地爬 ----
+    //   （坡很宽、处处可爬；**不许**绕边中点，也不许贴着坡脚/侧壁蹭。）
     if (out.blocked && !out.climbing && inp.blockCliffClimb && !inp.climbAnyTerrain) {
       const f2 = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
       if (f2) {
-        const mx = f2.mx !== undefined ? f2.mx - inp.x : 0;
-        const mz = f2.mz !== undefined ? f2.mz - inp.z : 0;
-        const ml = Math.hypot(mx, mz);
-        if (ml > CLIMB_FACE_REACH && mx * inp.dirX + mz * inp.dirZ > 0) {
-          dx = (mx / ml) * inp.speed * inp.dt;
-          dz = (mz / ml) * inp.speed * inp.dt;
-          out.blocked = false;
-        } else {
-          out.climbing = true;
-          dx = f2.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-          dz = f2.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
-        }
+        out.climbing = true;
+        dx = f2.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
+        dz = f2.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
       }
     }
 

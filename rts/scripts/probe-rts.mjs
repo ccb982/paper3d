@@ -1,4 +1,5 @@
 // ============================================================
+// ★ 标准测试位（用户定）：seed=4242 ship=-17,-267 landing=131,-206 cam=31,-242
 // probe-rts —— RTS 蜂群行为探针 + 基线断言（移植自 全新的游戏/scripts/tmp/diag-rts.mjs，2026-09-24）
 // 用法：npm run probe
 //   前置：dev server 已启动（默认 http://localhost:5175/；Vite 端口被占会自动 +1，用 RTS_URL 覆盖）
@@ -21,7 +22,7 @@ await page.setViewport({ width: 1280, height: 720 });
 const errs = [];
 page.on('pageerror', (e) => errs.push('[pageerror] ' + String(e).slice(0, 200)));
 page.on('console', (m) => { if (m.type() === 'error') errs.push('[console] ' + m.text().slice(0, 160)); });
-await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 
 const probe = () => page.evaluate(() => {
   try {
@@ -141,7 +142,7 @@ for (const t of [8000, 20000, 40000, 70000, 90000]) {
     await page.evaluate(() => {
       const w = window.__rts;
       setTimeout(() => w.swarm.data.scrubDay(0.5), 28000);   // T+68：第一波（收到舰）
-      w.cam.tx = 60; w.cam.tz = -40; w.cam.dist = 200; w.cam.pitch = 1.2;
+      w.cam.tx = 31; w.cam.tz = -242; w.cam.dist = 200; w.cam.pitch = 1.2;
     });
   }
   if (t === 20000) {

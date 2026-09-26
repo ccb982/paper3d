@@ -1,4 +1,5 @@
 // ============================================================
+// ★ 标准测试位（用户定）：seed=4242 ship=-17,-267 landing=131,-206 cam=31,-242
 // probe-squad —— 单小队全路径追踪 + 卡死归因
 // 用法：npm run probe:squad（前置 dev server；SEED / PICK=defense|assault|... / N=样本数）
 //   1) 取一个小队（默认第一个工兵队），2Hz 采样：成员位置/速度/指令/任务/挡格 + 队令/走廊/锚 + 队长
@@ -17,7 +18,7 @@ const browser = await puppeteer.launch({
   executablePath: CHROME_PATH, headless: 'new', protocolTimeout: 3e5, args: ['--no-sandbox'],
 });
 const page = await browser.newPage();
-await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=${SEED}&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction(() => window.__rts?.phase === 'world' && window.__rts?.swarm, { timeout: 240000, polling: 500 });
 await new Promise((r) => setTimeout(r, 15000));
 

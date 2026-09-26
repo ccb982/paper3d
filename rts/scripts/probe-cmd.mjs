@@ -1,9 +1,10 @@
 import puppeteer from 'puppeteer-core';
+// ★ 标准测试位（用户定）：seed=4242 ship=-17,-267 landing=131,-206 cam=31,-242
 const CHROME_PATH = process.env.CHROME_PATH ?? 'C:/Users/22641/AppData/Local/Google/Chrome/Application/chrome.exe';
 const browser = await puppeteer.launch({ executablePath: CHROME_PATH, headless: 'new', protocolTimeout: 3e5, args: ['--no-sandbox'] });
 const page = await browser.newPage();
 const RTS_URL = process.env.RTS_URL ?? 'http://localhost:5175/';
-await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=4242&x=60&z=-40`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+await page.goto(`${RTS_URL}${RTS_URL.includes('?') ? '&' : '?'}seed=4242&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
 await page.waitForFunction(() => window.__rts?.phase === 'world' && window.__rts?.swarm, { timeout: 240000, polling: 500 });
 console.log('[装载] 观察 30s…');
 const seen = [];

@@ -15,9 +15,13 @@ import puppeteer from 'puppeteer-core';
 const RTS_URL = process.env.RTS_URL ?? 'http://localhost:5175/';
 const CHROME_PATH = process.env.CHROME_PATH ?? 'C:/Users/22641/AppData/Local/Google/Chrome/Application/chrome.exe';
 const SEEDS = (process.env.SEEDS ?? '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,42,99,123,777,2024').split(',').map(Number);
-const FIXED_SEED = process.env.SEED ? Number(process.env.SEED) : null;
-const LOW = process.env.LOW ? process.env.LOW.split(',').map(Number) : null;      // 低地 x,z（配合 SEED 跳过扫描）
-const ENTER = process.env.ENTER ? process.env.ENTER.split(',').map(Number) : null; // 入口 x,z（默认=高原）
+// ★ 标准测试位（用户定 2026-09-26）：seed=4242 ship=(-17,-267) landing=(131,-206) cam=(31,-242)
+//   默认 = 标准位（低地 0,-232 → 船/台地 -17,-267）；显式给 SEEDS 或清空则回到扫描模式
+const STD_SEED = 4242, STD_LOW = [0, -232], STD_ENTER = [-17, -267];
+const SCAN_MODE = process.env.SEEDS !== undefined || process.env.STD_OFF === '1';
+const FIXED_SEED = process.env.SEED ? Number(process.env.SEED) : (SCAN_MODE ? null : STD_SEED);
+const LOW = process.env.LOW ? process.env.LOW.split(',').map(Number) : (SCAN_MODE ? null : STD_LOW);      // 低地 x,z（配合 SEED 跳过扫描）
+const ENTER = process.env.ENTER ? process.env.ENTER.split(',').map(Number) : (SCAN_MODE ? null : STD_ENTER); // 入口 x,z（默认=高原）
 const SPEED = Math.max(1, Number(process.env.SPEED ?? 8));
 const NEST = Math.max(1, Number(process.env.NEST ?? 3));
 const SCAN_ONLY = process.env.SCAN_ONLY === '1';

@@ -382,13 +382,13 @@ console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 /
   };
   ok(run(mkProbe(false, 2)).dx === 0, '硬边大落差：墙（只下不上）');
   ok(run(mkProbe(false, 0.5)).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
-  // ★ 上坡单一模型（2026-09-26）：想上坡 → 未到坡面走边中点（正对）；到坡面沿法线爬
+  // ★ 上坡就地模型（2026-09-26）：坡很宽、处处可爬——本格有坡面边且方向朝坡 → 就地沿法线爬
   const face = run(mkProbe(true, 2), 1, 0);
-  ok(face.dx > 0 && face.climbing === true, '已在坡面正对 → 沿法线爬');
-  const approach = run(mkProbe(true, 2, [4, 4]), 1, 0);   // 中点在前且远 → 先走过去（不爬）
-  ok(approach.dx > 0 && approach.dz > 0 && approach.climbing === false, '未到坡面（中点在 5.6m 外）→ 走边中点、不爬');
-  const behind = run(mkProbe(true, 2, [-4, 0]), 1, 0);    // 中点已在身后 → 正常走，不回头不爬
-  ok(behind.dx > 0 && Math.abs(behind.dz) < 1e-6 && behind.climbing === false, '中点身后 → 不回头、不爬（正常走）');
+  ok(face.dx > 0 && face.climbing === true, '正对坡面 → 就地沿法线爬');
+  const diagonal = run(mkProbe(true, 2), 0.707, 0.707);   // 斜向朝坡（有上坡分量）→ 也就地爬（不绕中点）
+  ok(diagonal.dx > 0 && Math.abs(diagonal.dz) < 1e-6 && diagonal.climbing === true, '斜向朝坡 → 就地爬（法线方向，不绕边中点）');
+  const back = run(mkProbe(true, 2), -1, 0);              // 方向背坡 → 不爬（坡面不许驻留：下坡小推）
+  ok(back.dx < 0 && back.climbing === false, '方向背坡 → 不爬（下坡小推）');
   const far = run(mkProbe(false, 2), 0.707, 0.707);   // 无坡（法线 null）→ 硬边墙照旧
   ok(far.dx === 0, '无坡硬边：仍按墙处理');
 }
