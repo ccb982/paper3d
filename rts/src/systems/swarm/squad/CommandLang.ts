@@ -29,9 +29,11 @@
 // ============================================================
 
 import { blockCheck } from '../../../entity/base/Blocking';
+import type { SquadMode } from '../engine/contracts';
 import type { SquadOrderState } from './State';
 
-export type Atom = 'patrol' | 'garrison' | 'march' | 'act';
+/** 解释结果的模式（= 两个移动原子 + 行为循环驻留 patrol/garrison；§2.10b） */
+export type Atom = SquadMode;
 
 /** 距离分流阈值（米；行军=长寻路，行动=短跳） */
 export const MARCH_DIST = 40;

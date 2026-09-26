@@ -7,7 +7,7 @@
 //   依赖铁律：只读队长执行态走廊（无状态、零分配）。
 
 import type { SquadOrderState } from './State';
-import { corridorAhead } from './Anchor';
+import { routeNext } from './Anchor';
 
 export interface FollowDir {
   x: number;
@@ -46,8 +46,9 @@ export function followDir(
   if (td <= stopR) return null;
   // ★ 掉队/被挡 → 沿走廊前瞻点走（长寻路；走廊即队长的长路）
   if (td > 12 && !walkable(px, pz, lx, lz)) {
-    // ★ 使用契约（§4.4）：成员只跟队长；掉队沿用**同一条路线**（routeNext 语义，S3 收口）
-    const ahead = corridorAhead(state, px, pz, 4);
+    // ★ 使用契约（§4.4/U5 收口 2026-09-26）：成员掉队与队长**同一语义**——同走廊 routeNext
+    //   （前一版 corridorAhead 是前瞻点，会跳过中间绕行点 → 直线撞崖；见《寻路重写方案.md》U5）
+    const ahead = routeNext(state, px, pz, 2);
     if (ahead) {
       const ax = ahead.x - px, az = ahead.z - pz;
       const al = Math.hypot(ax, az);

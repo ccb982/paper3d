@@ -190,6 +190,55 @@ export class PassTable {
     else this.stats.open++;
   }
 
+  /** ★★ 坡面方位（用户定 2026-09-26）：可爬坡面 = weld 且该向净升 > 阈值（climb 位）——
+   *  **方位来自地形裁决（finalRuling→weld），不用 16 向高度采样猜**；返回：
+   *  法线 (ux,uz)（轴对齐，决定正对方向）/ 坡面**边中点** (mx,mz)（未正对先走这里）/
+   *  净升 rise（米）。desired 给定时取与之最对齐的坡面（多坡择一）；无 → null。
+   *  本格优先，再扫 8 邻（覆盖 CLIMB_FACE_R 半径语义）。 */
+  climbFaceAt(
+    x: number, z: number, desiredX = 0, desiredZ = 0,
+  ): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
+    if (!this.ready) return null;
+    const dl = Math.hypot(desiredX, desiredZ);
+    const tryCell = (ix: number, iz: number, w: number): { ux: number; uz: number; rise: number; mx: number; mz: number } | null => {
+      if (ix < 0 || iz < 0 || ix >= this.side || iz >= this.side) return null;
+      const i = iz * this.side + ix;
+      let best: { ux: number; uz: number; rise: number; mx: number; mz: number } | null = null;
+      let bestScore = -Infinity;
+      const cx = this.ox + ix * CELL + CELL / 2;
+      const cz = this.oz + iz * CELL + CELL / 2;
+      for (let d = 0; d < 4; d++) {
+        if (this.climb[i * 4 + d] !== 1) continue;   // climb 位 = weld 且净升 > 阈值
+        const ux = DVX[d], uz = DVZ[d];
+        const rise = this.drop[i * 4 + d];
+        const align = dl > 1e-3 ? (desiredX * ux + desiredZ * uz) / dl : 0;   // [-1,1]
+        const score = align * 10 + rise - w;                                  // 对齐优先，其次净升，本格优先
+        if (score > bestScore) {
+          bestScore = score;
+          best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2) };
+        }
+      }
+      return best;
+    };
+    const c0 = this.cellAt(x, z);
+    if (c0 < 0) return null;
+    const ix0 = c0 % this.side, iz0 = (c0 - ix0) / this.side;
+    const own = tryCell(ix0, iz0, 0);
+    if (own) return own;
+    let best: { ux: number; uz: number; rise: number; mx: number; mz: number } | null = null;
+    let bestScore = -Infinity;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dz === 0) continue;
+        const f = tryCell(ix0 + dx, iz0 + dz, Math.hypot(dx, dz) * 0.5);
+        if (!f) continue;
+        const score = f.rise;
+        if (score > bestScore) { bestScore = score; best = f; }
+      }
+    }
+    return best;
+  }
+
   /** 窗口界（格坐标；可行性寻路 BFS 用） */
   bounds(): { ox: number; oz: number; side: number } {
     return { ox: Math.floor(this.ox / CELL), oz: Math.floor(this.oz / CELL), side: this.side };

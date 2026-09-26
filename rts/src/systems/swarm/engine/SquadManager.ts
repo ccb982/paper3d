@@ -8,7 +8,7 @@
 // 纯数据（无 three/无 services）→ 可独立自检。
 // ============================================================
 
-import type { AtomicKind, MobRole, OrderPhase, SquadReport } from './contracts';
+import type { MobRole, OrderPhase, SquadMode, SquadReport } from './contracts';
 
 export interface SquadRecord {
   id: number;
@@ -17,7 +17,7 @@ export interface SquadRecord {
   /** 最近汇报（队长位置 / 当前原子 / 命令阶段 / 汇报时刻） */
   x: number;
   z: number;
-  atom: AtomicKind;
+  atom: SquadMode;
   phase: OrderPhase;
   /** 队长自报：命令进度 0~1 / 静止时长（实秒）/ 整队血量比 */
   progress: number;

@@ -22,7 +22,7 @@ import { DANGER } from './SwarmDanger';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
-import { edgeStepRoute, edgeStepGreedy, cellsOfRoute } from './nav/EdgeFollow';
+import { edgeStepRoute, edgeStepGreedy, cellsOfRoute, axisStepToward, EDGE_LAYER_TOL } from './nav/EdgeFollow';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -89,9 +89,32 @@ export class SquadNavigator {
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
   edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
+    if (!g) return null;
+    const c = this.routeCursor(state, x, z, y);
+    if (!c) return null;
+    const st = axisStepToward(g, x, z, c.x - x, c.z - z);
+    if (!st) return null;   // 步不出：调用方做"路线修正"（朝当前路点软走），**不得朝最终目标直线**
+    return { dx: st.dx, dz: st.dz, climb: c.climb === true || g.climbAt(x, z, st.dx, st.dz) } as { dx: number; dz: number };
+  }
+
+  /** ★ 路线游标（用户定 2026-09-26）：沿走廊**单调锁存**推进的当前路点——
+   *  到达判定 = 点距 ≤ arriveR **且同层**（H2 高精度：层高差 ≤ EDGE_LAYER_TOL）；
+   *  已越过的路点永不回头（治"格边界最近格翻转"）；无走廊 → null。 */
+  routeCursor(
+    state: SquadOrderState | null, x: number, z: number, y: number, arriveR = 1.8,
+  ): { x: number; z: number; climb?: boolean } | null {
+    const g = this.localGrid();
     const path = state?.corridor ?? state?.order.path;
     if (!g || !path || path.length === 0) return null;
-    return edgeStepRoute(g, x, z, y, cellsOfRoute(path));
+    if (!state) return null;
+    let i = Math.max(0, Math.min(state.followIdx ?? 0, path.length - 1));
+    const reached = (p: { x: number; z: number }): boolean => {
+      if (Math.hypot(p.x - x, p.z - z) > arriveR) return false;
+      return Math.abs(g.heightAt(p.x, p.z) - y) <= EDGE_LAYER_TOL;   // ★ H2：同格不同层 ≠ 到达
+    };
+    while (i < path.length - 1 && reached(path[i] as { x: number; z: number })) i++;
+    state.followIdx = i;
+    return path[i] as { x: number; z: number; climb?: boolean };
   }
 
   /** ★ 方案 A：贪心格边步（成员跟队长 / 无路线；同格 → null 交软跟随） */
@@ -99,6 +122,15 @@ export class SquadNavigator {
     const g = this.localGrid();
     if (!g) return null;
     return edgeStepGreedy(g, x, z, y, tx, tz);
+  }
+
+  /** ★ 路线修正方向（单位向量）：朝当前锁存路点（无走廊/零距 → null；绝不朝最终目标） */
+  routeDir(state: SquadOrderState | null, x: number, z: number, y: number): { x: number; z: number } | null {
+    const rp = this.routeCursor(state, x, z, y);
+    if (!rp) return null;
+    const rx = rp.x - x, rz = rp.z - z;
+    const rl = Math.hypot(rx, rz);
+    return rl > 1e-3 ? { x: rx / rl, z: rz / rl } : null;
   }
 
   /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
@@ -192,6 +224,7 @@ export class SquadNavigator {
             { x: step.next.x, z: step.next.z, climb: step.climb },
             { x: tgt.x, z: tgt.z, climb: tail.ok ? tail.climb : false },   // 末段爬坡标注
           ];
+          state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
           state.pathFromX = this._from.x;
@@ -214,6 +247,7 @@ export class SquadNavigator {
       this.dbg.feasOk++;
       // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
+      state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       state.pathFromX = this._from.x;
@@ -229,6 +263,7 @@ export class SquadNavigator {
       this.dbg.feasBlocked++;
       state.pathFailedAt = now;
       state.corridor = undefined;
+      state.followIdx = undefined;
       return;
     }
     // ★ S2（用户定 2026-09-25）：**长寻路只用可行性表**——表外/未就绪 → 不发不可保证的路。
@@ -237,6 +272,7 @@ export class SquadNavigator {
     this.dbg.fail++;
     state.pathFailedAt = now;
     state.corridor = undefined;
+    state.followIdx = undefined;
   }
 
   /** ★ P2 初级寻路核验入口（大队发令前调用；与 ensurePath 共用 HPA 簇缓存）。
@@ -360,6 +396,10 @@ export class SquadNavigator {
         const upos0 = u.position;
         const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
         if (e3) { sdx = e3.dx; sdz = e3.dz; }
+        else if (isLead) {
+          const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
+          if (rd) { sdx = rd.x; sdz = rd.z; }
+        }
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }
         else u.moveTarget = { x: sx, y: 0, z: sz, climb: needClimb };

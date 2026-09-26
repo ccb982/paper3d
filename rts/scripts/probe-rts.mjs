@@ -95,17 +95,25 @@ await page.evaluate(() => {
       let a = window.__allTrk.get(s.id); if (!a) { a = []; window.__allTrk.set(s.id, a); }
       a.push({ t: +(performance.now() / 1000).toFixed(1), x: +(cx / n).toFixed(1), z: +(cz / n).toFixed(1) });
     }
-    // 行军队（advance 令 + 目标最远）
+    // 行军队（advance 令 + 目标最远）——★ 粘住固定一队（口径修复 2026-09-26）：
+    //   原实现每拍重选最远行军队 → 换队即算一次 cmdChanges（量的不是同一令的稳定性）；
+    //   现在只选一次（死/解散才重选），cmdChanges = 该队命令目标真实变化次数。
     const views = new Map((w.engineView?.squads() ?? []).map((v) => [v.id, v]));
     let best = null, bd = -1;
-    for (const s of w.swarm.squads.all()) {
-      const o = views.get(s.id)?.order;
-      if (!o || (o.kind !== 'advance' && o.kind !== 'act' && o.kind !== 'march') || !o.target) continue;
-      let cx = 0, cz = 0, n = 0;
-      for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
-      if (n === 0) continue;
-      const d = Math.hypot(o.target.x - cx / n, o.target.z - cz / n);
-      if (d > bd) { bd = d; best = s; }
+    const alive = (id) => w.swarm.squads.get(id) != null && w.swarm.squads.get(id).members.size > 0;
+    const sticky = window.__trkSid;
+    if (sticky != null && alive(sticky)) best = w.swarm.squads.get(sticky);
+    if (!best) {
+      for (const s of w.swarm.squads.all()) {
+        const o = views.get(s.id)?.order;
+        if (!o || (o.kind !== 'advance' && o.kind !== 'act' && o.kind !== 'march') || !o.target) continue;
+        let cx = 0, cz = 0, n = 0;
+        for (const m of s.members.values()) { cx += m.x; cz += m.z; n++; }
+        if (n === 0) continue;
+        const d = Math.hypot(o.target.x - cx / n, o.target.z - cz / n);
+        if (d > bd) { bd = d; best = s; }
+      }
+      if (best) window.__trkSid = best.id;
     }
     if (!best) return;
     let cx = 0, cz = 0, n = 0;

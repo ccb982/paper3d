@@ -17,6 +17,8 @@ export interface EdgeGrid {
   canStep(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ H2：格地表高（层判等用；生产 = PassTable.heightAt） */
   heightAt(x: number, z: number): number;
+  /** ★ 可爬坡面位（可选；生产 = PassTable.climbAt）：该向 = weld 且净升 > 阈值 */
+  climbAt?(x: number, z: number, dx: number, dz: number): boolean;
 }
 
 /** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
@@ -44,11 +46,15 @@ export function cellsOfRoute(route: readonly { x: number; z: number }[]): CellRe
 }
 
 /** 轴对齐单步（canStep 校验；两轴都需走时按"先大分量、后小分量"给一步；都被禁 → null） */
-function axisStep(g: EdgeGrid, x: number, z: number, ddx: number, ddz: number): { dx: number; dz: number } | null {
+export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, ddz: number): { dx: number; dz: number } | null {
   const sx = ddx === 0 ? 0 : (ddx > 0 ? 1 : -1);
   const sz = ddz === 0 ? 0 : (ddz > 0 ? 1 : -1);
   if (sx === 0 && sz === 0) return null;
-  const xFirst = Math.abs(ddx) >= Math.abs(ddz);
+  // ★ 坡面优先（用户定 2026-09-26）：目标轴若为**可爬坡面**（climb 位）→ 先走该轴（正对坡面），
+  //   不被"横向分量更大"抢走（否则先沿坡脚走 → 卡侧壁/来回摆）。坡面方位来自表标注。
+  const xClimb = sx !== 0 && (g.climbAt?.(x, z, sx, 0) ?? false);
+  const zClimb = sz !== 0 && (g.climbAt?.(x, z, 0, sz) ?? false);
+  const xFirst = xClimb && !zClimb ? true : zClimb && !xClimb ? false : Math.abs(ddx) >= Math.abs(ddz);
   const opts: [number, number][] = xFirst ? [[sx, 0], [0, sz]] : [[0, sz], [sx, 0]];
   for (const [dx, dz] of opts) {
     if (dx === 0 && dz === 0) continue;
@@ -92,7 +98,7 @@ export function edgeStepRoute(
   }
   const next = cells[idx + 1];
   if (!next) return null;                          // 已到路线末尾
-  return axisStep(g, x, z, next.cx - cur.cx, next.cz - cur.cz);
+  return axisStepToward(g, x, z, next.cx - cur.cx, next.cz - cur.cz);
 }
 
 /** ★ 贪心格边跟随（H2 层感知；成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep）。 */
@@ -106,5 +112,5 @@ export function edgeStepGreedy(
     const h = g.heightAt(cur.cx * EDGE_CELL + EDGE_CELL / 2, cur.cz * EDGE_CELL + EDGE_CELL / 2);
     if (Math.abs(h - y) <= EDGE_LAYER_TOL) return null;
   }
-  return axisStep(g, x, z, tgt.cx - cur.cx, tgt.cz - cur.cz);
+  return axisStepToward(g, x, z, tgt.cx - cur.cx, tgt.cz - cur.cz);
 }

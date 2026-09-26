@@ -1,44 +1,30 @@
 // ============================================================
-// squad/Abilities —— 原子能力四件套（稳定层；重写 P2）
+// squad/Abilities —— 运行模式到位口径（稳定层；《RTS架构.md》§2.10b）
 // ============================================================
-// 原子层 = 巡逻 / 驻守 / 行军 / 行动。**只增不改**：新增原子 = 加一行 + 该原子的
-// 到位策略；队长核心（SquadCore）与执行侧（MarchAction）都从这里取口径。
-//   · 行军：距离长 → 长寻路（走廊；nav/LongPath+Corridor）
-//   · 行动：距离短 → 短跳（LOS 直线）
-//   · 巡逻：到位后围绕目标游弋（loiter）
-//   · 驻守：到掩体/站位后不动
-// 复合命令（保护/防御/…）在队长侧落到原子：保护/防御 = 巡逻位，其余 = 驻守位。
+// ★ 原子只有两个：**长寻路 march / 短寻路 act**（距离分裂在 ensurePath 一处，C4）。
+//   patrol / garrison =「取目标函数 → 移动」的行为循环驻留模式（非原子）。
+// 本表只回答"到位后转什么模式"；行为目标点由各取目标函数给（patrolNext/blockCheck…）。
+// 复合命令（保护/防御/…）在队长侧落到模式：保护/防御/巡逻 = 巡逻位，其余 = 驻守位。
 // ============================================================
 
-import type { AtomicKind, CompositeKind } from '../engine/contracts';
+import type { CompositeKind, SquadMode } from '../engine/contracts';
 
-export interface AtomicDef {
-  /** 到位后驻留的原子（到位即转） */
-  onArrive: AtomicKind;
-  /** 到位后是否游弋（围绕目标小半径摆动；站位由队长层算） */
-  loiter: boolean;
-  /** 距离分流档：true = 长寻路（> MARCH_DIST），false = 短跳 */
-  long: boolean;
-  /** 稳定层说明（文档；不参与逻辑） */
-  note: string;
+export interface ModeDef {
+  /** 到位后驻留的运行模式（到位即转） */
+  onArrive: SquadMode;
 }
 
-/** 四件套真源（稳定层；只增不改） */
-export const ATOMIC: Record<AtomicKind, AtomicDef> = {
-  march: { onArrive: 'garrison', loiter: false, long: true, note: '距离长 → 长寻路（走廊）' },
-  act: { onArrive: 'garrison', loiter: false, long: false, note: '距离短 → 短跳（LOS 直线）' },
-  garrison: { onArrive: 'garrison', loiter: false, long: true, note: '驻守：到站位后不动' },
-  patrol: { onArrive: 'patrol', loiter: true, long: true, note: '巡逻：到位后围绕目标游弋' },
+/** 运行模式到位口径（稳定层；§2.10b：march/act 是原子，patrol/garrison 是行为循环驻留） */
+export const MODE: Record<SquadMode, ModeDef> = {
+  march: { onArrive: 'garrison' },
+  act: { onArrive: 'garrison' },
+  garrison: { onArrive: 'garrison' },
+  patrol: { onArrive: 'patrol' },
 };
 
-/** 到位后的驻留原子（复合命令走原映射：保护/防御/巡逻 = 巡逻位，其余 = 驻守位） */
-export function onArriveAtom(kind: CompositeKind | AtomicKind): AtomicKind {
-  const a = ATOMIC[kind as AtomicKind];
+/** 到位后的驻留模式（复合命令：保护/防御/巡逻 = 巡逻位，其余 = 驻守位） */
+export function onArriveAtom(kind: CompositeKind | SquadMode): SquadMode {
+  const a = MODE[kind as SquadMode];
   if (a) return a.onArrive;
   return kind === 'patrol' || kind === 'defend' || kind === 'protect' ? 'patrol' : 'garrison';
-}
-
-/** 是否游弋原子（巡逻；队长层据此算站位摆动） */
-export function isLoiter(kind: CompositeKind | AtomicKind): boolean {
-  return ATOMIC[kind as AtomicKind]?.loiter ?? (kind === 'patrol' || kind === 'protect');
 }

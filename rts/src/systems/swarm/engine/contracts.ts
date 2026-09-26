@@ -3,7 +3,7 @@
 // ============================================================
 // 两层收敛（《蜂群重写计划.md》§1）：
 //   复合层（引擎 → 队长）：protect / act / defend —— 由原子能力组合
-//   原子层（小队自决）：patrol / garrison / march / act —— 稳定层，只增不改
+//   运行模式（小队自决）：march/act = 移动原子；patrol/garrison = 行为循环驻留（§2.10b）
 // 铁律：命令生命周期显式；一切令过 OrderValidator（①环内 ②密度 ③可达）。
 // 本文件只放类型与常量表——不放逻辑（逻辑在各模块）。
 // ============================================================
@@ -12,8 +12,10 @@
 
 export type CompositeKind = 'protect' | 'act' | 'defend';
 
-/** 原子能力（小队能力四件套；march=距离长→长寻路，act=距离短→短跳） */
-export type AtomicKind = 'patrol' | 'garrison' | 'march' | 'act';
+/** ★ 两个移动原子（《RTS架构.md》§2.10b）：长寻路 march / 短寻路 act */
+export type MoveAtom = 'march' | 'act';
+/** ★ 小队运行模式（原子 + 行为循环驻留模式）：patrol/garrison =「取目标函数 → 移动」循环，非原子 */
+export type SquadMode = MoveAtom | 'patrol' | 'garrison';
 
 // ★ 复合 → 原子 的**解释器**在 `squad/CommandLang.ts`（唯一实现；引擎只选复合，队长解原子）。
 
@@ -23,7 +25,7 @@ export type OrderSource = 'engine' | 'player';
 
 export interface SquadOrder {
   /** 复合命令（引擎）/ 原子能力（队长自令） */
-  kind: CompositeKind | AtomicKind;
+  kind: CompositeKind | SquadMode;
   source: OrderSource;
   target: { x: number; z: number };
   /** 保护锚（仅 protect 用；铁律 G5：锚只属于保护令） */
@@ -61,7 +63,7 @@ export interface SquadReport {
   z: number;
   alive: number;
   /** 当前原子能力（执行层自报） */
-  atom: AtomicKind;
+  atom: SquadMode;
   /** 命令阶段（引擎只记录，不逐拍指挥） */
   phase: OrderPhase;
   /** 命令进度 0~1（队长自报；稳定门用） */

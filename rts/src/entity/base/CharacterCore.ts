@@ -42,7 +42,8 @@ export interface TerrainProbe {
   /** "脚下块→该方向"的边是否坡面（weld） */
   isWeldEdge(x: number, z: number, dirX: number, dirZ: number): boolean;
   /** ★ 上坡半径内最近坡面的**正对方向**（单位向量；无坡 → null）——上坡必须正对坡面（用户定 2026-09-25） */
-  uphillNormal?(x: number, z: number, r: number): { ux: number; uz: number } | null;
+  uphillNormal?(x: number, z: number, r: number, dirX?: number, dirZ?: number):
+    { ux: number; uz: number; mx?: number; mz?: number; rise?: number } | null;
   /** ★ 高精度层（H2 单源，用户定 2026-09-25）：该点在当前脚底高度附近的**地表层高**（y 感知选层） */
   layerAt(x: number, z: number, y: number): number;
 }
@@ -121,22 +122,46 @@ export class CharacterCore {
     //   · 坡面不许驻留：无上坡意图时给下坡小推力。
     if (inp.blockCliffClimb && !inp.climbAnyTerrain) {
       const dl0 = Math.hypot(inp.dirX, inp.dirZ) || 1;
-      const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R) : null;
+      const face = probe.uphillNormal ? probe.uphillNormal(inp.x, inp.z, CLIMB_FACE_R, inp.dirX, inp.dirZ) : null;
       const upDot = face ? (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0 : 0;
       if (face && (upDot > 0.1 || inp.climbOrdered)) {
-        const dot = Math.max(0, (inp.dirX * face.ux + inp.dirZ * face.uz) / dl0);
+        const dot = Math.max(0, upDot);
         if (dot >= CLIMB_FACE_DOT || inp.climbOrdered) {
+          // ★ 正对（或显式爬坡令）→ 沿表标注法线定速爬升
           this.climbUntil = nowS + CLIMB_TIMEOUT_S;
           this.climbDirX = face.ux;
           this.climbDirZ = face.uz;
+          out.climbing = true;
+        } else if (face.mx !== undefined && face.mz !== undefined) {
+          // ★ 未正对 → 先沿坡底走到**坡面边中点**（治"卡在坡侧壁"）；
+          //   ★ 到达中点附近 → **直接进入爬升**（weld 坡面/岸坡皆安全；治"水里出不来"——
+          //     旧法只转身不进爬坡态，岸坎 > SHORE_CLIMB_MAX 时被贴地回退卡住）
+          const mx = face.mx - inp.x, mz = face.mz - inp.z;
+          const ml = Math.hypot(mx, mz);
+          if (ml > 0.7) {
+            dx = (mx / ml) * inp.speed * inp.dt;
+            dz = (mz / ml) * inp.speed * inp.dt;
+            this.climbUntil = 0;
+          } else {
+            this.climbUntil = nowS + CLIMB_TIMEOUT_S;
+            this.climbDirX = face.ux;
+            this.climbDirZ = face.uz;
+            out.climbing = true;
+          }
+        } else {
+          // 无中点信息（回退采样）：对准法线
+          dx = face.ux * inp.speed * inp.dt;
+          dz = face.uz * inp.speed * inp.dt;
+          this.climbUntil = 0;
         }
-        // 方向对准坡面法线（未正对时 = 转身对准；正对时 = 法线直推）
-        dx = face.ux * inp.speed * inp.dt;
-        dz = face.uz * inp.speed * inp.dt;
-        out.climbing = dot >= CLIMB_FACE_DOT || (inp.climbOrdered && nowS < this.climbUntil);
       } else if (face && this.climbUntil < nowS) {
-        dx = -face.ux * inp.speed * inp.dt * 0.6;   // 坡面不许驻留（无上坡意图 → 下坡小推力）
-        dz = -face.uz * inp.speed * inp.dt * 0.6;
+        // ★ 下坡推力只对"**真在坡面上**"（局部坡度 ≥ CLIMB_SLOPE_MIN）生效；
+        //   在坡脚顺路经过（想沿坡底走）不再被无谓下推（治"卡坡脚打滑"）
+        const sg = probe.slopeGradAt ? probe.slopeGradAt(inp.x, inp.z) : null;
+        if (sg && sg.mag >= CLIMB_SLOPE_MIN) {
+          dx = -face.ux * inp.speed * inp.dt * 0.6;
+          dz = -face.uz * inp.speed * inp.dt * 0.6;
+        }
         this.climbUntil = 0;
       } else {
         this.climbUntil = 0;

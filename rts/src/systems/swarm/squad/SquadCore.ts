@@ -11,7 +11,7 @@
 
 import type { MobTactics, TacticalOrder, UnitDirective } from '../../../entity/SwarmUnit';
 import { squadBucket } from '../../../entity/SwarmUnit';
-import type { AtomicKind, MobRole, OrderPhase, SquadOrder, SquadReport } from '../engine/contracts';
+import type { MobRole, OrderPhase, SquadMode, SquadOrder, SquadReport } from '../engine/contracts';
 import type { Squad } from '../SquadTable';
 import { onArriveAtom } from './Abilities';
 import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
@@ -52,7 +52,7 @@ export class SquadCore {
   x = 0;
   z = 0;
   /** 当前原子能力（执行层自报） */
-  atom: AtomicKind = 'garrison';
+  atom: SquadMode = 'garrison';
   /** 命令阶段 */
   phase: OrderPhase = 'issued';
   /** 进度 0~1（换令稳定门用：≥0.5 可换） */

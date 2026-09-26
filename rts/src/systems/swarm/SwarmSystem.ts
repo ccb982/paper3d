@@ -754,7 +754,11 @@ export class SwarmSystem {
         const st = squad ? this.squadStateOf?.(squad.id) ?? null : null;
         const e = this.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
-        else { dx = ld.x; dz = ld.z; }
+        else {
+          // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
+          const rd = this.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
+          if (rd) { dx = rd.x; dz = rd.z; } else { dx = ld.x; dz = ld.z; }
+        }
       } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     } else if (lead) {
       // ★ 成员跟队长（滞回消抖；掉队沿走廊）；方案 A：目标距离>格 → 格边贪心步

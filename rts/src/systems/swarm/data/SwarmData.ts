@@ -479,6 +479,11 @@ export class SwarmData {
     wallNearAt: (x, z) => this.terrainWallAt(x, z, 0.8),
   };
 
+  /** ★ 坡面方位（表标注；上坡函数用）：weld+climb 位 → 轴向法线 + 边中点 */
+  climbFaceAt(x: number, z: number, dx = 0, dz = 0): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
+    return this.passTable.climbFaceAt(x, z, dx, dz);
+  }
+
   private terrainWallAt(x: number, z: number, k: number): boolean {
     if (RasterMap.current?.tileDefAt(x, z).genRole === 'pit') return true;
     const h = this.passTable.heightAt(x, z);

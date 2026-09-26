@@ -32,6 +32,8 @@ export interface SquadOrderState {
   pathFailedAt: number;
   /** 寻路轨走廊（覆盖式；命令对象只读） */
   corridor?: { x: number; z: number; climb?: boolean }[];
+  /** ★ 路线游标（锁存：沿走廊单调推进的当前路点下标；新走廊→0，清路→undefined） */
+  followIdx?: number;
   /** 最近一次求解时的队长位（位移 >12m → 从当前位置重算） */
   pathFromX?: number;
   pathFromZ?: number;
@@ -151,6 +153,7 @@ export function stateFromOrder(squadId: number, order: SquadOrder, prev: SquadOr
     st.pathAt = prev.pathAt;
     st.pathFailedAt = prev.pathFailedAt;
     st.corridor = prev.corridor;
+    st.followIdx = prev.followIdx;
     st.pathFromX = prev.pathFromX;
     st.pathFromZ = prev.pathFromZ;
     st.stallAt = prev.stallAt;

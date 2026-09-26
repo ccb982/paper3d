@@ -204,17 +204,16 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       return;
     }
     const s = this.steerState;
-    let dx = s.dirX, dz = s.dirZ;
+    // ★ 收敛（用户定 2026-09-26）：方向只认 steer 的 dirX/dirZ（= 格边步/路线修正产物）；
+    //   moveTarget 只用于**到达停步**，不再直线朝槽位（那是绕过路线的独立移动实现 → 撞崖/原地摆）。
+    const dx = s.dirX, dz = s.dirZ;
     if (this.moveTarget && s.source === 'formation') {
-      dx = this.moveTarget.x - this.entity.position.x;
-      dz = this.moveTarget.z - this.entity.position.z;
-      const d = Math.hypot(dx, dz);
+      const d = Math.hypot(this.moveTarget.x - this.entity.position.x, this.moveTarget.z - this.entity.position.z);
       if (d < 0.55) {
         this.controller.moveDir.x = 0;
         this.controller.moveDir.y = 0;
         return;
       }
-      dx /= d; dz /= d;
     }
     if (dx === 0 && dz === 0) {
       this.controller.moveDir.x = 0;

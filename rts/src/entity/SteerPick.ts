@@ -23,6 +23,8 @@ export interface SteerTable {
   blockedAt?(x: number, z: number): boolean;
   coverAt?(x: number, z: number): boolean;
   heightAt?(x: number, z: number): number;
+  /** ★ 坡面方位（可选；TerrainAssist 上坡用）：weld+climb 位的轴向法线 + 边中点（表标注） */
+  climbFaceAt?(x: number, z: number, dx?: number, dz?: number): { ux: number; uz: number; rise: number; mx: number; mz: number } | null;
 }
 
 /** 取全局表桥（实体侧 TerrainAssist 用；未接入 → null） */

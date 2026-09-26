@@ -30,25 +30,6 @@ export function goalOf(state: SquadOrderState): { x: number; z: number } | null 
   return liveOrderOf?.(state.squadId)?.target ?? state.order.target ?? null;
 }
 
-/** ★ 走廊前瞻点（无状态；look 米）：最近点之后第一个 >look 的点；无 → 末点；无路 → null。
- *  消费：队长锚点 / 掉队成员"长寻路找队长"（沿同一走廊）。 */
-export function corridorAhead(
-  state: SquadOrderState | null | undefined, cx: number, cz: number, look: number,
-): { x: number; z: number; climb?: boolean } | null {
-  const path = state?.corridor ?? state?.order.path;
-  if (!path || path.length === 0) return null;
-  let near = 0, nd = Infinity;
-  for (let i = 0; i < path.length; i++) {
-    const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-    if (d2 < nd) { nd = d2; near = i; }
-  }
-  for (let i = near; i < path.length; i++) {
-    const d2 = (path[i].x - cx) * (path[i].x - cx) + (path[i].z - cz) * (path[i].z - cz);
-    if (d2 > look * look) return path[i];
-  }
-  return path[path.length - 1];
-}
-
 /** ★ 沿路由推进（S3a）：**下一个未到达的路点**——**目标锁存（S3b 已实装）**：选定后锁定到
  *  "到达/段失效"才推进，禁止每拍在两点间翻转（《寻路重写方案.md》§4.4）。
  *  ——从最近路点向后找第一个距离 >adv 的点；
