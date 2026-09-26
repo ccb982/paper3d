@@ -165,6 +165,11 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
 - **小队分配（用户定 2026-09-26，待实施）**：近战/远程管理器**知道全局小队数与各队位置**——
   “哪队去哪”必须是**综合考虑的全局分配**（可数量、位置、同兵种间距、可达性、任务优先级），
   不是只在小队目标上加一个切向间距修正（现状 `Spread.spreadFix` 只做后者，属临时口径）。
+- **上坡（收敛 2026-09-26）**：上坡点 = 可行性表构建期预处理（连续坡段中心、坡面前 2m、带坡宽/rise）；
+  寻路（长寻路 + S1 短寻路共享 `nav/ClimbVia`）插"上坡点→跨坡点★"；**凭证挂在寻路上**
+  （`state.climbCred`；发新路线发放、到目标接下一寻路才回收）；执行层 `CharacterCore`：
+  **人在上坡点 + 持凭证 → 沿法线爬**（无自主上坡）。成员移动=定时对队长长寻路（同一条路）。
+  硬墙斥力：**依可行性表 `canStep`** 的不可行边、按距格边距离外推（≥1m 尽量远离）。
 - 收口（2026-09-26）：类型 `MoveAtom = 'march' | 'act'`（两个原子）；`SquadMode = MoveAtom | 'patrol' | 'garrison'`
   （运行模式；patrol/garrison 属行为循环驻留）。`engine/contracts.ts` 单源。
 
@@ -226,8 +231,8 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 > **纯数据/查询/端口，无指挥语义**；引擎/队长核/导航/UI/探针只读消费。文件头写明 owner。
 
-- **地形与表**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路）+ `TerrainScoring`（查询时评分纯函数；`SwarmData.scoringSrc` 每拍注入三张表句柄 + 权重 + 玩家位；`distGain=1+24·t01` 并入 dist 权重）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
-- **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/terrain/pathStamp`。
+- **地形与表（上坡点/斥力均出自 PassTable）**：`DefensePlan`（`analyzeLandingTerrain`）+ `PassTable`（建表并 `attachPassTable` 到寻路；`climbRuns` 预处理上坡点、`canStep` 供硬墙斥力）+ `TerrainScoring`（查询时评分纯函数；`SwarmData.scoringSrc` 每拍注入三张表句柄 + 权重 + 玩家位；`distGain=1+24·t01` 并入 dist 权重）+ `TerrainSemantics`（L1，落点锚，静态）+ `HoleMask/HoleTable`（L2，破坏掩码 + 坑洞/掩体表 2Hz）+ `setSteerTable` 表桥（实体 SteerPick 同表）。
+- **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/pathStamp/canStep/climbRunAt/nearestClimbPoint`。
 - **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（**p 驱动**：**外圈大圈一直收缩只减不增**：D0max → 大圆 90 → 缓缩 80 → 0；**内圈小圈先收缩 → 第一波后立即增大（甜甜圈 60，p 0.45-0.55）→ 再收缩**；总攻 p≥0.80 时已是 (0,0) 点）；环 1Hz 更新；**时间轴可自由快进/倒退**（`scrubDay`/`followRealtime` 重置姿态状态 → 环可反向）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
 - **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` **扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**（候选=需求降序表；高位不可达→次高可达；全不可达→null；**绝不出扇区/带**，确定性不掷随机数））；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
 - **编制与生成执行**：`RosterController`（占比/缺口 4Hz）；`CommanderSpawn`（`deploy/battalion(instant)/drain/reset` + 回收名单）；生成端口（`spawnMob/spawnMobIndex/spawnBuilder/buildCover/digTrench`）由 main/CommanderWiring 注入；`planDefense`（建计划 + 表 + 复位 + 开局班底）。
