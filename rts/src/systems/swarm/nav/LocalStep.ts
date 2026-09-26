@@ -22,8 +22,9 @@ export const LOCAL = {
   K_UP: 0.6,
   /** 水加价（每格） */
   K_WATER: 0.35,
-  /** 语义风险权重（"不要求很安全"：只做偏好） */
-  K_RISK: 0.5,
+  /** 评分偏好权重（"不要求很安全"：只做偏好）；评分归一尺度（±SCORE_N → ±1） */
+  K_SCORE: 0.5,
+  SCORE_N: 8,
   /** 网格边长（米；与 PassTable 同格） */
   CELL: 4,
 } as const;
@@ -40,8 +41,9 @@ export interface LocalGrid {
   waterAt(x: number, z: number): boolean;
   /** 高度（斜向禁上坡用；表外 NaN） */
   heightAt(x: number, z: number): number;
-  /** 语义风险（0 = 无；正 = 更危险，负 = 偏好；由上层注入地形语义） */
-  riskAt(x: number, z: number): number;
+  /** ★ 统一评分（可选；正值 = 更有利、负值 = 更差；null/表外 = 中性）——
+   *  由上层注入（地形语义 + 掩体表 + 事态×舰距加权，唯一实现 TerrainScoring.scoreAt） */
+  scoreAt?(x: number, z: number): number | null;
 }
 
 export interface SegmentCheck {
@@ -191,7 +193,9 @@ export function localStep(
       const drop = g.dropAt(wx, wz, dx, dz);
       if (drop > 0) c += drop * LOCAL.K_UP;
       if (g.waterAt(wx2, wz2)) c += LOCAL.K_WATER;
-      c += g.riskAt(wx2, wz2) * LOCAL.K_RISK;   // 语义偏好（可负=偏好）
+      // ★ 贪心消费统一评分（用户定 2026-09-26）：分数越高越便宜（地形+掩体+事态×舰距）
+      const sc = g.scoreAt ? g.scoreAt(wx2, wz2) : null;
+      if (sc !== null && sc > -1e8) c -= Math.max(-1, Math.min(1, sc / LOCAL.SCORE_N)) * LOCAL.K_SCORE;
       const nk = key(nx, nz);
       const nd = curD + c;
       const old = dist.get(nk);
@@ -214,15 +218,15 @@ export function localStep(
   pts[0] = { x: sx, z: sz };                       // 起点精确（避免先绕到格心）
   pts[pts.length - 1] = { x: gx, z: gz };          // 末点精确 = 目标（不许近似）
   // 沿路线取"≤SEG_MAX 的最远可视点"（从远到近找第一个可直连的）；
-  // ★ 拉直不得把安全路线变成更险的直线（正风险总和不得超过原路线该段）
+  // ★ 拉直不得把"高分路线"变成"低分直线"（负分总和不得超过原路线该段；评分=统一评分）
   const posRisk = (ax: number, az: number, bx: number, bz: number): number => {
     const len = Math.hypot(bx - ax, bz - az);
     const n = Math.max(1, Math.ceil(len / 2));
     let sum = 0;
     for (let k = 1; k <= n; k++) {
       const t = k / n;
-      const r = g.riskAt(ax + (bx - ax) * t, az + (bz - az) * t);
-      if (r > 0) sum += r;
+      const sc = g.scoreAt ? g.scoreAt(ax + (bx - ax) * t, az + (bz - az) * t) : null;
+      if (sc !== null && sc > -1e8 && sc < 0) sum += -sc / LOCAL.SCORE_N;
     }
     return sum;
   };

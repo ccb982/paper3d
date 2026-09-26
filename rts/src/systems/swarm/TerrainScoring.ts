@@ -16,6 +16,7 @@ import type { DefensePlan } from './LandingTerrain';
 import { Sem, type TerrainSemantics } from './TerrainSemantics';
 import type { HoleMask } from './HoleMask';
 import type { PassTable } from './nav/PassTable';
+import type { SquadType } from '../../entity/SwarmUnit';
 
 /** 评分格边长（米；与地形块/工事同网格，用于 bonus/特征量化） */
 export const CELL = 4;
@@ -172,13 +173,64 @@ export function featsAt(src: ScoringSources, x: number, z: number, px: number, p
   };
 }
 
-/** ★ 评分（mixed 口径，与旧 TerrainScore.score[] 同公式；权重里的 dist 已含时间增益）
- *  不可站 → -1e9；未注入数据源 → null */
+/** ★★ 评分唯一实现（用户定 2026-09-26）：`scoreForUnit('mixed', feats, weights)`——
+ *  地形语义（高/宽/隘/水/坡/贴墙）+ 掩体表（战壕/工事）+ 事态×舰距加权（近舰放大/地形衰减）。
+ *  贪心近寻路（LocalStep/EdgeFollow）也消费同一分数（见 LocalGrid.scoreAt 注入）。 */
 export function scoreAt(src: ScoringSources | null, x: number, z: number): number | null {
   if (!src) return null;
-  const f = featsAt(src, x, z, src.playerX, src.playerZ);
-  if (!f.pass) return -1e9;
-  const w = src.weights;
-  return w.h * f.h + w.dist * f.shipD + w.cover * f.cover + w.near * f.nearF
-    + w.threat * f.threatN + (w.width * f.width + w.choke * f.choke) * FEAT_SCALE + f.constTerm;
+  return scoreForUnit('mixed', featsAt(src, x, z, src.playerX, src.playerZ), src.weights);
+}
+
+// ------------------------------------------------------------
+// 兵种加权（自 UnitStrategy 并入：评分只有这一个实现）
+// ------------------------------------------------------------
+
+/** ★ 距离混合调参（用户定 2026-09-25）：近舰距离权重放大 / 地形权重衰减（远舰反之） */
+const NEAR_DIST_BOOST = 8;
+const NEAR_TERRAIN_DAMP = 0.35;
+
+/** 兵种特征权重乘子（缺省 1；《设计》§1.4 矩阵：
+ *  盾=隘口/掩体/宽度大优先 · 突=压向玩家(threat×)·接受低掩体 · 远程=高地+掩体+射程带 ·
+ *  后勤=远离接敌(away)+相对弱外推(dist/near 调低 → 靠舰侧；行为 rear 由 rear 使命兜) */
+const MUL: Record<SquadType, {
+  h: number; dist: number; threat: number; cover: number; width: number; choke: number; near: number; band: number; away: number;
+}> = {
+  defense:   { h: 1.0, dist: 1.1, threat: 1.0, cover: 1.4, width: 1.6, choke: 2.5, near: 1.2, band: 0, away: 0 },
+  assault:   { h: 0.8, dist: 1.3, threat: 1.6, cover: 0.7, width: 1.2, choke: 0.6, near: 0.8, band: 0, away: 0 },
+  ranged:    { h: 2.2, dist: 1.0, threat: 1.0, cover: 1.2, width: 0.8, choke: 0.8, near: 1.0, band: 1, away: 0 },
+  logistics: { h: 0.5, dist: 0.6, threat: 1.0, cover: 0.9, width: 0.6, choke: 0.7, near: 0.5, band: 0, away: 1 },
+  flyer:     { h: 1.0, dist: 1.0, threat: 1.0, cover: 1.0, width: 1.0, choke: 1.0, near: 1.0, band: 0, away: 0 },
+  mixed:     { h: 1.0, dist: 1.0, threat: 1.0, cover: 1.0, width: 1.0, choke: 1.0, near: 1.0, band: 0, away: 0 },
+};
+
+/** 远程射程带（米）：站位距玩家落 [BAND_LO, BAND_HI] 外按米线性罚（× BAND_W × m.band） */
+const BAND_LO = 25;
+const BAND_HI = 55;
+const BAND_W = 0.06;
+/** 后勤"远离接敌"（米）：距玩家越远越有利，封顶 80m（× AWAY_W × m.away） */
+const AWAY_CAP = 80;
+const AWAY_W = 0.06;
+
+/** ★ L3 兵种战术策略函数：该格对该兵种的有利度（无特征/不可站 → -1e9） */
+export function scoreForUnit(type: SquadType, f: CellFeats | null, base: ScoreWeights): number {
+  if (!f || !f.pass) return -1e9;
+  const m = MUL[type] ?? MUL.mixed;
+  // ★ 评分动态化（用户定 2026-09-25）：**地形分与距离分不固定相加**——
+  //   近舰（k→1）距离权重 > 地形权重（守家）；远舰（k→0）地形权重 > 距离权重（野战）。
+  const k = Math.max(0, Math.min(1, 1 - f.shipD / DIST_SCALE));
+  const distBoost = 1 + (NEAR_DIST_BOOST - 1) * k;          // 距离项：近舰放大
+  const terrainDamp = 1 - (1 - NEAR_TERRAIN_DAMP) * k;      // 地形项：近舰衰减
+  let s =
+    base.h * m.h * f.h * terrainDamp +
+    base.dist * m.dist * f.shipD * distBoost +
+    base.threat * m.threat * f.threatN * terrainDamp +
+    base.cover * m.cover * f.cover * terrainDamp +
+    (base.width * m.width * f.width + base.choke * m.choke * f.choke) * FEAT_SCALE * terrainDamp +
+    base.near * m.near * f.nearF * terrainDamp;
+  if (m.band > 0) {
+    const over = f.playerD < BAND_LO ? BAND_LO - f.playerD : f.playerD > BAND_HI ? f.playerD - BAND_HI : 0;
+    s -= over * BAND_W * m.band;
+  }
+  if (m.away > 0) s += m.away * Math.min(f.playerD, AWAY_CAP) * AWAY_W;
+  return s + f.constTerm;
 }

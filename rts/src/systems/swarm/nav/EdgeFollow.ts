@@ -19,6 +19,8 @@ export interface EdgeGrid {
   heightAt(x: number, z: number): number;
   /** ★ 可爬坡面位（可选；生产 = PassTable.climbAt）：该向 = weld 且净升 > 阈值 */
   climbAt?(x: number, z: number, dx: number, dz: number): boolean;
+  /** ★ 统一评分（可选；生产 = TerrainScoring.scoreAt）：对角同分量时择高分轴 */
+  scoreAt?(x: number, z: number): number | null;
 }
 
 /** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
@@ -43,7 +45,14 @@ export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, d
   //   不被"横向分量更大"抢走（否则先沿坡脚走 → 卡侧壁/来回摆）。坡面方位来自表标注。
   const xClimb = sx !== 0 && (g.climbAt?.(x, z, sx, 0) ?? false);
   const zClimb = sz !== 0 && (g.climbAt?.(x, z, 0, sz) ?? false);
-  const xFirst = xClimb && !zClimb ? true : zClimb && !xClimb ? false : Math.abs(ddx) >= Math.abs(ddz);
+  let xFirst = xClimb && !zClimb ? true : zClimb && !xClimb ? false : Math.abs(ddx) >= Math.abs(ddz);
+  // ★ 对角几乎同分量 → 用**统一评分**择轴（贪心消费地形/掩体/事态×舰距）
+  if (!xClimb && !zClimb && sx !== 0 && sz !== 0 && g.scoreAt
+    && Math.abs(Math.abs(ddx) - Math.abs(ddz)) <= 1) {
+    const s0 = g.scoreAt(x + (xFirst ? sx : 0) * EDGE_CELL, z + (xFirst ? 0 : sz) * EDGE_CELL) ?? -Infinity;
+    const s1 = g.scoreAt(x + (xFirst ? 0 : sx) * EDGE_CELL, z + (xFirst ? sz : 0) * EDGE_CELL) ?? -Infinity;
+    if (s1 > s0 + 1e-6) xFirst = !xFirst;
+  }
   const opts: [number, number][] = xFirst ? [[sx, 0], [0, sz]] : [[0, sz], [sx, 0]];
   for (const [dx, dz] of opts) {
     if (dx === 0 && dz === 0) continue;

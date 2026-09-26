@@ -51,8 +51,8 @@ export class SquadNavigator {
   readonly feas = new FeasibilityPath();
   /** ★ S1：短寻路网格（生产 = PassTable） */
   private table: PassTable | null = null;
-  /** ★ S1：语义风险注入（上层给地形语义；null = 无安全偏好） */
-  riskAt: ((x: number, z: number) => number) | null = null;
+  /** ★ S1：统一评分注入（上层给 TerrainScoring.scoreAt；null = 无偏好）——贪心近寻路消费 */
+  scoreFn: ((x: number, z: number) => number | null) | null = null;
 
   /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
   setPathTable(t: PassTable | null): void {
@@ -130,14 +130,14 @@ export class SquadNavigator {
   private localGrid(): LocalGrid | null {
     const t = this.table;
     if (!t || !t.ready) return null;
-    const risk = this.riskAt;
+    const sc = this.scoreFn;
     return {
       canStep: (x, z, dx, dz) => t.canStep(x, z, dx, dz),
       climbAt: (x, z, dx, dz) => t.climbAt(x, z, dx, dz),
       dropAt: (x, z, dx, dz) => t.dropAt(x, z, dx, dz),
       waterAt: (x, z) => t.waterAt(x, z),
       heightAt: (x, z) => t.heightAt(x, z),
-      riskAt: risk ? (x, z) => risk(x, z) : () => 0,
+      scoreAt: sc ? (x, z) => sc(x, z) : undefined,
     };
   }
 

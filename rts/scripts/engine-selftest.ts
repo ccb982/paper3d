@@ -298,7 +298,7 @@ console.log('[5e] LocalStep 短寻路（语义安全→可行性；终点精确�
     dropAt: () => 0,
     waterAt: () => false,
     heightAt: () => 0,
-    riskAt: () => 0,
+    scoreAt: () => 0,
     ...over,
   });
   // ① 开阔：按 ≤SEG_MAX 推进；迭代可精确到目标
@@ -332,7 +332,7 @@ console.log('[5e] LocalStep 短寻路（语义安全→可行性；终点精确�
   const uphill = mk({ heightAt: (x) => x * 0.5 });
   ok(canSegment(uphill, 0, 0, 4, 4).ok === false, '斜向禁上坡（段校验否决）');
   // ⑥ 语义风险：两点之间有高险带（x∈(4,12) 且 |z|<6）→ 绕开（偏好、非硬禁）
-  const risky = mk({ riskAt: (x, z) => (x > 4 && x < 12 && Math.abs(z) < 6 ? 10 : 0) });
+  const risky = mk({ scoreAt: (x, z) => (x > 4 && x < 12 && Math.abs(z) < 6 ? -10 : 0) });
   const stR = localStep(risky, 0, 0, 20, 0);
   ok(!!stR && Math.abs(stR.next.z) > 1, '语义风险：绕开高险带（偏好生效）');
   // ⑦ 不可走段 → canSegment 否决

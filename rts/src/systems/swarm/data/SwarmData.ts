@@ -15,7 +15,7 @@ import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
 import { PostureFn } from '../PostureFn';
 import { RANGED } from '../RangedTactics';
-import { WALL_DH, buildBonus, featsAt as featsAtSrc, scoreAt as scoreAtSrc, weightsFor,
+import { WALL_DH, buildBonus, featsAt as featsAtSrc, scoreAt as scoreAtSrc, scoreForUnit, weightsFor,
   type CellFeats, type ScoringSources } from '../TerrainScoring';
 import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from '../TerrainSemantics';
 import { HoleMask } from '../HoleMask';
@@ -28,7 +28,6 @@ import { RosterController } from '../RosterController';
 import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
-import { scoreForUnit } from '../UnitStrategy';
 import { setSteerTable } from '../../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../../entity/CoverEntity';
 import type { SquadRating } from '../SquadTable';
