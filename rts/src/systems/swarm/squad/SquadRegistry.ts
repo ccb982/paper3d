@@ -6,7 +6,7 @@
 // 本文件不依赖旧路径——旧黑板只作 UI/探针镜像。
 // ============================================================
 
-import { SquadCore, type SquadDrivePorts, type SquadNav } from './SquadCore';
+import { SquadCore, type SquadDrivePorts } from './SquadCore';
 import type { SquadOrderState } from './State';
 import type { Squad } from '../SquadTable';
 import type { MobRole, SquadOrder, SquadReport } from '../engine/contracts';
@@ -26,7 +26,6 @@ export class SquadRegistry {
   readonly dbg = { n: 0, accepted: 0, reports: 0, last: '' };
 
   constructor(
-    private readonly navOf: (id: number) => SquadNav,
     private readonly roleOf: (id: number) => MobRole,
     private readonly report: (r: SquadReport, now: number) => void,
     private readonly alive: (id: number) => number,
@@ -37,7 +36,6 @@ export class SquadRegistry {
     let c = this.cores.get(id);
     if (!c) {
       c = new SquadCore(id, this.roleOf(id), {
-        nav: this.navOf(id),
         report: (r) => { this.report(r, this.nowS); this.dbg.reports++; },
         alive: () => this.alive(id),
       });

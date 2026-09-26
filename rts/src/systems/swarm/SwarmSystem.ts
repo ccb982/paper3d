@@ -37,7 +37,7 @@ import {
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
-  AtomExecutor, MOVE_ATOMS, atomDirection, runDirective, fireProfile,
+  AtomExecutor, runDirective, fireProfile,
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
 import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
@@ -94,7 +94,6 @@ export interface SwarmHooks {
 
 const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
-const _atomDir = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
 const _dir = { x: 0, z: 0 };   // ★ 地形辅助 scratch（坡正面混合；零分配）
@@ -767,16 +766,7 @@ export class SwarmSystem {
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
         else { dx = fd.x; dz = fd.z; }
       } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    } else if (p.atomMove[i] !== 255) {
-      const atom = MOVE_ATOMS[p.atomMove[i]];
-      let tx = p.directiveTargetX[i] - p.x[i];
-      let tz = p.directiveTargetZ[i] - p.z[i];
-      const td = Math.hypot(tx, tz);
-      if (td > 0.5) { tx /= td; tz /= td; } else { tx = dx; tz = dz; }
-      atomDirection(atom, tx, tz, _atomDir);
-      dx = _atomDir.x;
-      dz = _atomDir.z;
-    }
+    }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
     // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
     const inside = this.data.blockedAt(p.x[i], p.z[i]);
     if (dx !== 0 || dz !== 0 || inside) {

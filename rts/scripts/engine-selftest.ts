@@ -643,29 +643,23 @@ console.log('[13] SquadCore 队长核心（接令/距离分流/汇报）');
 {
   const reports: SquadReport[] = [];
   const core = new SquadCore(1, 'melee', {
-    nav: {
-      longPath: (x, z) => (x > 200 ? -1 : Math.hypot(x, z) + 10),
-      canHop: () => true,
-    },
     report: (r) => reports.push(r),
     alive: () => 8,
   });
   core.accept({ kind: 'act', source: 'engine', target: { x: 100, z: 0 }, seq: 1, ttl: 0 });
   core.tick(0.5);
   ok(core.atom === 'march', '距离长（100 > 40）→ 行军（长寻路）');
-  ok(core.dbg.long === 1, '长寻路被调用');
   ok(reports.length === 1 && reports[0].squadId === 1 && reports[0].atom === 'march', '汇报走唯一接收器');
   core.x = 80;
   core.tick(0.5);
   ok(core.atom === 'act', '距离短（20 ≤ 40）→ 行动（短跳）');
-  ok(core.dbg.short === 1, '短跳被调用');
   core.x = 99.5;
   core.tick(0.5);
   ok(core.phase === 'done' && core.dbg.done === 1, '到位 → done');
   core.accept({ kind: 'march', source: 'player', target: { x: 300, z: 0 }, seq: 2, ttl: 0 });
   const before = reports.length;
   core.tick(0.5);
-  ok(reports.length === before + 1 && core.dbg.long === 1, '长寻路不可达 → 不推进（仍汇报，等引擎换点）');
+  ok(reports.length === before + 1 && core.atom === 'march', '远程令：兜底按距离推进（仍汇报）');
   ok(core.current()?.source === 'player', '玩家令可被队长接收（同源）');
 }
 

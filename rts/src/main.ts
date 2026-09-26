@@ -53,7 +53,6 @@ import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridg
 import { squadViews, type SquadViewPort } from './systems/swarm/engine/SquadView';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
 import { setLiveOrderSource, currentTargetOf } from './systems/swarm/squad/Anchor';
-import { createSquadNav } from './systems/swarm/squad/MarchAction';
 import { setSwarmDebugView } from './services/ui/SwarmDebugOverlay';
 import { setSwarmTraceView } from './services/ui/SwarmTrace';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
@@ -343,7 +342,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     // ★ 开火闩锁（新引擎 AttackQueues→TimerManager 置/撤）→ 成员指令开火门（软禁火）
     swarm.setFireGate((uid: number) => shadowBridge?.timers.canFire(uid) ?? true);
     squadCores = new SquadRegistry(
-      (id) => createSquadNav({ leaderPos: leaderPosOf, walkableLine: (a, b, c2, d2) => swarm.walkableLine(a, b, c2, d2) }, id),
       roleOf,
       (r: SquadReport, now: number) => shadowBridge?.squads.report(r, now),
       (id: number) => {

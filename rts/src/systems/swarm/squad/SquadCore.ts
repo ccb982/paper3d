@@ -23,13 +23,6 @@ import { interpretLeader, MARCH_DIST, ARRIVE_R } from './CommandLang';
 // 距离分流阈值单源在 CommandLang（兼容旧引用：再导出）
 export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 
-export interface SquadNav {
-  /** 长寻路：返回路径长度（米）；-1 = 不可达 */
-  longPath(x: number, z: number): number;
-  /** 短跳：LOS 直线可行 */
-  canHop(x: number, z: number): boolean;
-}
-
 /** 队长驱动端口（执行落地；由接线层注入） */
 export interface SquadDrivePorts {
   /** 长/短寻路求解（走廊写入 state） */
@@ -47,7 +40,6 @@ export interface SquadDrivePorts {
 }
 
 export interface SquadPorts {
-  nav: SquadNav;
   /** 汇报（唯一接收器：SquadManager.report） */
   report(r: SquadReport): void;
   alive(): number;
@@ -199,15 +191,7 @@ export class SquadCore {
       return;
     }
     // 从未 drive（自检/降级）时按距离兜底；实机原子由 drive 的 interpretLeader 决定
-    if (!this.hasDrive) {
-      if (d > MARCH_DIST) {
-        this.atom = 'march';
-        if (this.ports.nav.longPath(o.target.x, o.target.z) > 0) this.dbg.long++;
-      } else {
-        this.atom = 'act';
-        if (this.ports.nav.canHop(o.target.x, o.target.z)) this.dbg.short++;
-      }
-    }
+    if (!this.hasDrive) this.atom = d > MARCH_DIST ? 'march' : 'act';
     this.phase = 'executing';
     this.report();
   }
