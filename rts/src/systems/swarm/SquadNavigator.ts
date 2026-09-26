@@ -82,7 +82,7 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
-  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } } | null {
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     const g = this.localGrid();
     if (!g) return null;
     const c = this.routeCursor(state, x, z, y);
@@ -92,7 +92,7 @@ export class SquadNavigator {
     const stepClimb = g.climbAt(x, z, st.dx, st.dz);
     // ★ 凭证点：路点自带优先；本步跨坡边 → 查该坡点（方向即步向，过滤必中）
     const run = (c.climb === true || stepClimb) && this.table ? this.table.climbRunAt(x, z, st.dx, st.dz) : null;
-    const climbPt = c.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise } : undefined);
+    const climbPt = c.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined);
     return { dx: st.dx, dz: st.dz, climb: c.climb === true || stepClimb, climbPt };
   }
 
@@ -101,7 +101,7 @@ export class SquadNavigator {
    *  已越过的路点永不回头（治"格边界最近格翻转"）；无走廊 → null。 */
   routeCursor(
     state: SquadOrderState | null, x: number, z: number, y: number, arriveR = 1.8,
-  ): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } } | null {
+  ): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     const g = this.localGrid();
     const path = state?.corridor ?? state?.order.path;
     if (!g || !path || path.length === 0) return null;
@@ -115,7 +115,7 @@ export class SquadNavigator {
     };
     while (i < path.length - 1 && reached(path[i] as { x: number; z: number })) i++;
     state.followIdx = i;
-    return path[i] as { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } };
+    return path[i] as { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } };
   }
 
   /** ★ 方案 A：贪心格边步（成员跟队长 / 无路线；同格 → null 交软跟随） */
@@ -142,7 +142,7 @@ export class SquadNavigator {
   memberStep(
     uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
     state?: SquadOrderState | null,
-  ): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number }; done: boolean } | null {
+  ): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number }; done: boolean } | null {
     if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, climb: false, done: true };
     let memo = this.memberRoutes.get(uid);
     const stale = !memo || now - memo.at >= MEMBER_ROUTE_S || Math.hypot(lx - memo.gx, lz - memo.gz) > MEMBER_ROUTE_MOVE;
@@ -159,18 +159,18 @@ export class SquadNavigator {
     const e = this.edgeGreedy(x, z, y, rp.x, rp.z);
     if (!e) return null;   // 步不出 → 上层停（等下一拍/重算）
     const run = (rp.climb === true) && this.table ? this.table.climbRunAt(x, z, e.dx, e.dz) : null;
-    const climbPt = rp.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise } : undefined);
+    const climbPt = rp.climbPt ?? (run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined);
     return { dx: e.dx, dz: e.dz, climb: rp.climb === true, climbPt, done: false };
   }
 
   /** ★ 从路线取凭证（第一条爬坡路点的凭证点；无 → 回收） */
-  private credOf(path: readonly { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } }[] | undefined): { x: number; z: number; ux: number; uz: number; rise?: number } | undefined {
+  private credOf(path: readonly { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } }[] | undefined): { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } | undefined {
     if (!path) return undefined;
     for (const wp of path) {
       if (wp.climb !== true) continue;
       if (wp.climbPt) return wp.climbPt;
       const run = this.table ? this.table.climbRunAt(wp.x, wp.z, 0, -1) : null;
-      return run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise } : undefined;
+      return run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined;
     }
     return undefined;
   }

@@ -33,7 +33,9 @@
 import { RasterMap } from '../../../services/map/RasterMap';
 import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../../services/map/Refinements';
 /** ★ 上坡点余量（米；用户定 2026-09-26）：上坡点标在**坡面前**此距离（低侧法线上） */
-const CLIMB_MARGIN = 2;   // ★ 用户定：上坡点在坡面前 **2m**（再靠后 1m）
+const CLIMB_MARGIN = 2;
+/** ★ 落点余量（米；用户定 2026-09-26）：落点在坡面**过去**此距离（顶侧法线上） */
+const CLIMB_LAND = 1.5;   // ★ 用户定：上坡点在坡面前 **2m**（再靠后 1m）
 /** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
 const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../../services/map/ChunkGenerator';
@@ -70,7 +72,7 @@ export class PassTable {
   /** ★★ 上坡位置预处理（用户定 2026-09-26）：每条可爬边的**连续段**（按坡宽）→
    *  段中心、坡面前 CLIMB_MARGIN 米（低侧法线）标"上坡点"。寻路上高台**只能经这些点**。 */
   /** ★ 上坡点表（构建期预处理；寻路/执行/可视化读） */
-  climbRuns: { x: number; z: number; ux: number; uz: number; width: number; rise: number }[] = [];
+  climbRuns: { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number }[] = [];
   private climbRun = new Int16Array(0);   // per(cell*4+dir) → climbRuns 下标；-1 = 非上坡点
   ready = false;
   /** 建表统计（探针） */
@@ -242,6 +244,7 @@ export class PassTable {
             x: ccx + ux * (CELL / 2 - CLIMB_MARGIN), z: ccz + uz * (CELL / 2 - CLIMB_MARGIN),
             ux, uz, width: cells.length,
             rise: Math.max(...cells.map((ci) => this.drop[ci * 4 + d])),
+            lx: ccx + ux * (CELL / 2 + CLIMB_LAND), lz: ccz + uz * (CELL / 2 + CLIMB_LAND),
           });
         }
       }
@@ -249,7 +252,7 @@ export class PassTable {
   }
 
   /** ★ 上坡点查询（该格所属**连续坡**的上坡点：段中心、坡面前 CLIMB_MARGIN；无 → null） */
-  climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
+  climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null {
     if (!this.ready) return null;
     const c = this.cellAt(x, z);
     if (c < 0) return null;
@@ -264,9 +267,9 @@ export class PassTable {
   }
 
   /** ★ 最近上坡点（宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
-  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
+  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null {
     if (!this.ready) return null;
-    let best: { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null = null;
+    let best: { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null = null;
     let bestScore = -Infinity;
     for (const r of this.climbRuns) {
       const d = Math.hypot(r.x - x, r.z - z);

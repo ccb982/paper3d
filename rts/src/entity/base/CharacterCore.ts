@@ -22,6 +22,8 @@ export const UNBURY_DEPTH = 1.2;
 
 /** ★ 上坡点到位容差（米；凭证式上坡：人须在此邻域内才认"在上坡点"） */
 const CLIMB_POINT_TOL = 1.2;
+/** ★ 坡前起爬带（米；在坡点法线前方此范围内即可起爬——"聚在坡下就能爬"） */
+const BASE_NEAR = 2.5;
 /** ★ 高落差硬壁斥力（用户定 2026-09-26）：生效半径（米，外为 0）/ 采样档（米）/ 推力（速度占比） */
 const WALL_REPEL_R = 2.0;
 const WALL_REPEL_D = [0.6, 1.2, 1.8] as const;
@@ -65,7 +67,7 @@ export interface TerrainProbe {
   /** ★ 可行性表查询（可选；生产 = PassTable.canStep）：该向边是否可行（硬墙/坑/单向=不可行） */
   canStep?(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ 上坡点（表预处理；连续性段中心、坡面前 2m）——凭证式上坡的"点位" */
-  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null;
+  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;
 }
 
 export interface StepInput {
@@ -81,7 +83,7 @@ export interface StepInput {
   /** ★ 爬坡凭证（路线发放：climb=true → 队长/代理的 climb 令）；无凭证不得爬 */
   climbOrdered?: boolean;
   /** ★ 凭证自带的**上坡点**（路线里插的点）；内核据此判"在坡点"（与朝向无关） */
-  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number };
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
   /** 限制爬崖（敌人）：立面阻挡（坡面 weld 放行） */
   blockCliffClimb: boolean;
   /** 无视地形落差（载具/飞行） */
@@ -135,15 +137,26 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 凭证式上坡（用户定）：凭证由**路线**持有（寻路走完才回收）；
-    //      人在上坡点 + 持凭证 → 沿法线定速爬。无凭证不爬（无自主）。
+    // ---- 凭证式上坡（用户定）：**在坡点宽带内（聚在坡下）→ 沿法线升到落点**；
+    //      硬性防线：**本格在可行性表里必须有该向可爬边（climb 位）**，否则不升（禁硬边上爬）。
     if (inp.blockCliffClimb && !inp.climbAnyTerrain && inp.climbOrdered) {
       const run = inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null);
       if (run) {
         const tx = -run.uz, tz = run.ux;
-        const tOff = (inp.x - run.x) * tx + (inp.z - run.z) * tz;       // 切向偏（横向）
-        const sOff = (inp.x - run.x) * run.ux + (inp.z - run.z) * run.uz; // 沿法线（<0 = 还没到点）
-        if (Math.abs(tOff) <= CLIMB_POINT_TOL && sOff >= -CLIMB_POINT_TOL) {
+        const tOff = (inp.x - run.x) * tx + (inp.z - run.z) * tz;
+        const sOff = (inp.x - run.x) * run.ux + (inp.z - run.z) * run.uz;
+        const rw = (run as { w?: number; width?: number }).w ?? (run as { width?: number }).width ?? 3;
+        const halfSpan = Math.max(CLIMB_POINT_TOL, Math.min(6, rw * 2));
+        const atBase = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR;
+        const lx = run.lx ?? run.x + run.ux * 3.5;
+        const lz = run.lz ?? run.z + run.uz * 3.5;
+        const landY = probe.heightAt(lx, lz, inp.y);
+        const atLand = Math.hypot(inp.x - lx, inp.z - lz) <= 1.0
+          && (!Number.isFinite(landY) || inp.y >= landY - 0.6);
+        // ★ 硬边防线（用户定）：本格必须有该向可爬边（表 climb 位）——否则不升
+        const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
+        const climbable = own !== null;
+        if (!atLand && atBase && climbable) {
           out.climbing = true;
           dx = run.ux * inp.speed * CLIMB_SPEED_MUL * inp.dt;
           dz = run.uz * inp.speed * CLIMB_SPEED_MUL * inp.dt;
@@ -211,9 +224,16 @@ export class CharacterCore {
         || (az !== 0 && probe.isWeldEdge(inp.x, inp.z, 0, az));
       if (!onWeld) { dx = 0; dz = 0; out.reverted = true; }
     }
+    // ★ 爬坡防卡地里（用户定 2026-09-26）：爬升态下贴地高取**上层表面**（y 抬到坡面/顶面），
+    //   否则 y 感知选层会停在下层 → 人被埋进坡体（"卡地里"）。
+    let gyOut = unburied ? (top as number) : gyAware;
+    if (out.climbing) {
+      const up = probe.heightAt(gx, gz, inp.y + 1.5);
+      if (Number.isFinite(up) && up > gyOut) gyOut = up;
+    }
     out.dx = dx;
     out.dz = dz;
-    out.gy = unburied ? (top as number) : gyAware;
+    out.gy = gyOut;
     return out;
   }
 }

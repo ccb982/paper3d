@@ -483,7 +483,7 @@ export class SwarmData {
     return this.passTable.canStep(x, z, dx, dz);
   }
 
-  climbRunAt(x: number, z: number, dx = 0, dz = 0): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null {
+  climbRunAt(x: number, z: number, dx = 0, dz = 0): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null {
     return this.passTable.climbRunAt(x, z, dx, dz);
   }
 

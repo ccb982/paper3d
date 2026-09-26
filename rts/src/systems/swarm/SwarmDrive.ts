@@ -28,7 +28,7 @@ export interface DriveHost {
   readonly data: SwarmData;
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
-  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number }; done: boolean } | null;
+  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; climb: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number }; done: boolean } | null;
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
@@ -45,7 +45,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   let dx = p.dirX[i], dz = p.dirZ[i];
   let edgeMode = false;   // ★ 方案 A：格边步模式（轴对齐 + canStep；跳过软转向/坡混合）
   let cred = false;       // ★ 爬坡凭证（挂在寻路上：state.climbCred）
-  let credPt: { x: number; z: number; ux: number; uz: number; rise?: number } | undefined;   // ★ 凭证点
+  let credPt: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } | undefined;   // ★ 凭证点
   // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
   //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员一律追队长。
   const squad = host.squads.squadOf(p.swarmUid[i]);

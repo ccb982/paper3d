@@ -176,7 +176,7 @@ export class AgentPool {
       hx: hs, hz: hs,
       suspended: false,
     }, this.coreProbe, nowS);
-    if (r.unburied) this.y[i] = r.gy;   // ★ 脱埋吸附（逻辑 y 抬到顶层；L3 同口径）
+    if (r.unburied || r.climbing) this.y[i] = r.gy;   // ★ 脱埋/爬升：逻辑 y 跟随贴地（防卡地里；L3 同口径）
     return r;
   }
 

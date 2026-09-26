@@ -36,9 +36,9 @@ export function goalOf(state: SquadOrderState): { x: number; z: number } | null 
  *  都 ≤adv → 末点（终点=目标）。**绝不跳过中间绕行点**（原 look 前瞻会把绕行点吃掉 → 直线撞崖）。 */
 /** ★ 沿**任意路点序列**的下一个未到达路点（纯函数；成员自路线缓存也用） */
 export function routeNextPath(
-  path: readonly { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } }[] | null | undefined,
+  path: readonly { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } }[] | null | undefined,
   cx: number, cz: number, adv: number,
-): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } } | null {
+): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
   if (!path || path.length === 0) return null;
   let near = 0, nd = Infinity;
   for (let i = 0; i < path.length; i++) {

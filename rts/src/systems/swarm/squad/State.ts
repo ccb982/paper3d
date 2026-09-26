@@ -31,10 +31,10 @@ export interface SquadOrderState {
   /** 最近一次求解失败时刻（秒；失败冷却） */
   pathFailedAt: number;
   /** 寻路轨走廊（覆盖式；命令对象只读） */
-  corridor?: { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number } }[];
+  corridor?: { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } }[];
   /** ★ 爬坡凭证（用户定 2026-09-26）：**挂在寻路上**——发路线时发放；
    *  直到"到达目标点并且下一个寻路接上"才回收（新路线替换/清空时更新）。 */
-  climbCred?: { x: number; z: number; ux: number; uz: number; rise?: number };
+  climbCred?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
   /** ★ 路线游标（锁存：沿走廊单调推进的当前路点下标；新走廊→0，清路→undefined） */
   followIdx?: number;
   /** 最近一次求解时的队长位（位移 >12m → 从当前位置重算） */

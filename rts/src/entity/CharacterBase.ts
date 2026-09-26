@@ -85,7 +85,7 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 爬坡凭证（路线 climb=true → steer.climb；用户定 2026-09-26） */
   climbOrdered = false;
   /** ★ 凭证点（路线发放；内核判"在坡点"用） */
-  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number };
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
   /** ★ 地形探针（两载体共用一份：`entity/base/RasterProbe`；重写 P1） */
   private readonly probe: TerrainProbe = createRasterProbe(() => this.entity.position.y);
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;

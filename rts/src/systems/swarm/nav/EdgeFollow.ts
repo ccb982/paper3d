@@ -22,7 +22,7 @@ export interface EdgeGrid {
   /** ★ 统一评分（可选；生产 = TerrainScoring.scoreAt）：对角同分量时择高分轴 */
   scoreAt?(x: number, z: number): number | null;
   /** ★ 上坡点（可选；生产 = PassTable.climbRunAt）：该向可爬 → 该连续坡的中间上坡点（前 1m） */
-  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number } | null;
+  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;
 }
 
 /** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
