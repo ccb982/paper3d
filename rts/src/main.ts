@@ -400,6 +400,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const swd = swarm.data;
         const ship = { x: spawn.x, z: spawn.z, y: raster.surfaceHeightAt(spawn.x, spawn.z) };
         const band = swd.fortifyBand;
+        // ★ 舰船关联高地整片排除（含其上坑洞）；无舰船 → 传 null = 正常占领
         this.sectors.buildOne(ship.x, ship.z, ship.y, band.rLo, band.rHi,
           (x, z) => raster.surfaceHeightAt(x, z), (x, z) => swd.blockedAt(x, z));
         const recs: { id: number; role: 'engineer' | 'melee' | 'ranged' | 'flyer'; alive: number; x: number; z: number; atom?: string; phase?: string; progress?: number; stillS?: number }[] = [];

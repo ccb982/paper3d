@@ -756,16 +756,35 @@ console.log('[5j] SectorBuilder / BattalionManager（用户定 2026-09-26）');
 {
   const sb = new SectorBuilder();
   const shipY = 6;
-  const surf = (x: number) => (x < 0 ? 6 : 0);
+  // 地形：舰船高原（-28..-4 与 0..x 同层 6）；西侧再往外 -30 以下是山脚 0；
+  //        西 -20 处有一个"高原上的坑洞"（底 2，四周皆 6）；
+  //        东 20 处有一个"低地上的凹陷"（底 2，四周皆 0）。
+  const surf = (x: number, z: number) => {
+    if (x < 0) {
+      if (x < -30) return 0;
+      if (Math.abs(x + 20) < 4 && Math.abs(z) < 4) return 2;
+      return 6;
+    }
+    if (Math.abs(x - 20) < 4 && Math.abs(z) < 4) return 2;
+    return 0;
+  };
   const blk = (x: number, z: number) => x === 8 && z === 0;
-  sb.buildAll(0, 0, shipY, 4, 40, surf, blk);
+  sb.buildAll(0, 0, shipY, 4, 42, surf, blk);
   ok(sb.sectors.length === SECTOR_COUNT, '全环 8 扇区（用户定）');
   const east = sb.sectors[0]!;
   ok(east.points.length > 0, '山脚扇区有可部署点');
-  ok(east.points.every((p) => shipY - p.h >= HEIGHT_EPS), '高度硬规则：只收低于舰位 ≥0.5m 的山脚（排除同层高原/山顶）');
+  ok(east.points.every((p) => shipY - p.h >= HEIGHT_EPS), '高度硬规则：只收低于舰船层 ≥0.5m 的山脚（排除同层高原/山顶）');
   ok(!east.points.some((p) => p.x === 8 && p.z === 0), '阻断点（坑/水/硬墙）不进可部署面');
+  ok(east.points.some((p) => p.h === 2), '低地上的凹陷不算"舰船高地"（可正常占领）');
   const west = sb.sectors[4]!;
-  ok(west.points.length === 0, '与舰同层的高台整片排除（上去要绕路）');
+  ok(west.points.some((p) => p.x < -30), '背侧更低的真山脚仍可部署');
+  ok(!west.points.some((p) => p.x === -20 && p.z === 0), '★ 舰船关联高地里的坑洞/凹陷不进防区（用户定 2026-09-26）');
+  ok(!west.points.some((p) => shipY - p.h < HEIGHT_EPS), '舰船高原本片整片排除');
+  // ★ 没有舰船 → 正常占领（不做高度排除）
+  const sb0 = new SectorBuilder();
+  sb0.buildAll(0, 0, null, 4, 42, surf, blk);
+  const west0 = sb0.sectors[4]!;
+  ok(west0.points.some((p) => p.h === 6), '没有舰船 → 正常占领（同层高地也纳入）');
   const mains = sb.selectMain(2);
   ok(mains.length === 2, 'selectMain(k)：选出 ≤k 个可部署扇区');
   ok(sb.selectMain(99).length <= SECTOR_COUNT, 'main 数夹在 [1, 8]');
