@@ -41,30 +41,6 @@ export function createRasterProbe(hintY: () => number): TerrainProbe {
     isWeldEdge: (x, z, dx, dz) => weldAt(x, z, dx, dz),
     /** ★ 顶层地表（脱埋用；直读顶层，不做 y 感知选层） */
     topAt: (x, z) => RasterMap.current?.surfaceHeightAt(x, z) ?? NaN,
-    /** ★ 上坡半径内最近坡面的正对方向（16 向采样；须为 weld 坡面且有正上升） */
-    uphillNormal: (x, z, r, dirX = 0, dirZ = 0) => {
-      // ★ 坡面方位（用户定 2026-09-26）：优先读**表标注**（weld+climb 位 = 坡的轴向与边中点；
-      //   方位来自地形裁决，不用高度采样猜）；表未就绪/未接入 → 回退 16 向采样（旧口径）。
-      const f = getSteerTable()?.climbFaceAt?.(x, z, dirX, dirZ);
-      if (f) return { ux: f.ux, uz: f.uz, mx: f.mx, mz: f.mz, rise: f.rise };
-      const raster = RasterMap.current;
-      if (!raster) return null;
-      const y = hintY();
-      const h0 = raster.surfaceHeightAtFor(x, z, y);
-      let best: { ux: number; uz: number } | null = null;
-      let bestRise = Math.max(0.25, r * 0.15);
-      const N = 16;
-      for (let k = 0; k < N; k++) {
-        const a = (k / N) * Math.PI * 2;
-        const ux = Math.cos(a), uz = Math.sin(a);
-        const h1 = raster.surfaceHeightAtFor(x + ux * r, z + uz * r, y);
-        const rise = h1 - h0;
-        if (rise <= bestRise) continue;
-        if (!weldAt(x, z, ux, uz)) continue;
-        bestRise = rise;
-        best = { ux, uz };
-      }
-      return best;
-    },
+    climbPoint: (x, z, dx, dz) => getSteerTable()?.climbRunAt?.(x, z, dx, dz) ?? null,
   };
 }

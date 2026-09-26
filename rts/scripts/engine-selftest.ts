@@ -361,36 +361,37 @@ console.log('[5f] Anchor 路由推进（S3a）');
 }
 
 // ---------- 移动内核按表判墙（B3） ----------
-console.log('[5g] CharacterCore 判墙（B3：硬边大落差=墙 / 坡=可爬 / 小落差可走）');
+console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）');
 {
-  const mkProbe = (weld: boolean, rise: number, mid?: [number, number]) => ({
+  const mkProbe = (weld: boolean, rise: number, runAt: [number, number] | null = [0, 0]) => ({
     heightAt: (x: number) => (x >= 0.5 ? rise : 0),
     wetAt: () => false,
     slopeGradAt: () => (weld ? { gx: 1, gz: 0, mag: 1 } : null),
     isWeldEdge: () => weld,
-    // ★ 表标注坡面：法线 + 边中点（未给中点 = 回退采样口径，无中点信息）
-    uphillNormal: () => (weld ? { ux: 1, uz: 0, ...(mid ? { mx: mid[0], mz: mid[1] } : {}) } : null),
-    layerAt: (x: number) => (x >= 0.5 ? rise : 0),        // ★ H2：层高
+    layerAt: (x: number) => (x >= 0.5 ? rise : 0),
+    topAt: (x: number) => (x >= 0.5 ? rise : 0),
+    climbPoint: (x: number, z: number, dx: number, dz: number) => {
+      void x; void z; void dx; void dz;
+      return runAt && weld ? { x: runAt[0], z: runAt[1], ux: 1, uz: 0, width: 3 } : null;
+    },
   });
-  const run = (probe: ReturnType<typeof mkProbe>, dirX = 1, dirZ = 0) => {
+  const run = (probe: ReturnType<typeof mkProbe>, cred: boolean, dirX = 1, dirZ = 0) => {
     const core = new CharacterCore();
     return core.step({
       x: 0, y: 0, z: 0, dt: 0.1, dirX, dirZ, speed: 2,
-      climbOrdered: false, blockCliffClimb: true, climbAnyTerrain: false,
+      climbOrdered: cred, blockCliffClimb: true, climbAnyTerrain: false,
       hx: 0.4, hz: 0.4, suspended: false,
     }, probe as never, 0);
   };
-  ok(run(mkProbe(false, 2)).dx === 0, '硬边大落差：墙（只下不上）');
-  ok(run(mkProbe(false, 0.5)).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
-  // ★ 上坡就地模型（2026-09-26）：坡很宽、处处可爬——本格有坡面边且方向朝坡 → 就地沿法线爬
-  const face = run(mkProbe(true, 2), 1, 0);
-  ok(face.dx > 0 && face.climbing === true, '正对坡面 → 就地沿法线爬');
-  const diagonal = run(mkProbe(true, 2), 0.707, 0.707);   // 斜向朝坡（有上坡分量）→ 也就地爬（不绕中点）
-  ok(diagonal.dx > 0 && Math.abs(diagonal.dz) < 1e-6 && diagonal.climbing === true, '斜向朝坡 → 就地爬（法线方向，不绕边中点）');
-  const back = run(mkProbe(true, 2), -1, 0);              // 方向背坡 → 不爬（坡面不许驻留：下坡小推）
-  ok(back.dx < 0 && back.climbing === false, '方向背坡 → 不爬（下坡小推）');
-  const far = run(mkProbe(false, 2), 0.707, 0.707);   // 无坡（法线 null）→ 硬边墙照旧
-  ok(far.dx === 0, '无坡硬边：仍按墙处理');
+  ok(run(mkProbe(false, 2), false).dx === 0, '硬边大落差：墙（只下不上）');
+  ok(run(mkProbe(false, 0.5), false).dx > 0, '硬边小落差(≤0.6)：可走（无视）');
+  // ★ 凭证式上坡（用户定）：人在上坡点 + 持凭证 → 方可沿法线爬
+  const cred = run(mkProbe(true, 2), true);
+  ok(cred.dx > 0 && cred.climbing === true, '在上坡点 + 持凭证 → 沿法线爬');
+  const noCred = run(mkProbe(true, 2), false);
+  ok(noCred.climbing === false, '无凭证 → 不爬（没有自主上坡）');
+  const offPoint = run(mkProbe(true, 2, [5, 0]), true);
+  ok(offPoint.climbing === false, '持凭证但不在上坡点 → 不爬');
 }
 
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------

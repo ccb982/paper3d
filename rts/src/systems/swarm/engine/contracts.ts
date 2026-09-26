@@ -74,9 +74,6 @@ export interface SquadReport {
   hpRatio?: number;
 }
 
-// ---------- 实体侧契约（能力 / 升降格汇报） ----------
-// 分层：实体层不依赖 systems → 类型真源在 entity/base/contracts.ts，这里 re-export 方便引擎引用。
-export type { AbilityId, AbilityRequest, EntityTierReport } from '../../../entity/base/contracts';
 
 /** 四兵种（管理器分派依据；与 SquadTable.type 对齐） */
 export type MobRole = 'engineer' | 'melee' | 'ranged' | 'flyer';

@@ -33,7 +33,7 @@
 import { RasterMap } from '../../../services/map/RasterMap';
 import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../../services/map/Refinements';
 /** ★ 上坡点余量（米；用户定 2026-09-26）：上坡点标在**坡面前**此距离（低侧法线上） */
-const CLIMB_MARGIN = 1;
+const CLIMB_MARGIN = 2;   // ★ 用户定：上坡点在坡面前 **2m**（再靠后 1m）
 /** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
 const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../../services/map/ChunkGenerator';
@@ -69,7 +69,8 @@ export class PassTable {
   private weld = new Uint8Array(0);
   /** ★★ 上坡位置预处理（用户定 2026-09-26）：每条可爬边的**连续段**（按坡宽）→
    *  段中心、坡面前 CLIMB_MARGIN 米（低侧法线）标"上坡点"。寻路上高台**只能经这些点**。 */
-  private climbRuns: { x: number; z: number; ux: number; uz: number; width: number }[] = [];
+  /** ★ 上坡点表（构建期预处理；寻路/执行/可视化读） */
+  climbRuns: { x: number; z: number; ux: number; uz: number; width: number }[] = [];
   private climbRun = new Int16Array(0);   // per(cell*4+dir) → climbRuns 下标；-1 = 非上坡点
   ready = false;
   /** 建表统计（探针） */
@@ -246,12 +247,12 @@ export class PassTable {
     }
   }
 
-  /** ★ 上坡点查询（该格沿该向的可爬段 → 段中心"上坡点"，含坡宽）；无 → null */
+  /** ★ 上坡点查询（该格所属**连续坡**的上坡点：段中心、坡面前 CLIMB_MARGIN；无 → null） */
   climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null {
     if (!this.ready) return null;
     const c = this.cellAt(x, z);
     if (c < 0) return null;
-    // ★ 斜向口径（修 2026-09-26）：任一分量轴上查到 climb 位即认（不得只看主轴——否则斜向步会漏坡点）
+    // ★ 斜向口径：任一分量轴上查到 climb 位即认（不得只看主轴——否则斜向步漏坡点）
     const pick = (d: number): number => (this.climb[c * 4 + d] === 1 ? this.climbRun[c * 4 + d] : -1);
     let k = -1;
     if (dx > 0) k = pick(DIR_E);
@@ -261,7 +262,7 @@ export class PassTable {
     return k < 0 ? null : (this.climbRuns[k] ?? null);
   }
 
-  /** ★ 最近上坡点（带余量：宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
+  /** ★ 最近上坡点（宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
   nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number } | null {
     if (!this.ready) return null;
     let best: { x: number; z: number; ux: number; uz: number; width: number } | null = null;
@@ -269,41 +270,10 @@ export class PassTable {
     for (const r of this.climbRuns) {
       const d = Math.hypot(r.x - x, r.z - z);
       if (d > maxR) continue;
-      const score = Math.min(r.width, 4) * 1.5 - d * 0.05;   // 宽段优先，其次近
+      const score = Math.min(r.width, 4) * 1.5 - d * 0.05;
       if (score > bestScore) { bestScore = score; best = r; }
     }
     return best;
-  }
-
-  /** ★★ 坡面方位（用户定 2026-09-26）：**只认本格**的可爬坡面边（climb 位 = weld 且净升 > 阈值）。
-   *  方位来自地形裁决（finalRuling→weld），不用高度采样猜。返回法线 (ux,uz)（轴对齐，"正对"方向）
-   *  与净升 rise。用户口径：**坡很宽、处处可爬**——站在坡面任一格都能就地爬，不绕边中点/不蹭侧壁。
-   *  desired 给定时只取朝坡（align>0）中最正对、其次净升最高的边；无 → null。 */
-  climbFaceAt(
-    x: number, z: number, desiredX = 0, desiredZ = 0,
-  ): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
-    if (!this.ready) return null;
-    const i0 = this.cellAt(x, z);
-    if (i0 < 0) return null;
-    const dl = Math.hypot(desiredX, desiredZ);
-    const wantDir = dl > 1e-3;
-    const ix = i0 % this.side, iz = (i0 - ix) / this.side;
-    const cx = this.ox + ix * CELL + CELL / 2;
-    const cz = this.oz + iz * CELL + CELL / 2;
-    let best: { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null = null;
-    for (let dir = 0; dir < 4; dir++) {
-      if (this.climb[i0 * 4 + dir] !== 1) continue;
-      const ux = DVX[dir], uz = DVZ[dir];
-      const align = wantDir ? (desiredX * ux + desiredZ * uz) / dl : 0;
-      if (wantDir && align <= 0) continue;
-      const rise = this.drop[i0 * 4 + dir];
-      if (!best || align > best.align + 1e-6
-        || (Math.abs(align - best.align) <= 1e-6 && rise > best.rise)) {
-        best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2), align };
-      }
-    }
-    if (!best) return null;
-    return { ux: best.ux, uz: best.uz, rise: best.rise, mx: best.mx, mz: best.mz };
   }
 
   /** 窗口界（格坐标；可行性寻路 BFS 用） */

@@ -17,13 +17,6 @@ import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../services/map/ChunkGenerator';
  *  仅"当前在水里"时生效——陆地单位仍受 0.6m 台阶限制） */
 export const SHORE_CLIMB_MAX = 2.5;
 
-/** ★ 坡面程序化爬升（用户定 2026-09-24）：坡面**不许驻留**（要么上要么下）——
- *  坡度 ≥ 此值判"在坡面上"（米/米）；限制爬崖单位在坡面上期望朝上时进入爬坡态（定速直推）。 */
-export const CLIMB_SLOPE_MIN = 0.5;
-/** ★ 上坡半径（米；用户定 2026-09-25）：在坡的此半径内**想上坡必须正对坡面**（坡法线方向） */
-export const CLIMB_FACE_R = 5;
-/** ★ 正对阈值（dot）：方向与坡面法线对齐度 ≥ 此值才算"正对"（正对 → 爬；未正对 → 先转向坡面） */
-export const CLIMB_FACE_DOT = 0.8;
 /** 爬坡态单次续期时长（毫秒；到顶/坡度变缓即退出，超时兜底退出） */
 export const CLIMB_PATH_MS = 1500;
 /** ★ 爬坡减速（用户定 2026-09-24）：爬坡态速度乘子（L3 程序化爬坡 + L2 上坡共用口径） */

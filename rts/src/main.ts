@@ -43,6 +43,7 @@ import { CharacterClamp } from './systems/world/CharacterClamp';
 import { EnemyManager } from './ui/EnemyManager';
 import { EnemyListPanel } from './ui/EnemyListPanel';
 import { NavDebugMap } from './ui/NavDebugMap';
+import { ClimbPointsView } from './ui/ClimbPointsView';
 import { AiTrace } from './debug/AiTrace';
 import { simNow, setSimNow } from './services/SimClock';
 import { FastLane } from './rts/FastLane';
@@ -435,6 +436,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name), engineView!);
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
   const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }), engineView ?? undefined);
+  // ★ 上坡点场景可视化（用户定 2026-09-26）：**默认绘制**（H 键可关）
+  const climbView = new ClimbPointsView(scene, () => swarm.data.passTable);
+  climbView.setVisible(true);
   enemyPanel.onInspectCommand = (sid, entry) => navMap.open(sid, entry ? { x: entry.tx, z: entry.tz } : undefined);
   // ★ AI 可读记录器（命令/指令/寻路/生死；Y=下载 JSONL，U=控制台打印中文摘要）
   const aiTrace = new AiTrace(swarm, enemies, SEED, ENEMY_ROSTER.map((s) => s.name), engineView ?? undefined);
@@ -603,6 +607,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (e.code === 'BracketRight') cam.pitch = clamp(cam.pitch - 0.08, 0.12, 1.45);
     if (e.code === 'Escape') { if (navMap.visible) navMap.close(); else enemyMgr.clear(); }
     if (e.code === 'KeyM') navMap.toggleOverview();
+    if (e.code === 'KeyH') { climbView.toggle(); console.log('[climb] 上坡点可视化', climbView.isVisible ? '开' : '关'); }
     if (e.code === 'KeyY') aiTrace.download();
     if (e.code === 'KeyU') console.log(aiTrace.digest(150));
     if (e.code === 'Comma' || e.code === 'Period') {
@@ -787,6 +792,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     enemyMgr.update();   // ★ 红圈跟随 + 死亡自动收敛
     enemyPanel.refresh();   // ★ 右侧列表（2Hz 内部节流）
     navMap.update();        // ★ 寻路可视化小地图（M 开关；10Hz 内部节流）
+    climbView.refresh();    // ★ 上坡点可视化（默认绘制；表重建后自动刷新）
     aiTrace.update(dt);     // ★ AI 可读记录（2Hz 变化采样）
     timeline.refresh();     // ★ 时间轴（2Hz）
     entities.present(dtR);   // ★ 表现相（实时；渲染同步/动画）
@@ -799,7 +805,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, climbView, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

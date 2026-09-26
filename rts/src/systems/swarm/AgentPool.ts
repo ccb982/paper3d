@@ -169,7 +169,7 @@ export class AgentPool {
     const r = this.core[i].step({
       x: this.x[i], y: this.y[i], z: this.z[i], dt,
       dirX, dirZ, speed,
-      climbOrdered,          // ★ 显式爬坡令（路段★/本步跨坡边）；false 时仍由基类几何规则兜底
+      climbOrdered,
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       hx: hs, hz: hs,

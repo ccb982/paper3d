@@ -479,8 +479,8 @@ export class SwarmData {
   };
 
   /** ★ 坡面方位（表标注；上坡函数用）：weld+climb 位 → 轴向法线 + 边中点 */
-  climbFaceAt(x: number, z: number, dx = 0, dz = 0): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
-    return this.passTable.climbFaceAt(x, z, dx, dz);
+  climbRunAt(x: number, z: number, dx = 0, dz = 0): { x: number; z: number; ux: number; uz: number; width: number } | null {
+    return this.passTable.climbRunAt(x, z, dx, dz);
   }
 
   private terrainWallAt(x: number, z: number, k: number): boolean {

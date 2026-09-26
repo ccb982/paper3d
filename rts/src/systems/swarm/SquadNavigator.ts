@@ -102,8 +102,10 @@ export class SquadNavigator {
     if (!g || !path || path.length === 0) return null;
     if (!state) return null;
     let i = Math.max(0, Math.min(state.followIdx ?? 0, path.length - 1));
-    const reached = (p: { x: number; z: number }): boolean => {
-      if (Math.hypot(p.x - x, p.z - z) > arriveR) return false;
+    const reached = (p: { x: number; z: number; climb?: boolean }): boolean => {
+      // ★ 爬坡路点用**紧到位**（0.9m）：爬令保持到真的跨越（防提前翻掉→坡面中断）
+      const r = p.climb === true ? Math.min(arriveR, 0.9) : arriveR;
+      if (Math.hypot(p.x - x, p.z - z) > r) return false;
       return Math.abs(g.heightAt(p.x, p.z) - y) <= EDGE_LAYER_TOL;   // ★ H2：同格不同层 ≠ 到达
     };
     while (i < path.length - 1 && reached(path[i] as { x: number; z: number })) i++;

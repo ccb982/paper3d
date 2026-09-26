@@ -181,11 +181,11 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   applySteer(intent: SteerIntent | null): void {
     if (!intent) {
       this.steerState.source = 'none';
-      this.climbOrdered = false;
+      this.climbOrdered = false;   // 凭证随 steer 清除
       return;
     }
     Object.assign(this.steerState, intent);
-    this.climbOrdered = intent.climb === true;   // ★ 寻路标注的爬坡位 → 程序化爬坡
+    this.climbOrdered = intent.climb === true;   // ★ 爬坡凭证（路线发放）
     this.steerFreshUntil = performance.now() / 1000 + EnemyBase.STEER_TTL;
     // ★ E4a：收到 steer = 控制权交给 swarm（超时回落由 applySteerMovement 执行）
     this.controlSource = 'swarm';
@@ -221,7 +221,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       return;
     }
     // ★ 队长指令限速（ROE/压迫档）仍生效；本地 AI 的方向选择被让位
-    const mul = this.directiveKind !== 'none' ? this.directiveSpeedMul : 1;
+    let mul = this.directiveKind !== 'none' ? this.directiveSpeedMul : 1;
+    if (this.climbOrdered && mul < 1) mul = 1;   // 凭证在身：不被零限速压死
     const base = s.speed > 0 ? s.speed : this.moveSpeed;
     this.applyingSteer = true;
     this.moveBy(dx, dz, dt, base * mul);

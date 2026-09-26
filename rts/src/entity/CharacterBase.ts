@@ -21,8 +21,7 @@ import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
-import { CharacterCore, canShift, type TerrainProbe  } from "./base/CharacterCore";
-import { groundResolve } from "./base/Climb";
+import { CharacterCore, canShift, unbuyGroundY, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 
@@ -81,9 +80,10 @@ export abstract class CharacterBase extends EntityBase {
   private static readonly CLIMB_CD_MS = 1200;
   private climbT = -1;
   /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24；EnemyBase 由 steer 写入） */
-  climbOrdered = false;
   /** ★ 重写 P1：推进/爬坡/立面/贴地统一走 CharacterCore（L2/L3 同内核） */
   private readonly core = new CharacterCore();
+  /** ★ 爬坡凭证（路线 climb=true → steer.climb；用户定 2026-09-26） */
+  climbOrdered = false;
   /** ★ 地形探针（两载体共用一份：`entity/base/RasterProbe`；重写 P1） */
   private readonly probe: TerrainProbe = createRasterProbe(() => this.entity.position.y);
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
@@ -167,9 +167,8 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.x += dx;
     this.entity.position.z += dz;
     const p = this.entity.position;
-    const gr = groundResolve(this.probe, p.x, p.z, p.y);   // ★ 贴地/脱埋（Climb 专用件）
-    const gy = gr.y;
-    if (step.unburied || gr.unburied) {
+    const gy = unbuyGroundY(p.x, p.z, p.y);   // ★ 贴地/脱埋（顶层；两载体同口径）
+    if (step.unburied) {
       p.y = gy;                 // ★ 脱埋吸附：直接抬到顶层（不当作墙回退）
       this.airborneStandY = gy;
     } else if (this.controller.isAirborne()) {
