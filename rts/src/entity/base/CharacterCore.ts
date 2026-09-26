@@ -32,6 +32,7 @@ const CLIMB_START_R = 0.6;
 export const CLIMB_TRACE: {
   id: number; t: number; phase: string; x: number; z: number; y?: number;
   px: number; pz: number; d: number; tOff: number; sOff: number; frames: number;
+  y0: number; top0: number; buryMax: number; footGap: number;   // ★ 脚高记录：起步脚高/起步表面/最深埋深/当前脚面差
 }[] = [];
 let CLIMB_SEQ = 0;
 /** ★ 高落差硬壁斥力（用户定 2026-09-26）：生效半径（米，外为 0）/ 采样档（米）/ 推力（速度占比） */
@@ -134,6 +135,7 @@ export const CLIMB_STATS = {
   startDistMax: 0, // 实测起爬距最大值
   landed: 0,      // 到落点完成会话数
   abandoned: 0,   // 被拉离现场弃约数
+  buryFrames: 0,  // 爬升中脚低于表面 >0.3m 的帧数（“卡地里”指标）
 };
 
 export class CharacterCore {
@@ -142,7 +144,7 @@ export class CharacterCore {
   private session: {
     run: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
     lx: number; lz: number;
-    tr: { id: number; t: number; phase: string; x: number; z: number; y?: number; px: number; pz: number; d: number; tOff: number; sOff: number; frames: number };
+    tr: { id: number; t: number; phase: string; x: number; z: number; y?: number; px: number; pz: number; d: number; tOff: number; sOff: number; frames: number; y0: number; top0: number; buryMax: number; footGap: number };
   } | null = null;
   /** 结果复用（零分配） */
   private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false };
@@ -189,14 +191,20 @@ export class CharacterCore {
         const halfSpan = Math.max(CLIMB_POINT_TOL, Math.min(6, rw * 2));
         const lx = committed ? this.session!.lx : (run.lx ?? run.x + run.ux * 3.5);
         const lz = committed ? this.session!.lz : (run.lz ?? run.z + run.uz * 3.5);
-        const landY = probe.heightAt(lx, lz, inp.y);
-        const atLand = Math.hypot(inp.x - lx, inp.z - lz) <= 1.0
-          && (!Number.isFinite(landY) || inp.y >= landY - 0.6);
+        const dl = Math.hypot(lx - run.x, lz - run.z);   // 落点的法向坐标
+        // ★ 到达（用户定 2026-09-26）：到落点附近（或已越过法向坐标）**且 脚已着地**
+        //   （脚底贴到当前位置的最高表面；埋在体内/悬空都不算爬完）。
+        const footTop = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
+        const footOn = Number.isFinite(footTop) && Math.abs(footTop - inp.y) <= 0.25;
+        const atLand = (Math.hypot(inp.x - lx, inp.z - lz) <= 1.0 || sOff >= dl - 0.6) && footOn;
         // ★ 承诺续爬（不可中断）：不再复核 atBase/硬边；
         //   仅在被明显拉离现场（回收/传送）时弃约。到落点 = 完成。
         if (committed) {
           const tr = this.session!.tr;
           tr.frames++;
+          tr.footGap = Number.isFinite(footTop) ? footTop - inp.y : 0;   // 脚面差（<0 = 埋在地里）
+          if (tr.footGap < -0.3) CLIMB_STATS.buryFrames++;
+          if (-tr.footGap > tr.buryMax) tr.buryMax = -tr.footGap;
           const far = sOff < -(BASE_NEAR + 8) || Math.abs(tOff) > halfSpan + 8;
           if (far) { this.session = null; CLIMB_STATS.abandoned++; tr.phase = 'abandoned'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
           else if (atLand) { this.session = null; CLIMB_STATS.landed++; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
@@ -231,8 +239,10 @@ export class CharacterCore {
             } else {                                    // ④ 在点：硬边防线→起步
               const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
               if (own !== null) {
+                const top0 = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
                 const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
-                  px: run.x, pz: run.z, d: dPt, tOff, sOff, frames: 0 };
+                  px: run.x, pz: run.z, d: dPt, tOff, sOff, frames: 0,
+                  y0: inp.y, top0: Number.isFinite(top0) ? top0 : inp.y, buryMax: 0, footGap: 0 };
                 CLIMB_TRACE.push(tr);
                 if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
                 this.session = { run, lx, lz, tr };
@@ -315,7 +325,10 @@ export class CharacterCore {
     //   否则 y 感知选层会停在下层 → 人被埋进坡体（"卡地里"）。
     let gyOut = unburied ? (top as number) : gyAware;
     if (out.climbing) {
-      const up = probe.heightAt(gx, gz, inp.y + 1.5);
+      // ★ 爬升态取**最高表面**（用户定 2026-09-26：直接贴着坡面/顶面走到高原顶）——
+      //   y 感知取层在坡中/越顶时可能仍选下层 → 埋进坡体从另一端出头。
+      const upTop = probe.topAt ? probe.topAt(gx, gz) : undefined;
+      const up = (upTop !== undefined && Number.isFinite(upTop)) ? upTop : probe.heightAt(gx, gz, inp.y + 1.5);
       if (Number.isFinite(up) && up > gyOut) gyOut = up;
     }
     out.dx = dx;

@@ -97,6 +97,9 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 是否正在攀爬（CharacterClamp 跳过贴地，避免抢位置） */
   get isClimbing(): boolean { return this.climbT >= 0; }
 
+  /** ★ 程序化爬坡中（内核爬升态；含强制走位与承诺续爬）——贴地结算用：取最高表面直接到高原顶 */
+  get isTerrainClimbing(): boolean { return this.core.climbing; }
+
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   collisionVolume: {
     shape: import("../services/physics/PhysicsWorld").ColliderShape;
