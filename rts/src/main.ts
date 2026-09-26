@@ -22,6 +22,8 @@ import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
 import { CLIMB_STATS, CLIMB_TRACE } from './entity/base/CharacterCore';
+import { SectorBuilder } from './systems/swarm/tactics/SectorBuilder';
+import { BattalionManager } from './systems/swarm/tactics/BattalionManager';
 import { CLIMB_ROUTE_STATS } from './systems/swarm/SquadNavigator';
 import { ENEMY_BY_ID } from './config/enemyRoster';
 import type { SwarmHooks } from './systems/swarm/SwarmSystem';
@@ -246,6 +248,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 新引擎接线（重写 P4）：**唯一指挥链**——旧链已删，无回退开关
   let shadowBridge: EngineBridge | null = null;
   let engineView: SquadViewPort | null = null;
+  let tactics: { sectors: SectorBuilder; battalions: BattalionManager; mainSectors: number[]; acc: number; tick(h: number): void } | null = null;
   let squadCores: SquadRegistry | null = null;
   {
     shadowBridge = new EngineBridge({
@@ -384,6 +387,29 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     };
     setSwarmDebugView(engineView);
     setSwarmTraceView(engineView);
+    // ★ 战术侧（《RTS架构.md》§2.12）：扇区构建系统 + 大队管理器（只读编制/部署计划；不直接发令）
+    tactics = {
+      sectors: new SectorBuilder(),
+      battalions: new BattalionManager(),
+      mainSectors: [0],
+      acc: 0,
+      tick(h: number): void {
+        this.acc += h;
+        if (this.acc < 0.5) return;
+        this.acc = 0;
+        const swd = swarm.data;
+        const ship = { x: spawn.x, z: spawn.z, y: raster.surfaceHeightAt(spawn.x, spawn.z) };
+        const band = swd.fortifyBand;
+        this.sectors.buildOne(ship.x, ship.z, ship.y, band.rLo, band.rHi,
+          (x, z) => raster.surfaceHeightAt(x, z), (x, z) => swd.blockedAt(x, z));
+        const recs: { id: number; role: 'engineer' | 'melee' | 'ranged' | 'flyer'; alive: number; x: number; z: number; atom?: string; phase?: string; progress?: number; stillS?: number }[] = [];
+        if (shadowBridge) for (const r of shadowBridge.squads.all()) recs.push({ id: r.id, role: r.role, alive: r.alive, x: r.x, z: r.z, atom: r.atom, phase: r.phase, progress: r.progress, stillS: r.stillS });
+        this.battalions.refresh(recs);
+        this.battalions.regroup();
+        this.battalions.deploy(this.mainSectors);
+        this.battalions.gaps(this.mainSectors);
+      },
+    };
   }
   // ★ 玩家发令面板（重写 P3；用户定）：所有玩家命令从这里出 → EngineBridge.playerOrder*
   const cmdPanel = new CommandPanel();
@@ -437,7 +463,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   // ★ 右侧敌人列表（兵种 → 队长 → 代理；点击选中出红圈）
   const enemyPanel = new EnemyListPanel(swarm, enemyMgr, ENEMY_ROSTER.map((s) => s.name), engineView!);
   // ★ 寻路可视化小地图（走廊/起点/终点/队令/队长；M 键开关）
-  const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }), engineView ?? undefined);
+  const navMap = new NavDebugMap(raster, swarm, () => ({ x: spawn.x, z: spawn.z }), engineView ?? undefined, () => (tactics ? { sectors: tactics.sectors, mainSectors: tactics.mainSectors } : null));
   // ★ 上坡点场景可视化（用户定 2026-09-26）：**默认绘制**（H 键可关）
   const climbView = new ClimbPointsView(scene, () => swarm.data.passTable);
   climbView.setVisible(true);
@@ -752,6 +778,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     aiCtx.focusX = cam.tx; aiCtx.focusZ = cam.tz;   // ★ AI 激活焦点=相机（RTS 调试：看哪哪活；原=舰船 → 远处手放敌人休眠）
     aiSystem.updateAll(h, aiCtx);
     for (const e of enemies) charClamp.update(e, h);   // ★ 贴地/悬停/掉坑结算
+    tactics?.tick(h);   // ★ 战术侧：扇区摊销构建 + 大队编制/部署计划（只读，不发令）
     explosionFx.update(h);
     entities.simulate(h);                      // ★ 实体模拟相（移动/AI/物理同步）
     physics.step();
@@ -807,7 +834,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, climbView, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE }, get speed(): number { return speed; },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, climbView, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE },
+    tactics: { sectors: tactics?.sectors ?? null, battalions: tactics?.battalions ?? null, get mainSectors(): number[] { return tactics?.mainSectors ?? []; }, setMainSectors(k: number[]): void { if (tactics) tactics.mainSectors = k; } }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({
       ticks: shadowBridge!.dbg.ticks,

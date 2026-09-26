@@ -20,6 +20,8 @@ import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerM
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
+import { SectorBuilder, SECTOR_COUNT, HEIGHT_EPS } from '../src/systems/swarm/tactics/SectorBuilder.ts';
+import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift } from '../src/entity/base/CharacterCore.ts';
@@ -747,6 +749,47 @@ console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
   ok(decideChain({ ...base, routine: null }) === null, '全不成立 → null（保持现状）');
   // 优先级：重伤 > 事态
   ok(decideChain({ ...base, hpRatio: 0.2, atRingMax: true })?.source === 'wounded', '重伤压过事态');
+}
+
+// ---------- 战术侧：扇区构建 + 大队管理器（《RTS架构.md》§2.12） ----------
+console.log('[5j] SectorBuilder / BattalionManager（用户定 2026-09-26）');
+{
+  const sb = new SectorBuilder();
+  const shipY = 6;
+  const surf = (x: number) => (x < 0 ? 6 : 0);
+  const blk = (x: number, z: number) => x === 8 && z === 0;
+  sb.buildAll(0, 0, shipY, 4, 40, surf, blk);
+  ok(sb.sectors.length === SECTOR_COUNT, '全环 8 扇区（用户定）');
+  const east = sb.sectors[0]!;
+  ok(east.points.length > 0, '山脚扇区有可部署点');
+  ok(east.points.every((p) => shipY - p.h >= HEIGHT_EPS), '高度硬规则：只收低于舰位 ≥0.5m 的山脚（排除同层高原/山顶）');
+  ok(!east.points.some((p) => p.x === 8 && p.z === 0), '阻断点（坑/水/硬墙）不进可部署面');
+  const west = sb.sectors[4]!;
+  ok(west.points.length === 0, '与舰同层的高台整片排除（上去要绕路）');
+  const mains = sb.selectMain(2);
+  ok(mains.length === 2, 'selectMain(k)：选出 ≤k 个可部署扇区');
+  ok(sb.selectMain(99).length <= SECTOR_COUNT, 'main 数夹在 [1, 8]');
+
+  const bm = new BattalionManager();
+  const squads = [
+    { id: 1, role: 'melee' as const, alive: 12, x: 0, z: 0 },
+    { id: 2, role: 'melee' as const, alive: 12, x: 0, z: 0 },
+    { id: 3, role: 'melee' as const, alive: 8, x: 0, z: 0 },
+    { id: 4, role: 'ranged' as const, alive: 5, x: 0, z: 0 },
+    { id: 5, role: 'engineer' as const, alive: 2, x: 0, z: 0 },
+  ];
+  bm.refresh(squads);
+  for (const s of squads) ok(bm.situation.get(s.id)!.full === (s.role === 'engineer' ? SQUAD_FULL_BUILDER : SQUAD_FULL_COMBAT), `满编口径：${s.role}`);
+  bm.regroup();
+  ok(bm.battalions.every((b) => b.alive <= BATTALION_SIZE), `大队 ≤${BATTALION_SIZE} 人（不拆小队）`);
+  ok(bm.battalions.reduce((n, b) => n + b.squadIds.length, 0) === squads.length, '编制打包不丢小队');
+  bm.deploy([0, 1]);
+  ok([...bm.deployPlan.values()].every((s) => s === 0 || s === 1), '部署只投主攻扇区');
+  const meleeAt0 = [...bm.deployPlan].filter(([sid, sec]) => sec === 0 && bm.situation.get(sid)!.role === 'melee').length;
+  const meleeAt1 = [...bm.deployPlan].filter(([sid, sec]) => sec === 1 && bm.situation.get(sid)!.role === 'melee').length;
+  ok(meleeAt0 <= bm.quotaOf('melee') && meleeAt1 <= bm.quotaOf('melee'), '同区同类小队不超配额（不重复往一个扇区堆兵）');
+  const gaps = bm.gaps([0, 1]);
+  ok([...gaps.values()].every((g) => [...g.values()].every((n) => n >= 0)), '缺口表（扇区×兵种，供随打随补）非负');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

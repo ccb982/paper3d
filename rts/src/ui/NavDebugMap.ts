@@ -37,6 +37,8 @@ export class NavDebugMap {
     private readonly shipAt?: () => { x: number; z: number },
     /** ★ 引擎只读视图（替代旧镜像板） */
     private readonly view?: SquadViewPort,
+    /** ★ 战术侧（防区真形；用户定 2026-09-26）：SectorBuilder + 主攻扇区 */
+    private readonly tacticsAt?: () => { sectors: import('../systems/swarm/tactics/SectorBuilder').SectorBuilder; mainSectors: number[] } | null,
   ) {
     this.root = document.createElement('div');
     this.root.style.cssText = [
@@ -240,33 +242,53 @@ export class NavDebugMap {
         g.font = '10px Consolas,monospace';
         g.fillText(`上限 ${band.maxD.toFixed(0)}m`, sx - 30, sz - band.maxD * sPx - 4);
       }
+      // ★★ 防区外貌（用户定 2026-09-26）：**真形**（SectorBuilder 可部署面点集，随地形）——
+      //   高原/山顶整片不画（它们不在防区内）；主攻扇区高亮（橙）并画边界射线。
+      const tac = this.tacticsAt?.() ?? null;
+      if (tac) {
+        const mains = new Set(tac.mainSectors);
+        for (const s of tac.sectors.sectors) {
+          if (!s.scanned) continue;
+          const isMain = mains.has(s.idx);
+          g.fillStyle = isMain ? 'rgba(255,160,60,0.6)' : 'rgba(120,160,200,0.30)';
+          for (const p of s.points) {
+            const [px3, pz3] = p2(p.x, p.z);
+            const w = isMain ? 3 : 2;
+            g.fillRect(px3 - w / 2, pz3 - w / 2, w, w);
+          }
+          const a0 = (s.idx / 8) * Math.PI * 2, a1 = ((s.idx + 1) / 8) * Math.PI * 2;
+          if (isMain) {
+            const rOut = (s.dMax > 0 ? Math.max(s.dMax, rLo) : rHi) * sPx;
+            g.strokeStyle = 'rgba(255,170,70,0.9)';
+            g.lineWidth = 1.5;
+            for (const a of [a0, a1]) {
+              g.beginPath(); g.moveTo(sx + Math.cos(a) * 4, sz + Math.sin(a) * 4);
+              g.lineTo(sx + Math.cos(a) * rOut, sz + Math.sin(a) * rOut); g.stroke();
+            }
+          }
+          if (s.points.length) {
+            let mx = 0, mz = 0;
+            for (const p of s.points) { mx += p.x; mz += p.z; }
+            mx = mx / s.points.length; mz = mz / s.points.length;
+            const [lx, ly] = p2(mx, mz);
+            g.fillStyle = isMain ? 'rgba(255,190,110,0.95)' : '#a9c2d8';
+            g.font = '10px Consolas,monospace';
+            g.fillText(`区${s.idx}${isMain ? '·主攻' : ''}(${s.points.length})`, lx - 16, ly);
+          }
+        }
+        // 全环 8 条分界线（淡）
+        g.strokeStyle = 'rgba(150,190,230,0.25)';
+        g.lineWidth = 1;
+        for (let i = 0; i < 8; i++) {
+          const a = (i / 8) * Math.PI * 2;
+          const r = Math.max(rHi, 20) * sPx;
+          g.beginPath(); g.moveTo(sx + Math.cos(a) * 4, sz + Math.sin(a) * 4);
+          g.lineTo(sx + Math.cos(a) * r, sz + Math.sin(a) * r); g.stroke();
+        }
+      }
       const ownerOf = new Map<number, number>();   // sector → squadId
       for (const [sid, sec] of fort.claims) ownerOf.set(sec, sid);
       const bandValid = rHi > rLo + 1;   // ★ 环退化（收拢为点/小圆内）→ 不画扇区带
-      for (let i = 0; bandValid && i < 8; i++) {
-        const a0 = (i / 8) * Math.PI * 2, a1 = ((i + 1) / 8) * Math.PI * 2;
-        const owner = ownerOf.get(i);
-        const hue = owner !== undefined ? (owner * 47) % 360 : 210;
-        g.beginPath();
-        g.arc(sx, sz, rHi * sPx, a0, a1);
-        g.arc(sx, sz, rLo * sPx, a1, a0, true);
-        g.closePath();
-        g.fillStyle = owner !== undefined ? `hsla(${hue} 90% 60% 0.18)` : 'rgba(120,160,200,0.10)';
-        g.fill();
-        g.strokeStyle = 'rgba(150,190,230,0.4)';
-        g.lineWidth = 1;
-        g.stroke();
-        const mid = (a0 + a1) / 2;
-        const rm = (rLo + rHi) / 2;
-        const lx = sx + Math.cos(mid) * rm * sPx;
-        const ly = sz + Math.sin(mid) * rm * sPx;
-        g.fillStyle = owner !== undefined ? `hsl(${hue} 90% 70%)` : '#a9c2d8';
-        g.font = '10px Consolas,monospace';
-        g.fillText(`区${i}${owner !== undefined ? `·第${owner}队` : ''}`, lx - 14, ly);
-        const need = fort.safety[i];
-        g.fillStyle = 'rgba(220,232,245,0.8)';
-        g.fillText(Number.isFinite(need) ? `需求${need.toFixed(1)}` : '需求-', lx - 14, ly + 11);
-      }
       // 各队施工点（spot）
       for (const [sid, p] of fort.spots) {
         const [px2, pz2] = p2(p.x, p.z);
