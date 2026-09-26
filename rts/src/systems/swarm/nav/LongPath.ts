@@ -9,6 +9,7 @@
 // ============================================================
 
 import type { PassTable } from './PassTable';
+import { viaClimbPoints } from './ClimbVia';
 import { LOCAL } from './LocalStep';   // ★ S2：段长口径与短寻路同源（≤LOCAL.SEG_MAX）
 
 const CELL = 4;
@@ -221,6 +222,13 @@ export class FeasibilityPath {
       anchor = next;
     }
     if (out.length > 0) out[out.length - 1] = { x: gx, z: gz };
+    // ★ 派令侧爬坡几何（用户定 2026-09-26）：**细采样**找真实跨坡处 → 插
+    //   ① 该连续坡的**中间上坡点**（段中心、坡面前 1m）② 跨坡点（★）——任何情况先走中间上坡点。
+    {
+      const withClimbs = viaClimbPoints(t, sx, sz, out);
+      out.length = 0;
+      for (const q of withClimbs) out.push(q);
+    }
     // ★ S2（用户定 2026-09-25）：**加密**——每段 ≤LOCAL.SEG_MAX，逐段过表（可执行）+ 逐段 climb，
     //   执行层（Anchor.routeNext）按 ≤10m 路点推进即可逐步绕行；不加密则远路点会被"直线化"。
     if (out.length > 0 && LOCAL.SEG_MAX > 0) {

@@ -21,6 +21,8 @@ export interface EdgeGrid {
   climbAt?(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ 统一评分（可选；生产 = TerrainScoring.scoreAt）：对角同分量时择高分轴 */
   scoreAt?(x: number, z: number): number | null;
+  /** ★ 上坡点（可选；生产 = PassTable.climbRunAt）：该向可爬 → 该连续坡的中间上坡点（前 1m） */
+  climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null;
 }
 
 /** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
@@ -53,7 +55,18 @@ export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, d
     const s1 = g.scoreAt(x + (xFirst ? 0 : sx) * EDGE_CELL, z + (xFirst ? sz : 0) * EDGE_CELL) ?? -Infinity;
     if (s1 > s0 + 1e-6) xFirst = !xFirst;
   }
-  const opts: [number, number][] = xFirst ? [[sx, 0], [0, sz]] : [[0, sz], [sx, 0]];
+  let opts: [number, number][] = xFirst ? [[sx, 0], [0, sz]] : [[0, sz], [sx, 0]];
+  // ★ 贪心也走去坡点（用户定 2026-09-26）：本步为可爬坡边 → 朝**中间上坡点**（前 1m）走
+  if ((xClimb || zClimb) && g.climbRunAt) {
+    const run = g.climbRunAt(x, z, xClimb ? sx : 0, zClimb ? sz : 0);
+    if (run) {
+      const rdx = run.x - x, rdz = run.z - z;
+      const rax = rdx === 0 ? 0 : rdx > 0 ? 1 : -1;
+      const raz = rdz === 0 ? 0 : rdz > 0 ? 1 : -1;
+      const rFirst = Math.abs(rdx) >= Math.abs(rdz);
+      opts = rFirst ? [[rax, 0], [0, raz]] : [[0, raz], [rax, 0]];
+    }
+  }
   for (const [dx, dz] of opts) {
     if (dx === 0 && dz === 0) continue;
     if (!g.canStep(x, z, dx, dz)) continue;

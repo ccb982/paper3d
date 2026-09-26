@@ -14,6 +14,7 @@
     "probe:cmd": "node scripts/probe-cmd.mjs",
     "probe:dir": "node scripts/probe-dir.mjs",
     "probe:squad": "node scripts/probe-squad.mjs",
+    "probe:slope": "node scripts/probe-slope.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test:engine": "esbuild scripts/engine-selftest.ts --bundle --platform=node --format=esm --loader:.wasm=empty --loader:.wasm?url=empty --outfile=scripts/.engine-selftest.mjs && node scripts/.engine-selftest.mjs"

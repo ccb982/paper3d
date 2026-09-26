@@ -32,6 +32,8 @@
 
 import { RasterMap } from '../../../services/map/RasterMap';
 import { finalRuling, EDGE_CLIFF_BAND, type EdgeRuling } from '../../../services/map/Refinements';
+/** ★ 上坡点余量（米；用户定 2026-09-26）：上坡点标在**坡面前**此距离（低侧法线上） */
+const CLIMB_MARGIN = 1;
 /** ★ 爬坡位判定阈值（米，净升）：坡面（weld）净升超过此值 → 标"必须程序化爬坡" */
 const CLIMB_MARK_RISE = EDGE_CLIFF_BAND;
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../../services/map/ChunkGenerator';
@@ -65,6 +67,10 @@ export class PassTable {
   /** ★ 坡边显式标注（B1，用户定 2026-09-25）：该向边 = weld（坡）→ 1；cliff（硬边）→ 0。
    *  E/S 计算、W/N 镜像（两侧对应边同值）——寻路/移动不再靠坡度/落差猜。 */
   private weld = new Uint8Array(0);
+  /** ★★ 上坡位置预处理（用户定 2026-09-26）：每条可爬边的**连续段**（按坡宽）→
+   *  段中心、坡面前 CLIMB_MARGIN 米（低侧法线）标"上坡点"。寻路上高台**只能经这些点**。 */
+  private climbRuns: { x: number; z: number; ux: number; uz: number; width: number }[] = [];
+  private climbRun = new Int16Array(0);   // per(cell*4+dir) → climbRuns 下标；-1 = 非上坡点
   ready = false;
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
@@ -145,6 +151,7 @@ export class PassTable {
         }
       }
     }
+    this.buildClimbRuns();   // ★ 上坡位置预处理（坡宽 + 段中心 + 前 CLIMB_MARGIN）
     this.ready = true;
     st.ms = +(performance.now() - t0).toFixed(1);
   }
@@ -188,6 +195,84 @@ export class PassTable {
     if (kind === 1) this.stats.abs++;
     else if (kind === 2) this.stats.oneWay++;
     else this.stats.open++;
+  }
+
+  /** ★★ 上坡位置预处理（用户定 2026-09-26）：**按连续坡的宽度**取上坡点——
+   *  对每条**可爬坡边**，沿其**切向**找连续段（同朝向的整条坡 = 一段，宽度=段内格数），
+   *  取**段中心**，在**坡面前 CLIMB_MARGIN 米**（低侧法线）标上坡点；不同朝向各自成段。
+   *  寻路上高台只能经这些上坡点（`climbRunAt` / `nearestClimbPoint`）。 */
+  private buildClimbRuns(): void {
+    const n = this.side * this.side;
+    this.climbRun = new Int16Array(n * 4).fill(-1);
+    this.climbRuns = [];
+    for (let iz = 0; iz < this.side; iz++) {
+      for (let ix = 0; ix < this.side; ix++) {
+        const i = iz * this.side + ix;
+        for (let d = 0; d < 4; d++) {
+          if (this.climb[i * 4 + d] !== 1 || this.climbRun[i * 4 + d] !== -1) continue;
+          // 切向（垂直于法线）：E/W → z 轴；S/N → x 轴
+          const tax = d >= 2 ? 1 : 0, taz = d < 2 ? 1 : 0;
+          // 回退到段首
+          let x0 = ix, z0 = iz;
+          for (;;) {
+            const px2 = x0 - tax, pz2 = z0 - taz;
+            if (px2 < 0 || pz2 < 0 || px2 >= this.side || pz2 >= this.side) break;
+            const pi = pz2 * this.side + px2;
+            if (this.climb[pi * 4 + d] !== 1 || this.climbRun[pi * 4 + d] !== -1) break;
+            x0 = px2; z0 = pz2;
+          }
+          // 前探段长（占位标记）
+          const idx = this.climbRuns.length;
+          const cells: number[] = [];
+          let x = x0, z = z0;
+          while (x >= 0 && z >= 0 && x < this.side && z < this.side) {
+            const ci = z * this.side + x;
+            if (this.climb[ci * 4 + d] !== 1 || this.climbRun[ci * 4 + d] !== -1) break;
+            this.climbRun[ci * 4 + d] = idx;
+            cells.push(ci);
+            x += tax; z += taz;
+          }
+          const mid = cells[Math.floor(cells.length / 2)] as number;
+          const mix = mid % this.side, miz = (mid - mix) / this.side;
+          const ccx = this.ox + mix * CELL + CELL / 2;
+          const ccz = this.oz + miz * CELL + CELL / 2;
+          const ux = DVX[d], uz = DVZ[d];
+          this.climbRuns.push({
+            x: ccx + ux * (CELL / 2 - CLIMB_MARGIN), z: ccz + uz * (CELL / 2 - CLIMB_MARGIN),
+            ux, uz, width: cells.length,
+          });
+        }
+      }
+    }
+  }
+
+  /** ★ 上坡点查询（该格沿该向的可爬段 → 段中心"上坡点"，含坡宽）；无 → null */
+  climbRunAt(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number } | null {
+    if (!this.ready) return null;
+    const c = this.cellAt(x, z);
+    if (c < 0) return null;
+    // ★ 斜向口径（修 2026-09-26）：任一分量轴上查到 climb 位即认（不得只看主轴——否则斜向步会漏坡点）
+    const pick = (d: number): number => (this.climb[c * 4 + d] === 1 ? this.climbRun[c * 4 + d] : -1);
+    let k = -1;
+    if (dx > 0) k = pick(DIR_E);
+    if (k < 0 && dx < 0) k = pick(DIR_W);
+    if (k < 0 && dz > 0) k = pick(DIR_S);
+    if (k < 0 && dz < 0) k = pick(DIR_N);
+    return k < 0 ? null : (this.climbRuns[k] ?? null);
+  }
+
+  /** ★ 最近上坡点（带余量：宽段优先、其次近）：`maxR` 米内找——执行侧"找坡道"用 */
+  nearestClimbPoint(x: number, z: number, maxR = 48): { x: number; z: number; ux: number; uz: number; width: number } | null {
+    if (!this.ready) return null;
+    let best: { x: number; z: number; ux: number; uz: number; width: number } | null = null;
+    let bestScore = -Infinity;
+    for (const r of this.climbRuns) {
+      const d = Math.hypot(r.x - x, r.z - z);
+      if (d > maxR) continue;
+      const score = Math.min(r.width, 4) * 1.5 - d * 0.05;   // 宽段优先，其次近
+      if (score > bestScore) { bestScore = score; best = r; }
+    }
+    return best;
   }
 
   /** ★★ 坡面方位（用户定 2026-09-26）：**只认本格**的可爬坡面边（climb 位 = weld 且净升 > 阈值）。
@@ -310,6 +395,8 @@ export class PassTable {
     this.lethal = new Uint8Array(0);
     this.water = new Uint8Array(0);
     this.climb = new Uint8Array(0);
+    this.climbRun = new Int16Array(0);
+    this.climbRuns = [];
     this.weld = new Uint8Array(0);
   }
 }

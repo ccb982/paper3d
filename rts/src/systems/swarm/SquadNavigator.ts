@@ -19,6 +19,7 @@ import { shouldKite, kitePoint } from './RangedTactics';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
+import { viaClimbPoints } from './nav/ClimbVia';
 import { edgeStepGreedy, axisStepToward, EDGE_LAYER_TOL } from './nav/EdgeFollow';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
@@ -138,6 +139,7 @@ export class SquadNavigator {
       waterAt: (x, z) => t.waterAt(x, z),
       heightAt: (x, z) => t.heightAt(x, z),
       scoreAt: sc ? (x, z) => sc(x, z) : undefined,
+      climbRunAt: (x, z, dx, dz) => t.climbRunAt(x, z, dx, dz),
     };
   }
 
@@ -213,10 +215,14 @@ export class SquadNavigator {
         const step = localStep(g, this._from.x, this._from.z, tgt.x, tgt.z);
         if (step) {
           const tail = canSegment(g, step.next.x, step.next.z, tgt.x, tgt.z);
-          state.corridor = [
+          // ★ 短寻路同样经**可行性表预处理的上坡点**（细采样跨坡 → 中间上坡点 → 跨坡★）
+          const seg: { x: number; z: number; climb?: boolean }[] = [
             { x: step.next.x, z: step.next.z, climb: step.climb },
             { x: tgt.x, z: tgt.z, climb: tail.ok ? tail.climb : false },   // 末段爬坡标注
           ];
+          state.corridor = (this.table && this.table.ready)
+            ? viaClimbPoints(this.table, this._from.x, this._from.z, seg)
+            : seg;
           state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
