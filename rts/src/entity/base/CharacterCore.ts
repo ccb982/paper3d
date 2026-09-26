@@ -19,8 +19,23 @@
 
 import { CLIMB_SLOPE_MIN, CLIMB_SPEED_MUL, CLIMB_FACE_R, SHORE_CLIMB_MAX } from '../TerrainAssist';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
+import { RasterMap } from '../../services/map/RasterMap';
 
 export const CLIMB_TIMEOUT_S = 1.5;
+
+/** ★ 脱埋深度（米；用户定 2026-09-26）：脚底比**顶层地表**低 ≥ 此值 = 被楔在坡体/结构内部 */
+export const UNBURY_DEPTH = 1.2;
+
+/** ★ 脱埋贴地（两载体同口径）：y 感知选层；若停在"顶层地表之下 ≥UNBURY_DEPTH"的空腔
+ *  （坡背空腔/结构体内部——y 提示选层会停在底层）→ 抬到顶层，走出体内。
+ *  注：当前战场无"可站顶板（隧道）"空间；若未来出现，按层语义另开口径。 */
+export function unbuyGroundY(x: number, z: number, y: number): number {
+  const r = RasterMap.current;
+  if (!r) return y;
+  const gy = r.surfaceHeightAtFor(x, z, y);
+  const top = r.surfaceHeightAt(x, z);
+  return Number.isFinite(top) && top - gy > UNBURY_DEPTH ? top : gy;
+}
 
 /** 上坡意图阈值（方向·法线 dot；> 此值 = 想上坡） */
 const CLIMB_INTENT_DOT = 0.1;

@@ -21,7 +21,7 @@ import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
-import { CharacterCore, canShift, type TerrainProbe  } from "./base/CharacterCore";
+import { CharacterCore, unbuyGroundY, canShift, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
 import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
 
@@ -166,7 +166,7 @@ export abstract class CharacterBase extends EntityBase {
     this.entity.position.x += dx;
     this.entity.position.z += dz;
     const p = this.entity.position;
-    const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0;
+    const gy = unbuyGroundY(p.x, p.z, p.y);   // ★ 脱埋贴地（顶层；两载体同口径）
     if (this.controller.isAirborne()) {
       // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.8 → 可越 0.5 高差）。
       //   落地交给 WorldMode 落回贴地。横向位移已在上面按分量做了垂直壁受阻检查，
