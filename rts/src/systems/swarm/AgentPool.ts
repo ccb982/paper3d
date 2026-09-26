@@ -166,15 +166,16 @@ export class AgentPool {
     this.coreHintY = this.y[i];
     const air = this.isAir[i] === 1;
     const hs = Math.max(0.2, this.scale[i] * 0.5);
-    return this.core[i].step({
+    const r = this.core[i].step({
       x: this.x[i], y: this.y[i], z: this.z[i], dt,
       dirX, dirZ, speed,
-      climbOrdered: false,          // ★ L2 无需显式标注：上坡由基类几何规则（半径+正对坡面）自动处理
+      climbOrdered: false,   // ★ L2 无需显式标注：上坡由基类几何规则（半径+正对坡面）自动处理
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       hx: hs, hz: hs,
       suspended: false,
     }, this.coreProbe, nowS);
+    return r;
   }
 
   /** ★ 高精度位移闸门（H2，用户定 2026-09-25）：推挤也不能跨层/越台阶；不合格 → 取消本次推挤 */

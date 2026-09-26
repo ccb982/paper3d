@@ -190,50 +190,58 @@ export class PassTable {
     else this.stats.open++;
   }
 
-  /** ★★ 坡面方位（用户定 2026-09-26）：可爬坡面 = weld 且该向净升 > 阈值（climb 位）——
-   *  **方位来自地形裁决（finalRuling→weld），不用 16 向高度采样猜**；返回：
-   *  法线 (ux,uz)（轴对齐，决定正对方向）/ 坡面**边中点** (mx,mz)（未正对先走这里）/
-   *  净升 rise（米）。desired 给定时取与之最对齐的坡面（多坡择一）；无 → null。
-   *  本格优先，再扫 8 邻（覆盖 CLIMB_FACE_R 半径语义）。 */
+  /** ★★ 坡面方位（用户定 2026-09-26）：可爬坡面 = weld 且该向净升 > 阈值（climb 位）。
+   *  方位来自地形裁决（finalRuling→weld），**不用高度采样猜**。返回法线 (ux,uz)（轴对齐，
+   *  决定"正对"方向）/ 坡面**边中点** (mx,mz)（未到坡面先走这里）/ 净升 rise。
+   *  选取（词典序，无魔法权重）：**本格直用**；否则邻域（±1 格；给出 desired 时 ±2）
+   *  按"正对 align > 近 dist > 净升 rise"取最优；无朝坡候选 → null。 */
   climbFaceAt(
     x: number, z: number, desiredX = 0, desiredZ = 0,
   ): { ux: number; uz: number; rise: number; mx: number; mz: number } | null {
     if (!this.ready) return null;
+    const c0 = this.cellAt(x, z);
+    if (c0 < 0) return null;
+    const ix0 = c0 % this.side, iz0 = (c0 - ix0) / this.side;
     const dl = Math.hypot(desiredX, desiredZ);
-    const tryCell = (ix: number, iz: number, w: number): { ux: number; uz: number; rise: number; mx: number; mz: number } | null => {
+    const wantDir = dl > 1e-3;
+    /** 该格的坡面（同格多向 → 正对优先、其次净升；wantDir 时只认朝坡） */
+    const faceOf = (ix: number, iz: number): { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null => {
       if (ix < 0 || iz < 0 || ix >= this.side || iz >= this.side) return null;
       const i = iz * this.side + ix;
-      let best: { ux: number; uz: number; rise: number; mx: number; mz: number } | null = null;
-      let bestScore = -Infinity;
       const cx = this.ox + ix * CELL + CELL / 2;
       const cz = this.oz + iz * CELL + CELL / 2;
-      for (let d = 0; d < 4; d++) {
-        if (this.climb[i * 4 + d] !== 1) continue;   // climb 位 = weld 且净升 > 阈值
-        const ux = DVX[d], uz = DVZ[d];
-        const rise = this.drop[i * 4 + d];
-        const align = dl > 1e-3 ? (desiredX * ux + desiredZ * uz) / dl : 0;   // [-1,1]
-        const score = align * 10 + rise - w;                                  // 对齐优先，其次净升，本格优先
-        if (score > bestScore) {
-          bestScore = score;
-          best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2) };
+      let best: { ux: number; uz: number; rise: number; mx: number; mz: number; align: number } | null = null;
+      for (let dir = 0; dir < 4; dir++) {
+        if (this.climb[i * 4 + dir] !== 1) continue;   // climb 位 = weld 且净升 > 阈值
+        const ux = DVX[dir], uz = DVZ[dir];
+        const align = wantDir ? (desiredX * ux + desiredZ * uz) / dl : 0;
+        if (wantDir && align <= 0) continue;           // 只认朝坡的候选
+        const rise = this.drop[i * 4 + dir];
+        if (!best || align > best.align + 1e-6
+          || (Math.abs(align - best.align) <= 1e-6 && rise > best.rise)) {
+          best = { ux, uz, rise, mx: cx + ux * (CELL / 2), mz: cz + uz * (CELL / 2), align };
         }
       }
       return best;
     };
-    const c0 = this.cellAt(x, z);
-    if (c0 < 0) return null;
-    const ix0 = c0 % this.side, iz0 = (c0 - ix0) / this.side;
-    const own = tryCell(ix0, iz0, 0);
-    if (own) return own;
+    const own = faceOf(ix0, iz0);
+    if (own) return { ux: own.ux, uz: own.uz, rise: own.rise, mx: own.mx, mz: own.mz };
+    const R = wantDir ? 2 : 1;
     let best: { ux: number; uz: number; rise: number; mx: number; mz: number } | null = null;
-    let bestScore = -Infinity;
-    for (let dz = -1; dz <= 1; dz++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    let bAlign = -Infinity, bDist = Infinity, bRise = -Infinity;
+    for (let dz = -R; dz <= R; dz++) {
+      for (let dx = -R; dx <= R; dx++) {
         if (dx === 0 && dz === 0) continue;
-        const f = tryCell(ix0 + dx, iz0 + dz, Math.hypot(dx, dz) * 0.5);
+        const d = Math.hypot(dx, dz);
+        const f = faceOf(ix0 + dx, iz0 + dz);
         if (!f) continue;
-        const score = f.rise;
-        if (score > bestScore) { bestScore = score; best = f; }
+        const better = f.align > bAlign + 1e-6
+          || (Math.abs(f.align - bAlign) <= 1e-6 && d < bDist - 1e-6)
+          || (Math.abs(f.align - bAlign) <= 1e-6 && Math.abs(d - bDist) <= 1e-6 && f.rise > bRise);
+        if (better) {
+          best = { ux: f.ux, uz: f.uz, rise: f.rise, mx: f.mx, mz: f.mz };
+          bAlign = f.align; bDist = d; bRise = f.rise;
+        }
       }
     }
     return best;

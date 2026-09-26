@@ -145,12 +145,6 @@ export abstract class CharacterBase extends EntityBase {
     const speed = this.controller.moveSpeed;
     const prevX = this.entity.position.x;
     const prevZ = this.entity.position.z;
-    // ★ boss4D 玩家专属：垂直壁贴附保护——位移逐分量受阻检查。
-    //   朝壁方向（前方地表比脚底地表高出 EDGE_CLIFF_BAND 的立面）位移分量为 0，
-    //   角色始终与壁保留 clearance 距离（碰撞盒边缘外 m）。
-    //   检查只看地形高差、与跳跃离地高度无关 → 跳跃中朝壁的速度分量同样被消，
-    //   实现"跳跃无向墙壁速度"。
-    // ★ 重写 P1：推进/爬坡/立面 统一走 CharacterCore（L2/L3 同内核；地形经 TerrainProbe 注入）
     const vol = shapeExtents(this.collisionVolume.shape);
     const step = this.core.step(
       {
