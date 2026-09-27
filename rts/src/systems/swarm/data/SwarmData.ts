@@ -9,6 +9,8 @@
 // 消费方：新引擎（经 main/LiveView 单源读取）、队长核端口、导航/SteerPick 表桥、UI/探针只读。
 // ============================================================
 
+import { ROSTER_TARGET } from '../RosterController';
+import { meleeRole } from '../../spawn/MobPick';
 import { RasterMap } from '../../../services/map/RasterMap';
 import { onShipHighland } from '../tactics/SectorBuilder';
 import type { SwarmSystem } from '../SwarmSystem';
@@ -174,6 +176,8 @@ export class SwarmData {
   readonly fortify = new FortifyPlanner();
   /** ★ 前推棘轮里程（事态控制；每拍 ≤0.5m） */
   private pushM = 0;
+  /** ★ 近战混编计数（shield:assault 轮询；用户定 2026-09-27） */
+  private meleeMix = { mix: 0 };
 
   /** ★ 施工带（事态函数口径，单源） */
   get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
@@ -419,7 +423,10 @@ export class SwarmData {
       anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
       spawn: (role, x, z) => {
         if (!this.spawnMob) return false;
-        const ur = role === 'melee' ? 'assault' : role === 'engineer' ? 'logistics' : role;
+        // ★ 近战按 盾:突击 占比混合（ROSTER_TARGET；用户定 2026-09-27）——此前全部落 assault（=清一色原石虫）
+        const ur = role === 'melee'
+          ? meleeRole(this.meleeMix, ROSTER_TARGET.shield / Math.max(0.01, ROSTER_TARGET.shield + ROSTER_TARGET.assault))
+          : role === 'engineer' ? 'logistics' : role;
         // ★ 创建点由四管理器给定 → **原样生成**（near=true；不再沿痒旧“≥80m 外推”）
         this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false, true);
         return true;

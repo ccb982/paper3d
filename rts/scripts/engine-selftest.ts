@@ -14,6 +14,7 @@ import { Positions } from '../src/systems/swarm/engine/Positions.ts';
 import { SquadManager } from '../src/systems/swarm/engine/SquadManager.ts';
 import { SquadTable } from '../src/systems/swarm/SquadTable.ts';
 import { SquadNavigator } from '../src/systems/swarm/SquadNavigator.ts';
+import { pickDef, meleeRole } from '../src/systems/spawn/MobPick.ts';
 import { MeleeManager } from '../src/systems/swarm/engine/MeleeManager.ts';
 import { RangedManager } from '../src/systems/swarm/engine/RangedManager.ts';
 import { FlyerManager } from '../src/systems/swarm/engine/FlyerManager.ts';
@@ -169,6 +170,30 @@ console.log('[3] 四兵种管理器');
   ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 1, posture: 1, covers: [{ x: 18, z: 0 }] });
   const rAss = ranged.targets.get(12)!;
   ok(Math.abs(rAss.x - 18) < 0.01, '★ 总攻不躲掩体：仍压到 STANDOFF=18');
+}
+
+// ---------- 兵种选取（用户定 2026-09-27）----------
+console.log('[3d] 兵种选取：同 role 权重轮询 + 近战混盾');
+{
+  const defs = [
+    { role: 'assault', weight: 6 }, { role: 'assault', weight: 8 },
+    { role: 'assault', elite: true, weight: 12 }, { role: 'assault', squadMode: 'singleton', elite: true, weight: 1 },
+    { role: 'shield', weight: 6 }, { role: 'shield', weight: 5 },
+  ];
+  const acc: { [k: string]: number } = {};
+  const seen = new Set<unknown>(); let eliteHit = 0, singleHit = 0;
+  for (let i = 0; i < 200; i++) {
+    const d = pickDef(defs, 'assault', false, acc)!;
+    if (d.elite) eliteHit++;
+    if (d.squadMode === 'singleton') singleHit++;
+    seen.add(d);
+  }
+  ok(seen.size === 2 && eliteHit === 0 && singleHit === 0, '同 role 权重轮询：覆盖全部非精英兵种（不含精英/singleton）');
+  const e2 = pickDef(defs, 'assault', true, acc);
+  ok(!!e2 && e2.elite === true, '精英请求 → 精英兵种');
+  const mixAcc = { mix: 0 }; let shield = 0;
+  for (let i = 0; i < 100; i++) if (meleeRole(mixAcc, 0.37) === 'shield') shield++;
+  ok(shield === 37, '★ 近战混盾：盾占比 0.37 → 100 次恰好 37 只盾（确定性）');
 }
 
 // ---------- 队长接任（阵亡/回收同一口）----------

@@ -13,6 +13,7 @@ import type { ChunkManager } from '../../services/map/ChunkManager';
 import type { MobDef, WorldSpawner } from '../../systems/spawn/WorldSpawner';
 import type { SwarmData } from '../../systems/swarm/data/SwarmData';
 import { INTENT_NONE } from '../../systems/swarm/Director';
+import { pickDef } from '../../systems/spawn/MobPick';
 import { buildEnemyCover } from './EnemyCoverBuild';
 
 export interface CommanderWiringDeps {
@@ -42,6 +43,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   //   → 走唯一收口 spawnOne（落点闸门 / MAX_ALIVE / 记账；绕过旧每日配额）
   //   ★ **生成点必须距玩家 ≥80m**：不够就**沿来向向外推**（保持正面阵形，
   //   绝不从玩家径向外推——那会把阵形推成围着玩家的一圈）；到位靠行军
+  const pickAcc: { [k: string]: number } = {};
   const spawnMobPort = (x: number, z: number, role: UnitRole, elite = false, near = false) => {
     const p = d.playerPos();
     const plan = d.data.defensePlan;
@@ -53,9 +55,9 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
         sx += ax * 10; sz += az * 10;
       }
     }
-    const def = elite
-      ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
-      : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);   // 飞行兵包括自爆兵（用户定）
+    // ★ 兵种选取（用户定 2026-09-27）：同 role **按名册权重轮询全部非精英兵种**（不再只取第一个）；
+    //   精英 → 精英；飞行兵包括自爆兵（用户定）。acc 常驻本接线作用域（确定性、均匀）。
+    const def = pickDef<MobDef>(d.mobDefs, role, elite, pickAcc) ?? d.mobDefs[0];
     if (!def) return;
     // ★ 可站性微调：环位可能落在水里（此前直接失败 → 施工队只剩 1 只，永远开不了工）
     for (let i = 0; i < 6; i++) {
