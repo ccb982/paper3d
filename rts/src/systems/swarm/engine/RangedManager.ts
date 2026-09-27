@@ -37,7 +37,7 @@ export class RangedManager extends RoleManager {
       const s = ctx.pos.squad(id);
       if (!s) continue;
       // ★ 总攻（用户定）：集体进攻舰船——压到舰旁 STANDOFF 保距（到位开火）
-      const assault = (ctx.posture ?? 0) >= 0.9 || (ctx.ringMax > 0 && ctx.ringMax <= 30);
+      const assault = (ctx.posture ?? 0) >= 0.8 || (ctx.ringMax > 0 && ctx.ringMax <= 30);   // ★ 与 P_ASSAULT=0.80 同口径
       const adv = assault ? null : this.advanceTarget(id, s, ctx);
       // ★ 掩体配对（用户定 2026-09-26）：**已到位后优先躲敌方掩体**——
       //   藏点 = 掩体背向玩家 1.6m（玩家子弹被掩体挡；敌弹可穿自家掩体——BulletEntity 已约定）。
