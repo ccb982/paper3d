@@ -139,12 +139,17 @@ export class SquadNavigator {
   forceRepath(squadId: number): void { this.repath.add(squadId); }
   /** 成员路线失效（下一次对队长重新长寻路；代理同口） */
   dropMemberRoute(uid: number): void { this.memberRoutes.delete(uid); }
+  /** ★ 销毁前快照用：成员路线点数（-1 = 无缓存） */
+  memberRouteInfo(uid: number): number {
+    const m = this.memberRoutes.get(uid);
+    return m ? m.path.length : -1;
+  }
 
   /** 成员沿"自己的到队长路线"走一步（L2/L3 共用）：返回 {dx,dz,climb,done}；无解 → null（停） */
   memberStep(
     uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
     state?: SquadOrderState | null,
-  ): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
+  ): { dx: number; dz: number; done: boolean; direct?: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, done: true };
     let memo = this.memberRoutes.get(uid);
     const stale = !memo || now - memo.at >= MEMBER_ROUTE_S || Math.hypot(lx - memo.gx, lz - memo.gz) > MEMBER_ROUTE_MOVE;
@@ -157,19 +162,30 @@ export class SquadNavigator {
     // ★ 自己的到队长路线；失败/表外 → **回退小队走廊**（同一条长寻路，仍属长短寻路）
     let rp = memo && memo.path.length ? routeNextPath(memo.path, x, z, 2) : null;
     if (!rp && state) rp = routeNextPath(state.corridor ?? state.order.path, x, z, 2);
-    if (!rp) return null;
-    const e = this.edgeGreedy(x, z, y, rp.x, rp.z);
-    if (!e) return null;   // 步不出 → 上层停（等下一拍/重算）
-    // ★ 成员自己路线的凭证（用户定 2026-09-26）：**代理寻路追队长时也可得到凭证**——
-    //   路径含跨坡点 ∧ 在低侧(sOff≤-0.5) ∧ 距≤10m（仅近点生效，防远处直线强拉）；
-    //   与小队凭证并存（两条来源，取先到者）。
-    const c = this.credOf(memo && memo.path.length ? memo.path : undefined);
-    if (c) {
-      const sOff = (x - c.x) * c.ux + (z - c.z) * c.uz;
-      const d = Math.hypot(x - c.x, z - c.z);
-      if (sOff <= -0.5 && d <= 10) return { dx: e.dx, dz: e.dz, done: false, climb: true, climbPt: c };
+    const stepE = rp ? this.edgeGreedy(x, z, y, rp.x, rp.z) : null;
+    if (stepE) {
+      // ★ 成员自己路线的凭证（用户定 2026-09-26）：**代理寻路追队长时也可得到凭证**——
+      //   路径含跨坡点 ∧ 在低侧(sOff≤-0.5) ∧ 距≤10m（仅近点生效，防远处直线强拉）；
+      //   与小队凭证并存（两条来源，取先到者）。
+      const c = this.credOf(memo && memo.path.length ? memo.path : undefined);
+      if (c) {
+        const sOff = (x - c.x) * c.ux + (z - c.z) * c.uz;
+        const d = Math.hypot(x - c.x, z - c.z);
+        if (sOff <= -0.5 && d <= 10) return { dx: stepE.dx, dz: stepE.dz, done: false, climb: true, climbPt: c };
+      }
+      return { dx: stepE.dx, dz: stepE.dz, done: false };
     }
-    return { dx: e.dx, dz: e.dz, done: false };
+    // ★★ 兜底（用户定 2026-09-27，治"莫名其妙静止"）：自路线/小队走廊都取不到步 或 步不出 →
+    //   ① 先朝**队长**走一格（同一格边链）；② 仍不行 → 直接给朝队长的方向（direct=true，
+    //   上层跳过复算，交给内核处理水/岸/墙——否则成员在浅水/离轨处会永久站死）。
+    {
+      const el = this.edgeGreedy(x, z, y, lx, lz);
+      if (el) return { dx: el.dx, dz: el.dz, done: false };
+      const ax = lx - x, az = lz - z;
+      const al = Math.hypot(ax, az);
+      if (al > 1e-3) return { dx: ax / al, dz: az / al, done: false, direct: true };
+      return null;
+    }
   }
 
   /** ★ 从路线取凭证（第一条爬坡路点的凭证点；无 → 回收） */
@@ -434,6 +450,7 @@ export class SquadNavigator {
         // ★ 凭证口径（用户定 2026-09-26）：**队长需凭证；成员/代理无条件上送（无需凭证）**。
         let needClimb = isLead ? (state?.climbCred !== undefined) : true;
         let needClimbPt = state?.climbCred;
+        let memberDirect: { dx: number; dz: number } | null = null;   // ★ 成员兜底方向（direct）
         const isFlyer = squad.type === 'flyer';
         if (!isLead && isFlyer) {
           // ★ 飞行队成员（用户定 2026-09-26）：**直航队长**（不走地面 memberStep/格边步）——
@@ -441,7 +458,7 @@ export class SquadNavigator {
           sx = lead.x; sz = lead.z;
         } else if (!isLead) {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
-          if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
+          if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; if (ms.direct) memberDirect = { dx: ms.dx, dz: ms.dz }; }
           else { sx = upos0.x; sz = upos0.z; }
           if (ms?.climbPt) needClimbPt = ms.climbPt;   // 成员路线带坡点则用其点位（凭证本身不需要）
         }
@@ -452,6 +469,9 @@ export class SquadNavigator {
           const ax = lead.x - upos0.x, az = lead.z - upos0.z;
           const al = Math.hypot(ax, az) || 1;
           sdx = ax / al; sdz = az / al;
+        } else if (memberDirect) {
+          // ★ 成员寻路兜底（direct）：直接用"朝队长"方向（不再复算 → 防再次失败站死）
+          sdx = memberDirect.dx; sdz = memberDirect.dz;
         } else {
         const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
         if (e3) {

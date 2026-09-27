@@ -13,6 +13,7 @@
 import { Positions } from '../src/systems/swarm/engine/Positions.ts';
 import { SquadManager } from '../src/systems/swarm/engine/SquadManager.ts';
 import { SquadTable } from '../src/systems/swarm/SquadTable.ts';
+import { SquadNavigator } from '../src/systems/swarm/SquadNavigator.ts';
 import { MeleeManager } from '../src/systems/swarm/engine/MeleeManager.ts';
 import { RangedManager } from '../src/systems/swarm/engine/RangedManager.ts';
 import { FlyerManager } from '../src/systems/swarm/engine/FlyerManager.ts';
@@ -183,6 +184,17 @@ console.log('[3b] 队长接任：任何离场路径都要选举');
   const r2 = tb.remove(s1.leaderUid, false);   // 队长被回收（同一口）
   ok(!!r2 && !r2.wiped && s1.leaderUid !== 0 && s1.members.has(s1.leaderUid),
     '★ 队长被回收 → 同样接任（回收不产生无头队）');
+}
+
+// ---------- 成员寻路兜底（用户定 2026-09-27；治"莫名其妙静止"）----------
+console.log('[3c] memberStep 兜底：无路线/步不出 → 朝队长走/直航');
+{
+  const nav = new SquadNavigator();   // 未接表：feas/edge 全失败 → 走兜底
+  const ms = nav.memberStep(900, 0, 0, 0, 10, 0, 0, null);
+  ok(!!ms && ms.direct === true && ms.done === false && Math.abs(ms.dx - 1) < 1e-6 && Math.abs(ms.dz) < 1e-6,
+    '★ 双路线失败 → 直航兜底（朝向队长，direct=true）');
+  const arr = nav.memberStep(901, 10, 0, 0, 10.0, 0, 0, null);
+  ok(!!arr && arr.done === true, '到达半径内 → done（不抖）');
 }
 
 // ---------- TimerManager ----------

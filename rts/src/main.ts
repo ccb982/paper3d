@@ -22,6 +22,7 @@ import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
 import { CLIMB_STATS, CLIMB_TRACE } from './entity/base/CharacterCore';
+import { goneLog } from './systems/swarm/data/GoneLog';
 import { climbBook } from './entity/base/ClimbBook';
 import { SectorBuilder } from './systems/swarm/tactics/SectorBuilder';
 import { BattalionManager } from './systems/swarm/tactics/BattalionManager';
@@ -359,7 +360,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           e.retire(why === 'stuck' ? 'recycled' : 'despawned');
           return true;
         }
-        return swarm.recycleByUid(uid);
+        return swarm.recycleByUid(uid, why);
       },
       // ★ 引擎决策 → 队长核（**唯一执行层**）；UI/探针走 engineView（不再有镜像板）
       emit: (squadId, order, now) => {
@@ -885,7 +886,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, goneLog, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
     tactics: { sectors: tactics?.sectors ?? null, battalions: tactics?.battalions ?? null, get mainSectors(): number[] { return tactics?.mainSectors ?? []; }, setMainSectors(k: number[]): void { if (tactics) tactics.mainSectors = k; } }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({

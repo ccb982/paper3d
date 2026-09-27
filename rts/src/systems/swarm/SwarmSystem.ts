@@ -11,6 +11,7 @@ import { simNow } from '../../services/SimClock';
 import { entityPerf } from '../../entity/EntityPerf';
 import { eventBus } from '../../core/EventBus';
 import { SwarmLedger } from './SwarmLedger';
+import { goneLog } from './data/GoneLog';
 import {
   AgentPool,
   AGENT_TARGET_PLAYER,
@@ -176,7 +177,7 @@ export class SwarmSystem {
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
       // ★ 收回/退役 → **立即注销**（同一口径：队长空缺→本队接任）
-      this.unregisterMember(p.uid, false);
+      this.unregisterMember(p.uid, false, false, p.reason);
     });
   }
 
@@ -732,11 +733,11 @@ export class SwarmSystem {
 
   /** ★ 统一计时销毁（新引擎 TimerManager.onExpire 回调）：回收代理（归编制）。返回是否找到。
    *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：此路不得绕过/弱化；被收回 = 出了问题（修行为，不修判官）★★ */
-  recycleByUid(uid: number): boolean {
+  recycleByUid(uid: number, reason?: string): boolean {
     const p = this.pool;
     for (let i = p.count - 1; i >= 0; i--) {
       if (p.swarmUid[i] !== uid) continue;
-      this.removeAgent(i, true, false);   // 非击杀离场（unregister=true, killed=false）
+      this.removeAgent(i, true, false, reason);   // 非击杀离场（unregister=true, killed=false）
       this.ledger.noteRecall(1);          // 归还编制
       return true;
     }
@@ -803,7 +804,36 @@ export class SwarmSystem {
 
   /** ★★ 统一注销（用户定 2026-09-27）：SquadTable 移除 + **队长接任发布** + 池标志同步 + 全灭清理——
    *  阵亡 / 回收 / 清场三条路**唯一口径**（此前 enemy_removed 丢弃返回值→队长变更不广播、标志不同步） */
-  private unregisterMember(uid: number, killed: boolean): void {
+  /** ★ 销毁前快照（用户建议 2026-09-27：读被销毁单位的队长位置与自身寻路） */
+  private logGone(uid: number, carrier: 'pool' | 'entity', killed: boolean, reason?: string, i?: number): void {
+    const sq = this.squads.squadOf(uid);
+    let x = 0, z = 0, tier = 0, orderX = 0, orderZ = 0, dirKind = 0, dirX = 0, dirZ = 0;
+    if (i !== undefined) {
+      const p = this.pool;
+      x = p.x[i]; z = p.z[i]; tier = p.tier[i];
+      orderX = p.orderTargetX[i]; orderZ = p.orderTargetZ[i];
+      dirKind = p.directiveKind[i]; dirX = p.directiveTargetX[i]; dirZ = p.directiveTargetZ[i];
+    } else if (sq) {
+      const m = sq.members.get(uid);
+      if (m) { x = m.x; z = m.z; }
+    }
+    let leaderUid = 0, leaderX = 0, leaderZ = 0, route = -2, distLead = -1;
+    if (sq) {
+      leaderUid = sq.leaderUid;
+      const lm = sq.members.get(sq.leaderUid);
+      if (lm) { leaderX = lm.x; leaderZ = lm.z; }
+      route = this.nav.memberRouteInfo(uid);
+      if (leaderUid) distLead = Math.hypot(x - leaderX, z - leaderZ);
+    }
+    goneLog.push({
+      at: performance.now() / 1000, uid, carrier, killed, reason,
+      x, z, squadId: sq?.id ?? -1, leaderUid, leaderX, leaderZ, distLead,
+      route, orderX, orderZ, dirKind, dirX, dirZ, tier,
+    });
+  }
+
+  private unregisterMember(uid: number, killed: boolean, fromPool = false, reason?: string): void {
+    if (!fromPool) this.logGone(uid, 'entity', killed, reason);   // ★ 实体路径快照（含队长/路线状态）
     const res = this.squads.remove(uid, killed);
     if (!res) return;
     for (const c of res.changes) this.leaderChanges.push(c);
@@ -821,9 +851,10 @@ export class SwarmSystem {
 
   /** swap-remove 包装：释放槽/令牌 + 修正槽主索引；★ public（迷失销毁等非击杀离场用，
    *  调用方负责 ledger.noteRemoved）；unregister=false（升格路径）→ 小队归属/队长保留 */
-  removeAgent(i: number, unregister = true, killed = false): void {
+  removeAgent(i: number, unregister = true, killed = false, reason?: string): void {
     const last = this.pool.count - 1;
     const uid = this.pool.swarmUid[i];
+    if (unregister) this.logGone(uid, 'pool', killed, reason, i);   // ★ 销毁前快照（用户建议）
     this.releaseAgent(i);
     if (i !== last) {
       for (const owners of this.slotOwner) {
@@ -840,7 +871,7 @@ export class SwarmSystem {
       return;
     }
     // ★ 唯一注销口：队长空缺 → 本队接任；全灭→帧末广播
-    this.unregisterMember(uid, killed);
+    this.unregisterMember(uid, killed, true, reason);
   }
 
   // ============================================================
