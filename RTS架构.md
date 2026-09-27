@@ -141,6 +141,8 @@ perceive → situation → decide(单源) → write → debug
 - **波次与兵力放行（决策源）**：`t01`（落地起算）+ `releaseAt(t01)` → `setReleaseCap`（**第一波 0.45 / 总攻 0.80**）；`t01` 回退（换落点/新一日）自动复位。**创建不再是"波次激发"**：由四管理器按防区缺口/占比持续补齐（《战术侧架构.md》§3.D）。
 - **第一波抵舰驻留**：`wave1` 后进攻令（act/march）抵舰 70m 内 → **驻守 45s**；血比 <0.45 → 后撤；到期交回；玩家令不覆盖。
 - **write 两趟**：① 全队决策（含工兵 `mission:'build'`）；② 统一校验链（环/全局密度/可达）→ 唯一发令器 → `emit` → **队长核 `accept`**。
+- **命令无 TTL（用户定 2026-09-26）**：队令不过期、不自动回收（玩家令同）；同签名重发去重。
+- **总攻强制令（用户定）**：`assault` 期去其他指令，全体强制 `march → 舰`（覆盖玩家令；走玩家令同路径绕稳定门）。
 - 探针 `dbg`：ticks/issued/refreshed/spread/last + 各管理器 dbg（`__rts.newEngine()`，G9）。
 
 ---
@@ -381,7 +383,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 长寻路加权 | 上坡 +0.6/m；斜向 ×1.414（上坡仅四向） | `FeasibilityPath` |
 | 短寻路 | 窗口 24m；语义风险；终点精确；无解 null | `LocalStep` |
 | 硬边台阶豁免 | 0.6m；>0.6 上墙/下可行 | `PassTable.edge` |
-| LOD | L3 45/36、L2 120、L1 190、降格 55 | `SwarmConfig.SWARM` |
+| LOD | L3 110/128、L2 260、L1 420、降格 125（放大 2026-09-26） | `SwarmConfig.SWARM` |
 | 掩体校验 | STANDOFF 7 / TOL 3.5 / NEAR 2.5 / FAR 3.5 / GAP 1.2 / HIDE 2.5 | `entity/base/Blocking.PROTECT` |
 
 ---
