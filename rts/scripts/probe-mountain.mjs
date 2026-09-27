@@ -269,7 +269,7 @@ while (!stop) {
         const tb = w.shadowBridge?.timers?.dbg ?? null;
         return { recycled: tb?.stuckTotal ?? 0, expired: tb?.expiredTotal ?? 0, last: tb?.last ?? '', tracked: tb?.tracked ?? 0, exempt: tb?.exempt ?? 0 };
       })(),
-      pool: sw.pool.count, l3: w.enemies.length, speed: w.speed, orderDrops: sw.orderDrops,
+      pool: sw.pool.count, l3: w.enemies.length, speed: w.speed,
       nav: sw.navDbg ? { seg: sw.navDbg.seg, feasOk: sw.navDbg.feasOk, feasBlocked: sw.navDbg.feasBlocked, fail: sw.navDbg.fail, escape: sw.navDbg.escape } : null,
     };
   });
@@ -314,7 +314,7 @@ const arrT = arrived.map((v) => v.arrived).sort((a, b) => a - b);
 const med = arrT.length ? arrT[Math.floor(arrT.length / 2)] : null;
 const final = await page.evaluate(() => {
   const w = window.__rts;
-  return { led: w.swarm.ledger.snapshot(), orderDrops: w.swarm.orderDrops, l3: w.enemies.length, pool: w.swarm.pool.count };
+  return { led: w.swarm.ledger.snapshot(), l3: w.enemies.length, pool: w.swarm.pool.count };
 });
 console.log('');
 console.log('════════════════ 山地强制行军结算 ════════════════');
@@ -328,7 +328,7 @@ for (const v of vals) {
   const tag = v.arrived !== null ? `到达@${v.arrived.toFixed(0)}s` : v.gone !== null ? `消失@${v.gone.toFixed(0)}s` : `未到(最近${v.minD.toFixed(0)}m)`;
   console.log(`  uid ${v.uid} [${v.tier ?? '-'}] ${tag} 末距${v.lastD ?? '-'}m`);
 }
-console.log(`池 ${final.pool} · L3 ${final.l3} · orderDrops ${final.orderDrops}`);
+console.log(`池 ${final.pool} · L3 ${final.l3}`);
 const pageErrs = errs.filter((e) => e.startsWith('[pageerror]'));
 console.log('errors =', errs.length ? errs.slice(0, 4).join('\n') : '(none)');
 await page.screenshot({ path: 'diag-mountain.png' });

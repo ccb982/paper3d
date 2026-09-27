@@ -219,7 +219,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     showFloatingAt: () => {}, syncSceneBgm: () => {}, returnToBase: () => {},
   } as unknown as SpawnDeps);
   spawner.refreshEnemyScale();   // ★ 敌强口径（按会话/天数；此处桩会话）
-  // ★ 指挥器端口接线（兵力创建/工事全权在指挥层；spawnMob/spawnBuilder/buildCover/digTrench）
+  // ★ 指挥器端口接线（**创建只走四兵种管理器**；原子生成口由 attachSpawnPorts 装配）
   wireCommanderPorts({
     data: swarm.data, spawner, raster, mobDefs, entities, scene, chunks,
     surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
@@ -290,13 +290,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       },
       /** ★ 工兵端口（新引擎全权）：建造位置查询（危险点/扇区弧链随机可达点）+ 施工落地 */
       engineer: () => swarm.data.engineerPort(),
+      /** ★ 创建端口（四兵种管理器；只建本兵种 ∧ 只在对应防区） */
+      creation: () => swarm.data.combatCreationPort(),
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
       wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
       t01: () => swarm.data.lastT01,
       ledgerTotal: () => swarm.ledger.total,
       setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
-      spawnBattalion: (instant: boolean) => swarm.data.spawnBattalion(instant),
       /** ★ 发令可达核验（OrderValidator ③；用户定 2026-09-25）：长途 BFS / 短程 LOS——与取件门同源 */
       canReach: (id: number, x: number, z: number) => swarm.reachFrom(id, x, z),
       /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判。
@@ -408,6 +409,23 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         this.battalions.regroup();
         this.battalions.deploy(this.mainSectors);
         this.battalions.gaps(this.mainSectors);
+        // ★ 主攻选择（用户定 2026-09-26）：按难度（事态 p）选 1~3 个扇区；当前集合仍有效则不重选（稳定）
+        {
+          const p01 = swarm.data.postureP;
+          const k = p01 < 0.4 ? 1 : p01 < 0.75 ? 2 : 3;
+          const cur = this.mainSectors;
+          const valid = cur.length === k && cur.every((s) => (this.sectors.sectors[s]?.points.length ?? 0) > 0);
+          if (!valid) this.mainSectors = this.sectors.selectMain(k);
+        }
+        swarm.data.mainSectors = [...this.mainSectors];   // ★ 主攻扇区 → 四兵种创建与工兵投放
+        swarm.data.squadSectorOf = (id) => this.battalions.deployPlan.get(id) ?? -1;   // ★ 部署真源 → 三兵种创建计数
+        swarm.data.sectorAnchorOf = (sec) => {   // ★ 防区锚点：可部署面中离舰最近的点
+          const pts = this.sectors.sectors[sec]?.points;
+          if (!pts || pts.length === 0) return null;
+          let best = pts[0]!;
+          for (const p of pts) if (p.d < best.d) best = p;
+          return { x: best.x, z: best.z };
+        };
       },
     };
   }
@@ -544,7 +562,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       speed, camp: 'enemy', lifetime: life, damage: dmg,
     });
   };
-  // ★ 不再手工铺环：兵力全部由指挥器（planDefense → 端口 spawnMob）按**进攻轴向**创建
+  // ★ 不再手工铺环：兵力全部由**四兵种管理器的创建接口**按防区需求创建
   // ★ 兜底胶囊渲染（仅当 FTX 批量不可用时创建；否则不加入场景——防"红胶囊占位"）
   const useFallback = !batchOn;
   const unitMesh = useFallback

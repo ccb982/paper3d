@@ -262,9 +262,7 @@ export class WorldSpawner implements SwarmTierPort {
     const pool = this.deps.swarm.pool;
     for (let i = 0; i < pool.count; i++) add(pool.mobIndex[i], roleFromCode(pool.role[i]));
     this.deps.swarm.recallAll();
-    const out: { mobIndex: number; role: UnitRole; count: number }[] = [];
-    for (const [mobIndex, r] of roster) out.push({ mobIndex, role: r.role, count: r.count });
-    this.deps.swarm.data.setRecalledRoster(out);
+    // ★ 回收名单重放已删（用户定 2026-09-26）：落地后由**四兵种管理器**按防区缺口重建
   }
 
   /** ★ 远距实体降格节拍（WorldMode.update 每帧调用；0.25s 一拍才真正跑一次降格） */

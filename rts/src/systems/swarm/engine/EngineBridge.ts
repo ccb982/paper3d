@@ -57,13 +57,14 @@ export interface LiveView {
   /** 下发回调（实机模式用：交给旧执行链；影子模式不调）——带 squadId（哪队）+ now（实秒） */
   emit?(squadId: number, order: SquadOrder, now: number): void;
   /** 玩家是否在打某小队（被打反应：引擎告知队长玩家位置；0 = 无） */
-  playerAttacking?(): number;
   /** 全体敌方单位（含代理；uid/位置）——攻击队列 + 统一计时消费；缺省 → 不跑 */
   enemies?(): { uid: number; x: number; z: number }[];
   /** ★ 可攻击单位（排除工兵）：仅攻击队列入队口径；缺省 → 用 enemies() */
   attackables?(): { uid: number; x: number; z: number }[];
   /** ★ 工兵数据/落地端口（建造位置查询/施工落地）：缺省 → 工兵保持站位 */
   engineer?(): EngineerPort | null;
+  /** ★ 创建端口（四管理器共用；接线层注入） */
+  creation?: () => import('./SquadCreation').CreationPort | null;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
   exemptOf?(uid: number): string | null;
   /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
@@ -77,7 +78,6 @@ export interface LiveView {
   /** ★ 写兵力放行上限（账本闸门真源仍在账本） */
   setReleaseCap?(cap: number): void;
   /** ★ 生成大队（波次执行口；instant=整编一次性压上） */
-  spawnBattalion?(instant: boolean): boolean;
 }
 
 export class EngineBridge {
@@ -125,9 +125,11 @@ export class EngineBridge {
         this.dbg.last = `expire#${uid}:${why}${hit ? '' : '(gone)'}`;
       },
     });
-    this.melee = new MeleeManager(this.squads);
-    this.ranged = new RangedManager(this.squads);
-    this.flyer = new FlyerManager(this.squads);
+    // ★ 创建只走四管理器（用户定 2026-09-26：管理器自有兵种创建接口）
+    const creationOf = () => this.live.creation?.() ?? null;
+    this.melee = new MeleeManager(this.squads, creationOf);
+    this.ranged = new RangedManager(this.squads, creationOf);
+    this.flyer = new FlyerManager(this.squads, creationOf);
     this.engineer = new EngineerManager(this.squads, () => this.live.engineer?.() ?? null);
     this.core = new EngineCore({
       perceive: (now) => this.perceive(now),
@@ -192,6 +194,11 @@ export class EngineBridge {
     if (p) this.pos.setPlayer(p.x, p.z);
     const s = this.live.ship();
     if (s) this.pos.setShip(s.x, s.z);
+    // ★ 阵亡清册（用户定 2026-09-26）：不在世（SquadTable 已无）的旧记录即删——
+    //   防止僵尸记录占编制/占面板（队死后无人 report → 永远挂着）。
+    const liveIds = new Set<number>();
+    for (const sq of this.live.squads()) liveIds.add(sq.id);
+    for (const rec of [...this.squads.all()]) if (!liveIds.has(rec.id)) this.squads.remove(rec.id);
     for (const sq of this.live.squads()) {
       if (!this.squads.get(sq.id)) this.squads.register(sq.id, sq.role, sq.alive, now);
       this.pos.setSquad(sq.id, sq.x, sq.z);
@@ -235,15 +242,6 @@ export class EngineBridge {
   private situation(now: number): void {
     const p = this.pos.player();
     if (!p) return;
-    // 保护关系：玩家打某小队 → 登记保护（用最近的其他队当保护者）
-    const hit = this.live.playerAttacking?.() ?? 0;
-    if (hit > 0) {
-      const g = this.pos.squad(hit);
-      if (g) {
-        const protector = this.pos.nearestSquad(g.x, g.z, new Set([hit]));
-        if (protector >= 0) this.protect.assign(protector, hit, g.x, g.z);
-      }
-    }
     this.protect.refresh(this.pos.squadOf, p.x, p.z);
     // ★ 波次/兵力放行（决策源；自指挥官迁入）：t01 回退（换落点/新一日）→ 波次复位
     const t01 = this.live.t01?.() ?? 0;
@@ -253,12 +251,10 @@ export class EngineBridge {
     this.live.setReleaseCap?.(Math.ceil(total * releaseAt(t01)));
     if (!this.wave1Sent && t01 >= 0.45) {
       this.wave1Sent = true;
-      this.live.spawnBattalion?.(false);
       this.dbg.last = 'wave1';
     }
     if (!this.finalSent && t01 >= 0.80) {
       this.finalSent = true;
-      this.live.spawnBattalion?.(true);
       this.dbg.last = 'final';
     }
   }
@@ -288,7 +284,7 @@ export class EngineBridge {
     if (this.directMode) return;   // ★ 直控模式：不发令/不校验/不释放 TTL
     const p = this.pos.player();
     if (!p) return;
-    const hitId = this.live.playerAttacking?.() ?? 0;
+    const hitId = 0;   // 玩家攻击信号未接线（旧接口已删）
     interface Pending { rec: LiveSquad; cur?: OrderState; dec: Decision; tx: number; tz: number; mission?: string; }
     const pending: Pending[] = [];
     /** 无决策队（玩家令/无目标）的现令目标：作同兵种间距的**固定约束**（不随本拍调整） */

@@ -14,15 +14,18 @@ export const RANGED_POLICY = {
   STANDOFF: 18,
   /** 环带容差（米；在此带内视为在位） */
   BAND: 4,
+  /** ★ 每防区目标人数（按占比配置；补到满编） */
+  UNITS_PER_SECTOR: 3,
 } as const;
 
 export class RangedManager extends RoleManager {
-  constructor(mgr: SquadManager) {
-    super('ranged', mgr);
+  constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
+    super('ranged', mgr, creationOf, 3);
   }
 
   /** 保距：目标 = 玩家 + (本队→玩家方向) × STANDOFF，再夹进环 */
   assign(ctx: RoleCtx): number {
+    this.ensureSquads(ctx.now);
     const p = ctx.pos.player();
     if (!p) return 0;
     this.targets.clear();

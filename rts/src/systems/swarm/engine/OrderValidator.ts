@@ -36,7 +36,6 @@ export interface ValidateResult {
   /** 是否可发令（不可达 → false） */
   ok: boolean;
   /** 建议复合命令：到事态函数上限 → 'defend'；否则 null */
-  suggest: 'defend' | null;
 }
 
 /** 统一校验链：输入目标点 → 输出可下发点（+ 夹环/错开/可达/建议） */
@@ -44,7 +43,6 @@ export function validateOrder(id: number, sx: number, sz: number, ctx: ValidateC
   let x = sx;
   let z = sz;
   let clamped = false;
-  let suggest: ValidateResult['suggest'] = null;
 
   // ① 事态范围（环）
   if (ctx.ringMax > 0) {
@@ -59,7 +57,6 @@ export function validateOrder(id: number, sx: number, sz: number, ctx: ValidateC
         x = ctx.px + dx * k;
         z = ctx.pz + dz * k;
         clamped = true;
-        suggest = 'defend';   // ★ 到事态函数上限 → 执行防御（用户定）
       } else if (d < lo) {
         const k = lo / d;
         x = ctx.px + dx * k;
@@ -87,7 +84,7 @@ export function validateOrder(id: number, sx: number, sz: number, ctx: ValidateC
 
   // ③ 可达（注入核验）
   const reachable = ctx.canReach ? ctx.canReach(x, z) : true;
-  return { x, z, clamped, spread, reachable, ok: reachable, suggest };
+  return { x, z, clamped, spread, reachable, ok: reachable };
 }
 
 export { SPREAD };

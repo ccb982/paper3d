@@ -21,6 +21,7 @@ import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
 import { SectorBuilder, SECTOR_COUNT, HEIGHT_EPS } from '../src/systems/swarm/tactics/SectorBuilder.ts';
+import { SquadCreation, type CreationPort } from '../src/systems/swarm/engine/SquadCreation.ts';
 import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
@@ -472,9 +473,8 @@ console.log('[6] 同兵种散开 + 发令统一校验链');
   // OrderValidator ①：50m → 夹到环 30 + 建议防御
   const v1 = validateOrder(1, 50, 0, { px: 0, pz: 0, ringMin: 0, ringMax: 30, role: 'melee', siblings: [] });
   ok(Math.abs(v1.x - 30) < 0.01 && v1.clamped, '① 超上限夹到环上（50→30）');
-  ok(v1.suggest === 'defend', '① 到事态函数上限 → 建议防御');
   const v2 = validateOrder(1, 20, 0, { px: 0, pz: 0, ringMin: 0, ringMax: 30, role: 'melee', siblings: [] });
-  ok(!v2.clamped && v2.suggest === null, '① 环内不夹');
+  ok(!v2.clamped, '① 环内不夹');
   // ② 密度：与同兵种兄弟 10m → 错开（各推 15，自己到 -15）
   const v3 = validateOrder(9, 50, 0, {
     px: 0, pz: 0, ringMin: 0, ringMax: 0, role: 'melee',
@@ -508,8 +508,7 @@ console.log('[8] OrderWriter 唯一发令器');
   ok(w.issue(1, mk('protect', 5, 0), { now: 4 }), '静止 ≥25s → 允许换令');
   w.advance(1, 0.1, 0);
   ok(w.issue(1, mk('act', 77, 0), { now: 6, player: true }), '玩家令旁路');
-  ok(w.issue(1, mk('act', 55, 0), { now: 7, wounded: true }), '重伤旁路');
-  ok(w.dbg.bypass >= 2, 'dbg.bypass 计数');
+  ok(w.dbg.bypass >= 1, 'dbg.bypass 计数（玩家令旁路）');
 }
 
 // ---------- AttackQueues ----------
@@ -551,14 +550,6 @@ console.log('[10] SectorManager 扇形防区');
   ]);
   sec.tick((id) => leaders.get(id) ?? null, 0, 0, [1, 2, 3]);
   ok(sec.sectorOf(1) === 0 && sec.sectorOf(2) === 1 && sec.sectorOf(3) === 3, '各队归到最近扇区');
-  const empty = sec.emptySectors();
-  ok(empty.length === 1 && empty[0] === 2, '空区统计');
-  ok(sec.refillOf(2, 1) === 1, '空区补派数');
-  ok(sec.refillOf(0, 1) === 0, '有队不补派');
-  sec.setSafety(0, 0.9);
-  sec.setSafety(1, 0.2);
-  const safe = sec.safeSectors(0.8);
-  ok(safe.length === 1 && safe[0] === 0, '很安全的区（调区依据）');
   const c = sec.centerOf(0, 0, 0, 30);
   ok(Math.abs(c.x - 30) < 0.01 && Math.abs(c.z) < 0.01, '扇区中心点（调区目标）');
 }
@@ -642,11 +633,6 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   // ★ 玩家令 TTL 到期 → 释放，交回引擎（不能永久锁死该队）
   bridge.tick(0.6, 2.8 + 30 * 12 + 1);
   ok(bridge.writer.store.get(1)?.order.source === 'engine', '玩家令到期 → 交回引擎决策');
-  // 被打反应：玩家打 3 队 → 登记保护（保护者=最近的其他队）
-  const live2 = { ...live, playerAttacking: () => 3 };
-  const b2 = new EngineBridge(live2);
-  b2.tick(0.6, 1);
-  ok(b2.protect.dbg.links === 1, '玩家打小队 → 引擎登记保护关系');
 }
 
 // ---------- SquadCore（队长侧） ----------
@@ -823,6 +809,8 @@ console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看�
   ok(first?.x === 12, '查询：扇区内需求最高可达点');
   const excluded = fp.targetOf(0, 0, 0, 0, 30, 0.5, undefined, (x) => x === 12);
   ok(excluded?.x === 14, '查询：exclude（预约/黑名单）跳过已占点 → 不再多队同点');
+  const outBand = fp.targetOf(0, 0, 0, 20, 30, 0.5);
+  ok(outBand?.x === 12, '查询：带内无件 → 带外兜底（分到区就去造；用户定 2026-09-26）');
 
   // ② 工兵管理器：预约唯一 + 看门狗拉黑换点 + 补兵请求
   const sm = new SquadManager();
@@ -857,16 +845,60 @@ console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看�
   eng2.assign(ctx2);
   const t21 = eng2.targets.get(21)!, t22 = eng2.targets.get(22)!;
   ok(t21 && t22 && !(t21.x === t22.x && t21.z === t22.z), '★ 分区：两队不同区拿不同件（不重合）');
-  ok(eng2.fortDbg.spawned === 0, '有活队时不补兵（不微操队员）');
-  // ★ 补队：分区小队全灭 → 补一支新小队（3 只成队）
-  wiped.add(22);
-  ctx2.now = 2;
+  ok(eng2.fortDbg.spawned >= 3, '★ 统一编制：进图即建 = 缺了即补（有活空区入局即按配额补齐）');
+  // ★ 补队：曾用分区的小队没了 → 补一支新小队（3 只成队）
+  sm.remove(22);
+  eng2.sync();
+  ctx2.now = 4;
   eng2.assign(ctx2);
-  ok(spawnReq >= 3 && eng2.fortDbg.spawned >= 3, '★ 小队没了 → 补一支新小队（3 只成队）');
+  ok(eng2.fortDbg.spawned >= 3, '★ 曾用分区小队没了 → 补新小队（3 只成队）');
+  // ★ 预制配额：全部分区无活（无件）→ **不建队**（绝不建发呆的工兵）
+  const portNull = { ...port, pickSpot: () => null };
+  const eng3 = new EngineerManager(sm, () => portNull as never);
+  eng3.sync();
+  const ctx3 = { pos, ringMin: 0, ringMax: 0, now: 100 };
+  eng3.assign(ctx3);
+  ok(eng3.fortDbg.spawned === 0, '★ 预制配额：无活分区 → 不建队（不建发呆工兵）');
   // 看门狗：队长原地不动 30s → 拉黑换点
   for (let s = 3; s <= 33; s++) { ctx2.now = s; eng2.assign(ctx2); }
   ok(eng2.fortDbg.unreach > 0, '★ 到件看门狗：超时未到 → 判不可达、拉黑换点');
   ok(eng2.fortDbg.last.includes('拉黑') || eng2.fortDbg.unreach > 0, '看门狗留痕（fortDbg.unreach/last）');
+}
+
+// ---------- 统一创建接口：只建本兵种 ∧ 只在对应防区（《战术侧架构.md》§3.D / I11） ----------
+console.log('[12] SquadCreation 创建接口（role/sector 语法）');
+{
+  const calls: { role: string; x: number; z: number }[] = [];
+  let alive = 0;
+  const port: CreationPort = {
+    mainSectors: () => [0, 5],
+    aliveInSector: () => alive,
+    anchorOf: (sec) => (sec === 0 ? { x: 10, z: 0 } : null),
+    spawn: (role, x, z) => { calls.push({ role, x, z }); return true; },
+  };
+  const sc = new SquadCreation('melee', 6);
+  sc.tick(0, port);
+  ok(calls.length === 3, '缺就补：一次投放 3 只成队');
+  ok(calls.every((c) => c.role === 'melee'), '语法①：只建本兵种');
+  ok(calls.every((c) => Math.abs(c.z) < 1e-6 && c.x >= 8.4), '语法②：只在对应防区锚点创建');
+  const n1 = calls.length;
+  sc.tick(5, port);
+  ok(calls.length === n1, '在途记账：宽限期内不重复投放（幂等）');
+  sc.tick(30, port);
+  ok(calls.length === n1 + 3, '宽限到期仍无队（没到）→ 重试（同一条路）');
+  const sc2 = new SquadCreation('ranged', 3);
+  const before = calls.length;
+  sc2.tick(0, { mainSectors: () => [5], aliveInSector: () => 0, anchorOf: () => null, spawn: port.spawn });
+  ok(calls.length === before, '非对应防区（无锚点）→ 拒建');
+  // 满编循环：每波 3 只，直到 6 人满编（成员然后并队）
+  alive = 3;
+  const sc3 = new SquadCreation('melee', 6);
+  const b3 = calls.length;
+  sc3.tick(0, port);
+  ok(calls.length === b3 + 3, '满编循环：缺 3 → 补 3');
+  alive = 6;
+  sc3.tick(100, { ...port, aliveInSector: () => 6 });
+  ok(calls.length === b3 + 3, '满编后不再放');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

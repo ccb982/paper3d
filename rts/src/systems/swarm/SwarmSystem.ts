@@ -998,8 +998,6 @@ export class SwarmSystem {
   }
 
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
-  private _orderDrops = 0;
-  get orderDrops(): number { return this._orderDrops; }
 
   /** ★ 队长核端口：寻路求解（执行态走廊写入；长短由 ensurePath 内部分流） */
   /** ★ 巡逻点查询（队长核端口；实现 = nav.patrolNext） */

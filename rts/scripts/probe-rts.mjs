@@ -43,7 +43,6 @@ const probe = () => page.evaluate(() => {
     squadsN: sw?.squads?.size ?? null,
     recycled: w?.shadowBridge?.timers?.dbg?.stuckTotal ?? null,
     stage: c?.stage ?? null, posture: c?.battlePosture ?? null,
-    drops: sw?.orderDrops ?? null,
     clamps: c?.cmdLogRingClamps ?? null,
     decision: c?.lastDecision ? `${c.lastDecision.kind}@${c.lastDecision.at | 0}` : null,
     gain: sw?.data?.distGain ? +sw.data.distGain.toFixed(1) : null,

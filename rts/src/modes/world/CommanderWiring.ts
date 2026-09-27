@@ -42,7 +42,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   //   → 走唯一收口 spawnOne（落点闸门 / MAX_ALIVE / 记账；绕过旧每日配额）
   //   ★ **生成点必须距玩家 ≥80m**：不够就**沿来向向外推**（保持正面阵形，
   //   绝不从玩家径向外推——那会把阵形推成围着玩家的一圈）；到位靠行军
-  d.data.spawnMob = (x, z, role: UnitRole, elite = false, near = false) => {
+  const spawnMobPort = (x: number, z: number, role: UnitRole, elite = false, near = false) => {
     const p = d.playerPos();
     const plan = d.data.defensePlan;
     const ax = plan?.approachX ?? 1, az = plan?.approachZ ?? 0;
@@ -66,21 +66,8 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       if (d.spawner.spawnOne(def, qx, d.raster.surfaceHeightAt(qx, qz), qz, INTENT_NONE, -1)) return;
     }
   };
-  // ★ 起飞回收名单重放：引擎给锚点，这里只做**可站性微调**（水/坑里就近挪几米），
-  //   保证"回收数 = 放置数"（布置决策仍在引擎）
-  d.data.spawnMobIndex = (x, z, mobIndex) => {
-    const def = d.mobDefs[mobIndex];
-    if (!def) return;
-    for (let i = 0; i < 6; i++) {
-      const a = Math.random() * Math.PI * 2;
-      const r = i === 0 ? 0 : 2 + Math.random() * 6;
-      const sx = x + Math.cos(a) * r;
-      const sz = z + Math.sin(a) * r;
-      if (d.spawner.spawnSingle(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1)) return;
-    }
-  };
   // ★ 施工兵生成（独有施工战术）：名册 canBuild 兵种优先；无 → 杂兵兜底
-  d.data.spawnBuilder = (x, z) => {
+  const spawnBuilderPort = (x: number, z: number) => {
     const def = d.mobDefs.find((m) => m.canBuild)
       ?? d.mobDefs.find((m) => m.role === 'assault') ?? d.mobDefs[0];
     if (!def) return;
@@ -92,6 +79,8 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       if (d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1)) return;
     }
   };
+  // ★ 统一装配原子生成口（此后创建只经四兵种管理器；旧名单/班底/大队创建已删）
+  d.data.attachSpawnPorts({ mob: spawnMobPort, builder: spawnBuilderPort });
   // ★ 逐兵种战术表（名册 EnemySpec.tactics）
   d.data.mobTactics = (mobIndex) => d.mobDefs[mobIndex]?.tactics ?? null;
 }

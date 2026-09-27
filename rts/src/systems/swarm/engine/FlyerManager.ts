@@ -14,15 +14,18 @@ export const FLYER_POLICY = {
   ORBIT: 10,
   /** 航线点数（每队一个相位，避免重叠） */
   LANES: 4,
+  /** ★ 每防区目标人数（按占比配置；补到满编） */
+  UNITS_PER_SECTOR: 3,
 } as const;
 
 export class FlyerManager extends RoleManager {
-  constructor(mgr: SquadManager) {
-    super('flyer', mgr);
+  constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
+    super('flyer', mgr, creationOf, 3);
   }
 
   /** 航线：目标 = 玩家 + 本队相位对应的航线点，再夹进环 */
   assign(ctx: RoleCtx): number {
+    this.ensureSquads(ctx.now);
     const p = ctx.pos.player();
     if (!p) return 0;
     this.targets.clear();

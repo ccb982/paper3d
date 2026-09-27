@@ -41,7 +41,6 @@ export interface WriterCtx {
   /** 玩家令（最高优先） */
   player?: boolean;
   /** 重伤（<0.5 血量） */
-  wounded?: boolean;
 }
 
 export class OrderWriter {
@@ -56,7 +55,7 @@ export class OrderWriter {
   issue(id: number, order: SquadOrder, ctx: WriterCtx): boolean {
     const cur = this.store.get(id);
     if (cur) {
-      const bypass = ctx.player || ctx.wounded;
+      const bypass = ctx.player;
       if (bypass) {
         this.dbg.bypass++;
       } else {

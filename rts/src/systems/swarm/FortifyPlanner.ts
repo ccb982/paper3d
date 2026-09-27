@@ -34,17 +34,15 @@ export interface FortifyPick {
 export class FortifyPlanner {
   /** 每扇区峰值需求（-∞ = 未知/无格） */
   readonly safety: number[] = Array(FORTIFY_SECTORS).fill(-Infinity);
-  /** 每扇区峰值需求点 */
-  readonly worst: FortifyPick[] = Array.from({ length: FORTIFY_SECTORS }, () => ({ x: 0, z: 0, score: -Infinity }));
   /** ★ 每扇区是否已扫描（区分"未扫描"与"扫描后无可行点"——后者不阻塞前推） */
   readonly scanned: boolean[] = Array(FORTIFY_SECTORS).fill(false);
   /** ★ 每扇区候选点（需求降序；仅扇区内 ∧ 带内；targetOf 逐个试可达） */
   readonly candidates: FortifyPick[][] = Array.from({ length: FORTIFY_SECTORS }, () => []);
   private cursor = 0;
-  readonly dbg = { sweeps: 0, sectors: FORTIFY_SECTORS, builders: 0, assigned: '-' };
+  readonly dbg = { sweeps: 0, sectors: FORTIFY_SECTORS };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（**扇区内 ∧ 带内**；角度 [si,si+1)/8·2π）
-   *  产出：`worst[si]`（峰值点）· `safety[si]`（峰值分）· `candidates[si]`（需求降序候选，≤CAND_K） */
+   *  产出：`safety[si]`（峰值分）· `candidates[si]`（需求降序候选，≤CAND_K） */
   refreshOne(
     cx: number, cz: number, rLo: number, rHi: number,
     needAt: (x: number, z: number) => number | null,
@@ -70,7 +68,6 @@ export class FortifyPlanner {
       }
     }
     const best = list[0] as FortifyPick | undefined;
-    this.worst[si] = best ? { x: best.x, z: best.z, score: best.score } : { x: 0, z: 0, score: -Infinity };
     this.safety[si] = best ? best.score : -Infinity;
     this.dbg.sweeps++;
   }
@@ -86,7 +83,8 @@ export class FortifyPlanner {
 
   /** ★ 施工目标获取（唯一口径；见文件头契约）：
    *  候选 = refreshOne 预排的**扇区内 ∧ 带内**需求降序表；返回前以**当前带/扇区**复检。
-   *  ① 需求 ≥ doneScore 的可达最高位；② 否则扇区内可达的次高；③ 全不可达 → null。 */
+   *  ① 需求 ≥ doneScore 的**带内**可达最高位；② 否则**带内**可达次高；
+   *  ③ 否则**带外兜底**（仍限本扇区 ∧ 可达 ∧ 不排除；用户定 2026-09-26：分到区就去造）；④ 全不行 → null。 */
   targetOf(
     cx: number, cz: number, sec: number, rLo: number, rHi: number,
     doneScore: number,
@@ -100,25 +98,26 @@ export class FortifyPlanner {
     const a0 = (sec / FORTIFY_SECTORS) * TAU;
     const a1 = (sec + 1 === FORTIFY_SECTORS) ? TAU : ((sec + 1) / FORTIFY_SECTORS) * TAU;
     let fallback: FortifyPick | null = null;
+    let outBand: FortifyPick | null = null;
     for (const c of list) {
-      // ★ 复检①：当前带内（候选是摊销刷新的，带会动）
-      const d = Math.hypot(c.x - cx, c.z - cz);
-      if (d < rLo - 1 || d > rHi + 1) continue;
       // ★ 复检②：本扇区角度内（保证"在扇区之内"）
       let ang = Math.atan2(c.z - cz, c.x - cx);
       if (ang < 0) ang += TAU;
       if (ang < a0 || ang >= a1) continue;
       if (canReach && !canReach(c.x, c.z)) continue;
       if (exclude && exclude(c.x, c.z)) continue;
+      const d = Math.hypot(c.x - cx, c.z - cz);
+      const inBand = d >= rLo - 1 && d <= rHi + 1;
+      if (!inBand) { if (!outBand) outBand = { x: c.x, z: c.z, score: c.score }; continue; }
       if (c.score >= doneScore) return { x: c.x, z: c.z, score: c.score };
       if (!fallback) fallback = { x: c.x, z: c.z, score: c.score };
     }
-    return fallback;
+    // ★ 带内无件 → 带外兜底（用户定：分到区就去造）
+    return fallback ?? outBand;
   }
 
   clear(): void {
     this.safety.fill(-Infinity);
-    for (const w of this.worst) w.score = -Infinity;
     for (const l of this.candidates) l.length = 0;
     this.scanned.fill(false);
     this.cursor = 0;

@@ -69,6 +69,8 @@ export class SquadManager {
     rec.lastReport = now;
     rec.reports++;
     this.dbg.last = `#${r.squadId} ${r.atom}/${r.phase} alive=${r.alive} @${r.x.toFixed(0)},${r.z.toFixed(0)}`;
+    // ★ 阵亡即清（用户定 2026-09-26）：花名册不养僵尸（否则占编制/占分区，补队不断叠）
+    if (rec.alive <= 0) this.recs.delete(r.squadId);
   }
 
   get(id: number): SquadRecord | undefined {

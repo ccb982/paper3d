@@ -12,15 +12,18 @@ import type { SquadManager } from './SquadManager';
 export const MELEE_POLICY = {
   /** 接敌距离（米）：压到离玩家这么近就停（挥击由战斗原子接管） */
   ENGAGE: 12,
+  /** ★ 每防区目标人数（按占比配置；补到满编） */
+  UNITS_PER_SECTOR: 6,
 } as const;
 
 export class MeleeManager extends RoleManager {
-  constructor(mgr: SquadManager) {
-    super('melee', mgr);
+  constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
+    super('melee', mgr, creationOf, 6);
   }
 
   /** 压上：目标 = 玩家 + (本队→玩家方向) × (距离−ENGAGE)，再夹进环 */
   assign(ctx: RoleCtx): number {
+    this.ensureSquads(ctx.now);
     const p = ctx.pos.player();
     if (!p) return 0;
     this.targets.clear();

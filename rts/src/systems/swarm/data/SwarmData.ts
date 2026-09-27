@@ -5,11 +5,13 @@
 //   · 地形与表：DefensePlan / TerrainScoring（查询时评分）/ L1 语义 / L2 工事（HoleMask/HoleTable）/ PassTable
 //   · 事态与环：PostureFn（p/frontP）+ 环形活动区（ringBounds/clampToRing）+ t01 时钟
 //   · 工事数据：FortifyPlanner（需求/分区）+ 施工带（fortifyBand）+ 阶段 S1/S2
-//   · 编制与生成执行：CommanderSpawn + RosterController + 生成端口（模式层注入）
+//   · 编制统计：RosterController；生成执行：四兵种管理器自有创建接口（模式层注入原子生成口）
 // 消费方：新引擎（经 main/LiveView 单源读取）、队长核端口、导航/SteerPick 表桥、UI/探针只读。
 // ============================================================
 
+import { squadTypeOf } from '../../../entity/SwarmUnit';
 import { RasterMap } from '../../../services/map/RasterMap';
+import { onShipHighland } from '../tactics/SectorBuilder';
 import type { SwarmSystem } from '../SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
@@ -21,7 +23,6 @@ import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from '../TerrainSemantics';
 import { HoleMask } from '../HoleMask';
 import { HoleTable } from '../HoleTable';
 import { samplerFor } from '../../../services/map/TerrainSampler';
-import { CommanderSpawn } from '../CommanderSpawn';
 import { DANGER } from '../SwarmDanger';
 import { PassTable } from '../nav/PassTable';
 import { RosterController } from '../RosterController';
@@ -52,13 +53,16 @@ export class SwarmData {
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
   digTrench: ((x: number, z: number) => void) | null = null;
-  /** ★ 兵力创建端口（模式层注入：按角色在 (x,z) 生成一只；**全权在本层**）
-   *  @param near 开局班底用：**不做"≥80m 远离玩家"外推**（直接在锚点生成，工程队能立刻开工） */
-  spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
-  /** ★ 按 mobIndex 生成一只（名单重放用；模式层注入） */
-  spawnMobIndex: ((x: number, z: number, mobIndex: number) => void) | null = null;
-  /** ★ 施工兵种生成端口（独有施工战术：模式层挑名册 canBuild 兵种；无 → 杂兵兜底） */
-  spawnBuilder: ((x: number, z: number) => void) | null = null;
+  private spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
+  private spawnBuilder: ((x: number, z: number) => void) | null = null;
+  /** ★ 装配原子生成口（模式层一次性注入；此后再无其他创建入口） */
+  attachSpawnPorts(ports: {
+    mob: (x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void;
+    builder: (x: number, z: number) => void;
+  }): void {
+    this.spawnMob = ports.mob;
+    this.spawnBuilder = ports.builder;
+  }
   /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
   mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
   /** ★ 当前态势（引擎内部变量；驱动各编队命令强度） */
@@ -167,42 +171,30 @@ export class SwarmData {
   }
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
-  /** ★ 大队生成/登场队列（自本类拆出：CommanderSpawn；回收名单也在其中） */
-  private readonly spawn: CommanderSpawn;
-  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次；《RTS架构.md》§3.0） */
+  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次） */
   readonly passTable = new PassTable();
-  /** ★ §13.1 编制比例（占比统计 + 缺口；只读，不改行为） */
+  /** ★ §13.1 编制比例（占比统计 + 缺口；只读） */
   readonly roster = new RosterController();
-  /** ★ §13.3 工事规划（最危险区域选择；工兵循环的第一步） */
+  /** ★ §13.3 工事规划（最危险区域选择） */
   readonly fortify = new FortifyPlanner();
-  /** ★ §13.4 前推里程（棘轮：只增；每拍 +≤0.5m，封顶 frontP 允许值×120m） */
   /** ★ 前推棘轮里程（事态控制；每拍 ≤0.5m） */
   private pushM = 0;
 
-  /** ★ 施工带（事态函数口径，单源）：rLo=允许离舰+8、rHi=90 或 rLo+30，再加前推棘轮 pushM。
-   *  · **总攻（assault）→ 扇形工兵防区随环收缩为一个点 (0,0)**（用户定 2026-09-25）
-   *  引擎 tick 与小地图/探针共用——防"两处重算、漏 pushM"（2026-09-25 修） */
+  /** ★ 施工带（事态函数口径，单源） */
   get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
     if (this.battlePosture === 'assault') {
       return { rLo: 0, rHi: 0, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
     }
     const rLo = Math.max(24, this.frontMinD + 8);
     const rHiBase = Math.max(90, rLo + 30) + this.pushM;
-    const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;   // ★ 施工外圈不越活动上限
+    const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;
     return { rLo, rHi, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
   }
   private fortifyAccum = 0;
-  /** ★ 工程阶段（S0 勘察 → S1 施工 → S2 就绪；第一波 0.45 后转 S2） */
+  /** ★ 工程阶段（S0 勘察 → S1 施工 → S2 就绪） */
   stage: 'S0' | 'S1' | 'S2' = 'S0';
 
   constructor(private readonly swarm: SwarmSystem) {
-    this.spawn = new CommanderSpawn({
-      plan: () => this.plan,
-      mob: () => this.spawnMob,
-      mobIndex: () => this.spawnMobIndex,
-      builder: () => this.spawnBuilder,
-      gap: () => (this.roster.dbg.gap === '-' ? null : { role: this.roster.dbg.gap, val: this.roster.dbg.gapVal }),
-    });
   }
 
   /** ★ 环形夹取（公开给队长核（port.clampRing））：径向夹进 [下限, 上限]；
@@ -235,7 +227,6 @@ export class SwarmData {
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
-    this.spawn.reset();
     this.pushM = 0;   // ★ 前推里程复位（换落点）
     // ★ 单日节律复位（§3.5）：日程从落地重新走，挑衅采样清零（波次标记在引擎，t01 回退自动复位）
     this.rhythmT = 0;
@@ -245,21 +236,9 @@ export class SwarmData {
     this.lastKills = this.swarm.ledger.kills;
     this.postureFn.reset(now);
     this.battlePosture = 'fortify';
-    // ★ 兵力创建（全权在本层，编成/放置见 CommanderSpawn）：
-    //   · 回收名单 → 按名单**逐步回场**（数量/兵种照旧）
-    //   · 全新驻防 → 开局只上**少量班底**（近战 + 后勤修工事），其余由节律逐步补满基数
-    this.spawn.deploy();
+    // ★ 兵力创建：**四兵种管理器自有创建接口**（用户定 2026-09-26）——
+    //   本层只提供原子生成口与防区锚点；旧班底/大队/回收名单创建已删。
     return this.plan;
-  }
-
-  /** ★ 起飞回收：只交**名单**（兵种属性 + 数量）——怎么布置由本层决定 */
-  setRecalledRoster(roster: { mobIndex: number; role: UnitRole; count: number }[]): void {
-    this.spawn.setRoster(roster);
-  }
-
-  /** ★ 生成一个大队（30 怪；逐步登场/instant；编成/放置见 CommanderSpawn） */
-  spawnBattalion(instant = false): boolean {
-    return this.spawn.battalion(instant);
   }
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
@@ -312,7 +291,6 @@ export class SwarmData {
       const allDone = this.fortify.safety.every((v, i) => this.fortify.scanned[i] && (!Number.isFinite(v) || v < DONE));
       // ★ 总攻不推（施工带已收缩为点）；其余达标即推，2m/s（用户定：前压提速）
       if (allDone && this.battlePosture !== 'assault') this.pushM = Math.min(this.frontP * 120, this.pushM + 1.0);
-      this.fortify.dbg.builders = [...this.swarm.squads.all()].filter((s) => s.builders).length;
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
@@ -412,26 +390,78 @@ export class SwarmData {
       this.ringClock = 0;
       this.ringTick(shipX, shipZ);
     }
-    // ★ 逐步登场：队列滴灌（每 SPAWN_INTERVAL 出一只；总攻走 instant 不入队）
-    this.spawn.drain(dt);
     // ★ 波次判定/兵力放行已迁新引擎（`EngineBridge.situation`：t01 + releaseAt → setReleaseCap/spawnBattalion）
-    //   本层只留生成执行（CommanderSpawn）与地形/工事数据。
+    //   本层只留原子生成口与地形/工事数据。
   }
 
   /** ★ 工兵数据/落地端口（新引擎 EngineerManager 消费；旧工事指挥链已销毁）：
    *  数据 = 分区/需求/环带/可达；建造位置查询 + 施工落地都在这一个口上（单源）。 */
+  /** ★ 舰船关联高地判定（防区/工兵件 共同排除；用户定 2026-09-26） */
+  private onShipPlateau(x: number, z: number): boolean {
+    const raster = RasterMap.current;
+    if (!raster) return false;
+    if (this.lastShipX === 0 && this.lastShipZ === 0) return false;
+    const shipY = raster.surfaceHeightAt(this.lastShipX, this.lastShipZ);
+    return onShipHighland((px, pz) => raster.surfaceHeightAt(px, pz), shipY, x, z);
+  }
+
+  /** ★ 主攻扇区（tactics 注入；工兵优先投放） */
+  mainSectors: number[] = [];
+
+  squadSectorOf: ((id: number) => number) | null = null;
+  sectorAnchorOf: ((sec: number) => { x: number; z: number } | null) | null = null;
+  combatCreationPort(): import('../engine/SquadCreation').CreationPort {
+    return {
+      mainSectors: () => this.mainSectors,
+      aliveInSector: (role, sec) => this.aliveRoleInSector(role, sec),
+      anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
+      spawn: (role, x, z) => {
+        if (!this.spawnMob) return false;
+        const ur = role === 'melee' ? 'assault' : role === 'engineer' ? 'logistics' : role;
+        this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false);
+        return true;
+      },
+    };
+  }
+
+  /** 防区内本兵种现役人数；未部署队按最近锚点归档（防超额刷兵） */
+  private aliveRoleInSector(role: string, sec: number): number {
+    const t = squadTypeOf(role as Parameters<typeof squadTypeOf>[0]);
+    let n = 0;
+    for (const s of this.swarm.squads.all()) {
+      if (s.members.size <= 0) continue;
+      if (s.type !== t) continue;
+      if (s.builders !== (role === 'engineer')) continue;
+      // ★ 按**物理扇区角**归档（以舰为心；免疫部署延迟）——与 SectorBuilder 同圆心
+      let sq = this.squadSectorOf?.(s.id) ?? -1;
+      if (sq < 0) {
+        const lead = s.members.get(s.leaderUid);
+        if (lead) {
+          let ang = Math.atan2(lead.z - this.lastShipZ, lead.x - this.lastShipX);
+          if (ang < 0) ang += Math.PI * 2;
+          sq = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
+        }
+      }
+      if (sq !== sec) continue;
+      n += s.members.size;
+    }
+    return n;
+  }
+
   engineerPort(): EngineerPort {
     return {
       band: () => { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; },
       ship: () => ({ x: this.lastShipX, z: this.lastShipZ }),
-      needAt: (x, z) => this.fortifyNeed(x, z),
+      // ★ 舰船高地排除（用户定 2026-09-26）：高地（含其上坑洞）不算防区 → 不发工兵件
+      needAt: (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)),
       // ★ 取件门（用户定 2026-09-25）：长途 BFS；短程 LOS 快筛——唯一实现在 `SwarmSystem.reachFrom`
       canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),
       assault: () => this.battlePosture === 'assault',
       noNewBuild: () => this.lastDayRaw >= 0.45,
       aliveOfSquad: (id) => this.swarm.squads.get(id)?.members.size ?? 0,
       refreshSector: (cx, cz, rLo, rHi) =>
-        this.fortify.refreshOne(cx, cz, rLo, rHi, (x, z) => this.fortifyNeed(x, z)),
+        this.fortify.refreshOne(cx, cz, rLo, rHi,
+          (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z))),
       pickSpot: (sec, rLo, rHi, canReach, exclude) =>
         this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude),
       canDig: (x, z) => {
@@ -439,12 +469,15 @@ export class SwarmData {
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
       },
       cover: (x, z, v) => this.buildCover?.(x, z, v),
-      // ★ 补兵（用户定 2026-09-26）：工兵缺员 → 请求生成施工兵（生成口真源在 CommanderSpawn）
+      // ★ 补队（用户定）：工兵缺队 → 请求生成施工兵（统一编制机制）
       requestSpawn: (role, x, z) => {
         if (role !== 'builder' || !this.spawnBuilder) return false;
         this.spawnBuilder(x, z);
         return true;
       },
+      posture: () => this.postureP,
+      mainSectors: () => this.mainSectors,
+      sectorsScanned: () => this.fortify.scanned.every(Boolean),
       dig: (x, z) => this.digTrench?.(x, z),
       markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
     };
@@ -739,7 +772,6 @@ export class SwarmData {
   clear(now = 0): void {
     this.plan = null;
     this.stage = 'S0';
-    this.spawn.clear();
     this.holeTable.clear();
     this.postureFn.reset(now);
     this.battlePosture = 'fortify';

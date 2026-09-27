@@ -59,36 +59,6 @@ export class SectorManager {
     this.dbg.last = `n=${ids.length} empty=${empty}`;
   }
 
-  setSafety(id: number, s: number): void {
-    const sec = this.sectors[id];
-    if (sec) sec.safety = Math.max(0, Math.min(1, s));
-  }
-
-  safetyOf(id: number): number {
-    return this.sectors[id]?.safety ?? 0;
-  }
-
-  /** 很安全的区（调区依据：把队挪走） */
-  safeSectors(threshold: number): number[] {
-    const out: number[] = [];
-    for (const s of this.sectors) if (s.safety >= threshold && s.squads.length > 0) out.push(s.id);
-    this.dbg.safe = out.length;
-    return out;
-  }
-
-  /** 空区（补派依据） */
-  emptySectors(): number[] {
-    return this.sectors.filter((s) => s.squads.length === 0).map((s) => s.id);
-  }
-
-  /** 补派数：该区离"期望队数"还差几队（引擎拿去让兵种管理器刷） */
-  refillOf(id: number, want: number): number {
-    const n = Math.max(0, want - (this.sectors[id]?.squads.length ?? 0));
-    if (n > 0) this.dbg.refill += n;
-    return n;
-  }
-
-  /** 某队属于哪个扇区（-1 = 无） */
   sectorOf(squadId: number): number {
     for (const s of this.sectors) if (s.squads.includes(squadId)) return s.id;
     return -1;

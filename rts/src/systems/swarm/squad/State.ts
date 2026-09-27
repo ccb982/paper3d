@@ -6,7 +6,7 @@
 // UI/探针只读口 = `engine/SquadView`（旧黑板已删）。
 // ============================================================
 
-import type { SquadIntent, SquadOrderKind, TacticalOrder } from '../../../entity/SwarmUnit';
+import type { SquadOrderKind, TacticalOrder } from '../../../entity/SwarmUnit';
 import type { SquadOrder } from '../engine/contracts';
 import { GAME_MIN } from '../SwarmConfig';
 
@@ -49,33 +49,10 @@ export interface SquadOrderState {
 
 /** 命令 TTL（默认，游戏分钟） */
 export const ORDER_TTL_DEFAULT = 30 * GAME_MIN;
-/** 使命化 TTL 下限（断供保险；分钟级使命/驻守令寿命下限） */
-export const MISSION_TTL_FLOOR = 30 * GAME_MIN;
 /** 个体指令 TTL（游戏分钟） */
 export const DIRECTIVE_TTL = 6 * GAME_MIN;
 /** 队内保命线：个体 hpRatio 低于此值 → `fallback` 撤出 */
 export const MEMBER_FALLBACK_HP = 0.3;
-/** 驻守型（分钟级）使命 */
-export const LONG_LIVED_MISSIONS = new Set(['build', 'guard', 'patrol', 'rear', 'hold']);
-
-/** 意图推导（使命名优先，其次 kind） */
-export function intentOfOrder(kind: SquadOrderKind, mission?: string): SquadIntent {
-  switch (mission) {
-    case 'build': return 'build';
-    case 'guard': case 'hold': return 'hold';
-    case 'rear': return 'withdraw';
-    case 'assault': case 'flank': return 'attack';
-    case 'patrol': return 'patrol';
-    default: break;
-  }
-  switch (kind) {
-    case 'advance': case 'flank': case 'focus': case 'bound': return 'attack';
-    case 'retreat': return 'withdraw';
-    case 'protect': case 'garrison': return 'guard';
-    default: return 'regroup';
-  }
-}
-
 /** 缺参降级：绝不发无法执行的命令 */
 export function normalizeOrder(order: TacticalOrder): TacticalOrder {
   const o: TacticalOrder = { ...order, seq: order.seq || 1 };
@@ -131,7 +108,6 @@ export function toBoardOrder(o: SquadOrder): TacticalOrder {
   } as TacticalOrder;
   // ★ G5 例外（arch-guard 注明）：本文件是"引擎令 → 执行态"适配器，只**转发**引擎令自带 anchor，不产生锚
   if (o.anchor) out.anchor = { ...o.anchor };
-  out.intent = intentOfOrder(kind, o.mission);
   return out;
 }
 

@@ -6,6 +6,7 @@
 // ============================================================
 
 import type { MobRole } from './contracts';
+import { SquadCreation, type CreationPort } from './SquadCreation';
 import type { SquadManager } from './SquadManager';
 import type { Positions } from './Positions';
 
@@ -28,7 +29,23 @@ export abstract class RoleManager {
   readonly targets = new Map<number, Target>();
   readonly dbg = { squads: 0, assigned: 0, last: '' };
 
-  constructor(readonly role: MobRole, protected readonly mgr: SquadManager) {}
+  /** ★ 统一创建接口（用户定 2026-09-26：只建本兵种 ∧ 只在对应防区） */
+  readonly creation: SquadCreation;
+  constructor(
+    readonly role: MobRole,
+    protected readonly mgr: SquadManager,
+    /** 创建端口取用（接线层注入；未接线 = 不创建） */
+    private readonly creationOf: () => CreationPort | null = () => null,
+    creationPerSector = 0,
+  ) {
+    this.creation = new SquadCreation(role, creationPerSector);
+  }
+
+  /** 每拍检查对应防区：缺就补、有就不放 */
+  protected ensureSquads(now: number): void {
+    const port = this.creationOf();
+    if (port) this.creation.tick(now, port);
+  }
 
   /** 引擎每拍同步编成（SquadManager 是编成真源；这里只缓存本兵种子集） */
   sync(): void {

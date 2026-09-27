@@ -40,6 +40,28 @@ export interface SectorInfo {
   scanned: boolean;
 }
 
+/** ★ “舰船关联高地”判定（用户定 2026-09-26；共享：防区构建 + 工兵建造点查询）：
+ *  ① 高度 ≥ shipY-HEIGHT_EPS → 高地本体（同层/更高）；
+ *  ② 自身深陷（shipY-h＞1.2m）但 **8 方向 8m 内 ≥6 个方向是舰船层高** → 高地里的坑洞/凹陷。 */
+export function onShipHighland(
+  surfaceAt: (x: number, z: number) => number,
+  shipY: number,
+  x: number, z: number,
+): boolean {
+  const h = surfaceAt(x, z);
+  if (h >= shipY - HEIGHT_EPS) return true;
+  if (shipY - h > 1.2) {
+    let hi = 0;
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const hs = surfaceAt(x + Math.cos(a) * 8, z + Math.sin(a) * 8);
+      if (hs >= shipY - HEIGHT_EPS) hi++;
+    }
+    if (hi >= 6) return true;
+  }
+  return false;
+}
+
 export class SectorBuilder {
   readonly sectors: SectorInfo[] = Array.from({ length: SECTOR_COUNT }, (_, i) => ({
     idx: i, points: [], dMin: -1, dMax: -1, scanned: false,
@@ -97,7 +119,7 @@ export class SectorBuilder {
         if (blockedAt && blockedAt(x, z)) continue;
         // ★ 地形高度硬规则（用户定 2026-09-26 修正）：排除“主角关联的一片高地”
         //   （高地本体 ∥ 高地里的坑洞/凹陷）；**无舰船（shipY=null）→ 正常占领**。
-        if (shipY !== null && this.onShipHighland(x, z, shipY, surfaceAt)) continue;
+        if (shipY !== null && onShipHighland(surfaceAt, shipY, x, z)) continue;
         info.points.push({ x, z, h, d });
         if (info.points.length >= SECTOR_POINT_CAP) break;
       }
@@ -115,26 +137,6 @@ export class SectorBuilder {
     this.dbg.last = `sec${si} pts=${info.points.length}`;
   }
 
-  /** ★ “舰船关联高地”判定（用户定 2026-09-26）：
-   *  ① 高度 ≥ shipY-HEIGHT_EPS → 高地本体（同层/更高）；
-   *  ② 自身深陷（shipY-h＞1.2m）但 **8 方向 8m 内 ≥6 个方向是舰船层高** → 高地里的坑洞/凹陷（不算防区）。 */
-  private onShipHighland(
-    x: number, z: number, shipY: number,
-    surfaceAt: (x: number, z: number) => number,
-  ): boolean {
-    const h = surfaceAt(x, z);
-    if (h >= shipY - HEIGHT_EPS) return true;
-    if (shipY - h > 1.2) {
-      let hi = 0;
-      for (let k = 0; k < 8; k++) {
-        const a = (k / 8) * Math.PI * 2;
-        const hs = surfaceAt(x + Math.cos(a) * 8, z + Math.sin(a) * 8);
-        if (hs >= shipY - HEIGHT_EPS) hi++;
-      }
-      if (hi >= 6) return true;
-    }
-    return false;
-  }
 
   /** 主攻扇区选择（占位策略：可部署容量优先；待用户 chunk 战术覆盖）。
    *  k ≤ 0 或 > 8 → 夹到 [1, SECTOR_COUNT]。 */
