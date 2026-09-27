@@ -977,13 +977,14 @@ console.log('[12c] 总攻：50m 环生成 + 满编上限');
     unitTarget: () => 12,
     assault: () => true,
     assaultAnchor: () => ({ x: 50, z: 0 }),        // 总攻：距舰 50m
+    fillTarget: () => ({ x: 0, z: 0, gap: 9 }),    // 总攻不得并队（不贴舰）
     spawn: (role, x, z) => { calls.push({ x, z }); return true; },
     posture: () => 1,
   };
   const scA = new SquadCreation('melee', 12);
   scA.tick(0, portA, 3);
   ok(calls.length === 3 && calls.every((c) => Math.abs(c.x - 50) <= 1.5 && c.z === 0),
-    '★ 总攻阶段：在距舰 50m 处生成（不用平时锚）');
+    '★ 总攻：在距舰 50m 环部署（不并入现役队、不用平时锚）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

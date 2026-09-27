@@ -420,7 +420,8 @@ export class SwarmData {
       spawn: (role, x, z) => {
         if (!this.spawnMob) return false;
         const ur = role === 'melee' ? 'assault' : role === 'engineer' ? 'logistics' : role;
-        this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false);
+        // ★ 创建点由四管理器给定 → **原样生成**（near=true；不再沿痒旧“≥80m 外推”）
+        this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false, true);
         return true;
       },
     };

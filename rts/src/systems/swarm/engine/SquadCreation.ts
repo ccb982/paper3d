@@ -55,8 +55,10 @@ export class SquadCreation {
       const alive = port.aliveInSector(this.role, sec);
       if (alive >= target) continue;                           // 已满编 → 不放
       // ★ 补兵优先：有缺编队 → 在**队长身旁**投放（并入队伍，由队长指挥）；否则按锚点建新队
-      const fill = port.fillTarget?.(this.role, sec) ?? null;
       const assault = port.assault?.() ?? false;
+      // ★ 总攻（用户定 2026-09-26）：**新兵一律在 50m 环（主攻方向各防区中角）部署**，
+      //   不并入现役队（不贴舰刷兵）。
+      const fill = assault ? null : (port.fillTarget?.(this.role, sec) ?? null);
       const a = fill ? { x: fill.x, z: fill.z }
         : (assault ? (port.assaultAnchor?.(sec) ?? port.anchorOf(sec)) : port.anchorOf(sec));
       if (!a) continue;                                        // 无锚点（非对应防区）→ 拒建
