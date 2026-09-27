@@ -19,6 +19,8 @@ export const AGENT_CAPACITY = 256;
 /** ★ 空中层默认悬停高度（米，**相对地表**）——名册（`EnemySpec.airAltitude`）未给时的兜底。
  *  引擎层默认值放这里（`AgentPool` 零三方依赖），玩法层（WorldSpawner）负责填入。 */
 export const AIR_ALTITUDE_DEFAULT = 2.6;
+/** ★ 飞行地形净空（用户定 2026-09-26）：巡航高度至少高出顶层地表这么多（越崖不穿墙） */
+export const AIR_TERRAIN_CLEAR = 1.0;
 /** ★ 空中层悬停浮动（幅度 m / 角频率 rad/s）——**纯表现**：只加在渲染/贴地回写上，
  *  不影响 AI 的水平决策；相位用 `AgentPool.phase`（每只随机）错开，避免整队同频上下摆。
  *  L2（SwarmBatch 实例矩阵）与 L3（WorldMode.clampCharacter）两条路径共用，口径必须一致。 */

@@ -12,7 +12,7 @@ import type { CharacterBase } from '../../entity/CharacterBase';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 import type { RasterMap } from '../../services/map/RasterMap';
 import { eventBus } from '../../core/EventBus';
-import { AIR_BOB_AMP, AIR_BOB_RATE } from '../swarm/AgentPool';
+import { AIR_BOB_AMP, AIR_BOB_RATE, AIR_TERRAIN_CLEAR } from '../swarm/AgentPool';
 
 export interface CharacterClampDeps {
   raster: RasterMap;
@@ -39,14 +39,20 @@ export class CharacterClamp {
     //     否则升/降格瞬间会"跳一下"。
     if (e.airborne) {
       const p = e.position;
-      // ★ 飞行自由高度（用户定 2026-09-26）：巡航高度世界系保持（首帧按地表+悬停高初始化）——
-      //   不再每帧跟地表（飞过高台不被迦升）；外部可直接改 airCruiseY 自由调高度。
+      // ★ 飞行自由高度 + **地形净空**（用户定 2026-09-26）：巡航高度世界系保持
+      //   （首帧按地表+悬停高初始化；平缓地形不抖），但**至少高出顶层地表 AIR_TERRAIN_CLEAR**——
+      //   越崖自动升高飞过，不再直接穿墙；与 L2 SwarmBatch 同口径。
+      let gy = this.deps.raster.surfaceHeightAt(p.x, p.z);
+      const md = e.controller?.moveDir;   // ★ 前瞻：提前 3m 采样，遇崖先爬升（减少贴面穿模）
+      if (md && (md.x !== 0 || md.y !== 0)) {
+        const gyA = this.deps.raster.surfaceHeightAt(p.x + md.x * 3, p.z + md.y * 3);
+        if (Number.isFinite(gyA) && gyA > gy) gy = gyA;
+      }
       if (e.airCruiseY === 0) {
-        const gy = this.deps.raster.surfaceHeightAtFor(p.x, p.z, p.y);
         e.airCruiseY = gy + Math.max(0.4, (e.airAltitude && e.airAltitude > 0) ? e.airAltitude : 2.6);
       }
       const bob = Math.sin(performance.now() / 1000 * AIR_BOB_RATE + e.airPhase) * AIR_BOB_AMP;
-      const targetY = e.airCruiseY + bob;
+      const targetY = Math.max(e.airCruiseY, gy + AIR_TERRAIN_CLEAR) + bob;
       const dy = targetY - p.y;
       p.y += dy > 0 ? Math.min(dy, 3 * dt) : Math.max(dy, -3 * dt);
       return;
