@@ -1010,7 +1010,7 @@ console.log('[12c] 总攻：50m 环生成 + 满编上限');
   };
   const scA = new SquadCreation('melee', 12);
   scA.tick(0, portA, 3);
-  ok(calls.length === 3 && calls.every((c) => Math.abs(c.x - 50) <= 1.5 && c.z === 0),
+  ok(calls.length === 6 && calls.every((c) => c.x >= 48 && c.x <= 58 && c.z === 0),
     '★ 总攻：在距舰 50m 环部署（不并入现役队、不用平时锚）');
 }
 
@@ -1035,7 +1035,7 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
   const o3 = br.writer.store.get(3)!.order;
-  ok(o1.kind === 'march' && o2.kind === 'march' && o3.kind === 'march', '★ 总攻：全兵种均为 march（去掉其他指令）');
+  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o3.kind === 'patrol' && o1.mission === 'patrol', '★ 总攻：全兵种均为 patrol（到顶维持巡逻；去掉其他指令）');
   ok(Math.abs(o1.target.x - 200) < 0.01 && Math.abs(o1.target.z) < 0.01
     && Math.abs(o2.target.x - 200) < 0.01 && Math.abs(o3.target.x - 200) < 0.01,
     '★ 总攻：全体目标 = 舰船（强制寻路到舰）');
@@ -1044,7 +1044,7 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
     phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.2);
-  ok(br.writer.store.get(2)!.order.kind === 'march' && Math.abs(br.writer.store.get(2)!.order.target.x - 200) < 0.01,
+  ok(br.writer.store.get(2)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(2)!.order.target.x - 200) < 0.01,
     '★ 强制令绕稳定门（不被 kept 拦）');
   // ★ 总攻强制覆盖所有人（含玩家手动令；用户定 2026-09-26）
   br.writer.store.set(1, {
@@ -1052,7 +1052,7 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
     phase: 'executing', progress: 1, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.4);
-  ok(br.writer.store.get(1)!.order.kind === 'march' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
+  ok(br.writer.store.get(1)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
     '★ 总攻强制覆盖玩家手动令（无例外）');
 }
 

@@ -49,26 +49,27 @@ export class SquadCreation {
   /** 每拍检查全部对应防区：缺就补、有就不放
    *  @param every 补兵间隔（秒；**策略在兵种管理器**，此处只执行） */
   tick(now: number, port: CreationPort, every: number): number {
+    // ★ 总攻：提速补兵（用户定）——间隔 1s、每波最多 6 只，直到补满缺口
+    const assault = port.assault?.() ?? false;
+    const everySec = assault ? Math.min(every, 1) : every;
     for (const sec of port.mainSectors()) {
       if ((this.grace.get(sec) ?? 0) > now) continue;          // 节拍/在途 → 幂等
       const target = port.unitTarget ? port.unitTarget(this.role) : this.unitTarget;
       const alive = port.aliveInSector(this.role, sec);
       if (alive >= target) continue;                           // 已满编 → 不放
-      // ★ 补兵优先：有缺编队 → 在**队长身旁**投放（并入队伍，由队长指挥）；否则按锚点建新队
-      const assault = port.assault?.() ?? false;
       // ★ 总攻（用户定 2026-09-26）：**新兵一律在 50m 环（主攻方向各防区中角）部署**，
       //   不并入现役队（不贴舰刷兵）。
       const fill = assault ? null : (port.fillTarget?.(this.role, sec) ?? null);
       const a = fill ? { x: fill.x, z: fill.z }
         : (assault ? (port.assaultAnchor?.(sec) ?? port.anchorOf(sec)) : port.anchorOf(sec));
       if (!a) continue;                                        // 无锚点（非对应防区）→ 拒建
-      const need = Math.min(BURST, target - alive, fill ? fill.gap : Number.POSITIVE_INFINITY);
+      const need = Math.min((assault ? 6 : BURST), target - alive, fill ? fill.gap : Number.POSITIVE_INFINITY);
       let n = 0;
       for (let k = 0; k < need; k++) {
         if (!port.spawn(this.role, a.x + (k - 1) * 1.5, a.z)) break;
         n++;
       }
-      if (n > 0) { this.grace.set(sec, now + every); this.spawned += n; }
+      if (n > 0) { this.grace.set(sec, now + everySec); this.spawned += n; }
     }
     return this.spawned;
   }

@@ -68,6 +68,10 @@ export interface LiveView {
   posture?(): number;
   /** ★ 总攻（可选）：强制全体到舰，去掉其他指令/寻路 */
   assault?(): boolean;
+  /** 硬通行（可选）：总攻目标吸附用 */
+  blockedAt?(x: number, z: number): boolean;
+  /** 池代理位置（可选；卡死判官在册用——缺它则代理永不回收） */
+  agents?(): readonly { uid: number; x: number; z: number }[];
   /** ★ 按队给防区**前沿推进点**（可选） */
   frontOfSquad?(id: number): { x: number; z: number } | null;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
@@ -118,10 +122,19 @@ export class EngineBridge {
   constructor(private readonly live: LiveView) {
     this.sectors.build(4);   // 默认四扇区（引擎初始化）
     this.timers = new TimerManager({
-      roster: () => (this.live.enemies?.() ?? []).map((e) => e.uid),
+      // ★ 判官在册（用户定 2026-09-26）：**L3 实体 + 池代理**——此前只有 L3，
+      //   卡死的池代理永不回收（还占配额 → 补兵以为满员不补）。
+      roster: () => {
+        const out: number[] = [];
+        for (const e of this.live.enemies?.() ?? []) out.push(e.uid);
+        for (const a of this.live.agents?.() ?? []) out.push(a.uid);
+        return out;
+      },
       posOf: (uid) => {
         const e = (this.live.enemies?.() ?? []).find((x) => x.uid === uid);
-        return e ? { x: e.x, z: e.z } : null;
+        if (e) return { x: e.x, z: e.z };
+        const a = (this.live.agents?.() ?? []).find((x) => x.uid === uid);
+        return a ? { x: a.x, z: a.z } : null;
       },
       exemptOf: (uid) => this.live.exemptOf?.(uid) ?? null,
       onExpire: (uid, why) => {
@@ -297,11 +310,25 @@ export class EngineBridge {
     //   全体（全兵种）强制令 march 到舰；强制令走玩家同路径（绕稳定门）；
     //   对局不再经 decideChain/管理器目标下令。玩家手动令保留最高优先。
     if (this.live.assault?.() === true) {
+      // ★ 目标吸附（用户定 2026-09-26）：舰船精确点可能不可走（舰体/坑）→ 吸附到舰旁最近可行点
+      let tx = p.x, tz = p.z;
+      if (this.live.blockedAt?.(tx, tz)) {
+        let found = false;
+        outer: for (let r = 2; r <= 8 && !found; r += 2) {
+          for (let k = 0; k < 8; k++) {
+            const a2 = (k / 8) * Math.PI * 2;
+            const qx = p.x + Math.cos(a2) * r, qz = p.z + Math.sin(a2) * r;
+            if (!this.live.blockedAt(qx, qz)) { tx = qx; tz = qz; found = true; break outer; }
+          }
+        }
+      }
       for (const rec of [...this.squads.all()]) {
         // ★ 强制覆盖所有人（用户定 2026-09-26：含玩家手动令）——总攻阶段无例外
+        // ★★ 到顶后维持巡逻（用户定 2026-09-26）：kind=patrol → 到锚（舰）后队长自维持
+        //   18m 跨腿来回——持续移动天然躲开卡死判官（静止 25s 被收），也保持压制
         const order: SquadOrder = {
-          kind: 'march', source: 'engine', target: { x: p.x, z: p.z },
-          threat: { x: p.x, z: p.z }, seq: 0, ttl: 0,
+          kind: 'patrol', source: 'engine', target: { x: tx, z: tz }, mission: 'patrol',
+          threat: { x: tx, z: tz }, seq: 0, ttl: 0,
         };
         const ok = this.writer.issue(rec.id, order, { now, force: true });
         if (ok && !this.shadow) this.live.emit?.(rec.id, order, now);

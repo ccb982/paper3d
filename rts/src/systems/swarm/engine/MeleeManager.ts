@@ -12,8 +12,8 @@ import type { SquadManager } from './SquadManager';
 export const MELEE_POLICY = {
   /** 接敌距离（米）：平时压到离玩家这么近就停 */
   ENGAGE: 12,
-  /** ★ 总攻接敌距离（用户定 2026-09-26）：**压到近战攻距内**（否则停在 12m 外看着像“呆住”不打） */
-  ENGAGE_ASSAULT: 3,
+  /** ★ 总攻接敌距离（用户定 2026-09-26）：**必须进入近战攻距**（>2.5m 会停在攻距外→不交火→被卡死判官吃掉） */
+  ENGAGE_ASSAULT: 1.5,
   /** ★ 每防区目标人数（按占比配置；补到满编） */
   UNITS_PER_SECTOR: 6,
   /** ★ 补兵节拏（秒；事态驱动 slow→fast） */

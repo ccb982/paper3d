@@ -299,6 +299,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       creation: () => swarm.data.combatCreationPort(),
       posture: () => swarm.data.postureP,
       assault: () => swarm.data.battlePosture === 'assault',   // ★ 总攻：强制全体到舰
+      blockedAt: (x, z) => swarm.data.blockedAt(x, z),   // 总攻目标吸附用
+      agents: () => {   // ★ 池代理位置（卡死判官在册用）
+        const p = swarm.pool; const out: { uid: number; x: number; z: number }[] = [];
+        for (let i = 0; i < p.count; i++) out.push({ uid: p.swarmUid[i], x: p.x[i], z: p.z[i] });
+        return out;
+      },
       // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
       frontOfSquad: (id) => {
         let sec = tactics?.battalions.deployPlan.get(id) ?? -1;
