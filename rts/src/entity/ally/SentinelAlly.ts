@@ -9,7 +9,6 @@
 
 import type * as THREE from 'three';
 import { GroundStationaryAlly } from './GroundStationaryAlly';
-import type { EntityBase } from '../EntityBase';
 import type { FluidEffect } from '../../vendor/player/fluid/FluidEffect';
 
 /** ★ 站桩模式（祖宗）：以自身为中心的索敌/攻击参数

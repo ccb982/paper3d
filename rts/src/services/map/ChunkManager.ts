@@ -1145,12 +1145,6 @@ export class ChunkManager {
    *  细块统一单档（FINE_S_NEAR），建一次不重建（防"反复删/反复创建"）。 */
 
   /** 玩家点到 chunk 矩形最近点的水平距离（米；点在块内 = 0） */
-  private chunkDistToPlayer(cx: number, cz: number, px: number, pz: number): number {
-    const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
-    const dx = px < x0 ? x0 - px : (px > x0 + CHUNK_SIZE ? px - (x0 + CHUNK_SIZE) : 0);
-    const dz = pz < z0 ? z0 - pz : (pz > z0 + CHUNK_SIZE ? pz - (z0 + CHUNK_SIZE) : 0);
-    return Math.hypot(dx, dz);
-  }
 
   /** ★ 销毁 chunk（>DESTROY_RADIUS）：释放全部视觉/物理/索引（封存上限，防内存累积）；
    *  数据与烘焙缓存保留 → 回程 syncChunks 命中缓存重建。 */

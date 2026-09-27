@@ -209,7 +209,6 @@ export class NavDebugMap {
       const sp = this.shipAt();
       const [sx, sz] = p2(sp.x, sp.z);
       const sPx = S / this.span;
-      const fort = this.swarm.data.fortify;
       const band = this.swarm.data.fortifyBand;   // ★ 单源（含 pushM/前推棘轮）
       const rLo = band.rLo;
       const rHi = band.rHi;

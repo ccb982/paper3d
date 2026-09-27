@@ -37,7 +37,6 @@ export const CLIMB_TRACE: {
 let CLIMB_SEQ = 0;
 /** ★ 高落差硬壁斥力（用户定 2026-09-26）：生效半径（米，外为 0）/ 采样档（米）/ 推力（速度占比） */
 const WALL_REPEL_R = 2.0;
-const WALL_REPEL_D = [0.6, 1.2, 1.8] as const;
 const WALL_PUSH = 0.6;
 
 /** ★ 脱埋贴地（两载体同口径）：y 感知选层；若停在"顶层地表之下 ≥UNBURY_DEPTH"的空腔

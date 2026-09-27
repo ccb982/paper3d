@@ -19,20 +19,19 @@ import { PostureFn } from '../PostureFn';
 import { RANGED } from '../RangedTactics';
 import { WALL_DH, buildBonus, featsAt as featsAtSrc, scoreAt as scoreAtSrc, scoreForUnit, weightsFor,
   type CellFeats, type ScoringSources } from '../TerrainScoring';
-import { TerrainSemantics, Sem, SEM_NAMES, L1_R } from '../TerrainSemantics';
+import { TerrainSemantics, Sem, SEM_NAMES } from '../TerrainSemantics';
 import { HoleMask } from '../HoleMask';
 import { HoleTable } from '../HoleTable';
 import { samplerFor } from '../../../services/map/TerrainSampler';
 import { DANGER } from '../SwarmDanger';
 import { PassTable } from '../nav/PassTable';
-import { RosterController } from '../RosterController';
+import { RosterController, combatShare } from '../RosterController';
 import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
 import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../../entity/CoverEntity';
-import type { SquadRating } from '../SquadTable';
-import type { UnitRole, SquadType, MobTactics } from '../../../entity/SwarmUnit';
+import type { UnitRole, SquadType } from '../../../entity/SwarmUnit';
 
 /** ★ 坑底硬阈值（低于此高度不可走 → 禁止再挖；与 EngineerManager 端口同口径） */
 const FLOOR_MIN = -1.2;
@@ -63,8 +62,6 @@ export class SwarmData {
     this.spawnMob = ports.mob;
     this.spawnBuilder = ports.builder;
   }
-  /** ★ 逐兵种战术表（名册 `EnemySpec.tactics`；模式层按 mobIndex 提供） */
-  mobTactics: ((mobIndex: number) => MobTactics | null) | null = null;
   /** ★ 当前态势（引擎内部变量；驱动各编队命令强度） */
   battlePosture: BattlePosture = 'fortify';
   /** ★ 态势函数（M2：p = clamp(schedule(t) + provocation)；连续权重插值） */
@@ -136,8 +133,6 @@ export class SwarmData {
   private lastShipZ = 0;
   /** ★ 命令夹环计数（探针/调试） */
   cmdLogRingClamps = 0;
-  /** ★ 前线永不再贴近舰船的余量（米） */
-  private static readonly SHIP_CLEAR = 16;
 
   /** ★ 环形一日推进（用户定 2026-09-25，**p 驱动**）：
    *  · **外圈（大圈 / maxD）：一直收缩**——只减不增，不再外扩（旧 180 休整外径已删）
@@ -414,6 +409,7 @@ export class SwarmData {
     return {
       mainSectors: () => this.mainSectors,
       aliveInSector: (role, sec) => this.aliveRoleInSector(role, sec),
+      unitTarget: (role) => this.combatUnitTarget(role),
       anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
       spawn: (role, x, z) => {
         if (!this.spawnMob) return false;
@@ -422,6 +418,17 @@ export class SwarmData {
         return true;
       },
     };
+  }
+
+  /** ★ 每防区目标人头（用户定 2026-09-26）：占比（RosterController.combatShare）× 每区编制基数；
+   *  若场上该兵种占比低（roster 缺口）→ 临时 +2 偏置（消费 gap，防死输出）。 */
+  private combatUnitTarget(role: 'melee' | 'ranged' | 'flyer' | string): number {
+    if (role !== 'melee' && role !== 'ranged' && role !== 'flyer') return 0;
+    let n = Math.max(1, Math.round(combatShare(role) * 12));
+    const gap = this.roster.dbg.gap;
+    if ((gap === 'shield' || gap === 'assault') && role === 'melee') n += 2;
+    else if (gap === 'ranged' && role === 'ranged') n += 2;
+    return n;
   }
 
   /** 防区内本兵种现役人数；未部署队按最近锚点归档（防超额刷兵） */
@@ -497,9 +504,6 @@ export class SwarmData {
   }
 
   /** 旧部署维护（engineeringTick）已删除（用户定 2026-09-25）：战斗队由新引擎发令、工兵由 EngineerManager。 */
-  private _removedEngineeringTick(): void {
-    /* 保留空壳仅为引用清理过渡；无调用点，随本文件下次瘦身删除。 */
-  }
 
   /** ★ 远程有利位置（制高点 / 掩体后；含"掩体真的挡子弹"校验）。
    *  规则：距离在 [0.5R, 1.05R]（能射到且不贴脸）且 **≥ minDist**（边撤边打时要求更远）；

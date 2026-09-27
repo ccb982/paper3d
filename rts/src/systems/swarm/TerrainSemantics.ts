@@ -144,7 +144,6 @@ export class TerrainSemantics {
   private readonly passable = new Uint8Array(SIDE * SIDE);
   private readonly hardRole = new Uint8Array(SIDE * SIDE);   // pit / h<-1.2
   private readonly water = new Uint8Array(SIDE * SIDE);
-  private smp: FieldSampler | null = null;
   private regionsArr: SemRegion[] = [];
 
   get isReady(): boolean { return this.ready; }
@@ -155,7 +154,6 @@ export class TerrainSemantics {
   // ============================================================
   build(sampler: FieldSampler, cx: number, cz: number): void {
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
-    this.smp = sampler;
     this.ax = cx; this.az = cz;
     this.sx = cx - L1_R;
     this.sz = cz - L1_R;

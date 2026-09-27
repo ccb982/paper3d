@@ -226,7 +226,7 @@ export class SquadNavigator {
     if (state.climbCred) CLIMB_ROUTE_STATS.kept++;
   }
 
-  ensurePath(squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0): void {
+  ensurePath(_squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0): void {
     if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
     const tgt = state.order.target;
     if (!tgt) return;
@@ -385,13 +385,6 @@ export class SquadNavigator {
       if (!lead) continue;
       const tgt = currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
-      const dx = tgt.x - lead.x;
-      const dz = tgt.z - lead.z;
-      const len = Math.hypot(dx, dz);
-      const fx = len > 1e-3 ? dx / len : 1;
-      const fz = len > 1e-3 ? dz / len : 0;
-      const type = squad.type;
-      const singleton = squad.singleton;
       for (const u of members) {
         // ★ 远程：**统一形式（用户定 2026-09-25）**——选位/风筝只**产出一个目标点**，
         //   移动走同一条链（`edgeGreedy` 格边步 + 可行性）；不可达/未到位 → 站住打。禁止旁路直推。

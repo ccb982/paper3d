@@ -9,7 +9,6 @@ import * as THREE from 'three';
 import type { GameSession } from '../../core/Session';
 import type { RasterMap } from '../../services/map/RasterMap';
 import type { EntityManager } from '../../entity/EntityManager';
-import type { CoverEntity } from '../../entity/CoverEntity';
 import type { WorldUIManager } from '../../ui/world/WorldUIManager';
 import type { AllyBase } from '../../entity/ally/AllyBase';
 import { SentinelAlly } from '../../entity/ally/SentinelAlly';

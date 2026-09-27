@@ -45,7 +45,7 @@ import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Directo
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
-import {SWARM, AUTONOMY, STUCK, REACH_SHORT_LOS_R } from './SwarmConfig';
+import {SWARM, AUTONOMY, REACH_SHORT_LOS_R } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
 
@@ -93,7 +93,6 @@ export interface SwarmHooks {
 const _flow = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
-const _dir = { x: 0, z: 0 };   // ★ 地形辅助 scratch（坡正面混合；零分配）
 export class SwarmSystem {
   /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
   readonly ledger = new SwarmLedger();
@@ -285,12 +284,12 @@ export class SwarmSystem {
   // 每帧驱动（模式层 explore 阶段调用）
   // ============================================================
   update(dt: number, hooks: SwarmHooks): void {
+    const raster = RasterMap.current;
     const _te = entityPerf.enabled;
     const t0 = _te ? performance.now() : 0;
     this.grid.rebuild(this.pool);
     const t1 = _te ? performance.now() : 0;
     // ★ P2：流场重建（3Hz 或中心移动 > 1 格）——源 = 玩家 + 舰船
-    const raster = RasterMap.current;
     this.flowTimer -= dt;
     if (raster && (this.flowTimer <= 0 || this.flow.needsRebuild(hooks.playerX, hooks.playerZ))) {
       this.flowTimer = 1 / SWARM.FLOW_HZ;
@@ -461,7 +460,6 @@ export class SwarmSystem {
   syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0): void {
     if (!this.batch) return;
     const t0 = entityPerf.enabled ? performance.now() : 0;
-    const raster = RasterMap.current;
     // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
     this.batch.sync(
       this.pool,

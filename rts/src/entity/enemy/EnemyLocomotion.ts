@@ -26,7 +26,6 @@ export class EnemyLocomotion {
   private heldZ = 0;
   private heldUntil = 0;
   /** 危险探测距离（米；> 碰撞半宽，提前一个身位避开坑沿） */
-  private static readonly PROBE = 1.6;
   /** 探针：承诺方向/到期 + 最近一次实际期望方向（诊断用） */
   private lastDesiredX = 0;
   private lastDesiredZ = 0;
@@ -34,7 +33,6 @@ export class EnemyLocomotion {
     return { x: this.heldX, z: this.heldZ, until: this.heldUntil, dx: this.lastDesiredX, dz: this.lastDesiredZ };
   }
   /** 陡坡判定：1.2m 内升 > 1.0m（≈40°）= 墙 */
-  private static readonly STEEP_RISE = 1.0;
 
   /**
    * 解析本帧移动方向（候选选择：禁向量合成）。

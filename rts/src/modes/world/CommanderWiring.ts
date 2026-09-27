@@ -81,6 +81,4 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   };
   // ★ 统一装配原子生成口（此后创建只经四兵种管理器；旧名单/班底/大队创建已删）
   d.data.attachSpawnPorts({ mob: spawnMobPort, builder: spawnBuilderPort });
-  // ★ 逐兵种战术表（名册 EnemySpec.tactics）
-  d.data.mobTactics = (mobIndex) => d.mobDefs[mobIndex]?.tactics ?? null;
 }

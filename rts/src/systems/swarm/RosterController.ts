@@ -14,6 +14,15 @@ export const ROSTER_TARGET: Record<RosterRole, number> = {
   shield: 0.20, assault: 0.34, ranged: 0.20, logistics: 0.12, builder: 0.14, other: 0,
 };
 
+/** ★ 战斗三兵种占比（从 ROSTER_TARGET 推导；供管理器按占比补到满编；用户定 2026-09-26）
+ *  melee = shield+assault；飞行独立给 0.10（名册无飞行比） */
+export function combatShare(role: 'melee' | 'ranged' | 'flyer'): number {
+  const r = ROSTER_TARGET;
+  if (role === 'melee') return r.shield + r.assault;
+  if (role === 'ranged') return r.ranged;
+  return 0.10;
+}
+
 interface SquadLike {
   type: string;
   builders: boolean;

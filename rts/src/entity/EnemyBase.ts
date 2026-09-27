@@ -16,15 +16,12 @@ import type { EntityManager } from './EntityManager';
 import type { EntityBase, EntityHitPoint, RetireReason } from './EntityBase';
 import type {
   SwarmCarrier, SteerIntent, SwarmSnapshot, UnitRole, UnitAttackType,
-  SquadOrderKind, DirectiveKind, TacticalOrder, UnitDirective,
+  SquadOrderKind, DirectiveKind,
 } from './SwarmUnit';
 import {
-  orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE, roleBucket,
+  orderCode, orderFromCode, directiveCode, directiveFromCode, FIRE_FREE,
   UNIT_HIT_HOLD_S,
 } from './SwarmUnit';
-import {
-  MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
-} from './AtomExecutor';
 import { autoGroundSinkFromFrame } from '../services/fx/groundSink';
 import { EnemyLocomotion } from './enemy/EnemyLocomotion';
 import { EnemyBrain } from './enemy/EnemyBrain';
@@ -35,7 +32,6 @@ import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
-import { ENEMY_ENGAGE_FLOOR } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
 import { RasterMap } from '../services/map/RasterMap';
 import { eventBus } from '../core/EventBus';
@@ -74,8 +70,6 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   /** ★ 施工能力（会挖战壕/造掩体；与 role 解耦；缺省 false） */
   canBuild?: boolean;
 }
-
-const _atomDir = { x: 0, z: 0 };
 
 export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private assetRef: CharacterFxAssetSource;
@@ -141,7 +135,6 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   /** ★ E5：是否眩晕中（行为器判定） */
   get isStunned(): boolean { return this.brain.isStunned; }
 
-  private fbCd = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */

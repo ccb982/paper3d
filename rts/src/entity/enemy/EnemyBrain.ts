@@ -37,7 +37,6 @@ export class EnemyBrain {
   private fbLifetime = 2.4;
   private fbAim = 0;
   private fbMuzzle = 0;
-  private fbSpread = 0.05;
   private fbSkin = 'arrow';
   private fbCd = 0;
 
@@ -106,7 +105,6 @@ export class EnemyBrain {
           this.fbLifetime = Number(p.lifetime ?? 2.4);
           this.fbAim = Number(p.aimHeight ?? 0);
           this.fbMuzzle = Number(p.muzzleHeight ?? 0);
-          this.fbSpread = Number(p.spread ?? 0.05);
           this.fbSkin = String(p.skin ?? 'arrow');
           return;
         }

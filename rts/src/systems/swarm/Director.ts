@@ -6,7 +6,7 @@
 // （旧实现里的刷怪订单/预算/计划全部删除；兵力由账本 releaseCap + 指挥器释放。）
 // ============================================================
 
-import { neutralThreat, type ThreatProfile } from './EnemyScaling';
+import type { ThreatProfile } from './EnemyScaling';
 
 /** 攻击意图（代理索敌偏好；255 = 无意图，维持"游走 + 仇恨圈"旧观感） */
 export const INTENT_PLAYER = 0;
@@ -44,11 +44,9 @@ export class Director {
   private hooks: DirectorHooks | undefined;
   private warned = false;
   private assaulted = false;
-  private threat: ThreatProfile = neutralThreat();
 
   /** 威胁档案（UI 标签/难度仍由模式层读取；本模块只存不消费） */
-  setThreat(t: ThreatProfile): void {
-    this.threat = t;
+  setThreat(_t: ThreatProfile): void {
   }
 
   /** 新的一天：复位播报状态 */

@@ -44,7 +44,7 @@ export class TimerManager {
   constructor(private readonly h: TimerHost) {}
 
   /** 1Hz：卡死窗口推进（now = 实秒） */
-  tick(now: number): void {
+  tick(_now: number): void {
     const dbg = this.dbg;
     dbg.tracked = 0;
     dbg.exempt = 0;

@@ -239,7 +239,7 @@ export class EngineBridge {
     return Math.min(dp, ds) <= this.fireRange;
   }
 
-  private situation(now: number): void {
+  private situation(_now: number): void {
     const p = this.pos.player();
     if (!p) return;
     this.protect.refresh(this.pos.squadOf, p.x, p.z);

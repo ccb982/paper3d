@@ -7,7 +7,6 @@
 // 目标真源 = 新 store（`setLiveOrderSource` 注入；旧板只作走廊/滞回缓存）。
 // ============================================================
 
-import type { SquadType } from '../../../entity/SwarmUnit';
 import type { SquadOrderState } from './State';
 
 /** 活令（新 store 的单源视图；kind/G/P） */

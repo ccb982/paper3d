@@ -6,7 +6,6 @@
 // ============================================================
 import { RasterMap } from '../services/map/RasterMap';
 
-const DARK: [number, number, number] = [10, 14, 22];
 
 export class SpawnSelect {
   spawn: { x: number; z: number } | null = null;
@@ -31,8 +30,6 @@ export class SpawnSelect {
   private cz = 0;
   private spanM = 480;                         // 画布横跨多少米（滚轮 120~1200）
   private dragging = false;
-  private downX = 0;
-  private downY = 0;
   private lastX = 0;
   private lastY = 0;
   private moved = 0;
@@ -96,7 +93,7 @@ export class SpawnSelect {
 
     this.canvas.addEventListener('pointerdown', (e) => {
       this.dragging = true; this.moved = 0;
-      this.downX = this.lastX = e.clientX; this.downY = this.lastY = e.clientY;
+      this.lastX = e.clientX; this.lastY = e.clientY;
       this.canvas.setPointerCapture(e.pointerId);
       this.canvas.style.cursor = 'grabbing';
     });
@@ -115,7 +112,6 @@ export class SpawnSelect {
       if (this.moved < 6) {                       // 单击 = 落点
         const r = this.canvas.getBoundingClientRect();
         const u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
-        const mpp = this.spanM / this.box;
         this.pick(this.cx + (u - 0.5) * this.spanM, this.cz + (v - 0.5) * this.spanM);
       }
     });

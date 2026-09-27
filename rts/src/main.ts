@@ -52,7 +52,7 @@ import { simNow, setSimNow } from './services/SimClock';
 import { FastLane } from './rts/FastLane';
 import { Timeline } from './ui/Timeline';
 import { CopyInfoPanel } from './ui/CopyInfoPanel';
-import { GAME_MIN, AUTONOMY } from './systems/swarm/SwarmConfig';
+import { AUTONOMY } from './systems/swarm/SwarmConfig';
 import { EngineBridge, type LiveSquad } from './systems/swarm/engine/EngineBridge';
 import { squadViews, type SquadViewPort } from './systems/swarm/engine/SquadView';
 import { SquadRegistry } from './systems/swarm/squad/SquadRegistry';
@@ -225,7 +225,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
     playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
-  hooks.mobTactics = (mi) => mobDefs[mi]?.tactics ?? null;
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
   swarm.data.buildCover = (x, z, v) =>
     buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, { x: spawn.x, z: spawn.z });
@@ -331,11 +330,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     });
     shadowBridge.directMode = DIRECT;   // ★ ?direct=1：关蜂群引擎（只执行玩家指令）
     // ★ 队长核（重写 P2）：实机队长接令/分流/汇报；位置单源 = 队长
-    const leaderPosOf = (id: number): { x: number; z: number } | null => {
-      const sq = swarm.squads.get(id);
-      const lead = sq?.members.get(sq.leaderUid);
-      return lead ? { x: lead.x, z: lead.z } : null;
-    };
     const roleOf = (id: number): 'engineer' | 'flyer' | 'ranged' | 'melee' => {
       const sq = swarm.squads.get(id);
       const def = sq ? mobDefs[sq.mobKind] as { role?: string; isAir?: boolean } | undefined : undefined;
@@ -366,9 +360,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
         leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
-        mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,
         applyDirective: (uid, order, dir, until, ax, az) => swarm.applyDirectivePort(uid, order, dir, until, ax, az),
+        mobTactics: (mi) => mobDefs[mi]?.tactics ?? null,
       },
     );
     // ★ 执行态单源（队长核）：SwarmSystem 的 steer/follow/寻路读这里；旧黑板只作 UI 镜像
@@ -498,7 +492,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     clampVehicle: () => {},
     platformTopAt: () => null,
   });
-  const t0Ms = performance.now();
   // ★ 加速（用户定 2026-09-25）：只跑 AI 性能开销小；dt 缩放，日进度走**模拟时钟**
   let speed = 1;
   let simT = 0;
@@ -623,6 +616,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     return hit ? { x: hit.point.x, z: hit.point.z } : null;
   };
   /** ★ 手动放置一窝敌兵（force：可放水里/坑里；调试接口，探针同口） */
+  /** ★ **仅调试/探针**：手动放敌（玩法创建只走四兵种管理器；此口不参与玩法） */
   const placeEnemyAt = (x: number, z: number): boolean => {
     const def = mobDefs.find((d) => d.canBuild !== true && d.isAir !== true) ?? mobDefs[0];
     return def ? spawner.spawnOne(def, x, 0, z, undefined, -1, true) : false;

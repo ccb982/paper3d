@@ -9,7 +9,7 @@ import type { SwarmSystem } from '../systems/swarm/SwarmSystem';
 import type { EnemyBase } from '../entity/EnemyBase';
 import type { SquadView, SquadViewPort } from '../systems/swarm/engine/SquadView';
 import { orderCn, directiveCn, sourceCn } from '../ui/cn';
-import { orderFromCode, directiveFromCode } from '../entity/SwarmUnit';
+import { directiveFromCode } from '../entity/SwarmUnit';
 
 interface TraceEvent {
   t: number;                 // 秒（performance.now/1000）
@@ -51,7 +51,7 @@ export class AiTrace {
     private readonly swarm: SwarmSystem,
     private readonly enemies: EnemyBase[],
     private readonly seed: number,
-    private readonly names: readonly string[],
+    names: readonly string[],
     /** ★ 引擎只读视图（替代旧镜像板） */
     private readonly view?: SquadViewPort,
   ) {

@@ -14,6 +14,8 @@ export interface CreationPort {
   mainSectors(): readonly number[];
   /** 该防区本兵种**现役人数**（按人头补到满编） */
   aliveInSector(role: MobRole, sec: number): number;
+  /** ★ 该防区目标人头（按占比推导；接线层给；未接 = 用构造默认） */
+  unitTarget?(role: MobRole): number;
   /** 防区部署锚点（无 = 该区不可创建） */
   anchorOf(sec: number): { x: number; z: number } | null;
   /** 原子生成口（只被管理器调用） */
@@ -41,11 +43,12 @@ export class SquadCreation {
   tick(now: number, port: CreationPort): number {
     for (const sec of port.mainSectors()) {
       if ((this.grace.get(sec) ?? 0) > now) continue;          // 在途 → 幂等
+      const target = port.unitTarget ? port.unitTarget(this.role) : this.unitTarget;
       const alive = port.aliveInSector(this.role, sec);
-      if (alive >= this.unitTarget) continue;                  // 已满编 → 不放
+      if (alive >= target) continue;                           // 已满编 → 不放
       const a = port.anchorOf(sec);
       if (!a) continue;                                        // 无锚点（非对应防区）→ 拒建
-      const need = Math.min(BURST, this.unitTarget - alive);
+      const need = Math.min(BURST, target - alive);
       let n = 0;
       for (let k = 0; k < need; k++) {
         if (!port.spawn(this.role, a.x + (k - 1) * 1.5, a.z)) break;

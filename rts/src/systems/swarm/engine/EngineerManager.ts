@@ -241,7 +241,6 @@ export class EngineerManager extends RoleManager {
       // ---- 每拍复检（件必须仍合法；用户定 2026-09-26） ----
       if (spot) {
         const k = keyOf(spot.x, spot.z);
-        const d = Math.hypot(spot.x - ship.x, spot.z - ship.z);
         let ang = Math.atan2(spot.z - ship.z, spot.x - ship.x);
         if (ang < 0) ang += TAU;
         const inSec = sec >= 0 && secOfAngle(ang) === sec;
