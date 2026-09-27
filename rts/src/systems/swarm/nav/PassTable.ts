@@ -78,7 +78,7 @@ export class PassTable {
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
 
-  /** 建表（一次；活动窗口与 TerrainScore 同网格）。切工事/挖掘不重建。 */
+  /** 建表（一次；活动窗口与地形网格同步）。切工事/挖掘不重建。 */
   build(raster: RasterMap, cx: number, cz: number, r: number): void {
     const t0 = performance.now();
     // ★ 格对齐块格（4m=块）：格心即块心 → 高度/角色/裁决与地形表 1:1（用户定 2026-09-24）

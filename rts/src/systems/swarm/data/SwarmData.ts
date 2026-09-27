@@ -9,7 +9,6 @@
 // 消费方：新引擎（经 main/LiveView 单源读取）、队长核端口、导航/SteerPick 表桥、UI/探针只读。
 // ============================================================
 
-import { squadTypeOf } from '../../../entity/SwarmUnit';
 import { RasterMap } from '../../../services/map/RasterMap';
 import { onShipHighland } from '../tactics/SectorBuilder';
 import type { SwarmSystem } from '../SwarmSystem';
@@ -676,7 +675,7 @@ export class SwarmData {
   }
 
   /** ★ 工兵要塞需求分（§13 评分体系大改）：防御价值 × 掩体缺口；水/坑/硬边排除（null）
-   *  ——"该守且没掩体"的地方分最高（同源 TerrainScore/UnitStrategy，不另建表） */
+   *  ——"该守且没掩体"的地方分最高（同源 TerrainScoring，不另建表） */
   fortifyNeed(x: number, z: number): number | null {
     if (this.terrainWallAt(x, z, 1.0)) return null;
     const f = this.scoringFeats(x, z, this.viewPX, this.viewPZ);
