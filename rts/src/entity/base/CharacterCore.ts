@@ -25,10 +25,14 @@ export const UNBURY_DEPTH = 1.2;
 const CLIMB_POINT_TOL = 1.2;
 /** ★ 坡前起爬带（米；在坡点法线前方此范围内即可起爬——"聚在坡下就能爬"） */
 const BASE_NEAR = 2.5;
+/** ★ 兜底触发半径（用户定 2026-09-26 加强）：坡点附近这么远内、**还在下面**就算卡 */
+const FALLBACK_R = 14;
+/** ★ 兜底阈值：首次 10s；之后**反反复复**（1.5s 就重试） */
+const FALLBACK_S = 10;
+const FALLBACK_RETRY_S = 1.5;
 /** ★ 爬升自主速下限（用户定 2026-09-26）：承诺期内停步/零限速不得压死爬坡 */
 const CLIMB_MIN_SPEED = 2.5;
 /** ★ 起爬点半径（用户定 2026-09-26）：**爬坡必须从爬坡点起步**，到点才起 */
-const CLIMB_START_R = 0.6;
 /** ★ 起爬精确记录（用户定）：最近 48 次会话（起点/点位/实测距/结局） */
 export const CLIMB_TRACE: {
   id: number; t: number; phase: string; x: number; z: number; y?: number;
@@ -132,18 +136,10 @@ export const CLIMB_STATS = {
   cred: 0,        // 凭证抵达核心（climbOrdered 帧）
   noRun: 0,       // 有凭证但查不到坡带
   run: 0,         // 查到坡带
-  near: 0,        // 在点 6m 内（聚集区）
-  nearDeep: 0,    // 聚集区：卡在坡面/贴面未对齐（退出分支）
-  nearAlign: 0,   // 聚集区：横移对齐中
-  nearGo: 0,      // 聚集区：正向进点中
-  guardFail: 0,   // 硬性防线不过（本格无 climb 位）
   forced: 0,      // ★ 10s 兜底强制上送次数（用户定 2026-09-26）
   climbSteps: 0,  // 执行上升帧
   units: 0,       // 曾进入爬升态的核数
   sessions: 0,    // 起爬会话（提交）数
-  approach: 0,    // 强制走位帧（退出/横移/进点）
-  badStarts: 0,   // 起爬点偏离 > 起爬半径（应恒 0）
-  startDistMax: 0, // 实测起爬距最大值
   landed: 0,      // 到落点完成会话数
   abandoned: 0,   // 被拉离现场弃约数
   buryFrames: 0,  // 爬升中脚低于表面 >0.3m 的帧数（“卡地里”指标）
@@ -151,13 +147,13 @@ export const CLIMB_STATS = {
 
 export class CharacterCore {
   private everClimbed = false;
-  /** ★ 爬升承诺（用户定 2026-09-26）：一旦起爬 → 锁存本次坡+落点，不受凭证丢失/steer 过期/限速/到达停步影响，直到落点。 */
-  /** ★ 兜底计时（用户定）：同一坡点旁累计停留（防在点旁卡死） */
+  /** ★ 兜底计时（用户定）：同一坡点旁累计停留（防在点旁卡死；移动中才计） */
   private nearKey: string | null = null;
   private nearS = 0;
   private nearX = 0;
   private nearZ = 0;
-  private wasForced = false;
+  private forcedEver = false;
+  /** ★ 爬升承诺（用户定 2026-09-26）：一旦起爬 → 锁存本次坡+落点，不受凭证丢失/steer 过期/限速/到达停步影响，直到落点。 */
   private session: {
     run: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
     lx: number; lz: number;
@@ -197,11 +193,10 @@ export class CharacterCore {
     dx = inp.dirX * inp.speed * inp.dt;
     dz = inp.dirZ * inp.speed * inp.dt;
 
-    // ---- 凭证式上坡（用户定 2026-09-26 最终口径）：
-    //   一旦起爬 → **承诺（ClimbCommit）**：锁存本次坡+落点，凭证丢失/steer 过期/限速/停步均不得中断，直到落点；
-    //   未起爬时 **强制走位三点式**：①退出坡面 → ②坡底横移对齐 → ③正向进点；
-    //   **起爬必须在爬坡点（≤CLIMB_START_R=0.6m）**，此时才查硬性防线（本格有 climb 位，禁硬边上爬）；
-    //   精确记录：CLIMB_TRACE（起点坐标/点位/实测距/结局）。
+    // ---- 凭证式上坡（用户定 2026-09-26 最终口径：传送带 + 统一上坡点管理）：
+    //   抓上（凭证入区，或 10s 兜底）→ **承诺（ClimbCommit）**：锁存本次坡+落点，凭证丢失/steer 过期/限速/停步均不得中断，直到落点（脚着地）；
+    //   上坡点统一管理：**ClimbBook 认领制**（一单位只归一点；别的点不抢）+ 兜底计时（移动中卡点 10s）；
+    //   硬性防线在抓取时查（本格有 climb 位，禁硬边上爬）；记录：CLIMB_TRACE（起点/点位/实测距/结局）。
     const committed = this.session !== null;
     const uid = inp.uid ?? 0;
     if (committed && inp.climbAnyTerrain) { this.session = null; CLIMB_STATS.abandoned++; climbBook.release(uid); }   // 切到自由爬坡 → 弃约
@@ -214,14 +209,42 @@ export class CharacterCore {
     if (!inp.climbAnyTerrain && !inp.flying && inp.blockCliffClimb && !committed) {
       owned = uid ? climbBook.claimed(uid) : null;
       if (owned && Math.hypot(inp.x - owned.x, inp.z - owned.z) > 12) { climbBook.release(uid); owned = null; }   // 走远 → 释放
-      const cand = owned ?? inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null);
-      if (cand && moving) {
+      // ★ 候选：认领 / 凭证点 / 8 向查表（用户定：轮幅放大，只要在下面就反反复复送）
+      const cands: ClimbRun[] = [];
+      if (owned) cands.push(owned);
+      if (inp.climbPt) cands.push(inp.climbPt as ClimbRun);
+      if (probe.climbPoint) {
+        const dirs: Array<[number, number]> = [[inp.dirX, inp.dirZ], [1, 0], [-1, 0], [0, 1], [0, -1]];
+        for (const [ddx, ddz] of dirs) {
+          if (ddx === 0 && ddz === 0) continue;
+          const q = probe.climbPoint(inp.x, inp.z, ddx, ddz);
+          if (q) cands.push(q as ClimbRun);
+        }
+      }
+      let cand: ClimbRun | null = null;
+      let candD = FALLBACK_R;
+      for (const q of cands) {
+        const dq = Math.hypot(inp.x - q.x, inp.z - q.z);
+        if (dq <= candD) { cand = q; candD = dq; }
+      }
+      // ★ 还在下面（脚低于坡顶）才算“应送上去”
+      let below = true;
+      if (cand) {
+        const lx0 = cand.lx ?? cand.x + cand.ux * 3.5, lz0 = cand.lz ?? cand.z + cand.uz * 3.5;
+        const topY = probe.topAt ? probe.topAt(lx0, lz0) : probe.heightAt(lx0, lz0, inp.y);
+        below = !Number.isFinite(topY) || inp.y < topY - 0.5;
+      }
+      if (cand && below && moving) {
         const key = cand.x.toFixed(1) + ',' + cand.z.toFixed(1);
-        if (this.nearKey === key && Math.hypot(inp.x - this.nearX, inp.z - this.nearZ) <= 3) this.nearS += inp.dt;
+        if (this.nearKey === key && (this.forcedEver || Math.hypot(inp.x - this.nearX, inp.z - this.nearZ) <= 3)) this.nearS += inp.dt;
+        else if (this.nearKey === key) { this.nearX = inp.x; this.nearZ = inp.z; }   // 未兜底过：仅重记锚（快速移动不算卡）
         else { this.nearKey = key; this.nearS = 0; this.nearX = inp.x; this.nearZ = inp.z; }
-        if (this.nearS >= 10) { forced = cand; if (!this.wasForced) { CLIMB_STATS.forced++; this.wasForced = true; } }
-      } else { this.nearKey = null; this.nearS = 0; this.wasForced = false; }
-    } else { this.nearKey = null; this.nearS = 0; this.wasForced = false; }
+        const need = this.forcedEver ? FALLBACK_RETRY_S : FALLBACK_S;   // ★ 反反复复：之后快速重试
+        const crossed = this.nearS >= need && this.nearS - inp.dt < need;
+        if (this.nearS >= need) forced = cand;
+        if (crossed) { CLIMB_STATS.forced++; this.forcedEver = true; }
+      } else { this.nearKey = null; this.nearS = 0; }
+    } else { this.nearKey = null; this.nearS = 0; }
     if (!inp.climbAnyTerrain && (committed || forced || (inp.blockCliffClimb && inp.climbOrdered))) {
       const run = committed ? this.session!.run
         : (forced ?? owned ?? inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
@@ -273,7 +296,7 @@ export class CharacterCore {
             const inZone = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR && sOff <= dl + 0.5;
             const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
             // ★ 兜底报抢放宽：到点附近（≤6m）也强制抓（只在 forced 时）
-            const okIn = inZone || (forced !== null && Math.hypot(inp.x - run.x, inp.z - run.z) <= 6);
+            const okIn = inZone || (forced !== null && Math.hypot(inp.x - run.x, inp.z - run.z) <= 6);   // 兜底：走近即抓
             if (okIn && own !== null) {
               const top0 = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
               const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
@@ -283,7 +306,7 @@ export class CharacterCore {
               if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
               this.session = { run, lx, lz, tr };
               climbBook.claim(uid, run);   // ★ 认领：该点独属，别的点不抢
-              this.nearKey = null; this.nearS = 0; this.wasForced = false;
+              this.nearKey = null; this.nearS = 0;
               CLIMB_STATS.sessions++;
               out.climbing = true;
               CLIMB_STATS.climbSteps++;
@@ -297,6 +320,18 @@ export class CharacterCore {
             }
           }
         }
+      }
+    }
+
+    // ★ 兜底引导（用户定 2026-09-26 加强）：被兜底判定 → 每帧朝坡点走
+    //   （轮幅内反反复复送；走近即被传送带抓上；墙体由后面的立面阻挡/斥力处理）
+    if (forced && !out.climbing) {
+      const vx = forced.x - inp.x, vz = forced.z - inp.z;
+      const d = Math.hypot(vx, vz);
+      if (d > 0.05) {
+        const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
+        dx = (vx / d) * sp * inp.dt;
+        dz = (vz / d) * sp * inp.dt;
       }
     }
 
