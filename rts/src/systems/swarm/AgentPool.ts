@@ -173,6 +173,7 @@ export class AgentPool {
       climbPt,
       blockCliffClimb: !air,
       climbAnyTerrain: air,
+      flying: air,   // ★ 飞行：自由路径
       hx: hs, hz: hs,
       suspended: false,
     }, this.coreProbe, nowS);
@@ -244,6 +245,8 @@ export class AgentPool {
   // ---- P5：空中层（2026-09-18；《RTS架构.md》§7）----
   /** 是否飞行单位（1 = 独立空中层：不贴地、不绕坑/水、不掉坑判死、直线导航） */
   readonly isAir = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 飞行巡航高度（世界系；0 = 未初始化 → 首帧按地表+悬停高） */
+  readonly airCruiseY = new Float32Array(AGENT_CAPACITY);
   /** 悬停高度（米，**相对地表**；仅 isAir=1 有效；≤0 = 按地面单位处理） */
   readonly altitude = new Float32Array(AGENT_CAPACITY);
 
@@ -367,6 +370,7 @@ export class AgentPool {
     this.intent[i] = d.intent ?? 255;
     this.bias[i] = d.bias ?? 0.12;
     this.isAir[i] = d.isAir ? 1 : 0;
+    this.airCruiseY[i] = 0;
     this.altitude[i] = d.altitude ?? 0;
     this.retreatUntil[i] = 0;
     this.nextRetreatAt[i] = 0;

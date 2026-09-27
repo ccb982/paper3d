@@ -71,11 +71,18 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     const stM = host.squadStateOf(squad.id);
     if (stM?.climbCred) { cred = true; credPt = stM.climbCred; }   // ★ 成员同源：凭证挂在小队寻路上
     const lead = squad.members.get(squad.leaderUid);
+    // ★ 飞行（经典空中层）：**不走地面寻路**，直航到队长（避免地面路线失败→站住卡墙）
+    if (lead && p.isAir[i] === 1) {
+      const ax = lead.x - p.x[i], az = lead.z - p.z[i];
+      const al = Math.hypot(ax, az) || 1;
+      dx = ax / al; dz = az / al; edgeMode = false;
+    } else {
     const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
     if (ms?.climb && ms.climbPt) { cred = true; credPt = ms.climbPt; }   // ★ 成员自己路线的凭证（与小队凭证并存）
     if (ms && !ms.done) {
       dx = ms.dx; dz = ms.dz; edgeMode = true;
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+    }
   }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
   // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
   const inside = host.data.blockedAt(p.x[i], p.z[i]);
@@ -84,6 +91,10 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
       const spd = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
       const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred, credPt);
+      if (step.landed) {   // ★ 代理爬完坡：强制重寻路（队长走廊 + 本代理路线）
+        host.nav.dropMemberRoute(p.swarmUid[i]);
+        if (isLeader && squad) host.nav.forceRepath(squad.id);
+      }
       p.x[i] += step.dx; p.z[i] += step.dz;
       if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
     } else {
@@ -109,6 +120,10 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
         // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
         const spd2 = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
         const step = p.stepAgent(i, res.x, res.z, spd2, dt, performance.now() / 1000, cred, credPt);
+        if (step.landed) {   // ★ 代理爬完坡：强制重寻路
+          host.nav.dropMemberRoute(p.swarmUid[i]);
+          if (isLeader && squad) host.nav.forceRepath(squad.id);
+        }
         p.x[i] += step.dx; p.z[i] += step.dz;
         if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
       }

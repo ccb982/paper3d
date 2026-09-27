@@ -232,6 +232,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   //   （旧 `tactics.ringClamp` 写口已删；环是单源：commander.clampToRing）
 
   // ★ 官方升降格/命令/队长镜像（WorldSpawner 实现 SwarmTierPort）
+  EnemyBase.climbLandedHook = (sid, uid) => swarm.forceRepathClimb(sid, uid);   // ★ 爬坪到落点 → 强制重寻路
   hooks.tierPort = spawner;
   hooks.activeUnits = () => enemies;
   hooks.onDirective = (uid, order, directive, until) =>
@@ -280,7 +281,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const eng = new Set<number>();
         for (const sq of swarm.squads.all()) if (sq.builders) for (const uid of sq.members.keys()) eng.add(uid);
         const out: { uid: number; x: number; z: number }[] = [];
-        for (const e of enemies) if (!eng.has(e.swarmUid)) out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z });
+        for (const e of enemies) {
+          // ★ 回收/死亡的不再入队（用户定 2026-09-26：队列不得保留已回收者）——
+          //   实体退役是延后扫描，队列会认为“还在”
+          if (e.dead || e.hp <= 0 || e.lifeState !== 'active') continue;
+          if (!eng.has(e.swarmUid)) out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z });
+        }
         const pool = swarm.pool;
         for (let i = 0; i < pool.count; i++) {
           if (!eng.has(pool.swarmUid[i])) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
@@ -292,10 +298,23 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       /** ★ 创建端口（四兵种管理器；只建本兵种 ∧ 只在对应防区） */
       creation: () => swarm.data.combatCreationPort(),
       posture: () => swarm.data.postureP,
+      assault: () => swarm.data.battlePosture === 'assault',   // ★ 总攻：强制全体到舰
       // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
       frontOfSquad: (id) => {
-        const sec = tactics?.battalions.deployPlan.get(id) ?? -1;
-        if (sec < 0) return null;
+        let sec = tactics?.battalions.deployPlan.get(id) ?? -1;
+        if (sec < 0) {
+          // ★ 未部署队（边缘）：按**方位角归到最近主攻区**（用其前沿点；不落高原）
+          const mainS = tactics?.mainSectors ?? [];
+          if (mainS.length === 0) return null;
+          const s = swarm.squads.get(id);
+          const lead = s?.members.get(s?.leaderUid ?? 0);
+          if (!lead) return null;
+          const sh = { x: spawn.x, z: spawn.z };
+          let ang = Math.atan2(lead.z - sh.z, lead.x - sh.x);
+          if (ang < 0) ang += Math.PI * 2;
+          const secByAng = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
+          sec = mainS.includes(secByAng) ? secByAng : mainS[0]!;
+        }
         const pts = tactics?.sectors.sectors[sec]?.points;
         if (!pts || pts.length === 0) return null;
         let best = pts[0]!;

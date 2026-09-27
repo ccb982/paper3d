@@ -69,6 +69,8 @@ export abstract class CharacterBase extends EntityBase {
   airPhase = Math.random() * Math.PI * 2;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
+  /** ★ 飞行巡航高度（世界系；0 = 未初始化→首帧按地表+悬停高初始化；用户定：飞行自由高度） */
+  airCruiseY = 0;
   // ---- ★ 攀爬（可攀工事：掩体等 walkableTop 矩形；持续顶住自动翻上） ----
   /** 可攀最大高差（米）：顶面高于脚底不超过此值才能攀（掩体 3m 也在内） */
   static readonly CLIMB_MAX = 3.2;
@@ -99,6 +101,9 @@ export abstract class CharacterBase extends EntityBase {
 
   /** ★ 程序化爬坡中（内核爬升态；含强制走位与承诺续爬）——贴地结算用：取最高表面直接到高原顶 */
   get isTerrainClimbing(): boolean { return this.core.climbing; }
+
+  /** ★ 爬坡到落点回调（子类覆写；无默认行为） */
+  protected onClimbLandedEvent(): void { /* 默认无 */ }
 
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   collisionVolume: {
@@ -160,12 +165,14 @@ export abstract class CharacterBase extends EntityBase {
         climbPt: this.climbPt,
         blockCliffClimb: this.blockCliffClimb,
         climbAnyTerrain: this.climbAnyTerrain,
+        flying: this.airborne === true,   // ★ 飞行：自由路径
         hx: vol.hx, hz: vol.hz,
         suspended: false,
       },
       this.probe,
       performance.now() / 1000,
     );
+    if (step.landed) this.onClimbLandedEvent();   // ★ 爬坡完成 → 强制重寻路一次
     const dx = step.dx;
     const dz = step.dz;
     const climbing = step.climbing;
@@ -187,7 +194,7 @@ export abstract class CharacterBase extends EntityBase {
       //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.6) 以上 → 回退，
       //   0.6 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
-      if (!climbing && !this.climbAnyTerrain && gy - p.y > stepLimit) {
+      if (!climbing && !this.climbAnyTerrain && !this.airborne && gy - p.y > stepLimit) {   // ★ 飞行免责（经典空中层：墙只管地面）
         p.x = prevX;
         p.z = prevZ;
       }
@@ -207,7 +214,7 @@ export abstract class CharacterBase extends EntityBase {
     const _c2 = _ct ? performance.now() : 0;
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
-    this.separateFromStatics();
+    if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
     // ★ H2 层守卫：推挤不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
     if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain) {
       const lim = this.probe.wetAt(_pX, _pZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;

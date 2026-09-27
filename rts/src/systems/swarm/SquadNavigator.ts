@@ -134,6 +134,11 @@ export class SquadNavigator {
   /** ★ 成员路线缓存（用户定 2026-09-26）：**定时（或队长位移超限）对队长位置做一次长寻路**；
    *  路只在缓存里，供"沿路走格边步"用（全部移动来自长短寻路）。 */
   private readonly memberRoutes = new Map<number, { path: { x: number; z: number; climb?: boolean }[]; at: number; gx: number; gz: number }>();
+  /** ★ 强制重寻路一次（用户定 2026-09-26：爬完坡后强制到原目标重寻路，防“爬完又掉下去”） */
+  private readonly repath = new Set<number>();
+  forceRepath(squadId: number): void { this.repath.add(squadId); }
+  /** 成员路线失效（下一次对队长重新长寻路；代理同口） */
+  dropMemberRoute(uid: number): void { this.memberRoutes.delete(uid); }
 
   /** 成员沿"自己的到队长路线"走一步（L2/L3 共用）：返回 {dx,dz,climb,done}；无解 → null（停） */
   memberStep(
@@ -233,7 +238,8 @@ export class SquadNavigator {
     // ★ 到达判定（用于凭证回收）：上一次路线的目标点已被走到
     const arrivedNow = state.pathGoalX !== undefined && state.pathGoalZ !== undefined
       && Math.hypot(this._from.x - state.pathGoalX, this._from.z - state.pathGoalZ) <= 2.0;
-    const cur = state.corridor ?? state.order.path;
+    const forced = this.repath.delete(squad.id);   // ★ 强制重寻路（消费一次）
+    const cur = forced ? undefined : (state.corridor ?? state.order.path);
     const hasPath = !!cur && cur.length > 0;
     const raster = RasterMap.current;
     const lead = squad.members.get(squad.leaderUid);   // ★ 无质心（用户定 2026-09-24）：路从队长算

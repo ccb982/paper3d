@@ -67,6 +67,8 @@ export interface LiveView {
   creation?: () => import('./SquadCreation').CreationPort | null;
   /** ★ 事态进度（下令变量；可选） */
   posture?(): number;
+  /** ★ 总攻（可选）：强制全体到舰，去掉其他指令/寻路 */
+  assault?(): boolean;
   /** ★ 按队给防区**前沿推进点**（可选） */
   frontOfSquad?(id: number): { x: number; z: number } | null;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
@@ -292,6 +294,22 @@ export class EngineBridge {
     if (this.directMode) return;   // ★ 直控模式：不发令/不校验/不释放 TTL
     const p = this.pos.ship() ?? this.pos.player();   // ★ 命令参照舰船（用户定 2026-09-26）
     if (!p) return;
+    // ★★ 总攻（用户定 2026-09-26）：**去掉所有其他寻路与指令**——
+    //   全体（全兵种）强制令 march 到舰；强制令走玩家同路径（绕稳定门）；
+    //   对局不再经 decideChain/管理器目标下令。玩家手动令保留最高优先。
+    if (this.live.assault?.() === true) {
+      for (const rec of [...this.squads.all()]) {
+        // ★ 强制覆盖所有人（用户定 2026-09-26：含玩家手动令）——总攻阶段无例外
+        const order: SquadOrder = {
+          kind: 'march', source: 'engine', target: { x: p.x, z: p.z },
+          threat: { x: p.x, z: p.z }, seq: 0, ttl: 0,
+        };
+        const ok = this.writer.issue(rec.id, order, { now, force: true });
+        if (ok && !this.shadow) this.live.emit?.(rec.id, order, now);
+      }
+      this.dbg.last = 'assault:force-to-ship';
+      return;
+    }
     const hitId = 0;   // 玩家攻击信号未接线（旧接口已删）
     interface Pending { rec: LiveSquad; cur?: OrderState; dec: Decision; tx: number; tz: number; mission?: string; }
     const pending: Pending[] = [];

@@ -414,6 +414,29 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
   ok(offPoint.dx > 0 && offPoint.climbing === true, '持凭证但不在上坡点 → 强制走位进点（沿 +n，不直爬）');
   const nearPoint = run(mkProbe(true, 2, [0.4, 0]), true);
   ok(nearPoint.dx > 0 && nearPoint.climbing === true, '已在点（≤0.6m）→ 起步');
+  // ★ 爬完坡：到落点本帧 landed=true（触发强制重寻路；用户定 2026-09-26）
+  const coreL = new CharacterCore();
+  const pr2 = mkProbe(true, 2);
+  coreL.step({ x: 0, y: 0.5, z: 0, dt: 0.1, dirX: 1, dirZ: 0, speed: 2,
+    climbOrdered: true, climbPt: { x: 0, z: 0, ux: 1, uz: 0, w: 3 },
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false }, pr2 as never, 0);
+  const land = coreL.step({ x: 3.5, y: 2.0, z: 0, dt: 0.1, dirX: 1, dirZ: 0, speed: 2,
+    climbOrdered: true, climbPt: { x: 0, z: 0, ux: 1, uz: 0, w: 3 },
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false }, pr2 as never, 0.1);
+  ok(land.landed === true, '★ 爬到落点本帧 landed=true（强制重寻路钩子）');
+  // ★ 在顶上（无会话）：持证也**不再被爬坡走位拽回**（旧：deep→沿 -n 后退）
+  const coreT = new CharacterCore();
+  const topStep = coreT.step({ x: 3.5, y: 2.0, z: 0, dt: 0.1, dirX: 0, dirZ: 0, speed: 2,
+    climbOrdered: true, climbPt: { x: 0, z: 0, ux: 1, uz: 0, w: 3 },
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false }, pr2 as never, 0);
+  ok(topStep.dx === 0 && topStep.climbing === false, '★ 已在顶上：不再被“深入坡面”误判拽回下坡');
+  // ★ 飞行：自由路径（硬墙也不拦） + 高度不被地形改写（用户定 2026-09-26）
+  const coreF = new CharacterCore();
+  const flyStep = coreF.step({ x: 0, y: 5, z: 0, dt: 0.1, dirX: 1, dirZ: 0, speed: 2,
+    climbOrdered: true, blockCliffClimb: true, climbAnyTerrain: false,
+    hx: 0.4, hz: 0.4, suspended: false, flying: true }, mkProbe(false, 2) as never, 0);
+  ok(flyStep.dx > 0 && flyStep.gy === 5 && flyStep.climbing === false,
+    '★ 飞行：硬墙不拦、高度不被地形改写（自由路径）');
 }
 
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------
@@ -985,6 +1008,48 @@ console.log('[12c] 总攻：50m 环生成 + 满编上限');
   scA.tick(0, portA, 3);
   ok(calls.length === 3 && calls.every((c) => Math.abs(c.x - 50) <= 1.5 && c.z === 0),
     '★ 总攻：在距舰 50m 环部署（不并入现役队、不用平时锚）');
+}
+
+// ---------- 总攻：去掉其他指令，强制全体寻路到舰（用户定 2026-09-26） ----------
+console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
+{
+  const emitted2: SquadOrder[] = [];
+  const liveA = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    assault: () => true,
+    squads: () => [
+      { id: 1, role: 'melee' as const, x: 50, z: 0, alive: 8 },
+      { id: 2, role: 'ranged' as const, x: 80, z: 30, alive: 5 },
+      { id: 3, role: 'engineer' as const, x: 60, z: -20, alive: 3 },
+    ],
+    emit: (o: SquadOrder) => emitted2.push(o),
+  };
+  const br = new EngineBridge(liveA);
+  br.shadow = true;
+  br.tick(0.6, 1);
+  const o1 = br.writer.store.get(1)!.order;
+  const o2 = br.writer.store.get(2)!.order;
+  const o3 = br.writer.store.get(3)!.order;
+  ok(o1.kind === 'march' && o2.kind === 'march' && o3.kind === 'march', '★ 总攻：全兵种均为 march（去掉其他指令）');
+  ok(Math.abs(o1.target.x - 200) < 0.01 && Math.abs(o1.target.z) < 0.01
+    && Math.abs(o2.target.x - 200) < 0.01 && Math.abs(o3.target.x - 200) < 0.01,
+    '★ 总攻：全体目标 = 舰船（强制寻路到舰）');
+  br.writer.store.set(2, {
+    order: { kind: 'garrison', source: 'engine', target: { x: 1, z: 1 }, seq: 0, ttl: 0 },
+    phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
+  });
+  br.tick(0.6, 1.2);
+  ok(br.writer.store.get(2)!.order.kind === 'march' && Math.abs(br.writer.store.get(2)!.order.target.x - 200) < 0.01,
+    '★ 强制令绕稳定门（不被 kept 拦）');
+  // ★ 总攻强制覆盖所有人（含玩家手动令；用户定 2026-09-26）
+  br.writer.store.set(1, {
+    order: { kind: 'regroup', source: 'player', target: { x: 7, z: 7 }, seq: 0, ttl: 99 },
+    phase: 'executing', progress: 1, stillS: 0, issuedAt: 1,
+  });
+  br.tick(0.6, 1.4);
+  ok(br.writer.store.get(1)!.order.kind === 'march' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
+    '★ 总攻强制覆盖玩家手动令（无例外）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

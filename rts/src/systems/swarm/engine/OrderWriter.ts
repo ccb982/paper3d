@@ -40,6 +40,8 @@ export interface WriterCtx {
   now: number;
   /** 玩家令（最高优先） */
   player?: boolean;
+  /** ★ 强制令（用户定 2026-09-26：总攻全体到舰；绕稳定门，与玩家令同路径） */
+  force?: boolean;
   /** 重伤（<0.5 血量） */
 }
 
@@ -55,7 +57,7 @@ export class OrderWriter {
   issue(id: number, order: SquadOrder, ctx: WriterCtx): boolean {
     const cur = this.store.get(id);
     if (cur) {
-      const bypass = ctx.player;
+      const bypass = ctx.player || ctx.force;
       if (bypass) {
         this.dbg.bypass++;
       } else {

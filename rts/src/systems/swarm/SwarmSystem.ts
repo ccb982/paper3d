@@ -981,6 +981,12 @@ export class SwarmSystem {
   }
 
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
+  /** ★ 爬坡到落点：强制重寻路一次（队长走廊 + 成员/代理路线失效）——防爬完又掉下去 */
+  forceRepathClimb(squadId: number, uid: number): void {
+    this.nav.forceRepath(squadId);
+    this.nav.dropMemberRoute(uid);
+  }
+
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
     this.nav.stampFn = () => this.data.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算

@@ -39,11 +39,15 @@ export class CharacterClamp {
     //     否则升/降格瞬间会"跳一下"。
     if (e.airborne) {
       const p = e.position;
-      const gy = this.deps.raster.surfaceHeightAtFor(p.x, p.z, p.y);
+      // ★ 飞行自由高度（用户定 2026-09-26）：巡航高度世界系保持（首帧按地表+悬停高初始化）——
+      //   不再每帧跟地表（飞过高台不被迦升）；外部可直接改 airCruiseY 自由调高度。
+      if (e.airCruiseY === 0) {
+        const gy = this.deps.raster.surfaceHeightAtFor(p.x, p.z, p.y);
+        e.airCruiseY = gy + Math.max(0.4, (e.airAltitude && e.airAltitude > 0) ? e.airAltitude : 2.6);
+      }
       const bob = Math.sin(performance.now() / 1000 * AIR_BOB_RATE + e.airPhase) * AIR_BOB_AMP;
-      const targetY = gy + Math.max(0.4, e.airAltitude) + bob;
+      const targetY = e.airCruiseY + bob;
       const dy = targetY - p.y;
-      // 上下都用限速逼近（爬升 3m/s / 下降 3m/s）：跨地形时不瞬移、不"贴脸闪现"
       p.y += dy > 0 ? Math.min(dy, 3 * dt) : Math.max(dy, -3 * dt);
       return;
     }

@@ -98,6 +98,8 @@ export interface StepInput {
   blockCliffClimb: boolean;
   /** 无视地形落差（载具/飞行） */
   climbAnyTerrain: boolean;
+  /** ★ 飞行（用户定 2026-09-26）：**自由路径**——地形全免责（无墙/无爬坡/无贴地），高度由飞行层管 */
+  flying?: boolean;
   /** 碰撞盒半宽 / 半深（立面阻挡采样偏移） */
   hx: number;
   hz: number;
@@ -118,6 +120,8 @@ export interface StepResult {
   reverted: boolean;
   /** ★ 本拍发生脱埋吸附（y 已抬到顶层；调用方应直接采用 gy 并跳过回退） */
   unburied: boolean;
+  /** ★ 本帧到达爬坡落点（爬坡完成；触发一次强制重寻路） */
+  landed: boolean;
 }
 
 /** ★ 上坡流程计数（用户定 2026-09-26；探针读数用） */
@@ -150,7 +154,7 @@ export class CharacterCore {
     tr: { id: number; t: number; phase: string; x: number; z: number; y?: number; px: number; pz: number; d: number; tOff: number; sOff: number; frames: number; y0: number; top0: number; buryMax: number; footGap: number };
   } | null = null;
   /** 结果复用（零分配） */
-  private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false };
+  private readonly out: StepResult = { dx: 0, dz: 0, gy: 0, climbing: false, blocked: false, reverted: false, unburied: false, landed: false };
 
   /** 是否处于爬坡态（表现层/减速用） */
   get climbing(): boolean {
@@ -164,12 +168,20 @@ export class CharacterCore {
     out.reverted = false;
     out.climbing = false;
     out.unburied = false;
+    out.landed = false;
     let dx = 0;
     let dz = 0;
     if (inp.suspended) {
       out.dx = 0;
       out.dz = 0;
       out.gy = probe.heightAt(inp.x, inp.z, inp.y);
+      return out;
+    }
+    // ★ 飞行：自由路径（不判墙/不爬坡/不贴地/不脱埋）——水平自由移动，高度交给飞行层
+    if (inp.flying) {
+      out.dx = inp.dirX * inp.speed * inp.dt;
+      out.dz = inp.dirZ * inp.speed * inp.dt;
+      out.gy = inp.y;
       return out;
     }
     dx = inp.dirX * inp.speed * inp.dt;
@@ -210,7 +222,7 @@ export class CharacterCore {
           if (-tr.footGap > tr.buryMax) tr.buryMax = -tr.footGap;
           const far = sOff < -(BASE_NEAR + 8) || Math.abs(tOff) > halfSpan + 8;
           if (far) { this.session = null; CLIMB_STATS.abandoned++; tr.phase = 'abandoned'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
-          else if (atLand) { this.session = null; CLIMB_STATS.landed++; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
+          else if (atLand) { this.session = null; CLIMB_STATS.landed++; out.landed = true; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
           else {
             out.climbing = true;
             CLIMB_STATS.climbSteps++;
@@ -230,7 +242,12 @@ export class CharacterCore {
             if (Math.abs(tOff) > 0.35) CLIMB_STATS.nearAlign++;
             else if (dPt > CLIMB_START_R) CLIMB_STATS.nearGo++;
           }
-          if (!atLand) {
+          // ★★ 已在顶上（用户定 2026-09-26：“到了坡顶又掉下来”的根因修正）：
+          //   顶上的 sOff 天然 = 坡深（≫ 0.3）→ 旧逻辑每帧当“深入坡面”把人拽回下坡。
+          //   判据：y 已到落点顶层 ∧ sOff∈(0.3, +)→**视为已过坡**：不退、不横、不进点（交给路线/订单）。
+          const topY = probe.heightAt(lx, lz, inp.y);   // 落点顶层高
+          const onTop = Number.isFinite(topY) && inp.y >= topY - 0.6 && sOff > 0.3;
+          if (!atLand && !onTop) {
             const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
             const deep = sOff > 0.3;
             const hugMis = Math.abs(tOff) > 1.0 && sOff > -1.0;

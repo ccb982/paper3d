@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
-import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE } from './AgentPool';
+import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE, AIR_ALTITUDE_DEFAULT } from './AgentPool';
 import { LOD_MAX_DIST } from '../../services/lod';
 import { autoGroundSinkFrac } from '../../services/fx/groundSink';
 
@@ -292,8 +292,12 @@ export class SwarmBatch {
       //   上下浮动）定位；地面兵照旧贴地回写（渲染与逻辑同源）。
       //   ★ 浮动相位用 pool.phase（0~1 个体随机），同一批飞兵不会整齐上下摆。
       let baseY = gy;
-      if (pool.isAir[i] === 1 && pool.altitude[i] > 0) {
-        baseY = gy + pool.altitude[i]
+      if (pool.isAir[i] === 1) {
+        // ★ 飞行自由高度：巡航高度世界系保持（首帧初始化；不再每帧跟地表）
+        //   高度未给（≤0）→ 默认悬停高（AIR_ALTITUDE_DEFAULT）
+        const alt = pool.altitude[i] > 0 ? pool.altitude[i] : AIR_ALTITUDE_DEFAULT;
+        if (pool.airCruiseY[i] === 0) pool.airCruiseY[i] = gy + alt;
+        baseY = pool.airCruiseY[i]
           + Math.sin(time * AIR_BOB_RATE + pool.phase[i] * 6.2831853) * AIR_BOB_AMP;
       }
       pool.y[i] = baseY;
