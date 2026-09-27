@@ -452,8 +452,8 @@ export class SwarmData {
       refreshSector: (cx, cz, rLo, rHi) =>
         this.fortify.refreshOne(cx, cz, rLo, rHi,
           (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z))),
-      pickSpot: (sec, rLo, rHi, canReach, exclude) =>
-        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude),
+      pickSpot: (sec, rLo, rHi, canReach, exclude, from) =>
+        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude, from),
       canDig: (x, z) => {
         const raster = RasterMap.current;
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;

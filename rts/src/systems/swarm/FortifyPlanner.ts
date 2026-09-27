@@ -91,14 +91,22 @@ export class FortifyPlanner {
     canReach?: (x: number, z: number) => boolean,
     /** ★ 新（2026-09-26）：排除集（已预约/已建/黑名单点）——防多队同点 */
     exclude?: (x: number, z: number) => boolean,
+    /** ★★ 新（2026-09-27）：施工者位置——**朝前方（舰侧）优先**：优先选比工兵更靠舰的点 */
+    from?: { x: number; z: number },
   ): FortifyPick | null {
     const list = this.candidates[sec];
     if (!list || list.length === 0) return null;
     const TAU = Math.PI * 2;
     const a0 = (sec / FORTIFY_SECTORS) * TAU;
     const a1 = (sec + 1 === FORTIFY_SECTORS) ? TAU : ((sec + 1) / FORTIFY_SECTORS) * TAU;
+    const dFrom = from ? Math.hypot(from.x - cx, from.z - cz) : -1;
     let fallback: FortifyPick | null = null;
     let outBand: FortifyPick | null = null;
+    let bestDone: FortifyPick | null = null;       // 无 from：需求最高（原行为）
+    let fwdDone: FortifyPick | null = null;        // 有 from：朝舰侧最远（最推进）且达标
+    let fwdDoneD = Infinity;
+    let fwdAny: FortifyPick | null = null;         // 有 from：朝舰侧最远（任意分）
+    let fwdAnyD = Infinity;
     for (const c of list) {
       // ★ 复检②：本扇区角度内（保证"在扇区之内"）
       let ang = Math.atan2(c.z - cz, c.x - cx);
@@ -109,11 +117,18 @@ export class FortifyPlanner {
       const d = Math.hypot(c.x - cx, c.z - cz);
       const inBand = d >= rLo - 1 && d <= rHi + 1;
       if (!inBand) { if (!outBand) outBand = { x: c.x, z: c.z, score: c.score }; continue; }
-      if (c.score >= doneScore) return { x: c.x, z: c.z, score: c.score };
+      // ★★ 朝前方（用户定 2026-09-27）：比工兵更靠舰（+2m 容差）的点优先——工事向舰推进。
+      if (dFrom >= 0 && d <= dFrom + 2) {
+        if (c.score >= doneScore && d < fwdDoneD) { fwdDoneD = d; fwdDone = { x: c.x, z: c.z, score: c.score }; }
+        if (d < fwdAnyD) { fwdAnyD = d; fwdAny = { x: c.x, z: c.z, score: c.score }; }
+      }
+      if (c.score >= doneScore) { if (!bestDone) bestDone = { x: c.x, z: c.z, score: c.score }; continue; }
       if (!fallback) fallback = { x: c.x, z: c.z, score: c.score };
     }
+    // ★ 有 from：朝舰侧优先；无：原行为（需求最高）
+    if (dFrom >= 0) return fwdDone ?? fwdAny ?? bestDone ?? fallback ?? outBand;
     // ★ 带内无件 → 带外兜底（用户定：分到区就去造）
-    return fallback ?? outBand;
+    return bestDone ?? fallback ?? outBand;
   }
 
   clear(): void {

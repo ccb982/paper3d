@@ -337,6 +337,16 @@ console.log('[5d] FortifyPlanner 取点契约（扇区内 ∧ 带内 ∧ 可达 
   // 未刷新扇区：无候选 → null
   const fp2 = new FortifyPlanner();
   ok(fp2.targetOf(cx, cz, 2, rLo, rHi, 0.6, () => true) === null, '未刷新扇区 → null（不猜点）');
+  // ★ 朝前方（用户定 2026-09-27）：给 from → 优先“比工兵更靠舰”的点（工事向前推进）
+  const fp3 = new FortifyPlanner();
+  // 两个确定性候选：前方低分 (12,4) / 后方高分 (40,4)
+  const need2 = (x: number, z: number): number | null =>
+    (x === 12 && z === 4) ? 0.7 : (x === 40 && z === 4) ? 0.95 : null;
+  for (let i = 0; i < FORTIFY_SECTORS; i++) fp3.refreshOne(0, 0, 4, 44, need2);
+  const noFrom = fp3.targetOf(0, 0, 0, 4, 44, 0.6, () => true)!;
+  const withFrom = fp3.targetOf(0, 0, 0, 4, 44, 0.6, () => true, undefined, { x: 30, z: 0 })!;
+  ok(Math.hypot(noFrom.x, noFrom.z) > 32, '无 from：仍按需求分（选后方高分点）');
+  ok(Math.hypot(withFrom.x - 12, withFrom.z - 4) < 0.01, '★ 朝前方：有 from → 优先舰侧更近点（施工向舰推进）');
 }
 
 // ---------- 短寻路 LocalStep（S1 新契约） ----------

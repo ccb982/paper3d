@@ -73,6 +73,8 @@ export interface EngineerPort {
     sec: number, rLo: number, rHi: number,
     canReach: (x: number, z: number) => boolean,
     exclude?: (x: number, z: number) => boolean,
+    /** ★ 施工者位置（朝前方：优先比工兵靠舰的点；用户定 2026-09-27） */
+    from?: { x: number; z: number },
   ): { x: number; z: number; score: number } | null;
   /** 此点还能再挖（坑底硬阈值未到） */
   canDig(x: number, z: number): boolean;
@@ -287,7 +289,8 @@ export class EngineerManager extends RoleManager {
           (x, z) => {
             const k = keyOf(x, z);
             return this.built.has(k) || this.reserved.has(k) || (this.black.get(k) ?? 0) > now;
-          });
+          },
+          { x: s.x, z: s.z });   // ★ 朝前方：优先比队位更靠舰的点（进攻性工事）
         if (pick) {
           spot = { x: pick.x, z: pick.z, score: pick.score, at: now };
           this.spots.set(id, spot);
@@ -322,9 +325,19 @@ export class EngineerManager extends RoleManager {
           const canDig = port.canDig(spot.x, spot.z);
           let digs = this.digs.get(id) ?? 0;
           const want = Math.min(ENGINEER_POLICY.MAX_DIGS, Math.floor(t / ENGINEER_POLICY.DIG_EVERY_S));
+          const ship = port.ship();
           while (canDig && digs < want) {
-            port.dig(spot.x, spot.z);
-            port.markDirty(spot.x, spot.z, 16);
+            // ★ 坑洞朝前（用户定 2026-09-27）：第 2 道起沿**舰方向**每次1 2m（壕沟向舰延伸）
+            let dx = spot.x, dz = spot.z;
+            if (digs > 0) {
+              const ux = ship.x - spot.x, uz = ship.z - spot.z;
+              const L = Math.hypot(ux, uz) || 1;
+              const fx = spot.x + (ux / L) * digs * 2;
+              const fz = spot.z + (uz / L) * digs * 2;
+              if (port.canDig(fx, fz)) { dx = fx; dz = fz; }
+            }
+            port.dig(dx, dz);
+            port.markDirty(dx, dz, 16);
             digs++;
           }
           this.digs.set(id, digs);
