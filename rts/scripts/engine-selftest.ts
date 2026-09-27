@@ -1203,6 +1203,9 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
     phase: 'executing', progress: 1, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.4);
+  ok(br.hasFirePermit(7) === false, '开火许可查询：未授权 = false');
+  br.timers.allowFire(7, true);
+  ok(br.hasFirePermit(7) === true, '★ 开火许可查询：授权 = true（判官豁免消费）');
   ok(br.writer.store.get(1)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
     '★ 总攻强制覆盖玩家手动令（无例外）');
 }

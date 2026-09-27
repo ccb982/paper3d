@@ -247,6 +247,11 @@ export class EngineBridge {
     }
   }
 
+  /** ★ 开火许可查询（用户定 2026-09-27）：拿到许可的远程站桩射击 ≠ 发呆 → 判官豁免（main.exemptOf 消费） */
+  hasFirePermit(uid: number): boolean {
+    return this.timers.canFire(uid);
+  }
+
   /** 开火检验（射程/ROE；影子模式只判距离） */
   private canFire(uid: number, ents: readonly { uid: number; x: number; z: number }[]): boolean {
     let e: { uid: number; x: number; z: number } | null = null;

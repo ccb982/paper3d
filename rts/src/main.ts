@@ -344,6 +344,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
         if (swarm.orderKindOf(sq.id) === 'garrison') return 'garrison';
+        // ★ 拿到开火许可的远程（用户定 2026-09-27）：站桩射击不是发呆 → 不被回收
+        if (sq.type === 'ranged' && shadowBridge?.hasFirePermit(uid) === true) return 'fire';
         const nowS = simNow();
         const hitAt = swarm.recentHits.get(sq.id);
         if (hitAt !== undefined && nowS - hitAt <= AUTONOMY.SQUAD_ALERT_S) return 'hit';
