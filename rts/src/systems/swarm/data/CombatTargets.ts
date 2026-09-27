@@ -76,9 +76,10 @@ export function fillTargetOf(d: CombatDeps, role: string, sec: number): { x: num
   return best;
 }
 
-/** 每防区目标人头：占比 × 基数；roster 缺口 → 临时 +2 偏置 */
-export function combatUnitTarget(rosterGap: string, role: MobRole | string): number {
+/** 每防区目标人头：占比 × 基数；roster 缺口 → 临时 +2 偏置；**总攻 → 满编上限 12** */
+export function combatUnitTarget(rosterGap: string, role: MobRole | string, assault = false): number {
   if (role !== 'melee' && role !== 'ranged' && role !== 'flyer') return 0;
+  if (assault) return SQUAD_FULL;
   let n = Math.max(1, Math.round(combatShare(role) * PER_SECTOR_UNITS));
   if ((rosterGap === 'shield' || rosterGap === 'assault') && role === 'melee') n += 2;
   else if (rosterGap === 'ranged' && role === 'ranged') n += 2;

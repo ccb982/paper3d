@@ -420,7 +420,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           const k = p01 < 0.4 ? 1 : p01 < 0.75 ? 2 : 3;
           const cur = this.mainSectors;
           const valid = cur.length === k && cur.every((s) => (this.sectors.sectors[s]?.points.length ?? 0) > 0);
-          if (!valid) this.mainSectors = this.sectors.selectMain(k);
+          if (!valid) {
+            const sel = this.sectors.selectMain(k);
+            // ★ 总攻时施工带收缩→点集为空：selectMain 会空：**保留上一次主攻区**（生成用 50m 环，不依赖点集）
+            if (sel.length > 0) this.mainSectors = sel;
+            else if (this.mainSectors.length === 0) this.mainSectors = [0];
+          }
         }
         swarm.data.mainSectors = [...this.mainSectors];   // ★ 主攻扇区 → 四兵种创建与工兵投放
         swarm.data.squadSectorOf = (id) => this.battalions.deployPlan.get(id) ?? -1;   // ★ 部署真源 → 三兵种创建计数

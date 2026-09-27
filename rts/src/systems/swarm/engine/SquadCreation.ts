@@ -18,8 +18,12 @@ export interface CreationPort {
   unitTarget?(role: MobRole): number;
   /** 防区部署锚点（无 = 该区不可创建） */
   anchorOf(sec: number): { x: number; z: number } | null;
-  /** ★ 事态进度 0~1（补兵节拍驱动；可选：未接 = 0） */
+  /** ★ 事态进度 0~1（补兵节拏驱动；可选：未接 = 0） */
   posture?(): number;
+  /** ★ 总攻阶段（用户定 2026-09-26：**在距舰 50m 处生成、补到上限、毁了再补、集体进攻**） */
+  assault?(): boolean;
+  /** ★ 总攻生成点（距舰 50m 环；可选） */
+  assaultAnchor?(sec: number): { x: number; z: number } | null;
   /** ★ 补兵目标（用户定 2026-09-26）：该区**缺编队**的队长位置与缺口；
    *  新兵在队长身旁投放 → 并入该队（**队长指挥**）；null = 无可补之队 → 按锚点建新队。 */
   fillTarget?(role: MobRole, sec: number): { x: number; z: number; gap: number } | null;
@@ -52,7 +56,9 @@ export class SquadCreation {
       if (alive >= target) continue;                           // 已满编 → 不放
       // ★ 补兵优先：有缺编队 → 在**队长身旁**投放（并入队伍，由队长指挥）；否则按锚点建新队
       const fill = port.fillTarget?.(this.role, sec) ?? null;
-      const a = fill ? { x: fill.x, z: fill.z } : port.anchorOf(sec);
+      const assault = port.assault?.() ?? false;
+      const a = fill ? { x: fill.x, z: fill.z }
+        : (assault ? (port.assaultAnchor?.(sec) ?? port.anchorOf(sec)) : port.anchorOf(sec));
       if (!a) continue;                                        // 无锚点（非对应防区）→ 拒建
       const need = Math.min(BURST, target - alive, fill ? fill.gap : Number.POSITIVE_INFINITY);
       let n = 0;

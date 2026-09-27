@@ -966,5 +966,25 @@ console.log('[12b] 兵种管理器补兵（节拍策略在管理器）');
   ok(calls.length === 3, '★ 事态驱动：p=1 → fast 3s，更频繁');
 }
 
+// ---------- 总攻阶段：50m 环生成（用户定 2026-09-26） ----------
+console.log('[12c] 总攻：50m 环生成 + 满编上限');
+{
+  const calls: { x: number; z: number }[] = [];
+  const portA: CreationPort = {
+    mainSectors: () => [0],
+    aliveInSector: () => 0,
+    anchorOf: () => ({ x: 999, z: 999 }),          // 平时锚（不该被用）
+    unitTarget: () => 12,
+    assault: () => true,
+    assaultAnchor: () => ({ x: 50, z: 0 }),        // 总攻：距舰 50m
+    spawn: (role, x, z) => { calls.push({ x, z }); return true; },
+    posture: () => 1,
+  };
+  const scA = new SquadCreation('melee', 12);
+  scA.tick(0, portA, 3);
+  ok(calls.length === 3 && calls.every((c) => Math.abs(c.x - 50) <= 1.5 && c.z === 0),
+    '★ 总攻阶段：在距舰 50m 处生成（不用平时锚）');
+}
+
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);
 if (fail > 0) process.exit(1);

@@ -36,10 +36,15 @@ export class RangedManager extends RoleManager {
     for (const id of this.squads) {
       const s = ctx.pos.squad(id);
       if (!s) continue;
-      // 推进 → 到头驻守；无前沿点→无接线场景保距兜底
-      const adv = this.advanceTarget(id, s, ctx);
+      // ★ 总攻（用户定）：集体进攻舰船——压到舰旁 STANDOFF 保距（到位开火）
+      const assault = (ctx.posture ?? 0) >= 0.9 || (ctx.ringMax > 0 && ctx.ringMax <= 30);
+      const adv = assault ? null : this.advanceTarget(id, s, ctx);
       let t: { x: number; z: number };
-      if (adv) {
+      if (assault) {
+        const dx = s.x - p.x, dz = s.z - p.z;
+        const d = Math.hypot(dx, dz) || 1;
+        t = { x: p.x + (dx / d) * RANGED_POLICY.STANDOFF, z: p.z + (dz / d) * RANGED_POLICY.STANDOFF };
+      } else if (adv) {
         t = adv;
       } else if (ctx.frontOf) {
         t = { x: s.x, z: s.z };   // 正式接线且无点 → 站住

@@ -177,9 +177,8 @@ export class SwarmData {
 
   /** ★ 施工带（事态函数口径，单源） */
   get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
-    if (this.battlePosture === 'assault') {
-      return { rLo: 0, rHi: 0, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
-    }
+    // ★ 总攻不再收敛为点（用户定 2026-09-26：施工带别收敛）——
+    //   同一公式；避免点集空→主攻区/创建/工事全停。
     const rLo = Math.max(24, this.frontMinD + 8);
     const rHiBase = Math.max(90, rLo + 30) + this.pushM;
     const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;
@@ -409,9 +408,14 @@ export class SwarmData {
     return {
       mainSectors: () => this.mainSectors,
       aliveInSector: (role, sec) => this.combatDeps(role, sec, 'alive') as number,
-      unitTarget: (role) => combatUnitTargetFn(this.roster.dbg.gap, role),
+      unitTarget: (role) => combatUnitTargetFn(this.roster.dbg.gap, role, this.battlePosture === 'assault'),
       fillTarget: (role, sec) => this.combatDeps(role, sec, 'fill') as { x: number; z: number; gap: number } | null,
       posture: () => this.postureP,
+      assault: () => this.battlePosture === 'assault',
+      assaultAnchor: (sec) => {
+        const mid = ((sec + 0.5) / 8) * Math.PI * 2;
+        return { x: this.lastShipX + Math.cos(mid) * 50, z: this.lastShipZ + Math.sin(mid) * 50 };   // ★ 距舰 50m
+      },
       anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
       spawn: (role, x, z) => {
         if (!this.spawnMob) return false;
