@@ -66,7 +66,11 @@ export class MeleeManager extends RoleManager {
           const ang = Math.atan2(dz, dx) + (id % 2 === 0 ? 0.44 : -0.44);   // ±25°
           const ex = best.x + Math.cos(ang) * 6, ez = best.z + Math.sin(ang) * 6;
           const dNow = Math.hypot(s.x - best.x, s.z - best.z);
-          this.targets.set(id, dNow >= 5 && dNow <= 8 ? { x: s.x, z: s.z } : { x: ex, z: ez });
+          // ★ 三点校验（用户定 2026-09-26）：到位 = 5~8m 带 **且在本侧**（工兵→舰方向的正前方）——
+          //   否则从背面蹭进距离带就驻守（原石虫跑到工兵后面的根因）。
+          const proj = ((s.x - best.x) * dx + (s.z - best.z) * dz) / Math.max(0.001, dNow) / dl;
+          const guardSide = proj >= 0.25;   // 与舰方向夹角 ≤ 约 75° 算“在前”
+          this.targets.set(id, dNow >= 5 && dNow <= 8 && guardSide ? { x: s.x, z: s.z } : { x: ex, z: ez });
           continue;
         } else {
           // 推进 → 到头驻守（无前沿点 → 站住）

@@ -39,13 +39,32 @@ export class RangedManager extends RoleManager {
       // ★ 总攻（用户定）：集体进攻舰船——压到舰旁 STANDOFF 保距（到位开火）
       const assault = (ctx.posture ?? 0) >= 0.9 || (ctx.ringMax > 0 && ctx.ringMax <= 30);
       const adv = assault ? null : this.advanceTarget(id, s, ctx);
+      // ★ 掩体配对（用户定 2026-09-26）：**已到位后优先躲敌方掩体**——
+      //   藏点 = 掩体背向玩家 1.6m（玩家子弹被掩体挡；敌弹可穿自家掩体——BulletEntity 已约定）。
+      let hide: { x: number; z: number } | null = null;
+      const covers = ctx.covers ?? [];
+      if (!assault && covers.length > 0) {
+        const th = ctx.pos.player() ?? p;
+        let bd = Infinity;
+        for (const c of covers) {
+          const dxc = c.x - th.x, dzc = c.z - th.z;
+          const dc = Math.hypot(dxc, dzc) || 1;
+          const hx = c.x + (dxc / dc) * 1.6, hz = c.z + (dzc / dc) * 1.6;
+          const ds = Math.hypot(hx - s.x, hz - s.z);
+          if (ds < bd) { bd = ds; hide = { x: hx, z: hz }; }
+        }
+      }
       let t: { x: number; z: number };
       if (assault) {
         const dx = s.x - p.x, dz = s.z - p.z;
         const d = Math.hypot(dx, dz) || 1;
         t = { x: p.x + (dx / d) * RANGED_POLICY.STANDOFF, z: p.z + (dz / d) * RANGED_POLICY.STANDOFF };
+      } else if (adv && (adv.x !== s.x || adv.z !== s.z)) {
+        t = adv;                  // 尚未到前沿 → 继续推进
+      } else if (hide) {
+        t = hide;                 // 已到位/无推进目标 → 躲掩体
       } else if (adv) {
-        t = adv;
+        t = adv;                  // = 自身（驻守）
       } else if (ctx.frontOf) {
         t = { x: s.x, z: s.z };   // 正式接线且无点 → 站住
       } else {

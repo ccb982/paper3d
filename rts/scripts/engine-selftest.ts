@@ -153,6 +153,20 @@ console.log('[3] 四兵种管理器');
     '★ 远程：稳定驻守位（环内不漂移 → 不绕圈）');
   // 刷怪执行
   ok(eng.assign(ctx) === 1, '工兵分配（保持站位）');
+  // ★ 三点校验（用户定 2026-09-26）：护卫到位必须“在工兵→舰的正前方”——
+  //   从背面蹭进 5~8m 带不再驻守（原石虫跑到工兵后面的根因）。
+  pos.setSquad(11, 55, 0);   // 工兵 49：55 = 背面（远离舰/玩家）
+  melee.assign({ pos, ringMin: 5, ringMax: 100, now: 4, engineers: [{ x: 49, z: 0 }] });
+  const mSide = melee.targets.get(11)!;
+  ok(mSide.x < 44.5, '★ 护卫三点校验：背面 5~8m 不驻守 → 回工兵向舰侧 6m');
+  // ★ 远程躲掩体（用户定 2026-09-26）：到位后藏到掩体背向玩家 1.6m
+  pos.setSquad(12, 50, 0);
+  ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 0, covers: [{ x: 18, z: 0 }] });
+  const rHide = ranged.targets.get(12)!;
+  ok(Math.abs(rHide.x - 19.6) < 0.01 && Math.abs(rHide.z) < 0.01, '★ 远程：到位后躲掩体后背（18→19.6）');
+  ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 1, posture: 1, covers: [{ x: 18, z: 0 }] });
+  const rAss = ranged.targets.get(12)!;
+  ok(Math.abs(rAss.x - 18) < 0.01, '★ 总攻不躲掩体：仍压到 STANDOFF=18');
 }
 
 // ---------- TimerManager ----------

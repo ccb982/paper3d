@@ -22,6 +22,8 @@ export interface RoleCtx {
   engineers?: ReadonlyArray<{ x: number; z: number }>;
   /** ★ 本队防区的**前沿推进点**（可选；取自防区可部署点最远处） */
   frontOf?: (squadId: number) => { x: number; z: number } | null;
+  /** ★ 敌方掩体（可选；远程“躲掩体”用：静态坐标即可） */
+  covers?: ReadonlyArray<{ x: number; z: number }>;
 }
 
 export interface Target {
