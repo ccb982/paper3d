@@ -14,11 +14,15 @@ export const MELEE_POLICY = {
   ENGAGE: 12,
   /** ★ 每防区目标人数（按占比配置；补到满编） */
   UNITS_PER_SECTOR: 6,
+  /** ★ 补兵节拏（秒；事态驱动 slow→fast） */
+  REPLENISH: { slow: 15, fast: 3 },
 } as const;
 
 export class MeleeManager extends RoleManager {
   constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
     super('melee', mgr, creationOf, 6);
+    this.replenishSlowS = MELEE_POLICY.REPLENISH.slow;
+    this.replenishFastS = MELEE_POLICY.REPLENISH.fast;
   }
 
   /** 压上：目标 = 玩家 + (本队→玩家方向) × (距离−ENGAGE)，再夹进环 */

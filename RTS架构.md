@@ -51,12 +51,14 @@
 systems/swarm/
   engine/   EngineCore EngineBridge OrderWriter OrderValidator DecisionChain CommandLang
             Protect AttackQueues TimerManager Positions SquadManager SquadView SectorManager
-            RoleManager+四兵种(Melee/Ranged/Flyer/Engineer)Manager Spread contracts
+            RoleManager+四兵种(Melee/Ranged/Flyer/Engineer)Manager Spread SquadCreation contracts
+  tactics/  SectorBuilder（8 扇区/可部署面/主攻选择） BattalionManager（大队/情况表/部署去重）
   squad/    SquadCore SquadRegistry CommandLang State Decompose Anchor Follow Formation Abilities MarchAction
   data/     SwarmData（地形/表/L1/L2/事态环/t01/工事数据/编制与生成执行）
   nav/      PassTable LongPath LocalStep（短寻路；Corridor/ShortHop 旧加权链已退出主链）
   根        SwarmSystem（代理移动/渲染/LOD）、AgentPool、SquadTable、TerrainScoring/TerrainSemantics/HoleMask/HoleTable、
-            PostureFn、FortifyPlanner、CommanderSpawn、SwarmLedger、SwarmBatch、SwarmConfig、SwarmDanger、UnitTactics/UnitStrategy
+            PostureFn、FortifyPlanner、SwarmLedger、SwarmBatch、SwarmConfig、SwarmDanger、UnitTactics
+（生成执行 = 四兵种管理器唯一创建接口 + 私有原子口 attachSpawnPorts；旧 CommanderSpawn 已删）
 ```
 
 > **已删（不再存在）**：`SquadDispatch / OrderGate / SquadTactics / CommandLedger / EngineerCorps / EngineerDispatch /
@@ -92,7 +94,7 @@ perceive → situation → decide(单源) → write → debug
 ① 玩家令在身（未过期） → 引擎不产令
 ② 整队血比 <0.5       → march 到后撤点（无后撤点 → 保持现状）
 ③ 到事态环上限         → defend（守原地）
-   被打（playerAttacking/保护关系） → protect
+   保护关系（Protect.assign；玩家攻击信号旧口已删） → protect
 ④ 干预（intervention） → act 到纠正点（当前恒 null；磨蹭纠正已按用户要求删除）
 ⑤ 常规部署（兵种管理器目标） → act
 全不成立 → null（保持现状，不发令）
@@ -104,7 +106,7 @@ perceive → situation → decide(单源) → write → debug
   **复合 → 原子**的解释器在 `squad/CommandLang.ts`（队长层唯一实现，见 §3.2）；
   引擎侧命令语法/解释器在 `engine/CommandLang.ts`（见 §2.10）。
 - **发令统一校验链（`OrderValidator.ts`，一处实现、不许旁路）**：
-  ① **事态范围**：目标夹进 `[ringMin, ringMax]`；到上限 → `suggest='defend'`；
+  ① **事态范围**：目标夹进 `[ringMin, ringMax]`（`clamped` 标记；旧 suggest 输出已删）；
   ② **密度**：同兵种目标 <`SPREAD.MIN=40m` → **切向 θ 散开（径向 r 严格不变）**；工兵不参与；
   ③ **可达**：`canReach` 注入核验（**长途 BFS / 短程 LOS 快筛**；`SwarmSystem.reachFrom` 唯一实现；不可达 → 不发/调用方缩近）。
 - **Spread（`Spread.ts`）**：极坐标、**只解 θ**；目标角差用**余弦定理精确解**（弦长=min）；几何不可满足（min≥r1+r2）→ θ 拉满 π（**无径向推力**）；点按 id 定序 → 各队各自校验也收敛到同一全局解。
@@ -131,12 +133,12 @@ perceive → situation → decide(单源) → write → debug
 ### 2.8 单源数据与视图
 - `Positions`：玩家/舰船/各队队长位置**只此一处**（`setPlayer/setShip/setSquad/squad/nearestSquad/squadOf`）。
 - `SquadManager`：每队一条记录（role/alive/x/z/atom/phase/progress/stillS/hpRatio/reports）；`report` 为**唯一接收器**（未给字段不覆盖）；`tick` 过期检查。
-- `SectorManager`：扇形防区（建区/归区/中心点/安全度），后撤点由它给。
+- `SectorManager`：4 扇区归区/中心点（**仅后撤点**用；安全度/空区/补编等旧防区脑已删——防区 = `tactics/SectorBuilder`）。
 - `SquadView`：UI/探针**唯一只读口**（引擎令 + 汇报 + 队长核执行态 + 命令历史），**不反向指挥**。
 
 ### 2.9 EngineBridge —— 实机接线桥
-- **LiveView 端口**（引擎不直读世界，G4）：`player/ship/squads/canReach/emit/playerAttacking/enemies/attackables/engineer/exemptOf/retire/wave1/t01/ledgerTotal/setReleaseCap/spawnBattalion`。
-- **波次与兵力放行（决策源）**：`t01`（落地起算）+ `releaseAt(t01)` → `setReleaseCap` + `spawnBattalion(instant)`（**第一波 0.45 / 总攻 0.80**）；`t01` 回退（换落点/新一日）自动复位。
+- **LiveView 端口**（引擎不直读世界，G4）：`player/ship/squads/canReach/emit/enemies/attackables/engineer/creation/exemptOf/retire/wave1/t01/ledgerTotal/setReleaseCap`。
+- **波次与兵力放行（决策源）**：`t01`（落地起算）+ `releaseAt(t01)` → `setReleaseCap`（**第一波 0.45 / 总攻 0.80**）；`t01` 回退（换落点/新一日）自动复位。**创建不再是"波次激发"**：由四管理器按防区缺口/占比持续补齐（《战术侧架构.md》§3.D）。
 - **第一波抵舰驻留**：`wave1` 后进攻令（act/march）抵舰 70m 内 → **驻守 45s**；血比 <0.45 → 后撤；到期交回；玩家令不覆盖。
 - **write 两趟**：① 全队决策（含工兵 `mission:'build'`）；② 统一校验链（环/全局密度/可达）→ 唯一发令器 → `emit` → **队长核 `accept`**。
 - 探针 `dbg`：ticks/issued/refreshed/spread/last + 各管理器 dbg（`__rts.newEngine()`，G9）。
@@ -187,55 +189,11 @@ modifier  := 'roe' | 'mission' | 'ttl' | 'seq' | 'source'
 **只有三张表**：**地形语义表**（偏好/评分基础）· **可行性表**（硬通行唯一来源）· **战壕掩体表**（动态工事：参与评分；工兵建成即更新）。
 `TerrainScore` **已废除**（越权的第四套网格，2026-09-26）：① 硬通行（`blockedAt`/`pickSteer` 硬格）→ 地形真相（坑=墙）+ 与寻路同口径陡差；② 评分面 → `TerrainScoring.ts` **查询时纯函数**（语义表可站/宽度/隘口/坡 + 可行性表高度 + 掩体表战壕/bonus + raster 高度）。详见《寻路重写方案.md》§4.4.6。
 
-### 2.12 战术侧重构（用户定 2026-09-26；**用户亲自主导**；待实施）
+### 2.12 战术侧（唯一规格见《战术侧架构.md》）
 
-> **全新规格已单独成文：《战术侧架构.md》（CRUD 规格：表定义/操作/不变量/状态机/验收）。本节为摘要，冲突时以该文为准。**
-
-> 背景（本日只读调研）：现战术侧 = 全兵种只绕舰画环（无以敌为目标）+ 到达/换令口径四套阈值打架 + TTL 不续期 + 近战伤害 targetKind 断链
-> → 小队“executing 空转”、整场零战斗产出（详据见 §16.8）。重构方向以下三条，均由用户亲定。
-
-**① 按 chunk 的战术策略（用户亲自写）**
-- 地形模板有限——**以飞船所在的 chunk 为键**，用户手写该 chunk 的战术策略：
-  进攻方向/节奏、集结与压迫线、火力位、掩体/战壕需求、撤退条件等；引擎按当前 chunk 选择并执行；
-  无策略 chunk 走默认。（现环形几何 `MeleeManager/RangedManager/FlyerManager` 作为兜底，不再作为主策略）
-- 策略表格式/键与默认策略待用户亲定。
-
-**② 编制：大队制（用户定 2026-09-26 细化；**已实现 v1：`tactics/BattalionManager`**）**
-- 全部兵力编为若干**大队**（约 **30 人/大队**），大队下设小队；**部署/任务以“小队”为原子单位**。
-- 大队 = **任务与防区的持有者**；新**大队管理器**职责：组建/补员/满编维持、按小队向防区部署、跨防区调度。
-- **部署去重（管理器视角）**：同一防区**不重复部署同类小队**（按配额）；同一小队不双投；部署表全局唯一。
-- **缺什么补什么**：每个防区持一张“小队类型缺口表”；部署器按缺口逐队补齐；尽可能维持各小队**满编**。
-- **大队编制（管理器视角）**：大队（~30 人）= 若干小队（近战/远程/工兵按配比）；管理器维护
-  **大队花名册 + 每小队情况表**（类型、在编/满编、实时位置与所在层、当前任务/原子、目标可达性、伤亡与补员缺口、静止时间）。
-  数据源单一：`SquadManager`（位置/原子/阶段/进度/静止）+ `SquadTable`（成员/领队）+ `Ledger`（伤亡缺口）。
-- **按情况部署**：部署决策以“小队情况”为输入——缺编先补员/补队；按防区缺口表配类型；不重复部署；满编优先。
-
-**③ 战区（扇区）重写：8 扇区 + 主攻方向（用户定 2026-09-26）**
-- **全环仍分 8 个扇区**（就是现有 `FORTIFY_SECTORS = 8` 口径）；**从中选 1~3 个作为主攻方向**（按难度）——
-  **未入选的扇区不部署/不作战**；主攻扇区 = 部署与作战的唯一范围。
-  **（后续待实现；用户定 2026-09-26 细化）非主攻扇区派遣“工兵 + 护卫队”——**四处造防线，阻碍玩家采集**：
-  工兵小队在非主攻扇区（玩家采集路线/资源点周边）修筑防线与战壕，**阻断/骚扰采集**；护卫小队随行掩护；
-  编制来自非主攻方向的富余兵力（**不占主力编制**）；待定：采集点/资源点表的来源（语义表新增或单独表）、被阻断判定。——本期只记档，不实现。
-- 一个主攻扇区可**部署多个大队**（**含工兵小队**）。
-- 防区产出缺口表→部署器按小队下发；防区的作用 = **部署与驻守的唯一容器**（不再是“一对一认领”）。
-- **随打随补**：损失即补员、空编即补队，维持满编（补给走 roster/spawn 缺口闸门）。
-
-**④ 全新的扇区构建系统（SectorBuilder；用户定 2026-09-26；**已实现 v1**）**
-- **基准**：以角色（舰船）所在位置/层为圆心，全环 8 扇区（角度均分）。
-- **可部署面**：同层可达 ∧ 无需爬坡/绕路（`canReach` 同层口径）∧ 在作战/施工带内；
-  **排除与角色同层连通的高原/山顶整片区域**（上去要绕路）。
-- **构建产物**（每扇区）：可部署点集/容量 · 到舰距离带 · **小队类型缺口表** · 需求热点（工事 need）；
-  供部署器**选 1~3 个主攻扇区**并逐队部署。
-- **刷新**：摊销/事件驱动（舰迁移、地形/工事变、到达置不了）；中心单源（`lastShipX/Z` 就绪门：未就绪不构建）。
-- **可视化（用户定 2026-09-26）**：小地图（**M** 总览）按 SectorBuilder 点集画**防区真形**（随地形；高原/山顶整片不画），**主攻扇区橙色高亮** + 边界射线 + 区号/点数标注。
-
-**⑤ 地形高度硬规则（用户定 2026-09-26；极重要）**
-- **舰船所在位置关联的一片高地（含**高地里的坑洞/凹陷**）整片不得纳入防区**——上去要绕路；
-  防区偏防守，不强占舰船所在的高原/山顶。**没有舰船 → 正常占领**（不做高度排除，只排坑/水/硬墙）。
-- 防区 = **山脚下的包围圈**；判定口径（`SectorBuilder.onShipHighland`）：① 高度 ≥ 舰船层-0.5m → 高地本体；
-  ② 自身深陷（>1.2m）但 **8 方向 8m 内 ≥6 个方向为舰船层高** → 高地里的坑洞/凹陷（一律排除）。
-
-**与现有层的关系**：策略层（chunk 策略）→ 大队（任务/防区）→ 小队（执行：现 `squad/` 三件套 + 两原子）；现 `DecisionChain` 作为无策略时的兜底保留。
+> **本节不再展开**。战术侧的唯一规格 = **《战术侧架构.md》**（CRUD：表 T1~T6 / 操作 §3 / 不变量 I1~I11 / 状态机 / 验收）。
+> 要点（用户定 2026-09-26）：按飞船 chunk 手写战术策略（**写给蜂群引擎，不碰编制**）；大队 ~30 人；防区 8 扇区选 1~3 主攻；
+> **创建只走四兵种管理器**（只建本兵种 ∧ 只在对应防区）；工兵 = 统一编制机制（件预约/复检/看门狗/补队/高地排除）；回收严格（§0.1）。
 
 ## 3. 队长层（执行 `squad/`）
 
@@ -295,7 +253,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 - **查询**：`blockedAt/coverAt/walkableLine/heightAt/slopeGradAt/pathMulAt/pathMulFor/scoreForType/rangedPost/debugHasCover/isWaterAt/pathStamp/canStep/climbRunAt/nearestClimbPoint`。
 - **事态与环**：`PostureFn`（`p = clamp(schedule(t)+provocation)`，挑衅=被击 ×0.01 / 击杀 ×0.03，τ=90s，上限 +0.35；姿态阈值 0.22/0.30/0.55/0.80，assault 锁定）；`battlePosture`；`t01` 时钟（落地归一，`DAY_RHYTHM_S=450` 兜底，`debugDayT01/scrubDay/followRealtime`）；`ringBounds`（**p 驱动**：**外圈大圈一直收缩只减不增**：D0max → 大圆 90 → 缓缩 80 → 0；**内圈小圈先收缩 → 第一波后立即增大（甜甜圈 60，p 0.45-0.55）→ 再收缩**；总攻 p≥0.80 时已是 (0,0) 点）；环 1Hz 更新；**时间轴可自由快进/倒退**（`scrubDay`/`followRealtime` 重置姿态状态 → 环可反向）；`frontP`（单调）+ `ring/clampToRing/frontGate/postureInfo/setPosture`。
 - **工事数据**：`FortifyPlanner`（8 扇区；`refreshOne` 摊销 1 区/拍；`assign` 需求最高优先一队一区；`targetOf` **扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**（候选=需求降序表；高位不可达→次高可达；全不可达→null；**绝不出扇区/带**，确定性不掷随机数））；`pushM` 前推棘轮（8 区达标 +1m/拍=2m/s，封顶 `frontP×120m`；**无可行点扇区视为达标**、未扫描不算；前推闸门 `FRONT_TAU=18`）；`fortifyBand`（`rLo=max(24, frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM, frontMaxD)`；**总攻 → (0,0) 收缩为点**）；`fortifyNeed`（`scoreForUnit('defense')×(1−cover/COVER_FULL)`）；`stage` S1→S2（第一波 0.45 停新增）；`engineerPort()`（见 §7）。
-- **编制与生成执行**：`RosterController`（占比/缺口 4Hz）；`CommanderSpawn`（`deploy/battalion(instant)/drain/reset` + 回收名单）；生成端口（`spawnMob/spawnMobIndex/spawnBuilder/buildCover/digTrench`）由 main/CommanderWiring 注入；`planDefense`（建计划 + 表 + 复位 + 开局班底）。
+- **编制与生成执行（用户定 2026-09-26）**：`RosterController`（占比/缺口 4Hz，**被四管理器消费**：`combatShare` → 每区人头目标 + gap 偏置）；`planDefense`（建计划 + 表 + 复位）；原子生成口私有（`attachSpawnPorts`）；**创建只走四兵种管理器**（《战术侧架构.md》§3.D/E）。
 - **地形破坏入口**：`noteTerrainDig/markTerrainDirty`（`ChunkManager.onTerrainDig` 中央钩子；子弹/战壕都过）→ 掩码窗扫（`HoleMask.refresh`，挖过即战壕·评分查询时直读）+ 采样缓存失效。
 
 ---
@@ -363,23 +321,12 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 
 ---
 
-## 7. 工兵（`engine/EngineerManager` 全权）
+## 7. 工兵（规格见《战术侧架构.md》§3.C）
 
-- **取件门**：`engineerPort.canReach = SwarmSystem.reachFrom`（长途 BFS / 短程 LOS；唯一口径）。
-- **位置查询（唯一口径）**：`FortifyPlanner.targetOf`（**扇区内 ∧ 带内 ∧ 可达 ∧ 需求最高**；高位不可达→扇区内次高可达；全不可达→null，绝不越界）；经 `SwarmData.engineerPort()` 消费（数据：分区/需求/环带/可达/落地端口）。
-- **派件（重做 2026-09-26；用户定）**：**一队一分区**（每支工兵小队独立分区、不重合；队自己指挥自己、及时汇报）；
-  **件预约制**（格点全局唯一；防多队同点）+ **每拍复检**（件 ∈ 本区 ∧ 带内 ∧ need 有效 ∧ 可达）+ **到件看门狗**
-  （超 `ARRIVE_TIMEOUT_S=25s` 未到 → 拉黑该点换件，`BLACK_TTL_S=60s`；件查询带内优先、带外兜底）；
-  **舰船高地排除**：与防区同规则（`onShipHighland`；高地及其上坑洞不发件）；
-  **补队（用户定 最终）**：**预制配额**——先数“有活分区”，配额 = min(`SQUAD_QUOTA=3`, 有活区数)；
-  **只给有活分区建队（绝不建会发呆的队）**；无件空转 >`ZONE_IDLE_S=15s` → 换区；有队就不放；
-  节拍由**事态驱动**（`REPLENISH_SLOW_S=10 → FAST_S=2`，越后越频繁）；建队 = 在该区投放 3 只成队；
-  **件必须在施工带内**；**首件豁免**“第一波停新增”（落地班底必派一件，完成一件后停）。
-- **施工**：队长到件 **3m 内**计时（实秒）；**掩体 6s / 战壕 10s**（每 2s 挖 1 遍 ≤5 遍；坑底 −1.2m 封顶）；**总攻只修掩体**（战壕暂停）。
-- **不入攻击队列**：`LiveView.attackables` 过滤工兵编制；统一计时仍看全体。
-- **前推/连通**：8 区全达标 → `pushM` 棘轮（≤1m/拍=2m/s，封顶 `frontP×120m`）；施工带 `rHi ≤ 环上限`；**总攻收缩为点**。
-
----
+- **一队一分区**（独区、不重合）；队自己指挥自己、及时汇报；件**预约制**（全局唯一）+ **每拍复检** + **到件看门狗**（停驻 25s 换点、邻域拉黑、同区 3 连败冷却）；
+- **统一编制机制**：进图即建 = 缺了即补（同一循环）；配额 = min(3, 有活区数)；在途 25s 幂等；有队不放、有活才建；
+- **舰船高地排除**（含高地里的坑洞/凹陷）；建造查询带内优先、带外兜底；
+- 钉死口径：被卡死收回 = 一定出了问题（§0.1 铁律），**修行为不修判官**。
 
 ## 8. 战斗与快车道
 
@@ -516,6 +463,6 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 4. ~~高倍速混合时钟~~（已修 2026-09-25）：玩法计时统一到 `services/SimClock`，10×/100× 行动与下命令同步加速。
 5. **guard 已知债务**：`ChunkManager/GachaOverlay/FluidSolver/MapEntityDecorBase/TerrainMaterial` 五个非蜂群大文件（与本次重写无关）。
 6. **可选拆分**：`SwarmSystem`（1151）/`SwarmData`（692）/`EngineBridge`（415）/`main`（843）为"大而不乱"的文件，按需再拆。
-8. **战术侧重构（用户定 2026-09-26；用户亲自主导；已开工：大队+扇区 v1 已落）**：见 **§2.12**——按飞船 chunk 手写战术策略 / 大队制（~30 人）/ 防区扇区 + 随打随补 + 满编维持。
+8. **战术侧（用户定 2026-09-26）**：唯一规格 = **《战术侧架构.md》**。已落 v1：大队/扇区/四管理器唯一创建接口/占比补齐/主攻 1~3 选择/工兵统一编制。待做：**非主攻扇区"工兵+护卫阻碍采集"**、I11 的 arch-guard 规则、chunk 战术（用户自写，写给引擎、不碰编制）。
    同日只读调研的现状三根因（①只绕舰画环无以敌为目标 ②到达/换令口径打架+TTL 不续期 ③近战伤害 targetKind 断链）为重构输入。
 7. **寻路重写（待裁决）**：长寻路=通行优先的 Route 服务（逐段可执行、无路报 blocked，绝不回落直线）；短寻路=地形语义引导的 LocalStep（有限窗口完备、无死循环）。方案见 **《寻路重写方案.md》**，批准后按 S1→S4 逐步实施。

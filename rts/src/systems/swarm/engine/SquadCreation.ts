@@ -18,6 +18,11 @@ export interface CreationPort {
   unitTarget?(role: MobRole): number;
   /** 防区部署锚点（无 = 该区不可创建） */
   anchorOf(sec: number): { x: number; z: number } | null;
+  /** ★ 事态进度 0~1（补兵节拍驱动；可选：未接 = 0） */
+  posture?(): number;
+  /** ★ 补兵目标（用户定 2026-09-26）：该区**缺编队**的队长位置与缺口；
+   *  新兵在队长身旁投放 → 并入该队（**队长指挥**）；null = 无可补之队 → 按锚点建新队。 */
+  fillTarget?(role: MobRole, sec: number): { x: number; z: number; gap: number } | null;
   /** 原子生成口（只被管理器调用） */
   spawn(role: MobRole, x: number, z: number): boolean;
 }
@@ -35,26 +40,27 @@ export class SquadCreation {
     private readonly role: MobRole,
     /** 每防区目标**人数**（按占比配置；补到满编） */
     private readonly unitTarget: number,
-    /** 在途宽限（秒） */
-    private readonly graceS = 25,
   ) {}
 
-  /** 每拍检查全部对应防区：缺就补、有就不放（进图首建与阵亡补建同一条路） */
-  tick(now: number, port: CreationPort): number {
+  /** 每拍检查全部对应防区：缺就补、有就不放
+   *  @param every 补兵间隔（秒；**策略在兵种管理器**，此处只执行） */
+  tick(now: number, port: CreationPort, every: number): number {
     for (const sec of port.mainSectors()) {
-      if ((this.grace.get(sec) ?? 0) > now) continue;          // 在途 → 幂等
+      if ((this.grace.get(sec) ?? 0) > now) continue;          // 节拍/在途 → 幂等
       const target = port.unitTarget ? port.unitTarget(this.role) : this.unitTarget;
       const alive = port.aliveInSector(this.role, sec);
       if (alive >= target) continue;                           // 已满编 → 不放
-      const a = port.anchorOf(sec);
+      // ★ 补兵优先：有缺编队 → 在**队长身旁**投放（并入队伍，由队长指挥）；否则按锚点建新队
+      const fill = port.fillTarget?.(this.role, sec) ?? null;
+      const a = fill ? { x: fill.x, z: fill.z } : port.anchorOf(sec);
       if (!a) continue;                                        // 无锚点（非对应防区）→ 拒建
-      const need = Math.min(BURST, target - alive);
+      const need = Math.min(BURST, target - alive, fill ? fill.gap : Number.POSITIVE_INFINITY);
       let n = 0;
       for (let k = 0; k < need; k++) {
         if (!port.spawn(this.role, a.x + (k - 1) * 1.5, a.z)) break;
         n++;
       }
-      if (n > 0) { this.grace.set(sec, now + this.graceS); this.spawned += n; }
+      if (n > 0) { this.grace.set(sec, now + every); this.spawned += n; }
     }
     return this.spawned;
   }

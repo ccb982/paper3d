@@ -877,15 +877,28 @@ console.log('[12] SquadCreation 创建接口（role/sector 语法）');
     spawn: (role, x, z) => { calls.push({ role, x, z }); return true; },
   };
   const sc = new SquadCreation('melee', 6);
-  sc.tick(0, port);
+  sc.tick(0, port, 25);
   ok(calls.length === 3, '缺就补：一次投放 3 只成队');
   ok(calls.every((c) => c.role === 'melee'), '语法①：只建本兵种');
   ok(calls.every((c) => Math.abs(c.z) < 1e-6 && c.x >= 8.4), '语法②：只在对应防区锚点创建');
   const n1 = calls.length;
-  sc.tick(5, port);
+  sc.tick(5, port, 25);
   ok(calls.length === n1, '在途记账：宽限期内不重复投放（幂等）');
-  sc.tick(30, port);
+  sc.tick(30, port, 25);
   ok(calls.length === n1 + 3, '宽限到期仍无队（没到）→ 重试（同一条路）');
+  // ★ 补兵优先：有缺编队（fillTarget）→ 在**队长身旁**投放（并入，队长指挥）
+  const fillCalls: { x: number; z: number }[] = [];
+  const portF: CreationPort = {
+    mainSectors: () => [0],
+    aliveInSector: () => 2,
+    anchorOf: () => ({ x: 99, z: 99 }),
+    unitTarget: () => 6,
+    fillTarget: () => ({ x: 33, z: 0, gap: 2 }),
+    spawn: (role, x, z) => { fillCalls.push({ x, z }); return true; },
+  };
+  const scF = new SquadCreation('melee', 6);
+  scF.tick(0, portF, 25);
+  ok(fillCalls.length === 2 && fillCalls.every((c) => Math.abs(c.x - 33) <= 1.5), '★ 补兵自动化：新兵在队长身旁投放（并入队伍=队长指挥）');
   const sc2 = new SquadCreation('ranged', 3);
   const before = calls.length;
   sc2.tick(0, { mainSectors: () => [5], aliveInSector: () => 0, anchorOf: () => null, spawn: port.spawn });
@@ -894,11 +907,44 @@ console.log('[12] SquadCreation 创建接口（role/sector 语法）');
   alive = 3;
   const sc3 = new SquadCreation('melee', 6);
   const b3 = calls.length;
-  sc3.tick(0, port);
+  sc3.tick(0, port, 25);
   ok(calls.length === b3 + 3, '满编循环：缺 3 → 补 3');
   alive = 6;
-  sc3.tick(100, { ...port, aliveInSector: () => 6 });
+  sc3.tick(100, { ...port, aliveInSector: () => 6 }, 25);
   ok(calls.length === b3 + 3, '满编后不再放');
+}
+
+// ---------- 补兵下沉到兵种管理器：策略在管理器（节拍），机制在 SquadCreation ----------
+console.log('[12b] 兵种管理器补兵（节拍策略在管理器）');
+{
+  const sm2 = new SquadManager();
+  const pos2 = new Positions();
+  let calls: { role: string; x: number; z: number }[] = [];
+  const mkPort = (posture: number): CreationPort => ({
+    mainSectors: () => [0],
+    aliveInSector: () => 0,
+    anchorOf: () => ({ x: 5, z: 0 }),
+    spawn: (role, x, z) => { calls.push({ role, x, z }); return true; },
+    posture: () => posture,
+  });
+  let portP = mkPort(0);
+  const mm = new MeleeManager(sm2, () => portP);
+  mm.sync();
+  mm.assign({ pos: pos2, ringMin: 0, ringMax: 0, now: 0 });
+  ok(calls.length === 3 && calls.every((c) => c.role === 'melee'), '近战管理器：补兵走本管理器接口（只建本兵种）');
+  calls = [];
+  mm.assign({ pos: pos2, ringMin: 0, ringMax: 0, now: 5 });
+  ok(calls.length === 0, '★ 节拍在管理器：p=0 → slow 15s，宽限内不重投');
+  mm.assign({ pos: pos2, ringMin: 0, ringMax: 0, now: 16 });
+  ok(calls.length === 3, '★ 节拍到期 → 再补（同一条路）');
+  calls = [];
+  portP = mkPort(1);   // p=1 → fast 3s
+  const mm2 = new MeleeManager(sm2, () => portP);
+  mm2.sync();
+  mm2.assign({ pos: pos2, ringMin: 0, ringMax: 0, now: 0 });
+  calls = [];
+  mm2.assign({ pos: pos2, ringMin: 0, ringMax: 0, now: 4 });
+  ok(calls.length === 3, '★ 事态驱动：p=1 → fast 3s，更频繁');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

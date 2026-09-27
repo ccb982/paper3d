@@ -16,11 +16,15 @@ export const FLYER_POLICY = {
   LANES: 4,
   /** ★ 每防区目标人数（按占比配置；补到满编） */
   UNITS_PER_SECTOR: 3,
+  /** ★ 补兵节拏（秒；事态驱动 slow→fast） */
+  REPLENISH: { slow: 20, fast: 5 },
 } as const;
 
 export class FlyerManager extends RoleManager {
   constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
     super('flyer', mgr, creationOf, 3);
+    this.replenishSlowS = FLYER_POLICY.REPLENISH.slow;
+    this.replenishFastS = FLYER_POLICY.REPLENISH.fast;
   }
 
   /** 航线：目标 = 玩家 + 本队相位对应的航线点，再夹进环 */

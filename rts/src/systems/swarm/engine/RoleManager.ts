@@ -41,10 +41,17 @@ export abstract class RoleManager {
     this.creation = new SquadCreation(role, creationPerSector);
   }
 
-  /** 每拍检查对应防区：缺就补、有就不放 */
+  /** ★ 补兵节拍（用户定 2026-09-26：策略在兵种管理器；事态驱动——越后越频繁） */
+  protected replenishSlowS = 15;
+  protected replenishFastS = 3;
+
+  /** 每拍检查对应防区：缺就补、有就不放（本兵种策略：节拍 + 占比目标 + 优先并队） */
   protected ensureSquads(now: number): void {
     const port = this.creationOf();
-    if (port) this.creation.tick(now, port);
+    if (!port) return;
+    const p01 = Math.max(0, Math.min(1, port.posture ? port.posture() : 0));
+    const every = this.replenishSlowS + (this.replenishFastS - this.replenishSlowS) * p01;
+    this.creation.tick(now, port, every);
   }
 
   /** 引擎每拍同步编成（SquadManager 是编成真源；这里只缓存本兵种子集） */

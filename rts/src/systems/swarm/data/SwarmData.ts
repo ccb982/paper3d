@@ -25,7 +25,8 @@ import { HoleTable } from '../HoleTable';
 import { samplerFor } from '../../../services/map/TerrainSampler';
 import { DANGER } from '../SwarmDanger';
 import { PassTable } from '../nav/PassTable';
-import { RosterController, combatShare } from '../RosterController';
+import { RosterController } from '../RosterController';
+import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
 import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
@@ -408,8 +409,10 @@ export class SwarmData {
   combatCreationPort(): import('../engine/SquadCreation').CreationPort {
     return {
       mainSectors: () => this.mainSectors,
-      aliveInSector: (role, sec) => this.aliveRoleInSector(role, sec),
-      unitTarget: (role) => this.combatUnitTarget(role),
+      aliveInSector: (role, sec) => this.combatDeps(role, sec, 'alive') as number,
+      unitTarget: (role) => combatUnitTargetFn(this.roster.dbg.gap, role),
+      fillTarget: (role, sec) => this.combatDeps(role, sec, 'fill') as { x: number; z: number; gap: number } | null,
+      posture: () => this.postureP,
       anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
       spawn: (role, x, z) => {
         if (!this.spawnMob) return false;
@@ -420,39 +423,15 @@ export class SwarmData {
     };
   }
 
-  /** ★ 每防区目标人头（用户定 2026-09-26）：占比（RosterController.combatShare）× 每区编制基数；
-   *  若场上该兵种占比低（roster 缺口）→ 临时 +2 偏置（消费 gap，防死输出）。 */
-  private combatUnitTarget(role: 'melee' | 'ranged' | 'flyer' | string): number {
-    if (role !== 'melee' && role !== 'ranged' && role !== 'flyer') return 0;
-    let n = Math.max(1, Math.round(combatShare(role) * 12));
-    const gap = this.roster.dbg.gap;
-    if ((gap === 'shield' || gap === 'assault') && role === 'melee') n += 2;
-    else if (gap === 'ranged' && role === 'ranged') n += 2;
-    return n;
-  }
-
-  /** 防区内本兵种现役人数；未部署队按最近锚点归档（防超额刷兵） */
-  private aliveRoleInSector(role: string, sec: number): number {
-    const t = squadTypeOf(role as Parameters<typeof squadTypeOf>[0]);
-    let n = 0;
-    for (const s of this.swarm.squads.all()) {
-      if (s.members.size <= 0) continue;
-      if (s.type !== t) continue;
-      if (s.builders !== (role === 'engineer')) continue;
-      // ★ 按**物理扇区角**归档（以舰为心；免疫部署延迟）——与 SectorBuilder 同圆心
-      let sq = this.squadSectorOf?.(s.id) ?? -1;
-      if (sq < 0) {
-        const lead = s.members.get(s.leaderUid);
-        if (lead) {
-          let ang = Math.atan2(lead.z - this.lastShipZ, lead.x - this.lastShipX);
-          if (ang < 0) ang += Math.PI * 2;
-          sq = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
-        }
-      }
-      if (sq !== sec) continue;
-      n += s.members.size;
-    }
-    return n;
+  /** 战斗编制计算桥（CombatTargets；单源只读） */
+  private combatDeps(_role: string, _sec: number, _kind: 'alive' | 'fill'): unknown {
+    const d = {
+      squads: this.swarm.squads,
+      sectorOf: (id: number) => this.squadSectorOf?.(id) ?? -1,
+      shipX: () => this.lastShipX,
+      shipZ: () => this.lastShipZ,
+    };
+    return _kind === 'alive' ? aliveRoleInSectorFn(d, _role, _sec) : fillTargetOfFn(d, _role, _sec);
   }
 
   engineerPort(): EngineerPort {

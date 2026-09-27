@@ -16,11 +16,15 @@ export const RANGED_POLICY = {
   BAND: 4,
   /** ★ 每防区目标人数（按占比配置；补到满编） */
   UNITS_PER_SECTOR: 3,
+  /** ★ 补兵节拏（秒；事态驱动 slow→fast） */
+  REPLENISH: { slow: 18, fast: 4 },
 } as const;
 
 export class RangedManager extends RoleManager {
   constructor(mgr: SquadManager, creationOf?: () => import('./SquadCreation').CreationPort | null) {
     super('ranged', mgr, creationOf, 3);
+    this.replenishSlowS = RANGED_POLICY.REPLENISH.slow;
+    this.replenishFastS = RANGED_POLICY.REPLENISH.fast;
   }
 
   /** 保距：目标 = 玩家 + (本队→玩家方向) × STANDOFF，再夹进环 */
