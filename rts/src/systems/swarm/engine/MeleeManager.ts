@@ -10,8 +10,10 @@ import type { SquadManager } from './SquadManager';
 
 /** 近战策略参数（集中可调） */
 export const MELEE_POLICY = {
-  /** 接敌距离（米）：压到离玩家这么近就停（挥击由战斗原子接管） */
+  /** 接敌距离（米）：平时压到离玩家这么近就停 */
   ENGAGE: 12,
+  /** ★ 总攻接敌距离（用户定 2026-09-26）：**压到近战攻距内**（否则停在 12m 外看着像“呆住”不打） */
+  ENGAGE_ASSAULT: 3,
   /** ★ 每防区目标人数（按占比配置；补到满编） */
   UNITS_PER_SECTOR: 6,
   /** ★ 补兵节拏（秒；事态驱动 slow→fast） */
@@ -41,10 +43,11 @@ export class MeleeManager extends RoleManager {
       if (!s) continue;
       let t: { x: number; z: number };
       if (posture >= 0.8 || ctx.ringMax <= 0) {
-        // 冲锋（总攻）/无环：压到接敌距离
+        // 冲锋（总攻）/无环：压到接敌距离（总攻 = 近战攻距）
         const dx = p.x - s.x, dz = p.z - s.z;
         const d = Math.hypot(dx, dz);
-        const stop = Math.max(0, d - MELEE_POLICY.ENGAGE);
+        const stopDist = posture >= 0.8 ? MELEE_POLICY.ENGAGE_ASSAULT : MELEE_POLICY.ENGAGE;
+        const stop = Math.max(0, d - stopDist);
         t = d > 1e-3 ? { x: s.x + (dx / d) * stop, z: s.z + (dz / d) * stop } : { x: s.x, z: s.z };
       } else {
         // 护卫：最近工兵向舰侧 6m
@@ -55,10 +58,15 @@ export class MeleeManager extends RoleManager {
           if (d < bd) { bd = d; best = e; }
         }
         if (best) {
-          // ★ 护卫不受环夹（保护优先；夹环会把它拉离工兵）
+          // ★ 护卫（用户定 2026-09-26：**间距 ≥5m，不挡路**）：
+          //   · 站位 = 工兵向舰侧 6m，再**侧向偏置**（按队 id 奇偶 ±25°）——不占工兵的行进线；
+          //   · 已在 5~8m 带内 → **就地驻守**（防贴脸挡路/来回抖）。
           const dx = p.x - best.x, dz = p.z - best.z;
           const dl = Math.hypot(dx, dz) || 1;
-          this.targets.set(id, { x: best.x + (dx / dl) * 6, z: best.z + (dz / dl) * 6 });
+          const ang = Math.atan2(dz, dx) + (id % 2 === 0 ? 0.44 : -0.44);   // ±25°
+          const ex = best.x + Math.cos(ang) * 6, ez = best.z + Math.sin(ang) * 6;
+          const dNow = Math.hypot(s.x - best.x, s.z - best.z);
+          this.targets.set(id, dNow >= 5 && dNow <= 8 ? { x: s.x, z: s.z } : { x: ex, z: ez });
           continue;
         } else {
           // 推进 → 到头驻守（无前沿点 → 站住）

@@ -121,7 +121,7 @@ export function stateFromOrder(squadId: number, order: SquadOrder, prev: SquadOr
     squadId,
     order: o,
     issuedAt: now,
-    until: ttl > 0 ? now + ttl : 0,
+    until: 0,   // ★ 命令无 TTL（字段保留兼容 UI；用户定 2026-09-26）
     source: order.source === 'player' ? 'player' : 'engine',
     notBefore: now,
     pathGoalX: 0, pathGoalZ: 0, pathAt: 0, pathFailedAt: 0,

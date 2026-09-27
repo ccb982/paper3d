@@ -9,7 +9,7 @@
 // ============================================================
 
 import type { MobRole, OrderState, SquadOrder } from './contracts';
-import { GAME_MIN } from '../SwarmConfig';
+import {} from '../SwarmConfig';
 import { Positions } from './Positions';
 import { SquadManager } from './SquadManager';
 import { SectorManager } from './SectorManager';
@@ -29,7 +29,6 @@ import { TimerManager } from './TimerManager';
 import { EngineCore } from './EngineCore';
 
 /** 玩家令寿命（游戏分钟；《RTS架构.md》§5：玩家令 TTL 30 游戏分钟） */
-const PLAYER_ORDER_TTL = 30 * GAME_MIN;
 
 /** 工兵施工令的固定决策（不进战术决策链；目标由 EngineerManager 给） */
 const ENGINEER_DECISION: Decision = { source: 'routine', kind: 'act', target: null, reason: 'build' };
@@ -165,7 +164,7 @@ export class EngineBridge {
       target,
       threat: this.pos.player() ?? undefined,
       seq: 0,
-      ttl: PLAYER_ORDER_TTL,
+      ttl: 0,   // ★ 无 TTL（用户定）
     };
     const ok = this.writer.issue(squadId, order, { now: this.nowS, player: true });
     if (ok && !this.shadow) this.live.emit?.(squadId, order, this.nowS);
@@ -319,10 +318,7 @@ export class EngineBridge {
     for (const rec of [...this.squads.all()]) {
       // ★ 玩家令生命周期（《RTS架构.md》§5）：TTL 到期 → 释放，交回引擎决策（工兵也适用——防旧板目标锁死）
       const cur0 = this.writer.store.get(rec.id);
-      if (cur0 && cur0.order.source === 'player' && cur0.order.ttl > 0
-        && now - cur0.issuedAt >= cur0.order.ttl) {
-        this.writer.release(rec.id);
-      }
+      // ★ 命令无 TTL（用户定）：玩家令不再自动到期释放（直到被新令替换）
       // ★ 工兵 = 新引擎全权（用户定 2026-09-25）：目标 = 建造位置查询结果；
       //   不参与战术决策链（重伤撤退/保护由管理器施工优先），不入攻击队列（接线层过滤）。
       if (rec.role === 'engineer') {

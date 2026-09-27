@@ -51,7 +51,7 @@ export class SquadRegistry {
     const cur = core.current();
     if (cur && cur.kind === order.kind && (cur.mission ?? '') === (order.mission ?? '')
       && Math.hypot(cur.target.x - order.target.x, cur.target.z - order.target.z) <= 2) {
-      return;
+      // ★ 命令无 TTL（用户定）：同签名重发直接去重（不需续期）
     }
     core.accept(order, now);
     this.dbg.accepted++;

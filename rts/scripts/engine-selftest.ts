@@ -130,7 +130,7 @@ console.log('[3] 四兵种管理器');
   ok(ft !== undefined && Math.abs(Math.hypot(ft.x, ft.z) - 10) < 0.01, '飞天航线在 10m 圈上');
   // 环内夹取：环 [5, 8] → 近战 12 要夹到 8；环 [5, 20] → 远程 18 不夹
   melee.assign({ pos, ringMin: 5, ringMax: 8, now: 0, posture: 1 });   // 总攻→冲锋后夹环
-  ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 8) < 0.01, '近战冲锋目标夹进环上界 8');
+  ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 5) < 0.01, '近战冲锋（压到攻距 3m）目标夹进环（下界 5）');
   melee.assign({ pos, ringMin: 5, ringMax: 8, now: 1 });   // 低事态→稳定驻锚
   const mA = melee.targets.get(11)!;
   const rA = Math.hypot(mA.x, mA.z);
@@ -668,13 +668,13 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   const pOk = bridge.playerOrder(1, 'regroup', { x: 5, z: 5 });
   ok(pOk && bridge.writer.store.get(1)!.order.source === 'player', '玩家命令经唯一发令器直达队长');
   ok(bridge.writer.store.get(1)!.order.kind === 'regroup', '玩家命令内容生效');
-  ok(bridge.writer.store.get(1)!.order.ttl === 30 * 12, '玩家令 TTL = 30 游戏分钟');
+  ok(bridge.writer.store.get(1)!.order.ttl === 0, '★ 命令无 TTL（用户定）');
   // ★ 执行板续期（旧链已删）：玩家令在身 → 决策为空，但执行板每拍仍同步现令（不掉令）
   bridge.tick(0.6, 2.8);
   ok(bridge.dbg.refreshed >= 1, '执行板续期计数（无新令也不丢执行令）');
   // ★ 玩家令 TTL 到期 → 释放，交回引擎（不能永久锁死该队）
   bridge.tick(0.6, 2.8 + 30 * 12 + 1);
-  ok(bridge.writer.store.get(1)?.order.source === 'engine', '玩家令到期 → 交回引擎决策');
+  ok(bridge.writer.store.get(1)?.order.source === 'player', '★ 玩家令不过期（直到被替换）');
 }
 
 // ---------- SquadCore（队长侧） ----------

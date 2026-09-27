@@ -14,7 +14,7 @@ import { squadBucket } from '../../../entity/SwarmUnit';
 import type { MobRole, OrderPhase, SquadMode, SquadOrder, SquadReport } from '../engine/contracts';
 import type { Squad } from '../SquadTable';
 import { onArriveAtom } from './Abilities';
-import { stateFromOrder, ORDER_TTL_DEFAULT, type SquadOrderState } from './State';
+import { stateFromOrder, type SquadOrderState } from './State';
 import { formationOffset } from './Formation';
 import { decompose } from './Decompose';
 import { interpretLeader, MARCH_DIST, ARRIVE_R } from './CommandLang';
@@ -107,7 +107,7 @@ export class SquadCore {
     const o = this.order;
     if (!o) return;
     if (this.pending) {
-      this.state = stateFromOrder(this.id, o, this.state, now, ORDER_TTL_DEFAULT);
+      this.state = stateFromOrder(this.id, o, this.state, now, 0);   // ★ 无 TTL
       this.pending = null;
       this.patrolAnchor = null;   // ★ 新令 → 巡逻锚点重新捕获（防旧巡逻点污染）
       this.patrolGoal = null;
@@ -116,7 +116,7 @@ export class SquadCore {
     const st = this.state;
     if (!st) return;
     // ★ 玩家令优先：store 侧已保证（引擎不覆盖）；此处只看执行态是否过期
-    if (st.until > 0 && now > st.until && st.source !== 'player') return;
+    // ★ 命令无 TTL（用户定 2026-09-26）：不过期、不自动回收，直到被替换
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
     // ★ 巡逻（用户定 2026-09-25）：引擎**一条令**，小队**自维持**——到达本腿 → 查询下一个可行点 → 短寻路来回

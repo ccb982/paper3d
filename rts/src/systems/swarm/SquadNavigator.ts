@@ -434,9 +434,12 @@ export class SquadNavigator {
         // ★ 凭证挂在**寻路**上（用户定 2026-09-26）：路线在 → 票在；到达目标并接上下一条寻路才回收。
         let needClimb = state?.climbCred !== undefined;
         let needClimbPt = state?.climbCred;
-        if (!isLead) {
-          // ★ 成员路线缓存（定时对队长长寻路）——目标点从这里来；
-          //   凭证：成员自己路线带来的 **与小队凭证并存**（两条来源）。
+        const isFlyer = squad.type === 'flyer';
+        if (!isLead && isFlyer) {
+          // ★ 飞行队成员（用户定 2026-09-26）：**直航队长**（不走地面 memberStep/格边步）——
+          //   否则地面寻路失败 → moveTarget=自身 → 到达停步→钉死。
+          sx = lead.x; sz = lead.z;
+        } else if (!isLead) {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
           else { sx = upos0.x; sz = upos0.z; }
@@ -445,12 +448,24 @@ export class SquadNavigator {
         u.formSlot = rank;
         // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住
         let sdx = 0, sdz = 0;
+        if (!isLead && isFlyer) {
+          const ax = lead.x - upos0.x, az = lead.z - upos0.z;
+          const al = Math.hypot(ax, az) || 1;
+          sdx = ax / al; sdz = az / al;
+        } else {
         const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
         if (e3) {
           sdx = e3.dx; sdz = e3.dz;
         } else if (isLead) {
           const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
           if (rd) { sdx = rd.x; sdz = rd.z; }
+          else if (squad.type === 'flyer') {
+            // ★ 飞行队长兜底（用户定 2026-09-26）：无走廊/无路线修正 → **直航目标**（否则 dir=0 原地呆）
+            const axf = tgt.x - upos0.x, azf = tgt.z - upos0.z;
+            const alf = Math.hypot(axf, azf);
+            if (alf > 1e-3) { sdx = axf / alf; sdz = azf / alf; }
+          }
+        }
         }
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }
