@@ -16,6 +16,10 @@ export interface RoleCtx {
   ringMin: number;
   ringMax: number;
   now: number;
+  /** ★ 事态进度 0~1（用户定 2026-09-26：作为变量参与下令：高→总攻冲锋） */
+  posture?: number;
+  /** ★ 工兵友军位置（供近战护卫派份；可选） */
+  engineers?: ReadonlyArray<{ x: number; z: number }>;
 }
 
 export interface Target {
@@ -45,6 +49,22 @@ export abstract class RoleManager {
   protected replenishSlowS = 15;
   protected replenishFastS = 3;
 
+  /** ★ 稳定锚位（防绕圈；用户定 2026-09-26）：按 squadId 哈希定角，环上固定点；**不随位置重算** */
+  private readonly anchors = new Map<number, { x: number; z: number }>();
+  protected anchorOfSquad(id: number, ctx: RoleCtx): { x: number; z: number } | null {
+    if (ctx.ringMax <= 0) return null;
+    const p = ctx.pos.ship() ?? ctx.pos.player();   // ★ 舰为参照（用户定 2026-09-26）
+    if (!p) return null;
+    let a = this.anchors.get(id);
+    if (!a) {
+      const ang = ((id * 137.508) % 360) * Math.PI / 180;
+      const r = ctx.ringMin > 0 ? (ctx.ringMin + ctx.ringMax) / 2 : ctx.ringMax * 0.75;
+      a = { x: p.x + Math.cos(ang) * r, z: p.z + Math.sin(ang) * r };
+      this.anchors.set(id, a);
+    }
+    return a;
+  }
+
   /** 每拍检查对应防区：缺就补、有就不放（本兵种策略：节拍 + 占比目标 + 优先并队） */
   protected ensureSquads(now: number): void {
     const port = this.creationOf();
@@ -70,7 +90,7 @@ export abstract class RoleManager {
 
   /** 把目标夹进环（事态范围；与 OrderValidator ① 同口径） */
   protected clampToRing(s: Target, ctx: RoleCtx): Target {
-    const p = ctx.pos.player();
+    const p = ctx.pos.ship() ?? ctx.pos.player();   // ★ 环以舰为心（用户定）
     if (!p || ctx.ringMax <= 0) return { x: s.x, z: s.z };
     const dx = s.x - p.x;
     const dz = s.z - p.z;
@@ -84,6 +104,7 @@ export abstract class RoleManager {
   }
 
   clear(): void {
+    this.anchors.clear();
     this.squads.clear();
     this.targets.clear();
     this.dbg.squads = 0;

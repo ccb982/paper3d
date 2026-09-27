@@ -291,6 +291,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       engineer: () => swarm.data.engineerPort(),
       /** ★ 创建端口（四兵种管理器；只建本兵种 ∧ 只在对应防区） */
       creation: () => swarm.data.combatCreationPort(),
+      posture: () => swarm.data.postureP,
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
       wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */

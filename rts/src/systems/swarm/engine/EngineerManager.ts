@@ -303,7 +303,8 @@ export class EngineerManager extends RoleManager {
       }
       // ---- 施工：队长到件 3m 内才计时；掩体 6s / 战壕 10s（每 2s 挖一遍） ----
       if (Math.hypot(s.x - spot.x, s.z - spot.z) <= ENGINEER_POLICY.WORK_R) {
-        const kind: 'cover' | 'trench' = port.assault() ? 'cover' : 'trench';
+        // ★ 掩体为主（用户定 2026-09-26）：总攻全掩体；平时 4 件里 3 掩体 / 1 战壕
+        const kind: 'cover' | 'trench' = port.assault() || (this.built.size % 4) !== 3 ? 'cover' : 'trench';
         const t = (this.work.get(id) ?? 0) + dt;
         this.work.set(id, t);
         this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);

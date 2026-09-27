@@ -129,10 +129,27 @@ console.log('[3] 四兵种管理器');
   const ft = flyer.targets.get(13);
   ok(ft !== undefined && Math.abs(Math.hypot(ft.x, ft.z) - 10) < 0.01, '飞天航线在 10m 圈上');
   // 环内夹取：环 [5, 8] → 近战 12 要夹到 8；环 [5, 20] → 远程 18 不夹
-  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 0 });
-  ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 8) < 0.01, '近战目标夹进环上界 8');
+  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 0, posture: 1 });   // 总攻→冲锋后夹环
+  ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 8) < 0.01, '近战冲锋目标夹进环上界 8');
+  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 1 });   // 低事态→稳定驻锚
+  const mA = melee.targets.get(11)!;
+  const rA = Math.hypot(mA.x, mA.z);
+  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 2 });
+  const mB = melee.targets.get(11)!;
+  ok(rA >= 5 && rA <= 8 && Math.abs(mA.x - mB.x) < 1e-6 && Math.abs(mA.z - mB.z) < 1e-6,
+    '★ 低事态：稳定驻锚（锚位在环内且不随位置漂移）');
+  // ★ 工兵在旁：近战护卫（目标贴近工兵向舰侧 6m）
+  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 3, engineers: [{ x: 49, z: 0 }] });
+  const mE = melee.targets.get(11)!;
+  ok(Math.hypot(mE.x - 49, mE.z) <= 7 && Math.hypot(mE.x - 49, mE.z) >= 5,
+    '★ 近战护卫：目标 = 工兵向舰侧 6m（挡在工兵前）');
   ranged.assign({ pos, ringMin: 5, ringMax: 20, now: 0 });
-  ok(Math.abs(Math.hypot(ranged.targets.get(12)!.x, ranged.targets.get(12)!.z) - 18) < 0.01, '远程环内不夹（18 已在带内）');
+  const rA1 = ranged.targets.get(12)!;
+  const rr = Math.hypot(rA1.x, rA1.z);
+  ranged.assign({ pos, ringMin: 5, ringMax: 20, now: 1 });
+  const rA2 = ranged.targets.get(12)!;
+  ok(rr >= 5 && rr <= 20 && Math.abs(rA1.x - rA2.x) < 1e-6 && Math.abs(rA1.z - rA2.z) < 1e-6,
+    '★ 远程：稳定驻守位（环内不漂移 → 不绕圈）');
   // 刷怪执行
   ok(eng.assign(ctx) === 1, '工兵分配（保持站位）');
 }
@@ -591,7 +608,7 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
     emit: (o: SquadOrder) => emitted.push(o),
   };
   const bridge = new EngineBridge(live);
-  bridge.dbg.ringMax = 60;
+  bridge.dbg.ringMax = 200;   // ★ 初始：小队在环内（正常锚位）
   bridge.shadow = true;   // ★ 影子模式仅调试用（默认 false = 真下发）；本用例显式开启
   bridge.tick(0.6, 1);   // 2Hz → 触发一拍
   ok(bridge.dbg.ticks === 1, '桥接节拍触发');
@@ -604,19 +621,21 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   // 近战 2 队同兵种太近 → 下发目标（校验后）应被切向错开（间距 ≥40）
   const o1 = bridge.writer.store.get(1)!.order.target;
   const o2 = bridge.writer.store.get(2)!.order.target;
-  const a1 = Math.atan2(o1.z, o1.x);
-  const a2 = Math.atan2(o2.z, o2.x);
+  // ★ 一切以**舰船**为参照（用户定 2026-09-26）：角度/半径均围绕 舰(200,0)
+  const SX = 200, SZ = 0;
+  const a1 = Math.atan2(o1.z - SZ, o1.x - SX);
+  const a2 = Math.atan2(o2.z - SZ, o2.x - SX);
   let da = Math.abs(a1 - a2);
   if (da > Math.PI) da = Math.PI * 2 - da;
-  const rAvg = (Math.hypot(o1.x, o1.z) + Math.hypot(o2.x, o2.z)) * 0.5;
+  const rAvg = (Math.hypot(o1.x - SX, o1.z - SZ) + Math.hypot(o2.x - SX, o2.z - SZ)) * 0.5;
   // ★ 行进目标点 = 径向 r（兵种策略）⊗ 切向 θ（同兵种间距）：只解 θ、r 严格不变。
   //   r=12 < MIN/2 → 弦长上限 = r1+r2 = 24m，切向拉满 π → 弧长 π·12 ≈ 37.7m（本用例断言 ≥35）。
   ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
-  ok(Math.abs(Math.hypot(o1.x, o1.z) - 12) < 0.01 && Math.abs(Math.hypot(o2.x, o2.z) - 12) < 0.01,
-    '切向散开不改径向（r 严格不变）');
-  // 环夹取：90 → 60（环上限）
-  const t3 = bridge.ranged.targets.get(3)!;
-  ok(Math.hypot(t3.x, t3.z) <= 60.01, '远程目标夹进环（≤60）');
+  ok(Math.abs(Math.hypot(o1.x - SX, o1.z - SZ) - Math.hypot(o2.x - SX, o2.z - SZ)) < 0.01,
+    '切向散开不改径向（r 围绕舰严格不变）');
+  // 环夹取：**以舰为心**——(90,0) 收到 舰(200,0) 半径 60 的环上
+  const vClamp = validateOrder(3, 90, 0, { px: SX, pz: SZ, ringMin: 0, ringMax: 60, role: 'ranged', siblings: [] });
+  ok(Math.abs(Math.hypot(vClamp.x - SX, vClamp.z - SZ) - 60) < 0.01, '环夹勒以舰为心（90 → 舰心 60）');
   // 实机模式：emit 真下发
   bridge.shadow = false;
   bridge.tick(0.6, 2.2);

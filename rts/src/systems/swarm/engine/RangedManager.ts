@@ -27,22 +27,24 @@ export class RangedManager extends RoleManager {
     this.replenishFastS = RANGED_POLICY.REPLENISH.fast;
   }
 
-  /** 保距：目标 = 玩家 + (本队→玩家方向) × STANDOFF，再夹进环 */
+  /** ★ 驻守（用户定 2026-09-26）：**稳定驻守位**（不随位置重算 → 不绕圈）；无环时保持原保距行为 */
   assign(ctx: RoleCtx): number {
     this.ensureSquads(ctx.now);
-    const p = ctx.pos.player();
+    const p = ctx.pos.ship() ?? ctx.pos.player();   // ★ 舰为参照（用户定）
     if (!p) return 0;
     this.targets.clear();
     for (const id of this.squads) {
       const s = ctx.pos.squad(id);
       if (!s) continue;
-      const dx = s.x - p.x;
-      const dz = s.z - p.z;
-      const d = Math.hypot(dx, dz);
-      const inBand = Math.abs(d - RANGED_POLICY.STANDOFF) <= RANGED_POLICY.BAND;
-      const t = inBand || d < 1e-3
-        ? { x: s.x, z: s.z }
-        : { x: p.x + (dx / d) * RANGED_POLICY.STANDOFF, z: p.z + (dz / d) * RANGED_POLICY.STANDOFF };
+      const anch = this.anchorOfSquad(id, ctx);
+      let t: { x: number; z: number };
+      if (anch) {
+        t = anch;
+      } else {
+        const dx = s.x - p.x, dz = s.z - p.z;
+        const d = Math.hypot(dx, dz) || 1;
+        t = { x: p.x + (dx / d) * RANGED_POLICY.STANDOFF, z: p.z + (dz / d) * RANGED_POLICY.STANDOFF };
+      }
       this.targets.set(id, this.clampToRing(t, ctx));
     }
     this.dbg.assigned = this.targets.size;

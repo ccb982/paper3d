@@ -30,7 +30,7 @@ export class FlyerManager extends RoleManager {
   /** 航线：目标 = 玩家 + 本队相位对应的航线点，再夹进环 */
   assign(ctx: RoleCtx): number {
     this.ensureSquads(ctx.now);
-    const p = ctx.pos.player();
+    const p = ctx.pos.ship() ?? ctx.pos.player();   // ★ 舰为参照（用户定）
     if (!p) return 0;
     this.targets.clear();
     let k = 0;

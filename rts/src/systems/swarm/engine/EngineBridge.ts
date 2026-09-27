@@ -65,6 +65,8 @@ export interface LiveView {
   engineer?(): EngineerPort | null;
   /** ★ 创建端口（四管理器共用；接线层注入） */
   creation?: () => import('./SquadCreation').CreationPort | null;
+  /** ★ 事态进度（下令变量；可选） */
+  posture?(): number;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
   exemptOf?(uid: number): string | null;
   /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
@@ -266,7 +268,10 @@ export class EngineBridge {
 
   private decide(now: number): void {
     if (this.directMode) return;   // ★ 直控模式：不决策
-    const ctx = { pos: this.pos, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax, now };
+    // ★ 下令变量（用户定）：事态进度 + 工兵友军位置（近战护卫/高事态冲锋）
+    const engs = [...this.squads.all()].filter((r) => r.role === 'engineer' && r.alive > 0).map((r) => ({ x: r.x, z: r.z }));
+    const ctx = { pos: this.pos, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax, now,
+      posture: this.live.posture?.() ?? 0, engineers: engs };
     this.melee.sync();
     this.ranged.sync();
     this.flyer.sync();
@@ -282,7 +287,7 @@ export class EngineBridge {
    *  同签名重发被 kept 去重；非必要不打断（重规划仅 4 事件，S3b）。 */
   private write(now: number): void {
     if (this.directMode) return;   // ★ 直控模式：不发令/不校验/不释放 TTL
-    const p = this.pos.player();
+    const p = this.pos.ship() ?? this.pos.player();   // ★ 命令参照舰船（用户定 2026-09-26）
     if (!p) return;
     const hitId = 0;   // 玩家攻击信号未接线（旧接口已删）
     interface Pending { rec: LiveSquad; cur?: OrderState; dec: Decision; tx: number; tz: number; mission?: string; }
