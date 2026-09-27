@@ -35,6 +35,11 @@ export class FlyerManager extends RoleManager {
     this.targets.clear();
     let k = 0;
     for (const id of this.squads) {
+      const s = ctx.pos.squad(id);
+      if (s) {
+        const advF = this.advanceTarget(id, s, ctx);
+        if (advF) { this.targets.set(id, this.clampToRing(advF, ctx)); k++; continue; }
+      }
       const lane = k % FLYER_POLICY.LANES;
       k++;
       const ang = (lane / FLYER_POLICY.LANES) * Math.PI * 2;

@@ -20,6 +20,8 @@ export interface RoleCtx {
   posture?: number;
   /** ★ 工兵友军位置（供近战护卫派份；可选） */
   engineers?: ReadonlyArray<{ x: number; z: number }>;
+  /** ★ 本队防区的**前沿推进点**（可选；取自防区可部署点最远处） */
+  frontOf?: (squadId: number) => { x: number; z: number } | null;
 }
 
 export interface Target {
@@ -49,20 +51,19 @@ export abstract class RoleManager {
   protected replenishSlowS = 15;
   protected replenishFastS = 3;
 
-  /** ★ 稳定锚位（防绕圈；用户定 2026-09-26）：按 squadId 哈希定角，环上固定点；**不随位置重算** */
-  private readonly anchors = new Map<number, { x: number; z: number }>();
-  protected anchorOfSquad(id: number, ctx: RoleCtx): { x: number; z: number } | null {
-    if (ctx.ringMax <= 0) return null;
-    const p = ctx.pos.ship() ?? ctx.pos.player();   // ★ 舰为参照（用户定 2026-09-26）
-    if (!p) return null;
-    let a = this.anchors.get(id);
-    if (!a) {
-      const ang = ((id * 137.508) % 360) * Math.PI / 180;
-      const r = ctx.ringMin > 0 ? (ctx.ringMin + ctx.ringMax) / 2 : ctx.ringMax * 0.75;
-      a = { x: p.x + Math.cos(ang) * r, z: p.z + Math.sin(ang) * r };
-      this.anchors.set(id, a);
-    }
-    return a;
+  /** ★ 推进/驻守（用户定 2026-09-26：选主攻区 → 派兵 → **向前推进** → 到头就巡逻/驻守）
+   *  · 前沿点取自防区可部署点（SectorBuilder；高原/坑水已排除）——**不是新机制，就是推进目标点**；
+   *  · 到达（≤ HOLD_R）→ 目标 = 自身（**驻守**；无前沿点 → 站住等回收。
+   *  无接线（自检）：保持旧行为（向舰压进/保距）。 */
+  protected static readonly HOLD_R = 8;
+  protected frontOfSquad(id: number, ctx: RoleCtx): { x: number; z: number } | null {
+    return ctx.frontOf ? ctx.frontOf(id) : null;
+  }
+  /** 推进目标：未到→前沿点；到了→自身（驻守） */
+  protected advanceTarget(id: number, s: { x: number; z: number }, ctx: RoleCtx): { x: number; z: number } | null {
+    const f = this.frontOfSquad(id, ctx);
+    if (!f) return null;
+    return Math.hypot(s.x - f.x, s.z - f.z) <= RoleManager.HOLD_R ? { x: s.x, z: s.z } : f;
   }
 
   /** 每拍检查对应防区：缺就补、有就不放（本兵种策略：节拍 + 占比目标 + 优先并队） */
@@ -104,7 +105,6 @@ export abstract class RoleManager {
   }
 
   clear(): void {
-    this.anchors.clear();
     this.squads.clear();
     this.targets.clear();
     this.dbg.squads = 0;

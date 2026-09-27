@@ -49,7 +49,7 @@ export class MeleeManager extends RoleManager {
       } else {
         // 护卫：最近工兵向舰侧 6m
         let best: { x: number; z: number } | null = null;
-        let bd = 60;
+        let bd = 120;   // ★ 护卫半径（用户定：同区/邻近都能护到）
         for (const e of engs) {
           const d = Math.hypot(e.x - s.x, e.z - s.z);
           if (d < bd) { bd = d; best = e; }
@@ -61,7 +61,8 @@ export class MeleeManager extends RoleManager {
           this.targets.set(id, { x: best.x + (dx / dl) * 6, z: best.z + (dz / dl) * 6 });
           continue;
         } else {
-          t = this.anchorOfSquad(id, ctx) ?? { x: s.x, z: s.z };
+          // 推进 → 到头驻守（无前沿点 → 站住）
+          t = this.advanceTarget(id, s, ctx) ?? { x: s.x, z: s.z };
         }
       }
       this.targets.set(id, this.clampToRing(t, ctx));

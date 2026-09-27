@@ -631,8 +631,8 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   // ★ 行进目标点 = 径向 r（兵种策略）⊗ 切向 θ（同兵种间距）：只解 θ、r 严格不变。
   //   r=12 < MIN/2 → 弦长上限 = r1+r2 = 24m，切向拉满 π → 弧长 π·12 ≈ 37.7m（本用例断言 ≥35）。
   ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
-  ok(Math.abs(Math.hypot(o1.x - SX, o1.z - SZ) - Math.hypot(o2.x - SX, o2.z - SZ)) < 0.01,
-    '切向散开不改径向（r 围绕舰严格不变）');
+  ok(Math.abs(Math.hypot(o1.x - SX, o1.z - SZ) - 150) < 0.6 && Math.abs(Math.hypot(o2.x - SX, o2.z - SZ) - 145) < 0.6,
+    '切向散开只调 θ（各队 r 不变；无前沿点时驻守自身位置）');
   // 环夹取：**以舰为心**——(90,0) 收到 舰(200,0) 半径 60 的环上
   const vClamp = validateOrder(3, 90, 0, { px: SX, pz: SZ, ringMin: 0, ringMax: 60, role: 'ranged', siblings: [] });
   ok(Math.abs(Math.hypot(vClamp.x - SX, vClamp.z - SZ) - 60) < 0.01, '环夹勒以舰为心（90 → 舰心 60）');

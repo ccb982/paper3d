@@ -36,10 +36,13 @@ export class RangedManager extends RoleManager {
     for (const id of this.squads) {
       const s = ctx.pos.squad(id);
       if (!s) continue;
-      const anch = this.anchorOfSquad(id, ctx);
+      // 推进 → 到头驻守；无前沿点→无接线场景保距兜底
+      const adv = this.advanceTarget(id, s, ctx);
       let t: { x: number; z: number };
-      if (anch) {
-        t = anch;
+      if (adv) {
+        t = adv;
+      } else if (ctx.frontOf) {
+        t = { x: s.x, z: s.z };   // 正式接线且无点 → 站住
       } else {
         const dx = s.x - p.x, dz = s.z - p.z;
         const d = Math.hypot(dx, dz) || 1;

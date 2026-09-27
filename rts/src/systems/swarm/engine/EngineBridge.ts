@@ -67,6 +67,8 @@ export interface LiveView {
   creation?: () => import('./SquadCreation').CreationPort | null;
   /** ★ 事态进度（下令变量；可选） */
   posture?(): number;
+  /** ★ 按队给防区**前沿推进点**（可选） */
+  frontOfSquad?(id: number): { x: number; z: number } | null;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
   exemptOf?(uid: number): string | null;
   /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
@@ -271,7 +273,8 @@ export class EngineBridge {
     // ★ 下令变量（用户定）：事态进度 + 工兵友军位置（近战护卫/高事态冲锋）
     const engs = [...this.squads.all()].filter((r) => r.role === 'engineer' && r.alive > 0).map((r) => ({ x: r.x, z: r.z }));
     const ctx = { pos: this.pos, ringMin: this.dbg.ringMin, ringMax: this.dbg.ringMax, now,
-      posture: this.live.posture?.() ?? 0, engineers: engs };
+      posture: this.live.posture?.() ?? 0, engineers: engs,
+      frontOf: (id: number) => this.live.frontOfSquad?.(id) ?? null };
     this.melee.sync();
     this.ranged.sync();
     this.flyer.sync();

@@ -292,6 +292,16 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       /** ★ 创建端口（四兵种管理器；只建本兵种 ∧ 只在对应防区） */
       creation: () => swarm.data.combatCreationPort(),
       posture: () => swarm.data.postureP,
+      // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
+      frontOfSquad: (id) => {
+        const sec = tactics?.battalions.deployPlan.get(id) ?? -1;
+        if (sec < 0) return null;
+        const pts = tactics?.sectors.sectors[sec]?.points;
+        if (!pts || pts.length === 0) return null;
+        let best = pts[0]!;
+        for (const p of pts) if (p.d > best.d) best = p;
+        return { x: best.x, z: best.z };
+      },
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
       wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
