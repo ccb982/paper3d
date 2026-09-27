@@ -115,10 +115,12 @@ export class BattalionManager {
    *   · 满编（ratio 高）且 not 部署 → 优先填空缺；
    *   · 每扇区同类小队 ≤ quotaOf；
    *   · 一小队只投一区（deployPlan 唯一）。 */
-  deploy(mainSectors: readonly number[]): void {
+  deploy(mainSectors: readonly number[], shipX = 0, shipZ = 0): void {
+    // ★ 部署只在主攻区（用户定 2026-09-27：部署在主攻区是对的）；
+    //   区内选择按队所在方位就近；每队强制分到一区（无 -1）。
     const used = new Map<number, Map<Role4, number>>();   // sector → role → count
     for (const sec of mainSectors) used.set(sec, new Map());
-    // 已部署的队：若扇区仍在主攻列表内则保留（粘性）；否则释放
+    // 已部署的队：扇区仍在主攻列表内就保留（粘性）
     for (const [sid, sec] of [...this.deployPlan]) {
       const sit = this.situation.get(sid);
       if (!sit || !used.has(sec)) { this.deployPlan.delete(sid); continue; }
@@ -130,13 +132,20 @@ export class BattalionManager {
       .filter((s) => !this.deployPlan.has(s.id) && s.alive > 0)
       .sort((a, b) => (b.ratio - a.ratio) || (b.alive - a.alive) || (a.id - b.id));
     for (const sit of pending) {
+      // ★ 就近选防区（用户定 2026-09-27）：强制每队都有防区（无 -1）；
+      //   优先**队所在方位的主攻区**，其次角向最近的；配额仅作次级约束。
+      let ang = Math.atan2(sit.z - shipZ, sit.x - shipX);
+      if (ang < 0) ang += Math.PI * 2;
+      const secByAng = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
       let best = -1, bestScore = -Infinity;
       for (const sec of mainSectors) {
         const m = used.get(sec)!;
         const cur = m.get(sit.role) ?? 0;
         const quota = this.quotaOf(sit.role);
         const gapPenalty = cur >= quota ? 1000 : cur;      // 超配额重罚
-        const score = -gapPenalty - sec * 1e-3;   // 稳序：扇区序号小优先
+        const raw = Math.abs(sec - secByAng);
+        const angDist = Math.min(raw, 8 - raw);            // 0..4
+        const score = -gapPenalty - angDist * 5 - sec * 1e-3;   // 就近优先（配额仍主导）
         if (score > bestScore) { bestScore = score; best = sec; }
       }
       if (best < 0) break;

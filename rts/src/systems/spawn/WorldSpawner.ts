@@ -846,6 +846,8 @@ export class WorldSpawner implements SwarmTierPort {
     intent: number = INTENT_NONE,
     assaultIndex = -1,
     force = false,
+    /** ★ 原始血量覆盖（用户定 2026-09-27：特殊兵种卡死重放要**原血量**）；≤0 = 用名册推算 */
+    hpOverride = 0,
   ): boolean {
     if (!this.deps.scene || !this.deps.camera || this.deps.mobDefs.length === 0) return false;
     const mobIndex = this.deps.mobDefs.indexOf(def);
@@ -858,7 +860,9 @@ export class WorldSpawner implements SwarmTierPort {
     const sc = assaultIndex > 0
       ? computeEnemyScale({ ...base, assaultIndex })
       : this.deps.enemyScale;
-    const hp = Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
+    const hp = hpOverride > 0
+      ? Math.round(hpOverride)
+      : Math.max(Math.round(def.hp * sc.hp), Math.round(sc.hpFloor));
     // 近战总量 =（AI 挥击 + 攻击力加成）× 攻击倍率，且不低于攻击下限；代理统一记在 meleeDamage
     const meleeTotal = Math.max((stats.damage + def.attackPower) * sc.atk, sc.atkFloor);
     const dfs = def.defense + sc.def;

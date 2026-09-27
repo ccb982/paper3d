@@ -1,13 +1,13 @@
 // ============================================================
-// EnemyLocomotion —— 敌人移动器（E5 组合件；★ 与代理同源：SteerPick 候选选择）
+// EnemyLocomotion —— 敌人移动器（M0：**只做接触修正**）
 // ============================================================
-// 本文件不再"硬转向"：危险地形只作为**硬否决**，方向由 8 向候选 softmax 选出
-// （含承诺窗/转向惯性；与代理执行层同一套 `pickSteer`，两载体同内核）。
+// 方向只来自单命令链（steer 模块）；本件只做：坡面混合 + 前方即将踩危险→停；
+// 其余接触修正（硬边分量清零/可行性表斥力/脱埋）在内核 CharacterCore。
 // 地形判定：坑 / h<-1.2 = 禁止；**水=正常地块**（提前豁免，含深水）。
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
-import { pickSteer, getSteerTable } from '../SteerPick';
+import { getSteerTable } from '../SteerPick';
 import { fallLineBlend, dangerPointAt } from '../TerrainAssist';
 
 /** 地形辅助 scratch（零分配） */
@@ -21,17 +21,10 @@ export interface LocomotionResult {
 }
 
 export class EnemyLocomotion {
-  /** ★ 承诺方向/到期（SteerPick 外部状态；与代理同语义） */
-  private heldX = 0;
-  private heldZ = 0;
-  private heldUntil = 0;
   /** 危险探测距离（米；> 碰撞半宽，提前一个身位避开坑沿） */
-  /** 探针：承诺方向/到期 + 最近一次实际期望方向（诊断用） */
+  /** 探针：最近一次实际期望方向（诊断用） */
   private lastDesiredX = 0;
   private lastDesiredZ = 0;
-  get heldDbg(): { x: number; z: number; until: number; dx: number; dz: number } {
-    return { x: this.heldX, z: this.heldZ, until: this.heldUntil, dx: this.lastDesiredX, dz: this.lastDesiredZ };
-  }
   /** 陡坡判定：1.2m 内升 > 1.0m（≈40°）= 墙 */
 
   /**
@@ -41,10 +34,7 @@ export class EnemyLocomotion {
    */
   resolve(px: number, py: number, pz: number, airborne: boolean, dx: number, dz: number, dt: number): LocomotionResult {
     void dt;
-    if (airborne) {
-      this.heldX = 0; this.heldZ = 0; this.heldUntil = 0;
-      return { move: true, x: dx, z: dz };
-    }
+    if (airborne) return { move: true, x: dx, z: dz };
     const raster = RasterMap.current;
     // ★ 爬山（共享基础方法 TerrainAssist；与 L2 代理同内核）：坡正面（水=正常地块，无特殊）
     const tbl = getSteerTable();
@@ -52,15 +42,13 @@ export class EnemyLocomotion {
     this.lastDesiredX = _d.x; this.lastDesiredZ = _d.z;
     const danger = (x: number, z: number): boolean => this.isDangerPoint(raster, x, z, px, pz, py);
     const inside = danger(px, pz);
-    const res = pickSteer(
-      px, pz, _d.x, _d.z, 0, 0,
-      this.heldX, this.heldZ, this.heldUntil,
-      performance.now() / 1000,
-      inside, danger, null,
-    );
-    if (res.hold) return { move: false, x: 0, z: 0 };
-    this.heldX = res.x; this.heldZ = res.z; this.heldUntil = res.until;
-    return { move: true, x: res.x, z: res.z };
+    // ★ M0（用户定 2026-09-27）：方向只来自单命令链（steer 模块）；
+    //   本件只做**接触修正**：前方即将踩危险（坑/过低/立面）→ 停；
+    //   其余交内核（分量清零/可行性表斥力/坡面 weld）。
+    if (!inside && (_d.x !== 0 || _d.z !== 0) && danger(px + _d.x * 1.2, pz + _d.z * 1.2)) {
+      return { move: false, x: 0, z: 0 };
+    }
+    return { move: true, x: _d.x, z: _d.z };
   }
 
   /** ★ 点危险判定：坑 / 过低 / 立面（非坡硬边 > 台阶）——共享内核 `dangerPointAt` */

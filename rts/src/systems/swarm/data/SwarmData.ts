@@ -12,7 +12,7 @@
 import { ROSTER_TARGET } from '../RosterController';
 import { meleeRole } from '../../spawn/MobPick';
 import { RasterMap } from '../../../services/map/RasterMap';
-import { onShipHighland } from '../tactics/SectorBuilder';
+import { ShipHighland } from '../tactics/SectorBuilder';
 import type { SwarmSystem } from '../SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
@@ -400,8 +400,12 @@ export class SwarmData {
     if (!raster) return false;
     if (this.lastShipX === 0 && this.lastShipZ === 0) return false;
     const shipY = raster.surfaceHeightAt(this.lastShipX, this.lastShipZ);
-    return onShipHighland((px, pz) => raster.surfaceHeightAt(px, pz), shipY, x, z);
+    return this.shipHi.contains(this.lastShipX, this.lastShipZ, shipY, x, z,
+      (px, pz) => raster.surfaceHeightAt(px, pz));   // ★ 连通高原整片排除（用户定 2026-09-27②）
   }
+
+  /** ★ 与主角相连高原缓存（工兵建造点门；用户定 2026-09-27） */
+  private readonly shipHi = new ShipHighland();
 
   /** ★ 主攻扇区（tactics 注入；工兵优先投放） */
   mainSectors: number[] = [];

@@ -3,9 +3,10 @@
 // ============================================================
 // 基准：以角色（舰船）所在位置/层为圆心，全环 8 个扇区（角度均分）。
 // 可部署面：**作战/施工带内 ∧ 非坑/水/硬墙**；
-//   **排除“舰船所在位置关联的一片高地”**（用户定 2026-09-26 修正）——
-//   高地及**高地里的坑洞/凹陷**（四周均为舰船层高、自身深陷）一律不算防区；
-//   **没有主角 → 正常占领**（不做高度排除，只排除坑/水/硬墙）。
+//   **排除“与角色相连的整片高原”**（用户定 2026-09-27 修正②）：从角色格出发**连通泛洪**
+//   （层高 ≥ 舰Y-0.5 的格 + 被高原包住的坑洞/凹陷）→ 整片相连高原都不算防区；
+//   **断开的高地照常占领**并标 `high`（优先占位）；**没有主角 → 不排除**（只排除坑/水/硬墙）。
+//   · 每个点带 `high` 标记（该扇区**中位高 +1m 以上**）——防区内高地**优先占领**（远程上高地狙击，用户定）。
 // 产物（每扇区）：可部署点集（带地表高/到舰距）· 容量 · 距离带。
 // 用法：摊销构建（每拍刷 1 区，~4s 一轮）；部署器用 selectMain(k) 选主攻扇区（占位策略：
 //   容量优先；待用户 chunk 战术策略 ① 覆盖）。
@@ -13,13 +14,16 @@
 // ============================================================
 
 /** 扇区数（全环；用户定：仍 8 个） */
+import { CHUNK_SIZE } from '../../../services/map/ChunkGenerator';
+
 export const SECTOR_COUNT = 8;
 /** 部署点采样格（米，与可行性表同格） */
 export const SECTOR_CELL = 4;
 /** 采样上限（每扇区保留点数；防内存/摊销成本失控） */
 export const SECTOR_POINT_CAP = 600;
 /** 低于舰船层多少米才算"山脚"（排除舰船所在高地；用户定 2026-09-26） */
-export const HEIGHT_EPS = 0.5;
+/** 高地标记阈值（相对该扇区点集中位高；米） */
+export const HIGHLAND_MARK = 1.0;
 
 export interface DeployPoint {
   x: number;
@@ -28,6 +32,8 @@ export interface DeployPoint {
   h: number;
   /** 到舰距（米） */
   d: number;
+  /** ★ 高地（该扇区中位高 +1m 以上）→ 优先占领（远程狙击位；用户定 2026-09-27） */
+  high?: boolean;
 }
 
 export interface SectorInfo {
@@ -40,26 +46,81 @@ export interface SectorInfo {
   scanned: boolean;
 }
 
-/** ★ “舰船关联高地”判定（用户定 2026-09-26；共享：防区构建 + 工兵建造点查询）：
- *  ① 高度 ≥ shipY-HEIGHT_EPS → 高地本体（同层/更高）；
- *  ② 自身深陷（shipY-h＞1.2m）但 **8 方向 8m 内 ≥6 个方向是舰船层高** → 高地里的坑洞/凹陷。 */
-export function onShipHighland(
-  surfaceAt: (x: number, z: number) => number,
-  shipY: number,
-  x: number, z: number,
-): boolean {
-  const h = surfaceAt(x, z);
-  if (h >= shipY - HEIGHT_EPS) return true;
-  if (shipY - h > 1.2) {
-    let hi = 0;
-    for (let k = 0; k < 8; k++) {
-      const a = (k / 8) * Math.PI * 2;
-      const hs = surfaceAt(x + Math.cos(a) * 8, z + Math.sin(a) * 8);
-      if (hs >= shipY - HEIGHT_EPS) hi++;
+/** ★★ “与主角相连的高原”判定（用户定 2026-09-27 修正②）：
+ *  从主角格出发对 "层高 ≥ shipY-0.5" 的格做**连通泛洪**（4m 格），再收编**被高原包住的坑洞**
+ *  （≥6/8 邻域在高原内）→ 整片相连高原（含坑）都算“主角所在高原”，不算防区。
+ *  断开的高地不在连通域内 → 照常占领（并标 `high` 优先占位）。
+ *  缓存按 (shipX|0, shipZ|0, shipY) —— 主角不动不重算。共享：防区构建 + 工兵建造点查询。 */
+export class ShipHighland {
+  private key = '';
+  private cells = new Set<number>();
+  private readonly R = 260;   // 泛洪半径（米；覆盖带内所有点与连通路径）
+
+  private ensure(shipX: number, shipZ: number, shipY: number, surfaceAt: (x: number, z: number) => number): void {
+    const k = `${shipX | 0},${shipZ | 0},${shipY.toFixed(1)}`;
+    if (k === this.key) return;
+    this.key = k;
+    this.cells.clear();
+    const cs = SECTOR_CELL;
+    const hi = (x: number, z: number): boolean => {
+      const h = surfaceAt(x, z);
+      return Number.isFinite(h) && h >= shipY - 0.5;
+    };
+    const keyOf = (gx: number, gz: number): number => gx * 100000 + gz;
+    const g0x = Math.floor(shipX / cs), g0z = Math.floor(shipZ / cs);
+    const rCells = Math.ceil(this.R / cs);
+    const q: Array<[number, number]> = [[g0x, g0z]];
+    this.cells.add(keyOf(g0x, g0z));
+    while (q.length) {
+      const [gx, gz] = q.pop() as [number, number];
+      const cx = gx * cs + cs / 2, cz = gz * cs + cs / 2;
+      for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = gx + ox, nz = gz + oz;
+        if (Math.abs(nx - g0x) > rCells || Math.abs(nz - g0z) > rCells) continue;
+        const kk = keyOf(nx, nz);
+        if (this.cells.has(kk)) continue;
+        const px = nx * cs + cs / 2, pz = nz * cs + cs / 2;
+        if (!hi(px, pz)) continue;
+        this.cells.add(kk);
+        q.push([nx, nz]);
+      }
+      void cx; void cz;
     }
-    if (hi >= 6) return true;
+    // 收编被高原包住的坑洞/凹陷（≥6/8 邻域在高原内；迭代两轮足够）
+    for (let pass = 0; pass < 2; pass++) {
+      const add: Array<[number, number]> = [];
+      for (const kk of this.cells) {
+        const gx = Math.floor(kk / 100000), gz = kk % 100000;
+        for (const [ox, oz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = gx + ox, nz = gz + oz;
+          const nk = keyOf(nx, nz);
+          if (this.cells.has(nk)) continue;
+          const px = nx * cs + cs / 2, pz = nz * cs + cs / 2;
+          const h = surfaceAt(px, pz);
+          if (!Number.isFinite(h) || h >= shipY - 0.5) continue;
+          let cnt = 0;
+          for (let k2 = 0; k2 < 8; k2++) {
+            const a2 = (k2 / 8) * Math.PI * 2;
+            const qx = px + Math.cos(a2) * 4, qz = pz + Math.sin(a2) * 4;
+            if (this.cells.has(keyOf(Math.floor(qx / cs), Math.floor(qz / cs)))) cnt++;
+          }
+          if (cnt >= 6) add.push([nx, nz]);
+        }
+      }
+      for (const [ax, az] of add) {
+        const kk = keyOf(ax, az);
+        if (!this.cells.has(kk)) { this.cells.add(kk); }
+      }
+      if (add.length === 0) break;
+    }
   }
-  return false;
+
+  /** 该点是否属于“与主角相连的高原”（含被包住的坑洞） */
+  contains(shipX: number, shipZ: number, shipY: number, x: number, z: number,
+    surfaceAt: (x: number, z: number) => number): boolean {
+    this.ensure(shipX, shipZ, shipY, surfaceAt);
+    return this.cells.has(Math.floor(x / SECTOR_CELL) * 100000 + Math.floor(z / SECTOR_CELL));
+  }
 }
 
 export class SectorBuilder {
@@ -68,6 +129,8 @@ export class SectorBuilder {
   }));
   private cursor = 0;
   readonly dbg = { builds: 0, points: 0, scanned: 0, last: '' };
+  /** ★ 与主角相连高原缓存（连通泛洪；用户定 2026-09-27） */
+  readonly shipHighland = new ShipHighland();
 
   /** 摊销构建：每次刷新一个扇区（cursor 轮转）。
    *  @param surfaceAt 地表高（单源：raster/表）
@@ -119,7 +182,7 @@ export class SectorBuilder {
         if (blockedAt && blockedAt(x, z)) continue;
         // ★ 地形高度硬规则（用户定 2026-09-26 修正）：排除“主角关联的一片高地”
         //   （高地本体 ∥ 高地里的坑洞/凹陷）；**无舰船（shipY=null）→ 正常占领**。
-        if (shipY !== null && onShipHighland(surfaceAt, shipY, x, z)) continue;
+        if (shipY !== null && this.shipHighland.contains(cx, cz, shipY, x, z, surfaceAt)) continue;   // ★ 连通高原整片排除（用户定 2026-09-27②）
         info.points.push({ x, z, h, d });
         if (info.points.length >= SECTOR_POINT_CAP) break;
       }
@@ -128,6 +191,12 @@ export class SectorBuilder {
     for (const p of info.points) {
       if (p.d < dMin) dMin = p.d;
       if (p.d > dMax) dMax = p.d;
+    }
+    // ★ 高地标记（该扇区点集中位高 +1m 以上）→ 优先占领（远程狙击位；用户定 2026-09-27）
+    if (info.points.length > 1) {
+      const hs = info.points.map((p) => p.h).sort((a, b) => a - b);
+      const med = hs[Math.floor(hs.length / 2)] as number;
+      for (const p of info.points) p.high = p.h >= med + HIGHLAND_MARK;
     }
     info.dMin = info.points.length ? dMin : -1;
     info.dMax = info.points.length ? dMax : -1;

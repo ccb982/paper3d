@@ -43,6 +43,7 @@ import { Asset, type HitEffectShapeExport } from './vendor/player';
 import { CharacterFxManager } from './services/fx/CharacterFxManager';
 import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/WorldSpawner';
 import { wireCommanderPorts } from './modes/world/CommanderWiring';
+import { mountSectorZoneView } from './ui/SectorZoneView';
 import { buildEnemyCover } from './modes/world/EnemyCoverBuild';
 import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
@@ -79,9 +80,27 @@ const R = globalThis as unknown as Record<string, unknown>;
 let raster = new RasterMap(SEED);
 R.__rts = { raster, phase: 'select' };
 
+// ★★ 防区调试视图（用户定 2026-09-27）：**选点阶段就显示**、默认标准位、无 URL 参数；
+//   单击面板 = 该点当虚拟舰位重算（同一 SectorBuilder 逻辑）；Z 开关；R 复位舰位；S 标准位。
+//   预世界口径与生产一致：blockedAt = 坑（SwarmData 同式），带 [24,90] 与 [rLo=max(24,frontMinD+8), rHi=max(90,rLo+30)] 的初值一致。
+const zoneShip = { x: -17, z: -267 };
+mountSectorZoneView({
+  surfaceAt: (x, z) => raster.surfaceHeightAt(x, z),
+  tileAt: (x, z) => raster.tileDefAt(x, z),
+  blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',
+  ship: () => zoneShip,
+  band: () => {
+    const sw = (R.__rts as { swarm?: { data: { fortifyBand: { rLo: number; rHi: number } } } }).swarm;
+    if (sw) { const b = sw.data.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; }
+    return { rLo: 24, rHi: 90 };
+  },
+  mainSectors: () => ((R.__rts as { tactics?: { mainSectors: number[] } }).tactics?.mainSectors ?? []),
+});
+
 function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[], hitEffects: HitEffectShapeExport[]): void {
   const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
   const spawn = { x: spawnX, z: spawnZ };
+  zoneShip.x = spawnX; zoneShip.z = spawnZ;   // ★ 防区视图跟随出生点（未点选时）
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -311,23 +330,16 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
       frontOfSquad: (id) => {
         let sec = tactics?.battalions.deployPlan.get(id) ?? -1;
-        if (sec < 0) {
-          // ★ 未部署队（边缘）：按**方位角归到最近主攻区**（用其前沿点；不落高原）
-          const mainS = tactics?.mainSectors ?? [];
-          if (mainS.length === 0) return null;
-          const s = swarm.squads.get(id);
-          const lead = s?.members.get(s?.leaderUid ?? 0);
-          if (!lead) return null;
-          const sh = { x: spawn.x, z: spawn.z };
-          let ang = Math.atan2(lead.z - sh.z, lead.x - sh.x);
-          if (ang < 0) ang += Math.PI * 2;
-          const secByAng = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
-          sec = mainS.includes(secByAng) ? secByAng : mainS[0]!;
-        }
+        // ★ 删占位（用户定 2026-09-27）：**未部署队不再按方位角硬塞主攻区**（那是占位逻辑，不是设计）——
+        //   没有部署就没有前沿点（返回 null），队依旧走自己的常规行为。
+        if (sec < 0) return null;
         const pts = tactics?.sectors.sectors[sec]?.points;
         if (!pts || pts.length === 0) return null;
-        let best = pts[0]!;
-        for (const p of pts) if (p.d > best.d) best = p;
+        // ★ 防区内高地优先占领（用户定 2026-09-27）：优先取 high 点中最高者（同高取最远），无 → 原口径最远点
+        const highs = pts.filter((p) => p.high === true);
+        const pool = highs.length > 0 ? highs : pts;
+        let best = pool[0]!;
+        for (const p of pool) if (p.h > best.h + 1e-3 || (Math.abs(p.h - best.h) <= 1e-3 && p.d > best.d)) best = p;
         return { x: best.x, z: best.z };
       },
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
@@ -357,6 +369,42 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       },
       /** ★ 计时销毁/卡死判决落地（用户定）：L3 实体 retire / L2 代理回收（归还编制） */
       retire: (uid: number, why: string) => {
+        // ★ 特殊兵种卡死 → **原血量原地再放一个**（用户定 2026-09-27）：
+        //   精英 / singleton（小 boss）被卡死判官回收时，不清失——按名册满血在同一位置重放（编制中性：
+        //   回收归还额度 → 新放消耗额度）。非特殊兵种维持原回收逻辑。
+        if (why === 'stuck') {
+          const sq = swarm.squads.squadOf(uid);
+          const def = sq ? mobDefs[sq.mobKind] as { elite?: boolean; squadMode?: string } | undefined : undefined;
+          const special = !!def && (def.elite === true || def.squadMode === 'singleton');
+          if (special) {
+            const respawn = (x: number, y: number, z: number, mhp: number): boolean => {
+              for (let k = 0; k < 6; k++) {
+                const a2 = (k / 6) * Math.PI * 2;
+                const r = k === 0 ? 0 : 2 + (k % 3) * 2;
+                const qx = x + Math.cos(a2) * r, qz = z + Math.sin(a2) * r;
+                const qy = raster.surfaceHeightAt(qx, qz);
+                if (spawner.spawnSingle(def as never, qx, qy, qz, 255, -1, false, mhp)) return true;
+              }
+              return false;
+            };
+            for (const e of enemies) {
+              if (e.swarmUid !== uid) continue;
+              const x = e.position.x, z = e.position.z, y = e.position.y;
+              const mhp = (e as { maxHp?: number }).maxHp ?? 0;   // ★ 原血量（用户定 2026-09-27）
+              e.retire('recycled');
+              respawn(x, y, z, mhp);
+              return true;
+            }
+            const p = swarm.pool;
+            for (let i = 0; i < p.count; i++) {
+              if (p.swarmUid[i] !== uid) continue;
+              const x = p.x[i], y = p.y[i], z = p.z[i], mhp = p.maxHp[i];   // ★ 原血量
+              swarm.recycleByUid(uid, why);
+              respawn(x, y, z, mhp);
+              return true;
+            }
+          }
+        }
         for (const e of enemies) {
           if (e.swarmUid !== uid) continue;
           e.retire(why === 'stuck' ? 'recycled' : 'despawned');
@@ -442,17 +490,16 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         if (shadowBridge) for (const r of shadowBridge.squads.all()) recs.push({ id: r.id, role: r.role, alive: r.alive, x: r.x, z: r.z, atom: r.atom, phase: r.phase, progress: r.progress, stillS: r.stillS });
         this.battalions.refresh(recs);
         this.battalions.regroup();
-        this.battalions.deploy(this.mainSectors);
+        this.battalions.deploy(this.mainSectors, spawn.x, spawn.z);   // ★ 就近选防区（传舰位）
         this.battalions.gaps(this.mainSectors);
         // ★ 主攻选择（用户定 2026-09-26）：按难度（事态 p）选 1~3 个扇区；当前集合仍有效则不重选（稳定）
         {
           const p01 = swarm.data.postureP;
           const k = p01 < 0.4 ? 1 : p01 < 0.75 ? 2 : 3;
-          const cur = this.mainSectors;
-          const valid = cur.length === k && cur.every((s) => (this.sectors.sectors[s]?.points.length ?? 0) > 0);
-          if (!valid) {
+          // ★ 主攻选择冻结（用户定 2026-09-27）：**一次选定后不再按容量重排**；
+          //   只在 ①首次无选 ②事态档 k 变化 时重选（选中即冻结）。
+          if (this.mainSectors.length !== k) {
             const sel = this.sectors.selectMain(k);
-            // ★ 总攻时施工带收缩→点集为空：selectMain 会空：**保留上一次主攻区**（生成用 50m 环，不依赖点集）
             if (sel.length > 0) this.mainSectors = sel;
             else if (this.mainSectors.length === 0) this.mainSectors = [0];
           }
@@ -939,6 +986,7 @@ if (UX !== null && UZ !== null) {
   const sel = new SpawnSelect(raster, WORLD_R);
   R.__rts = { raster, phase: 'select', select: sel };
   sel.onConfirm = (x, z) => enter(x, z);
+  sel.onPick = (x, z) => { zoneShip.x = x; zoneShip.z = z; };   // ★ 选点阶段：点哪画哪（防区调试视图）
   // ★ 实时换图：新种子 → 新 RasterMap → 小地图重绘（仍留在阶段 A，无 3D）
   sel.onSeed = (s) => {
     raster = new RasterMap(s);

@@ -133,7 +133,7 @@ export class SquadNavigator {
 
   /** ★ 成员路线缓存（用户定 2026-09-26）：**定时（或队长位移超限）对队长位置做一次长寻路**；
    *  路只在缓存里，供"沿路走格边步"用（全部移动来自长短寻路）。 */
-  private readonly memberRoutes = new Map<number, { path: { x: number; z: number; climb?: boolean }[]; at: number; gx: number; gz: number }>();
+  private readonly memberRoutes = new Map<number, { path: { x: number; z: number; climb?: boolean }[]; at: number; gx: number; gz: number; idx?: number; cidx?: number }>();
   /** ★ 强制重寻路一次（用户定 2026-09-26：爬完坡后强制到原目标重寻路，防“爬完又掉下去”） */
   private readonly repath = new Set<number>();
   forceRepath(squadId: number): void { this.repath.add(squadId); }
@@ -156,12 +156,30 @@ export class SquadNavigator {
     if (stale) {
       const out: { x: number; z: number; climb?: boolean }[] = [];
       const res = this.feas.readyFor() ? this.feas.find(x, z, lx, lz, out) : 'outside';
-      memo = { path: res === 'ok' ? out : [], at: now, gx: lx, gz: lz };
+      memo = { path: res === 'ok' ? out : [], at: now, gx: lx, gz: lz, idx: 0, cidx: 0 };
       this.memberRoutes.set(uid, memo);
     }
-    // ★ 自己的到队长路线；失败/表外 → **回退小队走廊**（同一条长寻路，仍属长短寻路）
-    let rp = memo && memo.path.length ? routeNextPath(memo.path, x, z, 2) : null;
-    if (!rp && state) rp = routeNextPath(state.corridor ?? state.order.path, x, z, 2);
+    // ★★ M3 路径单消费（用户定 2026-09-27）：成员路线改**单调游标**（只前进不回头）——
+    //   旧 routeNextPath 是"最近点搜索"，绕行/折返时会回跳 → 到点前后方向来回（抖）。
+    let rp: { x: number; z: number; climb?: boolean } | null = null;
+    if (memo && memo.path.length) {
+      let i = Math.max(0, Math.min(memo.idx ?? 0, memo.path.length - 1));
+      while (i < memo.path.length - 1
+        && Math.hypot((memo.path[i] as { x: number }).x - x, (memo.path[i] as { z: number }).z - z) <= 1.5) i++;
+      memo.idx = i;
+      rp = memo.path[i] as { x: number; z: number; climb?: boolean };
+    }
+    // 失败/表外 → 回退小队走廊（同一条长寻路；同样单调游标，成员各持一份进度）
+    if (!rp && state) {
+      const cpath = state.corridor ?? state.order.path;
+      if (cpath && cpath.length) {
+        let i = Math.max(0, Math.min(memo!.cidx ?? 0, cpath.length - 1));
+        while (i < cpath.length - 1
+          && Math.hypot((cpath[i] as { x: number }).x - x, (cpath[i] as { z: number }).z - z) <= 1.5) i++;
+        memo!.cidx = i;
+        rp = cpath[i] as { x: number; z: number; climb?: boolean };
+      }
+    }
     const stepE = rp ? this.edgeGreedy(x, z, y, rp.x, rp.z) : null;
     if (stepE) {
       // ★ 成员自己路线的凭证（用户定 2026-09-26）：**代理寻路追队长时也可得到凭证**——

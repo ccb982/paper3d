@@ -23,7 +23,7 @@ import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerM
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
-import { SectorBuilder, SECTOR_COUNT, HEIGHT_EPS } from '../src/systems/swarm/tactics/SectorBuilder.ts';
+import { SectorBuilder, SECTOR_COUNT } from '../src/systems/swarm/tactics/SectorBuilder.ts';
 import { SquadCreation, type CreationPort } from '../src/systems/swarm/engine/SquadCreation.ts';
 import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
@@ -939,35 +939,32 @@ console.log('[5j] SectorBuilder / BattalionManager（用户定 2026-09-26）');
 {
   const sb = new SectorBuilder();
   const shipY = 6;
-  // 地形：舰船高原（-28..-4 与 0..x 同层 6）；西侧再往外 -30 以下是山脚 0；
-  //        西 -20 处有一个"高原上的坑洞"（底 2，四周皆 6）；
-  //        东 20 处有一个"低地上的凹陷"（底 2，四周皆 0）。
+  // 地形（连通性用）：
+  //  · 与舰相连的高原：h=6，条带 x∈(-34, 40) ∧ |z| ≤ 16（跨 chunk -1/0，相连）；
+  //  · 高原内凹陷：(10,-10) 单格 h=2（被高原包住）；
+  //  · 断开的小丘：x∈[-42,-38] ∧ |z| ≤ 6 → h=8（与高原隔着 h=0 壕沟）；
+  //  · 其余低地 h=0。
   const surf = (x: number, z: number) => {
-    if (x < 0) {
-      if (x < -30) return 0;
-      if (Math.abs(x + 20) < 4 && Math.abs(z) < 4) return 2;
+    if (x >= -42 && x <= -38 && Math.abs(z) <= 6) return 8;
+    if (x > -34 && x < 40 && Math.abs(z) <= 16) {
+      if (x === 10 && z === -10) return 2;
       return 6;
     }
-    if (Math.abs(x - 20) < 4 && Math.abs(z) < 4) return 2;
     return 0;
   };
-  const blk = (x: number, z: number) => x === 8 && z === 0;
+  const blk = (x: number, z: number) => x === 0 && z === -24;   // 低地阻断点
   sb.buildAll(0, 0, shipY, 4, 42, surf, blk);
   ok(sb.sectors.length === SECTOR_COUNT, '全环 8 扇区（用户定）');
-  const east = sb.sectors[0]!;
-  ok(east.points.length > 0, '山脚扇区有可部署点');
-  ok(east.points.every((p) => shipY - p.h >= HEIGHT_EPS), '高度硬规则：只收低于舰船层 ≥0.5m 的山脚（排除同层高原/山顶）');
-  ok(!east.points.some((p) => p.x === 8 && p.z === 0), '阻断点（坑/水/硬墙）不进可部署面');
-  ok(east.points.some((p) => p.h === 2), '低地上的凹陷不算"舰船高地"（可正常占领）');
-  const west = sb.sectors[4]!;
-  ok(west.points.some((p) => p.x < -30), '背侧更低的真山脚仍可部署');
-  ok(!west.points.some((p) => p.x === -20 && p.z === 0), '★ 舰船关联高地里的坑洞/凹陷不进防区（用户定 2026-09-26）');
-  ok(!west.points.some((p) => shipY - p.h < HEIGHT_EPS), '舰船高原本片整片排除');
-  // ★ 没有舰船 → 正常占领（不做高度排除）
+  const s7 = sb.sectors[7]!;   // x>0,z<0：含高原（连通）+低地
+  ok(s7.points.length > 0, '连通高原之外仍有可部署点');
+  ok(s7.points.every((p) => p.h !== 6), '★ 与主角相连的高原整片排除（超出所在 chunk 也排；用户定 2026-09-27②）');
+  ok(!sb.sectors.some((s) => s.points.some((p) => p.x === 10 && p.z === -10)), '被高原包住的坑洞一并排除');
+  ok(sb.sectors.some((s) => s.points.some((p) => p.h === 8 && p.high === true)), '★ 断开的小丘照常占领并标 high（优先占位）');
+  ok(!sb.sectors.some((s) => s.points.some((p) => p.x === 0 && p.z === -24)), '阻断点（坑/水/硬墙）不进可部署面');
+  // ★ 没有舰船 → 不做连通排除（正常占领）
   const sb0 = new SectorBuilder();
   sb0.buildAll(0, 0, null, 4, 42, surf, blk);
-  const west0 = sb0.sectors[4]!;
-  ok(west0.points.some((p) => p.h === 6), '没有舰船 → 正常占领（同层高地也纳入）');
+  ok(sb0.sectors[7]!.points.some((p) => p.h === 6), '没有舰船 → 不排除（正常占领）');
   const mains = sb.selectMain(2);
   ok(mains.length === 2, 'selectMain(k)：选出 ≤k 个可部署扇区');
   ok(sb.selectMain(99).length <= SECTOR_COUNT, 'main 数夹在 [1, 8]');
@@ -1208,6 +1205,25 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   ok(br.hasFirePermit(7) === true, '★ 开火许可查询：授权 = true（判官豁免消费）');
   ok(br.writer.store.get(1)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
     '★ 总攻强制覆盖玩家手动令（无例外）');
+}
+
+// ---------- 兜底发令（用户定 2026-09-27：绝不留下"无令站死"） ----------
+console.log('[12e] 无现令 + 校验不过 → 兜底发令');
+{
+  const emitted3: SquadOrder[] = [];
+  const liveC = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [{ id: 1, role: 'melee' as const, x: 260, z: 0, alive: 8 }],
+    emit: (o: SquadOrder) => emitted3.push(o),
+    canReach: () => false,   // 可达校验永远不过
+  };
+  const br = new EngineBridge(liveC);
+  br.shadow = true;
+  br.tick(0.6, 1);
+  ok(!!br.writer.store.get(1), '★ 无现令且不可达 → 仍发一条（兜底，防无令站死）');
+  const o = br.writer.store.get(1)!.order;
+  ok(o.kind === 'defend' || o.kind === 'act' || o.kind === 'march', '兜底令类型合法');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

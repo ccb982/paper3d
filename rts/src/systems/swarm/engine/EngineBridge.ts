@@ -108,6 +108,9 @@ export class EngineBridge {
   private lastSlow = -1e9;
   /** ★ 驻留窗口（第一波抵舰） */
   private readonly holdUntil = new Map<number, number>();
+  /** ★★ 目标驻留锁存（M2-lite；用户定 2026-09-27）：routine 令目标在**到达前**锁存 GOAL_DWELL_S 秒，防重算跳变。 */
+  private readonly goalHold = new Map<number, { x: number; z: number; at: number; kind: string }>();
+  private static readonly GOAL_DWELL_S = 6;
   /** ★ 波次/放行（决策源；用户定 2026-09-25 自指挥官迁入） */
   private wave1Sent = false;
   private finalSent = false;
@@ -159,6 +162,7 @@ export class EngineBridge {
       debug: () => this.debug(),
     });
   }
+
 
   /** 当前实秒（emit 给旧板写 TTL 用；每帧刷新） */
   private nowS = 0;
@@ -408,14 +412,36 @@ export class EngineBridge {
           }
         }
       }
-      const final = force ?? dec;
+      let final = force ?? dec;
       if (!final) {
         if (cur) held.set(rec.id, cur.order.target);
         continue;
       }
+      // ★★ 目标驻留锁存（M2-lite：只有一个命令、不随重算跳）——
+      //   routine 令：旧目标仍在驻留期且**未到达** → 沿用旧目标（直到到达/超时/换类）。
+      if (final.source === 'routine' && sp) {
+        const old = this.goalHold.get(rec.id);
+        const arriveOld = old ? Math.hypot(sp.x - old.x, sp.z - old.z) <= 8 : false;
+        if (old && now - old.at < EngineBridge.GOAL_DWELL_S && !arriveOld && old.kind === final.kind
+          && final.target && Math.hypot(final.target.x - old.x, final.target.z - old.z) > 4) {
+          final = { ...final, target: { x: old.x, z: old.z } };
+        } else if (final.target && (!old || arriveOld || now - old.at >= EngineBridge.GOAL_DWELL_S || old.kind !== final.kind)) {
+          this.goalHold.set(rec.id, { x: final.target.x, z: final.target.z, at: now, kind: final.kind });
+        }
+      }
       // 防御=守原地（target 为空时用**该队自身位置**；不是玩家位置——否则多队叠在同一目标=间距 0）
-      const tx = final.target ? final.target.x : sp?.x ?? rec.x;
-      const tz = final.target ? final.target.z : sp?.z ?? rec.z;
+      let tx = final.target ? final.target.x : sp?.x ?? rec.x;
+      let tz = final.target ? final.target.z : sp?.z ?? rec.z;
+      // ★ 环外的"守原地"改为**回环内**（用户定 2026-09-27）：`atRingMax` 的队若在环上限之外，
+      //   守原地=永远站死（判官必收）；改成朝舰方向夹回 ringMax 的点，先回到作战带再谈其余。
+      if (final.source === 'situation' && final.kind === 'defend' && sp && this.dbg.ringMax > 0) {
+        const dr = Math.hypot(sp.x - p.x, sp.z - p.z);
+        if (dr > this.dbg.ringMax + 4) {
+          const k = this.dbg.ringMax / dr;
+          tx = p.x + (sp.x - p.x) * k;
+          tz = p.z + (sp.z - p.z) * k;
+        }
+      }
       // ★ 巡逻（用户定 2026-09-25）：**引擎只发一条**——常规部署且**已到岗**、无威胁 → mission='patrol'，
       //   之后小队自维持巡逻（引擎不逐拍指挥；同签名重发被 kept 去重）
       const arrived = sp !== null && Math.hypot(sp.x - tx, sp.z - tz) <= 8;
@@ -447,10 +473,13 @@ export class EngineBridge {
         canReach: this.live.canReach ? (x2, z2) => this.live.canReach!(q.rec.id, x2, z2) : undefined,
       });
       if (v.spread) this.dbg.spread++;
-      if (!v.ok) {
-        if (q.cur && !this.shadow) { this.live.emit?.(q.rec.id, q.cur.order, now); refreshed++; }
+      if (!v.ok && q.cur) {
+        // 校验不过：保留现令（稳定门语义）
+        if (!this.shadow) { this.live.emit?.(q.rec.id, q.cur.order, now); refreshed++; }
         continue;
       }
+      // ★ 校验不过且**没有现令**（用户定 2026-09-27）：**照样发**——绝不留下"无令站死"的队；
+      //   远置单位靠这条兜底令先行军入场（步行不依赖可达判定），入场后自然恢复常规校验。
       const link = this.protect.linkOf(q.rec.id);
       // ★ 引擎命令语言：复合句（语法）→ 良构校验 → 解释器 → 唯一发令器（用户定 2026-09-25）
       const sentence: SquadOrder = {

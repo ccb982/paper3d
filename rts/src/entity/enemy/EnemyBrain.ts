@@ -231,12 +231,8 @@ export class EnemyBrain {
     const td = Math.hypot(dtx, dtz);
     if (td > 0.5) { tx = dtx / td; tz = dtz / td; }
     else if (t && dist > 1e-3) { tx = (t.x - entity.position.x) / dist; tz = (t.z - entity.position.z) / dist; }
-    if (tx !== 0 || tz !== 0) {
-      atomDirection(MOVE_ATOMS[_run.moveIdx], tx, tz, _atomDir);
-      if (_atomDir.x !== 0 || _atomDir.z !== 0) {
-        // 近似基础速度（2.5 m/s；精确移速后续配置化）× 指令限速
-        entity.moveBy(_atomDir.x, _atomDir.z, dt, 2.5 * entity.directiveSpeedMul);
-      }
-    }
+    // ★ M0（用户定 2026-09-27）：**删除原子直推**——大脑只算开火/动画，位移只走单命令链
+    //   （走廊/格边步 + 接触修正）。方向变量 tx/tz 仅供动画姿态参考。
+    void tx; void tz;
   }
 }

@@ -98,7 +98,8 @@ registerBehavior('wander', (entity, ctx, params) => {
   }
   // 速度波动（走走停停的自然节奏）
   const speed = baseSpeed * (0.5 + 0.5 * Math.abs(Math.sin(ctx.time * 2.5 + entity.entity.id * 1.7)));
-  entity.moveBy(entity.aiMoveDir.x, entity.aiMoveDir.z, ctx.dt, speed);
+  // ★ M0：移位只走单命令链（旧 AI 直推已废弃）
+  void speed;
 });
 
 /** 追击：朝目标直线移动 */
@@ -110,7 +111,8 @@ registerBehavior('moveToTarget', (entity, ctx, params) => {
   const dz = t.z - entity.entity.position.z;
   const len = Math.hypot(dx, dz);
   if (len < 0.01) return;
-  entity.moveBy(dx / len, dz / len, ctx.dt, speed);
+  // ★ M0：追击移位交单命令链（旧 AI 直推已废弃）
+  void dx; void dz; void speed;
 });
 
 /** 近战攻击：一次性挥击（计时播完 → attackFinished 条件退出，不再循环）；

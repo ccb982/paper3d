@@ -12,6 +12,8 @@ export class SpawnSelect {
   onConfirm: ((x: number, z: number) => void) | null = null;
   /** ★ 换种子（主入口负责 new RasterMap 后回调 setRaster） */
   onSeed: ((seed: number) => void) | null = null;
+  /** ★ 点选回调（防区调试视图跟随：选哪画哪；用户定 2026-09-27） */
+  onPick: ((x: number, z: number) => void) | null = null;
 
   private readonly root: HTMLDivElement;
   private readonly canvas: HTMLCanvasElement;
@@ -202,6 +204,7 @@ export class SpawnSelect {
   }
 
   pick(wx: number, wz: number): void {
+    this.onPick?.(wx, wz);   // ★ 选点即画防区（调试视图消费）
     this.spawn = { x: wx, z: wz };
     this.confirmBtn.disabled = false;
     this.render();

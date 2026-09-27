@@ -62,7 +62,11 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       else {
         // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
         const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
-        if (rd) { dx = rd.x; dz = rd.z; } else { dx = ld.x; dz = ld.z; }
+        if (rd) { dx = rd.x; dz = rd.z; }
+        if (rd) { dx = rd.x; dz = rd.z; }
+        // ★ M0（用户定 2026-09-27）：无走廊/无路点 → **持令原地停**（删"追目标直推"；
+        //   硬边/坡侧壁的接触修正不受影响，由下方 inside 分支处理）
+        else { dx = 0; dz = 0; p.atomMove[i] = 255; }
       }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   } else if (squad) {
@@ -86,50 +90,18 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
     }
   }   // ★ 收敛（2026-09-25）：无队长/无指令 → 停（删除原子直推分支；移动只走统一链）
-  // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
+  // ★★ M0（用户定 2026-09-27）：方向**只来自命令链**（长寻路走廊/成员路线）；接触修正（硬边分量清零、
+  //   可行性表斥力、坡面 weld、脱埋）全部由**内核 stepAgent** 负责——16 向软转向 pickSteer 退出移动链。
   const inside = host.data.blockedAt(p.x[i], p.z[i]);
   if (dx !== 0 || dz !== 0 || inside) {
-    if (edgeMode) {
-      // ★ 方案 A：格边步直推（不再经 16 向软转向，避免把格边步掰成斜向/被禁分量）
-      const spd = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
-      const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred, credPt);
-      if (step.landed) {   // ★ 代理爬完坡：强制重寻路（队长走廊 + 本代理路线）
-        host.nav.dropMemberRoute(p.swarmUid[i]);
-        if (isLeader && squad) host.nav.forceRepath(squad.id);
-      }
-      p.x[i] += step.dx; p.z[i] += step.dz;
-      if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
-    } else {
-      p.hazardTimer[i] -= dt;
-      const raster = RasterMap.current;
-      const hint = p.y[i];
-      const dangerAt = (hx: number, hz: number): boolean => {
-        if (!raster) return false;
-        if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
-        if (host.data.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
-        return dangerPointAt(raster, hx, hz, p.x[i], p.z[i], hint);   // 坑/过低/立面（共享内核）
-      };
-      const res = pickSteer(
-        p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
-        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], simNow(),   // ★ 模拟时钟（倍速同步）
-        host.data.blockedAt(p.x[i], p.z[i]),
-        dangerAt, host.data,
-        p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
-        host.squads.squadOf(p.swarmUid[i])?.type,   // ★ L3 兵种分（重构 P1-2；mixed=兵种中立）
-      );
-      if (!res.hold) {
-        p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        // ★ 重写 P1：两载体同内核——推进/爬坡/立面/贴地走代理池内核（与 L3 同口径）
-        const spd2 = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
-        const step = p.stepAgent(i, res.x, res.z, spd2, dt, performance.now() / 1000, cred, credPt);
-        if (step.landed) {   // ★ 代理爬完坡：强制重寻路
-          host.nav.dropMemberRoute(p.swarmUid[i]);
-          if (isLeader && squad) host.nav.forceRepath(squad.id);
-        }
-        p.x[i] += step.dx; p.z[i] += step.dz;
-        if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
-      }
+    const spd = cred ? Math.max(p.curSpeed[i] * p.directiveSpeedMul[i], p.curSpeed[i]) : p.curSpeed[i] * p.directiveSpeedMul[i];
+    const step = p.stepAgent(i, dx, dz, spd, dt, performance.now() / 1000, cred, credPt);
+    if (step.landed) {   // ★ 代理爬完坡：强制重寻路（队长走廊 + 本代理路线）
+      host.nav.dropMemberRoute(p.swarmUid[i]);
+      if (isLeader && squad) host.nav.forceRepath(squad.id);
     }
+    p.x[i] += step.dx; p.z[i] += step.dz;
+    if (step.dx !== 0 || step.dz !== 0) p.yaw[i] = Math.atan2(step.dx, step.dz);
   }
   // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
   // ★ H2：分离推挤过位移闸门（不得借推力跨层/越悬崖）

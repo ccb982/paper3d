@@ -137,7 +137,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   /** ★ E5：本段移动原子下标（255 = 无覆盖） */
   get atomMove(): number { return this.brain.atomMove; }
   /** 探针：移动器承诺方向（诊断用） */
-  get locomotionHeld(): { x: number; z: number; until: number } { return this.locomotion.heldDbg; }
+  /** M0：旧软转向承诺已废除（方向只来自单命令链） */
+  get locomotionHeld(): { x: number; z: number; until: number } { return { x: 0, z: 0, until: 0 }; }
   /** ★ E5：是否眩晕中（行为器判定） */
   /** ★ 爬坡到落点钩子（main 注入 → SwarmSystem.forceRepathClimb） */
   static climbLandedHook: ((squadId: number, uid: number) => void) | null = null;
