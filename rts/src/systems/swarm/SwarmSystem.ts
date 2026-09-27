@@ -1020,6 +1020,11 @@ export class SwarmSystem {
 
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
   /** ★ 爬坡到落点：强制重寻路一次（队长走廊 + 成员/代理路线失效）——防爬完又掉下去 */
+  /** ★ 兜底命令（用户定 2026-09-27）：强制队长重寻路（消费一次） */
+  forceRepath(squadId: number): void {
+    this.nav.forceRepath(squadId);
+  }
+
   forceRepathClimb(squadId: number, uid: number): void {
     this.nav.forceRepath(squadId);
     this.nav.dropMemberRoute(uid);
@@ -1051,6 +1056,10 @@ export class SwarmSystem {
     let y = this.unitY.get(squad.leaderUid) ?? 0;
     const p = this.pool;
     for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === squad.leaderUid) { y = p.y[i]; break; }
+    // ★ H2 单源（用户定 2026-09-27）：y 再用**当前地表**校正——防旧 y（出生/池滞后）把起点调进错层→BFS 全 blocked。
+    const lead = squad.members.get(squad.leaderUid);
+    const raster = RasterMap.current;
+    if (lead && raster) y = raster.surfaceHeightAtFor(lead.x, lead.z, y);
     this.nav.ensurePath(this.squads, squad, state, now, y);
   }
 

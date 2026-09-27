@@ -51,7 +51,11 @@ export class SquadRegistry {
     const cur = core.current();
     if (cur && cur.kind === order.kind && (cur.mission ?? '') === (order.mission ?? '')
       && Math.hypot(cur.target.x - order.target.x, cur.target.z - order.target.z) <= 2) {
-      // ★ 命令无 TTL（用户定）：同签名重发直接去重（不需续期）
+      // ★★ 同签名重发 = **真去重**（用户定 2026-09-27）：直接 return，
+      //   **不再** core.accept（否则每帧把 phase/progress/stillS/d0 清零——
+      //   “发呆检测/重发/重规划”全部永远不触发，历史 bug）。
+      this.dbg.accepted++;
+      return;
     }
     core.accept(order, now);
     this.dbg.accepted++;
@@ -79,6 +83,11 @@ export class SquadRegistry {
 
   /** 执行态（执行层读走廊/锚点；唯一来源 = 队长核） */
   stateOf(id: number): SquadOrderState | null { return this.cores.get(id)?.state ?? null; }
+  /** ★ M4（用户定 2026-09-27）：队长核执行视图（到达判定单源消费） */
+  viewOf(id: number): { phase: string; atom: string; progress: number; stillS: number } | null {
+    const c = this.cores.get(id);
+    return c ? { phase: c.phase, atom: c.atom, progress: c.progress, stillS: c.stillS } : null;
+  }
 
   drop(id: number): void { this.cores.delete(id); this.dbg.n = this.cores.size; }
 }

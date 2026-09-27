@@ -21,7 +21,7 @@ import { ENEMY_ROSTER, enemyAssetUrl, type EnemyAssetEntry } from './config/enem
 import { FtxAsset } from './vendor/player/FtxAsset';
 import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
-import { CLIMB_STATS, CLIMB_TRACE } from './entity/base/CharacterCore';
+import { CLIMB_STATS, CLIMB_TRACE, canShift } from './entity/base/CharacterCore';
 import { goneLog } from './systems/swarm/data/GoneLog';
 import { climbBook } from './entity/base/ClimbBook';
 import { SectorBuilder } from './systems/swarm/tactics/SectorBuilder';
@@ -44,6 +44,10 @@ import { CharacterFxManager } from './services/fx/CharacterFxManager';
 import { WorldSpawner, type SpawnDeps, type MobDef } from './systems/spawn/WorldSpawner';
 import { wireCommanderPorts } from './modes/world/CommanderWiring';
 import { mountSectorZoneView } from './ui/SectorZoneView';
+import { createRasterProbe } from './entity/base/RasterProbe';
+import { SHORE_CLIMB_MAX } from './entity/TerrainAssist';
+import { EDGE_CLIFF_BAND } from './services/map/Refinements';
+import { separationPushes, type SepBody } from './systems/swarm/EntitySeparation';
 import { buildEnemyCover } from './modes/world/EnemyCoverBuild';
 import { footSinkRatioOf } from './services/fx/FootAnchor';
 import { CharacterClamp } from './systems/world/CharacterClamp';
@@ -258,6 +262,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   hooks.onDirective = (uid, order, directive, until) =>
     spawner.applyOrderToEntity(uid, order, directive, until);
   hooks.onLeaderChanged = (uid, isLeader) => spawner.setLeaderFlag(uid, isLeader);
+  // ★ 碰撞斥力修正（用户定 2026-09-27）：体积重叠对互推（H2 闸门）
+  let sepHintY = 0;
+  const sepProbe = createRasterProbe(() => sepHintY);
   // ★ 近战伤害（代理侧钩子）：目标=舰船（1）扣舰船血量；玩家（0）暂无实体
   let shipHp = 1000;
   hooks.melee = (targetKind, dmg, x, z) => {
@@ -285,7 +292,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           else { const c = { x: 0, z: 0 }; swarm.squads.centroidOf(sq.id, c); lx = c.x; lz = c.z; }
           let sh = 0, sm = 0;
           for (const m of sq.members.values()) { sh += m.hp; sm += m.maxHp; }
-          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties), hpRatio: sm > 0 ? sh / sm : 1 });
+          const cv = squadCores?.viewOf(sq.id);
+          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties),
+            hpRatio: sm > 0 ? sh / sm : 1,
+            phase: cv?.phase, atom: cv?.atom, progress: cv?.progress, stillS: cv?.stillS });
         }
         return out;
       },
@@ -341,6 +351,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         for (const p of pool) if (p.h > best.h + 1e-3 || (Math.abs(p.h - best.h) <= 1e-3 && p.d > best.d)) best = p;
         return { x: best.x, z: best.z };
       },
+      // ★ 兜底命令端口（用户定 2026-09-27）
+      forceRepath: (id: number) => swarm.forceRepath(id),
+      anchorOf: (id: number) => { const sec = tactics?.battalions.deployPlan.get(id) ?? -1; return sec >= 0 ? (swarm.data.sectorAnchorOf?.(sec) ?? null) : null; },
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
       wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
@@ -882,6 +895,28 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     tactics?.tick(h);   // ★ 战术侧：扇区摊销构建 + 大队编制/部署计划（只读，不发令）
     explosionFx.update(h);
     entities.simulate(h);                      // ★ 实体模拟相（移动/AI/物理同步）
+    // ★ 碰撞修正（用户定 2026-09-27）：敌人互相挤压 → **等大反向斥力**（各推一半，限幅）
+    {
+      const refs: typeof enemies = [];
+      const bodies: SepBody[] = [];
+      for (const e of enemies) {
+        if (e.dead || e.lifeState !== 'active') continue;
+        const shape = (e.collisionVolume as unknown as { shape?: Record<string, number> }).shape ?? {};
+        const r = Math.max(0.3, shape['radius'] ?? Math.max(shape['hx'] ?? 0.4, shape['hz'] ?? 0.4));
+        refs.push(e); bodies.push({ x: e.position.x, z: e.position.z, y: e.position.y, r });
+      }
+      const pu = separationPushes(bodies);
+      for (let i = 0; i < bodies.length; i++) {
+        const dx = pu.x[i] as number, dz = pu.z[i] as number;
+        if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) continue;
+        const b = bodies[i] as SepBody;
+        sepHintY = b.y;
+        const lim = sepProbe.wetAt(b.x, b.z) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+        if (!canShift(sepProbe, b.x, b.z, b.y, b.x + dx, b.z + dz, lim)) continue;
+        const e = refs[i];
+        if (e) { e.entity.position.x = b.x + dx; e.entity.position.z = b.z + dz; }
+      }
+    }
     physics.step();
     playerBullets.update(h, camera);
     enemyArrows.update(h, camera);
@@ -934,7 +969,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, goneLog, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, goneLog, squadCores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
     tactics: { sectors: tactics?.sectors ?? null, battalions: tactics?.battalions ?? null, get mainSectors(): number[] { return tactics?.mainSectors ?? []; }, setMainSectors(k: number[]): void { if (tactics) tactics.mainSectors = k; } }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({

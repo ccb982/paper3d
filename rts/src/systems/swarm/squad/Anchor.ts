@@ -61,6 +61,16 @@ export function routeNext(
  *  有路线 → **下一路点**（routeNext）；无路线 → **队令目标**。 */
 const LATCH_ADV = 2;   // 路点推进阈值（米）
 export function currentTargetOf(state: SquadOrderState, cx: number, cz: number): { x: number; z: number; climb?: boolean } | null {
-  const nxt = routeNext(state, cx, cz, LATCH_ADV);
-  return nxt ?? goalOf(state);
+  // ★★ M3（用户定 2026-09-27）：**单调游标**（只前进不回跳）——
+  //   旧实现 routeNext 是“最近点搜索”，到点前后会在两个路点间翻转 → 发布目标/mt 抖动。
+  const path = state.corridor ?? state.order.path;
+  if (path && path.length) {
+    let i = Math.max(0, Math.min(state.tgtIdx ?? 0, path.length - 1));
+    while (i < path.length - 1
+      && Math.hypot((path[i] as { x: number }).x - cx, (path[i] as { z: number }).z - cz) <= LATCH_ADV) i++;
+    state.tgtIdx = i;
+    const p = path[i] as { x: number; z: number; climb?: boolean };
+    return { x: p.x, z: p.z, climb: p.climb };
+  }
+  return goalOf(state);
 }

@@ -52,6 +52,12 @@ export class SquadNavigator {
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
   readonly dbg = { solves: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
+  /** ★ 失败取证（诊断用）：最近 ensurePath 失败的 起点/目标/结果/起点Y */
+  readonly dbgFail: { sx: number; sz: number; tx: number; tz: number; res: string; fromY: number }[] = [];
+  private noteFail(res: string, tx: number, tz: number, fromY: number): void {
+    if (this.dbgFail.length >= 16) this.dbgFail.shift();
+    this.dbgFail.push({ sx: this._from.x, sz: this._from.z, tx, tz, res, fromY });
+  }
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
   /** ★ S1：短寻路网格（生产 = PassTable） */
@@ -123,6 +129,36 @@ export class SquadNavigator {
   }
 
   /** ★ 路线修正方向（单位向量）：朝当前锁存路点（无走廊/零距 → null；绝不朝最终目标） */
+  /** ★ 新走廊的游标起点 = 离单位最近的路点索引（防“回走到起点”拖抽） */
+  private nearestIdx(path: readonly { x: number; z: number }[], x: number, z: number): number {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < path.length; i++) {
+      const d = Math.hypot((path[i] as { x: number }).x - x, (path[i] as { z: number }).z - z);
+      if (d < bd) { bd = d; best = i; }
+    }
+    return Math.min(best, path.length - 1);
+  }
+
+  /** ★★ 短寻路命令提交（用户定 2026-09-27）：**一次发放**，沿此走到点（≤1m）/
+   *  发放超时（0.8s）/换路 才重算——防每帧重选轴向（格边步跨斜线时轴向每帧翻 → 拖抽）。 */
+  stepCommit(
+    state: SquadOrderState | null, x: number, z: number, now: number,
+    compute: (goal: { x: number; z: number }) => { dx: number; dz: number } | null,
+  ): { dx: number; dz: number } | null {
+    if (state && state.mvAt !== undefined && now - state.mvAt < 0.8
+      && Math.hypot(x - (state.mvGx ?? x), z - (state.mvGz ?? z)) > 1.0
+      && ((state.mvDx ?? 0) !== 0 || (state.mvDz ?? 0) !== 0)) {
+      return { dx: state.mvDx ?? 0, dz: state.mvDz ?? 0 };
+    }
+    const goal = { x, z };
+    const step = compute(goal);
+    if (state) {
+      if (step) { state.mvDx = step.dx; state.mvDz = step.dz; state.mvGx = goal.x; state.mvGz = goal.z; state.mvAt = now; }
+      else { state.mvAt = undefined; }
+    }
+    return step;
+  }
+
   routeDir(state: SquadOrderState | null, x: number, z: number, y: number): { x: number; z: number } | null {
     const rp = this.routeCursor(state, x, z, y);
     if (!rp) return null;
@@ -311,8 +347,10 @@ export class SquadNavigator {
       state.stallD = dNow;
     }
     const stalled = hasPath && now - (state.stallAt ?? now) > NAV.STALL_S;
-    if (hasPath && moved <= NAV.RETARGET_DIST && !stampChanged && !stalled) return;
-    if (state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;
+    // ★ 非必要不重规划（用户定 2026-09-27）：地形戳记变化**不再单独触发**（工具挖坑/掩体会频繁挠动戳记）；
+    //   仅“目标位移 > 阈值”或“净推进停滞”才重规划。
+    if (hasPath && moved <= NAV.RETARGET_DIST && !stalled) return;
+    if (!forced && state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;   // ★ forced 绕过冷却
     // ★ 长短归属（用户定 2026-09-25）：**按距离**（>40m 长 / ≤40m 短）；长寻路非引擎专属——
     //   队长派件也可走长寻路（如工兵被派到防区）。
     // ★ 长短寻路分工（用户定 2026-09-25）：长行军（>LONG_PATH_DIST）→ **长寻路**（BFS 全走廊）；
@@ -336,7 +374,7 @@ export class SquadNavigator {
             ? viaClimbPoints(this.table, this._from.x, this._from.z, seg)
             : seg;
           this.applyCred(state, state.corridor, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
-          state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
+          state.followIdx = this.nearestIdx(state.corridor, this._from.x, this._from.z); state.tgtIdx = state.followIdx;   // ★ 从最近点起步（不回路径起点）
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
           state.pathFromX = this._from.x;
@@ -360,7 +398,7 @@ export class SquadNavigator {
       // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
       this.applyCred(state, feasOut, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
-      state.followIdx = 0;   // ★ 新走廊 → 路线游标归零
+      state.followIdx = 0; state.tgtIdx = 0;   // ★ 新走廊 → 路线游标归零
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
       state.pathFromX = this._from.x;
@@ -374,11 +412,12 @@ export class SquadNavigator {
     if (feas === 'blocked') {
       // 可行性判死：绝不发不可走的路（清路径 + 冷却；命令门/队长会改派或等 TTL）
       this.dbg.feasBlocked++;
+      this.noteFail('blocked', tgt.x, tgt.z, leaderY);
       state.pathFailedAt = now;
       state.corridor = undefined;
       if (state.climbCred) CLIMB_ROUTE_STATS.cleared++;
       state.climbCred = undefined;
-      state.followIdx = undefined;
+      state.followIdx = undefined; state.tgtIdx = undefined;
       return;
     }
     // ★ S2（用户定 2026-09-25）：**长寻路只用可行性表**——表外/未就绪 → 不发不可保证的路。
@@ -386,9 +425,10 @@ export class SquadNavigator {
     this.dbg.solves++;
     this.dbg.fail++;
     state.pathFailedAt = now;
+    this.noteFail('outside/notReady', tgt.x, tgt.z, leaderY);
     state.corridor = undefined;
     state.climbCred = undefined;
-    state.followIdx = undefined;
+    state.followIdx = undefined; state.tgtIdx = undefined;
   }
 
   /** ② L3 实体编队 steer（10Hz 调用）：命令目标（或走廊路点）+ 阵型槽位 → moveTarget。 */
@@ -491,18 +531,35 @@ export class SquadNavigator {
           // ★ 成员寻路兜底（direct）：直接用"朝队长"方向（不再复算 → 防再次失败站死）
           sdx = memberDirect.dx; sdz = memberDirect.dz;
         } else {
-        const e3 = isLead ? this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y) : this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
-        if (e3) {
-          sdx = e3.dx; sdz = e3.dz;
-        } else if (isLead) {
-          const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
-          if (rd) { sdx = rd.x; sdz = rd.z; }
-          else if (squad.type === 'flyer') {
+        if (isLead) {
+          // ★ 短寻路一次发放（stepCommit）：沿已发放的格边步走到点才重选
+          const stc = this.stepCommit(state, upos0.x, upos0.z, now, (goal) => {
+            const c = this.routeCursor(state, upos0.x, upos0.z, upos0.y);
+            if (!c) return null;
+            const g = this.localGrid();
+            const e = g ? axisStepToward(g, upos0.x, upos0.z, c.x - upos0.x, c.z - upos0.z) : null;
+            if (!e) return null;
+            goal.x = c.x; goal.z = c.z;
+            return e;
+          });
+          if (stc) { sdx = stc.dx; sdz = stc.dz; }
+          else {
+            const e3 = this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y);
+            if (e3) { sdx = e3.dx; sdz = e3.dz; }
+            else {
+              const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
+              if (rd) { sdx = rd.x; sdz = rd.z; }
+              else if (squad.type === 'flyer') {
             // ★ 飞行队长兜底（用户定 2026-09-26）：无走廊/无路线修正 → **直航目标**（否则 dir=0 原地呆）
             const axf = tgt.x - upos0.x, azf = tgt.z - upos0.z;
             const alf = Math.hypot(axf, azf);
-            if (alf > 1e-3) { sdx = axf / alf; sdz = azf / alf; }
+                if (alf > 1e-3) { sdx = axf / alf; sdz = azf / alf; }
+              }
+            }
           }
+        } else {
+          const e3 = this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
+          if (e3) { sdx = e3.dx; sdz = e3.dz; }
         }
         }
         const mt = u.moveTarget;

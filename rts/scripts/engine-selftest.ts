@@ -694,9 +694,9 @@ console.log('[8] OrderWriter 唯一发令器');
   });
   ok(w.issue(1, mk('act', 10, 0), { now: 0 }), '首次发令成功');
   ok(store.get(1) !== undefined, '写入唯一写口（SquadOrderStore）');
-  ok(w.issue(1, mk('act', 10, 0), { now: 1 }), '同签名重发允许');
+  ok(!w.issue(1, mk('act', 10, 0), { now: 1 }), '★ 限制发放（用户定）：同签名重发被拒（不再每帧续期写板）');
   ok(!w.issue(1, mk('defend', 20, 0), { now: 2 }), '换令但进度低 → 拦截');
-  ok(w.dbg.kept === 1, 'dbg.kept 计数');
+  ok(w.dbg.kept === 2, 'dbg.kept 计数（同签名拒发 + 进度低揦截）');
   w.advance(1, 0.6, 0);
   ok(w.issue(1, mk('defend', 20, 0), { now: 3 }), '进度 ≥50% → 允许换令');
   w.advance(1, 0.1, 30);
@@ -1224,6 +1224,29 @@ console.log('[12e] 无现令 + 校验不过 → 兜底发令');
   ok(!!br.writer.store.get(1), '★ 无现令且不可达 → 仍发一条（兜底，防无令站死）');
   const o = br.writer.store.get(1)!.order;
   ok(o.kind === 'defend' || o.kind === 'act' || o.kind === 'march', '兜底令类型合法');
+}
+
+// ---------- 兜底命令机制（用户定 2026-09-27：发呆就重发/换目标） ----------
+console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底目标');
+{
+  const calls: number[] = [];
+  const emitted: SquadOrder[] = [];
+  const liveS = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [{ id: 1, role: 'engineer' as const, x: 100, z: 0, alive: 3, phase: 'executing', stillS: 20 }],
+    emit: (o: SquadOrder) => emitted.push(o),
+    canReach: () => true,
+    forceRepath: (id: number) => calls.push(id),
+    anchorOf: () => ({ x: 150, z: 20 }),
+  };
+  const br = new EngineBridge(liveS);
+  br.shadow = true;
+  br.tick(0.6, 1);
+  ok(calls.length === 1 && calls[0] === 1, '★ 发呆（stillS≥6）→ 强制重寻路 forceRepath');
+  const o = br.writer.store.get(1)!.order;
+  ok(Math.abs(o.target.x - 150) < 0.01 && Math.abs(o.target.z - 20) < 0.01, '★ 仍发呆（≥15s）→ 换可达兜底目标（防区锚点）');
+  ok(br.dbg.stall === 1, '兜底计数 +1');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

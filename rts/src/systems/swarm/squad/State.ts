@@ -37,6 +37,14 @@ export interface SquadOrderState {
   climbCred?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
   /** ★ 路线游标（锁存：沿走廊单调推进的当前路点下标；新走廊→0，清路→undefined） */
   followIdx?: number;
+  /** ★ M3：发布目标的**单调游标**（与行走游标 followIdx 分离；防“最近点回跳”） */
+  tgtIdx?: number;
+  /** ★★ 短寻路命令提交（用户定 2026-09-27）：一次发放的格边步方向 + 目标点 + 时刻 */
+  mvDx?: number;
+  mvDz?: number;
+  mvGx?: number;
+  mvGz?: number;
+  mvAt?: number;
   /** 最近一次求解时的队长位（位移 >12m → 从当前位置重算） */
   pathFromX?: number;
   pathFromZ?: number;
@@ -133,6 +141,8 @@ export function stateFromOrder(squadId: number, order: SquadOrder, prev: SquadOr
     st.pathFailedAt = prev.pathFailedAt;
     st.corridor = prev.corridor;
     st.followIdx = prev.followIdx;
+    st.tgtIdx = prev.tgtIdx;
+    st.mvDx = prev.mvDx; st.mvDz = prev.mvDz; st.mvGx = prev.mvGx; st.mvGz = prev.mvGz; st.mvAt = prev.mvAt;
     st.climbCred = prev.climbCred;
     st.pathFromX = prev.pathFromX;
     st.pathFromZ = prev.pathFromZ;

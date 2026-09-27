@@ -56,16 +56,25 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     if (ld) {
       const st = squad ? host.squadStateOf(squad.id) : null;
       if (st?.climbCred) { cred = true; credPt = st.climbCred; }
-      const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
-      if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
+      // ★★ 短寻路一次发放（用户定 2026-09-27，L2/L3 同口径）：沿已发放的格边步走到点才重选
+      const stc = host.nav.stepCommit(st, p.x[i], p.z[i], performance.now() / 1000, (goal) => {
+        const c = host.nav.routeCursor(st, p.x[i], p.z[i], p.y[i]);
+        if (!c) return null;
+        const e0 = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
+        if (!e0) return null;
+        goal.x = c.x; goal.z = c.z;
+        return e0;
+      });
+      if (stc) { dx = stc.dx; dz = stc.dz; edgeMode = true; }
       else {
-        // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
-        const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
-        if (rd) { dx = rd.x; dz = rd.z; }
-        if (rd) { dx = rd.x; dz = rd.z; }
-        // ★ M0（用户定 2026-09-27）：无走廊/无路点 → **持令原地停**（删"追目标直推"；
-        //   硬边/坡侧壁的接触修正不受影响，由下方 inside 分支处理）
-        else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+        const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
+        if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
+        else {
+          // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
+          const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
+          // ★ M0：无走廊/无路点 → **持令原地停**（硬边接触修正由 inside 分支处理）
+          if (rd) { dx = rd.x; dz = rd.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+        }
       }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   } else if (squad) {

@@ -41,6 +41,11 @@ export interface LiveSquad {
   alive: number;
   /** 整队血量比 Σhp/ΣmaxHp（重伤撤回判定用） */
   hpRatio?: number;
+  /** ★ M4：队长核执行状态（到达/原子/进度/静止）——引擎只读，不自算 */
+  phase?: string;
+  atom?: string;
+  progress?: number;
+  stillS?: number;
 }
 
 export interface LiveView {
@@ -76,6 +81,10 @@ export interface LiveView {
   covers?(): readonly { x: number; z: number }[];
   /** ★ 按队给防区**前沿推进点**（可选） */
   frontOfSquad?(id: number): { x: number; z: number } | null;
+  /** ★ 兜底（用户定 2026-09-27）：强制重寻路（传给队长核） */
+  forceRepath?(id: number): void;
+  /** ★ 兜底：本队防区锚点（可达优先候选） */
+  anchorOf?(id: number): { x: number; z: number } | null;
   /** ★ 卡死豁免（驻守/交战…）：返回原因或 null */
   exemptOf?(uid: number): string | null;
   /** ★ 计时销毁/卡死回收落地（实体 retire / 代理回收）；返回是否找到 */
@@ -111,11 +120,17 @@ export class EngineBridge {
   /** ★★ 目标驻留锁存（M2-lite；用户定 2026-09-27）：routine 令目标在**到达前**锁存 GOAL_DWELL_S 秒，防重算跳变。 */
   private readonly goalHold = new Map<number, { x: number; z: number; at: number; kind: string }>();
   private static readonly GOAL_DWELL_S = 6;
+  /** ★★ 兜底命令状态（用户定 2026-09-27）：各队上次救援时刻 */
+  private readonly stallAt = new Map<number, number>();
+  private static readonly STALL_REPATH_S = 6;     // 发呆阈值（秒）→ 强制重寻路
+  private static readonly STALL_FALLBACK_S = 15;  // 仍呆 → 换兜底目标
+  private static readonly STALL_RETRY_S = 5;      // 重试间隔
+
   /** ★ 波次/放行（决策源；用户定 2026-09-25 自指挥官迁入） */
   private wave1Sent = false;
   private finalSent = false;
   private lastT01 = -1;
-  readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, last: '' };
+  readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, stall: 0, last: '' };
   /** 影子模式：只算不发（默认 false = 真下发；旧链已删，影子仅调试用） */
   shadow = false;
   /** ★ 直控模式（用户定 2026-09-26）：**关蜂群引擎 decide/write**——只执行玩家指令、
@@ -227,12 +242,40 @@ export class EngineBridge {
       if (!this.squads.get(sq.id)) this.squads.register(sq.id, sq.role, sq.alive, now);
       this.pos.setSquad(sq.id, sq.x, sq.z);
       this.squads.report(
-        { squadId: sq.id, x: sq.x, z: sq.z, alive: sq.alive, atom: 'act', phase: 'executing', hpRatio: sq.hpRatio },
+        { squadId: sq.id, x: sq.x, z: sq.z, alive: sq.alive,
+          atom: (sq.atom ?? 'act') as never, phase: (sq.phase ?? 'executing') as never,
+          hpRatio: sq.hpRatio, progress: sq.progress, stillS: sq.stillS },
         now,
       );
       // ★ 队长自报进度/静止 → 稳定门（引擎只记录，不逐拍指挥）
       const rec = this.squads.get(sq.id);
       if (rec) this.writer.advance(sq.id, rec.progress, rec.stillS);
+    }
+    // ★★ 兜底命令机制（用户定 2026-09-27）：发呆（有令、未到、核静止 ≥ 阈值）
+    //   ① 强制重寻路 + 重发当前令（同签名去重不重置）；每 STALL_RETRY_S 重试；
+    //   ② 仍呆 ≥ STALL_FALLBACK_S → 换**可达兜底目标**（环内同方位点 → 本队防区锚点）。
+    for (const sq of this.live.squads()) {
+      const rec = this.squads.get(sq.id);
+      if (!rec || rec.phase === 'done' || (rec.stillS ?? 0) < EngineBridge.STALL_REPATH_S) continue;
+      const last = this.stallAt.get(rec.id);
+      if (last !== undefined && now - last < EngineBridge.STALL_RETRY_S) continue;
+      this.stallAt.set(rec.id, now);
+      this.live.forceRepath?.(rec.id);
+      const cur = this.writer.store.get(rec.id);
+      if (cur && !this.shadow) this.live.emit?.(rec.id, cur.order, now);
+      if ((rec.stillS ?? 0) >= EngineBridge.STALL_FALLBACK_S) {
+        const fb = this.fallbackTarget(rec);
+        if (fb) {
+          const order: SquadOrder = { kind: 'act', source: 'engine', target: fb, threat: { x: fb.x, z: fb.z }, seq: 0, ttl: 0 };
+          if (this.writer.issue(rec.id, order, { now, force: true }) && !this.shadow) this.live.emit?.(rec.id, order, now);
+          this.dbg.stall = this.dbg.stall + 1;
+          this.dbg.last = `stall#${rec.id} fallback→${fb.x | 0},${fb.z | 0}`;
+        } else {
+          this.dbg.last = `stall#${rec.id} no-fallback(still=${(rec.stillS ?? 0).toFixed(0)})`;
+        }
+      } else {
+        this.dbg.last = `stall#${rec.id} repath(still=${(rec.stillS ?? 0).toFixed(0)})`;
+      }
     }
     // 防区归位（队长位置单源）
     this.sectors.tick((id) => this.pos.squad(id), this.pos.player()?.x ?? 0, this.pos.player()?.z ?? 0, [...this.squads.all()].map((r) => r.id));
@@ -254,6 +297,27 @@ export class EngineBridge {
   /** ★ 开火许可查询（用户定 2026-09-27）：拿到许可的远程站桩射击 ≠ 发呆 → 判官豁免（main.exemptOf 消费） */
   hasFirePermit(uid: number): boolean {
     return this.timers.canFire(uid);
+  }
+
+  /** ★ 兜底目标（用户定 2026-09-27）：可达优先：① 环内同方位点（朝舰夹到 ringMax） → ② 本队防区锚点；都不行 → null。 */
+  private fallbackTarget(rec: LiveSquad): { x: number; z: number } | null {
+    const p = this.pos.ship() ?? this.pos.player();
+    const sp = this.pos.squad(rec.id);
+    const can = this.live.canReach;
+    if (p && sp && this.dbg.ringMax > 0) {
+      const dx = sp.x - p.x, dz = sp.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1) {
+        const k = this.dbg.ringMax / d;
+        const a = { x: p.x + dx * k, z: p.z + dz * k };
+        if (a.x !== sp.x || a.z !== sp.z) {
+          if (!can || can(rec.id, a.x, a.z)) return a;
+        }
+      }
+    }
+    const anc = this.live.anchorOf?.(rec.id) ?? null;
+    if (anc && (!can || can(rec.id, anc.x, anc.z))) return anc;
+    return null;
   }
 
   /** 开火检验（射程/ROE；影子模式只判距离） */
@@ -444,7 +508,7 @@ export class EngineBridge {
       }
       // ★ 巡逻（用户定 2026-09-25）：**引擎只发一条**——常规部署且**已到岗**、无威胁 → mission='patrol'，
       //   之后小队自维持巡逻（引擎不逐拍指挥；同签名重发被 kept 去重）
-      const arrived = sp !== null && Math.hypot(sp.x - tx, sp.z - tz) <= 8;
+      const arrived = rec.phase === 'done';   // ★ M4（用户定）：到达判定单源 = 队长核报告的 done
       const patrol = final.source === 'routine' && arrived
         && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined;
       pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined });

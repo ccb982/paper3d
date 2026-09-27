@@ -3,7 +3,7 @@
 // ============================================================
 // 所有蜂群引擎命令的**唯一出口**：引擎各管理器只产决策，命令一律经这里下发。
 // 职责（一处实现、不许旁路）：
-//   · 稳定门：同签名重发豁免；**换令**需 现令进度 ≥50% 或 长时间静止（ORDER_STABLE）
+//   · 限制发放（用户定 2026-09-27）：**同签名不重发**；**换令**需 现令进度 ≥80% 或 长时间静止（ORDER_STABLE）
 //   · 旁路：干预令（扎堆/越位/磨蹭/散开）/ 玩家令 / 重伤（<0.5）直接过
 //   · 唯一写口：SquadOrderStore（G2——只有本文件能写）
 //   · 台账/探针：dbg（issued/kept/bypass）+ 最近令
@@ -61,18 +61,20 @@ export class OrderWriter {
       if (bypass) {
         this.dbg.bypass++;
       } else {
+        // ★★ 限制发放（用户定 2026-09-27）：**同签名不重发**（不再每帧续期/写板；
+        //   无 TTL 后续期已无意义，反而每帧重发会打扰执行层节奏）。
         const sameSig =
           cur.order.kind === order.kind &&
+          (cur.order.mission ?? '') === (order.mission ?? '') &&
           cur.order.target.x === order.target.x &&
           cur.order.target.z === order.target.z;
-        if (!sameSig) {
-          const canSwitch =
-            cur.progress >= ORDER_STABLE.PROGRESS || cur.stillS >= ORDER_STABLE.STUCK_S;
-          if (!canSwitch) {
-            this.dbg.kept++;
-            this.dbg.last = `keep#${id} ${cur.order.kind}(p=${cur.progress.toFixed(2)},s=${cur.stillS.toFixed(1)})`;
-            return false;
-          }
+        if (sameSig) { this.dbg.kept++; return false; }
+        const canSwitch =
+          cur.progress >= ORDER_STABLE.PROGRESS || cur.stillS >= ORDER_STABLE.STUCK_S;
+        if (!canSwitch) {
+          this.dbg.kept++;
+          this.dbg.last = `keep#${id} ${cur.order.kind}(p=${cur.progress.toFixed(2)},s=${cur.stillS.toFixed(1)})`;
+          return false;
         }
       }
     }
