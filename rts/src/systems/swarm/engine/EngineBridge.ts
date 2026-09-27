@@ -266,12 +266,16 @@ export class EngineBridge {
     if (t01 < this.lastT01 - 0.2) { this.wave1Sent = false; this.finalSent = false; }
     this.lastT01 = t01;
     const total = this.live.ledgerTotal?.() ?? 0;
-    this.live.setReleaseCap?.(Math.ceil(total * releaseAt(t01)));
-    if (!this.wave1Sent && t01 >= 0.45) {
+    // ★★ 上限挂**事态函数 p**（用户定 2026-09-26）：releaseCap = total · releaseAt(p)。
+    //   与四管理器的补兵间隔（port.posture()）同源——改事态函数
+    //   （SCHEDULE_ANCHORS/挑衅）就**同时**改上限/刷兵间隔/行为姿态；击杀挑衅 → p 升 → 增援加快。
+    const p01 = Math.max(0, Math.min(1, this.live.posture?.() ?? 0));
+    this.live.setReleaseCap?.(Math.ceil(total * releaseAt(p01)));
+    if (!this.wave1Sent && p01 >= 0.45) {
       this.wave1Sent = true;
       this.dbg.last = 'wave1';
     }
-    if (!this.finalSent && t01 >= 0.80) {
+    if (!this.finalSent && p01 >= 0.80) {
       this.finalSent = true;
       this.dbg.last = 'final';
     }

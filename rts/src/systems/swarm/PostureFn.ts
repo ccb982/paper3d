@@ -22,7 +22,8 @@ const SCHEDULE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
   [1.00, 1.00],
 ];
 
-/** ★ 兵力放行曲线：早间只放少量（扎根），随后补满基数，两个波峰放宽 */
+/** ★ 兵力放行曲线（输入 = **事态函数 p**，用户定 2026-09-26）：早间只放少量（扎根），
+ *  随后补满基数，第一波大举增兵，总攻满编。与四管理器补兵间隔同源——改事态函数即同时改两者。 */
 const RELEASE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
   [0.00, 0.20],
   [0.30, 0.50],

@@ -139,6 +139,7 @@ perceive → situation → decide(单源) → write → debug
 ### 2.9 EngineBridge —— 实机接线桥
 - **LiveView 端口**（引擎不直读世界，G4）：`player/ship/squads/canReach/emit/enemies/attackables/engineer/creation/exemptOf/retire/wave1/t01/ledgerTotal/setReleaseCap`。
 - **波次与兵力放行（决策源）**：`t01`（落地起算）+ `releaseAt(t01)` → `setReleaseCap`（**第一波 0.45 / 总攻 0.80**）；`t01` 回退（换落点/新一日）自动复位。**创建不再是"波次激发"**：由四管理器按防区缺口/占比持续补齐（《战术侧架构.md》§3.D）。
+- **日兵力预算（2026-09-26 接线）**：`ledger.total = estimateDailyTotal(threat)`（`WorldSpawner.refreshEnemyScale` 接日计划；同日重刷不清零）→ `releaseCap = ceil(total·releaseAt(p))` 每拍写入账本（**上限与四管理器间隔同挂事态函数 p**——改事态函数=同时改上限/刷兵间隔/姿态）；**总攻不再按每区 12 限编**，全军投放、账本闸门封顶（击杀永久消耗、回收归还编制）。
 - **第一波抵舰驻留**：`wave1` 后进攻令（act/march）抵舰 70m 内 → **驻守 45s**；血比 <0.45 → 后撤；到期交回；玩家令不覆盖。
 - **write 两趟**：① 全队决策（含工兵 `mission:'build'`）；② 统一校验链（环/全局密度/可达）→ 唯一发令器 → `emit` → **队长核 `accept`**。
 - **命令无 TTL（用户定 2026-09-26）**：队令不过期、不自动回收（玩家令同）；同签名重发去重。
@@ -367,7 +368,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 |---|---|---|
 | 环：外圈（大圈） | D0max → 90 → 80 → 0（一直收缩，只减不增） | `SwarmData.ringBounds`（p 驱动，1Hz） |
 | 环：内圈（小圈） | D0min → 0（收缩）→ 60（第一波后立即增大）→ 0（再收缩） | 同上 |
-| 波次 / 放行 | 第一波 0.45 / 总攻 0.80；releaseAt 0.20→0.50→0.75→0.95→1.00 | `EngineBridge` / `PostureFn.releaseAt` |
+| 波次 / 放行 | 第一波 p 0.45 / 总攻 p 0.80；releaseAt(p) 0.20→0.50→0.75→0.95→1.00 | `EngineBridge` / `PostureFn.releaseAt` |
 | 抵舰驻留 | 抵舰 70m → 驻守 45s；血比<0.45 后撤 | `EngineBridge.write` |
 | 引擎节拍 | 2Hz（相位 tick） | `EngineCore.hz` |
 | 兵种策略 | 近战 12m / 远程 18m / 飞天 10m | 各 Manager |

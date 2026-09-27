@@ -31,6 +31,8 @@ const SQUAD_FULL = 12;
 const BUILDER_FULL = 3;
 /** 每防区编制基数（人数） */
 const PER_SECTOR_UNITS = 12;
+/** ★ 总攻全军投放的“无限”目标（真正上限在账本） */
+const ALL_IN_TARGET = 999;
 
 /** 物理扇区角归档（以舰为心） */
 function sectorOfPoint(d: CombatDeps, x: number, z: number): number {
@@ -76,10 +78,12 @@ export function fillTargetOf(d: CombatDeps, role: string, sec: number): { x: num
   return best;
 }
 
-/** 每防区目标人头：占比 × 基数；roster 缺口 → 临时 +2 偏置；**总攻 → 满编上限 12** */
+/** 每防区目标人头：占比 × 基数；roster 缺口 → 临时 +2 偏置。
+ *  ★ 总攻（用户定 2026-09-26）：**不再按每区 12 限编**——全军投放，
+ *  到底多少由账本闸门封顶（total/各级约束）。 */
 export function combatUnitTarget(rosterGap: string, role: MobRole | string, assault = false): number {
   if (role !== 'melee' && role !== 'ranged' && role !== 'flyer') return 0;
-  if (assault) return SQUAD_FULL;
+  if (assault) return ALL_IN_TARGET;
   let n = Math.max(1, Math.round(combatShare(role) * PER_SECTOR_UNITS));
   if ((rosterGap === 'shield' || rosterGap === 'assault') && role === 'melee') n += 2;
   else if (rosterGap === 'ranged' && role === 'ranged') n += 2;

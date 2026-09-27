@@ -350,6 +350,9 @@ export class WorldSpawner implements SwarmTierPort {
     return this.spawnOne(this.pickMob(), x, y, z);
   }
 
+  /** ★ 当日兵力计划已接入的天数（同日重刷不重置账本） */
+  private plannedDay = 0;
+
   /** ★ 重算当日敌强（出击开始）——参考属性 = 玩家基础 + 遗物，**不含装备**；
    *  生成/升格共用同一口径（含硬下限：血量 ≥ 角色攻击/2、攻击 ≥ 角色攻击/10） */
   refreshEnemyScale(): void {
@@ -368,6 +371,13 @@ export class WorldSpawner implements SwarmTierPort {
     // ★ 威胁度（波次/数量/攻击欲望）与敌强同源；注入导演后再开局
     this.deps.threat = computeThreat(inputs);
     this.deps.swarmDirector.setThreat(this.deps.threat);
+    // ★ 日兵力计划（用户定 2026-09-26）：总数 = 威胁预估；上限由指挥器按
+    //   releaseAt(t01) 每拍放开（早间少、第一波大增兵、总攻全军投放）。
+    //   同一天重刷（遗物/数值变动）不清零进度；换日/首次 → 重算。
+    if (this.plannedDay !== inputs.day || this.deps.swarm.ledger.total <= 0) {
+      this.plannedDay = inputs.day;
+      this.deps.swarm.ledger.beginDay(this.deps.threat, 12);
+    }
     // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
     const tier = threatTier(this.deps.threat.index);
     this.deps.worldUIManager.setThreatLabel(`敌军攻势：${tier.label}`, tier.color);
