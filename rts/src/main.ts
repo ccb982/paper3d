@@ -64,7 +64,6 @@ import { setSwarmDebugView } from './services/ui/SwarmDebugOverlay';
 import { setSwarmTraceView } from './services/ui/SwarmTrace';
 import { CommandPanel, type PanelSquad } from './ui/CommandPanel';
 import type { SquadOrder, SquadReport } from './systems/swarm/engine/contracts';
-import { pickSteer, steerDbg, steerScores } from './entity/SteerPick';
 
 const q = new URLSearchParams(location.search);
 const SEED = Number(q.get('seed') ?? 4242);
@@ -935,7 +934,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, pickSteer, steerDbg, steerScores, goneLog, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, goneLog, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
     tactics: { sectors: tactics?.sectors ?? null, battalions: tactics?.battalions ?? null, get mainSectors(): number[] { return tactics?.mainSectors ?? []; }, setMainSectors(k: number[]): void { if (tactics) tactics.mainSectors = k; } }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({

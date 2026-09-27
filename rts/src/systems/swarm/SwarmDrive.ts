@@ -15,7 +15,6 @@ import type { SquadNavigator } from './SquadNavigator';
 import type { SquadOrderState } from './squad/State';
 import type { SwarmData } from './data/SwarmData';
 import { leaderDir } from './squad/Follow';
-import { pickSteer } from '../../entity/SteerPick';
 import { dangerPointAt } from '../../entity/TerrainAssist';
 import { RasterMap } from '../../services/map/RasterMap';
 import { simNow } from '../../services/SimClock';

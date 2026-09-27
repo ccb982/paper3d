@@ -12,7 +12,7 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import type { SquadOrderState } from './squad/State';
-import { currentTargetOf, routeNextPath } from './squad/Anchor';
+import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
 import { shouldKite, kitePoint } from './RangedTactics';
 import { FeasibilityPath } from './nav/LongPath';
