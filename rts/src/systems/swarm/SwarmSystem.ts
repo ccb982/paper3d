@@ -175,8 +175,8 @@ export class SwarmSystem {
       if (p.uid <= 0) return;
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
-      // ★ 收回/退役 → **立即从 SquadTable 注销**（用户定 2026-09-26：列表不得保留已回收者）
-      this.squads.remove(p.uid, false);
+      // ★ 收回/退役 → **立即注销**（同一口径：队长空缺→本队接任）
+      this.unregisterMember(p.uid, false);
     });
   }
 
@@ -801,6 +801,19 @@ export class SwarmSystem {
     }
   }
 
+  /** ★★ 统一注销（用户定 2026-09-27）：SquadTable 移除 + **队长接任发布** + 池标志同步 + 全灭清理——
+   *  阵亡 / 回收 / 清场三条路**唯一口径**（此前 enemy_removed 丢弃返回值→队长变更不广播、标志不同步） */
+  private unregisterMember(uid: number, killed: boolean): void {
+    const res = this.squads.remove(uid, killed);
+    if (!res) return;
+    for (const c of res.changes) this.leaderChanges.push(c);
+    this.syncLeaderFlags(res.squadId);
+    if (res.wiped) {
+      this.pendingWiped.push(res.squadId);
+      this.squadGone?.(res.squadId);
+    }
+  }
+
   /** ★ 外部（引擎重组等）产生的队长变更：入同一通道，下一帧随 hooks 广播（L3 镜像用） */
   pushLeaderChange(uid: number, isLeader: boolean): void {
     this.leaderChanges.push({ uid, isLeader });
@@ -820,17 +833,14 @@ export class SwarmSystem {
       }
     }
     this.pool.removeAt(i);
-    if (!unregister) return;
-    // ★ 步骤 5/9：注销小队归属；队长阵亡/回收 → 本队接任；全灭上报（帧末统一广播）
-    const res = this.squads.remove(uid, killed);
-    if (res) {
-      for (const c of res.changes) this.leaderChanges.push(c);
-      this.syncLeaderFlags(res.squadId);
-      if (res.wiped) {
-        this.pendingWiped.push(res.squadId);
-        this.squadGone?.(res.squadId);               // 队长核/引擎 store 清（main 接线）
-      }
+    if (!unregister) {
+      // ★ 升/降格换载体：归属/队长保留，但池标志要跟上（防升回后丢队长标志）
+      const sq = this.squads.squadOf(uid);
+      if (sq) this.syncLeaderFlags(sq.id);
+      return;
     }
+    // ★ 唯一注销口：队长空缺 → 本队接任；全灭→帧末广播
+    this.unregisterMember(uid, killed);
   }
 
   // ============================================================
@@ -923,14 +933,7 @@ export class SwarmSystem {
   /** ★ 步骤 9：实体阵亡/销毁 → 小队注销（全灭上报；单人只下调评分） */
   onEntityKilled(uid: number): void {
     if (uid <= 0) return;
-    const res = this.squads.remove(uid, true);
-    if (!res) return;
-    for (const c of res.changes) this.leaderChanges.push(c);
-    this.syncLeaderFlags(res.squadId);
-    if (res.wiped) {
-      this.pendingWiped.push(res.squadId);
-      this.squadGone?.(res.squadId);
-    }
+    this.unregisterMember(uid, true);
   }
 
   /** ★ 步骤 10：被击上报（代理直调；实体经 enemy_hit → WorldMode → 这里） */

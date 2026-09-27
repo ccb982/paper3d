@@ -12,6 +12,7 @@
 
 import { Positions } from '../src/systems/swarm/engine/Positions.ts';
 import { SquadManager } from '../src/systems/swarm/engine/SquadManager.ts';
+import { SquadTable } from '../src/systems/swarm/SquadTable.ts';
 import { MeleeManager } from '../src/systems/swarm/engine/MeleeManager.ts';
 import { RangedManager } from '../src/systems/swarm/engine/RangedManager.ts';
 import { FlyerManager } from '../src/systems/swarm/engine/FlyerManager.ts';
@@ -167,6 +168,21 @@ console.log('[3] 四兵种管理器');
   ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 1, posture: 1, covers: [{ x: 18, z: 0 }] });
   const rAss = ranged.targets.get(12)!;
   ok(Math.abs(rAss.x - 18) < 0.01, '★ 总攻不躲掩体：仍压到 STANDOFF=18');
+}
+
+// ---------- 队长接任（阵亡/回收同一口）----------
+console.log('[3b] 队长接任：任何离场路径都要选举');
+{
+  const tb = new SquadTable();
+  tb.assign(1, 'melee', 0, 0); tb.assign(2, 'melee', 2, 0); tb.assign(3, 'melee', -2, 0);
+  const s1 = tb.squadOf(1)!;
+  ok(s1.leaderUid === 1, '首位入队即队长');
+  const r = tb.remove(1, true);   // 队长阵亡
+  ok(!!r && !r.wiped && s1.leaderUid !== 1 && s1.members.has(s1.leaderUid),
+    '★ 队长阵亡 → 本队接任（leaderUid ∈ members）');
+  const r2 = tb.remove(s1.leaderUid, false);   // 队长被回收（同一口）
+  ok(!!r2 && !r2.wiped && s1.leaderUid !== 0 && s1.members.has(s1.leaderUid),
+    '★ 队长被回收 → 同样接任（回收不产生无头队）');
 }
 
 // ---------- TimerManager ----------
