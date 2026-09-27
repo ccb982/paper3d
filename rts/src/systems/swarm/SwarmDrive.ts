@@ -69,7 +69,9 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     // ★ 架构底线（用户定 2026-09-26）：**成员的移动同样来自长短寻路**——**定时对队长位置做一次
     //   长寻路**（每人一条缓存路线），沿其走格边步；无解/到位 → 停。
     const stM = host.squadStateOf(squad.id);
-    if (stM?.climbCred) { cred = true; credPt = stM.climbCred; }   // ★ 成员同源：凭证挂在小队寻路上
+    // ★ 凭证口径（用户定）：**成员/代理无需凭证**——进爬坡区即上送；credPt 有则用于定位
+    cred = true;
+    if (stM?.climbCred) credPt = stM.climbCred;
     const lead = squad.members.get(squad.leaderUid);
     // ★ 飞行（经典空中层）：**不走地面寻路**，直航到队长（避免地面路线失败→站住卡墙）
     if (lead && p.isAir[i] === 1) {
@@ -78,7 +80,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
       dx = ax / al; dz = az / al; edgeMode = false;
     } else {
     const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
-    if (ms?.climb && ms.climbPt) { cred = true; credPt = ms.climbPt; }   // ★ 成员自己路线的凭证（与小队凭证并存）
+    if (ms?.climbPt) credPt = ms.climbPt;   // ★ 成员路线带坡点则用其点位
     if (ms && !ms.done) {
       dx = ms.dx; dz = ms.dz; edgeMode = true;
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }

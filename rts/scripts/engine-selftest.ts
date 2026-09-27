@@ -411,7 +411,11 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
   const noCred = run(mkProbe(true, 2), false);
   ok(noCred.climbing === false, '无凭证 → 不爬（没有自主上坡）');
   const offPoint = run(mkProbe(true, 2, [5, 0]), true);
-  ok(offPoint.dx > 0 && offPoint.climbing === true, '持凭证但不在上坡点 → 强制走位进点（沿 +n，不直爬）');
+  ok(offPoint.climbing === false, '★ 传送带：离坡点太远（区外）→ 不抓');
+  const inZone = run(mkProbe(true, 2, [2, 0]), true);
+  ok(inZone.climbing === true && inZone.dx > 0, '★ 传送带：进区（不必在点）→ 自动抓取上送（沿 +n）');
+  const centering = run(mkProbe(true, 2, [2, 1]), true);
+  ok(centering.climbing === true && centering.dz > 0, '★ 传送带：横向强制回中（向中线收）');
   const nearPoint = run(mkProbe(true, 2, [0.4, 0]), true);
   ok(nearPoint.dx > 0 && nearPoint.climbing === true, '已在点（≤0.6m）→ 起步');
   // ★ 爬完坡：到落点本帧 landed=true（触发强制重寻路；用户定 2026-09-26）

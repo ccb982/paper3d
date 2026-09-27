@@ -55,7 +55,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
     }
     const def = elite
       ? (d.mobDefs.find((m) => m.elite) ?? d.mobDefs[0])
-      : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);
+      : (d.mobDefs.find((m) => m.role === role) ?? d.mobDefs[0]);   // 飞行兵包括自爆兵（用户定）
     if (!def) return;
     // ★ 可站性微调：环位可能落在水里（此前直接失败 → 施工队只剩 1 只，永远开不了工）
     for (let i = 0; i < 6; i++) {

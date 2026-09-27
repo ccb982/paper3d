@@ -227,60 +227,41 @@ export class CharacterCore {
             out.climbing = true;
             CLIMB_STATS.climbSteps++;
             const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;   // 自主速：停步限速不能压死爬坡
-            dx = run.ux * sp * CLIMB_SPEED_MUL * inp.dt;
-            dz = run.uz * sp * CLIMB_SPEED_MUL * inp.dt;
+            // ★ 传送带：沿法线前进 + **横向强制回中**（tOff→0）——防侧滑/掉下坡
+            const cent = Math.min(1, Math.abs(tOff) / Math.max(0.5, halfSpan));
+            const sgn = tOff > 0 ? -1 : 1;
+            dx = (run.ux + sgn * tx * 0.9 * cent) * sp * CLIMB_SPEED_MUL * inp.dt;
+            dz = (run.uz + sgn * tz * 0.9 * cent) * sp * CLIMB_SPEED_MUL * inp.dt;
           }
         } else {
-          // ★★ 强制走位（用户定 2026-09-26）：**爬坡必须从爬坡点起步**——三点式：
-          //   ① 退出坡面（深入/贴面且未对齐 → 沿 -n 后退）
-          //   ② 沿坡底横移对齐（|tOff|>0.35 → 沿 ∓t 移到点的法线上）
-          //   ③ 正向进点（对齐后沿 +n 进点）→ 到点（硬边防线）起步。
+          // ★★ 传送带式程序化爬坡（用户定 2026-09-26：“类似传送带，强制平稳送到目标”）
+          //   · 爬坡点 = 实体区：**持凭证 ∧ 进区（横向带内 ∧ sOff≥-BASE_NEAR）∧ 硬边防线** → 自动抓上（无需精确到点）；
+          //   · 抓上后不可中断（ClimbCommit），到**落点（脚着地）**才释放；已在顶上者不再抓（防拽回）。
           CLIMB_STATS.run++;
-          const dPt = Math.hypot(inp.x - run.x, inp.z - run.z);
-          if (dPt <= 6) {
-            CLIMB_STATS.near++;
-            if (Math.abs(tOff) > 0.35) CLIMB_STATS.nearAlign++;
-            else if (dPt > CLIMB_START_R) CLIMB_STATS.nearGo++;
-          }
-          // ★★ 已在顶上（用户定 2026-09-26：“到了坡顶又掉下来”的根因修正）：
-          //   顶上的 sOff 天然 = 坡深（≫ 0.3）→ 旧逻辑每帧当“深入坡面”把人拽回下坡。
-          //   判据：y 已到落点顶层 ∧ sOff∈(0.3, +)→**视为已过坡**：不退、不横、不进点（交给路线/订单）。
-          const topY = probe.heightAt(lx, lz, inp.y);   // 落点顶层高
-          const onTop = Number.isFinite(topY) && inp.y >= topY - 0.6 && sOff > 0.3;
+          const topY = probe.heightAt(lx, lz, inp.y);
+          const onTop = Number.isFinite(topY) && inp.y >= topY - 0.6 && sOff > 0.3
+            && Math.hypot(inp.x - lx, inp.z - lz) <= 3;
           if (!atLand && !onTop) {
-            const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
-            const deep = sOff > 0.3;
-            const hugMis = Math.abs(tOff) > 1.0 && sOff > -1.0;
-            if (deep || hugMis) {                       // ① 退出
-              out.climbing = true; CLIMB_STATS.approach++;
-              CLIMB_STATS.nearDeep++;
-              dx = -run.ux * sp * inp.dt; dz = -run.uz * sp * inp.dt;
-            } else if (Math.abs(tOff) > 0.35) {         // ② 横移对齐
-              const s = tOff > 0 ? -1 : 1;
-              out.climbing = true; CLIMB_STATS.approach++;
-              dx = s * tx * sp * inp.dt; dz = s * tz * sp * inp.dt;
-            } else if (dPt > CLIMB_START_R) {           // ③ 正向进点
-              out.climbing = true; CLIMB_STATS.approach++;
-              dx = run.ux * sp * inp.dt; dz = run.uz * sp * inp.dt;
-            } else {                                    // ④ 在点：硬边防线→起步
-              const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
-              if (own !== null) {
-                const top0 = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
-                const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
-                  px: run.x, pz: run.z, d: dPt, tOff, sOff, frames: 0,
-                  y0: inp.y, top0: Number.isFinite(top0) ? top0 : inp.y, buryMax: 0, footGap: 0 };
-                CLIMB_TRACE.push(tr);
-                if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
-                this.session = { run, lx, lz, tr };
-                CLIMB_STATS.sessions++;
-                CLIMB_STATS.startDistMax = Math.max(CLIMB_STATS.startDistMax, dPt);
-                if (dPt > CLIMB_START_R + 0.05) CLIMB_STATS.badStarts++;
-                out.climbing = true;
-                CLIMB_STATS.climbSteps++;
-                if (!this.everClimbed) { this.everClimbed = true; CLIMB_STATS.units++; }
-                dx = run.ux * sp * CLIMB_SPEED_MUL * inp.dt;
-                dz = run.uz * sp * CLIMB_SPEED_MUL * inp.dt;
-              } else CLIMB_STATS.guardFail++;
+            const inZone = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR && sOff <= dl + 0.5;
+            const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
+            if (inZone && own !== null) {
+              const top0 = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
+              const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
+                px: run.x, pz: run.z, d: Math.hypot(inp.x - run.x, inp.z - run.z), tOff, sOff, frames: 0,
+                y0: inp.y, top0: Number.isFinite(top0) ? top0 : inp.y, buryMax: 0, footGap: 0 };
+              CLIMB_TRACE.push(tr);
+              if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
+              this.session = { run, lx, lz, tr };
+              CLIMB_STATS.sessions++;
+              out.climbing = true;
+              CLIMB_STATS.climbSteps++;
+              if (!this.everClimbed) { this.everClimbed = true; CLIMB_STATS.units++; }
+              const sp = inp.speed > 0.05 ? inp.speed : CLIMB_MIN_SPEED;
+              // ★ 抓取首拍也带回中（传送带一连线）
+              const cent0 = Math.min(1, Math.abs(tOff) / Math.max(0.5, halfSpan));
+              const sgn0 = tOff > 0 ? -1 : 1;
+              dx = (run.ux + sgn0 * tx * 0.9 * cent0) * sp * CLIMB_SPEED_MUL * inp.dt;
+              dz = (run.uz + sgn0 * tz * 0.9 * cent0) * sp * CLIMB_SPEED_MUL * inp.dt;
             }
           }
         }

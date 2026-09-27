@@ -167,12 +167,16 @@ export class SwarmSystem {
     //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。
     this.casualtyUnsub = eventBus.on('enemy_killed', (p) => {
       if (p.uid > 0) this.ledger.reportCasualty(1);
+      // ★ 阵亡（含自爆）→ **立即从 SquadTable 注销**（用户定 2026-09-26：列表不得保留已死者）
+      if (p.uid > 0) this.onEntityKilled(p.uid);
     });
     // ★ 非击杀离场：存活 −1；recycled 视为回收（归还编制、计 recalled）
     this.removedUnsub = eventBus.on('enemy_removed', (p) => {
       if (p.uid <= 0) return;
       if (p.reason === 'recycled') this.ledger.noteRecall(1);
       else this.ledger.noteRemoved(1);
+      // ★ 收回/退役 → **立即从 SquadTable 注销**（用户定 2026-09-26：列表不得保留已回收者）
+      this.squads.remove(p.uid, false);
     });
   }
 

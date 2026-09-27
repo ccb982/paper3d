@@ -431,8 +431,8 @@ export class SquadNavigator {
         const isLead = u.swarmUid === squad.leaderUid;
         const upos0 = u.position;
         let sx = tgt.x, sz = tgt.z;
-        // ★ 凭证挂在**寻路**上（用户定 2026-09-26）：路线在 → 票在；到达目标并接上下一条寻路才回收。
-        let needClimb = state?.climbCred !== undefined;
+        // ★ 凭证口径（用户定 2026-09-26）：**队长需凭证；成员/代理无条件上送（无需凭证）**。
+        let needClimb = isLead ? (state?.climbCred !== undefined) : true;
         let needClimbPt = state?.climbCred;
         const isFlyer = squad.type === 'flyer';
         if (!isLead && isFlyer) {
@@ -443,7 +443,7 @@ export class SquadNavigator {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
           else { sx = upos0.x; sz = upos0.z; }
-          if (ms?.climb && ms.climbPt) { needClimb = true; needClimbPt = ms.climbPt; }
+          if (ms?.climbPt) needClimbPt = ms.climbPt;   // 成员路线带坡点则用其点位（凭证本身不需要）
         }
         u.formSlot = rank;
         // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住
