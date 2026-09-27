@@ -7,6 +7,7 @@
 
 import type { SwarmSnapshot, UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity/SwarmUnit';
+import { climbBook } from '../../entity/base/ClimbBook';
 import { CharacterCore, canShift, type StepResult } from '../../entity/base/CharacterCore';
 import { SHORE_CLIMB_MAX } from '../../entity/TerrainAssist';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
@@ -171,6 +172,7 @@ export class AgentPool {
       dirX, dirZ, speed,
       climbOrdered,
       climbPt,
+      uid: this.swarmUid[i],   // ★ 上坡点认领制
       blockCliffClimb: !air,
       climbAnyTerrain: air,
       flying: air,   // ★ 飞行：自由路径
@@ -424,6 +426,7 @@ export class AgentPool {
 
   /** swap-remove（尾元素填位；所有数组同步搬移） */
   removeAt(i: number): void {
+    climbBook.release(this.swarmUid[i]);   // ★ 认领制：回收即释放坡点
     const last = this.count - 1;
     if (i !== last) this.copy(last, i);
     this.count = last;

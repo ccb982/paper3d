@@ -23,6 +23,7 @@ import {
   UNIT_HIT_HOLD_S,
 } from './SwarmUnit';
 import { autoGroundSinkFromFrame } from '../services/fx/groundSink';
+import { climbBook } from './base/ClimbBook';
 import { EnemyLocomotion } from './enemy/EnemyLocomotion';
 import { EnemyBrain } from './enemy/EnemyBrain';
 import { EnemyPresentation } from './enemy/EnemyPresentation';
@@ -86,6 +87,11 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   // ============================================================
   /** 稳定 uid（升格/降格往返不变；替代裸 index） */
   swarmUid = 0;
+
+  /** ★ 上坡点认领制：稳定 uid 上报内核（用户定 2026-09-26） */
+  protected override climbUid(): number {
+    return this.swarmUid;
+  }
   /** 当前载体（L3 实体恒为 'entity'） */
   readonly carrier = 'entity' as const;
   /** ★ 激活态（2026-09-19 单一单位模型）：实体载体恒 active（代理池 = dormant） */
@@ -565,6 +571,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *  降格/回收/清场走其他 reason → 天然不计击杀（取代 killedByCombat/deathReported）；
    *  ★ 2026-09-20 账本口径：killed → 击杀+1/存活−1；非击杀离场 → 存活−1（demoted 除外）。 */
   protected override onRetire(reason: RetireReason): void {
+    climbBook.release(this.swarmUid);   // ★ 认领制：退役即释放坡点
     if (reason === 'killed') {
       eventBus.emit('enemy_killed', {
         uid: this.swarmUid,

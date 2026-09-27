@@ -16,6 +16,7 @@
 import { CLIMB_SPEED_MUL, SHORE_CLIMB_MAX } from '../TerrainAssist';
 import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
 import { RasterMap } from '../../services/map/RasterMap';
+import { climbBook, type ClimbRun } from './ClimbBook';
 
 /** ★ 脱埋深度（米）：脚底比顶层地表低 ≥ 此值 = 被楔在坡体/结构内部 */
 export const UNBURY_DEPTH = 1.2;
@@ -105,6 +106,8 @@ export interface StepInput {
   hz: number;
   /** 攀爬插值/空中接管时挂起（本拍不动） */
   suspended: boolean;
+  /** ★ 稳定 uid（上坡点认领制用；0/缺省 = 不认领） */
+  uid?: number;
 }
 
 export interface StepResult {
@@ -134,6 +137,7 @@ export const CLIMB_STATS = {
   nearAlign: 0,   // 聚集区：横移对齐中
   nearGo: 0,      // 聚集区：正向进点中
   guardFail: 0,   // 硬性防线不过（本格无 climb 位）
+  forced: 0,      // ★ 10s 兜底强制上送次数（用户定 2026-09-26）
   climbSteps: 0,  // 执行上升帧
   units: 0,       // 曾进入爬升态的核数
   sessions: 0,    // 起爬会话（提交）数
@@ -148,6 +152,12 @@ export const CLIMB_STATS = {
 export class CharacterCore {
   private everClimbed = false;
   /** ★ 爬升承诺（用户定 2026-09-26）：一旦起爬 → 锁存本次坡+落点，不受凭证丢失/steer 过期/限速/到达停步影响，直到落点。 */
+  /** ★ 兜底计时（用户定）：同一坡点旁累计停留（防在点旁卡死） */
+  private nearKey: string | null = null;
+  private nearS = 0;
+  private nearX = 0;
+  private nearZ = 0;
+  private wasForced = false;
   private session: {
     run: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
     lx: number; lz: number;
@@ -193,10 +203,28 @@ export class CharacterCore {
     //   **起爬必须在爬坡点（≤CLIMB_START_R=0.6m）**，此时才查硬性防线（本格有 climb 位，禁硬边上爬）；
     //   精确记录：CLIMB_TRACE（起点坐标/点位/实测距/结局）。
     const committed = this.session !== null;
-    if (committed && inp.climbAnyTerrain) { this.session = null; CLIMB_STATS.abandoned++; }   // 切到自由爬坡 → 弃约
-    if (!inp.climbAnyTerrain && (committed || (inp.blockCliffClimb && inp.climbOrdered))) {
+    const uid = inp.uid ?? 0;
+    if (committed && inp.climbAnyTerrain) { this.session = null; CLIMB_STATS.abandoned++; climbBook.release(uid); }   // 切到自由爬坡 → 弃约
+    // ★★ 统一上坡点管理 + 10s 兜底（用户定 2026-09-26）：
+    //   · 认领制：一个单位同一时刻**只归一个上坡点**（其他点不抢）；
+    //   · 兜底：任何兵（不论有无凭证）**移动中**在同一坡点旁卡满 10s → 无条件送上坡。
+    const moving = inp.speed > 0.5 && (inp.dirX !== 0 || inp.dirZ !== 0);
+    let forced: ClimbRun | null = null;
+    let owned: ClimbRun | null = null;
+    if (!inp.climbAnyTerrain && !inp.flying && inp.blockCliffClimb && !committed) {
+      owned = uid ? climbBook.claimed(uid) : null;
+      if (owned && Math.hypot(inp.x - owned.x, inp.z - owned.z) > 12) { climbBook.release(uid); owned = null; }   // 走远 → 释放
+      const cand = owned ?? inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null);
+      if (cand && moving) {
+        const key = cand.x.toFixed(1) + ',' + cand.z.toFixed(1);
+        if (this.nearKey === key && Math.hypot(inp.x - this.nearX, inp.z - this.nearZ) <= 3) this.nearS += inp.dt;
+        else { this.nearKey = key; this.nearS = 0; this.nearX = inp.x; this.nearZ = inp.z; }
+        if (this.nearS >= 10) { forced = cand; if (!this.wasForced) { CLIMB_STATS.forced++; this.wasForced = true; } }
+      } else { this.nearKey = null; this.nearS = 0; this.wasForced = false; }
+    } else { this.nearKey = null; this.nearS = 0; this.wasForced = false; }
+    if (!inp.climbAnyTerrain && (committed || forced || (inp.blockCliffClimb && inp.climbOrdered))) {
       const run = committed ? this.session!.run
-        : (inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
+        : (forced ?? owned ?? inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
       if (!committed) { CLIMB_STATS.cred++; if (!run) CLIMB_STATS.noRun++; }
       if (run) {
         const tx = -run.uz, tz = run.ux;
@@ -221,8 +249,8 @@ export class CharacterCore {
           if (tr.footGap < -0.3) CLIMB_STATS.buryFrames++;
           if (-tr.footGap > tr.buryMax) tr.buryMax = -tr.footGap;
           const far = sOff < -(BASE_NEAR + 8) || Math.abs(tOff) > halfSpan + 8;
-          if (far) { this.session = null; CLIMB_STATS.abandoned++; tr.phase = 'abandoned'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
-          else if (atLand) { this.session = null; CLIMB_STATS.landed++; out.landed = true; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
+          if (far) { this.session = null; CLIMB_STATS.abandoned++; climbBook.release(uid); tr.phase = 'abandoned'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
+          else if (atLand) { this.session = null; CLIMB_STATS.landed++; climbBook.release(uid); out.landed = true; tr.phase = 'landed'; tr.x = inp.x; tr.z = inp.z; tr.y = inp.y; }
           else {
             out.climbing = true;
             CLIMB_STATS.climbSteps++;
@@ -244,7 +272,9 @@ export class CharacterCore {
           if (!atLand && !onTop) {
             const inZone = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR && sOff <= dl + 0.5;
             const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
-            if (inZone && own !== null) {
+            // ★ 兜底报抢放宽：到点附近（≤6m）也强制抓（只在 forced 时）
+            const okIn = inZone || (forced !== null && Math.hypot(inp.x - run.x, inp.z - run.z) <= 6);
+            if (okIn && own !== null) {
               const top0 = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
               const tr = { id: ++CLIMB_SEQ, t: nowS, phase: 'ascend', x: inp.x, z: inp.z, y: inp.y,
                 px: run.x, pz: run.z, d: Math.hypot(inp.x - run.x, inp.z - run.z), tOff, sOff, frames: 0,
@@ -252,6 +282,8 @@ export class CharacterCore {
               CLIMB_TRACE.push(tr);
               if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
               this.session = { run, lx, lz, tr };
+              climbBook.claim(uid, run);   // ★ 认领：该点独属，别的点不抢
+              this.nearKey = null; this.nearS = 0; this.wasForced = false;
               CLIMB_STATS.sessions++;
               out.climbing = true;
               CLIMB_STATS.climbSteps++;

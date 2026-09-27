@@ -26,6 +26,7 @@ import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift } from '../src/entity/base/CharacterCore.ts';
+import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
@@ -441,7 +442,46 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
     hx: 0.4, hz: 0.4, suspended: false, flying: true }, mkProbe(false, 2) as never, 0);
   ok(flyStep.dx > 0 && flyStep.gy === 5 && flyStep.climbing === false,
     '★ 飞行：硬墙不拦、高度不被地形改写（自由路径）');
+
+// ---------- 上坡点统一管理 + 10s 兜底（用户定 2026-09-26） ----------
+console.log('[5g2] 上坡点认领制 + 10s 兜底强制上送');
+{
+  const mkProbe3 = (weld: boolean, rise: number, runAt: [number, number] | null = [0, 0]) => ({
+    heightAt: (x: number) => (x >= 0.5 ? rise : 0),
+    wetAt: () => false,
+    slopeGradAt: () => (weld ? { gx: 1, gz: 0, mag: 1 } : null),
+    isWeldEdge: () => weld,
+    layerAt: (x: number) => (x >= 0.5 ? rise : 0),
+    topAt: (x: number) => (x >= 0.5 ? rise : 0),
+    climbPoint: (x: number, z: number, dx: number, dz: number) => {
+      void x; void z; void dx; void dz;
+      return runAt && weld ? { x: runAt[0], z: runAt[1], ux: 1, uz: 0, width: 3 } : null;
+    },
+  });
+  const uid = 77;
+  const mkInp = (dt: number, over: Record<string, unknown> = {}) => ({
+    x: -2, y: 0, z: 0, dt, dirX: 1, dirZ: 0, speed: 2, uid,
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false, ...over,
+  });
+  const pr = mkProbe3(true, 2, [0, 0]);
+  const core = new CharacterCore();
+  let last = core.step(mkInp(0.5) as never, pr as never, 0);
+  for (let i = 0; i < 19; i++) last = core.step(mkInp(0.5) as never, pr as never, 0);   // 共 10s（首帧仅记锚）
+  ok(last.climbing === false && climbBook.claimed(uid) === null, '9.5s 未到：无凭证也不上送（不误抓）');
+  last = core.step(mkInp(0.5) as never, pr as never, 0);   // 10.0s
+  ok(last.climbing === true, '★ 10s 兜底：任何兵（无凭证）移动中卡点满 10s → 强制上送');
+  ok(climbBook.claimed(uid) !== null, '★ 认领制：抓上即认领（该点独属，别的点不抢）');
+  const land = core.step(mkInp(0.5, { x: 3.5, y: 2 }) as never, pr as never, 1);
+  ok(land.landed === true && climbBook.claimed(uid) === null, '★ 到落点释放认领（允许新一段接管）');
+  const core2 = new CharacterCore();
+  let l2 = core2.step({ x: 0, y: 0, z: 0, dt: 0.5, dirX: 0, dirZ: 0, speed: 0, uid: 78,
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false } as never, pr as never, 0);
+  for (let i = 0; i < 30; i++) l2 = core2.step({ x: 0, y: 0, z: 0, dt: 0.5, dirX: 0, dirZ: 0, speed: 0, uid: 78,
+    blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false } as never, pr as never, 0);
+  ok(l2.climbing === false, '★ 站桩（驻守/施工）不计时：永不被兜底误送');
 }
+}
+
 
 // ---------- 方案 A：格边跟随（移动消费格边图） ----------
 console.log('[5h] EdgeFollow 格边跟随（方案 A：轴对齐 + canStep；斜向分解；无路 null）');

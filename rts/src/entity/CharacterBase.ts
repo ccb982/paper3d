@@ -49,6 +49,11 @@ export const DEFAULT_COLLISION_VOLUME = {
 };
 
 export abstract class CharacterBase extends EntityBase {
+  /** ★ 稳定 uid（子类覆盖；上坡点认领制用） */
+  protected climbUid(): number {
+    return 0;
+  }
+
   readonly controller: CharacterController;
   /** ★ 无视地形落差行进（载具：爬坡/过坑；开启后不再被 EDGE_CLIFF_BAND 立面阻挡） */
   climbAnyTerrain = false;
@@ -163,6 +168,7 @@ export abstract class CharacterBase extends EntityBase {
         dirX: dir.x, dirZ: dir.y, speed,
         climbOrdered: this.climbOrdered,
         climbPt: this.climbPt,
+        uid: this.climbUid(),   // ★ 上坡点认领制
         blockCliffClimb: this.blockCliffClimb,
         climbAnyTerrain: this.climbAnyTerrain,
         flying: this.airborne === true,   // ★ 飞行：自由路径
