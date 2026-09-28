@@ -114,7 +114,7 @@ export function updateSwarmDebug(dbg: SwarmDebugOverlay, host: SwarmDbgHost): vo
   }
   if (bestA >= 0) {
     const i = bestA;
-    info.push(`代理 d=${Math.sqrt(bestAD).toFixed(1)}m tier=${pool.tier[i]} aggro=${pool.aggro[i].toFixed(1)} intent=${pool.intent[i]} 开火=${pool.atomFire[i]} cd=${pool.attackCd[i].toFixed(2)} 指令=${DIRECTIVE_CODES[pool.directiveKind[i]]}`);
+    info.push(`代理 d=${Math.sqrt(bestAD).toFixed(1)}m tier=${pool.tier[i]} aggro=${pool.aggro[i].toFixed(1)} 开火=${pool.atomFire[i]} cd=${pool.attackCd[i].toFixed(2)} 指令=${DIRECTIVE_CODES[pool.directiveKind[i]]}`);
   }
   let bestE: EnemyBase | null = null, bestED = Infinity;
   for (const e of enemies) {

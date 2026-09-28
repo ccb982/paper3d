@@ -9,24 +9,9 @@
 import type { ThreatProfile } from './EnemyScaling';
 
 /** 攻击意图（代理索敌偏好；255 = 无意图，维持"游走 + 仇恨圈"旧观感） */
-export const INTENT_PLAYER = 0;
-export const INTENT_SHIP = 1;
-export const INTENT_FLANK = 2;
-export const INTENT_NONE = 255;
 
 export type DirectorPhase = 'calm' | 'warning' | 'assault' | 'lull';
 
-/** 波次订单（保留类型以兼容旧接线；新节律不再产出订单） */
-export interface SpawnOrder {
-  anchorX: number;
-  anchorZ: number;
-  intent: number;
-  waves: number;
-  count: number;
-  preferPack: boolean;
-  assaultIndex?: number;
-  sector?: number;
-}
 
 /** UI 播报钩子 */
 export interface DirectorHooks {

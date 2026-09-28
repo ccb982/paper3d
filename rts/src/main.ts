@@ -431,13 +431,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
                 const r = k === 0 ? 0 : 2 + (k % 3) * 2;
                 const qx = x + Math.cos(a2) * r, qz = z + Math.sin(a2) * r;
                 const qy = raster.surfaceHeightAt(qx, qz);
-                if (spawner.spawnSingle(def as never, qx, qy, qz, 255, -1, false, mhp)) return true;
+                if (spawner.spawnSingle(def as never, qx, qy, qz, -1, false, mhp)) return true;
               }
               // ★ 回退一（用户定 2026-09-27）：卡死点不可放 → **环内同方位点**再试
               const c = swarm.data.clampToRing(x, z);
-              if (Math.hypot(c.x - x, c.z - z) > 1 && spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, 255, -1, false, mhp)) return true;
+              if (Math.hypot(c.x - x, c.z - z) > 1 && spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, -1, false, mhp)) return true;
               // ★ 回退二：最后手段——force 放置（绝不让特殊兵种凭空消失）
-              return spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, 255, -1, true, mhp);
+              return spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, -1, true, mhp);
             };
             for (const e of enemies) {
               if (e.swarmUid !== uid) continue;
@@ -779,7 +779,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   /** ★ **仅调试/探针**：手动放敌（玩法创建只走四兵种管理器；此口不参与玩法） */
   const placeEnemyAt = (x: number, z: number): boolean => {
     const def = mobDefs.find((d) => d.canBuild !== true && d.isAir !== true) ?? mobDefs[0];
-    return def ? spawner.spawnOne(def, x, 0, z, undefined, -1, true) : false;
+    return def ? spawner.spawnOne(def, x, 0, z, -1, true) : false;
   };
   /** ★ 强制移动令（玩家源；选中队全体 advance）→ 返回发令队数（调试接口，探针同口） */
   const forceMoveSelectionTo = (x: number, z: number): number => {

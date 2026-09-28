@@ -76,6 +76,8 @@ export const SWARM = {
   ALERT_DELAY_SPAN: 1.3,
   ALERT_PAINT_RADIUS: 12,
   ALERT_PAINT_RADIUS_ATTACK: 10,
+  /** ★ L2 令目标行军：距令目标 > 此值 → 行军（不再围绕出生点游走）；到位 → 围绕令目标驻守 */
+  L2_POST_ARRIVE_R: 8,
 } as const;
 
 /** ★ 自主 LOD / 大队警戒参数（2026-09-19；《RTS架构.md》§5.10；集中可调） */

@@ -12,7 +12,6 @@ import type { RasterMap } from '../../services/map/RasterMap';
 import type { ChunkManager } from '../../services/map/ChunkManager';
 import type { MobDef, WorldSpawner } from '../../systems/spawn/WorldSpawner';
 import type { SwarmData } from '../../systems/swarm/data/SwarmData';
-import { INTENT_NONE } from '../../systems/swarm/Director';
 import { pickDef } from '../../systems/spawn/MobPick';
 import { buildEnemyCover } from './EnemyCoverBuild';
 
@@ -65,7 +64,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       const r = i === 0 ? 0 : 2 + Math.random() * 6;
       const qx = sx + Math.cos(a) * r;
       const qz = sz + Math.sin(a) * r;
-      if (d.spawner.spawnOne(def, qx, d.raster.surfaceHeightAt(qx, qz), qz, INTENT_NONE, -1)) return;
+      if (d.spawner.spawnOne(def, qx, d.raster.surfaceHeightAt(qx, qz), qz, -1)) return;
     }
   };
   // ★ 施工兵生成（独有施工战术）：名册 canBuild 兵种优先；无 → 杂兵兜底
@@ -78,7 +77,7 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
       const r = i === 0 ? 0 : 2 + Math.random() * 6;
       const sx = x + Math.cos(a) * r;
       const sz = z + Math.sin(a) * r;
-      if (d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, INTENT_NONE, -1)) return;
+      if (d.spawner.spawnOne(def, sx, d.raster.surfaceHeightAt(sx, sz), sz, -1)) return;
     }
   };
   // ★ 统一装配原子生成口（此后创建只经四兵种管理器；旧名单/班底/大队创建已删）

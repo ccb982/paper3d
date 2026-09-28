@@ -39,7 +39,7 @@ import { ChunkManager } from '../../services/map/ChunkManager';
 import { LOD_MAX_DIST } from '../../services/lod';
 import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
 import { SwarmSystem, SWARM } from '../../systems/swarm/SwarmSystem';
-import { Director, INTENT_NONE, INTENT_SHIP, type SpawnOrder } from '../../systems/swarm/Director';
+import { Director } from '../../systems/swarm/Director';
 import {
   computeEnemyScale, computeThreat, threatTier,
   type EnemyScale, type ThreatProfile,
@@ -179,12 +179,8 @@ export class WorldSpawner implements SwarmTierPort {
   static readonly SHIP_GROUP_HIDE_COUNT = 3;
   /** 近距通道持续时长（秒）：一群怪路过闪一瞬不报，扎住才报 */
   static readonly SHIP_GROUP_SUSTAIN = 0.6;
-  /** ★ 意图通道触发：≥ 此数蜂群代理**明确扑向舰船**（INTENT_SHIP）→ 快速播报（不论远近） */
-  static readonly SHIP_INTENT_COUNT = 4;
   /** 意图通道迟滞：扑向舰船的代理 ≤ 此数 才可清除 */
-  static readonly SHIP_INTENT_HIDE = 2;
   /** 意图通道持续时长（秒；比近距更快，扑舰波次换位期间不错过） */
-  static readonly SHIP_INTENT_SUSTAIN = 0.3;
 
 
   /** 已完成波次的 chunk（避免重复铺；换局由 reset() 清空） */
@@ -457,71 +453,6 @@ export class WorldSpawner implements SwarmTierPort {
     this.deps.worldUIManager?.showVictoryPanel(() => this.deps.returnToBase());
   }
 
-  /** ★ P4：执行导演订单（大波集中）：每次事件 1~2 波、每波一个方向扇区，
-   *  两波之间方向明显错开（双面夹击），但每面都是"一团人"而非全向散兵 */
-  spawnDirectorWave(order: SpawnOrder): void {
-    // ★ 袭击订单带主攻扇区（整场固定的一个方向）；环境散兵随机
-    let sector = order.sector ?? Math.random() * Math.PI * 2;
-    for (let w = 0; w < order.waves; w++) {
-      this.spawnWaveNear(order.anchorX, order.anchorZ, {
-        count: order.count,
-        intent: order.intent,
-        preferPack: order.preferPack,
-        sector,
-        spread: 0.5,
-        assaultIndex: order.assaultIndex ?? -1,
-      });
-      sector += Math.PI * (0.6 + Math.random() * 0.6);
-    }
-  }
-
-  /** ★ 波次生成（导演订单 / 调试用）：
-   *  在指定焦点的 LOD 外环（94~130m 纵深带，chunk 数据环内）铺 count 只代理。
-   *  sector 给定则整波集中在 ±spread 扇区（集中大波，便于防守）。
-   *  ⚠️ 无论焦点是谁，都避开 玩家 12m / 舰船 15m 的安全圈。 */
-  spawnWaveNear(
-    fx: number, fz: number,
-    opts: {
-      count: number; intent: number; preferPack: boolean;
-      sector?: number; spread?: number; assaultIndex?: number;
-    },
-  ): void {
-    if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
-    if (this.deps.chunks.isBoss4D) return; // 四维空间不补杂兵
-    const want = Math.max(1, opts.count);
-    let placed = 0;
-    const pp = this.deps.player?.position;
-    const sp = this.deps.ship?.position;
-    // ★ 方向：整波集中在 [sector ± spread] 扇区（默认全向；导演订单必带扇区）
-    const baseAng = opts.sector ?? Math.random() * Math.PI * 2;
-    const spread = opts.spread ?? Math.PI;
-    const lo = LOD_MAX_DIST + 4;
-    // ★ 波内纵深带：lo ~ SPAWN_BAND_HI（扩 LOD 后 lo 变远，带上限同步外扩）
-    const span = WorldSpawner.SPAWN_BAND_HI - lo;
-    // ★ count = 个体数（2026-09-13 三次修正：原按"窝"计数——原石虫一窝 4 只，
-    //   导演"每波 5~8"实际最多刷 32 只；现按个体扣减，窝仍是刷怪单位）
-    for (let i = 0; i < want * 10 && placed < want; i++) {
-      const ang = baseAng + (Math.random() - 0.5) * 2 * spread;
-      const dist = lo + Math.random() * span;
-      const x = fx + Math.cos(ang) * dist;
-      const z = fz + Math.sin(ang) * dist;
-      // 安全圈：不在玩家/舰船近旁生成（焦点波次也不贴脸）
-      if (pp && (x - pp.x) ** 2 + (z - pp.z) ** 2 < 12 * 12) continue;
-      if (sp && (x - sp.x) ** 2 + (z - sp.z) ** 2 < 15 * 15) continue;
-      // 目标 chunk 必须已有地形数据（未生成的世界区域不刷）
-      const cx = Math.floor(x / CHUNK_SIZE);
-      const cz = Math.floor(z / CHUNK_SIZE);
-      if (chunkKeyOf(cx, cz) === this.deps.spawnChunkKey) continue;
-      if (!this.deps.raster.getChunkData(cx, cz)) continue;
-      const role = this.deps.raster.tileDefAt(x, z).genRole;
-      if (role === 'pit' || role === 'liquid') continue;
-      const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9); // 洞顶优先（不刷进洞里）
-      if (y < -1.2) continue;
-      const def = this.pickMob(opts.preferPack);
-      if (this.spawnOne(def, x, y, z, opts.intent, opts.assaultIndex ?? -1)) placed += def.pack;
-    }
-  }
-
   /** ★ 随机取一条杂兵配置（按 weight 加权：原石虫权重大 → 成群出现）；
    *  preferPack = 突涌期偏成群（洪流感） */
   pickMob(preferPack = false): MobDef {
@@ -608,12 +539,10 @@ export class WorldSpawner implements SwarmTierPort {
   }
 
   /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
-   *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。双通道，谁触发取谁计数：
-   *   ① 近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
-   *      且持续 SHIP_GROUP_SUSTAIN 秒 —— 团已扎到船边；
-   *   ② 意图通道：≥SHIP_INTENT_COUNT 个代理明确扑向舰船（池 intent=INTENT_SHIP）持续
-   *      SHIP_INTENT_SUSTAIN 秒 —— 波次刚刷、还在路上就报，灵敏度更高。
-   *   横幅显示 max(近距, 扑舰) 计数并实时刷新；双双回落到各自 HIDE 才清除。 */
+   *  跟大规模进攻节奏零耦合；舰内/舰毁才停）。
+   *  近距通道：舰船 ≤SHIP_GROUP_RADIUS 内敌军（L3 实体 + 蜂群代理）≥SHIP_GROUP_COUNT
+   *  且持续 SHIP_GROUP_SUSTAIN 秒 —— 团已扎到船边。
+   *  横幅实时刷新计数，回落到 HIDE 才清除。（旧“扑舰意图”通道已删） */
   updateShipGroupWarning(dt: number): void {
     if (!this.deps.ship || this.deps.shipDestroyed) {
       this.groupWarnAccum = 0;
@@ -633,40 +562,30 @@ export class WorldSpawner implements SwarmTierPort {
       if (dx * dx + dz * dz <= r2) dist++;
     }
     const pool = this.deps.swarm.pool;
-    let intentShip = 0;
     for (let i = 0; i < pool.count; i++) {
       const dx = pool.x[i] - sx, dz = pool.z[i] - sz;
       if (dx * dx + dz * dz <= r2) dist++;
-      if (pool.intent[i] === INTENT_SHIP) intentShip++;
     }
     const proxHit = dist >= WorldSpawner.SHIP_GROUP_COUNT;
-    const intentHit = intentShip >= WorldSpawner.SHIP_INTENT_COUNT;
-    if (proxHit || intentHit) {
-      // 意图通道更快响应；已显示则持续刷新计数
-      const need = intentHit
-        ? WorldSpawner.SHIP_INTENT_SUSTAIN
-        : WorldSpawner.SHIP_GROUP_SUSTAIN;
+    if (proxHit) {
+      const need = WorldSpawner.SHIP_GROUP_SUSTAIN;
       this.groupWarnAccum = Math.min(need, this.groupWarnAccum + dt);
       if (this.groupWarnShown) {
-        this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+        this.deps.worldUIManager.showEnemyGroupWarning(dist);
       } else if (this.groupWarnAccum >= need) {
         this.groupWarnShown = true;
-        this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
-        this.deps.syncSceneBgm();   // ★ 大举入侵成立 → 战斗曲交叉淡入
+        this.deps.worldUIManager.showEnemyGroupWarning(dist);
+        this.deps.syncSceneBgm();
       }
-    } else if (
-      dist <= WorldSpawner.SHIP_GROUP_HIDE_COUNT &&
-      intentShip <= WorldSpawner.SHIP_INTENT_HIDE
-    ) {
+    } else if (dist <= WorldSpawner.SHIP_GROUP_HIDE_COUNT) {
       this.groupWarnAccum = 0;
       if (this.groupWarnShown) {
         this.groupWarnShown = false;
         this.deps.worldUIManager.clearEnemyGroupWarning();
-        this.deps.syncSceneBgm();   // ★ 威胁解除 → 淡回环境音 / 舰船曲
+        this.deps.syncSceneBgm();
       }
     } else if (this.groupWarnShown) {
-      // 迟滞带（已触发但未落到清除线）：维持并刷新计数
-      this.deps.worldUIManager.showEnemyGroupWarning(Math.max(dist, intentShip));
+      this.deps.worldUIManager.showEnemyGroupWarning(dist);
     }
   }
 
@@ -820,7 +739,6 @@ export class WorldSpawner implements SwarmTierPort {
   spawnOne(
     def: MobDef,
     x: number, _y: number, z: number,
-    intent: number = INTENT_NONE,
     assaultIndex = -1,
     /** ★ 手动放置接口（调试）：true = 忽略"水/坑不可站"与存活上限（可放水里） */
     force = false,
@@ -835,7 +753,7 @@ export class WorldSpawner implements SwarmTierPort {
         sx = x + Math.cos(ang) * dist;
         sz = z + Math.sin(ang) * dist;
       }
-      if (this.spawnSingle(def, sx, _y, sz, intent, assaultIndex, force)) any = true;
+      if (this.spawnSingle(def, sx, _y, sz, assaultIndex, force)) any = true;
     }
     return any;
   }
@@ -844,7 +762,6 @@ export class WorldSpawner implements SwarmTierPort {
   spawnSingle(
     def: MobDef,
     x: number, _y: number, z: number,
-    intent: number = INTENT_NONE,
     assaultIndex = -1,
     force = false,
     /** ★ 原始血量覆盖（用户定 2026-09-27：特殊兵种卡死重放要**原血量**）；≤0 = 用名册推算 */
@@ -887,7 +804,6 @@ export class WorldSpawner implements SwarmTierPort {
       aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
       wanderSpeed: stats.wanderSpeed,
       bias: this.deps.threat?.biasMul ?? 0.12,
-      intent,
       isAir: air,
       altitude: air ? def.airAltitude : 0,
       suicide: def.suicide === true,

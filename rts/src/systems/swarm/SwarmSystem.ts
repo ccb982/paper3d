@@ -41,7 +41,6 @@ import {
   AtomExecutor, runDirective, fireProfile,
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
-import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
 
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
@@ -226,7 +225,6 @@ export class SwarmSystem {
       tier: snap.tier,
       aggro: snap.aggro ?? 8,
       wanderSpeed: snap.wanderSpeed ?? 2,
-      intent: snap.intent ?? 255,
       // ★ 空中层（2026-09-18）：飞行标记必须跟着降格实体回池，否则回池即落地
       isAir: snap.isAir,
       altitude: snap.altitude,
@@ -487,9 +485,7 @@ export class SwarmSystem {
     const dsx = hooks.shipX - px, dsz = hooks.shipZ - pz;
     const dP2 = dpx * dpx + dpz * dpz;
     const dS2 = dsx * dsx + dsz * dsz;
-    // ★ P4：意图优先（导演分工）；无意图 = 就近（旧观感）
-    const intent = p.intent[i];
-    // ★ 祖宗嘲讽最优先（吸仇恨）：嘲讽圈内强制换目标，无视导演意图/就近
+    // ★ 祖宗嘲讽最优先（吸仇恨）：嘲讽圈内强制换目标，无视就近
     const taunt = hooks.nearestTaunt?.(px, pz) ?? null;
     let tk: number;
     let gx: number, gz: number;
@@ -498,9 +494,8 @@ export class SwarmSystem {
       gx = taunt.x;
       gz = taunt.z;
     } else {
-      if (intent === INTENT_SHIP) tk = dS2 <= 150 * 150 ? AGENT_TARGET_SHIP : AGENT_TARGET_PLAYER;
-      else if (intent === INTENT_PLAYER || intent === INTENT_FLANK) tk = dP2 <= 150 * 150 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
-      else tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+      // ★ 就近（扑玩家/扑舰由距离决定；攻击意图通道已删——运动语义只看命令+巡逻/驻守）
+      tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
       gx = tk === AGENT_TARGET_PLAYER ? hooks.playerX : hooks.shipX;
       gz = tk === AGENT_TARGET_PLAYER ? hooks.playerZ : hooks.shipZ;
     }
@@ -541,11 +536,10 @@ export class SwarmSystem {
       p.alertAt[i] = 0;
     }
     const aware = alerted && now >= p.alertAt[i];
-    const objective = intent !== INTENT_NONE;
     const taunted = taunt !== null;
     // ★ 无命令自主交战（保底）：无指令时用保底半径（不依赖各兵种短视野）
     const engageR = dk === 'none' ? SWARM.AUTONOMY_ENGAGE_R : 0;
-    const chasing = objective || taunted || d <= Math.max(p.aggro[i], engageR) || aware;
+    const chasing = taunted || d <= Math.max(p.aggro[i], engageR) || aware;
 
     // ---- 攻击冷却 / 令牌释放 ----
     p.attackCd[i] -= tick;
@@ -561,7 +555,7 @@ export class SwarmSystem {
     // ---- P4 士气：低血撤退（通用战术；盾/自爆/名册 unit.lowHp='fight' 豁免） ----
     const mobT = hooks.mobTactics?.(p.mobIndex[i]) ?? null;
     const noRetreat = mobT?.unit?.lowHp === 'fight' || p.suicide[i] === 1 || p.role[i] === ROLE_SHIELD;
-    if (objective && d < 20 && now >= p.nextRetreatAt[i]
+    if (chasing && d < 20 && now >= p.nextRetreatAt[i]
       && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO
       && !noRetreat) {
       p.retreatUntil[i] = now + SWARM.RETREAT_TIME_MIN + Math.random() * SWARM.RETREAT_TIME_SPAN;
@@ -570,28 +564,44 @@ export class SwarmSystem {
     const retreating = p.retreatUntil[i] > now;
 
     if (!chasing || d < 1e-4) {
-      // 圈外：家附近游走（轻微偏向目标）+ 释放槽/令牌
+      // 圈外：有令 → 向令目标行军/驻守；无令 → 家附近游走（轻微偏向目标）+ 释放槽/令牌
       this.releaseSlot(i);
-      p.curSpeed[i] = p.wanderSpeed[i];
       p.fromFlow[i] = 0;
-      p.wanderTimer[i] -= tick;
-      if (p.wanderTimer[i] <= 0) {
-        const a = Math.random() * Math.PI * 2;
-        // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
-        const r = 6 + Math.random() * 16;
-        p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
-        p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
-        p.wanderTimer[i] = 5 + Math.random() * 5;
+      // ★ L2 令目标行军/驻守（用户定 2026-09-27，根治远场"出生点游走被判官收"）：
+      //   有令（orderKind≠none）时——距令目标 > ARRIVE_R：以正常速度行军；到位：围绕**令目标**游走驻守。
+      //   此前 L2 只有追击/出生点游走两态，orderTarget 不参与运动 → 远场单位原地抽动。
+      const hasOrder = p.orderKind[i] !== 0;
+      const ox = p.orderTargetX[i], oz = p.orderTargetZ[i];
+      const odx = ox - px, odz = oz - pz;
+      const od = Math.hypot(odx, odz);
+      if (hasOrder && od > SWARM.L2_POST_ARRIVE_R) {
+        // 行军：以正常速度直奔令目标（不游走；兵种避让在移动层照常生效）
+        p.curSpeed[i] = p.speed[i];
+        p.dirX[i] = odx / od;
+        p.dirZ[i] = odz / od;
+      } else {
+        const cx = hasOrder ? ox : p.homeX[i];
+        const cz = hasOrder ? oz : p.homeZ[i];
+        p.curSpeed[i] = p.wanderSpeed[i];
+        p.wanderTimer[i] -= tick;
+        if (p.wanderTimer[i] <= 0) {
+          const a = Math.random() * Math.PI * 2;
+          // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
+          const r = 6 + Math.random() * 16;
+          p.wanderX[i] = cx + Math.cos(a) * r;
+          p.wanderZ[i] = cz + Math.sin(a) * r;
+          p.wanderTimer[i] = 5 + Math.random() * 5;
+        }
+        const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
+        const wd = Math.hypot(wdx, wdz);
+        const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
+        const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
+        const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
+        const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
+        const ml = Math.hypot(mx, mz);
+        p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
+        p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
       }
-      const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
-      const wd = Math.hypot(wdx, wdz);
-      const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
-      const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
-      const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
-      const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
-      const ml = Math.hypot(mx, mz);
-      p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
-      p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
     } else if (retreating) {
       // 低血撤离：背向目标撤（不攻击；释放槽/令牌让给同伴）
       this.releaseSlot(i);

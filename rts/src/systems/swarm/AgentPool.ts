@@ -59,8 +59,6 @@ export interface AgentSpawnData {
   aggro: number;
   /** 游走速度（m/s；原 AI wander 一致） */
   wanderSpeed: number;
-  /** 攻击意图（Director.ts 的 INTENT_*；缺省 255 = 无意图） */
-  intent?: number;
   /** 游荡时朝目标的偏向强度（威胁度驱动；缺省 0.12） */
   bias?: number;
   /** ★ 空中层（2026-09-18）：是否飞行单位（不贴地/不绕坑/不涉水/不掉坑判死） */
@@ -331,8 +329,6 @@ export class AgentPool {
   readonly atomFire = new Uint8Array(AGENT_CAPACITY).fill(1);
 
   // ---- P4：导演意图 / 士气 ----
-  /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
-  readonly intent = new Uint8Array(AGENT_CAPACITY);
   /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，模拟时钟 SimClock） */
   readonly retreatUntil = new Float32Array(AGENT_CAPACITY);
   readonly nextRetreatAt = new Float32Array(AGENT_CAPACITY);
@@ -371,7 +367,6 @@ export class AgentPool {
     this.fromFlow[i] = 0;
     this.alertAt[i] = 0;
     this.flash[i] = 0;
-    this.intent[i] = d.intent ?? 255;
     this.bias[i] = d.bias ?? 0.12;
     this.isAir[i] = d.isAir ? 1 : 0;
     this.airCruiseY[i] = 0;
@@ -462,7 +457,6 @@ export class AgentPool {
     this.fromFlow[to] = this.fromFlow[from];
     this.alertAt[to] = this.alertAt[from];
     this.flash[to] = this.flash[from];
-    this.intent[to] = this.intent[from];
     this.bias[to] = this.bias[from];
     this.isAir[to] = this.isAir[from];
     this.altitude[to] = this.altitude[from];
@@ -539,7 +533,6 @@ export class AgentPool {
       suicide: this.suicide[i] === 1,
       canBuild: this.canBuild[i] === 1,
       noDemoteUntil: this.noDemoteUntil[i],
-      intent: this.intent[i],
       bias: this.bias[i],
       aggro: this.aggro[i],
       wanderSpeed: this.wanderSpeed[i],
