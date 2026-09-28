@@ -414,6 +414,12 @@ export class EngineBridge {
    *  同签名重发被 kept 去重；非必要不打断（重规划仅 4 事件，S3b）。 */
   private write(now: number): void {
     if (this.directMode) return;   // ★ 直控模式：不发令/不校验/不释放 TTL
+    // ★ 清理已消失小队的段进计划项（用户定 2026-09-27）：防陈旧锚点残留/泄漏
+    if (this.plan.size > 0) {
+      const live = new Set<number>();
+      for (const sq of this.live.squads()) live.add(sq.id);
+      for (const id of [...this.plan.keys()]) if (!live.has(id)) this.plan.delete(id);
+    }
     const p = this.pos.ship() ?? this.pos.player();   // ★ 命令参照舰船（用户定 2026-09-26）
     if (!p) return;
     // ★★ 总攻（用户定 2026-09-26）：**去掉所有其他寻路与指令**——

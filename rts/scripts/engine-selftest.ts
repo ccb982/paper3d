@@ -1304,6 +1304,9 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
   const a3 = br.writer.store.get(2)!.order;
   ok(a3.mission === 'patrol' && Math.abs(a3.target.x - 105) < 1.5,
     '★ 到前缘：advancePoint=null → 就地巡逻（不再向舰推进）');
+  live.squads = () => [];
+  br.tick(0.6, 90);
+  ok((br as unknown as { plan: Map<number, unknown> }).plan.size === 0, '★ 小队消失 → 段进计划项清理（无残留）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);
