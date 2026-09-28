@@ -501,6 +501,10 @@ export class SquadNavigator {
       if (!lead) continue;
       const tgt = currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
+      // ★ 爬坡凭证单源（用户定 2026-09-27）：**每一个 steer 出口都必须携带**——
+      //   此前只有编队分支带 climb/climbPt，远程选位分支漏带 → 带爬坡路线的远程队长
+      //   永远进不了爬坡态 → 危险点前 STOP 站死（残余被收根因）。
+      const cred = state.climbCred;
       for (const u of members) {
         // ★ 远程：**统一形式（用户定 2026-09-25）**——选位/风筝只**产出一个目标点**，
         //   移动走同一条链（`edgeGreedy` 格边步 + 可行性）；不可达/未到位 → 站住打。禁止旁路直推。
@@ -548,6 +552,8 @@ export class SquadNavigator {
               u.applySteer({
                 dirX: e.dx, dirZ: e.dz, speed,
                 source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
+                climb: u.swarmUid === squad.leaderUid && cred !== undefined,
+                climbPt: u.swarmUid === squad.leaderUid ? cred : undefined,
               });
               const h2 = this.rangedHold.get(u.swarmUid);
               if (h2) { h2.blocked = 0; h2.lx = up.x; h2.lz = up.z; }

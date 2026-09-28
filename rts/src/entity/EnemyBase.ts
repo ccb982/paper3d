@@ -530,6 +530,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     const r = this.locomotion.resolve(
       this.entity.position.x, this.entity.position.y, this.entity.position.z,
       this.airborne, dx, dz, dt,
+      this.climbOrdered || this.climbPt !== undefined,   // ★ 凭证在身 → 放行危险点（爬坡接近段）
     );
     if (!r.move) {
       this.controller.moveDir.x = 0;

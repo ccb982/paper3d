@@ -32,7 +32,7 @@ export class EnemyLocomotion {
    * @param px,py,pz 当前位置（py 用于第二层高度/洞顶选层）
    * @param airborne 空中单位豁免地面危险
    */
-  resolve(px: number, py: number, pz: number, airborne: boolean, dx: number, dz: number, dt: number): LocomotionResult {
+  resolve(px: number, py: number, pz: number, airborne: boolean, dx: number, dz: number, dt: number, climbAuthorized = false): LocomotionResult {
     void dt;
     if (airborne) return { move: true, x: dx, z: dz };
     const raster = RasterMap.current;
@@ -45,7 +45,9 @@ export class EnemyLocomotion {
     // ★ M0（用户定 2026-09-27）：方向只来自单命令链（steer 模块）；
     //   本件只做**接触修正**：前方即将踩危险（坑/过低/立面）→ 停；
     //   其余交内核（分量清零/可行性表斥力/坡面 weld）。
-    if (!inside && (_d.x !== 0 || _d.z !== 0) && danger(px + _d.x * 1.2, pz + _d.z * 1.2)) {
+    // ★ 爬坡授权放行（用户定 2026-09-27）：凭证路线的**接近段**允许踩前方危险点
+    //   （危险点即待爬立面/坑缘），由内核爬坡逻辑接管；否则危险点前硬停 → 队长带票也站死。
+    if (!climbAuthorized && !inside && (_d.x !== 0 || _d.z !== 0) && danger(px + _d.x * 1.2, pz + _d.z * 1.2)) {
       return { move: false, x: 0, z: 0 };
     }
     return { move: true, x: _d.x, z: _d.z };
