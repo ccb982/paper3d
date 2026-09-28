@@ -513,8 +513,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
             for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === sq.leaderUid) { air = p.isAir[i] === 1; break; }
             if (!air) for (const e of enemies) if (e.swarmUid === sq.leaderUid) { air = e.isAir; break; }
             if (air) {
-              const base = Math.atan2(z - az, x - ax) + (leg >= 0 ? Math.PI / 2 : -Math.PI / 2);
-              return { x: ax + Math.cos(base) * r, z: az + Math.sin(base) * r };
+              // ★ 空中巡逻=**随机取样**来回飞（用户定 2026-09-27）：锚点周围随机角度取点、
+              //   夹进事态环；**不做可行性检验**（空中不需要）。
+              const a = Math.random() * Math.PI * 2;
+              const qx = ax + Math.cos(a) * r, qz = az + Math.sin(a) * r;
+              return swarm.data.clampToRing(qx, qz);
             }
           }
           const pg = swarm.patrolNext(x, z, ax, az, r, leg);
