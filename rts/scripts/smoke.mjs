@@ -24,7 +24,8 @@ const checks = [];
 let selInfo = { phase: null, hasSelect: false, canvases: 0 };
 let world = { phase: null, swarmN: null, swarmAlive: null, drawCalls: null };
 try {
-  await page.goto(`${RTS_URL}?seed=${SEED}&x=-17&z=-267`, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  // ★ 严格两阶段：**不带 x/z**（带 x/z 会直接进世界、跳过选点页——阶段 A 必超时）
+  await page.goto(`${RTS_URL}?seed=${SEED}`, { waitUntil: 'domcontentloaded', timeout: 120000 });
   await page.waitForFunction(() => window.__rts?.phase === 'select' && !!window.__rts?.select, { timeout: 180000, polling: 500 });
   selInfo = await page.evaluate(() => ({
     phase: window.__rts?.phase ?? null,

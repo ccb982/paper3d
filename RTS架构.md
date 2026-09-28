@@ -152,7 +152,7 @@ perceive → situation → decide(单源) → write → debug
 - **不算锚、不做阻挡校验**——阻挡校验是**基类功能**（`entity/base/Blocking.blockCheck`），由队长自主执行（见 §3.2）。
 
 ### 2.7 AttackQueues + TimerManager（消费已落地）
-- **攻击队列（`AttackQueues`，1Hz）**：维护"以玩家为半径""以舰船为半径"队列（可扩展祖宗/友军）；敌人**离哪个实体近就进哪个队列**（去重）；队列内做开火检验（射程 ≤`fireRange=25m`）。
+- **攻击队列（`AttackQueues`，1Hz）**：维护"以玩家为半径""以舰船为半径"队列（可扩展祖宗/友军）；敌人**离哪个实体近就进哪个队列**（去重）；队列内做开火检验：射程 = **单位自身射程**（2026-09-27：远程 50/55m；`range` 缺省才回落 `fireRange=25m`）——固定 25m 闸门会让远射手拿不到许可→被当发呆回收。
 - **开火许可 = 闩锁态**（`TimerManager.allowFire/canFire`）：一旦允许 → 持续开火，直到许可被去除；离场自动撤。
 - **计时销毁（`TimerManager`，1Hz）**：
   - 卡死窗口：包围盒 <`BBOX_R=4m` 持续 `HOLD_S=25s` → 回收；**豁免**：驻守命令 / 交火（被击 8s / `noDemoteUntil`）；
@@ -407,7 +407,7 @@ choice   := atom '(' point ')'   // 解释结果：原子 + 目标点（why = �
 | 同兵种间距 | ≥40m（切向 θ；r 不变；不可满足 θ→π） | `engine/Spread` |
 | 命令稳定门 | 进度≥0.5 或 静止≥25s | `ORDER_STABLE` |
 | 玩家令 TTL | 30 游戏分钟 | `EngineBridge.PLAYER_ORDER_TTL` |
-| 开火射程（闩锁） | 25m | `EngineBridge.fireRange` |
+| 开火射程（闩锁） | 自身射程（远程 50/55m）；缺省 25m | `EngineBridge.canFire` + `live.attackables[].range` |
 | 卡死回收 | 包围盒<4m 持续 25s（驻守/交火豁免） | `SwarmConfig.STUCK` |
 | 工兵施工 | 到件 3m；掩体 6s / 战壕 10s（2s/遍×5） | `EngineerManager` |
 | 施工带 / 需求线 | `rLo=max(24,frontMinD+8)`、`rHi=min(max(90,rLo+30)+pushM,frontMaxD)`；总攻 (0,0)；前推 2m/s；`NEED_DONE=0.6` | `SwarmData` |

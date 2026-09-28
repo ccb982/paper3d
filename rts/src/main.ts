@@ -311,16 +311,28 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       attackables: () => {
         const eng = new Set<number>();
         for (const sq of swarm.squads.all()) if (sq.builders) for (const uid of sq.members.keys()) eng.add(uid);
-        const out: { uid: number; x: number; z: number }[] = [];
+        const out: { uid: number; x: number; z: number; range?: number }[] = [];
+        // ★ 远程许可射程 = 单位自身射程（用户定 2026-09-27）：名册射程缓存（按 mobIndex）
+        const rCache = new Map<number, number>();
+        const rangeOf = (mi: number): number => {
+          let r = rCache.get(mi);
+          if (r === undefined) { const def = mobDefs[mi]; r = def ? spawner.mobAgentStats(def).range : 25; rCache.set(mi, r); }
+          return r;
+        };
         for (const e of enemies) {
           // ★ 回收/死亡的不再入队（用户定 2026-09-26：队列不得保留已回收者）——
           //   实体退役是延后扫描，队列会认为“还在”
           if (e.dead || e.hp <= 0 || e.lifeState !== 'active') continue;
-          if (!eng.has(e.swarmUid)) out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z });
+          if (eng.has(e.swarmUid)) continue;
+          const sq = swarm.squads.squadOf(e.swarmUid);
+          const mi = sq?.mobKind ?? -1;
+          const ranged = mi >= 0 && mobDefs[mi]?.role === 'ranged';
+          out.push({ uid: e.swarmUid, x: e.position.x, z: e.position.z, range: ranged ? rangeOf(mi) : undefined });
         }
         const pool = swarm.pool;
         for (let i = 0; i < pool.count; i++) {
-          if (!eng.has(pool.swarmUid[i])) out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i] });
+          if (eng.has(pool.swarmUid[i])) continue;
+          out.push({ uid: pool.swarmUid[i], x: pool.x[i], z: pool.z[i], range: pool.ranged[i] === 1 ? pool.meleeRange[i] : undefined });
         }
         return out;
       },

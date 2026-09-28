@@ -64,7 +64,7 @@ export interface LiveView {
   /** 全体敌方单位（含代理；uid/位置）——攻击队列 + 统一计时消费；缺省 → 不跑 */
   enemies?(): { uid: number; x: number; z: number }[];
   /** ★ 可攻击单位（排除工兵）：仅攻击队列入队口径；缺省 → 用 enemies() */
-  attackables?(): { uid: number; x: number; z: number }[];
+  attackables?(): { uid: number; x: number; z: number; range?: number }[];   // range = 该单位自身射程（远程豁免用）
   /** ★ 工兵数据/落地端口（建造位置查询/施工落地）：缺省 → 工兵保持站位 */
   engineer?(): EngineerPort | null;
   /** ★ 创建端口（四管理器共用；接线层注入） */
@@ -364,15 +364,17 @@ export class EngineBridge {
   }
 
   /** 开火检验（射程/ROE；影子模式只判距离） */
-  private canFire(uid: number, ents: readonly { uid: number; x: number; z: number }[]): boolean {
-    let e: { uid: number; x: number; z: number } | null = null;
+  private canFire(uid: number, ents: readonly { uid: number; x: number; z: number; range?: number }[]): boolean {
+    let e: { uid: number; x: number; z: number; range?: number } | null = null;
     for (const x of ents) if (x.uid === uid) { e = x; break; }
     if (!e) return false;
     const p = this.pos.player();
     const s = this.pos.ship();
     const dp = p ? Math.hypot(e.x - p.x, e.z - p.z) : Infinity;
     const ds = s ? Math.hypot(e.x - s.x, e.z - s.z) : Infinity;
-    return Math.min(dp, ds) <= this.fireRange;
+    // ★ 许可射程 = **单位自身射程**（用户定 2026-09-27）：远程 50/55m，固定 25m 闸门会让远射手拿不到许可
+    //   → 判官当"发呆"收掉（"隔着老远射箭被回收"）。range 缺省退回 fireRange。
+    return Math.min(dp, ds) <= (e.range ?? this.fireRange);
   }
 
   private situation(_now: number): void {
