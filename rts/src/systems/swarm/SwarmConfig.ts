@@ -60,11 +60,7 @@ export const SWARM = {
   ATTACK_TOKENS: 3,
   /** 令牌/挥击保持窗口（秒） */
   ATTACK_HOLD: 0.3,
-  /** P4 士气：低血撤退阈值 / 撤退时长区间 / 撤退冷却 / 狂暴速度倍率与时长 */
-  RETREAT_HP_RATIO: 0.3,
-  RETREAT_TIME_MIN: 2,
-  RETREAT_TIME_SPAN: 2,
-  RETREAT_COOLDOWN: 8,
+  /** ★ P4 士气：狂暴速度倍率与时长 */
   RAGE_SPEED: 1.25,
   RAGE_SECONDS: 5,
   RAGE_RADIUS: 12,
@@ -76,8 +72,6 @@ export const SWARM = {
   ALERT_DELAY_SPAN: 1.3,
   ALERT_PAINT_RADIUS: 12,
   ALERT_PAINT_RADIUS_ATTACK: 10,
-  /** ★ L2 令目标行军：距令目标 > 此值 → 行军（不再围绕出生点游走）；到位 → 围绕令目标驻守 */
-  L2_POST_ARRIVE_R: 8,
 } as const;
 
 /** ★ 自主 LOD / 大队警戒参数（2026-09-19；《RTS架构.md》§5.10；集中可调） */

@@ -330,8 +330,6 @@ export class AgentPool {
 
   // ---- P4：导演意图 / 士气 ----
   /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，模拟时钟 SimClock） */
-  readonly retreatUntil = new Float32Array(AGENT_CAPACITY);
-  readonly nextRetreatAt = new Float32Array(AGENT_CAPACITY);
   readonly rageUntil = new Float32Array(AGENT_CAPACITY);
 
   push(d: AgentSpawnData): number {
@@ -371,8 +369,6 @@ export class AgentPool {
     this.isAir[i] = d.isAir ? 1 : 0;
     this.airCruiseY[i] = 0;
     this.altitude[i] = d.altitude ?? 0;
-    this.retreatUntil[i] = 0;
-    this.nextRetreatAt[i] = 0;
     this.rageUntil[i] = 0;
     // ★ E3b：蜂群字段（缺省 = 未编队/散兵/近战/无目标）
     this.swarmUid[i] = d.uid ?? 0;
@@ -460,8 +456,6 @@ export class AgentPool {
     this.bias[to] = this.bias[from];
     this.isAir[to] = this.isAir[from];
     this.altitude[to] = this.altitude[from];
-    this.retreatUntil[to] = this.retreatUntil[from];
-    this.nextRetreatAt[to] = this.nextRetreatAt[from];
     this.rageUntil[to] = this.rageUntil[from];
     // ★ E3b：新列必须同步搬移（漏一列 = swap-remove 后静默丢值）
     this.swarmUid[to] = this.swarmUid[from];
