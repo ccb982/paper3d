@@ -240,7 +240,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     enemies,   // ★ 活数组：spawner 创建实体时 push（hooks/贴地共用）
     enemyDefs: new WeakMap(),
     mobDefs,
-    bossEntity: null, bossRun: false, threat: { setThreat: () => {} }, spawnChunkKey: 0, scalingInputs: null,
+    bossEntity: null, bossRun: false, threat: { setThreat: () => {} }, scalingInputs: null,
     enemyScale: { hp: 1, atk: 1, def: 0 },
     player: { position: { x: spawn.x, y: 0, z: spawn.z }, hitAnchorY: () => 1.5 },
     ship: null, entities, swarm, swarmDirector: { setThreat: () => {} },
@@ -256,7 +256,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   wireCommanderPorts({
     data: swarm.data, spawner, raster, mobDefs, entities, scene, chunks,
     surfaceAt: (x, z) => raster.surfaceHeightAtFor(x, z, 0),
-    playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
+    playerPos: () => (hooks.shipX !== 0 || hooks.shipZ !== 0 ? { x: hooks.shipX, z: hooks.shipZ } : { x: spawn.x, z: spawn.z }),   // ★ 生成环参照 = **舰心**（用户定 2026-09-27）
   });
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
   // ★ 懒更新（用户定 2026-09-27）：远处只记数据；玩家/相机走近（≤L3_RADIUS）再物化实体
@@ -566,7 +566,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       unstashEntity: (uid) => spawner.unstashByUid(uid),
       hasInPool: (uid) => { const pl = swarm.pool; for (let i = 0; i < pl.count; i++) if (pl.swarmUid[i] === uid) return true; return false; },
       takeFromPool: (uid) => swarm.takeAgent(uid),
-      putToPool: (data) => { swarm.demote(data as never); return true; },
+      // ★ 物化（L1→L2 从预留名册出人）：走**唯一生成口**（记配额）；满编/闸门拒绝 → false（调用方回补预留）
+      putToPool: (data) => swarm.spawn(data as never, false) >= 0,
     }));
     // ★ UI/探针只读视图（引擎令 + 汇报 + 队长核执行态；替代旧镜像板）
     engineView = {
@@ -981,6 +982,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     // ★ 舰船位置单源（用户定 2026-09-27）：hooks.ship 之前只在初始化拷贝一次玩家出生点、之后永不更新
     //   → 兜底"朝舰推进"方位错。每步从**舰船实体**（地图/小地图同源的那个接口）同步。
     hooks.shipX = shipEntity.position.x; hooks.shipZ = shipEntity.position.z;
+    hooks.camX = cam.tx; hooks.camZ = cam.tz;   // ★ 相机位置（分层 LOD 第二参照；用户定 2026-09-27）
     hooks.entityCount = enemies.length;
     // ★ 模拟时钟（秒）：一个白天 = 720s（06:00→18:00，12 分钟）；simT 累加的是秒（h），不是毫秒
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720);

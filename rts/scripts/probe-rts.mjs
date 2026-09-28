@@ -299,7 +299,7 @@ console.log('errors =', errs.length ? errs.slice(0, 4).join('\n') : '(none)');
 const last = samples[samples.length - 1] ?? {};
 const checks = [
   ['无 pageerror', pageErrs.length === 0],
-  ['池代理 > 0', (last.pool ?? 0) > 0],
+  ['有单位在场（池+实体）> 0', ((last.pool ?? 0) + (last.l3 ?? 0)) > 0],
   ['小队数 > 0', (last.squadsN ?? 0) > 0],
   ['命令已下发（引擎+队长）', (last.trace?.orders ?? 0) > 0 && (last.trace?.dirs ?? 0) > 0],
   ['寻路已产出', (last.trace?.paths ?? 0) > 0],

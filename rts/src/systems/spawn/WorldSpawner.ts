@@ -33,8 +33,7 @@ import type { AllyBase } from '../../entity/ally/AllyBase';
 import { resolveDockSpawn } from '../../services/ship/DockResolver';
 import { damageShip, isShipDestroyed } from '../../systems/ship/ShipState';
 import { applyDamage } from '../../services/combat/DamagePipeline';
-import { RasterMap, chunkKeyOf } from '../../services/map/RasterMap';
-import { CHUNK_SIZE } from '../../services/map/ChunkGenerator';
+import { RasterMap } from '../../services/map/RasterMap';
 import { ChunkManager } from '../../services/map/ChunkManager';
 import { LOD_MAX_DIST } from '../../services/lod';
 import { BOSS_AI, type AIConfig } from '../../systems/ai/aiconfig';
@@ -47,7 +46,9 @@ import {
 import {
   AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot,
 } from '../../systems/swarm/AgentPool';
-import { tierForDistance } from '../../systems/swarm/tiers/Flux';   // ★ 创建分档阈值单源（用户定 2026-09-27）
+import { tierForDistance, tierHandover } from '../../systems/swarm/tiers/Flux';   // ★ 创建分档阈值单源 + 交接编排（用户定 2026-09-27）
+import { agentTierAt } from '../../systems/swarm/tiers/policy';   // ★ 公共分档口径（舰心/玩家/相机，取最大；用户定 2026-09-27）
+import type { TierCarry, TierCarryMember } from '../../systems/swarm/tiers/contracts';
 import { WorldUIManager } from '../../ui/world/WorldUIManager';
 // ★ 贴片接地补偿（底部透明余量 → 下沉；与 L2 代理同口径）
 import { footSinkRatioOf } from '../../services/fx/FootAnchor';
@@ -129,7 +130,6 @@ export interface SpawnDeps {
   bossEntity: EnemyBase | null;
   bossRun: boolean;
   threat: ThreatProfile | null;
-  spawnChunkKey: number;
   scalingInputs: { day: number; totalPulls: number; refHp: number; refAtk: number; refDef: number } | null;
   enemyScale: EnemyScale;
   // ---- 世界引用（实时）----
@@ -157,13 +157,6 @@ export interface SpawnDeps {
 
 export class WorldSpawner implements SwarmTierPort {
   static readonly MAX_ALIVE = 200;
-  /** ★ 环境刷怪预铺闸（扫描式波次只批量预铺到 ambientTarget 的一半；
-   *  其余由导演低频补至 threat.ambientTarget。前期 target=6 → 只预铺 3 只，
-   *  场间几乎无扰，给足发育时间；中后期随威胁度增长铺满） */
-  static readonly AMBIENT_PRELOAD_RATIO = 0.5;
-  /** ★ 刷怪环上限（米）：波次/扫描刷怪点约束在此环内（代理 L1 回收半径 190m 的预留带）。
-   *  ★ 2026-09-21：LOD 显示半径 90→140m 后同步 120→180m */
-  static readonly ENEMY_CULL_RADIUS = 180;
   /** ★ 波次纵深带上限（米；lo = LOD_MAX_DIST+4 ~ 此值，且 ≤ 回收环预留带） */
   static readonly SPAWN_BAND_HI = 170;
   /** ★ 远距实体降格节拍（0.25s 一拍；超出 DEMOTE_RADIUS → 回代理池） */
@@ -185,7 +178,6 @@ export class WorldSpawner implements SwarmTierPort {
 
 
   /** 已完成波次的 chunk（避免重复铺；换局由 reset() 清空） */
-  private spawnedChunks = new Set<number>();
   /** 祖宗嘲讽查询的复用对象（零分配） */
   private _tauntScratch = { x: 0, z: 0 };
   /** ★ 「今日敌军已全部投入」是否已播报（每局一次；reset 清） */
@@ -197,7 +189,6 @@ export class WorldSpawner implements SwarmTierPort {
 
   /** ★ 换局清理（WorldMode.enter 调用） */
   reset(): void {
-    this.spawnedChunks.clear();
     this.cullAccum = 0;
     this.groupWarnAccum = 0;
     this.groupWarnShown = false;
@@ -272,80 +263,6 @@ export class WorldSpawner implements SwarmTierPort {
 
   /** ★ 舰船被围横幅是否已展示（WorldMode.syncSceneBgm 据此切战斗曲；只读） */
   get warnShown(): boolean { return this.groupWarnShown; }
-
-  scanAndSpawnWaves(px: number, pz: number, budget: number): void {
-    if (this.deps.testChunk || this.deps.mobDefs.length === 0) return;
-    // ★ 引擎账本生成闸门已满 → 整段跳过（省掉每帧 24 个 chunk 的扫描）
-    if (!this.deps.swarm.ledger.canSpawn()) return;
-    if (this.deps.chunks.isBoss4D) return; // 四维空间（最终 Boss 战地图）不刷杂兵
-    const pcx = Math.floor(px / CHUNK_SIZE);
-    const pcz = Math.floor(pz / CHUNK_SIZE);
-    let placedTotal = 0;
-    // ★ 从内环到外环扫（保证离玩家近的 chunk 优先铺满）
-    for (let ring = 1; ring <= 2 && placedTotal < budget; ring++) {
-      for (let dz = -ring; dz <= ring && placedTotal < budget; dz++) {
-        for (let dx = -ring; dx <= ring && placedTotal < budget; dx++) {
-          if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue; // 只在环上
-          const cx = pcx + dx, cz = pcz + dz;
-          const key = chunkKeyOf(cx, cz);
-          if (key === this.deps.spawnChunkKey) continue;  // 出生 chunk 不刷
-          if (this.spawnedChunks.has(key)) continue; // 已完成波次的 chunk 跳过
-          // ★ chunk 地形已就绪（有数据环）才可落点
-          if (!this.deps.raster.getChunkData(cx, cz)) continue;
-          // ★ 回收环约束（2026-09-12 狠缩环配套）：chunk 最近点超过回收环 −10m
-          //   → 整块不刷【且不标记完成】（靠近后转内环再补），避免刷出即被销毁
-          const nxp = Math.max(cx * CHUNK_SIZE, Math.min(px, (cx + 1) * CHUNK_SIZE));
-          const nzp = Math.max(cz * CHUNK_SIZE, Math.min(pz, (cz + 1) * CHUNK_SIZE));
-          const nd = Math.hypot(nxp - px, nzp - pz);
-          if (nd > WorldSpawner.ENEMY_CULL_RADIUS - 10) continue;
-          // ★ 每 chunk 一波 1~2 个（2026-09-13 二次定调：预铺只做保底，密度减半）
-          const want = 1 + Math.floor(Math.random() * 2);
-          let placed = 0;
-          let attempts = 0;
-          for (; attempts < want * 10 && placed < want && placedTotal < budget; attempts++) {
-            if (this.spawnAtRandomPointInChunk(cx, cz)) placed++;
-          }
-          placedTotal += placed;
-          // ★ 放满 / 尝试耗尽（地形基本没位置）才算完成；预算截断 → 下帧继续
-          if (placed >= want || attempts >= want * 10) {
-            this.spawnedChunks.add(key);
-          }
-        }
-      }
-    }
-  }
-
-  /** ★ 随机在 chunk 内找一个可站立点并生成一个杂兵（不可站立点返回 false） */
-  spawnAtRandomPointInChunk(cx: number, cz: number): boolean {
-    if (this.deps.mobDefs.length === 0 || !this.deps.scene || !this.deps.camera) return false;
-    // ★ 存活上限（实体 + 代理合计；防无限世界累积）+ 环境预铺闸
-    //   （预铺 = ambientTarget 的一半，其余交给导演按 ambientInterval 低频补）
-    if (this.deps.enemies.length + this.deps.swarm.count >= WorldSpawner.MAX_ALIVE) return false;
-    const ambientTarget = this.deps.threat?.ambientTarget ?? 10;
-    const preloadCap = Math.max(2, Math.ceil(ambientTarget * WorldSpawner.AMBIENT_PRELOAD_RATIO));
-    if (this.deps.enemies.length + this.deps.swarm.count >= preloadCap) return false;
-    const x = cx * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
-    const z = cz * CHUNK_SIZE + 4 + Math.random() * (CHUNK_SIZE - 8);
-    // ★ 玩家近旁不刷（防贴脸 pop-in；出生 chunk 自身已整体排除，
-    //   邻 chunk 允许到 12m——初始密度够又不出现在脚边）
-    const p = this.deps.player?.position;
-    if (p) {
-      const ddx = x - p.x, ddz = z - p.z;
-      const d2 = ddx * ddx + ddz * ddz;
-      if (d2 < 12 * 12) return false;
-      // ★ 回收环约束（配套狠缩环）：超出 回收环−10m 的点不刷——否则 0.25s 后即被清
-      const maxR = WorldSpawner.ENEMY_CULL_RADIUS - 10;
-      if (d2 > maxR * maxR) return false;
-    }
-    // ★ 坑/水/虚空/未生成：不站（isDepression 包含坑洞与水）
-    const role = this.deps.raster.tileDefAt(x, z).genRole;
-    if (role === 'pit' || role === 'liquid') return false;
-    // ★ 洞顶优先（浮空洞顶第二层）：不把杂兵刷进洞里
-    const y = this.deps.raster.surfaceHeightAtFor(x, z, 1e9);
-    // ★ 落点过低（挖坑后的深坑区）不生成
-    if (y < -1.2) return false;
-    return this.spawnOne(this.pickMob(), x, y, z);
-  }
 
   /** ★ 当日兵力计划已接入的天数（同日重刷不重置账本） */
   private plannedDay = 0;
@@ -557,22 +474,31 @@ export class WorldSpawner implements SwarmTierPort {
     for (const s of this.deps.swarm.squads.all()) {
       const r = s.reserved ?? 0;
       if (r <= 0) continue;
-      let lx = 0, lz = 0, found = false;
+      let lx = 0, lz = 0, leaderIdx = -1;
       for (let i = 0; i < pool.count; i++) {
         if (pool.swarmUid[i] !== s.leaderUid) continue;
-        lx = pool.x[i]; lz = pool.z[i]; found = true; break;
+        lx = pool.x[i]; lz = pool.z[i]; leaderIdx = i; break;
       }
-      if (!found) continue;                                     // 队长不在池（实体/已亡）：等下一拍
+      if (leaderIdx < 0) continue;                              // 队长不在池（实体/已亡）：等下一拍
       if (Math.hypot(lx - px, lz - pz) > SWARM.L2_RADIUS) continue;   // 仍在 L1 → 保持预留
-      const def = this.deps.mobDefs[s.mobKind];
-      if (!def) continue;
       const { n, hp } = this.deps.swarm.squads.takeReserved(s.id);
       if (n <= 0) continue;
+      // ★ Flux 收单源（用户定 2026-09-27）：L1→L2 物化走 **TierHandover.expandFromL1**——
+      //   按预留槽位出人（对象仓取出复用优先）；失败 → **回补预留**（下拍再试，绝不半途丢人）。
+      const h = tierHandover();
+      const leadSnap = pool.snapshot(leaderIdx);
+      const members: TierCarryMember[] = [
+        { uid: s.leaderUid, hp: leadSnap.hp, maxHp: leadSnap.maxHp, slotRank: 0 },
+      ];
       for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI * 2;
-        const mx = lx + Math.cos(a) * 2.5, mz = lz + Math.sin(a) * 2.5;
-        const my = this.deps.raster.surfaceHeightAt(mx, mz);
-        this.spawnSingle(def, mx, my, mz, -1, false, hp);   // 就近并入本队（≤2.5m 在并队半径内）
+        const mh = hp > 0 ? hp : leadSnap.maxHp;
+        members.push({ uid: 0, hp: mh, maxHp: mh, slotRank: k + 1 });
+      }
+      const role = s.builders ? 'engineer' : s.type === 'ranged' ? 'ranged' : s.type === 'flyer' ? 'flyer' : 'melee';
+      const carry: TierCarry = { squadId: s.id, role, squadType: s.type, mobIndex: s.mobKind, alive: n + 1, leader: leadSnap, members };
+      if (!h || !h.expandFromL1(carry)) {
+        this.deps.swarm.squads.reserve(s.id, n, hp);   // 回补：下拍重试
+        continue;
       }
     }
   }
@@ -784,8 +710,8 @@ export class WorldSpawner implements SwarmTierPort {
   ): boolean {
     // ★ P-L1（用户定 2026-09-27）：**L1 档只放队长**——落点在 L2 半径外时，
     //   其余成员记**预留名册**（不物化、不占算力）；走近（≤L2_RADIUS）由 tickReserved 物化。
-    const pp = this.deps.player?.position;
-    const farL1 = !force && !!pp && tierForDistance(Math.hypot(x - pp.x, z - pp.z)) === 'L1';
+    const sp0 = this.deps.ship?.position;
+    const farL1 = !force && !!sp0 && tierForDistance(Math.hypot(x - sp0.x, z - sp0.z)) === 'L1';   // ★ 舰心口径
     let any = false;
     for (let k = 0; k < def.pack; k++) {
       let sx = x, sz = z;
@@ -851,7 +777,8 @@ export class WorldSpawner implements SwarmTierPort {
       speed: stats.speed,
       meleeDamage: meleeTotal, meleeRange: stats.range,
       scale: def.scale,
-      tier: AGENT_TIER_FAR, // 由 SwarmSystem 每帧按距离重算
+      // ★ 生成即定档（用户定 2026-09-27）：**同时检查舰心/玩家**，取半径内等级最大者
+      tier: agentTierAt(x, z, [this.deps.ship ? { x: this.deps.ship.position.x, z: this.deps.ship.position.z } : null, this.deps.player ? { x: this.deps.player.position.x, z: this.deps.player.position.z } : null]),
       aggro: stats.aggro * (this.deps.threat?.aggroMul ?? 1),
       wanderSpeed: stats.wanderSpeed,
       bias: this.deps.threat?.biasMul ?? 0.12,

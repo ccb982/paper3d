@@ -33,6 +33,7 @@ import { SwarmLedger } from '../src/systems/swarm/SwarmLedger.ts';
 import { slotPosition, spawnFromMember } from '../src/systems/swarm/tiers/carry.ts';
 import { Flux, tierForDistance } from '../src/systems/swarm/tiers/Flux.ts';
 import { l1Step } from '../src/systems/swarm/tiers/L1.ts';
+import { agentTierAt } from '../src/systems/swarm/tiers/policy.ts';
 import type { TierCarry } from '../src/systems/swarm/tiers/contracts.ts';
 import type { AgentSnapshot } from '../src/systems/swarm/AgentPool.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
@@ -1550,6 +1551,14 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
   ok(a.x === 104 && a.z === 100, '★ L1：可行 → 轴对齐走一格（4m）');
   const b = l1Step(carry, 200, 100, { canStep: () => false });
   ok(b.x === 100 && b.z === 100, '★ L1：不可行 → 原地');
+}
+
+{
+  // ★ 公共分档口径：同时检查多参照，取半径内等级最大（最近胜出）
+  const ship = { x: 0, z: 0 }, player = { x: 400, z: 0 };
+  ok(agentTierAt(200, 0, [ship, player]) === 2, '★ 分档：舰心半径内 → L2（地板）');
+  ok(agentTierAt(600, 0, [ship, player]) === 2, '★ 分档：玩家半径内 → L2（相机/玩家参照）');
+  ok(agentTierAt(900, 0, [ship, player]) === 1, '★ 分档：全部参照外 → L1');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

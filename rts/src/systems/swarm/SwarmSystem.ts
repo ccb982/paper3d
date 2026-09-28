@@ -18,12 +18,12 @@ import {
   AGENT_TARGET_SHIP,
   AGENT_TARGET_SENTINEL,
   AGENT_TIER_FAR,
-  AGENT_TIER_MID,
   type AgentSpawnData,
   type AgentSnapshot,
 } from './AgentPool';
 import { CrowdGrid } from './CrowdGrid';
-import { l2ExecuteDirective } from './tiers/L2';   // ★ L2 档行为（用户定 2026-09-27：分层，不与 L1/L3 混写）
+import { l2ExecuteDirective } from './tiers/L2';
+import { agentTierAt } from './tiers/policy';   // ★ L2 档行为（用户定 2026-09-27：分层，不与 L1/L3 混写）
 import { unbuyGroundY } from '../../entity/base/CharacterCore';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
@@ -74,6 +74,9 @@ export interface SwarmHooks {
   /** ★ 升格可见性钩子（2026-09-25 用户定："玩家视野内变实体"）：给了就用它判升格；
    *  未给 → 回退原口径（离焦点 playerX/Z < L3_RADIUS）。降格由模式层 tickDemote 判。 */
   inView?: (x: number, z: number) => boolean;
+  /** ★ 相机位置（分层 LOD 第二参照；用户定 2026-09-27） */
+  camX?: number;
+  camZ?: number;
   /** ★ 祖宗嘲讽：查询 (x,z) 嘲讽圈内最近的祖宗位置（null = 圈外；返回对象会被复用） */
   nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
@@ -372,7 +375,6 @@ export class SwarmSystem {
     let promotes = 0;
     /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
     const nearR2 = SWARM.L3_RADIUS * SWARM.L3_RADIUS;
-    const l2R2 = SWARM.L2_RADIUS * SWARM.L2_RADIUS;
 
     for (let i = this.pool.count - 1; i >= 0; i--) {
       const p = this.pool;
@@ -426,7 +428,13 @@ export class SwarmSystem {
       // ★ P3：受击白闪衰减
       if (p.flash[i] > 0.01) p.flash[i] *= Math.exp(-dt * 6);
       else p.flash[i] = 0;
-      const tier = dFocus2 <= l2R2 ? AGENT_TIER_MID : AGENT_TIER_FAR;
+      // ★ 分层口径（用户定 2026-09-27）：**同时检查 舰心/玩家/相机，取半径内等级最大者**
+      //   （任一 ≤ L2_RADIUS → L2；全超出 → L1）；生成与逐帧共用 `tiers/policy`（单源）。
+      const tier = agentTierAt(p.x[i], p.z[i], [
+        { x: hooks.shipX, z: hooks.shipZ },
+        { x: hooks.playerX, z: hooks.playerZ },
+        { x: hooks.camX ?? hooks.playerX, z: hooks.camZ ?? hooks.playerZ },
+      ]);
       p.tier[i] = tier;
       // ---- 脑 tick（降频 + 个体相位抖动） ----
       p.thinkAcc[i] += dt;
