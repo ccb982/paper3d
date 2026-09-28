@@ -27,7 +27,7 @@ export interface DriveHost {
   readonly data: SwarmData;
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
-  memberStep(uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null;
+  memberStep(uid: number, x: number, z: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null;
   walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
@@ -54,9 +54,8 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
       p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
     if (ld) {
-      // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外，治"空中队长卡在水上路点抖"）：
-      //   空中单位**不消费地面走廊/格边步**——直接朝活动目标飞；否则 routeCursor 的层判等
-      //   （地面格 h vs 空中 y）永不成立 → 路点不推进 → 在路点上正负翻转抖动。
+      // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位**不消费地面走廊/
+      //   格边步**——直接朝活动目标飞（同层机制已删；寻路只认 2D 格，高度由实体自己管）。
       if (p.isAir[i] === 1) {
         dx = ld.x; dz = ld.z;
       } else {
@@ -65,20 +64,20 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
 
       // ★★ 短寻路一次发放（用户定 2026-09-27，L2/L3 同口径）：沿已发放的格边步走到点才重选
       const stc = host.nav.stepCommit(st, p.x[i], p.z[i], performance.now() / 1000, (goal) => {
-        const c = host.nav.routeCursor(st, p.x[i], p.z[i], p.y[i]);
+        const c = host.nav.routeCursor(st, p.x[i], p.z[i]);
         if (!c) return null;
-        const e0 = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
+        const e0 = host.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
         if (!e0) return null;
         goal.x = c.x; goal.z = c.z;
         return e0;
       });
       if (stc) { dx = stc.dx; dz = stc.dz; edgeMode = true; }
       else {
-        const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i], p.y[i]);
+        const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
         else {
           // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
-          const rd = host.nav.routeDir(st, p.x[i], p.z[i], p.y[i]);
+          const rd = host.nav.routeDir(st, p.x[i], p.z[i]);
           // ★ M0：无走廊/无路点 → **持令原地停**（硬边接触修正由 inside 分支处理）
           if (rd) { dx = rd.x; dz = rd.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
         }
@@ -93,13 +92,13 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     cred = true;
     if (stM?.climbCred) credPt = stM.climbCred;
     const lead = squad.members.get(squad.leaderUid);
-    // ★ 飞行（经典空中层）：**不走地面寻路**，直航到队长（避免地面路线失败→站住卡墙）
+    // ★ 飞行直航单源（空中层，用户定 2026-09-27）：成员直航队长——不走地面 memberStep/格边步
     if (lead && p.isAir[i] === 1) {
       const ax = lead.x - p.x[i], az = lead.z - p.z[i];
       const al = Math.hypot(ax, az) || 1;
       dx = ax / al; dz = az / al; edgeMode = false;
     } else {
-    const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], p.y[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
+    const ms = lead ? host.nav.memberStep(p.swarmUid[i], p.x[i], p.z[i], lead.x, lead.z, performance.now() / 1000, host.squadStateOf(squad.id)) : null;
     if (ms?.climbPt) credPt = ms.climbPt;   // ★ 成员路线带坡点则用其点位
     if (ms && !ms.done) {
       dx = ms.dx; dz = ms.dz; edgeMode = true;

@@ -215,10 +215,10 @@ console.log('[3b] 队长接任：任何离场路径都要选举');
 console.log('[3c] memberStep 兜底：无路线/步不出 → 朝队长走/直航');
 {
   const nav = new SquadNavigator();   // 未接表：feas/edge 全失败 → 走兜底
-  const ms = nav.memberStep(900, 0, 0, 0, 10, 0, 0, null);
+  const ms = nav.memberStep(900, 0, 0, 10, 0, 0, null);
   ok(!!ms && ms.direct === true && ms.done === false && Math.abs(ms.dx - 1) < 1e-6 && Math.abs(ms.dz) < 1e-6,
     '★ 双路线失败 → 直航兜底（朝向队长，direct=true）');
-  const arr = nav.memberStep(901, 10, 0, 0, 10.0, 0, 0, null);
+  const arr = nav.memberStep(901, 10, 0, 10.0, 0, 0, null);
   ok(!!arr && arr.done === true, '到达半径内 → done（不抖）');
 }
 

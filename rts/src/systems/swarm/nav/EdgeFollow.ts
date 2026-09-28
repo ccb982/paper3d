@@ -15,8 +15,6 @@ export const EDGE_CELL = 4;
 /** 只读格边端口（生产 = PassTable；自检 = 合成图） */
 export interface EdgeGrid {
   canStep(x: number, z: number, dx: number, dz: number): boolean;
-  /** ★ H2：格地表高（层判等用；生产 = PassTable.heightAt） */
-  heightAt(x: number, z: number): number;
   /** ★ 可爬坡面位（可选；生产 = PassTable.climbAt）：该向 = weld 且净升 > 阈值 */
   climbAt?(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ 统一评分（可选；生产 = TerrainScoring.scoreAt）：对角同分量时择高分轴 */
@@ -24,9 +22,6 @@ export interface EdgeGrid {
   /** ★ 上坡点（可选；生产 = PassTable.climbRunAt）：该向可爬 → 该连续坡的中间上坡点（前 1m） */
   climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;
 }
-
-/** ★ 层容差（H2，用户定 2026-09-25）：单位 y 与该格地表差 ≤ 此值才算"在同一层" */
-export const EDGE_LAYER_TOL = 0.6;
 
 export interface CellRef {
   cx: number;
@@ -75,16 +70,12 @@ export function axisStepToward(g: EdgeGrid, x: number, z: number, ddx: number, d
   return null;
 }
 
-/** ★ 贪心格边跟随（H2 层感知；成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep）。 */
+/** ★ 贪心格边跟随（成员跟队长 / 无路线）：朝目标格走一格（轴对齐 + canStep）；同格 → null（已到位）。 */
 export function edgeStepGreedy(
-  g: EdgeGrid, x: number, z: number, y: number, tx: number, tz: number,
+  g: EdgeGrid, x: number, z: number, tx: number, tz: number,
 ): { dx: number; dz: number } | null {
   const cur = cellOf(x, z);
   const tgt = cellOf(tx, tz);
-  if (cur.cx === tgt.cx && cur.cz === tgt.cz) {
-    // ★ H2：同格还必须同层；层不符（如崖底 vs 崖顶）→ 不判"已到位"，交软跟随/重算
-    const h = g.heightAt(cur.cx * EDGE_CELL + EDGE_CELL / 2, cur.cz * EDGE_CELL + EDGE_CELL / 2);
-    if (Math.abs(h - y) <= EDGE_LAYER_TOL) return null;
-  }
+  if (cur.cx === tgt.cx && cur.cz === tgt.cz) return null;   // 同格=已到位（层/高度由实体自己管）
   return axisStepToward(g, x, z, tgt.cx - cur.cx, tgt.cz - cur.cz);
 }

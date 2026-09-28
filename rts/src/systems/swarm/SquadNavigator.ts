@@ -14,15 +14,22 @@ import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import type { SquadOrderState } from './squad/State';
 import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
-import { shouldKite, kitePoint } from './RangedTactics';
+import { shouldKite, kitePoint, RANGED } from './RangedTactics';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
 import { viaClimbPoints } from './nav/ClimbVia';
-import { edgeStepGreedy, axisStepToward, EDGE_LAYER_TOL } from './nav/EdgeFollow';
+import { edgeStepGreedy, axisStepToward } from './nav/EdgeFollow';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
+/** ★ 远程选位锁存（用户定 2026-09-27，命令非必要不频繁变更）：
+ *  目标位移超此值 → 重选位（米） */
+const RANGED_REPICK_D = 6;
+/** ★ 走不动连续调用数（≈2s @10Hz）→ 重选一次位（可能换可达点） */
+const RANGED_BLOCKED_CALLS = 20;
+/** ★ 风筝模式退出滞回（米）：<24 触发边撤，>32 才解除（防阈值上每拍翻向） */
+const RANGED_KITE_OFF = 32;
 
 /** 寻路参数（集中可调） */
 export const NAV = {
@@ -52,11 +59,11 @@ export class SquadNavigator {
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
   readonly dbg = { solves: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
-  /** ★ 失败取证（诊断用）：最近 ensurePath 失败的 起点/目标/结果/起点Y */
-  readonly dbgFail: { sx: number; sz: number; tx: number; tz: number; res: string; fromY: number }[] = [];
-  private noteFail(res: string, tx: number, tz: number, fromY: number): void {
+  /** ★ 失败取证（诊断用）：最近 ensurePath 失败的 起点/目标/结果 */
+  readonly dbgFail: { sx: number; sz: number; tx: number; tz: number; res: string }[] = [];
+  private noteFail(res: string, tx: number, tz: number): void {
     if (this.dbgFail.length >= 16) this.dbgFail.shift();
-    this.dbgFail.push({ sx: this._from.x, sz: this._from.z, tx, tz, res, fromY });
+    this.dbgFail.push({ sx: this._from.x, sz: this._from.z, tx, tz, res });
   }
   /** ★ N1 可行性寻路（恒权·有向；命令门/小队底座用） */
   readonly feas = new FeasibilityPath();
@@ -91,19 +98,19 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
-  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number, y: number): { dx: number; dz: number } | null {
+  edgeFromCorridor(state: SquadOrderState | null, x: number, z: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
     if (!g) return null;
-    const c = this.routeCursor(state, x, z, y);
+    const c = this.routeCursor(state, x, z);
     if (!c) return null;
     return axisStepToward(g, x, z, c.x - x, c.z - z);   // 步不出 → 调用方路线修正
   }
 
-  /** ★ 路线游标（用户定 2026-09-26）：沿走廊**单调锁存**推进的当前路点——
-   *  到达判定 = 点距 ≤ arriveR **且同层**（H2 高精度：层高差 ≤ EDGE_LAYER_TOL）；
-   *  已越过的路点永不回头（治"格边界最近格翻转"）；无走廊 → null。 */
+  /** ★ 路线游标（用户定 2026-09-26；2026-09-27 **去掉同层机制**）：沿走廊**单调锁存**推进的当前路点——
+   *  到达判定 = 点距 ≤ arriveR（爬坡点 0.9m）。寻路只认 2D 格；高度由实体自己决定
+   *  （脚底贴合/爬坡/碰撞内核处理），不做 y↔格高判等（水底/陡坡上会误冻路点）。 */
   routeCursor(
-    state: SquadOrderState | null, x: number, z: number, y: number, arriveR = 1.8,
+    state: SquadOrderState | null, x: number, z: number, arriveR = 1.8,
   ): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     const g = this.localGrid();
     const path = state?.corridor ?? state?.order.path;
@@ -113,8 +120,7 @@ export class SquadNavigator {
     const reached = (p: { x: number; z: number; climb?: boolean }): boolean => {
       // ★ 爬坡路点用**紧到位**（0.9m）：爬令保持到真的跨越（防提前翻掉→坡面中断）
       const r = p.climb === true ? Math.min(arriveR, 0.9) : arriveR;
-      if (Math.hypot(p.x - x, p.z - z) > r) return false;
-      return Math.abs(g.heightAt(p.x, p.z) - y) <= EDGE_LAYER_TOL;   // ★ H2：同格不同层 ≠ 到达
+      return Math.hypot(p.x - x, p.z - z) <= r;
     };
     while (i < path.length - 1 && reached(path[i] as { x: number; z: number })) i++;
     state.followIdx = i;
@@ -122,10 +128,10 @@ export class SquadNavigator {
   }
 
   /** ★ 方案 A：贪心格边步（成员跟队长 / 无路线；同格 → null 交软跟随） */
-  edgeGreedy(x: number, z: number, y: number, tx: number, tz: number): { dx: number; dz: number } | null {
+  edgeGreedy(x: number, z: number, tx: number, tz: number): { dx: number; dz: number } | null {
     const g = this.localGrid();
     if (!g) return null;
-    return edgeStepGreedy(g, x, z, y, tx, tz);
+    return edgeStepGreedy(g, x, z, tx, tz);
   }
 
   /** ★ 路线修正方向（单位向量）：朝当前锁存路点（无走廊/零距 → null；绝不朝最终目标） */
@@ -159,8 +165,8 @@ export class SquadNavigator {
     return step;
   }
 
-  routeDir(state: SquadOrderState | null, x: number, z: number, y: number): { x: number; z: number } | null {
-    const rp = this.routeCursor(state, x, z, y);
+  routeDir(state: SquadOrderState | null, x: number, z: number): { x: number; z: number } | null {
+    const rp = this.routeCursor(state, x, z);
     if (!rp) return null;
     const rx = rp.x - x, rz = rp.z - z;
     const rl = Math.hypot(rx, rz);
@@ -183,7 +189,7 @@ export class SquadNavigator {
 
   /** 成员沿"自己的到队长路线"走一步（L2/L3 共用）：返回 {dx,dz,climb,done}；无解 → null（停） */
   memberStep(
-    uid: number, x: number, z: number, y: number, lx: number, lz: number, now: number,
+    uid: number, x: number, z: number, lx: number, lz: number, now: number,
     state?: SquadOrderState | null,
   ): { dx: number; dz: number; done: boolean; direct?: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
     if (Math.hypot(lx - x, lz - z) < MEMBER_ARRIVE_R) return { dx: 0, dz: 0, done: true };
@@ -216,7 +222,7 @@ export class SquadNavigator {
         rp = cpath[i] as { x: number; z: number; climb?: boolean };
       }
     }
-    const stepE = rp ? this.edgeGreedy(x, z, y, rp.x, rp.z) : null;
+    const stepE = rp ? this.edgeGreedy(x, z, rp.x, rp.z) : null;
     if (stepE) {
       // ★ 成员自己路线的凭证（用户定 2026-09-26）：**代理寻路追队长时也可得到凭证**——
       //   路径含跨坡点 ∧ 在低侧(sOff≤-0.5) ∧ 距≤10m（仅近点生效，防远处直线强拉）；
@@ -233,7 +239,7 @@ export class SquadNavigator {
     //   ① 先朝**队长**走一格（同一格边链）；② 仍不行 → 直接给朝队长的方向（direct=true，
     //   上层跳过复算，交给内核处理水/岸/墙——否则成员在浅水/离轨处会永久站死）。
     {
-      const el = this.edgeGreedy(x, z, y, lx, lz);
+      const el = this.edgeGreedy(x, z, lx, lz);
       if (el) return { dx: el.dx, dz: el.dz, done: false };
       const ax = lx - x, az = lz - z;
       const al = Math.hypot(ax, az);
@@ -277,6 +283,11 @@ export class SquadNavigator {
    *  自然就是可行路，不需要后向 LOS/BFS 优先。贪心全无推进才回落表图 BFS。 */
   weighted = true;
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
+  /** ★ 远程选位锁存（用户定 2026-09-27）：一次选位沿它走/到位就站住打——
+   *  只有目标位移/风筝模式（带滞回）/走不动 才重选。防 10Hz 重算 → 目标翻转 → 原地来回。 */
+  private readonly rangedHold = new Map<number, {
+    x: number; z: number; at: number; tx: number; tz: number; kite: boolean; blocked: number; lx: number; lz: number;
+  }>();
   private readonly _from = { x: 0, z: 0 };
 
   /** ① 命令目标 → 路线（全队共用；**用命令=按距离选寻路**：>40m 长=可行性表 S2 / ≤40m 短=LocalStep S1）。
@@ -301,10 +312,10 @@ export class SquadNavigator {
     if (state.climbCred) CLIMB_ROUTE_STATS.kept++;
   }
 
-  ensurePath(_squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0, leaderAir = false): void {
-    // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：飞行队 + **空中队长**（如战争术士）
-    //   不进地面寻路——不建走廊（移动由 driveAgent/steerEntities 的空中直航承担）。
-    if (squad.type === 'flyer' || leaderAir) {
+  ensurePath(_squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderAir = false): void {
+    // ★ 飞行直航单源（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：**空中队长**（含飞行队）不进地面寻路——
+    //   不建走廊（移动由 driveAgent/steerEntities 的空中直航承担）；isAir 是唯一空中判据（队型只影响编成）。
+    if (leaderAir) {
       state.corridor = undefined; state.climbCred = undefined;
       state.followIdx = undefined; state.tgtIdx = undefined;
       return;
@@ -320,27 +331,9 @@ export class SquadNavigator {
     const raster = RasterMap.current;
     const lead = squad.members.get(squad.leaderUid);   // ★ 无质心（用户定 2026-09-24）：路从队长算
     if (!raster || !lead) return;
+    // ★ 寻路只认 2D 格（用户定 2026-09-27：**删掉同层格机制**）——起点 = 单位 (x,z) 所在格；
+    //   高度/层由实体自己决定（脚底贴合、爬坡、硬墙都由移动内核处理），寻路不做 y 判等。
     this._from.x = lead.x; this._from.z = lead.z;
-    // ★ H2（用户定 2026-09-25）：起点按**层**取格——单位 y 与所在格高不符（崖底被算在崖顶格）时，
-    //   改从 5×5 邻域内"同层格"起步（否则 find 会判"同格/已在目标层"→ 路线失真、单位顶着崖壁）。
-    if (this.table) {
-      const h0 = this.table.heightAt(this._from.x, this._from.z);
-      if (Number.isFinite(h0) && h0 - leaderY > 0.6) {
-        const baseX = Math.floor(this._from.x / 4), baseZ = Math.floor(this._from.z / 4);
-        let best: { x: number; z: number } | null = null;
-        let bd = Infinity;
-        for (let dz2 = -2; dz2 <= 2; dz2++) {
-          for (let dx2 = -2; dx2 <= 2; dx2++) {
-            const cx = (baseX + dx2) * 4 + 2, cz = (baseZ + dz2) * 4 + 2;
-            const h = this.table.heightAt(cx, cz);
-            if (!Number.isFinite(h) || Math.abs(h - leaderY) > 0.6) continue;
-            const d2 = Math.hypot(cx - this._from.x, cz - this._from.z);
-            if (d2 < bd) { bd = d2; best = { x: cx, z: cz }; }
-          }
-        }
-        if (best) { this._from.x = best.x; this._from.z = best.z; }
-      }
-    }
     // ★ S3b 使用契约（《寻路重写方案.md》§4.4）：**重规划仅 4 事件**，其余保持路线不动
     //   ① 目标位移 > RETARGET_DIST  ② 净推进停滞 > STALL_S（距目标 3s 未缩短 ≥2m）
     //   ③ 表代次变化（掩体/地形）   ④ 到达（上层判定，无需路径）
@@ -418,7 +411,7 @@ export class SquadNavigator {
     if (feas === 'blocked') {
       // 可行性判死：绝不发不可走的路（清路径 + 冷却；命令门/队长会改派或等 TTL）
       this.dbg.feasBlocked++;
-      this.noteFail('blocked', tgt.x, tgt.z, leaderY);
+      this.noteFail('blocked', tgt.x, tgt.z);
       state.pathFailedAt = now;
       state.corridor = undefined;
       if (state.climbCred) CLIMB_ROUTE_STATS.cleared++;
@@ -431,10 +424,26 @@ export class SquadNavigator {
     this.dbg.solves++;
     this.dbg.fail++;
     state.pathFailedAt = now;
-    this.noteFail('outside/notReady', tgt.x, tgt.z, leaderY);
+    this.noteFail('outside/notReady', tgt.x, tgt.z);
     state.corridor = undefined;
     state.climbCred = undefined;
     state.followIdx = undefined; state.tgtIdx = undefined;
+  }
+
+  /** ★ 飞行直航单源（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位一律直航——
+   *  队长朝活动目标/选位点、成员朝队长；不经地面走廊/格边步（层判等对空中 y 永不成立 → 卡水/抖）。 */
+  private flyStraight(u: SwarmCarrier, fx: number, fz: number, speed: number): void {
+    const up = u.position;
+    const dx = fx - up.x, dz = fz - up.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const mt = u.moveTarget;
+    if (mt) { mt.x = fx; mt.y = 0; mt.z = fz; mt.climb = false; }
+    else u.moveTarget = { x: fx, y: 0, z: fz, climb: false };
+    u.controlSource = 'swarm';
+    u.applySteer({
+      dirX: dx / l, dirZ: dz / l, speed,
+      source: 'formation', targetX: fx, targetY: 0, targetZ: fz,
+    });
   }
 
   /** ② L3 实体编队 steer（10Hz 调用）：命令目标（或走廊路点）+ 阵型槽位 → moveTarget。 */
@@ -478,26 +487,38 @@ export class SquadNavigator {
           const up = u.position;
           const dT = Math.hypot(tgt.x - up.x, tgt.z - up.z);
           const speed = u.moveSpeed > 0 ? u.moveSpeed : 2.5;
-          const kp = shouldKite(dT, NAV_RANGE)
-            ? (rangedPost(up.x, up.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE))
-            : rangedPost(up.x, up.z, NAV_RANGE);
-          if (kp) {
-            // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位不经地面
-            //   格边步（层判等永不成立 → 站住/抖动），直接飞向选位点。
-            if (u.isAir) {
-              const adx = kp.x - up.x, adz = kp.z - up.z;
-              const al = Math.hypot(adx, adz) || 1;
-              const mtA = u.moveTarget;
-              if (mtA) { mtA.x = kp.x; mtA.y = 0; mtA.z = kp.z; }
-              else u.moveTarget = { x: kp.x, y: 0, z: kp.z };
-              u.controlSource = 'swarm';
-              u.applySteer({
-                dirX: adx / al, dirZ: adz / al, speed,
-                source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
+          // ★ 选位修正（用户定 2026-09-27）：
+          //   ① **中心 = 目标**——`rangedPost(px,pz,...)` 的语义是"玩家/目标为圆心"（环带距离、
+          //      掩体 LOS 都是"目标→该点"）。此前传单位自己 → 以己为圆心乱选 40m 环点/掩体方向反。
+          //   ② **锁存**（命令非必要不频繁变更）：一次选位沿它走、到位就站住打；只有
+          //      目标位移 > 6m / 风筝模式滞回翻转 / 走不动 ≈2s 才重选。
+          const held = this.rangedHold.get(u.swarmUid);
+          let kite = held ? held.kite : shouldKite(dT, NAV_RANGE);
+          if (held && kite && dT > RANGED_KITE_OFF) kite = false;       // 退出滞回
+          else if (held && !kite && dT < RANGED.DANGER) kite = true;    // 进入
+          const needPick = !held || kite !== held.kite
+            || Math.hypot(tgt.x - held.tx, tgt.z - held.tz) > RANGED_REPICK_D
+            || held.blocked >= RANGED_BLOCKED_CALLS;
+          let kp: { x: number; z: number } | null = held && !needPick ? { x: held.x, z: held.z } : null;
+          if (needPick) {
+            const fresh = kite
+              ? (rangedPost(tgt.x, tgt.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE))
+              : rangedPost(tgt.x, tgt.z, NAV_RANGE);
+            kp = fresh;
+            if (fresh) {
+              this.rangedHold.set(u.swarmUid, {
+                x: fresh.x, z: fresh.z, at: now, tx: tgt.x, tz: tgt.z, kite, blocked: 0, lx: up.x, lz: up.z,
               });
-              continue;
+            } else if (held) {
+              held.blocked = 0; held.at = now;   // 无位可选 → 站住打（保留目标锚，防每拍重算）
             }
-            const e = this.edgeGreedy(up.x, up.z, up.y, kp.x, kp.z);
+            if (this.rangedHold.size > 512) this.rangedHold.clear();
+          }
+          if (kp) {
+            // ★ 飞行直航单源（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位不经地面
+            //   格边步（层判等永不成立 → 站住/抖动），直接飞向选位点。
+            if (u.isAir) { this.flyStraight(u, kp.x, kp.z, speed); continue; }
+            const e = this.edgeGreedy(up.x, up.z, kp.x, kp.z);
             if (e) {
               const mt = u.moveTarget;
               if (mt) { mt.x = kp.x; mt.y = 0; mt.z = kp.z; }
@@ -507,10 +528,17 @@ export class SquadNavigator {
                 dirX: e.dx, dirZ: e.dz, speed,
                 source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
               });
+              const h2 = this.rangedHold.get(u.swarmUid);
+              if (h2) { h2.blocked = 0; h2.lx = up.x; h2.lz = up.z; }
               continue;
             }
+            // 走不动（未到位且取不到步）：累计 → 超阈值重选一次（held 在 needPick 里读 blocked）
+            const h3 = this.rangedHold.get(u.swarmUid);
+            if (h3 && Math.hypot(up.x - h3.lx, up.z - h3.lz) < 0.05
+              && Math.hypot(kp.x - up.x, kp.z - up.z) > 2.5) h3.blocked++;
+            else if (h3) { h3.blocked = 0; h3.lx = up.x; h3.lz = up.z; }
           }
-          // ★ 已在理想射程位（或目标点不可达/同格同层）：站住打（不追、不随编队前压）
+          // ★ 到位（或目标点不可达/同格）：站住打（不追、不随编队前压）——锁存保持，目标大位移才重选
           {
             const mt = u.moveTarget;
             if (mt) { mt.x = up.x; mt.y = 0; mt.z = up.z; }
@@ -530,31 +558,15 @@ export class SquadNavigator {
         let needClimb = isLead ? (state?.climbCred !== undefined) : true;
         let needClimbPt = state?.climbCred;
         let memberDirect: { dx: number; dz: number } | null = null;   // ★ 成员兜底方向（direct）
-        // ★ 飞行直航（空中层，用户定 2026-09-27）：空中单位不走地面 corridor/memberStep——
+        // ★ 飞行直航单源（空中层，用户定 2026-09-27）：空中单位不走地面 corridor/memberStep——
         //   队长飞命令目标、成员飞队长；否则地面层判等/格边步会导致路点不推进（卡水/抖）。
         if (u.isAir) {
-          const fx = isLead ? tgt.x : lead.x;
-          const fz = isLead ? tgt.z : lead.z;
-          const fdx = fx - upos0.x, fdz = fz - upos0.z;
-          const fl = Math.hypot(fdx, fdz) || 1;
-          const mtA = u.moveTarget;
-          if (mtA) { mtA.x = fx; mtA.y = 0; mtA.z = fz; mtA.climb = false; }
-          else u.moveTarget = { x: fx, y: 0, z: fz, climb: false };
-          u.controlSource = 'swarm';
-          u.applySteer({
-            dirX: fdx / fl, dirZ: fdz / fl,
-            speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5,
-            source: 'formation', targetX: fx, targetY: 0, targetZ: fz,
-          });
+          this.flyStraight(u, isLead ? tgt.x : lead.x, isLead ? tgt.z : lead.z,
+            u.moveSpeed > 0 ? u.moveSpeed : 2.5);
           continue;
         }
-        const isFlyer = squad.type === 'flyer';
-        if (!isLead && isFlyer) {
-          // ★ 飞行队成员（用户定 2026-09-26）：**直航队长**（不走地面 memberStep/格边步）——
-          //   否则地面寻路失败 → moveTarget=自身 → 到达停步→钉死。
-          sx = lead.x; sz = lead.z;
-        } else if (!isLead) {
-          const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, upos0.y, lead.x, lead.z, now, state);
+        if (!isLead) {
+          const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; if (ms.direct) memberDirect = { dx: ms.dx, dz: ms.dz }; }
           else { sx = upos0.x; sz = upos0.z; }
           if (ms?.climbPt) needClimbPt = ms.climbPt;   // 成员路线带坡点则用其点位（凭证本身不需要）
@@ -562,18 +574,14 @@ export class SquadNavigator {
         u.formSlot = rank;
         // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住
         let sdx = 0, sdz = 0;
-        if (!isLead && isFlyer) {
-          const ax = lead.x - upos0.x, az = lead.z - upos0.z;
-          const al = Math.hypot(ax, az) || 1;
-          sdx = ax / al; sdz = az / al;
-        } else if (memberDirect) {
+        if (memberDirect) {
           // ★ 成员寻路兜底（direct）：直接用"朝队长"方向（不再复算 → 防再次失败站死）
           sdx = memberDirect.dx; sdz = memberDirect.dz;
         } else {
         if (isLead) {
           // ★ 短寻路一次发放（stepCommit）：沿已发放的格边步走到点才重选
           const stc = this.stepCommit(state, upos0.x, upos0.z, now, (goal) => {
-            const c = this.routeCursor(state, upos0.x, upos0.z, upos0.y);
+            const c = this.routeCursor(state, upos0.x, upos0.z);
             if (!c) return null;
             const g = this.localGrid();
             const e = g ? axisStepToward(g, upos0.x, upos0.z, c.x - upos0.x, c.z - upos0.z) : null;
@@ -583,21 +591,15 @@ export class SquadNavigator {
           });
           if (stc) { sdx = stc.dx; sdz = stc.dz; }
           else {
-            const e3 = this.edgeFromCorridor(state, upos0.x, upos0.z, upos0.y);
+            const e3 = this.edgeFromCorridor(state, upos0.x, upos0.z);
             if (e3) { sdx = e3.dx; sdz = e3.dz; }
             else {
-              const rd = this.routeDir(state, upos0.x, upos0.z, upos0.y);   // ★ 路线修正（同 L2）
+              const rd = this.routeDir(state, upos0.x, upos0.z);   // ★ 路线修正（同 L2）
               if (rd) { sdx = rd.x; sdz = rd.z; }
-              else if (squad.type === 'flyer') {
-            // ★ 飞行队长兜底（用户定 2026-09-26）：无走廊/无路线修正 → **直航目标**（否则 dir=0 原地呆）
-            const axf = tgt.x - upos0.x, azf = tgt.z - upos0.z;
-            const alf = Math.hypot(axf, azf);
-                if (alf > 1e-3) { sdx = axf / alf; sdz = azf / alf; }
-              }
             }
           }
         } else {
-          const e3 = this.edgeGreedy(upos0.x, upos0.z, upos0.y, sx, sz);
+          const e3 = this.edgeGreedy(upos0.x, upos0.z, sx, sz);
           if (e3) { sdx = e3.dx; sdz = e3.dz; }
         }
         }

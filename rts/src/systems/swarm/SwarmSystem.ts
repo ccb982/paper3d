@@ -131,7 +131,6 @@ export class SwarmSystem {
   private steerAccum = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
-  private readonly unitY = new Map<number, number>();   // ★ H2：L3 队长 y 缓存（steer 每拍刷新）
   /** ★ 飞行直航（用户定 2026-09-27）：L3 队长是否空中（ensurePath 不建地面走廊） */
   private readonly unitAir = new Map<number, boolean>();
   /** 编队锚点量算复用对象（零分配） */
@@ -147,7 +146,7 @@ export class SwarmSystem {
     data: this.data,
     grid: this.grid,
     squadStateOf: (id) => this.squadStateOf?.(id) ?? null,
-    memberStep: (uid, x, z, y, lx, lz, now, st) => this.nav.memberStep(uid, x, z, y, lx, lz, now, st),
+    memberStep: (uid, x, z, lx, lz, now, st) => this.nav.memberStep(uid, x, z, lx, lz, now, st),
     walkableLine: (ax, az, bx, bz) => this.walkableLine(ax, az, bx, bz),
   };
   private batch: SwarmBatch | null = null;
@@ -441,7 +440,7 @@ export class SwarmSystem {
       // ★ S2：HPA 已退出长寻路主链（只用可行性表）——不再预热（方法留至 S4 删除）
       void raster;
       const _units = hooks.activeUnits?.();
-      if (_units) for (const u of _units) if (u.carrier === 'entity' && u.activation === 'active') { this.unitY.set(u.swarmUid, u.position.y); this.unitAir.set(u.swarmUid, u.isAir === true); }
+      if (_units) for (const u of _units) if (u.carrier === 'entity' && u.activation === 'active') this.unitAir.set(u.swarmUid, u.isAir === true);
       this.nav.steerEntities(_units, this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
         (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
     }
@@ -1055,15 +1054,11 @@ export class SwarmSystem {
   }
 
   ensurePathFor(state: SquadOrderState, squad: Squad, now: number): void {
-    let y = this.unitY.get(squad.leaderUid) ?? 0;
+    // ★ 寻路只认 2D 格（用户定 2026-09-27：删同层机制）——只需知"队长是否空中"（空中不建走廊）
     let leaderAir = this.unitAir.get(squad.leaderUid) === true;
     const p = this.pool;
-    for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === squad.leaderUid) { y = p.y[i]; leaderAir = p.isAir[i] === 1; break; }
-    // ★ H2 单源（用户定 2026-09-27）：y 再用**当前地表**校正——防旧 y（出生/池滞后）把起点调进错层→BFS 全 blocked。
-    const lead = squad.members.get(squad.leaderUid);
-    const raster = RasterMap.current;
-    if (lead && raster) y = raster.surfaceHeightAtFor(lead.x, lead.z, y);
-    this.nav.ensurePath(this.squads, squad, state, now, y, leaderAir);
+    for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === squad.leaderUid) { leaderAir = p.isAir[i] === 1; break; }
+    this.nav.ensurePath(this.squads, squad, state, now, leaderAir);
   }
 
   /** ★ 队长核端口：成员指令**唯一落地口**（池列写口 / L3 onDirective） */

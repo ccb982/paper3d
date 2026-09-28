@@ -41,12 +41,14 @@ export function rangedMoveTarget(
   px: number, pz: number, tx: number, tz: number, dist: number, range: number,
   rangedPost?: (x: number, z: number, range: number, minDist?: number) => { x: number; z: number } | null,
 ): { x: number; z: number } | null {
+  // ★ 中心口径（用户定 2026-09-27）：rangedPost 的 (x,z) = **目标/玩家**圆心（环带/掩体 LOS 语义）；
+  //   此前传单位位置 → 以己为圆心选 40m 环点/掩体方向反。
   if (shouldKite(dist, range)) {
     // ★ 边撤边打的目的 = 换到"离玩家更远 + 有掩体/高地"的位置；次选才是径向后撤
-    const post = rangedPost?.(px, pz, range, dist + 4);
+    const post = rangedPost?.(tx, tz, range, dist + 4);
     return post ?? kitePoint(tx, tz, px, pz, range);
   }
-  const post = rangedPost?.(px, pz, range, 0);
+  const post = rangedPost?.(tx, tz, range, 0);
   if (post) return post;
   // ★ 没有有利位置也不追：远了就前进到射程环（不贴脸），在环上就原地射击
   const ideal = range * RANGED.PREFER_RATIO;
