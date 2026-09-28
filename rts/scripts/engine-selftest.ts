@@ -30,6 +30,10 @@ import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift, CLIMB_STATS } from '../src/entity/base/CharacterCore.ts';
 import { SwarmLedger } from '../src/systems/swarm/SwarmLedger.ts';
+import { slotPosition, spawnFromMember } from '../src/systems/swarm/tiers/carry.ts';
+import { Flux, tierForDistance } from '../src/systems/swarm/tiers/Flux.ts';
+import type { TierCarry } from '../src/systems/swarm/tiers/contracts.ts';
+import type { AgentSnapshot } from '../src/systems/swarm/AgentPool.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt } from '../src/services/physics/StaticObstacleRegistry.ts';
@@ -1453,6 +1457,69 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
   live.squads = () => [];
   br.tick(0.6, 90);
   ok((br as unknown as { plan: Map<number, unknown> }).plan.size === 0, '★ 小队消失 → 段进计划项清理（无残留）');
+}
+
+
+// ============================================================
+// [13] 分档交接（tiers）：carry 零丢失换算 + Flux 编排幂等（纯逻辑）
+// ============================================================
+{
+  const mkLeader = (uid: number, x: number, z: number): AgentSnapshot => ({
+    mobIndex: 0, x, y: 0, z, hp: 80, maxHp: 100, defense: 2, attackPower: 5,
+    speed: 3, meleeDamage: 10, meleeRange: 1.6, scale: 1, tier: 2, yaw: 0,
+    uid,
+  } as AgentSnapshot);
+  const carry: TierCarry = {
+    squadId: 1, role: 'melee', squadType: 'assault', mobIndex: 0, alive: 3,
+    leader: mkLeader(1, 100, 50),
+    members: [
+      { uid: 1, hp: 80, maxHp: 100, slotRank: 0 },
+      { uid: 2, hp: 60, maxHp: 100, slotRank: 1 },
+      { uid: 3, hp: 40, maxHp: 100, slotRank: 2 },
+    ],
+  };
+  // carry 换算
+  const p0 = slotPosition(carry, 0);
+  ok(p0.x === 100 && p0.z === 50, '★ 交接：slot0 = 队长位置（落位公式同源）');
+  const d1 = spawnFromMember(carry, { uid: 7, hp: 33, maxHp: 100, slotRank: 1 });
+  ok(d1.uid === 7 && d1.hp === 33 && d1.maxHp === 100 && d1.formSlot === 1 && d1.isLeader === false,
+    '★ 交接：名册→池物化零丢失（uid/血/槽位）');
+  ok(d1.aggro !== undefined && d1.wanderSpeed !== undefined, '★ 交接：池必填项补默认（aggro/wanderSpeed）');
+
+  // Flux 编排（假端口）
+  const pool = new Map<number, AgentSnapshot>();
+  const ents = new Map<number, AgentSnapshot>();
+  const flux = new Flux({
+    hasInPool: (uid) => pool.has(uid),
+    takeFromPool: (uid) => { const v = pool.get(uid) ?? null; pool.delete(uid); return v; },
+    putToPool: (data) => {
+      const uid = (data as AgentSnapshot).uid ?? 0;
+      if (uid <= 0) return false;
+      pool.set(uid, data as AgentSnapshot); return true;
+    },
+    hasEntity: (uid) => ents.has(uid),
+    retireEntity: (uid) => { const v = ents.get(uid) ?? null; ents.delete(uid); return v; },
+    spawnEntity: (data) => {
+      const uid = (data as AgentSnapshot).uid ?? 0;
+      if (uid <= 0) return 0;
+      ents.set(uid, data as AgentSnapshot); return uid;
+    },
+  });
+  ents.set(1, mkLeader(1, 100, 50)); ents.set(2, mkLeader(2, 101, 50)); ents.set(3, mkLeader(3, 99, 50));
+  ok(flux.demoteToL2(carry) && pool.size === 3 && ents.size === 0, '★ 交接：L3→L2 全员回收进池');
+  ok(flux.demoteToL2(carry) && pool.size === 3, '★ 交接：L3→L2 幂等（已在池不重复搬）');
+  ok(flux.promoteToL3(carry) && ents.size === 3 && pool.size === 0, '★ 交接：L2→L3 全员升格实体');
+  ok(flux.promoteToL3(carry) && ents.size === 3, '★ 交接：L2→L3 幂等');
+  ok(flux.collapseToL1(carry) && pool.size === 0 && ents.size === 0, '★ 交接：L2→L1 收缩为队长单点（载体全卸）');
+  ok(carry.members[1]!.hp === 80 && carry.members[2]!.hp === 80, '★ 交接：收缩时名册按载体实况回填');
+  ok(flux.expandFromL1(carry) && pool.size === 3, '★ 交接：L1→L2 按预留槽物化（含队长 rank0）');
+  ok(flux.expandFromL1(carry) && pool.size === 3, '★ 交接：L1→L2 幂等');
+}
+
+{
+  // ★ 创建分档（自动转换口）：阈值单源 SWARM.L3_RADIUS / L2_RADIUS
+  ok(tierForDistance(50) === 'L3' && tierForDistance(200) === 'L2' && tierForDistance(400) === 'L1',
+    '★ 创建分档：按距离自动选 L3/L2/L1（阈值单源）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

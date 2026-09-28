@@ -290,6 +290,8 @@ export class EngineBridge {
       // ★ 优先级（用户定 2026-09-27）：**总攻强制令（最高） > 兜底段进-巡逻循环（一体：先推进再巡逻）**。
       //   总攻期：兜底只修路（forceRepath），**不改命令**（目标由总攻强制令决定）。
       if (this.live.assault?.() === true) continue;
+      // ★ 计划已接管（段进-巡逻）→ 只修路，不再发兜底目标（否则两手抢令；P-L3）
+      if (this.plan.has(rec.id)) continue;
       if ((rec.stillS ?? 0) >= EngineBridge.STALL_FALLBACK_S) {
         const fb = this.fallbackTarget(rec);
         if (fb) {
@@ -569,11 +571,14 @@ export class EngineBridge {
       let planMission = false;
       let planSwitch = false;
       let planDriving = false;
-      if (final.source === 'routine' && sp && !this.isPoolLeader(rec.id)) {
+      // ★ P-L3（用户定 2026-09-27）：长停滞实体（stillS ≥ STALL_FALLBACK_S）**强制接管**——
+      //   无论管理器目标在不在，都进段进-巡逻（"绕圈不接近"永远够不到目标 = 兜底没兜住）。
+      const stalledLong = force === null && (rec.stillS ?? 0) >= EngineBridge.STALL_FALLBACK_S;
+      if ((final.source === 'routine' || stalledLong) && sp && !this.isPoolLeader(rec.id)) {
         const tgt = final.target;
         // ★ 兜底语义（用户定 2026-09-27）：**只有确实没命令**（目标为空 / 原地待命）才进入段进-巡逻循环；
         //   出现真实命令 → **立即退出循环并清计划**（下次再没命令时重新起步）。
-        const standby = !tgt || Math.hypot(tgt.x - sp.x, tgt.z - sp.z) < 6;
+        const standby = stalledLong || !tgt || Math.hypot(tgt.x - sp.x, tgt.z - sp.z) < 6;
         if (!standby) this.plan.delete(rec.id);
         if (standby) {
           planDriving = true;

@@ -23,6 +23,7 @@ import {
   type AgentSnapshot,
 } from './AgentPool';
 import { CrowdGrid } from './CrowdGrid';
+import { l2ExecuteDirective } from './tiers/L2';   // ★ L2 档行为（用户定 2026-09-27：分层，不与 L1/L3 混写）
 import { unbuyGroundY } from '../../entity/base/CharacterCore';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
@@ -556,23 +557,9 @@ export class SwarmSystem {
       // 圈外：先执行小队令（有令），否则家附近游走；释放槽/令牌
       this.releaseSlot(i);
       p.fromFlow[i] = 0;
-      // ★ L2 令执行（用户定 2026-09-27；《移动执行重写.md》§7.4）：
-      //   队长核 → `applyDirective` 已把**成员槽位目标**（队长=原子目标）写进池列
-      //   `directiveTargetX/Z`；池体在此**消费**：活跃指令 + 距目标 > 到位半径 → 行军。
-      //   到点/无指令 → 原游走（家已随目标迁移，防"到岗又被出生点拽走"边界震荡）。
-      let executing = false;
-      if (p.directiveKind[i] !== 0 && (p.directiveUntil[i] === 0 || now < p.directiveUntil[i])) {
-        const dtx = p.directiveTargetX[i], dtz = p.directiveTargetZ[i];
-        const gdx = dtx - px, gdz = dtz - pz;
-        const gd = Math.hypot(gdx, gdz);
-        if (gd > SWARM.L2_EXEC_ARRIVE_R) {
-          executing = true;
-          p.homeX[i] = dtx; p.homeZ[i] = dtz;   // 家随目标（到位后围绕岗位驻守）
-          p.curSpeed[i] = p.speed[i] * (p.directiveSpeedMul[i] > 0 ? p.directiveSpeedMul[i] : 1);
-          p.dirX[i] = gdx / gd;
-          p.dirZ[i] = gdz / gd;
-        }
-      }
+      // ★ L2 令执行（用户定 2026-09-27；《移动执行重写.md》§7.5）：行为已归 **tiers/L2**
+      //   （队长核 → `applyDirective` 写池列 `directiveTargetX/Z`；本处只调用，不再混写）。
+      const executing = l2ExecuteDirective(p, i, px, pz, now);
       if (!executing) {
         p.curSpeed[i] = p.wanderSpeed[i];
         p.wanderTimer[i] -= tick;

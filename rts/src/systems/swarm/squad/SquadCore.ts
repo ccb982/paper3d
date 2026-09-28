@@ -69,6 +69,8 @@ export class SquadCore {
   private order: SquadOrder | null = null;
   /** 接令时到目标的距离（进度分母；队长自报） */
   private d0 = 0;
+  /** 上次"真推进"时的高水位进度（2% 量化；P-L3） */
+  private lastGainProg = 0;
   /** 指令序号（队内单调） */
   private seq = 1;
   /** ★ 巡逻（自维持）：锚点（引擎令目标，捕获一次）/ 当前腿目标 / 腿方向（±1 来回） */
@@ -87,6 +89,7 @@ export class SquadCore {
     this.phase = 'issued';
     this.progress = 0;
     this.stillS = 0;
+    this.lastGainProg = 0;
     this.d0 = Math.hypot(order.target.x - this.x, order.target.z - this.z);
     this.dbg.orders++;
     this.dbg.last = `#${this.id} ${order.kind}→${order.target.x.toFixed(0)},${order.target.z.toFixed(0)}`;
@@ -193,13 +196,16 @@ export class SquadCore {
     const dx = o.target.x - this.x;
     const dz = o.target.z - this.z;
     const d = Math.hypot(dx, dz);
-    // ★ 停滞口径（用户定 2026-09-27；《移动执行重写.md》§7.4）：**progress 不再涨 = 停滞**
-    //   ——不再用“位移”（池队在游走，位移会骗过判定）；L1/L2/L3 同口径。
+    // ★ 停滞口径（用户定 2026-09-27；P-L3 细化）：progress = **高水位**（不回落）——
+    //   每累积涨 ≥2%起始距离才算"真推进"并清零停滞；微弱抖动（远场绕圈）不再骗过救援。
     const prog = this.d0 > 1 ? Math.max(0, Math.min(1, 1 - d / this.d0)) : 1;
-    if (prog > this.progress + 0.005) this.stillS = 0;
-    else this.stillS += dt;
-    // ★ 进度 = 起始距离收敛比（命令过半 → 可换令）
-    this.progress = prog;
+    if (prog > this.progress) {
+      this.progress = prog;
+      if (prog - this.lastGainProg >= 0.02) { this.lastGainProg = prog; this.stillS = 0; }
+      else this.stillS += dt;
+    } else {
+      this.stillS += dt;
+    }
     if (d <= ARRIVE_R) {
       if (this.phase !== 'done') {
         this.phase = 'done';
