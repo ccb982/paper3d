@@ -145,6 +145,7 @@ export const CLIMB_STATS = {
   landed: 0,      // 到落点完成会话数
   abandoned: 0,   // 被拉离现场弃约数
   buryFrames: 0,  // 爬升中脚低于表面 >0.3m 的帧数（“卡地里”指标）
+  passive: 0,     // ★ 被动爬掩体抓取次数（用户定 2026-09-27；探针验证用）
 };
 
 export class CharacterCore {
@@ -304,7 +305,11 @@ export class CharacterCore {
               && Math.hypot(inp.x - lx, inp.z - lz) <= 3);
           if (!atLand && !onTop) {
             const inZone = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR && sOff <= dl + 0.5;
-            const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
+            // ★ 被动掩体跑（用户定 2026-09-27）：**不再要求地形坡点**（probe.climbPoint 对掩体必 null
+            //   → 被动冲掩体永远抓不上）；own 直接用 run 本身。
+            const own = (run as { passive?: boolean }).passive === true
+              ? run
+              : (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run);
             // ★ 兜底报抢放宽：到点附近（≤6m）也强制抓（只在 forced 时）
             const okIn = inZone || (forced !== null && Math.hypot(inp.x - run.x, inp.z - run.z) <= 6);   // 兜底：走近即抓
             if (okIn && own !== null) {
@@ -318,6 +323,7 @@ export class CharacterCore {
               if ((run as { passive?: boolean }).passive !== true) climbBook.claim(uid, run);   // ★ 认领：该点独属（被动掩体免认领）
               this.nearKey = null; this.nearS = 0;
               CLIMB_STATS.sessions++;
+              if ((run as { passive?: boolean }).passive === true) CLIMB_STATS.passive++;
               out.climbing = true;
               CLIMB_STATS.climbSteps++;
               if (!this.everClimbed) { this.everClimbed = true; CLIMB_STATS.units++; }

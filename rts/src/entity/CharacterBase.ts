@@ -98,7 +98,7 @@ export abstract class CharacterBase extends EntityBase {
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
   private climbToX = 0; private climbToY = 0; private climbToZ = 0;
   private climbContactT = 0;
-  private climbCand: { top: number; ix: number; iz: number } | null = null;
+  private climbCand: { top: number; ix: number; iz: number; ext: number } | null = null;
   /** ★ 过掩体优化：翻越后冷却（毫秒时间戳；防"翻过去又被推回来"来回翻） */
   private climbCdUntil = 0;
   /** ★ 是否正在攀爬（CharacterClamp 跳过贴地，避免抢位置） */
@@ -322,7 +322,14 @@ export abstract class CharacterBase extends EntityBase {
             const md = this.controller.moveDir;
             const want = Math.hypot(md.x, md.y) || 1;
             const into = (md.x * ix + md.y * iz) / want;
-            if (into > 0.6) this.climbCand = { top, ix, iz };
+            if (into > 0.6) {
+              // ★ 掩体沿逼近方向的半投影（用户定 2026-09-27）：落点要越过**对面**，否则厚掩体落在顶上被推回
+              const fx2 = o.yaw !== undefined ? Math.sin(o.yaw) : 0, fz2 = o.yaw !== undefined ? Math.cos(o.yaw) : 1;
+              const rx2 = fz2, rz2 = -fx2;
+              const hw2 = o.hw ?? o.r, hl2 = o.hl ?? o.r;
+              const ext = Math.abs(hw2 * (ix * rx2 + iz * rz2)) + Math.abs(hl2 * (ix * fx2 + iz * fz2));
+              this.climbCand = { top, ix, iz, ext };
+            }
           }
         }
         continue;
@@ -344,11 +351,12 @@ export abstract class CharacterBase extends EntityBase {
   }
 
   /** ★ 开始攀爬（目标 = 沿"朝墙内"方向前进一个身位 + 顶面高度） */
-  private beginClimb(cand: { top: number; ix: number; iz: number }): void {
+  private beginClimb(cand: { top: number; ix: number; iz: number; ext?: number }): void {
     const p = this.entity.position;
     const vol = this.collisionVolume;
     const me = vol ? shapeExtents(vol.shape) : { hx: 0.3, hy: 1, hz: 0.3 };
-    const reach = Math.max(0.5, Math.max(me.hx, me.hz) + 0.35);
+    // ★ 越到对面：基础 reach + 掩体沿逼近方向全厚（2×半投影）+ 余量（用户定 2026-09-27）
+    const reach = Math.max(0.5, Math.max(me.hx, me.hz) + 0.35) + 2 * (cand.ext ?? 0) + 0.4;
     this.climbFromX = p.x; this.climbFromY = p.y; this.climbFromZ = p.z;
     this.climbToX = p.x + cand.ix * reach;
     this.climbToZ = p.z + cand.iz * reach;

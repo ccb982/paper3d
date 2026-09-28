@@ -87,6 +87,12 @@ R.__rts = { raster, phase: 'select' };
 //   单击面板 = 该点当虚拟舰位重算（同一 SectorBuilder 逻辑）；Z 开关；R 复位舰位；S 标准位。
 //   预世界口径与生产一致：blockedAt = 坑（SwarmData 同式），带 [24,90] 与 [rLo=max(24,frontMinD+8), rHi=max(90,rLo+30)] 的初值一致。
 const zoneShip = { x: -17, z: -267 };
+// ★ 敌军兵力 HUD（用户定 2026-09-27 写清楚并绘制到 UI）：**在场 / 上限（随事态）/ 总配额**
+const enemyStatsEl = document.createElement('div');
+enemyStatsEl.style.cssText = 'position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:10060;pointer-events:none;font:12px Consolas,monospace;color:#ffcf9a;text-shadow:0 1px 2px #000;text-align:center;white-space:nowrap';
+enemyStatsEl.textContent = '敌军：—';
+document.body.appendChild(enemyStatsEl);
+
 mountSectorZoneView({
   surfaceAt: (x, z) => raster.surfaceHeightAt(x, z),
   tileAt: (x, z) => raster.tileDefAt(x, z),
@@ -273,6 +279,23 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     if (Math.hypot(x - spawn.x, z - spawn.z) <= SHIP_LENGTH / 2 + 2) shipHp = Math.max(0, shipHp - dmg);
   };
   // ★ 新引擎接线（重写 P4）：**唯一指挥链**——旧链已删，无回退开关
+  // ★ 巡逻位移记录（用户定 2026-09-27）：近 30s 的位移最大差值（bbox）；>4m = 真在巡（豁免判官）
+  const patrolTrack = new Map<number, { t: number[]; x: number[]; z: number[] }>();
+  const patrolMoved = (uid: number, x: number, z: number, now: number): boolean => {
+    let tr = patrolTrack.get(uid);
+    if (!tr) { tr = { t: [], x: [], z: [] }; patrolTrack.set(uid, tr); }
+    tr.t.push(now); tr.x.push(x); tr.z.push(z);
+    while (tr.t.length > 0 && now - (tr.t[0] as number) > 30) { tr.t.shift(); tr.x.shift(); tr.z.shift(); }
+    if (patrolTrack.size > 1024) patrolTrack.clear();
+    let mnX = Infinity, mxX = -Infinity, mnZ = Infinity, mxZ = -Infinity;
+    for (let i = 0; i < tr.x.length; i++) {
+      const vx = tr.x[i] as number, vz = tr.z[i] as number;
+      if (vx < mnX) mnX = vx; if (vx > mxX) mxX = vx;
+      if (vz < mnZ) mnZ = vz; if (vz > mxZ) mxZ = vz;
+    }
+    return Math.max(mxX - mnX, mxZ - mnZ) > 4;
+  };
+
   let shadowBridge: EngineBridge | null = null;
   let engineView: SquadViewPort | null = null;
   let tactics: { sectors: SectorBuilder; battalions: BattalionManager; mainSectors: number[]; acc: number; tick(h: number): void } | null = null;
@@ -372,7 +395,15 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       exemptOf: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
+        // ★ 驻守直接豁免（用户定 2026-09-27）；巡逻看"近 30s 位移最大差值"——>4m = 真在巡 → 豁免
         if (swarm.orderKindOf(sq.id) === 'garrison') return 'garrison';
+        {
+          const ost = shadowBridge?.writer.store.get(sq.id)?.order;
+          if (ost?.mission === 'patrol') {
+            const m = sq.members.get(uid);
+            if (m && patrolMoved(uid, m.x, m.z, simNow())) return 'patrol';
+          }
+        }
         // ★ 拿到开火许可的远程（用户定 2026-09-27）：站桩射击不是发呆 → 不被回收
         if (sq.type === 'ranged' && shadowBridge?.hasFirePermit(uid) === true) return 'fire';
         const nowS = simNow();
@@ -886,6 +917,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     const fx2 = Math.sin(cam.yaw), fz2 = Math.cos(cam.yaw);
     hooks.camForwardX = fx2; hooks.camForwardZ = fz2;
     hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船
+    // ★ 敌军兵力 HUD（用户定 2026-09-27）：在场 = alive；上限 = min(total, releaseCap)（随事态）；总配额 = total
+    {
+      const led = swarm.ledger;
+      const cap = Math.min(led.total, Math.max(0, led.releaseCap));
+      const txt = `敌军：在场 ${led.alive} ｜ 上限 ${cap} ｜ 总配额 ${led.total}（累计生成 ${led.spawned}）`;
+      if (enemyStatsEl.textContent !== txt) enemyStatsEl.textContent = txt;
+    }
     // ★ 舰船位置单源（用户定 2026-09-27）：hooks.ship 之前只在初始化拷贝一次玩家出生点、之后永不更新
     //   → 兜底"朝舰推进"方位错。每步从**舰船实体**（地图/小地图同源的那个接口）同步。
     hooks.shipX = shipEntity.position.x; hooks.shipZ = shipEntity.position.z;
