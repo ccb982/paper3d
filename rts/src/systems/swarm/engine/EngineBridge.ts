@@ -120,6 +120,13 @@ export class EngineBridge {
   /** ★★ 目标驻留锁存（M2-lite；用户定 2026-09-27）：routine 令目标在**到达前**锁存 GOAL_DWELL_S 秒，防重算跳变。 */
   private readonly goalHold = new Map<number, { x: number; z: number; at: number; kind: string }>();
   private static readonly GOAL_DWELL_S = 6;
+  /** ★★ 段进循环（用户定 2026-09-27）：推进一段 → 巡逻 → 再推进（队长不再"几乎不发令"）。 */
+  private readonly plan = new Map<number, { mode: 'move' | 'patrol'; until: number; x: number; z: number }>();
+  private static readonly PLAN_ADV = 30;        // 每段向舰推进距离（米）
+  private static readonly PLAN_NEAR = 10;       // 距舰这么近就不再推进（驻边巡逻）
+  private static readonly PLAN_PATROL_S = 10;   // 每段之间的巡逻时长（秒）
+  private static readonly PLAN_MOVE_TIMEOUT = 25; // 单段安全超时
+
   /** ★★ 兜底命令状态（用户定 2026-09-27）：各队上次救援时刻 */
   private readonly stallAt = new Map<number, number>();
   private static readonly STALL_REPATH_S = 6;     // 发呆阈值（秒）→ 强制重寻路
@@ -263,6 +270,9 @@ export class EngineBridge {
       this.live.forceRepath?.(rec.id);
       const cur = this.writer.store.get(rec.id);
       if (cur && !this.shadow) this.live.emit?.(rec.id, cur.order, now);
+      // ★ 优先级（用户定 2026-09-27）：**总攻强制令（最高） > 兜底段进-巡逻循环（一体：先推进再巡逻）**。
+      //   总攻期：兜底只修路（forceRepath），**不改命令**（目标由总攻强制令决定）。
+      if (this.live.assault?.() === true) continue;
       if ((rec.stillS ?? 0) >= EngineBridge.STALL_FALLBACK_S) {
         const fb = this.fallbackTarget(rec);
         if (fb) {
@@ -297,6 +307,23 @@ export class EngineBridge {
   /** ★ 开火许可查询（用户定 2026-09-27）：拿到许可的远程站桩射击 ≠ 发呆 → 判官豁免（main.exemptOf 消费） */
   hasFirePermit(uid: number): boolean {
     return this.timers.canFire(uid);
+  }
+
+  /** ★ 下一段推进点（用户定 2026-09-27）：从当前位置朝舰 PLAN_ADV 米；可达优先（30→15→8），都不行 → null */
+  private advancePoint(id: number, sp: { x: number; z: number }): { x: number; z: number } | null {
+    const p = this.pos.ship() ?? this.pos.player();
+    if (!p) return null;
+    const dx = p.x - sp.x, dz = p.z - sp.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= EngineBridge.PLAN_NEAR) return null;
+    const can = this.live.canReach;
+    const cands = [EngineBridge.PLAN_ADV, 15, 8];
+    for (const s of cands) {
+      const step = Math.min(s, d - 6);
+      const q = { x: sp.x + (dx / d) * step, z: sp.z + (dz / d) * step };
+      if (!can || can(id, q.x, q.z)) return q;
+    }
+    return null;
   }
 
   /** ★ 兜底目标（用户定 2026-09-27）：可达优先：① 环内同方位点（朝舰夹到 ringMax） → ② 本队防区锚点；都不行 → null。 */
@@ -403,12 +430,16 @@ export class EngineBridge {
       }
       for (const rec of [...this.squads.all()]) {
         // ★ 强制覆盖所有人（用户定 2026-09-26：含玩家手动令）——总攻阶段无例外
-        // ★★ 到顶后维持巡逻（用户定 2026-09-26）：kind=patrol → 到锚（舰）后队长自维持
-        //   18m 跨腿来回——持续移动天然躲开卡死判官（静止 25s 被收），也保持压制
+        // ★★ 到顶后维持巡逻：kind=patrol → 到锚（舰）后队长自维持 18m 跨腿。
         const order: SquadOrder = {
           kind: 'patrol', source: 'engine', target: { x: tx, z: tz }, mission: 'patrol',
           threat: { x: tx, z: tz }, seq: 0, ttl: 0,
         };
+        // ★★ 同签名不重发（用户定 2026-09-27，总攻也适用）——
+        //   旧写法每帧 force 重发 → 把 progress/stillS 清零 → 卡住的单位**永远不触发兜底救援**（发呆被收→重放=闪抖）。
+        const prev = this.writer.store.get(rec.id);
+        if (prev && prev.order.kind === order.kind && (prev.order.mission ?? '') === 'patrol'
+          && Math.hypot(prev.order.target.x - tx, prev.order.target.z - tz) <= 1) continue;
         const ok = this.writer.issue(rec.id, order, { now, force: true });
         if (ok && !this.shadow) this.live.emit?.(rec.id, order, now);
       }
@@ -416,7 +447,7 @@ export class EngineBridge {
       return;
     }
     const hitId = 0;   // 玩家攻击信号未接线（旧接口已删）
-    interface Pending { rec: LiveSquad; cur?: OrderState; dec: Decision; tx: number; tz: number; mission?: string; }
+    interface Pending { rec: LiveSquad; cur?: OrderState; dec: Decision; tx: number; tz: number; mission?: string; force?: boolean; }
     const pending: Pending[] = [];
     /** 无决策队（玩家令/无目标）的现令目标：作同兵种间距的**固定约束**（不随本拍调整） */
     const held = new Map<number, { x: number; z: number }>();
@@ -481,9 +512,38 @@ export class EngineBridge {
         if (cur) held.set(rec.id, cur.order.target);
         continue;
       }
+      // ★★ 段进循环（用户定 2026-09-27）：管理器**没有实质目标**（空 / 目标≈原地，<6m）时接管——
+      //   推进一段（朝舰）→ 到达/超时 → 巡逻 PLAN_PATROL_S → 再推进；距舰 ≤PLAN_NEAR 则常驻巡逻。
+      //   有明确目标（护卫工兵/躲掩体/射程环等）时**不接管**（尊重管理器策略）。
+      let planMission = false;
+      let planSwitch = false;
+      let planDriving = false;
+      if (final.source === 'routine' && sp) {
+        const tgt = final.target;
+        // ★ 兜底语义（用户定 2026-09-27）：**只有确实没命令**（目标为空 / 原地待命）才进入段进-巡逻循环；
+        //   出现真实命令 → **立即退出循环并清计划**（下次再没命令时重新起步）。
+        const standby = !tgt || Math.hypot(tgt.x - sp.x, tgt.z - sp.z) < 6;
+        if (!standby) this.plan.delete(rec.id);
+        if (standby) {
+          planDriving = true;
+          let pl = this.plan.get(rec.id);
+          if (!pl) { pl = { mode: 'patrol', until: 0, x: sp.x, z: sp.z }; this.plan.set(rec.id, pl); }
+          if (pl.mode === 'move') {
+            const reached = rec.phase === 'done' || Math.hypot(pl.x - sp.x, pl.z - sp.z) <= 5 || now >= pl.until;
+            if (reached) { pl.mode = 'patrol'; pl.until = now + EngineBridge.PLAN_PATROL_S; pl.x = sp.x; pl.z = sp.z; planSwitch = true; }
+          } else if (now >= pl.until) {
+            const np = this.advancePoint(rec.id, sp);
+            if (np) { pl.mode = 'move'; pl.x = np.x; pl.z = np.z; pl.until = now + EngineBridge.PLAN_MOVE_TIMEOUT; planSwitch = true; }
+            else { pl.until = now + EngineBridge.PLAN_PATROL_S; }   // 已到舰边 → 持续巡逻
+          }
+          if (pl.mode === 'move') final = { ...final, target: { x: pl.x, z: pl.z } };
+          else { final = { ...final, target: null }; planMission = true; }
+
+        }
+      }
       // ★★ 目标驻留锁存（M2-lite：只有一个命令、不随重算跳）——
       //   routine 令：旧目标仍在驻留期且**未到达** → 沿用旧目标（直到到达/超时/换类）。
-      if (final.source === 'routine' && sp) {
+      if (!planDriving && final.source === 'routine' && sp) {   // ★ 兜底循环期间不过锁存
         const old = this.goalHold.get(rec.id);
         const arriveOld = old ? Math.hypot(sp.x - old.x, sp.z - old.z) <= 8 : false;
         if (old && now - old.at < EngineBridge.GOAL_DWELL_S && !arriveOld && old.kind === final.kind
@@ -509,9 +569,9 @@ export class EngineBridge {
       // ★ 巡逻（用户定 2026-09-25）：**引擎只发一条**——常规部署且**已到岗**、无威胁 → mission='patrol'，
       //   之后小队自维持巡逻（引擎不逐拍指挥；同签名重发被 kept 去重）
       const arrived = rec.phase === 'done';   // ★ M4（用户定）：到达判定单源 = 队长核报告的 done
-      const patrol = final.source === 'routine' && arrived
-        && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined;
-      pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined });
+      const patrol = planMission || (final.source === 'routine' && arrived
+        && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined);
+      pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined, force: planSwitch });
     }
     // ---- pass ②：统一校验链（①环 ②同兵种密度=本拍真实目标全局解 ③可达）→ 唯一发令器 ----
     let issued = 0, refreshed = 0;
@@ -564,7 +624,7 @@ export class EngineBridge {
       };
       // ★ 执行板续期（重写 P4；用户定）：旧指挥链已删——唯一发令器每拍把**当前令**同步到执行板，
       //   否则旧板 TTL 到期 → 执行层丢令。新令/被拦都续。
-      if (this.writer.issue(q.rec.id, order, { now })) {
+      if (this.writer.issue(q.rec.id, order, { now, force: q.force === true })) {   // ★ 段切换：必要性发令（过稳定门）
         issued++;
         if (!this.shadow) this.live.emit?.(q.rec.id, order, now);
       } else {

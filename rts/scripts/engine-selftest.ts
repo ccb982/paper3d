@@ -809,8 +809,9 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   // ★ 行进目标点 = 径向 r（兵种策略）⊗ 切向 θ（同兵种间距）：只解 θ、r 严格不变。
   //   r=12 < MIN/2 → 弦长上限 = r1+r2 = 24m，切向拉满 π → 弧长 π·12 ≈ 37.7m（本用例断言 ≥35）。
   ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
-  ok(Math.abs(Math.hypot(o1.x - SX, o1.z - SZ) - 150) < 0.6 && Math.abs(Math.hypot(o2.x - SX, o2.z - SZ) - 145) < 0.6,
-    '切向散开只调 θ（各队 r 不变；无前沿点时驻守自身位置）');
+  ok(Math.hypot(o1.x - SX, o1.z - SZ) < 150 && Math.hypot(o2.x - SX, o2.z - SZ) < 145
+    && Math.hypot(o1.x - SX, o1.z - SZ) > 90 && Math.hypot(o2.x - SX, o2.z - SZ) > 85,
+    '★ 段进循环（用户定 2026-09-27）：无前沿点（待命）→ 向舰推进一段（r 减小）');
   // 环夹取：**以舰为心**——(90,0) 收到 舰(200,0) 半径 60 的环上
   const vClamp = validateOrder(3, 90, 0, { px: SX, pz: SZ, ringMin: 0, ringMax: 60, role: 'ranged', siblings: [] });
   ok(Math.abs(Math.hypot(vClamp.x - SX, vClamp.z - SZ) - 60) < 0.01, '环夹勒以舰为心（90 → 舰心 60）');
@@ -1247,6 +1248,34 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
   const o = br.writer.store.get(1)!.order;
   ok(Math.abs(o.target.x - 150) < 0.01 && Math.abs(o.target.z - 20) < 0.01, '★ 仍发呆（≥15s）→ 换可达兜底目标（防区锚点）');
   ok(br.dbg.stall === 1, '兜底计数 +1');
+}
+
+// ---------- 段进循环（用户定 2026-09-27：推进一段 → 巡逻 → 再推进） ----------
+console.log('[12g] 段进循环：向舰推进一段 → 巡逻 → 再推进');
+{
+  const SX = 200, SZ = 0;
+  const sq = { id: 1, role: 'melee' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: SX, z: SZ }),
+    squads: () => [sq],
+    emit: () => { /* */ },
+    canReach: () => true,
+  };
+  const br = new EngineBridge(live);
+  br.shadow = true;
+  br.dbg.ringMin = 20;
+  br.dbg.ringMax = 200;   // 环内正常态（避开总攻冲锋分支）
+  br.tick(0.6, 1);
+  const o1 = br.writer.store.get(1)!.order;
+  ok(o1.kind === 'act' && o1.target.x > 100 && o1.target.x <= 131, '★ 段进：待命 → 首拍向舰推进一段（≤30m）');
+  sq.x = o1.target.x; sq.z = o1.target.z; sq.phase = 'done';
+  br.tick(0.6, 2);
+  ok(br.writer.store.get(1)!.order.mission === 'patrol', '★ 段到（core done）→ 转巡逻（mission=patrol）');
+  sq.phase = 'executing';
+  br.tick(0.6, 2 + 11);
+  const o3 = br.writer.store.get(1)!.order;
+  ok(o3.kind === 'act' && o3.target.x > o1.target.x + 5, '★ 巡逻到期 → 再推进一段（更靠舰）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

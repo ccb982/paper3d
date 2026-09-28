@@ -52,7 +52,7 @@ export class MeleeManager extends RoleManager {
       } else {
         // 护卫：最近工兵向舰侧 6m
         let best: { x: number; z: number } | null = null;
-        let bd = 120;   // ★ 护卫半径（用户定：同区/邻近都能护到）
+        let bd = 25;   // ★ 护卫半径（用户定 2026-09-27：**只护近旁工兵**；远了不追，交给段进推进）
         for (const e of engs) {
           const d = Math.hypot(e.x - s.x, e.z - s.z);
           if (d < bd) { bd = d; best = e; }

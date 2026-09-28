@@ -337,19 +337,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         return out;
       },
       // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
-      frontOfSquad: (id) => {
-        let sec = tactics?.battalions.deployPlan.get(id) ?? -1;
-        // ★ 删占位（用户定 2026-09-27）：**未部署队不再按方位角硬塞主攻区**（那是占位逻辑，不是设计）——
-        //   没有部署就没有前沿点（返回 null），队依旧走自己的常规行为。
-        if (sec < 0) return null;
-        const pts = tactics?.sectors.sectors[sec]?.points;
-        if (!pts || pts.length === 0) return null;
-        // ★ 防区内高地优先占领（用户定 2026-09-27）：优先取 high 点中最高者（同高取最远），无 → 原口径最远点
-        const highs = pts.filter((p) => p.high === true);
-        const pool = highs.length > 0 ? highs : pts;
-        let best = pool[0]!;
-        for (const p of pool) if (p.h > best.h + 1e-3 || (Math.abs(p.h - best.h) <= 1e-3 && p.d > best.d)) best = p;
-        return { x: best.x, z: best.z };
+      frontOfSquad: () => {
+        // ★★ 退役占位（用户定 2026-09-27）：旧“防区最远点”前沿点会把队拽向外圈；
+        //   推进现在由**段进循环**（EngineBridge：向舰推进一段→巡逻→再推进）全权负责。
+        return null;
       },
       // ★ 兜底命令端口（用户定 2026-09-27）
       forceRepath: (id: number) => swarm.forceRepath(id),
@@ -397,7 +388,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
                 const qy = raster.surfaceHeightAt(qx, qz);
                 if (spawner.spawnSingle(def as never, qx, qy, qz, 255, -1, false, mhp)) return true;
               }
-              return false;
+              // ★ 回退一（用户定 2026-09-27）：卡死点不可放 → **环内同方位点**再试
+              const c = swarm.data.clampToRing(x, z);
+              if (Math.hypot(c.x - x, c.z - z) > 1 && spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, 255, -1, false, mhp)) return true;
+              // ★ 回退二：最后手段——force 放置（绝不让特殊兵种凭空消失）
+              return spawner.spawnSingle(def as never, c.x, raster.surfaceHeightAt(c.x, c.z), c.z, 255, -1, true, mhp);
             };
             for (const e of enemies) {
               if (e.swarmUid !== uid) continue;

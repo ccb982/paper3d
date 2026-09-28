@@ -56,6 +56,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     if (ld) {
       const st = squad ? host.squadStateOf(squad.id) : null;
       if (st?.climbCred) { cred = true; credPt = st.climbCred; }
+
       // ★★ 短寻路一次发放（用户定 2026-09-27，L2/L3 同口径）：沿已发放的格边步走到点才重选
       const stc = host.nav.stepCommit(st, p.x[i], p.z[i], performance.now() / 1000, (goal) => {
         const c = host.nav.routeCursor(st, p.x[i], p.z[i], p.y[i]);
