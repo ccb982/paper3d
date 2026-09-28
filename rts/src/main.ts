@@ -322,6 +322,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           for (const m of sq.members.values()) { sh += m.hp; sm += m.maxHp; }
           const cv = squadCores?.viewOf(sq.id);
           out.push({ id: sq.id, leaderUid: sq.leaderUid, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties),
+            full: sq.members.size,   // ★ §3.G：满编（存活占比判据）
             hpRatio: sm > 0 ? sh / sm : 1,
             phase: cv?.phase, atom: cv?.atom, progress: cv?.progress, stillS: cv?.stillS });
         }
@@ -369,6 +370,13 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       creation: () => swarm.data.combatCreationPort(),
       posture: () => swarm.data.postureP,
       assault: () => swarm.data.battlePosture === 'assault',   // ★ 总攻：强制全体到舰
+      // ★ §3.G：被击检测（命中窗 = squad alert 窗；与判官豁免同源 recentHits）
+      underAttack: (id: number) => {
+        const t = swarm.recentHits.get(id);
+        return t !== undefined && simNow() - t <= AUTONOMY.SQUAD_ALERT_S;
+      },
+      // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
+      clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
       blockedAt: (x, z) => swarm.data.blockedAt(x, z),   // 总攻目标吸附用
       agents: () => {   // ★ 池代理位置（卡死判官在册用）
         const p = swarm.pool; const out: { uid: number; x: number; z: number }[] = [];

@@ -28,6 +28,7 @@ import { FlyerManager } from './FlyerManager';
 import { EngineerManager, type EngineerPort } from './EngineerManager';
 import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { releaseAt } from '../PostureFn';
+import { coverProtects } from '../FortifyPlanner';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -42,6 +43,8 @@ export interface LiveSquad {
   alive: number;
   /** 整队血量比（HUD/账本用；命令侧不消费） */
   hpRatio?: number;
+  /** ★ 满编人数（§3.G 存活占比判据） */
+  full?: number;
   /** 队长核执行状态（HUD/判官用；命令侧只读不改） */
   phase?: string;
   atom?: string;
@@ -73,6 +76,10 @@ export interface LiveView {
   agents?(): readonly { uid: number; x: number; z: number }[];
   /** 卡死豁免（驻守/交战…） */
   exemptOf?(uid: number): string | null;
+  /** ★ §3.G：该队是否近期被击（命中窗 = squad alert 窗） */
+  underAttack?(squadId: number): boolean;
+  /** ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing） */
+  clampRing?(x: number, z: number): { x: number; z: number };
   /** 计时销毁/卡死回收落地 */
   retire?(uid: number, why: string): boolean;
   /** 第一波已发（波次状态） */
@@ -111,6 +118,24 @@ export class EngineBridge {
   private static readonly PLAN_MOVE_TIMEOUT = 25; // 单段安全超时（秒）
   private static readonly HOLD_R = 8;             // 到达判定（=队长到位口径）
 
+  /** ★ §3.C 总攻掩护施工（用户定 2026-09-29）：工兵 → 保护对象（远程队）/ 动态建造点 / 已建点 */
+  private readonly engineerWard = new Map<number, number>();
+  private readonly wardSpot = new Map<number, { x: number; z: number }>();
+  private readonly wardBuilt = new Map<number, { x: number; z: number }>();
+
+  /** ★ §3.G 工兵保护-支援（用户定 2026-09-29；第一波之后启用） */
+  private readonly protectorOf = new Map<number, number>();          // 工兵队 → 保护队
+  private readonly supportOf = new Map<number, number>();            // 工兵队 → 支援队
+  private readonly switchAt = new Map<number, number>();             // 换保护滞回
+  private readonly protG = new Map<number, { x: number; z: number }>();  // 保护点已发位置
+  private readonly woundAt = new Map<number, number>();              // 最近被打时刻
+  private readonly retreatT = new Map<number, { x: number; z: number }>(); // 后撤目标缓存
+  private static readonly PROTECT_SWITCH_S = 5;    // 换保护冷却（秒）
+  private static readonly PROTECT_G_MOVE = 8;      // 保护点重发阈值（米）
+  private static readonly RETREAT_DIST = 30;       // 后撤距离（米）
+  private static readonly RETREAT_REFRESH_D = 6;   // 后撤目标漂移重算阈值（米）
+  private static readonly SUPPORT_RELEASE_S = 8;   // 威胁解除后支援归建（秒）
+
   /** 波次/放行（决策源状态；releaseCap 仍走账本） */
   private wave1Sent = false;
   private finalSent = false;
@@ -148,7 +173,12 @@ export class EngineBridge {
     this.melee = new MeleeManager(this.squads, creationOf);
     this.ranged = new RangedManager(this.squads, creationOf);
     this.flyer = new FlyerManager(this.squads, creationOf);
-    this.engineer = new EngineerManager(this.squads, () => this.live.engineer?.() ?? null);
+    this.engineer = new EngineerManager(this.squads, () => {
+      const p = this.live.engineer?.() ?? null;
+      if (!p) return null;
+      // ★ §3.C：给工兵管理器接上"保护对象建造点"（引擎查询；非保护态返回 null → 走原查询）
+      return { ...p, wardSpot: (id: number) => this.wardSpotOf(id), wardCoverDone: (id: number, x: number, z: number) => this.wardCoverDone(id, x, z), wardOf: (id: number) => this.wardOf(id) };
+    });
     this.core = new EngineCore({
       perceive: (now) => this.perceive(now),
       situation: (now) => this.situation(now),
@@ -309,6 +339,7 @@ export class EngineBridge {
   /** 管理器只编成/补兵（架构第 9 条；ctx = 只读输入） */
   private decide(now: number): void {
     if (this.directMode) return;
+    this.updateWards();   // §3.C：先算保护对象建造点（管理器本拍取用）
     const ctx = { pos: this.pos, now };
     this.melee.sync();
     this.ranged.sync();
@@ -332,6 +363,7 @@ export class EngineBridge {
     if (!ship) return;
     const assault = this.live.assault?.() === true;
     const assaultT = assault ? this.shipSidePoint(ship.x, ship.z) : null;
+    const tactical = this.tacticalPlan(now);
     let issued = 0;
 
     for (const rec of [...this.squads.all()]) {
@@ -349,8 +381,9 @@ export class EngineBridge {
         continue;
       }
 
-      // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）
-      if (assault && assaultT) {
+      // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）；
+      //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）
+      if (assault && assaultT && !tactical.has(rec.id) && rec.role !== 'engineer') {
         const same = cur && cur.order.state === 'assault' && cur.order.kind === 'patrol'
           && Math.hypot(cur.order.target.x - assaultT.x, cur.order.target.z - assaultT.z) <= 1;
         if (!same) {
@@ -358,6 +391,14 @@ export class EngineBridge {
         }
         continue;
       }
+
+      // ②.5 ★ §3.G 保护/支援/后撤（只产标签；优先于工活与兜底）
+      const tac = tactical.get(rec.id);
+      if (tac) {
+        if (!tac.keep && this.send(rec.id, tac.state, tac.target, now, { kind: tac.kind, force: tac.force })) issued++;
+        continue;
+      }
+      const stale = cur?.order.kind === 'protect' || cur?.order.mission === 'build';
 
       // ③ 工兵活源（纯数据）：march 到施工点；到点/无活 → 落唯一兜底
       if (rec.role === 'engineer') {
@@ -373,6 +414,7 @@ export class EngineBridge {
       }
 
       // ④ 唯一兜底 = 行军 ↔ 巡逻交替（定稿第 8 条）
+      if (stale) this.plan.delete(rec.id);   // 旧保护/施工令 → 重置计划，首段强制接管
       let pl = this.plan.get(rec.id);
       if (!pl) { pl = { mode: 'patrol', x: sp.x, z: sp.z, until: now }; this.plan.set(rec.id, pl); }
       if (pl.mode === 'move') {
@@ -403,13 +445,209 @@ export class EngineBridge {
           const same = cur && cur.order.state === 'patrol'
             && Math.hypot(cur.order.target.x - pl.x, cur.order.target.z - pl.z) <= 1;
           if (!same) {
-            if (this.send(rec.id, 'patrol', { x: pl.x, z: pl.z }, now, { kind: 'patrol' })) issued++;
+            if (this.send(rec.id, 'patrol', { x: pl.x, z: pl.z }, now, { kind: 'patrol', force: stale })) issued++;
           }
         }
       }
     }
     this.dbg.issued = issued;
     this.dbg.refreshed = 0;
+  }
+
+  /** ★ §3.C 总攻掩护施工：为每队工兵配对最近远程（sticky；死了才换）+ 产出建造点。
+   *  非总攻 → 清空（工兵走原查询机制）。 */
+  private updateWards(): void {
+    const assault = this.live.assault?.() === true;
+    if (!assault) {
+      if (this.engineerWard.size > 0) { this.engineerWard.clear(); this.wardSpot.clear(); this.wardBuilt.clear(); }
+      return;
+    }
+    const lv = this.live.squads();
+    const byId = new Map<number, LiveSquad>();
+    for (const r of lv) byId.set(r.id, r);
+    for (const r of lv) {
+      if (r.role !== 'engineer') continue;
+      let w = this.engineerWard.get(r.id);
+      if (w !== undefined && !byId.get(w)) w = undefined;
+      if (w === undefined) {
+        let best: number | undefined;
+        let bd = Infinity;
+        for (const q of lv) {
+          if (q.role !== 'ranged') continue;
+          const d = Math.hypot(q.x - r.x, q.z - r.z);
+          if (d < bd - 1e-9 || (Math.abs(d - bd) < 1e-9 && best !== undefined && q.id < best)) { bd = d; best = q.id; }
+        }
+        if (best !== undefined) {
+          w = best;
+          this.engineerWard.set(r.id, w);
+          this.wardSpot.delete(r.id);
+          this.wardBuilt.delete(r.id);
+        }
+      }
+      if (w === undefined) { this.wardSpot.delete(r.id); continue; }
+      const ward = byId.get(w) as LiveSquad;
+      const built = this.wardBuilt.get(r.id);
+      if (built && Math.hypot(ward.x - built.x, ward.z - built.z) <= 6) { this.wardSpot.delete(r.id); continue; }
+      const p = this.wardBuildPoint(ward);
+      if (p) this.wardSpot.set(r.id, p); else this.wardSpot.delete(r.id);
+    }
+  }
+
+  /** 建造点：保护对象前部（朝舰）1.6~3.2m，与舰共线（coverProtects 校验），取首个可站点 */
+  private wardBuildPoint(ward: LiveSquad): { x: number; z: number } | null {
+    const ship = this.pos.ship() ?? this.pos.player();
+    if (!ship) return null;
+    const vx = ward.x - ship.x, vz = ward.z - ship.z;
+    const d = Math.hypot(vx, vz);
+    if (d < 1e-3) return null;
+    const ux = vx / d, uz = vz / d;
+    for (const off of [1.6, 2.4, 3.2]) {
+      const p = { x: ward.x - ux * off, z: ward.z - uz * off };
+      if (!coverProtects(ship, ward, p)) continue;
+      if (this.live.blockedAt?.(p.x, p.z) ?? false) continue;
+      return p;
+    }
+    return null;
+  }
+
+  /** 工兵管理器查询口：本拍建造点（null = 非保护状态 → 原查询机制） */
+  wardSpotOf(id: number): { x: number; z: number } | null {
+    return this.wardSpot.get(id) ?? null;
+  }
+
+  /** 保护对象位置（§3.C：建造自带掩体检测的"保护对象"；null=非保护态） */
+  wardOf(id: number): { x: number; z: number } | null {
+    const w = this.engineerWard.get(id);
+    if (w === undefined) return null;
+    const p = this.pos.squad(w);
+    return p ? { x: p.x, z: p.z } : null;
+  }
+
+  /** 掩护掩体落成回执：抑制同点重复产点（直到保护对象移动 >6m） */
+  wardCoverDone(id: number, x: number, z: number): void {
+    this.wardBuilt.set(id, { x, z });
+    this.wardSpot.delete(id);
+  }
+
+  /** ★ §3.G 工兵保护-支援规则（用户定 2026-09-29）：只产标签（protect/march）。
+   *  生效窗口：**第一波之后的进攻（含总攻）**——第一波前不配对。 */
+  private tacticalPlan(now: number): Map<number, {
+    state: 'protect' | 'march'; target: { x: number; z: number };
+    kind: SquadOrder['kind']; force: boolean; keep?: boolean;
+  }> {
+    const out = new Map<number, { state: 'protect' | 'march'; target: { x: number; z: number };
+      kind: SquadOrder['kind']; force: boolean; keep?: boolean }>();
+    if (!this.wave1Sent) return out;
+    const byId = new Map<number, LiveSquad>();
+    for (const r of this.live.squads()) byId.set(r.id, r);
+    // 死队清关系（I14）
+    for (const eng of [...this.protectorOf.keys()]) {
+      if (!byId.has(eng)) {
+        this.protectorOf.delete(eng); this.protG.delete(eng); this.switchAt.delete(eng);
+        this.woundAt.delete(eng); this.retreatT.delete(eng); this.supportOf.delete(eng);
+      }
+    }
+    for (const eng of [...this.supportOf.keys()]) if (!byId.has(eng)) this.supportOf.delete(eng);
+    for (const eng of byId.values()) {
+      if (eng.role !== 'engineer') continue;
+      // 配对/换队：保护队残（存活≤50% 或 血比<0.5）→ 5s 滞回后换最近健康未占用近战
+      let prot = this.protectorOf.get(eng.id);
+      let protLive = prot !== undefined ? byId.get(prot) : undefined;
+      if ((!protLive || this.worn(protLive))
+        && now - (this.switchAt.get(eng.id) ?? -1e9) >= EngineBridge.PROTECT_SWITCH_S) {
+        const used = new Set<number>();
+        for (const [e2, p2] of this.protectorOf) if (e2 !== eng.id) used.add(p2);
+        for (const p2 of this.supportOf.values()) used.add(p2);
+        const pick = this.pickMelee(eng, byId, used);
+        if (pick !== undefined) {
+          this.protectorOf.set(eng.id, pick);
+          this.switchAt.set(eng.id, now);
+          this.protG.delete(eng.id);
+          prot = pick; protLive = byId.get(pick);
+        }
+      }
+      // 保护令（G=工兵位；漂移 >8m 才重发，稳态 keep）
+      if (prot !== undefined && protLive) {
+        const G = { x: eng.x, z: eng.z };
+        const last = this.protG.get(eng.id);
+        if (!last || Math.hypot(G.x - last.x, G.z - last.z) > EngineBridge.PROTECT_G_MOVE) {
+          this.protG.set(eng.id, G);
+          out.set(prot, { state: 'protect', target: G, kind: 'protect', force: true });
+        } else {
+          out.set(prot, { state: 'protect', target: G, kind: 'protect', force: false, keep: true });
+        }
+      }
+      // 被打（工兵或其保护队）：工兵后撤 + 近战赶来支援
+      const wounded = this.live.underAttack?.(eng.id) === true
+        || (protLive ? this.live.underAttack?.(protLive.id) === true : false);
+      if (wounded) {
+        this.woundAt.set(eng.id, now);
+        const t = this.retreatPoint(eng);
+        if (t) {
+          const cur = this.writer.store.get(eng.id);
+          const same = cur && cur.order.state === 'march'
+            && Math.hypot(cur.order.target.x - t.x, cur.order.target.z - t.z) <= 2;
+          out.set(eng.id, same
+            ? { state: 'march', target: t, kind: 'act', force: false, keep: true }
+            : { state: 'march', target: t, kind: 'act', force: true });
+        }
+        let sup = this.supportOf.get(eng.id);
+        if (sup !== undefined && (!byId.get(sup) || this.worn(byId.get(sup)!))) { this.supportOf.delete(eng.id); sup = undefined; }
+        if (sup === undefined) {
+          const used2 = new Set<number>();
+          for (const p2 of this.protectorOf.values()) used2.add(p2);
+          for (const p2 of this.supportOf.values()) used2.add(p2);
+          const pick2 = this.pickMelee(eng, byId, used2);
+          if (pick2 !== undefined) { this.supportOf.set(eng.id, pick2); sup = pick2; }
+        }
+        if (sup !== undefined) {
+          const t2 = { x: eng.x, z: eng.z };
+          const cur2 = this.writer.store.get(sup);
+          const same2 = cur2 && cur2.order.state === 'march'
+            && Math.hypot(cur2.order.target.x - t2.x, cur2.order.target.z - t2.z) <= 2;
+          out.set(sup, same2
+            ? { state: 'march', target: t2, kind: 'act', force: false, keep: true }
+            : { state: 'march', target: t2, kind: 'act', force: true });
+        }
+      } else if (now - (this.woundAt.get(eng.id) ?? -1e9) >= EngineBridge.SUPPORT_RELEASE_S) {
+        this.supportOf.delete(eng.id);   // 威胁解除 → 支援归建
+      }
+    }
+    return out;
+  }
+
+  /** 残（§3.G）：存活 ≤50% 或 整队血比 <0.5 */
+  private worn(r: LiveSquad): boolean {
+    const full = r.full ?? 0;
+    const aliveRatio = full > 0 ? r.alive / full : 1;
+    return aliveRatio <= 0.5 || (r.hpRatio ?? 1) < 0.5;
+  }
+
+  /** 挑最近、健康、未占用近战（等距取 id 小者；确定性） */
+  private pickMelee(eng: LiveSquad, byId: Map<number, LiveSquad>, used: Set<number>): number | undefined {
+    let best: number | undefined;
+    let bd = Infinity;
+    for (const r of byId.values()) {
+      if (r.role !== 'melee' || used.has(r.id) || this.worn(r)) continue;
+      const d = Math.hypot(r.x - eng.x, r.z - eng.z);
+      if (d < bd - 1e-9 || (Math.abs(d - bd) < 1e-9 && best !== undefined && r.id < best)) { bd = d; best = r.id; }
+    }
+    return best;
+  }
+
+  /** 后撤点：沿 袭击者→工兵 外推 30m（夹环）；漂移 <6m 用缓存 */
+  private retreatPoint(eng: LiveSquad): { x: number; z: number } | null {
+    const p = this.pos.player() ?? this.pos.ship();
+    if (!p) return null;
+    const dx = eng.x - p.x, dz = eng.z - p.z;
+    const d = Math.hypot(dx, dz) || 1;
+    let t = { x: eng.x + (dx / d) * EngineBridge.RETREAT_DIST, z: eng.z + (dz / d) * EngineBridge.RETREAT_DIST };
+    const c = this.live.clampRing?.(t.x, t.z);
+    if (c) t = { x: c.x, z: c.z };
+    const old = this.retreatT.get(eng.id);
+    if (old && Math.hypot(t.x - old.x, t.z - old.z) <= EngineBridge.RETREAT_REFRESH_D) return { x: old.x, z: old.z };
+    this.retreatT.set(eng.id, t);
+    return t;
   }
 
   /** 唯一发令路径：标签+载荷 → OrderWriter → 队长核（ok=false 表示同签名被去重/被稳定门 keep，不重发） */

@@ -20,6 +20,7 @@
 // ============================================================
 
 import { RoleManager, type RoleCtx } from './RoleManager';
+import { coverProtects } from '../FortifyPlanner';
 import type { SquadManager } from './SquadManager';
 import { BUILDER_SQUAD_MAX } from '../SquadTable';
 import { FORTIFY_SECTORS } from '../FortifyPlanner';
@@ -81,6 +82,13 @@ export interface EngineerPort {
   canDig(x: number, z: number): boolean;
   /** 造掩体（真源端口） */
   cover(x: number, z: number, variant: 'cover' | 'wall'): void;
+  /** ★ §3.C 总攻掩护施工（用户定 2026-09-29）：引擎给的**动态建造点**（查询保护对象位置得出）；
+   *  null = 非保护状态（走原查询机制） */
+  wardSpot?(id: number): { x: number; z: number } | null;
+  /** ★ 掩护掩体落成回执（引擎据此抑制同点重复产点，直到保护对象移动） */
+  wardCoverDone?(id: number, x: number, z: number): void;
+  /** ★ 保护对象位置（§3.C；null=非保护状态 → 掩体检测对"工兵自己"） */
+  wardOf?(id: number): { x: number; z: number } | null;
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
   /** 地形脏标记（评分/采样局部重算） */
@@ -144,6 +152,71 @@ export class EngineerManager extends RoleManager {
   }
 
   /** 工兵目标分配 + 施工推进：认区（大队管理器）→ 取件（预约制）→ 复检 → 施工/补兵 */
+  /** ★ 建造 = 独立机制（用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
+   *  到 WORK_R 就计时（不驱动移动）；掩体 `COVER_TIME_S` / 战壕 `TRENCH_TIME_S`（每 2s 一遍 ×5）。
+   *  返回 'done' = 本次件落成（由调用方做"预约释放/落成回执"等位置侧记账）。 */
+  private buildAt(
+    port: EngineerPort, id: number, s: { x: number; z: number },
+    spot: { x: number; z: number }, kind: 'cover' | 'trench', dt: number,
+  ): 'working' | 'done' | 'invalid' {
+    // 未到场：只走位不检测（检测在可施工时生效，避免把"路上的点"误拉黑）
+    if (Math.hypot(s.x - spot.x, s.z - spot.z) > ENGINEER_POLICY.WORK_R) return 'working';
+    // ★★ 建造**自带掩体检测**（用户定 2026-09-29）：要造的掩体必须能保护
+    //    **保护对象**（ward）或**工兵自己**——与舰共线、位于其舰侧前部；
+    //    不达标 → 不施工（返回 invalid，调用方拉黑/换点）。
+    const shipPt = port.ship();
+    if (shipPt) {
+      const ward = port.wardOf?.(id) ?? null;
+      if (ward) {
+        if (!coverProtects(shipPt, ward, spot)) return 'invalid';
+      } else if (!coverProtects(shipPt, s, spot, 1.8, 0.2, 6)) {
+        return 'invalid';   // 工兵自身：站位在掩体后（公差放宽：0.2~6m）
+      }
+    }
+    const t = (this.work.get(id) ?? 0) + dt;
+    this.work.set(id, t);
+    this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);
+    if (kind === 'cover') {
+      if (t < ENGINEER_POLICY.COVER_TIME_S) return 'working';
+      port.cover(spot.x, spot.z, 'cover');
+      port.markDirty(spot.x, spot.z, 12);
+      this.built.add(keyOf(spot.x, spot.z));
+      this.builtOnce.add(id);
+      this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
+      this.work.delete(id); this.digs.delete(id);
+      return 'done';
+    }
+    const canDig = port.canDig(spot.x, spot.z);
+    let digs = this.digs.get(id) ?? 0;
+    const want = Math.min(ENGINEER_POLICY.MAX_DIGS, Math.floor(t / ENGINEER_POLICY.DIG_EVERY_S));
+    const ship = port.ship();
+    while (canDig && digs < want) {
+      // ★ 坑洞朝前（用户定 2026-09-27）：第 2 道起沿**舰方向**每次 2m（壕沟向舰延伸）
+      let dx = spot.x, dz = spot.z;
+      if (digs > 0) {
+        const ux = ship.x - spot.x, uz = ship.z - spot.z;
+        const L = Math.hypot(ux, uz) || 1;
+        const fx = spot.x + (ux / L) * digs * 2;
+        const fz = spot.z + (uz / L) * digs * 2;
+        if (port.canDig(fx, fz)) { dx = fx; dz = fz; }
+      }
+      port.dig(dx, dz);
+      port.markDirty(dx, dz, 16);
+      digs++;
+    }
+    this.digs.set(id, digs);
+    if (!canDig || t >= ENGINEER_POLICY.TRENCH_TIME_S || digs >= ENGINEER_POLICY.MAX_DIGS) {
+      this.built.add(keyOf(spot.x, spot.z));
+      this.builtOnce.add(id);
+      this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
+      this.work.delete(id); this.digs.delete(id);
+      return 'done';
+    }
+    return 'working';
+  }
+
+  /** ★ 施工任务调度（活源）：**位置只告知** → 队长寻路过去 → **建造独立机制**（buildAt）。
+   * 非保护态=原查询；保护态=引擎给保护对象前部点。 */
   assign(ctx: RoleCtx): number {
     const port = this.portOf();
     this.targets.clear();
@@ -241,6 +314,24 @@ export class EngineerManager extends RoleManager {
       if (!s) continue;
       const sec = this.zoneOf.get(id) ?? -1;
       let spot = this.spots.get(id);
+      // ★★ 保护状态（总攻掩护施工；用户定 2026-09-29）：建造点 = 引擎查询保护对象位置得出；
+      //    施工**独立像开火**（到范围就计时），不走预约/黑名单/原查询。
+      const ws = port.assault?.() && port.wardSpot ? port.wardSpot(id) : null;
+      if (ws) {
+        spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
+        this.spots.set(id, spot);
+        const rw = this.buildAt(port, id, s, ws, 'cover', dt);
+        if (rw === 'done') {
+          port.wardCoverDone?.(id, ws.x, ws.z);
+          this.spots.delete(id);
+          this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
+        } else if (rw === 'invalid') {
+          this.spots.delete(id);   // 不达标 → 丢点（引擎按保护对象位置重算）
+        }
+        this.targets.set(id, { x: ws.x, z: ws.z });
+        working++;
+        continue;
+      }
       // ---- 每拍复检（件必须仍合法；用户定 2026-09-26） ----
       if (spot) {
         const k = keyOf(spot.x, spot.z);
@@ -317,50 +408,21 @@ export class EngineerManager extends RoleManager {
         idle++;
         continue;
       }
-      // ---- 施工：队长到件 3m 内才计时；掩体 6s / 战壕 10s（每 2s 挖一遍） ----
-      if (Math.hypot(s.x - spot.x, s.z - spot.z) <= ENGINEER_POLICY.WORK_R) {
+      // ---- 施工：统一独立机制（位置来源=查询/保护对象；本机制只负责"到范围计时"） ----
+      {
         // ★ 掩体为主（用户定 2026-09-26）：总攻全掩体；平时 4 件里 3 掩体 / 1 战壕
         const kind: 'cover' | 'trench' = port.assault() || (this.built.size % 4) !== 3 ? 'cover' : 'trench';
-        const t = (this.work.get(id) ?? 0) + dt;
-        this.work.set(id, t);
-        this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);
-        if (kind === 'cover') {
-          if (t >= ENGINEER_POLICY.COVER_TIME_S) {
-            port.cover(spot.x, spot.z, 'cover');
-            port.markDirty(spot.x, spot.z, 12);
-            this.built.add(keyOf(spot.x, spot.z));
-            this.builtOnce.add(id);
-            this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
-            this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
-            this.dbg.last = `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`;
-          }
-        } else {
-          const canDig = port.canDig(spot.x, spot.z);
-          let digs = this.digs.get(id) ?? 0;
-          const want = Math.min(ENGINEER_POLICY.MAX_DIGS, Math.floor(t / ENGINEER_POLICY.DIG_EVERY_S));
-          const ship = port.ship();
-          while (canDig && digs < want) {
-            // ★ 坑洞朝前（用户定 2026-09-27）：第 2 道起沿**舰方向**每次1 2m（壕沟向舰延伸）
-            let dx = spot.x, dz = spot.z;
-            if (digs > 0) {
-              const ux = ship.x - spot.x, uz = ship.z - spot.z;
-              const L = Math.hypot(ux, uz) || 1;
-              const fx = spot.x + (ux / L) * digs * 2;
-              const fz = spot.z + (uz / L) * digs * 2;
-              if (port.canDig(fx, fz)) { dx = fx; dz = fz; }
-            }
-            port.dig(dx, dz);
-            port.markDirty(dx, dz, 16);
-            digs++;
-          }
-          this.digs.set(id, digs);
-          if (!canDig || t >= ENGINEER_POLICY.TRENCH_TIME_S || digs >= ENGINEER_POLICY.MAX_DIGS) {
-            this.built.add(keyOf(spot.x, spot.z));
-            this.builtOnce.add(id);
-            this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
-            this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
-            this.dbg.last = `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
-          }
+        const r = this.buildAt(port, id, s, spot, kind, dt);
+        if (r === 'done') {
+          this.releaseFor(id); this.spots.delete(id);
+          this.dbg.last = kind === 'cover'
+            ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
+            : `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
+        } else if (r === 'invalid') {
+          // 自带掩体检测不过 → 拉黑换点（防同点复活）
+          this.black.set(keyOf(spot.x, spot.z), now + ENGINEER_POLICY.BLACK_TTL_S);
+          this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
+          this.dbg.last = `#${id} 掩体检测不过 @${spot.x | 0},${spot.z | 0} → 换点`;
         }
         working++;
       }

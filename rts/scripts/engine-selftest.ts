@@ -22,7 +22,7 @@ import { EngineerManager } from '../src/systems/swarm/engine/EngineerManager.ts'
 import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerManager.ts';
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
-import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
+import { FortifyPlanner, FORTIFY_SECTORS, coverProtects } from '../src/systems/swarm/FortifyPlanner.ts';
 import { SectorBuilder, SECTOR_COUNT } from '../src/systems/swarm/tactics/SectorBuilder.ts';
 import { SquadCreation, type CreationPort } from '../src/systems/swarm/engine/SquadCreation.ts';
 import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
@@ -950,6 +950,99 @@ console.log('[5m] 侧向让路：对向碰撞 → 侧向力相反（且径向仍
   ok((p.x[0] as number) < -0.001 && (p.x[1] as number) > 0.001, '★ 径向分量仍等大反向（解重叠）');
 }
 
+// ---------- §3.G 工兵保护-支援（用户定 2026-09-29） ----------
+console.log('[12m] §3.G：保护配对 / 残则换 / 被打后撤+支援');
+{
+  const emitted: SquadOrder[] = [];
+  let hitEng = false;
+  const mk = (id: number, role: 'engineer' | 'melee', x: number, z: number, alive: number, full: number) =>
+    ({ id, role, x, z, alive, full, hpRatio: 1 });
+  const eng = mk(10, 'engineer', 100, 0, 3, 3);
+  const A = mk(11, 'melee', 90, 0, 12, 12);
+  const B = mk(12, 'melee', 110, 0, 12, 12);
+  const C = mk(13, 'melee', 170, 0, 12, 12);
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    posture: () => 0.5,
+    squads: () => [eng, A, B, C],
+    underAttack: (id: number) => hitEng && id === 10,
+    clampRing: (x: number, z: number) => ({ x, z }),
+    emit: (o: SquadOrder) => emitted.push(o),
+  };
+  const br = new EngineBridge(live);
+  br.tick(0.6, 1);
+  const p1 = br.writer.store.get(11)?.order;
+  ok(p1?.state === 'protect' && Math.abs(p1.target.x - 100) < 1, '★ 创建即配保护（最近近战 A；G=工兵位）');
+  A.alive = 5;   // 12 → 5 ≤ 50% = 残
+  br.tick(0.6, 8);
+  const p2 = br.writer.store.get(12)?.order;
+  ok(p2?.state === 'protect' && Math.abs(p2.target.x - 100) < 2, '★ 保护队残 → 5s 内换最近健康近战 B');
+  hitEng = true;
+  br.tick(0.6, 9);
+  const engO = br.writer.store.get(10)!.order;
+  ok(engO.state === 'march' && engO.target.x > 125 && engO.target.x <= 131, '★ 工兵被打 → march 远离袭击者 30m');
+  const sup = br.writer.store.get(13)?.order;
+  ok(sup?.state === 'march' && Math.hypot(sup.target.x - 100, sup.target.z) < 2, '★ 支援：最近健康近战 C 赶来工兵位');
+  hitEng = false;
+  br.tick(0.6, 20);
+  const rel = (br as unknown as { supportOf: Map<number, number> }).supportOf;
+  ok(rel.size === 0, '★ 威胁解除 → 支援关系解除（归建兜底）');
+}
+
+// ---------- I15 掩体检测（§3.C；用户定 2026-09-29） ----------
+console.log('[12n] coverProtects：与舰共线 + 保护对象前部');
+{
+  const ship = { x: 200, z: 0 };
+  const u = { x: 100, z: 0 };
+  ok(coverProtects(ship, u, { x: 101.6, z: 0 }), '舰侧正前 1.6m → 过（挡舰→单位弹道）');
+  ok(!coverProtects(ship, u, { x: 98.4, z: 0 }), '保护对象背后 → 不过');
+  ok(!coverProtects(ship, u, { x: 101.6, z: 3 }), '侧偏 3m（不与舰共线）→ 不过');
+  ok(coverProtects(ship, u, { x: 101, z: 1 }), '共线容差内（垂距 1.0）→ 过');
+  ok(!coverProtects(ship, u, { x: 130, z: 0 }), '离保护对象太远（>4.5m）→ 不过');
+}
+
+// ---------- §3.C 掩护施工（用户定 2026-09-29） ----------
+console.log('[12o] §3.C 掩护施工：查询保护对象位置 → 建造点（前部共线）');
+{
+  const mk = (id: number, role: 'engineer' | 'ranged', x: number, z: number) =>
+    ({ id, role, x, z, alive: 6, full: 6, hpRatio: 1 });
+  const eng = mk(10, 'engineer', 100, 0);
+  const rng = mk(20, 'ranged', 120, 0);
+  const port = {
+    band: () => ({ rLo: 0, rHi: 60 }),
+    ship: () => ({ x: 200, z: 0 }),
+    needAt: () => 1,
+    canReach: () => true,
+    assault: () => true,
+    noNewBuild: () => false,
+    aliveOfSquad: () => 6,
+    refreshSector: () => {},
+    pickSpot: () => null,
+    canDig: () => true,
+    cover: () => {},
+    dig: () => {},
+    markDirty: () => {},
+  };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    assault: () => true,
+    squads: () => [eng, rng],
+    engineer: () => port as never,
+    emit: () => { /* */ },
+  };
+  const br = new EngineBridge(live);
+  br.tick(0.6, 1);
+  const wp = br.wardSpotOf(10);
+  ok(!!wp && Math.abs(wp.x - 121.6) < 0.6 && Math.abs(wp.z) < 0.01, '★ 建造点 = 保护对象前部 1.6m（朝舰、与舰共线）');
+  const o = br.writer.store.get(10)?.order;
+  ok(o?.state === 'march' && o.mission === 'build', '★ 保护状态：工兵 march（寻路）到建造点');
+  br.wardCoverDone(10, wp!.x, wp!.z);
+  br.tick(0.6, 2);
+  ok(br.wardSpotOf(10) === null, '★ 掩体已成且对象未移动 → 抑制重复产点');
+}
+
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
 console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看门狗 / 补兵）');
 {
@@ -1142,12 +1235,11 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
   const o3 = br.writer.store.get(3)!.order;
-  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o3.kind === 'patrol' && o1.state === 'assault', '★ 总攻：全兵种标签=assault（到舰告终）');
+  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o1.state === 'assault' && o2.state === 'assault' && o3.state !== 'assault', '★ 总攻：战斗兵种=assault；工兵系豁免（§3.G）');
   // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
   ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10
-    && Math.hypot(o2.target.x - 200, o2.target.z) <= 10
-    && Math.hypot(o3.target.x - 200, o3.target.z) <= 10,
-    '★ 总攻：全体目标 = 舰旁可站点（≤10m；强制寻路到舰）');
+    && Math.hypot(o2.target.x - 200, o2.target.z) <= 10,
+    '★ 总攻：战斗兵种目标 = 舰旁可站点（≤10m）');
   br.writer.store.set(2, {
     order: { kind: 'garrison', source: 'engine', target: { x: 1, z: 1 }, seq: 0, ttl: 0 },
     phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
