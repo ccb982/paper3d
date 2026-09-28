@@ -45,11 +45,10 @@ export class SwarmLedger {
   /** ★ M2：日节律放行上限（指挥器每拍按 releaseAt(t01) 写入；早间只放少量，波峰放宽） */
   releaseCap = 0;
 
-  /** 已消耗的当日计划额度（用户定 2026-09-27：**累计生成**——回收/离场**不退款**）。
-   *  旧口径扣 recalled/removed → 同一份额度被反复生成（"创建又回收"的莫名其妙churn）：
-   *  total=59 而累计 spawned=113。现改为累计上限：当日生成到上限即停。 */
+  /** 已用配额 = 累计生成 − **回收退款**（回收/清场归还编制；击杀不退款 → 消耗配额）。
+   *  等价：deployed = alive + kills。 */
   get deployed(): number {
-    return Math.max(0, this.spawned);
+    return Math.max(0, this.spawned - this.recalled - this.removed);
   }
 
   /** 有效放行上限 = min(当日计划, 日节律放行) */
@@ -63,7 +62,11 @@ export class SwarmLedger {
     return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.cap() - this.deployed);
   }
 
-  /** 生成闸门（唯一判据；生成口在 SwarmSystem.spawn） */
+  /** ★ 生成闸门（唯一判据；用户定 2026-09-27 两值口径）：
+   *  · **配额**（total，按玩家实力等算好的当日总量）：**击杀消耗**（`deployed=alive+kills`）；
+   *    击杀吃满配额 = **兵力耗尽** → 停（回收/清场**退款**，所以回收后**再补**）；
+   *  · **上限**（cap = min(total, releaseCap)，随事态 p 变）：非总攻维持"场上=上限"；
+   *    总攻 p≥0.80 → releaseAt=1.0 → cap=total → **全部配额放光**。 */
   canSpawn(): boolean {
     return this.total <= 0 || this.deployed < this.cap();
   }

@@ -242,10 +242,24 @@ console.log('[4b] 账本口径：spawned = alive+kills+recalled+removed / 回收
   const threat2 = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
   led2.beginDay(threat2, 12, 0);
   led2.releaseCap = led2.total;
-  led2.noteSpawn(led2.total);
-  ok(!led2.canSpawn(), '★ 生成到当日总数 → 停');
+  // 非总攻：维持"场上=上限"；回收退款 → 再补
+  led2.releaseCap = Math.max(1, Math.floor(led2.total / 2));
+  led2.noteSpawn(led2.releaseCap);
+  ok(!led2.canSpawn(), '★ 场上到上限（非总攻）→ 停');
   led2.noteRecall(1, 'stuck');
-  ok(!led2.canSpawn(), '★ 回收**不退款**（旧口径会再放一个 → "创建又回收"churn）');
+  ok(led2.canSpawn(), '★ 回收退款 → **再补**（维持上限）');
+  led2.noteSpawn(1);
+  // 总攻：cap=total → 放光全部配额（deployed = 生成 − 回收退款）
+  led2.releaseCap = led2.total;
+  led2.noteSpawn(Math.max(0, led2.total - led2.deployed));
+  ok(led2.deployed >= led2.total && !led2.canSpawn(), '★ 总攻 → 放光全部配额');
+  // 总攻期"卡死回收→再补"照常（回收退款）
+  led2.noteRecall(1, 'stuck');
+  ok(led2.canSpawn(), '★ 总攻期：卡死回收 → 再补（机制正常）');
+  led2.noteSpawn(1);
+  // 击杀消耗配额：deployed=alive+kills 不变 → 吃满后不再补
+  led2.reportCasualty(Math.max(0, led2.alive));
+  ok(!led2.canSpawn(), '★ 兵力耗尽（击杀吃满配额）→ 不再补');
 
   const threat = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
   led.beginDay(threat, 12, 3);
