@@ -26,6 +26,7 @@ import { HoleTable } from '../HoleTable';
 import { samplerFor } from '../../../services/map/TerrainSampler';
 import { DANGER } from '../SwarmDanger';
 import { PassTable } from '../nav/PassTable';
+import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
 import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
 import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
@@ -168,8 +169,9 @@ export class SwarmData {
   }
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
-  /** ★ N0 可行性表（迷宫抽象；地形纯函数、建一次） */
+  /** ★ N0 可行性表（迷宫抽象）；★ 随地形走（用户定 2026-09-27）：keeper 负责标脏/节流重建 */
   readonly passTable = new PassTable();
+  private readonly passKeeper = new PassTableKeeper();
   /** ★ §13.1 编制比例（占比统计 + 缺口；只读） */
   readonly roster = new RosterController();
   /** ★ §13.3 工事规划（最危险区域选择） */
@@ -220,7 +222,8 @@ export class SwarmData {
     this.postCache.clear();     // ★ 现场有利位置缓存复位
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.scoringSrc = null;
-    this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（地形纯函数；一次构建，工事不重建）
+    this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（初始构建）
+    this.passKeeper.bind(cx, cz, radius);
     this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
@@ -282,6 +285,7 @@ export class SwarmData {
     this.fortifyAccum += dt;
     if (this.fortifyAccum >= 0.5) {
       this.fortifyAccum = 0;
+      this.passKeeper.flush(this.passTable, RasterMap.current);   // ★ 表随地形走（0.5s 拍）
       if (this.stage === 'S1' && this.lastDayRaw >= 0.45) this.stage = 'S2';   // 第一波后停新增（就绪）
       const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事）
       // ★ 前推（§13.4）：8 区全达标才推进；每拍 ≤0.5m；封顶 frontP×120m（事态允许）
@@ -753,6 +757,8 @@ export class SwarmData {
     this.holeMask.refresh(x, z, r + 12);                        // ★ L2 工事源（1m 深度场；评分查询时直读 → 挖过即战壕）
     const raster = RasterMap.current;
     if (raster) samplerFor(raster).invalidateArea(x, z, r + 6); // ★ 统一采样缓存同步失效
+    this.passKeeper.markDirty();   // ★ 表随地形走（0.5s 拍重建；否则路线穿过新坑 = 死锁）
+    this.scoreStamp++;             // ★ 代次戳：路线"表代次变化"事件 → 自动重算
   }
 
   /** ★ 地形脏区（模式层挖改/建造都调这个）：noteTerrainDig 单入口别名 */

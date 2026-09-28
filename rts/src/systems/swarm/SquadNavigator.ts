@@ -389,7 +389,10 @@ export class SquadNavigator {
           state.corridor = (this.table && this.table.ready)
             ? viaClimbPoints(this.table, this._from.x, this._from.z, seg)
             : seg;
-          this.applyCred(state, state.corridor, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
+          // ★ 用户定 2026-09-27：**凭证属于路线**——新路线必须先清旧票（新路有坡点再由 applyCred 换发）。
+          //   否则旧 climbCred 滞留 → 队长 `needClimb=true` 等爬、整队原地站死（残余被收根因之一）。
+          state.climbCred = undefined;
+          this.applyCred(state, state.corridor, arrivedNow);   // ★ 凭证生命周期（新路有坡点 → 换票）
           state.followIdx = this.nearestIdx(state.corridor, this._from.x, this._from.z); state.tgtIdx = state.followIdx;   // ★ 从最近点起步（不回路径起点）
           state.pathGoalX = tgt.x;
           state.pathGoalZ = tgt.z;
@@ -413,7 +416,8 @@ export class SquadNavigator {
       this.dbg.feasOk++;
       // 表图 BFS 可行路线（S2：加密 ≤10m + 逐段 climb；覆盖式，命令对象只读）
       state.corridor = feasOut;
-      this.applyCred(state, feasOut, arrivedNow);   // ★ 凭证生命周期（有坡点换票/无坡点保留/到达才回收）
+      state.climbCred = undefined;   // ★ 新路线必清旧票（同上；凭证属于路线，不跨路线继承）
+      this.applyCred(state, feasOut, arrivedNow);   // ★ 凭证生命周期（新路有坡点 → 换票）
       state.followIdx = 0; state.tgtIdx = 0;   // ★ 新走廊 → 路线游标归零
       state.pathGoalX = tgt.x;
       state.pathGoalZ = tgt.z;
