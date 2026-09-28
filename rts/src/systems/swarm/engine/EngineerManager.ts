@@ -28,8 +28,9 @@ import { FORTIFY_SECTORS } from '../FortifyPlanner';
 export const ENGINEER_POLICY = {
   /** 到件半径（米）：队长到件以内才计时 */
   WORK_R: 3,
-  /** 掩体施工时长（秒） */
-  COVER_TIME_S: 6,
+  /** ★ 掩体施工时长（秒）= **真实建造时长**（用户定 2026-09-27：此前写死 6s，远超 0.6s 建造动画
+   *  → 工兵"造得很快却站着"，净位移 <4m 被判官按卡死收）。单源 = COVER_DEPLOY_BUILD_TIME。 */
+  COVER_TIME_S: 0.8,
   /** 战壕施工时长（秒） */
   TRENCH_TIME_S: 10,
   /** 战壕每遍挖掘间隔（秒；每遍 ≈0.2m） */
@@ -284,13 +285,25 @@ export class EngineerManager extends RoleManager {
         }
       }
       // ---- 取件（建造位置查询；预约制 + 黑名单过滤） ----
-      if (!spot && sec >= 0 && (!port.noNewBuild() || !this.builtOnce.has(id))) {
-        const pick = port.pickSpot(sec, band.rLo, band.rHi, (x, z) => port.canReach(id, x, z),
-          (x, z) => {
-            const k = keyOf(x, z);
-            return this.built.has(k) || this.reserved.has(k) || (this.black.get(k) ?? 0) > now;
-          },
-          { x: s.x, z: s.z });   // ★ 朝前方：优先比队位更靠舰的点（进攻性工事）
+      if (!spot && sec >= 0) {
+        const exclude = (x: number, z: number): boolean => {
+          const k = keyOf(x, z);
+          return this.built.has(k) || this.reserved.has(k) || (this.black.get(k) ?? 0) > now;
+        };
+        const canReach = (x: number, z: number): boolean => port.canReach(id, x, z);
+        // ★ noNewBuild（事态 0.45 后停新增）只约束**常规带**；扩带兜底不受限（用户定 2026-09-27：
+        //   "没件就往舰船方向继续造，或者往防区外造"——工兵不许持令站桩发呆被判官收）。
+        const canNew = !port.noNewBuild() || !this.builtOnce.has(id);
+        let pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
+        if (!pick) {
+          const tryBand = (lo: number, hi: number): { x: number; z: number; score: number } | null => {
+            if (hi - lo < 6) return null;
+            port.refreshSector?.(s.x, s.z, lo, hi);
+            return port.pickSpot(sec, lo, hi, canReach, exclude, { x: s.x, z: s.z });
+          };
+          pick = tryBand(Math.max(10, band.rLo - 24), band.rLo)
+            ?? tryBand(band.rHi, band.rHi + 36);
+        }
         if (pick) {
           spot = { x: pick.x, z: pick.z, score: pick.score, at: now };
           this.spots.set(id, spot);
