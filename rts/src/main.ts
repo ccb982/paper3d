@@ -464,7 +464,22 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       {
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
-        patrolNext: (x, z, ax, az, r, leg) => swarm.patrolNext(x, z, ax, az, r, leg),
+        patrolNext: (id, x, z, ax, az, r, leg) => {
+          // ★ 空中队长巡腿=**直航环点**（用户定 2026-09-27）：地面可行性 BFS 对飞行队返回 null
+          //   → 巡腿回退锚点=站桩（"到上限却没巡逻"的飞行爆炸怪根因之一）。
+          const sq = swarm.squads.get(id);
+          if (sq) {
+            let air = false;
+            const p = swarm.pool;
+            for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === sq.leaderUid) { air = p.isAir[i] === 1; break; }
+            if (!air) for (const e of enemies) if (e.swarmUid === sq.leaderUid) { air = e.isAir; break; }
+            if (air) {
+              const base = Math.atan2(z - az, x - ax) + (leg >= 0 ? Math.PI / 2 : -Math.PI / 2);
+              return { x: ax + Math.cos(base) * r, z: az + Math.sin(base) * r };
+            }
+          }
+          return swarm.patrolNext(x, z, ax, az, r, leg);
+        },
         coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
         leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),

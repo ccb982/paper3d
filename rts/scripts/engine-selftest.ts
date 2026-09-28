@@ -1088,9 +1088,11 @@ console.log('[12l] 到事态上限的守原地 → 就地巡逻（defend 带 pat
   const mgr = (br as unknown as { melee: { assign: (c: unknown) => void; targets: Map<number, { x: number; z: number }> } }).melee;
   mgr.assign = () => { /* 不产决策 */ };
   mgr.targets.clear();
-  br.tick(1, 1);
+  // 先压一条低进度的旧令（正常情况下稳定门不允许换）→ 到上限必须能**立刻切入巡逻**
+  br.writer.issue(6, { kind: 'act', source: 'engine', target: { x: 0, z: 0 }, threat: { x: 0, z: 0 }, seq: 1, ttl: 0 }, { now: 1, force: true });
+  br.tick(1, 2);
   const o = br.writer.store.get(6)?.order;
-  ok(!!o && o.kind === 'defend' && o.mission === 'patrol', '★ 到上限 → defend 带 patrol（不再站桩被收）');
+  ok(!!o && o.kind === 'defend' && o.mission === 'patrol', '★ 到上限 → defend 带 patrol（过渡强制，不等 25s 站桩）');
 }
 
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------

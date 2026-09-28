@@ -25,7 +25,7 @@ export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 /** 队长驱动端口（执行落地；由接线层注入） */
 export interface SquadDrivePorts {
   /** ★ 巡逻点查询（用户口径 2026-09-25：查询可行移动目标点 → 短寻路来回走）；无可行点 → null */
-  patrolNext?(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
+  patrolNext?(id: number, x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
   /** ★ 掩体检测（保护/驻守取目标用）：(x,z) 是否被 (tx,tz) 方向的掩体挡住 */
   coverFrom?(tx: number, tz: number, x: number, z: number): boolean;
   /** 长/短寻路求解（走廊写入 state） */
@@ -129,7 +129,7 @@ export class SquadCore {
       let pg = this.patrolGoal;
       if (!pg || Math.hypot(pg.x - lx, pg.z - lz) <= ARRIVE_R) {
         const R = 18;   // 巡逻半径（米；锚点附近来回）
-        pg = port.patrolNext?.(lx, lz, ax0, az0, R, this.patrolLeg) ?? { x: ax0, z: az0 };
+        pg = port.patrolNext?.(this.id, lx, lz, ax0, az0, R, this.patrolLeg) ?? { x: ax0, z: az0 };
         this.patrolGoal = pg;
         this.patrolLeg = -this.patrolLeg;
       }

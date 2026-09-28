@@ -602,7 +602,12 @@ export class EngineBridge {
       const atLimitDefend = force === null && final.source === 'situation' && final.kind === 'defend';
       const patrol = planMission || atLimitDefend || (final.source === 'routine' && arrived
         && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined);
-      pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined, force: planSwitch });
+      // ★ 入巡过渡强制（用户定 2026-09-27）：从旧令切到"到上限巡逻"要立刻生效（否则被稳定门压着站桩 25s）；
+      //   就位后走常规同签名去重，不再每拍强制。
+      const curIsLimitPatrol = cur !== undefined && cur.order.kind === 'defend'
+        && (cur.order.mission ?? '') === 'patrol';
+      pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined,
+        force: planSwitch || (atLimitDefend && !curIsLimitPatrol) });
     }
     // ---- pass ②：统一校验链（①环 ②同兵种密度=本拍真实目标全局解 ③可达）→ 唯一发令器 ----
     let issued = 0, refreshed = 0;
