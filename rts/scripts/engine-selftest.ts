@@ -1278,5 +1278,33 @@ console.log('[12g] 段进循环：向舰推进一段 → 巡逻 → 再推进');
   ok(o3.kind === 'act' && o3.target.x > o1.target.x + 5, '★ 巡逻到期 → 再推进一段（更靠舰）');
 }
 
+// ---------- 段进上限（用户定 2026-09-27）：到事态活动带前缘 → 不推进，就地巡逻 ----------
+console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就地巡逻，不再向舰推进');
+{
+  const sq = { id: 2, role: 'melee' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [sq],
+    emit: () => { /* */ },
+    canReach: () => true,
+  };
+  const br = new EngineBridge(live);
+  br.shadow = true;
+  br.dbg.ringMin = 95;    // 活动带前缘：距舰不得 < 95（当前 d=100 → 只允许前进 5m）
+  br.dbg.ringMax = 200;
+  br.tick(0.6, 1);
+  const a1 = br.writer.store.get(2)!.order;
+  ok(a1.kind === 'act' && Math.abs(a1.target.x - 105) < 1, '★ 前缘 95：首段只推进到前缘（不越带）');
+  sq.x = a1.target.x; sq.z = a1.target.z; sq.phase = 'done';
+  br.tick(0.6, 12);   // 段到 → 巡逻（锚在 105）
+  const a2 = br.writer.store.get(2)!.order;
+  ok(a2.mission === 'patrol', '★ 段到 → 转巡逻');
+  br.tick(0.6, 25);   // 巡逻到期 → advancePoint 应因前缘返回 null → 续巡逻、不推进
+  const a3 = br.writer.store.get(2)!.order;
+  ok(a3.mission === 'patrol' && Math.abs(a3.target.x - 105) < 1.5,
+    '★ 到前缘：advancePoint=null → 就地巡逻（不再向舰推进）');
+}
+
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);
 if (fail > 0) process.exit(1);

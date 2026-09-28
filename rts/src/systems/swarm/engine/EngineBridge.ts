@@ -309,17 +309,21 @@ export class EngineBridge {
     return this.timers.canFire(uid);
   }
 
-  /** ★ 下一段推进点（用户定 2026-09-27）：从当前位置朝舰 PLAN_ADV 米；可达优先（30→15→8），都不行 → null */
+  /** ★ 下一段推进点（用户定 2026-09-27）：从当前位置朝舰 PLAN_ADV 米；可达优先（30→15→8），都不行 → null。
+   *  ★ 事态活动带前缘（用户定 2026-09-27，**与 p 值无关、只看范围**）：再向前（朝舰）越过内缘 `ringMin`
+   *    就超出本阶段允许活动的范围 → 停止推进（返回 null → 上层转"就地维持巡逻"）。 */
   private advancePoint(id: number, sp: { x: number; z: number }): { x: number; z: number } | null {
     const p = this.pos.ship() ?? this.pos.player();
     if (!p) return null;
     const dx = p.x - sp.x, dz = p.z - sp.z;
     const d = Math.hypot(dx, dz);
-    if (d <= EngineBridge.PLAN_NEAR) return null;
+    const front = Math.max(EngineBridge.PLAN_NEAR, this.dbg.ringMin > 0 ? this.dbg.ringMin : 0);
+    if (d <= front) return null;
     const can = this.live.canReach;
     const cands = [EngineBridge.PLAN_ADV, 15, 8];
     for (const s of cands) {
-      const step = Math.min(s, d - 6);
+      const step = Math.min(s, d - front);   // ★ 不越活动带前缘（ringMin）
+      if (step <= 1) return null;
       const q = { x: sp.x + (dx / d) * step, z: sp.z + (dz / d) * step };
       if (!can || can(id, q.x, q.z)) return q;
     }
