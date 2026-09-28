@@ -285,7 +285,7 @@ export class SwarmData {
     this.fortifyAccum += dt;
     if (this.fortifyAccum >= 0.5) {
       this.fortifyAccum = 0;
-      this.passKeeper.flush(this.passTable, RasterMap.current);   // ★ 表随地形走（0.5s 拍）
+      if (this.passKeeper.flush(this.passTable, RasterMap.current)) this.scoreStamp++;   // ★ 表真正重建 → 代次戳 +1
       if (this.stage === 'S1' && this.lastDayRaw >= 0.45) this.stage = 'S2';   // 第一波后停新增（就绪）
       const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事）
       // ★ 前推（§13.4）：8 区全达标才推进；每拍 ≤0.5m；封顶 frontP×120m（事态允许）
@@ -757,8 +757,7 @@ export class SwarmData {
     this.holeMask.refresh(x, z, r + 12);                        // ★ L2 工事源（1m 深度场；评分查询时直读 → 挖过即战壕）
     const raster = RasterMap.current;
     if (raster) samplerFor(raster).invalidateArea(x, z, r + 6); // ★ 统一采样缓存同步失效
-    this.passKeeper.markDirty();   // ★ 表随地形走（0.5s 拍重建；否则路线穿过新坑 = 死锁）
-    this.scoreStamp++;             // ★ 代次戳：路线"表代次变化"事件 → 自动重算
+    this.passKeeper.markDirty();   // ★ 表随地形走（重建拍见 tick；代次戳在**真正重建时** +1）
   }
 
   /** ★ 地形脏区（模式层挖改/建造都调这个）：noteTerrainDig 单入口别名 */

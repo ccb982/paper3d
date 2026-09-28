@@ -612,12 +612,27 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         }
         swarm.data.mainSectors = [...this.mainSectors];   // ★ 主攻扇区 → 四兵种创建与工兵投放
         swarm.data.squadSectorOf = (id) => this.battalions.deployPlan.get(id) ?? -1;   // ★ 部署真源 → 三兵种创建计数
-        swarm.data.sectorAnchorOf = (sec) => {   // ★ 防区锚点：可部署面中离舰最近的点
+        // ★ 防区锚点（用户定 2026-09-27）：可部署面中离舰最近的**可达**点（可达优先；否则最近点）。
+        //   缓存键 = `pathStamp`（= **表真正重建**的代次，见 PassTableKeeper/SwarmData），
+        //   挖掘次数不参与 → 不会恒失效；BFS 只查最近 8 个候选（次数封顶）。
+        const anchorCache = new Map<number, { stamp: number; a: { x: number; z: number } | null }>();
+        swarm.data.sectorAnchorOf = (sec) => {
+          const stamp = swarm.data.pathStamp;
+          const hit = anchorCache.get(sec);
+          if (hit && hit.stamp === stamp) return hit.a;
           const pts = this.sectors.sectors[sec]?.points;
-          if (!pts || pts.length === 0) return null;
-          let best = pts[0]!;
-          for (const p of pts) if (p.d < best.d) best = p;
-          return { x: best.x, z: best.z };
+          if (!pts || pts.length === 0) { anchorCache.set(sec, { stamp, a: null }); return null; }
+          const near = [...pts].sort((a, b) => a.d - b.d).slice(0, 8);
+          let bestReach: { x: number; z: number } | null = null;
+          let bestReachD = Infinity;
+          for (const p of near) {
+            if (p.d < bestReachD && swarm.reachable(spawn.x, spawn.z, p.x, p.z)) {
+              bestReachD = p.d; bestReach = { x: p.x, z: p.z };
+            }
+          }
+          const a = bestReach ?? { x: near[0]!.x, z: near[0]!.z };
+          anchorCache.set(sec, { stamp, a });
+          return a;
         };
       },
     };

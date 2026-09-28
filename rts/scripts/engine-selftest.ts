@@ -32,6 +32,7 @@ import { CharacterCore, canShift, CLIMB_STATS } from '../src/entity/base/Charact
 import { SwarmLedger } from '../src/systems/swarm/SwarmLedger.ts';
 import { slotPosition, spawnFromMember } from '../src/systems/swarm/tiers/carry.ts';
 import { Flux, tierForDistance } from '../src/systems/swarm/tiers/Flux.ts';
+import { l1Step } from '../src/systems/swarm/tiers/L1.ts';
 import type { TierCarry } from '../src/systems/swarm/tiers/contracts.ts';
 import type { AgentSnapshot } from '../src/systems/swarm/AgentPool.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
@@ -1536,6 +1537,19 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
   const r = tbl.takeReserved(sq.id);
   ok(r.n === 2 && r.hp === 77, '★ P-L1：预留名册 记/取（数量+血量）');
   ok(tbl.takeReserved(sq.id).n === 0, '★ P-L1：预留取走即清零（幂等）');
+}
+
+{
+  // ★ L1 移动：格级可行步进（纯函数；轴对齐 → 另一轴 → 原地）
+  const carry = {
+    squadId: 1, role: 'melee', squadType: 'assault', mobIndex: 0, alive: 1,
+    leader: { mobIndex: 0, x: 100, y: 0, z: 100, hp: 80, maxHp: 100, defense: 2, attackPower: 5, speed: 3, meleeDamage: 10, meleeRange: 1.6, scale: 1, tier: 1, yaw: 0, uid: 1 } as AgentSnapshot,
+    members: [],
+  } as TierCarry;
+  const a = l1Step(carry, 200, 100, { canStep: () => true });
+  ok(a.x === 104 && a.z === 100, '★ L1：可行 → 轴对齐走一格（4m）');
+  const b = l1Step(carry, 200, 100, { canStep: () => false });
+  ok(b.x === 100 && b.z === 100, '★ L1：不可行 → 原地');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

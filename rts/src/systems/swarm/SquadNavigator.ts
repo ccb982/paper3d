@@ -62,7 +62,11 @@ export class SquadNavigator {
   /** ★ 寻路代价倍率（注入 SwarmSystem；★ 重构 P1-3：带小队兵种 → L3 兵种亲和折扣） */
   pathMul: ((type: string, x: number, z: number) => number) | null = null;
   /** ★ P4 重规划计数（白名单探针：队路径重解次数/分钟口径） */
-  readonly dbg = { solves: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0 };
+  readonly dbg = { solves: 0, fail: 0, feasOk: 0, feasBlocked: 0, seg: 0, localOk: 0, localNull: 0, net: 0, netSkip: 0 };
+  /** ★ 净进展监护（用户定 2026-09-27）：路线归导航所有——到目标距离 5s 无净缩短（≥0.5m）
+   *  → 强制重算；连续 3 次无效 → **跳过游标 2 格**（把死结让开）。治"有位移无净进展/长走廊震荡"。 */
+  private readonly netMon = new Map<number, { at: number; best: number; retries: number; lastKick: number }>();
+
   /** ★ 失败取证（诊断用）：最近 ensurePath 失败的 起点/目标/结果 */
   readonly dbgFail: { sx: number; sz: number; tx: number; tz: number; res: string }[] = [];
   private noteFail(res: string, tx: number, tz: number): void {
@@ -501,6 +505,24 @@ export class SquadNavigator {
       if (!lead) continue;
       const tgt = currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
+      // ★ 净进展监护（用户定 2026-09-27；路线层的责任，不靠判官/豁免）：
+      const dGoal = Math.hypot(tgt.x - lead.x, tgt.z - lead.z);
+      let mon = this.netMon.get(sid);
+      if (!mon) { mon = { at: now, best: dGoal, retries: 0, lastKick: 0 }; this.netMon.set(sid, mon); }
+      if (dGoal < mon.best - 0.5) {
+        mon.best = dGoal; mon.at = now; mon.retries = 0;   // 净缩短 → 重新计时
+      } else if (now - mon.at > 5 && now - mon.lastKick > 2.5) {
+        mon.lastKick = now; mon.retries++;
+        this.dbg.net++;
+        if (mon.retries >= 3 && state.corridor && state.corridor.length > 1) {
+          state.followIdx = Math.min((state.followIdx ?? 0) + 2, state.corridor.length - 1);
+          this.dbg.netSkip++;
+          mon.retries = 0;
+        }
+        this.repath.add(sid);   // 导航层自管重算（ensurePath 下一次消费）
+        mon.at = now; mon.best = dGoal;
+      }
+      if (this.netMon.size > 1024) this.netMon.clear();
       // ★ 爬坡凭证单源（用户定 2026-09-27）：**每一个 steer 出口都必须携带**——
       //   此前只有编队分支带 climb/climbPt，远程选位分支漏带 → 带爬坡路线的远程队长
       //   永远进不了爬坡态 → 危险点前 STOP 站死（残余被收根因）。

@@ -25,10 +25,11 @@ export class PassTableKeeper {
     this.dirty = true;
   }
 
-  /** 0.5s 拍：脏 → 重建（表对象原地更新，nav/命令门无需重接） */
-  flush(table: PassTable, raster: RasterMap | null): void {
-    if (!this.dirty || !raster) return;
+  /** 脏 → 重建（表对象原地更新，nav/命令门无需重接）；返回是否真正重建 */
+  flush(table: PassTable, raster: RasterMap | null): boolean {
+    if (!this.dirty || !raster) return false;
     table.build(raster, this.cx, this.cz, this.r);
     this.dirty = false;
+    return true;
   }
 }

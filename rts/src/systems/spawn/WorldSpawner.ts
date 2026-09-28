@@ -47,6 +47,7 @@ import {
 import {
   AGENT_TARGET_SENTINEL, AGENT_TARGET_SHIP, AGENT_TIER_FAR, type AgentSnapshot,
 } from '../../systems/swarm/AgentPool';
+import { tierForDistance } from '../../systems/swarm/tiers/Flux';   // ★ 创建分档阈值单源（用户定 2026-09-27）
 import { WorldUIManager } from '../../ui/world/WorldUIManager';
 // ★ 贴片接地补偿（底部透明余量 → 下沉；与 L2 代理同口径）
 import { footSinkRatioOf } from '../../services/fx/FootAnchor';
@@ -784,7 +785,7 @@ export class WorldSpawner implements SwarmTierPort {
     // ★ P-L1（用户定 2026-09-27）：**L1 档只放队长**——落点在 L2 半径外时，
     //   其余成员记**预留名册**（不物化、不占算力）；走近（≤L2_RADIUS）由 tickReserved 物化。
     const pp = this.deps.player?.position;
-    const farL1 = !force && !!pp && Math.hypot(x - pp.x, z - pp.z) > SWARM.L2_RADIUS;
+    const farL1 = !force && !!pp && tierForDistance(Math.hypot(x - pp.x, z - pp.z)) === 'L1';
     let any = false;
     for (let k = 0; k < def.pack; k++) {
       let sx = x, sz = z;
