@@ -82,7 +82,9 @@ export interface TerrainProbe {
   /** ★ 可行性表查询（可选；生产 = PassTable.canStep）：该向边是否可行（硬墙/坑/单向=不可行） */
   canStep?(x: number, z: number, dx: number, dz: number): boolean;
   /** ★ 上坡点（表预处理；连续性段中心、坡面前 2m）——凭证式上坡的"点位" */
-  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;
+  climbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width?: number; rise?: number; lx?: number; lz?: number } | null;
+  /** ★ 被动爬掩体（用户定 2026-09-27）：正前方可攀工事 → 爬越段（免凭证；单查询，不进 8 向扫描） */
+  coverClimbPoint?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; lx?: number; lz?: number; top?: number; passive?: boolean } | null;
 }
 
 export interface StepInput {
@@ -245,9 +247,13 @@ export class CharacterCore {
         if (crossed) { CLIMB_STATS.forced++; this.forcedEver = true; }
       } else { this.nearKey = null; this.nearS = 0; }
     } else { this.nearKey = null; this.nearS = 0; }
-    if (!inp.climbAnyTerrain && (committed || forced || (inp.blockCliffClimb && inp.climbOrdered))) {
+    // ★ 被动爬掩体（用户定 2026-09-27）：无凭证也抓——"靠近就爬"（与地形爬坡点同一传送带）
+    const passiveRun = !committed && !forced && !owned && !inp.climbPt && probe.coverClimbPoint
+      ? probe.coverClimbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null;
+    const passive = passiveRun !== null && (passiveRun as { passive?: boolean }).passive === true;
+    if (!inp.climbAnyTerrain && (committed || forced || (inp.blockCliffClimb && inp.climbOrdered) || (passive && moving))) {
       const run = committed ? this.session!.run
-        : (forced ?? owned ?? inp.climbPt ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
+        : (forced ?? owned ?? inp.climbPt ?? passiveRun ?? (probe.climbPoint ? probe.climbPoint(inp.x, inp.z, inp.dirX, inp.dirZ) : null));
       if (!committed) { CLIMB_STATS.cred++; if (!run) CLIMB_STATS.noRun++; }
       if (run) {
         const tx = -run.uz, tz = run.ux;
@@ -261,7 +267,9 @@ export class CharacterCore {
         // ★ 到达（用户定 2026-09-26）：到落点附近（或已越过法向坐标）**且 脚已着地**
         //   （脚底贴到当前位置的最高表面；埋在体内/悬空都不算爬完）。
         const footTop = probe.topAt ? probe.topAt(inp.x, inp.z) : probe.heightAt(inp.x, inp.z, inp.y);
-        const footOn = Number.isFinite(footTop) && Math.abs(footTop - inp.y) <= 0.25;
+        const runTop = (run as { top?: number }).top;
+        const footOn = (Number.isFinite(footTop) && Math.abs(footTop - inp.y) <= 0.25)
+          || (runTop !== undefined && Number.isFinite(runTop) && Math.abs(runTop - inp.y) <= 0.3);
         const atLand = (Math.hypot(inp.x - lx, inp.z - lz) <= 1.0 || sOff >= dl - 0.6) && footOn;
         // ★ 承诺续爬（不可中断）：不再复核 atBase/硬边；
         //   仅在被明显拉离现场（回收/传送）时弃约。到落点 = 完成。
@@ -290,8 +298,10 @@ export class CharacterCore {
           //   · 抓上后不可中断（ClimbCommit），到**落点（脚着地）**才释放；已在顶上者不再抓（防拽回）。
           CLIMB_STATS.run++;
           const topY = probe.heightAt(lx, lz, inp.y);
-          const onTop = Number.isFinite(topY) && inp.y >= topY - 0.6 && sOff > 0.3
-            && Math.hypot(inp.x - lx, inp.z - lz) <= 3;
+          const coverTop = (run as { top?: number }).top;
+          const onTop = (coverTop !== undefined && Number.isFinite(coverTop) && inp.y >= coverTop - 0.3)
+            || (Number.isFinite(topY) && inp.y >= topY - 0.6 && sOff > 0.3
+              && Math.hypot(inp.x - lx, inp.z - lz) <= 3);
           if (!atLand && !onTop) {
             const inZone = Math.abs(tOff) <= halfSpan && sOff >= -BASE_NEAR && sOff <= dl + 0.5;
             const own = probe.climbPoint ? probe.climbPoint(inp.x, inp.z, run.ux, run.uz) : run;
@@ -305,7 +315,7 @@ export class CharacterCore {
               CLIMB_TRACE.push(tr);
               if (CLIMB_TRACE.length > 48) CLIMB_TRACE.shift();
               this.session = { run, lx, lz, tr };
-              climbBook.claim(uid, run);   // ★ 认领：该点独属，别的点不抢
+              if ((run as { passive?: boolean }).passive !== true) climbBook.claim(uid, run);   // ★ 认领：该点独属（被动掩体免认领）
               this.nearKey = null; this.nearS = 0;
               CLIMB_STATS.sessions++;
               out.climbing = true;
@@ -402,7 +412,9 @@ export class CharacterCore {
       // ★ 爬升态取**最高表面**（用户定 2026-09-26：直接贴着坡面/顶面走到高原顶）——
       //   y 感知取层在坡中/越顶时可能仍选下层 → 埋进坡体从另一端出头。
       const upTop = probe.topAt ? probe.topAt(gx, gz) : undefined;
-      const up = (upTop !== undefined && Number.isFinite(upTop)) ? upTop : probe.heightAt(gx, gz, inp.y + 1.5);
+      let up = (upTop !== undefined && Number.isFinite(upTop)) ? upTop : probe.heightAt(gx, gz, inp.y + 1.5);
+      const runTop = (this.session?.run as { top?: number } | undefined)?.top;
+      if (runTop !== undefined && Number.isFinite(runTop) && runTop > up) up = runTop;   // ★ 爬掩体：顶面高于地形
       if (Number.isFinite(up) && up > gyOut) gyOut = up;
     }
     out.dx = dx;

@@ -18,6 +18,9 @@ export interface ClimbRun {
   rise?: number;
   lx?: number;
   lz?: number;
+  /** ★ 被动爬掩体（用户定 2026-09-27）：顶面世界高（免凭证/免认领，靠近就爬） */
+  top?: number;
+  passive?: boolean;
 }
 
 const claims = new Map<number, ClimbRun>();

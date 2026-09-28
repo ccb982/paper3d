@@ -6,7 +6,7 @@
 // 口径：这是**接触修正**，不是移动命令——不选择方向、不换目标（M0 允许）。
 // ============================================================
 
-export interface SepBody { x: number; z: number; y: number; r: number; }
+export interface SepBody { x: number; z: number; y: number; r: number; /** ★ 运动/朝向（yaw → sin,cos）：侧向让路用 */ dx?: number; dz?: number; }
 
 const CELL = 6;   // 分桶边长（米；> 两倍最大半径 → 3×3 邻域足够）
 const grid = new Map<number, number[]>();
@@ -49,10 +49,17 @@ export function separationPushes(bodies: readonly SepBody[], maxPush = 0.45): { 
           const nx = d > 1e-4 ? dx * inv : 1;
           const nz = d > 1e-4 ? dz * inv : 0;
           const half = (sum - d) * 0.5;
-          pushX[i] = (pushX[i] as number) - nx * half;
-          pushZ[i] = (pushZ[i] as number) - nz * half;
-          pushX[j] = (pushX[j] as number) + nx * half;
-          pushZ[j] = (pushZ[j] as number) + nz * half;
+          // ★ 侧向让路（用户定 2026-09-27）：各沿自身运动方向右侧给侧向力（对向相遇=相反侧向，互滑而过）
+          const li = Math.hypot(a.dx ?? 0, a.dz ?? 0);
+          const lj = Math.hypot(b.dx ?? 0, b.dz ?? 0);
+          const aAhead = li > 0.1 ? (nx * (a.dx as number) + nz * (a.dz as number)) / li : 0;
+          const bAhead = lj > 0.1 ? (-nx * (b.dx as number) - nz * (b.dz as number)) / lj : 0;
+          const rix = li > 0.1 ? -(a.dz as number) / li : 0, riz = li > 0.1 ? (a.dx as number) / li : 0;
+          const rjx = lj > 0.1 ? -(b.dz as number) / lj : 0, rjz = lj > 0.1 ? (b.dx as number) / lj : 0;
+          pushX[i] = (pushX[i] as number) - nx * half * 0.3 + (aAhead > 0.2 ? rix * half * 0.7 : 0);
+          pushZ[i] = (pushZ[i] as number) - nz * half * 0.3 + (aAhead > 0.2 ? riz * half * 0.7 : 0);
+          pushX[j] = (pushX[j] as number) + nx * half * 0.3 + (bAhead > 0.2 ? rjx * half * 0.7 : 0);
+          pushZ[j] = (pushZ[j] as number) + nz * half * 0.3 + (bAhead > 0.2 ? rjz * half * 0.7 : 0);
         }
       }
     }

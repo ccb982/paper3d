@@ -23,7 +23,7 @@ import { entityPerf } from "./EntityPerf";
 import { SHORE_CLIMB_MAX } from "./TerrainAssist";
 import { CharacterCore, canShift, unbuyGroundY, type TerrainProbe  } from "./base/CharacterCore";
 import { createRasterProbe } from "./base/RasterProbe";
-import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
+import { queryStaticObstaclesInto, type StaticObstacle, COVER_CLIMB_MAX } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
 const _obstacleBuf: StaticObstacle[] = [];
@@ -78,7 +78,7 @@ export abstract class CharacterBase extends EntityBase {
   airCruiseY = 0;
   // ---- ★ 攀爬（可攀工事：掩体等 walkableTop 矩形；持续顶住自动翻上） ----
   /** 可攀最大高差（米）：顶面高于脚底不超过此值才能攀（掩体 3m 也在内） */
-  static readonly CLIMB_MAX = 3.2;
+  static readonly CLIMB_MAX = COVER_CLIMB_MAX;   // ★ 单源（与被动爬掩体同值；用户定 2026-09-27）
   /** 持续顶住时长（秒）→ 触发攀爬（防误触） */
   private static readonly CLIMB_HOLD = 0.25;
   /** 攀爬时长（秒） */

@@ -182,7 +182,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   shipRing2.position.set(spawn.x, shipY + 0.12, spawn.z);
   shipRing2.renderOrder = 21;
   scene.add(shipRing, shipRing2);
-  entities.create({
+  // ★ 舰船位置单源（用户定 2026-09-27）：**就用这个实体接口**（地图/小地图同源扫描 kind==='ship'）
+  const shipEntity = entities.create({
     kind: 'ship', x: spawn.x, y: shipY + 0.8, z: spawn.z,
     physics: { type: 'fixed', options: { shape: { type: 'cuboid', hx: SHIP_LENGTH / 2, hy: 0.8, hz: 1.2 } } },
   });
@@ -857,6 +858,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     const fx2 = Math.sin(cam.yaw), fz2 = Math.cos(cam.yaw);
     hooks.camForwardX = fx2; hooks.camForwardZ = fz2;
     hooks.playerX = spawn.x; hooks.playerZ = spawn.z;   // ★ 代理索敌 = 舰船
+    // ★ 舰船位置单源（用户定 2026-09-27）：hooks.ship 之前只在初始化拷贝一次玩家出生点、之后永不更新
+    //   → 兜底"朝舰推进"方位错。每步从**舰船实体**（地图/小地图同源的那个接口）同步。
+    hooks.shipX = shipEntity.position.x; hooks.shipZ = shipEntity.position.z;
     hooks.entityCount = enemies.length;
     // ★ 模拟时钟（秒）：一个白天 = 720s（06:00→18:00，12 分钟）；simT 累加的是秒（h），不是毫秒
     hooks.dayT01 = ((R.__rts as { __dayOverride?: number } | undefined)?.__dayOverride ?? (R.__dayOverride as number | undefined)) ?? Math.min(1, simT / 720);
@@ -898,7 +902,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         if (e.dead || e.lifeState !== 'active') continue;
         const shape = (e.collisionVolume as unknown as { shape?: Record<string, number> }).shape ?? {};
         const r = Math.max(0.3, shape['radius'] ?? Math.max(shape['hx'] ?? 0.4, shape['hz'] ?? 0.4));
-        refs.push(e); bodies.push({ x: e.position.x, z: e.position.z, y: e.position.y, r });
+        const yaw = e.faceYaw;
+        refs.push(e); bodies.push({ x: e.position.x, z: e.position.z, y: e.position.y, r, dx: Math.sin(yaw), dz: Math.cos(yaw) });
       }
       const pu = separationPushes(bodies);
       for (let i = 0; i < bodies.length; i++) {

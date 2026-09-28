@@ -167,6 +167,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   controlSource: 'swarm' | 'local' = 'local';
   /** 飞天/悬停高度 = CharacterBase 的 airborne/airAltitude（单一事实源） */
   get isAir(): boolean { return this.airborne; }
+  /** ★ 朝向（yawBase；yaw 0 = +z）——侧向让路/探针消费 */
+  get faceYaw(): number { return this.presentation.yawBase; }
   get altitude(): number { return this.airAltitude; }
 
   /** ★ steer 保持窗口（秒）：超时自动回落 local（不允许停摆，v2 铁律 3） */

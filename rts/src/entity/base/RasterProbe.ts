@@ -9,6 +9,7 @@
 import { RasterMap } from '../../services/map/RasterMap';
 import { finalRuling } from '../../services/map/Refinements';
 import { getSteerTable } from '../SteerPick';
+import { coverClimbAt } from '../../services/physics/StaticObstacleRegistry';
 import { BLOCK_SIZE, BLOCKS_PER_SIDE } from '../../services/map/ChunkGenerator';
 import type { TerrainProbe } from './CharacterCore';
 
@@ -42,6 +43,7 @@ export function createRasterProbe(hintY: () => number): TerrainProbe {
     /** ★ 顶层地表（脱埋用；直读顶层，不做 y 感知选层） */
     topAt: (x, z) => RasterMap.current?.surfaceHeightAt(x, z) ?? NaN,
     climbPoint: (x, z, dx, dz) => getSteerTable()?.climbRunAt?.(x, z, dx, dz) ?? null,
+    coverClimbPoint: (x, z, dx, dz) => coverClimbAt(x, z, hintY(), dx, dz),
     canStep: (x, z, dx, dz) => getSteerTable()?.canStep?.(x, z, dx, dz) ?? true,
   };
 }

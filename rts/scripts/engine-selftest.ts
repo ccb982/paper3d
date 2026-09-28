@@ -31,6 +31,8 @@ import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift, CLIMB_STATS } from '../src/entity/base/CharacterCore.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
+import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt } from '../src/services/physics/StaticObstacleRegistry.ts';
+import { separationPushes } from '../src/systems/swarm/EntitySeparation.ts';
 import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
 import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
 import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
@@ -990,6 +992,82 @@ console.log('[5j] SectorBuilder / BattalionManager（用户定 2026-09-26）');
   ok(meleeAt0 <= bm.quotaOf('melee') && meleeAt1 <= bm.quotaOf('melee'), '同区同类小队不超配额（不重复往一个扇区堆兵）');
   const gaps = bm.gaps([0, 1]);
   ok([...gaps.values()].every((g) => [...g.values()].every((n) => n >= 0)), '缺口表（扇区×兵种，供随打随补）非负');
+}
+
+// ---------- 被动爬掩体（用户定 2026-09-27）：无需凭证，靠近+朝它 → 给爬越段 ----------
+console.log('[5l] 被动爬掩体：靠近就爬 / 太高不爬 / 背向不爬');
+{
+  addStaticObstacleRect(90001, 10, 1.0, 0, 1.5, 1, 0.9, 0, true);   // 顶=1.9（脚0 → rise 1.9 可爬）
+  const away = coverClimbAt(11.5, 0, 0, 1, 0);
+  ok(away === null, '★ 背对掩体（目标在身后）→ 不爬');
+  const run = coverClimbAt(8.0, 0, 0, 1, 0);
+  ok(!!run && run.passive === true && run.top > 1.5 && Math.abs(run.ux - 1) < 1e-6 && run.lx > 10,
+    '★ 靠近+朝掩体 → 被动爬越段（法线=前进方向、落点在对面、带顶高）');
+  addStaticObstacleRect(90002, 30, 3.0, 0, 1.5, 1, 0.9, 0, true);   // 顶=3.9 → rise 3.9 > 3.2
+  ok(coverClimbAt(28.2, 0, 0, 1, 0) === null, '★ 顶太高（>COVER_CLIMB_MAX）→ 不爬（留给规划绕行）');
+  // ★ 长墙（中心远在 4m 外）：最近点法识别，落点刚好过墙
+  addStaticObstacleRect(90003, 60, 1.0, 0, 4, 0.3, 0.9, 0, true);   // 墙 x∈[56,64], z∈[-0.3,0.3], 顶=1.9
+  const wall = coverClimbAt(63.5, 1.2, 0, 0, -1);
+  ok(!!wall && wall.lz > -1.5 && Math.abs(wall.lx - 63.5) < 0.2,
+    '★ 长墙端部靠近 → 最近点起爬、落点刚好过墙（不被中心距离误判）');
+  removeStaticObstacle(90001);
+  removeStaticObstacle(90002);
+  removeStaticObstacle(90003);
+}
+
+// ---------- 完全没命令 → 兜底段进-巡逻（用户定 2026-09-27） ----------
+console.log('[12j] 无现令无决策 → 兜底接管（"被回收=没命令"第一类）');
+{
+  const sq = { id: 4, role: 'melee' as const, x: 100, z: 0, alive: 6, phase: 'executing' };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [sq],
+    emit: () => { /* */ },
+    canReach: () => true,
+  };
+  const br = new EngineBridge(live);
+  br.shadow = true;
+  br.dbg.ringMin = 0;
+  br.dbg.ringMax = 200;
+  const mgr = (br as unknown as { melee: { assign: (c: unknown) => void; targets: Map<number, { x: number; z: number }> } }).melee;
+  mgr.assign = () => { /* 不产决策 */ };
+  mgr.targets.clear();
+  br.tick(1, 1);
+  const o = br.writer.store.get(4)?.order;
+  ok(!!o && !!o.target && o.target.x > 100, '★ 无现令无决策 → 兜底接管（朝舰推进一段）');
+}
+
+// ---------- 碰撞侧向让路（用户定 2026-09-27）：两人相遇施加相反侧向力 ----------
+console.log('[5m] 侧向让路：对向碰撞 → 侧向力相反（且径向仍解重叠）');
+{
+  const bodies = [
+    { x: 0, z: 0, y: 0, r: 0.5, dx: 1, dz: 0 },     // A 向 +x，B 在其右前
+    { x: 0.8, z: 0, y: 0, r: 0.5, dx: -1, dz: 0 },  // B 向 -x（对向）
+  ];
+  const p = separationPushes(bodies);
+  ok((p.z[0] as number) > 0.001 && (p.z[1] as number) < -0.001, '★ 对向碰撞 → 两侧向力相反（各走各的右侧）');
+  ok((p.x[0] as number) < -0.001 && (p.x[1] as number) > 0.001, '★ 径向分量仍等大反向（解重叠）');
+}
+
+// ---------- advancePoint 可行性 + 锚回退（用户定 2026-09-27） ----------
+console.log('[12k] advancePoint：舰向全不可达 → 退玩家锚；都不可达 → 停');
+{
+  const sq = { id: 5, role: 'melee' as const, x: 100, z: 0, alive: 6, phase: 'executing' };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 200, z: 0 }),
+    squads: () => [sq],
+    emit: () => { /* */ },
+    canReach: (_id: number, x: number) => x < 105,   // 舰向 ≥105 全不可达；玩家向可达
+  };
+  const br = new EngineBridge(live);
+  br.shadow = true;
+  br.dbg.ringMin = 0;
+  br.dbg.ringMax = 200;
+  br.tick(1, 1);
+  const o = br.writer.store.get(5)?.order;
+  ok(!!o && !!o.target && o.target.x < 100, '★ 舰向不可达 → 退玩家锚（朝玩家推进）');
 }
 
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------

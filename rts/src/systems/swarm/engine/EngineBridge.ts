@@ -313,19 +313,31 @@ export class EngineBridge {
    *  ★ 事态活动带前缘（用户定 2026-09-27，**与 p 值无关、只看范围**）：再向前（朝舰）越过内缘 `ringMin`
    *    就超出本阶段允许活动的范围 → 停止推进（返回 null → 上层转"就地维持巡逻"）。 */
   private advancePoint(id: number, sp: { x: number; z: number }): { x: number; z: number } | null {
-    const p = this.pos.ship() ?? this.pos.player();
-    if (!p) return null;
-    const dx = p.x - sp.x, dz = p.z - sp.z;
-    const d = Math.hypot(dx, dz);
+    // ★ 方位单源（用户定 2026-09-27）：优先真实舰船；舰向全部不可达 → 退玩家锚再试（方位错了/没检验的修正）
+    const anchors: { x: number; z: number }[] = [];
+    const ship = this.pos.ship();
+    const player = this.pos.player();
+    if (ship) anchors.push(ship);
+    if (player && (!ship || Math.hypot(player.x - ship.x, player.z - ship.z) > 2)) anchors.push(player);
+    if (anchors.length === 0) return null;
     const front = Math.max(EngineBridge.PLAN_NEAR, this.dbg.ringMin > 0 ? this.dbg.ringMin : 0);
-    if (d <= front) return null;
     const can = this.live.canReach;
-    const cands = [EngineBridge.PLAN_ADV, 15, 8];
-    for (const s of cands) {
-      const step = Math.min(s, d - front);   // ★ 不越活动带前缘（ringMin）
-      if (step <= 1) return null;
-      const q = { x: sp.x + (dx / d) * step, z: sp.z + (dz / d) * step };
-      if (!can || can(id, q.x, q.z)) return q;
+    for (let ai = 0; ai < anchors.length; ai++) {
+      const p = anchors[ai] as { x: number; z: number };
+      const dx = p.x - sp.x, dz = p.z - sp.z;
+      const d = Math.hypot(dx, dz);
+      // 舰锚到带缘 = 到位就地巡逻（return null）；玩家锚到缘则跳过
+      if (d <= front) { if (ai === 0) return null; continue; }
+      let tried = false;
+      for (const s of [EngineBridge.PLAN_ADV, 15, 8]) {
+        const step = Math.min(s, d - front);   // ★ 不越活动带前缘（ringMin）
+        if (step <= 1) continue;
+        tried = true;
+        const q = { x: sp.x + (dx / d) * step, z: sp.z + (dz / d) * step };
+        if (!can || can(id, q.x, q.z)) return q;   // ★ 可行性检验（不可达候选逐个降距）
+      }
+      // 舰锚全部不可达 → 试玩家锚；贴着带缘没得走 → 停
+      if (!tried) return null;
     }
     return null;
   }
@@ -519,8 +531,10 @@ export class EngineBridge {
       }
       let final = force ?? dec;
       if (!final) {
-        if (cur) held.set(rec.id, cur.order.target);
-        continue;
+        if (cur) { held.set(rec.id, cur.order.target); continue; }
+        // ★ 完全没命令（无现令、无决策）→ 兜底段进-巡逻（用户定 2026-09-27：
+        //   "被回收=没命令/有命令不执行"里的第一类；此前在计划块之前就 continue，兜底永不介入）
+        final = { source: 'routine', kind: 'act', target: null, reason: '无命令→兜底' };
       }
       // ★★ 段进循环（用户定 2026-09-27）：管理器**没有实质目标**（空 / 目标≈原地，<6m）时接管——
       //   推进一段（朝舰）→ 到达/超时 → 巡逻 PLAN_PATROL_S → 再推进；距舰 ≤PLAN_NEAR 则常驻巡逻。

@@ -90,6 +90,12 @@ export class CrowdGrid {
     const x = pool.x[i], z = pool.z[i];
     const rSelf = pool.scale[i] * 0.45; // 碰撞半径近似（贴片宽 × 系数）
     const cx = Math.floor(x / CELL), cz = Math.floor(z / CELL);
+    // ★ 侧向让路（用户定 2026-09-27）：两人相遇 → 各沿**自身运动方向的右侧**给侧向力
+    //   （对向相遇自然成"相反侧向"，互相滑过；同向跟随只有后者让）。
+    const dirX = pool.dirX[i], dirZ = pool.dirZ[i];
+    const dirL = Math.hypot(dirX, dirZ);
+    const rx = dirL > 0.1 ? -dirZ / dirL : 0;
+    const rz = dirL > 0.1 ? dirX / dirL : 0;
     for (let dx = -1; dx <= 1; dx++) {
       for (let dz = -1; dz <= 1; dz++) {
         const arr = this.buckets.get(cellKey(cx + dx, cz + dz));
@@ -104,8 +110,16 @@ export class CrowdGrid {
           if (d2 >= rr * rr || d2 < 1e-6) continue;
           const d = Math.sqrt(d2);
           const push = (rr - d) * 0.5;
-          out.x -= (ox / d) * push;
-          out.z -= (oz / d) * push;
+          // 径向 30%（解重叠）+ 侧向 70%（让路）
+          out.x -= (ox / d) * push * 0.3;
+          out.z -= (oz / d) * push * 0.3;
+          if (rz !== 0 || rx !== 0) {
+            const ahead = (ox * dirX + oz * dirZ) / (d * dirL);   // 邻居在正前方的程度
+            if (ahead > 0.2) {
+              out.x += rx * push * 0.7;
+              out.z += rz * push * 0.7;
+            }
+          }
         }
       }
     }
