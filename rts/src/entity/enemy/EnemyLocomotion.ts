@@ -8,7 +8,7 @@
 
 import { RasterMap } from '../../services/map/RasterMap';
 import { getSteerTable } from '../SteerPick';
-import { fallLineBlend, dangerPointAt } from '../TerrainAssist';
+import { fallLineBlend } from '../TerrainAssist';
 
 /** 地形辅助 scratch（零分配） */
 const _d = { x: 0, z: 0 };
@@ -40,25 +40,10 @@ export class EnemyLocomotion {
     const tbl = getSteerTable();
     fallLineBlend(tbl, px, pz, dx, dz, _d);
     this.lastDesiredX = _d.x; this.lastDesiredZ = _d.z;
-    const danger = (x: number, z: number): boolean => this.isDangerPoint(raster, x, z, px, pz, py);
-    const inside = danger(px, pz);
-    // ★ M0（用户定 2026-09-27）：方向只来自单命令链（steer 模块）；
-    //   本件只做**接触修正**：前方即将踩危险（坑/过低/立面）→ 停；
-    //   其余交内核（分量清零/可行性表斥力/坡面 weld）。
-    // ★ M0（用户定 2026-09-27）：方向只来自单命令链（steer 模块）；
-    //   本件只做**接触修正**：前方即将踩危险（坑/过低/立面）→ 停；
-    //   其余交内核（分量清零/可行性表斥力/坡面 weld）。
-    if (!inside && (_d.x !== 0 || _d.z !== 0) && danger(px + _d.x * 1.2, pz + _d.z * 1.2)) {
-      return { move: false, x: 0, z: 0 };
-    }
+    // ★ 危险判定已删（用户澄清：从不是这套设计里的机制）。
+    //   本件只做坡面跟随/转移：方向只来自单命令链（steer 模块）；合法性归表/路线。
+    void raster; void px; void py; void pz;
     return { move: true, x: _d.x, z: _d.z };
   }
 
-  /** ★ 点危险判定：坑 / 过低 / 立面（非坡硬边 > 台阶）——共享内核 `dangerPointAt` */
-  private isDangerPoint(
-    raster: RasterMap | null, x: number, z: number,
-    px: number, pz: number, py: number,
-  ): boolean {
-    return raster ? dangerPointAt(raster, x, z, px, pz, py) : false;
-  }
 }

@@ -572,7 +572,7 @@ console.log('[5g] CharacterCore 判墙/凭证式上坡（用户定 2026-09-26）
     '★ 飞行：硬墙不拦、高度不被地形改写（自由路径）');
 
 // ---------- 上坡点统一管理 + 10s 兜底（用户定 2026-09-26） ----------
-console.log('[5g2] 上坡点认领制 + 10s 兜底强制上送');
+console.log('[5g2] 上坡点认领制 + 5s 兜底强制上送');
 {
   const mkProbe3 = (weld: boolean, rise: number, runAt: [number, number] | null = [0, 0]) => ({
     heightAt: (x: number) => (x >= 0.5 ? rise : 0),
@@ -594,10 +594,10 @@ console.log('[5g2] 上坡点认领制 + 10s 兜底强制上送');
   const pr = mkProbe3(true, 2, [0, 0]);
   const core = new CharacterCore();
   let last = core.step(mkInp(0.5) as never, pr as never, 0);
-  for (let i = 0; i < 19; i++) last = core.step(mkInp(0.5) as never, pr as never, 0);   // 共 10s（首帧仅记锚）
-  ok(last.climbing === false && climbBook.claimed(uid) === null, '9.5s 未到：无凭证也不上送（不误抓）');
-  last = core.step(mkInp(0.5) as never, pr as never, 0);   // 10.0s
-  ok(last.climbing === true, '★ 10s 兜底：任何兵（无凭证）移动中卡点满 10s → 强制上送');
+  for (let i = 0; i < 9; i++) last = core.step(mkInp(0.5) as never, pr as never, 0);   // 共 4.5s（首帧仅记锚；计从第二帧起）
+  ok(last.climbing === false && climbBook.claimed(uid) === null, '4.5s 未到：无凭证也不上送（不误抓）');
+  last = core.step(mkInp(0.5) as never, pr as never, 0);   // 5.0s
+  ok(last.climbing === true, '★ 5s 兜底：任何兵（无凭证）移动中卡点满 5s → 强制上送');
   ok(climbBook.claimed(uid) !== null, '★ 认领制：抓上即认领（该点独属，别的点不抢）');
   const land = core.step(mkInp(0.5, { x: 3.5, y: 2 }) as never, pr as never, 1);
   ok(land.landed === true && climbBook.claimed(uid) === null, '★ 到落点释放认领（允许新一段接管）');
@@ -615,7 +615,7 @@ console.log('[5g2] 上坡点认领制 + 10s 兜底强制上送');
     blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false, ...over,
   });
   let s3 = core3.step(in3(-10) as never, pr as never, 0);
-  for (let i = 0; i < 20; i++) s3 = core3.step(in3(-10) as never, pr as never, 0);   // 10s（首帧记锚）
+  for (let i = 0; i < 10; i++) s3 = core3.step(in3(-10) as never, pr as never, 0);   // 5s（首帧记锚）
   ok(s3.dx > 0 && s3.climbing === false && CLIMB_STATS.forced > f0,
     '★ 兜底加强：14m 大半径内也算卡（远离旧入区）→ 引导朝坡点走');
   const grab = core3.step(in3(-1) as never, pr as never, 0);   // 引导走进 6m → 抓
@@ -627,12 +627,12 @@ console.log('[5g2] 上坡点认领制 + 10s 兜底强制上送');
     blockCliffClimb: true, climbAnyTerrain: false, hx: 0.4, hz: 0.4, suspended: false, ...over,
   });
   let s4 = core4.step(in4(-2) as never, pr as never, 0);
-  for (let i = 0; i < 20; i++) s4 = core4.step(in4(-2) as never, pr as never, 0);
-  ok(s4.climbing === true, '首次兜底起爬（10s）');
+  for (let i = 0; i < 10; i++) s4 = core4.step(in4(-2) as never, pr as never, 0);
+  ok(s4.climbing === true, '首次兜底起爬（5s）');
   core4.step(in4(-100) as never, pr as never, 1);   // 被拉离 → 弃约
   let s4b = core4.step(in4(-2) as never, pr as never, 1.5);
   for (let i = 0; i < 4; i++) s4b = core4.step(in4(-2) as never, pr as never, 1.5 + (i + 1) * 0.5);
-  ok(s4b.climbing === true, '★ 反反复复：弃约后回来 1.5s 即重试上送（不再等 10s）');
+  ok(s4b.climbing === true, '★ 反反复复：弃约后回来 1.5s 即重试上送（不再等 5s）');
   // ★ 已在上面（脚高于坡顶）→ 永不误送
   const core5 = new CharacterCore();
   const pr5 = mkProbe3(true, 2, [0, 0]);
