@@ -237,6 +237,16 @@ console.log('[4b] 账本口径：spawned = alive+kills+recalled+removed / 回收
   ok(led.spawned === led.alive + led.kills + led.recalled + led.removed,
     '★ 恒等式：spawned = alive + kills + recalled + removed');
   ok(led.recallBy.stuck === 1 && led.recallBy.recycled === 1, '★ 回收按原因分桶（stuck/recycled）');
+  // ★ 累计上限（用户定 2026-09-27）：回收不退款
+  const led2 = new SwarmLedger();
+  const threat2 = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
+  led2.beginDay(threat2, 12, 0);
+  led2.releaseCap = led2.total;
+  led2.noteSpawn(led2.total);
+  ok(!led2.canSpawn(), '★ 生成到当日总数 → 停');
+  led2.noteRecall(1, 'stuck');
+  ok(!led2.canSpawn(), '★ 回收**不退款**（旧口径会再放一个 → "创建又回收"churn）');
+
   const threat = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
   led.beginDay(threat, 12, 3);
   ok(led.spawned === 3 && led.alive === 3 && led.recalled === 0,

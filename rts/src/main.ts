@@ -349,11 +349,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         for (let i = 0; i < p.count; i++) out.push({ uid: p.swarmUid[i], x: p.x[i], z: p.z[i] });
         return out;
       },
-      // ★ 按队给**前沿推进点**（本防区可部署点里离舰最远；高原已排除）
-      frontOfSquad: () => {
-        // ★★ 退役占位（用户定 2026-09-27）：旧“防区最远点”前沿点会把队拽向外圈；
-        //   推进现在由**段进循环**（EngineBridge：向舰推进一段→巡逻→再推进）全权负责。
-        return null;
+      // ★ 按队给**防区行进点**（用户定 2026-09-27）：= 该队**分配到的防区锚点**
+      //   （防区可部署面中离舰最近的点）——出生（含远场波次）后先归防区并行军过去；
+      //   未分配（-1）→ null（交段进-巡逻兜底）。总攻由总攻强制令全冲家（优先级最高）。
+      frontOfSquad: (id: number) => {
+        const sec = tactics?.battalions.deployPlan.get(id) ?? -1;
+        return sec >= 0 ? (swarm.data.sectorAnchorOf?.(sec) ?? null) : null;
       },
       // ★ 兜底命令端口（用户定 2026-09-27）
       forceRepath: (id: number) => swarm.forceRepath(id),

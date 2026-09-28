@@ -45,9 +45,11 @@ export class SwarmLedger {
   /** ★ M2：日节律放行上限（指挥器每拍按 releaseAt(t01) 写入；早间只放少量，波峰放宽） */
   releaseCap = 0;
 
-  /** 已消耗的计划额度（场上 + 已击杀；回收/离场不算） */
+  /** 已消耗的当日计划额度（用户定 2026-09-27：**累计生成**——回收/离场**不退款**）。
+   *  旧口径扣 recalled/removed → 同一份额度被反复生成（"创建又回收"的莫名其妙churn）：
+   *  total=59 而累计 spawned=113。现改为累计上限：当日生成到上限即停。 */
   get deployed(): number {
-    return Math.max(0, this.spawned - this.recalled - this.removed);
+    return Math.max(0, this.spawned);
   }
 
   /** 有效放行上限 = min(当日计划, 日节律放行) */
