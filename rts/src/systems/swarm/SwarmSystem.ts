@@ -213,6 +213,19 @@ export class SwarmSystem {
   }
 
   /** 降格：实体 → 代理（模式层回收实体时调用） */
+  /** ★ 档间交接（P-Flux，用户定 2026-09-27）：**取走**池代理（换载体：不计回收、不销编制）。
+   *  升格到 L3 时调用——人还在（同 uid 变实体），小队归属保留。 */
+  takeAgent(uid: number): AgentSnapshot | null {
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) {
+      if (p.swarmUid[i] !== uid) continue;
+      const snap = p.snapshot(i);
+      this.removeAgent(i, false);   // 换载体：保留小队归属/队长
+      return snap;
+    }
+    return null;
+  }
+
   demote(snap: AgentSnapshot): void {
     const uid = snap.uid && snap.uid > 0 ? snap.uid : this.nextUid++;
     const i = this.pool.push({
@@ -559,7 +572,7 @@ export class SwarmSystem {
       p.fromFlow[i] = 0;
       // ★ L2 令执行（用户定 2026-09-27；《移动执行重写.md》§7.5）：行为已归 **tiers/L2**
       //   （队长核 → `applyDirective` 写池列 `directiveTargetX/Z`；本处只调用，不再混写）。
-      const executing = l2ExecuteDirective(p, i, px, pz, now);
+      const executing = l2ExecuteDirective(p, i, px, pz, now, p.squadId[i], this.squadStateOf?.(p.squadId[i]) ?? null);
       if (!executing) {
         p.curSpeed[i] = p.wanderSpeed[i];
         p.wanderTimer[i] -= tick;

@@ -58,6 +58,10 @@ export interface Squad {
   suicide: boolean;
   /** ★ 施工小队（成员具备施工能力；与类型解耦（2026-09-20）） */
   builders: boolean;
+  /** ★ P-L1 预留名册（用户定 2026-09-27）：远处只放队长，其余成员记**预留**（升档物化） */
+  reserved?: number;
+  /** 预留成员的单人血量（物化时用；0/缺省 = 用兵种满血） */
+  reservedHp?: number;
   /** ★ 单例编制（1 单位 1 小队；不接收同伴也不并入别队） */
   singleton: boolean;
 }
@@ -101,6 +105,23 @@ export class SquadTable {
   }
 
   /** 生成时分配：**同兵种同属性**就近并入（< SQUAD_MAX），否则新建；首员即队长 */
+  /** ★ P-L1：远处只放队长——其余成员记**预留名册**（物化时并入本队） */
+  reserve(squadId: number, n: number, hp: number): void {
+    const s = this.squads.get(squadId);
+    if (!s || n <= 0) return;
+    s.reserved = (s.reserved ?? 0) + n;
+    if (hp > 0) s.reservedHp = hp;
+  }
+
+  /** 取走预留（物化）：返回数量与单人血量（取走即清零） */
+  takeReserved(squadId: number): { n: number; hp: number } {
+    const s = this.squads.get(squadId);
+    if (!s || !s.reserved) return { n: 0, hp: 0 };
+    const out = { n: s.reserved, hp: s.reservedHp ?? 0 };
+    s.reserved = 0;
+    return out;
+  }
+
   assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false, singleton = false, canBuild = false): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;

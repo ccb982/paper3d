@@ -290,6 +290,23 @@ export abstract class EntityBase {
     return this._life;
   }
 
+  /** ★ 档位收纳（用户定 2026-09-27；《移动执行重写.md》§7.4）：**冻结不销毁**——
+   *  移出模拟/渲染（EntityManager），纹理/血条等对象保留；`tierRestore` 反向复活复用。 */
+  private _tierStashed = false;
+  get tierStashed(): boolean { return this._tierStashed; }
+  tierStash(): void {
+    if (this._tierStashed || this._life !== 'active') return;
+    this._tierStashed = true;
+    this.visible = false;
+    this.em.unregister(this);
+  }
+  tierRestore(): void {
+    if (!this._tierStashed) return;
+    this._tierStashed = false;
+    this.em.register(this);
+    this.visible = true;
+  }
+
   /** ★ 统一退役入口（幂等）：标记状态 → 子类业务钩子 → 资源释放。
    *  ★ 击杀 / 降格 / 回收 / 清场全部经此；业务事件只能从这里（onRetire）发出。 */
   retire(reason: RetireReason): void {

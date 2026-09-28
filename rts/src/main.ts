@@ -12,7 +12,9 @@ import { SunCycle } from './services/render/SunCycle';
 import { updateTerrainLighting, updateWallMaterialsLighting } from './services/map/TerrainMaterial';
 import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { SpawnSelect } from './ui/SpawnSelect';
-import { SwarmSystem } from './systems/swarm/SwarmSystem';
+import { SwarmSystem, SWARM } from './systems/swarm/SwarmSystem';
+import { CoverLazy } from './modes/world/CoverLazy';   // ★ 工事懒更新（用户定 2026-09-27）
+import { Flux, setTierHandover } from './systems/swarm/tiers/Flux';   // ★ P-Flux：档间交接唯一口（用户定 2026-09-27）
 import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
 import { EntityManager } from './entity/EntityManager';
 import { addStaticObstacle, removeStaticObstacle } from './services/physics/StaticObstacleRegistry';
@@ -257,8 +259,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     playerPos: () => ({ x: spawn.x, z: spawn.z }),   // ★ 目标 = 舰船（非相机）
   });
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
-  swarm.data.buildCover = (x, z, v) =>
-    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, { x: spawn.x, z: spawn.z });
+  // ★ 懒更新（用户定 2026-09-27）：远处只记数据；玩家/相机走近（≤L3_RADIUS）再物化实体
+  const coverLazy = new CoverLazy((x, z, v) =>
+    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, { x: spawn.x, z: spawn.z }));
+  swarm.data.buildCover = (x, z, v) => coverLazy.queueOrBuild(x, z, v, spawn.x, spawn.z, cam.tx, cam.tz, SWARM.L3_RADIUS);
   // ★ 事态环形夹取：**引擎令 + 队长令同门**——新引擎 OrderValidator ① + 队长核 clampRing 端口
   //   （旧 `tactics.ringClamp` 写口已删；环是单源：commander.clampToRing）
 
@@ -464,6 +468,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           e.retire(why === 'stuck' ? 'stuck' : 'despawned');   // ★ 如实标记：stuck 不再记成 recycled（统计分桶）
           return true;
         }
+        spawner.dropStashByUid(uid);
         return swarm.recycleByUid(uid, why);
       },
       // ★ 引擎决策 → 队长核（**唯一执行层**）；UI/探针走 engineView（不再有镜像板）
@@ -512,7 +517,26 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
               return { x: ax + Math.cos(base) * r, z: az + Math.sin(base) * r };
             }
           }
-          return swarm.patrolNext(x, z, ax, az, r, leg);
+          const pg = swarm.patrolNext(x, z, ax, az, r, leg);
+          if (pg) return pg;
+          // ★ 地面兜底（用户定 2026-09-27：**到岗也不许站住**）：BFS 取不到腿（水边/死角）→
+          //   逐方向×逐级找**可达**点（10/6/3m；朝舰/两侧/背舰；交替腿）；全不可达才 null
+          //   ——L3 位移只走单命令链（M0），不可达的腿没有走廊 = 站住（"腿在人不动"的根因）。
+          const cx = swarm.data.ring.cx, cz = swarm.data.ring.cz;
+          const dx = cx - x, dz = cz - z;
+          const d = Math.hypot(dx, dz) || 1;
+          const dirs: [number, number][] = [
+            [dx / d, dz / d], [-dz / d, dx / d], [dz / d, -dx / d], [-dx / d, -dz / d],
+          ];
+          for (const [ux, uz] of dirs) {
+            for (const step of [10, 6, 3]) {
+              const t = Math.min(step, d);
+              const qx = x + ux * t * leg;
+              const qz = z + uz * t * leg;
+              if (swarm.reachFrom(id, qx, qz)) return { x: qx, z: qz };
+            }
+          }
+          return null;
         },
         coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
@@ -531,6 +555,19 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       shadowBridge?.writer.release(id);
       shadowBridge?.squads.remove(id);
     });
+    // ★ P-Flux 接线（用户定 2026-09-27；《移动执行重写.md》§7.4）：
+    //   实体（纹理/血条等）**不销毁**——L3→L2 隐藏、L2→L3 显示复用、L1 收纳对象仓/取出复用。
+    //   （现网升降格仍走旧销毁路径；本口在 P-L2′「隐藏更新」接线后接管——见文档相位。）
+    setTierHandover(new Flux({
+      hasEntity: (uid) => (spawner.entityByUid(uid) ?? null) !== null,
+      hideEntity: (uid) => spawner.hideByUid(uid),
+      showEntity: (uid) => spawner.showByUid(uid),
+      stashEntity: (uid) => spawner.stashByUid(uid),
+      unstashEntity: (uid) => spawner.unstashByUid(uid),
+      hasInPool: (uid) => { const pl = swarm.pool; for (let i = 0; i < pl.count; i++) if (pl.swarmUid[i] === uid) return true; return false; },
+      takeFromPool: (uid) => swarm.takeAgent(uid),
+      putToPool: (data) => { swarm.demote(data as never); return true; },
+    }));
     // ★ UI/探针只读视图（引擎令 + 汇报 + 队长核执行态；替代旧镜像板）
     engineView = {
       squads: () => (shadowBridge ? squadViews(shadowBridge.writer, shadowBridge.squads, (id) => squadCores?.stateOf(id) ?? null) : []),
@@ -954,6 +991,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       cmdPanel.setSquads(list);
     }
     spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池
+    spawner.tickReserved(h, cam.tx, cam.tz);   // ★ P-L1：预留名册走近物化（队长单点 → 队长+代理）
+    coverLazy.realize(spawn.x, spawn.z, cam.tx, cam.tz, SWARM.L3_RADIUS);   // ★ 工事懒更新：走近物化
     aiCtx.dt = h; aiCtx.time += h;
     aiCtx.target = aiCtx.findTarget('enemy');
     aiCtx.focusX = cam.tx; aiCtx.focusZ = cam.tz;   // ★ AI 激活焦点=相机（RTS 调试：看哪哪活；原=舰船 → 远处手放敌人休眠）
@@ -1037,7 +1076,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   };
   frame();
 
-  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, goneLog, squadCores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
+  R.__rts = { raster, phase: 'world', chunks, cam, camera, scene, renderer, spawn, spawner, coverLazy, swarm, mobDefs, physics, entities, copyInfo, get simT(): number { return simT; }, ship: proc.group, combat, enemyArrows, enemyBolts, playerBullets, enemies, aiCtx, shipState, enemyMgr, enemyPanel, navMap, aiTrace, fastLane, hooks, timeline, shadowBridge, engineView, placeEnemyAt, forceMoveSelectionTo, goneLog, squadCores, climbStats: { core: CLIMB_STATS, route: CLIMB_ROUTE_STATS, trace: CLIMB_TRACE, book: () => climbBook.size },
     tactics: { sectors: tactics?.sectors ?? null, battalions: tactics?.battalions ?? null, get mainSectors(): number[] { return tactics?.mainSectors ?? []; }, setMainSectors(k: number[]): void { if (tactics) tactics.mainSectors = k; } }, get speed(): number { return speed; },
     /** ★ 新引擎调试口契约（重写 P4；G9）：一次取全新架构快照（UI/探针只读） */
     newEngine: shadowBridge ? () => ({

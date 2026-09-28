@@ -529,13 +529,51 @@ export class WorldSpawner implements SwarmTierPort {
     this.forgetEntity(e);
     // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
     //   用 retire('demoted') 表达原因（取代 killedByCombat 布尔，2026-09-18）
-    e.retire('demoted');
+    // ★ 懒加载（用户定 2026-09-27）：**不销毁**——冻结并收纳进对象仓（纹理/血条保留、停更）；
+    //   回 L3 由 promoteAgent 直接取出复用（不重建）。
+    e.tierStash();
     if (idx >= 0) this.deps.enemies.splice(idx, 1);
+    if (e.swarmUid > 0) {
+      this.tierStash.set(e.swarmUid, e);
+      this.reuseDbg.stash++;
+    }
   }
 
   /** ★ 步骤 8：升格（SwarmTierPort.promote；委托 promoteAgent） */
   promote(snap: AgentSnapshot): void {
     this.promoteAgent(snap);
+  }
+
+  private reservedAccum = 0;
+
+  /** ★ P-L1 预留物化（用户定 2026-09-27；1s 拍）：预留队**走近（≤L2_RADIUS）**→
+   *  按名册在队长旁物化成员代理（就近并入本队）；未走近 → 维持队长单点。 */
+  tickReserved(dt: number, px: number, pz: number): void {
+    this.reservedAccum += dt;
+    if (this.reservedAccum < 1) return;
+    this.reservedAccum = 0;
+    const pool = this.deps.swarm.pool;
+    for (const s of this.deps.swarm.squads.all()) {
+      const r = s.reserved ?? 0;
+      if (r <= 0) continue;
+      let lx = 0, lz = 0, found = false;
+      for (let i = 0; i < pool.count; i++) {
+        if (pool.swarmUid[i] !== s.leaderUid) continue;
+        lx = pool.x[i]; lz = pool.z[i]; found = true; break;
+      }
+      if (!found) continue;                                     // 队长不在池（实体/已亡）：等下一拍
+      if (Math.hypot(lx - px, lz - pz) > SWARM.L2_RADIUS) continue;   // 仍在 L1 → 保持预留
+      const def = this.deps.mobDefs[s.mobKind];
+      if (!def) continue;
+      const { n, hp } = this.deps.swarm.squads.takeReserved(s.id);
+      if (n <= 0) continue;
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2;
+        const mx = lx + Math.cos(a) * 2.5, mz = lz + Math.sin(a) * 2.5;
+        const my = this.deps.raster.surfaceHeightAt(mx, mz);
+        this.spawnSingle(def, mx, my, mz, -1, false, hp);   // 就近并入本队（≤2.5m 在并队半径内）
+      }
+    }
   }
 
   /** ★ 舰船遇围警示播报（**无条件开启**：探索期照常盯，航行期舰船活着也盯，
@@ -743,6 +781,10 @@ export class WorldSpawner implements SwarmTierPort {
     /** ★ 手动放置接口（调试）：true = 忽略"水/坑不可站"与存活上限（可放水里） */
     force = false,
   ): boolean {
+    // ★ P-L1（用户定 2026-09-27）：**L1 档只放队长**——落点在 L2 半径外时，
+    //   其余成员记**预留名册**（不物化、不占算力）；走近（≤L2_RADIUS）由 tickReserved 物化。
+    const pp = this.deps.player?.position;
+    const farL1 = !force && !!pp && Math.hypot(x - pp.x, z - pp.z) > SWARM.L2_RADIUS;
     let any = false;
     for (let k = 0; k < def.pack; k++) {
       let sx = x, sz = z;
@@ -753,7 +795,15 @@ export class WorldSpawner implements SwarmTierPort {
         sx = x + Math.cos(ang) * dist;
         sz = z + Math.sin(ang) * dist;
       }
-      if (this.spawnSingle(def, sx, _y, sz, assaultIndex, force)) any = true;
+      if (this.spawnSingle(def, sx, _y, sz, assaultIndex, force)) {
+        any = true;
+        if (farL1 && k === 0 && this.lastAgentIdx >= 0) {
+          const sid = this.deps.swarm.pool.squadId[this.lastAgentIdx];
+          const hp = this.deps.swarm.pool.hp[this.lastAgentIdx];
+          this.deps.swarm.squads.reserve(sid, def.pack - 1, hp);
+          break;   // L1：只放队长
+        }
+      }
     }
     return any;
   }
@@ -817,11 +867,71 @@ export class WorldSpawner implements SwarmTierPort {
       shotLife: stats.shotLife,
       singleton: def.squadMode === 'singleton',
     }, force);
+    this.lastAgentIdx = idx;
     return idx >= 0;   // ★ 账本由引擎 spawn() 自增（唯一生成口）
   }
 
   /** ★ 步骤 5：uid → L3 实体（队长标记镜像用；降格时移除） */
   private readonly byUid = new Map<number, EnemyBase>();
+
+  /** ★ 档位隐藏/收纳（用户定 2026-09-27；《移动执行重写.md》§7.4）：
+   *  L2/L3 **不销毁**——纹理/血条等实体对象保留，隐藏/显示复用；L1 收纳进对象仓（对象保留）。 */
+  private readonly tierStash = new Map<number, EnemyBase>();
+  /** 懒加载探针：stash = 收纳次数 / reuse = 取出复用次数（reuse>0 = 确实没重建） */
+  readonly reuseDbg = { stash: 0, reuse: 0 };
+  /** 最近一次 spawnSingle 落池下标（P-L1 预留名册归属用；-1 = 无） */
+  private lastAgentIdx = -1;
+
+  /** 彻底移除：对象仓同 uid 一并丢弃（真死/清场；防漏对象） */
+  dropStashByUid(uid: number): void {
+    const e = this.tierStash.get(uid);
+    if (!e) return;
+    this.tierStash.delete(uid);
+    e.retire('recycled');
+  }
+
+  /** 实体查询（uid；判官/交接用） */
+  entityByUid(uid: number): EnemyBase | null {
+    return this.byUid.get(uid) ?? null;
+  }
+
+  /** L3→L2：隐藏（停渲染，不销毁不搬池） */
+  hideByUid(uid: number): boolean {
+    const e = this.byUid.get(uid);
+    if (!e) return false;
+    e.visible = false;
+    return true;
+  }
+
+  /** L2→L3：显示（复用既有对象，不重建） */
+  showByUid(uid: number): boolean {
+    const e = this.byUid.get(uid);
+    if (!e) return false;
+    e.visible = true;
+    return true;
+  }
+
+  /** L1 收纳：移出在场名单、存进对象仓（纹理/血条保留）；返回血量供名册回填 */
+  stashByUid(uid: number): { hp: number; maxHp: number } | null {
+    const e = this.byUid.get(uid);
+    if (!e) return null;
+    const idx = this.deps.enemies.indexOf(e);
+    if (idx >= 0) this.deps.enemies.splice(idx, 1);
+    e.visible = false;
+    this.tierStash.set(uid, e);
+    return { hp: e.hp, maxHp: e.maxHp };
+  }
+
+  /** 离开 L1：取出复用（原地复活；无 → false，调用方物化） */
+  unstashByUid(uid: number): boolean {
+    const e = this.tierStash.get(uid);
+    if (!e) return false;
+    this.tierStash.delete(uid);
+    this.deps.enemies.push(e);
+    e.visible = true;
+    if (e.swarmUid > 0) this.byUid.set(e.swarmUid, e);
+    return true;
+  }
 
   /** ★ 步骤 9：实体销毁 → 注销 uid 映射（阵亡/降格；小队注销由 swarm.onEntityKilled 负责） */
   forgetEntity(e: EnemyBase): void {
@@ -865,6 +975,20 @@ export class WorldSpawner implements SwarmTierPort {
     if (!this.deps.scene || !this.deps.camera) return;
     const def = this.deps.mobDefs[snap.mobIndex];
     if (!def) return;
+    // ★ 懒加载（用户定 2026-09-27）：对象仓有 → **取出复用**（纹理/血条不重建），快照回灌后复活
+    const uid0 = snap.uid ?? 0;
+    const stashed = uid0 > 0 ? this.tierStash.get(uid0) : undefined;
+    if (stashed && stashed.lifeState === 'active') {
+      this.tierStash.delete(uid0);
+      this.reuseDbg.reuse++;
+      this.deps.enemies.push(stashed);
+      stashed.position.x = snap.x; stashed.position.y = snap.y; stashed.position.z = snap.z;
+      stashed.hp = Math.min(snap.hp, snap.maxHp);
+      stashed.hydrate(snap);
+      stashed.tierRestore();   // 显示 + 重新注册（模拟/渲染恢复）
+      this.byUid.set(uid0, stashed);
+      return;
+    }
     const enemy = this.createEnemyEntity(def, snap.x, snap.y, snap.z, snap.hp, snap.maxHp);
     if (!enemy) return;
     const stats = this.mobAgentStats(def);

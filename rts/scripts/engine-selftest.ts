@@ -1396,7 +1396,9 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
   br.tick(0.6, 1);
   ok(calls.length === 1 && calls[0] === 1, '★ 发呆（stillS≥6）→ 强制重寻路 forceRepath');
   const o = br.writer.store.get(1)!.order;
-  ok(Math.abs(o.target.x - 150) < 0.01 && Math.abs(o.target.z - 20) < 0.01, '★ 仍发呆（≥15s）→ 换可达兜底目标（防区锚点）');
+  // ★ P-L3 口径（用户定 2026-09-27）：工兵没活**不许站住** → **段进-巡逻兜底接管**
+  //   （首段朝舰推进一段 ≤30m；planSwitch 强制发令）
+  ok(o.kind === 'act' && o.target.x > 100 && o.target.x <= 131, '★ 工兵没活 → 段进兜底接管（朝舰推一段）');
   ok(br.dbg.stall === 1, '兜底计数 +1');
 }
 
@@ -1461,7 +1463,7 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
 
 
 // ============================================================
-// [13] 分档交接（tiers）：carry 零丢失换算 + Flux 编排幂等（纯逻辑）
+// [13] 分档交接（tiers）：carry 零丢失换算 + Flux 隐藏/收纳编排
 // ============================================================
 {
   const mkLeader = (uid: number, x: number, z: number): AgentSnapshot => ({
@@ -1486,10 +1488,23 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
     '★ 交接：名册→池物化零丢失（uid/血/槽位）');
   ok(d1.aggro !== undefined && d1.wanderSpeed !== undefined, '★ 交接：池必填项补默认（aggro/wanderSpeed）');
 
-  // Flux 编排（假端口）
+  // Flux 编排（假端口：实体表带 hidden 标记；对象仓＝stash；池＝pool）
+  const ents = new Map<number, { snap: AgentSnapshot; hidden: boolean }>();
+  const stash = new Map<number, AgentSnapshot>();
   const pool = new Map<number, AgentSnapshot>();
-  const ents = new Map<number, AgentSnapshot>();
   const flux = new Flux({
+    hasEntity: (uid) => ents.has(uid),
+    hideEntity: (uid) => { const e = ents.get(uid); if (!e) return false; e.hidden = true; return true; },
+    showEntity: (uid) => { const e = ents.get(uid); if (!e) return false; e.hidden = false; return true; },
+    stashEntity: (uid) => {
+      const e = ents.get(uid); if (!e) return null;
+      ents.delete(uid); stash.set(uid, e.snap);
+      return { hp: e.snap.hp, maxHp: e.snap.maxHp };
+    },
+    unstashEntity: (uid) => {
+      const sn = stash.get(uid); if (!sn) return false;
+      stash.delete(uid); ents.set(uid, { snap: sn, hidden: false }); return true;
+    },
     hasInPool: (uid) => pool.has(uid),
     takeFromPool: (uid) => { const v = pool.get(uid) ?? null; pool.delete(uid); return v; },
     putToPool: (data) => {
@@ -1497,29 +1512,30 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
       if (uid <= 0) return false;
       pool.set(uid, data as AgentSnapshot); return true;
     },
-    hasEntity: (uid) => ents.has(uid),
-    retireEntity: (uid) => { const v = ents.get(uid) ?? null; ents.delete(uid); return v; },
-    spawnEntity: (data) => {
-      const uid = (data as AgentSnapshot).uid ?? 0;
-      if (uid <= 0) return 0;
-      ents.set(uid, data as AgentSnapshot); return uid;
-    },
   });
-  ents.set(1, mkLeader(1, 100, 50)); ents.set(2, mkLeader(2, 101, 50)); ents.set(3, mkLeader(3, 99, 50));
-  ok(flux.demoteToL2(carry) && pool.size === 3 && ents.size === 0, '★ 交接：L3→L2 全员回收进池');
-  ok(flux.demoteToL2(carry) && pool.size === 3, '★ 交接：L3→L2 幂等（已在池不重复搬）');
-  ok(flux.promoteToL3(carry) && ents.size === 3 && pool.size === 0, '★ 交接：L2→L3 全员升格实体');
-  ok(flux.promoteToL3(carry) && ents.size === 3, '★ 交接：L2→L3 幂等');
-  ok(flux.collapseToL1(carry) && pool.size === 0 && ents.size === 0, '★ 交接：L2→L1 收缩为队长单点（载体全卸）');
-  ok(carry.members[1]!.hp === 80 && carry.members[2]!.hp === 80, '★ 交接：收缩时名册按载体实况回填');
-  ok(flux.expandFromL1(carry) && pool.size === 3, '★ 交接：L1→L2 按预留槽物化（含队长 rank0）');
-  ok(flux.expandFromL1(carry) && pool.size === 3, '★ 交接：L1→L2 幂等');
+  for (const m of carry.members) ents.set(m.uid, { snap: mkLeader(m.uid, 100, 50), hidden: false });
+  ok(flux.demoteToL2(carry) && [...ents.values()].every((e) => e.hidden), '★ 交接：L3→L2 只隐藏不销毁（对象保留）');
+  ok(flux.demoteToL2(carry) && ents.size === 3, '★ 交接：L3→L2 幂等');
+  ok(flux.promoteToL3(carry) && [...ents.values()].every((e) => !e.hidden), '★ 交接：L2→L3 显示复用（不重建）');
+  ok(flux.collapseToL1(carry) && ents.size === 0 && stash.size === 3, '★ 交接：L2→L1 收纳进对象仓（不销毁）');
+  ok(carry.members[1]!.hp === 80, '★ 交接：收纳时名册按实体实况回填');
+  ok(flux.expandFromL1(carry) && ents.size === 3 && stash.size === 0, '★ 交接：L1→L2 取出复用（对象仓优先）');
+  ok(flux.expandFromL1(carry) && ents.size === 3, '★ 交接：L1→L2 幂等');
 }
-
 {
   // ★ 创建分档（自动转换口）：阈值单源 SWARM.L3_RADIUS / L2_RADIUS
   ok(tierForDistance(50) === 'L3' && tierForDistance(200) === 'L2' && tierForDistance(400) === 'L1',
     '★ 创建分档：按距离自动选 L3/L2/L1（阈值单源）');
+}
+
+{
+  // ★ P-L1 预留名册：远队只放队长，其余成员记预留（升档物化）
+  const tbl = new SquadTable();
+  const sq = tbl.assign(1, 'melee' as never, 0, 0, 0);
+  tbl.reserve(sq.id, 2, 77);
+  const r = tbl.takeReserved(sq.id);
+  ok(r.n === 2 && r.hp === 77, '★ P-L1：预留名册 记/取（数量+血量）');
+  ok(tbl.takeReserved(sq.id).n === 0, '★ P-L1：预留取走即清零（幂等）');
 }
 
 console.log(`\n引擎自检: ${pass}/${pass + fail} PASS`);

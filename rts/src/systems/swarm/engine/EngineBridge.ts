@@ -506,12 +506,17 @@ export class EngineBridge {
         const curE = this.writer.store.get(rec.id);
         if (curE && curE.order.source === 'player') { held.set(rec.id, curE.order.target); continue; }
         const tE = this.engineer.targets.get(rec.id);
-        if (tE) {
-          pending.push({ rec, cur: curE, dec: ENGINEER_DECISION, tx: tE.x, tz: tE.z, mission: 'build' });
+        const spE = this.pos.squad(rec.id);
+        // ★ 没件判定（用户定 2026-09-27）：管理器无目标、或目标≈自身（"没件就地待命"）都算**没活**
+        //   ——否则"目标=自身"被当成 build 令 → 站桩到判官收（真被收原因）。
+        const idleTgt = !tE || !spE || Math.hypot(tE.x - spE.x, tE.z - spE.z) < 3;
+        if (!idleTgt) {
+          // 真有活：现令不是 build（还在兜底/巡逻）→ **强制切回施工**（别被稳定门拖 25s）
+          const needForce = !curE || (curE.order.mission ?? '') !== 'build';
+          pending.push({ rec, cur: curE, dec: ENGINEER_DECISION, tx: tE!.x, tz: tE!.z, mission: 'build', force: needForce });
           continue;
         }
-        // ★ 没件（用户定 2026-09-27：到岗不动=没下一步命令 → 兜底兜住）：
-        //   L3 实体队长 → 落进下方段进-巡逻；池队（L2/L1）不跑兜底 → 保持 held。
+        // 没活：L3 实体队长 → 落进下方段进-巡逻（不许站住）；池队（L2/L1）不跑兜底 → 保持 held。
         if (this.isPoolLeader(rec.id)) { if (curE) held.set(rec.id, curE.order.target); continue; }
         engineerFallback = true;
       }
