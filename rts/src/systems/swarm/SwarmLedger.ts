@@ -66,15 +66,18 @@ export class SwarmLedger {
     return this.total <= 0 || this.deployed < this.cap();
   }
 
-  /** 换日 / 首次出击：按威胁预计算总数并清零（放行上限 = 0：落地后由指挥器按节律放开） */
-  beginDay(threat: ThreatProfile, expectedMinutes = 12): void {
+  /** 换日 / 首次出击：按威胁预计算总数并清零（放行上限 = 0：落地后由指挥器按节律放开）。
+   *  ★ aliveNow = 清零时已在场存活数（用户定 2026-09-27）：**重计入 spawned/alive**——
+   *    否则开局初始布置的单位之后被回收时只加 recalled 不加 spawned → `recalled > spawned`（统计失真）。 */
+  beginDay(threat: ThreatProfile, expectedMinutes = 12, aliveNow = 0): void {
     this.total = estimateDailyTotal(threat, expectedMinutes);
-    this.spawned = 0;
-    this.alive = 0;
+    this.spawned = Math.max(0, Math.round(aliveNow));
+    this.alive = this.spawned;
     this.kills = 0;
     this.recalled = 0;
     this.removed = 0;
     this.releaseCap = 0;
+    this.recallBy = { stuck: 0, recycled: 0, other: 0 };
   }
 
   /** 同日再出击：从存档镜像回灌（进度累计，总数不重算） */
@@ -122,11 +125,15 @@ export class SwarmLedger {
     this.alive = Math.max(0, this.alive - count);
   }
 
-  /** 远距 LOD 清除：存活 −1（不算击杀） */
-  noteRecall(count = 1): void {
+  /** 回收（不算击杀；存活 −1）★ 按原因分桶（用户定 2026-09-27）：stuck=判官回收 / recycled=LOD清场 / other */
+  recallBy: { stuck: number; recycled: number; other: number } = { stuck: 0, recycled: 0, other: 0 };
+  noteRecall(count = 1, reason?: string): void {
     if (count <= 0) return;
     this.recalled += count;
     this.alive = Math.max(0, this.alive - count);
+    if (reason === 'stuck') this.recallBy.stuck += count;
+    else if (reason === 'recycled') this.recallBy.recycled += count;
+    else this.recallBy.other += count;
   }
 
   /** 其他非击杀离场（主动清场等）：存活 −1（不算击杀；同样归还编制） */

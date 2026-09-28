@@ -29,6 +29,7 @@ import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER
 import { localStep, canSegment } from '../src/systems/swarm/nav/LocalStep.ts';
 import { currentTargetOf } from '../src/systems/swarm/squad/Anchor.ts';
 import { CharacterCore, canShift, CLIMB_STATS } from '../src/entity/base/CharacterCore.ts';
+import { SwarmLedger } from '../src/systems/swarm/SwarmLedger.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt } from '../src/services/physics/StaticObstacleRegistry.ts';
@@ -222,6 +223,24 @@ console.log('[3c] memberStep 兜底：无路线/步不出 → 朝队长走/直�
     '★ 双路线失败 → 直航兜底（朝向队长，direct=true）');
   const arr = nav.memberStep(901, 10, 0, 10.0, 0, 0, null);
   ok(!!arr && arr.done === true, '到达半径内 → done（不抖）');
+}
+
+// ---------- 账本：恒等式 + 回收分桶 + beginDay 存活重计（用户定 2026-09-27） ----------
+console.log('[4b] 账本口径：spawned = alive+kills+recalled+removed / 回收按原因分桶');
+{
+  const led = new SwarmLedger();
+  led.noteSpawn(5);
+  led.reportCasualty(1);
+  led.noteRecall(1, 'stuck');
+  led.noteRecall(1, 'recycled');
+  led.noteRemoved(1);
+  ok(led.spawned === led.alive + led.kills + led.recalled + led.removed,
+    '★ 恒等式：spawned = alive + kills + recalled + removed');
+  ok(led.recallBy.stuck === 1 && led.recallBy.recycled === 1, '★ 回收按原因分桶（stuck/recycled）');
+  const threat = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
+  led.beginDay(threat, 12, 3);
+  ok(led.spawned === 3 && led.alive === 3 && led.recalled === 0,
+    '★ beginDay：在场存活重计入 spawned/alive（否则 recalled>spawned 漂移）');
 }
 
 // ---------- TimerManager ----------

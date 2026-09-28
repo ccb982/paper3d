@@ -427,7 +427,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         }
         for (const e of enemies) {
           if (e.swarmUid !== uid) continue;
-          e.retire(why === 'stuck' ? 'recycled' : 'despawned');
+          e.retire(why === 'stuck' ? 'stuck' : 'despawned');   // ★ 如实标记：stuck 不再记成 recycled（统计分桶）
           return true;
         }
         return swarm.recycleByUid(uid, why);

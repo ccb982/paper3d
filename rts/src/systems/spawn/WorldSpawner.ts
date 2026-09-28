@@ -376,7 +376,8 @@ export class WorldSpawner implements SwarmTierPort {
     //   同一天重刷（遗物/数值变动）不清零进度；换日/首次 → 重算。
     if (this.plannedDay !== inputs.day || this.deps.swarm.ledger.total <= 0) {
       this.plannedDay = inputs.day;
-      this.deps.swarm.ledger.beginDay(this.deps.threat, 12);
+      const aliveNow = this.deps.enemies.length + this.deps.swarm.count;
+      this.deps.swarm.ledger.beginDay(this.deps.threat, 12, aliveNow);
     }
     // ★ HUD 只给档位（低/较低/中/较高/极高），不给精确数值
     const tier = threatTier(this.deps.threat.index);

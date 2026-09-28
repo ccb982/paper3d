@@ -47,7 +47,7 @@ export type EntityLifeState = 'active' | 'retiring' | 'disposed';
  *  - 'despawned'    主动移除（导演收手 / 登船收友军）
  *  - 'mode_cleanup' 模式切换 / 场景卸载
  *  注意：只影响业务流程口径，不影响资源释放路径。 */
-export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup';
+export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup' | 'stuck';
 
 /** ★ 命中点（世界坐标）——伤害管线透传给表现层（受击染料的注入位置）。
  *  2D 贴片只吃 x/y；3D 判定点带 z 也不影响。 */

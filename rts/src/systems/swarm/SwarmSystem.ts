@@ -175,7 +175,7 @@ export class SwarmSystem {
     // ★ 非击杀离场：存活 −1；recycled 视为回收（归还编制、计 recalled）
     this.removedUnsub = eventBus.on('enemy_removed', (p) => {
       if (p.uid <= 0) return;
-      if (p.reason === 'recycled') this.ledger.noteRecall(1);
+      if (p.reason === 'recycled' || p.reason === 'stuck') this.ledger.noteRecall(1, p.reason);
       else this.ledger.noteRemoved(1);
       // ★ 收回/退役 → **立即注销**（同一口径：队长空缺→本队接任）
       this.unregisterMember(p.uid, false, false, p.reason);
@@ -739,7 +739,7 @@ export class SwarmSystem {
     for (let i = p.count - 1; i >= 0; i--) {
       if (p.swarmUid[i] !== uid) continue;
       this.removeAgent(i, true, false, reason);   // 非击杀离场（unregister=true, killed=false）
-      this.ledger.noteRecall(1);          // 归还编制
+      this.ledger.noteRecall(1, reason);  // 归还编制（按原因分桶）
       return true;
     }
     return false;
