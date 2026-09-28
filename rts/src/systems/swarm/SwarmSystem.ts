@@ -31,7 +31,6 @@ import { SquadTable, type Squad, type SquadRating } from './SquadTable';
 import { SquadNavigator } from './SquadNavigator';
 import { driveAgent, type DriveHost } from './SwarmDrive';
 import type { SquadOrderState } from './squad/State';
-import { rangedMoveTarget } from './RangedTactics';
 import type { SwarmTierPort } from './SwarmTierPort';
 import { SwarmData } from './data/SwarmData';
 import {
@@ -132,6 +131,8 @@ export class SwarmSystem {
   private lastHooks: SwarmHooks | null = null;
   /** ★ E4a 编队 steer / HPA 预热节拍（10Hz） */
   private steerAccum = 0;
+  /** ★ 池成员位置回写节拍（0.25s；信息单源：队长位置=载体真值，否则到位/巡逻判定全错） */
+  private memberSyncAcc = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
   /** ★ 飞行直航（用户定 2026-09-27）：L3 队长是否空中（ensurePath 不建地面走廊） */
@@ -452,6 +453,17 @@ export class SwarmSystem {
         driveAgent(this.driveHost, i, step);
       }
     }
+    // ★ 池成员位置回写（用户定 2026-09-27；0.25s 拍）：**队长位置=载体真值**——
+    //   此前池队 members 位置从出生起不再更新 → 引擎/队长核的"到位/巡逻/锚点"全部按旧位算
+    //   （飞行发呆、有令不走的共同底层原因）。信息单源：每 0.25s 把池代理写回小队表。
+    this.memberSyncAcc += dt;
+    if (this.memberSyncAcc >= 0.25) {
+      this.memberSyncAcc = 0;
+      const p0 = this.pool;
+      for (let i = 0; i < p0.count; i++) {
+        this.squads.syncMember(p0.swarmUid[i], p0.hp[i], p0.maxHp[i], p0.x[i], p0.z[i], p0.lastSeenAt[i]);
+      }
+    }
     const t2 = _te ? performance.now() : 0;
     // ★ E4a 编队 steer（10Hz）+ HPA 簇预热（同拍顺带 2 个簇，长路径查询时基本命中缓存）
     this.steerAccum += dt;
@@ -461,8 +473,8 @@ export class SwarmSystem {
       void raster;
       const _units = hooks.activeUnits?.();
       if (_units) for (const u of _units) if (u.carrier === 'entity' && u.activation === 'active') this.unitAir.set(u.swarmUid, u.isAir === true);
-      this.nav.steerEntities(_units, this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now,
-        (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
+      // ★ 运动单源（用户定 2026-09-27）：远程选位/风筝不驱动运动（开火独立子系统负责开火）。
+      this.nav.steerEntities(_units, this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now);
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
@@ -582,25 +594,8 @@ export class SwarmSystem {
       //   （队长核 → `applyDirective` 写池列 `directiveTargetX/Z`；本处只调用，不再混写）。
       const executing = l2ExecuteDirective(p, i, px, pz, now, p.squadId[i], this.squadStateOf?.(p.squadId[i]) ?? null);
       if (!executing) {
-        p.curSpeed[i] = p.wanderSpeed[i];
-        p.wanderTimer[i] -= tick;
-        if (p.wanderTimer[i] <= 0) {
-          const a = Math.random() * Math.PI * 2;
-          // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
-          const r = 6 + Math.random() * 16;
-          p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
-          p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
-          p.wanderTimer[i] = 5 + Math.random() * 5;
-        }
-        const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
-        const wd = Math.hypot(wdx, wdz);
-        const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
-        const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
-        const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
-        const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
-        const ml = Math.hypot(mx, mz);
-        p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
-        p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
+        // ★ 无令/到点=停（用户定 2026-09-27：池队"游走兜底"不存在——状态目标由引擎标签驱动）。
+        p.dirX[i] = 0; p.dirZ[i] = 0; p.curSpeed[i] = 0;
       }
     } else {
       // 察觉/进入仇恨 → 刷警戒（同伴延迟响应）
@@ -636,14 +631,8 @@ export class SwarmSystem {
           }
         }
       }
-      // ★ 远程不追打（让位本地移动 atomMove=255，否则原子覆盖仍按 directiveTarget 走向玩家）
-      if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
-        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.data.rangedPost(x, z, r, 0, now));
-        destX = t ? t.x : px;
-        destZ = t ? t.z : pz;
-        p.fromFlow[i] = 0;
-        p.atomMove[i] = 255;
-      }
+      // ★ 运动/开火解耦（用户定 2026-09-27）：远程**不再**选位/风筝/站住——追敌移动与其他兵种相同，
+      //   射击由独立开火子系统负责（可边走边打）。此处删除旧"远程不追打"运动覆盖。
       const mx = destX - px, mz = destZ - pz;
       const md = Math.hypot(mx, mz);
       if (md > 0.05) {

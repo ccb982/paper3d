@@ -72,8 +72,9 @@ export const SWARM = {
   ALERT_DELAY_SPAN: 1.3,
   ALERT_PAINT_RADIUS: 12,
   ALERT_PAINT_RADIUS_ATTACK: 10,
-  /** ★ L2 令执行到位半径（米；用户定 2026-09-27：池队在地图上按令走，到此半径内恢复游走驻守） */
-  L2_EXEC_ARRIVE_R: 6,
+  /** ★ L2 令执行到位半径（米；用户定 2026-09-27：池队在地图上按令走，到此半径内=到点停）。
+   *  必须**小于**引擎换标阈值（规划 5m / 持守 8m）——否则停在阈值外，永不换标（死锁）。 */
+  L2_EXEC_ARRIVE_R: 2,
 } as const;
 
 /** ★ 自主 LOD / 大队警戒参数（2026-09-19；《RTS架构.md》§5.10；集中可调） */

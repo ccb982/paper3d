@@ -504,40 +504,37 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
         patrolNext: (id, x, z, ax, az, r, leg) => {
-          // ★ 空中队长巡腿=**直航环点**（用户定 2026-09-27）：地面可行性 BFS 对飞行队返回 null
-          //   → 巡腿回退锚点=站桩（"到上限却没巡逻"的飞行爆炸怪根因之一）。
+          // ★ 总攻=全体到舰（用户定 2026-09-27）：巡逻腿=锚点（舰）——直接压到舰，不巡。
+          if (swarm.data.battlePosture === 'assault') return { x: ax, z: az };
+          // ★★ 巡逻设计（用户定 2026-09-27）：**巡逻=不停调用长/短寻路走向下一腿**——
+          //   本端口只产"下一腿目标点"：地面腿走可行性（reachFrom 校验，长短寻路同源消费）；
+          //   空中腿**不做可行性**（直航目标）。围绕点**跟随当前位（可一直变）**；
+          //   腿=**大幅侧向**（基准 24m，逐级回退）× 交替侧 + 轻微外推；
+          //   **绝不向舰大幅后退**（腿只有侧向+外向分量）；空中不做可行性、直接飞；地面走可达校验。
           const sq = swarm.squads.get(id);
+          let air = false;
           if (sq) {
-            let air = false;
             const p = swarm.pool;
             for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === sq.leaderUid) { air = p.isAir[i] === 1; break; }
             if (!air) for (const e of enemies) if (e.swarmUid === sq.leaderUid) { air = e.isAir; break; }
-            if (air) {
-              // ★ 空中巡逻=**随机取样**来回飞（用户定 2026-09-27）：锚点周围随机角度取点、
-              //   夹进事态环；**不做可行性检验**（空中不需要）。
-              const a = Math.random() * Math.PI * 2;
-              const qx = ax + Math.cos(a) * r, qz = az + Math.sin(a) * r;
-              return swarm.data.clampToRing(qx, qz);
-            }
           }
-          const pg = swarm.patrolNext(x, z, ax, az, r, leg);
-          if (pg) return pg;
-          // ★ 地面兜底（用户定 2026-09-27：**到岗也不许站住**）：BFS 取不到腿（水边/死角）→
-          //   逐方向×逐级找**可达**点（10/6/3m；朝舰/两侧/背舰；交替腿）；全不可达才 null
-          //   ——L3 位移只走单命令链（M0），不可达的腿没有走廊 = 站住（"腿在人不动"的根因）。
-          const cx = swarm.data.ring.cx, cz = swarm.data.ring.cz;
-          const dx = cx - x, dz = cz - z;
-          const d = Math.hypot(dx, dz) || 1;
-          const dirs: [number, number][] = [
-            [dx / d, dz / d], [-dz / d, dx / d], [dz / d, -dx / d], [-dx / d, -dz / d],
-          ];
-          for (const [ux, uz] of dirs) {
-            for (const step of [10, 6, 3]) {
-              const t = Math.min(step, d);
-              const qx = x + ux * t * leg;
-              const qz = z + uz * t * leg;
-              if (swarm.reachFrom(id, qx, qz)) return { x: qx, z: qz };
-            }
+          const ring = swarm.data.ring;
+          let ox = x - ring.cx, oz = z - ring.cz;
+          const od = Math.hypot(ox, oz);
+          if (od < 1e-3) { ox = 1; oz = 0; } else { ox /= od; oz /= od; }   // 外向（远离舰）
+          const tx2 = -oz, tz2 = ox;                                        // 侧向
+          const R = Math.max(24, r);
+          const drift = R * 0.25;                                           // 轻微外推（防原地/回退）
+          const s0 = leg >= 0 ? 1 : -1;
+          const cands: [number, number][] = [];
+          for (const rr of [R, R * 0.6, R * 0.3]) {
+            cands.push([x + tx2 * s0 * rr + ox * drift, z + tz2 * s0 * rr + oz * drift]);
+            cands.push([x - tx2 * s0 * rr + ox * drift, z - tz2 * s0 * rr + oz * drift]);
+          }
+          cands.push([x + ox * drift, z + oz * drift]);
+          for (const [gx, gz] of cands) {
+            if (air) return swarm.data.clampToRing(gx, gz);               // 空中：免可行性，夹环直飞
+            if (swarm.reachFrom(id, gx, gz)) return { x: gx, z: gz };     // 地面：可达校验
           }
           return null;
         },

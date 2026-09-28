@@ -19,6 +19,9 @@ export interface SquadOrderState {
   until: number;
   /** 命令来源（引擎命令优先；玩家令同链） */
   source: 'engine' | 'player';
+  /** ★ 小队执行状态标签（用户定 2026-09-27；简单口径）：保护/驻守/巡逻/行军——
+   *  状态只做一件事：**不停调用长/短寻路走向该状态目标**（其余不驱动运动）。 */
+  execState?: 'march' | 'hold' | 'patrol' | 'protect' | 'assault';
   /** 生效时刻（秒；startAfter 延迟发动） */
   notBefore: number;
   /** 等信号 id（undefined = 无需） */

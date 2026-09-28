@@ -26,7 +26,8 @@ export function setLiveOrderSource(fn: ((squadId: number) => LiveOrder | null) |
 
 /** ★ 队令目标（新 store 单源；缺省回退旧板） */
 export function goalOf(state: SquadOrderState): { x: number; z: number } | null {
-  return liveOrderOf?.(state.squadId)?.target ?? state.order.target ?? null;
+  // ★ 执行态目标优先（用户定 2026-09-27）：核心维护的执行副本（巡逻腿/段目标）是移动权威；引擎最新令仅兜底。
+  return state.order.target ?? liveOrderOf?.(state.squadId)?.target ?? null;
 }
 
 /** ★ 沿路由推进（S3a）：**下一个未到达的路点**——**目标锁存（S3b 已实装）**：选定后锁定到

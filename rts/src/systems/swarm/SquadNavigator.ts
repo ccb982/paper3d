@@ -14,7 +14,6 @@ import type { SwarmCarrier } from '../../entity/SwarmUnit';
 import type { SquadOrderState } from './squad/State';
 import { currentTargetOf } from './squad/Anchor';
 import type { Squad, SquadTable } from './SquadTable';
-import { shouldKite, kitePoint, RANGED } from './RangedTactics';
 import { FeasibilityPath } from './nav/LongPath';
 import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
@@ -25,11 +24,8 @@ import { edgeStepGreedy, axisStepToward } from './nav/EdgeFollow';
 const NAV_RANGE = 50;
 /** ★ 远程选位锁存（用户定 2026-09-27，命令非必要不频繁变更）：
  *  目标位移超此值 → 重选位（米） */
-const RANGED_REPICK_D = 6;
 /** ★ 走不动连续调用数（≈2s @10Hz）→ 重选一次位（可能换可达点） */
-const RANGED_BLOCKED_CALLS = 20;
 /** ★ 风筝模式退出滞回（米）：<24 触发边撤，>32 才解除（防阈值上每拍翻向） */
-const RANGED_KITE_OFF = 32;
 
 /** 寻路参数（集中可调） */
 /** ★ 路线覆盖门（用户定 2026-09-27）：路线=命令执行队列的一部分——未执行 ≥80% 不得覆盖
@@ -289,9 +285,6 @@ export class SquadNavigator {
   private readonly unitsBySquad = new Map<number, SwarmCarrier[]>();
   /** ★ 远程选位锁存（用户定 2026-09-27）：一次选位沿它走/到位就站住打——
    *  只有目标位移/风筝模式（带滞回）/走不动 才重选。防 10Hz 重算 → 目标翻转 → 原地来回。 */
-  private readonly rangedHold = new Map<number, {
-    x: number; z: number; at: number; tx: number; tz: number; kite: boolean; blocked: number; lx: number; lz: number;
-  }>();
   private readonly _from = { x: 0, z: 0 };
 
   /** ① 命令目标 → 路线（全队共用；**用命令=按距离选寻路**：>40m 长=可行性表 S2 / ≤40m 短=LocalStep S1）。
@@ -473,8 +466,6 @@ export class SquadNavigator {
     squads: SquadTable,
     stateOf: (sid: number) => SquadOrderState | null,
     now: number,
-    /** ★ 远程有利位置提供者（制高/掩体后；由指挥器实现；minDist = 边撤边打要求更远） */
-    rangedPost?: (x: number, z: number, range: number, minDist?: number) => { x: number; z: number } | null,
   ): void {
     if (!units || units.length === 0) return;
     const bySquad = this.unitsBySquad;
@@ -505,75 +496,6 @@ export class SquadNavigator {
       for (const u of members) {
         // ★ 远程：**统一形式（用户定 2026-09-25）**——选位/风筝只**产出一个目标点**，
         //   移动走同一条链（`edgeGreedy` 格边步 + 可行性）；不可达/未到位 → 站住打。禁止旁路直推。
-        // ★ 射击/移动正交（用户定 2026-09-27）：**远程选位只在交战距离内接管**——远了走正常
-        //   移动链（行军/巡逻照常，边走边打，开火独立）；空中队完全不进此分支（随机巡逻直航）。
-        const upR = u.position;
-        const dT = Math.hypot(tgt.x - upR.x, tgt.z - upR.z);
-        if (rangedPost && u.attackType === 'ranged' && !u.isAir && dT <= NAV_RANGE) {
-          const up = u.position;
-          const speed = u.moveSpeed > 0 ? u.moveSpeed : 2.5;
-          // ★ 选位修正（用户定 2026-09-27）：
-          //   ① **中心 = 目标**——`rangedPost(px,pz,...)` 的语义是"玩家/目标为圆心"（环带距离、
-          //      掩体 LOS 都是"目标→该点"）。此前传单位自己 → 以己为圆心乱选 40m 环点/掩体方向反。
-          //   ② **锁存**（命令非必要不频繁变更）：一次选位沿它走、到位就站住打；只有
-          //      目标位移 > 6m / 风筝模式滞回翻转 / 走不动 ≈2s 才重选。
-          const held = this.rangedHold.get(u.swarmUid);
-          let kite = held ? held.kite : shouldKite(dT, NAV_RANGE);
-          if (held && kite && dT > RANGED_KITE_OFF) kite = false;       // 退出滞回
-          else if (held && !kite && dT < RANGED.DANGER) kite = true;    // 进入
-          const needPick = !held || kite !== held.kite
-            || Math.hypot(tgt.x - held.tx, tgt.z - held.tz) > RANGED_REPICK_D
-            || held.blocked >= RANGED_BLOCKED_CALLS;
-          let kp: { x: number; z: number } | null = held && !needPick ? { x: held.x, z: held.z } : null;
-          if (needPick) {
-            const fresh = kite
-              ? (rangedPost(tgt.x, tgt.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE))
-              : rangedPost(tgt.x, tgt.z, NAV_RANGE);
-            kp = fresh;
-            if (fresh) {
-              this.rangedHold.set(u.swarmUid, {
-                x: fresh.x, z: fresh.z, at: now, tx: tgt.x, tz: tgt.z, kite, blocked: 0, lx: up.x, lz: up.z,
-              });
-            } else if (held) {
-              held.blocked = 0; held.at = now;   // 无位可选 → 站住打（保留目标锚，防每拍重算）
-            }
-            if (this.rangedHold.size > 512) this.rangedHold.clear();
-          }
-          if (kp) {
-            // ★ 飞行直航单源（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位不经地面
-            //   格边步（层判等永不成立 → 站住/抖动），直接飞向选位点。
-            if (u.isAir) { this.flyStraight(u, kp.x, kp.z, speed); continue; }
-            const e = this.edgeGreedy(up.x, up.z, kp.x, kp.z);
-            if (e) {
-              const mt = u.moveTarget;
-              if (mt) { mt.x = kp.x; mt.y = 0; mt.z = kp.z; }
-              else u.moveTarget = { x: kp.x, y: 0, z: kp.z };
-              u.controlSource = 'swarm';
-              u.applySteer({
-                dirX: e.dx, dirZ: e.dz, speed,
-                source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
-                climb: u.swarmUid === squad.leaderUid && cred !== undefined,
-                climbPt: u.swarmUid === squad.leaderUid ? cred : undefined,
-              });
-              const h2 = this.rangedHold.get(u.swarmUid);
-              if (h2) { h2.blocked = 0; h2.lx = up.x; h2.lz = up.z; }
-              continue;
-            }
-            // 走不动（未到位且取不到步）：累计 → 超阈值重选一次（held 在 needPick 里读 blocked）
-            const h3 = this.rangedHold.get(u.swarmUid);
-            if (h3 && Math.hypot(up.x - h3.lx, up.z - h3.lz) < 0.05
-              && Math.hypot(kp.x - up.x, kp.z - up.z) > 2.5) h3.blocked++;
-            else if (h3) { h3.blocked = 0; h3.lx = up.x; h3.lz = up.z; }
-          }
-          // ★ 到位（或目标点不可达/同格）：站住打（不追、不随编队前压）——锁存保持，目标大位移才重选
-          {
-            const mt = u.moveTarget;
-            if (mt) { mt.x = up.x; mt.y = 0; mt.z = up.z; }
-            u.controlSource = 'swarm';
-            u.applySteer({ dirX: 0, dirZ: 0, speed: 0, source: 'formation', targetX: up.x, targetY: 0, targetZ: up.z });
-            continue;
-          }
-        }
         // ★ 架构底线（用户定 2026-09-26）：**代理与队长的所有移动都来自长短寻路**——
         //   成员沿**同一走廊**：无状态 routeNext 求"己身的下一路点"（不追队长位置；无走廊 → 停）。
         let rank = 0;

@@ -229,12 +229,10 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       this.controller.moveDir.y = 0;
       return;
     }
-    // ★ 队长指令限速（ROE/压迫档）仍生效；本地 AI 的方向选择被让位
-    let mul = this.directiveKind !== 'none' ? this.directiveSpeedMul : 1;
-    if (this.climbOrdered && mul < 1) mul = 1;   // 凭证在身：不被零限速压死
+    // ★ 运动/开火解耦（用户定 2026-09-27）：移动速度**不消费 directive**（指令只服务开火/表现）。
     const base = s.speed > 0 ? s.speed : this.moveSpeed;
     this.applyingSteer = true;
-    this.moveBy(dx, dz, dt, base * mul);
+    this.moveBy(dx, dz, dt, base);
     this.applyingSteer = false;
   }
 

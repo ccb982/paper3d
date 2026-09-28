@@ -138,9 +138,8 @@ console.log('[3] 四兵种管理器');
   ok(ranged.assign(ctx) === 1, '远程分配 1 队');
   const rt = ranged.targets.get(12);
   ok(rt !== undefined && Math.abs(rt.x - 18) < 0.01, '远程保距到射程环（50→18）');
-  ok(flyer.assign(ctx) === 1, '飞天分配 1 队');
-  const ft = flyer.targets.get(13);
-  ok(ft !== undefined && Math.abs(Math.hypot(ft.x, ft.z) - 10) < 0.01, '飞天航线在 10m 圈上');
+    ok(flyer.assign(ctx) === 0, '★ 飞天管理器只编成、不给目标（重写 2026-09-27）');
+  ok(flyer.targets.get(13) === undefined, '★ 飞天不再产航线/选位目标（移动由引擎标签驱动）');
   // 环内夹取：环 [5, 8] → 近战 12 要夹到 8；环 [5, 20] → 远程 18 不夹
   melee.assign({ pos, ringMin: 5, ringMax: 8, now: 0, posture: 1 });   // 总攻→冲锋后夹环
   ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 5) < 0.01, '近战冲锋（压到攻距 3m）目标夹进环（下界 5）');
@@ -1337,15 +1336,17 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   const o2 = br.writer.store.get(2)!.order;
   const o3 = br.writer.store.get(3)!.order;
   ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o3.kind === 'patrol' && o1.mission === 'patrol', '★ 总攻：全兵种均为 patrol（到顶维持巡逻；去掉其他指令）');
-  ok(Math.abs(o1.target.x - 200) < 0.01 && Math.abs(o1.target.z) < 0.01
-    && Math.abs(o2.target.x - 200) < 0.01 && Math.abs(o3.target.x - 200) < 0.01,
-    '★ 总攻：全体目标 = 舰船（强制寻路到舰）');
+  // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
+  ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10
+    && Math.hypot(o2.target.x - 200, o2.target.z) <= 10
+    && Math.hypot(o3.target.x - 200, o3.target.z) <= 10,
+    '★ 总攻：全体目标 = 舰旁可站点（≤10m；强制寻路到舰）');
   br.writer.store.set(2, {
     order: { kind: 'garrison', source: 'engine', target: { x: 1, z: 1 }, seq: 0, ttl: 0 },
     phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.2);
-  ok(br.writer.store.get(2)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(2)!.order.target.x - 200) < 0.01,
+  ok(br.writer.store.get(2)!.order.kind === 'patrol' && Math.hypot(br.writer.store.get(2)!.order.target.x - 200, br.writer.store.get(2)!.order.target.z) <= 10,
     '★ 强制令绕稳定门（不被 kept 拦）');
   // ★ 总攻强制覆盖所有人（含玩家手动令；用户定 2026-09-26）
   br.writer.store.set(1, {
@@ -1356,7 +1357,7 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   ok(br.hasFirePermit(7) === false, '开火许可查询：未授权 = false');
   br.timers.allowFire(7, true);
   ok(br.hasFirePermit(7) === true, '★ 开火许可查询：授权 = true（判官豁免消费）');
-  ok(br.writer.store.get(1)!.order.kind === 'patrol' && Math.abs(br.writer.store.get(1)!.order.target.x - 200) < 0.01,
+  ok(br.writer.store.get(1)!.order.kind === 'patrol' && Math.hypot(br.writer.store.get(1)!.order.target.x - 200, br.writer.store.get(1)!.order.target.z) <= 10,
     '★ 总攻强制覆盖玩家手动令（无例外）');
 }
 
@@ -1396,12 +1397,11 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
   const br = new EngineBridge(liveS);
   br.shadow = true;
   br.tick(0.6, 1);
-  ok(calls.length === 1 && calls[0] === 1, '★ 发呆（stillS≥6）→ 强制重寻路 forceRepath');
   const o = br.writer.store.get(1)!.order;
-  // ★ P-L3 口径（用户定 2026-09-27）：工兵没活**不许站住** → **段进-巡逻兜底接管**
-  //   （首段朝舰推进一段 ≤30m；planSwitch 强制发令）
-  ok(o.kind === 'act' && o.target.x > 100 && o.target.x <= 131, '★ 工兵没活 → 段进兜底接管（朝舰推一段）');
-  ok(br.dbg.stall === 1, '兜底计数 +1');
+  // ★ 唯一兜底（用户定 2026-09-27）：**行军/巡逻交替**——没活 → 行军段（朝舰推一段 ≤30m）。
+  ok(o.kind === 'act' && o.target.x > 100 && o.target.x <= 131, '★ 没活 → 唯一兜底接管（行军段：朝舰推一段）');
+  ok(o.state === 'march' || o.state === 'patrol', '★ 兜底令带引擎标签（march/patrol）');
+  void calls;
 }
 
 // ---------- 段进循环（用户定 2026-09-27：推进一段 → 巡逻 → 再推进） ----------

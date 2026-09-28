@@ -1,11 +1,12 @@
 // ============================================================
 // swarm/tiers/L2 —— L2 档：队长 + 代理（只在地图数据上走；用户定 2026-09-27）
 // ============================================================
-// 归属（《移动执行重写.md》§7.5）：
-//   · 拥有：队长 + 代理（沿用 SoA 存储，但**行为只在本模块**）；执行队令。
-//   · 移动口径（用户定 2026-09-27）：**L2/L1 只走长寻路**——跟随队长核 ensurePath 产出的
-//     可行性表**长走廊**路点（绕水/绕崖不直撞）；走廊走完/无走廊才退回指令直行。
-//   · 不做：段进-巡逻/停滞救援（**兜底唯一归属 = L3**）；掩体/攻击槽（L3 的事）。
+// ★★ 移动设计（用户定 2026-09-27，单源口径；与 L1/L3 同）：
+//   · 移动只有两种原语：**长寻路**（可行性长走廊）与**短寻路**（短跳）；
+//   · **驻守** = 停在目标点；**巡逻** = 状态，**不停调用长/短寻路走向下一腿**；
+//   · **空中不消费 directive**（抑制/选位/风筝非本设计）：移动只认**队令目标**
+//     （`orderTarget`，队长核写；巡逻腿也在其中），到点停；
+//   · 不做：段进-巡逻/停滞救援（兜底唯一归属 = L3）；掩体/攻击槽（L3 的事）。
 // ============================================================
 
 import type { AgentPool } from '../AgentPool';
@@ -24,12 +25,14 @@ const STOP_R = 1.2;
  * @returns true = 本拍已接管移动（调用方跳过游走）；false = 无令/已到位 → 交回游走。
  */
 export function l2ExecuteDirective(
-  pool: AgentPool, i: number, px: number, pz: number, now: number,
+  pool: AgentPool, i: number, px: number, pz: number, _now: number,
   squadId: number, st: SquadOrderState | null,
 ): boolean {
-  // ★ 长寻路（用户定 2026-09-27：L2/L1 只走长寻路）：队长核 ensurePath 的长走廊
-  const corr = st?.corridor;
-  if (corr && corr.length > 1) {
+  // ★ 运动单源（用户定 2026-09-27）：只认**队令目标**——地面优先**长/短寻路走廊**（队长核产出），
+  //   无走廊直行；空中直航。**不消费 directive**（抑制/选位/风筝不属于本设计；开火独立）。
+  if (pool.orderKind[i] === 0) return false;   // 无令 → 停（驻守/巡逻由队长核换目标）
+  const corr = pool.isAir[i] === 1 ? undefined : (st && st.corridor && st.corridor.length > 1 ? st.corridor : undefined);
+  if (st && corr) {
     const stamp = `${Math.round(st.pathGoalX ?? 0)},${Math.round(st.pathGoalZ ?? 0)}:${corr.length}`;
     let f = follow.get(squadId);
     if (!f || f.stamp !== stamp) {
@@ -46,25 +49,23 @@ export function l2ExecuteDirective(
     const gdx = w.x - px, gdz = w.z - pz;
     const gd = Math.hypot(gdx, gdz);
     if (gd > STOP_R) {
-      pool.homeX[i] = w.x; pool.homeZ[i] = w.z;   // 家随路点（走完围绕终点驻守）
-      pool.curSpeed[i] = pool.speed[i] * (pool.directiveSpeedMul[i] > 0 ? pool.directiveSpeedMul[i] : 1);
+      pool.homeX[i] = w.x; pool.homeZ[i] = w.z;
+      pool.curSpeed[i] = pool.speed[i];
       pool.dirX[i] = gdx / gd;
       pool.dirZ[i] = gdz / gd;
       return true;
     }
-    return false;   // 走廊走完 → 交回游走/下一条令
+    return false;
   }
-
-  // 无走廊 → 原口径：活跃指令 + 距目标 > 到位半径 → 直行（短程/紧急用）
-  if (pool.directiveKind[i] === 0) return false;
-  if (pool.directiveUntil[i] !== 0 && now >= pool.directiveUntil[i]) return false;
-  const dtx = pool.directiveTargetX[i], dtz = pool.directiveTargetZ[i];
-  const gdx = dtx - px, gdz = dtz - pz;
+  const ox = pool.orderTargetX[i], oz = pool.orderTargetZ[i];
+  const gdx = ox - px, gdz = oz - pz;
   const gd = Math.hypot(gdx, gdz);
-  if (gd <= SWARM.L2_EXEC_ARRIVE_R) return false;
-  pool.homeX[i] = dtx; pool.homeZ[i] = dtz;
-  pool.curSpeed[i] = pool.speed[i] * (pool.directiveSpeedMul[i] > 0 ? pool.directiveSpeedMul[i] : 1);
-  pool.dirX[i] = gdx / gd;
-  pool.dirZ[i] = gdz / gd;
-  return true;
+  if (gd > SWARM.L2_EXEC_ARRIVE_R) {
+    pool.homeX[i] = ox; pool.homeZ[i] = oz;
+    pool.curSpeed[i] = pool.speed[i];
+    pool.dirX[i] = gdx / gd;
+    pool.dirZ[i] = gdz / gd;
+    return true;
+  }
+  return false;   // 到点停
 }

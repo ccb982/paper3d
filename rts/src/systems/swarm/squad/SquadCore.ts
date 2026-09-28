@@ -117,10 +117,25 @@ export class SquadCore {
     // ★ 命令无 TTL（用户定 2026-09-26）：不过期、不自动回收，直到被替换
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
-    // ★ 巡逻（用户定 2026-09-25）：引擎**一条令**，小队**自维持**——到达本腿 → 查询下一个可行点 → 短寻路来回
-    if (st.order.kind !== 'protect' && st.order.mission === 'patrol') {
+    // ============================================================
+    // ★★ 移动设计（用户定 2026-09-27，单源口径）：
+    //   · 移动只有两种原语：**长寻路**（可行性长走廊）与**短寻路**（短跳）；
+    //   · **驻守** = 停在目标点（到点即停）；
+    //   · **巡逻** = 一个**状态**：**不停调用长/短寻路走向下一个巡逻目标（腿）**，到腿换下一腿；
+    //     空中不做可行性（直航腿）；左右大幅、围绕点随当前位置漂移、不许大幅后退。
+    //   · 其他（风筝/抑制/选位等）不属于本设计——**一律不驱动运动**（射击独立、边走边打）。
+    // ============================================================
+    // ★ 巡逻（引擎一条令，小队自维持）：**引擎令（非玩家/工兵）目标已在身边（≤8m）= 已到点** →
+    //   **自动进巡逻状态**（不停调用长/短寻路取下一腿）；显式 mission=patrol 也进巡。
+    // ★ 引擎令目标（永不被执行副本覆盖）——归位/锚点以此为准。
+    const engT = this.order?.target ?? null;
+    // ★ 标签**只由蜂群引擎给**（用户定 2026-09-27）：队长核**只读** `order.state`，不得自设/自转；
+    //   缺失（旧令兼容）→ 退化 march/protect。状态语义只有一条：不停调用长/短寻路走向状态目标。
+    st.execState = this.order?.state
+      ?? (st.order.kind === 'protect' ? 'protect' : 'march');
+    if (st.order.kind !== 'protect' && st.execState === 'patrol') {
       if (!this.patrolAnchor) {
-        this.patrolAnchor = { x: st.order.target?.x ?? lx, z: st.order.target?.z ?? lz };   // 引擎令目标 = 锚点（一次）
+        this.patrolAnchor = { x: engT?.x ?? lx, z: engT?.z ?? lz };   // 引擎令目标 = 锚点（一次）
       }
       const ax0 = this.patrolAnchor.x;
       const az0 = this.patrolAnchor.z;
@@ -131,7 +146,9 @@ export class SquadCore {
         this.patrolGoal = pg;
         this.patrolLeg = -this.patrolLeg;
       }
-      st.order.target = { x: pg.x, z: pg.z };   // 执行副本覆盖（引擎令=锚点不动）
+      st.order.target = { x: pg.x, z: pg.z };   // 巡逻：执行副本=当前腿（引擎令=锚点不动）
+    } else if (st.order.kind !== 'protect' && engT) {
+      st.order.target = { x: engT.x, z: engT.z };   // 行军/驻守：目标**归位**=引擎令目标
     }
     // ① 站位锚（defend/act/patrol 经 resolveAnchor；protect 走 blockCheck 调整点，不用锚）
     let anchor: { x: number; z: number } | null = null;
@@ -150,9 +167,12 @@ export class SquadCore {
       st.order.target = { x: sel.x, z: sel.z };
       port.ensurePath(st, squad, now);
     }
-    // ④ 队长目标（protect 已挡住 → 原地驻守；其余 = 原子目标）→ 环夹取
-    let ax = sel.x;
-    let az = sel.z;
+    // ④ 队长位移目标（用户定 2026-09-27，**运动单源**）：
+    //   · 非保护状态：位移目标 = **路点/令目标（anchor）**——长/短寻路的当前路点或最终令目标；
+    //   · 保护状态：按保护调整点（sel）；
+    //   · atom（行军/驻守/抑制/选位…）**只影响表现/开火，不驱动位移**（其他都没了）。
+    let ax = st.order.kind === 'protect' ? sel.x : (anchor ? anchor.x : lx);
+    let az = st.order.kind === 'protect' ? sel.z : (anchor ? anchor.z : lz);
     if (sel.atom === 'garrison' && st.order.kind === 'protect') { ax = lx; az = lz; }
     const c = port.clampRing(ax, az);
     ax = c.x; az = c.z;
@@ -174,15 +194,15 @@ export class SquadCore {
       const dir = decompose(squad, st, bucket, now, hpRatio, () => this.seq++,
         atTarget, port.mobTactics(squad.mobKind));
       if (!port.fireAllowed(uid)) dir.fire = 'hold';
-      if (!squad.singleton) {
-        if (uid === squad.leaderUid) {
-          dir.targetX = ax;
-          dir.targetZ = az;
-        } else {
-          const off = formationOffset(squad.type, rank);
-          dir.targetX = lx + fx * off.fx - fz * off.fz;
-          dir.targetZ = lz + fz * off.fx + fx * off.fz;
-        }
+      // ★ 位移目标=状态目标（用户定 2026-09-27）：**所有队同口径**（含 singleton/精英）——
+      //   队长取状态目标、成员取槽位；atom/directive 不驱动位移（开火独立）。
+      if (uid === squad.leaderUid) {
+        dir.targetX = ax;
+        dir.targetZ = az;
+      } else {
+        const off = formationOffset(squad.type, rank);
+        dir.targetX = lx + fx * off.fx - fz * off.fz;
+        dir.targetZ = lz + fz * off.fx + fx * off.fz;
       }
       rank++;
       port.applyDirective(uid, st.order, dir, st.until, ax, az);

@@ -36,6 +36,9 @@ export interface SquadOrder {
   /** TTL（游戏分钟；命令/规划层用 GAME_MIN） */
   ttl: number;
   mission?: string;
+  /** ★ 状态标签（用户定 2026-09-27：**只有蜂群引擎能给**；队长核只按标签执行长/短寻路）：
+   *  march（短时效，到位换标）/ hold / patrol / protect / assault */
+  state?: 'march' | 'hold' | 'patrol' | 'protect' | 'assault';
 }
 // ★ 命令格式（用户定）：**作用对象只有队长**（引擎只指挥队长；成员一律跟队长走）。
 //   · 位移命令：径向+切向 → target 过 OrderValidator（①环内②密度③可达）→ 下发（Spread 只解 θ）
