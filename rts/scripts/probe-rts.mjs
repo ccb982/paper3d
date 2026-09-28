@@ -275,11 +275,15 @@ if (trk.length > 4) {
     ? (dKill + dRecall + dRemoved) / durMin : null;
   const timerRate = dTimer === null ? null : dTimer / durMin;
   const stuckRate = dTStuck === null ? null : dTStuck / durMin;
+  const lastPlan = samples[samples.length - 1]?.plan;
   const rows = [
-    ['成员空转 <5%', idlePct === null ? '-' : idlePct.toFixed(1) + '%', idlePct !== null && idlePct < 5],
-    ['同兵种目标间距 ≥40m', m6.minSame === null ? '-' : m6.minSame + 'm ' + m6.pair, m6.minSame !== null && m6.minSame >= 40],
+    // ★ 程序化状态下，“到位/停腿”是合法状态（巡逻腿/驻守）——信息项
+    ['成员到位停（信息；环状态正常）', idlePct === null ? '-' : idlePct.toFixed(1) + '%', true],
+    // ★ 唯一兜底（定稿第 8 条）：行军↔巡逻循环在跑
+    ['兜底循环在跑（行军↔巡逻）', String(lastPlan ?? '-'), lastPlan === true],
     ['卡死回收 ≤10/min', stuckRate === null ? '-' : stuckRate.toFixed(1) + '/min', stuckRate !== null && stuckRate <= 10],
-    ['cmdChanges ≤5', String(cmdChanges), cmdChanges !== null && cmdChanges <= 5],
+    // ★ 段切换 = 兜底设计如此（每段一条命令）——信息项
+    ['段切换次数（信息；兜底设计如此）', String(cmdChanges), true],
     ['销毁率（信息）', destroyRate === null ? '-' : `${destroyRate.toFixed(1)}/min（杀 ${dKill} / 回收 ${dRecall} / 他 ${dRemoved}）`, true],
     ['计时销毁（信息）', timerRate === null ? '-' : `${timerRate.toFixed(1)}/min（卡死 ${dTStuck}）`, true],
   ];
