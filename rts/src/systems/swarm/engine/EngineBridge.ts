@@ -597,7 +597,10 @@ export class EngineBridge {
       // ★ 巡逻（用户定 2026-09-25）：**引擎只发一条**——常规部署且**已到岗**、无威胁 → mission='patrol'，
       //   之后小队自维持巡逻（引擎不逐拍指挥；同签名重发被 kept 去重）
       const arrived = rec.phase === 'done';   // ★ M4（用户定）：到达判定单源 = 队长核报告的 done
-      const patrol = planMission || (final.source === 'routine' && arrived
+      // ★ 到事态上限的"守原地"改为**就地巡逻**（用户定 2026-09-27）：decideChain 到上限给 situation/defend
+      //   （守原地=站着不动）→ 判官按净位移收掉——**这才是"没命令"的真相**。给 patrol 令后队长核自维持巡腿。
+      const atLimitDefend = force === null && final.source === 'situation' && final.kind === 'defend';
+      const patrol = planMission || atLimitDefend || (final.source === 'routine' && arrived
         && hitId !== rec.id && this.protect.linkOf(rec.id) === undefined);
       pending.push({ rec, cur, dec: final, tx, tz, mission: patrol ? 'patrol' : undefined, force: planSwitch });
     }

@@ -1070,6 +1070,29 @@ console.log('[12k] advancePoint：舰向全不可达 → 退玩家锚；都不�
   ok(!!o && !!o.target && o.target.x < 100, '★ 舰向不可达 → 退玩家锚（朝玩家推进）');
 }
 
+// ---------- 到事态上限 → 就地巡逻（用户定 2026-09-27："没命令"真相） ----------
+console.log('[12l] 到事态上限的守原地 → 就地巡逻（defend 带 patrol，不再站桩）');
+{
+  const sq = { id: 6, role: 'melee' as const, x: 150, z: 0, alive: 8, phase: 'executing' };
+  const live = {
+    player: () => ({ x: 0, z: 0 }),
+    ship: () => ({ x: 0, z: 0 }),
+    squads: () => [sq],
+    emit: () => { /* */ },
+    canReach: () => true,
+  };
+  const br = new EngineBridge(live);
+  br.shadow = true;
+  br.dbg.ringMin = 0;
+  br.dbg.ringMax = 100;   // 距舰 150 ≥ 100 → 到上限
+  const mgr = (br as unknown as { melee: { assign: (c: unknown) => void; targets: Map<number, { x: number; z: number }> } }).melee;
+  mgr.assign = () => { /* 不产决策 */ };
+  mgr.targets.clear();
+  br.tick(1, 1);
+  const o = br.writer.store.get(6)?.order;
+  ok(!!o && o.kind === 'defend' && o.mission === 'patrol', '★ 到上限 → defend 带 patrol（不再站桩被收）');
+}
+
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
 console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看门狗 / 补兵）');
 {

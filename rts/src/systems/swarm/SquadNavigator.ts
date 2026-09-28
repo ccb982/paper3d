@@ -32,6 +32,10 @@ const RANGED_BLOCKED_CALLS = 20;
 const RANGED_KITE_OFF = 32;
 
 /** 寻路参数（集中可调） */
+/** ★ 路线覆盖门（用户定 2026-09-27）：路线=命令执行队列的一部分——未执行 ≥80% 不得覆盖
+ *  （长短切换/换路型同理）；仅 目标大位移 / 强制救援 / 已执行≥80% 后的停滞 才允许换。 */
+const ROUTE_REPLACE_PROGRESS = 0.8;
+
 export const NAV = {
   /** 目标位移超此值 → 重算（米） */
   RETARGET_DIST: 24,
@@ -346,16 +350,29 @@ export class SquadNavigator {
       state.stallD = dNow;
     }
     const stalled = hasPath && now - (state.stallAt ?? now) > NAV.STALL_S;
-    // ★ 非必要不重规划（用户定 2026-09-27）：地形戳记变化**不再单独触发**（工具挖坑/掩体会频繁挠动戳记）；
-    //   仅“目标位移 > 阈值”或“净推进停滞”才重规划。
-    if (hasPath && moved <= NAV.RETARGET_DIST && !stalled) return;
+    // ★ 路线覆盖门（用户定 2026-09-27）：**路线=命令执行队列的一部分，不能贸然覆盖**——
+    //   现有路线已执行（游标消耗）≥ ROUTE_REPLACE_PROGRESS 才允许换；仅三类例外：
+    //   ① 强制救援（forced）② 目标大位移（moved > RETARGET_DIST）③ 已执行≥80% 后的停滞。
+    //   否则保持当前路线/路型（长/短不再随阈值横跳 → 不原地打转）。
+    const routeProg = hasPath
+      ? Math.min(1, (state.followIdx ?? 0) / Math.max(1, (cur?.length ?? 1) - 1))
+      : 1;
+    const canReplace = forced || moved > NAV.RETARGET_DIST
+      || (stalled && routeProg >= ROUTE_REPLACE_PROGRESS);
+    if (hasPath && !canReplace) return;
     if (!forced && state.pathFailedAt > 0 && now - state.pathFailedAt < NAV.FAIL_COOLDOWN_S) return;   // ★ forced 绕过冷却
     // ★ 长短归属（用户定 2026-09-25）：**按距离**（>40m 长 / ≤40m 短）；长寻路非引擎专属——
     //   队长派件也可走长寻路（如工兵被派到防区）。
     // ★ 长短寻路分工（用户定 2026-09-25）：长行军（>LONG_PATH_DIST）→ **长寻路**（BFS 全走廊）；
     //   短程（交战/巡逻/驻守/就近施工）→ 短跳（LOS 10m 贪心）
     const dTgt0 = Math.hypot(tgt.x - this._from.x, tgt.z - this._from.z);
-    const longHaul = dTgt0 > NAV.LONG_PATH_DIST;
+    // ★ 长短归属**带滞回**（用户定 2026-09-27，治"有命令却不执行"）：固定 40m 阈值在目标距离 34~46m
+    //   来回时会让路型每拍/每次重算横跳（短跳 2 点 ↔ BFS 长走廊）→ 方向翻转 → 原地打转。
+    //   依据**现有路型**带 ±8m 死区：长则更晚才回落，短则更晚才升长。
+    const wasLong = (state.corridor?.length ?? 0) > 4;
+    const longHaul = wasLong
+      ? dTgt0 > NAV.LONG_PATH_DIST - 8
+      : dTgt0 > NAV.LONG_PATH_DIST + 8;
     if (this.weighted && this.feas.readyFor() && !longHaul) {
       // ★ S1：短寻路 = localStep（两阶段：语义安全引导 → 可行性校验；终点精确；无解 null）
       //   用户口径：路径无需最短；目标点不许走偏；上坡显式（climb 标注）
