@@ -301,8 +301,14 @@ export class SquadNavigator {
     if (state.climbCred) CLIMB_ROUTE_STATS.kept++;
   }
 
-  ensurePath(_squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0): void {
-    if (squad.type === 'flyer') return;          // 飞行兵走直线（独立空中层）
+  ensurePath(_squads: SquadTable, squad: Squad, state: SquadOrderState, now: number, leaderY = 0, leaderAir = false): void {
+    // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：飞行队 + **空中队长**（如战争术士）
+    //   不进地面寻路——不建走廊（移动由 driveAgent/steerEntities 的空中直航承担）。
+    if (squad.type === 'flyer' || leaderAir) {
+      state.corridor = undefined; state.climbCred = undefined;
+      state.followIdx = undefined; state.tgtIdx = undefined;
+      return;
+    }
     const tgt = state.order.target;
     if (!tgt) return;
     // ★ 到达判定（用于凭证回收）：上一次路线的目标点已被走到
@@ -476,6 +482,21 @@ export class SquadNavigator {
             ? (rangedPost(up.x, up.z, NAV_RANGE, dT + 4) ?? kitePoint(tgt.x, tgt.z, up.x, up.z, NAV_RANGE))
             : rangedPost(up.x, up.z, NAV_RANGE);
           if (kp) {
+            // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外）：空中单位不经地面
+            //   格边步（层判等永不成立 → 站住/抖动），直接飞向选位点。
+            if (u.isAir) {
+              const adx = kp.x - up.x, adz = kp.z - up.z;
+              const al = Math.hypot(adx, adz) || 1;
+              const mtA = u.moveTarget;
+              if (mtA) { mtA.x = kp.x; mtA.y = 0; mtA.z = kp.z; }
+              else u.moveTarget = { x: kp.x, y: 0, z: kp.z };
+              u.controlSource = 'swarm';
+              u.applySteer({
+                dirX: adx / al, dirZ: adz / al, speed,
+                source: 'formation', targetX: kp.x, targetY: 0, targetZ: kp.z,
+              });
+              continue;
+            }
             const e = this.edgeGreedy(up.x, up.z, up.y, kp.x, kp.z);
             if (e) {
               const mt = u.moveTarget;
@@ -509,6 +530,24 @@ export class SquadNavigator {
         let needClimb = isLead ? (state?.climbCred !== undefined) : true;
         let needClimbPt = state?.climbCred;
         let memberDirect: { dx: number; dz: number } | null = null;   // ★ 成员兜底方向（direct）
+        // ★ 飞行直航（空中层，用户定 2026-09-27）：空中单位不走地面 corridor/memberStep——
+        //   队长飞命令目标、成员飞队长；否则地面层判等/格边步会导致路点不推进（卡水/抖）。
+        if (u.isAir) {
+          const fx = isLead ? tgt.x : lead.x;
+          const fz = isLead ? tgt.z : lead.z;
+          const fdx = fx - upos0.x, fdz = fz - upos0.z;
+          const fl = Math.hypot(fdx, fdz) || 1;
+          const mtA = u.moveTarget;
+          if (mtA) { mtA.x = fx; mtA.y = 0; mtA.z = fz; mtA.climb = false; }
+          else u.moveTarget = { x: fx, y: 0, z: fz, climb: false };
+          u.controlSource = 'swarm';
+          u.applySteer({
+            dirX: fdx / fl, dirZ: fdz / fl,
+            speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5,
+            source: 'formation', targetX: fx, targetY: 0, targetZ: fz,
+          });
+          continue;
+        }
         const isFlyer = squad.type === 'flyer';
         if (!isLead && isFlyer) {
           // ★ 飞行队成员（用户定 2026-09-26）：**直航队长**（不走地面 memberStep/格边步）——

@@ -54,6 +54,12 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
     const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
       p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
     if (ld) {
+      // ★ 飞行直航（用户定 2026-09-27 /《移动执行重写.md》§0 例外，治"空中队长卡在水上路点抖"）：
+      //   空中单位**不消费地面走廊/格边步**——直接朝活动目标飞；否则 routeCursor 的层判等
+      //   （地面格 h vs 空中 y）永不成立 → 路点不推进 → 在路点上正负翻转抖动。
+      if (p.isAir[i] === 1) {
+        dx = ld.x; dz = ld.z;
+      } else {
       const st = squad ? host.squadStateOf(squad.id) : null;
       if (st?.climbCred) { cred = true; credPt = st.climbCred; }
 
@@ -76,6 +82,7 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
           // ★ M0：无走廊/无路点 → **持令原地停**（硬边接触修正由 inside 分支处理）
           if (rd) { dx = rd.x; dz = rd.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
         }
+      }
       }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
   } else if (squad) {

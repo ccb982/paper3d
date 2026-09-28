@@ -63,11 +63,12 @@ export class OrderWriter {
       } else {
         // ★★ 限制发放（用户定 2026-09-27）：**同签名不重发**（不再每帧续期/写板；
         //   无 TTL 后续期已无意义，反而每帧重发会打扰执行层节奏）。
+        // ★ 同签名容差 1m（用户定 2026-09-27）：validate/spread 每拍给出的**亚米级目标微移**
+        //   不算换令（精确相等会导致每帧重发 → 队长核 pending 重置 → 巡腿目标每帧重选 = 拖抽）。
         const sameSig =
           cur.order.kind === order.kind &&
           (cur.order.mission ?? '') === (order.mission ?? '') &&
-          cur.order.target.x === order.target.x &&
-          cur.order.target.z === order.target.z;
+          Math.hypot(cur.order.target.x - order.target.x, cur.order.target.z - order.target.z) <= 1;
         if (sameSig) { this.dbg.kept++; return false; }
         const canSwitch =
           cur.progress >= ORDER_STABLE.PROGRESS || cur.stillS >= ORDER_STABLE.STUCK_S;

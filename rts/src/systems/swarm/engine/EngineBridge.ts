@@ -536,8 +536,10 @@ export class EngineBridge {
             if (np) { pl.mode = 'move'; pl.x = np.x; pl.z = np.z; pl.until = now + EngineBridge.PLAN_MOVE_TIMEOUT; planSwitch = true; }
             else { pl.until = now + EngineBridge.PLAN_PATROL_S; }   // 已到舰边 → 持续巡逻
           }
+          // ★ 巡逻期**锚点冻结**（用户定 2026-09-27）：目标用切段时记下的锚点，
+          //   **不再取当前位置**（否则每帧都算换令 → 巡腿目标每帧重选 = 拖抽）。
           if (pl.mode === 'move') final = { ...final, target: { x: pl.x, z: pl.z } };
-          else { final = { ...final, target: null }; planMission = true; }
+          else { final = { ...final, target: { x: pl.x, z: pl.z } }; planMission = true; }
 
         }
       }
