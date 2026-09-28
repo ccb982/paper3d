@@ -35,6 +35,8 @@ const ENGINEER_DECISION: Decision = { source: 'routine', kind: 'act', target: nu
 
 export interface LiveSquad {
   id: number;
+  /** ★ 队长 uid（用户定 2026-09-27：兜底闸门——只给 L3 实体队长的队跑兜底） */
+  leaderUid?: number;
   role: MobRole;
   x: number;
   z: number;
@@ -129,6 +131,15 @@ export class EngineBridge {
 
   /** ★★ 兜底命令状态（用户定 2026-09-27）：各队上次救援时刻 */
   private readonly stallAt = new Map<number, number>();
+  /** ★ 兜底闸门（用户定 2026-09-27）：**兜底只给 L3 实体队长**；池队（L2/L1）不跑兜底。
+   *  口径 = 黑名单制："已知池队长的队"才拦；无载体信息（自检/模拟）→ 默认放行。 */
+  private readonly leaderUidOf = new Map<number, number>();
+  private readonly poolAgentUids = new Set<number>();
+  private isPoolLeader(id: number): boolean {
+    const lu = this.leaderUidOf.get(id);
+    if (lu === undefined) return false;
+    return this.poolAgentUids.has(lu);
+  }
   private static readonly STALL_REPATH_S = 6;     // 发呆阈值（秒）→ 强制重寻路
   private static readonly STALL_FALLBACK_S = 15;  // 仍呆 → 换兜底目标
   private static readonly STALL_RETRY_S = 5;      // 重试间隔
@@ -149,12 +160,13 @@ export class EngineBridge {
   constructor(private readonly live: LiveView) {
     this.sectors.build(4);   // 默认四扇区（引擎初始化）
     this.timers = new TimerManager({
-      // ★ 判官在册（用户定 2026-09-26）：**L3 实体 + 池代理**——此前只有 L3，
-      //   卡死的池代理永不回收（还占配额 → 补兵以为满员不补）。
+      // ★ 判官在册（用户定 2026-09-27）：**只判 L3 实体**——远场池无实体成本、无"回收"意义
+      //   （此前池也判收 → "回收→退款→补兵"churn）；池的卡死由**progress 停滞 → 救援 +
+      //   池执行令**闭环负责（《移动执行重写.md》§7.4）。实体保留判官：近处卡死占预算/堵路。
+      //   ⚠️ `live.enemies()` 含代理（索敌口径）——用 `agents()` 的 uid 集合剔除，只留真实体。
       roster: () => {
         const out: number[] = [];
-        for (const e of this.live.enemies?.() ?? []) out.push(e.uid);
-        for (const a of this.live.agents?.() ?? []) out.push(a.uid);
+        for (const e of this.live.enemies?.() ?? []) if (!this.poolAgentUids.has(e.uid)) out.push(e.uid);
         return out;
       },
       posOf: (uid) => {
@@ -240,12 +252,16 @@ export class EngineBridge {
     if (p) this.pos.setPlayer(p.x, p.z);
     const s = this.live.ship();
     if (s) this.pos.setShip(s.x, s.z);
+    // ★ 池代理 uid 集合（兜底/判官闸门用）：live.enemies() 含代理 → 用 agents() 剔除
+    this.poolAgentUids.clear();
+    for (const a of this.live.agents?.() ?? []) this.poolAgentUids.add(a.uid);
     // ★ 阵亡清册（用户定 2026-09-26）：不在世（SquadTable 已无）的旧记录即删——
     //   防止僵尸记录占编制/占面板（队死后无人 report → 永远挂着）。
     const liveIds = new Set<number>();
     for (const sq of this.live.squads()) liveIds.add(sq.id);
-    for (const rec of [...this.squads.all()]) if (!liveIds.has(rec.id)) this.squads.remove(rec.id);
+    for (const rec of [...this.squads.all()]) if (!liveIds.has(rec.id)) { this.squads.remove(rec.id); this.leaderUidOf.delete(rec.id); }
     for (const sq of this.live.squads()) {
+      if (sq.leaderUid !== undefined) this.leaderUidOf.set(sq.id, sq.leaderUid);
       if (!this.squads.get(sq.id)) this.squads.register(sq.id, sq.role, sq.alive, now);
       this.pos.setSquad(sq.id, sq.x, sq.z);
       this.squads.report(
@@ -262,6 +278,7 @@ export class EngineBridge {
     //   ① 强制重寻路 + 重发当前令（同签名去重不重置）；每 STALL_RETRY_S 重试；
     //   ② 仍呆 ≥ STALL_FALLBACK_S → 换**可达兜底目标**（环内同方位点 → 本队防区锚点）。
     for (const sq of this.live.squads()) {
+      if (this.isPoolLeader(sq.id)) continue;   // ★ 兜底只给 L3 实体（用户定 2026-09-27）
       const rec = this.squads.get(sq.id);
       if (!rec || rec.phase === 'done' || (rec.stillS ?? 0) < EngineBridge.STALL_REPATH_S) continue;
       const last = this.stallAt.get(rec.id);
@@ -482,13 +499,19 @@ export class EngineBridge {
       // ★ 命令无 TTL（用户定）：玩家令不再自动到期释放（直到被新令替换）
       // ★ 工兵 = 新引擎全权（用户定 2026-09-25）：目标 = 建造位置查询结果；
       //   不参与战术决策链（重伤撤退/保护由管理器施工优先），不入攻击队列（接线层过滤）。
+      let engineerFallback = false;
       if (rec.role === 'engineer') {
         const curE = this.writer.store.get(rec.id);
         if (curE && curE.order.source === 'player') { held.set(rec.id, curE.order.target); continue; }
         const tE = this.engineer.targets.get(rec.id);
-        if (!tE) { if (curE) held.set(rec.id, curE.order.target); continue; }
-        pending.push({ rec, cur: curE, dec: ENGINEER_DECISION, tx: tE.x, tz: tE.z, mission: 'build' });
-        continue;
+        if (tE) {
+          pending.push({ rec, cur: curE, dec: ENGINEER_DECISION, tx: tE.x, tz: tE.z, mission: 'build' });
+          continue;
+        }
+        // ★ 没件（用户定 2026-09-27：到岗不动=没下一步命令 → 兜底兜住）：
+        //   L3 实体队长 → 落进下方段进-巡逻；池队（L2/L1）不跑兜底 → 保持 held。
+        if (this.isPoolLeader(rec.id)) { if (curE) held.set(rec.id, curE.order.target); continue; }
+        engineerFallback = true;
       }
       const cur = this.writer.store.get(rec.id);
       const mgr = rec.role === 'melee' ? this.melee : rec.role === 'ranged' ? this.ranged : rec.role === 'flyer' ? this.flyer : this.engineer;
@@ -531,7 +554,9 @@ export class EngineBridge {
           }
         }
       }
-      let final = force ?? dec;
+      let final = engineerFallback
+        ? ({ source: 'routine', kind: 'act', target: null, reason: '工兵无件→兜底' } as Decision)
+        : (force ?? dec);
       if (!final) {
         if (cur) { held.set(rec.id, cur.order.target); continue; }
         // ★ 完全没命令（无现令、无决策）→ 兜底段进-巡逻（用户定 2026-09-27：
@@ -544,7 +569,7 @@ export class EngineBridge {
       let planMission = false;
       let planSwitch = false;
       let planDriving = false;
-      if (final.source === 'routine' && sp) {
+      if (final.source === 'routine' && sp && !this.isPoolLeader(rec.id)) {
         const tgt = final.target;
         // ★ 兜底语义（用户定 2026-09-27）：**只有确实没命令**（目标为空 / 原地待命）才进入段进-巡逻循环；
         //   出现真实命令 → **立即退出循环并清计划**（下次再没命令时重新起步）。

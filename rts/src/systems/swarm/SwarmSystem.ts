@@ -553,28 +553,47 @@ export class SwarmSystem {
     }
 
     if (!chasing || d < 1e-4) {
-      // 圈外：家附近游走（轻微偏向目标）+ 释放槽/令牌
+      // 圈外：先执行小队令（有令），否则家附近游走；释放槽/令牌
       this.releaseSlot(i);
-      p.curSpeed[i] = p.wanderSpeed[i];
       p.fromFlow[i] = 0;
-      p.wanderTimer[i] -= tick;
-      if (p.wanderTimer[i] <= 0) {
-        const a = Math.random() * Math.PI * 2;
-        // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
-        const r = 6 + Math.random() * 16;
-        p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
-        p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
-        p.wanderTimer[i] = 5 + Math.random() * 5;
+      // ★ L2 令执行（用户定 2026-09-27；《移动执行重写.md》§7.4）：
+      //   队长核 → `applyDirective` 已把**成员槽位目标**（队长=原子目标）写进池列
+      //   `directiveTargetX/Z`；池体在此**消费**：活跃指令 + 距目标 > 到位半径 → 行军。
+      //   到点/无指令 → 原游走（家已随目标迁移，防"到岗又被出生点拽走"边界震荡）。
+      let executing = false;
+      if (p.directiveKind[i] !== 0 && (p.directiveUntil[i] === 0 || now < p.directiveUntil[i])) {
+        const dtx = p.directiveTargetX[i], dtz = p.directiveTargetZ[i];
+        const gdx = dtx - px, gdz = dtz - pz;
+        const gd = Math.hypot(gdx, gdz);
+        if (gd > SWARM.L2_EXEC_ARRIVE_R) {
+          executing = true;
+          p.homeX[i] = dtx; p.homeZ[i] = dtz;   // 家随目标（到位后围绕岗位驻守）
+          p.curSpeed[i] = p.speed[i] * (p.directiveSpeedMul[i] > 0 ? p.directiveSpeedMul[i] : 1);
+          p.dirX[i] = gdx / gd;
+          p.dirZ[i] = gdz / gd;
+        }
       }
-      const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
-      const wd = Math.hypot(wdx, wdz);
-      const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
-      const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
-      const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
-      const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
-      const ml = Math.hypot(mx, mz);
-      p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
-      p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
+      if (!executing) {
+        p.curSpeed[i] = p.wanderSpeed[i];
+        p.wanderTimer[i] -= tick;
+        if (p.wanderTimer[i] <= 0) {
+          const a = Math.random() * Math.PI * 2;
+          // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
+          const r = 6 + Math.random() * 16;
+          p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
+          p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
+          p.wanderTimer[i] = 5 + Math.random() * 5;
+        }
+        const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
+        const wd = Math.hypot(wdx, wdz);
+        const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
+        const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
+        const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
+        const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
+        const ml = Math.hypot(mx, mz);
+        p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
+        p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
+      }
     } else {
       // 察觉/进入仇恨 → 刷警戒（同伴延迟响应）
       if (aware) this.flow.paintAlert(px, pz, SWARM.ALERT_PAINT_RADIUS, now, SWARM.ALERT_SECONDS);

@@ -317,7 +317,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           let sh = 0, sm = 0;
           for (const m of sq.members.values()) { sh += m.hp; sm += m.maxHp; }
           const cv = squadCores?.viewOf(sq.id);
-          out.push({ id: sq.id, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties),
+          out.push({ id: sq.id, leaderUid: sq.leaderUid, role, x: lx, z: lz, alive: Math.max(0, sq.members.size - sq.casualties),
             hpRatio: sm > 0 ? sh / sm : 1,
             phase: cv?.phase, atom: cv?.atom, progress: cv?.progress, stillS: cv?.stillS });
         }
@@ -396,6 +396,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
         // ★ 驻守直接豁免（用户定 2026-09-27）；巡逻看"近 30s 位移最大差值"——>4m = 真在巡 → 豁免
+        //   ★ 口径（用户定 2026-09-27）：**只有"明确是驻守"（garrison 令）才豁免**；
+        //   到岗不动 = 没下一步命令 / 兜底循环没兜住 → 修兜底，**不许豁免**。
         if (swarm.orderKindOf(sq.id) === 'garrison') return 'garrison';
         {
           const ost = shadowBridge?.writer.store.get(sq.id)?.order;
