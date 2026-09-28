@@ -40,18 +40,12 @@ import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
 import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt } from '../src/services/physics/StaticObstacleRegistry.ts';
 import { separationPushes } from '../src/systems/swarm/EntitySeparation.ts';
-import { wellFormed, interpretEngine } from '../src/systems/swarm/engine/CommandLang.ts';
-import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
-import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
-import { spreadFix } from '../src/systems/swarm/engine/Spread.ts';
-import { validateOrder } from '../src/systems/swarm/engine/OrderValidator.ts';
 import { OrderWriter, SquadOrderStore } from '../src/systems/swarm/engine/OrderWriter.ts';
 import { AttackQueues } from '../src/systems/swarm/engine/AttackQueues.ts';
 import { SectorManager } from '../src/systems/swarm/engine/SectorManager.ts';
 import { EngineCore } from '../src/systems/swarm/engine/EngineCore.ts';
 import { EngineBridge } from '../src/systems/swarm/engine/EngineBridge.ts';
 import { SquadCore } from '../src/systems/swarm/squad/SquadCore.ts';
-import { decideChain } from '../src/systems/swarm/engine/DecisionChain.ts';
 import type { SquadReport } from '../src/systems/swarm/engine/contracts.ts';
 import type { SquadOrder } from '../src/systems/swarm/engine/contracts.ts';
 import { STUCK } from '../src/systems/swarm/SwarmConfig.ts';
@@ -131,53 +125,14 @@ console.log('[3] 四兵种管理器');
   const eng = new EngineerManager(mgr);
   melee.sync(); ranged.sync(); flyer.sync(); eng.sync();
   ok(melee.dbg.squads === 1 && ranged.dbg.squads === 1 && flyer.dbg.squads === 1 && eng.dbg.squads === 1, '四管理器编成同步（各拿各的）');
-  const ctx = { pos, ringMin: 0, ringMax: 0, now: 0 };
-  ok(melee.assign(ctx) === 1, '近战分配 1 队');
-  const mt = melee.targets.get(11);
-  ok(mt !== undefined && Math.abs(mt.x - 12) < 0.01, '近战压到离玩家 ENGAGE=12 处（50→12）');
-  ok(ranged.assign(ctx) === 1, '远程分配 1 队');
-  const rt = ranged.targets.get(12);
-  ok(rt !== undefined && Math.abs(rt.x - 18) < 0.01, '远程保距到射程环（50→18）');
-    ok(flyer.assign(ctx) === 0, '★ 飞天管理器只编成、不给目标（重写 2026-09-27）');
-  ok(flyer.targets.get(13) === undefined, '★ 飞天不再产航线/选位目标（移动由引擎标签驱动）');
-  // 环内夹取：环 [5, 8] → 近战 12 要夹到 8；环 [5, 20] → 远程 18 不夹
-  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 0, posture: 1 });   // 总攻→冲锋后夹环
-  ok(Math.abs(Math.hypot(melee.targets.get(11)!.x, melee.targets.get(11)!.z) - 5) < 0.01, '近战冲锋（压到攻距 3m）目标夹进环（下界 5）');
-  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 1 });   // 低事态→稳定驻锚
-  const mA = melee.targets.get(11)!;
-  const rA = Math.hypot(mA.x, mA.z);
-  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 2 });
-  const mB = melee.targets.get(11)!;
-  ok(rA >= 5 && rA <= 8 && Math.abs(mA.x - mB.x) < 1e-6 && Math.abs(mA.z - mB.z) < 1e-6,
-    '★ 低事态：稳定驻锚（锚位在环内且不随位置漂移）');
-  // ★ 工兵在旁：近战护卫（目标贴近工兵向舰侧 6m）
-  melee.assign({ pos, ringMin: 5, ringMax: 8, now: 3, engineers: [{ x: 49, z: 0 }] });
-  const mE = melee.targets.get(11)!;
-  ok(Math.hypot(mE.x - 49, mE.z) <= 7 && Math.hypot(mE.x - 49, mE.z) >= 5,
-    '★ 近战护卫：目标 = 工兵向舰侧 6m（挡在工兵前）');
-  ranged.assign({ pos, ringMin: 5, ringMax: 20, now: 0 });
-  const rA1 = ranged.targets.get(12)!;
-  const rr = Math.hypot(rA1.x, rA1.z);
-  ranged.assign({ pos, ringMin: 5, ringMax: 20, now: 1 });
-  const rA2 = ranged.targets.get(12)!;
-  ok(rr >= 5 && rr <= 20 && Math.abs(rA1.x - rA2.x) < 1e-6 && Math.abs(rA1.z - rA2.z) < 1e-6,
-    '★ 远程：稳定驻守位（环内不漂移 → 不绕圈）');
-  // 刷怪执行
-  ok(eng.assign(ctx) === 1, '工兵分配（保持站位）');
-  // ★ 三点校验（用户定 2026-09-26）：护卫到位必须“在工兵→舰的正前方”——
-  //   从背面蹭进 5~8m 带不再驻守（原石虫跑到工兵后面的根因）。
-  pos.setSquad(11, 55, 0);   // 工兵 49：55 = 背面（远离舰/玩家）
-  melee.assign({ pos, ringMin: 5, ringMax: 100, now: 4, engineers: [{ x: 49, z: 0 }] });
-  const mSide = melee.targets.get(11)!;
-  ok(mSide.x < 44.5, '★ 护卫三点校验：背面 5~8m 不驻守 → 回工兵向舰侧 6m');
-  // ★ 远程躲掩体（用户定 2026-09-26）：到位后藏到掩体背向玩家 1.6m
-  pos.setSquad(12, 50, 0);
-  ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 0, covers: [{ x: 18, z: 0 }] });
-  const rHide = ranged.targets.get(12)!;
-  ok(Math.abs(rHide.x - 19.6) < 0.01 && Math.abs(rHide.z) < 0.01, '★ 远程：到位后躲掩体后背（18→19.6）');
-  ranged.assign({ pos, ringMin: 5, ringMax: 100, now: 1, posture: 1, covers: [{ x: 18, z: 0 }] });
-  const rAss = ranged.targets.get(12)!;
-  ok(Math.abs(rAss.x - 18) < 0.01, '★ 总攻不躲掩体：仍压到 STANDOFF=18');
+  const ctx = { pos, now: 0 };
+  // ★ 管理器无决策权（用户定 2026-09-27，架构第 9 条）：只编成/补兵，不给任何目标；
+  //   移动只由引擎命令标签/唯一兜底驱动；开火独立。
+  ok(melee.assign(ctx) === 0 && melee.targets.size === 0, '近战管理器只编成、不给目标');
+  ok(ranged.assign(ctx) === 0 && ranged.targets.size === 0, '远程管理器只编成、不给目标');
+  ok(flyer.assign(ctx) === 0 && flyer.targets.size === 0, '飞天管理器只编成、不给目标');
+  // 工兵唯一例外：产出"活源目标（纯数据）"（施工任务）；不含战术决策。
+  ok(eng.assign(ctx) === 1, '工兵分配（活源目标数据）');
 }
 
 // ---------- 兵种选取（用户定 2026-09-27）----------
@@ -354,7 +309,7 @@ console.log('[5] Protect 保护命令（引擎只给 G/P 双点）');
 }
 
 // ---------- 复合 → 原子（队长层条件表） ----------
-console.log('[5b] CommandLang 复合→原子（解释器）');
+console.log('[5b] CommandLang 复合→原子（解释器；标签执行实现保留）');
 {
   const mk = (over: Partial<Parameters<typeof interpretLeader>[0]['order']>) => ({
     squadId: 1, issuedAt: 0, until: 0, source: 'engine' as const, notBefore: 0,
@@ -375,25 +330,6 @@ console.log('[5b] CommandLang 复合→原子（解释器）');
   ok(interpretLeader(act as never, 0, 0, null).atom === 'march', 'act：>40 → 行军');
   ok(interpretLeader(act as never, 80, 0, null).atom === 'act', 'act：20 → 行动');
   ok(interpretLeader(act as never, 99.5, 0, null).atom === 'garrison', 'act：到位 → 驻守');
-}
-
-// ---------- 引擎命令语言（语法 + 解释器） ----------
-console.log('[5c] CommandLang 引擎复合句（良构 + 解释器）');
-{
-  const base = {
-    kind: 'protect' as const, source: 'engine' as const, seq: 0, ttl: 0,
-    target: { x: 0, z: 0 }, anchor: { x: 8, z: 0 }, threat: { x: 0, z: 0 },
-  };
-  ok(wellFormed(base) === null, 'protect：G/P 齐全 → 良构');
-  ok(wellFormed({ ...base, anchor: undefined }) !== null, 'protect：缺 G → 拦下');
-  ok(wellFormed({ ...base, threat: undefined }) !== null, 'protect：缺 P → 拦下');
-  ok(wellFormed({ ...base, kind: 'act' as never, target: undefined as never }) !== null, 'act：缺 target → 拦下');
-  const itP = interpretEngine(base);
-  ok(itP.op === 'block' && itP.anchor!.x === 8 && itP.threat!.x === 0, 'protect → block（双点原样）');
-  const itA = interpretEngine({ ...base, kind: 'act' as never, target: { x: 12, z: 3 } });
-  ok(itA.op === 'move' && itA.target.x === 12, 'act → move(target)');
-  const itD = interpretEngine({ ...base, kind: 'defend' as never, target: { x: 7, z: 7 } });
-  ok(itD.op === 'hold' && itD.target.z === 7, 'defend → hold(target)');
 }
 
 // ---------- 施工目标获取契约（FortifyPlanner.targetOf） ----------
@@ -685,55 +621,6 @@ console.log('[5i] canShift 跨层位移闸门（H2：推挤/步进/贴地同规�
   ok(canShift(probeAt((x) => (x >= 2 ? -3 : 0)) as never, 0, 0, 0, 4, 0, 0.6) === true, '下降 → 允许');
 }
 
-// ---------- Spread / OrderValidator ----------
-console.log('[6] 同兵种散开 + 发令统一校验链');
-{
-  // Spread（切向）：同兵种两点在径向上滑开，径向距离不变；异兵种不约束
-  const fixed = spreadFix([
-    { id: 1, role: 'melee', x: 50, z: 0 },
-    { id: 2, role: 'melee', x: 50, z: 8 },
-    { id: 3, role: 'ranged', x: 50, z: 5 },
-  ], { x: 0, z: 0 });
-  const g1 = fixed.find((f) => f.id === 1)!;
-  const g2 = fixed.find((f) => f.id === 2)!;
-  const g3 = fixed.find((f) => f.id === 3)!;
-  ok(Math.abs(Math.hypot(g1.x, g1.z) - 50) < 0.01 && Math.abs(Math.hypot(g2.x, g2.z) - Math.hypot(50, 8)) < 0.01, '切向推开：径向距离（r）严格不变');
-  ok(Math.abs(g2.z - g1.z) > 30, '切向拉开间距（8m → 30m+）');
-  ok(g3.moved === 0, '异兵种不约束');
-  const fixed2 = spreadFix([
-    { id: 1, role: 'melee', x: 0, z: 0 },
-    { id: 2, role: 'melee', x: 10, z: 0 },
-    { id: 3, role: 'ranged', x: 5, z: 0 },
-  ]);
-  const f1 = fixed.find((f) => f.id === 1)!;
-  const f2 = fixed.find((f) => f.id === 2)!;
-  const f3 = fixed.find((f) => f.id === 3)!;
-  ok(Math.abs(Math.hypot(f1.x - f2.x, f1.z - f2.z) - 40) < 0.01, '同兵种 10m → 错开到 40m');
-  ok(f1.moved > 0 && f2.moved > 0, '对称推开（两边都动）');
-  const far = spreadFix([
-    { id: 1, role: 'melee', x: 0, z: 0 },
-    { id: 2, role: 'melee', x: 100, z: 0 },
-  ]);
-  ok(far[0].moved === 0 && far[1].moved === 0, '已 ≥40m 不动');
-  // OrderValidator ①：50m → 夹到环 30 + 建议防御
-  const v1 = validateOrder(1, 50, 0, { px: 0, pz: 0, ringMin: 0, ringMax: 30, role: 'melee', siblings: [] });
-  ok(Math.abs(v1.x - 30) < 0.01 && v1.clamped, '① 超上限夹到环上（50→30）');
-  const v2 = validateOrder(1, 20, 0, { px: 0, pz: 0, ringMin: 0, ringMax: 30, role: 'melee', siblings: [] });
-  ok(!v2.clamped, '① 环内不夹');
-  // ② 密度：与同兵种兄弟 10m → 错开（各推 15，自己到 -15）
-  const v3 = validateOrder(9, 50, 0, {
-    px: 0, pz: 0, ringMin: 0, ringMax: 0, role: 'melee',
-    siblings: [{ id: 8, role: 'melee', x: 50, z: 8 }],
-  });
-  ok(v3.spread && Math.abs(Math.hypot(v3.x, v3.z) - 50) < 0.01 && Math.abs(v3.z) > 3, '② 与兄弟太近 → 切向错开（径向 r 不变）');
-  // ③ 可达
-  const v4 = validateOrder(1, 20, 0, {
-    px: 0, pz: 0, ringMin: 0, ringMax: 0, role: 'melee', siblings: [],
-    canReach: () => false,
-  });
-  ok(!v4.ok && !v4.reachable, '③ 不可达 → 不发令');
-}
-
 // ---------- OrderWriter ----------
 console.log('[8] OrderWriter 唯一发令器');
 {
@@ -842,42 +729,29 @@ console.log('[12] EngineBridge 实机接线桥（影子模式）');
   ok(bridge.dbg.ticks === 1, '桥接节拍触发');
   ok(bridge.squads.dbg.count === 3, '小队已登记（perceive）');
   ok(bridge.pos.squad(1)?.x === 50, '位置进单源 Positions');
-  ok(bridge.melee.dbg.assigned === 2 && bridge.ranged.dbg.assigned === 1, '四管理器各拿各的（decide）');
+  ok(bridge.melee.dbg.assigned === 0 && bridge.ranged.dbg.assigned === 0, '★ 管理器只编成、不产目标（架构第 9 条）');
   // 影子模式：命令只进本地 store，不 emit
   ok(emitted.length === 0, '影子模式不发实机命令');
   ok(bridge.writer.dbg.issued >= 1, '命令经唯一发令器下发（本地）');
-  // 近战 2 队同兵种太近 → 下发目标（校验后）应被切向错开（间距 ≥40）
-  const o1 = bridge.writer.store.get(1)!.order.target;
-  const o2 = bridge.writer.store.get(2)!.order.target;
-  // ★ 一切以**舰船**为参照（用户定 2026-09-26）：角度/半径均围绕 舰(200,0)
-  const SX = 200, SZ = 0;
-  const a1 = Math.atan2(o1.z - SZ, o1.x - SX);
-  const a2 = Math.atan2(o2.z - SZ, o2.x - SX);
-  let da = Math.abs(a1 - a2);
-  if (da > Math.PI) da = Math.PI * 2 - da;
-  const rAvg = (Math.hypot(o1.x - SX, o1.z - SZ) + Math.hypot(o2.x - SX, o2.z - SZ)) * 0.5;
-  // ★ 行进目标点 = 径向 r（兵种策略）⊗ 切向 θ（同兵种间距）：只解 θ、r 严格不变。
-  //   r=12 < MIN/2 → 弦长上限 = r1+r2 = 24m，切向拉满 π → 弧长 π·12 ≈ 37.7m（本用例断言 ≥35）。
-  ok(da * rAvg >= 35, `同兵种切向间距（弧长 ${(da * rAvg).toFixed(1)}m）已拉开`);
-  ok(Math.hypot(o1.x - SX, o1.z - SZ) < 150 && Math.hypot(o2.x - SX, o2.z - SZ) < 145
-    && Math.hypot(o1.x - SX, o1.z - SZ) > 90 && Math.hypot(o2.x - SX, o2.z - SZ) > 85,
-    '★ 段进循环（用户定 2026-09-27）：无前沿点（待命）→ 向舰推进一段（r 减小）');
-  // 环夹取：**以舰为心**——(90,0) 收到 舰(200,0) 半径 60 的环上
-  const vClamp = validateOrder(3, 90, 0, { px: SX, pz: SZ, ringMin: 0, ringMax: 60, role: 'ranged', siblings: [] });
-  ok(Math.abs(Math.hypot(vClamp.x - SX, vClamp.z - SZ) - 60) < 0.01, '环夹勒以舰为心（90 → 舰心 60）');
-  // 实机模式：emit 真下发
+  // ★ 唯一兜底（定稿第 8 条）：无管理器目标 → 行军段（朝舰推一段 ≤30m）
+  const o1 = bridge.writer.store.get(1)!.order;
+  const o2 = bridge.writer.store.get(2)!.order;
+  ok(o1.state === 'march' && o1.target.x > 50 && o1.target.x <= 81, '★ 兜底：首拍行军段（朝舰 ≤30m）');
+  ok(o2.state === 'march', '★ 兜底：所有队同口径（无选位/间距机制）');
+  // 实机模式：玩家令直达队长（emit）
   bridge.shadow = false;
   bridge.tick(0.6, 2.2);
-  ok(emitted.length >= 1, '实机模式 emit 下发');
+  const pOk2 = bridge.playerOrder(2, 'garrison', { x: 5, z: 5 });
+  ok(pOk2 && emitted.length >= 1, '实机模式 emit 下发（玩家令直达队长）');
   ok(bridge.writer.dbg.issued >= 1, '发令器台账');
   // 玩家命令：随随便便就能下（同一发令器 + player 旁路 + 只给队长）
   const pOk = bridge.playerOrder(1, 'regroup', { x: 5, z: 5 });
   ok(pOk && bridge.writer.store.get(1)!.order.source === 'player', '玩家命令经唯一发令器直达队长');
   ok(bridge.writer.store.get(1)!.order.kind === 'regroup', '玩家命令内容生效');
   ok(bridge.writer.store.get(1)!.order.ttl === 0, '★ 命令无 TTL（用户定）');
-  // ★ 执行板续期（旧链已删）：玩家令在身 → 决策为空，但执行板每拍仍同步现令（不掉令）
+  // ★ 稳态不重发（定稿第 3 条）：玩家令在身 → 引擎不覆盖、不逐拍重发
   bridge.tick(0.6, 2.8);
-  ok(bridge.dbg.refreshed >= 1, '执行板续期计数（无新令也不丢执行令）');
+  ok(bridge.writer.store.get(1)?.order.source === 'player', '★ 玩家令不过期（执行板不再逐拍重发）');
   // ★ 玩家令 TTL 到期 → 释放，交回引擎（不能永久锁死该队）
   bridge.tick(0.6, 2.8 + 30 * 12 + 1);
   ok(bridge.writer.store.get(1)?.order.source === 'player', '★ 玩家令不过期（直到被替换）');
@@ -961,28 +835,6 @@ console.log('[15] 接线补全（攻击队列 1Hz + 统一计时挂相位）');
   let t = 1;
   for (let i = 0; i < 30; i++) { t += 1; br.tick(1.0, t); }
   ok(br.timers.dbg.expiredTotal >= 1 || br.dbg.last.includes('expire'), '静止实体到期（统一计时生效）');
-}
-
-// ---------- DecisionChain 显式优先链 ----------
-console.log('[16] DecisionChain（玩家>重伤>事态>干预>常规）');
-{
-  const base = {
-    playerOrder: false, hpRatio: 1, atRingMax: false, underAttack: false,
-    routine: { x: 10, z: 0 }, retreat: { x: -30, z: -30 },
-  };
-  ok(decideChain({ ...base, playerOrder: true }) === null, '① 玩家令在身 → 引擎不产令');
-  const w = decideChain({ ...base, hpRatio: 0.4 });
-  ok(w?.source === 'wounded' && w.kind === 'march' && w.target?.x === -30 && w.target?.z === -30, '② 整队危急 → 向**后**撤（远离战场）');
-  ok(decideChain({ ...base, hpRatio: 0.4, retreat: null }) === null, '② 无后撤点 → 不产令（保持现状）');
-  const s1 = decideChain({ ...base, atRingMax: true });
-  ok(s1?.source === 'situation' && s1.kind === 'defend', '③ 到上限 → 防御');
-  const s2 = decideChain({ ...base, underAttack: true });
-  ok(s2?.kind === 'protect', '③ 被打 → 保护');
-  const rt = decideChain(base);
-  ok(rt?.source === 'routine' && rt.kind === 'act', '⑤ 常规部署');
-  ok(decideChain({ ...base, routine: null }) === null, '全不成立 → null（保持现状）');
-  // 优先级：重伤 > 事态
-  ok(decideChain({ ...base, hpRatio: 0.2, atRingMax: true })?.source === 'wounded', '重伤压过事态');
 }
 
 // ---------- 战术侧：扇区构建 + 大队管理器（《RTS架构.md》§2.12） ----------
@@ -1096,51 +948,6 @@ console.log('[5m] 侧向让路：对向碰撞 → 侧向力相反（且径向仍
   const p = separationPushes(bodies);
   ok((p.z[0] as number) > 0.001 && (p.z[1] as number) < -0.001, '★ 对向碰撞 → 两侧向力相反（各走各的右侧）');
   ok((p.x[0] as number) < -0.001 && (p.x[1] as number) > 0.001, '★ 径向分量仍等大反向（解重叠）');
-}
-
-// ---------- advancePoint 可行性 + 锚回退（用户定 2026-09-27） ----------
-console.log('[12k] advancePoint：舰向全不可达 → 退玩家锚；都不可达 → 停');
-{
-  const sq = { id: 5, role: 'melee' as const, x: 100, z: 0, alive: 6, phase: 'executing' };
-  const live = {
-    player: () => ({ x: 0, z: 0 }),
-    ship: () => ({ x: 200, z: 0 }),
-    squads: () => [sq],
-    emit: () => { /* */ },
-    canReach: (_id: number, x: number) => x < 105,   // 舰向 ≥105 全不可达；玩家向可达
-  };
-  const br = new EngineBridge(live);
-  br.shadow = true;
-  br.dbg.ringMin = 0;
-  br.dbg.ringMax = 200;
-  br.tick(1, 1);
-  const o = br.writer.store.get(5)?.order;
-  ok(!!o && !!o.target && o.target.x < 100, '★ 舰向不可达 → 退玩家锚（朝玩家推进）');
-}
-
-// ---------- 到事态上限 → 就地巡逻（用户定 2026-09-27："没命令"真相） ----------
-console.log('[12l] 到事态上限的守原地 → 就地巡逻（defend 带 patrol，不再站桩）');
-{
-  const sq = { id: 6, role: 'melee' as const, x: 150, z: 0, alive: 8, phase: 'executing' };
-  const live = {
-    player: () => ({ x: 0, z: 0 }),
-    ship: () => ({ x: 0, z: 0 }),
-    squads: () => [sq],
-    emit: () => { /* */ },
-    canReach: () => true,
-  };
-  const br = new EngineBridge(live);
-  br.shadow = true;
-  br.dbg.ringMin = 0;
-  br.dbg.ringMax = 100;   // 距舰 150 ≥ 100 → 到上限
-  const mgr = (br as unknown as { melee: { assign: (c: unknown) => void; targets: Map<number, { x: number; z: number }> } }).melee;
-  mgr.assign = () => { /* 不产决策 */ };
-  mgr.targets.clear();
-  // 先压一条低进度的旧令（正常情况下稳定门不允许换）→ 到上限必须能**立刻切入巡逻**
-  br.writer.issue(6, { kind: 'act', source: 'engine', target: { x: 0, z: 0 }, threat: { x: 0, z: 0 }, seq: 1, ttl: 0 }, { now: 1, force: true });
-  br.tick(1, 2);
-  const o = br.writer.store.get(6)?.order;
-  ok(!!o && o.kind === 'defend' && o.mission === 'patrol', '★ 到上限 → defend 带 patrol（过渡强制，不等 25s 站桩）');
 }
 
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
@@ -1335,7 +1142,7 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
   const o3 = br.writer.store.get(3)!.order;
-  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o3.kind === 'patrol' && o1.mission === 'patrol', '★ 总攻：全兵种均为 patrol（到顶维持巡逻；去掉其他指令）');
+  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o3.kind === 'patrol' && o1.state === 'assault', '★ 总攻：全兵种标签=assault（到舰告终）');
   // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
   ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10
     && Math.hypot(o2.target.x - 200, o2.target.z) <= 10
@@ -1391,8 +1198,6 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
     squads: () => [{ id: 1, role: 'engineer' as const, x: 100, z: 0, alive: 3, phase: 'executing', stillS: 20 }],
     emit: (o: SquadOrder) => emitted.push(o),
     canReach: () => true,
-    forceRepath: (id: number) => calls.push(id),
-    anchorOf: () => ({ x: 150, z: 20 }),
   };
   const br = new EngineBridge(liveS);
   br.shadow = true;
@@ -1401,7 +1206,6 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
   // ★ 唯一兜底（用户定 2026-09-27）：**行军/巡逻交替**——没活 → 行军段（朝舰推一段 ≤30m）。
   ok(o.kind === 'act' && o.target.x > 100 && o.target.x <= 131, '★ 没活 → 唯一兜底接管（行军段：朝舰推一段）');
   ok(o.state === 'march' || o.state === 'patrol', '★ 兜底令带引擎标签（march/patrol）');
-  void calls;
 }
 
 // ---------- 段进循环（用户定 2026-09-27：推进一段 → 巡逻 → 再推进） ----------
@@ -1425,7 +1229,7 @@ console.log('[12g] 段进循环：向舰推进一段 → 巡逻 → 再推进');
   ok(o1.kind === 'act' && o1.target.x > 100 && o1.target.x <= 131, '★ 段进：待命 → 首拍向舰推进一段（≤30m）');
   sq.x = o1.target.x; sq.z = o1.target.z; sq.phase = 'done';
   br.tick(0.6, 2);
-  ok(br.writer.store.get(1)!.order.mission === 'patrol', '★ 段到（core done）→ 转巡逻（mission=patrol）');
+  ok(br.writer.store.get(1)!.order.state === 'patrol', '★ 段到（core done）→ 转巡逻（mission=patrol）');
   sq.phase = 'executing';
   br.tick(0.6, 2 + 11);
   const o3 = br.writer.store.get(1)!.order;
@@ -1453,10 +1257,10 @@ console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就�
   sq.x = a1.target.x; sq.z = a1.target.z; sq.phase = 'done';
   br.tick(0.6, 12);   // 段到 → 巡逻（锚在 105）
   const a2 = br.writer.store.get(2)!.order;
-  ok(a2.mission === 'patrol', '★ 段到 → 转巡逻');
+  ok(a2.state === 'patrol', '★ 段到 → 转巡逻');
   br.tick(0.6, 25);   // 巡逻到期 → advancePoint 应因前缘返回 null → 续巡逻、不推进
   const a3 = br.writer.store.get(2)!.order;
-  ok(a3.mission === 'patrol' && Math.abs(a3.target.x - 105) < 1.5,
+  ok(a3.state === 'patrol' && Math.abs(a3.target.x - 105) < 1.5,
     '★ 到前缘：advancePoint=null → 就地巡逻（不再向舰推进）');
   live.squads = () => [];
   br.tick(0.6, 90);

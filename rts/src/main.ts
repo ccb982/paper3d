@@ -370,30 +370,17 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       posture: () => swarm.data.postureP,
       assault: () => swarm.data.battlePosture === 'assault',   // ★ 总攻：强制全体到舰
       blockedAt: (x, z) => swarm.data.blockedAt(x, z),   // 总攻目标吸附用
-      covers: () => swarm.data.holeTable.covers,   // ★ 远程躲掩体（敌掩体表）
       agents: () => {   // ★ 池代理位置（卡死判官在册用）
         const p = swarm.pool; const out: { uid: number; x: number; z: number }[] = [];
         for (let i = 0; i < p.count; i++) out.push({ uid: p.swarmUid[i], x: p.x[i], z: p.z[i] });
         return out;
       },
-      // ★ 按队给**防区行进点**（用户定 2026-09-27）：= 该队**分配到的防区锚点**
-      //   （防区可部署面中离舰最近的点）——出生（含远场波次）后先归防区并行军过去；
-      //   未分配（-1）→ null（交段进-巡逻兜底）。总攻由总攻强制令全冲家（优先级最高）。
-      frontOfSquad: (id: number) => {
-        const sec = tactics?.battalions.deployPlan.get(id) ?? -1;
-        return sec >= 0 ? (swarm.data.sectorAnchorOf?.(sec) ?? null) : null;
-      },
-      // ★ 兜底命令端口（用户定 2026-09-27）
-      forceRepath: (id: number) => swarm.forceRepath(id),
-      anchorOf: (id: number) => { const sec = tactics?.battalions.deployPlan.get(id) ?? -1; return sec >= 0 ? (swarm.data.sectorAnchorOf?.(sec) ?? null) : null; },
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
       wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
       t01: () => swarm.data.lastT01,
       ledgerTotal: () => swarm.ledger.total,
       setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
-      /** ★ 发令可达核验（OrderValidator ③；用户定 2026-09-25）：长途 BFS / 短程 LOS——与取件门同源 */
-      canReach: (id: number, x: number, z: number) => swarm.reachFrom(id, x, z),
       /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判。
        *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：豁免名单**只减不增**；被收回 = 出了问题（修行为，不修判官）★★ */
       exemptOf: (uid: number) => {
@@ -538,9 +525,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           }
           return null;
         },
-        coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
         leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),
+        coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,
         applyDirective: (uid, order, dir, until, ax, az) => swarm.applyDirectivePort(uid, order, dir, until, ax, az),

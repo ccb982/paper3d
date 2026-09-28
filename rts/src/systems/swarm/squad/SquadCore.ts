@@ -1,12 +1,13 @@
 // ============================================================
-// squad/SquadCore.ts —— 队长核心（重写 P2/P4；铁律 1）
+// squad/SquadCore.ts —— 队长核心（重写 2026-09-27；用户定稿九条）
 // ============================================================
-// 队长只做三件事：
-//   ① 接令：命令唯一来源 = SquadOrderStore（引擎/玩家同源）
-//   ② 复合→原子：`squad/CommandLang` 解释器选 **行军/行动/驻守/巡逻**；
-//      走廊锚点 → 队长走；成员**围队长**（阵型槽位）——队长不给代理下战术命令
-//   ③ 汇报：唯一接收器 SquadManager.report（进度/位置/原子/阶段）
-// 纯逻辑（寻路/指令落地由端口注入）→ 可独立自检。
+// ★ 队长核只做一件事：**按标签 + 数据，不停调用长/短寻路走向该状态目标**。
+//   · 标签**只由蜂群引擎给**（只读 `order.state`；核内不自设/不自动转标）；
+//   · 数据载荷 = `order.target`（巡逻时=锚点，队长自维持腿）；
+//   · 运动单源：非巡逻状态 → 位移目标 = 令目标/路点；巡逻状态 → 当前腿（patrolNext）；
+//   · 开火独立（成员指令里的火力/阵型由分解矩阵给；位移槽位围绕队长）。
+//   其余一切机制不存在（原子解释器/掩体选位/环夹/自动转巡…已删）。
+// 汇报：唯一接收器 SquadManager.report（进度/位置/原子/阶段）。
 // ============================================================
 
 import type { MobTactics, TacticalOrder, UnitDirective } from '../../../entity/SwarmUnit';
@@ -24,16 +25,16 @@ export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 
 /** 队长驱动端口（执行落地；由接线层注入） */
 export interface SquadDrivePorts {
-  /** ★ 巡逻点查询（用户口径 2026-09-25：查询可行移动目标点 → 短寻路来回走）；无可行点 → null */
+  /** ★ 巡逻腿查询（用户口径：查询可行移动目标点 → 长/短寻路走过去）；无可行点 → null */
   patrolNext?(id: number, x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
   /** ★ 掩体检测（保护/驻守取目标用）：(x,z) 是否被 (tx,tz) 方向的掩体挡住 */
   coverFrom?(tx: number, tz: number, x: number, z: number): boolean;
   /** 长/短寻路求解（走廊写入 state） */
   ensurePath(state: SquadOrderState, squad: Squad, now: number): void;
-  /** 队长站位锚（保护/驻守/巡逻 + 走廊前瞻；由接线层提供 resolveAnchor） */
+  /** 队长站位锚（走廊前瞻路点/令目标；由接线层提供 currentTargetOf） */
   leaderTarget(state: SquadOrderState, squad: Squad, lx: number, lz: number, now: number): { x: number; z: number; climb?: boolean } | null;
   /** 事态环夹取（队长目标/指令目标同门） */
-  clampRing(x: number, z: number): { x: number; z: number };
+  clampRing?(x: number, z: number): { x: number; z: number };
   mobTactics(mobIndex: number): MobTactics | null;
   /** 开火闩锁（引擎）：false → 软禁火（fire=hold） */
   fireAllowed(uid: number): boolean;
@@ -51,33 +52,30 @@ export class SquadCore {
   /** 队长位置（实机每帧由载体写） */
   x = 0;
   z = 0;
-  /** 当前原子能力（执行层自报） */
+  /** 当前原子能力（**表现/判官用**；不驱动位移） */
   atom: SquadMode = 'garrison';
   /** 命令阶段 */
   phase: OrderPhase = 'issued';
-  /** 进度 0~1（换令稳定门用：≥0.5 可换） */
+  /** 进度 0~1（HUD/判官） */
   progress = 0;
-  /** 静止时长（实秒；≥ORDER_STABLE.STUCK_S 可换） */
+  /** 静止时长（实秒；HUD/判官） */
   stillS = 0;
   /** 探针契约（G9） */
   readonly dbg = { orders: 0, long: 0, short: 0, done: 0, last: '' };
 
   /** 本队执行态（路径缓存/锚点滞回；真源=引擎令） */
   state: SquadOrderState | null = null;
-  /** 最近一次接令（待建态） */
   private pending: SquadOrder | null = null;
   private order: SquadOrder | null = null;
-  /** 接令时到目标的距离（进度分母；队长自报） */
+  /** 接令时到目标的距离（进度分母） */
   private d0 = 0;
-  /** 上次"真推进"时的高水位进度（2% 量化；P-L3） */
   private lastGainProg = 0;
-  /** 指令序号（队内单调） */
   private seq = 1;
-  /** ★ 巡逻（自维持）：锚点（引擎令目标，捕获一次）/ 当前腿目标 / 腿方向（±1 来回） */
+  /** ★ 巡逻（状态）：锚点（引擎令目标，捕获一次）/ 当前腿目标 / 腿方向（±1 交替） */
   private patrolAnchor: { x: number; z: number } | null = null;
   private patrolGoal: { x: number; z: number } | null = null;
   private patrolLeg = 1;
-  /** 是否已 drive 过（原子由 interpretLeader 决定；tick 只在从未 drive 时按距离兜底） */
+  /** 是否已 drive 过（tick 降级兜底用） */
   private hasDrive = false;
 
   constructor(readonly id: number, readonly role: MobRole, private readonly ports: SquadPorts) {}
@@ -100,85 +98,61 @@ export class SquadCore {
     return this.order;
   }
 
-  /** 队长驱动（每帧；执行层调遣——复合→原子 + 走廊锚点 + 成员围队长 + 指令落地） */
+  /** 队长驱动（每帧）：标签 → 长/短寻路 → 路点 → 成员围队长 + 指令落地 */
   drive(squad: Squad, now: number, port: SquadDrivePorts): void {
     const o = this.order;
     if (!o) return;
     if (this.pending) {
       this.state = stateFromOrder(this.id, o, this.state, now, 0);   // ★ 无 TTL
       this.pending = null;
-      this.patrolAnchor = null;   // ★ 新令 → 巡逻锚点重新捕获（防旧巡逻点污染）
+      this.patrolAnchor = null;
       this.patrolGoal = null;
       this.patrolLeg = 1;
     }
     const st = this.state;
     if (!st) return;
-    // ★ 玩家令优先：store 侧已保证（引擎不覆盖）；此处只看执行态是否过期
-    // ★ 命令无 TTL（用户定 2026-09-26）：不过期、不自动回收，直到被替换
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
-    // ============================================================
-    // ★★ 移动设计（用户定 2026-09-27，单源口径）：
-    //   · 移动只有两种原语：**长寻路**（可行性长走廊）与**短寻路**（短跳）；
-    //   · **驻守** = 停在目标点（到点即停）；
-    //   · **巡逻** = 一个**状态**：**不停调用长/短寻路走向下一个巡逻目标（腿）**，到腿换下一腿；
-    //     空中不做可行性（直航腿）；左右大幅、围绕点随当前位置漂移、不许大幅后退。
-    //   · 其他（风筝/抑制/选位等）不属于本设计——**一律不驱动运动**（射击独立、边走边打）。
-    // ============================================================
-    // ★ 巡逻（引擎一条令，小队自维持）：**引擎令（非玩家/工兵）目标已在身边（≤8m）= 已到点** →
-    //   **自动进巡逻状态**（不停调用长/短寻路取下一腿）；显式 mission=patrol 也进巡。
-    // ★ 引擎令目标（永不被执行副本覆盖）——归位/锚点以此为准。
-    const engT = this.order?.target ?? null;
-    // ★ 标签**只由蜂群引擎给**（用户定 2026-09-27）：队长核**只读** `order.state`，不得自设/自转；
-    //   缺失（旧令兼容）→ 退化 march/protect。状态语义只有一条：不停调用长/短寻路走向状态目标。
-    st.execState = this.order?.state
-      ?? (st.order.kind === 'protect' ? 'protect' : 'march');
-    if (st.order.kind !== 'protect' && st.execState === 'patrol') {
-      if (!this.patrolAnchor) {
-        this.patrolAnchor = { x: engT?.x ?? lx, z: engT?.z ?? lz };   // 引擎令目标 = 锚点（一次）
-      }
-      const ax0 = this.patrolAnchor.x;
-      const az0 = this.patrolAnchor.z;
+    // ★ 标签只读（唯一来源=引擎令；缺失旧令 → 按 kind 退化）
+    const label: NonNullable<SquadOrder['state']> = o.state
+      ?? (o.kind === 'protect' ? 'protect' : o.kind === 'defend' || o.kind === 'garrison' ? 'hold'
+        : o.kind === 'patrol' ? 'patrol' : 'march');
+    st.execState = label;
+    const engT = o.target;
+    // ---- 运动单源 ----
+    // 巡逻（状态）：不停调用长/短寻路取下一腿；锚点=引擎令目标（捕获一次）
+    if (label === 'patrol' && o.kind !== 'protect') {
+      if (!this.patrolAnchor) this.patrolAnchor = { x: engT.x, z: engT.z };
       let pg = this.patrolGoal;
       if (!pg || Math.hypot(pg.x - lx, pg.z - lz) <= ARRIVE_R) {
-        const R = 18;   // 巡逻半径（米；锚点附近来回）
-        pg = port.patrolNext?.(this.id, lx, lz, ax0, az0, R, this.patrolLeg) ?? { x: ax0, z: az0 };
+        pg = port.patrolNext?.(this.id, lx, lz, this.patrolAnchor.x, this.patrolAnchor.z, 18, this.patrolLeg)
+          ?? { x: this.patrolAnchor.x, z: this.patrolAnchor.z };
         this.patrolGoal = pg;
         this.patrolLeg = -this.patrolLeg;
       }
-      st.order.target = { x: pg.x, z: pg.z };   // 巡逻：执行副本=当前腿（引擎令=锚点不动）
-    } else if (st.order.kind !== 'protect' && engT) {
-      st.order.target = { x: engT.x, z: engT.z };   // 行军/驻守：目标**归位**=引擎令目标
+      st.order.target = { x: pg.x, z: pg.z };
+    } else {
+      // 行军/驻守/保护/总攻：目标 = 引擎令目标（载荷）
+      st.order.target = { x: engT.x, z: engT.z };
     }
-    // ① 站位锚（defend/act/patrol 经 resolveAnchor；protect 走 blockCheck 调整点，不用锚）
-    let anchor: { x: number; z: number } | null = null;
-    if (st.order.kind !== 'protect') {
-      // ★ 使用契约（《寻路重写方案.md》§4.4）：队长=唯一路线消费者；
-      //   重规划仅 4 事件（目标变/停滞3s/表代次/到达）+ 目标锁存（S3b 已实装）；
-      //   令尽后自决（短寻路向舰）= 下命令方案待设计（§4.4.2）
-      port.ensurePath(st, squad, now);   // 寻路轨：长=可行性表路线（S2）/ 短=LocalStep（S1）
-      anchor = port.leaderTarget(st, squad, lx, lz, now);
-    }
-    // ② 复合 → 原子（解释器 = `squad/CommandLang.ts`；protect 用 blockCheck 调整点）
-    //   ★ 命令使用设计（方案 §4.4.2）：引擎令与自决**同一条执行链**；令尽后自主（短寻路向舰，S3 立项）
+    // ---- 不停调用长/短寻路（唯一方向来源） ----
+    port.ensurePath(st, squad, now);
+    const anchor = port.leaderTarget(st, squad, lx, lz, now);
+    // ---- 复合 → 原子（解释器 = `squad/CommandLang.ts`；保护用 blockCheck 调整点） ----
     const sel = interpretLeader(st, lx, lz, anchor, port.coverFrom);
-    // ③ protect：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
+    // ★ 保护：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
     if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
       st.order.target = { x: sel.x, z: sel.z };
       port.ensurePath(st, squad, now);
     }
-    // ④ 队长位移目标（用户定 2026-09-27，**运动单源**）：
-    //   · 非保护状态：位移目标 = **路点/令目标（anchor）**——长/短寻路的当前路点或最终令目标；
-    //   · 保护状态：按保护调整点（sel）；
-    //   · atom（行军/驻守/抑制/选位…）**只影响表现/开火，不驱动位移**（其他都没了）。
+    // ★ 队长位移目标（单源）：保护=调整点（sel）；其余=路点/令目标（anchor）
     let ax = st.order.kind === 'protect' ? sel.x : (anchor ? anchor.x : lx);
     let az = st.order.kind === 'protect' ? sel.z : (anchor ? anchor.z : lz);
     if (sel.atom === 'garrison' && st.order.kind === 'protect') { ax = lx; az = lz; }
-    const c = port.clampRing(ax, az);
-    ax = c.x; az = c.z;
-    this.atom = sel.atom;   // 原子自报（tick 不再按距离覆盖）
+    if (port.clampRing) { const c = port.clampRing(ax, az); ax = c.x; az = c.z; }
+    this.atom = sel.atom;
     this.hasDrive = true;
-    // ⑤ 成员调遣：分解矩阵 + 开火门 + 围队长（队长走原子目标）
+    // ---- 成员调遣：分解矩阵（火力/低血）+ 围队长（位移=槽位） ----
     const bucket = squadBucket(squad.type);
     const uids: number[] = [];
     for (const uid of squad.members.keys()) uids.push(uid);
@@ -194,8 +168,6 @@ export class SquadCore {
       const dir = decompose(squad, st, bucket, now, hpRatio, () => this.seq++,
         atTarget, port.mobTactics(squad.mobKind));
       if (!port.fireAllowed(uid)) dir.fire = 'hold';
-      // ★ 位移目标=状态目标（用户定 2026-09-27）：**所有队同口径**（含 singleton/精英）——
-      //   队长取状态目标、成员取槽位；atom/directive 不驱动位移（开火独立）。
       if (uid === squad.leaderUid) {
         dir.targetX = ax;
         dir.targetZ = az;
@@ -209,15 +181,14 @@ export class SquadCore {
     }
   }
 
-  /** 每拍推进：按距离选 行军/行动 → 到位 → 汇报（引擎只记录，不逐拍指挥） */
+  /** 每拍推进：进度/到位 → 汇报（引擎只记录，不逐拍指挥） */
   tick(dt: number): void {
     const o = this.order;
     if (!o) return;
     const dx = o.target.x - this.x;
     const dz = o.target.z - this.z;
     const d = Math.hypot(dx, dz);
-    // ★ 停滞口径（用户定 2026-09-27；P-L3 细化）：progress = **高水位**（不回落）——
-    //   每累积涨 ≥2%起始距离才算"真推进"并清零停滞；微弱抖动（远场绕圈）不再骗过救援。
+    // 停滞口径：progress = 高水位（不回落）；每涨 ≥2% 算真推进并清零停滞
     const prog = this.d0 > 1 ? Math.max(0, Math.min(1, 1 - d / this.d0)) : 1;
     if (prog > this.progress) {
       this.progress = prog;
@@ -232,11 +203,10 @@ export class SquadCore {
         this.dbg.done++;
         this.dbg.last = `#${this.id} done ${o.kind}`;
       }
-      this.atom = onArriveAtom(o.kind);   // ★ 稳定层（squad/Abilities）：到位驻留口径单源
+      this.atom = onArriveAtom(o.kind);
       this.report();
       return;
     }
-    // 从未 drive（自检/降级）时按距离兜底；实机原子由 drive 的 interpretLeader 决定
     if (!this.hasDrive) this.atom = d > MARCH_DIST ? 'march' : 'act';
     this.phase = 'executing';
     this.report();
