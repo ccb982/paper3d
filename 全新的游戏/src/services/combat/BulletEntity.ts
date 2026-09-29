@@ -56,7 +56,7 @@ export interface BulletEntityOptions {
   targetZ?: number;
   /** ★ 无视墙（玩家贴城墙开枪时置位）：碰撞分组 filter 掉 GROUP_WALL，子弹穿墙 */
   ignoreWalls?: boolean;
-  /** ★ 自家墙豁免（用户定 2026-09-29）：玩家弹且源在自家墙背面 → 穿自家墙（正向全挡由发射端不置位） */
+  /** ★ 本阵营掩体背面豁免（用户定 2026-09-29） */
   ignoreOwnCovers?: boolean;
 }
 
@@ -197,9 +197,9 @@ export class BulletEntity extends EntityBase {
       this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
       // ★ 常规物理体积全程极小（0.05）：近点不放大；远点由 onUpdate 临近落点放大
       this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
-      // ★ 子弹 vs 掩体口径（用户定 2026-09-29 重写）：**本阵营背向豁免、正面全挡；实心墙全挡**。
-      //   豁免与否由发射端按"源在自家墙正面吗"置 ignoreOwnCovers（ownWallBlocksFrom）。
-      //   敌掩体内部有真孔：正面即使不豁免，仍可穿**孔**（物理复合体）；玩家墙内部实心。
+      // ★ 子弹 vs 三道具（用户定 2026-09-29）：
+      //   玩家城墙 / 玩家墙 = 实心（GROUP_COVER_SOLID）→ 任何子弹都不豁免（含背面）；
+      //   敌人掩体 = GROUP_WALL → **敌弹始终豁免**（穿自家）；正面可穿真孔（物理复合体）；玩家弹打墙体。
       let mask = 0xffff;
       if (this.ignoreOwnCovers) mask &= ~(this.camp === 'enemy' ? GROUP_WALL : GROUP_COVER_PLAYER);
       if (this.ignoreWalls) mask &= ~GROUP_WALL;   // 调试：无视敌掩体

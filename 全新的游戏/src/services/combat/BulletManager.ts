@@ -45,7 +45,7 @@ export interface SpawnBulletOptions {
   targetZ?: number;
   /** ★ 无视墙（玩家贴城墙开枪）：碰撞分组 filter 掉 GROUP_WALL */
   ignoreWalls?: boolean;
-  /** ★ 自家墙豁免（用户定 2026-09-29）：仅玩家弹、且发射源在自家墙**背面**时置位（穿自家墙） */
+  /** ★ 本阵营掩体背面豁免（用户定 2026-09-29） */
   ignoreOwnCovers?: boolean;
   /** ★ 弹种标签（**组合层路由用**：选哪个子弹池 → 哪种程序化视觉）。
    *  BulletEntity 不读它；WorldMode 按它把敌方弹分派到箭池 / 法球池。缺省 = 'arrow'。 */

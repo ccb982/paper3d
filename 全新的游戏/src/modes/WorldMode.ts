@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownWallBlocksFrom } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownCoverBlocksFrom } from '../entity/CoverEntity';
 import { restoreWalls } from './world/RestoreWalls';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
@@ -1006,10 +1006,11 @@ export class WorldMode implements IGameMode {
         if (d < 18) this.worldUIManager?.flashExplosion(1 - d / 18);
       }
       if (opts.type === 'projectile' && opts.camp === 'enemy') {
-        // ★ 敌掩体：对敌背面豁免（源在敌掩体正面 → 不豁免，撞墙；真孔仍可穿）。用户定 2026-09-29
-        //   判定用**发射者本体位置**（不是弹出生点——出生点已前移，会把背面误判成正面）
+        // ★ 敌掩体非孔部分：背面豁免敌弹（方向判定；用户定 2026-09-29）
+        //   源位置缺失（如池代理）→ 退弹出生点
+        const sp = (opts.source as { position?: { x: number; z: number } } | undefined)?.position;
         (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
-          !ownWallBlocksFrom(opts.source.position.x, opts.source.position.z, opts.dirX, opts.dirZ, 'enemy');
+          !ownCoverBlocksFrom(sp?.x ?? opts.x, sp?.z ?? opts.z, opts.dirX, opts.dirZ, 'enemy');
         executeAttack(
           this.entities,
           opts.bulletSkin === 'fireball' ? this.enemyBolts : this.enemyBullets,
@@ -1017,10 +1018,11 @@ export class WorldMode implements IGameMode {
         );
         return;
       }
-      // ★ 墙/掩体：本阵营背向豁免、正面全挡、实心墙全挡（用户定 2026-09-29；判定用发射者位置）
       if (opts.type === 'projectile') {
+        // ★ 城墙背面豁免玩家弹（方向判定；用户定 2026-09-29）；源缺失→退弹出生点
+        const sp = (opts.source as { position?: { x: number; z: number } } | undefined)?.position;
         (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
-          !ownWallBlocksFrom(opts.source.position.x, opts.source.position.z, opts.dirX, opts.dirZ, 'player');
+          !ownCoverBlocksFrom(sp?.x ?? opts.x, sp?.z ?? opts.z, opts.dirX, opts.dirZ, 'player');
       }
       executeAttack(this.entities, this.bullets, opts);
     };
@@ -2023,9 +2025,8 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
       targetX: aim.x, targetY: aim.y, targetZ: aim.z,
-      // ★ 墙/掩体口径（用户定 2026-09-29）：**本阵营背向豁免、正面全挡、实心墙全挡**——
-      //   源在自家墙背面 → 穿（城墙）；正面/前方有实心墙 → 不豁免（撞墙）；敌掩体正面靠真孔穿。
-      ignoreOwnCovers: !ownWallBlocksFrom(this.player.position.x, this.player.position.z, dx, dz, 'player'),
+      // ★ 城墙背面豁免玩家弹（用户定 2026-09-29）
+      ignoreOwnCovers: !ownCoverBlocksFrom(this.player.position.x, this.player.position.z, dx, dz, 'player'),
     });
     // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
     this.swarm.alertAt(p.x, p.z, 16, 6);

@@ -13,8 +13,8 @@ import { updateTerrainLighting, updateWallMaterialsLighting } from './services/m
 import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { SpawnSelect } from './ui/SpawnSelect';
 import { SwarmSystem, SWARM } from './systems/swarm/SwarmSystem';
+import { ownCoverBlocksFrom } from './entity/CoverEntity';   // ★ 城墙背面豁免玩家弹/敌掩体背面豁免敌弹（方向判定）
 import { CoverLazy } from './modes/world/CoverLazy';   // ★ 工事懒更新（用户定 2026-09-27）
-import { ownWallBlocksFrom } from './entity/CoverEntity';   // ★ 玩家墙正面拦截判定（背向豁免自家弹；用户定 2026-09-29）
 import { Flux, setTierHandover } from './systems/swarm/tiers/Flux';   // ★ P-Flux：档间交接唯一口（用户定 2026-09-27）
 import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
 import { EntityManager } from './entity/EntityManager';
@@ -667,12 +667,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       if (opts.type === 'projectile') {
         const skin = (opts as { bulletSkin?: string }).bulletSkin;
         const pool = opts.camp === 'enemy' ? (skin === 'fireball' ? enemyBolts : enemyArrows) : playerBullets;
-        // ★ 墙/掩体单向后豁免（用户定 2026-09-29）：源在自家墙正面（或前方有实心墙）→ 不豁免（撞墙）；
-        //   背面 → 豁免（自家子弹穿自家城墙）；敌掩体正面仍可穿**真孔**。
-        //   判定用**发射者本体位置**（弹出生点已前移，会把背面误判成正面）。
-        (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
-          !ownWallBlocksFrom(opts.source.position.x, opts.source.position.z, opts.dirX, opts.dirZ,
-            opts.camp === 'enemy' ? 'enemy' : 'player');
+        // ★ 本阵营掩体背面豁免（用户定 2026-09-29：只看子弹方向；源缺失→退弹出生点）
+        const sp = (opts.source as { position?: { x: number; z: number } } | undefined)?.position;
+        (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers = !ownCoverBlocksFrom(
+          sp?.x ?? opts.x, sp?.z ?? opts.z, opts.dirX, opts.dirZ,
+          opts.camp === 'enemy' ? 'enemy' : 'player');
         executeAttack(entities, pool, opts);
         return;
       }
@@ -780,8 +779,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       x: x + dx * 0.7, y: oy + dy * 0.7, z: z + dz * 0.7,
       dirX: dx, dirY: dy, dirZ: dz,
       speed, camp: 'enemy', lifetime: life, damage: dmg,
-      // ★ 敌掩体背向豁免（用户定 2026-09-29；池代理直连发射也要判）：源=代理位置，不是弹出生点
-      ignoreOwnCovers: !ownWallBlocksFrom(x, z, dx, dz, 'enemy'),
+      ignoreOwnCovers: !ownCoverBlocksFrom(x, z, dx, dz, 'enemy'),   // ★ 池代理直连也判（背面豁免）
     });
   };
   // ★ 不再手工铺环：兵力全部由**四兵种管理器的创建接口**按防区需求创建

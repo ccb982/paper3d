@@ -30,8 +30,10 @@ export async function ensureRapierReady(): Promise<void> {
  *  默认刚体 membership/filter 全 1（与一切交互）；
  *  城墙 membership = GROUP_WALL，子弹 filter 去掉该位即可"无视墙"。 */
 export const GROUP_WALL = 0x0002;
-/** ★ 玩家造墙分组（用户定 2026-09-29）：**背向对自家子弹豁免、正向全挡**（内部实心，视觉开孔）。 */
+/** ★ 实心墙分组（用户定 2026-09-29）：**任何子弹都不豁免**——variant 'wall' 用（两面全挡）。 */
+/** ★ 玩家城墙分组（用户定 2026-09-29）：**背面豁免玩家子弹**（方向判定；墙变体用实心组）。 */
 export const GROUP_COVER_PLAYER = 0x0004;
+export const GROUP_COVER_SOLID = 0x0008;
 
 export type ColliderShape =
   | { type: 'ball'; radius: number }
