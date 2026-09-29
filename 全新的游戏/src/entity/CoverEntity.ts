@@ -15,7 +15,7 @@ import { StructureEntity, type StructureOptions } from './StructureEntity';
 import type { EntityManager } from './EntityManager';
 import { addStaticObstacleRect, removeStaticObstacle } from '../services/physics/StaticObstacleRegistry';
 import { HealthBar } from '../services/fx/HealthBar';
-import { GROUP_WALL, GROUP_COVER_PLAYER, GROUP_SLIT_PLAYER } from '../services/physics/PhysicsWorld';
+import { GROUP_WALL, GROUP_COVER_PLAYER } from '../services/physics/PhysicsWorld';
 import { RasterMap } from '../services/map/RasterMap';
 import {
   CoverRenderer,
@@ -112,6 +112,26 @@ export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/Worl
   return out;
 }
 
+/** ★ 墙/掩体单向后豁免判定（用户定 2026-09-29）：按 owner 查该阵营的墙，源在**正面**（前向锥内）
+ *  → 全挡（不给豁免）；源在**背面** → 豁免（自家弹穿）。**实心墙（variant 'wall'）两面全挡**
+ *  （墙不透子弹）；城墙（'cover'，视觉开孔）背向豁免；敌人掩体内部有真孔（正面靠孔穿）。 */
+export function ownWallBlocksFrom(x: number, z: number, dx: number, dz: number, owner: 'player' | 'enemy'): boolean {
+  const dl = Math.hypot(dx, dz) || 1;
+  const nx = dx / dl, nz = dz / dl;
+  for (const c of _coverRegistry) {
+    if (c.owner !== owner) continue;
+    const rx = c.position.x - x, rz = c.position.z - z;
+    const dist = Math.hypot(rx, rz);
+    if (dist > 40) continue;
+    if ((rx * nx + rz * nz) / (dist || 1) < 0.5) continue;   // 墙不在射击方向上（前向锥内）
+    if (c.variant === 'wall') return true;                    // ★ 实心墙：不透子弹（两面全挡）
+    const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);
+    const side = (x - c.position.x) * fwdX + (z - c.position.z) * fwdZ;   // >0 = 源在正面
+    if (side > 0) return true;
+  }
+  return false;
+}
+
 /** ★ 线段 (ax,az)→(bx,bz) 是否被某座墙挡住（远程选位的"掩体真的挡子弹吗"校验）。
  *  实现：把线段变换到墙局部坐标，与矩形 [-W/2,W/2]×[-T/2,T/2] 做 slab 相交。 */
 export function coverBlocksLine(ax: number, az: number, bx: number, bz: number): boolean {
@@ -184,9 +204,11 @@ export class CoverEntity extends StructureEntity {
   private readonly poster: boolean;
 
   constructor(em: EntityManager, scene: THREE.Scene, opts: CoverOptions) {
-    const hasSlit = (opts.variant ?? 'cover') !== 'wall';
-    // ★ 碰撞分组（2026-09-19 用户定调）：玩家造 → GROUP_COVER_PLAYER（玩家/友军子弹穿自家）；
-    //   敌人造 → GROUP_WALL（敌弹穿自家）；对方子弹一律实心（只能穿射击孔）。
+    // ★ 玩家墙**内部实心**（用户定 2026-09-29）：碰撞=整块；视觉开孔保留（网格另建）。
+    const hasSlit = (opts.variant ?? 'cover') !== 'wall' && opts.owner !== 'player';
+    // ★ 碰撞分组（用户定 2026-09-29 重写）：**保留阵营分组（只对本阵营通透）**——
+    //   敌人掩体 → GROUP_WALL（敌弹穿自家）；玩家墙 → GROUP_COVER_PLAYER（**背向对自家子弹豁免、
+    //   正向全挡**：豁免与否由发射端按"源是否在墙背面"置 ignoreOwnCovers，见 ownWallBlocksFrom）。
     const groups = opts.owner === 'player'
       ? (GROUP_COVER_PLAYER << 16) | 0xffff
       : (GROUP_WALL << 16) | 0xffff;
@@ -211,13 +233,7 @@ export class CoverEntity extends StructureEntity {
                 shape: { type: 'cuboid', hx: (COVER_W - COVER_SLIT_W) / 4, hy: (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2, hz: COVER_T / 2 },
                 offset: { x: (COVER_W + COVER_SLIT_W) / 4, y: (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2, z: 0 },
               },
-              // ★ 我方射击孔膜（2026-09-19）：玩家造城墙的孔口贴薄膜——
-              //   **只挡敌弹**（敌弹 filter 含 GROUP_SLIT_PLAYER）；玩家/友军弹剔除本组 → 自由穿。
-              ...(opts.owner === 'player' ? [{
-                shape: { type: 'cuboid' as const, hx: COVER_SLIT_W / 2, hy: (COVER_SLIT_Y1 - COVER_SLIT_Y0) / 2, hz: COVER_T / 2 },
-                offset: { x: 0, y: (COVER_SLIT_Y0 + COVER_SLIT_Y1) / 2, z: 0 },
-                groups: (GROUP_SLIT_PLAYER << 16) | 0xffff,
-              }] : []),
+              // ★ 射击孔无膜（用户定 2026-09-29）：孔口不贴任何薄膜——窗口对所有子弹通透。
             ],
             collisionGroups: groups,
           },

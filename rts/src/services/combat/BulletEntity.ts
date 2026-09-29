@@ -197,11 +197,11 @@ export class BulletEntity extends EntityBase {
       this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
       // ★ 常规物理体积全程极小（0.05）：近点不放大；远点由 onUpdate 临近落点放大
       this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
-      // ★ 子弹 vs 掩体口径（用户定 2026-09-29 重写）：**保留阵营分组——只对本阵营通透**：
-      //   敌弹 → 忽略 GROUP_WALL（敌掩体，穿自家）；玩家弹 → **无豁免**（玩家城墙实心=GROUP_COVER_SOLID）。
+      // ★ 子弹 vs 掩体口径（用户定 2026-09-29 重写）：**本阵营背向豁免、正面全挡；实心墙全挡**。
+      //   豁免与否由发射端按"源在自家墙正面吗"置 ignoreOwnCovers（ownWallBlocksFrom）。
+      //   敌掩体内部有真孔：正面即使不豁免，仍可穿**孔**（物理复合体）；玩家墙内部实心。
       let mask = 0xffff;
-      if (this.camp === 'enemy') mask &= ~GROUP_WALL;
-      if (this.camp !== 'enemy' && this.ignoreOwnCovers) mask &= ~GROUP_COVER_PLAYER;   // ★ 背向豁免自家墙
+      if (this.ignoreOwnCovers) mask &= ~(this.camp === 'enemy' ? GROUP_WALL : GROUP_COVER_PLAYER);
       if (this.ignoreWalls) mask &= ~GROUP_WALL;   // 调试：无视敌掩体
       this.em.physics.setCollisionGroups(rb.handle, (0xffff << 16) | mask);
       const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;

@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownWallBlocksFrom } from '../entity/CoverEntity';
 import { restoreWalls } from './world/RestoreWalls';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
@@ -1006,12 +1006,20 @@ export class WorldMode implements IGameMode {
         if (d < 18) this.worldUIManager?.flashExplosion(1 - d / 18);
       }
       if (opts.type === 'projectile' && opts.camp === 'enemy') {
+        // ★ 敌掩体：对敌背面豁免（源在敌掩体正面 → 不豁免，撞墙；真孔仍可穿）。用户定 2026-09-29
+        (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
+          !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ, 'enemy');
         executeAttack(
           this.entities,
           opts.bulletSkin === 'fireball' ? this.enemyBolts : this.enemyBullets,
           opts,
         );
         return;
+      }
+      // ★ 墙/掩体：本阵营背向豁免、正面全挡、实心墙全挡（用户定 2026-09-29）
+      if (opts.type === 'projectile') {
+        (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
+          !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ, 'player');
       }
       executeAttack(this.entities, this.bullets, opts);
     };
@@ -2014,8 +2022,9 @@ export class WorldMode implements IGameMode {
       speed: PLAYER_BULLET_SPEED, camp: 'player', lifetime: PLAYER_BULLET_LIFETIME,
       attackFormula: { min: PLAYER_BULLET_MIN_DAMAGE, ratio: PLAYER_BULLET_ATK_RATIO },
       targetX: aim.x, targetY: aim.y, targetZ: aim.z,
-      // ★ 掩体口径（2026-09-19）：玩家子弹**自动穿自家掩体**（分组过滤），
-      //   打敌掩体需从射击孔穿过（不再贴墙全忽略）。
+      // ★ 墙/掩体口径（用户定 2026-09-29）：**本阵营背向豁免、正面全挡、实心墙全挡**——
+      //   源在自家墙背面 → 穿（城墙）；正面/前方有实心墙 → 不豁免（撞墙）；敌掩体正面靠真孔穿。
+      ignoreOwnCovers: !ownWallBlocksFrom(muzzle.x + dx * 1.5, muzzle.z + dz * 1.5, dx, dz, 'player'),
     });
     // ★ P2：枪声刷警戒（共享感知——附近游走的代理按个体延迟进入追击）
     this.swarm.alertAt(p.x, p.z, 16, 6);

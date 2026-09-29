@@ -127,18 +127,19 @@ export function coverAt(x: number, z: number, margin = 0.2): boolean {
   return false;
 }
 
-  /** ★ 玩家墙正面拦截判定（用户定 2026-09-29）：源(x,z) 朝(dx,dz)前方有玩家墙且**源在其正面**
-   *  → 正面全挡（子弹不得豁免自家墙）；否则（源在背面/无墙在前）→ 背向豁免（自家弹穿墙）。
-   *  正面 = 墙 heading 指向侧（墙面向来敌）；heading 缺省按 +Z。 */
-export function ownWallBlocksFrom(x: number, z: number, dx: number, dz: number): boolean {
+  /** ★ 墙/掩体单向后豁免判定（用户定 2026-09-29）：按 owner 查该阵营的墙，源在**正面**（前向锥内）
+   *  → 全挡（不给豁免）；源在**背面** → 豁免（自家弹穿）。**实心墙（variant 'wall'）两面全挡**
+   *  （墙不透子弹）；城墙（'cover'，视觉开孔）背向豁免；敌人掩体内部有真孔（正面靠孔穿）。 */
+export function ownWallBlocksFrom(x: number, z: number, dx: number, dz: number, owner: 'player' | 'enemy'): boolean {
   const dl = Math.hypot(dx, dz) || 1;
   const nx = dx / dl, nz = dz / dl;
   for (const c of _coverRegistry) {
-    if (c.owner !== 'player') continue;
+    if (c.owner !== owner) continue;
     const rx = c.position.x - x, rz = c.position.z - z;
     const dist = Math.hypot(rx, rz);
     if (dist > 40) continue;
     if ((rx * nx + rz * nz) / (dist || 1) < 0.5) continue;   // 墙不在射击方向上（前向锥内）
+    if (c.variant === 'wall') return true;                    // ★ 实心墙：不透子弹（两面全挡）
     const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);
     const side = (x - c.position.x) * fwdX + (z - c.position.z) * fwdZ;   // >0 = 源在正面
     if (side > 0) return true;

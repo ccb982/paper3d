@@ -30,11 +30,8 @@ export async function ensureRapierReady(): Promise<void> {
  *  默认刚体 membership/filter 全 1（与一切交互）；
  *  城墙 membership = GROUP_WALL，子弹 filter 去掉该位即可"无视墙"。 */
 export const GROUP_WALL = 0x0002;
-/** ★ 玩家造掩体分组（2026-09-19）：玩家/友军子弹可 filter 掉它实现“穿自家掩体” */
+/** ★ 玩家造墙分组（用户定 2026-09-29）：**背向对自家子弹豁免、正向全挡**（内部实心，视觉开孔）。 */
 export const GROUP_COVER_PLAYER = 0x0004;
-/** ★ 我方射击孔膜（2026-09-19）：玩家造城墙的孔口贴一层薄膜，
- *  只挡敌弹（敌弹 filter 含本位）；玩家/友军弹 filter 剔除本位 → 自由穿。 */
-export const GROUP_SLIT_PLAYER = 0x0008;
 
 export type ColliderShape =
   | { type: 'ball'; radius: number }

@@ -667,11 +667,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       if (opts.type === 'projectile') {
         const skin = (opts as { bulletSkin?: string }).bulletSkin;
         const pool = opts.camp === 'enemy' ? (skin === 'fireball' ? enemyBolts : enemyArrows) : playerBullets;
-        // ★ 玩家墙：背向对自家子弹豁免（源在背面）；正向全挡（不置位 → 撞墙）。用户定 2026-09-29
-        if (opts.camp !== 'enemy') {
-          (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
-            !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ);
-        }
+        // ★ 墙/掩体单向后豁免（用户定 2026-09-29）：源在自家墙正面（或前方有实心墙）→ 不豁免（撞墙）；
+        //   背面 → 豁免（自家子弹穿自家城墙）；敌掩体正面仍可穿**真孔**。
+        (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
+          !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ, opts.camp === 'enemy' ? 'enemy' : 'player');
         executeAttack(entities, pool, opts);
         return;
       }
