@@ -29,11 +29,11 @@ import { FORTIFY_SECTORS } from '../FortifyPlanner';
 export const ENGINEER_POLICY = {
   /** 到件半径（米）：队长到件以内才计时 */
   WORK_R: 3,
+  /** ★ 掩体建造：工兵**当前位置向参照侧**多远放掩体（米；用户定 2026-09-29） */
+  COVER_BUILD_HIDE: 1.6,
   /** ★ 掩体密度门（用户定 2026-09-29）：该半径内掩体 ≥ 上限 → 改挖战壕 */
   COVER_DENSITY_R: 12,
   COVER_DENSITY_MAX: 3,
-  /** 工作位偏移：站在掩体背参照侧多远（米） */
-  WORK_HIDE: 1.6,
   /** ★ 掩体施工时长（秒）= **真实建造时长**（用户定 2026-09-27：此前写死 6s，远超 0.6s 建造动画
    *  → 工兵"造得很快却站着"，净位移 <4m 被判官按卡死收）。单源 = COVER_DEPLOY_BUILD_TIME。 */
   COVER_TIME_S: 0.8,
@@ -160,13 +160,6 @@ export class EngineerManager extends RoleManager {
   }
 
   /** 工兵目标分配 + 施工推进：认区（大队管理器）→ 取件（预约制）→ 复检 → 施工/补兵 */
-  /** ★ 参照点（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰 */
-  private frontRef(port: EngineerPort, s: { x: number; z: number }): { x: number; z: number } | null {
-    const pl = port.playerOf?.() ?? null;
-    if (pl && Math.hypot(pl.x - s.x, pl.z - s.z) <= THREAT_NEAR) return pl;
-    return port.ship();
-  }
-
   /** ★ 附近已建掩体数（建造账本；用户定 2026-09-29） */
   private coverCountNear(x: number, z: number, r: number): number {
     let n = 0;
@@ -174,27 +167,22 @@ export class EngineerManager extends RoleManager {
     return n;
   }
 
-  /** ★ 工作位（用户定 2026-09-29）：**掩体背参照侧** WORK_HIDE 米——
-   *  行军目标=工作位（工兵站在掩体后面干活），掩体本身挡在 工兵↔参照 之间。 */
-  private workPoint(spot: { x: number; z: number }, ref: { x: number; z: number } | null): { x: number; z: number } {
-    if (!ref) return { x: spot.x, z: spot.z };
-    const dx = spot.x - ref.x, dz = spot.z - ref.z;   // 参照 → 掩体（向外）
-    const d = Math.hypot(dx, dz);
-    if (d < 1e-3) return { x: spot.x, z: spot.z };
-    return { x: spot.x + (dx / d) * ENGINEER_POLICY.WORK_HIDE, z: spot.z + (dz / d) * ENGINEER_POLICY.WORK_HIDE };
+  /** ★ 参照点（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰 */
+  private buildRef(port: EngineerPort, s: { x: number; z: number }): { x: number; z: number } | null {
+    const pl = port.playerOf?.() ?? null;
+    if (pl && Math.hypot(pl.x - s.x, pl.z - s.z) <= THREAT_NEAR) return pl;
+    return port.ship();
   }
 
-  /** ★ 强行挪位（用户定 2026-09-29）：落点若不在参照侧前方 → 沿参照方向前移到前方 0.5m。
-   *  默认参照=舰（掩体挡在工兵与舰之间）；玩家近 → 参照=玩家（掩体改挡玩家侧）。 */
-  private forceFront(s: { x: number; z: number }, spot: { x: number; z: number }, ref: { x: number; z: number } | null): { x: number; z: number } {
-    if (!ref) return spot;
-    const ux = ref.x - s.x, uz = ref.z - s.z;
-    const d = Math.hypot(ux, uz);
-    if (d < 1e-3) return spot;
-    const front = (spot.x - s.x) * (ux / d) + (spot.z - s.z) * (uz / d);
-    if (front >= 0.5) return spot;
-    const k = 0.5 - front;
-    return { x: spot.x + (ux / d) * k, z: spot.z + (uz / d) * k };
+  /** ★ 建造位置（用户定 2026-09-29）：**工兵当前位置向参照侧 1.6m**（与掩体点无关；
+   *  掩体点只是行军目标）。参照=舰；玩家 20m 内 → 玩家。 */
+  private coverSpot(port: EngineerPort, s: { x: number; z: number }): { x: number; z: number } {
+    const ref = this.buildRef(port, s);
+    if (!ref) return { x: s.x, z: s.z };
+    const dx = ref.x - s.x, dz = ref.z - s.z;
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-3) return { x: s.x, z: s.z };
+    return { x: s.x + (dx / d) * ENGINEER_POLICY.COVER_BUILD_HIDE, z: s.z + (dz / d) * ENGINEER_POLICY.COVER_BUILD_HIDE };
   }
 
   /** ★ 建造 = 独立机制（用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
@@ -212,9 +200,11 @@ export class EngineerManager extends RoleManager {
     this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);
     if (kind === 'cover') {
       if (t < ENGINEER_POLICY.COVER_TIME_S) return 'working';
-      port.cover(spot.x, spot.z, 'cover');
-      port.markDirty(spot.x, spot.z, 12);
-      this.built.add(keyOf(spot.x, spot.z));
+      // ★ 落位（用户定 2026-09-29）：**当前位置向参照侧 1.6m**
+      const bp = this.coverSpot(port, s);
+      port.cover(bp.x, bp.z, 'cover');
+      port.markDirty(bp.x, bp.z, 12);
+      this.built.add(keyOf(bp.x, bp.z));
       this.builtOnce.add(id);
       this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
       this.work.delete(id); this.digs.delete(id);
@@ -360,11 +350,7 @@ export class EngineerManager extends RoleManager {
           this.spots.delete(id);
           this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
         }
-        {
-          const ref = this.frontRef(port, s);
-          const wp = this.workPoint({ x: ws.x, z: ws.z }, ref);
-          this.targets.set(id, { x: wp.x, z: wp.z });
-        }
+        this.targets.set(id, { x: ws.x, z: ws.z });   // 只告知掩体点；站位/朝向归队长
         working++;
         continue;
       }
@@ -432,9 +418,7 @@ export class EngineerManager extends RoleManager {
             ?? tryBand(band.rHi, band.rHi + 36);
         }
         if (pick) {
-          const ref = this.frontRef(port, s);
-          const fp = this.forceFront(s, { x: pick.x, z: pick.z }, ref);   // ★ 强行挪到参照侧
-          spot = { x: fp.x, z: fp.z, score: pick.score, at: now };
+          spot = { x: pick.x, z: pick.z, score: pick.score, at: now };   // 掩体点=纯行军目标
           this.spots.set(id, spot);
           this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
           this.work.delete(id); this.digs.delete(id);
@@ -455,7 +439,10 @@ export class EngineerManager extends RoleManager {
           : dense ? 'trench'
           : (this.built.size % 4) !== 3 ? 'cover' : 'trench';
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
-          if (kind === 'cover') this.coversBuilt.set(keyOf(spot.x, spot.z), { x: spot.x, z: spot.z });
+          if (kind === 'cover') {
+            const bp = this.coverSpot(port, s);
+            this.coversBuilt.set(keyOf(bp.x, bp.z), bp);
+          }
           this.releaseFor(id); this.spots.delete(id);
           this.dbg.last = kind === 'cover'
             ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
@@ -463,12 +450,7 @@ export class EngineerManager extends RoleManager {
         }
         working++;
       }
-      // ★ 行军目标 = 掩体背参照侧的工作位（用户定 2026-09-29）——工兵站到掩体后面干活
-      {
-        const ref = this.frontRef(port, s);
-        const wp = this.workPoint(spot, ref);
-        this.targets.set(id, { x: wp.x, z: wp.z });
-      }
+      this.targets.set(id, { x: spot.x, z: spot.z });   // 只告知掩体点；站位/朝向归队长（build 任务）
     }
     // ---- ★ 补队（用户定 2026-09-26）：**检查全部 8 个防区——有队就不放，没有就放** ----
     const posture = Math.max(0, Math.min(1, port.posture ? port.posture() : 0));

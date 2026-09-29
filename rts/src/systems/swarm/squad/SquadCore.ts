@@ -130,7 +130,7 @@ export class SquadCore {
     st.execState = label;
     const engT = o.target;
     // ---- 运动单源 ----
-    // 巡逻（状态）：不停调用长/短寻路取下一腿；锚点=引擎令目标（捕获一次）
+    // 掩体点=纯行军目标（建造位置由管理器按当前位置向参照侧决定；用户定 2026-09-29）
     if (label === 'patrol' && o.kind !== 'protect') {
       if (!this.patrolAnchor) this.patrolAnchor = { x: engT.x, z: engT.z };
       let pg = this.patrolGoal;
