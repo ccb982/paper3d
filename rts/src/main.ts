@@ -537,9 +537,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         // ★ 驻守（队长状态）：舰位 + 掩体表（自主掩体循环；毁件自然消失）
         shipPoint: () => ({ x: hooks.shipX, z: hooks.shipZ }),
         playerPoint: () => ({ x: hooks.playerX, z: hooks.playerZ }),
-        coversNear: (x: number, z: number, r: number) => swarm.data.holeTable.covers
-          .filter((c) => Math.hypot(c.x - x, c.z - z) <= r)
-          .map((c) => ({ x: c.x, z: c.z })),
+        // ★ 队长掩体查询 = **建造账本**（掩体，含未物化；用户定 2026-09-29）——懒物化不挡"躲掩体"
+        coversNear: (x: number, z: number, r: number) => {
+          const out: { x: number; z: number }[] = [];
+          for (const c of swarm.data.fortify.builtList()) {
+            if (c.kind === 'cover' && Math.hypot(c.x - x, c.z - z) <= r) out.push({ x: c.x, z: c.z });
+          }
+          return out;
+        },
         coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,

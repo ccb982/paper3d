@@ -1279,18 +1279,16 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
   const o3 = br.writer.store.get(3)!.order;
-  ok(o1.kind === 'patrol' && o2.kind === 'patrol' && o1.state === 'assault' && o2.state === 'assault' && o3.state !== 'assault', '★ 总攻：战斗兵种=assault；工兵系豁免（§3.G）');
+  ok(o1.kind === 'patrol' && o1.state === 'assault' && o2.state === 'hold' && o3.state !== 'assault', '★ 总攻：近战=assault；远程=hold躲掩体；工兵系豁免');
   // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
-  ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10
-    && Math.hypot(o2.target.x - 200, o2.target.z) <= 10,
-    '★ 总攻：战斗兵种目标 = 舰旁可站点（≤10m）');
+  ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10, '★ 总攻：近战目标 = 舰旁可站点（≤10m）');
   br.writer.store.set(2, {
     order: { kind: 'garrison', source: 'engine', target: { x: 1, z: 1 }, seq: 0, ttl: 0 },
     phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.2);
-  ok(br.writer.store.get(2)!.order.kind === 'patrol' && Math.hypot(br.writer.store.get(2)!.order.target.x - 200, br.writer.store.get(2)!.order.target.z) <= 10,
-    '★ 强制令绕稳定门（不被 kept 拦）');
+  ok(br.writer.store.get(2)!.order.state === 'hold' && br.writer.store.get(2)!.order.kind === 'defend',
+    '★ 远程：总攻发 hold（绕稳定门强制；队长自主躲掩体）');
   // ★ 总攻强制覆盖所有人（含玩家手动令；用户定 2026-09-26）
   br.writer.store.set(1, {
     order: { kind: 'regroup', source: 'player', target: { x: 7, z: 7 }, seq: 0, ttl: 99 },

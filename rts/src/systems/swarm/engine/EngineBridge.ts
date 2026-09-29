@@ -379,8 +379,17 @@ export class EngineBridge {
       }
 
       // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）；
-      //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）
+      //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）；
+      //   ★ 远程（用户定 2026-09-29）：**总攻不压舰——驻守躲掩体**（队长自主掩体循环：
+      //     找更靠舰的掩体、躲其背参照侧；掩体由工兵掩护施工建在它前面）。
       if (assault && assaultT && !tactical.has(rec.id) && rec.role !== 'engineer') {
+        if (rec.role === 'ranged') {
+          const same = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
+          if (!same) {
+            if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
+          }
+          continue;
+        }
         const same = cur && cur.order.state === 'assault' && cur.order.kind === 'patrol'
           && Math.hypot(cur.order.target.x - assaultT.x, cur.order.target.z - assaultT.z) <= 1;
         if (!same) {
