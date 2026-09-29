@@ -108,9 +108,11 @@ export class FortifyPlanner {
   }
 
   /** ★ 已建工事计数（密度门用；单一账本） */
+  /** ★ 附近**已建掩体**数（密度门用；用户定 2026-09-29：只数掩体——坑洞不算，
+   *  否则一条壕多笔挖掘把密度顶满 → 永远挖壕、不造掩体） */
   countNear(x: number, z: number, r: number): number {
     let n = 0;
-    for (const c of this.builtCovers.values()) if (Math.hypot(c.x - x, c.z - z) <= r) n++;
+    for (const c of this.builtCovers.values()) if (c.kind === 'cover' && Math.hypot(c.x - x, c.z - z) <= r) n++;
     return n;
   }
 
