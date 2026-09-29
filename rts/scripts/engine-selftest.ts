@@ -1280,9 +1280,9 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   br.tick(0.6, 1);
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
-  ok(o1.kind === 'patrol' && o1.state === 'assault' && o2.state === 'hold'
+  ok(o1.kind === 'patrol' && o1.state === 'assault' && o2.state === 'assault'
     && br.writer.store.get(3) === undefined,
-    '★ 总攻：近战=assault；远程=hold躲掩体；工兵无件→不发令（全交掩体点查询）');
+    '★ 总攻：近战/远程=assault（远程先行军→到点驻守）；工兵无件→不发令');
   // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
   ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10, '★ 总攻：近战目标 = 舰旁可站点（≤10m）');
   br.writer.store.set(2, {
@@ -1290,8 +1290,8 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
     phase: 'executing', progress: 0, stillS: 0, issuedAt: 1,
   });
   br.tick(0.6, 1.2);
-  ok(br.writer.store.get(2)!.order.state === 'hold' && br.writer.store.get(2)!.order.kind === 'defend',
-    '★ 远程：总攻发 hold（绕稳定门强制；队长自主躲掩体）');
+  ok(br.writer.store.get(2)!.order.state === 'assault' && br.writer.store.get(2)!.order.kind === 'patrol',
+    '★ 远程：总攻先行军（绕稳定门强制；到点转驻守）');
   // ★ 总攻强制覆盖所有人（含玩家手动令；用户定 2026-09-26）
   br.writer.store.set(1, {
     order: { kind: 'regroup', source: 'player', target: { x: 7, z: 7 }, seq: 0, ttl: 99 },

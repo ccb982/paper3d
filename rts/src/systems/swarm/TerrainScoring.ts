@@ -120,12 +120,28 @@ export interface ScoringSources {
   playerZ: number;
 }
 
+/** ★ 已建工事加成半径（米；用户定 2026-09-29）：**邻域铺开**——
+ *  只写自己那一格会让相邻 4m 格需求不降（实测：点=0.0、东4=18.9）→ 取点继续挑隔壁 → 工兵挨着造。
+ *  掩体 2.5 / 坑洞 1.2，按距离线性衰减到 0；查询自然转去别处。 */
+export const COVER_SPREAD_R = 10;
+
 /** ★ 掩体/制高加成表（扫描产物 + 已建掩体；键同旧 TerrainScore.key） */
 export function buildBonus(plan: DefensePlan, built: readonly { x: number; z: number; kind?: string }[]): Map<string, number> {
   const bonus = new Map<string, number>();
   for (const p of plan.posts) bonus.set(bonusKey(p.x, p.z), p.kind === 'cover' ? 1.2 : 0.8);
-  // ★ 已建工事 = 综合评分上升（掩体 2.5 / 坑洞 1.2；含未物化账本；用户定 2026-09-29）
-  for (const c of built) bonus.set(bonusKey(c.x, c.z), c.kind === 'trench' ? 1.2 : 2.5);
+  // ★ 已建工事 = 综合评分上升（掩体 2.5 / 坑洞 1.2；含未物化账本）——**按半径铺开到邻域**
+  const stamp = (x: number, z: number, base: number): void => {
+    for (let dx = -COVER_SPREAD_R; dx <= COVER_SPREAD_R; dx += CELL) {
+      for (let dz = -COVER_SPREAD_R; dz <= COVER_SPREAD_R; dz += CELL) {
+        const d = Math.hypot(dx, dz);
+        if (d > COVER_SPREAD_R) continue;
+        const b = base * (1 - d / COVER_SPREAD_R);
+        const k = bonusKey(x + dx, z + dz);
+        if (b > (bonus.get(k) ?? 0)) bonus.set(k, b);
+      }
+    }
+  };
+  for (const c of built) stamp(c.x, c.z, c.kind === 'trench' ? 1.2 : 2.5);
   return bonus;
 }
 

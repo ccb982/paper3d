@@ -72,6 +72,8 @@ export interface LiveView {
   assault?(): boolean;
   /** 硬通行（总攻目标吸附用） */
   blockedAt?(x: number, z: number): boolean;
+  /** ★ 附近已建掩体（账本；常驻驻守门用——有"更靠舰"的掩体才驻守，否则先随前进循环走） */
+  coversNear?(x: number, z: number, r: number): readonly { x: number; z: number }[];
   /** 池代理位置（卡死判官在册） */
   agents?(): readonly { uid: number; x: number; z: number }[];
   /** 卡死豁免（驻守/交战…） */
@@ -404,18 +406,28 @@ export class EngineBridge {
         continue;
       }
 
-      // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）；
-      //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）；
-      //   ★ 远程（用户定 2026-09-29）：**总攻不压舰——驻守躲掩体**（队长自主掩体循环：
-      //     找更靠舰的掩体、躲其背参照侧；掩体由工兵掩护施工建在它前面）。
-      if (assault && !tactical.has(rec.id) && rec.role !== 'engineer') {
-        if (rec.role === 'ranged') {
+      // ★ 远程兵种（用户定 2026-09-29）：**非总攻 = 常驻驻守**（HoldCover 自主掩体循环、开火独立、
+      //   判官 garrison 豁免）——但**有"更靠舰"的掩体可躲才驻守**；没有掩体 → 落 ④ 前进循环
+      //   （推进/巡逻往前走，等工兵把掩体造到前面再驻守；不然创建后原地站死）。
+      if (rec.role === 'ranged' && !assault) {
+        const covers = this.live.coversNear?.(sp.x, sp.z, 40) ?? [];
+        const shipD = Math.hypot(sp.x - ship.x, sp.z - ship.z);
+        const ahead = covers.some((c) => Math.hypot(c.x - ship.x, c.z - ship.z) < shipD - 0.5);
+        if (ahead) {
           const same = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
           if (!same) {
             if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
           }
           continue;
         }
+        // 无掩体可躲 → 下落 ④（唯一兜底：行军↔巡逻前进循环）
+      }
+
+      // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）；
+      //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）；
+      //   ★ 远程（用户定 2026-09-29）：**总攻不压舰——驻守躲掩体**（队长自主掩体循环：
+      //     找更靠舰的掩体、躲其背参照侧；掩体由工兵掩护施工建在它前面）。
+      if (assault && !tactical.has(rec.id) && rec.role !== 'engineer') {
         // ★ 目标=**以舰为中心、从本队真的可达的最近可站点**（每队各算各的；2s 缓存复检）
         const at = this.shipSidePoint(rec.id, ship.x, ship.z, now);
         if (at) {
