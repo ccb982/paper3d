@@ -20,7 +20,6 @@
 // ============================================================
 
 import { RoleManager, type RoleCtx } from './RoleManager';
-import { coverProtects } from '../FortifyPlanner';
 import type { SquadManager } from './SquadManager';
 import { BUILDER_SQUAD_MAX } from '../SquadTable';
 import { FORTIFY_SECTORS } from '../FortifyPlanner';
@@ -87,8 +86,6 @@ export interface EngineerPort {
   wardSpot?(id: number): { x: number; z: number } | null;
   /** ★ 掩护掩体落成回执（引擎据此抑制同点重复产点，直到保护对象移动） */
   wardCoverDone?(id: number, x: number, z: number): void;
-  /** ★ 保护对象位置（§3.C；null=非保护状态 → 掩体检测对"工兵自己"） */
-  wardOf?(id: number): { x: number; z: number } | null;
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
   /** 地形脏标记（评分/采样局部重算） */
@@ -158,21 +155,10 @@ export class EngineerManager extends RoleManager {
   private buildAt(
     port: EngineerPort, id: number, s: { x: number; z: number },
     spot: { x: number; z: number }, kind: 'cover' | 'trench', dt: number,
-  ): 'working' | 'done' | 'invalid' {
-    // 未到场：只走位不检测（检测在可施工时生效，避免把"路上的点"误拉黑）
+  ): 'working' | 'done' {
+    // ★ 建造**不做达标检测**（用户定 2026-09-29）：99% 情况可造，检测会把工兵卡死；
+    //   达标由**选点侧**负责（常规=查询；保护态=引擎按保护对象位置给点）。
     if (Math.hypot(s.x - spot.x, s.z - spot.z) > ENGINEER_POLICY.WORK_R) return 'working';
-    // ★★ 建造**自带掩体检测**（用户定 2026-09-29）：要造的掩体必须能保护
-    //    **保护对象**（ward）或**工兵自己**——与舰共线、位于其舰侧前部；
-    //    不达标 → 不施工（返回 invalid，调用方拉黑/换点）。
-    const shipPt = port.ship();
-    if (shipPt) {
-      const ward = port.wardOf?.(id) ?? null;
-      if (ward) {
-        if (!coverProtects(shipPt, ward, spot)) return 'invalid';
-      } else if (!coverProtects(shipPt, s, spot, 1.8, 0.2, 6)) {
-        return 'invalid';   // 工兵自身：站位在掩体后（公差放宽：0.2~6m）
-      }
-    }
     const t = (this.work.get(id) ?? 0) + dt;
     this.work.set(id, t);
     this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);
@@ -320,13 +306,10 @@ export class EngineerManager extends RoleManager {
       if (ws) {
         spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
         this.spots.set(id, spot);
-        const rw = this.buildAt(port, id, s, ws, 'cover', dt);
-        if (rw === 'done') {
+        if (this.buildAt(port, id, s, ws, 'cover', dt) === 'done') {
           port.wardCoverDone?.(id, ws.x, ws.z);
           this.spots.delete(id);
           this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
-        } else if (rw === 'invalid') {
-          this.spots.delete(id);   // 不达标 → 丢点（引擎按保护对象位置重算）
         }
         this.targets.set(id, { x: ws.x, z: ws.z });
         working++;
@@ -412,17 +395,11 @@ export class EngineerManager extends RoleManager {
       {
         // ★ 掩体为主（用户定 2026-09-26）：总攻全掩体；平时 4 件里 3 掩体 / 1 战壕
         const kind: 'cover' | 'trench' = port.assault() || (this.built.size % 4) !== 3 ? 'cover' : 'trench';
-        const r = this.buildAt(port, id, s, spot, kind, dt);
-        if (r === 'done') {
+        if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
           this.releaseFor(id); this.spots.delete(id);
           this.dbg.last = kind === 'cover'
             ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
             : `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
-        } else if (r === 'invalid') {
-          // 自带掩体检测不过 → 拉黑换点（防同点复活）
-          this.black.set(keyOf(spot.x, spot.z), now + ENGINEER_POLICY.BLACK_TTL_S);
-          this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
-          this.dbg.last = `#${id} 掩体检测不过 @${spot.x | 0},${spot.z | 0} → 换点`;
         }
         working++;
       }

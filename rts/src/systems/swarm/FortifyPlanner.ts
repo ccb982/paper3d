@@ -138,27 +138,3 @@ export class FortifyPlanner {
     this.cursor = 0;
   }
 }
-
-/** ★ I15 掩体检测（用户定 2026-09-29）：**要造的掩体能不能保护 protectee**——
- *  与舰共线（到 舰→protectee 连线距离 ≤ tol）∧ 在 protectee 的**舰侧前部**（front ∈ [minFront, maxFront]）。
- *  保护对象 = 工兵自己，或工兵负责掩护的远程兵（总攻期掩护施工）。 */
-export function coverProtects(
-  ship: { x: number; z: number },
-  protectee: { x: number; z: number },
-  cand: { x: number; z: number },
-  tol = 1.8,
-  minFront = 0.6,
-  maxFront = 4.5,
-): boolean {
-  const vx = protectee.x - ship.x, vz = protectee.z - ship.z;
-  const d = Math.hypot(vx, vz);
-  if (d < 1e-3) return false;
-  const ux = vx / d, uz = vz / d;              // 舰 → protectee 单位向量
-  const wx = cand.x - protectee.x, wz = cand.z - protectee.z;
-  const dist = Math.hypot(wx, wz);
-  if (dist < minFront || dist > maxFront) return false;
-  const front = -(wx * ux + wz * uz);          // >0 = 在 protectee 的舰侧
-  if (front < minFront || front > d - 0.5) return false;   // 前部且不得越过舰
-  const cross = Math.abs(wx * uz - wz * ux);   // 到 舰→protectee 连线的垂距
-  return cross <= tol;
-}

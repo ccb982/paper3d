@@ -28,7 +28,7 @@ import { FlyerManager } from './FlyerManager';
 import { EngineerManager, type EngineerPort } from './EngineerManager';
 import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { releaseAt } from '../PostureFn';
-import { coverProtects } from '../FortifyPlanner';
+import { coverPoint, threePoint, type Pt } from '../CoverGeom';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -177,7 +177,7 @@ export class EngineBridge {
       const p = this.live.engineer?.() ?? null;
       if (!p) return null;
       // ★ §3.C：给工兵管理器接上"保护对象建造点"（引擎查询；非保护态返回 null → 走原查询）
-      return { ...p, wardSpot: (id: number) => this.wardSpotOf(id), wardCoverDone: (id: number, x: number, z: number) => this.wardCoverDone(id, x, z), wardOf: (id: number) => this.wardOf(id) };
+      return { ...p, wardSpot: (id: number) => this.wardSpotOf(id), wardCoverDone: (id: number, x: number, z: number) => this.wardCoverDone(id, x, z) };
     });
     this.core = new EngineCore({
       perceive: (now) => this.perceive(now),
@@ -488,22 +488,24 @@ export class EngineBridge {
       const ward = byId.get(w) as LiveSquad;
       const built = this.wardBuilt.get(r.id);
       if (built && Math.hypot(ward.x - built.x, ward.z - built.z) <= 6) { this.wardSpot.delete(r.id); continue; }
-      const p = this.wardBuildPoint(ward);
+      const p = this.wardBuildPoint(r, ward);
       if (p) this.wardSpot.set(r.id, p); else this.wardSpot.delete(r.id);
     }
   }
 
-  /** 建造点：保护对象前部（朝舰）1.6~3.2m，与舰共线（coverProtects 校验），取首个可站点 */
-  private wardBuildPoint(ward: LiveSquad): { x: number; z: number } | null {
-    const ship = this.pos.ship() ?? this.pos.player();
-    if (!ship) return null;
-    const vx = ward.x - ship.x, vz = ward.z - ship.z;
-    const d = Math.hypot(vx, vz);
-    if (d < 1e-3) return null;
-    const ux = vx / d, uz = vz / d;
+  /** 建造点（用户定 2026-09-29；**与舰共线**）：
+   *  · 威胁点 = **舰**（无舰才退玩家）——玩家会在舰反侧游走，拿玩家当威胁会把掩体造到工兵背后；
+   *  · 受护点 = 工兵/保护对象中**更靠舰者**（离舰最近的那个）——保证掩体落在**两者前方/舰侧**；
+   *  · 落点 = 受护点朝舰 1.6~3.2m，三点检测（通用几何）→ 取首个可站点。 */
+  private wardBuildPoint(eng: LiveSquad, ward: LiveSquad): Pt | null {
+    const threat = this.pos.ship() ?? this.pos.player();
+    if (!threat) return null;
+    const dEng = Math.hypot(eng.x - threat.x, eng.z - threat.z);
+    const dWard = Math.hypot(ward.x - threat.x, ward.z - threat.z);
+    const unit: Pt = dEng < dWard ? { x: eng.x, z: eng.z } : { x: ward.x, z: ward.z };
     for (const off of [1.6, 2.4, 3.2]) {
-      const p = { x: ward.x - ux * off, z: ward.z - uz * off };
-      if (!coverProtects(ship, ward, p)) continue;
+      const p = coverPoint(threat, unit, off);
+      if (!threePoint(threat, unit, p)) continue;
       if (this.live.blockedAt?.(p.x, p.z) ?? false) continue;
       return p;
     }
@@ -513,14 +515,6 @@ export class EngineBridge {
   /** 工兵管理器查询口：本拍建造点（null = 非保护状态 → 原查询机制） */
   wardSpotOf(id: number): { x: number; z: number } | null {
     return this.wardSpot.get(id) ?? null;
-  }
-
-  /** 保护对象位置（§3.C：建造自带掩体检测的"保护对象"；null=非保护态） */
-  wardOf(id: number): { x: number; z: number } | null {
-    const w = this.engineerWard.get(id);
-    if (w === undefined) return null;
-    const p = this.pos.squad(w);
-    return p ? { x: p.x, z: p.z } : null;
   }
 
   /** 掩护掩体落成回执：抑制同点重复产点（直到保护对象移动 >6m） */

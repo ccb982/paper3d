@@ -22,7 +22,8 @@ import { EngineerManager } from '../src/systems/swarm/engine/EngineerManager.ts'
 import { TimerManager, type TimerHost } from '../src/systems/swarm/engine/TimerManager.ts';
 import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
-import { FortifyPlanner, FORTIFY_SECTORS, coverProtects } from '../src/systems/swarm/FortifyPlanner.ts';
+import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
+import { coverPoint, threePoint } from '../src/systems/swarm/CoverGeom.ts';
 import { SectorBuilder, SECTOR_COUNT } from '../src/systems/swarm/tactics/SectorBuilder.ts';
 import { SquadCreation, type CreationPort } from '../src/systems/swarm/engine/SquadCreation.ts';
 import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
@@ -991,15 +992,17 @@ console.log('[12m] §3.G：保护配对 / 残则换 / 被打后撤+支援');
 }
 
 // ---------- I15 掩体检测（§3.C；用户定 2026-09-29） ----------
-console.log('[12n] coverProtects：与舰共线 + 保护对象前部');
+console.log('[12n] CoverGeom：通用三点检测（任意 舰/敌人/掩体 点）');
 {
-  const ship = { x: 200, z: 0 };
+  const threat = { x: 200, z: 0 };   // 可传舰，也可传敌人
   const u = { x: 100, z: 0 };
-  ok(coverProtects(ship, u, { x: 101.6, z: 0 }), '舰侧正前 1.6m → 过（挡舰→单位弹道）');
-  ok(!coverProtects(ship, u, { x: 98.4, z: 0 }), '保护对象背后 → 不过');
-  ok(!coverProtects(ship, u, { x: 101.6, z: 3 }), '侧偏 3m（不与舰共线）→ 不过');
-  ok(coverProtects(ship, u, { x: 101, z: 1 }), '共线容差内（垂距 1.0）→ 过');
-  ok(!coverProtects(ship, u, { x: 130, z: 0 }), '离保护对象太远（>4.5m）→ 不过');
+  const p = coverPoint(threat, u, 1.6);
+  ok(Math.abs(p.x - 101.6) < 0.01 && Math.abs(p.z) < 0.01, '落点 = 受护点朝威胁 1.6m（在 威胁↔受护 之间）');
+  ok(threePoint(threat, u, p), '三点检测：掩体在威胁侧、共线 → 过');
+  ok(!threePoint(threat, u, { x: 98.4, z: 0 }), '掩体在受护点背后 → 不过（写反会在这里被抓）');
+  ok(!threePoint(threat, u, { x: 101.6, z: 3 }), '侧偏 3m（不共线）→ 不过');
+  ok(threePoint(threat, u, { x: 101, z: 1 }), '共线容差内（垂距 1.0）→ 过');
+  ok(!threePoint(threat, u, { x: 130, z: 0 }), '离受护点太远（>4.5m）→ 不过');
 }
 
 // ---------- §3.C 掩护施工（用户定 2026-09-29） ----------
@@ -1041,6 +1044,23 @@ console.log('[12o] §3.C 掩护施工：查询保护对象位置 → 建造点�
   br.wardCoverDone(10, wp!.x, wp!.z);
   br.tick(0.6, 2);
   ok(br.wardSpotOf(10) === null, '★ 掩体已成且对象未移动 → 抑制重复产点');
+  // ★ 反向场景（用户抓的 bug）：舰(0,0)、玩家远在舰反侧(400,0)、工兵(90,0) 比 ward(100,0) 更靠舰
+  //   → 受护点=工兵，落点须在其**朝舰侧**（88.4），而不是 ward 的舰侧（98.4）=工兵背后。
+  const eng2 = { id: 30, role: 'engineer' as const, x: 90, z: 0, alive: 3, full: 3, hpRatio: 1 };
+  const rng2 = { id: 31, role: 'ranged' as const, x: 100, z: 0, alive: 6, full: 6, hpRatio: 1 };
+  const live2 = {
+    player: () => ({ x: 400, z: 0 }),
+    ship: () => ({ x: 0, z: 0 }),
+    assault: () => true,
+    squads: () => [eng2, rng2],
+    engineer: () => ({ ...port, ship: () => ({ x: 0, z: 0 }) } as never),
+    emit: () => { /* */ },
+  };
+  const br2 = new EngineBridge(live2);
+  br2.tick(0.6, 1);
+  const wp2 = br2.wardSpotOf(30);
+  ok(!!wp2 && Math.abs(wp2.x - 88.4) < 0.6 && wp2.x < 90,
+    '★ 与舰共线：落点=更靠舰者(工兵)朝舰侧 1.6m（不再造到工兵背后）');
 }
 
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
