@@ -406,17 +406,19 @@ export class EngineBridge {
       }
       const stale = cur?.order.kind === 'protect' || cur?.order.mission === 'build';
 
-      // ③ 工兵活源（纯数据）：march 到施工点；到点/无活 → 落唯一兜底
+      // ③ 工兵活源（纯数据）：**无命令全交给掩体点查询**（用户定 2026-09-29）——
+      //    有件：发 march 到件（走位交给寻路，到点即停；施工计时是管理器的独立机制）；
+      //    无件：**不发任何兜底**（站住；管理器每拍重新查件）。工兵永不参与 ④ 行军↔巡逻兜底。
       if (rec.role === 'engineer') {
         const t = this.engineer.targets.get(rec.id);
-        if (t && Math.hypot(t.x - sp.x, t.z - sp.z) >= 3) {
+        if (t) {
           const same = cur && cur.order.mission === 'build'
             && Math.hypot(cur.order.target.x - t.x, cur.order.target.z - t.z) <= 2;
           if (!same) {
             if (this.send(rec.id, 'march', { x: t.x, z: t.z }, now, { kind: 'act', mission: 'build', force: true })) issued++;
           }
-          continue;
         }
+        continue;
       }
 
       // ④ 唯一兜底 = 行军 ↔ 巡逻交替（定稿第 8 条）

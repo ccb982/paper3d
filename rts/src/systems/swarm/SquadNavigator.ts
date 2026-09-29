@@ -570,11 +570,6 @@ export class SquadNavigator {
           else {
             const e3 = this.edgeFromCorridor(state, upos0.x, upos0.z);
             if (e3) { sdx = e3.dx; sdz = e3.dz; }
-            else {
-              // ★ 无走廊/无格边步 → **短寻路补一步**（LocalStep，表校验；不是裸直线；用户定 2026-09-29）
-              const ld2 = this.localDir(upos0.x, upos0.z, tgt.x, tgt.z);
-              if (ld2) { sdx = ld2.x; sdz = ld2.z; }
-            }
           }
           }
         } else {
@@ -595,18 +590,6 @@ export class SquadNavigator {
         });
       }
     }
-  }
-
-  /** ★ 无走廊时的短跳兜底方向（用户定 2026-09-29）：对目标做一次 LocalStep（可行性表逐边校验），
-   *  有解给方向（不是裸直线——仍走表的边规则）。 */
-  localDir(x: number, z: number, gx: number, gz: number): { x: number; z: number } | null {
-    const g = this.localGrid();
-    if (!g) return null;
-    const step = localStep(g, x, z, gx, gz);
-    if (!step) return null;
-    const dx = step.next.x - x, dz = step.next.z - z;
-    const l = Math.hypot(dx, dz);
-    return l > 1e-3 ? { x: dx / l, z: dz / l } : null;
   }
 
   clear(): void {

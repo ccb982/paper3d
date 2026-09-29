@@ -134,7 +134,7 @@ console.log('[3] 四兵种管理器');
   ok(ranged.assign(ctx) === 0 && ranged.targets.size === 0, '远程管理器只编成、不给目标');
   ok(flyer.assign(ctx) === 0 && flyer.targets.size === 0, '飞天管理器只编成、不给目标');
   // 工兵唯一例外：产出"活源目标（纯数据）"（施工任务）；不含战术决策。
-  ok(eng.assign(ctx) === 1, '工兵分配（活源目标数据）');
+  ok(eng.assign(ctx) === 0, '工兵无端口：不发目标（无命令全交掩体点查询）');
 }
 
 // ---------- 兵种选取（用户定 2026-09-27）----------
@@ -1280,8 +1280,9 @@ console.log('[12d] 总攻：强制令全体到舰（绕稳定门）');
   br.tick(0.6, 1);
   const o1 = br.writer.store.get(1)!.order;
   const o2 = br.writer.store.get(2)!.order;
-  const o3 = br.writer.store.get(3)!.order;
-  ok(o1.kind === 'patrol' && o1.state === 'assault' && o2.state === 'hold' && o3.state !== 'assault', '★ 总攻：近战=assault；远程=hold躲掩体；工兵系豁免');
+  ok(o1.kind === 'patrol' && o1.state === 'assault' && o2.state === 'hold'
+    && br.writer.store.get(3) === undefined,
+    '★ 总攻：近战=assault；远程=hold躲掩体；工兵无件→不发令（全交掩体点查询）');
   // ★ 目标=舰旁吸附点（用户定 2026-09-27 修）：无条件吸附，目标距舰 ≤10m（不再恒等于舰点）
   ok(Math.hypot(o1.target.x - 200, o1.target.z) <= 10, '★ 总攻：近战目标 = 舰旁可站点（≤10m）');
   br.writer.store.set(2, {
@@ -1324,9 +1325,8 @@ console.log('[12e] 无现令 + 校验不过 → 兜底发令');
 }
 
 // ---------- 兜底命令机制（用户定 2026-09-27：发呆就重发/换目标） ----------
-console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底目标');
+console.log('[12f] 工兵无件：不发任何兜底（全交给掩体点查询）');
 {
-  const calls: number[] = [];
   const emitted: SquadOrder[] = [];
   const liveS = {
     player: () => ({ x: 0, z: 0 }),
@@ -1338,10 +1338,8 @@ console.log('[12f] 兜底命令：发呆 → 强制重寻路 + 换可达兜底�
   const br = new EngineBridge(liveS);
   br.shadow = true;
   br.tick(0.6, 1);
-  const o = br.writer.store.get(1)!.order;
-  // ★ 唯一兜底（用户定 2026-09-27）：**行军/巡逻交替**——没活 → 行军段（朝舰推一段 ≤30m）。
-  ok(o.kind === 'act' && o.target.x > 100 && o.target.x <= 131, '★ 没活 → 唯一兜底接管（行军段：朝舰推一段）');
-  ok(o.state === 'march' || o.state === 'patrol', '★ 兜底令带引擎标签（march/patrol）');
+  // ★ 用户定 2026-09-29：工兵**无命令全交给掩体点查询**；无件 → **不发兜底**（站住，等下一件）。
+  ok(br.writer.store.get(1) === undefined, '★ 工兵无件 → 不发任何兜底（不参与行军↔巡逻）');
 }
 
 // ---------- 段进循环（用户定 2026-09-27：推进一段 → 巡逻 → 再推进） ----------

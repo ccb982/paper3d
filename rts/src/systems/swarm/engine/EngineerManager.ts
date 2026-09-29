@@ -229,14 +229,10 @@ export class EngineerManager extends RoleManager {
     const port = this.portOf();
     this.targets.clear();
     const ids = [...this.squads];
-    // 未接线（自检/降级）：保持站位
+    // 未接线（自检/降级）：**不发目标**（工兵无命令全交给掩体点查询；用户定 2026-09-29）
     if (!port) {
-      for (const id of ids) {
-        const s = ctx.pos.squad(id);
-        if (s) this.targets.set(id, { x: s.x, z: s.z });
-      }
-      this.dbg.assigned = this.targets.size;
-      return this.targets.size;
+      this.dbg.assigned = 0;
+      return 0;
     }
     const now = ctx.now;
     const dt = this.lastNow >= 0 ? Math.max(0, Math.min(1, now - this.lastNow)) : 0;
@@ -380,8 +376,9 @@ export class EngineerManager extends RoleManager {
         }
       }
       if (!spot) {
-        // 未部署 / 无件可派（第一波后/无合法点）：保持站位
-        this.targets.set(id, { x: s.x, z: s.z });
+        // 未部署 / 无件可派：**不发目标**（交给引擎唯一兜底：行军↔巡逻；
+        //   用户定 2026-09-29：没活就兜底，不发“站位件”混淆发令）
+        this.targets.delete(id);
         idle++;
         continue;
       }

@@ -16,7 +16,6 @@ import type { SquadOrderState } from './squad/State';
 import type { SwarmData } from './data/SwarmData';
 import { leaderDir } from './squad/Follow';
 import { RasterMap } from '../../services/map/RasterMap';
-import { simNow } from '../../services/SimClock';
 import { entityPerf } from '../../entity/EntityPerf';
 
 export interface DriveHost {
@@ -31,14 +30,6 @@ export interface DriveHost {
 
 /** 人群分离 scratch（本模块独占；零分配） */
 const _sep = { x: 0, z: 0 };
-
-/** ★ 池队卡滞救援（用户定 2026-09-29；池路径此前无救援 → 走不到目的地）：
- *  5s 位移 <2m = 卡 → 强制重寻路；再 5s → 横向推离 1s（只修位移，不改选向/目标）。 */
-const _stuck = new Map<number, { x: number; z: number; at: number; n: number }>();
-const _stuckNudge = new Map<number, { dx: number; dz: number; until: number }>();
-const STUCK_S = 5;
-const STUCK_R = 2;
-const PUSH_S = 1.0;
 
 /** 移动积分（★ 方向只来自统一链：走廊格边步 / 路线修正 / 成员贪心；禁止向量合成） */
 export function driveAgent(host: DriveHost, i: number, dt: number): void {
@@ -56,26 +47,6 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
   const squad = host.squads.squadOf(p.swarmUid[i]);
   const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
   if (isLeader) {
-    // ★ 卡滞救援（池队；到工作点 3m 内豁免——那是在干活不是卡）
-    const nowS = simNow();
-    const atWork = Math.hypot(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i]) <= 3;
-    if (!atWork) {
-      let sk = _stuck.get(squad.id);
-      if (!sk) { sk = { x: p.x[i], z: p.z[i], at: nowS, n: 0 }; _stuck.set(squad.id, sk); }
-      if (Math.hypot(p.x[i] - sk.x, p.z[i] - sk.z) > STUCK_R) {
-        sk.x = p.x[i]; sk.z = p.z[i]; sk.at = nowS; sk.n = 0; _stuckNudge.delete(squad.id);
-      } else if (nowS - sk.at >= STUCK_S) {
-        if (sk.n === 0) { host.nav.forceRepath(squad.id); sk.n = 1; sk.at = nowS; }
-        else {
-          const gx = p.orderTargetX[i] - p.x[i], gz = p.orderTargetZ[i] - p.z[i];
-          const gl = Math.hypot(gx, gz) || 1;
-          const side = (squad.id & 1) === 0 ? 1 : -1;
-          _stuckNudge.set(squad.id, { dx: (-gz / gl) * side, dz: (gx / gl) * side, until: nowS + PUSH_S });
-          sk.n = 2; sk.at = nowS;
-        }
-      }
-    } else { _stuck.delete(squad.id); _stuckNudge.delete(squad.id); }
-    if (_stuckNudge.get(squad.id) && nowS > _stuckNudge.get(squad.id)!.until) _stuckNudge.delete(squad.id);
     // ★ 队长 → 指令锚点（唯一路线消费者）。方案 A：有走廊 → **格边步**（与规划同口径）
     const ld = leaderDir(p.directiveTargetX[i] - p.x[i], p.directiveTargetZ[i] - p.z[i],
       p.orderTargetX[i] - p.x[i], p.orderTargetZ[i] - p.z[i]);
@@ -101,18 +72,10 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
         else {
           const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
           if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
-          else {
-            // ★ 无走廊/无格边步 → **短寻路补一步**（LocalStep，表校验；用户定 2026-09-29）
-            const ld2 = host.nav.localDir(p.x[i], p.z[i], p.orderTargetX[i], p.orderTargetZ[i]);
-            if (ld2) { dx = ld2.x; dz = ld2.z; edgeMode = false; }
-            else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-          }
+          else { dx = 0; dz = 0; p.atomMove[i] = 255; }
         }
       }
     } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    // ★ 卡滞推离（位移兜底）：本段直接侧向推离
-    const nd = _stuckNudge.get(squad.id);
-    if (nd) { dx = nd.dx; dz = nd.dz; edgeMode = false; }
   } else if (squad) {
     // ★ 架构底线（用户定 2026-09-26）：**成员的移动同样来自长短寻路**——**定时对队长位置做一次
     //   长寻路**（每人一条缓存路线），沿其走格边步；无解/到位 → 停。
