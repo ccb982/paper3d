@@ -29,6 +29,11 @@ import { FORTIFY_SECTORS } from '../FortifyPlanner';
 export const ENGINEER_POLICY = {
   /** 到件半径（米）：队长到件以内才计时 */
   WORK_R: 3,
+  /** ★ 掩体密度门（用户定 2026-09-29）：该半径内掩体 ≥ 上限 → 改挖战壕 */
+  COVER_DENSITY_R: 12,
+  COVER_DENSITY_MAX: 3,
+  /** 工作位偏移：站在掩体背参照侧多远（米） */
+  WORK_HIDE: 1.6,
   /** ★ 掩体施工时长（秒）= **真实建造时长**（用户定 2026-09-27：此前写死 6s，远超 0.6s 建造动画
    *  → 工兵"造得很快却站着"，净位移 <4m 被判官按卡死收）。单源 = COVER_DEPLOY_BUILD_TIME。 */
   COVER_TIME_S: 0.8,
@@ -89,6 +94,7 @@ export interface EngineerPort {
   wardCoverDone?(id: number, x: number, z: number): void;
   /** ★ 玩家位（近旁时建造朝向玩家侧） */
   playerOf?(): { x: number; z: number } | null;
+
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
   /** 地形脏标记（评分/采样局部重算） */
@@ -116,6 +122,8 @@ export class EngineerManager extends RoleManager {
   private readonly black = new Map<string, number>();
   /** 各队施工计时（秒） */
   private readonly work = new Map<number, number>();
+  /** ★ 掩体建造账本（密度门；用户定 2026-09-29）：不依赖懒物化/实体表 */
+  private readonly coversBuilt = new Map<string, { x: number; z: number }>();
   /** 各队战壕已挖遍数 */
   private readonly digs = new Map<number, number>();
   /** 已完成过一件的队（首件豁免"第一波后停新增"） */
@@ -157,6 +165,23 @@ export class EngineerManager extends RoleManager {
     const pl = port.playerOf?.() ?? null;
     if (pl && Math.hypot(pl.x - s.x, pl.z - s.z) <= THREAT_NEAR) return pl;
     return port.ship();
+  }
+
+  /** ★ 附近已建掩体数（建造账本；用户定 2026-09-29） */
+  private coverCountNear(x: number, z: number, r: number): number {
+    let n = 0;
+    for (const c of this.coversBuilt.values()) if (Math.hypot(c.x - x, c.z - z) <= r) n++;
+    return n;
+  }
+
+  /** ★ 工作位（用户定 2026-09-29）：**掩体背参照侧** WORK_HIDE 米——
+   *  行军目标=工作位（工兵站在掩体后面干活），掩体本身挡在 工兵↔参照 之间。 */
+  private workPoint(spot: { x: number; z: number }, ref: { x: number; z: number } | null): { x: number; z: number } {
+    if (!ref) return { x: spot.x, z: spot.z };
+    const dx = spot.x - ref.x, dz = spot.z - ref.z;   // 参照 → 掩体（向外）
+    const d = Math.hypot(dx, dz);
+    if (d < 1e-3) return { x: spot.x, z: spot.z };
+    return { x: spot.x + (dx / d) * ENGINEER_POLICY.WORK_HIDE, z: spot.z + (dz / d) * ENGINEER_POLICY.WORK_HIDE };
   }
 
   /** ★ 强行挪位（用户定 2026-09-29）：落点若不在参照侧前方 → 沿参照方向前移到前方 0.5m。
@@ -330,11 +355,16 @@ export class EngineerManager extends RoleManager {
         spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
         this.spots.set(id, spot);
         if (this.buildAt(port, id, s, ws, 'cover', dt) === 'done') {
+          this.coversBuilt.set(keyOf(ws.x, ws.z), { x: ws.x, z: ws.z });
           port.wardCoverDone?.(id, ws.x, ws.z);
           this.spots.delete(id);
           this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
         }
-        this.targets.set(id, { x: ws.x, z: ws.z });
+        {
+          const ref = this.frontRef(port, s);
+          const wp = this.workPoint({ x: ws.x, z: ws.z }, ref);
+          this.targets.set(id, { x: wp.x, z: wp.z });
+        }
         working++;
         continue;
       }
@@ -418,9 +448,14 @@ export class EngineerManager extends RoleManager {
       }
       // ---- 施工：统一独立机制（位置来源=查询/保护对象；本机制只负责"到范围计时"） ----
       {
-        // ★ 掩体为主（用户定 2026-09-26）：总攻全掩体；平时 4 件里 3 掩体 / 1 战壕
-        const kind: 'cover' | 'trench' = port.assault() || (this.built.size % 4) !== 3 ? 'cover' : 'trench';
+        // ★ 选型（用户定 2026-09-26/29）：总攻全掩体；**区域掩体密度≥上限 → 改挖战壕**；
+        //   其余维持 4 件里 3 掩体 / 1 战壕。
+        const dense = this.coverCountNear(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
+        const kind: 'cover' | 'trench' = port.assault() ? 'cover'
+          : dense ? 'trench'
+          : (this.built.size % 4) !== 3 ? 'cover' : 'trench';
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
+          if (kind === 'cover') this.coversBuilt.set(keyOf(spot.x, spot.z), { x: spot.x, z: spot.z });
           this.releaseFor(id); this.spots.delete(id);
           this.dbg.last = kind === 'cover'
             ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
@@ -428,7 +463,12 @@ export class EngineerManager extends RoleManager {
         }
         working++;
       }
-      this.targets.set(id, { x: spot.x, z: spot.z });
+      // ★ 行军目标 = 掩体背参照侧的工作位（用户定 2026-09-29）——工兵站到掩体后面干活
+      {
+        const ref = this.frontRef(port, s);
+        const wp = this.workPoint(spot, ref);
+        this.targets.set(id, { x: wp.x, z: wp.z });
+      }
     }
     // ---- ★ 补队（用户定 2026-09-26）：**检查全部 8 个防区——有队就不放，没有就放** ----
     const posture = Math.max(0, Math.min(1, port.posture ? port.posture() : 0));

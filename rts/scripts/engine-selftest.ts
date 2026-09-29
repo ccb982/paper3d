@@ -1134,6 +1134,7 @@ console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看�
   eng2.assign(ctx2);
   const t21 = eng2.targets.get(21)!, t22 = eng2.targets.get(22)!;
   ok(t21 && t22 && !(t21.x === t22.x && t21.z === t22.z), '★ 分区：两队不同区拿不同件（不重合）');
+  ok(Math.abs(t21.x - 13.6) < 0.6 && Math.abs(t21.z) < 0.6, '★ 行军目标=掩体背参照侧工作位（掩体挡在工兵与舰之间）');
   ok(eng2.fortDbg.spawned >= 3, '★ 统一编制：进图即建 = 缺了即补（有活空区入局即按配额补齐）');
   // ★ 补队：曾用分区的小队没了 → 补一支新小队（3 只成队）
   sm.remove(22);
