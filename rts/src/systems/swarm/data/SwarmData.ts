@@ -475,6 +475,7 @@ export class SwarmData {
         const raster = RasterMap.current;
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
       },
+      coversNear: (x: number, z: number, r: number) => this.fortify.countNear(x, z, r),
       cover: (x, z, v) => { this.fortify.recordBuilt(x, z, 'cover'); this.buildCover?.(x, z, v); },
       // ★ 补队（用户定）：工兵缺队 → 请求生成施工兵（统一编制机制）
       requestSpawn: (role, x, z) => {

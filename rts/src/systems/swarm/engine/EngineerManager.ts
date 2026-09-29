@@ -94,6 +94,8 @@ export interface EngineerPort {
   wardCoverDone?(id: number, x: number, z: number): void;
   /** ★ 玩家位（近旁时建造朝向玩家侧） */
   playerOf?(): { x: number; z: number } | null;
+  /** ★ 附近已建工事数（密度门；单一建造账本，用户定 2026-09-29） */
+  coversNear?(x: number, z: number, r: number): number;
 
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
@@ -122,8 +124,6 @@ export class EngineerManager extends RoleManager {
   private readonly black = new Map<string, number>();
   /** 各队施工计时（秒） */
   private readonly work = new Map<number, number>();
-  /** ★ 掩体建造账本（密度门；用户定 2026-09-29）：不依赖懒物化/实体表 */
-  private readonly coversBuilt = new Map<string, { x: number; z: number }>();
   /** 各队战壕已挖遍数 */
   private readonly digs = new Map<number, number>();
   /** 已完成过一件的队（首件豁免"第一波后停新增"） */
@@ -160,13 +160,6 @@ export class EngineerManager extends RoleManager {
   }
 
   /** 工兵目标分配 + 施工推进：认区（大队管理器）→ 取件（预约制）→ 复检 → 施工/补兵 */
-  /** ★ 附近已建掩体数（建造账本；用户定 2026-09-29） */
-  private coverCountNear(x: number, z: number, r: number): number {
-    let n = 0;
-    for (const c of this.coversBuilt.values()) if (Math.hypot(c.x - x, c.z - z) <= r) n++;
-    return n;
-  }
-
   /** ★ 参照点（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰 */
   private buildRef(port: EngineerPort, s: { x: number; z: number }): { x: number; z: number } | null {
     const pl = port.playerOf?.() ?? null;
@@ -345,7 +338,6 @@ export class EngineerManager extends RoleManager {
         spot = { x: ws.x, z: ws.z, score: 0, at: spot?.at ?? now };
         this.spots.set(id, spot);
         if (this.buildAt(port, id, s, ws, 'cover', dt) === 'done') {
-          this.coversBuilt.set(keyOf(ws.x, ws.z), { x: ws.x, z: ws.z });
           port.wardCoverDone?.(id, ws.x, ws.z);
           this.spots.delete(id);
           this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
@@ -434,15 +426,11 @@ export class EngineerManager extends RoleManager {
       {
         // ★ 选型（用户定 2026-09-26/29）：总攻全掩体；**区域掩体密度≥上限 → 改挖战壕**；
         //   其余维持 4 件里 3 掩体 / 1 战壕。
-        const dense = this.coverCountNear(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
+        const dense = (port.coversNear?.(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
         const kind: 'cover' | 'trench' = port.assault() ? 'cover'
           : dense ? 'trench'
           : (this.built.size % 4) !== 3 ? 'cover' : 'trench';
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
-          if (kind === 'cover') {
-            const bp = this.coverSpot(port, s);
-            this.coversBuilt.set(keyOf(bp.x, bp.z), bp);
-          }
           this.releaseFor(id); this.spots.delete(id);
           this.dbg.last = kind === 'cover'
             ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`

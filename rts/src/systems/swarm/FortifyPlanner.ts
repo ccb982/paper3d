@@ -21,8 +21,6 @@
 export const FORTIFY_SECTORS = 8;
 /** 扇区需求达标线（need < 此值 = 该区已够工事；调参入口） */
 export const NEED_DONE = 0.6;
-/** 每扇区保留的候选点数（需求降序；供"次高可达"回退；上限 = 摊销成本封顶） */
-export const CAND_K = 24;
 
 export interface FortifyPick {
   x: number;
@@ -44,7 +42,7 @@ export class FortifyPlanner {
   readonly dbg = { sweeps: 0, sectors: FORTIFY_SECTORS };
 
   /** 摊销刷新：本次只重算第 cursor 个扇区（**扇区内 ∧ 带内**；角度 [si,si+1)/8·2π）
-   *  产出：`safety[si]`（峰值分）· `candidates[si]`（需求降序候选，≤CAND_K） */
+   *  产出：`safety[si]`（峰值分）· `candidates[si]`（**全量**需求降序候选；不截尾） */
   refreshOne(
     cx: number, cz: number, rLo: number, rHi: number,
     needAt: (x: number, z: number) => number | null,
@@ -76,9 +74,12 @@ export class FortifyPlanner {
         if (ang < a0 || ang >= a1) continue;
         const sc = needAt(cx + dx, cz + dz);
         if (sc === null) continue;
-        FortifyPlanner.insertCandidate(list, { x: cx + dx, z: cz + dz, score: sc });
+        list.push({ x: cx + dx, z: cz + dz, score: sc });
       }
     }
+    // ★ 全量候选按需求降序（用户定 2026-09-29：**不再 CAND_K 截尾**——否则高分地建完后
+    //   低分可建点（如水）根本不在候选表里 → 工兵"没活"发呆）。targetOf 逐个试可达/排除。
+    list.sort((a, b) => b.score - a.score);
     const best = list[0] as FortifyPick | undefined;
     this.safety[si] = best ? best.score : -Infinity;
     this.dbg.sweeps++;
@@ -106,6 +107,13 @@ export class FortifyPlanner {
     return this.builtCovers.values();
   }
 
+  /** ★ 已建工事计数（密度门用；单一账本） */
+  countNear(x: number, z: number, r: number): number {
+    let n = 0;
+    for (const c of this.builtCovers.values()) if (Math.hypot(c.x - x, c.z - z) <= r) n++;
+    return n;
+  }
+
   /** ★ 查询期保新（用户定 2026-09-29）：扇区标脏 或 事态系数变化 → 立即重算该扇区；
    *  否则查询会吃到轮询刷新的旧分（评分读的是刷新时刻的 事态权重 + 三张表）。 */
   ensureFresh(
@@ -115,15 +123,6 @@ export class FortifyPlanner {
     if (!this.dirty[sec] && this.postureMark === posture) return;
     this.refreshAt(sec, cx, cz, rLo, rHi, needAt);
     this.postureMark = posture;
-  }
-
-  /** 需求降序插入（同分保序；超 CAND_K 截尾） */
-  private static insertCandidate(list: FortifyPick[], c: FortifyPick): void {
-    if (list.length >= CAND_K && c.score <= (list[list.length - 1] as FortifyPick).score) return;
-    let i = list.length;
-    while (i > 0 && (list[i - 1] as FortifyPick).score < c.score) i--;
-    list.splice(i, 0, c);
-    if (list.length > CAND_K) list.pop();
   }
 
   /** ★ 施工目标获取（唯一口径；见文件头契约）：
@@ -157,8 +156,8 @@ export class FortifyPlanner {
       let ang = Math.atan2(c.z - cz, c.x - cx);
       if (ang < 0) ang += TAU;
       if (ang < a0 || ang >= a1) continue;
+      if (exclude && exclude(c.x, c.z)) continue;   // 便宜的排除先做（不跑到达核验）
       if (canReach && !canReach(c.x, c.z)) continue;
-      if (exclude && exclude(c.x, c.z)) continue;
       const d = Math.hypot(c.x - cx, c.z - cz);
       const inBand = d >= rLo - 1 && d <= rHi + 1;
       if (!inBand) { if (!outBand) outBand = { x: c.x, z: c.z, score: c.score }; continue; }
