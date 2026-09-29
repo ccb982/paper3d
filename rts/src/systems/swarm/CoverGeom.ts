@@ -15,6 +15,9 @@ export const COVER_TOL = 1.8;
 /** 受护点前部带（米） */
 export const COVER_FRONT = { min: 0.6, max: 4.5 };
 
+/** 玩家进到该半径（米）→ 参照/朝向换成玩家（用户定 2026-09-29） */
+export const THREAT_NEAR = 20;
+
 /** 落点：unit 前部（朝 threat）standoff 米——即 威胁↔受护 连线上的受护侧一点 */
 export function coverPoint(threat: Pt, unit: Pt, standoff: number): Pt {
   const dx = unit.x - threat.x, dz = unit.z - threat.z;

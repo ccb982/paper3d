@@ -10,6 +10,8 @@
 // 方向参照 = 舰（威胁来源）；"躲" = 掩体在 舰↔躲点 之间。
 // ============================================================
 
+import { THREAT_NEAR } from '../CoverGeom';
+
 /** 驻守策略参数（集中可调） */
 export const HOLD_COVER = {
   /** 掩体搜索半径（米） */
@@ -24,8 +26,8 @@ export const HOLD_COVER = {
   RETREAT_MARGIN: 6,
   /** 掩体存活判定半径（米；表里 2m 内有件 = 还活着） */
   ALIVE_R: 2,
-  /** 玩家进到该半径（米）→ 用玩家做"背身参照"+掩体检测（用户定 2026-09-29；口径=20m） */
-  PLAYER_NEAR: 20,
+  /** 玩家进到该半径（米）→ 用玩家做"背身参照"+掩体检测（单源 CoverGeom.THREAT_NEAR） */
+  PLAYER_NEAR: THREAT_NEAR,
 };
 
 export interface HoldCoverState {

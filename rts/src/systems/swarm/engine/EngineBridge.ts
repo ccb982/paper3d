@@ -28,7 +28,7 @@ import { FlyerManager } from './FlyerManager';
 import { EngineerManager, type EngineerPort } from './EngineerManager';
 import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { releaseAt } from '../PostureFn';
-import { coverPoint, threePoint, type Pt } from '../CoverGeom';
+import { coverPoint, threePoint, THREAT_NEAR, type Pt } from '../CoverGeom';
 import { Protect } from './Protect';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
@@ -177,7 +177,7 @@ export class EngineBridge {
       const p = this.live.engineer?.() ?? null;
       if (!p) return null;
       // ★ §3.C：给工兵管理器接上"保护对象建造点"（引擎查询；非保护态返回 null → 走原查询）
-      return { ...p, wardSpot: (id: number) => this.wardSpotOf(id), wardCoverDone: (id: number, x: number, z: number) => this.wardCoverDone(id, x, z) };
+      return { ...p, wardSpot: (id: number) => this.wardSpotOf(id), wardCoverDone: (id: number, x: number, z: number) => this.wardCoverDone(id, x, z), playerOf: () => this.pos.player() };
     });
     this.core = new EngineCore({
       perceive: (now) => this.perceive(now),
@@ -498,7 +498,10 @@ export class EngineBridge {
    *  · 受护点 = 工兵/保护对象中**更靠舰者**（离舰最近的那个）——保证掩体落在**两者前方/舰侧**；
    *  · 落点 = 受护点朝舰 1.6~3.2m，三点检测（通用几何）→ 取首个可站点。 */
   private wardBuildPoint(eng: LiveSquad, ward: LiveSquad): Pt | null {
-    const threat = this.pos.ship() ?? this.pos.player();
+    // ★ 参照（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰
+    const player = this.pos.player();
+    const near = player && Math.hypot(player.x - eng.x, player.z - eng.z) <= THREAT_NEAR;
+    const threat = near ? player : (this.pos.ship() ?? player);
     if (!threat) return null;
     const dEng = Math.hypot(eng.x - threat.x, eng.z - threat.z);
     const dWard = Math.hypot(ward.x - threat.x, ward.z - threat.z);

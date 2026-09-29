@@ -20,6 +20,7 @@
 // ============================================================
 
 import { RoleManager, type RoleCtx } from './RoleManager';
+import { THREAT_NEAR } from '../CoverGeom';
 import type { SquadManager } from './SquadManager';
 import { BUILDER_SQUAD_MAX } from '../SquadTable';
 import { FORTIFY_SECTORS } from '../FortifyPlanner';
@@ -86,6 +87,8 @@ export interface EngineerPort {
   wardSpot?(id: number): { x: number; z: number } | null;
   /** ★ 掩护掩体落成回执（引擎据此抑制同点重复产点，直到保护对象移动） */
   wardCoverDone?(id: number, x: number, z: number): void;
+  /** ★ 玩家位（近旁时建造朝向玩家侧） */
+  playerOf?(): { x: number; z: number } | null;
   /** 挖战壕一遍（≈0.2m） */
   dig(x: number, z: number): void;
   /** 地形脏标记（评分/采样局部重算） */
@@ -149,6 +152,26 @@ export class EngineerManager extends RoleManager {
   }
 
   /** 工兵目标分配 + 施工推进：认区（大队管理器）→ 取件（预约制）→ 复检 → 施工/补兵 */
+  /** ★ 参照点（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰 */
+  private frontRef(port: EngineerPort, s: { x: number; z: number }): { x: number; z: number } | null {
+    const pl = port.playerOf?.() ?? null;
+    if (pl && Math.hypot(pl.x - s.x, pl.z - s.z) <= THREAT_NEAR) return pl;
+    return port.ship();
+  }
+
+  /** ★ 强行挪位（用户定 2026-09-29）：落点若不在参照侧前方 → 沿参照方向前移到前方 0.5m。
+   *  默认参照=舰（掩体挡在工兵与舰之间）；玩家近 → 参照=玩家（掩体改挡玩家侧）。 */
+  private forceFront(s: { x: number; z: number }, spot: { x: number; z: number }, ref: { x: number; z: number } | null): { x: number; z: number } {
+    if (!ref) return spot;
+    const ux = ref.x - s.x, uz = ref.z - s.z;
+    const d = Math.hypot(ux, uz);
+    if (d < 1e-3) return spot;
+    const front = (spot.x - s.x) * (ux / d) + (spot.z - s.z) * (uz / d);
+    if (front >= 0.5) return spot;
+    const k = 0.5 - front;
+    return { x: spot.x + (ux / d) * k, z: spot.z + (uz / d) * k };
+  }
+
   /** ★ 建造 = 独立机制（用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
    *  到 WORK_R 就计时（不驱动移动）；掩体 `COVER_TIME_S` / 战壕 `TRENCH_TIME_S`（每 2s 一遍 ×5）。
    *  返回 'done' = 本次件落成（由调用方做"预约释放/落成回执"等位置侧记账）。 */
@@ -379,7 +402,9 @@ export class EngineerManager extends RoleManager {
             ?? tryBand(band.rHi, band.rHi + 36);
         }
         if (pick) {
-          spot = { x: pick.x, z: pick.z, score: pick.score, at: now };
+          const ref = this.frontRef(port, s);
+          const fp = this.forceFront(s, { x: pick.x, z: pick.z }, ref);   // ★ 强行挪到参照侧
+          spot = { x: fp.x, z: fp.z, score: pick.score, at: now };
           this.spots.set(id, spot);
           this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
           this.work.delete(id); this.digs.delete(id);

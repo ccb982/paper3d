@@ -41,6 +41,12 @@ export const NAV = {
   FAIL_COOLDOWN_S: 3,
   /** ★ 净推进停滞阈值（秒；S3b：距目标 3s 未缩短 ≥2m → 重算；替代位移/TTL 轮询） */
   STALL_S: 3,
+  /** ★ 卡滞位移兜底（用户定 2026-09-29）：非驻守状态，5s 未离开附近 = 卡 */
+  STUCK_S: 5,
+  /** 卡滞判定半径（米；5s 位移 < 此值 = 没离开附近） */
+  STUCK_R: 2,
+  /** 横向推离时长（秒；第二次仍卡 → 侧向推一段） */
+  STUCK_PUSH_S: 1.0,
   /** ★ 长短寻路分界（米；用户定 2026-09-25）：> 此值=长行军→长寻路（FeasibilityPath 全走廊）；
    *  ≤ 此值=交战/巡逻/驻守/就近施工→短寻路（LocalStep 局部绕障） */
   LONG_PATH_DIST: 40,
@@ -179,6 +185,9 @@ export class SquadNavigator {
   /** ★ 强制重寻路一次（用户定 2026-09-26：爬完坡后强制到原目标重寻路，防“爬完又掉下去”） */
   private readonly repath = new Set<number>();
   forceRepath(squadId: number): void { this.repath.add(squadId); }
+  /** ★ 卡滞探测/推离（每队一条；被动位移兜底，用户定 2026-09-29） */
+  private readonly stuck = new Map<number, { x: number; z: number; at: number; n: number }>();
+  private readonly nudge = new Map<number, { dx: number; dz: number; until: number }>();
   /** 成员路线失效（下一次对队长重新长寻路；代理同口） */
   dropMemberRoute(uid: number): void { this.memberRoutes.delete(uid); }
   /** ★ 销毁前快照用：成员路线点数（-1 = 无缓存） */
@@ -492,6 +501,36 @@ export class SquadNavigator {
       if (!lead) continue;
       const tgt = currentTargetOf(state, lead.x, lead.z);
       if (!tgt) continue;
+      // ★★ 卡滞位移兜底（用户定 2026-09-29）：**非驻守**状态，5s 未离开附近（<STUCK_R）= 卡 →
+      //    ① 强制重寻路；② 再卡 5s → 横向推离（纯位移修正，不改选向/不换目标）。
+      //    豁免：驻守（自身状态就是找掩体/驻留）；工兵在施工点工作（mission=build 且已到点）。
+      const working = state.order.mission === 'build'
+        && Math.hypot(tgt.x - lead.x, tgt.z - lead.z) <= 3.5;
+      if (state.execState !== 'hold' && state.order.kind !== 'protect' && !working) {
+        let sk = this.stuck.get(sid);
+        if (!sk) { sk = { x: lead.x, z: lead.z, at: now, n: 0 }; this.stuck.set(sid, sk); }
+        if (Math.hypot(lead.x - sk.x, lead.z - sk.z) > NAV.STUCK_R) {
+          sk.x = lead.x; sk.z = lead.z; sk.at = now; sk.n = 0;
+          this.nudge.delete(sid);
+        } else if (now - sk.at >= NAV.STUCK_S) {
+          if (sk.n === 0) {
+            this.repath.add(sid);          // ① 强制重寻路（绕过路线覆盖门/冷却）
+            sk.n = 1; sk.at = now;
+          } else {
+            // ② 仍卡 → 横向推离（确定性奇偶选侧；只修位移）
+            const dx = tgt.x - lead.x, dz = tgt.z - lead.z;
+            const d = Math.hypot(dx, dz) || 1;
+            const side = (sid & 1) === 0 ? 1 : -1;
+            this.nudge.set(sid, { dx: (-dz / d) * side, dz: (dx / d) * side, until: now + NAV.STUCK_PUSH_S });
+            sk.n = 2; sk.at = now;
+          }
+        }
+      } else {
+        this.stuck.delete(sid);
+        this.nudge.delete(sid);
+      }
+      const nd = this.nudge.get(sid);
+      if (nd && now > nd.until) this.nudge.delete(sid);
       const cred = state.climbCred;
       for (const u of members) {
         // ★ 远程：**统一形式（用户定 2026-09-25）**——选位/风筝只**产出一个目标点**，
@@ -528,6 +567,11 @@ export class SquadNavigator {
           sdx = memberDirect.dx; sdz = memberDirect.dz;
         } else {
         if (isLead) {
+          const nd2 = this.nudge.get(sid);
+          if (nd2) {
+            // ★ 卡滞推离（位移兜底）：本段直接侧向推离
+            sdx = nd2.dx; sdz = nd2.dz;
+          } else {
           // ★ 短寻路一次发放（stepCommit）：沿已发放的格边步走到点才重选
           const stc = this.stepCommit(state, upos0.x, upos0.z, now, (goal) => {
             const c = this.routeCursor(state, upos0.x, upos0.z);
@@ -546,6 +590,7 @@ export class SquadNavigator {
               const rd = this.routeDir(state, upos0.x, upos0.z);   // ★ 路线修正（同 L2）
               if (rd) { sdx = rd.x; sdz = rd.z; }
             }
+          }
           }
         } else {
           const e3 = this.edgeGreedy(upos0.x, upos0.z, sx, sz);
@@ -570,5 +615,7 @@ export class SquadNavigator {
 
   clear(): void {
     this.unitsBySquad.clear();
+    this.stuck.clear();
+    this.nudge.clear();
   }
 }
