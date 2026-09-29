@@ -87,6 +87,11 @@ export class HealthBar implements EntityEffect {
     this.group.quaternion.copy(camera.quaternion);
   }
 
+  /** ★ 可见性联动（实体收纳/隐藏时同步隐藏；恢复时再显示） */
+  setVisible(v: boolean): void {
+    this.group.visible = v;
+  }
+
   dispose(): void {
     this.group.removeFromParent();
     this.group.traverse((o) => {

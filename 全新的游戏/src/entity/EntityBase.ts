@@ -104,6 +104,9 @@ export abstract class EntityBase {
     // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
     //   必须立即隐藏，否则留下"幽灵影子"）
     this.gsCtl.setVisible(v && this.viewLod < 3);
+    // ★ 特效槽联动（2026-09-29）：血条等场景对象不随实体渲染管线 →
+    //   隐藏不同步会留下"幽灵血条"
+    this.fx.setVisible(v);
   }
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */

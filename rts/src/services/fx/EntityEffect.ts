@@ -13,6 +13,9 @@ export interface EntityEffect {
   update(dt: number, x: number, y: number, z: number): boolean;
   /** 渲染（实体 render 时调用；billboard/朝向自行处理） */
   render(camera: THREE.Camera): void;
+  /** ★ 可见性联动（可选）：实体 visible=false（收纳/隐藏）时必须同步隐藏自身场景对象
+   *  （血条等 Group 直接挂场景，不走实体渲染管线 → 不联动会留"幽灵血条"） */
+  setVisible?(v: boolean): void;
   /** 释放（detach/实体销毁时调用） */
   dispose(): void;
 }
