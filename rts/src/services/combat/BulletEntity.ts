@@ -8,7 +8,7 @@
 import { EntityBase } from '../../entity/EntityBase';
 import type { EntityManager } from '../../entity/EntityManager';
 import { sameTeam } from './teams';
-import { GROUP_WALL, GROUP_COVER_PLAYER, GROUP_SLIT_PLAYER } from '../physics/PhysicsWorld';
+import { GROUP_WALL, GROUP_COVER_PLAYER } from '../physics/PhysicsWorld';
 import { queryFinalStats } from './FinalStats';
 import type { FrameAssetSource } from '../fx/AssetSource';
 import type { ShadowFrameSource } from '../render/SilhouetteShadow';
@@ -56,6 +56,8 @@ export interface BulletEntityOptions {
   targetZ?: number;
   /** ★ 无视墙（玩家贴城墙开枪时置位）：碰撞分组 filter 掉 GROUP_WALL，子弹穿墙 */
   ignoreWalls?: boolean;
+  /** ★ 自家墙豁免（用户定 2026-09-29）：玩家弹且源在自家墙背面 → 穿自家墙（正向全挡由发射端不置位） */
+  ignoreOwnCovers?: boolean;
 }
 
 /** ★ 子弹命中判定半径（米）——逻辑命中口径（蜂群线段判定等）×
@@ -102,6 +104,7 @@ export class BulletEntity extends EntityBase {
   private closeShot = false;
   /** ★ 无视墙（玩家贴城墙开枪）：碰撞分组 filter 掉 GROUP_WALL */
   private ignoreWalls = false;
+  private ignoreOwnCovers = false;
   /** ★ 命中/落地后生成站桩友军（itemId；null = 普通子弹） */
   allyOnHit: string | null = null;
   /** ★ 回收回调（BulletManager 注册：超时 → 回池） */
@@ -173,6 +176,7 @@ export class BulletEntity extends EntityBase {
     this.owner = opts.owner ?? null;
     this.allyOnHit = opts.allyOnHit ?? null;
     this.ignoreWalls = opts.ignoreWalls ?? false;
+    this.ignoreOwnCovers = opts.ignoreOwnCovers ?? false;
     this.entity.position.x = opts.x;
     this.entity.position.y = opts.y;
     this.entity.position.z = opts.z;
@@ -193,14 +197,12 @@ export class BulletEntity extends EntityBase {
       this.em.physics.setPosition(rb.handle, opts.x, opts.y, opts.z);
       // ★ 常规物理体积全程极小（0.05）：近点不放大；远点由 onUpdate 临近落点放大
       this.em.physics.setBallRadius(rb.handle, BULLET_BODY_RADIUS);
-      // ★ 子弹 vs 掩体口径（2026-09-19 用户定调）：**各穿各的掩体、对方掩体实心（只能穿射击孔）**
-      //   玩家/友军弹 → 忽略 GROUP_COVER_PLAYER（自家掩体）；敌弹 → 忽略 GROUP_WALL（敌掩体）
-      //   ignoreWalls（兼容/调试）= 两类掩体全忽略
-      const ownGroup = this.camp === 'enemy' ? GROUP_WALL : GROUP_COVER_PLAYER;
-      let mask = 0xffff & ~ownGroup;
-      // ★ 我方射击孔膜只挡敌弹：玩家/友军弹剔除本组
-      if (this.camp !== 'enemy') mask &= ~GROUP_SLIT_PLAYER;
-      if (this.ignoreWalls) mask &= ~GROUP_WALL & ~GROUP_COVER_PLAYER & ~GROUP_SLIT_PLAYER;
+      // ★ 子弹 vs 掩体口径（用户定 2026-09-29 重写）：**保留阵营分组——只对本阵营通透**：
+      //   敌弹 → 忽略 GROUP_WALL（敌掩体，穿自家）；玩家弹 → **无豁免**（玩家城墙实心=GROUP_COVER_SOLID）。
+      let mask = 0xffff;
+      if (this.camp === 'enemy') mask &= ~GROUP_WALL;
+      if (this.camp !== 'enemy' && this.ignoreOwnCovers) mask &= ~GROUP_COVER_PLAYER;   // ★ 背向豁免自家墙
+      if (this.ignoreWalls) mask &= ~GROUP_WALL;   // 调试：无视敌掩体
       this.em.physics.setCollisionGroups(rb.handle, (0xffff << 16) | mask);
       const len = Math.hypot(opts.dirX, opts.dirY, opts.dirZ) || 1;
       this.em.physics.setLinearVelocity(

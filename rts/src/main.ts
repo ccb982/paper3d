@@ -14,6 +14,7 @@ import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { SpawnSelect } from './ui/SpawnSelect';
 import { SwarmSystem, SWARM } from './systems/swarm/SwarmSystem';
 import { CoverLazy } from './modes/world/CoverLazy';   // ★ 工事懒更新（用户定 2026-09-27）
+import { ownWallBlocksFrom } from './entity/CoverEntity';   // ★ 玩家墙正面拦截判定（背向豁免自家弹；用户定 2026-09-29）
 import { Flux, setTierHandover } from './systems/swarm/tiers/Flux';   // ★ P-Flux：档间交接唯一口（用户定 2026-09-27）
 import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
 import { EntityManager } from './entity/EntityManager';
@@ -666,6 +667,11 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       if (opts.type === 'projectile') {
         const skin = (opts as { bulletSkin?: string }).bulletSkin;
         const pool = opts.camp === 'enemy' ? (skin === 'fireball' ? enemyBolts : enemyArrows) : playerBullets;
+        // ★ 玩家墙：背向对自家子弹豁免（源在背面）；正向全挡（不置位 → 撞墙）。用户定 2026-09-29
+        if (opts.camp !== 'enemy') {
+          (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
+            !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ);
+        }
         executeAttack(entities, pool, opts);
         return;
       }
