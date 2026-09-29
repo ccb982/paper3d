@@ -129,8 +129,9 @@ export class CoverRenderer extends FxRendererBase {
     // ★ 道具图标海报（2026-09-19 二次定调：放**正面 +Z，给敌人看**）
     //   居中摆放（不避开射击孔）；异步载入，未就绪前不显示
     if (iconUrl) {
-      const posterSize = slit ? 1.8 : 2.2;
-      const posterY = 1.5;
+      // ★ 放大到占主体（用户定 2026-09-29）：城墙 3.2 / 墙 3.8，居中在墙体中部
+      const posterSize = slit ? 3.2 : 3.8;
+      const posterY = 2.2;
       const pm = new THREE.MeshBasicMaterial({
         transparent: true, opacity: 0, depthWrite: false, side: THREE.FrontSide,
       });
