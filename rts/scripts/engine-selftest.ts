@@ -219,9 +219,9 @@ console.log('[4b] 账本口径：spawned = alive+kills+recalled+removed / 回收
   led2.noteRecall(1, 'stuck');
   ok(led2.canSpawn(), '★ 总攻期：卡死回收 → 再补（机制正常）');
   led2.noteSpawn(1);
-  // 击杀消耗配额：deployed=alive+kills 不变 → 吃满后不再补
+  // ★ 击杀腾出名额（用户定 2026-09-29：**按在场卡上限**）→ 立即可补
   led2.reportCasualty(Math.max(0, led2.alive));
-  ok(!led2.canSpawn(), '★ 兵力耗尽（击杀吃满配额）→ 不再补');
+  ok(led2.canSpawn(), '★ 击杀腾出名额 → 再补（非总攻也能补满到上限）');
 
   const threat = { assaultsPerDay: [2, 3], assaultWaves: [1, 2], waveCount: [4, 6], ambientInterval: 20 } as never;
   led.beginDay(threat, 12, 3);

@@ -129,6 +129,10 @@ export class EngineBridge {
   private readonly wardSpot = new Map<number, { x: number; z: number }>();
   private readonly wardBuilt = new Map<number, { x: number; z: number }>();
 
+  /** ★ §3.G 飞行支援（用户定 2026-09-29）：**非飞行队被打 → 引擎调最近可用飞行队赶来**
+   *  （队间调动全在引擎；管理器不参与）。支援点=被支援队实时位置（漂移 >8m 重发）；
+   *  威胁解除 `SUPPORT_RELEASE_S`（8s）→ 归建（回各自命令源）。 */
+  private readonly flyerSupport = new Map<number, { atkId: number; x: number; z: number; hitAt: number }>();
   /** ★ §3.G 工兵保护-支援（用户定 2026-09-29；第一波之后启用） */
   private readonly protectorOf = new Map<number, number>();          // 工兵队 → 保护队
   private readonly supportOf = new Map<number, number>();            // 工兵队 → 支援队
@@ -603,6 +607,53 @@ export class EngineBridge {
     if (!this.wave1Sent) return out;
     const byId = new Map<number, LiveSquad>();
     for (const r of this.live.squads()) byId.set(r.id, r);
+    // ★★ 飞行支援（用户定 2026-09-29；队间调动全在引擎）：
+    //   非飞行队**被打** → 调**最近、健康、未占用**的飞行队赶来（支援点=被支援队实时位置，
+    //   漂移 >8m 强制重发；否则 keep）；威胁解除 8s → 归建（回各自命令源：总攻/兜底）。
+    {
+      const flyers: LiveSquad[] = [];
+      for (const r of byId.values()) if (r.role === 'flyer' && r.alive > 0) flyers.push(r);
+      // 清理：支援者/被支援者不在场，或威胁解除
+      for (const [fid, s] of [...this.flyerSupport]) {
+        if (!byId.has(fid) || !byId.has(s.atkId) || now - s.hitAt >= EngineBridge.SUPPORT_RELEASE_S) this.flyerSupport.delete(fid);
+      }
+      const supported = new Set<number>();
+      for (const s of this.flyerSupport.values()) supported.add(s.atkId);
+      for (const r of byId.values()) {
+        if (r.role === 'flyer') continue;
+        if (this.live.underAttack?.(r.id) !== true) continue;
+        // 已有飞行队来援 → 只刷新支援点/时刻
+        let has = false;
+        for (const s of this.flyerSupport.values()) {
+          if (s.atkId !== r.id) continue;
+          s.hitAt = now; s.x = r.x; s.z = r.z; has = true;
+        }
+        if (has) continue;
+        // 选最近可用飞行队
+        const used = new Set(this.flyerSupport.keys());
+        let best: LiveSquad | undefined;
+        let bd = Infinity;
+        for (const f of flyers) {
+          if (used.has(f.id)) continue;
+          const d = Math.hypot(f.x - r.x, f.z - r.z);
+          if (d < bd) { bd = d; best = f; }
+        }
+        if (best) {
+          this.flyerSupport.set(best.id, { atkId: r.id, x: r.x, z: r.z, hitAt: now });
+          supported.add(r.id);
+        }
+      }
+      for (const [fid, s] of this.flyerSupport) {
+        const dst = { x: s.x, z: s.z };
+        const cur = this.writer.store.get(fid);
+        const same = cur && cur.order.state === 'march'
+          && Math.hypot(cur.order.target.x - dst.x, cur.order.target.z - dst.z) <= 8;
+        out.set(fid, {
+          state: 'march', target: dst, kind: 'act',
+          force: !same, keep: same,
+        });
+      }
+    }
     // 死队清关系（I14）
     for (const eng of [...this.protectorOf.keys()]) {
       if (!byId.has(eng)) {
