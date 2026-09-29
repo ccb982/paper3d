@@ -8,6 +8,8 @@
 // 查询：半径圆 → 邻近 8m 网格桶收集（去重），开销 = 邻近桶内障碍数。
 // ============================================================
 
+import { COVER_H } from '../render/CoverRenderer';   // ★ 攀爬上限单源 = 掩体高
+
 export interface StaticObstacle {
   id: number;
   x: number; z: number; y: number;
@@ -125,8 +127,9 @@ export interface CoverClimbRun {
   passive: true;
 }
 
-/** 可攀工事最大高差（米；与 CharacterBase.CLIMB_MAX 同值——两载体同口径） */
-export const COVER_CLIMB_MAX = 3.2;
+/** 可攀工事最大高差（米；**单源 = 掩体高**——掩体加高后此处不跟就会"爬不上去"）
+ *  ★ 2026-09-29 修：原写死 3.2，掩体加高到 COVER_H=4.5 后 rise 4.5 > 3.2 → 永不触发攀爬。 */
+export const COVER_CLIMB_MAX = COVER_H;
 
 const _coverBuf: StaticObstacle[] = [];
 

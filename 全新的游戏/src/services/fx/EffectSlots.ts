@@ -49,11 +49,6 @@ export class EffectSlots {
     for (const fx of this.slots.values()) fx.render(camera);
   }
 
-  /** ★ 可见性联动：实体 visible 变化 → 同步给支持的特效（血条等挂场景对象） */
-  setVisible(v: boolean): void {
-    for (const fx of this.slots.values()) fx.setVisible?.(v);
-  }
-
   /** 全部销毁 */
   disposeAll(): void {
     for (const fx of this.slots.values()) fx.dispose();

@@ -40,7 +40,7 @@ import type { TierCarry } from '../src/systems/swarm/tiers/contracts.ts';
 import type { AgentSnapshot } from '../src/systems/swarm/AgentPool.ts';
 import { climbBook } from '../src/entity/base/ClimbBook';
 import { edgeStepGreedy, axisStepToward, cellOf } from '../src/systems/swarm/nav/EdgeFollow.ts';
-import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt } from '../src/services/physics/StaticObstacleRegistry.ts';
+import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt, COVER_CLIMB_MAX } from '../src/services/physics/StaticObstacleRegistry.ts';
 import { separationPushes } from '../src/systems/swarm/EntitySeparation.ts';
 import { OrderWriter, SquadOrderStore } from '../src/systems/swarm/engine/OrderWriter.ts';
 import { AttackQueues } from '../src/systems/swarm/engine/AttackQueues.ts';
@@ -905,7 +905,7 @@ console.log('[5l] 被动爬掩体：靠近就爬 / 太高不爬 / 背向不爬')
   const run = coverClimbAt(8.0, 0, 0, 1, 0);
   ok(!!run && run.passive === true && run.top > 1.5 && Math.abs(run.ux - 1) < 1e-6 && run.lx > 10,
     '★ 靠近+朝掩体 → 被动爬越段（法线=前进方向、落点在对面、带顶高）');
-  addStaticObstacleRect(90002, 30, 3.0, 0, 1.5, 1, 0.9, 0, true);   // 顶=3.9 → rise 3.9 > 3.2
+  addStaticObstacleRect(90002, 30, COVER_CLIMB_MAX, 0, 1.5, 1, 0.9, 0, true);   // 顶 = COVER_CLIMB_MAX + 0.9 → rise 超限
   ok(coverClimbAt(28.2, 0, 0, 1, 0) === null, '★ 顶太高（>COVER_CLIMB_MAX）→ 不爬（留给规划绕行）');
   // ★ 长墙（中心远在 4m 外）：最近点法识别，落点刚好过墙
   addStaticObstacleRect(90003, 60, 1.0, 0, 4, 0.3, 0.9, 0, true);   // 墙 x∈[56,64], z∈[-0.3,0.3], 顶=1.9

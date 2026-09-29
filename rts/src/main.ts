@@ -13,7 +13,7 @@ import { updateTerrainLighting, updateWallMaterialsLighting } from './services/m
 import { updateApronLighting } from './services/map/decor/PlatformApron';
 import { SpawnSelect } from './ui/SpawnSelect';
 import { SwarmSystem, SWARM } from './systems/swarm/SwarmSystem';
-import { ownCoverBlocksFrom } from './entity/CoverEntity';   // ★ 城墙背面豁免玩家弹/敌掩体背面豁免敌弹（方向判定）
+import { ownCoverBlocksFrom, coverTopAt } from './entity/CoverEntity';   // ★ 城墙背面豁免玩家弹/敌掩体背面豁免敌弹（方向判定）；coverTopAt=平台顶（落顶支撑）
 import { CoverLazy } from './modes/world/CoverLazy';   // ★ 工事懒更新（用户定 2026-09-27）
 import { Flux, setTierHandover } from './systems/swarm/tiers/Flux';   // ★ P-Flux：档间交接唯一口（用户定 2026-09-27）
 import { PhysicsWorld, ensureRapierReady } from './services/physics/PhysicsWorld';
@@ -26,6 +26,7 @@ import { buildProceduralShip, SHIP_LENGTH } from './entity/ship/proceduralShip';
 import { EnemyBase } from './entity/EnemyBase';
 import { CLIMB_STATS, CLIMB_TRACE, canShift } from './entity/base/CharacterCore';
 import { goneLog } from './systems/swarm/data/GoneLog';
+import { eventBus } from './core/EventBus';
 import { climbBook } from './entity/base/ClimbBook';
 import { SectorBuilder } from './systems/swarm/tactics/SectorBuilder';
 import { BattalionManager } from './systems/swarm/tactics/BattalionManager';
@@ -253,6 +254,20 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     showFloatingAt: () => {}, syncSceneBgm: () => {}, returnToBase: () => {},
   } as unknown as SpawnDeps);
   spawner.refreshEnemyScale();   // ★ 敌强口径（按会话/天数；此处桩会话）
+  // ★★ 实体离场即摘名单（用户定 2026-09-29；唯一口径）：判官回收/击杀/清场只走 `retire()`
+  //   （销毁资源 + 发事件），**`enemies` 数组与 `spawner.byUid` 不会自动清** →
+  //   每次回收实体都留下一个僵尸引用（实证：T510 实体数组 46 里 29 个已 disposed，且与"回=29"一一对应）。
+  //   在此订阅两条退役事件，一处摘除（demote/stash 走自己的 splice，不重复）。
+  const fieldRemoveByUid = (uid: number): void => {
+    if (!(uid > 0)) return;
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      if (enemies[i].swarmUid === uid) { enemies.splice(i, 1); break; }
+    }
+    const e = spawner.entityByUid(uid);
+    if (e) spawner.forgetEntity(e);
+  };
+  eventBus.on('enemy_killed', (p) => fieldRemoveByUid(p.uid));
+  eventBus.on('enemy_removed', (p) => fieldRemoveByUid(p.uid));
   // ★ 指挥器端口接线（**创建只走四兵种管理器**；原子生成口由 attachSpawnPorts 装配）
   wireCommanderPorts({
     data: swarm.data, spawner, raster, mobDefs, entities, scene, chunks,
@@ -716,7 +731,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     raster,
     player: null as unknown as Parameters<typeof CharacterClamp.prototype.update>[0],
     clampVehicle: () => {},
-    platformTopAt: () => null,
+    // ★ 平台顶（掩体顶）：站上/攀上顶面时以顶面为地面——不接 → 攀爬成功也被贴地拽下去（爬不上去）
+    platformTopAt: (x, z) => coverTopAt(x, z),
   });
   // ★ 加速（用户定 2026-09-25）：只跑 AI 性能开销小；dt 缩放，日进度走**模拟时钟**
   let speed = 1;
