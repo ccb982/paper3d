@@ -112,9 +112,9 @@ export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/Worl
   return out;
 }
 
-/** ★ 墙/掩体单向后豁免判定（用户定 2026-09-29）：按 owner 查该阵营的墙，源在**正面**（前向锥内）
- *  → 全挡（不给豁免）；源在**背面** → 豁免（自家弹穿）。**实心墙（variant 'wall'）两面全挡**
- *  （墙不透子弹）；城墙（'cover'，视觉开孔）背向豁免；敌人掩体内部有真孔（正面靠孔穿）。 */
+/** ★ 墙/掩体豁免判定（用户定 2026-09-29 修）：按 owner 查该阵营的墙——**看子弹朝向**：
+ *  源在**背面** → 豁免（自家弹穿）；源在**正面** → 全挡；**实心墙（variant 'wall'）两面全挡**。
+ *  判定基准 = **发射者本体位置**（不是弹出生点，后者会把背面误判成正面）。 */
 export function ownWallBlocksFrom(x: number, z: number, dx: number, dz: number, owner: 'player' | 'enemy'): boolean {
   const dl = Math.hypot(dx, dz) || 1;
   const nx = dx / dl, nz = dz / dl;
@@ -122,12 +122,12 @@ export function ownWallBlocksFrom(x: number, z: number, dx: number, dz: number, 
     if (c.owner !== owner) continue;
     const rx = c.position.x - x, rz = c.position.z - z;
     const dist = Math.hypot(rx, rz);
-    if (dist > 40) continue;
     if ((rx * nx + rz * nz) / (dist || 1) < 0.5) continue;   // 墙不在射击方向上（前向锥内）
     if (c.variant === 'wall') return true;                    // ★ 实心墙：不透子弹（两面全挡）
+    // ★ 用**子弹方向**判定（用户定 2026-09-29）：方向·墙正面法线 < 0 = 正面射来 → 全挡；
+    //   > 0 = 背面射来（穿自家城墙）→ 豁免。不看位置，简单可靠。
     const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);
-    const side = (x - c.position.x) * fwdX + (z - c.position.z) * fwdZ;   // >0 = 源在正面
-    if (side > 0) return true;
+    if (nx * fwdX + nz * fwdZ < 0) return true;
   }
   return false;
 }

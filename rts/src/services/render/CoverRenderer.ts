@@ -30,13 +30,13 @@ function loadIconTexture(url: string, onReady: (tex: THREE.CanvasTexture) => voi
 
 /** 城墙/墙尺寸（世界米；与碰撞体同口径） */
 export const COVER_W = 4.0;
-export const COVER_H = 3.0;
+export const COVER_H = 4.5;   // ★ 拉高（用户定 2026-09-29）：高过站立单位（敌 ~3.7m），掩体后真正挡弹
 export const COVER_T = 0.8;
 /** 射击孔：宽 / 高度带（★ 2026-09-19 三次定调"再上移、按摄像机高度"：
  *  纯视觉（物理实心、我方近墙射击无视墙）；高度带覆盖 TPS 相机眼位（≈脚底+1.2 起）） */
-export const COVER_SLIT_W = 2.2;
-export const COVER_SLIT_Y0 = 1.3;
-export const COVER_SLIT_Y1 = 2.5;
+export const COVER_SLIT_W = 3.0;    // ★ 随墙高同步拉大（用户定 2026-09-29）
+export const COVER_SLIT_Y0 = 1.3;   // 孔下沿（瞄准高度，保持）
+export const COVER_SLIT_Y1 = 3.5;   // ★ 孔上沿拉高（孔带 2.2m；孔以上墙体 1.0m）
 
 /** 程序化灰砖贴图（模块级缓存；所有掩体/掩体弹共享） */
 let _brickTex: THREE.CanvasTexture | null = null;

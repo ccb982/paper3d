@@ -669,8 +669,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         const pool = opts.camp === 'enemy' ? (skin === 'fireball' ? enemyBolts : enemyArrows) : playerBullets;
         // ★ 墙/掩体单向后豁免（用户定 2026-09-29）：源在自家墙正面（或前方有实心墙）→ 不豁免（撞墙）；
         //   背面 → 豁免（自家子弹穿自家城墙）；敌掩体正面仍可穿**真孔**。
+        //   判定用**发射者本体位置**（弹出生点已前移，会把背面误判成正面）。
         (opts as { ignoreOwnCovers?: boolean }).ignoreOwnCovers =
-          !ownWallBlocksFrom(opts.x, opts.z, opts.dirX, opts.dirZ, opts.camp === 'enemy' ? 'enemy' : 'player');
+          !ownWallBlocksFrom(opts.source.position.x, opts.source.position.z, opts.dirX, opts.dirZ,
+            opts.camp === 'enemy' ? 'enemy' : 'player');
         executeAttack(entities, pool, opts);
         return;
       }
@@ -778,6 +780,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       x: x + dx * 0.7, y: oy + dy * 0.7, z: z + dz * 0.7,
       dirX: dx, dirY: dy, dirZ: dz,
       speed, camp: 'enemy', lifetime: life, damage: dmg,
+      // ★ 敌掩体背向豁免（用户定 2026-09-29；池代理直连发射也要判）：源=代理位置，不是弹出生点
+      ignoreOwnCovers: !ownWallBlocksFrom(x, z, dx, dz, 'enemy'),
     });
   };
   // ★ 不再手工铺环：兵力全部由**四兵种管理器的创建接口**按防区需求创建
