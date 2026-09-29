@@ -393,7 +393,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       },
       // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
       clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
-      blockedAt: (x, z) => swarm.data.blockedAt(x, z),   // 总攻目标吸附用
+      blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',   // 不可站地形（只坑；水一直可站——总攻吸附/掩护点用）
       /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：**真跟到被保护对象旁（≤14m）** → 1.5m；
        *  没跟到（对象走了它还落下）→ 维持全局 4m（照收——"保护者没跟过去"不放过）。 */
       stuckR: (uid: number) => {
@@ -526,8 +526,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         squadOf: (id: number) => swarm.squads.get(id) ?? null,
         ensurePath: (state, squad, now) => swarm.ensurePathFor(state, squad, now),
         patrolNext: (id, x, z, ax, az, r, leg) => {
-          // ★ 总攻=全体到舰（用户定 2026-09-27）：巡逻腿=锚点（舰）——直接压到舰，不巡。
-          if (swarm.data.battlePosture === 'assault') return { x: ax, z: az };
           // ★★ 巡逻设计（用户定 2026-09-27）：**巡逻=不停调用长/短寻路走向下一腿**——
           //   本端口只产"下一腿目标点"：地面腿走可行性（reachFrom 校验，长短寻路同源消费）；
           //   空中腿**不做可行性**（直航目标）。围绕点**跟随当前位（可一直变）**；

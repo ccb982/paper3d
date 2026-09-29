@@ -284,17 +284,18 @@ export class EngineBridge {
     return this.timers.canFire(uid);
   }
 
-  /** 舰旁可站点（总攻吸附；过滤不可走/坑） */
+  /** ★ 舰旁可站点（用户定 2026-09-29 简化）：**以舰为中心**从 2m 起向外扫圆环（8 向），
+   *  返回**离舰最近的可站位置**（不可站 = 坑/水，`blockedAt` 口）。**不做可达校验**——
+   *  "能找到寻路到不了的地点算玩家厉害"，各队尽力靠近即可；扫不到 → 退回舰点。 */
   private shipSidePoint(sx: number, sz: number): { x: number; z: number } {
-    let tx = sx, tz = sz, found = false;
-    outer: for (let r = 2; r <= 10 && !found; r += 2) {
+    for (let r = 2; r <= 40; r += 2) {
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2;
         const qx = sx + Math.cos(a) * r, qz = sz + Math.sin(a) * r;
-        if (!(this.live.blockedAt?.(qx, qz) ?? false)) { tx = qx; tz = qz; found = true; break outer; }
+        if (!(this.live.blockedAt?.(qx, qz) ?? false)) return { x: qx, z: qz };
       }
     }
-    return { x: tx, z: tz };
+    return { x: sx, z: sz };
   }
 
   /** 下一段推进点：从当前位置朝舰 PLAN_ADV 米（不越活动带前缘）；到带缘 → null。
