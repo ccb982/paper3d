@@ -28,6 +28,9 @@ export { MARCH_DIST, ARRIVE_R } from './CommandLang';
 export interface SquadDrivePorts {
   /** ★ 巡逻腿查询（用户口径：查询可行移动目标点 → 长/短寻路走过去）；无可行点 → null */
   patrolNext?(id: number, x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
+  /** ★★ 保护腿专用查询（用户定 2026-09-29）：**绕锚点、半径原样、BFS 必须 'ok'**（严格可达）——
+   *  通用巡逻口会把半径抬到 ≥24 且用宽松门，保护圈"限死半径 + 真可达"必须走这个口。 */
+  protectNext?(id: number, x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null;
   /** ★ 驻守（队长状态）：舰位（自主掩体循环的方向参照） */
   shipPoint?(): { x: number; z: number } | null;
   /** ★ 驻守：附近掩体查询（掩体表；毁件自然消失 → 触发后撤） */
@@ -84,14 +87,12 @@ export class SquadCore {
   private patrolLeg = 1;
   /** ★ 驻守状态（自主掩体循环：藏/毁/撤/再进） */
   private hold: HoldCoverState = newHoldCoverState(0);
-  /** ★ protect 稳态小左右移动（用户定 2026-09-29）：驻位锚 + 当前侧 + 下次换向时刻 */
-  private protAnchor: { x: number; z: number } | null = null;
-  private protSide = 1;
-  private protUntil = 0;
-  /** 横移幅度（米；跨度 2×=5m —— 也满足判官"净活动范围"口径） */
-  private static readonly PROT_SWAY = 2.5;
-  /** 换向周期（秒） */
-  private static readonly PROT_SWAY_S = 2.2;
+  /** ★ protect 短寻路巡逻（用户定 2026-09-29）：保护圈=范围限定死——
+   *  圈中心 A=G 朝威胁方向 min(NEAR_G, |PG|−STANDOFF) 处；进圈后绕 A 的 LOOP_R 短寻路巡逻腿。 */
+  private static readonly PROTECT_NEAR_G = 12;   // 保护圈中心离 G 的上限（米）
+  private static readonly PROTECT_RANGE = 20;    // 进入圈内的判定（米）；超过 → 先走向 A
+  private static readonly PROTECT_LOOP_R = 6;    // 圈内巡逻腿半径（米；范围限定死；对穿跨度≈12m>判官4m）
+  private static readonly PROTECT_HOP_R = 6;     // 圈心无腿 → 绕自身的短跳半径（米；仍限死）
   /** 是否已 drive 过（tick 降级兜底用） */
   private hasDrive = false;
 
@@ -126,7 +127,6 @@ export class SquadCore {
       this.patrolGoal = null;
       this.patrolLeg = 1;
       this.hold = newHoldCoverState(now);   // ★ 新令 → 驻守循环重开
-      this.protAnchor = null; this.protSide = 1; this.protUntil = 0;   // ★ 保护横移重开
     }
     const st = this.state;
     if (!st) return;
@@ -175,34 +175,57 @@ export class SquadCore {
     // ---- 不停调用长/短寻路（唯一方向来源） ----
     port.ensurePath(st, squad, now);
     const anchor = port.leaderTarget(st, squad, lx, lz, now);
-    // ---- 复合 → 原子（解释器 = `squad/CommandLang.ts`；保护用 blockCheck 调整点） ----
+    // ---- 复合 → 原子（解释器 = `squad/CommandLang.ts`；保护走保护圈逻辑） ----
     const sel = interpretLeader(st, lx, lz, anchor, port.coverFrom);
-    // ★ 保护：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
-    if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
-      this.protAnchor = null;   // 离开稳态 → 清横移锚
-      st.order.target = { x: sel.x, z: sel.z };
-      port.ensurePath(st, squad, now);
-    }
-    // ★ 队长位移目标（单源）：保护=调整点（sel）；其余=路点/令目标（anchor）
-    let ax = st.order.kind === 'protect' ? sel.x : (anchor ? anchor.x : lx);
-    let az = st.order.kind === 'protect' ? sel.z : (anchor ? anchor.z : lz);
-    if (sel.atom === 'garrison' && st.order.kind === 'protect') {
-      // ★★ protect 稳态**小左右移动**（用户定 2026-09-29）：挡住后不许站桩——
-      //   绕驻位（首次挡住处）沿"威胁→保护点"垂线 ±PROT_SWAY 来回，周期 PROT_SWAY_S。
-      if (!this.protAnchor) this.protAnchor = { x: lx, z: lz };
-      if (now >= this.protUntil) { this.protSide = -this.protSide; this.protUntil = now + SquadCore.PROT_SWAY_S; }
-      const thx = st.order.threatX ?? st.order.target.x - 1;
-      const thz = st.order.threatZ ?? st.order.target.z;
-      let px = -(st.order.target.z - thz), pz = st.order.target.x - thx;
-      const pl = Math.hypot(px, pz) || 1; px /= pl; pz /= pl;
-      const ox = this.protAnchor.x + px * SquadCore.PROT_SWAY * this.protSide;
-      const oz = this.protAnchor.z + pz * SquadCore.PROT_SWAY * this.protSide;
-      if (st.order.target.x !== ox || st.order.target.z !== oz) {
-        st.order.target = { x: ox, z: oz };
-        st.corridor = undefined; st.followIdx = undefined; st.tgtIdx = undefined; st.mvAt = undefined;
+    // ★★ 保护（用户定 2026-09-29）：**不断调用短寻路、类似巡逻、范围限定死**——
+    //   圈中心 A = G 朝威胁方向 min(PROTECT_NEAR_G, |PG|−STANDOFF) 处（玩家贴近 → 自然退化为 7m 拦截）；
+    //   离 A 超过 PROTECT_RANGE → 走向 A；进圈 → 绕 A 半径 PROTECT_LOOP_R 的**短寻路巡逻腿**，
+    //   换腿即清路重建（不走 3s 停等）；无腿 → 原位（不硬发不可走点）。
+    let ax: number;
+    let az: number;
+    if (st.order.kind === 'protect') {
+      const G = o.target;
+      const P = port.playerPoint?.() ?? (st.order.threatX !== undefined
+        ? { x: st.order.threatX, z: st.order.threatZ ?? G.z } : null);
+      const dGP = P ? Math.hypot(G.x - P.x, G.z - P.z) : 0;
+      const dFromG = P && dGP > 1e-3 ? Math.min(SquadCore.PROTECT_NEAR_G, Math.max(0, dGP - 7)) : 0;
+      const ux = P && dGP > 1e-3 ? (P.x - G.x) / dGP : 0;
+      const uz = P && dGP > 1e-3 ? (P.z - G.z) / dGP : 0;
+      const A = { x: G.x + ux * dFromG, z: G.z + uz * dFromG };
+      const dA = Math.hypot(A.x - lx, A.z - lz);
+      if (dA > SquadCore.PROTECT_RANGE) {
+        this.patrolGoal = null;   // 走向圈心（短/长分流在 ensurePath）
+        st.order.target = { x: A.x, z: A.z };
         port.ensurePath(st, squad, now);
+        ax = A.x; az = A.z;
+      } else {
+        if (!this.patrolAnchor || Math.hypot(this.patrolAnchor.x - A.x, this.patrolAnchor.z - A.z) > 2) {
+          this.patrolAnchor = { x: A.x, z: A.z }; this.patrolGoal = null;
+        }
+        let pg = this.patrolGoal;
+        if (!pg || Math.hypot(pg.x - lx, pg.z - lz) <= ARRIVE_R) {
+          // 腿序：绕圈心 A → 圈心无腿 → **绕自身短跳**（保底：保证移动；仍限死在保护范围内）
+          // ★ 严格口（protectNext=nav.patrolNext：绕锚点、半径原样、BFS 'ok'）；无此口才回退通用口
+          const legQ = port.protectNext ?? port.patrolNext;
+          pg = legQ?.(this.id, lx, lz, A.x, A.z, SquadCore.PROTECT_LOOP_R, this.patrolLeg)
+            ?? legQ?.(this.id, lx, lz, lx, lz, SquadCore.PROTECT_HOP_R, this.patrolLeg)
+            ?? null;
+          this.patrolGoal = pg;
+          this.patrolLeg = -this.patrolLeg;
+          if (pg) { st.corridor = undefined; st.followIdx = undefined; st.tgtIdx = undefined; st.mvAt = undefined; }
+        }
+        if (pg) {
+          st.order.target = { x: pg.x, z: pg.z };
+          port.ensurePath(st, squad, now);
+          ax = pg.x; az = pg.z;
+        } else {
+          ax = lx; az = lz;   // 无可行腿 → 原位（下一拍再试；不硬发不可走点）
+        }
       }
-      ax = ox; az = oz;
+    } else {
+      // 行军/总攻/驻守：队长位移目标 = 路点/令目标（anchor）
+      ax = anchor ? anchor.x : lx;
+      az = anchor ? anchor.z : lz;
     }
     if (port.clampRing) { const c = port.clampRing(ax, az); ax = c.x; az = c.z; }
     this.atom = sel.atom;

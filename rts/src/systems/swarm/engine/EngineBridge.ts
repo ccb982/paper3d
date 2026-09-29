@@ -80,6 +80,9 @@ export interface LiveView {
   underAttack?(squadId: number): boolean;
   /** ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing） */
   clampRing?(x: number, z: number): { x: number; z: number };
+  /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：返回该单位的卡死窗口跨度阈值；
+   *  缺省 = 全局 STUCK.BBOX_R（保护队"真跟到被保护对象旁"才放宽） */
+  stuckR?(uid: number): number | undefined;
   /** 计时销毁/卡死回收落地 */
   retire?(uid: number, why: string): boolean;
   /** 归一当日进度 0~1 */
@@ -162,6 +165,7 @@ export class EngineBridge {
         return a ? { x: a.x, z: a.z } : null;
       },
       exemptOf: (uid) => this.live.exemptOf?.(uid) ?? null,
+      bboxR: (uid) => this.live.stuckR?.(uid),
       onExpire: (uid, why) => {
         const hit = this.live.retire?.(uid, why) ?? false;
         this.dbg.last = `expire#${uid}:${why}${hit ? '' : '(gone)'}`;
@@ -386,6 +390,16 @@ export class EngineBridge {
         if (rec.role === 'ranged') {
           const same = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
           if (!same) {
+            if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
+          }
+          continue;
+        }
+        // ★ 到点转驻守（用户定 2026-09-29）：近战压到舰旁点后改发 hold（defend→garrison）——
+        //   到点站住是合法状态（判官豁免）；开火照打（独立子系统）。此前到点后无位移又无豁免 → 被判官收。
+        const arrived = Math.hypot(assaultT.x - sp.x, assaultT.z - sp.z) <= EngineBridge.HOLD_R;
+        if (arrived) {
+          const sameH = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
+          if (!sameH) {
             if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
           }
           continue;

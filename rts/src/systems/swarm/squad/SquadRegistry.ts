@@ -49,8 +49,15 @@ export class SquadRegistry {
   accept(id: number, order: SquadOrder, now = 0): void {
     const core = this.ensure(id);
     const cur = core.current();
+    // ★ 同签名去重（用户定 2026-09-29 补 threat）：**威胁点变化也算换令**——
+    //   保护拦截点是由威胁算出来的；只比 kind/mission/target 会把"玩家移动"吞掉，
+    //   保护几何永远锚在第一次的威胁位置（实测 bug）。
+    const sameThreat = (!cur?.threat && !order.threat)
+      || (!!cur?.threat && !!order.threat
+        && Math.hypot(cur.threat.x - order.threat.x, cur.threat.z - order.threat.z) <= 2);
     if (cur && cur.kind === order.kind && (cur.mission ?? '') === (order.mission ?? '')
-      && Math.hypot(cur.target.x - order.target.x, cur.target.z - order.target.z) <= 2) {
+      && Math.hypot(cur.target.x - order.target.x, cur.target.z - order.target.z) <= 2
+      && sameThreat) {
       // ★★ 同签名重发 = **真去重**（用户定 2026-09-27）：直接 return，
       //   **不再** core.accept（否则每帧把 phase/progress/stillS/d0 清零——
       //   “发呆检测/重发/重规划”全部永远不触发，历史 bug）。

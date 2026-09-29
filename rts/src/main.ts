@@ -394,6 +394,18 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
       clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
       blockedAt: (x, z) => swarm.data.blockedAt(x, z),   // 总攻目标吸附用
+      /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：**真跟到被保护对象旁（≤14m）** → 1.5m；
+       *  没跟到（对象走了它还落下）→ 维持全局 4m（照收——"保护者没跟过去"不放过）。 */
+      stuckR: (uid: number) => {
+        const sq = swarm.squads.squadOf(uid);
+        if (!sq) return undefined;
+        const ost = shadowBridge?.writer.store.get(sq.id)?.order;
+        if (ost?.state === 'protect') {
+          const m = sq.members.get(sq.leaderUid);
+          if (m && Math.hypot(m.x - ost.target.x, m.z - ost.target.z) <= 14) return 1.5;
+        }
+        return undefined;
+      },
       agents: () => {   // ★ 池代理位置（卡死判官在册用）
         const p = swarm.pool; const out: { uid: number; x: number; z: number }[] = [];
         for (let i = 0; i < p.count; i++) out.push({ uid: p.swarmUid[i], x: p.x[i], z: p.z[i] });
@@ -561,6 +573,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
           }
           return out;
         },
+        // ★ 发令门（用户定 2026-09-29）已回退；保护腿走**严格口**（nav.patrolNext：绕锚点/半径原样/BFS 'ok'）
+        protectNext: (x, z, ax, az, r, leg) => swarm.patrolNext(x, z, ax, az, r, leg),
         coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,

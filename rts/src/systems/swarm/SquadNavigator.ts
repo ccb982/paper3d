@@ -106,7 +106,14 @@ export class SquadNavigator {
     if (!g) return null;
     const c = this.routeCursor(state, x, z);
     if (!c) return null;
-    return axisStepToward(g, x, z, c.x - x, c.z - z);   // 步不出 → 调用方路线修正
+    const e = axisStepToward(g, x, z, c.x - x, c.z - z);
+    if (e) return e;
+    // ★★ 短寻路兜底（用户定 2026-09-29："用短寻路"）：两轴都被禁 ≠ 无路——
+    //   长走廊是**疏路点**，贪心轴步会被局部挡边卡死（有 corridor 却不走 → 站桩 → 判官收）。
+    //   改：对**当前路点**做 LocalStep（短寻路；canSegment 逐边校验）→ 取它的第一步。
+    const step = localStep(g, x, z, c.x, c.z);
+    if (!step) return null;
+    return axisStepToward(g, x, z, step.next.x - x, step.next.z - z);
   }
 
   /** ★ 路线游标（用户定 2026-09-26；2026-09-27 **去掉同层机制**）：沿走廊**单调锁存**推进的当前路点——

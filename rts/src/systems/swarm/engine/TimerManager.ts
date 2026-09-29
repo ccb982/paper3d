@@ -23,6 +23,9 @@ export interface TimerHost {
   posOf(uid: number): { x: number; z: number } | null;
   /** 当前豁免卡死判定的原因（驻守 / 交战中 / 已到位…）；null = 不豁免 */
   exemptOf(uid: number): string | null;
+  /** ★ 每单位卡死窗口**逃逸半径**（用户定 2026-09-29：保护队放宽——
+   *  跟到被保护对象旁（≤14m）时窗口跨度阈值降到 1.5m；缺省 = STUCK.BBOX_R） */
+  bboxR?(uid: number): number | undefined;
   /** 到期回收（卡死 / 寿命） */
   onExpire(uid: number, why: string): void;
 }
@@ -75,7 +78,8 @@ export class TimerManager {
       else if (p.z > rec.maxZ) rec.maxZ = p.z;
       rec.t += 1;
       dbg.tracked++;
-      if (rec.maxX - rec.minX > STUCK.BBOX_R || rec.maxZ - rec.minZ > STUCK.BBOX_R) {
+      const rB = this.h.bboxR?.(uid) ?? STUCK.BBOX_R;
+      if (rec.maxX - rec.minX > rB || rec.maxZ - rec.minZ > rB) {
         rec.minX = rec.maxX = p.x;
         rec.minZ = rec.maxZ = p.z;
         rec.t = 0;
