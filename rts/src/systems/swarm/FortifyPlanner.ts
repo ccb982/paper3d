@@ -94,10 +94,6 @@ export class FortifyPlanner {
     this.dirty[si] = true;
   }
 
-  isDirty(sec: number): boolean {
-    return this.dirty[sec] === true;
-  }
-
   /** ★ 建造账本（不依赖懒物化；做"掩体加成"与密度判定的真源；用户定 2026-09-29） */
   private readonly builtCovers = new Map<string, { x: number; z: number; kind: 'cover' | 'trench' }>();
   private postureMark = Number.NaN;

@@ -82,8 +82,6 @@ export interface LiveView {
   clampRing?(x: number, z: number): { x: number; z: number };
   /** 计时销毁/卡死回收落地 */
   retire?(uid: number, why: string): boolean;
-  /** 第一波已发（波次状态） */
-  wave1?(): boolean;
   /** 归一当日进度 0~1 */
   t01?(): number;
   /** 兵力计划总数（账本） */
@@ -140,7 +138,7 @@ export class EngineBridge {
   private wave1Sent = false;
   private finalSent = false;
   private lastT01 = -1;
-  readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, stall: 0, last: '' };
+  readonly dbg = { ticks: 0, shadow: false, ringMin: 0, ringMax: 0, issued: 0, refreshed: 0, spread: 0, last: '' };
   /** 影子模式：只算不发（仅调试用） */
   shadow = false;
   /** 直控模式：关引擎 decide/write（只执行玩家指令） */
@@ -259,6 +257,9 @@ export class EngineBridge {
           hpRatio: sq.hpRatio, progress: sq.progress, stillS: sq.stillS },
         now,
       );
+      // ★ 队长自报进度/静止 → 发令器稳定门（引擎只记录，不逐拍指挥）
+      const rec = this.squads.get(sq.id);
+      if (rec) this.writer.advance(sq.id, rec.progress ?? 0, rec.stillS ?? 0);
     }
     this.sectors.tick((id) => this.pos.squad(id), this.pos.player()?.x ?? 0, this.pos.player()?.z ?? 0, [...this.squads.all()].map((r) => r.id));
     // 1Hz 慢拍：攻击队列 + 统一计时（开火子系统的数据面）
@@ -330,10 +331,6 @@ export class EngineBridge {
     this.live.setReleaseCap?.(Math.ceil(total * releaseAt(p01)));
     if (!this.wave1Sent && p01 >= 0.45) { this.wave1Sent = true; this.dbg.last = 'wave1'; }
     if (!this.finalSent && p01 >= 0.80) { this.finalSent = true; this.dbg.last = 'final'; }
-  }
-
-  get wave1Active(): boolean {
-    return this.wave1Sent;
   }
 
   /** 管理器只编成/补兵（架构第 9 条；ctx = 只读输入） */

@@ -384,7 +384,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         return out;
       },
       /** ★ 第一波已发（波次决策源：抵舰驻留；真源 = 引擎） */
-      wave1: () => shadowBridge?.wave1Active ?? false,
       /** ★ 波次/放行数据面（引擎决策读；账本仍是闸门真源） */
       t01: () => swarm.data.lastT01,
       ledgerTotal: () => swarm.ledger.total,

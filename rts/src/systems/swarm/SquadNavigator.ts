@@ -35,8 +35,6 @@ const ROUTE_REPLACE_PROGRESS = 0.8;
 export const NAV = {
   /** 目标位移超此值 → 重算（米） */
   RETARGET_DIST: 24,
-  /** 路径最长有效期（秒；兜底地形变化） */
-  REFRESH_S: 12,
   /** 求解失败冷却（秒；防每拍重试） */
   FAIL_COOLDOWN_S: 3,
   /** ★ 净推进停滞阈值（秒；S3b：距目标 3s 未缩短 ≥2m → 重算；替代位移/TTL 轮询） */
