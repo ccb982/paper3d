@@ -497,6 +497,10 @@ export class EngineBridge {
       const built = this.wardBuilt.get(r.id);
       if (built && Math.hypot(ward.x - built.x, ward.z - built.z) <= 6) { this.wardSpot.delete(r.id); continue; }
       const p = this.wardBuildPoint(r, ward);
+      // ★ 同点不重建（用户定 2026-09-29）：受护对象没动时按原几何会算出**同一个点** →
+      //   工兵 0.8s 一件原地刷（判官看站桩 → 回收）；原抑制"受护≤6m"在对象离点 >6m 时失效，
+      //   这里以**点**为准：与落成点 ≤2.5m 一律不产点（对象真动了 → 新点自然 >2.5m）。
+      if (p && built && Math.hypot(p.x - built.x, p.z - built.z) <= 2.5) { this.wardSpot.delete(r.id); continue; }
       if (p) this.wardSpot.set(r.id, p); else this.wardSpot.delete(r.id);
     }
   }

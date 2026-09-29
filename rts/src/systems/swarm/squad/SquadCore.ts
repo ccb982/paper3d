@@ -84,6 +84,14 @@ export class SquadCore {
   private patrolLeg = 1;
   /** ★ 驻守状态（自主掩体循环：藏/毁/撤/再进） */
   private hold: HoldCoverState = newHoldCoverState(0);
+  /** ★ protect 稳态小左右移动（用户定 2026-09-29）：驻位锚 + 当前侧 + 下次换向时刻 */
+  private protAnchor: { x: number; z: number } | null = null;
+  private protSide = 1;
+  private protUntil = 0;
+  /** 横移幅度（米；跨度 2×=5m —— 也满足判官"净活动范围"口径） */
+  private static readonly PROT_SWAY = 2.5;
+  /** 换向周期（秒） */
+  private static readonly PROT_SWAY_S = 2.2;
   /** 是否已 drive 过（tick 降级兜底用） */
   private hasDrive = false;
 
@@ -118,9 +126,13 @@ export class SquadCore {
       this.patrolGoal = null;
       this.patrolLeg = 1;
       this.hold = newHoldCoverState(now);   // ★ 新令 → 驻守循环重开
+      this.protAnchor = null; this.protSide = 1; this.protUntil = 0;   // ★ 保护横移重开
     }
     const st = this.state;
     if (!st) return;
+    // ★ 保护 G 还原（用户定 2026-09-29）：引擎载荷 target=**被保护点 G** 恒真——
+    //   上一拍的"调整点/横移点"只作本拍运动目标，不许污染下一拍的 G（否则 blockCheck 锚点漂移）。
+    if (o.kind === 'protect') st.order.target = { x: o.target.x, z: o.target.z };
     const lead = squad.members.get(squad.leaderUid);
     const lx = lead?.x ?? this.x, lz = lead?.z ?? this.z;
     // ★ 标签只读（唯一来源=引擎令；缺失旧令 → 按 kind 退化）
@@ -167,13 +179,31 @@ export class SquadCore {
     const sel = interpretLeader(st, lx, lz, anchor, port.coverFrom);
     // ★ 保护：**调整点即寻路目标**（覆盖执行副本目标 → 走廊朝调整点；到点再校验，收敛）
     if (st.order.kind === 'protect' && sel.atom !== 'garrison') {
+      this.protAnchor = null;   // 离开稳态 → 清横移锚
       st.order.target = { x: sel.x, z: sel.z };
       port.ensurePath(st, squad, now);
     }
     // ★ 队长位移目标（单源）：保护=调整点（sel）；其余=路点/令目标（anchor）
     let ax = st.order.kind === 'protect' ? sel.x : (anchor ? anchor.x : lx);
     let az = st.order.kind === 'protect' ? sel.z : (anchor ? anchor.z : lz);
-    if (sel.atom === 'garrison' && st.order.kind === 'protect') { ax = lx; az = lz; }
+    if (sel.atom === 'garrison' && st.order.kind === 'protect') {
+      // ★★ protect 稳态**小左右移动**（用户定 2026-09-29）：挡住后不许站桩——
+      //   绕驻位（首次挡住处）沿"威胁→保护点"垂线 ±PROT_SWAY 来回，周期 PROT_SWAY_S。
+      if (!this.protAnchor) this.protAnchor = { x: lx, z: lz };
+      if (now >= this.protUntil) { this.protSide = -this.protSide; this.protUntil = now + SquadCore.PROT_SWAY_S; }
+      const thx = st.order.threatX ?? st.order.target.x - 1;
+      const thz = st.order.threatZ ?? st.order.target.z;
+      let px = -(st.order.target.z - thz), pz = st.order.target.x - thx;
+      const pl = Math.hypot(px, pz) || 1; px /= pl; pz /= pl;
+      const ox = this.protAnchor.x + px * SquadCore.PROT_SWAY * this.protSide;
+      const oz = this.protAnchor.z + pz * SquadCore.PROT_SWAY * this.protSide;
+      if (st.order.target.x !== ox || st.order.target.z !== oz) {
+        st.order.target = { x: ox, z: oz };
+        st.corridor = undefined; st.followIdx = undefined; st.tgtIdx = undefined; st.mvAt = undefined;
+        port.ensurePath(st, squad, now);
+      }
+      ax = ox; az = oz;
+    }
     if (port.clampRing) { const c = port.clampRing(ax, az); ax = c.x; az = c.z; }
     this.atom = sel.atom;
     this.hasDrive = true;

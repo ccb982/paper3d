@@ -124,6 +124,8 @@ export class EngineerManager extends RoleManager {
   private readonly builtOnce = new Set<number>();
   /** 已建件（key = "x,z"） */
   private readonly built = new Set<string>();
+  /** ★ 每队上一件类型（用户定 2026-09-29：循环=掩体→坑洞→掩体… 1:1 交替） */
+  private readonly lastKind = new Map<number, 'cover' | 'trench'>();
   private lastNow = -1;
   /** ★ 补队节拍（分区 → 下次可投放时刻） */
   private readonly spawnAt = new Map<number, number>();
@@ -189,6 +191,7 @@ export class EngineerManager extends RoleManager {
       port.cover(bp.x, bp.z, 'cover');
       port.markDirty(bp.x, bp.z, 12);
       this.built.add(keyOf(bp.x, bp.z));
+      this.built.add(keyOf(spot.x, spot.z));   // ★ 件点也记（防同点再取件；用户定 2026-09-29）
       this.builtOnce.add(id);
       this.builtBy.set(id, (this.builtBy.get(id) ?? 0) + 1);
       this.work.delete(id); this.digs.delete(id);
@@ -325,6 +328,8 @@ export class EngineerManager extends RoleManager {
         this.spots.set(id, spot);
         if (this.buildAt(port, id, s, ws, 'cover', dt) === 'done') {
           port.wardCoverDone?.(id, ws.x, ws.z);
+          this.built.add(keyOf(ws.x, ws.z));   // ★ 掩护点也记（防同点再取件；用户定 2026-09-29）
+          this.lastKind.set(id, 'cover');      // ★ 循环记账（掩护=掩体件）
           this.spots.delete(id);
           this.dbg.last = `#${id} 掩护掩体成 @${ws.x | 0},${ws.z | 0}`;
         }
@@ -385,12 +390,13 @@ export class EngineerManager extends RoleManager {
       // ---- 施工：统一独立机制（位置来源=查询/保护对象；本机制只负责"到范围计时"） ----
       {
         // ★ 选型（用户定 2026-09-26/29）：总攻全掩体；**区域掩体密度≥上限 → 改挖战壕**；
-        //   其余维持 4 件里 3 掩体 / 1 战壕。
+        //   其余按**循环：掩体 → 坑洞 → 掩体 …（1:1，每队各记各的账）**——造完一件换下一种。
         const dense = (port.coversNear?.(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
         const kind: 'cover' | 'trench' = port.assault() ? 'cover'
           : dense ? 'trench'
-          : (this.built.size % 4) !== 3 ? 'cover' : 'trench';
+          : this.lastKind.get(id) === 'cover' ? 'trench' : 'cover';
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
+          this.lastKind.set(id, kind);   // ★ 循环记账（造完→下一件换类型）
           this.releaseFor(id); this.spots.delete(id);
           this.dbg.last = kind === 'cover'
             ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
@@ -475,6 +481,7 @@ export class EngineerManager extends RoleManager {
     this.digs.clear();
     this.builtOnce.clear();
     this.built.clear();
+    this.lastKind.clear();
     this.builtBy.clear();
     this.spawnAt.clear();
     this.zoneOf.clear();

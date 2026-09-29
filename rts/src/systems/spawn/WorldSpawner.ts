@@ -416,8 +416,11 @@ export class WorldSpawner implements SwarmTierPort {
     const mobIndex = def ? this.deps.mobDefs.indexOf(def) : -1;
     if (!def || mobIndex < 0) {
       // ★ 非战斗清理（无定义可回池）→ 不算击杀（retire 原因收口，2026-09-18）
+      //   ★ 2026-09-29：retire 会发 enemy_removed → 离场订阅已摘除该实体；
+      //   此处**按当前下标复查**再摘（防用陈旧 idx 双删、踢掉列表里的无辜实体）。
       e.retire('recycled');
-      if (idx >= 0) this.deps.enemies.splice(idx, 1);
+      const i2 = this.deps.enemies.indexOf(e);
+      if (i2 >= 0) this.deps.enemies.splice(i2, 1);
       return;
     }
     const stats = this.mobAgentStats(def);
