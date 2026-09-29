@@ -1149,10 +1149,12 @@ console.log('[6] EngineerManager 重做（认区=大队管理器 / 预约 / 看�
   const ctx3 = { pos, ringMin: 0, ringMax: 0, now: 100 };
   eng3.assign(ctx3);
   ok(eng3.fortDbg.spawned === 0, '★ 预制配额：无活分区 → 不建队（不建发呆工兵）');
-  // 看门狗：队长原地不动 30s → 拉黑换点
-  for (let s = 3; s <= 33; s++) { ctx2.now = s; eng2.assign(ctx2); }
-  ok(eng2.fortDbg.unreach > 0, '★ 到件看门狗：超时未到 → 判不可达、拉黑换点');
-  ok(eng2.fortDbg.last.includes('拉黑') || eng2.fortDbg.unreach > 0, '看门狗留痕（fortDbg.unreach/last）');
+  // ★ 无到件计时（用户定 2026-09-29）：队长原地不动 60s → 不拉黑/不换点（可行即去造）
+  const tBefore = eng2.targets.get(21);
+  for (let s = 3; s <= 63; s++) { ctx2.now = s; eng2.assign(ctx2); }
+  const tAfter = eng2.targets.get(21);
+  ok(!!tBefore && !!tAfter && tBefore.x === tAfter.x && tBefore.z === tAfter.z,
+    '★ 无到件计时：可行即去造（60s 未到不拉黑/不换点）');
 }
 
 // ---------- 统一创建接口：只建本兵种 ∧ 只在对应防区（《战术侧架构.md》§3.D / I11） ----------

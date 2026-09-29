@@ -166,7 +166,6 @@ export class SwarmSystem {
   private tokenUsed = [0, 0, 0];
 
   constructor() {
-    this.nav.pathMul = (type, x, z) => this.data.pathMulFor(type, x, z);   // ★ 掩体折扣 × 兵种亲和（P1-3）
     // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
     //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种。
     //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。

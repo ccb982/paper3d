@@ -18,7 +18,6 @@ export interface SteerTable {
   /** ★ 爬山/涉水基础方法（可选；TerrainAssist 消费）：坡梯度 / 硬边界 / 掩体脚印 */
   slopeGradAt?(x: number, z: number): { gx: number; gz: number; mag: number };
   blockedAt?(x: number, z: number): boolean;
-  coverAt?(x: number, z: number): boolean;
   heightAt?(x: number, z: number): number;
   /** ★ 上坡点（表预处理；可爬坡边的连续段中心、坡面前 1m） */
   climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;

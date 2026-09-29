@@ -10,7 +10,7 @@
 //   ④ 续件：造完释放预约 → 立刻申请下一个；只要引擎不干预就一直造下去。
 //   ★ **件预约制**：一件（格点）全局唯一（本管理器 `reserved`）——防多队同点/一区多队扎堆；
 //   ★ **每拍复检**：件必须 ∈ 本队扇区 ∧ 带内 ∧ need 有效 ∧ 可达；不过 → 释放重取；
-//   ★ **到件看门狗**：发件后 `ARRIVE_TIMEOUT_S` 未进 WORK_R → 拉黑该点（BLACK_TTL_S）换点（`fortDbg.unreach`）；
+//   ★ **无到件计时**（用户定 2026-09-29）：寻路可行即去造——**不做途中计时/拉黑/区冷却**；
 //   ★ **补队（用户定）**：**分区里的工兵小队没了 → 补一支新小队**（在该分区锚点集中投放施工兵成队）；
 //   小队经 SquadManager 及时汇报，引擎不微操队员。
 //
@@ -43,10 +43,6 @@ export const ENGINEER_POLICY = {
   DIG_EVERY_S: 2,
   /** 战壕最大遍数（≈1.0m；受坑底硬阈值封顶） */
   MAX_DIGS: 5,
-  /** ★ 到件看门狗（秒）：发件后超时未到 → 判不可达，拉黑换点 */
-  ARRIVE_TIMEOUT_S: 25,
-  /** ★ 拉黑时长（秒）：到期自动解禁 */
-  BLACK_TTL_S: 60,
   /** ★ 补兵节拍（秒/只）：每扇区缺员的投放间隔 */
   /** ★ 补队节拍（秒；事态驱动：越后越频繁；用户定 2026-09-26） */
   REPLENISH_SLOW_S: 10,
@@ -120,8 +116,6 @@ export class EngineerManager extends RoleManager {
   private readonly spots = new Map<number, { x: number; z: number; score: number; at: number }>();
   /** ★ 件预约表（全局唯一：格点 → 队；防多队同点） */
   private readonly reserved = new Map<string, number>();
-  /** ★ 到件黑名单（格点 → 解禁时刻；到不了的件短期不再派） */
-  private readonly black = new Map<string, number>();
   /** 各队施工计时（秒） */
   private readonly work = new Map<number, number>();
   /** 各队战壕已挖遍数 */
@@ -137,9 +131,6 @@ export class EngineerManager extends RoleManager {
   private readonly zoneOf = new Map<number, number>();
   /** ★ 空转起始时刻（无件持续超时 → 换区；用户定 2026-09-26） */
   private readonly noSpotSince = new Map<number, number>();
-  /** ★ 分区连续到不了次数 / 不可用冷却（防“一直转圈”） */
-  private readonly zoneFails = new Map<number, number>();
-  private readonly zoneBadUntil = new Map<number, number>();
   /** ★ 分区“有活”记忆（滞回 15s；防数据回刷/带漂移导致建队抖动） */
   private readonly zoneWorkUntil = new Map<number, number>();
   /** ★ 投放在途宽限期（分区 → 时刻）：**投放后短期不重复投**（防同区连拍堆队） */
@@ -147,7 +138,7 @@ export class EngineerManager extends RoleManager {
   private readonly zoneTaken = new Set<number>();
   private zoneCursor = 0;
   /** 施工探针（G9） */
-  readonly fortDbg = { spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, unreach: 0, spawned: 0, last: '' };
+  readonly fortDbg = { spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, spawned: 0, last: '' };
   /** ★ 按队完工计数（探针：验证“每队真的开工”） */
   readonly builtBy = new Map<number, number>();
 
@@ -264,7 +255,6 @@ export class EngineerManager extends RoleManager {
     const ship = port.ship();
     port.refreshSector(ship.x, ship.z, band.rLo, band.rHi);
     // 黑名单过期清理
-    for (const [k, t] of [...this.black]) if (t <= now) this.black.delete(k);
     let working = 0, idle = 0;
     // ★ 补兵统计：按部署扇区累计工兵存活
     // ★ 预热门（用户定 2026-09-26）：8 区数据未扫完 → 不建不派（先站位，避早期误建队）
@@ -304,7 +294,7 @@ export class EngineerManager extends RoleManager {
       if (ready) {
         for (let i = 0; i < workZonesNow.length && sec < 0; i++) {
           const c = (workZonesNow[(this.zoneCursor + i) % workZonesNow.length] as number);
-          if (this.zoneTaken.has(c) || (this.zoneBadUntil.get(c) ?? 0) > now) continue;
+          if (this.zoneTaken.has(c)) continue;
           sec = c;
         }
       }
@@ -353,38 +343,11 @@ export class EngineerManager extends RoleManager {
         if (ang < 0) ang += TAU;
         const inSec = sec >= 0 && secOfAngle(ang) === sec;
         const arrived = Math.hypot(s.x - spot.x, s.z - spot.z) <= ENGINEER_POLICY.WORK_R;
-        const timedOut = !arrived && now - spot.at > ENGINEER_POLICY.ARRIVE_TIMEOUT_S;
         // ★ 复检：建成 / need 无效 / 出本区 / 不可达 → 换件（**不再因“出带”判死**：分到区就去造）
         const bad = this.built.has(k) || port.needAt(spot.x, spot.z) === null
           || !inSec || !port.canReach(id, spot.x, spot.z);
-        if (timedOut) {
-          // ★ 到件看门狗：到不了 → **邻域拉黑** + 换点（单点拉黑会在同一坑周围打转）
-          const bx = spot.x, bz = spot.z;
-          for (let ox = -4; ox <= 4; ox += 4) {
-            for (let oz = -4; oz <= 4; oz += 4) this.black.set(keyOf(bx + ox, bz + oz), now + ENGINEER_POLICY.BLACK_TTL_S);
-          }
-          this.fortDbg.unreach++;
-          this.fortDbg.last = `#${id} 到不了件 @${spot.x | 0},${spot.z | 0} → 拉黑换点`;
-          const sec2 = this.zoneOf.get(id) ?? -1;
-          if (sec2 >= 0) {
-            const n = (this.zoneFails.get(sec2) ?? 0) + 1;
-            this.zoneFails.set(sec2, n);
-            if (n >= 3) {
-              // ★ 连续 3 次到不了 → 判该区不可用（冷却 120s）并释放本区
-              this.zoneBadUntil.set(sec2, now + 120);
-              this.zoneFails.delete(sec2);
-              for (const [qid, qsec] of [...this.zoneOf]) {
-                if (qsec !== sec2) continue;
-                this.zoneOf.delete(qid);
-                this.noSpotSince.delete(qid);
-              }
-              this.zoneTaken.delete(sec2);
-              this.fortDbg.last = `分区${sec2} 连续到不了 → 冷却换区`;
-            }
-          }
-          this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
-          spot = undefined;
-        } else if (bad) {
+        void arrived;
+        if (bad) {
           this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
           spot = undefined;
         }
@@ -393,7 +356,7 @@ export class EngineerManager extends RoleManager {
       if (!spot && sec >= 0) {
         const exclude = (x: number, z: number): boolean => {
           const k = keyOf(x, z);
-          return this.built.has(k) || this.reserved.has(k) || (this.black.get(k) ?? 0) > now;
+          return this.built.has(k) || this.reserved.has(k);   // ★ 无拉黑（用户定 2026-09-29：寻路可行即去造）
         };
         const canReach = (x: number, z: number): boolean => port.canReach(id, x, z);
         // ★ noNewBuild（事态 0.45 后停新增）只约束**常规带**；扩带兜底不受限（用户定 2026-09-27：
@@ -463,7 +426,6 @@ export class EngineerManager extends RoleManager {
       // ★ 统一编制机制（用户定 2026-09-26）：**进图即建 = 缺了即补（同一条路）**——
       //   有队就不放；受预制配额（有活区数∩上限）控制；班底/大队不再产工兵（互不挤占）。
       if (squadsHere > 0 && aliveHere > 0) continue;          // 有队 → 不放
-      if ((this.zoneBadUntil.get(sec) ?? 0) > now) continue;  // 区被判不可用 → 不放
       if ((this.zoneSpawnGrace.get(sec) ?? 0) > now) continue; // 刚投过（在途）→ 不重复投
       const next = this.spawnAt.get(sec) ?? 0;
       if (next > now) continue;
@@ -512,7 +474,6 @@ export class EngineerManager extends RoleManager {
     super.clear();
     this.spots.clear();
     this.reserved.clear();
-    this.black.clear();
     this.work.clear();
     this.digs.clear();
     this.builtOnce.clear();
@@ -521,14 +482,12 @@ export class EngineerManager extends RoleManager {
     this.spawnAt.clear();
     this.zoneOf.clear();
     this.noSpotSince.clear();
-    this.zoneFails.clear();
-    this.zoneBadUntil.clear();
     this.zoneWorkUntil.clear();
     this.zoneSpawnGrace.clear();
     this.zoneTaken.clear();
     this.zoneCursor = 0;
     this.lastNow = -1;
     this.fortDbg.spots = 0; this.fortDbg.working = 0; this.fortDbg.idle = 0; this.fortDbg.built = 0;
-    this.fortDbg.maxWork = 0; this.fortDbg.unreach = 0; this.fortDbg.spawned = 0;
+    this.fortDbg.maxWork = 0; this.fortDbg.spawned = 0;
   }
 }

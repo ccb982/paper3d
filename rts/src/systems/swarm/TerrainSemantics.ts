@@ -142,7 +142,6 @@ export class TerrainSemantics {
   private readonly width = new Float32Array(SIDE * SIDE);
   private readonly losBlocked = new Uint8Array(SIDE * SIDE);
   private readonly passable = new Uint8Array(SIDE * SIDE);
-  private readonly hardRole = new Uint8Array(SIDE * SIDE);   // pit / h<-1.2
   private readonly water = new Uint8Array(SIDE * SIDE);
   private regionsArr: SemRegion[] = [];
 
@@ -166,7 +165,6 @@ export class TerrainSemantics {
         const h = sampler.heightAt(x, z);
         const role = sampler.roleAt(x, z);
         this.rawH[i] = h;
-        this.hardRole[i] = (role === 'pit' || h < -1.2) ? 1 : 0;
         this.water[i] = role === 'liquid' ? 1 : 0;
         this.passable[i] = 1;
         this.cls[i] = Sem.Neutral;
@@ -417,7 +415,6 @@ export class TerrainSemantics {
     for (let iz = 0; iz < SIDE; iz++) {
       for (let ix = 0; ix < SIDE; ix++) {
         const i = iz * SIDE + ix;
-        if (this.hardRole[i]) { this.cls[i] = this.water[i] ? Sem.Water : Sem.Pit; this.passable[i] = 0; continue; }
         if (this.water[i]) { this.cls[i] = Sem.Water; this.passable[i] = 1; }
         // 陡壁：邻格最大高差超 WALL_GRAD
         let dh = 0;
@@ -552,7 +549,6 @@ export class TerrainSemantics {
   private walkableQuick(ix: number, iz: number): boolean {
     if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return false;
     const i = iz * SIDE + ix;
-    if (this.hardRole[i]) return false;
     // 陡壁判定（与主分类同口径）
     let dh = 0;
     if (ix > 0) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i - 1]));

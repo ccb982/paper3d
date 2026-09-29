@@ -33,7 +33,7 @@ import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
-import { COVER_HP, coverBlocksLine, coverAt as coverAtEntity, snapshotCovers } from '../../../entity/CoverEntity';
+import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../../entity/CoverEntity';
 import type { UnitRole, SquadType } from '../../../entity/SwarmUnit';
 
 /** ★ 坑底硬阈值（低于此高度不可走 → 禁止再挖；与 EngineerManager 端口同口径） */
@@ -527,7 +527,6 @@ export class SwarmData {
   }
 
   private terrainWallAt(x: number, z: number, k: number): boolean {
-    if (RasterMap.current?.tileDefAt(x, z).genRole === 'pit') return true;
     const h = this.passTable.heightAt(x, z);
     for (const [dx, dz] of [[4, 0], [-4, 0], [0, 4], [0, -4]] as const) {
       if (Math.abs(this.passTable.heightAt(x + dx, z + dz) - h) > WALL_DH * k) return true;
@@ -638,17 +637,11 @@ export class SwarmData {
   }
 
   /** ★ 硬边界查询（墙面/坑水；表未就绪 → false）：移动/寻路的危险地形判定 */
-  /** ★ 硬通行（三张表原则，用户定 2026-09-25）：只认**地形真相**——坑（地块类型）恒为墙；
-   *  不再经 TerrainScore（它是越权的第四套网格，曾把平地判 blocked → 站桩卡死）。
-   *  水=可走（偏好另算）；挖深的普通地块不算硬格。 */
-  blockedAt(x: number, z: number): boolean {
-    return RasterMap.current?.tileDefAt(x, z).genRole === 'pit';
+  /** ★ 硬通行（用户定 2026-09-29）：**坑/战壕不参与寻路** → 无硬格。 */
+  blockedAt(_x: number, _z: number): boolean {
+    return false;
   }
 
-  /** ★ 掩体脚印（过掩体优化：SteerPick 候选惩罚 / TerrainAssist） */
-  coverAt(x: number, z: number): boolean {
-    return coverAtEntity(x, z);
-  }
 
   /** ★ 表高（SteerTable 桥；出水爬岸判定用） */
   heightAt(x: number, z: number): number {
@@ -724,22 +717,7 @@ export class SwarmData {
   }
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
-  /** ★ 掩体折扣（SquadPath 逐格乘算；用户定 2026-09-25 三张表原则）：
-   *  直接查**战壕掩体表**（`coverAtEntity` 掩体脚印）——不再经 TerrainScore 第四网格。 */
-  pathMulAt(x: number, z: number): number {
-    return coverAtEntity(x, z) ? 0.6 : 1;
-  }
 
-  /** ★ L3 寻路代价（重构 P1-3）：掩体折扣 × 兵种亲和——scoreFor 越高越便宜。
-   *  SquadPath/HPA 统一夹取 [0.5,1.5]；非表内/不可站 → 1（阻挡另判） */
-  pathMulFor(type: string, x: number, z: number): number {
-    const cover = coverAtEntity(x, z) ? 0.6 : 1;
-    const f = this.scoringFeats(x, z, this.viewPX, this.viewPZ);
-    if (!f || !f.pass) return 1;
-    const s = scoreForUnit(type as SquadType, f, this.liveWeights());
-    const aff = Math.max(-1, Math.min(1, s / PATH_AFF_N));
-    return cover * (1 - PATH_AFF_W * aff);
-  }
 
   /** ★ 水域查询（地形真相：地块角色 liquid；用户定 2026-09-25 三张表原则） */
   isWaterAt(x: number, z: number): boolean {

@@ -60,8 +60,6 @@ export class PassTable {
   private can = new Uint8Array(0);
   /** ②-⑤ 四向边净落差（n*4；米，带符号：正 = 该向升高） */
   private drop = new Float32Array(0);
-  /** 坑格（**地块类型 pit** 一律墙；边全禁，便于探针/诊断） */
-  private lethal = new Uint8Array(0);
   /** 水域格（可走；寻路加价用） */
   private water = new Uint8Array(0);
   /** ★ 爬坡位（用户定 2026-09-24）：weld（坡面）且该向净升 > CLIMB_MARK_RISE → 必须"程序化爬坡" */
@@ -76,7 +74,7 @@ export class PassTable {
   private climbRun = new Int16Array(0);   // per(cell*4+dir) → climbRuns 下标；-1 = 非上坡点
   ready = false;
   /** 建表统计（探针） */
-  readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, lethal: 0, ms: 0 };
+  readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, ms: 0 };
 
   /** 建表（一次；活动窗口与地形网格同步）。切工事/挖掘不重建。 */
   build(raster: RasterMap, cx: number, cz: number, r: number): void {
@@ -90,7 +88,6 @@ export class PassTable {
       this.can = new Uint8Array(n * 4);
       this.drop = new Float32Array(n * 4);
       this.h = new Float32Array(n);
-      this.lethal = new Uint8Array(n);
       this.water = new Uint8Array(n);
       this.climb = new Uint8Array(n * 4);
       this.weld = new Uint8Array(n * 4);
@@ -98,13 +95,12 @@ export class PassTable {
       this.can.fill(0);
       this.drop.fill(0);
       this.h.fill(0);
-      this.lethal.fill(0);
       this.water.fill(0);
       this.climb.fill(0);
       this.weld.fill(0);
     }
     const st = this.stats;
-    st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0; st.lethal = 0;
+    st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0;
     const sh = (x: number, z: number): number => raster.surfaceHeightAt(x, z);
 
     // ① 自身高度 + 深坑格
@@ -117,12 +113,6 @@ export class PassTable {
         this.h[i] = hh;
         const role = raster.tileDefAt(wx, wz).genRole;
         if (role === 'liquid') this.water[i] = 1;
-        // ★ 坑（**地块类型 pit**，不是战壕）→ 一律墙（用户定 2026-09-25）：
-        //   边全禁（绝对墙），与移动/SteerPick 的 blockedAt（pit=硬格）同口径。
-        if (role === 'pit') {
-          this.lethal[i] = 1;
-          st.lethal++;
-        }
       }
     }
 
@@ -166,8 +156,6 @@ export class PassTable {
     raster: RasterMap, ix: number, iz: number,
     i: number, j: number, hA: number, hB: number, dir: 0 | 1 | 2 | 3,
   ): [boolean, boolean, number, number, boolean, boolean, boolean] {
-    // 坑（地块类型）= 绝对墙（始终不可行，双向禁）
-    if (this.lethal[i] === 1 || this.lethal[j] === 1) return [false, false, hB - hA, 1, false, false, false];
     const net = hB - hA;
     // ★ 地形表裁决（与渲染同源）：4m 格 = 4m 块，直接问该块边
     const bx = Math.floor(this.ox / BLOCK_SIZE) + ix * BLOCKS_PER_CELL;
@@ -352,7 +340,6 @@ export class PassTable {
     this.can = new Uint8Array(0);
     this.drop = new Float32Array(0);
     this.h = new Float32Array(0);
-    this.lethal = new Uint8Array(0);
     this.water = new Uint8Array(0);
     this.climb = new Uint8Array(0);
     this.climbRun = new Int16Array(0);
