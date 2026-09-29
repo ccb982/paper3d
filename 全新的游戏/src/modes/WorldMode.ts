@@ -55,7 +55,7 @@ import {
   PLAYER_BULLET_SPEED, PLAYER_BULLET_LIFETIME,
   AIM_ASSIST_ANGLE, AIM_ASSIST_MAX, AIM_ASSIST_RANGE, AIM_ASSIST_STRENGTH,
   CROSSHAIR_CONVERGE_DIST, FIREABLE_AMMO,
-  SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME, COVER_SHOT_SPEED, MAX_COVER_PLAYER,
+  SENTINEL_SHOT_SPEED, SENTINEL_SHOT_LIFETIME, COVER_SHOT_SPEED,
   SENTINEL_IMPACT_MIN_DAMAGE, SENTINEL_IMPACT_ATK_RATIO, SENTINEL_MIN_DAMAGE, SENTINEL_ATK_RATIO,
   SENTINEL_MINE_RANGE, SENTINEL_WAKE_R, SENTINEL_MINE_SAMPLES, HEAL_PROC_MIN_HEAL,
   interpCamPose, _camMat, _camEye, _camAt, _camUp, _arcV, type WorldModeEnterContext,
@@ -2334,10 +2334,7 @@ export class WorldMode implements IGameMode {
     const cover = new CoverEntity(this.entities, this.scene, {
       x, y, z, heading, owner: 'player', buildTime: COVER_DEPLOY_BUILD_TIME, variant,
     });
-    this.playerCovers.push(cover);
-    while (this.playerCovers.length > MAX_COVER_PLAYER) {
-      this.playerCovers.shift()!.retire('recycled');
-    }
+    this.playerCovers.push(cover);   // ★ 不设上限（用户定 2026-09-29）：永不挤掉旧墙
   }
 
   /** 祖宗弹纹理（懒建缓存：祖宗素材第 0 帧合成） */

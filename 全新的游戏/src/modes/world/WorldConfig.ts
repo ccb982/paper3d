@@ -45,7 +45,7 @@ export const SENTINEL_SHOT_SPEED = 20;
 export const SENTINEL_SHOT_LIFETIME = 3.0;
 /** ★ 掩体弹（玩家遗物部署）：速度/寿命/同时存在上限 */
 export const COVER_SHOT_SPEED = 18;
-export const MAX_COVER_PLAYER = 6;
+
 /** ★ 祖宗弹命中伤害 = max(下限, 主角攻击力 × 系数)，结算后立即落地生成祖宗 */
 export const SENTINEL_IMPACT_MIN_DAMAGE = 8;
 export const SENTINEL_IMPACT_ATK_RATIO = 0.8;
