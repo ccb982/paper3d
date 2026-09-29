@@ -394,6 +394,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
       clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
       blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',   // 不可站地形（只坑；水一直可站——总攻吸附/掩护点用）
+      canReach: (id, x, z) => swarm.reachFrom(id, x, z),   // 发令门：总攻目标必须从本队真的可达（BFS）
       /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：**真跟到被保护对象旁（≤14m）** → 1.5m；
        *  没跟到（对象走了它还落下）→ 维持全局 4m（照收——"保护者没跟过去"不放过）。 */
       stuckR: (uid: number) => {

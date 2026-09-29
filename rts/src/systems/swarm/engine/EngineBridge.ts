@@ -83,6 +83,9 @@ export interface LiveView {
   /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：返回该单位的卡死窗口跨度阈值；
    *  缺省 = 全局 STUCK.BBOX_R（保护队"真跟到被保护对象旁"才放宽） */
   stuckR?(uid: number): number | undefined;
+  /** ★ 发令门（用户定 2026-09-29）：该目标从该队出发**真的可达**吗（缺省 = 不校验）——
+   *  总攻目标确认用它：**从足够远的平坦地做寻路**，只认可达点（不然接令后必站桩）。 */
+  canReach?(squadId: number, x: number, z: number): boolean;
   /** 计时销毁/卡死回收落地 */
   retire?(uid: number, why: string): boolean;
   /** 归一当日进度 0~1 */
@@ -284,18 +287,34 @@ export class EngineBridge {
     return this.timers.canFire(uid);
   }
 
-  /** ★ 舰旁可站点（用户定 2026-09-29 简化）：**以舰为中心**从 2m 起向外扫圆环（8 向），
-   *  返回**离舰最近的可站位置**（不可站 = 坑/水，`blockedAt` 口）。**不做可达校验**——
-   *  "能找到寻路到不了的地点算玩家厉害"，各队尽力靠近即可；扫不到 → 退回舰点。 */
-  private shipSidePoint(sx: number, sz: number): { x: number; z: number } {
+  /** ★ 舰旁可站点（用户定 2026-09-29）：**以舰为中心**从 2m 起向外扫圆环（8 向，≤40m），
+   *  返回**离舰最近、且从该队出发真正可达**的可站位置（不可站 = 坑；`blockedAt` 口；
+   *  可达 = 发令门 `canReach`——**从足够远的平坦地做寻路**，不认"看着近但走不到"的点）。
+   *  都不可达 → 退回舰点（各队尽力靠近）。按队缓存（≤2s 复检一次）。 */
+  private readonly assaultSpot = new Map<number, { x: number; z: number; at: number }>();
+  /** 负缓存（找不到可达点的时刻；2s 内不重扫——扫描含 BFS，防每拍重算） */
+  private readonly assaultNoSpot = new Map<number, number>();
+
+  private shipSidePoint(squadId: number, sx: number, sz: number, now: number): { x: number; z: number } | null {
+    const cached = this.assaultSpot.get(squadId);
+    if (cached && now - cached.at < 2 && (this.live.canReach?.(squadId, cached.x, cached.z) ?? true)) {
+      return { x: cached.x, z: cached.z };
+    }
+    const noAt = this.assaultNoSpot.get(squadId);
+    if (noAt !== undefined && now - noAt < 2) return null;
     for (let r = 2; r <= 40; r += 2) {
       for (let k = 0; k < 8; k++) {
         const a = (k / 8) * Math.PI * 2;
         const qx = sx + Math.cos(a) * r, qz = sz + Math.sin(a) * r;
-        if (!(this.live.blockedAt?.(qx, qz) ?? false)) return { x: qx, z: qz };
+        if (this.live.blockedAt?.(qx, qz) ?? false) continue;
+        if (this.live.canReach && !this.live.canReach(squadId, qx, qz)) continue;
+        this.assaultSpot.set(squadId, { x: qx, z: qz, at: now });
+        this.assaultNoSpot.delete(squadId);
+        return { x: qx, z: qz };
       }
     }
-    return { x: sx, z: sz };
+    this.assaultNoSpot.set(squadId, now);
+    return null;   // 40m 内没有本队可达的点 → 交 ② 兜底（常规巡逻前进循环）
   }
 
   /** 下一段推进点：从当前位置朝舰 PLAN_ADV 米（不越活动带前缘）；到带缘 → null。
@@ -364,7 +383,9 @@ export class EngineBridge {
     const ship = this.pos.ship() ?? this.pos.player();
     if (!ship) return;
     const assault = this.live.assault?.() === true;
-    const assaultT = assault ? this.shipSidePoint(ship.x, ship.z) : null;
+    if (!assault && (this.assaultSpot.size > 0 || this.assaultNoSpot.size > 0)) {
+      this.assaultSpot.clear(); this.assaultNoSpot.clear();   // 总攻结束 → 清目标/负缓存
+    }
     const tactical = this.tacticalPlan(now);
     let issued = 0;
 
@@ -387,7 +408,7 @@ export class EngineBridge {
       //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）；
       //   ★ 远程（用户定 2026-09-29）：**总攻不压舰——驻守躲掩体**（队长自主掩体循环：
       //     找更靠舰的掩体、躲其背参照侧；掩体由工兵掩护施工建在它前面）。
-      if (assault && assaultT && !tactical.has(rec.id) && rec.role !== 'engineer') {
+      if (assault && !tactical.has(rec.id) && rec.role !== 'engineer') {
         if (rec.role === 'ranged') {
           const same = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
           if (!same) {
@@ -395,22 +416,28 @@ export class EngineBridge {
           }
           continue;
         }
-        // ★ 到点转驻守（用户定 2026-09-29）：近战压到舰旁点后改发 hold（defend→garrison）——
-        //   到点站住是合法状态（判官豁免）；开火照打（独立子系统）。此前到点后无位移又无豁免 → 被判官收。
-        const arrived = Math.hypot(assaultT.x - sp.x, assaultT.z - sp.z) <= EngineBridge.HOLD_R;
-        if (arrived) {
-          const sameH = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
-          if (!sameH) {
-            if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
+        // ★ 目标=**以舰为中心、从本队真的可达的最近可站点**（每队各算各的；2s 缓存复检）
+        const at = this.shipSidePoint(rec.id, ship.x, ship.z, now);
+        if (at) {
+          // ★ 到点转驻守（用户定 2026-09-29）：近战/飞天压到点后改发 hold（defend→garrison）——
+          //   到点站住是合法状态（判官豁免）；开火照打（独立子系统）。此前到点后无位移又无豁免 → 被判官收。
+          const arrived = Math.hypot(at.x - sp.x, at.z - sp.z) <= EngineBridge.HOLD_R;
+          if (arrived) {
+            const sameH = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
+            if (!sameH) {
+              if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
+            }
+            continue;
+          }
+          const same = cur && cur.order.state === 'assault' && cur.order.kind === 'patrol'
+            && Math.hypot(cur.order.target.x - at.x, cur.order.target.z - at.z) <= 1;
+          if (!same) {
+            if (this.send(rec.id, 'assault', at, now, { kind: 'patrol', force: true })) issued++;
           }
           continue;
         }
-        const same = cur && cur.order.state === 'assault' && cur.order.kind === 'patrol'
-          && Math.hypot(cur.order.target.x - assaultT.x, cur.order.target.z - assaultT.z) <= 1;
-        if (!same) {
-          if (this.send(rec.id, 'assault', assaultT, now, { kind: 'patrol', force: true })) issued++;
-        }
-        continue;
+        // ★ 兜底（用户定 2026-09-29）：**寻路不到舰 → 常规巡逻前进循环**（下落走 ④ 段进兜底：
+        //   行军段↔巡逻段交替、朝舰前缘推；不强求到达，尽力往前——不再原地站桩被判官收）。
       }
 
       // ②.5 ★ §3.G 保护/支援/后撤（只产标签；优先于工活与兜底）
