@@ -45,7 +45,7 @@ import {
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import { DANGER } from './SwarmDanger';
 import type { PassTable } from './nav/PassTable';
-import {SWARM, AUTONOMY, REACH_SHORT_LOS_R } from './SwarmConfig';
+import {SWARM, AUTONOMY } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
 
@@ -151,7 +151,6 @@ export class SwarmSystem {
     grid: this.grid,
     squadStateOf: (id) => this.squadStateOf?.(id) ?? null,
     memberStep: (uid, x, z, lx, lz, now, st) => this.nav.memberStep(uid, x, z, lx, lz, now, st),
-    walkableLine: (ax, az, bx, bz) => this.walkableLine(ax, az, bx, bz),
   };
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
@@ -975,29 +974,19 @@ export class SwarmSystem {
   /** ★ P4 白名单探针：队路径重规划计数 */
   get navDbg(): SquadNavigator['dbg'] { return this.nav.dbg; }
 
-  /** ★ 可行性直达检查（工兵选点等）：直线可走（读表） */
-  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
-    return this.nav.feas.walkableLine(ax, az, bx, bz);
-  }
-
-  /** ★ 有向可达（表图 BFS；可绕障——**允许绕出扇区**） */
-  reachable(ax: number, az: number, bx: number, bz: number): boolean {
-    const out: { x: number; z: number }[] = [];
-    return this.nav.feas.find(ax, az, bx, bz, out) === 'ok';
-  }
-
-  /** ★ 队长可达核验（**唯一口径**；用户定 2026-09-25）：
-   *  · 长途（> REACH_SHORT_LOS_R）→ **BFS**（可行路径；可绕障）
-   *  · 短程 → **LOS 快筛**（直线可走即过；否则再 BFS 兜底）
-   *  取件门（`engineerPort.canReach`）与发令 ③（`OrderValidator.canReach`）共用本实现。 */
+  /** ★ 队长可达核验（**唯一口径**；用户定 2026-09-25/29）：**只认可行性表 BFS**（不用 LOS）。
+   *  取件门与巡逻腿共用本实现。 */
   reachFrom(id: number, x: number, z: number): boolean {
     const sq = this.squads.get(id);
     const lead = sq?.members.get(sq.leaderUid);
     if (!lead) return false;
-    if (Math.hypot(x - lead.x, z - lead.z) <= REACH_SHORT_LOS_R) {
-      return this.walkableLine(lead.x, lead.z, x, z) || this.reachable(lead.x, lead.z, x, z);
-    }
     return this.reachable(lead.x, lead.z, x, z);
+  }
+
+  /** ★ 有向可达（表图 BFS；可绕障）——**blocked 才拒绝；表外无法裁决 → 放行**（用户定 2026-09-29：不用 LOS） */
+  reachable(ax: number, az: number, bx: number, bz: number): boolean {
+    const out: { x: number; z: number }[] = [];
+    return this.nav.feas.find(ax, az, bx, bz, out) !== 'blocked';
   }
 
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */

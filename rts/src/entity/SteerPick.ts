@@ -15,9 +15,8 @@ export interface SteerTable {
   scoreTypeAt?(type: string, x: number, z: number): number | null;
   /** ★ 水域查询（可选）：水中提高"上岸"权重 */
   isWaterAt?(x: number, z: number): boolean;
-  /** ★ 爬山/涉水基础方法（可选；TerrainAssist 消费）：坡梯度 / 直线可走 / 硬边界 / 掩体脚印 */
+  /** ★ 爬山/涉水基础方法（可选；TerrainAssist 消费）：坡梯度 / 硬边界 / 掩体脚印 */
   slopeGradAt?(x: number, z: number): { gx: number; gz: number; mag: number };
-  walkableLine?(ax: number, az: number, bx: number, bz: number): boolean;
   blockedAt?(x: number, z: number): boolean;
   coverAt?(x: number, z: number): boolean;
   heightAt?(x: number, z: number): number;

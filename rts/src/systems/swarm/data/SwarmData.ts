@@ -460,7 +460,7 @@ export class SwarmData {
       // ★ 舰船高地排除（用户定 2026-09-26）：高地（含其上坑洞）不算防区 → 不发工兵件
       needAt: (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)),
       // ★ 取件门（用户定 2026-09-25）：长途 BFS；短程 LOS 快筛——唯一实现在 `SwarmSystem.reachFrom`
-      canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),
+      canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),   // ★ 取件门=可行性表 BFS（用户定 2026-09-29：不用 LOS）
       assault: () => this.battlePosture === 'assault',
       noNewBuild: () => this.lastDayRaw >= 0.45,
       aliveOfSquad: (id) => this.swarm.squads.get(id)?.members.size ?? 0,
@@ -648,11 +648,6 @@ export class SwarmData {
   /** ★ 掩体脚印（过掩体优化：SteerPick 候选惩罚 / TerrainAssist） */
   coverAt(x: number, z: number): boolean {
     return coverAtEntity(x, z);
-  }
-
-  /** ★ 直线可走（SteerTable 桥；TerrainAssist 出水方向用） */
-  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
-    return this.swarm.walkableLine(ax, az, bx, bz);
   }
 
   /** ★ 表高（SteerTable 桥；出水爬岸判定用） */

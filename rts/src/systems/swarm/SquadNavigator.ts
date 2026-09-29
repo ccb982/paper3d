@@ -169,14 +169,6 @@ export class SquadNavigator {
     return step;
   }
 
-  routeDir(state: SquadOrderState | null, x: number, z: number): { x: number; z: number } | null {
-    const rp = this.routeCursor(state, x, z);
-    if (!rp) return null;
-    const rx = rp.x - x, rz = rp.z - z;
-    const rl = Math.hypot(rx, rz);
-    return rl > 1e-3 ? { x: rx / rl, z: rz / rl } : null;
-  }
-
   /** ★ 成员路线缓存（用户定 2026-09-26）：**定时（或队长位移超限）对队长位置做一次长寻路**；
    *  路只在缓存里，供"沿路走格边步"用（全部移动来自长短寻路）。 */
   private readonly memberRoutes = new Map<number, { path: { x: number; z: number; climb?: boolean }[]; at: number; gx: number; gz: number; idx?: number; cidx?: number }>();
@@ -543,7 +535,6 @@ export class SquadNavigator {
         // ★ 凭证口径（用户定 2026-09-26）：**队长需凭证；成员/代理无条件上送（无需凭证）**。
         let needClimb = isLead ? (state?.climbCred !== undefined) : true;
         let needClimbPt = state?.climbCred;
-        let memberDirect: { dx: number; dz: number } | null = null;   // ★ 成员兜底方向（direct）
         // ★ 飞行直航单源（空中层，用户定 2026-09-27）：空中单位不走地面 corridor/memberStep——
         //   队长飞命令目标、成员飞队长；否则地面层判等/格边步会导致路点不推进（卡水/抖）。
         if (u.isAir) {
@@ -553,17 +544,13 @@ export class SquadNavigator {
         }
         if (!isLead) {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, lead.x, lead.z, now, state);
-          if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; if (ms.direct) memberDirect = { dx: ms.dx, dz: ms.dz }; }
+          if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
           else { sx = upos0.x; sz = upos0.z; }
           if (ms?.climbPt) needClimbPt = ms.climbPt;   // 成员路线带坡点则用其点位（凭证本身不需要）
         }
         u.formSlot = rank;
         // ★ 同链格边步（队长沿走廊游标 / 成员沿"自己的到队长路线"）；无步 → 站住
         let sdx = 0, sdz = 0;
-        if (memberDirect) {
-          // ★ 成员寻路兜底（direct）：直接用"朝队长"方向（不再复算 → 防再次失败站死）
-          sdx = memberDirect.dx; sdz = memberDirect.dz;
-        } else {
         if (isLead) {
           const nd2 = this.nudge.get(sid);
           if (nd2) {
@@ -584,16 +571,11 @@ export class SquadNavigator {
           else {
             const e3 = this.edgeFromCorridor(state, upos0.x, upos0.z);
             if (e3) { sdx = e3.dx; sdz = e3.dz; }
-            else {
-              const rd = this.routeDir(state, upos0.x, upos0.z);   // ★ 路线修正（同 L2）
-              if (rd) { sdx = rd.x; sdz = rd.z; }
-            }
           }
           }
         } else {
           const e3 = this.edgeGreedy(upos0.x, upos0.z, sx, sz);
           if (e3) { sdx = e3.dx; sdz = e3.dz; }
-        }
         }
         const mt = u.moveTarget;
         if (mt) { mt.x = sx; mt.y = 0; mt.z = sz; mt.climb = needClimb; }

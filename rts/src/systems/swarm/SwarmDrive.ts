@@ -27,7 +27,6 @@ export interface DriveHost {
   readonly grid: CrowdGrid;
   squadStateOf(id: number): SquadOrderState | null;
   memberStep(uid: number, x: number, z: number, lx: number, lz: number, now: number, state?: SquadOrderState | null): { dx: number; dz: number; done: boolean; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null;
-  walkableLine(ax: number, az: number, bx: number, bz: number): boolean;
 }
 
 /** 人群分离 scratch（本模块独占；零分配） */
@@ -75,10 +74,8 @@ export function driveAgent(host: DriveHost, i: number, dt: number): void {
         const e = host.nav.edgeFromCorridor(st, p.x[i], p.z[i]);
         if (e) { dx = e.dx; dz = e.dz; edgeMode = true; }
         else {
-          // ★ 路线修正（用户定 2026-09-26）：有走廊 → 朝**当前路点**走（绝不朝最终目标直线）
-          const rd = host.nav.routeDir(st, p.x[i], p.z[i]);
-          // ★ M0：无走廊/无路点 → **持令原地停**（硬边接触修正由 inside 分支处理）
-          if (rd) { dx = rd.x; dz = rd.z; } else { dx = 0; dz = 0; p.atomMove[i] = 255; }
+          // ★ 无格边步 → 停（用户定 2026-09-29：**不做直行兜底**，位移只走表校验的格边步）
+          dx = 0; dz = 0; p.atomMove[i] = 255;
         }
       }
       }

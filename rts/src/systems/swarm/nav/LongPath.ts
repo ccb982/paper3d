@@ -92,32 +92,6 @@ export class FeasibilityPath {
   }
 
   /** 线段可走（2m 采样；有向边位）——贪心段候选过滤用 */
-  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
-    const t = this.table;
-    if (!t || !t.ready) return false;
-    const d = Math.hypot(bx - ax, bz - az);
-    const n = Math.max(1, Math.ceil(d / 2));
-    let px = ax, pz = az;
-    for (let k = 1; k <= n; k++) {
-      const q = k / n;
-      const x = ax + (bx - ax) * q, z = az + (bz - az) * q;
-      const dx = x - px, dz = z - pz;
-      const sx = Math.abs(dx) < 0.4 ? 0 : (dx > 0 ? 1 : -1);
-      const sz = Math.abs(dz) < 0.4 ? 0 : (dz > 0 ? 1 : -1);
-      if (sx !== 0 || sz !== 0) {
-        if (!t.canStep(px, pz, sx, sz)) return false;
-        // ★ 上坡必须横平竖直：斜向采样步只许平/下坡
-        if (sx !== 0 && sz !== 0) {
-          const h0 = t.heightAt(px, pz);
-          const h1 = t.heightAt(x, z);
-          if (h1 > h0) return false;
-        }
-      }
-      px = x; pz = z;
-    }
-    return true;
-  }
-
   /** 可行性 BFS（8 向；有向边位）。ok → out 填稀疏走廊（≤8 路点，含精确终点）。
    *  ★ 爬坡位（用户定 2026-09-24）：路点带 `climb` = "到此点必须程序化爬坡"（坡面净升超阈值）。 */
   find(
