@@ -535,6 +535,12 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         },
         // ★ 去哪就去哪（简化 2026-09-25）：队长目标 = 下一路点 / 队令目标（无锚点层）
         leaderTarget: (state, _squad, lx, lz) => currentTargetOf(state, lx, lz),
+        // ★ 驻守（队长状态）：舰位 + 掩体表（自主掩体循环；毁件自然消失）
+        shipPoint: () => ({ x: hooks.shipX, z: hooks.shipZ }),
+        playerPoint: () => ({ x: hooks.playerX, z: hooks.playerZ }),
+        coversNear: (x: number, z: number, r: number) => swarm.data.holeTable.covers
+          .filter((c) => Math.hypot(c.x - x, c.z - z) <= r)
+          .map((c) => ({ x: c.x, z: c.z })),
         coverFrom: (tx, tz, x, z) => swarm.data.debugHasCover(tx, tz, x, z),
         clampRing: (x, z) => swarm.data.clampToRing(x, z),
         fireAllowed: (uid) => shadowBridge?.timers.canFire(uid) ?? true,

@@ -24,6 +24,7 @@ import { Protect } from '../src/systems/swarm/engine/Protect.ts';
 import { interpretLeader } from '../src/systems/swarm/squad/CommandLang.ts';
 import { FortifyPlanner, FORTIFY_SECTORS } from '../src/systems/swarm/FortifyPlanner.ts';
 import { coverPoint, threePoint } from '../src/systems/swarm/CoverGeom.ts';
+import { stepHoldCover, newHoldCoverState } from '../src/systems/swarm/squad/HoldCover.ts';
 import { SectorBuilder, SECTOR_COUNT } from '../src/systems/swarm/tactics/SectorBuilder.ts';
 import { SquadCreation, type CreationPort } from '../src/systems/swarm/engine/SquadCreation.ts';
 import { BattalionManager, BATTALION_SIZE, SQUAD_FULL_COMBAT, SQUAD_FULL_BUILDER } from '../src/systems/swarm/tactics/BattalionManager.ts';
@@ -1061,6 +1062,28 @@ console.log('[12o] §3.C 掩护施工：查询保护对象位置 → 建造点�
   const wp2 = br2.wardSpotOf(30);
   ok(!!wp2 && Math.abs(wp2.x - 88.4) < 0.6 && wp2.x < 90,
     '★ 与舰共线：落点=更靠舰者(工兵)朝舰侧 1.6m（不再造到工兵背后）');
+}
+
+// ---------- 驻守=队长状态：自主掩体循环（用户定 2026-09-29） ----------
+console.log('[12p] 驻守状态：自主掩体循环（藏→毁→撤→再进）');
+{
+  const ship = { x: 0, z: 0 };
+  const st = newHoldCoverState(0);
+  const covers = [{ x: 98, z: 0 }, { x: 110, z: 0 }, { x: 88, z: 0 }];
+  const t1 = stepHoldCover(st, 0, { x: 120, z: 0 }, ship, covers);
+  ok(st.phase === 'hide' && st.cover?.x === 88 && Math.abs(t1.x - 89.6) < 0.1, '★ 藏：选更靠舰的掩体、躲其背舰侧');
+  const t2 = stepHoldCover(st, 1, { x: 89.6, z: 0 }, ship, [{ x: 98, z: 0 }, { x: 110, z: 0 }]);
+  ok(st.phase === 'hide' && st.cover?.x === 110 && Math.abs(t2.x - 111.6) < 0.1, '★ 毁：改躲更远（更安全）掩体');
+  const t3 = stepHoldCover(st, 20, { x: 111.6, z: 0 }, ship, [{ x: 98, z: 0 }, { x: 110, z: 0 }]);
+  ok(st.phase === 'hide' && st.cover?.x === 98 && Math.abs(t3.x - 99.6) < 0.1, '★ 进：藏够 15s → 再向舰前移一个掩体');
+  const t4 = stepHoldCover(st, 50, { x: 99.6, z: 0 }, ship, []);
+  ok(st.phase === 'retreat' && t4.x > 109, '★ 无掩体 → 背舰脱离（后撤）');
+  // ★ 玩家靠近（用户定 2026-09-29）：参照换玩家 + 掩体检测校核；不达标 → 绕掩体找"真被挡"点
+  const cf = (_tx: number, _tz: number, _x: number, z: number) => z >= 1.5;   // 仅 +z 侧真被挡
+  const st2 = newHoldCoverState(0);
+  const t5 = stepHoldCover(st2, 0, { x: 111.6, z: 0 }, ship, [{ x: 100, z: 0 }],
+    { player: { x: 95, z: 0 }, coverFrom: cf });
+  ok(st2.phase === 'hide' && t5.z >= 1.4, '★ 玩家靠近：掩体检测调整（确保真藏在掩体后）');
 }
 
 // ---------- 工兵重做：预约制 + 每拍复检 + 看门狗 + 补兵（用户定 2026-09-26） ----------
