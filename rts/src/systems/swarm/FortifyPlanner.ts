@@ -36,6 +36,8 @@ export class FortifyPlanner {
   readonly safety: number[] = Array(FORTIFY_SECTORS).fill(-Infinity);
   /** ★ 每扇区是否已扫描（区分"未扫描"与"扫描后无可行点"——后者不阻塞前推） */
   readonly scanned: boolean[] = Array(FORTIFY_SECTORS).fill(false);
+  /** ★ 扇区脏标记（用户定 2026-09-29）：事态系数变化/掩体表变动 → 查询前按需重算 */
+  readonly dirty: boolean[] = Array(FORTIFY_SECTORS).fill(true);
   /** ★ 每扇区候选点（需求降序；仅扇区内 ∧ 带内；targetOf 逐个试可达） */
   readonly candidates: FortifyPick[][] = Array.from({ length: FORTIFY_SECTORS }, () => []);
   private cursor = 0;
@@ -49,7 +51,17 @@ export class FortifyPlanner {
   ): void {
     const si = this.cursor;
     this.cursor = (this.cursor + 1) % FORTIFY_SECTORS;
+    this.refreshAt(si, cx, cz, rLo, rHi, needAt);
+  }
+
+  /** ★ 立即重算指定扇区（查询期按需刷新；用户定 2026-09-29）——
+   *  评分读的是"刷新时刻"的事态权重 + 三张表；轮询刷新会让查询吃到最多 ~4s 的旧分。 */
+  refreshAt(
+    si: number, cx: number, cz: number, rLo: number, rHi: number,
+    needAt: (x: number, z: number) => number | null,
+  ): void {
     this.scanned[si] = true;
+    this.dirty[si] = false;
     const TAU = Math.PI * 2;
     const a0 = (si / FORTIFY_SECTORS) * TAU;
     const a1 = ((si + 1) / FORTIFY_SECTORS) * TAU;
@@ -70,6 +82,43 @@ export class FortifyPlanner {
     const best = list[0] as FortifyPick | undefined;
     this.safety[si] = best ? best.score : -Infinity;
     this.dbg.sweeps++;
+  }
+
+  /** ★ 标脏（位移/掩体表变化；按 角度→扇区 归属；用户定 2026-09-29） */
+  markDirty(x: number, z: number, cx: number, cz: number): void {
+    if (!Number.isFinite(cx) || !Number.isFinite(cz)) { this.dirty.fill(true); return; }
+    const TAU = Math.PI * 2;
+    let ang = Math.atan2(z - cz, x - cx);
+    if (ang < 0) ang += TAU;
+    const si = Math.min(FORTIFY_SECTORS - 1, Math.floor((ang / TAU) * FORTIFY_SECTORS));
+    this.dirty[si] = true;
+  }
+
+  isDirty(sec: number): boolean {
+    return this.dirty[sec] === true;
+  }
+
+  /** ★ 建造账本（不依赖懒物化；做"掩体加成"与密度判定的真源；用户定 2026-09-29） */
+  private readonly builtCovers = new Map<string, { x: number; z: number; kind: 'cover' | 'trench' }>();
+  private postureMark = Number.NaN;
+
+  recordBuilt(x: number, z: number, kind: 'cover' | 'trench'): void {
+    this.builtCovers.set(`${Math.round(x / 4)},${Math.round(z / 4)}`, { x, z, kind });
+  }
+
+  builtList(): Iterable<{ x: number; z: number; kind: 'cover' | 'trench' }> {
+    return this.builtCovers.values();
+  }
+
+  /** ★ 查询期保新（用户定 2026-09-29）：扇区标脏 或 事态系数变化 → 立即重算该扇区；
+   *  否则查询会吃到轮询刷新的旧分（评分读的是刷新时刻的 事态权重 + 三张表）。 */
+  ensureFresh(
+    sec: number, cx: number, cz: number, rLo: number, rHi: number,
+    needAt: (x: number, z: number) => number | null, posture: number,
+  ): void {
+    if (!this.dirty[sec] && this.postureMark === posture) return;
+    this.refreshAt(sec, cx, cz, rLo, rHi, needAt);
+    this.postureMark = posture;
   }
 
   /** 需求降序插入（同分保序；超 CAND_K 截尾） */

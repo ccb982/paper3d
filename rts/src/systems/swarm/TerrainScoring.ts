@@ -121,10 +121,11 @@ export interface ScoringSources {
 }
 
 /** ★ 掩体/制高加成表（扫描产物 + 已建掩体；键同旧 TerrainScore.key） */
-export function buildBonus(plan: DefensePlan, builtCovers: readonly { x: number; z: number }[]): Map<string, number> {
+export function buildBonus(plan: DefensePlan, built: readonly { x: number; z: number; kind?: string }[]): Map<string, number> {
   const bonus = new Map<string, number>();
   for (const p of plan.posts) bonus.set(bonusKey(p.x, p.z), p.kind === 'cover' ? 1.2 : 0.8);
-  for (const c of builtCovers) bonus.set(bonusKey(c.x, c.z), 2.5);   // ★ 造好的掩体 = 新有利位置
+  // ★ 已建工事 = 综合评分上升（掩体 2.5 / 坑洞 1.2；含未物化账本；用户定 2026-09-29）
+  for (const c of built) bonus.set(bonusKey(c.x, c.z), c.kind === 'trench' ? 1.2 : 2.5);
   return bonus;
 }
 

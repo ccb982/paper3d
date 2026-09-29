@@ -342,7 +342,7 @@ export class SwarmData {
         const smp0 = samplerFor(raster);
         this.scoringSrc = {
           raster, semantics: this.semantics, holeMask: this.holeMask, passTable: this.passTable,
-          plan: this.plan, bonus: buildBonus(this.plan, this.holeTable.covers),
+          plan: this.plan, bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
           weights: this.distGain === 1 ? w0 : { ...w0, dist: w0.dist * this.distGain },
           heightAt: (x: number, z: number) => smp0.heightAt(raster, x, z),
           playerX, playerZ,
@@ -467,13 +467,15 @@ export class SwarmData {
       refreshSector: (cx, cz, rLo, rHi) =>
         this.fortify.refreshOne(cx, cz, rLo, rHi,
           (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z))),
-      pickSpot: (sec, rLo, rHi, canReach, exclude, from) =>
-        this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude, from),
+      pickSpot: (sec, rLo, rHi, canReach, exclude, from) => {
+        this.fortify.ensureFresh(sec, this.lastShipX, this.lastShipZ, rLo, rHi, (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)), this.postureP);   // ★ 查询前保新
+        return this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude, from);
+      },
       canDig: (x, z) => {
         const raster = RasterMap.current;
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
       },
-      cover: (x, z, v) => this.buildCover?.(x, z, v),
+      cover: (x, z, v) => { this.fortify.recordBuilt(x, z, 'cover'); this.buildCover?.(x, z, v); },
       // ★ 补队（用户定）：工兵缺队 → 请求生成施工兵（统一编制机制）
       requestSpawn: (role, x, z) => {
         if (role !== 'builder' || !this.spawnBuilder) return false;
@@ -483,11 +485,10 @@ export class SwarmData {
       posture: () => this.postureP,
       mainSectors: () => this.mainSectors,
       sectorsScanned: () => this.fortify.scanned.every(Boolean),
-      dig: (x, z) => this.digTrench?.(x, z),
+      dig: (x, z) => { this.fortify.recordBuilt(x, z, 'trench'); this.digTrench?.(x, z); },
       markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
     };
   }
-
   /** ★ 环形活动区（事态函数单源；**1Hz**）：宽环 → 大圆 → 外圈放宽 → 点；夹环基准 = 舰船 */
   private ringTick(shipX: number, shipZ: number): void {
     if (!this.plan) return;
@@ -763,6 +764,7 @@ export class SwarmData {
   /** ★ 地形脏区（模式层挖改/建造都调这个）：noteTerrainDig 单入口别名 */
   markTerrainDirty(x: number, z: number, r = 12): void {
     this.noteTerrainDig(x, z, r);
+    if (Number.isFinite(this.lastShipX)) this.fortify.markDirty(x, z, this.lastShipX, this.lastShipZ); else this.fortify.dirty.fill(true);   // ★ 表变化→标脏（查询前即时重算）
   }
 
   /** ★ 调试：态势一行摘要（覆盖层/测试读取） */
