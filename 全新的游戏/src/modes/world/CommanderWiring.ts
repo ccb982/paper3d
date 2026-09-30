@@ -31,8 +31,9 @@ export interface CommanderWiringDeps {
 
 /** ★ 一次性接线（enter）：buildCover / digTrench / spawnMob */
 export function wireCommanderPorts(d: CommanderWiringDeps): void {
-  d.data.buildCover = (x, z, v) =>
-    buildEnemyCover(d.entities, d.scene, x, d.surfaceAt(x, z), z, v, d.data.defensePlan);
+  // ★ 掩体朝向修正（rts 口径）：正面朝**舰**（威胁来源）；件数据带 face（岗哨斜件/封口）优先
+  d.data.buildCover = (x, z, v, face) =>
+    buildEnemyCover(d.entities, d.scene, x, d.surfaceAt(x, z), z, v, d.data.defensePlan, face ?? d.playerPos());
   d.data.digTrench = (x, z) => {
     d.chunks?.digRect(x, z, 3, 3);   // ★ 7×7 宽面：逐级缩小约束下才能挖深
   };

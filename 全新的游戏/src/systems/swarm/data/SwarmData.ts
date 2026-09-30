@@ -85,7 +85,7 @@ export class SwarmData {
   private rhythmT = 0;
   /** 太阳钟口径：落地时的当日进度（节奏从落地起算 → t01 在黄昏到达 1；<0 = 待定） */
   private t01Base = -1;
-  private static readonly DAY_RHYTHM_S = 450;
+  private static readonly DAY_RHYTHM_S = 600;   // ★ 本体口径：一天 10 分钟（450→600）
   /** 挑衅采样：最近命中戳（防重复计）+ 击杀差分 */
   private readonly hitSeen = new Map<number, number>();
   private lastKills = 0;

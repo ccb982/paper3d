@@ -86,7 +86,7 @@ export class PlanData {
     if (!this.plan) return;
     const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
     const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
-    const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m
+    const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m（本体：落点在舰外 ~160m → 环在走廊上）
     const rb = PlanData.ringBounds(p, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
     this.frontMinD = rb.minD;
     this.frontMaxD = rb.maxD;

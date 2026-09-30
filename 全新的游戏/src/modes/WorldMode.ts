@@ -44,7 +44,7 @@ import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
 import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint } from './world/LandingCamera';
-import { setSimNow } from '../services/SimClock';
+import { setSimNow, simNow } from '../services/SimClock';
 import { wireCommanderPorts } from './world/CommanderWiring';
 import { installEngineWiring } from './world/EngineWiring';
 import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
@@ -91,6 +91,13 @@ import { setPropAtlas, plantGustAt, plantDropTryClaim, tickPlantGust, PROP_GUST_
 import { aiSystem } from '../systems/ai/AISystem';
 import type { BehaviorContext, TargetCandidate } from '../systems/ai/behaviors';
 import { SwarmSystem, SWARM, type SwarmHooks } from '../systems/swarm/SwarmSystem';
+import { separationPushes, type SepBody } from '../systems/swarm/EntitySeparation';
+import { createRasterProbe } from '../entity/base/RasterProbe';
+import { SHORE_CLIMB_MAX } from '../entity/TerrainAssist';
+import { EDGE_CLIFF_BAND } from '../services/map/Refinements';
+import { canShift } from '../entity/base/CharacterCore';
+import { CoverLazy } from './world/CoverLazy';
+import { buildEnemyCover } from './world/EnemyCoverBuild';
 import { dayT01FromHour } from '../systems/swarm/PostureFn';
 import { Director, type DirectorHooks } from '../systems/swarm/Director';
 import { computeEnemyScale, computeThreat, threatTier, type EnemyScale, type ThreatProfile } from '../systems/swarm/EnemyScaling';
@@ -246,6 +253,13 @@ export class WorldMode implements IGameMode {
   private spawnChunkKey = -1;
   /** ★ 新蜂群引擎装配（引擎+队长核+战术侧；《移植清单》P2） */
   private engineWire: ReturnType<typeof installEngineWiring> | null = null;
+  /** ★ 工事懒物化（rts 口径）：远处只记数据，近处再物化 */
+  private coverLazy: CoverLazy | null = null;
+  /** ★ 实体互推（H2 闸门）探针与提示高度 */
+  private sepHintY = 0;
+  private sepProbe: ReturnType<typeof createRasterProbe> | null = null;
+  private enemyRemovedUnsub?: () => void;
+  private readonly _pv = new THREE.Vector3();
   /** ★ 模拟时钟（玩法计时唯一真源；每子步写入） */
   private simT = 0;
   /** ★ P4→日节律：战斗节奏导演（平时少量游荡 / 每天 1~2 波大举进攻 + 预警 + 按天强化） */
@@ -762,11 +776,30 @@ export class WorldMode implements IGameMode {
       ship: () => ({ x: this.ship.position.x, z: this.ship.position.z }),
       surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0),
     });
-    // ★ 进图即建表（防"未落地 → 无计划/无表 → 敌人不动"；落地时 finishDock 会重建成真实落点）
-    this.swarm.data.planDefense(this.ship.position.x, this.ship.position.z, 144, performance.now() / 1000, this.ship.position.x, this.ship.position.z);
+    // ★ 工事懒物化（rts 同口径）：buildCover 走 CoverLazy（近物化/远记数据）
+    this.coverLazy = new CoverLazy((x, z, v, face) => {
+      const ship = this.ship.position;
+      buildEnemyCover(this.entities, this.scene!, x, this.raster.surfaceHeightAtFor(x, z, 0), z, v, this.swarm.data.defensePlan, face ?? { x: ship.x, z: ship.z });
+    });
+    this.swarm.data.buildCover = (x, z, v, face) => {
+      const ship = this.ship.position;
+      const cam = this.camera?.position ?? ship;
+      this.coverLazy!.queueOrBuild(x, z, v, ship.x, ship.z, cam.x, cam.z, SWARM.L3_RADIUS, face);
+    };
+    // ★ 爬坪到落点 → 强制重寻路（rts 口径）
+    EnemyBase.climbLandedHook = (sid, uid) => this.swarm.forceRepathClimb(sid, uid);
+    this.sepProbe = createRasterProbe(() => this.sepHintY);
     this.swarmHooks.tierPort = this.spawner;   // 升降格/回收唯一桥接（WorldSpawner 实现）
     this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
     this.swarmHooks.mobTactics = (mi) => this.mobDefs[mi]?.tactics ?? null;   // ★ 逐兵种战术表
+    // ★ 升格判据（rts 口径）：相机视野内 → L3（视锥投影 + 距离 220m）
+    this.swarmHooks.inView = (x: number, z: number): boolean => {
+      const cam = this.camera; if (!cam) return false;
+      const y = this.raster.surfaceHeightAtFor(x, z, 0) + 1.2;
+      this._pv.set(x, y, z).project(cam);
+      if (this._pv.z > 1 || this._pv.x < -1.15 || this._pv.x > 1.15 || this._pv.y < -1.15 || this._pv.y > 1.15) return false;
+      return Math.hypot(cam.position.x - x, cam.position.z - z) < 220;
+    };
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
@@ -1130,10 +1163,18 @@ export class WorldMode implements IGameMode {
         this.statsDirty = true;
       }
     });
+    // ★ 非击杀离场（判官回收/清场，rts 口径）：实数组摘除 + spawner 忘掉（防僵尸引用）
+    this.enemyRemovedUnsub = eventBus.on('enemy_removed', (payload) => {
+      for (let i = this.enemies.length - 1; i >= 0; i--) {
+        if (this.enemies[i]!.swarmUid === payload.uid) { this.enemies.splice(i, 1); break; }
+      }
+      const e = this.spawner.entityByUid(payload.uid);
+      if (e) this.spawner.forgetEntity(e);
+    });
     // ★ 真击杀统计：蜂群引擎直接消费 `enemy_killed`（SwarmLedger），WorldMode 不重复计数
     // ★ 步骤 10：敌人受击（实体侧广播）→ 小队/大队警觉（免降格 + 倾盆而出）
     this.enemyHitUnsub = eventBus.on('enemy_hit', (payload) => {
-      this.swarm.noteHit(payload.squadId, performance.now() / 1000);
+      this.swarm.noteHit(payload.squadId, simNow());   // ★ 模拟时钟（与判官同源）
     });
     // ★ 无人机召唤：使用「可露希尔的无人机」道具 → 近玩家位置放出（不入槽位）
     this.droneSummonUnsub = eventBus.on('drone_summon', () => {
@@ -1644,6 +1685,34 @@ export class WorldMode implements IGameMode {
 
     // ---- 物理固定步长（航行期无物理需求：舰船无刚体、无实体推进 → 全免） ----
     if (this.phase === 'explore') {
+      // ★ 相机位置（分层 LOD 第二参照；rts 口径）
+      this.swarmHooks.camX = this.camera?.position.x ?? 0;
+      this.swarmHooks.camZ = this.camera?.position.z ?? 0;
+      // ★ 工事懒物化：走近物化（rts 口径）
+      this.coverLazy?.realize(this.player.position.x, this.player.position.z, this.camera?.position.x ?? 0, this.camera?.position.z ?? 0, SWARM.L3_RADIUS);
+      // ★ 实体互推（H2 闸门；rts 口径）：重叠对推 + 可移位校验
+      if (this.sepProbe) {
+        const refs: EnemyBase[] = [];
+        const bodies: SepBody[] = [];
+        for (const e of this.enemies) {
+          if (e.dead || e.lifeState !== 'active') continue;
+          const shape = (e.collisionVolume as unknown as { shape?: Record<string, number> }).shape ?? {};
+          const r = Math.max(0.3, shape['radius'] ?? Math.max(shape['hx'] ?? 0.4, shape['hz'] ?? 0.4));
+          const yaw = e.faceYaw;
+          refs.push(e); bodies.push({ x: e.position.x, z: e.position.z, y: e.position.y, r, dx: Math.sin(yaw), dz: Math.cos(yaw) });
+        }
+        const pu = separationPushes(bodies);
+        for (let i = 0; i < bodies.length; i++) {
+          const dx = pu.x[i] as number, dz = pu.z[i] as number;
+          if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) continue;
+          const b = bodies[i] as SepBody;
+          this.sepHintY = b.y;
+          const lim = this.sepProbe.wetAt(b.x, b.z) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+          if (!canShift(this.sepProbe, b.x, b.z, b.y, b.x + dx, b.z + dz, lim)) continue;
+          const e = refs[i];
+          if (e) { e.entity.position.x = b.x + dx; e.entity.position.z = b.z + dz; }
+        }
+      }
       this.acc += dt;
       const FIXED = 1 / 60;
       let steps = 0;
@@ -1747,6 +1816,9 @@ export class WorldMode implements IGameMode {
     // ---- 取消 enemy_hit 事件订阅（自主 LOD 警觉） ----
     this.enemyHitUnsub?.();
     this.enemyHitUnsub = undefined;
+    this.enemyRemovedUnsub?.();
+    this.enemyRemovedUnsub = undefined;
+    this.coverLazy = null;
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
@@ -2805,6 +2877,19 @@ export class WorldMode implements IGameMode {
     if (k >= 1) this.finishDock();
   }
 
+  /** ★ 敌方登陆点（rts 同口径）：以舰为圆心 160m 一圈 16 向找可行点（不堵/不淹） */
+  private pickEnemyLanding(ship: { x: number; z: number }): { x: number; z: number } {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const x = ship.x + Math.cos(a) * 160;
+      const z = ship.z + Math.sin(a) * 160;
+      if (this.raster.tileDefAt(x, z).genRole === 'pit') continue;
+      if (this.raster.surfaceHeightAtFor(x, z, 0) < -1.0) continue;
+      return { x, z };
+    }
+    return { x: ship.x + 160, z: ship.z };
+  }
+
   /** ★ 触地收尾：舰船落位、角色在下机点接管、友军部署、恢复水面/云月。
    *  镜头调度已在 beginSettle 启动（与落稳同步结束），此处不再重建过渡。 */
   private finishDock(): void {
@@ -2817,7 +2902,11 @@ export class WorldMode implements IGameMode {
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
     // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；展开轴=扫描走廊（掩体朝舰船，战壕脚底下）
-    this.swarm.data.planDefense(sp.x, sp.z, 144, performance.now() / 1000, sp.x, sp.z);
+    // ★ 完整移植（rts 同口径）：**敌方登陆点**在距舰 ~160m 的可行方向 → planDefense(落点)；
+    //   事态环/防区/工事带都以**走廊**展开（不贴脸），PassTable 舰心窗罩住 舰↔落点 走廊。
+    const landing = this.pickEnemyLanding(sp);
+    const tableR = Math.min(240, Math.max(144, Math.hypot(landing.x - sp.x, landing.z - sp.z) + 60));
+    this.swarm.data.planDefense(landing.x, landing.z, tableR, performance.now() / 1000, sp.x, sp.z);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;

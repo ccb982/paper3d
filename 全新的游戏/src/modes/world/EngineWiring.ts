@@ -379,6 +379,8 @@ export function installEngineWiring(host: EngineWiringHost): EngineWiring {
       orders: bridge!.writer.recent(8).length,
       enemies: host.enemies().length,
       enemyPos: host.enemies().slice(0, 12).map((e) => [Math.round(e.position.x), Math.round(e.position.z)]),
+      poolN: swarm.pool.count,
+      poolPos: (() => { const p = swarm.pool; const out: [number, number][] = []; for (let i = 0; i < Math.min(12, p.count); i++) out.push([Math.round(p.x[i]), Math.round(p.z[i])]); return out; })(),
       squadStates: [...bridge!.squads.all()].slice(0, 8).map((x) => `${x.id}:${x.phase ?? ''}`),
       units: host.enemies().slice(0, 6).map((e) => {
         const cs = cores.stateOf(e.squadId ?? -1);
