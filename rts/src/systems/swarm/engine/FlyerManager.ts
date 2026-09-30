@@ -46,3 +46,16 @@ export const FLYER_TACTICS: UnitTactics = {
   mul: { h: 1, dist: 1, threat: 1, cover: 1, gap: 1, narrow: 1, hidden: 1, coverLOS: 0, high: 1, front: 1, back: 1, near: 1 },
   withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, coverLOS: 0, high: 0, front: 0, back: 0, near: 0 },
 };
+
+// ============================================================
+// ★ 飞行支援驻位（用户定 2026-09-30）：**选点函数**——被支援队旁 14m、朝舰侧 ±45°（按 id 分左右）：
+//   不叠在被支援队上、卡在威胁来向；飞行直航（无视地形通道/坡面）。
+// ============================================================
+export function flyerSupportSpot(
+  from: { x: number; z: number }, ship: { x: number; z: number }, id: number,
+): { x: number; z: number } {
+  const ux = ship.x - from.x, uz = ship.z - from.z;
+  const L = Math.hypot(ux, uz) || 1;
+  const a = Math.atan2(uz / L, ux / L) + (id % 2 === 0 ? Math.PI / 4 : -Math.PI / 4);
+  return { x: from.x + Math.cos(a) * 14, z: from.z + Math.sin(a) * 14 };
+}

@@ -147,7 +147,9 @@ export class SquadCore {
       if (!this.patrolAnchor) this.patrolAnchor = { x: engT.x, z: engT.z };
       let pg = this.patrolGoal;
       if (!pg || Math.hypot(pg.x - lx, pg.z - lz) <= ARRIVE_R) {
-        pg = port.patrolNext?.(this.id, lx, lz, this.patrolAnchor.x, this.patrolAnchor.z, 18, this.patrolLeg)
+        // ★ 近战巡逻半径更大（用户定 2026-09-30：非保护近战到处游荡）：30m；其余 18m
+        const pr = squad.type === 'defense' || squad.type === 'assault' ? 30 : 18;
+        pg = port.patrolNext?.(this.id, lx, lz, this.patrolAnchor.x, this.patrolAnchor.z, pr, this.patrolLeg)
           ?? { x: this.patrolAnchor.x, z: this.patrolAnchor.z };
         this.patrolGoal = pg;
         this.patrolLeg = -this.patrolLeg;

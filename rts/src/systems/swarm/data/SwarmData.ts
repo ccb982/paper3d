@@ -20,6 +20,7 @@ import { PostureFn } from '../PostureFn';
 import { TerrainSemantics, L1_R, R_MAX } from '../TerrainSemantics';
 import { type TacticalCtx, scoreFor, scoreTileAt } from '../engine/UnitScoring';
 import { rangedGarrisonSpot } from '../engine/RangedManager';
+import { flyerSupportSpot } from '../engine/FlyerManager';
 import { CoverTables } from './CoverTables';
 import { PlanData } from './PlanData';
 import { samplerFor } from '../../../services/map/TerrainSampler';
@@ -485,6 +486,11 @@ export class SwarmData {
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
 
+
+  /** ★ 飞行支援驻位（D7 选点函数）：被支援队旁 ±45° 14m（不叠队、卡威胁向） */
+  flyerSupportPoint(id: number, x: number, z: number): { x: number; z: number } {
+    return flyerSupportSpot({ x, z }, this.planning.ship(), id);
+  }
 
   /** ★ 远程部署位（D7 接线）：高地+岗哨驻守位（**限本队防区**；可达优先，近位不可达才 forced） */
   rangedGarrison(sid: number, x: number, z: number): { x: number; z: number; forced: boolean } | null {

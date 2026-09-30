@@ -394,7 +394,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
       clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
       // ★ §0.3 防区锁（用户定 2026-09-30）：非总攻 → 引擎令目标夹进该队扇区（环带外不锁）
-      sectorLock: (id: number, x: number, z: number) => swarm.data.sectorLockTarget(id, x, z),
+      sectorLock: (id: number, x: number, z: number) => swarm.data.sectorLockTarget(id, x, z), flyerSpot: (id: number, x: number, z: number) => swarm.data.flyerSupportPoint(id, x, z),
       blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',   // 不可站地形（只坑；水一直可站——总攻吸附/掩护点用）
       canReach: (id, x, z) => swarm.reachFrom(id, x, z),   // 发令门：总攻目标必须从本队真的可达（BFS）
       coversNear: (x, z, r) => { const out: { x: number; z: number }[] = []; for (const c of swarm.data.fortify.builtList()) if (c.kind === 'cover' && Math.hypot(c.x - x, c.z - z) <= r) out.push(c); return out; },   // 远程驻守门（账本）

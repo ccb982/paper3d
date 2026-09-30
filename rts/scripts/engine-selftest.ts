@@ -917,7 +917,7 @@ console.log('[5l] 被动爬掩体：靠近就爬 / 太高不爬 / 背向不爬')
 // ---------- 完全没命令 → 兜底段进-巡逻（用户定 2026-09-27） ----------
 console.log('[12j] 无现令无决策 → 兜底接管（"被回收=没命令"第一类）');
 {
-  const sq = { id: 4, role: 'melee' as const, x: 100, z: 0, alive: 6, phase: 'executing' };
+  const sq = { id: 4, role: 'flyer' as const, x: 100, z: 0, alive: 6, phase: 'executing' };
   const live = {
     player: () => ({ x: 0, z: 0 }),
     ship: () => ({ x: 200, z: 0 }),
@@ -1343,7 +1343,7 @@ console.log('[12f] 工兵无件：不发任何兜底（全交给掩体点查询�
 console.log('[12g] 段进循环：向舰推进一段 → 巡逻 → 再推进');
 {
   const SX = 200, SZ = 0;
-  const sq = { id: 1, role: 'melee' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
+  const sq = { id: 1, role: 'flyer' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
   const live = {
     player: () => ({ x: 0, z: 0 }),
     ship: () => ({ x: SX, z: SZ }),
@@ -1370,7 +1370,7 @@ console.log('[12g] 段进循环：向舰推进一段 → 巡逻 → 再推进');
 // ---------- 段进上限（用户定 2026-09-27）：到事态活动带前缘 → 不推进，就地巡逻 ----------
 console.log('[12h] 段进上限：到事态活动带前缘（ringMin）→ 就地巡逻，不再向舰推进');
 {
-  const sq = { id: 2, role: 'melee' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
+  const sq = { id: 2, role: 'flyer' as const, x: 100, z: 0, alive: 8, phase: 'executing' };
   const live = {
     player: () => ({ x: 0, z: 0 }),
     ship: () => ({ x: 200, z: 0 }),
