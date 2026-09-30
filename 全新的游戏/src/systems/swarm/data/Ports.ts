@@ -62,12 +62,16 @@ export function makeCombatCreationPort(h: PortHost): CreationPort {
       for (let i = 0; i < SECTOR_COUNT; i++) if (!m.includes(i)) rest.push(i);
       return [...m, ...rest];
     },
-    /** ★ §0.3 溢出：放置点随机（环带外 → 无约束）；工兵不在溢出名单 */
+    /** ★ §0.3 溢出：防区满足后随机放置；★ 不变量（用户定 2026-09-30）：**所有敌人都必须在事态
+     *  环带 [minD, maxD] 之内**——溢出点改带内随机（旧"环带外+无约束"作废）；工兵不在溢出名单 */
     overflowAnchor: () => {
       const a = Math.random() * Math.PI * 2;
-      const base = h.outerRing() > 0 ? h.outerRing() : 150;
+      const b = h.band();
+      const lo = Math.max(0, b.rLo + 4);
+      const hi = Math.max(lo + 8, b.rHi - 4);
+      const r = lo + Math.random() * (hi - lo);
       const s = h.ship();
-      return { x: s.x + Math.cos(a) * (base + 12 + Math.random() * 36), z: s.z + Math.sin(a) * (base + 12 + Math.random() * 36) };
+      return { x: s.x + Math.cos(a) * r, z: s.z + Math.sin(a) * r };
     },
     aliveInSector: (role, sec) => aliveRoleInSectorFn(deps, role, sec),
     unitTarget: (role) => combatUnitTargetFn(h.roster.dbg.gap, role, h.battlePosture === 'assault'),

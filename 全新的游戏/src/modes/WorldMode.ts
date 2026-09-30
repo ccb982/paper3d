@@ -1464,7 +1464,9 @@ export class WorldMode implements IGameMode {
       // ★ M2：当日进度（太阳钟：6:00=0 / 18:00=1）→ 蜂群态势函数日程
       // ★ 本体口径（2026-09-30）：蜂群节奏 = **落地起算**（不继承太阳钟——本体白天仅 7.5 分钟，
       //   航行到傍晚落地会"一进图就总攻"）；太阳钟仍驱动昼夜/UI，不驱蜂群事态。
-      hooks.dayT01 = -1;
+      // ★ Boss 局（用户定 2026-09-30）：**去掉事态函数**——dayT01=1 → p=1 总攻锁定、
+      //   环收为一点、满额放行：落地即无脑冲家（普通局才走落地曲线）。
+      hooks.dayT01 = this.bossRun ? 1 : -1;
       this.simT += dt; setSimNow(this.simT);   // ★ 模拟时钟单源（蜂群全部玩法计时读它）
       const _tSw = performance.now();
       this.swarm.update(dt, hooks);

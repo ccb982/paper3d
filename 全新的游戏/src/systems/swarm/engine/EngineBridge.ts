@@ -508,10 +508,9 @@ export class EngineBridge {
         }
       } else {
         if (now >= pl.until) {
-          // ★ 本体口径（2026-09-30）：**推进受事态门控**——p<0.45 只巡逻/游荡，不朝舰推进；
-          //   否则开局（落地 6 点、p≈0）敌人 1 分钟就冲到家。（rts 测试节奏保持原样）
-          const p01 = this.live.posture?.() ?? 0;
-          const np = p01 < 0.45 ? null : (rec.role === 'melee' ? this.wanderPoint(sp, rec.id) : this.advancePoint(sp, rec.id));
+          // ★ 本体口径（2026-09-30 用户定）：**严格跟随事态曲线**——推进不另设硬门，
+          //   节奏由"环内界锚落点 + p 驱动收缩"唯一决定（低 p 时 advancePoint 在环缘自然停住）。
+          const np = rec.role === 'melee' ? this.wanderPoint(sp, rec.id) : this.advancePoint(sp, rec.id);
           if (np) {
             // 巡完 → 再推进一段
             pl.mode = 'move'; pl.x = np.x; pl.z = np.z; pl.until = now + EngineBridge.PLAN_MOVE_TIMEOUT;

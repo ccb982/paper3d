@@ -86,8 +86,12 @@ export class PlanData {
     if (!this.plan) return;
     const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
     const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
-    const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m（本体：落点在舰外 ~160m → 环在走廊上）
-    const rb = PlanData.ringBounds(p, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
+    const RING_HALF = 80;   // 初始宽环外沿：前沿 +80m
+    // ★ 本体口径（2026-09-30 用户定）：环**内界锚到落点**（front0 在落点向舰 40m → 落点距舰 = ffrontD + 40）——
+    //   低 p 时敌人留在落点/工事带（~160m 外）分帧施工，随事态曲线（p 驱动的收缩）才逐步压向舰；
+    //   旧值 ffrontD-80 ≈ 距舰 40m 会让"一落地敌人就在舰旁"。
+    const landingD = Math.max(0, ffrontD + 40);
+    const rb = PlanData.ringBounds(p, landingD, ffrontD + RING_HALF);
     this.frontMinD = rb.minD;
     this.frontMaxD = rb.maxD;
     this.sx = shipX; this.sz = shipZ;   // 夹环/工事基准（单源）
