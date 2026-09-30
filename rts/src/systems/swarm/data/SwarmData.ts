@@ -20,6 +20,7 @@ import { PostureFn } from '../PostureFn';
 import { TerrainSemantics, L1_R, R_MAX } from '../TerrainSemantics';
 import { type TacticalCtx, scoreFor, scoreTileAt } from '../engine/UnitScoring';
 import { CoverTables } from './CoverTables';
+import { PlanData } from './PlanData';
 import { samplerFor } from '../../../services/map/TerrainSampler';
 import { PassTable } from '../nav/PassTable';
 import { PassTableKeeper } from '../nav/PassTableKeeper';
@@ -39,13 +40,13 @@ const PATH_AFF_N = 8;
 const PATH_AFF_W = 0.25;
 
 export class SwarmData {
-  /** ★ S0 勘察：地形检测产出的防守布置 */
-  private plan: DefensePlan | null = null;
+  /** ★ 落点计划 / 活动环 / 施工带（PlanData；2026-09-30 抽出） */
+  readonly planning = new PlanData();
   /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《RTS架构.md》§1；落地/换落点重算） */
   readonly semantics = new TerrainSemantics();
   /** ★ 工事表集合（HoleMask/HoleTable + 掩体加成 + LOS 地形层；2026-09-30 抽出） */
   readonly covers = new CoverTables({
-    plan: () => this.plan,
+    plan: () => this.planning.defensePlan,
     builtList: () => this.fortify.builtList(),
     builtCount: () => this.fortify.builtCount,
     pass: () => this.passTable,
@@ -97,7 +98,7 @@ export class SwarmData {
     this.debugDayT01 = Math.max(0, Math.min(1, v));
     // ★ 自由快进/倒退（用户定）：拖动即**重算姿态状态**（解总攻锁/清挑衅/闸门归零）→ 事态/环可反向
     this.postureFn.reset(this.lastNowS);
-    this.ringClock = 1;   // ★ 拖动即重算事态环（下一拍）
+    this.planning.resetClock();   // ★ 拖动即重算事态环（下一拍）
   }
 
   /** ★ 恢复实时时钟（清拖动覆盖） */
@@ -105,7 +106,7 @@ export class SwarmData {
     this.debugDayT01 = -1;
     this.t01Base = -1;
     this.postureFn.reset(this.lastNowS);
-    this.ringClock = 1;   // ★ 恢复实时即重算事态环（下一拍）
+    this.planning.resetClock();   // ★ 恢复实时即重算事态环（下一拍）
   }
   /** 进入总攻时的兵力（撤退判定基准） */
   private aliveAtPosture = 0;
@@ -120,48 +121,11 @@ export class SwarmData {
   private frontP = 0;
   /** 态势代次（切换 → 触发整队） */
   private postureEpoch = 0;
-  /** ★ 事态闸门解析出的**允许离舰最小半径**（本次部署拍；-1 = 无闸） */
-  private frontMinD = -1;
-  /** ★ 环形活动区上限（事态函数管；第一波收拢到舰） */
-  private frontMaxD = -1;
-  /** ★ 事态环节拍（用户定：范围**按秒更新**，不随模拟子步/帧抖动） */
-  private ringClock = 1;
   /** 最近一拍实秒（scrub/恢复实时重置姿态用） */
   private lastNowS = 0;
-  /** ★ 最近一次舰船位（环夹取基准；引擎/队长核同口径） */
-  private lastShipX = 0;
   /** ★ 原始当日进度（hooks.dayT01；第一波 ≥0.45 起停止新增施工——队长层派件读） */
   private lastDayRaw = -1;
-  private lastShipZ = 0;
-  /** ★ 命令夹环计数（探针/调试） */
-  cmdLogRingClamps = 0;
 
-  /** ★ 环形一日推进（p 驱动，用户定 2026-09-25）：外圈一直收缩；内圈先收→放大（甜甜圈 60）→再收；
-   *  总攻（p≥0.80）时已是 (0,0) 一点；形状由 p 驱动；时间轴快进/回退可反向（无棘轮/无总攻锁）。 */
-  static ringBounds(p: number, d0min: number, d0max: number): { minD: number; maxD: number } {
-    const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
-    const BIG_R = 90;      // 大圆半径（第一波）
-    const DONUT_IN = 60;   // 甜甜圈内径（小圈峰值）
-    const OUT_AT_DONUT = 80; // 甜甜圈段外圈（缓缩后的值；始终 > 内圈）
-    const P_ASSAULT = 0.80;
-    const pk = Math.max(0, Math.min(1, p));
-    // ---- 内圈（小圈）：收缩 → 增大 → 再收缩 ----
-    let minD: number;
-    if (pk < 0.25) minD = d0min;
-    else if (pk < 0.45) minD = lerp(d0min, 0, (pk - 0.25) / 0.20);           // 先收缩
-    else if (pk < 0.55) minD = lerp(0, DONUT_IN, (pk - 0.45) / 0.10);        // ★ 第一波后立即增大（后撤；用户定：原 0.62 太晚）
-    else if (pk < 0.72) minD = DONUT_IN;
-    else if (pk < P_ASSAULT) minD = lerp(DONUT_IN, 0, (pk - 0.72) / (P_ASSAULT - 0.72));  // 最后再收缩
-    else minD = 0;
-    // ---- 外圈（大圈）：一直收缩（只减不增） ----
-    let maxD: number;
-    if (pk < 0.25) maxD = d0max;
-    else if (pk < 0.45) maxD = lerp(d0max, BIG_R, (pk - 0.25) / 0.20);
-    else if (pk < 0.72) maxD = lerp(BIG_R, OUT_AT_DONUT, (pk - 0.45) / 0.27);
-    else if (pk < P_ASSAULT) maxD = lerp(OUT_AT_DONUT, 0, (pk - 0.72) / (P_ASSAULT - 0.72));
-    else maxD = 0;
-    return { minD, maxD };
-  }
   /** 最近一次大队决策（调试/测试读取） */
   lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ N0 可行性表（迷宫抽象）；★ 随地形走（用户定 2026-09-27）：keeper 负责标脏/节流重建 */
@@ -171,23 +135,14 @@ export class SwarmData {
   readonly roster = new RosterController();
   /** ★ §13.3 工事规划（最危险区域选择） */
   readonly fortify = new FortifyPlanner();
-  /** ★ 前推棘轮里程（事态控制；每拍 ≤0.5m） */
-  private pushM = 0;
   /** ★ 近战混编计数（shield:assault 轮询；用户定 2026-09-27） */
   private meleeMix = { mix: 0 };
 
-  /** ★ 施工带（事态函数口径，单源） */
+  /** ★ 施工带（PlanData 公式；总攻不收敛为点） */
   get fortifyBand(): { rLo: number; rHi: number; minD: number; maxD: number; frontP: number; pushM: number } {
-    // ★ 总攻不再收敛为点（用户定 2026-09-26：施工带别收敛）——
-    //   同一公式；避免点集空→主攻区/创建/工事全停。
-    const rLo = Math.max(24, this.frontMinD + 8);
-    const rHiBase = Math.max(90, rLo + 30) + this.pushM;
-    const rHi = this.frontMaxD > 0 ? Math.min(rHiBase, this.frontMaxD) : rHiBase;
-    return { rLo, rHi, minD: this.frontMinD, maxD: this.frontMaxD, frontP: this.frontP, pushM: this.pushM };
+    return this.planning.band(this.frontP);
   }
   private fortifyAccum = 0;
-  /** ★ 工程阶段（S0 勘察 → S1 施工 → S2 就绪） */
-  stage: 'S0' | 'S1' | 'S2' = 'S0';
 
   constructor(private readonly swarm: SwarmSystem) {
   }
@@ -195,31 +150,16 @@ export class SwarmData {
   /** ★ 环形夹取（公开给队长核（port.clampRing））：径向夹进 [下限, 上限]；
    *  未启用/未就绪 → 原样返回；收拢态（上限<下限）→ 上限主导（收拢到 0=舰船点） */
   clampToRing(x: number, z: number): { x: number; z: number } {
-    if (this.frontMinD < 0 || this.frontMaxD < 0) return { x, z };
-    if (this.lastShipX === 0 && this.lastShipZ === 0) return { x, z };
-    const dx = x - this.lastShipX, dz = z - this.lastShipZ;
-    const d = Math.hypot(dx, dz);
-    if (d < 1e-3) return { x, z };
-    const rMin = this.frontMinD, rMax = this.frontMaxD;
-    const rWant = rMax < rMin ? Math.min(d, Math.max(0, rMax)) : Math.min(Math.max(d, rMin), rMax);
-    if (Math.abs(rWant - d) <= 0.01) return { x, z };
-    this.cmdLogRingClamps++;
-    return { x: this.lastShipX + (dx / d) * rWant, z: this.lastShipZ + (dz / d) * rWant };
+    return this.planning.clampToRing(x, z);
   }
 
   /** ★ §0.3 防区锁：非总攻 + 队长在环带内 → 目标夹进本扇区楔形；带外（溢出/外面）→ 原样 */
   sectorLockTarget(id: number, x: number, z: number): { x: number; z: number } {
-    const ring = this.ring, cx = ring.cx, cz = ring.cz;
-    const sq = this.swarm.squads.get(id);
-    const lead = sq ? sq.members.get(sq.leaderUid) : undefined;
-    if (!lead) return { x, z };
-    const d = Math.hypot(lead.x - cx, lead.z - cz);
-    if (d < ring.minD - 6 || d > ring.maxD + 6) return { x, z };   // 外面 → 无约束
-    const ang = angleOfPoint(x, z, cx, cz);
-    const ca = clampAngleToSector(ang, secOfPoint(lead.x, lead.z, cx, cz));
-    if (ca === ang) return { x, z };
-    const r = Math.hypot(x - cx, z - cz);
-    return { x: cx + Math.cos(ca) * r, z: cz + Math.sin(ca) * r };
+    return this.planning.sectorLockTarget(x, z, (sid) => {
+      const sq = this.swarm.squads.get(sid);
+      const lead = sq ? sq.members.get(sq.leaderUid) : undefined;
+      return lead ? { x: lead.x, z: lead.z } : null;
+    }, id);
   }
 
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）。掩体朝舰侧+5m、战壕留原位；
@@ -227,7 +167,7 @@ export class SwarmData {
   planDefense(cx: number, cz: number, radius = 80, now = 0, shipX?: number, shipZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
-    this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
+    this.planning.setPlan(analyzeLandingTerrain(raster, cx, cz, radius));
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.tacticCtx = null;
     const pcx = shipX !== undefined ? shipX : cx;
@@ -235,10 +175,10 @@ export class SwarmData {
     this.passTable.build(raster, pcx, pcz, radius);   // ★ N0 可行性表（舰心窗；初始构建）
     this.passKeeper.bind(pcx, pcz, radius);
     this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
-    this.stage = 'S1';
+    this.planning.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
     //   （舰船会不断移动换登陆点；每次落地都要有自己的防御布置）
-    this.pushM = 0;   // ★ 前推里程复位（换落点）
+    this.planning.resetPush();   // ★ 前推里程复位（换落点）
     // ★ 单日节律复位（§3.5）：日程从落地重新走，挑衅采样清零（波次标记在引擎，t01 回退自动复位）
     this.rhythmT = 0;
     this.t01Base = -1;
@@ -249,29 +189,28 @@ export class SwarmData {
     this.battlePosture = 'fortify';
     // ★ 兵力创建：**四兵种管理器自有创建接口**（用户定 2026-09-26）——
     //   本层只提供原子生成口与防区锚点；旧班底/大队/回收名单创建已删。
-    return this.plan;
+    return this.planning.defensePlan;
   }
 
   /** ★ 防守布置（读；阶段机 S0~S6 消费） */
-  get defensePlan(): DefensePlan | null {
-    return this.plan;
-  }
-
-  setDefensePlan(plan: DefensePlan | null): void {
-    this.plan = plan;
-  }
+  get defensePlan(): DefensePlan | null { return this.planning.defensePlan; }
+  setDefensePlan(plan: DefensePlan | null): void { this.planning.setPlan(plan); }
+  get stage(): 'S0' | 'S1' | 'S2' { return this.planning.stage; }
+  get lastShipX(): number { return this.planning.lastX; }
+  get lastShipZ(): number { return this.planning.lastZ; }
+  get cmdLogRingClamps(): number { return this.planning.clamps; }
 
   /** ★ 每帧：事态/环/地形表/工事数据/生成队列（数据面 tick）
    *  @param dayT01 当日进度 0~1（太阳钟：6:00=0 / 18:00=1；<0 = 无输入 → 内部兜底钟） */
   /** ★ 事态闸门（调试/探针读：frontP 单调推进、minD 允许离舰半径） */
   get frontGate(): { frontP: number; minD: number } {
-    return { frontP: this.frontP, minD: this.frontMinD };
+    return { frontP: this.frontP, minD: this.planning.ring().minD };
   }
 
   /** ★ 环形活动区（事态函数**单源**；新引擎 OrderValidator ① / 队长令同口径）：
    *  [minD, maxD] = 允许的离舰半径区间 + 环心（舰船）。未就绪 = (-1,-1)。 */
   get ring(): { minD: number; maxD: number; cx: number; cz: number } {
-    return { minD: this.frontMinD, maxD: this.frontMaxD, cx: this.lastShipX, cz: this.lastShipZ };
+    return this.planning.ring();
   }
 
   /** ★ 地形表只读视图（队长掩体校验/外部读用；队长经 resolveAnchor 传入） */
@@ -296,13 +235,13 @@ export class SwarmData {
     if (this.fortifyAccum >= 0.5) {
       this.fortifyAccum = 0;
       if (this.passKeeper.flush(this.passTable, RasterMap.current)) this.scoreStamp++;   // ★ 表真正重建 → 代次戳 +1
-      if (this.stage === 'S1' && this.lastDayRaw >= 0.45) this.stage = 'S2';   // 第一波后停新增（就绪）
+      if (this.planning.stage === 'S1' && this.lastDayRaw >= 0.45) this.planning.stage = 'S2';   // 第一波后停新增（就绪）
       const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事）
       // ★ 前推（§13.4）：8 区全达标才推进；每拍 ≤0.5m；封顶 frontP×120m（事态允许）
       // ★ 未扫描 → 不算达标；已扫描但**无可行点**（-∞，如海面）→ 视为达标（不可施工，不阻塞前推）
       const allDone = this.fortify.safety.every((v, i) => this.fortify.scanned[i] && (!Number.isFinite(v) || v < DONE));
       // ★ 总攻不推（施工带已收缩为点）；其余达标即推，2m/s（用户定：前压提速）
-      if (allDone && this.battlePosture !== 'assault') this.pushM = Math.min(this.frontP * 120, this.pushM + 1.0);
+      if (allDone) this.planning.advancePush(this.frontP, this.battlePosture === 'assault');
     }
     // ★ 态势函数（M2）：p = clamp(schedule(t) + provocation)
     //   日程 = 太阳钟（无输入 → 落地起算兜底钟）；挑衅 = 被击 + 击杀（衰减在 PostureFn 内）
@@ -345,7 +284,8 @@ export class SwarmData {
       this.aliveAtPosture = next === 'assault' ? this.swarm.ledger.alive : 0;
     }
     // ★ 地块评分表重建（换落点/态势变化才全量重算；掩体/挖掘走局部重算）
-    if (this.plan) {
+    const plan = this.planning.defensePlan;
+    if (plan) {
       const raster = RasterMap.current;
       if (raster) {
         const smp0 = samplerFor(raster);
@@ -358,7 +298,7 @@ export class SwarmData {
           waterAt: (x, z) => this.isWaterAt(x, z), isDugAt: (x, z) => this.holeMask.isDug(x, z),
           // ★ D7-2 掩体遮挡（参照=舰；实体掩体 LOS + 地形掩体）——近寻路消费
           coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.covers.blocker),
-          ship: hasShip0 ? { x: shipX, z: shipZ } : { x: this.plan.cx, z: this.plan.cz },
+          ship: hasShip0 ? { x: shipX, z: shipZ } : { x: plan.cx, z: plan.cz },
           player: { x: playerX, z: playerZ },
           p: this.postureP, posture: this.battlePosture,
           distGain: this.distGain,
@@ -366,20 +306,20 @@ export class SwarmData {
         setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
         // ★ 地形事实表（静态·**舰心窗**）：未建/舰动/换落点时重建；半径罩住 舰↔落点 走廊（dist+60）
         const hasShip = shipX !== 0 || shipZ !== 0;
-        const cxs = hasShip ? shipX : this.plan.cx, czs = hasShip ? shipZ : this.plan.cz;
-        const corridor = Math.hypot(this.plan.cx - cxs, this.plan.cz - czs);
+        const cxs = hasShip ? shipX : plan.cx, czs = hasShip ? shipZ : plan.cz;
+        const corridor = Math.hypot(plan.cx - cxs, plan.cz - czs);
         const radius = Math.min(R_MAX, Math.max(L1_R, corridor + 60));
         const a = this.semantics.anchor;
         const ao = this.semantics.aoAnchor;
-        if (!this.semantics.isReady || a.x !== cxs || a.z !== czs || ao.x !== this.plan.cx || ao.z !== this.plan.cz) {
+        if (!this.semantics.isReady || a.x !== cxs || a.z !== czs || ao.x !== plan.cx || ao.z !== plan.cz) {
           const smp = samplerFor(raster);
           this.semantics.build({
             heightAt: (x, z) => smp.heightAt(raster, x, z),
             roleAt: (x, z) => smp.roleAt(raster, x, z),
-          }, cxs, czs, radius, this.plan.cx, this.plan.cz);
+          }, cxs, czs, radius, plan.cx, plan.cz);
           // ★ 独立坑洞掩码（同锚窗口）：真源 = RasterMap.levelDepthAt（权威挖掘深度）
           this.holeMask.build({ digDepthAt: (x, z) => raster.levelDepthAt(x, z) },
-            this.plan.cx, this.plan.cz);
+            plan.cx, plan.cz);
           const dbg = typeof location !== 'undefined'
             && (location.search.includes('l1dbg') || location.search.includes('swarmdbg'));
           if (dbg) {
@@ -399,11 +339,7 @@ export class SwarmData {
       }
     }
     // ★ 事态环（1Hz；用户定）：范围按秒更新——避免每子步抖动引发夹环改令
-    this.ringClock += dt;
-    if (this.ringClock >= 1) {
-      this.ringClock = 0;
-      this.ringTick(shipX, shipZ);
-    }
+    this.planning.tick(dt, this.postureP, shipX, shipZ);
     // ★ 波次判定/兵力放行已迁新引擎（`EngineBridge.situation`：t01 + releaseAt → setReleaseCap/spawnBattalion）
     //   本层只留原子生成口与地形/工事数据。
   }
@@ -433,7 +369,7 @@ export class SwarmData {
   get system(): SwarmSystem { return this.swarm; }
   ship(): { x: number; z: number } { return { x: this.lastShipX, z: this.lastShipZ }; }
   band(): { rLo: number; rHi: number } { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; }
-  outerRing(): number { return this.frontMaxD; }
+  outerRing(): number { return this.planning.outerMax; }
   dayRaw(): number { return this.lastDayRaw; }
   /** ★ 近战按 盾:突击 占比混合生成（ROSTER_TARGET；用户定 2026-09-27） */
   spawnRole(role: MobRole, x: number, z: number): boolean {
@@ -456,18 +392,6 @@ export class SwarmData {
 
   engineerPort(): EngineerPort {
     return makeEngineerPort(this);
-  }
-  /** ★ 环形活动区（事态函数单源；**1Hz**）：宽环 → 大圆 → 外圈放宽 → 点；夹环基准 = 舰船 */
-  private ringTick(shipX: number, shipZ: number): void {
-    if (!this.plan) return;
-    const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
-    const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
-    const RING_HALF = 80;   // 初始宽环：以原前沿 ffrontD 为中心 ±80m
-    // ★ 纯 p 函数（用户定：时间轴可自由快进/倒退 → 环随之收缩/回涨，不设棘轮）
-    const rb = SwarmData.ringBounds(this.postureP, Math.max(0, ffrontD - RING_HALF), ffrontD + RING_HALF);
-    this.frontMinD = rb.minD;
-    this.frontMaxD = rb.maxD;
-    this.lastShipX = shipX; this.lastShipZ = shipZ;   // ★ 夹环/工事基准（单源）
   }
 
   /** 旧部署维护（engineeringTick）已删除（用户定 2026-09-25）：战斗队由新引擎发令、工兵由 EngineerManager。 */
@@ -589,8 +513,7 @@ export class SwarmData {
 
   /** 清理（退出模式） */
   clear(now = 0): void {
-    this.plan = null;
-    this.stage = 'S0';
+    this.planning.reset();
     this.covers.clear();
     this.postureFn.reset(now);
     this.battlePosture = 'fortify';
@@ -605,6 +528,5 @@ export class SwarmData {
     this.tacticCtx = null;
     this.passTable.clear();
     this.fortify.clear();
-    this.pushM = 0;
   }
 }
