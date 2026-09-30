@@ -27,6 +27,8 @@ export interface CommanderWiringDeps {
   surfaceAt: (x: number, z: number) => number;
   /** 玩家位置（生成点距离门控） */
   playerPos: () => { x: number; z: number };
+  /** ★ 兵力闸门（账本 canSpawn；用户定 2026-09-30：HUD 的敌人总数/上限必须真的调控生成） */
+  canSpawn?: () => boolean;
 }
 
 /** ★ 一次性接线（enter）：buildCover / digTrench / spawnMob */
@@ -45,6 +47,9 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   //   绝不从玩家径向外推——那会把阵形推成围着玩家的一圈）；到位靠行军
   const pickAcc: { [k: string]: number } = {};
   const spawnMobPort = (x: number, z: number, role: UnitRole, elite = false, near = false) => {
+    // ★ 兵力闸门（唯一判据 = SwarmLedger.canSpawn：在场 alive < min(total, releaseCap)）：
+    //   击杀腾名额可补；总额满 → 不发（HUD"在场/上限/总配额"与实际一致）
+    if (d.canSpawn && !d.canSpawn()) return;
     const p = d.playerPos();
     const plan = d.data.defensePlan;
     const ax = plan?.approachX ?? 1, az = plan?.approachZ ?? 0;

@@ -8,7 +8,7 @@ export function mountKeyHints(): HTMLDivElement {
   const el = document.createElement('div');
   el.id = 'key-hints';
   el.style.cssText =
-    'position:fixed;left:10px;bottom:8px;z-index:25;pointer-events:none;'
+    'position:fixed;right:10px;bottom:8px;z-index:25;pointer-events:none;text-align:right;'
     + 'background:rgba(10,14,20,.55);border:1px solid rgba(80,110,150,.35);border-radius:8px;'
     + 'padding:6px 10px;color:#cfe0f5;font:11.5px/1.7 system-ui,Segoe UI,sans-serif;'
     + 'max-width:520px;user-select:none';

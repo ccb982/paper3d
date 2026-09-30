@@ -766,7 +766,7 @@ export class WorldMode implements IGameMode {
     );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
     // ★ 命令器端口（造掩体/挖壕/地形脏/生成口）——新接线
-    wireCommanderPorts({ data: this.swarm.data, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.ship.position.x, z: this.ship.position.z }) });
+    wireCommanderPorts({ data: this.swarm.data, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.ship.position.x, z: this.ship.position.z }), canSpawn: () => this.swarm.ledger.canSpawn() });
     // ★ 新引擎装配：LiveView → EngineBridge → 队长核 + 战术侧
     this.engineWire = installEngineWiring({
       swarm: this.swarm, spawner: this.spawner, raster: this.raster, scene: this.scene!,
