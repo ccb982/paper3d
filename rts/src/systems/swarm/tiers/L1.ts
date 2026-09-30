@@ -8,20 +8,7 @@
 // 本文件目前提供名册/槽位工具（P-L1 接线移动与生成）。
 // ============================================================
 
-import type { TierCarry, TierCarryMember } from './contracts';
-
-/** 预留槽位 rank 列表（rank 0 = 队长；物化数量依据） */
-export function reserveSlotRanks(alive: number): number[] {
-  const n = Math.max(1, Math.floor(alive));
-  const out: number[] = [];
-  for (let r = 0; r < n; r++) out.push(r);
-  return out;
-}
-
-/** 新 L1 队名册：同兵种满血（hp/maxHp 由接线层按兵种给）；uid=0 = 未分配（物化时分配） */
-export function rosterFresh(alive: number, hp: number, maxHp: number): TierCarryMember[] {
-  return reserveSlotRanks(alive).map((slotRank) => ({ uid: 0, hp, maxHp, slotRank }));
-}
+import type { TierCarry } from './contracts';
 
 /** L1 移动端口（用户定 2026-09-27：L1/L2 只走可行性）：格级可行步进（不走走廊/掩体）。
  *  `canStep`（PassTable 同源）由接线层注入；返回**新位置**（不可行/零距 → 原地）。 */

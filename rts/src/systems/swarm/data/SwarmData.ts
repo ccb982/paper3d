@@ -2,7 +2,7 @@
 // data/SwarmData —— 蜂群数据面（**无指挥语义**；重写 P4 归位）
 // ============================================================
 // 职责（只做数据/查询/端口，不做决策、不发令）：
-//   · 地形与表：DefensePlan / TerrainScoring（查询时评分）/ L1 语义 / L2 工事（HoleMask/HoleTable）/ PassTable
+//   · 地形与表：DefensePlan / 事实表 TerrainSemantics / 兵种评分 UnitScoring / L2 工事（HoleMask/HoleTable）/ PassTable
 //   · 事态与环：PostureFn（p/frontP）+ 环形活动区（ringBounds/clampToRing）+ t01 时钟
 //   · 工事数据：FortifyPlanner（需求/分区）+ 施工带（fortifyBand）+ 阶段 S1/S2
 //   · 编制统计：RosterController；生成执行：四兵种管理器自有创建接口（模式层注入原子生成口）
@@ -134,12 +134,8 @@ export class SwarmData {
   /** ★ 命令夹环计数（探针/调试） */
   cmdLogRingClamps = 0;
 
-  /** ★ 环形一日推进（用户定 2026-09-25，**p 驱动**）：
-   *  · **外圈（大圈 / maxD）：一直收缩**——只减不增，不再外扩（旧 180 休整外径已删）
-   *  · **内圈（小圈 / minD）：先收缩 → 再增大（甜甜圈 60）→ 最后再收缩**
-   *  · **总攻（p ≥ 0.80）时已是 (0,0) 一个点**
-   *  · 形状由**事态 p**驱动（挑衅加速 → 环同步加速）；**时间轴可自由快进/倒退**：
-   *    拖动/恢复实时会重置姿态状态 → p 回退 → 环可反向（无棘轮、无总攻锁覆盖） */
+  /** ★ 环形一日推进（p 驱动，用户定 2026-09-25）：外圈一直收缩；内圈先收→放大（甜甜圈 60）→再收；
+   *  总攻（p≥0.80）时已是 (0,0) 一点；形状由 p 驱动；时间轴快进/回退可反向（无棘轮/无总攻锁）。 */
   static ringBounds(p: number, d0min: number, d0max: number): { minD: number; maxD: number } {
     const lerp = (a: number, b: number, k: number): number => a + (b - a) * k;
     const BIG_R = 90;      // 大圆半径（第一波）
@@ -209,6 +205,14 @@ export class SwarmData {
     return { x: this.lastShipX + (dx / d) * rWant, z: this.lastShipZ + (dz / d) * rWant };
   }
 
+  /** ★ 掩体加成缓存（键=掩体集/已建数/落点） */
+  private bonusCache: { key: string; map: ReadonlyMap<string, number> } = { key: '', map: new Map() };
+  private bonusCached(): ReadonlyMap<string, number> {
+    const key = this.plan ? `${this.holeTable.covers.length}|${this.fortify.builtCount}|${this.plan.cx},${this.plan.cz}` : '';
+    if (this.plan && key !== this.bonusCache.key) this.bonusCache = { key, map: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]) };
+    return this.bonusCache.map;
+  }
+
   /** ★ §0.3 防区锁：非总攻 + 队长在环带内 → 目标夹进本扇区楔形；带外（溢出/外面）→ 原样 */
   sectorLockTarget(id: number, x: number, z: number): { x: number; z: number } {
     const ring = this.ring, cx = ring.cx, cz = ring.cz;
@@ -229,9 +233,8 @@ export class SwarmData {
     return { x: cx + Math.cos(ca) * r, z: cz + Math.sin(ca) * r };
   }
 
-  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）。展开轴=扫描走廊轴；
-   *  掩体朝舰侧 +5m、战壕留原位；此后不随玩家移动动态重排（《RTS架构.md》§3/§4，用户定 2026-09-21）。
-   *  ★ 可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊（否则打到舰西侧 outside）。 */
+  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）。掩体朝舰侧+5m、战壕留原位；
+   *  可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊（否则打到舰西侧 outside）。 */
   planDefense(cx: number, cz: number, radius = 80, now = 0, shipX?: number, shipZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
@@ -363,7 +366,7 @@ export class SwarmData {
         this.tacticCtx = {
           facts: this.semantics,
           heightAt: (x: number, z: number) => smp0.heightAt(raster, x, z),
-          bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
+          bonus: this.bonusCached(),
           waterAt: (x, z) => this.isWaterAt(x, z), isDugAt: (x, z) => this.holeMask.isDug(x, z),
           // ★ D7-2 掩体遮挡（参照=舰；实体掩体 LOS + 地形掩体）——近寻路消费
           coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.coverBlocker),
@@ -544,12 +547,9 @@ export class SwarmData {
 
   /** 旧部署维护（engineeringTick）已删除（用户定 2026-09-25）：战斗队由新引擎发令、工兵由 EngineerManager。 */
 
-  /** ★ 远程有利位置（制高点 / 掩体后；含"掩体真的挡子弹"校验）。
-   *  规则：距离在 [0.5R, 1.05R]（能射到且不贴脸）且 **≥ minDist**（边撤边打时要求更远）；
-   *  掩体挡住玩家视线加分；越接近理想站位（0.8R）越好；无合适点 → null（原地射击）。 */
-  /** ★ 掩体 LOS 地形层（用户定 2026-09-25 三张表原则）：不再经 TerrainScore 第四网格。
-   *  墙 = 地块 pit 或 4m 邻格高差 > WALL_DH（与旧 classify 同口径，直读地形高度）；
-   *  战壕 = 掩体表 HoleMask（挖过即战壕）；贴墙 = 4m 邻格高差 > 0.8·WALL_DH。 */
+  /** ★ 远程有利位置（制高/掩体后，含"掩体真挡子弹"校验）：距离 [0.5R,1.05R] 且 ≥minDist；
+   *  掩体挡视线加分、越接近 0.8R 越好；无合适点 → null（原地射击）。 */
+  /** ★ 掩体 LOS 地形层（三张表原则）：墙=pit 或 4m 邻差>WALL_DH；壕=HoleMask；贴墙=邻差>0.8·WALL_DH。 */
   private readonly coverBlocker: TerrainCover = {
     blockedAt: (x, z) => this.terrainWallAt(x, z, 1.0),
     isTrenchAt: (x, z) => this.holeMask.isDug(x, z),
@@ -752,10 +752,8 @@ export class SwarmData {
     return RasterMap.current?.tileDefAt(x, z).genRole === 'liquid';
   }
 
-  /** ★★ 全地形破坏的中央入口（ChunkManager.onTerrainDig 接线；**玩家子弹也走这**）：
-   *   1m 深度场窗扫 → HoleTable（敌读工事）
-   *   + 评分/选位查询时直读掩码（挖过即战壕；无表可重算）
-   *   + 统一采样缓存失效。 */
+  /** ★★ 全地形破坏中央入口（ChunkManager.onTerrainDig；玩家子弹也走这）：
+   *  1m 深度场窗扫 → HoleTable + 直读掩码（挖过即战壕）+ 采样缓存失效。 */
   noteTerrainDig(x: number, z: number, r = 16): void {
     this.holeMask.refresh(x, z, r + 12);                        // ★ L2 工事源（1m 深度场；评分查询时直读 → 挖过即战壕）
     const raster = RasterMap.current;

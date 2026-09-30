@@ -42,7 +42,7 @@ export interface LocalGrid {
   /** 高度（斜向禁上坡用；表外 NaN） */
   heightAt(x: number, z: number): number;
   /** ★ 统一评分（可选；正值 = 更有利、负值 = 更差；null/表外 = 中性）——
-   *  由上层注入（地形语义 + 掩体表 + 事态×舰距加权，唯一实现 TerrainScoring.scoreAt） */
+   *  由上层注入（地形语义 + 掩体表 + 事态×舰距加权；D3 后合成在兵种管理器 `*_TACTICS`） */
   scoreAt?(x: number, z: number): number | null;
   /** ★ 上坡点（可选；生产 = PassTable.climbRunAt）：可爬坡边 → 段中心上坡点（坡面前 1m） */
   climbRunAt?(x: number, z: number, dx: number, dz: number): { x: number; z: number; ux: number; uz: number; width: number; rise: number; lx: number; lz: number } | null;

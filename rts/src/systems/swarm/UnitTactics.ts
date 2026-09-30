@@ -8,7 +8,7 @@
 
 import { coverBlocksLine } from '../../entity/CoverEntity';
 
-/** 地形遮蔽查询（TerrainScore 结构满足；null = 无地形层，只查实体掩体） */
+/** 地形遮蔽查询（事实/地形接口满足；null = 无地形层，只查实体掩体） */
 export interface TerrainCover {
   blockedAt(x: number, z: number): boolean;
   isTrenchAt(x: number, z: number): boolean;

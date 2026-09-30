@@ -64,35 +64,6 @@ export const ORDER_TTL_DEFAULT = 30 * GAME_MIN;
 export const DIRECTIVE_TTL = 6 * GAME_MIN;
 /** 队内保命线：个体 hpRatio 低于此值 → `fallback` 撤出 */
 export const MEMBER_FALLBACK_HP = 0.3;
-/** 缺参降级：绝不发无法执行的命令 */
-export function normalizeOrder(order: TacticalOrder): TacticalOrder {
-  const o: TacticalOrder = { ...order, seq: order.seq || 1 };
-  switch (o.kind) {
-    case 'protect':
-      if (!o.target && !o.subTargets?.length) o.kind = 'regroup';
-      break;
-    case 'flank':
-      if (!o.path && !o.target) o.kind = 'advance';
-      break;
-    case 'garrison':
-      if (!o.target) o.kind = 'regroup';
-      break;
-    case 'focus':
-      if (!o.target) o.kind = 'advance';
-      break;
-    case 'advance':
-    case 'bound':
-      if (!o.target && !o.path) o.kind = 'regroup';
-      break;
-    case 'retreat':
-      if (!o.target) o.kind = 'regroup';
-      break;
-    case 'regroup':
-    default:
-      break;
-  }
-  return o;
-}
 
 /** 引擎复合/原子令 → 执行板 kind 语义（导航/镜像同一份映射） */
 export function boardKindOf(kind: SquadOrder['kind']): SquadOrderKind {

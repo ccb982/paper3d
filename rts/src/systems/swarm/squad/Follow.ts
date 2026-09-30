@@ -5,10 +5,6 @@
 //   远且直线被挡（崖/墙/单向边）→ **长寻路找队长**：沿队走廊（队长正在走的同一条
 //   可行走廊）的前瞻点绕行——不另起炉灶、不花每帧 A*。
 //   依赖铁律：只读队长执行态走廊（无状态、零分配）。
-
-import type { SquadOrderState } from './State';
-import { routeNext } from './Anchor';
-
 export interface FollowDir {
   x: number;
   z: number;
@@ -24,36 +20,4 @@ export function leaderDir(
   const od = Math.hypot(ox, oz);
   if (od > 8) return { x: ox / od, z: oz / od };
   return null;
-}
-
-/** 跟班停步半径：队长未真到位（离锚 >8m）→ 压到 2m；否则动 5m / 停 8m 滞回 */
-export function followStopR(stopped: boolean, leadX: number, leadZ: number, ox: number, oz: number): number {
-  return Math.hypot(leadX - ox, leadZ - oz) > 8 ? 2 : (stopped ? 8 : 5);
-}
-
-/** 跟队长方向；null = 已到位（应停）。stopR = 停步半径（滞回由调用方给） */
-export function followDir(
-  state: SquadOrderState | null,
-  px: number,
-  pz: number,
-  lx: number,
-  lz: number,
-  stopR: number,
-  walkable: (ax: number, az: number, bx: number, bz: number) => boolean,
-): FollowDir | null {
-  const tx = lx - px, tz = lz - pz;
-  const td = Math.hypot(tx, tz);
-  if (td <= stopR) return null;
-  // ★ 掉队/被挡 → 沿走廊前瞻点走（长寻路；走廊即队长的长路）
-  if (td > 12 && !walkable(px, pz, lx, lz)) {
-    // ★ 使用契约（§4.4/U5 收口 2026-09-26）：成员掉队与队长**同一语义**——同走廊 routeNext
-    //   （前一版 corridorAhead 是前瞻点，会跳过中间绕行点 → 直线撞崖；见《寻路重写方案.md》U5）
-    const ahead = routeNext(state, px, pz, 2);
-    if (ahead) {
-      const ax = ahead.x - px, az = ahead.z - pz;
-      const al = Math.hypot(ax, az);
-      if (al > 1e-3) return { x: ax / al, z: az / al };
-    }
-  }
-  return { x: tx / td, z: tz / td };
 }

@@ -126,12 +126,4 @@ export function tierForDistance(d: number): 'L1' | 'L2' | 'L3' {
 /** 创建入口（唯一自动转换口）：按距离选档并落地——
  *  L3：升格实体；L2：物化代理（含队长）；L1：只登记携带（队长单点+名册，无需物化）。
  *  未注入实现 → 返回 null（不落地，安全默认）。返回实际落地档 / null = 失败。 */
-export function createAt(carry: TierCarry, distance: number): 'L1' | 'L2' | 'L3' | null {
-  const tier = tierForDistance(distance);
-  if (!impl) return null;
-  if (tier === 'L3') return impl.promoteToL3(carry) ? 'L3' : null;
-  if (tier === 'L2') return impl.expandFromL1(carry) ? 'L2' : null;
-  return 'L1';
-}
-
 import { SWARM } from '../SwarmConfig';

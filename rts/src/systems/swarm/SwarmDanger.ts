@@ -4,7 +4,7 @@
 // 治"危险口径五套并存"：各层阈值集中在此，模块一律引用本表（不再各写各的）。
 //   层级分工（同表不同层，语义各自标注）：
 //   · 执行层台阶（角色可上）≡ services/map/Refinements.EDGE_CLIFF_BAND
-//   · 表硬边界（不可站/不可穿越）WALL_DH / 坡面 SLOPE_DH —— 真源 = Refinements/TerrainScoring（此处转发）
+//   · 表硬边界（不可站/不可穿越）WALL_DH / 坡面 SLOPE_DH —— 真源 = TerrainSemantics（此处转发）
 //   · A* 陡升挡 WALL_STEP（与执行层同口径，防"寻路放行/执行禁行"脱节）
 //   · 代理/实体危险探测 PROBE_RISE@PROBE_R（连续陡坡 ≈40°+ 视为墙）；坑底 PIT_H
 //   · 流场爬升加价 FLOW_CLIFF_DH（软代价，不阻挡）
@@ -18,7 +18,7 @@ export const DANGER = {
   CLIMB_BAND: EDGE_CLIFF_BAND,
   /** 表硬边界：4 邻域陡差 > 此值 → 不可站/不可穿越（真源 Refinements） */
   WALL_DH,
-  /** 表坡面阈值（真源 TerrainScore） */
+  /** 表坡面阈值（真源 TerrainSemantics） */
   SLOPE_DH,
   /** A* 陡升挡（≡ 执行层；只挡升不挡降）——历史口径：单步瞬时坎 */
   WALL_STEP: EDGE_CLIFF_BAND,

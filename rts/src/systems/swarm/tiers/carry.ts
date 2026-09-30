@@ -29,11 +29,6 @@ export function slotPosition(c: TierCarry, rank: number): { x: number; z: number
   };
 }
 
-/** 名册项 ← 载体快照（L3/L2 → 名册；收缩/降档口径） */
-export function memberFromSnapshot(uid: number, snapshot: AgentSnapshot, slotRank: number): TierCarryMember {
-  return { uid, hp: snapshot.hp, maxHp: snapshot.maxHp, slotRank };
-}
-
 /** 名册项 → 池物化数据（统计字段继承队长快照；只覆盖身份/位置/血——零丢失） */
 export function spawnFromMember(c: TierCarry, m: TierCarryMember): TierSpawnData {
   const p = m.slotRank === 0

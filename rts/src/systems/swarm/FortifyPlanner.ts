@@ -143,6 +143,11 @@ export class FortifyPlanner {
     return this.builtCovers.values();
   }
 
+  /** ★ 已建件总数（缓存键用；2026-09-30） */
+  get builtCount(): number {
+    return this.builtCovers.size;
+  }
+
   /** ★ 已建工事计数（密度门用；单一账本） */
   /** ★ 附近**已建掩体**数（密度门用；用户定 2026-09-29：只数掩体——坑洞不算，
    *  否则一条壕多笔挖掘把密度顶满 → 永远挖壕、不造掩体） */
