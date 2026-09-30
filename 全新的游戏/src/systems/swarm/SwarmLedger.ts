@@ -51,24 +51,26 @@ export class SwarmLedger {
     return Math.max(0, this.spawned - this.recalled - this.removed);
   }
 
-  /** 有效放行上限 = min(当日计划, 日节律放行) */
-  private cap(): number {
-    if (this.total <= 0) return Number.MAX_SAFE_INTEGER;
-    return Math.min(this.total, Math.max(0, this.releaseCap));
+  /** ★ 已消耗配额 = 累计生成 − 累计回收/清场（**击杀不返还**；用户定 2026-09-30） */
+  get committed(): number {
+    return Math.max(0, this.spawned - this.recalled - this.removed);
   }
 
-  /** 还能生成多少（total <= 0 = 未初始化 → 无限，交 beginDay 兜底） */
+  /** 还能生成多少（两个变量取小：配额剩余 ∧ 并发上限剩余） */
   get remaining(): number {
-    return this.total <= 0 ? Number.MAX_SAFE_INTEGER : Math.max(0, this.cap() - this.alive);
+    if (this.total <= 0) return Number.MAX_SAFE_INTEGER;
+    return Math.max(0, Math.min(this.total - this.committed, this.releaseCap - this.alive));
   }
 
-  /** ★ 生成闸门（唯一判据；用户定 2026-09-27，2026-09-29 改**在场口径**）：
-   *  · **上限**（cap = min(total, releaseCap)，随事态 p 变）：**按当前存活 alive 卡**——
-   *    击杀/战损腾出的名额可立即补回（非总攻维持"场上=上限"）；
-   *  · 总攻 p≥0.80 → releaseAt=1.0 → cap=total → 满额投放；
-   *  · 回收/清场同样归还编制（alive −1 → 名额释放）。 */
+  /** ★ 生成闸门（唯一判据；**两个独立变量**，用户定 2026-09-30）：
+   *  · **配额 total**（当日总量；HUD"击杀/上限"显示；**累计消耗 committed** 卡：
+   *    击杀**不返还**；回收/清场 recalled/removed **归还编制**）；
+   *  · **上限 releaseCap**（并发在场上限；**不展示**；随事态函数 p 增大 → 由指挥器写入
+   *    `ceil(total × releaseAt(p))`；在场上限只卡 alive，不消耗配额）。
+   *  生成 = 两者同时满足：committed < total ∧ alive < releaseCap。 */
   canSpawn(): boolean {
-    return this.total <= 0 || this.alive < this.cap();
+    if (this.total <= 0) return true;
+    return this.committed < this.total && this.alive < this.releaseCap;
   }
 
   /** 换日 / 首次出击：按威胁预计算总数并清零（放行上限 = 0：落地后由指挥器按节律放开）。

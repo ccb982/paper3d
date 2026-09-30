@@ -47,8 +47,8 @@ export function wireCommanderPorts(d: CommanderWiringDeps): void {
   //   绝不从玩家径向外推——那会把阵形推成围着玩家的一圈）；到位靠行军
   const pickAcc: { [k: string]: number } = {};
   const spawnMobPort = (x: number, z: number, role: UnitRole, elite = false, near = false) => {
-    // ★ 兵力闸门（唯一判据 = SwarmLedger.canSpawn：在场 alive < min(total, releaseCap)）：
-    //   击杀腾名额可补；总额满 → 不发（HUD"在场/上限/总配额"与实际一致）
+    // ★ 兵力闸门（唯一判据 = SwarmLedger.canSpawn）：**配额 total**（累计消耗，击杀不返还）
+    //   与**上限 releaseCap**（并发在场，随事态增大）两个变量同时卡
     if (d.canSpawn && !d.canSpawn()) return;
     const p = d.playerPos();
     const plan = d.data.defensePlan;
