@@ -1,0 +1,133 @@
+// ============================================================
+// engine/TimerManager —— 统一实体计时管理器（重写 P1；用户定 2026-09-24）
+// ============================================================
+// 用户口径：**卡死窗口 + 开火许可闩锁**由本管理器统一管理（1Hz）。
+//   · 卡死窗口（净活动范围包围盒；语义与 STUCK 完全一致——从严，不改口径）
+//   · 开火许可闩锁（AttackQueues 置/撤；允许后持续开火直到许可去除）
+//   · 计时销毁（寿命 despawn）= **实体基类能力**（`entity/base/Abilities` 的 despawn 状态机），不在此重复。
+// 实体只"上报/被查询"，不自己开表；本管理器是引擎侧（实体层不依赖 systems）。
+// 探针契约：readonly dbg（G9）。
+//
+// ★★ 收回机制铁律（用户定 2026-09-25；见《RTS架构.md》§0.1）★★
+//   · 本机制**不得弱化/放宽豁免/绕过/删除**；豁免名单只减不增（当前仅：驻守 / 交火）。
+//   · 被收回 = 一定出了问题（工兵=站桩/无件/到不了件；战斗=卡住/失去行动）。
+//   · **修行为，不修判官**；宁可错杀不可放过（放宽=放过问题）。
+// ============================================================
+
+import { STUCK } from '../SwarmConfig';
+
+export interface TimerHost {
+  /** 在册实体 uid 花名册（引擎/池提供；1Hz 迭代） */
+  roster(): readonly number[];
+  /** 实体当前位置（不在册 → null） */
+  posOf(uid: number): { x: number; z: number } | null;
+  /** 当前豁免卡死判定的原因（驻守 / 交战中 / 已到位…）；null = 不豁免 */
+  exemptOf(uid: number): string | null;
+  /** ★ 每单位卡死窗口**逃逸半径**（用户定 2026-09-29：保护队放宽——
+   *  跟到被保护对象旁（≤14m）时窗口跨度阈值降到 1.5m；缺省 = STUCK.BBOX_R） */
+  bboxR?(uid: number): number | undefined;
+  /** 到期回收（卡死 / 寿命） */
+  onExpire(uid: number, why: string): void;
+}
+
+interface StuckWin {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  t: number;
+}
+
+export class TimerManager {
+  private readonly stuck = new Map<number, StuckWin>();
+  private readonly fireLatch = new Set<number>();
+  /** 探针契约（G9）：每次 tick 重置计数；latched/expiredTotal/stuckTotal = 累计 */
+  readonly dbg = { tracked: 0, exempt: 0, window: 0, expired: 0, expiredTotal: 0, stuckTotal: 0, latched: 0, last: '' };
+
+  constructor(private readonly h: TimerHost) {}
+
+  /** 1Hz：卡死窗口推进（now = 实秒） */
+  tick(_now: number): void {
+    const dbg = this.dbg;
+    dbg.tracked = 0;
+    dbg.exempt = 0;
+    dbg.window = 0;
+    dbg.expired = 0;
+
+    // ---- 卡死窗口（包围盒 > BBOX_R 即逃逸重开；连续 HOLD_S → 回收） ----
+    for (const uid of this.h.roster()) {
+      const p = this.h.posOf(uid);
+      if (!p) {
+        this.stuck.delete(uid);
+        continue;
+      }
+      const why = this.h.exemptOf(uid);
+      if (why) {
+        this.stuck.delete(uid);
+        dbg.exempt++;
+        continue;
+      }
+      const rec = this.stuck.get(uid);
+      if (!rec) {
+        this.stuck.set(uid, { minX: p.x, maxX: p.x, minZ: p.z, maxZ: p.z, t: 0 });
+        continue;
+      }
+      if (p.x < rec.minX) rec.minX = p.x;
+      else if (p.x > rec.maxX) rec.maxX = p.x;
+      if (p.z < rec.minZ) rec.minZ = p.z;
+      else if (p.z > rec.maxZ) rec.maxZ = p.z;
+      rec.t += 1;
+      dbg.tracked++;
+      const rB = this.h.bboxR?.(uid) ?? STUCK.BBOX_R;
+      if (rec.maxX - rec.minX > rB || rec.maxZ - rec.minZ > rB) {
+        rec.minX = rec.maxX = p.x;
+        rec.minZ = rec.maxZ = p.z;
+        rec.t = 0;
+        dbg.window++;
+        continue;
+      }
+      if (rec.t >= STUCK.HOLD_S) {
+        dbg.last = `stuck#${uid} bbox=${(rec.maxX - rec.minX).toFixed(1)}x${(rec.maxZ - rec.minZ).toFixed(1)}`;
+        this.forget(uid);
+        dbg.expired++;
+        dbg.expiredTotal++;
+        dbg.stuckTotal++;
+        this.h.onExpire(uid, 'stuck');
+      }
+    }
+    if (this.stuck.size > 4096) this.stuck.clear();   // 防漏（同旧口径）
+  }
+
+  /** 开火许可闩锁：true=允许（持续开火，直到撤除）；false=撤除 */
+  allowFire(uid: number, on: boolean): void {
+    if (on) {
+      if (!this.fireLatch.has(uid)) {
+        this.fireLatch.add(uid);
+        this.dbg.latched++;
+      }
+    } else {
+      this.fireLatch.delete(uid);
+    }
+  }
+
+  canFire(uid: number): boolean {
+    return this.fireLatch.has(uid);
+  }
+
+  /** 卡死判定中（已连续 HOLD_S；探针/调试用） */
+  stuckOf(uid: number): boolean {
+    const rec = this.stuck.get(uid);
+    return rec !== undefined && rec.t >= STUCK.HOLD_S;
+  }
+
+  /** 离场清理（卡死窗口 / 开火闩锁） */
+  forget(uid: number): void {
+    this.stuck.delete(uid);
+    this.fireLatch.delete(uid);
+  }
+
+  clear(): void {
+    this.stuck.clear();
+    this.fireLatch.clear();
+  }
+}

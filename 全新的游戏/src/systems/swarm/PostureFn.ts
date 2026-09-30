@@ -1,11 +1,11 @@
 // ============================================================
-// PostureFn —— 连续态势函数（M2；《敌人管线设计.md》§2/§3.5）
+// PostureFn —— 连续态势函数（M2；《RTS架构.md》§2/§3.5）
 // ============================================================
 // p = clamp(schedule(t) + provocation, 0, 1)
 //   schedule：单日节律（时间主导：0.45 第一波 / 0.80 总攻）
 //   provocation：挑衅累加（击杀/被击/工事被拆）→ 指数衰减，上限 +0.35
 // 迟滞：上升快、回落慢；总攻进入后锁定，仅 withdraw 安全阀可打断。
-// 已接线（M2）：SwarmCommander.tick 读太阳钟（世界 6:00=0 / 18:00=1）+ 挑衅采样；
+// 已接线（M2）：data/SwarmData.tick 读太阳钟（世界 6:00=0 / 18:00=1）+ 挑衅采样；
 // 节奏口径 = 从落地起算、黄昏到 1（落地即黄昏 → 直接满节奏）。
 // ============================================================
 
@@ -22,7 +22,8 @@ const SCHEDULE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
   [1.00, 1.00],
 ];
 
-/** ★ 兵力放行曲线：早间只放少量（扎根），随后补满基数，两个波峰放宽 */
+/** ★ 兵力放行曲线（输入 = **事态函数 p**，用户定 2026-09-26）：早间只放少量（扎根），
+ *  随后补满基数，第一波大举增兵，总攻满编。与四管理器补兵间隔同源——改事态函数即同时改两者。 */
 const RELEASE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
   [0.00, 0.20],
   [0.30, 0.50],
@@ -36,9 +37,10 @@ const RELEASE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
 export const DAWN_HOUR = 6;
 export const DUSK_HOUR = 18;
 
-/** 太阳小时 → 当日进度 0~1（6:00 = 0，18:00 = 1；夜晚钳到端点） */
+/** 太阳小时 → 当日进度 0~1（6:00=0，18:00=1；夜晚钳到端点）——本体 WorldMode 消费 */
 export function dayT01FromHour(hour: number): number {
-  return clamp01((hour - DAWN_HOUR) / (DUSK_HOUR - DAWN_HOUR));
+  const h = (hour - DAWN_HOUR) / (DUSK_HOUR - DAWN_HOUR);
+  return h < 0 ? 0 : h > 1 ? 1 : h;
 }
 
 /** 锚点分段线性采样 */
@@ -91,7 +93,7 @@ export interface PostureState {
 }
 
 /** ★ 稳步推进：各姿态的**离舰前沿放行上限**（fortify 起手顶多放开一点；总攻才贴近船）
- *  frontP 只增长、单调向目标值逼近 —— 事态再落也不再回拉阵地（《敌人管线设计.md》§3.9） */
+ *  frontP 只增长、单调向目标值逼近 —— 事态再落也不再回拉阵地（《RTS架构.md》§3.9） */
 const FRONT_BY_POSTURE: Record<BattlePosture, number> = {
   fortify: 0.00,
   patrol: 0.15,
@@ -100,8 +102,9 @@ const FRONT_BY_POSTURE: Record<BattlePosture, number> = {
   assault: 0.95,
   withdraw: 0.15,   // 撤退重组的"前沿锚"回落许可（但 frontP 单调，此处只影响目标值不再起作用）
 };
-/** 前沿放行的逼近时间常数（越大越"稳步"；63% 到达耗时） */
-const FRONT_TAU = 40;
+/** 前沿放行的逼近时间常数（越大越"稳步"；63% 到达耗时）
+ *  ★ 2026-09-25 用户定：40 → 18（第一波前压时间太长，加快放行） */
+const FRONT_TAU = 18;
 
 export class PostureFn {
   private prov = 0;

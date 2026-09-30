@@ -146,11 +146,6 @@ export interface ThreatProfile {
   intentChance: number;
 }
 
-/** 基准威胁（无输入时；t=0 档） */
-export function neutralThreat(): ThreatProfile {
-  return buildThreat(1);
-}
-
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }

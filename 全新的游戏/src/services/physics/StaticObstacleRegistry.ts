@@ -8,6 +8,8 @@
 // 查询：半径圆 → 邻近 8m 网格桶收集（去重），开销 = 邻近桶内障碍数。
 // ============================================================
 
+import { COVER_H } from '../render/CoverRenderer';   // ★ 攀爬上限单源 = 掩体高
+
 export interface StaticObstacle {
   id: number;
   x: number; z: number; y: number;
@@ -109,3 +111,78 @@ export function queryStaticObstaclesInto(
     }
   }
 }
+
+// ============================================================
+// ★ 被动爬掩体（用户定 2026-09-27）：与地形爬坡点同构、**无需凭证**——靠近就爬。
+//   消费方：L2 代理经 RasterProbe.climbPoint 兜底（CharacterCore 传送带直接抓）；
+//           L3 实体已有"顶住 0.25s 自动翻"（CharacterBase.climbCand），同一条口径。
+// ============================================================
+
+/** 爬越段（与地形 ClimbRun 同构；top = 顶面世界高，passive 标记免凭证/免认领） */
+export interface CoverClimbRun {
+  x: number; z: number;
+  ux: number; uz: number;
+  lx: number; lz: number;
+  top: number;
+  passive: true;
+}
+
+/** 可攀工事最大高差（米；**单源 = 掩体高**——掩体加高后此处不跟就会"爬不上去"）
+ *  ★ 2026-09-29 修：原写死 3.2，掩体加高到 COVER_H=4.5 后 rise 4.5 > 3.2 → 永不触发攀爬。 */
+export const COVER_CLIMB_MAX = COVER_H;
+
+const _coverBuf: StaticObstacle[] = [];
+
+/** 被动爬掩体查询：单位正前方接触区若有可站顶工事（高差 0.4~COVER_CLIMB_MAX）→ 返回爬越段。
+ *  法线 = 单位当前前进方向（越到对侧）；起点的 sOff 基准 = 单位当前位置（P2 传送带口径）。 */
+export function coverClimbAt(
+  px: number, pz: number, py: number, dirX: number, dirZ: number, reach = 1.6,
+): CoverClimbRun | null {
+  const dl = Math.hypot(dirX, dirZ);
+  if (dl < 1e-3) return null;
+  const ux = dirX / dl, uz = dirZ / dl;
+  queryStaticObstaclesInto(px, pz, reach + 1.5, _coverBuf);
+  let best: CoverClimbRun | null = null;
+  let bestD = Infinity;
+  for (const o of _coverBuf) {
+    if (!o.walkableTop) continue;                       // 只爬可站顶工事（掩体/船体）
+    const top = o.y + o.hy;
+    const rise = top - py;
+    if (rise < 0.4 || rise > COVER_CLIMB_MAX) continue; // 太低不爬 / 太高（规划绕行）
+    if (py >= top - 0.2) continue;                      // 已在顶上
+    // ★ 最近点（OBB 局部夹取 / 圆沿连线）：长墙也能在前方接触区被识别（中心可能很远）
+    let cx: number, cz: number, thick = o.r;
+    if (o.hw !== undefined && o.hl !== undefined && o.yaw !== undefined) {
+      const fx = Math.sin(o.yaw), fz = Math.cos(o.yaw);   // 局部 +z（正面）
+      const rx2 = fz, rz2 = -fx;                          // 局部 +x
+      const vx = px - o.x, vz = pz - o.z;
+      const lx = vx * rx2 + vz * rz2, lz = vx * fx + vz * fz;
+      const clx = Math.max(-o.hw, Math.min(o.hw, lx));
+      const clz = Math.max(-o.hl, Math.min(o.hl, lz));
+      cx = o.x + clx * rx2 + clz * fx;
+      cz = o.z + clx * rz2 + clz * fz;
+      thick = Math.abs(o.hw * (ux * rx2 + uz * rz2)) + Math.abs(o.hl * (ux * fx + uz * fz));
+    } else {
+      const vx = px - o.x, vz = pz - o.z;
+      const d = Math.hypot(vx, vz) || 1;
+      const cl = Math.min(d, o.r);
+      cx = o.x + (vx / d) * cl;
+      cz = o.z + (vz / d) * cl;
+    }
+    const wx = cx - px, wz = cz - pz;
+    const along = wx * ux + wz * uz;
+    const lat = wx * (-uz) + wz * ux;
+    const dist = Math.hypot(wx, wz);
+    if (along < 0.1 || dist > reach) continue;          // 正前方接触区（靠得够近就爬）
+    if (Math.abs(lat) > 1.0) continue;                  // 不偏路
+    const d2 = Math.hypot(o.x - px, o.z - pz);
+    if (d2 < bestD) {
+      bestD = d2;
+      best = { x: px, z: pz, ux, uz,
+        lx: cx + ux * (thick + 0.8), lz: cz + uz * (thick + 0.8),
+        top, passive: true };
+    }
+  }
+  return best;
+}
+

@@ -1,5 +1,5 @@
 // ============================================================
-// HoleTable —— 敌用工事公式表（《敌人管线设计.md》§1.3 工事层·动态表）
+// HoleTable —— 敌用工事公式表（《RTS架构.md》§1.3 工事层·动态表）
 // ============================================================
 // 敌人真正读的"工事"在这里：坑洞（1m 深度场）与**构造掩体**（活注册表）都**动态计算**。
 //   · 精度：**1m×1m 二维网格**（288×288，与 HoleMask 同窗同格），坑洞条目存深度；
@@ -17,6 +17,7 @@
 
 import { L1_R, type TerrainSemantics } from './TerrainSemantics';
 import { HoleMask, MASK_SIDE } from './HoleMask';
+import { simNow } from '../../services/SimClock';
 
 /** 打分门槛：深度低于此值，任何坑都不是有效坑洞（分恒 0） */
 export const HOLE_MIN_DEPTH = 0.30;
@@ -78,7 +79,8 @@ export interface Hole {
 }
 
 function perfNow(): number {
-  return typeof performance !== 'undefined' ? performance.now() : Date.now();
+  // ★ 工事占用计时 = 模拟时钟（毫秒；倍速同步）
+  return simNow() * 1000;
 }
 
 export class HoleTable {

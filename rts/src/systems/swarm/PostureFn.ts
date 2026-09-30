@@ -37,6 +37,12 @@ const RELEASE_ANCHORS: ReadonlyArray<readonly [number, number]> = [
 export const DAWN_HOUR = 6;
 export const DUSK_HOUR = 18;
 
+/** 太阳小时 → 当日进度 0~1（6:00=0，18:00=1；夜晚钳到端点）——本体 WorldMode 消费 */
+export function dayT01FromHour(hour: number): number {
+  const h = (hour - DAWN_HOUR) / (DUSK_HOUR - DAWN_HOUR);
+  return h < 0 ? 0 : h > 1 ? 1 : h;
+}
+
 /** 锚点分段线性采样 */
 function sampleAnchors(anchors: ReadonlyArray<readonly [number, number]>, v: number): number {
   const t = clamp01(v);

@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmUnit —— 蜂群单位数据面 / 载体契约（《实体架构.md》§5.3 / §9.4）
+// SwarmUnit —— 蜂群单位数据面 / 载体契约（《RTS架构.md》§5.3 / §9.4）
 // ============================================================
 // ★ 铁律：entity/ 不引 systems/swarm/ —— 本文件是实体侧的唯一类型面，
 //   systems/swarm 的 AgentSnapshot 以本文件 SwarmSnapshot 为基（systems→entity 合法）。
@@ -25,7 +25,7 @@ export type DeployMode =
   | 'regroup'    // 后方集结（后勤等）
   | 'build';     // 施工（施工兵种）
 
-/** 引擎侧战术部署（逐兵种覆盖；《敌人管线设计.md》§3.2） */
+/** 引擎侧战术部署（逐兵种覆盖；《RTS架构.md》§3.2） */
 export interface EngineTactics {
   /** 部署模式（缺省 = 按小队属性） */
   mode?: DeployMode;
@@ -41,7 +41,7 @@ export interface EngineTactics {
   screenDist?: number;
 }
 
-/** 队内战术（逐兵种覆盖；《敌人管线设计.md》§3.3） */
+/** 队内战术（逐兵种覆盖；《RTS架构.md》§3.3） */
 export interface UnitTactics {
   /** 低血（≤30%）行为：fallback=撤出（通用）/ fight=继续战斗 */
   lowHp?: 'fallback' | 'fight';
@@ -82,7 +82,7 @@ export function attackFromCode(c: number): UnitAttackType {
 }
 
 // ============================================================
-// ★ 步骤 9b：命令与个体指令（载体契约；《实体架构.md》§5.11）
+// ★ 步骤 9b：命令与个体指令（载体契约；《RTS架构.md》§5.11）
 // ============================================================
 
 /** 小队整体命令（mode；引擎→队长→全队） */
@@ -97,12 +97,11 @@ export type DirectiveKind =
 /** ★ P4 战术意图（命令三件套之一；引擎填，队长按它 argmax scoreFor 拆步） */
 export type SquadIntent = 'attack' | 'hold' | 'guard' | 'build' | 'patrol' | 'withdraw' | 'regroup';
 
-/** 通用五轴命令（引擎侧外壳；路径/目标/ROE/队形/时序+分工） */
+/** 通用五轴命令（引擎侧外壳；路径/目标/队形/时序+分工） */
 export interface TacticalOrder {
   kind: SquadOrderKind;
   path?: { x: number; z: number }[];
   target?: { x: number; z: number; r?: number };
-  roe?: 'engage' | 'holdFire' | 'fireOnArrival' | 'focusOnly';
   formation?: 'column' | 'line' | 'loose' | 'wings';
   startAfter?: number;
   signal?: number;
@@ -227,6 +226,10 @@ export interface SteerIntent {
   targetX?: number;
   targetY?: number;
   targetZ?: number;
+  /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24）：到目标点必须程序化爬坡 */
+  climb?: boolean;
+  /** ★ 凭证自带的上坡点（爬坡执行与此点比对；与朝向无关） */
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
 }
 
 /** ★ 实体侧数据面（EnemyBase 实现；玩家/友军不实现） */
@@ -262,7 +265,7 @@ export interface SwarmUnit {
   /** 空中悬停高度（米，相对地表；地面恒 0） */
   readonly altitude: number;
   /** 移动目标点（世界坐标；编队槽位/寻路下发，hold 语义；null = 无目标） */
-  moveTarget: { x: number; y: number; z: number } | null;
+  moveTarget: { x: number; y: number; z: number; climb?: boolean } | null;
   /** ★ 编队移动速度（m/s；steer 下发速度的兜底；随快照跨 LOD） */
   moveSpeed: number;
   /** 攻击类型 */
@@ -279,9 +282,6 @@ export interface SwarmSnapshot {
   role?: UnitRole;
   moveTargetX?: number;
   moveTargetY?: number;
-  /** ★ 成员级任务目标（工程分块 / 护卫扇区；跨 LOD 保留） */
-  taskX?: number;
-  taskZ?: number;
   moveTargetZ?: number;
   /** ★ 编队移动速度（m/s；代理侧 = AgentSnapshot.speed 同源） */
   moveSpeed?: number;

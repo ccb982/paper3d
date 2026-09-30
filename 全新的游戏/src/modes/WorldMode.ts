@@ -42,12 +42,11 @@ import { EnemyBase } from '../entity/EnemyBase';
 import type { AllyBase, AllyWorldPort } from '../entity/ally/AllyBase';
 import { DroneAlly } from '../entity/ally/DroneAlly';
 import { SentinelAlly } from '../entity/ally/SentinelAlly';
-import { SwarmDebugOverlay, updateSwarmDebug } from '../services/ui/SwarmDebugOverlay';
-import { TerrainTableViewer } from '../services/ui/TerrainTableViewer';
-import { SwarmTrace } from '../services/ui/SwarmTrace';
 import { buildEnemyTargetCandidates } from './world/TargetCandidates';
-import { wireCommanderPorts } from './world/CommanderWiring';
 import { landingCamera, tryStartLandingShot, updateLandingShot, playerExitPoint } from './world/LandingCamera';
+import { setSimNow } from '../services/SimClock';
+import { wireCommanderPorts } from './world/CommanderWiring';
+import { installEngineWiring } from './world/EngineWiring';
 import { saveWorldStateNow, restoreWorldState } from './world/WorldPersistence';
 import {
   DRONE_ITEM, PLAYER_MOVE_SPEED, VEHICLE_BRIDGE_RADIUS, VEHICLE_CLIMB_SPEED,
@@ -245,6 +244,10 @@ export class WorldMode implements IGameMode {
   private enemyDefs = new WeakMap<EnemyBase, MobDef>();
   /** ★ 出生 chunk key（玩家安全区：自己不刷怪；敌人从他处生成） */
   private spawnChunkKey = -1;
+  /** ★ 新蜂群引擎装配（引擎+队长核+战术侧；《移植清单》P2） */
+  private engineWire: ReturnType<typeof installEngineWiring> | null = null;
+  /** ★ 模拟时钟（玩法计时唯一真源；每子步写入） */
+  private simT = 0;
   /** ★ P4→日节律：战斗节奏导演（平时少量游荡 / 每天 1~2 波大举进攻 + 预警 + 按天强化） */
   private swarmDirector = new Director();
   /** 导演播报钩子（复用对象；enter 时绑定 UI） */
@@ -361,13 +364,6 @@ export class WorldMode implements IGameMode {
   private killedUnsub?: () => void;
   /** ★ 步骤 10：敌人受击 → 小队/大队警觉（自主 LOD） */
   private enemyHitUnsub?: () => void;
-  /** ★ 调试可视化（?swarmdbg=1）：小队/属性/指令 */
-  private swarmDbg: SwarmDebugOverlay | null = null;
-  private swarmDbgAccum = 0;
-  /** ★ 地形表实时视图（?l1view=1；读当前世界，1Hz） */
-  private tableViewer: TerrainTableViewer | null = null;
-  /** ★ 敌人轨迹快照（?swarmtrace=1；调试） */
-  private swarmTrace: SwarmTrace | null = null;
   /** ★ 爆炸视觉（自爆/范围爆炸） */
   private explosionFx: ExplosionFx | null = null;
   private pickupGlows: PickupGlowEffect[] = [];
@@ -755,11 +751,22 @@ export class WorldMode implements IGameMode {
       this.mobDefs.map((d) => d.groundSink),
     );
     // ★ 蜂群回调（一次性绑定，避免每帧闭包分配）
+    // ★ 命令器端口（造掩体/挖壕/地形脏/生成口）——新接线
+    wireCommanderPorts({ data: this.swarm.data, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.ship.position.x, z: this.ship.position.z }) });
+    // ★ 新引擎装配：LiveView → EngineBridge → 队长核 + 战术侧
+    this.engineWire = installEngineWiring({
+      swarm: this.swarm, spawner: this.spawner, raster: this.raster, scene: this.scene!,
+      entities: this.entities, chunks: this.chunks,
+      enemies: () => this.enemies, mobDefs: () => this.mobDefs,
+      player: () => ({ x: this.player.position.x, z: this.player.position.z }),
+      ship: () => ({ x: this.ship.position.x, z: this.ship.position.z }),
+      surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0),
+    });
+    // ★ 进图即建表（防"未落地 → 无计划/无表 → 敌人不动"；落地时 finishDock 会重建成真实落点）
+    this.swarm.data.planDefense(this.ship.position.x, this.ship.position.z, 144, performance.now() / 1000, this.ship.position.x, this.ship.position.z);
     this.swarmHooks.tierPort = this.spawner;   // 升降格/回收唯一桥接（WorldSpawner 实现）
     this.swarmHooks.activeUnits = () => this.enemies;   // L3 编队 steer 的只读单位面
     this.swarmHooks.mobTactics = (mi) => this.mobDefs[mi]?.tactics ?? null;   // ★ 逐兵种战术表
-    // ★ 蜂群指挥器端口（兵力/工事全权在指挥层；地形扫描延后到 finishDock 真实落点，enter 时舰位在水面会扫空）
-    wireCommanderPorts({ commander: this.swarm.commander, spawner: this.spawner, raster: this.raster, mobDefs: this.mobDefs, entities: this.entities, scene: this.scene!, chunks: this.chunks, surfaceAt: (x, z) => this.deploySurfaceAt(x, z, 0), playerPos: () => ({ x: this.player.position.x, z: this.player.position.z }) });
     // ★ 步骤 5：队长标记镜像（池侧选举/接任 → L3 实体）
     this.swarmHooks.onLeaderChanged = (uid, isLeader) => this.spawner.setLeaderFlag(uid, isLeader);
     // ★ 步骤 9b：命令/指令 → L3 实体（池侧写列；实体走 uid 映射推送）
@@ -789,20 +796,6 @@ export class WorldMode implements IGameMode {
         bulletSkin: skin === 1 ? 'fireball' : 'arrow',
       });
     };
-    // ★ 调试可视化：?swarmdbg=1（小队/属性/指令；无 flag 零开销）
-    if (location.search.includes('l1view')) this.tableViewer = new TerrainTableViewer();
-    if (location.search.includes('swarmdbg')) {
-      this.swarmDbg = new SwarmDebugOverlay();
-      // ★ 控制台测试入口（验证命令链）：
-      //   __swarm.issueOrder(squadId, { kind:'advance', target:{x,z}, seq:1 })
-      (window as unknown as { __swarm?: unknown }).__swarm = this.swarm;
-      (window as unknown as { __commander?: unknown }).__commander = this.swarm.commander;
-    }
-    // ★ 敌人轨迹快照（?swarmtrace=1）：1Hz 记录每只敌人走位 + 每队命令 + 工程进度
-    if (location.search.includes('swarmtrace')) {
-      this.swarmTrace = new SwarmTrace();
-      (window as unknown as { __trace?: unknown }).__trace = this.swarmTrace;
-    }
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
@@ -1418,12 +1411,12 @@ export class WorldMode implements IGameMode {
       hooks.camForwardX = camF.x; hooks.camForwardZ = camF.z;
       hooks.entityCount = this.enemies.length;
       // ★ M2：当日进度（太阳钟：6:00=0 / 18:00=1）→ 蜂群态势函数日程
-      hooks.dayT01 = dayT01FromHour(renderManager.querySun().hour);
+      // ★ 本体口径（2026-09-30）：蜂群节奏 = **落地起算**（不继承太阳钟——本体白天仅 7.5 分钟，
+      //   航行到傍晚落地会"一进图就总攻"）；太阳钟仍驱动昼夜/UI，不驱蜂群事态。
+      hooks.dayT01 = -1;
+      this.simT += dt; setSimNow(this.simT);   // ★ 模拟时钟单源（蜂群全部玩法计时读它）
       this.swarm.update(dt, hooks);
-      this.updateSwarmDbg(dt);
-      this.swarmTrace?.sample(dt, this.swarm, pp.x, pp.y);   // pp = 地面坐标 (x, y=z)
-      const cmdr = this.swarm.commander;
-      this.tableViewer?.tick(cmdr.semantics, this.raster, cmdr.holeMask, cmdr.holeTable, dt);
+      this.engineWire?.tick(dt);   // ★ P2：引擎拍 + 队长核 + 战术侧
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
       this.explosionFx?.update(dt);
@@ -1431,7 +1424,7 @@ export class WorldMode implements IGameMode {
       // ---- ★ P2：玩家/友军子弹命中代理（线段 vs 人群网格；命中即结算） ----
       this.combatSystem.updateAgentHits(dt);
       // ---- ★ 攻势播报（M3.5：节奏唯一来源 = PostureFn；这里只把姿态变化播给 UI） ----
-      this.swarmDirector.announce(this.swarm.commander.battlePosture, this.swarm.commander.postureP);
+      this.swarmDirector.announce(this.swarm.data.battlePosture, this.swarm.data.postureP);
       // ---- ★ 远距实体降格（0.25s 一拍）：实体超出 DEMOTE_RADIUS → 回代理池，
       //   代理的远距回收由 SwarmSystem 统一处理。节拍与实现都在 WorldSpawner ----
       this.spawner.tickDemote(dt, pp.x, pp.y);
@@ -1757,12 +1750,9 @@ export class WorldMode implements IGameMode {
     // ---- 取消无人机召唤事件订阅 + 销毁无人机 ----
     this.droneSummonUnsub?.();
     this.droneSummonUnsub = undefined;
-    // ---- 调试可视化（?swarmdbg=1） ----
-    this.swarmDbg?.dispose();
-    this.swarmDbg = null;
-    this.tableViewer?.dispose();
-    this.tableViewer = null;
-    this.swarmTrace = null;
+    // ---- 引擎装配（P2） ----
+    this.engineWire?.dispose();
+    this.engineWire = null;
     // ---- 爆炸视觉 ----
     this.explosionFx?.dispose();
     this.explosionFx = null;
@@ -2174,24 +2164,6 @@ export class WorldMode implements IGameMode {
     );
   }
 
-  /** ★ 调试可视化（?swarmdbg=1）：采集在覆盖层内，这里只做 10Hz 限流 + 接线 */
-  private updateSwarmDbg(dt: number): void {
-    const dbg = this.swarmDbg;
-    if (!dbg || !this.camera) return;
-    this.swarmDbgAccum += dt;
-    if (this.swarmDbgAccum < 0.1) return;
-    this.swarmDbgAccum = 0;
-    updateSwarmDebug(dbg, {
-      swarm: this.swarm,
-      enemies: this.enemies,
-      playerX: this.player.position.x,
-      playerY: this.player.position.y,
-      playerZ: this.player.position.z,
-      camera: this.camera,
-      groundAt: (x, z) => this.raster.surfaceHeightAt(x, z),
-      mobName: (kind) => this.mobDefs[kind]?.name ?? `#${kind}`,
-    });
-  }
 
   /** ★ 放置面高度：地形 / 墙顶 / 舰船甲板 取最高（墙上加墙用） */
   private deploySurfaceAt(x: number, z: number, y: number): number {
@@ -2845,7 +2817,7 @@ export class WorldMode implements IGameMode {
     const sp = resolveDockSpawn(this.raster, cur.x, cur.z);
     this.setPhase('explore');     // ★ 落地停稳 = 人下机到地面（露天环境 + 恢复昼夜）
     // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；展开轴=扫描走廊（掩体朝舰船，战壕脚底下）
-    this.swarm.commander.planDefense(sp.x, sp.z, 80);
+    this.swarm.data.planDefense(sp.x, sp.z, 144, performance.now() / 1000, sp.x, sp.z);
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;

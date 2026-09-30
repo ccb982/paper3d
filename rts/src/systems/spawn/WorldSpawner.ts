@@ -123,6 +123,8 @@ export const SENTINEL_TAUNT_RADIUS = 40;
 // ★ SpawnDeps —— WorldMode 提供给 Spawner 的一切（含共享可变状态）
 // ============================================================
 export interface SpawnDeps {
+  /** 兼容本体存档分块键（rts 未用；可选） */
+  readonly spawnChunkKey?: number;
   // ---- 共享可变状态（WorldMode 持有；Spawner 读写同一份）----
   enemies: EnemyBase[];
   enemyDefs: WeakMap<EnemyBase, MobDef>;

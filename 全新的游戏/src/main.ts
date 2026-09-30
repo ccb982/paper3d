@@ -68,6 +68,7 @@ let currentEnv: 'ship' | 'world' = 'ship';
 // 渲染资源（全局持有，供逐帧刷新背景/雾色）
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
+let cameraRef: THREE.PerspectiveCamera | null = null;
 
 /** 舰船内部固定背景色（中性深石墨；2026-09-16 极简改版：灰底换成深底，
  *  剖切房间在暗背景上"亮起来"，GTAO/暗角的对比也更干净） */
@@ -154,6 +155,7 @@ async function boot() {
   renderManager.setup(sceneLocal, rendererLocal);
 
   const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 500);
+  cameraRef = camera;
   window.addEventListener('resize', () => {
     rendererLocal.setSize(window.innerWidth, window.innerHeight);
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -735,6 +737,12 @@ function enterWorldMode(
   // ★ BGM：这里**不下发**曲目 —— 世界模式自己按阶段切曲（在舰船上播 / 下机出去静音），
   //   见 WorldMode.syncShipBgm（舰船曲目仍是 src/config/bgm.ts 的 'ship' 一条真源）。
 }
+
+// ★ 开发调试口（自动冒烟/联调）：控制台 __game.enterWorld() / __game.enterBase()
+(globalThis as unknown as { __game?: unknown }).__game = {
+  enterWorld: (day = 1): void => { void (async () => { await ensureRapierReady(); enterWorldMode(scene, cameraRef!, renderer, day); })(); },
+  enterBase: (): void => enterBaseMode(scene, cameraRef!, renderer),
+};
 
 // ============================================================
 // ★ 运行期异常上屏（进图/模式切换/帧更新抛错不再无声空屏）

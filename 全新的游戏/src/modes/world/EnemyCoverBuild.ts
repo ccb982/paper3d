@@ -1,8 +1,8 @@
 // ============================================================
-// EnemyCoverBuild —— 敌人工程兵造掩体（S1；《敌人管线设计.md》§3）
+// EnemyCoverBuild —— 敌人工程兵造掩体（S1；《RTS架构.md》§3）
 // ============================================================
 // 敌人造的掩体：**无海报**（poster:false）、正面朝来向（面向玩家来向）、带施工插值。
-// 由 SwarmCommander.buildCover 端口调用（模式层注入）。
+// 由 data/SwarmData.buildCover 端口调用（模式层注入）。
 // ============================================================
 
 import type * as THREE from 'three';
@@ -20,9 +20,13 @@ export function buildEnemyCover(
   z: number,
   variant: 'cover' | 'wall',
   plan: DefensePlan | null,
+  /** ★ 朝向覆盖（用户定 2026-09-25：RTS 里威胁来自舰船 → 正面朝舰；缺省用 plan 来向） */
+  face?: { x: number; z: number },
 ): void {
-  // 正面 +Z 朝向玩家来向（射击孔面向来敌）
-  const heading = plan ? Math.atan2(plan.approachX, plan.approachZ) : 0;
+  // 正面 +Z 朝向来敌（射击孔面向来敌）
+  const heading = face
+    ? Math.atan2(face.x - x, face.z - z)
+    : (plan ? Math.atan2(plan.approachX, plan.approachZ) : 0);
   new EnemyCoverEntity(entities, scene, {
     x, y, z,
     heading,

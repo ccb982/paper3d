@@ -20,7 +20,10 @@ import { CharacterDeathFx } from "../services/fx/CharacterDeathFx";
 import { RasterMap } from "../services/map/RasterMap";
 import { EDGE_CLIFF_BAND } from "../services/map/Refinements";
 import { entityPerf } from "./EntityPerf";
-import { queryStaticObstaclesInto, type StaticObstacle } from "../services/physics/StaticObstacleRegistry";
+import { SHORE_CLIMB_MAX } from "./TerrainAssist";
+import { CharacterCore, canShift, unbuyGroundY, type TerrainProbe  } from "./base/CharacterCore";
+import { createRasterProbe } from "./base/RasterProbe";
+import { queryStaticObstaclesInto, type StaticObstacle, COVER_CLIMB_MAX } from "../services/physics/StaticObstacleRegistry";
 
 /** ★ 静态障碍查询复用缓冲（零分配；单帧内各角色顺序使用） */
 const _obstacleBuf: StaticObstacle[] = [];
@@ -46,14 +49,21 @@ export const DEFAULT_COLLISION_VOLUME = {
 };
 
 export abstract class CharacterBase extends EntityBase {
+  /** ★ 稳定 uid（子类覆盖；上坡点认领制用） */
+  protected climbUid(): number {
+    return 0;
+  }
+
   readonly controller: CharacterController;
   /** ★ 无视地形落差行进（载具：爬坡/过坑；开启后不再被 EDGE_CLIFF_BAND 立面阻挡） */
   climbAnyTerrain = false;
+  /** ★ 是否允许爬掩体/可攀工事（用户定 2026-09-25：RTS 先给敌人关掉——行军路过就反复翻→卡） */
+  canClimbCovers = true;
   /** ★ 限制爬崖（敌人等开启）：禁止朝高台立面位移——只能走插值坡/≤EDGE_CLIFF_BAND 小台阶，
    *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
   blockCliffClimb = false;
 
-  // ---- ★ 空中层（2026-09-18；《实体架构.md》§7）----
+  // ---- ★ 空中层（2026-09-18；《RTS架构.md》§7）----
   /** 飞行单位：悬停在「地表高 + airAltitude」，不贴地、不受地形落差阻挡、不吃掉坑判死。
    *  ★ y 的唯一驱动点是 `WorldMode.clampCharacter`（它会优先处理飞行分支）；
    *    开启者在 EnemyBase 构造里按名册 `isAir` 设置，并同时打开 `climbAnyTerrain`。 */
@@ -64,20 +74,41 @@ export abstract class CharacterBase extends EntityBase {
   airPhase = Math.random() * Math.PI * 2;
   /** ★ 起跳站立面高（空中 y 基准；落地时刷新为当前贴地高）。真实跳跃用 */
   private airborneStandY = 0;
+  /** ★ 飞行巡航高度（世界系；0 = 未初始化→首帧按地表+悬停高初始化；用户定：飞行自由高度） */
+  airCruiseY = 0;
   // ---- ★ 攀爬（可攀工事：掩体等 walkableTop 矩形；持续顶住自动翻上） ----
   /** 可攀最大高差（米）：顶面高于脚底不超过此值才能攀（掩体 3m 也在内） */
-  static readonly CLIMB_MAX = 3.2;
+  static readonly CLIMB_MAX = COVER_CLIMB_MAX;   // ★ 单源（与被动爬掩体同值；用户定 2026-09-27）
   /** 持续顶住时长（秒）→ 触发攀爬（防误触） */
   private static readonly CLIMB_HOLD = 0.25;
   /** 攀爬时长（秒） */
   private static readonly CLIMB_TIME = 0.45;
+  /** ★ 过掩体优化：翻越后冷却（毫秒；防来回翻） */
+  private static readonly CLIMB_CD_MS = 1200;
   private climbT = -1;
+  /** ★ 寻路明确标注"要爬坡"（用户定 2026-09-24；EnemyBase 由 steer 写入） */
+  /** ★ 重写 P1：推进/爬坡/立面/贴地统一走 CharacterCore（L2/L3 同内核） */
+  private readonly core = new CharacterCore();
+  /** ★ 爬坡凭证（路线 climb=true → steer.climb；用户定 2026-09-26） */
+  climbOrdered = false;
+  /** ★ 凭证点（路线发放；内核判"在坡点"用） */
+  climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
+  /** ★ 地形探针（两载体共用一份：`entity/base/RasterProbe`；重写 P1） */
+  private readonly probe: TerrainProbe = createRasterProbe(() => this.entity.position.y);
   private climbFromX = 0; private climbFromY = 0; private climbFromZ = 0;
   private climbToX = 0; private climbToY = 0; private climbToZ = 0;
   private climbContactT = 0;
-  private climbCand: { top: number; ix: number; iz: number } | null = null;
+  private climbCand: { top: number; ix: number; iz: number; ext: number } | null = null;
+  /** ★ 过掩体优化：翻越后冷却（毫秒时间戳；防"翻过去又被推回来"来回翻） */
+  private climbCdUntil = 0;
   /** ★ 是否正在攀爬（CharacterClamp 跳过贴地，避免抢位置） */
   get isClimbing(): boolean { return this.climbT >= 0; }
+
+  /** ★ 程序化爬坡中（内核爬升态；含强制走位与承诺续爬）——贴地结算用：取最高表面直接到高原顶 */
+  get isTerrainClimbing(): boolean { return this.core.climbing; }
+
+  /** ★ 爬坡到落点回调（子类覆写；无默认行为） */
+  protected onClimbLandedEvent(): void { /* 默认无 */ }
 
   /** ★ 角色碰撞体积（实例基类属性；子类可覆写为不同体型） */
   collisionVolume: {
@@ -130,44 +161,36 @@ export abstract class CharacterBase extends EntityBase {
     const speed = this.controller.moveSpeed;
     const prevX = this.entity.position.x;
     const prevZ = this.entity.position.z;
-    // ★ boss4D 玩家专属：垂直壁贴附保护——位移逐分量受阻检查。
-    //   朝壁方向（前方地表比脚底地表高出 EDGE_CLIFF_BAND 的立面）位移分量为 0，
-    //   角色始终与壁保留 clearance 距离（碰撞盒边缘外 m）。
-    //   检查只看地形高差、与跳跃离地高度无关 → 跳跃中朝壁的速度分量同样被消，
-    //   实现"跳跃无向墙壁速度"。
-    let dx = dir.x * speed * dt;
-    let dz = dir.y * speed * dt;
-    // ★ 立面阻挡：boss4D 玩家（requireRealLanding）与受限爬崖单位（blockCliffClimb，
-    //   敌人）共用——朝壁方向位移分量清零；blockCliffClimb 单位放行"插值坡"
-    //   （陡升但仍在延续 = 坡），requireRealLanding 保持原严格逻辑（>0.5 即挡）
-    if (!this.climbAnyTerrain && (this.controller.requireRealLanding || this.blockCliffClimb)) {
-      const raster = RasterMap.current;
-      const p0 = this.entity.position;
-      // ★ 第二层高度（浮空洞顶）：按自身高度选层（山上的敌/玩家不会误判洞为崖）
-      const gyHere = raster?.surfaceHeightAtFor(p0.x, p0.z, p0.y) ?? 0;
-      if (raster) {
-        const ext = shapeExtents(this.collisionVolume.shape);
-        const m = 0.1; // 贴壁保留距离
-        /** 该采样点是否"墙"（陡升 > 台阶豁免，且再远 0.8m 不再延续） */
-        const isWall = (sx: number, sz: number, ux: number, uz: number): boolean => {
-          const h1 = raster.surfaceHeightAtFor(sx, sz, p0.y);
-          const rise = h1 - gyHere;
-          if (rise <= EDGE_CLIFF_BAND) return false;
-          if (!this.blockCliffClimb) return true; // boss4D 玩家：原逻辑
-          const h2 = raster.surfaceHeightAtFor(sx + ux * 0.8, sz + uz * 0.8, p0.y);
-          return h2 - h1 < rise * 0.5;
-        };
-        if (dx > 0 && isWall(p0.x + ext.hx + m, p0.z, 1, 0)) dx = 0;
-        else if (dx < 0 && isWall(p0.x - ext.hx - m, p0.z, -1, 0)) dx = 0;
-        if (dz > 0 && isWall(p0.x, p0.z + ext.hz + m, 0, 1)) dz = 0;
-        else if (dz < 0 && isWall(p0.x, p0.z - ext.hz - m, 0, -1)) dz = 0;
-      }
-    }
+    const vol = shapeExtents(this.collisionVolume.shape);
+    const step = this.core.step(
+      {
+        x: prevX, y: this.entity.position.y, z: prevZ, dt,
+        dirX: dir.x, dirZ: dir.y, speed,
+        climbOrdered: this.climbOrdered,
+        climbPt: this.climbPt,
+        uid: this.climbUid(),   // ★ 上坡点认领制
+        blockCliffClimb: this.blockCliffClimb,
+        climbAnyTerrain: this.climbAnyTerrain,
+        flying: this.airborne === true,   // ★ 飞行：自由路径
+        hx: vol.hx, hz: vol.hz,
+        suspended: false,
+      },
+      this.probe,
+      performance.now() / 1000,
+    );
+    if (step.landed) this.onClimbLandedEvent();   // ★ 爬坡完成 → 强制重寻路一次
+    const dx = step.dx;
+    const dz = step.dz;
+    const climbing = step.climbing;
+    const stepLimit = this.probe.wetAt(prevX, prevZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
     this.entity.position.x += dx;
     this.entity.position.z += dz;
     const p = this.entity.position;
-    const gy = RasterMap.current?.surfaceHeightAtFor(p.x, p.z, p.y) ?? 0;
-    if (this.controller.isAirborne()) {
+    const gy = unbuyGroundY(p.x, p.z, p.y);   // ★ 贴地/脱埋（顶层；两载体同口径）
+    if (step.unburied) {
+      p.y = gy;                 // ★ 脱埋吸附：直接抬到顶层（不当作墙回退）
+      this.airborneStandY = gy;
+    } else if (this.controller.isAirborne()) {
       // ★ 空中态：真实离地，y = 起跳站立面 + 抛物线偏移（峰值 0.8 → 可越 0.5 高差）。
       //   落地交给 WorldMode 落回贴地。横向位移已在上面按分量做了垂直壁受阻检查，
       //   因此跳跃无法朝壁方向推进（不穿模、不会横向切入壁腹被 clamp 抬升）。
@@ -177,7 +200,7 @@ export abstract class CharacterBase extends EntityBase {
       //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.6) 以上 → 回退，
       //   0.6 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
-      if (!this.climbAnyTerrain && gy - p.y > EDGE_CLIFF_BAND) {
+      if (!climbing && !this.climbAnyTerrain && !this.airborne && gy - p.y > stepLimit) {   // ★ 飞行免责（经典空中层：墙只管地面）
         p.x = prevX;
         p.z = prevZ;
       }
@@ -191,14 +214,21 @@ export abstract class CharacterBase extends EntityBase {
         !this.controller.isAirborne() && Math.abs(p.y - floorY) <= 0.05;
     }
     // ★ 角色间推挤（kinematic 无物理响应 → 实体层处理互相阻挡）
+    const _pX = p.x, _pZ = p.z;   // ★ H2：推挤前位置（层守卫基准）
     const _c1 = _ct ? performance.now() : 0;
-    this.separateFromOthers();
+    if (!climbing) this.separateFromOthers();   // 爬坡态跳过分离（防坡面扎堆互推卡死）
     const _c2 = _ct ? performance.now() : 0;
     // ★ 地图装饰物推挤（碎石等 fixed cuboid 障碍）
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
-    this.separateFromStatics();
-    // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去
-    if (this.climbCand && !this.controller.isAirborne() && !this.airborne) {
+    if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
+    // ★ H2 层守卫：推挤不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
+    if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain) {
+      const lim = this.probe.wetAt(_pX, _pZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+      if (!canShift(this.probe, _pX, _pZ, p.y, p.x, p.z, lim)) { p.x = _pX; p.z = _pZ; }
+    }
+    // ★ 攀爬：持续顶住可攀工事（climbCand）→ 自动翻上去；★ 过掩体优化：翻完加冷却，防反复翻/来回翻
+    if (this.climbCand && !this.controller.isAirborne() && !this.airborne
+      && performance.now() >= this.climbCdUntil) {
       this.climbContactT += dt;
       if (this.climbContactT >= CharacterBase.CLIMB_HOLD) this.beginClimb(this.climbCand);
     } else {
@@ -248,7 +278,7 @@ export abstract class CharacterBase extends EntityBase {
         other.hz,
       );
       if (!sep) continue;
-      p.x += sep.ax;
+      p.x += sep.ax;   // ★ 水=正常地块（无水中分离折减）
       p.z += sep.az;
       op.x += sep.bx;
       op.z += sep.bz;
@@ -285,9 +315,21 @@ export abstract class CharacterBase extends EntityBase {
           // ★ 攀爬候选：顶面可站 + 高差在可攀范围（0.4~CLIMB_MAX）→ 持续顶住则翻上去
           const top = o.y + o.hy;
           const rise = top - p.y;
-          if (o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
+          if (this.canClimbCovers && o.walkableTop && rise > 0.4 && rise <= CharacterBase.CLIMB_MAX) {
             const len = Math.hypot(push.dx, push.dz) || 1;
-            this.climbCand = { top, ix: -push.dx / len, iz: -push.dz / len };
+            const ix = -push.dx / len, iz = -push.dz / len;   // 指向掩体（推挤反方向）
+            // ★ 沿路才爬（用户定 2026-09-25）：只有期望方向朝掩体（掩体在路上）才触发爬，防行军路过反复翻
+            const md = this.controller.moveDir;
+            const want = Math.hypot(md.x, md.y) || 1;
+            const into = (md.x * ix + md.y * iz) / want;
+            if (into > 0.6) {
+              // ★ 掩体沿逼近方向的半投影（用户定 2026-09-27）：落点要越过**对面**，否则厚掩体落在顶上被推回
+              const fx2 = o.yaw !== undefined ? Math.sin(o.yaw) : 0, fz2 = o.yaw !== undefined ? Math.cos(o.yaw) : 1;
+              const rx2 = fz2, rz2 = -fx2;
+              const hw2 = o.hw ?? o.r, hl2 = o.hl ?? o.r;
+              const ext = Math.abs(hw2 * (ix * rx2 + iz * rz2)) + Math.abs(hl2 * (ix * fx2 + iz * fz2));
+              this.climbCand = { top, ix, iz, ext };
+            }
           }
         }
         continue;
@@ -309,11 +351,12 @@ export abstract class CharacterBase extends EntityBase {
   }
 
   /** ★ 开始攀爬（目标 = 沿"朝墙内"方向前进一个身位 + 顶面高度） */
-  private beginClimb(cand: { top: number; ix: number; iz: number }): void {
+  private beginClimb(cand: { top: number; ix: number; iz: number; ext?: number }): void {
     const p = this.entity.position;
     const vol = this.collisionVolume;
     const me = vol ? shapeExtents(vol.shape) : { hx: 0.3, hy: 1, hz: 0.3 };
-    const reach = Math.max(0.5, Math.max(me.hx, me.hz) + 0.35);
+    // ★ 越到对面：基础 reach + 掩体沿逼近方向全厚（2×半投影）+ 余量（用户定 2026-09-27）
+    const reach = Math.max(0.5, Math.max(me.hx, me.hz) + 0.35) + 2 * (cand.ext ?? 0) + 0.4;
     this.climbFromX = p.x; this.climbFromY = p.y; this.climbFromZ = p.z;
     this.climbToX = p.x + cand.ix * reach;
     this.climbToZ = p.z + cand.iz * reach;
@@ -340,6 +383,7 @@ export abstract class CharacterBase extends EntityBase {
       p.y = this.climbToY;
       this.climbT = -1;
       this.controller.onFloor = true;
+      this.climbCdUntil = performance.now() + CharacterBase.CLIMB_CD_MS;   // 过掩体：翻完冷却
     }
   }
 

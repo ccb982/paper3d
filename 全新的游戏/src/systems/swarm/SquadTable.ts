@@ -1,12 +1,12 @@
 // ============================================================
-// SquadTable —— 小队注册表 + 队长 + 状态评级（《实体架构.md》§5.5/§5.8 步骤 5/9）
+// SquadTable —— 小队注册表 + 队长 + 状态评级（《RTS架构.md》§5.5/§5.8 步骤 5/9）
 // ============================================================
 // 职责：
 //   · 生成时按“同质就近”分配小队（一队一兵种，上限 12；Boss 单例后续由 squadMode 接入）
 //   · 队长唯一：首员即队长；队长阵亡/回收 → 本队接任（最新情报 > 血量 > 靠队心）
 //   · 成员信息（hp/位置/目击）低频同步；**状态评级以血量为主要因素**
 //   · 阵亡：单人只下调评分（不改事件）；**只有全灭才上报**（一次，随后注销）
-// 说明：本表只做数据/选举/评级，不含战术；战术（SquadTactics）后续消费评级。
+// 说明：本表只做数据/选举/评级，不含战术；战术（squad/SquadCore）消费评级。
 // ============================================================
 
 import type { UnitRole } from '../../entity/SwarmUnit';
@@ -15,7 +15,7 @@ import { type SquadType, squadTypeOf } from '../../entity/SwarmUnit';
 // 契约层已上移：本文件保留再导出（兼容旧引用）
 export { type SquadType, squadTypeOf };
 
-/** 小队容量上限（同质编队 4~12；《敌人管线设计.md》§3.1） */
+/** 小队容量上限（同质编队 4~12；《RTS架构.md》§3.1） */
 export const SQUAD_MAX = 12;
 /** ★ §13.3：工兵小队上限（每队 3 工兵足够；多了拆新队 = 分区多线程） */
 export const BUILDER_SQUAD_MAX = 3;
@@ -58,6 +58,10 @@ export interface Squad {
   suicide: boolean;
   /** ★ 施工小队（成员具备施工能力；与类型解耦（2026-09-20）） */
   builders: boolean;
+  /** ★ P-L1 预留名册（用户定 2026-09-27）：远处只放队长，其余成员记**预留**（升档物化） */
+  reserved?: number;
+  /** 预留成员的单人血量（物化时用；0/缺省 = 用兵种满血） */
+  reservedHp?: number;
   /** ★ 单例编制（1 单位 1 小队；不接收同伴也不并入别队） */
   singleton: boolean;
 }
@@ -67,7 +71,7 @@ export interface LeaderChange {
   isLeader: boolean;
 }
 
-/** 小队状态评级（引擎侧信息面；《敌人管线设计.md》§3.5 BattalionView） */
+/** 小队状态评级（引擎侧信息面；《RTS架构.md》§3.5 BattalionView） */
 export interface SquadRating {
   squadId: number;
   battalionId: number;
@@ -101,6 +105,23 @@ export class SquadTable {
   }
 
   /** 生成时分配：**同兵种同属性**就近并入（< SQUAD_MAX），否则新建；首员即队长 */
+  /** ★ P-L1：远处只放队长——其余成员记**预留名册**（物化时并入本队） */
+  reserve(squadId: number, n: number, hp: number): void {
+    const s = this.squads.get(squadId);
+    if (!s || n <= 0) return;
+    s.reserved = (s.reserved ?? 0) + n;
+    if (hp > 0) s.reservedHp = hp;
+  }
+
+  /** 取走预留（物化）：返回数量与单人血量（取走即清零） */
+  takeReserved(squadId: number): { n: number; hp: number } {
+    const s = this.squads.get(squadId);
+    if (!s || !s.reserved) return { n: 0, hp: 0 };
+    const out = { n: s.reserved, hp: s.reservedHp ?? 0 };
+    s.reserved = 0;
+    return out;
+  }
+
   assign(uid: number, role: UnitRole, x: number, z: number, mobKind = -1, suicide = false, singleton = false, canBuild = false): Squad {
     const existing = this.ofUid.get(uid);
     if (existing !== undefined) return this.squads.get(existing)!;
@@ -245,7 +266,7 @@ export class SquadTable {
     return out;
   }
 
-  /** 选举：最新情报 > 血量 > 靠队心（《实体架构.md》§5.5） */
+  /** 选举：最新情报 > 血量 > 靠队心（《RTS架构.md》§5.5） */
   private electLeader(squad: Squad): number {
     const c = this.centroid(squad);
     let bestUid = 0;

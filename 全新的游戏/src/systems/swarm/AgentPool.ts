@@ -1,5 +1,5 @@
 // ============================================================
-// AgentPool —— 蜂群代理池（SoA 定长数组；《敌人管线设计.md》§4/§5.5）
+// AgentPool —— 蜂群代理池（SoA 定长数组；《RTS架构.md》§4/§5.5）
 // ============================================================
 // 远层敌人（L1/L2）的唯一载体：定长 Float32Array/TypedArray 热字段，
 // swap-remove 删除，全程零分配；升格为 L3 实体 / 降格回池都走快照拷贝。
@@ -7,13 +7,20 @@
 
 import type { SwarmSnapshot, UnitRole, UnitAttackType } from '../../entity/SwarmUnit';
 import { roleCode, roleFromCode, attackCode, attackFromCode } from '../../entity/SwarmUnit';
+import { climbBook } from '../../entity/base/ClimbBook';
+import { CharacterCore, canShift, type StepResult } from '../../entity/base/CharacterCore';
+import { SHORE_CLIMB_MAX } from '../../entity/TerrainAssist';
+import { EDGE_CLIFF_BAND } from '../../services/map/Refinements';
+import { createRasterProbe } from '../../entity/base/RasterProbe';
 
-/** 池容量（= 全图存活上限 200 + 缓冲；《敌人管线设计.md》§8） */
+/** 池容量（= 全图存活上限 200 + 缓冲；《RTS架构.md》§8） */
 export const AGENT_CAPACITY = 256;
 
 /** ★ 空中层默认悬停高度（米，**相对地表**）——名册（`EnemySpec.airAltitude`）未给时的兜底。
  *  引擎层默认值放这里（`AgentPool` 零三方依赖），玩法层（WorldSpawner）负责填入。 */
 export const AIR_ALTITUDE_DEFAULT = 2.6;
+/** ★ 飞行地形净空（用户定 2026-09-26）：巡航高度至少高出顶层地表这么多（越崖不穿墙） */
+export const AIR_TERRAIN_CLEAR = 1.0;
 /** ★ 空中层悬停浮动（幅度 m / 角频率 rad/s）——**纯表现**：只加在渲染/贴地回写上，
  *  不影响 AI 的水平决策；相位用 `AgentPool.phase`（每只随机）错开，避免整队同频上下摆。
  *  L2（SwarmBatch 实例矩阵）与 L3（WorldMode.clampCharacter）两条路径共用，口径必须一致。 */
@@ -52,8 +59,6 @@ export interface AgentSpawnData {
   aggro: number;
   /** 游走速度（m/s；原 AI wander 一致） */
   wanderSpeed: number;
-  /** 攻击意图（Director.ts 的 INTENT_*；缺省 255 = 无意图） */
-  intent?: number;
   /** 游荡时朝目标的偏向强度（威胁度驱动；缺省 0.12） */
   bias?: number;
   /** ★ 空中层（2026-09-18）：是否飞行单位（不贴地/不绕坑/不涉水/不掉坑判死） */
@@ -87,9 +92,6 @@ export interface AgentSpawnData {
   moveTargetX?: number;
   moveTargetY?: number;
   moveTargetZ?: number;
-  /** ★ 成员级任务目标（工程分块 / 护卫扇区；跨 LOD 保留） */
-  taskX?: number;
-  taskZ?: number;
   /** ★ 感知 / AI 状态（跨 LOD 连续；缺省 = 无/初始） */
   lastSeenX?: number;
   lastSeenZ?: number;
@@ -153,6 +155,42 @@ export interface AgentSnapshot extends SwarmSnapshot {
 export class AgentPool {
   count = 0;
 
+  /** ★ 重写 P1：两载体同内核——每只代理一个 CharacterCore（爬坡态须每只独立；零分配复用） */
+  readonly core: CharacterCore[] = Array.from({ length: AGENT_CAPACITY }, () => new CharacterCore());
+  /** 探针选层提示（stepAgent 每拍刷新；与 L3 共用同一份探针实现 `entity/base/RasterProbe`） */
+  private coreHintY = 0;
+  private readonly coreProbe = createRasterProbe(() => this.coreHintY);
+
+  /** ★ 重写 P1：推进一只代理（两载体同内核；与 L3 `CharacterBase` 同口径）。
+   *  方向决策/分离/寻路在外，本方法只做推进/爬坡/立面/贴地。 */
+  stepAgent(i: number, dirX: number, dirZ: number, speed: number, dt: number, nowS: number, climbOrdered = false, climbPt?: { x: number; z: number; ux: number; uz: number }): StepResult {
+    this.coreHintY = this.y[i];
+    const air = this.isAir[i] === 1;
+    const hs = Math.max(0.2, this.scale[i] * 0.5);
+    const r = this.core[i].step({
+      x: this.x[i], y: this.y[i], z: this.z[i], dt,
+      dirX, dirZ, speed,
+      climbOrdered,
+      climbPt,
+      uid: this.swarmUid[i],   // ★ 上坡点认领制
+      blockCliffClimb: !air,
+      climbAnyTerrain: air,
+      flying: air,   // ★ 飞行：自由路径
+      hx: hs, hz: hs,
+      suspended: false,
+    }, this.coreProbe, nowS);
+    if (!air || r.unburied || r.climbing) this.y[i] = r.gy;   // ★ 地面代理**每步回写地面 y**（防旧 y 停在出生值 → 导航层调整入错层）
+    return r;
+  }
+
+  /** ★ 高精度位移闸门（H2，用户定 2026-09-25）：推挤也不能跨层/越台阶；不合格 → 取消本次推挤 */
+  shiftAgent(i: number, dx: number, dz: number): boolean {
+    const lim = this.coreProbe.wetAt(this.x[i], this.z[i]) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
+    if (!canShift(this.coreProbe, this.x[i], this.z[i], this.y[i], this.x[i] + dx, this.z[i] + dz, lim)) return false;
+    this.x[i] += dx; this.z[i] += dz;
+    return true;
+  }
+
   // ---- 位置/朝向 ----
   readonly x = new Float32Array(AGENT_CAPACITY);
   readonly y = new Float32Array(AGENT_CAPACITY);
@@ -206,9 +244,11 @@ export class AgentPool {
   /** 游荡偏向强度（威胁度驱动） */
   readonly bias = new Float32Array(AGENT_CAPACITY);
 
-  // ---- P5：空中层（2026-09-18；《实体架构.md》§7）----
+  // ---- P5：空中层（2026-09-18；《RTS架构.md》§7）----
   /** 是否飞行单位（1 = 独立空中层：不贴地、不绕坑/水、不掉坑判死、直线导航） */
   readonly isAir = new Uint8Array(AGENT_CAPACITY);
+  /** ★ 飞行巡航高度（世界系；0 = 未初始化 → 首帧按地表+悬停高） */
+  readonly airCruiseY = new Float32Array(AGENT_CAPACITY);
   /** 悬停高度（米，**相对地表**；仅 isAir=1 有效；≤0 = 按地面单位处理） */
   readonly altitude = new Float32Array(AGENT_CAPACITY);
 
@@ -263,8 +303,6 @@ export class AgentPool {
   readonly moveTargetZ = new Float32Array(AGENT_CAPACITY);
   readonly hasMoveTarget = new Uint8Array(AGENT_CAPACITY);
   /** ★ 成员级任务目标（引擎写：工程各自的分块 / 护卫各自的扇区；0,0 = 无任务） */
-  readonly taskX = new Float32Array(AGENT_CAPACITY);
-  readonly taskZ = new Float32Array(AGENT_CAPACITY);
   /** ★ 感知 / AI 状态（E3b 步骤 2/3：跨 LOD 不失忆；步骤 9 接线填值） */
   readonly lastSeenX = new Float32Array(AGENT_CAPACITY);
   readonly lastSeenZ = new Float32Array(AGENT_CAPACITY);
@@ -291,11 +329,7 @@ export class AgentPool {
   readonly atomFire = new Uint8Array(AGENT_CAPACITY).fill(1);
 
   // ---- P4：导演意图 / 士气 ----
-  /** 攻击意图（Director.ts 的 INTENT_*；255 = 无意图） */
-  readonly intent = new Uint8Array(AGENT_CAPACITY);
-  /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，performance.now/1000） */
-  readonly retreatUntil = new Float32Array(AGENT_CAPACITY);
-  readonly nextRetreatAt = new Float32Array(AGENT_CAPACITY);
+  /** 低血撤退截止 / 下次可撤退时间 / 狂暴截止（秒，模拟时钟 SimClock） */
   readonly rageUntil = new Float32Array(AGENT_CAPACITY);
 
   push(d: AgentSpawnData): number {
@@ -331,12 +365,10 @@ export class AgentPool {
     this.fromFlow[i] = 0;
     this.alertAt[i] = 0;
     this.flash[i] = 0;
-    this.intent[i] = d.intent ?? 255;
     this.bias[i] = d.bias ?? 0.12;
     this.isAir[i] = d.isAir ? 1 : 0;
+    this.airCruiseY[i] = 0;
     this.altitude[i] = d.altitude ?? 0;
-    this.retreatUntil[i] = 0;
-    this.nextRetreatAt[i] = 0;
     this.rageUntil[i] = 0;
     // ★ E3b：蜂群字段（缺省 = 未编队/散兵/近战/无目标）
     this.swarmUid[i] = d.uid ?? 0;
@@ -361,8 +393,6 @@ export class AgentPool {
     this.moveTargetX[i] = hasMt ? d.moveTargetX! : 0;
     this.moveTargetY[i] = hasMt ? (d.moveTargetY ?? 0) : 0;
     this.moveTargetZ[i] = hasMt ? d.moveTargetZ! : 0;
-    this.taskX[i] = d.taskX ?? 0;
-    this.taskZ[i] = d.taskZ ?? 0;
     this.lastSeenX[i] = d.lastSeenX ?? 0;
     this.lastSeenZ[i] = d.lastSeenZ ?? 0;
     this.lastSeenAt[i] = d.lastSeenAt ?? 0;
@@ -389,6 +419,7 @@ export class AgentPool {
 
   /** swap-remove（尾元素填位；所有数组同步搬移） */
   removeAt(i: number): void {
+    climbBook.release(this.swarmUid[i]);   // ★ 认领制：回收即释放坡点
     const last = this.count - 1;
     if (i !== last) this.copy(last, i);
     this.count = last;
@@ -422,12 +453,9 @@ export class AgentPool {
     this.fromFlow[to] = this.fromFlow[from];
     this.alertAt[to] = this.alertAt[from];
     this.flash[to] = this.flash[from];
-    this.intent[to] = this.intent[from];
     this.bias[to] = this.bias[from];
     this.isAir[to] = this.isAir[from];
     this.altitude[to] = this.altitude[from];
-    this.retreatUntil[to] = this.retreatUntil[from];
-    this.nextRetreatAt[to] = this.nextRetreatAt[from];
     this.rageUntil[to] = this.rageUntil[from];
     // ★ E3b：新列必须同步搬移（漏一列 = swap-remove 后静默丢值）
     this.swarmUid[to] = this.swarmUid[from];
@@ -451,8 +479,6 @@ export class AgentPool {
     this.moveTargetY[to] = this.moveTargetY[from];
     this.moveTargetZ[to] = this.moveTargetZ[from];
     this.hasMoveTarget[to] = this.hasMoveTarget[from];
-    this.taskX[to] = this.taskX[from];
-    this.taskZ[to] = this.taskZ[from];
     this.lastSeenX[to] = this.lastSeenX[from];
     this.lastSeenZ[to] = this.lastSeenZ[from];
     this.lastSeenAt[to] = this.lastSeenAt[from];
@@ -501,7 +527,6 @@ export class AgentPool {
       suicide: this.suicide[i] === 1,
       canBuild: this.canBuild[i] === 1,
       noDemoteUntil: this.noDemoteUntil[i],
-      intent: this.intent[i],
       bias: this.bias[i],
       aggro: this.aggro[i],
       wanderSpeed: this.wanderSpeed[i],
@@ -529,13 +554,6 @@ export class AgentPool {
       out.moveTargetX = this.moveTargetX[i];
       out.moveTargetY = this.moveTargetY[i];
       out.moveTargetZ = this.moveTargetZ[i];
-    }
-    // ★ 成员级任务目标（0,0 = 无；对象复用 → 显式清空）
-    out.taskX = undefined;
-    out.taskZ = undefined;
-    if (this.taskX[i] !== 0 || this.taskZ[i] !== 0) {
-      out.taskX = this.taskX[i];
-      out.taskZ = this.taskZ[i];
     }
     return out;
   }

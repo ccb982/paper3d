@@ -1,28 +1,37 @@
 // ============================================================
-// SwarmConfig —— 蜂群参数（《敌人管线设计.md》§8：参数集中可调）
+// SwarmConfig —— 蜂群参数（《RTS架构.md》§8：参数集中可调）
 // ============================================================
 // SWARM    分层/回收/战斗节拍；AUTONOMY 自主 LOD/大队警戒。
 // 从 SwarmSystem 外置（护栏行数）；原路径 re-export 兼容旧引用。
 // ============================================================
 
+/** ★ 命令侧时间尺度（用户定 2026-09-24）：**下命令侧的时间比现实快 5 倍**
+ *  （游戏内 5 秒 = 现实 1 秒）→ 1 游戏分钟 = 12 实秒（`GAME_MIN`）。
+ *  约定：**只有命令/规划层计时**（队长令/成员指令门、命令 TTL、发令冷却、使命重发）用 `GAME_MIN`；
+ *        日钟/施工/战斗/寻路/回收等其他计时一律保持原实秒值。 */
+export const GAME_SEC = 0.2;
+export const GAME_MIN = 12;
+
+/** ★ 可达核验（用户定 2026-09-25）：长途用 **BFS**（可行路径）；≤ 此距离用 **LOS 快筛**（LOS 或 BFS 任一） */
+
 /** 分层/回收参数（§9；集中可调）★ 2026-09-21 扩大 LOD：L3 45m/36；L2 120m；L1 190m；降格 55m */
 export const SWARM = {
-  /** L3 实体层：升格半径 / 实体上限 */
-  L3_RADIUS: 45,
-  L3_CAP: 36,
+  /** L3 实体层：升格半径 / 实体上限（★ 用户定 2026-09-26：放大便于总攻整波可见） */
+  L3_RADIUS: 110,
+  L3_CAP: 128,
   /** L2 代理层半径（L3~L2 = 代理半频） */
-  L2_RADIUS: 120,
+  L2_RADIUS: 260,
   /** L1 远群半径（超出即回收） */
-  L1_RADIUS: 190,
-  /** 降格半径（实体 > 此距离 → 回代理） */
-  DEMOTE_RADIUS: 55,
+  L1_RADIUS: 420,
+  /** 降格半径（实体 > 此距离 → 回代理（滞后升格，防抖）） */
+  DEMOTE_RADIUS: 125,
   /** 升格预算（每帧最多几只；防一圈同时升级的尖刺） */
-  PROMOTE_PER_FRAME: 2,
+  PROMOTE_PER_FRAME: 6,   // ★ 升格预算（放大 LOD 后同步提升，防升格拖尾）
   /** 决策频率（Hz）：索引 = tier（1/2） */
   THINK_HZ: [0, 2, 5],
   /** 移动积分频率（Hz）：索引 = tier（1/2） */
   MOVE_HZ: [0, 10, 20],
-  /** ★ E4a：L3 实体编队 steer 下发频率（Hz；《实体架构.md》§9.4） */
+  /** ★ E4a：L3 实体编队 steer 下发频率（Hz；《RTS架构.md》§9.4） */
   STEER_HZ: 10,
   /** 近战额外射程余量（米；进入即停下挥击） */
   MELEE_PAD: 0.4,
@@ -50,15 +59,11 @@ export const SWARM = {
   ATTACK_TOKENS: 3,
   /** 令牌/挥击保持窗口（秒） */
   ATTACK_HOLD: 0.3,
-  /** P4 士气：低血撤退阈值 / 撤退时长区间 / 撤退冷却 / 狂暴速度倍率与时长 */
-  RETREAT_HP_RATIO: 0.3,
-  RETREAT_TIME_MIN: 2,
-  RETREAT_TIME_SPAN: 2,
-  RETREAT_COOLDOWN: 8,
+  /** ★ P4 士气：狂暴速度倍率与时长 */
   RAGE_SPEED: 1.25,
   RAGE_SECONDS: 5,
   RAGE_RADIUS: 12,
-  /** ★ 无命令自主交战保底半径（米；《实体架构.md》§5.12） */
+  /** ★ 无命令自主交战保底半径（米；《RTS架构.md》§5.12） */
   AUTONOMY_ENGAGE_R: 16,
   /** 警戒场：持续时间 / 反应延迟区间 / 察觉时刷出的半径 / 挥击时刷出的半径 */
   ALERT_SECONDS: 6,
@@ -66,9 +71,12 @@ export const SWARM = {
   ALERT_DELAY_SPAN: 1.3,
   ALERT_PAINT_RADIUS: 12,
   ALERT_PAINT_RADIUS_ATTACK: 10,
+  /** ★ L2 令执行到位半径（米；用户定 2026-09-27：池队在地图上按令走，到此半径内=到点停）。
+   *  必须**小于**引擎换标阈值（规划 5m / 持守 8m）——否则停在阈值外，永不换标（死锁）。 */
+  L2_EXEC_ARRIVE_R: 2,
 } as const;
 
-/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《实体架构.md》§5.10；集中可调） */
+/** ★ 自主 LOD / 大队警戒参数（2026-09-19；《RTS架构.md》§5.10；集中可调） */
 export const AUTONOMY = {
   /** 单位被击免降格窗口（秒） */
   UNIT_HOLD_S: 6,
@@ -100,10 +108,6 @@ export const STUCK = {
   HOLD_S: 25,
 } as const;
 
-/** ★ 指挥层重发/寿命常量（P5 收口：重发常量统一——原 RESEND_S 等散落各写各的） */
-export const RESEND = {
-  /** 大队任务周期重发（秒；T+ 重发保持使命存活） */
-  MISSION_S: 10,
-  /** 使命 TTL 余量（秒；重发间隔 + 余量 = 下发 TTL，防两拍之间掉令） */
-  TTL_PAD: 5,
-} as const;
+/** ★ 命令稳定门（用户定 2026-09-24）：**换令**（kind/目标变）需"现令进度 ≥PROGRESS 或 长时间静止（无净推进 ≥STUCK_S 实秒）"。
+ *  治"mission/target 微变即重发"——常规命令至少维持到过半或卡住。 */
+export const ORDER_STABLE = { PROGRESS: 0.5, STUCK_S: 25 } as const;

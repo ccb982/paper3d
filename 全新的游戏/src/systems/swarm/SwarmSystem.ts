@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmSystem —— 蜂群调度器（《敌人管线设计.md》§41/§5.5；P1 数据层）
+// SwarmSystem —— 蜂群调度器（《RTS架构.md》§41/§5.5；P1 数据层）
 // ============================================================
 // 职责：
 //   · 代理池 + 人群网格 + 批量渲染的唯一持有者与驱动者
@@ -7,45 +7,45 @@
 // ============================================================
 
 import { RasterMap } from '../../services/map/RasterMap';
+import { simNow } from '../../services/SimClock';
 import { entityPerf } from '../../entity/EntityPerf';
 import { eventBus } from '../../core/EventBus';
 import { SwarmLedger } from './SwarmLedger';
+import { goneLog } from './data/GoneLog';
 import {
   AgentPool,
   AGENT_TARGET_PLAYER,
   AGENT_TARGET_SHIP,
   AGENT_TARGET_SENTINEL,
   AGENT_TIER_FAR,
-  AGENT_TIER_MID,
   type AgentSpawnData,
   type AgentSnapshot,
 } from './AgentPool';
 import { CrowdGrid } from './CrowdGrid';
+import { l2ExecuteDirective } from './tiers/L2';
+import { agentTierAt } from './tiers/policy';   // ★ L2 档行为（用户定 2026-09-27：分层，不与 L1/L3 混写）
+import { unbuyGroundY } from '../../entity/base/CharacterCore';
 import { SwarmBatch } from './SwarmBatch';
 import { FlowField } from './FlowField';
-import { SquadTable, type SquadRating } from './SquadTable';
-import { SquadTactics, squadBucket, roleBucket, SquadLeaderAI } from './SquadTactics';
+import { SquadTable, type Squad, type SquadRating } from './SquadTable';
 import { SquadNavigator } from './SquadNavigator';
-import { formationOffset } from './Formation';
-import { rangedMoveTarget } from './RangedTactics';
+import { driveAgent, type DriveHost } from './SwarmDrive';
+import type { SquadOrderState } from './squad/State';
 import type { SwarmTierPort } from './SwarmTierPort';
-import { SwarmCommander } from './SwarmCommander';
+import { SwarmData } from './data/SwarmData';
 import {
-  roleFromCode, orderCode, directiveCode, fireCode, orderFromCode, directiveFromCode,
+  roleFromCode, orderFromCode, directiveFromCode, orderCode, directiveCode, fireCode, roleBucket,
   ROLE_SHIELD, type MobTactics, type TacticalOrder, type UnitDirective, type SwarmCarrier,
 } from '../../entity/SwarmUnit';
 import {
-  AtomExecutor, MOVE_ATOMS, atomDirection, runDirective, fireProfile,
+  AtomExecutor, runDirective, fireProfile,
   type DirectiveRun,
 } from '../../entity/AtomExecutor';
-import { INTENT_PLAYER, INTENT_SHIP, INTENT_FLANK, INTENT_NONE } from './Director';
-import { pickSteer } from '../../entity/SteerPick';
+
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
-import { MemberTaskNav } from './MemberTaskNav';
-import { SwarmRecovery } from './SwarmRecovery';
 import { DANGER } from './SwarmDanger';
-import type { PassTable } from './PassTable';
-import { SWARM, AUTONOMY, STUCK } from './SwarmConfig';
+import type { PassTable } from './nav/PassTable';
+import {SWARM, AUTONOMY } from './SwarmConfig';
 
 export { SWARM, AUTONOMY } from './SwarmConfig';
 
@@ -70,6 +70,12 @@ export interface SwarmHooks {
   tierPort?: SwarmTierPort;
   /** 代理近战结算（targetKind：0=玩家 / 1=舰船 / 2=祖宗；x/z = 代理位置——祖宗结算定位用） */
   melee: (targetKind: number, dmg: number, x: number, z: number) => void;
+  /** ★ 升格可见性钩子（2026-09-25 用户定："玩家视野内变实体"）：给了就用它判升格；
+   *  未给 → 回退原口径（离焦点 playerX/Z < L3_RADIUS）。降格由模式层 tickDemote 判。 */
+  inView?: (x: number, z: number) => boolean;
+  /** ★ 相机位置（分层 LOD 第二参照；用户定 2026-09-27） */
+  camX?: number;
+  camZ?: number;
   /** ★ 祖宗嘲讽：查询 (x,z) 嘲讽圈内最近的祖宗位置（null = 圈外；返回对象会被复用） */
   nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
@@ -87,13 +93,9 @@ export interface SwarmHooks {
   ) => void;
 }
 
-const _sep = { x: 0, z: 0 };
 const _flow = { x: 0, z: 0 };
-const _atomDir = { x: 0, z: 0 };
 /** ★ 统一决策内核输出 scratch（零分配） */
 const _run: DirectiveRun = { moveIdx: 255, move: 'hold', fire: false, inRange: false };
-/** ★ 成员 uid scratch（编队槽位 rank 基准；容量复用，零分配） */
-const _memberUids: number[] = [];
 export class SwarmSystem {
   /** ★ 蜂群伤亡账本（引擎直管）：敌人总数 / 击杀 / 回收的唯一口径（2026-09-20） */
   readonly ledger = new SwarmLedger();
@@ -102,10 +104,8 @@ export class SwarmSystem {
   /** ★ 非击杀离场订阅（recycled/despawned：账本存活 −1） */
   private readonly removedUnsub: () => void;
   readonly pool = new AgentPool();
-  /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《实体架构.md》§5.5） */
+  /** ★ 步骤 5：小队注册表 + 队长（同质就近编队；《RTS架构.md》§5.5） */
   readonly squads = new SquadTable();
-  /** ★ 命令台账（诊断面：引擎下了什么命令；唯一写口 = tactics.issue） */
-  get cmdLog() { return this.tactics.ledger; }
   /** ★ 稳定 uid 分配器（spawn/demote 缺省分配；升降格往返不变） */
   private nextUid = 1;
   /** ★ 队长变更待广播（帧末统一回调，避免循环内跨层） */
@@ -114,14 +114,12 @@ export class SwarmSystem {
   private readonly pendingWiped: number[] = [];
   /** ★ 步骤 9：成员状态同步节拍（4Hz） */
   private ratingAccum = 0;
-  /** ★ 步骤 9b：小队黑板 + 命令分解（同质默认矩阵） */
-  readonly tactics = new SquadTactics();
-  /** ★ 步骤 9b：分解节拍（2Hz） */
-  private tacticsAccum = 0;
-  /** ★ 步骤 9d：队长自主发令（1Hz；引擎命令优先） */
-  readonly leaderAI = new SquadLeaderAI();
+  /** ★ 执行态单源（队长核；main 接线）：执行层读走廊/锚点用 */
+  private squadStateOf: ((id: number) => SquadOrderState | null) | null = null;
+  /** ★ 队注销回调（全灭/收编）：main 接线清队长核/引擎 store */
+  private squadGone: ((id: number) => void) | null = null;
   /** ★ 蜂群指挥器（引擎侧：大队任务/小队覆盖/BattalionView） */
-  readonly commander = new SwarmCommander(this);
+  readonly data = new SwarmData(this);
   /** ★ 步骤 10：大队警觉（squadId → 最近被击秒；态势机/外部只读） */
   readonly recentHits = new Map<number, number>();
   /** ★ 步骤 10：倾盆而出截止（秒；0 = 未触发） */
@@ -129,20 +127,31 @@ export class SwarmSystem {
   /** ★ 步骤 6：上帧玩家位置（被击升格的 L3 范围判定） */
   private lastPlayerX = 0;
   private lastPlayerZ = 0;
+  /** ★ 最近一帧 hooks（队长核 applyDirective → L3 onDirective 用） */
+  private lastHooks: SwarmHooks | null = null;
   /** ★ E4a 编队 steer / HPA 预热节拍（10Hz） */
   private steerAccum = 0;
+  /** ★ 池成员位置回写节拍（0.25s；信息单源：队长位置=载体真值，否则到位/巡逻判定全错） */
+  private memberSyncAcc = 0;
   /** ★ 小队寻路 + L3 编队 steer（拆分模块；SquadPath + Formation） */
   private readonly nav = new SquadNavigator();
-  /** ★ 成员任务绕墙走廊（基础寻路保证：任务目标直行撞墙 → A* 绕行，绝不原地磨蹭） */
-  private readonly taskNav = new MemberTaskNav(
-    (x, z) => this.commander.blockedAt(x, z),
-    (x, z) => this.commander.pathMulAt(x, z),
-  );
+  /** ★ 飞行直航（用户定 2026-09-27）：L3 队长是否空中（ensurePath 不建地面走廊） */
+  private readonly unitAir = new Map<number, boolean>();
   /** 编队锚点量算复用对象（零分配） */
-  private readonly _centroid = { x: 0, z: 0 };
   /** ★ 执行层：原子执行器（二级掷；步骤 9c） */
   private readonly atoms = new AtomExecutor();
   private grid = new CrowdGrid();
+
+  /** ★ 移动执行宿主（SwarmDrive 拆出；构造时建一次，零分配引用） */
+  private readonly driveHost: DriveHost = {
+    pool: this.pool,
+    squads: this.squads,
+    nav: this.nav,
+    data: this.data,
+    grid: this.grid,
+    squadStateOf: (id) => this.squadStateOf?.(id) ?? null,
+    memberStep: (uid, x, z, lx, lz, now, st) => this.nav.memberStep(uid, x, z, lx, lz, now, st),
+  };
   private batch: SwarmBatch | null = null;
   /** ★ P2：群体导航流场 + 警戒场（与网格共存） */
   private flow = new FlowField();
@@ -157,26 +166,21 @@ export class SwarmSystem {
   private tokenUsed = [0, 0, 0];
 
   constructor() {
-    this.nav.pathMul = (type, x, z) => this.commander.pathMulFor(type, x, z);   // ★ 掩体折扣 × 兵种亲和（P1-3）
     // ★ 唯一伤亡通道（实体侧）：EnemyBase.onRetire('killed') → enemy_killed → 账本
     //   代理/队长（池内）由 update 循环直记；两条路都只报数量，不需要兵种。
     //   uid ≤ 0（计划外直建实体，如 Boss）不属于蜂群账本 → 不计。
     this.casualtyUnsub = eventBus.on('enemy_killed', (p) => {
       if (p.uid > 0) this.ledger.reportCasualty(1);
+      // ★ 阵亡（含自爆）→ **立即从 SquadTable 注销**（用户定 2026-09-26：列表不得保留已死者）
+      if (p.uid > 0) this.onEntityKilled(p.uid);
     });
     // ★ 非击杀离场：存活 −1；recycled 视为回收（归还编制、计 recalled）
     this.removedUnsub = eventBus.on('enemy_removed', (p) => {
       if (p.uid <= 0) return;
-      if (p.reason === 'recycled') this.ledger.noteRecall(1);
+      if (p.reason === 'recycled' || p.reason === 'stuck') this.ledger.noteRecall(1, p.reason);
       else this.ledger.noteRemoved(1);
-    });
-    this.recovery = new SwarmRecovery({
-      pool: this.pool,
-      squads: this.squads,
-      tactics: this.tactics,
-      recentHits: this.recentHits,
-      removeAgent: (i, killed, report) => this.removeAgent(i, killed, report),
-      noteRecall: (n) => this.ledger.noteRecall(n),
+      // ★ 收回/退役 → **立即注销**（同一口径：队长空缺→本队接任）
+      this.unregisterMember(p.uid, false, false, p.reason);
     });
   }
 
@@ -211,6 +215,19 @@ export class SwarmSystem {
   }
 
   /** 降格：实体 → 代理（模式层回收实体时调用） */
+  /** ★ 档间交接（P-Flux，用户定 2026-09-27）：**取走**池代理（换载体：不计回收、不销编制）。
+   *  升格到 L3 时调用——人还在（同 uid 变实体），小队归属保留。 */
+  takeAgent(uid: number): AgentSnapshot | null {
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) {
+      if (p.swarmUid[i] !== uid) continue;
+      const snap = p.snapshot(i);
+      this.removeAgent(i, false);   // 换载体：保留小队归属/队长
+      return snap;
+    }
+    return null;
+  }
+
   demote(snap: AgentSnapshot): void {
     const uid = snap.uid && snap.uid > 0 ? snap.uid : this.nextUid++;
     const i = this.pool.push({
@@ -224,7 +241,6 @@ export class SwarmSystem {
       tier: snap.tier,
       aggro: snap.aggro ?? 8,
       wanderSpeed: snap.wanderSpeed ?? 2,
-      intent: snap.intent ?? 255,
       // ★ 空中层（2026-09-18）：飞行标记必须跟着降格实体回池，否则回池即落地
       isAir: snap.isAir,
       altitude: snap.altitude,
@@ -288,12 +304,12 @@ export class SwarmSystem {
   // 每帧驱动（模式层 explore 阶段调用）
   // ============================================================
   update(dt: number, hooks: SwarmHooks): void {
+    const raster = RasterMap.current;
     const _te = entityPerf.enabled;
     const t0 = _te ? performance.now() : 0;
     this.grid.rebuild(this.pool);
     const t1 = _te ? performance.now() : 0;
     // ★ P2：流场重建（3Hz 或中心移动 > 1 格）——源 = 玩家 + 舰船
-    const raster = RasterMap.current;
     this.flowTimer -= dt;
     if (raster && (this.flowTimer <= 0 || this.flow.needsRebuild(hooks.playerX, hooks.playerZ))) {
       this.flowTimer = 1 / SWARM.FLOW_HZ;
@@ -302,7 +318,8 @@ export class SwarmSystem {
         { x: hooks.shipX, z: hooks.shipZ },
       ]);
     }
-    const now = performance.now() / 1000;
+    const now = simNow();   // ★ 模拟时钟（倍速同步）
+    this.lastHooks = hooks;
     this.lastPlayerX = hooks.playerX;
     this.lastPlayerZ = hooks.playerZ;
 
@@ -318,25 +335,13 @@ export class SwarmSystem {
       }
     }
 
-    // ★ 步骤 9d：队长自主发令（1Hz；看到玩家 → 进攻；残血 → 撤退；★ P4：引擎命令在身 → 拆步推进）
-    this.leaderAI.tick(dt, this.squads, this.tactics, hooks.playerX, hooks.playerZ, now,
-      (t, x, z) => this.commander.scoreForType(t, x, z, hooks.playerX, hooks.playerZ));
     // ★ 指挥器：大队任务周期重发 + S1 工程 + 态势函数（M2：接当日进度）
-    this.commander.tick(dt, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
+    this.data.tick(dt, now, hooks.playerX, hooks.playerZ, hooks.dayT01 ?? -1, hooks.shipX, hooks.shipZ);
 
-    // ★ 步骤 9b：命令分解（2Hz；黑板 → 个体指令；池写列 / 实体走 hook）
-    this.tacticsAccum += dt;
-    if (this.tacticsAccum >= 0.5) {
-      this.tacticsAccum = 0;
-      this.applyOrders(now, hooks);
-    }
+    // ★ 队长层调遣（squad/SquadCore.drive）由 main 每帧驱动（成员指令唯一写口 = applyDirective）
 
-    // ★ 卡死回收（1Hz；用户定调：驻守/到位/交战豁免 → 其余"长时间不挪窝"回收）
-    this.stuckAccum += dt;
-    if (this.stuckAccum >= STUCK.CHECK_S) {
-      this.stuckAccum = 0;
-      this.recovery.tick(now, hooks.activeUnits);
-    }
+    // ★ 卡死回收已收编进新引擎 `engine/TimerManager`（1Hz；驻守/交战豁免 → 净活动范围回收）
+    //   ——计时销毁/卡死判决与开火闩锁同源（EngineBridge 驱动）。
 
     // ★ 步骤 10：大队警觉 → 倾盆而出（玩家近 + 多小队被击；动态算力 + 全图警戒）
     if (now >= this.counterUntil) {
@@ -369,7 +374,6 @@ export class SwarmSystem {
     let promotes = 0;
     /** ★ 本帧远距回收计数（循环结束统一回调，避免每只都跨层调用） */
     const nearR2 = SWARM.L3_RADIUS * SWARM.L3_RADIUS;
-    const l2R2 = SWARM.L2_RADIUS * SWARM.L2_RADIUS;
 
     for (let i = this.pool.count - 1; i >= 0; i--) {
       const p = this.pool;
@@ -410,8 +414,9 @@ export class SwarmSystem {
         continue;
       }
 
-      // ---- 升格（近玩家 + 实体空位 + 帧预算） ----
-      if (dFocus2 < nearR2 && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
+      // ---- 升格（可见性/近焦点 + 实体空位 + 帧预算）----
+      const visible = hooks.inView ? hooks.inView(p.x[i], p.z[i]) : dFocus2 < nearR2;
+      if (visible && hooks.entityCount + promotes < l3Cap && promotes < promoteBudget) {
         const snap = p.snapshot(i);
         this.removeAgent(i, false);   // ★ 升格 = 换载体：保留小队归属/队长
         hooks.tierPort?.promote(snap);
@@ -422,7 +427,13 @@ export class SwarmSystem {
       // ★ P3：受击白闪衰减
       if (p.flash[i] > 0.01) p.flash[i] *= Math.exp(-dt * 6);
       else p.flash[i] = 0;
-      const tier = dFocus2 <= l2R2 ? AGENT_TIER_MID : AGENT_TIER_FAR;
+      // ★ 分层口径（用户定 2026-09-27）：**同时检查 舰心/玩家/相机，取半径内等级最大者**
+      //   （任一 ≤ L2_RADIUS → L2；全超出 → L1）；生成与逐帧共用 `tiers/policy`（单源）。
+      const tier = agentTierAt(p.x[i], p.z[i], [
+        { x: hooks.shipX, z: hooks.shipZ },
+        { x: hooks.playerX, z: hooks.playerZ },
+        { x: hooks.camX ?? hooks.playerX, z: hooks.camZ ?? hooks.playerZ },
+      ]);
       p.tier[i] = tier;
       // ---- 脑 tick（降频 + 个体相位抖动） ----
       p.thinkAcc[i] += dt;
@@ -437,7 +448,18 @@ export class SwarmSystem {
       if (p.moveAcc[i] >= moveGap) {
         const step = p.moveAcc[i];
         p.moveAcc[i] = 0;
-        this.move(i, step);
+        driveAgent(this.driveHost, i, step);
+      }
+    }
+    // ★ 池成员位置回写（用户定 2026-09-27；0.25s 拍）：**队长位置=载体真值**——
+    //   此前池队 members 位置从出生起不再更新 → 引擎/队长核的"到位/巡逻/锚点"全部按旧位算
+    //   （飞行发呆、有令不走的共同底层原因）。信息单源：每 0.25s 把池代理写回小队表。
+    this.memberSyncAcc += dt;
+    if (this.memberSyncAcc >= 0.25) {
+      this.memberSyncAcc = 0;
+      const p0 = this.pool;
+      for (let i = 0; i < p0.count; i++) {
+        this.squads.syncMember(p0.swarmUid[i], p0.hp[i], p0.maxHp[i], p0.x[i], p0.z[i], p0.lastSeenAt[i]);
       }
     }
     const t2 = _te ? performance.now() : 0;
@@ -445,9 +467,12 @@ export class SwarmSystem {
     this.steerAccum += dt;
     if (this.steerAccum >= 1 / SWARM.STEER_HZ) {
       this.steerAccum = 0;
-      if (raster) this.nav.warm(raster, hooks.playerX, hooks.playerZ);
-      this.nav.steerEntities(hooks.activeUnits?.(), this.squads, this.tactics, now,
-        (x, z, r) => this.commander.rangedPost(x, z, r));
+      // ★ S2：HPA 已退出长寻路主链（只用可行性表）——不再预热（方法留至 S4 删除）
+      void raster;
+      const _units = hooks.activeUnits?.();
+      if (_units) for (const u of _units) if (u.carrier === 'entity' && u.activation === 'active') this.unitAir.set(u.swarmUid, u.isAir === true);
+      // ★ 运动单源（用户定 2026-09-27）：远程选位/风筝不驱动运动（开火独立子系统负责开火）。
+      this.nav.steerEntities(_units, this.squads, (sid) => this.squadStateOf?.(sid) ?? null, now);
     }
     // ★ 远距回收记账（不算击杀；引擎直管，模式层不参与）
     // ★ 步骤 5：队长变更广播（模式层把标记镜像到 L3 实体）
@@ -471,11 +496,10 @@ export class SwarmSystem {
   syncRender(camera?: import('three').Camera, focusX = 0, focusZ = 0): void {
     if (!this.batch) return;
     const t0 = entityPerf.enabled ? performance.now() : 0;
-    const raster = RasterMap.current;
     // ★ 空中层（2026-09-18）：把时间喂给批量同步 → 飞行兵悬停带上下浮动（纯渲染层）
     this.batch.sync(
       this.pool,
-      (x, z, y) => raster?.surfaceHeightAtFor(x, z, y) ?? 0,
+      (x, z, y) => unbuyGroundY(x, z, y),   // ★ 贴地/脱埋（与 L3 同口径）
       camera, focusX, focusZ,
       undefined, // maxDist：走默认（LOD_MAX_DIST）
       performance.now() / 1000,
@@ -493,9 +517,7 @@ export class SwarmSystem {
     const dsx = hooks.shipX - px, dsz = hooks.shipZ - pz;
     const dP2 = dpx * dpx + dpz * dpz;
     const dS2 = dsx * dsx + dsz * dsz;
-    // ★ P4：意图优先（导演分工）；无意图 = 就近（旧观感）
-    const intent = p.intent[i];
-    // ★ 祖宗嘲讽最优先（吸仇恨）：嘲讽圈内强制换目标，无视导演意图/就近
+    // ★ 祖宗嘲讽最优先（吸仇恨）：嘲讽圈内强制换目标，无视就近
     const taunt = hooks.nearestTaunt?.(px, pz) ?? null;
     let tk: number;
     let gx: number, gz: number;
@@ -504,9 +526,8 @@ export class SwarmSystem {
       gx = taunt.x;
       gz = taunt.z;
     } else {
-      if (intent === INTENT_SHIP) tk = dS2 <= 150 * 150 ? AGENT_TARGET_SHIP : AGENT_TARGET_PLAYER;
-      else if (intent === INTENT_PLAYER || intent === INTENT_FLANK) tk = dP2 <= 150 * 150 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
-      else tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
+      // ★ 就近（扑玩家/扑舰由距离决定；攻击意图通道已删——运动语义只看命令+巡逻/驻守）
+      tk = dP2 <= dS2 ? AGENT_TARGET_PLAYER : AGENT_TARGET_SHIP;
       gx = tk === AGENT_TARGET_PLAYER ? hooks.playerX : hooks.shipX;
       gz = tk === AGENT_TARGET_PLAYER ? hooks.playerZ : hooks.shipZ;
     }
@@ -547,11 +568,10 @@ export class SwarmSystem {
       p.alertAt[i] = 0;
     }
     const aware = alerted && now >= p.alertAt[i];
-    const objective = intent !== INTENT_NONE;
     const taunted = taunt !== null;
     // ★ 无命令自主交战（保底）：无指令时用保底半径（不依赖各兵种短视野）
     const engageR = dk === 'none' ? SWARM.AUTONOMY_ENGAGE_R : 0;
-    const chasing = objective || taunted || d <= Math.max(p.aggro[i], engageR) || aware;
+    const chasing = taunted || d <= Math.max(p.aggro[i], engageR) || aware;
 
     // ---- 攻击冷却 / 令牌释放 ----
     p.attackCd[i] -= tick;
@@ -564,58 +584,17 @@ export class SwarmSystem {
       }
     }
 
-    // ---- P4 士气：低血撤退（通用战术；盾/自爆/名册 unit.lowHp='fight' 豁免） ----
-    const mobT = hooks.mobTactics?.(p.mobIndex[i]) ?? null;
-    const noRetreat = mobT?.unit?.lowHp === 'fight' || p.suicide[i] === 1 || p.role[i] === ROLE_SHIELD;
-    if (objective && d < 20 && now >= p.nextRetreatAt[i]
-      && p.hp[i] < p.maxHp[i] * SWARM.RETREAT_HP_RATIO
-      && !noRetreat) {
-      p.retreatUntil[i] = now + SWARM.RETREAT_TIME_MIN + Math.random() * SWARM.RETREAT_TIME_SPAN;
-      p.nextRetreatAt[i] = now + SWARM.RETREAT_COOLDOWN;
-    }
-    const retreating = p.retreatUntil[i] > now;
-
     if (!chasing || d < 1e-4) {
-      // 圈外：家附近游走（轻微偏向目标）+ 释放槽/令牌
+      // 圈外：先执行小队令（有令），否则家附近游走；释放槽/令牌
       this.releaseSlot(i);
-      p.curSpeed[i] = p.wanderSpeed[i];
       p.fromFlow[i] = 0;
-      p.wanderTimer[i] -= tick;
-      if (p.wanderTimer[i] <= 0) {
-        const a = Math.random() * Math.PI * 2;
-        // ★ 大范围巡逻（22m；此前 6m 小碎步 → 看起来像原地抽动）
-        const r = 6 + Math.random() * 16;
-        p.wanderX[i] = p.homeX[i] + Math.cos(a) * r;
-        p.wanderZ[i] = p.homeZ[i] + Math.sin(a) * r;
-        p.wanderTimer[i] = 5 + Math.random() * 5;
+      // ★ L2 令执行（用户定 2026-09-27；《移动执行重写.md》§7.5）：行为已归 **tiers/L2**
+      //   （队长核 → `applyDirective` 写池列 `directiveTargetX/Z`；本处只调用，不再混写）。
+      const executing = l2ExecuteDirective(p, i, px, pz, now, p.squadId[i], this.squadStateOf?.(p.squadId[i]) ?? null);
+      if (!executing) {
+        // ★ 无令/到点=停（用户定 2026-09-27：池队"游走兜底"不存在——状态目标由引擎标签驱动）。
+        p.dirX[i] = 0; p.dirZ[i] = 0; p.curSpeed[i] = 0;
       }
-      const wdx = p.wanderX[i] - px, wdz = p.wanderZ[i] - pz;
-      const wd = Math.hypot(wdx, wdz);
-      const bx = wd > 1e-3 ? wdx / wd : 0, bz = wd > 1e-3 ? wdz / wd : 0;
-      const bias = p.bias[i]; // ★ 威胁度驱动（越高越主动朝玩家游走）
-      const mx = bx + (d > 1e-4 ? (tx / d) * bias : 0);
-      const mz = bz + (d > 1e-4 ? (tz / d) * bias : 0);
-      const ml = Math.hypot(mx, mz);
-      p.dirX[i] = ml > 1e-4 ? mx / ml : 0;
-      p.dirZ[i] = ml > 1e-4 ? mz / ml : 0;
-    } else if (retreating) {
-      // 低血撤离：背向目标撤（不攻击；释放槽/令牌让给同伴）
-      this.releaseSlot(i);
-      if (p.hasToken[i]) {
-        p.hasToken[i] = 0;
-        this.tokenUsed[p.tokenTarget[i]] = Math.max(0, this.tokenUsed[p.tokenTarget[i]] - 1);
-      }
-      p.curSpeed[i] = p.wanderSpeed[i];
-      p.fromFlow[i] = 0;
-      const bx = d > 1e-4 ? -tx / d : 0;
-      const bz = d > 1e-4 ? -tz / d : 0;
-      // 侧向偏移避免笔直倒退成一列
-      const side = p.phase[i] < 0.5 ? 1 : -1;
-      const mx = bx - bz * 0.35 * side;
-      const mz = bz + bx * 0.35 * side;
-      const ml = Math.hypot(mx, mz);
-      p.dirX[i] = ml > 1e-4 ? mx / ml : bx;
-      p.dirZ[i] = ml > 1e-4 ? mz / ml : bz;
     } else {
       // 察觉/进入仇恨 → 刷警戒（同伴延迟响应）
       if (aware) this.flow.paintAlert(px, pz, SWARM.ALERT_PAINT_RADIUS, now, SWARM.ALERT_SECONDS);
@@ -650,14 +629,8 @@ export class SwarmSystem {
           }
         }
       }
-      // ★ 远程不追打（让位本地移动 atomMove=255，否则原子覆盖仍按 directiveTarget 走向玩家）
-      if (p.ranged[i] === 1 && tk === AGENT_TARGET_PLAYER) {
-        const t = rangedMoveTarget(px, pz, gx, gz, d, p.meleeRange[i], (x, z, r) => this.commander.rangedPost(x, z, r));
-        destX = t ? t.x : px;
-        destZ = t ? t.z : pz;
-        p.fromFlow[i] = 0;
-        p.atomMove[i] = 255;
-      }
+      // ★ 运动/开火解耦（用户定 2026-09-27）：远程**不再**选位/风筝/站住——追敌移动与其他兵种相同，
+      //   射击由独立开火子系统负责（可边走边打）。此处删除旧"远程不追打"运动覆盖。
       const mx = destX - px, mz = destZ - pz;
       const md = Math.hypot(mx, mz);
       if (md > 0.05) {
@@ -726,123 +699,35 @@ export class SwarmSystem {
     p.facingBack[i] = dot > (p.facingBack[i] === 1 ? 0.10 : 0.35) ? 1 : 0;
   }
 
-  private stuckAccum = 0;
-  /** ★ 卡死回收（自本类拆出：SwarmRecovery；代理 + L3 实体统一口径） */
-  private readonly recovery: SwarmRecovery;
-  /** 调试计数（每次回收拍重置；转发 SwarmRecovery.dbg） */
-  get stuckDbg(): { exempt: number; window: number; tracked: number; recycled: number; last: string } {
-    return this.recovery.dbg;
+  /** ★ 开火闩锁（新引擎 AttackQueues→TimerManager 置/撤；执行层只读）：缺省全放行 */
+  private fireGate: (uid: number) => boolean = () => true;
+
+  /** 接线（main.ts）：引擎开火许可 → 成员指令开火门 */
+  setFireGate(fn: ((uid: number) => boolean) | null): void {
+    this.fireGate = fn ?? (() => true);
+  }
+
+  fireAllowed(uid: number): boolean {
+    return this.fireGate(uid);
+  }
+
+  /** ★ 统一计时销毁（新引擎 TimerManager.onExpire 回调）：回收代理（归编制）。返回是否找到。
+   *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：此路不得绕过/弱化；被收回 = 出了问题（修行为，不修判官）★★ */
+  recycleByUid(uid: number, reason?: string): boolean {
+    const p = this.pool;
+    for (let i = p.count - 1; i >= 0; i--) {
+      if (p.swarmUid[i] !== uid) continue;
+      this.removeAgent(i, true, false, reason);   // 非击杀离场（unregister=true, killed=false）
+      this.ledger.noteRecall(1, reason);  // 归还编制（按原因分桶）
+      return true;
+    }
+    return false;
   }
 
   /** 移动积分（★ SteerPick：16 向候选 + softmax 选择；禁止向量合成） */
-  private move(i: number, dt: number): void {
-    const p = this.pool;
-    // ---- 人群分离：本拍只算一次（方向决策里当"反向惩罚"，移动后做一次物理外推） ----
-    const t0 = entityPerf.enabled ? performance.now() : 0;
-    this.grid.separation(p, i, _sep);
-    entityPerf.swarmSep += (entityPerf.enabled ? performance.now() : 0) - t0;
-    let dx = p.dirX[i], dz = p.dirZ[i];
-    // ★ 指挥链闭合（用户定 2026-09-23）：代理只认"找队长"——朝队长走 + 局部 steer；
-    //   队级复杂寻路（可行性走廊/贪心段）全在队长身上；成员任务（taskX/Z）不再驱动移动。
-    const squad = this.squads.squadOf(p.swarmUid[i]);
-    const isLeader = !!squad && squad.leaderUid === p.swarmUid[i];
-    const lead = squad && !isLeader ? squad.members.get(squad.leaderUid) : undefined;
-    const hasMyTask = p.taskX[i] !== 0 || p.taskZ[i] !== 0;
-    if (isLeader && hasMyTask) {
-      // ★ 队长（干活的）：**长腿走队级指令目标**（走廊锚点+阵型，避局部极小）；近程直走件点
-      const tx = p.taskX[i] - p.x[i], tz = p.taskZ[i] - p.z[i];
-      const td = Math.hypot(tx, tz);
-      if (td > 15) {
-        const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
-        const ad = Math.hypot(ax, az);
-        if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
-        else { dx = tx / td; dz = tz / td; }
-      } else if (td > 2) {
-        // ★ 最后一程（≤15m）：直线可走才直走；**直线被墙/单向边挡 → 回队级锚点**（走廊绕上坡正面）
-        if (this.walkableLine(p.x[i], p.z[i], p.taskX[i], p.taskZ[i])) { dx = tx / td; dz = tz / td; }
-        else {
-          const ax = p.directiveTargetX[i] - p.x[i], az = p.directiveTargetZ[i] - p.z[i];
-          const ad = Math.hypot(ax, az);
-          if (ad > 0.5) { dx = ax / ad; dz = az / ad; }
-          else { dx = tx / td; dz = tz / td; }
-        }
-      }
-      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    } else if (lead) {
-      const tx = lead.x - p.x[i], tz = lead.z - p.z[i];
-      const td = Math.hypot(tx, tz);
-      // 双阈值滞回（停→>8m 才动；动→<5m 才停）：只在 5~8m 边界来回蹭 = 绕圈源，滞回消抖
-      const stopped = p.atomMove[i] === 255;
-      if (td > (stopped ? 8 : 5)) { dx = tx / td; dz = tz / td; }
-      else { dx = 0; dz = 0; p.atomMove[i] = 255; }
-    } else if (p.atomMove[i] !== 255) {
-      const atom = MOVE_ATOMS[p.atomMove[i]];
-      let tx = p.directiveTargetX[i] - p.x[i];
-      let tz = p.directiveTargetZ[i] - p.z[i];
-      const td = Math.hypot(tx, tz);
-      if (td > 0.5) { tx /= td; tz /= td; } else { tx = dx; tz = dz; }
-      atomDirection(atom, tx, tz, _atomDir);
-      dx = _atomDir.x;
-      dz = _atomDir.z;
-    }
-    // ★ 坡面优化（用户定 2026-09-24）：上坡必须**从坡正面**（沿梯度/fall line 直上，不斜切横穿）——
-    //   期望方向含上坡分量且局部坡显著 → 向"最陡上升方向"混合（飞行层豁免）
-    if ((dx !== 0 || dz !== 0) && p.isAir[i] !== 1) {
-      const g = this.commander.slopeGradAt(p.x[i], p.z[i]);
-      if (g.mag > 0.18) {
-        const up = dx * g.gx + dz * g.gz;
-        if (up > 0.15) {   // 正在上坡 → 贴坡正面走
-          dx = dx * 0.4 + g.gx * 0.6;
-          dz = dz * 0.4 + g.gz * 0.6;
-          const l = Math.hypot(dx, dz) || 1;
-          dx /= l; dz /= l;
-        }
-      }
-    }
-    // ★ 硬边界内（被推入/出生点）：即使本拍无期望方向也要逃离
-    const inside = this.commander.blockedAt(p.x[i], p.z[i]);
-    if (dx !== 0 || dz !== 0 || inside) {
-      p.hazardTimer[i] -= dt;
-      const raster = RasterMap.current;
-      const hint = p.y[i];
-      const here = raster ? raster.surfaceHeightAtFor(p.x[i], p.z[i], hint) : 0;
-      const dangerAt = (hx: number, hz: number): boolean => {
-        if (!raster) return false;
-        if (p.isAir[i] === 1) return false;   // 空中层豁免地面危险
-        if (this.commander.blockedAt(hx, hz)) return true;   // 表：硬墙/坑水
-        const role = raster.tileDefAt(hx, hz).genRole;
-        const h = raster.surfaceHeightAtFor(hx, hz, hint);
-        if (role === 'pit' && h < DANGER.PIT_H) return true;
-        // ★ N1：坡是正常通路（不否决；坡度只减速）。离散硬边/悬崖已由可行性表拦在走廊外。
-        return false;
-      };
-      const res = pickSteer(
-        p.x[i], p.z[i], dx, dz, _sep.x, _sep.z,
-        p.safeDirX[i], p.safeDirZ[i], p.hazardTimer[i], performance.now() / 1000,
-        this.commander.blockedAt(p.x[i], p.z[i]),
-        dangerAt, this.commander,
-        p.isAir[i] !== 1,   // ★ 空中层（飞行）不吃地面表分/掩体折扣
-        this.squads.squadOf(p.swarmUid[i])?.type,   // ★ L3 兵种分（重构 P1-2；mixed=兵种中立）
-      );
-      if (!res.hold) {
-        p.safeDirX[i] = res.x; p.safeDirZ[i] = res.z; p.hazardTimer[i] = res.until;
-        const sp = p.curSpeed[i] * p.directiveSpeedMul[i] * dt;   // ★ 执行层：限速（默认 1）
-        p.x[i] += res.x * sp;
-        p.z[i] += res.z * sp;
-        p.yaw[i] = Math.atan2(res.x, res.z);
-      }
-    }
-    // ---- 人群分离外推（复用本拍已算向量；只做物理推挤，不参与方向决策） ----
-    if (_sep.x !== 0 || _sep.z !== 0) {
-      p.x[i] += _sep.x;
-      p.z[i] += _sep.z;
-    }
-  }
-
   // ============================================================
   // 攻击槽 / 移除清理
   // ============================================================
-
   /** 占槽：取离自己最近的空扇区（无空位 → -1，直走目标） */
   private claimSlot(i: number, tk: number, gx: number, gz: number, px: number, pz: number): number {
     const owners = this.slotOwner[tk];
@@ -897,6 +782,48 @@ export class SwarmSystem {
     }
   }
 
+  /** ★★ 统一注销（用户定 2026-09-27）：SquadTable 移除 + **队长接任发布** + 池标志同步 + 全灭清理——
+   *  阵亡 / 回收 / 清场三条路**唯一口径**（此前 enemy_removed 丢弃返回值→队长变更不广播、标志不同步） */
+  /** ★ 销毁前快照（用户建议 2026-09-27：读被销毁单位的队长位置与自身寻路） */
+  private logGone(uid: number, carrier: 'pool' | 'entity', killed: boolean, reason?: string, i?: number): void {
+    const sq = this.squads.squadOf(uid);
+    let x = 0, z = 0, tier = 0, orderX = 0, orderZ = 0, dirKind = 0, dirX = 0, dirZ = 0;
+    if (i !== undefined) {
+      const p = this.pool;
+      x = p.x[i]; z = p.z[i]; tier = p.tier[i];
+      orderX = p.orderTargetX[i]; orderZ = p.orderTargetZ[i];
+      dirKind = p.directiveKind[i]; dirX = p.directiveTargetX[i]; dirZ = p.directiveTargetZ[i];
+    } else if (sq) {
+      const m = sq.members.get(uid);
+      if (m) { x = m.x; z = m.z; }
+    }
+    let leaderUid = 0, leaderX = 0, leaderZ = 0, route = -2, distLead = -1;
+    if (sq) {
+      leaderUid = sq.leaderUid;
+      const lm = sq.members.get(sq.leaderUid);
+      if (lm) { leaderX = lm.x; leaderZ = lm.z; }
+      route = this.nav.memberRouteInfo(uid);
+      if (leaderUid) distLead = Math.hypot(x - leaderX, z - leaderZ);
+    }
+    goneLog.push({
+      at: performance.now() / 1000, uid, carrier, killed, reason,
+      x, z, squadId: sq?.id ?? -1, leaderUid, leaderX, leaderZ, distLead,
+      route, orderX, orderZ, dirKind, dirX, dirZ, tier,
+    });
+  }
+
+  private unregisterMember(uid: number, killed: boolean, fromPool = false, reason?: string): void {
+    if (!fromPool) this.logGone(uid, 'entity', killed, reason);   // ★ 实体路径快照（含队长/路线状态）
+    const res = this.squads.remove(uid, killed);
+    if (!res) return;
+    for (const c of res.changes) this.leaderChanges.push(c);
+    this.syncLeaderFlags(res.squadId);
+    if (res.wiped) {
+      this.pendingWiped.push(res.squadId);
+      this.squadGone?.(res.squadId);
+    }
+  }
+
   /** ★ 外部（引擎重组等）产生的队长变更：入同一通道，下一帧随 hooks 广播（L3 镜像用） */
   pushLeaderChange(uid: number, isLeader: boolean): void {
     this.leaderChanges.push({ uid, isLeader });
@@ -904,9 +831,10 @@ export class SwarmSystem {
 
   /** swap-remove 包装：释放槽/令牌 + 修正槽主索引；★ public（迷失销毁等非击杀离场用，
    *  调用方负责 ledger.noteRemoved）；unregister=false（升格路径）→ 小队归属/队长保留 */
-  removeAgent(i: number, unregister = true, killed = false): void {
+  removeAgent(i: number, unregister = true, killed = false, reason?: string): void {
     const last = this.pool.count - 1;
     const uid = this.pool.swarmUid[i];
+    if (unregister) this.logGone(uid, 'pool', killed, reason, i);   // ★ 销毁前快照（用户建议）
     this.releaseAgent(i);
     if (i !== last) {
       for (const owners of this.slotOwner) {
@@ -916,17 +844,14 @@ export class SwarmSystem {
       }
     }
     this.pool.removeAt(i);
-    if (!unregister) return;
-    // ★ 步骤 5/9：注销小队归属；队长阵亡/回收 → 本队接任；全灭上报（帧末统一广播）
-    const res = this.squads.remove(uid, killed);
-    if (res) {
-      for (const c of res.changes) this.leaderChanges.push(c);
-      this.syncLeaderFlags(res.squadId);
-      if (res.wiped) {
-        this.pendingWiped.push(res.squadId);
-        this.tactics.board.dropSquad(res.squadId);   // ★ 全灭 → 黑板同步清
-      }
+    if (!unregister) {
+      // ★ 升/降格换载体：归属/队长保留，但池标志要跟上（防升回后丢队长标志）
+      const sq = this.squads.squadOf(uid);
+      if (sq) this.syncLeaderFlags(sq.id);
+      return;
     }
+    // ★ 唯一注销口：队长空缺 → 本队接任；全灭→帧末广播
+    this.unregisterMember(uid, killed, true, reason);
   }
 
   // ============================================================
@@ -947,7 +872,7 @@ export class SwarmSystem {
       this.pool.hp[i] -= final;
       this.pool.flash[i] = 1; // ★ P3：受击白闪
       // ★ 步骤 10：被击 → 单位免降格 + 小队警觉 + 大队警觉累积
-      const now = performance.now() / 1000;
+      const now = simNow();   // ★ 模拟时钟（倍速同步）
       this.pool.noDemoteUntil[i] = now + AUTONOMY.UNIT_HOLD_S;
       this.noteHit(this.pool.squadId[i], now);
       // ★ 步骤 6：被击升格（限 L3 范围）：近处代理挨打 → 本帧立即升格（下一帧生效）
@@ -995,7 +920,7 @@ export class SwarmSystem {
 
   /** ★ P4 狂暴（同伴阵亡：附近代理短时加速，冲上去拼命） */
   enrageAt(x: number, z: number, radius: number, seconds: number): void {
-    const now = performance.now() / 1000;
+    const now = simNow();   // ★ 模拟时钟（倍速同步）
     const r2 = radius * radius;
     const p = this.pool;
     for (let i = 0; i < p.count; i++) {
@@ -1008,7 +933,7 @@ export class SwarmSystem {
 
   /** 刷警戒（玩家开火 / 爆炸等；共享感知入口） */
   alertAt(x: number, z: number, radius: number, seconds: number): void {
-    this.flow.paintAlert(x, z, radius, performance.now() / 1000, seconds);
+    this.flow.paintAlert(x, z, radius, simNow(), seconds);
   }
 
   /** ★ 步骤 9：实体成员同步（模式层 0.25s 节拍喂入；实体不在池内，池侧同步覆盖不到） */
@@ -1019,14 +944,7 @@ export class SwarmSystem {
   /** ★ 步骤 9：实体阵亡/销毁 → 小队注销（全灭上报；单人只下调评分） */
   onEntityKilled(uid: number): void {
     if (uid <= 0) return;
-    const res = this.squads.remove(uid, true);
-    if (!res) return;
-    for (const c of res.changes) this.leaderChanges.push(c);
-    this.syncLeaderFlags(res.squadId);
-    if (res.wiped) {
-      this.pendingWiped.push(res.squadId);
-      this.tactics.board.dropSquad(res.squadId);
-    }
+    this.unregisterMember(uid, true);
   }
 
   /** ★ 步骤 10：被击上报（代理直调；实体经 enemy_hit → WorldMode → 这里） */
@@ -1052,41 +970,43 @@ export class SwarmSystem {
     return this.squads.ratings(performance.now() / 1000);
   }
 
-  /** ★ 步骤 9b：发令（引擎/测试入口；参数校验+缺参降级在 SquadTactics 内） */
-  issueOrder(squadId: number, order: TacticalOrder, ttl?: number): void {
-    this.tactics.issue(squadId, order, performance.now() / 1000, ttl);
-  }
-
-  /** ★ P2 初级寻路核验（大队发令门调用；直通 SquadNavigator/HPA 簇缓存） */
-  coarseCheck(
-    sx: number, sz: number, gx: number, gz: number,
-    out: { x: number; z: number }[],
-  ): 'ok' | 'blocked' | 'unknown' {
-    return this.nav.coarseCheck(sx, sz, gx, gz, out);
-  }
-
   /** ★ P4 白名单探针：队路径重规划计数 */
   get navDbg(): SquadNavigator['dbg'] { return this.nav.dbg; }
-  /** ★ P4 白名单探针：任务走廊重规划计数 */
-  get memberNavDbg(): MemberTaskNav['dbg'] { return this.taskNav.dbg; }
 
-  /** ★ 可行性直达检查（工兵选点等）：直线可走（读表） */
-  walkableLine(ax: number, az: number, bx: number, bz: number): boolean {
-    return this.nav.feas.walkableLine(ax, az, bx, bz);
+  /** ★ 队长可达核验（**唯一口径**；用户定 2026-09-25/29）：**只认可行性表 BFS**（不用 LOS）。
+   *  取件门与巡逻腿共用本实现。 */
+  reachFrom(id: number, x: number, z: number): boolean {
+    const sq = this.squads.get(id);
+    const lead = sq?.members.get(sq.leaderUid);
+    if (!lead) return false;
+    return this.reachable(lead.x, lead.z, x, z);
   }
 
-  /** ★ 有向可达（表图 BFS；可绕障——**允许绕出扇区**）——取点校验用（先 walkableLine 粗筛再调这个） */
+  /** ★ 有向可达（表图 BFS；可绕障）——**blocked 才拒绝；表外无法裁决 → 放行**（用户定 2026-09-29：不用 LOS） */
   reachable(ax: number, az: number, bx: number, bz: number): boolean {
     const out: { x: number; z: number }[] = [];
-    return this.nav.feas.find(ax, az, bx, bz, out) === 'ok';
+    return this.nav.feas.find(ax, az, bx, bz, out) !== 'blocked';
   }
 
   /** ★ N1：可行性表 → 小队寻路/命令门（表就绪后可行性寻路接管） */
+  /** ★ 爬坡到落点：强制重寻路一次（队长走廊 + 成员/代理路线失效）——防爬完又掉下去 */
+  /** ★ 兜底命令（用户定 2026-09-27）：强制队长重寻路（消费一次） */
+  forceRepath(squadId: number): void {
+    this.nav.forceRepath(squadId);
+  }
+
+  forceRepathClimb(squadId: number, uid: number): void {
+    this.nav.forceRepath(squadId);
+    this.nav.dropMemberRoute(uid);
+  }
+
   attachPassTable(t: PassTable): void {
     this.nav.setPathTable(t);
-    this.taskNav.setPathTable(t);   // ★ 任务走廊薄层化（可行性寻路）
-    this.nav.stampFn = () => this.commander.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
+    this.nav.stampFn = () => this.data.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
+    // ★ S1：短寻路语义风险（地形语义 → 偏好安全；"不要求很安全"）
+    this.nav.scoreFn = (x, z, sid) => sid !== undefined ? this.data.scoreForSquad(sid, x, z) : this.data.scoreAt(x, z);   // ★ 贪心消费统一评分（D7：有队 → 按该队兵种）
   }
+
 
   /** ★ N1 探针：可行性寻路计数（calls/ok/blocked/outside）+ 最近被拒样本 */
   get feasDbg(): { calls: number; ok: number; blocked: number; outside: number } { return this.nav.feas.dbg; }
@@ -1095,84 +1015,59 @@ export class SwarmSystem {
   }
 
   /** ★ P3 观测：命令到期回落本地的次数（重构总纲 P3-1 使命化前后对比；probe 读取） */
-  private _orderDrops = 0;
-  get orderDrops(): number { return this._orderDrops; }
 
-  /** ★ 步骤 9b：把小队命令分解成个体指令（池写列；实体经 onDirective 推送） */
-  private applyOrders(now: number, hooks: SwarmHooks): void {
-    for (const squad of this.squads.all()) {
-      const state = this.tactics.board.get(squad.id);
-      if (!state) continue;
-      if (state.until > 0 && now > state.until) {
-        this._orderDrops++;   // ★ P3 观测：命令到期回落本地（使命 TTL 使命化前后对比）
-        this.tactics.board.dropSquad(squad.id);   // 命令到期 → 回落本地自主
-        continue;
-      }
-      // ★ 五轴时序/信号：未到生效时刻/未发信号 → 本拍不下发（旧指令自然过期）
-      if (!this.tactics.board.isActive(state, now)) continue;
-      // ★ 小队寻路：命令目标不可直达 → 求走廊 waypoint（实体 steer / 代理指令共用）
-      this.nav.ensurePath(this.squads, squad, state, now);
-      const bucket = squadBucket(squad.type);
-      // ★ 编队锚点（与 steerL3 同口径）：命令当前路点 + 前进方向；
-      //   ★ P4 寻路轨优先：队长步令在身 → 锚点 = 当前步（软参考；过期/无步回退命令锚）
-      let ax = state.order.target?.x ?? 0;
-      let az = state.order.target?.z ?? 0;
-      let fx = 1, fz = 0;
-      const hasC = this.squads.centroidOf(squad.id, this._centroid);
-      const stepState = this.tactics.board.getPath(squad.id);
-      const stepTgt = stepState && now < stepState.until ? stepState.order.target : null;
-      if (stepTgt) {
-        ax = stepTgt.x;
-        az = stepTgt.z;
-      } else if (hasC) {
-        const tgt = SquadTactics.resolveAnchor(state, this._centroid.x, this._centroid.z, squad.type, now, this.commander.terrain);
-        if (tgt) { ax = tgt.x; az = tgt.z; }
-      }
-      if (hasC) {
-        const adx = ax - this._centroid.x, adz = az - this._centroid.z;
-        const al = Math.hypot(adx, adz);
-        if (al > 1e-3) { fx = adx / al; fz = adz / al; }
-      }
-      // ★ 槽位 rank 基准 = 全员 uid（L3 + 代理同口径，跨 LOD 不换位）
-      _memberUids.length = 0;
-      for (const uid of squad.members.keys()) _memberUids.push(uid);
-      for (const [uid, info] of squad.members) {
-        // ★ 队长管队内：按每个成员的血量分解（残血 → fallback）
-        const hpRatio = info.maxHp > 0 ? info.hp / info.maxHp : 1;
-        const directive = this.tactics.decompose(
-          squad, bucket, now, hpRatio, hooks.mobTactics?.(squad.mobKind) ?? null,
-          this.commander.terrain,
-        );
-        // ★ 队长第二指挥（编队位置）：按 uid rank 下发阵型槽位目标（单例不排阵）
-        if (!squad.singleton) {
-          let rank = 0;
-          for (const m of _memberUids) if (m < uid) rank++;
-          const off = formationOffset(squad.type, rank);
-          directive.targetX = ax + fx * off.fx - fz * off.fz;
-          directive.targetZ = az + fz * off.fx + fx * off.fz;
-        }
-        let found = false;
-        for (let i = 0; i < this.pool.count; i++) {
-          if (this.pool.swarmUid[i] !== uid) continue;
-          this.pool.orderKind[i] = orderCode(state.order.kind);
-          this.pool.orderTargetX[i] = ax;
-          this.pool.orderTargetZ[i] = az;
-          this.pool.orderUntil[i] = state.until;
-          this.pool.orderSeq[i] = state.order.seq;
-          this.pool.directiveKind[i] = directiveCode(directive.kind);
-          this.pool.directiveTargetX[i] = directive.targetX ?? 0;
-          this.pool.directiveTargetZ[i] = directive.targetZ ?? 0;
-          this.pool.directiveWard[i] = directive.wardUid ?? 0;
-          this.pool.directiveUntil[i] = directive.until;
-          this.pool.directiveFire[i] = fireCode(directive.fire);
-          this.pool.directiveSpeedMul[i] = directive.speedMul;
-          this.pool.directiveSeq[i] = directive.seq;
-          found = true;
-          break;
-        }
-        if (!found) hooks.onDirective?.(uid, state.order, directive, state.until);
-      }
+  /** ★ 队长核端口：寻路求解（执行态走廊写入；长短由 ensurePath 内部分流） */
+  /** ★ 巡逻点查询（队长核端口；实现 = nav.patrolNext） */
+  patrolNext(x: number, z: number, ax: number, az: number, r: number, leg: number): { x: number; z: number } | null {
+    return this.nav.patrolNext(x, z, ax, az, r, leg);
+  }
+
+  ensurePathFor(state: SquadOrderState, squad: Squad, now: number): void {
+    // ★ 寻路只认 2D 格（用户定 2026-09-27：删同层机制）——只需知"队长是否空中"（空中不建走廊）
+    let leaderAir = this.unitAir.get(squad.leaderUid) === true;
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) if (p.swarmUid[i] === squad.leaderUid) { leaderAir = p.isAir[i] === 1; break; }
+    this.nav.ensurePath(this.squads, squad, state, now, leaderAir);
+  }
+
+  /** ★ 队长核端口：成员指令**唯一落地口**（池列写口 / L3 onDirective） */
+  applyDirectivePort(
+    uid: number, order: TacticalOrder, directive: UnitDirective, until: number, ax: number, az: number,
+  ): void {
+    const p = this.pool;
+    for (let i = 0; i < p.count; i++) {
+      if (p.swarmUid[i] !== uid) continue;
+      p.orderKind[i] = orderCode(order.kind);
+      p.orderTargetX[i] = ax;
+      p.orderTargetZ[i] = az;
+      p.orderUntil[i] = until;
+      p.orderSeq[i] = order.seq;
+      p.directiveKind[i] = directiveCode(directive.kind);
+      p.directiveTargetX[i] = directive.targetX ?? 0;
+      p.directiveTargetZ[i] = directive.targetZ ?? 0;
+      p.directiveWard[i] = directive.wardUid ?? 0;
+      p.directiveUntil[i] = directive.until;
+      p.directiveFire[i] = fireCode(directive.fire);
+      p.directiveSpeedMul[i] = directive.speedMul;
+      p.directiveSeq[i] = directive.seq;
+      return;
     }
+    this.lastHooks?.onDirective?.(uid, order, directive, until);
+  }
+
+  /** ★ main 接线：执行态单源（队长核） */
+  setSquadStateSource(fn: ((id: number) => SquadOrderState | null) | null): void {
+    this.squadStateOf = fn;
+  }
+
+  /** 该队现令 kind（执行态单源；卡死豁免/查询用） */
+  orderKindOf(id: number): string | null {
+    return this.squadStateOf?.(id)?.order.kind ?? null;
+  }
+
+  /** ★ main 接线：队注销（清队长核 + 引擎 store） */
+  setSquadGone(fn: ((id: number) => void) | null): void {
+    this.squadGone = fn;
   }
 
   /** 调试/统计：层级计数 */
@@ -1196,18 +1091,14 @@ export class SwarmSystem {
 
   /** 运行时状态清空（不含账本；clear 与 recallAll 共用） */
   private resetRuntime(): void {
+    for (const s of this.squads.all()) this.squadGone?.(s.id);   // 队长核/引擎 store 清
     this.pool.clear();
     this.squads.clear();
-    this.tactics.clear();
     this.nextUid = 1;
     this.leaderChanges.length = 0;
     this.pendingWiped.length = 0;
     this.ratingAccum = 0;
-    this.tacticsAccum = 0;
-    this.leaderAI.clear();
-    this.commander.clear();
-    this.recovery.clear();
-    this.stuckAccum = 0;
+    this.data.clear();
     this.recentHits.clear();
     this.counterUntil = 0;
     this.lastPlayerX = 0;

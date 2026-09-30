@@ -1,5 +1,5 @@
 // ============================================================
-// SwarmBatch —— 远层代理批量渲染（《敌人管线设计.md》§6）
+// SwarmBatch —— 远层代理批量渲染（《RTS架构.md》§6）
 // ============================================================
 // 每兵种一张图集（前/后两帧；base+residual 在 CPU 按 FTXQuad 同款公式烘焙），
 // 一个 InstancedMesh 画完该兵种全部代理（draw call = 兵种数；当前 11 兵种 ≈ 11 次）。
@@ -12,7 +12,7 @@
 import * as THREE from 'three';
 import type { FrameAssetSource } from '../../services/fx/AssetSource';
 import type { AgentPool } from './AgentPool';
-import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE } from './AgentPool';
+import { AGENT_CAPACITY, AIR_BOB_AMP, AIR_BOB_RATE, AIR_ALTITUDE_DEFAULT, AIR_TERRAIN_CLEAR } from './AgentPool';
 import { LOD_MAX_DIST } from '../../services/lod';
 import { autoGroundSinkFrac } from '../../services/fx/groundSink';
 
@@ -292,8 +292,13 @@ export class SwarmBatch {
       //   上下浮动）定位；地面兵照旧贴地回写（渲染与逻辑同源）。
       //   ★ 浮动相位用 pool.phase（0~1 个体随机），同一批飞兵不会整齐上下摆。
       let baseY = gy;
-      if (pool.isAir[i] === 1 && pool.altitude[i] > 0) {
-        baseY = gy + pool.altitude[i]
+      if (pool.isAir[i] === 1) {
+        // ★ 飞行自由高度 + **地形净空**（用户定 2026-09-26）：巡航高度世界系保持，
+        //   但至少高出顶层地表 AIR_TERRAIN_CLEAR（平缓地形不抖；越崖不穿墙）。
+        const alt = pool.altitude[i] > 0 ? pool.altitude[i] : AIR_ALTITUDE_DEFAULT;
+        if (pool.airCruiseY[i] === 0) pool.airCruiseY[i] = gy + alt;
+        const gyAhead = groundAt(pool.x[i] + pool.dirX[i] * 3, pool.z[i] + pool.dirZ[i] * 3, pool.y[i]);
+        baseY = Math.max(pool.airCruiseY[i], Math.max(gy, gyAhead) + AIR_TERRAIN_CLEAR)
           + Math.sin(time * AIR_BOB_RATE + pool.phase[i] * 6.2831853) * AIR_BOB_AMP;
       }
       pool.y[i] = baseY;
@@ -320,7 +325,10 @@ export class SwarmBatch {
           _m.compose(_p, _q, _s);
           barMesh!.setMatrixAt(bi, _m);
           const mx = pool.maxHp[i];
-          barRatio!.setX(bi, mx > 0 ? Math.max(0, Math.min(1, pool.hp[i] / mx)) : 0);
+          const hpv = pool.hp[i];
+          // ★ 兜底：maxHp 未写（0/NaN）→ 显示满条而不是空条（否则"创建时血条全空"）
+          const ratio = mx > 0 && Number.isFinite(hpv) ? Math.max(0, Math.min(1, hpv / mx)) : 1;
+          barRatio!.setX(bi, ratio);
         }
       }
     }

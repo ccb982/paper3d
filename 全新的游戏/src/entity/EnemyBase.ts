@@ -16,16 +16,14 @@ import type { EntityManager } from './EntityManager';
 import type { EntityBase, EntityHitPoint, RetireReason } from './EntityBase';
 import type {
   SwarmCarrier, SteerIntent, SwarmSnapshot, UnitRole, UnitAttackType,
-  SquadOrderKind, DirectiveKind, TacticalOrder, UnitDirective,
+  SquadOrderKind, DirectiveKind,
 } from './SwarmUnit';
 import {
-  orderCode, orderFromCode, directiveCode, directiveFromCode, fireCode, FIRE_FREE, roleBucket,
+  orderCode, orderFromCode, directiveCode, directiveFromCode, FIRE_FREE,
   UNIT_HIT_HOLD_S,
 } from './SwarmUnit';
-import {
-  MOVE_ATOMS, resolveWeights, atomDirection, rollMove, rollFire,
-} from './AtomExecutor';
 import { autoGroundSinkFromFrame } from '../services/fx/groundSink';
+import { climbBook } from './base/ClimbBook';
 import { EnemyLocomotion } from './enemy/EnemyLocomotion';
 import { EnemyBrain } from './enemy/EnemyBrain';
 import { EnemyPresentation } from './enemy/EnemyPresentation';
@@ -35,10 +33,10 @@ import { AIStateMachine } from '../systems/ai/AIStateMachine';
 import type { BehaviorContext } from '../systems/ai/behaviors';
 import { aiSystem } from '../systems/ai/AISystem';
 import type { AIConfig } from '../systems/ai/aiconfig';
-import { ENEMY_ENGAGE_FLOOR } from '../systems/ai/aiconfig';
 import { HealthBar } from '../services/fx/HealthBar';
 import { RasterMap } from '../services/map/RasterMap';
 import { eventBus } from '../core/EventBus';
+import { simNow } from '../services/SimClock';
 
 export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset'> {
   /** 攻击行为标记（预留） */
@@ -74,8 +72,6 @@ export interface EnemyOptions extends Omit<CharacterBaseOptions, 'kind' | 'asset
   canBuild?: boolean;
 }
 
-const _atomDir = { x: 0, z: 0 };
-
 export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private assetRef: CharacterFxAssetSource;
   /** ★ E5：移动器（危险地形绕行；纯搬运） */
@@ -86,11 +82,16 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   private readonly brain = new EnemyBrain();
 
   // ============================================================
-  // ★ 蜂群预留字段（《实体架构.md》§5.3；v2 由 SwarmTierPort 填值）
+  // ★ 蜂群预留字段（《RTS架构.md》§5.3；v2 由 SwarmTierPort 填值）
   //   当前全部为默认值（散兵/未编队/地面/近战）→ 行为零变化。
   // ============================================================
   /** 稳定 uid（升格/降格往返不变；替代裸 index） */
   swarmUid = 0;
+
+  /** ★ 上坡点认领制：稳定 uid 上报内核（用户定 2026-09-26） */
+  protected override climbUid(): number {
+    return this.swarmUid;
+  }
   /** 当前载体（L3 实体恒为 'entity'） */
   readonly carrier = 'entity' as const;
   /** ★ 激活态（2026-09-19 单一单位模型）：实体载体恒 active（代理池 = dormant） */
@@ -135,10 +136,17 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   get fireHold(): boolean { return this.brain.fireHold; }
   /** ★ E5：本段移动原子下标（255 = 无覆盖） */
   get atomMove(): number { return this.brain.atomMove; }
+  /** 探针：移动器承诺方向（诊断用） */
   /** ★ E5：是否眩晕中（行为器判定） */
+  /** ★ 爬坡到落点钩子（main 注入 → SwarmSystem.forceRepathClimb） */
+  static climbLandedHook: ((squadId: number, uid: number) => void) | null = null;
+
+  protected override onClimbLandedEvent(): void {
+    EnemyBase.climbLandedHook?.(this.squadId, this.swarmUid);
+  }
+
   get isStunned(): boolean { return this.brain.isStunned; }
 
-  private fbCd = 0;
   /** 大编队（-1 = 未编队；权威在 Squad.battalion，实体只存副本） */
   battalionId = -1;
   /** 小编队（-1 = 散兵/未编队） */
@@ -159,6 +167,8 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   controlSource: 'swarm' | 'local' = 'local';
   /** 飞天/悬停高度 = CharacterBase 的 airborne/airAltitude（单一事实源） */
   get isAir(): boolean { return this.airborne; }
+  /** ★ 朝向（yawBase；yaw 0 = +z）——侧向让路/探针消费 */
+  get faceYaw(): number { return this.presentation.yawBase; }
   get altitude(): number { return this.airAltitude; }
 
   /** ★ steer 保持窗口（秒）：超时自动回落 local（不允许停摆，v2 铁律 3） */
@@ -169,7 +179,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   /** ★ E4a：steer 消费内的 moveBy 重入豁免（本地 AI 走 moveBy 一律被拦） */
   private applyingSteer = false;
 
-  /** ★ 编队控制中（swarm 且 steer 新鲜）：本地 AI 只保留战斗决策（《实体架构.md》§9.4） */
+  /** ★ 编队控制中（swarm 且 steer 新鲜）：本地 AI 只保留战斗决策（《RTS架构.md》§9.4） */
   get swarmControlled(): boolean {
     return this.controlSource === 'swarm' && this.hasFreshSteer;
   }
@@ -178,9 +188,13 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
   applySteer(intent: SteerIntent | null): void {
     if (!intent) {
       this.steerState.source = 'none';
+      this.climbOrdered = false;   // 凭证随 steer 清除
+      this.climbPt = undefined;
       return;
     }
     Object.assign(this.steerState, intent);
+    this.climbOrdered = intent.climb === true;   // ★ 爬坡凭证（路线发放）
+    this.climbPt = intent.climbPt;               // ★ 凭证点（爬坡执行比对用）
     this.steerFreshUntil = performance.now() / 1000 + EnemyBase.STEER_TTL;
     // ★ E4a：收到 steer = 控制权交给 swarm（超时回落由 applySteerMovement 执行）
     this.controlSource = 'swarm';
@@ -199,34 +213,32 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       return;
     }
     const s = this.steerState;
-    let dx = s.dirX, dz = s.dirZ;
+    // ★ 收敛（用户定 2026-09-26）：方向只认 steer 的 dirX/dirZ（= 格边步/路线修正产物）；
+    //   moveTarget 只用于**到达停步**，不再直线朝槽位（那是绕过路线的独立移动实现 → 撞崖/原地摆）。
+    const dx = s.dirX, dz = s.dirZ;
     if (this.moveTarget && s.source === 'formation') {
-      dx = this.moveTarget.x - this.entity.position.x;
-      dz = this.moveTarget.z - this.entity.position.z;
-      const d = Math.hypot(dx, dz);
+      const d = Math.hypot(this.moveTarget.x - this.entity.position.x, this.moveTarget.z - this.entity.position.z);
       if (d < 0.55) {
         this.controller.moveDir.x = 0;
         this.controller.moveDir.y = 0;
         return;
       }
-      dx /= d; dz /= d;
     }
     if (dx === 0 && dz === 0) {
       this.controller.moveDir.x = 0;
       this.controller.moveDir.y = 0;
       return;
     }
-    // ★ 队长指令限速（ROE/压迫档）仍生效；本地 AI 的方向选择被让位
-    const mul = this.directiveKind !== 'none' ? this.directiveSpeedMul : 1;
+    // ★ 运动/开火解耦（用户定 2026-09-27）：移动速度**不消费 directive**（指令只服务开火/表现）。
     const base = s.speed > 0 ? s.speed : this.moveSpeed;
     this.applyingSteer = true;
-    this.moveBy(dx, dz, dt, base * mul);
+    this.moveBy(dx, dz, dt, base);
     this.applyingSteer = false;
   }
 
   /** ★ 被击（步骤 10 自主 LOD）：单位级免降格窗口 + 广播（小队/大队警觉由 WorldMode 转交 swarm） */
   override onTakeDamage(dmg: number, source: EntityBase | null, hitPoint?: EntityHitPoint): void {
-    this.noDemoteUntil = performance.now() / 1000 + UNIT_HIT_HOLD_S;
+    this.noDemoteUntil = simNow() + UNIT_HIT_HOLD_S;   // ★ 模拟时钟（倍速同步）
     eventBus.emit('enemy_hit', { squadId: this.squadId });
     super.onTakeDamage(dmg, source, hitPoint);
   }
@@ -381,6 +393,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
     this.camp = 'enemy';
     // ★ 2026-09-14 用户定调：敌人只能从插值坡上高台（禁止贴墙瞬移攀爬）
     this.blockCliffClimb = true;
+    // ★ 爬掩体开启，但有'沿路才爬'门控（CharacterBase：期望方向朝掩体才触发）
     // ★ 空中层（2026-09-18）：飞行单位 —— 悬停 + 不贴地 + 无视地形落差/危险地形。
     //   climbAnyTerrain 关掉 CharacterBase 的立面阻挡（飞在空中不该被墙挡住）；
     //   y 由 WorldMode.clampCharacter 的飞行分支统一驱动。
@@ -508,8 +521,9 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *   ★ 角色朝向 = 移动方向：贴片绕 Y 旋转到移动方向角（任意角度）
    *   ★ 防掉坑：移动前探测前方地形，坑洞/悬崖/水面前提前停下转向 */
   moveBy(dx: number, dz: number, dt: number, speed: number): void {
-    // ★ E4a：编队控制中本地 AI 不再自行选路（steer 消费经 applyingSteer 豁免）
-    if (this.swarmControlled && !this.applyingSteer) return;
+    // ★ 收敛（用户定 2026-09-25）：**移动只走统一链**——只有 steer 消费（applyingSteer）允许位移；
+    //   本地 AI / EnemyBrain / AI behaviors 一律不得自行移动（选路/移动统一由引擎→队长→格边/短长寻路）。
+    if (!this.applyingSteer) return;
     // ★ E5：危险地形绕行由 EnemyLocomotion 解析（纯搬运）
     const r = this.locomotion.resolve(
       this.entity.position.x, this.entity.position.y, this.entity.position.z,
@@ -520,7 +534,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
       this.controller.moveDir.y = 0;
       return;
     }
-    this.controller.moveToward(r.x, r.z, dt, speed);
+    this.controller.moveToward(r.x, r.z, dt, speed);   // ★ 水=正常地块（无限速）
     // 贴片朝向 = 移动方向（绕 Y 旋转：+z 指向移动方向）
     if (Math.abs(r.x) > 0.001 || Math.abs(r.z) > 0.001) {
       this.presentation.yawBase = Math.atan2(r.x, r.z);
@@ -556,6 +570,7 @@ export class EnemyBase extends CharacterBase implements SwarmCarrier {
    *  降格/回收/清场走其他 reason → 天然不计击杀（取代 killedByCombat/deathReported）；
    *  ★ 2026-09-20 账本口径：killed → 击杀+1/存活−1；非击杀离场 → 存活−1（demoted 除外）。 */
   protected override onRetire(reason: RetireReason): void {
+    climbBook.release(this.swarmUid);   // ★ 认领制：退役即释放坡点
     if (reason === 'killed') {
       eventBus.emit('enemy_killed', {
         uid: this.swarmUid,

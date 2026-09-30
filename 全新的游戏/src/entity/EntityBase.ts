@@ -37,7 +37,7 @@ import type { ActiveEffect, EffectStatKey, HealProcDef } from '../services/comba
  *  物理只做推挤/碰撞事件）；read=纯物理驱动（子弹/物品：物理推进 → 位置读回） */
 export type PhysicsMode = 'none' | 'kinematic' | 'read';
 
-/** ★ 生命周期状态（《实体架构.md》§9.3）：active → retiring → disposed */
+/** ★ 生命周期状态（《RTS架构.md》§9.3）：active → retiring → disposed */
 export type EntityLifeState = 'active' | 'retiring' | 'disposed';
 
 /** ★ 退役原因 = 业务语义的唯一来源（取代 killedByCombat/deathReported）：
@@ -47,7 +47,7 @@ export type EntityLifeState = 'active' | 'retiring' | 'disposed';
  *  - 'despawned'    主动移除（导演收手 / 登船收友军）
  *  - 'mode_cleanup' 模式切换 / 场景卸载
  *  注意：只影响业务流程口径，不影响资源释放路径。 */
-export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup';
+export type RetireReason = 'killed' | 'demoted' | 'recycled' | 'despawned' | 'mode_cleanup' | 'stuck';
 
 /** ★ 命中点（世界坐标）——伤害管线透传给表现层（受击染料的注入位置）。
  *  2D 贴片只吃 x/y；3D 判定点带 z 也不影响。 */
@@ -104,6 +104,9 @@ export abstract class EntityBase {
     // ★ 影子联动隐藏（池化回收后 update 已停止 / 第一人称藏自身 →
     //   必须立即隐藏，否则留下"幽灵影子"）
     this.gsCtl.setVisible(v && this.viewLod < 3);
+    // ★ 特效槽联动（2026-09-29）：血条等场景对象不随实体渲染管线 →
+    //   收纳/隐藏不同步会留下"幽灵血条"（坑里/远点冻结那份）
+    (this.fx as unknown as { setVisible?: (v: boolean) => void }).setVisible?.(v);   // 兼容：本体 fx 未带 setVisible（不复活旧改动）
   }
   private _visible = true;
   /** ★ 是否面相机（billboard）；false = 固定朝向（setYaw 控制），用于检查背面帧 */
@@ -279,7 +282,7 @@ export abstract class EntityBase {
   /** ★ 死亡等待复活状态（当前仅玩家：锁操作 + 免伤；其他实体死亡即销毁，用不到） */
   dead = false;
 
-  // ============ 生命周期（《实体架构.md》§9.3：状态机 + 退役原因） ============
+  // ============ 生命周期（《RTS架构.md》§9.3：状态机 + 退役原因） ============
 
   /** 生命周期状态（active；retire 幂等；dispose 亦幂等） */
   private _life: EntityLifeState = 'active';
@@ -288,6 +291,23 @@ export abstract class EntityBase {
 
   get lifeState(): EntityLifeState {
     return this._life;
+  }
+
+  /** ★ 档位收纳（用户定 2026-09-27；《移动执行重写.md》§7.4）：**冻结不销毁**——
+   *  移出模拟/渲染（EntityManager），纹理/血条等对象保留；`tierRestore` 反向复活复用。 */
+  private _tierStashed = false;
+  get tierStashed(): boolean { return this._tierStashed; }
+  tierStash(): void {
+    if (this._tierStashed || this._life !== 'active') return;
+    this._tierStashed = true;
+    this.visible = false;
+    this.em.unregister(this);
+  }
+  tierRestore(): void {
+    if (!this._tierStashed) return;
+    this._tierStashed = false;
+    this.em.register(this);
+    this.visible = true;
   }
 
   /** ★ 统一退役入口（幂等）：标记状态 → 子类业务钩子 → 资源释放。

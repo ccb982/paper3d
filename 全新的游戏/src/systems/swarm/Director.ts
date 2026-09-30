@@ -6,27 +6,12 @@
 // （旧实现里的刷怪订单/预算/计划全部删除；兵力由账本 releaseCap + 指挥器释放。）
 // ============================================================
 
-import { neutralThreat, type ThreatProfile } from './EnemyScaling';
+import type { ThreatProfile } from './EnemyScaling';
 
 /** 攻击意图（代理索敌偏好；255 = 无意图，维持"游走 + 仇恨圈"旧观感） */
-export const INTENT_PLAYER = 0;
-export const INTENT_SHIP = 1;
-export const INTENT_FLANK = 2;
-export const INTENT_NONE = 255;
 
 export type DirectorPhase = 'calm' | 'warning' | 'assault' | 'lull';
 
-/** 波次订单（保留类型以兼容旧接线；新节律不再产出订单） */
-export interface SpawnOrder {
-  anchorX: number;
-  anchorZ: number;
-  intent: number;
-  waves: number;
-  count: number;
-  preferPack: boolean;
-  assaultIndex?: number;
-  sector?: number;
-}
 
 /** UI 播报钩子 */
 export interface DirectorHooks {
@@ -44,11 +29,9 @@ export class Director {
   private hooks: DirectorHooks | undefined;
   private warned = false;
   private assaulted = false;
-  private threat: ThreatProfile = neutralThreat();
 
   /** 威胁档案（UI 标签/难度仍由模式层读取；本模块只存不消费） */
-  setThreat(t: ThreatProfile): void {
-    this.threat = t;
+  setThreat(_t: ThreatProfile): void {
   }
 
   /** 新的一天：复位播报状态 */
