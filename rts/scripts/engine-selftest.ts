@@ -1318,7 +1318,7 @@ console.log('[12e] 无现令 + 校验不过 → 兜底发令');
   br.tick(0.6, 1);
   ok(!!br.writer.store.get(1), '★ 无现令且不可达 → 仍发一条（兜底，防无令站死）');
   const o = br.writer.store.get(1)!.order;
-  ok(o.kind === 'defend' || o.kind === 'act' || o.kind === 'march', '兜底令类型合法');
+  ok(o.kind === 'defend' || o.kind === 'act' || o.kind === 'march' || o.kind === 'patrol', '兜底令类型合法（行军↔巡逻交替）');
 }
 
 // ---------- 兜底命令机制（用户定 2026-09-27：发呆就重发/换目标） ----------

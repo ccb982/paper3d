@@ -1,21 +1,8 @@
 // ============================================================
-// engine/EngineBridge —— 蜂群引擎（命令侧重写 2026-09-27；用户定稿九条）
-// ============================================================
-// ★ 蜂群引擎 = **唯一指挥源**：每一拍给每支小队**一个状态标签 + 数据载荷**
-//   （唯一发令口 OrderWriter；队长核只读标签）。
-//
-//   标签：protect / hold / patrol / march / assault（总攻=标签）
-//     · march 短时效：**到达 → 引擎换标**（换 hold）；
-//     · hold / patrol / protect：**在没有新命令覆盖前一直执行**。
-//
-//   命令来源（仅四源）：
-//     ① 玩家令（原样执行、无 TTL；引擎不覆盖——直到新命令）
-//     ② 总攻（assault）：全体到**舰旁可站点**
-//     ③ 工兵活源（纯数据）：march 到施工点
-//     ④ **唯一兜底 = 行军 ↔ 巡逻交替**（推进一段 → 巡一段 → 再推进…）
-//
-//   其余一切机制不存在（决策链/校验链/切向间距/驻留锁存/救援重发/自动转巡… 均已删）。
-//   管理器只编成/补兵（架构第 9 条）；开火独立（AttackQueues/TimerManager）。
+// engine/EngineBridge —— 蜂群引擎（命令侧；用户定稿九条）：**唯一指挥源**，每拍一队一标签 + 数据载荷。
+//   标签 protect/hold/patrol/march/assault（march 到点换 hold；hold/patrol/protect 持续）；
+//   四源：① 玩家令 ② 总攻（舰旁可站点）③ 工兵活源（件数据）④ 唯一兜底=行军↔巡逻交替。
+//   其余机制不存在；管理器只编成/补兵；开火独立（AttackQueues/TimerManager）。
 // ============================================================
 
 import type { MobRole, SquadOrder } from './contracts';
@@ -74,8 +61,8 @@ export interface LiveView {
   blockedAt?(x: number, z: number): boolean;
   /** ★ 附近已建掩体（账本；常驻驻守门用——有"更靠舰"的掩体才驻守，否则先随前进循环走） */
   coversNear?(x: number, z: number, r: number): readonly { x: number; z: number }[];
-  /** ★ 远程部署位（用户定 2026-09-30）：找"高地+岗哨"驻守位（位数据；缺省 = 未接） */
-  garrisonSpot?(squadId: number, x: number, z: number): { x: number; z: number } | null;
+  /** ★ 远程部署位（用户定 2026-09-30）：找"高地+岗哨"驻守位（可达优先；forced=近位强爬；缺省 = 未接） */
+  garrisonSpot?(squadId: number, x: number, z: number): { x: number; z: number; forced: boolean } | null;
   /** 池代理位置（卡死判官在册） */
   agents?(): readonly { uid: number; x: number; z: number }[];
   /** 卡死豁免（驻守/交战…） */
@@ -323,16 +310,27 @@ export class EngineBridge {
 
   /** 下一段推进点：从当前位置朝舰 PLAN_ADV 米（不越活动带前缘）；到带缘 → null。
    *  ★ 寻路可行性由**队长核**负责（长/短寻路）；引擎只给目标（定稿第 4 条）。 */
-  private advancePoint(sp: { x: number; z: number }): { x: number; z: number } | null {
+  /** ★ 前进点（**可行性校验版**，用户定 2026-09-30）：朝舰方向试 3 距离 × 5 角度，取首个可达点；
+   *  全不可达 → null（回巡逻，别把不可达点当令发出去 → 站死被收） */
+  private advancePoint(sp: { x: number; z: number }, id: number): { x: number; z: number } | null {
     const ship = this.pos.ship() ?? this.pos.player();
     if (!ship) return null;
     const front = Math.max(EngineBridge.PLAN_NEAR, this.dbg.ringMin > 0 ? this.dbg.ringMin : 0);
     const dx = ship.x - sp.x, dz = ship.z - sp.z;
     const d = Math.hypot(dx, dz);
     if (d <= front) return null;
-    const step = Math.min(EngineBridge.PLAN_ADV, d - front);
-    if (step <= 1) return null;
-    return { x: sp.x + (dx / d) * step, z: sp.z + (dz / d) * step };
+    const step0 = Math.min(EngineBridge.PLAN_ADV, d - front);
+    if (step0 <= 1) return null;
+    const base = Math.atan2(dz, dx);
+    const reach = (x: number, z: number): boolean => !this.live.canReach || this.live.canReach(id, x, z);
+    for (const k of [1, 0.6, 0.3]) {
+      for (const a of [0, 0.45, -0.45, 0.9, -0.9]) {
+        const s = step0 * k;
+        const x = sp.x + Math.cos(base + a) * s, z = sp.z + Math.sin(base + a) * s;
+        if (reach(x, z)) return { x, z };
+      }
+    }
+    return null;
   }
 
   /** 开火检验（射程；单位自身射程优先） */
@@ -426,8 +424,8 @@ export class EngineBridge {
           continue;
         }
         if (step.action === 'march' && step.target) {
-          // ★ 不可达 → 强制攀爬（用户定 2026-09-30：寻路真过不去就强爬硬边）mission='force'
-          const mission = (this.live.canReach?.(rec.id, step.target.x, step.target.z) ?? true) ? undefined : 'force';
+          // ★ 不可达且近位 → 强制攀爬（mission='force'；远位已在部署位选择时放弃）
+          const mission = step.forced ? 'force' : undefined;
           const sameT = !!cur && cur.order.mission === mission && Math.hypot(cur.order.target.x - step.target.x, cur.order.target.z - step.target.z) <= 4;
           if (!sameT && this.send(rec.id, 'march', step.target, now, { kind: 'march', force: true, mission })) issued++;
           continue;
@@ -503,7 +501,7 @@ export class EngineBridge {
         }
       } else {
         if (now >= pl.until) {
-          const np = this.advancePoint(sp);
+          const np = this.advancePoint(sp, rec.id);
           if (np) {
             // 巡完 → 再推进一段
             pl.mode = 'move'; pl.x = np.x; pl.z = np.z; pl.until = now + EngineBridge.PLAN_MOVE_TIMEOUT;

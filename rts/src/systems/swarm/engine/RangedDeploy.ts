@@ -13,8 +13,8 @@ export interface RangedStepInput {
   ship: { x: number; z: number };
   now: number;
   /** 上一拍的部署位缓存（粘性防抖；null = 无） */
-  cached: { x: number; z: number; at: number } | null;
-  garrisonSpot: ((id: number, x: number, z: number) => { x: number; z: number } | null) | null;
+  cached: { x: number; z: number; at: number; forced?: boolean } | null;
+  garrisonSpot: ((id: number, x: number, z: number) => { x: number; z: number; forced: boolean } | null) | null;
   coversNear: ((x: number, z: number, r: number) => readonly { x: number; z: number }[]) | null;
   holdR: number;
 }
@@ -23,7 +23,9 @@ export interface RangedStep {
   action: 'hold' | 'march' | 'fallback';
   target?: { x: number; z: number };
   /** 缓存更新（undefined = 不动；null = 清空） */
-  spot?: { x: number; z: number; at: number } | null;
+  spot?: { x: number; z: number; at: number; forced?: boolean } | null;
+  /** 强制攀爬（仅部署位不可达且为近位时） */
+  forced?: boolean;
 }
 
 /** 粘性窗口（秒）：部署位在窗口内不重算（防每拍扫描/抖动） */
@@ -33,13 +35,13 @@ export function rangedStep(i: RangedStepInput): RangedStep {
   let spot = i.cached && i.now - i.cached.at < STICKY_S ? i.cached : null;
   if (!spot) {
     const g = i.garrisonSpot?.(i.squadId, i.from.x, i.from.z) ?? null;
-    if (g) spot = { x: g.x, z: g.z, at: i.now };
+    if (g) spot = { x: g.x, z: g.z, at: i.now, forced: g.forced };
   }
   if (spot) {
     const d = Math.hypot(spot.x - i.from.x, spot.z - i.from.z);
     // ★ 到点也要**把件位当锚**发（队长核据此走进岗哨件，而不是就地起循环）
-    if (d <= i.holdR) return { action: 'hold', target: { x: spot.x, z: spot.z }, spot };
-    return { action: 'march', target: { x: spot.x, z: spot.z }, spot };
+    if (d <= i.holdR) return { action: 'hold', target: { x: spot.x, z: spot.z }, spot, forced: spot.forced };
+    return { action: 'march', target: { x: spot.x, z: spot.z }, spot, forced: spot.forced };
   }
   const covers = i.coversNear?.(i.from.x, i.from.z, 40) ?? [];
   const d0 = Math.hypot(i.from.x - i.ship.x, i.from.z - i.ship.z);

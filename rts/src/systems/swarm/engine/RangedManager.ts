@@ -13,6 +13,7 @@ import { RoleManager, type RoleCtx } from './RoleManager';
 import type { SquadManager } from './SquadManager';
 import type { UnitTactics, TacticalCtx } from './UnitScoring';
 import { KIND, SLOPE_DIR } from '../TerrainSemantics';
+import { secOfPoint } from '../Sectors';
 
 /** 远程策略参数（集中可调） */
 export const RANGED_POLICY = {
@@ -65,14 +66,18 @@ export const RANGED_TACTICS: UnitTactics = {
 // ============================================================
 export function rangedGarrisonSpot(
   ctx: TacticalCtx, from: { x: number; z: number }, center: { x: number; z: number } = from, radius = 180, step = 4,
-): { x: number; z: number; why: 'sentry' | 'high' } | null {
+  /** ★ 限定防区楔形（2026-09-30：只在本队防区选岗哨——防跨区远征 + 与防区锁一致） */
+  sector = -1,
+  /** ★ 可达判据（引擎发令门）：优先选**可达**的位；全不可达时只有 ≤forceR 的近位才带 forced 返回 */
+  opts?: { reachable?: (x: number, z: number) => boolean; forceR?: number },
+): { x: number; z: number; why: 'sentry' | 'high'; forced: boolean } | null {
   const { facts, bonus } = ctx;
-  let bestSentry: { x: number; z: number; why: 'sentry'; score: number } | null = null;
-  let bestHigh: { x: number; z: number; why: 'high'; score: number } | null = null;
+  const cands: { x: number; z: number; why: 'sentry' | 'high'; score: number; d: number }[] = [];
   const R = Math.ceil(radius / step) * step;
   for (let dz = -R; dz <= R; dz += step) {
     for (let dx = -R; dx <= R; dx += step) {
       const x = center.x + dx, z = center.z + dz;
+      if (sector >= 0 && secOfPoint(x, z, center.x, center.z) !== sector) continue;
       const c = facts.cellAt(x, z);
       if (!c || (c.kind !== KIND.Peak && c.kind !== KIND.Plateau)) continue;
       if (!facts.isPassableAt(x, z)) continue;
@@ -87,15 +92,24 @@ export function rangedGarrisonSpot(
       const d = Math.hypot(x - from.x, z - from.z);
       const hidden = c.occluded ? 1 : 0;
       const front = c.slopeDir === SLOPE_DIR.Front ? 1 : 0;
-      if (c.kind === KIND.Peak && cov > 0) {
-        const score = cov * 2 + hidden + front * 0.5 - d * 0.01;   // 岗哨优先
-        if (!bestSentry || score > bestSentry.score) bestSentry = { x, z, why: 'sentry', score };
-      } else {
-        const score = cov * 2 + hidden + (c.kind === KIND.Peak ? 0.5 : 0) + front * 0.2 - d * 0.01;
-        if (!bestHigh || score > bestHigh.score) bestHigh = { x, z, why: 'high', score };
-      }
+      const sentry = c.kind === KIND.Peak && cov > 0;
+      const score = (sentry ? cov * 2 + hidden + front * 0.5 : cov * 2 + hidden + (c.kind === KIND.Peak ? 0.5 : 0) + front * 0.2) - d * 0.01;
+      cands.push({ x, z, why: sentry ? 'sentry' : 'high', score, d });
     }
   }
-  const pick = bestSentry ?? bestHigh;
-  return pick ? { x: pick.x, z: pick.z, why: pick.why } : null;
+  if (cands.length === 0) return null;
+  cands.sort((a, b) => b.score - a.score);
+  const forceR = opts?.forceR ?? 24;
+  const n = Math.min(cands.length, 12);   // 可达检查封顶（BFS 贵）
+  for (let i = 0; i < n; i++) {
+    const c = cands[i];
+    if (opts?.reachable && !opts.reachable(c.x, c.z)) continue;   // 可达优先
+    return { x: c.x, z: c.z, why: c.why, forced: false };
+  }
+  // 全不可达：仅近位（≤forceR）允许强制攀爬；远位放弃（交给旧门/兜底，别送死）
+  for (let i = 0; i < n; i++) {
+    const c = cands[i];
+    if (c.d <= forceR) return { x: c.x, z: c.z, why: c.why, forced: true };
+  }
+  return null;
 }

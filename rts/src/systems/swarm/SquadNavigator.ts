@@ -19,6 +19,7 @@ import type { PassTable } from './nav/PassTable';
 import { localStep, canSegment, type LocalGrid } from './nav/LocalStep';
 import { viaClimbPoints } from './nav/ClimbVia';
 import { edgeStepGreedy, axisStepToward } from './nav/EdgeFollow';
+import { coverBlocksLine } from '../../entity/CoverEntity';
 
 /** 远程兵近似射程（弩 50 / 术士 52~55；选位/边撤边打阈值用它即可） */
 const NAV_RANGE = 50;
@@ -264,6 +265,17 @@ export class SquadNavigator {
       return run ? { x: run.x, z: run.z, ux: run.ux, uz: run.uz, rise: run.rise, lx: run.lx, lz: run.lz, w: run.width } : undefined;
     }
     return undefined;
+  }
+
+  /** ★ 近距直推也要有寻路来源（用户定 2026-09-30）：short path（常规 → 显式 force 两级）；
+   *  null = 站（位移不许"走私"） */
+  private directStep(squadId: number | undefined, x: number, z: number, tx: number, tz: number): { x: number; z: number; climb: boolean } | null {
+    const g = this.localGrid(squadId);
+    if (!g) return null;
+    const a = localStep(g, x, z, tx, tz);
+    if (a) return { x: a.next.x, z: a.next.z, climb: a.climb };
+    const b = localStep(g, x, z, tx, tz, true);
+    return b ? { x: b.next.x, z: b.next.z, climb: b.climb } : null;
   }
 
   /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险；squadId → 该队兵种偏好） */
@@ -549,35 +561,58 @@ export class SquadNavigator {
             u.moveSpeed > 0 ? u.moveSpeed : 2.5);
           continue;
         }
-        // ★ 驻守直接进岗哨（用户定 2026-09-30）：hold 且目标在近旁（≤6m）→ 直推进入（可爬），
-        //   不再交给长/短寻路（否则掩体/坡缘挡一下就不进去）
+        // ★ 驻守直接进岗哨（用户定 2026-09-30）：hold 且目标在近旁（≤6m）→ **短寻路直推**（常规→force），
+        //   位移仍出自寻路（不许穿掩体的直线）；无解 → 站（等锚/重寻路）
         if (state?.execState === 'hold' && state.order.target) {
           const htx = state.order.target.x, htz = state.order.target.z;
-          const hdx = htx - upos0.x, hdz = htz - upos0.z;
-          const hl = Math.hypot(hdx, hdz);
-          if (hl > 0.35 && hl <= 6) {
-            if (u.moveTarget) { u.moveTarget.x = htx; u.moveTarget.y = 0; u.moveTarget.z = htz; u.moveTarget.climb = true; }
-            else u.moveTarget = { x: htx, y: 0, z: htz, climb: true };
-            u.controlSource = 'swarm';
-            u.applySteer({ dirX: hdx / hl, dirZ: hdz / hl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: htx, targetY: 0, targetZ: htz });
-            continue;
+          const hl = Math.hypot(htx - upos0.x, htz - upos0.z);
+          if (hl > 0.35 && hl <= 6 && !coverBlocksLine(upos0.x, upos0.z, htx, htz)) {
+            const ds = this.directStep(state.squadId, upos0.x, upos0.z, htx, htz);
+            if (ds) {
+              const dx = ds.x - upos0.x, dz = ds.z - upos0.z;
+              const dl = Math.hypot(dx, dz) || 1;
+              if (u.moveTarget) { u.moveTarget.x = ds.x; u.moveTarget.y = 0; u.moveTarget.z = ds.z; u.moveTarget.climb = ds.climb; }
+              else u.moveTarget = { x: ds.x, y: 0, z: ds.z, climb: ds.climb };
+              u.controlSource = 'swarm';
+              u.applySteer({ dirX: dx / dl, dirZ: dz / dl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: ds.x, targetY: 0, targetZ: ds.z });
+              continue;
+            }
           }
         }
-        // ★ 强制攀爬（用户定 2026-09-30）：mission='force' → 忽略可行性直推目标；climb=true 交执行层爬硬边
+        // ★ 强制攀爬（用户定 2026-09-30）：mission='force' → **短寻路（显式 force 许可）**直推目标
         if (state?.order.mission === 'force' && state.order.target) {
-          const ftx = state.order.target.x, ftz = state.order.target.z;
-          const fdx = ftx - upos0.x, fdz = ftz - upos0.z;
-          const fl = Math.hypot(fdx, fdz) || 1;
-          if (u.moveTarget) { u.moveTarget.x = ftx; u.moveTarget.y = 0; u.moveTarget.z = ftz; u.moveTarget.climb = true; }
-          else u.moveTarget = { x: ftx, y: 0, z: ftz, climb: true };
-          u.controlSource = 'swarm';
-          u.applySteer({ dirX: fdx / fl, dirZ: fdz / fl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: ftx, targetY: 0, targetZ: ftz });
+          const ds = this.directStep(state.squadId, upos0.x, upos0.z, state.order.target.x, state.order.target.z);
+          if (ds) {
+            const dx = ds.x - upos0.x, dz = ds.z - upos0.z;
+            const dl = Math.hypot(dx, dz) || 1;
+            if (u.moveTarget) { u.moveTarget.x = ds.x; u.moveTarget.y = 0; u.moveTarget.z = ds.z; u.moveTarget.climb = ds.climb; }
+            else u.moveTarget = { x: ds.x, y: 0, z: ds.z, climb: ds.climb };
+            u.controlSource = 'swarm';
+            u.applySteer({ dirX: dx / dl, dirZ: dz / dl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: ds.x, targetY: 0, targetZ: ds.z });
+          }
           continue;
         }
         if (!isLead) {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }
-          else { sx = upos0.x; sz = upos0.z; }
+          else {
+            // ★ 掉队兜底（用户定 2026-09-30）：队长已走远（>10m）→ **短寻路直推跟随**（常规→force）
+            const ddx = lead.x - upos0.x, ddz = lead.z - upos0.z;
+            const dl2 = Math.hypot(ddx, ddz) || 1;
+            if (dl2 > 10) {
+              const ds = this.directStep(state?.squadId, upos0.x, upos0.z, lead.x, lead.z);
+              if (ds) {
+                const dx = ds.x - upos0.x, dz = ds.z - upos0.z;
+                const dd = Math.hypot(dx, dz) || 1;
+                if (u.moveTarget) { u.moveTarget.x = ds.x; u.moveTarget.y = 0; u.moveTarget.z = ds.z; u.moveTarget.climb = ds.climb; }
+                else u.moveTarget = { x: ds.x, y: 0, z: ds.z, climb: ds.climb };
+                u.controlSource = 'swarm';
+                u.applySteer({ dirX: dx / dd, dirZ: dz / dd, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: ds.x, targetY: 0, targetZ: ds.z });
+                continue;
+              }
+            }
+            sx = upos0.x; sz = upos0.z;
+          }
           if (ms?.climbPt) needClimbPt = ms.climbPt;   // 成员路线带坡点则用其点位（凭证本身不需要）
         }
         u.formSlot = rank;

@@ -55,6 +55,30 @@ export interface SegmentCheck {
   climb: boolean;
 }
 
+/** ★ 段校验（force 版；用户定 2026-09-30）：force=true 时穿硬边也算过、标 climb */
+function canSegmentF(
+  g: LocalGrid, ax: number, az: number, bx: number, bz: number, force: boolean,
+): SegmentCheck {
+  if (!force) return canSegment(g, ax, az, bx, bz);
+  const d = Math.hypot(bx - ax, bz - az);
+  const n = Math.max(1, Math.ceil(d / 2));
+  let px = ax, pz = az;
+  let climb = false;
+  for (let k = 1; k <= n; k++) {
+    const t = k / n;
+    const x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+    const dx = x - px, dz = z - pz;
+    const sx = Math.abs(dx) < 0.4 ? 0 : (dx > 0 ? 1 : -1);
+    const sz = Math.abs(dz) < 0.4 ? 0 : (dz > 0 ? 1 : -1);
+    if (sx !== 0 || sz !== 0) {
+      if (!g.canStep(px, pz, sx, sz)) climb = true;             // 穿硬边 → 程序化爬
+      else if (!climb && g.climbAt(px, pz, sx, sz)) climb = true;
+    }
+    px = x; pz = z;
+  }
+  return { ok: true, climb };
+}
+
 /** ★ 唯一段校验（2m 采样；与执行层同规则）：可走 + 爬坡标注。
  *  · 采样步进用 canStep（有向边；斜向需两轴均可走）
  *  · 斜向禁上坡（表只校四向边，斜线可能切折面/脊）
@@ -152,6 +176,9 @@ const czOf = (k: number): number => k - cxOf(k) * 100000;
  */
 export function localStep(
   g: LocalGrid, sx: number, sz: number, gx: number, gz: number,
+  /** ★ 显式强制许可（用户定 2026-09-30）：允许穿越硬边（代价加重、标 climb）——
+   *  只给"强制攀爬/进岗哨"这类显式场景；**位移仍然全部出自本函数** */
+  force = false,
 ): LocalStepOut | null {
   const d = Math.hypot(gx - sx, gz - sz);
   if (d <= LOCAL.ARRIVE) return null;   // 已到（无需段）
@@ -186,12 +213,14 @@ export function localStep(
       const wx2 = nx * cell + cell / 2, wz2 = nz * cell + cell / 2;
       // 窗口（有限 → 必终止）
       if (Math.hypot(wx2 - sx, wz2 - sz) > RW) continue;
-      if (!g.canStep(wx, wz, dx, dz)) continue;
-      if (dx !== 0 && dz !== 0) {
+      const can = g.canStep(wx, wz, dx, dz);
+      if (!can && !force) continue;
+      if (dx !== 0 && dz !== 0 && !force) {
         const h0 = g.heightAt(wx, wz), h1 = g.heightAt(wx2, wz2);
         if (Number.isFinite(h0) && Number.isFinite(h1) && h1 > h0) continue;   // 斜向禁上坡
       }
       let c = (dx !== 0 && dz !== 0) ? 1.414 : 1;
+      if (!can) c += 50;   // ★ 强制穿硬边：重罚（有正常路就走正常路）
       const drop = g.dropAt(wx, wz, dx, dz);
       if (drop > 0) c += drop * LOCAL.K_UP;
       if (g.waterAt(wx2, wz2)) c += LOCAL.K_WATER;
@@ -242,7 +271,7 @@ export function localStep(
   if (pts.length === 1) {
     // 同格：直接给精确目标（爬坡显式）
     const p0 = pts[0] as { x: number; z: number };
-    const seg = canSegment(g, sx, sz, p0.x, p0.z);
+    const seg = canSegmentF(g, sx, sz, p0.x, p0.z, force);
     return seg.ok ? { next: { x: p0.x, z: p0.z }, climb: seg.climb } : null;
   }
   let next: { x: number; z: number } | null = null;
@@ -251,7 +280,7 @@ export function localStep(
   for (let i = MAXI; i >= 1; i--) {
     const p = pts[i] as { x: number; z: number };
     if (Math.hypot(p.x - sx, p.z - sz) > LOCAL.SEG_MAX) continue;
-    const seg = canSegment(g, sx, sz, p.x, p.z);
+    const seg = canSegmentF(g, sx, sz, p.x, p.z, force);
     if (!seg.ok) continue;
     if (posRisk(sx, sz, p.x, p.z) > (cum[i] as number) + 0.01) continue;   // 不得拉直成更险直线
     next = p; climb = seg.climb;
@@ -262,7 +291,7 @@ export function localStep(
     for (let i = 1; i <= MAXI; i++) {
       const p = pts[i] as { x: number; z: number };
       if (Math.hypot(p.x - sx, p.z - sz) < 0.1) continue;
-      const seg = canSegment(g, sx, sz, p.x, p.z);
+      const seg = canSegmentF(g, sx, sz, p.x, p.z, force);
       if (seg.ok) { next = p; climb = seg.climb; break; }
     }
     if (!next) return null;   // 第一段也不可执行 → 宁可不发

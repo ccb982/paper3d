@@ -486,13 +486,17 @@ export class SwarmData {
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
 
 
-  /** ★ 远程部署位（D7 接线）：高地+岗哨驻守位（围绕舰扫全 AO；位数据） */
-  rangedGarrison(sid: number, x: number, z: number): { x: number; z: number } | null {
+  /** ★ 远程部署位（D7 接线）：高地+岗哨驻守位（**限本队防区**；可达优先，近位不可达才 forced） */
+  rangedGarrison(sid: number, x: number, z: number): { x: number; z: number; forced: boolean } | null {
     const ctx = this.tacticCtx;
     if (!ctx) return null;
     const rec = this.swarm.squads.get(sid);
     const lead = rec ? rec.members.get(rec.leaderUid) : undefined;
-    return rangedGarrisonSpot(ctx, lead ? { x: lead.x, z: lead.z } : { x, z }, this.planning.ship());
+    const from = lead ? { x: lead.x, z: lead.z } : { x, z };
+    const ship = this.planning.ship();
+    return rangedGarrisonSpot(ctx, from, ship, 180, 4, secOfPoint(from.x, from.z, ship.x, ship.z), {
+      reachable: (px, pz) => this.swarm.reachFrom(sid, px, pz),
+    });
   }
 
   /** ★ 水域查询（地形真相：地块角色 liquid；用户定 2026-09-25 三张表原则） */
