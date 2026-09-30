@@ -74,17 +74,30 @@ export interface DeathAnimOptions {
   fadeDuration?: number;
   /** 硬性寿命上限（秒，默认 2.5） */
   maxLifetime?: number;
+  /** ★ 随机速度冲击下限/上限（px/s；死亡特效池 3 档随机用，默认 20/40） */
+  impulseMin?: number;
+  impulseMax?: number;
 }
 
 export class DeathAnimEffect {
   private mesh: THREE.Mesh;
   private material: THREE.ShaderMaterial;
   private fluid: FluidEffect | null;
-  private elapsed = 0;
+  /** 已播放时长（秒；**公开**：死亡特效池「抢最接近播完的实例」用） */
+  elapsed = 0;
   private fadeStart: number;
   private maxLifetime: number;
   private fadeDuration: number;
   private worldSize: number;
+  /** ★ 复用状态（死亡特效池：CharacterFxManager 判断空闲用；play/replay 置 true，sleep 置 false） */
+  inUse = false;
+  /** ★ 本次变体的随机冲量范围（px/s；死亡特效池 3 档随机） */
+  private impulseMin = DEATH_IMPULSE_MIN;
+  private impulseMax = DEATH_IMPULSE_MAX;
+  /** ★ 推力段时长（秒；fadeStart = pushDuration + 0.15） */
+  private pushDuration = 0.3;
+  /** 当前帧索引（换帧复用/静态兜底重挂纹理用） */
+  private frameIndex = 0;
   /** ★ 推力（px/s²，随机方向）：小力度，让残差纹理**缓缓漂离**而不是被撕飞（默认 `DEATH_PUSH_FORCE`） */
   private pushForce: number;
   /** ★ 散度爆炸参数（见模块常量 `DEATH_EXPLODE_*`；strength 必须为负才是向外） */
@@ -104,11 +117,12 @@ export class DeathAnimEffect {
 
   constructor(
     private scene: THREE.Scene,
-    asset: CharacterFxAssetSource,
+    private readonly asset: CharacterFxAssetSource,
     frameIndex: number,
     renderer: THREE.WebGLRenderer,
     opts?: DeathAnimOptions,
   ) {
+    this.frameIndex = frameIndex;
     this.worldSize = opts?.worldSize ?? 2.0;
     this.fadeDuration = opts?.fadeDuration ?? 1.2;
     this.maxLifetime = opts?.maxLifetime ?? 2.5;
@@ -116,6 +130,9 @@ export class DeathAnimEffect {
     this.explodeStrength = opts?.explodeStrength ?? DEATH_EXPLODE_STRENGTH;
     this.explodeRadius = opts?.explodeRadius ?? DEATH_EXPLODE_RADIUS;
     this.explodeDuration = opts?.explodeDuration ?? DEATH_EXPLODE_DURATION;
+    this.impulseMin = opts?.impulseMin ?? DEATH_IMPULSE_MIN;
+    this.impulseMax = opts?.impulseMax ?? DEATH_IMPULSE_MAX;
+    this.pushDuration = opts?.pushDuration ?? 0.3;
 
     // ★ 独立流体实例（矢量模式：残差缓慢流动 → 纹理缓缓漂离）
     this.fluid = asset.createDeathFluidEffect(renderer, frameIndex);
@@ -200,9 +217,8 @@ export class DeathAnimEffect {
       gravity: { x: Math.cos(angle) * force, y: Math.sin(angle) * force },
     });
 
-    // ★ 随机速度冲击（一次性**轻推**）
-    //  ★★ 小力度（2026-09-18）：800 + rand·1200（800~2000）→ 20 ~ 40 px/s。
-    const speed = DEATH_IMPULSE_MIN + Math.random() * (DEATH_IMPULSE_MAX - DEATH_IMPULSE_MIN);
+    // ★ 随机速度冲击（一次性**轻推**；死亡特效池 3 档随机范围，速度可大可小）
+    const speed = this.impulseMin + Math.random() * Math.max(0, this.impulseMax - this.impulseMin);
     const vAngle = Math.random() * Math.PI * 2; // 随机方向
     this.fluid?.solver.queueInjection({
       enabled: true,
@@ -228,6 +244,58 @@ export class DeathAnimEffect {
       strength: this.explodeStrength,
       duration: this.explodeDuration,
     });
+    this.inUse = true;
+  }
+
+  /** ★ 池化：播完休眠（不销毁；CharacterFxManager 管理池） */
+  sleep(): void {
+    this.inUse = false;
+    this.mesh.visible = false;
+  }
+
+  /** ★ 池化复用重播（用户定 2026-09-30）：换帧（流体 resetFrame）+ 换散度档参数 + 重新播。
+   *  返回 false = 该实例不可安全复用（无流体/资产无原始帧）→ 调用方走新建兜底。 */
+  replay(frameIndex: number, x: number, y: number, z: number, opts?: DeathAnimOptions): boolean {
+    const frame = this.asset.getFluidFrame?.(frameIndex) ?? null;
+    if (this.fluid && frame) {
+      this.fluid.resetFrame(frame);
+    } else if (!this.fluid) {
+      // 静态兜底：换死亡帧纹理对
+      const pair = this.asset.getFramePair(frameIndex);
+      if (!pair) return false;
+      this.material.uniforms.uColorTex.value = pair.base;
+      this.material.uniforms.uUseFluid.value = 0;
+    } else {
+      return false;
+    }
+    this.frameIndex = frameIndex;
+    if (opts) {
+      this.worldSize = opts.worldSize ?? this.worldSize;
+      this.pushForce = opts.pushForce ?? DEATH_PUSH_FORCE;
+      this.explodeStrength = opts.explodeStrength ?? DEATH_EXPLODE_STRENGTH;
+      this.explodeRadius = opts.explodeRadius ?? DEATH_EXPLODE_RADIUS;
+      this.explodeDuration = opts.explodeDuration ?? DEATH_EXPLODE_DURATION;
+      this.impulseMin = opts.impulseMin ?? DEATH_IMPULSE_MIN;
+      this.impulseMax = opts.impulseMax ?? DEATH_IMPULSE_MAX;
+      this.fadeDuration = opts.fadeDuration ?? this.fadeDuration;
+      this.maxLifetime = opts.maxLifetime ?? this.maxLifetime;
+      this.pushDuration = opts.pushDuration ?? 0.3;
+    }
+    this.fadeStart = this.pushDuration + 0.15;
+    // ★ 尺寸随新死亡帧比例重算（贴片一致：竖长/横长不压扁）
+    const ftxFrame = this.asset.getFtxFrame(frameIndex);
+    const aspect = ftxFrame ? ftxFrame.bbox.w / Math.max(1, ftxFrame.bbox.h) : 1;
+    this.scaleY = this.worldSize;
+    this.scaleX = this.worldSize * aspect;
+    this.mesh.scale.set(this.scaleX, this.scaleY, 1);
+    this.mesh.visible = true;
+    // 复位计时/透明/合成纹理
+    this.elapsed = 0;
+    this.solveAccum = 0;
+    this.material.uniforms.uOpacity.value = 1;
+    this.material.uniforms.uFluidTex.value = this.fluid?.getCompositeTexture() ?? null;
+    this.play(x, y, z);
+    return true;
   }
 
   /** 每帧推进：流体 step → 淡出 → 播完返回 true */

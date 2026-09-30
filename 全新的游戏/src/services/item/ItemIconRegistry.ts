@@ -73,6 +73,11 @@ const FTX_ICON_SOURCES: Record<string, string> = {
 };
 
 export class ItemIconRegistry {
+  /** ★ 探针（__iconDbg）：图标动画器的烘焙次数/耗时/活跃画布（用户定 2026-09-30） */
+  static iconDbg(): { fluid: unknown; dynamic: unknown } {
+    return { fluid: getFluidIconAnimator().perf, dynamic: getDynamicIconAnimator().perf };
+  }
+
   private cache = new Map<string, HTMLCanvasElement>();
   private sixBrothers: Map<string, HTMLCanvasElement> | null = null;
   /** ★ 采集物图标（道具图标.ftx3.gz：草药/花/木/浆果） */

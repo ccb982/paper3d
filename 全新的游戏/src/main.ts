@@ -32,7 +32,7 @@ import { minimapWarmupState } from './services/ui/MinimapWarmup';
 import { renderManager, LIGHT_TUNING } from './services/render/RenderManager';
 import { setGameRenderer, applyShaderDebug } from './services/render/GameRenderer';
 import { getDroneIconAnimator } from './services/item/DroneIcon';
-import { registerAssetIconSource, registerDynamicIcon } from './services/item/ItemIconRegistry';
+import { ItemIconRegistry, registerAssetIconSource, registerDynamicIcon } from './services/item/ItemIconRegistry';
 import { ItemManager } from './systems/inventory/ItemManager';
 import { relicGrantsFor, dispatchRelicEvent } from './core/RelicEffects';
 import { RELIC_ITEM_CONFIG } from './config/relics';
@@ -207,6 +207,8 @@ async function boot() {
     (window as unknown as { __ppDig?: unknown }).__ppDig = digPerf;
     // ★ 小地图预加载状态（拿它验证"抽卡页预热 → 进世界交接"是否生效）
     (window as unknown as { __mmWarm?: () => unknown }).__mmWarm = () => minimapWarmupState();
+    // ★ 图标烘焙探针（缓存/共享是否有效）：paints/paintMs/canvases/groups
+    (window as unknown as { __iconDbg?: () => unknown }).__iconDbg = () => ({ drone: getDroneIconAnimator().perf, ...ItemIconRegistry.iconDbg() });
     (window as unknown as { __ppEnterWorld?: () => void }).__ppEnterWorld = () => {
       if (currentSession) enterWorldMode(scene, camera, renderer, currentSession.meta.day);
     };

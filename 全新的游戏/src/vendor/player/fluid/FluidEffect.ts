@@ -29,7 +29,7 @@ export class FluidEffect {
     renderer: THREE.WebGLRenderer,
     physics: PhysicsConfig,
     frame: FrameTextureData,
-    palette: PaletteColor[],
+    private readonly palette: PaletteColor[],
     entities: SerializedRegionEntity[],
   ) {
     // 解算器分辨率 = 帧纹理 bbox 尺寸（与残差 1:1，避免量化错位）
@@ -97,6 +97,17 @@ export class FluidEffect {
 
     // 5. 首帧合成，立即产出可显示纹理
     this.solver.composite();
+  }
+
+  /** ★ 复用换帧（死亡特效池，用户定 2026-09-30）：载入新帧残差/基础色 → 清运动场/爆炸 → 重建 φ */
+  resetFrame(frame: FrameTextureData): void {
+    const residual = buildResidualData(frame);
+    if (residual) this.solver.loadResidual(residual.data, residual.width, residual.height);
+    const baseHsl = buildBaseHslData(frame, this.palette);
+    if (baseHsl) this.solver.setBaseHsl(baseHsl.data, baseHsl.width, baseHsl.height);
+    else this.solver.clearBaseHsl();
+    this.solver.reset();
+    this.solver.resetLevelSet();
   }
 
   step(dt: number): void {

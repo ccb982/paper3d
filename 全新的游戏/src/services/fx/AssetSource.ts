@@ -32,6 +32,8 @@ export interface FrameAssetSource {
  * 受击染料 / 死亡动画都需要：独立流体实例（不缓存，与共享播放实例隔离）。
  */
 export interface CharacterFxAssetSource extends FrameAssetSource {
+  /** ★ FTX 原始帧数据（死亡特效池换帧复用用；纯纹理包可不实现 → 退静态兜底） */
+  getFluidFrame?(index: number): FrameTextureData | null;
   /** 第 index 帧 FTX 帧数据（bbox 宽高比/区域实体用） */
   getFtxFrame(index: number): FrameTextureData | null;
   /** ★ 死亡动画流体：矢量模式 + 强重力 + 大速度上限（撕碎消散） */

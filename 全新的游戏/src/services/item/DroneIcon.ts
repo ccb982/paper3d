@@ -58,6 +58,8 @@ export class DroneIconAnimator {
   private rafId = 0;
   private lastT = 0;
   private lastPaint = 0;
+  /** ★ 探针（__iconDbg）：烘焙次数/耗时/活跃画布数 */
+  readonly perf = { paints: 0, paintMs: 0, canvases: 0, groups: 0 };
   private buf: Uint8Array | null = null;
   /** 像素回读进行中（异步 PBO 路径；防重入，慢时自动降频） */
   private painting = false;
@@ -168,14 +170,19 @@ export class DroneIconAnimator {
     }
     if (this.living.length === 0) return; // 无活动画布 → 停转（RAF 不再续约）
 
+    this.perf.canvases = this.living.length;
+    this.perf.groups = this.living.length > 0 ? 1 : 0;
     const now = performance.now();
 
     // ★ 烘焙节流：动画推进与烘焙**同拍**（原先 60Hz 推进只为 30fps 上屏 → 白烧解算）
     if (now - this.lastPaint >= FRAME_MS) {
       const dt = Math.max(0, Math.min(0.1, (now - this.lastT) / 1000));
       this.lastT = now;
+      const _t0 = performance.now();
       if (this.anim) this.anim.update(dt);
       void this.paintFrame();
+      this.perf.paints++;
+      this.perf.paintMs += performance.now() - _t0;
     }
     this.rafId = requestAnimationFrame(this.tick);
   };

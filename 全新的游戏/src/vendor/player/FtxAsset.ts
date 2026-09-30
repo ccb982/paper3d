@@ -197,6 +197,11 @@ export class FtxAsset implements CharacterFxAssetSource {
    *   `DeathAnimEffect.play()` 会立刻 `updateConfig` 覆盖成随机方向的 20（见其 DEATH_PUSH_FORCE）。
    *   ★ 判据 = 稳态流速 `v_eq ≈ 1.63·g` 必须 < `maxVelocity`；g=20 ⇒ ≈33 px/s，留足余量。
    */
+  /** ★ 原始帧数据（死亡特效池换帧复用用；用户定 2026-09-30） */
+  getFluidFrame(index: number): FrameTextureData | null {
+    return this.frames[index] ?? null;
+  }
+
   createDeathFluidEffect(renderer: THREE.WebGLRenderer, frameIndex: number): FluidEffect | null {
     const frame = this.frames[frameIndex];
     if (!frame) return null;

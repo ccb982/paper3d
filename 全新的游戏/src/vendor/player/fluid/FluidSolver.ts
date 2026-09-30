@@ -1358,6 +1358,7 @@ export class FluidSolver {
     this.time = 0;
     this.waypointStates.clear();
     this.injectionQueue.length = 0;
+    this.activeExplosions.length = 0;   // ★ 复用换帧（死亡特效池）：清掉上一发的爆炸包络
     this.initFields();
     // ★ 立即重新合成：compositeTarget 里还留着上一发/预热结束时的旧画面，
     //   若不刷新，reset 后的首帧烘焙会采样到"上一发的完整尾焰残影"（一大片黑的元凶）

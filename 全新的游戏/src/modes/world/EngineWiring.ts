@@ -19,6 +19,7 @@ import { AUTONOMY, SWARM } from '../../systems/swarm/SwarmConfig';
 import { simNow } from '../../services/SimClock';
 import { AGENT_TARGET_SHIP } from '../../systems/swarm/AgentPool';
 import { EngineBridge, type LiveSquad } from '../../systems/swarm/engine/EngineBridge';
+import { CharacterFxManager } from '../../services/fx/CharacterFxManager';
 import { SquadRegistry } from '../../systems/swarm/squad/SquadRegistry';
 import { setLiveOrderSource, currentTargetOf } from '../../systems/swarm/squad/Anchor';
 import { setTierHandover, Flux } from '../../systems/swarm/tiers/Flux';
@@ -395,6 +396,8 @@ export function installEngineWiring(host: EngineWiringHost): EngineWiring {
       posture: swarm.data.battlePosture,
     }),
     swarm, bridge, cores,
+    /** ★ 死亡特效池探针（每类 3 个/复用计数；用户定 2026-09-30） */
+    fxDbg: () => CharacterFxManager.dbg(),
   };
   let disposed = false;
   return {

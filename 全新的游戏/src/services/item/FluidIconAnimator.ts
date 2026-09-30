@@ -53,6 +53,8 @@ class FluidIconAnimator {
   /** ★ 画布可见性（IntersectionObserver：不可见的生产线跳过推进/烘焙 → 零开销） */
   private io: IntersectionObserver | null = null;
   private visible = new WeakSet<HTMLCanvasElement>();
+  /** ★ 探针（__iconDbg）：烘焙次数/耗时/活跃画布数（验证"共享缓存"是否真的省） */
+  readonly perf = { paints: 0, paintMs: 0, canvases: 0, groups: 0 };
 
   static getInstance(): FluidIconAnimator {
     if (!FluidIconAnimator.instance) FluidIconAnimator.instance = new FluidIconAnimator();
@@ -144,6 +146,10 @@ class FluidIconAnimator {
   private tick = (): void => {
     this.rafId = 0;
     const now = performance.now();
+    this.perf.groups = this.groups.size;
+    let _cv = 0;
+    for (const _g of this.groups.values()) _cv += _g.canvases.length;
+    this.perf.canvases = _cv;
     const paintDue = now - this.lastPaint >= FRAME_MS;
     // ★ 推进步长 = 距上次烘焙的真实时长（钳 MAX_STEP）——与烘焙同拍
     const stepDt = paintDue ? Math.min(Math.max(0, now - this.lastT) / 1000, MAX_STEP) : 0;
@@ -178,8 +184,11 @@ class FluidIconAnimator {
       alive = true;
       // ★ 流体推进与烘焙**同拍**（原先 60Hz 推进只为 24fps 上屏 → 白烧求解器）
       if (paintDue) {
+        const _t0 = performance.now();
         stepFluidShared(g.effect, stepDt);
         this.paint(g);
+        this.perf.paints++;
+        this.perf.paintMs += performance.now() - _t0;
       }
     }
     if (paintDue) { this.lastPaint = now; this.lastT = now; }

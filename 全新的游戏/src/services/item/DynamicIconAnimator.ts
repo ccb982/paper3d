@@ -157,6 +157,10 @@ class DynamicIconAnimator {
   private tick = (): void => {
     this.rafId = 0;
     const now = performance.now();
+    this.perf.groups = this.list.length;
+    let _cv = 0;
+    for (const _p of this.list) _cv += _p.canvases.length;
+    this.perf.canvases = _cv;
 
     let alive = false;
     // WeakMap 不可枚举 → 用强引用列表遍历（条目 = 已注册素材数，极少）
@@ -179,8 +183,11 @@ class DynamicIconAnimator {
       // ★ 推进与烘焙**同拍**（原先 60Hz 推进只为 24fps 上屏 → 白烧求解器）
       if (now - p.lastPaint >= FRAME_MS) {
         const stepDt = Math.min(Math.max(0, now - p.lastPaint) / 1000, MAX_STEP);
+        const _t0 = performance.now();
         this.advance(p, stepDt);
         this.paint(p);
+        this.perf.paints++;
+        this.perf.paintMs += performance.now() - _t0;
         p.lastPaint = now;
       }
     }
@@ -423,6 +430,8 @@ class DynamicIconAnimator {
 
   /** 强引用列表（WeakMap 不可遍历；生命周期与素材同在，条目极少） */
   private list: Producer[] = [];
+  /** ★ 探针（__iconDbg）：烘焙次数/耗时/活跃画布数 */
+  readonly perf = { paints: 0, paintMs: 0, canvases: 0, groups: 0 };
 }
 
 /** 单例访问（ItemIconRegistry） */

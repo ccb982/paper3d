@@ -1217,9 +1217,12 @@ export class ChunkManager {
 
   /** 玩家点到 chunk 矩形最近点的水平距离（米；点在块内 = 0） */
   private chunkDistToPlayer(cx: number, cz: number, px: number, pz: number): number {
+    // ★ 2026-09-30 修分环双档失效：原口径 = 到 chunk **矩形**的距离 → 玩家贴着块边时
+    //   70m 外（中心 ~100m）仍是 fineS=8（顶面 90~135k 三角，占渲染大头）。
+    //   改**块心距**：≤60m 细弧 / ≥70m 粗弧 真正落在中环；实测 >60m 的块 top 90k→30k（3×）。
     const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
-    const dx = px < x0 ? x0 - px : (px > x0 + CHUNK_SIZE ? px - (x0 + CHUNK_SIZE) : 0);
-    const dz = pz < z0 ? z0 - pz : (pz > z0 + CHUNK_SIZE ? pz - (z0 + CHUNK_SIZE) : 0);
+    const dx = px - (x0 + CHUNK_SIZE / 2);
+    const dz = pz - (z0 + CHUNK_SIZE / 2);
     return Math.hypot(dx, dz);
   }
 
