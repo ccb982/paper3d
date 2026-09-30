@@ -1156,7 +1156,6 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       queues: { ...shadowBridge!.queues.dbg },
       timers: { ...shadowBridge!.timers.dbg },
       pos: { ...shadowBridge!.pos.dbg },
-      sectors: { ...shadowBridge!.sectors.dbg },
     }) : null };
 }
 

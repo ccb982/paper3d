@@ -44,7 +44,7 @@ import { addStaticObstacleRect, removeStaticObstacle, coverClimbAt, COVER_CLIMB_
 import { separationPushes } from '../src/systems/swarm/EntitySeparation.ts';
 import { OrderWriter, SquadOrderStore } from '../src/systems/swarm/engine/OrderWriter.ts';
 import { AttackQueues } from '../src/systems/swarm/engine/AttackQueues.ts';
-import { SectorManager } from '../src/systems/swarm/engine/SectorManager.ts';
+import { secOfPoint, sectorMid, sectorStart, clampAngleToSector } from '../src/systems/swarm/Sectors.ts';
 import { EngineCore } from '../src/systems/swarm/engine/EngineCore.ts';
 import { EngineBridge } from '../src/systems/swarm/engine/EngineBridge.ts';
 import { SquadCore } from '../src/systems/swarm/squad/SquadCore.ts';
@@ -672,20 +672,17 @@ console.log('[9] AttackQueues 攻击队列（1Hz + 最近实体去重 + 开火�
   ok(q.dbg.members === 1, 'dbg.members 更新');
 }
 
-// ---------- SectorManager ----------
-console.log('[10] SectorManager 扇形防区');
+// ---------- Sectors（防区单源；2026-09-30 架构收口） ----------
+console.log('[10] Sectors 防区单源（角↔区 / 楔形夹取）');
 {
-  const sec = new SectorManager();
-  sec.build(4);   // 0° 90° 180° 270°
-  const leaders = new Map<number, { x: number; z: number }>([
-    [1, { x: 10, z: 0 }],    // 0° → 扇区 0
-    [2, { x: 0, z: 10 }],    // 90° → 扇区 1
-    [3, { x: 0, z: -10 }],   // 270° → 扇区 3
-  ]);
-  sec.tick((id) => leaders.get(id) ?? null, 0, 0, [1, 2, 3]);
-  ok(sec.sectorOf(1) === 0 && sec.sectorOf(2) === 1 && sec.sectorOf(3) === 3, '各队归到最近扇区');
-  const c = sec.centerOf(0, 0, 0, 30);
-  ok(Math.abs(c.x - 30) < 0.01 && Math.abs(c.z) < 0.01, '扇区中心点（调区目标）');
+  ok(secOfPoint(10, 0, 0, 0) === 0 && secOfPoint(0, 10, 0, 0) === 2 && secOfPoint(-10, 0, 0, 0) === 4,
+    '点→区：8 区均分（0°/90°/180° → 0/2/4）');
+  ok(Math.abs(sectorMid(0) - Math.PI / 8) < 1e-6 && Math.abs(sectorStart(2) - Math.PI / 2) < 1e-6,
+    '区中角 / 区起点角');
+  const inS = sectorMid(3);
+  const out = sectorMid(3) + 1.2;   // 邻区方向（非对侧 ±π 边界值，避免符号歧义）
+  ok(clampAngleToSector(inS, 3) === inS && Math.abs(clampAngleToSector(out, 3) - (sectorMid(3) + Math.PI / 8)) < 1e-6,
+    '楔形夹取：区内原样 / 区外夹到边界');
 }
 
 // ---------- EngineCore ----------

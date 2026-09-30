@@ -136,7 +136,8 @@ export interface EngineerPort {
 
 const keyOf = (x: number, z: number): string => `${x},${z}`;
 const TAU = Math.PI * 2;
-const secOfAngle = (ang: number): number => Math.floor((ang / TAU) * FORTIFY_SECTORS) % FORTIFY_SECTORS;
+// ★ 防区数学单源（2026-09-30）：secOfAngle 来自 swarm/Sectors
+import { secOfAngle } from '../Sectors';
 
 export class EngineerManager extends RoleManager {
   /** 各队当前施工点（件；含发放时刻 + ★ 战术件队列） */

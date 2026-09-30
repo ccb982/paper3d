@@ -13,10 +13,9 @@
 // 纪律：只读地形/表，不写任何裁决；不直接发令。
 // ============================================================
 
-/** 扇区数（全环；用户定：仍 8 个） */
-import { CHUNK_SIZE } from '../../../services/map/ChunkGenerator';
-
-export const SECTOR_COUNT = 8;
+/** 扇区数（全环；单源 = Sectors） */
+import { SECTOR_COUNT, sectorStart } from '../Sectors';
+export { SECTOR_COUNT };
 /** 部署点采样格（米，与可行性表同格） */
 export const SECTOR_CELL = 4;
 /** 采样上限（每扇区保留点数；防内存/摊销成本失控） */
@@ -100,7 +99,7 @@ export class ShipHighland {
           if (!Number.isFinite(h) || h >= shipY - 0.5) continue;
           let cnt = 0;
           for (let k2 = 0; k2 < 8; k2++) {
-            const a2 = (k2 / 8) * Math.PI * 2;
+            const a2 = sectorStart(k2);
             const qx = px + Math.cos(a2) * 4, qz = pz + Math.sin(a2) * 4;
             if (this.cells.has(keyOf(Math.floor(qx / cs), Math.floor(qz / cs)))) cnt++;
           }

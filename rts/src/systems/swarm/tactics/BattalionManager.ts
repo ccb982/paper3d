@@ -9,6 +9,8 @@
 // · 只做编制/部署计划；**不直接发令**（发令唯一出口仍是 engine/OrderWriter）。
 // ============================================================
 
+import { secOfPoint } from '../Sectors';
+
 /** 大队编制（人） */
 export const BATTALION_SIZE = 30;
 /** 战斗小队满编（与 SquadTable.SQUAD_MAX 同口径） */
@@ -134,9 +136,7 @@ export class BattalionManager {
     for (const sit of pending) {
       // ★ 就近选防区（用户定 2026-09-27）：强制每队都有防区（无 -1）；
       //   优先**队所在方位的主攻区**，其次角向最近的；配额仅作次级约束。
-      let ang = Math.atan2(sit.z - shipZ, sit.x - shipX);
-      if (ang < 0) ang += Math.PI * 2;
-      const secByAng = Math.floor((ang / (Math.PI * 2)) * 8) % 8;
+      const secByAng = secOfPoint(sit.x, sit.z, shipX, shipZ);
       let best = -1, bestScore = -Infinity;
       for (const sec of mainSectors) {
         const m = used.get(sec)!;

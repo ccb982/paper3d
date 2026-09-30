@@ -17,22 +17,19 @@ import type { SwarmSystem } from '../SwarmSystem';
 import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
 import { PostureFn } from '../PostureFn';
-import { RANGED } from '../RangedTactics';
-import { TerrainSemantics, L1_R, R_MAX, WALL_DH } from '../TerrainSemantics';
+import { TerrainSemantics, L1_R, R_MAX } from '../TerrainSemantics';
 import { type TacticalCtx, scoreFor, scoreTileAt } from '../engine/UnitScoring';
-import { HoleMask } from '../HoleMask';
-import { HoleTable } from '../HoleTable';
+import { CoverTables } from './CoverTables';
 import { samplerFor } from '../../../services/map/TerrainSampler';
-import { DANGER } from '../SwarmDanger';
 import { PassTable } from '../nav/PassTable';
 import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
 import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
-import { FortifyPlanner, NEED_DONE, buildBonus, FORTIFY_SECTORS } from '../FortifyPlanner';
+import { FortifyPlanner, NEED_DONE, FORTIFY_SECTORS } from '../FortifyPlanner';
+import { angleOfPoint, secOfPoint, clampAngleToSector, sectorMid } from '../Sectors';
 import type { EngineerPort } from '../engine/EngineerManager';
-import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
+import { hasCoverFrom } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
-import { COVER_HP, coverBlocksLine, snapshotCovers } from '../../../entity/CoverEntity';
 import type { UnitRole, SquadType } from '../../../entity/SwarmUnit';
 
 /** ★ 坑底硬阈值（低于此高度不可走 → 禁止再挖；与 EngineerManager 端口同口径） */
@@ -46,10 +43,15 @@ export class SwarmData {
   private plan: DefensePlan | null = null;
   /** ★ L1 敌人地形语义表（静态主体 + ★动态战壕覆盖层；《RTS架构.md》§1；落地/换落点重算） */
   readonly semantics = new TerrainSemantics();
-  readonly holeMask = new HoleMask();   // ★ 独立破坏掩码（与 L1 语义表解耦）
-  /** ★★ 敌用动态坑洞公式表（掩码 → 深×近打分；2Hz 持续重排） */
-  readonly holeTable = new HoleTable();
-  private holeClock = 0; private coverTag = '';   // 工事表节拍 / 掩体集合指纹
+  /** ★ 工事表集合（HoleMask/HoleTable + 掩体加成 + LOS 地形层；2026-09-30 抽出） */
+  readonly covers = new CoverTables({
+    plan: () => this.plan,
+    builtList: () => this.fortify.builtList(),
+    builtCount: () => this.fortify.builtCount,
+    pass: () => this.passTable,
+  });
+  get holeMask(): import('../HoleMask').HoleMask { return this.covers.mask; }
+  get holeTable(): import('../HoleTable').HoleTable { return this.covers.table; }
   /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)）
    *  face = 正面朝向点（D5 战术件：岗哨斜件 45° / 封口横向；缺省 = 朝舰） */
   buildCover: ((x: number, z: number, variant: 'cover' | 'wall', face?: { x: number; z: number }) => void) | null = null;
@@ -205,31 +207,18 @@ export class SwarmData {
     return { x: this.lastShipX + (dx / d) * rWant, z: this.lastShipZ + (dz / d) * rWant };
   }
 
-  /** ★ 掩体加成缓存（键=掩体集/已建数/落点） */
-  private bonusCache: { key: string; map: ReadonlyMap<string, number> } = { key: '', map: new Map() };
-  private bonusCached(): ReadonlyMap<string, number> {
-    const key = this.plan ? `${this.holeTable.covers.length}|${this.fortify.builtCount}|${this.plan.cx},${this.plan.cz}` : '';
-    if (this.plan && key !== this.bonusCache.key) this.bonusCache = { key, map: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]) };
-    return this.bonusCache.map;
-  }
-
   /** ★ §0.3 防区锁：非总攻 + 队长在环带内 → 目标夹进本扇区楔形；带外（溢出/外面）→ 原样 */
   sectorLockTarget(id: number, x: number, z: number): { x: number; z: number } {
     const ring = this.ring, cx = ring.cx, cz = ring.cz;
     const sq = this.swarm.squads.get(id);
     const lead = sq ? sq.members.get(sq.leaderUid) : undefined;
     if (!lead) return { x, z };
-    const TAU = Math.PI * 2;
     const d = Math.hypot(lead.x - cx, lead.z - cz);
     if (d < ring.minD - 6 || d > ring.maxD + 6) return { x, z };   // 外面 → 无约束
-    let la = Math.atan2(lead.z - cz, lead.x - cx); if (la < 0) la += TAU;
-    const sec = Math.floor((la / TAU) * FORTIFY_SECTORS) % FORTIFY_SECTORS;
-    const mid = ((sec + 0.5) / FORTIFY_SECTORS) * TAU;
-    const half = TAU / (FORTIFY_SECTORS * 2);
-    let ta = Math.atan2(z - cz, x - cx); if (ta < 0) ta += TAU;
-    let delta = ((ta - mid + Math.PI * 3) % TAU) - Math.PI;   // 归一到 [-π, π]
-    if (Math.abs(delta) <= half) return { x, z };
-    const ca = mid + (delta > 0 ? half : -half), r = Math.hypot(x - cx, z - cz);
+    const ang = angleOfPoint(x, z, cx, cz);
+    const ca = clampAngleToSector(ang, secOfPoint(lead.x, lead.z, cx, cz));
+    if (ca === ang) return { x, z };
+    const r = Math.hypot(x - cx, z - cz);
     return { x: cx + Math.cos(ca) * r, z: cz + Math.sin(ca) * r };
   }
 
@@ -239,7 +228,6 @@ export class SwarmData {
     const raster = RasterMap.current;
     if (!raster) return null;
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
-    this.postCache.clear();     // ★ 现场有利位置缓存复位
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.tacticCtx = null;
     const pcx = shipX !== undefined ? shipX : cx;
@@ -294,7 +282,7 @@ export class SwarmData {
 
   /** ★ 调试/探针：掩体校验真源（与队长同源 hasCoverFrom） */
   debugHasCover(tx: number, tz: number, x: number, z: number): boolean {
-    return hasCoverFrom(tx, tz, x, z, this.coverBlocker);
+    return this.covers.debugHasCover(tx, tz, x, z);
   }
 
   tick(dt: number, now: number, playerX = 0, playerZ = 0, dayT01 = -1, shipX = 0, shipZ = 0): void {
@@ -366,10 +354,10 @@ export class SwarmData {
         this.tacticCtx = {
           facts: this.semantics,
           heightAt: (x: number, z: number) => smp0.heightAt(raster, x, z),
-          bonus: this.bonusCached(),
+          bonus: this.covers.bonusCached(),
           waterAt: (x, z) => this.isWaterAt(x, z), isDugAt: (x, z) => this.holeMask.isDug(x, z),
           // ★ D7-2 掩体遮挡（参照=舰；实体掩体 LOS + 地形掩体）——近寻路消费
-          coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.coverBlocker),
+          coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.covers.blocker),
           ship: hasShip0 ? { x: shipX, z: shipZ } : { x: this.plan.cx, z: this.plan.cz },
           player: { x: playerX, z: playerZ },
           p: this.postureP, posture: this.battlePosture,
@@ -399,19 +387,15 @@ export class SwarmData {
             console.log('[L1] 地形事实表构建完成', JSON.stringify(st));
           }
           (globalThis as unknown as { __l1?: TerrainSemantics }).__l1 = this.semantics;
-          const gw = globalThis as unknown as { __holeMask?: HoleMask; __holeTable?: HoleTable };
+          const gw = globalThis as unknown as {
+            __holeMask?: import('../HoleMask').HoleMask;
+            __holeTable?: import('../HoleTable').HoleTable;
+          };
           gw.__holeMask = this.holeMask;
           gw.__holeTable = this.holeTable;
         }
         // ★★★ 敌用工事表（动态 2Hz）：坑洞（掩码×深×近）+ 掩体（活注册表×遮蔽×近）
-        this.holeClock += dt;
-        if (this.holeClock >= 0.5) {
-          this.holeClock = 0;
-          const cov = snapshotCovers('enemy').map((c) => ({ x: c.x, z: c.z, hp: c.hp, maxHp: COVER_HP, variant: c.variant, heading: c.heading, hidden: coverBlocksLine(c.x, c.z, playerX, playerZ) }));
-          this.holeTable.rebuild(this.holeMask, this.semantics, playerX, playerZ, cov);
-          const tag = `${cov.length}:${cov.map((c) => `${c.x | 0},${c.z | 0}`).join(';')}`;
-          if (tag !== this.coverTag) { this.coverTag = tag; this.scoreStamp++; }   // 掩体增减 → 评分表全量重评
-        }
+        if (this.covers.tick(dt, this.semantics, playerX, playerZ)) this.scoreStamp++;   // 掩体增减 → 评分代次 +1
       }
     }
     // ★ 事态环（1Hz；用户定）：范围按秒更新——避免每子步抖动引发夹环改令
@@ -465,7 +449,7 @@ export class SwarmData {
       posture: () => this.postureP,
       assault: () => this.battlePosture === 'assault',
       assaultAnchor: (sec) => {
-        const mid = ((sec + 0.5) / 8) * Math.PI * 2;
+        const mid = sectorMid(sec);
         return { x: this.lastShipX + Math.cos(mid) * 50, z: this.lastShipZ + Math.sin(mid) * 50 };   // ★ 距舰 50m
       },
       anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
@@ -547,15 +531,6 @@ export class SwarmData {
 
   /** 旧部署维护（engineeringTick）已删除（用户定 2026-09-25）：战斗队由新引擎发令、工兵由 EngineerManager。 */
 
-  /** ★ 远程有利位置（制高/掩体后，含"掩体真挡子弹"校验）：距离 [0.5R,1.05R] 且 ≥minDist；
-   *  掩体挡视线加分、越接近 0.8R 越好；无合适点 → null（原地射击）。 */
-  /** ★ 掩体 LOS 地形层（三张表原则）：墙=pit 或 4m 邻差>WALL_DH；壕=HoleMask；贴墙=邻差>0.8·WALL_DH。 */
-  private readonly coverBlocker: TerrainCover = {
-    blockedAt: (x, z) => this.terrainWallAt(x, z, 1.0),
-    isTrenchAt: (x, z) => this.holeMask.isDug(x, z),
-    wallNearAt: (x, z) => this.terrainWallAt(x, z, 0.8),
-  };
-
   /** ★ 坡面方位（表标注；上坡函数用）：weld+climb 位 → 轴向法线 + 边中点 */
   canStep(x: number, z: number, dx: number, dz: number): boolean {
     return this.passTable.canStep(x, z, dx, dz);
@@ -565,108 +540,6 @@ export class SwarmData {
     return this.passTable.climbRunAt(x, z, dx, dz);
   }
 
-  private terrainWallAt(x: number, z: number, k: number): boolean {
-    const h = this.passTable.heightAt(x, z);
-    for (const [dx, dz] of [[4, 0], [-4, 0], [0, 4], [0, -4]] as const) {
-      if (Math.abs(this.passTable.heightAt(x + dx, z + dz) - h) > WALL_DH * k) return true;
-    }
-    return false;
-  }
-
-  /** ★ 战壕选格（用户定 2026-09-25 三张表原则）：格源 = **战壕掩体表**（HoleMask 1m 挖掘场，
-   *  "挖过即战壕"——与工事表同源）；排名用当前地形分（说明：排名项随 C3 语义化）。 */
-  trenchNear(
-    x: number, z: number, radius: number, minD = 0, maxD = Infinity,
-  ): { x: number; z: number; score: number } | null {
-    const mask = this.holeMask;
-    if (!mask.isReady) return null;
-    let best: { x: number; z: number; score: number } | null = null;
-    const r2 = radius * radius, min2 = minD * minD, max2 = maxD * maxD;
-    const x0 = Math.floor(x - radius), x1 = Math.ceil(x + radius);
-    const z0 = Math.floor(z - radius), z1 = Math.ceil(z + radius);
-    for (let cz = z0; cz <= z1; cz++) {
-      for (let cx = x0; cx <= x1; cx++) {
-        const bx = cx + 0.5, bz = cz + 0.5;
-        if (!mask.isDug(bx, bz)) continue;
-        const d2 = (bx - x) ** 2 + (bz - z) ** 2;
-        if (d2 > r2 || d2 < min2 || d2 > max2) continue;
-        const s = scoreTileAt(this.tacticCtx, bx, bz) ?? -1e9;
-        if (!best || s > best.score) best = { x: bx, z: bz, score: s };
-      }
-    }
-    return best;
-  }
-
-  rangedPost(px: number, pz: number, range: number, minDist = 0, now = 0): { x: number; z: number } | null {
-    const plan = this.plan;
-    if (!plan || range <= 0) return null;
-    const ideal = range * RANGED.PREFER_RATIO;
-    // ★ 远程优先入壕（用户定调）：在"理想站位 ±6m"的射程环带里找最高分战壕 → 直接选它
-    const dMin = Math.max(minDist, range * 0.5, ideal - 6);
-    const dMax = Math.min(range * 1.05, ideal + 6);
-    if (dMax > dMin) {
-      const trRing = this.trenchNear(px, pz, dMax, dMin, dMax);
-      if (trRing) return { x: trRing.x, z: trRing.z };
-    }
-    let best: { x: number; z: number } | null = null;
-    let bestScore = -Infinity;
-    const consider = (x: number, z: number, high: boolean, base = 0): void => {
-      const d = Math.hypot(x - px, z - pz);
-      if (d < range * 0.5 || d > range * 1.05 || d < minDist) return;
-      const blocked = hasCoverFrom(px, pz, x, z, this.coverBlocker);  // 玩家 → 该点：真被遮挡吗（实体LOS+地形）
-      let score = base + -Math.abs(d - ideal) * 0.08;
-      if (blocked) score += 3;
-      if (high) score += 0.8;
-      if (score > bestScore) { bestScore = score; best = { x, z }; }
-    };
-    // ★ 优先用**落地扫描产物**（posts：一次算好的制高/掩体位）；已建掩体实时补入
-    for (const p of plan.posts) {
-      if (p.kind === 'cover') consider(p.x - plan.approachX * 1.2, p.z - plan.approachZ * 1.2, false, p.score);
-      else consider(p.x, p.z, true, p.score);
-    }
-    for (const c of this.holeTable.covers) {
-      consider(c.x - plan.approachX * 1.2, c.z - plan.approachZ * 1.2, false, 3.5);
-    }
-    // ★ 战壕偏好（全兵种；远程最重）：玩家射程带内最高分战壕格
-    const tr = this.trenchNear(px, pz, range * 1.05);
-    if (tr) consider(tr.x, tr.z, false, 2.0);
-    if (best) return best;
-    // ★ 扫描产物/掩体都不在射程带内（玩家跑远了）→ **现场找位**：
-    //   以玩家为圆心、0.8R 为半径环采样（高地优先 / 掩体加成 / 可站）
-    return this.terrainPost(px, pz, range, now);
-  }
-
-  /** ★ 现场有利位置（无扫描产物时）：玩家周围射程环采样 + 1.5s 缓存（多小队共用） */
-  private readonly postCache = new Map<string, { x: number; z: number; at: number }>();
-  private terrainPost(px: number, pz: number, range: number, now = 0): { x: number; z: number } | null {
-    const raster = RasterMap.current;
-    if (!raster) return null;
-    const key = `${Math.floor(px / 16)},${Math.floor(pz / 16)},${Math.round(range)}`;
-    const nowMs = now * 1000;
-    const hit = this.postCache.get(key);
-    if (hit && nowMs - hit.at < 1500) return { x: hit.x, z: hit.z };
-    const r = range * RANGED.PREFER_RATIO;
-    let best: { x: number; z: number } | null = null;
-    let bestScore = -Infinity;
-    for (let k = 0; k < 16; k++) {
-      const a = (k / 16) * Math.PI * 2;
-      const x = px + Math.cos(a) * r;
-      const z = pz + Math.sin(a) * r;
-      const role = raster.tileDefAt(x, z).genRole;
-      const h = raster.surfaceHeightAt(x, z);
-      if (role === 'pit' || (role === 'liquid' && h < -0.8) || h < DANGER.PIT_H) continue;
-      // 高地加成：相对周边 5m 的抬升
-      const elev = h - (raster.surfaceHeightAt(x + 5, z) + raster.surfaceHeightAt(x - 5, z)
-        + raster.surfaceHeightAt(x, z + 5) + raster.surfaceHeightAt(x, z - 5)) / 4;
-      // ★ 优先读地块评分表（全兵种共用；掩体/态势权重已在表内）；表未就绪回落高程探针
-      let score = scoreTileAt(this.tacticCtx, x, z) ?? (elev * 0.5);
-      if (score <= -1e8) continue;
-      if (hasCoverFrom(px, pz, x, z, this.coverBlocker)) score += 3;
-      if (score > bestScore) { bestScore = score; best = { x, z }; }
-    }
-    if (best) this.postCache.set(key, { x: best.x, z: best.z, at: nowMs });
-    return best;
-  }
 
   /** ★ 调试/测试：强制切态势（覆盖态势函数自动转移；总攻同样锁定） */
   setPosture(p: BattlePosture, now = 0): void {
@@ -709,7 +582,7 @@ export class SwarmData {
   /** ★ 工兵要塞需求分：兵种分（defense 档）× 掩体缺口；水/坑/硬边排除（null）
    *  ——"该守且没掩体"的地方分最高（D5 将换"件优先级梯队"） */
   fortifyNeed(x: number, z: number): number | null {
-    if (this.terrainWallAt(x, z, 1.0)) return null;
+    if (this.covers.blockedNow(x, z)) return null;
     const ctx = this.tacticCtx;
     if (!ctx) return null;
     const val = scoreFor('defense', ctx, x, z, this.viewPX, this.viewPZ);
@@ -777,7 +650,7 @@ export class SwarmData {
   clear(now = 0): void {
     this.plan = null;
     this.stage = 'S0';
-    this.holeTable.clear();
+    this.covers.clear();
     this.postureFn.reset(now);
     this.battlePosture = 'fortify';
     this.aliveAtPosture = 0;
@@ -788,7 +661,6 @@ export class SwarmData {
     this.postureP = 0;
     this.postureSchedule = 0;
     this.postureProvocation = 0;
-    this.postCache.clear();
     this.tacticCtx = null;
     this.passTable.clear();
     this.fortify.clear();

@@ -18,7 +18,9 @@
 //         确定性（不掷随机数）；返回前以**当前带/扇区**复检（候选是摊销刷新的）。
 // ============================================================
 
-export const FORTIFY_SECTORS = 8;
+import { SECTOR_COUNT, secOfAngle } from './Sectors';
+
+export const FORTIFY_SECTORS = SECTOR_COUNT;
 /** 扇区需求达标线（need < 此值 = 该区已够工事；调参入口） */
 export const NEED_DONE = 0.6;
 
@@ -124,11 +126,7 @@ export class FortifyPlanner {
   /** ★ 标脏（位移/掩体表变化；按 角度→扇区 归属；用户定 2026-09-29） */
   markDirty(x: number, z: number, cx: number, cz: number): void {
     if (!Number.isFinite(cx) || !Number.isFinite(cz)) { this.dirty.fill(true); return; }
-    const TAU = Math.PI * 2;
-    let ang = Math.atan2(z - cz, x - cx);
-    if (ang < 0) ang += TAU;
-    const si = Math.min(FORTIFY_SECTORS - 1, Math.floor((ang / TAU) * FORTIFY_SECTORS));
-    this.dirty[si] = true;
+    this.dirty[secOfAngle(Math.atan2(z - cz, x - cx))] = true;
   }
 
   /** ★ 建造账本（不依赖懒物化；做"掩体加成"与密度判定的真源；用户定 2026-09-29） */

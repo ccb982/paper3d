@@ -21,7 +21,6 @@
 import type { MobRole, SquadOrder } from './contracts';
 import { Positions } from './Positions';
 import { SquadManager } from './SquadManager';
-import { SectorManager } from './SectorManager';
 import { MeleeManager } from './MeleeManager';
 import { RangedManager } from './RangedManager';
 import { FlyerManager } from './FlyerManager';
@@ -103,7 +102,6 @@ export interface LiveView {
 export class EngineBridge {
   readonly pos = new Positions();
   readonly squads = new SquadManager();
-  readonly sectors = new SectorManager();
   readonly melee: MeleeManager;
   readonly ranged: RangedManager;
   readonly flyer: FlyerManager;
@@ -161,7 +159,6 @@ export class EngineBridge {
   private readonly core: EngineCore;
 
   constructor(private readonly live: LiveView) {
-    this.sectors.build(4);
     this.timers = new TimerManager({
       // 判官在册：只判 L3 实体（live.enemies() 含代理 → 用 agents() 剔除）
       roster: () => {
@@ -276,7 +273,6 @@ export class EngineBridge {
       const rec = this.squads.get(sq.id);
       if (rec) this.writer.advance(sq.id, rec.progress ?? 0, rec.stillS ?? 0);
     }
-    this.sectors.tick((id) => this.pos.squad(id), this.pos.player()?.x ?? 0, this.pos.player()?.z ?? 0, [...this.squads.all()].map((r) => r.id));
     // 1Hz 慢拍：攻击队列 + 统一计时（开火子系统的数据面）
     if (now - this.lastSlow >= 1) {
       this.lastSlow = now;
