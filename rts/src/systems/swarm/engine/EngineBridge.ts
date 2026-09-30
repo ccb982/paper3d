@@ -29,6 +29,7 @@ import { OrderWriter, SquadOrderStore } from './OrderWriter';
 import { releaseAt } from '../PostureFn';
 import { coverPoint, threePoint, THREAT_NEAR, type Pt } from '../CoverGeom';
 import { Protect } from './Protect';
+import { rangedStep } from './RangedDeploy';
 import { AttackQueues } from './AttackQueues';
 import { TimerManager } from './TimerManager';
 import { EngineCore } from './EngineCore';
@@ -73,6 +74,8 @@ export interface LiveView {
   blockedAt?(x: number, z: number): boolean;
   /** ★ 附近已建掩体（账本；常驻驻守门用——有"更靠舰"的掩体才驻守，否则先随前进循环走） */
   coversNear?(x: number, z: number, r: number): readonly { x: number; z: number }[];
+  /** ★ 远程部署位（用户定 2026-09-30）：找"高地+岗哨"驻守位（位数据；缺省 = 未接） */
+  garrisonSpot?(squadId: number, x: number, z: number): { x: number; z: number } | null;
   /** 池代理位置（卡死判官在册） */
   agents?(): readonly { uid: number; x: number; z: number }[];
   /** 卡死豁免（驻守/交战…） */
@@ -127,11 +130,11 @@ export class EngineBridge {
   /** ★ §3.C 总攻掩护施工（用户定 2026-09-29）：工兵 → 保护对象（远程队）/ 动态建造点 / 已建点 */
   private readonly engineerWard = new Map<number, number>();
   private readonly wardSpot = new Map<number, { x: number; z: number }>();
+  /** ★ 远程部署位缓存（D7；粘性 10s 防抖；总攻清空） */
+  private readonly rangedSpots = new Map<number, { x: number; z: number; at: number }>();
   private readonly wardBuilt = new Map<number, { x: number; z: number }>();
 
-  /** ★ §3.G 飞行支援（用户定 2026-09-29）：**非飞行队被打 → 引擎调最近可用飞行队赶来**
-   *  （队间调动全在引擎；管理器不参与）。支援点=被支援队实时位置（漂移 >8m 重发）；
-   *  威胁解除 `SUPPORT_RELEASE_S`（8s）→ 归建（回各自命令源）。 */
+  /** ★ 飞行支援：非飞行队被打 → 调最近飞行队赶来（支援点=被支援队实时位置，漂移>8m 重发；8s 归建）。 */
   private readonly flyerSupport = new Map<number, { atkId: number; x: number; z: number; hitAt: number }>();
   /** ★ §3.G 工兵保护-支援（用户定 2026-09-29；第一波之后启用） */
   private readonly protectorOf = new Map<number, number>();          // 工兵队 → 保护队
@@ -291,10 +294,7 @@ export class EngineBridge {
     return this.timers.canFire(uid);
   }
 
-  /** ★ 舰旁可站点（用户定 2026-09-29）：**以舰为中心**从 2m 起向外扫圆环（8 向，≤40m），
-   *  返回**离舰最近、且从该队出发真正可达**的可站位置（不可站 = 坑；`blockedAt` 口；
-   *  可达 = 发令门 `canReach`——**从足够远的平坦地做寻路**，不认"看着近但走不到"的点）。
-   *  都不可达 → 退回舰点（各队尽力靠近）。按队缓存（≤2s 复检一次）。 */
+  /** ★ 舰旁可站点：以舰为中心 8 向 ≤40m 圆环 → 离舰最近 ∧ 本队真可达（发令门）的可站点；缓存 2s 复检。 */
   private readonly assaultSpot = new Map<number, { x: number; z: number; at: number }>();
   /** 负缓存（找不到可达点的时刻；2s 内不重扫——扫描含 BFS，防每拍重算） */
   private readonly assaultNoSpot = new Map<number, number>();
@@ -350,6 +350,7 @@ export class EngineBridge {
   private situation(_now: number): void {
     const p = this.pos.player();
     if (!p) return;
+    if (this.live.assault?.()) this.rangedSpots.clear();   // 总攻：部署位作废（回压舰/掩体逻辑）
     this.protect.refresh(this.pos.squadOf, p.x, p.z);
     const t01 = this.live.t01?.() ?? 0;
     if (t01 < this.lastT01 - 0.2) { this.wave1Sent = false; this.finalSent = false; }
@@ -408,23 +409,30 @@ export class EngineBridge {
         continue;
       }
 
-      // ★ 远程兵种（用户定 2026-09-29）：**非总攻 = 常驻驻守**（HoldCover 自主掩体循环、开火独立、
-      //   判官 garrison 豁免）——但**有"更靠舰"的掩体可躲才驻守**；没有掩体 → 落 ④ 前进循环
-      //   （推进/巡逻往前走，等工兵把掩体造到前面再驻守；不然创建后原地站死）。
+      // ★ 远程兵种（用户定 2026-09-29/30）：非总攻=常驻驻守（RangedDeploy：部署位→行军/驻守；无→掩体门；再无→④）。
       if (rec.role === 'ranged' && !assault) {
-        const covers = this.live.coversNear?.(sp.x, sp.z, 40) ?? [];
-        const shipD = Math.hypot(sp.x - ship.x, sp.z - ship.z);
-        const ahead = covers.some((c) => Math.hypot(c.x - ship.x, c.z - ship.z) < shipD - 0.5);
-        if (ahead) {
-          const same = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
-          if (!same) {
-            if (this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
-          }
+        const step = rangedStep({
+          squadId: rec.id, from: sp, ship, now,
+          cached: this.rangedSpots.get(rec.id) ?? null,
+          garrisonSpot: this.live.garrisonSpot ?? null,
+          coversNear: this.live.coversNear ?? null,
+          holdR: EngineBridge.HOLD_R,
+        });
+        if (step.spot === null) this.rangedSpots.delete(rec.id);
+        else if (step.spot) this.rangedSpots.set(rec.id, step.spot);
+        if (step.action === 'hold') {
+          const sameH = cur && cur.order.state === 'hold' && cur.order.kind === 'defend';
+          if (!sameH && this.send(rec.id, 'hold', { x: sp.x, z: sp.z }, now, { kind: 'defend', force: true })) issued++;
           continue;
         }
-        // 无掩体可躲 → 下落 ④（唯一兜底：行军↔巡逻前进循环）
+        if (step.action === 'march' && step.target) {
+          // ★ 不可达 → 强制攀爬（用户定 2026-09-30：寻路真过不去就强爬硬边）mission='force'
+          const mission = (this.live.canReach?.(rec.id, step.target.x, step.target.z) ?? true) ? undefined : 'force';
+          const sameT = !!cur && cur.order.mission === mission && Math.hypot(cur.order.target.x - step.target.x, cur.order.target.z - step.target.z) <= 4;
+          if (!sameT && this.send(rec.id, 'march', step.target, now, { kind: 'march', force: true, mission })) issued++;
+          continue;
+        }
       }
-
       // ② 总攻（标签 assault）：全体到舰旁可站点（同签名去重）；
       //   ★ §3.G：**工兵系豁免**（工兵/保护队/支援队不压舰，走保护与施工）；
       //   ★ 远程（用户定 2026-09-29）：**总攻不压舰——驻守躲掩体**（队长自主掩体循环：
@@ -450,8 +458,7 @@ export class EngineBridge {
           }
           continue;
         }
-        // ★ 兜底（用户定 2026-09-29）：**寻路不到舰 → 常规巡逻前进循环**（下落走 ④ 段进兜底：
-        //   行军段↔巡逻段交替、朝舰前缘推；不强求到达，尽力往前——不再原地站桩被判官收）。
+        // ★ 兜底（用户定 2026-09-29）：寻路不到舰 → 常规巡逻前进循环（④：行军段↔巡逻段交替、朝舰前缘推）。
       }
 
       // ②.5 ★ §3.G 保护/支援/后撤（只产标签；优先于工活与兜底）
@@ -561,10 +568,7 @@ export class EngineBridge {
     }
   }
 
-  /** 建造点（用户定 2026-09-29；**与舰共线**）：
-   *  · 威胁点 = **舰**（无舰才退玩家）——玩家会在舰反侧游走，拿玩家当威胁会把掩体造到工兵背后；
-   *  · 受护点 = 工兵/保护对象中**更靠舰者**（离舰最近的那个）——保证掩体落在**两者前方/舰侧**；
-   *  · 落点 = 受护点朝舰 1.6~3.2m，三点检测（通用几何）→ 取首个可站点。 */
+  /** 建造点（与舰共线）：威胁=舰（无舰退玩家）；受护=工兵/保护对象中更靠舰者；落点=受护点朝舰 1.6~3.2m 首可站点。 */
   private wardBuildPoint(eng: LiveSquad, ward: LiveSquad): Pt | null {
     // ★ 参照（用户定 2026-09-29）：玩家进到 THREAT_NEAR 内 → 玩家；否则舰
     const player = this.pos.player();

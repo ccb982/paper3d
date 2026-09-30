@@ -26,6 +26,8 @@ export const HOLD_COVER = {
   RETREAT_MARGIN: 6,
   /** 掩体存活判定半径（米；表里 2m 内有件 = 还活着） */
   ALIVE_R: 2,
+  /** ★ 指定驻守件（锚）近旁判定半径（米）：**直接走进去**（用户定 2026-09-30） */
+  ANCHOR_R: 10,
   /** 玩家进到该半径（米）→ 用玩家做"背身参照"+掩体检测（单源 CoverGeom.THREAT_NEAR） */
   PLAYER_NEAR: THREAT_NEAR,
 };
@@ -49,8 +51,9 @@ export function stepHoldCover(
   pos: { x: number; z: number },
   ship: { x: number; z: number },
   covers: readonly { x: number; z: number }[],
-  /** ★ 玩家靠近时：玩家位 + 掩体检测（同源 coverFrom；确保真藏在掩体后） */
-  opt?: { player?: { x: number; z: number } | null; coverFrom?: (tx: number, tz: number, x: number, z: number) => boolean },
+  /** ★ 玩家靠近时：玩家位 + 掩体检测（同源 coverFrom；确保真藏在掩体后）；
+   *  ★ anchor = 指定驻守件点（引擎令目标）：seek 时**优先走到锚点近旁的件**（走进岗哨） */
+  opt?: { player?: { x: number; z: number } | null; coverFrom?: (tx: number, tz: number, x: number, z: number) => boolean; anchor?: { x: number; z: number } | null },
 ): { x: number; z: number } {
   const dShip = (p: { x: number; z: number }): number => Math.hypot(p.x - ship.x, p.z - ship.z);
   // 掩体被毁：藏/撤阶段的掩体表里消失 → 转撤退
@@ -61,13 +64,26 @@ export function stepHoldCover(
   // 藏够 → 再向前
   if (st.phase === 'hide' && now - st.at >= HOLD_COVER.ADVANCE_S) { st.phase = 'seek'; st.at = now; }
   if (st.phase === 'seek') {
-    // 比当前更靠舰的掩体（搜索半径内），取离舰最近者
     let best: { x: number; z: number } | null = null;
-    let bd = dShip(pos) - 0.5;
-    for (const c of covers) {
-      if (Math.hypot(c.x - pos.x, c.z - pos.z) > HOLD_COVER.SEARCH_R) continue;
-      const d = dShip(c);
-      if (d < bd) { bd = d; best = c; }
+    // ★ ① 指定驻守件优先（用户定 2026-09-30：驻守要**直接走进岗哨**）——
+    //   锚点（引擎令目标）近旁 ≤ANCHOR_R 的件 = 目标件，取离锚最近者
+    const anchor = opt?.anchor ?? null;
+    if (anchor) {
+      let bd2 = Infinity;
+      for (const c of covers) {
+        const dc = Math.hypot(c.x - anchor.x, c.z - anchor.z);
+        if (dc <= HOLD_COVER.ANCHOR_R && dc < bd2) { bd2 = dc; best = c; }
+      }
+    }
+    // ② 旧模式（用户定 2026-09-30：不满足进岗哨条件 → 走原模式）：比当前更靠舰的掩体，取离舰最近者；
+    //   "保证被挡"由输出段的 coverFrom 校核负责（有校核口时躲点必真被挡）
+    if (!best) {
+      let bd = dShip(pos) - 0.5;
+      for (const c of covers) {
+        if (Math.hypot(c.x - pos.x, c.z - pos.z) > HOLD_COVER.SEARCH_R) continue;
+        const d = dShip(c);
+        if (d < bd) { bd = d; best = c; }
+      }
     }
     if (best) { st.cover = { x: best.x, z: best.z }; st.phase = 'hide'; st.at = now; st.back = null; }
   } else if (st.phase === 'retreat') {

@@ -44,21 +44,27 @@ export class RangedManager extends RoleManager {
 //   配方：**喜高地**（h 项重）+ 掩体 + **藏点**（对舰遮挡加成）+ 射程带
 // ============================================================
 export const RANGED_TACTICS: UnitTactics = {
-  mul: { h: 2.2, dist: 1.0, threat: 1.0, cover: 1.2, gap: 0.8, narrow: 0.8, hidden: 0.6, coverLOS: 1.0, high: 0, front: 0, back: 0, near: 1.0 },
-  curves: { hidden: [[0.05, 0.05], [0.45, 0.15], [0.9, 0.25]], coverLOS: [[0.05, 0.4], [0.45, 0.6], [0.9, 0.8]] },
+  mul: { h: 2.2, dist: 1.0, threat: 1.0, cover: 1.2, gap: 0.8, narrow: 0.8, hidden: 0.6, coverLOS: 1.0, high: 0, front: 0, back: 1.0, near: 1.0 },
+  curves: {
+    hidden: [[0.05, 0.05], [0.45, 0.15], [0.9, 0.25]],
+    coverLOS: [[0.05, 0.4], [0.45, 0.6], [0.9, 0.8]],
+    /** ★ 从背舰面上山（用户定 2026-09-30；寻路负责走背舰坡面） */
+    back: [[0.05, 0.2], [0.45, 0.35], [1, 0.5]],
+  },
   withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, coverLOS: 0, high: 0, front: 0, back: 0, near: 0 },
   band: 1,
 };
 
 // ============================================================
-// ★ 远程部署函数（D7 骨架；用户定 2026-09-30）：**专门找"高地 + 岗哨"的地方去驻守**
-//   候选序：① 岗哨位（山顶 ∧ 近旁有已建掩体=账本加成 → 躲掩体驻守）
-//           ② 高地面藏点（山顶/高原 ∧（对舰遮挡 ∨ 掩体））
+// ★ 远程部署函数（D7；用户定 2026-09-30）：**优势区 = 有掩体岗哨的高地**
+//   候选序：① 岗哨位（山顶 ∧ 近旁有已建掩体=账本加成）
+//           ② 高地面（山顶/高原；遮挡/掩体/迎舰加分；**无掩体也收**，作次优）
 //           ③ null（交给既有驻守/兜底）
 //   消费：地形事实（kind/occluded/slopeDir）+ 掩体表（bonus 账本）；产出=**位数据**（位置）。
+//   可达性由引擎查（不可达 → 强制攀爬 mission='force'）；背舰面上山由近寻路（back 权重）负责。
 // ============================================================
 export function rangedGarrisonSpot(
-  ctx: TacticalCtx, from: { x: number; z: number }, radius = 90, step = 4,
+  ctx: TacticalCtx, from: { x: number; z: number }, center: { x: number; z: number } = from, radius = 180, step = 4,
 ): { x: number; z: number; why: 'sentry' | 'high' } | null {
   const { facts, bonus } = ctx;
   let bestSentry: { x: number; z: number; why: 'sentry'; score: number } | null = null;
@@ -66,7 +72,7 @@ export function rangedGarrisonSpot(
   const R = Math.ceil(radius / step) * step;
   for (let dz = -R; dz <= R; dz += step) {
     for (let dx = -R; dx <= R; dx += step) {
-      const x = from.x + dx, z = from.z + dz;
+      const x = center.x + dx, z = center.z + dz;
       const c = facts.cellAt(x, z);
       if (!c || (c.kind !== KIND.Peak && c.kind !== KIND.Plateau)) continue;
       if (!facts.isPassableAt(x, z)) continue;
@@ -78,14 +84,14 @@ export function rangedGarrisonSpot(
           if (v > cov) cov = v;
         }
       }
-      const d = Math.hypot(dx, dz);
+      const d = Math.hypot(x - from.x, z - from.z);
       const hidden = c.occluded ? 1 : 0;
       const front = c.slopeDir === SLOPE_DIR.Front ? 1 : 0;
       if (c.kind === KIND.Peak && cov > 0) {
         const score = cov * 2 + hidden + front * 0.5 - d * 0.01;   // 岗哨优先
         if (!bestSentry || score > bestSentry.score) bestSentry = { x, z, why: 'sentry', score };
-      } else if (hidden || cov > 0) {
-        const score = hidden + cov - d * 0.01;
+      } else {
+        const score = cov * 2 + hidden + (c.kind === KIND.Peak ? 0.5 : 0) + front * 0.2 - d * 0.01;
         if (!bestHigh || score > bestHigh.score) bestHigh = { x, z, why: 'high', score };
       }
     }

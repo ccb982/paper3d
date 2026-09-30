@@ -549,6 +549,31 @@ export class SquadNavigator {
             u.moveSpeed > 0 ? u.moveSpeed : 2.5);
           continue;
         }
+        // ★ 驻守直接进岗哨（用户定 2026-09-30）：hold 且目标在近旁（≤6m）→ 直推进入（可爬），
+        //   不再交给长/短寻路（否则掩体/坡缘挡一下就不进去）
+        if (state?.execState === 'hold' && state.order.target) {
+          const htx = state.order.target.x, htz = state.order.target.z;
+          const hdx = htx - upos0.x, hdz = htz - upos0.z;
+          const hl = Math.hypot(hdx, hdz);
+          if (hl > 0.35 && hl <= 6) {
+            if (u.moveTarget) { u.moveTarget.x = htx; u.moveTarget.y = 0; u.moveTarget.z = htz; u.moveTarget.climb = true; }
+            else u.moveTarget = { x: htx, y: 0, z: htz, climb: true };
+            u.controlSource = 'swarm';
+            u.applySteer({ dirX: hdx / hl, dirZ: hdz / hl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: htx, targetY: 0, targetZ: htz });
+            continue;
+          }
+        }
+        // ★ 强制攀爬（用户定 2026-09-30）：mission='force' → 忽略可行性直推目标；climb=true 交执行层爬硬边
+        if (state?.order.mission === 'force' && state.order.target) {
+          const ftx = state.order.target.x, ftz = state.order.target.z;
+          const fdx = ftx - upos0.x, fdz = ftz - upos0.z;
+          const fl = Math.hypot(fdx, fdz) || 1;
+          if (u.moveTarget) { u.moveTarget.x = ftx; u.moveTarget.y = 0; u.moveTarget.z = ftz; u.moveTarget.climb = true; }
+          else u.moveTarget = { x: ftx, y: 0, z: ftz, climb: true };
+          u.controlSource = 'swarm';
+          u.applySteer({ dirX: fdx / fl, dirZ: fdz / fl, speed: u.moveSpeed > 0 ? u.moveSpeed : 2.5, source: 'formation', targetX: ftx, targetY: 0, targetZ: ftz });
+          continue;
+        }
         if (!isLead) {
           const ms = this.memberStep(u.swarmUid, upos0.x, upos0.z, lead.x, lead.z, now, state);
           if (ms) { sx = upos0.x + ms.dx * 4; sz = upos0.z + ms.dz * 4; }

@@ -158,11 +158,13 @@ export class SquadCore {
       //   藏（更靠舰掩体背舰侧）→ 毁（掩体没了）→ 撤（更安全的掩体/背舰脱离）→ 过段时间再进。
       //   引擎给坐标（> 搜索半径 → 先到坐标；≤ → 就地起循环）；只给驻守（目标≈自身）→ 立起循环。
       const shipPt = port.shipPoint?.() ?? null;
-      const covers = port.coversNear?.(lx, lz, HOLD_COVER.SEARCH_R) ?? [];
+      // ★ 锚点（引擎令目标）也要能取到——件在锚旁，可能超出 leader 的 40m 搜索圈
+      const covers = port.coversNear?.(lx, lz, HOLD_COVER.SEARCH_R + HOLD_COVER.ANCHOR_R + 4) ?? [];
       if (shipPt && Math.hypot(engT.x - lx, engT.z - lz) <= HOLD_COVER.SEARCH_R) {
         const t = stepHoldCover(this.hold, now, { x: lx, z: lz }, shipPt, covers, {
           player: port.playerPoint?.() ?? null,
           coverFrom: port.coverFrom,
+          anchor: { x: engT.x, z: engT.z },   // ★ 指定驻守件点：走进岗哨（用户定 2026-09-30）
         });
         st.order.target = { x: t.x, z: t.z };
       } else {
