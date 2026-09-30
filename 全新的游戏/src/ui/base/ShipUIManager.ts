@@ -20,6 +20,8 @@ import { CharacterStatsPanel, type CharacterStatsSnapshot } from '../shared/Char
 
 type ShipPanel = 'action' | 'formation' | 'operator' | 'none';
 
+import { mountKeyHints } from '../shared/KeyHints';
+
 export class ShipUIManager extends BaseInteractionUI {
   private currentPanel: ShipPanel = 'none';
   /** ★ 编队 → 完整背包页（2026-09-12）：角色属性 + 背包网格 + 出击槽 */
@@ -37,6 +39,9 @@ export class ShipUIManager extends BaseInteractionUI {
   setCraftingOverlay(overlay: CraftingOverlay): void {
     this._craftingOverlay = overlay;
   }
+
+  /** ★ 快捷键说明条（主页面/舰船共用；用户定 2026-09-30） */
+  private readonly keyHints = mountKeyHints();
 
   constructor(
     private session: GameSession,
@@ -301,5 +306,6 @@ export class ShipUIManager extends BaseInteractionUI {
     this.inventoryPageOpen = false;
     if (this.root?.parentNode) this.root.parentNode.removeChild(this.root);
     this.panelContainer.innerHTML = '';
+    this.keyHints?.parentNode?.removeChild(this.keyHints);
   }
 }

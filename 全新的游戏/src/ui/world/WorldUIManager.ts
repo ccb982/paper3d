@@ -33,8 +33,14 @@ import type { FinalStats } from '../../services/combat/FinalStats';
 
 export type FloatingTextType = 'normal' | 'crit' | 'heal' | 'miss' | 'pickup';
 
+import { mountKeyHints } from '../shared/KeyHints';
+
 export class WorldUIManager extends BaseInteractionUI {
   private minimap: Minimap;
+  /** ★ 快捷键说明条（世界 HUD；用户定 2026-09-30） */
+  private readonly keyHints = mountKeyHints();
+  /** ★ 小地图可见（Q 开关；用户定 2026-09-30） */
+  private minimapVisible = true;
   /** ★ 世界地图面板（M 键；读地形记录表，chunk 卸载不丢） */
   private mapPanel: MapPanel | null = null;
   /** ★ 玩家标记点（大地图放置；小地图 + 场景方位提示共用同一份实例） */
@@ -571,8 +577,14 @@ export class WorldUIManager extends BaseInteractionUI {
   }
 
   setMinimapVisible(v: boolean): void {
+    this.minimapVisible = v;
     this.minimap.setVisible(v);
     this.navHints.setVisible(v);
+  }
+
+  /** ★ 小地图开关（Q；用户定 2026-09-30） */
+  toggleMinimap(): void {
+    this.setMinimapVisible(!this.minimapVisible);
   }
 
   /** ★ 世界地图面板是否打开（输入门控：打开时丢弃视角/缩放） */
@@ -954,6 +966,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
   override dispose(): void {
     super.dispose();
+    this.keyHints?.parentNode?.removeChild(this.keyHints);
     this.minimap.dispose();
     this.mapPanel?.dispose();
     this.mapPanel = null;

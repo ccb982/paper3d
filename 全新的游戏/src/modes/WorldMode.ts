@@ -391,7 +391,7 @@ export class WorldMode implements IGameMode {
   /** ★ 装备提供的友军每秒回血（黍姐的XX 等；refreshPlayerStats 汇总，无人机/祖宗每帧结算） */
   private allyRegen = 0;
   /** ★ 当前选择的快捷弹药（'default' = 普通弹药；其余 = 弹药 itemId）
-   *  Q 切换 / 点击切换；攻击键发射。消耗品不进快捷栏，在背包内使用 */
+   *  **滚轮切换** / 点击切换；左键发射。消耗品不进快捷栏，在背包内使用 */
   private selectedQuickItem = 'default';
   /** ★ 投送弹（祖宗弹 / 掩体弹；落地或寿命到 → 生成对应实体） */
   private sentinelShots: {
@@ -1246,21 +1246,18 @@ export class WorldMode implements IGameMode {
     const talking = this.dialogue?.isActive ?? false;
     const uiLocked = inInterior || talking;
 
-    // ★ 按 I 键打开/关闭背包（舰内同样可用）；M 打开/关闭世界地图（读持久小地图表）
+    // ★ Tab 打开/关闭背包（舰内同样可用）；Q 打开/关闭世界地图（读持久小地图表）——用户定 2026-09-30
     if (!talking && this.binding.consumeInventory()) {
       this.worldUIManager.toggleInventory();
     }
     if (!uiLocked && this.binding.consumeMap()) {
       this.worldUIManager.toggleMapPanel();
     }
-    // ★ Q 切换快捷弹药（战斗中鼠标隐藏 → 键盘操作）
-    //   ★ Q 按住 + 滚轮 = 直接前后切换弹药（不缩放视角）；点按 Q 仍顺序切换
-    if (!uiLocked && this.binding.isSwitchItemHeld() && zoom !== 0) {
-      this.cycleQuickItem(zoom > 0 ? 1 : -1);
-      zoom = 0; // 滚轮已用于切换 → 本帧不缩放
-    }
-    if (!uiLocked && this.binding.consumeSwitchItem()) this.cycleQuickItem();
-    // ★ F：航行期 = 停靠；探索期的消耗品请在背包（I）内点击使用
+    // ★ 裸滚轮 = 自动切换武器/快捷弹药（用户定 2026-09-30）；Alt/Ctrl+滚轮 = 缩放（在 consumeZoom 分流）
+    const switchAxis = this.binding.consumeSwitchAxis();
+    if (!uiLocked && switchAxis !== 0) this.cycleQuickItem(switchAxis > 0 ? 1 : -1);
+    // ★ 点按 Q 仍顺序切换（保留）
+    // ★ F：航行期 = 停靠；探索期的消耗品请在背包（Tab）内点击使用
     if (!uiLocked && this.binding.consumeUseItem() && this.phase === 'sail') {
       this.requestDock(false);
     }
@@ -2518,7 +2515,7 @@ export class WorldMode implements IGameMode {
   /** ★ 快捷栏条目：普通弹药（∞）+ 行囊内弹药（祖宗等）。
    *  排序：普通弹药 → 弹药（各自内部保持背包扫描顺序，稳定排序）；
    *  弹药由攻击键发射消耗；Q/点击切换。只列行囊（player）里的。
-   *  ★ 消耗品不进快捷栏：直接在背包（I）内点击使用。 */
+   *  ★ 消耗品不进快捷栏：直接在背包（Tab）内点击使用。 */
   private buildAmmoEntries(): AmmoEntryView[] {
     const out: AmmoEntryView[] = [
       { id: 'default', name: '普通弹药', count: -1, iconId: 'bullet_default', selected: this.selectedQuickItem === 'default' },
@@ -2561,7 +2558,7 @@ export class WorldMode implements IGameMode {
   }
 
   /** ★ 切换快捷弹药（dir=+1 下一个 / -1 上一个，循环；普通弹药 → 行囊内弹药）：
-   *   点按 Q = 顺序 +1；Q+滚轮 = 前后双向切换 */
+   *   **裸滚轮 = 前后双向切换**（用户定 2026-09-30） */
   private cycleQuickItem(dir = 1): void {
     const entries = this.buildAmmoEntries();
     if (entries.length <= 1) return;

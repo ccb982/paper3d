@@ -21,31 +21,27 @@ export interface InputActions {
   moveAxis: { x: number; y: number };
   /** ★ 视角轴向（鼠标增量，像素；触屏 = 拖拽增量，同语义） */
   lookAxis: { x: number; y: number };
-  /** ★ 缩放输入（滚轮增量，消费式；触屏 = 双指捏合，同语义） */
+  /** ★ 缩放输入（滚轮增量，消费式；触屏 = 双指捏合，同语义）——**仅 Alt/Ctrl+滚轮**（用户定 2026-09-30） */
   zoomAxis: number;
+  /** ★ 切换武器/快捷弹药输入（裸滚轮增量，消费式；用户定 2026-09-30：滑轮=自动切换武器） */
+  switchAxis: number;
   /** 指针位置（屏幕归一化 0..1，左上原点；null = 无指针） */
   pointer: { x: number; y: number } | null;
-  /** 按键按下（攻击/闪避/技能/交互/跳跃），消费式读取 */
+  /** 按键按下（攻击/交互/跳跃…），消费式读取 */
   pressed: {
     attack: boolean;
-    dodge: boolean;
-    skill: boolean;
     interact: boolean;
     jump: boolean;
     inventory: boolean;
-    /** ★ 切换快捷弹药（Q；战斗中鼠标隐藏 → 键盘切换） */
-    switchItem: boolean;
-    /** ★ 使用键（F；航行期 = 停靠；消耗品改在背包内点击使用） */
+    /** ★ F：交互 + 航行期停靠（用户定 2026-09-30：交互/停靠都放 F） */
     useItem: boolean;
-    /** ★ 世界地图面板（M） */
+    /** ★ 世界地图面板（Q；用户定 2026-09-30） */
     map: boolean;
   };
   /** ★ 按住状态（持续，非消费式；长按语义用——如按住跳跃=连跳、按住攻击=持续发射） */
   held: {
     attack: boolean;
     jump: boolean;
-    dodge: boolean;
-    skill: boolean;
     interact: boolean;
   };
   /** ★ 交互事件队列（消费式读取；语义与设备无关，供多端复用） */
@@ -58,9 +54,10 @@ export function createInputActions(): InputActions {
     moveAxis: { x: 0, y: 0 },
     lookAxis: { x: 0, y: 0 },
     zoomAxis: 0,
+    switchAxis: 0,
     pointer: null,
-    pressed: { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false, map: false },
-    held: { attack: false, jump: false, dodge: false, skill: false, interact: false },
+    pressed: { attack: false, interact: false, jump: false, inventory: false, useItem: false, map: false },
+    held: { attack: false, jump: false, interact: false },
     interactions: [],
   };
 }

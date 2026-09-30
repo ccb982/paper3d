@@ -44,20 +44,17 @@ export class DesktopBinding {
     });
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Tab') e.preventDefault();   // ★ Tab = 背包（不许浏览器切焦点）
       if (KEY_MAP[e.code]) {
         // 方向键/WASD 不触发页面滚动
         e.preventDefault();
       }
       if (!this.keyState.get(e.code)) {
         // 上升沿：记录按下（消费式）
-        if (e.code === 'KeyJ') this.state.pressed.attack = true;
-        if (e.code === 'KeyK') this.state.pressed.dodge = true;
-        if (e.code === 'KeyL') this.state.pressed.skill = true;
-        if (e.code === 'KeyE') this.state.pressed.interact = true;
-        if (e.code === 'KeyI') this.state.pressed.inventory = true;
-        if (e.code === 'KeyQ') this.state.pressed.switchItem = true;
-        if (e.code === 'KeyF') this.state.pressed.useItem = true;
-        if (e.code === 'KeyM') this.state.pressed.map = true;
+        // ★ 键位（用户定 2026-09-30）：攻击=鼠标左键（无键盘键）；不设闪避/技能键
+        if (e.code === 'Tab') this.state.pressed.inventory = true;   // ★ 背包（I→Tab）
+        if (e.code === 'KeyQ') this.state.pressed.map = true;        // ★ 世界地图（Q；小地图常显无需开关）
+        if (e.code === 'KeyF') { this.state.pressed.useItem = true; this.state.pressed.interact = true; }   // ★ F = 交互 + 停靠
         if (e.code === 'Space') this.state.pressed.jump = true;
       }
       this.keyState.set(e.code, true);
@@ -124,15 +121,18 @@ export class DesktopBinding {
       this.state.interactions.push({ type: 'tap', x: p.x, y: p.y, dx: 0, dy: 0 });
     };
     const onWheel = (e: WheelEvent) => {
-      // ★ 滚轮 → 缩放增量（消费式：update 后由 consumeZoom 读取）
-      this.state.zoomAxis += e.deltaY;
+      // ★ 输入分流（用户定 2026-09-30）：**裸滚轮 = 切换武器/快捷弹药**；
+      //   **Ctrl + 滚轮 = 缩放视角**——消费式读取
+      if (e.ctrlKey) this.state.zoomAxis += e.deltaY;
+      else this.state.switchAxis += e.deltaY;
     };
     const onBlur = () => {
       this.keyState.clear();
       this.state.moveAxis = { x: 0, y: 0 };
-      this.state.pressed = { attack: false, dodge: false, skill: false, interact: false, jump: false, inventory: false, switchItem: false, useItem: false, map: false };
+      this.state.pressed = { attack: false, interact: false, jump: false, inventory: false, useItem: false, map: false };
       this.state.interactions = [];
       this.state.zoomAxis = 0;
+      this.state.switchAxis = 0;
       pointerDown = false;
       this.leftDown = false;
     };
@@ -198,11 +198,9 @@ export class DesktopBinding {
     this.state.moveAxis = { x, y };
     // ★ held 按住状态（长按语义：如按住跳跃 = 落地连跳；按住左键/J = 持续发射）
     this.state.held = {
-      attack: this.leftDown || !!this.keyState.get('KeyJ'),
+      attack: this.leftDown,
       jump: !!this.keyState.get('Space'),
-      dodge: !!this.keyState.get('KeyK'),
-      skill: !!this.keyState.get('KeyL'),
-      interact: !!this.keyState.get('KeyE'),
+      interact: !!this.keyState.get('KeyF'),
     };
     // lookAxis：读出的增量即本帧值（消费式，用完归零）
   }
@@ -214,10 +212,17 @@ export class DesktopBinding {
     return v;
   }
 
-  /** 消费缩放增量（返回并清零 zoomAxis） */
+  /** 消费缩放增量（返回并清零 zoomAxis；仅 Alt/Ctrl+滚轮产生） */
   consumeZoom(): number {
     const v = this.state.zoomAxis;
     this.state.zoomAxis = 0;
+    return v;
+  }
+
+  /** ★ 消费切换武器/快捷弹药增量（裸滚轮；正=下一件，负=上一件） */
+  consumeSwitchAxis(): number {
+    const v = this.state.switchAxis;
+    this.state.switchAxis = 0;
     return v;
   }
 
@@ -242,18 +247,6 @@ export class DesktopBinding {
     return v;
   }
 
-  /** ★ 消费切换快捷物品键（Q） */
-  consumeSwitchItem(): boolean {
-    const v = this.state.pressed.switchItem;
-    this.state.pressed.switchItem = false;
-    return v;
-  }
-
-  /** ★ 切换物品键（Q）是否按住（Q+滚轮 = 弹药/物品切换，不缩放） */
-  isSwitchItemHeld(): boolean {
-    return !!this.keyState.get('KeyQ');
-  }
-
   /** ★ 消费使用键（F；航行期 = 停靠） */
   consumeUseItem(): boolean {
     const v = this.state.pressed.useItem;
@@ -261,7 +254,7 @@ export class DesktopBinding {
     return v;
   }
 
-  /** ★ 消费世界地图键（M） */
+  /** ★ 消费世界地图键（Q；用户定 2026-09-30：M→Q） */
   consumeMap(): boolean {
     const v = this.state.pressed.map;
     this.state.pressed.map = false;
