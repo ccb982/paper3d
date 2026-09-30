@@ -18,9 +18,8 @@ import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
 import { PostureFn } from '../PostureFn';
 import { RANGED } from '../RangedTactics';
-import { WALL_DH, buildBonus, featsAt as featsAtSrc, scoreAt as scoreAtSrc, scoreForUnit, weightsFor,
-  type CellFeats, type ScoringSources } from '../TerrainScoring';
-import { TerrainSemantics, Sem, SEM_NAMES } from '../TerrainSemantics';
+import { TerrainSemantics, L1_R, R_MAX, WALL_DH } from '../TerrainSemantics';
+import { type TacticalCtx, scoreFor, scoreTileAt } from '../engine/UnitScoring';
 import { HoleMask } from '../HoleMask';
 import { HoleTable } from '../HoleTable';
 import { samplerFor } from '../../../services/map/TerrainSampler';
@@ -29,7 +28,7 @@ import { PassTable } from '../nav/PassTable';
 import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
 import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
-import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
+import { FortifyPlanner, NEED_DONE, buildBonus } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
@@ -74,9 +73,6 @@ export class SwarmData {
   /** ★ 实时玩家位置（tick 刷新；scoreTypeAt/SteerPick 兵种分用——比 rebuild 烙进 score 的新） */
   private viewPX = 0;
   private viewPZ = 0;
-  /** ★ 权重缓存（postureP/posture 变才重算；SteerPick 8 向热路径免重复 weightsFor） */
-  private _wKey = '';
-  private _wCache: ReturnType<typeof weightsFor> | null = null;
   postureSchedule = 0;
   postureProvocation = 0;
   /** 内部日程时钟（无太阳钟输入时的兜底：落地起算，7.5 分钟 = 一个白天） */
@@ -112,7 +108,7 @@ export class SwarmData {
   private aliveAtPosture = 0;
   /** ★ 地块有利位置评分表（全兵种共用；掩体/态势变化即重建） */
   /** ★ 评分数据源（查询时算；无第四网格）：每拍重建 = 三张表句柄 + 权重 + 玩家位 */
-  private scoringSrc: ScoringSources | null = null;
+  private tacticCtx: TacticalCtx | null = null;
   /** ★ 距离系数时间增益（指挥器每拍写；1 = 无增益） */
   distGain = 1;
   /** 评分表触发戳（换落点 +1） */
@@ -221,7 +217,7 @@ export class SwarmData {
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
     this.postCache.clear();     // ★ 现场有利位置缓存复位
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
-    this.scoringSrc = null;
+    this.tacticCtx = null;
     this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（初始构建）
     this.passKeeper.bind(cx, cz, radius);
     this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
@@ -338,24 +334,37 @@ export class SwarmData {
     if (this.plan) {
       const raster = RasterMap.current;
       if (raster) {
-        const w0 = weightsFor(this.postureP, this.battlePosture);
         const smp0 = samplerFor(raster);
-        this.scoringSrc = {
-          raster, semantics: this.semantics, holeMask: this.holeMask, passTable: this.passTable,
-          plan: this.plan, bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
-          weights: this.distGain === 1 ? w0 : { ...w0, dist: w0.dist * this.distGain },
+        // ★ 战术上下文（D3：事实 + 事态 → 兵种管理器策略合成；本层不再有评分表）
+        const hasShip0 = shipX !== 0 || shipZ !== 0;
+        this.tacticCtx = {
+          facts: this.semantics,
           heightAt: (x: number, z: number) => smp0.heightAt(raster, x, z),
-          playerX, playerZ,
+          bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
+          waterAt: (x, z) => this.isWaterAt(x, z),
+          isDugAt: (x, z) => this.holeMask.isDug(x, z),
+          ship: hasShip0 ? { x: shipX, z: shipZ } : { x: this.plan.cx, z: this.plan.cz },
+          player: { x: playerX, z: playerZ },
+          p: this.postureP,
+          posture: this.battlePosture,
+          distGain: this.distGain,
         };
         setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
-        // ★ L1 语义表（静态）：仅在"未建 / 换落点"时构建一次（玩家移动不触发）
+        // ★ 地形事实表（静态·**舰心窗**，用户定）：未建 / 舰动 / 换落点时重建（玩家移动不触发）；
+        //   半径罩住 舰↔落点 走廊（dist+60，上限 R_MAX）；C3 参照=舰（眼点=舰处地形高+1.6m）
+        const hasShip = shipX !== 0 || shipZ !== 0;
+        const cxs = hasShip ? shipX : this.plan.cx;
+        const czs = hasShip ? shipZ : this.plan.cz;
+        const corridor = Math.hypot(this.plan.cx - cxs, this.plan.cz - czs);
+        const radius = Math.min(R_MAX, Math.max(L1_R, corridor + 60));
         const a = this.semantics.anchor;
-        if (!this.semantics.isReady || a.x !== this.plan.cx || a.z !== this.plan.cz) {
+        const ao = this.semantics.aoAnchor;
+        if (!this.semantics.isReady || a.x !== cxs || a.z !== czs || ao.x !== this.plan.cx || ao.z !== this.plan.cz) {
           const smp = samplerFor(raster);
           this.semantics.build({
             heightAt: (x, z) => smp.heightAt(raster, x, z),
             roleAt: (x, z) => smp.roleAt(raster, x, z),
-          }, this.plan.cx, this.plan.cz);
+          }, cxs, czs, radius, this.plan.cx, this.plan.cz);
           // ★ 独立坑洞掩码（同锚窗口）：真源 = RasterMap.levelDepthAt（权威挖掘深度）
           this.holeMask.build({ digDepthAt: (x, z) => raster.levelDepthAt(x, z) },
             this.plan.cx, this.plan.cz);
@@ -363,12 +372,7 @@ export class SwarmData {
             && (location.search.includes('l1dbg') || location.search.includes('swarmdbg'));
           if (dbg) {
             const st = this.semantics.stats();
-            console.log('[L1] 语义表构建完成', JSON.stringify(st));
-            for (const cls of [Sem.HighGround, Sem.Choke, Sem.Hollow, Sem.FrontSlope, Sem.ReverseSlope]) {
-              const top = this.semantics.regionsOf(cls).slice(0, 3)
-                .map((r) => `#${r.id}(a=${r.area}, rep=${r.rx.toFixed(0)},${r.rz.toFixed(0)})`).join(' ');
-              if (top) console.log(`[L1] ${SEM_NAMES[cls]}: ${top}`);
-            }
+            console.log('[L1] 地形事实表构建完成', JSON.stringify(st));
           }
           (globalThis as unknown as { __l1?: TerrainSemantics }).__l1 = this.semantics;
           const gw = globalThis as unknown as { __holeMask?: HoleMask; __holeTable?: HoleTable };
@@ -551,7 +555,7 @@ export class SwarmData {
         if (!mask.isDug(bx, bz)) continue;
         const d2 = (bx - x) ** 2 + (bz - z) ** 2;
         if (d2 > r2 || d2 < min2 || d2 > max2) continue;
-        const s = scoreAtSrc(this.scoringSrc, bx, bz) ?? -1e9;
+        const s = scoreTileAt(this.tacticCtx, bx, bz) ?? -1e9;
         if (!best || s > best.score) best = { x: bx, z: bz, score: s };
       }
     }
@@ -620,7 +624,7 @@ export class SwarmData {
       const elev = h - (raster.surfaceHeightAt(x + 5, z) + raster.surfaceHeightAt(x - 5, z)
         + raster.surfaceHeightAt(x, z + 5) + raster.surfaceHeightAt(x, z - 5)) / 4;
       // ★ 优先读地块评分表（全兵种共用；掩体/态势权重已在表内）；表未就绪回落高程探针
-      let score = scoreAtSrc(this.scoringSrc, x, z) ?? (elev * 0.5);
+      let score = scoreTileAt(this.tacticCtx, x, z) ?? (elev * 0.5);
       if (score <= -1e8) continue;
       if (hasCoverFrom(px, pz, x, z, this.coverBlocker)) score += 3;
       if (score > bestScore) { bestScore = score; best = { x, z }; }
@@ -664,56 +668,38 @@ export class SwarmData {
 
   /** ★ 表分查询（执行层候选方向打分用；未就绪/表外 → null） */
   scoreAt(x: number, z: number): number | null {
-    return scoreAtSrc(this.scoringSrc, x, z);
+    return scoreTileAt(this.tacticCtx, x, z);
   }
 
-  /** ★ 特征查询（查询时算；无数据源 → null） */
-  private scoringFeats(x: number, z: number, px: number, pz: number): CellFeats | null {
-    return this.scoringSrc ? featsAtSrc(this.scoringSrc, x, z, px, pz) : null;
-  }
-
-  /** ★ 当前态势权重（带缓存；SteerPick 热路径用） */
-  private liveWeights(): ReturnType<typeof weightsFor> {
-    const key = `${this.postureP}|${this.battlePosture}`;
-    if (key !== this._wKey || !this._wCache) {
-      this._wKey = key;
-      this._wCache = weightsFor(this.postureP, this.battlePosture);
-    }
-    // ★ 距离系数时间增益（用户定 2026-09-25）：随时事增大，日终 ×(1+GAIN) 彻底碾压地形
-    const gain = this.distGain;
-    return gain === 1 ? this._wCache : { ...this._wCache, dist: this._wCache.dist * gain };
-  }
-
-  /** ★ 工兵要塞需求分（§13 评分体系大改）：防御价值 × 掩体缺口；水/坑/硬边排除（null）
-   *  ——"该守且没掩体"的地方分最高（同源 TerrainScoring，不另建表） */
+  /** ★ 工兵要塞需求分：兵种分（defense 档）× 掩体缺口；水/坑/硬边排除（null）
+   *  ——"该守且没掩体"的地方分最高（D5 将换"件优先级梯队"） */
   fortifyNeed(x: number, z: number): number | null {
     if (this.terrainWallAt(x, z, 1.0)) return null;
-    const f = this.scoringFeats(x, z, this.viewPX, this.viewPZ);
-    if (!f || !f.pass) return null;
-    const val = scoreForUnit('defense', f, this.liveWeights());
+    const ctx = this.tacticCtx;
+    if (!ctx) return null;
+    const val = scoreFor('defense', ctx, x, z, this.viewPX, this.viewPZ);
     if (val <= -1e8) return null;
-    const deficit = 1 - Math.min(1, Math.max(0, f.cover) / 2.5);   // COVER_FULL = 2.5
+    const cover = ctx.bonus.get(`${Math.round(x / 4)},${Math.round(z / 4)}`) ?? 0;
+    const deficit = 1 - Math.min(1, Math.max(0, cover) / 2.5);   // COVER_FULL = 2.5
     return val * deficit;
   }
 
-  /** ★ L3 兵种分（重构 P1）：当前态势基权 × 兵种权重 × 合成字段（探针/中立选位用；
-   *  小队消费在 Decide/SquadPath 内走 UnitStrategy.scoreForUnit 纯函数） */
+  /** ★ L3 兵种分（D3：路由到该兵种管理器系数表） */
   scoreForType(type: SquadType, x: number, z: number, playerX = 0, playerZ = 0): number {
-    return scoreForUnit(type, this.scoringFeats(x, z, playerX, playerZ), this.liveWeights());
+    if (!this.tacticCtx) return -1e9;
+    return scoreFor(type, this.tacticCtx, x, z, playerX, playerZ);
   }
 
-  /** ★ SteerTable 扩展（重构 P1-2）：16 向候选按兵种打分；读实时玩家位置 */
+  /** ★ SteerTable 扩展：16 向候选按兵种打分；读实时玩家位置 */
   scoreTypeAt(type: string, x: number, z: number): number | null {
-    const f = this.scoringFeats(x, z, this.viewPX, this.viewPZ);
-    if (!f) return null;
-    return scoreForUnit(type as SquadType, f, this.liveWeights());
+    if (!this.tacticCtx) return null;
+    return scoreFor(type as SquadType, this.tacticCtx, x, z, this.viewPX, this.viewPZ);
   }
 
-  /** ★ parity 断言用：与 score[] 同一重建权重+烘焙玩家位复算 mixed（隔离权重/玩家两项陈旧差） */
+  /** ★ parity 断言用：同上下文复算 mixed */
   scoreMixedAt(x: number, z: number): number | null {
-    const src = this.scoringSrc;
-    if (!src) return null;
-    return scoreForUnit('mixed', this.scoringFeats(x, z, src.playerX, src.playerZ), src.weights);
+    if (!this.tacticCtx) return null;
+    return scoreFor('mixed', this.tacticCtx, x, z);
   }
 
   /** ★ 水域查询（允许站立；执行层在水中 → 上岸权重） */
@@ -763,7 +749,7 @@ export class SwarmData {
     this.postureSchedule = 0;
     this.postureProvocation = 0;
     this.postCache.clear();
-    this.scoringSrc = null;
+    this.tacticCtx = null;
     this.passTable.clear();
     this.fortify.clear();
     this.pushM = 0;

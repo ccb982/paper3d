@@ -11,6 +11,7 @@
 
 import { RoleManager, type RoleCtx } from './RoleManager';
 import type { SquadManager } from './SquadManager';
+import type { UnitTactics } from './UnitScoring';
 
 /** 近战策略参数（集中可调） */
 export const MELEE_POLICY = {
@@ -36,3 +37,26 @@ export class MeleeManager extends RoleManager {
     return 0;
   }
 }
+
+// ============================================================
+// ★ 近战战术系数表（D3：决策源下移进兵种管理器；只给"分/数据"，不产标签）
+//   谓词：**不走高地**（山顶/高原硬排除）；沿缝道推进；突击档迎舰坡加成
+// ============================================================
+
+/** 撤退档基值（本兵种自己的消费；× mul） */
+const MELEE_WITHDRAW = { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, high: 0, front: 0, near: 0 };
+
+/** ★ 近战（守备档）：守缝道/窄口、要掩体；不走高地 */
+export const MELEE_DEFENSE_TACTICS: UnitTactics = {
+  mul: { h: 1.0, dist: 1.1, threat: 1.0, cover: 1.4, gap: 1.6, narrow: 2.5, hidden: 0, high: 0, front: 0, near: 1.2 },
+  withdraw: MELEE_WITHDRAW,
+  avoidHigh: true,
+};
+
+/** ★ 近战（突击档）：推进（距离项随 p 压地形）；迎舰坡推进；不走高地 */
+export const MELEE_ASSAULT_TACTICS: UnitTactics = {
+  mul: { h: 0.8, dist: 1.3, threat: 1.6, cover: 0.7, gap: 1.2, narrow: 0.6, hidden: 0, high: 0, front: 0.5, near: 0.8 },
+  curves: { front: [[0.05, 0], [0.45, 0.1], [0.9, 0.3]] },
+  withdraw: MELEE_WITHDRAW,
+  avoidHigh: true,
+};

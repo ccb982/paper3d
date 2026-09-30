@@ -11,6 +11,7 @@
 
 import { RoleManager, type RoleCtx } from './RoleManager';
 import type { SquadManager } from './SquadManager';
+import type { UnitTactics } from './UnitScoring';
 
 /** 远程策略参数（集中可调） */
 export const RANGED_POLICY = {
@@ -36,3 +37,14 @@ export class RangedManager extends RoleManager {
     return 0;
   }
 }
+
+// ============================================================
+// ★ 远程战术系数表（D3：决策源下移进兵种管理器）
+//   配方：**喜高地**（h 项重）+ 掩体 + **藏点**（对舰遮挡加成）+ 射程带
+// ============================================================
+export const RANGED_TACTICS: UnitTactics = {
+  mul: { h: 2.2, dist: 1.0, threat: 1.0, cover: 1.2, gap: 0.8, narrow: 0.8, hidden: 0.6, high: 0, front: 0, near: 1.0 },
+  curves: { hidden: [[0.05, 0.05], [0.45, 0.15], [0.9, 0.25]] },
+  withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, high: 0, front: 0, near: 0 },
+  band: 1,
+};

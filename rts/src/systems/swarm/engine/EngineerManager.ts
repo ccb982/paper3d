@@ -24,6 +24,7 @@ import { THREAT_NEAR } from '../CoverGeom';
 import type { SquadManager } from './SquadManager';
 import { BUILDER_SQUAD_MAX } from '../SquadTable';
 import { FORTIFY_SECTORS } from '../FortifyPlanner';
+import type { UnitTactics } from './UnitScoring';
 
 /** 工兵策略参数（集中可调） */
 export const ENGINEER_POLICY = {
@@ -495,3 +496,12 @@ export class EngineerManager extends RoleManager {
     this.fortDbg.maxWork = 0; this.fortDbg.spawned = 0;
   }
 }
+
+// ============================================================
+// ★ 工兵战术系数表（D3 骨架）：远离接敌（靠舰侧施工）；件优先级梯队 = D5 接线
+// ============================================================
+export const ENGINEER_TACTICS: UnitTactics = {
+  mul: { h: 0.5, dist: 0.6, threat: 1.0, cover: 0.9, gap: 0.6, narrow: 0.7, hidden: 0, high: 0, front: 0, near: 0.5 },
+  withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, high: 0, front: 0, near: 0 },
+  away: 1,
+};

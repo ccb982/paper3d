@@ -22,6 +22,42 @@ export const FORTIFY_SECTORS = 8;
 /** 扇区需求达标线（need < 此值 = 该区已够工事；调参入口） */
 export const NEED_DONE = 0.6;
 
+// ============================================================
+// ★ 掩体/工事加成（原 TerrainScoring.buildBonus；D3 随整文件迁移至此）
+// ============================================================
+/** 工事网格边长（米；与地形块同网格） */
+export const CELL = 4;
+/** ★ 已建工事加成半径（米；用户定 2026-09-29）：**邻域铺开**——
+ *  只写自己那一格会让相邻 4m 格需求不降（实测：点=0.0、东4=18.9）→ 取点继续挑隔壁 → 工兵挨着造。 */
+export const COVER_SPREAD_R = 10;
+
+/** 掩体加成键（同 TERRAIN 网格） */
+export function bonusKey(x: number, z: number): string {
+  return `${Math.round(x / CELL)},${Math.round(z / CELL)}`;
+}
+
+/** ★ 掩体/制高加成表（扫描产物 + 已建掩体）：掩体 2.5 / 坑洞 1.2，按 COVER_SPREAD_R 线性铺开 */
+export function buildBonus(
+  plan: { posts: readonly { x: number; z: number; kind?: string }[] },
+  built: readonly { x: number; z: number; kind?: string }[],
+): Map<string, number> {
+  const bonus = new Map<string, number>();
+  for (const p of plan.posts) bonus.set(bonusKey(p.x, p.z), p.kind === 'cover' ? 1.2 : 0.8);
+  const stamp = (x: number, z: number, base: number): void => {
+    for (let dx = -COVER_SPREAD_R; dx <= COVER_SPREAD_R; dx += CELL) {
+      for (let dz = -COVER_SPREAD_R; dz <= COVER_SPREAD_R; dz += CELL) {
+        const d = Math.hypot(dx, dz);
+        if (d > COVER_SPREAD_R) continue;
+        const b = base * (1 - d / COVER_SPREAD_R);
+        const k = bonusKey(x + dx, z + dz);
+        if (b > (bonus.get(k) ?? 0)) bonus.set(k, b);
+      }
+    }
+  };
+  for (const c of built) stamp(c.x, c.z, c.kind === 'trench' ? 1.2 : 2.5);
+  return bonus;
+}
+
 export interface FortifyPick {
   x: number;
   z: number;

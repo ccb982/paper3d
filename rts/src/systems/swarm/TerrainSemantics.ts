@@ -1,185 +1,182 @@
 // ============================================================
-// TerrainSemantics —— L1 敌人地形语义表（静态·舰船锚；《RTS架构.md》§6.0）
+// TerrainSemantics —— 地形事实表（3 通道 · 不评分；《地形语义表设计.md》D2）
 // ============================================================
-// ★ 表管线位置（用户定 2026-09-25）：这是**消费层**，与可行性表 PassTable **正交**：
-//   地形真相源（Tiles/ChunkGenerator/Refinements.finalRuling）
-//     ├─► PassTable（能不能走：有向边/爬坡/坑墙）
-//     └─► TerrainSemantics（走哪儿更好：战术语义偏好）
-//   本表只影响"偏好"（短寻路 risk / TerrainScore 评分），**不决定可行性**。
-// 一句话：把高度场重分配成"战术语义"（高地/关口/低谷/迎背船坡/走廊/开阔/隐蔽…），
-//   语义区块用梯度≈0 的种子 + BFS 扩块（比 4m 格大）；锚 = 舰船落点，落地算一次。
-// 纯逻辑：只依赖 FieldSampler（高度/role）——游戏内接 TerrainSampler，自测接合成地形。
-// 分层：Primary 类（互斥，见 Sem）+ 正交标记（aspect 坡向、slope、width、losBlocked、concealed）。
-// 方向主轴（用户定调）：面向舰船的坡 = 迎船坡（偏进攻）；背对舰船的坡 = 背船坡（偏防御）。
-// 注意：L1 **只基于初始地形**（创建时高度场）；人造改动一律不算类——
-//  地形破坏 = 独立掩码模块 HoleMask（原始数据，不参与任何语义类）；
-//  敌人读的是另一个**动态坑洞公式表 HoleTable**（深×近打分，持续修改）。
-
+// ★ 表只给事实、不给分；评分合成归兵种管理器（D3 起）。
+//   C1 高度：rawH + h（3×3 平滑）——C2/C3 的构建输入，制高/攀爬直接消费
+//   C2 地形结构：kind（0 平地 / 1 坡面 / 2 山顶 / 3 高原 / 4 缝道）
+//                + slope（|∇h|，米/格）+ narrowW/narrowDir/narrowLong（缝道字段）
+//   C3 对舰关系：slopeDir（0 平/侧 / 1 迎舰 / 2 背舰）+ occluded（舰眼点 3D 遮挡）
+// ★ 窗口（用户定 2026-09-29）：**以舰为中心**的一大块区域（静态，换落点/舰动重建）；
+//   半径 = 罩住 舰↔落点 走廊（dist+60，上限 240；缺省 144）。舰眼点 = 舰处地形高 + 1.6m。
+// ★ 表外真源：可走=PassTable（只作长/短寻路校验）；水**可走**、**不挡视线**。
+//   isPassableAt 仅为旧消费兼容（非陡壁），新代码请用 cellAt/字段口 + PassTable。
 // ============================================================
 
 /** 采样接口：游戏内 = TerrainSampler + RasterMap 的适配器；自测 = 合成高度场 */
 export interface FieldSampler {
   heightAt(x: number, z: number): number;
-  roleAt(x: number, z: number): string;
+  /** 地形 role（可选；事实表只认高度——水不挡视线） */
+  roleAt?(x: number, z: number): string;
 }
 
-/** 语义格边长（米；4m = 地形块网格，与挖掘同源；HoleMask/HoleTable 共享） */
+/** 事实格边长（米；4m = 地形块网格，与挖掘同源；HoleMask/HoleTable 共享） */
 export const L1_CELL = 4;
-/** 语义表半径（米；覆盖落点周边） */
+/** 事实表缺省半径（米；舰心窗可扩到 R_MAX 以罩住落点走廊） */
 export const L1_R = 144;
-export const SIDE = Math.floor((L1_R * 2) / L1_CELL) + 1;
+/** 窗口半径上限（米；= main pickEnemyLanding 160m 走廊 + 边距） */
+export const R_MAX = 240;
+/** 数组静态上限边长（格）——按 R_MAX 分配，build 时取活动窗口 */
+const SIDE_MAX = Math.floor((R_MAX * 2) / L1_CELL) + 1;
 
-// ---- 判据常量（初版可调） ----
-/** 坡面梯度阈值（m/m；1.5m/4m ≈ 21°） */
-const SLOPE_GRAD = 1.5 / 4;
-/** 邻格可攀高差（米；与 SLOPE_DH 同源：超过则视为不可跨越） */
-const CLIMB_DH = 1.5;
-/** 陡壁梯度阈值（m/m；3.0m/4m ≈ 37°，与 TerrainScore.WALL_DH 同源） */
-const WALL_GRAD = 3.0 / 4;
-/** 平坦判定（m/m）：低于此值才可能算高台/低谷/开阔 */
-const FLAT_GRAD = 0.15;
-/** 坡向主轴有效下限（|n̂·d̂_ship| 小于此值 → 侧坡，不判迎/背） */
-const ASPECT_EPS = 0.25;
-/** 高台/低谷的相对邻域高差（米；邻域 = Chebyshev 半径 3 格 ≈ 12m 的外环均值） */
+// ---- 判据常量（初版可调；《地形语义表设计.md》§3.5） ----
+/** 可走格（判缝道/坡面用）：4m 邻差 ≤ 此值（非陡壁；= 通行坡面阈值 SLOPE_DH） */
+export const SLOPE_DH = 1.5;
+/** 陡壁：4m 邻差 > 此值（硬边界；全工程口径单源，SwarmDanger 引用） */
+export const WALL_DH = 3.0;
+/** 平台：3×3 高差 ≤ 此值（高地面要件） */
+const PLATFORM_DH = 0.75;
+/** 隆起：相对 12m 环均高 ≥ 此值（高地面要件） */
 const RELIEF_DH = 1.2;
-/** BFS 扩块：相邻格高差容差（米）——面积类（高地/低谷/开阔/隐蔽） */
-const REGION_DH = 0.75;
-/** BFS 扩块：窄类（关口/走廊/坡）容差放宽（沿走向会有正常落差） */
-const REGION_DH_NARROW = 1.5;
-/** 区块最小区数（不足 → 降为中性）；关口/走廊是窄特征，单独放宽 */
-const REGION_MIN_CELLS = 3;
-const REGION_MIN_CHOKE = 1;
-const REGION_MIN_CORRIDOR = 2;
+/** 坡面：|∇h| ≥ 此值（米/格；0.25 ≈ 0.0625 m/m） */
+const SLOPE_FACE = 0.25;
+/** 坡向有效下限（|下坡·d̂舰| 小于此值 → 平/侧） */
+const ASPECT_EPS = 0.25;
+/** 缝道：W ≤ 此值（格） */
+const NARROW_MAX = 2;
+/** 长条：沿缝轴 ≥ 此值（格） */
+const LONG_RUN = 6;
+/** 连续可走格扫描上限（格） */
+const RUN_CAP = 16;
+/** 山顶上限（格）：高地块面积 ≤ 此值 = 山顶；> 此值或含舰 = 高原 */
+const PEAK_MAX_CELLS = 60;
 /** LOS 采样步长（米）与净空（米） */
 const LOS_STEP = 2;
 const LOS_CLEAR = 0.2;
 /** 视点高度：舰船侧 +1.6m，目标格 +0.4m（人眼 vs 地面） */
 const EYE_SHIP = 1.6;
 const EYE_TARGET = 0.4;
-/** 可站宽度上限（轴向各 3 格，同 TerrainScore） */
-const WIDTH_CAP = 3;
-/** ★ 战壕判定：当前高比创建时基准低 ≥ 此值（米；一层挖掘 ≈0.2m） */
-// 挖掘深度阈值/掩码 = 独立模块 HoleMask；本模块不持有任何破坏数据
-/** 语义主类（互斥；数值顺序即调试显示顺序） */
-export const Sem = {
-  Neutral: 0,
-  HighGround: 1,   // 高地/制高
-  Hollow: 2,       // 低谷
-  FrontSlope: 3,   // 迎船坡（面向舰船 → 偏进攻）
-  ReverseSlope: 4, // 背船坡（背对舰船 → 偏防御）
-  Choke: 5,        // 关口/隘口
-  Corridor: 6,     // 走廊
-  Open: 7,         // 开阔地
-  Concealed: 8,    // 隐蔽接近/盲区（LOS 被地形遮挡；v1 合并为一类）
-  Cliff: 9,        // 陡壁（硬边界）
-  Water: 10,       // 水（可走）
-  Pit: 11,         // 坑（硬边界）
+
+/** ★ C2 地形结构：kind（互斥；数值即调试显示顺序） */
+export const KIND = {
+  Flat: 0,     // 平地
+  Face: 1,     // 坡面（山的腰/小起伏）
+  Peak: 2,     // 山顶（小面积高地面）
+  Plateau: 3,  // 高原（大面积高地面 / 含舰）
+  Gap: 4,      // 缝道（窄道；W/θ*/长条）
 } as const;
-export type Sem = typeof Sem[keyof typeof Sem];
+export type Kind = typeof KIND[keyof typeof KIND];
 
-export const SEM_NAMES: readonly string[] = [
-  '中性', '高地', '低谷', '迎船坡', '背船坡', '关口', '走廊', '开阔地', '隐蔽', '陡壁', '水', '坑',
-];
+export const KIND_NAMES: readonly string[] = ['平地', '坡面', '山顶', '高原', '缝道'];
 
-/** 参与 BFS 扩块的类（地形标记类不扩块：陡壁/水/坑/中性） */
-const REGION_CLASSES: readonly Sem[] = [
-  Sem.HighGround, Sem.Hollow, Sem.FrontSlope, Sem.ReverseSlope,
-  Sem.Choke, Sem.Corridor, Sem.Open, Sem.Concealed,
-];
+/** ★ C3 对舰关系：slopeDir */
+export const SLOPE_DIR = {
+  Flat: 0,   // 平/侧
+  Front: 1,  // 迎舰
+  Back: 2,   // 背舰
+} as const;
+export type SlopeDir = typeof SLOPE_DIR[keyof typeof SLOPE_DIR];
 
-/** 语义区块 */
-export interface SemRegion {
-  id: number;
-  cls: Sem;
-  area: number;
-  /** 代表点（高地=最高格 / 低谷=最低格 / 其他=离质心最近格） */
-  rx: number; rz: number;
-  /** 质心 */
-  cx: number; cz: number;
-  /** 平均坡向（n̂·d̂_ship；仅坡类有意义） */
-  aspect: number;
-  minH: number; maxH: number;
-  minX: number; maxX: number; minZ: number; maxZ: number;
-}
+export const SLOPE_DIR_NAMES: readonly string[] = ['平/侧', '迎舰', '背舰'];
 
-/** 构建统计（回读/评估用） */
+/** 事实表统计（回读/评估用） */
 export interface L1Stats {
   buildMs: number;
   side: number;
   cells: number;
-  passable: number;
-  hist: Record<string, number>;
-  regionCount: number;
-  regionsByClass: Record<string, { count: number; cells: number; maxArea: number }>;
-  losBlocked: number;
-  concealed: number;
+  kinds: Record<string, number>;
+  narrow: number;
+  narrowLong: number;
+  frontShip: number;
+  backShip: number;
+  occluded: number;
+  peakCells: number;
+  plateauCells: number;
   anchor: { x: number; z: number };
-}
-
-interface Acc {
-  area: number; sumX: number; sumZ: number; sumAspect: number; aspectN: number;
-  minH: number; maxH: number; minX: number; maxX: number; minZ: number; maxZ: number;
-  repX: number; repZ: number; repV: number;
+  ao: { x: number; z: number };
 }
 
 export class TerrainSemantics {
   private ready = false;
+  /** 窗口中心 = **舰**（C3 参照） */
   private ax = 0;
   private az = 0;
+  /** 落点（AO 锚；仅用于重建检测/回读） */
+  private aox = 0;
+  private aoz = 0;
+  /** 活动窗口半径与边长（格） */
+  private r = L1_R;
+  private n = 0;
   private sx = 0;
   private sz = 0;
   private buildMs = 0;
+  /** 舰眼点高度（舰处地形高 + EYE_SHIP） */
+  private eyeY = 0;
+  private samplerRef: FieldSampler | null = null;
 
-  /** 原始高度（采样） */
-  private readonly rawH = new Float32Array(SIDE * SIDE);
-  /** 平滑高度（3×3；梯度/坡向/LOS 用） */
-  private readonly h = new Float32Array(SIDE * SIDE);
-  private readonly cls = new Uint8Array(SIDE * SIDE);
-  private readonly regionId = new Int16Array(SIDE * SIDE);
-  /** n̂·d̂_ship（下坡方向 · 指向舰船；平地 = 0） */
-  private readonly aspect = new Float32Array(SIDE * SIDE);
-  private readonly slope = new Float32Array(SIDE * SIDE);
-  private readonly width = new Float32Array(SIDE * SIDE);
-  private readonly losBlocked = new Uint8Array(SIDE * SIDE);
-  private readonly passable = new Uint8Array(SIDE * SIDE);
-  private readonly water = new Uint8Array(SIDE * SIDE);
-  private regionsArr: SemRegion[] = [];
+  /** C1：原始高度（采样） */
+  private readonly rawH = new Float32Array(SIDE_MAX * SIDE_MAX);
+  /** C1：平滑高度（3×3；梯度/坡向/LOS 用） */
+  private readonly h = new Float32Array(SIDE_MAX * SIDE_MAX);
+  /** C2：结构 kind */
+  private readonly kind = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** C2：梯度幅值（米/格） */
+  private readonly slope = new Float32Array(SIDE_MAX * SIDE_MAX);
+  /** C2：缝道宽度（0=非缝道，1=4m，2=8m，3=更宽） */
+  private readonly narrowW = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** C2：缝道法线（0..3 四向；255=无） */
+  private readonly narrowDir = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** C2：长条缝道（沿缝轴 ≥6 格） */
+  private readonly narrowLong = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** C3：坡向（0 平/侧 / 1 迎舰 / 2 背舰） */
+  private readonly slopeDir = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** C3：对舰遮挡（地形；水不挡） */
+  private readonly occluded = new Uint8Array(SIDE_MAX * SIDE_MAX);
+  /** 兼容口：非陡壁（**不是**寻路可行性；可行性=PassTable） */
+  private readonly standable = new Uint8Array(SIDE_MAX * SIDE_MAX);
 
   get isReady(): boolean { return this.ready; }
+  /** 窗口中心（= 舰） */
   get anchor(): { x: number; z: number } { return { x: this.ax, z: this.az }; }
+  /** 落点 AO 锚（= 窗口半径依据） */
+  get aoAnchor(): { x: number; z: number } { return { x: this.aox, z: this.aoz }; }
 
   // ============================================================
-  // 构建（落地一次；换落点重算）
+  // 构建（落地/换落点/舰动一次）
+  // @param cx/cz  窗口中心 = **舰**（C3 参照；坡向与遮挡都相对它）
+  // @param radius 窗口半径（米；缺省 L1_R，罩住舰↔落点走廊用 dist+60）
+  // @param aoX/aoZ 落点 AO（仅记录；用于重建检测）
   // ============================================================
-  build(sampler: FieldSampler, cx: number, cz: number): void {
+  build(sampler: FieldSampler, cx: number, cz: number, radius = L1_R, aoX = cx, aoZ = cz): void {
     const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
     this.ax = cx; this.az = cz;
-    this.sx = cx - L1_R;
-    this.sz = cz - L1_R;
-    this.regionId.fill(-1);
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const i = iz * SIDE + ix;
+    this.aox = aoX; this.aoz = aoZ;
+    this.r = Math.max(L1_CELL, Math.min(R_MAX, radius));
+    this.n = Math.floor((this.r * 2) / L1_CELL) + 1;
+    this.sx = cx - this.r;
+    this.sz = cz - this.r;
+    this.samplerRef = sampler;
+    this.eyeY = sampler.heightAt(cx, cz) + EYE_SHIP;
+    const n = this.n, n2 = n * n;
+    this.kind.fill(KIND.Flat, 0, n2);
+    this.narrowW.fill(0, 0, n2);
+    this.narrowDir.fill(255, 0, n2);
+    this.narrowLong.fill(0, 0, n2);
+    this.slopeDir.fill(SLOPE_DIR.Flat, 0, n2);
+    this.occluded.fill(0, 0, n2);
+    this.standable.fill(1, 0, n2);
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const i = iz * n + ix;
         const x = this.sx + ix * L1_CELL + L1_CELL / 2;
         const z = this.sz + iz * L1_CELL + L1_CELL / 2;
-        const h = sampler.heightAt(x, z);
-        const role = sampler.roleAt(x, z);
-        this.rawH[i] = h;
-        this.water[i] = role === 'liquid' ? 1 : 0;
-        this.passable[i] = 1;
-        this.cls[i] = Sem.Neutral;
-        this.aspect[i] = 0;
+        this.rawH[i] = sampler.heightAt(x, z);
         this.slope[i] = 0;
-        this.width[i] = 0;
-        this.losBlocked[i] = 0;
       }
     }
     this.smoothHeights();
-    this.computeSlopeAspect();
-    this.computeLos();
-    const regions = this.classifyAndGrow();
-    this.regionsArr = regions;
-    // 坑洞/破坏 → HoleMask（独立模块）+ HoleTable（敌用动态表）；L1 只读初始地形
+    this.computeGradients();     // C1.h → |∇h|（C2）与坡向（C3）
+    this.computeLos();           // C3.occluded（舰眼点 3D）
+    this.computeStructure();     // C2：缝道 → 高地分档 → 坡面 → 平地
     this.ready = true;
     this.buildMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
   }
@@ -188,187 +185,186 @@ export class TerrainSemantics {
   // 读表 API
   // ============================================================
 
-  /** 主类（未就绪/表外 → Neutral）。**纯初始地形语义**——不受任何挖改/构造影响。 */
-  classAt(x: number, z: number): Sem {
+  /** ★ 统一事实查询口（表外/未就绪 → null；不评分） */
+  cellAt(x: number, z: number): {
+    h: number; kind: Kind; slope: number;
+    narrowW: number; narrowDir: number; narrowLong: boolean;
+    slopeDir: SlopeDir; occluded: boolean;
+  } | null {
     const i = this.indexAt(x, z);
-    return i < 0 ? Sem.Neutral : this.cls[i] as Sem;
+    if (i < 0) return null;
+    return {
+      h: this.h[i],
+      kind: this.kind[i] as Kind,
+      slope: this.slope[i],
+      narrowW: this.narrowW[i],
+      narrowDir: this.narrowDir[i],
+      narrowLong: this.narrowLong[i] === 1,
+      slopeDir: this.slopeDir[i] as SlopeDir,
+      occluded: this.occluded[i] === 1,
+    };
   }
 
-  /** 语义区块 id（未就绪/表外/无区块 → -1） */
-  regionIdAt(x: number, z: number): number {
+  /** C2 结构 kind（表外 → Flat） */
+  kindAt(x: number, z: number): Kind {
     const i = this.indexAt(x, z);
-    return i < 0 ? -1 : this.regionId[i];
+    return (i < 0 ? KIND.Flat : this.kind[i]) as Kind;
   }
 
-  /** 语义区块对象（无 → null） */
-  regionAt(x: number, z: number): SemRegion | null {
-    const id = this.regionIdAt(x, z);
-    return id < 0 ? null : (this.regionsArr[id] ?? null);
-  }
-
-  /** 全部区块（只读） */
-  regions(): readonly SemRegion[] { return this.regionsArr; }
-
-  /** 某类语义的区块（按面积降序） */
-  regionsOf(cls: Sem): SemRegion[] {
-    return this.regionsArr.filter((r) => r.cls === cls).sort((a, b) => b.area - a.area);
-  }
-
-  /** 坡向：下坡方向 · 指向舰船（[-1,1]；平地/表外 = 0）——>0 迎船坡、<0 背船坡 */
-  aspectAt(x: number, z: number): number {
-    const i = this.indexAt(x, z);
-    return i < 0 ? 0 : this.aspect[i];
-  }
-
-  /** 坡度（m/m；未就绪/表外 = 0） */
-  slopeAt(x: number, z: number): number {
+  /** C2 梯度幅值（米/格；表外 → 0） */
+  slopeMagAt(x: number, z: number): number {
     const i = this.indexAt(x, z);
     return i < 0 ? 0 : this.slope[i];
   }
 
-  /** 可站宽度 0~1（轴向连续可站格 / 4；同 TerrainScore 口径） */
-  widthAt(x: number, z: number): number {
+  /** C2 缝道宽度（0=非缝道，1=4m，2=8m，3=更宽；表外 → 0） */
+  narrowWidthAt(x: number, z: number): number {
     const i = this.indexAt(x, z);
-    return i < 0 ? 0 : this.width[i];
+    return i < 0 ? 0 : this.narrowW[i];
   }
 
-  /** 可走（非陡壁/坑；水可走） */
-  isPassableAt(x: number, z: number): boolean {
+  /** C2 缝道法线（0..3 四向；255=无；表外 → 255） */
+  narrowDirAt(x: number, z: number): number {
     const i = this.indexAt(x, z);
-    return i >= 0 && this.passable[i] === 1;
+    return i < 0 ? 255 : this.narrowDir[i];
   }
 
-  /** 对舰船方向被地形遮挡（LOS blocked） */
-  losBlockedAt(x: number, z: number): boolean {
+  /** C2 长条缝道（沿缝轴 ≥6 格） */
+  isNarrowLongAt(x: number, z: number): boolean {
     const i = this.indexAt(x, z);
-    return i >= 0 && this.losBlocked[i] === 1;
+    return i >= 0 && this.narrowLong[i] === 1;
   }
 
-  /** 隐蔽（可走 + LOS 被挡；偷袭/接近用） */
-  concealedAt(x: number, z: number): boolean {
+  /** C3 坡向（0 平/侧 / 1 迎舰 / 2 背舰；表外 → 0） */
+  slopeDirAt(x: number, z: number): SlopeDir {
     const i = this.indexAt(x, z);
-    return i >= 0 && this.passable[i] === 1 && this.losBlocked[i] === 1;
+    return (i < 0 ? SLOPE_DIR.Flat : this.slopeDir[i]) as SlopeDir;
   }
 
-  /** 平滑高度（语义判据用的那个 h；未就绪/表外 → NaN） */
+  /** C3 对舰遮挡（舰眼点 3D；水不挡） */
+  occludedAt(x: number, z: number): boolean {
+    const i = this.indexAt(x, z);
+    return i >= 0 && this.occluded[i] === 1;
+  }
+
+  /** 平滑高度（C1；未就绪/表外 → NaN） */
   smoothHeightAt(x: number, z: number): number {
     const i = this.indexAt(x, z);
     return i < 0 ? NaN : this.h[i];
   }
 
-  /** 下坡方向（单位向量；写入 out；平地/表外 → false）——坡向箭头的原始方向 */
-  downhillInto(x: number, z: number, out: { x: number; z: number }): boolean {
-    const i = this.indexAt(x, z);
-    if (i < 0) return false;
-    const ix = i % SIDE, iz = (i - ix) / SIDE;
-    const iL = ix > 0 ? i - 1 : i, iR = ix < SIDE - 1 ? i + 1 : i;
-    const iU = iz > 0 ? i - SIDE : i, iD = iz < SIDE - 1 ? i + SIDE : i;
-    const gx = (this.h[iR] - this.h[iL]) / (2 * L1_CELL);
-    const gz = (this.h[iD] - this.h[iU]) / (2 * L1_CELL);
-    const l = Math.hypot(gx, gz);
-    if (l < 1e-6) { out.x = 0; out.z = 0; return false; }
-    out.x = -gx / l; out.z = -gz / l;
-    return true;
-  }
-
-  /** 原始采样高度（回读/评估用；未就绪/表外 → NaN） */
+  /** 原始采样高度（C1 回读；未就绪/表外 → NaN） */
   rawHeightAt(x: number, z: number): number {
     const i = this.indexAt(x, z);
     return i < 0 ? NaN : this.rawH[i];
   }
 
+  /** 兼容口：非陡壁（**不是**寻路可行性；请用 PassTable + cellAt） */
+  isPassableAt(x: number, z: number): boolean {
+    const i = this.indexAt(x, z);
+    return i >= 0 && this.standable[i] === 1;
+  }
+
   /** 回读统计（评估用） */
   stats(): L1Stats {
-    const hist: Record<string, number> = {};
-    for (const n of SEM_NAMES) hist[n] = 0;
-    let passable = 0, losBlocked = 0, concealed = 0;
-    for (let i = 0; i < this.cls.length; i++) {
-      const c = this.cls[i] as Sem;
-      hist[SEM_NAMES[c]]++;
-      if (this.passable[i]) passable++;
-      if (this.losBlocked[i]) losBlocked++;
-      if (this.passable[i] && this.losBlocked[i]) concealed++;
-    }
-    const byCls: Record<string, { count: number; cells: number; maxArea: number }> = {};
-    for (const r of this.regionsArr) {
-      const key = SEM_NAMES[r.cls];
-      const rec = byCls[key] ?? (byCls[key] = { count: 0, cells: 0, maxArea: 0 });
-      rec.count++; rec.cells += r.area; rec.maxArea = Math.max(rec.maxArea, r.area);
+    const kinds: Record<string, number> = {};
+    for (const k of KIND_NAMES) kinds[k] = 0;
+    let narrow = 0, narrowLong = 0, frontShip = 0, backShip = 0, occluded = 0;
+    let peakCells = 0, plateauCells = 0;
+    const n2 = this.n * this.n;
+    for (let i = 0; i < n2; i++) {
+      const k = this.kind[i] as Kind;
+      kinds[KIND_NAMES[k]]++;
+      if (this.narrowW[i] >= 1 && this.narrowW[i] <= NARROW_MAX) narrow++;
+      if (this.narrowLong[i]) narrowLong++;
+      if (this.slopeDir[i] === SLOPE_DIR.Front) frontShip++;
+      else if (this.slopeDir[i] === SLOPE_DIR.Back) backShip++;
+      if (this.occluded[i]) occluded++;
+      if (k === KIND.Peak) peakCells++;
+      else if (k === KIND.Plateau) plateauCells++;
     }
     return {
       buildMs: Math.round(this.buildMs * 100) / 100,
-      side: SIDE, cells: SIDE * SIDE, passable,
-      hist, regionCount: this.regionsArr.length, regionsByClass: byCls,
-      losBlocked, concealed, anchor: { x: this.ax, z: this.az },
+      side: this.n, cells: n2,
+      kinds, narrow, narrowLong, frontShip, backShip, occluded,
+      peakCells, plateauCells,
+      anchor: { x: this.ax, z: this.az },
+      ao: { x: this.aox, z: this.aoz },
     };
   }
 
   clear(): void {
     this.ready = false;
-    this.regionsArr = [];
-    this.regionId.fill(-1);
+    this.samplerRef = null;
+    this.n = 0;
   }
 
   // ============================================================
-  // 内部：高度平滑 / 坡向 / LOS / 分类 / 扩块
+  // 内部：C1 平滑 → 梯度/坡向（C2/C3）→ LOS（C3）→ 结构（C2）
   // ============================================================
 
   private smoothHeights(): void {
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        let sum = 0, n = 0;
+    const n = this.n;
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        let sum = 0, cnt = 0;
         for (let dz = -1; dz <= 1; dz++) {
           const jz = iz + dz;
-          if (jz < 0 || jz >= SIDE) continue;
+          if (jz < 0 || jz >= n) continue;
           for (let dx = -1; dx <= 1; dx++) {
             const jx = ix + dx;
-            if (jx < 0 || jx >= SIDE) continue;
-            sum += this.rawH[jz * SIDE + jx]; n++;
+            if (jx < 0 || jx >= n) continue;
+            sum += this.rawH[jz * n + jx]; cnt++;
           }
         }
-        this.h[iz * SIDE + ix] = sum / n;
+        this.h[iz * n + ix] = sum / cnt;
       }
     }
   }
 
-  private computeSlopeAspect(): void {
+  /** 中心差分 → |∇h|（米/格，C2.slope）与坡向（C3.slopeDir；d̂ = 格 → 舰） */
+  private computeGradients(): void {
+    const n = this.n;
     const cx = this.ax, cz = this.az;
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const i = iz * SIDE + ix;
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const i = iz * n + ix;
         const iL = ix > 0 ? i - 1 : i;
-        const iRt = ix < SIDE - 1 ? i + 1 : i;
-        const iU = iz > 0 ? i - SIDE : i;
-        const iD = iz < SIDE - 1 ? i + SIDE : i;
-        const gx = (this.h[iRt] - this.h[iL]) / (2 * L1_CELL);
-        const gz = (this.h[iD] - this.h[iU]) / (2 * L1_CELL);
-        const s = Math.hypot(gx, gz);
+        const iR = ix < n - 1 ? i + 1 : i;
+        const iU = iz > 0 ? i - n : i;
+        const iD = iz < n - 1 ? i + n : i;
+        // ∇h（m/m）→ ×4 得米/格
+        const gx = (this.h[iR] - this.h[iL]) / 2 / L1_CELL;
+        const gz = (this.h[iD] - this.h[iU]) / 2 / L1_CELL;
+        const s = Math.hypot(gx, gz) * L1_CELL;
         this.slope[i] = s;
-        if (s < 1e-6) { this.aspect[i] = 0; continue; }
-        // 下坡方向 = -∇h
-        const dx = -gx / s, dz = -gz / s;
+        if (s < 1e-6) { this.slopeDir[i] = SLOPE_DIR.Flat; continue; }
+        // 下坡方向 = -∇h；与 d̂舰 的余弦（>0 朝舰）
+        const dx = -gx, dz = -gz;
         const x = this.sx + ix * L1_CELL + L1_CELL / 2;
         const z = this.sz + iz * L1_CELL + L1_CELL / 2;
         const tx = cx - x, tz = cz - z;
         const td = Math.hypot(tx, tz);
-        this.aspect[i] = td < 1 ? 0 : (dx * tx + dz * tz) / td;
+        if (td < 1) { this.slopeDir[i] = SLOPE_DIR.Flat; continue; }
+        const a = (dx * tx + dz * tz) / (Math.hypot(dx, dz) * td);
+        this.slopeDir[i] = a > ASPECT_EPS ? SLOPE_DIR.Front : a < -ASPECT_EPS ? SLOPE_DIR.Back : SLOPE_DIR.Flat;
       }
     }
   }
 
-  /** 舰船 → 每格的高度场 LOS（采样步进；被中间地形挡住 → blocked） */
+  /** 舰眼点 → 每格的高度场 3D LOS（原始高度采样；水不挡视线） */
   private computeLos(): void {
+    const n = this.n;
     const cx = this.ax, cz = this.az;
-    const ci = this.indexAt(cx, cz);
-    const eye = (ci < 0 ? 0 : this.h[ci]) + EYE_SHIP;
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const i = iz * SIDE + ix;
+    const eye = this.eyeY;
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const i = iz * n + ix;
         const x = this.sx + ix * L1_CELL + L1_CELL / 2;
         const z = this.sz + iz * L1_CELL + L1_CELL / 2;
         const dx = x - cx, dz = z - cz;
         const dist = Math.hypot(dx, dz);
-        if (dist < L1_CELL) { this.losBlocked[i] = 0; continue; }
+        if (dist < L1_CELL) { this.occluded[i] = 0; continue; }
         const target = this.h[i] + EYE_TARGET;
         const steps = Math.max(2, Math.ceil(dist / LOS_STEP));
         let blocked = 0;
@@ -378,190 +374,164 @@ export class TerrainSemantics {
           const lineH = eye + (target - eye) * t;
           if (this.heightNearestRaw(px, pz) > lineH + LOS_CLEAR) { blocked = 1; break; }
         }
-        this.losBlocked[i] = blocked;
+        this.occluded[i] = blocked;
       }
     }
   }
 
-  /** LOS 采样：用**原始高度**（平滑只服务坡向；窄缝/门洞必须保留真实落差） */
+  /** LOS 采样：用**原始高度**（平滑只服务坡向；窄缝/门洞必须保留真实落差）；
+   *  出窗（窗口边）→ 用采样器补真实高度 */
   private heightNearestRaw(px: number, pz: number): number {
+    const n = this.n;
     let ix = Math.round((px - this.sx - L1_CELL / 2) / L1_CELL);
     let iz = Math.round((pz - this.sz - L1_CELL / 2) / L1_CELL);
-    if (ix < 0) ix = 0; else if (ix >= SIDE) ix = SIDE - 1;
-    if (iz < 0) iz = 0; else if (iz >= SIDE) iz = SIDE - 1;
-    return this.rawH[iz * SIDE + ix];
+    if (ix < 0 || iz < 0 || ix >= n || iz >= n) {
+      return this.samplerRef ? this.samplerRef.heightAt(px, pz) : 0;
+    }
+    return this.rawH[iz * n + ix];
   }
 
   /** 外环（Chebyshev 半径 3 ≈ 12m）均值 */
   private ringMean(ix: number, iz: number): number {
-    let sum = 0, n = 0;
+    const n = this.n;
+    let sum = 0, cnt = 0;
     const r = 3;
     for (let dz = -r; dz <= r; dz++) {
       const jz = iz + dz;
-      if (jz < 0 || jz >= SIDE) continue;
+      if (jz < 0 || jz >= n) continue;
       for (let dx = -r; dx <= r; dx++) {
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
         const jx = ix + dx;
-        if (jx < 0 || jx >= SIDE) continue;
-        sum += this.rawH[jz * SIDE + jx]; n++;
+        if (jx < 0 || jx >= n) continue;
+        sum += this.rawH[jz * n + jx]; cnt++;
       }
     }
-    return n > 0 ? sum / n : this.rawH[iz * SIDE + ix];
+    return cnt > 0 ? sum / cnt : this.rawH[iz * n + ix];
   }
 
-  /** 分类 + BFS 扩块（返回区块表） */
-  private classifyAndGrow(): SemRegion[] {
-    // ---- 第一遍：可站判定 + 宽度 + 主类 ----
-    for (let iz = 0; iz < SIDE; iz++) {
-      for (let ix = 0; ix < SIDE; ix++) {
-        const i = iz * SIDE + ix;
-        if (this.water[i]) { this.cls[i] = Sem.Water; this.passable[i] = 1; }
-        // 陡壁：邻格最大高差超 WALL_GRAD
+  /** 可走格（判缝道/高地面用）：4m 邻差 ≤ SLOPE_DH */
+  private walkableFlat(): Uint8Array {
+    const n = this.n;
+    const out = new Uint8Array(n * n);
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const i = iz * n + ix;
+        const h = this.rawH[i];
         let dh = 0;
-        if (ix > 0) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i - 1]));
-        if (ix < SIDE - 1) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i + 1]));
-        if (iz > 0) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i - SIDE]));
-        if (iz < SIDE - 1) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i + SIDE]));
-        if (dh / L1_CELL > WALL_GRAD) { this.cls[i] = Sem.Cliff; this.passable[i] = 0; continue; }
-        if (this.cls[i] === Sem.Water) continue;   // 水：保持水类（可走）
-        // 宽度（轴向连续"可攀"格：可站 + 相对高差 ≤ CLIMB_DH；各侧上限 3）
-        const climbable = (jx: number, jz: number): boolean => {
-          if (!this.walkableQuick(jx, jz)) return false;
-          const j = jz * SIDE + jx;
-          return Math.abs(this.rawH[j] - this.rawH[i]) <= CLIMB_DH;
-        };
-        let lx = 0; while (lx < WIDTH_CAP && ix - (lx + 1) >= 0 && climbable(ix - (lx + 1), iz)) lx++;
-        let rx = 0; while (rx < WIDTH_CAP && ix + (rx + 1) < SIDE && climbable(ix + (rx + 1), iz)) rx++;
-        let uz = 0; while (uz < WIDTH_CAP && iz - (uz + 1) >= 0 && climbable(ix, iz - (uz + 1))) uz++;
-        let dz2 = 0; while (dz2 < WIDTH_CAP && iz + (dz2 + 1) < SIDE && climbable(ix, iz + (dz2 + 1))) dz2++;
-        const runX = 1 + lx + rx, runZ = 1 + uz + dz2;
-        const wCells = Math.min(runX, runZ);
-        this.width[i] = Math.min(1, wCells / 4);
-        // 两侧（窄轴首格之外）是否更高 ≥1.5m（关口/走廊的压迫感）
-        // ★ 几何量一律用**原始高度**（平滑只服务坡向；夹持/宽度/LOS 用 raw）
-        let flankXL = false, flankXR = false, flankZU = false, flankZD = false;
-        if (ix - (lx + 1) >= 0) { const j = i - (lx + 1); if (this.rawH[j] - this.rawH[i] >= 1.5) flankXL = true; }
-        if (ix + (rx + 1) < SIDE) { const j = i + (rx + 1); if (this.rawH[j] - this.rawH[i] >= 1.5) flankXR = true; }
-        if (iz - (uz + 1) >= 0) { const j = i - (uz + 1) * SIDE; if (this.rawH[j] - this.rawH[i] >= 1.5) flankZU = true; }
-        if (iz + (dz2 + 1) < SIDE) { const j = i + (dz2 + 1) * SIDE; if (this.rawH[j] - this.rawH[i] >= 1.5) flankZD = true; }
-        const flankX = flankXL || flankXR, flankZ = flankZU || flankZD;
-        const s = this.slope[i];
-        const relief = this.h[i] - this.ringMean(ix, iz);
-        const asp = this.aspect[i];
-        // 主类（优先级：关口 > 高地 > 低谷 > 坡 > 走廊 > 开阔 > 隐蔽）
-        // 关口：窄到 1 格，且**窄轴两侧都被抬高**（真夹持；单侧墙不算关口）
-        const choke = (runX <= 1 && flankXL && flankXR) || (runZ <= 1 && flankZU && flankZD);
-        if (s <= SLOPE_GRAD && choke) this.cls[i] = Sem.Choke;
-        else if (s <= FLAT_GRAD && relief >= RELIEF_DH) this.cls[i] = Sem.HighGround;
-        else if (s <= FLAT_GRAD && relief <= -RELIEF_DH) this.cls[i] = Sem.Hollow;
-        else if (s >= SLOPE_GRAD && Math.abs(asp) >= ASPECT_EPS) {
-          this.cls[i] = asp > 0 ? Sem.FrontSlope : Sem.ReverseSlope;
-        } else if (s <= SLOPE_GRAD && wCells >= 2 && wCells <= 4 && (flankX || flankZ)) this.cls[i] = Sem.Corridor;
-        else if (wCells >= 4) this.cls[i] = Sem.Open;
-        else if (this.losBlocked[i]) this.cls[i] = Sem.Concealed;
-        else this.cls[i] = Sem.Neutral;
-        // 隐蔽修正：开阔/走廊/中性被 LOS 挡住 → 隐蔽（坡类/高地保留原类，隐蔽走标记）
-        const c = this.cls[i] as Sem;
-        if (this.losBlocked[i] && (c === Sem.Open || c === Sem.Corridor || c === Sem.Neutral)) {
-          this.cls[i] = Sem.Concealed;
-        }
+        if (ix > 0) dh = Math.max(dh, Math.abs(this.rawH[i - 1] - h));
+        if (ix < n - 1) dh = Math.max(dh, Math.abs(this.rawH[i + 1] - h));
+        if (iz > 0) dh = Math.max(dh, Math.abs(this.rawH[i - n] - h));
+        if (iz < n - 1) dh = Math.max(dh, Math.abs(this.rawH[i + n] - h));
+        out[i] = dh <= SLOPE_DH ? 1 : 0;
       }
     }
-    // ---- 第二遍：BFS 扩块（同类 + 邻步高差容差；不足最小区数 → 降中性） ----
-    const regions: SemRegion[] = [];
-    const queue = new Int32Array(SIDE * SIDE);
-    const inRegion = new Uint8Array(SIDE * SIDE);
-    for (let seed = 0; seed < this.cls.length; seed++) {
-      const cls = this.cls[seed] as Sem;
-      if (!REGION_CLASSES.includes(cls) || inRegion[seed]) continue;
-      const tol = (cls === Sem.Choke || cls === Sem.Corridor
-        || cls === Sem.FrontSlope || cls === Sem.ReverseSlope) ? REGION_DH_NARROW : REGION_DH;
-      const minCells = cls === Sem.Choke ? REGION_MIN_CHOKE
-        : cls === Sem.Corridor ? REGION_MIN_CORRIDOR : REGION_MIN_CELLS;
-      let qh = 0, qt = 0, area = 0, aborted = false;
-      queue[qt++] = seed;
-      inRegion[seed] = 1;
-      const acc: Acc = {
-        area: 0, sumX: 0, sumZ: 0, sumAspect: 0, aspectN: 0,
-        minH: this.h[seed], maxH: this.h[seed],
-        minX: 1e9, maxX: -1e9, minZ: 1e9, maxZ: -1e9,
-        repX: 0, repZ: 0, repV: cls === Sem.Hollow ? 1e9 : -1e9,
-      };
-      while (qh < qt) {
-        const i = queue[qh++];
-        const ix = i % SIDE, iz = (i - ix) / SIDE;
-        const x = this.sx + ix * L1_CELL + L1_CELL / 2;
-        const z = this.sz + iz * L1_CELL + L1_CELL / 2;
-        area++;
-        acc.sumX += x; acc.sumZ += z;
-        if (this.slope[i] >= SLOPE_GRAD) { acc.sumAspect += this.aspect[i]; acc.aspectN++; }
-        const h = this.h[i];
-        if (h < acc.minH) acc.minH = h;
-        if (h > acc.maxH) acc.maxH = h;
-        if (x < acc.minX) acc.minX = x; if (x > acc.maxX) acc.maxX = x;
-        if (z < acc.minZ) acc.minZ = z; if (z > acc.maxZ) acc.maxZ = z;
-        const better = cls === Sem.Hollow ? h < acc.repV : h > acc.repV;
-        if (better) { acc.repV = h; acc.repX = x; acc.repZ = z; }
-        // 4 邻域扩散
-        for (const j of [ix > 0 ? i - 1 : -1, ix < SIDE - 1 ? i + 1 : -1,
-          iz > 0 ? i - SIDE : -1, iz < SIDE - 1 ? i + SIDE : -1]) {
-          if (j < 0 || inRegion[j]) continue;
-          if ((this.cls[j] as Sem) !== cls) continue;
-          if (Math.abs(this.h[j] - h) > tol) continue;
-          inRegion[j] = 1;
-          queue[qt++] = j;
-        }
-      }
-      if (area < minCells) {
-        // 不足最小面积：整体降为中性（不产生小区块噪声）
-        for (let k = 0; k < qt; k++) { this.cls[queue[k]] = Sem.Neutral; inRegion[queue[k]] = 0; }
-        aborted = true;
-      }
-      if (aborted) continue;
-      const id = regions.length;
-      for (let k = 0; k < qt; k++) this.regionId[queue[k]] = id;
-      const cxx = acc.sumX / area, czz = acc.sumZ / area;
-      // 代表点：高地/低谷已在遍历中取极值；其余 = 离质心最近格（近似用极值顶点兜底）
-      let rx = acc.repX, rz = acc.repZ;
-      if (cls !== Sem.HighGround && cls !== Sem.Hollow) {
-        rx = cxx; rz = czz;
-        let bestD = Infinity;
-        for (let k = 0; k < qt; k++) {
-          const j = queue[k];
-          const jx = this.sx + (j % SIDE) * L1_CELL + L1_CELL / 2;
-          const jz = this.sz + ((j - (j % SIDE)) / SIDE) * L1_CELL + L1_CELL / 2;
-          const d = (jx - cxx) ** 2 + (jz - czz) ** 2;
-          if (d < bestD) { bestD = d; rx = jx; rz = jz; }
-        }
-      }
-      regions.push({
-        id, cls, area,
-        rx, rz, cx: cxx, cz: czz,
-        aspect: acc.aspectN > 0 ? acc.sumAspect / acc.aspectN : 0,
-        minH: acc.minH, maxH: acc.maxH,
-        minX: acc.minX, maxX: acc.maxX, minZ: acc.minZ, maxZ: acc.maxZ,
-      });
-    }
-    return regions;
+    return out;
   }
 
-  /** 快速可站（宽度探测用；水算可站、硬边界/陡壁不算） */
-  private walkableQuick(ix: number, iz: number): boolean {
-    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return false;
-    const i = iz * SIDE + ix;
-    // 陡壁判定（与主分类同口径）
-    let dh = 0;
-    if (ix > 0) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i - 1]));
-    if (ix < SIDE - 1) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i + 1]));
-    if (iz > 0) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i - SIDE]));
-    if (iz < SIDE - 1) dh = Math.max(dh, Math.abs(this.h[i] - this.h[i + SIDE]));
-    return dh / L1_CELL <= WALL_GRAD;
+  /**
+   * C2 结构（判定次序：缝道 → 高地分档 → 坡面 → 平地）：
+   *   缝道   = 可走 ∧ W ≤2（W = min 四向连续可走格；CAP=16）；长条 = 沿缝轴 ≥6
+   *   高地面 = 可走 ∧ 平台（3×3 ≤0.75）∧ relief（−12m 环均 ≥1.2）
+   *   山顶/高原 = 高地块 4 邻接扩块：≤60 格=山顶；>60 或含舰=高原
+   *   坡面   = 非缝道 ∧ 非高地 ∧ |∇h| ≥0.25（米/格；小起伏也算）
+   *   平地   = 其余；不可走格（陡壁）不参与分档（kind 保持平地）
+   */
+  private computeStructure(): void {
+    const n = this.n;
+    // ① 陡壁（兼容口 standable；doc：不参与结构分档）
+    for (let iz = 0; iz < n; iz++) {
+      for (let ix = 0; ix < n; ix++) {
+        const i = iz * n + ix;
+        const h = this.rawH[i];
+        let dh = 0;
+        if (ix > 0) dh = Math.max(dh, Math.abs(this.rawH[i - 1] - h));
+        if (ix < n - 1) dh = Math.max(dh, Math.abs(this.rawH[i + 1] - h));
+        if (iz > 0) dh = Math.max(dh, Math.abs(this.rawH[i - n] - h));
+        if (iz < n - 1) dh = Math.max(dh, Math.abs(this.rawH[i + n] - h));
+        this.standable[i] = dh <= WALL_DH ? 1 : 0;
+      }
+    }
+    const walk = this.walkableFlat();
+    // ② 缝道：四向 run 取最小 = W、argmin = 法线；W≤2 = 缝道；沿缝轴 ≥6 = 长条
+    const DIRS: readonly (readonly [number, number])[] = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    const run = (ix: number, iz: number, dx: number, dz: number): number => {
+      let cnt = 1;
+      for (let s = 1; s <= RUN_CAP; s++) { const x = ix + dx * s, z = iz + dz * s; if (x < 0 || z < 0 || x >= n || z >= n || !walk[z * n + x]) break; cnt++; }
+      for (let s = 1; s <= RUN_CAP; s++) { const x = ix - dx * s, z = iz - dz * s; if (x < 0 || z < 0 || x >= n || z >= n || !walk[z * n + x]) break; cnt++; }
+      return cnt;
+    };
+    for (let iz = 1; iz < n - 1; iz++) {
+      for (let ix = 1; ix < n - 1; ix++) {
+        const i = iz * n + ix;
+        if (!walk[i] || !this.standable[i]) continue;
+        let wmin = 99, dm = 0;
+        for (let d = 0; d < 4; d++) { const rr = run(ix, iz, DIRS[d][0], DIRS[d][1]); if (rr < wmin) { wmin = rr; dm = d; } }
+        this.narrowW[i] = Math.min(3, wmin);
+        this.narrowDir[i] = dm;
+        if (wmin <= NARROW_MAX) {
+          this.kind[i] = KIND.Gap;
+          const pd = dm === 0 ? 1 : dm === 1 ? 0 : dm === 2 ? 3 : 2;
+          if (run(ix, iz, DIRS[pd][0], DIRS[pd][1]) >= LONG_RUN) this.narrowLong[i] = 1;
+        }
+      }
+    }
+    // ③ 高地面（排除已成缝道格）
+    const hi = new Uint8Array(n * n);
+    for (let iz = 1; iz < n - 1; iz++) {
+      for (let ix = 1; ix < n - 1; ix++) {
+        const i = iz * n + ix;
+        if (!walk[i] || this.kind[i] === KIND.Gap) continue;
+        let mx = 0;
+        for (let a = -1; a <= 1; a++) {
+          for (let c = -1; c <= 1; c++) {
+            if (!a && !c) continue;
+            mx = Math.max(mx, Math.abs(this.rawH[(iz + a) * n + (ix + c)] - this.rawH[i]));
+          }
+        }
+        if (mx > PLATFORM_DH) continue;
+        if (this.rawH[i] - this.ringMean(ix, iz) < RELIEF_DH) continue;
+        hi[i] = 1;
+      }
+    }
+    // ④ 扩块分档：≤60 格 = 山顶；>60 或含舰 = 高原
+    const seen = new Int32Array(n * n).fill(-1);
+    for (let s0 = 0; s0 < hi.length; s0++) {
+      if (!hi[s0] || seen[s0] >= 0) continue;
+      const q: number[] = [s0]; seen[s0] = s0;
+      const cells: number[] = [];
+      let hasAnchor = false;
+      while (q.length > 0) {
+        const c = q.pop()!;
+        cells.push(c);
+        const cx = c % n, cz = (c - cx) / n;
+        const wx = this.sx + cx * L1_CELL + L1_CELL / 2, wz = this.sz + cz * L1_CELL + L1_CELL / 2;
+        if (Math.abs(wx - this.ax) <= L1_CELL && Math.abs(wz - this.az) <= L1_CELL) hasAnchor = true;
+        for (const [nx, nz] of [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]]) {
+          if (nx < 0 || nz < 0 || nx >= n || nz >= n) continue;
+          const j = nz * n + nx;
+          if (hi[j] && seen[j] < 0) { seen[j] = s0; q.push(j); }
+        }
+      }
+      const k = hasAnchor || cells.length > PEAK_MAX_CELLS ? KIND.Plateau : KIND.Peak;
+      for (const c of cells) this.kind[c] = k;
+    }
+    // ⑤ 坡面 → 平地
+    for (let iz = 1; iz < n - 1; iz++) {
+      for (let ix = 1; ix < n - 1; ix++) {
+        const i = iz * n + ix;
+        if (this.kind[i] !== KIND.Flat) continue;
+        if (!walk[i] || !this.standable[i]) continue;
+        if (this.slope[i] >= SLOPE_FACE) this.kind[i] = KIND.Face;
+      }
+    }
   }
 
   private indexAt(x: number, z: number): number {
+    const n = this.n;
+    if (n <= 1) return -1;
     const ix = Math.round((x - this.sx - L1_CELL / 2) / L1_CELL);
     const iz = Math.round((z - this.sz - L1_CELL / 2) / L1_CELL);
-    if (ix < 0 || iz < 0 || ix >= SIDE || iz >= SIDE) return -1;
-    return iz * SIDE + ix;
+    if (ix < 0 || iz < 0 || ix >= n || iz >= n) return -1;
+    return iz * n + ix;
   }
 }
