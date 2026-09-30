@@ -11,26 +11,29 @@
 
 export type CoverLazyVariant = 'cover' | 'wall';
 
+/** ★ D5：战术件正面朝向点（岗哨斜件 45°/封口横向；缺省 = 模式层朝舰） */
+export type CoverFace = { x: number; z: number } | undefined;
+
 export class CoverLazy {
-  /** 待物化（只存数据：位置+类型） */
-  private readonly pending: { x: number; z: number; v: CoverLazyVariant }[] = [];
+  /** 待物化（只存数据：位置+类型+朝向） */
+  private readonly pending: { x: number; z: number; v: CoverLazyVariant; face?: { x: number; z: number } }[] = [];
   /** 探针：queued = 只记数据次数 / realized = 物化次数 */
   readonly dbg = { queued: 0, realized: 0 };
 
-  constructor(private readonly build: (x: number, z: number, v: CoverLazyVariant) => void) {}
+  constructor(private readonly build: (x: number, z: number, v: CoverLazyVariant, face?: { x: number; z: number }) => void) {}
 
   get pendingCount(): number {
     return this.pending.length;
   }
 
   /** 建造入口：近 → 立即物化；远 → 只记数据（懒更新） */
-  queueOrBuild(x: number, z: number, v: CoverLazyVariant, px: number, pz: number, cx: number, cz: number, r: number): void {
+  queueOrBuild(x: number, z: number, v: CoverLazyVariant, px: number, pz: number, cx: number, cz: number, r: number, face?: { x: number; z: number }): void {
     const d = Math.min(Math.hypot(x - px, z - pz), Math.hypot(x - cx, z - cz));
     if (d <= r) {
-      this.build(x, z, v);
+      this.build(x, z, v, face);
       this.dbg.realized++;
     } else {
-      this.pending.push({ x, z, v });
+      this.pending.push({ x, z, v, face });
       this.dbg.queued++;
     }
   }
@@ -48,7 +51,7 @@ export class CoverLazy {
       const d = Math.min(Math.hypot(c.x - px, c.z - pz), Math.hypot(c.x - cx, c.z - cz));
       if (d > r) continue;
       this.pending.splice(i, 1);
-      this.build(c.x, c.z, c.v);
+      this.build(c.x, c.z, c.v, c.face);
       this.dbg.realized++;
       budget--;
     }

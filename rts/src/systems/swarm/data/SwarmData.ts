@@ -50,8 +50,9 @@ export class SwarmData {
   /** ★★ 敌用动态坑洞公式表（掩码 → 深×近打分；2Hz 持续重排） */
   readonly holeTable = new HoleTable();
   private holeClock = 0; private coverTag = '';   // 工事表节拍 / 掩体集合指纹
-  /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)） */
-  buildCover: ((x: number, z: number, variant: 'cover' | 'wall') => void) | null = null;
+  /** ★ 工程阶段（S1）：造掩体端口（模式层注入；生成 CoverEntity(owner:'enemy', poster:false)）
+   *  face = 正面朝向点（D5 战术件：岗哨斜件 45° / 封口横向；缺省 = 朝舰） */
+  buildCover: ((x: number, z: number, variant: 'cover' | 'wall', face?: { x: number; z: number }) => void) | null = null;
   /** ★ S1：挖战壕端口（模式层注入；每次一块 4×4m、1 层） */
   digTrench: ((x: number, z: number) => void) | null = null;
   private spawnMob: ((x: number, z: number, role: UnitRole, elite?: boolean, near?: boolean) => void) | null = null;
@@ -461,6 +462,8 @@ export class SwarmData {
     return {
       band: () => { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; },
       ship: () => ({ x: this.lastShipX, z: this.lastShipZ }),
+      /** ★ D5 工兵战术：事实表读取口（山顶岗哨/缝道封口） */
+      facts: () => this.semantics,
       // ★ 舰船高地排除（用户定 2026-09-26）：高地（含其上坑洞）不算防区 → 不发工兵件
       needAt: (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)),
       // ★ 取件门（用户定 2026-09-25）：长途 BFS；短程 LOS 快筛——唯一实现在 `SwarmSystem.reachFrom`
@@ -480,7 +483,7 @@ export class SwarmData {
         return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
       },
       coversNear: (x: number, z: number, r: number) => this.fortify.countNear(x, z, r),
-      cover: (x, z, v) => { this.fortify.recordBuilt(x, z, 'cover'); this.buildCover?.(x, z, v); },
+      cover: (x, z, v, face) => { this.fortify.recordBuilt(x, z, 'cover'); this.buildCover?.(x, z, v, face); },
       // ★ 补队（用户定）：工兵缺队 → 请求生成施工兵（统一编制机制）
       requestSpawn: (role, x, z) => {
         if (role !== 'builder' || !this.spawnBuilder) return false;

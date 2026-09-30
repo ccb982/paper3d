@@ -276,9 +276,9 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
   });
   // ★ 掩体朝向修正（用户定 2026-09-25）：正面朝**舰船**（威胁来源），而非登陆点地形来向
   // ★ 懒更新（用户定 2026-09-27）：远处只记数据；玩家/相机走近（≤L3_RADIUS）再物化实体
-  const coverLazy = new CoverLazy((x, z, v) =>
-    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, { x: spawn.x, z: spawn.z }));
-  swarm.data.buildCover = (x, z, v) => coverLazy.queueOrBuild(x, z, v, spawn.x, spawn.z, cam.tx, cam.tz, SWARM.L3_RADIUS);
+  const coverLazy = new CoverLazy((x, z, v, face) =>
+    buildEnemyCover(entities, scene, x, raster.surfaceHeightAtFor(x, z, 0), z, v, swarm.data.defensePlan, face ?? { x: spawn.x, z: spawn.z }));
+  swarm.data.buildCover = (x, z, v, face) => coverLazy.queueOrBuild(x, z, v, spawn.x, spawn.z, cam.tx, cam.tz, SWARM.L3_RADIUS, face);
   // ★ 事态环形夹取：**引擎令 + 队长令同门**——新引擎 OrderValidator ① + 队长核 clampRing 端口
   //   （旧 `tactics.ringClamp` 写口已删；环是单源：commander.clampToRing）
 

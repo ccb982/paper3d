@@ -25,6 +25,7 @@ import type { SquadManager } from './SquadManager';
 import { BUILDER_SQUAD_MAX } from '../SquadTable';
 import { FORTIFY_SECTORS } from '../FortifyPlanner';
 import type { UnitTactics } from './UnitScoring';
+import { KIND, SLOPE_DIR, type TerrainSemantics } from '../TerrainSemantics';
 
 /** 工兵策略参数（集中可调） */
 export const ENGINEER_POLICY = {
@@ -52,7 +53,30 @@ export const ENGINEER_POLICY = {
   SQUAD_QUOTA: 3,
   /** ★ 分区无件空转超时（秒）→ 换区（用户定 2026-09-26） */
   ZONE_IDLE_S: 15,
+  // ---- ★ 工兵战术实施（D5；用户定 2026-09-30：消费地形语义 → 战术决策） ----
+  /** 岗哨三件：斜件后退（米） */
+  SENTRY_BACK: 3.5,
+  /** 岗哨三件：斜件左右（米） */
+  SENTRY_SIDE: 2.5,
+  /** 岗哨判定：朝舰缘搜索半径（格；"高地面内向舰侧骤降边缘带 ≤2 格"） */
+  SENTRY_EDGE_CELLS: 2,
+  /** 战术扫描：半径（米）与步长（米）——岗哨=山顶 / 封口=缝道 */
+  TACTIC_SCAN_R: 110,
+  TACTIC_SCAN_STEP: 8,
+  /** 战术扫描重算间隔（秒） */
+  TACTIC_RESCAN_S: 3,
+  /** 每拍每队最多试几个候选（可达门逐个测） */
+  TACTIC_MAX_TRY: 8,
 } as const;
+
+/** ★ 工兵件数据（D5 战术实施产物）：位置 + 正面朝向点 */
+export interface EngineerPiece {
+  x: number;
+  z: number;
+  /** 正面朝向点（缺省 = 参照舰/玩家） */
+  face?: { x: number; z: number };
+  tactic: 'sentry' | 'choke' | 'cover' | 'trench';
+}
 
 /** 建造位置查询 / 施工落地端口（由接线层注入；工兵管理器只消费数据） */
 export interface EngineerPort {
@@ -82,8 +106,10 @@ export interface EngineerPort {
   ): { x: number; z: number; score: number } | null;
   /** 此点还能再挖（坑底硬阈值未到） */
   canDig(x: number, z: number): boolean;
-  /** 造掩体（真源端口） */
-  cover(x: number, z: number, variant: 'cover' | 'wall'): void;
+  /** 造掩体（真源端口；face = 正面朝向点；缺省 = 朝舰） */
+  cover(x: number, z: number, variant: 'cover' | 'wall', face?: { x: number; z: number }): void;
+  /** ★ 地形事实读取口（D5 工兵战术：山顶岗哨/缝道封口；未接 = 退回常规件） */
+  facts?(): TerrainSemantics | null;
   /** ★ §3.C 总攻掩护施工（用户定 2026-09-29）：引擎给的**动态建造点**（查询保护对象位置得出）；
    *  null = 非保护状态（走原查询机制） */
   wardSpot?(id: number): { x: number; z: number } | null;
@@ -113,8 +139,8 @@ const TAU = Math.PI * 2;
 const secOfAngle = (ang: number): number => Math.floor((ang / TAU) * FORTIFY_SECTORS) % FORTIFY_SECTORS;
 
 export class EngineerManager extends RoleManager {
-  /** 各队当前施工点（件；含发放时刻） */
-  private readonly spots = new Map<number, { x: number; z: number; score: number; at: number }>();
+  /** 各队当前施工点（件；含发放时刻 + ★ 战术件队列） */
+  private readonly spots = new Map<number, { x: number; z: number; score: number; at: number; plan?: EngineerPiece[] }>();
   /** ★ 件预约表（全局唯一：格点 → 队；防多队同点） */
   private readonly reserved = new Map<string, number>();
   /** 各队施工计时（秒） */
@@ -141,7 +167,7 @@ export class EngineerManager extends RoleManager {
   private readonly zoneTaken = new Set<number>();
   private zoneCursor = 0;
   /** 施工探针（G9） */
-  readonly fortDbg = { spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, spawned: 0, last: '' };
+  readonly fortDbg = { spots: 0, working: 0, idle: 0, built: 0, maxWork: 0, spawned: 0, sentry: 0, choke: 0, last: '' };
   /** ★ 按队完工计数（探针：验证“每队真的开工”） */
   readonly builtBy = new Map<number, number>();
 
@@ -169,10 +195,115 @@ export class EngineerManager extends RoleManager {
     const dx = ref.x - s.x, dz = ref.z - s.z;
     const d = Math.hypot(dx, dz);
     if (d < 1e-3) return { x: s.x, z: s.z };
-    return { x: s.x + (dx / d) * ENGINEER_POLICY.COVER_BUILD_HIDE, z: s.z + (dz / d) * ENGINEER_POLICY.COVER_BUILD_HIDE };
+        return { x: s.x + (dx / d) * ENGINEER_POLICY.COVER_BUILD_HIDE, z: s.z + (dz / d) * ENGINEER_POLICY.COVER_BUILD_HIDE };
   }
 
-  /** ★ 建造 = 独立机制（用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
+  // ============================================================
+  // ★ 工兵战术实施（D5；用户定 2026-09-30）
+  //   消费地形事实（真相源）→ 战术件数据：
+  //     ① 岗哨（最高）：山顶 ∧ 朝舰缘 → 三件（前件朝舰 / 两斜件后退+左右+45°）
+  //     ② 缝道封口（次高）：缝道 ∧ W≤2 → 单件，正面=缝道轴向（朝舰侧）
+  //     ③ 常规防御件（兜底）：走原 need 查询
+  // ============================================================
+
+  /** ① 岗哨三件：山顶 ∧ ±2 格内存在迎舰坡面 → 前件 + 两斜件 */
+  private sentryPieces(facts: TerrainSemantics, x: number, z: number, ship: { x: number; z: number }): EngineerPiece[] | null {
+    const c = facts.cellAt(x, z);
+    if (!c || c.kind !== KIND.Peak) return null;
+    // 朝舰缘：±2 格内有迎舰坡面（向舰侧骤降）
+    let edge = false;
+    for (let dz = -ENGINEER_POLICY.SENTRY_EDGE_CELLS; dz <= ENGINEER_POLICY.SENTRY_EDGE_CELLS && !edge; dz++) {
+      for (let dx = -ENGINEER_POLICY.SENTRY_EDGE_CELLS; dx <= ENGINEER_POLICY.SENTRY_EDGE_CELLS && !edge; dx++) {
+        const e = facts.cellAt(x + dx * 4, z + dz * 4);
+        if (e && e.slope >= 0.25 && e.slopeDir === SLOPE_DIR.Front) edge = true;
+      }
+    }
+    if (!edge) return null;
+    const ux0 = ship.x - x, uz0 = ship.z - z;
+    const L = Math.hypot(ux0, uz0) || 1;
+    const ux = ux0 / L, uz = uz0 / L;          // 朝舰单位
+    const rx = -uz, rz = ux;                    // 右手向
+    const B = ENGINEER_POLICY.SENTRY_BACK, W = ENGINEER_POLICY.SENTRY_SIDE, H = 10;
+    const rot = (vx: number, vz: number, a: number): { x: number; z: number } =>
+      ({ x: vx * Math.cos(a) - vz * Math.sin(a), z: vx * Math.sin(a) + vz * Math.cos(a) });
+    const lf = rot(ux, uz, Math.PI / 4), rf = rot(ux, uz, -Math.PI / 4);
+    const lx = x - ux * B - rx * W, lz = z - uz * B - rz * W;
+    const gx = x - ux * B + rx * W, gz = z - uz * B + rz * W;
+    return [
+      { x, z, face: { x: x + ux * H, z: z + uz * H }, tactic: 'sentry' },
+      { x: lx, z: lz, face: { x: lx + lf.x * H, z: lz + lf.z * H }, tactic: 'sentry' },
+      { x: gx, z: gz, face: { x: gx + rf.x * H, z: gz + rf.z * H }, tactic: 'sentry' },
+    ];
+  }
+
+  /** ② 缝道封口件：缝道 ∧ W≤2 → 单件，正面=缝道轴向朝舰侧（横跨车道堵路） */
+  private chokePiece(facts: TerrainSemantics, x: number, z: number, ship: { x: number; z: number }): EngineerPiece | null {
+    const c = facts.cellAt(x, z);
+    if (!c || c.kind !== KIND.Gap || c.narrowW < 1 || c.narrowW > 2) return null;
+    const DIRS: readonly (readonly [number, number])[] = [[1, 0], [0, 1], [1, 1], [1, -1]];
+    const d = c.narrowDir;
+    if (d < 0 || d > 3) return null;
+    const ax = d === 0 ? 1 : d === 1 ? 0 : d === 2 ? 3 : 2;   // 法线 → 轴向（垂直向）
+    let vx = DIRS[ax][0], vz = DIRS[ax][1];
+    if (vx * (ship.x - x) + vz * (ship.z - z) < 0) { vx = -vx; vz = -vz; }   // 朝舰侧
+    return { x, z, face: { x: x + vx * 10, z: z + vz * 10 }, tactic: 'choke' };
+  }
+
+  /** 点 → 件队列（岗哨 > 封口 > 常规） */
+  private planFor(port: EngineerPort, x: number, z: number): EngineerPiece[] {
+    const facts = port.facts?.() ?? null;
+    if (facts) {
+      const ship = port.ship();
+      const sentry = this.sentryPieces(facts, x, z, ship);
+      if (sentry) return sentry;
+      const choke = this.chokePiece(facts, x, z, ship);
+      if (choke) return [choke];
+    }
+    return [{ x, z, tactic: 'cover' }];
+  }
+
+  /** 战术候选扫描（缓存；每 TACTIC_RESCAN_S 秒重扫一次）：岗哨=山顶 / 封口=缝道 */
+  private tacticScanAt = -1;
+  private tacticCache: { sentry: { x: number; z: number }[]; choke: { x: number; z: number }[] } = { sentry: [], choke: [] };
+  private refreshTactics(port: EngineerPort, ship: { x: number; z: number }, now: number): void {
+    if (now - this.tacticScanAt < ENGINEER_POLICY.TACTIC_RESCAN_S) return;
+    this.tacticScanAt = now;
+    const facts = port.facts?.() ?? null;
+    if (!facts) { this.tacticCache = { sentry: [], choke: [] }; return; }
+    const sentry: { x: number; z: number }[] = [];
+    const choke: { x: number; z: number }[] = [];
+    const R = ENGINEER_POLICY.TACTIC_SCAN_R, ST = ENGINEER_POLICY.TACTIC_SCAN_STEP;
+    for (let dz = -R; dz <= R; dz += ST) {
+      for (let dx = -R; dx <= R; dx += ST) {
+        const x = ship.x + dx, z = ship.z + dz;
+        const c = facts.cellAt(x, z);
+        if (!c) continue;
+        if (c.kind === KIND.Peak) { if (this.sentryPieces(facts, x, z, ship)) sentry.push({ x, z }); }
+        else if (c.kind === KIND.Gap && c.narrowW >= 1 && c.narrowW <= 2) choke.push({ x, z });
+      }
+    }
+    this.tacticCache = { sentry, choke };
+  }
+
+  /** 本队取战术件（岗哨优先、次封口；可达门逐个测；全不可达 → null 落常规） */
+  private pickTactic(port: EngineerPort, id: number, s: { x: number; z: number }, ship: { x: number; z: number }, now: number): EngineerPiece[] | null {
+    this.refreshTactics(port, ship, now);
+    const exclude = (x: number, z: number): boolean => this.built.has(keyOf(x, z)) || this.reserved.has(keyOf(x, z));
+    const tryList = (list: { x: number; z: number }[]): EngineerPiece[] | null => {
+      const arr = list.filter((p) => !exclude(p.x, p.z))
+        .sort((a, b) => Math.hypot(a.x - s.x, a.z - s.z) - Math.hypot(b.x - s.x, b.z - s.z));
+      const n = Math.min(arr.length, ENGINEER_POLICY.TACTIC_MAX_TRY);
+      for (let i = 0; i < n; i++) {
+        if (!port.canReach(id, arr[i].x, arr[i].z)) continue;
+        return this.planFor(port, arr[i].x, arr[i].z);
+      }
+      return null;
+    };
+    return tryList(this.tacticCache.sentry) ?? tryList(this.tacticCache.choke);
+  }
+
+  /** ★ 建造 = 独立机制
+（用户定 2026-09-29；类似开火）：**位置来源（查询/保护对象）与本机制解耦**——
    *  到 WORK_R 就计时（不驱动移动）；掩体 `COVER_TIME_S` / 战壕 `TRENCH_TIME_S`（每 2s 一遍 ×5）。
    *  返回 'done' = 本次件落成（由调用方做"预约释放/落成回执"等位置侧记账）。 */
   private buildAt(
@@ -187,9 +318,10 @@ export class EngineerManager extends RoleManager {
     this.fortDbg.maxWork = Math.max(this.fortDbg.maxWork, t);
     if (kind === 'cover') {
       if (t < ENGINEER_POLICY.COVER_TIME_S) return 'working';
-      // ★ 落位（用户定 2026-09-29）：**当前位置向参照侧 1.6m**
-      const bp = this.coverSpot(port, s);
-      port.cover(bp.x, bp.z, 'cover');
+      // ★ 落位：战术件（岗哨/封口）按**件数据**（含正面朝向）；常规=当前位置向参照侧 1.6m（用户定 2026-09-29）
+      const piece = this.spots.get(id)?.plan?.[0];
+      const bp = piece ? { x: piece.x, z: piece.z } : this.coverSpot(port, s);
+      port.cover(bp.x, bp.z, 'cover', piece?.face);
       port.markDirty(bp.x, bp.z, 12);
       this.built.add(keyOf(bp.x, bp.z));
       this.built.add(keyOf(spot.x, spot.z));   // ★ 件点也记（防同点再取件；用户定 2026-09-29）
@@ -346,8 +478,12 @@ export class EngineerManager extends RoleManager {
         const inSec = sec >= 0 && secOfAngle(ang) === sec;
         const arrived = Math.hypot(s.x - spot.x, s.z - spot.z) <= ENGINEER_POLICY.WORK_R;
         // ★ 复检：建成 / need 无效 / 出本区 / 不可达 → 换件（**不再因“出带”判死**：分到区就去造）
-        const bad = this.built.has(k) || port.needAt(spot.x, spot.z) === null
-          || !inSec || !port.canReach(id, spot.x, spot.z);
+        //   战术件（岗哨/封口）跳过 needAt/扇区复检（不由 need 驱动；只守：未建 + 可达）
+        const tactical = spot.plan?.[0] !== undefined && spot.plan[0].tactic !== 'cover';
+        const bad = this.built.has(k)
+          || (!tactical && port.needAt(spot.x, spot.z) === null)
+          || (!tactical && !inSec)
+          || !port.canReach(id, spot.x, spot.z);
         void arrived;
         if (bad) {
           this.releaseFor(id); this.spots.delete(id); this.work.delete(id); this.digs.delete(id);
@@ -364,8 +500,11 @@ export class EngineerManager extends RoleManager {
         // ★ noNewBuild（事态 0.45 后停新增）只约束**常规带**；扩带兜底不受限（用户定 2026-09-27：
         //   "没件就往舰船方向继续造，或者往防区外造"——工兵不许持令站桩发呆被判官收）。
         const canNew = !port.noNewBuild() || !this.builtOnce.has(id);
-        let pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
-        if (!pick) {
+        // ★ 战术件优先（D5：岗哨→封口→常规）；全不可达/无候选 → 落原 need 查询
+        const tact = canNew ? this.pickTactic(port, id, s, ship, now) : null;
+        let pick: { x: number; z: number; score: number } | null = null;
+        if (!tact) pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
+        if (!tact && !pick) {
           const tryBand = (lo: number, hi: number): { x: number; z: number; score: number } | null => {
             if (hi - lo < 6) return null;
             port.refreshSector?.(s.x, s.z, lo, hi);
@@ -374,7 +513,15 @@ export class EngineerManager extends RoleManager {
           pick = tryBand(Math.max(10, band.rLo - 24), band.rLo)
             ?? tryBand(band.rHi, band.rHi + 36);
         }
-        if (pick) {
+        if (tact) {
+          spot = { x: tact[0].x, z: tact[0].z, score: 999, at: now, plan: tact };   // ★ 战术件队列
+          this.spots.set(id, spot);
+          this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
+          if (tact[0].tactic === 'sentry') this.fortDbg.sentry++;
+          else if (tact[0].tactic === 'choke') this.fortDbg.choke++;
+          this.dbg.last = `#${id} 战术件 ${tact[0].tactic} @${spot.x | 0},${spot.z | 0}`;
+          this.work.delete(id); this.digs.delete(id);
+        } else if (pick) {
           spot = { x: pick.x, z: pick.z, score: pick.score, at: now };   // 掩体点=纯行军目标
           this.spots.set(id, spot);
           this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
@@ -393,15 +540,28 @@ export class EngineerManager extends RoleManager {
         // ★ 选型（用户定 2026-09-26/29）：总攻全掩体；**区域掩体密度≥上限 → 改挖战壕**；
         //   其余按**循环：掩体 → 坑洞 → 掩体 …（1:1，每队各记各的账）**——造完一件换下一种。
         const dense = (port.coversNear?.(spot.x, spot.z, ENGINEER_POLICY.COVER_DENSITY_R) ?? 0) >= ENGINEER_POLICY.COVER_DENSITY_MAX;
-        const kind: 'cover' | 'trench' = port.assault() ? 'cover'
+        const tacticKind = spot.plan?.[0]?.tactic;
+        const kind: 'cover' | 'trench' = tacticKind === 'sentry' || tacticKind === 'choke' ? 'cover'
+          : port.assault() ? 'cover'
           : dense ? 'trench'
           : this.lastKind.get(id) === 'cover' ? 'trench' : 'cover';
         if (this.buildAt(port, id, s, spot, kind, dt) === 'done') {
           this.lastKind.set(id, kind);   // ★ 循环记账（造完→下一件换类型）
-          this.releaseFor(id); this.spots.delete(id);
-          this.dbg.last = kind === 'cover'
-            ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
-            : `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
+          const entry = this.spots.get(id);
+          const rest = kind === 'cover' && entry?.plan && entry.plan.length > 1 ? entry.plan.slice(1) : null;
+          if (rest && rest.length > 0) {
+            // ★ 岗哨三件：落成一件 → 下一件（更新目标点，队长继续走过去）
+            this.releaseFor(id);
+            const next = rest[0];
+            this.spots.set(id, { x: next.x, z: next.z, score: entry!.score, at: now, plan: rest });
+            this.reserved.set(keyOf(next.x, next.z), id);
+            this.dbg.last = `#${id} 岗哨件成 → 下一件 @${next.x | 0},${next.z | 0}（余 ${rest.length - 1}）`;
+          } else {
+            this.releaseFor(id); this.spots.delete(id);
+            this.dbg.last = kind === 'cover'
+              ? `#${id} 掩体成 @${spot.x | 0},${spot.z | 0}`
+              : `#${id} 战壕成 @${spot.x | 0},${spot.z | 0}`;
+          }
         }
         working++;
       }
