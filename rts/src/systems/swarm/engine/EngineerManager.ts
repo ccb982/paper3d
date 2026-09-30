@@ -268,6 +268,8 @@ export class EngineerManager extends RoleManager {
   private tacticCache: { sentry: { x: number; z: number }[]; choke: { x: number; z: number }[] } = { sentry: [], choke: [] };
   /** ★ 调优（2026-09-30）：一个山顶只造**一组**岗哨（8m 格记账）——否则 sentry 候选永不枯竭、choke 被饿死 */
   private readonly sentrySiteDone = new Set<string>();
+  /** ★ 战术件连做上限（2026-09-30）：连做 N 件战术件后强制转常规一件（让掩体↔战壕循环有机会出壕） */
+  private readonly tacticStreak = new Map<number, number>();
   private readonly siteKey = (x: number, z: number): string => `${Math.round(x / 8)},${Math.round(z / 8)}`;
   private sentryBuiltNear(x: number, z: number): boolean {
     const kx = Math.round(x / 8), kz = Math.round(z / 8);
@@ -516,8 +518,9 @@ export class EngineerManager extends RoleManager {
         // ★ noNewBuild（事态 0.45 后停新增）只约束**常规带**；扩带兜底不受限（用户定 2026-09-27：
         //   "没件就往舰船方向继续造，或者往防区外造"——工兵不许持令站桩发呆被判官收）。
         const canNew = !port.noNewBuild() || !this.builtOnce.has(id);
-        // ★ 战术件优先（D5：岗哨→封口→常规）；全不可达/无候选 → 落原 need 查询
-        const tact = canNew ? this.pickTactic(port, id, s, ship, now) : null;
+        // ★ 战术件优先（D5：岗哨→封口→常规）；连做 2 件战术件后强制转常规（保住掩体↔战壕循环）
+        const streak = this.tacticStreak.get(id) ?? 0;
+        const tact = canNew && streak < 2 ? this.pickTactic(port, id, s, ship, now) : null;
         let pick: { x: number; z: number; score: number } | null = null;
         if (!tact) pick = canNew ? port.pickSpot(sec, band.rLo, band.rHi, canReach, exclude, { x: s.x, z: s.z }) : null;
         if (!tact && !pick) {
@@ -535,12 +538,14 @@ export class EngineerManager extends RoleManager {
           this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
           if (tact[0].tactic === 'sentry') { this.fortDbg.sentry++; this.sentrySiteDone.add(this.siteKey(spot.x, spot.z)); }
           else if (tact[0].tactic === 'choke') this.fortDbg.choke++;
+          this.tacticStreak.set(id, streak + 1);
           this.dbg.last = `#${id} 战术件 ${tact[0].tactic} @${spot.x | 0},${spot.z | 0}`;
           this.work.delete(id); this.digs.delete(id);
         } else if (pick) {
           spot = { x: pick.x, z: pick.z, score: pick.score, at: now };   // 掩体点=纯行军目标
           this.spots.set(id, spot);
           this.reserved.set(keyOf(spot.x, spot.z), id);   // ★ 预约（全局唯一）
+          this.tacticStreak.set(id, 0);
           this.work.delete(id); this.digs.delete(id);
         }
       }
@@ -676,6 +681,7 @@ export class EngineerManager extends RoleManager {
     this.zoneCursor = 0;
     this.lastNow = -1;
     this.sentrySiteDone.clear();
+    this.tacticStreak.clear();
     this.tacticScanAt = -1;
     this.tacticCache = { sentry: [], choke: [] };
     this.fortDbg.spots = 0; this.fortDbg.working = 0; this.fortDbg.idle = 0; this.fortDbg.built = 0;
