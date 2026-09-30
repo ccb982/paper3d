@@ -24,16 +24,16 @@ import { samplerFor } from '../../../services/map/TerrainSampler';
 import { PassTable } from '../nav/PassTable';
 import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
-import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
-import { FortifyPlanner, NEED_DONE, FORTIFY_SECTORS } from '../FortifyPlanner';
-import { angleOfPoint, secOfPoint, clampAngleToSector, sectorMid } from '../Sectors';
+import { makeCombatCreationPort, makeEngineerPort } from './Ports';
+import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
+import { angleOfPoint, secOfPoint, clampAngleToSector } from '../Sectors';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
 import type { UnitRole, SquadType } from '../../../entity/SwarmUnit';
+import type { MobRole } from '../engine/contracts';
 
 /** ★ 坑底硬阈值（低于此高度不可走 → 禁止再挖；与 EngineerManager 端口同口径） */
-const FLOOR_MIN = -1.2;
 /** ★ L3 寻路亲和（P1-3）：scoreFor 归一 ±PATH_AFF_N 分 → 倍率 ∓PATH_AFF_W（与掩体折扣相乘） */
 const PATH_AFF_N = 8;
 const PATH_AFF_W = 0.25;
@@ -411,7 +411,7 @@ export class SwarmData {
   /** ★ 工兵数据/落地端口（新引擎 EngineerManager 消费；旧工事指挥链已销毁）：
    *  数据 = 分区/需求/环带/可达；建造位置查询 + 施工落地都在这一个口上（单源）。 */
   /** ★ 舰船关联高地判定（防区/工兵件 共同排除；用户定 2026-09-26） */
-  private onShipPlateau(x: number, z: number): boolean {
+  onShipPlateau(x: number, z: number): boolean {
     const raster = RasterMap.current;
     if (!raster) return false;
     if (this.lastShipX === 0 && this.lastShipZ === 0) return false;
@@ -428,93 +428,34 @@ export class SwarmData {
 
   squadSectorOf: ((id: number) => number) | null = null;
   sectorAnchorOf: ((sec: number) => { x: number; z: number } | null) | null = null;
-  combatCreationPort(): import('../engine/SquadCreation').CreationPort {
-    return {
-      mainSectors: () => this.mainSectors,
-      /** ★ §0.3：创建优先级次序（主攻在前，其余防区在后） */
-      sectorOrder: () => {
-        const m = this.mainSectors, rest: number[] = [];
-        for (let i = 0; i < FORTIFY_SECTORS; i++) if (!m.includes(i)) rest.push(i);
-        return [...m, ...rest];
-      },
-      /** ★ §0.3 溢出：放置点随机（环带外 → 无约束）；工兵不在溢出名单 */
-      overflowAnchor: () => {
-        const a = Math.random() * Math.PI * 2;
-        const base = this.frontMaxD > 0 ? this.frontMaxD : 150;
-        return { x: this.lastShipX + Math.cos(a) * (base + 12 + Math.random() * 36), z: this.lastShipZ + Math.sin(a) * (base + 12 + Math.random() * 36) };
-      },
-      aliveInSector: (role, sec) => this.combatDeps(role, sec, 'alive') as number,
-      unitTarget: (role) => combatUnitTargetFn(this.roster.dbg.gap, role, this.battlePosture === 'assault'),
-      fillTarget: (role, sec) => this.combatDeps(role, sec, 'fill') as { x: number; z: number; gap: number } | null,
-      posture: () => this.postureP,
-      assault: () => this.battlePosture === 'assault',
-      assaultAnchor: (sec) => {
-        const mid = sectorMid(sec);
-        return { x: this.lastShipX + Math.cos(mid) * 50, z: this.lastShipZ + Math.sin(mid) * 50 };   // ★ 距舰 50m
-      },
-      anchorOf: (sec) => this.sectorAnchorOf?.(sec) ?? null,
-      spawn: (role, x, z) => {
-        if (!this.spawnMob) return false;
-        // ★ 近战按 盾:突击 占比混合（ROSTER_TARGET；用户定 2026-09-27）——此前全部落 assault（=清一色原石虫）
-        const ur = role === 'melee'
-          ? meleeRole(this.meleeMix, ROSTER_TARGET.shield / Math.max(0.01, ROSTER_TARGET.shield + ROSTER_TARGET.assault))
-          : role === 'engineer' ? 'logistics' : role;
-        // ★ 创建点由四管理器给定 → **原样生成**（near=true；不再沿痒旧“≥80m 外推”）
-        this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false, true);
-        return true;
-      },
-    };
+
+  // ---- 端口宿主（data/Ports.ts 工厂消费；只暴露端口真正需要的） ----
+  get system(): SwarmSystem { return this.swarm; }
+  ship(): { x: number; z: number } { return { x: this.lastShipX, z: this.lastShipZ }; }
+  band(): { rLo: number; rHi: number } { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; }
+  outerRing(): number { return this.frontMaxD; }
+  dayRaw(): number { return this.lastDayRaw; }
+  /** ★ 近战按 盾:突击 占比混合生成（ROSTER_TARGET；用户定 2026-09-27） */
+  spawnRole(role: MobRole, x: number, z: number): boolean {
+    if (!this.spawnMob) return false;
+    const ur = role === 'melee'
+      ? meleeRole(this.meleeMix, ROSTER_TARGET.shield / Math.max(0.01, ROSTER_TARGET.shield + ROSTER_TARGET.assault))
+      : role === 'engineer' ? 'logistics' : role;
+    this.spawnMob(x, z, ur as Parameters<typeof this.spawnMob>[2], false, true);
+    return true;
+  }
+  spawnBuilderAt(x: number, z: number): boolean {
+    if (!this.spawnBuilder) return false;
+    this.spawnBuilder(x, z);
+    return true;
   }
 
-  /** 战斗编制计算桥（CombatTargets；单源只读） */
-  private combatDeps(_role: string, _sec: number, _kind: 'alive' | 'fill'): unknown {
-    const d = {
-      squads: this.swarm.squads,
-      sectorOf: (id: number) => this.squadSectorOf?.(id) ?? -1,
-      shipX: () => this.lastShipX,
-      shipZ: () => this.lastShipZ,
-    };
-    return _kind === 'alive' ? aliveRoleInSectorFn(d, _role, _sec) : fillTargetOfFn(d, _role, _sec);
+  combatCreationPort(): import('../engine/SquadCreation').CreationPort {
+    return makeCombatCreationPort(this);
   }
 
   engineerPort(): EngineerPort {
-    return {
-      band: () => { const b = this.fortifyBand; return { rLo: b.rLo, rHi: b.rHi }; },
-      ship: () => ({ x: this.lastShipX, z: this.lastShipZ }),
-      /** ★ D5 工兵战术：事实表读取口（山顶岗哨/缝道封口） */
-      facts: () => this.semantics,
-      // ★ 舰船高地排除（用户定 2026-09-26）：高地（含其上坑洞）不算防区 → 不发工兵件
-      needAt: (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)),
-      // ★ 取件门（用户定 2026-09-25）：长途 BFS；短程 LOS 快筛——唯一实现在 `SwarmSystem.reachFrom`
-      canReach: (id, x, z) => this.swarm.reachFrom(id, x, z),   // ★ 取件门=可行性表 BFS（用户定 2026-09-29：不用 LOS）
-      assault: () => this.battlePosture === 'assault',
-      noNewBuild: () => this.lastDayRaw >= 0.45,
-      aliveOfSquad: (id) => this.swarm.squads.get(id)?.members.size ?? 0,
-      refreshSector: (cx, cz, rLo, rHi) =>
-        this.fortify.refreshOne(cx, cz, rLo, rHi,
-          (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z))),
-      pickSpot: (sec, rLo, rHi, canReach, exclude, from) => {
-        this.fortify.ensureFresh(sec, this.lastShipX, this.lastShipZ, rLo, rHi, (x, z) => (this.onShipPlateau(x, z) ? null : this.fortifyNeed(x, z)), this.postureP);   // ★ 查询前保新
-        return this.fortify.targetOf(this.lastShipX, this.lastShipZ, sec, rLo, rHi, NEED_DONE, canReach, exclude, from);
-      },
-      canDig: (x, z) => {
-        const raster = RasterMap.current;
-        return !raster || raster.surfaceHeightAt(x, z) - 0.2 >= FLOOR_MIN;
-      },
-      coversNear: (x: number, z: number, r: number) => this.fortify.countNear(x, z, r),
-      cover: (x, z, v, face) => { this.fortify.recordBuilt(x, z, 'cover'); this.buildCover?.(x, z, v, face); },
-      // ★ 补队（用户定）：工兵缺队 → 请求生成施工兵（统一编制机制）
-      requestSpawn: (role, x, z) => {
-        if (role !== 'builder' || !this.spawnBuilder) return false;
-        this.spawnBuilder(x, z);
-        return true;
-      },
-      posture: () => this.postureP,
-      mainSectors: () => this.mainSectors,
-      sectorsScanned: () => this.fortify.scanned.every(Boolean),
-      dig: (x, z) => { this.fortify.recordBuilt(x, z, 'trench'); this.digTrench?.(x, z); },
-      markDirty: (x, z, r) => this.markTerrainDirty(x, z, r),
-    };
+    return makeEngineerPort(this);
   }
   /** ★ 环形活动区（事态函数单源；**1Hz**）：宽环 → 大圆 → 外圈放宽 → 点；夹环基准 = 舰船 */
   private ringTick(shipX: number, shipZ: number): void {

@@ -398,8 +398,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',   // 不可站地形（只坑；水一直可站——总攻吸附/掩护点用）
       canReach: (id, x, z) => swarm.reachFrom(id, x, z),   // 发令门：总攻目标必须从本队真的可达（BFS）
       coversNear: (x, z, r) => { const out: { x: number; z: number }[] = []; for (const c of swarm.data.fortify.builtList()) if (c.kind === 'cover' && Math.hypot(c.x - x, c.z - z) <= r) out.push(c); return out; },   // 远程驻守门（账本）
-      /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：**真跟到被保护对象旁（≤14m）** → 1.5m；
-       *  没跟到（对象走了它还落下）→ 维持全局 4m（照收——"保护者没跟过去"不放过）。 */
+      /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：真跟到（≤14m）→1.5m；没跟到→全局 4m（照收）。 */
       stuckR: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return undefined;
@@ -420,8 +419,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       t01: () => swarm.data.lastT01,
       ledgerTotal: () => swarm.ledger.total,
       setReleaseCap: (cap: number) => { swarm.ledger.releaseCap = cap; },
-      /** ★ 卡死豁免（新引擎 TimerManager 口径）：驻守命令 / 交火中（被击 8s / noDemote）→ 免判。
-       *  ★★ 收回机制铁律（《RTS架构.md》§0.1）：豁免名单**只减不增**；被收回 = 出了问题（修行为，不修判官）★★ */
+      /** ★ 卡死豁免（TimerManager 口径）：驻守/交火 → 免判。收回铁律：豁免只减不增；被收=修行为，不修判官。 */
       exemptOf: (uid: number) => {
         const sq = swarm.squads.squadOf(uid);
         if (!sq) return null;
@@ -1049,7 +1047,10 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
     // ★ 执行态 → 视图由 engineView 按需读取（镜像板已删）
     if (shadowBridge) {
       const list: PanelSquad[] = [];
-      for (const r of shadowBridge.squads.all()) list.push({ id: r.id, role: r.role, alive: r.alive, selected: false });
+      for (const r of shadowBridge.squads.all()) {
+        const st = squadCores?.stateOf(r.id)?.execState;
+        list.push({ id: r.id, role: r.role, alive: r.alive, selected: false, state: st });
+      }
       cmdPanel.setSquads(list);
     }
     spawner.tickDemote(h, cam.tx, cam.tz);     // ★ 远距/出视野 L3 → 降格回池

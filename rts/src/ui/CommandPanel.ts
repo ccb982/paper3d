@@ -16,17 +16,17 @@ export interface PanelSquad {
   role: string;
   alive: number;
   selected: boolean;
+  /** ★ 当前执行标签（engine 状态；用户定 2026-09-30：面板显示小队状态） */
+  state?: string;
 }
 
-/** 面板可选命令（与 engine/contracts 的复合/原子对齐） */
+/** 面板可选命令（与 engine 标签对齐：garrison→hold；总攻=引擎专属，玩家不可发） */
 const KINDS: readonly { id: string; label: string }[] = [
   { id: 'act', label: '行动' },
   { id: 'march', label: '行军' },
   { id: 'garrison', label: '驻守' },
   { id: 'patrol', label: '巡逻' },
-  { id: 'defend', label: '防御' },
   { id: 'protect', label: '保护' },
-  { id: 'regroup', label: '集结' },
 ];
 
 const SCOPE_LABEL: Record<OrderScope, string> = { near: '近队60m', all: '全体', selected: '指定队' };
@@ -52,12 +52,14 @@ export class CommandPanel {
     this.render();
   }
 
-  /** 每帧喂入小队列表（只读展示 + 指定队选择） */
+  /** 每帧喂入小队列表（只读展示 + 指定队选择；**保留用户已选**，不被刷新冲掉） */
   setSquads(list: PanelSquad[]): void {
-    const sig = list.map((s) => `${s.id}:${s.role}:${s.alive}:${s.selected ? 1 : 0}`).join('|');
+    const sel = new Set(this.squads.filter((s) => s.selected).map((s) => s.id));
+    const merged = list.map((s) => ({ ...s, selected: sel.has(s.id) }));
+    const sig = merged.map((s) => `${s.id}:${s.role}:${s.alive}:${s.state ?? ''}:${s.selected ? 1 : 0}`).join('|');
     if (sig === this._sig) return;
     this._sig = sig;
-    this.squads = list;
+    this.squads = merged;
     this.render();
   }
 
@@ -83,7 +85,7 @@ export class CommandPanel {
       .map((k) => `<button data-kind="${k.id}" style="${this.btn(false, true)}">${k.label}</button>`)
       .join(' ');
     const chips = this.squads
-      .map((s) => `<span data-sq="${s.id}" style="${this.chip(s.selected)}">#${s.id} ${s.role}×${s.alive}</span>`)
+      .map((s) => `<span data-sq="${s.id}" style="${this.chip(s.selected)}">#${s.id} ${s.role}×${s.alive}${s.state ? ` · ${s.state}` : ''}</span>`)
       .join(' ') || '<span style="opacity:.5">（无小队）</span>';
     this.el.innerHTML = `
       <div style="opacity:.85;margin-bottom:2px">发令面板 · 目标 <b>(${this.target.x.toFixed(0)}, ${this.target.z.toFixed(0)})</b>
