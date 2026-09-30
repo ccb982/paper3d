@@ -138,6 +138,9 @@ export class SunCycle {
   }
 
   get current(): SunSample { return this.sample; }
+
+  /** ★ 累计天数（HUD/月相共用） */
+  get dayCount(): number { return this._dayCount; }
   get moon(): MoonSample { return this.moonSample; }
   get sky(): SkyGradient { return this.skyGradient; }
 

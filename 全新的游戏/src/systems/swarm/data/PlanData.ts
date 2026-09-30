@@ -86,12 +86,15 @@ export class PlanData {
     if (!this.plan) return;
     const front0 = { x: this.plan.cx + this.plan.approachX * 40, z: this.plan.cz + this.plan.approachZ * 40 };
     const ffrontD = Math.hypot(shipX - front0.x, shipZ - front0.z);
-    const RING_HALF = 80;   // 初始宽环外沿：前沿 +80m
-    // ★ 本体口径（2026-09-30 用户定）：环**内界锚到落点**（front0 在落点向舰 40m → 落点距舰 = ffrontD + 40）——
-    //   低 p 时敌人留在落点/工事带（~160m 外）分帧施工，随事态曲线（p 驱动的收缩）才逐步压向舰；
-    //   旧值 ffrontD-80 ≈ 距舰 40m 会让"一落地敌人就在舰旁"。
-    const landingD = Math.max(0, ffrontD + 40);
-    const rb = PlanData.ringBounds(p, landingD, ffrontD + RING_HALF);
+    const RING_HALF = 80;
+    // ★ 本体口径（2026-09-30 用户定）：环**内界锚到落点**——低 p 时敌人留在落点/工事带分帧施工，
+    //   随事态曲线（p 驱动的收缩）才逐步压向舰；旧值 ffrontD-80 ≈ 距舰 40m 会让"一落地敌人就在舰旁"。
+    // ★ 修正（2026-09-30）：**落点距舰必须直接量 plan 中心**——front0/ffrontD 是"主要来向"点
+    //   （approach 未必朝舰），拿它推落点会把内界推到落点之外（实测 206 vs 落点 160 → 敌人全被推远）。
+    const landD = Math.max(0, Math.hypot(shipX - this.plan.cx, shipZ - this.plan.cz));
+    const d0min = landD;                                              // 起点：落点线（不再内推）
+    const d0max = Math.max(ffrontD + RING_HALF, landD + 40);          // 外沿：罩住落点外侧 40m
+    const rb = PlanData.ringBounds(p, d0min, d0max);
     this.frontMinD = rb.minD;
     this.frontMaxD = rb.maxD;
     this.sx = shipX; this.sz = shipZ;   // 夹环/工事基准（单源）

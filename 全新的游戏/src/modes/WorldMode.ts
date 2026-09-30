@@ -211,6 +211,11 @@ export class WorldMode implements IGameMode {
   private landingTouchdown = false;
   /** ★ 触地期预算化布置预计算（落点键；与收尾参数一致才提交，2026-09-30） */
   private planPrepKey: { x: number; z: number; lx: number; lz: number; r: number } | null = null;
+  /** ★ 世界时钟 HUD（每日进度条 + 计时；用户定 2026-09-30） */
+  private clockAccum = 0;
+  private dockSimS = -1;      // 落地时刻（simT；-1 未落地）
+  private contactSimS = -1;   // 首敌进舰（≤24m）时刻（落地起算秒；-1 未发生）
+  private assaultSimS = -1;   // 总攻开始时刻（落地起算秒；-1 未发生）
   /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
   private static readonly LAND_SETTLE_SECONDS = 1.8;
   /** ★ 起飞段（登船后自动爬升到最低净空；期间锁输入） */
@@ -1302,8 +1307,9 @@ export class WorldMode implements IGameMode {
         if (c) this.harvestCollectible(c, true);
       }
     }
-    // ★ 按 E：就近 NPC / 途中访客对话 / 进舰内（仅降落后；飞行中不进）
-    if (!uiLocked && input.held.interact && this.phase === 'explore' && !this.player.dead) {
+    // ★ 按 F：就近 NPC / 途中访客对话 / 进舰内（仅降落后；飞行中不进）
+    //   沿触发（**不能 held**：舱内 F 出舱后，若仍 held 会当帧再次进舱 → "按 F 又进舰船里"）
+    if (!uiLocked && this.binding.consumeInteract() && this.phase === 'explore' && !this.player.dead) {
       if (this.nearbyNpc) this.startNpcDialogue(this.nearbyNpc);
       else if (this.nearbyVisitor) this.startVisitorDialogue(this.nearbyVisitor);
       else this.enterShipInterior();
@@ -1316,8 +1322,8 @@ export class WorldMode implements IGameMode {
         && this.phase === 'explore' && !this.player.dead
         && (p0.x - s0.x) ** 2 + (p0.z - s0.z) ** 2 <= WorldMode.REBOARD_RADIUS ** 2;
       if (talking) this.worldUIManager.setBoardPrompt(false);
-      else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyNpc.displayName}交谈`);
-      else if (this.nearbyVisitor) this.worldUIManager.setBoardPrompt(true, `E · 与${this.nearbyVisitor.displayName}交谈`);
+      else if (this.nearbyNpc) this.worldUIManager.setBoardPrompt(true, `F · 与${this.nearbyNpc.displayName}交谈`);
+      else if (this.nearbyVisitor) this.worldUIManager.setBoardPrompt(true, `F · 与${this.nearbyVisitor.displayName}交谈`);
       else this.worldUIManager.setBoardPrompt(nearShip);
     }
 
@@ -1474,6 +1480,41 @@ export class WorldMode implements IGameMode {
       const _tEn = performance.now();
       this.engineWire?.tick(dt);   // ★ P2：引擎拍 + 队长核 + 战术侧
       worldPerf.engineMs = performance.now() - _tEn;
+      // ---- ★ 世界时钟 HUD（每日进度条 + 计时/接敌/总攻；0.25s 拍）----
+      this.clockAccum += dt;
+      if (this.clockAccum >= 0.25) {
+        this.clockAccum = 0;
+        if (this.assaultSimS < 0 && this.swarm.data.battlePosture === 'assault') {
+          this.assaultSimS = Math.max(0, this.simT - this.dockSimS);
+        }
+        if (this.contactSimS < 0 && this.ship) {
+          const sx = this.ship.position.x, sz = this.ship.position.z, r2 = 24 * 24;
+          let near = false;
+          for (const e of this.enemies) {
+            const dx = e.position.x - sx, dz = e.position.z - sz;
+            if (dx * dx + dz * dz <= r2) { near = true; break; }
+          }
+          if (!near) {
+            const pool = this.swarm.pool;
+            for (let i = 0; i < pool.count; i++) {
+              const dx = pool.x[i] - sx, dz = pool.z[i] - sz;
+              if (dx * dx + dz * dz <= r2) { near = true; break; }
+            }
+          }
+          if (near) this.contactSimS = Math.max(0, this.simT - this.dockSimS);
+        }
+        const clk = renderManager.clock;
+        this.worldUIManager.updateDayClock({
+          p: this.swarm.data.postureP,
+          posture: this.swarm.data.battlePosture,
+          elapsedS: this.dockSimS >= 0 ? this.simT - this.dockSimS : 0,
+          hour: clk.hour,
+          day: clk.day,
+          contactS: this.contactSimS,
+          assaultS: this.assaultSimS,
+          boss: this.bossRun,
+        });
+      }
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
       this.explosionFx?.update(dt);
@@ -2952,6 +2993,10 @@ export class WorldMode implements IGameMode {
     worldPerf.planMs = performance.now() - _tPlan;
     worldPerf.planAnalyzeMs = this.swarm.data.planPerf.analyze;
     worldPerf.planPassMs = this.swarm.data.planPerf.pass;
+    // ★ 世界时钟 HUD：落地起算计时 + 事件戳复位（接敌/总攻）
+    this.dockSimS = this.simT;
+    this.contactSimS = -1;
+    this.assaultSimS = -1;
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -3324,6 +3369,9 @@ export class WorldMode implements IGameMode {
 
   /** 进入舰内房间（E 调用：仅探索期落地后、靠近舰船；返回是否进入） */
   private enterShipInterior(): boolean {
+    // ★ 转场吃键（2026-09-30）：进舱这次 F 的边沿不再触发任何世界交互；出舱同理（见 exitShipInterior）
+    this.binding?.consumeInteract();
+    this.binding?.consumeUseItem();
     if (!this.ship || !this.scene || !this.camera || !this.renderer) return false;
     if (this.phase !== 'explore' || this.shipInterior) return false;
     this.camBlend = null; // ★ 进舰取消在途镜头过渡（房间 setupCamera 直接接管）
@@ -3497,6 +3545,9 @@ export class WorldMode implements IGameMode {
     this.worldUIManager?.setCombatHudVisible(true);
     this.worldUIManager?.setMinimapVisible(true); // ★ 修复：舰内隐藏的小地图出舱恢复（否则一去不回）
     this.worldUIManager?.setDockButtonVisible(false);
+    // ★ 转场吃键：出舱这次 F（舱内站点触发）的边沿不得留给世界 → 防"出舱当帧又进舱"
+    this.binding?.consumeInteract();
+    this.binding?.consumeUseItem();
     const p = this.player.position;
     this.cameraCtrl?.snapTo(p.x, p.y, p.z);
   }

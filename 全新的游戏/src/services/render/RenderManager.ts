@@ -93,6 +93,11 @@ class RenderManager {
     return this._rawDt * this._timeScale;
   }
 
+  /** ★ 游戏内时钟（HUD 读）：hour 0~24（900 现实秒 = 24h）+ 累计天数 */
+  get clock(): { hour: number; day: number } {
+    return { hour: this.sunCycle.current.hour, day: this.sunCycle.dayCount };
+  }
+
   /** ★ 顿帧（CombatDirector 调用）：全局时间缩放到 scale 并自动恢复。
    *  并发请求取"损失时间"更大者（连续命中不会叠成幻灯片）。 */
   hitstop(seconds: number, scale = 0.08): void {

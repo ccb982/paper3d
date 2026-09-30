@@ -1305,6 +1305,9 @@ export class GachaOverlay {
     const s = this.session;
     // ★ 抽卡完全免费：无票证、无资源消耗
     if (!s.gacha) s.gacha = { pityCounter: 0, totalPulls: 0 };
+    // ★ 今日已抽锁定（用户定 2026-09-30）：单抽/十连都算，当天不能再抽（UI 兜底失败也拦）
+    if (s.gacha.pulledDay === s.meta.day) return;
+    s.gacha.pulledDay = s.meta.day;
     if (!s.outOfRun) s.outOfRun = { owned: {} };
     if (!s.outOfRun.owned) s.outOfRun.owned = {};
 
@@ -1506,8 +1509,10 @@ export class GachaOverlay {
     //   分帧算好 探索圆盘 / 底图 / LOD 边带索引 → 出击进世界时直接交接，首帧零成本。
     //   幂等（同种子直接返回）；换天换局换种子自动重算；失败一律回退冷路径。
     warmupMinimap(this.session);
-    // ★ 每次进入抽卡页都回到「抽卡按钮」态（行动按钮由抽完卡触发）
+    // ★ 每次进入抽卡页：默认回到「抽卡按钮」态；**今日已抽 → 直接恢复出击态**
+    //   （用户定 2026-09-30：抽完卡返回再进，必须还是出击按钮，不能再抽）
     this.resetToGachaState();
+    if (this.session.gacha?.pulledDay === this.session.meta.day) this.switchToDepartButton();
     // ★ 抽卡页同样是左上角返回键的布局 → 临时压制设置齿轮（否则齿轮正好压在返回键上）
     (globalThis as { setSettingsSuppressed?: (v: boolean) => void }).setSettingsSuppressed?.(true);
     this.root.style.display = 'block';

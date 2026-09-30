@@ -254,6 +254,13 @@ export class DesktopBinding {
     return v;
   }
 
+  /** ★ 消费交互键（F；探索期 = 进舰/交谈）——沿触发；转场需清残留（见 WorldMode） */
+  consumeInteract(): boolean {
+    const v = this.state.pressed.interact;
+    this.state.pressed.interact = false;
+    return v;
+  }
+
   /** ★ 消费世界地图键（Q；用户定 2026-09-30：M→Q） */
   consumeMap(): boolean {
     const v = this.state.pressed.map;

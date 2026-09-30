@@ -94,6 +94,8 @@ export interface GameSession {
     totalPulls: number;
     /** ★ 6★ 普瑞赛斯递增计数（第 n 抽概率 = n/50，必出于第 50 抽） */
     bossPity?: number;
+    /** ★ 今日已抽日戳（= meta.day；当日单抽/十连后锁定为出击态，用户定 2026-09-30） */
+    pulledDay?: number;
   };
 
   // ----- ⑧ 每日进度 -----

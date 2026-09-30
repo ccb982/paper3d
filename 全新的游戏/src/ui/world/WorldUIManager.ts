@@ -23,6 +23,7 @@ import { Crosshair } from '../../services/ui/Crosshair';
 import { AmmoPanel } from '../../services/ui/AmmoPanel';
 import { AllyHud } from '../../services/ui/AllyHud';
 import { EnemyKillHud } from '../../services/ui/EnemyKillHud';
+import { DayClockHud, type DayClockState } from '../../services/ui/DayClockHud';
 import { RasterMap } from '../../services/map/RasterMap';
 import { renderDialogBubble } from '../components/DialogBubble';
 import { createButton } from '../components/Button';
@@ -92,6 +93,8 @@ export class WorldUIManager extends BaseInteractionUI {
    *  素材《敌人数量和舰船生命》（644×68）等比缩到 46px 高、水平居中于屏幕最顶部。
    *  旧版"舰船 HP/油量"单行文本已废弃；油量改在舰内面板（ShipPanels）查看。 */
   private enemyKillHud = new EnemyKillHud();
+  /** ★ 每日进度条（顶部）+ 计时/接敌/总攻时刻（右上角）；用户定 2026-09-30 */
+  private dayClock = new DayClockHud();
   /** ★ 舰船受击报警：顶部大横幅 + 全屏红晕（脉冲闪烁；剩余秒数） */
   private shipAlertEl: HTMLDivElement | null = null;
   private shipVignetteEl: HTMLDivElement | null = null;
@@ -170,7 +173,7 @@ export class WorldUIManager extends BaseInteractionUI {
     // 交互提示
     this.interactPrompt = document.createElement('div');
     this.interactPrompt.className = CSS.interactPrompt;
-    this.interactPrompt.textContent = '按 E 拾取';
+    this.interactPrompt.textContent = '按 F 拾取';
     document.body.appendChild(this.interactPrompt);
   }
 
@@ -234,7 +237,7 @@ export class WorldUIManager extends BaseInteractionUI {
 
     // 交互提示
     if (ctx.nearbyItem && ctx.nearbyItem.distance < 2) {
-      this.interactPrompt.textContent = `按 E 拾取 ${ctx.nearbyItem.itemId}`;
+      this.interactPrompt.textContent = `按 F 拾取 ${ctx.nearbyItem.itemId}`;
       this.interactPrompt.style.display = 'block';
     } else {
       this.interactPrompt.style.display = 'none';
@@ -618,7 +621,7 @@ export class WorldUIManager extends BaseInteractionUI {
   }
 
   /** ★ 交互提示（靠近舰船/事件 NPC 按 E；探索期显示，其余隐藏；文案由调用方给） */
-  setBoardPrompt(visible: boolean, text = 'E · 进入舰船'): void {
+  setBoardPrompt(visible: boolean, text = 'F · 进入舰船'): void {
     if (!visible) {
       if (this.boardPromptEl) this.boardPromptEl.style.display = 'none';
       return;
@@ -822,6 +825,12 @@ export class WorldUIManager extends BaseInteractionUI {
     this.ammoPanel.setVisible(v);
     this.allyHud.setVisible(v);
     this.crosshair.setVisible(v);
+    this.dayClock.setVisible(v);   // ★ 每日进度条/计时随战斗 HUD 显隐（舰内/航行收起）
+  }
+
+  /** ★ 世界时钟 HUD（WorldMode 每 0.25s 推）：每日进度条 + 计时 + 接敌/总攻时刻 */
+  updateDayClock(s: DayClockState): void {
+    this.dayClock.update(s);
   }
 
   /** 打开/关闭背包面板（以弹窗栈内是否含 inventory-panel 为准） */
@@ -981,6 +990,7 @@ export class WorldUIManager extends BaseInteractionUI {
     this.dockBtn = null;
     // ★ 顶部状态条（敌人数量 / 舰船生命）跨局防残留
     this.enemyKillHud.dispose();
+    this.dayClock.dispose();
     // ★ 舰船受击报警 DOM（横幅 + 红晕）跨局防残留
     this.shipAlertEl?.remove();
     this.shipAlertEl = null;
