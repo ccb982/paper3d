@@ -32,6 +32,8 @@ export interface TacticalCtx {
   waterAt?: (x: number, z: number) => boolean;
   /** 战壕（挖掘；可选） */
   isDugAt?: (x: number, z: number) => boolean;
+  /** ★ 掩体视线遮挡（D7-2；对参照=舰；可选）：该点是否被**实体掩体/地形掩体**挡住 */
+  coverFromAt?: (x: number, z: number) => boolean;
   /** 舰（C3 参照） */
   ship: { x: number; z: number };
   /** 玩家（威胁方向） */
@@ -56,14 +58,16 @@ export interface CellFeats {
   gap: number;        // 缝道宽度 0~1（narrowW/4；0=非缝道）
   choke: number;      // 窄口 0/1（narrowW=1）
   trench: number;     // 战壕 0/1
-  hidden: number;     // 对舰遮挡 0/1
+  hidden: number;     // 对舰遮挡（地形）0/1
+  coverLOS: number;   // 掩体视线遮挡（实体/地形掩体；D7-2）0/1
   high: number;       // 高地面（山顶/高原）0/1
   front: number;      // 迎舰坡 0/1
+  back: number;       // 背舰坡 0/1（D7：从山背面接近/上山用）
   constTerm: number;  // 贴墙/战壕/水/坡常量项
 }
 
 /** 权重字段名 */
-export type WeightField = 'h' | 'dist' | 'threat' | 'cover' | 'gap' | 'narrow' | 'hidden' | 'high' | 'front' | 'near';
+export type WeightField = 'h' | 'dist' | 'threat' | 'cover' | 'gap' | 'narrow' | 'hidden' | 'coverLOS' | 'high' | 'front' | 'back' | 'near';
 export type ScoreWeights = Record<WeightField, number>;
 /** 事态曲线：p 锚点（前缀和 = 与旧 PHASE 口径同锚） */
 export type Curve = ReadonlyArray<readonly [number, number]>;
@@ -96,14 +100,16 @@ export const NEUTRAL_CURVES: Record<WeightField, Curve> = {
   gap:    [[0.05, 0.05], [0.25, 0.1], [0.45, 0.25], [0.65, 0.35], [0.9, 0.4]],
   narrow: [[0.05, 0.2], [0.25, 0.3], [0.45, 0.2], [0.65, 0.1], [0.9, 0.05]],
   hidden: [[0.05, 0], [0.9, 0]],
+  coverLOS: [[0.05, 0], [0.9, 0]],
   high:   [[0.05, 0], [0.9, 0]],
   front:  [[0.05, 0], [0.9, 0]],
+  back:   [[0.05, 0], [0.9, 0]],
   near:   [[0.05, 1.6], [0.25, 1.2], [0.45, 0], [0.65, 0], [0.9, 0]],
 };
 
 /** 中性（mixed）：无兵种偏好 */
 export const MIXED_TACTICS: UnitTactics = {
-  mul: { h: 1, dist: 1, threat: 1, cover: 1, gap: 1, narrow: 1, hidden: 1, high: 1, front: 1, near: 1 },
+  mul: { h: 1, dist: 1, threat: 1, cover: 1, gap: 1, narrow: 1, hidden: 1, coverLOS: 1, high: 1, front: 1, back: 1, near: 1 },
 };
 
 // ---- 策略注入（避免循环：管理器只 import type，接线在本文件底部） ----
@@ -140,7 +146,7 @@ export function curveAt(p: number, c: Curve): number {
 /** 事态 p（+该兵种系数表）→ 权重 */
 export function weightsOf(t: UnitTactics, p: number, posture: BattlePosture): ScoreWeights {
   const out = {} as ScoreWeights;
-  const fields: WeightField[] = ['h', 'dist', 'threat', 'cover', 'gap', 'narrow', 'hidden', 'high', 'front', 'near'];
+  const fields: WeightField[] = ['h', 'dist', 'threat', 'cover', 'gap', 'narrow', 'hidden', 'coverLOS', 'high', 'front', 'back', 'near'];
   for (const f of fields) {
     const base = posture === 'withdraw' && t.withdraw ? t.withdraw[f] : curveAt(p, t.curves?.[f] ?? NEUTRAL_CURVES[f]);
     out[f] = base * t.mul[f];
@@ -178,6 +184,9 @@ export function featsAt(ctx: TacticalCtx, x: number, z: number, px?: number, pz?
   const water = ctx.waterAt ? ctx.waterAt(x, z) : false;
   const trench = ctx.isDugAt ? ctx.isDugAt(x, z) : false;
   const high = c.kind === KIND.Peak || c.kind === KIND.Plateau ? 1 : 0;
+  const cover = ctx.bonus.get(bonusKey(x, z)) ?? 0;
+  // ★ D7-2：掩体遮挡只在**靠掩体**（bonus>0）时才算（控开销；遮挡参照=舰）
+  const coverLOS = cover > 0 && ctx.coverFromAt ? (ctx.coverFromAt(x, z) ? 1 : 0) : 0;
   return {
     pass,
     h: ctx.heightAt(x, z),
@@ -185,13 +194,15 @@ export function featsAt(ctx: TacticalCtx, x: number, z: number, px?: number, pz?
     nearF: d < 30 ? -(1 - d / 30) * 4 : 0,
     threatN: (dt / R) * DIST_SCALE,
     playerD: dt,
-    cover: ctx.bonus.get(bonusKey(x, z)) ?? 0,
+    cover,
     gap: Math.min(1, c.narrowW / 4),
     choke: c.narrowW === 1 ? 1 : 0,
     trench: trench ? 1 : 0,
     hidden: c.occluded ? 1 : 0,
+    coverLOS,
     high,
     front: c.slopeDir === SLOPE_DIR.Front ? 1 : 0,
+    back: c.slopeDir === SLOPE_DIR.Back ? 1 : 0,
     constTerm:
       (wallNear ? 0.8 : 0) +
       (trench ? 1.2 : 0) -
@@ -221,7 +232,7 @@ export function composeScore(t: UnitTactics, f: CellFeats | null, ctx: TacticalC
     w.threat * f.threatN * terrainDamp +
     w.cover * f.cover * terrainDamp +
     (w.gap * f.gap + w.narrow * f.choke) * FEAT_SCALE * terrainDamp +
-    (w.hidden * f.hidden + w.high * f.high + w.front * f.front) * FEAT_SCALE * terrainDamp +
+    (w.hidden * f.hidden + w.coverLOS * f.coverLOS + w.high * f.high + w.front * f.front + w.back * f.back) * FEAT_SCALE * terrainDamp +
     w.near * f.nearF * terrainDamp;
   if (t.band && t.band > 0) {
     const over = f.playerD < BAND_LO ? BAND_LO - f.playerD : f.playerD > BAND_HI ? f.playerD - BAND_HI : 0;

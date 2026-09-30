@@ -1004,7 +1004,7 @@ export class SwarmSystem {
     this.nav.setPathTable(t);
     this.nav.stampFn = () => this.data.pathStamp;   // ★ 阶段二：掩体代次 → 偏好重算
     // ★ S1：短寻路语义风险（地形语义 → 偏好安全；"不要求很安全"）
-    this.nav.scoreFn = (x, z) => this.data.scoreAt(x, z);   // ★ 贪心消费统一评分
+    this.nav.scoreFn = (x, z, sid) => sid !== undefined ? this.data.scoreForSquad(sid, x, z) : this.data.scoreAt(x, z);   // ★ 贪心消费统一评分（D7：有队 → 按该队兵种）
   }
 
 

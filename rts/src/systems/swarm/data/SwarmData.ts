@@ -211,16 +211,20 @@ export class SwarmData {
 
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
    *  展开轴 = 扫描走廊轴（落地一次）；**掩体一律朝舰船（落点中心）侧 +5m、战壕留在原位**；
-   *  此后不随玩家移动/危机度动态重排（《RTS架构.md》§3/§4，用户定调 2026-09-21）。 */
-  planDefense(cx: number, cz: number, radius = 80, now = 0): DefensePlan | null {
+   *  此后不随玩家移动/危机度动态重排（《RTS架构.md》§3/§4，用户定调 2026-09-21）。
+   *  ★ 可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊——
+   *  否则舰队打到舰西侧会"outside/notReady"（实测 397 次失败里大头）。 */
+  planDefense(cx: number, cz: number, radius = 80, now = 0, shipX?: number, shipZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
     this.plan = analyzeLandingTerrain(raster, cx, cz, radius);
     this.postCache.clear();     // ★ 现场有利位置缓存复位
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.tacticCtx = null;
-    this.passTable.build(raster, cx, cz, radius);   // ★ N0 可行性表（初始构建）
-    this.passKeeper.bind(cx, cz, radius);
+    const pcx = shipX !== undefined ? shipX : cx;
+    const pcz = shipZ !== undefined ? shipZ : cz;
+    this.passTable.build(raster, pcx, pcz, radius);   // ★ N0 可行性表（舰心窗；初始构建）
+    this.passKeeper.bind(pcx, pcz, radius);
     this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
     this.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
@@ -344,6 +348,8 @@ export class SwarmData {
           bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
           waterAt: (x, z) => this.isWaterAt(x, z),
           isDugAt: (x, z) => this.holeMask.isDug(x, z),
+          // ★ D7-2 掩体遮挡（参照=舰；实体掩体 LOS + 地形掩体）——近寻路消费
+          coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.coverBlocker),
           ship: hasShip0 ? { x: shipX, z: shipZ } : { x: this.plan.cx, z: this.plan.cz },
           player: { x: playerX, z: playerZ },
           p: this.postureP,
@@ -697,6 +703,13 @@ export class SwarmData {
   scoreTypeAt(type: string, x: number, z: number): number | null {
     if (!this.tacticCtx) return null;
     return scoreFor(type as SquadType, this.tacticCtx, x, z, this.viewPX, this.viewPZ);
+  }
+
+  /** ★ 近寻路分（D7）：有队 → 按该队兵种策略（近战/远程/工兵各自消费）；无上下文 → null */
+  scoreForSquad(sid: number, x: number, z: number): number | null {
+    if (!this.tacticCtx) return null;
+    const type = this.swarm.squads.get(sid)?.type ?? 'mixed';
+    return scoreFor(type, this.tacticCtx, x, z, this.viewPX, this.viewPZ);
   }
 
   /** ★ parity 断言用：同上下文复算 mixed */

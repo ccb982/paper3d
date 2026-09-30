@@ -43,6 +43,6 @@ export class FlyerManager extends RoleManager {
 // ★ 飞行战术系数表（D3）：低依赖地形（机动支援；被击来援已实现引擎侧）
 // ============================================================
 export const FLYER_TACTICS: UnitTactics = {
-  mul: { h: 1, dist: 1, threat: 1, cover: 1, gap: 1, narrow: 1, hidden: 1, high: 1, front: 1, near: 1 },
-  withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, high: 0, front: 0, near: 0 },
+  mul: { h: 1, dist: 1, threat: 1, cover: 1, gap: 1, narrow: 1, hidden: 1, coverLOS: 0, high: 1, front: 1, back: 1, near: 1 },
+  withdraw: { h: 0.5, dist: 0.25, threat: 0.6, cover: 1.2, gap: 0.2, narrow: 0.1, hidden: 0, coverLOS: 0, high: 0, front: 0, back: 0, near: 0 },
 };

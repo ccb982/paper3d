@@ -72,8 +72,9 @@ export class SquadNavigator {
   readonly feas = new FeasibilityPath();
   /** ★ S1：短寻路网格（生产 = PassTable） */
   private table: PassTable | null = null;
-  /** ★ S1：统一评分注入（上层给 TerrainScoring.scoreAt；null = 无偏好）——贪心近寻路消费 */
-  scoreFn: ((x: number, z: number) => number | null) | null = null;
+  /** ★ S1：统一评分注入（上层给 data.scoreAt/scoreForSquad；null = 无偏好）——贪心近寻路消费
+   *  squadId 可选：有则按**该队兵种**打分（D7；无 → mixed 中性） */
+  scoreFn: ((x: number, z: number, squadId?: number) => number | null) | null = null;
 
   /** ★ N1：接可行性表（表就绪后可行性寻路接管命令门） */
   setPathTable(t: PassTable | null): void {
@@ -102,7 +103,7 @@ export class SquadNavigator {
 
   /** ★ 方案 A（移动消费格边图）：从执行态走廊取**格边步**（轴对齐 + canStep）；无走廊/到末尾 → null */
   edgeFromCorridor(state: SquadOrderState | null, x: number, z: number): { dx: number; dz: number } | null {
-    const g = this.localGrid();
+    const g = this.localGrid(state?.squadId);
     if (!g) return null;
     const c = this.routeCursor(state, x, z);
     if (!c) return null;
@@ -122,7 +123,7 @@ export class SquadNavigator {
   routeCursor(
     state: SquadOrderState | null, x: number, z: number, arriveR = 1.8,
   ): { x: number; z: number; climb?: boolean; climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number } } | null {
-    const g = this.localGrid();
+    const g = this.localGrid(state?.squadId);
     const path = state?.corridor ?? state?.order.path;
     if (!g || !path || path.length === 0) return null;
     if (!state) return null;
@@ -265,8 +266,8 @@ export class SquadNavigator {
     return undefined;
   }
 
-  /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险） */
-  private localGrid(): LocalGrid | null {
+  /** ★ S1：短寻路网格端口（PassTable 只读 + 语义风险；squadId → 该队兵种偏好） */
+  private localGrid(squadId?: number): LocalGrid | null {
     const t = this.table;
     if (!t || !t.ready) return null;
     const sc = this.scoreFn;
@@ -276,7 +277,7 @@ export class SquadNavigator {
       dropAt: (x, z, dx, dz) => t.dropAt(x, z, dx, dz),
       waterAt: (x, z) => t.waterAt(x, z),
       heightAt: (x, z) => t.heightAt(x, z),
-      scoreAt: sc ? (x, z) => sc(x, z) : undefined,
+      scoreAt: sc ? (x, z) => sc(x, z, squadId) : undefined,
       climbRunAt: (x, z, dx, dz) => t.climbRunAt(x, z, dx, dz),
     };
   }
@@ -374,7 +375,7 @@ export class SquadNavigator {
     if (this.weighted && this.feas.readyFor() && !longHaul) {
       // ★ S1：短寻路 = localStep（两阶段：语义安全引导 → 可行性校验；终点精确；无解 null）
       //   用户口径：路径无需最短；目标点不许走偏；上坡显式（climb 标注）
-      const g = this.localGrid();
+      const g = this.localGrid(squad.id);
       if (g) {
         const step = localStep(g, this._from.x, this._from.z, tgt.x, tgt.z);
         if (step) {
@@ -567,7 +568,7 @@ export class SquadNavigator {
           const stc = this.stepCommit(state, upos0.x, upos0.z, now, (goal) => {
             const c = this.routeCursor(state, upos0.x, upos0.z);
             if (!c) return null;
-            const g = this.localGrid();
+            const g = this.localGrid(sid);
             const e = g ? axisStepToward(g, upos0.x, upos0.z, c.x - upos0.x, c.z - upos0.z) : null;
             if (!e) return null;
             goal.x = c.x; goal.z = c.z;
