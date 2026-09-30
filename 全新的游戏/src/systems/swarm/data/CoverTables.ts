@@ -22,6 +22,13 @@ export class CoverTables {
   private tag = '';
   private clock = 0;
   private bonus: { key: string; map: ReadonlyMap<string, number> } = { key: '', map: new Map() };
+  /** ★ 分片重建驱动（2026-09-30 异步化）：脏触发立即起算，每帧预算推进，无 2Hz 单帧尖峰 */
+  private rebuilding = false;
+  private dirty = true;
+  private pendingTag = '';
+  private tableT0 = 0;
+  /** ★ 性能计数（HUD 读取）：rebuildMs = 上次整表重建总耗时；stepMs = 本帧切片耗时 */
+  readonly perf = { rebuildMs: 0, stepMs: 0 };
 
   constructor(private readonly deps: {
     plan(): DefensePlan | null;
@@ -66,19 +73,41 @@ export class CoverTables {
     return this.bonus.map;
   }
 
-  /** 2Hz 重建敌用工事表；返回 true = 掩体集合变化（评分代次 +1 信号） */
+  /** ★ 标记掩体/地形表脏（挖坑/建造后调用；不等 0.5s 拍，立即触发重建） */
+  markDirty(): void {
+    this.dirty = true;
+  }
+
+  /** 重建敌用工事表（分片驱动版）；返回 true = 掩体集合变化（评分代次 +1 信号）。
+   *  · 触发：0.5s 节拍 或 脏标记（挖坑/建造后 = 延迟最小的起算点）；
+   *  · 执行：每帧按时间预算切片推进（无单帧长任务）；结果在完成帧一次性提交。 */
   tick(dt: number, sem: TerrainSemantics | null, playerX: number, playerZ: number): boolean {
     this.clock += dt;
-    if (this.clock < 0.5) return false;
-    this.clock = 0;
-    const cov = snapshotCovers('enemy').map((c) => ({
-      x: c.x, z: c.z, hp: c.hp, maxHp: COVER_HP, variant: c.variant, heading: c.heading,
-      hidden: coverBlocksLine(c.x, c.z, playerX, playerZ),
-    }));
-    this.table.rebuild(this.mask, sem, playerX, playerZ, cov);
-    const tag = `${cov.length}:${cov.map((c) => `${c.x | 0},${c.z | 0}`).join(';')}`;
-    if (tag !== this.tag) { this.tag = tag; return true; }
-    return false;
+    let changed = false;
+    if (!this.rebuilding && (this.clock >= 0.5 || this.dirty)) {
+      this.clock = 0;
+      this.dirty = false;
+      const cov = snapshotCovers('enemy').map((c) => ({
+        x: c.x, z: c.z, hp: c.hp, maxHp: COVER_HP, variant: c.variant, heading: c.heading,
+        hidden: coverBlocksLine(c.x, c.z, playerX, playerZ),
+      }));
+      this.pendingTag = `${cov.length}:${cov.map((c) => `${c.x | 0},${c.z | 0}`).join(';')}`;
+      this.tableT0 = performance.now();
+      this.table.rebuildBegin(this.mask, sem, playerX, playerZ, cov);
+      this.rebuilding = this.table.isRebuilding;
+    }
+    if (this.rebuilding) {
+      const t0 = performance.now();
+      let done = this.table.rebuildStep();
+      while (!done && performance.now() - t0 < 2) done = this.table.rebuildStep();
+      this.perf.stepMs = performance.now() - t0;
+      if (done) {
+        this.rebuilding = false;
+        this.perf.rebuildMs = performance.now() - this.tableT0;
+        if (this.pendingTag !== this.tag) { this.tag = this.pendingTag; changed = true; }
+      }
+    }
+    return changed;
   }
 
   clear(): void {

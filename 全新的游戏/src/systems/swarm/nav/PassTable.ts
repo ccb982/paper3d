@@ -76,9 +76,21 @@ export class PassTable {
   /** 建表统计（探针） */
   readonly stats = { cells: 0, edges: 0, abs: 0, oneWay: 0, open: 0, ms: 0 };
 
-  /** 建表（一次；活动窗口与地形网格同步）。切工事/挖掘不重建。 */
+  /** ★ 分片构建状态（触地期按帧预算预构建；-1 空闲） */
+  private bPhase = -1;   // 0=①行 1=②-⑤行 2=收尾
+  private bIz = 0;
+  private bT0 = 0;
+  private bRaster: RasterMap | null = null;
+
+  /** 建表（同步一次跑完；切工事/挖掘不重建） */
   build(raster: RasterMap, cx: number, cz: number, r: number): void {
-    const t0 = performance.now();
+    this.beginBuild(raster, cx, cz, r);
+    while (!this.stepBuild(1e9)) { /* 同步跑完 */ }
+  }
+
+  /** ★ 分片：开始（分配/复位；随后 stepBuild 逐行推进） */
+  beginBuild(raster: RasterMap, cx: number, cz: number, r: number): void {
+    this.bT0 = performance.now();
     // ★ 格对齐块格（4m=块）：格心即块心 → 高度/角色/裁决与地形表 1:1（用户定 2026-09-24）
     this.ox = Math.floor((cx - r) / CELL) * CELL;
     this.oz = Math.floor((cz - r) / CELL) * CELL;
@@ -101,52 +113,76 @@ export class PassTable {
     }
     const st = this.stats;
     st.cells = n; st.edges = 0; st.abs = 0; st.oneWay = 0; st.open = 0;
-    const sh = (x: number, z: number): number => raster.surfaceHeightAt(x, z);
+    this.ready = false;
+    this.bRaster = raster;
+    this.bPhase = 0;
+    this.bIz = 0;
+  }
 
-    // ① 自身高度 + 深坑格
-    for (let iz = 0; iz < this.side; iz++) {
-      for (let ix = 0; ix < this.side; ix++) {
-        const i = iz * this.side + ix;
-        const wx = this.ox + ix * CELL + CELL / 2;
-        const wz = this.oz + iz * CELL + CELL / 2;
-        const hh = sh(wx, wz);
-        this.h[i] = hh;
-        const role = raster.tileDefAt(wx, wz).genRole;
-        if (role === 'liquid') this.water[i] = 1;
-      }
-    }
-
-    // ②-⑤ 四向边：只算 E/S 两条，双向同时写（W/N 即邻格的反向）
-    for (let iz = 0; iz < this.side; iz++) {
-      for (let ix = 0; ix < this.side; ix++) {
-        const i = iz * this.side + ix;
-        if (ix + 1 < this.side) {
-          const j = i + 1;
-          const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
-          this.setDir(i, DIR_E, fwd, dropQ);
-          this.setDir(j, DIR_W, rev, -dropQ);
-          this.climb[i * 4 + DIR_E] = cf ? 1 : 0;
-          this.climb[j * 4 + DIR_W] = cr ? 1 : 0;
-          this.weld[i * 4 + DIR_E] = wf ? 1 : 0;
-          this.weld[j * 4 + DIR_W] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
-          this.count(kind);
-        }
-        if (iz + 1 < this.side) {
-          const k = i + this.side;
-          const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
-          this.setDir(i, DIR_S, fwd, dropQ);
-          this.setDir(k, DIR_N, rev, -dropQ);
-          this.climb[i * 4 + DIR_S] = cf ? 1 : 0;
-          this.climb[k * 4 + DIR_N] = cr ? 1 : 0;
-          this.weld[i * 4 + DIR_S] = wf ? 1 : 0;
-          this.weld[k * 4 + DIR_N] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
-          this.count(kind);
+  /** ★ 分片：推进（rowBudget 行/次）；返回是否完成 */
+  stepBuild(rowBudget: number): boolean {
+    const raster = this.bRaster;
+    if (this.bPhase === 0) {
+      if (!raster) return true;
+      const end = Math.min(this.side, this.bIz + Math.max(1, rowBudget));
+      for (; this.bIz < end; this.bIz++) {
+        const iz = this.bIz;
+        for (let ix = 0; ix < this.side; ix++) {
+          const i = iz * this.side + ix;
+          const wx = this.ox + ix * CELL + CELL / 2;
+          const wz = this.oz + iz * CELL + CELL / 2;
+          const hh = raster.surfaceHeightAt(wx, wz);
+          this.h[i] = hh;
+          const role = raster.tileDefAt(wx, wz).genRole;
+          if (role === 'liquid') this.water[i] = 1;
         }
       }
+      if (this.bIz < this.side) return false;
+      this.bPhase = 1; this.bIz = 0;
     }
-    this.buildClimbRuns();   // ★ 上坡位置预处理（坡宽 + 段中心 + 前 CLIMB_MARGIN）
-    this.ready = true;
-    st.ms = +(performance.now() - t0).toFixed(1);
+    if (this.bPhase === 1) {
+      if (!raster) return true;
+      const end = Math.min(this.side, this.bIz + Math.max(1, rowBudget));
+      for (; this.bIz < end; this.bIz++) {
+        const iz = this.bIz;
+        for (let ix = 0; ix < this.side; ix++) {
+          const i = iz * this.side + ix;
+          if (ix + 1 < this.side) {
+            const j = i + 1;
+            const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, j, this.h[i], this.h[j], DIR_E);
+            this.setDir(i, DIR_E, fwd, dropQ);
+            this.setDir(j, DIR_W, rev, -dropQ);
+            this.climb[i * 4 + DIR_E] = cf ? 1 : 0;
+            this.climb[j * 4 + DIR_W] = cr ? 1 : 0;
+            this.weld[i * 4 + DIR_E] = wf ? 1 : 0;
+            this.weld[j * 4 + DIR_W] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
+            this.count(kind);
+          }
+          if (iz + 1 < this.side) {
+            const k = i + this.side;
+            const [fwd, rev, dropQ, kind, cf, cr, wf] = this.edge(raster, ix, iz, i, k, this.h[i], this.h[k], DIR_S);
+            this.setDir(i, DIR_S, fwd, dropQ);
+            this.setDir(k, DIR_N, rev, -dropQ);
+            this.climb[i * 4 + DIR_S] = cf ? 1 : 0;
+            this.climb[k * 4 + DIR_N] = cr ? 1 : 0;
+            this.weld[i * 4 + DIR_S] = wf ? 1 : 0;
+            this.weld[k * 4 + DIR_N] = wf ? 1 : 0;   // ★ 两侧对应边同值（B1）
+            this.count(kind);
+          }
+        }
+      }
+      if (this.bIz < this.side) return false;
+      this.bPhase = 2;
+    }
+    if (this.bPhase === 2) {
+      this.buildClimbRuns();   // ★ 上坡位置预处理（坡宽 + 段中心 + 前 CLIMB_MARGIN）
+      this.ready = true;
+      this.stats.ms = +(performance.now() - this.bT0).toFixed(1);
+      this.bPhase = -1;
+      this.bRaster = null;
+      return true;
+    }
+    return this.bPhase === -1;
   }
 
   /** 一条边（i→j）：返回 [正向可走, 反向可走, 净落差(米), 分类(0 开放/1 绝对/2 单向),

@@ -14,7 +14,7 @@ import { meleeRole } from '../../spawn/MobPick';
 import { RasterMap } from '../../../services/map/RasterMap';
 import { ShipHighland } from '../tactics/SectorBuilder';
 import type { SwarmSystem } from '../SwarmSystem';
-import { analyzeLandingTerrain, type DefensePlan } from '../LandingTerrain';
+import { analyzeLandingTerrain, analyzeScanBody, scanBegin, scanStep, scanTake, type DefensePlan, type ScanBuild } from '../LandingTerrain';
 import type { BattlePosture } from '../Posture';
 import { PostureFn } from '../PostureFn';
 import { TerrainSemantics, L1_R, R_MAX } from '../TerrainSemantics';
@@ -25,7 +25,6 @@ import { CoverTables } from './CoverTables';
 import { PlanData } from './PlanData';
 import { samplerFor } from '../../../services/map/TerrainSampler';
 import { PassTable } from '../nav/PassTable';
-import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
 import { makeCombatCreationPort, makeEngineerPort } from './Ports';
 import { FortifyPlanner, NEED_DONE } from '../FortifyPlanner';
@@ -132,7 +131,6 @@ export class SwarmData {
   lastDecision: { squad: number; kind: string; at: number } | null = null;
   /** ★ N0 可行性表（迷宫抽象）；★ 随地形走（用户定 2026-09-27）：keeper 负责标脏/节流重建 */
   readonly passTable = new PassTable();
-  private readonly passKeeper = new PassTableKeeper();
   /** ★ §13.1 编制比例（占比统计 + 缺口；只读） */
   readonly roster = new RosterController();
   /** ★ §13.3 工事规划（最危险区域选择） */
@@ -166,16 +164,85 @@ export class SwarmData {
 
   /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）。掩体朝舰侧+5m、战壕留原位；
    *  可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊（否则打到舰西侧 outside）。 */
+  /** ★ 落地布置分项耗时（ms；性能面板定位用，2026-09-30） */
+  readonly planPerf = { analyze: 0, pass: 0 };
+
   planDefense(cx: number, cz: number, radius = 80, now = 0, shipX?: number, shipZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
-    this.planning.setPlan(analyzeLandingTerrain(raster, cx, cz, radius));
+    const _tA = performance.now();
+    const plan = analyzeLandingTerrain(raster, cx, cz, radius);
+    this.planPerf.analyze = performance.now() - _tA;
+    const _tP = performance.now();
+    this.passTable.build(raster, shipX !== undefined ? shipX : cx, shipZ !== undefined ? shipZ : cz, radius);
+    this.planPerf.pass = performance.now() - _tP;
+    return this.applyPlan(plan, cx, cz, radius, now, shipX, shipZ);
+  }
+
+  // ★ 触地期预算化预计算（2026-09-30 修 F 卡顿）：扫描体+可行表按帧切片推进；
+  //   落稳收尾 commitPlan 只做提交（几毫秒）。prepare/step/commit 与 planDefense 完全同口径。
+  private planPrep: {
+    scan: ScanBuild;
+    cx: number; cz: number; radius: number;
+    shipX: number; shipZ: number;
+  } | null = null;
+
+  /** ★ 分片：开始预计算（触地起；参数 = planDefense 同参） */
+  preparePlan(cx: number, cz: number, radius: number, shipX: number, shipZ: number): void {
+    const raster = RasterMap.current;
+    if (!raster) return;
+    this.planPrep = {
+      scan: scanBegin(raster, cx, cz, radius),
+      cx, cz, radius, shipX, shipZ,
+    };
+    this.passTable.beginBuild(raster, shipX, shipZ, radius);
+  }
+
+  /** ★ 分片：推进（ms 预算）；返回是否全部就绪 */
+  stepPlan(msBudget: number): boolean {
+    const P = this.planPrep;
+    if (!P) return true;
+    const t0 = performance.now();
+    for (;;) {
+      if (P.scan.phase < 3) {
+        scanStep(P.scan, 2);
+      } else if (!this.passTable.ready) {
+        this.passTable.stepBuild(2);
+      } else {
+        return true;
+      }
+      if (performance.now() - t0 >= msBudget) return false;
+    }
+  }
+
+  /** ★ 分片：提交（落稳收尾；未完成则当场补完再提交） */
+  commitPlan(now = 0): DefensePlan | null {
+    const P = this.planPrep;
+    if (!P) return null;
+    this.planPrep = null;
+    const raster = RasterMap.current;
+    if (!raster) return null;
+    if (P.scan.phase < 3) while (!scanStep(P.scan, 1e9)) { /* 补完 */ }
+    if (!this.passTable.ready) while (!this.passTable.stepBuild(1e9)) { /* 补完 */ }
+    const _tA = performance.now();
+    const plan = analyzeScanBody(scanTake(P.scan));
+    this.planPerf.analyze = performance.now() - _tA;
+    this.planPerf.pass = 0;
+    return this.applyPlan(plan, P.cx, P.cz, P.radius, now, P.shipX, P.shipZ);
+  }
+
+  /** ★ 分片：放弃预计算（落点漂移/取消） */
+  abortPlan(): void {
+    this.planPrep = null;
+  }
+
+  /** ★ 提交共用尾段：状态落位/表绑定/节律复位（与同步口径完全一致） */
+  private applyPlan(plan: DefensePlan, cx: number, cz: number, radius: number, now: number, shipX?: number, shipZ?: number): DefensePlan | null {
+    this.planning.setPlan(plan);
     this.scoreStamp++;          // ★ 评分表触发戳（换落点重算）
     this.tacticCtx = null;
     const pcx = shipX !== undefined ? shipX : cx;
     const pcz = shipZ !== undefined ? shipZ : cz;
-    this.passTable.build(raster, pcx, pcz, radius);   // ★ N0 可行性表（舰心窗；初始构建）
-    this.passKeeper.bind(pcx, pcz, radius);
     this.swarm.attachPassTable(this.passTable);     // ★ N1：表 → 命令门/小队寻路（可行性寻路启用）
     this.planning.stage = 'S1';
     // ★ 换登陆点 = 重新部署：取消上一落点排队的兵力，本落点重新起一个大队
@@ -236,7 +303,6 @@ export class SwarmData {
     this.fortifyAccum += dt;
     if (this.fortifyAccum >= 0.5) {
       this.fortifyAccum = 0;
-      if (this.passKeeper.flush(this.passTable, RasterMap.current)) this.scoreStamp++;   // ★ 表真正重建 → 代次戳 +1
       if (this.planning.stage === 'S1' && this.lastDayRaw >= 0.45) this.planning.stage = 'S2';   // 第一波后停新增（就绪）
       const DONE = NEED_DONE;   // ★ 需求达标线（need < DONE = 该区已够工事）
       // ★ 前推（§13.4）：8 区全达标才推进；每拍 ≤0.5m；封顶 frontP×120m（事态允许）
@@ -510,13 +576,22 @@ export class SwarmData {
     return RasterMap.current?.tileDefAt(x, z).genRole === 'liquid';
   }
 
+  /** ★ 挖坑链路计时（性能面板；noteMs = 挖坑帧同步部分） */
+  readonly digPerf = { noteMs: 0 };
+
   /** ★★ 全地形破坏中央入口（ChunkManager.onTerrainDig；玩家子弹也走这）：
-   *  1m 深度场窗扫 → HoleTable + 直读掩码（挖过即战壕）+ 采样缓存失效。 */
+   *  1m 深度场窗扫 → HoleTable + 直读掩码（挖过即战壕）+ 采样缓存失效。
+   *  ★ 2026-09-30 用户定（致命 bug 修复）：**挖坑/战壕绝不动可行表（PassTable）**——
+   *   可行表只反映静态地形（自然坑/崖/水），动态破坏走 HoleMask/HoleTable + 移动层实探；
+   *   此前挖坑触发 0.5s 拍整表重建（~71ms 单帧 + 战壕边缘被误判爬升墙 → 卡死风险）。
+   *  ★ 2026-09-30：工事表重建改**异步分片**（covers.markDirty 立即起算；无 2Hz 单帧尖峰）。 */
   noteTerrainDig(x: number, z: number, r = 16): void {
+    const t0 = performance.now();
     this.holeMask.refresh(x, z, r + 12);                        // ★ L2 工事源（1m 深度场；评分查询时直读 → 挖过即战壕）
     const raster = RasterMap.current;
     if (raster) samplerFor(raster).invalidateArea(x, z, r + 6); // ★ 统一采样缓存同步失效
-    this.passKeeper.markDirty();   // ★ 表随地形走（重建拍见 tick；代次戳在**真正重建时** +1）
+    this.covers.markDirty();       // ★ 掩体/坑洞表：立即触发分片重建（不等 0.5s 拍 → 修改延迟最小）
+    this.digPerf.noteMs = performance.now() - t0;
   }
 
   /** ★ 地形脏区（模式层挖改/建造都调这个）：noteTerrainDig 单入口别名 */

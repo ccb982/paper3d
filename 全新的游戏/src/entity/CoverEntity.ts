@@ -84,7 +84,7 @@ export function coverSupportAt(
   x: number, z: number, belowY: number, exclude: CoverEntity,
 ): number | null {
   let best: number | null = null;
-  for (const c of _coverRegistry) {
+  for (const c of gridPoint(x, z)) {
     if (c === exclude) continue;
     const top = c.topAt(x, z);
     if (top === null) continue;
@@ -117,7 +117,7 @@ export function snapshotCovers(owner?: 'player' | 'enemy'): import('../core/Worl
 export function ownCoverBlocksFrom(x: number, z: number, dx: number, dz: number, owner: 'player' | 'enemy'): boolean {
   const dl = Math.hypot(dx, dz) || 1;
   const nx = dx / dl, nz = dz / dl;
-  for (const c of _coverRegistry) {
+  for (const c of gridRect(x, z, x + nx * dl, z + nz * dl)) {
     if (c.owner !== owner) continue;
     if (c.variant === 'wall') continue;
     const rx = c.position.x - x, rz = c.position.z - z;
@@ -130,10 +130,10 @@ export function ownCoverBlocksFrom(x: number, z: number, dx: number, dz: number,
 }
 
 export function coverBlocksLine(ax: number, az: number, bx: number, bz: number): boolean {
-  for (const c of _coverRegistry) {
+  for (const c of gridRect(Math.min(ax, bx), Math.min(az, bz), Math.max(ax, bx), Math.max(az, bz))) {
     const p = c.position;
-    const fwdX = Math.sin(c.heading), fwdZ = Math.cos(c.heading);   // 厚轴
-    const rgtX = fwdZ, rgtZ = -fwdX;                                // 宽轴
+    const fwdX = c.fwdX, fwdZ = c.fwdZ;   // 厚轴（缓存）
+    const rgtX = c.rgtX, rgtZ = c.rgtZ;   // 宽轴
     const rel = (x: number, z: number): { u: number; v: number } => ({
       u: (x - p.x) * rgtX + (z - p.z) * rgtZ,   // 宽向
       v: (x - p.x) * fwdX + (z - p.z) * fwdZ,   // 厚向
@@ -158,7 +158,7 @@ export function coverBlocksLine(ax: number, az: number, bx: number, bz: number):
 /** ★ 玩家附近是否有**玩家墙**（开枪时判定"无视自家墙"；敌人墙不享受该便利） */
 export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
   const r2 = r * r;
-  for (const c of _coverRegistry) {
+  for (const c of gridRect(x - r, z - r, x + r, z + r)) {
     if (c.owner !== 'player') continue;
     const dx = c.position.x - x;
     const dz = c.position.z - z;
@@ -167,13 +167,69 @@ export function wallNear(x: number, z: number, r = WALL_IGNORE_R): boolean {
   return false;
 }
 
-/** ★ 掩体注册表（顶面站立 / 攀爬查询用；数量个位数，线性扫描足够） */
+/** ★ 掩体注册表（存档/光环等低频全量遍历用） */
 const _coverRegistry = new Set<CoverEntity>();
+
+/** ★ 掩体数量（性能面板用） */
+export function coverCount(): number {
+  return _coverRegistry.size;
+}
+
+// ============================================================
+// ★ 掩体空间网格（2026-09-30 性能优化）：8m 格；点/线/半径查询只扫邻格——
+//   原先每次查询线性扫全表且现算 sin/cos（coverTopAt 每角色每帧被调 → 卡顿）
+// ============================================================
+const GRID_CELL = 8;
+/** 足迹保守半径（旋转矩形外接圆 + 余量） */
+const COVER_R_FOOT = Math.hypot(COVER_W / 2, COVER_T / 2) + 0.25;
+const _coverGrid = new Map<number, CoverEntity[]>();
+const _emptyCovers: readonly CoverEntity[] = [];
+const _scratchCovers = new Set<CoverEntity>();
+const gkey = (gx: number, gz: number): number => gx * 65537 + gz;
+function gridSpan(c: CoverEntity, fn: (gx: number, gz: number) => void): void {
+  const p = c.entity.position;
+  const gx0 = Math.floor((p.x - COVER_R_FOOT) / GRID_CELL), gx1 = Math.floor((p.x + COVER_R_FOOT) / GRID_CELL);
+  const gz0 = Math.floor((p.z - COVER_R_FOOT) / GRID_CELL), gz1 = Math.floor((p.z + COVER_R_FOOT) / GRID_CELL);
+  for (let gz = gz0; gz <= gz1; gz++) for (let gx = gx0; gx <= gx1; gx++) fn(gx, gz);
+}
+function gridInsert(c: CoverEntity): void {
+  gridSpan(c, (gx, gz) => {
+    const k = gkey(gx, gz);
+    const arr = _coverGrid.get(k);
+    if (arr) arr.push(c); else _coverGrid.set(k, [c]);
+  });
+}
+function gridRemove(c: CoverEntity): void {
+  gridSpan(c, (gx, gz) => {
+    const k = gkey(gx, gz);
+    const arr = _coverGrid.get(k);
+    if (!arr) return;
+    const i = arr.indexOf(c);
+    if (i >= 0) arr.splice(i, 1);
+    if (arr.length === 0) _coverGrid.delete(k);
+  });
+}
+function gridPoint(x: number, z: number): readonly CoverEntity[] {
+  return _coverGrid.get(gkey(Math.floor(x / GRID_CELL), Math.floor(z / GRID_CELL))) ?? _emptyCovers;
+}
+/** 矩形范围去重收集（线段/半径查询用；scratch 单线程复用） */
+function gridRect(x0: number, z0: number, x1: number, z1: number): Set<CoverEntity> {
+  _scratchCovers.clear();
+  const gx0 = Math.floor((x0 - COVER_R_FOOT) / GRID_CELL), gx1 = Math.floor((x1 + COVER_R_FOOT) / GRID_CELL);
+  const gz0 = Math.floor((z0 - COVER_R_FOOT) / GRID_CELL), gz1 = Math.floor((z1 + COVER_R_FOOT) / GRID_CELL);
+  for (let gz = gz0; gz <= gz1; gz++) for (let gx = gx0; gx <= gx1; gx++) {
+    const arr = _coverGrid.get(gkey(gx, gz));
+    if (arr) for (const c of arr) _scratchCovers.add(c);
+  }
+  return _scratchCovers;
+}
 
 /** ★ 掩体顶面高度（世界 Y；不在任何掩体足迹内 → null）——供角色贴地/落顶 */
 export function coverTopAt(x: number, z: number): number | null {
+  const arr = gridPoint(x, z);
+  if (arr.length === 0) return null;
   let best: number | null = null;
-  for (const c of _coverRegistry) {
+  for (const c of arr) {
     const top = c.topAt(x, z);
     if (top !== null && (best === null || top > best)) best = top;
   }
@@ -192,6 +248,11 @@ export class CoverEntity extends StructureEntity {
   private readonly blockId: number;
   /** 墙朝向（碰撞体/阻挡索引/渲染共用） */
   readonly heading: number;
+  /** ★ 朝向缓存（2026-09-30 性能）：掩体查询不再每格现算 sin/cos */
+  readonly fwdX: number;
+  readonly fwdZ: number;
+  readonly rgtX: number;
+  readonly rgtZ: number;
   /** ★ 光环前的基础值（城墙光环动态改 maxHp/defense，离开范围要能回落） */
   private readonly baseMaxHp: number;
   private readonly baseDefense: number;
@@ -259,6 +320,8 @@ export class CoverEntity extends StructureEntity {
     this.poster = opts.poster !== false;
     this.hasSlit = this.variant !== 'wall';
     this.heading = opts.heading ?? 0;
+    this.fwdX = Math.sin(this.heading); this.fwdZ = Math.cos(this.heading);
+    this.rgtX = this.fwdZ; this.rgtZ = -this.fwdX;
     this.baseMaxHp = this.maxHp;
     this.baseDefense = this.defense;
     this.buildTime = opts.buildTime ?? 0;
@@ -281,6 +344,7 @@ export class CoverEntity extends StructureEntity {
       COVER_W / 2, COVER_T / 2, COVER_H / 2, this.heading, true, true,
     );
     _coverRegistry.add(this);
+    gridInsert(this);
   }
 
   /** ★ 城墙光环结算（由 updateWallAuras 调用）：多座城墙**叠加**（上限/防御/修复相加），范围内持续回血 */
@@ -297,16 +361,16 @@ export class CoverEntity extends StructureEntity {
   /** ★ 顶面高度（世界 Y；点在墙足迹内才返回）——角色落顶/攀爬目标 */
   topAt(x: number, z: number): number | null {
     const p = this.entity.position;
-    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
     const dx = x - p.x, dz = z - p.z;
-    const lz = dx * fx + dz * fz;   // 厚度轴
-    const lx = dx * fz - dz * fx;   // 宽度轴
+    const lz = dx * this.fwdX + dz * this.fwdZ;   // 厚度轴
+    const lx = dx * this.rgtX + dz * this.rgtZ;   // 宽度轴
     if (Math.abs(lx) > COVER_W / 2 || Math.abs(lz) > COVER_T / 2) return null;
     return p.y + COVER_H;
   }
 
   override dispose(): void {
     _coverRegistry.delete(this);
+    gridRemove(this);
     removeStaticObstacle(this.blockId);
     super.dispose();
   }

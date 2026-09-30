@@ -20,7 +20,7 @@ import type { Asset } from '../vendor/player';
 import type { FluidEffect } from '../vendor/player/fluid/FluidEffect';
 import { compositeFrameToCanvas } from '../services/item/BasicMaterialsIcons';
 import { SentinelProjectile } from '../services/fx/SentinelProjectile';
-import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownCoverBlocksFrom } from '../entity/CoverEntity';
+import { CoverEntity, COVER_DEPLOY_BUILD_TIME, coverTopAt, updateWallAuras, snapshotCovers, ownCoverBlocksFrom, coverCount } from '../entity/CoverEntity';
 import { restoreWalls } from './world/RestoreWalls';
 import {
   loadWorldState, saveWorldState, pruneWorldStates,
@@ -160,6 +160,14 @@ import { WorldSpawner, type SpawnDeps, type MobDef, SENTINEL_TAUNT_RADIUS, AGENT
 export const worldPerf = {
   chunks: 0, ui: 0, combat: 0, ai: 0, entity: 0, post: 0, phys: 0, total: 0,
   drones: 0, ent: 0, water: 0, clamp: 0,
+  /** ★ 蜂群数据面 / 指挥链耗时（ms；用户定 2026-09-30） */
+  swarmMs: 0, engineMs: 0,
+  /** ★ 掩体数量（网格索引）；代理数见 nAgents */
+  nCovers: 0,
+  /** ★ 着陆收尾（finishDock）与 planDefense 耗时（ms；F 卡顿定位用） */
+  dockMs: 0, planMs: 0, pickMs: 0, planAnalyzeMs: 0, planPassMs: 0,
+  /** ★ 挖坑链路（ms）：noteMs = 挖坑帧同步（掩码窗扫+失效）；holeRebuildMs = 工事表整表重建（分片累计） */
+  digNoteMs: 0, holeRebuildMs: 0,
   nEnemies: 0, nDrones: 0, nEntities: 0, nBases: 0,
   /** ★ 蜂群代理数（L1+L2；P0 度量） */
   nAgents: 0,
@@ -201,6 +209,8 @@ export class WorldMode implements IGameMode {
   } | null = null;
   /** 本帧是否触地（landingStep 结果；实体段转落稳用） */
   private landingTouchdown = false;
+  /** ★ 触地期预算化布置预计算（落点键；与收尾参数一致才提交，2026-09-30） */
+  private planPrepKey: { x: number; z: number; lx: number; lz: number; r: number } | null = null;
   /** 落稳段时长（秒）：镜头保持追尾，看舰船贴地/滑到安全点 */
   private static readonly LAND_SETTLE_SECONDS = 1.8;
   /** ★ 起飞段（登船后自动爬升到最低净空；期间锁输入） */
@@ -632,6 +642,7 @@ export class WorldMode implements IGameMode {
     this.flightCamInit = false;
     this.landing = null;
     this.landingTouchdown = false;
+    this.planPrepKey = null;   // ★ 布置预计算键（世界初始化清空）
     this.takeoff = false;
     this.camBlend = null;
     landingCamera.shot = null;
@@ -1366,6 +1377,8 @@ export class WorldMode implements IGameMode {
       ? { x: shipFwd.x, z: shipFwd.z }
       : this.cameraCtrl.getFrame().forward;
     this.chunks.update(pp.x, pp.y, dt, faceFw.x, faceFw.z);
+    // ★ 落稳前：布置预计算按帧推进（3ms/帧；预计算中不占收尾帧）
+    if (this.planPrepKey) this.swarm.data.stepPlan(5);
     const _t1 = performance.now();
 
     // ★ 小地图更新
@@ -1453,8 +1466,12 @@ export class WorldMode implements IGameMode {
       //   航行到傍晚落地会"一进图就总攻"）；太阳钟仍驱动昼夜/UI，不驱蜂群事态。
       hooks.dayT01 = -1;
       this.simT += dt; setSimNow(this.simT);   // ★ 模拟时钟单源（蜂群全部玩法计时读它）
+      const _tSw = performance.now();
       this.swarm.update(dt, hooks);
+      worldPerf.swarmMs = performance.now() - _tSw;
+      const _tEn = performance.now();
       this.engineWire?.tick(dt);   // ★ P2：引擎拍 + 队长核 + 战术侧
+      worldPerf.engineMs = performance.now() - _tEn;
       // ★ 自爆危急提醒（边框红晙）+ 爆炸视觉推进
       updateSuicideWarning(this.worldUIManager, this.swarm.pool, this.enemies, pp.x, pp.y, dt);
       this.explosionFx?.update(dt);
@@ -1579,6 +1596,9 @@ export class WorldMode implements IGameMode {
     worldPerf.nEnemies = this.enemies.length;
     worldPerf.nDrones = this.drones.length;
     worldPerf.nAgents = this.swarm.count;
+    worldPerf.nCovers = coverCount();
+    worldPerf.digNoteMs = this.swarm.data.digPerf.noteMs;
+    worldPerf.holeRebuildMs = this.swarm.data.covers.perf.rebuildMs;
     // ★ 口径区分（2026-09-12）：活体实体（角色/道具/子弹）vs 全部物理记录
     //   （后者含 每 chunk 地面 trimesh + 每装饰物 cuboid ——"刚进图 105"即此类）
     worldPerf.nBases = this.entities.baseCount;
@@ -2836,6 +2856,15 @@ export class WorldMode implements IGameMode {
     L.toX = sp.x;
     L.toZ = sp.z;
     landingCamera.shot = null; // 观察机位结束，交棒落稳段镜头
+    // ★ 触地期预算化布置：分析表+可行表分帧预计算（落稳收尾只提交；修 F 卡顿）
+    {
+      const _tp = performance.now();
+      const landing = this.pickEnemyLanding(sp);
+      worldPerf.pickMs = performance.now() - _tp;
+      const tableR = Math.min(240, Math.max(144, Math.hypot(landing.x - sp.x, landing.z - sp.z) + 60));
+      this.swarm.data.preparePlan(landing.x, landing.z, tableR, sp.x, sp.z);
+      this.planPrepKey = { x: sp.x, z: sp.z, lx: landing.x, lz: landing.z, r: tableR };
+    }
     // 玩家下机点：舰船右舷侧旁（不在机体里）
     const exit = playerExitPoint(this.ship, this.raster, sp.x, sp.z);
     L.exitX = exit.x; L.exitY = exit.y; L.exitZ = exit.z;
@@ -2891,6 +2920,7 @@ export class WorldMode implements IGameMode {
    *  镜头调度已在 beginSettle 启动（与落稳同步结束），此处不再重建过渡。 */
   private finishDock(): void {
     if (!this.session || !this.ship) return;
+    const _tDock = performance.now();
     const emergency = this.landing?.emergency ?? false;
     const L = this.landing;
     this.landing = null;
@@ -2901,9 +2931,25 @@ export class WorldMode implements IGameMode {
     // ★ S0 勘察 + 战术布置：每次落地重做（舰船换登陆点）；展开轴=扫描走廊（掩体朝舰船，战壕脚底下）
     // ★ 完整移植（rts 同口径）：**敌方登陆点**在距舰 ~160m 的可行方向 → planDefense(落点)；
     //   事态环/防区/工事带都以**走廊**展开（不贴脸），PassTable 舰心窗罩住 舰↔落点 走廊。
+    const _tPlan = performance.now();
     const landing = this.pickEnemyLanding(sp);
+    worldPerf.pickMs = performance.now() - _tPlan;
     const tableR = Math.min(240, Math.max(144, Math.hypot(landing.x - sp.x, landing.z - sp.z) + 60));
-    this.swarm.data.planDefense(landing.x, landing.z, tableR, performance.now() / 1000, sp.x, sp.z);
+    const P = this.planPrepKey;
+    this.planPrepKey = null;
+    const same = P !== null
+      && Math.hypot(P.x - sp.x, P.z - sp.z) < 1.0
+      && Math.hypot(P.lx - landing.x, P.lz - landing.z) < 1.0
+      && Math.abs(P.r - tableR) < 0.5;
+    if (same) {
+      this.swarm.data.commitPlan(performance.now() / 1000);   // ★ 预计算就绪：只提交（几毫秒）
+    } else {
+      this.swarm.data.abortPlan();
+      this.swarm.data.planDefense(landing.x, landing.z, tableR, performance.now() / 1000, sp.x, sp.z);
+    }
+    worldPerf.planMs = performance.now() - _tPlan;
+    worldPerf.planAnalyzeMs = this.swarm.data.planPerf.analyze;
+    worldPerf.planPassMs = this.swarm.data.planPerf.pass;
     // ★ Boss 战：落地后在舰船前方生成普瑞赛斯（一次性）
     if (this.bossRun && !this.bossEntity) this.spawner.spawnBoss(sp.x, sp.z);
     this.ship.position.x = sp.x;
@@ -2931,6 +2977,7 @@ export class WorldMode implements IGameMode {
       this.cameraCtrl.snapTo(exit.x, exit.y, exit.z);
       p.controlLocked = false;
     }
+    worldPerf.dockMs = performance.now() - _tDock;
   }
 
   // ============================================================

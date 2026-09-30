@@ -412,7 +412,7 @@ async function boot() {
   const hudWrap = document.createElement('div');
   // ★ 调试 HUD 可见性：默认隐藏，由右上角「性能」按钮切换（控制台 setHudVisible(true) 亦可）
   //   hidden 时整段统计代码跳过 → 零累加、零 DOM 写入，不存在后台白烧
-  let hudVisible = (globalThis as { __PP_HUD?: boolean }).__PP_HUD === true;
+  let hudVisible = (globalThis as { __PP_HUD?: boolean }).__PP_HUD !== false;   // ★ 默认开启（用户定 2026-09-30；?__PP_HUD=false 可关）
   hudWrap.style.cssText =
     'position:fixed;top:38px;right:8px;z-index:999;display:none;flex-direction:column;gap:4px;align-items:flex-end;pointer-events:none';
   const hudEl: HTMLDivElement = document.createElement('div');
@@ -486,6 +486,7 @@ async function boot() {
   let wpChunksSum = 0, wpUiSum = 0, wpCombatSum = 0, wpAiSum = 0;
   let wpEntSum = 0, wpPostSum = 0, wpPhysSum = 0;
   let wpDronesSum = 0, wpEntSubSum = 0, wpWaterSum = 0, wpClampSum = 0;
+  let wpSwarmSum = 0, wpEngineSum = 0;
   /** ★ 窗口内 chunk 装配峰值（确认走路卡顿是否来自交付尖峰） */
   let wpAsmMax = 0;
   // ★ 实体管线阶段耗时（EntityBase.update 聚合；同窗口平均）
@@ -571,6 +572,8 @@ async function boot() {
         wpEntSubSum += worldPerf.ent;
         wpWaterSum += worldPerf.water;
         wpClampSum += worldPerf.clamp;
+        wpSwarmSum += worldPerf.swarmMs;
+        wpEngineSum += worldPerf.engineMs;
         if (worldPerf.assembly > wpAsmMax) wpAsmMax = worldPerf.assembly;
         epBehSum += entityPerf.behavior;
         epPhysSum += entityPerf.phys;
@@ -601,8 +604,9 @@ async function boot() {
             + `阶段 行为 ${(epBehSum / fpsFrames).toFixed(1)}  物理 ${(epPhysSum / fpsFrames).toFixed(1)}  动画 ${(epAnimSum / fpsFrames).toFixed(1)}  渲染 ${(epRenderSum / fpsFrames).toFixed(1)}  索引 ${(epMovedSum / fpsFrames).toFixed(1)}  影子 ${(epShadowSum / fpsFrames).toFixed(1)}\n`
             + `行为拆 移动 ${(epMoveSum / fpsFrames).toFixed(1)}  推挤 ${(epSepOtherSum / fpsFrames).toFixed(1)}  静态 ${(epSepStaticSum / fpsFrames).toFixed(1)}  染料 ${(epDyeSum / fpsFrames).toFixed(1)}\n`
             + `蜂群 决策 ${(epSwarmSum / fpsFrames).toFixed(2)}  分离 ${(epSwarmSepSum / fpsFrames).toFixed(2)}  批渲 ${(epSwarmRenderSum / fpsFrames).toFixed(2)}\n`
+            + `数据面 ${(wpSwarmSum / fpsFrames).toFixed(2)}  指挥链(引擎+队长核+战术) ${(wpEngineSum / fpsFrames).toFixed(2)}  挖改通知 ${worldPerf.digNoteMs.toFixed(1)}ms 工事重建 ${worldPerf.holeRebuildMs.toFixed(0)}ms\n`
             + (inWorldEnv
-              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 机 ${worldPerf.nDrones})  `
+              ? `实体数 ${worldPerf.nBases} (敌 ${worldPerf.nEnemies} 代理 ${worldPerf.nAgents} 掩体 ${worldPerf.nCovers} 机 ${worldPerf.nDrones})  收尾 ${worldPerf.dockMs.toFixed(0)}ms/布置 ${worldPerf.planMs.toFixed(0)}ms  `
                 + `刚体记录 ${worldPerf.nEntities} = 地形 ${worldPerf.nGround} + 装饰/友军 ${worldPerf.nDecor}`
                 + ` + 其他 ${worldPerf.nEntities - worldPerf.nGround - worldPerf.nDecor}`
               : `（舰船模式：世界统计暂停）`);
@@ -617,6 +621,7 @@ async function boot() {
         wpChunksSum = 0; wpUiSum = 0; wpCombatSum = 0; wpAiSum = 0;
         wpEntSum = 0; wpPostSum = 0; wpPhysSum = 0;
         wpDronesSum = 0; wpEntSubSum = 0; wpWaterSum = 0; wpClampSum = 0;
+        wpSwarmSum = 0; wpEngineSum = 0;
         wpAsmMax = 0;
         epBehSum = 0; epPhysSum = 0; epAnimSum = 0;
         epRenderSum = 0; epMovedSum = 0; epShadowSum = 0;

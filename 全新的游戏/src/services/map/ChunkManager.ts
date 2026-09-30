@@ -236,6 +236,8 @@ export class ChunkManager {
   private queuedKeys = new Set<number>();
   /** 每帧构建时间预算（毫秒）；单帧最多消耗这么多，剩余下帧继续 */
   private static readonly BUILD_BUDGET_MS = 8;
+  /** ★ 降落冲刺期每帧构建预算（摊开 3×3；用户定 2026-09-30；单项快照超支已 ~20ms，不再叠加） */
+  private static readonly RUSH_BUDGET_MS = 8;
   /** ★ 档位（2026-09-10）：可见构建半径（±2 chunk = 5×5）/ 数据+预烘焙半径（±4 = 9×9）
    *  ★ 2026-09-11：预烘半径 3→4——更早算好（数据+纹理+几何），进入构建环直接装配不等烘焙 */
   private static readonly BUILD_RADIUS = 2;
@@ -929,7 +931,13 @@ export class ChunkManager {
       this.rushDirZ = dirZ / l;
     }
     this.setCoarseMode(false);
-    this.bootstrap(px, pz);
+    // ★ 2026-09-30 修 F 卡顿：**不再同帧直建中心块**（planDecor+9 邻快照会成单帧长任务）——
+    //   进近/落稳有几秒，全部交给预算化队列（rush 期预算提到 RUSH_BUDGET_MS），中心块最高优先。
+    //   角色 Y 由 clampCharacter 按高度场驱动，不依赖地面先建好。
+    if (this.testChunk || this.boss4D) { this.bootstrap(px, pz); return; }
+    this.syncChunks(px, pz);
+    this.markHotChunk(px, pz);
+    this.enqueueChunk(Math.floor(px / CHUNK_SIZE), Math.floor(pz / CHUNK_SIZE), false);
   }
 
   /** 装饰补挂耗时冷却：本次超过预算 → 下一块推迟同等时间（把尖峰摊到后续帧） */
@@ -1332,7 +1340,7 @@ export class ChunkManager {
     // ★ 优先级：坑洞重建在途/待投时压缩地形创建预算（地形创建优先级不高——
     //   2026-09-08 用户定调），把主线程+烘焙 worker 让给地形修改链路
     const patching = this.patchRebuilds.size > 0 || this.pendingPatches.size > 0;
-    const budget = ChunkManager.BUILD_BUDGET_MS * (patching ? 0.5 : 1);
+    const budget = (performance.now() < this.rushUntil ? ChunkManager.RUSH_BUDGET_MS : ChunkManager.BUILD_BUDGET_MS) * (patching ? 0.5 : 1);
     while (this.queue.length > 0 && performance.now() - t0 < budget) {
       // ★ 在途闸门：构建类烘焙在途 ≤ BUILD_INFLIGHT_MAX
       //   （跨区新增一片/接缝重建批量时不再把多个烘焙任务同帧塞进 worker → 无爆发）

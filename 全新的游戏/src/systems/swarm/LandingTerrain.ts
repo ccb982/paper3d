@@ -68,87 +68,121 @@ interface Scan {
   width: Uint8Array;
 }
 
-function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): Scan {
+/** ★ 分片扫描状态（触地期按帧预算预计算；收尾 scanTake） */
+export interface ScanBuild {
+  raster: RasterMap;
+  cx: number; cz: number; radius: number;
+  n: number; x0: number; z0: number;
+  h: Float32Array; pass: Uint8Array; stand: Uint8Array; reach: Uint8Array; width: Uint8Array;
+  phase: 0 | 1 | 2 | 3;   // 0 行扫描 / 1 可达洪泛 / 2 宽度 BFS / 3 完成
+  iz: number;
+}
+
+export function scanBegin(raster: RasterMap, cx: number, cz: number, radius: number): ScanBuild {
   const n = Math.floor((radius * 2) / STEP) + 1;
-  const h = new Float32Array(n * n);
-  const pass = new Uint8Array(n * n);
-  const stand = new Uint8Array(n * n);
-  const x0 = cx - radius;
-  const z0 = cz - radius;
-  const at = (ix: number, iz: number): number => iz * n + ix;
+  return {
+    raster, cx, cz, radius, n, x0: cx - radius, z0: cz - radius,
+    h: new Float32Array(n * n), pass: new Uint8Array(n * n), stand: new Uint8Array(n * n),
+    reach: new Uint8Array(n * n), width: new Uint8Array(n * n), phase: 0, iz: 0,
+  };
+}
+
+/** 推进（rowBudget = 本轮行数）；返回是否完成 */
+export function scanStep(b: ScanBuild, rowBudget: number): boolean {
+  const { raster, n, x0, z0, h, pass, stand } = b;
   const sampleH = (x: number, z: number): number => raster.surfaceHeightAt(x, z);
-
-  for (let iz = 0; iz < n; iz++) {
-    for (let ix = 0; ix < n; ix++) {
-      const x = x0 + ix * STEP;
-      const z = z0 + iz * STEP;
-      const i = at(ix, iz);
-      const hh = sampleH(x, z);
-      h[i] = hh;
-      const role = raster.tileDefAt(x, z).genRole;
-      // pass = 基本地形（坑/水/过低 → 不可通行）；**墙由遍历时的边上检查处理**
-      //（方向无关的"上升检测"会把所有崖底也判死 → 洪泛出不了高台）
-      if (role === 'pit' || role === 'liquid' || hh < DANGER.PIT_H) { pass[i] = 0; stand[i] = 0; continue; }
-      pass[i] = 1;
-      // stand = 可布防（崖边/贴墙不摆工事）
-      let cliff = false, wall = false;
-      const probe = (dx: number, dz: number): void => {
-        const d = sampleH(x + dx * 2, z + dz * 2) - hh;
-        if (d > CLIMB_MAX) wall = true;
-        else if (d < -DROP_MAX) cliff = true;
-      };
-      probe(1, 0); probe(-1, 0); probe(0, 1); probe(0, -1);
-      stand[i] = cliff || wall ? 0 : 1;
+  if (b.phase === 0) {
+    const end = Math.min(n, b.iz + Math.max(1, rowBudget));
+    for (; b.iz < end; b.iz++) {
+      const iz = b.iz;
+      for (let ix = 0; ix < n; ix++) {
+        const x = x0 + ix * STEP;
+        const z = z0 + iz * STEP;
+        const i = iz * n + ix;
+        const hh = sampleH(x, z);
+        h[i] = hh;
+        const role = raster.tileDefAt(x, z).genRole;
+        if (role === 'pit' || role === 'liquid' || hh < DANGER.PIT_H) { pass[i] = 0; stand[i] = 0; continue; }
+        pass[i] = 1;
+        let cliff = false, wall = false;
+        const probe = (dx: number, dz: number): void => {
+          const d = sampleH(x + dx * 2, z + dz * 2) - hh;
+          if (d > CLIMB_MAX) wall = true;
+          else if (d < -DROP_MAX) cliff = true;
+        };
+        probe(1, 0); probe(-1, 0); probe(0, 1); probe(0, -1);
+        stand[i] = cliff || wall ? 0 : 1;
+      }
     }
+    if (b.iz < n) return false;
+    b.phase = 1;
   }
-
-  // ---- 可达性（从中心洪泛；**严格**：相邻格高差 ≤ CLIMB_MAX，上下都算）----
-  //   ★ 部署锚点必须"能去也能回"：早期只挡爬升、下落放行 → 锚点会落到崖下，
-  //     部队生成在低层台地后**爬不回舰船/玩家**（实测：远程/施工队卡在崖边不动）
-  const reach = new Uint8Array(n * n);
-  const cix = Math.round((cx - x0) / STEP);
-  const ciz = Math.round((cz - z0) / STEP);
-  const start = at(cix, ciz);
-  if (pass[start]) {
-    const stack = [start];
-    reach[start] = 1;
-    while (stack.length > 0) {
-      const c = stack.pop()!;
+  if (b.phase === 1) {
+    const reach = b.reach;
+    const cix = Math.round((b.cx - x0) / STEP);
+    const ciz = Math.round((b.cz - z0) / STEP);
+    const start = ciz * n + cix;
+    if (pass[start]) {
+      const stack = [start];
+      reach[start] = 1;
+      while (stack.length > 0) {
+        const c = stack.pop()!;
+        const ix = c % n;
+        const iz = (c - ix) / n;
+        const hc = h[c];
+        const tryStep = (nx: number, nz: number): void => {
+          if (nx < 0 || nz < 0 || nx >= n || nz >= n) return;
+          const nb = nz * n + nx;
+          if (!pass[nb] || reach[nb]) return;
+          if (Math.abs(h[nb] - hc) > CLIMB_MAX) return;
+          reach[nb] = 1;
+          stack.push(nb);
+        };
+        tryStep(ix - 1, iz); tryStep(ix + 1, iz);
+        tryStep(ix, iz - 1); tryStep(ix, iz + 1);
+      }
+    }
+    b.phase = 2;
+  }
+  if (b.phase === 2) {
+    const width = b.width;
+    const queue: number[] = [];
+    for (let i = 0; i < n * n; i++) {
+      if (pass[i] && stand[i]) width[i] = WIDTH_CAP;
+      else { width[i] = 0; queue.push(i); }
+    }
+    for (let qi = 0; qi < queue.length; qi++) {
+      const c = queue[qi];
+      const w = width[c] + 1;
+      if (w > WIDTH_CAP) continue;
       const ix = c % n;
       const iz = (c - ix) / n;
-      const hc = h[c];
-      const tryStep = (nx: number, nz: number): void => {
-        if (nx < 0 || nz < 0 || nx >= n || nz >= n) return;
-        const nb = nz * n + nx;
-        if (!pass[nb] || reach[nb]) return;
-        if (Math.abs(h[nb] - hc) > CLIMB_MAX) return;   // 崖/墙：不可达
-        reach[nb] = 1;
-        stack.push(nb);
-      };
-      tryStep(ix - 1, iz); tryStep(ix + 1, iz);
-      tryStep(ix, iz - 1); tryStep(ix, iz + 1);
+      if (ix > 0 && width[c - 1] > w) { width[c - 1] = w; queue.push(c - 1); }
+      if (ix < n - 1 && width[c + 1] > w) { width[c + 1] = w; queue.push(c + 1); }
+      if (iz > 0 && width[c - n] > w) { width[c - n] = w; queue.push(c - n); }
+      if (iz < n - 1 && width[c + n] > w) { width[c + n] = w; queue.push(c + n); }
     }
+    b.phase = 3;
+    return true;
   }
+  return b.phase === 3;
+}
 
-  // ---- 通行宽度（多源 BFS：到最近不可通行/不可布防格；单位 = 格） ----
-  const width = new Uint8Array(n * n);
-  const queue: number[] = [];
-  for (let i = 0; i < n * n; i++) {
-    if (pass[i] && stand[i]) width[i] = WIDTH_CAP;
-    else { width[i] = 0; queue.push(i); }
-  }
-  for (let qi = 0; qi < queue.length; qi++) {
-    const c = queue[qi];
-    const w = width[c] + 1;
-    if (w > WIDTH_CAP) continue;
-    const ix = c % n;
-    const iz = (c - ix) / n;
-    if (ix > 0 && width[c - 1] > w) { width[c - 1] = w; queue.push(c - 1); }
-    if (ix < n - 1 && width[c + 1] > w) { width[c + 1] = w; queue.push(c + 1); }
-    if (iz > 0 && width[c - n] > w) { width[c - n] = w; queue.push(c - n); }
-    if (iz < n - 1 && width[c + n] > w) { width[c + n] = w; queue.push(c + n); }
-  }
-  return { n, radius, cx, cz, h, pass, stand, reach, width };
+/** 取结果（扫描须已完成） */
+export function scanTake(b: ScanBuild): Scan {
+  return { n: b.n, radius: b.radius, cx: b.cx, cz: b.cz, h: b.h, pass: b.pass, stand: b.stand, reach: b.reach, width: b.width };
+}
+
+function buildScan(raster: RasterMap, cx: number, cz: number, radius: number): Scan {
+  const b = scanBegin(raster, cx, cz, radius);
+  while (!scanStep(b, 1e9)) { /* 同步跑完 */ }
+  return scanTake(b);
+}
+
+
+/** ★ 从扫描体做战术分析（切分点：扫描可在触地期预算化，分析在此一次完成） */
+export function analyzeScan(scan: Scan): DefensePlan {
+  return analyzeScanBody(scan);
 }
 
 /** ★ 舰船落地周边地形检测 + 战术分析（v2）
@@ -158,8 +192,12 @@ export function analyzeLandingTerrain(
   raster: RasterMap, cx: number, cz: number, radius = 80,
   preferX?: number, preferZ?: number,
 ): DefensePlan {
-  const scan = buildScan(raster, cx, cz, radius);
-  const { n, pass, stand, reach, width, h } = scan;
+  return analyzeScanBody(buildScan(raster, cx, cz, radius), preferX, preferZ);
+}
+
+/** ★ 分析主体（输入扫描体；preferX/Z = 主来向偏好） */
+export function analyzeScanBody(scan: Scan, preferX?: number, preferZ?: number): DefensePlan {
+  const { n, radius, cx, cz, pass, stand, reach, width, h } = scan;
   const x0 = cx - radius;
   const z0 = cz - radius;
   const okAt = (x: number, z: number): boolean => {

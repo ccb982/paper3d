@@ -118,12 +118,36 @@ export class HoleTable {
     return c && c.until > nowMs ? c.squad : 0;
   }
 
-  /** ★★ 重排（每个低频拍调一次 = "动态不断修改"）：
-   *  1m 深度场 → 逐格打分（深×近）→ 连通块合并成坑洞 → 按分降序；
-   *  掩体（构造工事）同拍从输入快照重算（遮蔽×近×血量）。
-   *  @param nowMs 占用过期判定时钟（测试可注入） */
+  /** ★ 分片预算（格/次；约 1ms 量级） */
+  static readonly RB_CHUNK = 4096;
+  /** ★ 分片重建状态（CoverTables 每帧推进；null = 无进行中） */
+  private rb: {
+    mask: HoleMask; sem: TerrainSemantics; px: number; pz: number; nowMs: number;
+    sx: number; sz: number;
+    phase: 1 | 2 | 3;
+    iz: number;
+    scan: number;
+    comp: {
+      start: number; que: number[]; q: number;
+      n: number; sumD: number; maxD: number; sumX: number; sumZ: number;
+      best: number; bx: number; bz: number;
+    } | null;
+    list: Hole[];
+  } | null = null;
+
+  get isRebuilding(): boolean { return this.rb !== null; }
+
+  /** ★★ 重排（同步一次跑完；测试/兜底） */
   rebuild(mask: HoleMask | null, sem: TerrainSemantics | null, px: number, pz: number,
     covers: readonly CoverRec[] = [], nowMs = perfNow()): void {
+    this.rebuildBegin(mask, sem, px, pz, covers, nowMs);
+    while (!this.rebuildStep(1e9)) { /* 同步跑完 */ }
+  }
+
+  /** ★★ 分片重建：开始（掩体重算/占用清理/打分复位）——随后 rebuildStep 按帧推进 */
+  rebuildBegin(mask: HoleMask | null, sem: TerrainSemantics | null, px: number, pz: number,
+    covers: readonly CoverRec[] = [], nowMs = perfNow()): void {
+    this.rb = null;
     this.scores.fill(-1);
     // ★ 掩体：动态重算（活注册表快照；遮蔽随玩家移动实时变 + 残墙降权）
     this.coversArr = covers.map((c) => {
@@ -140,59 +164,90 @@ export class HoleTable {
     if (!mask || !mask.isReady || !sem || !sem.isReady) { this.holesArr = []; return; }
     const sx = mask.anchor.x - L1_R, sz = mask.anchor.z - L1_R;
     this.lastSx = sx; this.lastSz = sz;
-
-    // ① 逐格打分（1m 格心）
-    for (let iz = 0; iz < MASK_SIDE; iz++) {
-      for (let ix = 0; ix < MASK_SIDE; ix++) {
-        const i = iz * MASK_SIDE + ix;
-        const wx = sx + ix + 0.5, wz = sz + iz + 0.5;
-        const depth = mask.depthAt(wx, wz);
-        if (depth < HOLE_MIN_DEPTH) continue;                     // 不够深 → 非坑
-        if (!sem.isPassableAt(wx, wz)) continue;                  // 坑/崖等不可站 → 非坑
-        const dist = Math.hypot(wx - px, wz - pz);
-        const depthF = Math.min(1, Math.max(0, (depth - HOLE_MIN_DEPTH) / (HOLE_FULL_DEPTH - HOLE_MIN_DEPTH)));
-        const proxF = Math.min(1, Math.max(0, (HOLE_FAR_R - dist) / (HOLE_FAR_R - HOLE_NEAR_R)));
-        this.scores[i] = depthF * proxF;                          // 乘积：浅或远 → 0
-      }
-    }
-
-    // ② 连通块合并成坑洞（4 邻；id = 块内最小格索引 → 稳定）
     this.region.fill(-1);
-    const list: Hole[] = [];
-    for (let iz = 0; iz < MASK_SIDE; iz++) {
-      for (let ix = 0; ix < MASK_SIDE; ix++) {
-        const start = iz * MASK_SIDE + ix;
-        if (this.scores[start] <= 0 || this.region[start] >= 0) continue;
-        const que: number[] = [start];
-        this.region[start] = start;
-        let q = 0, n = 0, sumD = 0, maxD = 0, sumX = 0, sumZ = 0;
-        let best = -1, bx = 0, bz = 0;
-        while (q < que.length) {
-          if (que.length > MASK_SIDE * MASK_SIDE) throw new Error('[HoleTable] BFS 队列爆炸（region 标记失效）');
-          const c = que[q++];
+    // ★ 旧坑洞列表保留到提交帧（分片期间敌人取坑连续；之前是整表原子替换）
+    this.rb = {
+      mask, sem, px, pz, nowMs, sx, sz,
+      phase: 1, iz: 0, scan: 0, comp: null, list: [],
+    };
+  }
+
+  /** ★★ 分片重建：推进（cellBudget 格/次）；返回是否完成 */
+  rebuildStep(cellBudget = HoleTable.RB_CHUNK): boolean {
+    const rb = this.rb;
+    // 未建窗（mask/sem 缺失）视为完成（holesArr 已在 begin 清空）
+    if (!rb) return true;
+    let n = 0;
+    const { mask, sem, px, pz, nowMs, sx, sz } = rb;
+    if (rb.phase === 1) {
+      while (rb.iz < MASK_SIDE && n < cellBudget) {
+        const iz = rb.iz;
+        for (let ix = 0; ix < MASK_SIDE; ix++) {
+          const i = iz * MASK_SIDE + ix;
+          const wx = sx + ix + 0.5, wz = sz + iz + 0.5;
+          const depth = mask.depthAt(wx, wz);
+          if (depth < HOLE_MIN_DEPTH) { n++; continue; }          // 不够深 → 非坑
+          if (!sem.isPassableAt(wx, wz)) { n++; continue; }       // 坑/崖等不可站 → 非坑
+          const dist = Math.hypot(wx - px, wz - pz);
+          const depthF = Math.min(1, Math.max(0, (depth - HOLE_MIN_DEPTH) / (HOLE_FULL_DEPTH - HOLE_MIN_DEPTH)));
+          const proxF = Math.min(1, Math.max(0, (HOLE_FAR_R - dist) / (HOLE_FAR_R - HOLE_NEAR_R)));
+          this.scores[i] = depthF * proxF;                        // 乘积：浅或远 → 0
+          n++;
+        }
+        rb.iz++;
+      }
+      if (rb.iz < MASK_SIDE) return false;
+      rb.phase = 2;
+    }
+    if (rb.phase === 2) {
+      while (n < cellBudget) {
+        if (!rb.comp) {
+          let start = -1;
+          for (; rb.scan < MASK_SIDE * MASK_SIDE; rb.scan++) {
+            const i = rb.scan;
+            if (this.scores[i] > 0 && this.region[i] < 0) { start = i; rb.scan++; break; }
+          }
+          if (start < 0) { rb.phase = 3; break; }
+          this.region[start] = start;
+          rb.comp = { start, que: [start], q: 0, n: 0, sumD: 0, maxD: 0, sumX: 0, sumZ: 0, best: -1, bx: 0, bz: 0 };
+        }
+        const comp = rb.comp;
+        while (comp.q < comp.que.length && n < cellBudget) {
+          if (comp.que.length > MASK_SIDE * MASK_SIDE) throw new Error('[HoleTable] BFS 队列爆炸（region 标记失效）');
+          const c = comp.que[comp.q++];
+          n++;
           const cix = c % MASK_SIDE, ciz = (c - cix) / MASK_SIDE;
           const wx = sx + cix + 0.5, wz = sz + ciz + 0.5;
           const d = mask.depthAt(wx, wz);
-          n++; sumD += d; sumX += wx; sumZ += wz;
-          if (d > maxD) maxD = d;
-          if (this.scores[c] > best) { best = this.scores[c]; bx = wx; bz = wz; }
+          comp.n++; comp.sumD += d; comp.sumX += wx; comp.sumZ += wz;
+          if (d > comp.maxD) comp.maxD = d;
+          if (this.scores[c] > comp.best) { comp.best = this.scores[c]; comp.bx = wx; comp.bz = wz; }
           for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
             const nxi = cix + dx, nzi = ciz + dz;
             if (nxi < 0 || nzi < 0 || nxi >= MASK_SIDE || nzi >= MASK_SIDE) continue;
             const ni = nzi * MASK_SIDE + nxi;
-            if (this.scores[ni] > 0 && this.region[ni] < 0) { this.region[ni] = start; que.push(ni); }
+            if (this.scores[ni] > 0 && this.region[ni] < 0) { this.region[ni] = comp.start; comp.que.push(ni); }
           }
         }
-        const dist = Math.hypot(bx - px, bz - pz);
-        list.push({
-          id: start, cells: n, maxDepth: maxD, avgDepth: sumD / n,
-          cx: bx, cz: bz, mx: sumX / n, mz: sumZ / n,
-          score: Math.max(0, best), dist,
-          claimedBy: this.claimedBy(start, nowMs),
-        });
+        if (comp.q >= comp.que.length) {
+          const dist = Math.hypot(comp.bx - px, comp.bz - pz);
+          rb.list.push({
+            id: comp.start, cells: comp.n, maxDepth: comp.maxD, avgDepth: comp.sumD / comp.n,
+            cx: comp.bx, cz: comp.bz, mx: comp.sumX / comp.n, mz: comp.sumZ / comp.n,
+            score: Math.max(0, comp.best), dist,
+            claimedBy: this.claimedBy(comp.start, nowMs),
+          });
+          rb.comp = null;
+        }
       }
+      if (rb.phase === 2) return false;
     }
-    this.holesArr = list.sort((a, b) => b.score - a.score);
+    if (rb.phase === 3) {
+      this.holesArr = rb.list.sort((a, b) => b.score - a.score);
+      this.rb = null;
+      return true;
+    }
+    return true;
   }
 
   /** 读点：坑洞分（世界坐标；非坑/表外 = 0） */
