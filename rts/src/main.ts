@@ -318,7 +318,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
 
   let shadowBridge: EngineBridge | null = null;
   let engineView: SquadViewPort | null = null;
-  let tactics: { sectors: SectorBuilder; battalions: BattalionManager; mainSectors: number[]; acc: number; tick(h: number): void } | null = null;
+  let tactics: { sectors: SectorBuilder; battalions: BattalionManager; mainSectors: number[]; acc: number; roll: number; tick(h: number): void } | null = null;
   let squadCores: SquadRegistry | null = null;
   {
     shadowBridge = new EngineBridge({
@@ -393,6 +393,8 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       },
       // ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing）
       clampRing: (x: number, z: number) => swarm.data.clampToRing(x, z),
+      // ★ §0.3 防区锁（用户定 2026-09-30）：非总攻 → 引擎令目标夹进该队扇区（环带外不锁）
+      sectorLock: (id: number, x: number, z: number) => swarm.data.sectorLockTarget(id, x, z),
       blockedAt: (x, z) => raster.tileDefAt(x, z).genRole === 'pit',   // 不可站地形（只坑；水一直可站——总攻吸附/掩护点用）
       canReach: (id, x, z) => swarm.reachFrom(id, x, z),   // 发令门：总攻目标必须从本队真的可达（BFS）
       coversNear: (x, z, r) => { const out: { x: number; z: number }[] = []; for (const c of swarm.data.fortify.builtList()) if (c.kind === 'cover' && Math.hypot(c.x - x, c.z - z) <= r) out.push(c); return out; },   // 远程驻守门（账本）
@@ -618,6 +620,7 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
       battalions: new BattalionManager(),
       mainSectors: [0],
       acc: 0,
+      roll: 0,
       tick(h: number): void {
         this.acc += h;
         if (this.acc < 0.5) return;
@@ -634,14 +637,14 @@ function startWorld(spawnX: number, spawnZ: number, mobAssets: EnemyAssetEntry[]
         this.battalions.regroup();
         this.battalions.deploy(this.mainSectors, spawn.x, spawn.z);   // ★ 就近选防区（传舰位）
         this.battalions.gaps(this.mainSectors);
-        // ★ 主攻选择（用户定 2026-09-26）：按难度（事态 p）选 1~3 个扇区；当前集合仍有效则不重选（稳定）
+        // ★ 主攻选择（用户定 2026-09-30）：**随机 1~3 个方向**（p 档定 k）；k 变化时重掷；
+        //   掷点用 seed+轮次（可复现）；选中即冻结（用户定 2026-09-27）。
         {
           const p01 = swarm.data.postureP;
           const k = p01 < 0.4 ? 1 : p01 < 0.75 ? 2 : 3;
-          // ★ 主攻选择冻结（用户定 2026-09-27）：**一次选定后不再按容量重排**；
-          //   只在 ①首次无选 ②事态档 k 变化 时重选（选中即冻结）。
           if (this.mainSectors.length !== k) {
-            const sel = this.sectors.selectMain(k);
+            this.roll++;
+            const sel = this.sectors.selectMain(k, (SEED * 2654435761 + this.roll * 7919) >>> 0);
             if (sel.length > 0) this.mainSectors = sel;
             else if (this.mainSectors.length === 0) this.mainSectors = [0];
           }

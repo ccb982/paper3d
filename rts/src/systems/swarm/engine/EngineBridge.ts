@@ -82,6 +82,8 @@ export interface LiveView {
   underAttack?(squadId: number): boolean;
   /** ★ §3.G：后撤点夹环（单源 SwarmData.clampToRing） */
   clampRing?(x: number, z: number): { x: number; z: number };
+  /** ★ §0.3 防区锁：非总攻 + 队长在环带内 → 目标夹进本扇区；带外（溢出）→ 原样 */
+  sectorLock?(squadId: number, x: number, z: number): { x: number; z: number };
   /** ★ 保护队放宽逃逸阈值（用户定 2026-09-29）：返回该单位的卡死窗口跨度阈值；
    *  缺省 = 全局 STUCK.BBOX_R（保护队"真跟到被保护对象旁"才放宽） */
   stuckR?(uid: number): number | undefined;
@@ -772,6 +774,8 @@ export class EngineBridge {
     now: number,
     opt?: { kind?: SquadOrder['kind']; mission?: string; force?: boolean },
   ): boolean {
+    // ★ §0.3 防区锁（2026-09-30）：非总攻 → 引擎令目标夹进该队扇区（环带外的兵不受锁）
+    if (!(this.live.assault?.() ?? false) && this.live.sectorLock) target = this.live.sectorLock(id, target.x, target.z);
     const order: SquadOrder = {
       kind: opt?.kind ?? 'act',
       source: 'engine',

@@ -28,7 +28,7 @@ import { PassTable } from '../nav/PassTable';
 import { PassTableKeeper } from '../nav/PassTableKeeper';
 import { RosterController } from '../RosterController';
 import { aliveRoleInSector as aliveRoleInSectorFn, fillTargetOf as fillTargetOfFn, combatUnitTarget as combatUnitTargetFn } from './CombatTargets';
-import { FortifyPlanner, NEED_DONE, buildBonus } from '../FortifyPlanner';
+import { FortifyPlanner, NEED_DONE, buildBonus, FORTIFY_SECTORS } from '../FortifyPlanner';
 import type { EngineerPort } from '../engine/EngineerManager';
 import { hasCoverFrom, type TerrainCover } from '../UnitTactics';
 import { setSteerTable } from '../../../entity/SteerPick';
@@ -209,11 +209,29 @@ export class SwarmData {
     return { x: this.lastShipX + (dx / d) * rWant, z: this.lastShipZ + (dz / d) * rWant };
   }
 
-  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）
-   *  展开轴 = 扫描走廊轴（落地一次）；**掩体一律朝舰船（落点中心）侧 +5m、战壕留在原位**；
-   *  此后不随玩家移动/危机度动态重排（《RTS架构.md》§3/§4，用户定调 2026-09-21）。
-   *  ★ 可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊——
-   *  否则舰队打到舰西侧会"outside/notReady"（实测 397 次失败里大头）。 */
+  /** ★ §0.3 防区锁：非总攻 + 队长在环带内 → 目标夹进本扇区楔形；带外（溢出/外面）→ 原样 */
+  sectorLockTarget(id: number, x: number, z: number): { x: number; z: number } {
+    const ring = this.ring, cx = ring.cx, cz = ring.cz;
+    const sq = this.swarm.squads.get(id);
+    const lead = sq ? sq.members.get(sq.leaderUid) : undefined;
+    if (!lead) return { x, z };
+    const TAU = Math.PI * 2;
+    const d = Math.hypot(lead.x - cx, lead.z - cz);
+    if (d < ring.minD - 6 || d > ring.maxD + 6) return { x, z };   // 外面 → 无约束
+    let la = Math.atan2(lead.z - cz, lead.x - cx); if (la < 0) la += TAU;
+    const sec = Math.floor((la / TAU) * FORTIFY_SECTORS) % FORTIFY_SECTORS;
+    const mid = ((sec + 0.5) / FORTIFY_SECTORS) * TAU;
+    const half = TAU / (FORTIFY_SECTORS * 2);
+    let ta = Math.atan2(z - cz, x - cx); if (ta < 0) ta += TAU;
+    let delta = ((ta - mid + Math.PI * 3) % TAU) - Math.PI;   // 归一到 [-π, π]
+    if (Math.abs(delta) <= half) return { x, z };
+    const ca = mid + (delta > 0 ? half : -half), r = Math.hypot(x - cx, z - cz);
+    return { x: cx + Math.cos(ca) * r, z: cz + Math.sin(ca) * r };
+  }
+
+  /** ★ S0 勘察：舰船落地周边地形检测 → DefensePlan（高地/掩体位/来向/三环）。展开轴=扫描走廊轴；
+   *  掩体朝舰侧 +5m、战壕留原位；此后不随玩家移动动态重排（《RTS架构.md》§3/§4，用户定 2026-09-21）。
+   *  ★ 可行性表（2026-09-30 修）：**以舰为中心**、半径罩住 舰↔落点 走廊（否则打到舰西侧 outside）。 */
   planDefense(cx: number, cz: number, radius = 80, now = 0, shipX?: number, shipZ?: number): DefensePlan | null {
     const raster = RasterMap.current;
     if (!raster) return null;
@@ -346,22 +364,18 @@ export class SwarmData {
           facts: this.semantics,
           heightAt: (x: number, z: number) => smp0.heightAt(raster, x, z),
           bonus: buildBonus(this.plan, [...this.holeTable.covers, ...this.fortify.builtList()]),
-          waterAt: (x, z) => this.isWaterAt(x, z),
-          isDugAt: (x, z) => this.holeMask.isDug(x, z),
+          waterAt: (x, z) => this.isWaterAt(x, z), isDugAt: (x, z) => this.holeMask.isDug(x, z),
           // ★ D7-2 掩体遮挡（参照=舰；实体掩体 LOS + 地形掩体）——近寻路消费
           coverFromAt: (x, z) => hasCoverFrom(this.lastShipX, this.lastShipZ, x, z, this.coverBlocker),
           ship: hasShip0 ? { x: shipX, z: shipZ } : { x: this.plan.cx, z: this.plan.cz },
           player: { x: playerX, z: playerZ },
-          p: this.postureP,
-          posture: this.battlePosture,
+          p: this.postureP, posture: this.battlePosture,
           distGain: this.distGain,
         };
         setSteerTable(this);   // ★ 表桥：实体侧 SteerPick 也能读表（同内核）
-        // ★ 地形事实表（静态·**舰心窗**，用户定）：未建 / 舰动 / 换落点时重建（玩家移动不触发）；
-        //   半径罩住 舰↔落点 走廊（dist+60，上限 R_MAX）；C3 参照=舰（眼点=舰处地形高+1.6m）
+        // ★ 地形事实表（静态·**舰心窗**）：未建/舰动/换落点时重建；半径罩住 舰↔落点 走廊（dist+60）
         const hasShip = shipX !== 0 || shipZ !== 0;
-        const cxs = hasShip ? shipX : this.plan.cx;
-        const czs = hasShip ? shipZ : this.plan.cz;
+        const cxs = hasShip ? shipX : this.plan.cx, czs = hasShip ? shipZ : this.plan.cz;
         const corridor = Math.hypot(this.plan.cx - cxs, this.plan.cz - czs);
         const radius = Math.min(R_MAX, Math.max(L1_R, corridor + 60));
         const a = this.semantics.anchor;
@@ -430,6 +444,18 @@ export class SwarmData {
   combatCreationPort(): import('../engine/SquadCreation').CreationPort {
     return {
       mainSectors: () => this.mainSectors,
+      /** ★ §0.3：创建优先级次序（主攻在前，其余防区在后） */
+      sectorOrder: () => {
+        const m = this.mainSectors, rest: number[] = [];
+        for (let i = 0; i < FORTIFY_SECTORS; i++) if (!m.includes(i)) rest.push(i);
+        return [...m, ...rest];
+      },
+      /** ★ §0.3 溢出：放置点随机（环带外 → 无约束）；工兵不在溢出名单 */
+      overflowAnchor: () => {
+        const a = Math.random() * Math.PI * 2;
+        const base = this.frontMaxD > 0 ? this.frontMaxD : 150;
+        return { x: this.lastShipX + Math.cos(a) * (base + 12 + Math.random() * 36), z: this.lastShipZ + Math.sin(a) * (base + 12 + Math.random() * 36) };
+      },
       aliveInSector: (role, sec) => this.combatDeps(role, sec, 'alive') as number,
       unitTarget: (role) => combatUnitTargetFn(this.roster.dbg.gap, role, this.battlePosture === 'assault'),
       fillTarget: (role, sec) => this.combatDeps(role, sec, 'fill') as { x: number; z: number; gap: number } | null,

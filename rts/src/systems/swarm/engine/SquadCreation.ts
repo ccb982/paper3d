@@ -12,6 +12,12 @@ import type { MobRole } from './contracts';
 export interface CreationPort {
   /** 对应防区（主攻/认领）——创建的唯一合法范围 */
   mainSectors(): readonly number[];
+  /** ★ §0.3 创建优先级次序（用户定 2026-09-30）：**主攻防区在前，其余防区在后**；
+   *  未接 = 仅 mainSectors（旧行为）。 */
+  sectorOrder?(): readonly number[];
+  /** ★ §0.3 溢出锚点（用户定 2026-09-30）：防区满足后 → 到处放小队、无约束（放置点随机）；
+   *  null/未接 = 不放溢出。 */
+  overflowAnchor?(role: MobRole): { x: number; z: number } | null;
   /** 该防区本兵种**现役人数**（按人头补到满编） */
   aliveInSector(role: MobRole, sec: number): number;
   /** ★ 该防区目标人头（按占比推导；接线层给；未接 = 用构造默认） */
@@ -52,11 +58,15 @@ export class SquadCreation {
     // ★ 总攻：提速补兵（用户定）——间隔 1s、每波最多 6 只，直到补满缺口
     const assault = port.assault?.() ?? false;
     const everySec = assault ? Math.min(every, 1) : every;
-    for (const sec of port.mainSectors()) {
-      if ((this.grace.get(sec) ?? 0) > now) continue;          // 节拍/在途 → 幂等
+    // ★ §0.3：主攻防区在前 → 其余防区在后（优先满足防区；全满后再谈溢出）
+    const order = port.sectorOrder ? port.sectorOrder() : port.mainSectors();
+    let allFull = order.length > 0;
+    for (const sec of order) {
       const target = port.unitTarget ? port.unitTarget(this.role) : this.unitTarget;
       const alive = port.aliveInSector(this.role, sec);
       if (alive >= target) continue;                           // 已满编 → 不放
+      allFull = false;
+      if ((this.grace.get(sec) ?? 0) > now) continue;          // 节拍/在途 → 幂等
       // ★ 总攻（用户定 2026-09-26）：**新兵一律在 50m 环（主攻方向各防区中角）部署**，
       //   不并入现役队（不贴舰刷兵）。
       const fill = assault ? null : (port.fillTarget?.(this.role, sec) ?? null);
@@ -70,6 +80,22 @@ export class SquadCreation {
         n++;
       }
       if (n > 0) { this.grace.set(sec, now + everySec); this.spawned += n; }
+    }
+    // ★ §0.3 溢出（用户定 2026-09-30）：**防区全满 → 到处放小队、无约束**（放置点随机；工兵除外）
+    if (allFull && this.role !== 'engineer' && port.overflowAnchor) {
+      const key = -1;
+      if ((this.grace.get(key) ?? 0) <= now) {
+        const a = port.overflowAnchor(this.role);
+        if (a) {
+          const need = assault ? 6 : BURST;
+          let n = 0;
+          for (let k = 0; k < need; k++) {
+            if (!port.spawn(this.role, a.x + (k - 1) * 1.5, a.z)) break;
+            n++;
+          }
+          if (n > 0) { this.grace.set(key, now + everySec); this.spawned += n; }
+        }
+      }
     }
     return this.spawned;
   }

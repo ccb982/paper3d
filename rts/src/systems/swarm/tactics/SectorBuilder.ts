@@ -209,13 +209,19 @@ export class SectorBuilder {
 
   /** 主攻扇区选择（占位策略：可部署容量优先；待用户 chunk 战术覆盖）。
    *  k ≤ 0 或 > 8 → 夹到 [1, SECTOR_COUNT]。 */
-  selectMain(k: number): number[] {
+  /** ★ 主攻选择（用户定 2026-09-30）：**随机 1~3 个方向**（不再按容量占位）——
+   *  在"已扫描 ∧ 有点"的扇区里洗牌取前 kk；seed 固定 → 可复现。 */
+  selectMain(k: number, seed = 0): number[] {
     const kk = Math.max(1, Math.min(SECTOR_COUNT, Math.floor(k)));
-    return this.sectors
-      .filter((s) => s.scanned && s.points.length > 0)
-      .sort((a, b) => b.points.length - a.points.length)
-      .slice(0, kk)
-      .map((s) => s.idx);
+    const cand = this.sectors.filter((s) => s.scanned && s.points.length > 0).map((s) => s.idx);
+    if (cand.length === 0) return [];
+    let s = (seed >>> 0) || 0x9e3779b9;
+    const rnd = (): number => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+    for (let i = cand.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = cand[i]; cand[i] = cand[j]; cand[j] = t;
+    }
+    return cand.slice(0, kk).sort((a, b) => a - b);
   }
 
   clear(): void {
