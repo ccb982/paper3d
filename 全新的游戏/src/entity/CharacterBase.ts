@@ -62,6 +62,14 @@ export abstract class CharacterBase extends EntityBase {
   /** ★ 限制爬崖（敌人等开启）：禁止朝高台立面位移——只能走插值坡/≤EDGE_CLIFF_BAND 小台阶，
    *  防"贴墙被 clampCharacter 抬升"式瞬移上高台。玩家默认关（boss4D 走 requireRealLanding） */
   blockCliffClimb = false;
+  /** ★ 主角专属（用户定 2026-09-30）：**保留"贴墙跳→被抬上墙顶"的老手感**——
+   *  落地态不做悬崖回退/层守卫，位移进墙腹后由 CharacterClamp 抬升贴顶。仅 Player 开启。 */
+  wallJumpAssist = false;
+  /** ★ 上一拍是否空中（刚落地判定用） */
+  private wasAirborne = false;
+  /** ★ 老手感生效判定（用户定 2026-09-30）：**Boss 战（requireRealLanding）自动关闭** */
+  private get wallJumpAssistOn(): boolean { return this.wallJumpAssist && !this.controller.requireRealLanding; }
+
 
   // ---- ★ 空中层（2026-09-18；《RTS架构.md》§7）----
   /** 飞行单位：悬停在「地表高 + airAltitude」，不贴地、不受地形落差阻挡、不吃掉坑判死。
@@ -170,6 +178,7 @@ export abstract class CharacterBase extends EntityBase {
         climbPt: this.climbPt,
         uid: this.climbUid(),   // ★ 上坡点认领制
         blockCliffClimb: this.blockCliffClimb,
+        wallJumpAssist: this.wallJumpAssistOn,
         climbAnyTerrain: this.climbAnyTerrain,
         flying: this.airborne === true,   // ★ 飞行：自由路径
         hx: vol.hx, hz: vol.hz,
@@ -200,7 +209,7 @@ export abstract class CharacterBase extends EntityBase {
       //   位移后目标贴地高比当前脚高高出 EDGE_CLIFF_BAND(0.6) 以上 → 回退，
       //   0.6 以下小台阶由 clampCharacter 上行限速自动踏过（stepHeight ≡ EDGE_CLIFF_BAND）。
       this.airborneStandY = gy;
-      if (!climbing && !this.climbAnyTerrain && !this.airborne && gy - p.y > stepLimit) {   // ★ 飞行免责（经典空中层：墙只管地面）
+      if (!climbing && !this.climbAnyTerrain && !this.airborne && !this.wallJumpAssistOn && gy - p.y > stepLimit) {   // ★ wallJumpAssist=主角放行（老手感）
         p.x = prevX;
         p.z = prevZ;
       }
@@ -222,7 +231,7 @@ export abstract class CharacterBase extends EntityBase {
     //   ★ 2026-09-11：改查 JS 空间索引（廉价）→ 恢复每帧（推挤手感最好）
     if (!this.airborne) this.separateFromStatics();   // ★ 飞行不吃地面障碍推挤
     // ★ H2 层守卫：推挤不得跨层/越台阶（不合格 → 回退推挤；跳跃/攀爬/免限单位除外）
-    if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain) {
+    if (!climbing && !this.controller.isAirborne() && !this.airborne && !this.climbAnyTerrain && !this.wallJumpAssistOn) {
       const lim = this.probe.wetAt(_pX, _pZ) ? SHORE_CLIMB_MAX : EDGE_CLIFF_BAND;
       if (!canShift(this.probe, _pX, _pZ, p.y, p.x, p.z, lim)) { p.x = _pX; p.z = _pZ; }
     }
@@ -235,6 +244,7 @@ export abstract class CharacterBase extends EntityBase {
       this.climbContactT = 0;
     }
     const _c3 = _ct ? performance.now() : 0;
+    this.wasAirborne = this.controller.isAirborne();
     // ★ 受击染料推进（降频解算 + 每步持续注入 + 计时释放）
     this.hitDyeFx.update(dt);
     const _c4 = _ct ? performance.now() : 0;

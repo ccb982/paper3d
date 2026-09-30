@@ -54,6 +54,7 @@ export class Player extends CharacterBase {
    *  （过坑的贴地桥接在 WorldMode.clampVehicle） */
   applyVehicleStats(stats: { vehicle: boolean; moveSpeedPct: number }): void {
     this.climbAnyTerrain = stats.vehicle;
+    this.wallJumpAssist = true;   // ★ 主角保留"贴墙跳→抬上墙顶"老手感（用户定 2026-09-30）
     this.vehicleRide.setStats(stats);
   }
 

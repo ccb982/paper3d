@@ -103,6 +103,8 @@ export interface StepInput {
   climbPt?: { x: number; z: number; ux: number; uz: number; rise?: number; lx?: number; lz?: number; w?: number };
   /** 限制爬崖（敌人）：立面阻挡（坡面 weld 放行） */
   blockCliffClimb: boolean;
+  /** ★ 主角放行（用户定 2026-09-30）：跳跃/顶墙时**允许水平顶进高台立面**（老手感：挤进墙腹→贴地抬升） */
+  wallJumpAssist?: boolean;
   /** 无视地形落差（载具/飞行） */
   climbAnyTerrain: boolean;
   /** ★ 飞行（用户定 2026-09-26）：**自由路径**——地形全免责（无墙/无爬坡/无贴地），高度由飞行层管 */
@@ -403,7 +405,7 @@ export class CharacterCore {
       out.blocked = false;
       dx = 0;
       dz = 0;   // 本拍只做竖直吸附（防水平穿模）；下一拍正常走
-    } else if (!out.climbing && !inp.climbAnyTerrain && gyAware - inp.y > stepLimit) {
+    } else if (!out.climbing && !inp.climbAnyTerrain && !inp.wallJumpAssist && gyAware - inp.y > stepLimit) {
       // ★ 坡面（weld）放行：沿坡面自然贴地上行（用户定：没有自主上坡操作，只有走上坡点）
       const ax = dx > 0 ? 1 : dx < 0 ? -1 : 0;
       const az = dz > 0 ? 1 : dz < 0 ? -1 : 0;
