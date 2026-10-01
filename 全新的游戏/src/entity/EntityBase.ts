@@ -294,7 +294,11 @@ export abstract class EntityBase {
   }
 
   /** ★ 档位收纳（用户定 2026-09-27；《移动执行重写.md》§7.4）：**冻结不销毁**——
-   *  移出模拟/渲染（EntityManager），纹理/血条等对象保留；`tierRestore` 反向复活复用。 */
+   *  移出模拟/渲染（EntityManager），纹理/血条等对象保留；`tierRestore` 反向复活复用。
+   *  ★ 刚体必须同步停用（2026-10-01 修"子弹穿透代理"根因）：收纳后实体不在 `bases`，
+   *  碰撞事件按 userData 查不到实体 → 命中被当成静态世界（挡弹/挖地形）——
+   *  即"看不见的停车位刚体吃子弹"。停用后子弹直达可见代理（线段判定）。
+   *  ★ 同理 L1 收纳（`stashByUid`）也必须走本方法（冻结+停刚体）。 */
   private _tierStashed = false;
   get tierStashed(): boolean { return this._tierStashed; }
   tierStash(): void {
@@ -302,12 +306,24 @@ export abstract class EntityBase {
     this._tierStashed = true;
     this.visible = false;
     this.em.unregister(this);
+    const rb = this.entity.rigidBody;
+    if (rb) this.em.physics?.setBodyEnabled(rb.handle, false);
   }
   tierRestore(): void {
     if (!this._tierStashed) return;
     this._tierStashed = false;
     this.em.register(this);
     this.visible = true;
+    const rb = this.entity.rigidBody;
+    if (rb) {
+      const physics = this.em.physics;
+      if (physics) {
+        // ★ 复活位置以实体当前位置为准（收纳期位置可能已被 promote 快照重写）
+        const p = this.entity.position;
+        physics.setPosition(rb.handle, p.x, p.y + this.physicsBodyOffsetY(), p.z);
+        physics.setBodyEnabled(rb.handle, true);
+      }
+    }
   }
 
   /** ★ 统一退役入口（幂等）：标记状态 → 子类业务钩子 → 资源释放。

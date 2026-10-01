@@ -1,0 +1,313 @@
+// ============================================================
+// main —— 装配：wasm → 骨架 → 竞技场（进化训练）→ 展示个体 → 渲染
+// ============================================================
+// 两个 Sim 分工：
+//   trainer 里的 population 个 Sim —— 闷头跑分，不渲染（大头开销在这）
+//   showcase 这 1 个 Sim            —— 只渲染它，跑完一轮就换上"历史最佳"重跑
+// 这样训练吞吐和画面稳定互不干扰：最优个体在进化，你眼前看到的就是"当前的最优"。
+
+import { initRapierWasm } from './core/rapierWasm';
+import {
+  DEFAULT_CONFIG, assertColliderMass, assertMassBudget, buildSkeleton, type Skeleton,
+} from './core/skeleton';
+import { BRAIN_SHAPE } from './core/brain';
+import { DEFAULT_TRAINER, Trainer } from './core/evolution';
+import { DEFAULT_SIM, Sim, type SimConfig, type SimMode } from './core/sim';
+import { packGenome, unpackGenome } from './core/genome';
+import { Viewer } from './render/viewer';
+import { Hud } from './ui/hud';
+
+// ★ state 必须在 new Hud 之前：Hud 构造时会立刻触发一次滑块的初始回调，
+//   若 state 还在 TDZ 里就会直接 ReferenceError 崩在启动阶段。
+const state = {
+  paused: false,
+  mode: 'walk' as SimMode,
+  budgetMs: 6,
+  speed: 1,
+  ghost: false,
+  joints: false,
+  textures: true,
+};
+
+let sk: Skeleton;
+let trainer: Trainer;
+let showcase: Sim;
+let viewer: Viewer;
+
+/** ★ Hud 构造期间的初始回调要挡掉：那时 trainer / viewer 都还没建 */
+let booted = false;
+
+const hud = new Hud({
+  onPause: () => { if (booted) state.paused = !state.paused; },
+  onResetPopulation: () => { if (booted) trainer.resetPopulation(); },
+  onRespawn: () => { if (booted) showcase.begin(trainer.showcase()); },
+  onExport: () => { if (booted) doExport(); },
+  onImport: () => { if (booted) doImport(); },
+  onGhost: () => { if (booted) { state.ghost = !state.ghost; viewer.showGhost = state.ghost; } },
+  onJoints: () => { if (booted) { state.joints = !state.joints; viewer.showJoints = state.joints; } },
+  onTextures: () => { if (booted) { state.textures = !state.textures; viewer.showTextures = state.textures; } },
+  onSigma: (v) => { if (booted) trainer.sigma = v; },
+  onBudget: (v) => { state.budgetMs = v; },
+  onSpeed: (v) => { state.speed = v; },
+  onPhase: (m) => { if (booted && m !== state.mode) rebuild(m); },
+});
+
+/** 物理步的实测平均耗时（指数滑动平均）——预算按 ms 给，步数靠它换算 */
+let perStepMs = 0.03;
+
+function simCfg(mode: SimMode): SimConfig {
+  return { ...DEFAULT_SIM, mode };
+}
+
+function boot(): void {
+  const canvas = document.getElementById('view') as HTMLCanvasElement | null;
+  if (!canvas) throw new Error('缺少 #view 画布');
+
+  // ---- 骨架自检（先证伪再做昂贵的初始化） ----
+  assertMassBudget();
+  sk = buildSkeleton(DEFAULT_CONFIG);
+  assertColliderMass(sk);
+
+  trainer = new Trainer(sk, BRAIN_SHAPE, simCfg(state.mode), DEFAULT_TRAINER);
+  showcase = new Sim(sk, BRAIN_SHAPE, simCfg(state.mode));
+  viewer = new Viewer(canvas, sk, trainer.population);
+
+  showcase.begin(trainer.showcase());
+  booted = true;
+
+  hud.setStatus(
+    `就绪 · ${sk.bodies.length} 刚体 ${sk.joints.length} 关节（${sk.joints.length * 3} 转动自由度） ` +
+    `体重 ${sk.massTotal.toFixed(1)}kg 身高 ${sk.totalHeight.toFixed(2)}m ` +
+    `参数 ${trainer.paramCount} 个`,
+  );
+
+  wireKeyboard(canvas);
+  wirePointer(canvas);
+  window.addEventListener('resize', () => viewer.resize());
+  // ★ 首帧补一次 resize：boot 时画布可能还没完成布局，Viewer 构造里那次读到的是 0。
+  //   不补的话画面会停在极小的视口（症状：只有 UI，看不到骨骼）。
+  viewer.resize();
+  requestAnimationFrame(() => viewer.resize());
+
+  // 离屏验收用的调试入口（浏览器控制台 / CDP 都能驱动）
+  (window as unknown as Record<string, unknown>).STICKMAN = {
+    get trainer() { return trainer; },
+    get showcase() { return showcase; },
+    get viewer() { return viewer; },
+    get skeleton() { return sk; },
+    state,
+    rebuild,
+    exportText: () => packGenome(trainer.showcase(), BRAIN_SHAPE, {
+      gen: trainer.gen, fitness: trainer.bestEverFitness, note: `stickman-lab/${state.mode}`,
+    }),
+  };
+
+  requestAnimationFrame(frame);
+}
+
+/** 切换阶段（走路 / 战斗）：重建两套 Sim 并把已学到的基因组带过去 */
+function rebuild(mode: SimMode): void {
+  state.mode = mode;
+  const carry = trainer.bestEver.slice();
+  const learned = trainer.bestEverFitness > -Infinity;
+
+  trainer = new Trainer(sk, BRAIN_SHAPE, simCfg(mode), DEFAULT_TRAINER);
+  if (learned) trainer.inject(carry);
+
+  showcase = new Sim(sk, BRAIN_SHAPE, simCfg(mode));
+  showcase.begin(trainer.showcase());
+  hud.setHistory(trainer.history);
+  hud.setStatus(`切换到「${mode === 'walk' ? '学走路' : '学战斗'}」${learned ? '（已继承之前的基因组）' : ''}`);
+}
+
+// ---------------------------------------------------------------- 帧循环
+
+let last = performance.now();
+let stepsAccum = 0;
+let stepsWindowStart = performance.now();
+let stepsPerSec = 0;
+
+function frame(now: number): void {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+
+  const t0 = performance.now();
+
+  if (!state.paused) {
+    // ---- 训练：按 ms 预算换算成物理步数 ----
+    const steps = Math.max(1, Math.round(state.budgetMs / Math.max(1e-4, perStepMs)));
+    trainer.tick(steps);
+
+    // ---- 展示个体：按真实时间推进（受播放速度倍率控制） ----
+    const want = Math.max(1, Math.round(dt * DEFAULT_SIM.physicsHz * state.speed));
+    showcase.advance(want);
+    if (showcase.finished) showcase.begin(trainer.showcase());
+  }
+
+  const frameMs = performance.now() - t0;
+
+  // 实测每步耗时（EWMA），供下一帧换算预算
+  const usedSteps = Math.max(1, trainer.stepsLastFrame);
+  perStepMs = perStepMs * 0.9 + (frameMs / usedSteps) * 0.1;
+
+  stepsAccum += trainer.stepsLastFrame;
+  if (now - stepsWindowStart > 500) {
+    stepsPerSec = (stepsAccum * 1000) / (now - stepsWindowStart);
+    stepsAccum = 0;
+    stepsWindowStart = now;
+  }
+
+  viewer.showGhost = state.ghost;
+  viewer.showJoints = state.joints;
+  viewer.showTextures = state.textures;
+  viewer.syncShowcase(showcase.doll, dt);
+  viewer.syncGhost(trainer);
+  viewer.render();
+
+  hud.setHistory(trainer.history);
+  hud.update({
+    paused: state.paused,
+    mode: state.mode,
+    gen: trainer.gen,
+    evaluated: trainer.evaluated,
+    population: trainer.population,
+    bestNow: trainer.bestNowFitness,
+    bestEver: trainer.bestEverFitness,
+    bestDist: trainer.bestDistNow,
+    bestFallen: trainer.bestFallenNow,
+    hits: trainer.hitsNow,
+    hurts: trainer.hurtsNow,
+    sigma: trainer.sigma,
+    budgetMs: state.budgetMs,
+    speed: state.speed,
+    stepsPerSec,
+    frameMs,
+    ghost: state.ghost,
+    joints: state.joints,
+    textures: state.textures,
+  });
+}
+
+// ---------------------------------------------------------------- 输入
+
+function wireKeyboard(canvas: HTMLCanvasElement): void {
+  window.addEventListener('keydown', (ev) => {
+    if (ev.target instanceof HTMLInputElement) return;
+    switch (ev.key.toLowerCase()) {
+      case ' ': ev.preventDefault(); state.paused = !state.paused; break;
+      case 'r': showcase.begin(trainer.showcase()); break;
+      case 'g': state.ghost = !state.ghost; break;
+      case 'j': state.joints = !state.joints; break;
+      case 't': state.textures = !state.textures; break;
+      case 'e': doExport(); break;
+      case 'v': viewer.resetView(); break;
+      default: break;
+    }
+  });
+  canvas.addEventListener('dblclick', () => showcase.begin(trainer.showcase()));
+}
+
+/**
+ * 指针：拖拽转视角 / 滚轮推拉 / 右键复位。
+ * ★ 3D 之后这一条是**必要**的（不是锦上添花）：正面视图的素材与行走步态的最佳
+ *   观察角度差 90°，只给一个固定机位必然有一头看不清楚，得让人自己转。
+ */
+function wirePointer(canvas: HTMLCanvasElement): void {
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+
+  canvas.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    dragging = true;
+    lastX = ev.clientX;
+    lastY = ev.clientY;
+    canvas.setPointerCapture(ev.pointerId);
+  });
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!dragging) return;
+    const dx = ev.clientX - lastX;
+    const dy = ev.clientY - lastY;
+    lastX = ev.clientX;
+    lastY = ev.clientY;
+    if (booted) viewer.orbit(dx * 0.007, dy * 0.005);
+  });
+  const end = (ev: PointerEvent) => {
+    if (!dragging) return;
+    dragging = false;
+    try { canvas.releasePointerCapture(ev.pointerId); } catch { /* 已释放 */ }
+  };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    if (booted) viewer.resetView();
+  });
+  canvas.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    if (booted) viewer.zoom(ev.deltaY > 0 ? 1.08 : 1 / 1.08);
+  }, { passive: false });
+}
+
+function doExport(): void {
+  const text = packGenome(trainer.showcase(), BRAIN_SHAPE, {
+    gen: trainer.gen,
+    fitness: trainer.bestEverFitness,
+    note: `stickman-lab/${state.mode}`,
+  });
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stickman-${state.mode}-gen${trainer.gen}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+  hud.setStatus(`已导出基因组 · ${(text.length / 1024).toFixed(1)} KB · 参数 ${trainer.paramCount} 个`);
+}
+
+function doImport(): void {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    f.text().then((text) => {
+      try {
+        const { g, shape } = unpackGenome(text);
+        if (shape.inputs !== BRAIN_SHAPE.inputs || shape.hidden !== BRAIN_SHAPE.hidden ||
+            shape.outputs !== BRAIN_SHAPE.outputs) {
+          hud.setStatus(
+            `导入失败：网络形状 ${shape.inputs}/${shape.hidden}/${shape.outputs} ` +
+            `与当前 ${BRAIN_SHAPE.inputs}/${BRAIN_SHAPE.hidden}/${BRAIN_SHAPE.outputs} 不符`,
+            true,
+          );
+          return;
+        }
+        trainer.inject(g);
+        showcase.begin(trainer.showcase());
+        hud.setStatus(`已导入基因组并注入当代种群`);
+      } catch (e) {
+        hud.setStatus(`导入失败：${(e as Error).message}`, true);
+      }
+    });
+  });
+  input.click();
+}
+
+// ---------------------------------------------------------------- 启动
+
+(async () => {
+  try {
+    hud.setStatus('正在实例化 rapier wasm…');
+    await initRapierWasm();
+    hud.setStatus('正在装配骨架…');
+    boot();
+  } catch (e) {
+    const err = e as Error;
+    hud.setStatus(`启动失败：${err.message}`, true);
+    // 把完整堆栈也打出来，离屏验收时能从 console 里捞到原因
+    console.error('[stickman-lab] 启动失败', err);
+  }
+})();

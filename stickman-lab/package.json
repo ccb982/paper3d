@@ -1,0 +1,30 @@
+{
+  "name": "stickman-lab",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "物理火柴人实验室：Rapier 关节骨架 + 进化学习行走/战斗 + 海猫组件贴图（最终作为隐藏 boss 移植回本体）",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "parts": "python tools/build-parts.py",
+    "size": "node tools/measure-size.mjs",
+    "verify": "node tools/run.mjs verify-core",
+    "forces": "node tools/run.mjs probe-forces",
+    "forces:walk": "node tools/run.mjs probe-forces walk 30",
+    "ground": "node tools/run.mjs probe-ground"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d": "0.14.0",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.170.0",
+    "typescript": "~5.5.3",
+    "vite": "^5.4.0",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0"
+  }
+}

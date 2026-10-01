@@ -1,0 +1,62 @@
+[
+ {
+  "name": "猫的右大腿",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的右大腿.bin"
+ },
+ {
+  "name": "猫的右小腿",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的右小腿.bin"
+ },
+ {
+  "name": "猫的右手",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的右手.bin"
+ },
+ {
+  "name": "猫的右臂",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的右臂.bin"
+ },
+ {
+  "name": "猫的头",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的头.bin"
+ },
+ {
+  "name": "猫的左大腿",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的左大腿.bin"
+ },
+ {
+  "name": "猫的左小腿",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的左小腿.bin"
+ },
+ {
+  "name": "猫的左手",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的左手.bin"
+ },
+ {
+  "name": "猫的左臂",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的左臂.bin"
+ },
+ {
+  "name": "猫的身体",
+  "width": 1568,
+  "height": 2944,
+  "file": "猫的身体.bin"
+ }
+]

@@ -80,6 +80,8 @@ export interface SwarmHooks {
   nearestTaunt?: (x: number, z: number) => { x: number; z: number } | null;
   /** 代理被击杀（掉落/遗物击杀统计由模式层结算） */
   onAgentKilled?: (mobIndex: number, x: number, y: number, z: number) => void;
+  /** ★ 代理**真离场**（击杀/回收；升格换载体不触发）——模式层清对象仓同 uid 冻结副本 */
+  onAgentRemoved?: (uid: number, killed: boolean) => void;
   /** ★ 步骤 5：队长变更（池侧选举/接任）→ 模式层镜像到 L3 实体 */
   onLeaderChanged?: (uid: number, isLeader: boolean) => void;
   /** ★ 步骤 9：**全灭才上报**（单人阵亡只下调评分，不发事件） */
@@ -228,7 +230,9 @@ export class SwarmSystem {
     return null;
   }
 
-  demote(snap: AgentSnapshot): void {
+  /** 降格：实体 → 代理（模式层回收实体时调用；返回 false = 池满未入池——
+   *  ★ 调用方必须保持实体在场（勿收纳/勿摘除），下拍重试；否则单位凭空消失。 */
+  demote(snap: AgentSnapshot): boolean {
     const uid = snap.uid && snap.uid > 0 ? snap.uid : this.nextUid++;
     const i = this.pool.push({
       mobIndex: snap.mobIndex,
@@ -287,7 +291,7 @@ export class SwarmSystem {
       shotLife: snap.shotLife,
       singleton: snap.singleton,
     });
-    if (i < 0) return;
+    if (i < 0) return false;
     // ★ 步骤 5：编队归属兜底（正常随快照保留）+ 队长标记同步
     const role = roleFromCode(this.pool.role[i]);
     const squad = this.squads.squadOf(uid)
@@ -298,6 +302,7 @@ export class SwarmSystem {
     this.pool.battalionId[i] = squad.battalionId;
     this.squads.syncMember(uid, this.pool.hp[i], this.pool.maxHp[i], this.pool.x[i], this.pool.z[i], this.pool.lastSeenAt[i]);
     this.syncLeaderFlags(squad.id);
+    return true;
   }
 
   // ============================================================
@@ -852,6 +857,8 @@ export class SwarmSystem {
     }
     // ★ 唯一注销口：队长空缺 → 本队接任；全灭→帧末广播
     this.unregisterMember(uid, killed, true, reason);
+    // ★ 真离场（非换载体）：对象仓同 uid 冻结副本已成孤儿（永远不会再升格复用）→ 通知模式层回收
+    this.lastHooks?.onAgentRemoved?.(uid, killed);
   }
 
   // ============================================================

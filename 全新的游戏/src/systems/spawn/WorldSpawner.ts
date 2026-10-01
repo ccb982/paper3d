@@ -426,7 +426,7 @@ export class WorldSpawner implements SwarmTierPort {
       return;
     }
     const stats = this.mobAgentStats(def);
-    this.deps.swarm.demote({
+    const ok = this.deps.swarm.demote({
       mobIndex,
       x: e.position.x, y: e.position.y, z: e.position.z,
       hp: e.hp, maxHp: e.maxHp,
@@ -448,6 +448,9 @@ export class WorldSpawner implements SwarmTierPort {
       // ★ v2：实体侧编队/uid/移动目标抽干回池（def 派生项仍按上面名册口径）
       ...e.drain(),
     });
+    // ★ 池满（AGENT_CAPACITY）→ 未入池：保持实体在场（注册/可见/刚体全不动），下拍重试。
+    //   否则"先收纳再摘除"会把单位弄丢，对象仓里留个永远回不来的孤儿。
+    if (!ok) return;
     // ★ 步骤 5/9：注销 uid 映射（队长标记不再指向该实体）
     this.forgetEntity(e);
     // ★ 降格 = 实体销毁但"人还活着"（回代理池）→ 不算击杀；
@@ -810,17 +813,26 @@ export class WorldSpawner implements SwarmTierPort {
   /** ★ 档位隐藏/收纳（用户定 2026-09-27；《移动执行重写.md》§7.4）：
    *  L2/L3 **不销毁**——纹理/血条等实体对象保留，隐藏/显示复用；L1 收纳进对象仓（对象保留）。 */
   private readonly tierStash = new Map<number, EnemyBase>();
-  /** 懒加载探针：stash = 收纳次数 / reuse = 取出复用次数（reuse>0 = 确实没重建） */
-  readonly reuseDbg = { stash: 0, reuse: 0 };
+  /** 懒加载探针：stash = 收纳次数 / reuse = 取出复用次数（reuse>0 = 确实没重建）/ drop = 孤儿清仓次数 */
+  readonly reuseDbg = { stash: 0, reuse: 0, drop: 0 };
   /** 最近一次 spawnSingle 落池下标（P-L1 预留名册归属用；-1 = 无） */
   private lastAgentIdx = -1;
 
-  /** 彻底移除：对象仓同 uid 一并丢弃（真死/清场；防漏对象） */
+  /** 彻底移除：对象仓同 uid 一并丢弃（真死/清场；防漏对象；副本静默退役不记账） */
   dropStashByUid(uid: number): void {
     const e = this.tierStash.get(uid);
     if (!e) return;
     this.tierStash.delete(uid);
+    this.reuseDbg.drop++;
     e.retire('recycled');
+  }
+
+  /** ★ 模式退出清仓（2026-10-01）：收纳实体已 `em.unregister`，`entities.clear()` 遍历不到——
+   *  不清理会在共享场景里留下隐形对象/网格跨局累积。退役全部并清空。 */
+  disposeStash(): void {
+    for (const e of this.tierStash.values()) e.retire('mode_cleanup');
+    this.reuseDbg.drop += this.tierStash.size;
+    this.tierStash.clear();
   }
 
   /** 实体查询（uid；判官/交接用） */
@@ -844,24 +856,27 @@ export class WorldSpawner implements SwarmTierPort {
     return true;
   }
 
-  /** L1 收纳：移出在场名单、存进对象仓（纹理/血条保留）；返回血量供名册回填 */
+  /** L1 收纳：移出在场名单、存进对象仓（纹理/血条保留）；返回血量供名册回填。
+   *  ★ 必须走 `tierStash()`（2026-10-01）：冻结模拟 + **停用刚体**——
+   *  否则停车位留下看不见的实心刚体，子弹被它挡下（命中按静态世界结算）。 */
   stashByUid(uid: number): { hp: number; maxHp: number } | null {
     const e = this.byUid.get(uid);
     if (!e) return null;
     const idx = this.deps.enemies.indexOf(e);
     if (idx >= 0) this.deps.enemies.splice(idx, 1);
-    e.visible = false;
+    e.tierStash();
     this.tierStash.set(uid, e);
     return { hp: e.hp, maxHp: e.maxHp };
   }
 
-  /** 离开 L1：取出复用（原地复活；无 → false，调用方物化） */
+  /** 离开 L1：取出复用（原地复活；无 → false，调用方物化）。
+   *  ★ 走 `tierRestore()`：恢复模拟 + 重新启用刚体（与收纳成对）。 */
   unstashByUid(uid: number): boolean {
     const e = this.tierStash.get(uid);
     if (!e) return false;
     this.tierStash.delete(uid);
     this.deps.enemies.push(e);
-    e.visible = true;
+    e.tierRestore();
     if (e.swarmUid > 0) this.byUid.set(e.swarmUid, e);
     return true;
   }

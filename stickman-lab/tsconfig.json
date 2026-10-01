@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "strict": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  // tools/ 是 node 侧验收脚本（用到 node:fs / process 等），不进 tsc 的类型检查范围 ——
+  // 没有装 @types/node，且它们也不进产物。运行时由 esbuild 编译，不做类型检查。
+  "include": ["src"]
+}

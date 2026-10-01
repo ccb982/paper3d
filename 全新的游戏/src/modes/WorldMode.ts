@@ -848,6 +848,8 @@ export class WorldMode implements IGameMode {
     this.swarmHooks.melee = (tk, dmg, x, z) => this.spawner.agentMelee(tk, dmg, x, z);
     this.swarmHooks.nearestTaunt = (x, z) => this.spawner.nearestTauntSentinel(x, z);
     this.swarmHooks.onAgentKilled = (mobIndex, x, y, z) => this.onAgentKilled(mobIndex, x, y, z);
+    // ★ 代理真离场（击杀/回收；升格换载体不触发）→ 对象仓同 uid 冻结副本已成孤儿：立即回收
+    this.swarmHooks.onAgentRemoved = (uid) => this.spawner.dropStashByUid(uid);
     // ★ 友军世界端口（一次性注入所有友军；替代逐个体的 6 个回调）
     allySystem.setWorldPort({
       rangedAttack: (from, target) => this.fireSentinelShot(from, target),
@@ -1919,6 +1921,9 @@ export class WorldMode implements IGameMode {
 
     // ---- 地图流式管理器（chunk 刚体移出物理世界 + 视觉销毁 + 烘焙缓存释放） ----
     this.chunks?.dispose();
+
+    // ---- ★ 对象仓残留（收纳实体已 em.unregister，entities.clear() 遍历不到）----
+    this.spawner.disposeStash();
 
     // ---- 实体清理 ----
     this.entities.clear();

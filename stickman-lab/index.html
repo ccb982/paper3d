@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>火柴人实验室 · stickman-lab</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c1f24;
+        --ink-dim: #5b6570;
+        --line: #d6dbe1;
+        --panel: rgba(255, 255, 255, 0.88);
+        --accent: #b4331f;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+        background: #eef1f4; color: var(--ink);
+        font: 12px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace;
+      }
+      /* ★ 必须显式写 width/height:100%（2026-10-01 实测踩坑）：
+         <canvas> 是"替换元素"，`inset:0` 不会把它拉伸 —— 宽高都是 auto 时它会用
+         **固有尺寸 300×150**（HTML 规范默认值），于是 3D 画布只有左上角一小块、
+         看上去就是"网页里啥也没有，只有 UI 面板"。
+         Viewer.resize() 读的是 canvas.clientWidth，而 clientWidth 又来自这个 CSS 框，
+         写成 auto 就成了循环依赖。 */
+      #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+      .panel {
+        position: fixed; z-index: 10;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        box-shadow: 0 6px 24px rgba(28, 31, 36, 0.10);
+        backdrop-filter: blur(6px);
+      }
+
+      /* ---- 左上：统计 ---- */
+      #stats { left: 12px; top: 12px; width: 320px; padding: 10px 12px; }
+      #stats h1 {
+        margin: 0 0 8px; font-size: 13px; letter-spacing: .04em;
+        display: flex; align-items: baseline; gap: 8px;
+      }
+      #stats h1 em { font-style: normal; color: var(--ink-dim); font-size: 10px; }
+      .row { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
+      .row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+      .sep { height: 1px; background: var(--line); margin: 7px 0; }
+      #chart { display: block; width: 100%; height: 74px; margin-top: 6px; }
+
+      /* ---- 右上：控制 ---- */
+      #ctrl { right: 12px; top: 12px; width: 246px; padding: 10px 12px; }
+      #ctrl h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: .04em; color: var(--ink-dim); }
+      #ctrl label { display: block; margin: 7px 0 2px; color: var(--ink-dim); font-size: 11px; }
+      #ctrl label b { color: var(--ink); float: right; font-variant-numeric: tabular-nums; }
+      #ctrl input[type=range] { width: 100%; margin: 0; accent-color: var(--accent); }
+      .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      button {
+        flex: 1 1 auto; min-width: 66px;
+        padding: 5px 8px; font: inherit; cursor: pointer;
+        background: #fff; color: var(--ink);
+        border: 1px solid var(--line); border-radius: 6px;
+      }
+      button:hover { border-color: #aeb7c0; }
+      button[data-on="1"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.wide { flex: 1 0 100%; }
+
+      /* ---- 左下：状态条 ---- */
+      #boot {
+        left: 12px; bottom: 12px; padding: 7px 12px; color: var(--ink-dim);
+      }
+      #boot.err { color: #a3140a; border-color: #e3b4ae; }
+      .hint { color: var(--ink-dim); font-size: 10.5px; margin-top: 6px; line-height: 1.45; }
+      kbd {
+        background: #fff; border: 1px solid var(--line); border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 4px; font: inherit; font-size: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+
+    <div class="panel" id="stats">
+      <h1>火柴人实验室 <em>stickman-lab</em></h1>
+      <div class="row"><span>阶段</span><b id="s-stage">—</b></div>
+      <div class="row"><span>代数</span><b id="s-gen">0</b></div>
+      <div class="row"><span>个体</span><b id="s-pop">0</b></div>
+      <div class="sep"></div>
+      <div class="row"><span>当代最佳</span><b id="s-best">—</b></div>
+      <div class="row"><span>历史最佳</span><b id="s-top">—</b></div>
+      <div class="row"><span>展示对象</span><b id="s-show">—</b></div>
+      <div class="sep"></div>
+      <div class="row"><span>训练速度</span><b id="s-tps">—</b></div>
+      <div class="row"><span>帧内预算</span><b id="s-budget">—</b></div>
+      <canvas id="chart" width="600" height="150"></canvas>
+    </div>
+
+    <div class="panel" id="ctrl">
+      <h2>控制台</h2>
+
+      <label>变异强度 σ <b id="v-sigma">—</b></label>
+      <input id="i-sigma" type="range" min="0.02" max="0.6" step="0.01" />
+
+      <label>每帧物理预算 <b id="v-budget">—</b></label>
+      <input id="i-budget" type="range" min="1" max="24" step="1" />
+
+      <label>播放速度 <b id="v-speed">—</b></label>
+      <input id="i-speed" type="range" min="0.1" max="3" step="0.1" />
+
+      <label>训练阶段 <b id="v-speedgoal">—</b></label>
+      <input id="i-speedgoal" type="range" min="0" max="1" step="1" />
+
+      <div class="btns">
+        <button id="b-pause">暂停</button>
+        <button id="b-reset">重开种群</button>
+        <button id="b-respawn">重开当前</button>
+        <button id="b-export">导出基因组</button>
+        <button id="b-import">导入基因组</button>
+        <button id="b-ghost">显示整代</button>
+        <button id="b-joints">显示关节</button>
+        <button id="b-tex">显示贴图</button>
+      </div>
+
+      <div class="hint">
+        双击地面 = 重开个体 · <kbd>空格</kbd> 暂停 · <kbd>R</kbd> 重开当前 ·
+        <kbd>G</kbd> 整代 · <kbd>E</kbd> 导出
+      </div>
+    </div>
+
+    <div class="panel" id="boot">初始化…</div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

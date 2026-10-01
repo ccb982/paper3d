@@ -1,0 +1,76 @@
+{
+ "targetHeight": 256,
+ "palette": 254,
+ "frames": [
+  {
+   "index": 0,
+   "name": "猫的右大腿",
+   "file": "d_0.bin",
+   "width": 138,
+   "height": 256
+  },
+  {
+   "index": 1,
+   "name": "猫的右小腿",
+   "file": "d_1.bin",
+   "width": 101,
+   "height": 256
+  },
+  {
+   "index": 2,
+   "name": "猫的右手",
+   "file": "d_2.bin",
+   "width": 194,
+   "height": 256
+  },
+  {
+   "index": 3,
+   "name": "猫的右臂",
+   "file": "d_3.bin",
+   "width": 115,
+   "height": 256
+  },
+  {
+   "index": 4,
+   "name": "猫的头",
+   "file": "d_4.bin",
+   "width": 140,
+   "height": 256
+  },
+  {
+   "index": 5,
+   "name": "猫的左大腿",
+   "file": "d_5.bin",
+   "width": 136,
+   "height": 256
+  },
+  {
+   "index": 6,
+   "name": "猫的左小腿",
+   "file": "d_6.bin",
+   "width": 117,
+   "height": 256
+  },
+  {
+   "index": 7,
+   "name": "猫的左手",
+   "file": "d_7.bin",
+   "width": 185,
+   "height": 256
+  },
+  {
+   "index": 8,
+   "name": "猫的左臂",
+   "file": "d_8.bin",
+   "width": 104,
+   "height": 256
+  },
+  {
+   "index": 9,
+   "name": "猫的身体",
+   "file": "d_9.bin",
+   "width": 143,
+   "height": 256
+  }
+ ]
+}
