@@ -12077,17 +12077,18 @@ console.log("\n=== A. \u7EAF\u91CD\u529B\uFF1A\u951A\u70B9\u6F02\u79FB + \u662F\
   const r = rig(3, 0.2);
   r.rod.setLinvel({ x: 1.2, y: 0, z: 0.9 }, true);
   let maxDrift = 0;
+  let maxZ = 0;
   for (let i = 0; i < 360; i++) {
     r.world.step();
     const a1 = anchorWorld(r.base, { x: 0, y: 0, z: 0 });
     const a2 = anchorWorld(r.rod, { x: 0, y: r.anchorLocalY, z: 0 });
     maxDrift = Math.max(maxDrift, dist(a1, a2));
+    maxZ = Math.max(maxZ, Math.abs(r.rod.translation().z));
   }
   const t = r.rod.translation();
   console.log(`  3 \u79D2\u540E\uFF1A\u6746\u4F4D\u7F6E (${t.x.toFixed(3)}, ${t.y.toFixed(3)}, ${t.z.toFixed(3)})`);
   console.log(`  \u951A\u70B9\u6700\u5927\u6F02\u79FB = ${(maxDrift * 1e3).toFixed(3)} mm  ${maxDrift < 0.01 ? "\u2714 \u7EA6\u675F\u7262\u9760" : "\u2718 \u7EA6\u675F\u8F6F"}`);
-  const movedInZ = Math.abs(t.z) > 0.05;
-  console.log(`  ${movedInZ ? "\u2714 \u6446\u51FA\u4E86 Z \u65B9\u5411\u4F4D\u79FB \u2014\u2014 \u786E\u5B9E\u662F 3 \u8F6C\u52A8\u81EA\u7531\u5EA6\uFF0C\u4E0D\u662F\u88AB\u9501\u5E73\u9762" : "\u2718 \u6CA1\u6709 Z \u4F4D\u79FB\uFF0C\u53EF\u80FD\u88AB\u9650\u5236\u5728\u5E73\u9762\u5185"}`);
+  console.log(`  \u8FC7\u7A0B\u6700\u5927 |z| = ${(maxZ * 1e3).toFixed(1)} mm  ${maxZ > 0.05 ? "\u2714 \u6446\u51FA\u4E86 Z \u65B9\u5411\u4F4D\u79FB \u2014\u2014 \u786E\u5B9E\u662F 3 \u8F6C\u52A8\u81EA\u7531\u5EA6\uFF0C\u4E0D\u662F\u88AB\u9501\u5E73\u9762" : "\u2718 \u6CA1\u6709 Z \u4F4D\u79FB\uFF0C\u53EF\u80FD\u88AB\u9650\u5236\u5728\u5E73\u9762\u5185"}`);
 }
 console.log("\n=== B. \u4E09\u8F74\u529B\u77E9\u51B2\u91CF\u626B\u63CF\uFF1A\u951A\u70B9\u4ECE\u54EA\u4E2A\u91CF\u7EA7\u5F00\u59CB\u88AB\u6495\u88C2 ===");
 console.log("  \uFF08\u6BCF\u7269\u7406\u6B65\u65BD\u52A0 (tx,ty,tz) \u4E09\u8F74\u529B\u77E9\u51B2\u91CF\uFF0C\u8DD1 2 \u79D2\uFF0C\u8BB0\u5F55\u951A\u70B9\u6700\u5927\u6F02\u79FB\uFF09");

@@ -12305,8 +12305,16 @@ var PART_BY_KEY = new Map(
 var DEFAULT_CONFIG = {
   height: 1.8,
   mass: 70,
-  stance: 0.5,
-  limbRadiusScale: 0.6
+  // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
+  //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
+  //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
+  stance: 1,
+  limbRadiusScale: 0.6,
+  // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
+  // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
+  // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
+  spineSegments: 4,
+  soleFootScale: 1
 };
 var SEGMENTS = [
   { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -12343,6 +12351,18 @@ var JOINT_MAX_TORQUE = {
   knee_l: 150,
   knee_r: 150
 };
+var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
+var JOINT_LIMITS_XY_DEG = {
+  neck: [30, 70],
+  shoulder_l: [75, 65],
+  shoulder_r: [75, 65],
+  elbow_l: [14, 16],
+  elbow_r: [14, 16],
+  hip_l: [45, 40],
+  hip_r: [45, 40],
+  knee_l: [6, 8],
+  knee_r: [6, 8]
+};
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
   const length = Math.max(w, h);
@@ -12357,9 +12377,27 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const px2m = cfg.height / extent.h;
   const centerPx = (extent.x0 + extent.x1) / 2;
   const groundPx = extent.y1;
-  const mapX = (px, applyStance) => (px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
+  const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
   const mapY = (px) => (groundPx - px) * px2m;
   const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
+  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  const CHEST = K > 1 ? `spine${K}` : "torso";
+  const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
+  let byKeyRef = null;
+  const attachTo = (parentKey, wy) => {
+    if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
+    let best = 0, bestD = Infinity;
+    for (let s = 0; s < K; s++) {
+      const b = byKeyRef.get(segKey(s));
+      if (!b) continue;
+      const d = Math.abs(b.cy - wy);
+      if (d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return segKey(best);
+  };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
   const bodies = [];
@@ -12371,6 +12409,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       part.bh * px2m,
       cfg.limbRadiusScale
     );
+    const cy = mapY(part.cy);
     const totalMass = spec.massPct / 100 * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
     const mainMass = totalMass - solePct / 100 * cfg.mass;
@@ -12393,28 +12432,72 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const offsetY = -length / 2 + soleHalfThick;
+      const sfx = Math.max(0.1, cfg.soleFootScale);
+      const hx = soleHalfLen * sfx;
+      const hz = radius * 0.9 * sfx;
       colliders.push({
         shape: "cuboid",
         halfHeight: 0,
         radius: 0,
-        hx: soleHalfLen,
+        hx,
         hy: soleHalfThick,
-        hz: radius * 0.9,
+        hz,
         offsetY,
         mass: soleMass,
         comY: 0,
         // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
-        inertiaZ: soleMass * (soleHalfLen * soleHalfLen + soleHalfThick * soleHalfThick) / 3,
-        inertiaXY: soleMass * (radius * radius * 0.81 + soleHalfThick * soleHalfThick) / 3
+        inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+        inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
+    }
+    if (spec.key === "torso" && K > 1) {
+      const segLen = length / K;
+      const segMass = totalMass / K;
+      const hx = radius, hz = radius * 0.9;
+      for (let s = 0; s < K; s++) {
+        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+        const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
+        const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
+        bodies.push({
+          key: s === 0 ? "torso" : `spine${s + 1}`,
+          bone: spec.bone,
+          label: s === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s + 1}`,
+          part,
+          cx: 0,
+          cy: cyS,
+          cz: mapZ(part.cx, false),
+          length: segLen,
+          radius,
+          halfHeight: segLen / 2,
+          mass: segMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: segLen / 2,
+            hz,
+            offsetY: 0,
+            mass: segMass,
+            comY: 0,
+            inertiaZ: iZ,
+            inertiaXY: iX
+          }],
+          leg: false,
+          texSlice: { index: s, count: K }
+        });
+      }
+      continue;
     }
     bodies.push({
       key: spec.key,
       bone: spec.bone,
       label: spec.label,
       part,
-      cx: mapX(part.cx, !!spec.leg),
+      cx: 0,
+      // ★ 素材是正面视图，没有深度信息 ⇒ 前向一律 0
       cy: mapY(part.cy),
+      cz: mapZ(part.cx, !!spec.leg),
       length,
       radius,
       halfHeight,
@@ -12424,17 +12507,23 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     });
   }
   const byKey = new Map(bodies.map((b) => [b.key, b]));
+  byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
   const joints = [];
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const parent = byKey.get(jm.parent);
+    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
-    const wx = mapX(jm.x, stanceHere);
+    const wx = 0;
     const wy = mapY(jm.y);
+    const wz = mapZ(jm.x, stanceHere);
+    const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
+    const flexMin = jm.limitDeg[0] * DEG;
+    const flexMax = jm.limitDeg[1] * DEG;
+    const tau = JOINT_MAX_TORQUE[name] ?? 100;
     joints.push({
       name,
       index,
@@ -12442,15 +12531,45 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       childKey: child.key,
       wx,
       wy,
-      parentLocalX: wx - parent.cx,
-      parentLocalY: wy - parent.cy,
-      childLocalX: wx - child.cx,
-      childLocalY: wy - child.cy,
-      minRad: jm.limitDeg[0] * DEG,
-      maxRad: jm.limitDeg[1] * DEG,
-      maxTorque: JOINT_MAX_TORQUE[name] ?? 100
+      wz,
+      parentLocal: [wx - parent.cx, wy - parent.cy, wz - parent.cz],
+      childLocal: [wx - child.cx, wy - child.cy, wz - child.cz],
+      minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
+      maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
+      maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
     });
   });
+  if (K > 1) {
+    const SPINE_XY_DEG = [15, 20];
+    const SPINE_FLEX_DEG = [-25, 25];
+    const SPINE_TAU = 120;
+    for (let s = 0; s < K - 1; s++) {
+      const p = byKey.get(segKey(s));
+      const c = byKey.get(segKey(s + 1));
+      if (!p || !c) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s} \u4E0D\u5B58\u5728`);
+      const wy = (p.cy + c.cy) / 2;
+      const wx = 0, wz = 0;
+      joints.push({
+        name: `spine${s + 1}`,
+        index: joints.length,
+        // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
+        parentKey: p.key,
+        childKey: c.key,
+        wx,
+        wy,
+        wz,
+        parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
+        childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
+        maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
+        maxTorque: [
+          SPINE_TAU * TORQUE_AXIS_FACTOR[0],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[1],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[2]
+        ]
+      });
+    }
+  }
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
   return {
     cfg,
@@ -12470,47 +12589,173 @@ var MEM_SELF = 2;
 var GROUPS_SELF = (MEM_SELF << 16 | MEM_GROUND) >>> 0;
 var GROUPS_GROUND = (MEM_GROUND << 16 | MEM_SELF) >>> 0;
 var IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
-var Z_AXIS = { x: 0, y: 0, z: 1 };
 var ZERO = { x: 0, y: 0, z: 0 };
+var MOTOR_ALPHA = 1;
+var MOTOR_ALPHA_RECOVER = 1;
+var LIMIT_SOFT_ZONE = 0.3;
+var AXIS_X = 0;
+var AXIS_Y = 1;
 var DEFAULTS = {
   groundFriction: 1,
   bodyFriction: 0.9,
   linearDamping: 0,
   angularDamping: 0.04,
-  torqueScale: 1
+  torqueScale: 1,
+  kP: 48,
+  kD: 1,
+  posRefScale: 0.9,
+  purgeJointCache: true,
+  motorAlpha: MOTOR_ALPHA
 };
+function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  out[0] = vx + qw * tx + (qy * tz - qz * ty);
+  out[1] = vy + qw * ty + (qz * tx - qx * tz);
+  out[2] = vz + qw * tz + (qx * ty - qy * tx);
+}
+function quatInvRotate(qx, qy, qz, qw, vx, vy, vz, out) {
+  quatRotate(-qx, -qy, -qz, qw, vx, vy, vz, out);
+}
+function quatRel(ax, ay, az, aw, bx, by, bz, bw, out) {
+  const cx = -ax, cy = -ay, cz = -az, cw = aw;
+  out[0] = cw * bx + cx * bw + cy * bz - cz * by;
+  out[1] = cw * by - cx * bz + cy * bw + cz * bx;
+  out[2] = cw * bz + cx * by - cy * bx + cz * bw;
+  out[3] = cw * bw - cx * bx - cy * by - cz * bz;
+}
+function quatToRotVec(qx, qy, qz, qw, out) {
+  const w = qw > 1 ? 1 : qw < -1 ? -1 : qw;
+  const half = Math.acos(w);
+  const s = Math.sin(half);
+  if (s < 1e-7) {
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    return;
+  }
+  const ang = 2 * half;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  out[0] = qx * k;
+  out[1] = qy * k;
+  out[2] = qz * k;
+}
+function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
+  quatRel(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4);
+  quatToRotVec(tmp4[0], tmp4[1], tmp4[2], tmp4[3], out);
+}
+function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
+  quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
+}
 var Ragdoll = class {
   sk;
   opt;
   bodies = [];
+  /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
   joints = [];
   /** key → 刚体下标 */
   indexByKey = /* @__PURE__ */ new Map();
+  /**
+   * ★ 身体参考点的刚体 key = 脊柱最上一段（胸腔）。K=1 时就是 'torso'。
+   * 见 torso() 的注释 —— 分段之后"树根"是骨盆，但状态量要以胸腔为基准。
+   */
+  torsoKey;
   /** 关节 i → [父刚体下标, 子刚体下标] */
   jointBodies;
-  /** 关节目标角速度（rad/s），由 setMotorTargets 写入、driveMotors 消费 */
+  /**
+   * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
+   * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
+   *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
+   */
+  jointIeff;
+  /**
+   * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
+   * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
+   *   由 setMotorTargets 写入，driveMotors 里映射成 θ_ref = cmd × 该侧量程 × posRefScale。
+   * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
+   */
   motorTarget;
+  /**
+   * 每个可驱动轴的 θ_ref 斜率：cmd > 0 时用 refPos，cmd < 0 时用 refNeg。
+   * 两者都取正数 —— 因为 hi 可能很小（膝 +2°）、lo 很负（膝 −145°），
+   * 必须各按自己的量程走，才能同时保住 `cmd = 0 ⇒ θ_ref = 0`。见 posRefScale。
+   */
+  refPos;
+  refNeg;
+  /**
+   * ★ 上一次 driveMotors 里**实际施加**到子刚体上的马达冲量（N·m·s），每关节 3 个轴。
+   *
+   * 存在的意义：Rapier 0.14 的 wasm 绑定里**完全没有关节冲量/反力的读回接口**
+   * （rawimpulsejointset_* 只有 jointType / anchor / limits / motor 配置，没有 impulse）。
+   * 所以"各个组件受力"只能靠**我们自己记账 + 牛顿定律重建**：
+   *   · 马达力矩 —— 这个文件自己施加的，直接记下来（本数组）
+   *   · 地面接触力 —— 从接触流形 contactImpulse + normal 读
+   *   · 关节反作用力 —— 用"子树动量收支"反推（见 tools/probe-forces.ts C 段）
+   * 除以 dt 就是力矩（N·m）。
+   */
+  motorImpulse;
+  /**
+   * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
+   *
+   * 为什么必须和 motorImpulse 成对存在（这是"关节明明有力却撑不住"的头号嫌疑的判据）：
+   *   本文件的稳定性护栏 `|imp| ≤ α·|err|·Ieff` 是**正比于误差**的 ⇒ 它给出的有效力矩上限是
+   *
+   *       τ_max_eff = α · kP · Δθ · Ieff / dt
+   *
+   *   对髋外展轴（Ieff ≈ 0.083）在 α=0.35 时只有 ~31 N·m/rad ⇒ 就算关节差 45°（0.785 rad），
+   *   也只出得了 ~25 N·m，而髋的**声明**力矩是 120 N·m（外展）—— **只用了 20%**。
+   *   （α 提到 1.0 之后这个比例回到 ~75%，见 MOTOR_ALPHA 的长注释。）
+   *   只看 motorImpulse 是看不出这件事的（它已经是被削过的值，看起来"很合理"）；
+   *   必须和 motorDemand 相除才能回答"是没力气，还是不敢用力"。
+   */
+  motorDemand;
   world;
   initX;
   initY;
+  initZ;
+  // ---- 热路径复用缓冲（零分配） ----
+  qRel = new Float64Array(4);
+  rv = new Float64Array(3);
+  relL = new Float64Array(3);
+  axisW = new Float64Array(3);
+  /** tiltOf / headingOf 的独立 scratch（别和 rv 共用，否则嵌套调用会串） */
+  dirTmp = new Float64Array(3);
+  /** applyTorqueImpulse 的复用向量（wasm 侧只读，复用安全） */
+  iv = { x: 0, y: 0, z: 0 };
   constructor(world, sk2, opt = {}) {
     this.world = world;
     this.sk = sk2;
     this.opt = { ...DEFAULTS, ...opt };
-    this.motorTarget = new Float32Array(sk2.joints.length);
+    for (const key of Object.keys(opt)) {
+      if (!(key in DEFAULTS)) {
+        console.warn(`[ragdoll] \u26A0 \u672A\u77E5\u914D\u7F6E\u9879 "${key}" \u88AB\u5FFD\u7565\uFF08\u662F\u4E0D\u662F\u6539\u540D\u4E86\uFF1F\u89C1 RagdollOptions\uFF09`);
+      }
+    }
+    this.motorTarget = new Float32Array(sk2.joints.length * 3);
+    this.motorImpulse = new Float64Array(sk2.joints.length * 3);
+    this.motorDemand = new Float64Array(sk2.joints.length * 3);
+    let topSpine = -1;
+    for (const b of sk2.bodies) {
+      const m = /^spine(\d+)$/.exec(b.key);
+      if (m) topSpine = Math.max(topSpine, Number(m[1]));
+    }
+    this.torsoKey = topSpine > 0 ? `spine${topSpine}` : "torso";
     const ground = this.world.createRigidBody(rapier_default.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
     this.world.createCollider(
-      rapier_default.ColliderDesc.cuboid(60, 0.5, 4).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
+      rapier_default.ColliderDesc.cuboid(60, 0.5, 12).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
       ground
     );
     this.initX = new Float64Array(sk2.bodies.length);
     this.initY = new Float64Array(sk2.bodies.length);
+    this.initZ = new Float64Array(sk2.bodies.length);
     sk2.bodies.forEach((b, i) => {
       this.indexByKey.set(b.key, i);
       this.initX[i] = b.cx;
       this.initY[i] = b.cy;
+      this.initZ[i] = b.cz;
       const body = this.world.createRigidBody(
-        rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, 0).enabledTranslations(true, true, false).enabledRotations(false, false, true).setLinearDamping(this.opt.linearDamping).setAngularDamping(this.opt.angularDamping).setCanSleep(false)
+        rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setLinearDamping(this.opt.linearDamping).setAngularDamping(this.opt.angularDamping).setCanSleep(false)
       );
       this.bodies.push(body);
       for (const c of b.colliders) {
@@ -12525,7 +12770,35 @@ var Ragdoll = class {
       }
     });
     this.jointBodies = new Int32Array(sk2.joints.length * 2);
-    sk2.joints.forEach((j, i) => {
+    this.createJoints();
+    this.jointIeff = new Float64Array(sk2.joints.length);
+    const bodyI = new Float64Array(this.bodies.length);
+    for (let i = 0; i < this.bodies.length; i++) {
+      const I = this.bodies[i].principalInertia();
+      bodyI[i] = Math.max(1e-6, Math.min(I.x, I.y, I.z));
+    }
+    for (let i = 0; i < sk2.joints.length; i++) {
+      const ip = bodyI[this.jointBodies[i * 2]];
+      const ic = bodyI[this.jointBodies[i * 2 + 1]];
+      this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+    }
+    this.refPos = new Float64Array(sk2.joints.length * 3);
+    this.refNeg = new Float64Array(sk2.joints.length * 3);
+    for (let i = 0; i < sk2.joints.length; i++) {
+      for (let k = 0; k < 3; k++) {
+        const s = this.opt.posRefScale;
+        this.refPos[i * 3 + k] = s * Math.max(0, sk2.joints[i].maxRad[k]);
+        this.refNeg[i * 3 + k] = s * Math.max(0, -sk2.joints[i].minRad[k]);
+      }
+    }
+  }
+  /**
+   * 建/重建所有关节。
+   * 球关节只有两个锚点参数，没有轴、没有限位 —— 限位和马达全在 driveMotors 里。
+   */
+  createJoints() {
+    this.joints.length = 0;
+    this.sk.joints.forEach((j, i) => {
       const pi = this.indexByKey.get(j.parentKey);
       const ci = this.indexByKey.get(j.childKey);
       if (pi === void 0 || ci === void 0) {
@@ -12533,79 +12806,204 @@ var Ragdoll = class {
       }
       this.jointBodies[i * 2] = pi;
       this.jointBodies[i * 2 + 1] = ci;
-      const jd = rapier_default.JointData.revolute(
-        { x: j.parentLocalX, y: j.parentLocalY, z: 0 },
-        { x: j.childLocalX, y: j.childLocalY, z: 0 },
-        Z_AXIS
+      const jd = rapier_default.JointData.spherical(
+        { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
+        { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
       );
-      jd.limitsEnabled = true;
-      jd.limits = [j.minRad, j.maxRad];
-      const joint = this.world.createImpulseJoint(
-        jd,
-        this.bodies[pi],
-        this.bodies[ci],
-        true
-      );
-      this.joints.push(joint);
+      this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
   }
   get jointCount() {
     return this.joints.length;
   }
   // ------------------------------------------------------------ 读状态
-  /** 绕 Z 的姿态角（弧度）。对外公开：适应度要用它算躯干倾角 */
-  angleOf(body) {
-    const q = body.rotation();
-    return 2 * Math.atan2(q.z, q.w);
+  /** 把刚体本地向量 v 转到世界，写入 out */
+  toWorld(b, vx, vy, vz, out) {
+    const q = b.rotation();
+    quatRotate(q.x, q.y, q.z, q.w, vx, vy, vz, out);
   }
-  /** 关节相对角（子树相对父树绕 Z 的转角，初始姿态为 0） */
-  jointAngle(i) {
-    const p = this.bodies[this.jointBodies[i * 2]];
-    const c = this.bodies[this.jointBodies[i * 2 + 1]];
-    return this.angleOf(c) - this.angleOf(p);
+  /** 刚体"上方向"相对世界竖直的夹角（弧度，0 = 完全直立）。摔倒判定/姿态评分用 */
+  tiltOf(body) {
+    this.toWorld(body, 0, 1, 0, this.dirTmp);
+    const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];
+    return Math.acos(y);
   }
-  /** 关节相对角速度（rad/s） */
-  jointSpeed(i) {
-    const p = this.bodies[this.jointBodies[i * 2]];
-    const c = this.bodies[this.jointBodies[i * 2 + 1]];
-    return c.angvel().z - p.angvel().z;
+  /** 刚体"前方向"在世界 XZ 平面里的方位角（弧度；绕 +Y 转，0 = 正对 +X） */
+  headingOf(body) {
+    this.toWorld(body, 1, 0, 0, this.dirTmp);
+    return Math.atan2(-this.dirTmp[2], this.dirTmp[0]);
   }
   /**
-   * 写马达目标：targets[i] ∈ [-1,1]，乘 JOINT_MAX_SPEED 得到目标角速度。
+   * 关节 i 的**三轴关节角**（父体本地的旋转向量，弧度）写入 out[0..2]。
+   * |out| ≤ π；分量含义 = 绕父体本地 X/Y/Z 各转了多少。
+   * ★ 这是 3D 关节的姿态真源：软限位、网络输入、探针全走它。
+   */
+  jointRot(i, out = this.rv) {
+    const p = this.bodies[this.jointBodies[i * 2]];
+    const c = this.bodies[this.jointBodies[i * 2 + 1]];
+    const qp = p.rotation();
+    const qc = c.rotation();
+    calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, this.qRel, out);
+  }
+  /** 关节 i 的**三轴相对角速度**（父体本地，rad/s）写入 out[0..2] */
+  jointRelVel(i, out = this.relL) {
+    const p = this.bodies[this.jointBodies[i * 2]];
+    const c = this.bodies[this.jointBodies[i * 2 + 1]];
+    const wp = p.angvel();
+    const wc = c.angvel();
+    const qp = p.rotation();
+    calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
+  }
+  /** 兼容标量读数：关节 i 的屈伸角（绕本地 Z 的分量，弧度） */
+  jointAngle(i) {
+    const buf = this.rvTmp;
+    this.jointRot(i, buf);
+    return buf[2];
+  }
+  /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
+  jointSpeed(i) {
+    const buf = this.rvTmp;
+    this.jointRelVel(i, buf);
+    return buf[2];
+  }
+  rvTmp = new Float64Array(3);
+  /**
+   * 写马达命令：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，**表示该轴的目标关节角**
+   * （占该侧机械量程的比例的 posRefScale 倍，见 RagdollOptions.posRefScale）。
+   *
+   * ★ 语义已从"目标角速度"改成"目标角" —— 这是本项目的头号结构性修正：
+   *   速度目标没有静态刚度（静载荷下必然蠕变），而且不可被网络用来"维持一个姿态"。
+   *   见 RagdollOptions.kP 的长注释。
+   *
    * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
    */
   setMotorTargets(targets) {
-    for (let i = 0; i < this.joints.length; i++) {
+    for (let i = 0; i < this.motorTarget.length; i++) {
       const t = targets[i];
-      this.motorTarget[i] = (t < -1 ? -1 : t > 1 ? 1 : t) * JOINT_MAX_SPEED;
+      this.motorTarget[i] = t < -1 ? -1 : t > 1 ? 1 : t;
     }
   }
   /**
-   * ★ 自实现的关节马达：每物理步调用一次，dt = 物理步长。
-   * 力矩 = clamp(增益 × (目标角速度 − 当前相对角速度), ±τmax)，
-   * 然后以一对等大反向的 Z 轴力矩冲量施加到子/父刚体上。
-   * 增益取 τmax / JOINT_MAX_SPEED ⇒ 满误差时正好输出 τmax，物理含义清晰。
+   * ★ 自实现的**位置环 PD** 关节马达：每物理步调用一次，dt = 物理步长。
+   *
+   *     θ_ref  = cmd ×（cmd ≥ 0 ? posRefScale·hi : posRefScale·(−lo)）   // 网络给的目标角
+   *     err    = kP·(θ_ref − θ) − kD·ω_rel                              // 等效目标角速度
+   *     τ      = clamp(err · τmax / JOINT_MAX_SPEED, ±τmax)
+   *
+   * 增益取 τmax/JOINT_MAX_SPEED ⇒ **err 跑满 JOINT_MAX_SPEED 时正好输出 τmax**，物理含义清晰。
+   * 然后把"本地轴上的力矩冲量"用父体姿态搬到世界，对父/子各施加一对等大反向的冲量。
+   *
+   * ★★ 为什么是位置环而不是"角速度目标"（这是本项目最重的一处结构性修正）：
+   *   速度目标下，`cmd = 0` 的含义是"把角速度刹到 0"（`err = −ω_rel ≠ 0`）⇒ 关节一直在**制动**，
+   *   但它**没有静态刚度**：重力压着膝盖，只要膝盖不转，误差就恰好等于 0、力矩也就没了。
+   *   ⇒ 静载荷下必然**蠕变**（实测没位置项时躯干 1 s 内从 0.888 掉到 0.149 m）。
+   *   位置环天然有静态刚度：θ ≠ θ_ref 就一直有力，这才是"站着不动"能成立的前提。
+   *   ★ 且 `θ_ref = 0` 时 `err = −kP·θ − kD·ω_rel`，与历史公式 `target = −k·θ; err = target − ω_rel`
+   *     **逐项一致** ⇒ 这是严格泛化，零输出的行为一字没变，但网络拿到了位置通道。
+   *
+   * ★★ 两处必须保留的护栏：
+   *   1) 稳定性上限 |imp| ≤ α·|err|·Ieff（见构造里 jointIeff 的注释）——
+   *      只限力矩不限加速度的话，轻肢体（前臂 I≈0.03）会被打出每步 28 rad/s 的相对转速，
+   *      显式积分的比例控制直接发散（probe-reset 的 284 m/s）。
+   *   2) 位置感知软限位 —— 替代 Rapier 的硬限位（球关节压根没有）。
+   *      越界时把该轴的目标速度强制指向回程，越界越多回程越快，最多打满 JOINT_MAX_SPEED。
+   *      这样马达再怎么被网络驱动都不可能把关节推出限位之外，
+   *      也就不存在"推出去 → 限位猛烈纠正 → 甩飞"的爆炸路径
+   *      （probe-spike：Rapier 硬限位下 neck 被推到 −162°、限位 [−35°,45°]，
+   *        纠正时相对角速度顶到 68.9 rad/s → 头甩飞 → 整条链炸）。
+   *      ★ 它只在**越界之后**介入，越界时直接接管该轴的目标速度（不再走位置环）
+   *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
    */
   driveMotors(dt) {
     const scale = this.opt.torqueScale;
+    const kP = this.opt.kP;
+    const kD = this.opt.kD;
+    const qRel = this.qRel;
+    const rv = this.rv;
+    const relL = this.relL;
     for (let i = 0; i < this.joints.length; i++) {
       const j = this.sk.joints[i];
       const pi = this.jointBodies[i * 2];
       const ci = this.jointBodies[i * 2 + 1];
       const p = this.bodies[pi];
       const c = this.bodies[ci];
-      const err = this.motorTarget[i] - (c.angvel().z - p.angvel().z);
-      const tauMax = j.maxTorque * scale;
-      let tau = err * (tauMax / JOINT_MAX_SPEED);
-      if (tau > tauMax) tau = tauMax;
-      else if (tau < -tauMax) tau = -tauMax;
-      const imp = tau * dt;
-      c.applyTorqueImpulse({ x: 0, y: 0, z: imp }, true);
-      p.applyTorqueImpulse({ x: 0, y: 0, z: -imp }, true);
+      const qp = p.rotation();
+      const qc = c.rotation();
+      const wp = p.angvel();
+      const wc = c.angvel();
+      calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
+      calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
+      const Ieff = this.jointIeff[i];
+      for (let k = 0; k < 3; k++) {
+        this.motorImpulse[i * 3 + k] = 0;
+        this.motorDemand[i * 3 + k] = 0;
+        const lo = j.minRad[k];
+        const hi = j.maxRad[k];
+        const a = rv[k];
+        const idx = i * 3 + k;
+        let alpha = this.opt.motorAlpha;
+        let err;
+        const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
+        if (a > hi) {
+          err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
+          alpha = MOTOR_ALPHA_RECOVER;
+        } else if (a < lo) {
+          err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
+          alpha = MOTOR_ALPHA_RECOVER;
+        } else {
+          const cmd = this.motorTarget[idx];
+          const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+          err = kP * (thRef - a) - kD * relL[k];
+        }
+        if (err === 0) continue;
+        const tauMax = j.maxTorque[k] * scale;
+        let tau = err * (tauMax / JOINT_MAX_SPEED);
+        if (tau > tauMax) tau = tauMax;
+        else if (tau < -tauMax) tau = -tauMax;
+        this.motorDemand[idx] = tau;
+        let imp = tau * dt;
+        const impStable = alpha * Math.abs(err) * Ieff;
+        if (imp > impStable) imp = impStable;
+        else if (imp < -impStable) imp = -impStable;
+        if (imp === 0) continue;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const iv = this.iv;
+        iv.x = this.axisW[0] * imp;
+        iv.y = this.axisW[1] * imp;
+        iv.z = this.axisW[2] * imp;
+        this.motorImpulse[idx] = imp;
+        c.applyTorqueImpulse(iv, true);
+        iv.x = -iv.x;
+        iv.y = -iv.y;
+        iv.z = -iv.z;
+        p.applyTorqueImpulse(iv, true);
+      }
     }
   }
+  /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
+  refAngleOf(joint, axis) {
+    const idx = joint * 3 + axis;
+    const cmd = this.motorTarget[idx];
+    return cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+  }
   // ------------------------------------------------------------ 便利读数
+  /**
+   * ★ 身体参考点 = **上躯干（胸腔）**，不是树根。
+   *
+   * 为什么：脊柱分段后（见 SkeletonConfig.spineSegments）树根变成了骨盆，
+   * 而"站得直不直 / 现在多高 / 朝哪转"这些量真正的载体是**上躯干**：
+   *   · 平衡反馈用的角速度：胸的角速度才是"我在倒"的信号（骨盆更迟钝）
+   *   · 直立惩罚 ∫(cos tilt − 1)：必须量胸的倾角，否则弯腰驼背不扣分
+   *   · 摔倒判定的高度：骨盆会深蹲（0.83 → 0.5 是正常下蹲），胸塌到地面才是摔
+   * 分段前（K=1）它本身就是 'torso'，行为与历史完全一致。
+   */
   torso() {
+    return this.bodies[this.indexByKey.get(this.torsoKey) ?? 0];
+  }
+  /** 树根 = 骨盆（脊柱最下一段，key 恒为 'torso'）。行走位移的基准点 */
+  root() {
     return this.bodies[this.indexByKey.get("torso") ?? 0];
   }
   head() {
@@ -12614,23 +13012,51 @@ var Ragdoll = class {
   shin(side) {
     return this.bodies[this.indexByKey.get(side === "l" ? "shin_l" : "shin_r") ?? 0];
   }
-  /** 脚掌底面（= 小腿胶囊底端）的世界 y —— 接地的代理量，比接触查询便宜 */
-  soleY(side) {
+  bodyByKey(key) {
+    return this.bodies[this.indexByKey.get(key) ?? 0];
+  }
+  /**
+   * 脚掌某点的世界坐标写入 out[0..2]。
+   * ★ 3D 之后不能再写 `body.y − length/2`：刚体会转，最低点必须按姿态算。
+   *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
+   */
+  footPoint(side, out) {
     const key = side === "l" ? "shin_l" : "shin_r";
     const idx = this.indexByKey.get(key) ?? 0;
-    return this.bodies[idx].translation().y - this.sk.bodies[idx].length / 2;
+    const b = this.bodies[idx];
+    const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");
+    const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
+    const t = b.translation();
+    this.toWorld(b, 0, ly, 0, out);
+    out[0] += t.x;
+    out[1] += t.y;
+    out[2] += t.z;
+  }
+  footTmp = new Float64Array(3);
+  /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
+  soleY(side) {
+    this.footPoint(side, this.footTmp);
+    return this.footTmp[1];
   }
   // ------------------------------------------------------------ 重置
-  /** 回到初始位姿，清零速度（每个个体开跑前调用） */
+  /**
+   * 回到初始位姿，清零速度（每个个体开跑前调用）。
+   * ★ 若 purgeJointCache：连关节一起删掉重建 —— 清掉解算器的暖启动冲量缓存。
+   *   不这么做的话，同一份基因组在同一个 Sim 上重放会从第 1 步就分叉（见 RagdollOptions）。
+   */
   reset(offsetX = 0) {
     this.motorTarget.fill(0);
+    if (this.opt.purgeJointCache) {
+      for (const j of this.joints) this.world.removeImpulseJoint(j, true);
+    }
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
-      b.setTranslation({ x: this.initX[i] + offsetX, y: this.initY[i], z: 0 }, true);
+      b.setTranslation({ x: this.initX[i] + offsetX, y: this.initY[i], z: this.initZ[i] }, true);
       b.setRotation(IDENTITY, true);
       b.setLinvel(ZERO, true);
       b.setAngvel(ZERO, true);
     }
+    if (this.opt.purgeJointCache) this.createJoints();
   }
 };
 
@@ -12783,7 +13209,7 @@ for (const scale of [0.25, 0.5, 1, 2, 4]) {
   let sum = 0;
   for (let i = 0; i < doll.jointCount; i++) sum += Math.abs(doll.jointAngle(i));
   console.log(
-    `  torqueScale=${scale.toFixed(2)}  \u0394x=${(tp.x - x0).toFixed(3).padStart(7)} m  \u8EAF\u5E72y=${tp.y.toFixed(3)}  \u503E\u89D2=${deg(doll.angleOf(doll.torso())).toFixed(0).padStart(4)}\xB0  \u03A3|\u5173\u8282\u89D2|=${sum.toFixed(2).padStart(5)} rad  ${blowAt0(blewAt)}`
+    `  torqueScale=${scale.toFixed(2)}  \u0394x=${(tp.x - x0).toFixed(3).padStart(7)} m  \u8EAF\u5E72y=${tp.y.toFixed(3)}  \u503E\u89D2=${deg(doll.tiltOf(doll.torso())).toFixed(0).padStart(4)}\xB0  \u03A3|\u5173\u8282\u89D2|=${sum.toFixed(2).padStart(5)} rad  ${blowAt0(blewAt)}`
   );
 }
 function blowAt0(i) {

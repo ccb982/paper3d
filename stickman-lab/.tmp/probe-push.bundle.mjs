@@ -183,9 +183,9 @@ function passArray32ToWasm0(arg, malloc) {
   WASM_VECTOR_LEN = arg.length;
   return ptr;
 }
-function handleError(f, args) {
+function handleError(f2, args) {
   try {
-    return f.apply(this, args);
+    return f2.apply(this, args);
   } catch (e) {
     wasm.__wbindgen_exn_store(addHeapObject(e));
   }
@@ -1287,9 +1287,9 @@ var init_rapier_wasm3d_bg = __esm({
       * - `f(handle)`: the function to apply to the integer handle of each collider managed by this collider set. Called as `f(handle)`.
       * @param {Function} f
       */
-      forEachColliderHandle(f) {
+      forEachColliderHandle(f2) {
         try {
-          wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -2371,9 +2371,9 @@ var init_rapier_wasm3d_bg = __esm({
       * (false).
       * @param {Function} f
       */
-      drainCollisionEvents(f) {
+      drainCollisionEvents(f2) {
         try {
-          wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -2381,9 +2381,9 @@ var init_rapier_wasm3d_bg = __esm({
       /**
       * @param {Function} f
       */
-      drainContactForceEvents(f) {
+      drainContactForceEvents(f2) {
         try {
-          wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -2785,9 +2785,9 @@ var init_rapier_wasm3d_bg = __esm({
       * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
       * @param {Function} f
       */
-      forEachJointHandle(f) {
+      forEachJointHandle(f2) {
         try {
-          wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -2800,9 +2800,9 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} body
       * @param {Function} f
       */
-      forEachJointAttachedToRigidBody(body, f) {
+      forEachJointAttachedToRigidBody(body, f2) {
         try {
-          wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
+          wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -3023,9 +3023,9 @@ var init_rapier_wasm3d_bg = __esm({
       *   set. Called as `f(collider)`.
       * @param {Function} f
       */
-      forEachActiveRigidBodyHandle(f) {
+      forEachActiveRigidBodyHandle(f2) {
         try {
-          wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -3435,9 +3435,9 @@ var init_rapier_wasm3d_bg = __esm({
       * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
       * @param {Function} f
       */
-      forEachJointHandle(f) {
+      forEachJointHandle(f2) {
         try {
-          wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -3450,9 +3450,9 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} body
       * @param {Function} f
       */
-      forEachJointAttachedToRigidBody(body, f) {
+      forEachJointAttachedToRigidBody(body, f2) {
         try {
-          wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
+          wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -3490,8 +3490,8 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} handle1
       * @param {Function} f
       */
-      contact_pairs_with(handle1, f) {
-        wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
+      contact_pairs_with(handle1, f2) {
+        wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
       }
       /**
       * @param {number} handle1
@@ -3506,8 +3506,8 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} handle1
       * @param {Function} f
       */
-      intersection_pairs_with(handle1, f) {
-        wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
+      intersection_pairs_with(handle1, f2) {
+        wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
       }
       /**
       * @param {number} handle1
@@ -4938,9 +4938,9 @@ var init_rapier_wasm3d_bg = __esm({
       * - `f(handle)`: the function to apply to the integer handle of each rigid-body managed by this set. Called as `f(collider)`.
       * @param {Function} f
       */
-      forEachRigidBodyHandle(f) {
+      forEachRigidBodyHandle(f2) {
         try {
-          wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
+          wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -7575,10 +7575,10 @@ var init_coarena = __esm({
           return null;
         }
       }
-      forEach(f) {
+      forEach(f2) {
         for (const elt of this.data) {
           if (elt != null)
-            f(elt);
+            f2(elt);
         }
       }
       getAll() {
@@ -7730,8 +7730,8 @@ var init_rigid_body_set = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEach(f) {
-        this.map.forEach(f);
+      forEach(f2) {
+        this.map.forEach(f2);
       }
       /**
        * Applies the given closure to each active rigid-bodies contained by this set.
@@ -7740,9 +7740,9 @@ var init_rigid_body_set = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEachActiveRigidBody(islands, f) {
+      forEachActiveRigidBody(islands, f2) {
         islands.forEachActiveRigidBodyHandle((handle) => {
-          f(this.get(handle));
+          f2(this.get(handle));
         });
       }
       /**
@@ -8351,8 +8351,8 @@ var init_impulse_joint_set = __esm({
        *
        * @param f - The closure called with the integer handle of each impulse joint attached to the rigid-body.
        */
-      forEachJointHandleAttachedToRigidBody(handle, f) {
-        this.raw.forEachJointAttachedToRigidBody(handle, f);
+      forEachJointHandleAttachedToRigidBody(handle, f2) {
+        this.raw.forEachJointAttachedToRigidBody(handle, f2);
       }
       /**
        * Internal function, do not call directly.
@@ -8390,8 +8390,8 @@ var init_impulse_joint_set = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEach(f) {
-        this.map.forEach(f);
+      forEach(f2) {
+        this.map.forEach(f2);
       }
       /**
        * Gets all joints in the list.
@@ -8622,16 +8622,16 @@ var init_multibody_joint_set = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEach(f) {
-        this.map.forEach(f);
+      forEach(f2) {
+        this.map.forEach(f2);
       }
       /**
        * Calls the given closure with the integer handle of each multibody joint attached to this rigid-body.
        *
        * @param f - The closure called with the integer handle of each multibody joint attached to the rigid-body.
        */
-      forEachJointHandleAttachedToRigidBody(handle, f) {
-        this.raw.forEachJointAttachedToRigidBody(handle, f);
+      forEachJointHandleAttachedToRigidBody(handle, f2) {
+        this.raw.forEachJointAttachedToRigidBody(handle, f2);
       }
       /**
        * Gets all joints in the list.
@@ -8705,8 +8705,8 @@ var init_island_manager = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEachActiveRigidBodyHandle(f) {
-        this.raw.forEachActiveRigidBodyHandle(f);
+      forEachActiveRigidBodyHandle(f2) {
+        this.raw.forEachActiveRigidBodyHandle(f2);
       }
     };
   }
@@ -8776,15 +8776,15 @@ var init_narrow_phase = __esm({
        * @param collider1 - The second collider involved in the contact.
        * @param f - Closure that will be called on each collider that is in contact with `collider1`.
        */
-      contactPairsWith(collider1, f) {
-        this.raw.contact_pairs_with(collider1, f);
+      contactPairsWith(collider1, f2) {
+        this.raw.contact_pairs_with(collider1, f2);
       }
       /**
        * Enumerates all the colliders intersecting the given colliders, assuming one of them
        * is a sensor.
        */
-      intersectionPairsWith(collider1, f) {
-        this.raw.intersection_pairs_with(collider1, f);
+      intersectionPairsWith(collider1, f2) {
+        this.raw.intersection_pairs_with(collider1, f2);
       }
       /**
        * Iterates through all the contact manifolds between the given pair of colliders.
@@ -8795,7 +8795,7 @@ var init_narrow_phase = __esm({
        *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
        *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
        */
-      contactPair(collider1, collider2, f) {
+      contactPair(collider1, collider2, f2) {
         const rawPair = this.raw.contact_pair(collider1, collider2);
         if (!!rawPair) {
           const flipped = rawPair.collider1() != collider1;
@@ -8803,7 +8803,7 @@ var init_narrow_phase = __esm({
           for (i = 0; i < rawPair.numContactManifolds(); ++i) {
             this.tempManifold.raw = rawPair.contactManifold(i);
             if (!!this.tempManifold.raw) {
-              f(this.tempManifold, flipped);
+              f2(this.tempManifold, flipped);
             }
             this.tempManifold.free();
           }
@@ -11181,16 +11181,16 @@ var init_world = __esm({
        *
        * @param f(collider) - The function to apply to each collider managed by this physics world. Called as `f(collider)`.
        */
-      forEachCollider(f) {
-        this.colliders.forEach(f);
+      forEachCollider(f2) {
+        this.colliders.forEach(f2);
       }
       /**
        * Applies the given closure to each rigid-body managed by this physics world.
        *
        * @param f(body) - The function to apply to each rigid-body managed by this physics world. Called as `f(collider)`.
        */
-      forEachRigidBody(f) {
-        this.bodies.forEach(f);
+      forEachRigidBody(f2) {
+        this.bodies.forEach(f2);
       }
       /**
        * Applies the given closure to each active rigid-body managed by this physics world.
@@ -11201,8 +11201,8 @@ var init_world = __esm({
        *
        * @param f - The function to apply to each active rigid-body managed by this physics world. Called as `f(collider)`.
        */
-      forEachActiveRigidBody(f) {
-        this.bodies.forEachActiveRigidBody(this.islands, f);
+      forEachActiveRigidBody(f2) {
+        this.bodies.forEachActiveRigidBody(this.islands, f2);
       }
       /**
        * Find the closest intersection between a ray and the physics world.
@@ -11352,15 +11352,15 @@ var init_world = __esm({
        * @param collider1 - The second collider involved in the contact.
        * @param f - Closure that will be called on each collider that is in contact with `collider1`.
        */
-      contactPairsWith(collider1, f) {
-        this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f));
+      contactPairsWith(collider1, f2) {
+        this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f2));
       }
       /**
        * Enumerates all the colliders intersecting the given colliders, assuming one of them
        * is a sensor.
        */
-      intersectionPairsWith(collider1, f) {
-        this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f));
+      intersectionPairsWith(collider1, f2) {
+        this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f2));
       }
       /**
        * Iterates through all the contact manifolds between the given pair of colliders.
@@ -11371,8 +11371,8 @@ var init_world = __esm({
        *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
        *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
        */
-      contactPair(collider1, collider2, f) {
-        this.narrowPhase.contactPair(collider1.handle, collider2.handle, f);
+      contactPair(collider1, collider2, f2) {
+        this.narrowPhase.contactPair(collider1.handle, collider2.handle, f2);
       }
       /**
        * Returns `true` if `collider1` and `collider2` intersect and at least one of them is a sensor.
@@ -11475,8 +11475,8 @@ var init_event_queue = __esm({
        * involved in the collision, and a boolean indicating if the collision started (true) or stopped
        * (false).
        */
-      drainCollisionEvents(f) {
-        this.raw.drainCollisionEvents(f);
+      drainCollisionEvents(f2) {
+        this.raw.drainCollisionEvents(f2);
       }
       /**
        * Applies the given javascript closure on each contact force event of this collector, then clear
@@ -11485,11 +11485,11 @@ var init_event_queue = __esm({
        * @param f - JavaScript closure applied to each collision event. The
        *            closure must take one `TempContactForceEvent` argument.
        */
-      drainContactForceEvents(f) {
+      drainContactForceEvents(f2) {
         let event = new TempContactForceEvent();
         this.raw.drainContactForceEvents((raw) => {
           event.raw = raw;
-          f(event);
+          f2(event);
           event.free();
         });
       }
@@ -12692,10 +12692,10 @@ var init_collider_set = __esm({
         this.map = void 0;
       }
       /** @internal */
-      castClosure(f) {
+      castClosure(f2) {
         return (handle) => {
-          if (!!f) {
-            return f(this.get(handle));
+          if (!!f2) {
+            return f2(this.get(handle));
           } else {
             return void 0;
           }
@@ -12807,8 +12807,8 @@ var init_collider_set = __esm({
        *
        * @param f - The closure to apply.
        */
-      forEach(f) {
-        this.map.forEach(f);
+      forEach(f2) {
+        this.map.forEach(f2);
       }
       /**
        * Gets all colliders in the list.
@@ -13553,7 +13553,7 @@ var init_ragdoll = __esm({
   }
 });
 
-// tools/probe-servo.ts
+// tools/probe-push.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -13567,7 +13567,7 @@ var { Ragdoll: Ragdoll2 } = await Promise.resolve().then(() => (init_ragdoll(), 
   const imports = {};
   for (const imp of WebAssembly.Module.imports(compiled)) {
     const fn = bg[imp.name];
-    if (typeof fn !== "function") throw new Error(`[probe] wasm \u5BFC\u5165\u7F3A\u5931 ${imp.module}::${imp.name}`);
+    if (typeof fn !== "function") throw new Error(`[probe-push] wasm \u5BFC\u5165\u7F3A\u5931 ${imp.module}::${imp.name}`);
     (imports[imp.module] ??= {})[imp.name] = fn;
   }
   const instance = await WebAssembly.instantiate(compiled, imports);
@@ -13577,328 +13577,453 @@ var RAPIER = (await Promise.resolve().then(() => (init_rapier(), rapier_exports)
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var DT = 1 / 120;
 var G = 9.81;
-var NJ = sk.joints.length;
-var AXIS_NAME = ["\u7ED5X \u5916\u5C55", "\u7ED5Y \u626D\u8F6C", "\u7ED5Z \u5C48\u4F38"];
-var line = (n = 96) => "\u2500".repeat(n);
-var W3 = new Float64Array(3);
-function makeRig(gravityY, suspend, kP, kD) {
-  const world = new RAPIER.World({ x: 0, y: gravityY, z: 0 });
+var M = sk.massTotal;
+var NW = M * G;
+var log = (...a) => console.log(...a);
+var failures = 0;
+function check(name, ok, detail = "") {
+  if (!ok) failures++;
+  log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? "   " + detail : ""}`);
+}
+var f = (x, n = 3) => x.toFixed(n);
+var pc = (x, n = 1) => `${(x * 100).toFixed(n)}%`;
+var allCol = [];
+for (const b of sk.bodies) {
+  for (const c of b.colliders) {
+    const halfY = c.shape === "cuboid" ? c.hy : c.halfHeight + c.radius;
+    allCol.push({
+      key: b.key,
+      bottom: b.cy + c.offsetY - halfY,
+      hx: c.shape === "cuboid" ? c.hx : c.radius,
+      hz: c.shape === "cuboid" ? c.hz : c.radius
+    });
+  }
+}
+var g0 = Math.min(...allCol.map((c) => c.bottom));
+var touching = allCol.filter((c) => c.bottom <= g0 + 0.02);
+var P_X = Math.max(...touching.map((c) => c.hx));
+var P_Z = Math.max(...touching.map((c) => c.hz));
+var P_Z_PASSIVE = P_Z;
+var ZC = 0.9659;
+var OMEGA = Math.sqrt(G / ZC);
+var V_CATCH = OMEGA * P_X;
+var GROUPS = ["\u9ACB", "\u819D", "\u810A", "\u9888", "\u80A9", "\u8098"];
+var groupOf = sk.joints.map((j) => {
+  const n = j.name;
+  if (n.startsWith("hip")) return "\u9ACB";
+  if (n.startsWith("knee")) return "\u819D";
+  if (n.startsWith("spine")) return "\u810A";
+  if (n.startsWith("neck")) return "\u9888";
+  if (n.startsWith("shoulder")) return "\u80A9";
+  return "\u8098";
+});
+var nAx = sk.joints.length * 3;
+log("\u5173\u8282\u51FA\u529B\u5BA1\u8BA1 \u2014\u2014 \u9759\u606F / \u53D7\u6270 / \u6743\u9650\u6807\u5B9A");
+log(`  \u4F53\u91CD ${NW.toFixed(0)} N   \u5173\u8282 ${sk.joints.length} \u4E2A / ${nAx} \u4E2A\u53EF\u9A71\u52A8\u8F74`);
+log(`  p_max(\u524D\u540E) = ${f(P_X)} m    \u03C9 = ${f(OMEGA, 3)} rad/s    v_catch = ${f(V_CATCH)} m/s`);
+log("");
+function comOf(doll) {
+  let mt = 0, x = 0, y = 0, z = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    const c = b.worldCom();
+    mt += m;
+    x += m * c.x;
+    y += m * c.y;
+    z += m * c.z;
+  }
+  return { x: x / mt, y: y / mt, z: z / mt };
+}
+function comVx(doll) {
+  let mt = 0, x = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    mt += m;
+    x += m * b.linvel().x;
+  }
+  return x / mt;
+}
+function run(label, rest, scale, quiet, dv) {
+  const world = new RAPIER.World({ x: 0, y: -G, z: 0 });
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
-  const opt = {};
-  if (kP !== void 0) opt.kP = kP;
-  if (kD !== void 0) opt.kD = kD;
-  const doll = new Ragdoll2(world, sk, opt);
+  const doll = new Ragdoll2(world, sk, { kP: rest, torqueScale: scale });
   doll.reset(0);
-  if (suspend) {
-    const tp = doll.torso().translation();
-    const anchor = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(tp.x, tp.y, tp.z));
-    const lc = doll.torso().localCom();
-    world.createImpulseJoint(
-      RAPIER.JointData.spherical({ x: 0, y: 0, z: 0 }, { x: lc.x, y: lc.y, z: lc.z }),
-      anchor,
-      doll.torso(),
-      true
-    );
-  }
-  const zero = new Float32Array(NJ * 3);
-  return {
-    world,
-    doll,
-    step: (targets) => {
-      doll.setMotorTargets(targets ?? zero);
-      doll.driveMotors(DT);
-      world.step();
-    },
-    free: () => world.free()
+  const zero = new Float32Array(doll.jointCount * 3);
+  const step = () => {
+    doll.setMotorTargets(zero);
+    doll.driveMotors(DT);
+    world.step();
   };
+  for (let i = 0; i < 120; i++) step();
+  const ySettle = doll.torso().translation().y;
+  const com0 = comOf(doll);
+  if (!quiet) {
+    for (const b of doll.bodies) b.applyImpulse({ x: b.mass() * dv, y: 0, z: 0 }, true);
+  }
+  const marks = [0.25, 0.5, 1, 2];
+  const markX = [];
+  let mi = 0;
+  let peakComX = 0, peakXi = 0, peakXiZ = 0, zeroAxes = 0, occSum = 0, occN = 0;
+  const peakOcc = {};
+  const capCount = {};
+  for (const g of GROUPS) {
+    peakOcc[g] = 0;
+    capCount[g] = 0;
+  }
+  let fallT = null;
+  const total = Math.round(2.5 / DT);
+  for (let s = 0; s < total; s++) {
+    step();
+    const t = (s + 1) * DT;
+    const c = comOf(doll), v = comVx(doll);
+    const dx = c.x - com0.x;
+    const dz = c.z - com0.z;
+    peakComX = Math.max(peakComX, Math.abs(dx));
+    peakXi = Math.max(peakXi, Math.abs(dx + v / OMEGA));
+    peakXiZ = Math.max(peakXiZ, Math.abs(dz + comVz(doll) / OMEGA));
+    let zc = 0;
+    for (let i = 0; i < doll.jointCount; i++) {
+      const g = groupOf[i];
+      for (let k = 0; k < 3; k++) {
+        const imp = doll.motorImpulse[i * 3 + k];
+        if (imp === 0) {
+          zc++;
+          continue;
+        }
+        const occ = Math.abs(imp) / DT / (sk.joints[i].maxTorque[k] * scale);
+        occSum += occ;
+        occN++;
+        if (occ > peakOcc[g]) peakOcc[g] = occ;
+        if (occ >= 0.999) capCount[g]++;
+      }
+    }
+    zeroAxes += zc;
+    if (fallT === null && (doll.torso().translation().y < 0.8 || Math.abs(dx) > 0.45)) fallT = t;
+    while (mi < marks.length && t >= marks[mi] - 1e-9) {
+      markX.push(dx);
+      mi++;
+    }
+  }
+  while (markX.length < marks.length) markX.push(comOf(doll).x - com0.x);
+  return {
+    label,
+    quiet,
+    ySettle,
+    yEnd: doll.torso().translation().y,
+    markX,
+    peakComX,
+    peakXi,
+    peakXiZ,
+    zeroAxes: zeroAxes / (total * nAx),
+    meanOcc: occN ? occSum / occN : 0,
+    peakOcc,
+    capCount,
+    fallT
+  };
+}
+function table(rs, showFall) {
+  log(`  ${"\u914D\u7F6E".padEnd(22)} ${"\u80F8\u8154y \u9759\u7F6E\u2192\u672B".padStart(15)} ${"\u96F6\u51FA\u529B\u8F74".padStart(9)} ${"\u5747\u5360\u7528".padStart(8)} ${GROUPS.map((g) => g.padStart(7)).join("")} ${"\u03BEx\u5CF0".padStart(7)} ${"\u03BEz\u5CF0".padStart(7)} ${"\u8D8A\u754C".padStart(6)} ${showFall ? "\u6454\u5012@".padStart(8) : ""}`);
+  log("  " + "\u2500".repeat(showFall ? 128 : 120));
+  for (const r of rs) {
+    log(`  ${r.label.padEnd(22)} ${`${f(r.ySettle, 3)}\u2192${f(r.yEnd, 3)}`.padStart(15)} ${pc(r.zeroAxes).padStart(9)} ${pc(r.meanOcc, 2).padStart(8)} ` + GROUPS.map((g) => pc(r.peakOcc[g], 0).padStart(7)).join(" ") + ` ${f(r.peakXi).padStart(7)} ${f(r.peakXiZ).padStart(7)} ${(r.peakXi > P_X || r.peakXiZ > P_Z_PASSIVE ? "\u2605\u8D8A\u754C" : " \u57DF\u5185").padStart(6)} ` + (showFall ? `${(r.fallT === null ? "\u672A\u6454" : f(r.fallT, 2) + "s").padStart(8)}` : ""));
+  }
 }
 if (process.argv.includes("diag")) {
-  const ji = sk.joints.findIndex((x) => x.name === "hip_l");
-  for (const [tag, gy, susp] of [["\u5931\u91CD(0g)", 0, false], ["\u6709\u91CD\u529B(1g)", -G, false]]) {
-    const rig = makeRig(gy, susp);
-    const t = new Float32Array(NJ * 3);
-    t[ji * 3 + 0] = 1;
-    const rv = new Float64Array(3);
-    console.log(`
---- ${tag}\uFF1A\u547D\u4EE4 hip_l \u7ED5X = +1\uFF08\u03B8_ref = ${(rig.doll.refAngleOf(ji, 0) * 180 / Math.PI).toFixed(1)}\xB0\uFF09---`);
-    console.log("  step   \u03C4_imp/dt    \u03C9_rel(x)   \u5173\u8282\u89D2x(\xB0)  \u53F3\u817Fy(m)  \u8EAF\u5E72y(m)");
-    for (let i = 1; i <= 240; i++) {
-      rig.step(t);
-      if (i % 20 === 0) {
-        rig.doll.jointRelVel(ji, W3);
-        rig.doll.jointRot(ji, rv);
-        console.log(
-          `  ${String(i).padStart(4)} ${(rig.doll.motorImpulse[ji * 3 + 0] / DT).toFixed(1).padStart(9)} ${W3[0].toFixed(3).padStart(10)} ${(rv[0] * 180 / Math.PI).toFixed(1).padStart(11)} ${rig.doll.shin("l").translation().y.toFixed(3).padStart(9)} ${rig.doll.torso().translation().y.toFixed(3).padStart(9)}`
-        );
+  const rest = Number(process.argv[process.argv.indexOf("diag") + 1] ?? 9) || 9;
+  const world = new RAPIER.World({ x: 0, y: -G, z: 0 });
+  world.timestep = DT;
+  world.numSolverIterations = 16;
+  world.numAdditionalFrictionIterations = 8;
+  const doll = new Ragdoll2(world, sk, { kP: rest });
+  doll.reset(0);
+  const zero = new Float32Array(doll.jointCount * 3);
+  log(`\u2550\u2550\u2550\u2550\u2550\u2550 diag\uFF1A\u9759\u606F\u65F6\u95F4\u5E8F\u5217\uFF08kP = ${rest}\uFF0C\u5168\u7A0B\u96F6\u547D\u4EE4\u3001\u96F6\u6270\u52A8\uFF09\u2550\u2550\u2550\u2550\u2550\u2550`);
+  log(`  ${"t(s)".padStart(6)} ${"\u80F8\u8154y".padStart(7)} ${"\u80F8\u8154\u503E\u89D2\xB0".padStart(10)} ${"CoM x".padStart(8)} ${"CoM z".padStart(8)} ${"CoM vx".padStart(8)} ${"\u03BEx".padStart(8)} ${"\u03BEz".padStart(8)} ${"\u819D\u5CF0\u503C".padStart(7)} ${"\u9ACB\u5CF0\u503C".padStart(7)} ${"\u63A5\u89E6\u5408\u529BN".padStart(10)}`);
+  log("  " + "\u2500".repeat(96));
+  let s = 0;
+  for (let mark = 0; mark <= Math.round(3.5 / DT); mark++) {
+    while (s < mark) {
+      doll.setMotorTargets(zero);
+      doll.driveMotors(DT);
+      world.step();
+      s++;
+    }
+    if (mark % Math.round(0.25 / DT) !== 0) continue;
+    const c = comOf(doll), v = comVx(doll);
+    const tq = doll.torso().rotation();
+    let kPeak = 0, hPeak = 0, contactY = 0;
+    for (let i = 0; i < doll.jointCount; i++) {
+      const g = groupOf[i];
+      for (let k = 0; k < 3; k++) {
+        const occ = Math.abs(doll.motorImpulse[i * 3 + k]) / DT / sk.joints[i].maxTorque[k];
+        if (g === "\u819D" && occ > kPeak) kPeak = occ;
+        if (g === "\u9ACB" && occ > hPeak) hPeak = occ;
       }
     }
-    rig.free();
+    for (const b of doll.bodies) {
+      for (let ci = 0; ci < b.numColliders(); ci++) {
+        const col = b.collider(ci);
+        world.contactPairsWith(col, (other) => {
+          world.contactPair(col, other, (mf, flipped) => {
+            const n = mf.normal();
+            const sgn = flipped ? 1 : -1;
+            for (let k = 0; k < mf.numContacts(); k++) contactY += n.y * mf.contactImpulse(k) * sgn / DT;
+          });
+        });
+      }
+    }
+    log(`  ${f(mark * DT, 2).padStart(6)} ${f(doll.torso().translation().y).padStart(7)} ${f(doll.tiltOf(doll.torso()) * 180 / Math.PI, 1).padStart(10)} ${f(c.x).padStart(8)} ${f(c.z).padStart(8)} ${f(v).padStart(8)} ${f(c.x + v / OMEGA).padStart(8)} ${f(c.z + comVz(doll) / OMEGA).padStart(8)} ${pc(kPeak, 0).padStart(7)} ${pc(hPeak, 0).padStart(7)} ${f(contactY, 0).padStart(10)}`);
   }
-  console.log("");
+  log("");
+  log(`  \u4F53\u91CD = ${f(NW, 0)} N\uFF08\u63A5\u89E6\u5408\u529B\u5217\u5E94\u4E0E\u5B83\u76F8\u5F53\uFF1B\u660E\u663E\u504F\u5C0F = \u6B63\u5728\u4E0B\u843D\uFF09`);
+  log("");
   process.exit(0);
 }
-console.log(`
-${"\u2550".repeat(98)}`);
-console.log("  [A] \u5931\u91CD\u5355\u5173\u8282\u9636\u8DC3\uFF08gravity = 0\uFF0C\u65E0\u5730\u9762 \u21D2 \u552F\u4E00\u80FD\u9A71\u52A8\u5173\u8282\u7684\u5C31\u662F\u9A6C\u8FBE\uFF09");
-console.log(`  \u5173\u8282\u6570 ${NJ}   \u6BCF\u5173\u8282 3 \u8F74   \u2605 \u547D\u4EE4 \xB11 = \u03B8_ref \u5230**\u8BE5\u4FA7\u673A\u68B0\u91CF\u7A0B\u7684 90%**\uFF08\u4E0D\u518D\u662F\u76EE\u6807\u89D2\u901F\u5EA6\uFF09   \u65F6\u957F 1.0 s`);
-console.log(`${"\u2550".repeat(98)}`);
-var LIMB_KEYS = ["head", "hand_l", "hand_r", "shin_l", "shin_r"];
-function stepOne(ji, ax, sgn, seconds = 0.6, k, kd) {
-  const rig = makeRig(0, false, k, kd);
-  const t = new Float32Array(NJ * 3);
-  t[ji * 3 + ax] = sgn;
-  const n = Math.round(seconds / DT);
-  const rv = new Float64Array(3);
-  let peakW = 0, peakTau = 0, work = 0, travel = 0;
-  for (let i = 1; i <= n; i++) {
-    rig.step(t);
-    const tau = rig.doll.motorImpulse[ji * 3 + ax] / DT;
-    if (Math.abs(tau) > peakTau) peakTau = Math.abs(tau);
-    rig.doll.jointRelVel(ji, W3);
-    if (Math.abs(W3[ax]) > Math.abs(peakW)) peakW = W3[ax];
-    work += Math.abs(tau * W3[ax]) * DT;
-    rig.doll.jointRot(ji, rv);
-    if (Math.abs(rv[ax]) > Math.abs(travel)) travel = rv[ax];
+function comVz(doll) {
+  let mt = 0, z = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    mt += m;
+    z += m * b.linvel().z;
   }
-  const lo = sk.joints[ji].minRad[ax], hi = sk.joints[ji].maxRad[ax];
-  rig.free();
-  return { peakW, travel, lo, hi, peakTau, work };
+  return z / mt;
 }
-function settle(ji, ax, cmd, kP, seconds = 1.5) {
-  const rig = makeRig(0, false, kP);
-  const t = new Float32Array(NJ * 3);
-  t[ji * 3 + ax] = cmd;
-  rig.doll.setMotorTargets(t);
-  const thRef = rig.doll.refAngleOf(ji, ax);
-  const n = Math.round(seconds / DT);
-  const tail = Math.round(0.15 / DT);
-  const rv = new Float64Array(3);
-  let angSum = 0, tauSum = 0, cnt = 0;
-  for (let i = 1; i <= n; i++) {
-    rig.step(t);
-    if (i > n - tail) {
-      rig.doll.jointRot(ji, rv);
-      angSum += rv[ax];
-      tauSum += Math.abs(rig.doll.motorImpulse[ji * 3 + ax] / DT);
-      cnt++;
-    }
-  }
-  rig.free();
-  return { thRef, ang: angSum / cnt, tau: tauSum / cnt };
-}
-var ctrlTravel = 0;
+log("\u2550\u2550\u2550\u2550\u2550\u2550 [Z] CoP \u53EF\u8FBE\u57DF\uFF1A\u88AB\u52A8\uFF08\u53CC\u811A\u7B49\u8F7D\u8377\uFF09vs \u4E3B\u52A8\uFF08\u53EF\u5DEE\u52A8\u5378\u8F7D\uFF09\u2550\u2550\u2550\u2550\u2550\u2550");
+log('  \u2605 \u4E0A\u4E00\u8F6E\uFF08probe-stability\uFF09\u53EA\u62A5\u4E86\u51F8\u5305 \u21D2 \u4F1A\u9AD8\u4F30\u5E73\u8861\u6743\u9650\u3002\u51F8\u5305\u8981\u6C42"\u80FD\u628A\u4E00\u53EA\u811A\u7684\u8F7D\u8377\u964D\u5230 0"\uFF0C');
+log("    \u90A3**\u5FC5\u987B\u9760\u4E3B\u52A8\u63A7\u5236**\uFF08\u5DEE\u52A8\u5206\u914D\u5730\u9762\u53CD\u529B\uFF09\u3002\u6CA1\u6709\u4EFB\u4F55\u63A7\u5236\u5668\u65F6\uFF0C\u4E24\u811A\u5404\u627F\u4E00\u534A\uFF0C");
+log('    \u51C0 CoP \u88AB\u5939\u5728**\u4E24\u811A\u811A\u5370\u4E2D\u5FC3\u7684\u4E2D\u70B9**\u9644\u8FD1 \u2014\u2014 \u8FD9\u624D\u662F"\u9759\u606F\u65F6\u771F\u6B63\u53EF\u7528\u7684\u652F\u6491\u9762"\u3002');
 {
-  const rig = makeRig(0, false);
-  const zero = new Float32Array(NJ * 3);
-  const rv = new Float64Array(3);
-  for (let i = 1; i <= 72; i++) rig.step(zero);
-  for (let j = 0; j < NJ; j++) {
-    rig.doll.jointRot(j, rv);
-    ctrlTravel = Math.max(ctrlTravel, Math.abs(rv[0]), Math.abs(rv[1]), Math.abs(rv[2]));
-  }
-  console.log(`  \u5BF9\u7167\u7EC4 targets \u5168 0\uFF1A\u5931\u91CD 0.6 s \u540E\u6700\u5927 |\u5173\u8282\u89D2| = ${(ctrlTravel * 180 / Math.PI).toFixed(3)}\xB0  ${ctrlTravel < 1e-3 ? "\u2714 \u5B8C\u5168\u4E0D\u52A8\uFF08\u8BC1\u660E\u4E0B\u9762\u7684\u8FD0\u52A8\u4E0D\u662F\u6570\u503C\u566A\u58F0\uFF09" : "\u2718 \u6709\u6B8B\u4F59\u8FD0\u52A8"}`);
-  rig.free();
-}
-console.log(`
-  ${"\u5173\u8282".padEnd(11)} ${"\u8F74".padEnd(8)} ${"\u03B8_ref\xB0".padStart(8)} ${"\u884C\u7A0B\xB0".padStart(8)} ${"\u5230\u4F4D\u7387".padStart(7)} ${"\u9650\u4F4D\xB0".padStart(14)} ${"\u5CF0\u503C\u03C9".padStart(8)} ${"\u5CF0\u503C\u529B\u77E9".padStart(9)} ${"\u6CE8\u80FDJ".padStart(7)}`);
-console.log("  " + line(96));
-var reachSum = 0;
-var reachN = 0;
-var worstReach = 1e9;
-var worstReachName = "";
-for (let j = 0; j < NJ; j++) {
-  for (let ax = 0; ax < 3; ax++) {
-    const plus = stepOne(j, ax, 1);
-    const minus = stepOne(j, ax, -1);
-    const useP = Math.abs(plus.travel) >= Math.abs(minus.travel);
-    const r = useP ? plus : minus;
-    const refDeg = (useP ? sk.joints[j].maxRad[ax] : sk.joints[j].minRad[ax]) * 0.9 * 180 / Math.PI;
-    const travelDeg = r.travel * 180 / Math.PI;
-    const loDeg = r.lo * 180 / Math.PI, hiDeg = r.hi * 180 / Math.PI;
-    const reach = refDeg !== 0 ? travelDeg / refDeg : NaN;
-    console.log(
-      `  ${sk.joints[j].name.padEnd(11)} ${AXIS_NAME[ax].padEnd(8)} ${refDeg.toFixed(1).padStart(8)} ${travelDeg.toFixed(1).padStart(8)} ${(Number.isFinite(reach) ? reach.toFixed(2) : "\u2014").padStart(7)} ${`[${loDeg.toFixed(0)},${hiDeg.toFixed(0)}]`.padStart(14)} ${r.peakW.toFixed(2).padStart(8)} ${r.peakTau.toFixed(0).padStart(9)} ${r.work.toFixed(2).padStart(7)}`
-    );
-    if (Number.isFinite(reach)) {
-      reachSum += reach;
-      reachN++;
-      if (reach < worstReach) {
-        worstReach = reach;
-        worstReachName = `${sk.joints[j].name}\xB7${AXIS_NAME[ax]}`;
+  const byFoot = /* @__PURE__ */ new Map();
+  for (const b of sk.bodies) {
+    for (const c of b.colliders) {
+      const halfY = c.shape === "cuboid" ? c.hy : c.halfHeight + c.radius;
+      if (b.cy + c.offsetY - halfY > g0 + 0.02) continue;
+      const hx = c.shape === "cuboid" ? c.hx : c.radius;
+      const hz = c.shape === "cuboid" ? c.hz : c.radius;
+      const cur = byFoot.get(b.key);
+      if (!cur) byFoot.set(b.key, { z0: b.cz - hz, z1: b.cz + hz, x0: b.cx - hx, x1: b.cx + hx });
+      else {
+        cur.z0 = Math.min(cur.z0, b.cz - hz);
+        cur.z1 = Math.max(cur.z1, b.cz + hz);
+        cur.x0 = Math.min(cur.x0, b.cx - hx);
+        cur.x1 = Math.max(cur.x1, b.cx + hx);
       }
     }
   }
-}
-console.log(`
-  \u21B3 \u5E73\u5747\u5230\u4F4D\u7387\uFF08\u884C\u7A0B / \u03B8_ref\uFF09= ${(reachSum / reachN).toFixed(3)}    \u6700\u5DEE = ${worstReachName}\uFF08${worstReach.toFixed(2)}\uFF09`);
-console.log('  \u21B3 \u2605 \u5230\u4F4D\u7387 \u2248 1 \u21D2 \u4F4D\u7F6E\u73AF\u786E\u5B9E\u628A\u5173\u8282\u9001\u5230\u4E86\u7F51\u7EDC\u6307\u5B9A\u7684\u76EE\u6807\u89D2\uFF08\u8FD9\u624D\u662F"\u80FD\u7EF4\u6301\u59FF\u6001"\u7684\u524D\u63D0\uFF09\u3002');
-console.log("     \u5C0F\u4E8E 1 \u53EA\u53EF\u80FD\u6709\u4E24\u4E2A\u539F\u56E0\uFF1A\u649E\u4E86\u673A\u68B0\u9650\u4F4D\uFF08\u8BE5\u8F74\u91CF\u7A0B\u6BD4 90% \u5C0F\uFF09\u3001\u6216\u8005 \u03B8_ref \u7684 90% \u7F29\u653E\u3002");
-console.log(`
-${"\u2550".repeat(98)}`);
-console.log('  [A2] \u2605\u2605 \u4F4D\u7F6E\u73AF\u7684\u5B58\u5728\u6027\u8BC1\u660E\uFF1A\u03B8_ref \u662F"**\u76EE\u6807\u89D2**"\uFF0C\u4E0D\u662F"\u76EE\u6807\u89D2\u901F\u5EA6"');
-console.log("     \u5224\u636E\u6709\u4E24\u534A\uFF0C\u5FC5\u987B**\u540C\u65F6**\u6210\u7ACB\u624D\u7B97\u771F\u7684\u4F4D\u7F6E\u73AF\uFF1A");
-console.log("       \u2460 \u5173\u8282\u505C\u5728 \u03B8_ref \u9644\u8FD1\uFF08\u4E0D\u662F\u4E00\u8DEF\u51B2\u5230\u5E95\u518D\u88AB\u9650\u4F4D\u62E6\u4F4F\uFF09\uFF1B");
-console.log('       \u2461 \u505C\u4F4F\u4E4B\u540E**\u7A33\u6001\u529B\u77E9 \u2260 0** \u2014\u2014 \u8FD9\u5C31\u662F"\u9759\u6001\u521A\u5EA6"\uFF0C\u901F\u5EA6\u73AF\u6839\u672C\u7ED9\u4E0D\u51FA\u6765\u3002');
-console.log(`${"\u2550".repeat(98)}`);
-console.log(`  ${"\u5173\u8282\xB7\u8F74".padEnd(18)} ${"\u547D\u4EE4".padStart(5)} ${"\u03B8_ref\xB0".padStart(8)} ${"\u7A33\u6001\u89D2\xB0".padStart(8)} ${"\u7A33\u6001|\u03C4|".padStart(8)} ${"\u5CF0\u503C|\u03C4|".padStart(8)}  \u7ED3\u8BBA`);
-console.log("  " + line(80));
-for (const [jname, ax] of [["hip_l", 2], ["knee_l", 2], ["shoulder_l", 2], ["elbow_l", 2]]) {
-  const ji = sk.joints.findIndex((x) => x.name === jname);
-  for (const [cmd, kP] of [[-0.5, void 0], [-0.5, 0]]) {
-    const r = settle(ji, ax, cmd, kP);
-    const rDeg = r.thRef * 180 / Math.PI, aDeg = r.ang * 180 / Math.PI;
-    const ok = kP === 0 ? Math.abs(aDeg) < 1 : Math.abs(aDeg - rDeg) < Math.abs(rDeg) * 0.25 + 3;
-    console.log(
-      `  ${`${jname}\xB7${AXIS_NAME[ax]}`.padEnd(18)} ${String(cmd).padStart(5)} ${rDeg.toFixed(1).padStart(8)} ${aDeg.toFixed(1).padStart(8)} ${r.tau.toFixed(2).padStart(8)} ${"\u2014".padStart(8)}  ${kP === 0 ? ok ? "\u2714 \u7EAF\u963B\u5C3C \u21D2 \u5931\u91CD\u4E0B**\u6839\u672C\u4E0D\u52A8**\uFF08\u5BF9\u7167\u6210\u7ACB\uFF09" : "\u2718 \u7ADF\u7136\u52A8\u4E86" : ok ? `\u2714 \u505C\u5230\u76EE\u6807\u89D2\uFF0C\u7A33\u6001\u529B\u77E9 ${r.tau.toFixed(2)} N\xB7m \u2260 0 \u21D2 \u6709\u9759\u6001\u521A\u5EA6` : "\u2718 \u6CA1\u5230\u4F4D"}`
-    );
-  }
-  console.log("  " + line(80));
-}
-console.log('  \u21B3 \u4E0A\u534A = \u4F4D\u7F6E\u73AF\uFF08\u51FA\u5382 kP\uFF09\uFF1A\u8DD1\u5230\u76EE\u6807\u89D2\u505C\u4F4F\uFF0C\u4E14**\u505C\u4F4F\u65F6\u4ECD\u5728\u51FA\u529B** \u2014\u2014 \u8FD9\u6B63\u662F"\u7AD9\u7740\u4E0D\u52A8"\u9700\u8981\u7684\u3002');
-console.log("     \u4E0B\u534A = \u901F\u5EA6\u73AF\uFF08kP=0\uFF09\uFF1Aerr = \u2212kD\xB7\u03C9_rel \u662F**\u7EAF\u963B\u5C3C**\uFF0C\u5931\u91CD\u4E0B\u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u63A8\u5B83 \u21D2 \u4E00\u52A8\u4E0D\u52A8\u3002");
-console.log(`
-${"\u2550".repeat(98)}`);
-console.log('  [B] \u5931\u91CD"\u8737\u7F29"\uFF08gravity = 0\uFF0C\u5168\u8EAB\u5C48\u4F38\u8F74\u4E00\u8D77\u6536 \u21D2 \u624B/\u811A\u5230\u8EAF\u5E72\u7684\u8DDD\u79BB\u5FC5\u987B\u7F29\u77ED\uFF09');
-console.log(`${"\u2550".repeat(98)}`);
-function curl(sgn, seconds = 1.5) {
-  const rig = makeRig(0, false);
-  const t = new Float32Array(NJ * 3);
-  for (let j = 0; j < NJ; j++) t[j * 3 + 2] = sgn;
-  const dist = () => {
-    const tp = rig.doll.torso().translation();
-    let s = 0, n2 = 0;
-    for (const key of LIMB_KEYS) {
-      const i = rig.doll.indexByKey.get(key);
-      if (i === void 0) continue;
-      const p = rig.doll.bodies[i].translation();
-      s += Math.hypot(p.x - tp.x, p.y - tp.y, p.z - tp.z);
-      n2++;
-    }
-    return s / n2;
-  };
-  const d0 = dist();
-  let dmin = d0, dmax = d0;
-  const n = Math.round(seconds / DT);
-  for (let i = 1; i <= n; i++) {
-    rig.step(t);
-    const d = dist();
-    if (d < dmin) dmin = d;
-    if (d > dmax) dmax = d;
-  }
-  const d1 = dist();
-  rig.free();
-  return { d0, d1, dmin, dmax };
-}
-for (const sgn of [-1, 1]) {
-  const r = curl(sgn);
-  const delta = r.d1 - r.d0;
-  console.log(`  \u5C48\u4F38\u8F74\u76EE\u6807 = ${sgn > 0 ? "+1" : "\u22121"}\uFF1A  \u5E73\u5747\u80A2\u7AEF\u8DDD\u8EAF\u5E72 ${r.d0.toFixed(3)} m \u2192 ${r.d1.toFixed(3)} m   \u0394 = ${delta >= 0 ? "+" : ""}${delta.toFixed(3)} m   ${delta < -0.05 ? "\u2714 \u8EAB\u4F53\u81EA\u5DF1\u8737\u8D77\u6765\u4E86\uFF08\u65E0\u91CD\u529B\u3001\u65E0\u5730\u9762 \u21D2 \u53EA\u80FD\u662F\u9A6C\u8FBE\u5230\u4F4D\uFF09" : ""}`);
-}
-{
-  const rig = makeRig(0, false);
-  const tp0 = rig.doll.torso().translation();
-  let d0 = 0, n = 0;
-  for (const key of LIMB_KEYS) {
-    const i = rig.doll.indexByKey.get(key);
-    if (i === void 0) continue;
-    const p = rig.doll.bodies[i].translation();
-    d0 += Math.hypot(p.x - tp0.x, p.y - tp0.y, p.z - tp0.z);
-    n++;
-  }
-  d0 /= n;
-  const zero = new Float32Array(NJ * 3);
-  for (let i = 1; i <= 180; i++) rig.step(zero);
-  const tp = rig.doll.torso().translation();
-  let d1 = 0;
-  let m = 0;
-  for (const key of LIMB_KEYS) {
-    const i = rig.doll.indexByKey.get(key);
-    if (i === void 0) continue;
-    const p = rig.doll.bodies[i].translation();
-    d1 += Math.hypot(p.x - tp.x, p.y - tp.y, p.z - tp.z);
-    m++;
-  }
-  d1 /= m;
-  console.log(`  \u5BF9\u7167\u7EC4 targets \u5168 0\uFF1A${d0.toFixed(3)} m \u2192 ${d1.toFixed(3)} m   \u0394 = ${(d1 - d0).toFixed(3)} m   ${Math.abs(d1 - d0) < 0.03 ? "\u2714 \u5B8C\u5168\u4E0D\u52A8" : "\u2718 \u6709\u6F02\u79FB"}`);
-  rig.free();
-}
-console.log(`
-${"\u2550".repeat(98)}`);
-console.log("  [C] \u2605 \u60AC\u6302\u6D4B\u8BD5\uFF08gravity = 9.81 **\u7167\u5E38\u5F00\u7740**\uFF0C\u8EAF\u5E72\u88AB\u7403\u5F62\u5173\u8282\u540A\u4F4F \u21D2 \u4E0D\u4F1A\u6389\u5730\u4E0A\uFF09");
-console.log("      \u547D\u4EE4\u5C48\u4F38\u8F74 \u21D2 \u80A2\u4F53\u5FC5\u987B**\u62AC\u8D77\u6765**\uFF0C\u5373\u9A6C\u8FBE\u5728\u514B\u670D\u91CD\u529B\u505A\u529F\u3002\u8FD9\u662F\u6700\u76F4\u63A5\u7684\u53CD\u9A73\u3002");
-console.log(`${"\u2550".repeat(98)}`);
-function lift(ji, ax, sgn, probeKey, seconds = 1.5) {
-  const rig = makeRig(-G, true);
-  const idx0 = rig.doll.indexByKey.get(probeKey);
-  if (idx0 === void 0) throw new Error(`[probe-servo] \u9AA8\u67B6\u91CC\u6CA1\u6709\u521A\u4F53 key = ${probeKey}`);
-  const idx = idx0;
-  const y0 = rig.doll.bodies[idx].translation().y;
-  const t = new Float32Array(NJ * 3);
-  const n = Math.round(seconds / DT);
-  let ymax = y0, ymin = y0, work = 0;
-  if (sgn !== 0) t[ji * 3 + ax] = sgn;
-  const jw = () => {
-    rig.doll.jointRelVel(ji, W3);
-    return W3[ax];
-  };
-  for (let i = 1; i <= n; i++) {
-    rig.step(t);
-    const y = rig.doll.bodies[idx].translation().y;
-    if (y > ymax) ymax = y;
-    if (y < ymin) ymin = y;
-    if (sgn !== 0) work += Math.abs(rig.doll.motorImpulse[ji * 3 + ax] / DT * jw()) * DT;
-  }
-  const y1 = rig.doll.bodies[idx].translation().y;
-  const a0 = rig.doll.jointAngle(ji);
-  rig.free();
-  return { y0, y1, ymax, ymin, work, a0 };
-}
-var lifts = [
-  ["hip_l", "\u5C48\u4F38", "shin_l"],
-  ["knee_l", "\u5C48\u4F38", "shin_l"],
-  ["hip_r", "\u5C48\u4F38", "shin_r"],
-  ["shoulder_l", "\u5C48\u4F38", "hand_l"],
-  ["shoulder_r", "\u5C48\u4F38", "hand_r"],
-  ["elbow_l", "\u5C48\u4F38", "hand_l"]
-];
-console.log(`  ${"\u5173\u8282".padEnd(12)} ${"\u89C2\u6D4B\u90E8\u4F4D".padEnd(11)} ${"\u9759\u6B62y".padStart(8)} ${"\u6700\u4F4Ey".padStart(8)} ${"\u6700\u9AD8y".padStart(8)} ${"\u62AC\u5347m".padStart(8)} ${"\u6CE8\u80FDJ".padStart(8)}`);
-console.log("  " + line(74));
-for (const [jname, , probeKey] of lifts) {
-  const ji = sk.joints.findIndex((x) => x.name === jname);
-  const ctrl = lift(ji, 2, 0, probeKey);
-  const a = lift(ji, 2, 1, probeKey);
-  const b = lift(ji, 2, -1, probeKey);
-  const best = a.ymax > b.ymax ? a : b;
-  const rise = best.ymax - Math.min(ctrl.ymax, best.y0);
-  console.log(
-    `  ${jname.padEnd(12)} ${probeKey.padEnd(11)} ${ctrl.y1.toFixed(3).padStart(8)} ${best.ymin.toFixed(3).padStart(8)} ${best.ymax.toFixed(3).padStart(8)} ${(rise >= 0 ? "+" : "") + rise.toFixed(3)}${"".padStart(3)} ${best.work.toFixed(3).padStart(8)}`
+  const feetArr = [...byFoot.entries()].sort((a, b) => a[1].z0 - b[1].z0);
+  for (const [k, r] of feetArr) log(`      \u811A ${k}\uFF1AX[${f(r.x0)}, ${f(r.x1)}]  Z[${f(r.z0)}, ${f(r.z1)}]`);
+  const zPassive = [
+    (feetArr[0][1].z0 + feetArr[1][1].z0) / 2,
+    (feetArr[0][1].z1 + feetArr[1][1].z1) / 2
+  ];
+  const zActive = [feetArr[0][1].z0, feetArr[1][1].z1];
+  const xPassive = [
+    (feetArr[0][1].x0 + feetArr[1][1].x0) / 2,
+    (feetArr[0][1].x1 + feetArr[1][1].x1) / 2
+  ];
+  const xActive = [Math.min(feetArr[0][1].x0, feetArr[1][1].x0), Math.max(feetArr[0][1].x1, feetArr[1][1].x1)];
+  const half = (r) => (r[1] - r[0]) / 2;
+  const ctr = (r) => (r[1] + r[0]) / 2;
+  P_Z_PASSIVE = half(zPassive);
+  log("");
+  log(`  ${"\u65B9\u5411".padEnd(8)} ${"\u88AB\u52A8(\u7B49\u8F7D\u8377)".padStart(18)} ${"\u534A\u5BBD".padStart(8)} ${"\u4E3B\u52A8(\u53EF\u5DEE\u52A8)".padStart(18)} ${"\u534A\u5BBD".padStart(8)} ${"\u88AB\u52A8\u5360\u6BD4".padStart(9)}`);
+  log(`  ${"\u4FA7\u5411 Z".padEnd(8)} ${`[${f(zPassive[0])}, ${f(zPassive[1])}]`.padStart(18)} ${f(half(zPassive)).padStart(8)} ${`[${f(zActive[0])}, ${f(zActive[1])}]`.padStart(18)} ${f(half(zActive)).padStart(8)} ${pc(half(zPassive) / half(zActive), 0).padStart(9)}`);
+  log(`  ${"\u524D\u540E X".padEnd(8)} ${`[${f(xPassive[0])}, ${f(xPassive[1])}]`.padStart(18)} ${f(half(xPassive)).padStart(8)} ${`[${f(xActive[0])}, ${f(xActive[1])}]`.padStart(18)} ${f(half(xActive)).padStart(8)} ${pc(half(xPassive) / half(xActive), 0).padStart(9)}`);
+  log("");
+  log(`  \u4FA7\u5411\u88AB\u52A8\u4E2D\u5FC3 z = ${f(ctr(zPassive))}\uFF08\u2260 0\uFF01\u4E24\u811A\u811A\u5370\u4E0D\u5BF9\u79F0\uFF1A${f(feetArr[0][1].z1)} vs ${f(feetArr[1][1].z1)}\uFF09`);
+  const comZ0 = 55e-4;
+  log(`  \u9759\u606F CoM z = ${f(comZ0)}\uFF08probe-stability\uFF09\u21D2 \u8DDD\u88AB\u52A8\u529B\u5B66 CoP \u533A\u95F4\u7684\u4F59\u91CF\uFF1A`);
+  log(`      \u8D1F\u5411 ${f(comZ0 - zPassive[0])} m    \u6B63\u5411 ${f(zPassive[1] - comZ0)} m`);
+  check(
+    'Z1 \u4FA7\u5411"\u88AB\u52A8\u53EF\u8FBE CoP"\u8FDC\u5C0F\u4E8E\u51F8\u5305 \u21D2 \u9759\u606F\u7AD9\u59FF\u7684\u4FA7\u5411\u4F59\u91CF\u53EA\u6709 ~6~7 cm',
+    half(zPassive) < half(zActive) * 0.35,
+    `\u88AB\u52A8\u534A\u5BBD ${f(half(zPassive))} m vs \u51F8\u5305 ${f(half(zActive))} m\uFF08\u88AB\u52A8\u53EA\u5360 ${pc(half(zPassive) / half(zActive), 0)}\uFF09`
   );
-  void ctrl.y0;
-  void best.y1;
+  check(
+    "Z2 \u524D\u540E\u65B9\u5411\u65E0\u6B64\u635F\u5931\uFF08\u4E24\u811A\u540C\u5411\uFF0C\u7B49\u8F7D\u8377\u4E5F\u80FD\u8986\u76D6\u6574\u4E2A\u8DB3\u8FF9\uFF09",
+    half(xPassive) > half(xActive) * 0.95,
+    `\u88AB\u52A8 ${f(half(xPassive))} m \u2248 \u51F8\u5305 ${f(half(xActive))} m`
+  );
+  log("");
+  log("  \u21D2 **\u4FA7\u5411\u624D\u662F\u771F\u6B63\u7684\u77ED\u677F**\uFF1A\u88AB\u52A8\u53EA\u6709 \xB1" + f(half(zPassive)) + " m\uFF0C\u800C probe-push \u7684\u5B9E\u6D4B\u6B63\u662F\u5728");
+  log("     \u03BEz \u8D8A\u8FC7\u8FD9\u4E2A\u6570\u4E4B\u540E\uFF08t\u22481.0\u21921.25 s\uFF09\u7ACB\u523B\u7FFB\u5012\u3002\u524D\u540E\u65B9\u5411\u53CD\u800C\u6709 \xB1" + f(half(xPassive)) + " m \u7684\u88AB\u52A8\u4F59\u91CF\u3002");
 }
-console.log("  \u21B3 \u9759\u6B62\u5BF9\u7167\uFF08targets \u5168 0\uFF09\u65F6\u80A2\u4F53\u53EA\u662F\u5782\u7740\uFF1B\u4E0A\u9762\u6BCF\u4E00\u884C\u90FD\u51FA\u73B0\u4E86\u660E\u663E\u7684\u62AC\u5347 \u21D2 \u9A6C\u8FBE\u5728\u514B\u670D\u91CD\u529B\u505A\u529F\u3002");
-console.log(`
-${"\u2550".repeat(98)}`);
-console.log('  [D] \u6CE8\u80FD\u7EDF\u8BA1\uFF1A\u4E00\u4E2A"\u8E0F\u6B65"\u6307\u4EE4\u4E0B\u5173\u8282\u5904\u6CE8\u5165\u7684\u673A\u68B0\u80FD');
-console.log(`${"\u2550".repeat(98)}`);
+log("");
+log("\u2550\u2550\u2550\u2550\u2550\u2550 A \u7EC4\uFF1A\u9759\u606F\u5BA1\u8BA1\uFF08\u4E0D\u65BD\u52A0\u4EFB\u4F55\u51B2\u91CF\uFF0C2.5 s\uFF09\u2550\u2550\u2550\u2550\u2550\u2550");
+var qA = run("rest=0     \u03C4\xD71", 0, 1, true, 0);
+var qB = run("rest=9     \u03C4\xD71\uFF08\u5F53\u524D\uFF09", 9, 1, true, 0);
+var qC = run("rest=36    \u03C4\xD71", 36, 1, true, 0);
+table([qA, qB, qC], false);
+log("");
+log("  \u2605 \u5217\u7684\u542B\u4E49\uFF1A");
+log("    \u300C\u96F6\u51FA\u529B\u8F74\u300D= \u5355\u6B65\u5185 motorImpulse \u6070\u4E3A 0 \u7684\u8F74\u5360\u6BD4\u3002\u63A5\u8FD1 0% \u21D2 **\u6BCF\u4E2A\u8F74\u6BCF\u6B65\u90FD\u5728\u51FA\u529B**\u3002");
+log("    \u300C\u5747\u5360\u7528\u300D  = |\u03C4|/\u03C4max \u7684\u6B65\xD7\u8F74\u5747\u503C \u2014\u2014 \u9759\u606F\u65F6\u7684\u6301\u7EED\u51FA\u529B\u6C34\u5E73\u3002");
+log('    \u5206\u7EC4\u5CF0\u503C    = \u54EA\u4E00\u7C7B\u5173\u8282\u5728\u625B\u3002\u5E73\u8861\u53EA\u5173\u5FC3**\u9ACB/\u819D**\uFF1B\u8098\u6253\u6EE1\u8BF4\u660E"\u5236\u52A8"\u5728\u5168\u5173\u8282\u65E0\u5DEE\u522B\u53D1\u751F\u3002');
+log("");
+check(
+  "A1 \u9759\u606F\u65F6\u5173\u8282**\u4E00\u76F4\u5728\u51FA\u529B**\uFF08\u96F6\u8F93\u51FA = \u5236\u52A8\uFF0C\u4E0D\u662F\u677E\u624B\uFF09",
+  qB.zeroAxes < 0.02,
+  `\u5F53\u524D\u914D\u7F6E\uFF1A\u96F6\u51FA\u529B\u8F74\u4EC5 ${pc(qB.zeroAxes, 2)}`
+);
+check(
+  'A2 "\u96F6\u76EE\u6807 = \u4E0D\u51FA\u529B"\u662F\u9519\u7684\uFF1Arest=0 \u540C\u6837\u5728\u5236\u52A8',
+  qA.zeroAxes < 0.02,
+  `rest=0\uFF1A\u96F6\u51FA\u529B\u8F74 ${pc(qA.zeroAxes, 2)}\uFF0C\u5747\u5360\u7528 ${pc(qA.meanOcc, 2)}`
+);
+check(
+  'A3 \u9759\u606F\u51FA\u529B\u91CC"\u975E\u5E73\u8861\u5173\u8282"\uFF08\u8098/\u80A9\uFF09\u6BD4\u9ACB/\u819D\u66F4\u5403\u7D27 \u21D2 \u662F\u5173\u8282\u5236\u52A8\u800C\u975E\u5E73\u8861\u63A7\u5236',
+  Math.max(qB.peakOcc["\u8098"], qB.peakOcc["\u80A9"]) >= Math.max(qB.peakOcc["\u9ACB"], qB.peakOcc["\u819D"]),
+  `\u8098 ${pc(qB.peakOcc["\u8098"])} \u80A9 ${pc(qB.peakOcc["\u80A9"])} vs \u9ACB ${pc(qB.peakOcc["\u9ACB"])} \u819D ${pc(qB.peakOcc["\u819D"])}`
+);
+check(
+  "A4 \u2605 \u63A8\u7FFB\u65E7\u7ED3\u8BBA\uFF1A**\u03B1=1.0 \u4E4B\u540E\u7EAF\u963B\u5C3C\uFF08kP=0\uFF09\u4E5F\u4E0D\u518D\u8815\u53D8\u584C\u9677**",
+  qA.ySettle > 1.3,
+  `\u9759\u7F6E 1 s \u540E\u80F8\u8154\u9AD8\u5EA6\uFF1AkP=0 \u2192 ${f(qA.ySettle)} m\uFF08bind 1.429\uFF09\uFF0CkP=9 \u2192 ${f(qB.ySettle)} m  \u21D2 \u65E7"rest=0 \u584C\u5230 0.149 m"\u662F \u03B1=0.35 \u7684\u4EA7\u7269`
+);
+check(
+  'A5 \u2605\u2605 kP=9\uFF08\u65E7\u9ED8\u8BA4\uFF09\u65F6\u4E0D\u52A0\u6270\u52A8\u4E5F\u4F1A\u5012 \u21D2 \u90A3\u65F6\u786E\u5B9E"\u5173\u8282\u592A\u8F6F"',
+  qB.fallT !== null || qB.peakXiZ > P_Z_PASSIVE,
+  `kP=9 \u9759\u606F 2.5 s\uFF1A\u4FA7\u5411 \u03BEz \u5CF0\u503C ${f(qB.peakXiZ)} > \u88AB\u52A8\u57DF ${f(P_Z_PASSIVE)}\uFF08\u524D\u540E \u03BEx \u5CF0\u503C ${f(qB.peakXi)} > ${f(P_X)}\uFF09\uFF1B\u80F8\u8154 ${f(qB.ySettle)} \u2192 ${f(qB.yEnd)} m`
+);
+log("");
+var DV = 0.2;
+log(`\u2550\u2550\u2550\u2550\u2550\u2550 B \u7EC4\uFF1A\u53D7\u6270\uFF08\u6BCF\u521A\u4F53 m_i\xB7\u0394v\uFF0C\u7EAF CoM \u5E73\u79FB\u6FC0\u52B1 \u0394v = ${DV} m/s \u6CBF +X\uFF09\u2550\u2550\u2550\u2550\u2550\u2550`);
+log(`  \u7406\u8BBA\u53EF\u6551\u4E0A\u9650 \u03C9\xB7p_max = ${f(V_CATCH)} m/s \u21D2 \u672C\u6B21\u53EA\u7528\u5230 ${pc(DV / V_CATCH, 0)} \u7684\u989D\u5EA6\uFF0C\u843D\u5728"\u53EF\u6551"\u533A\u95F4\u5185`);
+log("");
+var CFG = [
+  ["rest=0    \u03C4\xD71\uFF08\u7EAF\u5236\u52A8\uFF09", 0, 1],
+  ["rest=9    \u03C4\xD71\uFF08\u5F53\u524D\uFF09", 9, 1],
+  ["rest=36   \u03C4\xD71\uFF08\u589E\u76CA\xD74\uFF09", 36, 1],
+  ["rest=144  \u03C4\xD71\uFF08\u589E\u76CA\xD716\uFF09", 144, 1],
+  ["rest=9    \u03C4\xD74\uFF08\u6743\u9650\xD74\uFF09", 9, 4],
+  ["rest=144  \u03C4\xD74\uFF08\u53CC\u7BA1\u9F50\u4E0B\uFF09", 144, 4]
+];
+var rsB = CFG.map(([l, r, s]) => run(l, r, s, false, DV));
+table(rsB, true);
+log("");
+log("  \u2605 \u4F4D\u79FB\u5217\uFF08t = 0.25/0.5/1/2 s\uFF0C\u5355\u4F4D m\uFF09\uFF1A");
+for (const r of rsB) {
+  log(`    ${r.label.padEnd(22)} ${r.markX.map((x) => f(x).padStart(7)).join(" ")}   \u03BEx \u5CF0 ${f(r.peakXi)}   \u03BEz \u5CF0 ${f(r.peakXiZ)}`);
+}
+log("");
 {
-  const rig = makeRig(-G, true);
-  const t = new Float32Array(NJ * 3);
-  let work = 0;
-  const n = Math.round(3 / DT);
-  for (let i = 1; i <= n; i++) {
-    const ph = i * DT * 1.15;
-    for (let j = 0; j < NJ; j++) t[j * 3 + 2] = 0.6 * Math.sin(2 * Math.PI * ph + j * 0.7);
-    rig.step(t);
-    for (let j = 0; j < NJ; j++) {
-      rig.doll.jointRelVel(j, W3);
-      work += Math.abs(rig.doll.motorImpulse[j * 3 + 2] / DT * W3[2]) * DT;
-    }
-  }
-  console.log(`  3 s \u5185\u5173\u8282\u5904\u7D2F\u8BA1\u6CE8\u5165\u80FD\u91CF \u2248 ${work.toFixed(2)} J\uFF08= \u6BCF\u516C\u65A4\u4F53\u91CD ${(work / sk.massTotal).toFixed(2)} J/kg\uFF09`);
-  console.log(`  \u4F53\u91CD ${sk.massTotal.toFixed(1)} kg\uFF0C\u62AC\u5347 1 m \u9700\u8981 ${(sk.massTotal * G).toFixed(0)} J \u21D2 \u76F8\u5F53\u4E8E\u628A\u81EA\u8EAB\u6258\u8D77\u4E86 ${(work / (sk.massTotal * G)).toFixed(2)} m`);
-  rig.free();
+  const cur = rsB[1], hi = rsB[3], big = rsB[4];
+  check(
+    "B1 \u2605 \u63A8\u7FFB\u65E7\u7ED3\u8BBA\uFF1A**\u63D0\u9AD8 kP \u80FD\u628A DCM \u5CF0\u503C\u538B\u4E0B\u6765**\uFF08\u03B1=1.0 \u4E4B\u540E\u521A\u5EA6\u624D\u662F\u6709\u6548\u53D8\u91CF\uFF09",
+    rsB[3].peakXi < rsB[0].peakXi,
+    `\u03BEx \u5CF0 \u968F kP\uFF1A${rsB.slice(0, 4).map((r) => f(r.peakXi)).join(" \u2192 ")}\uFF08\u57DF ${f(P_X)}\uFF09`
+  );
+  check(
+    'B2 \u51B2\u91CF\u8FDC\u4F4E\u4E8E\u53EF\u6551\u4E0A\u9650\u3001\u4ECD\u7136\u6551\u4E0D\u56DE\u6765 \u21D2 \u4E0D\u662F"\u5E45\u5EA6\u592A\u5927"',
+    DV < V_CATCH * 0.7,
+    `${DV} vs ${f(V_CATCH)} m/s`
+  );
+  check(
+    "B3 \u2605 \u9AD8\u521A\u5EA6\uFF08kP=144\uFF09\u4E0B\u524D\u540E\u65B9\u5411\u5DF2\u80FD\u5B88\u4F4F\u88AB\u52A8\u57DF",
+    rsB[3].peakXi < P_X,
+    `kP=144 \u5CF0\u503C \u03BEx = ${f(rsB[3].peakXi)} \u2264 \u57DF ${f(P_X)}`
+  );
+  const occRatio = (g) => cur.peakOcc[g] / Math.max(big.peakOcc[g], 1e-9);
+  const trajDiff = Math.max(...big.markX.map((x, i) => Math.abs(x - cur.markX[i])));
+  check(
+    "B4 \u6743\u9650 \xD74\uFF1A\u9ACB/\u819D\u4E0D\u518D\u89E6\u4E0A\u9650\u3001\u5360\u7528\u7387\u7B49\u6BD4\u6389\u5230 1/4\u3001\u800C\u8F68\u8FF9\u51E0\u4E4E\u4E0D\u52A8 \u21D2 \u6743\u9650\u4E0D\u662F\u74F6\u9888",
+    big.capCount["\u9ACB"] === 0 && big.capCount["\u819D"] === 0 && occRatio("\u9ACB") > 3 && occRatio("\u9ACB") < 5.5 && occRatio("\u819D") > 3 && occRatio("\u819D") < 5.5 && trajDiff < 0.02 && Math.abs(big.peakXi - cur.peakXi) < 0.01,
+    `\u89E6\u4E0A\u9650 ${big.capCount["\u9ACB"]}/${big.capCount["\u819D"]} \u6B21\uFF1B\u5360\u7528 \u9ACB ${pc(cur.peakOcc["\u9ACB"])}\u2192${pc(big.peakOcc["\u9ACB"])}\uFF08\xF7${f(occRatio("\u9ACB"), 1)}\uFF09 \u819D ${pc(cur.peakOcc["\u819D"])}\u2192${pc(big.peakOcc["\u819D"])}\uFF08\xF7${f(occRatio("\u819D"), 1)}\uFF09\uFF1B\u8F68\u8FF9\u6700\u5927\u5DEE ${f(trajDiff, 4)} m\uFF0C\u5CF0\u503C \u03BE ${f(cur.peakXi)}\u2192${f(big.peakXi)}`
+  );
+  check(
+    "B5 \u9ACB/\u819D\u529B\u77E9\u5360\u7528\u8FDC\u672A\u6253\u6EE1 \u21D2 \u5E73\u8861\u6743\u9650\u6709\u4F59\u91CF",
+    Math.max(cur.peakOcc["\u9ACB"], cur.peakOcc["\u819D"]) < 0.6,
+    `\u5F53\u524D\u5CF0\u503C\uFF1A\u9ACB ${pc(cur.peakOcc["\u9ACB"])} \u819D ${pc(cur.peakOcc["\u819D"])}\uFF08\u6253\u6EE1\u7684\u662F\u8098 ${pc(cur.peakOcc["\u8098"])}\uFF09`
+  );
 }
-console.log("");
+log("");
+log("\u2550\u2550\u2550\u2550\u2550\u2550 [X] \u6743\u9650\u6807\u5B9A\uFF1A\u628A CoP \u9876\u5230\u652F\u6491\u57DF\u8FB9\u7F18\u9700\u8981\u591A\u5C11\u529B\u77E9\uFF1F \u2550\u2550\u2550\u2550\u2550\u2550");
+log('  \u672C\u9AA8\u67B6**\u65E0\u8E1D\u5173\u8282**\uFF08\u811A\u4E0E\u5C0F\u817F\u540C\u521A\u4F53\uFF09\u21D2 CoP \u53EA\u80FD\u9760**\u819D\u5173\u8282\u529B\u77E9**\u9876\uFF08"\u819D\u5373\u8E1D"\uFF09\uFF1A\u0394p = \u03C4 / N_leg');
+log("");
+var NL_D = NW / 2;
+var NL_S = NW;
+var capFlex = sk.joints.find((j) => j.name === "knee_l").maxTorque[2];
+var capAbd = sk.joints.find((j) => j.name === "knee_l").maxTorque[0];
+log(`  \u5355\u817F\u8D1F\u8377\uFF1A\u53CC\u817F\u652F\u6491 ${f(NL_D, 0)} N   \u5355\u817F\u652F\u6491 ${f(NL_S, 0)} N`);
+log(`  \u819D\u5173\u8282\u4E0A\u9650\uFF1A\u5C48\u4F38 ${f(capFlex, 0)} N\xB7m   \u5916\u5C55 ${f(capAbd, 0)} N\xB7m`);
+log("");
+log(`  ${"\u65B9\u5411".padEnd(10)} ${"\u811A\u5370\u5185\u534A\u5E45 \u0394p".padStart(13)} ${"\u03C4(\u53CC\u817F)".padStart(10)} ${"\u5360\u6BD4".padStart(7)} ${"\u03C4(\u5355\u817F)".padStart(10)} ${"\u5360\u6BD4".padStart(7)}  \u4F59\u91CF`);
+for (const [name, dp, cap] of [["\u524D\u540E(\u5C48\u4F38)", P_X, capFlex], ["\u4FA7\u5411(\u5916\u5C55)", P_Z, capAbd]]) {
+  const td = NL_D * dp, ts = NL_S * dp;
+  log(`  ${name.padEnd(10)} ${f(dp).padStart(13)} ${f(td, 1).padStart(10)} ${pc(td / cap, 0).padStart(7)} ${f(ts, 1).padStart(10)} ${pc(ts / cap, 0).padStart(7)}  ${f(cap / ts, 1)}\xD7`);
+}
+check(
+  "X1 \u6700\u574F\u60C5\u51B5\uFF08\u5355\u817F\u5168\u91CD\uFF09\u9876\u5230\u524D/\u540E\u7F18\u4E5F\u53EA\u8981 \u226460% \u6743\u9650",
+  NL_S * P_X / capFlex <= 0.6,
+  `${f(NL_S * P_X, 1)} / ${f(capFlex, 0)} = ${pc(NL_S * P_X / capFlex, 0)}`
+);
+check(
+  "X2 \u4FA7\u5411\u540C\u7406",
+  NL_S * P_Z / capAbd <= 0.6,
+  `${f(NL_S * P_Z, 1)} / ${f(capAbd, 0)} = ${pc(NL_S * P_Z / capAbd, 0)}`
+);
+log("");
+log("\u2550\u2550\u2550\u2550\u2550\u2550 [Y] \u53CD\u4E8B\u5B9E\uFF1A\u540C\u6837\u51B2\u91CF\u4E0B\uFF0C\u7406\u60F3 DCM \u63A7\u5236\u5668\u80FD\u4E0D\u80FD\u6551\u56DE\u6765\uFF1F \u2550\u2550\u2550\u2550\u2550\u2550");
+log("  LIPM \u79EF\u5206 \u1E8D = \u03C9\xB2(x \u2212 p)\uFF0C\u63A7\u5236\u5668\u53D6\u7ECF\u5178\u6355\u83B7\u70B9\u6CD5 p = clamp(\u03BE, \xB1p_max)");
+{
+  let x = 0, v = DV;
+  const dt = 1 / 960;
+  let peakX = 0, peakXi = 0;
+  for (let i = 0; i < Math.round(2.5 / dt); i++) {
+    const xi = x + v / OMEGA;
+    const p = Math.max(-P_X, Math.min(P_X, xi));
+    const a = OMEGA * OMEGA * (x - p);
+    v += a * dt;
+    x += v * dt;
+    peakX = Math.max(peakX, Math.abs(x));
+    peakXi = Math.max(peakXi, Math.abs(x + v / OMEGA));
+  }
+  log(`      \u521D\u59CB \u03BE = \u0394v/\u03C9 = ${f(DV / OMEGA)} m  \u2264 p_max = ${f(P_X)} m  \u21D2 **\u6355\u83B7\u57DF\u5185\uFF0C\u7406\u8BBA\u53EF\u6551**`);
+  log(`      \u7406\u60F3\u63A7\u5236\u5668\uFF1A\u5CF0\u503C |x| = ${f(peakX)} m\uFF0C\u5CF0\u503C \u03BE = ${f(peakXi)} m\uFF0C2.5 s \u672B\u901F ${f(v)} m/s`);
+  check(
+    "Y1 \u540C\u4E00\u51B2\u91CF\u5728\u7406\u60F3 DCM \u63A7\u5236\u5668\u4E0B\u53EF\u88AB\u5B8C\u5168\u6551\u56DE\uFF08\u03BE \u4ECE\u672A\u8D8A\u754C\uFF09",
+    peakXi <= P_X + 1e-6 && Math.abs(v) < 0.01,
+    `\u5CF0\u503C \u03BE = ${f(peakXi)} \u2264 ${f(P_X)}\uFF0C\u672B\u901F ${f(v)} m/s`
+  );
+}
+log("");
+log("\u2550\u2550\u2550\u2550\u2550\u2550 \u7ED3\u8BBA \u2550\u2550\u2550\u2550\u2550\u2550");
+log('  1. \u2718\u300C\u5173\u8282\u5B8C\u5168\u4E0D\u65BD\u52A0\u529B\u300D\u2014\u2014 \u4E0D\u6210\u7ACB\uFF0C\u800C\u4E14**\u65B9\u5411\u76F8\u53CD**\u3002targets = 0 \u7684\u542B\u4E49\u662F"\u628A\u5173\u8282\u89D2\u901F\u5EA6\u5239\u5230 0"\uFF0C');
+log(`     \u6240\u4EE5\u9759\u606F\u65F6\u6BCF\u4E2A\u8F74**\u6BCF\u6B65\u90FD\u5728\u51FA\u529B**\uFF08\u96F6\u51FA\u529B\u8F74\u4EC5 ${pc(qB.zeroAxes, 2)}\uFF09\uFF0C\u6253\u6EE1\u7684\u662F**\u8098**\u8FD9\u7C7B\u975E\u5E73\u8861\u5173\u8282\u3002`);
+log("  2. \u2718\u300C\u6743\u9650\u4E0D\u591F\u300D\u2014\u2014 \u4E0D\u6210\u7ACB\u3002[X] \u8BF4\u6700\u574F\u60C5\u51B5\u4E5F\u53EA\u7528 50~55%\uFF1B\u5B9E\u6D4B\u628A\u6743\u9650 \xD74 \u540E\u9ACB/\u819D\u518D\u4E5F\u6CA1\u89E6\u8FC7\u4E0A\u9650\uFF0C");
+log(`     \u5360\u7528\u7387\u7B49\u6BD4\u7F29\u5230 1/4\uFF0C\u800C CoM \u8F68\u8FF9\u53EA\u5DEE ${f(Math.max(...rsB[4].markX.map((x, i) => Math.abs(x - rsB[1].markX[i]))), 4)} m\u3001\u5CF0\u503C \u03BE \u53EA\u5DEE ${f(Math.abs(rsB[4].peakXi - rsB[1].peakXi), 4)}\uFF08B4\uFF09`);
+log("     \u21D2 \u90A3\u4E9B\u6743\u9650**\u6839\u672C\u6CA1\u88AB\u7528\u4E0A**\uFF1A\u4E0D\u662F\u88AB\u4EBA\u5361\u4F4F\uFF0C\u662F\u6CA1\u4EBA\u53BB\u8981\u3002");
+log("  3. \u2718\u300C\u63A7\u5236\u5668\u4E0D\u591F\u5F3A\u300D\u2014\u2014 \u5728 \u03B1=0.35 \u65F6**\u770B\u8D77\u6765**\u6210\u7ACB\uFF08\u628A kP \u8C03 \xD716\uFF0CDCM \u6F02\u5F97\u66F4\u8FDC\uFF09\uFF1B");
+log("     \u2605 \u4F46\u90A3\u662F\u62A4\u680F\u5728\u5361\uFF1A\u03B1\u21921.0 \u4E4B\u540E\u63D0\u9AD8 kP **\u65B9\u5411\u5C31\u5BF9\u4E86**\uFF08B1\uFF1A\u03BEx \u5CF0\u968F kP \u5355\u8C03\u4E0B\u964D\uFF0CB3\uFF1AkP=144 \u5DF2\u5B88\u4F4F\u57DF\uFF09\u3002");
+log("  4. \u2714 \u771F\u6B63\u7684\u7F3A\u53E3\uFF1A**\u6CA1\u6709\u4EFB\u4F55\u4E1C\u897F\u5728\u63A7\u5236\u91CD\u5FC3\uFF08CoP / DCM\uFF09**\u3002\u8BC1\u636E\u94FE\uFF1A");
+log("     \xB7 \u89C2\u6D4B 88 \u7EF4\u91CC\u6CA1\u6709 CoM / CoM \u901F\u5EA6 / CoP / DCM\uFF08probe-stability [F]\uFF09\uFF1B");
+log("     \xB7 \u9002\u5E94\u5EA6\u60E9\u7F5A\u7684\u662F\u80F8\u8154\u503E\u89D2\uFF08\u5360 12.4% \u8D28\u91CF\u3001\u4E2D\u5FC3\u79BB CoM 0.46 m\uFF09\uFF1B");
+log("     \xB7 \u552F\u4E00\u7684\u4F4D\u7F6E\u53CD\u9988\u662F kP\xB7(\u03B8_ref\u2212\u03B8)\uFF0C\u800C\u5B83\u5BF9 CoM \u6BEB\u65E0\u56E0\u679C \u2014\u2014 \u5B83\u53EA\u7BA1\u5173\u8282\u89D2\u3002");
+log("  5. \u2714 \u800C\u8FD9\u4EF6\u4E8B**\u662F\u505A\u5F97\u5230\u7684**\uFF1A[Y] \u7528\u540C\u4E00\u51B2\u91CF\u8DD1\u7406\u60F3\u6355\u83B7\u70B9\u63A7\u5236\u5668\uFF0C\u5CF0\u503C \u03BE \u4ECE\u672A\u8D8A\u754C\u3001\u672B\u901F\u5F52\u96F6\u3002");
+log('     \u21D2 \u7F3A\u7684\u662F"\u6709\u4EBA\u5728\u7528\u8FD9\u4E9B\u529B"\uFF0C\u4E0D\u662F"\u6CA1\u6709\u529B"\u3002');
+log("  6. \u26A0 \u2605\u2605 \u989D\u5916\u53D1\u73B0\uFF08\u53EF\u80FD\u6BD4\u4E0A\u9762\u7684\u95EE\u9898\u66F4\u6025\uFF09\uFF1A**\u8FD9\u4E2A\u59FF\u52BF\u9759\u606F\u5C31\u7AD9\u4E0D\u4F4F**\u3002");
+log('     rest=9\u3001\u96F6\u547D\u4EE4\u96F6\u6270\u52A8\uFF0C\u03BEz \u5728 t\u22481.0\u21921.25 s \u8D8A\u8FC7\u4FA7\u5411"\u88AB\u52A8"CoP \u534A\u5BBD\u540E\u7ACB\u523B\u4FA7\u7FFB\uFF0C');
+log(`     \u80F8\u8154\u4ECE ${f(qB.ySettle)} m \u6389\u5230 ${f(qB.yEnd)} m\uFF08A5\uFF09\u3002\u673A\u5236\u89C1 [Z]\uFF1A\u51F8\u5305 \xB10.266 m \u662F**\u4E3B\u52A8**\u53EF\u8FBE\u57DF\uFF0C`);
+log('     \u8981\u9760"\u5DEE\u52A8\u5378\u8F7D\u4E00\u53EA\u811A"\u624D\u62FF\u5F97\u5230\uFF1B\u6CA1\u6709\u4EFB\u4F55\u63A7\u5236\u5668\u65F6\u51C0 CoP \u88AB\u5939\u5728\u4E24\u811A\u811A\u5370\u4E2D\u5FC3\u7684\u4E2D\u70B9\uFF0C');
+log("     **\u88AB\u52A8\u4FA7\u5411\u534A\u5BBD\u53EA\u6709 \xB10.065 m\uFF08\u51F8\u5305\u7684 24%\uFF09** \u21D2 \u9759\u6B62\u5E73\u8861\u8FD9\u4E00\u9879\u5F53\u524D**\u4E0D\u6210\u7ACB**\uFF0C");
+log('     \u8FD9\u4E0D\u662F\u8C03\u53C2\u95EE\u9898\uFF0C\u662F"\u4FA7\u5411\u4F59\u91CF\u672C\u6765\u5C31\u6CA1\u6709"\u3002');
+log(`  7. \u26A0 \u7ED3\u6784\u6027\u95EE\u9898\uFF1A\u7F51\u7EDC\u8F93\u51FA\u662F**\u89D2\u901F\u5EA6\u76EE\u6807** \u21D2 \u5BF9\u9759\u8F7D\u8377\u53EA\u80FD\u9760"\u901F\u5EA6\u8BEF\u5DEE"\u6362\u529B\u77E9 \u21D2 \u9759\u6B62\u59FF\u6001\u5FC5\u7136**\u8815\u53D8**`);
+log(`     \uFF08A4\uFF1Arest=0 \u65F6\u80F8\u8154 ${f(qA.ySettle)}\u2192${f(qA.yEnd)} m\uFF09\u3002\u901F\u5EA6\u63A7\u5236 + \u9759\u8F7D\u8377\u5929\u751F\u4E0D\u5339\u914D\uFF1B`);
+log("     \u4F4D\u7F6E\u73AF\uFF08kP\xB7(\u03B8_ref\u2212\u03B8)\uFF09\u6B63\u662F\u4E3A\u6B64\u800C\u751F \u2014\u2014 \u4F46\u5B83\u4ECD\u7136**\u4E0D\u662F**\u91CD\u5FC3\u63A7\u5236\u3002");
+log("");
+log("\u2550\u2550\u2550\u2550\u2550\u2550 \u2605\u2605 \u540E\u8BB0\uFF1A\u4E0A\u9762\u7B2C 2/3/5/6 \u6761\u7684\u5F52\u56E0\u5DF2\u88AB probe-posture \u4FEE\u6B63 \u2550\u2550\u2550\u2550\u2550\u2550");
+log('  \xB7 \u7B2C 2 \u6761\u300C\u6743\u9650\u4E0D\u591F \u2260 \u95EE\u9898\u300D\u2014\u2014 **\u5F53\u65F6\u7684\u524D\u63D0\u662F\u9519\u7684**\uFF1A[X] \u7684"\u6700\u574F\u60C5\u51B5\u53EA\u7528 50~55%"\u662F\u5728');
+log("    \u7A33\u5B9A\u6027\u62A4\u680F \u03B1 = 0.35 \u4E0B\u6D4B\u7684 \u21D2 \u5B83\u6D4B\u7684\u662F**\u53EF\u7528**\u6743\u9650\uFF0C\u4E0D\u662F**\u8BBE\u8BA1**\u6743\u9650\u3002");
+log("    \u771F\u5B9E\u60C5\u51B5\uFF1A\u03B1=0.35 \u628A\u6709\u6548\u5173\u8282\u521A\u5EA6\u538B\u5230\u8BBE\u8BA1\u503C\u7684 **22%**\uFF08probe-posture [B2]\uFF09\u3002");
+log("  \xB7 \u7B2C 3 \u6761\u300C\u63D0\u9AD8 kP \u6CA1\u7528\u300D\u2014\u2014 \u5728 \u03B1=0.35 \u65F6\u786E\u5B9E\u6CA1\u7528\uFF08\u62A4\u680F\u662F\u74F6\u9888\uFF09\uFF1B\u628A \u03B1 \u4E00\u8D77\u653E\u5F00\u540E");
+log("    kP 9 \u2192 48 \u76F4\u63A5\u8BA9\u96F6\u8F93\u51FA\u4ECE 1.4 s \u7AD9\u5230**\u8DD1\u6EE1**\u3002");
+log('  \xB7 \u7B2C 5 \u6761\u300C\u7F3A\u7684\u662F\u6709\u4EBA\u5728\u7528\u8FD9\u4E9B\u529B\u300D\u2014\u2014 \u5BF9\uFF0C\u4F46**\u5148\u7F3A\u7684\u662F"\u7ED9\u4E86\u591A\u5C11\u529B"**\u3002\u987A\u5E8F\u5E94\u662F\uFF1A');
+log("    \u5148\u505A\u6743\u9650\u5BF9\u8D26\u5355\uFF08\u03C4\u5E94\u7528/\u03C4\u9700\u6C42\u3001\u6709\u6548\u521A\u5EA6 vs \u8BBE\u8BA1\u503C\uFF09\uFF0C\u518D\u8C08\u89C2\u6D4B/\u9002\u5E94\u5EA6/\u7B56\u7565\u3002");
+log("  \xB7 \u7B2C 6 \u6761\u300C\u9759\u606F\u5C31\u7AD9\u4E0D\u4F4F\u300D\u2014\u2014 **\u5DF2\u4FEE**\uFF08kP=48 / \u03B1=1.0\uFF09\u3002\u73B0\u5728\u96F6\u8F93\u51FA\u8DD1\u6EE1 6 s\u3001\u03BEz \u5CF0\u503C 0.27\u3002");
+log('  \u21D2 \u672C\u63A2\u9488\u7684**\u529B\u5BA1\u8BA1**\uFF08[X] \u9010\u8F74\u5360\u7528\u3001[Z] \u63A5\u89E6\u5408\u529B\uFF09\u4ECD\u7136\u6709\u6548\uFF0C\u7EE7\u7EED\u5F53"\u529B\u662F\u600E\u4E48\u8D70\u7684"\u7528\uFF1B');
+log("     \u4F46**\u4E0D\u8981\u518D\u5F15\u7528\u5B83\u7684\u56E0\u679C\u7ED3\u8BBA** \u2014\u2014 \u90A3\u4E9B\u5DF2\u88AB probe-posture \u6539\u5199\u3002");
+log("");
+log(failures === 0 ? "  \u2705 probe-push \u5168\u90E8\u901A\u8FC7" : `  \u274C probe-push \u5931\u8D25 ${failures} \u9879`);
+process.exitCode = failures === 0 ? 0 : 1;

@@ -9,7 +9,7 @@
 //
 //   [A] 失重单关节阶跃（gravity = 0）
 //       没有地面、没有重力 ⇒ 唯一能让关节动起来的东西就是马达。
-//       命令单轴 ±1（= θ_ref 到该侧机械量程的 90%），测**实际到达的关节角**与稳态力矩。
+//       命令单轴 ±1（= ±JOINT_MAX_SPEED），测**实际达到的关节角速度**。
 //       ★ 对照组：targets 全 0 ⇒ 角速度必须 ≈ 0（证明"能动"不是数值噪声）。
 //       ★ 跟踪率 = 实际 / 目标。跟踪率 ≈ 1 ⇒ 马达真的在闭环驱动这个轴。
 //
@@ -33,7 +33,7 @@ import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 const require = createRequire(import.meta.url);
 
 // ★ rapier 相关模块必须先导入完，再注入真实 wasm（见 tools/_bundle.mjs 的说明）
-const { buildSkeleton, DEFAULT_CONFIG } = await import('../src/core/skeleton');
+const { buildSkeleton, DEFAULT_CONFIG, JOINT_MAX_SPEED } = await import('../src/core/skeleton');
 const { Ragdoll } = await import('../src/core/ragdoll');
 
 {
@@ -67,19 +67,15 @@ interface Rig {
   free: () => void;
 }
 
-/**
- * 建一个装置。gravityY = 0 表示失重；suspend = true 时把躯干吊在固定锚点上。
- * ★ 参数已从 `(restTension, aRef)` 改成 `(kP, kD)`：动作改成 PD **位置**目标后，
- *   原来的 `restTension` 软墙已经不存在（见 ragdoll.RagdollOptions.kP 的长注释）。
- */
-function makeRig(gravityY: number, suspend: boolean, kP?: number, kD?: number): Rig {
+/** 建一个装置。gravityY = 0 表示失重；suspend = true 时把躯干吊在固定锚点上 */
+function makeRig(gravityY: number, suspend: boolean, restTension?: number, ref?: number): Rig {
   const world = new RAPIER.World({ x: 0, y: gravityY, z: 0 });
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
   const opt: Record<string, number> = {};
-  if (kP !== undefined) opt.kP = kP;
-  if (kD !== undefined) opt.kD = kD;
+  if (restTension !== undefined) opt.restTension = restTension;
+  if (ref !== undefined) opt.restTensionRef = ref;
   const doll = new Ragdoll(world, sk, opt);
   doll.reset(0);
 
@@ -114,10 +110,9 @@ if (process.argv.includes('diag')) {
   for (const [tag, gy, susp] of [['失重(0g)', 0, false], ['有重力(1g)', -G, false]] as const) {
     const rig = makeRig(gy, susp);
     const t = new Float32Array(NJ * 3);
-    // ★ 语义已变：+1 不再表示"目标角速度 +9 rad/s"，而是"θ_ref = 该轴正向量程的 90%"
     t[ji * 3 + 0] = 1;
     const rv = new Float64Array(3);
-    console.log(`\n--- ${tag}：命令 hip_l 绕X = +1（θ_ref = ${((rig.doll.refAngleOf(ji, 0) * 180) / Math.PI).toFixed(1)}°）---`);
+    console.log(`\n--- ${tag}：命令 hip_l 绕X 目标 +1（= +${JOINT_MAX_SPEED} rad/s）---`);
     console.log('  step   τ_imp/dt    ω_rel(x)   关节角x(°)  右腿y(m)  躯干y(m)');
     for (let i = 1; i <= 240; i++) {
       rig.step(t);
@@ -139,19 +134,12 @@ if (process.argv.includes('diag')) {
 
 console.log(`\n${'═'.repeat(98)}`);
 console.log('  [A] 失重单关节阶跃（gravity = 0，无地面 ⇒ 唯一能驱动关节的就是马达）');
-console.log(`  关节数 ${NJ}   每关节 3 轴   ★ 命令 ±1 = θ_ref 到**该侧机械量程的 90%**（不再是目标角速度）   时长 1.0 s`);
+console.log(`  关节数 ${NJ}   每关节 3 轴   目标 ±1.0 = ±${JOINT_MAX_SPEED} rad/s   时长 1.0 s`);
 console.log(`${'═'.repeat(98)}`);
 
-/**
- * ★ 肢体末端参考点的 key。
- * ★★ 必须用**骨架里的真名**（见 skeleton.ts 的 key）：前臂叫 `hand_l`，不是 `forearm_l`。
- *    写错名字时 `indexByKey.get` 返回 undefined —— 旧代码用了 `!` 直接把探针跑崩。
- */
-const LIMB_KEYS = ['head', 'hand_l', 'hand_r', 'shin_l', 'shin_r'] as const;
-
 /** 命令单关节单轴，返回 { 峰值ω, 峰值跟踪率, 行程(rad), 该轴限位(rad), 峰值力矩, 注能 } */
-function stepOne(ji: number, ax: number, sgn: number, seconds = 0.6, k?: number, kd?: number) {
-  const rig = makeRig(0, false, k, kd);
+function stepOne(ji: number, ax: number, sgn: number, seconds = 0.6, k?: number, ref?: number) {
+  const rig = makeRig(0, false, k, ref);
   const t = new Float32Array(NJ * 3);
   t[ji * 3 + ax] = sgn;
   const n = Math.round(seconds / DT);
@@ -173,37 +161,6 @@ function stepOne(ji: number, ax: number, sgn: number, seconds = 0.6, k?: number,
   return { peakW, travel, lo, hi, peakTau, work };
 }
 
-/**
- * ★ 位置环的"存在性证明"专用：给一个**部分量程**的命令，跑一段时间让它稳定，
- * 取最后 0.15 s 的平均关节角与平均 |τ|。
- * 判据：位置环 ⇒ 关节停在 θ_ref 附近且**稳态力矩 ≠ 0**（静态刚度）；
- *       纯速度环（kP=0）⇒ err = −kD·ω ⇒ 失重下**根本不动**（也停不住）。
- */
-function settle(ji: number, ax: number, cmd: number, kP: number | undefined, seconds = 1.5) {
-  const rig = makeRig(0, false, kP);
-  const t = new Float32Array(NJ * 3);
-  t[ji * 3 + ax] = cmd;
-  // ★★ 顺序不能反：refAngleOf 读的是**当前** motorTarget（由 setMotorTargets 写入）。
-  //    先读后写会永远读出 θ_ref = 0（踩过：A2 表整列 θ_ref° 全是 0.0，判据全假 FAIL）。
-  rig.doll.setMotorTargets(t);
-  const thRef = rig.doll.refAngleOf(ji, ax);
-  const n = Math.round(seconds / DT);
-  const tail = Math.round(0.15 / DT);
-  const rv = new Float64Array(3);
-  let angSum = 0, tauSum = 0, cnt = 0;
-  for (let i = 1; i <= n; i++) {
-    rig.step(t);
-    if (i > n - tail) {
-      rig.doll.jointRot(ji, rv);
-      angSum += rv[ax];
-      tauSum += Math.abs(rig.doll.motorImpulse[ji * 3 + ax] / DT);
-      cnt++;
-    }
-  }
-  rig.free();
-  return { thRef, ang: angSum / cnt, tau: tauSum / cnt };
-}
-
 // 对照组：targets 全 0 —— 失重下关节必须一动不动
 let ctrlTravel = 0;
 {
@@ -220,64 +177,67 @@ let ctrlTravel = 0;
   rig.free();
 }
 
-console.log(`\n  ${'关节'.padEnd(11)} ${'轴'.padEnd(8)} ${'θ_ref°'.padStart(8)} ${'行程°'.padStart(8)} ${'到位率'.padStart(7)} ${'限位°'.padStart(14)} ${'峰值ω'.padStart(8)} ${'峰值力矩'.padStart(9)} ${'注能J'.padStart(7)}`);
-console.log('  ' + line(96));
-let reachSum = 0, reachN = 0, worstReach = 1e9, worstReachName = '';
+console.log(`\n  ${'关节'.padEnd(11)} ${'轴'.padEnd(8)} ${'方向'.padStart(5)} ${'峰值ω'.padStart(8)} ${'峰值跟踪率'.padStart(10)} ${'行程°'.padStart(8)} ${'限位°'.padStart(14)} ${'峰值力矩'.padStart(9)} ${'注能J'.padStart(7)}`);
+console.log('  ' + line(90));
+let bestTrackSum = 0, bestTrackN = 0, worstBest = 1e9, worstBestName = '';
 for (let j = 0; j < NJ; j++) {
   for (let ax = 0; ax < 3; ax++) {
     const plus = stepOne(j, ax, +1);
     const minus = stepOne(j, ax, -1);
-    // 用"行程更大"的那一端作为该轴的能力上限（另一端可能一开始就贴着限位）
-    const useP = Math.abs(plus.travel) >= Math.abs(minus.travel);
+    // 用"两端里更好的那一次"作为该轴的能力上限（有一端可能一开始就贴着限位）
+    const tp = plus.peakW / JOINT_MAX_SPEED, tm = minus.peakW / -JOINT_MAX_SPEED;
+    const useP = Math.abs(tp) >= Math.abs(tm);
     const r = useP ? plus : minus;
-    const refDeg = ((useP ? sk.joints[j].maxRad[ax] : sk.joints[j].minRad[ax]) * 0.9 * 180) / Math.PI;
+    const track = useP ? tp : tm;
     const travelDeg = (r.travel * 180) / Math.PI;
     const loDeg = (r.lo * 180) / Math.PI, hiDeg = (r.hi * 180) / Math.PI;
-    const reach = refDeg !== 0 ? travelDeg / refDeg : NaN;
+    const hitLimit = Math.abs(travelDeg - (travelDeg > 0 ? hiDeg : loDeg)) < 4;
     console.log(
-      `  ${sk.joints[j].name.padEnd(11)} ${AXIS_NAME[ax].padEnd(8)} ${refDeg.toFixed(1).padStart(8)} ` +
-      `${travelDeg.toFixed(1).padStart(8)} ${(Number.isFinite(reach) ? reach.toFixed(2) : '—').padStart(7)} ` +
-      `${`[${loDeg.toFixed(0)},${hiDeg.toFixed(0)}]`.padStart(14)} ${r.peakW.toFixed(2).padStart(8)} ` +
-      `${r.peakTau.toFixed(0).padStart(9)} ${r.work.toFixed(2).padStart(7)}`,
+      `  ${sk.joints[j].name.padEnd(11)} ${AXIS_NAME[ax].padEnd(8)} ${(useP ? '+1' : '−1').padStart(5)} ` +
+      `${r.peakW.toFixed(2).padStart(8)} ${track.toFixed(3).padStart(10)} ${travelDeg.toFixed(1).padStart(8)} ` +
+      `${`[${loDeg.toFixed(0)},${hiDeg.toFixed(0)}]`.padStart(14)} ${r.peakTau.toFixed(0).padStart(9)} ${r.work.toFixed(2).padStart(7)}` +
+      `${hitLimit ? '  ← 已顶到限位' : ''}`,
     );
-    if (Number.isFinite(reach)) {
-      reachSum += reach; reachN++;
-      if (reach < worstReach) { worstReach = reach; worstReachName = `${sk.joints[j].name}·${AXIS_NAME[ax]}`; }
-    }
+    bestTrackSum += Math.abs(track); bestTrackN++;
+    if (Math.abs(track) < worstBest) { worstBest = Math.abs(track); worstBestName = `${sk.joints[j].name}·${AXIS_NAME[ax]}`; }
   }
 }
-console.log(`\n  ↳ 平均到位率（行程 / θ_ref）= ${(reachSum / reachN).toFixed(3)}    最差 = ${worstReachName}（${worstReach.toFixed(2)}）`);
-console.log('  ↳ ★ 到位率 ≈ 1 ⇒ 位置环确实把关节送到了网络指定的目标角（这才是"能维持姿态"的前提）。');
-console.log('     小于 1 只可能有两个原因：撞了机械限位（该轴量程比 90% 小）、或者 θ_ref 的 90% 缩放。');
+console.log(`\n  ↳ 平均峰值跟踪率 ${(bestTrackSum / bestTrackN).toFixed(3)}    最差 = ${worstBestName}（${worstBest.toFixed(3)}）`);
+console.log(`  ↳ ★ 判据要这么读：跟踪率是"峰值 ω / 目标 ω"。撞了限位之后速度必然回落到 0，`);
+console.log(`     所以**不能用稳态速度**判马达好坏（我第一版就踩了这个坑：测的是撞限位之后的稳态，` +
+  `全部读成 0.000）。`);
+console.log(`     正确判据 = 峰值跟踪率 > 0.5 且行程明显 > 0 ⇒ 马达确实把这个轴驱动起来了。`);
 
-// ------------------------------------------------------------------ [A2] 位置环 vs 速度环
+// ------------------------------------------------------------------ [A2] 真凶：restTension 的隐形软墙
 console.log(`\n${'═'.repeat(98)}`);
-console.log('  [A2] ★★ 位置环的存在性证明：θ_ref 是"**目标角**"，不是"目标角速度"');
-console.log('     判据有两半，必须**同时**成立才算真的位置环：');
-console.log('       ① 关节停在 θ_ref 附近（不是一路冲到底再被限位拦住）；');
-console.log('       ② 停住之后**稳态力矩 ≠ 0** —— 这就是"静态刚度"，速度环根本给不出来。');
+console.log('  [A2] ★ 真凶定位：restTension 给每个关节加了一堵"隐形软墙"');
+console.log(`     公式是 target += −k·a（a = 关节角）。当 |a| = JOINT_MAX_SPEED/k = ${JOINT_MAX_SPEED}/k 时，`);
+console.log(`     这个修正量**正好等于满速命令** ⇒ 网络输出再满也推不过这个角度。`);
 console.log(`${'═'.repeat(98)}`);
-console.log(`  ${'关节·轴'.padEnd(18)} ${'命令'.padStart(5)} ${'θ_ref°'.padStart(8)} ${'稳态角°'.padStart(8)} ${'稳态|τ|'.padStart(8)} ${'峰值|τ|'.padStart(8)}  结论`);
+console.log(`  ${'关节·轴'.padEnd(20)} ${'k'.padStart(4)} ${'a_ref'.padStart(7)} ${'理论软墙°'.padStart(10)} ${'峰值ω'.padStart(8)} ${'实测行程°'.padStart(10)} ${'机械限位°'.padStart(12)}`);
 console.log('  ' + line(80));
+const CFGS: [number, number | undefined][] = [
+  [0, undefined], [3, undefined], [9, undefined], [9, 0.25], [9, 0.12],
+];
 for (const [jname, ax] of [['hip_l', 2], ['knee_l', 2], ['shoulder_l', 2], ['elbow_l', 2]] as const) {
   const ji = sk.joints.findIndex((x) => x.name === jname);
-  // ★ kP = undefined ⇒ 用 Ragdoll 的**出厂默认**（不要在这里写死数字：默认值改过，写死会假 FAIL）
-  for (const [cmd, kP] of [[-0.5, undefined], [-0.5, 0]] as const) {
-    const r = settle(ji, ax, cmd, kP);
-    const rDeg = (r.thRef * 180) / Math.PI, aDeg = (r.ang * 180) / Math.PI;
-    const ok = kP === 0 ? Math.abs(aDeg) < 1 : Math.abs(aDeg - rDeg) < Math.abs(rDeg) * 0.25 + 3;
+  const lo = (sk.joints[ji].minRad[ax] * 180) / Math.PI, hi = (sk.joints[ji].maxRad[ax] * 180) / Math.PI;
+  for (const [k, ref] of CFGS) {
+    const a = stepOne(ji, ax, +1, 0.6, k, ref);
+    const b = stepOne(ji, ax, -1, 0.6, k, ref);
+    const r = Math.abs(a.travel) >= Math.abs(b.travel) ? a : b;
+    const wall = k > 0
+      ? `${((Math.min(JOINT_MAX_SPEED / k, ref ?? Infinity) * 180) / Math.PI).toFixed(0)}`
+      : '无';
     console.log(
-      `  ${`${jname}·${AXIS_NAME[ax]}`.padEnd(18)} ${String(cmd).padStart(5)} ${rDeg.toFixed(1).padStart(8)} ` +
-      `${aDeg.toFixed(1).padStart(8)} ${r.tau.toFixed(2).padStart(8)} ${'—'.padStart(8)}  ` +
-      `${kP === 0
-        ? (ok ? '✔ 纯阻尼 ⇒ 失重下**根本不动**（对照成立）' : '✘ 竟然动了')
-        : (ok ? `✔ 停到目标角，稳态力矩 ${r.tau.toFixed(2)} N·m ≠ 0 ⇒ 有静态刚度` : '✘ 没到位')}`,
+      `  ${`${jname}·屈伸`.padEnd(20)} ${String(k).padStart(4)} ${(ref === undefined ? '∞' : ref.toFixed(2)).padStart(7)} ${wall.padStart(10)} ${r.peakW.toFixed(2).padStart(8)} ` +
+      `${((r.travel * 180) / Math.PI).toFixed(1).padStart(10)} ${`[${lo.toFixed(0)},${hi.toFixed(0)}]`.padStart(12)}`,
     );
   }
   console.log('  ' + line(80));
 }
-console.log('  ↳ 上半 = 位置环（出厂 kP）：跑到目标角停住，且**停住时仍在出力** —— 这正是"站着不动"需要的。');
-console.log('     下半 = 速度环（kP=0）：err = −kD·ω_rel 是**纯阻尼**，失重下没有任何东西推它 ⇒ 一动不动。');
+console.log('  ↳ 读法：k=0 时能一路顶到**机械限位**；k 越大（且 a_ref=∞）行程越早被"软墙"截住。');
+console.log('     加上 a_ref 饱和后，行程重新回到机械限位附近 ⇒ 执行器权限恢复。');
 
 // ------------------------------------------------------------------ [B] 失重蜷缩
 console.log(`\n${'═'.repeat(98)}`);
@@ -291,9 +251,7 @@ function curl(sgn: number, seconds = 1.5) {
   const dist = () => {
     const tp = rig.doll.torso().translation();
     let s = 0, n = 0;
-    // ★ key 必须用骨架里的真名：'hand_l'（前臂）而不是 'forearm_l' ——
-    //   写错名字时 indexByKey.get 返回 undefined，旧代码用 `!` 直接崩（踩过）。
-    for (const key of LIMB_KEYS) {
+    for (const key of ['head', 'forearm_l', 'forearm_r', 'shin_l', 'shin_r']) {
       const i = rig.doll.indexByKey.get(key);
       if (i === undefined) continue;
       const p = rig.doll.bodies[i].translation();
@@ -325,9 +283,8 @@ for (const sgn of [-1, +1]) {
   const rig = makeRig(0, false);
   const tp0 = rig.doll.torso().translation();
   let d0 = 0, n = 0;
-  for (const key of LIMB_KEYS) {
-    const i = rig.doll.indexByKey.get(key);
-    if (i === undefined) continue;
+  for (const key of ['head', 'forearm_l', 'forearm_r', 'shin_l', 'shin_r']) {
+    const i = rig.doll.indexByKey.get(key)!;
     const p = rig.doll.bodies[i].translation();
     d0 += Math.hypot(p.x - tp0.x, p.y - tp0.y, p.z - tp0.z); n++;
   }
@@ -336,9 +293,8 @@ for (const sgn of [-1, +1]) {
   for (let i = 1; i <= 180; i++) rig.step(zero);
   const tp = rig.doll.torso().translation();
   let d1 = 0; let m = 0;
-  for (const key of LIMB_KEYS) {
-    const i = rig.doll.indexByKey.get(key);
-    if (i === undefined) continue;
+  for (const key of ['head', 'forearm_l', 'forearm_r', 'shin_l', 'shin_r']) {
+    const i = rig.doll.indexByKey.get(key)!;
     const p = rig.doll.bodies[i].translation();
     d1 += Math.hypot(p.x - tp.x, p.y - tp.y, p.z - tp.z); m++;
   }
@@ -355,10 +311,7 @@ console.log(`${'═'.repeat(98)}`);
 
 function lift(ji: number, ax: number, sgn: number, probeKey: string, seconds = 1.5) {
   const rig = makeRig(-G, true);
-  const idx0 = rig.doll.indexByKey.get(probeKey);
-  // ★ 写错部位名时给一条**可读**的报错，而不是 `bodies[undefined].translation()` 的崩溃
-  if (idx0 === undefined) throw new Error(`[probe-servo] 骨架里没有刚体 key = ${probeKey}`);
-  const idx = idx0;
+  const idx = rig.doll.indexByKey.get(probeKey)!;
   const y0 = rig.doll.bodies[idx].translation().y;
   const t = new Float32Array(NJ * 3);
   const n = Math.round(seconds / DT);
@@ -385,9 +338,9 @@ const lifts: [string, string, string][] = [
   ['hip_l', '屈伸', 'shin_l'],
   ['knee_l', '屈伸', 'shin_l'],
   ['hip_r', '屈伸', 'shin_r'],
-  ['shoulder_l', '屈伸', 'hand_l'],
-  ['shoulder_r', '屈伸', 'hand_r'],
-  ['elbow_l', '屈伸', 'hand_l'],
+  ['shoulder_l', '屈伸', 'forearm_l'],
+  ['shoulder_r', '屈伸', 'forearm_r'],
+  ['elbow_l', '屈伸', 'forearm_l'],
 ];
 console.log(`  ${'关节'.padEnd(12)} ${'观测部位'.padEnd(11)} ${'静止y'.padStart(8)} ${'最低y'.padStart(8)} ${'最高y'.padStart(8)} ${'抬升m'.padStart(8)} ${'注能J'.padStart(8)}`);
 console.log('  ' + line(74));

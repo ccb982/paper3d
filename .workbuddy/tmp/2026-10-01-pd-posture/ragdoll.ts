@@ -55,34 +55,14 @@ const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const ZERO = { x: 0, y: 0, z: 0 };
 
 /**
- * ★★ 马达每物理步最多吃掉多少比例的"相对角速度误差"。默认 **1.0**（= 一步收敛）。
- *
- * ★ 这个数原来是 0.35，是**按角速度目标控制器**定的：那时 `err = ω_des − ω_rel`，
- *   轻肢体（前臂 I≈0.03）在 τmax=40 N·m 下一个 1/120 s 步就能被打出 Δω = 28 rad/s，
- *   而误差本身可能只有 1 rad/s ⇒ 显式积分必然振荡发散，所以要压到 1/3 的余量。
- *
- * ★★ 换成位置环之后 0.35 就成了**性能杀手**（probe-posture [B2] 实测）：
- *   护栏给出的有效力矩上限是 τ_eff = α·|err|·Ieff/dt，而 err = kP·Δθ + kD·ω —— 于是
- *
- *       有效关节刚度 = kP · min( τmax/9 , α·Ieff/dt )
- *                      └ 设计值 ┘   └ 护栏值 ┘
- *
- *   髋外展：设计值 13.3，护栏值 0.35×0.083×120 = **3.49** ⇒ 只用了 26% 的力气。
- *   实测"实际力矩 / 想要力矩" = **22%**（全 36 轴求和），零输出下髋/脊柱被重力压开，
- *   83~96° 直接劈叉塌下去 —— 这就是"站不住"的**真根因**（不是控制策略的锅）。
- *
- * ★ 为什么 1.0 是**有依据的**、而不是"把安全阀拧松"：
- *   本护栏的语义是"每步最多把相对角速度误差吃掉多少"。α = 1 恰好是**一步收敛**——
- *   一步之后相对角速度误差归零，且**不过冲**；α < 1 是欠阻尼意义上的保守，
- *   α = 2 才是显式 P 控制的振荡边界。所以 1.0 是"最快且不过冲"的那一档。
- *   ★ 实践上也不会失控：kP 提高后 τ 会先被 **τmax** 夹住（例如膝 Δθ=2.28 rad 时
- *     err=109、护栏允许 5.1 N·m·s，但 τmax 只给 1.25 N·m·s）⇒ 真正生效的是物理力矩上限。
- *   ★ 而且实测峰|线速度|随 α 提高**下降**（3.4 → 0.1 m/s）：关节越硬，人偶越不抖。
+ * 马达每物理步最多吃掉多少比例的"相对角速度误差"。
+ * 显式 P 控制的稳定条件是 α < 2（α=1 一步到位、α>2 振荡发散），取 0.35 留足余量。
+ * 这是"限加速度"而不是"限力矩"——后者才是 probe-reset 里那个 284 m/s 爆炸的根因。
  */
-const MOTOR_ALPHA = 1.0;
+const MOTOR_ALPHA = 0.35;
 
-/** 越界回程时用的 α。★ 它必须 ≥ MOTOR_ALPHA，否则"保命回程"反而比正常控制更软 */
-const MOTOR_ALPHA_RECOVER = 1.0;
+/** 越界回程时用的 α：要大一点才能把甩出去的关节拉回来，但仍须 < 1 */
+const MOTOR_ALPHA_RECOVER = 0.7;
 
 /**
  * 软限位的"回程带"（弧度）：越界量达到这个宽度时，目标速度被强制打满回程。
@@ -109,70 +89,61 @@ export interface RagdollOptions {
    */
   torqueScale?: number;
   /**
-   * ★★ 位置环比例增益 kP（单位 1/s）。默认 9.0。
+   * ★ 被动"姿态张力"增益 k（单位 1/s）：关节的等效目标角速度里叠加 `−k · 关节角`，
+   * 把关节往**初始姿态（角 0）**拉。默认 9.0，置 0 可关掉对照。
    *
-   * 网络输出的是**目标关节角** θ_ref（不是目标角速度了！见 setMotorTargets），
-   * 马达把它变成一个**等效目标角速度**：
+   * ★ 为什么从 6.0 提到 9.0（tools/probe-ground 的 k 对照，体重 687 N）：
+   *   k=6  静息接触力 606 N（88% 体重）  t=2s 躯干 y = 1.107 m  CoM 撑在支撑区内 2.25s/3s
+   *   k=9  静息接触力 720 N（105% 体重）  t=2s 躯干 y = 1.120 m  CoM 撑在支撑区内 2.75s/3s
+   *   k=12 静息接触力 725 N（106% 体重）  t=2s 躯干 y = 1.122 m  CoM 撑在支撑区内 3.00s/3s
+   *   判据是"静止站立时地面接触力应当 ≈ 体重"⇒ k≥9 才真正对账（k=6 只有 0.88 倍）。
+   *   再往上（12）静息性能几乎饱和，但张力越大网络越难克服（会压低步幅），故取 9.0。
    *
-   *     err = kP·(θ_ref − θ) − kD·ω_rel          // 单位 rad/s
-   *     τ   = clamp(err · τmax / JOINT_MAX_SPEED, ±τmax)
+   * 为什么必须有它（这是"学不出走路"的第三个根因，实测数据在 tools/probe-fight）：
+   *   网络输出的目标是**角速度**，不是位置。于是"零输出"= 纯阻尼控制 ——
+   *   它能抵抗关节运动，但**不抵抗静态力矩**：重力压着膝盖，只要膝盖不转，
+   *   阻尼项就输出 0 力矩，膝盖便一路弯到限位。实测零输出的刚体人偶躯干
+   *   从 1.128 m 被慢慢压到 0.693 m（蹲姿），直接踩到摔倒阈值。
+   *   后果是 ES 一代里个体几乎全是"摔倒"，适应度梯度全花在"别倒"上，
+   *   40 代也走不出一步。
+   * 加上它之后零输出 = 站得住 —— 这正是想要的 ES 起点：**先会站，再学走**。
    *
-   * 为什么必须是位置目标（这一条是本项目"学不出走路"的**头号结构性原因**）：
-   *   网络输出的目标是**角速度**时，"零输出"= 纯阻尼控制 —— 它能抵抗关节**运动**，
-   *   但**不抵抗静态力矩**：重力压着膝盖，只要膝盖不转，阻尼项就输出 0 力矩，
-   *   膝盖便一路弯到限位。实测零输出的刚体人偶躯干从 1.129 m 被慢慢压到 0.693 m（蹲姿），
-   *   直接踩到摔倒阈值 ⇒ ES 一代里个体几乎全是"摔倒"，适应度梯度全花在"别倒"上。
-   *
-   *   ★ 而且**速度目标对静载荷天生不匹配**：`target = 0` 不是"松手"，是"把角速度刹到 0"
-   *     （`err = −ω_rel ≠ 0`）⇒ 关节一直在**制动**（实测零出力轴仅 0.00%），
-   *     但那是"关节空间的制动"，**不是"重心空间的平衡控制"** —— 把全身刹住 = 让身体僵住，
-   *     而僵住的倒立摆一点恢复能力都没有（它不改变 CoP）。见 probe-push。
-   *
-   * ★ 参数取值：**kP = 48**（原为 9）。零输出时 `err = −kP·θ − kD·ω_rel`，形式与历史
-   *   `target = −k·θ; err = target − ω_rel` 逐项一致 ⇒ 仍是严格泛化，只是**刚度换挡了**。
-   *   ★★ 为什么从 9 提到 48（probe-posture [B2] 的实测，别再改回去）：
-   *     k=9 是按"静息接触力 ≈ 体重"这一条标定的（6→88%，9→105%，12→106% 饱和），
-   *     **而那条判据根本管不到"抗屈曲"**。绑定姿态的 CoM 投影本来就在支撑多边形内
-   *     （A9 已验证）⇒ 关节足够硬时它是一个静定的刚体站姿，应该**永远站着**；
-   *     实测 k=9 只能站 1.28 s（髋被压开 83~96°、直接劈叉塌下去）。
-   *     6 s 回合的扫描（α=1.0）：
-   *       kP  9 → 1.40 s   ξz峰 1.88   域内 69%
-   *       kP 24 → 1.73 s   ξz峰 3.33   域内 70%
-   *       kP 48 → **6.00 s 跑满** ξz峰 0.27  域内 93%   ← 取这一档
-   *       kP 90 → **6.00 s 跑满** ξz峰 0.20  域内 100%
-   *     ⇒ 抗屈曲需要 kP ≥ ~48；再往上收益递减（且会把人偶变成纯位置伺服的木偶，
-   *       丢掉"关节柔性"这个对战斗姿态有用的自由度），所以取 48 而不是 90。
-   *     ★ 静力接触力不受影响：那条曲线在 k≥12 就饱和在 ~106% 体重。
+   * ★ 为什么是"改目标速度"而不是"直接加一个弹簧力矩"：
+   *   直接加 k·θ 的弹簧力矩有显式积分稳定条件 k < 2·Ieff/dt —— 前臂 I≈0.03、
+   *   dt=1/120 ⇒ k < 7.2 N·m/rad，而要让 70 kg 人形站住需要的 k 是几十上百，
+   *   必然发散。改成写进目标速度后，它自动走上面那套 `α·|err|·Ieff` 的稳定性上限，
+   *   结构性稳定。物理含义上也站得住：这就是 PD 控制的 P 项（角速度目标是 D 项），
+   *   对应肌肉的静息张力/韧带刚度。
    */
-  kP?: number;
+  restTension?: number;
   /**
-   * 位置环微分增益 kD（无量纲）。默认 1.0 —— 与历史行为逐项一致。
-   * 物理含义：`err = kP·e − kD·ω`，kD 越大越"粘"。
-   * ★ 不要设 0：手臂惯量 ≈ 0.03 kg·m²，纯 P 会让轻肢在 τmax 下每步打出几十 rad/s 的
-   *   相对转速，显式积分的比例控制直接振荡发散（probe-reset 里那个 284 m/s）。
-   *   稳定性真正的护栏是下面 `α·|err|·Ieff` 那条，kD 只是把环路阻尼调舒服。
+   * ★★ 被动姿态张力的**饱和角** a_ref（弧度，默认 0.25 rad ≈ 14°）。
+   *
+   * ★ 为什么必须有它（probe-servo A2 段查出来的真凶，务必别删）：
+   *   restTension 的原始公式是 `target += −k·a`，随关节角**线性无界增长**。
+   *   而 target 的满量程只有 ±JOINT_MAX_SPEED = ±9 rad/s。于是当
+   *       |a| = JOINT_MAX_SPEED / k = 9 / 9 = 1.0 rad = 57.3°
+   *   时，这个修正量**正好等于满速命令** ⇒ 网络输出再满也推不过这个角度。
+   *   等于给每个关节加了一堵 ±57.3° 的**隐形软墙**，把执行器掐死。
+   *
+   *   实测（probe-servo A2，失重、满速命令、k=9）：
+   *     膝屈伸 行程 −59.7°（机械限位 [−145°, +2°]）
+   *     肘屈伸 行程 −61.0°（机械限位 [−120°, +10°]）
+   *     髋屈伸 行程 −69.3°（机械限位 [ −80°, +60°]）
+   *     肩屈伸 行程 +63.5°（机械限位 [ −95°, +80°]）
+   *   —— 全部挤在 57~71° 这个带里，机械限位根本没碰到。这是"学不出走路"的头号
+   *      结构性原因：走路需要膝屈曲 60~90°、髋伸展 −40°，全被软墙截住。
+   *   而 k=0 时同一命令能一路顶到机械限位（见 A2 段的对照行）。
+   *
+   *   修法：把张力**饱和**掉 —— `target += −k·clamp(a, −a_ref, +a_ref)`。
+   *   小角度区（|a| < a_ref）行为与原来完全一致（站桩靠的就是这一段），
+   *   大角度区张力封顶在 k·a_ref，网络仍有 |9 − k·a_ref| 的净权限把关节推到机械限位。
+   *   物理上也说得通：韧带刚度是先线性后屈服的，不是无限线性弹簧。
+   *
+   *   取 0.25 rad @ k=9 ⇒ 封顶 2.25 rad/s = 满速的 25%，网络保留 75% 权限。
+   *   置 Infinity 可退回"无饱和"的旧行为，用于对照实验。
    */
-  kD?: number;
-  /**
-   * ★ 网络命令的**角度量程比例**（默认 0.9）。
-   *
-   * `out[k] ∈ [−1, +1]` 线性映射到关节该轴自己的机械量程：
-   *
-   *     θ_ref = out · (out ≥ 0 ? posRefScale·hi : posRefScale·(−lo))
-   *
-   * ★ 为什么是**非对称**斜率（正负两侧各按自己的量程走）：
-   *   关节量程本来就非对称，典型如膝屈伸 `[−145°, +2°]` —— 膝只能屈不能伸。
-   *   对称映射会让 out = 0 对应的 θ_ref ≠ 0，那就**丢掉了"零输出 = 回到绑定姿态"**
-   *   这个性质，也就丢掉了与历史行为的可比性。非对称斜率同时保住了两件事：
-   *     ① out = 0 ⇒ θ_ref = 0 ⇒ 与旧行为逐项一致；
-   *     ② |out| = 1 ⇒ 能顶到量程的 90%（剩下 10% 留给软限位的斜坡）。
-   *
-   * ★ 权限够不够（解析）：髋 θ_ref 到 −0.9×80° = −1.26 rad、膝到 −2.28 rad 时
-   *   `err = kP·|e| ≈ 48×2.28 = 109 rad/s`，远超 JOINT_MAX_SPEED = 9
-   *   ⇒ τ 被 clamp 到 τmax ⇒ **满力矩**。旧的"速度目标"模型峰值也是 τmax，
-   *   区别是：旧模型必须靠**持续的角速度误差**才能维持这个力矩，站着不动就没了。
-   */
-  posRefScale?: number;
+  restTensionRef?: number;
   /**
    * ★ reset() 时是否"删掉关节再重建"（默认 true）。
    *
@@ -185,20 +156,6 @@ export interface RagdollOptions {
    * 关掉它（false）可以复现那个污染，用于对照实验。
    */
   purgeJointCache?: boolean;
-  /**
-   * ★★ 稳定性护栏的 α（每步最多吃掉多少比例的相对角速度误差）。默认 1.0。
-   *
-   * `|imp| ≤ α·|err|·Ieff` 里的 α 直接决定**有效力矩上限**（见 motorDemand 注释）：
-   *     τ_max_eff = α · kP · Δθ · Ieff / dt
-   * 显式 P 控制的稳定条件是 α < 2，α = 1 表示"一步到位"（无过冲），取 1.0 是**有依据的**取值
-   * —— 不是把安全阀拧松。0.35 是当年给"角速度目标控制器"定的，换位置环后它把髋的
-   * 力矩压到 26%、把脊柱压到 10%，是"站不住"的真根因。详见 MOTOR_ALPHA 的长注释。
-   *
-   * ★ 它必须是一个**可探测的旋钮**而不是常量：probe-posture 的 [B2] 用它做扫描，
-   *   回答"撑不住是因为没力气，还是因为不敢用力"。
-   * ★ 越界回程用 MOTOR_ALPHA_RECOVER（同为 1.0）—— 回程是保命动作，不受这个旋钮影响。
-   */
-  motorAlpha?: number;
 }
 
 const DEFAULTS: Required<RagdollOptions> = {
@@ -207,11 +164,13 @@ const DEFAULTS: Required<RagdollOptions> = {
   linearDamping: 0.0,
   angularDamping: 0.04,
   torqueScale: 1.0,
-  kP: 48.0,
-  kD: 1.0,
-  posRefScale: 0.9,
+  restTension: 9.0,
+  // ★ 0.25 是**白拿的**：probe-ground 实测站桩指标与"无饱和"逐项相同
+  //   （t=2s 躯干 1.120 m / 接触力 719 N = 105% / CoM 2.75s），
+  //   而 probe-servo A2 显示膝屈伸行程从 −59.7° 恢复到 −144.5°（机械限位 −145°）。
+  //   0.12 会开始伤站桩（570 N = 83%）；0.40 与 0.25 无差别 ⇒ 0.25 有余量。
+  restTensionRef: 0.25,
   purgeJointCache: true,
-  motorAlpha: MOTOR_ALPHA,
 };
 
 // ---------------------------------------------------------------- 四元数工具
@@ -325,20 +284,8 @@ export class Ragdoll {
    *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
    */
   readonly jointIeff: Float64Array;
-  /**
-   * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
-   * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
-   *   由 setMotorTargets 写入，driveMotors 里映射成 θ_ref = cmd × 该侧量程 × posRefScale。
-   * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
-   */
+  /** 关节目标角速度（rad/s），长度 = 关节数 × 3，由 setMotorTargets 写入、driveMotors 消费 */
   readonly motorTarget: Float32Array;
-  /**
-   * 每个可驱动轴的 θ_ref 斜率：cmd > 0 时用 refPos，cmd < 0 时用 refNeg。
-   * 两者都取正数 —— 因为 hi 可能很小（膝 +2°）、lo 很负（膝 −145°），
-   * 必须各按自己的量程走，才能同时保住 `cmd = 0 ⇒ θ_ref = 0`。见 posRefScale。
-   */
-  private readonly refPos: Float64Array;
-  private readonly refNeg: Float64Array;
   /**
    * ★ 上一次 driveMotors 里**实际施加**到子刚体上的马达冲量（N·m·s），每关节 3 个轴。
    *
@@ -351,21 +298,6 @@ export class Ragdoll {
    * 除以 dt 就是力矩（N·m）。
    */
   readonly motorImpulse: Float64Array;
-  /**
-   * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
-   *
-   * 为什么必须和 motorImpulse 成对存在（这是"关节明明有力却撑不住"的头号嫌疑的判据）：
-   *   本文件的稳定性护栏 `|imp| ≤ α·|err|·Ieff` 是**正比于误差**的 ⇒ 它给出的有效力矩上限是
-   *
-   *       τ_max_eff = α · kP · Δθ · Ieff / dt
-   *
-   *   对髋外展轴（Ieff ≈ 0.083）在 α=0.35 时只有 ~31 N·m/rad ⇒ 就算关节差 45°（0.785 rad），
-   *   也只出得了 ~25 N·m，而髋的**声明**力矩是 120 N·m（外展）—— **只用了 20%**。
-   *   （α 提到 1.0 之后这个比例回到 ~75%，见 MOTOR_ALPHA 的长注释。）
-   *   只看 motorImpulse 是看不出这件事的（它已经是被削过的值，看起来"很合理"）；
-   *   必须和 motorDemand 相除才能回答"是没力气，还是不敢用力"。
-   */
-  readonly motorDemand: Float64Array;
 
   private readonly world: RAPIER.World;
   private readonly initX: Float64Array;
@@ -386,21 +318,8 @@ export class Ragdoll {
     this.world = world;
     this.sk = sk;
     this.opt = { ...DEFAULTS, ...opt };
-
-    // ★★ 静默失效护栏：`tools/*.ts` **不参与 tsc**（没有 @types/node，tsconfig 只 include src），
-    //   所以探针里写错选项名（比如把 kP 写成已删除的 restTension）**不会有任何编译错误**，
-    //   而且 `{...DEFAULTS, ...opt}` 会把那个键原样抄进来、悄悄忽略 —— 探针就会拿着
-    //   默认参数跑出"对照组与实验组一模一样"的假结论（这个坑真的踩过）。
-    //   ⇒ 构造时点名未知键。
-    for (const key of Object.keys(opt)) {
-      if (!(key in DEFAULTS)) {
-        console.warn(`[ragdoll] ⚠ 未知配置项 "${key}" 被忽略（是不是改名了？见 RagdollOptions）`);
-      }
-    }
-
     this.motorTarget = new Float32Array(sk.joints.length * 3);
     this.motorImpulse = new Float64Array(sk.joints.length * 3);
-    this.motorDemand = new Float64Array(sk.joints.length * 3);
 
     // ★ 身体参考点：脊柱最上一段（spineN）；没有分段就是 'torso'
     let topSpine = -1;
@@ -485,17 +404,6 @@ export class Ragdoll {
       const ip = bodyI[this.jointBodies[i * 2]];
       const ic = bodyI[this.jointBodies[i * 2 + 1]];
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
-    }
-
-    // ---- ★ 位置命令的 θ_ref 斜率（每轴一份，构造时算一次）----
-    this.refPos = new Float64Array(sk.joints.length * 3);
-    this.refNeg = new Float64Array(sk.joints.length * 3);
-    for (let i = 0; i < sk.joints.length; i++) {
-      for (let k = 0; k < 3; k++) {
-        const s = this.opt.posRefScale;
-        this.refPos[i * 3 + k] = s * Math.max(0, sk.joints[i].maxRad[k]);
-        this.refNeg[i * 3 + k] = s * Math.max(0, -sk.joints[i].minRad[k]);
-      }
     }
   }
 
@@ -585,39 +493,22 @@ export class Ragdoll {
   private readonly rvTmp = new Float64Array(3);
 
   /**
-   * 写马达命令：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，**表示该轴的目标关节角**
-   * （占该侧机械量程的比例的 posRefScale 倍，见 RagdollOptions.posRefScale）。
-   *
-   * ★ 语义已从"目标角速度"改成"目标角" —— 这是本项目的头号结构性修正：
-   *   速度目标没有静态刚度（静载荷下必然蠕变），而且不可被网络用来"维持一个姿态"。
-   *   见 RagdollOptions.kP 的长注释。
-   *
+   * 写马达目标：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，
+   * 乘 JOINT_MAX_SPEED 得到该轴的**目标相对角速度**（父体本地）。
    * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
    */
   setMotorTargets(targets: Float32Array): void {
     for (let i = 0; i < this.motorTarget.length; i++) {
       const t = targets[i];
-      this.motorTarget[i] = t < -1 ? -1 : t > 1 ? 1 : t;
+      this.motorTarget[i] = (t < -1 ? -1 : t > 1 ? 1 : t) * JOINT_MAX_SPEED;
     }
   }
 
   /**
-   * ★ 自实现的**位置环 PD** 关节马达：每物理步调用一次，dt = 物理步长。
-   *
-   *     θ_ref  = cmd ×（cmd ≥ 0 ? posRefScale·hi : posRefScale·(−lo)）   // 网络给的目标角
-   *     err    = kP·(θ_ref − θ) − kD·ω_rel                              // 等效目标角速度
-   *     τ      = clamp(err · τmax / JOINT_MAX_SPEED, ±τmax)
-   *
-   * 增益取 τmax/JOINT_MAX_SPEED ⇒ **err 跑满 JOINT_MAX_SPEED 时正好输出 τmax**，物理含义清晰。
+   * ★ 自实现的三轴关节马达：每物理步调用一次，dt = 物理步长。
+   * 逐轴：期望力矩 = clamp(增益 × (目标角速度 − 当前相对角速度), ±τmax_axis)，
+   * 增益取 τmax/JOINT_MAX_SPEED ⇒ 满误差时正好输出 τmax，物理含义清晰。
    * 然后把"本地轴上的力矩冲量"用父体姿态搬到世界，对父/子各施加一对等大反向的冲量。
-   *
-   * ★★ 为什么是位置环而不是"角速度目标"（这是本项目最重的一处结构性修正）：
-   *   速度目标下，`cmd = 0` 的含义是"把角速度刹到 0"（`err = −ω_rel ≠ 0`）⇒ 关节一直在**制动**，
-   *   但它**没有静态刚度**：重力压着膝盖，只要膝盖不转，误差就恰好等于 0、力矩也就没了。
-   *   ⇒ 静载荷下必然**蠕变**（实测没位置项时躯干 1 s 内从 0.888 掉到 0.149 m）。
-   *   位置环天然有静态刚度：θ ≠ θ_ref 就一直有力，这才是"站着不动"能成立的前提。
-   *   ★ 且 `θ_ref = 0` 时 `err = −kP·θ − kD·ω_rel`，与历史公式 `target = −k·θ; err = target − ω_rel`
-   *     **逐项一致** ⇒ 这是严格泛化，零输出的行为一字没变，但网络拿到了位置通道。
    *
    * ★★ 两处必须保留的护栏：
    *   1) 稳定性上限 |imp| ≤ α·|err|·Ieff（见构造里 jointIeff 的注释）——
@@ -629,13 +520,11 @@ export class Ragdoll {
    *      也就不存在"推出去 → 限位猛烈纠正 → 甩飞"的爆炸路径
    *      （probe-spike：Rapier 硬限位下 neck 被推到 −162°、限位 [−35°,45°]，
    *        纠正时相对角速度顶到 68.9 rad/s → 头甩飞 → 整条链炸）。
-   *      ★ 它只在**越界之后**介入，越界时直接接管该轴的目标速度（不再走位置环）
-   *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
    */
   driveMotors(dt: number): void {
     const scale = this.opt.torqueScale;
-    const kP = this.opt.kP;
-    const kD = this.opt.kD;
+    const rest = this.opt.restTension;
+    const ref = this.opt.restTensionRef;
     const qRel = this.qRel;
     const rv = this.rv;
     const relL = this.relL;
@@ -656,18 +545,16 @@ export class Ragdoll {
       const Ieff = this.jointIeff[i];
 
       for (let k = 0; k < 3; k++) {
-        // 记账：本步该轴实际施加 / 想要施加的马达冲量（0 = 该轴没出力，skip 分支不会漏）
+        // 记账：本步该轴实际施加的马达冲量（0 = 该轴没出力，skip 分支不会漏）
         this.motorImpulse[i * 3 + k] = 0;
-        this.motorDemand[i * 3 + k] = 0;
         const lo = j.minRad[k];
         const hi = j.maxRad[k];
         const a = rv[k];
-        const idx = i * 3 + k;
 
-        let alpha = this.opt.motorAlpha;
-        let err: number;
+        let target = this.motorTarget[i * 3 + k];
+        let alpha = MOTOR_ALPHA;
 
-        // ---- 软限位（逐轴）：只在**越界之后**才介入，直接接管目标速度 ----
+        // ---- 软限位（逐轴）：只在**越界之后**才介入 ----
         // ★★ 不要提前量（这里踩过一次大坑，别改回去）：膝的限位是 [−145°, +2°]，
         //    静止姿态 0° 恰好在 +2° 内侧。若按 (hi − zone) 提前 17° 就介入，等于一开局
         //    就判定膝盖越界、全力把它往后掰 —— 实测躯干从 1.128 m 一路塌到 0.698 m，
@@ -675,25 +562,30 @@ export class Ragdoll {
         //    越界量与回程速度的关系仍保留 LIMIT_SOFT_ZONE 的斜坡（越界越多回程越快）。
         const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
         if (a > hi) {
-          err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
+          const rec = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp);
+          if (target > rec) target = rec;
           alpha = MOTOR_ALPHA_RECOVER;
         } else if (a < lo) {
-          err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
+          const rec = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp);
+          if (target < rec) target = rec;
           alpha = MOTOR_ALPHA_RECOVER;
-        } else {
-          // ---- 位置环 PD：θ_ref 由网络命令映射到该侧机械量程 ----
-          const cmd = this.motorTarget[idx];
-          const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-          err = kP * (thRef - a) - kD * relL[k];
         }
 
+        // ★ 被动姿态张力：往初始姿态拉（见 RagdollOptions.restTension 的长注释）。
+        //   放在软限位之后叠加，方向永远和"回程"一致（越界时 a 与 -a·k 同向回中）。
+        //   ★★ 必须**饱和**：不饱和就是 ±JOINT_MAX_SPEED/k 处的一堵隐形软墙，会把执行器掐死。
+        if (rest > 0) {
+          const ac = a > ref ? ref : a < -ref ? -ref : a;
+          target += -ac * rest;
+        }
+
+        const err = target - relL[k];
         if (err === 0) continue;
 
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);
         if (tau > tauMax) tau = tauMax;
         else if (tau < -tauMax) tau = -tauMax;
-        this.motorDemand[idx] = tau;   // ★ 削之前的"想要值"，供诊断
         let imp = tau * dt;
 
         // ★ 稳定性上限：|imp| ≤ α·|err|·Ieff ⇒ 每步最多吃掉 α 比例的相对角速度误差
@@ -713,19 +605,12 @@ export class Ragdoll {
         iv.x = this.axisW[0] * imp;
         iv.y = this.axisW[1] * imp;
         iv.z = this.axisW[2] * imp;
-        this.motorImpulse[idx] = imp;   // 记账（+ = 推子体绕本轴正转）
+        this.motorImpulse[i * 3 + k] = imp;   // 记账（+ = 推子体绕本轴正转）
         c.applyTorqueImpulse(iv, true);
         iv.x = -iv.x; iv.y = -iv.y; iv.z = -iv.z;
         p.applyTorqueImpulse(iv, true);
       }
     }
-  }
-
-  /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
-  refAngleOf(joint: number, axis: number): number {
-    const idx = joint * 3 + axis;
-    const cmd = this.motorTarget[idx];
-    return cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
   }
 
   // ------------------------------------------------------------ 便利读数

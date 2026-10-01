@@ -1,9 +1,8 @@
 // ============================================================
 // brain —— 极简 MLP（单隐层），零分配前向
 // ============================================================
-// 为什么用这么小的网络：机器人关节控制是个低维问题。3D 之后输入 70 维、
-// 输出 27 维（9 关节 × 3 转动轴），单隐层 32 单元的 MLP 足够学出步态，
-// 参数量 3163 个 float32 ≈ 12.6 KB —— 内置进本体占 1MB 预算的 1.3%。
+// 为什么用这么小的网络：机器人关节控制是个低维问题。当前（12 关节）输入 94 维、
+// 输出 36 维，单隐层 32 单元的 MLP 足够学出步态，参数量 4228 个 float32 ≈ 16.5 KB。
 // 参数量再大的网络在进化策略下反而收敛更慢（维度灾难，且 ES 的搜索方向
 // 是各向同性的高斯扰动，多余维度只贡献噪声）。
 //
@@ -22,52 +21,72 @@ export const HIDDEN_UNITS = 32;
 
 /**
  * ★ 按关节数算出网络形状。
- *   inputs  = 2（时钟）+ 4（躯干四元数）+ 3（线速度）+ 3（角速度）+ 1（高度）+ 1（侧向 z）
- *             + 3N（关节旋转向量）+ 3N（相对角速度）+ 2（两脚高度）= 16 + 6N
- *   outputs = 3N（每关节 3 轴目标角速度）
+ *   inputs  = 2（时钟）+ 4（胸腔四元数）+ 3（线速度）+ 3（角速度）+ 1（高度）+ 1（侧向 z）
+ *             + 2（CoM 相对支撑域中心）+ 2（CoM 速度）+ 2（DCM 归一化越界量）
+ *             + 3N（关节旋转向量）+ 3N（相对角速度）+ 2（两脚高度）= 22 + 6N
+ *   outputs = 3N（每关节 3 轴**目标角**，见 ragdoll.setMotorTargets）
  *
  * ★ 为什么是函数而不是常量：躯干沿脊柱分段后关节数不再是 9（见 SkeletonConfig.spineSegments），
  *   网络形状必须跟着骨架走。调用方拿到骨架后一律用 `shapeForJoints(sk.joints.length)`，
  *   不要写死 BRAIN_SHAPE —— 写死会在换骨架时静默错配（Sim 只会跑出垃圾分数，不会报错）。
+ *
+ * ★ 22 / 6N 的来历（观测加"重心"那一步，+6 维）：
+ *   原来的观测里**没有任何 CoM / CoM 速度 / CoP / DCM** ⇒ 策略在**原理上**拿不到
+ *   "我在往哪倒"，只能靠胸腔（占 12.4% 质量、离 CoM 0.4635 m）间接推。
+ *   实测症状就是这个："直立占比 48~97% 却只前进 0.37 m、**仍判摔**"。
  */
 export function shapeForJoints(jointCount: number): BrainShape {
-  return { inputs: 16 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+  return { inputs: 22 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
 }
 
 export function inputCount(jointCount: number): number {
-  return 16 + 6 * jointCount;
+  return 22 + 6 * jointCount;
 }
 
-/** 9 关节骨架（spineSegments = 1）的形状：70 / 32 / 27。仅作默认值/参考 */
+/** 9 关节骨架（spineSegments = 1）的形状：76 / 32 / 27。仅作默认值/参考 */
 export const BRAIN_SHAPE: BrainShape = shapeForJoints(9);
 
 /**
- * 输入维度清单（改这里必须同步 sim.ts 的 fillInput，且更新 BRAIN_SHAPE）。
+ * 输入维度清单（改这里必须同步 sim.ts 的 controlTick，且更新 INPUT_COUNT）。
+ *
+ * ★ 用**函数**生成而不是写死一个数组：写死数组没法做"长度 = 观测维数"的自检
+ *   （关节段是 N 个重复项），而这条自检是本项目最容易静默失效的地方之一。
  *
  * 3D 之后哪些输入变了、为什么：
  *   · 丢掉了 2D 的「躯干绕 Z 转角 + 绕 Z 角速度」—— 3D 里一个绕 Z 的标量不足以描述姿态；
- *   · 换成【躯干四元数 4 维】+【躯干角速度 3 维】：后者是平衡反馈的关键量，
+ *   · 换成【胸腔四元数 4 维】+【胸腔角速度 3 维】：后者是平衡反馈的关键量，
  *     没有它网络感知不到自己在倒（2D 版只有绕 Z 一个分量，等于瞎子）。
- *   · 关节角/角速度从 9 维各变 27 维（每关节 3 轴）。
+ *   · 关节角/角速度从 9 维各变 3N 维（每关节 3 轴）。
  *     ★ 用的是**父体本地**的旋转向量（exponential map）与相对角速度，
  *       不是欧拉角 —— 见 ragdoll.jointRot / jointRelVel。
- *   · 多了一个「躯干侧向 z」：任务要求沿 +X 直走，偏出去要有信号可看。
+ *   · 新增【重心块 6 维】—— 见 posture.ts。**这是"能不能主动平衡"的前提**：
+ *       没有它，策略连"我在往哪倒"都不知道，只能用胸腔姿态当代理（而胸腔只是代理量）。
  */
-export const INPUT_LAYOUT = [
-  'clock.sin', 'clock.cos',                       // 0,1
-  'torso.quat.x', 'torso.quat.y', 'torso.quat.z', 'torso.quat.w',  // 2..5
-  'torso.vx', 'torso.vy', 'torso.vz',             // 6..8
-  'torso.wx', 'torso.wy', 'torso.wz',             // 9..11
-  'torso.height',                                 // 12
-  'torso.lateralZ',                               // 13  （走歪了多少）
-  'joint[0..8].rot[0..2]',                        // 14..40 （9×3，父体本地旋转向量）
-  'joint[0..8].relomega[0..2]',                   // 41..67 （9×3，父体本地相对角速度）
-  'sole.l.y', 'sole.r.y',                         // 68,69
-] as const;
+export function inputLayout(jointCount: number): string[] {
+  const out: string[] = [
+    'clock.sin', 'clock.cos',                                   // 0,1
+    'chest.quat.x', 'chest.quat.y', 'chest.quat.z', 'chest.quat.w',  // 2..5
+    'chest.vx', 'chest.vy', 'chest.vz',                         // 6..8
+    'chest.wx', 'chest.wy', 'chest.wz',                         // 9..11
+    'chest.height',                                             // 12
+    'chest.lateralZ',                                           // 13
+    'com.dx', 'com.dz',                                         // 14,15 CoM 相对支撑域中心（m）
+    'com.vx', 'com.vz',                                         // 16,17 CoM 水平速度（×2）
+    'dcm.nx', 'dcm.nz',                                         // 18,19 DCM 归一化位置（0=中心，±1=域边缘）
+  ];
+  for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].rot.x`, `joint[${i}].rot.y`, `joint[${i}].rot.z`);
+  for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].relw.x`, `joint[${i}].relw.y`, `joint[${i}].relw.z`);
+  out.push('sole.l.y', 'sole.r.y');
+  return out;
+}
 
-export const INPUT_COUNT = 2 + 4 + 3 + 3 + 1 + 1 + 27 + 27 + 2; // = 70
+/** 12 关节（spineSegments = 4）的清单，长 94 */
+export const INPUT_LAYOUT = inputLayout(12);
 
-/** 输出：每关节 3 个数（目标角速度，父体本地三轴，tanh 后 × JOINT_MAX_SPEED） */
+/** 12 关节（spineSegments = 4）时的观测维数：22 + 6×12 = 94 */
+export const INPUT_COUNT = 22 + 6 * 12;
+
+/** 输出：每关节 3 个数（**目标关节角**的比例，父体本地三轴 ∈ [-1,1]，见 ragdoll.posRefScale） */
 export const OUTPUT_PER_JOINT = 3;
 
 /** 参数总数 */

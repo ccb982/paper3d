@@ -53,11 +53,8 @@ export function makeGaussian(rng: Rng): () => number {
  * 而且变异 sigma 相对权重尺度小了 10 倍，等于在搜索空间里挪不动。
  *
  * 现在：W1 ~ N(0, scale/√inputs)，W2 ~ N(0, scale/√hidden)，偏置全 0。
- *
- * ★★ 但**不要**以为这样就得到"输出 ≈ 0"（本项目真踩过这个坑，见 evolution.seedPopulation）：
- *   预激活仍是 O(0.5)（实测 tanh 后 |out| ~ 0.4），也就是一开局全员按 40% 量程乱扯关节。
- *   想要"什么都不做"的起点，必须显式地用**全 0 基因组**（tanh(0) = 0 ⇒ θ_ref = 0 ⇒
- *   保持绑定姿态），它已经作为平凡解被放进初始种群。
+ * 后果正好是我们要的起点 —— 输出 ≈ tanh(0) = 0 ⇒ **初始行为 = 保持初始姿态**
+ * （关节目标角速度 0 = 纯阻尼站立），ES 从一个"站得住但不会走"的个体开始爬。
  */
 export function randomGenome(
   s: BrainShape, gauss: () => number, scale = 1.0,

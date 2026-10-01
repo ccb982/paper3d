@@ -173,7 +173,7 @@ for (let i = 0; i < 240; i++) { // 最多 2 秒
 }
 log(`  零输出躯干高度轨迹: ${yTrace.map((v) => v.toFixed(3)).join(' → ')}`);
 check('零输出时不会瞬移/NaN', yTrace.every((v) => Number.isFinite(v) && v > -1 && v < 5));
-check('零输出时能站在地面上（>0.9m，接近胸腔初始 1.429m）',
+check('零输出时能站在地面上（>0.9m，接近初始 1.128m）',
   yTrace[yTrace.length - 1] > 0.9, `末值 ${yTrace[yTrace.length - 1].toFixed(3)} m`);
 // ★ 期望别设成"2 秒不倒"：零输出 = 所有关节目标角速度为 0 = 纯阻尼控制器，
 //   它能抵抗关节运动，但**不做平衡**（没有位置反馈）。美术素材左右本来就不对称
@@ -205,7 +205,7 @@ check('随机基因组确实驱动了关节', moved > 0.05, `Σ|angle| = ${moved
 log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
 {
   const RAPIER = (await import('@dimforge/rapier3d')).default;
-  check('网络输入维度与声明一致（22 + 6N：含重心块 6 维）', SHAPE.inputs === inputCount(sk.joints.length),
+  check('网络输入维度与声明一致（16 + 6N）', SHAPE.inputs === inputCount(sk.joints.length),
     `inputs=${SHAPE.inputs} 期望=${inputCount(sk.joints.length)}（关节数 ${sk.joints.length}）`);
   check('网络输出 = 关节数 × 3',
     SHAPE.outputs === sk.joints.length * 3, `outputs=${SHAPE.outputs} 关节数=${sk.joints.length}`);
@@ -277,31 +277,6 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   }
 
   // ---- C. 反证：给躯干一个纯绕 X 的角速度，2D 的 enabledRotations(F,F,T) 会把它清零 ----
-  //
-  // ★★ 判据必须**去掉地面与马达**（踩过一次，别改回去）：
-  //   最初这里写的是"给躯干 ωx=4，跑 120 步，看 max|q.x| > 0.05"。kP 从 9 提到 48 之后
-  //   它掉到 0.037 而假报 FAIL —— 但那**不是回归**：两只脚踩在地上，刚度足够时地面接触
-  //   会在**一两步内**把这个滚转整个吃掉（实测 1 步后 ωx 从 4.00 掉到 0.01 rad/s）。
-  //   那恰恰是"站得住"的同一个机制，不是"轴被锁"。⇒ 要判"是不是真 3D"，
-  //   就必须把重力、地面、马达**全部摘掉**，只看"这个角速度能不能活在刚体上"。
-  //   2D 的 enabledRotations(F,F,T) 在任何条件下都会把它清零。
-  //   还必须**把关节也摘掉**：只关重力/马达是不够的，球关节的锚点约束会在 5 步内
-  //   把这个 ωx 摊给整条链（实测 4.00 → 2.03），那是动量再分配，同样不是"轴被锁"。
-  //   ⇒ 真正干净的判据 = 无重力 + 无马达 + 无关节，只看角速度能不能活在刚体上。
-  const w0 = new RAPIER.World({ x: 0, y: 0, z: 0 });
-  w0.timestep = 1 / 120;
-  const d0 = new Ragdoll(w0, sk, { kP: 0, kD: 0, angularDamping: 0 });
-  for (const j of d0.joints) w0.removeImpulseJoint(j, true);
-  d0.torso().setAngvel({ x: 4, y: 0, z: 0 }, true);
-  for (let i = 0; i < 5; i++) w0.step();
-  const wxFree = Math.abs(d0.torso().angvel().x);
-  check('★ 无重力/无马达/无关节时躯干绕 X 的角速度原样保留（平面锁解除的直接判据）',
-    wxFree > 3.9, `5 步后 ωx=${wxFree.toFixed(2)} rad/s（初始 4.00）`);
-  w0.free();
-
-  // 判据二：**在有地面、有马达的现实条件下**，整条链确实会绕 X 动（不是恒为 0）。
-  // ★ 阈值只要求"显著非零"，别写死——它同时受"地面接触抗滚转"和"关节刚度"影响，
-  //   两者都是可调参数（kP 9→48 时这个值从 0.05+ 降到 0.037，是稳定性变好而非回归）。
   const w2 = mkW();
   const d2 = new Ragdoll(w2, sk);
   d2.torso().setAngvel({ x: 4, y: 0, z: 0 }, true);
@@ -312,8 +287,8 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
     const q = d2.torso().rotation();
     if (Math.abs(q.x) > maxQx) maxQx = Math.abs(q.x);
   }
-  check('★ 有地面 + 马达时整条链确实绕 X 转动（|q.x| 显著非零）', maxQx > 0.01,
-    `max|q.x|=${maxQx.toFixed(3)}（被地面接触吃掉的量，与 kP 有关）`);
+  check('★ 躯干能真绕 X 翻滚（|q.x| > 0）—— 平面方案下这里恒为 0', maxQx > 0.05,
+    `max|q.x|=${maxQx.toFixed(3)}`);
 
   // ---- D. 暖启动缓存清理：同一基因组跑两次必须逐位一致 ----
   //     判据放在 **Sim 层**（begin() 会整世界重建），因为只按 Ragdoll.reset()

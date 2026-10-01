@@ -6058,6 +6058,24 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
   const mapY = (px) => (groundPx - px) * px2m;
   const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
+  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  const CHEST = K > 1 ? `spine${K}` : "torso";
+  const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
+  let byKeyRef = null;
+  const attachTo = (parentKey, wy) => {
+    if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
+    let best = 0, bestD = Infinity;
+    for (let s = 0; s < K; s++) {
+      const b = byKeyRef.get(segKey(s));
+      if (!b) continue;
+      const d = Math.abs(b.cy - wy);
+      if (d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return segKey(best);
+  };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
   const bodies = [];
@@ -6069,6 +6087,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       part.bh * px2m,
       cfg.limbRadiusScale
     );
+    const cy = mapY(part.cy);
     const totalMass = spec.massPct / 100 * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
     const mainMass = totalMass - solePct / 100 * cfg.mass;
@@ -6091,20 +6110,62 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const offsetY = -length / 2 + soleHalfThick;
+      const sfx = Math.max(0.1, cfg.soleFootScale);
+      const hx = soleHalfLen * sfx;
+      const hz = radius * 0.9 * sfx;
       colliders.push({
         shape: "cuboid",
         halfHeight: 0,
         radius: 0,
-        hx: soleHalfLen,
+        hx,
         hy: soleHalfThick,
-        hz: radius * 0.9,
+        hz,
         offsetY,
         mass: soleMass,
         comY: 0,
         // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
-        inertiaZ: soleMass * (soleHalfLen * soleHalfLen + soleHalfThick * soleHalfThick) / 3,
-        inertiaXY: soleMass * (radius * radius * 0.81 + soleHalfThick * soleHalfThick) / 3
+        inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+        inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
+    }
+    if (spec.key === "torso" && K > 1) {
+      const segLen = length / K;
+      const segMass = totalMass / K;
+      const hx = radius, hz = radius * 0.9;
+      for (let s = 0; s < K; s++) {
+        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+        const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
+        const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
+        bodies.push({
+          key: s === 0 ? "torso" : `spine${s + 1}`,
+          bone: spec.bone,
+          label: s === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s + 1}`,
+          part,
+          cx: 0,
+          cy: cyS,
+          cz: mapZ(part.cx, false),
+          length: segLen,
+          radius,
+          halfHeight: segLen / 2,
+          mass: segMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: segLen / 2,
+            hz,
+            offsetY: 0,
+            mass: segMass,
+            comY: 0,
+            inertiaZ: iZ,
+            inertiaXY: iX
+          }],
+          leg: false,
+          texSlice: { index: s, count: K }
+        });
+      }
+      continue;
     }
     bodies.push({
       key: spec.key,
@@ -6124,12 +6185,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     });
   }
   const byKey = new Map(bodies.map((b) => [b.key, b]));
+  byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
   const joints = [];
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const parent = byKey.get(jm.parent);
+    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
@@ -6155,6 +6217,37 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
     });
   });
+  if (K > 1) {
+    const SPINE_XY_DEG = [15, 20];
+    const SPINE_FLEX_DEG = [-25, 25];
+    const SPINE_TAU = 120;
+    for (let s = 0; s < K - 1; s++) {
+      const p = byKey.get(segKey(s));
+      const c = byKey.get(segKey(s + 1));
+      if (!p || !c) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s} \u4E0D\u5B58\u5728`);
+      const wy = (p.cy + c.cy) / 2;
+      const wx = 0, wz = 0;
+      joints.push({
+        name: `spine${s + 1}`,
+        index: joints.length,
+        // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
+        parentKey: p.key,
+        childKey: c.key,
+        wx,
+        wy,
+        wz,
+        parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
+        childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
+        maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
+        maxTorque: [
+          SPINE_TAU * TORQUE_AXIS_FACTOR[0],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[1],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[2]
+        ]
+      });
+    }
+  }
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
   return {
     cfg,
@@ -6208,7 +6301,12 @@ var init_skeleton = __esm({
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
       stance: 1,
-      limbRadiusScale: 0.6
+      limbRadiusScale: 0.6,
+      // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
+      // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
+      // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
+      spineSegments: 4,
+      soleFootScale: 1
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -13024,8 +13122,8 @@ var init_ragdoll = __esm({
     GROUPS_GROUND = (MEM_GROUND << 16 | MEM_SELF) >>> 0;
     IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
     ZERO = { x: 0, y: 0, z: 0 };
-    MOTOR_ALPHA = 0.35;
-    MOTOR_ALPHA_RECOVER = 0.7;
+    MOTOR_ALPHA = 1;
+    MOTOR_ALPHA_RECOVER = 1;
     LIMIT_SOFT_ZONE = 0.3;
     AXIS_X = 0;
     AXIS_Y = 1;
@@ -13035,10 +13133,11 @@ var init_ragdoll = __esm({
       linearDamping: 0,
       angularDamping: 0.04,
       torqueScale: 1,
-      restTension: 9,
-      restTensionRef: Infinity,
-      // ★ 默认 Infinity = 旧行为；固定值见 restTensionRef 的注释
-      purgeJointCache: true
+      kP: 48,
+      kD: 1,
+      posRefScale: 0.9,
+      purgeJointCache: true,
+      motorAlpha: MOTOR_ALPHA
     };
     Ragdoll = class {
       sk;
@@ -13048,6 +13147,11 @@ var init_ragdoll = __esm({
       joints = [];
       /** key → 刚体下标 */
       indexByKey = /* @__PURE__ */ new Map();
+      /**
+       * ★ 身体参考点的刚体 key = 脊柱最上一段（胸腔）。K=1 时就是 'torso'。
+       * 见 torso() 的注释 —— 分段之后"树根"是骨盆，但状态量要以胸腔为基准。
+       */
+      torsoKey;
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
       /**
@@ -13056,8 +13160,20 @@ var init_ragdoll = __esm({
        *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
        */
       jointIeff;
-      /** 关节目标角速度（rad/s），长度 = 关节数 × 3，由 setMotorTargets 写入、driveMotors 消费 */
+      /**
+       * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
+       * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
+       *   由 setMotorTargets 写入，driveMotors 里映射成 θ_ref = cmd × 该侧量程 × posRefScale。
+       * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
+       */
       motorTarget;
+      /**
+       * 每个可驱动轴的 θ_ref 斜率：cmd > 0 时用 refPos，cmd < 0 时用 refNeg。
+       * 两者都取正数 —— 因为 hi 可能很小（膝 +2°）、lo 很负（膝 −145°），
+       * 必须各按自己的量程走，才能同时保住 `cmd = 0 ⇒ θ_ref = 0`。见 posRefScale。
+       */
+      refPos;
+      refNeg;
       /**
        * ★ 上一次 driveMotors 里**实际施加**到子刚体上的马达冲量（N·m·s），每关节 3 个轴。
        *
@@ -13070,6 +13186,21 @@ var init_ragdoll = __esm({
        * 除以 dt 就是力矩（N·m）。
        */
       motorImpulse;
+      /**
+       * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
+       *
+       * 为什么必须和 motorImpulse 成对存在（这是"关节明明有力却撑不住"的头号嫌疑的判据）：
+       *   本文件的稳定性护栏 `|imp| ≤ α·|err|·Ieff` 是**正比于误差**的 ⇒ 它给出的有效力矩上限是
+       *
+       *       τ_max_eff = α · kP · Δθ · Ieff / dt
+       *
+       *   对髋外展轴（Ieff ≈ 0.083）在 α=0.35 时只有 ~31 N·m/rad ⇒ 就算关节差 45°（0.785 rad），
+       *   也只出得了 ~25 N·m，而髋的**声明**力矩是 120 N·m（外展）—— **只用了 20%**。
+       *   （α 提到 1.0 之后这个比例回到 ~75%，见 MOTOR_ALPHA 的长注释。）
+       *   只看 motorImpulse 是看不出这件事的（它已经是被削过的值，看起来"很合理"）；
+       *   必须和 motorDemand 相除才能回答"是没力气，还是不敢用力"。
+       */
+      motorDemand;
       world;
       initX;
       initY;
@@ -13087,8 +13218,20 @@ var init_ragdoll = __esm({
         this.world = world;
         this.sk = sk2;
         this.opt = { ...DEFAULTS, ...opt };
+        for (const key of Object.keys(opt)) {
+          if (!(key in DEFAULTS)) {
+            console.warn(`[ragdoll] \u26A0 \u672A\u77E5\u914D\u7F6E\u9879 "${key}" \u88AB\u5FFD\u7565\uFF08\u662F\u4E0D\u662F\u6539\u540D\u4E86\uFF1F\u89C1 RagdollOptions\uFF09`);
+          }
+        }
         this.motorTarget = new Float32Array(sk2.joints.length * 3);
         this.motorImpulse = new Float64Array(sk2.joints.length * 3);
+        this.motorDemand = new Float64Array(sk2.joints.length * 3);
+        let topSpine = -1;
+        for (const b of sk2.bodies) {
+          const m = /^spine(\d+)$/.exec(b.key);
+          if (m) topSpine = Math.max(topSpine, Number(m[1]));
+        }
+        this.torsoKey = topSpine > 0 ? `spine${topSpine}` : "torso";
         const ground = this.world.createRigidBody(rapier_default.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
         this.world.createCollider(
           rapier_default.ColliderDesc.cuboid(60, 0.5, 12).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
@@ -13129,6 +13272,15 @@ var init_ragdoll = __esm({
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+        }
+        this.refPos = new Float64Array(sk2.joints.length * 3);
+        this.refNeg = new Float64Array(sk2.joints.length * 3);
+        for (let i = 0; i < sk2.joints.length; i++) {
+          for (let k = 0; k < 3; k++) {
+            const s = this.opt.posRefScale;
+            this.refPos[i * 3 + k] = s * Math.max(0, sk2.joints[i].maxRad[k]);
+            this.refNeg[i * 3 + k] = s * Math.max(0, -sk2.joints[i].minRad[k]);
+          }
         }
       }
       /**
@@ -13207,21 +13359,38 @@ var init_ragdoll = __esm({
       }
       rvTmp = new Float64Array(3);
       /**
-       * 写马达目标：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，
-       * 乘 JOINT_MAX_SPEED 得到该轴的**目标相对角速度**（父体本地）。
+       * 写马达命令：targets 长度 = 关节数 × 3，每个 ∈ [-1,1]，**表示该轴的目标关节角**
+       * （占该侧机械量程的比例的 posRefScale 倍，见 RagdollOptions.posRefScale）。
+       *
+       * ★ 语义已从"目标角速度"改成"目标角" —— 这是本项目的头号结构性修正：
+       *   速度目标没有静态刚度（静载荷下必然蠕变），而且不可被网络用来"维持一个姿态"。
+       *   见 RagdollOptions.kP 的长注释。
+       *
        * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
        */
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
           const t = targets[i];
-          this.motorTarget[i] = (t < -1 ? -1 : t > 1 ? 1 : t) * JOINT_MAX_SPEED;
+          this.motorTarget[i] = t < -1 ? -1 : t > 1 ? 1 : t;
         }
       }
       /**
-       * ★ 自实现的三轴关节马达：每物理步调用一次，dt = 物理步长。
-       * 逐轴：期望力矩 = clamp(增益 × (目标角速度 − 当前相对角速度), ±τmax_axis)，
-       * 增益取 τmax/JOINT_MAX_SPEED ⇒ 满误差时正好输出 τmax，物理含义清晰。
+       * ★ 自实现的**位置环 PD** 关节马达：每物理步调用一次，dt = 物理步长。
+       *
+       *     θ_ref  = cmd ×（cmd ≥ 0 ? posRefScale·hi : posRefScale·(−lo)）   // 网络给的目标角
+       *     err    = kP·(θ_ref − θ) − kD·ω_rel                              // 等效目标角速度
+       *     τ      = clamp(err · τmax / JOINT_MAX_SPEED, ±τmax)
+       *
+       * 增益取 τmax/JOINT_MAX_SPEED ⇒ **err 跑满 JOINT_MAX_SPEED 时正好输出 τmax**，物理含义清晰。
        * 然后把"本地轴上的力矩冲量"用父体姿态搬到世界，对父/子各施加一对等大反向的冲量。
+       *
+       * ★★ 为什么是位置环而不是"角速度目标"（这是本项目最重的一处结构性修正）：
+       *   速度目标下，`cmd = 0` 的含义是"把角速度刹到 0"（`err = −ω_rel ≠ 0`）⇒ 关节一直在**制动**，
+       *   但它**没有静态刚度**：重力压着膝盖，只要膝盖不转，误差就恰好等于 0、力矩也就没了。
+       *   ⇒ 静载荷下必然**蠕变**（实测没位置项时躯干 1 s 内从 0.888 掉到 0.149 m）。
+       *   位置环天然有静态刚度：θ ≠ θ_ref 就一直有力，这才是"站着不动"能成立的前提。
+       *   ★ 且 `θ_ref = 0` 时 `err = −kP·θ − kD·ω_rel`，与历史公式 `target = −k·θ; err = target − ω_rel`
+       *     **逐项一致** ⇒ 这是严格泛化，零输出的行为一字没变，但网络拿到了位置通道。
        *
        * ★★ 两处必须保留的护栏：
        *   1) 稳定性上限 |imp| ≤ α·|err|·Ieff（见构造里 jointIeff 的注释）——
@@ -13233,11 +13402,13 @@ var init_ragdoll = __esm({
        *      也就不存在"推出去 → 限位猛烈纠正 → 甩飞"的爆炸路径
        *      （probe-spike：Rapier 硬限位下 neck 被推到 −162°、限位 [−35°,45°]，
        *        纠正时相对角速度顶到 68.9 rad/s → 头甩飞 → 整条链炸）。
+       *      ★ 它只在**越界之后**介入，越界时直接接管该轴的目标速度（不再走位置环）
+       *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
       driveMotors(dt) {
         const scale = this.opt.torqueScale;
-        const rest = this.opt.restTension;
-        const ref = this.opt.restTensionRef;
+        const kP = this.opt.kP;
+        const kD = this.opt.kD;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
@@ -13256,31 +13427,31 @@ var init_ragdoll = __esm({
           const Ieff = this.jointIeff[i];
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
+            this.motorDemand[i * 3 + k] = 0;
             const lo = j.minRad[k];
             const hi = j.maxRad[k];
             const a = rv[k];
-            let target = this.motorTarget[i * 3 + k];
-            let alpha = MOTOR_ALPHA;
+            const idx = i * 3 + k;
+            let alpha = this.opt.motorAlpha;
+            let err;
             const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
             if (a > hi) {
-              const rec = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp);
-              if (target > rec) target = rec;
+              err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
             } else if (a < lo) {
-              const rec = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp);
-              if (target < rec) target = rec;
+              err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
+            } else {
+              const cmd = this.motorTarget[idx];
+              const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+              err = kP * (thRef - a) - kD * relL[k];
             }
-            if (rest > 0) {
-              const ac = a > ref ? ref : a < -ref ? -ref : a;
-              target += -ac * rest;
-            }
-            const err = target - relL[k];
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
             let tau = err * (tauMax / JOINT_MAX_SPEED);
             if (tau > tauMax) tau = tauMax;
             else if (tau < -tauMax) tau = -tauMax;
+            this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const impStable = alpha * Math.abs(err) * Ieff;
             if (imp > impStable) imp = impStable;
@@ -13293,7 +13464,7 @@ var init_ragdoll = __esm({
             iv.x = this.axisW[0] * imp;
             iv.y = this.axisW[1] * imp;
             iv.z = this.axisW[2] * imp;
-            this.motorImpulse[i * 3 + k] = imp;
+            this.motorImpulse[idx] = imp;
             c.applyTorqueImpulse(iv, true);
             iv.x = -iv.x;
             iv.y = -iv.y;
@@ -13302,8 +13473,28 @@ var init_ragdoll = __esm({
           }
         }
       }
+      /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
+      refAngleOf(joint, axis) {
+        const idx = joint * 3 + axis;
+        const cmd = this.motorTarget[idx];
+        return cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+      }
       // ------------------------------------------------------------ 便利读数
+      /**
+       * ★ 身体参考点 = **上躯干（胸腔）**，不是树根。
+       *
+       * 为什么：脊柱分段后（见 SkeletonConfig.spineSegments）树根变成了骨盆，
+       * 而"站得直不直 / 现在多高 / 朝哪转"这些量真正的载体是**上躯干**：
+       *   · 平衡反馈用的角速度：胸的角速度才是"我在倒"的信号（骨盆更迟钝）
+       *   · 直立惩罚 ∫(cos tilt − 1)：必须量胸的倾角，否则弯腰驼背不扣分
+       *   · 摔倒判定的高度：骨盆会深蹲（0.83 → 0.5 是正常下蹲），胸塌到地面才是摔
+       * 分段前（K=1）它本身就是 'torso'，行为与历史完全一致。
+       */
       torso() {
+        return this.bodies[this.indexByKey.get(this.torsoKey) ?? 0];
+      }
+      /** 树根 = 骨盆（脊柱最下一段，key 恒为 'torso'）。行走位移的基准点 */
+      root() {
         return this.bodies[this.indexByKey.get("torso") ?? 0];
       }
       head() {
@@ -13386,12 +13577,12 @@ var RAPIER = (await Promise.resolve().then(() => (init_rapier(), rapier_exports)
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var DT = 1 / 120;
 var W_TOTAL = sk.massTotal * 9.81;
-function run(restTension, aRef = Infinity, seconds = 3, verbose = false) {
+function run(kP, seconds = 3, verbose = false) {
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
-  const doll = new Ragdoll2(world, sk, { restTension, restTensionRef: aRef });
+  const doll = new Ragdoll2(world, sk, { kP });
   doll.reset(0);
   const footCols = ["l", "r"].flatMap((side) => {
     const b = doll.bodyByKey(side === "l" ? "shin_l" : "shin_r");
@@ -13456,16 +13647,18 @@ function run(restTension, aRef = Infinity, seconds = 3, verbose = false) {
     }
   }
   console.log(
-    `  k=${String(restTension).padStart(2)} a_ref=${(aRef === Infinity ? "\u221E" : aRef.toFixed(2)).padStart(4)}  \u91CD\u5FC3\u6491\u5728\u652F\u6491\u533A\u5185 ${standTime.toFixed(2)}s / ${seconds}s   t=2s \u8EAF\u5E72y=${Number.isNaN(torsoY2s) ? "\u2014" : torsoY2s.toFixed(3)}   \u5E73\u5747\u63A5\u89E6\u529B ${(sumF / nF).toFixed(0)} N\uFF08= \u4F53\u91CD\u7684 ${(sumF / nF / W_TOTAL * 100).toFixed(0)}%\uFF09`
+    `  kP=${String(kP).padStart(2)}  \u91CD\u5FC3\u6491\u5728\u652F\u6491\u533A\u5185 ${standTime.toFixed(2)}s / ${seconds}s   t=2s \u8EAF\u5E72y=${Number.isNaN(torsoY2s) ? "\u2014" : torsoY2s.toFixed(3)}   \u5E73\u5747\u63A5\u89E6\u529B ${(sumF / nF).toFixed(0)} N\uFF08= \u4F53\u91CD\u7684 ${(sumF / nF / W_TOTAL * 100).toFixed(0)}%\uFF09`
   );
 }
 console.log(`
-=== \u5730\u9762\u53CD\u529B / \u91CD\u5FC3\u652F\u6491 \u5B9E\u6D4B\uFF08\u4F53\u91CD ${W_TOTAL.toFixed(0)} N\uFF0C\u5173\u8282\u76EE\u6807\u5168 0\uFF09===`);
-console.log("  \u9010\u5E27\u7EC6\u8282\uFF08k=9, a_ref=0.25 = \u5F53\u524D\u9ED8\u8BA4\uFF09:");
-run(9, 0.25, 3, true);
-console.log('\n  k / a_ref \u5BF9\u7167\uFF08\u7AD9\u6869\uFF0C\u770B"\u4E0D\u9971\u548C"\u4F1A\u4E0D\u4F1A\u584C\u3001\u9971\u548C\u4E4B\u540E\u6389\u591A\u5C11\uFF09:');
-for (const [k, a] of [[0, Infinity], [3, Infinity], [6, Infinity], [9, Infinity], [9, 0.12], [9, 0.25], [9, 0.4], [12, 0.25]]) {
-  run(k, a, 3, false);
+=== \u5730\u9762\u53CD\u529B / \u91CD\u5FC3\u652F\u6491 \u5B9E\u6D4B\uFF08\u4F53\u91CD ${W_TOTAL.toFixed(0)} N\uFF0C\u5173\u8282\u76EE\u6807\u5168 0 = \u4FDD\u6301\u7ED1\u5B9A\u59FF\u6001\uFF09===`);
+console.log("  \u9010\u5E27\u7EC6\u8282\uFF08kP=9 = \u5F53\u524D\u9ED8\u8BA4\uFF09:");
+run(9, 3, true);
+console.log('\n  kP \u5BF9\u7167\uFF08\u7AD9\u6869\uFF1BkP=0 \u5C31\u662F"\u7EAF\u963B\u5C3C"\u7684\u5BF9\u7167\u7EC4 \u2014\u2014 \u4F4D\u7F6E\u73AF\u6CA1\u6709 P \u9879\uFF09:');
+for (const k of [0, 3, 6, 9, 12]) {
+  run(k, 3, false);
 }
-console.log("  k = 0 \u21D2 \u7EAF\u963B\u5C3C\uFF08\u91CD\u529B\u80FD\u538B\u57AE\u5173\u8282\uFF0C\u56E0\u4E3A\u9759\u6001\u4E0B\u901F\u5EA6=0 \u21D2 \u9A6C\u8FBE\u51FA\u529B=0\uFF09");
+console.log("  \u2605 \u5224\u636E = \u9759\u606F\u63A5\u89E6\u529B\u5E94 \u2248 \u4F53\u91CD\uFF08687 N\uFF09\uFF1BkP=0 \u65F6\u91CD\u529B\u80FD\u538B\u57AE\u5173\u8282\uFF08\u9759\u6001\u901F\u5EA6=0 \u21D2 \u963B\u5C3C\u9879\u51FA\u529B=0\uFF09");
+console.log('  \u2605 \u5386\u53F2\u5BF9\u7167\uFF1A\u65E7\u516C\u5F0F k\xB7\u03B8 \u88AB JOINT_MAX_SPEED/k \u5904\u7684"\u9690\u5F62\u8F6F\u5899"\u622A\u65AD\uFF0CkP=9 \u65F6\u819D\u53EA\u80FD\u5F2F\u5230 \u221259.7\xB0\uFF1B');
+console.log('    \u73B0\u5728\u6539\u6210"\u4F4D\u7F6E\u76EE\u6807 + PD"\u540E**\u6CA1\u6709\u90A3\u5835\u5899**\uFF08\u03B8_ref \u7531\u7F51\u7EDC\u7ED9\u3001\u4E0A\u9650\u662F\u673A\u68B0\u91CF\u7A0B\u7684 90%\uFF09\u3002');
 console.log("");

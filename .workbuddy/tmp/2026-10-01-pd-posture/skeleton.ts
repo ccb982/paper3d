@@ -90,21 +90,6 @@ export interface SkeletonConfig {
    *   —— 弯腰时板子沿脊柱连续弯折，不是把贴图切成 K 条各贴一段。见 viewer.ts。
    */
   spineSegments: number;
-  /**
-   * ★★ 脚掌**足迹**缩放（默认 1.0）。只缩放水平面（长 hx / 宽 hz），不动厚度。
-   *
-   * 为什么需要一个专门的旋钮（用户提问引出的一次量化）：
-   *   脚掌是**站立能力的唯一硬约束** —— 支撑域半宽 p_max 直接决定"能刹住多快的重心"
-   *   `v_catch = ω·p_max`（ω = √(g/z_c)）。而本骨架的两个数都偏小：
-   *     · `META.sole.len`（= 343 px = 0.220 m）是**手填常数**，不是从素材推的；
-   *       脚长/身高 = 0.122，而真人 ≈ 0.15 ⇒ 前后平衡极限只有解剖值的 ~80%。
-   *     · 侧向半宽 = `小腿胶囊半径 × 0.9`，而半径又被 `limbRadiusScale = 0.6` 削过
-   *       ⇒ 物理脚宽 0.129 m，**远窄于画里的脚**（shin 贴图 bbox 宽 0.239 m）。
-   *   ⇒ 于是"脚比画里小"这件事必须能被量化、能被扫，而不是埋在素材里没人知道。
-   *   ★ 注意：**调大它不会让人偶变高或变胖**，只让脚下的支撑域变大。
-   *   ★ 代价：脚变长会让"迈步"更容易踢到自己的另一只脚（本骨架关掉了自碰撞，所以只是视觉问题）。
-   */
-  soleFootScale: number;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -119,7 +104,6 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
-  soleFootScale: 1.0,
 };
 
 // ---------------------------------------------------------------- 环节规格
@@ -412,23 +396,19 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       inertiaXY: mainIz * 0.5,
     });
 
-    // ★ 脚掌：同一个刚体上的第二个 collider，底面与胶囊底端齐平。
-    //   soleFootScale 只缩放水平足迹（见 SkeletonConfig.soleFootScale）。
+    // ★ 脚掌：同一个刚体上的第二个 collider，底面与胶囊底端齐平
     if (solePct > 0) {
       const soleMass = (solePct / 100) * cfg.mass;
       const offsetY = -length / 2 + soleHalfThick; // 相对刚体几何中心
-      const sfx = Math.max(0.1, cfg.soleFootScale);
-      const hx = soleHalfLen * sfx;
-      const hz = radius * 0.9 * sfx;
       colliders.push({
         shape: 'cuboid',
         halfHeight: 0, radius: 0,
-        hx, hy: soleHalfThick, hz,
+        hx: soleHalfLen, hy: soleHalfThick, hz: radius * 0.9,
         offsetY,
         mass: soleMass,
         comY: 0, // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
-        inertiaZ: (soleMass * (hx * hx + soleHalfThick * soleHalfThick)) / 3,
-        inertiaXY: (soleMass * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
+        inertiaZ: (soleMass * (soleHalfLen * soleHalfLen + soleHalfThick * soleHalfThick)) / 3,
+        inertiaXY: (soleMass * (radius * radius * 0.81 + soleHalfThick * soleHalfThick)) / 3,
       });
     }
 

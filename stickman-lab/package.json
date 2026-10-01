@@ -16,7 +16,12 @@
     "forces:walk": "node tools/run.mjs probe-forces walk 30",
     "ground": "node tools/run.mjs probe-ground",
     "servo": "node tools/run.mjs probe-servo",
-    "skin": "node tools/run.mjs probe-skin"
+    "skin": "node tools/run.mjs probe-skin",
+    "stability": "node tools/run.mjs probe-stability",
+    "push": "node tools/run.mjs probe-push",
+    "push:diag": "node tools/run.mjs probe-push diag 9",
+    "posture": "node tools/run.mjs probe-posture",
+    "posture:walk": "node tools/run.mjs probe-posture 20 24 3.5 walk"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

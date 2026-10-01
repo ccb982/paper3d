@@ -43737,7 +43737,8 @@ var DEFAULT_CONFIG = {
   // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
-  spineSegments: 4
+  spineSegments: 4,
+  soleFootScale: 1
 };
 var SEGMENTS = [
   { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -43854,19 +43855,22 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const offsetY = -length / 2 + soleHalfThick;
+      const sfx = Math.max(0.1, cfg.soleFootScale);
+      const hx = soleHalfLen * sfx;
+      const hz = radius * 0.9 * sfx;
       colliders.push({
         shape: "cuboid",
         halfHeight: 0,
         radius: 0,
-        hx: soleHalfLen,
+        hx,
         hy: soleHalfThick,
-        hz: radius * 0.9,
+        hz,
         offsetY,
         mass: soleMass,
         comY: 0,
         // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
-        inertiaZ: soleMass * (soleHalfLen * soleHalfLen + soleHalfThick * soleHalfThick) / 3,
-        inertiaXY: soleMass * (radius * radius * 0.81 + soleHalfThick * soleHalfThick) / 3
+        inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+        inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
     }
     if (spec.key === "torso" && K2 > 1) {

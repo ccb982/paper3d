@@ -16,11 +16,8 @@
 // ★ 绝不读 body.handle（本体踩过 0.14.0 返回坏 handle 的坑），全程用对象引用。
 
 import RAPIER from '@dimforge/rapier3d';
-import { Ragdoll, type RagdollOptions } from './ragdoll';
+import { Ragdoll } from './ragdoll';
 import { BRAIN_SHAPE, brainParamCount, brainForward, type BrainShape } from './brain';
-import {
-  dcm, dcmExcess, newCom, newSupport, omegaAt, readCom, readSupport,
-} from './posture';
 import type { Skeleton } from './skeleton';
 
 export type SimMode = 'walk' | 'fight';
@@ -49,25 +46,6 @@ export interface SimConfig {
   fallHeightRatio: number;
   /** 摔倒判定：躯干"上方向"偏离世界竖直超过该值（弧度） */
   fallAngle: number;
-  /**
-   * ★ 覆盖适应度权重（默认全用 W）。
-   *
-   * 存在的意义：**站桩考核**与**课程学习**。想单独问"它到底会不会站"，
-   * 就得把 `distance` / `velocity` 关掉 —— 否则"往前扑倒滑出去"也会得分，
-   * 测出来的不是站立能力。用法：
-   *     new Sim(sk, shape, { ...DEFAULT_SIM, weights: { distance: 0, velocity: 0 } })
-   */
-  weights?: Partial<FitnessWeights>;
-  /**
-   * ★ 透传给 Ragdoll 的选项（kP / kD / motorAlpha / torqueScale …）。
-   *
-   * 存在的意义 = **让"执行器够不够力"变成可扫描的实验变量**，而不是埋在常量里。
-   * 典型用法（probe-posture 的权限扫描）：
-   *     new Sim(sk, shape, { ...DEFAULT_SIM, doll: { motorAlpha: 1.2, kP: 9 } })
-   * 注意：这份选项会成为**考核口径的一部分** —— 训练用的 cfg 和考核用的 cfg 必须一致，
-   * 否则等于在 A 硬件上训练、在 B 硬件上打分。
-   */
-  doll?: RagdollOptions;
 }
 
 export const DEFAULT_SIM: SimConfig = {
@@ -93,23 +71,14 @@ export const DEFAULT_SIM: SimConfig = {
  *      会形成一个离"走得一般"很近的局部最优，ES 会直接卡在那里。
  *      改成惩罚后，站桩总分 = 0，任何倾斜/扑倒都从 0 往下扣，梯度方向正确。
  *   3) 新增 lateral（∫|z|dt）：任务要求沿 +X 直走，偏出去要扣。
- *
- * ★★ 4) 新增 balance（DCM 越界积分）—— 见 W.balance 的注释。这是本轮最关键的修正。
  */
 export const W = {
   /** 净前进距离（跑到终点时的 x 位移） */
   distance: 3.0,
   /** 前进速度积分（塑形项：让早期就有梯度，不必等撞线） */
   velocity: 0.6,
-  /**
-   * ★ 躯干不正的惩罚：W × ∫(cos(tilt) − 1)dt（≤ 0，不直立就一直扣）。
-   * ★★ 权重已从 1.2 **降到 0.5**：它优化的是**代理量** ——
-   *   胸腔只占 12.4% 质量、中心离 CoM 0.4635 m，而"人像棍子一样平移倒下"时
-   *   胸腔倾角**始终 ≈ 0** ⇒ 这个项对真正的摔倒几乎无感（实测"直立占比 48~97%
-   *   却只前进 0.37 m、**仍判摔**"）。真正的平衡判据交给下面的 balance。
-   *   不删它是因为"弯腰驼背"确实要以姿态扣分，只是不该由它负责平衡。
-   */
-  upright: 0.5,
+  /** 躯干不正的惩罚：W × ∫(cos(tilt) − 1)dt（≤ 0，不直立就一直扣） */
+  upright: 1.2,
   /** 躯干离地高度偏差（站着才不扣） */
   height: 0.8,
   /** 侧向漂移 ∫|z|dt：任务要求沿 +X 直走 */
@@ -120,71 +89,6 @@ export const W = {
   step: 0.4,
   /** 摔倒一次性扣分 */
   fall: 2.0,
-  /**
-   * ★ 存活奖励（每秒）。**默认 0 = 关闭**，只有"站桩考核"这类关掉了
-   * `distance/velocity/step` 的模式才该打开。
-   *
-   * ★★ 为什么必须有这么一个项（这条是跑 probe-posture 时踩出来的真坑）：
-   *   本适应度里所有姿态项（balance / upright / height / lateral / energy）**都是
-   *   随时间累积的负数**，而"摔倒"只是一次性 −2。于是当 locomotion 项被关掉、
-   *   没有任何"活得越久拿分越多"的正项时，**早死反而分数更高** ——
-   *   ES 会直奔"赶紧倒下"这个解（实测：站桩训练 20 代，最佳个体存活从 0.78 s
-   *   一路缩到 0.65 s，却因为累积惩罚更少而分数更高，ξz 峰值也确实"变小"了）。
-   *
-   *   ★ 行走模式不需要它：`distance` 只有在活着的时候才累积，天然带存活激励
-   *     （这也是"摔倒只是一次性 −2"没有毁掉行走训练的原因）。
-   *   ★ 也**不能**给行走默认加上它：站着不动 6 s 白拿 6×1.5 = 9 分，
-   *     正好抵消 distance 的满分量级 ⇒ 会造出一个"原地不动"的强局部最优
-   *     （当年把 upright 从"奖励"改成"惩罚"就是为了掐掉这个最优）。
-   */
-  survive: 0,
-  /**
-   * ★★ DCM 越界积分（本轮新增，**这是"站得住"真正的梯度来源**）。
-   *
-   *   项的形式：W.balance × ∫ (ex² + ez²) dt
-   *     其中 ex = max(0, |ξx − cx| / halfX − 1)、ez 同理（无量纲，见 posture.dcmExcess）
-   *     ξ = CoM + CoM速度/ω 是**捕获点**，越界之后任何 CoP 都救不回来。
-   *
-   *   ★ 为什么必须是它、而不是"CoM 投影落在支撑多边形内"：
-   *     静力投影判据比真实约束**宽得多**（它是静态近似）。真约束是不稳定倒立摆
-   *     ẍ = ω²(x−p)，稳定当且仅当 ξ 在域内。probe-stability 实测：走路量级 0.5 m/s
-   *     就已经超过本骨架的可刹上限 ω·p_max = 0.351 m/s ⇒ 静止站立在数学上已不可能，
-   *     只有迈步能救。用静力判据会给出"余量 0.11 m，很安全"的错误结论。
-   *
-   *   ★ 为什么用**归一化**而不是米：站立时 half 只有 0.07 m、迈步时 half 在变，
-   *     用米会让"域大的时候小犯规"和"域小的时候不犯规"混在一起不可比。
-   *     归一化后 0 = 正好在域边缘、1 = 越出整整一个半宽，跨姿态可比。
-   *
-   *   ★ 为什么侧向用**被动**半宽（0.070）而不是凸包（0.266）：
-   *     两脚等载荷时净 CoP = 两脚 CoP 的平均 ⇒ 侧向可调范围只有"单只脚的宽度"。
-   *     拿凸包当域等于给策略 4 倍宽容度，它会以为 ξz = 0.2 很安全（实测静息就是这样翻的）。
-   *
-   *   ★ 为什么平方：域内给 0 ⇒ 与 upright 一样"站桩不白拿分"，不会造出新的局部最优；
-   *     越界越狠扣得越急 ⇒ 梯度指向"别出去"，而不是"出去一点也没事"。
-   *
-   *   ★ 取值 2.0 的来由：一次典型的摔倒，越界量在 1~3 个半宽之间，积分 ≈ 1~9，
-   *     ×2 后是 2~18 分 —— 与 distance（满分 3×3=9）同量级、比 fall（2.0）重，
-   *     也就是"慢慢倒下去"和"直接判摔"都会被明显惩罚，但不会把分数压成常数。
-   */
-  balance: 2.0,
-  /**
-   * ★★ 抖动惩罚（W.smooth）：∫ Σ_axis (τ_t − τ_{t−1})² （N·m²·s 量纲见下）。
-   *
-   *   ★ 为什么需要它：`energy = 0.02·∫Σout²` 量的是**出力大小**，量不到**抖动**。
-   *     一个每步朝相反方向猛扯、净输出 ≈ 0 的"抽风"关节，Σout² 并不大，
-   *     但它把接触抖散了（probe-posture [C3]：抽风个体只活 0.38~0.60 s）。
-   *
-   *   ★ 为什么用**力矩**差而不是网络输出差：力矩里含 `−kD·ω_rel` 反馈项。
-   *     高频换向在力矩上才看得见；网络命令可能是低频的，而关节在硬顶。
-   *
-   *   ★ 为什么是"平方和"而不是 Σ|Δτ|：和 W.balance 同理 —— 小幅连续修正（真人式）
-   *     几乎不罚，大幅高频（抽风）按平方放大。用 Σ|Δτ| 会让"每步轻微调整"也被线性罚。
-   *
-   *   ★ 量纲/量级（probe-posture [C3]，3.5 s 回合）：
-   *     静息（零输出）实测抖动 ≈ 66 N·m/s；抽风个体 ≈ 1.0e5 N·m/s ⇒ 差 3 个数量级。
-   *     取 1e-4 量级即可把两者在分数上分开，而不会把正常步态压死（见 C3 的 smooth 列）。
-   */
-  smooth: 1e-4,
   /** 战斗：命中一次 */
   hit: 4.0,
   /** 战斗：被击中（按出拳次数，不是按周期数） */
@@ -192,8 +96,6 @@ export const W = {
   /** 战斗：手贴近假人的程度 ∫max(0, 1 − d/1.2)dt —— 塑形项，让"挥空"也有梯度 */
   approach: 0.8,
 } as const;
-
-export type FitnessWeights = typeof W;
 
 const ZERO = { x: 0, y: 0, z: 0 };
 
@@ -203,8 +105,6 @@ export class Sim {
   doll!: Ragdoll;
   readonly cfg: SimConfig;
   readonly shape: BrainShape;
-  /** 本次评估实际使用的权重（= W 叠加 cfg.weights） */
-  readonly w: FitnessWeights;
   readonly stages: number;      // 每个控制周期包含几个物理步
   readonly ticksTotal: number;  // 一次评估的控制周期总数
   /** 物理步长（秒）—— driveMotors 的 dt */
@@ -219,9 +119,6 @@ export class Sim {
   private readonly out: Float32Array;
   private readonly motor: Float32Array;
   private readonly jbuf = new Float64Array(3);
-  /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
-  private readonly com = newCom();
-  private readonly sup = newSupport();
 
   // ---- 评估状态 ----
   private subStep = 0;
@@ -235,13 +132,6 @@ export class Sim {
   private accEnergy = 0;
   private accVel = 0;
   private accClose = 0;
-  /** ★ DCM 越界积分（无量纲，见 W.balance） */
-  private accBalance = 0;
-  /** ★ 抖动积分 ∫ Σ(Δτ)²（N·m²·s，见 W.smooth） */
-  private accSmooth = 0;
-  /** 上一物理步的**实际**关节力矩（= motorImpulse/dt），用于算 Δτ */
-  private readonly tauPrev: Float64Array;
-  private tauPrimed = false;
   private lastStance: 0 | 1 | 2 = 0;
   private stepCount = 0;
 
@@ -262,33 +152,11 @@ export class Sim {
   fitness = 0;
   hits = 0;
   hurts = 0;
-  /** ★ 诊断：DCM 归一化越界量的峰值（1 = 越出整整一个被动半宽） */
-  peakDcmX = 0;
-  peakDcmZ = 0;
-  /** ★★ 诊断：本回合**因何中止**。'' = 跑满时长没摔。
-   *
-   * 为什么必须有（跑 probe-posture 时踩出来的真需求）：
-   *   摔倒判定有三条独立路径（胸塌到 62% / 倾角 > 1.25 rad / 头 < 0.45 m），
-   *   而"ξz 峰值只有 1.25（远没越界）却仍然判摔"这种情况**无法从分数和 ξ 看出来**。
-   *   没有归因就只能瞎猜是"倒"还是"蹲塌"，而这两者对应的修法完全相反
-   *   （倒 ⇒ 补侧向控制；蹲塌 ⇒ 看动作空间/阈值）。
-   *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
-   */
-  fallReason: '' | 'height' | 'tilt' | 'head' = '';
-  /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
-  endTorsoY = 0;
-  endTilt = 0;
-  endHeadY = 0;
-  /** ★ 诊断：ξ 同时落在 x/z 域内的控制周期占比（"站住了"的直接指标） */
-  inDomainRatio = 0;
-  private inDomainTicks = 0;
-  private balanceTicks = 0;
 
   constructor(sk: Skeleton, shape: BrainShape = BRAIN_SHAPE, cfg: SimConfig = DEFAULT_SIM) {
     this.sk = sk;
     this.cfg = cfg;
     this.shape = shape;
-    this.w = { ...W, ...cfg.weights };
 
     this.dt = 1 / cfg.physicsHz;
     this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
@@ -301,7 +169,6 @@ export class Sim {
     this.hidden = new Float32Array(shape.hidden);
     this.out = new Float32Array(shape.outputs);
     this.motor = new Float32Array(this.doll.jointCount * 3);
-    this.tauPrev = new Float64Array(this.doll.jointCount * 3);
 
     this.initTorsoY = this.doll.torso().translation().y;
   }
@@ -328,7 +195,7 @@ export class Sim {
     w.numSolverIterations = this.cfg.solverIterations;
     w.numAdditionalFrictionIterations = Math.max(1, this.cfg.solverIterations >> 1);
     this.world = w;
-    this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
+    this.doll = new Ragdoll(w, this.sk);
 
     this.puppet = undefined;
     this.fist = undefined;
@@ -369,8 +236,6 @@ export class Sim {
   get progress(): number { return this.tick / this.ticksTotal; }
   /** ★ 净前进距离（跑到此刻为止的位移；"最远距离"已弃用，见 W 的注释） */
   get distance(): number { return this.doll.torso().translation().x - this.startX; }
-  /** ★★ 诊断：本回合的**抖动积分** Σ(Δτ)²（量纲 (N·m)²，见 W.smooth / [C3]） */
-  get smoothCost(): number { return this.accSmooth; }
 
   // ------------------------------------------------------------ 生命周期
 
@@ -393,23 +258,9 @@ export class Sim {
     this.tick = 0;
     this.phase = 0;
     this.accUpright = 0; this.accHeight = 0; this.accLateral = 0;
-    this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
-    this.accSmooth = 0;
-    // ★ 抖动需要一个"前一帧力矩"；第一步没有前值，置 0 并打标记，
-    //   否则第 1 步的 Δτ = τ_0 本身会被当成一次巨大抖动（假罚）。
-    this.tauPrev.fill(0);
-    this.tauPrimed = false;
+    this.accEnergy = 0; this.accVel = 0; this.accClose = 0;
     this.lastStance = 0;
     this.stepCount = 0;
-    this.inDomainTicks = 0;
-    this.balanceTicks = 0;
-    this.peakDcmX = 0;
-    this.peakDcmZ = 0;
-    this.fallReason = '';
-    this.endTorsoY = 0;
-    this.endTilt = 0;
-    this.endHeadY = 0;
-    this.inDomainRatio = 0;
     this.handCooldownL = 0;
     this.handCooldownR = 0;
     this.fistTouching = false;
@@ -433,7 +284,6 @@ export class Sim {
       if (this.subStep === 0) this.controlTick();
       // ★ 关节力矩每物理步施加一次（网络只在控制周期被调用，力矩是连续量）
       this.doll.driveMotors(this.dt);
-      this.accumulateSmooth();   // ★ 抖动积分：必须在 driveMotors 之后（读本步力矩）
       this.world.step();
       used++;
       this.subStep++;
@@ -445,34 +295,6 @@ export class Sim {
       if (this.checkFall()) break;
     }
     return used;
-  }
-
-  /**
-   * ★ 抖动记账（W.smooth）：`accSmooth += Σ_axis (Δτ)²`，其中 `τ = motorImpulse / dt`。
-   *
-   * - 逐**物理步**累加（不是逐控制周期）—— "抽风"的定义就是**步间**抖动。
-   * - 用**实际施加的力矩**（`motorImpulse`）而不是网络输出 `out`：
-   *   力矩里含 `−kD·ω_rel` 反馈项，能抓到"命令平滑但关节在硬顶"的那种抽风。
-   * - 第一步跳过：没有前值，Δτ 会把"起步瞬间 0 → 一个正常力矩"记成一次巨大抖动。
-   * - 量纲：`∫ Σ(Δτ)²/dt dt = Σ(Δτ)²`，即 (N·m)²（dt 是常数，并入 W.smooth）。
-   */
-  private accumulateSmooth(): void {
-    const imp = this.doll.motorImpulse;
-    const tp = this.tauPrev;
-    const invDt = 1 / this.dt;
-    if (!this.tauPrimed) {
-      for (let i = 0; i < imp.length; i++) tp[i] = imp[i] * invDt;
-      this.tauPrimed = true;
-      return;
-    }
-    let acc = 0;
-    for (let i = 0; i < imp.length; i++) {
-      const tau = imp[i] * invDt;
-      const d = tau - tp[i];
-      acc += d * d;
-      tp[i] = tau;
-    }
-    this.accSmooth += acc;
   }
 
   /** 一次性跑完（离屏验收 / 无渲染时用） */
@@ -491,7 +313,7 @@ export class Sim {
     this.phase += this.cfg.gaitHz / this.cfg.controlHz;
     if (this.phase >= 1) this.phase -= Math.floor(this.phase);
 
-    // ---- 填输入（布局见 brain.ts 的 INPUT_LAYOUT，共 22 + 6N 维）----
+    // ---- 填输入（布局见 brain.ts 的 INPUT_LAYOUT，共 70 维）----
     const torso = doll.torso();
     const tp = torso.translation();
     const tv = torso.linvel();
@@ -508,23 +330,7 @@ export class Sim {
     x[12] = tp.y;
     x[13] = tp.z;
 
-    // ---- ★ 重心块（6 维）：CoM / CoM 速度 / DCM。见 posture.ts ----
-    // ★★ 没有这 6 维，策略在**原理上**看不到"我在往哪倒" —— 它只能靠胸腔姿态当代理，
-    //    而胸腔只占 12.4% 质量、离 CoM 0.4635 m（实测症状："直立率高却不前进、仍判摔"）。
-    const com = readCom(doll, this.com);
-    const sup = readSupport(doll, this.sup);
-    const om = omegaAt(com.y);
-    // DCM ξ = x + ẋ/ω（捕获点 / 发散分量）；归一化到支撑域，0 = 中心、±1 = 域边缘
-    const nx = (dcm(com.x, com.vx, om) - sup.cx) / sup.halfX;
-    const nz = (dcm(com.z, com.vz, om) - sup.cz) / sup.halfZ;
-    x[14] = com.x - sup.cx;          // CoM 相对支撑域中心（m）
-    x[15] = com.z - sup.cz;
-    x[16] = com.vx * 2;              // CoM 水平速度（×2 ⇒ 0.35 m/s 的抓地上限映射到 ~0.7）
-    x[17] = com.vz * 2;
-    x[18] = nx > 3 ? 3 : nx < -3 ? -3 : nx;   // DCM 归一化位置（clamp ±3：越界也要有梯度）
-    x[19] = nz > 3 ? 3 : nz < -3 ? -3 : nz;
-
-    let k = 20;
+    let k = 14;
     const jb = this.jbuf;
     for (let i = 0; i < doll.jointCount; i++) {
       doll.jointRot(i, jb);
@@ -538,7 +344,6 @@ export class Sim {
     x[k + 1] = doll.soleY('r');
 
     // ---- 前向 → 马达 ----
-    // ★ 输出语义 = 目标**关节角**（不是角速度），见 ragdoll.setMotorTargets / posRefScale
     brainForward(this.shape, p, x, this.hidden, this.out);
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
     doll.setMotorTargets(this.motor);
@@ -549,18 +354,6 @@ export class Sim {
     this.accUpright += Math.cos(doll.tiltOf(torso)) * dt;
     this.accHeight += Math.abs(tp.y - this.initTorsoY) * dt;
     this.accLateral += Math.abs(tp.z) * dt;
-
-    // ★★ DCM 越界积分（见 W.balance）：域内给 0，越界按"越出几个半宽"的平方扣。
-    //    侧向用**被动**半宽（两脚等载时净 CoP 只能动"一只脚的宽度"）——
-    //    拿凸包当域会高估 4 倍，策略会把 ξz=0.2 当成安全区。
-    const eX = dcmExcess(nx, 0, 1);
-    const eZ = dcmExcess(nz, 0, 1);
-    this.accBalance += (eX * eX + eZ * eZ) * dt;
-    if (eX === 0 && eZ === 0) this.inDomainTicks++;
-    this.balanceTicks++;
-    const anX = nx < 0 ? -nx : nx, anZ = nz < 0 ? -nz : nz;
-    if (anX > this.peakDcmX) this.peakDcmX = anX;
-    if (anZ > this.peakDcmZ) this.peakDcmZ = anZ;
 
     let energy = 0;
     for (let i = 0; i < this.out.length; i++) energy += this.out[i] * this.out[i];
@@ -655,13 +448,11 @@ export class Sim {
     const tp = torso.translation();
     const tilt = this.doll.tiltOf(torso);
     const headY = this.doll.head().translation().y;
-    // ★ 写成"超标倍数"而不是三条 || 短路：判据完全等价（r > 1 ⟺ 原条件），
-    //   但能顺带说出**是哪一条**、以及超标最狠的是哪一条（见 fallReason）。
-    const rH = (this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y);
-    const rT = tilt / this.cfg.fallAngle;
-    const rD = 0.45 / Math.max(1e-6, headY);
-    if (rH > 1 || rT > 1 || rD > 1) {
-      this.fallReason = rH >= rT && rH >= rD ? 'height' : rT >= rD ? 'tilt' : 'head';
+    if (
+      tp.y < this.initTorsoY * this.cfg.fallHeightRatio ||
+      tilt > this.cfg.fallAngle ||
+      headY < 0.45
+    ) {
       this.finish(true);
       return true;
     }
@@ -671,44 +462,32 @@ export class Sim {
   private finish(fallen: boolean): void {
     this.fallen = fallen;
     const elapsed = this.tick / this.cfg.controlHz;
-    const w = this.w;
-    this.endTorsoY = this.doll.torso().translation().y;
-    this.endTilt = this.doll.tiltOf(this.doll.torso());
-    this.endHeadY = this.doll.head().translation().y;
-    this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
     let f: number;
     if (this.cfg.mode === 'walk') {
       f =
-        w.distance * Math.max(0, this.distance) +
-        w.velocity * this.accVel +
+        W.distance * Math.max(0, this.distance) +
+        W.velocity * this.accVel +
         // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以这一项恒 ≤ 0：不直立就扣分，
         //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-        w.upright * (this.accUpright - elapsed) -
-        w.height * this.accHeight -
-        w.lateral * this.accLateral -
-        w.energy * this.accEnergy -
-        // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-        w.balance * this.accBalance -
-        // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
-        w.smooth * this.accSmooth +
-        w.survive * elapsed +
-        w.step * this.stepCount;
-      if (fallen) f -= w.fall;
+        W.upright * (this.accUpright - elapsed) -
+        W.height * this.accHeight -
+        W.lateral * this.accLateral -
+        W.energy * this.accEnergy +
+        W.step * this.stepCount;
+      if (fallen) f -= W.fall;
     } else {
       // 战斗：命中为主，但**必须带姿态塑形**（否则全员摔倒时适应度全是 −2.00，
       // 梯度恒为零、ES 无从下手 —— 2D 版就是这么卡住的）。
       // 存活/直立给出"先站住"的梯度，approach 给出"伸手够到假人"的梯度，
       // 命中才在上面叠一次大奖励。
       f =
-        w.hit * this.hits -
-        w.hurt * this.hurts +
-        w.approach * this.accClose +
-        w.upright * (this.accUpright - elapsed) -
-        w.height * this.accHeight -
-        w.balance * this.accBalance -
-        w.smooth * this.accSmooth +
+        W.hit * this.hits -
+        W.hurt * this.hurts +
+        W.approach * this.accClose +
+        W.upright * (this.accUpright - elapsed) -
+        W.height * this.accHeight +
         0.5 * this.progressRaw() -
-        (fallen ? w.fall : 0);
+        (fallen ? W.fall : 0);
     }
     this.fitness = f;
     this.finished = true;

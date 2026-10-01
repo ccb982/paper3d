@@ -112,43 +112,11 @@ export class Trainer {
     this.sims = Array.from({ length: cfg.population }, () => new Sim(sk, shape, simCfg));
     this.fitness = new Float64Array(cfg.population).fill(-Infinity);
 
-    this.genomes = this.seedPopulation();
-    this.bestEver = this.genomes[0].slice();
-    this.bestNow = this.genomes[0].slice();
+    const seedGenome = randomGenome(shape, this.gauss, INIT_WEIGHT_SCALE);
+    this.genomes = Array.from({ length: cfg.population }, () => seedGenome.slice());
+    this.bestEver = seedGenome.slice();
+    this.bestNow = seedGenome.slice();
     this.startGeneration();
-  }
-
-  /**
-   * ★★ 造初始种群。两样东西缺一个，ES 都会卡死：
-   *
-   * ① **平凡解（全 0 权重）必须在池子里**。
-   *    `randomGenome` 的注释声称"输出 ≈ tanh(0) = 0 ⇒ 初始行为 = 保持初始姿态"——
-   *    **那句话是错的**：W1/W2 按扇入缩放后预激活仍是 O(0.5)，输出是 tanh(0.4) ≈ 0.4，
-   *    也就是一开局全员按 40% 量程乱扯关节（probe-posture [C0] 实测读数）。
-   *    而"θ_ref = 0 ⇒ 保持绑定姿态"是**站立任务的精确最优解**（绑定姿态的 CoM 投影本来
-   *    就在支撑多边形内，硬件够硬时它永远站着，实测零输出 6 s 跑满、适应度 +8.59）。
-   *    不把全 0 权重放进池子，ES 从"抽风"盆地出发就永远爬不到它
-   *    （实测：20 代最佳 −1.26，比"什么都不做"差 10 分，且存活 0.82 s < 6 s）。
-   *
-   * ② **多样性**。原来 24 个个体是**同一个基因组的克隆**（gen0 的 best == mean 就是证据），
-   *    第一代没有任何可挑选的变异，等于白烧一代。
-   *
-   * 配比：1 个精确平凡解 + 1 个随机种子 + 其余对半分（一半围绕平凡解做局部精修，
-   * 一半围绕随机权重做远征探索）。σ 用 sigmaInit：对全 0 基因组来说，
-   * 12% 的参数 ±0.06 得到的是"几乎不动"的邻居，正是站立任务需要的梯度。
-   */
-  private seedPopulation(): Float32Array[] {
-    const n = this.cfg.population;
-    const zero = new Float32Array(this.paramCount);
-    const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
-    const out: Float32Array[] = [zero, rnd.slice()];
-    while (out.length < n) {
-      const src = out.length % 2 === 0 ? zero : rnd;
-      const dst = new Float32Array(this.paramCount);
-      mutateInto(src, dst, this.cfg.sigmaInit, this.cfg.mutationProb, this.rng, this.gauss);
-      out.push(dst);
-    }
-    return out;
   }
 
   get population(): number { return this.cfg.population; }
@@ -272,8 +240,11 @@ export class Trainer {
     this.gauss = makeGaussian(this.rng);
     this.sigma = this.cfg.sigmaInit;
     this.prevMean = -Infinity;
-    // ★ 同样要带上平凡解，见 seedPopulation 的注释
-    this.genomes = this.seedPopulation();
+    const g0 = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
+    for (let i = 0; i < this.genomes.length; i++) {
+      this.genomes[i] = g0.slice();
+      mutateInto(g0, this.genomes[i], this.cfg.sigmaInit, this.cfg.mutationProb, this.rng, this.gauss);
+    }
     this.gen = 0;
     this.bestEverFitness = -Infinity;
     this.history.length = 0;

@@ -361,7 +361,7 @@ console.log('构建装置……');
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
-  const doll = new Ragdoll(world, sk, {});   // 默认配置（restTension = 9.0）
+  const doll = new Ragdoll(world, sk, {});   // 默认配置（kP = 9.0，位置环）
   doll.reset(0);
   const zero = new Float32Array(doll.jointCount * 3);
   doll.setMotorTargets(zero);
