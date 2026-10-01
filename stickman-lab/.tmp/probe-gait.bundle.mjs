@@ -6198,6 +6198,14 @@ var limbAxes_default = {
     knee_r: [
       1037.5,
       2206
+    ],
+    foot_l: [
+      454.5,
+      2792
+    ],
+    foot_r: [
+      1110.5,
+      2792
     ]
   },
   margin: {
@@ -6232,11 +6240,18 @@ var limbAxes_default = {
       pawHeightPx: 103,
       slopeDeg: 0.82
     }
-  }
+  },
+  anchorsNote: "foot_l/foot_r = \u8E1D\u951A\u70B9\uFF1Ay \u53D6 paw.yWide\uFF08\u9774\u5B50\u9876\u7AEF\uFF0C\u5B9E\u6D4B 2792\uFF09\uFF0Cx \u53D6 paw.centerX\uFF08\u5B9E\u6D4B\u9774\u5FC3\uFF09\u30022026-10-01 \u52A0\u8E1D\u5173\u8282\u65F6\u52A0\u5165\u3002"
 };
 
 // src/core/partsMeta.ts
-var META = parts_default;
+var ANKLE_JOINTS = [
+  { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
+  { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
+];
+var meta = parts_default;
+if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
+var META = meta;
 var PART_BY_KEY = new Map(
   META.parts.map((p) => [p.key, p])
 );
@@ -6303,7 +6318,13 @@ var DEFAULT_CONFIG = {
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
-  footSplayDeg: 25
+  footSplayDeg: 25,
+  // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
+  anklePitchDeg: [0, 0],
+  ankleRollDeg: 0,
+  ankleTorque: 45,
+  footUvWarpDeg: 0,
+  ankleEnabled: false
 };
 var SEGMENTS = [
   { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -6326,7 +6347,11 @@ var JOINT_ORDER = [
   "hip_l",
   "hip_r",
   "knee_l",
-  "knee_r"
+  "knee_r",
+  // ★ 踝（2026-10-01 新增）：脚掌是独立刚体，这两项是它的俯仰/内外翻。
+  //   放在最后 ⇒ 已有的 0~7 号马达索引不变（旧基因组的权重仍对得上前 8 个关节）。
+  "foot_l",
+  "foot_r"
 ];
 function anchorPx(name, jm) {
   const a = LIMB_AXES.anchors[name];
@@ -6342,7 +6367,11 @@ var JOINT_MAX_TORQUE = {
   hip_l: 200,
   hip_r: 200,
   knee_l: 150,
-  knee_r: 150
+  knee_r: 150,
+  // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
+  //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+  foot_l: 45,
+  foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
 var JOINT_LIMITS_XY_DEG = {
@@ -6354,7 +6383,11 @@ var JOINT_LIMITS_XY_DEG = {
   hip_l: [45, 40],
   hip_r: [45, 40],
   knee_l: [6, 8],
-  knee_r: [6, 8]
+  knee_r: [6, 8],
+  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
+  //   放开会让脚掌乱翻、把支撑面搞丢。
+  foot_l: [8, 6],
+  foot_r: [8, 6]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -6403,9 +6436,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return Math.atan(ax.k * (leg ? cfg.stance : 1));
   };
   const restYawOf = (key) => {
-    if (key !== "shin_l" && key !== "shin_r") return 0;
+    if (key !== "shin_l" && key !== "shin_r" && key !== "foot_l" && key !== "foot_r") return 0;
     const s = cfg.footSplayDeg * DEG;
-    return key === "shin_l" ? -s : s;
+    return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
   for (const spec of SEGMENTS) {
@@ -6434,6 +6467,22 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
       centerY = mapY(midY);
       centerZ = mapZ(midX, !!spec.leg);
+    }
+    let footAnkle = null;
+    if (cfg.ankleEnabled && spec.leg && (spec.soleMassPct ?? 0) > 0) {
+      const side2 = spec.key === "shin_l" ? "l" : "r";
+      const ak = LIMB_AXES.anchors?.[`foot_${side2}`];
+      const kn = LIMB_AXES.anchors?.[`knee_${side2}`];
+      if (ak && kn) {
+        footAnkle = [kn[0], ak[1]];
+        const shankLen = Math.abs(mapY(ak[1]) - mapY(kn[1]));
+        const newLen = shankLen + 2 * PIVOT_PAD;
+        const newHalfH = Math.max(1e-3, newLen / 2 - radius);
+        length = newLen;
+        halfHeight = newHalfH;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        centerZ = mapZ(kn[0], true);
+      }
     }
     const plateOffset = rotVecByQuat(
       qVisInv,
@@ -6466,10 +6515,76 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const side = spec.key === "shin_l" ? "l" : "r";
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
+      const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
       const hx = soleHalfLen * sfx;
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
+      const soleMassTotal = mainMass + soleMass;
+      if (anklePx && cfg.ankleEnabled) {
+        const ankleY = mapY(anklePx[1]);
+        const ankleZ = mapZ(anklePx[0], true);
+        const fTilt = 0;
+        const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
+        const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const soleDrop = ankleY;
+        const fMidY = soleWorldY;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        bodies.push({
+          key: spec.key === "shin_l" ? "foot_l" : "foot_r",
+          bone: spec.bone,
+          label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
+          part,
+          // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          cx: 0,
+          cy: ankleY,
+          cz: ankleZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
+          plateOffset: [0, 0, 0],
+          plateHidden: true,
+          // ★ 渲染层据此跳过这块板
+          length: soleDrop,
+          radius: 0,
+          halfHeight: soleDrop / 2,
+          mass: soleMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: soleHalfThick,
+            hz,
+            offsetY: local2[1],
+            offsetZ: local2[2],
+            mass: soleMass,
+            comY: 0,
+            inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+            inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
+          }],
+          leg: true
+        });
+        bodies.push({
+          key: spec.key,
+          bone: spec.bone,
+          label: spec.label,
+          part,
+          cx: 0,
+          cy,
+          cz: centerZ,
+          restTiltRad: tilt,
+          restYawRad: yaw,
+          plateOffset,
+          length,
+          radius,
+          halfHeight,
+          mass: mainMass,
+          colliders: [colliders[0]],
+          leg: true
+        });
+        continue;
+      }
       const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: "cuboid",
@@ -6482,7 +6597,6 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         offsetZ: local[2],
         mass: soleMass,
         comY: 0,
-        // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
         inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
         inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
@@ -6556,10 +6670,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
   const joints = [];
-  JOINT_ORDER.forEach((name, index) => {
+  const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
+  JOINT_ORDER_ACTIVE.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const childPart = PART_BY_KEY.get(jm.child);
+    const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
+    const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
     if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
     const [axPx, ayPx] = anchorPx(name, jm);
     const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));
@@ -13644,8 +13760,62 @@ function dcmExcess(xi, center, half) {
   return e > 0 ? e : 0;
 }
 
+// src/core/phaseSeed.ts
+var BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+
+// src/core/jointProgram.ts
+var TAU = Math.PI * 2;
+function phaseProgram(s = BEST_PHASE) {
+  const sc = s.scale;
+  const hip = 0.6 * sc, knee = 0.5 * sc, arm = 0.3 * sc, waist = 0.2 * sc;
+  const joints = [
+    // ★★ 骨盆（髋）：**左右下发同相**（amp 同号、lead 同为 0）。
+    //   这是实测出来的，不是随手写的：`tools/probe-seed` 扫 legPhase = ±1 × 三档幅度，
+    //   legPhase=+1（左右同相下发）才**往前走**（+1.25 m / 2 次有效迈步 / altQ=0.75），
+    //   legPhase=−1（反相下发）会**往后走**（−1.24 m）。
+    //   也就是说：**命令同相 ⇒ 实测反相** —— 交替是地面把一条腿按住"造"出来的。
+    //   所以"腿部要交替"这条要求由 **alt 项**（量的是实际角速度）负责，程序只描述可实现的命令。
+    { joint: "hip_l", axis: 2, aSin: 0.0557, aCos: -0.0973, bias: 0.1302, w: 1, leg: true, move: true },
+    { joint: "hip_r", axis: 2, aSin: 0.0534, aCos: -0.0705, bias: 0.1529, w: 1, leg: true, move: true },
+    // ★ 膝盖：与同侧髋同相、略滞后（收腿），左右同样同相下发
+    { joint: "knee_l", axis: 2, aSin: -0.1022, aCos: 0.0922, bias: 0.1, w: 1, leg: true, move: true },
+    { joint: "knee_r", axis: 2, aSin: -0.0847, aCos: 0.0749, bias: 0.0843, w: 1, leg: true, move: true },
+    // ★ 没有踝/足关节（JOINT_ORDER 只有 8 个），脚只能被小腿拖着走 ⇒ 程序里也不写脚
+    // 手臂：与同侧腿反相（平衡用），权重低一点，免得它抢戏
+    { joint: "shoulder_l", axis: 2, aSin: -0.0981, aCos: 0.0826, bias: 0.0131, w: 0.4, leg: false, move: false },
+    { joint: "shoulder_r", axis: 2, aSin: 0.0871, aCos: 38e-4, bias: 0.0251, w: 0.4, leg: false, move: false },
+    { joint: "elbow_l", axis: 2, aSin: -45e-4, aCos: 0.0163, bias: 13e-4, w: 0.25, leg: false, move: false },
+    { joint: "elbow_r", axis: 2, aSin: 64e-4, aCos: 35e-4, bias: 14e-4, w: 0.25, leg: false, move: false }
+  ];
+  for (let i = 1; i <= 3; i++) {
+    joints.push({ joint: `spine${i}`, axis: 0, aSin: -56e-4, aCos: 0.0222, bias: 0.0237, w: 0.2, leg: false, move: false });
+  }
+  return {
+    name: "walk-phase-v1",
+    joints,
+    pairs: [["hip_l", "hip_r"], ["knee_l", "knee_r"]],
+    moveTarget: 1,
+    // rad/s：髋/膝平均角速度到这个值就满分（×0.15 步态实测 0.58、×0.5 饱和）
+    // ★ 抬腿：左右膝"一次抬一条"。base 取实测 bias，ref 取实测摆幅 0.2 rad。
+    //   ★ sign=+1 是**屈膝**方向（实测：sign=−1 时抬腿高度≈0、同时抬占比≈0 ⇒ 那是伸腿方向，
+    //   等于"从来不抬"白拿互斥满分）。
+    liftPairs: [["knee_l", "knee_r"]],
+    // 两条腿平均抬到这个高度才算"真在抬腿"（实测最好那组是 0.22~0.23）
+    liftTarget: 0.25,
+    lifts: [
+      { joint: "knee_l", sign: 1, ref: 0.2, base: 0.1 },
+      { joint: "knee_r", sign: 1, ref: 0.2, base: 0.084 }
+    ]
+  };
+}
+function targetAngle(j, phase) {
+  return j.bias + j.aSin * Math.sin(TAU * phase) + j.aCos * Math.cos(TAU * phase);
+}
+
 // src/core/sim.ts
 var DEFAULT_SIM = {
+  programMode: true,
+  program: null,
   physicsHz: 120,
   controlHz: 60,
   duration: 6,
@@ -13682,6 +13852,20 @@ var W = {
    *   仍显著低于 3.0，但足以提供"往 +X 走"的方向梯度。
    */
   distance: 1.5,
+  // ══ 关节程序模式（用户 2026-10-01："不写笼统的奖励分数了，精确控制各个关节"）══
+  /** 逐关节跟踪误差系数：−w.joint · ∫(实际角−程序目标角)²dt（每关节还有自己的 w） */
+  joint: 1,
+  /** 腿部交替：w.alt · (交替质量 − 1)，≤0。两腿角速度和≈0（完全反相）时为 0 */
+  alt: 2,
+  /** 移动鼓励：w.move · min(1, 髋/膝平均角速度 / moveTarget) —— "骨盆和膝盖要动" */
+  move: 1,
+  /** 前进任务分：w.task · 迈出来的位移 · 时间平均交替质量 */
+  task: 1.5,
+  /** 旧的"迈步-站稳"循环项总开关（0 = 关掉，只用程序奖励；UI 可调回 1） */
+  excl: 2,
+  cycle: 0,
+  moveScale: {},
+  // 逐关节移动倍率（UI 实时改；默认权重在 jointProgram.ts）
   /**
    * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
    * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
@@ -13889,6 +14073,22 @@ var Sim = class {
   accClose = 0;
   /** ★ DCM 越界积分（无量纲，见 W.balance） */
   accBalance = 0;
+  /** ★ 关节程序（相位 → 每个关节的目标角）。null = 不用程序模式 */
+  prog;
+  /** 逐关节跟踪误差积分（键 = 关节名） */
+  accJt = {};
+  /** 逐关节角速度积分（rad，键 = 关节名） */
+  accMove = {};
+  /** 腿部"同相"程度积分：∫((qdot_l+qdot_r)/moveTarget)² dt */
+  accAlt = 0;
+  /** ★ 抬腿互斥：两条腿"同时在抬"的时间占比（0 = 一次抬一条，1 = 一直一起抬） */
+  accOverlap = 0;
+  /** 每条腿实际"抬起来"的平均高度（0~1，诊断用） */
+  accLift = {};
+  /** 交替质量的时间积分（0=完全同相，1=完全反相），用来给前进分打折 */
+  accAltQ = 0;
+  /** 上一个控制周期的关节角（算角速度用，避免跨 wasm 边界） */
+  prevAng = {};
   /** ★ 有效迈步时记下的 x：前进奖励只对"上一次有效迈步之后推进的位移"付费 */
   stepRefX = 0;
   /** 已付费的前进距离（见 W.distance） */
@@ -13985,6 +14185,15 @@ var Sim = class {
     this.cfg = cfg;
     this.shape = shape;
     this.w = { ...W, ...cfg.weights };
+    this.prog = cfg.program ?? (cfg.mode === "walk" && cfg.programMode ? phaseProgram() : null);
+    if (this.prog) {
+      for (const j of this.prog.joints) {
+        this.accJt[j.joint] = 0;
+        this.accMove[j.joint] = 0;
+        this.prevAng[j.joint] = 0;
+      }
+      for (const L2 of this.prog.lifts) this.accLift[L2.joint] = 0;
+    }
     this.dt = 1 / cfg.physicsHz;
     this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
     this.ticksTotal = Math.max(1, Math.round(cfg.duration * cfg.controlHz));
@@ -14086,6 +14295,15 @@ var Sim = class {
     this.accVel = 0;
     this.accClose = 0;
     this.accBalance = 0;
+    this.accAlt = 0;
+    this.accAltQ = 0;
+    this.accOverlap = 0;
+    for (const k of Object.keys(this.accLift)) this.accLift[k] = 0;
+    for (const k of Object.keys(this.accJt)) {
+      this.accJt[k] = 0;
+      this.accMove[k] = 0;
+      this.prevAng[k] = 0;
+    }
     this.accProgress = 0;
     this.accSmooth = 0;
     this.tauPrev.fill(0);
@@ -14305,6 +14523,40 @@ var Sim = class {
     if (this.holdWindow > 0) this.accBalance += (eX * eX + eZ * eZ) * dt;
     if (eX === 0 && eZ === 0) this.inDomainTicks++;
     this.balanceTicks++;
+    if (this.prog) {
+      const P = this.prog;
+      const inv = 1 / Math.max(0.2, P.moveTarget);
+      const qd = {};
+      for (const j of P.joints) {
+        const idx = JOINT_ORDER.indexOf(j.joint);
+        const a = idx < 0 ? 0 : this.x[20 + 3 * idx + j.axis];
+        const rate = (a - this.prevAng[j.joint]) * (1 / dt);
+        this.prevAng[j.joint] = a;
+        qd[j.joint] = rate;
+        const e = (a - targetAngle(j, this.phase)) / 0.2;
+        this.accJt[j.joint] += j.w * e * e * dt;
+        if (j.move) this.accMove[j.joint] += Math.abs(rate) * dt;
+      }
+      for (const L2 of P.lifts) {
+        const idx = JOINT_ORDER.indexOf(L2.joint);
+        const a = idx < 0 ? 0 : this.x[20 + 3 * idx + 2];
+        this.accLift[L2.joint] += Math.max(0, Math.min(1, (L2.sign * a - L2.base) / L2.ref)) * dt;
+      }
+      let mx = 0;
+      for (const [l2, r] of P.liftPairs) {
+        const iL = JOINT_ORDER.indexOf(l2), iR = JOINT_ORDER.indexOf(r);
+        const sL = P.lifts.find((x2) => x2.joint === l2), sR = P.lifts.find((x2) => x2.joint === r);
+        if (!sL || !sR || iL < 0 || iR < 0) continue;
+        const gL = Math.max(0, Math.min(1, (sL.sign * this.x[20 + 3 * iL + 2] - sL.base) / sL.ref));
+        const gR = Math.max(0, Math.min(1, (sR.sign * this.x[20 + 3 * iR + 2] - sR.base) / sR.ref));
+        mx = Math.max(mx, Math.min(gL, gR));
+      }
+      this.accOverlap += mx * dt;
+      let s2 = 0;
+      for (const [l2, r] of P.pairs) s2 += (qd[l2] + qd[r]) * inv;
+      this.accAlt += s2 * s2 * dt;
+      this.accAltQ += Math.max(0, Math.min(1, 1 - s2 * s2 / 4)) * dt;
+    }
     if (this.holdWindow > 0) {
       this.accProgress += Math.max(0, this.distance - this.stepRefX) * dt;
     }
@@ -14474,17 +14726,71 @@ var Sim = class {
   fitnessTerms(fallen, elapsed) {
     const w = this.w;
     if (this.cfg.mode === "walk") {
+      if (this.prog) {
+        const P = this.prog;
+        const E = Math.max(0.2, elapsed);
+        const pt = {};
+        let jt = 0;
+        for (const j of P.joints) {
+          pt[`jt.${j.joint}`] = -w.joint * this.accJt[j.joint] / E;
+          jt += pt[`jt.${j.joint}`];
+        }
+        pt.jt = jt;
+        let mvSum = 0, nMv = 0;
+        for (const j of P.joints) {
+          if (!j.move) continue;
+          const f2 = Math.min(1, this.accMove[j.joint] / E / P.moveTarget);
+          pt[`mv.${j.joint}`] = w.move * j.w * (w.moveScale[j.joint] ?? 1) * f2;
+          mvSum += f2;
+          nMv++;
+        }
+        const moveFrac = nMv > 0 ? mvSum / nMv : 0;
+        const altQ = this.accAltQ / E;
+        pt.altQ = altQ;
+        pt.alt = w.alt * altQ * moveFrac;
+        const ovl = this.accOverlap / E;
+        pt.overlap = ovl;
+        let hL = 0, hR = 0, np = 0;
+        for (const L2 of P.lifts) {
+          pt[`lift.${L2.joint}`] = this.accLift[L2.joint] / E;
+        }
+        for (const [l2, r] of P.liftPairs) {
+          hL += pt[`lift.${l2}`] ?? 0;
+          hR += pt[`lift.${r}`] ?? 0;
+          np++;
+        }
+        const hAvg = np > 0 ? (hL + hR) / (2 * np) : 0;
+        pt.liftH = hAvg;
+        pt.liftGate = Math.min(1, hAvg / P.liftTarget);
+        pt.excl = w.excl * (1 - ovl) * moveFrac * pt.liftGate;
+        pt.move = w.move * moveFrac;
+        pt.task = w.task * this.accProgress * altQ;
+        pt.program = jt + pt.alt + pt.excl + pt.move + pt.task;
+        pt.moveFrac = moveFrac;
+        const tt = {
+          ...pt,
+          // ---- 物理基本盘（不是"奖励"，是别摔倒/别歪/别抖）----
+          upright: w.upright * (this.accUpright - elapsed),
+          height: -w.height * this.accHeight,
+          lateral: -w.lateral * this.accLateral,
+          energy: -w.energy * this.accEnergy,
+          smooth: -w.smooth * this.accSmooth,
+          fall: fallen ? -w.fall : 0
+        };
+        tt.total = Object.values(tt).reduce((a, b) => a + b, 0);
+        return tt;
+      }
       const t2 = {
         // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
         //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-        distance: w.distance * this.accProgress,
+        distance: w.cycle * w.distance * this.accProgress,
         // ★★ 走路模式**不用** DCM 越界罚（见 accBalance 处的说明）：它和"保持分"用同一个
         //   判据（CoM/ξ 在支撑域内），一正一负双重惩罚同一个动作。实测：会走的种子
         //   换脚+迈步+重复步+前进一共 +2.7 分，却被 balance −50 埋掉，比"站着不动"还差。
         //   稳定性改由 W.hold（保持分）负责：域内站稳才给分 ⇒ 站不稳就没有保持分。
         balance: 0,
         // 仍继续累计 accBalance（供诊断 inDomainRatio 看）
-        velocity: w.velocity * this.accVel,
+        velocity: w.cycle * w.velocity * this.accVel,
         upright: w.upright * (this.accUpright - elapsed),
         height: -w.height * this.accHeight,
         lateral: -w.lateral * this.accLateral,
@@ -14495,24 +14801,24 @@ var Sim = class {
         //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。
         //   负号是这行唯一的要点，别改回去。
         smooth: -w.smooth * this.accSmooth,
-        survive: w.survive * elapsed,
+        survive: w.cycle * w.survive * elapsed,
         // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
-        switch: w.switch * this.switchCount,
+        switch: w.cycle * w.switch * this.switchCount,
         // ★★ 大位移奖金：按**打折后**的有效迈步距离计价（米 × stepDecay^已迈步数）
         //   "大位移才有奖励" + "在迈步后要高于迈下一步的收益，然后逐渐减弱"
-        step: w.step * this.accStepScore,
+        step: w.cycle * w.step * this.accStepScore,
         // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
         // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
-        step2: w.step2 * (this.stepCount * (this.stepCount - 1) / 2),
+        step2: w.cycle * w.step2 * (this.stepCount * (this.stepCount - 1) / 2),
         // ★★ 静止罚（"抢步罚后面会转为静止罚"）：不在迈步-站稳循环里就一直扣，见 W.still
-        still: -w.still * this.accStill,
+        still: -w.cycle * w.still * this.accStill,
         // ★★ 抢步罚（"迈一步立刻迈第二步应该是负分"）：见 W.rush
-        rush: -w.rush * this.accRush,
+        rush: -w.cycle * w.rush * this.accRush,
         // ★★ 同腿连迈罚（"一条腿连着迈两步更是负上加负"）：见 W.sameFoot
-        sameFoot: -w.sameFoot * this.accSameFoot,
+        sameFoot: -w.cycle * w.sameFoot * this.accSameFoot,
         // ★★★ 迈步后保持稳定的加分（循环的第二半）：站稳秒数 × 该步折扣，见 W.hold
-        hold: w.hold * this.accHold,
-        air: -w.air * this.accAir,
+        hold: w.cycle * w.hold * this.accHold,
+        air: -w.cycle * w.air * this.accAir,
         fall: fallen ? -w.fall : 0
       };
       t2.total = Object.values(t2).reduce((a, b) => a + b, 0);

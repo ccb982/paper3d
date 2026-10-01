@@ -130,6 +130,27 @@
       <label>静止罚（不迈步就扣）<b id="v-wstill">—</b></label>
       <input id="i-wstill" type="range" min="0" max="4" step="0.1" value="1" />
 
+      <h4>关节程序（逐关节精确控制）</h4>
+      <label>逐关节跟踪误差 <b id="v-wjoint">—</b></label>
+      <input id="i-wjoint" type="range" min="0" max="2" step="0.05" value="1" />
+      <label>腿部交替（角速度和≈0）<b id="v-walt">—</b></label>
+      <input id="i-walt" type="range" min="0" max="6" step="0.1" value="2" />
+      <label>抬腿互斥（一次抬一条）<b id="v-wexcl">—</b></label>
+      <input id="i-wexcl" type="range" min="0" max="6" step="0.1" value="2" />
+      <label>要动（骨盆/膝盖）<b id="v-wmove">—</b></label>
+      <input id="i-wmove" type="range" min="0" max="4" step="0.1" value="1" />
+      <label>前进（需交替推进）<b id="v-wtask">—</b></label>
+      <input id="i-wtask" type="range" min="0" max="4" step="0.1" value="1.5" />
+
+      <label>骨盆左·要动 <b id="v-mhip_l">—</b></label>
+      <input id="i-mhip_l" type="range" min="0" max="3" step="0.1" value="1" />
+      <label>骨盆右·要动 <b id="v-mhip_r">—</b></label>
+      <input id="i-mhip_r" type="range" min="0" max="3" step="0.1" value="1" />
+      <label>膝盖左·要动 <b id="v-mknee_l">—</b></label>
+      <input id="i-mknee_l" type="range" min="0" max="3" step="0.1" value="1" />
+      <label>膝盖右·要动 <b id="v-mknee_r">—</b></label>
+      <input id="i-mknee_r" type="range" min="0" max="3" step="0.1" value="1" />
+
       <div class="btns">
         <button id="b-pause">暂停</button>
         <button id="b-reset">重开种群</button>

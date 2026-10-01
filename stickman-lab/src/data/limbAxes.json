@@ -190,6 +190,14 @@
     "knee_r": [
       1037.5,
       2206.0
+    ],
+    "foot_l": [
+      454.5,
+      2792.0
+    ],
+    "foot_r": [
+      1110.5,
+      2792.0
     ]
   },
   "margin": {
@@ -224,5 +232,6 @@
       "pawHeightPx": 103.0,
       "slopeDeg": 0.82
     }
-  }
+  },
+  "anchorsNote": "foot_l/foot_r = 踝锚点：y 取 paw.yWide（靴子顶端，实测 2792），x 取 paw.centerX（实测靴心）。2026-10-01 加踝关节时加入。"
 }

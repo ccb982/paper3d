@@ -54,7 +54,22 @@ export interface PartsMeta {
   bytesTotal: number;
 }
 
-export const META = raw as unknown as PartsMeta;
+/**
+ * ★ 踝关节元数据（2026-10-01 新增）。
+ *   `parts.json` 是旧 `build-parts.py` 的产物，里面没有踝；新测量管线
+ *   （`limbAxes.json`）才量得出靴子顶端。这里在代码层补上，锚点由
+ *   `limbAxes.anchors.foot_*` 提供（skeleton 的 `anchorPx` 优先取实测值）。
+ *   `limitDeg` = [低头(plantarflex), 勾脚(dorsiflex)]，由 SkeletonConfig.anklePitchDeg 覆盖。
+ */
+const ANKLE_JOINTS: JointMeta[] = [
+  { name: 'foot_l', parent: 'shin_l', child: 'foot_l', x: 454.5, y: 2792, limitDeg: [-10, 18] },
+  { name: 'foot_r', parent: 'shin_r', child: 'foot_r', x: 1110.5, y: 2792, limitDeg: [-10, 18] },
+];
+
+const meta = raw as unknown as PartsMeta;
+if (!meta.joints.some((j) => j.name === 'foot_l')) meta.joints.push(...ANKLE_JOINTS);
+
+export const META: PartsMeta = meta;
 
 /** key → 组件元数据 */
 export const PART_BY_KEY: ReadonlyMap<string, PartMeta> = new Map(

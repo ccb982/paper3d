@@ -2,7 +2,7 @@
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { buildSkeleton, DEFAULT_CONFIG } from '../src/core/skeleton';
+import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
 import { BEST_PHASE, phaseGenomeFor } from '../src/core/phaseSeed';
@@ -30,16 +30,38 @@ const NAMES: Record<string, string> = {
   switch: '候选落地', noPrev: '无上一只脚', noAlt: '同腿/未换脚', slow: '速度不足',
   notStraight: '不直（侧偏过大）', tooSmall: '位移不够', notYet: '未过所需步长', ok: '★有效迈步',
 };
-for (const sc of [BEST_PHASE.scale, 0.5, 1.0]) {
+for (const [sc, lp] of [[0.15, 1], [0.15, -1], [0.3, 1], [0.3, -1], [0.5, 1], [0.5, -1]] as [number, number][]) {
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
-  sim.begin(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, scale: sc }));
+  sim.begin(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, scale: sc, legPhase: lp }));
+  // ★ 逐控制周期采样**实际**关节角 ⇒ 量出"这条腿到底能摆多大幅度"（程序的参考必须是可达的）
+  const NAMES2 = ['hip_l', 'hip_r', 'knee_l', 'knee_r'];
+  const mn: Record<string, number> = {}, mx: Record<string, number> = {}, sum: Record<string, number> = {}, cnt: Record<string, number> = {};
+  for (const n of NAMES2) { mn[n] = 1e9; mx[n] = -1e9; sum[n] = 0; cnt[n] = 0; }
   let g = 0;
-  while (g < 8 * DEFAULT_SIM.physicsHz && !sim.finished) g += sim.advance(400);
+  while (g < 8 * DEFAULT_SIM.physicsHz && !sim.finished) {
+    g += sim.advance(2);
+    for (const n of NAMES2) {
+      const i = JOINT_ORDER.indexOf(n);
+      const a = (sim as unknown as { x: Float32Array }).x[20 + 3 * i + 2];
+      if (a < mn[n]) mn[n] = a; if (a > mx[n]) mx[n] = a;
+      sum[n] += a; cnt[n]++;
+    }
+  }
+  const ampOf = (n: string) => ((mx[n] - mn[n]) / 2).toFixed(3);
+  const midOf = (n: string) => (sum[n] / Math.max(1, cnt[n])).toFixed(3);
   const d = sim.stepDiag;
   const s = sim.stepStat;
-  console.log(`\n  scale=${sc}  位移=${sim.distance.toFixed(2)}m  倒地=${sim.fallen}  有效迈步=${s.count}`);
-  console.log('  门槛拦截: ' + Object.entries(NAMES).map(([k, n]) => `${n}=${d[k as keyof typeof d]}`).join('  '));
-  console.log(`  分项: ${JSON.stringify(sim.terms)}`);
+  const T = sim.terms;
+  console.log(`\n  scale=${sc} legPhase=${lp}  位移=${sim.distance.toFixed(2)}m 倒地=${sim.fallen} 步=${s.count}`
+    + `\n     altQ=${(T.altQ ?? 0).toFixed(2)} move=${(T.moveFrac ?? 0).toFixed(2)} task=${(T.task ?? 0).toFixed(2)}`
+    + ` jt.hip=${(T['jt.hip_l'] ?? 0).toFixed(2)}/${(T['jt.hip_r'] ?? 0).toFixed(2)}`
+    + ` jt.knee=${(T['jt.knee_l'] ?? 0).toFixed(2)}/${(T['jt.knee_r'] ?? 0).toFixed(2)}`
+    + ` program=${(T.program ?? 0).toFixed(2)} total=${(T.total ?? 0).toFixed(2)}`
+    + `
+     抬腿: 同时抬占比=${(T.overlap ?? 0).toFixed(2)} 互斥分=${(T.excl ?? 0).toFixed(2)}`
+    + ` 左膝高度=${(T['lift.knee_l'] ?? 0).toFixed(2)} 右膝高度=${(T['lift.knee_r'] ?? 0).toFixed(2)}`
+    + `
+     实际可达幅度/中值: ` + NAMES2.map((n) => `${n}±${ampOf(n)}@${midOf(n)}`).join('  '));
 }
 console.log(`\n  当前门槛: stepMinDx=${DEFAULT_SIM.stepMinDx} stepMinTotal=${DEFAULT_SIM.stepMinTotal}`
   + ` stepMaxDz=${DEFAULT_SIM.stepMaxDz} stepVMin=${DEFAULT_SIM.stepVMin} stepMinGap=${DEFAULT_SIM.stepMinGap}`);

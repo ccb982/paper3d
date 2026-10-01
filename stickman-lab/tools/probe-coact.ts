@@ -135,7 +135,8 @@ const CHANNELS: Ch[] = [
  */
 function footContact(world: RAPIER.World, doll: InstanceType<typeof Ragdoll>, side: 'l' | 'r'): { fy: number; cx: number; cz: number } {
   // ★ `contactImpulse` 是**冲量**（N·s），力 = 冲量 / dt。忘了除会把 687 N 读成 6 N。
-  const idx = idxOf(side === 'l' ? 'shin_l' : 'shin_r');
+  // ★ 2026-10-01 加踝关节后，接触发生在**脚掌刚体**（foot_l/foot_r）上，不再是小腿。
+  const idx = idxOf(`foot_${side}`);
   const b = doll.bodies[idx];
   let fy = 0, sx = 0, sz = 0;
   for (let ci = 0; ci < b.numColliders(); ci++) {

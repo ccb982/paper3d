@@ -21,11 +21,16 @@ import { BRAIN_SHAPE, brainParamCount, brainForward, type BrainShape } from './b
 import {
   dcm, dcmExcess, newCom, newSupport, omegaAt, readCom, readSupport,
 } from './posture';
-import type { Skeleton } from './skeleton';
+import { phaseProgram, targetAngle, TAU, type GaitProgram } from './jointProgram';
+import { JOINT_ORDER, type Skeleton } from './skeleton';
 
 export type SimMode = 'walk' | 'fight';
 
 export interface SimConfig {
+  /** ★ 走"关节程序"奖励（逐关节跟踪 + 腿部交替 + 移动鼓励），而不是笼统分数 */
+  programMode: boolean;
+  /** 关节程序（null = 用默认的相位步态程序 phaseProgram()） */
+  program: GaitProgram | null;
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
   physicsHz: number;
   /** 控制（决策）频率；网络只在控制周期被调用 */
@@ -109,6 +114,8 @@ export interface SimConfig {
 }
 
 export const DEFAULT_SIM: SimConfig = {
+  programMode: true,
+  program: null,
   physicsHz: 120,
   controlHz: 60,
   duration: 6,
@@ -153,6 +160,19 @@ export const W = {
    *   仍显著低于 3.0，但足以提供"往 +X 走"的方向梯度。
    */
   distance: 1.5,
+  // ══ 关节程序模式（用户 2026-10-01："不写笼统的奖励分数了，精确控制各个关节"）══
+  /** 逐关节跟踪误差系数：−w.joint · ∫(实际角−程序目标角)²dt（每关节还有自己的 w） */
+  joint: 1.0,
+  /** 腿部交替：w.alt · (交替质量 − 1)，≤0。两腿角速度和≈0（完全反相）时为 0 */
+  alt: 2.0,
+  /** 移动鼓励：w.move · min(1, 髋/膝平均角速度 / moveTarget) —— "骨盆和膝盖要动" */
+  move: 1.0,
+  /** 前进任务分：w.task · 迈出来的位移 · 时间平均交替质量 */
+  task: 1.5,
+  /** 旧的"迈步-站稳"循环项总开关（0 = 关掉，只用程序奖励；UI 可调回 1） */
+  excl: 2.0,
+  cycle: 0.0,
+  moveScale: {} as Record<string, number>,   // 逐关节移动倍率（UI 实时改；默认权重在 jointProgram.ts）
   /**
    * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
    * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
@@ -364,6 +384,22 @@ export class Sim {
   private accClose = 0;
   /** ★ DCM 越界积分（无量纲，见 W.balance） */
   private accBalance = 0;
+  /** ★ 关节程序（相位 → 每个关节的目标角）。null = 不用程序模式 */
+  readonly prog: GaitProgram | null;
+  /** 逐关节跟踪误差积分（键 = 关节名） */
+  private accJt: Record<string, number> = {};
+  /** 逐关节角速度积分（rad，键 = 关节名） */
+  private accMove: Record<string, number> = {};
+  /** 腿部"同相"程度积分：∫((qdot_l+qdot_r)/moveTarget)² dt */
+  private accAlt = 0;
+  /** ★ 抬腿互斥：两条腿"同时在抬"的时间占比（0 = 一次抬一条，1 = 一直一起抬） */
+  private accOverlap = 0;
+  /** 每条腿实际"抬起来"的平均高度（0~1，诊断用） */
+  private accLift: Record<string, number> = {};
+  /** 交替质量的时间积分（0=完全同相，1=完全反相），用来给前进分打折 */
+  private accAltQ = 0;
+  /** 上一个控制周期的关节角（算角速度用，避免跨 wasm 边界） */
+  private prevAng: Record<string, number> = {};
   /** ★ 有效迈步时记下的 x：前进奖励只对"上一次有效迈步之后推进的位移"付费 */
   private stepRefX = 0;
   /** 已付费的前进距离（见 W.distance） */
@@ -463,6 +499,12 @@ export class Sim {
     this.cfg = cfg;
     this.shape = shape;
     this.w = { ...W, ...cfg.weights };
+    // ★ 关节程序：默认用探针实测最好的那组相位步态（×0.15，1.25 m / 2 次有效迈步）
+    this.prog = cfg.program ?? (cfg.mode === 'walk' && cfg.programMode ? phaseProgram() : null);
+    if (this.prog) {
+      for (const j of this.prog.joints) { this.accJt[j.joint] = 0; this.accMove[j.joint] = 0; this.prevAng[j.joint] = 0; }
+      for (const L of this.prog.lifts) this.accLift[L.joint] = 0;   // 不初始化就是 undefined ⇒ += 变 NaN
+    }
 
     this.dt = 1 / cfg.physicsHz;
     this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
@@ -568,6 +610,9 @@ export class Sim {
     this.phase = 0;
     this.accUpright = 0; this.accHeight = 0; this.accLateral = 0;
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
+    this.accAlt = 0; this.accAltQ = 0; this.accOverlap = 0;
+    for (const k of Object.keys(this.accLift)) this.accLift[k] = 0;
+    for (const k of Object.keys(this.accJt)) { this.accJt[k] = 0; this.accMove[k] = 0; this.prevAng[k] = 0; }
     this.accProgress = 0;
     this.accSmooth = 0;
     // ★ 抖动需要一个"前一帧力矩"；第一步没有前值，置 0 并打标记，
@@ -809,6 +854,53 @@ export class Sim {
     if (this.holdWindow > 0) this.accBalance += (eX * eX + eZ * eZ) * dt;
     if (eX === 0 && eZ === 0) this.inDomainTicks++;
     this.balanceTicks++;
+    // ★★★★★ 关节程序积分（用户 2026-10-01："精确控制各个关节"）。
+    //   读的是观测里已经算好的关节角（x[20+3i+k]），不额外跨 wasm 边界；
+    //   角速度用相邻控制周期的差分（rad/s），同样不跨界。
+    if (this.prog) {
+      const P = this.prog;
+      const inv = 1 / Math.max(0.2, P.moveTarget);
+      const qd: Record<string, number> = {};
+      for (const j of P.joints) {
+        const idx = JOINT_ORDER.indexOf(j.joint);
+        const a = idx < 0 ? 0 : this.x[20 + 3 * idx + j.axis];
+        const rate = (a - this.prevAng[j.joint]) * (1 / dt);
+        this.prevAng[j.joint] = a;
+        qd[j.joint] = rate;
+        // ★ 误差按"该关节本来要摆多大"归一化 ⇒ 每个 jt 项的量纲都是"相对于自己幅度的偏差²"，
+        //   不同关节之间才可比，w 才有意义。
+        const e = (a - targetAngle(j, this.phase)) / 0.2;   // 0.2 rad ≈ 实测可达摆幅（probe-fit）
+        this.accJt[j.joint] += j.w * e * e * dt;
+        if (j.move) this.accMove[j.joint] += Math.abs(rate) * dt;
+      }
+      // ★★ 抬腿互斥（用户："交替抬腿，一次抬一条"）：
+      //   lift = clamp((sign·(角度−base))/ref, 0, 1)。同时在抬 ⇒ overlap 上升。
+      //   刻意**不锁相位**：实测两膝在角度上并不同相，硬锁相位会因猜错而全盘皆错；
+      //   "不能同时抬"才是这条要求的本质。
+      for (const L of P.lifts) {
+        const idx = JOINT_ORDER.indexOf(L.joint);
+        const a = idx < 0 ? 0 : this.x[20 + 3 * idx + 2];
+        this.accLift[L.joint] += Math.max(0, Math.min(1, (L.sign * a - L.base) / L.ref)) * dt;
+      }
+      let mx = 0;
+      for (const [l, r] of P.liftPairs) {
+        const iL = JOINT_ORDER.indexOf(l), iR = JOINT_ORDER.indexOf(r);
+        const sL = P.lifts.find((x) => x.joint === l), sR = P.lifts.find((x) => x.joint === r);
+        if (!sL || !sR || iL < 0 || iR < 0) continue;
+        const gL = Math.max(0, Math.min(1, (sL.sign * this.x[20 + 3 * iL + 2] - sL.base) / sL.ref));
+        const gR = Math.max(0, Math.min(1, (sR.sign * this.x[20 + 3 * iR + 2] - sR.base) / sR.ref));
+        mx = Math.max(mx, Math.min(gL, gR));
+      }
+      this.accOverlap += mx * dt;
+
+      // ★ 腿部交替：两条腿**角速度的和**应该 ≈ 0（同相摆动时和变大）。
+      //   归一化到 moveTarget，所以 w.alt 的量纲是"相对目标速度的平方秒"。
+      let s2 = 0;
+      for (const [l, r] of P.pairs) s2 += (qd[l] + qd[r]) * inv;
+      this.accAlt += s2 * s2 * dt;
+      this.accAltQ += Math.max(0, Math.min(1, 1 - (s2 * s2) / 4)) * dt;
+    }
+
     // ★★ 前进奖励积分（见 W.distance）：**只对"上一次有效迈步之后推进的位移"付费**。
     //   为什么要：现在位移是最容易拿的大分项，一个"两脚蹭地往前挪、从不迈步"的策略
     //   拿到 1.17 m 却没有一次有效迈步，适应度反而最高（实测第 3 代最优个体就是这样）。
@@ -1024,16 +1116,79 @@ export class Sim {
   private fitnessTerms(fallen: boolean, elapsed: number): Record<string, number> {
     const w = this.w;
     if (this.cfg.mode === 'walk') {
+      if (this.prog) {
+        // ★★★ 关节程序模式（用户 2026-10-01）：奖励 = 逐关节"要动" + 逐对"要交替" + 前进。
+        //   刻意**不用**不可达的目标角作主项（理由见 jointProgram.GaitProgram 的注释）。
+        // ★ 程序模式：逐关节跟踪 + 腿部交替 + 移动鼓励 + 前进（都乘交替质量）
+        const P = this.prog;
+        const E = Math.max(0.2, elapsed);
+        const pt: Record<string, number> = {};
+        let jt = 0;
+        for (const j of P.joints) {
+          pt[`jt.${j.joint}`] = -w.joint * this.accJt[j.joint] / E;
+          jt += pt[`jt.${j.joint}`];
+        }
+        pt.jt = jt;
+        // ★ 逐关节"要动"：每个 move 关节单独一项，饱和到 1（w.move/关节数 分摊）
+        let mvSum = 0, nMv = 0;
+        for (const j of P.joints) {
+          if (!j.move) continue;
+          const f = Math.min(1, (this.accMove[j.joint] / E) / P.moveTarget);
+          pt[`mv.${j.joint}`] = w.move * j.w * (w.moveScale[j.joint] ?? 1) * f;
+          mvSum += f; nMv++;
+        }
+        const moveFrac = nMv > 0 ? mvSum / nMv : 0;
+        // ★ 逐对"交替"：两条腿角速度和 ≈ 0 ⇒ 完全反相（正分，0~w.alt）
+        const altQ = this.accAltQ / E;
+        pt.altQ = altQ;
+        // ★★ 交替分**必须乘"在动"**：站着不动时两条腿角速度都是 0，"和≈0"会被判成满分交替
+        //   （实测零基因组白拿 alt=1.82 / altQ=0.91）。乘上 moveFrac 之后，
+        //   "不动"就既没有移动分、也没有交替分。
+        pt.alt = w.alt * altQ * moveFrac;
+        // ★ 抬腿互斥分：0 = 一次抬一条，1 = 一直同时抬。
+        //   ⚠ 两个必须同时乘的因子（都是被实测坑出来的）：
+        //   · moveFrac —— 站着不动时两条腿都在地面，"没有冲突"是假的；
+        //   · 抬腿高度 —— 方向选错（把"伸腿"当抬腿）时高度≈0、同时抬占比≈0 ⇒
+        //     "从来不抬"反而拿满分（实测 excl=2.00 / 高度 0.00）。
+        //     所以要求两条腿的平均抬腿高度达到 liftTarget。
+        const ovl = this.accOverlap / E;
+        pt.overlap = ovl;
+        let hL = 0, hR = 0, np = 0;
+        for (const L of P.lifts) { pt[`lift.${L.joint}`] = this.accLift[L.joint] / E; }
+        for (const [l, r] of P.liftPairs) {
+          hL += pt[`lift.${l}`] ?? 0; hR += pt[`lift.${r}`] ?? 0; np++;
+        }
+        const hAvg = np > 0 ? (hL + hR) / (2 * np) : 0;
+        pt.liftH = hAvg;
+        pt.liftGate = Math.min(1, hAvg / P.liftTarget);
+        pt.excl = w.excl * (1 - ovl) * moveFrac * pt.liftGate;
+        pt.move = w.move * moveFrac;
+        pt.task = w.task * this.accProgress * altQ;   // 只有"交替推进"的位移才给分
+        pt.program = jt + pt.alt + pt.excl + pt.move + pt.task;
+        pt.moveFrac = moveFrac;
+        const tt: Record<string, number> = {
+          ...pt,
+          // ---- 物理基本盘（不是"奖励"，是别摔倒/别歪/别抖）----
+          upright: w.upright * (this.accUpright - elapsed),
+          height: -w.height * this.accHeight,
+          lateral: -w.lateral * this.accLateral,
+          energy: -w.energy * this.accEnergy,
+          smooth: -w.smooth * this.accSmooth,
+          fall: fallen ? -w.fall : 0,
+        };
+        tt.total = Object.values(tt).reduce((a, b) => a + b, 0);
+        return tt;
+      }
       const t: Record<string, number> = {
         // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
         //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-        distance: w.distance * this.accProgress,
+        distance: w.cycle * w.distance * this.accProgress,
         // ★★ 走路模式**不用** DCM 越界罚（见 accBalance 处的说明）：它和"保持分"用同一个
         //   判据（CoM/ξ 在支撑域内），一正一负双重惩罚同一个动作。实测：会走的种子
         //   换脚+迈步+重复步+前进一共 +2.7 分，却被 balance −50 埋掉，比"站着不动"还差。
         //   稳定性改由 W.hold（保持分）负责：域内站稳才给分 ⇒ 站不稳就没有保持分。
         balance: 0,   // 仍继续累计 accBalance（供诊断 inDomainRatio 看）
-        velocity: w.velocity * this.accVel,
+        velocity: w.cycle * w.velocity * this.accVel,
         upright: w.upright * (this.accUpright - elapsed),
         height: -w.height * this.accHeight,
         lateral: -w.lateral * this.accLateral,
@@ -1044,24 +1199,24 @@ export class Sim {
         //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。
         //   负号是这行唯一的要点，别改回去。
         smooth: -w.smooth * this.accSmooth,
-        survive: w.survive * elapsed,
+        survive: w.cycle * w.survive * elapsed,
         // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
-        switch: w.switch * this.switchCount,
+        switch: w.cycle * w.switch * this.switchCount,
         // ★★ 大位移奖金：按**打折后**的有效迈步距离计价（米 × stepDecay^已迈步数）
         //   "大位移才有奖励" + "在迈步后要高于迈下一步的收益，然后逐渐减弱"
-        step: w.step * this.accStepScore,
+        step: w.cycle * w.step * this.accStepScore,
         // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
         // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
-        step2: w.step2 * ((this.stepCount * (this.stepCount - 1)) / 2),
+        step2: w.cycle * w.step2 * ((this.stepCount * (this.stepCount - 1)) / 2),
         // ★★ 静止罚（"抢步罚后面会转为静止罚"）：不在迈步-站稳循环里就一直扣，见 W.still
-        still: -w.still * this.accStill,
+        still: -w.cycle * w.still * this.accStill,
         // ★★ 抢步罚（"迈一步立刻迈第二步应该是负分"）：见 W.rush
-        rush: -w.rush * this.accRush,
+        rush: -w.cycle * w.rush * this.accRush,
         // ★★ 同腿连迈罚（"一条腿连着迈两步更是负上加负"）：见 W.sameFoot
-        sameFoot: -w.sameFoot * this.accSameFoot,
+        sameFoot: -w.cycle * w.sameFoot * this.accSameFoot,
         // ★★★ 迈步后保持稳定的加分（循环的第二半）：站稳秒数 × 该步折扣，见 W.hold
-        hold: w.hold * this.accHold,
-        air: -w.air * this.accAir,
+        hold: w.cycle * w.hold * this.accHold,
+        air: -w.cycle * w.air * this.accAir,
         fall: fallen ? -w.fall : 0,
       };
       t.total = Object.values(t).reduce((a, b) => a + b, 0);

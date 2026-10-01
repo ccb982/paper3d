@@ -20,7 +20,8 @@ export interface HudHooks {
   onSpeed: (v: number) => void;
   onPhase: (mode: 'walk' | 'fight') => void;
   /** ★ 步态奖励可调（用户 2026-10-01） */
-  onGaitTune: (o: { straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wHold?: number; wStill?: number }) => void;
+  onGaitTune: (o: { straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wHold?: number; wStill?: number; wJoint?: number; wAlt?: number; wExcl?: number; wMove?: number; wTask?: number;
+    moveScale?: Record<string, number> }) => void;
 }
 
 export interface HudState {
@@ -64,7 +65,8 @@ export class Hud {
       best: $('s-best'), top: $('s-top'), show: $('s-show'),
       tps: $('s-tps'), budget: $('s-budget'),
       vSigma: $('v-sigma'), vBudget: $('v-budget'), vSpeed: $('v-speed'), vPhase: $('v-speedgoal'),
-      vMinDx: $('v-mindx'), vWSwitch: $('v-wswitch'), vWDist: $('v-wdist'), vWHold: $('v-whold'), vWStill: $('v-wstill'),
+      vMinDx: $('v-mindx'), vWSwitch: $('v-wswitch'), vWDist: $('v-wdist'), vWHold: $('v-whold'), vWStill: $('v-wstill'), vWJoint: $('v-wjoint'), vWAlt: $('v-walt'), vWExcl: $('v-wexcl'), vWMove: $('v-wmove'), vWTask: $('v-wtask'),
+    vMHipL: $('v-mhip_l'), vMHipR: $('v-mhip_r'), vMKneeL: $('v-mknee_l'), vMKneeR: $('v-mknee_r'),
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
     };
@@ -106,6 +108,16 @@ export class Hud {
     bindRange('i-wdist', 'vWDist', (v) => hooks.onGaitTune({ wDistance: v }), (v) => v.toFixed(2));
     bindRange('i-whold', 'vWHold', (v) => hooks.onGaitTune({ wHold: v }), (v) => v.toFixed(2));
     bindRange('i-wstill', 'vWStill', (v) => hooks.onGaitTune({ wStill: v }), (v) => v.toFixed(2));
+    // ---- 关节程序 ----
+    bindRange('i-wjoint', 'vWJoint', (v) => hooks.onGaitTune({ wJoint: v }), (v) => v.toFixed(2));
+    bindRange('i-walt', 'vWAlt', (v) => hooks.onGaitTune({ wAlt: v }), (v) => v.toFixed(2));
+    bindRange('i-wexcl', 'vWExcl', (v) => hooks.onGaitTune({ wExcl: v }), (v) => v.toFixed(2));
+    bindRange('i-wmove', 'vWMove', (v) => hooks.onGaitTune({ wMove: v }), (v) => v.toFixed(2));
+    bindRange('i-wtask', 'vWTask', (v) => hooks.onGaitTune({ wTask: v }), (v) => v.toFixed(2));
+    for (const [id, key] of [['i-mhip_l', 'hip_l'], ['i-mhip_r', 'hip_r'], ['i-mknee_l', 'knee_l'], ['i-mknee_r', 'knee_r']] as [string, string][]) {
+      bindRange(id, `vM${key.slice(0, 1).toUpperCase()}${key.slice(1)}` as never,
+        (v) => hooks.onGaitTune({ moveScale: { [key]: v } }), (v) => v.toFixed(2));
+    }
     {
       const cb = document.getElementById('i-straight') as HTMLInputElement | null;
       if (cb) {

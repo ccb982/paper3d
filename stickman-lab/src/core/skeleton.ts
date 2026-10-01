@@ -195,6 +195,30 @@ export interface SkeletonConfig {
    *   被"补偿回素材原位"的只有实测中轴倾角（`restVisualQuatOf`）。
    */
   footSplayDeg: number;
+  /**
+   * ★★ 踝关节（用户 2026-10-01："脚做踝关节，纹理上用脚部位的uv扭曲"）。
+   *   之前脚掌只是**小腿刚体上的第二个 collider**（同一个刚体 ⇒ 脚不能主动转），
+   *   "落脚/蹬地/勾脚"全都做不到 —— 这是 6 s 必倒的结构性原因。
+   *   现在把脚掌拆成**独立刚体 + 踝 revolute**；视觉上脚部仍在小腿贴图里，
+   *   靠 `footUvWarpDeg` 的 UV 扭曲跟着踝角走（渲染层做，物理不参与）。
+   */
+  /** [低头(plantarflex, 蹬地/尖脚), 勾脚(dorsiflex, 脚跟先着地)]，单位度 */
+  anklePitchDeg: readonly [number, number];
+  /** 内外翻余量（外八已经在静姿态偏航里） */
+  ankleRollDeg: number;
+  ankleTorque: number;
+  /** 脚部 UV 扭曲的最大额外角度（度）：0 = 只跟物理踝角，>0 = 视觉夸张 */
+  footUvWarpDeg: number;
+  /**
+   * ★★ 踝关节总开关，**默认 false**。
+   *   代码路径已全部就绪（独立脚掌刚体 + 踝 revolute + 门禁都按 10 关节更新，verify 全绿），
+   *   但**打开后走不了**：脚一旦变成独立刚体，腿部动力学就变了
+   *   （实测 0.5 s 内骨架塌 41 cm、实际关节运动幅度涨 1.5 倍、位移 1.25 m → 0.08 m，
+   *   把踝**锁死**也一样坏 ⇒ 不是自由度的问题，是刚体拆分后 PD 增益/惯量分布要重调）。
+   *   所以先默认关着（= 脚掌回到"小腿上的第二个 collider"，即加踝前的物理），
+   *   等重调 kP/kD 或把踝做成刚性锁，再打开。
+   */
+  ankleEnabled: boolean;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -213,6 +237,12 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
   footSplayDeg: 25,
+  // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
+  anklePitchDeg: [0, 0],
+  ankleRollDeg: 0,
+  ankleTorque: 45,
+  footUvWarpDeg: 0,
+  ankleEnabled: false,
 };
 
 // ---------------------------------------------------------------- 环节规格
@@ -260,6 +290,9 @@ export const JOINT_ORDER: readonly string[] = [
   'elbow_l', 'elbow_r',
   'hip_l', 'hip_r',
   'knee_l', 'knee_r',
+  // ★ 踝（2026-10-01 新增）：脚掌是独立刚体，这两项是它的俯仰/内外翻。
+  //   放在最后 ⇒ 已有的 0~7 号马达索引不变（旧基因组的权重仍对得上前 8 个关节）。
+  'foot_l', 'foot_r',
 ];
 
 /**
@@ -322,6 +355,10 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   hip_r: 200,
   knee_l: 150,
   knee_r: 150,
+  // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
+  //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+  foot_l: 45,
+  foot_r: 45,
 };
 
 /**
@@ -354,6 +391,10 @@ export const JOINT_LIMITS_XY_DEG: Readonly<Record<string, readonly [number, numb
   hip_r:      [45, 40],
   knee_l:     [ 6,  8],
   knee_r:     [ 6,  8],
+  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
+  //   放开会让脚掌乱翻、把支撑面搞丢。
+  foot_l:     [ 8,  6],
+  foot_r:     [ 8,  6],
 };
 
 // ---------------------------------------------------------------- 计算后的骨架
@@ -424,6 +465,12 @@ export interface BodyDef {
    * 所以要把这段偏移存下来，渲染时 `mesh.position = bodyPos + q·plateOffset`。
    */
   plateOffset: Vec3;
+  /**
+   * ★ 渲染层跳过这块贴图板（2026-10-01 踝关节）。
+   *   脚掌是独立刚体，但它**没有自己的贴图** —— 脚还在小腿那张 PNG 里，
+   *   靠渲染层对脚部区域做 UV 扭曲来表现踝的转动。
+   */
+  plateHidden?: boolean;
   /** 长轴长度（米） */
   length: number;
   /** 主胶囊半径（米） */
@@ -588,9 +635,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
    *   左脚必须取 **−ψ**、右脚取 **+ψ**（取反就是内八 —— 这个符号错过一次）。
    */
   const restYawOf = (key: string): number => {
-    if (key !== 'shin_l' && key !== 'shin_r') return 0;
+    if (key !== 'shin_l' && key !== 'shin_r' && key !== 'foot_l' && key !== 'foot_r') return 0;
     const s = cfg.footSplayDeg * DEG;
-    return key === 'shin_l' ? -s : s;
+    // ★ 脚掌刚体沿用同一套外八偏航（否则踝的静姿态零位会把脚拧回正前方 25°）。
+    return key === 'shin_l' || key === 'foot_l' ? -s : s;
   };
 
   const bodies: BodyDef[] = [];
@@ -631,6 +679,30 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       centerY = mapY(midY);
       centerZ = mapZ(midX, !!spec.leg);
     }
+    // ★★ 有踝锚点时，小腿刚体只代表"膝→踝"这一段：
+    //   原来它居中在**整条小腿（含靴子）**的中点上，加了踝之后必须重新居中，
+    //   否则膝锚点会落到胶囊外面 66~70mm（门禁"锚点不越出胶囊"会失败），
+    //   物理上也会让膝铰链挂在骨外。
+    let footAnkle: [number, number] | null = null;
+    if (cfg.ankleEnabled && spec.leg && (spec.soleMassPct ?? 0) > 0) {
+      const side2 = spec.key === 'shin_l' ? 'l' : 'r';
+      const ak = LIMB_AXES.anchors?.[`foot_${side2}`];
+      const kn = LIMB_AXES.anchors?.[`knee_${side2}`];
+      if (ak && kn) {
+        footAnkle = [kn[0], ak[1]];
+        const shankLen = Math.abs(mapY(ak[1]) - mapY(kn[1]));
+        const newLen = shankLen + 2 * PIVOT_PAD;
+        const newHalfH = Math.max(1e-3, newLen / 2 - radius);
+        length = newLen;
+        halfHeight = newHalfH;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        // ★ 横向对准**膝锚点**（不是膝踝中点）：小腿骨按用户定调是**铅垂**的
+        //   （restTiltOf 对 shin 强制 0），而素材里膝→踝是外撇 7.1°（x 527.5→454.5）。
+        //   对准膝 ⇒ 膝铰链正好在骨轴上（门禁要求），踝锚点因此横向偏 24mm
+        //   —— 父骨侧的弯折偏置，门禁本来就允许（膝对大腿也有 16mm）。
+        centerZ = mapZ(kn[0], true);
+      }
+    }
     // 贴图板中心（bbox 中心）在"视觉静姿态"局部系里的偏移
     const plateOffset = rotVecByQuat(
       qVisInv,
@@ -644,7 +716,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
 
     const colliders: ColliderDef[] = [];
 
-    // 主胶囊
+    // 主胶囊（★ 长度/中心已按"膝→踝"重算过）
     const mainCom = comOffset(length, spec.comRatio, spec.proximal);
     const mainIz = mainMass * Math.pow(spec.gyrationRatio * length, 2);
     colliders.push({
@@ -674,6 +746,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       const side = spec.key === 'shin_l' ? 'l' : 'r';
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === 'shin_l' ? 'knee_l' : 'knee_r'];
+      const anklePx = LIMB_AXES.anchors?.[spec.key === 'shin_l' ? 'foot_l' : 'foot_r'];
       const hx = soleHalfLen * sfx;
       // 侧向半宽用**实测靴宽**（前后长度 hx 仍是手填设计参数：正面视图测不出脚长）
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
@@ -684,14 +757,93 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //   的必然代价（线框视图可见），已在文档里记明。
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
-      const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);  // collider 用物理静姿态
+      const soleMassTotal = mainMass + soleMass;
+      void soleMassTotal;
+
+      // ═══ ★★ 2026-10-01：脚掌拆成**独立刚体**，用踝 revolute 接在小腿上 ═══
+      //   之前这里是"小腿刚体上的第二个 collider"：脚和腿同一个刚体 ⇒ 脚**不能主动转**，
+      //   于是勾脚/尖脚/落脚全做不到（这是 6 s 必倒的结构性原因，见架构设计 §12.5）。
+      //   视觉上脚仍在小腿贴图里，由渲染层的**脚部 UV 扭曲**跟着踝角走。
+      if (anklePx && cfg.ankleEnabled) {
+        const ankleY = mapY(anklePx[1]);
+        const ankleZ = mapZ(anklePx[0], true);
+        // 脚掌刚体中心 = 踝锚点（局部原点在锚点上，盒体用 offsetY 往下偏）
+        const fTilt = 0;                       // 脚掌在物理里保持水平（盒底贴地）
+        const fYaw = restYawOf(spec.key === 'shin_l' ? 'foot_l' : 'foot_r');
+        const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        // ★ 脚掌盒从**踝一直罩到鞋底**（不是只盖鞋底那一片）：
+        //   ① 踝锚点必须落在自己刚体的碰撞体内，否则门禁"锚点不越出胶囊"必失败，
+        //      物理上踝也确实在脚掌实体的上端；
+        //   ② 只留鞋底一片的话，脚掌和地面之间会有一条"薄片"，蹬地时几乎没有支撑面。
+        // ★★ 碰撞体是**薄鞋底板**，不是"从踝罩到鞋底的高盒"。
+        //  踩过的坑：高盒绕**盒子顶部**的踝旋转时，底角会扎进地面
+        //   （25° ⇒ 21mm），踝被地面反力锁死、腿一推就倒（实测位移 1.25 m → 0.08 m、
+        //   ES 完全学不动，膝跟踪误差 −13）。真实机器人也是这么建的：
+        //   脚掌 = 一块平底板，踝关节在它**上方**约 6cm（MuJoCo/MIT Cheetah 同款做法）。
+        const soleDrop = ankleY;                              // 踝离地高度（米）
+        const fMidY = soleWorldY;                             // 盒心高度 ⇒ 盒底正好落地
+        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        bodies.push({
+          key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
+          bone: spec.bone,
+          label: spec.key === 'shin_l' ? '左脚掌' : '右脚掌',
+          part,                       // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          cx: 0,
+          cy: ankleY,
+          cz: ankleZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
+          plateOffset: [0, 0, 0],
+          plateHidden: true,          // ★ 渲染层据此跳过这块板
+          length: soleDrop,
+          radius: 0,
+          halfHeight: soleDrop / 2,
+          mass: soleMass,
+          colliders: [{
+            shape: 'cuboid',
+            halfHeight: 0, radius: 0,
+            hx, hy: soleHalfThick, hz,
+            offsetY: local[1], offsetZ: local[2],
+            mass: soleMass,
+            comY: 0,
+            inertiaZ: (soleMass * (hx * hx + soleHalfThick * soleHalfThick)) / 3,
+            inertiaXY: (soleMass * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
+          }],
+          leg: true,
+        });
+        // ★ 小腿胶囊**只到踝**（上面已把刚体中心/长度重算到"膝→踝"这一段），
+        //   靴子那段归脚掌刚体 ⇒ 小腿胶囊不会戳到地面、也不与脚掌盒互穿。
+        bodies.push({
+          key: spec.key,
+          bone: spec.bone,
+          label: spec.label,
+          part,
+          cx: 0,
+          cy,
+          cz: centerZ,
+          restTiltRad: tilt,
+          restYawRad: yaw,
+          plateOffset,
+          length,
+          radius,
+          halfHeight,
+          mass: mainMass,
+          colliders: [colliders[0]],
+          leg: true,
+        });
+        continue;
+      }
+
+      // ---- 兜底：没有踝锚点数据时维持旧行为（脚掌作为第二 collider 挂在小腿上）----
+      const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: 'cuboid',
         halfHeight: 0, radius: 0,
         hx, hy: soleHalfThick, hz,
         offsetY: local[1], offsetZ: local[2],
         mass: soleMass,
-        comY: 0, // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
+        comY: 0,
         inertiaZ: (soleMass * (hx * hx + soleHalfThick * soleHalfThick)) / 3,
         inertiaXY: (soleMass * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
       });
@@ -765,10 +917,16 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   // ---- 关节 ----
   const jointMetaByName = new Map<string, JointMeta>(META.joints.map((j) => [j.name, j]));
   const joints: JointDef[] = [];
-  JOINT_ORDER.forEach((name, index) => {
+  // ★ 踝关节受 `ankleEnabled` 控制（默认关）。JOINT_ORDER 里始终有 foot_l/foot_r
+  //   （网络维度按它算，保持稳定），关掉时**不建这两个关节**、脚掌也不拆成独立刚体。
+  const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith('foot_'));
+  JOINT_ORDER_ACTIVE.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json 缺少关节 ${name}`);
-    const childPart = PART_BY_KEY.get(jm.child);
+    // ★ 踝关节的子刚体是"脚掌"：它**没有自己的贴图**（脚还在小腿那张 PNG 里），
+    //   所以 PART_BY_KEY 里查不到 —— 借用小腿的部件元数据即可（渲染层会跳过它的板）。
+    const isAnkle = jm.child === 'foot_l' || jm.child === 'foot_r';
+    const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : '');
     if (!childPart) throw new Error(`[skeleton] 关节 ${name} 的子部件元数据不存在`);
 
     // ★★ 锚点 = limbAxes.json 的实测值（见 ANCHOR_MARGIN 上方的说明）：

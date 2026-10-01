@@ -459,6 +459,14 @@ var limbAxes_default = {
     knee_r: [
       1037.5,
       2206
+    ],
+    foot_l: [
+      454.5,
+      2792
+    ],
+    foot_r: [
+      1110.5,
+      2792
     ]
   },
   margin: {
@@ -493,11 +501,18 @@ var limbAxes_default = {
       pawHeightPx: 103,
       slopeDeg: 0.82
     }
-  }
+  },
+  anchorsNote: "foot_l/foot_r = \u8E1D\u951A\u70B9\uFF1Ay \u53D6 paw.yWide\uFF08\u9774\u5B50\u9876\u7AEF\uFF0C\u5B9E\u6D4B 2792\uFF09\uFF0Cx \u53D6 paw.centerX\uFF08\u5B9E\u6D4B\u9774\u5FC3\uFF09\u30022026-10-01 \u52A0\u8E1D\u5173\u8282\u65F6\u52A0\u5165\u3002"
 };
 
 // src/core/partsMeta.ts
-var META = parts_default;
+var ANKLE_JOINTS = [
+  { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
+  { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
+];
+var meta = parts_default;
+if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
+var META = meta;
 var PART_BY_KEY = new Map(
   META.parts.map((p) => [p.key, p])
 );
@@ -564,7 +579,13 @@ var DEFAULT_CONFIG = {
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
-  footSplayDeg: 25
+  footSplayDeg: 25,
+  // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
+  anklePitchDeg: [0, 0],
+  ankleRollDeg: 0,
+  ankleTorque: 45,
+  footUvWarpDeg: 0,
+  ankleEnabled: false
 };
 var SEGMENTS = [
   { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -587,7 +608,11 @@ var JOINT_ORDER = [
   "hip_l",
   "hip_r",
   "knee_l",
-  "knee_r"
+  "knee_r",
+  // ★ 踝（2026-10-01 新增）：脚掌是独立刚体，这两项是它的俯仰/内外翻。
+  //   放在最后 ⇒ 已有的 0~7 号马达索引不变（旧基因组的权重仍对得上前 8 个关节）。
+  "foot_l",
+  "foot_r"
 ];
 function anchorPx(name, jm) {
   const a = LIMB_AXES.anchors[name];
@@ -602,7 +627,11 @@ var JOINT_MAX_TORQUE = {
   hip_l: 200,
   hip_r: 200,
   knee_l: 150,
-  knee_r: 150
+  knee_r: 150,
+  // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
+  //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+  foot_l: 45,
+  foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
 var JOINT_LIMITS_XY_DEG = {
@@ -614,7 +643,11 @@ var JOINT_LIMITS_XY_DEG = {
   hip_l: [45, 40],
   hip_r: [45, 40],
   knee_l: [6, 8],
-  knee_r: [6, 8]
+  knee_r: [6, 8],
+  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
+  //   放开会让脚掌乱翻、把支撑面搞丢。
+  foot_l: [8, 6],
+  foot_r: [8, 6]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -663,9 +696,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return Math.atan(ax.k * (leg ? cfg.stance : 1));
   };
   const restYawOf = (key) => {
-    if (key !== "shin_l" && key !== "shin_r") return 0;
+    if (key !== "shin_l" && key !== "shin_r" && key !== "foot_l" && key !== "foot_r") return 0;
     const s = cfg.footSplayDeg * DEG;
-    return key === "shin_l" ? -s : s;
+    return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
   for (const spec of SEGMENTS) {
@@ -694,6 +727,22 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
       centerY = mapY(midY);
       centerZ = mapZ(midX, !!spec.leg);
+    }
+    let footAnkle = null;
+    if (cfg.ankleEnabled && spec.leg && (spec.soleMassPct ?? 0) > 0) {
+      const side2 = spec.key === "shin_l" ? "l" : "r";
+      const ak = LIMB_AXES.anchors?.[`foot_${side2}`];
+      const kn = LIMB_AXES.anchors?.[`knee_${side2}`];
+      if (ak && kn) {
+        footAnkle = [kn[0], ak[1]];
+        const shankLen = Math.abs(mapY(ak[1]) - mapY(kn[1]));
+        const newLen = shankLen + 2 * PIVOT_PAD;
+        const newHalfH = Math.max(1e-3, newLen / 2 - radius);
+        length = newLen;
+        halfHeight = newHalfH;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        centerZ = mapZ(kn[0], true);
+      }
     }
     const plateOffset = rotVecByQuat(
       qVisInv,
@@ -726,10 +775,76 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const side = spec.key === "shin_l" ? "l" : "r";
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
+      const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
       const hx = soleHalfLen * sfx;
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
+      const soleMassTotal = mainMass + soleMass;
+      if (anklePx && cfg.ankleEnabled) {
+        const ankleY = mapY(anklePx[1]);
+        const ankleZ = mapZ(anklePx[0], true);
+        const fTilt = 0;
+        const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
+        const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const soleDrop = ankleY;
+        const fMidY = soleWorldY;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        bodies.push({
+          key: spec.key === "shin_l" ? "foot_l" : "foot_r",
+          bone: spec.bone,
+          label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
+          part,
+          // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          cx: 0,
+          cy: ankleY,
+          cz: ankleZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
+          plateOffset: [0, 0, 0],
+          plateHidden: true,
+          // ★ 渲染层据此跳过这块板
+          length: soleDrop,
+          radius: 0,
+          halfHeight: soleDrop / 2,
+          mass: soleMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: soleHalfThick,
+            hz,
+            offsetY: local2[1],
+            offsetZ: local2[2],
+            mass: soleMass,
+            comY: 0,
+            inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
+            inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
+          }],
+          leg: true
+        });
+        bodies.push({
+          key: spec.key,
+          bone: spec.bone,
+          label: spec.label,
+          part,
+          cx: 0,
+          cy: cy2,
+          cz: centerZ,
+          restTiltRad: tilt,
+          restYawRad: yaw,
+          plateOffset,
+          length,
+          radius,
+          halfHeight,
+          mass: mainMass,
+          colliders: [colliders[0]],
+          leg: true
+        });
+        continue;
+      }
       const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: "cuboid",
@@ -742,7 +857,6 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         offsetZ: local[2],
         mass: soleMass,
         comY: 0,
-        // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
         inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
         inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
@@ -816,10 +930,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
   const joints = [];
-  JOINT_ORDER.forEach((name, index) => {
+  const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
+  JOINT_ORDER_ACTIVE.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const childPart = PART_BY_KEY.get(jm.child);
+    const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
+    const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
     if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
     const [axPx, ayPx] = anchorPx(name, jm);
     const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));

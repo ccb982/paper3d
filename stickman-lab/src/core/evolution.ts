@@ -184,7 +184,8 @@ export class Trainer {
    *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
    */
   applyGaitTuning(o: {
-    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number; wHold?: number; wStill?: number;
+    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number; wHold?: number; wStill?: number; wJoint?: number; wAlt?: number; wExcl?: number; wMove?: number; wTask?: number;
+    moveScale?: Record<string, number>;
   }): void {
     for (const sm of this.sims) {
       if (o.straight !== undefined || o.minDx !== undefined) {
@@ -196,6 +197,14 @@ export class Trainer {
       if (o.wStep !== undefined) w.step = o.wStep;
       if (o.wHold !== undefined) w.hold = o.wHold;
       if (o.wStill !== undefined) w.still = o.wStill;
+      if (o.wJoint !== undefined) w.joint = o.wJoint;
+      if (o.wAlt !== undefined) w.alt = o.wAlt;
+      if (o.wExcl !== undefined) w.excl = o.wExcl;
+      if (o.wMove !== undefined) w.move = o.wMove;
+      if (o.wTask !== undefined) w.task = o.wTask;
+      if (o.moveScale) {
+        for (const sm of this.sims) for (const [j, v] of Object.entries(o.moveScale)) sm.w.moveScale[j] = v;
+      }
       if (Object.keys(w).length) sm.setWeights(w);
     }
     if (o.minDx !== undefined) this.stepMinDxManual = o.minDx;

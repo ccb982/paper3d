@@ -77,12 +77,16 @@ const sk = buildSkeleton(DEFAULT_CONFIG);
 // ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
 const SHAPE = shapeForJoints(sk.joints.length);
 assertColliderMass(sk);
-check('刚体数 = 10 + 脊柱段数 − 1', sk.bodies.length === 10 + Math.max(0, sk.cfg.spineSegments - 1),
+// 踝关节由 cfg.ankleEnabled 控制（默认 false）：开 = 12 段（多两只独立脚掌），关 = 10 段
+check(`刚体数 = ${sk.cfg.ankleEnabled ? 12 : 10} + 脊柱段数 − 1${sk.cfg.ankleEnabled ? '（含两只独立脚掌）' : ''}`,
+  sk.bodies.length === (sk.cfg.ankleEnabled ? 12 : 10) + Math.max(0, sk.cfg.spineSegments - 1),
   `${sk.bodies.length}（spineSegments=${sk.cfg.spineSegments}）`);
-check('关节数 = 躯干原有 9 + 脊柱 K-1（无踝，脚与小腿一体化）', sk.joints.length === 9 + Math.max(0, sk.cfg.spineSegments - 1), `${sk.joints.length}（spineSegments=${sk.cfg.spineSegments}）`);
-check('★ 前 9 个关节顺序与 JOINT_ORDER 逐字一致，脊柱关节接在后面',
-  sk.joints.slice(0, JOINT_ORDER.length).every((j, i) => j.name === JOINT_ORDER[i]) &&
-  sk.joints.slice(JOINT_ORDER.length).every((j) => /^spine\d+$/.test(j.name)),
+check(`关节数 = 躯干 9 + ${sk.cfg.ankleEnabled ? '踝 2 + ' : ''}脊柱 K-1`, sk.joints.length === (sk.cfg.ankleEnabled ? 11 : 9) + Math.max(0, sk.cfg.spineSegments - 1), `${sk.joints.length}（spineSegments=${sk.cfg.spineSegments}）`);
+// 踝关闭时 JOINT_ORDER 末两项（foot_l/foot_r）不建关节，脊柱关节提前 2 位
+const EXP_ORDER = sk.cfg.ankleEnabled ? JOINT_ORDER : JOINT_ORDER.filter((n) => !n.startsWith('foot_'));
+check('★ 有效关节顺序与 JOINT_ORDER（踝关时去掉末两项）逐字一致，脊柱关节接在后面',
+  sk.joints.slice(0, EXP_ORDER.length).every((j, i) => j.name === EXP_ORDER[i]) &&
+  sk.joints.slice(EXP_ORDER.length).every((j) => /^spine\d+$/.test(j.name)),
   sk.joints.map((j) => j.name).join(','));
 check('总质量 = 70 kg', Math.abs(sk.massTotal - 70) < 1e-6, `${sk.massTotal.toFixed(3)} kg`);
 check('总身高 = 1.80 m', Math.abs(sk.totalHeight - 1.8) < 1e-6, `${sk.totalHeight.toFixed(4)} m`);
@@ -307,8 +311,10 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   check(`★ 躯干切成 ${K} 段（骨盆 + ${K - 1} 节脊椎）`,
     sk.bodies.filter((b) => b.key === 'torso' || b.key.startsWith('spine')).length === K,
     `${sk.bodies.filter((b) => b.key === 'torso' || b.key.startsWith('spine')).map((b) => b.key).join('/')}`);
+  // ★ 索引 9 之后：JOINT_ORDER 现在有 10 项（末两项是踝 foot_l/foot_r），
+  //   脊柱关节从 JOINT_ORDER.length 开始接（2026-10-01 加踝）。
   check(`★ 脊柱关节 ${K - 1} 个已建成，且排在 JOINT_ORDER 之后`,
-    spineJoints.length === K - 1 && sk.joints[9].name.startsWith('spine'),
+    spineJoints.length === K - 1 && sk.joints[EXP_ORDER.length].name.startsWith('spine'),
     `${spineJoints.map((j) => j.name).join(',')}（总关节 ${sk.joints.length}）`);
   check('★ 髋挂在骨盆段、颈/肩挂在最上一段（胸腔）',
     sk.joints.find((j) => j.name === 'hip_l')!.parentKey === 'torso' &&
