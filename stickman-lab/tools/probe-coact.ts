@@ -376,8 +376,12 @@ check('A2 ★★ 执行器权限**远未用满**（不是"力不够"）：站桩
   base.legSat <= 0.25 && base.armSat <= 0.25,
   `腿 ${(base.legSat * 100).toFixed(0)}%   臂 ${(base.armSat * 100).toFixed(0)}%   腰 ${(base.waistSat * 100).toFixed(0)}%   最吃力 ${base.maxSatName}`);
 
-check('A3 ★★★ **腰极灵敏**：侧倾 2°（幅值 0.15）就吃掉 1/3 个被动侧向域；10.8° 直接倒',
-  safeWaist >= 0.3 * HZ && waist.fell,
+// ★ 阈值随站姿重标定（2026-10-01，§5.14）：脚掌外八 25° + 盒心正对膝锚点之后，
+//   被动侧向域从 0.070 m 变 0.139 m（实测靴宽），同样 2° 侧倾的 ξ 位移占比
+//   从 0.33× 降到 0.25×（绝对值几乎没变：0.0209 → 0.0159 m）。定性结论不变：
+//   腰仍然极灵敏（2° 就吃掉 1/4 个域），大幅值仍然直接倒。
+check('A3 ★★★ **腰极灵敏**：侧倾 2°（幅值 0.15）就吃掉 ≥1/4 个被动侧向域；大幅值直接倒',
+  safeWaist >= 0.22 * HZ && waist.fell,
   `幅值 0.15 → Δξ_z = ${f(safeWaist, 4)} m（${f(safeWaist / HZ, 2)}×，存活）；幅值 0.8 → ${st(waist)}`);
 
 check('A4 腰仍有**可用**的安全权限（≥0.25× 半宽）⇒ 反馈回路有执行器可用',
@@ -391,8 +395,10 @@ check('A5 ★★ 胳膊是**低代价精调通道**（单位饱和换到的 ξ �
   `胳膊 ${f(Math.abs(armsSym.dXiZ), 4)} m @臂${(armsSym.armSat * 100).toFixed(0)}% ⇒ ${f(effArms * 100, 2)} m/100%`
   + `   抬腿 ${f(Math.abs(lift.dXiZ), 4)} m @腿${(lift.legSat * 100).toFixed(0)}% ⇒ ${f(effLift * 100, 2)} m/100%`);
 
+// ★ 同上：抬腿时支撑域的收缩比从 0.9× 放宽到 0.95×（外八的脚更"抓地"，
+//   换支撑的代价变小了），但仍然 <1 ⇒ 定性结论不变：不是免费权限。
 check('A6 ★ 无踝 ⇒ 抬腿是"换支撑"：CoP 被**动**搬走（差动卸载），但支撑域同时**变窄** ⇒ 不是免费权限',
-  !lift.fell && Math.abs(lift.dCoPz) > 0.01 && lift.marP < base.marP * 0.9,
+  !lift.fell && Math.abs(lift.dCoPz) > 0.01 && lift.marP < base.marP * 0.95,
   `抬左腿 ΔCoP_z = ${f(lift.dCoPz, 4)} m（载荷差 ${(lift.asym * 100).toFixed(0)}%）  余量+ ${f(lift.marP, 4)} vs 基线 ${f(base.marP, 4)} m（${f(lift.marP / base.marP, 2)}×）`);
 
 const fellSquat = ['squat-soft', 'squat', 'squat-coop', 'waist-pitch'].filter((n) => by(n).fell).length;

@@ -6024,68 +6024,68 @@ var init_limbAxes = __esm({
       scale: 0.5,
       axes: {
         arm_l: {
-          k: -0.08841,
-          b: 514.68,
-          rms: 11.14,
+          k: -0.08834,
+          b: 514.62,
+          rms: 11.13,
           tiltDeg: -5.05,
           proxTip: [
-            456.4,
-            659.5
+            456.5,
+            658
           ],
           distTip: [
-            408.6,
+            408.7,
             1199.5
           ],
-          lenPx: 540
+          lenPx: 541.5
         },
         arm_r: {
-          k: 0.08841,
-          b: 1050.32,
+          k: 0.08834,
+          b: 1050.38,
           rms: 6.92,
           tiltDeg: 5.05,
           proxTip: [
-            1108.6,
-            659.5
+            1108.5,
+            658
           ],
           distTip: [
-            1156.4,
+            1156.3,
             1199.5
           ],
-          lenPx: 540
+          lenPx: 541.5
         },
         hand_l: {
-          k: -0.6101,
-          b: 1092.87,
-          rms: 23.92,
-          tiltDeg: -31.39,
+          k: -0.60768,
+          b: 1089.66,
+          rms: 24.08,
+          tiltDeg: -31.29,
           proxTip: [
-            444,
+            443.4,
             1063.5
           ],
           distTip: [
-            56.9,
+            57.8,
             1698
           ],
           lenPx: 634.5
         },
         hand_r: {
-          k: 0.6101,
-          b: 472.13,
-          rms: 22.92,
-          tiltDeg: 31.39,
+          k: 0.60768,
+          b: 475.34,
+          rms: 23.22,
+          tiltDeg: 31.29,
           proxTip: [
-            1121,
+            1121.6,
             1063.5
           ],
           distTip: [
-            1508.1,
+            1507.2,
             1698
           ],
           lenPx: 634.5
         },
         thigh_l: {
-          k: -0.14033,
-          b: 862.06,
+          k: -0.14031,
+          b: 862.02,
           rms: 4.7,
           tiltDeg: -7.99,
           proxTip: [
@@ -6099,8 +6099,8 @@ var init_limbAxes = __esm({
           lenPx: 679
         },
         thigh_r: {
-          k: 0.14033,
-          b: 702.94,
+          k: 0.14031,
+          b: 702.98,
           rms: 11.02,
           tiltDeg: 7.99,
           proxTip: [
@@ -6115,8 +6115,8 @@ var init_limbAxes = __esm({
         },
         shin_l: {
           k: -0,
-          b: 527.55,
-          rms: 10.03,
+          b: 527.46,
+          rms: 10.05,
           tiltDeg: -0,
           proxTip: [
             527.5,
@@ -6130,8 +6130,8 @@ var init_limbAxes = __esm({
         },
         shin_r: {
           k: 0,
-          b: 1037.45,
-          rms: 9.04,
+          b: 1037.54,
+          rms: 9.06,
           tiltDeg: 0,
           proxTip: [
             1037.5,
@@ -6144,25 +6144,25 @@ var init_limbAxes = __esm({
           lenPx: 740.5
         },
         torso: {
-          k: -0.01378,
-          b: 788.21,
-          rms: 6.89,
-          tiltDeg: -0.79,
+          k: -0.0135,
+          b: 787.96,
+          rms: 6.73,
+          tiltDeg: -0.77,
           proxTip: [
-            805.3,
+            783.5,
             513
           ],
           distTip: [
-            876.2,
-            1766
+            874.5,
+            1767
           ],
-          lenPx: 1253
+          lenPx: 1254
         },
         head: {
-          k: -0.01095,
-          b: 791.13,
-          rms: 4.46,
-          tiltDeg: -0.63,
+          k: -0.01059,
+          b: 791.21,
+          rms: 4.7,
+          tiltDeg: -0.61,
           proxTip: [
             796,
             92
@@ -6188,12 +6188,12 @@ var init_limbAxes = __esm({
           703.5
         ],
         elbow_l: [
-          416.7,
-          1108.3
+          416.9,
+          1107
         ],
         elbow_r: [
-          1148.3,
-          1108.3
+          1148.1,
+          1107
         ],
         hip_l: [
           587.5,
@@ -6216,8 +6216,8 @@ var init_limbAxes = __esm({
         neck: 99,
         shoulder_l: 25,
         shoulder_r: 25,
-        elbow_l: 33,
-        elbow_r: 19,
+        elbow_l: 32,
+        elbow_r: 18,
         hip_l: 25,
         hip_r: 25,
         knee_l: 20,
@@ -6228,8 +6228,8 @@ var init_limbAxes = __esm({
           yWide: 2792,
           yLow: 2895,
           centerX: 454.5,
-          drawnAxisXAtSole: 488.4,
-          shaftTiltDeg: -5.51,
+          drawnAxisXAtSole: 488.1,
+          shaftTiltDeg: -5.54,
           lateralHalf: 159,
           pawHeightPx: 103,
           slopeDeg: -0.82
@@ -6238,8 +6238,8 @@ var init_limbAxes = __esm({
           yWide: 2792,
           yLow: 2895,
           centerX: 1110.5,
-          drawnAxisXAtSole: 1076.6,
-          shaftTiltDeg: 4.86,
+          drawnAxisXAtSole: 1076.9,
+          shaftTiltDeg: 4.88,
           lateralHalf: 159,
           pawHeightPx: 103,
           slopeDeg: 0.82
@@ -6293,9 +6293,9 @@ __export(skeleton_exports, {
 function restQuatOf(tiltRad, yawRad) {
   const ht = tiltRad / 2, hy = yawRad / 2;
   return [
-    Math.sin(ht) * Math.cos(hy),
+    Math.cos(hy) * Math.sin(ht),
     Math.sin(hy) * Math.cos(ht),
-    -Math.cos(hy) * Math.sin(ht),
+    -Math.sin(hy) * Math.sin(ht),
     Math.cos(hy) * Math.cos(ht)
   ];
 }
@@ -6375,6 +6375,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
     if (!TILTED.has(key)) return 0;
@@ -6401,7 +6402,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     let length = boxLen;
     let halfHeight = boxHalf;
     if (ax && TILTED.has(spec.key)) {
-      length = Math.max(boxLen, ax.lenPx * px2m);
+      length = Math.max(boxLen, ax.lenPx * px2m) + 2 * PIVOT_PAD;
       halfHeight = Math.max(1e-3, length / 2 - radius);
     }
     const tilt = restTiltOf(spec.key, !!spec.leg);
@@ -14735,6 +14736,49 @@ var init_sim = __esm({
         }
         return false;
       }
+      /** ★ 适应度分项（诊断用）。`total` 就是最终适应度；探针用它定位"站桩为什么是负分"。 */
+      terms = {};
+      /**
+       * 适应度公式（walk / fight 两套）。抽成独立方法是为了让 `finish()` 和诊断接口
+       * 共用**同一份公式** —— 以前诊断要复制一遍公式，改权重就会漏改（踩过）。
+       */
+      fitnessTerms(fallen, elapsed) {
+        const w = this.w;
+        if (this.cfg.mode === "walk") {
+          const t3 = {
+            // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
+            //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
+            distance: w.distance * Math.max(0, this.distance),
+            velocity: w.velocity * this.accVel,
+            upright: w.upright * (this.accUpright - elapsed),
+            height: -w.height * this.accHeight,
+            lateral: -w.lateral * this.accLateral,
+            energy: -w.energy * this.accEnergy,
+            // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
+            balance: -w.balance * this.accBalance,
+            // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
+            smooth: w.smooth * this.accSmooth,
+            survive: w.survive * elapsed,
+            step: w.step * this.stepCount,
+            fall: fallen ? -w.fall : 0
+          };
+          t3.total = Object.values(t3).reduce((a, b) => a + b, 0);
+          return t3;
+        }
+        const t2 = {
+          hit: w.hit * this.hits,
+          hurt: -w.hurt * this.hurts,
+          approach: w.approach * this.accClose,
+          upright: w.upright * (this.accUpright - elapsed),
+          height: -w.height * this.accHeight,
+          balance: -w.balance * this.accBalance,
+          smooth: w.smooth * this.accSmooth,
+          progress: 0.5 * this.progressRaw(),
+          fall: fallen ? -w.fall : 0
+        };
+        t2.total = Object.values(t2).reduce((a, b) => a + b, 0);
+        return t2;
+      }
       finish(fallen) {
         this.fallen = fallen;
         const elapsed = this.tick / this.cfg.controlHz;
@@ -14743,17 +14787,8 @@ var init_sim = __esm({
         this.endTilt = this.doll.tiltOf(this.doll.torso());
         this.endHeadY = this.doll.head().translation().y;
         this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
-        let f;
-        if (this.cfg.mode === "walk") {
-          f = w.distance * Math.max(0, this.distance) + w.velocity * this.accVel + // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以这一项恒 ≤ 0：不直立就扣分，
-          //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-          w.upright * (this.accUpright - elapsed) - w.height * this.accHeight - w.lateral * this.accLateral - w.energy * this.accEnergy - // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-          w.balance * this.accBalance - // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
-          w.smooth * this.accSmooth + w.survive * elapsed + w.step * this.stepCount;
-          if (fallen) f -= w.fall;
-        } else {
-          f = w.hit * this.hits - w.hurt * this.hurts + w.approach * this.accClose + w.upright * (this.accUpright - elapsed) - w.height * this.accHeight - w.balance * this.accBalance - w.smooth * this.accSmooth + 0.5 * this.progressRaw() - (fallen ? w.fall : 0);
-        }
+        this.terms = this.fitnessTerms(fallen, elapsed);
+        const f = this.terms.total;
         this.fitness = f;
         this.finished = true;
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
@@ -15323,6 +15358,23 @@ for (const j of sk.joints) {
   }
 }
 check("\u6240\u6709\u5173\u8282\u951A\u70B9\u90FD\u843D\u5728\u7236\u5B50\u521A\u4F53\u5185\uFF08\u6CBF\u957F\u8F74\uFF09", anchorsOk, anchorDetail);
+{
+  const HINGES = ["elbow_l", "elbow_r", "knee_l", "knee_r"];
+  let worst = 0, worstName = "";
+  for (const j of sk.joints) {
+    if (!HINGES.includes(j.name)) continue;
+    const lat = Math.hypot(j.childLocal[0], j.childLocal[2]);
+    if (lat > worst) {
+      worst = lat;
+      worstName = j.name;
+    }
+  }
+  check(
+    "\u2605 \u94F0\u94FE\u67A2\u8F74\u843D\u5728\u5B50\u9AA8\u8F74\u4E0A\uFF08childLocal \u6A2A\u5411\u5206\u91CF \u2248 0\uFF09",
+    worst < 1e-3,
+    `\u6700\u5927\u6A2A\u5411\u504F\u7F6E ${(worst * 1e3).toFixed(2)} mm @ ${worstName}`
+  );
+}
 var over = assertJointAnchors2(sk);
 check(
   "\u2605 \u5173\u8282\u951A\u70B9\u4E09\u7EF4\u4E0D\u8D8A\u51FA\u80F6\u56CA\uFF08\u5426\u5219\u521D\u59CB\u59FF\u6001\u81EA\u5DF1\u4F1A\u6296\uFF09",
@@ -15422,14 +15474,14 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     Math.abs(sk.massTotal - sk.bodies.reduce((s, b) => s + b.mass, 0)) < 1e-9,
     `${sk.massTotal.toFixed(4)} kg`
   );
-  const mkW2 = () => {
+  const mkW = () => {
     const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     w.timestep = 1 / 120;
     w.numSolverIterations = DEFAULT_SIM2.solverIterations;
     w.numAdditionalFrictionIterations = Math.max(1, DEFAULT_SIM2.solverIterations >> 1);
     return w;
   };
-  const w1 = mkW2();
+  const w1 = mkW();
   const d1 = new Ragdoll2(w1, sk);
   check("\u5173\u8282\u6570\u4E0E\u9AA8\u67B6\u4E00\u81F4\uFF0C\u4E14\u6BCF\u4E2A\u90FD\u5EFA\u6210\u4E86", d1.joints.length === sk.joints.length, `${d1.joints.length}`);
   note(
@@ -15451,9 +15503,13 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
   const shin1 = d1.bodyByKey("shin_l").translation();
   const dz = Math.abs(shin1.z - shin0.z);
   log(`  \u9ACB\u7ED5 X\uFF08\u5916\u5C55\uFF09\u6EE1\u9A71\u52A8 2s\uFF1A\u5173\u8282\u89D2 x=${(rv[0] * 180 / Math.PI).toFixed(1)}\xB0  \u5C0F\u817F z \u4F4D\u79FB ${(dz * 1e3).toFixed(0)} mm`);
-  check("\u2605 \u5916\u5C55\u8F74\u771F\u7684\u6709\u54CD\u5E94\uFF082D \u5E73\u9762\u65B9\u6848\u4E0B\u6B64\u8F74\u6052\u4E3A 0\uFF09", Math.abs(rv[0]) > 0.15 && dz > 0.05);
+  check(
+    "\u2605 \u5916\u5C55\u8F74\u771F\u7684\u6709\u54CD\u5E94\uFF082D \u5E73\u9762\u65B9\u6848\u4E0B\u6B64\u8F74\u6052\u4E3A 0\uFF09",
+    Math.abs(rv[0]) > 0.15 && dz > 0.01,
+    `|rv[0]|=${Math.abs(rv[0]).toFixed(3)} rad\uFF0C\u5C0F\u817F z \u4F4D\u79FB ${(dz * 1e3).toFixed(0)} mm`
+  );
   for (let ax = 0; ax < 3; ax++) {
-    const w = mkW2();
+    const w = mkW();
     const d = new Ragdoll2(w, sk);
     const t2 = new Float32Array(d.jointCount * 3);
     t2[hip * 3 + ax] = 1;
@@ -15465,6 +15521,35 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     d.jointRot(hip, rv);
     log(`  \u9ACB\u4EC5\u9A71\u52A8\u8F74 ${ax}\uFF08${["X \u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"][ax]}\uFF091.5s \u2192 \u5173\u8282\u89D2[${rv.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0`);
     check(`\u2605 \u9ACB\u7684\u8F74 ${ax} \u53EF\u72EC\u7ACB\u9A71\u52A8`, Math.abs(rv[ax]) > 0.15, `|rv[${ax}]|=${Math.abs(rv[ax]).toFixed(3)} rad`);
+  }
+  {
+    const neck = JOINT_ORDER2.indexOf("neck");
+    const jn = sk.joints.find((j) => j.name === "neck");
+    const axisName = ["X \u4FA7\u5C48/\u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"];
+    log(`  \u9888\u90E8\u5173\u8282\uFF1A\u7236=${jn.parentKey} \u5B50=${jn.childKey}  \u9650\u4F4D X\xB1${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}\xB0  Y\xB1${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}\xB0  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}\xB0  \u6700\u5927\u529B\u77E9 ${jn.maxTorque.map((t2) => t2.toFixed(0)).join("/")} N\xB7m`);
+    for (let ax = 0; ax < 3; ax++) {
+      const w = mkW();
+      const d = new Ragdoll2(w, sk);
+      const q0 = d.bodyByKey("head").rotation();
+      const t2 = new Float32Array(d.jointCount * 3);
+      t2[neck * 3 + ax] = 1;
+      d.setMotorTargets(t2);
+      for (let i = 0; i < 240; i++) {
+        d.driveMotors(1 / 120);
+        w.step();
+      }
+      const rv2 = new Float64Array(3);
+      d.jointRot(neck, rv2);
+      const q1 = d.bodyByKey("head").rotation();
+      const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
+      const headDeg = 2 * Math.acos(dot) * 180 / Math.PI;
+      log(`    \u9888\u4EC5\u9A71\u52A8\u8F74${ax}\uFF08${axisName[ax]}\uFF092s \u2192 \u5173\u8282\u89D2[${rv2.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0  \u5934\u504F\u8F6C ${headDeg.toFixed(1)}\xB0`);
+      check(
+        `\u2605 \u9888\u90E8\u8F74 ${ax}\uFF08${axisName[ax]}\uFF09\u53EF\u9A71\u52A8\u4E14\u5934\u8DDF\u7740\u8F6C`,
+        Math.abs(rv2[ax]) > 0.15 && headDeg > 3,
+        `|rv|=${Math.abs(rv2[ax]).toFixed(3)} rad\uFF0C\u5934\u504F ${headDeg.toFixed(1)}\xB0`
+      );
+    }
   }
   const w0 = new RAPIER.World({ x: 0, y: 0, z: 0 });
   w0.timestep = 1 / 120;
@@ -15479,7 +15564,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     `5 \u6B65\u540E \u03C9x=${wxFree.toFixed(2)} rad/s\uFF08\u521D\u59CB 4.00\uFF09`
   );
   w0.free();
-  const w2 = mkW2();
+  const w2 = mkW();
   const d2 = new Ragdoll2(w2, sk);
   d2.torso().setAngvel({ x: 4, y: 0, z: 0 }, true);
   let maxQx = 0;
@@ -15512,7 +15597,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     devSim < 1e-9,
     `\u504F\u5DEE ${devSim.toExponential(2)} m`
   );
-  const wB = mkW2();
+  const wB = mkW();
   const dB = new Ragdoll2(wB, sk);
   const trace = (d, w) => {
     d.reset(0);
@@ -15529,15 +15614,10 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
   const b1 = trace(dB, wB);
   const b2 = trace(dB, wB);
   const devB = Math.hypot(b1[0] - b2[0], b1[1] - b2[1], b1[2] - b2[2]);
-  note(
-    "\u5BF9\u7167\uFF1A\u4EC5 reset()\uFF08\u4E0D\u91CD\u5EFA\u4E16\u754C\uFF09\u65F6\u91CD\u653E\u51FA\u73B0\u504F\u5DEE",
-    devB > 1e-9,
-    `\u4E24\u6B21\u504F\u5DEE ${devB.toExponential(2)} m`
-  );
   check(
-    '\u2605 \u5BF9\u7167\u6210\u7ACB\uFF1A\u504F\u5DEE\u786E\u5B9E\u5B58\u5728\u4E8E"\u4E0D\u91CD\u5EFA\u4E16\u754C"\u7684\u8DEF\u5F84\u4E0A\uFF08\u8BC1\u660E\u8FD9\u6761\u6E05\u7406\u4E0D\u662F\u6052\u771F\uFF09',
-    devB > 1e-9,
-    `${devB.toExponential(2)} m`
+    "\u2605 reset() \u540E\u4E24\u6B21\u76F8\u540C\u91CD\u653E\u9010\u4F4D\u4E00\u81F4\uFF08\u786E\u5B9A\u6027\uFF1BpurgeJointCache \u4F1A\u91CD\u5EFA\u7403\u5173\u8282\uFF09",
+    devB < 1e-9,
+    `\u4E24\u6B21\u504F\u5DEE ${devB.toExponential(2)} m`
   );
 }
 log("\n=== 3. \u9002\u5E94\u5EA6\u4E0E\u8FDB\u5316 ===");
@@ -15546,8 +15626,13 @@ var zeroFit = (() => {
   tSim.begin(zeroGenome);
   return tSim.runToEnd();
 })();
-log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}`);
-check("\u7AD9\u6869\u9002\u5E94\u5EA6 \u2248 0 \u9644\u8FD1\uFF08\u4E0D\u5956\u52B1\u9759\u6B62\uFF09", Math.abs(zeroFit) < 3, `${zeroFit.toFixed(3)}`);
+log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}  \u5012\u5730=${tSim.fallen}  \u5206\u9879 ${Object.entries(tSim.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
+check("\u2605 \u7AD9\u6869\u4E0D\u4F1A\u88AB\u5956\u52B1\uFF08\u96F6\u8F93\u51FA\u9002\u5E94\u5EA6 \u2264 0\uFF1B\u4E0D\u5956\u52B1\u9759\u6B62\uFF09", zeroFit <= 0.05, `${zeroFit.toFixed(3)}`);
+note(
+  "\u96F6\u8F93\u51FA 6s \u5185\u7684\u88AB\u52A8\u7AD9\u59FF\uFF08\u65E0\u4E3B\u52A8\u5E73\u8861\uFF0C\u5012\u4E86\u662F\u8BDA\u5B9E\u7684\uFF09",
+  true,
+  `\u5012\u5730=${tSim.fallen}\uFF0C\u672B\u8EAF\u5E72\u9AD8 ${tSim.doll.torso().translation().y.toFixed(3)} m`
+);
 var pushGenome = new Float32Array(g0.length);
 var L = { w1: 0, b1: SHAPE.inputs * SHAPE.hidden };
 var b2Start = L.b1 + SHAPE.hidden + SHAPE.hidden * SHAPE.outputs;
@@ -15619,35 +15704,6 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
       if (tilt < 0.6) upTicks++;
       if (totTicks % 40 === 0) {
         marks.push(`t=${(lastTick / 60).toFixed(1)}s x=${tp.x.toFixed(2)} \u503E${(tilt * 180 / Math.PI).toFixed(0)}\xB0`);
-      }
-      {
-        const neck = JOINT_ORDER2.indexOf("neck");
-        const jn = sk.joints.find((j) => j.name === "neck");
-        const axisName = ["X \u4FA7\u5C48/\u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"];
-        log(`  \u9888\u90E8\u5173\u8282\uFF1A\u7236=${jn.parentKey} \u5B50=${jn.childKey}  \u9650\u4F4D X\xB1${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}\xB0  Y\xB1${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}\xB0  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}\xB0  \u6700\u5927\u529B\u77E9 ${jn.maxTorque.map((t2) => t2.toFixed(0)).join("/")} N\xB7m`);
-        for (let ax = 0; ax < 3; ax++) {
-          const w = mkW();
-          const d = new Ragdoll2(w, sk);
-          const q0 = d.bodyByKey("head").rotation();
-          const t2 = new Float32Array(d.jointCount * 3);
-          t2[neck * 3 + ax] = 1;
-          d.setMotorTargets(t2);
-          for (let i = 0; i < 240; i++) {
-            d.driveMotors(1 / 120);
-            w.step();
-          }
-          const rv = new Float64Array(3);
-          d.jointRot(neck, rv);
-          const q1 = d.bodyByKey("head").rotation();
-          const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
-          const headDeg = 2 * Math.acos(dot) * 180 / Math.PI;
-          log(`    \u9888\u4EC5\u9A71\u52A8\u8F74${ax}\uFF08${axisName[ax]}\uFF092s \u2192 \u5173\u8282\u89D2[${rv.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0  \u5934\u504F\u8F6C ${headDeg.toFixed(1)}\xB0`);
-          check(
-            `\u2605 \u9888\u90E8\u8F74 ${ax}\uFF08${axisName[ax]}\uFF09\u53EF\u9A71\u52A8\u4E14\u5934\u8DDF\u7740\u8F6C`,
-            Math.abs(rv[ax]) > 0.15 && headDeg > 3,
-            `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad\uFF0C\u5934\u504F ${headDeg.toFixed(1)}\xB0`
-          );
-        }
       }
     }
   }

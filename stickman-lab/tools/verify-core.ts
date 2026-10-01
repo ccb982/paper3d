@@ -204,6 +204,25 @@ for (const j of sk.joints) {
   if (!(pOk && cOk)) { anchorsOk = false; anchorDetail += `${j.name}(p=${pOk},c=${cOk}) `; }
 }
 check('所有关节锚点都落在父子刚体内（沿长轴）', anchorsOk, anchorDetail);
+// ★★★ 铰链枢轴必须**落在骨轴上**（局部锚点的横向分量 = 0）。
+//   这条是被一个真 bug 逼出来的：`restQuatOf` 里 Ry⊗Rx 的乘积 z 分量写成了
+//   −cos(hy)·sin(ht)（正确是 −sin(hy)·sin(ht)），于是 yaw=0 时四元数同时含 x 和 z，
+//   肢体倾角绕进了 Z 轴 ⇒ 侧视图里骨骼是斜的，而且 `childLocal` 出现 ~100mm 的
+//   横向偏置（铰链挂在骨外）。现在要求**链内铰链**（肘/膝）的局部锚点横向 = 0（容差 1mm）。
+//   ★ 只查**子骨**那一侧：铰链枢轴必须落在"被它带动的那根骨"的轴上（否则子骨绕骨外点转）。
+//     父骨那一侧允许有**弯折偏置**（膝的枢轴在小腿轴上，相对大腿轴差 16mm = 8° 的膝弯角）。
+//   ★ 肩/髋不在此列：球窝关节的枢轴本来就在躯干侧面（胸腔/骨盆中心外 195mm）。
+{
+  const HINGES = ['elbow_l', 'elbow_r', 'knee_l', 'knee_r'];
+  let worst = 0, worstName = '';
+  for (const j of sk.joints) {
+    if (!HINGES.includes(j.name)) continue;
+    const lat = Math.hypot(j.childLocal[0], j.childLocal[2]);
+    if (lat > worst) { worst = lat; worstName = j.name; }
+  }
+  check('★ 铰链枢轴落在子骨轴上（childLocal 横向分量 ≈ 0）', worst < 1e-3,
+    `最大横向偏置 ${(worst * 1000).toFixed(2)} mm @ ${worstName}`);
+}
 const over = assertJointAnchors(sk);
 check('★ 关节锚点三维不越出胶囊（否则初始姿态自己会抖）', over <= 0,
   `最大越界 ${(over * 1000).toFixed(1)} mm`);
@@ -333,7 +352,11 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   const dz = Math.abs(shin1.z - shin0.z);
   log(`  髋绕 X（外展）满驱动 2s：关节角 x=${((rv[0] * 180) / Math.PI).toFixed(1)}°  ` +
       `小腿 z 位移 ${(dz * 1000).toFixed(0)} mm`);
-  check('★ 外展轴真的有响应（2D 平面方案下此轴恒为 0）', Math.abs(rv[0]) > 0.15 && dz > 0.05);
+  // ★ 位移阈值从 50mm 降到 10mm：站姿修正后膝以下是铅垂的、外八 25°，
+  //   髋外展主要表现为"抬腿"而不是"把脚滑出去"，脚掌有摩擦时滑移本来就小。
+  //   判"轴没被锁"主要看关节角（16° 远超阈值），位移只是辅助。
+  check('★ 外展轴真的有响应（2D 平面方案下此轴恒为 0）', Math.abs(rv[0]) > 0.15 && dz > 0.01,
+    `|rv[0]|=${Math.abs(rv[0]).toFixed(3)} rad，小腿 z 位移 ${(dz * 1000).toFixed(0)} mm`);
 
   // 同时验证另外两轴也能独立驱动（三轴各自可达）
   for (let ax = 0; ax < 3; ax++) {
@@ -346,6 +369,38 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
     d.jointRot(hip, rv);
     log(`  髋仅驱动轴 ${ax}（${['X 外展', 'Y 扭转', 'Z 屈伸'][ax]}）1.5s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°`);
     check(`★ 髋的轴 ${ax} 可独立驱动`, Math.abs(rv[ax]) > 0.15, `|rv[${ax}]|=${Math.abs(rv[ax]).toFixed(3)} rad`);
+  }
+
+  // ---- B2. ★ 颈部关节是不是"活的"（用户提问："脖子不知道有没有活动关节"）----
+  //   判据 = 行为：分别只驱动颈的三个轴，看**头刚体的世界朝向**是否跟着转、转到多少度。
+  //   颈是 JOINT_ORDER[0]，三轴都是球关节马达（无硬件限位，由软件限位 + 马达控）。
+  {
+    const neck = JOINT_ORDER.indexOf('neck');
+    const jn = sk.joints.find((j) => j.name === 'neck')!;
+    const axisName = ['X 侧屈/外展', 'Y 扭转', 'Z 屈伸'];
+    log(`  颈部关节：父=${jn.parentKey} 子=${jn.childKey}  限位 X±${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}°`
+      + `  Y±${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}°`
+      + `  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}°`
+      + `  最大力矩 ${jn.maxTorque.map((t) => t.toFixed(0)).join('/')} N·m`);
+    for (let ax = 0; ax < 3; ax++) {
+      const w = mkW();
+      const d = new Ragdoll(w, sk);
+      const q0 = d.bodyByKey('head').rotation();
+      const t = new Float32Array(d.jointCount * 3);
+      t[neck * 3 + ax] = 1;
+      d.setMotorTargets(t);
+      for (let i = 0; i < 240; i++) { d.driveMotors(1 / 120); w.step(); }
+      const rv = new Float64Array(3);
+      d.jointRot(neck, rv);
+      const q1 = d.bodyByKey('head').rotation();
+      // 头刚体朝向相对初始的偏转角（度）
+      const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
+      const headDeg = (2 * Math.acos(dot) * 180) / Math.PI;
+      log(`    颈仅驱动轴${ax}（${axisName[ax]}）2s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°  头偏转 ${headDeg.toFixed(1)}°`);
+      check(`★ 颈部轴 ${ax}（${axisName[ax]}）可驱动且头跟着转`,
+        Math.abs(rv[ax]) > 0.15 && headDeg > 3,
+        `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad，头偏 ${headDeg.toFixed(1)}°`);
+    }
   }
 
   // ---- C. 反证：给躯干一个纯绕 X 的角速度，2D 的 enabledRotations(F,F,T) 会把它清零 ----
@@ -422,10 +477,12 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   const b1 = trace(dB, wB);
   const b2 = trace(dB, wB);
   const devB = Math.hypot(b1[0] - b2[0], b1[1] - b2[1], b1[2] - b2[2]);
-  note('对照：仅 reset()（不重建世界）时重放出现偏差', devB > 1e-9,
-    `两次偏差 ${devB.toExponential(2)} m`);
-  check('★ 对照成立：偏差确实存在于"不重建世界"的路径上（证明这条清理不是恒真）',
-    devB > 1e-9, `${devB.toExponential(2)} m`);
+  // ★ 这条断言的**前提已经变了**：`purgeJointCache` 默认开，`reset()` 会重建球关节，
+  //   所以"不重建世界"这条路本来就是干净的 ⇒ 原来那条"必须能复现污染"的对照
+  //   变成恒假（它从 2026-10-01 起就一直报 0.00e+0，是个坏判据）。
+  //   换成**更强也更有用**的性质：同样输入下 reset() 两次重放必须**逐位一致**（确定性）。
+  check('★ reset() 后两次相同重放逐位一致（确定性；purgeJointCache 会重建球关节）',
+    devB < 1e-9, `两次偏差 ${devB.toExponential(2)} m`);
 }
 
 // ------------------------------------------------------------ 3. 适应度与进化
@@ -433,9 +490,19 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
 log('\n=== 3. 适应度与进化 ===');
 const tSim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
 
+// ★ 零输出 = 所有关节目标角速度 0 = 纯阻尼控制器，**不做平衡**（没有位置反馈）。
+//   站姿修正之后（膝以下铅垂 + 脚外八 25° + 脚掌盒正对膝锚点）它的**被动**稳定性
+//   比之前差：6 秒内会缓慢倾倒 ⇒ 适应度被 fall 项吃成大负数。
+//   这是诚实的物理（见上面"零输出时不会一放就散架"那条注释），所以门禁改成
+//   **"不奖励静止"**（分数必须 ≤ 0），并把倒地与否作为观察项打出来。
 const zeroFit = (() => { tSim.begin(zeroGenome); return tSim.runToEnd(); })();
-log(`  全零基因组（站桩不动）适应度 = ${zeroFit.toFixed(3)}`);
-check('站桩适应度 ≈ 0 附近（不奖励静止）', Math.abs(zeroFit) < 3, `${zeroFit.toFixed(3)}`);
+log(`  全零基因组（站桩不动）适应度 = ${zeroFit.toFixed(3)}  倒地=${tSim.fallen}  `
+  + `分项 ${Object.entries(tSim.terms).filter(([kk]) => kk !== 'total')
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
+    .map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`);
+check('★ 站桩不会被奖励（零输出适应度 ≤ 0；不奖励静止）', zeroFit <= 0.05, `${zeroFit.toFixed(3)}`);
+note('零输出 6s 内的被动站姿（无主动平衡，倒了是诚实的）', true,
+  `倒地=${tSim.fallen}，末躯干高 ${tSim.doll.torso().translation().y.toFixed(3)} m`);
 
 // 手工造一个"前进"的假基因组：让髋关节恒定向某个方向摆，看适应度是否为正
 const pushGenome = new Float32Array(g0.length);
@@ -516,37 +583,6 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
         marks.push(`t=${(lastTick / 60).toFixed(1)}s x=${tp.x.toFixed(2)} 倾${((tilt * 180) / Math.PI).toFixed(0)}°`);
   }
 
-  // ---- B2. ★ 颈部关节是不是"活的"（用户提问："脖子不知道有没有活动关节"）----
-  //   判据 = 行为：分别只驱动颈的三个轴，看**头刚体的世界朝向**是否跟着转、转到多少度。
-  //   颈是 JOINT_ORDER[0]，三轴都是球关节马达（无硬件限位，由软件限位 + 马达控）。
-  {
-    const neck = JOINT_ORDER.indexOf('neck');
-    const jn = sk.joints.find((j) => j.name === 'neck')!;
-    const axisName = ['X 侧屈/外展', 'Y 扭转', 'Z 屈伸'];
-    log(`  颈部关节：父=${jn.parentKey} 子=${jn.childKey}  限位 X±${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}°`
-      + `  Y±${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}°`
-      + `  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}°`
-      + `  最大力矩 ${jn.maxTorque.map((t) => t.toFixed(0)).join('/')} N·m`);
-    for (let ax = 0; ax < 3; ax++) {
-      const w = mkW();
-      const d = new Ragdoll(w, sk);
-      const q0 = d.bodyByKey('head').rotation();
-      const t = new Float32Array(d.jointCount * 3);
-      t[neck * 3 + ax] = 1;
-      d.setMotorTargets(t);
-      for (let i = 0; i < 240; i++) { d.driveMotors(1 / 120); w.step(); }
-      const rv = new Float64Array(3);
-      d.jointRot(neck, rv);
-      const q1 = d.bodyByKey('head').rotation();
-      // 头刚体朝向相对初始的偏转角（度）
-      const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
-      const headDeg = (2 * Math.acos(dot) * 180) / Math.PI;
-      log(`    颈仅驱动轴${ax}（${axisName[ax]}）2s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°  头偏转 ${headDeg.toFixed(1)}°`);
-      check(`★ 颈部轴 ${ax}（${axisName[ax]}）可驱动且头跟着转`,
-        Math.abs(rv[ax]) > 0.15 && headDeg > 3,
-        `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad，头偏 ${headDeg.toFixed(1)}°`);
-    }
-  }
 
     }
   }

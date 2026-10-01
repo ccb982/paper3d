@@ -73,10 +73,13 @@ export type Vec4 = readonly [number, number, number, number];
  */
 export function restQuatOf(tiltRad: number, yawRad: number): Vec4 {
   const ht = tiltRad / 2, hy = yawRad / 2;
+  // Ry(hy) ⊗ Rx(ht) 的精确乘积（★ z 分量是 −sin(hy)·sin(ht)：
+  //   写成 −cos(hy)·sin(ht) 会让 yaw=0 时四元数**同时含 x 和 z 分量**，
+  //   倾角就绕进了 Z 轴 ⇒ 侧视图里骨骼是斜的。这个 bug 踩过一次，别改回去。）
   return [
-    Math.sin(ht) * Math.cos(hy),
+    Math.cos(hy) * Math.sin(ht),
     Math.sin(hy) * Math.cos(ht),
-    -Math.cos(hy) * Math.sin(ht),
+    -Math.sin(hy) * Math.sin(ht),
     Math.cos(hy) * Math.cos(ht),
   ];
 }
@@ -556,13 +559,23 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
    *   腿要跟 stance 一起缩（stance<1 时两腿并拢 ⇒ 倾角同步变小），上肢不缩。
    *   躯干/头不设静倾角：实测 <1°，且脊柱段要保持同一朝向才能做 LBS 蒙皮。
    */
+  /** 肢体胶囊每端的枢轴余量（米）：铰链枢轴在关节上，允许略微出轮廓 */
+  const PIVOT_PAD = 0.015;
   const TILTED = new Set(['arm_l', 'arm_r', 'hand_l', 'hand_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r']);
+  /**
+   * ★ 肢体静倾角 = **该部件贴图自己的实测中轴倾角**（`limbAxes.axes[key].k`），
+   *   绕**世界 X 轴**（画布的左右 = 世界侧向 Z）。
+   *   · 绕 X ⇒ 正面视图里是斜的（就是素材画的 2D 方向），侧视图里投影到 Y = **竖直**，
+   *     这正是用户要的"保留正面的倾斜，侧面是竖直的"。
+   *     ⚠ 代码里绝不能出现绕 Z 的肢体倾角 —— 那才会让侧视图歪。
+   *   · 唯一的例外是**小腿**：用户定调"从膝关节到脚尖"要走直线（素材小腿外撇 5~6°，
+   *     照搬就是"脚尖朝外侧"），所以小腿骨强制铅垂。
+   *   · 骨必须**逐段**跟各自纹理的方向（上臂 5°、前臂+手 31°），不能合并成一根直骨：
+   *     用户"为什么手臂和纹理侧面方向不一致"就是在指这个。
+   *   ★ 倾角只影响骨骼/碰撞体；渲染端 `restVisualQuatOf` 完全补偿 ⇒ 贴图逐像素不动。
+   */
   const restTiltOf = (key: string, leg: boolean): number => {
     if (!TILTED.has(key)) return 0;
-    // ★ 小腿骨**不跟随素材的外撇**：用户要求"从膝关节到脚尖"走直线，
-    //   素材小腿骨轴外撇 5.9°/4.9°，照搬就是"脚尖朝外侧"。
-    //   注意这**不影响纹理** —— 倾角在渲染端被完全补偿掉（restVisualQuatOf），
-    //   所以这里改的纯粹是骨骼：膝以下垂直向下。
     if (key === 'shin_l' || key === 'shin_r') return 0;
     const ax = LIMB_AXES.axes[key];
     if (!ax) return 0;
@@ -598,7 +611,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     let length = boxLen;
     let halfHeight = boxHalf;
     if (ax && TILTED.has(spec.key)) {
-      length = Math.max(boxLen, ax.lenPx * px2m);
+      // ★ PIVOT_PAD：铰链枢轴在**关节**上，解剖上略微在肢体轮廓之外
+      //   （肘锚点距前臂骨轴中点 205mm，骨轴半长只有 203mm）。给每端留 15mm，
+      //   否则 verify-core 的"锚点不越出胶囊"会差 2mm 判失败。
+      length = Math.max(boxLen, ax.lenPx * px2m) + 2 * PIVOT_PAD;
       halfHeight = Math.max(1e-3, length / 2 - radius);
     }
     const tilt = restTiltOf(spec.key, !!spec.leg);

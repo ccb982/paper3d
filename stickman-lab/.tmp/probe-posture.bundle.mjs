@@ -6024,68 +6024,68 @@ var init_limbAxes = __esm({
       scale: 0.5,
       axes: {
         arm_l: {
-          k: -0.08841,
-          b: 514.68,
-          rms: 11.14,
+          k: -0.08834,
+          b: 514.62,
+          rms: 11.13,
           tiltDeg: -5.05,
           proxTip: [
-            456.4,
-            659.5
+            456.5,
+            658
           ],
           distTip: [
-            408.6,
+            408.7,
             1199.5
           ],
-          lenPx: 540
+          lenPx: 541.5
         },
         arm_r: {
-          k: 0.08841,
-          b: 1050.32,
+          k: 0.08834,
+          b: 1050.38,
           rms: 6.92,
           tiltDeg: 5.05,
           proxTip: [
-            1108.6,
-            659.5
+            1108.5,
+            658
           ],
           distTip: [
-            1156.4,
+            1156.3,
             1199.5
           ],
-          lenPx: 540
+          lenPx: 541.5
         },
         hand_l: {
-          k: -0.6101,
-          b: 1092.87,
-          rms: 23.92,
-          tiltDeg: -31.39,
+          k: -0.60768,
+          b: 1089.66,
+          rms: 24.08,
+          tiltDeg: -31.29,
           proxTip: [
-            444,
+            443.4,
             1063.5
           ],
           distTip: [
-            56.9,
+            57.8,
             1698
           ],
           lenPx: 634.5
         },
         hand_r: {
-          k: 0.6101,
-          b: 472.13,
-          rms: 22.92,
-          tiltDeg: 31.39,
+          k: 0.60768,
+          b: 475.34,
+          rms: 23.22,
+          tiltDeg: 31.29,
           proxTip: [
-            1121,
+            1121.6,
             1063.5
           ],
           distTip: [
-            1508.1,
+            1507.2,
             1698
           ],
           lenPx: 634.5
         },
         thigh_l: {
-          k: -0.14033,
-          b: 862.06,
+          k: -0.14031,
+          b: 862.02,
           rms: 4.7,
           tiltDeg: -7.99,
           proxTip: [
@@ -6099,8 +6099,8 @@ var init_limbAxes = __esm({
           lenPx: 679
         },
         thigh_r: {
-          k: 0.14033,
-          b: 702.94,
+          k: 0.14031,
+          b: 702.98,
           rms: 11.02,
           tiltDeg: 7.99,
           proxTip: [
@@ -6115,8 +6115,8 @@ var init_limbAxes = __esm({
         },
         shin_l: {
           k: -0,
-          b: 527.55,
-          rms: 10.03,
+          b: 527.46,
+          rms: 10.05,
           tiltDeg: -0,
           proxTip: [
             527.5,
@@ -6130,8 +6130,8 @@ var init_limbAxes = __esm({
         },
         shin_r: {
           k: 0,
-          b: 1037.45,
-          rms: 9.04,
+          b: 1037.54,
+          rms: 9.06,
           tiltDeg: 0,
           proxTip: [
             1037.5,
@@ -6144,25 +6144,25 @@ var init_limbAxes = __esm({
           lenPx: 740.5
         },
         torso: {
-          k: -0.01378,
-          b: 788.21,
-          rms: 6.89,
-          tiltDeg: -0.79,
+          k: -0.0135,
+          b: 787.96,
+          rms: 6.73,
+          tiltDeg: -0.77,
           proxTip: [
-            805.3,
+            783.5,
             513
           ],
           distTip: [
-            876.2,
-            1766
+            874.5,
+            1767
           ],
-          lenPx: 1253
+          lenPx: 1254
         },
         head: {
-          k: -0.01095,
-          b: 791.13,
-          rms: 4.46,
-          tiltDeg: -0.63,
+          k: -0.01059,
+          b: 791.21,
+          rms: 4.7,
+          tiltDeg: -0.61,
           proxTip: [
             796,
             92
@@ -6188,12 +6188,12 @@ var init_limbAxes = __esm({
           703.5
         ],
         elbow_l: [
-          416.7,
-          1108.3
+          416.9,
+          1107
         ],
         elbow_r: [
-          1148.3,
-          1108.3
+          1148.1,
+          1107
         ],
         hip_l: [
           587.5,
@@ -6216,8 +6216,8 @@ var init_limbAxes = __esm({
         neck: 99,
         shoulder_l: 25,
         shoulder_r: 25,
-        elbow_l: 33,
-        elbow_r: 19,
+        elbow_l: 32,
+        elbow_r: 18,
         hip_l: 25,
         hip_r: 25,
         knee_l: 20,
@@ -6228,8 +6228,8 @@ var init_limbAxes = __esm({
           yWide: 2792,
           yLow: 2895,
           centerX: 454.5,
-          drawnAxisXAtSole: 488.4,
-          shaftTiltDeg: -5.51,
+          drawnAxisXAtSole: 488.1,
+          shaftTiltDeg: -5.54,
           lateralHalf: 159,
           pawHeightPx: 103,
           slopeDeg: -0.82
@@ -6238,8 +6238,8 @@ var init_limbAxes = __esm({
           yWide: 2792,
           yLow: 2895,
           centerX: 1110.5,
-          drawnAxisXAtSole: 1076.6,
-          shaftTiltDeg: 4.86,
+          drawnAxisXAtSole: 1076.9,
+          shaftTiltDeg: 4.88,
           lateralHalf: 159,
           pawHeightPx: 103,
           slopeDeg: 0.82
@@ -6287,9 +6287,9 @@ __export(skeleton_exports, {
 function restQuatOf(tiltRad, yawRad) {
   const ht = tiltRad / 2, hy = yawRad / 2;
   return [
-    Math.sin(ht) * Math.cos(hy),
+    Math.cos(hy) * Math.sin(ht),
     Math.sin(hy) * Math.cos(ht),
-    -Math.cos(hy) * Math.sin(ht),
+    -Math.sin(hy) * Math.sin(ht),
     Math.cos(hy) * Math.cos(ht)
   ];
 }
@@ -6369,6 +6369,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
     if (!TILTED.has(key)) return 0;
@@ -6386,12 +6387,18 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
-    const { length, radius, halfHeight } = capsuleFromBox(
+    const { length: boxLen, radius, halfHeight: boxHalf } = capsuleFromBox(
       part.bw * px2m,
       part.bh * px2m,
       cfg.limbRadiusScale
     );
     const ax = LIMB_AXES.axes[spec.key];
+    let length = boxLen;
+    let halfHeight = boxHalf;
+    if (ax && TILTED.has(spec.key)) {
+      length = Math.max(boxLen, ax.lenPx * px2m) + 2 * PIVOT_PAD;
+      halfHeight = Math.max(1e-3, length / 2 - radius);
+    }
     const tilt = restTiltOf(spec.key, !!spec.leg);
     const yaw = restYawOf(spec.key);
     const qRestInv = invQuatOf(restQuatOf(tilt, yaw));
@@ -6635,11 +6642,14 @@ function assertJointAnchors(sk2) {
   for (const j of sk2.joints) {
     const p = sk2.bodies.find((b) => b.key === j.parentKey);
     const c = sk2.bodies.find((b) => b.key === j.childKey);
-    for (const [b, l] of [[p, j.parentLocal], [c, j.childLocal]]) {
+    for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
       const reach = b.halfHeight + b.radius;
       const d = Math.hypot(l[0], l[1], l[2]);
       const over = d - reach;
       if (over > worst) worst = over;
+      if (over > 1e-4) {
+        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm |d|=${(d * 1e3).toFixed(1)}mm > reach=${(reach * 1e3).toFixed(1)}mm  \u8D8A ${(over * 1e3).toFixed(1)}mm`);
+      }
     }
   }
   return worst;
@@ -14732,6 +14742,49 @@ var init_sim = __esm({
         }
         return false;
       }
+      /** ★ 适应度分项（诊断用）。`total` 就是最终适应度；探针用它定位"站桩为什么是负分"。 */
+      terms = {};
+      /**
+       * 适应度公式（walk / fight 两套）。抽成独立方法是为了让 `finish()` 和诊断接口
+       * 共用**同一份公式** —— 以前诊断要复制一遍公式，改权重就会漏改（踩过）。
+       */
+      fitnessTerms(fallen, elapsed) {
+        const w = this.w;
+        if (this.cfg.mode === "walk") {
+          const t2 = {
+            // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
+            //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
+            distance: w.distance * Math.max(0, this.distance),
+            velocity: w.velocity * this.accVel,
+            upright: w.upright * (this.accUpright - elapsed),
+            height: -w.height * this.accHeight,
+            lateral: -w.lateral * this.accLateral,
+            energy: -w.energy * this.accEnergy,
+            // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
+            balance: -w.balance * this.accBalance,
+            // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
+            smooth: w.smooth * this.accSmooth,
+            survive: w.survive * elapsed,
+            step: w.step * this.stepCount,
+            fall: fallen ? -w.fall : 0
+          };
+          t2.total = Object.values(t2).reduce((a, b) => a + b, 0);
+          return t2;
+        }
+        const t = {
+          hit: w.hit * this.hits,
+          hurt: -w.hurt * this.hurts,
+          approach: w.approach * this.accClose,
+          upright: w.upright * (this.accUpright - elapsed),
+          height: -w.height * this.accHeight,
+          balance: -w.balance * this.accBalance,
+          smooth: w.smooth * this.accSmooth,
+          progress: 0.5 * this.progressRaw(),
+          fall: fallen ? -w.fall : 0
+        };
+        t.total = Object.values(t).reduce((a, b) => a + b, 0);
+        return t;
+      }
       finish(fallen) {
         this.fallen = fallen;
         const elapsed = this.tick / this.cfg.controlHz;
@@ -14740,17 +14793,8 @@ var init_sim = __esm({
         this.endTilt = this.doll.tiltOf(this.doll.torso());
         this.endHeadY = this.doll.head().translation().y;
         this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
-        let f2;
-        if (this.cfg.mode === "walk") {
-          f2 = w.distance * Math.max(0, this.distance) + w.velocity * this.accVel + // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以这一项恒 ≤ 0：不直立就扣分，
-          //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-          w.upright * (this.accUpright - elapsed) - w.height * this.accHeight - w.lateral * this.accLateral - w.energy * this.accEnergy - // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-          w.balance * this.accBalance - // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
-          w.smooth * this.accSmooth + w.survive * elapsed + w.step * this.stepCount;
-          if (fallen) f2 -= w.fall;
-        } else {
-          f2 = w.hit * this.hits - w.hurt * this.hurts + w.approach * this.accClose + w.upright * (this.accUpright - elapsed) - w.height * this.accHeight - w.balance * this.accBalance - w.smooth * this.accSmooth + 0.5 * this.progressRaw() - (fallen ? w.fall : 0);
-        }
+        this.terms = this.fitnessTerms(fallen, elapsed);
+        const f2 = this.terms.total;
         this.fitness = f2;
         this.finished = true;
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
@@ -15227,18 +15271,18 @@ log("\u2550\u2550\u2550\u2550\u2550\u2550 [A] \u89C2\u6D4B / \u652F\u6491\u57DF\
     `${f(com.y, 4)} m`
   );
   check(
-    "A5 \u524D\u540E\u534A\u5BBD \u2248 0.110 m\uFF08\u811A\u638C\u957F\u5EA6\u51B3\u5B9A\uFF0C\u4E0E probe-stability \u4E00\u81F4\uFF09",
-    Math.abs(sup.halfX - 0.11) < 0.01,
+    "A5 \u524D\u540E\u534A\u5BBD \u2248 0.143 m\uFF08\u5916\u516B 25\xB0 + \u5B9E\u6D4B\u9774\u5BBD\uFF1B\u65E7\u503C 0.110 \u662F\u80F6\u56CA\u534A\u5F84\u731C\u7684\uFF09",
+    Math.abs(sup.halfX - 0.143) < 0.012,
     `${f(sup.halfX)} m`
   );
   check(
-    "A6 \u2605 \u4FA7\u5411**\u88AB\u52A8**\u534A\u5BBD \u2248 0.070 m\uFF08= \u5355\u811A\u5BBD\uFF0C\u4E0D\u662F\u7AD9\u59FF\u5BBD\uFF09",
-    Math.abs(sup.halfZ - 0.07) < 0.012,
+    "A6 \u2605 \u4FA7\u5411**\u88AB\u52A8**\u534A\u5BBD \u2248 0.139 m\uFF08= \u5355\u811A\u5BBD\uFF1A\u5B9E\u6D4B\u9774\u5BBD 0.102 + \u5916\u516B\u6295\u5F71 0.046\uFF09",
+    Math.abs(sup.halfZ - 0.139) < 0.015,
     `${f(sup.halfZ)} m`
   );
   check(
-    "A7 \u2605 \u4FA7\u5411\u4E3B\u52A8\u534A\u5BBD\uFF08\u51F8\u5305\uFF09\u2248 0.266 m \u21D2 \u88AB\u52A8\u53EA\u5360 1/4",
-    sup.halfZActive > sup.halfZ * 3,
+    "A7 \u2605 \u4FA7\u5411\u4E3B\u52A8\u534A\u5BBD\uFF08\u51F8\u5305\uFF09\u2265 \u88AB\u52A8 2 \u500D\uFF08\u7AD9\u59FF\u5BBD vs \u5355\u811A\u5BBD\uFF09",
+    sup.halfZActive > sup.halfZ * 1.8,
     `\u88AB\u52A8 ${f(sup.halfZ)} / \u4E3B\u52A8 ${f(sup.halfZActive)} = ${pc(sup.halfZ / sup.halfZActive, 0)}`
   );
   check("A8 \u7ED1\u5B9A\u59FF\u6001\u4E24\u811A\u90FD\u63A5\u5730", sup.contactN === 2, `${sup.contactN} \u53EA`);

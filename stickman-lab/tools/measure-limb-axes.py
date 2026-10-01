@@ -90,23 +90,22 @@ def load_mask(path):
 
 
 def _load_mask_uncached(path):
-    im = Image.open(path).convert("RGBA")
+    """行/列覆盖区间。★ 全部用 PIL 的 C 级 `crop().getbbox()` 逐行/逐列取范围，
+    不用 Python 逐像素循环 —— 全画布 1568x2944 = 460 万像素/部件，
+    纯 Python 要 15~20 s/部件（10 个部件 3 分钟，还容易被中断）。
+    （别用 transpose 推列：ROTATE_90 的行列映射和直觉相反，这里踩过。）"""
+    im = Image.open(path).convert("RGBA").split()[3].point(lambda v: 255 if v > 8 else 0)
     W, H = im.size
-    a = im.load()
-    rows, cols = {}, {}
+    rows = {}
     for y in range(H):
-        for x in range(W):
-            if a[x, y][3] > 8:
-                if y in rows:
-                    lo, hi = rows[y]
-                    rows[y] = (min(lo, x), max(hi, x))
-                else:
-                    rows[y] = (x, x)
-                if x in cols:
-                    lo, hi = cols[x]
-                    cols[x] = (min(lo, y), max(hi, y))
-                else:
-                    cols[x] = (y, y)
+        bb = im.crop((0, y, W, y + 1)).getbbox()
+        if bb:
+            rows[y] = (bb[0], bb[2] - 1)
+    cols = {}
+    for x in range(W):
+        bb = im.crop((x, 0, x + 1, H)).getbbox()
+        if bb:
+            cols[x] = (bb[1], bb[3] - 1)
     return rows, cols
 
 
@@ -128,22 +127,9 @@ def margin_at(mask, x, y):
 
 
 def row_profile(path):
-    im = Image.open(path).convert("RGBA")
-    W, H = im.size
-    a = im.load()
-    out = []
-    for y in range(H):
-        lo, hi, n, sx = None, None, 0, 0
-        for x in range(W):
-            if a[x, y][3] > 8:
-                n += 1
-                sx += x
-                if lo is None:
-                    lo = x
-                hi = x
-        if n > 3:
-            out.append((y, sx / n, n))
-    return out
+    """逐行 (y, 覆盖中点 x, 覆盖宽度)。复用掩膜的行区间（不重复扫像素）。"""
+    rows, _ = load_mask(path)
+    return [(y, (lo + hi) / 2, hi - lo + 1) for y, (lo, hi) in rows.items() if hi - lo + 1 > 3]
 
 
 def fit_axis(prof):
@@ -227,7 +213,7 @@ def best_overlap(pm, cm, box):
             continue
         for x in range(lo, hi + 1):
             mg = min(margin_at(pm, x, y), margin_at(cm, x, y))
-            if best is None or mg > best[2]:
+            if best is None or mg > best[1]:
                 best = ([x, y], mg)
     return best if best else (None, -1e9)
 
@@ -442,10 +428,8 @@ def main() -> int:
     #   ② 再把骨轴改成**铅垂**（k=0，过该肢体中段中点）：上臂/前臂/小腿都竖直。
     #      用户回读"脚尖朝外侧"——素材整条腿外撇（髋 615 → 膝 542 → 脚底 476px），
     #      照搬骨骼就是外八。改成垂直后"膝→脚尖"是一条铅垂线（用户："从膝关节到脚尖"）。
-    #   上肢同样处理（用户："我要手臂侧面的骨架竖直，纹理别动"）——
-    #   原来上臂骨 5°、前臂骨 31°，肘几乎伸直却在骨上折 36° = 一条断臂。
     #   纹理侧完全不受影响：倾角在渲染端被 restVisualQuatOf 补偿掉，贴图仍与素材逐像素一致。
-    for key in ("shin_l", "shin_r", "arm_l", "arm_r", "hand_l", "hand_r"):
+    for key in ("shin_l", "shin_r"):
         prof = row_profile(os.path.join(SRC_DIR, FILES[key]))
         if key.startswith("shin"):
             shaft = [p for p in prof if p[0] <= measure_paw(key)["yWide"]]   # 排除靴子
@@ -484,6 +468,82 @@ def main() -> int:
     for side, p in paws.items():
         print(f"  shin_{side}: 最宽行 y={p['yWide']}  最低点 y={p['yLow']}  爪高 {p['pawHeightPx']}px  "
               f"中心 x={p['centerX']}  侧向半宽 {p['lateralHalf']}px  底边斜 {p['slopeDeg']}°")
+
+    # ---------------------------------------------------------------- 关节锚点
+    #   硬要求（用户："最起码各个肢体的关节必须连起来"）：锚点必须落在父/子两张贴图的
+    #   alpha **内部**并留足余量。余量要求分档：肩/髋 25px（大摆角球窝，贴边必露缝）、
+    #   膝 20px、肘 8px、颈 6px。
+    print(f"\n关节锚点（落在父/子 alpha 内部；肩/髋≥{MARGIN_BALL:.0f}px 膝≥{MARGIN_KNEE:.0f}px "
+          f"肘≥{MARGIN_HINGE:.0f}px 颈≥{MARGIN_DEFAULT:.0f}px）")
+    anchors, margins, ok = {}, {}, True
+    for jname, pkey, ckey in CHAINS:
+        pm, cm = masks[pkey], masks[ckey]
+        ca = axes[ckey]
+        mg_min = (MARGIN_BALL if jname in BALL_JOINTS
+                  else MARGIN_KNEE if jname in KNEE_JOINTS
+                  else MARGIN_HINGE if jname in ELBOW_JOINTS
+                  else MARGIN_DEFAULT)
+        cands = []
+        if jname == "neck":
+            cands.append(("沿用重叠区中心", list(old_anchor[jname])))
+        else:
+            if pkey != "torso":
+                pa = axes[pkey]
+                if ckey in ("hand_l", "hand_r"):
+                    # 肘：上臂/前臂各自的实测轴不同（5°/31°）⇒ 铰链取"两轴最近可交点"
+                    near, mg, mis = nearest_cross(pa, ca, pm, cm, mg_min)
+                    if near:
+                        cands.append((f"双轴最近可交点(差{mis:.0f}px)", near))
+                if ckey.startswith("shin"):
+                    onAx, mg = on_child_axis(ca, pm, cm, mg_min)
+                    if onAx:
+                        cands.append(("子骨轴上吸附(膝以下铅垂)", onAx))
+                if abs(pa["k"] - ca["k"]) >= NEAR_PARALLEL:
+                    hit = intersect(pa, ca)
+                    if hit and min(margin_at(pm, hit[0], hit[1]), margin_at(cm, hit[0], hit[1])) >= mg_min:
+                        cands.append(("中轴求交", hit))
+                else:
+                    cands.append(("中轴近平行→端心连线中点", [
+                        (ca["proxTip"][0] + pa["distTip"][0]) / 2,
+                        (ca["proxTip"][1] + pa["distTip"][1]) / 2]))
+            else:
+                pt, mg = topmost_overlap(pm, cm, ca["proxTip"], 0.35 * ca["lenPx"], mg_min)
+                if pt:
+                    cands.append((f"重叠区首次接触(余量≥{mg_min:.0f}px)", pt))
+            cands.append((f"近端端心内移 {INWARD:.0%}", inward_point(ca, INWARD)))
+            pt, mg = topmost_overlap(pm, cm, ca["proxTip"], 0.35 * ca["lenPx"], mg_min)
+            if pt:
+                cands.append((f"重叠区首次接触(宽搜,余量≥{mg_min:.0f}px)", pt))
+            for i in range(1, 26):
+                cands.append((f"内扫 {i}%", inward_point(ca, i / 100.0)))
+
+        best = None
+        for how, pt in cands:
+            mg = min(margin_at(pm, pt[0], pt[1]), margin_at(cm, pt[0], pt[1]))
+            if mg >= mg_min:
+                best = (how, pt, mg)
+                break
+        if best is None:
+            pc, pcx = parts[pkey], parts[ckey]
+            box = (max(pc["cx"] - pc["bw"] / 2, pcx["cx"] - pcx["bw"] / 2) + 1,
+                   max(pc["cy"] - pc["bh"] / 2, pcx["cy"] - pcx["bh"] / 2) + 1,
+                   min(pc["cx"] + pc["bw"] / 2, pcx["cx"] + pcx["bw"] / 2) - 1,
+                   min(pc["cy"] + pc["bh"] / 2, pcx["cy"] + pcx["bh"] / 2) - 1)
+            pt, mg = best_overlap(pm, cm, box)
+            if pt:
+                cands.append(("重叠区最大余量(兜底)", pt))
+                if mg < 0:
+                    print(f"  [警告] {jname}: 连通性兜底后余量仍为 {mg:.1f}px（源图这两块本身不接）")
+                    ok = False
+            else:
+                print(f"  {jname:11} 父子贴图无任何 alpha 重叠")
+                ok = False
+                continue
+        how, (px, py), mg = best
+        anchors[jname] = [round(px, 1), round(py, 1)]
+        margins[jname] = round(mg, 1)
+        ox, oy = old_anchor[jname]
+        print(f"  {jname:11} ({px:7.1f},{py:7.1f}) 余量 {mg:5.1f}px  [{how}]  旧({ox:.0f},{oy:.0f}) Δ高 {oy - py:+6.1f}px")
 
     symmetrize_anchors(anchors, center_x)
 

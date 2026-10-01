@@ -668,6 +668,52 @@ export class Sim {
     return false;
   }
 
+  /** ★ 适应度分项（诊断用）。`total` 就是最终适应度；探针用它定位"站桩为什么是负分"。 */
+  terms: Record<string, number> = {};
+
+  /**
+   * 适应度公式（walk / fight 两套）。抽成独立方法是为了让 `finish()` 和诊断接口
+   * 共用**同一份公式** —— 以前诊断要复制一遍公式，改权重就会漏改（踩过）。
+   */
+  private fitnessTerms(fallen: boolean, elapsed: number): Record<string, number> {
+    const w = this.w;
+    if (this.cfg.mode === 'walk') {
+      const t: Record<string, number> = {
+        // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
+        //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
+        distance: w.distance * Math.max(0, this.distance),
+        velocity: w.velocity * this.accVel,
+        upright: w.upright * (this.accUpright - elapsed),
+        height: -w.height * this.accHeight,
+        lateral: -w.lateral * this.accLateral,
+        energy: -w.energy * this.accEnergy,
+        // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
+        balance: -w.balance * this.accBalance,
+        // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
+        smooth: w.smooth * this.accSmooth,
+        survive: w.survive * elapsed,
+        step: w.step * this.stepCount,
+        fall: fallen ? -w.fall : 0,
+      };
+      t.total = Object.values(t).reduce((a, b) => a + b, 0);
+      return t;
+    }
+    // 战斗：命中为主，但**必须带姿态塑形**（否则全员摔倒时适应度全是负数、梯度恒为零）。
+    const t: Record<string, number> = {
+      hit: w.hit * this.hits,
+      hurt: -w.hurt * this.hurts,
+      approach: w.approach * this.accClose,
+      upright: w.upright * (this.accUpright - elapsed),
+      height: -w.height * this.accHeight,
+      balance: -w.balance * this.accBalance,
+      smooth: w.smooth * this.accSmooth,
+      progress: 0.5 * this.progressRaw(),
+      fall: fallen ? -w.fall : 0,
+    };
+    t.total = Object.values(t).reduce((a, b) => a + b, 0);
+    return t;
+  }
+
   private finish(fallen: boolean): void {
     this.fallen = fallen;
     const elapsed = this.tick / this.cfg.controlHz;
@@ -676,40 +722,8 @@ export class Sim {
     this.endTilt = this.doll.tiltOf(this.doll.torso());
     this.endHeadY = this.doll.head().translation().y;
     this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
-    let f: number;
-    if (this.cfg.mode === 'walk') {
-      f =
-        w.distance * Math.max(0, this.distance) +
-        w.velocity * this.accVel +
-        // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以这一项恒 ≤ 0：不直立就扣分，
-        //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-        w.upright * (this.accUpright - elapsed) -
-        w.height * this.accHeight -
-        w.lateral * this.accLateral -
-        w.energy * this.accEnergy -
-        // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-        w.balance * this.accBalance -
-        // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
-        w.smooth * this.accSmooth +
-        w.survive * elapsed +
-        w.step * this.stepCount;
-      if (fallen) f -= w.fall;
-    } else {
-      // 战斗：命中为主，但**必须带姿态塑形**（否则全员摔倒时适应度全是 −2.00，
-      // 梯度恒为零、ES 无从下手 —— 2D 版就是这么卡住的）。
-      // 存活/直立给出"先站住"的梯度，approach 给出"伸手够到假人"的梯度，
-      // 命中才在上面叠一次大奖励。
-      f =
-        w.hit * this.hits -
-        w.hurt * this.hurts +
-        w.approach * this.accClose +
-        w.upright * (this.accUpright - elapsed) -
-        w.height * this.accHeight -
-        w.balance * this.accBalance -
-        w.smooth * this.accSmooth +
-        0.5 * this.progressRaw() -
-        (fallen ? w.fall : 0);
-    }
+    this.terms = this.fitnessTerms(fallen, elapsed);
+    const f = this.terms.total;
     this.fitness = f;
     this.finished = true;
     // 停下马达，避免展示视图里刚体还在挣扎

@@ -120,12 +120,18 @@ log('══════ [A] 观测 / 支撑域口径自检（直接用 posture.t
     `${brain.INPUT_COUNT}`);
   check('A4 CoM 高度 ≈ 0.966 m（对照 probe-stability 的解析值）',
     Math.abs(com.y - 0.9659) < 0.01, `${f(com.y, 4)} m`);
-  check('A5 前后半宽 ≈ 0.110 m（脚掌长度决定，与 probe-stability 一致）',
-    Math.abs(sup.halfX - 0.110) < 0.01, `${f(sup.halfX)} m`);
-  check('A6 ★ 侧向**被动**半宽 ≈ 0.070 m（= 单脚宽，不是站姿宽）',
-    Math.abs(sup.halfZ - 0.070) < 0.012, `${f(sup.halfZ)} m`);
-  check('A7 ★ 侧向主动半宽（凸包）≈ 0.266 m ⇒ 被动只占 1/4',
-    sup.halfZActive > sup.halfZ * 3, `被动 ${f(sup.halfZ)} / 主动 ${f(sup.halfZActive)} = ${pc(sup.halfZ / sup.halfZActive, 0)}`);
+  // ★ 期望值随**脚掌几何**重标定（2026-10-01）：脚掌盒不再用"小腿胶囊半径×0.9"那个猜测，
+  //   改成按纹理实测的靴宽（`limbAxes.paw.lateralHalf` = 159 px = 0.102 m 半宽），
+  //   并且整体绕竖直轴**外八 25°**（用户定调"脚要向外侧倾斜，做成外八"）、
+  //   盒心正对膝锚点。所以：
+  //     · 前后半宽 0.110 → 0.143 m（外八后 hx 在前后方向的投影变短、盒对角线露出更多）
+  //     · 侧向被动半宽 0.070 → 0.139 m（实测靴宽 0.102 + 外八带来的 hx·sin25 = 0.046）
+  check('A5 前后半宽 ≈ 0.143 m（外八 25° + 实测靴宽；旧值 0.110 是胶囊半径猜的）',
+    Math.abs(sup.halfX - 0.143) < 0.012, `${f(sup.halfX)} m`);
+  check('A6 ★ 侧向**被动**半宽 ≈ 0.139 m（= 单脚宽：实测靴宽 0.102 + 外八投影 0.046）',
+    Math.abs(sup.halfZ - 0.139) < 0.015, `${f(sup.halfZ)} m`);
+  check('A7 ★ 侧向主动半宽（凸包）≥ 被动 2 倍（站姿宽 vs 单脚宽）',
+    sup.halfZActive > sup.halfZ * 1.8, `被动 ${f(sup.halfZ)} / 主动 ${f(sup.halfZActive)} = ${pc(sup.halfZ / sup.halfZActive, 0)}`);
   check('A8 绑定姿态两脚都接地', sup.contactN === 2, `${sup.contactN} 只`);
   check('A9 绑定姿态 DCM 在被动域内（起跑线是安全的）',
     Math.abs(nz) < 1 && Math.abs(nx) < 1, `nx=${f(nx, 2)} nz=${f(nz, 2)}`);
