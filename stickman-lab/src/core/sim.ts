@@ -63,6 +63,16 @@ export interface SimConfig {
    *   设在 0 = 不抬升（永远用 stepMinDx）。
    */
   stepMinDxMax: number;
+  /** 一次有效迈步打开的**稳定窗口**上限（秒）：窗口内站稳就计时给分 —— 见 W.hold */
+  holdMaxSec: number;
+  /** 每多迈一步，保持段速率与步数分打的折扣（stepDecay^n，n = 已迈步数） */
+  stepDecay: number;
+  /** 两次有效迈步的**最小间隔**（s）：小于它按抢步罚（见 W.rush） */
+  stepMinGap: number;
+  /** 静止罚的**宽限**（s）：循环外先免费站这么久，之后开始扣 */
+  stillGrace: number;
+  /** 静止罚速率爬满所用的时间（s）：从宽限点起线性升到 1×，之后到 3× 封顶 */
+  stillRamp: number;
   /**
    * 求解器迭代次数。
    * ★ 3D 之后**必须**提高：球关节的锚点约束刚度直接由它决定。
@@ -108,7 +118,12 @@ export const DEFAULT_SIM: SimConfig = {
   stepMinDx: 0.05,     // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
   stepMaxDz: 0.06,     // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
   stepMinTotal: 0.15,  // 累计前进不足 15 cm 时一律不给步数分
-  stepMinDxMax: 0.30,   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
+  stepMinDxMax: 0.30,
+  holdMaxSec: 2.0,    // 每迈一步最多换 2.0 s 的"站稳"分 ⇒ 想多拿必须再迈
+  stepDecay: 0.6,     // 第 2 步 ×0.6、第 3 步 ×0.36 …（"逐渐减弱"）
+  stepMinGap: 0.35,   // 两步之间至少 0.35 s，否则算"抢步"扣分
+  stillGrace: 0.6,    // 循环外先免费站 0.6 s
+  stillRamp: 1.5,     // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
   solverIterations: 16,
   fallHeightRatio: 0.62,
   fallAngle: 1.25,
@@ -145,6 +160,43 @@ export const W = {
    * 但那次的解法应该是"收紧条件"，不是"取消换脚奖励"—— 没有它就没有"迈步"这个梯度。
    */
   switch: 0.3,
+  /**
+   * ★★★ **迈步后保持稳定的加分**（用户 2026-10-01 定调，循环式奖励）：
+   * > "还不如让这玩意只迈两步，但是每迈一步都要稳，需要自行调整平衡"
+   * > "需要一个迈步后保持稳定的加分，而且在迈步后要高于迈下一步的收益，然后逐渐减弱，再迈下一步"
+   * > "循环为迈步，保持稳定，再迈下一步，再保持稳定的循环"
+   *
+   * 做法：一次**有效迈步**打开一个**稳定窗口**（`holdMaxSec` 秒，上限），
+   *   · 窗口内只要**还在支撑域内**（DCM 未越界）就积分"站稳的秒数"——这就是"自行调整平衡"；
+   *   · 每一步的窗口按 `stepDecay^已迈步数` 打折 ⇒ **第一步比第二步值钱，之后逐渐减弱**；
+   *   · 窗口用完（或摔倒）就不再给分 ⇒ 想继续拿分**必须再迈一步**，
+   *     于是最优策略长成用户描述的循环：**迈步 → 站稳 → 再迈 → 再站稳**。
+   *   （曾经用"给分速率指数衰减"，实测不行：迈步后要 1~2 s 才稳得住，
+   *     `holdTau=1.1s` 时窗口结束时速率已衰减到 4%，等于白给 ⇒ 改成计秒数。）
+   * 于是最优策略自然长成用户描述的循环：**迈步 → 稳住 → 再迈 → 再稳住**。
+   */
+  hold: 1.2,
+  /**
+   * ★★ **抢步罚**（用户 2026-10-01："迈一步立刻迈第二步应该是负分"）。
+   * 两次有效迈步之间的间隔 < `stepMinGap`（默认 0.35 s）就按"越快罚得越狠"计：
+   *   罚 = `W.rush · (1 − gap/stepMinGap)`。
+   * 它和"迈步后保持稳定"的加分是一对：**站稳了再迈才有分，抢步倒扣** ⇒ 策略学到的是节奏。
+   */
+  rush: 1.5,
+  /**
+   * ★★ **静止罚**（用户 2026-10-01："这个抢步罚后面会转为静止罚"）。
+   * 只有"不罚"是不够的：迈一步 → 站完 2 s 窗口 → 什么都不做，收益并不比
+   * "继续迈步"差，所以最优解会退化成"**迈一步然后 freeze**"。
+   * ⇒ 只要**不在循环里**（稳定窗口已关、或还没迈出第一步）就一直扣，
+   *   而且**越站越贵**：扣分速率在 `stillGrace` 秒后开始，按 `stillRamp` 线性爬升（上限 3×）。
+   */
+  still: 1.0,
+  /**
+   * ★★ **同腿连迈罚**（用户："一条腿连着迈两步更是负上加负"）。
+   * 摆动腿腾空后**又落到同一条腿**（stance 1→0→1 / 2→0→2）而不是换另一条 = 单腿跳，
+   * 这种"假步"既不计入有效迈步，还要额外扣分（`W.sameFoot` / 次）。
+   */
+  sameFoot: 0.5,
   /** 前进速度积分（塑形项：让早期就有梯度，不必等撞线） */
   velocity: 0.6,
   /**
@@ -329,6 +381,33 @@ export class Sim {
   readonly stepDiag = { switch: 0, noPrev: 0, noAlt: 0, slow: 0, notStraight: 0, tooSmall: 0, notYet: 0, ok: 0 };
   /** ★ 交替换脚次数（只要求左右交替 + 在前进）—— W.switch 的计价依据 */
   private switchCount = 0;
+  /** ★ 当前稳定窗口剩余秒数（迈步时打开，用完关闭）—— 见 W.hold */
+  private holdWindow = 0;
+  /** ★ 当前窗口的折扣（= stepDecay^已迈步数） */
+  private holdFactor = 0;
+  /** ★ 累计"迈步后站稳的秒数 × 折扣" */
+  private accHold = 0;
+  /** ★ 上一次有效迈步的时刻（s），用于抢步判定 */
+  private lastStepT = -1;
+  /** ★ 抢步罚累计（归一化量，1 = 刚好抢到 0 间隔） */
+  private accRush = 0;
+  /** ★ 已过秒数（抢步判定用） */
+  private elapsed = 0;
+  /** ★ 同腿连迈次数 */
+  private accSameFoot = 0;
+  /** ★ 不在"迈步+站稳"循环里的时长（s）—— 静止罚的计时 */
+  private quietT = 0;
+  /** ★ 静止罚累计（归一化秒数，速率加权前） */
+  private accStill = 0;
+  /** ★ 腾空前着地的是哪只脚 / 本轮是否腾空过（同腿连迈判定用） */
+  private footBeforeFlight = 0;
+  private sawFlight = false;
+  /** ★ 诊断：CoM 在支撑域内的累计/计数（hold 奖励的判据） */
+  private supInRatio = 0;
+  private supTicks = 0;
+  private lastInSup = false;
+  /** ★ 步数分按"逐渐减弱"加权后的累计（米 × 折扣） */
+  private accStepScore = 0;
   /** ★ 腾空时间（双脚都离地），单位 s —— 见 W.air */
   private accAir = 0;
 
@@ -489,6 +568,20 @@ export class Sim {
     this.lastStance = 0;
     this.stepCount = 0;
     this.switchCount = 0;
+    this.holdWindow = 0;
+    this.holdFactor = 0;
+    this.accHold = 0;
+    this.supInRatio = 0;
+    this.supTicks = 0;
+    this.lastStepT = -1;
+    this.accRush = 0;
+    this.elapsed = 0;
+    this.accSameFoot = 0;
+    this.quietT = 0;
+    this.accStill = 0;
+    this.footBeforeFlight = 0;
+    this.sawFlight = false;
+    this.accStepScore = 0;
     this.stepDist = 0;
     this.stepTotalX = 0;
     this.stepLastFoot = 0;
@@ -602,8 +695,15 @@ export class Sim {
   }
 
   /** ★ 诊断：有效迈步的门槛分项计数 + 已计分的有效步数/距离。 */
-  get stepStat(): { diag: Record<string, number>; count: number; dist: number } {
-    return { diag: { ...this.stepDiag }, count: this.stepCount, dist: this.stepDist };
+  get stepStat(): { diag: Record<string, number>; count: number; dist: number;
+    holdWindow: number; holdFactor: number; accHold: number; inDomainRatio: number;
+    lastInSup: boolean; supInRatio: number; supTicks: number } {
+    return {
+      diag: { ...this.stepDiag }, count: this.stepCount, dist: this.stepDist,
+      holdWindow: this.holdWindow, holdFactor: this.holdFactor, accHold: this.accHold,
+      lastInSup: this.lastInSup, supInRatio: this.supInRatio, supTicks: this.supTicks,
+      inDomainRatio: this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0,
+    };
   }
 
   /** ★ 诊断：当前观测里的时钟两项（clock.sin, clock.cos）与步态相位。 */
@@ -695,6 +795,33 @@ export class Sim {
     this.accBalance += (eX * eX + eZ * eZ) * dt;
     if (eX === 0 && eZ === 0) this.inDomainTicks++;
     this.balanceTicks++;
+    // ★★★ 稳定窗口积分（见 W.hold）：**只有还在支撑域内**才给分（这就是"每迈一步都要稳"），
+    //   计的是"站稳的秒数 × 该步折扣"，窗口上限 holdMaxSec ⇒ 想要更多分必须再迈一步。
+    //   ★ 判据用 **CoM 在支撑域内**，不是 DCM：DCM = 捕获点，**走路时本来就该超前于 CoM**
+    //   （每一步都是"重心冲出 → 落脚点把它接住"）。用 DCM 当"站稳"判据会把所有
+    //   正在走的策略判成不稳（实测：位移 1.21m 的步态域内占比只有 41%，稳定窗口 0 分）。
+    if (com.y > 0) { this.supTicks++; if (Math.abs(com.x - sup.cx) <= sup.halfX && Math.abs(com.z - sup.cz) <= sup.halfZ) this.supInRatio++; }
+    // ★★★ 静止罚（见 W.still）：**不在循环里**就一直扣，越站越贵。
+    //   循环内（稳定窗口还开着）不罚；窗口一关（或还没迈出第一步）就开始计时，
+    //   过 stillGrace 之后按 stillRamp 线性爬坡，封 3×。
+    if (this.holdWindow > 0) {
+      this.quietT = 0;
+    } else {
+      this.quietT += dt;
+      const over = this.quietT - this.cfg.stillGrace;
+      if (over > 0) {
+        const ramp = Math.min(3, over / Math.max(0.05, this.cfg.stillRamp));
+        this.accStill += ramp * dt;
+      }
+    }
+    if (this.holdWindow > 0) {
+      const inSup = Math.abs(com.x - sup.cx) <= sup.halfX && Math.abs(com.z - sup.cz) <= sup.halfZ;
+      this.lastInSup = inSup;
+      if (inSup) {
+        this.accHold += this.holdWindow > dt ? dt : this.holdWindow;
+        this.holdWindow -= dt;
+      }
+    }
     const anX = nx < 0 ? -nx : nx, anZ = nz < 0 ? -nz : nz;
     if (anX > this.peakDcmX) this.peakDcmX = anX;
     if (anZ > this.peakDcmZ) this.peakDcmZ = anZ;
@@ -717,6 +844,14 @@ export class Sim {
       //   满足则：步数 +1、**按本步前进距离计价**（stepDist += Δx），并重置本步锚点。
       //   任一条不满足：只重置锚点（这一步不算分），左右交替的序列也重新开始。
       this.stepDiag.switch++;
+      // ★★ 同腿连迈（假步）：腾空后又落回**同一条腿** ⇒ 计数扣分（不计入有效迈步）
+      const st: number = stance;
+      if (st !== 0 && st === this.footBeforeFlight && this.sawFlight) {
+        this.accSameFoot++;
+        this.stepDiag.noAlt++;
+      }
+      if (st === 0) this.sawFlight = true;
+      if (st !== 0) this.footBeforeFlight = st;
       const footChanged = this.lastStance !== 0 && stance !== this.lastStance;
       if (this.lastStance === 0) this.stepDiag.noPrev++;
       else if (!footChanged) this.stepDiag.noAlt++;
@@ -738,6 +873,21 @@ export class Sim {
           this.stepCount++;
           this.stepDist += dx;
           this.stepDiag.ok++;
+          // ★★ 抢步罚：距上一步太近就倒扣（"迈一步立刻迈第二步应该是负分"）
+          if (this.lastStepT >= 0) {
+            const gap = this.elapsed - this.lastStepT;
+            if (gap < this.cfg.stepMinGap) {
+              this.accRush += 1 - gap / Math.max(1e-6, this.cfg.stepMinGap);
+            }
+          }
+          this.lastStepT = this.elapsed;
+          // ★★ 循环式奖励（用户定调）：这一步的折扣 = stepDecay^步数（越走越弱）
+          const decay = Math.pow(this.cfg.stepDecay, this.stepCount);
+          this.accStepScore += dx * decay;
+          // ★★ 迈步 ⇒ 打开"稳定窗口"：域内站稳就计秒数，窗口上限 holdMaxSec
+          this.holdWindow = this.cfg.holdMaxSec;
+          this.holdFactor = decay;
+          this.quietT = 0;              // ★ 进入循环 ⇒ 静止计时清零
         }
         // 无论这一步是否计分，锚点都挪到当前 ⇒ 下一步量的是"这一脚"，不会跨步累计
         this.stepAnchorX = tp.x;
@@ -862,17 +1012,28 @@ export class Sim {
         energy: -w.energy * this.accEnergy,
         // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
         balance: -w.balance * this.accBalance,
-        // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
-        smooth: w.smooth * this.accSmooth,
+        // ★★ 抖动**罚**（治"抽风式频繁发力"，见 W.smooth / probe-posture [C3]）
+        //   ⚠ 这里以前写成 **加号** ⇒ 疯狂抽风反而加分：实测 25 代训练把总分顶到 800~1400，
+        //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。
+        //   负号是这行唯一的要点，别改回去。
+        smooth: -w.smooth * this.accSmooth,
         survive: w.survive * elapsed,
         // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
         switch: w.switch * this.switchCount,
-        // ★★ 步数奖励按**有效迈步的前进距离**计价（m），不按次数 ——
-        //   "大位移才有奖励"；而每一次有效迈步都必须满足三条门槛（见 controlTick）。
-        step: w.step * this.stepDist,
+        // ★★ 大位移奖金：按**打折后**的有效迈步距离计价（米 × stepDecay^已迈步数）
+        //   "大位移才有奖励" + "在迈步后要高于迈下一步的收益，然后逐渐减弱"
+        step: w.step * this.accStepScore,
         // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
         // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
         step2: w.step2 * ((this.stepCount * (this.stepCount - 1)) / 2),
+        // ★★ 静止罚（"抢步罚后面会转为静止罚"）：不在迈步-站稳循环里就一直扣，见 W.still
+        still: -w.still * this.accStill,
+        // ★★ 抢步罚（"迈一步立刻迈第二步应该是负分"）：见 W.rush
+        rush: -w.rush * this.accRush,
+        // ★★ 同腿连迈罚（"一条腿连着迈两步更是负上加负"）：见 W.sameFoot
+        sameFoot: -w.sameFoot * this.accSameFoot,
+        // ★★★ 迈步后保持稳定的加分（循环的第二半）：站稳秒数 × 该步折扣，见 W.hold
+        hold: w.hold * this.accHold,
         air: -w.air * this.accAir,
         fall: fallen ? -w.fall : 0,
       };
@@ -887,7 +1048,7 @@ export class Sim {
       upright: w.upright * (this.accUpright - elapsed),
       height: -w.height * this.accHeight,
       balance: -w.balance * this.accBalance,
-      smooth: w.smooth * this.accSmooth,
+      smooth: -w.smooth * this.accSmooth,   // ★ 惩罚，负号（见 walk 分支的注释）
       progress: 0.5 * this.progressRaw(),
       fall: fallen ? -w.fall : 0,
     };

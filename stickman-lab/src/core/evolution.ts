@@ -162,7 +162,7 @@ export class Trainer {
    *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
    */
   applyGaitTuning(o: {
-    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number;
+    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number; wHold?: number; wStill?: number;
   }): void {
     for (const sm of this.sims) {
       if (o.straight !== undefined || o.minDx !== undefined) {
@@ -172,6 +172,8 @@ export class Trainer {
       if (o.wSwitch !== undefined) w.switch = o.wSwitch;
       if (o.wDistance !== undefined) w.distance = o.wDistance;
       if (o.wStep !== undefined) w.step = o.wStep;
+      if (o.wHold !== undefined) w.hold = o.wHold;
+      if (o.wStill !== undefined) w.still = o.wStill;
       if (Object.keys(w).length) sm.setWeights(w);
     }
     if (o.minDx !== undefined) this.stepMinDxManual = o.minDx;

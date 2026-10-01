@@ -588,7 +588,7 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;
   log(`  ${marks.join('  |  ')}`);
-  log(`  换脚（迈步）次数 = ${anat.terms.step !== undefined ? '' : ''}${(anat as unknown as { stepCount: number }).stepCount}`
+  log(`  换脚（迈步）次数 = ${(anat as unknown as { stepCount: number }).stepCount}`
     + `   腾空 = ${(((anat as unknown as { accAir: number }).accAir)).toFixed(2)} s`
     + `   分项 ${Object.entries(anat.terms).filter(([kk]) => kk !== 'total')
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5)

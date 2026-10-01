@@ -86,9 +86,13 @@ function run(g: Float32Array, dur = 6, gaitHz = DEFAULT_SIM.gaitHz,
   const marks: string[] = [];
   const clockTrace: string[] = [];
   let prev = -1, switches = 0, contacts = 0, air = 0, t = 0;
-  const hz = DEFAULT_SIM.controlHz;
+  // ★★ 时间基准：`advance(1)` 推进的是**物理步**（physicsHz=120），不是控制周期（60Hz）。
+  //   之前按 controlHz 计数 ⇒ 实际只跑了 duration/2 秒，而且永远走不到 ticksTotal（回合不结束、
+  //   finish() 不触发 ⇒ terms 是空的）。这个错会让所有"存活秒数"偏小一半。
+  const hz = DEFAULT_SIM.physicsHz;
   const n = Math.round(dur * hz);
-  for (let i = 0; i < n && !sim.finished; i++) {
+  // ★ 多跑几拍：让 sim 自己走到 duration 触发 finish()，否则 terms 是空的（分项在 finish 里算）
+  for (let i = 0; i < n + 8 && !sim.finished; i++) {
     sim.advance(1);
     if (i % 30 === 0) clockTrace.push(`${t.toFixed(2)}:${sim.clock.phase.toFixed(2)}/${sim.clock.sin.toFixed(2)}`);
     t = (i + 1) / hz;
@@ -161,12 +165,41 @@ const latR = run(lat);
 const f = (n: string): string => (fwd.terms[n] ?? 0).toFixed(3);
 const l = (n: string): string => (latR.terms[n] ?? 0).toFixed(3);
 console.log(`  前进型 gait  x=${fwd.x.toFixed(2)}m z=${fwd.z.toFixed(2)}m 存活${fwd.t.toFixed(2)}s`
-  + `  换脚奖励 switch=${f('switch')}  大位移奖金 step=${f('step')}`);
+  + `  换脚=${f('switch')}  位移奖金=${f('step')}  **保持=${f('hold')}**`);
 console.log(`  侧向抖 gait  x=${latR.x.toFixed(2)}m z=${latR.z.toFixed(2)}m 存活${latR.t.toFixed(2)}s`
-  + `  换脚奖励 switch=${l('switch')}  大位移奖金 step=${l('step')}`);
+  + `  换脚=${l('switch')}  位移奖金=${l('step')}  **保持=${l('hold')}**`);
 console.log(`  ① 前进型拿到换脚奖励（必须有）: ${(fwd.terms.switch ?? 0) > 0 ? 'PASS' : 'FAIL'}`);
 console.log(`  ①b 侧向抖没有前进 ⇒ 不拿换脚奖励: ${Math.abs(latR.terms.switch ?? 0) < 1e-9 ? 'PASS' : 'note ' + (latR.terms.switch ?? 0).toFixed(3)}`);
 console.log(`  ② 纯侧向位移不奖励: ${Math.abs(latR.terms.step ?? 0) < 1e-9 ? 'PASS' : 'FAIL'}`);
+// ---- 机制验证：把门槛全开到 0，看"迈步→武装→域内积分保持分"这条链是否通 ----
+console.log('\n  === 机制验证：门槛全 0 时「保持分」应当 > 0（说明循环奖励链是通的）===');
+{
+  const loose = { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 };
+  const g = mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15);
+  const r = run(g, 6, DEFAULT_SIM.gaitHz, loose);
+  console.log(`  x=${r.x.toFixed(2)}m 存活${r.t.toFixed(2)}s  换脚=${(r.terms.switch ?? 0).toFixed(2)}`
+    + `  位移奖金=${(r.terms.step ?? 0).toFixed(3)}  保持分=${(r.terms.hold ?? 0).toFixed(3)}`
+    + `  有效迈步=${JSON.stringify((r.step as { count: number }).count)}`);
+  const st = r.step as { count: number; holdWindow: number; holdFactor: number; accHold: number; inDomainRatio: number };
+  console.log(`  稳定窗口剩余 = ${st.holdWindow.toFixed(2)}s  折扣 = ${st.holdFactor.toFixed(2)}`
+    + `  域内(DCM)占比 = ${(st.inDomainRatio * 100).toFixed(0)}%  累计站稳 = ${st.accHold.toFixed(2)}s`);
+  console.log(`  ⇒ ${(r.terms.hold ?? 0) > 0
+    ? 'PASS 循环奖励链通：迈步武装 → 域内积分 → 衰减'
+    : st.holdWindow > 0 || st.accHold > 0
+      ? '稳定窗口已打开但没攒到秒数：迈步后**大部分时间不在支撑域内**（"每步都要稳"这条还没做到）'
+      : 'FAIL 迈步后没有打开稳定窗口'}`);
+}
+// ---- 静止罚验收：站着不动必须比"会迈步"更贵 ----
+console.log('\n  === 验收：静止罚（不迈步就一直扣）===');
+{
+  const zero = new Float32Array(brainParamCount(SHAPE));
+  const st0 = run(zero);
+  const st1 = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz,
+    { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 });
+  console.log(`  站桩不动  静止罚=${(st0.terms.still ?? 0).toFixed(2)}  换脚=${(st0.terms.switch ?? 0).toFixed(2)}  存活${st0.t.toFixed(2)}s  键=${Object.keys(st0.terms).join(',')}`);
+  console.log(`  会迈步    静止罚=${(st1.terms.still ?? 0).toFixed(2)}  换脚=${(st1.terms.switch ?? 0).toFixed(2)}  保持=${(st1.terms.hold ?? 0).toFixed(2)}`);
+  console.log(`  ⇒ ${(st0.terms.still ?? 0) < (st1.terms.still ?? 0) ? 'PASS 会迈步的静止罚更少（梯度方向正确）' : 'FAIL'}`);
+}
 // ---- 位移门槛扫描：定多小才既够得着、又不会被钻空子 ----
 console.log('\n  === 位移门槛扫描（前进型 gait x=1.21m vs 侧向抖 x=0.06m）===');
 console.log('  stepMinDx  stepMinTotal │ 前进型 step  侧向抖 step  前进型有效迈步');

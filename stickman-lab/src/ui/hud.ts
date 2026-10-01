@@ -20,7 +20,7 @@ export interface HudHooks {
   onSpeed: (v: number) => void;
   onPhase: (mode: 'walk' | 'fight') => void;
   /** ★ 步态奖励可调（用户 2026-10-01） */
-  onGaitTune: (o: { straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number }) => void;
+  onGaitTune: (o: { straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wHold?: number; wStill?: number }) => void;
 }
 
 export interface HudState {
@@ -64,7 +64,7 @@ export class Hud {
       best: $('s-best'), top: $('s-top'), show: $('s-show'),
       tps: $('s-tps'), budget: $('s-budget'),
       vSigma: $('v-sigma'), vBudget: $('v-budget'), vSpeed: $('v-speed'), vPhase: $('v-speedgoal'),
-      vMinDx: $('v-mindx'), vWSwitch: $('v-wswitch'), vWDist: $('v-wdist'),
+      vMinDx: $('v-mindx'), vWSwitch: $('v-wswitch'), vWDist: $('v-wdist'), vWHold: $('v-whold'), vWStill: $('v-wstill'),
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
     };
@@ -104,6 +104,8 @@ export class Hud {
     bindRange('i-mindx', 'vMinDx', (v) => hooks.onGaitTune({ minDx: v }), (v) => `${v.toFixed(2)} m`);
     bindRange('i-wswitch', 'vWSwitch', (v) => hooks.onGaitTune({ wSwitch: v }), (v) => v.toFixed(2));
     bindRange('i-wdist', 'vWDist', (v) => hooks.onGaitTune({ wDistance: v }), (v) => v.toFixed(2));
+    bindRange('i-whold', 'vWHold', (v) => hooks.onGaitTune({ wHold: v }), (v) => v.toFixed(2));
+    bindRange('i-wstill', 'vWStill', (v) => hooks.onGaitTune({ wStill: v }), (v) => v.toFixed(2));
     {
       const cb = document.getElementById('i-straight') as HTMLInputElement | null;
       if (cb) {
