@@ -14216,14 +14216,14 @@ var init_sim = __esm({
       stepMinTotal: 0.15,
       // 累计前进不足 15 cm 时一律不给步数分
       stepMinDxMax: 0.3,
-      holdMaxSec: 2,
-      // 每迈一步最多换 2.0 s 的"站稳"分 ⇒ 想多拿必须再迈
+      holdMaxSec: 1.2,
+      // ★ 收紧：每迈一步最多换 1.2 s 的"站稳"分 ⇒ 循环要快
       stepDecay: 0.6,
       // 第 2 步 ×0.6、第 3 步 ×0.36 …（"逐渐减弱"）
-      stepMinGap: 0.35,
-      // 两步之间至少 0.35 s，否则算"抢步"扣分
-      stillGrace: 0.6,
-      // 循环外先免费站 0.6 s
+      stepMinGap: 0.2,
+      // ★ 收紧：两步至少隔 0.20 s，否则算"抢步"扣分（稳住加分与抢步扣分的间隔要小）
+      stillGrace: 0.25,
+      // ★ 收紧：循环外只免费站 0.25 s，静止罚很快就上
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
@@ -14234,9 +14234,11 @@ var init_sim = __esm({
       /**
        * 净前进距离（x 位移）。★ 用户 2026-10-01："前进奖励要弱" ⇒ 3.0 → **0.5**。
        *   原来 3.0 太大，ES 只要"整体往前蹭"就能拿分，于是**迈步本身反而不值钱**
-       *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。前进只当"方向正确"的薄引导。
+       *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。
+       *   0.5 削弱后又太弱（策略连方向都找不着了），按用户要求**再增大到 1.5** ——
+       *   仍显著低于 3.0，但足以提供"往 +X 走"的方向梯度。
        */
-      distance: 0.5,
+      distance: 1.5,
       /**
        * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
        * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
@@ -14262,6 +14264,8 @@ var init_sim = __esm({
        * 于是最优策略自然长成用户描述的循环：**迈步 → 稳住 → 再迈 → 再稳住**。
        */
       hold: 1.2,
+      // ★ 显式记录"第一步之前"状态：保持分窗口只在**有效迈步之后**才打开
+      //   （用户 2026-10-01："迈第一步之前不要有稳住的加分"）。验收见 tools/probe-gait。
       /**
        * ★★ **抢步罚**（用户 2026-10-01："迈一步立刻迈第二步应该是负分"）。
        * 两次有效迈步之间的间隔 < `stepMinGap`（默认 0.35 s）就按"越快罚得越狠"计：
@@ -14442,6 +14446,10 @@ var init_sim = __esm({
       accClose = 0;
       /** ★ DCM 越界积分（无量纲，见 W.balance） */
       accBalance = 0;
+      /** ★ 有效迈步时记下的 x：前进奖励只对"上一次有效迈步之后推进的位移"付费 */
+      stepRefX = 0;
+      /** 已付费的前进距离（见 W.distance） */
+      accProgress = 0;
       /** ★ 抖动积分 ∫ Σ(Δτ)²（N·m²·s，见 W.smooth） */
       accSmooth = 0;
       /** 上一物理步的**实际**关节力矩（= motorImpulse/dt），用于算 Δτ */
@@ -14635,6 +14643,7 @@ var init_sim = __esm({
         this.accVel = 0;
         this.accClose = 0;
         this.accBalance = 0;
+        this.accProgress = 0;
         this.accSmooth = 0;
         this.tauPrev.fill(0);
         this.tauPrimed = false;
@@ -14850,9 +14859,12 @@ var init_sim = __esm({
         this.accLateral += Math.abs(tp.z) * dt;
         const eX = dcmExcess(nx, 0, 1);
         const eZ = dcmExcess(nz, 0, 1);
-        this.accBalance += (eX * eX + eZ * eZ) * dt;
+        if (this.holdWindow > 0) this.accBalance += (eX * eX + eZ * eZ) * dt;
         if (eX === 0 && eZ === 0) this.inDomainTicks++;
         this.balanceTicks++;
+        if (this.holdWindow > 0) {
+          this.accProgress += Math.max(0, this.distance - this.stepRefX) * dt;
+        }
         if (com.y > 0) {
           this.supTicks++;
           if (Math.abs(com.x - sup.cx) <= sup.halfX && Math.abs(com.z - sup.cz) <= sup.halfZ) this.supInRatio++;
@@ -14926,6 +14938,7 @@ var init_sim = __esm({
               this.holdWindow = this.cfg.holdMaxSec;
               this.holdFactor = decay;
               this.quietT = 0;
+              this.stepRefX = this.distance;
             }
             this.stepAnchorX = tp2.x;
             this.stepAnchorZ = tp2.z;
@@ -15021,14 +15034,19 @@ var init_sim = __esm({
           const t3 = {
             // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
             //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-            distance: w.distance * Math.max(0, this.distance),
+            distance: w.distance * this.accProgress,
+            // ★★ 走路模式**不用** DCM 越界罚（见 accBalance 处的说明）：它和"保持分"用同一个
+            //   判据（CoM/ξ 在支撑域内），一正一负双重惩罚同一个动作。实测：会走的种子
+            //   换脚+迈步+重复步+前进一共 +2.7 分，却被 balance −50 埋掉，比"站着不动"还差。
+            //   稳定性改由 W.hold（保持分）负责：域内站稳才给分 ⇒ 站不稳就没有保持分。
+            balance: 0,
+            // 仍继续累计 accBalance（供诊断 inDomainRatio 看）
             velocity: w.velocity * this.accVel,
             upright: w.upright * (this.accUpright - elapsed),
             height: -w.height * this.accHeight,
             lateral: -w.lateral * this.accLateral,
             energy: -w.energy * this.accEnergy,
-            // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-            balance: -w.balance * this.accBalance,
+            //   （DCM 越界罚：走路模式已关闭，见上面 balance: 0 的说明；accBalance 仍在累计供诊断）
             // ★★ 抖动**罚**（治"抽风式频繁发力"，见 W.smooth / probe-posture [C3]）
             //   ⚠ 这里以前写成 **加号** ⇒ 疯狂抽风反而加分：实测 25 代训练把总分顶到 800~1400，
             //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。
@@ -15219,6 +15237,42 @@ var init_genome = __esm({
   }
 });
 
+// src/core/phaseSeed.ts
+function phaseGenome(shape, s) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L2 = brainLayout(shape);
+  p[L2.w1 + 0 * shape.inputs + 0] = 5;
+  p[L2.w1 + 1 * shape.inputs + 1] = 5;
+  const out = (joint, axis, aSin, aCos, bias) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
+    if (o < 0) return;
+    p[L2.w2 + o * shape.hidden + 0] = aSin * s.scale;
+    p[L2.w2 + o * shape.hidden + 1] = aCos * s.scale;
+    p[L2.b2 + o] = bias * s.scale;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
+    out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
+    out(j.replace("hip", "knee"), 2, -s.knee * sgn, s.knee * 0.35 * sgn, s.duty * sgn * 0.4);
+  }
+  for (const [j, sgn] of [["shoulder_l", -1], ["shoulder_r", 1]]) {
+    out(j, 2, s.arm * sgn, 0, 0);
+  }
+  for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
+  return p;
+}
+function phaseGenomeFor(jointCount, s = BEST_PHASE) {
+  return phaseGenome(shapeForJoints(jointCount), s);
+}
+var BEST_PHASE;
+var init_phaseSeed = __esm({
+  "src/core/phaseSeed.ts"() {
+    "use strict";
+    init_brain();
+    init_skeleton();
+    BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+  }
+});
+
 // src/core/evolution.ts
 var evolution_exports = {};
 __export(evolution_exports, {
@@ -15232,6 +15286,7 @@ var init_evolution = __esm({
     "use strict";
     init_brain();
     init_genome();
+    init_phaseSeed();
     init_sim();
     INIT_WEIGHT_SCALE = 1;
     DEFAULT_TRAINER = {
@@ -15245,6 +15300,7 @@ var init_evolution = __esm({
       sigmaInit: 0.06,
       sigmaMin: 4e-3,
       sigmaMax: 0.2,
+      seedGait: true,
       mutationProb: 0.12,
       seed: 20261001
     };
@@ -15266,6 +15322,9 @@ var init_evolution = __esm({
       bestNowFitness = -Infinity;
       bestDistNow = 0;
       bestFallenNow = false;
+      /** 本代最优个体的分项奖励（键同 Sim.terms） */
+      bestTermsNow = {};
+      bestSwitchesNow = 0;
       hitsNow = 0;
       hurtsNow = 0;
       history = [];
@@ -15273,6 +15332,8 @@ var init_evolution = __esm({
       cursor = 0;
       /** 上一代平均分（1/5 法则判据） */
       prevMean = -Infinity;
+      /** 关节数（相位种子要按关节数推 shape） */
+      jointCount = 0;
       rng;
       gauss;
       /** 每帧实际消耗的物理步（对外报告，用于验证预算是否起作用） */
@@ -15283,6 +15344,7 @@ var init_evolution = __esm({
         this.rng = makeRng(cfg.seed);
         this.gauss = makeGaussian(this.rng);
         this.sigma = cfg.sigmaInit;
+        this.jointCount = sk2.joints.length;
         this.sims = Array.from({ length: cfg.population }, () => new Sim(sk2, shape, simCfg));
         this.fitness = new Float64Array(cfg.population).fill(-Infinity);
         this.genomes = this.seedPopulation();
@@ -15313,7 +15375,13 @@ var init_evolution = __esm({
         const n = this.cfg.population;
         const zero = new Float32Array(this.paramCount);
         const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
-        const out = [zero, rnd.slice()];
+        const gait = [];
+        if (this.cfg.seedGait) {
+          for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
+            gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
+          }
+        }
+        const out = [zero, rnd.slice(), ...gait];
         while (out.length < n) {
           const src = out.length % 2 === 0 ? zero : rnd;
           const dst = new Float32Array(this.paramCount);
@@ -15364,6 +15432,8 @@ var init_evolution = __esm({
         this.bestNowFitness = -Infinity;
         this.bestDistNow = 0;
         this.bestFallenNow = false;
+        this.bestTermsNow = {};
+        this.bestSwitchesNow = 0;
         this.hitsNow = 0;
         this.hurtsNow = 0;
         this.cursor = 0;
@@ -15385,6 +15455,8 @@ var init_evolution = __esm({
               this.bestNow.set(this.genomes[this.cursor]);
               this.bestDistNow = sim2.distance;
               this.bestFallenNow = sim2.fallen;
+              this.bestTermsNow = sim2.terms;
+              this.bestSwitchesNow = sim2.stepStat?.count ?? 0;
               this.hitsNow = sim2.hits;
               this.hurtsNow = sim2.hurts;
             }
@@ -15432,6 +15504,8 @@ var init_evolution = __esm({
           mean,
           worst,
           sigma: this.sigma,
+          bestTerms: { ...this.bestTermsNow },
+          bestSwitches: this.bestSwitchesNow,
           bestDist: this.bestDistNow,
           bestFallen: this.bestFallenNow,
           hits: this.hitsNow,

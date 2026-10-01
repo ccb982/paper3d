@@ -15,6 +15,7 @@ import { BRAIN_SHAPE, brainParamCount, type BrainShape } from './brain';
 import {
   blendInto, makeGaussian, makeRng, mutateInto, randomGenome, type Rng,
 } from './genome';
+import { BEST_PHASE, phaseGenomeFor } from './phaseSeed';
 import { Sim, type SimConfig } from './sim';
 import type { Skeleton } from './skeleton';
 
@@ -30,6 +31,8 @@ export interface TrainerConfig {
   sigmaInit: number;
   sigmaMin: number;
   sigmaMax: number;
+  /** 是否把"手工相位步态"放进初始种群（见 phaseSeed.ts） */
+  seedGait: boolean;
   /** 每个参数被变异的概率 */
   mutationProb: number;
   seed: number;
@@ -46,11 +49,15 @@ export const DEFAULT_TRAINER: TrainerConfig = {
   sigmaInit: 0.06,
   sigmaMin: 0.004,
   sigmaMax: 0.2,
+  seedGait: true,
   mutationProb: 0.12,
   seed: 20261001,
 };
 
 export interface GenStat {
+  /** 本代最优个体的分项奖励（键同 Sim.terms）——新一代开始时会被清空，所以必须随历史一起存 */
+  bestTerms: Record<string, number>;
+  bestSwitches: number;
   gen: number;
   best: number;
   mean: number;
@@ -84,6 +91,9 @@ export class Trainer {
   bestNowFitness = -Infinity;
   bestDistNow = 0;
   bestFallenNow = false;
+  /** 本代最优个体的分项奖励（键同 Sim.terms） */
+  bestTermsNow: Record<string, number> = {};
+  bestSwitchesNow = 0;
   hitsNow = 0;
   hurtsNow = 0;
   history: GenStat[] = [];
@@ -92,6 +102,8 @@ export class Trainer {
   private cursor = 0;
   /** 上一代平均分（1/5 法则判据） */
   private prevMean = -Infinity;
+  /** 关节数（相位种子要按关节数推 shape） */
+  private jointCount = 0;
   private rng: Rng;
   private gauss: () => number;
   /** 每帧实际消耗的物理步（对外报告，用于验证预算是否起作用） */
@@ -109,6 +121,7 @@ export class Trainer {
     this.gauss = makeGaussian(this.rng);
     this.sigma = cfg.sigmaInit;
 
+    this.jointCount = sk.joints.length;
     this.sims = Array.from({ length: cfg.population }, () => new Sim(sk, shape, simCfg));
     this.fitness = new Float64Array(cfg.population).fill(-Infinity);
 
@@ -141,7 +154,16 @@ export class Trainer {
     const n = this.cfg.population;
     const zero = new Float32Array(this.paramCount);
     const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
-    const out: Float32Array[] = [zero, rnd.slice()];
+    // ★★ 相位步态种子（用户："还得优化参数啊"）：前几个个体直接给"已经会走"的基因组。
+    //   为什么要：从全随机出发，"先迈出第一步"没有梯度（要同时满足换脚+前进+CoM 稳），
+    //   实测几十代最好个体都只是原地抖腿。现在 ES 从 1.21 m 的祖代开始爬"走得久"。
+    const gait: Float32Array[] = [];
+    if (this.cfg.seedGait) {
+      for (const sc of [BEST_PHASE.scale, 0.5, 1.0]) {
+        gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
+      }
+    }
+    const out: Float32Array[] = [zero, rnd.slice(), ...gait];
     while (out.length < n) {
       const src = out.length % 2 === 0 ? zero : rnd;
       const dst = new Float32Array(this.paramCount);
@@ -192,6 +214,8 @@ export class Trainer {
     this.bestNowFitness = -Infinity;
     this.bestDistNow = 0;
     this.bestFallenNow = false;
+    this.bestTermsNow = {};
+    this.bestSwitchesNow = 0;
     this.hitsNow = 0;
     this.hurtsNow = 0;
     this.cursor = 0;
@@ -214,6 +238,9 @@ export class Trainer {
           this.bestNow.set(this.genomes[this.cursor]);
           this.bestDistNow = sim.distance;
           this.bestFallenNow = sim.fallen;
+          // ★ 本代最优个体的分项（无头训练探针/UI 都要看"这一步到底哪项拿了分"）
+          this.bestTermsNow = sim.terms;
+          this.bestSwitchesNow = sim.stepStat?.count ?? 0;
           this.hitsNow = sim.hits;
           this.hurtsNow = sim.hurts;
         }
@@ -265,6 +292,7 @@ export class Trainer {
 
     this.history.push({
       gen: this.gen, best, mean, worst, sigma: this.sigma,
+      bestTerms: { ...this.bestTermsNow }, bestSwitches: this.bestSwitchesNow,
       bestDist: this.bestDistNow, bestFallen: this.bestFallenNow,
       hits: this.hitsNow, hurts: this.hurtsNow,
       avgTicks: ticks / n,

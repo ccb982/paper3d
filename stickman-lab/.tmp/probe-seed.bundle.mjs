@@ -193,9 +193,9 @@ function passArray32ToWasm0(arg, malloc) {
   WASM_VECTOR_LEN = arg.length;
   return ptr;
 }
-function handleError(f2, args) {
+function handleError(f, args) {
   try {
-    return f2.apply(this, args);
+    return f.apply(this, args);
   } catch (e) {
     wasm.__wbindgen_exn_store(addHeapObject(e));
   }
@@ -1188,9 +1188,9 @@ var RawColliderSet = class _RawColliderSet {
   * - `f(handle)`: the function to apply to the integer handle of each collider managed by this collider set. Called as `f(handle)`.
   * @param {Function} f
   */
-  forEachColliderHandle(f2) {
+  forEachColliderHandle(f) {
     try {
-      wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2272,9 +2272,9 @@ var RawEventQueue = class {
   * (false).
   * @param {Function} f
   */
-  drainCollisionEvents(f2) {
+  drainCollisionEvents(f) {
     try {
-      wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2282,9 +2282,9 @@ var RawEventQueue = class {
   /**
   * @param {Function} f
   */
-  drainContactForceEvents(f2) {
+  drainContactForceEvents(f) {
     try {
-      wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2686,9 +2686,9 @@ var RawImpulseJointSet = class _RawImpulseJointSet {
   * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachJointHandle(f2) {
+  forEachJointHandle(f) {
     try {
-      wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2701,9 +2701,9 @@ var RawImpulseJointSet = class _RawImpulseJointSet {
   * @param {number} body
   * @param {Function} f
   */
-  forEachJointAttachedToRigidBody(body, f2) {
+  forEachJointAttachedToRigidBody(body, f) {
     try {
-      wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
+      wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2924,9 +2924,9 @@ var RawIslandManager = class _RawIslandManager {
   *   set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachActiveRigidBodyHandle(f2) {
+  forEachActiveRigidBodyHandle(f) {
     try {
-      wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3336,9 +3336,9 @@ var RawMultibodyJointSet = class _RawMultibodyJointSet {
   * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachJointHandle(f2) {
+  forEachJointHandle(f) {
     try {
-      wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3351,9 +3351,9 @@ var RawMultibodyJointSet = class _RawMultibodyJointSet {
   * @param {number} body
   * @param {Function} f
   */
-  forEachJointAttachedToRigidBody(body, f2) {
+  forEachJointAttachedToRigidBody(body, f) {
     try {
-      wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
+      wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3391,8 +3391,8 @@ var RawNarrowPhase = class _RawNarrowPhase {
   * @param {number} handle1
   * @param {Function} f
   */
-  contact_pairs_with(handle1, f2) {
-    wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
+  contact_pairs_with(handle1, f) {
+    wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
   }
   /**
   * @param {number} handle1
@@ -3407,8 +3407,8 @@ var RawNarrowPhase = class _RawNarrowPhase {
   * @param {number} handle1
   * @param {Function} f
   */
-  intersection_pairs_with(handle1, f2) {
-    wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
+  intersection_pairs_with(handle1, f) {
+    wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
   }
   /**
   * @param {number} handle1
@@ -4839,9 +4839,9 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * - `f(handle)`: the function to apply to the integer handle of each rigid-body managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachRigidBodyHandle(f2) {
+  forEachRigidBodyHandle(f) {
     try {
-      wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-gait.ts
+// tools/probe-seed.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -7914,10 +7914,10 @@ var Coarena = class {
       return null;
     }
   }
-  forEach(f2) {
+  forEach(f) {
     for (const elt of this.data) {
       if (elt != null)
-        f2(elt);
+        f(elt);
     }
   }
   getAll() {
@@ -8060,8 +8060,8 @@ var RigidBodySet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Applies the given closure to each active rigid-bodies contained by this set.
@@ -8070,9 +8070,9 @@ var RigidBodySet = class {
    *
    * @param f - The closure to apply.
    */
-  forEachActiveRigidBody(islands, f2) {
+  forEachActiveRigidBody(islands, f) {
     islands.forEachActiveRigidBodyHandle((handle) => {
-      f2(this.get(handle));
+      f(this.get(handle));
     });
   }
   /**
@@ -8663,8 +8663,8 @@ var ImpulseJointSet = class {
    *
    * @param f - The closure called with the integer handle of each impulse joint attached to the rigid-body.
    */
-  forEachJointHandleAttachedToRigidBody(handle, f2) {
-    this.raw.forEachJointAttachedToRigidBody(handle, f2);
+  forEachJointHandleAttachedToRigidBody(handle, f) {
+    this.raw.forEachJointAttachedToRigidBody(handle, f);
   }
   /**
    * Internal function, do not call directly.
@@ -8702,8 +8702,8 @@ var ImpulseJointSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Gets all joints in the list.
@@ -8920,16 +8920,16 @@ var MultibodyJointSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Calls the given closure with the integer handle of each multibody joint attached to this rigid-body.
    *
    * @param f - The closure called with the integer handle of each multibody joint attached to the rigid-body.
    */
-  forEachJointHandleAttachedToRigidBody(handle, f2) {
-    this.raw.forEachJointAttachedToRigidBody(handle, f2);
+  forEachJointHandleAttachedToRigidBody(handle, f) {
+    this.raw.forEachJointAttachedToRigidBody(handle, f);
   }
   /**
    * Gets all joints in the list.
@@ -8987,8 +8987,8 @@ var IslandManager = class {
    *
    * @param f - The closure to apply.
    */
-  forEachActiveRigidBodyHandle(f2) {
-    this.raw.forEachActiveRigidBodyHandle(f2);
+  forEachActiveRigidBodyHandle(f) {
+    this.raw.forEachActiveRigidBodyHandle(f);
   }
 };
 
@@ -9029,15 +9029,15 @@ var NarrowPhase = class {
    * @param collider1 - The second collider involved in the contact.
    * @param f - Closure that will be called on each collider that is in contact with `collider1`.
    */
-  contactPairsWith(collider1, f2) {
-    this.raw.contact_pairs_with(collider1, f2);
+  contactPairsWith(collider1, f) {
+    this.raw.contact_pairs_with(collider1, f);
   }
   /**
    * Enumerates all the colliders intersecting the given colliders, assuming one of them
    * is a sensor.
    */
-  intersectionPairsWith(collider1, f2) {
-    this.raw.intersection_pairs_with(collider1, f2);
+  intersectionPairsWith(collider1, f) {
+    this.raw.intersection_pairs_with(collider1, f);
   }
   /**
    * Iterates through all the contact manifolds between the given pair of colliders.
@@ -9048,7 +9048,7 @@ var NarrowPhase = class {
    *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
    *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
    */
-  contactPair(collider1, collider2, f2) {
+  contactPair(collider1, collider2, f) {
     const rawPair = this.raw.contact_pair(collider1, collider2);
     if (!!rawPair) {
       const flipped = rawPair.collider1() != collider1;
@@ -9056,7 +9056,7 @@ var NarrowPhase = class {
       for (i = 0; i < rawPair.numContactManifolds(); ++i) {
         this.tempManifold.raw = rawPair.contactManifold(i);
         if (!!this.tempManifold.raw) {
-          f2(this.tempManifold, flipped);
+          f(this.tempManifold, flipped);
         }
         this.tempManifold.free();
       }
@@ -11332,16 +11332,16 @@ var World = class _World {
    *
    * @param f(collider) - The function to apply to each collider managed by this physics world. Called as `f(collider)`.
    */
-  forEachCollider(f2) {
-    this.colliders.forEach(f2);
+  forEachCollider(f) {
+    this.colliders.forEach(f);
   }
   /**
    * Applies the given closure to each rigid-body managed by this physics world.
    *
    * @param f(body) - The function to apply to each rigid-body managed by this physics world. Called as `f(collider)`.
    */
-  forEachRigidBody(f2) {
-    this.bodies.forEach(f2);
+  forEachRigidBody(f) {
+    this.bodies.forEach(f);
   }
   /**
    * Applies the given closure to each active rigid-body managed by this physics world.
@@ -11352,8 +11352,8 @@ var World = class _World {
    *
    * @param f - The function to apply to each active rigid-body managed by this physics world. Called as `f(collider)`.
    */
-  forEachActiveRigidBody(f2) {
-    this.bodies.forEachActiveRigidBody(this.islands, f2);
+  forEachActiveRigidBody(f) {
+    this.bodies.forEachActiveRigidBody(this.islands, f);
   }
   /**
    * Find the closest intersection between a ray and the physics world.
@@ -11503,15 +11503,15 @@ var World = class _World {
    * @param collider1 - The second collider involved in the contact.
    * @param f - Closure that will be called on each collider that is in contact with `collider1`.
    */
-  contactPairsWith(collider1, f2) {
-    this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f2));
+  contactPairsWith(collider1, f) {
+    this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f));
   }
   /**
    * Enumerates all the colliders intersecting the given colliders, assuming one of them
    * is a sensor.
    */
-  intersectionPairsWith(collider1, f2) {
-    this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f2));
+  intersectionPairsWith(collider1, f) {
+    this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f));
   }
   /**
    * Iterates through all the contact manifolds between the given pair of colliders.
@@ -11522,8 +11522,8 @@ var World = class _World {
    *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
    *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
    */
-  contactPair(collider1, collider2, f2) {
-    this.narrowPhase.contactPair(collider1.handle, collider2.handle, f2);
+  contactPair(collider1, collider2, f) {
+    this.narrowPhase.contactPair(collider1.handle, collider2.handle, f);
   }
   /**
    * Returns `true` if `collider1` and `collider2` intersect and at least one of them is a sensor.
@@ -11620,8 +11620,8 @@ var EventQueue = class {
    * involved in the collision, and a boolean indicating if the collision started (true) or stopped
    * (false).
    */
-  drainCollisionEvents(f2) {
-    this.raw.drainCollisionEvents(f2);
+  drainCollisionEvents(f) {
+    this.raw.drainCollisionEvents(f);
   }
   /**
    * Applies the given javascript closure on each contact force event of this collector, then clear
@@ -11630,11 +11630,11 @@ var EventQueue = class {
    * @param f - JavaScript closure applied to each collision event. The
    *            closure must take one `TempContactForceEvent` argument.
    */
-  drainContactForceEvents(f2) {
+  drainContactForceEvents(f) {
     let event = new TempContactForceEvent();
     this.raw.drainContactForceEvents((raw) => {
       event.raw = raw;
-      f2(event);
+      f(event);
       event.free();
     });
   }
@@ -12801,10 +12801,10 @@ var ColliderSet = class {
     this.map = void 0;
   }
   /** @internal */
-  castClosure(f2) {
+  castClosure(f) {
     return (handle) => {
-      if (!!f2) {
-        return f2(this.get(handle));
+      if (!!f) {
+        return f(this.get(handle));
       } else {
         return void 0;
       }
@@ -12916,8 +12916,8 @@ var ColliderSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Gets all colliders in the list.
@@ -13484,16 +13484,16 @@ function brainLayout(s) {
   return { w1, b1, w2, b2, total: b2 + s.outputs };
 }
 function brainForward(s, p, x, hidden, out) {
-  const L2 = brainLayout(s);
+  const L = brainLayout(s);
   for (let h = 0; h < s.hidden; h++) {
-    let acc = p[L2.b1 + h];
-    const row = L2.w1 + h * s.inputs;
+    let acc = p[L.b1 + h];
+    const row = L.w1 + h * s.inputs;
     for (let i = 0; i < s.inputs; i++) acc += p[row + i] * x[i];
     hidden[h] = Math.tanh(acc);
   }
   for (let o = 0; o < s.outputs; o++) {
-    let acc = p[L2.b2 + o];
-    const row = L2.w2 + o * s.hidden;
+    let acc = p[L.b2 + o];
+    const row = L.w2 + o * s.hidden;
     for (let h = 0; h < s.hidden; h++) acc += p[row + h] * hidden[h];
     out[o] = Math.tanh(acc);
   }
@@ -14542,8 +14542,8 @@ var Sim = class {
     this.endHeadY = this.doll.head().translation().y;
     this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
     this.terms = this.fitnessTerms(fallen, elapsed);
-    const f2 = this.terms.total;
-    this.fitness = f2;
+    const f = this.terms.total;
+    this.fitness = f;
     this.finished = true;
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
     this.doll.setMotorTargets(this.motor);
@@ -14567,35 +14567,19 @@ var Sim = class {
   }
 };
 
-// tools/probe-gait.ts
-var require2 = createRequire(import.meta.url);
-{
-  const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
-  const compiled = await WebAssembly.compile(fs.readFileSync(p));
-  const bg = rapier_wasm3d_bg_exports;
-  const imports = {};
-  for (const imp of WebAssembly.Module.imports(compiled)) {
-    const f2 = bg[imp.name];
-    if (typeof f2 === "function") (imports[imp.module] ??= {})[imp.name] = f2;
-  }
-  const r = await WebAssembly.instantiate(compiled, imports);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
-}
-var sk = buildSkeleton(DEFAULT_CONFIG);
-var SHAPE = shapeForJoints(sk.joints.length);
-var L = brainLayout(SHAPE);
-function phaseGenome(s) {
-  const p = new Float32Array(brainParamCount(SHAPE));
-  p[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-  p[L.w1 + 1 * SHAPE.inputs + 1] = 5;
+// src/core/phaseSeed.ts
+var BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+function phaseGenome(shape, s) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L = brainLayout(shape);
+  p[L.w1 + 0 * shape.inputs + 0] = 5;
+  p[L.w1 + 1 * shape.inputs + 1] = 5;
   const out = (joint, axis, aSin, aCos, bias) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
     if (o < 0) return;
-    p[L.w2 + o * SHAPE.hidden + 0] = aSin;
-    p[L.w2 + o * SHAPE.hidden + 1] = aCos;
-    p[L.b2 + o] = bias;
+    p[L.w2 + o * shape.hidden + 0] = aSin * s.scale;
+    p[L.w2 + o * shape.hidden + 1] = aCos * s.scale;
+    p[L.b2 + o] = bias * s.scale;
   };
   for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
     out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
@@ -14607,139 +14591,49 @@ function phaseGenome(s) {
   for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
   return p;
 }
-var runG = (g, gaitHz, dur = 6) => run(g, dur, gaitHz);
-function run(g, dur = 6, gaitHz = DEFAULT_SIM.gaitHz, ov = {}) {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: "walk", duration: dur, gaitHz, ...ov });
-  sim.begin(g);
-  const marks = [];
-  const clockTrace = [];
-  let prev = -1, switches = 0, contacts = 0, air = 0, t = 0;
-  const hz = DEFAULT_SIM.physicsHz;
-  const n = Math.round(dur * hz);
-  for (let i = 0; i < n + 8 && !sim.finished; i++) {
-    sim.advance(1);
-    if (i % 30 === 0) clockTrace.push(`${t.toFixed(2)}:${sim.clock.phase.toFixed(2)}/${sim.clock.sin.toFixed(2)}`);
-    t = (i + 1) / hz;
-    const l2 = sim.doll.soleY("l") < 0.012;
-    const r = sim.doll.soleY("r") < 0.012;
-    const c = l2 && r ? 2 : l2 || r ? 1 : 0;
-    if (c > 0) contacts++;
-    else air++;
-    if (c === 1 && prev >= 0 && c !== prev) switches++;
-    prev = c;
-    if (i % Math.round(hz * 0.25) === 0 && marks.length < 24) {
-      marks.push(`${t.toFixed(2)}s x=${sim.doll.torso().translation().x.toFixed(2)}/${c === 2 ? "\u53CC" : c === 1 ? "\u5355" : "\u7A7A"}`);
-    }
+function phaseGenomeFor(jointCount, s = BEST_PHASE) {
+  return phaseGenome(shapeForJoints(jointCount), s);
+}
+
+// tools/probe-seed.ts
+var require2 = createRequire(import.meta.url);
+{
+  const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
+  const compiled = await WebAssembly.compile(fs.readFileSync(p));
+  const bg = rapier_wasm3d_bg_exports;
+  const imports = {};
+  for (const imp of WebAssembly.Module.imports(compiled)) {
+    const f = bg[imp.name];
+    if (typeof f === "function") (imports[imp.module] ??= {})[imp.name] = f;
   }
-  const tp = sim.doll.torso().translation();
-  return { x: tp.x, z: tp.z, t, fell: sim.fallen, switches, contacts, airRatio: air / Math.max(1, n), terms: sim.terms, step: sim.stepStat, trace: marks.join(" ") + " | clock " + clockTrace.slice(0, 8).join(" ") };
-}
-console.log("=== \u76F8\u4F4D\u9A71\u52A8\u624B\u5DE5\u6B65\u6001\uFF1A\u7269\u7406\u5230\u5E95\u80FD\u8FDE\u7EED\u8D70\u51E0\u6B65\uFF1F\uFF08\u7ED5\u8FC7 ES\uFF09===\n");
-console.log("  \u9ACBAmp \u5360\u7A7Abias \u53CD\u76F8 \u2502   \u7EC8\u70B9x    \u5B58\u6D3B   \u6362\u811A \u63A5\u5730  \u7ED3\u679C");
-var cands = [];
-for (const duty of [0, 0.8, 1.6, 2.4]) {
-  for (const hip of [0.3, 0.6, 0.9]) {
-    for (const lp of [1, -1]) cands.push({ hip, knee: 0.5, duty, legPhase: lp, arm: 0.3, waist: 0.2 });
-  }
-}
-var bySurv = { t: -1, s: null, r: null };
-var byX = { x: -99, s: null, r: null };
-for (const s of cands) {
-  const r = run(phaseGenome(s));
-  console.log(`  ${s.hip.toFixed(2)}  ${s.duty.toFixed(1).padStart(5)}   ${s.legPhase > 0 ? "\u662F" : "\u5426"} \u2502 ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}${String(r.contacts).padStart(5)}  ${r.fell ? "\u6454" : "\u5B58\u6D3B"}`);
-  if (r.t > bySurv.t) bySurv = { t: r.t, s, r };
-  if (r.x > byX.x) byX = { x: r.x, s, r };
-}
-console.log(`
-  \u5B58\u6D3B\u6700\u4E45\uFF1A\u9ACB${bySurv.s?.hip} bias${bySurv.s?.duty} \u53CD\u76F8${bySurv.s?.legPhase > 0}  \u5B58\u6D3B ${bySurv.t.toFixed(2)}s  \u7EC8\u70B9x=${bySurv.r?.x.toFixed(3)}  \u6362\u811A ${bySurv.r?.switches}`);
-console.log(`  \u8D70\u5F97\u6700\u8FDC\uFF1A\u9ACB${byX.s?.hip} bias${byX.s?.duty} \u53CD\u76F8${byX.s?.legPhase > 0}  \u7EC8\u70B9x=${byX.x.toFixed(3)}  \u5B58\u6D3B ${byX.r?.t.toFixed(2)}s`);
-if (bySurv.r) console.log(`
-  \u793A\u8303\u8F68\u8FF9\uFF1A${bySurv.r.trace}`);
-var ok = (bySurv.r?.switches ?? 0) >= 3 && !bySurv.r?.fell;
-console.log("\n  === \u6B65\u9891\u626B\u63CF\uFF08\u56FA\u5B9A x0.15 \u7684\u90A3\u7EC4\u76F8\u4F4D\u6B65\u6001\uFF09===");
-console.log("  gaitHz   x_end   \u5B58\u6D3B   \u6362\u811A \u817E\u7A7A\u5360\u6BD4  \u7ED3\u679C");
-for (const gh of [0.6, 0.8, 1, 1.15, 1.5, 2]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * 0.15;
-  const r = runG(g, gh);
-  console.log(`  ${gh.toFixed(2)}    ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}   ${(r.airRatio * 100).toFixed(0).padStart(4)}%  ${r.fell ? "FALL" : "OK"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u5956\u52B1\u53EA\u5728\u300C\u5DE6\u53F3\u4EA4\u66FF + \u8FD9\u4E00\u811A\u76F4\u7EBF + \u4F4D\u79FB\u591F\u5927\u300D\u65F6\u624D\u7ED9 ===");
-var mk = (spec, scale) => {
-  const b = phaseGenome(spec);
-  const g = new Float32Array(b.length);
-  for (let i2 = 0; i2 < b.length; i2++) g[i2] = b[i2] * scale;
-  return g;
-};
-var fwd = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15));
-var lat = new Float32Array(brainParamCount(SHAPE));
-for (const j of ["hip_l", "hip_r"]) {
-  const o = JOINT_ORDER.indexOf(j) * 3 + 0;
-  lat[L.w2 + o * SHAPE.hidden + 0] = 0.6;
-}
-var latR = run(lat);
-var f = (n) => (fwd.terms[n] ?? 0).toFixed(3);
-var l = (n) => (latR.terms[n] ?? 0).toFixed(3);
-console.log(`  \u524D\u8FDB\u578B gait  x=${fwd.x.toFixed(2)}m z=${fwd.z.toFixed(2)}m \u5B58\u6D3B${fwd.t.toFixed(2)}s  \u6362\u811A=${f("switch")}  \u4F4D\u79FB\u5956\u91D1=${f("step")}  **\u4FDD\u6301=${f("hold")}**`);
-console.log(`  \u4FA7\u5411\u6296 gait  x=${latR.x.toFixed(2)}m z=${latR.z.toFixed(2)}m \u5B58\u6D3B${latR.t.toFixed(2)}s  \u6362\u811A=${l("switch")}  \u4F4D\u79FB\u5956\u91D1=${l("step")}  **\u4FDD\u6301=${l("hold")}**`);
-console.log(`  \u2460 \u524D\u8FDB\u578B\u62FF\u5230\u6362\u811A\u5956\u52B1\uFF08\u5FC5\u987B\u6709\uFF09: ${(fwd.terms.switch ?? 0) > 0 ? "PASS" : "FAIL"}`);
-console.log(`  \u2460b \u4FA7\u5411\u6296\u6CA1\u6709\u524D\u8FDB \u21D2 \u4E0D\u62FF\u6362\u811A\u5956\u52B1: ${Math.abs(latR.terms.switch ?? 0) < 1e-9 ? "PASS" : "note " + (latR.terms.switch ?? 0).toFixed(3)}`);
-console.log(`  \u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u4E0D\u5956\u52B1: ${Math.abs(latR.terms.step ?? 0) < 1e-9 ? "PASS" : "FAIL"}`);
-console.log("\n  === \u673A\u5236\u9A8C\u8BC1\uFF1A\u95E8\u69DB\u5168 0 \u65F6\u300C\u4FDD\u6301\u5206\u300D\u5E94\u5F53 > 0\uFF08\u8BF4\u660E\u5FAA\u73AF\u5956\u52B1\u94FE\u662F\u901A\u7684\uFF09===");
-{
-  const loose = { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 };
-  const g = mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15);
-  const r = run(g, 6, DEFAULT_SIM.gaitHz, loose);
-  console.log(`  x=${r.x.toFixed(2)}m \u5B58\u6D3B${r.t.toFixed(2)}s  \u6362\u811A=${(r.terms.switch ?? 0).toFixed(2)}  \u4F4D\u79FB\u5956\u91D1=${(r.terms.step ?? 0).toFixed(3)}  \u4FDD\u6301\u5206=${(r.terms.hold ?? 0).toFixed(3)}  \u6709\u6548\u8FC8\u6B65=${JSON.stringify(r.step.count)}`);
-  const st = r.step;
-  console.log(`  \u7A33\u5B9A\u7A97\u53E3\u5269\u4F59 = ${st.holdWindow.toFixed(2)}s  \u6298\u6263 = ${st.holdFactor.toFixed(2)}  \u57DF\u5185(DCM)\u5360\u6BD4 = ${(st.inDomainRatio * 100).toFixed(0)}%  \u7D2F\u8BA1\u7AD9\u7A33 = ${st.accHold.toFixed(2)}s`);
-  console.log(`  \u21D2 ${(r.terms.hold ?? 0) > 0 ? "PASS \u5FAA\u73AF\u5956\u52B1\u94FE\u901A\uFF1A\u8FC8\u6B65\u6B66\u88C5 \u2192 \u57DF\u5185\u79EF\u5206 \u2192 \u8870\u51CF" : st.holdWindow > 0 || st.accHold > 0 ? '\u7A33\u5B9A\u7A97\u53E3\u5DF2\u6253\u5F00\u4F46\u6CA1\u6512\u5230\u79D2\u6570\uFF1A\u8FC8\u6B65\u540E**\u5927\u90E8\u5206\u65F6\u95F4\u4E0D\u5728\u652F\u6491\u57DF\u5185**\uFF08"\u6BCF\u6B65\u90FD\u8981\u7A33"\u8FD9\u6761\u8FD8\u6CA1\u505A\u5230\uFF09' : "FAIL \u8FC8\u6B65\u540E\u6CA1\u6709\u6253\u5F00\u7A33\u5B9A\u7A97\u53E3"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u8FC8\u7B2C\u4E00\u6B65\u4E4B\u524D\u6CA1\u6709\u4FDD\u6301\u5206 ===");
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const r0 = run(zero);
-  console.log(`  \u7AD9\u6869 6s\uFF08\u4ECE\u672A\u8FC8\u6B65\uFF09: \u4FDD\u6301\u5206=${(r0.terms.hold ?? 0).toFixed(3)}  \u9759\u6B62\u7F5A=${(r0.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(r0.terms.switch ?? 0).toFixed(2)}`);
-  console.log(`  \u21D2 ${Math.abs(r0.terms.hold ?? 0) < 1e-9 ? "PASS \u6CA1\u8FC8\u8FC7\u6B65\u5C31\u6CA1\u6709\u4FDD\u6301\u5206\uFF08\u53EA\u6709\u9759\u6B62\u7F5A\uFF09" : "FAIL \u7B2C\u4E00\u6B65\u4E4B\u524D\u5C31\u7ED9\u4E86\u4FDD\u6301\u5206"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u9759\u6B62\u7F5A\uFF08\u4E0D\u8FC8\u6B65\u5C31\u4E00\u76F4\u6263\uFF09===");
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const st0 = run(zero);
-  const st1 = run(
-    mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15),
-    6,
-    DEFAULT_SIM.gaitHz,
-    { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 }
+  const r = await WebAssembly.instantiate(compiled, imports);
+  __wbg_set_wasm(
+    r.instance ? r.instance.exports : r.exports
   );
-  console.log(`  \u7AD9\u6869\u4E0D\u52A8  \u9759\u6B62\u7F5A=${(st0.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(st0.terms.switch ?? 0).toFixed(2)}  \u5B58\u6D3B${st0.t.toFixed(2)}s  \u952E=${Object.keys(st0.terms).join(",")}`);
-  console.log(`  \u4F1A\u8FC8\u6B65    \u9759\u6B62\u7F5A=${(st1.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(st1.terms.switch ?? 0).toFixed(2)}  \u4FDD\u6301=${(st1.terms.hold ?? 0).toFixed(2)}`);
-  console.log(`  \u21D2 ${(st0.terms.still ?? 0) < (st1.terms.still ?? 0) ? "PASS \u4F1A\u8FC8\u6B65\u7684\u9759\u6B62\u7F5A\u66F4\u5C11\uFF08\u68AF\u5EA6\u65B9\u5411\u6B63\u786E\uFF09" : "FAIL"}`);
 }
-console.log("\n  === \u4F4D\u79FB\u95E8\u69DB\u626B\u63CF\uFF08\u524D\u8FDB\u578B gait x=1.21m vs \u4FA7\u5411\u6296 x=0.06m\uFF09===");
-console.log("  stepMinDx  stepMinTotal \u2502 \u524D\u8FDB\u578B step  \u4FA7\u5411\u6296 step  \u524D\u8FDB\u578B\u6709\u6548\u8FC8\u6B65");
-for (const [dx, tot, vmin, dz] of [
-  [0.12, 0.3, 0.05, 0.06],
-  [0.05, 0.1, 0.05, 0.06],
-  [0.05, 0.1, 0, 0.06],
-  [0.05, 0.1, 0, 0.2],
-  [0.02, 0.05, 0, 0.2],
-  [0.02, 0.05, 0, 1]
-]) {
-  const ov = { stepMinDx: dx, stepMinTotal: tot, stepVMin: vmin, stepMaxDz: dz };
-  const a = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz, ov);
-  const b = run(lat, 6, DEFAULT_SIM.gaitHz, ov);
-  console.log(`  dx=${dx.toFixed(2)} tot=${tot.toFixed(2)} vx>${vmin.toFixed(2)} |dz|<=${dz.toFixed(2)} | \u524D\u8FDB ${(a.terms.step ?? 0).toFixed(3).padStart(6)}  \u4FA7\u6296 ${(b.terms.step ?? 0).toFixed(3).padStart(6)}  \u95E8\u69DB\u8BA1\u6570 ${JSON.stringify(a.step)}`);
-}
-console.log("\n  === \u5BF9\u7167\uFF1A\u8F93\u51FA\u6574\u4F53\u7F29\u653E\uFF08\u5C0F\u5E45\u5EA6\u5468\u671F\u6270\u52A8\uFF09===");
-console.log("  scale   x_end   \u5B58\u6D3B   \u6362\u811A  \u7ED3\u679C");
-for (const sc of [1, 0.5, 0.3, 0.15, 0.05]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * sc;
-  const r = run(g);
-  console.log(`  x${sc.toFixed(2)}  ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}  ${r.fell ? "FALL" : "OK"}`);
+var sk = buildSkeleton(DEFAULT_CONFIG);
+var SHAPE = shapeForJoints(sk.joints.length);
+var NAMES = {
+  switch: "\u5019\u9009\u843D\u5730",
+  noPrev: "\u65E0\u4E0A\u4E00\u53EA\u811A",
+  noAlt: "\u540C\u817F/\u672A\u6362\u811A",
+  slow: "\u901F\u5EA6\u4E0D\u8DB3",
+  notStraight: "\u4E0D\u76F4\uFF08\u4FA7\u504F\u8FC7\u5927\uFF09",
+  tooSmall: "\u4F4D\u79FB\u4E0D\u591F",
+  notYet: "\u672A\u8FC7\u6240\u9700\u6B65\u957F",
+  ok: "\u2605\u6709\u6548\u8FC8\u6B65"
+};
+for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: "walk", duration: 6 });
+  sim.begin(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, scale: sc }));
+  let g = 0;
+  while (g < 8 * DEFAULT_SIM.physicsHz && !sim.finished) g += sim.advance(400);
+  const d = sim.stepDiag;
+  const s = sim.stepStat;
+  console.log(`
+  scale=${sc}  \u4F4D\u79FB=${sim.distance.toFixed(2)}m  \u5012\u5730=${sim.fallen}  \u6709\u6548\u8FC8\u6B65=${s.count}`);
+  console.log("  \u95E8\u69DB\u62E6\u622A: " + Object.entries(NAMES).map(([k, n]) => `${n}=${d[k]}`).join("  "));
+  console.log(`  \u5206\u9879: ${JSON.stringify(sim.terms)}`);
 }
 console.log(`
-  \u21D2 \u5224\u8BFB\uFF1A${ok ? "\u7269\u7406\u80FD\u8FDE\u7EED\u8FC8\u591A\u6B65 \u21D2 \u786C\u4EF6/\u6267\u884C\u5668\u591F\u7528\uFF0C\u7F3A\u7684\u662F**\u641C\u7D22\u4E0E\u5956\u52B1**\uFF08\u76F4\u7EBF\u6743\u91CD\u6709\u7528\uFF0C\u4F46\u4E0D\u662F\u5173\u952E\uFF09" : "\u8FDE\u6700\u4F18\u76F8\u4F4D\u6B65\u6001\u90FD\u8D70\u4E0D\u6EE1 3 \u6B65 \u21D2 **\u63A8\u8FDB\u6743\u9650**\u4E0D\u8DB3\uFF0C\u5956\u52B1\u52A0\u6743\u6551\u4E0D\u4E86"}`);
+  \u5F53\u524D\u95E8\u69DB: stepMinDx=${DEFAULT_SIM.stepMinDx} stepMinTotal=${DEFAULT_SIM.stepMinTotal} stepMaxDz=${DEFAULT_SIM.stepMaxDz} stepVMin=${DEFAULT_SIM.stepVMin} stepMinGap=${DEFAULT_SIM.stepMinGap}`);

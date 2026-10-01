@@ -193,9 +193,9 @@ function passArray32ToWasm0(arg, malloc) {
   WASM_VECTOR_LEN = arg.length;
   return ptr;
 }
-function handleError(f2, args) {
+function handleError(f, args) {
   try {
-    return f2.apply(this, args);
+    return f.apply(this, args);
   } catch (e) {
     wasm.__wbindgen_exn_store(addHeapObject(e));
   }
@@ -1054,9 +1054,9 @@ var RawColliderSet = class _RawColliderSet {
   * @param {number} handle
   * @param {RawShape} shape
   */
-  coSetShape(handle, shape) {
-    _assertClass(shape, RawShape);
-    wasm.rawcolliderset_coSetShape(this.__wbg_ptr, handle, shape.__wbg_ptr);
+  coSetShape(handle, shape2) {
+    _assertClass(shape2, RawShape);
+    wasm.rawcolliderset_coSetShape(this.__wbg_ptr, handle, shape2.__wbg_ptr);
   }
   /**
   * @param {number} handle
@@ -1142,17 +1142,17 @@ var RawColliderSet = class _RawColliderSet {
   * @param {RawRigidBodySet} bodies
   * @returns {number | undefined}
   */
-  createCollider(enabled, shape, translation, rotation, massPropsMode, mass, centerOfMass, principalAngularInertia, angularInertiaFrame, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies) {
+  createCollider(enabled, shape2, translation, rotation, massPropsMode, mass, centerOfMass, principalAngularInertia, angularInertiaFrame, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies) {
     try {
       const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
-      _assertClass(shape, RawShape);
+      _assertClass(shape2, RawShape);
       _assertClass(translation, RawVector);
       _assertClass(rotation, RawRotation);
       _assertClass(centerOfMass, RawVector);
       _assertClass(principalAngularInertia, RawVector);
       _assertClass(angularInertiaFrame, RawRotation);
       _assertClass(bodies, RawRigidBodySet);
-      wasm.rawcolliderset_createCollider(retptr, this.__wbg_ptr, enabled, shape.__wbg_ptr, translation.__wbg_ptr, rotation.__wbg_ptr, massPropsMode, mass, centerOfMass.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies.__wbg_ptr);
+      wasm.rawcolliderset_createCollider(retptr, this.__wbg_ptr, enabled, shape2.__wbg_ptr, translation.__wbg_ptr, rotation.__wbg_ptr, massPropsMode, mass, centerOfMass.__wbg_ptr, principalAngularInertia.__wbg_ptr, angularInertiaFrame.__wbg_ptr, density, friction, restitution, frictionCombineRule, restitutionCombineRule, isSensor, collisionGroups, solverGroups, activeCollisionTypes, activeHooks, activeEvents, contactForceEventThreshold, contactSkin, hasParent, parent, bodies.__wbg_ptr);
       var r0 = getInt32Memory0()[retptr / 4 + 0];
       var r2 = getFloat64Memory0()[retptr / 8 + 1];
       return r0 === 0 ? void 0 : r2;
@@ -1188,9 +1188,9 @@ var RawColliderSet = class _RawColliderSet {
   * - `f(handle)`: the function to apply to the integer handle of each collider managed by this collider set. Called as `f(handle)`.
   * @param {Function} f
   */
-  forEachColliderHandle(f2) {
+  forEachColliderHandle(f) {
     try {
-      wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawcolliderset_forEachColliderHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2272,9 +2272,9 @@ var RawEventQueue = class {
   * (false).
   * @param {Function} f
   */
-  drainCollisionEvents(f2) {
+  drainCollisionEvents(f) {
     try {
-      wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.raweventqueue_drainCollisionEvents(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2282,9 +2282,9 @@ var RawEventQueue = class {
   /**
   * @param {Function} f
   */
-  drainContactForceEvents(f2) {
+  drainContactForceEvents(f) {
     try {
-      wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.raweventqueue_drainContactForceEvents(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2686,9 +2686,9 @@ var RawImpulseJointSet = class _RawImpulseJointSet {
   * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachJointHandle(f2) {
+  forEachJointHandle(f) {
     try {
-      wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawimpulsejointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2701,9 +2701,9 @@ var RawImpulseJointSet = class _RawImpulseJointSet {
   * @param {number} body
   * @param {Function} f
   */
-  forEachJointAttachedToRigidBody(body, f2) {
+  forEachJointAttachedToRigidBody(body, f) {
     try {
-      wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
+      wasm.rawimpulsejointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -2924,9 +2924,9 @@ var RawIslandManager = class _RawIslandManager {
   *   set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachActiveRigidBodyHandle(f2) {
+  forEachActiveRigidBodyHandle(f) {
     try {
-      wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawislandmanager_forEachActiveRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3336,9 +3336,9 @@ var RawMultibodyJointSet = class _RawMultibodyJointSet {
   * - `f(handle)`: the function to apply to the integer handle of each joint managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachJointHandle(f2) {
+  forEachJointHandle(f) {
     try {
-      wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawmultibodyjointset_forEachJointHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3351,9 +3351,9 @@ var RawMultibodyJointSet = class _RawMultibodyJointSet {
   * @param {number} body
   * @param {Function} f
   */
-  forEachJointAttachedToRigidBody(body, f2) {
+  forEachJointAttachedToRigidBody(body, f) {
     try {
-      wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f2));
+      wasm.rawmultibodyjointset_forEachJointAttachedToRigidBody(this.__wbg_ptr, body, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -3391,8 +3391,8 @@ var RawNarrowPhase = class _RawNarrowPhase {
   * @param {number} handle1
   * @param {Function} f
   */
-  contact_pairs_with(handle1, f2) {
-    wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
+  contact_pairs_with(handle1, f) {
+    wasm.rawnarrowphase_contact_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
   }
   /**
   * @param {number} handle1
@@ -3407,8 +3407,8 @@ var RawNarrowPhase = class _RawNarrowPhase {
   * @param {number} handle1
   * @param {Function} f
   */
-  intersection_pairs_with(handle1, f2) {
-    wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f2));
+  intersection_pairs_with(handle1, f) {
+    wasm.rawnarrowphase_intersection_pairs_with(this.__wbg_ptr, handle1, addHeapObject(f));
   }
   /**
   * @param {number} handle1
@@ -3716,15 +3716,15 @@ var RawQueryPipeline = class {
   * @param {Function} filter_predicate
   * @returns {number | undefined}
   */
-  intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+  intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape2, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
     try {
       const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
       _assertClass(bodies, RawRigidBodySet);
       _assertClass(colliders, RawColliderSet);
       _assertClass(shapePos, RawVector);
       _assertClass(shapeRot, RawRotation);
-      _assertClass(shape, RawShape);
-      wasm.rawquerypipeline_intersectionWithShape(retptr, this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+      _assertClass(shape2, RawShape);
+      wasm.rawquerypipeline_intersectionWithShape(retptr, this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape2.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
       var r0 = getInt32Memory0()[retptr / 4 + 0];
       var r2 = getFloat64Memory0()[retptr / 8 + 1];
       return r0 === 0 ? void 0 : r2;
@@ -3817,15 +3817,15 @@ var RawQueryPipeline = class {
   * @param {Function} filter_predicate
   * @returns {RawColliderShapeCastHit | undefined}
   */
-  castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape, target_distance, maxToi, stop_at_penetration, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+  castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape2, target_distance, maxToi, stop_at_penetration, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
     try {
       _assertClass(bodies, RawRigidBodySet);
       _assertClass(colliders, RawColliderSet);
       _assertClass(shapePos, RawVector);
       _assertClass(shapeRot, RawRotation);
       _assertClass(shapeVel, RawVector);
-      _assertClass(shape, RawShape);
-      const ret = wasm.rawquerypipeline_castShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shapeVel.__wbg_ptr, shape.__wbg_ptr, target_distance, maxToi, stop_at_penetration, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+      _assertClass(shape2, RawShape);
+      const ret = wasm.rawquerypipeline_castShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shapeVel.__wbg_ptr, shape2.__wbg_ptr, target_distance, maxToi, stop_at_penetration, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
       return ret === 0 ? void 0 : RawColliderShapeCastHit.__wrap(ret);
     } finally {
       heap[stack_pointer++] = void 0;
@@ -3844,14 +3844,14 @@ var RawQueryPipeline = class {
   * @param {number | undefined} filter_exclude_rigid_body
   * @param {Function} filter_predicate
   */
-  intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape, callback, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
+  intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape2, callback, filter_flags, filter_groups, filter_exclude_collider, filter_exclude_rigid_body, filter_predicate) {
     try {
       _assertClass(bodies, RawRigidBodySet);
       _assertClass(colliders, RawColliderSet);
       _assertClass(shapePos, RawVector);
       _assertClass(shapeRot, RawRotation);
-      _assertClass(shape, RawShape);
-      wasm.rawquerypipeline_intersectionsWithShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape.__wbg_ptr, addBorrowedObject(callback), filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
+      _assertClass(shape2, RawShape);
+      wasm.rawquerypipeline_intersectionsWithShape(this.__wbg_ptr, bodies.__wbg_ptr, colliders.__wbg_ptr, shapePos.__wbg_ptr, shapeRot.__wbg_ptr, shape2.__wbg_ptr, addBorrowedObject(callback), filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, !isLikeNone(filter_exclude_collider), isLikeNone(filter_exclude_collider) ? 0 : filter_exclude_collider, !isLikeNone(filter_exclude_rigid_body), isLikeNone(filter_exclude_rigid_body) ? 0 : filter_exclude_rigid_body, addBorrowedObject(filter_predicate));
     } finally {
       heap[stack_pointer++] = void 0;
       heap[stack_pointer++] = void 0;
@@ -4839,9 +4839,9 @@ var RawRigidBodySet = class _RawRigidBodySet {
   * - `f(handle)`: the function to apply to the integer handle of each rigid-body managed by this set. Called as `f(collider)`.
   * @param {Function} f
   */
-  forEachRigidBodyHandle(f2) {
+  forEachRigidBodyHandle(f) {
     try {
-      wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f2));
+      wasm.rawrigidbodyset_forEachRigidBodyHandle(this.__wbg_ptr, addBorrowedObject(f));
     } finally {
       heap[stack_pointer++] = void 0;
     }
@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-gait.ts
+// tools/probe-trainwalk.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -6365,15 +6365,15 @@ function capsuleFromBox(w, h, radiusScale) {
 function comOffset(length, comRatio, proximal) {
   return proximal === "top" ? length * (0.5 - comRatio) : length * (comRatio - 0.5);
 }
-function buildSkeleton(cfg = DEFAULT_CONFIG) {
+function buildSkeleton(cfg2 = DEFAULT_CONFIG) {
   const { extent } = META;
-  const px2m = cfg.height / extent.h;
+  const px2m = cfg2.height / extent.h;
   const centerPx = (extent.x0 + extent.x1) / 2;
   const groundPx = extent.y1;
-  const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
+  const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg2.stance : 1);
   const mapY = (px) => (groundPx - px) * px2m;
   const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
-  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  const K = Math.max(1, Math.floor(cfg2.spineSegments));
   const CHEST = K > 1 ? `spine${K}` : "torso";
   const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
   let byKeyRef = null;
@@ -6400,11 +6400,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (key === "shin_l" || key === "shin_r") return 0;
     const ax = LIMB_AXES.axes[key];
     if (!ax) return 0;
-    return Math.atan(ax.k * (leg ? cfg.stance : 1));
+    return Math.atan(ax.k * (leg ? cfg2.stance : 1));
   };
   const restYawOf = (key) => {
     if (key !== "shin_l" && key !== "shin_r") return 0;
-    const s = cfg.footSplayDeg * DEG;
+    const s = cfg2.footSplayDeg * DEG;
     return key === "shin_l" ? -s : s;
   };
   const bodies = [];
@@ -6414,7 +6414,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     const { length: boxLen, radius, halfHeight: boxHalf } = capsuleFromBox(
       part.bw * px2m,
       part.bh * px2m,
-      cfg.limbRadiusScale
+      cfg2.limbRadiusScale
     );
     const ax = LIMB_AXES.axes[spec.key];
     let length = boxLen;
@@ -6440,9 +6440,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       [0, mapY(part.cy) - centerY, mapZ(part.cx, !!spec.leg) - centerZ]
     );
     const cy = centerY;
-    const totalMass = spec.massPct / 100 * cfg.mass;
+    const totalMass = spec.massPct / 100 * cfg2.mass;
     const solePct = spec.soleMassPct ?? 0;
-    const mainMass = totalMass - solePct / 100 * cfg.mass;
+    const mainMass = totalMass - solePct / 100 * cfg2.mass;
     const colliders = [];
     const mainCom = comOffset(length, spec.comRatio, spec.proximal);
     const mainIz = mainMass * Math.pow(spec.gyrationRatio * length, 2);
@@ -6461,8 +6461,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       inertiaXY: mainIz * 0.5
     });
     if (solePct > 0) {
-      const soleMass = solePct / 100 * cfg.mass;
-      const sfx = Math.max(0.1, cfg.soleFootScale);
+      const soleMass = solePct / 100 * cfg2.mass;
+      const sfx = Math.max(0.1, cfg2.soleFootScale);
       const side = spec.key === "shin_l" ? "l" : "r";
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
@@ -6636,7 +6636,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   }
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
   return {
-    cfg,
+    cfg: cfg2,
     px2m,
     centerPx,
     groundPx,
@@ -7914,10 +7914,10 @@ var Coarena = class {
       return null;
     }
   }
-  forEach(f2) {
+  forEach(f) {
     for (const elt of this.data) {
       if (elt != null)
-        f2(elt);
+        f(elt);
     }
   }
   getAll() {
@@ -8060,8 +8060,8 @@ var RigidBodySet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Applies the given closure to each active rigid-bodies contained by this set.
@@ -8070,9 +8070,9 @@ var RigidBodySet = class {
    *
    * @param f - The closure to apply.
    */
-  forEachActiveRigidBody(islands, f2) {
+  forEachActiveRigidBody(islands, f) {
     islands.forEachActiveRigidBodyHandle((handle) => {
-      f2(this.get(handle));
+      f(this.get(handle));
     });
   }
   /**
@@ -8663,8 +8663,8 @@ var ImpulseJointSet = class {
    *
    * @param f - The closure called with the integer handle of each impulse joint attached to the rigid-body.
    */
-  forEachJointHandleAttachedToRigidBody(handle, f2) {
-    this.raw.forEachJointAttachedToRigidBody(handle, f2);
+  forEachJointHandleAttachedToRigidBody(handle, f) {
+    this.raw.forEachJointAttachedToRigidBody(handle, f);
   }
   /**
    * Internal function, do not call directly.
@@ -8702,8 +8702,8 @@ var ImpulseJointSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Gets all joints in the list.
@@ -8920,16 +8920,16 @@ var MultibodyJointSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Calls the given closure with the integer handle of each multibody joint attached to this rigid-body.
    *
    * @param f - The closure called with the integer handle of each multibody joint attached to the rigid-body.
    */
-  forEachJointHandleAttachedToRigidBody(handle, f2) {
-    this.raw.forEachJointAttachedToRigidBody(handle, f2);
+  forEachJointHandleAttachedToRigidBody(handle, f) {
+    this.raw.forEachJointAttachedToRigidBody(handle, f);
   }
   /**
    * Gets all joints in the list.
@@ -8987,8 +8987,8 @@ var IslandManager = class {
    *
    * @param f - The closure to apply.
    */
-  forEachActiveRigidBodyHandle(f2) {
-    this.raw.forEachActiveRigidBodyHandle(f2);
+  forEachActiveRigidBodyHandle(f) {
+    this.raw.forEachActiveRigidBodyHandle(f);
   }
 };
 
@@ -9029,15 +9029,15 @@ var NarrowPhase = class {
    * @param collider1 - The second collider involved in the contact.
    * @param f - Closure that will be called on each collider that is in contact with `collider1`.
    */
-  contactPairsWith(collider1, f2) {
-    this.raw.contact_pairs_with(collider1, f2);
+  contactPairsWith(collider1, f) {
+    this.raw.contact_pairs_with(collider1, f);
   }
   /**
    * Enumerates all the colliders intersecting the given colliders, assuming one of them
    * is a sensor.
    */
-  intersectionPairsWith(collider1, f2) {
-    this.raw.intersection_pairs_with(collider1, f2);
+  intersectionPairsWith(collider1, f) {
+    this.raw.intersection_pairs_with(collider1, f);
   }
   /**
    * Iterates through all the contact manifolds between the given pair of colliders.
@@ -9048,7 +9048,7 @@ var NarrowPhase = class {
    *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
    *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
    */
-  contactPair(collider1, collider2, f2) {
+  contactPair(collider1, collider2, f) {
     const rawPair = this.raw.contact_pair(collider1, collider2);
     if (!!rawPair) {
       const flipped = rawPair.collider1() != collider1;
@@ -9056,7 +9056,7 @@ var NarrowPhase = class {
       for (i = 0; i < rawPair.numContactManifolds(); ++i) {
         this.tempManifold.raw = rawPair.contactManifold(i);
         if (!!this.tempManifold.raw) {
-          f2(this.tempManifold, flipped);
+          f(this.tempManifold, flipped);
         }
         this.tempManifold.free();
       }
@@ -10068,10 +10068,10 @@ var QueryPipeline = class {
    * @param groups - The bit groups and filter associated to the ray, in order to only
    *   hit the colliders with collision groups compatible with the ray's group.
    */
-  intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+  intersectionWithShape(bodies, colliders, shapePos, shapeRot, shape2, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
     let rawPos = VectorOps.intoRaw(shapePos);
     let rawRot = RotationOps.intoRaw(shapeRot);
-    let rawShape = shape.intoRaw();
+    let rawShape = shape2.intoRaw();
     let result = this.raw.intersectionWithShape(bodies.raw, colliders.raw, rawPos, rawRot, rawShape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
     rawPos.free();
     rawRot.free();
@@ -10146,11 +10146,11 @@ var QueryPipeline = class {
    * @param groups - The bit groups and filter associated to the shape to cast, in order to only
    *   test on colliders with collision groups compatible with this group.
    */
-  castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+  castShape(bodies, colliders, shapePos, shapeRot, shapeVel, shape2, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
     let rawPos = VectorOps.intoRaw(shapePos);
     let rawRot = RotationOps.intoRaw(shapeRot);
     let rawVel = VectorOps.intoRaw(shapeVel);
-    let rawShape = shape.intoRaw();
+    let rawShape = shape2.intoRaw();
     let result = ColliderShapeCastHit.fromRaw(colliders, this.raw.castShape(bodies.raw, colliders.raw, rawPos, rawRot, rawVel, rawShape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate));
     rawPos.free();
     rawRot.free();
@@ -10169,10 +10169,10 @@ var QueryPipeline = class {
    *   test on colliders with collision groups compatible with this group.
    * @param callback - A function called with the handles of each collider intersecting the `shape`.
    */
-  intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+  intersectionsWithShape(bodies, colliders, shapePos, shapeRot, shape2, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
     let rawPos = VectorOps.intoRaw(shapePos);
     let rawRot = RotationOps.intoRaw(shapeRot);
-    let rawShape = shape.intoRaw();
+    let rawShape = shape2.intoRaw();
     this.raw.intersectionsWithShape(bodies.raw, colliders.raw, rawPos, rawRot, rawShape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate);
     rawPos.free();
     rawRot.free();
@@ -11332,16 +11332,16 @@ var World = class _World {
    *
    * @param f(collider) - The function to apply to each collider managed by this physics world. Called as `f(collider)`.
    */
-  forEachCollider(f2) {
-    this.colliders.forEach(f2);
+  forEachCollider(f) {
+    this.colliders.forEach(f);
   }
   /**
    * Applies the given closure to each rigid-body managed by this physics world.
    *
    * @param f(body) - The function to apply to each rigid-body managed by this physics world. Called as `f(collider)`.
    */
-  forEachRigidBody(f2) {
-    this.bodies.forEach(f2);
+  forEachRigidBody(f) {
+    this.bodies.forEach(f);
   }
   /**
    * Applies the given closure to each active rigid-body managed by this physics world.
@@ -11352,8 +11352,8 @@ var World = class _World {
    *
    * @param f - The function to apply to each active rigid-body managed by this physics world. Called as `f(collider)`.
    */
-  forEachActiveRigidBody(f2) {
-    this.bodies.forEachActiveRigidBody(this.islands, f2);
+  forEachActiveRigidBody(f) {
+    this.bodies.forEachActiveRigidBody(this.islands, f);
   }
   /**
    * Find the closest intersection between a ray and the physics world.
@@ -11410,8 +11410,8 @@ var World = class _World {
    * @param groups - The bit groups and filter associated to the ray, in order to only
    *   hit the colliders with collision groups compatible with the ray's group.
    */
-  intersectionWithShape(shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
-    let handle = this.queryPipeline.intersectionWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+  intersectionWithShape(shapePos, shapeRot, shape2, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+    let handle = this.queryPipeline.intersectionWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape2, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
     return handle != null ? this.colliders.get(handle) : null;
   }
   /**
@@ -11470,8 +11470,8 @@ var World = class _World {
    * @param groups - The bit groups and filter associated to the shape to cast, in order to only
    *   test on colliders with collision groups compatible with this group.
    */
-  castShape(shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
-    return this.queryPipeline.castShape(this.bodies, this.colliders, shapePos, shapeRot, shapeVel, shape, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+  castShape(shapePos, shapeRot, shapeVel, shape2, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+    return this.queryPipeline.castShape(this.bodies, this.colliders, shapePos, shapeRot, shapeVel, shape2, targetDistance, maxToi, stopAtPenetration, filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
   }
   /**
    * Retrieve all the colliders intersecting the given shape.
@@ -11483,8 +11483,8 @@ var World = class _World {
    *   test on colliders with collision groups compatible with this group.
    * @param callback - A function called with the handles of each collider intersecting the `shape`.
    */
-  intersectionsWithShape(shapePos, shapeRot, shape, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
-    this.queryPipeline.intersectionsWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape, this.colliders.castClosure(callback), filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
+  intersectionsWithShape(shapePos, shapeRot, shape2, callback, filterFlags, filterGroups, filterExcludeCollider, filterExcludeRigidBody, filterPredicate) {
+    this.queryPipeline.intersectionsWithShape(this.bodies, this.colliders, shapePos, shapeRot, shape2, this.colliders.castClosure(callback), filterFlags, filterGroups, filterExcludeCollider ? filterExcludeCollider.handle : null, filterExcludeRigidBody ? filterExcludeRigidBody.handle : null, this.colliders.castClosure(filterPredicate));
   }
   /**
    * Finds the handles of all the colliders with an AABB intersecting the given AABB.
@@ -11503,15 +11503,15 @@ var World = class _World {
    * @param collider1 - The second collider involved in the contact.
    * @param f - Closure that will be called on each collider that is in contact with `collider1`.
    */
-  contactPairsWith(collider1, f2) {
-    this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f2));
+  contactPairsWith(collider1, f) {
+    this.narrowPhase.contactPairsWith(collider1.handle, this.colliders.castClosure(f));
   }
   /**
    * Enumerates all the colliders intersecting the given colliders, assuming one of them
    * is a sensor.
    */
-  intersectionPairsWith(collider1, f2) {
-    this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f2));
+  intersectionPairsWith(collider1, f) {
+    this.narrowPhase.intersectionPairsWith(collider1.handle, this.colliders.castClosure(f));
   }
   /**
    * Iterates through all the contact manifolds between the given pair of colliders.
@@ -11522,8 +11522,8 @@ var World = class _World {
    *            passed to this closure is `true`, then the contact manifold data is flipped, i.e., methods like `localNormal1`
    *            actually apply to the `collider2` and fields like `localNormal2` apply to the `collider1`.
    */
-  contactPair(collider1, collider2, f2) {
-    this.narrowPhase.contactPair(collider1.handle, collider2.handle, f2);
+  contactPair(collider1, collider2, f) {
+    this.narrowPhase.contactPair(collider1.handle, collider2.handle, f);
   }
   /**
    * Returns `true` if `collider1` and `collider2` intersect and at least one of them is a sensor.
@@ -11620,8 +11620,8 @@ var EventQueue = class {
    * involved in the collision, and a boolean indicating if the collision started (true) or stopped
    * (false).
    */
-  drainCollisionEvents(f2) {
-    this.raw.drainCollisionEvents(f2);
+  drainCollisionEvents(f) {
+    this.raw.drainCollisionEvents(f);
   }
   /**
    * Applies the given javascript closure on each contact force event of this collector, then clear
@@ -11630,11 +11630,11 @@ var EventQueue = class {
    * @param f - JavaScript closure applied to each collision event. The
    *            closure must take one `TempContactForceEvent` argument.
    */
-  drainContactForceEvents(f2) {
+  drainContactForceEvents(f) {
     let event = new TempContactForceEvent();
     this.raw.drainContactForceEvents((raw) => {
       event.raw = raw;
-      f2(event);
+      f(event);
       event.free();
     });
   }
@@ -11672,11 +11672,11 @@ var ActiveCollisionTypes;
   ActiveCollisionTypes2[ActiveCollisionTypes2["ALL"] = 60943] = "ALL";
 })(ActiveCollisionTypes || (ActiveCollisionTypes = {}));
 var Collider = class {
-  constructor(colliderSet, handle, parent, shape) {
+  constructor(colliderSet, handle, parent, shape2) {
     this.colliderSet = colliderSet;
     this.handle = handle;
     this._parent = parent;
-    this._shape = shape;
+    this._shape = shape2;
   }
   /** @internal */
   finalizeDeserialization(bodies) {
@@ -11731,11 +11731,11 @@ var Collider = class {
    * Sets the new shape of the collider.
    * @param shape - The collider’s new shape.
    */
-  setShape(shape) {
-    let rawShape = shape.intoRaw();
+  setShape(shape2) {
+    let rawShape = shape2.intoRaw();
     this.colliderSet.raw.coSetShape(this.handle, rawShape);
     rawShape.free();
-    this._shape = shape;
+    this._shape = shape2;
   }
   /**
    * Sets whether this collider is enabled or not.
@@ -12343,9 +12343,9 @@ var ColliderDesc = class _ColliderDesc {
    *
    * @param shape - The shape of the collider being built.
    */
-  constructor(shape) {
+  constructor(shape2) {
     this.enabled = true;
-    this.shape = shape;
+    this.shape = shape2;
     this.massPropsMode = MassPropsMode.Density;
     this.density = 1;
     this.friction = 0.5;
@@ -12373,8 +12373,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param radius - The radius of the ball.
    */
   static ball(radius) {
-    const shape = new Ball(radius);
-    return new _ColliderDesc(shape);
+    const shape2 = new Ball(radius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Create a new collider descriptor with a capsule shape.
@@ -12383,8 +12383,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param radius - The radius of the capsule basis.
    */
   static capsule(halfHeight, radius) {
-    const shape = new Capsule(halfHeight, radius);
-    return new _ColliderDesc(shape);
+    const shape2 = new Capsule(halfHeight, radius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new segment shape.
@@ -12393,8 +12393,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param b - The second point of the segment.
    */
   static segment(a, b) {
-    const shape = new Segment(a, b);
-    return new _ColliderDesc(shape);
+    const shape2 = new Segment(a, b);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new triangle shape.
@@ -12404,8 +12404,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param c - The third point of the triangle.
    */
   static triangle(a, b, c) {
-    const shape = new Triangle(a, b, c);
-    return new _ColliderDesc(shape);
+    const shape2 = new Triangle(a, b, c);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new triangle shape with round corners.
@@ -12417,8 +12417,8 @@ var ColliderDesc = class _ColliderDesc {
    *   this is also equal to half the thickness of the triangle.
    */
   static roundTriangle(a, b, c, borderRadius) {
-    const shape = new RoundTriangle(a, b, c, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundTriangle(a, b, c, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor with a polyline shape.
@@ -12428,8 +12428,8 @@ var ColliderDesc = class _ColliderDesc {
    *    the vertices are assumed to describe a line strip.
    */
   static polyline(vertices, indices) {
-    const shape = new Polyline(vertices, indices);
-    return new _ColliderDesc(shape);
+    const shape2 = new Polyline(vertices, indices);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor with a triangle mesh shape.
@@ -12438,8 +12438,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param indices - The indices of the triangle mesh's triangles.
    */
   static trimesh(vertices, indices, flags) {
-    const shape = new TriMesh(vertices, indices, flags);
-    return new _ColliderDesc(shape);
+    const shape2 = new TriMesh(vertices, indices, flags);
+    return new _ColliderDesc(shape2);
   }
   // #if DIM3
   /**
@@ -12450,8 +12450,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param hz - The half-width of the rectangle along its local `z` axis.
    */
   static cuboid(hx, hy, hz) {
-    const shape = new Cuboid(hx, hy, hz);
-    return new _ColliderDesc(shape);
+    const shape2 = new Cuboid(hx, hy, hz);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor with a rectangular shape with round borders.
@@ -12462,8 +12462,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param borderRadius - The radius of the cuboid's borders.
    */
   static roundCuboid(hx, hy, hz, borderRadius) {
-    const shape = new RoundCuboid(hx, hy, hz, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundCuboid(hx, hy, hz, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor with a heightfield shape.
@@ -12475,8 +12475,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param scale - The scale factor applied to the heightfield.
    */
   static heightfield(nrows, ncols, heights, scale, flags) {
-    const shape = new Heightfield(nrows, ncols, heights, scale, flags);
-    return new _ColliderDesc(shape);
+    const shape2 = new Heightfield(nrows, ncols, heights, scale, flags);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Create a new collider descriptor with a cylinder shape.
@@ -12485,8 +12485,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param radius - The radius of the cylinder basis.
    */
   static cylinder(halfHeight, radius) {
-    const shape = new Cylinder(halfHeight, radius);
-    return new _ColliderDesc(shape);
+    const shape2 = new Cylinder(halfHeight, radius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Create a new collider descriptor with a cylinder shape with rounded corners.
@@ -12496,8 +12496,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param borderRadius - The radius of the cylinder's rounded edges and vertices.
    */
   static roundCylinder(halfHeight, radius, borderRadius) {
-    const shape = new RoundCylinder(halfHeight, radius, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundCylinder(halfHeight, radius, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Create a new collider descriptor with a cone shape.
@@ -12506,8 +12506,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param radius - The radius of the cone basis.
    */
   static cone(halfHeight, radius) {
-    const shape = new Cone(halfHeight, radius);
-    return new _ColliderDesc(shape);
+    const shape2 = new Cone(halfHeight, radius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Create a new collider descriptor with a cone shape with rounded corners.
@@ -12517,8 +12517,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param borderRadius - The radius of the cone's rounded edges and vertices.
    */
   static roundCone(halfHeight, radius, borderRadius) {
-    const shape = new RoundCone(halfHeight, radius, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundCone(halfHeight, radius, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Computes the convex-hull of the given points and use the resulting
@@ -12527,8 +12527,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param points - The point that will be used to compute the convex-hull.
    */
   static convexHull(points) {
-    const shape = new ConvexPolyhedron(points, null);
-    return new _ColliderDesc(shape);
+    const shape2 = new ConvexPolyhedron(points, null);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor that uses the given set of points assumed
@@ -12537,8 +12537,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param vertices - The vertices of the convex polyline.
    */
   static convexMesh(vertices, indices) {
-    const shape = new ConvexPolyhedron(vertices, indices);
-    return new _ColliderDesc(shape);
+    const shape2 = new ConvexPolyhedron(vertices, indices);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Computes the convex-hull of the given points and use the resulting
@@ -12549,8 +12549,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param borderRadius - The radius of the round border added to the convex polyhedron.
    */
   static roundConvexHull(points, borderRadius) {
-    const shape = new RoundConvexPolyhedron(points, null, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundConvexPolyhedron(points, null, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   /**
    * Creates a new collider descriptor that uses the given set of points assumed
@@ -12560,8 +12560,8 @@ var ColliderDesc = class _ColliderDesc {
    * @param borderRadius - The radius of the round border added to the convex polyline.
    */
   static roundConvexMesh(vertices, indices, borderRadius) {
-    const shape = new RoundConvexPolyhedron(vertices, indices, borderRadius);
-    return new _ColliderDesc(shape);
+    const shape2 = new RoundConvexPolyhedron(vertices, indices, borderRadius);
+    return new _ColliderDesc(shape2);
   }
   // #endif
   // #if DIM3
@@ -12801,10 +12801,10 @@ var ColliderSet = class {
     this.map = void 0;
   }
   /** @internal */
-  castClosure(f2) {
+  castClosure(f) {
     return (handle) => {
-      if (!!f2) {
-        return f2(this.get(handle));
+      if (!!f) {
+        return f(this.get(handle));
       } else {
         return void 0;
       }
@@ -12916,8 +12916,8 @@ var ColliderSet = class {
    *
    * @param f - The closure to apply.
    */
-  forEach(f2) {
-    this.map.forEach(f2);
+  forEach(f) {
+    this.map.forEach(f);
   }
   /**
    * Gets all colliders in the list.
@@ -13484,16 +13484,16 @@ function brainLayout(s) {
   return { w1, b1, w2, b2, total: b2 + s.outputs };
 }
 function brainForward(s, p, x, hidden, out) {
-  const L2 = brainLayout(s);
+  const L = brainLayout(s);
   for (let h = 0; h < s.hidden; h++) {
-    let acc = p[L2.b1 + h];
-    const row = L2.w1 + h * s.inputs;
+    let acc = p[L.b1 + h];
+    const row = L.w1 + h * s.inputs;
     for (let i = 0; i < s.inputs; i++) acc += p[row + i] * x[i];
     hidden[h] = Math.tanh(acc);
   }
   for (let o = 0; o < s.outputs; o++) {
-    let acc = p[L2.b2 + o];
-    const row = L2.w2 + o * s.hidden;
+    let acc = p[L.b2 + o];
+    const row = L.w2 + o * s.hidden;
     for (let h = 0; h < s.hidden; h++) acc += p[row + h] * hidden[h];
     out[o] = Math.tanh(acc);
   }
@@ -13980,19 +13980,19 @@ var Sim = class {
   inDomainRatio = 0;
   inDomainTicks = 0;
   balanceTicks = 0;
-  constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+  constructor(sk2, shape2 = BRAIN_SHAPE, cfg2 = DEFAULT_SIM) {
     this.sk = sk2;
-    this.cfg = cfg;
-    this.shape = shape;
-    this.w = { ...W, ...cfg.weights };
-    this.dt = 1 / cfg.physicsHz;
-    this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
-    this.ticksTotal = Math.max(1, Math.round(cfg.duration * cfg.controlHz));
+    this.cfg = cfg2;
+    this.shape = shape2;
+    this.w = { ...W, ...cfg2.weights };
+    this.dt = 1 / cfg2.physicsHz;
+    this.stages = Math.max(1, Math.round(cfg2.physicsHz / cfg2.controlHz));
+    this.ticksTotal = Math.max(1, Math.round(cfg2.duration * cfg2.controlHz));
     this.buildWorld();
-    this.params = new Float32Array(brainParamCount(shape));
-    this.x = new Float32Array(shape.inputs);
-    this.hidden = new Float32Array(shape.hidden);
-    this.out = new Float32Array(shape.outputs);
+    this.params = new Float32Array(brainParamCount(shape2));
+    this.x = new Float32Array(shape2.inputs);
+    this.hidden = new Float32Array(shape2.hidden);
+    this.out = new Float32Array(shape2.outputs);
     this.motor = new Float32Array(this.doll.jointCount * 3);
     this.tauPrev = new Float64Array(this.doll.jointCount * 3);
     this.initTorsoY = this.doll.torso().translation().y;
@@ -14111,9 +14111,9 @@ var Sim = class {
     this.stepTotalX = 0;
     this.stepLastFoot = 0;
     {
-      const t0 = this.doll.torso().translation();
-      this.stepAnchorX = t0.x;
-      this.stepAnchorZ = t0.z;
+      const t02 = this.doll.torso().translation();
+      this.stepAnchorX = t02.x;
+      this.stepAnchorZ = t02.z;
     }
     this.accAir = 0;
     this.inDomainTicks = 0;
@@ -14542,8 +14542,8 @@ var Sim = class {
     this.endHeadY = this.doll.head().translation().y;
     this.inDomainRatio = this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0;
     this.terms = this.fitnessTerms(fallen, elapsed);
-    const f2 = this.terms.total;
-    this.fitness = f2;
+    const f = this.terms.total;
+    this.fitness = f;
     this.finished = true;
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
     this.doll.setMotorTargets(this.motor);
@@ -14567,35 +14567,77 @@ var Sim = class {
   }
 };
 
-// tools/probe-gait.ts
-var require2 = createRequire(import.meta.url);
-{
-  const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
-  const compiled = await WebAssembly.compile(fs.readFileSync(p));
-  const bg = rapier_wasm3d_bg_exports;
-  const imports = {};
-  for (const imp of WebAssembly.Module.imports(compiled)) {
-    const f2 = bg[imp.name];
-    if (typeof f2 === "function") (imports[imp.module] ??= {})[imp.name] = f2;
-  }
-  const r = await WebAssembly.instantiate(compiled, imports);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
+// src/core/genome.ts
+function makeRng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
 }
-var sk = buildSkeleton(DEFAULT_CONFIG);
-var SHAPE = shapeForJoints(sk.joints.length);
-var L = brainLayout(SHAPE);
-function phaseGenome(s) {
-  const p = new Float32Array(brainParamCount(SHAPE));
-  p[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-  p[L.w1 + 1 * SHAPE.inputs + 1] = 5;
+function makeGaussian(rng) {
+  let spare = 0;
+  let hasSpare = false;
+  return () => {
+    if (hasSpare) {
+      hasSpare = false;
+      return spare;
+    }
+    let u = 0, v = 0, s = 0;
+    do {
+      u = rng() * 2 - 1;
+      v = rng() * 2 - 1;
+      s = u * u + v * v;
+    } while (s >= 1 || s === 0);
+    const m = Math.sqrt(-2 * Math.log(s) / s);
+    spare = v * m;
+    hasSpare = true;
+    return u * m;
+  };
+}
+function randomGenome(s, gauss, scale = 1) {
+  const g = new Float32Array(brainParamCount(s));
+  const L = brainLayout(s);
+  const s1 = scale / Math.sqrt(s.inputs);
+  const s2 = scale / Math.sqrt(s.hidden);
+  for (let h = 0; h < s.hidden; h++) {
+    const row = L.w1 + h * s.inputs;
+    for (let i = 0; i < s.inputs; i++) g[row + i] = gauss() * s1;
+  }
+  for (let o = 0; o < s.outputs; o++) {
+    const row = L.w2 + o * s.hidden;
+    for (let h = 0; h < s.hidden; h++) g[row + h] = gauss() * s2;
+  }
+  return g;
+}
+function mutateInto(src, dst, sigma, prob, rng, gauss) {
+  for (let i = 0; i < src.length; i++) {
+    dst[i] = rng() < prob ? src[i] + gauss() * sigma : src[i];
+  }
+}
+function blendInto(a, b, dst, rng) {
+  for (let i = 0; i < a.length; i++) {
+    const t = rng();
+    dst[i] = a[i] * t + b[i] * (1 - t);
+  }
+}
+
+// src/core/phaseSeed.ts
+var BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+function phaseGenome(shape2, s) {
+  const p = new Float32Array(brainParamCount(shape2));
+  const L = brainLayout(shape2);
+  p[L.w1 + 0 * shape2.inputs + 0] = 5;
+  p[L.w1 + 1 * shape2.inputs + 1] = 5;
   const out = (joint, axis, aSin, aCos, bias) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
     if (o < 0) return;
-    p[L.w2 + o * SHAPE.hidden + 0] = aSin;
-    p[L.w2 + o * SHAPE.hidden + 1] = aCos;
-    p[L.b2 + o] = bias;
+    p[L.w2 + o * shape2.hidden + 0] = aSin * s.scale;
+    p[L.w2 + o * shape2.hidden + 1] = aCos * s.scale;
+    p[L.b2 + o] = bias * s.scale;
   };
   for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
     out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
@@ -14607,139 +14649,331 @@ function phaseGenome(s) {
   for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
   return p;
 }
-var runG = (g, gaitHz, dur = 6) => run(g, dur, gaitHz);
-function run(g, dur = 6, gaitHz = DEFAULT_SIM.gaitHz, ov = {}) {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: "walk", duration: dur, gaitHz, ...ov });
-  sim.begin(g);
-  const marks = [];
-  const clockTrace = [];
-  let prev = -1, switches = 0, contacts = 0, air = 0, t = 0;
-  const hz = DEFAULT_SIM.physicsHz;
-  const n = Math.round(dur * hz);
-  for (let i = 0; i < n + 8 && !sim.finished; i++) {
-    sim.advance(1);
-    if (i % 30 === 0) clockTrace.push(`${t.toFixed(2)}:${sim.clock.phase.toFixed(2)}/${sim.clock.sin.toFixed(2)}`);
-    t = (i + 1) / hz;
-    const l2 = sim.doll.soleY("l") < 0.012;
-    const r = sim.doll.soleY("r") < 0.012;
-    const c = l2 && r ? 2 : l2 || r ? 1 : 0;
-    if (c > 0) contacts++;
-    else air++;
-    if (c === 1 && prev >= 0 && c !== prev) switches++;
-    prev = c;
-    if (i % Math.round(hz * 0.25) === 0 && marks.length < 24) {
-      marks.push(`${t.toFixed(2)}s x=${sim.doll.torso().translation().x.toFixed(2)}/${c === 2 ? "\u53CC" : c === 1 ? "\u5355" : "\u7A7A"}`);
+function phaseGenomeFor(jointCount, s = BEST_PHASE) {
+  return phaseGenome(shapeForJoints(jointCount), s);
+}
+
+// src/core/evolution.ts
+var INIT_WEIGHT_SCALE = 1;
+var DEFAULT_TRAINER = {
+  population: 48,
+  eliteFrac: 0.2,
+  // ★★ 3D 之后这三个数**必须**跟着降下来（原值 0.28 / 0.02 / 0.6 / 0.35 是 2D 时代
+  //    的 750 维参数空间配的）。现在 3163 维、权重按扇入缩放后量级只有 ~0.12，
+  //    再用 σ=0.28 × 35% 的参数就变异，一步的扰动比权重本身还大两倍
+  //    —— 实测 σ 会一路顶到上限 0.6，40 代的最佳分在 1.6 附近乱跳，等于随机游走。
+  //    经验口径：ES 的 σ 应当和权重量级同阶，被变异的参数比例应当 ~1/√n。
+  sigmaInit: 0.06,
+  sigmaMin: 4e-3,
+  sigmaMax: 0.2,
+  seedGait: true,
+  mutationProb: 0.12,
+  seed: 20261001
+};
+var Trainer = class {
+  shape;
+  cfg;
+  sims;
+  /** 当代基因组（每个都是一个 Float32Array，长度 = 参数量） */
+  genomes = [];
+  /** 当代已评估出的分数（未评估完的为 -Infinity） */
+  fitness;
+  gen = 0;
+  sigma;
+  /** 历史最佳（浅拷贝） */
+  bestEver;
+  bestEverFitness = -Infinity;
+  /** 当代最佳 */
+  bestNow;
+  bestNowFitness = -Infinity;
+  bestDistNow = 0;
+  bestFallenNow = false;
+  /** 本代最优个体的分项奖励（键同 Sim.terms） */
+  bestTermsNow = {};
+  bestSwitchesNow = 0;
+  hitsNow = 0;
+  hurtsNow = 0;
+  history = [];
+  /** 当前正在评估的个体下标 */
+  cursor = 0;
+  /** 上一代平均分（1/5 法则判据） */
+  prevMean = -Infinity;
+  /** 关节数（相位种子要按关节数推 shape） */
+  jointCount = 0;
+  rng;
+  gauss;
+  /** 每帧实际消耗的物理步（对外报告，用于验证预算是否起作用） */
+  stepsLastFrame = 0;
+  constructor(sk2, shape2 = BRAIN_SHAPE, simCfg, cfg2 = DEFAULT_TRAINER) {
+    this.shape = shape2;
+    this.cfg = cfg2;
+    this.rng = makeRng(cfg2.seed);
+    this.gauss = makeGaussian(this.rng);
+    this.sigma = cfg2.sigmaInit;
+    this.jointCount = sk2.joints.length;
+    this.sims = Array.from({ length: cfg2.population }, () => new Sim(sk2, shape2, simCfg));
+    this.fitness = new Float64Array(cfg2.population).fill(-Infinity);
+    this.genomes = this.seedPopulation();
+    this.bestEver = this.genomes[0].slice();
+    this.bestNow = this.genomes[0].slice();
+    this.startGeneration();
+  }
+  /**
+   * ★★ 造初始种群。两样东西缺一个，ES 都会卡死：
+   *
+   * ① **平凡解（全 0 权重）必须在池子里**。
+   *    `randomGenome` 的注释声称"输出 ≈ tanh(0) = 0 ⇒ 初始行为 = 保持初始姿态"——
+   *    **那句话是错的**：W1/W2 按扇入缩放后预激活仍是 O(0.5)，输出是 tanh(0.4) ≈ 0.4，
+   *    也就是一开局全员按 40% 量程乱扯关节（probe-posture [C0] 实测读数）。
+   *    而"θ_ref = 0 ⇒ 保持绑定姿态"是**站立任务的精确最优解**（绑定姿态的 CoM 投影本来
+   *    就在支撑多边形内，硬件够硬时它永远站着，实测零输出 6 s 跑满、适应度 +8.59）。
+   *    不把全 0 权重放进池子，ES 从"抽风"盆地出发就永远爬不到它
+   *    （实测：20 代最佳 −1.26，比"什么都不做"差 10 分，且存活 0.82 s < 6 s）。
+   *
+   * ② **多样性**。原来 24 个个体是**同一个基因组的克隆**（gen0 的 best == mean 就是证据），
+   *    第一代没有任何可挑选的变异，等于白烧一代。
+   *
+   * 配比：1 个精确平凡解 + 1 个随机种子 + 其余对半分（一半围绕平凡解做局部精修，
+   * 一半围绕随机权重做远征探索）。σ 用 sigmaInit：对全 0 基因组来说，
+   * 12% 的参数 ±0.06 得到的是"几乎不动"的邻居，正是站立任务需要的梯度。
+   */
+  seedPopulation() {
+    const n = this.cfg.population;
+    const zero = new Float32Array(this.paramCount);
+    const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
+    const gait = [];
+    if (this.cfg.seedGait) {
+      for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
+        gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
+      }
+    }
+    const out = [zero, rnd.slice(), ...gait];
+    while (out.length < n) {
+      const src = out.length % 2 === 0 ? zero : rnd;
+      const dst = new Float32Array(this.paramCount);
+      mutateInto(src, dst, this.cfg.sigmaInit, this.cfg.mutationProb, this.rng, this.gauss);
+      out.push(dst);
+    }
+    return out;
+  }
+  get population() {
+    return this.cfg.population;
+  }
+  get evaluated() {
+    return this.cursor;
+  }
+  /** ★ 位移门槛课程的当前值 / 总代数（UI 显示用） */
+  stepMinDxNow = 0;
+  rampGens = 60;
+  /**
+   * ★ 运行时调步态奖励（UI 用，用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项，
+   *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
+   */
+  applyGaitTuning(o) {
+    for (const sm of this.sims) {
+      if (o.straight !== void 0 || o.minDx !== void 0) {
+        sm.setStepRule({ straight: o.straight, minDx: o.minDx });
+      }
+      const w = {};
+      if (o.wSwitch !== void 0) w.switch = o.wSwitch;
+      if (o.wDistance !== void 0) w.distance = o.wDistance;
+      if (o.wStep !== void 0) w.step = o.wStep;
+      if (o.wHold !== void 0) w.hold = o.wHold;
+      if (o.wStill !== void 0) w.still = o.wStill;
+      if (Object.keys(w).length) sm.setWeights(w);
+    }
+    if (o.minDx !== void 0) this.stepMinDxManual = o.minDx;
+  }
+  /** 手动设定过阈值 ⇒ 课程不再自动抬升（用户在 UI 上自己控制） */
+  stepMinDxManual = -1;
+  get paramCount() {
+    return brainParamCount(this.shape);
+  }
+  /**
+   * 开工新一代：清分 + 让每个 Sim 装上自己的基因组并重置世界。
+   * ★ 少了这里的 begin()，Sim 会一直停在 finished 状态 → advance() 空转 → 一个个体都跑不动。
+   */
+  startGeneration() {
+    this.fitness.fill(-Infinity);
+    this.bestNowFitness = -Infinity;
+    this.bestDistNow = 0;
+    this.bestFallenNow = false;
+    this.bestTermsNow = {};
+    this.bestSwitchesNow = 0;
+    this.hitsNow = 0;
+    this.hurtsNow = 0;
+    this.cursor = 0;
+    for (let i = 0; i < this.genomes.length; i++) {
+      this.sims[i].begin(this.genomes[i]);
     }
   }
-  const tp = sim.doll.torso().translation();
-  return { x: tp.x, z: tp.z, t, fell: sim.fallen, switches, contacts, airRatio: air / Math.max(1, n), terms: sim.terms, step: sim.stepStat, trace: marks.join(" ") + " | clock " + clockTrace.slice(0, 8).join(" ") };
-}
-console.log("=== \u76F8\u4F4D\u9A71\u52A8\u624B\u5DE5\u6B65\u6001\uFF1A\u7269\u7406\u5230\u5E95\u80FD\u8FDE\u7EED\u8D70\u51E0\u6B65\uFF1F\uFF08\u7ED5\u8FC7 ES\uFF09===\n");
-console.log("  \u9ACBAmp \u5360\u7A7Abias \u53CD\u76F8 \u2502   \u7EC8\u70B9x    \u5B58\u6D3B   \u6362\u811A \u63A5\u5730  \u7ED3\u679C");
-var cands = [];
-for (const duty of [0, 0.8, 1.6, 2.4]) {
-  for (const hip of [0.3, 0.6, 0.9]) {
-    for (const lp of [1, -1]) cands.push({ hip, knee: 0.5, duty, legPhase: lp, arm: 0.3, waist: 0.2 });
+  /** 每帧调用：在预算内推进评估；一代评完立刻繁殖下一代 */
+  tick(budgetSteps) {
+    let used = 0;
+    while (used < budgetSteps && this.cursor < this.population) {
+      const sim = this.sims[this.cursor];
+      const u = sim.advance(budgetSteps - used);
+      used += u;
+      if (sim.finished) {
+        this.fitness[this.cursor] = sim.fitness;
+        if (sim.fitness > this.bestNowFitness) {
+          this.bestNowFitness = sim.fitness;
+          this.bestNow.set(this.genomes[this.cursor]);
+          this.bestDistNow = sim.distance;
+          this.bestFallenNow = sim.fallen;
+          this.bestTermsNow = sim.terms;
+          this.bestSwitchesNow = sim.stepStat?.count ?? 0;
+          this.hitsNow = sim.hits;
+          this.hurtsNow = sim.hurts;
+        }
+        this.cursor++;
+      } else if (u === 0) {
+        break;
+      }
+    }
+    this.stepsLastFrame = used;
+    if (this.cursor >= this.population) {
+      this.recordAndBreed();
+    }
   }
-}
-var bySurv = { t: -1, s: null, r: null };
-var byX = { x: -99, s: null, r: null };
-for (const s of cands) {
-  const r = run(phaseGenome(s));
-  console.log(`  ${s.hip.toFixed(2)}  ${s.duty.toFixed(1).padStart(5)}   ${s.legPhase > 0 ? "\u662F" : "\u5426"} \u2502 ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}${String(r.contacts).padStart(5)}  ${r.fell ? "\u6454" : "\u5B58\u6D3B"}`);
-  if (r.t > bySurv.t) bySurv = { t: r.t, s, r };
-  if (r.x > byX.x) byX = { x: r.x, s, r };
-}
-console.log(`
-  \u5B58\u6D3B\u6700\u4E45\uFF1A\u9ACB${bySurv.s?.hip} bias${bySurv.s?.duty} \u53CD\u76F8${bySurv.s?.legPhase > 0}  \u5B58\u6D3B ${bySurv.t.toFixed(2)}s  \u7EC8\u70B9x=${bySurv.r?.x.toFixed(3)}  \u6362\u811A ${bySurv.r?.switches}`);
-console.log(`  \u8D70\u5F97\u6700\u8FDC\uFF1A\u9ACB${byX.s?.hip} bias${byX.s?.duty} \u53CD\u76F8${byX.s?.legPhase > 0}  \u7EC8\u70B9x=${byX.x.toFixed(3)}  \u5B58\u6D3B ${byX.r?.t.toFixed(2)}s`);
-if (bySurv.r) console.log(`
-  \u793A\u8303\u8F68\u8FF9\uFF1A${bySurv.r.trace}`);
-var ok = (bySurv.r?.switches ?? 0) >= 3 && !bySurv.r?.fell;
-console.log("\n  === \u6B65\u9891\u626B\u63CF\uFF08\u56FA\u5B9A x0.15 \u7684\u90A3\u7EC4\u76F8\u4F4D\u6B65\u6001\uFF09===");
-console.log("  gaitHz   x_end   \u5B58\u6D3B   \u6362\u811A \u817E\u7A7A\u5360\u6BD4  \u7ED3\u679C");
-for (const gh of [0.6, 0.8, 1, 1.15, 1.5, 2]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * 0.15;
-  const r = runG(g, gh);
-  console.log(`  ${gh.toFixed(2)}    ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}   ${(r.airRatio * 100).toFixed(0).padStart(4)}%  ${r.fell ? "FALL" : "OK"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u5956\u52B1\u53EA\u5728\u300C\u5DE6\u53F3\u4EA4\u66FF + \u8FD9\u4E00\u811A\u76F4\u7EBF + \u4F4D\u79FB\u591F\u5927\u300D\u65F6\u624D\u7ED9 ===");
-var mk = (spec, scale) => {
-  const b = phaseGenome(spec);
-  const g = new Float32Array(b.length);
-  for (let i2 = 0; i2 < b.length; i2++) g[i2] = b[i2] * scale;
-  return g;
+  /** 一代结束：记账 → 选精英 → 变异/杂交 → 开工下一代 */
+  recordAndBreed() {
+    const n = this.population;
+    const order = Array.from({ length: n }, (_, i) => i).sort(
+      (a, b) => this.fitness[b] - this.fitness[a]
+    );
+    const best = this.fitness[order[0]];
+    const worst = this.fitness[order[n - 1]];
+    let sum = 0, ticks = 0;
+    for (let i = 0; i < n; i++) {
+      sum += this.fitness[i];
+      ticks += this.sims[i].ticksDone;
+    }
+    const mean = sum / n;
+    if (best > this.bestEverFitness) {
+      this.bestEverFitness = best;
+      this.bestEver.set(this.genomes[order[0]]);
+    }
+    const c0 = this.sims[0]?.cfg.stepMinDx ?? 0;
+    const cMax = this.sims[0]?.cfg.stepMinDxMax ?? 0;
+    if (cMax > 0 && cMax > c0 && this.stepMinDxManual < 0) {
+      const RAMP = 60;
+      const u = Math.min(1, this.gen / RAMP);
+      const cur = c0 + (cMax - c0) * u;
+      for (const sm of this.sims) sm.setStepMinDx(cur);
+      this.stepMinDxNow = cur;
+      this.rampGens = RAMP;
+    }
+    this.history.push({
+      gen: this.gen,
+      best,
+      mean,
+      worst,
+      sigma: this.sigma,
+      bestTerms: { ...this.bestTermsNow },
+      bestSwitches: this.bestSwitchesNow,
+      bestDist: this.bestDistNow,
+      bestFallen: this.bestFallenNow,
+      hits: this.hitsNow,
+      hurts: this.hurtsNow,
+      avgTicks: ticks / n
+    });
+    if (this.history.length > 4e3) this.history.splice(0, 1e3);
+    let improved = 0;
+    if (Number.isFinite(this.prevMean)) {
+      for (let i = 0; i < n; i++) if (this.fitness[i] > this.prevMean) improved++;
+      const rate = improved / n;
+      this.sigma *= rate > 0.2 ? 1.15 : 0.9;
+      this.sigma = Math.min(this.cfg.sigmaMax, Math.max(this.cfg.sigmaMin, this.sigma));
+    }
+    this.prevMean = mean;
+    const eliteCount = Math.max(1, Math.round(n * this.cfg.eliteFrac));
+    const elites = [];
+    for (let i = 0; i < eliteCount; i++) elites.push(this.genomes[order[i]].slice());
+    const next = [];
+    for (let i = 0; i < eliteCount; i++) next.push(elites[i].slice());
+    while (next.length < n) {
+      const child = new Float32Array(this.paramCount);
+      if (this.rng() < 0.25 && eliteCount >= 2) {
+        const a = elites[this.rng() * eliteCount | 0];
+        const b = elites[this.rng() * eliteCount | 0];
+        blendInto(a, b, child, this.rng);
+        mutateInto(child, child, this.sigma * 0.5, this.cfg.mutationProb, this.rng, this.gauss);
+      } else {
+        const a = elites[this.rng() * eliteCount | 0];
+        mutateInto(a, child, this.sigma, this.cfg.mutationProb, this.rng, this.gauss);
+      }
+      next.push(child);
+    }
+    this.genomes = next;
+    this.gen++;
+    this.startGeneration();
+  }
+  /** 重开种群（换 seed，从随机权重重来） */
+  resetPopulation(seed = Math.random() * 4294967295 >>> 0) {
+    this.rng = makeRng(seed);
+    this.gauss = makeGaussian(this.rng);
+    this.sigma = this.cfg.sigmaInit;
+    this.prevMean = -Infinity;
+    this.genomes = this.seedPopulation();
+    this.gen = 0;
+    this.bestEverFitness = -Infinity;
+    this.history.length = 0;
+    this.startGeneration();
+  }
+  /** 把一份外部基因组注入当代（导入存档 / 用历史最佳继续跑） */
+  inject(genome, asBest = true) {
+    if (genome.length !== this.paramCount) {
+      throw new Error(`[trainer] \u6CE8\u5165\u7684\u57FA\u56E0\u7EC4\u957F\u5EA6 ${genome.length} \u2260 ${this.paramCount}`);
+    }
+    if (asBest) this.bestEver.set(genome);
+    for (let i = 0; i < this.genomes.length; i++) {
+      if (i === 0) this.genomes[i].set(genome);
+      else mutateInto(genome, this.genomes[i], this.sigma, this.cfg.mutationProb, this.rng, this.gauss);
+    }
+    this.startGeneration();
+  }
+  /** 展示视图用：当前应当渲染哪个基因组（用历史最佳，比当代最佳稳定） */
+  showcase() {
+    return this.bestEverFitness > -Infinity ? this.bestEver : this.genomes[0];
+  }
 };
-var fwd = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15));
-var lat = new Float32Array(brainParamCount(SHAPE));
-for (const j of ["hip_l", "hip_r"]) {
-  const o = JOINT_ORDER.indexOf(j) * 3 + 0;
-  lat[L.w2 + o * SHAPE.hidden + 0] = 0.6;
-}
-var latR = run(lat);
-var f = (n) => (fwd.terms[n] ?? 0).toFixed(3);
-var l = (n) => (latR.terms[n] ?? 0).toFixed(3);
-console.log(`  \u524D\u8FDB\u578B gait  x=${fwd.x.toFixed(2)}m z=${fwd.z.toFixed(2)}m \u5B58\u6D3B${fwd.t.toFixed(2)}s  \u6362\u811A=${f("switch")}  \u4F4D\u79FB\u5956\u91D1=${f("step")}  **\u4FDD\u6301=${f("hold")}**`);
-console.log(`  \u4FA7\u5411\u6296 gait  x=${latR.x.toFixed(2)}m z=${latR.z.toFixed(2)}m \u5B58\u6D3B${latR.t.toFixed(2)}s  \u6362\u811A=${l("switch")}  \u4F4D\u79FB\u5956\u91D1=${l("step")}  **\u4FDD\u6301=${l("hold")}**`);
-console.log(`  \u2460 \u524D\u8FDB\u578B\u62FF\u5230\u6362\u811A\u5956\u52B1\uFF08\u5FC5\u987B\u6709\uFF09: ${(fwd.terms.switch ?? 0) > 0 ? "PASS" : "FAIL"}`);
-console.log(`  \u2460b \u4FA7\u5411\u6296\u6CA1\u6709\u524D\u8FDB \u21D2 \u4E0D\u62FF\u6362\u811A\u5956\u52B1: ${Math.abs(latR.terms.switch ?? 0) < 1e-9 ? "PASS" : "note " + (latR.terms.switch ?? 0).toFixed(3)}`);
-console.log(`  \u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u4E0D\u5956\u52B1: ${Math.abs(latR.terms.step ?? 0) < 1e-9 ? "PASS" : "FAIL"}`);
-console.log("\n  === \u673A\u5236\u9A8C\u8BC1\uFF1A\u95E8\u69DB\u5168 0 \u65F6\u300C\u4FDD\u6301\u5206\u300D\u5E94\u5F53 > 0\uFF08\u8BF4\u660E\u5FAA\u73AF\u5956\u52B1\u94FE\u662F\u901A\u7684\uFF09===");
+
+// tools/probe-trainwalk.ts
+var require2 = createRequire(import.meta.url);
 {
-  const loose = { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 };
-  const g = mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15);
-  const r = run(g, 6, DEFAULT_SIM.gaitHz, loose);
-  console.log(`  x=${r.x.toFixed(2)}m \u5B58\u6D3B${r.t.toFixed(2)}s  \u6362\u811A=${(r.terms.switch ?? 0).toFixed(2)}  \u4F4D\u79FB\u5956\u91D1=${(r.terms.step ?? 0).toFixed(3)}  \u4FDD\u6301\u5206=${(r.terms.hold ?? 0).toFixed(3)}  \u6709\u6548\u8FC8\u6B65=${JSON.stringify(r.step.count)}`);
-  const st = r.step;
-  console.log(`  \u7A33\u5B9A\u7A97\u53E3\u5269\u4F59 = ${st.holdWindow.toFixed(2)}s  \u6298\u6263 = ${st.holdFactor.toFixed(2)}  \u57DF\u5185(DCM)\u5360\u6BD4 = ${(st.inDomainRatio * 100).toFixed(0)}%  \u7D2F\u8BA1\u7AD9\u7A33 = ${st.accHold.toFixed(2)}s`);
-  console.log(`  \u21D2 ${(r.terms.hold ?? 0) > 0 ? "PASS \u5FAA\u73AF\u5956\u52B1\u94FE\u901A\uFF1A\u8FC8\u6B65\u6B66\u88C5 \u2192 \u57DF\u5185\u79EF\u5206 \u2192 \u8870\u51CF" : st.holdWindow > 0 || st.accHold > 0 ? '\u7A33\u5B9A\u7A97\u53E3\u5DF2\u6253\u5F00\u4F46\u6CA1\u6512\u5230\u79D2\u6570\uFF1A\u8FC8\u6B65\u540E**\u5927\u90E8\u5206\u65F6\u95F4\u4E0D\u5728\u652F\u6491\u57DF\u5185**\uFF08"\u6BCF\u6B65\u90FD\u8981\u7A33"\u8FD9\u6761\u8FD8\u6CA1\u505A\u5230\uFF09' : "FAIL \u8FC8\u6B65\u540E\u6CA1\u6709\u6253\u5F00\u7A33\u5B9A\u7A97\u53E3"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u8FC8\u7B2C\u4E00\u6B65\u4E4B\u524D\u6CA1\u6709\u4FDD\u6301\u5206 ===");
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const r0 = run(zero);
-  console.log(`  \u7AD9\u6869 6s\uFF08\u4ECE\u672A\u8FC8\u6B65\uFF09: \u4FDD\u6301\u5206=${(r0.terms.hold ?? 0).toFixed(3)}  \u9759\u6B62\u7F5A=${(r0.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(r0.terms.switch ?? 0).toFixed(2)}`);
-  console.log(`  \u21D2 ${Math.abs(r0.terms.hold ?? 0) < 1e-9 ? "PASS \u6CA1\u8FC8\u8FC7\u6B65\u5C31\u6CA1\u6709\u4FDD\u6301\u5206\uFF08\u53EA\u6709\u9759\u6B62\u7F5A\uFF09" : "FAIL \u7B2C\u4E00\u6B65\u4E4B\u524D\u5C31\u7ED9\u4E86\u4FDD\u6301\u5206"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u9759\u6B62\u7F5A\uFF08\u4E0D\u8FC8\u6B65\u5C31\u4E00\u76F4\u6263\uFF09===");
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const st0 = run(zero);
-  const st1 = run(
-    mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15),
-    6,
-    DEFAULT_SIM.gaitHz,
-    { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 }
+  const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
+  const compiled = await WebAssembly.compile(fs.readFileSync(p));
+  const bg = rapier_wasm3d_bg_exports;
+  const imports = {};
+  for (const imp of WebAssembly.Module.imports(compiled)) {
+    const f = bg[imp.name];
+    if (typeof f === "function") (imports[imp.module] ??= {})[imp.name] = f;
+  }
+  const r = await WebAssembly.instantiate(compiled, imports);
+  __wbg_set_wasm(
+    r.instance ? r.instance.exports : r.exports
   );
-  console.log(`  \u7AD9\u6869\u4E0D\u52A8  \u9759\u6B62\u7F5A=${(st0.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(st0.terms.switch ?? 0).toFixed(2)}  \u5B58\u6D3B${st0.t.toFixed(2)}s  \u952E=${Object.keys(st0.terms).join(",")}`);
-  console.log(`  \u4F1A\u8FC8\u6B65    \u9759\u6B62\u7F5A=${(st1.terms.still ?? 0).toFixed(2)}  \u6362\u811A=${(st1.terms.switch ?? 0).toFixed(2)}  \u4FDD\u6301=${(st1.terms.hold ?? 0).toFixed(2)}`);
-  console.log(`  \u21D2 ${(st0.terms.still ?? 0) < (st1.terms.still ?? 0) ? "PASS \u4F1A\u8FC8\u6B65\u7684\u9759\u6B62\u7F5A\u66F4\u5C11\uFF08\u68AF\u5EA6\u65B9\u5411\u6B63\u786E\uFF09" : "FAIL"}`);
 }
-console.log("\n  === \u4F4D\u79FB\u95E8\u69DB\u626B\u63CF\uFF08\u524D\u8FDB\u578B gait x=1.21m vs \u4FA7\u5411\u6296 x=0.06m\uFF09===");
-console.log("  stepMinDx  stepMinTotal \u2502 \u524D\u8FDB\u578B step  \u4FA7\u5411\u6296 step  \u524D\u8FDB\u578B\u6709\u6548\u8FC8\u6B65");
-for (const [dx, tot, vmin, dz] of [
-  [0.12, 0.3, 0.05, 0.06],
-  [0.05, 0.1, 0.05, 0.06],
-  [0.05, 0.1, 0, 0.06],
-  [0.05, 0.1, 0, 0.2],
-  [0.02, 0.05, 0, 0.2],
-  [0.02, 0.05, 0, 1]
-]) {
-  const ov = { stepMinDx: dx, stepMinTotal: tot, stepVMin: vmin, stepMaxDz: dz };
-  const a = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz, ov);
-  const b = run(lat, 6, DEFAULT_SIM.gaitHz, ov);
-  console.log(`  dx=${dx.toFixed(2)} tot=${tot.toFixed(2)} vx>${vmin.toFixed(2)} |dz|<=${dz.toFixed(2)} | \u524D\u8FDB ${(a.terms.step ?? 0).toFixed(3).padStart(6)}  \u4FA7\u6296 ${(b.terms.step ?? 0).toFixed(3).padStart(6)}  \u95E8\u69DB\u8BA1\u6570 ${JSON.stringify(a.step)}`);
-}
-console.log("\n  === \u5BF9\u7167\uFF1A\u8F93\u51FA\u6574\u4F53\u7F29\u653E\uFF08\u5C0F\u5E45\u5EA6\u5468\u671F\u6270\u52A8\uFF09===");
-console.log("  scale   x_end   \u5B58\u6D3B   \u6362\u811A  \u7ED3\u679C");
-for (const sc of [1, 0.5, 0.3, 0.15, 0.05]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * sc;
-  const r = run(g);
-  console.log(`  x${sc.toFixed(2)}  ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}  ${r.fell ? "FALL" : "OK"}`);
+var sk = buildSkeleton(DEFAULT_CONFIG);
+var shape = shapeForJoints(sk.joints.length);
+var nums = process.argv.map(Number).filter((n) => Number.isFinite(n) && n > 0);
+var GENS = nums[0] ?? 4;
+var SEED = nums[1] ?? 20261001;
+var cfg = { ...DEFAULT_TRAINER, population: 48, seedGait: true };
+var tr = new Trainer(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 6 }, cfg, SEED);
+console.log(`
+=== \u65E0\u5934\u8BAD\u7EC3 ${GENS} \u4EE3\uFF08walk\uFF0C\u76F8\u4F4D\u6B65\u6001\u79CD\u5B50\u5F00\uFF0Cpop=48\uFF0C\u6BCF\u56DE\u5408 6 s\uFF09===
+`);
+console.log("  \u4EE3   \u6700\u597D\u9002\u5E94\u5EA6   \u5E73\u5747       \u03C3        \u8DDD\u79BB   \u6362\u811A  \u8FC8\u6B65  \u4FDD\u6301  \u9759\u6B62\u7F5A  \u62A2\u6B65\u7F5A  \u5012  \u5E73\u8861\u7F5A");
+var t0 = Date.now();
+for (let g = 1; g <= GENS; g++) {
+  let guard = 0;
+  while (tr.history.length < g && guard++ < 2e5) tr.tick(2400);
+  const h = tr.history[tr.history.length - 1];
+  const t = h.bestTerms;
+  const r = (v) => v === void 0 ? "\u2014" : v.toFixed(2).padStart(5);
+  console.log(`  ${String(g).padStart(3)}   ${h.best.toFixed(2).padStart(9)}   ${h.mean.toFixed(2).padStart(8)}  ${h.sigma.toFixed(4)}  ${r(h.bestDist)}  ${String(h.bestSwitches ?? 0).padStart(4)}  ${r(t?.step)}  ${r(t?.hold)}  ${r(t?.still)}  ${r(t?.rush)}  ${h.bestFallen ? "\u662F" : "\u5426"}`);
 }
 console.log(`
-  \u21D2 \u5224\u8BFB\uFF1A${ok ? "\u7269\u7406\u80FD\u8FDE\u7EED\u8FC8\u591A\u6B65 \u21D2 \u786C\u4EF6/\u6267\u884C\u5668\u591F\u7528\uFF0C\u7F3A\u7684\u662F**\u641C\u7D22\u4E0E\u5956\u52B1**\uFF08\u76F4\u7EBF\u6743\u91CD\u6709\u7528\uFF0C\u4F46\u4E0D\u662F\u5173\u952E\uFF09" : "\u8FDE\u6700\u4F18\u76F8\u4F4D\u6B65\u6001\u90FD\u8D70\u4E0D\u6EE1 3 \u6B65 \u21D2 **\u63A8\u8FDB\u6743\u9650**\u4E0D\u8DB3\uFF0C\u5956\u52B1\u52A0\u6743\u6551\u4E0D\u4E86"}`);
+  \u7528\u65F6 ${((Date.now() - t0) / 1e3).toFixed(1)} s\uFF08${GENS} \u4EE3\uFF09`);

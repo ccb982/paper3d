@@ -119,10 +119,10 @@ export const DEFAULT_SIM: SimConfig = {
   stepMaxDz: 0.06,     // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
   stepMinTotal: 0.15,  // 累计前进不足 15 cm 时一律不给步数分
   stepMinDxMax: 0.30,
-  holdMaxSec: 2.0,    // 每迈一步最多换 2.0 s 的"站稳"分 ⇒ 想多拿必须再迈
+  holdMaxSec: 1.2,    // ★ 收紧：每迈一步最多换 1.2 s 的"站稳"分 ⇒ 循环要快
   stepDecay: 0.6,     // 第 2 步 ×0.6、第 3 步 ×0.36 …（"逐渐减弱"）
-  stepMinGap: 0.35,   // 两步之间至少 0.35 s，否则算"抢步"扣分
-  stillGrace: 0.6,    // 循环外先免费站 0.6 s
+  stepMinGap: 0.20,   // ★ 收紧：两步至少隔 0.20 s，否则算"抢步"扣分（稳住加分与抢步扣分的间隔要小）
+  stillGrace: 0.25,   // ★ 收紧：循环外只免费站 0.25 s，静止罚很快就上
   stillRamp: 1.5,     // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
   solverIterations: 16,
   fallHeightRatio: 0.62,
@@ -148,9 +148,11 @@ export const W = {
   /**
    * 净前进距离（x 位移）。★ 用户 2026-10-01："前进奖励要弱" ⇒ 3.0 → **0.5**。
    *   原来 3.0 太大，ES 只要"整体往前蹭"就能拿分，于是**迈步本身反而不值钱**
-   *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。前进只当"方向正确"的薄引导。
+   *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。
+   *   0.5 削弱后又太弱（策略连方向都找不着了），按用户要求**再增大到 1.5** ——
+   *   仍显著低于 3.0，但足以提供"往 +X 走"的方向梯度。
    */
-  distance: 0.5,
+  distance: 1.5,
   /**
    * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
    * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
@@ -176,6 +178,8 @@ export const W = {
    * 于是最优策略自然长成用户描述的循环：**迈步 → 稳住 → 再迈 → 再稳住**。
    */
   hold: 1.2,
+  // ★ 显式记录"第一步之前"状态：保持分窗口只在**有效迈步之后**才打开
+  //   （用户 2026-10-01："迈第一步之前不要有稳住的加分"）。验收见 tools/probe-gait。
   /**
    * ★★ **抢步罚**（用户 2026-10-01："迈一步立刻迈第二步应该是负分"）。
    * 两次有效迈步之间的间隔 < `stepMinGap`（默认 0.35 s）就按"越快罚得越狠"计：
@@ -360,6 +364,10 @@ export class Sim {
   private accClose = 0;
   /** ★ DCM 越界积分（无量纲，见 W.balance） */
   private accBalance = 0;
+  /** ★ 有效迈步时记下的 x：前进奖励只对"上一次有效迈步之后推进的位移"付费 */
+  private stepRefX = 0;
+  /** 已付费的前进距离（见 W.distance） */
+  private accProgress = 0;
   /** ★ 抖动积分 ∫ Σ(Δτ)²（N·m²·s，见 W.smooth） */
   private accSmooth = 0;
   /** 上一物理步的**实际**关节力矩（= motorImpulse/dt），用于算 Δτ */
@@ -560,6 +568,7 @@ export class Sim {
     this.phase = 0;
     this.accUpright = 0; this.accHeight = 0; this.accLateral = 0;
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
+    this.accProgress = 0;
     this.accSmooth = 0;
     // ★ 抖动需要一个"前一帧力矩"；第一步没有前值，置 0 并打标记，
     //   否则第 1 步的 Δτ = τ_0 本身会被当成一次巨大抖动（假罚）。
@@ -792,9 +801,22 @@ export class Sim {
     //    拿凸包当域会高估 4 倍，策略会把 ξz=0.2 当成安全区。
     const eX = dcmExcess(nx, 0, 1);
     const eZ = dcmExcess(nz, 0, 1);
-    this.accBalance += (eX * eX + eZ * eZ) * dt;
+    // ★★ 只在"该站稳"的窗口里罚（用户 2026-10-01 的循环：迈步 → 站稳 → 再迈步）。
+    //   原因：ξ 是**捕获点**，走路时本来就该超前于 CoM（重心先冲出去、脚再接住）。
+    //   之前"越界就罚"等于**罚"迈步"本身** —— 实测无头训练里平均适应度 −288、
+    //   最好个体也是"动了就挨罚"，ES 完全看不到"走"的梯度（详见 tools/probe-trainwalk）。
+    //   现在：窗口开着（该稳）却 ξ 越界 ⇒ 罚；窗口关着（在走）⇒ 只记录不罚。
+    if (this.holdWindow > 0) this.accBalance += (eX * eX + eZ * eZ) * dt;
     if (eX === 0 && eZ === 0) this.inDomainTicks++;
     this.balanceTicks++;
+    // ★★ 前进奖励积分（见 W.distance）：**只对"上一次有效迈步之后推进的位移"付费**。
+    //   为什么要：现在位移是最容易拿的大分项，一个"两脚蹭地往前挪、从不迈步"的策略
+    //   拿到 1.17 m 却没有一次有效迈步，适应度反而最高（实测第 3 代最优个体就是这样）。
+    //   加上"参考点 + 窗口内"两个条件后：迈了步才有钱、站稳时蹭地也没钱。
+    if (this.holdWindow > 0) {
+      this.accProgress += Math.max(0, this.distance - this.stepRefX) * dt;
+    }
+
     // ★★★ 稳定窗口积分（见 W.hold）：**只有还在支撑域内**才给分（这就是"每迈一步都要稳"），
     //   计的是"站稳的秒数 × 该步折扣"，窗口上限 holdMaxSec ⇒ 想要更多分必须再迈一步。
     //   ★ 判据用 **CoM 在支撑域内**，不是 DCM：DCM = 捕获点，**走路时本来就该超前于 CoM**
@@ -888,6 +910,7 @@ export class Sim {
           this.holdWindow = this.cfg.holdMaxSec;
           this.holdFactor = decay;
           this.quietT = 0;              // ★ 进入循环 ⇒ 静止计时清零
+          this.stepRefX = this.distance; // ★ 前进奖励从这里开始重新计（只付"迈出来的"位移）
         }
         // 无论这一步是否计分，锚点都挪到当前 ⇒ 下一步量的是"这一脚"，不会跨步累计
         this.stepAnchorX = tp.x;
@@ -1004,14 +1027,18 @@ export class Sim {
       const t: Record<string, number> = {
         // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
         //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-        distance: w.distance * Math.max(0, this.distance),
+        distance: w.distance * this.accProgress,
+        // ★★ 走路模式**不用** DCM 越界罚（见 accBalance 处的说明）：它和"保持分"用同一个
+        //   判据（CoM/ξ 在支撑域内），一正一负双重惩罚同一个动作。实测：会走的种子
+        //   换脚+迈步+重复步+前进一共 +2.7 分，却被 balance −50 埋掉，比"站着不动"还差。
+        //   稳定性改由 W.hold（保持分）负责：域内站稳才给分 ⇒ 站不稳就没有保持分。
+        balance: 0,   // 仍继续累计 accBalance（供诊断 inDomainRatio 看）
         velocity: w.velocity * this.accVel,
         upright: w.upright * (this.accUpright - elapsed),
         height: -w.height * this.accHeight,
         lateral: -w.lateral * this.accLateral,
         energy: -w.energy * this.accEnergy,
-        // ★★ DCM 越界积分：这才是"站得住"真正的梯度来源（见 W.balance）
-        balance: -w.balance * this.accBalance,
+        //   （DCM 越界罚：走路模式已关闭，见上面 balance: 0 的说明；accBalance 仍在累计供诊断）
         // ★★ 抖动**罚**（治"抽风式频繁发力"，见 W.smooth / probe-posture [C3]）
         //   ⚠ 这里以前写成 **加号** ⇒ 疯狂抽风反而加分：实测 25 代训练把总分顶到 800~1400，
         //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。

@@ -190,6 +190,14 @@ console.log('\n  === 机制验证：门槛全 0 时「保持分」应当 > 0（�
       : 'FAIL 迈步后没有打开稳定窗口'}`);
 }
 // ---- 静止罚验收：站着不动必须比"会迈步"更贵 ----
+// ---- 验收：第一步之前不给保持分 ----
+console.log('\n  === 验收：迈第一步之前没有保持分 ===');
+{
+  const zero = new Float32Array(brainParamCount(SHAPE));
+  const r0 = run(zero);
+  console.log(`  站桩 6s（从未迈步）: 保持分=${(r0.terms.hold ?? 0).toFixed(3)}  静止罚=${(r0.terms.still ?? 0).toFixed(2)}  换脚=${(r0.terms.switch ?? 0).toFixed(2)}`);
+  console.log(`  ⇒ ${Math.abs(r0.terms.hold ?? 0) < 1e-9 ? 'PASS 没迈过步就没有保持分（只有静止罚）' : 'FAIL 第一步之前就给了保持分'}`);
+}
 console.log('\n  === 验收：静止罚（不迈步就一直扣）===');
 {
   const zero = new Float32Array(brainParamCount(SHAPE));
