@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-seed.ts
+// tools/_lift.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -14463,58 +14463,39 @@ function phaseGenomeFor(jointCount, s = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s);
 }
 
-// tools/probe-seed.ts
+// tools/_lift.ts
 var require2 = createRequire(import.meta.url);
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
-  const compiled = await WebAssembly.compile(fs.readFileSync(p));
-  const bg = rapier_wasm3d_bg_exports;
-  const imports = {};
-  for (const imp of WebAssembly.Module.imports(compiled)) {
-    const f = bg[imp.name];
-    if (typeof f === "function") (imports[imp.module] ??= {})[imp.name] = f;
+  const c = await WebAssembly.compile(fs.readFileSync(p));
+  const imp = {};
+  for (const i of WebAssembly.Module.imports(c)) {
+    const f = rapier_wasm3d_bg_exports[i.name];
+    if (typeof f === "function") (imp[i.module] ??= {})[i.name] = f;
   }
-  const r = await WebAssembly.instantiate(compiled, imports);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
+  const r = await WebAssembly.instantiate(c, imp);
+  __wbg_set_wasm(r.instance ? r.instance.exports : r.exports);
 }
 var sk = buildSkeleton(DEFAULT_CONFIG);
-var SHAPE = shapeForJoints(sk.joints.length);
-for (const [sc, lp] of [[0.15, 1], [0.15, -1], [0.3, 1], [0.3, -1], [0.5, 1], [0.5, -1]]) {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: "walk", duration: 6 });
-  sim.begin(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, scale: sc, legPhase: lp }));
-  const NAMES2 = ["hip_l", "hip_r", "knee_l", "knee_r"];
-  const mn = {}, mx = {}, sum = {}, cnt = {};
-  for (const n of NAMES2) {
-    mn[n] = 1e9;
-    mx[n] = -1e9;
-    sum[n] = 0;
-    cnt[n] = 0;
-  }
-  let g = 0;
-  while (g < 8 * DEFAULT_SIM.physicsHz && !sim.finished) {
-    g += sim.advance(2);
-    for (const n of NAMES2) {
-      const i = JOINT_ORDER.indexOf(n);
-      const a = sim.x[20 + 3 * i + 2];
-      if (a < mn[n]) mn[n] = a;
-      if (a > mx[n]) mx[n] = a;
-      sum[n] += a;
-      cnt[n]++;
-    }
-  }
-  const ampOf = (n) => ((mx[n] - mn[n]) / 2).toFixed(3);
-  const midOf = (n) => (sum[n] / Math.max(1, cnt[n])).toFixed(3);
-  const d = sim.stepDiag;
-  const s = sim.walkStat;
-  const T = sim.terms;
-  console.log("     \u5168\u5206\u9879: " + JSON.stringify(T));
-  console.log(`
-  scale=${sc} legPhase=${lp}  \u4F4D\u79FB=${sim.distance.toFixed(2)}m \u5012\u5730=${sim.fallen} \u62AC\u819D\u9AD8=${T["mv.knee_l"]?.toFixed(2)}
-     altQ=${(T.altQ ?? 0).toFixed(2)} move=${(T.moveFrac ?? 0).toFixed(2)} task=${(T.task ?? 0).toFixed(2)} jt.hip=${(T["jt.hip_l"] ?? 0).toFixed(2)}/${(T["jt.hip_r"] ?? 0).toFixed(2)} jt.knee=${(T["jt.knee_l"] ?? 0).toFixed(2)}/${(T["jt.knee_r"] ?? 0).toFixed(2)} program=${(T.program ?? 0).toFixed(2)} total=${(T.total ?? 0).toFixed(2)}
-     \u62AC\u817F: \u540C\u65F6\u62AC\u5360\u6BD4=${(T.overlap ?? 0).toFixed(2)} \u4E92\u65A5\u5206=${(T.excl ?? 0).toFixed(2)} \u5DE6\u819D\u9AD8\u5EA6=${(T["lift.knee_l"] ?? 0).toFixed(2)} \u53F3\u819D\u9AD8\u5EA6=${(T["lift.knee_r"] ?? 0).toFixed(2)}
-     \u5B9E\u9645\u53EF\u8FBE\u5E45\u5EA6/\u4E2D\u503C: ` + NAMES2.map((n) => `${n}\xB1${ampOf(n)}@${midOf(n)}`).join("  "));
+var sim = new Sim(sk, shapeForJoints(sk.joints.length), { ...DEFAULT_SIM, mode: "walk", duration: 6 });
+sim.begin(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, scale: 0.15, legPhase: 1 }));
+var wl = sk.bodies.findIndex((b) => b.key === "shin_l");
+var wr = sk.bodies.findIndex((b) => b.key === "shin_r");
+var airL = 0;
+var airR = 0;
+var both = 0;
+var ticks = 0;
+var minL = 9;
+var maxL = 0;
+while (!sim.finished && ticks < 6 * 120) {
+  sim.advance(2);
+  ticks++;
+  const yl = sim.doll.soleY("l"), yr = sim.doll.soleY("r");
+  minL = Math.min(minL, yl);
+  maxL = Math.max(maxL, yl);
+  if (yl > 0.02) airL++;
+  if (yr > 0.02) airR++;
+  if (yl > 0.02 && yr > 0.02) both++;
 }
-console.log(`
-  \u5F53\u524D\u95E8\u69DB: stepMinDx=${DEFAULT_SIM.stepMinDx} stepMinTotal=${DEFAULT_SIM.stepMinTotal} stepMaxDz=${DEFAULT_SIM.stepMaxDz} stepVMin=${DEFAULT_SIM.stepVMin} stepMinGap=${DEFAULT_SIM.stepMinGap}`);
+console.log(`soleY \u5DE6\u811A: min=${minL.toFixed(3)} max=${maxL.toFixed(3)} m\uFF1B\u817E\u7A7A\u5360\u6BD4 L=${(airL / ticks * 100).toFixed(1)}% R=${(airR / ticks * 100).toFixed(1)}% \u53CC=${(both / ticks * 100).toFixed(1)}%`);
+console.log(`\u7D22\u5F15 shin_l=${wl} shin_r=${wr}\uFF08\u63A5\u89E6\u68C0\u6D4B\u5E94\u6539\u7528 foot_l/foot_r \u6216\u978B\u5E95 cuboid\uFF09`);

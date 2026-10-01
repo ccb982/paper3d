@@ -506,7 +506,15 @@ log(`  全零基因组（站桩不动）适应度 = ${zeroFit.toFixed(3)}  倒�
   + `分项 ${Object.entries(tSim.terms).filter(([kk]) => kk !== 'total')
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
     .map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`);
-check('★ 站桩不会被奖励（零输出适应度 ≤ 0；不奖励静止）', zeroFit <= 0.05, `${zeroFit.toFixed(3)}`);
+// ★ 站桩必须拿不到"走路"那几项：velTrack 已扣掉 φ(v*) 基线，lift/single/jointMove 全是 0。
+// ★ 站桩必须拿不到"走路"那几项。jointMove 只能压到 ~0.1（纯阻尼站桩时的被动晃动
+//   是真实的关节运动，门控因子也只能按"站得住"筛）⇒ 用绝对上限而不是要求精确 0。
+check('★ 站桩拿不到走路奖励（velTrack 扣基线、lift/single≈0、jointMove 很小）',
+  Math.abs(tSim.terms.velTrack) < 1e-6 && Math.abs(tSim.terms.lift) < 1e-6
+  && Math.abs(tSim.terms.single) < 1e-6 && tSim.terms.jointMove < 0.1,
+  `velTrack=${tSim.terms.velTrack.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)}`
+  + ` single=${tSim.terms.single.toFixed(3)} jointMove=${tSim.terms.jointMove.toFixed(3)}`
+  + ` 位移=${tSim.distance.toFixed(3)}m 总=${zeroFit.toFixed(3)}`);
 note('零输出 6s 内的被动站姿（无主动平衡，倒了是诚实的）', true,
   `倒地=${tSim.fallen}，末躯干高 ${tSim.doll.torso().translation().y.toFixed(3)} m`);
 
@@ -594,8 +602,11 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;
   log(`  ${marks.join('  |  ')}`);
-  log(`  换脚（迈步）次数 = ${(anat as unknown as { stepCount: number }).stepCount}`
-    + `   腾空 = ${(((anat as unknown as { accAir: number }).accAir)).toFixed(2)} s`
+  // ★ 新配方没有"换脚计数"了 ⇒ 改报**交替步态的直接证据**：
+  //   单脚支撑占比（"一次抬一条"）+ 抬腿饱和度 + 逐关节移动。
+  const aws = anat.walkStat;
+  log(`  单脚支撑占比 = ${aws.singleRatio.toFixed(2)}   移动饱和度 = ${aws.moveFrac.toFixed(2)}`
+    + `   逐关节 ${Object.entries(aws.jtMove).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`
     + `   分项 ${Object.entries(anat.terms).filter(([kk]) => kk !== 'total')
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5)
       .map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`);

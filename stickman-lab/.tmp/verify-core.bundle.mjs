@@ -14199,8 +14199,11 @@ function rotQ(qx, qy, qz, qw, vx, vy, vz, out) {
   out[1] = vy + qw * ty + (qz * tx - qx * tz);
   out[2] = vz + qw * tz + (qx * ty - qy * tx);
 }
+function soleBodyIndex(doll, side) {
+  return doll.indexByKey.get(`foot_${side}`) ?? doll.indexByKey.get(side === "l" ? "shin_l" : "shin_r");
+}
 function footRect(doll, side, out) {
-  const idx = doll.indexByKey.get(side === "l" ? "shin_l" : "shin_r");
+  const idx = soleBodyIndex(doll, side);
   if (idx === void 0) return false;
   const bd = doll.sk.bodies[idx];
   const b = doll.bodies[idx];
@@ -14229,6 +14232,9 @@ function footRect(doll, side, out) {
   out.cx = (x0 + x1) / 2;
   out.cz = (z0 + z1) / 2;
   return minY <= CONTACT_Y;
+}
+function footGrounded(doll, side) {
+  return footRect(doll, side, side === "l" ? RECT_L : RECT_R);
 }
 function readSupport(doll, out) {
   const inL = footRect(doll, "l", RECT_L);
@@ -14303,95 +14309,18 @@ var init_posture = __esm({
   }
 });
 
-// src/core/phaseSeed.ts
-function phaseGenome(shape, s) {
-  const p = new Float32Array(brainParamCount(shape));
-  const L2 = brainLayout(shape);
-  p[L2.w1 + 0 * shape.inputs + 0] = 5;
-  p[L2.w1 + 1 * shape.inputs + 1] = 5;
-  const out = (joint, axis, aSin, aCos, bias) => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
-    if (o < 0) return;
-    p[L2.w2 + o * shape.hidden + 0] = aSin * s.scale;
-    p[L2.w2 + o * shape.hidden + 1] = aCos * s.scale;
-    p[L2.b2 + o] = bias * s.scale;
-  };
-  for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
-    out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
-    out(j.replace("hip", "knee"), 2, -s.knee * sgn, s.knee * 0.35 * sgn, s.duty * sgn * 0.4);
-  }
-  for (const [j, sgn] of [["shoulder_l", -1], ["shoulder_r", 1]]) {
-    out(j, 2, s.arm * sgn, 0, 0);
-  }
-  for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
-  return p;
+// src/core/walkReward.ts
+function phi(err) {
+  return Math.exp(-(err * err) / 0.25);
 }
-function phaseGenomeFor(jointCount, s = BEST_PHASE) {
-  return phaseGenome(shapeForJoints(jointCount), s);
-}
-var BEST_PHASE;
-var init_phaseSeed = __esm({
-  "src/core/phaseSeed.ts"() {
+var AIR_TARGET, JOINT_MOVE_TARGET, TARGET_VX, MOVE_JOINTS;
+var init_walkReward = __esm({
+  "src/core/walkReward.ts"() {
     "use strict";
-    init_brain();
-    init_skeleton();
-    BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
-  }
-});
-
-// src/core/jointProgram.ts
-function phaseProgram(s = BEST_PHASE) {
-  const sc = s.scale;
-  const hip = 0.6 * sc, knee = 0.5 * sc, arm = 0.3 * sc, waist = 0.2 * sc;
-  const joints = [
-    // ★★ 骨盆（髋）：**左右下发同相**（amp 同号、lead 同为 0）。
-    //   这是实测出来的，不是随手写的：`tools/probe-seed` 扫 legPhase = ±1 × 三档幅度，
-    //   legPhase=+1（左右同相下发）才**往前走**（+1.25 m / 2 次有效迈步 / altQ=0.75），
-    //   legPhase=−1（反相下发）会**往后走**（−1.24 m）。
-    //   也就是说：**命令同相 ⇒ 实测反相** —— 交替是地面把一条腿按住"造"出来的。
-    //   所以"腿部要交替"这条要求由 **alt 项**（量的是实际角速度）负责，程序只描述可实现的命令。
-    { joint: "hip_l", axis: 2, aSin: 0.0557, aCos: -0.0973, bias: 0.1302, w: 1, leg: true, move: true },
-    { joint: "hip_r", axis: 2, aSin: 0.0534, aCos: -0.0705, bias: 0.1529, w: 1, leg: true, move: true },
-    // ★ 膝盖：与同侧髋同相、略滞后（收腿），左右同样同相下发
-    { joint: "knee_l", axis: 2, aSin: -0.1022, aCos: 0.0922, bias: 0.1, w: 1, leg: true, move: true },
-    { joint: "knee_r", axis: 2, aSin: -0.0847, aCos: 0.0749, bias: 0.0843, w: 1, leg: true, move: true },
-    // ★ 没有踝/足关节（JOINT_ORDER 只有 8 个），脚只能被小腿拖着走 ⇒ 程序里也不写脚
-    // 手臂：与同侧腿反相（平衡用），权重低一点，免得它抢戏
-    { joint: "shoulder_l", axis: 2, aSin: -0.0981, aCos: 0.0826, bias: 0.0131, w: 0.4, leg: false, move: false },
-    { joint: "shoulder_r", axis: 2, aSin: 0.0871, aCos: 38e-4, bias: 0.0251, w: 0.4, leg: false, move: false },
-    { joint: "elbow_l", axis: 2, aSin: -45e-4, aCos: 0.0163, bias: 13e-4, w: 0.25, leg: false, move: false },
-    { joint: "elbow_r", axis: 2, aSin: 64e-4, aCos: 35e-4, bias: 14e-4, w: 0.25, leg: false, move: false }
-  ];
-  for (let i = 1; i <= 3; i++) {
-    joints.push({ joint: `spine${i}`, axis: 0, aSin: -56e-4, aCos: 0.0222, bias: 0.0237, w: 0.2, leg: false, move: false });
-  }
-  return {
-    name: "walk-phase-v1",
-    joints,
-    pairs: [["hip_l", "hip_r"], ["knee_l", "knee_r"]],
-    moveTarget: 1,
-    // rad/s：髋/膝平均角速度到这个值就满分（×0.15 步态实测 0.58、×0.5 饱和）
-    // ★ 抬腿：左右膝"一次抬一条"。base 取实测 bias，ref 取实测摆幅 0.2 rad。
-    //   ★ sign=+1 是**屈膝**方向（实测：sign=−1 时抬腿高度≈0、同时抬占比≈0 ⇒ 那是伸腿方向，
-    //   等于"从来不抬"白拿互斥满分）。
-    liftPairs: [["knee_l", "knee_r"]],
-    // 两条腿平均抬到这个高度才算"真在抬腿"（实测最好那组是 0.22~0.23）
-    liftTarget: 0.25,
-    lifts: [
-      { joint: "knee_l", sign: 1, ref: 0.2, base: 0.1 },
-      { joint: "knee_r", sign: 1, ref: 0.2, base: 0.084 }
-    ]
-  };
-}
-function targetAngle(j, phase) {
-  return j.bias + j.aSin * Math.sin(TAU * phase) + j.aCos * Math.cos(TAU * phase);
-}
-var TAU;
-var init_jointProgram = __esm({
-  "src/core/jointProgram.ts"() {
-    "use strict";
-    init_phaseSeed();
-    TAU = Math.PI * 2;
+    AIR_TARGET = 0.5;
+    JOINT_MOVE_TARGET = 1;
+    TARGET_VX = 0.5;
+    MOVE_JOINTS = ["hip_l", "hip_r", "knee_l", "knee_r"];
   }
 });
 
@@ -14402,7 +14331,7 @@ __export(sim_exports, {
   Sim: () => Sim,
   W: () => W
 });
-var DEFAULT_SIM, W, ZERO2, Sim;
+var MOVE_SET, DEFAULT_SIM, W, ZERO2, Sim;
 var init_sim = __esm({
   "src/core/sim.ts"() {
     "use strict";
@@ -14410,11 +14339,10 @@ var init_sim = __esm({
     init_ragdoll();
     init_brain();
     init_posture();
-    init_jointProgram();
+    init_walkReward();
     init_skeleton();
+    MOVE_SET = new Set(MOVE_JOINTS);
     DEFAULT_SIM = {
-      programMode: true,
-      program: null,
       physicsHz: 120,
       controlHz: 60,
       duration: 6,
@@ -14439,197 +14367,62 @@ var init_sim = __esm({
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
-      fallHeightRatio: 0.62,
+      /**
+       * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
+       * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
+       *   实测零输出基因组（纯阻尼）会在 0.5 s 内塌 0.41 m、然后一路滑出 **1.25 m**，
+       *   而躯干高度还有初始的 70% ⇒ 回合不结束、速度跟踪项被它白拿 0.51 分。
+       *   经典配方里 crash ⇒ reset 是"结构上不给退化解留时间"，这里同理。
+       */
+      fallHeightRatio: 0.85,
       fallAngle: 1.25
     };
     W = {
+      // ══════ 走路：walkReward.ts 的 11 项（顺序同那张表）══════
+      /** 线速度跟踪 φ(v*−v_x)，v*=0.5 m/s —— 唯一说"往哪儿走"的一项 */
+      velTrack: 1,
       /**
-       * 净前进距离（x 位移）。★ 用户 2026-10-01："前进奖励要弱" ⇒ 3.0 → **0.5**。
-       *   原来 3.0 太大，ES 只要"整体往前蹭"就能拿分，于是**迈步本身反而不值钱**
-       *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。
-       *   0.5 削弱后又太弱（策略连方向都找不着了），按用户要求**再增大到 1.5** ——
-       *   仍显著低于 3.0，但足以提供"往 +X 走"的方向梯度。
+       * 角速度跟踪 φ(ω*−ω_y)。★ **默认 0**：φ(0)=1 意味着"完全不自转"是满分，而站桩恰好满分
+       *   ⇒ 白拿一份分（实测零输出 +0.5）。自转由 tiltRate 罚（已把 ω_y 纳入）。
        */
-      distance: 1.5,
-      // ══ 关节程序模式（用户 2026-10-01："不写笼统的奖励分数了，精确控制各个关节"）══
-      /** 逐关节跟踪误差系数：−w.joint · ∫(实际角−程序目标角)²dt（每关节还有自己的 w） */
-      joint: 1,
-      /** 腿部交替：w.alt · (交替质量 − 1)，≤0。两腿角速度和≈0（完全反相）时为 0 */
-      alt: 2,
-      /** 移动鼓励：w.move · min(1, 髋/膝平均角速度 / moveTarget) —— "骨盆和膝盖要动" */
-      move: 1,
-      /** 前进任务分：w.task · 迈出来的位移 · 时间平均交替质量 */
-      task: 1.5,
-      /** 旧的"迈步-站稳"循环项总开关（0 = 关掉，只用程序奖励；UI 可调回 1） */
-      excl: 2,
-      cycle: 0,
+      yawTrack: 0,
+      /** 侧向漂移 −v_z² */
+      lateral: 4,
+      /** 翻滚/俯仰角速度罚 */
+      tiltRate: 0.05,
+      /** 抬腿：Σ_脚 min(1, 腾空/0.5s)·dt —— 交替步态的发动机之一 */
+      lift: 1,
+      /** 单脚支撑（"一次抬一条"）：恰好一脚着地 +1 / 两脚都飞 −0.5 / 都着地 0 */
+      single: 1.5,
+      /**
+       * 逐关节"要动"（骨盆/膝盖），每关节另有 moveScale 倍率。
+       * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
+       *   而不是走 —— 实测 jointMove=1.0 时最好个体 5 代只走 0.03 m，训练全部靠抖腿拿分。
+       */
+      jointMove: 0.3,
+      /** 逐关节倍率（UI 滑块） */
       moveScale: {},
-      // 逐关节移动倍率（UI 实时改；默认权重在 jointProgram.ts）
       /**
-       * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
-       * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
-       * **不要求**位移门槛、**不要求**直线 —— 后两条是可选项（见 `stepMinDx` / `stepMaxDz`），
-       * 只影响上面的"大位移奖金"（`step`/`step2`）。
-       * 为什么要有：奖励被劫持过一次（ES 找"原地抖腿"刷步数），
-       * 但那次的解法应该是"收紧条件"，不是"取消换脚奖励"—— 没有它就没有"迈步"这个梯度。
+       * 弯腰驼背罚 ∫(cos tilt − 1)dt。★ 从 0.5 抬到 2.0：这个 rig 被动站不住，
+       *   "塌着往前滑"也能拿速度跟踪分（实测零输出基因组滑 0.65 m 拿 velTrack +0.63），
+       *   倾角罚必须压过 locomotion 收益，"塌"才不是可行解。
        */
-      switch: 0.3,
-      /**
-       * ★★★ **迈步后保持稳定的加分**（用户 2026-10-01 定调，循环式奖励）：
-       * > "还不如让这玩意只迈两步，但是每迈一步都要稳，需要自行调整平衡"
-       * > "需要一个迈步后保持稳定的加分，而且在迈步后要高于迈下一步的收益，然后逐渐减弱，再迈下一步"
-       * > "循环为迈步，保持稳定，再迈下一步，再保持稳定的循环"
-       *
-       * 做法：一次**有效迈步**打开一个**稳定窗口**（`holdMaxSec` 秒，上限），
-       *   · 窗口内只要**还在支撑域内**（DCM 未越界）就积分"站稳的秒数"——这就是"自行调整平衡"；
-       *   · 每一步的窗口按 `stepDecay^已迈步数` 打折 ⇒ **第一步比第二步值钱，之后逐渐减弱**；
-       *   · 窗口用完（或摔倒）就不再给分 ⇒ 想继续拿分**必须再迈一步**，
-       *     于是最优策略长成用户描述的循环：**迈步 → 站稳 → 再迈 → 再站稳**。
-       *   （曾经用"给分速率指数衰减"，实测不行：迈步后要 1~2 s 才稳得住，
-       *     `holdTau=1.1s` 时窗口结束时速率已衰减到 4%，等于白给 ⇒ 改成计秒数。）
-       * 于是最优策略自然长成用户描述的循环：**迈步 → 稳住 → 再迈 → 再稳住**。
-       */
-      hold: 1.2,
-      // ★ 显式记录"第一步之前"状态：保持分窗口只在**有效迈步之后**才打开
-      //   （用户 2026-10-01："迈第一步之前不要有稳住的加分"）。验收见 tools/probe-gait。
-      /**
-       * ★★ **抢步罚**（用户 2026-10-01："迈一步立刻迈第二步应该是负分"）。
-       * 两次有效迈步之间的间隔 < `stepMinGap`（默认 0.35 s）就按"越快罚得越狠"计：
-       *   罚 = `W.rush · (1 − gap/stepMinGap)`。
-       * 它和"迈步后保持稳定"的加分是一对：**站稳了再迈才有分，抢步倒扣** ⇒ 策略学到的是节奏。
-       */
-      rush: 1.5,
-      /**
-       * ★★ **静止罚**（用户 2026-10-01："这个抢步罚后面会转为静止罚"）。
-       * 只有"不罚"是不够的：迈一步 → 站完 2 s 窗口 → 什么都不做，收益并不比
-       * "继续迈步"差，所以最优解会退化成"**迈一步然后 freeze**"。
-       * ⇒ 只要**不在循环里**（稳定窗口已关、或还没迈出第一步）就一直扣，
-       *   而且**越站越贵**：扣分速率在 `stillGrace` 秒后开始，按 `stillRamp` 线性爬升（上限 3×）。
-       */
-      still: 1,
-      /**
-       * ★★ **同腿连迈罚**（用户："一条腿连着迈两步更是负上加负"）。
-       * 摆动腿腾空后**又落到同一条腿**（stance 1→0→1 / 2→0→2）而不是换另一条 = 单腿跳，
-       * 这种"假步"既不计入有效迈步，还要额外扣分（`W.sameFoot` / 次）。
-       */
-      sameFoot: 0.5,
-      /** 前进速度积分（塑形项：让早期就有梯度，不必等撞线） */
-      velocity: 0.6,
-      /**
-       * ★ 躯干不正的惩罚：W × ∫(cos(tilt) − 1)dt（≤ 0，不直立就一直扣）。
-       * ★★ 权重已从 1.2 **降到 0.5**：它优化的是**代理量** ——
-       *   胸腔只占 12.4% 质量、中心离 CoM 0.4635 m，而"人像棍子一样平移倒下"时
-       *   胸腔倾角**始终 ≈ 0** ⇒ 这个项对真正的摔倒几乎无感（实测"直立占比 48~97%
-       *   却只前进 0.37 m、**仍判摔**"）。真正的平衡判据交给下面的 balance。
-       *   不删它是因为"弯腰驼背"确实要以姿态扣分，只是不该由它负责平衡。
-       */
-      upright: 0.5,
-      /** 躯干离地高度偏差（站着才不扣） */
+      upright: 2,
+      /** 高度偏差罚 */
       height: 0.8,
-      /** 侧向漂移 ∫|z|dt：任务要求沿 +X 直走 */
-      lateral: 1,
-      /** 关节耗能 */
+      /** 关节角速度平方罚 */
+      jointMotion: 1e-3,
+      /** 力矩平方罚 */
+      torque: 2e-5,
+      /** 电机指令变化率罚（替代旧的 accSmooth；旧版符号写反过一次，"疯狂抽风"反而加分） */
+      actRate: 0.25,
       energy: 0.02,
-      /**
-       * ★ 有效迈步奖励，**单位：每米前进**（`w.step · Σ本步前进距离`）。
-       *   "大位移才有奖励"；每一次有效迈步都要满足三条门槛（左右交替 / 这一脚直线 / 位移够大）。
-       */
-      step: 4,
-      /**
-       * ★★ **第 2 步起的超线性加成**：`w.step2 · n(n−1)/2`（n = 换脚次数）。
-       *
-       * 为什么必须有（用户 2026-10-01："第一步会迈出去，但是第二步不会迈了。
-       * 需不需要走直线分数加权或者什么手段教会他走第二步？"）：
-       *   `probe-gait`（绕过 ES 的手工相位步态，24 组）实测：**没有任何一组能迈出第二步**，
-       *   最好的那组走 1.21 m、存活 3.6 s，但**换脚只有 1 次**。
-       *   而原来的奖励结构是 `step 0.4/步` 对 `fall 2.0` ⇒
-       *   **"迈一步再倒"是净负分（+0.4−2.0 = −1.6）** ⇒ ES 学到的最优解是"别迈步"。
-       *   直线/方向加权救不了这个：它只能改变**已有动作的方向**，
-       *   而"落地之后再迈"这个动作在物理层压根没出现。
-       *   ⇒ 把"第 2 步、第 3 步…"的价格抬到**超线性**，让"多迈一步"的边际收益超过摔倒代价：
-       *     n=1 → +0.4，n=2 → +1.2，n=3 → +2.8，n=4 → +5.2（`step` + `step2` 两项之和）
-       */
-      step2: 0.8,
-      /**
-       * ★ 腾空时间惩罚（`∫`双脚离地 dt）。
-       * 为什么要：实测**全幅**相位步态 0.27 s 就双脚腾空（把整个人甩起来，腾空占比 10~13%），
-       * 而把输出缩到 ×0.05~0.15 才走得远、活得久 ⇒ 摆动权限相对支撑能力过强，
-       * 搜索很容易滑到"跳"这个局部解上。给腾空上分可以把搜索推回"走"。
-       */
-      air: 0.5,
-      /** 摔倒一次性扣分 */
-      fall: 2,
-      /**
-       * ★ 存活奖励（每秒）。**默认 0 = 关闭**，只有"站桩考核"这类关掉了
-       * `distance/velocity/step` 的模式才该打开。
-       *
-       * ★★ 为什么必须有这么一个项（这条是跑 probe-posture 时踩出来的真坑）：
-       *   本适应度里所有姿态项（balance / upright / height / lateral / energy）**都是
-       *   随时间累积的负数**，而"摔倒"只是一次性 −2。于是当 locomotion 项被关掉、
-       *   没有任何"活得越久拿分越多"的正项时，**早死反而分数更高** ——
-       *   ES 会直奔"赶紧倒下"这个解（实测：站桩训练 20 代，最佳个体存活从 0.78 s
-       *   一路缩到 0.65 s，却因为累积惩罚更少而分数更高，ξz 峰值也确实"变小"了）。
-       *
-       *   ★ 行走模式不需要它：`distance` 只有在活着的时候才累积，天然带存活激励
-       *     （这也是"摔倒只是一次性 −2"没有毁掉行走训练的原因）。
-       *   ★ 也**不能**给行走默认加上它：站着不动 6 s 白拿 6×1.5 = 9 分，
-       *     正好抵消 distance 的满分量级 ⇒ 会造出一个"原地不动"的强局部最优
-       *     （当年把 upright 从"奖励"改成"惩罚"就是为了掐掉这个最优）。
-       */
-      survive: 0,
-      /**
-       * ★★ DCM 越界积分（本轮新增，**这是"站得住"真正的梯度来源**）。
-       *
-       *   项的形式：W.balance × ∫ (ex² + ez²) dt
-       *     其中 ex = max(0, |ξx − cx| / halfX − 1)、ez 同理（无量纲，见 posture.dcmExcess）
-       *     ξ = CoM + CoM速度/ω 是**捕获点**，越界之后任何 CoP 都救不回来。
-       *
-       *   ★ 为什么必须是它、而不是"CoM 投影落在支撑多边形内"：
-       *     静力投影判据比真实约束**宽得多**（它是静态近似）。真约束是不稳定倒立摆
-       *     ẍ = ω²(x−p)，稳定当且仅当 ξ 在域内。probe-stability 实测：走路量级 0.5 m/s
-       *     就已经超过本骨架的可刹上限 ω·p_max = 0.351 m/s ⇒ 静止站立在数学上已不可能，
-       *     只有迈步能救。用静力判据会给出"余量 0.11 m，很安全"的错误结论。
-       *
-       *   ★ 为什么用**归一化**而不是米：站立时 half 只有 0.07 m、迈步时 half 在变，
-       *     用米会让"域大的时候小犯规"和"域小的时候不犯规"混在一起不可比。
-       *     归一化后 0 = 正好在域边缘、1 = 越出整整一个半宽，跨姿态可比。
-       *
-       *   ★ 为什么侧向用**被动**半宽（0.070）而不是凸包（0.266）：
-       *     两脚等载荷时净 CoP = 两脚 CoP 的平均 ⇒ 侧向可调范围只有"单只脚的宽度"。
-       *     拿凸包当域等于给策略 4 倍宽容度，它会以为 ξz = 0.2 很安全（实测静息就是这样翻的）。
-       *
-       *   ★ 为什么平方：域内给 0 ⇒ 与 upright 一样"站桩不白拿分"，不会造出新的局部最优；
-       *     越界越狠扣得越急 ⇒ 梯度指向"别出去"，而不是"出去一点也没事"。
-       *
-       *   ★ 取值 2.0 的来由：一次典型的摔倒，越界量在 1~3 个半宽之间，积分 ≈ 1~9，
-       *     ×2 后是 2~18 分 —— 与 distance（满分 3×3=9）同量级、比 fall（2.0）重，
-       *     也就是"慢慢倒下去"和"直接判摔"都会被明显惩罚，但不会把分数压成常数。
-       */
+      // ══════ 以下只被 fight 分支用 ══════
+      hit: 3,
+      hurt: 1,
+      approach: 0.8,
       balance: 2,
-      /**
-       * ★★ 抖动惩罚（W.smooth）：∫ Σ_axis (τ_t − τ_{t−1})² （N·m²·s 量纲见下）。
-       *
-       *   ★ 为什么需要它：`energy = 0.02·∫Σout²` 量的是**出力大小**，量不到**抖动**。
-       *     一个每步朝相反方向猛扯、净输出 ≈ 0 的"抽风"关节，Σout² 并不大，
-       *     但它把接触抖散了（probe-posture [C3]：抽风个体只活 0.38~0.60 s）。
-       *
-       *   ★ 为什么用**力矩**差而不是网络输出差：力矩里含 `−kD·ω_rel` 反馈项。
-       *     高频换向在力矩上才看得见；网络命令可能是低频的，而关节在硬顶。
-       *
-       *   ★ 为什么是"平方和"而不是 Σ|Δτ|：和 W.balance 同理 —— 小幅连续修正（真人式）
-       *     几乎不罚，大幅高频（抽风）按平方放大。用 Σ|Δτ| 会让"每步轻微调整"也被线性罚。
-       *
-       *   ★ 量纲/量级（probe-posture [C3]，3.5 s 回合）：
-       *     静息（零输出）实测抖动 ≈ 66 N·m/s；抽风个体 ≈ 1.0e5 N·m/s ⇒ 差 3 个数量级。
-       *     取 1e-4 量级即可把两者在分数上分开，而不会把正常步态压死（见 C3 的 smooth 列）。
-       */
-      smooth: 1e-4,
-      /** 战斗：命中一次 */
-      hit: 4,
-      /** 战斗：被击中（按出拳次数，不是按周期数） */
-      hurt: 0.02,
-      /** 战斗：手贴近假人的程度 ∫max(0, 1 − d/1.2)dt —— 塑形项，让"挥空"也有梯度 */
-      approach: 0.8
+      fall: 2
     };
     ZERO2 = { x: 0, y: 0, z: 0 };
     Sim = class {
@@ -14668,80 +14461,41 @@ var init_sim = __esm({
       accHeight = 0;
       accLateral = 0;
       accEnergy = 0;
+      // ══════ 走路奖励（walkReward.ts 的 11 项）══════
+      accLift = 0;
+      // Σ_脚 min(1, 腾空/目标)·dt
+      accSingle = 0;
+      // 单脚支撑：+1 / 两脚都飞 −0.5 / 都着地 0，×dt
+      accTicks = 0;
+      // 累计控制秒数（给"平均"类分项做分母）
+      accAlive = 0;
+      // ∫"站得住"因子 dt（门控抬腿/单脚支撑/要动三项）
+      accJtMove = {};
+      // 逐关节"要动"
+      accMoveSum = 0;
+      accJointMotion = 0;
+      // ∫Σ|q̇|²
+      accTau = 0;
+      // ∫Στ²
+      accActRate = 0;
+      // ∫Σ|Δq*|²
+      airL = 0;
+      // 左脚连续腾空时间
+      airR = 0;
+      motorPrev;
+      // 上一拍的马达目标（action rate）
+      accVelTrack = 0;
+      // ∫(φ(v*−vx) − φ(v*))dt  （扣基线，站桩 = 0）
+      accYaw = 0;
+      // ∫φ(−ω_y)dt
+      accLat = 0;
+      // ∫v_z² dt
+      accTilt = 0;
+      // ∫|ω|² dt
       accVel = 0;
       accClose = 0;
       /** ★ DCM 越界积分（无量纲，见 W.balance） */
       accBalance = 0;
-      /** ★ 关节程序（相位 → 每个关节的目标角）。null = 不用程序模式 */
-      prog;
-      /** 逐关节跟踪误差积分（键 = 关节名） */
-      accJt = {};
-      /** 逐关节角速度积分（rad，键 = 关节名） */
-      accMove = {};
-      /** 腿部"同相"程度积分：∫((qdot_l+qdot_r)/moveTarget)² dt */
-      accAlt = 0;
-      /** ★ 抬腿互斥：两条腿"同时在抬"的时间占比（0 = 一次抬一条，1 = 一直一起抬） */
-      accOverlap = 0;
-      /** 每条腿实际"抬起来"的平均高度（0~1，诊断用） */
-      accLift = {};
-      /** 交替质量的时间积分（0=完全同相，1=完全反相），用来给前进分打折 */
-      accAltQ = 0;
-      /** 上一个控制周期的关节角（算角速度用，避免跨 wasm 边界） */
-      prevAng = {};
-      /** ★ 有效迈步时记下的 x：前进奖励只对"上一次有效迈步之后推进的位移"付费 */
-      stepRefX = 0;
-      /** 已付费的前进距离（见 W.distance） */
-      accProgress = 0;
-      /** ★ 抖动积分 ∫ Σ(Δτ)²（N·m²·s，见 W.smooth） */
-      accSmooth = 0;
-      /** 上一物理步的**实际**关节力矩（= motorImpulse/dt），用于算 Δτ */
-      tauPrev;
-      tauPrimed = false;
-      lastStance = 0;
-      /** ★ 有效迈步次数（满足三条门槛；见 SimConfig.stepMinDx） */
-      stepCount = 0;
-      /** ★ 有效迈步累计**前进距离**（m）—— 步数奖励按它计价，不按次数 */
-      stepDist = 0;
-      /** 上一次有效迈步的画布起点（用于算本步的 Δx/Δz） */
-      stepAnchorX = 0;
-      stepAnchorZ = 0;
-      /** 累计净前进（m），用作 stepMinTotal 的门槛 */
-      stepTotalX = 0;
-      /** 上一次着地的是哪只脚（1=左 2=右），用来强制左右交替 */
-      stepLastFoot = 0;
-      /** ★ 诊断：有效迈步各道门槛分别挡了多少次（探针/调试用，见 `get stepDiag`） */
-      stepDiag = { switch: 0, noPrev: 0, noAlt: 0, slow: 0, notStraight: 0, tooSmall: 0, notYet: 0, ok: 0 };
-      /** ★ 交替换脚次数（只要求左右交替 + 在前进）—— W.switch 的计价依据 */
-      switchCount = 0;
-      /** ★ 当前稳定窗口剩余秒数（迈步时打开，用完关闭）—— 见 W.hold */
-      holdWindow = 0;
-      /** ★ 当前窗口的折扣（= stepDecay^已迈步数） */
-      holdFactor = 0;
-      /** ★ 累计"迈步后站稳的秒数 × 折扣" */
-      accHold = 0;
-      /** ★ 上一次有效迈步的时刻（s），用于抢步判定 */
-      lastStepT = -1;
-      /** ★ 抢步罚累计（归一化量，1 = 刚好抢到 0 间隔） */
-      accRush = 0;
-      /** ★ 已过秒数（抢步判定用） */
-      elapsed = 0;
-      /** ★ 同腿连迈次数 */
-      accSameFoot = 0;
-      /** ★ 不在"迈步+站稳"循环里的时长（s）—— 静止罚的计时 */
-      quietT = 0;
-      /** ★ 静止罚累计（归一化秒数，速率加权前） */
-      accStill = 0;
-      /** ★ 腾空前着地的是哪只脚 / 本轮是否腾空过（同腿连迈判定用） */
-      footBeforeFlight = 0;
-      sawFlight = false;
-      /** ★ 诊断：CoM 在支撑域内的累计/计数（hold 奖励的判据） */
-      supInRatio = 0;
-      supTicks = 0;
-      lastInSup = false;
-      /** ★ 步数分按"逐渐减弱"加权后的累计（米 × 折扣） */
-      accStepScore = 0;
-      /** ★ 腾空时间（双脚都离地），单位 s —— 见 W.air */
-      accAir = 0;
       // ---- 战斗模式 ----
       puppet;
       fist;
@@ -14777,6 +14531,9 @@ var init_sim = __esm({
       endHeadY = 0;
       /** ★ 诊断：ξ 同时落在 x/z 域内的控制周期占比（"站住了"的直接指标） */
       inDomainRatio = 0;
+      /** 支撑域内占比（诊断：域内 CoM 占比，DCM 判据已从走路奖励里去掉） */
+      supInRatio = 0;
+      supTicks = 0;
       inDomainTicks = 0;
       balanceTicks = 0;
       constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
@@ -14784,15 +14541,6 @@ var init_sim = __esm({
         this.cfg = cfg;
         this.shape = shape;
         this.w = { ...W, ...cfg.weights };
-        this.prog = cfg.program ?? (cfg.mode === "walk" && cfg.programMode ? phaseProgram() : null);
-        if (this.prog) {
-          for (const j of this.prog.joints) {
-            this.accJt[j.joint] = 0;
-            this.accMove[j.joint] = 0;
-            this.prevAng[j.joint] = 0;
-          }
-          for (const L2 of this.prog.lifts) this.accLift[L2.joint] = 0;
-        }
         this.dt = 1 / cfg.physicsHz;
         this.stages = Math.max(1, Math.round(cfg.physicsHz / cfg.controlHz));
         this.ticksTotal = Math.max(1, Math.round(cfg.duration * cfg.controlHz));
@@ -14802,7 +14550,8 @@ var init_sim = __esm({
         this.hidden = new Float32Array(shape.hidden);
         this.out = new Float32Array(shape.outputs);
         this.motor = new Float32Array(this.doll.jointCount * 3);
-        this.tauPrev = new Float64Array(this.doll.jointCount * 3);
+        this.motorPrev = new Float32Array(this.doll.jointCount * 3);
+        for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
         this.initTorsoY = this.doll.torso().translation().y;
       }
       /**
@@ -14869,11 +14618,15 @@ var init_sim = __esm({
       get distance() {
         return this.doll.torso().translation().x - this.startX;
       }
-      /** ★★ 诊断：本回合的**抖动积分** Σ(Δτ)²（量纲 (N·m)²，见 W.smooth / [C3]） */
-      get smoothCost() {
-        return this.accSmooth;
+      /** 诊断：本回合的电机指令变化率积分（替代旧的抖动积分 Σ(Δτ)²，见 W.actRate） */
+      get actionRateCost() {
+        return this.accActRate;
       }
       // ------------------------------------------------------------ 生命周期
+      /** ★ UI 滑块：运行时改权重（只接受新配方那 11 项的键） */
+      setWeights(w) {
+        this.w = { ...this.w, ...w };
+      }
       /** 装上一份基因组，重置世界，开始一次评估 */
       begin(params) {
         if (params.length !== this.params.length) {
@@ -14894,45 +14647,24 @@ var init_sim = __esm({
         this.accVel = 0;
         this.accClose = 0;
         this.accBalance = 0;
-        this.accAlt = 0;
-        this.accAltQ = 0;
-        this.accOverlap = 0;
-        for (const k of Object.keys(this.accLift)) this.accLift[k] = 0;
-        for (const k of Object.keys(this.accJt)) {
-          this.accJt[k] = 0;
-          this.accMove[k] = 0;
-          this.prevAng[k] = 0;
-        }
-        this.accProgress = 0;
-        this.accSmooth = 0;
-        this.tauPrev.fill(0);
-        this.tauPrimed = false;
-        this.lastStance = 0;
-        this.stepCount = 0;
-        this.switchCount = 0;
-        this.holdWindow = 0;
-        this.holdFactor = 0;
-        this.accHold = 0;
+        this.accLift = 0;
+        this.accSingle = 0;
+        this.accTicks = 0;
+        this.accMoveSum = 0;
+        this.accAlive = 0;
+        this.accJointMotion = 0;
+        this.accTau = 0;
+        this.accActRate = 0;
+        this.airL = 0;
+        this.airR = 0;
+        this.motorPrev.fill(0);
+        this.accVelTrack = 0;
+        this.accYaw = 0;
+        this.accLat = 0;
+        this.accTilt = 0;
+        for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
         this.supInRatio = 0;
         this.supTicks = 0;
-        this.lastStepT = -1;
-        this.accRush = 0;
-        this.elapsed = 0;
-        this.accSameFoot = 0;
-        this.quietT = 0;
-        this.accStill = 0;
-        this.footBeforeFlight = 0;
-        this.sawFlight = false;
-        this.accStepScore = 0;
-        this.stepDist = 0;
-        this.stepTotalX = 0;
-        this.stepLastFoot = 0;
-        {
-          const t02 = this.doll.torso().translation();
-          this.stepAnchorX = t02.x;
-          this.stepAnchorZ = t02.z;
-        }
-        this.accAir = 0;
         this.inDomainTicks = 0;
         this.balanceTicks = 0;
         this.peakDcmX = 0;
@@ -14962,7 +14694,6 @@ var init_sim = __esm({
         while (used < budgetSteps && !this.finished) {
           if (this.subStep === 0) this.controlTick();
           this.doll.driveMotors(this.dt);
-          this.accumulateSmooth();
           this.world.step();
           used++;
           this.subStep++;
@@ -14979,69 +14710,27 @@ var init_sim = __esm({
         return used;
       }
       /**
-       * ★ 抖动记账（W.smooth）：`accSmooth += Σ_axis (Δτ)²`，其中 `τ = motorImpulse / dt`。
-       *
-       * - 逐**物理步**累加（不是逐控制周期）—— "抽风"的定义就是**步间**抖动。
-       * - 用**实际施加的力矩**（`motorImpulse`）而不是网络输出 `out`：
-       *   力矩里含 `−kD·ω_rel` 反馈项，能抓到"命令平滑但关节在硬顶"的那种抽风。
-       * - 第一步跳过：没有前值，Δτ 会把"起步瞬间 0 → 一个正常力矩"记成一次巨大抖动。
-       * - 量纲：`∫ Σ(Δτ)²/dt dt = Σ(Δτ)²`，即 (N·m)²（dt 是常数，并入 W.smooth）。
-       */
-      accumulateSmooth() {
-        const imp = this.doll.motorImpulse;
-        const tp = this.tauPrev;
-        const invDt = 1 / this.dt;
-        if (!this.tauPrimed) {
-          for (let i = 0; i < imp.length; i++) tp[i] = imp[i] * invDt;
-          this.tauPrimed = true;
-          return;
-        }
-        let acc = 0;
-        for (let i = 0; i < imp.length; i++) {
-          const tau = imp[i] * invDt;
-          const d = tau - tp[i];
-          acc += d * d;
-          tp[i] = tau;
-        }
-        this.accSmooth += acc;
-      }
-      /**
        * ★★ 运行时调奖励规则（UI 滑块/开关用，用户 2026-10-01："做成可调的按钮"）：
        *   · `straight=false` ⇒ 取消"这一脚必须直线"（`stepMaxDz` 放到无穷大），
        *     只保留换脚奖励与位移门槛；
        *   · `minDx` ⇒ 改"一次有效迈步所需的净前进"（0 = 不设门槛）。
        *   换脚奖励本身（W.switch）**不受这里影响**，它必须一直在。
        */
-      setStepRule(o) {
-        if (o.straight !== void 0) {
-          if (o.straight && this.cfg.stepMaxDz > 1e8) this.cfg.stepMaxDz = DEFAULT_SIM.stepMaxDz;
-          else if (!o.straight) this.cfg.stepMaxDz = 1e9;
-        }
-        if (o.minDx !== void 0) this.cfg.stepMinDx = o.minDx;
-      }
-      /** ★ 运行时调适应度权重（UI 滑块用）。改完立即对后续 tick 生效。 */
-      setWeights(w) {
-        this.w = { ...this.w, ...w };
-      }
       /**
-       * ★ 课程：设置"一次有效迈步所需的净前进"。Trainer 每代调用，从 `stepMinDx` 线性升到
-       *   `stepMinDxMax`（用户："位移奖励阈值可以逐步增大"）。**只改门槛，不改已发生的记账。**
+       * ★ 诊断（走路奖励）：腾空/单脚支撑/逐关节移动 —— 经典配方里"交替步态从哪来"的全部证据。
+       *   `singleRatio` = 恰好一脚着地的时间占比（"一次抬一条"的直接度量）。
        */
-      setStepMinDx(v2) {
-        this.cfg.stepMinDx = v2;
-      }
-      /** ★ 诊断：有效迈步的门槛分项计数 + 已计分的有效步数/距离。 */
-      get stepStat() {
+      get walkStat() {
+        const E = Math.max(0.2, this.accTicks);
+        const jt = {};
+        for (const k of MOVE_JOINTS) jt[k] = (this.accJtMove[k] ?? 0) / E;
         return {
-          diag: { ...this.stepDiag },
-          count: this.stepCount,
-          dist: this.stepDist,
-          holdWindow: this.holdWindow,
-          holdFactor: this.holdFactor,
-          accHold: this.accHold,
-          lastInSup: this.lastInSup,
-          supInRatio: this.supInRatio,
-          supTicks: this.supTicks,
+          airL: this.airL,
+          airR: this.airR,
+          singleRatio: this.accSingle / E,
+          moveFrac: this.accMoveSum / E / MOVE_JOINTS.length,
+          jtMove: jt,
+          supInRatio: this.supTicks > 0 ? this.supInRatio / this.supTicks : 0,
           inDomainRatio: this.balanceTicks > 0 ? this.inDomainTicks / this.balanceTicks : 0
         };
       }
@@ -15119,128 +14808,49 @@ var init_sim = __esm({
         this.accLateral += Math.abs(tp.z) * dt;
         const eX = dcmExcess(nx, 0, 1);
         const eZ = dcmExcess(nz, 0, 1);
-        if (this.holdWindow > 0) this.accBalance += (eX * eX + eZ * eZ) * dt;
+        if (this.cfg.mode === "fight") this.accBalance += (eX * eX + eZ * eZ) * dt;
         if (eX === 0 && eZ === 0) this.inDomainTicks++;
         this.balanceTicks++;
-        if (this.prog) {
-          const P = this.prog;
-          const inv = 1 / Math.max(0.2, P.moveTarget);
-          const qd = {};
-          for (const j of P.joints) {
-            const idx = JOINT_ORDER.indexOf(j.joint);
-            const a = idx < 0 ? 0 : this.x[20 + 3 * idx + j.axis];
-            const rate = (a - this.prevAng[j.joint]) * (1 / dt);
-            this.prevAng[j.joint] = a;
-            qd[j.joint] = rate;
-            const e = (a - targetAngle(j, this.phase)) / 0.2;
-            this.accJt[j.joint] += j.w * e * e * dt;
-            if (j.move) this.accMove[j.joint] += Math.abs(rate) * dt;
-          }
-          for (const L2 of P.lifts) {
-            const idx = JOINT_ORDER.indexOf(L2.joint);
-            const a = idx < 0 ? 0 : this.x[20 + 3 * idx + 2];
-            this.accLift[L2.joint] += Math.max(0, Math.min(1, (L2.sign * a - L2.base) / L2.ref)) * dt;
-          }
-          let mx = 0;
-          for (const [l, r] of P.liftPairs) {
-            const iL = JOINT_ORDER.indexOf(l), iR = JOINT_ORDER.indexOf(r);
-            const sL = P.lifts.find((x2) => x2.joint === l), sR = P.lifts.find((x2) => x2.joint === r);
-            if (!sL || !sR || iL < 0 || iR < 0) continue;
-            const gL = Math.max(0, Math.min(1, (sL.sign * this.x[20 + 3 * iL + 2] - sL.base) / sL.ref));
-            const gR = Math.max(0, Math.min(1, (sR.sign * this.x[20 + 3 * iR + 2] - sR.base) / sR.ref));
-            mx = Math.max(mx, Math.min(gL, gR));
-          }
-          this.accOverlap += mx * dt;
-          let s2 = 0;
-          for (const [l, r] of P.pairs) s2 += (qd[l] + qd[r]) * inv;
-          this.accAlt += s2 * s2 * dt;
-          this.accAltQ += Math.max(0, Math.min(1, 1 - s2 * s2 / 4)) * dt;
-        }
-        if (this.holdWindow > 0) {
-          this.accProgress += Math.max(0, this.distance - this.stepRefX) * dt;
-        }
-        if (com.y > 0) {
-          this.supTicks++;
-          if (Math.abs(com.x - sup.cx) <= sup.halfX && Math.abs(com.z - sup.cz) <= sup.halfZ) this.supInRatio++;
-        }
-        if (this.holdWindow > 0) {
-          this.quietT = 0;
-        } else {
-          this.quietT += dt;
-          const over2 = this.quietT - this.cfg.stillGrace;
-          if (over2 > 0) {
-            const ramp = Math.min(3, over2 / Math.max(0.05, this.cfg.stillRamp));
-            this.accStill += ramp * dt;
+        const gL = footGrounded(doll, "l"), gR = footGrounded(doll, "r");
+        const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        this.airL = gL ? 0 : this.airL + dt;
+        this.airR = gR ? 0 : this.airR + dt;
+        this.accLift += (Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET)) * dt;
+        const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
+        const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
+        this.accAlive += alive * dt;
+        this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : -0.15) * dt;
+        this.accTicks += dt;
+        let jSpd = 0, jMove = 0;
+        for (let i2 = 0; i2 < doll.jointCount; i2++) {
+          doll.jointRelVel(i2, this.jbuf);
+          const w0 = this.jbuf[0], w1 = this.jbuf[1], w2 = this.jbuf[2];
+          jSpd += w0 * w0 + w1 * w1 + w2 * w2;
+          if (MOVE_SET.has(JOINT_ORDER[i2])) {
+            const sp = Math.sqrt(jSpd === 0 ? w0 * w0 : w0 * w0 + w1 * w1 + w2 * w2);
+            const f = Math.min(1, sp / JOINT_MOVE_TARGET);
+            this.accJtMove[JOINT_ORDER[i2]] += f * dt;
+            jMove += f;
           }
         }
-        if (this.holdWindow > 0) {
-          const inSup = Math.abs(com.x - sup.cx) <= sup.halfX && Math.abs(com.z - sup.cz) <= sup.halfZ;
-          this.lastInSup = inSup;
-          if (inSup) {
-            this.accHold += this.holdWindow > dt ? dt : this.holdWindow;
-            this.holdWindow -= dt;
-          }
+        let act2 = 0, tau2 = 0;
+        for (let i2 = 0; i2 < this.motor.length; i2++) {
+          const dq = this.motor[i2] - this.motorPrev[i2];
+          act2 += dq * dq;
+          this.motorPrev[i2] = this.motor[i2];
+          const tq2 = this.doll.motorImpulse[i2] / this.dt;
+          tau2 += tq2 * tq2;
         }
-        const anX = nx < 0 ? -nx : nx, anZ = nz < 0 ? -nz : nz;
-        if (anX > this.peakDcmX) this.peakDcmX = anX;
-        if (anZ > this.peakDcmZ) this.peakDcmZ = anZ;
-        let energy = 0;
-        for (let i = 0; i < this.out.length; i++) energy += this.out[i] * this.out[i];
-        this.accEnergy += energy * dt;
-        const yl = doll.soleY("l");
-        const yr = doll.soleY("r");
-        const near = 0.07;
-        const stance = yl < near && yl <= yr ? 1 : yr < near ? 2 : 0;
-        if (stance !== 0 && stance !== this.lastStance) {
-          this.stepDiag.switch++;
-          const st = stance;
-          if (st !== 0 && st === this.footBeforeFlight && this.sawFlight) {
-            this.accSameFoot++;
-            this.stepDiag.noAlt++;
-          }
-          if (st === 0) this.sawFlight = true;
-          if (st !== 0) this.footBeforeFlight = st;
-          const footChanged = this.lastStance !== 0 && stance !== this.lastStance;
-          if (this.lastStance === 0) this.stepDiag.noPrev++;
-          else if (!footChanged) this.stepDiag.noAlt++;
-          else if (doll.torso().linvel().x <= this.cfg.stepVMin) this.stepDiag.slow++;
-          if (footChanged && doll.torso().linvel().x > this.cfg.stepVMin) {
-            this.switchCount++;
-            const tp2 = doll.torso().translation();
-            const dx = tp2.x - this.stepAnchorX;
-            const dz = tp2.z - this.stepAnchorZ;
-            this.stepTotalX = Math.max(this.stepTotalX, tp2.x);
-            const straight = Math.abs(dz) <= this.cfg.stepMaxDz;
-            const far = dx >= this.cfg.stepMinDx;
-            const past = this.stepTotalX >= this.cfg.stepMinTotal;
-            if (!straight) this.stepDiag.notStraight++;
-            else if (!far) this.stepDiag.tooSmall++;
-            else if (!past) this.stepDiag.notYet++;
-            if (straight && far && past) {
-              this.stepCount++;
-              this.stepDist += dx;
-              this.stepDiag.ok++;
-              if (this.lastStepT >= 0) {
-                const gap = this.elapsed - this.lastStepT;
-                if (gap < this.cfg.stepMinGap) {
-                  this.accRush += 1 - gap / Math.max(1e-6, this.cfg.stepMinGap);
-                }
-              }
-              this.lastStepT = this.elapsed;
-              const decay = Math.pow(this.cfg.stepDecay, this.stepCount);
-              this.accStepScore += dx * decay;
-              this.holdWindow = this.cfg.holdMaxSec;
-              this.holdFactor = decay;
-              this.quietT = 0;
-              this.stepRefX = this.distance;
-            }
-            this.stepAnchorX = tp2.x;
-            this.stepAnchorZ = tp2.z;
-            this.stepLastFoot = stance;
-          }
-          this.lastStance = stance;
-        }
-        if (stance === 0) this.accAir += dt;
+        this.accJointMotion += jSpd * dt;
+        this.accActRate += act2 * dt;
+        this.accTau += tau2 * dt;
+        this.accMoveSum += jMove * dt;
+        const tvx = tv.x, tvz = tv.z;
+        const ang = torso.angvel();
+        this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
+        this.accYaw += phi(-ang.y) * dt;
+        this.accLat += tvz * tvz * dt;
+        this.accTilt += (ang.x * ang.x + ang.y * ang.y + ang.z * ang.z) * dt;
         if (this.cfg.mode === "fight") this.fightTick(dt);
       }
       /** 战斗模式的额外逻辑：假人出拳节奏 + 命中/受击判定 */
@@ -15325,103 +14935,33 @@ var init_sim = __esm({
       fitnessTerms(fallen, elapsed) {
         const w = this.w;
         if (this.cfg.mode === "walk") {
-          if (this.prog) {
-            const P = this.prog;
-            const E = Math.max(0.2, elapsed);
-            const pt = {};
-            let jt = 0;
-            for (const j of P.joints) {
-              pt[`jt.${j.joint}`] = -w.joint * this.accJt[j.joint] / E;
-              jt += pt[`jt.${j.joint}`];
-            }
-            pt.jt = jt;
-            let mvSum = 0, nMv = 0;
-            for (const j of P.joints) {
-              if (!j.move) continue;
-              const f = Math.min(1, this.accMove[j.joint] / E / P.moveTarget);
-              pt[`mv.${j.joint}`] = w.move * j.w * (w.moveScale[j.joint] ?? 1) * f;
-              mvSum += f;
-              nMv++;
-            }
-            const moveFrac = nMv > 0 ? mvSum / nMv : 0;
-            const altQ = this.accAltQ / E;
-            pt.altQ = altQ;
-            pt.alt = w.alt * altQ * moveFrac;
-            const ovl = this.accOverlap / E;
-            pt.overlap = ovl;
-            let hL = 0, hR = 0, np = 0;
-            for (const L2 of P.lifts) {
-              pt[`lift.${L2.joint}`] = this.accLift[L2.joint] / E;
-            }
-            for (const [l, r] of P.liftPairs) {
-              hL += pt[`lift.${l}`] ?? 0;
-              hR += pt[`lift.${r}`] ?? 0;
-              np++;
-            }
-            const hAvg = np > 0 ? (hL + hR) / (2 * np) : 0;
-            pt.liftH = hAvg;
-            pt.liftGate = Math.min(1, hAvg / P.liftTarget);
-            pt.excl = w.excl * (1 - ovl) * moveFrac * pt.liftGate;
-            pt.move = w.move * moveFrac;
-            pt.task = w.task * this.accProgress * altQ;
-            pt.program = jt + pt.alt + pt.excl + pt.move + pt.task;
-            pt.moveFrac = moveFrac;
-            const tt = {
-              ...pt,
-              // ---- 物理基本盘（不是"奖励"，是别摔倒/别歪/别抖）----
-              upright: w.upright * (this.accUpright - elapsed),
-              height: -w.height * this.accHeight,
-              lateral: -w.lateral * this.accLateral,
-              energy: -w.energy * this.accEnergy,
-              smooth: -w.smooth * this.accSmooth,
-              fall: fallen ? -w.fall : 0
-            };
-            tt.total = Object.values(tt).reduce((a, b) => a + b, 0);
-            return tt;
+          const tt = {};
+          const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);
+          tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg;
+          tt.yawTrack = w.yawTrack * this.accYaw;
+          tt.lateral = -w.lateral * this.accLat;
+          tt.tiltRate = -w.tiltRate * this.accTilt;
+          tt.lift = w.lift * this.accLift * aliveAvg;
+          tt.single = w.single * this.accSingle * aliveAvg;
+          let jm = 0, nJm = 0;
+          for (const k of MOVE_JOINTS) {
+            const v2 = this.accJtMove[k] ?? 0;
+            tt[`mv.${k}`] = w.jointMove * (w.moveScale[k] ?? 1) * v2 * aliveAvg;
+            jm += v2;
+            nJm++;
           }
-          const t3 = {
-            // ★ accUpright = ∫cos(tilt)dt ≤ elapsed，所以 upright 恒 ≤ 0：不直立就扣分，
-            //   "站着不动"恰好得 0，不会白拿分（见 W 的注释）。
-            distance: w.cycle * w.distance * this.accProgress,
-            // ★★ 走路模式**不用** DCM 越界罚（见 accBalance 处的说明）：它和"保持分"用同一个
-            //   判据（CoM/ξ 在支撑域内），一正一负双重惩罚同一个动作。实测：会走的种子
-            //   换脚+迈步+重复步+前进一共 +2.7 分，却被 balance −50 埋掉，比"站着不动"还差。
-            //   稳定性改由 W.hold（保持分）负责：域内站稳才给分 ⇒ 站不稳就没有保持分。
-            balance: 0,
-            // 仍继续累计 accBalance（供诊断 inDomainRatio 看）
-            velocity: w.cycle * w.velocity * this.accVel,
-            upright: w.upright * (this.accUpright - elapsed),
-            height: -w.height * this.accHeight,
-            lateral: -w.lateral * this.accLateral,
-            energy: -w.energy * this.accEnergy,
-            //   （DCM 越界罚：走路模式已关闭，见上面 balance: 0 的说明；accBalance 仍在累计供诊断）
-            // ★★ 抖动**罚**（治"抽风式频繁发力"，见 W.smooth / probe-posture [C3]）
-            //   ⚠ 这里以前写成 **加号** ⇒ 疯狂抽风反而加分：实测 25 代训练把总分顶到 800~1400，
-            //   而解剖日志里光这一项就是 `smooth=2700`。ES 一直在优化"抖得更狠"。
-            //   负号是这行唯一的要点，别改回去。
-            smooth: -w.smooth * this.accSmooth,
-            survive: w.cycle * w.survive * elapsed,
-            // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
-            switch: w.cycle * w.switch * this.switchCount,
-            // ★★ 大位移奖金：按**打折后**的有效迈步距离计价（米 × stepDecay^已迈步数）
-            //   "大位移才有奖励" + "在迈步后要高于迈下一步的收益，然后逐渐减弱"
-            step: w.cycle * w.step * this.accStepScore,
-            // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
-            // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
-            step2: w.cycle * w.step2 * (this.stepCount * (this.stepCount - 1) / 2),
-            // ★★ 静止罚（"抢步罚后面会转为静止罚"）：不在迈步-站稳循环里就一直扣，见 W.still
-            still: -w.cycle * w.still * this.accStill,
-            // ★★ 抢步罚（"迈一步立刻迈第二步应该是负分"）：见 W.rush
-            rush: -w.cycle * w.rush * this.accRush,
-            // ★★ 同腿连迈罚（"一条腿连着迈两步更是负上加负"）：见 W.sameFoot
-            sameFoot: -w.cycle * w.sameFoot * this.accSameFoot,
-            // ★★★ 迈步后保持稳定的加分（循环的第二半）：站稳秒数 × 该步折扣，见 W.hold
-            hold: w.cycle * w.hold * this.accHold,
-            air: -w.cycle * w.air * this.accAir,
-            fall: fallen ? -w.fall : 0
-          };
-          t3.total = Object.values(t3).reduce((a, b) => a + b, 0);
-          return t3;
+          tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
+          tt.alive = aliveAvg;
+          tt.upright = w.upright * (this.accUpright - elapsed);
+          tt.height = -w.height * this.accHeight;
+          tt.jointMotion = -w.jointMotion * this.accJointMotion;
+          tt.torque = -w.torque * this.accTau;
+          tt.actRate = -w.actRate * this.accActRate;
+          tt.energy = -w.energy * this.accEnergy;
+          tt.fallen = fallen ? 1 : 0;
+          tt.total = 0;
+          for (const [k, v2] of Object.entries(tt)) if (k !== "total" && k !== "fallen") tt.total += v2;
+          return tt;
         }
         const t2 = {
           hit: w.hit * this.hits,
@@ -15430,8 +14970,8 @@ var init_sim = __esm({
           upright: w.upright * (this.accUpright - elapsed),
           height: -w.height * this.accHeight,
           balance: -w.balance * this.accBalance,
-          smooth: -w.smooth * this.accSmooth,
-          // ★ 惩罚，负号（见 walk 分支的注释）
+          smooth: -w.actRate * this.accActRate,
+          // ★ 惩罚，负号（电机指令变化率）
           progress: 0.5 * this.progressRaw(),
           fall: fallen ? -w.fall : 0
         };
@@ -15585,6 +15125,42 @@ var init_genome = __esm({
   }
 });
 
+// src/core/phaseSeed.ts
+function phaseGenome(shape, s) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L2 = brainLayout(shape);
+  p[L2.w1 + 0 * shape.inputs + 0] = 5;
+  p[L2.w1 + 1 * shape.inputs + 1] = 5;
+  const out = (joint, axis, aSin, aCos, bias) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
+    if (o < 0) return;
+    p[L2.w2 + o * shape.hidden + 0] = aSin * s.scale;
+    p[L2.w2 + o * shape.hidden + 1] = aCos * s.scale;
+    p[L2.b2 + o] = bias * s.scale;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
+    out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
+    out(j.replace("hip", "knee"), 2, -s.knee * sgn, s.knee * 0.35 * sgn, s.duty * sgn * 0.4);
+  }
+  for (const [j, sgn] of [["shoulder_l", -1], ["shoulder_r", 1]]) {
+    out(j, 2, s.arm * sgn, 0, 0);
+  }
+  for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
+  return p;
+}
+function phaseGenomeFor(jointCount, s = BEST_PHASE) {
+  return phaseGenome(shapeForJoints(jointCount), s);
+}
+var BEST_PHASE;
+var init_phaseSeed = __esm({
+  "src/core/phaseSeed.ts"() {
+    "use strict";
+    init_brain();
+    init_skeleton();
+    BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+  }
+});
+
 // src/core/evolution.ts
 var evolution_exports = {};
 __export(evolution_exports, {
@@ -15636,7 +15212,10 @@ var init_evolution = __esm({
       bestFallenNow = false;
       /** 本代最优个体的分项奖励（键同 Sim.terms） */
       bestTermsNow = {};
-      bestSwitchesNow = 0;
+      /** 本代最优：单脚支撑占比（"一次抬一条"的直接度量） */
+      bestSingleNow = 0;
+      /** 本代最优：逐关节移动的平均饱和度 */
+      bestMoveFracNow = 0;
       hitsNow = 0;
       hurtsNow = 0;
       history = [];
@@ -15715,28 +15294,24 @@ var init_evolution = __esm({
        * ★ 运行时调步态奖励（UI 用，用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项，
        *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
        */
-      applyGaitTuning(o) {
+      /** ★ UI 滑块：只改**新配方**的权重（walkReward.ts 那 11 项） */
+      applyWalkWeights(o) {
+        const w = {};
+        if (o.velTrack !== void 0) w.velTrack = o.velTrack;
+        if (o.lift !== void 0) w.lift = o.lift;
+        if (o.single !== void 0) w.single = o.single;
+        if (o.jointMove !== void 0) w.jointMove = o.jointMove;
+        if (o.actRate !== void 0) w.actRate = o.actRate;
+        if (o.lateral !== void 0) w.lateral = o.lateral;
+        if (o.torque !== void 0) w.torque = o.torque;
         for (const sm of this.sims) {
-          if (o.straight !== void 0 || o.minDx !== void 0) {
-            sm.setStepRule({ straight: o.straight, minDx: o.minDx });
-          }
-          const w = {};
-          if (o.wSwitch !== void 0) w.switch = o.wSwitch;
-          if (o.wDistance !== void 0) w.distance = o.wDistance;
-          if (o.wStep !== void 0) w.step = o.wStep;
-          if (o.wHold !== void 0) w.hold = o.wHold;
-          if (o.wStill !== void 0) w.still = o.wStill;
-          if (o.wJoint !== void 0) w.joint = o.wJoint;
-          if (o.wAlt !== void 0) w.alt = o.wAlt;
-          if (o.wExcl !== void 0) w.excl = o.wExcl;
-          if (o.wMove !== void 0) w.move = o.wMove;
-          if (o.wTask !== void 0) w.task = o.wTask;
+          sm.setWeights(w);
           if (o.moveScale) {
-            for (const sm2 of this.sims) for (const [j, v2] of Object.entries(o.moveScale)) sm2.w.moveScale[j] = v2;
+            for (const [j, v2] of Object.entries(o.moveScale)) {
+              sm.w.moveScale[j] = v2;
+            }
           }
-          if (Object.keys(w).length) sm.setWeights(w);
         }
-        if (o.minDx !== void 0) this.stepMinDxManual = o.minDx;
       }
       /** 手动设定过阈值 ⇒ 课程不再自动抬升（用户在 UI 上自己控制） */
       stepMinDxManual = -1;
@@ -15753,7 +15328,8 @@ var init_evolution = __esm({
         this.bestDistNow = 0;
         this.bestFallenNow = false;
         this.bestTermsNow = {};
-        this.bestSwitchesNow = 0;
+        this.bestSingleNow = 0;
+        this.bestMoveFracNow = 0;
         this.hitsNow = 0;
         this.hurtsNow = 0;
         this.cursor = 0;
@@ -15776,7 +15352,9 @@ var init_evolution = __esm({
               this.bestDistNow = sim2.distance;
               this.bestFallenNow = sim2.fallen;
               this.bestTermsNow = sim2.terms;
-              this.bestSwitchesNow = sim2.stepStat?.count ?? 0;
+              const ws = sim2.walkStat;
+              this.bestSingleNow = ws.singleRatio;
+              this.bestMoveFracNow = ws.moveFrac;
               this.hitsNow = sim2.hits;
               this.hurtsNow = sim2.hurts;
             }
@@ -15808,16 +15386,6 @@ var init_evolution = __esm({
           this.bestEverFitness = best;
           this.bestEver.set(this.genomes[order[0]]);
         }
-        const c0 = this.sims[0]?.cfg.stepMinDx ?? 0;
-        const cMax = this.sims[0]?.cfg.stepMinDxMax ?? 0;
-        if (cMax > 0 && cMax > c0 && this.stepMinDxManual < 0) {
-          const RAMP = 60;
-          const u = Math.min(1, this.gen / RAMP);
-          const cur = c0 + (cMax - c0) * u;
-          for (const sm of this.sims) sm.setStepMinDx(cur);
-          this.stepMinDxNow = cur;
-          this.rampGens = RAMP;
-        }
         this.history.push({
           gen: this.gen,
           best,
@@ -15825,7 +15393,8 @@ var init_evolution = __esm({
           worst,
           sigma: this.sigma,
           bestTerms: { ...this.bestTermsNow },
-          bestSwitches: this.bestSwitchesNow,
+          bestSingle: this.bestSingleNow,
+          bestMoveFrac: this.bestMoveFracNow,
           bestDist: this.bestDistNow,
           bestFallen: this.bestFallenNow,
           hits: this.hitsNow,
@@ -16349,7 +15918,11 @@ var zeroFit = (() => {
   return tSim.runToEnd();
 })();
 log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}  \u5012\u5730=${tSim.fallen}  \u5206\u9879 ${Object.entries(tSim.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
-check("\u2605 \u7AD9\u6869\u4E0D\u4F1A\u88AB\u5956\u52B1\uFF08\u96F6\u8F93\u51FA\u9002\u5E94\u5EA6 \u2264 0\uFF1B\u4E0D\u5956\u52B1\u9759\u6B62\uFF09", zeroFit <= 0.05, `${zeroFit.toFixed(3)}`);
+check(
+  "\u2605 \u7AD9\u6869\u62FF\u4E0D\u5230\u8D70\u8DEF\u5956\u52B1\uFF08velTrack \u6263\u57FA\u7EBF\u3001lift/single\u22480\u3001jointMove \u5F88\u5C0F\uFF09",
+  Math.abs(tSim.terms.velTrack) < 1e-6 && Math.abs(tSim.terms.lift) < 1e-6 && Math.abs(tSim.terms.single) < 1e-6 && tSim.terms.jointMove < 0.1,
+  `velTrack=${tSim.terms.velTrack.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)} single=${tSim.terms.single.toFixed(3)} jointMove=${tSim.terms.jointMove.toFixed(3)} \u4F4D\u79FB=${tSim.distance.toFixed(3)}m \u603B=${zeroFit.toFixed(3)}`
+);
 note(
   "\u96F6\u8F93\u51FA 6s \u5185\u7684\u88AB\u52A8\u7AD9\u59FF\uFF08\u65E0\u4E3B\u52A8\u5E73\u8861\uFF0C\u5012\u4E86\u662F\u8BDA\u5B9E\u7684\uFF09",
   true,
@@ -16431,7 +16004,8 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;
   log(`  ${marks.join("  |  ")}`);
-  log(`  \u6362\u811A\uFF08\u8FC8\u6B65\uFF09\u6B21\u6570 = ${anat.stepCount}   \u817E\u7A7A = ${anat.accAir.toFixed(2)} s   \u5206\u9879 ${Object.entries(anat.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
+  const aws = anat.walkStat;
+  log(`  \u5355\u811A\u652F\u6491\u5360\u6BD4 = ${aws.singleRatio.toFixed(2)}   \u79FB\u52A8\u9971\u548C\u5EA6 = ${aws.moveFrac.toFixed(2)}   \u9010\u5173\u8282 ${Object.entries(aws.jtMove).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}   \u5206\u9879 ${Object.entries(anat.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
   log(`  \u76F4\u7ACB\u5360\u6BD4 ${(upRatio * 100).toFixed(0)}%   \u6700\u5927\u503E\u89D2 ${(maxTilt * 180 / Math.PI).toFixed(0)}\xB0   \u51C0\u524D\u8FDB ${anat.distance.toFixed(2)} m   \u5B58\u6D3B ${(totTicks / 60).toFixed(2)}s   \u6454\u5012=${anat.fallen}`);
   note(
     "\u6700\u4F73\u4E2A\u4F53\u8FC7\u534A\u65F6\u95F4\u4FDD\u6301\u76F4\u7ACB\uFF08\u5B66\u7684\u662F\u8D70\uFF0C\u4E0D\u662F\u6251\u5012\u6ED1\u884C\uFF09",

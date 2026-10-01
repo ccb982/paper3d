@@ -121,8 +121,14 @@ const V3 = new Float64Array(3);
  * ★ 不能写 `body.y − length/2`：刚体会转，最低点必须按姿态算（footPoint 的注释同理）。
  * 返回是否接地。
  */
+function soleBodyIndex(doll: Ragdoll, side: 'l' | 'r'): number | undefined {
+  // ★ 鞋底 collider 所在刚体：踝关节开启时是独立的 foot_l/foot_r，关闭时挂在小腿上
+  //   （`ankleEnabled`，见 SkeletonConfig）。
+  return doll.indexByKey.get(`foot_${side}`) ?? doll.indexByKey.get(side === 'l' ? 'shin_l' : 'shin_r');
+}
+
 function footRect(doll: Ragdoll, side: 'l' | 'r', out: FootRect): boolean {
-  const idx = doll.indexByKey.get(side === 'l' ? 'shin_l' : 'shin_r');
+  const idx = soleBodyIndex(doll, side);
   if (idx === undefined) return false;
   const bd = doll.sk.bodies[idx];
   const b = doll.bodies[idx];
@@ -148,6 +154,15 @@ function footRect(doll: Ragdoll, side: 'l' | 'r', out: FootRect): boolean {
   out.x0 = x0; out.x1 = x1; out.z0 = z0; out.z1 = z1; out.minY = minY;
   out.cx = (x0 + x1) / 2; out.cz = (z0 + z1) / 2;
   return minY <= CONTACT_Y;
+}
+
+/**
+ * ★ 脚是否接地（几何判据：鞋底盒 4 个底角里最低的�� ≤ CONTACT_Y）。
+ *   腾空时间（feet air time）和"单脚支撑"两项奖励都用它 —— 经典配方里
+ *   **交替步态是从这一项长出来的**，不需要任何相位/换脚检测。
+ */
+export function footGrounded(doll: Ragdoll, side: 'l' | 'r'): boolean {
+  return footRect(doll, side, side === 'l' ? RECT_L : RECT_R);
 }
 
 /**

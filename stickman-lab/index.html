@@ -110,37 +110,25 @@
       <label>训练阶段（默认走路）<b id="v-speedgoal">—</b></label>
       <input id="i-speedgoal" type="range" min="0" max="1" step="1" value="0" />
 
-      <h2>步态奖励（可调）</h2>
+      <h2>走路奖励（walkReward.ts 的 11 项）</h2>
 
-      <label class="chk"><input id="i-straight" type="checkbox" checked /> 这一脚必须走直线
-        <b id="v-straightt">开</b></label>
+      <label>速度跟踪 v*=0.5 m/s <b id="v-veltrack">—</b></label>
+      <input id="i-veltrack" type="range" min="0" max="4" step="0.1" value="1" />
 
-      <label>位移门槛（一次有效迈步 ≥）<b id="v-mindx">—</b></label>
-      <input id="i-mindx" type="range" min="0" max="0.3" step="0.01" value="0.05" />
+      <label>抬腿（腾空时间）<b id="v-lift">—</b></label>
+      <input id="i-lift" type="range" min="0" max="4" step="0.1" value="1" />
 
-      <label>换脚奖励（必须有）<b id="v-wswitch">—</b></label>
-      <input id="i-wswitch" type="range" min="0" max="2" step="0.05" value="0.3" />
+      <label>单脚支撑（一次抬一条）<b id="v-single">—</b></label>
+      <input id="i-single" type="range" min="0" max="6" step="0.1" value="1.5" />
 
-      <label>前进奖励（弱）<b id="v-wdist">—</b></label>
-      <input id="i-wdist" type="range" min="0" max="3" step="0.1" value="1.5" />
+      <label>骨盆/膝盖要动 <b id="v-jointmove">—</b></label>
+      <input id="i-jointmove" type="range" min="0" max="4" step="0.1" value="0.3" />
 
-      <label>迈步后保持稳定 <b id="v-whold">—</b></label>
-      <input id="i-whold" type="range" min="0" max="4" step="0.1" value="1.2" />
+      <label>侧向漂移罚 <b id="v-lateral">—</b></label>
+      <input id="i-lateral" type="range" min="0" max="12" step="0.1" value="4" />
 
-      <label>静止罚（不迈步就扣）<b id="v-wstill">—</b></label>
-      <input id="i-wstill" type="range" min="0" max="4" step="0.1" value="1" />
-
-      <h4>关节程序（逐关节精确控制）</h4>
-      <label>逐关节跟踪误差 <b id="v-wjoint">—</b></label>
-      <input id="i-wjoint" type="range" min="0" max="2" step="0.05" value="1" />
-      <label>腿部交替（角速度和≈0）<b id="v-walt">—</b></label>
-      <input id="i-walt" type="range" min="0" max="6" step="0.1" value="2" />
-      <label>抬腿互斥（一次抬一条）<b id="v-wexcl">—</b></label>
-      <input id="i-wexcl" type="range" min="0" max="6" step="0.1" value="2" />
-      <label>要动（骨盆/膝盖）<b id="v-wmove">—</b></label>
-      <input id="i-wmove" type="range" min="0" max="4" step="0.1" value="1" />
-      <label>前进（需交替推进）<b id="v-wtask">—</b></label>
-      <input id="i-wtask" type="range" min="0" max="4" step="0.1" value="1.5" />
+      <label>指令平滑罚 <b id="v-actrate">—</b></label>
+      <input id="i-actrate" type="range" min="0" max="2" step="0.01" value="0.25" />
 
       <label>骨盆左·要动 <b id="v-mhip_l">—</b></label>
       <input id="i-mhip_l" type="range" min="0" max="3" step="0.1" value="1" />

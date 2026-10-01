@@ -57,7 +57,10 @@ export const DEFAULT_TRAINER: TrainerConfig = {
 export interface GenStat {
   /** 本代最优个体的分项奖励（键同 Sim.terms）——新一代开始时会被清空，所以必须随历史一起存 */
   bestTerms: Record<string, number>;
-  bestSwitches: number;
+  /** 本代最优个体的"单脚支撑占比"（0=一直两脚着地，1=一直单脚） */
+  bestSingle: number;
+  /** 本代最优个体的逐关节移动饱和度 */
+  bestMoveFrac: number;
   gen: number;
   best: number;
   mean: number;
@@ -93,7 +96,10 @@ export class Trainer {
   bestFallenNow = false;
   /** 本代最优个体的分项奖励（键同 Sim.terms） */
   bestTermsNow: Record<string, number> = {};
-  bestSwitchesNow = 0;
+  /** 本代最优：单脚支撑占比（"一次抬一条"的直接度量） */
+  bestSingleNow = 0;
+  /** 本代最优：逐关节移动的平均饱和度 */
+  bestMoveFracNow = 0;
   hitsNow = 0;
   hurtsNow = 0;
   history: GenStat[] = [];
@@ -183,32 +189,30 @@ export class Trainer {
    * ★ 运行时调步态奖励（UI 用，用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项，
    *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
    */
-  applyGaitTuning(o: {
-    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number; wHold?: number; wStill?: number; wJoint?: number; wAlt?: number; wExcl?: number; wMove?: number; wTask?: number;
+  /** ★ UI 滑块：只改**新配方**的权重（walkReward.ts 那 11 项） */
+  applyWalkWeights(o: {
+    velTrack?: number; lift?: number; single?: number; jointMove?: number;
+    actRate?: number; lateral?: number; torque?: number;
     moveScale?: Record<string, number>;
   }): void {
+    const w: Record<string, number> = {};
+    if (o.velTrack !== undefined) w.velTrack = o.velTrack;
+    if (o.lift !== undefined) w.lift = o.lift;
+    if (o.single !== undefined) w.single = o.single;
+    if (o.jointMove !== undefined) w.jointMove = o.jointMove;
+    if (o.actRate !== undefined) w.actRate = o.actRate;
+    if (o.lateral !== undefined) w.lateral = o.lateral;
+    if (o.torque !== undefined) w.torque = o.torque;
     for (const sm of this.sims) {
-      if (o.straight !== undefined || o.minDx !== undefined) {
-        sm.setStepRule({ straight: o.straight, minDx: o.minDx });
-      }
-      const w: Record<string, number> = {};
-      if (o.wSwitch !== undefined) w.switch = o.wSwitch;
-      if (o.wDistance !== undefined) w.distance = o.wDistance;
-      if (o.wStep !== undefined) w.step = o.wStep;
-      if (o.wHold !== undefined) w.hold = o.wHold;
-      if (o.wStill !== undefined) w.still = o.wStill;
-      if (o.wJoint !== undefined) w.joint = o.wJoint;
-      if (o.wAlt !== undefined) w.alt = o.wAlt;
-      if (o.wExcl !== undefined) w.excl = o.wExcl;
-      if (o.wMove !== undefined) w.move = o.wMove;
-      if (o.wTask !== undefined) w.task = o.wTask;
+      sm.setWeights(w);
       if (o.moveScale) {
-        for (const sm of this.sims) for (const [j, v] of Object.entries(o.moveScale)) sm.w.moveScale[j] = v;
+        for (const [j, v] of Object.entries(o.moveScale)) {
+          (sm.w.moveScale as Record<string, number>)[j] = v;
+        }
       }
-      if (Object.keys(w).length) sm.setWeights(w);
     }
-    if (o.minDx !== undefined) this.stepMinDxManual = o.minDx;
   }
+
 
   /** 手动设定过阈值 ⇒ 课程不再自动抬升（用户在 UI 上自己控制） */
   stepMinDxManual = -1;
@@ -224,7 +228,8 @@ export class Trainer {
     this.bestDistNow = 0;
     this.bestFallenNow = false;
     this.bestTermsNow = {};
-    this.bestSwitchesNow = 0;
+    this.bestSingleNow = 0;
+    this.bestMoveFracNow = 0;
     this.hitsNow = 0;
     this.hurtsNow = 0;
     this.cursor = 0;
@@ -249,7 +254,9 @@ export class Trainer {
           this.bestFallenNow = sim.fallen;
           // ★ 本代最优个体的分项（无头训练探针/UI 都要看"这一步到底哪项拿了分"）
           this.bestTermsNow = sim.terms;
-          this.bestSwitchesNow = sim.stepStat?.count ?? 0;
+          const ws = sim.walkStat;
+          this.bestSingleNow = ws.singleRatio;
+          this.bestMoveFracNow = ws.moveFrac;
           this.hitsNow = sim.hits;
           this.hurtsNow = sim.hurts;
         }
@@ -284,24 +291,10 @@ export class Trainer {
       this.bestEver.set(this.genomes[order[0]]);
     }
 
-    // ---- ★★ 位移门槛课程（用户 2026-10-01："阈值可以逐步增大"+"现在先用更小的阈值"）----
-    //   起步 stepMinDx（小到够得着），在前 `rampGens` 代内线性抬到 stepMinDxMax。
-    //   为什么要课程：门槛一上来就卡死 ⇒ 步数分恒为 0 ⇒ ES 看不到任何"多迈一步"的梯度
-    //   （实测：12 cm 门槛下连最好的手工步态都是 0 分）。
-    const c0 = this.sims[0]?.cfg.stepMinDx ?? 0;
-    const cMax = this.sims[0]?.cfg.stepMinDxMax ?? 0;
-    if (cMax > 0 && cMax > c0 && this.stepMinDxManual < 0) {
-      const RAMP = 60;                       // 抬升用多少代走完
-      const u = Math.min(1, this.gen / RAMP);
-      const cur = c0 + (cMax - c0) * u;
-      for (const sm of this.sims) sm.setStepMinDx(cur);
-      this.stepMinDxNow = cur;
-      this.rampGens = RAMP;
-    }
-
     this.history.push({
       gen: this.gen, best, mean, worst, sigma: this.sigma,
-      bestTerms: { ...this.bestTermsNow }, bestSwitches: this.bestSwitchesNow,
+      bestTerms: { ...this.bestTermsNow },
+      bestSingle: this.bestSingleNow, bestMoveFrac: this.bestMoveFracNow,
       bestDist: this.bestDistNow, bestFallen: this.bestFallenNow,
       hits: this.hitsNow, hurts: this.hurtsNow,
       avgTicks: ticks / n,

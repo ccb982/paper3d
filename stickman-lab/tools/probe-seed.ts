@@ -50,9 +50,10 @@ for (const [sc, lp] of [[0.15, 1], [0.15, -1], [0.3, 1], [0.3, -1], [0.5, 1], [0
   const ampOf = (n: string) => ((mx[n] - mn[n]) / 2).toFixed(3);
   const midOf = (n: string) => (sum[n] / Math.max(1, cnt[n])).toFixed(3);
   const d = sim.stepDiag;
-  const s = sim.stepStat;
+  const s = sim.walkStat;
   const T = sim.terms;
-  console.log(`\n  scale=${sc} legPhase=${lp}  位移=${sim.distance.toFixed(2)}m 倒地=${sim.fallen} 步=${s.count}`
+  console.log('     全分项: ' + JSON.stringify(T));
+  console.log(`\n  scale=${sc} legPhase=${lp}  位移=${sim.distance.toFixed(2)}m 倒地=${sim.fallen} 抬膝高=${T['mv.knee_l']?.toFixed(2)}`
     + `\n     altQ=${(T.altQ ?? 0).toFixed(2)} move=${(T.moveFrac ?? 0).toFixed(2)} task=${(T.task ?? 0).toFixed(2)}`
     + ` jt.hip=${(T['jt.hip_l'] ?? 0).toFixed(2)}/${(T['jt.hip_r'] ?? 0).toFixed(2)}`
     + ` jt.knee=${(T['jt.knee_l'] ?? 0).toFixed(2)}/${(T['jt.knee_r'] ?? 0).toFixed(2)}`

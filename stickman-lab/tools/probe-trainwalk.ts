@@ -43,7 +43,7 @@ const cfg: TrainerConfig = { ...DEFAULT_TRAINER, population: 48, seedGait: true 
 const tr = new Trainer(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6 }, cfg, SEED);
 
 console.log(`\n=== 无头训练 ${GENS} 代（walk，相位步态种子开，pop=48，每回合 6 s）===\n`);
-console.log('  代   最好适应度   平均       σ        距离   交替度  移动   前进  互斥  同时抬 抬腿高  倒');
+console.log('  代   最好适应度   平均       σ        距离   速度跟踪  抬腿  单脚支撑  要动  站得住  倒');
 const t0 = Date.now();
 for (let g = 1; g <= GENS; g++) {
   // ★ Trainer.tick() 内部会在一代评完后自动繁殖，所以这里只管推进预算
@@ -53,12 +53,12 @@ for (let g = 1; g <= GENS; g++) {
   const t = h.bestTerms;
   const r = (v: number | undefined) => (v === undefined ? '—' : v.toFixed(2).padStart(5));
   console.log(`  ${String(g).padStart(3)}   ${h.best.toFixed(2).padStart(9)}   ${h.mean.toFixed(2).padStart(8)}`
-    + `  ${h.sigma.toFixed(4)}  ${r(h.bestDist)}  ${r(t?.altQ)}  ${r(t?.moveFrac)}  ${r(t?.task)}`
-    + `  ${r(t?.excl)}  ${r(t?.overlap)}  ${r(t?.liftH)}  ${h.bestFallen ? '是' : '否'}`);
+    + `  ${h.sigma.toFixed(4)}  ${r(h.bestDist)}  ${r(t?.velTrack)}  ${r(t?.lift)}`
+    + `  ${r(t?.single)}  ${r(t?.jointMove)}  ${r(t?.alive)}  ${h.bestFallen ? '是' : '否'}`);
   // ★ 逐关节明细：这就是"精确控制各个关节"要看到的东西
   const ent = (pre: string) => Object.entries(t ?? {}).filter(([k]) => k.startsWith(pre))
     .map(([k, v]) => `${k.slice(pre.length)}=${v.toFixed(2)}`);
   console.log(`        每关节移动: ${ent('mv.').join(' ')}`);
-  console.log(`        每关节跟踪: ${ent('jt.').join(' ')}`);
+
 }
 console.log(`\n  用时 ${((Date.now() - t0) / 1000).toFixed(1)} s（${GENS} 代）`);
