@@ -190,6 +190,7 @@ export const W = {
   upright: 2.0,
   /** 高度偏差罚 */
   height: 0.8,
+  survive: 0.0,
   /** 关节角速度平方罚 */
   jointMotion: 0.001,
   /** 力矩平方罚 */
@@ -750,6 +751,10 @@ export class Sim {
     const headY = this.doll.head().translation().y;
     // ★ 写成"超标倍数"而不是三条 || 短路：判据完全等价（r > 1 ⟺ 原条件），
     //   但能顺带说出**是哪一条**、以及超标最狠的是哪一条（见 fallReason）。
+    // ★★ crash：任何非脚部刚体碰到地面 ⇒ 截断（Rudin 2022 的原做法）。
+    //   只看躯干高度/倾角抓不住"往前塌"（实测：塌 41cm 而躯干仍有 70% 高、倾角几乎不变，
+    //   于是一路滑 0.65~1.25 m 还能拿速度跟踪分）。
+    if (this.doll.bodyHitGround()) { this.finish(true); return true; }
     const rH = (this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y);
     const rT = tilt / this.cfg.fallAngle;
     const rD = 0.45 / Math.max(1e-6, headY);
@@ -804,9 +809,15 @@ export class Sim {
       tt.torque = -w.torque * this.accTau;
       tt.actRate = -w.actRate * this.accActRate;
       tt.energy = -w.energy * this.accEnergy;
+      tt.survive = w.survive * elapsed;
       tt.fallen = fallen ? 1 : 0;              // 只做标记，不进 total
+      // ★★ 只有**非诊断**的项进 total。逐关节明细（mv.*）和 alive/fallen 是给人看的，
+      //   一起累加会把"要动"这项的权重变成 4 倍（实测零输出基因组 total 虚高 1.0）。
       tt.total = 0;
-      for (const [k, v] of Object.entries(tt)) if (k !== 'total' && k !== 'fallen') tt.total += v;
+      for (const [k, v] of Object.entries(tt)) {
+        if (k === 'total' || k === 'fallen' || k === 'alive' || k.startsWith('mv.')) continue;
+        tt.total += v;
+      }
       return tt;
     }
     // 战斗：命中为主，但**必须带姿态塑形**（否则全员摔倒时适应度全是负数、梯度恒为零）。

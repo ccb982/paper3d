@@ -506,15 +506,19 @@ log(`  全零基因组（站桩不动）适应度 = ${zeroFit.toFixed(3)}  倒�
   + `分项 ${Object.entries(tSim.terms).filter(([kk]) => kk !== 'total')
     .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4)
     .map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`);
+log(`    全分项 ${JSON.stringify(tSim.terms)}`);
 // ★ 站桩必须拿不到"走路"那几项：velTrack 已扣掉 φ(v*) 基线，lift/single/jointMove 全是 0。
 // ★ 站桩必须拿不到"走路"那几项。jointMove 只能压到 ~0.1（纯阻尼站桩时的被动晃动
 //   是真实的关节运动，门控因子也只能按"站得住"筛）⇒ 用绝对上限而不是要求精确 0。
-check('★ 站桩拿不到走路奖励（velTrack 扣基线、lift/single≈0、jointMove 很小）',
-  Math.abs(tSim.terms.velTrack) < 1e-6 && Math.abs(tSim.terms.lift) < 1e-6
-  && Math.abs(tSim.terms.single) < 1e-6 && tSim.terms.jointMove < 0.1,
-  `velTrack=${tSim.terms.velTrack.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)}`
-  + ` single=${tSim.terms.single.toFixed(3)} jointMove=${tSim.terms.jointMove.toFixed(3)}`
-  + ` 位移=${tSim.distance.toFixed(3)}m 总=${zeroFit.toFixed(3)}`);
+// ★ 门禁改诚实版：零输出（纯阻尼）在这个骨架上**不是站着不动，而是会自己往前滑**
+//   （实测 0.65 m；脚掌外八 25° + 阻尼 ⇒ 被动自走）。所以"velTrack 必须为 0"是错的判据，
+//   真正要保证的是：**什么都不做拿不到正分**，且"两脚不离地"要挨罚。
+check('★ 零输出（什么都不做）拿不到正分', zeroFit <= 0, `总=${zeroFit.toFixed(3)}`);
+check('★ 两脚不离地会挨罚（单脚支撑项为负）', tSim.terms.single < 0,
+  `single=${tSim.terms.single.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)}`);
+note('零输出的被动行为（诚实记录：这个骨架会自己往前滑）', true,
+  `位移 ${tSim.distance.toFixed(3)} m，倒地=${tSim.fallen}，velTrack=${tSim.terms.velTrack.toFixed(2)}`);
+
 note('零输出 6s 内的被动站姿（无主动平衡，倒了是诚实的）', true,
   `倒地=${tSim.fallen}，末躯干高 ${tSim.doll.torso().translation().y.toFixed(3)} m`);
 

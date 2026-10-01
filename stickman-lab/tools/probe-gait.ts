@@ -41,6 +41,13 @@ const require = createRequire(import.meta.url);
   );
 }
 
+// 本文件自己的断言小工具（原来只有 console.log + 三元，输出没法统计）
+let FAILS = 0;
+const check = (name: string, ok: boolean, detail = ''): void => {
+  if (!ok) FAILS++;
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '   ' + detail : ''}`);
+};
+
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 const L = brainLayout(SHAPE);
@@ -147,69 +154,52 @@ for (const gh of [0.6, 0.8, 1.0, 1.15, 1.5, 2.0]) {
   console.log(`  ${gh.toFixed(2)}    ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}`
     + `   ${(r.airRatio * 100).toFixed(0).padStart(4)}%  ${r.fell ? 'FALL' : 'OK'}`);
 }
-// ---- 三条门槛的验收：交替 / 直线 / 大位移（用户 2026-10-01 定调）----
-console.log('\n  === 验收：奖励只在「左右交替 + 这一脚直线 + 位移够大」时才给 ===');
+// ---- 走路奖励的核心性质验收（新配方 walkReward.ts 的 11 项，2026-10-01 重构后重写）----
+console.log('\n  === 验收：走路奖励的核心性质（速度跟踪 / 抬腿 / 单脚支撑）===');
 const mk = (spec: Spec, scale: number) => {
   const b = phaseGenome(spec);
   const g = new Float32Array(b.length);
   for (let i2 = 0; i2 < b.length; i2++) g[i2] = b[i2] * scale;
   return g;
 };
-const fwd = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15));
-const lat = new Float32Array(brainParamCount(SHAPE));
-for (const j of ['hip_l', 'hip_r'] as const) {
-  const o = JOINT_ORDER.indexOf(j) * 3 + 0;      // 轴 0 = 绕 X = 侧向外展
-  lat[L.w2 + o * SHAPE.hidden + 0] = 0.6;
-}
-const latR = run(lat);
-const f = (n: string): string => (fwd.terms[n] ?? 0).toFixed(3);
-const l = (n: string): string => (latR.terms[n] ?? 0).toFixed(3);
-console.log(`  前进型 gait  x=${fwd.x.toFixed(2)}m z=${fwd.z.toFixed(2)}m 存活${fwd.t.toFixed(2)}s`
-  + `  换脚=${f('switch')}  位移奖金=${f('step')}  **保持=${f('hold')}**`);
-console.log(`  侧向抖 gait  x=${latR.x.toFixed(2)}m z=${latR.z.toFixed(2)}m 存活${latR.t.toFixed(2)}s`
-  + `  换脚=${l('switch')}  位移奖金=${l('step')}  **保持=${l('hold')}**`);
-console.log(`  ① 前进型拿到换脚奖励（必须有）: ${(fwd.terms.switch ?? 0) > 0 ? 'PASS' : 'FAIL'}`);
-console.log(`  ①b 侧向抖没有前进 ⇒ 不拿换脚奖励: ${Math.abs(latR.terms.switch ?? 0) < 1e-9 ? 'PASS' : 'note ' + (latR.terms.switch ?? 0).toFixed(3)}`);
-console.log(`  ② 纯侧向位移不奖励: ${Math.abs(latR.terms.step ?? 0) < 1e-9 ? 'PASS' : 'FAIL'}`);
-// ---- 机制验证：把门槛全开到 0，看"迈步→武装→域内积分保持分"这条链是否通 ----
-console.log('\n  === 机制验证：门槛全 0 时「保持分」应当 > 0（说明循环奖励链是通的）===');
 {
-  const loose = { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 };
-  const g = mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15);
-  const r = run(g, 6, DEFAULT_SIM.gaitHz, loose);
-  console.log(`  x=${r.x.toFixed(2)}m 存活${r.t.toFixed(2)}s  换脚=${(r.terms.switch ?? 0).toFixed(2)}`
-    + `  位移奖金=${(r.terms.step ?? 0).toFixed(3)}  保持分=${(r.terms.hold ?? 0).toFixed(3)}`
-    + `  有效迈步=${JSON.stringify((r.step as { count: number }).count)}`);
-  const st = r.step as { count: number; holdWindow: number; holdFactor: number; accHold: number; inDomainRatio: number };
-  console.log(`  稳定窗口剩余 = ${st.holdWindow.toFixed(2)}s  折扣 = ${st.holdFactor.toFixed(2)}`
-    + `  域内(DCM)占比 = ${(st.inDomainRatio * 100).toFixed(0)}%  累计站稳 = ${st.accHold.toFixed(2)}s`);
-  console.log(`  ⇒ ${(r.terms.hold ?? 0) > 0
-    ? 'PASS 循环奖励链通：迈步武装 → 域内积分 → 衰减'
-    : st.holdWindow > 0 || st.accHold > 0
-      ? '稳定窗口已打开但没攒到秒数：迈步后**大部分时间不在支撑域内**（"每步都要稳"这条还没做到）'
-      : 'FAIL 迈步后没有打开稳定窗口'}`);
+  const fwdSpec: Spec = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 };
+  const fwd = run(mk(fwdSpec, 0.15));
+  // 纯侧向：只驱动**髋外展**（axis 0），前后完全不动 ⇒ 位移应该≈0、拿不到速度跟踪分
+  const latG = new Float32Array(brainParamCount(SHAPE));
+  latG[L.w1 + 0 * SHAPE.inputs + 0] = 5;
+  latG[L.w1 + 1 * SHAPE.inputs + 1] = 5;
+  for (const [jn, sg] of [['hip_l', 1], ['hip_r', -1]] as [string, number][]) {
+    const o = JOINT_ORDER.indexOf(jn) * 3 + 0;
+    latG[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg * 0.15;
+  }
+  const lat = run(latG);
+  const st = run(new Float32Array(brainParamCount(SHAPE)));
+  const T = (r: Run, k: string) => r.terms[k] ?? 0;
+  console.log(`  前进型  位移 ${fwd.x.toFixed(2)}m  velTrack=${T(fwd, 'velTrack').toFixed(2)}  lift=${T(fwd, 'lift').toFixed(2)}  single=${T(fwd, 'single').toFixed(2)}  总=${T(fwd, 'total').toFixed(2)}`);
+  console.log(`  侧向抖  位移 ${lat.x.toFixed(2)}m  velTrack=${T(lat, 'velTrack').toFixed(2)}  总=${T(lat, 'total').toFixed(2)}`);
+  console.log(`  零输出  位移 ${st.x.toFixed(2)}m  velTrack=${T(st, 'velTrack').toFixed(2)}  single=${T(st, 'single').toFixed(2)}  总=${T(st, 'total').toFixed(2)}`);
+  check('① 前进型拿到速度跟踪分（唯一"往哪儿走"的一项）', T(fwd, 'velTrack') > 0.05, `${T(fwd, 'velTrack').toFixed(3)}`);
+  // ★★ 诚实修正：这条**不能**断言 velTrack 单独能区分三者 ——
+  //   实测这个骨架**几乎什么都不做也会往前滑 0.6 m**（脚掌外八 25° + 纯阻尼 ⇒ 被动自走）：
+  //   零输出 0.65 m、纯侧向抖 0.66 m、真步态 0.59 m，velTrack 全在 0.5~0.62 之间。
+  //   真正把三者分开的是**单脚支撑**（零输出 −1.07 / 侧向 −0.7 / 真步态 −0.32）
+  //   和总分。所以这里断言"总分排序正确"，并把 velTrack 不可分辨这件事记进输出。
+  check('①b 总分把"真步态 / 侧向抖 / 什么都不做"正确排序', T(fwd, 'total') > T(lat, 'total')
+    && T(fwd, 'total') > T(st, 'total'),
+    `步态 ${T(fwd, 'total').toFixed(2)} > 侧向 ${T(lat, 'total').toFixed(2)} > 零输出 ${T(st, 'total').toFixed(2)}`);
+  console.log(`     ℹ velTrack 单独不可分辨（这个骨架会被动自走）：`
+    + ` 步态 ${T(fwd, 'velTrack').toFixed(2)} / 侧向 ${T(lat, 'velTrack').toFixed(2)}`
+    + ` / 零输出 ${T(st, 'velTrack').toFixed(2)}；真正区分的是 single=`
+    + `${T(fwd, 'single').toFixed(2)}/${T(lat, 'single').toFixed(2)}/${T(st, 'single').toFixed(2)}`);
+  check('② 纯侧向位移被 lateral 项罚', T(lat, 'lateral') < 0, `${T(lat, 'lateral').toFixed(3)}`);
+  check('③ 零输出拿不到正分（站桩/蹭地不是可行解）', T(st, 'total') <= 0, `总=${T(st, 'total').toFixed(3)}`);
+  check('④ 两脚不离地要挨罚（单脚支撑项为负）', T(st, 'single') < 0, `${T(st, 'single').toFixed(3)}`);
+  const big = run(mk(fwdSpec, 0.6));
+  console.log(`  大幅度  位移 ${big.x.toFixed(2)}m  lift=${T(big, 'lift').toFixed(2)}  single=${T(big, 'single').toFixed(2)}`);
+  check('⑤ 抬腿项随脚真的离地而上升（腾空时间机制生效）', T(big, 'lift') >= T(fwd, 'lift'),
+    `大幅度 ${T(big, 'lift').toFixed(3)} ≥ x0.15 ${T(fwd, 'lift').toFixed(3)}`);
 }
-// ---- 静止罚验收：站着不动必须比"会迈步"更贵 ----
-// ---- 验收：第一步之前不给保持分 ----
-console.log('\n  === 验收：迈第一步之前没有保持分 ===');
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const r0 = run(zero);
-  console.log(`  站桩 6s（从未迈步）: 保持分=${(r0.terms.hold ?? 0).toFixed(3)}  静止罚=${(r0.terms.still ?? 0).toFixed(2)}  换脚=${(r0.terms.switch ?? 0).toFixed(2)}`);
-  console.log(`  ⇒ ${Math.abs(r0.terms.hold ?? 0) < 1e-9 ? 'PASS 没迈过步就没有保持分（只有静止罚）' : 'FAIL 第一步之前就给了保持分'}`);
-}
-console.log('\n  === 验收：静止罚（不迈步就一直扣）===');
-{
-  const zero = new Float32Array(brainParamCount(SHAPE));
-  const st0 = run(zero);
-  const st1 = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz,
-    { stepMinDx: 0, stepMinTotal: 0, stepMaxDz: 1e9, stepVMin: 0 });
-  console.log(`  站桩不动  静止罚=${(st0.terms.still ?? 0).toFixed(2)}  换脚=${(st0.terms.switch ?? 0).toFixed(2)}  存活${st0.t.toFixed(2)}s  键=${Object.keys(st0.terms).join(',')}`);
-  console.log(`  会迈步    静止罚=${(st1.terms.still ?? 0).toFixed(2)}  换脚=${(st1.terms.switch ?? 0).toFixed(2)}  保持=${(st1.terms.hold ?? 0).toFixed(2)}`);
-  console.log(`  ⇒ ${(st0.terms.still ?? 0) < (st1.terms.still ?? 0) ? 'PASS 会迈步的静止罚更少（梯度方向正确）' : 'FAIL'}`);
-}
-// ---- 位移门槛扫描：定多小才既够得着、又不会被钻空子 ----
-console.log('\n  === 位移门槛扫描（前进型 gait x=1.21m vs 侧向抖 x=0.06m）===');
 console.log('  stepMinDx  stepMinTotal │ 前进型 step  侧向抖 step  前进型有效迈步');
 for (const [dx, tot, vmin, dz] of [
   [0.12, 0.30, 0.05, 0.06], [0.05, 0.10, 0.05, 0.06], [0.05, 0.10, 0.0, 0.06],

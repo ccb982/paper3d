@@ -322,6 +322,8 @@ export class Ragdoll {
   readonly sk: Skeleton;
   readonly opt: Required<RagdollOptions>;
   readonly bodies: RAPIER.RigidBody[] = [];
+  /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+  readonly soleCol: [RAPIER.Collider | null, RAPIER.Collider | null] = [null, null];
   /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
   readonly joints: RAPIER.ImpulseJoint[] = [];
   /** key → 刚体下标 */
@@ -483,7 +485,13 @@ export class Ragdoll {
           .setFriction(this.opt.bodyFriction)
           .setRestitution(0.0)
           .setCollisionGroups(GROUPS_SELF);
-        this.world.createCollider(cd, body);
+        const col = this.world.createCollider(cd, body);
+        // ★ 记住鞋底 collider：腾空时间/单脚支撑要用**真实接触**判定
+        //   （几何判据有 3cm 死区，实测脚能抬 9cm 却被判成一直着地）。
+        if (c.shape === 'cuboid') {
+          if (b.key === 'shin_l' || b.key === 'foot_l') this.soleCol[0] = col;
+          else if (b.key === 'shin_r' || b.key === 'foot_r') this.soleCol[1] = col;
+        }
       }
     });
 
@@ -559,6 +567,55 @@ export class Ragdoll {
   }
 
   /** 刚体"上方向"相对世界竖直的夹角（弧度，0 = 完全直立）。摔倒判定/姿态评分用 */
+  /**
+   * ★ 脚是否着地（**Rapier 真实接触对**，不是几何判据）。
+   *   判据：存在接触流形、且法向的竖直分量 |n·y| > 0.5（只认"从上方压下来"的接触）。
+   *   自碰撞是关的（GROUPS_SELF 只和地面碰），所以任何接触对就是对地接触。
+   *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
+   *   仍被判成着地 ⇒ `lift` 项恒为 0。
+   */
+  footGrounded(side: 0 | 1): boolean {
+    const col = this.soleCol[side];
+    if (!col) return false;
+    let hit = false;
+    this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
+      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+        if (mf.numContacts() === 0) return;
+        const ny = mf.normal().y;
+        if (ny > 0.5 || ny < -0.5) hit = true;
+      });
+    });
+    return hit;
+  }
+
+  /**
+   * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
+   *   这是 Rudin 2022 的原话做法（"contacts with the base are considered crashes
+   *   and lead to resets"）。之前只用"躯干高度/倾角"判摔，于是**往前塌**不算摔：
+   *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
+   *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
+   */
+  bodyHitGround(): boolean {
+    for (let i = 0; i < this.bodies.length; i++) {
+      const bd = this.sk.bodies[i];
+      if (bd.key === 'shin_l' || bd.key === 'shin_r' || bd.key === 'foot_l' || bd.key === 'foot_r') continue;
+      const b = this.bodies[i];
+      for (let ci = 0; ci < b.numColliders(); ci++) {
+        const col = b.collider(ci);
+        let hit = false;
+        this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+          this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+            if (mf.numContacts() === 0) return;
+            const ny = mf.normal().y;
+            if (ny > 0.5 || ny < -0.5) hit = true;
+          });
+        });
+        if (hit) return true;
+      }
+    }
+    return false;
+  }
+
   tiltOf(body: RAPIER.RigidBody): number {
     this.toWorld(body, 0, 1, 0, this.dirTmp);
     const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];

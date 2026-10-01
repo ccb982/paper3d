@@ -13633,6 +13633,8 @@ var init_ragdoll = __esm({
       sk;
       opt;
       bodies = [];
+      /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+      soleCol = [null, null];
       /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
       joints = [];
       /** key → 刚体下标 */
@@ -13753,7 +13755,11 @@ var init_ragdoll = __esm({
               { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
               IDENTITY
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
-            this.world.createCollider(cd, body);
+            const col = this.world.createCollider(cd, body);
+            if (c.shape === "cuboid") {
+              if (b.key === "shin_l" || b.key === "foot_l") this.soleCol[0] = col;
+              else if (b.key === "shin_r" || b.key === "foot_r") this.soleCol[1] = col;
+            }
           }
         });
         this.jointBodies = new Int32Array(sk2.joints.length * 2);
@@ -13810,6 +13816,53 @@ var init_ragdoll = __esm({
         quatRotate(q.x, q.y, q.z, q.w, vx, vy, vz, out);
       }
       /** 刚体"上方向"相对世界竖直的夹角（弧度，0 = 完全直立）。摔倒判定/姿态评分用 */
+      /**
+       * ★ 脚是否着地（**Rapier 真实接触对**，不是几何判据）。
+       *   判据：存在接触流形、且法向的竖直分量 |n·y| > 0.5（只认"从上方压下来"的接触）。
+       *   自碰撞是关的（GROUPS_SELF 只和地面碰），所以任何接触对就是对地接触。
+       *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
+       *   仍被判成着地 ⇒ `lift` 项恒为 0。
+       */
+      footGrounded(side) {
+        const col = this.soleCol[side];
+        if (!col) return false;
+        let hit = false;
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (mf) => {
+            if (mf.numContacts() === 0) return;
+            const ny = mf.normal().y;
+            if (ny > 0.5 || ny < -0.5) hit = true;
+          });
+        });
+        return hit;
+      }
+      /**
+       * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
+       *   这是 Rudin 2022 的原话做法（"contacts with the base are considered crashes
+       *   and lead to resets"）。之前只用"躯干高度/倾角"判摔，于是**往前塌**不算摔：
+       *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
+       *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
+       */
+      bodyHitGround() {
+        for (let i = 0; i < this.bodies.length; i++) {
+          const bd = this.sk.bodies[i];
+          if (bd.key === "shin_l" || bd.key === "shin_r" || bd.key === "foot_l" || bd.key === "foot_r") continue;
+          const b = this.bodies[i];
+          for (let ci = 0; ci < b.numColliders(); ci++) {
+            const col = b.collider(ci);
+            let hit = false;
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numContacts() === 0) return;
+                const ny = mf.normal().y;
+                if (ny > 0.5 || ny < -0.5) hit = true;
+              });
+            });
+            if (hit) return true;
+          }
+        }
+        return false;
+      }
       tiltOf(body) {
         this.toWorld(body, 0, 1, 0, this.dirTmp);
         const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];
@@ -14234,11 +14287,11 @@ function footRect(doll, side, out) {
   return minY <= CONTACT_Y;
 }
 function footGrounded(doll, side) {
-  return footRect(doll, side, side === "l" ? RECT_L : RECT_R);
+  return doll.footGrounded(side === "l" ? 0 : 1);
 }
 function readSupport(doll, out) {
-  const inL = footRect(doll, "l", RECT_L);
-  const inR = footRect(doll, "r", RECT_R);
+  const inL = footRect(doll, "l", RECT_L) && doll.footGrounded(0);
+  const inR = footRect(doll, "r", RECT_R) && doll.footGrounded(1);
   const wLx = RECT_L.x1 - RECT_L.x0, wRx = RECT_R.x1 - RECT_R.x0;
   const wLz = RECT_L.z1 - RECT_L.z0, wRz = RECT_R.z1 - RECT_R.z0;
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
@@ -14410,6 +14463,7 @@ var init_sim = __esm({
       upright: 2,
       /** 高度偏差罚 */
       height: 0.8,
+      survive: 0,
       /** 关节角速度平方罚 */
       jointMotion: 1e-3,
       /** 力矩平方罚 */
@@ -14916,6 +14970,10 @@ var init_sim = __esm({
         const tp = torso.translation();
         const tilt = this.doll.tiltOf(torso);
         const headY = this.doll.head().translation().y;
+        if (this.doll.bodyHitGround()) {
+          this.finish(true);
+          return true;
+        }
         const rH = this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y);
         const rT = tilt / this.cfg.fallAngle;
         const rD = 0.45 / Math.max(1e-6, headY);
@@ -14958,9 +15016,13 @@ var init_sim = __esm({
           tt.torque = -w.torque * this.accTau;
           tt.actRate = -w.actRate * this.accActRate;
           tt.energy = -w.energy * this.accEnergy;
+          tt.survive = w.survive * elapsed;
           tt.fallen = fallen ? 1 : 0;
           tt.total = 0;
-          for (const [k, v2] of Object.entries(tt)) if (k !== "total" && k !== "fallen") tt.total += v2;
+          for (const [k, v2] of Object.entries(tt)) {
+            if (k === "total" || k === "fallen" || k === "alive" || k.startsWith("mv.")) continue;
+            tt.total += v2;
+          }
           return tt;
         }
         const t2 = {
@@ -15918,10 +15980,17 @@ var zeroFit = (() => {
   return tSim.runToEnd();
 })();
 log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}  \u5012\u5730=${tSim.fallen}  \u5206\u9879 ${Object.entries(tSim.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
+log(`    \u5168\u5206\u9879 ${JSON.stringify(tSim.terms)}`);
+check("\u2605 \u96F6\u8F93\u51FA\uFF08\u4EC0\u4E48\u90FD\u4E0D\u505A\uFF09\u62FF\u4E0D\u5230\u6B63\u5206", zeroFit <= 0, `\u603B=${zeroFit.toFixed(3)}`);
 check(
-  "\u2605 \u7AD9\u6869\u62FF\u4E0D\u5230\u8D70\u8DEF\u5956\u52B1\uFF08velTrack \u6263\u57FA\u7EBF\u3001lift/single\u22480\u3001jointMove \u5F88\u5C0F\uFF09",
-  Math.abs(tSim.terms.velTrack) < 1e-6 && Math.abs(tSim.terms.lift) < 1e-6 && Math.abs(tSim.terms.single) < 1e-6 && tSim.terms.jointMove < 0.1,
-  `velTrack=${tSim.terms.velTrack.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)} single=${tSim.terms.single.toFixed(3)} jointMove=${tSim.terms.jointMove.toFixed(3)} \u4F4D\u79FB=${tSim.distance.toFixed(3)}m \u603B=${zeroFit.toFixed(3)}`
+  "\u2605 \u4E24\u811A\u4E0D\u79BB\u5730\u4F1A\u6328\u7F5A\uFF08\u5355\u811A\u652F\u6491\u9879\u4E3A\u8D1F\uFF09",
+  tSim.terms.single < 0,
+  `single=${tSim.terms.single.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)}`
+);
+note(
+  "\u96F6\u8F93\u51FA\u7684\u88AB\u52A8\u884C\u4E3A\uFF08\u8BDA\u5B9E\u8BB0\u5F55\uFF1A\u8FD9\u4E2A\u9AA8\u67B6\u4F1A\u81EA\u5DF1\u5F80\u524D\u6ED1\uFF09",
+  true,
+  `\u4F4D\u79FB ${tSim.distance.toFixed(3)} m\uFF0C\u5012\u5730=${tSim.fallen}\uFF0CvelTrack=${tSim.terms.velTrack.toFixed(2)}`
 );
 note(
   "\u96F6\u8F93\u51FA 6s \u5185\u7684\u88AB\u52A8\u7AD9\u59FF\uFF08\u65E0\u4E3B\u52A8\u5E73\u8861\uFF0C\u5012\u4E86\u662F\u8BDA\u5B9E\u7684\uFF09",

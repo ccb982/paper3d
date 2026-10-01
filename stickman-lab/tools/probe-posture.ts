@@ -95,6 +95,9 @@ log('══════ [A] 观测 / 支撑域口径自检（直接用 posture.t
   world.numAdditionalFrictionIterations = 8;
   const doll = new Ragdoll(world, sk, {});
   doll.reset(0);
+  // ★ 必须先 step 几步：**接触对是窄相阶段算出来的**，没 step 过就一次接触都没有
+  //   （脚掌接地判定改成 Rapier 真实接触之后暴露出来的探针 bug：A8 报"接地 0 只"）。
+  for (let i = 0; i < 8; i++) world.step();
 
   const com = posture.newCom();
   const sup = posture.newSupport();
@@ -248,7 +251,12 @@ function trace(sim: InstanceType<typeof Sim>, genome: Float32Array, stepS = 0.25
 // ------------------------------------------------------------ [B] 零输出基线
 
 const STAND_W = {
-  distance: 0, velocity: 0, step: 0,   // 关掉 locomotion：考核只问"站不站得住"
+  // ★ 奖励重构后（walkReward.ts 的 11 项）这里必须用**新键名**：
+  //   旧的 distance/velocity/step 已经不存在，写在这里会被静默忽略 ⇒ 站立任务
+  //   变成"只有姿态罚、没有正信号"，ES 直奔"赶紧倒下"（实测存活 1.12 s）。
+  //   关掉全部 locomotion，只问"站不站得住"。
+  velTrack: 0, yawTrack: 0, lateral: 0, tiltRate: 0,
+  lift: 0, single: 0, jointMove: 0, actRate: 0, jointMotion: 0, torque: 0,
   // ★★ survive 必须打开（默认 0）。理由见 sim.ts 的 W.survive 长注释：
   //    站桩模式下所有姿态项都是**随时间累积的负数**，而"摔倒"只是一次性 −2 ⇒
   //    不补一个正比于存活时间的正项，ES 会直奔"赶紧倒下"（实测 20 代里最佳个体

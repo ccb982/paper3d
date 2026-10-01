@@ -162,7 +162,8 @@ function footRect(doll: Ragdoll, side: 'l' | 'r', out: FootRect): boolean {
  *   **交替步态是从这一项长出来的**，不需要任何相位/换脚检测。
  */
 export function footGrounded(doll: Ragdoll, side: 'l' | 'r'): boolean {
-  return footRect(doll, side, side === 'l' ? RECT_L : RECT_R);
+  // ★ 用 **Rapier 真实接触对**，不是几何判据（几何有 3cm 死区，实测脚抬 9cm 仍判着地）。
+  return doll.footGrounded(side === 'l' ? 0 : 1);
 }
 
 /**
@@ -170,8 +171,9 @@ export function footGrounded(doll: Ragdoll, side: 'l' | 'r'): boolean {
  * ★ 被动 vs 主动的区别见文件头 —— 观测与适应度一律用**被动**半宽。
  */
 export function readSupport(doll: Ragdoll, out: Support): Support {
-  const inL = footRect(doll, 'l', RECT_L);
-  const inR = footRect(doll, 'r', RECT_R);
+  // ★ 支撑域的"接地"也改用真实接触（足迹矩形仍由几何算），两者口径一致。
+  const inL = footRect(doll, 'l', RECT_L) && doll.footGrounded(0);
+  const inR = footRect(doll, 'r', RECT_R) && doll.footGrounded(1);
   const wLx = RECT_L.x1 - RECT_L.x0, wRx = RECT_R.x1 - RECT_R.x0;
   const wLz = RECT_L.z1 - RECT_L.z0, wRz = RECT_R.z1 - RECT_R.z0;
 
