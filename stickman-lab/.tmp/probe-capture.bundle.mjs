@@ -6412,17 +6412,17 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   let byKeyRef = null;
   const attachTo = (parentKey, wy) => {
     if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
-    let best = 0, bestD = Infinity;
+    let best2 = 0, bestD = Infinity;
     for (let s = 0; s < K; s++) {
       const b = byKeyRef.get(segKey(s));
       if (!b) continue;
       const d = Math.abs(b.cy - wy);
       if (d < bestD) {
         bestD = d;
-        best = s;
+        best2 = s;
       }
     }
-    return segKey(best);
+    return segKey(best2);
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
@@ -14622,6 +14622,30 @@ var Sim = class {
   }
 };
 
+// src/core/phaseSeed.ts
+var CAPTURE_GAIT = {
+  /** 摆动周期（秒） */
+  T: 1.89,
+  /** 目标速度（m/s） */
+  vDes: 0.39,
+  /** 摆动脚抬升高度（m） */
+  lift: 0.15,
+  /** 落脚点速度修正增益 */
+  kv: 0.3283,
+  /** 躯干俯仰 → 髋（★ 负号才接得住） */
+  kPitch: 2.544,
+  /** 俯仰角速度 → 髋 */
+  kRate: 0.542,
+  /** 捕获点走出当前支撑脚多远才换脚（m） */
+  thresh: 0.0673,
+  /** 落地吸能：支撑膝额外屈多少（rad） */
+  absorb: 0.4,
+  /** 吸能衰减时间常数（s） */
+  absorbTau: 0.25,
+  /** 实测：4 次真实换脚、0.625 m、存活 4.32 s（零输出基线 1.83 s） */
+  measured: { steps: 4, x: 0.625, t: 4.32 }
+};
+
 // tools/probe-capture.ts
 var require2 = createRequire(import.meta.url);
 {
@@ -14695,15 +14719,17 @@ function run(p, dur = 8) {
       prevStance = stanceL ? 1 : 2;
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const swingX = xi + p.kv * (com.vx - p.vDes) * p.T * 0.5;
+    const swingX = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
     const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
+    const dtSw = t - lastSwitch;
+    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     for (const side of ["l", "r"]) {
       const isStance = side === "l" === stanceL;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       const [h, k] = isStance ? ik(hipX, com.y - 0.1, side === "l" ? plantL : plantR, 0.012) : ik(hipX, com.y - 0.1, swingX, swingY);
       setAxis(`hip_${side}`, h + corr, jHip);
-      setAxis(`knee_${side}`, k, jKnee);
+      setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz;
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
@@ -14713,20 +14739,87 @@ function run(p, dur = 8) {
   }
   return { x: sim.distance, alive: !sim.fallen, steps, t };
 }
-var BEST = { T: 1.89, vDes: 0.59, lift: 0.31, kv: 0.3283, kPitch: 1.24, kRate: 0.35, kLat: 0, kLatV: 0, kLatSwing: 0, thresh: 0.05 };
+var FB = {
+  T: CAPTURE_GAIT.T,
+  vDes: CAPTURE_GAIT.vDes,
+  lift: CAPTURE_GAIT.lift,
+  kv: CAPTURE_GAIT.kv,
+  kPitch: CAPTURE_GAIT.kPitch,
+  kRate: CAPTURE_GAIT.kRate,
+  thresh: CAPTURE_GAIT.thresh,
+  absorb: CAPTURE_GAIT.absorb,
+  absorbTau: CAPTURE_GAIT.absorbTau,
+  kLat: 0,
+  kLatV: 0,
+  kLatSwing: 0
+};
+console.log("  \u9636\u6BB5 1\uFF1A\u4FEF\u4EF0\u53CD\u9988\u7B26\u53F7 \xD7 \u843D\u5730\u5438\u80FD");
+console.log("   kPitch  kRate  absorb   \u4F4D\u79FB     \u5B58\u6D3B   \u6362\u811A");
+var best = { ...FB };
+var bs = run(best);
+console.log(`   ${FB.kPitch.toFixed(2).padStart(5)}  ${FB.kRate.toFixed(2).padStart(5)}  ${FB.absorb.toFixed(2).padStart(5)}   ${bs.x.toFixed(3)}m  ${bs.t.toFixed(2)}s  ${bs.steps}  (\u57FA\u51C6)`);
+for (const kPitch of [-2, -1, -0.4, 0.4, 1, 2]) {
+  for (const absorb of [0, 0.2, 0.4]) {
+    const p = { ...FB, kPitch, absorb };
+    const r = run(p);
+    const better = r.t > bs.t + 1e-9 || Math.abs(r.t - bs.t) <= 1e-9 && r.x > bs.x;
+    if (better) {
+      best = p;
+      bs = r;
+    }
+    console.log(`   ${kPitch.toFixed(2).padStart(5)}  ${FB.kRate.toFixed(2).padStart(5)}  ${absorb.toFixed(2).padStart(5)}   ${r.x.toFixed(3)}m  ${r.t.toFixed(2)}s  ${r.steps}${better ? "  \u2190" : ""}`);
+  }
+}
+console.log(`
+  \u9636\u6BB5 1 \u7ED3\u679C: kPitch=${best.kPitch} absorb=${best.absorb} \u2192 \u4F4D\u79FB ${bs.x.toFixed(3)}m \u5B58\u6D3B ${bs.t.toFixed(2)}s \u6362\u811A ${bs.steps}`);
+console.log("");
+console.log("  \u9636\u6BB5 2\uFF1A\u5176\u4F59\u53C2\u6570\u7EC6\u5316");
+var RANGE = {
+  T: [0.5, 2.5],
+  vDes: [0.2, 1],
+  lift: [0.02, 0.15],
+  kv: [-0.6, 0.6],
+  kRate: [-1.5, 1.5],
+  absorbTau: [0.1, 0.8],
+  thresh: [0.02, 0.12],
+  kPitch: [-3, 3],
+  absorb: [0, 0.6]
+};
+var scoreOf = (r) => (r.alive ? 20 : 0) + r.x + 0.6 * r.steps + 0.5 * r.t;
+var clampP = (p) => {
+  const q = { ...p };
+  for (const k of Object.keys(RANGE)) {
+    const r = RANGE[k];
+    q[k] = Math.max(r[0], Math.min(r[1], q[k]));
+  }
+  return q;
+};
+var step2 = 0.2;
+for (let it = 0; it < 250 && step2 > 5e-3; it++) {
+  let improved = false;
+  for (const key of ["T", "vDes", "lift", "kv", "kRate", "kPitch", "absorb", "absorbTau", "thresh"]) {
+    for (const d of [step2, -step2]) {
+      const p = clampP({ ...best, [key]: best[key] + d });
+      const r = run(p);
+      if (scoreOf(r) > scoreOf(bs) + 1e-9) {
+        best = p;
+        bs = r;
+        improved = true;
+      }
+    }
+  }
+  if (!improved) step2 *= 0.6;
+}
+console.log(`  \u2605 \u53C2\u6570 ${JSON.stringify(best, (k, v) => typeof v === "number" ? +v.toFixed(4) : v)}`);
+console.log(`  \u2605 \u7ED3\u679C: \u4F4D\u79FB ${bs.x.toFixed(3)} m \xB7 \u5B58\u6D3B ${bs.t.toFixed(2)} s \xB7 \u6362\u811A ${bs.steps} \xB7 \u6D3B\u6EE1=${bs.alive}`);
+var zero = run({ ...best, T: 0, thresh: 1e9, lift: 0, kv: 0, vDes: 0, kPitch: 0, kRate: 0, absorb: 0 }, 8);
 var FAILS = 0;
 var check = (name, ok, detail = "") => {
   if (!ok) FAILS++;
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? "   " + detail : ""}`);
 };
-var zero = run({ ...BEST, T: 0, thresh: 1e9, lift: 0, kv: 0, vDes: 0, kPitch: 0, kRate: 0 }, 8);
-var cap = run(BEST, 8);
-console.log(`
-  \u6355\u83B7\u70B9\u63A7\u5236\u5668: \u4F4D\u79FB ${cap.x.toFixed(3)} m \xB7 \u5B58\u6D3B ${cap.t.toFixed(2)} s \xB7 \u6362\u811A ${cap.steps}`);
-console.log(`  \u96F6\u8F93\u51FA\u57FA\u7EBF : \u4F4D\u79FB ${zero.x.toFixed(3)} m \xB7 \u5B58\u6D3B ${zero.t.toFixed(2)} s \xB7 \u6362\u811A ${zero.steps}`);
-check("\u2605 \u6355\u83B7\u70B9\u63A7\u5236\u5668\u80FD\u8E29\u51FA\u5355\u817F\u652F\u6491\uFF08\u4E0D\u662F\u6ED1\u884C\uFF09", cap.steps >= 3, `\u6362\u811A ${cap.steps} \u6B21`);
-check("\u2605 \u524D\u8FDB\u65B9\u5411\u4E3A\u6B63\uFF08CoM \u771F\u7684\u5728\u5F80\u524D\u79FB\uFF09", cap.x > 0.3, `${cap.x.toFixed(3)} m`);
-check("\u2605 \u6BD4\u96F6\u8F93\u51FA\u57FA\u7EBF\u6D3B\u5F97\u4E45", cap.t > zero.t, `${cap.t.toFixed(2)}s vs ${zero.t.toFixed(2)}s`);
-console.log(`
-  \u26A0 \u5DF2\u77E5\u4E0D\u8DB3\uFF1A\u8FC8\u6B65\u540E\u8EAF\u5E72**\u4FEF\u4EF0\u4F1A\u53D1\u6563**\uFF08\u5B9E\u6D4B t=1.0s \u8D77 pitch \u22121.2\xB0\u2192\u221213\xB0\u3001vx 0.28\u21920.55 m/s \u524D\u6251\u5012\u4E0B\uFF09\u3002\u9010\u62CD trace \u663E\u793A\u4FEF\u4EF0\u53CD\u9988\u7684**\u7B26\u53F7\u4E0E\u9ACB\u7684\u7B26\u53F7\u7EA6\u5B9A\u76F8\u53CD**\uFF08kPitch \u9009\u5230 +1.24 \u53CD\u800C\u5728\u653E\u5927\u524D\u6251\uFF09\u2014\u2014 \u4E0B\u4E00\u6B65\u662F\u663E\u5F0F\u626B\u8FD9\u4E2A\u7B26\u53F7 + \u52A0"\u843D\u5730\u5438\u80FD"\uFF08\u652F\u6491\u819D\u5C48\uFF09\u3002`);
+console.log(`  \u96F6\u8F93\u51FA\u57FA\u7EBF: \u4F4D\u79FB ${zero.x.toFixed(3)} m \xB7 \u5B58\u6D3B ${zero.t.toFixed(2)} s \xB7 \u6362\u811A ${zero.steps}`);
+check("\u2605 \u6355\u83B7\u70B9\u63A7\u5236\u5668\u80FD\u8E29\u51FA\u5355\u817F\u652F\u6491\uFF08\u4E0D\u662F\u6ED1\u884C\uFF09", bs.steps >= 3, `\u6362\u811A ${bs.steps} \u6B21`);
+check("\u2605 \u524D\u8FDB\u65B9\u5411\u4E3A\u6B63\uFF08CoM \u771F\u7684\u5728\u5F80\u524D\u79FB\uFF09", bs.x > 0.3, `${bs.x.toFixed(3)} m`);
+check("\u2605 \u6BD4\u96F6\u8F93\u51FA\u57FA\u7EBF\u6D3B\u5F97\u4E45", bs.t > zero.t, `${bs.t.toFixed(2)}s vs ${zero.t.toFixed(2)}s`);
 console.log(FAILS === 0 ? "\u2605 capture \u5168\u90E8\u901A\u8FC7" : `\u2605 capture \u6709 ${FAILS} \u6761 FAIL`);

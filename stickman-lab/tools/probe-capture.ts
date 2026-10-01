@@ -7,6 +7,7 @@ import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
 import { readCom, newCom, omegaAt } from '../src/core/posture';
+import { CAPTURE_GAIT } from '../src/core/phaseSeed';
 
 const require = createRequire(import.meta.url);
 {
@@ -34,7 +35,7 @@ const HIP_Z = 0.007;
 const jHip = sk.joints.find((j) => j.name === 'hip_l')!;
 const jKnee = sk.joints.find((j) => j.name === 'knee_l')!;
 
-interface Params { T: number; vDes: number; lift: number; kv: number; kPitch: number; kRate: number; kLat: number; kLatV: number; kLatSwing: number; thresh: number }
+interface Params { T: number; vDes: number; lift: number; kv: number; kPitch: number; kRate: number; kLat: number; kLatV: number; kLatSwing: number; thresh: number; absorb: number; absorbTau: number }
 
 function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t: number } {
   const sim = new Sim(sk, SH, { ...DEFAULT_SIM, mode: 'walk', duration: dur });
@@ -92,8 +93,15 @@ function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t:
     }
     // 摆动相位：用"迈出去多久"归一，配合最小摆动时间
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const swingX = xi + p.kv * (com.vx - p.vDes) * p.T * 0.5;
+    // ★ Raibert 落脚点：x* = ξ + kv·(v_des − v_x)·T_s/2
+    //   （**慢了就把脚放得更靠前**）。之前写成 (v_x − v_des) ⇒ 方向整个反了，
+    //   站得住也走起来了，但一路往后走（实测 −0.26 ~ −1.15 m）。
+    const swingX = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
     const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
+    // ★ 落地吸能：支撑脚刚落地的一小段时间里额外屈膝，把落地的冲击/前扑动能吃掉
+    //   （膝能屈 −145°，权限足够；这是所有双足行走器必备的一步）。
+    const dtSw = t - lastSwitch;
+    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     for (const side of ['l', 'r'] as const) {
       const isStance = (side === 'l') === stanceL;
@@ -102,7 +110,7 @@ function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t:
         ? ik(hipX, com.y - 0.10, side === 'l' ? plantL : plantR, 0.012)
         : ik(hipX, com.y - 0.10, swingX, swingY);
       setAxis(`hip_${side}`, h + corr, jHip);
-      setAxis(`knee_${side}`, k, jKnee);
+      setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       // ★★ 侧向调节（axis 0 = 外展）：站距 0.33 m，只调俯仰是**必然**倒的 ——
       //   横向平衡没有出口。支撑腿外展把骨盆/重心推向支撑脚，摆动腿外展控制落点宽度。
@@ -115,25 +123,73 @@ function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t:
   return { x: sim.distance, alive: !sim.fallen, steps, t };
 }
 
-// ── 已搜到的参数（前后）+ 状态触发阈值 ──
-const BEST: Params = { T: 1.89, vDes: 0.59, lift: 0.31, kv: 0.3283, kPitch: 1.24, kRate: 0.35, kLat: 0, kLatV: 0, kLatSwing: 0, thresh: 0.05 };
+// ── 阶段 1：俯仰反馈的**符号**（之前坐标下降选到 +1.24，而 trace 显示它在放大前扑）──
+// ★ 参数真源 = phaseSeed.CAPTURE_GAIT（探针搜出来的，UI/训练共用同一份）
+const FB: Params = {
+  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
+  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
+  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
+  kLat: 0, kLatV: 0, kLatSwing: 0,
+};
+console.log('  阶段 1：俯仰反馈符号 × 落地吸能');
+console.log('   kPitch  kRate  absorb   位移     存活   换脚');
+let best = { ...FB }, bs = run(best);
+console.log(`   ${FB.kPitch.toFixed(2).padStart(5)}  ${FB.kRate.toFixed(2).padStart(5)}  ${FB.absorb.toFixed(2).padStart(5)}   ${bs.x.toFixed(3)}m  ${bs.t.toFixed(2)}s  ${bs.steps}  (基准)`);
+for (const kPitch of [-2, -1, -0.4, 0.4, 1, 2]) {
+  for (const absorb of [0, 0.2, 0.4]) {
+    const p: Params = { ...FB, kPitch, absorb };
+    const r = run(p);
+    const better = r.t > bs.t + 1e-9 || (Math.abs(r.t - bs.t) <= 1e-9 && r.x > bs.x);
+    if (better) { best = p; bs = r; }
+    console.log(`   ${kPitch.toFixed(2).padStart(5)}  ${FB.kRate.toFixed(2).padStart(5)}  ${absorb.toFixed(2).padStart(5)}   ${r.x.toFixed(3)}m  ${r.t.toFixed(2)}s  ${r.steps}${better ? '  ←' : ''}`);
+  }
+}
+console.log(`
+  阶段 1 结果: kPitch=${best.kPitch} absorb=${best.absorb} → 位移 ${bs.x.toFixed(3)}m 存活 ${bs.t.toFixed(2)}s 换脚 ${bs.steps}`);
+
+// ── 阶段 2：在阶段 1 最好的基础上补齐其余参数 ──
+console.log('');
+console.log('  阶段 2：其余参数细化');
+// ★ 目标必须是"活着 **且** 往前走 **且** 真的迈步"，否则搜索会买最便宜的稳定：
+//   只按存活搜的话，"永远不迈步"能拿满分（实测 thresh=0.45 → 0 次换脚、活满 8 s）。
+const RANGE: Partial<Record<keyof Params, [number, number]>> = {
+  T: [0.5, 2.5], vDes: [0.2, 1.0], lift: [0.02, 0.15], kv: [-0.6, 0.6],
+  kRate: [-1.5, 1.5], absorbTau: [0.1, 0.8], thresh: [0.02, 0.12],
+  kPitch: [-3, 3], absorb: [0, 0.6],
+};
+const scoreOf = (r: { x: number; alive: boolean; steps: number; t: number }): number =>
+  (r.alive ? 20 : 0) + r.x + 0.6 * r.steps + 0.5 * r.t;
+const clampP = (p: Params): Params => {
+  const q = { ...p };
+  for (const k of Object.keys(RANGE) as (keyof Params)[]) {
+    const r = RANGE[k]!;
+    q[k] = Math.max(r[0], Math.min(r[1], q[k]));
+  }
+  return q;
+};
+let step2 = 0.2;
+for (let it = 0; it < 250 && step2 > 5e-3; it++) {
+  let improved = false;
+  for (const key of ['T', 'vDes', 'lift', 'kv', 'kRate', 'kPitch', 'absorb', 'absorbTau', 'thresh'] as (keyof Params)[]) {
+    for (const d of [step2, -step2]) {
+      const p = clampP({ ...best, [key]: best[key] + d });
+      const r = run(p);
+      if (scoreOf(r) > scoreOf(bs) + 1e-9) { best = p; bs = r; improved = true; }
+    }
+  }
+  if (!improved) step2 *= 0.6;
+}
+console.log(`  ★ 参数 ${JSON.stringify(best, (k, v) => (typeof v === 'number' ? +v.toFixed(4) : v))}`);
+console.log(`  ★ 结果: 位移 ${bs.x.toFixed(3)} m · 存活 ${bs.t.toFixed(2)} s · 换脚 ${bs.steps} · 活满=${bs.alive}`);
+
+const zero = run({ ...best, T: 0, thresh: 1e9, lift: 0, kv: 0, vDes: 0, kPitch: 0, kRate: 0, absorb: 0 }, 8);
 let FAILS = 0;
 const check = (name: string, ok: boolean, detail = ''): void => {
   if (!ok) FAILS++;
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '   ' + detail : ''}`);
 };
-const zero = run({ ...BEST, T: 0, thresh: 1e9, lift: 0, kv: 0, vDes: 0, kPitch: 0, kRate: 0 }, 8);
-const cap = run(BEST, 8);
-console.log(`
-  捕获点控制器: 位移 ${cap.x.toFixed(3)} m · 存活 ${cap.t.toFixed(2)} s · 换脚 ${cap.steps}`);
-console.log(`  零输出基线 : 位移 ${zero.x.toFixed(3)} m · 存活 ${zero.t.toFixed(2)} s · 换脚 ${zero.steps}`);
-
-// ★ 验收：这套控制器**真的踩出了单腿支撑**（实测载荷 0.00/1.00），这是骨架第一次
-check('★ 捕获点控制器能踩出单腿支撑（不是滑行）', cap.steps >= 3, `换脚 ${cap.steps} 次`);
-check('★ 前进方向为正（CoM 真的在往前移）', cap.x > 0.3, `${cap.x.toFixed(3)} m`);
-check('★ 比零输出基线活得久', cap.t > zero.t, `${cap.t.toFixed(2)}s vs ${zero.t.toFixed(2)}s`);
-console.log(`
-  ⚠ 已知不足：迈步后躯干**俯仰会发散**（实测 t=1.0s 起 pitch −1.2°→−13°、`
-  + `vx 0.28→0.55 m/s 前扑倒下）。逐拍 trace 显示俯仰反馈的**符号与髋的符号约定相反**`
-  + `（kPitch 选到 +1.24 反而在放大前扑）—— 下一步是显式扫这个符号 + 加"落地吸能"（支撑膝屈）。`);
+console.log(`  零输出基线: 位移 ${zero.x.toFixed(3)} m · 存活 ${zero.t.toFixed(2)} s · 换脚 ${zero.steps}`);
+check('★ 捕获点控制器能踩出单腿支撑（不是滑行）', bs.steps >= 3, `换脚 ${bs.steps} 次`);
+check('★ 前进方向为正（CoM 真的在往前移）', bs.x > 0.3, `${bs.x.toFixed(3)} m`);
+check('★ 比零输出基线活得久', bs.t > zero.t, `${bs.t.toFixed(2)}s vs ${zero.t.toFixed(2)}s`);
 console.log(FAILS === 0 ? '★ capture 全部通过' : `★ capture 有 ${FAILS} 条 FAIL`);
