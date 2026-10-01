@@ -39,7 +39,7 @@
 //   是数值发散的温床。代价是左右腿可以互穿 —— 对"纸片人偶"这个视觉风格反而是好事。
 
 import RAPIER from '@dimforge/rapier3d';
-import { JOINT_MAX_SPEED, type BodyDef, type JointDef, type Skeleton } from './skeleton';
+import { JOINT_MAX_SPEED, restQuatOf, type BodyDef, type JointDef, type Skeleton } from './skeleton';
 
 // ---------------------------------------------------------------- 碰撞分组
 // groups = (membership << 16) | filter，双方都要放行才算碰撞。
@@ -53,6 +53,8 @@ const GROUPS_GROUND = ((MEM_GROUND << 16) | MEM_SELF) >>> 0;
 
 const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
 const ZERO = { x: 0, y: 0, z: 0 };
+
+
 
 /**
  * ★★ 马达每物理步最多吃掉多少比例的"相对角速度误差"。默认 **1.0**（= 一步收敛）。
@@ -371,6 +373,8 @@ export class Ragdoll {
   private readonly initX: Float64Array;
   private readonly initY: Float64Array;
   private readonly initZ: Float64Array;
+  /** 各刚体的静倾角四元数（reset 用） */
+  private readonly restQ: { x: number; y: number; z: number; w: number }[];
 
   // ---- 热路径复用缓冲（零分配） ----
   private readonly qRel = new Float64Array(4);
@@ -424,6 +428,11 @@ export class Ragdoll {
     this.initX = new Float64Array(sk.bodies.length);
     this.initY = new Float64Array(sk.bodies.length);
     this.initZ = new Float64Array(sk.bodies.length);
+    this.restQ = sk.bodies.map((b) => {
+      // 静姿态 = Ry(膝盖以下内收偏航) ⊗ Rx(实测中轴倾角)，与 skeleton.ts 同一公式
+      const [x, y, z, w] = restQuatOf(b.restTiltRad, b.restYawRad);
+      return { x, y, z, w };
+    });
     sk.bodies.forEach((b: BodyDef, i: number) => {
       this.indexByKey.set(b.key, i);
       this.initX[i] = b.cx;
@@ -433,6 +442,10 @@ export class Ragdoll {
       const body = this.world.createRigidBody(
         RAPIER.RigidBodyDesc.dynamic()
           .setTranslation(b.cx, b.cy, b.cz)
+          // ★ 静倾角：肢体贴图本身是斜的（上臂 7°、前臂+手 31°、大腿 8°、小腿 9°），
+          //   所以刚体初始朝向 = 绕 X 转 restTiltRad，让局部 +Y 沿实测中轴躺平。
+          //   这样 reset 后的姿态就是素材画的那张姿势，斜肢体不会被画成正的。
+          .setRotation(this.restQ[i])
           // ★ 3D：六自由度全开，不再锁任何轴（2D 版这里是 (T,T,F)+(F,F,T)）
           .setLinearDamping(this.opt.linearDamping)
           .setAngularDamping(this.opt.angularDamping)
@@ -445,7 +458,8 @@ export class Ragdoll {
           ? RAPIER.ColliderDesc.capsule(c.halfHeight, c.radius)
           : RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
         // ★ ColliderDesc.setTranslation 是 (x,y,z) 三个数，不是 Vector
-        cd.setTranslation(0, c.offsetY, 0)
+        // ★ offsetZ：脚掌盒要按纹理实测的靴心侧偏摆（否则盒心挂在小腿中轴上，靴子对不上）
+        cd.setTranslation(0, c.offsetY, c.offsetZ)
           // ★ 质量必须逐个 collider 给：不给就按默认密度 1.0 凭空加质量。
           //   已用 body.mass() 读回校验过：偏差 < 1e-6 kg（见 probe-motor A 段）。
           .setMassProperties(
@@ -792,7 +806,8 @@ export class Ragdoll {
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
       b.setTranslation({ x: this.initX[i] + offsetX, y: this.initY[i], z: this.initZ[i] }, true);
-      b.setRotation(IDENTITY, true);
+      // ★ 复位到**静倾角**姿态，不是单位四元数 —— 否则斜肢体每 reset 都被掰直。
+      b.setRotation(this.restQ[i], true);
       b.setLinvel(ZERO, true);
       b.setAngvel(ZERO, true);
     }

@@ -38,7 +38,7 @@
 
 import * as THREE from 'three';
 import { META } from '../core/partsMeta';
-import type { Skeleton } from '../core/skeleton';
+import { invQuatOf, restVisualQuatOf, type Skeleton } from '../core/skeleton';
 import type { Ragdoll } from '../core/ragdoll';
 import type { Trainer } from '../core/evolution';
 
@@ -262,6 +262,20 @@ interface PlateSlot {
   /** 非 null = 蒙皮板（躯干） */
   skin: SkinGroup | null;
   sortPos: THREE.Vector3;
+  /**
+   * ★★ 该刚体**静倾角的逆**四元数。
+   *
+   * 用户定调（2026-10-01）："纹理别动，调整关节的倾斜度" ——
+   * 贴图在静姿态下必须与素材**逐像素一致**（不转、不移、不缩）。
+   * 而刚体/碰撞体要沿实测中轴倾斜（物理胶囊得和贴图同向，否则碰撞体是竖直的、
+   * 会戳出贴图外面）。两者用同一个"相对静姿态的增量旋转" qRel 统一：
+   *     qRel = qBody ⊗ restTilt⁻¹
+   * 静姿态（qBody = restTilt）时 qRel = 单位四元数 ⇒ 贴图**完全不动**；
+   * 动力学一旦转动，qRel 就是纯增量 ⇒ 贴图正常跟随。
+   * 位置同理：贴图心 = 刚体位置 + qRel · plateOffset（plateOffset 已在骨架里
+   * 按 restTilt⁻¹ 折算好），保证静姿态下精确落回素材位置。
+   */
+  qRestInv: THREE.Quaternion;
 }
 
 export class Viewer {
@@ -291,6 +305,8 @@ export class Viewer {
     new THREE.Vector3(0, 1, 0), Math.PI / 2,
   );
   private readonly qBody = new THREE.Quaternion();
+  /** 相对静姿态的增量朝向（qBody ⊗ restTilt⁻¹） */
+  private readonly qRel = new THREE.Quaternion();
   private readonly tmpV = new THREE.Vector3();
   private readonly sortDir = new THREE.Vector3();
   private readonly camDir = new THREE.Vector3();
@@ -355,14 +371,26 @@ export class Viewer {
         side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
-      this.plates.push({ mesh, drivers: [i], skin: null, sortPos: new THREE.Vector3() });
+      this.plates.push({
+        mesh, drivers: [i], skin: null, sortPos: new THREE.Vector3(),
+        // ★ 视觉补偿只含**倾角**（= 素材画法）；偏航是主动纠正的站姿，贴图必须跟着转，
+        //   否则脚掌 collider 已经内收、看到的靴子还是外八（用户："外八，脚尖向外啊"）。
+        qRestInv: (() => {
+          const [x, y, z, w] = invQuatOf(restVisualQuatOf(b.restTiltRad));
+          return new THREE.Quaternion(x, y, z, w);
+        })(),
+      });
       this.scene.add(mesh);
     }
 
     if (groups.skinned.length > 0) {
       const tex = loadTex(sk.bodies[groups.skinned[0]].part.file);
       const g = this.buildSkinGroup(sk, groups.skinned, tex);
-      this.plates.push({ mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos });
+      this.plates.push({
+        mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
+        // 躯干不设静倾角（脊柱 LBS 蒙皮要求各段同朝向）
+        qRestInv: new THREE.Quaternion(),
+      });
       this.scene.add(g.mesh);
     }
 
@@ -392,7 +420,7 @@ export class Viewer {
       for (const c of b.colliders) {
         if (c.shape !== 'cuboid') continue;
         const box = new THREE.Mesh(new THREE.BoxGeometry(c.hx * 2, c.hy * 2, c.hz * 2), boneMat);
-        box.position.set(0, c.offsetY, 0);
+        box.position.set(0, c.offsetY, c.offsetZ);
         box.renderOrder = 85;
         g.add(box);
       }
@@ -622,10 +650,18 @@ export class Viewer {
       const body = doll.bodies[slot.drivers[0]];
       const t = body.translation();
       const q = body.rotation();
-      slot.mesh.position.set(t.x, t.y, t.z);
-      // ★ 板子的世界朝向 = 刚体朝向 ⊗ 板子固定朝向（先 qFix 后 qBody）
+      // ★★★ 贴图位姿 = **相对静姿态的增量**（用户定调："纹理别动，调整关节的倾斜度"）
+      //   qRel = qBody ⊗ restTilt⁻¹
+      //   静姿态下 qRel = 单位四元数 ⇒ 板子位置/朝向与素材**逐像素一致**（纹理没被动过）；
+      //   动力学转动时 qRel 是纯增量 ⇒ 板子正常跟随刚体。
+      //   位置：板心 = 刚体位置 + qRel · plateOffset（plateOffset 在骨架里已按 restTilt⁻¹ 折算）。
       this.qBody.set(q.x, q.y, q.z, q.w);
-      slot.mesh.quaternion.copy(this.qBody).multiply(this.qFix);
+      this.qRel.copy(this.qBody).multiply(slot.qRestInv);
+      const off = doll.sk.bodies[slot.drivers[0]].plateOffset;
+      this.tmpV.set(off[0], off[1], off[2]).applyQuaternion(this.qRel);
+      slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
+      // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
+      slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix);
       slot.sortPos.set(t.x, t.y, t.z);
     }
 

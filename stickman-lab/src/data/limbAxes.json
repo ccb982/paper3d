@@ -1,0 +1,228 @@
+{
+  "_comment": "肢体中轴 + 关节锚点 + 爪区实测（画布 px，源图坐标）。tools/measure-limb-axes.py 生成。锚点已保证落在父/子贴图 alpha 内部（margin 字段）⇒ 关节连得上；skeleton.ts 消费 anchors/paw；verify-core 钉住 margin ≥ 0。",
+  "source": "C:\\Users\\22641\\Desktop\\游戏素材\\ui页面\\海猫_抠图",
+  "scale": 0.5,
+  "axes": {
+    "arm_l": {
+      "k": -0.08841,
+      "b": 514.68,
+      "rms": 11.14,
+      "tiltDeg": -5.05,
+      "proxTip": [
+        456.4,
+        659.5
+      ],
+      "distTip": [
+        408.6,
+        1199.5
+      ],
+      "lenPx": 540.0
+    },
+    "arm_r": {
+      "k": 0.08841,
+      "b": 1050.32,
+      "rms": 6.92,
+      "tiltDeg": 5.05,
+      "proxTip": [
+        1108.6,
+        659.5
+      ],
+      "distTip": [
+        1156.4,
+        1199.5
+      ],
+      "lenPx": 540.0
+    },
+    "hand_l": {
+      "k": -0.6101,
+      "b": 1092.87,
+      "rms": 23.92,
+      "tiltDeg": -31.39,
+      "proxTip": [
+        444.0,
+        1063.5
+      ],
+      "distTip": [
+        56.9,
+        1698.0
+      ],
+      "lenPx": 634.5
+    },
+    "hand_r": {
+      "k": 0.6101,
+      "b": 472.13,
+      "rms": 22.92,
+      "tiltDeg": 31.39,
+      "proxTip": [
+        1121.0,
+        1063.5
+      ],
+      "distTip": [
+        1508.1,
+        1698.0
+      ],
+      "lenPx": 634.5
+    },
+    "thigh_l": {
+      "k": -0.14033,
+      "b": 862.06,
+      "rms": 4.7,
+      "tiltDeg": -7.99,
+      "proxTip": [
+        644.6,
+        1549.5
+      ],
+      "distTip": [
+        549.3,
+        2228.5
+      ],
+      "lenPx": 679.0
+    },
+    "thigh_r": {
+      "k": 0.14033,
+      "b": 702.94,
+      "rms": 11.02,
+      "tiltDeg": 7.99,
+      "proxTip": [
+        920.4,
+        1549.5
+      ],
+      "distTip": [
+        1015.7,
+        2228.5
+      ],
+      "lenPx": 679.0
+    },
+    "shin_l": {
+      "k": -0.0,
+      "b": 527.55,
+      "rms": 10.03,
+      "tiltDeg": -0.0,
+      "proxTip": [
+        527.5,
+        2051.5
+      ],
+      "distTip": [
+        527.5,
+        2792.0
+      ],
+      "lenPx": 740.5
+    },
+    "shin_r": {
+      "k": 0.0,
+      "b": 1037.45,
+      "rms": 9.04,
+      "tiltDeg": 0.0,
+      "proxTip": [
+        1037.5,
+        2051.5
+      ],
+      "distTip": [
+        1037.5,
+        2792.0
+      ],
+      "lenPx": 740.5
+    },
+    "torso": {
+      "k": -0.01378,
+      "b": 788.21,
+      "rms": 6.89,
+      "tiltDeg": -0.79,
+      "proxTip": [
+        805.3,
+        513.0
+      ],
+      "distTip": [
+        876.2,
+        1766.0
+      ],
+      "lenPx": 1253
+    },
+    "head": {
+      "k": -0.01095,
+      "b": 791.13,
+      "rms": 4.46,
+      "tiltDeg": -0.63,
+      "proxTip": [
+        796.0,
+        92.0
+      ],
+      "distTip": [
+        775.0,
+        731.0
+      ],
+      "lenPx": 639
+    }
+  },
+  "anchors": {
+    "neck": [
+      792.0,
+      622.5
+    ],
+    "shoulder_l": [
+      479.0,
+      703.5
+    ],
+    "shoulder_r": [
+      1086.0,
+      703.5
+    ],
+    "elbow_l": [
+      416.7,
+      1108.3
+    ],
+    "elbow_r": [
+      1148.3,
+      1108.3
+    ],
+    "hip_l": [
+      587.5,
+      1574.5
+    ],
+    "hip_r": [
+      977.5,
+      1574.5
+    ],
+    "knee_l": [
+      527.5,
+      2222.0
+    ],
+    "knee_r": [
+      1037.5,
+      2222.0
+    ]
+  },
+  "margin": {
+    "neck": 99,
+    "shoulder_l": 25,
+    "shoulder_r": 25,
+    "elbow_l": 33,
+    "elbow_r": 19,
+    "hip_l": 25,
+    "hip_r": 25,
+    "knee_l": 4,
+    "knee_r": 4
+  },
+  "paw": {
+    "l": {
+      "yWide": 2792.0,
+      "yLow": 2895.0,
+      "centerX": 454.5,
+      "drawnAxisXAtSole": 488.4,
+      "shaftTiltDeg": -5.51,
+      "lateralHalf": 159.0,
+      "pawHeightPx": 103.0,
+      "slopeDeg": -0.82
+    },
+    "r": {
+      "yWide": 2792.0,
+      "yLow": 2895.0,
+      "centerX": 1110.5,
+      "drawnAxisXAtSole": 1076.6,
+      "shaftTiltDeg": 4.86,
+      "lateralHalf": 159.0,
+      "pawHeightPx": 103.0,
+      "slopeDeg": 0.82
+    }
+  }
+}

@@ -5,6 +5,7 @@
 // 画布 1568×2944，y 向下，原点左上。换算到世界坐标见 skeleton.ts。
 
 import raw from '../data/parts.json';
+import limbAxesRaw from '../data/limbAxes.json';
 
 export interface PartMeta {
   /** 刚体 id，也是贴图文件名 */
@@ -59,3 +60,64 @@ export const META = raw as unknown as PartsMeta;
 export const PART_BY_KEY: ReadonlyMap<string, PartMeta> = new Map(
   META.parts.map((p) => [p.key, p]),
 );
+
+/**
+ * ★★ 肢体中轴与关节锚点（`tools/measure-limb-axes.py` 从 alpha 掩膜实测生成）。
+ *
+ * 为什么需要它 —— 用户回读 2026-10-01：
+ *   "我的纹理初始状态，各个部位都是有一定倾斜度的"
+ *   "最起码各个肢体的关节必须连起来"
+ * 实测倾角：上臂 7.3°/2.8°、前臂+手 30.6°/32.2°、大腿 8°、小腿 9.2°/7.7°、
+ *          躯干 0.8°、头 0.6°。⇒
+ *   ① `parts.json` 那个"父/子 bbox 重叠区中心"当锚点的启发式对**斜肢体**不成立：
+ *      肩锚点会落进上臂中点（比肩峰低 0.19 m ⇒ 显矮 + 手臂上部无锚点"悬空"）。
+ *   ② 刚体不能继续按"竖直胶囊"摆：贴图是斜的，竖直刚体会把斜肢体画歪，
+ *      链也接不上 ⇒ 每个肢体刚体带**静倾角** restTiltRad，贴图另有局部偏移 plateOffset。
+ *
+ * 字段：
+ *   axes[key]  = { k, b, tiltDeg, proxTip, distTip, lenPx }  —— 中轴 x = k·y + b（画布 px）
+ *   anchors[joint] = [x, y]  —— 关节锚点（画布 px），**保证落在父/子两张贴图 alpha 内部**
+ *   margin[joint]  = 到两侧轮廓的内缩余量（px）⇒ verify-core 钉住 ≥ 0
+ */
+export interface LimbAxis {
+  /** 中轴斜率 dx/dy（画布 px；y 向下） */
+  k: number;
+  b: number;
+  /** 中轴直线拟合残差 rms（px） */
+  rms: number;
+  /** 相对竖直的倾角（度，符号同 k） */
+  tiltDeg: number;
+  /** 近端端心（画布 px）：上/下肢都是上端 */
+  proxTip: [number, number];
+  /** 远端端心（画布 px） */
+  distTip: [number, number];
+  /** 沿中轴的长度（画布 px） */
+  lenPx: number;
+}
+
+export interface PawMeta {
+  /** 靴筒/脚背交界（alpha 最宽行）的画布 y */
+  yWide: number;
+  /** alpha 最低点（画布 y）= 靴底 */
+  yLow: number;
+  /** 靴心的画布 x（相对小腿中轴是偏的） */
+  centerX: number;
+  /** 靴子侧向半宽（画布 px） */
+  lateralHalf: number;
+  /** 爪区高度（画布 px） */
+  pawHeightPx: number;
+  /** 靴底边斜率（度，只报告：不据此给碰撞体加横滚） */
+  slopeDeg: number;
+}
+
+export interface LimbAxes {
+  source: string;
+  scale: number;
+  axes: Record<string, LimbAxis>;
+  anchors: Record<string, [number, number]>;
+  margin: Record<string, number>;
+  /** 爪区（靴子）实测：'l' = shin_l，'r' = shin_r */
+  paw: { l: PawMeta; r: PawMeta };
+}
+
+export const LIMB_AXES = limbAxesRaw as unknown as LimbAxes;

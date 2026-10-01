@@ -55,12 +55,64 @@
 //           另外两轴（绕 X 外展 / 绕 Y 扭转）见 JOINT_LIMITS_XY_DEG。
 //           本骨架无踝关节（脚与小腿一体化），关节数 = 9，总转动自由度 = 27。
 
-import { META, PART_BY_KEY, type JointMeta, type PartMeta } from './partsMeta';
+import { META, LIMB_AXES, PART_BY_KEY, type JointMeta, type PartMeta } from './partsMeta';
 
 // ---------------------------------------------------------------- 配置
 
 /** 三轴量（X / Y / Z），语义见文件头的轴约定 */
 export type Vec3 = readonly [number, number, number];
+/** 四元数 (x, y, z, w) */
+export type Vec4 = readonly [number, number, number, number];
+
+/**
+ * ★ 刚体**静姿态**四元数：`Ry(yaw) ⊗ Rx(tilt)`。
+ *
+ * 静姿态 = 素材画的那张姿势在骨骼层面的表示（肢体沿实测中轴躺平 + 膝盖以下向内偏航）。
+ * 它**不是**动力学状态：物理体创建/复位时带上它，之后只由马达相对它转动。
+ * 渲染端用它的逆把贴图补偿回素材原位（viewer.ts 的 qRel），所以"纹理别动"成立。
+ */
+export function restQuatOf(tiltRad: number, yawRad: number): Vec4 {
+  const ht = tiltRad / 2, hy = yawRad / 2;
+  return [
+    Math.sin(ht) * Math.cos(hy),
+    Math.sin(hy) * Math.cos(ht),
+    -Math.cos(hy) * Math.sin(ht),
+    Math.cos(hy) * Math.cos(ht),
+  ];
+}
+
+/**
+ * ★★ **视觉补偿**用的静姿态 = 只有倾角，**不含偏航**。
+ *
+ * 这条区分是用户两次回读逼出来的，必须写死：
+ *   · `restTiltRad`（实测中轴倾角）= **素材就是这么画的** ⇒ 贴图必须补偿回原位，
+ *     否则等于"旋转纹理来假装骨架对了"（用户："纹理别动，调整关节的倾斜度"）。
+ *   · `restYawRad`（膝盖以下内收）= **我们主动纠正的站姿**，素材画的是外八字、
+ *     用户要求改成内收（"脚部骨骼向内收一下"）⇒ 这是真正的骨骼旋转，
+ *     **贴图必须跟着转**，否则脚掌 collider 已经内收、肉眼看到的靴子还是外八。
+ */
+export function restVisualQuatOf(tiltRad: number): Vec4 {
+  return restQuatOf(tiltRad, 0);
+}
+
+/** 单位四元数的逆（共轭） */
+export function invQuatOf(q: Vec4): Vec4 {
+  return [-q[0], -q[1], -q[2], q[3]];
+}
+
+/** 用四元数旋转向量（x,y,z） */
+export function rotVecByQuat(q: Vec4, v: Vec3): Vec3 {
+  const [qx, qy, qz, qw] = q;
+  const [vx, vy, vz] = v;
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  return [
+    vx + qw * tx + (qy * tz - qz * ty),
+    vy + qw * ty + (qz * tx - qx * tz),
+    vz + qw * tz + (qx * ty - qy * tx),
+  ];
+}
 
 export interface SkeletonConfig {
   /** 角色总高（米）。素材 span 高（2807px）映射到该值 */
@@ -105,6 +157,22 @@ export interface SkeletonConfig {
    *   ★ 代价：脚变长会让"迈步"更容易踢到自己的另一只脚（本骨架关掉了自碰撞，所以只是视觉问题）。
    */
   soleFootScale: number;
+  /**
+   * ★★ 膝盖以下向内偏航（度，默认 15）。只作用于两根小腿的**静姿态**：
+   * 素材的靴子是外八字（靴底边斜 −17°/+19°，靴头指向身体外侧），照搬就是"脚尖朝外"。
+   * 左脚 +15°、右脚 −15°（左右反向），绕各自膝锚点发生 ⇒ 小腿是"绕膝内收"。
+   * 0 = 保持素材原样（外八字）；负值 = 更大内八。
+   */
+  footInwardDeg: number;
+  /**
+   * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米，默认 0 = 膝到脚尖铅垂）。
+   *
+   * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
+   * 实测：素材整条腿外撇 —— 髋 x=615 → 膝 x=517（骨骼修正后）→ 画出来的靴心 x=440，
+   * 照搬靴心就等于"脚尖朝外侧"。所以脚掌盒的横向**按膝锚点摆**、宽度按实测靴宽，
+   * **纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。正值 = 再往中线收。
+   */
+  footInwardCm: number;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -120,6 +188,18 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
   soleFootScale: 1.0,
+  // ★★ 膝盖以下绕竖直轴的偏航（度）。默认 **0**：脚掌长轴已经沿世界 X（正前方），
+  //   一旦偏航，脚尖反而变成"内八/外八"（用户回读："现在还是内八"）。留作调姿旋钮。
+  footInwardDeg: 0,
+  /**
+   * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米）。默认 0 = 膝到脚尖垂直。
+   *
+   * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
+   * 实测：素材整条腿是外撇的 —— 髋 x=615 → 膝 x=542 → 小腿骨轴到脚底 x=476，
+   * 画出来的靴心更外（x=440），即**素材腿从髋到脚外移 139px ≈ 89mm**。
+   * 这个数只挪**脚掌碰撞盒**（骨骼），**纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。
+   */
+  footInwardCm: 0,
 };
 
 // ---------------------------------------------------------------- 环节规格
@@ -168,6 +248,37 @@ export const JOINT_ORDER: readonly string[] = [
   'hip_l', 'hip_r',
   'knee_l', 'knee_r',
 ];
+
+/**
+ * ★★ 关节锚点 = `limbAxes.json` 的实测值（`tools/measure-limb-axes.py` 从 alpha 掩膜测）。
+ *
+ * 演进过程（三次返工，每次都有实测依据）：
+ *   ① `build-parts.py::joint_anchor()` = 父/子 bbox **重叠区中心**。
+ *      对细交叉的铰链（颈 219px / 肘 178px / 膝 143px）成立；
+ *      对深重叠的球窝关节错得离谱：肩的重叠区 = **整条上臂**（595px）⇒ 中心落在上臂中点，
+ *      肩锚点只有 1.267 m（肩峰解剖值 1.46 m）⇒ 显矮 + 上臂贴图上部 0.14 m 无锚点（"悬空"）。
+ *   ② 临时改成"取子部件 bbox 上缘" ⇒ 肩/髋高度回到解剖分数，
+ *      但**右肩 78.7% 出界**：源图左右本就不等高（左臂顶 y=625 / 右臂顶 y=693，差 68px）。
+ *   ③ 现在：逐行取 alpha 覆盖中点、按行宽加权最小二乘拟合**中轴**，
+ *      锚点按优先级取"父子 alpha 都覆盖且余量够"的点 ——
+ *      肘/膝取两中轴求交（真实铰链位置），肩/髋取父子 alpha 重叠区的**首次接触点**
+ *      （解剖上肩/髋就是上/下肢与躯干最初相接处），并对肩/髋要求 **25px 内缩**
+ *      （大摆角球窝关节，锚点贴边必露缝）；源图右臂顶只与躯干重叠 1~2px，
+ *      沿轴内扫永远落在躯干外，所以必须二维搜索。
+ *
+ * 硬保证（用户："最起码各个肢体的关节必须连起来"）：9 个锚点全部落在父/子两张贴图的
+ * alpha **内部**（margin ≥ 6px，肩/髋 ≥ 25px），verify-core 钉死这一条。
+ * 颈沿用重叠区中心（头是球形，重叠中心已对，余量 99px）。
+ */
+const ANCHOR_MARGIN: Readonly<Record<string, number>> = {
+  shoulder_l: 25, shoulder_r: 25, hip_l: 25, hip_r: 25,
+};
+
+/** 关节锚点（画布 px）：优先实测值，缺则回退 parts.json */
+function anchorPx(name: string, jm: JointMeta): [number, number] {
+  const a = LIMB_AXES.anchors[name];
+  return a ? [a[0], a[1]] : [jm.x, jm.y];
+}
 
 /**
  * ★ 网络输出的三轴口径（每关节 3 个数，共 27）。
@@ -246,6 +357,12 @@ export interface ColliderDef {
   hz: number;
   /** 相对刚体几何中心的偏移（本地，米） */
   offsetY: number;
+  /**
+   * ★ 侧向偏移（本地米，+Z）。脚掌要加这个：纹理里画出来的靴子相对小腿中轴是**偏**的
+   * （左靴心 x=440px / 右靴心 x=1096px，而小腿中轴在 ~460/~1075px），
+   * 盒心挂在中轴上就会偏出靴子外 —— 用户回读："脚部和纹理不太匹配"。
+   */
+  offsetZ: number;
   /** 本 collider 的质量（kg） */
   mass: number;
   /** 本 collider 的质心（相对它自己原点，本地米） */
@@ -265,6 +382,35 @@ export interface BodyDef {
   cx: number;
   cy: number;
   cz: number;
+  /**
+   * ★★ 静倾角（绕世界 X 轴，弧度）：刚体局部 +Y 对齐到**贴图实测中轴的近端方向**。
+   *
+   * 为什么必须有（用户回读 2026-10-01："各个部位都是有一定倾斜度的"）：
+   *   实测倾角：上臂 7.3°/2.8°、前臂+手 30.6°/32.2°、大腿 8.0°、小腿 9.2°/7.7°。
+   *   刚体原来一律是**竖直胶囊**、贴图板贴在刚体中心且不旋转 ⇒ 渲染时斜肢体被画成正的，
+   *   于是前臂/手掌歪 30°、上臂歪 7°，上下臂在肘部错开、接不上。
+   *   有了静倾角：刚体朝向 = 静倾角 ⊗ 动力学旋转，胶囊沿实测中轴躺平，
+   *   贴图板随刚体一起倾斜 ⇒ **初始姿态就是素材画的那张姿势**。
+   *   躯干/头不设（实测倾角 <1°，且脊柱 LBS 蒙皮假设躯干不倾斜）。
+   */
+  restTiltRad: number;
+  /**
+   * ★★ 绕竖直轴（世界 Y）的静偏航（弧度）—— 只给两根小腿。
+   *
+   * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
+   * 素材里两只靴子是**外八字**画的（靴底边在画布上斜 −17°/+19°，靴头朝身体外侧），
+   * 照搬就是"脚尖朝外"，走路/战斗都是错的站姿。
+   * ⇒ 膝盖以下的骨骼整体绕竖直轴向内偏航（左右反向），把脚尖转向正前方。
+   * 偏航绕**膝锚点**发生（局部锚点随刚体一起算），所以小腿是"绕膝内收"，不是整体平移。
+   * 上臂/前臂/大腿不偏航（手肘的展开是动作，不是静态站姿问题）。
+   */
+  restYawRad: number;
+  /**
+   * ★ 贴图板中心相对刚体中心的**局部**偏移（米，刚体局部系）。
+   * 肢体刚体中心现在落在中轴中点上，而贴图中心是 bbox 中心（斜肢体的 bbox 中心偏离中轴），
+   * 所以要把这段偏移存下来，渲染时 `mesh.position = bodyPos + q·plateOffset`。
+   */
+  plateOffset: Vec3;
   /** 长轴长度（米） */
   length: number;
   /** 主胶囊半径（米） */
@@ -382,6 +528,37 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   const soleHalfThick = (META.sole.thick * px2m) / 2;
 
   // ---- 刚体 ----
+  /**
+   * ★ 肢体刚体的静倾角（绕世界 X，弧度）。
+   *   画布里肢体的中轴是 x = k·y + b（y 向下），画布 +x 映射到世界 −Z（见 mapZ 的负号），
+   *   所以"沿中轴指向近端"的世界方向 ∝ (0, +1, +k·stance)，
+   *   而绕 X 转 φ 把局部 +Y 映到 (0, cos φ, sin φ) ⇒ φ = atan(k·stance)。
+   *   腿要跟 stance 一起缩（stance<1 时两腿并拢 ⇒ 倾角同步变小），上肢不缩。
+   *   躯干/头不设静倾角：实测 <1°，且脊柱段要保持同一朝向才能做 LBS 蒙皮。
+   */
+  const TILTED = new Set(['arm_l', 'arm_r', 'hand_l', 'hand_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r']);
+  const restTiltOf = (key: string, leg: boolean): number => {
+    if (!TILTED.has(key)) return 0;
+    // ★ 小腿骨**不跟随素材的外撇**：用户要求"从膝关节到脚尖"走直线，
+    //   素材小腿骨轴外撇 5.9°/4.9°，照搬就是"脚尖朝外侧"。
+    //   注意这**不影响纹理** —— 倾角在渲染端被完全补偿掉（restVisualQuatOf），
+    //   所以这里改的纯粹是骨骼：膝以下垂直向下。
+    if (key === 'shin_l' || key === 'shin_r') return 0;
+    const ax = LIMB_AXES.axes[key];
+    if (!ax) return 0;
+    return Math.atan(ax.k * (leg ? cfg.stance : 1));
+  };
+  /**
+   * ★ 膝盖以下向内偏航（左右反向）。
+   *   mapZ 取负 ⇒ 画布 x 小的左脚在世界 +Z、右脚在 −Z。
+   *   绕 +Y 转 ψ 把 +Z 转向 +X，所以**左脚取 +ψ、右脚取 −ψ**才能都把脚尖转向正前方。
+   */
+  const restYawOf = (key: string): number => {
+    if (key !== 'shin_l' && key !== 'shin_r') return 0;
+    const s = cfg.footInwardDeg * DEG;
+    return key === 'shin_l' ? s : -s;
+  };
+
   const bodies: BodyDef[] = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -390,7 +567,30 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     const { length, radius, halfHeight } = capsuleFromBox(
       part.bw * px2m, part.bh * px2m, cfg.limbRadiusScale,
     );
-    const cy = mapY(part.cy);
+
+    // ★ 肢体刚体中心 = **实测中轴的中点**（不是 bbox 中心）：
+    //   锥形肢体的 bbox 中心偏离中轴（上下宽度不等），胶囊躺上去就会偏。
+    const ax = LIMB_AXES.axes[spec.key];
+    const tilt = restTiltOf(spec.key, !!spec.leg);
+    const yaw = restYawOf(spec.key);
+    // 物理静姿态 = 倾角 + 偏航（骨骼真的这么摆）
+    const qRestInv = invQuatOf(restQuatOf(tilt, yaw));
+    // 视觉补偿 = 只有倾角（偏航是主动纠正的站姿，贴图要跟着转）
+    const qVisInv = invQuatOf(restVisualQuatOf(tilt));
+    let centerY = mapY(part.cy);
+    let centerZ = mapZ(part.cx, !!spec.leg);
+    if (ax && TILTED.has(spec.key)) {
+      const midY = (ax.proxTip[1] + ax.distTip[1]) / 2;
+      const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
+      centerY = mapY(midY);
+      centerZ = mapZ(midX, !!spec.leg);
+    }
+    // 贴图板中心（bbox 中心）在"视觉静姿态"局部系里的偏移
+    const plateOffset = rotVecByQuat(
+      qVisInv,
+      [0, mapY(part.cy) - centerY, mapZ(part.cx, !!spec.leg) - centerZ],
+    );
+    const cy = centerY;
 
     const totalMass = (spec.massPct / 100) * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
@@ -405,26 +605,45 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       shape: 'capsule',
       halfHeight, radius,
       hx: 0, hy: 0, hz: 0,
-      offsetY: 0,
+      offsetY: 0, offsetZ: 0,
       mass: mainMass,
       comY: mainCom,
       inertiaZ: mainIz,
       inertiaXY: mainIz * 0.5,
     });
 
-    // ★ 脚掌：同一个刚体上的第二个 collider，底面与胶囊底端齐平。
-    //   soleFootScale 只缩放水平足迹（见 SkeletonConfig.soleFootScale）。
+    // ★★ 脚掌：同一刚体上的第二个 collider，**按纹理实测的靴子摆**（用户回读 2026-10-01：
+    //   "脚部和纹理不太匹配"）。原来这里是三个各猜各的：
+    //     · 盒心挂在小腿胶囊正中         → 但画出来的靴子相对小腿中轴是偏的（偏 20~30px）
+    //     · 侧向半宽 = capsuleRadius·0.9  → 而靴子实测侧向半宽 165/153px，比它宽 60%
+    //     · 盒底 = 胶囊底端               → 胶囊底端在小腿 bbox 底，靴底比它高 7px
+    //   现在（`limbAxes.paw`，measure-limb-axes.py 实测）：
+    //     · 盒心侧向 = 靴心 x（吃 stance，与整条腿一致）
+    //     · 盒心竖向 = 盒底贴地（世界 Y = hy），不再用"胶囊底端"倒推
+    //     · 侧向半宽 = 实测 lateralHalf × soleFootScale
+    //   前后长度（hx）仍是手填设计参数：正面视图**测不出**脚的前后长度（见 soleFootScale 注释）。
     if (solePct > 0) {
       const soleMass = (solePct / 100) * cfg.mass;
-      const offsetY = -length / 2 + soleHalfThick; // 相对刚体几何中心
       const sfx = Math.max(0.1, cfg.soleFootScale);
+      const side = spec.key === 'shin_l' ? 'l' : 'r';
+      const paw = LIMB_AXES.paw?.[side];
+      const knee = LIMB_AXES.anchors?.[spec.key === 'shin_l' ? 'knee_l' : 'knee_r'];
       const hx = soleHalfLen * sfx;
-      const hz = radius * 0.9 * sfx;
+      // 侧向半宽用**实测靴宽**（前后长度 hx 仍是手填设计参数：正面视图测不出脚长）
+      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      // ★ 盒心横向 = **膝锚点正下方**（可再内收 footInwardCm），不是画出来的靴心：
+      //   素材靴心比膝锚点外偏 102px ≈ 65mm，那正是"外八"；盒心挂靴心 ⇒ 膝到脚尖朝外。
+      //   盒宽仍取实测靴宽，所以盒子会从靴子内侧探出去一点 —— 这是"骨骼正确、纹理不动"
+      //   的必然代价（线框视图可见），已在文档里记明。
+      const soleWorldY = soleHalfThick;
+      const inward = (cfg.footInwardCm / 100) * (spec.key === 'shin_l' ? 1 : -1);
+      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true) - inward;
+      const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);  // collider 用物理静姿态
       colliders.push({
         shape: 'cuboid',
         halfHeight: 0, radius: 0,
         hx, hy: soleHalfThick, hz,
-        offsetY,
+        offsetY: local[1], offsetZ: local[2],
         mass: soleMass,
         comY: 0, // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
         inertiaZ: (soleMass * (hx * hx + soleHalfThick * soleHalfThick)) / 3,
@@ -451,6 +670,9 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           cx: 0,
           cy: cyS,
           cz: mapZ(part.cx, false),
+          restTiltRad: 0,          // 躯干不设静倾角（脊柱段要同朝向才能 LBS）
+          restYawRad: 0,
+          plateOffset: [0, 0, 0],  // 蒙皮板由 viewer 逐段插值，不用刚体中心
           length: segLen,
           radius,
           halfHeight: segLen / 2,
@@ -459,7 +681,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             shape: 'cuboid',
             halfHeight: 0, radius: 0,
             hx, hy: segLen / 2, hz,
-            offsetY: 0,
+            offsetY: 0, offsetZ: 0,
             mass: segMass,
             comY: 0,
             inertiaZ: iZ,
@@ -478,8 +700,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       label: spec.label,
       part,
       cx: 0, // ★ 素材是正面视图，没有深度信息 ⇒ 前向一律 0
-      cy: mapY(part.cy),
-      cz: mapZ(part.cx, !!spec.leg),
+      cy: centerY,
+      cz: centerZ,
+      restTiltRad: tilt,
+      restYawRad: yaw,
+      plateOffset,
       length,
       radius,
       halfHeight,
@@ -497,20 +722,34 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json 缺少关节 ${name}`);
-    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
+    const childPart = PART_BY_KEY.get(jm.child);
+    if (!childPart) throw new Error(`[skeleton] 关节 ${name} 的子部件元数据不存在`);
+
+    // ★★ 锚点 = limbAxes.json 的实测值（见 ANCHOR_MARGIN 上方的说明）：
+    //   源图的肢体是**斜的**，bbox 重叠区中心对深重叠关节（肩/髋）是错的；
+    //   实测锚点保证落在父/子两张贴图 alpha 内部 ⇒ 关节连得上。
+    const [axPx, ayPx] = anchorPx(name, jm);
+    const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] 关节 ${name} 的刚体不存在`);
 
     // ★ 锚点收窄必须与子环节一致：否则髋/膝锚点会飘到收窄后的刚体之外
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(jm.y);
-    const wz = mapZ(jm.x, stanceHere);
+    const wy = mapY(ayPx);
+    const wz = mapZ(axPx, stanceHere);
 
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
     const tau = JOINT_MAX_TORQUE[name] ?? 100;
+
+    // ★ 局部锚点 = 把世界偏移转到该刚体的局部系（要扣掉它的静倾角，
+    //   否则带倾角的肢体上，Rapier 会在错误的点上建铰链 ⇒ 一 reset 就错位）。
+    const dParent = rotVecByQuat(invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [wx - parent.cx, wy - parent.cy, wz - parent.cz]);
+    const dChild = rotVecByQuat(invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [wx - child.cx, wy - child.cy, wz - child.cz]);
 
     joints.push({
       name,
@@ -518,8 +757,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       parentKey: parent.key,
       childKey: child.key,
       wx, wy, wz,
-      parentLocal: [wx - parent.cx, wy - parent.cy, wz - parent.cz],
-      childLocal: [wx - child.cx, wy - child.cy, wz - child.cz],
+      parentLocal: dParent,
+      childLocal: dChild,
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]],

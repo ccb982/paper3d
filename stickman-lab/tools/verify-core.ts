@@ -114,9 +114,52 @@ check('骨盆（torso = 树根）初始高度在 0.7~1.0 m', prevY > 0.7 && prev
   check('胸腔严格高于骨盆（脊柱是向上堆叠的）', chestY > prevY + 0.1, `${chestY.toFixed(3)} vs ${prevY.toFixed(3)} m`);
   check('胸腔顶面不超出身高（没有把贴图拉伸到身外）', topY <= sk.totalHeight + 1e-6, `${topY.toFixed(3)} ≤ ${sk.totalHeight.toFixed(3)} m`);
 }
+// ★★★ 关节高度 / 身高 必须落在解剖区间（2026-10-01 加）
+//   这条断言是为了钉住一类**静默**错误：`build-parts.py` 用"父/子 bbox 重叠区中心"当锚点，
+//   对深重叠的球窝关节（肩/髋）会偏低 —— 肩锚点因此落在**上臂中点**，
+//   表现为"骨架显矮 + 手臂上部悬空"，而**所有其它断言全绿**（质量/身高/胸腔比例都不受影响）。
+//   判据用人体测量学的**分数**（不写死米数，改身高也不会失效）：
+//   颈(C7) 0.80~0.84 / 肩峰 0.79~0.83 / 肘 0.60~0.65 / 髋 0.45~0.52 / 膝 0.25~0.29。
+{
+  const H = sk.totalHeight;
+  const bands: [string, string, number, number][] = [
+    ['neck', '颈 C7', 0.80, 0.84],
+    ['shoulder_l', '肩峰', 0.79, 0.83],
+    ['shoulder_r', '肩峰(右)', 0.79, 0.83],
+    ['elbow_l', '肘', 0.60, 0.65],
+    ['hip_l', '髋', 0.45, 0.52],
+    ['knee_l', '膝', 0.25, 0.29],
+  ];
+  log('  关节高度分数（锚点 y / 身高）：');
+  for (const [jn, label, lo, hi] of bands) {
+    const j = sk.joints.find((x) => x.name === jn)!;
+    const r = j.wy / H;
+    log(`    ${label.padEnd(10)} ${j.wy.toFixed(3)} m = ${(r * 100).toFixed(1)}%   区间 ${(lo * 100).toFixed(0)}~${(hi * 100).toFixed(0)}%`);
+    check(`关节高度比例：${label}`, r >= lo && r <= hi, `${(r * 100).toFixed(1)}%`);
+  }
+  // 上臂物理长度 = 肩→肘；贴图上臂高 0.381 m，锚点必须在**上端**（否则贴片上部无锚点 = "悬空"）
+  const sh = sk.joints.find((x) => x.name === 'shoulder_l')!;
+  const el = sk.joints.find((x) => x.name === 'elbow_l')!;
+  const armPart = sk.bodies.find((b) => b.key === 'arm_l')!;
+  const upperArm = sh.wy - el.wy;
+  const armTop = armPart.cy + armPart.length / 2;
+  log(`  上臂：肩 ${sh.wy.toFixed(3)} → 肘 ${el.wy.toFixed(3)} = ${upperArm.toFixed(3)} m`
+    + `   贴片上缘 ${armTop.toFixed(3)} m   肩锚点高出贴片上缘 ${(sh.wy - armTop).toFixed(3)} m`);
+  check('★ 上臂长度落在解剖区间 0.28~0.36 m（肩锚点必须在上臂上端，不能落在中点）',
+    upperArm > 0.28 && upperArm < 0.36, `${upperArm.toFixed(3)} m`);
+  check('★ 肩锚点不低于上臂贴片上缘（否则上臂顶部无锚点 = "悬空"）',
+    sh.wy >= armTop - 1e-6, `肩 ${sh.wy.toFixed(3)} vs 贴片上缘 ${armTop.toFixed(3)}`);
+  // 大腿同理：髋锚点必须在大腿上端
+  const hip = sk.joints.find((x) => x.name === 'hip_l')!;
+  const knee = sk.joints.find((x) => x.name === 'knee_l')!;
+  const thigh = sk.bodies.find((b) => b.key === 'thigh_l')!;
+  log(`  大腿：髋 ${hip.wy.toFixed(3)} → 膝 ${knee.wy.toFixed(3)} = ${(hip.wy - knee.wy).toFixed(3)} m`
+    + `   贴片上缘 ${(thigh.cy + thigh.length / 2).toFixed(3)} m`);
+  check('★ 大腿长度落在解剖区间 0.38~0.48 m',
+    hip.wy - knee.wy > 0.38 && hip.wy - knee.wy < 0.48, `${(hip.wy - knee.wy).toFixed(3)} m`);
+}
 check('★ 前向一律 0（素材是正面视图，没有深度信息）',
-  sk.bodies.every((b) => b.cx === 0));
-check('★ 左右肢体分开在 Z 上（不是 X 上）—— 大腿中心间距 ≈ 0.20 m',
+  sk.bodies.every((b) => b.cx === 0));check('★ 左右肢体分开在 Z 上（不是 X 上）—— 大腿中心间距 ≈ 0.20 m',
   Math.abs(sk.bodies.find((b) => b.key === 'thigh_l')!.cz - sk.bodies.find((b) => b.key === 'thigh_r')!.cz) > 0.15,
   `thigh_l.z=${sk.bodies.find((b) => b.key === 'thigh_l')!.cz.toFixed(3)}  ` +
   `thigh_r.z=${sk.bodies.find((b) => b.key === 'thigh_r')!.cz.toFixed(3)}`);

@@ -6014,16 +6014,253 @@ var init_parts = __esm({
   }
 });
 
+// src/data/limbAxes.json
+var limbAxes_default;
+var init_limbAxes = __esm({
+  "src/data/limbAxes.json"() {
+    limbAxes_default = {
+      _comment: "\u80A2\u4F53\u4E2D\u8F74 + \u5173\u8282\u951A\u70B9 + \u722A\u533A\u5B9E\u6D4B\uFF08\u753B\u5E03 px\uFF0C\u6E90\u56FE\u5750\u6807\uFF09\u3002tools/measure-limb-axes.py \u751F\u6210\u3002\u951A\u70B9\u5DF2\u4FDD\u8BC1\u843D\u5728\u7236/\u5B50\u8D34\u56FE alpha \u5185\u90E8\uFF08margin \u5B57\u6BB5\uFF09\u21D2 \u5173\u8282\u8FDE\u5F97\u4E0A\uFF1Bskeleton.ts \u6D88\u8D39 anchors/paw\uFF1Bverify-core \u9489\u4F4F margin \u2265 0\u3002",
+      source: "C:\\Users\\22641\\Desktop\\\u6E38\u620F\u7D20\u6750\\ui\u9875\u9762\\\u6D77\u732B_\u62A0\u56FE",
+      scale: 0.5,
+      axes: {
+        arm_l: {
+          k: -0.08841,
+          b: 514.68,
+          rms: 11.14,
+          tiltDeg: -5.05,
+          proxTip: [
+            456.4,
+            659.5
+          ],
+          distTip: [
+            408.6,
+            1199.5
+          ],
+          lenPx: 540
+        },
+        arm_r: {
+          k: 0.08841,
+          b: 1050.32,
+          rms: 6.92,
+          tiltDeg: 5.05,
+          proxTip: [
+            1108.6,
+            659.5
+          ],
+          distTip: [
+            1156.4,
+            1199.5
+          ],
+          lenPx: 540
+        },
+        hand_l: {
+          k: -0.6101,
+          b: 1092.87,
+          rms: 23.92,
+          tiltDeg: -31.39,
+          proxTip: [
+            444,
+            1063.5
+          ],
+          distTip: [
+            56.9,
+            1698
+          ],
+          lenPx: 634.5
+        },
+        hand_r: {
+          k: 0.6101,
+          b: 472.13,
+          rms: 22.92,
+          tiltDeg: 31.39,
+          proxTip: [
+            1121,
+            1063.5
+          ],
+          distTip: [
+            1508.1,
+            1698
+          ],
+          lenPx: 634.5
+        },
+        thigh_l: {
+          k: -0.14033,
+          b: 862.06,
+          rms: 4.7,
+          tiltDeg: -7.99,
+          proxTip: [
+            644.6,
+            1549.5
+          ],
+          distTip: [
+            549.3,
+            2228.5
+          ],
+          lenPx: 679
+        },
+        thigh_r: {
+          k: 0.14033,
+          b: 702.94,
+          rms: 11.02,
+          tiltDeg: 7.99,
+          proxTip: [
+            920.4,
+            1549.5
+          ],
+          distTip: [
+            1015.7,
+            2228.5
+          ],
+          lenPx: 679
+        },
+        shin_l: {
+          k: -0,
+          b: 527.55,
+          rms: 10.03,
+          tiltDeg: -0,
+          proxTip: [
+            527.5,
+            2051.5
+          ],
+          distTip: [
+            527.5,
+            2792
+          ],
+          lenPx: 740.5
+        },
+        shin_r: {
+          k: 0,
+          b: 1037.45,
+          rms: 9.04,
+          tiltDeg: 0,
+          proxTip: [
+            1037.5,
+            2051.5
+          ],
+          distTip: [
+            1037.5,
+            2792
+          ],
+          lenPx: 740.5
+        },
+        torso: {
+          k: -0.01378,
+          b: 788.21,
+          rms: 6.89,
+          tiltDeg: -0.79,
+          proxTip: [
+            805.3,
+            513
+          ],
+          distTip: [
+            876.2,
+            1766
+          ],
+          lenPx: 1253
+        },
+        head: {
+          k: -0.01095,
+          b: 791.13,
+          rms: 4.46,
+          tiltDeg: -0.63,
+          proxTip: [
+            796,
+            92
+          ],
+          distTip: [
+            775,
+            731
+          ],
+          lenPx: 639
+        }
+      },
+      anchors: {
+        neck: [
+          792,
+          622.5
+        ],
+        shoulder_l: [
+          479,
+          703.5
+        ],
+        shoulder_r: [
+          1086,
+          703.5
+        ],
+        elbow_l: [
+          416.7,
+          1108.3
+        ],
+        elbow_r: [
+          1148.3,
+          1108.3
+        ],
+        hip_l: [
+          587.5,
+          1574.5
+        ],
+        hip_r: [
+          977.5,
+          1574.5
+        ],
+        knee_l: [
+          527.5,
+          2222
+        ],
+        knee_r: [
+          1037.5,
+          2222
+        ]
+      },
+      margin: {
+        neck: 99,
+        shoulder_l: 25,
+        shoulder_r: 25,
+        elbow_l: 33,
+        elbow_r: 19,
+        hip_l: 25,
+        hip_r: 25,
+        knee_l: 4,
+        knee_r: 4
+      },
+      paw: {
+        l: {
+          yWide: 2792,
+          yLow: 2895,
+          centerX: 454.5,
+          drawnAxisXAtSole: 488.4,
+          shaftTiltDeg: -5.51,
+          lateralHalf: 159,
+          pawHeightPx: 103,
+          slopeDeg: -0.82
+        },
+        r: {
+          yWide: 2792,
+          yLow: 2895,
+          centerX: 1110.5,
+          drawnAxisXAtSole: 1076.6,
+          shaftTiltDeg: 4.86,
+          lateralHalf: 159,
+          pawHeightPx: 103,
+          slopeDeg: 0.82
+        }
+      }
+    };
+  }
+});
+
 // src/core/partsMeta.ts
-var META, PART_BY_KEY;
+var META, PART_BY_KEY, LIMB_AXES;
 var init_partsMeta = __esm({
   "src/core/partsMeta.ts"() {
     "use strict";
     init_parts();
+    init_limbAxes();
     META = parts_default;
     PART_BY_KEY = new Map(
       META.parts.map((p) => [p.key, p])
     );
+    LIMB_AXES = limbAxes_default;
   }
 });
 
@@ -6040,8 +6277,43 @@ __export(skeleton_exports, {
   assertColliderMass: () => assertColliderMass,
   assertJointAnchors: () => assertJointAnchors,
   assertMassBudget: () => assertMassBudget,
-  buildSkeleton: () => buildSkeleton
+  buildSkeleton: () => buildSkeleton,
+  invQuatOf: () => invQuatOf,
+  restQuatOf: () => restQuatOf,
+  restVisualQuatOf: () => restVisualQuatOf,
+  rotVecByQuat: () => rotVecByQuat
 });
+function restQuatOf(tiltRad, yawRad) {
+  const ht = tiltRad / 2, hy = yawRad / 2;
+  return [
+    Math.sin(ht) * Math.cos(hy),
+    Math.sin(hy) * Math.cos(ht),
+    -Math.cos(hy) * Math.sin(ht),
+    Math.cos(hy) * Math.cos(ht)
+  ];
+}
+function restVisualQuatOf(tiltRad) {
+  return restQuatOf(tiltRad, 0);
+}
+function invQuatOf(q) {
+  return [-q[0], -q[1], -q[2], q[3]];
+}
+function rotVecByQuat(q, v2) {
+  const [qx, qy, qz, qw] = q;
+  const [vx, vy, vz] = v2;
+  const tx = 2 * (qy * vz - qz * vy);
+  const ty = 2 * (qz * vx - qx * vz);
+  const tz = 2 * (qx * vy - qy * vx);
+  return [
+    vx + qw * tx + (qy * tz - qz * ty),
+    vy + qw * ty + (qz * tx - qx * tz),
+    vz + qw * tz + (qx * ty - qy * tx)
+  ];
+}
+function anchorPx(name, jm) {
+  const a = LIMB_AXES.anchors[name];
+  return a ? [a[0], a[1]] : [jm.x, jm.y];
+}
 function capsuleFromBox(w, h2, radiusScale) {
   const length = Math.max(w, h2);
   const radius = Math.min(Math.min(w, h2) / 2 * radiusScale, length / 2 * 0.92);
@@ -6078,6 +6350,19 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
+  const restTiltOf = (key, leg) => {
+    if (!TILTED.has(key)) return 0;
+    if (key === "shin_l" || key === "shin_r") return 0;
+    const ax = LIMB_AXES.axes[key];
+    if (!ax) return 0;
+    return Math.atan(ax.k * (leg ? cfg.stance : 1));
+  };
+  const restYawOf = (key) => {
+    if (key !== "shin_l" && key !== "shin_r") return 0;
+    const s = cfg.footInwardDeg * DEG;
+    return key === "shin_l" ? s : -s;
+  };
   const bodies = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -6087,7 +6372,24 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       part.bh * px2m,
       cfg.limbRadiusScale
     );
-    const cy = mapY(part.cy);
+    const ax = LIMB_AXES.axes[spec.key];
+    const tilt = restTiltOf(spec.key, !!spec.leg);
+    const yaw = restYawOf(spec.key);
+    const qRestInv = invQuatOf(restQuatOf(tilt, yaw));
+    const qVisInv = invQuatOf(restVisualQuatOf(tilt));
+    let centerY = mapY(part.cy);
+    let centerZ = mapZ(part.cx, !!spec.leg);
+    if (ax && TILTED.has(spec.key)) {
+      const midY = (ax.proxTip[1] + ax.distTip[1]) / 2;
+      const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
+      centerY = mapY(midY);
+      centerZ = mapZ(midX, !!spec.leg);
+    }
+    const plateOffset = rotVecByQuat(
+      qVisInv,
+      [0, mapY(part.cy) - centerY, mapZ(part.cx, !!spec.leg) - centerZ]
+    );
+    const cy = centerY;
     const totalMass = spec.massPct / 100 * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
     const mainMass = totalMass - solePct / 100 * cfg.mass;
@@ -6102,6 +6404,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       hy: 0,
       hz: 0,
       offsetY: 0,
+      offsetZ: 0,
       mass: mainMass,
       comY: mainCom,
       inertiaZ: mainIz,
@@ -6109,10 +6412,16 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     });
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
-      const offsetY = -length / 2 + soleHalfThick;
       const sfx = Math.max(0.1, cfg.soleFootScale);
+      const side = spec.key === "shin_l" ? "l" : "r";
+      const paw = LIMB_AXES.paw?.[side];
+      const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
       const hx = soleHalfLen * sfx;
-      const hz = radius * 0.9 * sfx;
+      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const soleWorldY = soleHalfThick;
+      const inward = cfg.footInwardCm / 100 * (spec.key === "shin_l" ? 1 : -1);
+      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true) - inward;
+      const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: "cuboid",
         halfHeight: 0,
@@ -6120,7 +6429,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         hx,
         hy: soleHalfThick,
         hz,
-        offsetY,
+        offsetY: local[1],
+        offsetZ: local[2],
         mass: soleMass,
         comY: 0,
         // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
@@ -6144,6 +6454,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           cx: 0,
           cy: cyS,
           cz: mapZ(part.cx, false),
+          restTiltRad: 0,
+          // 躯干不设静倾角（脊柱段要同朝向才能 LBS）
+          restYawRad: 0,
+          plateOffset: [0, 0, 0],
+          // 蒙皮板由 viewer 逐段插值，不用刚体中心
           length: segLen,
           radius,
           halfHeight: segLen / 2,
@@ -6156,6 +6471,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             hy: segLen / 2,
             hz,
             offsetY: 0,
+            offsetZ: 0,
             mass: segMass,
             comY: 0,
             inertiaZ: iZ,
@@ -6174,8 +6490,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       part,
       cx: 0,
       // ★ 素材是正面视图，没有深度信息 ⇒ 前向一律 0
-      cy: mapY(part.cy),
-      cz: mapZ(part.cx, !!spec.leg),
+      cy: centerY,
+      cz: centerZ,
+      restTiltRad: tilt,
+      restYawRad: yaw,
+      plateOffset,
       length,
       radius,
       halfHeight,
@@ -6191,17 +6510,28 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
+    const childPart = PART_BY_KEY.get(jm.child);
+    if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
+    const [axPx, ayPx] = anchorPx(name, jm);
+    const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(jm.y);
-    const wz = mapZ(jm.x, stanceHere);
+    const wy = mapY(ayPx);
+    const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
     const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [wx - parent.cx, wy - parent.cy, wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [wx - child.cx, wy - child.cy, wz - child.cz]
+    );
     joints.push({
       name,
       index,
@@ -6210,8 +6540,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       wx,
       wy,
       wz,
-      parentLocal: [wx - parent.cx, wy - parent.cy, wz - parent.cz],
-      childLocal: [wx - child.cx, wy - child.cy, wz - child.cz],
+      parentLocal: dParent,
+      childLocal: dChild,
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
@@ -6306,7 +6636,19 @@ var init_skeleton = __esm({
       // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
       // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
       spineSegments: 4,
-      soleFootScale: 1
+      soleFootScale: 1,
+      // ★★ 膝盖以下绕竖直轴的偏航（度）。默认 **0**：脚掌长轴已经沿世界 X（正前方），
+      //   一旦偏航，脚尖反而变成"内八/外八"（用户回读："现在还是内八"）。留作调姿旋钮。
+      footInwardDeg: 0,
+      /**
+       * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米）。默认 0 = 膝到脚尖垂直。
+       *
+       * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
+       * 实测：素材整条腿是外撇的 —— 髋 x=615 → 膝 x=542 → 小腿骨轴到脚底 x=476，
+       * 画出来的靴心更外（x=440），即**素材腿从髋到脚外移 139px ≈ 89mm**。
+       * 这个数只挪**脚掌碰撞盒**（骨骼），**纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。
+       */
+      footInwardCm: 0
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -13205,6 +13547,8 @@ var init_ragdoll = __esm({
       initX;
       initY;
       initZ;
+      /** 各刚体的静倾角四元数（reset 用） */
+      restQ;
       // ---- 热路径复用缓冲（零分配） ----
       qRel = new Float64Array(4);
       rv = new Float64Array(3);
@@ -13240,18 +13584,22 @@ var init_ragdoll = __esm({
         this.initX = new Float64Array(sk2.bodies.length);
         this.initY = new Float64Array(sk2.bodies.length);
         this.initZ = new Float64Array(sk2.bodies.length);
+        this.restQ = sk2.bodies.map((b) => {
+          const [x, y, z, w] = restQuatOf(b.restTiltRad, b.restYawRad);
+          return { x, y, z, w };
+        });
         sk2.bodies.forEach((b, i) => {
           this.indexByKey.set(b.key, i);
           this.initX[i] = b.cx;
           this.initY[i] = b.cy;
           this.initZ[i] = b.cz;
           const body = this.world.createRigidBody(
-            rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setLinearDamping(this.opt.linearDamping).setAngularDamping(this.opt.angularDamping).setCanSleep(false)
+            rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(this.opt.angularDamping).setCanSleep(false)
           );
           this.bodies.push(body);
           for (const c of b.colliders) {
             const cd = c.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c.halfHeight, c.radius) : rapier_default.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
-            cd.setTranslation(0, c.offsetY, 0).setMassProperties(
+            cd.setTranslation(0, c.offsetY, c.offsetZ).setMassProperties(
               c.mass,
               { x: 0, y: c.comY, z: 0 },
               { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
@@ -13543,7 +13891,7 @@ var init_ragdoll = __esm({
         for (let i = 0; i < this.bodies.length; i++) {
           const b = this.bodies[i];
           b.setTranslation({ x: this.initX[i] + offsetX, y: this.initY[i], z: this.initZ[i] }, true);
-          b.setRotation(IDENTITY, true);
+          b.setRotation(this.restQ[i], true);
           b.setLinvel(ZERO, true);
           b.setAngvel(ZERO, true);
         }
@@ -14840,6 +15188,49 @@ check("\u9AA8\u76C6\uFF08torso = \u6811\u6839\uFF09\u521D\u59CB\u9AD8\u5EA6\u572
   check("\u80F8\u8154\u6BD4\u4F8B\uFF08\u4E2D\u5FC3/\u8EAB\u9AD8\uFF09\u843D\u5728\u89E3\u5256\u533A\u95F4 70%~85%", ratio > 0.7 && ratio < 0.85, `${(ratio * 100).toFixed(1)}%`);
   check("\u80F8\u8154\u4E25\u683C\u9AD8\u4E8E\u9AA8\u76C6\uFF08\u810A\u67F1\u662F\u5411\u4E0A\u5806\u53E0\u7684\uFF09", chestY > prevY + 0.1, `${chestY.toFixed(3)} vs ${prevY.toFixed(3)} m`);
   check("\u80F8\u8154\u9876\u9762\u4E0D\u8D85\u51FA\u8EAB\u9AD8\uFF08\u6CA1\u6709\u628A\u8D34\u56FE\u62C9\u4F38\u5230\u8EAB\u5916\uFF09", topY <= sk.totalHeight + 1e-6, `${topY.toFixed(3)} \u2264 ${sk.totalHeight.toFixed(3)} m`);
+}
+{
+  const H = sk.totalHeight;
+  const bands = [
+    ["neck", "\u9888 C7", 0.8, 0.84],
+    ["shoulder_l", "\u80A9\u5CF0", 0.79, 0.83],
+    ["shoulder_r", "\u80A9\u5CF0(\u53F3)", 0.79, 0.83],
+    ["elbow_l", "\u8098", 0.6, 0.65],
+    ["hip_l", "\u9ACB", 0.45, 0.52],
+    ["knee_l", "\u819D", 0.25, 0.29]
+  ];
+  log("  \u5173\u8282\u9AD8\u5EA6\u5206\u6570\uFF08\u951A\u70B9 y / \u8EAB\u9AD8\uFF09\uFF1A");
+  for (const [jn, label, lo, hi] of bands) {
+    const j = sk.joints.find((x) => x.name === jn);
+    const r = j.wy / H;
+    log(`    ${label.padEnd(10)} ${j.wy.toFixed(3)} m = ${(r * 100).toFixed(1)}%   \u533A\u95F4 ${(lo * 100).toFixed(0)}~${(hi * 100).toFixed(0)}%`);
+    check(`\u5173\u8282\u9AD8\u5EA6\u6BD4\u4F8B\uFF1A${label}`, r >= lo && r <= hi, `${(r * 100).toFixed(1)}%`);
+  }
+  const sh = sk.joints.find((x) => x.name === "shoulder_l");
+  const el = sk.joints.find((x) => x.name === "elbow_l");
+  const armPart = sk.bodies.find((b) => b.key === "arm_l");
+  const upperArm = sh.wy - el.wy;
+  const armTop = armPart.cy + armPart.length / 2;
+  log(`  \u4E0A\u81C2\uFF1A\u80A9 ${sh.wy.toFixed(3)} \u2192 \u8098 ${el.wy.toFixed(3)} = ${upperArm.toFixed(3)} m   \u8D34\u7247\u4E0A\u7F18 ${armTop.toFixed(3)} m   \u80A9\u951A\u70B9\u9AD8\u51FA\u8D34\u7247\u4E0A\u7F18 ${(sh.wy - armTop).toFixed(3)} m`);
+  check(
+    "\u2605 \u4E0A\u81C2\u957F\u5EA6\u843D\u5728\u89E3\u5256\u533A\u95F4 0.28~0.36 m\uFF08\u80A9\u951A\u70B9\u5FC5\u987B\u5728\u4E0A\u81C2\u4E0A\u7AEF\uFF0C\u4E0D\u80FD\u843D\u5728\u4E2D\u70B9\uFF09",
+    upperArm > 0.28 && upperArm < 0.36,
+    `${upperArm.toFixed(3)} m`
+  );
+  check(
+    '\u2605 \u80A9\u951A\u70B9\u4E0D\u4F4E\u4E8E\u4E0A\u81C2\u8D34\u7247\u4E0A\u7F18\uFF08\u5426\u5219\u4E0A\u81C2\u9876\u90E8\u65E0\u951A\u70B9 = "\u60AC\u7A7A"\uFF09',
+    sh.wy >= armTop - 1e-6,
+    `\u80A9 ${sh.wy.toFixed(3)} vs \u8D34\u7247\u4E0A\u7F18 ${armTop.toFixed(3)}`
+  );
+  const hip = sk.joints.find((x) => x.name === "hip_l");
+  const knee = sk.joints.find((x) => x.name === "knee_l");
+  const thigh = sk.bodies.find((b) => b.key === "thigh_l");
+  log(`  \u5927\u817F\uFF1A\u9ACB ${hip.wy.toFixed(3)} \u2192 \u819D ${knee.wy.toFixed(3)} = ${(hip.wy - knee.wy).toFixed(3)} m   \u8D34\u7247\u4E0A\u7F18 ${(thigh.cy + thigh.length / 2).toFixed(3)} m`);
+  check(
+    "\u2605 \u5927\u817F\u957F\u5EA6\u843D\u5728\u89E3\u5256\u533A\u95F4 0.38~0.48 m",
+    hip.wy - knee.wy > 0.38 && hip.wy - knee.wy < 0.48,
+    `${(hip.wy - knee.wy).toFixed(3)} m`
+  );
 }
 check(
   "\u2605 \u524D\u5411\u4E00\u5F8B 0\uFF08\u7D20\u6750\u662F\u6B63\u9762\u89C6\u56FE\uFF0C\u6CA1\u6709\u6DF1\u5EA6\u4FE1\u606F\uFF09",
