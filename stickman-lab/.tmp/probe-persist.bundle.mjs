@@ -14412,7 +14412,9 @@ var Sim = class {
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+    const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+    const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+    if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
       this.altCount++;
       this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
     }
@@ -14717,6 +14719,32 @@ function phaseGenome(shape2, s2) {
 function phaseGenomeFor(jointCount, s2 = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s2);
 }
+var BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+function balancerGenome(shape2, s2 = BEST_BALANCER) {
+  const p = new Float32Array(brainParamCount(shape2));
+  const L = brainLayout(shape2);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L.w1 + 0 * shape2.inputs + QX] = 1;
+  p[L.w1 + 1 * shape2.inputs + WX] = 1;
+  p[L.w1 + 2 * shape2.inputs + CMX] = 1;
+  p[L.w1 + 3 * shape2.inputs + CVX] = 1;
+  p[L.w1 + 4 * shape2.inputs + 0] = 5;
+  p[L.w1 + 5 * shape2.inputs + 1] = 5;
+  const row = (joint, w, b2) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape2.hidden + i] += w[i];
+    p[L.b2 + o] += b2;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
+    row(j, [sgn * s2.kPitch, sgn * s2.kRate, sgn * s2.kComX, 0, sgn * s2.osc * 0.09, 0], s2.bias);
+  }
+  row("knee_l", [0, 0, 0, 0, -s2.osc * 0.075, s2.osc * 0.027], s2.knee + s2.osc * 0.048);
+  row("knee_r", [0, 0, 0, 0, s2.osc * 0.075, s2.osc * 0.027], s2.knee + s2.osc * 0.048);
+  row("shoulder_l", [0, 0, 0, 0, -s2.osc * 0.045, 0], 0);
+  row("shoulder_r", [0, 0, 0, 0, s2.osc * 0.045, 0], 0);
+  return p;
+}
 
 // src/core/evolution.ts
 var INIT_WEIGHT_SCALE = 1;
@@ -14811,6 +14839,9 @@ var Trainer = class {
     const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
     const gait = [];
     if (this.cfg.seedGait) {
+      gait.push(balancerGenome(this.shape, BEST_BALANCER));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
       for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
         gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
       }

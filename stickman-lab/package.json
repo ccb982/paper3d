@@ -27,7 +27,8 @@
     "trainwalk": "node tools/run.mjs probe-trainwalk",
     "seed": "node tools/run.mjs probe-seed",
     "persist": "node tools/run.mjs probe-persist",
-    "closed": "node tools/run.mjs probe-closed"
+    "closed": "node tools/run.mjs probe-closed",
+    "capture": "node tools/run.mjs probe-capture"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

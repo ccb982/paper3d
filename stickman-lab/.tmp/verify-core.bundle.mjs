@@ -14977,7 +14977,9 @@ var init_sim = __esm({
         const [fl2, fr2] = this.doll.footLoadFrac(dt);
         this.accShift += Math.abs(fl2 - fr2) * dt;
         const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-        if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+        const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+        const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+        if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
           this.altCount++;
           this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
         }
@@ -15336,13 +15338,39 @@ function phaseGenome(shape, s) {
 function phaseGenomeFor(jointCount, s = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s);
 }
-var BEST_PHASE;
+function balancerGenome(shape, s = BEST_BALANCER) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L2 = brainLayout(shape);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L2.w1 + 0 * shape.inputs + QX] = 1;
+  p[L2.w1 + 1 * shape.inputs + WX] = 1;
+  p[L2.w1 + 2 * shape.inputs + CMX] = 1;
+  p[L2.w1 + 3 * shape.inputs + CVX] = 1;
+  p[L2.w1 + 4 * shape.inputs + 0] = 5;
+  p[L2.w1 + 5 * shape.inputs + 1] = 5;
+  const row = (joint, w, b) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L2.w2 + o * shape.hidden + i] += w[i];
+    p[L2.b2 + o] += b;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
+    row(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
+  }
+  row("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
+  row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  return p;
+}
+var BEST_PHASE, BEST_BALANCER;
 var init_phaseSeed = __esm({
   "src/core/phaseSeed.ts"() {
     "use strict";
     init_brain();
     init_skeleton();
     BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+    BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
   }
 });
 
@@ -15453,6 +15481,9 @@ var init_evolution = __esm({
         const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
         const gait = [];
         if (this.cfg.seedGait) {
+          gait.push(balancerGenome(this.shape, BEST_BALANCER));
+          gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
+          gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
           for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
             gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
           }

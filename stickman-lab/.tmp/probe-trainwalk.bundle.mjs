@@ -14319,6 +14319,10 @@ var Sim = class {
     const c2 = Math.PI * 2;
     x[0] = Math.sin(this.phase * c2);
     x[1] = Math.cos(this.phase * c2);
+    if (this.cfg.obsMask?.clock) {
+      x[0] = 0;
+      x[1] = 0;
+    }
     x[2] = tq.x;
     x[3] = tq.y;
     x[4] = tq.z;
@@ -14344,17 +14348,40 @@ var Sim = class {
     x[19] = nz > 3 ? 3 : nz < -3 ? -3 : nz;
     let k = 20;
     const jb = this.jbuf;
+    const noJoint = this.cfg.obsMask?.joint === true;
+    const noQuat = this.cfg.obsMask?.quat === true;
+    const noVel = this.cfg.obsMask?.vel === true;
     for (let i = 0; i < doll.jointCount; i++) {
       doll.jointRot(i, jb);
-      x[k++] = jb[0];
-      x[k++] = jb[1];
-      x[k++] = jb[2];
+      if (noJoint) {
+        x[k] = 0;
+        x[k + 1] = 0;
+        x[k + 2] = 0;
+        k += 3;
+      } else {
+        x[k++] = jb[0];
+        x[k++] = jb[1];
+        x[k++] = jb[2];
+      }
     }
     for (let i = 0; i < doll.jointCount; i++) {
       doll.jointRelVel(i, jb);
-      x[k++] = jb[0] * 0.2;
-      x[k++] = jb[1] * 0.2;
-      x[k++] = jb[2] * 0.2;
+      if (noJoint) {
+        x[k] = 0;
+        x[k + 1] = 0;
+        x[k + 2] = 0;
+        k += 3;
+      } else {
+        x[k++] = jb[0] * 0.2;
+        x[k++] = jb[1] * 0.2;
+        x[k++] = jb[2] * 0.2;
+      }
+    }
+    if (noQuat) {
+      for (let q = 2; q <= 5; q++) x[q] = 0;
+    }
+    if (noVel) {
+      for (let q = 6; q <= 11; q++) x[q] = 0;
     }
     x[k] = doll.soleY("l");
     x[k + 1] = doll.soleY("r");
@@ -14385,7 +14412,9 @@ var Sim = class {
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+    const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+    const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+    if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
       this.altCount++;
       this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
     }
@@ -14596,18 +14625,23 @@ var Sim = class {
 // src/core/genome.ts
 function makeRng(seed) {
   let a = seed >>> 0;
-  return () => {
+  const f = () => {
     a = a + 1831565813 >>> 0;
     let t = a;
     t = Math.imul(t ^ t >>> 15, t | 1);
     t ^= t + Math.imul(t ^ t >>> 7, t | 61);
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
+  f.getState = () => ({ s: a });
+  f.setState = (st) => {
+    a = st.s >>> 0;
+  };
+  return f;
 }
 function makeGaussian(rng) {
   let spare = 0;
   let hasSpare = false;
-  return () => {
+  const f = () => {
     if (hasSpare) {
       hasSpare = false;
       return spare;
@@ -14623,6 +14657,13 @@ function makeGaussian(rng) {
     hasSpare = true;
     return u * m;
   };
+  f.getState = () => ({ s: rng.getState ? rng.getState().s : 0, spare, hasSpare });
+  f.setState = (st) => {
+    if (rng.setState && st) rng.setState({ s: st.s });
+    spare = st?.spare ?? 0;
+    hasSpare = st?.hasSpare ?? false;
+  };
+  return f;
 }
 function randomGenome(s, gauss, scale = 1) {
   const g = new Float32Array(brainParamCount(s));
@@ -14677,6 +14718,32 @@ function phaseGenome(shape2, s) {
 }
 function phaseGenomeFor(jointCount, s = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s);
+}
+var BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+function balancerGenome(shape2, s = BEST_BALANCER) {
+  const p = new Float32Array(brainParamCount(shape2));
+  const L = brainLayout(shape2);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L.w1 + 0 * shape2.inputs + QX] = 1;
+  p[L.w1 + 1 * shape2.inputs + WX] = 1;
+  p[L.w1 + 2 * shape2.inputs + CMX] = 1;
+  p[L.w1 + 3 * shape2.inputs + CVX] = 1;
+  p[L.w1 + 4 * shape2.inputs + 0] = 5;
+  p[L.w1 + 5 * shape2.inputs + 1] = 5;
+  const row = (joint, w, b) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape2.hidden + i] += w[i];
+    p[L.b2 + o] += b;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
+    row(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
+  }
+  row("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
+  row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  return p;
 }
 
 // src/core/evolution.ts
@@ -14772,6 +14839,9 @@ var Trainer = class {
     const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
     const gait = [];
     if (this.cfg.seedGait) {
+      gait.push(balancerGenome(this.shape, BEST_BALANCER));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
       for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
         gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
       }
@@ -14949,6 +15019,59 @@ var Trainer = class {
     this.startGeneration();
   }
   /** 把一份外部基因组注入当代（导入存档 / 用历史最佳继续跑） */
+  /**
+   * ★ 存档：把整个训练状态打包成纯数据（供 persist.ts 写 localStorage / 导出文件）。
+   *   含**随机数状态** ⇒ 恢复后训练从原来那一步继续，而不是从头再来一遍。
+   */
+  snapshot() {
+    const w = {};
+    const ms = {};
+    for (const [k, v] of Object.entries(this.sims[0]?.w ?? {})) {
+      if (typeof v === "number") w[k] = v;
+      else if (k === "moveScale" && v && typeof v === "object") Object.assign(ms, v);
+    }
+    return {
+      mode: "walk",
+      // Trainer 目前只跑 walk；fight 时由 main 传 mode 覆盖
+      gen: this.gen,
+      sigma: this.sigma,
+      // ★ 高斯采样器也要存（它内部缓存了 Box–Muller 的第二个样本，漏了会导致往返不一致）
+      rng: this.gauss.getState ? this.gauss.getState() : { s: 0, spare: 0, hasSpare: false },
+      // ★ prevMean 也要存：它是 1/5 成功法则的判据，漏了的话读档后第一步的 σ 自适应就分叉
+      //   （实测：状态逐位一致，读档继续训 3 代的结果仍与一路训到底不同）。
+      prevMean: Number.isFinite(this.prevMean) ? this.prevMean : null,
+      genomes: this.genomes.map((g) => Array.from(g)),
+      bestEver: Array.from(this.bestEver),
+      bestEverFitness: this.bestEverFitness,
+      weights: w,
+      moveScale: ms,
+      shape: { inputs: this.shape.inputs, hidden: this.shape.hidden, outputs: this.shape.outputs },
+      history: this.history.slice(-200).map((h) => ({ gen: h.gen, best: h.best, mean: h.mean }))
+    };
+  }
+  /** 读档：种群/最优/σ/RNG/权重全部还原，然后重新开一代。 */
+  restore(s) {
+    this.gen = s.gen;
+    this.sigma = s.sigma;
+    this.prevMean = s.prevMean ?? -Infinity;
+    if (this.gauss.setState) this.gauss.setState(s.rng);
+    else if (this.rng.setState) this.rng.setState({ s: s.rng.s });
+    for (let i = 0; i < this.genomes.length && i < s.genomes.length; i++) {
+      this.genomes[i].set(s.genomes[i]);
+    }
+    this.bestEver.set(s.bestEver);
+    this.bestEverFitness = s.bestEverFitness;
+    const w = { ...s.weights };
+    for (const sm of this.sims) {
+      sm.setWeights(w);
+      for (const [j, v] of Object.entries(s.moveScale)) {
+        sm.w.moveScale[j] = v;
+      }
+    }
+    this.history.length = 0;
+    for (const h of s.history) this.history.push({ ...h });
+    this.startGeneration();
+  }
   inject(genome, asBest = true) {
     if (genome.length !== this.paramCount) {
       throw new Error(`[trainer] \u6CE8\u5165\u7684\u57FA\u56E0\u7EC4\u957F\u5EA6 ${genome.length} \u2260 ${this.paramCount}`);

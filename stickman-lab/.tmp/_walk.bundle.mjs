@@ -79,11 +79,11 @@ function __wbg_set_wasm(val) {
 var heap = new Array(128).fill(void 0);
 heap.push(void 0, null, true, false);
 var heap_next = heap.length;
-function addHeapObject(obj) {
+function addHeapObject(obj2) {
   if (heap_next === heap.length) heap.push(heap.length + 1);
   const idx = heap_next;
   heap_next = heap[idx];
-  heap[idx] = obj;
+  heap[idx] = obj2;
   return idx;
 }
 function getObject(idx) {
@@ -160,9 +160,9 @@ function getFloat32Memory0() {
   return cachedFloat32Memory0;
 }
 var stack_pointer = 128;
-function addBorrowedObject(obj) {
+function addBorrowedObject(obj2) {
   if (stack_pointer == 1) throw new Error("out of js stack");
-  heap[--stack_pointer] = obj;
+  heap[--stack_pointer] = obj2;
   return stack_pointer;
 }
 function getArrayF32FromWasm0(ptr, len) {
@@ -212,10 +212,10 @@ var RawBroadPhaseFinalization = typeof FinalizationRegistry === "undefined" ? { 
 var RawBroadPhase = class _RawBroadPhase {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawBroadPhase.prototype);
-    obj.__wbg_ptr = ptr;
-    RawBroadPhaseFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawBroadPhase.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawBroadPhaseFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -341,10 +341,10 @@ var RawColliderSetFinalization = typeof FinalizationRegistry === "undefined" ? {
 var RawColliderSet = class _RawColliderSet {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawColliderSet.prototype);
-    obj.__wbg_ptr = ptr;
-    RawColliderSetFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawColliderSet.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawColliderSetFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -1202,10 +1202,10 @@ var RawColliderShapeCastHitFinalization = typeof FinalizationRegistry === "undef
 var RawColliderShapeCastHit = class _RawColliderShapeCastHit {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawColliderShapeCastHit.prototype);
-    obj.__wbg_ptr = ptr;
-    RawColliderShapeCastHitFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawColliderShapeCastHit.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawColliderShapeCastHitFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -1266,10 +1266,10 @@ var RawContactForceEventFinalization = typeof FinalizationRegistry === "undefine
 var RawContactForceEvent = class _RawContactForceEvent {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawContactForceEvent.prototype);
-    obj.__wbg_ptr = ptr;
-    RawContactForceEventFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawContactForceEvent.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawContactForceEventFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -1340,10 +1340,10 @@ var RawContactManifoldFinalization = typeof FinalizationRegistry === "undefined"
 var RawContactManifold = class _RawContactManifold {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawContactManifold.prototype);
-    obj.__wbg_ptr = ptr;
-    RawContactManifoldFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawContactManifold.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawContactManifoldFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -1515,10 +1515,10 @@ var RawContactPairFinalization = typeof FinalizationRegistry === "undefined" ? {
 var RawContactPair = class _RawContactPair {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawContactPair.prototype);
-    obj.__wbg_ptr = ptr;
-    RawContactPairFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawContactPair.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawContactPairFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -1617,10 +1617,10 @@ var RawDeserializedWorldFinalization = typeof FinalizationRegistry === "undefine
 var RawDeserializedWorld = class _RawDeserializedWorld {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawDeserializedWorld.prototype);
-    obj.__wbg_ptr = ptr;
-    RawDeserializedWorldFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawDeserializedWorld.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawDeserializedWorldFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -2302,10 +2302,10 @@ var RawGenericJointFinalization = typeof FinalizationRegistry === "undefined" ? 
 var RawGenericJoint = class _RawGenericJoint {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawGenericJoint.prototype);
-    obj.__wbg_ptr = ptr;
-    RawGenericJointFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawGenericJoint.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawGenericJointFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -2441,10 +2441,10 @@ var RawImpulseJointSetFinalization = typeof FinalizationRegistry === "undefined"
 var RawImpulseJointSet = class _RawImpulseJointSet {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawImpulseJointSet.prototype);
-    obj.__wbg_ptr = ptr;
-    RawImpulseJointSetFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawImpulseJointSet.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawImpulseJointSetFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -2715,10 +2715,10 @@ var RawIntegrationParametersFinalization = typeof FinalizationRegistry === "unde
 var RawIntegrationParameters = class _RawIntegrationParameters {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawIntegrationParameters.prototype);
-    obj.__wbg_ptr = ptr;
-    RawIntegrationParametersFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawIntegrationParameters.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawIntegrationParametersFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -2889,10 +2889,10 @@ var RawIslandManagerFinalization = typeof FinalizationRegistry === "undefined" ?
 var RawIslandManager = class _RawIslandManager {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawIslandManager.prototype);
-    obj.__wbg_ptr = ptr;
-    RawIslandManagerFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawIslandManager.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawIslandManagerFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3182,10 +3182,10 @@ var RawMultibodyJointSetFinalization = typeof FinalizationRegistry === "undefine
 var RawMultibodyJointSet = class _RawMultibodyJointSet {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawMultibodyJointSet.prototype);
-    obj.__wbg_ptr = ptr;
-    RawMultibodyJointSetFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawMultibodyJointSet.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawMultibodyJointSetFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3365,10 +3365,10 @@ var RawNarrowPhaseFinalization = typeof FinalizationRegistry === "undefined" ? {
 var RawNarrowPhase = class _RawNarrowPhase {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawNarrowPhase.prototype);
-    obj.__wbg_ptr = ptr;
-    RawNarrowPhaseFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawNarrowPhase.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawNarrowPhaseFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3503,10 +3503,10 @@ var RawPointColliderProjectionFinalization = typeof FinalizationRegistry === "un
 var RawPointColliderProjection = class _RawPointColliderProjection {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawPointColliderProjection.prototype);
-    obj.__wbg_ptr = ptr;
-    RawPointColliderProjectionFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawPointColliderProjection.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawPointColliderProjectionFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3567,10 +3567,10 @@ var RawPointProjectionFinalization = typeof FinalizationRegistry === "undefined"
 var RawPointProjection = class _RawPointProjection {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawPointProjection.prototype);
-    obj.__wbg_ptr = ptr;
-    RawPointProjectionFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawPointProjection.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawPointProjectionFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3878,10 +3878,10 @@ var RawRayColliderHitFinalization = typeof FinalizationRegistry === "undefined" 
 var RawRayColliderHit = class _RawRayColliderHit {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawRayColliderHit.prototype);
-    obj.__wbg_ptr = ptr;
-    RawRayColliderHitFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawRayColliderHit.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawRayColliderHitFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3914,10 +3914,10 @@ var RawRayColliderIntersectionFinalization = typeof FinalizationRegistry === "un
 var RawRayColliderIntersection = class _RawRayColliderIntersection {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawRayColliderIntersection.prototype);
-    obj.__wbg_ptr = ptr;
-    RawRayColliderIntersectionFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawRayColliderIntersection.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawRayColliderIntersectionFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -3978,10 +3978,10 @@ var RawRayIntersectionFinalization = typeof FinalizationRegistry === "undefined"
 var RawRayIntersection = class _RawRayIntersection {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawRayIntersection.prototype);
-    obj.__wbg_ptr = ptr;
-    RawRayIntersectionFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawRayIntersection.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawRayIntersectionFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -4035,10 +4035,10 @@ var RawRigidBodySetFinalization = typeof FinalizationRegistry === "undefined" ? 
 var RawRigidBodySet = class _RawRigidBodySet {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawRigidBodySet.prototype);
-    obj.__wbg_ptr = ptr;
-    RawRigidBodySetFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawRigidBodySet.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawRigidBodySetFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -4860,10 +4860,10 @@ var RawRotationFinalization = typeof FinalizationRegistry === "undefined" ? { re
 var RawRotation = class _RawRotation {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawRotation.prototype);
-    obj.__wbg_ptr = ptr;
-    RawRotationFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawRotation.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawRotationFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -4933,10 +4933,10 @@ var RawSdpMatrix3Finalization = typeof FinalizationRegistry === "undefined" ? { 
 var RawSdpMatrix3 = class _RawSdpMatrix3 {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawSdpMatrix3.prototype);
-    obj.__wbg_ptr = ptr;
-    RawSdpMatrix3Finalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawSdpMatrix3.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawSdpMatrix3Finalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -5018,10 +5018,10 @@ var RawShapeFinalization = typeof FinalizationRegistry === "undefined" ? { regis
 var RawShape = class _RawShape {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawShape.prototype);
-    obj.__wbg_ptr = ptr;
-    RawShapeFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawShape.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawShapeFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -5389,10 +5389,10 @@ var RawShapeCastHitFinalization = typeof FinalizationRegistry === "undefined" ? 
 var RawShapeCastHit = class _RawShapeCastHit {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawShapeCastHit.prototype);
-    obj.__wbg_ptr = ptr;
-    RawShapeCastHitFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawShapeCastHit.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawShapeCastHitFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -5446,10 +5446,10 @@ var RawShapeContactFinalization = typeof FinalizationRegistry === "undefined" ? 
 var RawShapeContact = class _RawShapeContact {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawShapeContact.prototype);
-    obj.__wbg_ptr = ptr;
-    RawShapeContactFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawShapeContact.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawShapeContactFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -5503,10 +5503,10 @@ var RawVectorFinalization = typeof FinalizationRegistry === "undefined" ? { regi
 var RawVector = class _RawVector {
   static __wrap(ptr) {
     ptr = ptr >>> 0;
-    const obj = Object.create(_RawVector.prototype);
-    obj.__wbg_ptr = ptr;
-    RawVectorFinalization.register(obj, obj.__wbg_ptr, obj);
-    return obj;
+    const obj2 = Object.create(_RawVector.prototype);
+    obj2.__wbg_ptr = ptr;
+    RawVectorFinalization.register(obj2, obj2.__wbg_ptr, obj2);
+    return obj2;
   }
   __destroy_into_raw() {
     const ptr = this.__wbg_ptr;
@@ -5652,8 +5652,8 @@ function __wbindgen_object_drop_ref(arg0) {
   takeObject(arg0);
 }
 function __wbindgen_number_get(arg0, arg1) {
-  const obj = getObject(arg1);
-  const ret = typeof obj === "number" ? obj : void 0;
+  const obj2 = getObject(arg1);
+  const ret = typeof obj2 === "number" ? obj2 : void 0;
   getFloat64Memory0()[arg0 / 8 + 1] = isLikeNone(ret) ? 0 : ret;
   getInt32Memory0()[arg0 / 4 + 0] = !isLikeNone(ret);
 }
@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-gait.ts
+// tools/_walk.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -6412,17 +6412,17 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   let byKeyRef = null;
   const attachTo = (parentKey, wy) => {
     if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
-    let best = 0, bestD = Infinity;
+    let best2 = 0, bestD = Infinity;
     for (let s = 0; s < K; s++) {
       const b = byKeyRef.get(segKey(s));
       if (!b) continue;
       const d = Math.abs(b.cy - wy);
       if (d < bestD) {
         bestD = d;
-        best = s;
+        best2 = s;
       }
     }
-    return segKey(best);
+    return segKey(best2);
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
@@ -14412,9 +14412,7 @@ var Sim = class {
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-    const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
-    const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
-    if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
+    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
       this.altCount++;
       this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
     }
@@ -14622,187 +14620,82 @@ var Sim = class {
   }
 };
 
-// tools/probe-gait.ts
+// tools/_walk.ts
 var require2 = createRequire(import.meta.url);
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
-  const compiled = await WebAssembly.compile(fs.readFileSync(p));
-  const bg = rapier_wasm3d_bg_exports;
-  const imports = {};
-  for (const imp of WebAssembly.Module.imports(compiled)) {
-    const f = bg[imp.name];
-    if (typeof f === "function") (imports[imp.module] ??= {})[imp.name] = f;
+  const c = await WebAssembly.compile(fs.readFileSync(p));
+  const imp = {};
+  for (const i of WebAssembly.Module.imports(c)) {
+    const f = rapier_wasm3d_bg_exports[i.name];
+    if (typeof f === "function") (imp[i.module] ??= {})[i.name] = f;
   }
-  const r = await WebAssembly.instantiate(compiled, imports);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
+  const r = await WebAssembly.instantiate(c, imp);
+  __wbg_set_wasm(r.instance ? r.instance.exports : r.exports);
 }
-var FAILS = 0;
-var check = (name, ok2, detail = "") => {
-  if (!ok2) FAILS++;
-  console.log(`  ${ok2 ? "PASS" : "FAIL"}  ${name}${detail ? "   " + detail : ""}`);
-};
 var sk = buildSkeleton(DEFAULT_CONFIG);
-var SHAPE = shapeForJoints(sk.joints.length);
-var L = brainLayout(SHAPE);
-function phaseGenome(s) {
-  const p = new Float32Array(brainParamCount(SHAPE));
-  p[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-  p[L.w1 + 1 * SHAPE.inputs + 1] = 5;
-  const out = (joint, axis, aSin, aCos, bias) => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + axis;
+var SH = shapeForJoints(sk.joints.length);
+var L = brainLayout(SH);
+var QX = 2;
+var WX = 9;
+var CMX = 14;
+var CVX = 16;
+var DUR = 8;
+function g(k) {
+  const p = new Float32Array(4228);
+  p[L.w1 + 0 * SH.inputs + QX] = 1;
+  p[L.w1 + 1 * SH.inputs + WX] = 1;
+  p[L.w1 + 2 * SH.inputs + CMX] = 1;
+  p[L.w1 + 3 * SH.inputs + CVX] = 1;
+  p[L.w1 + 4 * SH.inputs + 0] = 5;
+  p[L.w1 + 5 * SH.inputs + 1] = 5;
+  const row = (j, ax, w, b) => {
+    const o = JOINT_ORDER.indexOf(j) * 3 + ax;
     if (o < 0) return;
-    p[L.w2 + o * SHAPE.hidden + 0] = aSin;
-    p[L.w2 + o * SHAPE.hidden + 1] = aCos;
-    p[L.b2 + o] = bias;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * SH.hidden + i] += w[i];
+    p[L.b2 + o] += b;
   };
-  for (const [j, sgn] of [["hip_l", 1], ["hip_r", s.legPhase]]) {
-    out(j, 2, s.hip * sgn, 0, s.duty * sgn * 0.5);
-    out(j.replace("hip", "knee"), 2, -s.knee * sgn, s.knee * 0.35 * sgn, s.duty * sgn * 0.4);
+  for (const [j, s] of [["hip_l", 1], ["hip_r", 1]]) {
+    row(j, 2, [s * k[0], s * k[1], 0, s * k[2]], k[3]);
+    row(j, 2, [0, 0, 0, 0, s * k[6] * 0.09, 0], 0);
   }
-  for (const [j, sgn] of [["shoulder_l", -1], ["shoulder_r", 1]]) {
-    out(j, 2, s.arm * sgn, 0, 0);
-  }
-  for (let i = 1; i <= 3; i++) out(`spine${i}`, 0, s.waist * 0.5, 0, 0);
+  row("knee_l", 2, [0, 0, 0, 0, -k[6] * 0.075, k[6] * 0.027], k[4] + k[6] * 0.048);
+  row("knee_r", 2, [0, 0, 0, 0, k[6] * 0.075, k[6] * 0.027], k[4] + k[6] * 0.048);
+  row("shoulder_l", 2, [0, 0, 0, 0, -k[6] * 0.045, 0], 0);
+  row("shoulder_r", 2, [0, 0, 0, 0, k[6] * 0.045, 0], 0);
   return p;
 }
-var runG = (g, gaitHz, dur = 6) => run(g, dur, gaitHz);
-function run(g, dur = 6, gaitHz = DEFAULT_SIM.gaitHz, ov = {}) {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: "walk", duration: dur, gaitHz, ...ov });
-  sim.begin(g);
-  const marks = [];
-  const clockTrace = [];
-  let prev = -1, switches = 0, contacts = 0, air = 0, t = 0;
-  const hz = DEFAULT_SIM.physicsHz;
-  const n = Math.round(dur * hz);
-  for (let i = 0; i < n + 8 && !sim.finished; i++) {
+function score(k) {
+  const sim = new Sim(sk, SH, { ...DEFAULT_SIM, mode: "walk", duration: DUR });
+  sim.begin(g(k));
+  let sum = 0, n = 0;
+  while (!sim.finished) {
     sim.advance(1);
-    if (i % 30 === 0) clockTrace.push(`${t.toFixed(2)}:${sim.clock.phase.toFixed(2)}/${sim.clock.sin.toFixed(2)}`);
-    t = (i + 1) / hz;
-    const l = sim.doll.soleY("l") < 0.012;
-    const r = sim.doll.soleY("r") < 0.012;
-    const c = l && r ? 2 : l || r ? 1 : 0;
-    if (c > 0) contacts++;
-    else air++;
-    if (c === 1 && prev >= 0 && c !== prev) switches++;
-    prev = c;
-    if (i % Math.round(hz * 0.25) === 0 && marks.length < 24) {
-      marks.push(`${t.toFixed(2)}s x=${sim.doll.torso().translation().x.toFixed(2)}/${c === 2 ? "\u53CC" : c === 1 ? "\u5355" : "\u7A7A"}`);
+    sum += Math.abs(sim.doll.tiltOf(sim.doll.torso()));
+    n++;
+  }
+  return { x: sim.distance, alive: !sim.fallen && n >= DUR * 120 * 0.98, tilt: sum / Math.max(1, n) * 57.3 };
+}
+var best = [0.028, -0.028, 0, 0, 0.028, 0.15, 0.15];
+var bs = score(best);
+console.log(`  \u8D77\u70B9: x=${bs.x.toFixed(3)}m \u6D3B\u6EE1=${bs.alive} \u503E\u89D2=${bs.tilt.toFixed(1)}\xB0`);
+var obj = (s) => s.alive ? s.x : -10 + s.x;
+var step = 0.4;
+for (let it = 0; it < 200 && step > 1e-3; it++) {
+  let imp = false;
+  for (let i = 0; i < 7; i++) for (const d of [step, -step]) {
+    const k2 = best.slice();
+    k2[i] += d;
+    const s2 = score(k2);
+    if (obj(s2) > obj(bs) + 1e-9) {
+      best = k2;
+      bs = s2;
+      imp = true;
     }
   }
-  const tp = sim.doll.torso().translation();
-  return { x: tp.x, z: tp.z, t, fell: sim.fallen, switches, contacts, airRatio: air / Math.max(1, n), terms: sim.terms, step: sim.stepStat, trace: marks.join(" ") + " | clock " + clockTrace.slice(0, 8).join(" ") };
-}
-console.log("=== \u76F8\u4F4D\u9A71\u52A8\u624B\u5DE5\u6B65\u6001\uFF1A\u7269\u7406\u5230\u5E95\u80FD\u8FDE\u7EED\u8D70\u51E0\u6B65\uFF1F\uFF08\u7ED5\u8FC7 ES\uFF09===\n");
-console.log("  \u9ACBAmp \u5360\u7A7Abias \u53CD\u76F8 \u2502   \u7EC8\u70B9x    \u5B58\u6D3B   \u6362\u811A \u63A5\u5730  \u7ED3\u679C");
-var cands = [];
-for (const duty of [0, 0.8, 1.6, 2.4]) {
-  for (const hip of [0.3, 0.6, 0.9]) {
-    for (const lp of [1, -1]) cands.push({ hip, knee: 0.5, duty, legPhase: lp, arm: 0.3, waist: 0.2 });
-  }
-}
-var bySurv = { t: -1, s: null, r: null };
-var byX = { x: -99, s: null, r: null };
-for (const s of cands) {
-  const r = run(phaseGenome(s));
-  console.log(`  ${s.hip.toFixed(2)}  ${s.duty.toFixed(1).padStart(5)}   ${s.legPhase > 0 ? "\u662F" : "\u5426"} \u2502 ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}${String(r.contacts).padStart(5)}  ${r.fell ? "\u6454" : "\u5B58\u6D3B"}`);
-  if (r.t > bySurv.t) bySurv = { t: r.t, s, r };
-  if (r.x > byX.x) byX = { x: r.x, s, r };
+  if (!imp) step *= 0.6;
 }
 console.log(`
-  \u5B58\u6D3B\u6700\u4E45\uFF1A\u9ACB${bySurv.s?.hip} bias${bySurv.s?.duty} \u53CD\u76F8${bySurv.s?.legPhase > 0}  \u5B58\u6D3B ${bySurv.t.toFixed(2)}s  \u7EC8\u70B9x=${bySurv.r?.x.toFixed(3)}  \u6362\u811A ${bySurv.r?.switches}`);
-console.log(`  \u8D70\u5F97\u6700\u8FDC\uFF1A\u9ACB${byX.s?.hip} bias${byX.s?.duty} \u53CD\u76F8${byX.s?.legPhase > 0}  \u7EC8\u70B9x=${byX.x.toFixed(3)}  \u5B58\u6D3B ${byX.r?.t.toFixed(2)}s`);
-if (bySurv.r) console.log(`
-  \u793A\u8303\u8F68\u8FF9\uFF1A${bySurv.r.trace}`);
-var ok = (bySurv.r?.switches ?? 0) >= 3 && !bySurv.r?.fell;
-console.log("\n  === \u6B65\u9891\u626B\u63CF\uFF08\u56FA\u5B9A x0.15 \u7684\u90A3\u7EC4\u76F8\u4F4D\u6B65\u6001\uFF09===");
-console.log("  gaitHz   x_end   \u5B58\u6D3B   \u6362\u811A \u817E\u7A7A\u5360\u6BD4  \u7ED3\u679C");
-for (const gh of [0.6, 0.8, 1, 1.15, 1.5, 2]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * 0.15;
-  const r = runG(g, gh);
-  console.log(`  ${gh.toFixed(2)}    ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}   ${(r.airRatio * 100).toFixed(0).padStart(4)}%  ${r.fell ? "FALL" : "OK"}`);
-}
-console.log("\n  === \u9A8C\u6536\uFF1A\u8D70\u8DEF\u5956\u52B1\u7684\u6838\u5FC3\u6027\u8D28\uFF08\u901F\u5EA6\u8DDF\u8E2A / \u62AC\u817F / \u5355\u811A\u652F\u6491\uFF09===");
-var mk = (spec, scale) => {
-  const b = phaseGenome(spec);
-  const g = new Float32Array(b.length);
-  for (let i2 = 0; i2 < b.length; i2++) g[i2] = b[i2] * scale;
-  return g;
-};
-{
-  const fwdSpec = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 };
-  const fwd = run(mk(fwdSpec, 0.15));
-  const latG = new Float32Array(brainParamCount(SHAPE));
-  latG[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-  latG[L.w1 + 1 * SHAPE.inputs + 1] = 5;
-  for (const [jn, sg] of [["hip_l", 1], ["hip_r", -1]]) {
-    const o = JOINT_ORDER.indexOf(jn) * 3 + 0;
-    latG[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg * 0.15;
-  }
-  const lat2 = run(latG);
-  const st = run(new Float32Array(brainParamCount(SHAPE)));
-  const T = (r, k) => r.terms[k] ?? 0;
-  console.log(`  \u524D\u8FDB\u578B  \u4F4D\u79FB ${fwd.x.toFixed(2)}m  velTrack=${T(fwd, "velTrack").toFixed(2)}  lift=${T(fwd, "lift").toFixed(2)}  single=${T(fwd, "single").toFixed(2)}  \u603B=${T(fwd, "total").toFixed(2)}`);
-  console.log(`  \u4FA7\u5411\u6296  \u4F4D\u79FB ${lat2.x.toFixed(2)}m  velTrack=${T(lat2, "velTrack").toFixed(2)}  \u603B=${T(lat2, "total").toFixed(2)}`);
-  console.log(`  \u96F6\u8F93\u51FA  \u4F4D\u79FB ${st.x.toFixed(2)}m  velTrack=${T(st, "velTrack").toFixed(2)}  single=${T(st, "single").toFixed(2)}  \u603B=${T(st, "total").toFixed(2)}`);
-  check('\u2460 \u524D\u8FDB\u5206\u88AB"\u8FC8\u6B65\u6570"\u95E8\u63A7\uFF08\u4E0D\u62AC\u811A\u7684\u7B56\u7565\u62FF\u4E0D\u5230\u524D\u8FDB\u5206\uFF09', T(fwd, "velTrack") === 0 && (fwd.terms.altCount ?? 0) === 0, `velTrack=${T(fwd, "velTrack").toFixed(3)} \u6362\u811A\u6570=${fwd.terms.altCount ?? 0}`);
-  check("\u2460b \u96F6\u8F93\u51FA\uFF08\u88AB\u52A8\u81EA\u8D70\uFF09\u62FF\u4E0D\u5230\u524D\u8FDB\u5206", T(st, "velTrack") === 0, `${T(st, "velTrack").toFixed(3)}`);
-  {
-    const ab = new Float32Array(brainParamCount(SHAPE));
-    ab[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-    for (const [jn, sg] of [["hip_l", 1], ["hip_r", 1]]) {
-      const o = JOINT_ORDER.indexOf(jn) * 3 + 0;
-      ab[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg;
-    }
-    const r = run(ab);
-    console.log(`     \u2139 \u9ACB\u5916\u5C55\u6837\u672C: shift=${T(r, "shift").toFixed(2)} \u6362\u811A\u6570=${r.terms.altCount ?? 0} \u96F6\u8F93\u51FA shift=${T(st, "shift").toFixed(2)}`);
-    check(
-      "\u2460c \u2605 \u91CD\u5FC3\u8F6C\u79FB\u662F\u53EF\u5B66\u7684\uFF08\u4E3B\u52A8\u9ACB\u5916\u5C55\u7684\u91CD\u5FC3\u8F6C\u79FB\u5206 \u2265 \u96F6\u8F93\u51FA\u7684 3 \u500D\uFF09",
-      T(r, "shift") > T(st, "shift") * 3,
-      `\u5916\u5C55 ${T(r, "shift").toFixed(2)} vs \u96F6\u8F93\u51FA ${T(st, "shift").toFixed(2)} = ${(T(r, "shift") / Math.max(1e-6, T(st, "shift"))).toFixed(1)}\xD7`
-    );
-  }
-  console.log(`     \u2139 velTrack \u5355\u72EC\u4E0D\u53EF\u5206\u8FA8\uFF08\u8FD9\u4E2A\u9AA8\u67B6\u4F1A\u88AB\u52A8\u81EA\u8D70\uFF09\uFF1A \u6B65\u6001 ${T(fwd, "velTrack").toFixed(2)} / \u4FA7\u5411 ${T(lat2, "velTrack").toFixed(2)} / \u96F6\u8F93\u51FA ${T(st, "velTrack").toFixed(2)}\uFF1B\u771F\u6B63\u533A\u5206\u7684\u662F single=${T(fwd, "single").toFixed(2)}/${T(lat2, "single").toFixed(2)}/${T(st, "single").toFixed(2)}`);
-  check("\u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u88AB lateral \u9879\u7F5A", T(lat2, "lateral") < 0, `${T(lat2, "lateral").toFixed(3)}`);
-  check(
-    "\u2462 \u96F6\u8F93\u51FA\u7684\u603B\u5206\u660E\u663E\u4F4E\u4E8E\u4F1A\u8D70\u8DEF\u7684\u7B56\u7565\uFF08\u8E6D\u5730/\u88AB\u52A8\u6643\u4E0D\u662F\u53EF\u884C\u89E3\uFF09",
-    T(st, "total") < 0.5,
-    `\u96F6\u8F93\u51FA ${T(st, "total").toFixed(3)}\uFF08\u5176\u4E2D shift=${T(st, "shift").toFixed(2)} \u662F\u88AB\u52A8\u6643\u52A8\uFF09`
-  );
-  check("\u2463 \u4E24\u811A\u4E0D\u79BB\u5730\u8981\u6328\u7F5A\uFF08\u5355\u811A\u652F\u6491\u9879\u4E3A\u8D1F\uFF09", T(st, "single") < 0, `${T(st, "single").toFixed(3)}`);
-  const big = run(mk(fwdSpec, 0.6));
-  console.log(`  \u5927\u5E45\u5EA6  \u4F4D\u79FB ${big.x.toFixed(2)}m  lift=${T(big, "lift").toFixed(2)}  single=${T(big, "single").toFixed(2)}`);
-  check(
-    "\u2464 \u62AC\u817F\u9879\u968F\u811A\u771F\u7684\u79BB\u5730\u800C\u4E0A\u5347\uFF08\u817E\u7A7A\u65F6\u95F4\u673A\u5236\u751F\u6548\uFF09",
-    T(big, "lift") >= T(fwd, "lift"),
-    `\u5927\u5E45\u5EA6 ${T(big, "lift").toFixed(3)} \u2265 x0.15 ${T(fwd, "lift").toFixed(3)}`
-  );
-}
-console.log("  stepMinDx  stepMinTotal \u2502 \u524D\u8FDB\u578B step  \u4FA7\u5411\u6296 step  \u524D\u8FDB\u578B\u6709\u6548\u8FC8\u6B65");
-for (const [dx, tot, vmin, dz] of [
-  [0.12, 0.3, 0.05, 0.06],
-  [0.05, 0.1, 0.05, 0.06],
-  [0.05, 0.1, 0, 0.06],
-  [0.05, 0.1, 0, 0.2],
-  [0.02, 0.05, 0, 0.2],
-  [0.02, 0.05, 0, 1]
-]) {
-  const ov = { stepMinDx: dx, stepMinTotal: tot, stepVMin: vmin, stepMaxDz: dz };
-  const a = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz, ov);
-  const b = run(lat, 6, DEFAULT_SIM.gaitHz, ov);
-  console.log(`  dx=${dx.toFixed(2)} tot=${tot.toFixed(2)} vx>${vmin.toFixed(2)} |dz|<=${dz.toFixed(2)} | \u524D\u8FDB ${(a.terms.step ?? 0).toFixed(3).padStart(6)}  \u4FA7\u6296 ${(b.terms.step ?? 0).toFixed(3).padStart(6)}  \u95E8\u69DB\u8BA1\u6570 ${JSON.stringify(a.step)}`);
-}
-console.log("\n  === \u5BF9\u7167\uFF1A\u8F93\u51FA\u6574\u4F53\u7F29\u653E\uFF08\u5C0F\u5E45\u5EA6\u5468\u671F\u6270\u52A8\uFF09===");
-console.log("  scale   x_end   \u5B58\u6D3B   \u6362\u811A  \u7ED3\u679C");
-for (const sc of [1, 0.5, 0.3, 0.15, 0.05]) {
-  const base = phaseGenome({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 });
-  const g = new Float32Array(base.length);
-  for (let i = 0; i < base.length; i++) g[i] = base[i] * sc;
-  const r = run(g);
-  console.log(`  x${sc.toFixed(2)}  ${r.x.toFixed(3).padStart(7)}  ${r.t.toFixed(2)}s ${String(r.switches).padStart(5)}  ${r.fell ? "FALL" : "OK"}`);
-}
-console.log(`
-  \u21D2 \u5224\u8BFB\uFF1A${ok ? "\u7269\u7406\u80FD\u8FDE\u7EED\u8FC8\u591A\u6B65 \u21D2 \u786C\u4EF6/\u6267\u884C\u5668\u591F\u7528\uFF0C\u7F3A\u7684\u662F**\u641C\u7D22\u4E0E\u5956\u52B1**\uFF08\u76F4\u7EBF\u6743\u91CD\u6709\u7528\uFF0C\u4F46\u4E0D\u662F\u5173\u952E\uFF09" : "\u8FDE\u6700\u4F18\u76F8\u4F4D\u6B65\u6001\u90FD\u8D70\u4E0D\u6EE1 3 \u6B65 \u21D2 **\u63A8\u8FDB\u6743\u9650**\u4E0D\u8DB3\uFF0C\u5956\u52B1\u52A0\u6743\u6551\u4E0D\u4E86"}`);
+  \u2605 \u641C\u5230\u7684\u53C2\u6570 [k_pitch,k_rate,k_comvx,bias,knee,oscScale,oscCom] =`);
+console.log(`    ${best.map((v) => v.toFixed(4)).join(", ")}`);
+console.log(`  \u2605 \u7ED3\u679C: \u4F4D\u79FB ${bs.x.toFixed(3)} m   \u6D3B\u6EE1 8s=${bs.alive}   \u5E73\u5747\u503E\u89D2 ${bs.tilt.toFixed(2)}\xB0`);

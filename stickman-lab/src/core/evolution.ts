@@ -15,7 +15,7 @@ import { BRAIN_SHAPE, brainParamCount, type BrainShape } from './brain';
 import {
   blendInto, makeGaussian, makeRng, mutateInto, randomGenome, type Rng,
 } from './genome';
-import { BEST_PHASE, phaseGenomeFor } from './phaseSeed';
+import { BEST_BALANCER, BEST_PHASE, balancerGenome, phaseGenomeFor } from './phaseSeed';
 import { Sim, type SimConfig } from './sim';
 import type { Skeleton } from './skeleton';
 
@@ -165,6 +165,14 @@ export class Trainer {
     //   实测几十代最好个体都只是原地抖腿。现在 ES 从 1.21 m 的祖代开始爬"走得久"。
     const gait: Float32Array[] = [];
     if (this.cfg.seedGait) {
+      // ★★ 种子要覆盖"从站到走"这条学习链的每一环（用户 2026-10-01："压根走不起来"）：
+      //   ① 镇定器：唯一已知能**站满 8 s** 的基因组（零输出只能站 4.72 s）
+      //   ② 镇定器 + 振荡：站得住的前提下摆腿（走的方向，但目前位移≈0）
+      //   ③ 纯相位步态：唯一已知能**走出去**的基因组（1.25 m，但 1.8 s 就倒）
+      //   ES 从"会站的"出发去学"会走的"，比从零输出（4.7 s 就倒）开始强得多。
+      gait.push(balancerGenome(this.shape, BEST_BALANCER));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
+      gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
       for (const sc of [BEST_PHASE.scale, 0.5, 1.0]) {
         gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
       }

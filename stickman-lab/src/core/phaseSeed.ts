@@ -53,3 +53,66 @@ export function phaseGenome(shape: BrainShape, s: PhaseSpec): Float32Array {
 export function phaseGenomeFor(jointCount: number, s: PhaseSpec = BEST_PHASE): Float32Array {
   return phaseGenome(shapeForJoints(jointCount), s);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 镇定器（2026-10-01）：手写反馈控制器，**让骨架站得住**
+//
+// ★ 为什么需要它（实测，之前一直没搞清楚）：
+//   零输出（纯阻尼）只能站 4.72 s：躯干高度全程不变，但**缓慢前倾**
+//   （3 s 内 0.2°→4.7°，髋/膝各漂 1~2°），CoM 缓慢前移，最后顶翻。
+//   而"常数偏置"治不了（髋 −1°/−2°/−3° 全部倒得更快、往后倒 0.83 m）——
+//   它是**边缘稳定**，必须靠反馈兜住。
+//   坐标下降搜出的 6 个系数能做到：**站满 8 s、平均倾角 0.77°**。
+//
+// 观测下标（见 sim.ts 的 observe）：
+//   2 = 躯干四元数 x（俯仰）、9 = 躯干角速度 x、14 = CoM 相对支撑域 x、16 = CoM 速度 x
+export interface BalancerSpec {
+  /** 俯仰角 → 髋屈伸 */
+  kPitch: number;
+  /** 俯仰角速度 → 髋屈伸 */
+  kRate: number;
+  /** CoM 横向偏移 → 髋屈伸（钉住位置用；追速度时置 0） */
+  kComX: number;
+  /** 髋静态偏置 */
+  bias: number;
+  /** 膝静态偏置 */
+  knee: number;
+  /** ★ 同时叠加的步态振荡幅度（0 = 纯镇定器；>0 = 边平衡边摆腿） */
+  osc: number;
+}
+
+/** 搜出来的镇定器（坐标下降，目标 = 站满 8 s + 倾角小） */
+export const BEST_BALANCER: BalancerSpec =
+  { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+
+/**
+ * 构造"镇定器 (+ 可选振荡器)"基因组。
+ * 隐层 0..3 接躯干状态（反馈），隐层 4..5 接时钟（振荡）——**两组互不干扰**。
+ */
+export function balancerGenome(shape: BrainShape, s: BalancerSpec = BEST_BALANCER): Float32Array {
+  const p = new Float32Array(brainParamCount(shape));
+  const L = brainLayout(shape);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;     // 观测下标
+  p[L.w1 + 0 * shape.inputs + QX] = 1;
+  p[L.w1 + 1 * shape.inputs + WX] = 1;
+  p[L.w1 + 2 * shape.inputs + CMX] = 1;
+  p[L.w1 + 3 * shape.inputs + CVX] = 1;
+  p[L.w1 + 4 * shape.inputs + 0] = 5;           // h4 ← clock.sin
+  p[L.w1 + 5 * shape.inputs + 1] = 5;           // h5 ← clock.cos
+  // ★ 用 `+=` 叠加：直接赋值会把镇定器的权重清零（写错过一次，
+  //   害得"合成"基因组里其实只有振荡器，于是全在往后倒）。
+  const row = (joint: string, w: number[], b: number): void => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape.hidden + i] += w[i];
+    p[L.b2 + o] += b;
+  };
+  for (const [j, sgn] of [['hip_l', 1], ['hip_r', 1]] as [string, number][]) {
+    row(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
+  }
+  row('knee_l', [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row('knee_r', [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row('shoulder_l', [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
+  row('shoulder_r', [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  return p;
+}

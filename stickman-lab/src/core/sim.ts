@@ -669,7 +669,12 @@ export class Sim {
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+    // ★ 必须"真的单脚着地"才算换支撑脚：载荷份额 >70% **且** 该脚接触地面、另一脚离地。
+    //   只看载荷会被前后晃动钻空子 —— 实测**站桩不动的镇定器**能拿到 13 次"换脚"
+    //   （前后倾让载荷在两脚间来回跨 70% 阈值），于是它成了最优解而完全没在走。
+    const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+    const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+    if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
       this.altCount++;
       // ★★ 换脚**只有在正在推进时才计价**：φ(v*−v_x)。
       //   不加这一层的话实测 6 代就学会"原地金鸡独立式交替"（换脚 14 次/6s = 2.3Hz，
