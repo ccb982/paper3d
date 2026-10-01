@@ -100,6 +100,28 @@ export function invQuatOf(q: Vec4): Vec4 {
   return [-q[0], -q[1], -q[2], q[3]];
 }
 
+/** 四元数 → 旋转矢量（|v| = 角度，方向 = 轴）；与 ragdoll 的 quatToRotVec 同口径 */
+export function quatToRotVec(q: Vec4): Vec3 {
+  const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
+  const half = Math.acos(w);
+  const s = Math.sin(half);
+  if (Math.abs(s) < 1e-7) return [0, 0, 0];
+  const ang = 2 * half;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  return [q[0] * k, q[1] * k, q[2] * k];
+}
+
+/** conj(a) ⊗ b */
+function quatRel(a: Vec4, b: Vec4): Vec4 {
+  const cx = -a[0], cy = -a[1], cz = -a[2], cw = a[3];
+  return [
+    cw * b[0] + cx * b[3] + cy * b[2] - cz * b[1],
+    cw * b[1] - cx * b[2] + cy * b[3] + cz * b[0],
+    cw * b[2] + cx * b[1] - cy * b[0] + cz * b[3],
+    cw * b[3] - cx * b[0] - cy * b[1] - cz * b[2],
+  ];
+}
+
 /** 用四元数旋转向量（x,y,z） */
 export function rotVecByQuat(q: Vec4, v: Vec3): Vec3 {
   const [qx, qy, qz, qw] = q;
@@ -158,21 +180,18 @@ export interface SkeletonConfig {
    */
   soleFootScale: number;
   /**
-   * ★★ 膝盖以下向内偏航（度，默认 15）。只作用于两根小腿的**静姿态**：
-   * 素材的靴子是外八字（靴底边斜 −17°/+19°，靴头指向身体外侧），照搬就是"脚尖朝外"。
-   * 左脚 +15°、右脚 −15°（左右反向），绕各自膝锚点发生 ⇒ 小腿是"绕膝内收"。
-   * 0 = 保持素材原样（外八字）；负值 = 更大内八。
-   */
-  footInwardDeg: number;
-  /**
-   * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米，默认 0 = 膝到脚尖铅垂）。
+   * ★★ 脚掌外八角（度，默认 25 = **外八**：脚尖朝身体外侧）。
    *
-   * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
-   * 实测：素材整条腿外撇 —— 髋 x=615 → 膝 x=517（骨骼修正后）→ 画出来的靴心 x=440，
-   * 照搬靴心就等于"脚尖朝外侧"。所以脚掌盒的横向**按膝锚点摆**、宽度按实测靴宽，
-   * **纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。正值 = 再往中线收。
+   * 用户定调（2026-10-01）："脚要向外侧倾斜，做成外八"。
+   * 只作用于两根小腿的**静姿态**：绕竖直轴偏航，把脚尖从"正前方"转向外侧。
+   * 方向：`mapZ` 取负 ⇒ 画布 x 小的**左脚在世界 +Z**；绕 +Y 转 ψ 把 +X 转向 −Z，
+   * 所以外八必须**左脚 −ψ、右脚 +ψ**（反了就是内八 —— 这个符号错过一次）。
+   * 负值 = 内八，0 = 正前方。
+   *
+   * ★ 这不是"旋转纹理作弊"：偏航是**主动的站姿选择**，贴图必须跟着转；
+   *   被"补偿回素材原位"的只有实测中轴倾角（`restVisualQuatOf`）。
    */
-  footInwardCm: number;
+  footSplayDeg: number;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -188,18 +207,9 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
   soleFootScale: 1.0,
-  // ★★ 膝盖以下绕竖直轴的偏航（度）。默认 **0**：脚掌长轴已经沿世界 X（正前方），
-  //   一旦偏航，脚尖反而变成"内八/外八"（用户回读："现在还是内八"）。留作调姿旋钮。
-  footInwardDeg: 0,
-  /**
-   * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米）。默认 0 = 膝到脚尖垂直。
-   *
-   * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
-   * 实测：素材整条腿是外撇的 —— 髋 x=615 → 膝 x=542 → 小腿骨轴到脚底 x=476，
-   * 画出来的靴心更外（x=440），即**素材腿从髋到脚外移 139px ≈ 89mm**。
-   * 这个数只挪**脚掌碰撞盒**（骨骼），**纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。
-   */
-  footInwardCm: 0,
+  // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
+  //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
+  footSplayDeg: 25,
 };
 
 // ---------------------------------------------------------------- 环节规格
@@ -444,6 +454,16 @@ export interface JointDef {
   /** 锚点相对父 / 子刚体几何中心的偏移（本地米） */
   parentLocal: Vec3;
   childLocal: Vec3;
+  /**
+   * ★★ 静姿态下的关节角读数（弧度，三轴）—— 关节的"零点偏置"。
+   *
+   * ragdoll 的 `jointRot` 算的是 `conj(q父) ⊗ q子` 的旋转矢量，而父子刚体**静倾角不同**
+   * （上臂 5°、前臂+手 35°、大腿 8°、小腿 0°…），于是素材姿势本身就带一个非零读数
+   * （肘 ≈ ∓30°）。左右两侧的偏置**符号相反**（k 是镜像的），而肘/膝限位是**不对称**的
+   * ⇒ 马达会把一条胳膊往里掰、另一条往外掰（用户回读："初始状态下两个手臂就一个往外一个往内折了"）。
+   * 减去它之后：**关节零位 = 素材画的那张姿势**，软限位/马达/读数三者的参照系一致。
+   */
+  restRad: Vec3;
   /** 三轴软限位（弧度）：[0]绕X 外展 [1]绕Y 扭转 [2]绕Z 屈伸 */
   minRad: Vec3;
   maxRad: Vec3;
@@ -549,14 +569,15 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     return Math.atan(ax.k * (leg ? cfg.stance : 1));
   };
   /**
-   * ★ 膝盖以下向内偏航（左右反向）。
-   *   mapZ 取负 ⇒ 画布 x 小的左脚在世界 +Z、右脚在 −Z。
-   *   绕 +Y 转 ψ 把 +Z 转向 +X，所以**左脚取 +ψ、右脚取 −ψ**才能都把脚尖转向正前方。
+   * ★ 脚掌外八偏航（左右反向）。
+   *   `mapZ` 取负 ⇒ 画布 x 小的**左脚在世界 +Z**、右脚在 −Z。
+   *   绕 +Y 转 ψ：+X（正前方）→ −Z，所以要让**脚尖朝外侧**，
+   *   左脚必须取 **−ψ**、右脚取 **+ψ**（取反就是内八 —— 这个符号错过一次）。
    */
   const restYawOf = (key: string): number => {
     if (key !== 'shin_l' && key !== 'shin_r') return 0;
-    const s = cfg.footInwardDeg * DEG;
-    return key === 'shin_l' ? s : -s;
+    const s = cfg.footSplayDeg * DEG;
+    return key === 'shin_l' ? -s : s;
   };
 
   const bodies: BodyDef[] = [];
@@ -564,13 +585,22 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json 缺少组件 ${spec.key}`);
 
-    const { length, radius, halfHeight } = capsuleFromBox(
+    const { length: boxLen, radius, halfHeight: boxHalf } = capsuleFromBox(
       part.bw * px2m, part.bh * px2m, cfg.limbRadiusScale,
     );
-
     // ★ 肢体刚体中心 = **实测中轴的中点**（不是 bbox 中心）：
     //   锥形肢体的 bbox 中心偏离中轴（上下宽度不等），胶囊躺上去就会偏。
     const ax = LIMB_AXES.axes[spec.key];
+    // ★★ 倾斜肢体的胶囊长度改用**实测中轴长度**，不是 bbox 高度。
+    //   前臂+手贴图斜 31°：bbox 高只有 0.395 m，而沿骨轴的真实长度 0.407 m ——
+    //   用 bbox 高做胶囊，肘锚点（在前臂近端）就顶出胶囊 10.9mm（verify-core 报）。
+    //   骨轴长度才是"这根骨头有多长"的正确度量，碰撞体必须按它来。
+    let length = boxLen;
+    let halfHeight = boxHalf;
+    if (ax && TILTED.has(spec.key)) {
+      length = Math.max(boxLen, ax.lenPx * px2m);
+      halfHeight = Math.max(1e-3, length / 2 - radius);
+    }
     const tilt = restTiltOf(spec.key, !!spec.leg);
     const yaw = restYawOf(spec.key);
     // 物理静姿态 = 倾角 + 偏航（骨骼真的这么摆）
@@ -631,13 +661,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       const hx = soleHalfLen * sfx;
       // 侧向半宽用**实测靴宽**（前后长度 hx 仍是手填设计参数：正面视图测不出脚长）
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
-      // ★ 盒心横向 = **膝锚点正下方**（可再内收 footInwardCm），不是画出来的靴心：
-      //   素材靴心比膝锚点外偏 102px ≈ 65mm，那正是"外八"；盒心挂靴心 ⇒ 膝到脚尖朝外。
-      //   盒宽仍取实测靴宽，所以盒子会从靴子内侧探出去一点 —— 这是"骨骼正确、纹理不动"
+      // ★ 盒心横向 = **膝锚点正下方**（膝到脚尖铅垂），不是画出来的靴心：
+      //   素材靴心比膝锚点外偏 60~100px，那正是"外八"；盒心挂靴心 ⇒ 膝到脚尖朝外。
+      //   脚尖朝向由 `footSplayDeg`（外八）单独控制，两者互不干涉。
+      //   盒宽取实测靴宽，所以盒子会从靴子内侧探出去一点 —— 这是"骨骼正确、纹理不动"
       //   的必然代价（线框视图可见），已在文档里记明。
       const soleWorldY = soleHalfThick;
-      const inward = (cfg.footInwardCm / 100) * (spec.key === 'shin_l' ? 1 : -1);
-      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true) - inward;
+      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);  // collider 用物理静姿态
       colliders.push({
         shape: 'cuboid',
@@ -759,6 +789,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       wx, wy, wz,
       parentLocal: dParent,
       childLocal: dChild,
+      // ★ 静姿态读数（父静姿态⁻¹ ⊗ 子静姿态），ragdoll 用它把关节零位挪到素材姿势
+      restRad: quatToRotVec(quatRel(
+        restQuatOf(parent.restTiltRad, parent.restYawRad),
+        restQuatOf(child.restTiltRad, child.restYawRad),
+      )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]],
@@ -784,6 +819,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         wx, wy, wz,
         parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
         childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        restRad: [0, 0, 0],   // 躯干段无静倾角 ⇒ 关节零位就是素材姿势
         minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
         maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
         maxTorque: [
@@ -838,12 +874,17 @@ export function assertJointAnchors(sk: Skeleton): number {
   for (const j of sk.joints) {
     const p = sk.bodies.find((b) => b.key === j.parentKey)!;
     const c = sk.bodies.find((b) => b.key === j.childKey)!;
-    for (const [b, l] of [[p, j.parentLocal], [c, j.childLocal]] as const) {
+    for (const [b, l, tag] of [[p, j.parentLocal, 'P'], [c, j.childLocal, 'C']] as const) {
       // 允许偏离：胶囊半径 + 两端半球（= 半高 + 半径）
       const reach = b.halfHeight + b.radius;
       const d = Math.hypot(l[0], l[1], l[2]);
       const over = d - reach;
       if (over > worst) worst = over;
+      if (over > 1e-4) {
+        // eslint-disable-next-line no-console
+        console.log(`      [越界] ${j.name}.${tag} 局部(${l.map((v) => (v * 1000).toFixed(0)).join(',')})mm `
+          + `|d|=${(d * 1000).toFixed(1)}mm > reach=${(reach * 1000).toFixed(1)}mm  越 ${(over * 1000).toFixed(1)}mm`);
+      }
     }
   }
   return worst;

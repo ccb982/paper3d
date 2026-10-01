@@ -38,9 +38,15 @@ META_PATH = os.path.join(ROOT, "src", "data", "parts.json")
 #   · 肩/髋是大摆角球窝关节（肩 -95~80°、髋 -80~60°）⇒ 锚点必须**深**在肢体里，
 #     否则摆出去时肢体上缘绕锚点扫出缝隙（源图里上臂顶只是一小撮 sliver，锚点贴边必露缝）。
 #   · 肘/膝是链内铰链，摆角小、两侧贴图重叠很宽 ⇒ 6px 足够。
-MARGIN_DEFAULT = 4.0   # 肘/膝：链内铰链，两侧贴图重叠很宽，4px 足够（骨轴求交点常落在重叠区边缘）
+MARGIN_DEFAULT = 6.0   # 颈：球形头与躯干重叠很宽
+MARGIN_HINGE = 8.0     # 肘：链内铰链
+MARGIN_KNEE = 20.0     # 膝：见下面注释
+# 膝：要求 20px（12.8mm）。用 4px 会把锚点顶在大腿贴图/胶囊的**端面**上 ——
+#   实测越界 5.5mm（verify-core 报 10.9mm），而且膝一轉就露缝。
 MARGIN_BALL = 25.0
 BALL_JOINTS = ("shoulder_l", "shoulder_r", "hip_l", "hip_r")
+KNEE_JOINTS = ("knee_l", "knee_r")
+ELBOW_JOINTS = ("elbow_l", "elbow_r")
 INWARD = 0.06       # 从近端端心沿中轴向内的比例（保证锚点严格在子贴图内部）
 NEAR_PARALLEL = 0.02
 
@@ -70,8 +76,20 @@ CHAINS = [
 ]
 
 
+_MASK_CACHE = {}
+
+
 def load_mask(path):
-    """返回 (行区间 dict: y -> (xmin, xmax), 列区间 dict: x -> (ymin, ymax))。"""
+    """返回 (行区间 dict, 列区间 dict)。**带缓存**：全画布 4.6M 像素/部件，
+    main + measure_paw + 骨轴重拟合会各要一次，不缓存要跑 3 分钟。"""
+    if path in _MASK_CACHE:
+        return _MASK_CACHE[path]
+    r = _load_mask_uncached(path)
+    _MASK_CACHE[path] = r
+    return r
+
+
+def _load_mask_uncached(path):
     im = Image.open(path).convert("RGBA")
     W, H = im.size
     a = im.load()
@@ -285,6 +303,38 @@ def on_child_axis(ca, pm, cm, mg_min):
     return best if best else (None, -1e9)
 
 
+def weighted_mid_cross(pa, ca, pm, cm, mg_min, r_pa, r_ca, y_hint):
+    """两条铅垂骨轴之间的**加权中点**（肘用）。
+
+    站姿修正后上臂骨与前臂骨都是竖直的，但它们各自的 x 差 ~150px（上臂 407 / 前臂 250），
+    所以肘锚点不可能同时在两根骨头上。而 Rapier 的球关节锚点必须落在**两个刚体的碰撞体内**，
+    否则一 reset 就被弹开（verify-core 的"锚点不越出胶囊"就是这条）。
+    ⇒ 取 x = (x_pa·r_ca + x_ca·r_pa)/(r_pa + r_ca)（按对侧胶囊半径加权 = 落在两者都容得下的位置），
+      再要求该 x 距两条骨轴都 ≤ 对应胶囊半径，并落在父子 alpha 内。
+    半径取 `capsuleFromBox` 的口径：r = 0.3·bbox 宽（limbRadiusScale=0.6）。
+    """
+    x_pa = pa["b"]
+    x_ca = ca["b"]
+    x = (x_pa * r_ca + x_ca * r_pa) / (r_pa + r_ca)
+    if abs(x - x_pa) > r_pa or abs(x - x_ca) > r_ca:
+        return None, -1e9
+    best = None
+    y_lo = max(pa["y0"], ca["y0"], y_hint - 120)
+    y_hi = min(pa["y1"], ca["y1"], y_hint + 120)
+    for y in range(int(y_lo), int(y_hi) + 1):
+        pr, cr = pm[0].get(y), cm[0].get(y)
+        if not (pr and cr):
+            continue
+        xx = min(max(x, max(pr[0], cr[0])), min(pr[1], cr[1]))
+        mg = min(margin_at(pm, xx, y), margin_at(cm, xx, y))
+        if mg < mg_min:
+            continue
+        d = abs(y - y_hint)
+        if best is None or d < best[2]:
+            best = ([round(xx, 1), float(y)], mg, d)
+    return (best[0], best[1]) if best else (None, -1e9)
+
+
 def nearest_cross(pa, ca, pm, cm, mg_min):
     """双骨轴**最近的可交点**（严格求交常常落到某侧贴图之外 ⇒ 不可用）。
 
@@ -326,6 +376,10 @@ PAIRS = [("shoulder_l", "shoulder_r"), ("elbow_l", "elbow_r"),
          ("hip_l", "hip_r"), ("knee_l", "knee_r")]
 PART_PAIRS = [("arm_l", "arm_r"), ("hand_l", "hand_r"),
               ("thigh_l", "thigh_r"), ("shin_l", "shin_r")]
+
+
+AXES_ANCHOR_HINT = {j["name"]: (j["x"], j["y"]) for j in json.load(
+    open(os.path.join(ROOT, "src", "data", "parts.json"), encoding="utf-8"))["joints"]}
 
 
 def symmetrize_axes(axes, center_x):
@@ -385,14 +439,18 @@ def main() -> int:
     # ★★ 小腿骨轴 —— 两处修正，都是"骨骼"层面的，纹理一律不动：
     #   ① 先只用**靴子上方的小腿肚段**拟合：靴子外张 20~23mm，会把整条小腿轴带偏 3°
     #      （全高拟合 8~9° → 靴上方拟合 4.9~5.5°）。
-    #   ② 再把骨轴改成**膝以下垂直**（k=0，过小腿肚段中点）：
+    #   ② 再把骨轴改成**铅垂**（k=0，过该肢体中段中点）：上臂/前臂/小腿都竖直。
     #      用户回读"脚尖朝外侧"——素材整条腿外撇（髋 615 → 膝 542 → 脚底 476px），
     #      照搬骨骼就是外八。改成垂直后"膝→脚尖"是一条铅垂线（用户："从膝关节到脚尖"）。
+    #   上肢同样处理（用户："我要手臂侧面的骨架竖直，纹理别动"）——
+    #   原来上臂骨 5°、前臂骨 31°，肘几乎伸直却在骨上折 36° = 一条断臂。
     #   纹理侧完全不受影响：倾角在渲染端被 restVisualQuatOf 补偿掉，贴图仍与素材逐像素一致。
-    for key in ("shin_l", "shin_r"):
-        yw = measure_paw(key)["yWide"]
+    for key in ("shin_l", "shin_r", "arm_l", "arm_r", "hand_l", "hand_r"):
         prof = row_profile(os.path.join(SRC_DIR, FILES[key]))
-        shaft = [p for p in prof if p[0] <= yw]
+        if key.startswith("shin"):
+            shaft = [p for p in prof if p[0] <= measure_paw(key)["yWide"]]   # 排除靴子
+        else:
+            shaft = prof                                                      # 上肢整条
         k, b, rms = fit_axis(shaft)
         y0, y1 = shaft[0][0], shaft[-1][0]
         x_mid = k * ((y0 + y1) / 2) + b
@@ -404,83 +462,9 @@ def main() -> int:
             "drawnTiltDeg": round(math.degrees(math.atan2(k, 1.0)), 2),
         }
 
-    print(f"{'part':8} {'中轴k':>8} {'倾角°':>7} {'残差px':>7} {'近端端心':>15} {'远端端心':>15} {'轴长px':>7}")
-    for k, a in axes.items():
-        ang = math.degrees(math.atan2(a["k"], 1.0))
-        print(f"{k:8} {a['k']:8.4f} {ang:7.2f} {a['rms']:7.2f} "
-              f"({a['proxTip'][0]:6.1f},{a['proxTip'][1]:6.0f}) ({a['distTip'][0]:6.1f},{a['distTip'][1]:6.0f}) {a['lenPx']:7.0f}")
-
-    # ★ 先把骨轴左右对称化，**再**用对称后的骨轴找锚点 ——
-    #   否则锚点吸附在"各自歪掉的"骨轴上，腿还是歪的（第一版大腿就是这么改错的）。
+    # ★ 先对称化骨轴，**再**用对称后的骨轴找锚点（否则锚点吸附在各自歪掉的骨轴上）
     center_x = (meta["extent"]["x0"] + meta["extent"]["x1"]) / 2
     symmetrize_axes(axes, center_x)
-
-    print(f"\n关节锚点（要求：落在父/子 alpha 内部；肩/髋余量 ≥ {MARGIN_BALL:.0f}px，肘/膝/颈 ≥ {MARGIN_DEFAULT:.0f}px）")
-    anchors, margins, ok = {}, {}, True
-    for jname, pkey, ckey in CHAINS:
-        mg_min = MARGIN_BALL if jname in BALL_JOINTS else MARGIN_DEFAULT
-        pm, cm = masks[pkey], masks[ckey]
-        ca = axes[ckey]
-        cands = []
-        if jname == "neck":
-            cands.append(("沿用重叠区中心", list(old_anchor[jname])))
-        else:
-            if pkey != "torso":
-                pa = axes[pkey]
-                if ckey.startswith("shin"):
-                    onAx, mg = on_child_axis(ca, pm, cm, mg_min)
-                    if onAx:
-                        cands.append(("子骨轴上吸附(膝以下铅垂)", onAx))
-                if abs(pa["k"] - ca["k"]) >= NEAR_PARALLEL:
-                    hit = intersect(pa, ca)
-                    if hit and min(margin_at(pm, hit[0], hit[1]), margin_at(cm, hit[0], hit[1])) >= mg_min:
-                        cands.append(("中轴求交", hit))
-                    near, mg, mis = nearest_cross(pa, ca, pm, cm, mg_min)
-                    if near:
-                        cands.append((f"双轴最近可交点(差{mis:.0f}px)", near))
-                else:
-                    cands.append(("中轴近平行→端心连线中点", [
-                        (ca["proxTip"][0] + pa["distTip"][0]) / 2,
-                        (ca["proxTip"][1] + pa["distTip"][1]) / 2]))
-            else:
-                pt, mg = topmost_overlap(pm, cm, ca["proxTip"], 0.35 * ca["lenPx"], mg_min)
-                if pt:
-                    cands.append((f"重叠区首次接触(余量≥{mg_min:.0f}px)", pt))
-            cands.append((f"近端端心内移 {INWARD:.0%}", inward_point(ca, INWARD)))
-            pt, mg = topmost_overlap(pm, cm, ca["proxTip"], 0.35 * ca["lenPx"], mg_min)
-            if pt:
-                cands.append((f"重叠区首次接触(宽搜,余量≥{mg_min:.0f}px)", pt))
-            for i in range(1, 26):
-                cands.append((f"内扫 {i}%", inward_point(ca, i / 100.0)))
-
-        best = None
-        for how, pt in cands:
-            mg = min(margin_at(pm, pt[0], pt[1]), margin_at(cm, pt[0], pt[1]))
-            if mg >= mg_min:
-                best = (how, pt, mg)
-                break
-        if best is None:
-            # 兜底：重叠区里余量最大的点（连通性优先，宁可位置次优）
-            pc, pcx = parts[pkey], parts[ckey]
-            box = (max(pc["cx"] - pc["bw"] / 2, pcx["cx"] - pcx["bw"] / 2) + 1,
-                   max(pc["cy"] - pc["bh"] / 2, pcx["cy"] - pcx["bh"] / 2) + 1,
-                   min(pc["cx"] + pc["bw"] / 2, pcx["cx"] + pcx["bw"] / 2) - 1,
-                   min(pc["cy"] + pc["bh"] / 2, pcx["cy"] + pcx["bh"] / 2) - 1)
-            pt, mg = best_overlap(pm, cm, box)
-            if pt:
-                cands.append(("重叠区最大余量(兜底)", pt))
-                if mg < 0:
-                    print(f"  [警告] {jname}: 连通性兜底后余量仍为 {mg:.1f}px（源图这两块本身不接）")
-                    ok = False
-            else:
-                print(f"  {jname:11} 父子贴图无任何 alpha 重叠")
-                ok = False
-                continue
-        how, (px, py), mg = best
-        anchors[jname] = [round(px, 1), round(py, 1)]
-        margins[jname] = round(mg, 1)
-        ox, oy = old_anchor[jname]
-        print(f"  {jname:11} ({px:7.1f},{py:7.1f}) 余量 {mg:5.1f}px  [{how}]  旧({ox:.0f},{oy:.0f}) Δ高 {oy - py:+6.1f}px")
 
     paws = {"l": measure_paw("shin_l"), "r": measure_paw("shin_r")}
     # 爪区对称化：**位置类**字段做镜像平均；**尺寸类**字段（半宽/高度）只能取算术平均

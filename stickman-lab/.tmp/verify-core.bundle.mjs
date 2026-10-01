@@ -6205,11 +6205,11 @@ var init_limbAxes = __esm({
         ],
         knee_l: [
           527.5,
-          2222
+          2206
         ],
         knee_r: [
           1037.5,
-          2222
+          2206
         ]
       },
       margin: {
@@ -6220,8 +6220,8 @@ var init_limbAxes = __esm({
         elbow_r: 19,
         hip_l: 25,
         hip_r: 25,
-        knee_l: 4,
-        knee_r: 4
+        knee_l: 20,
+        knee_r: 20
       },
       paw: {
         l: {
@@ -6250,6 +6250,12 @@ var init_limbAxes = __esm({
 });
 
 // src/core/partsMeta.ts
+var partsMeta_exports = {};
+__export(partsMeta_exports, {
+  LIMB_AXES: () => LIMB_AXES,
+  META: () => META,
+  PART_BY_KEY: () => PART_BY_KEY
+});
 var META, PART_BY_KEY, LIMB_AXES;
 var init_partsMeta = __esm({
   "src/core/partsMeta.ts"() {
@@ -6279,6 +6285,7 @@ __export(skeleton_exports, {
   assertMassBudget: () => assertMassBudget,
   buildSkeleton: () => buildSkeleton,
   invQuatOf: () => invQuatOf,
+  quatToRotVec: () => quatToRotVec,
   restQuatOf: () => restQuatOf,
   restVisualQuatOf: () => restVisualQuatOf,
   rotVecByQuat: () => rotVecByQuat
@@ -6297,6 +6304,24 @@ function restVisualQuatOf(tiltRad) {
 }
 function invQuatOf(q) {
   return [-q[0], -q[1], -q[2], q[3]];
+}
+function quatToRotVec(q) {
+  const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
+  const half = Math.acos(w);
+  const s = Math.sin(half);
+  if (Math.abs(s) < 1e-7) return [0, 0, 0];
+  const ang = 2 * half;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  return [q[0] * k, q[1] * k, q[2] * k];
+}
+function quatRel(a, b) {
+  const cx = -a[0], cy = -a[1], cz = -a[2], cw = a[3];
+  return [
+    cw * b[0] + cx * b[3] + cy * b[2] - cz * b[1],
+    cw * b[1] - cx * b[2] + cy * b[3] + cz * b[0],
+    cw * b[2] + cx * b[1] - cy * b[0] + cz * b[3],
+    cw * b[3] - cx * b[0] - cy * b[1] - cz * b[2]
+  ];
 }
 function rotVecByQuat(q, v2) {
   const [qx, qy, qz, qw] = q;
@@ -6360,19 +6385,25 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const restYawOf = (key) => {
     if (key !== "shin_l" && key !== "shin_r") return 0;
-    const s = cfg.footInwardDeg * DEG;
-    return key === "shin_l" ? s : -s;
+    const s = cfg.footSplayDeg * DEG;
+    return key === "shin_l" ? -s : s;
   };
   const bodies = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
-    const { length, radius, halfHeight } = capsuleFromBox(
+    const { length: boxLen, radius, halfHeight: boxHalf } = capsuleFromBox(
       part.bw * px2m,
       part.bh * px2m,
       cfg.limbRadiusScale
     );
     const ax = LIMB_AXES.axes[spec.key];
+    let length = boxLen;
+    let halfHeight = boxHalf;
+    if (ax && TILTED.has(spec.key)) {
+      length = Math.max(boxLen, ax.lenPx * px2m);
+      halfHeight = Math.max(1e-3, length / 2 - radius);
+    }
     const tilt = restTiltOf(spec.key, !!spec.leg);
     const yaw = restYawOf(spec.key);
     const qRestInv = invQuatOf(restQuatOf(tilt, yaw));
@@ -6419,8 +6450,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const hx = soleHalfLen * sfx;
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const soleWorldY = soleHalfThick;
-      const inward = cfg.footInwardCm / 100 * (spec.key === "shin_l" ? 1 : -1);
-      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true) - inward;
+      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: "cuboid",
@@ -6542,6 +6572,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       wz,
       parentLocal: dParent,
       childLocal: dChild,
+      // ★ 静姿态读数（父静姿态⁻¹ ⊗ 子静姿态），ragdoll 用它把关节零位挪到素材姿势
+      restRad: quatToRotVec(quatRel(
+        restQuatOf(parent.restTiltRad, parent.restYawRad),
+        restQuatOf(child.restTiltRad, child.restYawRad)
+      )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
@@ -6568,6 +6603,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         wz,
         parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
         childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        restRad: [0, 0, 0],
+        // 躯干段无静倾角 ⇒ 关节零位就是素材姿势
         minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
         maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
         maxTorque: [
@@ -6610,11 +6647,14 @@ function assertJointAnchors(sk2) {
   for (const j of sk2.joints) {
     const p = sk2.bodies.find((b) => b.key === j.parentKey);
     const c = sk2.bodies.find((b) => b.key === j.childKey);
-    for (const [b, l] of [[p, j.parentLocal], [c, j.childLocal]]) {
+    for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
       const reach = b.halfHeight + b.radius;
       const d = Math.hypot(l[0], l[1], l[2]);
       const over2 = d - reach;
       if (over2 > worst) worst = over2;
+      if (over2 > 1e-4) {
+        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v2) => (v2 * 1e3).toFixed(0)).join(",")})mm |d|=${(d * 1e3).toFixed(1)}mm > reach=${(reach * 1e3).toFixed(1)}mm  \u8D8A ${(over2 * 1e3).toFixed(1)}mm`);
+      }
     }
   }
   return worst;
@@ -6637,18 +6677,9 @@ var init_skeleton = __esm({
       // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
       spineSegments: 4,
       soleFootScale: 1,
-      // ★★ 膝盖以下绕竖直轴的偏航（度）。默认 **0**：脚掌长轴已经沿世界 X（正前方），
-      //   一旦偏航，脚尖反而变成"内八/外八"（用户回读："现在还是内八"）。留作调姿旋钮。
-      footInwardDeg: 0,
-      /**
-       * ★★ 脚掌相对**膝锚点正下方**再向内收多少（厘米）。默认 0 = 膝到脚尖垂直。
-       *
-       * 用户定调（2026-10-01）："脚部骨骼向内收一下，现在是从膝关节到脚尖，脚尖朝外侧"。
-       * 实测：素材整条腿是外撇的 —— 髋 x=615 → 膝 x=542 → 小腿骨轴到脚底 x=476，
-       * 画出来的靴心更外（x=440），即**素材腿从髋到脚外移 139px ≈ 89mm**。
-       * 这个数只挪**脚掌碰撞盒**（骨骼），**纹理一律不动**（用户："纹理是不能动的，要动骨骼"）。
-       */
-      footInwardCm: 0
+      // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
+      //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
+      footSplayDeg: 25
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -13422,14 +13453,14 @@ function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
 function quatInvRotate(qx, qy, qz, qw, vx, vy, vz, out) {
   quatRotate(-qx, -qy, -qz, qw, vx, vy, vz, out);
 }
-function quatRel(ax, ay, az, aw, bx, by, bz, bw, out) {
+function quatRel2(ax, ay, az, aw, bx, by, bz, bw, out) {
   const cx = -ax, cy = -ay, cz = -az, cw = aw;
   out[0] = cw * bx + cx * bw + cy * bz - cz * by;
   out[1] = cw * by - cx * bz + cy * bw + cz * bx;
   out[2] = cw * bz + cx * by - cy * bx + cz * bw;
   out[3] = cw * bw - cx * bx - cy * by - cz * bz;
 }
-function quatToRotVec(qx, qy, qz, qw, out) {
+function quatToRotVec2(qx, qy, qz, qw, out) {
   const w = qw > 1 ? 1 : qw < -1 ? -1 : qw;
   const half = Math.acos(w);
   const s = Math.sin(half);
@@ -13446,8 +13477,8 @@ function quatToRotVec(qx, qy, qz, qw, out) {
   out[2] = qz * k;
 }
 function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
-  quatRel(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4);
-  quatToRotVec(tmp4[0], tmp4[1], tmp4[2], tmp4[3], out);
+  quatRel2(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4);
+  quatToRotVec2(tmp4[0], tmp4[1], tmp4[2], tmp4[3], out);
 }
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
@@ -13547,7 +13578,7 @@ var init_ragdoll = __esm({
       initX;
       initY;
       initZ;
-      /** 各刚体的静倾角四元数（reset 用） */
+      /** 各刚体的静姿态四元数（reset 用 + 关节角的参考系） */
       restQ;
       // ---- 热路径复用缓冲（零分配） ----
       qRel = new Float64Array(4);
@@ -13678,11 +13709,15 @@ var init_ragdoll = __esm({
        * ★ 这是 3D 关节的姿态真源：软限位、网络输入、探针全走它。
        */
       jointRot(i, out = this.rv) {
-        const p = this.bodies[this.jointBodies[i * 2]];
-        const c = this.bodies[this.jointBodies[i * 2 + 1]];
-        const qp = p.rotation();
-        const qc = c.rotation();
+        const pi = this.jointBodies[i * 2];
+        const ci = this.jointBodies[i * 2 + 1];
+        const qp = this.bodies[pi].rotation();
+        const qc = this.bodies[ci].rotation();
         calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, this.qRel, out);
+        const rr = this.sk.joints[i].restRad;
+        out[0] -= rr[0];
+        out[1] -= rr[1];
+        out[2] -= rr[2];
       }
       /** 关节 i 的**三轴相对角速度**（父体本地，rad/s）写入 out[0..2] */
       jointRelVel(i, out = this.relL) {
@@ -13771,6 +13806,10 @@ var init_ragdoll = __esm({
           const wp = p.angvel();
           const wc = c.angvel();
           calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
+          const rr = j.restRad;
+          rv[0] -= rr[0];
+          rv[1] -= rr[1];
+          rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
           const Ieff = this.jointIeff[i];
           for (let k = 0; k < 3; k++) {
@@ -15138,6 +15177,7 @@ var {
   DEFAULT_CONFIG: DEFAULT_CONFIG2,
   JOINT_ORDER: JOINT_ORDER2
 } = skeletonMod;
+var { META: META2, LIMB_AXES: LIMB_AXES2 } = await Promise.resolve().then(() => (init_partsMeta(), partsMeta_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { Ragdoll: Ragdoll2 } = await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { shapeForJoints: shapeForJoints2, brainParamCount: brainParamCount2, inputCount: inputCount2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
@@ -15191,45 +15231,74 @@ check("\u9AA8\u76C6\uFF08torso = \u6811\u6839\uFF09\u521D\u59CB\u9AD8\u5EA6\u572
 }
 {
   const H = sk.totalHeight;
-  const bands = [
-    ["neck", "\u9888 C7", 0.8, 0.84],
-    ["shoulder_l", "\u80A9\u5CF0", 0.79, 0.83],
-    ["shoulder_r", "\u80A9\u5CF0(\u53F3)", 0.79, 0.83],
-    ["elbow_l", "\u8098", 0.6, 0.65],
-    ["hip_l", "\u9ACB", 0.45, 0.52],
-    ["knee_l", "\u819D", 0.25, 0.29]
-  ];
-  log("  \u5173\u8282\u9AD8\u5EA6\u5206\u6570\uFF08\u951A\u70B9 y / \u8EAB\u9AD8\uFF09\uFF1A");
-  for (const [jn, label, lo, hi] of bands) {
+  const cx = (META2.extent.x0 + META2.extent.x1) / 2;
+  const groundPx = META2.extent.y1;
+  const px2m = H / META2.extent.h;
+  const frac = (name) => {
+    const a = LIMB_AXES2.anchors[name];
+    return (groundPx - a[1]) * px2m / H;
+  };
+  const zOf = (name) => -(LIMB_AXES2.anchors[name][0] - cx) * px2m;
+  log("  \u2460 \u5173\u8282\u8FDE\u901A\u6027\uFF08\u951A\u70B9\u5FC5\u987B\u843D\u5728\u7236/\u5B50\u4E24\u5F20\u8D34\u56FE alpha \u5185\u90E8\uFF09\uFF1A");
+  const need = {
+    neck: 6,
+    shoulder_l: 25,
+    shoulder_r: 25,
+    hip_l: 25,
+    hip_r: 25,
+    elbow_l: 8,
+    elbow_r: 8,
+    knee_l: 20,
+    knee_r: 20
+  };
+  for (const [jn, minMg] of Object.entries(need)) {
+    const mg = LIMB_AXES2.margin[jn];
     const j = sk.joints.find((x) => x.name === jn);
-    const r = j.wy / H;
-    log(`    ${label.padEnd(10)} ${j.wy.toFixed(3)} m = ${(r * 100).toFixed(1)}%   \u533A\u95F4 ${(lo * 100).toFixed(0)}~${(hi * 100).toFixed(0)}%`);
+    log(`    ${jn.padEnd(11)} \u4F59\u91CF ${String(mg).padStart(5)} px\uFF08\u4E0B\u9650 ${minMg}\uFF09   \u4E16\u754C y=${j.wy.toFixed(3)} z=${j.wz >= 0 ? "+" : ""}${j.wz.toFixed(3)}`);
+    check(`\u8FDE\u901A\u6027\u4F59\u91CF\uFF1A${jn}`, (mg ?? -1) >= minMg, `${mg} px \u2265 ${minMg} px`);
+  }
+  log("  \u2461 \u5173\u8282\u9AD8\u5EA6\u5206\u6570\uFF08\u7D20\u6750\u5B9E\u6D4B \xB11.5% / \u4EBA\u4F53\u53C2\u8003\uFF09\uFF1A");
+  const bands = [
+    // 关节, 标签, 素材下界, 素材上界, 人体下界, 人体上界
+    ["neck", "\u9888 C7", 0.8, 0.84, 0.8, 0.84],
+    ["shoulder_l", "\u80A9\u5CF0", 0.767, 0.797, 0.79, 0.83],
+    ["elbow_l", "\u8098", 0.625, 0.655, 0.6, 0.65],
+    ["hip_l", "\u9ACB", 0.462, 0.492, 0.45, 0.52],
+    ["knee_l", "\u819D", 0.222, 0.252, 0.25, 0.29]
+  ];
+  for (const [jn, label, lo, hi, rlo, rhi] of bands) {
+    const r = frac(jn);
+    log(`    ${label.padEnd(8)} ${(r * 100).toFixed(1)}%   \u7D20\u6750\u533A\u95F4 ${(lo * 100).toFixed(1)}~${(hi * 100).toFixed(1)}%   \u4EBA\u4F53\u53C2\u8003 ${(rlo * 100).toFixed(0)}~${(rhi * 100).toFixed(0)}%`);
     check(`\u5173\u8282\u9AD8\u5EA6\u6BD4\u4F8B\uFF1A${label}`, r >= lo && r <= hi, `${(r * 100).toFixed(1)}%`);
   }
-  const sh = sk.joints.find((x) => x.name === "shoulder_l");
-  const el = sk.joints.find((x) => x.name === "elbow_l");
-  const armPart = sk.bodies.find((b) => b.key === "arm_l");
-  const upperArm = sh.wy - el.wy;
-  const armTop = armPart.cy + armPart.length / 2;
-  log(`  \u4E0A\u81C2\uFF1A\u80A9 ${sh.wy.toFixed(3)} \u2192 \u8098 ${el.wy.toFixed(3)} = ${upperArm.toFixed(3)} m   \u8D34\u7247\u4E0A\u7F18 ${armTop.toFixed(3)} m   \u80A9\u951A\u70B9\u9AD8\u51FA\u8D34\u7247\u4E0A\u7F18 ${(sh.wy - armTop).toFixed(3)} m`);
+  log("  \u2462 \u5DE6\u53F3\u5BF9\u79F0\uFF08\u6E90\u56FE\u5DE6\u53F3\u4E0D\u7B49\uFF0C\u9AA8\u67B6\u5FC5\u987B\u955C\u50CF\uFF09\uFF1A");
+  for (const [l, r, label] of [
+    ["shoulder_l", "shoulder_r", "\u80A9"],
+    ["elbow_l", "elbow_r", "\u8098"],
+    ["hip_l", "hip_r", "\u9ACB"],
+    ["knee_l", "knee_r", "\u819D"]
+  ]) {
+    const d = (zOf(l) + zOf(r)) * 1e3;
+    log(`    ${label}  L z=${zOf(l).toFixed(3)}  R z=${zOf(r).toFixed(3)}   \u955C\u50CF\u6B8B\u5DEE ${d.toFixed(1)} mm`);
+    check(`\u5DE6\u53F3\u955C\u50CF\u5BF9\u79F0\uFF1A${label}`, Math.abs(d) < 1, `${d.toFixed(1)} mm`);
+  }
+  const seg = (a, b) => {
+    const ja = sk.joints.find((x) => x.name === a);
+    const jb = sk.joints.find((x) => x.name === b);
+    return Math.hypot(ja.wy - jb.wy, ja.wz - jb.wz);
+  };
+  const upperArm = seg("shoulder_l", "elbow_l");
+  const thigh = seg("hip_l", "knee_l");
+  log(`  \u2463 \u80A2\u6BB5\u957F\u5EA6\uFF1A\u4E0A\u81C2(\u80A9\u2192\u8098) ${upperArm.toFixed(3)} m [\u7D20\u6750 0.26 / \u4EBA\u4F53 0.30~0.33]   \u5927\u817F(\u9ACB\u2192\u819D) ${thigh.toFixed(3)} m [\u7D20\u6750 0.42 / \u4EBA\u4F53 0.40~0.45]`);
   check(
-    "\u2605 \u4E0A\u81C2\u957F\u5EA6\u843D\u5728\u89E3\u5256\u533A\u95F4 0.28~0.36 m\uFF08\u80A9\u951A\u70B9\u5FC5\u987B\u5728\u4E0A\u81C2\u4E0A\u7AEF\uFF0C\u4E0D\u80FD\u843D\u5728\u4E2D\u70B9\uFF09",
-    upperArm > 0.28 && upperArm < 0.36,
+    "\u2605 \u4E0A\u81C2\u957F\u5EA6\u5728\u7D20\u6750\u533A\u95F4 0.24~0.29 m\uFF08\u7D20\u6750\u4E0A\u81C2\u504F\u77ED\uFF0C\u732B\u7684\u4F53\u6001\u5982\u6B64\uFF09",
+    upperArm > 0.24 && upperArm < 0.29,
     `${upperArm.toFixed(3)} m`
   );
   check(
-    '\u2605 \u80A9\u951A\u70B9\u4E0D\u4F4E\u4E8E\u4E0A\u81C2\u8D34\u7247\u4E0A\u7F18\uFF08\u5426\u5219\u4E0A\u81C2\u9876\u90E8\u65E0\u951A\u70B9 = "\u60AC\u7A7A"\uFF09',
-    sh.wy >= armTop - 1e-6,
-    `\u80A9 ${sh.wy.toFixed(3)} vs \u8D34\u7247\u4E0A\u7F18 ${armTop.toFixed(3)}`
-  );
-  const hip = sk.joints.find((x) => x.name === "hip_l");
-  const knee = sk.joints.find((x) => x.name === "knee_l");
-  const thigh = sk.bodies.find((b) => b.key === "thigh_l");
-  log(`  \u5927\u817F\uFF1A\u9ACB ${hip.wy.toFixed(3)} \u2192 \u819D ${knee.wy.toFixed(3)} = ${(hip.wy - knee.wy).toFixed(3)} m   \u8D34\u7247\u4E0A\u7F18 ${(thigh.cy + thigh.length / 2).toFixed(3)} m`);
-  check(
     "\u2605 \u5927\u817F\u957F\u5EA6\u843D\u5728\u89E3\u5256\u533A\u95F4 0.38~0.48 m",
-    hip.wy - knee.wy > 0.38 && hip.wy - knee.wy < 0.48,
-    `${(hip.wy - knee.wy).toFixed(3)} m`
+    thigh > 0.38 && thigh < 0.48,
+    `${thigh.toFixed(3)} m`
   );
 }
 check(
@@ -15353,14 +15422,14 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     Math.abs(sk.massTotal - sk.bodies.reduce((s, b) => s + b.mass, 0)) < 1e-9,
     `${sk.massTotal.toFixed(4)} kg`
   );
-  const mkW = () => {
+  const mkW2 = () => {
     const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
     w.timestep = 1 / 120;
     w.numSolverIterations = DEFAULT_SIM2.solverIterations;
     w.numAdditionalFrictionIterations = Math.max(1, DEFAULT_SIM2.solverIterations >> 1);
     return w;
   };
-  const w1 = mkW();
+  const w1 = mkW2();
   const d1 = new Ragdoll2(w1, sk);
   check("\u5173\u8282\u6570\u4E0E\u9AA8\u67B6\u4E00\u81F4\uFF0C\u4E14\u6BCF\u4E2A\u90FD\u5EFA\u6210\u4E86", d1.joints.length === sk.joints.length, `${d1.joints.length}`);
   note(
@@ -15384,7 +15453,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
   log(`  \u9ACB\u7ED5 X\uFF08\u5916\u5C55\uFF09\u6EE1\u9A71\u52A8 2s\uFF1A\u5173\u8282\u89D2 x=${(rv[0] * 180 / Math.PI).toFixed(1)}\xB0  \u5C0F\u817F z \u4F4D\u79FB ${(dz * 1e3).toFixed(0)} mm`);
   check("\u2605 \u5916\u5C55\u8F74\u771F\u7684\u6709\u54CD\u5E94\uFF082D \u5E73\u9762\u65B9\u6848\u4E0B\u6B64\u8F74\u6052\u4E3A 0\uFF09", Math.abs(rv[0]) > 0.15 && dz > 0.05);
   for (let ax = 0; ax < 3; ax++) {
-    const w = mkW();
+    const w = mkW2();
     const d = new Ragdoll2(w, sk);
     const t2 = new Float32Array(d.jointCount * 3);
     t2[hip * 3 + ax] = 1;
@@ -15410,7 +15479,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     `5 \u6B65\u540E \u03C9x=${wxFree.toFixed(2)} rad/s\uFF08\u521D\u59CB 4.00\uFF09`
   );
   w0.free();
-  const w2 = mkW();
+  const w2 = mkW2();
   const d2 = new Ragdoll2(w2, sk);
   d2.torso().setAngvel({ x: 4, y: 0, z: 0 }, true);
   let maxQx = 0;
@@ -15443,7 +15512,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     devSim < 1e-9,
     `\u504F\u5DEE ${devSim.toExponential(2)} m`
   );
-  const wB = mkW();
+  const wB = mkW2();
   const dB = new Ragdoll2(wB, sk);
   const trace = (d, w) => {
     d.reset(0);
@@ -15550,6 +15619,35 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
       if (tilt < 0.6) upTicks++;
       if (totTicks % 40 === 0) {
         marks.push(`t=${(lastTick / 60).toFixed(1)}s x=${tp.x.toFixed(2)} \u503E${(tilt * 180 / Math.PI).toFixed(0)}\xB0`);
+      }
+      {
+        const neck = JOINT_ORDER2.indexOf("neck");
+        const jn = sk.joints.find((j) => j.name === "neck");
+        const axisName = ["X \u4FA7\u5C48/\u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"];
+        log(`  \u9888\u90E8\u5173\u8282\uFF1A\u7236=${jn.parentKey} \u5B50=${jn.childKey}  \u9650\u4F4D X\xB1${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}\xB0  Y\xB1${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}\xB0  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}\xB0  \u6700\u5927\u529B\u77E9 ${jn.maxTorque.map((t2) => t2.toFixed(0)).join("/")} N\xB7m`);
+        for (let ax = 0; ax < 3; ax++) {
+          const w = mkW();
+          const d = new Ragdoll2(w, sk);
+          const q0 = d.bodyByKey("head").rotation();
+          const t2 = new Float32Array(d.jointCount * 3);
+          t2[neck * 3 + ax] = 1;
+          d.setMotorTargets(t2);
+          for (let i = 0; i < 240; i++) {
+            d.driveMotors(1 / 120);
+            w.step();
+          }
+          const rv = new Float64Array(3);
+          d.jointRot(neck, rv);
+          const q1 = d.bodyByKey("head").rotation();
+          const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
+          const headDeg = 2 * Math.acos(dot) * 180 / Math.PI;
+          log(`    \u9888\u4EC5\u9A71\u52A8\u8F74${ax}\uFF08${axisName[ax]}\uFF092s \u2192 \u5173\u8282\u89D2[${rv.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0  \u5934\u504F\u8F6C ${headDeg.toFixed(1)}\xB0`);
+          check(
+            `\u2605 \u9888\u90E8\u8F74 ${ax}\uFF08${axisName[ax]}\uFF09\u53EF\u9A71\u52A8\u4E14\u5934\u8DDF\u7740\u8F6C`,
+            Math.abs(rv[ax]) > 0.15 && headDeg > 3,
+            `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad\uFF0C\u5934\u504F ${headDeg.toFixed(1)}\xB0`
+          );
+        }
       }
     }
   }

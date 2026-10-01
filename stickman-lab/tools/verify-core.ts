@@ -50,6 +50,7 @@ const skeletonMod = await import('../src/core/skeleton');
 const {
   buildSkeleton, assertMassBudget, assertColliderMass, assertJointAnchors, DEFAULT_CONFIG, JOINT_ORDER,
 } = skeletonMod;
+const { META, LIMB_AXES } = await import('../src/core/partsMeta');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { Ragdoll } = await import('../src/core/ragdoll');
 const { shapeForJoints, brainParamCount, inputCount } = await import('../src/core/brain');
@@ -114,49 +115,77 @@ check('骨盆（torso = 树根）初始高度在 0.7~1.0 m', prevY > 0.7 && prev
   check('胸腔严格高于骨盆（脊柱是向上堆叠的）', chestY > prevY + 0.1, `${chestY.toFixed(3)} vs ${prevY.toFixed(3)} m`);
   check('胸腔顶面不超出身高（没有把贴图拉伸到身外）', topY <= sk.totalHeight + 1e-6, `${topY.toFixed(3)} ≤ ${sk.totalHeight.toFixed(3)} m`);
 }
-// ★★★ 关节高度 / 身高 必须落在解剖区间（2026-10-01 加）
-//   这条断言是为了钉住一类**静默**错误：`build-parts.py` 用"父/子 bbox 重叠区中心"当锚点，
-//   对深重叠的球窝关节（肩/髋）会偏低 —— 肩锚点因此落在**上臂中点**，
-//   表现为"骨架显矮 + 手臂上部悬空"，而**所有其它断言全绿**（质量/身高/胸腔比例都不受影响）。
-//   判据用人体测量学的**分数**（不写死米数，改身高也不会失效）：
-//   颈(C7) 0.80~0.84 / 肩峰 0.79~0.83 / 肘 0.60~0.65 / 髋 0.45~0.52 / 膝 0.25~0.29。
+// ★★★ 关节锚点：连通性（alpha 余量）+ 高度分数 + 肢段长度
+//   ① 连通性是**硬要求**（用户："最起码各个肢体的关节必须连起来"）：
+//      每个锚点必须落在父/子两张贴图的 alpha **内部**并留足余量 —— 由
+//      `tools/measure-limb-axes.py` 实测写入 `limbAxes.margin`，这里钉住下限。
+//      肩/髋是大摆角球窝关节 ⇒ 25px；膝 20px；肘 8px。
+//   ② 高度分数区间**同时**给两个口径：素材实测值 ±1.5%，以及人体测量学参考值。
+//      素材是**猫**（额状体态、头身比、肢段比都跟人不一样），所以解剖区间只能当参考，
+//      真正要防回归的是"离素材实测值别跑偏"。
 {
   const H = sk.totalHeight;
-  const bands: [string, string, number, number][] = [
-    ['neck', '颈 C7', 0.80, 0.84],
-    ['shoulder_l', '肩峰', 0.79, 0.83],
-    ['shoulder_r', '肩峰(右)', 0.79, 0.83],
-    ['elbow_l', '肘', 0.60, 0.65],
-    ['hip_l', '髋', 0.45, 0.52],
-    ['knee_l', '膝', 0.25, 0.29],
-  ];
-  log('  关节高度分数（锚点 y / 身高）：');
-  for (const [jn, label, lo, hi] of bands) {
+  const cx = (META.extent.x0 + META.extent.x1) / 2;
+  const groundPx = META.extent.y1;
+  const px2m = H / META.extent.h;
+  /** 画布锚点 → 关节高度分数（与 buildSkeleton 同一套映射） */
+  const frac = (name: string): number => {
+    const a = LIMB_AXES.anchors[name]!;
+    return ((groundPx - a[1]) * px2m) / H;
+  };
+  /** 画布锚点 x → 世界 Z（左右） */
+  const zOf = (name: string): number => -(LIMB_AXES.anchors[name]![0] - cx) * px2m;
+
+  log('  ① 关节连通性（锚点必须落在父/子两张贴图 alpha 内部）：');
+  const need: Record<string, number> = {
+    neck: 6, shoulder_l: 25, shoulder_r: 25, hip_l: 25, hip_r: 25,
+    elbow_l: 8, elbow_r: 8, knee_l: 20, knee_r: 20,
+  };
+  for (const [jn, minMg] of Object.entries(need)) {
+    const mg = LIMB_AXES.margin[jn];
     const j = sk.joints.find((x) => x.name === jn)!;
-    const r = j.wy / H;
-    log(`    ${label.padEnd(10)} ${j.wy.toFixed(3)} m = ${(r * 100).toFixed(1)}%   区间 ${(lo * 100).toFixed(0)}~${(hi * 100).toFixed(0)}%`);
+    log(`    ${jn.padEnd(11)} 余量 ${String(mg).padStart(5)} px（下限 ${minMg}）`
+      + `   世界 y=${j.wy.toFixed(3)} z=${j.wz >= 0 ? '+' : ''}${j.wz.toFixed(3)}`);
+    check(`连通性余量：${jn}`, (mg ?? -1) >= minMg, `${mg} px ≥ ${minMg} px`);
+  }
+
+  log('  ② 关节高度分数（素材实测 ±1.5% / 人体参考）：');
+  const bands: [string, string, number, number, number, number][] = [
+    // 关节, 标签, 素材下界, 素材上界, 人体下界, 人体上界
+    ['neck', '颈 C7', 0.80, 0.84, 0.80, 0.84],
+    ['shoulder_l', '肩峰', 0.767, 0.797, 0.79, 0.83],
+    ['elbow_l', '肘', 0.625, 0.655, 0.60, 0.65],
+    ['hip_l', '髋', 0.462, 0.492, 0.45, 0.52],
+    ['knee_l', '膝', 0.222, 0.252, 0.25, 0.29],
+  ];
+  for (const [jn, label, lo, hi, rlo, rhi] of bands) {
+    const r = frac(jn);
+    log(`    ${label.padEnd(8)} ${(r * 100).toFixed(1)}%   素材区间 ${(lo * 100).toFixed(1)}~${(hi * 100).toFixed(1)}%`
+      + `   人体参考 ${(rlo * 100).toFixed(0)}~${(rhi * 100).toFixed(0)}%`);
     check(`关节高度比例：${label}`, r >= lo && r <= hi, `${(r * 100).toFixed(1)}%`);
   }
-  // 上臂物理长度 = 肩→肘；贴图上臂高 0.381 m，锚点必须在**上端**（否则贴片上部无锚点 = "悬空"）
-  const sh = sk.joints.find((x) => x.name === 'shoulder_l')!;
-  const el = sk.joints.find((x) => x.name === 'elbow_l')!;
-  const armPart = sk.bodies.find((b) => b.key === 'arm_l')!;
-  const upperArm = sh.wy - el.wy;
-  const armTop = armPart.cy + armPart.length / 2;
-  log(`  上臂：肩 ${sh.wy.toFixed(3)} → 肘 ${el.wy.toFixed(3)} = ${upperArm.toFixed(3)} m`
-    + `   贴片上缘 ${armTop.toFixed(3)} m   肩锚点高出贴片上缘 ${(sh.wy - armTop).toFixed(3)} m`);
-  check('★ 上臂长度落在解剖区间 0.28~0.36 m（肩锚点必须在上臂上端，不能落在中点）',
-    upperArm > 0.28 && upperArm < 0.36, `${upperArm.toFixed(3)} m`);
-  check('★ 肩锚点不低于上臂贴片上缘（否则上臂顶部无锚点 = "悬空"）',
-    sh.wy >= armTop - 1e-6, `肩 ${sh.wy.toFixed(3)} vs 贴片上缘 ${armTop.toFixed(3)}`);
-  // 大腿同理：髋锚点必须在大腿上端
-  const hip = sk.joints.find((x) => x.name === 'hip_l')!;
-  const knee = sk.joints.find((x) => x.name === 'knee_l')!;
-  const thigh = sk.bodies.find((b) => b.key === 'thigh_l')!;
-  log(`  大腿：髋 ${hip.wy.toFixed(3)} → 膝 ${knee.wy.toFixed(3)} = ${(hip.wy - knee.wy).toFixed(3)} m`
-    + `   贴片上缘 ${(thigh.cy + thigh.length / 2).toFixed(3)} m`);
+  // 左右对称（源图左右不等 ⇒ 骨架必须对称，否则腿是歪的）
+  log('  ③ 左右对称（源图左右不等，骨架必须镜像）：');
+  for (const [l, r, label] of [['shoulder_l', 'shoulder_r', '肩'], ['elbow_l', 'elbow_r', '肘'],
+    ['hip_l', 'hip_r', '髋'], ['knee_l', 'knee_r', '膝']] as [string, string, string][]) {
+    const d = (zOf(l) + zOf(r)) * 1000;
+    log(`    ${label}  L z=${zOf(l).toFixed(3)}  R z=${zOf(r).toFixed(3)}   镜像残差 ${d.toFixed(1)} mm`);
+    check(`左右镜像对称：${label}`, Math.abs(d) < 1.0, `${d.toFixed(1)} mm`);
+  }
+  // 肢段长度（肩→肘 / 髋→膝）
+  const seg = (a: string, b: string): number => {
+    const ja = sk.joints.find((x) => x.name === a)!;
+    const jb = sk.joints.find((x) => x.name === b)!;
+    return Math.hypot(ja.wy - jb.wy, ja.wz - jb.wz);
+  };
+  const upperArm = seg('shoulder_l', 'elbow_l');
+  const thigh = seg('hip_l', 'knee_l');
+  log(`  ④ 肢段长度：上臂(肩→肘) ${upperArm.toFixed(3)} m [素材 0.26 / 人体 0.30~0.33]`
+    + `   大腿(髋→膝) ${thigh.toFixed(3)} m [素材 0.42 / 人体 0.40~0.45]`);
+  check('★ 上臂长度在素材区间 0.24~0.29 m（素材上臂偏短，猫的体态如此）',
+    upperArm > 0.24 && upperArm < 0.29, `${upperArm.toFixed(3)} m`);
   check('★ 大腿长度落在解剖区间 0.38~0.48 m',
-    hip.wy - knee.wy > 0.38 && hip.wy - knee.wy < 0.48, `${(hip.wy - knee.wy).toFixed(3)} m`);
+    thigh > 0.38 && thigh < 0.48, `${thigh.toFixed(3)} m`);
 }
 check('★ 前向一律 0（素材是正面视图，没有深度信息）',
   sk.bodies.every((b) => b.cx === 0));check('★ 左右肢体分开在 Z 上（不是 X 上）—— 大腿中心间距 ≈ 0.20 m',
@@ -485,7 +514,40 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
       if (tilt < 0.6) upTicks++;
       if (totTicks % 40 === 0) {
         marks.push(`t=${(lastTick / 60).toFixed(1)}s x=${tp.x.toFixed(2)} 倾${((tilt * 180) / Math.PI).toFixed(0)}°`);
-      }
+  }
+
+  // ---- B2. ★ 颈部关节是不是"活的"（用户提问："脖子不知道有没有活动关节"）----
+  //   判据 = 行为：分别只驱动颈的三个轴，看**头刚体的世界朝向**是否跟着转、转到多少度。
+  //   颈是 JOINT_ORDER[0]，三轴都是球关节马达（无硬件限位，由软件限位 + 马达控）。
+  {
+    const neck = JOINT_ORDER.indexOf('neck');
+    const jn = sk.joints.find((j) => j.name === 'neck')!;
+    const axisName = ['X 侧屈/外展', 'Y 扭转', 'Z 屈伸'];
+    log(`  颈部关节：父=${jn.parentKey} 子=${jn.childKey}  限位 X±${(jn.minRad[0] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[0] * 180 / Math.PI).toFixed(0)}°`
+      + `  Y±${(jn.minRad[1] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[1] * 180 / Math.PI).toFixed(0)}°`
+      + `  Z${(jn.minRad[2] * 180 / Math.PI).toFixed(0)}~${(jn.maxRad[2] * 180 / Math.PI).toFixed(0)}°`
+      + `  最大力矩 ${jn.maxTorque.map((t) => t.toFixed(0)).join('/')} N·m`);
+    for (let ax = 0; ax < 3; ax++) {
+      const w = mkW();
+      const d = new Ragdoll(w, sk);
+      const q0 = d.bodyByKey('head').rotation();
+      const t = new Float32Array(d.jointCount * 3);
+      t[neck * 3 + ax] = 1;
+      d.setMotorTargets(t);
+      for (let i = 0; i < 240; i++) { d.driveMotors(1 / 120); w.step(); }
+      const rv = new Float64Array(3);
+      d.jointRot(neck, rv);
+      const q1 = d.bodyByKey('head').rotation();
+      // 头刚体朝向相对初始的偏转角（度）
+      const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
+      const headDeg = (2 * Math.acos(dot) * 180) / Math.PI;
+      log(`    颈仅驱动轴${ax}（${axisName[ax]}）2s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°  头偏转 ${headDeg.toFixed(1)}°`);
+      check(`★ 颈部轴 ${ax}（${axisName[ax]}）可驱动且头跟着转`,
+        Math.abs(rv[ax]) > 0.15 && headDeg > 3,
+        `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad，头偏 ${headDeg.toFixed(1)}°`);
+    }
+  }
+
     }
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;

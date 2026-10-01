@@ -265,6 +265,18 @@ function quatRel(
  * |out| ∈ [0, π]，始终取"最短表示"（角度 > π 时翻转轴）。
  * 这就是 3D 关节的"三轴关节角"，见 sim 的输入填装。
  */
+/** 四元数乘法 a ⊗ b */
+function quatMul(
+  ax: number, ay: number, az: number, aw: number,
+  bx: number, by: number, bz: number, bw: number,
+  out: Float64Array,
+): void {
+  out[0] = aw * bx + ax * bw + ay * bz - az * by;
+  out[1] = aw * by - ax * bz + ay * bw + az * bx;
+  out[2] = aw * bz + ax * by - ay * bx + az * bw;
+  out[3] = aw * bw - ax * bx - ay * by - az * bz;
+}
+
 function quatToRotVec(
   qx: number, qy: number, qz: number, qw: number,
   out: Float64Array,
@@ -373,7 +385,7 @@ export class Ragdoll {
   private readonly initX: Float64Array;
   private readonly initY: Float64Array;
   private readonly initZ: Float64Array;
-  /** 各刚体的静倾角四元数（reset 用） */
+  /** 各刚体的静姿态四元数（reset 用 + 关节角的参考系） */
   private readonly restQ: { x: number; y: number; z: number; w: number }[];
 
   // ---- 热路径复用缓冲（零分配） ----
@@ -565,11 +577,17 @@ export class Ragdoll {
    * ★ 这是 3D 关节的姿态真源：软限位、网络输入、探针全走它。
    */
   jointRot(i: number, out: Float64Array = this.rv): void {
-    const p = this.bodies[this.jointBodies[i * 2]];
-    const c = this.bodies[this.jointBodies[i * 2 + 1]];
-    const qp = p.rotation();
-    const qc = c.rotation();
+    const pi = this.jointBodies[i * 2];
+    const ci = this.jointBodies[i * 2 + 1];
+    const qp = this.bodies[pi].rotation();
+    const qc = this.bodies[ci].rotation();
     calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, this.qRel, out);
+    // ★ 减去静姿态读数（restRad）⇒ 关节零位 = **素材画的那张姿势**。
+    //   不减的话每条肢体的静倾角会变成关节角的常量偏置（上臂 5°/前臂 35° ⇒ 肘 ±30°），
+    //   左右偏置符号相反而肘/膝限位不对称 ⇒ 马达把一条胳膊往里掰、另一条往外掰
+    //   （用户回读："初始状态下两个手臂就一个往外一个往内折了"）。
+    const rr = this.sk.joints[i].restRad;
+    out[0] -= rr[0]; out[1] -= rr[1]; out[2] -= rr[2];
   }
 
   /** 关节 i 的**三轴相对角速度**（父体本地，rad/s）写入 out[0..2] */
@@ -666,6 +684,9 @@ export class Ragdoll {
       const wp = p.angvel();
       const wc = c.angvel();
       calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
+      // ★ 关节零位 = 静姿态（素材姿势），见 jointRot 的注释
+      const rr = j.restRad;
+      rv[0] -= rr[0]; rv[1] -= rr[1]; rv[2] -= rr[2];
       calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
       const Ieff = this.jointIeff[i];
 

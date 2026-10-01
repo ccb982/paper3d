@@ -650,15 +650,18 @@ export class Viewer {
       const body = doll.bodies[slot.drivers[0]];
       const t = body.translation();
       const q = body.rotation();
-      // ★★★ 贴图位姿 = **相对静姿态的增量**（用户定调："纹理别动，调整关节的倾斜度"）
-      //   qRel = qBody ⊗ restTilt⁻¹
-      //   静姿态下 qRel = 单位四元数 ⇒ 板子位置/朝向与素材**逐像素一致**（纹理没被动过）；
-      //   动力学转动时 qRel 是纯增量 ⇒ 板子正常跟随刚体。
-      //   位置：板心 = 刚体位置 + qRel · plateOffset（plateOffset 在骨架里已按 restTilt⁻¹ 折算）。
+      // ★★★ 贴图位姿 = 位置跟**刚体完整朝向**，朝向只跟**相对静姿态的增量**
+      //   （用户定调："纹理别动，调整关节的倾斜度"）
+      //   · 位置：offset 存的是"静姿态下把板心摆到素材位置"的局部偏移（骨架里已按 restTilt⁻¹ 折算），
+      //     所以必须用**完整**的 qBody 变换它 ⇒ 静姿态下板心精确落在素材位置，一个像素不差。
+      //   · 朝向：用 qRel = qBody ⊗ restTilt⁻¹ ⇒ 静姿态下 qRel = 单位四元数，板子不转（纹理没被动过）；
+      //     动力学一转，qRel 就是纯增量，板子正常跟随。
+      //   ★ 位置与朝向用**不同**的旋转不是笔误：骨骼的静倾角要"吃掉"（纹理保持画法），
+      //     但刚体本身是倾斜的，板心的偏移向量必须跟着刚体一起转。
       this.qBody.set(q.x, q.y, q.z, q.w);
       this.qRel.copy(this.qBody).multiply(slot.qRestInv);
       const off = doll.sk.bodies[slot.drivers[0]].plateOffset;
-      this.tmpV.set(off[0], off[1], off[2]).applyQuaternion(this.qRel);
+      this.tmpV.set(off[0], off[1], off[2]).applyQuaternion(this.qBody);
       slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
       slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix);
