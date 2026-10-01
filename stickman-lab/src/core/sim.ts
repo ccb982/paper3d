@@ -248,7 +248,8 @@ export class Sim {
   private accEnergy = 0;
   // ══════ 走路奖励（walkReward.ts 的 11 项）══════
   private accLift = 0;          // Σ_脚 min(1, 腾空/目标)·dt
-  private accSingle = 0;        // 单脚支撑：+1 / 两脚都飞 −0.5 / 都着地 0，×dt
+  private accSingle = 0;        // 双脚离地（跳/摔）时间积分，×dt（负）
+  private altCount = 0;          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
   private accTicks = 0;         // 累计控制秒数（给"平均"类分项做分母）
   private accAlive = 0;         // ∫"站得住"因子 dt（门控抬腿/单脚支撑/要动三项）
   private accJtMove: Record<string, number> = {};   // 逐关节"要动"
@@ -429,6 +430,7 @@ export class Sim {
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
     // 走路奖励记账器（walkReward.ts）
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
+    this.altCount = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
     this.airL = 0; this.airR = 0; this.motorPrev.fill(0);
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
@@ -608,6 +610,10 @@ export class Sim {
     //       （Rudin 2022 原文：奖励与动作空间里"没有任何步态相关元素"）。
     const gL = footGrounded(doll, 'l'), gR = footGrounded(doll, 'r');
     const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+    // ★ 换支撑脚事件（Ragdoll 内部维护上一拍状态；双脚离地/都着地时也要喂进去）
+    const stanceNow: 0 | 1 | 2 = nGround === 0 ? 0 : gL ? 1 : 2;
+    const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
+    if (altNow) this.altCount++;
     this.airL = gL ? 0 : this.airL + dt;
     this.airR = gR ? 0 : this.airR + dt;
     this.accLift += (Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET)) * dt;
@@ -629,7 +635,10 @@ export class Sim {
     //   而刷分）之后，"从不抬脚"就变成了 0 分 ⇒ ES 找到"两脚不离地滑行 0.63 m"，
     //   lift=0、single=0、velTrack 还有分（实测 6 代都是这个解）。
     //   "一次抬一条"的反面就是"两脚都在地上"，必须给它负分。
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : -0.15) * dt;
+    // ★★ "一次抬一条"按**换支撑脚的事件**计分（不是"当前是否单脚支撑"）：
+    //   长时间单脚支撑在现几何下差 1.23×（实测），所以姿态式判据永远拿不到分 ⇒ 什么也学不到。
+    //   短暂交替可行（顶翻时间常数 ~0.2 s），所以计分改成"换脚事件 + 跳起来的时间罚"。
+    this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;   // 双脚离地（跳/摔）仍按时间罚
     this.accTicks += dt;
 
     //  ② 逐关节"要动"：骨盆(髋)和膝盖必须持续动，站桩得 0。
@@ -794,7 +803,10 @@ export class Sim {
       tt.lateral = -w.lateral * this.accLat;
       tt.tiltRate = -w.tiltRate * this.accTilt;
       tt.lift = w.lift * this.accLift * aliveAvg;
-      tt.single = w.single * this.accSingle * aliveAvg;
+      // ★ 换支撑脚拿分（主）+ 双脚离地时间罚（次）。**没有"两脚都着地"的负分**了 ——
+      //   那是姿态式判据，在现几何下会把"滑行"也罚掉（而滑行是这个骨架的被动行为）。
+      tt.single = w.single * (this.altCount * aliveAvg + this.accSingle);
+      tt.altCount = this.altCount;
       let jm = 0, nJm = 0;
       for (const k of MOVE_JOINTS) {
         const v = this.accJtMove[k] ?? 0;

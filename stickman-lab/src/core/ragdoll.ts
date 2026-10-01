@@ -589,6 +589,37 @@ export class Ragdoll {
   }
 
   /**
+   * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
+   *
+   * ★★ 为什么要做成**事件**而不是"当前是否单脚支撑"（用户 2026-10-01：
+   *   "抬一次脚就摔倒了，什么也学不到"）：
+   *   实测几何上**长时间单脚支撑是不可能的** —— 两脚在 z=±0.164 m，CoM 在 z≈0.007，
+   *   抬掉一只脚后 CoM 离另一只脚 0.171 m，而单脚（含外八 25° 投影）只有 0.139 m
+   *   侧向半宽 ⇒ **差 1.23×**。站距收到 0.181 m 才有 1.43×，但那会让脚骨比画出来的靴子
+   *   内缩 7 cm（用户早就投诉过"脚部和纹理不太匹配"），而且真正的解法是踝关节内外翻
+   *   —— 也就是 `ankleEnabled`（代码就绪、默认关，见架构设计 §12.6）。
+   *   但**短暂的交替是可行的**（顶翻的时间常数 ~1/ω ≈ 0.2 s，0.1 s 的抬脚不会倒，
+   *   种子步态 1.25 m 就是这么走的）⇒ "一次抬一条"应该按**换支撑脚的事件**计分。
+   *
+   * @param stanceNow 0=双脚离地 1=左脚支撑 2=右脚支撑
+   */
+  private lastStance: 0 | 1 | 2 = 0;
+  private stanceAge = 0;
+  altEvent(stanceNow: 0 | 1 | 2, dt: number): boolean {
+    this.stanceAge += dt;
+    const prev = this.lastStance;
+    this.lastStance = stanceNow;
+    // ① 必须"换到另一只脚"（1↔2），且 ② 上一个支撑状态不是双脚离地（否则跳一下也算），
+    //   ③ 不应期 0.15 s（否则高频抖动会被数成很多次）
+    const switched = (prev === 1 && stanceNow === 2) || (prev === 2 && stanceNow === 1);
+    if (switched && this.stanceAge > 0.15) return true;
+    if (stanceNow === 0) this.stanceAge = 0;   // 离地时重新计时
+    return false;
+  }
+
+  resetAlt(): void { this.lastStance = 0; this.stanceAge = 0; }
+
+  /**
    * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
    *   这是 Rudin 2022 的原话做法（"contacts with the base are considered crashes
    *   and lead to resets"）。之前只用"躯干高度/倾角"判摔，于是**往前塌**不算摔：

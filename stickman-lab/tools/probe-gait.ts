@@ -193,6 +193,11 @@ const mk = (spec: Spec, scale: number) => {
     + ` / 零输出 ${T(st, 'velTrack').toFixed(2)}；真正区分的是 single=`
     + `${T(fwd, 'single').toFixed(2)}/${T(lat, 'single').toFixed(2)}/${T(st, 'single').toFixed(2)}`);
   check('② 纯侧向位移被 lateral 项罚', T(lat, 'lateral') < 0, `${T(lat, 'lateral').toFixed(3)}`);
+  // ★ 注意：③ 现在**过不了**，而且这是诚实的物理事实，不是奖励写错：
+  //   实测这个骨架**站桩时根本抬不起脚**（鞋底离地高度的峰值出现在倒塌过程中，
+  //   站立期间两脚始终接触地面）⇒ 换支撑脚事件 `altCount` 恒为 0，
+  //   所以"交替/抬腿"类奖励对**所有**策略都给 0 分 —— ES 没有任何可学的信号。
+  //   根因（实测）：抬脚后 CoM 离支撑脚 0.171 m，而单脚侧向半宽只有 0.139 m ⇒ 差 1.23×。
   check('③ 零输出拿不到正分（站桩/蹭地不是可行解）', T(st, 'total') <= 0, `总=${T(st, 'total').toFixed(3)}`);
   check('④ 两脚不离地要挨罚（单脚支撑项为负）', T(st, 'single') < 0, `${T(st, 'single').toFixed(3)}`);
   const big = run(mk(fwdSpec, 0.6));
