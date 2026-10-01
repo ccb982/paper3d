@@ -14884,6 +14884,10 @@ var init_sim = __esm({
         const c2 = Math.PI * 2;
         x[0] = Math.sin(this.phase * c2);
         x[1] = Math.cos(this.phase * c2);
+        if (this.cfg.obsMask?.clock) {
+          x[0] = 0;
+          x[1] = 0;
+        }
         x[2] = tq.x;
         x[3] = tq.y;
         x[4] = tq.z;
@@ -14909,17 +14913,40 @@ var init_sim = __esm({
         x[19] = nz > 3 ? 3 : nz < -3 ? -3 : nz;
         let k = 20;
         const jb = this.jbuf;
+        const noJoint = this.cfg.obsMask?.joint === true;
+        const noQuat = this.cfg.obsMask?.quat === true;
+        const noVel = this.cfg.obsMask?.vel === true;
         for (let i = 0; i < doll.jointCount; i++) {
           doll.jointRot(i, jb);
-          x[k++] = jb[0];
-          x[k++] = jb[1];
-          x[k++] = jb[2];
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0];
+            x[k++] = jb[1];
+            x[k++] = jb[2];
+          }
         }
         for (let i = 0; i < doll.jointCount; i++) {
           doll.jointRelVel(i, jb);
-          x[k++] = jb[0] * 0.2;
-          x[k++] = jb[1] * 0.2;
-          x[k++] = jb[2] * 0.2;
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0] * 0.2;
+            x[k++] = jb[1] * 0.2;
+            x[k++] = jb[2] * 0.2;
+          }
+        }
+        if (noQuat) {
+          for (let q = 2; q <= 5; q++) x[q] = 0;
+        }
+        if (noVel) {
+          for (let q = 6; q <= 11; q++) x[q] = 0;
         }
         x[k] = doll.soleY("l");
         x[k + 1] = doll.soleY("r");
@@ -15176,18 +15203,23 @@ __export(genome_exports, {
 });
 function makeRng(seed) {
   let a = seed >>> 0;
-  return () => {
+  const f = () => {
     a = a + 1831565813 >>> 0;
     let t2 = a;
     t2 = Math.imul(t2 ^ t2 >>> 15, t2 | 1);
     t2 ^= t2 + Math.imul(t2 ^ t2 >>> 7, t2 | 61);
     return ((t2 ^ t2 >>> 14) >>> 0) / 4294967296;
   };
+  f.getState = () => ({ s: a });
+  f.setState = (st) => {
+    a = st.s >>> 0;
+  };
+  return f;
 }
 function makeGaussian(rng) {
   let spare = 0;
   let hasSpare = false;
-  return () => {
+  const f = () => {
     if (hasSpare) {
       hasSpare = false;
       return spare;
@@ -15203,6 +15235,13 @@ function makeGaussian(rng) {
     hasSpare = true;
     return u * m;
   };
+  f.getState = () => ({ s: rng.getState ? rng.getState().s : 0, spare, hasSpare });
+  f.setState = (st) => {
+    if (rng.setState && st) rng.setState({ s: st.s });
+    spare = st?.spare ?? 0;
+    hasSpare = st?.hasSpare ?? false;
+  };
+  return f;
 }
 function randomGenome(s, gauss, scale = 1) {
   const g = new Float32Array(brainParamCount(s));
@@ -15591,6 +15630,59 @@ var init_evolution = __esm({
         this.startGeneration();
       }
       /** 把一份外部基因组注入当代（导入存档 / 用历史最佳继续跑） */
+      /**
+       * ★ 存档：把整个训练状态打包成纯数据（供 persist.ts 写 localStorage / 导出文件）。
+       *   含**随机数状态** ⇒ 恢复后训练从原来那一步继续，而不是从头再来一遍。
+       */
+      snapshot() {
+        const w = {};
+        const ms2 = {};
+        for (const [k, v2] of Object.entries(this.sims[0]?.w ?? {})) {
+          if (typeof v2 === "number") w[k] = v2;
+          else if (k === "moveScale" && v2 && typeof v2 === "object") Object.assign(ms2, v2);
+        }
+        return {
+          mode: "walk",
+          // Trainer 目前只跑 walk；fight 时由 main 传 mode 覆盖
+          gen: this.gen,
+          sigma: this.sigma,
+          // ★ 高斯采样器也要存（它内部缓存了 Box–Muller 的第二个样本，漏了会导致往返不一致）
+          rng: this.gauss.getState ? this.gauss.getState() : { s: 0, spare: 0, hasSpare: false },
+          // ★ prevMean 也要存：它是 1/5 成功法则的判据，漏了的话读档后第一步的 σ 自适应就分叉
+          //   （实测：状态逐位一致，读档继续训 3 代的结果仍与一路训到底不同）。
+          prevMean: Number.isFinite(this.prevMean) ? this.prevMean : null,
+          genomes: this.genomes.map((g) => Array.from(g)),
+          bestEver: Array.from(this.bestEver),
+          bestEverFitness: this.bestEverFitness,
+          weights: w,
+          moveScale: ms2,
+          shape: { inputs: this.shape.inputs, hidden: this.shape.hidden, outputs: this.shape.outputs },
+          history: this.history.slice(-200).map((h2) => ({ gen: h2.gen, best: h2.best, mean: h2.mean }))
+        };
+      }
+      /** 读档：种群/最优/σ/RNG/权重全部还原，然后重新开一代。 */
+      restore(s) {
+        this.gen = s.gen;
+        this.sigma = s.sigma;
+        this.prevMean = s.prevMean ?? -Infinity;
+        if (this.gauss.setState) this.gauss.setState(s.rng);
+        else if (this.rng.setState) this.rng.setState({ s: s.rng.s });
+        for (let i = 0; i < this.genomes.length && i < s.genomes.length; i++) {
+          this.genomes[i].set(s.genomes[i]);
+        }
+        this.bestEver.set(s.bestEver);
+        this.bestEverFitness = s.bestEverFitness;
+        const w = { ...s.weights };
+        for (const sm of this.sims) {
+          sm.setWeights(w);
+          for (const [j, v2] of Object.entries(s.moveScale)) {
+            sm.w.moveScale[j] = v2;
+          }
+        }
+        this.history.length = 0;
+        for (const h2 of s.history) this.history.push({ ...h2 });
+        this.startGeneration();
+      }
       inject(genome, asBest = true) {
         if (genome.length !== this.paramCount) {
           throw new Error(`[trainer] \u6CE8\u5165\u7684\u57FA\u56E0\u7EC4\u957F\u5EA6 ${genome.length} \u2260 ${this.paramCount}`);

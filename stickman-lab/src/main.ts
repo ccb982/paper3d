@@ -14,6 +14,9 @@ import { shapeForJoints, type BrainShape } from './core/brain';
 import { DEFAULT_TRAINER, Trainer } from './core/evolution';
 import { DEFAULT_SIM, Sim, type SimConfig, type SimMode } from './core/sim';
 import { packGenome, unpackGenome } from './core/genome';
+import {
+  clearLocal, loadLocal, packSession, saveLocal, sizeKb, unpackSession,
+} from './core/persist';
 import { Viewer } from './render/viewer';
 import { Hud } from './ui/hud';
 
@@ -79,9 +82,11 @@ function boot(): void {
 
   showcase.begin(trainer.showcase());
   booted = true;
+  const restored = tryRestore();     // ★ 刷新页面后自动接着训（localStorage 存档）
 
   hud.setStatus(
-    `就绪 · ${sk.bodies.length} 刚体 ${sk.joints.length} 关节（${sk.joints.length * 3} 转动自由度） ` +
+    (restored ? '已恢复存档 · ' : '就绪 · ')
+    + `${sk.bodies.length} 刚体 ${sk.joints.length} 关节（${sk.joints.length * 3} 转动自由度） ` +
     `体重 ${sk.massTotal.toFixed(1)}kg 身高 ${sk.totalHeight.toFixed(2)}m ` +
     `参数 ${trainer.paramCount} 个`,
   );
@@ -117,6 +122,7 @@ function rebuild(mode: SimMode): void {
   const learned = trainer.bestEverFitness > -Infinity;
 
   trainer = new Trainer(sk, SHAPE, simCfg(mode), DEFAULT_TRAINER);
+  tryRestore();          // ★ 有存档就自动恢复（刷新页面不丢）
   if (learned) trainer.inject(carry);
 
   showcase = new Sim(sk, SHAPE, simCfg(mode));
@@ -143,6 +149,7 @@ function frame(now: number): void {
     // ---- 训练：按 ms 预算换算成物理步数 ----
     const steps = Math.max(1, Math.round(state.budgetMs / Math.max(1e-4, perStepMs)));
     trainer.tick(steps);
+    autosave();          // ★ 内部按代数去重：新代才写一次 localStorage
 
     // ---- 展示个体：按真实时间推进（受播放速度倍率控制） ----
     const want = Math.max(1, Math.round(dt * DEFAULT_SIM.physicsHz * state.speed));
@@ -255,20 +262,56 @@ function wirePointer(canvas: HTMLCanvasElement): void {
   }, { passive: false });
 }
 
+/**
+ * ★★ 自动存档（用户 2026-10-01："刷新一下页面就没了，也存不下来"）。
+ *   每个新代写一次 localStorage（含随机数状态 ⇒ 刷新后从原来那一步继续训），
+ *   写失败（隐私模式/配额满）只在状态栏提示一次，不打断训练。
+ */
+let lastSavedGen = -1;
+let saveWarned = false;
+function autosave(force = false): void {
+  if (!booted) return;
+  if (!force && trainer.gen === lastSavedGen) return;
+  lastSavedGen = trainer.gen;
+  const text = packSession({ ...trainer.snapshot(), mode: state.mode, note: `stickman-lab/${state.mode}` });
+  if (saveLocal(text)) {
+    if (force) hud.setStatus(`已自动存档 · ${sizeKb(text).toFixed(1)} KB · gen ${trainer.gen}`);
+  } else if (!saveWarned) {
+    saveWarned = true;
+    hud.setStatus('⚠ 自动存档失败（浏览器禁用 localStorage？训练仍可继续，请用"导出"手动保存）', true);
+  }
+}
+
+/** 启动时读档；返回是否成功 */
+function tryRestore(): boolean {
+  const text = loadLocal();
+  if (!text) return false;
+  try {
+    const s = unpackSession(text, SHAPE, trainer.paramCount, trainer.population);
+    if (s.mode !== state.mode) return false;             // 模式不同就不自动加载
+    trainer.restore(s);
+    showcase.begin(trainer.showcase());
+    lastSavedGen = trainer.gen;
+    hud.setStatus(`已从存档恢复：gen ${trainer.gen} · σ=${trainer.sigma.toFixed(4)}`
+      + ` · 历史最优 ${trainer.bestEverFitness.toFixed(2)}`);
+    return true;
+  } catch (e) {
+    clearLocal();                                       // 坏档直接丢掉，别反复报错
+    hud.setStatus(`存档已损坏，已丢弃：${(e as Error).message}`, true);
+    return false;
+  }
+}
+
 function doExport(): void {
-  const text = packGenome(trainer.showcase(), SHAPE, {
-    gen: trainer.gen,
-    fitness: trainer.bestEverFitness,
-    note: `stickman-lab/${state.mode}`,
-  });
+  const text = packSession({ ...trainer.snapshot(), mode: state.mode, note: `stickman-lab/${state.mode}` });
   const blob = new Blob([text], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `stickman-${state.mode}-gen${trainer.gen}.json`;
+  a.download = `stickman-session-${state.mode}-gen${trainer.gen}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  hud.setStatus(`已导出基因组 · ${(text.length / 1024).toFixed(1)} KB · 参数 ${trainer.paramCount} 个`);
+  hud.setStatus(`已导出训练会话（含种群/σ/RNG）· ${sizeKb(text).toFixed(1)} KB`);
 }
 
 function doImport(): void {
@@ -280,19 +323,13 @@ function doImport(): void {
     if (!f) return;
     f.text().then((text) => {
       try {
-        const { g, shape } = unpackGenome(text);
-        if (shape.inputs !== SHAPE.inputs || shape.hidden !== SHAPE.hidden ||
-            shape.outputs !== SHAPE.outputs) {
-          hud.setStatus(
-            `导入失败：网络形状 ${shape.inputs}/${shape.hidden}/${shape.outputs} ` +
-            `与当前 ${SHAPE.inputs}/${SHAPE.hidden}/${SHAPE.outputs} 不符`,
-            true,
-          );
-          return;
-        }
-        trainer.inject(g);
+        const s = unpackSession(text, SHAPE, trainer.paramCount, trainer.population);
+        trainer.restore(s);
         showcase.begin(trainer.showcase());
-        hud.setStatus(`已导入基因组并注入当代种群`);
+        lastSavedGen = trainer.gen;
+        autosave(true);
+        hud.setStatus(`已导入训练会话：gen ${s.gen} · σ=${s.sigma.toFixed(4)}`
+          + ` · 历史最优 ${s.bestEverFitness.toFixed(2)}`);
       } catch (e) {
         hud.setStatus(`导入失败：${(e as Error).message}`, true);
       }

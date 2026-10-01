@@ -64,6 +64,12 @@ export interface SimConfig {
   /** ★ 重心转移项的封顶秒数（"会单腿平衡"这件事值多少）；不封顶会被"永远单腿站"刷满 */
   shiftCapSec: number;
   /**
+   * ★★ 观测消融开关（**只给 tools/probe-closed 用**，正常训练一律 false/不设）。
+   *   用来回答"训练出来的到底是闭环反馈还是一段回放"：把观测的某一部分置零，
+   *   看轨迹是否变化。变了 = 那一部分真的被用了。
+   */
+  obsMask?: { clock?: boolean; quat?: boolean; vel?: boolean; joint?: boolean };
+  /**
    * ★★ 位移门槛的**课程上限**（默认 0.30 m）。`stepMinDx` 从**当前值**按代次线性升到这里
    *   （Trainer 每代调 `Sim.setStepMinDx`，见 evolution.ts 的 recordAndBreed）。
    *   用户 2026-10-01："这个奖励机制是有效的，位移奖励阈值可以逐步增大" + "现在先用更小的阈值"
@@ -550,6 +556,8 @@ export class Sim {
 
     x[0] = Math.sin(this.phase * c2);
     x[1] = Math.cos(this.phase * c2);
+    // ★ 观测消融（探针用，见 SimConfig.obsMask）
+    if (this.cfg.obsMask?.clock) { x[0] = 0; x[1] = 0; }
     x[2] = tq.x; x[3] = tq.y; x[4] = tq.z; x[5] = tq.w;
     x[6] = tv.x * 0.5; x[7] = tv.y * 0.5; x[8] = tv.z * 0.5;
     x[9] = tw.x * 0.2; x[10] = tw.y * 0.2; x[11] = tw.z * 0.2;
@@ -574,14 +582,20 @@ export class Sim {
 
     let k = 20;
     const jb = this.jbuf;
+    // ★ 关节反馈消融（探针用）
+    const noJoint = this.cfg.obsMask?.joint === true;
+    const noQuat = this.cfg.obsMask?.quat === true;
+    const noVel = this.cfg.obsMask?.vel === true;
     for (let i = 0; i < doll.jointCount; i++) {
       doll.jointRot(i, jb);
-      x[k++] = jb[0]; x[k++] = jb[1]; x[k++] = jb[2];
+      if (noJoint) { x[k] = 0; x[k + 1] = 0; x[k + 2] = 0; k += 3; } else { x[k++] = jb[0]; x[k++] = jb[1]; x[k++] = jb[2]; }
     }
     for (let i = 0; i < doll.jointCount; i++) {
       doll.jointRelVel(i, jb);
-      x[k++] = jb[0] * 0.2; x[k++] = jb[1] * 0.2; x[k++] = jb[2] * 0.2;
+      if (noJoint) { x[k] = 0; x[k + 1] = 0; x[k + 2] = 0; k += 3; } else { x[k++] = jb[0] * 0.2; x[k++] = jb[1] * 0.2; x[k++] = jb[2] * 0.2; }
     }
+    if (noQuat) { for (let q = 2; q <= 5; q++) x[q] = 0; }
+    if (noVel) { for (let q = 6; q <= 11; q++) x[q] = 0; }
     x[k] = doll.soleY('l');
     x[k + 1] = doll.soleY('r');
 

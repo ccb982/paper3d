@@ -9,25 +9,39 @@ import { brainLayout, brainParamCount, type BrainShape } from './brain';
 
 // ---------------------------------------------------------------- 可复现随机
 
-export type Rng = () => number;
-
 /** mulberry32：小而快、可播种 —— 训练过程可复现（同一 seed 同一结果） */
+export type RngState = { s: number };
+export type Rng = (() => number) & {
+  /** ★ 取/设内部状态（存档用：刷新页面后训练能从原来那一步继续，而不是从头） */
+  getState?: () => RngState;
+  setState?: (st: RngState) => void;
+};
+
 export function makeRng(seed: number): Rng {
   let a = seed >>> 0;
-  return () => {
+  const f = ((): number => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  }) as Rng;
+  f.getState = (): RngState => ({ s: a });
+  f.setState = (st: RngState): void => { a = st.s >>> 0; };
+  return f;
 }
 
 /** 标准正态（Box–Muller），缓存第二个样本避免每次算两次 log/sqrt */
-export function makeGaussian(rng: Rng): () => number {
+export type Gauss = (() => number) & {
+  /** ★ 取/设状态（含 Box–Muller 的**缓存样本**）—— 少了它存档往返就不一致 */
+  getState?: () => { s: number; spare: number; hasSpare: boolean };
+  setState?: (st: { s: number; spare: number; hasSpare: boolean }) => void;
+};
+
+export function makeGaussian(rng: Rng): Gauss {
   let spare = 0;
   let hasSpare = false;
-  return () => {
+  const f = ((): number => {
     if (hasSpare) { hasSpare = false; return spare; }
     let u = 0, v = 0, s = 0;
     do {
@@ -39,7 +53,14 @@ export function makeGaussian(rng: Rng): () => number {
     spare = v * m;
     hasSpare = true;
     return u * m;
+  }) as Gauss;
+  f.getState = () => ({ s: rng.getState ? rng.getState().s : 0, spare, hasSpare });
+  f.setState = (st) => {
+    if (rng.setState && st) rng.setState({ s: st.s });
+    spare = st?.spare ?? 0;
+    hasSpare = st?.hasSpare ?? false;
   };
+  return f;
 }
 
 // ---------------------------------------------------------------- 初始化

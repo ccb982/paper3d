@@ -25,7 +25,9 @@
     "posture:walk": "node tools/run.mjs probe-posture 20 24 3.5 walk",
     "gait": "node tools/run.mjs probe-gait",
     "trainwalk": "node tools/run.mjs probe-trainwalk",
-    "seed": "node tools/run.mjs probe-seed"
+    "seed": "node tools/run.mjs probe-seed",
+    "persist": "node tools/run.mjs probe-persist",
+    "closed": "node tools/run.mjs probe-closed"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",
