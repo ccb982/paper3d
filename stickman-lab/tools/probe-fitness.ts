@@ -17,7 +17,7 @@ import RAPIER from '@dimforge/rapier3d';
 import { DEFAULT_CONFIG, buildSkeleton } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { Trainer, DEFAULT_TRAINER } from '../src/core/evolution';
-import { BRAIN_SHAPE } from '../src/core/brain';
+import { shapeForJoints } from '../src/core/brain';
 
 const require = createRequire(import.meta.url);
 {
@@ -35,11 +35,13 @@ const require = createRequire(import.meta.url);
 }
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
 const simCfg = { ...DEFAULT_SIM, mode: 'walk' as const, duration: 4 };
-const trainer = new Trainer(sk, BRAIN_SHAPE, simCfg, { ...DEFAULT_TRAINER, population: 24, seed: 12345 });
+const trainer = new Trainer(sk, SHAPE, simCfg, { ...DEFAULT_TRAINER, population: 24, seed: 12345 });
 
 // 独立的重放器：不参与训练，只用来"重新评估"
-const replay = new Sim(sk, BRAIN_SHAPE, simCfg);
+const replay = new Sim(sk, SHAPE, simCfg);
 function rescore(g: Float32Array): number {
   replay.begin(g);
   return replay.runToEnd();

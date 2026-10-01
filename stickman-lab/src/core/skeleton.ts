@@ -71,6 +71,25 @@ export interface SkeletonConfig {
   stance: number;
   /** 胶囊半径 = 包围盒半宽 × 该系数（<1 = 物理比美术瘦，避免刚体互穿抖动） */
   limbRadiusScale: number;
+  /**
+   * ★★ 躯干沿脊柱切成几段（≥1）。用户定调：「身体部分也是需要和脊椎一样有很多关节的」。
+   *
+   * 为什么不能把躯干做成一个刚体：
+   *   · 真实人体的躯干有 24 节椎骨（有意义的运动节段约 17 个），腰-胸-颈是三个曲度。
+   *     一整块刚体意味着"弯腰/转体/侧倾"三个自由度全丢了 —— 只剩一个整体旋转。
+   *   · 对走路的影响是直接的：躯干必须能**反向扭转**来抵消腿的角动量
+   *     （人走路时骨盆与胸腔反向旋转 ±5~8°，这是"不甩胳膊就站不稳"的物理原因）。
+   *   · 对战斗的影响更直接：出拳的力从地面→腿→骨盆→脊柱→肩→手，
+   *     一条刚体躯干等于把力量链掐成两截。
+   *
+   * 制造成本：段数 K ⇒ K−1 个脊柱关节（每个 +3 转动自由度、+3 网络输出、+6 网络输入），
+   *           刚体数 +K−1。段 0 = 骨盆（key 仍是 'torso'，所以 torso() 语义不变），
+   *           躯干上原有的 9 个关节按解剖重新挂：髋 → 骨盆，颈/肩 → 最上一段（胸腔）。
+   *
+   * ★ 视觉：躯干护甲仍是**一整张贴图 + 单个 mesh**，按脊柱段做逐顶点线性混合蒙皮
+   *   —— 弯腰时板子沿脊柱连续弯折，不是把贴图切成 K 条各贴一段。见 viewer.ts。
+   */
+  spineSegments: number;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -81,6 +100,10 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
   stance: 1.0,
   limbRadiusScale: 0.6,
+  // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
+  // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
+  // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
+  spineSegments: 4,
 };
 
 // ---------------------------------------------------------------- 环节规格
@@ -237,6 +260,13 @@ export interface BodyDef {
   /** 该刚体的 collider 列表 */
   colliders: ColliderDef[];
   leg: boolean;
+  /**
+   * ★ 脊柱分段标记：本刚体是整块躯干护甲在脊柱方向上的第 index 段（0 = 最下 = 骨盆），
+   * 共 count 段。**这不是"把贴图切条"** —— 视觉上仍然只有一张完整贴图，
+   * viewer.ts 把带该标记的刚体收进**一个**蒙皮 mesh，按此顺序做线性混合蒙皮。
+   * 只有躯干分段后（spineSegments > 1）才有值。
+   */
+  texSlice?: { index: number; count: number };
 }
 
 export interface JointDef {
@@ -307,6 +337,30 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
 
   const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
 
+  // ---- 脊柱分段（见 SkeletonConfig.spineSegments）----
+  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  /** 最上一段（胸腔）的 key；颈/肩挂在它上面 */
+  const CHEST = K > 1 ? `spine${K}` : 'torso';
+  /** 第 s 段（0 = 骨盆）的 key */
+  const segKey = (s: number): string => (s === 0 ? 'torso' : `spine${s + 1}`);
+  /**
+   * ★ 躯干上原有 9 个关节按**锚点高度**自动分配到对应段落（不是按名字硬编码）。
+   *   髋的锚点在躯干下端 → 骨盆；颈在最上端 → 胸腔；肩线通常落在胸腔或它下一段，
+   *   就近分配才不会把锚点甩到段外（硬编码"颈肩都挂最上段"实测让肩锚点越界 20 mm）。
+   */
+  let byKeyRef: Map<string, BodyDef> | null = null;
+  const attachTo = (parentKey: string, wy: number): string => {
+    if (parentKey !== 'torso' || K <= 1 || !byKeyRef) return parentKey;
+    let best = 0, bestD = Infinity;
+    for (let s = 0; s < K; s++) {
+      const b = byKeyRef.get(segKey(s));
+      if (!b) continue;
+      const d = Math.abs(b.cy - wy);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    return segKey(best);
+  };
+
   // ---- 脚掌尺寸（画布 px → 米），两个小腿共用 ----
   const soleHalfLen = (META.sole.len * px2m) / 2;
   const soleHalfThick = (META.sole.thick * px2m) / 2;
@@ -320,6 +374,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     const { length, radius, halfHeight } = capsuleFromBox(
       part.bw * px2m, part.bh * px2m, cfg.limbRadiusScale,
     );
+    const cy = mapY(part.cy);
 
     const totalMass = (spec.massPct / 100) * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
@@ -357,6 +412,46 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       });
     }
 
+    // ★★ 躯干沿脊柱切成 K 段（用户定调：身体也要像脊椎一样有很多关节）。
+    //   段 0 的 key 仍然是 'torso' ⇒ torso() / 适应度 / 相机 的语义完全不变。
+    if (spec.key === 'torso' && K > 1) {
+      const segLen = length / K;
+      const segMass = totalMass / K;
+      const hx = radius, hz = radius * 0.9;
+      for (let s = 0; s < K; s++) {
+        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+        // 盒式惯量（每段自己的主惯量；段间的平行轴项由动力学自动承担）
+        const iZ = (segMass * (hx * hx + (segLen / 2) * (segLen / 2))) / 3;
+        const iX = (segMass * ((segLen / 2) * (segLen / 2) + hz * hz)) / 3;
+        bodies.push({
+          key: s === 0 ? 'torso' : `spine${s + 1}`,
+          bone: spec.bone,
+          label: s === 0 ? '骨盆' : `脊椎${s + 1}`,
+          part,
+          cx: 0,
+          cy: cyS,
+          cz: mapZ(part.cx, false),
+          length: segLen,
+          radius,
+          halfHeight: segLen / 2,
+          mass: segMass,
+          colliders: [{
+            shape: 'cuboid',
+            halfHeight: 0, radius: 0,
+            hx, hy: segLen / 2, hz,
+            offsetY: 0,
+            mass: segMass,
+            comY: 0,
+            inertiaZ: iZ,
+            inertiaXY: iX,
+          }],
+          leg: false,
+          texSlice: { index: s, count: K },
+        });
+      }
+      continue;
+    }
+
     bodies.push({
       key: spec.key,
       bone: spec.bone,
@@ -374,6 +469,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     });
   }
   const byKey = new Map(bodies.map((b) => [b.key, b]));
+  byKeyRef = byKey;
 
   // ---- 关节 ----
   const jointMetaByName = new Map<string, JointMeta>(META.joints.map((j) => [j.name, j]));
@@ -381,7 +477,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json 缺少关节 ${name}`);
-    const parent = byKey.get(jm.parent);
+    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] 关节 ${name} 的刚体不存在`);
 
@@ -409,6 +505,36 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]],
     });
   });
+
+  // ---- ★ 脊柱关节（K−1 个）：连接相邻两段，锚点在两段的交界面上 ----
+  if (K > 1) {
+    const SPINE_XY_DEG: readonly [number, number] = [15, 20];   // [侧倾, 扭转]
+    const SPINE_FLEX_DEG: readonly [number, number] = [-25, 25];
+    const SPINE_TAU = 120;
+    for (let s = 0; s < K - 1; s++) {
+      const p = byKey.get(segKey(s));
+      const c = byKey.get(segKey(s + 1));
+      if (!p || !c) throw new Error(`[skeleton] 脊柱段 ${s} 不存在`);
+      const wy = (p.cy + c.cy) / 2;      // 两段是紧邻的，交界面就在两个中心的中间
+      const wx = 0, wz = 0;
+      joints.push({
+        name: `spine${s + 1}`,
+        index: joints.length,             // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
+        parentKey: p.key,
+        childKey: c.key,
+        wx, wy, wz,
+        parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
+        childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
+        maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
+        maxTorque: [
+          SPINE_TAU * TORQUE_AXIS_FACTOR[0],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[1],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[2],
+        ],
+      });
+    }
+  }
 
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
 

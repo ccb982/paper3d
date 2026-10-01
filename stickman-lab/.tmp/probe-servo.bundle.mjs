@@ -13362,12 +13362,12 @@ var init_ragdoll = __esm({
   }
 });
 
-// tools/probe-ground.ts
+// tools/probe-servo.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, JOINT_MAX_SPEED: JOINT_MAX_SPEED2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 var { Ragdoll: Ragdoll2 } = await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 {
   const wasmPath = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -13385,87 +13385,310 @@ var { Ragdoll: Ragdoll2 } = await Promise.resolve().then(() => (init_ragdoll(), 
 var RAPIER = (await Promise.resolve().then(() => (init_rapier(), rapier_exports))).default;
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var DT = 1 / 120;
-var W_TOTAL = sk.massTotal * 9.81;
-function run(restTension, aRef = Infinity, seconds = 3, verbose = false) {
-  const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+var G = 9.81;
+var NJ = sk.joints.length;
+var AXIS_NAME = ["\u7ED5X \u5916\u5C55", "\u7ED5Y \u626D\u8F6C", "\u7ED5Z \u5C48\u4F38"];
+var line = (n = 96) => "\u2500".repeat(n);
+var W3 = new Float64Array(3);
+function makeRig(gravityY, suspend, restTension, ref) {
+  const world = new RAPIER.World({ x: 0, y: gravityY, z: 0 });
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
-  const doll = new Ragdoll2(world, sk, { restTension, restTensionRef: aRef });
+  const opt = {};
+  if (restTension !== void 0) opt.restTension = restTension;
+  if (ref !== void 0) opt.restTensionRef = ref;
+  const doll = new Ragdoll2(world, sk, opt);
   doll.reset(0);
-  const footCols = ["l", "r"].flatMap((side) => {
-    const b = doll.bodyByKey(side === "l" ? "shin_l" : "shin_r");
-    const out = [];
-    for (let i = 0; i < b.numColliders(); i++) out.push(b.collider(i));
-    return out;
-  });
-  const targets = new Float32Array(doll.jointCount * 3);
-  doll.setMotorTargets(targets);
-  const prevV = doll.bodies.map((b) => b.linvel());
-  const footPt = new Float64Array(3);
-  const SAMPLE = 30;
-  const SAMPLE_DT = SAMPLE * DT;
-  if (verbose) {
-    console.log("   t    \u8EAF\u5E72y   \u811ALy   \u811ARy   \u63A5\u89E6\u529BN  \u52A8\u91CF\u6CD5N  CoM.x   \u811A\u652F\u6491[x0,x1]  CoM\u5728\u652F\u6491\u5185");
+  if (suspend) {
+    const tp = doll.torso().translation();
+    const anchor = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(tp.x, tp.y, tp.z));
+    const lc = doll.torso().localCom();
+    world.createImpulseJoint(
+      RAPIER.JointData.spherical({ x: 0, y: 0, z: 0 }, { x: lc.x, y: lc.y, z: lc.z }),
+      anchor,
+      doll.torso(),
+      true
+    );
   }
-  let standTime = seconds;
-  let torsoY2s = NaN;
-  let sumF = 0, nF = 0;
-  for (let step = 1; step <= seconds * 120; step++) {
-    doll.driveMotors(DT);
-    world.step();
-    if (step % SAMPLE !== 0) continue;
-    let impSum = 0;
-    for (const col of footCols) {
-      world.contactPairsWith(col, (other) => {
-        world.contactPair(col, other, (mf) => {
-          for (let i = 0; i < mf.numContacts(); i++) impSum += mf.contactImpulse(i);
-        });
-      });
+  const zero = new Float32Array(NJ * 3);
+  return {
+    world,
+    doll,
+    step: (targets) => {
+      doll.setMotorTargets(targets ?? zero);
+      doll.driveMotors(DT);
+      world.step();
+    },
+    free: () => world.free()
+  };
+}
+if (process.argv.includes("diag")) {
+  const ji = sk.joints.findIndex((x) => x.name === "hip_l");
+  for (const [tag, gy, susp] of [["\u5931\u91CD(0g)", 0, false], ["\u6709\u91CD\u529B(1g)", -G, false]]) {
+    const rig = makeRig(gy, susp);
+    const t = new Float32Array(NJ * 3);
+    t[ji * 3 + 0] = 1;
+    const rv = new Float64Array(3);
+    console.log(`
+--- ${tag}\uFF1A\u547D\u4EE4 hip_l \u7ED5X \u76EE\u6807 +1\uFF08= +${JOINT_MAX_SPEED2} rad/s\uFF09---`);
+    console.log("  step   \u03C4_imp/dt    \u03C9_rel(x)   \u5173\u8282\u89D2x(\xB0)  \u53F3\u817Fy(m)  \u8EAF\u5E72y(m)");
+    for (let i = 1; i <= 240; i++) {
+      rig.step(t);
+      if (i % 20 === 0) {
+        rig.doll.jointRelVel(ji, W3);
+        rig.doll.jointRot(ji, rv);
+        console.log(
+          `  ${String(i).padStart(4)} ${(rig.doll.motorImpulse[ji * 3 + 0] / DT).toFixed(1).padStart(9)} ${W3[0].toFixed(3).padStart(10)} ${(rv[0] * 180 / Math.PI).toFixed(1).padStart(11)} ${rig.doll.shin("l").translation().y.toFixed(3).padStart(9)} ${rig.doll.torso().translation().y.toFixed(3).padStart(9)}`
+        );
+      }
     }
-    const fContact = impSum / DT;
-    sumF += fContact;
-    nF++;
-    let fMom = 0;
-    let mtot = 0, cmx = 0;
-    for (let i = 0; i < doll.bodies.length; i++) {
-      const b = doll.bodies[i];
-      const m = b.mass();
-      const v = b.linvel();
-      fMom += m * ((v.y - prevV[i].y) / SAMPLE_DT + 9.81);
-      const t = b.translation();
-      mtot += m;
-      cmx += m * t.x;
-      prevV[i].x = v.x;
-      prevV[i].y = v.y;
-      prevV[i].z = v.z;
-    }
-    cmx /= mtot;
-    doll.footPoint("l", footPt);
-    const lx = footPt[0];
-    doll.footPoint("r", footPt);
-    const rx = footPt[0];
-    const x0 = Math.min(lx, rx), x1 = Math.max(lx, rx);
-    const inside = cmx >= x0 - 0.02 && cmx <= x1 + 0.02;
-    if (!inside && standTime === seconds) standTime = step / 120;
-    if (Math.abs(step / 120 - 2) < 1e-9) torsoY2s = doll.torso().translation().y;
-    if (verbose) {
-      console.log(
-        `  ${(step / 120).toFixed(2)}  ${doll.torso().translation().y.toFixed(3)}  ${doll.soleY("l").toFixed(3)}  ${doll.soleY("r").toFixed(3)}  ${fContact.toFixed(0).padStart(7)}  ${fMom.toFixed(0).padStart(7)}  ${cmx.toFixed(3).padStart(6)}  [${x0.toFixed(2)},${x1.toFixed(2)}]  ${inside ? "\u662F" : "\u2605\u5426"}`
-      );
-    }
+    rig.free();
   }
-  console.log(
-    `  k=${String(restTension).padStart(2)} a_ref=${(aRef === Infinity ? "\u221E" : aRef.toFixed(2)).padStart(4)}  \u91CD\u5FC3\u6491\u5728\u652F\u6491\u533A\u5185 ${standTime.toFixed(2)}s / ${seconds}s   t=2s \u8EAF\u5E72y=${Number.isNaN(torsoY2s) ? "\u2014" : torsoY2s.toFixed(3)}   \u5E73\u5747\u63A5\u89E6\u529B ${(sumF / nF).toFixed(0)} N\uFF08= \u4F53\u91CD\u7684 ${(sumF / nF / W_TOTAL * 100).toFixed(0)}%\uFF09`
-  );
+  console.log("");
+  process.exit(0);
 }
 console.log(`
-=== \u5730\u9762\u53CD\u529B / \u91CD\u5FC3\u652F\u6491 \u5B9E\u6D4B\uFF08\u4F53\u91CD ${W_TOTAL.toFixed(0)} N\uFF0C\u5173\u8282\u76EE\u6807\u5168 0\uFF09===`);
-console.log("  \u9010\u5E27\u7EC6\u8282\uFF08k=9, a_ref=0.25 = \u5F53\u524D\u9ED8\u8BA4\uFF09:");
-run(9, 0.25, 3, true);
-console.log('\n  k / a_ref \u5BF9\u7167\uFF08\u7AD9\u6869\uFF0C\u770B"\u4E0D\u9971\u548C"\u4F1A\u4E0D\u4F1A\u584C\u3001\u9971\u548C\u4E4B\u540E\u6389\u591A\u5C11\uFF09:');
-for (const [k, a] of [[0, Infinity], [3, Infinity], [6, Infinity], [9, Infinity], [9, 0.12], [9, 0.25], [9, 0.4], [12, 0.25]]) {
-  run(k, a, 3, false);
+${"\u2550".repeat(98)}`);
+console.log("  [A] \u5931\u91CD\u5355\u5173\u8282\u9636\u8DC3\uFF08gravity = 0\uFF0C\u65E0\u5730\u9762 \u21D2 \u552F\u4E00\u80FD\u9A71\u52A8\u5173\u8282\u7684\u5C31\u662F\u9A6C\u8FBE\uFF09");
+console.log(`  \u5173\u8282\u6570 ${NJ}   \u6BCF\u5173\u8282 3 \u8F74   \u76EE\u6807 \xB11.0 = \xB1${JOINT_MAX_SPEED2} rad/s   \u65F6\u957F 1.0 s`);
+console.log(`${"\u2550".repeat(98)}`);
+function stepOne(ji, ax, sgn, seconds = 0.6, k, ref) {
+  const rig = makeRig(0, false, k, ref);
+  const t = new Float32Array(NJ * 3);
+  t[ji * 3 + ax] = sgn;
+  const n = Math.round(seconds / DT);
+  const rv = new Float64Array(3);
+  let peakW = 0, peakTau = 0, work = 0, travel = 0;
+  for (let i = 1; i <= n; i++) {
+    rig.step(t);
+    const tau = rig.doll.motorImpulse[ji * 3 + ax] / DT;
+    if (Math.abs(tau) > peakTau) peakTau = Math.abs(tau);
+    rig.doll.jointRelVel(ji, W3);
+    if (Math.abs(W3[ax]) > Math.abs(peakW)) peakW = W3[ax];
+    work += Math.abs(tau * W3[ax]) * DT;
+    rig.doll.jointRot(ji, rv);
+    if (Math.abs(rv[ax]) > Math.abs(travel)) travel = rv[ax];
+  }
+  const lo = sk.joints[ji].minRad[ax], hi = sk.joints[ji].maxRad[ax];
+  rig.free();
+  return { peakW, travel, lo, hi, peakTau, work };
 }
-console.log("  k = 0 \u21D2 \u7EAF\u963B\u5C3C\uFF08\u91CD\u529B\u80FD\u538B\u57AE\u5173\u8282\uFF0C\u56E0\u4E3A\u9759\u6001\u4E0B\u901F\u5EA6=0 \u21D2 \u9A6C\u8FBE\u51FA\u529B=0\uFF09");
+var ctrlTravel = 0;
+{
+  const rig = makeRig(0, false);
+  const zero = new Float32Array(NJ * 3);
+  const rv = new Float64Array(3);
+  for (let i = 1; i <= 72; i++) rig.step(zero);
+  for (let j = 0; j < NJ; j++) {
+    rig.doll.jointRot(j, rv);
+    ctrlTravel = Math.max(ctrlTravel, Math.abs(rv[0]), Math.abs(rv[1]), Math.abs(rv[2]));
+  }
+  console.log(`  \u5BF9\u7167\u7EC4 targets \u5168 0\uFF1A\u5931\u91CD 0.6 s \u540E\u6700\u5927 |\u5173\u8282\u89D2| = ${(ctrlTravel * 180 / Math.PI).toFixed(3)}\xB0  ${ctrlTravel < 1e-3 ? "\u2714 \u5B8C\u5168\u4E0D\u52A8\uFF08\u8BC1\u660E\u4E0B\u9762\u7684\u8FD0\u52A8\u4E0D\u662F\u6570\u503C\u566A\u58F0\uFF09" : "\u2718 \u6709\u6B8B\u4F59\u8FD0\u52A8"}`);
+  rig.free();
+}
+console.log(`
+  ${"\u5173\u8282".padEnd(11)} ${"\u8F74".padEnd(8)} ${"\u65B9\u5411".padStart(5)} ${"\u5CF0\u503C\u03C9".padStart(8)} ${"\u5CF0\u503C\u8DDF\u8E2A\u7387".padStart(10)} ${"\u884C\u7A0B\xB0".padStart(8)} ${"\u9650\u4F4D\xB0".padStart(14)} ${"\u5CF0\u503C\u529B\u77E9".padStart(9)} ${"\u6CE8\u80FDJ".padStart(7)}`);
+console.log("  " + line(90));
+var bestTrackSum = 0;
+var bestTrackN = 0;
+var worstBest = 1e9;
+var worstBestName = "";
+for (let j = 0; j < NJ; j++) {
+  for (let ax = 0; ax < 3; ax++) {
+    const plus = stepOne(j, ax, 1);
+    const minus = stepOne(j, ax, -1);
+    const tp = plus.peakW / JOINT_MAX_SPEED2, tm = minus.peakW / -JOINT_MAX_SPEED2;
+    const useP = Math.abs(tp) >= Math.abs(tm);
+    const r = useP ? plus : minus;
+    const track = useP ? tp : tm;
+    const travelDeg = r.travel * 180 / Math.PI;
+    const loDeg = r.lo * 180 / Math.PI, hiDeg = r.hi * 180 / Math.PI;
+    const hitLimit = Math.abs(travelDeg - (travelDeg > 0 ? hiDeg : loDeg)) < 4;
+    console.log(
+      `  ${sk.joints[j].name.padEnd(11)} ${AXIS_NAME[ax].padEnd(8)} ${(useP ? "+1" : "\u22121").padStart(5)} ${r.peakW.toFixed(2).padStart(8)} ${track.toFixed(3).padStart(10)} ${travelDeg.toFixed(1).padStart(8)} ${`[${loDeg.toFixed(0)},${hiDeg.toFixed(0)}]`.padStart(14)} ${r.peakTau.toFixed(0).padStart(9)} ${r.work.toFixed(2).padStart(7)}${hitLimit ? "  \u2190 \u5DF2\u9876\u5230\u9650\u4F4D" : ""}`
+    );
+    bestTrackSum += Math.abs(track);
+    bestTrackN++;
+    if (Math.abs(track) < worstBest) {
+      worstBest = Math.abs(track);
+      worstBestName = `${sk.joints[j].name}\xB7${AXIS_NAME[ax]}`;
+    }
+  }
+}
+console.log(`
+  \u21B3 \u5E73\u5747\u5CF0\u503C\u8DDF\u8E2A\u7387 ${(bestTrackSum / bestTrackN).toFixed(3)}    \u6700\u5DEE = ${worstBestName}\uFF08${worstBest.toFixed(3)}\uFF09`);
+console.log(`  \u21B3 \u2605 \u5224\u636E\u8981\u8FD9\u4E48\u8BFB\uFF1A\u8DDF\u8E2A\u7387\u662F"\u5CF0\u503C \u03C9 / \u76EE\u6807 \u03C9"\u3002\u649E\u4E86\u9650\u4F4D\u4E4B\u540E\u901F\u5EA6\u5FC5\u7136\u56DE\u843D\u5230 0\uFF0C`);
+console.log(`     \u6240\u4EE5**\u4E0D\u80FD\u7528\u7A33\u6001\u901F\u5EA6**\u5224\u9A6C\u8FBE\u597D\u574F\uFF08\u6211\u7B2C\u4E00\u7248\u5C31\u8E29\u4E86\u8FD9\u4E2A\u5751\uFF1A\u6D4B\u7684\u662F\u649E\u9650\u4F4D\u4E4B\u540E\u7684\u7A33\u6001\uFF0C\u5168\u90E8\u8BFB\u6210 0.000\uFF09\u3002`);
+console.log(`     \u6B63\u786E\u5224\u636E = \u5CF0\u503C\u8DDF\u8E2A\u7387 > 0.5 \u4E14\u884C\u7A0B\u660E\u663E > 0 \u21D2 \u9A6C\u8FBE\u786E\u5B9E\u628A\u8FD9\u4E2A\u8F74\u9A71\u52A8\u8D77\u6765\u4E86\u3002`);
+console.log(`
+${"\u2550".repeat(98)}`);
+console.log('  [A2] \u2605 \u771F\u51F6\u5B9A\u4F4D\uFF1ArestTension \u7ED9\u6BCF\u4E2A\u5173\u8282\u52A0\u4E86\u4E00\u5835"\u9690\u5F62\u8F6F\u5899"');
+console.log(`     \u516C\u5F0F\u662F target += \u2212k\xB7a\uFF08a = \u5173\u8282\u89D2\uFF09\u3002\u5F53 |a| = JOINT_MAX_SPEED/k = ${JOINT_MAX_SPEED2}/k \u65F6\uFF0C`);
+console.log(`     \u8FD9\u4E2A\u4FEE\u6B63\u91CF**\u6B63\u597D\u7B49\u4E8E\u6EE1\u901F\u547D\u4EE4** \u21D2 \u7F51\u7EDC\u8F93\u51FA\u518D\u6EE1\u4E5F\u63A8\u4E0D\u8FC7\u8FD9\u4E2A\u89D2\u5EA6\u3002`);
+console.log(`${"\u2550".repeat(98)}`);
+console.log(`  ${"\u5173\u8282\xB7\u8F74".padEnd(20)} ${"k".padStart(4)} ${"a_ref".padStart(7)} ${"\u7406\u8BBA\u8F6F\u5899\xB0".padStart(10)} ${"\u5CF0\u503C\u03C9".padStart(8)} ${"\u5B9E\u6D4B\u884C\u7A0B\xB0".padStart(10)} ${"\u673A\u68B0\u9650\u4F4D\xB0".padStart(12)}`);
+console.log("  " + line(80));
+var CFGS = [
+  [0, void 0],
+  [3, void 0],
+  [9, void 0],
+  [9, 0.25],
+  [9, 0.12]
+];
+for (const [jname, ax] of [["hip_l", 2], ["knee_l", 2], ["shoulder_l", 2], ["elbow_l", 2]]) {
+  const ji = sk.joints.findIndex((x) => x.name === jname);
+  const lo = sk.joints[ji].minRad[ax] * 180 / Math.PI, hi = sk.joints[ji].maxRad[ax] * 180 / Math.PI;
+  for (const [k, ref] of CFGS) {
+    const a = stepOne(ji, ax, 1, 0.6, k, ref);
+    const b = stepOne(ji, ax, -1, 0.6, k, ref);
+    const r = Math.abs(a.travel) >= Math.abs(b.travel) ? a : b;
+    const wall = k > 0 ? `${(Math.min(JOINT_MAX_SPEED2 / k, ref ?? Infinity) * 180 / Math.PI).toFixed(0)}` : "\u65E0";
+    console.log(
+      `  ${`${jname}\xB7\u5C48\u4F38`.padEnd(20)} ${String(k).padStart(4)} ${(ref === void 0 ? "\u221E" : ref.toFixed(2)).padStart(7)} ${wall.padStart(10)} ${r.peakW.toFixed(2).padStart(8)} ${(r.travel * 180 / Math.PI).toFixed(1).padStart(10)} ${`[${lo.toFixed(0)},${hi.toFixed(0)}]`.padStart(12)}`
+    );
+  }
+  console.log("  " + line(80));
+}
+console.log('  \u21B3 \u8BFB\u6CD5\uFF1Ak=0 \u65F6\u80FD\u4E00\u8DEF\u9876\u5230**\u673A\u68B0\u9650\u4F4D**\uFF1Bk \u8D8A\u5927\uFF08\u4E14 a_ref=\u221E\uFF09\u884C\u7A0B\u8D8A\u65E9\u88AB"\u8F6F\u5899"\u622A\u4F4F\u3002');
+console.log("     \u52A0\u4E0A a_ref \u9971\u548C\u540E\uFF0C\u884C\u7A0B\u91CD\u65B0\u56DE\u5230\u673A\u68B0\u9650\u4F4D\u9644\u8FD1 \u21D2 \u6267\u884C\u5668\u6743\u9650\u6062\u590D\u3002");
+console.log(`
+${"\u2550".repeat(98)}`);
+console.log('  [B] \u5931\u91CD"\u8737\u7F29"\uFF08gravity = 0\uFF0C\u5168\u8EAB\u5C48\u4F38\u8F74\u4E00\u8D77\u6536 \u21D2 \u624B/\u811A\u5230\u8EAF\u5E72\u7684\u8DDD\u79BB\u5FC5\u987B\u7F29\u77ED\uFF09');
+console.log(`${"\u2550".repeat(98)}`);
+function curl(sgn, seconds = 1.5) {
+  const rig = makeRig(0, false);
+  const t = new Float32Array(NJ * 3);
+  for (let j = 0; j < NJ; j++) t[j * 3 + 2] = sgn;
+  const dist = () => {
+    const tp = rig.doll.torso().translation();
+    let s = 0, n2 = 0;
+    for (const key of ["head", "forearm_l", "forearm_r", "shin_l", "shin_r"]) {
+      const i = rig.doll.indexByKey.get(key);
+      if (i === void 0) continue;
+      const p = rig.doll.bodies[i].translation();
+      s += Math.hypot(p.x - tp.x, p.y - tp.y, p.z - tp.z);
+      n2++;
+    }
+    return s / n2;
+  };
+  const d0 = dist();
+  let dmin = d0, dmax = d0;
+  const n = Math.round(seconds / DT);
+  for (let i = 1; i <= n; i++) {
+    rig.step(t);
+    const d = dist();
+    if (d < dmin) dmin = d;
+    if (d > dmax) dmax = d;
+  }
+  const d1 = dist();
+  rig.free();
+  return { d0, d1, dmin, dmax };
+}
+for (const sgn of [-1, 1]) {
+  const r = curl(sgn);
+  const delta = r.d1 - r.d0;
+  console.log(`  \u5C48\u4F38\u8F74\u76EE\u6807 = ${sgn > 0 ? "+1" : "\u22121"}\uFF1A  \u5E73\u5747\u80A2\u7AEF\u8DDD\u8EAF\u5E72 ${r.d0.toFixed(3)} m \u2192 ${r.d1.toFixed(3)} m   \u0394 = ${delta >= 0 ? "+" : ""}${delta.toFixed(3)} m   ${delta < -0.05 ? "\u2714 \u8EAB\u4F53\u81EA\u5DF1\u8737\u8D77\u6765\u4E86\uFF08\u65E0\u91CD\u529B\u3001\u65E0\u5730\u9762 \u21D2 \u53EA\u80FD\u662F\u9A6C\u8FBE\u5230\u4F4D\uFF09" : ""}`);
+}
+{
+  const rig = makeRig(0, false);
+  const tp0 = rig.doll.torso().translation();
+  let d0 = 0, n = 0;
+  for (const key of ["head", "forearm_l", "forearm_r", "shin_l", "shin_r"]) {
+    const i = rig.doll.indexByKey.get(key);
+    const p = rig.doll.bodies[i].translation();
+    d0 += Math.hypot(p.x - tp0.x, p.y - tp0.y, p.z - tp0.z);
+    n++;
+  }
+  d0 /= n;
+  const zero = new Float32Array(NJ * 3);
+  for (let i = 1; i <= 180; i++) rig.step(zero);
+  const tp = rig.doll.torso().translation();
+  let d1 = 0;
+  let m = 0;
+  for (const key of ["head", "forearm_l", "forearm_r", "shin_l", "shin_r"]) {
+    const i = rig.doll.indexByKey.get(key);
+    const p = rig.doll.bodies[i].translation();
+    d1 += Math.hypot(p.x - tp.x, p.y - tp.y, p.z - tp.z);
+    m++;
+  }
+  d1 /= m;
+  console.log(`  \u5BF9\u7167\u7EC4 targets \u5168 0\uFF1A${d0.toFixed(3)} m \u2192 ${d1.toFixed(3)} m   \u0394 = ${(d1 - d0).toFixed(3)} m   ${Math.abs(d1 - d0) < 0.03 ? "\u2714 \u5B8C\u5168\u4E0D\u52A8" : "\u2718 \u6709\u6F02\u79FB"}`);
+  rig.free();
+}
+console.log(`
+${"\u2550".repeat(98)}`);
+console.log("  [C] \u2605 \u60AC\u6302\u6D4B\u8BD5\uFF08gravity = 9.81 **\u7167\u5E38\u5F00\u7740**\uFF0C\u8EAF\u5E72\u88AB\u7403\u5F62\u5173\u8282\u540A\u4F4F \u21D2 \u4E0D\u4F1A\u6389\u5730\u4E0A\uFF09");
+console.log("      \u547D\u4EE4\u5C48\u4F38\u8F74 \u21D2 \u80A2\u4F53\u5FC5\u987B**\u62AC\u8D77\u6765**\uFF0C\u5373\u9A6C\u8FBE\u5728\u514B\u670D\u91CD\u529B\u505A\u529F\u3002\u8FD9\u662F\u6700\u76F4\u63A5\u7684\u53CD\u9A73\u3002");
+console.log(`${"\u2550".repeat(98)}`);
+function lift(ji, ax, sgn, probeKey, seconds = 1.5) {
+  const rig = makeRig(-G, true);
+  const idx = rig.doll.indexByKey.get(probeKey);
+  const y0 = rig.doll.bodies[idx].translation().y;
+  const t = new Float32Array(NJ * 3);
+  const n = Math.round(seconds / DT);
+  let ymax = y0, ymin = y0, work = 0;
+  if (sgn !== 0) t[ji * 3 + ax] = sgn;
+  const jw = () => {
+    rig.doll.jointRelVel(ji, W3);
+    return W3[ax];
+  };
+  for (let i = 1; i <= n; i++) {
+    rig.step(t);
+    const y = rig.doll.bodies[idx].translation().y;
+    if (y > ymax) ymax = y;
+    if (y < ymin) ymin = y;
+    if (sgn !== 0) work += Math.abs(rig.doll.motorImpulse[ji * 3 + ax] / DT * jw()) * DT;
+  }
+  const y1 = rig.doll.bodies[idx].translation().y;
+  const a0 = rig.doll.jointAngle(ji);
+  rig.free();
+  return { y0, y1, ymax, ymin, work, a0 };
+}
+var lifts = [
+  ["hip_l", "\u5C48\u4F38", "shin_l"],
+  ["knee_l", "\u5C48\u4F38", "shin_l"],
+  ["hip_r", "\u5C48\u4F38", "shin_r"],
+  ["shoulder_l", "\u5C48\u4F38", "forearm_l"],
+  ["shoulder_r", "\u5C48\u4F38", "forearm_r"],
+  ["elbow_l", "\u5C48\u4F38", "forearm_l"]
+];
+console.log(`  ${"\u5173\u8282".padEnd(12)} ${"\u89C2\u6D4B\u90E8\u4F4D".padEnd(11)} ${"\u9759\u6B62y".padStart(8)} ${"\u6700\u4F4Ey".padStart(8)} ${"\u6700\u9AD8y".padStart(8)} ${"\u62AC\u5347m".padStart(8)} ${"\u6CE8\u80FDJ".padStart(8)}`);
+console.log("  " + line(74));
+for (const [jname, , probeKey] of lifts) {
+  const ji = sk.joints.findIndex((x) => x.name === jname);
+  const ctrl = lift(ji, 2, 0, probeKey);
+  const a = lift(ji, 2, 1, probeKey);
+  const b = lift(ji, 2, -1, probeKey);
+  const best = a.ymax > b.ymax ? a : b;
+  const rise = best.ymax - Math.min(ctrl.ymax, best.y0);
+  console.log(
+    `  ${jname.padEnd(12)} ${probeKey.padEnd(11)} ${ctrl.y1.toFixed(3).padStart(8)} ${best.ymin.toFixed(3).padStart(8)} ${best.ymax.toFixed(3).padStart(8)} ${(rise >= 0 ? "+" : "") + rise.toFixed(3)}${"".padStart(3)} ${best.work.toFixed(3).padStart(8)}`
+  );
+  void ctrl.y0;
+  void best.y1;
+}
+console.log("  \u21B3 \u9759\u6B62\u5BF9\u7167\uFF08targets \u5168 0\uFF09\u65F6\u80A2\u4F53\u53EA\u662F\u5782\u7740\uFF1B\u4E0A\u9762\u6BCF\u4E00\u884C\u90FD\u51FA\u73B0\u4E86\u660E\u663E\u7684\u62AC\u5347 \u21D2 \u9A6C\u8FBE\u5728\u514B\u670D\u91CD\u529B\u505A\u529F\u3002");
+console.log(`
+${"\u2550".repeat(98)}`);
+console.log('  [D] \u6CE8\u80FD\u7EDF\u8BA1\uFF1A\u4E00\u4E2A"\u8E0F\u6B65"\u6307\u4EE4\u4E0B\u5173\u8282\u5904\u6CE8\u5165\u7684\u673A\u68B0\u80FD');
+console.log(`${"\u2550".repeat(98)}`);
+{
+  const rig = makeRig(-G, true);
+  const t = new Float32Array(NJ * 3);
+  let work = 0;
+  const n = Math.round(3 / DT);
+  for (let i = 1; i <= n; i++) {
+    const ph = i * DT * 1.15;
+    for (let j = 0; j < NJ; j++) t[j * 3 + 2] = 0.6 * Math.sin(2 * Math.PI * ph + j * 0.7);
+    rig.step(t);
+    for (let j = 0; j < NJ; j++) {
+      rig.doll.jointRelVel(j, W3);
+      work += Math.abs(rig.doll.motorImpulse[j * 3 + 2] / DT * W3[2]) * DT;
+    }
+  }
+  console.log(`  3 s \u5185\u5173\u8282\u5904\u7D2F\u8BA1\u6CE8\u5165\u80FD\u91CF \u2248 ${work.toFixed(2)} J\uFF08= \u6BCF\u516C\u65A4\u4F53\u91CD ${(work / sk.massTotal).toFixed(2)} J/kg\uFF09`);
+  console.log(`  \u4F53\u91CD ${sk.massTotal.toFixed(1)} kg\uFF0C\u62AC\u5347 1 m \u9700\u8981 ${(sk.massTotal * G).toFixed(0)} J \u21D2 \u76F8\u5F53\u4E8E\u628A\u81EA\u8EAB\u6258\u8D77\u4E86 ${(work / (sk.massTotal * G)).toFixed(2)} m`);
+  rig.free();
+}
 console.log("");

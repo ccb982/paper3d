@@ -17,7 +17,7 @@ import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import RAPIER from '@dimforge/rapier3d';
 import { DEFAULT_CONFIG, buildSkeleton } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
-import { BRAIN_SHAPE, brainParamCount } from '../src/core/brain';
+import { shapeForJoints, brainParamCount } from '../src/core/brain';
 import { makeRng, makeGaussian, randomGenome } from '../src/core/genome';
 
 const require = createRequire(import.meta.url);
@@ -36,12 +36,14 @@ const require = createRequire(import.meta.url);
 }
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
 const CFG = { ...DEFAULT_SIM, mode: 'walk' as const, duration: 4 };
 
 const rng = makeRng(4242);
 const gauss = makeGaussian(rng);
-const G = randomGenome(BRAIN_SHAPE, gauss, 1.2);
-const NOISE = randomGenome(BRAIN_SHAPE, gauss, 2.0);
+const G = randomGenome(SHAPE, gauss, 1.2);
+const NOISE = randomGenome(SHAPE, gauss, 2.0);
 
 /** 跑一遍并采集过程峰值 —— 用来抓数值爆冲 */
 function runTracked(sim: Sim) {
@@ -84,14 +86,14 @@ const fmt = (r: ReturnType<typeof runTracked>) =>
 
 console.log('\n=== A. 三个全新 Sim 各跑一次同一基因组（查全局共享状态）===');
 for (let i = 0; i < 3; i++) {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   s.begin(G);
   console.log(`  fresh#${i}  ${fmt(runTracked(s))}`);
 }
 
 console.log('\n=== B. 同一个 Sim 连跑 4 次同一基因组（看交替）===');
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   for (let i = 0; i < 4; i++) {
     s.begin(G);
     console.log(`  第 ${i + 1} 次   ${fmt(runTracked(s))}`);
@@ -100,7 +102,7 @@ console.log('\n=== B. 同一个 Sim 连跑 4 次同一基因组（看交替）==
 
 console.log('\n=== C. 同一个 Sim：G → 干扰 → G（查是否被上一个个体污染）===');
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   s.begin(G);       const a = runTracked(s);
   s.begin(NOISE);   runTracked(s);
   s.begin(G);       const b = runTracked(s);
@@ -114,7 +116,7 @@ console.log('\n=== C. 同一个 Sim：G → 干扰 → G（查是否被上一个
 
 console.log('\n=== E. reset 后"头 6 步"的速度总和（定位残留从第几步开始起作用）===');
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   const lines: string[] = [];
   for (let run = 0; run < 3; run++) {
     s.begin(G);
@@ -138,8 +140,8 @@ console.log('\n=== E. reset 后"头 6 步"的速度总和（定位残留从第�
 
 console.log('\n=== D. 峰值速度速查（判断是不是数值爆冲刷分）===');
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
-  const zero = new Float32Array(brainParamCount(BRAIN_SHAPE));
+  const s = new Sim(sk, SHAPE, CFG);
+  const zero = new Float32Array(brainParamCount(SHAPE));
   s.begin(zero);
   console.log(`  零输出（站桩）  ${fmt(runTracked(s))}`);
   s.begin(G);

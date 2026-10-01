@@ -6058,6 +6058,24 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
   const mapY = (px) => (groundPx - px) * px2m;
   const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
+  const K = Math.max(1, Math.floor(cfg.spineSegments));
+  const CHEST = K > 1 ? `spine${K}` : "torso";
+  const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
+  let byKeyRef = null;
+  const attachTo = (parentKey, wy) => {
+    if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
+    let best = 0, bestD = Infinity;
+    for (let s = 0; s < K; s++) {
+      const b = byKeyRef.get(segKey(s));
+      if (!b) continue;
+      const d = Math.abs(b.cy - wy);
+      if (d < bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    return segKey(best);
+  };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
   const bodies = [];
@@ -6069,6 +6087,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       part.bh * px2m,
       cfg.limbRadiusScale
     );
+    const cy = mapY(part.cy);
     const totalMass = spec.massPct / 100 * cfg.mass;
     const solePct = spec.soleMassPct ?? 0;
     const mainMass = totalMass - solePct / 100 * cfg.mass;
@@ -6106,6 +6125,45 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         inertiaXY: soleMass * (radius * radius * 0.81 + soleHalfThick * soleHalfThick) / 3
       });
     }
+    if (spec.key === "torso" && K > 1) {
+      const segLen = length / K;
+      const segMass = totalMass / K;
+      const hx = radius, hz = radius * 0.9;
+      for (let s = 0; s < K; s++) {
+        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+        const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
+        const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
+        bodies.push({
+          key: s === 0 ? "torso" : `spine${s + 1}`,
+          bone: spec.bone,
+          label: s === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s + 1}`,
+          part,
+          cx: 0,
+          cy: cyS,
+          cz: mapZ(part.cx, false),
+          length: segLen,
+          radius,
+          halfHeight: segLen / 2,
+          mass: segMass,
+          colliders: [{
+            shape: "cuboid",
+            halfHeight: 0,
+            radius: 0,
+            hx,
+            hy: segLen / 2,
+            hz,
+            offsetY: 0,
+            mass: segMass,
+            comY: 0,
+            inertiaZ: iZ,
+            inertiaXY: iX
+          }],
+          leg: false,
+          texSlice: { index: s, count: K }
+        });
+      }
+      continue;
+    }
     bodies.push({
       key: spec.key,
       bone: spec.bone,
@@ -6124,12 +6182,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     });
   }
   const byKey = new Map(bodies.map((b) => [b.key, b]));
+  byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
   const joints = [];
   JOINT_ORDER.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const parent = byKey.get(jm.parent);
+    const parent = byKey.get(attachTo(jm.parent, mapY(jm.y)));
     const child = byKey.get(jm.child);
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
@@ -6155,6 +6214,37 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
     });
   });
+  if (K > 1) {
+    const SPINE_XY_DEG = [15, 20];
+    const SPINE_FLEX_DEG = [-25, 25];
+    const SPINE_TAU = 120;
+    for (let s = 0; s < K - 1; s++) {
+      const p = byKey.get(segKey(s));
+      const c = byKey.get(segKey(s + 1));
+      if (!p || !c) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s} \u4E0D\u5B58\u5728`);
+      const wy = (p.cy + c.cy) / 2;
+      const wx = 0, wz = 0;
+      joints.push({
+        name: `spine${s + 1}`,
+        index: joints.length,
+        // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
+        parentKey: p.key,
+        childKey: c.key,
+        wx,
+        wy,
+        wz,
+        parentLocal: [wx - p.cx, wy - p.cy, wz - p.cz],
+        childLocal: [wx - c.cx, wy - c.cy, wz - c.cz],
+        minRad: [-SPINE_XY_DEG[0] * DEG, -SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[0] * DEG],
+        maxRad: [SPINE_XY_DEG[0] * DEG, SPINE_XY_DEG[1] * DEG, SPINE_FLEX_DEG[1] * DEG],
+        maxTorque: [
+          SPINE_TAU * TORQUE_AXIS_FACTOR[0],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[1],
+          SPINE_TAU * TORQUE_AXIS_FACTOR[2]
+        ]
+      });
+    }
+  }
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
   return {
     cfg,
@@ -6208,7 +6298,11 @@ var init_skeleton = __esm({
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
       stance: 1,
-      limbRadiusScale: 0.6
+      limbRadiusScale: 0.6,
+      // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
+      // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
+      // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
+      spineSegments: 4
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -13036,6 +13130,11 @@ var init_ragdoll = __esm({
       angularDamping: 0.04,
       torqueScale: 1,
       restTension: 9,
+      // ★ 0.25 是**白拿的**：probe-ground 实测站桩指标与"无饱和"逐项相同
+      //   （t=2s 躯干 1.120 m / 接触力 719 N = 105% / CoM 2.75s），
+      //   而 probe-servo A2 显示膝屈伸行程从 −59.7° 恢复到 −144.5°（机械限位 −145°）。
+      //   0.12 会开始伤站桩（570 N = 83%）；0.40 与 0.25 无差别 ⇒ 0.25 有余量。
+      restTensionRef: 0.25,
       purgeJointCache: true
     };
     Ragdoll = class {
@@ -13235,6 +13334,7 @@ var init_ragdoll = __esm({
       driveMotors(dt) {
         const scale = this.opt.torqueScale;
         const rest = this.opt.restTension;
+        const ref = this.opt.restTensionRef;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
@@ -13268,7 +13368,10 @@ var init_ragdoll = __esm({
               if (target < rec) target = rec;
               alpha = MOTOR_ALPHA_RECOVER;
             }
-            if (rest > 0) target += -a * rest;
+            if (rest > 0) {
+              const ac = a > ref ? ref : a < -ref ? -ref : a;
+              target += -ac * rest;
+            }
             const err = target - relL[k];
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -13360,13 +13463,22 @@ var init_ragdoll = __esm({
 var brain_exports = {};
 __export(brain_exports, {
   BRAIN_SHAPE: () => BRAIN_SHAPE,
+  HIDDEN_UNITS: () => HIDDEN_UNITS,
   INPUT_COUNT: () => INPUT_COUNT,
   INPUT_LAYOUT: () => INPUT_LAYOUT,
   OUTPUT_PER_JOINT: () => OUTPUT_PER_JOINT,
   brainForward: () => brainForward,
   brainLayout: () => brainLayout,
-  brainParamCount: () => brainParamCount
+  brainParamCount: () => brainParamCount,
+  inputCount: () => inputCount,
+  shapeForJoints: () => shapeForJoints
 });
+function shapeForJoints(jointCount) {
+  return { inputs: 16 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+}
+function inputCount(jointCount) {
+  return 16 + 6 * jointCount;
+}
 function brainParamCount(s) {
   return s.inputs * s.hidden + s.hidden + s.hidden * s.outputs + s.outputs;
 }
@@ -13392,11 +13504,12 @@ function brainForward(s, p, x, hidden, out) {
     out[o] = Math.tanh(acc);
   }
 }
-var BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
+var HIDDEN_UNITS, BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
 var init_brain = __esm({
   "src/core/brain.ts"() {
     "use strict";
-    BRAIN_SHAPE = { inputs: 70, hidden: 32, outputs: 27 };
+    HIDDEN_UNITS = 32;
+    BRAIN_SHAPE = shapeForJoints(9);
     INPUT_LAYOUT = [
       "clock.sin",
       "clock.cos",
@@ -13745,10 +13858,10 @@ var init_sim = __esm({
         const ph = t2 % period / period;
         const pulse = Math.max(0, Math.sin(Math.PI * ph));
         const lunge = pulse * pulse;
-        const chestY = Math.max(0.45, doll.torso().translation().y + 0.05);
+        const chestY2 = Math.max(0.45, doll.torso().translation().y + 0.05);
         fist.setNextKinematicTranslation({
           x: this.fistBaseX - lunge * this.fistLunge,
-          y: chestY,
+          y: chestY2,
           z: 0
         });
         const fp = fist.translation();
@@ -14211,7 +14324,7 @@ var {
 } = skeletonMod;
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { Ragdoll: Ragdoll2 } = await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
-var { BRAIN_SHAPE: BRAIN_SHAPE2, brainParamCount: brainParamCount2, INPUT_COUNT: INPUT_COUNT2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
+var { shapeForJoints: shapeForJoints2, brainParamCount: brainParamCount2, inputCount: inputCount2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Trainer: Trainer2, DEFAULT_TRAINER: DEFAULT_TRAINER2 } = await Promise.resolve().then(() => (init_evolution(), evolution_exports));
 var { packGenome: packGenome2, unpackGenome: unpackGenome2, makeRng: makeRng2, makeGaussian: makeGaussian2, randomGenome: randomGenome2 } = await Promise.resolve().then(() => (init_genome(), genome_exports));
 await initWasm();
@@ -14225,12 +14338,17 @@ log("\n=== 1. \u9AA8\u67B6\uFF1A\u51E0\u4F55\u4E0E\u8D28\u91CF ===");
 var massSum = assertMassBudget2();
 check("\u73AF\u8282\u8D28\u91CF\u6BD4\u4E4B\u548C = 100%", Math.abs(massSum - 100) < 1e-9, `${massSum}%`);
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
+var SHAPE = shapeForJoints2(sk.joints.length);
 assertColliderMass2(sk);
-check("\u521A\u4F53\u6570 = 10\uFF08\u4E00\u7EC4\u4EF6\u4E00\u521A\u4F53\uFF09", sk.bodies.length === 10, `${sk.bodies.length}`);
-check("\u5173\u8282\u6570 = 9\uFF08\u65E0\u8E1D\uFF0C\u811A\u4E0E\u5C0F\u817F\u4E00\u4F53\u5316\uFF09", sk.joints.length === 9, `${sk.joints.length}`);
 check(
-  "\u5173\u8282\u987A\u5E8F\u4E0E JOINT_ORDER \u4E00\u81F4",
-  sk.joints.every((j, i) => j.name === JOINT_ORDER2[i]),
+  "\u521A\u4F53\u6570 = 10 + \u810A\u67F1\u6BB5\u6570 \u2212 1",
+  sk.bodies.length === 10 + Math.max(0, sk.cfg.spineSegments - 1),
+  `${sk.bodies.length}\uFF08spineSegments=${sk.cfg.spineSegments}\uFF09`
+);
+check("\u5173\u8282\u6570 = \u8EAF\u5E72\u539F\u6709 9 + \u810A\u67F1 K-1\uFF08\u65E0\u8E1D\uFF0C\u811A\u4E0E\u5C0F\u817F\u4E00\u4F53\u5316\uFF09", sk.joints.length === 9 + Math.max(0, sk.cfg.spineSegments - 1), `${sk.joints.length}\uFF08spineSegments=${sk.cfg.spineSegments}\uFF09`);
+check(
+  "\u2605 \u524D 9 \u4E2A\u5173\u8282\u987A\u5E8F\u4E0E JOINT_ORDER \u9010\u5B57\u4E00\u81F4\uFF0C\u810A\u67F1\u5173\u8282\u63A5\u5728\u540E\u9762",
+  sk.joints.slice(0, JOINT_ORDER2.length).every((j, i) => j.name === JOINT_ORDER2[i]) && sk.joints.slice(JOINT_ORDER2.length).every((j) => /^spine\d+$/.test(j.name)),
   sk.joints.map((j) => j.name).join(",")
 );
 check("\u603B\u8D28\u91CF = 70 kg", Math.abs(sk.massTotal - 70) < 1e-6, `${sk.massTotal.toFixed(3)} kg`);
@@ -14238,12 +14356,19 @@ check("\u603B\u8EAB\u9AD8 = 1.80 m", Math.abs(sk.totalHeight - 1.8) < 1e-6, `${s
 check("px2m \u6362\u7B97\u81EA\u6D3D", Math.abs(sk.totalHeight / (sk.groundPx - 92) - sk.px2m) < 1e-12);
 log("\n  \u73AF\u8282          \u8D28\u91CFkg   \u957Fm    \u534A\u5F84m  \u8D28\u5FC3\u504F\u79FBm  \u60EF\u91CFkg\xB7m\xB2      z\u4FA7\u5411m");
 var prevY = Infinity;
+var chestY = 0;
 for (const b of sk.bodies) {
   const col = b.colliders.map((c) => `${c.mass.toFixed(2)}`).join("+");
   log(`  ${b.label.padEnd(10)} ${b.mass.toFixed(2).padStart(7)} (${col.padEnd(9)}) ${b.length.toFixed(3)}  ${b.radius.toFixed(3)}  ${b.colliders[0].comY >= 0 ? " " : ""}${b.colliders[0].comY.toFixed(3)}     ${b.colliders[0].inertiaZ.toFixed(3)}   ${b.cz >= 0 ? " " : ""}${b.cz.toFixed(4)}`);
   if (b.key === "torso") prevY = b.cy;
+  if (b.key === `spine${sk.cfg.spineSegments}`) chestY = b.cy;
 }
-check("\u8EAF\u5E72\u521D\u59CB\u9AD8\u5EA6\u5728 0.9~1.3 m", prevY > 0.9 && prevY < 1.3, `${prevY.toFixed(3)} m`);
+check("\u9AA8\u76C6\uFF08torso = \u6811\u6839\uFF09\u521D\u59CB\u9AD8\u5EA6\u5728 0.7~1.0 m", prevY > 0.7 && prevY < 1, `${prevY.toFixed(3)} m`);
+check(
+  `\u80F8\u8154\uFF08spine${sk.cfg.spineSegments}\uFF09\u521D\u59CB\u9AD8\u5EA6\u5728 1.05~1.35 m`,
+  chestY > 1.05 && chestY < 1.35,
+  `${chestY.toFixed(3)} m`
+);
 check(
   "\u2605 \u524D\u5411\u4E00\u5F8B 0\uFF08\u7D20\u6750\u662F\u6B63\u9762\u89C6\u56FE\uFF0C\u6CA1\u6709\u6DF1\u5EA6\u4FE1\u606F\uFF09",
   sk.bodies.every((b) => b.cx === 0)
@@ -14287,12 +14412,12 @@ check(
   `knee.x=${(sk.joints[8].maxRad[0] * 180 / Math.PI).toFixed(1)}\xB0  hip.x=${(sk.joints[6].maxRad[0] * 180 / Math.PI).toFixed(1)}\xB0`
 );
 log("\n=== 2. \u7269\u7406\u88C5\u914D\u4E0E\u7A33\u5B9A\u6027 ===");
-var sim = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, duration: 3 });
-check("Sim \u5173\u8282\u6570 = 9", sim.doll.jointCount === 9);
+var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, duration: 3 });
+check("Sim \u5173\u8282\u6570 = \u9AA8\u67B6\u5173\u8282\u6570", sim.doll.jointCount === sk.joints.length, `${sim.doll.jointCount}`);
 var rng0 = makeRng2(7);
 var gauss0 = makeGaussian2(rng0);
-var g0 = randomGenome2(BRAIN_SHAPE2, gauss0, 1.2);
-check("\u57FA\u56E0\u7EC4\u957F\u5EA6 = \u53C2\u6570\u91CF", g0.length === brainParamCount2(BRAIN_SHAPE2), `${g0.length} \u4E2A`);
+var g0 = randomGenome2(SHAPE, gauss0, 1.2);
+check("\u57FA\u56E0\u7EC4\u957F\u5EA6 = \u53C2\u6570\u91CF", g0.length === brainParamCount2(SHAPE), `${g0.length} \u4E2A`);
 var zeroGenome = new Float32Array(g0.length);
 sim.begin(zeroGenome);
 var yTrace = [];
@@ -14334,14 +14459,36 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
 {
   const RAPIER = (await Promise.resolve().then(() => (init_rapier(), rapier_exports))).default;
   check(
-    "\u7F51\u7EDC\u8F93\u5165\u7EF4\u5EA6\u4E0E\u58F0\u660E\u4E00\u81F4\uFF0870\uFF09",
-    BRAIN_SHAPE2.inputs === INPUT_COUNT2,
-    `inputs=${BRAIN_SHAPE2.inputs} INPUT_COUNT=${INPUT_COUNT2}`
+    "\u7F51\u7EDC\u8F93\u5165\u7EF4\u5EA6\u4E0E\u58F0\u660E\u4E00\u81F4\uFF0816 + 6N\uFF09",
+    SHAPE.inputs === inputCount2(sk.joints.length),
+    `inputs=${SHAPE.inputs} \u671F\u671B=${inputCount2(sk.joints.length)}\uFF08\u5173\u8282\u6570 ${sk.joints.length}\uFF09`
   );
   check(
-    "\u7F51\u7EDC\u8F93\u51FA = \u5173\u8282\u6570 \xD7 3\uFF0827\uFF09",
-    BRAIN_SHAPE2.outputs === sk.joints.length * 3,
-    `outputs=${BRAIN_SHAPE2.outputs}`
+    "\u7F51\u7EDC\u8F93\u51FA = \u5173\u8282\u6570 \xD7 3",
+    SHAPE.outputs === sk.joints.length * 3,
+    `outputs=${SHAPE.outputs} \u5173\u8282\u6570=${sk.joints.length}`
+  );
+  const K = sk.cfg.spineSegments;
+  const spineJoints = sk.joints.filter((j) => j.name.startsWith("spine"));
+  check(
+    `\u2605 \u8EAF\u5E72\u5207\u6210 ${K} \u6BB5\uFF08\u9AA8\u76C6 + ${K - 1} \u8282\u810A\u690E\uFF09`,
+    sk.bodies.filter((b) => b.key === "torso" || b.key.startsWith("spine")).length === K,
+    `${sk.bodies.filter((b) => b.key === "torso" || b.key.startsWith("spine")).map((b) => b.key).join("/")}`
+  );
+  check(
+    `\u2605 \u810A\u67F1\u5173\u8282 ${K - 1} \u4E2A\u5DF2\u5EFA\u6210\uFF0C\u4E14\u6392\u5728 JOINT_ORDER \u4E4B\u540E`,
+    spineJoints.length === K - 1 && sk.joints[9].name.startsWith("spine"),
+    `${spineJoints.map((j) => j.name).join(",")}\uFF08\u603B\u5173\u8282 ${sk.joints.length}\uFF09`
+  );
+  check(
+    "\u2605 \u9ACB\u6302\u5728\u9AA8\u76C6\u6BB5\u3001\u9888/\u80A9\u6302\u5728\u6700\u4E0A\u4E00\u6BB5\uFF08\u80F8\u8154\uFF09",
+    sk.joints.find((j) => j.name === "hip_l").parentKey === "torso" && sk.joints.find((j) => j.name === "neck").parentKey === `spine${K}`,
+    `hip_l\u2192${sk.joints.find((j) => j.name === "hip_l").parentKey} neck\u2192${sk.joints.find((j) => j.name === "neck").parentKey}`
+  );
+  check(
+    "\u2605 \u5207\u5F00\u4E4B\u540E\u603B\u8D28\u91CF\u5B88\u6052\uFF08\u5206\u914D\u6CA1\u4E22\u6CA1\u91CD\uFF09",
+    Math.abs(sk.massTotal - sk.bodies.reduce((s, b) => s + b.mass, 0)) < 1e-9,
+    `${sk.massTotal.toFixed(4)} kg`
   );
   const mkW = () => {
     const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -14352,7 +14499,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
   };
   const w1 = mkW();
   const d1 = new Ragdoll2(w1, sk);
-  check("\u5173\u8282\u6570 = 9\uFF0C\u4E14\u6BCF\u4E2A\u90FD\u5EFA\u6210\u4E86", d1.joints.length === 9, `${d1.joints.length}`);
+  check("\u5173\u8282\u6570\u4E0E\u9AA8\u67B6\u4E00\u81F4\uFF0C\u4E14\u6BCF\u4E2A\u90FD\u5EFA\u6210\u4E86", d1.joints.length === sk.joints.length, `${d1.joints.length}`);
   note(
     "\u5173\u8282 JS \u7C7B\u540D\uFF08\u7ED1\u5B9A\u5C42\u8BFB\u56DE\uFF0C\u975E\u884C\u4E3A\u5224\u636E\uFF09",
     d1.joints[0].constructor.name === "SphericalImpulseJoint",
@@ -14402,10 +14549,10 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     maxQx > 0.05,
     `max|q.x|=${maxQx.toFixed(3)}`
   );
-  const gz = new Float32Array(brainParamCount2(BRAIN_SHAPE2));
+  const gz = new Float32Array(brainParamCount2(SHAPE));
   for (let k = 0; k < gz.length; k++) gz[k] = Math.sin(k * 1.7) * 0.3;
   const traceSim = () => {
-    const s = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, duration: 1 });
+    const s = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, duration: 1 });
     s.begin(gz);
     s.advance(120);
     const p = s.doll.torso().translation();
@@ -14449,7 +14596,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
   );
 }
 log("\n=== 3. \u9002\u5E94\u5EA6\u4E0E\u8FDB\u5316 ===");
-var tSim = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "walk", duration: 6 });
+var tSim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk", duration: 6 });
 var zeroFit = (() => {
   tSim.begin(zeroGenome);
   return tSim.runToEnd();
@@ -14457,15 +14604,15 @@ var zeroFit = (() => {
 log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}`);
 check("\u7AD9\u6869\u9002\u5E94\u5EA6 \u2248 0 \u9644\u8FD1\uFF08\u4E0D\u5956\u52B1\u9759\u6B62\uFF09", Math.abs(zeroFit) < 3, `${zeroFit.toFixed(3)}`);
 var pushGenome = new Float32Array(g0.length);
-var L = { w1: 0, b1: BRAIN_SHAPE2.inputs * BRAIN_SHAPE2.hidden };
-var b2Start = L.b1 + BRAIN_SHAPE2.hidden + BRAIN_SHAPE2.hidden * BRAIN_SHAPE2.outputs;
-for (let o = 0; o < BRAIN_SHAPE2.outputs; o++) pushGenome[b2Start + o] = 0.8;
+var L = { w1: 0, b1: SHAPE.inputs * SHAPE.hidden };
+var b2Start = L.b1 + SHAPE.hidden + SHAPE.hidden * SHAPE.outputs;
+for (let o = 0; o < SHAPE.outputs; o++) pushGenome[b2Start + o] = 0.8;
 tSim.begin(pushGenome);
 var pushFit = tSim.runToEnd();
 log(`  \u6052\u5B9A\u5173\u8282\u504F\u7F6E\u57FA\u56E0\u7EC4\uFF1A\u9002\u5E94\u5EA6 = ${pushFit.toFixed(3)}  \u524D\u8FDB ${tSim.distance.toFixed(3)} m  \u6454\u5012=${tSim.fallen}`);
 check("\u4E0D\u540C\u57FA\u56E0\u7EC4\u7ED9\u51FA\u4E0D\u540C\u9002\u5E94\u5EA6\uFF08\u68AF\u5EA6\u5B58\u5728\uFF09", Math.abs(pushFit - zeroFit) > 1e-6);
 var trainCfg = { ...DEFAULT_TRAINER2, population: 24, seed: 12345 };
-var trainer = new Trainer2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "walk", duration: 4 }, trainCfg);
+var trainer = new Trainer2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk", duration: 4 }, trainCfg);
 check(
   "trainer \u6BCF\u4E2A Sim \u90FD\u5DF2\u5F00\u5DE5\uFF08\u975E finished\uFF09",
   trainer.sims.every((s) => !s.finished),
@@ -14509,7 +14656,7 @@ check(
 );
 log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09===");
 {
-  const anat = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "walk", duration: 6 });
+  const anat = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk", duration: 6 });
   anat.begin(trainer.bestEver);
   let upTicks = 0;
   let totTicks = 0;
@@ -14540,13 +14687,13 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
   );
 }
 log("\n=== 4. \u57FA\u56E0\u7EC4\u5B58\u6863\u5F80\u8FD4 ===");
-var text = packGenome2(trainer.bestEver, BRAIN_SHAPE2, { gen: trainer.gen, fitness: bestEver });
+var text = packGenome2(trainer.bestEver, SHAPE, { gen: trainer.gen, fitness: bestEver });
 var back = unpackGenome2(text);
 var same = back.g.length === trainer.bestEver.length;
 for (let i = 0; same && i < back.g.length; i++) same = back.g[i] === trainer.bestEver[i];
 check("base64 \u5F80\u8FD4\u9010\u4F4D\u4E00\u81F4", same);
-check("\u5B58\u6863\u4F53\u79EF < 32 KB\uFF081 MB \u9884\u7B97\u91CC\u5360 <4%\uFF09", text.length < 32768, `${(text.length / 1024).toFixed(2)} KB`);
-var shot = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "walk", duration: 4 });
+check("\u5B58\u6863\u4F53\u79EF < 64 KB\uFF081 MB \u9884\u7B97\u91CC\u5360 <7%\uFF09", text.length < 32768, `${(text.length / 1024).toFixed(2)} KB`);
+var shot = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk", duration: 4 });
 shot.begin(back.g);
 var replay = shot.runToEnd();
 check(
@@ -14555,7 +14702,7 @@ check(
   `${replay.toFixed(3)}`
 );
 log("\n=== 5. \u6218\u6597\u9636\u6BB5 ===");
-var stand = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "fight", duration: 6 });
+var stand = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "fight", duration: 6 });
 stand.begin(zeroGenome);
 var standFit = stand.runToEnd();
 log(`  \u7AD9\u6869\u4E0D\u52A8\uFF1A\u547D\u4E2D ${stand.hits}  \u88AB\u51FB\u4E2D ${stand.hurts}  \u9002\u5E94\u5EA6 ${standFit.toFixed(2)}`);
@@ -14565,7 +14712,7 @@ check("\u7AD9\u6869\u6253\u4E0D\u51FA\u547D\u4E2D\uFF08\u547D\u4E2D\u5FC5\u987B\
   const sw = new Float32Array(g0.length);
   for (const j of [1, 2]) sw[b2Start + j * 3 + 2] = 6;
   for (const j of [3, 4]) sw[b2Start + j * 3 + 2] = 3;
-  const swingSim = new Sim2(sk, BRAIN_SHAPE2, { ...DEFAULT_SIM2, mode: "fight", duration: 4 });
+  const swingSim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "fight", duration: 4 });
   swingSim.begin(sw);
   swingSim.runToEnd();
   log(`  \u53CC\u81C2\u524D\u6325\u57FA\u56E0\u7EC4\uFF1A\u547D\u4E2D ${swingSim.hits}  \u88AB\u51FB\u4E2D ${swingSim.hurts}  \u9002\u5E94\u5EA6 ${swingSim.fitness.toFixed(2)}  \u51C0\u524D\u8FDB ${swingSim.distance.toFixed(2)}m`);
@@ -14573,7 +14720,7 @@ check("\u7AD9\u6869\u6253\u4E0D\u51FA\u547D\u4E2D\uFF08\u547D\u4E2D\u5FC5\u987B\
 }
 var fightTrainer = new Trainer2(
   sk,
-  BRAIN_SHAPE2,
+  SHAPE,
   { ...DEFAULT_SIM2, mode: "fight", duration: 4 },
   { ...DEFAULT_TRAINER2, population: 24, seed: 777 }
 );

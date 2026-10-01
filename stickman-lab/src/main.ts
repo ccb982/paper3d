@@ -10,7 +10,7 @@ import { initRapierWasm } from './core/rapierWasm';
 import {
   DEFAULT_CONFIG, assertColliderMass, assertMassBudget, buildSkeleton, type Skeleton,
 } from './core/skeleton';
-import { BRAIN_SHAPE } from './core/brain';
+import { shapeForJoints, type BrainShape } from './core/brain';
 import { DEFAULT_TRAINER, Trainer } from './core/evolution';
 import { DEFAULT_SIM, Sim, type SimConfig, type SimMode } from './core/sim';
 import { packGenome, unpackGenome } from './core/genome';
@@ -30,6 +30,7 @@ const state = {
 };
 
 let sk: Skeleton;
+let SHAPE: BrainShape;
 let trainer: Trainer;
 let showcase: Sim;
 let viewer: Viewer;
@@ -67,9 +68,11 @@ function boot(): void {
   assertMassBudget();
   sk = buildSkeleton(DEFAULT_CONFIG);
   assertColliderMass(sk);
+  // ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+  SHAPE = shapeForJoints(sk.joints.length);
 
-  trainer = new Trainer(sk, BRAIN_SHAPE, simCfg(state.mode), DEFAULT_TRAINER);
-  showcase = new Sim(sk, BRAIN_SHAPE, simCfg(state.mode));
+  trainer = new Trainer(sk, SHAPE, simCfg(state.mode), DEFAULT_TRAINER);
+  showcase = new Sim(sk, SHAPE, simCfg(state.mode));
   viewer = new Viewer(canvas, sk, trainer.population);
 
   showcase.begin(trainer.showcase());
@@ -97,7 +100,7 @@ function boot(): void {
     get skeleton() { return sk; },
     state,
     rebuild,
-    exportText: () => packGenome(trainer.showcase(), BRAIN_SHAPE, {
+    exportText: () => packGenome(trainer.showcase(), SHAPE, {
       gen: trainer.gen, fitness: trainer.bestEverFitness, note: `stickman-lab/${state.mode}`,
     }),
   };
@@ -111,10 +114,10 @@ function rebuild(mode: SimMode): void {
   const carry = trainer.bestEver.slice();
   const learned = trainer.bestEverFitness > -Infinity;
 
-  trainer = new Trainer(sk, BRAIN_SHAPE, simCfg(mode), DEFAULT_TRAINER);
+  trainer = new Trainer(sk, SHAPE, simCfg(mode), DEFAULT_TRAINER);
   if (learned) trainer.inject(carry);
 
-  showcase = new Sim(sk, BRAIN_SHAPE, simCfg(mode));
+  showcase = new Sim(sk, SHAPE, simCfg(mode));
   showcase.begin(trainer.showcase());
   hud.setHistory(trainer.history);
   hud.setStatus(`切换到「${mode === 'walk' ? '学走路' : '学战斗'}」${learned ? '（已继承之前的基因组）' : ''}`);
@@ -251,7 +254,7 @@ function wirePointer(canvas: HTMLCanvasElement): void {
 }
 
 function doExport(): void {
-  const text = packGenome(trainer.showcase(), BRAIN_SHAPE, {
+  const text = packGenome(trainer.showcase(), SHAPE, {
     gen: trainer.gen,
     fitness: trainer.bestEverFitness,
     note: `stickman-lab/${state.mode}`,
@@ -276,11 +279,11 @@ function doImport(): void {
     f.text().then((text) => {
       try {
         const { g, shape } = unpackGenome(text);
-        if (shape.inputs !== BRAIN_SHAPE.inputs || shape.hidden !== BRAIN_SHAPE.hidden ||
-            shape.outputs !== BRAIN_SHAPE.outputs) {
+        if (shape.inputs !== SHAPE.inputs || shape.hidden !== SHAPE.hidden ||
+            shape.outputs !== SHAPE.outputs) {
           hud.setStatus(
             `导入失败：网络形状 ${shape.inputs}/${shape.hidden}/${shape.outputs} ` +
-            `与当前 ${BRAIN_SHAPE.inputs}/${BRAIN_SHAPE.hidden}/${BRAIN_SHAPE.outputs} 不符`,
+            `与当前 ${SHAPE.inputs}/${SHAPE.hidden}/${SHAPE.outputs} 不符`,
             true,
           );
           return;

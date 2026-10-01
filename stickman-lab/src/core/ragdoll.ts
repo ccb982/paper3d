@@ -117,6 +117,34 @@ export interface RagdollOptions {
    */
   restTension?: number;
   /**
+   * ★★ 被动姿态张力的**饱和角** a_ref（弧度，默认 0.25 rad ≈ 14°）。
+   *
+   * ★ 为什么必须有它（probe-servo A2 段查出来的真凶，务必别删）：
+   *   restTension 的原始公式是 `target += −k·a`，随关节角**线性无界增长**。
+   *   而 target 的满量程只有 ±JOINT_MAX_SPEED = ±9 rad/s。于是当
+   *       |a| = JOINT_MAX_SPEED / k = 9 / 9 = 1.0 rad = 57.3°
+   *   时，这个修正量**正好等于满速命令** ⇒ 网络输出再满也推不过这个角度。
+   *   等于给每个关节加了一堵 ±57.3° 的**隐形软墙**，把执行器掐死。
+   *
+   *   实测（probe-servo A2，失重、满速命令、k=9）：
+   *     膝屈伸 行程 −59.7°（机械限位 [−145°, +2°]）
+   *     肘屈伸 行程 −61.0°（机械限位 [−120°, +10°]）
+   *     髋屈伸 行程 −69.3°（机械限位 [ −80°, +60°]）
+   *     肩屈伸 行程 +63.5°（机械限位 [ −95°, +80°]）
+   *   —— 全部挤在 57~71° 这个带里，机械限位根本没碰到。这是"学不出走路"的头号
+   *      结构性原因：走路需要膝屈曲 60~90°、髋伸展 −40°，全被软墙截住。
+   *   而 k=0 时同一命令能一路顶到机械限位（见 A2 段的对照行）。
+   *
+   *   修法：把张力**饱和**掉 —— `target += −k·clamp(a, −a_ref, +a_ref)`。
+   *   小角度区（|a| < a_ref）行为与原来完全一致（站桩靠的就是这一段），
+   *   大角度区张力封顶在 k·a_ref，网络仍有 |9 − k·a_ref| 的净权限把关节推到机械限位。
+   *   物理上也说得通：韧带刚度是先线性后屈服的，不是无限线性弹簧。
+   *
+   *   取 0.25 rad @ k=9 ⇒ 封顶 2.25 rad/s = 满速的 25%，网络保留 75% 权限。
+   *   置 Infinity 可退回"无饱和"的旧行为，用于对照实验。
+   */
+  restTensionRef?: number;
+  /**
    * ★ reset() 时是否"删掉关节再重建"（默认 true）。
    *
    * 为什么：Rapier 的约束解算器会把上一轮的**累积冲量**存在关节里做暖启动，
@@ -137,6 +165,11 @@ const DEFAULTS: Required<RagdollOptions> = {
   angularDamping: 0.04,
   torqueScale: 1.0,
   restTension: 9.0,
+  // ★ 0.25 是**白拿的**：probe-ground 实测站桩指标与"无饱和"逐项相同
+  //   （t=2s 躯干 1.120 m / 接触力 719 N = 105% / CoM 2.75s），
+  //   而 probe-servo A2 显示膝屈伸行程从 −59.7° 恢复到 −144.5°（机械限位 −145°）。
+  //   0.12 会开始伤站桩（570 N = 83%）；0.40 与 0.25 无差别 ⇒ 0.25 有余量。
+  restTensionRef: 0.25,
   purgeJointCache: true,
 };
 
@@ -238,6 +271,11 @@ export class Ragdoll {
   readonly joints: RAPIER.ImpulseJoint[] = [];
   /** key → 刚体下标 */
   readonly indexByKey = new Map<string, number>();
+  /**
+   * ★ 身体参考点的刚体 key = 脊柱最上一段（胸腔）。K=1 时就是 'torso'。
+   * 见 torso() 的注释 —— 分段之后"树根"是骨盆，但状态量要以胸腔为基准。
+   */
+  readonly torsoKey: string;
   /** 关节 i → [父刚体下标, 子刚体下标] */
   readonly jointBodies: Int32Array;
   /**
@@ -282,6 +320,14 @@ export class Ragdoll {
     this.opt = { ...DEFAULTS, ...opt };
     this.motorTarget = new Float32Array(sk.joints.length * 3);
     this.motorImpulse = new Float64Array(sk.joints.length * 3);
+
+    // ★ 身体参考点：脊柱最上一段（spineN）；没有分段就是 'torso'
+    let topSpine = -1;
+    for (const b of sk.bodies) {
+      const m = /^spine(\d+)$/.exec(b.key);
+      if (m) topSpine = Math.max(topSpine, Number(m[1]));
+    }
+    this.torsoKey = topSpine > 0 ? `spine${topSpine}` : 'torso';
 
     // ---- 地面（3D 之后侧向也要铺开：人形会在 Z 上翻滚） ----
     const ground = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(0, 0, 0));
@@ -478,6 +524,7 @@ export class Ragdoll {
   driveMotors(dt: number): void {
     const scale = this.opt.torqueScale;
     const rest = this.opt.restTension;
+    const ref = this.opt.restTensionRef;
     const qRel = this.qRel;
     const rv = this.rv;
     const relL = this.relL;
@@ -526,7 +573,11 @@ export class Ragdoll {
 
         // ★ 被动姿态张力：往初始姿态拉（见 RagdollOptions.restTension 的长注释）。
         //   放在软限位之后叠加，方向永远和"回程"一致（越界时 a 与 -a·k 同向回中）。
-        if (rest > 0) target += -a * rest;
+        //   ★★ 必须**饱和**：不饱和就是 ±JOINT_MAX_SPEED/k 处的一堵隐形软墙，会把执行器掐死。
+        if (rest > 0) {
+          const ac = a > ref ? ref : a < -ref ? -ref : a;
+          target += -ac * rest;
+        }
 
         const err = target - relL[k];
         if (err === 0) continue;
@@ -564,7 +615,19 @@ export class Ragdoll {
 
   // ------------------------------------------------------------ 便利读数
 
-  torso(): RAPIER.RigidBody { return this.bodies[this.indexByKey.get('torso') ?? 0]; }
+  /**
+   * ★ 身体参考点 = **上躯干（胸腔）**，不是树根。
+   *
+   * 为什么：脊柱分段后（见 SkeletonConfig.spineSegments）树根变成了骨盆，
+   * 而"站得直不直 / 现在多高 / 朝哪转"这些量真正的载体是**上躯干**：
+   *   · 平衡反馈用的角速度：胸的角速度才是"我在倒"的信号（骨盆更迟钝）
+   *   · 直立惩罚 ∫(cos tilt − 1)：必须量胸的倾角，否则弯腰驼背不扣分
+   *   · 摔倒判定的高度：骨盆会深蹲（0.83 → 0.5 是正常下蹲），胸塌到地面才是摔
+   * 分段前（K=1）它本身就是 'torso'，行为与历史完全一致。
+   */
+  torso(): RAPIER.RigidBody { return this.bodies[this.indexByKey.get(this.torsoKey) ?? 0]; }
+  /** 树根 = 骨盆（脊柱最下一段，key 恒为 'torso'）。行走位移的基准点 */
+  root(): RAPIER.RigidBody { return this.bodies[this.indexByKey.get('torso') ?? 0]; }
   head(): RAPIER.RigidBody { return this.bodies[this.indexByKey.get('head') ?? 0]; }
   shin(side: 'l' | 'r'): RAPIER.RigidBody {
     return this.bodies[this.indexByKey.get(side === 'l' ? 'shin_l' : 'shin_r') ?? 0];

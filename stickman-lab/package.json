@@ -14,7 +14,9 @@
     "verify": "node tools/run.mjs verify-core",
     "forces": "node tools/run.mjs probe-forces",
     "forces:walk": "node tools/run.mjs probe-forces walk 30",
-    "ground": "node tools/run.mjs probe-ground"
+    "ground": "node tools/run.mjs probe-ground",
+    "servo": "node tools/run.mjs probe-servo",
+    "skin": "node tools/run.mjs probe-skin"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

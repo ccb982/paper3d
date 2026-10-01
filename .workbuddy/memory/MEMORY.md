@@ -55,18 +55,34 @@ L3 实体（升 35 / 降 40m，EntityManager）> L2 代理（80m，`swarm.pool`�
 
 ## ★★ stickman-lab（独立小项目：物理火柴人 → 隐藏 boss）→ 流水 2026-10-01.md
 路径 `架构重置\stickman-lab`。Rapier3D 关节骨架 + 进化学习，几何从 `海猫_抠图` 素材**反推**（相邻组件 bbox 重叠区 = 关节），
-质量取 Dempster 1955、力矩上限取 MuJoCo humanoid.xml gear。**10 刚体 / 9 关节（无踝，脚与小腿同刚体双 collider）**。
+质量取 Dempster 1955、力矩上限取 MuJoCo humanoid.xml gear。**13 刚体 / 12 关节（无踝；脚与小腿同刚体双 collider；躯干按 `spineSegments=4` 切成骨盆+3 节脊椎）**。
 - ★★ **关节马达必须自实现**（成对等大反向 Z 轴力矩冲量）。Rapier 自带马达 factor 1→20 不出力、30 爆炸，无可用区间；硬关节限位同样兜不住马达。
 - ★★ 两条硬不变量：**限加速度**（`|imp| ≤ α·|err|·Ieff`，α≈0.35）+ **限位也自己实现**（位置感知软限位，越界强制回程）。缺任一条 → 峰|v| 284 m/s 级爆炸。
 - ★ **`Sim.begin()` 不是干净重置**：Rapier 约束/接触**暖启动缓存**残留，同一基因组连跑从 **step1** 就分叉 → 适应度被个体间残留污染。修法方向 = 每轮重建 World。
 - ★ **「自主扫描地形/避障」目前完全没有**：输入 27 维无任何地形量，地面是纯平 `cuboid(60,0.5,4)`。别误以为有。
 - ★★ 该项目的 `node_modules` 是 junction → **`vite-plugin-wasm` + `vite-plugin-top-level-await` 必需**（rapier 包内有裸 `.wasm` 导入），
   且 **必须设 `cacheDir:'.vite'`**，否则与本体共用 `node_modules/.vite/deps` 互相清缓存（会被环境护栏拦成 dev server 启崩）。
-- 离屏验收：`node tools/run.mjs <verify-core|probe-motor|probe-reset|probe-spike|probe-fitness|probe-ground|probe-fight|probe-forces>`（esbuild 打包后直跑真实模块）。
+- 离屏验收：`node tools/run.mjs <verify-core|probe-motor|probe-reset|probe-spike|probe-fitness|probe-ground|probe-fight|probe-forces|probe-servo|probe-skin>`（esbuild 打包后直跑真实模块）。
+  ★ 纯数学部分**故意拆成模块级导出函数**（如 `viewer.ts` 的 `buildSkinBinding`/`skinPositions`/`groupPlates`），就为了能离屏断言。
 - ★★ **已整体重写为真 3D**（2D 平面方案废弃，用户定调）：**球关节 ×9 = 27 转动自由度**、六自由度全开；
   世界轴 `+X=前 / +Y=上 / +Z=侧向`；画布 x→Z 且**取负**（否则左右镜像）；关节三轴 `0=外展(×0.6) 1=扭转(×0.35) 2=屈伸(×1.0)`。
-  网络 **70→32→27（3163 参数）**。★ 三轴口径必须 `brain.ts` / `ragdoll.driveMotors` / `sim.ts` 三处一致（改一处 = 动作错乱且**无编译错误**）。
+  网络 **88→32→36（4036 参数）**，形状由 **`shapeForJoints(n) = {16+6n, 32, 3n}`** 算出（`BRAIN_SHAPE` 只是 9 关节参考值；
+  ★ **写死会静默错配**：`Sim` 的 TypedArray 越界写被丢弃，只跑出垃圾分数、**不报错**）。★ 三轴口径必须 `brain.ts` / `ragdoll.driveMotors` / `sim.ts` 三处一致（改一处 = 动作错乱且**无编译错误**）。
   架构真源 = **`stickman-lab/架构设计.md`**（13 章，含移植契约 `BossController`）。
+- ★★ **躯干分段是"玩法层"需求**：真实躯干有 24 节椎骨，一整块刚体把"弯腰/转体/侧倾"和"力量链"全掐了。
+  ★ `torso()` 语义已变 = **上躯干（胸腔 spineK）**（直立惩罚要量胸腔，骨盆会正常深蹲）；`root()` = 骨盆。
+  ★ 躯干上原有 9 个关节必须按**锚点高度就近分配**到各段（硬编码"颈肩都挂最上段"实测让肩锚点越界 20 mm）。
+- ★★ **`restTension` 必须饱和**：`target += −k·a` 线性无界 ⇒ 在 `|a| = 9/k` 处修正量 = 满速命令
+  ⇒ 每个关节被加了 ±57.3° 的**隐形软墙**，膝行程只剩 −59.7°（限位 −145°）、执行器权限砍 **62%**（就是它把 k 从 6 提到 9 亲手加重的）。
+  修法 = `target += −k·clamp(a, −a_ref, +a_ref)`，`restTensionRef` 默认 **0.25**。加饱和后站桩指标逐项不变、膝行程回到 −144.5°。
+  ★ 教训：调参别只看单一指标（当时只看"站桩接触力 ≈ 体重"），要看对整条控制回路的影响。
+- ★★ **躯干护甲 = 一张完整贴图 + 骨架折叠，不是把图切成 K 条**（用户明确否决"切条"）：
+  K 段收进**一个** mesh，`PlaneGeometry(w, H, 1, K·SUB)` 只换 position 缓冲（UV/index 原样 = 整图连续），
+  逐顶点线性混合蒙皮 `pos = w0·(T_s0+R_s0·loc0) + w1·(T_s1+R_s1·loc1)`，`v = (py+H/2)/H·K − 0.5`。
+  ★ 曾经"每刚体一块板各画整张图" ⇒ 躯干变成 4 张叠起来的完整图 = **蜈蚣**（用户原话）。
+  ★ 绕 Z 弯时板内横向偏移平行于旋转轴 ⇒ **关节面上 LBS 无误差**、圆化深度 ≤ `(1/16)·2sin(θ/2)·segLen`（4.84 mm）⇒ 够用，不必上 dual-quaternion。
+  ★ 蒙皮 mesh 必须 `frustumCulled = false`。验收 `probe-skin`（含拿真 `PlaneGeometry` 核对顶点顺序/UV 方向，不信推导）。
+  ★★ **不变量：护甲板数 = 素材组件数（10），与刚体数无关**（13 刚体仍是 10 块板）。
 - ★★ **确定性只能靠整世界重建**：`Sim.buildWorld()`（free + new World + new Ragdoll）。`reset()` 清不掉暖启动缓存（偏差 1.84e-3 m）；删关节重建也清不掉（地面接触缓存）。修后偏差 **0.00e+0 m**。
 - ★★ **被动姿态张力 `restTension`（默认 9.0）**：网络输出的是**角速度**目标 ⇒ 零输出 = 纯阻尼，**不抵抗静态力矩**，重力会把膝盖压到限位（躯干 1.128→0.693 m）。
   修法 = 目标速度里叠加 `−k·θ`。k 判据 = **静息接触力应 ≈ 体重**（k=6→88%，k=9→105%，k=12→106% 饱和）。**不要改成直接加弹簧力矩**（显式积分必发散，k 上限只有 7.2）。

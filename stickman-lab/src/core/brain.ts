@@ -17,8 +17,29 @@ export interface BrainShape {
   outputs: number;
 }
 
-/** 9 关节 × 3 转动轴（球关节）。脚与小腿一体化，无踝 */
-export const BRAIN_SHAPE: BrainShape = { inputs: 70, hidden: 32, outputs: 27 };
+/** 隐层单元数（唯一真源，改这里会连带改参数量） */
+export const HIDDEN_UNITS = 32;
+
+/**
+ * ★ 按关节数算出网络形状。
+ *   inputs  = 2（时钟）+ 4（躯干四元数）+ 3（线速度）+ 3（角速度）+ 1（高度）+ 1（侧向 z）
+ *             + 3N（关节旋转向量）+ 3N（相对角速度）+ 2（两脚高度）= 16 + 6N
+ *   outputs = 3N（每关节 3 轴目标角速度）
+ *
+ * ★ 为什么是函数而不是常量：躯干沿脊柱分段后关节数不再是 9（见 SkeletonConfig.spineSegments），
+ *   网络形状必须跟着骨架走。调用方拿到骨架后一律用 `shapeForJoints(sk.joints.length)`，
+ *   不要写死 BRAIN_SHAPE —— 写死会在换骨架时静默错配（Sim 只会跑出垃圾分数，不会报错）。
+ */
+export function shapeForJoints(jointCount: number): BrainShape {
+  return { inputs: 16 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+}
+
+export function inputCount(jointCount: number): number {
+  return 16 + 6 * jointCount;
+}
+
+/** 9 关节骨架（spineSegments = 1）的形状：70 / 32 / 27。仅作默认值/参考 */
+export const BRAIN_SHAPE: BrainShape = shapeForJoints(9);
 
 /**
  * 输入维度清单（改这里必须同步 sim.ts 的 fillInput，且更新 BRAIN_SHAPE）。

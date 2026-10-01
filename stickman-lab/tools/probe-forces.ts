@@ -37,7 +37,7 @@ const require = createRequire(import.meta.url);
 const { buildSkeleton, DEFAULT_CONFIG } = await import('../src/core/skeleton');
 const { Ragdoll } = await import('../src/core/ragdoll');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
-const { BRAIN_SHAPE } = await import('../src/core/brain');
+const { shapeForJoints } = await import('../src/core/brain');
 const { Trainer, DEFAULT_TRAINER } = await import('../src/core/evolution');
 
 {
@@ -56,6 +56,8 @@ const { Trainer, DEFAULT_TRAINER } = await import('../src/core/evolution');
 
 const RAPIER = (await import('@dimforge/rapier3d')).default;
 const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
 const DT = 1 / 120;
 const G = 9.81;
 const W_TOTAL = sk.massTotal * G;
@@ -380,12 +382,12 @@ const gens = argv.includes('walk') ? Number(argv[argv.indexOf('walk') + 1] ?? 30
 if (gens > 0) {
   console.log(`\n训练 ${gens} 代（walk 阶段，pop=${DEFAULT_TRAINER.population ?? '?'}）……`);
   const cfg = { ...DEFAULT_SIM, mode: 'walk' as const };
-  const trainer = new Trainer(sk, BRAIN_SHAPE, cfg, DEFAULT_TRAINER);
+  const trainer = new Trainer(sk, SHAPE, cfg, DEFAULT_TRAINER);
   const t0 = Date.now();
   while (trainer.gen < gens) trainer.tick(1 << 30);
   console.log(`  完成：${gens} 代 / ${((Date.now() - t0) / 1000).toFixed(1)} s  历史最佳 ${trainer.bestEverFitness.toFixed(3)}`);
 
-  const sim = new Sim(sk, BRAIN_SHAPE, cfg);
+  const sim = new Sim(sk, SHAPE, cfg);
   sim.begin(trainer.bestEver.slice());
   const pre = 60;   // 先跑 0.5 s 起步，再开窗口
   for (let i = 0; i < pre; i++) sim.advance(1);

@@ -19,7 +19,7 @@ const require = createRequire(import.meta.url);
 //   症状：TypeError: wasm.rawintegrationparameters_new is not a function）。
 const { buildSkeleton, DEFAULT_CONFIG } = await import('../src/core/skeleton');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
-const { BRAIN_SHAPE, brainParamCount, brainLayout } = await import('../src/core/brain');
+const { shapeForJoints, brainParamCount, brainLayout } = await import('../src/core/brain');
 
 {
   const wasmPath: string = require.resolve('@dimforge/rapier3d/rapier_wasm3d_bg.wasm');
@@ -36,12 +36,14 @@ const { BRAIN_SHAPE, brainParamCount, brainLayout } = await import('../src/core/
 }
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
-const L = brainLayout(BRAIN_SHAPE);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
+const L = brainLayout(SHAPE);
 const b2 = L.b2;
 
 /** 造一个基因组：只写输出层偏置，让指定 (关节,轴) 恒为给定输出值 */
 function biasGenome(map: Record<string, number>): Float32Array {
-  const g = new Float32Array(brainParamCount(BRAIN_SHAPE));
+  const g = new Float32Array(brainParamCount(SHAPE));
   for (const [k, v] of Object.entries(map)) {
     const [j, ax] = k.split(':').map(Number);
     g[b2 + j * 3 + ax] = v;
@@ -53,7 +55,7 @@ function biasGenome(map: Record<string, number>): Float32Array {
 //           5 hip_l, 6 hip_r, 7 knee_l, 8 knee_r
 
 function analyse(tag: string, g: Float32Array, duration = 4): void {
-  const sim = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration });
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration });
   sim.begin(g);
   let minHand = Infinity, minAt = 0, maxHandSpeed = 0;
   let nearWhileFast = 0;
@@ -104,7 +106,7 @@ function analyse(tag: string, g: Float32Array, duration = 4): void {
 }
 
 console.log('=== 战斗通道实测 ===');
-analyse('基线：全零（站桩）', new Float32Array(brainParamCount(BRAIN_SHAPE)));
+analyse('基线：全零（站桩）', new Float32Array(brainParamCount(SHAPE)));
 analyse('只挥肩（关节1/2 绕Z 拉满）', biasGenome({ '1:2': 6, '2:2': 6 }));
 analyse('肩+肘前挥', biasGenome({ '1:2': 6, '2:2': 6, '3:2': 3, '4:2': 3 }));
 analyse('肩前挥 + 髋前摆（试图迈步）', biasGenome({ '1:2': 6, '2:2': 6, '5:2': -3, '6:2': -3 }));

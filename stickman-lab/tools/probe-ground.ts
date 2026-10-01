@@ -41,12 +41,12 @@ const W_TOTAL = sk.massTotal * 9.81;
 
 type Vec = { x: number; y: number; z: number };
 
-function run(restTension: number, seconds = 3, verbose = false): void {
+function run(restTension: number, aRef = Infinity, seconds = 3, verbose = false): void {
   const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
   world.timestep = DT;
   world.numSolverIterations = 16;
   world.numAdditionalFrictionIterations = 8;
-  const doll = new Ragdoll(world, sk, { restTension });
+  const doll = new Ragdoll(world, sk, { restTension, restTensionRef: aRef });
   doll.reset(0);
 
   // 两只脚所在刚体的全部 collider（小腿胶囊 + 脚掌扁盒）
@@ -127,7 +127,7 @@ function run(restTension: number, seconds = 3, verbose = false): void {
   }
 
   console.log(
-    `  k=${String(restTension).padStart(2)}  ` +
+    `  k=${String(restTension).padStart(2)} a_ref=${(aRef === Infinity ? '∞' : aRef.toFixed(2)).padStart(4)}  ` +
     `重心撑在支撑区内 ${standTime.toFixed(2)}s / ${seconds}s   ` +
     `t=2s 躯干y=${Number.isNaN(torsoY2s) ? '—' : torsoY2s.toFixed(3)}   ` +
     `平均接触力 ${(sumF / nF).toFixed(0)} N（= 体重的 ${((sumF / nF / W_TOTAL) * 100).toFixed(0)}%）`,
@@ -135,10 +135,12 @@ function run(restTension: number, seconds = 3, verbose = false): void {
 }
 
 console.log(`\n=== 地面反力 / 重心支撑 实测（体重 ${W_TOTAL.toFixed(0)} N，关节目标全 0）===`);
-console.log('  逐帧细节（k=9 = 当前默认 restTension）:');
-run(9, 3, true);
-console.log('\n  被动姿态张力 k 的对照：');
-for (const k of [0, 3, 6, 9, 12]) run(k, 3, false);
+console.log('  逐帧细节（k=9, a_ref=0.25 = 当前默认）:');
+run(9, 0.25, 3, true);
+console.log('\n  k / a_ref 对照（站桩，看"不饱和"会不会塌、饱和之后掉多少）:');
+for (const [k, a] of [[0, Infinity], [3, Infinity], [6, Infinity], [9, Infinity], [9, 0.12], [9, 0.25], [9, 0.4], [12, 0.25]] as const) {
+  run(k, a, 3, false);
+}
 console.log('  k = 0 ⇒ 纯阻尼（重力能压垮关节，因为静态下速度=0 ⇒ 马达出力=0）');
 console.log('');
 

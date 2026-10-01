@@ -17,6 +17,22 @@
 //   相机一转，挥到身前的胳膊应该在躯干**前面**。所以每帧按**真实深度**（相机前方向上的
 //   投影距离）从远到近排 renderOrder，parts.json 的 z 只作为深度接近时的次级判据。
 //
+// ★★ 躯干是「一张贴图 + 骨架折叠」——**不是**切成 K 张图（用户定调）。
+//   物理上躯干是 spineSegments 段独立刚体（见 skeleton.ts），视觉上却只有一个 mesh：
+//     · geometry = PlaneGeometry(w, H, 1, K·SUB) —— 一整块布，UV 连续覆盖整张贴图；
+//     · 每个顶点按它落在脊柱的哪一段上，拿两段刚体的世界变换做**线性混合蒙皮**（LBS）。
+//   这样弯腰时贴图沿脊柱连续弯折，接缝处不会出现"每段各画一张整图"的**蜈蚣**。
+//   ★ 曾经的错误实现：每个脊柱刚体各建一个 PlaneGeometry(w, h)（h = 整块高度）
+//     ⇒ 4 段各画一张完整躯干图、沿脊柱堆叠 ⇒ 就是那条蜈蚣。
+//
+//   蒙皮的绑定（bind）姿态 = 刚体全部单位旋转时的姿态（ragdoll 出生状态）：
+//     顶点绑定世界位置 rest(px,py) = (0, cyC + py, cz − px)
+//       —— qFix（绕 Y +90°）把板内 (px, py) 映射成世界 (0, py, −px)，见上面的朝向说明。
+//     顶点 v ∈ [0, K−1] 表示它落在第几段的中心线上：v = (py + H/2)/H·K − 0.5，
+//     取 floor 得主段 s0、小数部分作次段 s1 = s0+1 的权重（标准 LBS）。
+//     ⇒ 每帧 pos = w0·(T_s0 + R_s0·loc0) + w1·(T_s1 + R_s1·loc1)，直接写世界坐标。
+//   ★ 因此蒙皮 mesh 必须 frustumCulled = false（顶点每帧变，包围球失效）。
+//
 // 整代视图（ghost）：population 个个体各画 9 条骨架线，合成一个 LineSegments，
 //   每帧只改一个 Float32Array —— 比渲染几百块贴图便宜两个数量级。
 
@@ -36,12 +52,230 @@ export interface ViewerOptions {
   assetBase?: string;
 }
 
+/**
+ * ★★ 躯干护甲蒙皮 —— 纯函数部分（不含 WebGL），故意从 Viewer 里拆出来：
+ *    把"一张贴图 + 骨架折叠"这件事变成可以**离屏断言**的数学，
+ *    而不是只能靠截图判断（见 tools/probe-skin.ts）。
+ *
+ * 绑定（bind）姿态 = 各段刚体**全部单位旋转**时的姿态（ragdoll 出生状态）。
+ * 顶点在板内的坐标 (px, py) 经 qFix（绕 Y +90°）→ 世界 (0, py, −px)，再加板心 (0, cyC, cz)：
+ *     rest(px, py) = (0, cyC + py, cz − px)
+ * 顶点归段：v = (py + H/2)/H·K − 0.5，主段 s0 = floor(v)、次段 s1 = s0+1、次段权重 = v − s0
+ *    （段中心处 v = 段号 ⇒ 整数 ⇒ 权重 0 ⇒ 该顶点 100% 刚性跟随该段）。
+ * 每帧：pos = w0·(T_s0 + R_s0·loc0) + w1·(T_s1 + R_s1·loc1)，
+ *   其中 loc_s = rest − T_s^bind 是该顶点在段 s 本地系里的绑定坐标。
+ */
+export interface SkinBinding {
+  /** 驱动刚体下标，从下（骨盆）到上（胸腔） */
+  segBody: number[];
+  vCount: number;
+  /** 每个顶点的绑定：主段 / 次段 / 次段权重 */
+  vS0: Int32Array;
+  vS1: Int32Array;
+  vW1: Float32Array;
+  /** 每个顶点在【主段 / 次段】刚体本地坐标系里的绑定坐标 */
+  loc0: Float32Array;
+  loc1: Float32Array;
+  /** 绑定姿态下的世界位置 —— 蒙皮收敛性判据（单位旋转时输出必须等于它） */
+  bindPos: Float32Array;
+  /** 板面几何（米）：宽 / 高 / 板心 y / 板心 z / 网格行数 */
+  w: number;
+  H: number;
+  cyC: number;
+  cz: number;
+  rows: number;
+}
+
+export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6): SkinBinding {
+  const segs = [...segIdx].sort(
+    (a, b) => sk.bodies[a].texSlice!.index - sk.bodies[b].texSlice!.index,
+  );
+  const K = segs.length;
+
+  // 板子要覆盖整摞段：y 取所有段的并集。
+  // 躯干是高瘦件（bh > bw）⇒ 这段联合区间正好等于 part.bh·px2m，即原来的整块高度，
+  // 贴图不会被拉伸。若哪天躯干变成宽扁件，这里会按实际刚体跨度铺板（仍不裁图）。
+  let yLo = Infinity;
+  let yHi = -Infinity;
+  for (const i of segs) {
+    const b = sk.bodies[i];
+    yLo = Math.min(yLo, b.cy - b.length / 2);
+    yHi = Math.max(yHi, b.cy + b.length / 2);
+  }
+  const H = yHi - yLo;
+  const cyC = (yHi + yLo) / 2;
+  const cz = sk.bodies[segs[0]].cz;
+  const w = sk.bodies[segs[0]].part.bw * sk.px2m;
+
+  const rows = Math.max(1, Math.round(K * sub));
+  const vCount = (rows + 1) * 2;
+
+  const vS0 = new Int32Array(vCount);
+  const vS1 = new Int32Array(vCount);
+  const vW1 = new Float32Array(vCount);
+  const loc0 = new Float32Array(vCount * 3);
+  const loc1 = new Float32Array(vCount * 3);
+  const bindPos = new Float32Array(vCount * 3);
+
+  for (let i = 0; i < vCount; i++) {
+    const iy = (i / 2) | 0;
+    const ix = i % 2;
+    const py = H / 2 - (iy / rows) * H;   // 板内高度（米），+ 朝上
+    const px = ix * w - w / 2;            // 板内横向（米），+ 朝画布右
+
+    const by = cyC + py;
+    const bz = cz - px;
+
+    // 顶点落在第几段的中心线上：段中心处 v = 段号，段交界处 v = x.5
+    let v = ((py + H / 2) / H) * K - 0.5;
+    if (v < 0) v = 0;
+    else if (v > K - 1) v = K - 1;
+    const s0 = Math.min(K - 1, Math.floor(v));
+    const s1 = Math.min(K - 1, s0 + 1);
+    vS0[i] = s0;
+    vS1[i] = s1;
+    vW1[i] = s0 === s1 ? 0 : v - s0;
+
+    // 相对各段刚体**绑定姿态**的本地坐标（绑定姿态旋转 = 单位阵 ⇒ 直接相减）
+    const b0 = sk.bodies[segs[s0]];
+    const b1 = sk.bodies[segs[s1]];
+    loc0[i * 3] = -b0.cx;
+    loc0[i * 3 + 1] = by - b0.cy;
+    loc0[i * 3 + 2] = bz - b0.cz;
+    loc1[i * 3] = -b1.cx;
+    loc1[i * 3 + 1] = by - b1.cy;
+    loc1[i * 3 + 2] = bz - b1.cz;
+
+    bindPos[i * 3] = 0;
+    bindPos[i * 3 + 1] = by;
+    bindPos[i * 3 + 2] = bz;
+  }
+
+  return { segBody: segs, vCount, vS0, vS1, vW1, loc0, loc1, bindPos, w, H, cyC, cz, rows };
+}
+
+/** 绑定姿态下各段刚体的平移（= 板心 + 段偏移），可直接喂给 skinPositions 做恒等检查 */
+export function bindSegPositions(sk: Skeleton, b: SkinBinding, out: Float64Array): void {
+  for (let s = 0; s < b.segBody.length; s++) {
+    const body = sk.bodies[b.segBody[s]];
+    out[s * 3] = body.cx;
+    out[s * 3 + 1] = body.cy;
+    out[s * 3 + 2] = body.cz;
+  }
+}
+
+/** 单位旋转矩阵（行主序 3×3）逐段铺开 —— 与 bindSegPositions 配对做收敛性检查 */
+export function identitySegRotations(b: SkinBinding, out: Float64Array): void {
+  for (let s = 0; s < b.segBody.length; s++) {
+    const rp = s * 9;
+    out[rp] = 1; out[rp + 1] = 0; out[rp + 2] = 0;
+    out[rp + 3] = 0; out[rp + 4] = 1; out[rp + 5] = 0;
+    out[rp + 6] = 0; out[rp + 7] = 0; out[rp + 8] = 1;
+  }
+}
+
+/**
+ * 逐顶点线性混合蒙皮：把绑定姿态的顶点按各段刚体的当前位姿混合到**世界坐标**。
+ * @param segT K×3 各段刚体的世界平移
+ * @param segR K×9 各段刚体的世界旋转（行主序 3×3）
+ * @param out  长度必须 = binding.vCount × 3
+ */
+export function skinPositions(
+  b: SkinBinding, segT: Float64Array, segR: Float64Array, out: Float32Array,
+): void {
+  const n = b.vCount;
+  const loc0 = b.loc0;
+  const loc1 = b.loc1;
+  const vS0 = b.vS0;
+  const vS1 = b.vS1;
+  const vW1 = b.vW1;
+  for (let i = 0; i < n; i++) {
+    const i0 = vS0[i], i1 = vS1[i];
+    const r0 = i0 * 9, r1 = i1 * 9;
+    const t0 = i0 * 3, t1 = i1 * 3;
+    const a = i * 3;
+    const l0x = loc0[a], l0y = loc0[a + 1], l0z = loc0[a + 2];
+    const l1x = loc1[a], l1y = loc1[a + 1], l1z = loc1[a + 2];
+
+    const ax = segR[r0] * l0x + segR[r0 + 1] * l0y + segR[r0 + 2] * l0z + segT[t0];
+    const ay = segR[r0 + 3] * l0x + segR[r0 + 4] * l0y + segR[r0 + 5] * l0z + segT[t0 + 1];
+    const az = segR[r0 + 6] * l0x + segR[r0 + 7] * l0y + segR[r0 + 8] * l0z + segT[t0 + 2];
+    const w1 = vW1[i];
+    if (w1 <= 0) {
+      out[a] = ax; out[a + 1] = ay; out[a + 2] = az;
+    } else {
+      const w0 = 1 - w1;
+      const bx = segR[r1] * l1x + segR[r1 + 1] * l1y + segR[r1 + 2] * l1z + segT[t1];
+      const by = segR[r1 + 3] * l1x + segR[r1 + 4] * l1y + segR[r1 + 5] * l1z + segT[t1 + 1];
+      const bz = segR[r1 + 6] * l1x + segR[r1 + 7] * l1y + segR[r1 + 8] * l1z + segT[t1 + 2];
+      out[a] = w0 * ax + w1 * bx;
+      out[a + 1] = w0 * ay + w1 * by;
+      out[a + 2] = w0 * az + w1 * bz;
+    }
+  }
+}
+
+/** 蒙皮板：一张贴图 + 一条网格 + K 个驱动刚体（躯干脊柱段） */
+interface SkinGroup {
+  mesh: THREE.Mesh;
+  /** ★ 纯数据部分（绑定 + 每帧蒙皮解算）—— 与 WebGL 无关，可离屏验收 */
+  b: SkinBinding;
+  /** 输出缓冲：顶点世界坐标（直接就是 geometry 的 position 属性数组） */
+  pos: Float32Array;
+  /** 每段的当前平移（K×3）与旋转矩阵行主序（K×9），每帧刷新 */
+  segT: Float64Array;
+  segR: Float64Array;
+  /** 深度排序代表点（取中间那段） */
+  sortPos: THREE.Vector3;
+}
+
+/**
+ * ★★ 护甲板分组规则（唯一真源）—— **一块板 = 一个组件**，不是"一个刚体一块板"。
+ *   躯干被切成 K 段独立刚体，但它们共用同一张贴图 ⇒ 合成**唯一一个**蒙皮组、
+ *   只建一个 mesh。曾经按"每刚体一块板 + 每块画整张图"实现，结果躯干变成 4 张
+ *   叠起来的完整躯干图 = 蜈蚣。
+ *
+ *   抽成纯函数是为了让 viewer 与离屏验收（tools/probe-skin.ts）共用同一条规则：
+ *   板数必须恒等于 `META.parts.length`。
+ *
+ * @returns plain   单刚体板（每块板 1 个刚体，各画自己那张整图）
+ *          skinned 组成**那一个**蒙皮组的刚体下标（从骨盆到胸腔）。
+ *                  空数组 = 躯干未分段（spineSegments = 1）⇒ 躯干也走 plain。
+ */
+export function groupPlates(sk: Skeleton): { plain: number[]; skinned: number[] } {
+  const plain: number[] = [];
+  const skinned: number[] = [];
+  for (let i = 0; i < sk.bodies.length; i++) {
+    if (sk.bodies[i].texSlice) skinned.push(i);
+    else plain.push(i);
+  }
+  // 按切片下标排序，保证"从骨盆到胸腔"的顺序与蒙皮绑定一致
+  skinned.sort((a, b) => sk.bodies[a].texSlice!.index - sk.bodies[b].texSlice!.index);
+  return { plain, skinned };
+}
+
+/** 一块护甲板的渲染槽位 —— ★ 槽位数 = 组件数，不是刚体数 */
+interface PlateSlot {
+  mesh: THREE.Mesh;
+  /** 驱动刚体下标：单片板 1 个，蒙皮板 K 个 */
+  drivers: number[];
+  /** 非 null = 蒙皮板（躯干） */
+  skin: SkinGroup | null;
+  sortPos: THREE.Vector3;
+}
+
 export class Viewer {
+  /** 每段脊柱刚体上再细分几行 —— 越大弯折越圆滑。顶点数 = 2·(K·SUB+1)，可忽略 */
+  private static readonly SKIN_SUB = 6;
+
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
   readonly camera: THREE.PerspectiveCamera;
-  /** 与 skeleton.bodies 一一对应的护甲板 */
-  private readonly plates: THREE.Mesh[] = [];
+  /**
+   * 护甲板槽位。★ 不是"与 skeleton.bodies 一一对应"：躯干被切成 K 段**物理刚体**，
+   * 视觉上仍是**一块板**（单 mesh + 单贴图 + 蒙皮），所以槽位数 = 组件数，不是刚体数。
+   */
+  private readonly plates: PlateSlot[] = [];
   /** 每个刚体的物理线框（胶囊 + 脚掌盒），与 bodies 一一对应 */
   private readonly boneGroups: THREE.Group[] = [];
   private readonly ghost: THREE.LineSegments;
@@ -95,27 +329,48 @@ export class Viewer {
     // ---- 地面 + 三维距离网格 ----
     this.scene.add(this.buildGround());
 
-    // ---- 护甲板 ----
+    // ★★ 一块板 = 一张贴图。躯干虽然被切成 K 段物理刚体，这里仍然只建 **一个 mesh**，
+    //   靠逐顶点线性混合蒙皮把它绑到各段上（见文件头 + buildSkinGroup）。
+    //   每条脊柱刚体各建一个 mesh 的话，每块都会画**一整张**躯干图 ⇒ 蜈蚣。
+    const groups = groupPlates(sk);
     const loader = new THREE.TextureLoader();
-    for (const b of sk.bodies) {
-      const tex = loader.load(assetBase + b.part.file);
+    const maxAniso = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+    const loadTex = (file: string): THREE.Texture => {
+      const tex = loader.load(assetBase + file);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.magFilter = THREE.LinearFilter;
       tex.minFilter = THREE.LinearMipmapLinearFilter;
       tex.generateMipmaps = true;
-      tex.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+      tex.anisotropy = maxAniso;
+      return tex;
+    };
 
+    for (const i of groups.plain) {
+      const b = sk.bodies[i];
       const w = b.part.bw * sk.px2m;
       const h = b.part.bh * sk.px2m;
       const mat = new THREE.MeshBasicMaterial({
-        map: tex, transparent: true, depthTest: false, depthWrite: false,
+        map: loadTex(b.part.file), transparent: true, depthTest: false, depthWrite: false,
         // ★ DoubleSide：相机绕到背面时板子不能凭空消失
         side: THREE.DoubleSide,
       });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
-      this.plates.push(mesh);
+      this.plates.push({ mesh, drivers: [i], skin: null, sortPos: new THREE.Vector3() });
       this.scene.add(mesh);
     }
+
+    if (groups.skinned.length > 0) {
+      const tex = loadTex(sk.bodies[groups.skinned[0]].part.file);
+      const g = this.buildSkinGroup(sk, groups.skinned, tex);
+      this.plates.push({ mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos });
+      this.scene.add(g.mesh);
+    }
+
+    // ★ 自检：组件数 = 板数。躯干折叠成一块后仍然成立（否则说明某块板和别的合并/漏掉了）
+    if (this.plates.length !== META.parts.length) {
+      console.warn(`[viewer] 护甲板数 ${this.plates.length} ≠ 素材组件数 ${META.parts.length}`);
+    }
+
     this.depths = new Float64Array(this.plates.length);
     this.order = this.plates.map((_, i) => i);
 
@@ -187,6 +442,71 @@ export class Viewer {
       this.ro.observe(canvas);
     }
     requestAnimationFrame(() => this.resize());
+  }
+
+  /**
+   * 建躯干蒙皮板：一张贴图、一整块连续网格、按脊柱段做逐顶点线性混合蒙皮。
+   *
+   * ★ 几何拓扑直接用 PlaneGeometry(w, H, 1, K·SUB)（UV 已连续覆盖 0~1 整图），
+   *   只把它的 position 缓冲换成我们自己的 —— 顶点数与顺序不变，所以 index / uv 全部复用。
+   *   PlaneGeometry 的顶点顺序：iy = 0 是最上面一行（本地 y = +H/2），ix = 0 是左边，
+   *   与 buildSkinBinding 里的顶点编号完全一致。
+   *
+   * 绑定/蒙皮的数学全在模块级纯函数里（buildSkinBinding / skinPositions），
+   * 这里只负责把结果接到 THREE 的 mesh 上。
+   */
+  private buildSkinGroup(sk: Skeleton, segIdx: number[], tex: THREE.Texture): SkinGroup {
+    const b = buildSkinBinding(sk, segIdx, Viewer.SKIN_SUB);
+    const geo = new THREE.PlaneGeometry(b.w, b.H, 1, b.rows);
+    if (geo.getAttribute('position').count !== b.vCount) {
+      throw new Error(`[viewer] 蒙皮顶点数对不上：geo ${geo.getAttribute('position').count} ≠ binding ${b.vCount}`);
+    }
+    const pos = new Float32Array(b.vCount * 3);
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: tex, transparent: true, depthTest: false, depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    // ★ 顶点每帧写世界坐标 ⇒ 包围球失效，必须关掉视锥剔除，否则整体从画面里消失
+    mesh.frustumCulled = false;
+
+    return {
+      mesh, b, pos,
+      segT: new Float64Array(b.segBody.length * 3),
+      segR: new Float64Array(b.segBody.length * 9),
+      sortPos: new THREE.Vector3(),
+    };
+  }
+
+  /** 逐顶点线性混合蒙皮：读各段刚体位姿 → 写顶点世界坐标 */
+  private syncSkin(g: SkinGroup, doll: Ragdoll): void {
+    const K = g.b.segBody.length;
+    const segT = g.segT;
+    const segR = g.segR;
+
+    // 先把 K 段的位姿解出来 —— wasm 绑定 + 四元数展开只在 K 次，不放进顶点循环
+    for (let s = 0; s < K; s++) {
+      const body = doll.bodies[g.b.segBody[s]];
+      const t = body.translation();
+      const q = body.rotation();
+      const tp = s * 3;
+      const rp = s * 9;
+      segT[tp] = t.x; segT[tp + 1] = t.y; segT[tp + 2] = t.z;
+      // 四元数 → 行主序 3×3，作用等价于 R·v（与 three 的 makeRotationFromQuaternion 同口径）
+      const x = q.x, y = q.y, z = q.z, w = q.w;
+      const x2 = x + x, y2 = y + y, z2 = z + z;
+      const xx = x * x2, xy = x * y2, xz = x * z2;
+      const yy = y * y2, yz = y * z2, zz = z * z2;
+      const wx = w * x2, wy = w * y2, wz = w * z2;
+      segR[rp] = 1 - (yy + zz); segR[rp + 1] = xy - wz;       segR[rp + 2] = xz + wy;
+      segR[rp + 3] = xy + wz;   segR[rp + 4] = 1 - (xx + zz); segR[rp + 5] = yz - wx;
+      segR[rp + 6] = xz - wy;   segR[rp + 7] = yz + wx;       segR[rp + 8] = 1 - (xx + yy);
+    }
+
+    skinPositions(g.b, segT, segR, g.pos);
+    (g.mesh.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
   }
 
   /** 三维地面网格：沿 X 的行走刻度 + 沿 Z 的侧向刻度 */
@@ -290,34 +610,40 @@ export class Viewer {
   syncShowcase(doll: Ragdoll, dt = 1 / 60): void {
     this.updateCamera(doll, dt);
 
-    for (let i = 0; i < this.plates.length; i++) {
-      const body = doll.bodies[i];
+    for (const slot of this.plates) {
+      slot.mesh.visible = this.showTextures;
+      if (slot.skin) {
+        this.syncSkin(slot.skin, doll);
+        // 排序代表点取中间那段（整块板的深度差异远小于它与别的板的差异）
+        const mid = doll.bodies[slot.drivers[(slot.drivers.length - 1) >> 1]].translation();
+        slot.sortPos.set(mid.x, mid.y, mid.z);
+        continue;
+      }
+      const body = doll.bodies[slot.drivers[0]];
       const t = body.translation();
       const q = body.rotation();
-      const mesh = this.plates[i];
-      mesh.visible = this.showTextures;
-      mesh.position.set(t.x, t.y, t.z);
+      slot.mesh.position.set(t.x, t.y, t.z);
       // ★ 板子的世界朝向 = 刚体朝向 ⊗ 板子固定朝向（先 qFix 后 qBody）
       this.qBody.set(q.x, q.y, q.z, q.w);
-      mesh.quaternion.copy(this.qBody).multiply(this.qFix);
+      slot.mesh.quaternion.copy(this.qBody).multiply(this.qFix);
+      slot.sortPos.set(t.x, t.y, t.z);
     }
 
     // ---- 深度排序（远 → 近）----
     // 相机前方向：从相机指向目标
     this.sortDir.copy(this.target).sub(this.camera.position).normalize();
     for (let i = 0; i < this.plates.length; i++) {
-      const p = this.plates[i].position;
-      this.tmpV.copy(p).sub(this.camera.position);
+      this.tmpV.copy(this.plates[i].sortPos).sub(this.camera.position);
       this.depths[i] = this.tmpV.dot(this.sortDir);
     }
     const artZ = doll.sk.bodies;
     this.order.sort((a, b) => {
       const d = this.depths[b] - this.depths[a];
       if (Math.abs(d) > 1e-4) return d;
-      return artZ[a].part.z - artZ[b].part.z;
+      return artZ[this.plates[a].drivers[0]].part.z - artZ[this.plates[b].drivers[0]].part.z;
     });
     for (let rank = 0; rank < this.order.length; rank++) {
-      this.plates[this.order[rank]].renderOrder = rank;
+      this.plates[this.order[rank]].mesh.renderOrder = rank;
     }
 
     if (this.showJoints) {
@@ -390,14 +716,18 @@ export class Viewer {
       if (m instanceof THREE.Material) m.dispose();
     }
     for (const p of this.plates) {
-      const m = p.material as THREE.MeshBasicMaterial;
+      const m = p.mesh.material as THREE.MeshBasicMaterial;
       m.map?.dispose();
       m.dispose();
-      p.geometry.dispose();
+      p.mesh.geometry.dispose();
     }
     this.renderer.dispose();
   }
 }
 
-/** 素材里描述过的组件顺序（用于自检：视图里的板数必须等于素材组件数） */
+/**
+ * ★ 不变量：视图里的**护甲板数**必须恒等于素材组件数 —— 与刚体数无关。
+ *   躯干分段后刚体从 10 涨到 13，但板仍然是 10 块（躯干 K 段合成 1 块）。
+ *   viewer 构造时会自检并 warn；离屏版在 tools/probe-skin.ts 的 [I] 段（含分组真源 groupPlates）。
+ */
 export const EXPECTED_PLATES = META.parts.length;

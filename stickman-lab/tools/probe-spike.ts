@@ -18,7 +18,7 @@ import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import RAPIER from '@dimforge/rapier3d';
 import { DEFAULT_CONFIG, buildSkeleton, JOINT_ORDER } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
-import { BRAIN_SHAPE } from '../src/core/brain';
+import { shapeForJoints } from '../src/core/brain';
 import { makeRng, makeGaussian, randomGenome } from '../src/core/genome';
 import { Ragdoll } from '../src/core/ragdoll';
 
@@ -38,6 +38,8 @@ const require = createRequire(import.meta.url);
 }
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
 const CFG = { ...DEFAULT_SIM, mode: 'walk' as const, duration: 4 };
 
 const V_LIMIT = 20;
@@ -106,18 +108,18 @@ function trace(sim: Sim, label: string) {
 
 const rng = makeRng(4242);
 const gauss = makeGaussian(rng);
-const G = randomGenome(BRAIN_SHAPE, gauss, 1.2);
+const G = randomGenome(SHAPE, gauss, 1.2);
 const ZERO = new Float32Array(G.length);
 
 console.log('\n=== 尖峰定位（|v| > 20 m/s 或 |ω| > 50 rad/s 即停机）===');
 
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   s.begin(ZERO);
   trace(s, '零输出（基线，应当全程安静）');
 }
 {
-  const s = new Sim(sk, BRAIN_SHAPE, CFG);
+  const s = new Sim(sk, SHAPE, CFG);
   s.begin(G);
   trace(s, '随机基因组（复现爆炸）');
 }

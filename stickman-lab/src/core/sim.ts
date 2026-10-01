@@ -384,19 +384,25 @@ export class Sim {
     const ph = (t % period) / period;
     const pulse = Math.max(0, Math.sin(Math.PI * ph));
     const lunge = pulse * pulse;
-    // ★ 拳头高度跟着躯干走：蹲下也不能白躲（否则"趴着活到最后"会变成一个局部最优）
-    const chestY = Math.max(0.45, doll.torso().translation().y + 0.05);
+    // ★ 战斗用的"身体中心" = 骨盆与胸腔的中点。
+    //   ★ 为什么不用 torso()：脊柱分段后 torso() 是**胸腔**（1.43 m），
+    //     直接当拳靶会把假人拳头抬高到头上。取中点 ≈ 1.13 m，正好等于
+    //     分段之前"整块躯干"的中心高度 —— 战斗几何不用重新调标。
+    const rp = doll.root().translation();
+    const cp = doll.torso().translation();
+    const bodyX = (rp.x + cp.x) / 2;
+    const bodyY = Math.max(0.45, (rp.y + cp.y) / 2);
+    const bodyZ = (rp.z + cp.z) / 2;
     fist.setNextKinematicTranslation({
       x: this.fistBaseX - lunge * this.fistLunge,
-      y: chestY,
+      y: bodyY + 0.05,
       z: 0,
     });
 
     const fp = fist.translation();
-    const tp = doll.torso().translation();
-    const dxf = fp.x - tp.x;
-    const dyf = fp.y - tp.y;
-    const dzf = fp.z - tp.z;
+    const dxf = fp.x - bodyX;
+    const dyf = fp.y - bodyY;
+    const dzf = fp.z - bodyZ;
     // 上升沿计一次：一次出拳压在身上只算 1 次"被击中"（按周期累加会让分数被一次接触吃光）
     const touching = dxf * dxf + dyf * dyf + dzf * dzf < 0.45 * 0.45;
     if (touching && !this.fistTouching) this.hurts++;

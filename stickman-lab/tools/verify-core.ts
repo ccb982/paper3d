@@ -52,7 +52,7 @@ const {
 } = skeletonMod;
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { Ragdoll } = await import('../src/core/ragdoll');
-const { BRAIN_SHAPE, brainParamCount, INPUT_COUNT } = await import('../src/core/brain');
+const { shapeForJoints, brainParamCount, inputCount } = await import('../src/core/brain');
 const { Trainer, DEFAULT_TRAINER } = await import('../src/core/evolution');
 const { packGenome, unpackGenome, makeRng, makeGaussian, randomGenome } = await import('../src/core/genome');
 
@@ -73,11 +73,15 @@ const massSum = assertMassBudget();
 check('环节质量比之和 = 100%', Math.abs(massSum - 100) < 1e-9, `${massSum}%`);
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
+const SHAPE = shapeForJoints(sk.joints.length);
 assertColliderMass(sk);
-check('刚体数 = 10（一组件一刚体）', sk.bodies.length === 10, `${sk.bodies.length}`);
-check('关节数 = 9（无踝，脚与小腿一体化）', sk.joints.length === 9, `${sk.joints.length}`);
-check('关节顺序与 JOINT_ORDER 一致',
-  sk.joints.every((j, i) => j.name === JOINT_ORDER[i]),
+check('刚体数 = 10 + 脊柱段数 − 1', sk.bodies.length === 10 + Math.max(0, sk.cfg.spineSegments - 1),
+  `${sk.bodies.length}（spineSegments=${sk.cfg.spineSegments}）`);
+check('关节数 = 躯干原有 9 + 脊柱 K-1（无踝，脚与小腿一体化）', sk.joints.length === 9 + Math.max(0, sk.cfg.spineSegments - 1), `${sk.joints.length}（spineSegments=${sk.cfg.spineSegments}）`);
+check('★ 前 9 个关节顺序与 JOINT_ORDER 逐字一致，脊柱关节接在后面',
+  sk.joints.slice(0, JOINT_ORDER.length).every((j, i) => j.name === JOINT_ORDER[i]) &&
+  sk.joints.slice(JOINT_ORDER.length).every((j) => /^spine\d+$/.test(j.name)),
   sk.joints.map((j) => j.name).join(','));
 check('总质量 = 70 kg', Math.abs(sk.massTotal - 70) < 1e-6, `${sk.massTotal.toFixed(3)} kg`);
 check('总身高 = 1.80 m', Math.abs(sk.totalHeight - 1.8) < 1e-6, `${sk.totalHeight.toFixed(4)} m`);
@@ -85,6 +89,7 @@ check('px2m 换算自洽', Math.abs(sk.totalHeight / (sk.groundPx - 92) - sk.px2
 
 log('\n  环节          质量kg   长m    半径m  质心偏移m  惯量kg·m²      z侧向m');
 let prevY = Infinity;
+let chestY = 0;
 for (const b of sk.bodies) {
   const col = b.colliders.map((c) => `${c.mass.toFixed(2)}`).join('+');
   log(`  ${b.label.padEnd(10)} ${b.mass.toFixed(2).padStart(7)} (${col.padEnd(9)}) ` +
@@ -92,8 +97,12 @@ for (const b of sk.bodies) {
       `${b.colliders[0].comY >= 0 ? ' ' : ''}${b.colliders[0].comY.toFixed(3)}     ` +
       `${b.colliders[0].inertiaZ.toFixed(3)}   ${b.cz >= 0 ? ' ' : ''}${b.cz.toFixed(4)}`);
   if (b.key === 'torso') prevY = b.cy;
+  if (b.key === `spine${sk.cfg.spineSegments}`) chestY = b.cy;
 }
-check('躯干初始高度在 0.9~1.3 m', prevY > 0.9 && prevY < 1.3, `${prevY.toFixed(3)} m`);
+// ★ 分段后 torso = **骨盆**（树根），它比原来的一整块躯干低；胸腔单独校验。
+check('骨盆（torso = 树根）初始高度在 0.7~1.0 m', prevY > 0.7 && prevY < 1.0, `${prevY.toFixed(3)} m`);
+check(`胸腔（spine${sk.cfg.spineSegments}）初始高度在 1.05~1.35 m`, chestY > 1.05 && chestY < 1.35,
+  `${chestY.toFixed(3)} m`);
 check('★ 前向一律 0（素材是正面视图，没有深度信息）',
   sk.bodies.every((b) => b.cx === 0));
 check('★ 左右肢体分开在 Z 上（不是 X 上）—— 大腿中心间距 ≈ 0.20 m',
@@ -131,13 +140,13 @@ check('★ 膝/肘的次要两轴压得比髋/肩紧（解剖上是铰链）',
 // ------------------------------------------------------------ 2. 物理装配
 
 log('\n=== 2. 物理装配与稳定性 ===');
-const sim = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, duration: 3 });
-check('Sim 关节数 = 9', sim.doll.jointCount === 9);
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, duration: 3 });
+check('Sim 关节数 = 骨架关节数', sim.doll.jointCount === sk.joints.length, `${sim.doll.jointCount}`);
 
 const rng0 = makeRng(7);
 const gauss0 = makeGaussian(rng0);
-const g0 = randomGenome(BRAIN_SHAPE, gauss0, 1.2);
-check('基因组长度 = 参数量', g0.length === brainParamCount(BRAIN_SHAPE), `${g0.length} 个`);
+const g0 = randomGenome(SHAPE, gauss0, 1.2);
+check('基因组长度 = 参数量', g0.length === brainParamCount(SHAPE), `${g0.length} 个`);
 
 // 站着不动（全零输出）：零基因组 = 所有关节目标速度为 0 = "保持姿态"的阻尼控制器，
 // 所以这一段的期望是"站得住"，而不是"会走"。
@@ -185,10 +194,27 @@ check('随机基因组确实驱动了关节', moved > 0.05, `Σ|angle| = ${moved
 log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
 {
   const RAPIER = (await import('@dimforge/rapier3d')).default;
-  check('网络输入维度与声明一致（70）', BRAIN_SHAPE.inputs === INPUT_COUNT,
-    `inputs=${BRAIN_SHAPE.inputs} INPUT_COUNT=${INPUT_COUNT}`);
-  check('网络输出 = 关节数 × 3（27）',
-    BRAIN_SHAPE.outputs === sk.joints.length * 3, `outputs=${BRAIN_SHAPE.outputs}`);
+  check('网络输入维度与声明一致（16 + 6N）', SHAPE.inputs === inputCount(sk.joints.length),
+    `inputs=${SHAPE.inputs} 期望=${inputCount(sk.joints.length)}（关节数 ${sk.joints.length}）`);
+  check('网络输出 = 关节数 × 3',
+    SHAPE.outputs === sk.joints.length * 3, `outputs=${SHAPE.outputs} 关节数=${sk.joints.length}`);
+
+  // ---- ★ 脊柱分段（用户定调：身体也要像脊椎一样很多关节）----
+  const K = sk.cfg.spineSegments;
+  const spineJoints = sk.joints.filter((j) => j.name.startsWith('spine'));
+  check(`★ 躯干切成 ${K} 段（骨盆 + ${K - 1} 节脊椎）`,
+    sk.bodies.filter((b) => b.key === 'torso' || b.key.startsWith('spine')).length === K,
+    `${sk.bodies.filter((b) => b.key === 'torso' || b.key.startsWith('spine')).map((b) => b.key).join('/')}`);
+  check(`★ 脊柱关节 ${K - 1} 个已建成，且排在 JOINT_ORDER 之后`,
+    spineJoints.length === K - 1 && sk.joints[9].name.startsWith('spine'),
+    `${spineJoints.map((j) => j.name).join(',')}（总关节 ${sk.joints.length}）`);
+  check('★ 髋挂在骨盆段、颈/肩挂在最上一段（胸腔）',
+    sk.joints.find((j) => j.name === 'hip_l')!.parentKey === 'torso' &&
+    sk.joints.find((j) => j.name === 'neck')!.parentKey === `spine${K}`,
+    `hip_l→${sk.joints.find((j) => j.name === 'hip_l')!.parentKey} neck→${sk.joints.find((j) => j.name === 'neck')!.parentKey}`);
+  check('★ 切开之后总质量守恒（分配没丢没重）',
+    Math.abs(sk.massTotal - sk.bodies.reduce((s, b) => s + b.mass, 0)) < 1e-9,
+    `${sk.massTotal.toFixed(4)} kg`);
 
   const mkW = () => {
     const w = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
@@ -201,7 +227,7 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   // ---- A. 关节必须是球关节（3 转动自由度）----
   const w1 = mkW();
   const d1 = new Ragdoll(w1, sk);
-  check('关节数 = 9，且每个都建成了', d1.joints.length === 9, `${d1.joints.length}`);
+  check('关节数与骨架一致，且每个都建成了', d1.joints.length === sk.joints.length, `${d1.joints.length}`);
   // ★ Rapier 0.14 的 JS 侧把这个球关节报成 GenericImpulseJoint ——
   //   查过源码：`RawGenericJoint.spherical()` 确实被调用（dynamics/impulse_joint.js:415），
   //   只是 `jointType(handle)` 的读回走的是另一条绑定路径（和坏 handle 同一族问题）。
@@ -256,10 +282,10 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
   // ---- D. 暖启动缓存清理：同一基因组跑两次必须逐位一致 ----
   //     判据放在 **Sim 层**（begin() 会整世界重建），因为只按 Ragdoll.reset()
   //     清不掉地面接触的累积冲量 —— 见下面 E 段的对照。
-  const gz = new Float32Array(brainParamCount(BRAIN_SHAPE));
+  const gz = new Float32Array(brainParamCount(SHAPE));
   for (let k = 0; k < gz.length; k++) gz[k] = Math.sin(k * 1.7) * 0.3;
   const traceSim = () => {
-    const s = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, duration: 1 });
+    const s = new Sim(sk, SHAPE, { ...DEFAULT_SIM, duration: 1 });
     s.begin(gz);
     s.advance(120);
     const p = s.doll.torso().translation();
@@ -297,7 +323,7 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
 // ------------------------------------------------------------ 3. 适应度与进化
 
 log('\n=== 3. 适应度与进化 ===');
-const tSim = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
+const tSim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
 
 const zeroFit = (() => { tSim.begin(zeroGenome); return tSim.runToEnd(); })();
 log(`  全零基因组（站桩不动）适应度 = ${zeroFit.toFixed(3)}`);
@@ -306,9 +332,9 @@ check('站桩适应度 ≈ 0 附近（不奖励静止）', Math.abs(zeroFit) < 3
 // 手工造一个"前进"的假基因组：让髋关节恒定向某个方向摆，看适应度是否为正
 const pushGenome = new Float32Array(g0.length);
 // 输出层偏置（最后 outputs 个参数）全偏向一侧 → 所有关节同向转
-const L = { w1: 0, b1: BRAIN_SHAPE.inputs * BRAIN_SHAPE.hidden };
-const b2Start = L.b1 + BRAIN_SHAPE.hidden + BRAIN_SHAPE.hidden * BRAIN_SHAPE.outputs;
-for (let o = 0; o < BRAIN_SHAPE.outputs; o++) pushGenome[b2Start + o] = 0.8;
+const L = { w1: 0, b1: SHAPE.inputs * SHAPE.hidden };
+const b2Start = L.b1 + SHAPE.hidden + SHAPE.hidden * SHAPE.outputs;
+for (let o = 0; o < SHAPE.outputs; o++) pushGenome[b2Start + o] = 0.8;
 tSim.begin(pushGenome);
 const pushFit = tSim.runToEnd();
 log(`  恒定关节偏置基因组：适应度 = ${pushFit.toFixed(3)}  前进 ${tSim.distance.toFixed(3)} m  摔倒=${tSim.fallen}`);
@@ -316,7 +342,7 @@ check('不同基因组给出不同适应度（梯度存在）', Math.abs(pushFit
 
 // ---- 真跑进化 ----
 const trainCfg = { ...DEFAULT_TRAINER, population: 24, seed: 12345 };
-const trainer = new Trainer(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 4 }, trainCfg);
+const trainer = new Trainer(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 4 }, trainCfg);
 check('trainer 每个 Sim 都已开工（非 finished）',
   trainer.sims.every((s) => !s.finished), `${trainer.sims.filter((s) => !s.finished).length}/${trainer.population}`);
 
@@ -362,7 +388,7 @@ check('sigma 自适应没跑出上下限',
 // 直立占比高 = 真的在走；前几秒就趴下 = 还在刷 dive 分（要回去调适应度）。
 log('\n=== 3b. 最佳个体行为解剖（walk）===');
 {
-  const anat = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
+  const anat = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
   anat.begin(trainer.bestEver);
   let upTicks = 0;
   let totTicks = 0;
@@ -395,16 +421,16 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
 // ------------------------------------------------------------ 4. 基因组存档
 
 log('\n=== 4. 基因组存档往返 ===');
-const text = packGenome(trainer.bestEver, BRAIN_SHAPE, { gen: trainer.gen, fitness: bestEver });
+const text = packGenome(trainer.bestEver, SHAPE, { gen: trainer.gen, fitness: bestEver });
 const back = unpackGenome(text);
 let same = back.g.length === trainer.bestEver.length;
 for (let i = 0; same && i < back.g.length; i++) same = back.g[i] === trainer.bestEver[i];
 check('base64 往返逐位一致', same);
 // 期望体积 = 参数量 × 4 字节 → base64 ≈ ×1.37。3D 之后参数量 3163。
-check('存档体积 < 32 KB（1 MB 预算里占 <4%）', text.length < 32768, `${(text.length / 1024).toFixed(2)} KB`);
+check('存档体积 < 64 KB（1 MB 预算里占 <7%）', text.length < 32768, `${(text.length / 1024).toFixed(2)} KB`);
 
 // 导入的基因组必须能直接跑出同样的分数
-const shot = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 4 });
+const shot = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk', duration: 4 });
 shot.begin(back.g);
 const replay = shot.runToEnd();
 check('重放导入基因组得分与训练时一致', Math.abs(replay - 0) >= 0 && Number.isFinite(replay),
@@ -415,7 +441,7 @@ check('重放导入基因组得分与训练时一致', Math.abs(replay - 0) >= 0
 log('\n=== 5. 战斗阶段 ===');
 
 // 5a. 两条通道是否都通 —— 用确定性用例，不靠"训练有没有运气学会"
-const stand = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 6 });
+const stand = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 6 });
 stand.begin(zeroGenome);
 const standFit = stand.runToEnd();
 log(`  站桩不动：命中 ${stand.hits}  被击中 ${stand.hurts}  适应度 ${standFit.toFixed(2)}`);
@@ -431,7 +457,7 @@ check('站桩打不出命中（命中必须靠主动挥拳）', stand.hits === 0
   // 绕 Z 正向旋转把下垂的肢体推向 +X（前），推导见 skeleton.ts 的轴口径注释。
   for (const j of [1, 2]) sw[b2Start + j * 3 + 2] = 6;
   for (const j of [3, 4]) sw[b2Start + j * 3 + 2] = 3;
-  const swingSim = new Sim(sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 4 });
+  const swingSim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 4 });
   swingSim.begin(sw);
   swingSim.runToEnd();
   log(`  双臂前挥基因组：命中 ${swingSim.hits}  被击中 ${swingSim.hurts}  ` +
@@ -441,7 +467,7 @@ check('站桩打不出命中（命中必须靠主动挥拳）', stand.hits === 0
 
 // 5b. 真跑战斗进化：命中数应该从 0 往上走
 const fightTrainer = new Trainer(
-  sk, BRAIN_SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 4 },
+  sk, SHAPE, { ...DEFAULT_SIM, mode: 'fight', duration: 4 },
   { ...DEFAULT_TRAINER, population: 24, seed: 777 },
 );
 const FIGHT_GENS = 25;
