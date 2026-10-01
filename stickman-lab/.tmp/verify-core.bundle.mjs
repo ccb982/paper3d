@@ -14208,13 +14208,35 @@ var init_sim = __esm({
       duration: 6,
       mode: "walk",
       gaitHz: 1.15,
+      stepVMin: 0.05,
+      stepMinDx: 0.05,
+      // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
+      stepMaxDz: 0.06,
+      // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
+      stepMinTotal: 0.15,
+      // 累计前进不足 15 cm 时一律不给步数分
+      stepMinDxMax: 0.3,
+      // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
       fallHeightRatio: 0.62,
       fallAngle: 1.25
     };
     W = {
-      /** 净前进距离（跑到终点时的 x 位移） */
-      distance: 3,
+      /**
+       * 净前进距离（x 位移）。★ 用户 2026-10-01："前进奖励要弱" ⇒ 3.0 → **0.5**。
+       *   原来 3.0 太大，ES 只要"整体往前蹭"就能拿分，于是**迈步本身反而不值钱**
+       *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。前进只当"方向正确"的薄引导。
+       */
+      distance: 0.5,
+      /**
+       * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
+       * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
+       * **不要求**位移门槛、**不要求**直线 —— 后两条是可选项（见 `stepMinDx` / `stepMaxDz`），
+       * 只影响上面的"大位移奖金"（`step`/`step2`）。
+       * 为什么要有：奖励被劫持过一次（ES 找"原地抖腿"刷步数），
+       * 但那次的解法应该是"收紧条件"，不是"取消换脚奖励"—— 没有它就没有"迈步"这个梯度。
+       */
+      switch: 0.3,
       /** 前进速度积分（塑形项：让早期就有梯度，不必等撞线） */
       velocity: 0.6,
       /**
@@ -14232,8 +14254,33 @@ var init_sim = __esm({
       lateral: 1,
       /** 关节耗能 */
       energy: 0.02,
-      /** 两侧脚掌交替触地（鼓励"迈步"而不是"蹭"） */
-      step: 0.4,
+      /**
+       * ★ 有效迈步奖励，**单位：每米前进**（`w.step · Σ本步前进距离`）。
+       *   "大位移才有奖励"；每一次有效迈步都要满足三条门槛（左右交替 / 这一脚直线 / 位移够大）。
+       */
+      step: 4,
+      /**
+       * ★★ **第 2 步起的超线性加成**：`w.step2 · n(n−1)/2`（n = 换脚次数）。
+       *
+       * 为什么必须有（用户 2026-10-01："第一步会迈出去，但是第二步不会迈了。
+       * 需不需要走直线分数加权或者什么手段教会他走第二步？"）：
+       *   `probe-gait`（绕过 ES 的手工相位步态，24 组）实测：**没有任何一组能迈出第二步**，
+       *   最好的那组走 1.21 m、存活 3.6 s，但**换脚只有 1 次**。
+       *   而原来的奖励结构是 `step 0.4/步` 对 `fall 2.0` ⇒
+       *   **"迈一步再倒"是净负分（+0.4−2.0 = −1.6）** ⇒ ES 学到的最优解是"别迈步"。
+       *   直线/方向加权救不了这个：它只能改变**已有动作的方向**，
+       *   而"落地之后再迈"这个动作在物理层压根没出现。
+       *   ⇒ 把"第 2 步、第 3 步…"的价格抬到**超线性**，让"多迈一步"的边际收益超过摔倒代价：
+       *     n=1 → +0.4，n=2 → +1.2，n=3 → +2.8，n=4 → +5.2（`step` + `step2` 两项之和）
+       */
+      step2: 0.8,
+      /**
+       * ★ 腾空时间惩罚（`∫`双脚离地 dt）。
+       * 为什么要：实测**全幅**相位步态 0.27 s 就双脚腾空（把整个人甩起来，腾空占比 10~13%），
+       * 而把输出缩到 ×0.05~0.15 才走得远、活得久 ⇒ 摆动权限相对支撑能力过强，
+       * 搜索很容易滑到"跳"这个局部解上。给腾空上分可以把搜索推回"走"。
+       */
+      air: 0.5,
       /** 摔倒一次性扣分 */
       fall: 2,
       /**
@@ -14317,6 +14364,7 @@ var init_sim = __esm({
       shape;
       /** 本次评估实际使用的权重（= W 叠加 cfg.weights） */
       w;
+      // ★ 可运行时调（UI 滑块），见 setWeights
       stages;
       // 每个控制周期包含几个物理步
       ticksTotal;
@@ -14354,7 +14402,23 @@ var init_sim = __esm({
       tauPrev;
       tauPrimed = false;
       lastStance = 0;
+      /** ★ 有效迈步次数（满足三条门槛；见 SimConfig.stepMinDx） */
       stepCount = 0;
+      /** ★ 有效迈步累计**前进距离**（m）—— 步数奖励按它计价，不按次数 */
+      stepDist = 0;
+      /** 上一次有效迈步的画布起点（用于算本步的 Δx/Δz） */
+      stepAnchorX = 0;
+      stepAnchorZ = 0;
+      /** 累计净前进（m），用作 stepMinTotal 的门槛 */
+      stepTotalX = 0;
+      /** 上一次着地的是哪只脚（1=左 2=右），用来强制左右交替 */
+      stepLastFoot = 0;
+      /** ★ 诊断：有效迈步各道门槛分别挡了多少次（探针/调试用，见 `get stepDiag`） */
+      stepDiag = { switch: 0, noPrev: 0, noAlt: 0, slow: 0, notStraight: 0, tooSmall: 0, notYet: 0, ok: 0 };
+      /** ★ 交替换脚次数（只要求左右交替 + 在前进）—— W.switch 的计价依据 */
+      switchCount = 0;
+      /** ★ 腾空时间（双脚都离地），单位 s —— 见 W.air */
+      accAir = 0;
       // ---- 战斗模式 ----
       puppet;
       fist;
@@ -14503,6 +14567,16 @@ var init_sim = __esm({
         this.tauPrimed = false;
         this.lastStance = 0;
         this.stepCount = 0;
+        this.switchCount = 0;
+        this.stepDist = 0;
+        this.stepTotalX = 0;
+        this.stepLastFoot = 0;
+        {
+          const t02 = this.doll.torso().translation();
+          this.stepAnchorX = t02.x;
+          this.stepAnchorZ = t02.z;
+        }
+        this.accAir = 0;
         this.inDomainTicks = 0;
         this.balanceTicks = 0;
         this.peakDcmX = 0;
@@ -14574,6 +14648,40 @@ var init_sim = __esm({
           tp[i] = tau;
         }
         this.accSmooth += acc;
+      }
+      /**
+       * ★★ 运行时调奖励规则（UI 滑块/开关用，用户 2026-10-01："做成可调的按钮"）：
+       *   · `straight=false` ⇒ 取消"这一脚必须直线"（`stepMaxDz` 放到无穷大），
+       *     只保留换脚奖励与位移门槛；
+       *   · `minDx` ⇒ 改"一次有效迈步所需的净前进"（0 = 不设门槛）。
+       *   换脚奖励本身（W.switch）**不受这里影响**，它必须一直在。
+       */
+      setStepRule(o) {
+        if (o.straight !== void 0) {
+          if (o.straight && this.cfg.stepMaxDz > 1e8) this.cfg.stepMaxDz = DEFAULT_SIM.stepMaxDz;
+          else if (!o.straight) this.cfg.stepMaxDz = 1e9;
+        }
+        if (o.minDx !== void 0) this.cfg.stepMinDx = o.minDx;
+      }
+      /** ★ 运行时调适应度权重（UI 滑块用）。改完立即对后续 tick 生效。 */
+      setWeights(w) {
+        this.w = { ...this.w, ...w };
+      }
+      /**
+       * ★ 课程：设置"一次有效迈步所需的净前进"。Trainer 每代调用，从 `stepMinDx` 线性升到
+       *   `stepMinDxMax`（用户："位移奖励阈值可以逐步增大"）。**只改门槛，不改已发生的记账。**
+       */
+      setStepMinDx(v2) {
+        this.cfg.stepMinDx = v2;
+      }
+      /** ★ 诊断：有效迈步的门槛分项计数 + 已计分的有效步数/距离。 */
+      get stepStat() {
+        return { diag: { ...this.stepDiag }, count: this.stepCount, dist: this.stepDist };
+      }
+      /** ★ 诊断：当前观测里的时钟两项（clock.sin, clock.cos）与步态相位。 */
+      get clock() {
+        const c2 = Math.PI * 2;
+        return { phase: this.phase, sin: this.x[0], cos: this.x[1] };
       }
       /** 一次性跑完（离屏验收 / 无渲染时用） */
       runToEnd() {
@@ -14658,9 +14766,35 @@ var init_sim = __esm({
         const near = 0.07;
         const stance = yl < near && yl <= yr ? 1 : yr < near ? 2 : 0;
         if (stance !== 0 && stance !== this.lastStance) {
-          if (this.lastStance !== 0) this.stepCount++;
+          this.stepDiag.switch++;
+          const footChanged = this.lastStance !== 0 && stance !== this.lastStance;
+          if (this.lastStance === 0) this.stepDiag.noPrev++;
+          else if (!footChanged) this.stepDiag.noAlt++;
+          else if (doll.torso().linvel().x <= this.cfg.stepVMin) this.stepDiag.slow++;
+          if (footChanged && doll.torso().linvel().x > this.cfg.stepVMin) {
+            this.switchCount++;
+            const tp2 = doll.torso().translation();
+            const dx = tp2.x - this.stepAnchorX;
+            const dz = tp2.z - this.stepAnchorZ;
+            this.stepTotalX = Math.max(this.stepTotalX, tp2.x);
+            const straight = Math.abs(dz) <= this.cfg.stepMaxDz;
+            const far = dx >= this.cfg.stepMinDx;
+            const past = this.stepTotalX >= this.cfg.stepMinTotal;
+            if (!straight) this.stepDiag.notStraight++;
+            else if (!far) this.stepDiag.tooSmall++;
+            else if (!past) this.stepDiag.notYet++;
+            if (straight && far && past) {
+              this.stepCount++;
+              this.stepDist += dx;
+              this.stepDiag.ok++;
+            }
+            this.stepAnchorX = tp2.x;
+            this.stepAnchorZ = tp2.z;
+            this.stepLastFoot = stance;
+          }
           this.lastStance = stance;
         }
+        if (stance === 0) this.accAir += dt;
         if (this.cfg.mode === "fight") this.fightTick(dt);
       }
       /** 战斗模式的额外逻辑：假人出拳节奏 + 命中/受击判定 */
@@ -14759,7 +14893,15 @@ var init_sim = __esm({
             // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
             smooth: w.smooth * this.accSmooth,
             survive: w.survive * elapsed,
-            step: w.step * this.stepCount,
+            // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
+            switch: w.switch * this.switchCount,
+            // ★★ 步数奖励按**有效迈步的前进距离**计价（m），不按次数 ——
+            //   "大位移才有奖励"；而每一次有效迈步都必须满足三条门槛（见 controlTick）。
+            step: w.step * this.stepDist,
+            // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
+            // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
+            step2: w.step2 * (this.stepCount * (this.stepCount - 1) / 2),
+            air: -w.air * this.accAir,
             fall: fallen ? -w.fall : 0
           };
           t3.total = Object.values(t3).reduce((a, b) => a + b, 0);
@@ -15035,6 +15177,28 @@ var init_evolution = __esm({
       get evaluated() {
         return this.cursor;
       }
+      /** ★ 位移门槛课程的当前值 / 总代数（UI 显示用） */
+      stepMinDxNow = 0;
+      rampGens = 60;
+      /**
+       * ★ 运行时调步态奖励（UI 用，用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项，
+       *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
+       */
+      applyGaitTuning(o) {
+        for (const sm of this.sims) {
+          if (o.straight !== void 0 || o.minDx !== void 0) {
+            sm.setStepRule({ straight: o.straight, minDx: o.minDx });
+          }
+          const w = {};
+          if (o.wSwitch !== void 0) w.switch = o.wSwitch;
+          if (o.wDistance !== void 0) w.distance = o.wDistance;
+          if (o.wStep !== void 0) w.step = o.wStep;
+          if (Object.keys(w).length) sm.setWeights(w);
+        }
+        if (o.minDx !== void 0) this.stepMinDxManual = o.minDx;
+      }
+      /** 手动设定过阈值 ⇒ 课程不再自动抬升（用户在 UI 上自己控制） */
+      stepMinDxManual = -1;
       get paramCount() {
         return brainParamCount(this.shape);
       }
@@ -15098,6 +15262,16 @@ var init_evolution = __esm({
         if (best > this.bestEverFitness) {
           this.bestEverFitness = best;
           this.bestEver.set(this.genomes[order[0]]);
+        }
+        const c0 = this.sims[0]?.cfg.stepMinDx ?? 0;
+        const cMax = this.sims[0]?.cfg.stepMinDxMax ?? 0;
+        if (cMax > 0 && cMax > c0 && this.stepMinDxManual < 0) {
+          const RAMP = 60;
+          const u = Math.min(1, this.gen / RAMP);
+          const cur = c0 + (cMax - c0) * u;
+          for (const sm of this.sims) sm.setStepMinDx(cur);
+          this.stepMinDxNow = cur;
+          this.rampGens = RAMP;
         }
         this.history.push({
           gen: this.gen,
@@ -15709,6 +15883,7 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;
   log(`  ${marks.join("  |  ")}`);
+  log(`  \u6362\u811A\uFF08\u8FC8\u6B65\uFF09\u6B21\u6570 = ${anat.terms.step !== void 0 ? "" : ""}${anat.stepCount}   \u817E\u7A7A = ${anat.accAir.toFixed(2)} s   \u5206\u9879 ${Object.entries(anat.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
   log(`  \u76F4\u7ACB\u5360\u6BD4 ${(upRatio * 100).toFixed(0)}%   \u6700\u5927\u503E\u89D2 ${(maxTilt * 180 / Math.PI).toFixed(0)}\xB0   \u51C0\u524D\u8FDB ${anat.distance.toFixed(2)} m   \u5B58\u6D3B ${(totTicks / 60).toFixed(2)}s   \u6454\u5012=${anat.fallen}`);
   note(
     "\u6700\u4F73\u4E2A\u4F53\u8FC7\u534A\u65F6\u95F4\u4FDD\u6301\u76F4\u7ACB\uFF08\u5B66\u7684\u662F\u8D70\uFF0C\u4E0D\u662F\u6251\u5012\u6ED1\u884C\uFF09",

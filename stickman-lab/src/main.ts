@@ -51,6 +51,8 @@ const hud = new Hud({
   onBudget: (v) => { state.budgetMs = v; },
   onSpeed: (v) => { state.speed = v; },
   onPhase: (m) => { if (booted && m !== state.mode) rebuild(m); },
+  // ★ 步态奖励可调项：直通到 Trainer（转发给整代 Sim，下一 tick 生效）
+  onGaitTune: (o) => { if (booted) trainer.applyGaitTuning(o); },
 });
 
 /** 物理步的实测平均耗时（指数滑动平均）——预算按 ms 给，步数靠它换算 */

@@ -36,6 +36,34 @@ export interface SimConfig {
   /** 步态时钟频率（Hz）：给网络一个节拍输入，让它更容易长出周期步态 */
   gaitHz: number;
   /**
+   * ★ 换脚计数的**前进速度门槛**（m/s，默认 0.05）：换脚瞬间躯干的前向速度必须超过它，
+   *   否则这次换脚不计入步数。用来堵住"原地抖腿刷步数"的奖励劫持（见 controlTick）。
+   */
+  stepVMin: number;
+  /**
+   * ★★ **有效迈步**的三条门槛（用户 2026-10-01 定调）：
+   *   "奖励改为迈一个脚后再次迈另一个脚，同时位移为直线，而且大位移才有奖励"
+   *
+   *   ① 左右**交替**：`stance` 必须严格 l→r 或 r→l（连续两次同脚不算"迈另一个脚"）
+   *   ② 这一脚是**直线**：本步期间横向漂移 `|Δz| ≤ stepMaxDz`
+   *   ③ **大位移**：本步净前进 `Δx ≥ stepMinDx`，且累计前进超过 `stepMinTotal` 才开始计分
+   *
+   *   奖励 = `W.step · 本步前进距离`（米）⇒ 走得越远拿得越多，而不是"数了几次脚"。
+   *   这么设计的动因见 §5.15：数脚步能被"原地抖腿"劫持（实测 6 次换脚 +12 分却 1.05s 就摔），
+   *   而"位移计价 + 直线门槛"让**只有真的走出去**才有分。
+   */
+  stepMinDx: number;
+  stepMaxDz: number;
+  stepMinTotal: number;
+  /**
+   * ★★ 位移门槛的**课程上限**（默认 0.30 m）。`stepMinDx` 从**当前值**按代次线性升到这里
+   *   （Trainer 每代调 `Sim.setStepMinDx`，见 evolution.ts 的 recordAndBreed）。
+   *   用户 2026-10-01："这个奖励机制是有效的，位移奖励阈值可以逐步增大" + "现在先用更小的阈值"
+   *   ⇒ 起步用 0.05 m（够得着），随训练推进自动抬到 0.30 m（要求越走越远）。
+   *   设在 0 = 不抬升（永远用 stepMinDx）。
+   */
+  stepMinDxMax: number;
+  /**
    * 求解器迭代次数。
    * ★ 3D 之后**必须**提高：球关节的锚点约束刚度直接由它决定。
    *   probe-ball E 段（同一 5.0 N·m·s 冲量下锚点漂移）：
@@ -76,6 +104,11 @@ export const DEFAULT_SIM: SimConfig = {
   duration: 6,
   mode: 'walk',
   gaitHz: 1.15,
+  stepVMin: 0.05,
+  stepMinDx: 0.05,     // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
+  stepMaxDz: 0.06,     // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
+  stepMinTotal: 0.15,  // 累计前进不足 15 cm 时一律不给步数分
+  stepMinDxMax: 0.30,   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
   solverIterations: 16,
   fallHeightRatio: 0.62,
   fallAngle: 1.25,
@@ -97,8 +130,21 @@ export const DEFAULT_SIM: SimConfig = {
  * ★★ 4) 新增 balance（DCM 越界积分）—— 见 W.balance 的注释。这是本轮最关键的修正。
  */
 export const W = {
-  /** 净前进距离（跑到终点时的 x 位移） */
-  distance: 3.0,
+  /**
+   * 净前进距离（x 位移）。★ 用户 2026-10-01："前进奖励要弱" ⇒ 3.0 → **0.5**。
+   *   原来 3.0 太大，ES 只要"整体往前蹭"就能拿分，于是**迈步本身反而不值钱**
+   *   （实测：最优个体 6 s 只走 −0.24 m，`step` 分却是 0）。前进只当"方向正确"的薄引导。
+   */
+  distance: 0.5,
+  /**
+   * ★★ **换脚奖励（必须有）**：每完成一次"左脚→右脚 / 右脚→左脚"的交替接地就给一次。
+   * 只要求 ① 左右交替 ② 换脚瞬间在前进（`stepVMin`）。
+   * **不要求**位移门槛、**不要求**直线 —— 后两条是可选项（见 `stepMinDx` / `stepMaxDz`），
+   * 只影响上面的"大位移奖金"（`step`/`step2`）。
+   * 为什么要有：奖励被劫持过一次（ES 找"原地抖腿"刷步数），
+   * 但那次的解法应该是"收紧条件"，不是"取消换脚奖励"—— 没有它就没有"迈步"这个梯度。
+   */
+  switch: 0.3,
   /** 前进速度积分（塑形项：让早期就有梯度，不必等撞线） */
   velocity: 0.6,
   /**
@@ -116,8 +162,33 @@ export const W = {
   lateral: 1.0,
   /** 关节耗能 */
   energy: 0.02,
-  /** 两侧脚掌交替触地（鼓励"迈步"而不是"蹭"） */
-  step: 0.4,
+  /**
+   * ★ 有效迈步奖励，**单位：每米前进**（`w.step · Σ本步前进距离`）。
+   *   "大位移才有奖励"；每一次有效迈步都要满足三条门槛（左右交替 / 这一脚直线 / 位移够大）。
+   */
+  step: 4.0,
+  /**
+   * ★★ **第 2 步起的超线性加成**：`w.step2 · n(n−1)/2`（n = 换脚次数）。
+   *
+   * 为什么必须有（用户 2026-10-01："第一步会迈出去，但是第二步不会迈了。
+   * 需不需要走直线分数加权或者什么手段教会他走第二步？"）：
+   *   `probe-gait`（绕过 ES 的手工相位步态，24 组）实测：**没有任何一组能迈出第二步**，
+   *   最好的那组走 1.21 m、存活 3.6 s，但**换脚只有 1 次**。
+   *   而原来的奖励结构是 `step 0.4/步` 对 `fall 2.0` ⇒
+   *   **"迈一步再倒"是净负分（+0.4−2.0 = −1.6）** ⇒ ES 学到的最优解是"别迈步"。
+   *   直线/方向加权救不了这个：它只能改变**已有动作的方向**，
+   *   而"落地之后再迈"这个动作在物理层压根没出现。
+   *   ⇒ 把"第 2 步、第 3 步…"的价格抬到**超线性**，让"多迈一步"的边际收益超过摔倒代价：
+   *     n=1 → +0.4，n=2 → +1.2，n=3 → +2.8，n=4 → +5.2（`step` + `step2` 两项之和）
+   */
+  step2: 0.8,
+  /**
+   * ★ 腾空时间惩罚（`∫`双脚离地 dt）。
+   * 为什么要：实测**全幅**相位步态 0.27 s 就双脚腾空（把整个人甩起来，腾空占比 10~13%），
+   * 而把输出缩到 ×0.05~0.15 才走得远、活得久 ⇒ 摆动权限相对支撑能力过强，
+   * 搜索很容易滑到"跳"这个局部解上。给腾空上分可以把搜索推回"走"。
+   */
+  air: 0.5,
   /** 摔倒一次性扣分 */
   fall: 2.0,
   /**
@@ -204,7 +275,7 @@ export class Sim {
   readonly cfg: SimConfig;
   readonly shape: BrainShape;
   /** 本次评估实际使用的权重（= W 叠加 cfg.weights） */
-  readonly w: FitnessWeights;
+  w: FitnessWeights;   // ★ 可运行时调（UI 滑块），见 setWeights
   readonly stages: number;      // 每个控制周期包含几个物理步
   readonly ticksTotal: number;  // 一次评估的控制周期总数
   /** 物理步长（秒）—— driveMotors 的 dt */
@@ -243,7 +314,23 @@ export class Sim {
   private readonly tauPrev: Float64Array;
   private tauPrimed = false;
   private lastStance: 0 | 1 | 2 = 0;
+  /** ★ 有效迈步次数（满足三条门槛；见 SimConfig.stepMinDx） */
   private stepCount = 0;
+  /** ★ 有效迈步累计**前进距离**（m）—— 步数奖励按它计价，不按次数 */
+  private stepDist = 0;
+  /** 上一次有效迈步的画布起点（用于算本步的 Δx/Δz） */
+  private stepAnchorX = 0;
+  private stepAnchorZ = 0;
+  /** 累计净前进（m），用作 stepMinTotal 的门槛 */
+  private stepTotalX = 0;
+  /** 上一次着地的是哪只脚（1=左 2=右），用来强制左右交替 */
+  private stepLastFoot = 0;
+  /** ★ 诊断：有效迈步各道门槛分别挡了多少次（探针/调试用，见 `get stepDiag`） */
+  readonly stepDiag = { switch: 0, noPrev: 0, noAlt: 0, slow: 0, notStraight: 0, tooSmall: 0, notYet: 0, ok: 0 };
+  /** ★ 交替换脚次数（只要求左右交替 + 在前进）—— W.switch 的计价依据 */
+  private switchCount = 0;
+  /** ★ 腾空时间（双脚都离地），单位 s —— 见 W.air */
+  private accAir = 0;
 
   // ---- 战斗模式 ----
   private puppet?: RAPIER.RigidBody;
@@ -401,6 +488,16 @@ export class Sim {
     this.tauPrimed = false;
     this.lastStance = 0;
     this.stepCount = 0;
+    this.switchCount = 0;
+    this.stepDist = 0;
+    this.stepTotalX = 0;
+    this.stepLastFoot = 0;
+    {
+      const t0 = this.doll.torso().translation();
+      this.stepAnchorX = t0.x;
+      this.stepAnchorZ = t0.z;
+    }
+    this.accAir = 0;
     this.inDomainTicks = 0;
     this.balanceTicks = 0;
     this.peakDcmX = 0;
@@ -473,6 +570,46 @@ export class Sim {
       tp[i] = tau;
     }
     this.accSmooth += acc;
+  }
+
+  /**
+   * ★★ 运行时调奖励规则（UI 滑块/开关用，用户 2026-10-01："做成可调的按钮"）：
+   *   · `straight=false` ⇒ 取消"这一脚必须直线"（`stepMaxDz` 放到无穷大），
+   *     只保留换脚奖励与位移门槛；
+   *   · `minDx` ⇒ 改"一次有效迈步所需的净前进"（0 = 不设门槛）。
+   *   换脚奖励本身（W.switch）**不受这里影响**，它必须一直在。
+   */
+  setStepRule(o: { straight?: boolean; minDx?: number }): void {
+    if (o.straight !== undefined) {
+      // 关掉"直线"时把容差放到 1e9（等于没有这条），开回来时用配置里的默认值
+      if (o.straight && this.cfg.stepMaxDz > 1e8) this.cfg.stepMaxDz = DEFAULT_SIM.stepMaxDz;
+      else if (!o.straight) this.cfg.stepMaxDz = 1e9;
+    }
+    if (o.minDx !== undefined) this.cfg.stepMinDx = o.minDx;
+  }
+
+  /** ★ 运行时调适应度权重（UI 滑块用）。改完立即对后续 tick 生效。 */
+  setWeights(w: Partial<typeof W>): void {
+    this.w = { ...this.w, ...w };
+  }
+
+  /**
+   * ★ 课程：设置"一次有效迈步所需的净前进"。Trainer 每代调用，从 `stepMinDx` 线性升到
+   *   `stepMinDxMax`（用户："位移奖励阈值可以逐步增大"）。**只改门槛，不改已发生的记账。**
+   */
+  setStepMinDx(v: number): void {
+    this.cfg.stepMinDx = v;
+  }
+
+  /** ★ 诊断：有效迈步的门槛分项计数 + 已计分的有效步数/距离。 */
+  get stepStat(): { diag: Record<string, number>; count: number; dist: number } {
+    return { diag: { ...this.stepDiag }, count: this.stepCount, dist: this.stepDist };
+  }
+
+  /** ★ 诊断：当前观测里的时钟两项（clock.sin, clock.cos）与步态相位。 */
+  get clock(): { phase: number; sin: number; cos: number } {
+    const c2 = Math.PI * 2;
+    return { phase: this.phase, sin: this.x[0], cos: this.x[1] };
   }
 
   /** 一次性跑完（离屏验收 / 无渲染时用） */
@@ -572,9 +709,45 @@ export class Sim {
     const near = 0.07;
     const stance: 0 | 1 | 2 = yl < near && yl <= yr ? 1 : yr < near ? 2 : 0;
     if (stance !== 0 && stance !== this.lastStance) {
-      if (this.lastStance !== 0) this.stepCount++;
+      // ★★★ **有效迈步**判定（用户 2026-10-01 定调，见 SimConfig.stepMinDx）：
+      //   ① 换脚瞬间在前进（vx > stepVMin）
+      //   ② 左右**交替**（stance 与上次着地脚不同，且上一次确实着过地）
+      //   ③ 这一脚是**直线**：本步期间 |Δz| ≤ stepMaxDz
+      //   ④ **大位移**：本步净前进 Δx ≥ stepMinDx，且累计 ≥ stepMinTotal
+      //   满足则：步数 +1、**按本步前进距离计价**（stepDist += Δx），并重置本步锚点。
+      //   任一条不满足：只重置锚点（这一步不算分），左右交替的序列也重新开始。
+      this.stepDiag.switch++;
+      const footChanged = this.lastStance !== 0 && stance !== this.lastStance;
+      if (this.lastStance === 0) this.stepDiag.noPrev++;
+      else if (!footChanged) this.stepDiag.noAlt++;
+      else if (doll.torso().linvel().x <= this.cfg.stepVMin) this.stepDiag.slow++;
+      if (footChanged && doll.torso().linvel().x > this.cfg.stepVMin) {
+        // ★ 基础"换脚奖励"：只认左右交替 + 在前进，不看位移/直线（那两条是可选项）
+        this.switchCount++;
+        const tp = doll.torso().translation();
+        const dx = tp.x - this.stepAnchorX;
+        const dz = tp.z - this.stepAnchorZ;
+        this.stepTotalX = Math.max(this.stepTotalX, tp.x);
+        const straight = Math.abs(dz) <= this.cfg.stepMaxDz;
+        const far = dx >= this.cfg.stepMinDx;
+        const past = this.stepTotalX >= this.cfg.stepMinTotal;
+        if (!straight) this.stepDiag.notStraight++;
+        else if (!far) this.stepDiag.tooSmall++;
+        else if (!past) this.stepDiag.notYet++;
+        if (straight && far && past) {
+          this.stepCount++;
+          this.stepDist += dx;
+          this.stepDiag.ok++;
+        }
+        // 无论这一步是否计分，锚点都挪到当前 ⇒ 下一步量的是"这一脚"，不会跨步累计
+        this.stepAnchorX = tp.x;
+        this.stepAnchorZ = tp.z;
+        this.stepLastFoot = stance;
+      }
       this.lastStance = stance;
     }
+    // ★ 腾空记账：双脚都不在支撑 ⇒ 记 dt（见 W.air）
+    if (stance === 0) this.accAir += dt;
 
     if (this.cfg.mode === 'fight') this.fightTick(dt);
   }
@@ -692,7 +865,15 @@ export class Sim {
         // ★ 抖动罚：治"抽风式频繁发力"（见 W.smooth / probe-posture [C3]）
         smooth: w.smooth * this.accSmooth,
         survive: w.survive * elapsed,
-        step: w.step * this.stepCount,
+        // ★ 换脚奖励（**基础项，必须有**）：每交替换一次脚（只要求左右交替 + 在前进）
+        switch: w.switch * this.switchCount,
+        // ★★ 步数奖励按**有效迈步的前进距离**计价（m），不按次数 ——
+        //   "大位移才有奖励"；而每一次有效迈步都必须满足三条门槛（见 controlTick）。
+        step: w.step * this.stepDist,
+        // 超线性加成：已完成"步对"数（n=1→0, 2→1, 3→3, 4→6），现在 n 只统计**有效**迈步，
+        // 已被"距离计价 + 直线门槛"约束住，抖腿拿不到（实测踩过一次奖励劫持，见 §5.15）。
+        step2: w.step2 * ((this.stepCount * (this.stepCount - 1)) / 2),
+        air: -w.air * this.accAir,
         fall: fallen ? -w.fall : 0,
       };
       t.total = Object.values(t).reduce((a, b) => a + b, 0);

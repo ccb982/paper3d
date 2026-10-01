@@ -153,6 +153,32 @@ export class Trainer {
 
   get population(): number { return this.cfg.population; }
   get evaluated(): number { return this.cursor; }
+  /** ★ 位移门槛课程的当前值 / 总代数（UI 显示用） */
+  stepMinDxNow = 0;
+  rampGens = 60;
+
+  /**
+   * ★ 运行时调步态奖励（UI 用，用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项，
+   *   但是换脚奖励必须有，前进奖励要弱"）。转发给整代所有 Sim，下一个 tick 就生效。
+   */
+  applyGaitTuning(o: {
+    straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number; wStep?: number;
+  }): void {
+    for (const sm of this.sims) {
+      if (o.straight !== undefined || o.minDx !== undefined) {
+        sm.setStepRule({ straight: o.straight, minDx: o.minDx });
+      }
+      const w: Record<string, number> = {};
+      if (o.wSwitch !== undefined) w.switch = o.wSwitch;
+      if (o.wDistance !== undefined) w.distance = o.wDistance;
+      if (o.wStep !== undefined) w.step = o.wStep;
+      if (Object.keys(w).length) sm.setWeights(w);
+    }
+    if (o.minDx !== undefined) this.stepMinDxManual = o.minDx;
+  }
+
+  /** 手动设定过阈值 ⇒ 课程不再自动抬升（用户在 UI 上自己控制） */
+  stepMinDxManual = -1;
   get paramCount(): number { return brainParamCount(this.shape); }
 
   /**
@@ -218,6 +244,21 @@ export class Trainer {
     if (best > this.bestEverFitness) {
       this.bestEverFitness = best;
       this.bestEver.set(this.genomes[order[0]]);
+    }
+
+    // ---- ★★ 位移门槛课程（用户 2026-10-01："阈值可以逐步增大"+"现在先用更小的阈值"）----
+    //   起步 stepMinDx（小到够得着），在前 `rampGens` 代内线性抬到 stepMinDxMax。
+    //   为什么要课程：门槛一上来就卡死 ⇒ 步数分恒为 0 ⇒ ES 看不到任何"多迈一步"的梯度
+    //   （实测：12 cm 门槛下连最好的手工步态都是 0 分）。
+    const c0 = this.sims[0]?.cfg.stepMinDx ?? 0;
+    const cMax = this.sims[0]?.cfg.stepMinDxMax ?? 0;
+    if (cMax > 0 && cMax > c0 && this.stepMinDxManual < 0) {
+      const RAMP = 60;                       // 抬升用多少代走完
+      const u = Math.min(1, this.gen / RAMP);
+      const cur = c0 + (cMax - c0) * u;
+      for (const sm of this.sims) sm.setStepMinDx(cur);
+      this.stepMinDxNow = cur;
+      this.rampGens = RAMP;
     }
 
     this.history.push({

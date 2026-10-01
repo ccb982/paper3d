@@ -19,6 +19,8 @@ export interface HudHooks {
   onBudget: (v: number) => void;
   onSpeed: (v: number) => void;
   onPhase: (mode: 'walk' | 'fight') => void;
+  /** ★ 步态奖励可调（用户 2026-10-01） */
+  onGaitTune: (o: { straight?: boolean; minDx?: number; wSwitch?: number; wDistance?: number }) => void;
 }
 
 export interface HudState {
@@ -62,6 +64,7 @@ export class Hud {
       best: $('s-best'), top: $('s-top'), show: $('s-show'),
       tps: $('s-tps'), budget: $('s-budget'),
       vSigma: $('v-sigma'), vBudget: $('v-budget'), vSpeed: $('v-speed'), vPhase: $('v-speedgoal'),
+      vMinDx: $('v-mindx'), vWSwitch: $('v-wswitch'), vWDist: $('v-wdist'),
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
     };
@@ -96,6 +99,19 @@ export class Hud {
     bindRange('i-speed', 'vSpeed', hooks.onSpeed, (v) => `${v.toFixed(1)}×`);
     bindRange('i-speedgoal', 'vPhase', (v) => hooks.onPhase(v < 0.5 ? 'walk' : 'fight'),
       (v) => (v < 0.5 ? '学走路' : '学战斗'));
+
+    // ---- 步态奖励可调项（用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项"）----
+    bindRange('i-mindx', 'vMinDx', (v) => hooks.onGaitTune({ minDx: v }), (v) => `${v.toFixed(2)} m`);
+    bindRange('i-wswitch', 'vWSwitch', (v) => hooks.onGaitTune({ wSwitch: v }), (v) => v.toFixed(2));
+    bindRange('i-wdist', 'vWDist', (v) => hooks.onGaitTune({ wDistance: v }), (v) => v.toFixed(2));
+    {
+      const cb = document.getElementById('i-straight') as HTMLInputElement | null;
+      if (cb) {
+        const sync = () => hooks.onGaitTune({ straight: cb.checked });
+        cb.addEventListener('change', sync);
+        sync();
+      }
+    }
   }
 
   setStatus(text: string, isError = false): void {

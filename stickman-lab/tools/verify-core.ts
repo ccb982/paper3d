@@ -588,6 +588,11 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
   }
   const upRatio = totTicks ? upTicks / totTicks : 0;
   log(`  ${marks.join('  |  ')}`);
+  log(`  换脚（迈步）次数 = ${anat.terms.step !== undefined ? '' : ''}${(anat as unknown as { stepCount: number }).stepCount}`
+    + `   腾空 = ${(((anat as unknown as { accAir: number }).accAir)).toFixed(2)} s`
+    + `   分项 ${Object.entries(anat.terms).filter(([kk]) => kk !== 'total')
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5)
+      .map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(' ')}`);
   log(`  直立占比 ${(upRatio * 100).toFixed(0)}%   最大倾角 ${((maxTilt * 180) / Math.PI).toFixed(0)}°   ` +
       `净前进 ${anat.distance.toFixed(2)} m   存活 ${(totTicks / 60).toFixed(2)}s   摔倒=${anat.fallen}`);
   // 40 代就学会走路不是硬性要求（27 个输出维度大得多），所以这里是观察项不是断言。

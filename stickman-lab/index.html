@@ -110,6 +110,20 @@
       <label>训练阶段 <b id="v-speedgoal">—</b></label>
       <input id="i-speedgoal" type="range" min="0" max="1" step="1" />
 
+      <h2>步态奖励（可调）</h2>
+
+      <label class="chk"><input id="i-straight" type="checkbox" checked /> 这一脚必须走直线
+        <b id="v-straightt">开</b></label>
+
+      <label>位移门槛（一次有效迈步 ≥）<b id="v-mindx">—</b></label>
+      <input id="i-mindx" type="range" min="0" max="0.3" step="0.01" />
+
+      <label>换脚奖励（必须有）<b id="v-wswitch">—</b></label>
+      <input id="i-wswitch" type="range" min="0" max="2" step="0.05" />
+
+      <label>前进奖励（弱）<b id="v-wdist">—</b></label>
+      <input id="i-wdist" type="range" min="0" max="3" step="0.1" />
+
       <div class="btns">
         <button id="b-pause">暂停</button>
         <button id="b-reset">重开种群</button>
