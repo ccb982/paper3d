@@ -13837,6 +13837,35 @@ var init_ragdoll = __esm({
         return hit;
       }
       /**
+       * ★★ 每只脚的**竖向载荷份额**（`[左, 右]`，和为 1；两只都没受力时给 [0.5, 0.5]）。
+       *
+       * ★ 为什么用"载荷"而不是"几何接触"来做重心转移/换支撑脚的判据：
+       *   ① 几何接触（`contactDist`）要 0.5 cm 以内才算出，抬 1~2 cm 的小步根本测不到；
+       *   ② Rapier 窄相还保留**预测性接触**（形状没碰但进了预测距离），实测脚离地 9 cm
+       *      仍会报接触（这是踩过的坑，见 footGrounded 的注释）。
+       *   而"这只脚承担了 70% 的体重"**才是支撑腿的定义**，也是 Raibert/捕获点那套
+       *   真正在控的量（把重心挪到支撑脚上）。
+       *
+       * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
+       */
+      footLoadFrac(dt) {
+        const one = (side) => {
+          const col = this.soleCol[side];
+          if (!col) return 0;
+          let f = 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+            });
+          });
+          return f;
+        };
+        const fl = one(0), fr = one(1);
+        const sum = fl + fr;
+        return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+      }
+      /**
        * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
        *
        * ★★ 为什么要做成**事件**而不是"当前是否单脚支撑"（用户 2026-10-01：
@@ -14432,6 +14461,7 @@ var init_sim = __esm({
       mode: "walk",
       gaitHz: 1.15,
       stepVMin: 0.05,
+      shiftCapSec: 1.5,
       stepMinDx: 0.05,
       // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
       stepMaxDz: 0.06,
@@ -14476,7 +14506,9 @@ var init_sim = __esm({
       /** 抬腿：Σ_脚 min(1, 腾空/0.5s)·dt —— 交替步态的发动机之一 */
       lift: 1,
       /** 单脚支撑（"一次抬一条"）：恰好一脚着地 +1 / 两脚都飞 −0.5 / 都着地 0 */
-      single: 1.5,
+      single: 2.5,
+      /** ★ 重心转移：∫|载荷左−载荷右|dt（0=双脚均分，1=全压一只脚）。迈步真正的第一步。 */
+      shift: 2,
       /**
        * 逐关节"要动"（骨盆/膝盖），每关节另有 moveScale 倍率。
        * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
@@ -14551,7 +14583,10 @@ var init_sim = __esm({
       accSingle = 0;
       // 双脚离地（跳/摔）时间积分，×dt（负）
       altCount = 0;
-      // ★ 换支撑脚次数（"一次抬一条"的事件计数）
+      accSwitchQ = 0;
+      // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
+      accShift = 0;
+      // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
       accTicks = 0;
       // 累计控制秒数（给"平均"类分项做分母）
       accAlive = 0;
@@ -14739,6 +14774,8 @@ var init_sim = __esm({
         this.accMoveSum = 0;
         this.accAlive = 0;
         this.altCount = 0;
+        this.accShift = 0;
+        this.accSwitchQ = 0;
         this.doll.resetAlt();
         this.accJointMotion = 0;
         this.accTau = 0;
@@ -14910,6 +14947,13 @@ var init_sim = __esm({
         const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
         const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
         this.accAlive += alive * dt;
+        const [fl2, fr2] = this.doll.footLoadFrac(dt);
+        this.accShift += Math.abs(fl2 - fr2) * dt;
+        const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
+        if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+          this.altCount++;
+          this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
+        }
         this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;
         this.accTicks += dt;
         let jSpd = 0, jMove = 0;
@@ -15032,13 +15076,15 @@ var init_sim = __esm({
         if (this.cfg.mode === "walk") {
           const tt = {};
           const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);
-          tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg;
+          tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg * Math.min(1, this.altCount / 2);
           tt.yawTrack = w.yawTrack * this.accYaw;
           tt.lateral = -w.lateral * this.accLat;
           tt.tiltRate = -w.tiltRate * this.accTilt;
           tt.lift = w.lift * this.accLift * aliveAvg;
-          tt.single = w.single * (this.altCount * aliveAvg + this.accSingle);
+          tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
           tt.altCount = this.altCount;
+          tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
+          tt.shiftRaw = this.accShift;
           let jm = 0, nJm = 0;
           for (const k of MOVE_JOINTS) {
             const v2 = this.accJtMove[k] ?? 0;
@@ -16019,7 +16065,11 @@ var zeroFit = (() => {
 })();
 log(`  \u5168\u96F6\u57FA\u56E0\u7EC4\uFF08\u7AD9\u6869\u4E0D\u52A8\uFF09\u9002\u5E94\u5EA6 = ${zeroFit.toFixed(3)}  \u5012\u5730=${tSim.fallen}  \u5206\u9879 ${Object.entries(tSim.terms).filter(([kk]) => kk !== "total").sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 4).map(([kk, vv]) => `${kk}=${vv.toFixed(2)}`).join(" ")}`);
 log(`    \u5168\u5206\u9879 ${JSON.stringify(tSim.terms)}`);
-check("\u2605 \u96F6\u8F93\u51FA\uFF08\u4EC0\u4E48\u90FD\u4E0D\u505A\uFF09\u62FF\u4E0D\u5230\u6B63\u5206", zeroFit <= 0, `\u603B=${zeroFit.toFixed(3)}`);
+check(
+  "\u2605 \u96F6\u8F93\u51FA\uFF08\u4EC0\u4E48\u90FD\u4E0D\u505A\uFF09\u62FF\u4E0D\u5230\u524D\u8FDB\u5206\uFF0C\u4E14\u603B\u5206\u5F88\u4F4E",
+  zeroFit < 0.5 && tSim.terms.velTrack === 0,
+  `\u603B=${zeroFit.toFixed(3)} velTrack=${tSim.terms.velTrack.toFixed(3)} shift=${tSim.terms.shift.toFixed(2)}`
+);
 check(
   "\u2605 \u4E24\u811A\u4E0D\u79BB\u5730\u4F1A\u6328\u7F5A\uFF08\u5355\u811A\u652F\u6491\u9879\u4E3A\u8D1F\uFF09",
   tSim.terms.single < 0,

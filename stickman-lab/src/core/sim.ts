@@ -61,6 +61,8 @@ export interface SimConfig {
   stepMinDx: number;
   stepMaxDz: number;
   stepMinTotal: number;
+  /** ★ 重心转移项的封顶秒数（"会单腿平衡"这件事值多少）；不封顶会被"永远单腿站"刷满 */
+  shiftCapSec: number;
   /**
    * ★★ 位移门槛的**课程上限**（默认 0.30 m）。`stepMinDx` 从**当前值**按代次线性升到这里
    *   （Trainer 每代调 `Sim.setStepMinDx`，见 evolution.ts 的 recordAndBreed）。
@@ -121,6 +123,7 @@ export const DEFAULT_SIM: SimConfig = {
   mode: 'walk',
   gaitHz: 1.15,
   stepVMin: 0.05,
+  shiftCapSec: 1.5,
   stepMinDx: 0.05,     // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
   stepMaxDz: 0.06,     // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
   stepMinTotal: 0.15,  // 累计前进不足 15 cm 时一律不给步数分
@@ -173,7 +176,9 @@ export const W = {
   /** 抬腿：Σ_脚 min(1, 腾空/0.5s)·dt —— 交替步态的发动机之一 */
   lift: 1.0,
   /** 单脚支撑（"一次抬一条"）：恰好一脚着地 +1 / 两脚都飞 −0.5 / 都着地 0 */
-  single: 1.5,
+  single: 2.5,
+  /** ★ 重心转移：∫|载荷左−载荷右|dt（0=双脚均分，1=全压一只脚）。迈步真正的第一步。 */
+  shift: 2.0,
   /**
    * 逐关节"要动"（骨盆/膝盖），每关节另有 moveScale 倍率。
    * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
@@ -249,7 +254,9 @@ export class Sim {
   // ══════ 走路奖励（walkReward.ts 的 11 项）══════
   private accLift = 0;          // Σ_脚 min(1, 腾空/目标)·dt
   private accSingle = 0;        // 双脚离地（跳/摔）时间积分，×dt（负）
-  private altCount = 0;          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
+  private altCount = 0;
+  private accSwitchQ = 0;         // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
+  private accShift = 0;          // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
   private accTicks = 0;         // 累计控制秒数（给"平均"类分项做分母）
   private accAlive = 0;         // ∫"站得住"因子 dt（门控抬腿/单脚支撑/要动三项）
   private accJtMove: Record<string, number> = {};   // 逐关节"要动"
@@ -430,7 +437,7 @@ export class Sim {
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
     // 走路奖励记账器（walkReward.ts）
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
-    this.altCount = 0; this.doll.resetAlt();
+    this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
     this.airL = 0; this.airR = 0; this.motorPrev.fill(0);
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
@@ -635,9 +642,27 @@ export class Sim {
     //   而刷分）之后，"从不抬脚"就变成了 0 分 ⇒ ES 找到"两脚不离地滑行 0.63 m"，
     //   lift=0、single=0、velTrack 还有分（实测 6 代都是这个解）。
     //   "一次抬一条"的反面就是"两脚都在地上"，必须给它负分。
-    // ★★ "一次抬一条"按**换支撑脚的事件**计分（不是"当前是否单脚支撑"）：
-    //   长时间单脚支撑在现几何下差 1.23×（实测），所以姿态式判据永远拿不到分 ⇒ 什么也学不到。
-    //   短暂交替可行（顶翻时间常数 ~0.2 s），所以计分改成"换脚事件 + 跳起来的时间罚"。
+    // ★★★ 重心转移 + 换支撑脚（用户 2026-10-01："抬一次脚就摔了，什么也学不到"）。
+    //   实测根因：抬脚后 CoM 离支撑脚 0.171 m，而单脚侧向半宽只有 0.139 m ⇒ **差 1.23×**，
+    //   所以"抬脚"在现几何下几乎不会出现（种子步态的鞋底离地峰值只出现在倒塌过程中，
+    //   站立期间两脚始终贴地）⇒ 直接教抬腿 = 教一个学不到的动作。
+    //   但**髋外展限位 ±45°、骨盆横向可移 ~0.15 m**，够把重心挪到支撑脚上 ——
+    //   这才是迈步真正的第一步（Raibert 落脚点 / 捕获点那套在控的量）。奖励分两层：
+    //     ① `shift`    = ∫|载荷左−载荷右|dt   （连续 0..1：把体重挪到一只脚上就有分）
+    //     ② `altCount` = 换支撑脚次数（载荷 >70% 从一只脚换到另一只脚，0.15 s 不应期）
+    //   判据用**接触力分配**而不是几何接触：抬 1~2 cm 的小步几何测不到，而且 Rapier
+    //   窄相会保留**预测性接触**（脚离地 9 cm 仍报接触，踩过）。
+    const [fl2, fr2] = this.doll.footLoadFrac(dt);
+    this.accShift += Math.abs(fl2 - fr2) * dt;
+    const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
+    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+      this.altCount++;
+      // ★★ 换脚**只有在正在推进时才计价**：φ(v*−v_x)。
+      //   不加这一层的话实测 6 代就学会"原地金鸡独立式交替"（换脚 14 次/6s = 2.3Hz，
+      //   而 velTrack −0.18、位移 −0.38 m）—— 交替本身被当成了终点。
+      //   加了之后："迈步"必须同时是"往前走的迈步"，原地抖腿一分不给。
+      this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
+    }
     this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;   // 双脚离地（跳/摔）仍按时间罚
     this.accTicks += dt;
 
@@ -796,7 +821,12 @@ export class Sim {
       // ★★ 减去"站桩基线"：φ(v*) 是站着不动就能拿到的底分（实测 0.368），
       //   原样积分会让"什么都不做"得正分（零输出基因组 +0.87，门禁直接抓到）。
       //   经典配方里没这一步是因为它默认策略被**命令**去走；我们要把"不动"钉在 0 分。
-      tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg;
+      // ★★ 前进分要"迈过步"才给（stepGate = min(1, 换脚数/2)）。
+      //   实测这个骨架**零输出也会自己往前滑 0.65 m**（脚掌外八 25° + 纯阻尼 ⇒ 被动自走），
+      //   不设门槛的话"什么都不做"能拿满速度跟踪（实测 +0.63，总分最高）。
+      //   冷启动由 `shift` 项负责（它不依赖前进），迈出两步之后前进分才解锁。
+      tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg
+        * Math.min(1, this.altCount / 2);
       // ★ yawTrack 默认权重 0：φ(0)=1 意味着"完全不自转"是**满��**，而站桩恰好满���
       //   ⇒ 又一份白拿的分。自转改由 tiltRate 罚（把 ω_y 也纳入）。
       tt.yawTrack = w.yawTrack * this.accYaw;
@@ -805,8 +835,14 @@ export class Sim {
       tt.lift = w.lift * this.accLift * aliveAvg;
       // ★ 换支撑脚拿分（主）+ 双脚离地时间罚（次）。**没有"两脚都着地"的负分**了 ——
       //   那是姿态式判据，在现几何下会把"滑行"也罚掉（而滑行是这个骨架的被动行为）。
-      tt.single = w.single * (this.altCount * aliveAvg + this.accSingle);
-      tt.altCount = this.altCount;
+      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
+      tt.altCount = this.altCount;   // 诊断：换支撑脚次数
+      // ★ 重心转移：**封顶**的"能力门槛"，不是无限得分项。
+      //   实测：不封顶的话，策略只要**永远把体重压在一只脚上**就能拿满（6s × 2.0 ≈ 20 分，
+      //   而换脚数还是 0）—— 奖励被"金鸡独立"刷满，学不到走路。
+      //   所以只付"会单腿平衡"这件事本身（cap 1.5 s），**多出来的收益必须靠换脚拿**。
+      tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
+      tt.shiftRaw = this.accShift;   // 诊断：实际单腿时间
       let jm = 0, nJm = 0;
       for (const k of MOVE_JOINTS) {
         const v = this.accJtMove[k] ?? 0;

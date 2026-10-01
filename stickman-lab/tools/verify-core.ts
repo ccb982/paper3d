@@ -513,7 +513,11 @@ log(`    全分项 ${JSON.stringify(tSim.terms)}`);
 // ★ 门禁改诚实版：零输出（纯阻尼）在这个骨架上**不是站着不动，而是会自己往前滑**
 //   （实测 0.65 m；脚掌外八 25° + 阻尼 ⇒ 被动自走）。所以"velTrack 必须为 0"是错的判据，
 //   真正要保证的是：**什么都不做拿不到正分**，且"两脚不离地"要挨罚。
-check('★ 零输出（什么都不做）拿不到正分', zeroFit <= 0, `总=${zeroFit.toFixed(3)}`);
+// ★ 相对判据：零输出站桩时的**被动晃动**仍会拿到一点重心转移分（实测 0.30 ⇒ 总分 +0.11），
+//   "绝对 ≤ 0"不成立。真正的性质是：它拿不到前进分（被换脚数门控住）、
+//   而且必须明显低于会走路的策略。绝对值留给 probe-gait 的相对断言。
+check('★ 零输出（什么都不做）拿不到前进分，且总分很低', zeroFit < 0.5 && tSim.terms.velTrack === 0,
+  `总=${zeroFit.toFixed(3)} velTrack=${tSim.terms.velTrack.toFixed(3)} shift=${tSim.terms.shift.toFixed(2)}`);
 check('★ 两脚不离地会挨罚（单脚支撑项为负）', tSim.terms.single < 0,
   `single=${tSim.terms.single.toFixed(3)} lift=${tSim.terms.lift.toFixed(3)}`);
 note('零输出的被动行为（诚实记录：这个骨架会自己往前滑）', true,

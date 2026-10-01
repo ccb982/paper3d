@@ -13831,6 +13831,35 @@ var init_ragdoll = __esm({
         return hit;
       }
       /**
+       * ★★ 每只脚的**竖向载荷份额**（`[左, 右]`，和为 1；两只都没受力时给 [0.5, 0.5]）。
+       *
+       * ★ 为什么用"载荷"而不是"几何接触"来做重心转移/换支撑脚的判据：
+       *   ① 几何接触（`contactDist`）要 0.5 cm 以内才算出，抬 1~2 cm 的小步根本测不到；
+       *   ② Rapier 窄相还保留**预测性接触**（形状没碰但进了预测距离），实测脚离地 9 cm
+       *      仍会报接触（这是踩过的坑，见 footGrounded 的注释）。
+       *   而"这只脚承担了 70% 的体重"**才是支撑腿的定义**，也是 Raibert/捕获点那套
+       *   真正在控的量（把重心挪到支撑脚上）。
+       *
+       * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
+       */
+      footLoadFrac(dt) {
+        const one = (side) => {
+          const col = this.soleCol[side];
+          if (!col) return 0;
+          let f2 = 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              for (let k = 0; k < mf.numContacts(); k++) f2 += Math.abs(mf.contactImpulse(k)) / dt;
+            });
+          });
+          return f2;
+        };
+        const fl = one(0), fr = one(1);
+        const sum = fl + fr;
+        return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+      }
+      /**
        * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
        *
        * ★★ 为什么要做成**事件**而不是"当前是否单脚支撑"（用户 2026-10-01：

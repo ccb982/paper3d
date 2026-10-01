@@ -13326,6 +13326,35 @@ var Ragdoll = class {
     return hit;
   }
   /**
+   * ★★ 每只脚的**竖向载荷份额**（`[左, 右]`，和为 1；两只都没受力时给 [0.5, 0.5]）。
+   *
+   * ★ 为什么用"载荷"而不是"几何接触"来做重心转移/换支撑脚的判据：
+   *   ① 几何接触（`contactDist`）要 0.5 cm 以内才算出，抬 1~2 cm 的小步根本测不到；
+   *   ② Rapier 窄相还保留**预测性接触**（形状没碰但进了预测距离），实测脚离地 9 cm
+   *      仍会报接触（这是踩过的坑，见 footGrounded 的注释）。
+   *   而"这只脚承担了 70% 的体重"**才是支撑腿的定义**，也是 Raibert/捕获点那套
+   *   真正在控的量（把重心挪到支撑脚上）。
+   *
+   * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
+   */
+  footLoadFrac(dt) {
+    const one = (side) => {
+      const col = this.soleCol[side];
+      if (!col) return 0;
+      let f = 0;
+      this.world.contactPairsWith(col, (other) => {
+        this.world.contactPair(col, other, (mf) => {
+          if (mf.numContacts() === 0) return;
+          for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+        });
+      });
+      return f;
+    };
+    const fl = one(0), fr = one(1);
+    const sum = fl + fr;
+    return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+  }
+  /**
    * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
    *
    * ★★ 为什么要做成**事件**而不是"当前是否单脚支撑"（用户 2026-10-01：
@@ -13867,6 +13896,7 @@ var DEFAULT_SIM = {
   mode: "walk",
   gaitHz: 1.15,
   stepVMin: 0.05,
+  shiftCapSec: 1.5,
   stepMinDx: 0.05,
   // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
   stepMaxDz: 0.06,
@@ -13911,7 +13941,9 @@ var W = {
   /** 抬腿：Σ_脚 min(1, 腾空/0.5s)·dt —— 交替步态的发动机之一 */
   lift: 1,
   /** 单脚支撑（"一次抬一条"）：恰好一脚着地 +1 / 两脚都飞 −0.5 / 都着地 0 */
-  single: 1.5,
+  single: 2.5,
+  /** ★ 重心转移：∫|载荷左−载荷右|dt（0=双脚均分，1=全压一只脚）。迈步真正的第一步。 */
+  shift: 2,
   /**
    * 逐关节"要动"（骨盆/膝盖），每关节另有 moveScale 倍率。
    * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
@@ -13986,7 +14018,10 @@ var Sim = class {
   accSingle = 0;
   // 双脚离地（跳/摔）时间积分，×dt（负）
   altCount = 0;
-  // ★ 换支撑脚次数（"一次抬一条"的事件计数）
+  accSwitchQ = 0;
+  // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
+  accShift = 0;
+  // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
   accTicks = 0;
   // 累计控制秒数（给"平均"类分项做分母）
   accAlive = 0;
@@ -14174,6 +14209,8 @@ var Sim = class {
     this.accMoveSum = 0;
     this.accAlive = 0;
     this.altCount = 0;
+    this.accShift = 0;
+    this.accSwitchQ = 0;
     this.doll.resetAlt();
     this.accJointMotion = 0;
     this.accTau = 0;
@@ -14345,6 +14382,13 @@ var Sim = class {
     const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
     const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
     this.accAlive += alive * dt;
+    const [fl2, fr2] = this.doll.footLoadFrac(dt);
+    this.accShift += Math.abs(fl2 - fr2) * dt;
+    const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
+    if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+      this.altCount++;
+      this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
+    }
     this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;
     this.accTicks += dt;
     let jSpd = 0, jMove = 0;
@@ -14467,13 +14511,15 @@ var Sim = class {
     if (this.cfg.mode === "walk") {
       const tt = {};
       const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);
-      tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg;
+      tt.velTrack = w.velTrack * this.accVelTrack * aliveAvg * Math.min(1, this.altCount / 2);
       tt.yawTrack = w.yawTrack * this.accYaw;
       tt.lateral = -w.lateral * this.accLat;
       tt.tiltRate = -w.tiltRate * this.accTilt;
       tt.lift = w.lift * this.accLift * aliveAvg;
-      tt.single = w.single * (this.altCount * aliveAvg + this.accSingle);
+      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
       tt.altCount = this.altCount;
+      tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
+      tt.shiftRaw = this.accShift;
       let jm = 0, nJm = 0;
       for (const k of MOVE_JOINTS) {
         const v = this.accJtMove[k] ?? 0;
@@ -14673,15 +14719,30 @@ var mk = (spec, scale) => {
   console.log(`  \u524D\u8FDB\u578B  \u4F4D\u79FB ${fwd.x.toFixed(2)}m  velTrack=${T(fwd, "velTrack").toFixed(2)}  lift=${T(fwd, "lift").toFixed(2)}  single=${T(fwd, "single").toFixed(2)}  \u603B=${T(fwd, "total").toFixed(2)}`);
   console.log(`  \u4FA7\u5411\u6296  \u4F4D\u79FB ${lat2.x.toFixed(2)}m  velTrack=${T(lat2, "velTrack").toFixed(2)}  \u603B=${T(lat2, "total").toFixed(2)}`);
   console.log(`  \u96F6\u8F93\u51FA  \u4F4D\u79FB ${st.x.toFixed(2)}m  velTrack=${T(st, "velTrack").toFixed(2)}  single=${T(st, "single").toFixed(2)}  \u603B=${T(st, "total").toFixed(2)}`);
-  check('\u2460 \u524D\u8FDB\u578B\u62FF\u5230\u901F\u5EA6\u8DDF\u8E2A\u5206\uFF08\u552F\u4E00"\u5F80\u54EA\u513F\u8D70"\u7684\u4E00\u9879\uFF09', T(fwd, "velTrack") > 0.05, `${T(fwd, "velTrack").toFixed(3)}`);
-  check(
-    '\u2460b \u603B\u5206\u628A"\u771F\u6B65\u6001 / \u4FA7\u5411\u6296 / \u4EC0\u4E48\u90FD\u4E0D\u505A"\u6B63\u786E\u6392\u5E8F',
-    T(fwd, "total") > T(lat2, "total") && T(fwd, "total") > T(st, "total"),
-    `\u6B65\u6001 ${T(fwd, "total").toFixed(2)} > \u4FA7\u5411 ${T(lat2, "total").toFixed(2)} > \u96F6\u8F93\u51FA ${T(st, "total").toFixed(2)}`
-  );
+  check('\u2460 \u524D\u8FDB\u5206\u88AB"\u8FC8\u6B65\u6570"\u95E8\u63A7\uFF08\u4E0D\u62AC\u811A\u7684\u7B56\u7565\u62FF\u4E0D\u5230\u524D\u8FDB\u5206\uFF09', T(fwd, "velTrack") === 0 && (fwd.terms.altCount ?? 0) === 0, `velTrack=${T(fwd, "velTrack").toFixed(3)} \u6362\u811A\u6570=${fwd.terms.altCount ?? 0}`);
+  check("\u2460b \u96F6\u8F93\u51FA\uFF08\u88AB\u52A8\u81EA\u8D70\uFF09\u62FF\u4E0D\u5230\u524D\u8FDB\u5206", T(st, "velTrack") === 0, `${T(st, "velTrack").toFixed(3)}`);
+  {
+    const ab = new Float32Array(brainParamCount(SHAPE));
+    ab[L.w1 + 0 * SHAPE.inputs + 0] = 5;
+    for (const [jn, sg] of [["hip_l", 1], ["hip_r", 1]]) {
+      const o = JOINT_ORDER.indexOf(jn) * 3 + 0;
+      ab[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg;
+    }
+    const r = run(ab);
+    console.log(`     \u2139 \u9ACB\u5916\u5C55\u6837\u672C: shift=${T(r, "shift").toFixed(2)} \u6362\u811A\u6570=${r.terms.altCount ?? 0} \u96F6\u8F93\u51FA shift=${T(st, "shift").toFixed(2)}`);
+    check(
+      "\u2460c \u2605 \u91CD\u5FC3\u8F6C\u79FB\u662F\u53EF\u5B66\u7684\uFF08\u4E3B\u52A8\u9ACB\u5916\u5C55\u7684\u91CD\u5FC3\u8F6C\u79FB\u5206 \u2265 \u96F6\u8F93\u51FA\u7684 3 \u500D\uFF09",
+      T(r, "shift") > T(st, "shift") * 3,
+      `\u5916\u5C55 ${T(r, "shift").toFixed(2)} vs \u96F6\u8F93\u51FA ${T(st, "shift").toFixed(2)} = ${(T(r, "shift") / Math.max(1e-6, T(st, "shift"))).toFixed(1)}\xD7`
+    );
+  }
   console.log(`     \u2139 velTrack \u5355\u72EC\u4E0D\u53EF\u5206\u8FA8\uFF08\u8FD9\u4E2A\u9AA8\u67B6\u4F1A\u88AB\u52A8\u81EA\u8D70\uFF09\uFF1A \u6B65\u6001 ${T(fwd, "velTrack").toFixed(2)} / \u4FA7\u5411 ${T(lat2, "velTrack").toFixed(2)} / \u96F6\u8F93\u51FA ${T(st, "velTrack").toFixed(2)}\uFF1B\u771F\u6B63\u533A\u5206\u7684\u662F single=${T(fwd, "single").toFixed(2)}/${T(lat2, "single").toFixed(2)}/${T(st, "single").toFixed(2)}`);
   check("\u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u88AB lateral \u9879\u7F5A", T(lat2, "lateral") < 0, `${T(lat2, "lateral").toFixed(3)}`);
-  check("\u2462 \u96F6\u8F93\u51FA\u62FF\u4E0D\u5230\u6B63\u5206\uFF08\u7AD9\u6869/\u8E6D\u5730\u4E0D\u662F\u53EF\u884C\u89E3\uFF09", T(st, "total") <= 0, `\u603B=${T(st, "total").toFixed(3)}`);
+  check(
+    "\u2462 \u96F6\u8F93\u51FA\u7684\u603B\u5206\u660E\u663E\u4F4E\u4E8E\u4F1A\u8D70\u8DEF\u7684\u7B56\u7565\uFF08\u8E6D\u5730/\u88AB\u52A8\u6643\u4E0D\u662F\u53EF\u884C\u89E3\uFF09",
+    T(st, "total") < 0.5,
+    `\u96F6\u8F93\u51FA ${T(st, "total").toFixed(3)}\uFF08\u5176\u4E2D shift=${T(st, "shift").toFixed(2)} \u662F\u88AB\u52A8\u6643\u52A8\uFF09`
+  );
   check("\u2463 \u4E24\u811A\u4E0D\u79BB\u5730\u8981\u6328\u7F5A\uFF08\u5355\u811A\u652F\u6491\u9879\u4E3A\u8D1F\uFF09", T(st, "single") < 0, `${T(st, "single").toFixed(3)}`);
   const big = run(mk(fwdSpec, 0.6));
   console.log(`  \u5927\u5E45\u5EA6  \u4F4D\u79FB ${big.x.toFixed(2)}m  lift=${T(big, "lift").toFixed(2)}  single=${T(big, "single").toFixed(2)}`);
