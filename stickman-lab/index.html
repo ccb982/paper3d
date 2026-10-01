@@ -49,7 +49,13 @@
       #chart { display: block; width: 100%; height: 74px; margin-top: 6px; }
 
       /* ---- 右上：控制 ---- */
-      #ctrl { right: 12px; top: 12px; width: 246px; padding: 10px 12px; }
+      /* ★ 必须给 max-height + overflow-y：html/body 是 overflow:hidden，而面板是
+         position:fixed ⇒ 面板比窗口高时**底部永远够不着**（滑块多起来必踩，用户就发现
+         "最后一个滑块没了"）。 */
+      #ctrl {
+        right: 12px; top: 12px; width: 246px; padding: 10px 12px;
+        max-height: calc(100vh - 24px); overflow-y: auto; overscroll-behavior: contain;
+      }
       #ctrl h2 { margin: 0 0 8px; font-size: 12px; letter-spacing: .04em; color: var(--ink-dim); }
       #ctrl label { display: block; margin: 7px 0 2px; color: var(--ink-dim); font-size: 11px; }
       #ctrl label b { color: var(--ink); float: right; font-variant-numeric: tabular-nums; }
@@ -119,7 +125,7 @@
       <input id="i-lift" type="range" min="0" max="4" step="0.1" value="1" />
 
       <label>单脚支撑（一次抬一条）<b id="v-single">—</b></label>
-      <input id="i-single" type="range" min="0" max="6" step="0.1" value="1.5" />
+      <input id="i-single" type="range" min="0" max="6" step="0.1" value="2.5" />
 
       <label>骨盆/膝盖要动 <b id="v-jointmove">—</b></label>
       <input id="i-jointmove" type="range" min="0" max="4" step="0.1" value="0.3" />

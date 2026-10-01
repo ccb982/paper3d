@@ -114,7 +114,9 @@ export class Hud {
     bindRange('i-lateral', 'vLateral', (v) => hooks.onGaitTune({ lateral: v }), (v) => v.toFixed(2));
     bindRange('i-actrate', 'vActRate', (v) => hooks.onGaitTune({ actRate: v }), (v) => v.toFixed(2));
     for (const [id, key] of [['i-mhip_l', 'hip_l'], ['i-mhip_r', 'hip_r'], ['i-mknee_l', 'knee_l'], ['i-mknee_r', 'knee_r']] as [string, string][]) {
-      bindRange(id, `vM${key.slice(0, 1).toUpperCase()}${key.slice(1)}` as never,
+      // ★ label 的 id 必须和 index.html 里的完全一致（`v-mhip_l` 这种带短横），
+      //   拼错的话 $() 取不到元素 ⇒ 数值一直显示 "—"（用户看到的就是这个）。
+      bindRange(id, `v-m${key}`,
         (v) => hooks.onGaitTune({ moveScale: { [key]: v } }), (v) => v.toFixed(2));
     }
   }
