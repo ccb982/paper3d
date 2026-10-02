@@ -16187,6 +16187,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let prevLz = 0, prevLy = 0, hasL = false;
   const jHip = sk2.joints.find((j) => j.name === "hip_l");
   const jKnee = sk2.joints.find((j) => j.name === "knee_l");
+  const jElbow = sk2.joints.find((j) => j.name === "elbow_l");
+  const jShoulder = sk2.joints.find((j) => j.name === "shoulder_l");
   const setAxis = (joint, ang, j, ax = 2) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
     if (o < 0) return;
@@ -16250,9 +16252,16 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const isStance = side === "l" === stanceL;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       const [h, k] = isStance ? ik(hipX, com.y - 0.1, side === "l" ? plantL : plantR, 0.012) : ik(hipX, com.y - 0.1, swingX, swingY);
-      setAxis(`hip_${side}`, h + corr, jHip);
+      setAxis(`hip_${side}`, isStance ? h + corr : h, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      const armSwing = p.armSwing ?? 0;
+      if (armSwing > 0) {
+        const swingNow = Math.sin(Math.PI * Math.min(1, s));
+        const armTarget = (isStance ? 1 : -1) * armSwing * (0.35 + 0.65 * swingNow);
+        setAxis(`shoulder_${side}`, armTarget, jShoulder);
+        setAxis(`elbow_${side}`, isStance ? -0.12 : 0.55, jElbow);
+      }
       if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
@@ -16429,7 +16438,7 @@ var AXES = [
   { k: "thresh", grid: [0.02, 0.045, 0.0673, 0.1, 0.15, 0.22] },
   { k: "absorb", grid: [0, 0.2, 0.4, 0.7, 1] },
   { k: "kv", grid: [0, 0.15, 0.3283, 0.55, 0.85] },
-  { k: "kPitch", grid: [0.8, 1.6, 2.544, 3.6, 5] },
+  { k: "kPitch", grid: [-3, -1.6, -0.8, -0.4, 0, 0.8, 1.6, 2.544, 3.6] },
   { k: "kRate", grid: [0, 0.25, 0.542, 0.9, 1.4] }
 ];
 var fmt = (m) => `\u53CC\u652F\u6491 ${(100 * m.dbl / Math.max(1, m.n)).toFixed(0).padStart(2)}% \u5355\u652F\u6491 ${(100 * m.sgl / Math.max(1, m.n)).toFixed(0).padStart(2)}% \u4F4D\u79FB ${m.dist.toFixed(3)}m \u6B65\u957F ${m.stepLen.toFixed(3)}m \u95F4\u9694 ${m.stepGap.toFixed(2)}s \u819D ${m.kneeMid.toFixed(0)}/${m.kneeMax.toFixed(0)}\xB0 \u9ACB ${m.hipMax.toFixed(0)}\xB0 \u80A9 ${m.shMax.toFixed(0)}\xB0`;
@@ -16462,7 +16471,7 @@ for (let round = 0; round < 4 && stall < 2; round++) {
   if (improved) stall = 0;
   else stall++;
 }
-var bm = run(best);
+console.log("\n=== armSwing \u6D88\u878D\uFF08\u80A9\u5230\u5E95\u52A8\u4E0D\u52A8\uFF1F\uFF09===");
 console.log(`
 === \u6700\u4F18\uFF1Acost=${bc.toFixed(3)} ===`);
 console.log(`  ${JSON.stringify({

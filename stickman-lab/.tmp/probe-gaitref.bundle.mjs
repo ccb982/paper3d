@@ -16267,6 +16267,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let prevLz = 0, prevLy = 0, hasL = false;
   const jHip = sk2.joints.find((j) => j.name === "hip_l");
   const jKnee = sk2.joints.find((j) => j.name === "knee_l");
+  const jElbow = sk2.joints.find((j) => j.name === "elbow_l");
+  const jShoulder = sk2.joints.find((j) => j.name === "shoulder_l");
   const setAxis = (joint, ang, j, ax = 2) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
     if (o < 0) return;
@@ -16333,6 +16335,13 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      const armSwing = p.armSwing ?? 0;
+      if (armSwing > 0) {
+        const swingNow = Math.sin(Math.PI * Math.min(1, s));
+        const armTarget = (isStance ? 1 : -1) * armSwing * (0.35 + 0.65 * swingNow);
+        setAxis(`shoulder_${side}`, armTarget, jShoulder);
+        setAxis(`elbow_${side}`, isStance ? -0.12 : 0.55, jElbow);
+      }
       if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;

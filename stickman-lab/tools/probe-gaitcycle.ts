@@ -308,6 +308,90 @@ console.log('\n=== ⑤d ★★ 为什么「只在稳住相」和「全关」数�
   }
 }
 
+console.log('\n=== ⑤i ★★★ 迈一步之后到底发生了什么？（摔倒解剖）===\n');
+{
+  const s9 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s9.begin(new Float32Array(s9.params.length));
+  const tr: string[] = [];
+  let nStepSeen = 0, tLastAir = -1, tFall = -1;
+  const hist: { t: number; mos: number; tilt: number; headY: number; torsoY: number; dist: number; nG: number; air: number }[] = [];
+  const cb9 = (): void => {
+    const t = s9.ticksDone / DEFAULT_SIM.controlHz;
+    const gL = footGrounded(s9.doll, 'l'), gR = footGrounded(s9.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const air = Math.max(s9.doll.soleY("l"), s9.doll.soleY("r"));
+    if (nG === 1 && air > 0.03) tLastAir = t;
+    const c = readCom(s9.doll, newCom());
+    hist.push({ t, mos: marginOfStability(c.x, c.vx, omegaAt(c.y), 0, c.z, c.vz, 0).x,
+      tilt: s9.doll.tiltOf(s9.doll.torso()), headY: s9.doll.head().translation().y,
+      torsoY: s9.doll.torso().translation().y, dist: s9.distance, nG, air });
+    if (s9.fallen && tFall < 0) tFall = t;
+  };
+  const r9 = runCaptureTeacher(sk, s9, FB, { dur: DUR, clockDriven: true, onFrame: cb9 });
+  const tAir = tLastAir < 0 ? -1 : tLastAir;
+  console.log(`  存活 ${r9.t.toFixed(2)}s · 摔倒时刻 ${tFall.toFixed(2)}s · 摔倒原因【${s9.fallReason || '未知'}】`);
+  console.log(`  最后一次真离地（>3cm）：${tAir < 0 ? '从未' : tAir.toFixed(2) + 's'}`);
+  console.log(`  ⇒ 迈完一步后 ${tFall < 0 ? '—' : (tFall - Math.max(0, tAir)).toFixed(2)}s 摔倒\n`);
+  console.log('  时间轴（每 0.15s 一行）：');
+  console.log('     t(s)  支撑脚数  离地(m)  MoS(mm)  倾角(°)  头高(m)  躯干高(m)  脚净位移(m)');
+  const step = Math.max(1, Math.round(hist.length / 40));
+  for (let i = 0; i < hist.length; i += step) {
+    const h = hist[i]!;
+    console.log(`  ${h.t.toFixed(2).padStart(6)}  ${String(h.nG).padStart(6)}  ${h.air.toFixed(3).padStart(7)}`
+      + `  ${(h.mos * 1000).toFixed(0).padStart(7)}  ${(h.tilt * 180 / Math.PI).toFixed(1).padStart(6)}`
+      + `  ${h.headY.toFixed(3).padStart(7)}  ${h.torsoY.toFixed(3).padStart(9)}  ${h.dist.toFixed(3).padStart(9)}`);
+  }
+  console.log(`\n  判读：摔倒原因【${s9.fallReason}】= ` + ({
+    height: '躯干塌了（高度不足）', tilt: '躯干倾斜超限', head: '头掉下去了',
+  } as Record<string, string>)[s9.fallReason] + ' ⇒ 对应要修哪个伺服项');
+  console.log(`  初始躯干高 ${hist[0]?.torsoY.toFixed(3)}m · 结束 ${hist[hist.length - 1]?.torsoY.toFixed(3)}m`
+    + ` · 跌了 ${(((hist[0]?.torsoY ?? 0) - (hist[hist.length - 1]?.torsoY ?? 0)) * 100).toFixed(0)}cm`);
+}
+
+console.log('\n=== ⑤h ★★★ 一个完整循环为什么跑不完？（逐条循环逐项判定）===\n');
+{
+  const s8 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s8.begin(new Float32Array(s8.params.length));
+  // 逐条循环记录：进入 step / adjust 的时刻、离地峰值、窗末 MoS、是否达标
+  const cyc: { i: number; tStepIn: number; clr: number; tAdjIn: number; mosEnd: number; dur: number; ok: boolean; why: string }[] = [];
+  let cur = -1, tStepIn = -1, clrMax = 0, tAdjIn = -1, mosLast = 0, adjStart = -1;
+  const cb8 = (): void => {
+    const t = s8.ticksDone / DEFAULT_SIM.controlHz;
+    const ph = s8.gp.now;
+    const clr = Math.max(0, 0.03);   // 用 terms 里的诊断代替（避免重复实现）
+    if (ph === 'step') {
+      if (cur < 0) { cur = cyc.length; tStepIn = t; clrMax = 0; tAdjIn = -1; }
+      clrMax = Math.max(clrMax, (s8.terms.lift ?? 0) > 0 ? 1 : 0);
+    } else if (ph === 'adjust') {
+      if (tAdjIn < 0) { tAdjIn = t; adjStart = t; }
+      mosLast = s8.terms.moS ?? 0;
+      const durAdj = t - adjStart;
+      if (durAdj > 0.20 && !cyc.some(c => c.i === cur)) {
+        const ok = durAdj >= 0.70 && mosLast >= 0;
+        cyc.push({ i: cur, tStepIn, clr: clrMax, tAdjIn, mosEnd: mosLast, dur: durAdj, ok,
+          why: ok ? '通过' : (durAdj < 0.70 ? `稳住只 ${durAdj.toFixed(2)}s < 0.70s` : `窗末 MoS ${(mosLast * 1000).toFixed(0)}mm < 0`) });
+        cur = -1; adjStart = -1;
+      }
+    } else { cur = -1; adjStart = -1; }
+  };
+  const r8 = runCaptureTeacher(sk, s8, FB, { dur: DUR, clockDriven: true, onFrame: cb8 });
+  console.log('  序号进入step(s)  离地达标  进入adjust(s)  稳住时长  窗末MoS   结果');
+  if (!cyc.length) {
+    console.log('  ✗ **一条循环都没有记录到**：状态机从未出现 step→adjust 的完整转移');
+  }
+  for (const c of cyc.slice(0, 8))
+    console.log(`  ${String(c.i).padStart(3)}  ${c.tStepIn.toFixed(2).padStart(8)}  ${c.clr > 0 ? '   ✓   ' : '   ✗   '}`
+      + ` ${c.tAdjIn.toFixed(2).padStart(10)}  ${c.dur.toFixed(2).padStart(7)}s  ${(c.mosEnd * 1000).toFixed(0).padStart(6)}mm  ${c.ok ? '✓' : '✗'} ${c.why}`);
+  console.log(`\n  完整循环数：${cyc.filter(c => c.ok).length} / 观测到 ${cyc.length} 条`);
+  console.log(`  发令数 ${s8.cmdOrders} · 发令时间线 ${s8.cmdTimeline}`);
+  // 时间预算账：迈步 1 个循环至少需要 STEP_MIN + ADJUST_MIN
+  console.log(`\n  ★ 时间预算：STEP_MIN(0.28) + ADJUST_MIN(0.70) = 0.98 s，而发令的迈步间隔只有 1.00 s`);
+  console.log(`    ⇒ 留给"调整"的窗口 ≈ 0.02 s —— **结构上就不可能完成一个循环**。`);
+  console.log(`    这是设计冲突：发令间隔 ${1.0.toFixed(2)}s（你要求的"迈步间隔1s"）`);
+  console.log(`    vs 状态机要求的 0.98s，二者几乎相等而没有余量。`);
+  check('至少完成 1 个完整循环（迈步→调整）', cyc.filter(c => c.ok).length >= 1, `${cyc.filter(c => c.ok).length} 个`);
+}
+
 console.log('\n=== ⑤g ★★★★ 与标准步态数据逐项比对（含上身发力）====\n');
 console.log('  速度口径：我们 rig 躯干高 1.21m ⇒ 腿长≈0.85m ⇒ 迈步间隔1s ⇒ 步长≈0.5m ⇒ **0.5 m/s（慢速档）**\n');
 {

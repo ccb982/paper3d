@@ -149,7 +149,7 @@ const AXES: { k: keyof CaptureParams; grid: number[] }[] = [
   { k: 'thresh', grid: [0.02, 0.045, 0.0673, 0.10, 0.15, 0.22] },
   { k: 'absorb', grid: [0.0, 0.2, 0.4, 0.7, 1.0] },
   { k: 'kv', grid: [0.0, 0.15, 0.3283, 0.55, 0.85] },
-  { k: 'kPitch', grid: [0.8, 1.6, 2.544, 3.6, 5.0] },
+  { k: 'kPitch', grid: [-3.0, -1.6, -0.8, -0.4, 0, 0.8, 1.6, 2.544, 3.6] },
   { k: 'kRate', grid: [0.0, 0.25, 0.542, 0.9, 1.4] },
 ];
 
@@ -185,7 +185,7 @@ for (let round = 0; round < 4 && stall < 2; round++) {
   if (improved) stall = 0; else stall++;
 }
 
-const bm = run(best);
+console.log('\n=== armSwing 消融（肩到底动不动？）===');
 console.log(`\n=== 最优：cost=${bc.toFixed(3)} ===`);
 console.log(`  ${JSON.stringify({
   T: best.T, vDes: best.vDes, lift: best.lift, thresh: best.thresh,

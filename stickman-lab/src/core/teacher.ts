@@ -73,6 +73,10 @@ export interface CaptureParams {
    * = 平衡基线 0.16 的 **33.5×** ⇒ 完全没有角动量抵消。
    */
   spineSync: number;
+  /** ★★ 上身发力：手臂摆动幅度（rad）。肩与同侧髋**反相**摆动。
+   *   Sci Rep 2019：摆臂力矩是胸廓-骨盆反相的主因，并抵消摆动腿的垂直轴角动量。
+   *   0 = 关闭（旧行为：肩只是 `-h*0.4` 的装饰，实测只有 4°）。 */
+  armSwing?: number;
 }
 
 /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
@@ -128,7 +132,10 @@ export function runCaptureTeacher(
   let prevLz = 0, prevLy = 0, hasL = false;
 
   const jHip = sk.joints.find((j) => j.name === 'hip_l')!;
-  const jKnee = sk.joints.find((j) => j.name === 'knee_l')!;
+  const jKnee = sk.joints.find((j) => j.name === "knee_l")!;
+  const jElbow = sk.joints.find((j) => j.name === "elbow_l")!;
+  // ★ 肩必须用**肩自己的**限位归一化：之前错用 jHip ⇒ 指令幅度被髋的限位缩放了
+  const jShoulder = sk.joints.find((j) => j.name === "shoulder_l")!;
   const setAxis = (joint: string, ang: number, j: typeof jHip, ax = 2): void => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
     if (o < 0) return;
@@ -210,9 +217,30 @@ export function runCaptureTeacher(
       const [h, k] = isStance
         ? ik(hipX, com.y - 0.10, side === 'l' ? plantL : plantR, 0.012)
         : ik(hipX, com.y - 0.10, swingX, swingY);
+      // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
+      //   理由是双脚支撑时两腿受同一指令只会产生纯俯仰力矩。**实测更差了**：
+      //   存活 3.85s → 2.43s，双支撑 35% → 71%，步长 0.111m → 0.033m。
+      //   ⇒ 两条腿都需要这个修正（它同时起到"髋策略撑住躯干"的作用）。
+      //   保留原样；要试别的角色分工请先跑 npm run tune + npm run gaitcycle 回读。
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      // ★★ 上身发力（用户 2026-10-02 要求"包括上身发力"）：手臂摆动。
+      //   文献：肩与**同侧髋反向**摆动（相位差 ~180°）；Sci Rep 2019 证明正是这个
+      //   摆动力矩（arm swing moment）把胸廓拉向与骨盆**反相**、并抵消摆动腿的
+      //   垂直轴角动量。旧代码只给 `−h×0.4`（≈同相、幅度仅 4°）⇒ 手臂是摆设。
+      //   改：① 用**摆动进度** sin(πs) 驱动（真实摆臂在摆动相最大）
+      //       ② 与**同侧髋**符号相反（反相）
+      //       ③ 幅度 0.6~0.8 × 髋幅度，肩峰可达 ~25~30°
+      const armSwing = p.armSwing ?? 0;
+      if (armSwing > 0) {
+        const swingNow = Math.sin(Math.PI * Math.min(1, s));
+        // 同侧腿在**摆**时，同侧肩要**向后**；同侧腿在**支撑**时，肩向前
+        const armTarget = (isStance ? 1 : -1) * armSwing * (0.35 + 0.65 * swingNow);
+        setAxis(`shoulder_${side}`, armTarget, jShoulder);
+        // 肘：摆动相微屈（真实步态肘屈 20~40°），支撑相伸直
+        setAxis(`elbow_${side}`, isStance ? -0.12 : 0.55, jElbow);
+      }
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。

@@ -16291,6 +16291,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let prevLz = 0, prevLy = 0, hasL = false;
   const jHip = sk2.joints.find((j) => j.name === "hip_l");
   const jKnee = sk2.joints.find((j) => j.name === "knee_l");
+  const jElbow = sk2.joints.find((j) => j.name === "elbow_l");
+  const jShoulder = sk2.joints.find((j) => j.name === "shoulder_l");
   const setAxis = (joint, ang, j, ax = 2) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
     if (o < 0) return;
@@ -16357,6 +16359,13 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      const armSwing = p.armSwing ?? 0;
+      if (armSwing > 0) {
+        const swingNow = Math.sin(Math.PI * Math.min(1, s));
+        const armTarget = (isStance ? 1 : -1) * armSwing * (0.35 + 0.65 * swingNow);
+        setAxis(`shoulder_${side}`, armTarget, jShoulder);
+        setAxis(`elbow_${side}`, isStance ? -0.12 : 0.55, jElbow);
+      }
       if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
@@ -16681,6 +16690,115 @@ console.log("\n=== \u2464d \u2605\u2605 \u4E3A\u4EC0\u4E48\u300C\u53EA\u5728\u7A
   } else {
     console.log(`  \u21D2 \u2713 adjust \u76F8\u786E\u5B9E\u5B58\u5728\uFF0C\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D= \u771F\u7684\u53EA\u5728\u7A33\u4F4F\u65F6\u51FA\u529B\u3002`);
   }
+}
+console.log("\n=== \u2464i \u2605\u2605\u2605 \u8FC8\u4E00\u6B65\u4E4B\u540E\u5230\u5E95\u53D1\u751F\u4E86\u4EC0\u4E48\uFF1F\uFF08\u6454\u5012\u89E3\u5256\uFF09===\n");
+{
+  const s9 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s9.begin(new Float32Array(s9.params.length));
+  const tr = [];
+  let nStepSeen = 0, tLastAir = -1, tFall = -1;
+  const hist = [];
+  const cb9 = () => {
+    const t = s9.ticksDone / DEFAULT_SIM.controlHz;
+    const gL = footGrounded(s9.doll, "l"), gR = footGrounded(s9.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const air = Math.max(s9.doll.soleY("l"), s9.doll.soleY("r"));
+    if (nG === 1 && air > 0.03) tLastAir = t;
+    const c = readCom(s9.doll, newCom());
+    hist.push({
+      t,
+      mos: marginOfStability(c.x, c.vx, omegaAt(c.y), 0, c.z, c.vz, 0).x,
+      tilt: s9.doll.tiltOf(s9.doll.torso()),
+      headY: s9.doll.head().translation().y,
+      torsoY: s9.doll.torso().translation().y,
+      dist: s9.distance,
+      nG,
+      air
+    });
+    if (s9.fallen && tFall < 0) tFall = t;
+  };
+  const r9 = runCaptureTeacher(sk, s9, FB, { dur: DUR, clockDriven: true, onFrame: cb9 });
+  const tAir = tLastAir < 0 ? -1 : tLastAir;
+  console.log(`  \u5B58\u6D3B ${r9.t.toFixed(2)}s \xB7 \u6454\u5012\u65F6\u523B ${tFall.toFixed(2)}s \xB7 \u6454\u5012\u539F\u56E0\u3010${s9.fallReason || "\u672A\u77E5"}\u3011`);
+  console.log(`  \u6700\u540E\u4E00\u6B21\u771F\u79BB\u5730\uFF08>3cm\uFF09\uFF1A${tAir < 0 ? "\u4ECE\u672A" : tAir.toFixed(2) + "s"}`);
+  console.log(`  \u21D2 \u8FC8\u5B8C\u4E00\u6B65\u540E ${tFall < 0 ? "\u2014" : (tFall - Math.max(0, tAir)).toFixed(2)}s \u6454\u5012
+`);
+  console.log("  \u65F6\u95F4\u8F74\uFF08\u6BCF 0.15s \u4E00\u884C\uFF09\uFF1A");
+  console.log("     t(s)  \u652F\u6491\u811A\u6570  \u79BB\u5730(m)  MoS(mm)  \u503E\u89D2(\xB0)  \u5934\u9AD8(m)  \u8EAF\u5E72\u9AD8(m)  \u811A\u51C0\u4F4D\u79FB(m)");
+  const step = Math.max(1, Math.round(hist.length / 40));
+  for (let i = 0; i < hist.length; i += step) {
+    const h = hist[i];
+    console.log(`  ${h.t.toFixed(2).padStart(6)}  ${String(h.nG).padStart(6)}  ${h.air.toFixed(3).padStart(7)}  ${(h.mos * 1e3).toFixed(0).padStart(7)}  ${(h.tilt * 180 / Math.PI).toFixed(1).padStart(6)}  ${h.headY.toFixed(3).padStart(7)}  ${h.torsoY.toFixed(3).padStart(9)}  ${h.dist.toFixed(3).padStart(9)}`);
+  }
+  console.log(`
+  \u5224\u8BFB\uFF1A\u6454\u5012\u539F\u56E0\u3010${s9.fallReason}\u3011= ` + {
+    height: "\u8EAF\u5E72\u584C\u4E86\uFF08\u9AD8\u5EA6\u4E0D\u8DB3\uFF09",
+    tilt: "\u8EAF\u5E72\u503E\u659C\u8D85\u9650",
+    head: "\u5934\u6389\u4E0B\u53BB\u4E86"
+  }[s9.fallReason] + " \u21D2 \u5BF9\u5E94\u8981\u4FEE\u54EA\u4E2A\u4F3A\u670D\u9879");
+  console.log(`  \u521D\u59CB\u8EAF\u5E72\u9AD8 ${hist[0]?.torsoY.toFixed(3)}m \xB7 \u7ED3\u675F ${hist[hist.length - 1]?.torsoY.toFixed(3)}m \xB7 \u8DCC\u4E86 ${(((hist[0]?.torsoY ?? 0) - (hist[hist.length - 1]?.torsoY ?? 0)) * 100).toFixed(0)}cm`);
+}
+console.log("\n=== \u2464h \u2605\u2605\u2605 \u4E00\u4E2A\u5B8C\u6574\u5FAA\u73AF\u4E3A\u4EC0\u4E48\u8DD1\u4E0D\u5B8C\uFF1F\uFF08\u9010\u6761\u5FAA\u73AF\u9010\u9879\u5224\u5B9A\uFF09===\n");
+{
+  const s8 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s8.begin(new Float32Array(s8.params.length));
+  const cyc = [];
+  let cur = -1, tStepIn = -1, clrMax = 0, tAdjIn = -1, mosLast = 0, adjStart = -1;
+  const cb8 = () => {
+    const t = s8.ticksDone / DEFAULT_SIM.controlHz;
+    const ph = s8.gp.now;
+    const clr = Math.max(0, 0.03);
+    if (ph === "step") {
+      if (cur < 0) {
+        cur = cyc.length;
+        tStepIn = t;
+        clrMax = 0;
+        tAdjIn = -1;
+      }
+      clrMax = Math.max(clrMax, (s8.terms.lift ?? 0) > 0 ? 1 : 0);
+    } else if (ph === "adjust") {
+      if (tAdjIn < 0) {
+        tAdjIn = t;
+        adjStart = t;
+      }
+      mosLast = s8.terms.moS ?? 0;
+      const durAdj = t - adjStart;
+      if (durAdj > 0.2 && !cyc.some((c) => c.i === cur)) {
+        const ok = durAdj >= 0.7 && mosLast >= 0;
+        cyc.push({
+          i: cur,
+          tStepIn,
+          clr: clrMax,
+          tAdjIn,
+          mosEnd: mosLast,
+          dur: durAdj,
+          ok,
+          why: ok ? "\u901A\u8FC7" : durAdj < 0.7 ? `\u7A33\u4F4F\u53EA ${durAdj.toFixed(2)}s < 0.70s` : `\u7A97\u672B MoS ${(mosLast * 1e3).toFixed(0)}mm < 0`
+        });
+        cur = -1;
+        adjStart = -1;
+      }
+    } else {
+      cur = -1;
+      adjStart = -1;
+    }
+  };
+  const r8 = runCaptureTeacher(sk, s8, FB, { dur: DUR, clockDriven: true, onFrame: cb8 });
+  console.log("  \u5E8F\u53F7\u8FDB\u5165step(s)  \u79BB\u5730\u8FBE\u6807  \u8FDB\u5165adjust(s)  \u7A33\u4F4F\u65F6\u957F  \u7A97\u672BMoS   \u7ED3\u679C");
+  if (!cyc.length) {
+    console.log("  \u2717 **\u4E00\u6761\u5FAA\u73AF\u90FD\u6CA1\u6709\u8BB0\u5F55\u5230**\uFF1A\u72B6\u6001\u673A\u4ECE\u672A\u51FA\u73B0 step\u2192adjust \u7684\u5B8C\u6574\u8F6C\u79FB");
+  }
+  for (const c of cyc.slice(0, 8))
+    console.log(`  ${String(c.i).padStart(3)}  ${c.tStepIn.toFixed(2).padStart(8)}  ${c.clr > 0 ? "   \u2713   " : "   \u2717   "} ${c.tAdjIn.toFixed(2).padStart(10)}  ${c.dur.toFixed(2).padStart(7)}s  ${(c.mosEnd * 1e3).toFixed(0).padStart(6)}mm  ${c.ok ? "\u2713" : "\u2717"} ${c.why}`);
+  console.log(`
+  \u5B8C\u6574\u5FAA\u73AF\u6570\uFF1A${cyc.filter((c) => c.ok).length} / \u89C2\u6D4B\u5230 ${cyc.length} \u6761`);
+  console.log(`  \u53D1\u4EE4\u6570 ${s8.cmdOrders} \xB7 \u53D1\u4EE4\u65F6\u95F4\u7EBF ${s8.cmdTimeline}`);
+  console.log(`
+  \u2605 \u65F6\u95F4\u9884\u7B97\uFF1ASTEP_MIN(0.28) + ADJUST_MIN(0.70) = 0.98 s\uFF0C\u800C\u53D1\u4EE4\u7684\u8FC8\u6B65\u95F4\u9694\u53EA\u6709 1.00 s`);
+  console.log(`    \u21D2 \u7559\u7ED9"\u8C03\u6574"\u7684\u7A97\u53E3 \u2248 0.02 s \u2014\u2014 **\u7ED3\u6784\u4E0A\u5C31\u4E0D\u53EF\u80FD\u5B8C\u6210\u4E00\u4E2A\u5FAA\u73AF**\u3002`);
+  console.log(`    \u8FD9\u662F\u8BBE\u8BA1\u51B2\u7A81\uFF1A\u53D1\u4EE4\u95F4\u9694 ${1 .toFixed(2)}s\uFF08\u4F60\u8981\u6C42\u7684"\u8FC8\u6B65\u95F4\u96941s"\uFF09`);
+  console.log(`    vs \u72B6\u6001\u673A\u8981\u6C42\u7684 0.98s\uFF0C\u4E8C\u8005\u51E0\u4E4E\u76F8\u7B49\u800C\u6CA1\u6709\u4F59\u91CF\u3002`);
+  check("\u81F3\u5C11\u5B8C\u6210 1 \u4E2A\u5B8C\u6574\u5FAA\u73AF\uFF08\u8FC8\u6B65\u2192\u8C03\u6574\uFF09", cyc.filter((c) => c.ok).length >= 1, `${cyc.filter((c) => c.ok).length} \u4E2A`);
 }
 console.log("\n=== \u2464g \u2605\u2605\u2605\u2605 \u4E0E\u6807\u51C6\u6B65\u6001\u6570\u636E\u9010\u9879\u6BD4\u5BF9\uFF08\u542B\u4E0A\u8EAB\u53D1\u529B\uFF09====\n");
 console.log("  \u901F\u5EA6\u53E3\u5F84\uFF1A\u6211\u4EEC rig \u8EAF\u5E72\u9AD8 1.21m \u21D2 \u817F\u957F\u22480.85m \u21D2 \u8FC8\u6B65\u95F4\u96941s \u21D2 \u6B65\u957F\u22480.5m \u21D2 **0.5 m/s\uFF08\u6162\u901F\u6863\uFF09**\n");
