@@ -16665,6 +16665,12 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    const footCX_B = stanceL ? footBufL[0] : footBufR[0];
+    const comShiftB = com.x - footCX_B;
+    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
+    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
+    dbgLog.comShiftB = +comShiftB.toFixed(3);
+    dbgLog.corrCom = +corrCom.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
@@ -16698,7 +16704,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const roleCell = isStance ? cStance : cSwing;
       const stanceLock = p.stanceLock ?? 0;
       let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = isStance ? h + corr : h;
+      let hipCmd = isStance ? h + corr + corrCom : h;
       if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
         const w = stanceLock;
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
@@ -16812,6 +16818,16 @@ var CAPTURE_GAIT = {
   spineSync: 0.25,
   /** ★ 矢状面承重转移（CoM 反馈 → 踝力矩移 CoP）。PLOS CB 2021 中支撑相增益最高。 */
   kCop: 3,
+  /**
+   * ★★ B 方案：矢状面重心转移 —— CoM 相对支撑脚的纵向位置/速度反馈 → 支撑髋俯仰。
+   *   注意：与 BalancerSpec.kComX（镇定器用的**矢状反馈**）是**不同的东西**，
+   *   故命名 kWtX 以免混淆。probe-arch 二维扫描最优 (kWtX×kWtVx = 4×0.3)。
+   *   扫描依据：kWtX=4,kWtVx=0.3 ⇒ 位移 0.643m/2.72s（=0.236 m/s，目标 0.39）、
+   *   峰值倾角 21.8°（全表最低）、离地峰 52mm；kWtX=0 时位移仅 0.048m（原地不动）。
+   */
+  kWtX: 4,
+  /** ★ B 方案的 CoM 速度阻尼项（s）。 */
+  kWtVx: 0.3,
   /** 躯干俯仰 → 髋（★ 负号才接得住） */
   kPitch: 0.4,
   // ★ 重标（见 probe-arch 存活寻优）
@@ -16858,6 +16874,8 @@ var FB = {
   thresh: CAPTURE_GAIT.thresh,
   spineSync: CAPTURE_GAIT.spineSync,
   kCop: CAPTURE_GAIT.kCop,
+  kWtX: CAPTURE_GAIT.kWtX,
+  kWtVx: CAPTURE_GAIT.kWtVx,
   cmBalance: 0,
   cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb,
@@ -17739,20 +17757,3 @@ for (const kc of [0, 3, 30, 100]) {
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
 console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
-console.log("\n=== A \u5224\u636E\uFF1A\u8E1D\u63A5\u6CA1\u63A5\u8FDB\u52A8\u529B\u5B66 ===\n");
-console.log("  \u8E1D\u4E0A\u9650  \u672BCoM\u524D\u540E  \u5CF0\u503C\u503E\xB0  \u5B58\u6D3B     \u79BB\u5730\u5CF0  \u524D\u811A\u627F\u91CD\u5CF0");
-for (const mt of [45, 150, 400]) {
-  const skA = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt });
-  const fA = new Sim(skA, shapeForJoints(skA.joints.length), { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
-  fA.begin(new Float32Array(fA.params.length));
-  let pk = 0, cmX = 0, clr = 0, load = 0;
-  const rA = runCaptureTeacher(skA, fA, { ...FB, kCop: 30 }, { dur: 3, clockDriven: true, onFrame: () => {
-    pk = Math.max(pk, fA.doll.tiltOf(fA.doll.torso()));
-    cmX = readCom(fA.doll, cTmp).x;
-    clr = Math.max(clr, Math.max(fA.doll.soleY("l"), fA.doll.soleY("r")));
-    const [fl, fr] = fA.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-    load = Math.max(load, Math.max(fl, fr));
-  } });
-  console.log(`  ${String(mt).padStart(5)}  ${cmX.toFixed(4).padStart(9)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${rA.t.toFixed(2)}s  ${(clr * 1e3).toFixed(0).padStart(5)}mm  ${load.toFixed(2).padStart(9)}`);
-}
-console.log("\n  \u4E09\u6863\u82E5\u5B8C\u5168\u4E00\u81F4 \u21D2 \u8E1D\u5728\u7ED3\u6784\u4E0A\u5C31\u6CA1\u63A5\u5165\u52A8\u529B\u5B66 \u21D2 A \u5FC5\u987B\u5199\u663E\u5F0F\u652F\u6491\u70B9\u6A21\u578B\uFF0C\u4E0D\u662F\u8C03\u53C2\u6570\u3002");

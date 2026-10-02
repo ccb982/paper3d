@@ -27,7 +27,7 @@ const shape = shapeForJoints(sk.joints.length);
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, cmBalance: 0, cmBalanceD: 0,
+  spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, kWtX: CAPTURE_GAIT.kWtX, kWtVx: CAPTURE_GAIT.kWtVx, cmBalance: 0, cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
   kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
   ankleSwing: 12, anklePush: 15, ankleStance: 0,
@@ -905,21 +905,3 @@ for (const kc of [0, 3, 30, 100]) {
 }
 console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
 
-// ===== A 方案决定性判据：踝到底接没接进动力学 =====
-console.log('\n=== A 判据：踝接没接进动力学 ===\n');
-console.log('  踝上限  末CoM前后  峰值倾°  存活     离地峰  前脚承重峰');
-for (const mt of [45, 150, 400]) {
-  const skA = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt } as never);
-  const fA = new Sim(skA, shapeForJoints(skA.joints.length), { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
-  fA.begin(new Float32Array(fA.params.length));
-  let pk = 0, cmX = 0, clr = 0, load = 0;
-  const rA = runCaptureTeacher(skA, fA, { ...FB, kCop: 30 }, { dur: 3, clockDriven: true, onFrame: (): void => {
-    pk = Math.max(pk, fA.doll.tiltOf(fA.doll.torso()));
-    cmX = readCom(fA.doll, cTmp).x;
-    clr = Math.max(clr, Math.max(fA.doll.soleY('l'), fA.doll.soleY('r')));
-    const [fl, fr] = fA.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-    load = Math.max(load, Math.max(fl, fr));
-  } });
-  console.log(`  ${String(mt).padStart(5)}  ${cmX.toFixed(4).padStart(9)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${rA.t.toFixed(2)}s  ${(clr * 1000).toFixed(0).padStart(5)}mm  ${load.toFixed(2).padStart(9)}`);
-}
-console.log('\n  三档若完全一致 ⇒ 踝在结构上就没接入动力学 ⇒ A 必须写显式支撑点模型，不是调参数。');

@@ -78,6 +78,15 @@ export interface CaptureParams {
    *   实现见 teacher.ts 中 xi / comShiftErr / copTau / copGainPhase。
    */
   kCop?: number;
+  /**
+   * ★★ B 方案：矢状面重心转移增益（rad/m）。CoM 相对支撑脚的纵向位置 + 速度反馈 → 支撑髋俯仰。
+   *   文献：Neptune/Perry Front Neurol 2019（髋可维持 CoM 增量，效率为跖屈肌的 1/4 ⇒ 增益需大）；
+   *         Becker/PLOS Comp Biol 2021（CoM 位置+速度延迟线性反馈即可解释关节矩反应）。
+   *   实现见 teacher.ts 的 comShiftB / corrCom。
+   */
+  kWtX?: number;
+  /** ★ B 方案的 CoM 速度阻尼项（s）。 */
+  kWtVx?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -474,6 +483,33 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const absorb = Math.min(ABSORB_MAX, p.absorb)
       * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★ B 方案：矢状面重心转移（用户 2026-10-02："前脚承重都没做"）
+    //   动机：整套 APA 转移此前**只写在横向 (z) 上**（`copZ - com.z`），
+    //   而"前脚承重"要的是**矢状面前移** ⇒ 矢状面完全没有承重转移控制器。
+    //   另：`loadAccept = 0.5` 在两脚平分时就已满足，状态机一进 toStance 就宣布
+    //   "转移完成" ⇒ 转移从未启动却被当成完成。
+    //
+    //   文献依据 ——
+    //   · Neptune/Perry, Front Neurol 2019, 10:999：髋肌也能维持 CoM 增量，
+    //     但"the work produced by these muscles has been **four times more efficient**"
+    //     （指跖屈肌 vs 髋肌）⇒ 髋效率低、需要的增益大。
+    //   · Becker/Banks/Whittle, PLOS Comput Biol 2021, 17(6):e1008369：
+    //     CoM 位置+速度的延迟线性反馈即可解释踝反射 ⇒ 同样口径用在髋俯仰上成立。
+    //
+    //   控制器（阻尼倒立摆形式）：
+    //     e  = com.x − 支撑脚x        （CoM 相对支撑脚的纵向位置）
+    //     ė  = com.vx                 （CoM 前移速度）
+    //     τ  = −kComX·e − kComVx·ė     （把 CoM 拉回/停在支撑脚上方）
+    //   ⇒ 符号：CoM 在脚**前方**(e>0) 且前移 ⇒ 给**屈髋**把躯干压回去、拉 CoM 后移。
+    const footCX_B = stanceL ? footBufL[0]! : footBufR[0]!;
+    const comShiftB = com.x - footCX_B;
+    //   ⚠ 必须限幅：`comShiftB` 在**不换脚**时会无界增长（脚不动，CoM 一路前移），
+    //   实测 ξ 3s 内 0.006→0.667 而 footCX 只到 −0.094 ⇒ 误差 +0.5m ⇒
+    //   指令 −2.0 rad 直接饱和、髋被顶死。限幅 ±0.45 rad。
+    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
+    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
+    dbgLog.comShiftB = +comShiftB.toFixed(3); dbgLog.corrCom = +corrCom.toFixed(4);
     // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
     //   用状态机在"迈步相/调整相"之间调度增益）。
     //   实测依据（probe-gaitcycle ④）：脊椎反相**全程开**会把双支撑占比从 83% 顶到 94%
@@ -551,7 +587,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   正确分工：**摆动腿只吃 IK**（纯迈步），`corr` 只给支撑腿。
       //   （注：早期试过"corr 只给支撑腿"更差，但那是**归一化还坏着**的时候测的
       //     ——膝只能动 1.6°，结论不可信；现在重测。）
-      let hipCmd = isStance ? h + corr : h;
+      let hipCmd = isStance ? h + corr + corrCom : h;
       // ★★★ 支撑腿在「迈步相」锁定（用户："脚往前迈的时候，身体别动"）
       //   回读依据（npm run roles）：step 相支撑腿 **髋 ROM 38.5° / 膝 ROM 30.7°**，
       //   而指令表要求 髋 15° / 膝 15.7°（Oberg slow midstance）⇒ 实际是要求的 2 倍。
