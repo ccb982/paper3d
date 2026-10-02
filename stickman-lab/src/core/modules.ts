@@ -63,8 +63,12 @@ export const MODULES: readonly Def[] = [
   //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
   //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
   //     只在落地后的调整相用来纠正身体。
-  { id: 'spineSync', label: '骨盆-脊椎反相', part: 'spine', phases: ['adjust'], singleOnly: false },
-  { id: 'cmBalance', label: 'CMP 质心力矩', part: 'spine', phases: ['adjust'], singleOnly: false },
+  // ★ 2026-10-02 修正：原来写 `phases: ['adjust']`，但 adjust 相实测 **0 帧**
+  //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
+  //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
+  //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
+  { id: 'spineSync', label: '骨盆-脊椎反相', part: 'spine', phases: ['both', 'step', 'adjust'], singleOnly: false },
+  { id: 'cmBalance', label: 'CMP 质心力矩', part: 'spine', phases: ['both', 'step', 'adjust'], singleOnly: false },
   { id: 'pelvisFirst', label: '盆骨/髋优先', part: 'l', phases: ['step', 'adjust'], singleOnly: true },
   { id: 'refShape', label: '文献髋膝形状', part: 'l', phases: ['step', 'adjust'], singleOnly: true },
   { id: 'placement', label: '落点/捕获点', part: 'l', phases: ['step', 'adjust'], singleOnly: true },

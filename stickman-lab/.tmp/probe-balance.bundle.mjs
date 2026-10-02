@@ -6249,7 +6249,11 @@ var ANKLE_JOINTS = [
   { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
   { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
 ];
+var HIP_LIMIT = [-95, 100];
 var meta = parts_default;
+for (const j of meta.joints) {
+  if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
 if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
 var META = meta;
 var PART_BY_KEY = new Map(
@@ -13469,6 +13473,29 @@ var Ragdoll = class {
     this.jointRot(i, buf);
     return buf[2];
   }
+  /**
+   * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
+   *   teacher 的 IK 需要真实髋位置 —— 之前用 `com.y − HIP_DY` 推算，
+   *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
+   *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
+   */
+  jointWorld(i, out) {
+    const j = this.sk.joints[i];
+    if (!j) {
+      out[0] = out[1] = out[2] = 0;
+      return;
+    }
+    const p = this.bodies[this.jointBodies[i * 2]];
+    const t = p.translation(), r = p.rotation();
+    const lx = j.parentLocal[0], ly = j.parentLocal[1], lz = j.parentLocal[2];
+    const ix = r.w * lx + r.y * lz - r.z * ly;
+    const iy = r.w * ly + r.z * lx - r.x * lz;
+    const iz = r.w * lz + r.x * ly - r.y * lx;
+    const iw = -r.x * lx - r.y * ly - r.z * lz;
+    out[0] = t.x + ix * r.w + iw * -r.x + iy * -r.z - iz * -r.y;
+    out[1] = t.y + iy * r.w + iw * -r.y + iz * -r.x - ix * -r.z;
+    out[2] = t.z + iz * r.w + iw * -r.z + ix * -r.y - iy * -r.x;
+  }
   /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
   jointSpeed(i) {
     const buf = this.rvTmp;
@@ -14678,8 +14705,12 @@ var MODULES = [
   //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
   //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
   //     只在落地后的调整相用来纠正身体。
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["adjust"], singleOnly: false },
-  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["adjust"], singleOnly: false },
+  // ★ 2026-10-02 修正：原来写 `phases: ['adjust']`，但 adjust 相实测 **0 帧**
+  //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
+  //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
+  //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -16344,30 +16375,66 @@ function cell(phase, role) {
   return PHASE_ROLE.find((c) => c.phase === phase && c.role === role && c.w > 0) ?? null;
 }
 
+// src/core/gaitEvents.ts
+var THR = {
+  /** IC 初次接触：载荷占比超过此值 */
+  IC: 0.02,
+  /** TO 离趾：载荷占比低于此值（JAB 2003：离趾要用低阈值） */
+  TO: 0.01,
+  /** 起立加载完成的判据（Perry：体重压到该腿） */
+  loadAccept: 0.5
+};
+var WT = {
+  min: 0.134,
+  max: 0.207,
+  /** APA 预备段占比（Hansen 2016：先反向预备，再正向转移） */
+  apaShare: 0.35
+};
+function copTargetZ(stage, stanceZ, swingZ) {
+  switch (stage) {
+    case "APA-back":
+      return stanceZ;
+    case "APA-toSwing":
+      return stanceZ * 0.5 + swingZ * 0.5;
+    case "toStance":
+      return stanceZ * 1.35;
+    case "done":
+      return stanceZ;
+    default:
+      return stanceZ;
+  }
+}
+
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
+var PUSH_FRAC = 0.75;
+var STABLE_HOLD = 0.45;
+var LAT_MAX_ERR = 0.04;
 var PX2M = 68e-5;
 var Y = (py) => (2899 - py) * PX2M;
-var LEN_A = Y(1574.5) - Y(2206);
-var LEN_B = Y(2206) - Y(2792);
-var HIP_Z = 7e-3;
-var HIP_DY = 0.18;
+var LEN_A = 0.407;
+var LEN_B = 0.379;
+var HIP_Z = 0.05;
+var STANCE_Z = 0.07;
+var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
-function ik(hipX, hipY, fx, fy) {
+function ik(hipX, hipY, fx, fy, planeScale = 1) {
+  const la = LEN_A * planeScale, lb = LEN_B * planeScale;
   const dx = fx - hipX, dy = fy - hipY;
   let d = Math.hypot(dx, dy);
-  d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-  d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
+  d = Math.min(d, (la + lb) * 0.995);
+  d = Math.max(d, Math.abs(la - lb) + 0.02);
   const base = Math.atan2(dx, -dy);
   const cosK = Math.max(-1, Math.min(
     1,
-    (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)
+    (la * la + lb * lb - d * d) / (2 * la * lb)
   ));
   const interior = Math.acos(cosK);
-  const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
+  const hipRel = base + Math.atan2(lb * Math.sin(interior), la + lb * Math.cos(interior));
   return [hipRel, -(Math.PI - interior)];
 }
+var LEG = LEN_A + LEN_B;
 function runCaptureTeacher(sk2, sim, p, opts = {}) {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
@@ -16378,6 +16445,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   const iR = sk2.bodies.findIndex((b) => b.key === "shin_r");
   let plantL = sim.doll.bodies[iL].translation().x;
   let plantR = sim.doll.bodies[iR].translation().x;
+  let plantLz = HIP_Z, plantRz = -HIP_Z;
   let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
   const lbuf = new Float64Array(3);
   const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
@@ -16401,12 +16469,22 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let nAxes = 0;
   let curOwner = "?";
   const ownerLog = /* @__PURE__ */ new Map();
+  const hipW = new Float64Array(3);
   const angLog = {};
   const dbgLog = {};
   const hipDy = p.hipDy ?? HIP_DY;
   let hipYRef = -1;
   const swapTrace = [];
   let stanceSeq = "";
+  let wtStage = "idle";
+  let wtT = 0;
+  let wtDone = false;
+  let stableT = 0;
+  let wtLoadOf = () => {
+    const [fl, fr] = sim.doll.footLoadFrac(dt);
+    return stanceLNow ? fl : fr;
+  };
+  let stanceLNow = true;
   let lastDiagT = -1;
   while (!sim.finished && t < dur) {
     sim.advance(1);
@@ -16418,11 +16496,17 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     const om = omegaAt(com.y);
     const xi = com.x + com.vx / om;
     let stanceL = prevStance === 1;
+    stanceLNow = stanceL;
     const swingIsL = !stanceL;
     if (clockDriven) {
       const half = p.T * 0.5;
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim.doll, "l") : footGrounded(sim.doll, "r");
+      const mosNow = xi - (com.x + com.vx / om);
+      const stableNow = wtStage === "done" && mosNow > 0;
+      if (stableNow) stableT += dt;
+      else stableT = 0;
+      const stableEnough = stableT >= STABLE_HOLD;
       const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
       sim.doll.soleXZ("l", footBufL);
       sim.doll.soleXZ("r", footBufR);
@@ -16438,7 +16522,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         });
         if (swapTrace.length > 400) swapTrace.shift();
       }
-      if (landed && t >= readyT) {
+      if (landed && t >= readyT && stableEnough) {
         steps++;
         lastSwitch = t;
         stanceL = swingIsL;
@@ -16447,6 +16531,13 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         sim.doll.soleXZ("l", footBufL);
         sim.doll.soleXZ("r", footBufR);
         const landedX = stanceL ? footBufL[0] : footBufR[0];
+        const landedZ = stanceL ? HIP_Z : -HIP_Z;
+        plantLz = stanceL ? landedZ : plantLz;
+        if (stanceL) {
+          plantL = landedX;
+        } else {
+          plantR = landedX;
+        }
         if (stanceL) plantL = landedX;
         else plantR = landedX;
       }
@@ -16462,6 +16553,9 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+    const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
+    const inPush = s >= PUSH_FRAC;
+    const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
     let swingX = swingX0;
@@ -16498,7 +16592,14 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const isStance = side === "l" === stanceL;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
-      const [h, k] = isStance ? ik(hipX, hipYRef, side === "l" ? plantL : plantR, 0.012) : ik(hipX, hipYRef, swingX, swingY);
+      const hipY = hipYRef;
+      const hipZ = side === "l" ? HIP_Z : -HIP_Z;
+      const footZTarget = side === "l" ? STANCE_Z : -STANCE_Z;
+      const dzWant = footZTarget - hipZ;
+      const sinAb = Math.max(-0.7, Math.min(0.7, dzWant / LEG));
+      const abductFF = Math.asin(sinAb);
+      const planeScale = Math.sqrt(Math.max(0.05, 1 - sinAb * sinAb));
+      const [h, k] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012, planeScale) : ik(hipX, hipY, swingX, swingY, planeScale);
       const phNow = sim.gp.now;
       const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
       const roleCell = isStance ? cStance : cSwing;
@@ -16510,7 +16611,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
         if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
-      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;
+      if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
       curOwner = isStance ? `balance(ik+corr${stanceLock > 0 ? "+lock" : ""}${s > 0.5 ? "+push" : ""})` : "step(ik)";
       if (!isStance) hipCmd = h;
       setAxis(`hip_${side}`, hipCmd, jHip);
@@ -16518,7 +16619,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      setAxis(`foot_${side}`, ankleDeg * Math.PI / 180, jFoot);
+      setAxis(`foot_${side}`, (ankleDeg + (isStance ? pushTorque : 0)) * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
@@ -16531,9 +16632,39 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
       }
       const stanceZ = stanceL ? HIP_Z : -HIP_Z;
-      const shiftErr = stanceZ - com.z;
-      const latCorr = p.kLat * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
+      const shiftErrRaw = stanceZ - com.z;
+      if (wtDone && s < 0.05) {
+        wtStage = "APA-back";
+        wtT = 0;
+        wtDone = false;
+      } else if (wtStage === "idle") {
+        wtStage = "APA-back";
+        wtT = 0;
+      }
+      if (wtStage !== "done") {
+        wtT += dt;
+        const load = wtLoadOf();
+        if (wtStage === "APA-back" && wtT >= WT.min * WT.apaShare) {
+          wtStage = "APA-toSwing";
+          wtT = 0;
+        } else if (wtStage === "APA-toSwing" && wtT >= WT.min * (1 - WT.apaShare)) {
+          wtStage = "toStance";
+          wtT = 0;
+        } else if (wtStage === "toStance" && load >= THR.loadAccept) {
+          wtStage = "done";
+          wtDone = true;
+        } else if (wtStage === "toStance" && wtT > WT.max) {
+          wtStage = "done";
+          wtDone = true;
+        }
+      }
+      const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
+      const shiftErrRaw2 = copZ - com.z;
+      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
+      const kLatEff = wtStage === "done" ? p.kLat : (p.kLat ?? 0) * 1.8;
+      const latCorr = kLatEff * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
+      const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
+      setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     dbgLog.s = +s.toFixed(3);
     dbgLog.swingY = +swingY.toFixed(4);

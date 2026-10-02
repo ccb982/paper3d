@@ -8,7 +8,7 @@ import { shapeForJoints } from '../src/core/brain';
 import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 import { footGrounded, readCom, newCom } from '../src/core/posture';
 import { HIP_Z } from '../src/core/teacher';
-import { LegEventTracker, EVENT_LABEL, WT, THR } from '../src/core/gaitEvents';
+import { LegEventTracker, EVENT_LABEL, WT, THR, BalanceGate } from '../src/core/gaitEvents';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
 const require = createRequire(import.meta.url);
 { const p = require.resolve('@dimforge/rapier3d/rapier_wasm3d_bg.wasm');
@@ -21,6 +21,7 @@ const require = createRequire(import.meta.url);
 const sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true } as never);
 const fbL = new Float64Array(2), fbR = new Float64Array(2);
 const cTmp = newCom();
+const balGateDbg = new BalanceGate();
 const shape = shapeForJoints(sk.joints.length);
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
@@ -609,4 +610,98 @@ console.log('   t(s)  支撑脚数  承重占比   CoM偏移  MoS(mm)  倾角° 
     console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}      ${(stanceL ? fl : fr).toFixed(2)}     ${(c2.z - stZ).toFixed(3).padStart(6)}   ${((xi - (c2.x + c2.vx / om)) * 1000).toFixed(0).padStart(6)}  ${(sh3.doll.tiltOf(sh3.doll.torso()) * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh3.doll.torso().translation().y.toFixed(3)}`);
   } });
   console.log('\n  判读：支撑脚数=1 且 承重≥0.5 且 躯干高不掉 ⇒ "迈一条腿后保持稳定"达成。');
+}
+
+// ===== 腰的实际运动 + 权重转移稳定性 =====
+console.log('\n=== 腰（骨盆-脊椎）实际在动吗 ===\n');
+console.log('  配置                       腰ROM(°)   胸廓-骨盆相位(°)  存活');
+for (const c of [
+  { n: 'spineSync=0（对照）', p: { spineSync: 0 } as Partial<CaptureParams> },
+  { n: 'spineSync=0.10', p: { spineSync: 0.10 } as Partial<CaptureParams> },
+  { n: 'spineSync=0.25', p: { spineSync: 0.25 } as Partial<CaptureParams> },
+  { n: 'spineSync=0.50', p: { spineSync: 0.50 } as Partial<CaptureParams> },
+]) {
+  const sw2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 2.5, gaitHz: 1 / FB.T });
+  sw2.begin(new Float32Array(sw2.params.length));
+  const sp: number[] = [];
+  let th: number[] = [];
+  runCaptureTeacher(sk, sw2, { ...FB, ...c.p }, { dur: 2.5, clockDriven: true, onFrame: (): void => {
+    const q = sw2.doll.torso().rotation();
+    sp.push(q.y); th.push(q.z);
+  } });
+  const rom = (Math.max(...sp) - Math.min(...sp)) * 2 * 180 / Math.PI;
+  // 胸廓-骨盆相对相位（互相关峰）
+  let best = 0, bc = -Infinity;
+  for (let lag = 0; lag < sp.length; lag++) {
+    let v = 0;
+    for (let i = 0; i + lag < sp.length; i++) v += sp[i + lag]! * th[i]!;
+    if (v > bc) { bc = v; best = lag; }
+  }
+  const phase = (best / Math.max(1, sp.length)) * 360;
+  const rw2 = { t: 0 };
+  console.log(`  ${c.n.padEnd(26)} ${rom.toFixed(1).padStart(7)}   ${phase.toFixed(0).padStart(14)}`);
+  void rw2;
+}
+console.log('\n  文献：慢速 1km/h 胸廓滞后骨椎 −20°（Sci Rep 2019）；胸廓ROM≈骨盆一半（MacKinnon&Winter）');
+
+// ===== 核心验收：重心能否转到前腿 + 抬起后腿会不会摔 =====
+console.log('\n=== 核心验收：抬起后腿（单支撑）能否站住 ===\n');
+{
+  const sh4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
+  sh4.begin(new Float32Array(sh4.params.length));
+  let m = 0;
+  let everSingle = 0, singleFell = 0, fellT = -1;
+  console.log('   t(s)  支撑数  前腿z    后腿z   前后间距  CoM偏移  前腿承重  倾角°  躯干高');
+  runCaptureTeacher(sk, sh4, FB, { dur: 5, clockDriven: true, onFrame: (t, stanceL): void => {
+    const gL = footGrounded(sh4.doll, 'l'), gR = footGrounded(sh4.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const [fl, fr] = sh4.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    sh4.doll.soleXZ('l', fbL); sh4.doll.soleXZ('r', fbR);
+    const c2 = readCom(sh4.doll, cTmp);
+    const tilt = sh4.doll.tiltOf(sh4.doll.torso());
+    if (nG === 1) {
+      everSingle++;
+      if (sh4.fallen || Math.abs(tilt) > 0.5) { singleFell++; if (fellT < 0) fellT = t; }
+    }
+    if (m++ % 14 === 0 || (nG === 1 && m % 3 === 0))
+      console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}    ${fbL[1]!.toFixed(3).padStart(6)}  ${fbR[1]!.toFixed(3).padStart(6)}  ${(Math.abs(fbL[1]! - fbR[1]!) * 1000).toFixed(0).padStart(6)}mm  ${(c2.z - (stanceL ? fbL[1]! : fbR[1]!)).toFixed(3).padStart(6)}  ${(stanceL ? fl : fr).toFixed(2).padStart(7)}  ${(tilt * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh4.doll.torso().translation().y.toFixed(3)}`);
+  } });
+  console.log(`\n  出现单支撑帧 ${everSingle}；其中失稳 ${singleFell}`);
+  console.log('  ⇒ 判定「重心真的转到前腿 + 抬后腿不摔」需要：单支撑时承重≥0.5 且 倾角<10° 且 躯干高不掉');
+}
+
+// ===== 闩锁回读：前腿落地后有没有再离地 =====
+console.log('\n=== 支撑闩锁回读（前腿落地后是否再离地）===\n');
+console.log('   t(s)  支撑脚数  左脚离地  右脚离地  支撑模块  闩锁腿');
+{
+  const sl2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  sl2.begin(new Float32Array(sl2.params.length));
+  let m = 0, everAir = 0;
+  runCaptureTeacher(sk, sl2, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
+    const gL = footGrounded(sl2.doll, 'l'), gR = footGrounded(sl2.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const aL = sl2.doll.soleY('l'), aR = sl2.doll.soleY('r');
+    if (!gL || !gR) everAir++;
+    if (m++ % 16 === 0)
+      console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}     ${(aL * 1000).toFixed(0).padStart(5)}mm  ${(aR * 1000).toFixed(0).padStart(5)}mm   ${String(dl?.wtMod ?? 0).padStart(6)}   ${String(dl?.latch ?? '—')}`);
+  } });
+  console.log(`\n  出现腾空帧 ${everAir}（>0 才算真的迈出腿）`);
+}
+
+// ===== 迈腿前平衡判定门 =====
+console.log('\n=== 迈腿前平衡判定门（MoS>10mm + 承重≥50% + 连续稳定0.45s）===\n');
+console.log('   t(s)  MoS(mm)  承重   连续稳定s  判定   离地峰(mm)');
+{
+  const bg = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  bg.begin(new Float32Array(bg.params.length));
+  let m = 0, pk = 0;
+  runCaptureTeacher(sk, bg, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
+    pk = Math.max(pk, Math.max(bg.doll.soleY('l'), bg.doll.soleY('r')));
+    if (m++ % 16 !== 0) return;
+    const [fl, fr] = bg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const load = stanceL ? fl : fr;
+    const v = balGateDbg.judge(dl?.mosX ?? 0, load, 1 / DEFAULT_SIM.controlHz);
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${(v.mos * 1000).toFixed(0).padStart(6)}  ${load.toFixed(2)}  ${v.holdT.toFixed(2).padStart(7)}   ${v.ok ? '✓放行' : '✗等待'}  ${(pk * 1000).toFixed(0).padStart(6)}`);
+  } });
+  console.log(`\n  全程离地峰值 ${(pk * 1000).toFixed(0)}mm（门未放行前应当 ≈0）`);
 }

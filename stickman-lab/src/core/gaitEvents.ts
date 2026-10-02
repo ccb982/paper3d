@@ -150,3 +150,67 @@ export function copTargetZ(stage: WtStage, stanceZ: number, swingZ: number): num
     default: return stanceZ;
   }
 }
+// ═══════════════════════════════════════════════════════════════════════
+//  ★★★ 迈腿前的**平衡判定门**（用户 2026-10-02）
+//   "后腿起来得经过一个平衡判定的东西，甚至第一步走出之前我也觉得应该有这么个玩意"
+// ═══════════════════════════════════════════════════════════════════════
+//
+// 文献依据（三条独立判据，全部成立才允许任何脚离地）：
+//  ① **MoS > 0** —— CoM 必须真的在支撑脚上方（Perry: midstance 是全程唯一
+//     CoG 真正位于支撑面之上的时段；不支持这个条件迈步 = 倒立摆失稳）
+//     MoS = BoS边缘 − XCoM，XCoM = x + ẋ/ω   （Hof）
+//  ② **承重已转移** —— 该支撑腿 vGRF 达标才算"接住了"
+//     （Lambrecht 2017：IC 是接触事件；Frontiers 2022：转移全程 134~207ms）
+//  ③ **连续稳定 STABLE_HOLD 秒** —— 瞬时稳定不算，要能站住
+//     （Frontiers 2022 用的就是这个"持续时间"思路：WT 起始判据 = 高于基线 3SD 且 ≥100ms）
+//
+// 关键：这个门**对每一次抬腿都生效**，包括
+//   · 第一步迈出之前（还没迈过任何一步）
+//   · 前腿落地后、后腿抬起（前进方向）
+//   · 后退之后后腿抬起
+// ⇒ 不满足就一直等，不会出现"没稳住就把腿抬起来"。
+export const BAL = {
+  /** MoS 最小余量（m）：CoM 要在支撑边内这么多才算稳 */
+  mosMargin: 0.01,
+  /** 连续稳定时长（s）—— Frontiers 2022 的 WT 持续判据思路 */
+  hold: 0.45,
+} as const;
+
+/** 一次平衡判定的记录（调试回读用） */
+export interface BalVerdict {
+  ok: boolean;
+  mos: number;
+  load: number;
+  holdT: number;
+  /** 没通过时说清卡在哪一条 */
+  why: string;
+}
+
+/**
+ * ★ 平衡判定门：累积"连续稳定"时间，只在三条都成立时放行一次抬腿。
+ */
+export class BalanceGate {
+  private holdT = 0;
+  reset(): void { this.holdT = 0; }
+
+  /**
+   * @param mos  当前 MoS（m，正 = CoM 在支撑边内）
+   * @param load 支撑腿承重占比（0~1）
+   * @param dt   时间步
+   */
+  judge(mos: number, load: number, dt: number): BalVerdict {
+    const okMos = mos > BAL.mosMargin;
+    const okLoad = load >= THR.loadAccept;
+    if (okMos && okLoad) this.holdT += dt; else this.holdT = 0;
+    const ok = this.holdT >= BAL.hold;
+    const why = ok ? '通过'
+      : !okMos ? `MoS 不足（${(mos * 1000).toFixed(0)}mm ≤ ${(BAL.mosMargin * 1000).toFixed(0)}mm，CoM 不在支撑脚上方）`
+      : !okLoad ? `承重未转移（${load.toFixed(2)} < ${THR.loadAccept}）`
+      : `连续稳定不足（${this.holdT.toFixed(2)}s < ${BAL.hold}s）`;
+    return { ok, mos, load, holdT: this.holdT, why };
+  }
+
+  get stableFor(): number { return this.holdT; }
+}
+
+export const BAL_LABEL = '迈腿前平衡判定（MoS>10mm + 承重≥50% + 连续稳定0.45s）';

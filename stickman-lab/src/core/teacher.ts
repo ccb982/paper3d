@@ -28,7 +28,7 @@ export const STABLE_HOLD = 0.45;
 /** ★ 横向误差限幅（m）：kLat·误差 不得换算成 >~8° 的髋外展（见 latCorr 注释） */
 const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
-import { copTargetZ, WT, THR, type WtStage } from './gaitEvents';
+import { copTargetZ, WT, THR, BalanceGate, type WtStage } from './gaitEvents';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
 const PX2M = 0.00068;
@@ -36,7 +36,10 @@ const Y = (py: number): number => (2899 - py) * PX2M;
 export const LEN_A = 0.407;      // ★ 实测髋→膝 0.407（锚点 wx/wy/wz 实算，不用像素换算）
 export const LEN_B = 0.379;      // ★ 实测膝→踝 0.379
 export const HIP_Z = 0.05;     // ★ 髋横向半间距（两腿分开的关键）
-export const STANCE_Z = 0.07;   // ★ 脚的目标横向位置（站距 140mm，Stasiu 文献）     // ★ 两条腿髋参考点的横向半间距：原来 0.007(7mm) ⇒ 双脚实测间距 0~9mm
+export const STANCE_Z = 0.07;   // ★ 脚的目标横向位置（站距 140mm，Stasiu 文献）
+/** ★ 支撑面在**前后方向**的半宽（m）：脚掌长度的一半，MoS 的分母
+ *  （Hof: MoS = BoS边缘 − XCoM；单脚支撑时只剩一只脚的掌长） */
+export const STANCE_X_HALF = 0.09;
                                   //   （横向支撑面≈0，"迈出的腿无法支撑"）。改后需重标 kLat/kLatV。
 /**
  * ★★ CoM 到**真实髋**的垂直落差（m）。
@@ -256,7 +259,32 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let wtStage: WtStage = 'idle';
   let wtT = 0;                       // 本阶段已持续时间
   let wtDone = false;                // 本次落地是否已完成转移（防止重复触发）
-  let stableT = 0;                // 连续站稳计时（换脚门控）
+  let stableT = 0;                // 连续站稳计时（换脚门控)
+  // ══════════════════════════════════════════════════════════════════════
+  let lastSwitchWasFlip = true;   // 是否发生过真正的换脚（用于闩锁判据）
+  const balGate = new BalanceGate();   // ★ 迈腿前平衡判定门
+  let balBlocked = '';
+  // ★★★ 支撑**闩锁**（用户 2026-10-02）：
+  //   "前腿落地后启动一个支撑相关的模块，别再让前腿再离地了"
+  //   "落地就得锁定，要是接受50%以上体重再触发，说不定就触发不了了"
+  //
+  //   ⇒ 触发条件是**着地（接触）**，不是承重 ≥50%。
+  //     理由（本 rig 的实测）：两条腿的承重常在 0.5 上下摆动（0.48~0.89），
+  //     指望某个"承重过半"的瞬间来上闩，实测经常不出现 ⇒ 闩锁永远不上 ⇒ 前腿反复离地。
+  //     文献上"接触"本身就是一个明确事件（IC 初次接触，Lambrecht 2017 / JAB 2003），
+  //     之后才是载荷转移（Frontiers 2022：134~207ms）。
+  //
+  //   语义：某条腿**一旦着地**，它就被闩锁为支撑腿；在另一条腿着地之前，
+  //        它**绝不允许再离地**。
+  //
+  //   换腿重量转移的文献：
+  //   · Sci Rep 2021 (Amma et al.)：双支撑期"卸载 ULR / 加载 LR"**成对且几乎同时**发生，
+  //     二者线性相关 ⇒ 后腿不能在体重还没转完时抬。
+  //   · Frontiers 2022：转移**结束判据** = 摆动腿 vGRF < 10 N，全程 134~207 ms。
+  //   · Perry：Pre-swing(50~62%GC) = 对侧初次接触 → 本侧离趾（顺序不可逆）。
+  // ══════════════════════════════════════════════════════════════════════
+  let latchedStance: 'l' | 'r' | null = null;   // 被闩锁的支撑腿（着地即锁）
+  let wtModule = 0;                 // ★ 支撑模块启动计数（探针回读用）
   /** 本次落地的目标承重（Frontiers 2022：结束判据 = 该腿 vGRF < 10N）
    *  ⚠ `stanceL` 在下面主循环里才赋值，这里用可变闭包变量延后读取。 */
   let wtLoadOf = (): number => {
@@ -296,6 +324,16 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       // 防抖：迈步相本身就要占掉一半周期，落地后再等一小会儿才换角色
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim.doll, 'l') : footGrounded(sim.doll, 'r');
+      // ★★ **着地即闩锁**（用户 2026-10-02 明确："落地就得锁定"）。
+      //   一旦摆动腿触地（IC 事件），立刻把它闩为支撑腿并启动支撑模块：
+      //   在另一条腿着地之前，**它不允许再离地**。
+      if (landed && latchedStance !== (swingIsL ? 'l' : 'r')) {
+        // ⚠ 只有当"另一条腿已被换下去"时才算这次落地，否则是同一条腿反复触地
+        if (lastSwitchWasFlip || latchedStance === null) {
+          latchedStance = swingIsL ? 'l' : 'r';
+          wtModule++;
+        }
+      }
       // ══════════════════════════════════════════════════════════════════
       // ★★★ 换脚必须以「站稳」为前提（用户 2026-10-02："身体没调整过去，先不急迈另一条腿，
       //   现在需要迈一条腿后保持稳定，而且要求抬高后退后依旧稳定"）
@@ -324,7 +362,8 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       }
       if (landed && t >= readyT && stableEnough) {   // ★ 必须"站稳"才允许迈下一条
         steps++;
-        lastSwitch = t;
+        stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
+        lastSwitchWasFlip = true;
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
         prevStance = stanceL ? 1 : 2;
         stanceSeq += stanceL ? "L" : "R";
@@ -367,6 +406,20 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     const inPush = s >= PUSH_FRAC;
     // ③ 新支撑腿发力：踝跖屈（顶髋）+ 髋伸（前送）
     const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★ 迈腿前的**平衡判定门**（用户 2026-10-02："后腿起来得经过一个平衡判定的东西，
+    //   甚至第一步走出之前我也觉得应该有这么个玩意"）
+    //   三条判据（MoS + 承重 + 连续稳定）全部成立才允许**任何脚离地** ——
+    //   前进时的后腿、后退时的后腿、以及第一步，全都走这一个门。
+    // MoS：CoM 到支撑边界的余量（正 = 站得住）。平衡判定门的第一条判据。
+    const supEdgeX = com.x + (stanceL ? STANCE_X_HALF : -STANCE_X_HALF);
+    const mosHere = supEdgeX - (com.x + com.vx / om);
+    //   没通过就把摆动高度压到 0（等于不迈），而不是硬抬。
+    // ══════════════════════════════════════════════════════════════════════
+    const [flNow, frNow] = sim.doll.footLoadFrac(dt);
+    const stanceLoadNow = stanceL ? flNow : frNow;
+    const verdict = balGate.judge(mosHere, stanceLoadNow, dt);
+    if (!verdict.ok) balBlocked = verdict.why; else balBlocked = '';
     // ★ 重心转移期内**前伸也要压住**：先把体重挪过去，再把腿送出去。
     //   否则腿在体重还没卸掉时就往前甩 ⇒ 既抬不高也甩不远。
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
@@ -397,9 +450,11 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
 //     ② 25~100% **迈出**：摆动腿离地 → 前伸 → 落地
 // 转移期内摆动腿只抬起一点点（跟着身体被"卸掉"），离地主体在转移之后
 const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-const swingY = s < SHIFT_FRAC
+// ★★ 平衡判定门没通过 ⇒ **不允许离地**（把抬升压到 0，等门通过再迈）
+      const swingYRaw = s < SHIFT_FRAC
       ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC)          // 转移期：几乎不离地
       : 0.012 + p.lift * Math.sin(Math.PI * sSwing);       // 迈出期：完整抬升曲线
+    const swingY = verdict.ok ? swingYRaw : 0.012;        // ★ 没过门就贴地
     const dtSw = t - lastSwitch;
     // ★★ 落地吸能**必须限幅**（用户 2026-10-02："脚落地后甚至无法实现支撑"）。
     //   旧式：`absorb = p.absorb · exp(−dtSw/τ)`，触地那一帧 dtSw=0 ⇒ **满量** p.absorb。
@@ -440,7 +495,10 @@ const swingY = s < SHIFT_FRAC
         - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
     }
     for (const side of ['l', 'r'] as const) {
-      const isStance = (side === 'l') === stanceL;
+      const isStance0 = (side === 'l') === stanceL;
+      // ★★ 闩锁的强制：闩锁腿**永远是支撑腿**，绝不被派成摆动腿
+      //   （"前腿落地后别再让它离地"）。若因时钟错位被派成摆动，这里直接改回支撑。
+      const isStance = latchedStance === side ? true : isStance0;
       // ★ 虚拟髋（com.y − HIP_DY）。实测对比：
       //   用**真实髋刚体**(0.849m) ⇒ IK 必须把腿折到 92% 才够得着地 ⇒ 存活反而降到 0.77s
       //   用**虚拟髋**(0.744m)      ⇒ 站立构型接近自然 ⇒ 存活 1.90s / 3 次换脚
@@ -573,7 +631,10 @@ const swingY = s < SHIFT_FRAC
         const load = wtLoadOf();
         if (wtStage === 'APA-back' && wtT >= WT.min * WT.apaShare) { wtStage = 'APA-toSwing'; wtT = 0; }
         else if (wtStage === 'APA-toSwing' && wtT >= WT.min * (1 - WT.apaShare)) { wtStage = 'toStance'; wtT = 0; }
-        else if (wtStage === 'toStance' && load >= THR.loadAccept) { wtStage = 'done'; wtDone = true; }
+        else if (wtStage === 'toStance' && load >= THR.loadAccept) {
+          wtStage = 'done'; wtDone = true;
+          wtModule++;
+        }
         else if (wtStage === 'toStance' && wtT > WT.max) { wtStage = 'done'; wtDone = true; }   // 超时也放行，避免卡死
       }
       // ★ 按阶段给出 CoP 横向目标（APA 先反向预备、再正向转移）
@@ -591,7 +652,7 @@ const swingY = s < SHIFT_FRAC
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     // owner 已在各写入点打标
-    dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+    dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.wtMod = wtModule; dbgLog.latch = latchedStance ? (latchedStance === "l" ? 1 : 2) : 0; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，

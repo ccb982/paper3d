@@ -14705,8 +14705,12 @@ var MODULES = [
   //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
   //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
   //     只在落地后的调整相用来纠正身体。
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["adjust"], singleOnly: false },
-  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["adjust"], singleOnly: false },
+  // ★ 2026-10-02 修正：原来写 `phases: ['adjust']`，但 adjust 相实测 **0 帧**
+  //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
+  //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
+  //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -16373,6 +16377,35 @@ function copTargetZ(stage, stanceZ, swingZ) {
       return stanceZ;
   }
 }
+var BAL = {
+  /** MoS 最小余量（m）：CoM 要在支撑边内这么多才算稳 */
+  mosMargin: 0.01,
+  /** 连续稳定时长（s）—— Frontiers 2022 的 WT 持续判据思路 */
+  hold: 0.45
+};
+var BalanceGate = class {
+  holdT = 0;
+  reset() {
+    this.holdT = 0;
+  }
+  /**
+   * @param mos  当前 MoS（m，正 = CoM 在支撑边内）
+   * @param load 支撑腿承重占比（0~1）
+   * @param dt   时间步
+   */
+  judge(mos, load, dt) {
+    const okMos = mos > BAL.mosMargin;
+    const okLoad = load >= THR.loadAccept;
+    if (okMos && okLoad) this.holdT += dt;
+    else this.holdT = 0;
+    const ok = this.holdT >= BAL.hold;
+    const why = ok ? "\u901A\u8FC7" : !okMos ? `MoS \u4E0D\u8DB3\uFF08${(mos * 1e3).toFixed(0)}mm \u2264 ${(BAL.mosMargin * 1e3).toFixed(0)}mm\uFF0CCoM \u4E0D\u5728\u652F\u6491\u811A\u4E0A\u65B9\uFF09` : !okLoad ? `\u627F\u91CD\u672A\u8F6C\u79FB\uFF08${load.toFixed(2)} < ${THR.loadAccept}\uFF09` : `\u8FDE\u7EED\u7A33\u5B9A\u4E0D\u8DB3\uFF08${this.holdT.toFixed(2)}s < ${BAL.hold}s\uFF09`;
+    return { ok, mos, load, holdT: this.holdT, why };
+  }
+  get stableFor() {
+    return this.holdT;
+  }
+};
 
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
@@ -16385,6 +16418,7 @@ var LEN_A = 0.407;
 var LEN_B = 0.379;
 var HIP_Z = 0.05;
 var STANCE_Z = 0.07;
+var STANCE_X_HALF = 0.09;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
@@ -16449,6 +16483,11 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   let wtT = 0;
   let wtDone = false;
   let stableT = 0;
+  let lastSwitchWasFlip = true;
+  const balGate = new BalanceGate();
+  let balBlocked = "";
+  let latchedStance = null;
+  let wtModule = 0;
   let wtLoadOf = () => {
     const [fl, fr] = sim2.doll.footLoadFrac(dt);
     return stanceLNow ? fl : fr;
@@ -16471,6 +16510,12 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const half = p.T * 0.5;
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim2.doll, "l") : footGrounded(sim2.doll, "r");
+      if (landed && latchedStance !== (swingIsL ? "l" : "r")) {
+        if (lastSwitchWasFlip || latchedStance === null) {
+          latchedStance = swingIsL ? "l" : "r";
+          wtModule++;
+        }
+      }
       const mosNow = xi - (com.x + com.vx / om);
       const stableNow = wtStage === "done" && mosNow > 0;
       if (stableNow) stableT += dt;
@@ -16493,7 +16538,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       }
       if (landed && t >= readyT && stableEnough) {
         steps++;
-        lastSwitch = t;
+        stanceL = swingIsL;
+        lastSwitchWasFlip = true;
         stanceL = swingIsL;
         prevStance = stanceL ? 1 : 2;
         stanceSeq += stanceL ? "L" : "R";
@@ -16525,6 +16571,13 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
     const inPush = s >= PUSH_FRAC;
     const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
+    const supEdgeX = com.x + (stanceL ? STANCE_X_HALF : -STANCE_X_HALF);
+    const mosHere = supEdgeX - (com.x + com.vx / om);
+    const [flNow, frNow] = sim2.doll.footLoadFrac(dt);
+    const stanceLoadNow = stanceL ? flNow : frNow;
+    const verdict = balGate.judge(mosHere, stanceLoadNow, dt);
+    if (!verdict.ok) balBlocked = verdict.why;
+    else balBlocked = "";
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
     let swingX = swingX0;
@@ -16538,7 +16591,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       swingX = Math.max(swingX0, stanceX + reach * openF);
     }
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-    const swingY = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
+    const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
+    const swingY = verdict.ok ? swingYRaw : 0.012;
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
@@ -16558,7 +16612,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02 - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
     }
     for (const side of ["l", "r"]) {
-      const isStance = side === "l" === stanceL;
+      const isStance0 = side === "l" === stanceL;
+      const isStance = latchedStance === side ? true : isStance0;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
       const hipY = hipYRef;
@@ -16622,6 +16677,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         } else if (wtStage === "toStance" && load >= THR.loadAccept) {
           wtStage = "done";
           wtDone = true;
+          wtModule++;
         } else if (wtStage === "toStance" && wtT > WT.max) {
           wtStage = "done";
           wtDone = true;
@@ -16639,6 +16695,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     dbgLog.swingY = +swingY.toFixed(4);
     dbgLog.swingX = +swingX.toFixed(3);
     dbgLog.stanceX = +(stanceL ? footBufL[0] : footBufR[0]).toFixed(3);
+    dbgLog.wtMod = wtModule;
+    dbgLog.latch = latchedStance ? latchedStance === "l" ? 1 : 2 : 0;
     dbgLog.comY = +com.y.toFixed(3);
     dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
@@ -16696,6 +16754,7 @@ var sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true });
 var fbL = new Float64Array(2);
 var fbR = new Float64Array(2);
 var cTmp = newCom();
+var balGateDbg = new BalanceGate();
 var shape = shapeForJoints(sk.joints.length);
 var FB = {
   T: CAPTURE_GAIT.T,
@@ -17299,4 +17358,99 @@ console.log("   t(s)  \u652F\u6491\u811A\u6570  \u627F\u91CD\u5360\u6BD4   CoM\u
     console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}      ${(stanceL ? fl : fr).toFixed(2)}     ${(c2.z - stZ).toFixed(3).padStart(6)}   ${((xi - (c2.x + c2.vx / om)) * 1e3).toFixed(0).padStart(6)}  ${(sh3.doll.tiltOf(sh3.doll.torso()) * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh3.doll.torso().translation().y.toFixed(3)}`);
   } });
   console.log('\n  \u5224\u8BFB\uFF1A\u652F\u6491\u811A\u6570=1 \u4E14 \u627F\u91CD\u22650.5 \u4E14 \u8EAF\u5E72\u9AD8\u4E0D\u6389 \u21D2 "\u8FC8\u4E00\u6761\u817F\u540E\u4FDD\u6301\u7A33\u5B9A"\u8FBE\u6210\u3002');
+}
+console.log("\n=== \u8170\uFF08\u9AA8\u76C6-\u810A\u690E\uFF09\u5B9E\u9645\u5728\u52A8\u5417 ===\n");
+console.log("  \u914D\u7F6E                       \u8170ROM(\xB0)   \u80F8\u5ED3-\u9AA8\u76C6\u76F8\u4F4D(\xB0)  \u5B58\u6D3B");
+for (const c of [
+  { n: "spineSync=0\uFF08\u5BF9\u7167\uFF09", p: { spineSync: 0 } },
+  { n: "spineSync=0.10", p: { spineSync: 0.1 } },
+  { n: "spineSync=0.25", p: { spineSync: 0.25 } },
+  { n: "spineSync=0.50", p: { spineSync: 0.5 } }
+]) {
+  const sw2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 2.5, gaitHz: 1 / FB.T });
+  sw2.begin(new Float32Array(sw2.params.length));
+  const sp = [];
+  let th = [];
+  runCaptureTeacher(sk, sw2, { ...FB, ...c.p }, { dur: 2.5, clockDriven: true, onFrame: () => {
+    const q = sw2.doll.torso().rotation();
+    sp.push(q.y);
+    th.push(q.z);
+  } });
+  const rom = (Math.max(...sp) - Math.min(...sp)) * 2 * 180 / Math.PI;
+  let best = 0, bc = -Infinity;
+  for (let lag = 0; lag < sp.length; lag++) {
+    let v = 0;
+    for (let i = 0; i + lag < sp.length; i++) v += sp[i + lag] * th[i];
+    if (v > bc) {
+      bc = v;
+      best = lag;
+    }
+  }
+  const phase = best / Math.max(1, sp.length) * 360;
+  const rw2 = { t: 0 };
+  console.log(`  ${c.n.padEnd(26)} ${rom.toFixed(1).padStart(7)}   ${phase.toFixed(0).padStart(14)}`);
+}
+console.log("\n  \u6587\u732E\uFF1A\u6162\u901F 1km/h \u80F8\u5ED3\u6EDE\u540E\u9AA8\u690E \u221220\xB0\uFF08Sci Rep 2019\uFF09\uFF1B\u80F8\u5ED3ROM\u2248\u9AA8\u76C6\u4E00\u534A\uFF08MacKinnon&Winter\uFF09");
+console.log("\n=== \u6838\u5FC3\u9A8C\u6536\uFF1A\u62AC\u8D77\u540E\u817F\uFF08\u5355\u652F\u6491\uFF09\u80FD\u5426\u7AD9\u4F4F ===\n");
+{
+  const sh4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
+  sh4.begin(new Float32Array(sh4.params.length));
+  let m = 0;
+  let everSingle = 0, singleFell = 0, fellT = -1;
+  console.log("   t(s)  \u652F\u6491\u6570  \u524D\u817Fz    \u540E\u817Fz   \u524D\u540E\u95F4\u8DDD  CoM\u504F\u79FB  \u524D\u817F\u627F\u91CD  \u503E\u89D2\xB0  \u8EAF\u5E72\u9AD8");
+  runCaptureTeacher(sk, sh4, FB, { dur: 5, clockDriven: true, onFrame: (t, stanceL) => {
+    const gL = footGrounded(sh4.doll, "l"), gR = footGrounded(sh4.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const [fl, fr] = sh4.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    sh4.doll.soleXZ("l", fbL);
+    sh4.doll.soleXZ("r", fbR);
+    const c2 = readCom(sh4.doll, cTmp);
+    const tilt = sh4.doll.tiltOf(sh4.doll.torso());
+    if (nG === 1) {
+      everSingle++;
+      if (sh4.fallen || Math.abs(tilt) > 0.5) {
+        singleFell++;
+        if (fellT < 0) fellT = t;
+      }
+    }
+    if (m++ % 14 === 0 || nG === 1 && m % 3 === 0)
+      console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}    ${fbL[1].toFixed(3).padStart(6)}  ${fbR[1].toFixed(3).padStart(6)}  ${(Math.abs(fbL[1] - fbR[1]) * 1e3).toFixed(0).padStart(6)}mm  ${(c2.z - (stanceL ? fbL[1] : fbR[1])).toFixed(3).padStart(6)}  ${(stanceL ? fl : fr).toFixed(2).padStart(7)}  ${(tilt * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh4.doll.torso().translation().y.toFixed(3)}`);
+  } });
+  console.log(`
+  \u51FA\u73B0\u5355\u652F\u6491\u5E27 ${everSingle}\uFF1B\u5176\u4E2D\u5931\u7A33 ${singleFell}`);
+  console.log("  \u21D2 \u5224\u5B9A\u300C\u91CD\u5FC3\u771F\u7684\u8F6C\u5230\u524D\u817F + \u62AC\u540E\u817F\u4E0D\u6454\u300D\u9700\u8981\uFF1A\u5355\u652F\u6491\u65F6\u627F\u91CD\u22650.5 \u4E14 \u503E\u89D2<10\xB0 \u4E14 \u8EAF\u5E72\u9AD8\u4E0D\u6389");
+}
+console.log("\n=== \u652F\u6491\u95E9\u9501\u56DE\u8BFB\uFF08\u524D\u817F\u843D\u5730\u540E\u662F\u5426\u518D\u79BB\u5730\uFF09===\n");
+console.log("   t(s)  \u652F\u6491\u811A\u6570  \u5DE6\u811A\u79BB\u5730  \u53F3\u811A\u79BB\u5730  \u652F\u6491\u6A21\u5757  \u95E9\u9501\u817F");
+{
+  const sl2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  sl2.begin(new Float32Array(sl2.params.length));
+  let m = 0, everAir = 0;
+  runCaptureTeacher(sk, sl2, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl) => {
+    const gL = footGrounded(sl2.doll, "l"), gR = footGrounded(sl2.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const aL = sl2.doll.soleY("l"), aR = sl2.doll.soleY("r");
+    if (!gL || !gR) everAir++;
+    if (m++ % 16 === 0)
+      console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}     ${(aL * 1e3).toFixed(0).padStart(5)}mm  ${(aR * 1e3).toFixed(0).padStart(5)}mm   ${String(dl?.wtMod ?? 0).padStart(6)}   ${String(dl?.latch ?? "\u2014")}`);
+  } });
+  console.log(`
+  \u51FA\u73B0\u817E\u7A7A\u5E27 ${everAir}\uFF08>0 \u624D\u7B97\u771F\u7684\u8FC8\u51FA\u817F\uFF09`);
+}
+console.log("\n=== \u8FC8\u817F\u524D\u5E73\u8861\u5224\u5B9A\u95E8\uFF08MoS>10mm + \u627F\u91CD\u226550% + \u8FDE\u7EED\u7A33\u5B9A0.45s\uFF09===\n");
+console.log("   t(s)  MoS(mm)  \u627F\u91CD   \u8FDE\u7EED\u7A33\u5B9As  \u5224\u5B9A   \u79BB\u5730\u5CF0(mm)");
+{
+  const bg = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  bg.begin(new Float32Array(bg.params.length));
+  let m = 0, pk = 0;
+  runCaptureTeacher(sk, bg, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl) => {
+    pk = Math.max(pk, Math.max(bg.doll.soleY("l"), bg.doll.soleY("r")));
+    if (m++ % 16 !== 0) return;
+    const [fl, fr] = bg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const load = stanceL ? fl : fr;
+    const v = balGateDbg.judge(dl?.mosX ?? 0, load, 1 / DEFAULT_SIM.controlHz);
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${(v.mos * 1e3).toFixed(0).padStart(6)}  ${load.toFixed(2)}  ${v.holdT.toFixed(2).padStart(7)}   ${v.ok ? "\u2713\u653E\u884C" : "\u2717\u7B49\u5F85"}  ${(pk * 1e3).toFixed(0).padStart(6)}`);
+  } });
+  console.log(`
+  \u5168\u7A0B\u79BB\u5730\u5CF0\u503C ${(pk * 1e3).toFixed(0)}mm\uFF08\u95E8\u672A\u653E\u884C\u524D\u5E94\u5F53 \u22480\uFF09`);
 }

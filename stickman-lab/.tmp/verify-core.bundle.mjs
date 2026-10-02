@@ -6265,7 +6265,7 @@ __export(partsMeta_exports, {
   META: () => META,
   PART_BY_KEY: () => PART_BY_KEY
 });
-var ANKLE_JOINTS, meta, META, PART_BY_KEY, LIMB_AXES;
+var ANKLE_JOINTS, HIP_LIMIT, meta, META, PART_BY_KEY, LIMB_AXES;
 var init_partsMeta = __esm({
   "src/core/partsMeta.ts"() {
     "use strict";
@@ -6275,7 +6275,11 @@ var init_partsMeta = __esm({
       { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
       { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
     ];
+    HIP_LIMIT = [-95, 100];
     meta = parts_default;
+    for (const j of meta.joints) {
+      if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+    }
     if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
     META = meta;
     PART_BY_KEY = new Map(
@@ -13982,6 +13986,29 @@ var init_ragdoll = __esm({
         this.jointRot(i, buf);
         return buf[2];
       }
+      /**
+       * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
+       *   teacher 的 IK 需要真实髋位置 —— 之前用 `com.y − HIP_DY` 推算，
+       *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
+       *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
+       */
+      jointWorld(i, out) {
+        const j = this.sk.joints[i];
+        if (!j) {
+          out[0] = out[1] = out[2] = 0;
+          return;
+        }
+        const p = this.bodies[this.jointBodies[i * 2]];
+        const t2 = p.translation(), r = p.rotation();
+        const lx = j.parentLocal[0], ly = j.parentLocal[1], lz = j.parentLocal[2];
+        const ix = r.w * lx + r.y * lz - r.z * ly;
+        const iy = r.w * ly + r.z * lx - r.x * lz;
+        const iz = r.w * lz + r.x * ly - r.y * lx;
+        const iw = -r.x * lx - r.y * ly - r.z * lz;
+        out[0] = t2.x + ix * r.w + iw * -r.x + iy * -r.z - iz * -r.y;
+        out[1] = t2.y + iy * r.w + iw * -r.y + iz * -r.x - ix * -r.z;
+        out[2] = t2.z + iz * r.w + iw * -r.z + ix * -r.y - iy * -r.x;
+      }
       /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
       jointSpeed(i) {
         const buf = this.rvTmp;
@@ -15251,8 +15278,12 @@ var init_modules = __esm({
       //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
       //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
       //     只在落地后的调整相用来纠正身体。
-      { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["adjust"], singleOnly: false },
-      { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["adjust"], singleOnly: false },
+      // ★ 2026-10-02 修正：原来写 `phases: ['adjust']`，但 adjust 相实测 **0 帧**
+      //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
+      //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
+      //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
+      { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+      { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
       { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
       { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
       { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
