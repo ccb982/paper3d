@@ -124,7 +124,9 @@ const iv: number[] = [];
 for (let i = 1; i < mt.touchdowns.length; i++) iv.push(mt.touchdowns[i]! - mt.touchdowns[i - 1]!);
 console.log('  触地时刻(s): ' + mt.touchdowns.map((v) => v.toFixed(2)).join(' '));
 console.log('  间隔(s):     ' + iv.map((v) => v.toFixed(2)).join(' ') + (iv.length ? '' : '（不足两次触地）'));
-const med = iv.length ? [...iv].sort((a, b) => a - b)[Math.floor(iv.length / 2)]! : 0;
+const medianOf = (a: number[]): number =>
+  a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)]! : 0;
+const med = medianOf(iv);
 console.log(`  中位间隔 ${med.toFixed(2)} s · 期望 ≈1.00 s（MIN_CYCLE=1.0）`);
 console.log(`  ⚠ teacher 的步态周期 T=${FB.T} s ⇒ 每条腿 ${(FB.T / 2).toFixed(2)} s，理论间隔 ${(FB.T / 2).toFixed(2)} s`);
 check('实测间隔与 1 s 同量级（0.5~1.5 s）', med > 0.4 && med < 1.6, `${med.toFixed(2)} s`);
@@ -236,6 +238,56 @@ for (const cfg of [
 console.log('');
 console.log('  解读：离地峰值 <3 cm 的占比高 + 主频高 ⇒ 就是"高频抽搐"，');
 console.log('        奖励里的 MIN_CLEARANCE(3cm) 与 cadenceScore(1Hz) 正是为关住它设的。');
+
+console.log('\n=== ⑤c ★ 模块开关对照实验：脊椎模块到底帮了多少（用户 2026-10-02）===\n');
+console.log('  同一个 teacher，只改「哪些模块开着」，看差别（不是看 MoS 变没变，是看整体变好还是变差）');
+console.log('\n  ' + '配置'.padEnd(30) + '存活    换脚  单支撑MoS均  |WBAM|中位  双支撑%  摆动冻结分');
+{
+  const cases: { n: string; p: Partial<CaptureParams>; off: Parameters<typeof ModuleSet.prototype.enable>[0][] }[] = [
+    { n: '全开（cm0.15+脊椎0.25）', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: [] },
+    { n: '★ 关掉脊椎全部模块', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['spineSync', 'cmBalance'] },
+    { n: '★ 关掉脊椎+身体平衡项', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['spineSync', 'cmBalance', 'balance'] },
+    { n: '★ 关掉身体全部模块', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['loadShift', 'altSwitch', 'singleSupport', 'cycle', 'stillSwing', 'balance', 'distance', 'spineSync', 'cmBalance'] },
+    { n: '★ 只留逐腿模块（髋/落点/步长）', p: {}, off: ['loadShift', 'altSwitch', 'singleSupport', 'cycle', 'stillSwing', 'balance', 'distance', 'spineSync', 'cmBalance', 'stepClearance'] },
+  ];
+  for (const c of cases) {
+    const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+    s3.begin(new Float32Array(s3.params.length));
+    // ★ 代码层面关模块（这就是用户要的"代码操控什么模块起作用"）
+    for (const id of c.off) s3.mod.enable(id, false);
+    const d3 = { n: 0, dbl: 0, mos: [] as number[], wb: [] as number[] };
+    const c3 = newCom(), sp3 = newSupport(), l3 = new Float64Array(3);
+    const cb3 = (): void => {
+      const gL = footGrounded(s3.doll, 'l'), gR = footGrounded(s3.doll, 'r');
+      const ng = (gL ? 1 : 0) + (gR ? 1 : 0);
+      d3.n++;
+      if (ng === 2) d3.dbl++;
+      else if (ng === 1) {
+        readCom(s3.doll, c3); readSupport(s3.doll, sp3);
+        d3.mos.push(marginOfStability(c3.x, c3.vx, omegaAt(c3.y), sp3.cx + sp3.halfX, c3.z, c3.vz, sp3.cz + sp3.halfZ).x);
+        wholeBodyAngularMomentum(s3.doll, c3, l3);
+        d3.wb.push(Math.hypot(l3[0]!, l3[1]!, l3[2]!));
+      }
+    };
+    const rr3 = runCaptureTeacher(sk, s3, { ...FB, ...c.p }, { dur: DUR, clockDriven: true, onFrame: cb3 });
+    const m3 = medianOf(d3.mos), w3 = medianOf(d3.wb);
+    console.log(`  ${c.n.padEnd(28)} ${rr3.t.toFixed(2)}s  ${String(rr3.steps).padStart(3)}  `
+      + `${(m3 * 1000).toFixed(0).padStart(8)}mm ${w3.toFixed(2).padStart(9)}  `
+      + `${(100 * d3.dbl / Math.max(1, d3.n)).toFixed(0).padStart(5)}%  ${(s3.terms.stillSwing ?? 0).toFixed(2)}`);
+  }
+  console.log('\n  判读：`stillSwing` 一列越接近 0 = 摆动相身体越冻结（越好）');
+  console.log('        存活/换脚掉了 = 那批模块是在撑命；掉了但 MoS 变好 = 它在拿稳当行走');
+}
+
+console.log('\n=== ⑤d ★ 模块开关为什么关（逐模块打印原因）===\n');
+{
+  const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s4.begin(new Float32Array(s4.params.length));
+  for (const id of ['spineSync', 'pelvisFirst'] as const) s4.mod.enable(id, false);
+  console.log(`  当前状态：${s4.gpLabel}`);
+  for (const l of s4.mod.report(s4.gp.now, 2)) console.log('  ' + l);
+  console.log('\n  ⇒ 每行都指名了"这个模块归谁 + 现在为什么不起作用"，不再需要读代码猜');
+}
 
 console.log('\n=== ⑤b 状态机轨迹：每一段「该迈哪条腿 + 身体该不该动」+ 哪一个状态没通过 ===\n');
 {

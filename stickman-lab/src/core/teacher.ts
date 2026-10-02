@@ -190,7 +190,10 @@ export function runCaptureTeacher(
     //   段间抵消 70~95%；偏离它就说明身体在"整体转"，必须靠髋/脊柱配重来抵消。
     //   实测（probe-gaitcycle）：未启用时单支撑 |WBAM| 中位 5.36 = 平衡基线 0.16 的 **33.5×**。
     let cmRoll = 0;
-    if (p.cmBalance > 0) {
+    // ★ 脊椎归属的模块走统一开关（否则 `mod.enable('cmBalance', false)` 是假的：
+    //   实测关掉脊椎两行数字完全一样 ⇒ 老师根本不看模块表）。
+    const cmOn = p.cmBalance > 0 && sim.mod.active('cmBalance', sim.gp.now, 2, null);
+    if (cmOn) {
       wholeBodyAngularMomentum(sim.doll, com, lbuf);
       const lz = lbuf[2]!;                       // 额状面：绕竖直轴（左右转）
       const ly = lbuf[1]!;                       // 矢状面：绕侧向轴（前扑后仰的转动）
@@ -214,7 +217,7 @@ export function runCaptureTeacher(
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
       //   摆动腿是左 ⇒ 胸廓往 +yaw 走（右转），反之亦然；幅度随摆动进度 sin(πs) 起伏。
-      if (p.spineSync > 0) {
+      if (p.spineSync > 0 && sim.mod.active('spineSync', sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;      // 与摆动腿反相（isStance=false 即该腿在摆）
         const yaw = dir * p.spineSync * sw;

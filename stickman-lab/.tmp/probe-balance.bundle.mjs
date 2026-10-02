@@ -15039,6 +15039,7 @@ var Sim = class {
   // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   gp = new GaitPhaseMachine();
+  // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
   /**
    * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
    *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
@@ -16153,7 +16154,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
-    if (p.cmBalance > 0) {
+    const cmOn = p.cmBalance > 0 && sim.mod.active("cmBalance", sim.gp.now, 2, null);
+    if (cmOn) {
       wholeBodyAngularMomentum(sim.doll, com, lbuf);
       const lz = lbuf[2];
       const ly = lbuf[1];
@@ -16171,7 +16173,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      if (p.spineSync > 0) {
+      if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
         const yaw = dir * p.spineSync * sw;

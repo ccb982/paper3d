@@ -372,7 +372,7 @@ export class Sim {
   private airPeakL = 0; private airPeakR = 0;   // 本次腾空的最大脚底高度（离地高度判据）
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
-  private gp = new GaitPhaseMachine();
+  gp = new GaitPhaseMachine();   // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
   /**
    * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
    *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
@@ -933,7 +933,7 @@ export class Sim {
     //   窄相会保留**预测性接触**（脚离地 9 cm 仍报接触，踩过）。
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.lastLoadFrac = [fl2, fr2];
-    this.accShift += Math.abs(fl2 - fr2) * dt;
+    if (this.mod.active('loadShift', this.gp.now, nGround, null)) this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
     // ★ 必须"真的单脚着地"才算换支撑脚：载荷份额 >70% **且** 该脚接触地面、另一脚离地。
     //   只看载荷会被前后晃动钻空子 —— 实测**站桩不动的镇定器**能拿到 13 次"换脚"
@@ -967,7 +967,8 @@ export class Sim {
     //   这才是"训练一直偏好站着不动"的根因（不是权重配得不好）。
     //   判据用**几何接触**（不是载荷）：这一步只要求"确实一脚离地"，能挣到分就行，
     //   质量更高的部分由上面的 `shift`（载荷转移）和 `accSwitchQ`（换支撑脚）负责。
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
+    if (this.mod.active('singleSupport', this.gp.now, nGround, null))
+      this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
 
     // ══════ ★★ 文献步态参考分 + 盆骨优先（用户 2026-10-02）══════════════
     //  只在**真单支撑帧**给分：站着不动 / 两脚都在地上 ⇒ 一分不给。
