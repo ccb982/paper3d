@@ -14847,7 +14847,22 @@ var MODULES = [
   //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
   //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
   //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  // ★★ 相位收窄为 **`['step']`（仅摆动/迈腿相）**（2026-10-02，文献依据）：
+  //   `spineSync` 是**步态反相旋转**机制（Takemura 2007, Sci Rep 2019：
+  //   胸廓与骨盆反相旋转，抵消摆动腿的垂直轴角动量）—— 它的**服务对象是摆动腿**，
+  //   在没有摆动腿的**静态平衡保持**下没有任何力学理由要开。
+  //   而单腿站立的文献结论正相反（Riemann, Myers & Lephart 2003,
+  //   *Arch Phys Med Rehabil* 84:36-42）：
+  //     · "The **trunk**... appeared to be the **least important** source of
+  //       corrective action"
+  //     · "significantly **more corrective action occurred between the pelvis and thigh
+  //       than between the pelvis and trunk**"
+  //     · "the **higher inertia** associated with the trunk may **preclude it from
+  //       contributing to the quick adjustments** necessary for single-leg stance
+  //       equilibrium"
+  //   实测的代价（此前误设为三相全开）：单腿保持平衡时腰仍收到 **−14°** 的躯干旋转指令，
+  //   而躯干只实际动了 −2.7° ⇒ 给本就不稳的系统又加了一个大惯量扰动源。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8\uFF08\u4EC5\u6446\u52A8\u76F8\uFF09", part: "spine", phases: ["step"], singleOnly: false },
   { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },

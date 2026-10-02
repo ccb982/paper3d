@@ -29,6 +29,8 @@ export const STABLE_HOLD = 0.45;
 const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
 import { copTargetZ, WT, THR, BalanceGate, type WtStage } from './gaitEvents';
+import { balanceHold, holdParamsFrom, type BalanceHoldParams } from './balanceHold';
+import { stepSystem, stepParamsFrom } from './stepSystem';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
 const PX2M = 0.00068;
@@ -266,6 +268,15 @@ export function runCaptureTeacher(
   const singleLeg = opts.singleLeg ?? null;
   const liftHold = opts.liftHold ?? 0.25;
   const out = new Float32Array(sim.doll.jointCount * 3);
+  // ★ 两个模块的参数视图（用户 2026-10-02 的两模块设计）：
+  //   ① `holdP` → 承重腿 + 腰的平衡维持（balanceHold.ts，纯函数、无状态）
+  //   ② `stepP` → 迈步（stepSystem.ts，纯函数、无状态）
+  //   teacher 只负责把两者**接到关节上**，不自己算平衡/迈步的数学。
+  const holdP: BalanceHoldParams = holdParamsFrom(p as unknown as Record<string, unknown>);
+  const stepP = stepParamsFrom(p as unknown as Record<string, unknown>, (p.T ?? 2.2) / 2);
+  // 全身质量：从 Rapier 各刚体实测求和（K_crit = mgh 需要它；不手填体重常数）
+  let totalMass = 0; for (const b of sim.doll.bodies) totalMass += b.mass();
+  totalMass = Math.max(1, totalMass);
   const com = newCom();
   const dt = 1 / sim.cfg.controlHz;
   const iL = sk.bodies.findIndex((b) => b.key === 'shin_l');
@@ -750,51 +761,38 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //          而髋做 CoM 策略效率只有跖屈肌的 **1/4**（Neptune/Perry 2019）
     //          ⇒ 必然饱和（实测 CoM 冲到 0.4~2.0 m/s）⇒ 平衡门拦下 ⇒ 死锁。
     //      新：踝=CoP 策略（主力，直接）、髋=CoM 策略（备选，被动超临界刚度）。
-    const ankleWX = stanceL ? footBufL[0]! : footBufR[0]!;
-    const ankleWY = com.y - hipDy;                    // 踝（承重脚）世界高度
-    // ① VIP 摆角：正 = CoM 在踝前方（= CoP 移到足底前部）
-    const vipX = com.x - ankleWX;
-    const vipY = Math.max(0.05, ankleWY);
-    const qVip = Math.atan2(vipX, vipY);              // VIP 倾角（rad）
-    // VIP 角速度（用 CoM 相对速度算，避���除以小分母放大噪声）
-    const qVipDot = (com.vx * vipY - vipX * com.vy) / (vipY * vipY);
-    // ③ 双刚度临界值。质量用脚上实测总重反推，避免再引入一个手填的体重常数。
-    // 质量：从 Rapier 各刚体实测质量求和（不引入手填的体重常数）
-    let mSum = 0; for (const b of sim.doll.bodies) mSum += b.mass();
-    const bodyMass = Math.max(1, mSum);
-    const kCritAnkle = bodyMass * 9.81 * vipY;         // K_crit = mgh（绕踝）
-    const kCritHip = bodyMass * 9.81 * (hipDy * 0.55); // 绕髋的上身：h≈髋高的一半
-    // ④ CoP 行程限制：跖骨头 ↔ 足跟（Michaels & Ting 2025）。CoP 出界 ⇒ 踝力矩饱和。
-    const copLimit = COP_HALF_LEN;                     // 踝↔足尖/足跟的最大行程（m）
-    const copOut = Math.max(0, Math.abs(vipX) - copLimit * vipY);
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★ 调用**模块 ①：承重腿 + 腰的平衡维持系统**（balanceHold.ts）
+    //
+    //   用户 2026-10-02："我的设计分两个模块，一个承重腿和腰的平衡维持系统，
+    //   另一个迈步系统"。本文件原先把两套逻辑**缠在同一个循环里**，
+    //   导致"关掉迈步相关的东西就把平衡也关了"（kWtX 全局归零那次）。
+    //   ⇒ 现在平衡全部由 balanceHold() 一个**纯函数**算出，本模块不持有任何状态。
+    //
+    //   平面分工与全部文献依据见 balanceHold.ts 文件头。
+    const hold = balanceHold(holdP, {
+      comX: com.x, comY: com.y, comZ: com.z,
+      comVx: com.vx, comVy: com.vy, comVz: com.vz,
+      stanceX: stanceL ? footBufL[0]! : footBufR[0]!,
+      stanceZ: stanceL ? HIP_Z : -HIP_Z,
+      ankleY: com.y - hipDy,
+      bodyMass: totalMass,
+      hipHeight: hipDy,
+      singleLeg: singleLeg !== null,
+    });
+    const qVip = hold.qVip, qVipDot = hold.qVipDot;
+    const qVmp = hold.qVmp;
+    // 以下全部已搬到 `balanceHold()` 里算（见上方调用点），此处只做诊断转发。
+    const vipDegDbg = hold.ankleSag * 57.3;             // 实际下发的踝矢状角偏移（°）
+    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;      // >0 ⇒ 超临界，多出来的就是稳定裕度
+    const kCritAnkle = hold.kCritAnkle, kCritHip = hold.kCritHip;
+    const copOut = hold.copOut;
+    const bodyMass = totalMass;
     dbgLog.qVip = +qVip.toFixed(4); dbgLog.vipDot = +qVipDot.toFixed(4);
     dbgLog.kCritA = +kCritAnkle.toFixed(1); dbgLog.kCritH = +kCritHip.toFixed(1);
     dbgLog.copOut = +copOut.toFixed(4);
-
-    // ── ②a 踝：**欠临界**被动刚度 + VIP 延迟反馈 → 直接移 CoP
-    //   ⚠⚠ **量纲**（2026-10-02 修正，踩过一次坑）：
-    //   `K_crit = mgh` 的单位是 **N·m/rad（刚度）**，而 `ankleDeg` 是**关节角（rad）**。
-    //   第一版直接写 `ankleStiff = -(kAnkleStiff)*K_crit` 并当角度用 ⇒ 指令达到
-    //   **−14638°**（实测回读），整个踝从第 0 帧就被顶死在限位上。
-    //   ⇒ 必须用**无量纲的刚度比**：踝的实际刚度 `K_ankle`，我们要求的刚度
-    //     `K_req = kAnkleStiff·K_crit`，等效角度偏移 = 扭矩 ÷ 实际刚度
-    //     = −(K_req/K_ankle)·q_vip ⇒ **比值**才是可以进角度通道的量。
-    //   K_ankle 取踝自身被动刚度（人体踝静息刚度约 0.7·K_crit，Winter 2001
-    //   *Ankle muscle stiffness in the control of balance during quiet standing*）。
-    const kAnkleActual = 0.7 * kCritAnkle;              // 踝实测被动刚度近似（N·m/rad）
-    const kAnkleReq = (p.kAnkleStiff ?? 0.5) * kCritAnkle; // 我们要求的（欠临界，<K_crit）
-    const vipTau = -(p.kVipP ?? 0.9) * qVip - (p.kVipD ?? 0.18) * qVipDot;  // 归一化反馈量
-    // 等效角度：VIP 反馈 + 刚度差，两者都以 q_vip 的倍数表示（无量纲比）
-    const ankleCorr = ((kAnkleReq / kAnkleActual) - 1) * -qVip + (p.kVipP ?? 0.9) * vipTau * -1;
-    // 反馈量随 CoP 接近足底边缘而**衰减**（出界后踝已饱和，再加也没用 ——
-    //   Sci Rep 2025 的 "saturated ankle torque"），把活交给髋。
-    const copMargin = Math.max(0, 1 - copOut / 0.02);
-    const ankleOut = ankleCorr * copMargin;             // ★ 踝是主力（CoP 策略）
-    const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));  // 实际下发的踝角度偏移
-    // ── ②b 髋：**超临界**被动刚度 ⇒ 被动稳定，代价极小；只在踝饱和时才主动接管
-    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;     // >0 ⇒ 超临界，多出来的就是稳定裕度
-    const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin); // 踝饱和时才增大
-    const corrCom = Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + holdDamp));
+    syncComTarget();   // ★ 每周期同步 CoM 目标到承重腿落点（否则单腿站立下目标钉在初值）
+    const corrCom = Math.max(-0.45, Math.min(0.45, hold.hipSag + holdDamp));
     dbgLog.ankleCorr = +vipDegDbg.toFixed(2); dbgLog.hipStiff = +hipStiffRatio.toFixed(4);   // 报**实际下发的踝角度偏移(°)**
     // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
     //   用状态机在"迈步相/调整相"之间调度增益）。
@@ -967,10 +965,11 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
       //   摆动腿是左 ⇒ 胸廓往 +yaw 走（右转），反之亦然；幅度随摆动进度 sin(πs) 起伏。
-      if (p.spineSync > 0 && sim.mod.active('spineSync', sim.gp.now, 2, null)) {
+      if (p.spineSync > 0 && sim.mod.active('spineSync', sim.gp.now, 2, null) && !singleLeg) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;      // 与摆动腿反相（isStance=false 即该腿在摆）
         const yaw = dir * p.spineSync * sw;
+        dbgLog.sWaist = +(yaw * 57.3).toFixed(2);
         // 胸廓：**用实际的脊柱关节名**（spineSegments>1 时才有，可能是 spine1..3 或更长）
         //   旧写法硬编码 ['spine1','spine2','spine3'] + JOINT_ORDER.indexOf ⇒ 永远 −1 ⇒ 腰从未被驱动。
         //   每段用**它自己的**关节描述做归一化（错用 jHip 会让限位算错）。
@@ -1027,73 +1026,21 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
       const shiftErrRaw2 = copZ - com.z;
       const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
-      // 转移阶段用更大的增益（APA 需要明确动作），转移完回到常规增益
-      const kLatEff = wtStage === 'done' ? p.kLat : (p.kLat ?? 0) * 1.8;
-
-      // ══════════════════════════════════════════════════════════════════════
-      // ★★★★★ **额状面平衡控制器（VMP）** —— 矢状面 VIP 的额状面对偶
-      //
-      //   为什么必须有（用户 2026-10-02："我怀疑是因为无法单脚站稳导致的，
-      //   我需要学怎么保证单脚站稳"）：单腿站立实测 CoM **侧移 0.377 m**，
-      //   与前后漂移 0.343 m 一样大 —— 而**矢状面才有控制器**（VIP），
-      //   额状面**一个都没有** ⇒ CoM 从支撑脚侧面滑出去，单腿永远站不住。
-      //
-      //   文献依据 ——
-      //   · Morasso et al., Front Comput Neurosci 2022, 15:956932：踝策略 = **CoP 策略**
-      //     （直接控 CoP），髋策略 = **CoM 策略**（控上身局部 CoM）。矢状面两者分工
-      //     我们已按此建好；额状面是**同一套分工**。
-      //   · Nashner & McCollum 1985 / Horak & Nashner：**支撑面变小 ⇒ CoP 行程变短
-      //     ⇒ 策略被迫从踝策略转向髋策略**。单腿站立正是"支撑面从两脚缩到一只脚"
-      //     的典型场景 ⇒ 额状面必须靠髋外展/内收，这就是"髋策略"的额状面版本。
-      //   · 支撑面减半 ⇒ 额状面可用行程也减半 ⇒ 阈值要按**单脚宽**取，不是双脚宽。
-      //
-      //   VMP（Virtual Medial Pendulum）= 从**支撑脚**连到 CoM 的额状面虚拟摆，
-      //   它的摆角**就是 CoP 在该脚上的横向位置**（与矢状面 VIP 同理）。
-      const stanceZf = stanceL ? HIP_Z : -HIP_Z;        // 支撑脚的横向位置
-      const vmpX = com.z - stanceZf;                   // CoM 相对支撑脚的横向偏移
-      const vmpY = vipY;                               // 同一高度（踝到 CoM）
-      const qVmp = Math.atan2(vmpX, vmpY);
-      // VMP 角速度：横向速度（z），不是除以小分母放大噪声
-      const qVmpDot = com.vz / vmpY;
-      // CoP 横向行程限制 = **单脚半宽**（支撑面减半 ⇒ 行程减半，Nashner 的策略转移条件）
-      const copLatLimit = COP_HALF_LEN * 0.6;
-      const copLatOut = Math.max(0, Math.abs(vmpX) - copLatLimit * vmpY);
-      const latMargin = Math.max(0, 1 - copLatOut / 0.02);
-      // 髋外展：超临界被动刚度（kHipStiff 同源）+ VMP 反馈
-      const vmpTau = -qVmp * (p.kVmpP ?? 14) - qVmpDot * (p.kVmpD ?? 3);
-      const vmpDeg = vmpTau * latMargin * 57.3;
-      dbgLog.qVmp = +qVmp.toFixed(4); dbgLog.vmpDeg = +vmpDeg.toFixed(2);
-      dbgLog.copLatOut = +copLatOut.toFixed(4);
-
-// 旧的 `shiftErr`（限幅 40mm）+ `kLat` 只在 APA 转移期用，
-      //   单腿站立时 CoM 侧移 377mm ⇒ 它连 1/9 的误差都看见不到 ⇒ 已被 VMP 取代。
-      const latCorr = vmpDeg / 57.3
-        + (isStance ? cmRoll : -cmRoll * 0.3);
-      // ══════════════════════════════════════════════════════════════════════
-      // ★★ 额状面力学链（Liu et al., J Biomech 2012 的原文结构）
-      //   "the whole body center of mass moves away from the supporting leg inducing a
-      //    **lateral bending (hip abduction/adduction) moment** that is equilibrated
-      //    **at the ankle level by supination or pronation of the ankle** that involves
-      //    **axial rotation**"
-      //   ⇒ 髋外展产生额状面力矩 ⇒ **踝必须反向内/外翻把它平衡掉**。
-      //   此前我们只驱动髋（VMP）、踝的额状面自由度**完全没有控制器**
-      //   ⇒ 髋单独外展造出无法平衡的力矩 ⇒ CoM 反而被推得更偏
-      //   （实测 kVmpP 0→80 侧移 0.275~0.337m 纹丝不动）。
-      //   ⚠ 符号：髋外展（正）让支撑侧抬起、CoM 相对脚向外 ⇒ 需要踝**内翻**反向制动。
-      const ankleEvertCmd = isStance
-        ? qVip * 0 + qVmp * (p.kVmpAnkle ?? 9) * latMargin   // ★ 符号已翻转（原为 -qVmp，实测发散）
-        : 0;
-      dbgLog.ankleEv = +ankleEvertCmd.toFixed(3);
+      // ★ 额状面指令全部由**模块 ①**（balanceHold.ts）算出，见上方 `hold` 调用点。
+      //   VMP（髋外展）+ 踝内/外翻反向配对（Liu et al., J Biomech 2012 的力学链）。
+      dbgLog.qVmp = +qVmp.toFixed(4);
+      dbgLog.copLatOut = +hold.copLatOut.toFixed(4);
+      dbgLog.ankleEv = +hold.ankleLat.toFixed(3);
+      const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
       // ② 支撑腿发力前送：支撑相后半段线性增大（s∈[0.5,1]），把身体推过支撑脚
 
       // ★ 摆动腿要**向外（外展）**让开支撑腿，原来写的是 `-p.kLatSwing`（向内）⇒ 踝内收
       const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);   // ★ 前馈外展 + 反馈修正
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
       // ★★ 踝的**内翻/外翻**（轴 0，绕足长轴）—— 额状面力学链的执行端（Liu 2012）。
-      //   此前踝的额状面自由度虽已存在（限位已按文献放宽到 ±14°/±10°），
-      //   但**没有任何控制器驱动**，所以髋单独外展造出的额状面力矩无人平衡。
-      if (ankleEvertCmd !== 0) {
-        const aCmd = Math.max(-14, Math.min(14, ankleEvertCmd * 57.3));
+      //   限位已按文献放宽到 ±14°/±10°；指令由模块 ① 的 `hold.ankleLat` 给出。
+      if (hold.ankleLat !== 0 && isStance) {
+        const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
         setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
       }
     }

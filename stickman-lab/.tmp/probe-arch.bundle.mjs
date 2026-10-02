@@ -14856,7 +14856,22 @@ var MODULES = [
   //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
   //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
   //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  // ★★ 相位收窄为 **`['step']`（仅摆动/迈腿相）**（2026-10-02，文献依据）：
+  //   `spineSync` 是**步态反相旋转**机制（Takemura 2007, Sci Rep 2019：
+  //   胸廓与骨盆反相旋转，抵消摆动腿的垂直轴角动量）—— 它的**服务对象是摆动腿**，
+  //   在没有摆动腿的**静态平衡保持**下没有任何力学理由要开。
+  //   而单腿站立的文献结论正相反（Riemann, Myers & Lephart 2003,
+  //   *Arch Phys Med Rehabil* 84:36-42）：
+  //     · "The **trunk**... appeared to be the **least important** source of
+  //       corrective action"
+  //     · "significantly **more corrective action occurred between the pelvis and thigh
+  //       than between the pelvis and trunk**"
+  //     · "the **higher inertia** associated with the trunk may **preclude it from
+  //       contributing to the quick adjustments** necessary for single-leg stance
+  //       equilibrium"
+  //   实测的代价（此前误设为三相全开）：单腿保持平衡时腰仍收到 **−14°** 的躯干旋转指令，
+  //   而躯干只实际动了 −2.7° ⇒ 给本就不稳的系统又加了一个大惯量扰动源。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8\uFF08\u4EC5\u6446\u52A8\u76F8\uFF09", part: "spine", phases: ["step"], singleOnly: false },
   { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -16852,7 +16867,16 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));
     const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
     const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin);
-    const corrCom = Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + holdDamp));
+    syncComTarget();
+    const hipSagittal = singleLeg ? Math.max(-0.35, Math.min(
+      0.35,
+      -(p.kWtX ?? 0) * (com.x - comTargetX) - (p.kWtVx ?? 0) * com.vx
+    )) : 0;
+    dbgLog.hipSag = +hipSagittal.toFixed(4);
+    const corrCom = Math.max(-0.45, Math.min(
+      0.45,
+      hipStiffRatio * -0.08 + hipActive + holdDamp + hipSagittal
+    ));
     dbgLog.ankleCorr = +vipDegDbg.toFixed(2);
     dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
@@ -16913,10 +16937,11 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const vipDeg = isStance ? vipDegDbg : 0;
       const ankleCmd = verdictV.ok ? ankleDeg + (isStance ? pushTorque + vipDeg : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
-      if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null)) {
+      if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null) && !singleLeg) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
         const yaw = dir * p.spineSync * sw;
+        dbgLog.sWaist = +(yaw * 57.3).toFixed(2);
         for (const sj of spineNames) {
           const sjDesc = sk2.joints[jointIndexByName(sk2, sj)];
           if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
@@ -17977,21 +18002,20 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log("\n=== \u5355\u817F\u7AD9\u7ACB\uFF1A\u989D\u72B6\u9762\u529B\u5B66\u94FE\u9A8C\u8BC1\uFF08kVmpP \xD7 kVmpAnkle\uFF09===\n");
-console.log("  kVmpP kVmpAnk \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u8EAF\u5E72\u503E\xB0 \u5B58\u6D3B   \u5355\u652F\u6491\u5E27");
-for (const kp of [0, 14, 28]) {
-  for (const ka of [0, 9, 20]) {
-    const fT = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
-    fT.begin(new Float32Array(fT.params.length));
-    let cx = 0, cz = 0, tPk = 0, ss = 0;
-    const rT = runCaptureTeacher(sk, fT, { ...FB, kVmpP: kp, kVmpAnkle: ka }, { dur: 4, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: () => {
-      const c6 = readCom(fT.doll, cTmp);
-      cx = c6.x;
-      cz = c6.z;
-      tPk = Math.max(tPk, fT.doll.tiltOf(fT.doll.torso()));
-      if (!(footGrounded(fT.doll, "l") && footGrounded(fT.doll, "r"))) ss++;
-    } });
-    console.log(`  ${String(kp).padStart(5)} ${String(ka).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rT.t.toFixed(2)}s ${String(ss).padStart(8)}`);
-  }
+console.log("\n=== \u5355\u817F\u7AD9\u7ACB\uFF1A\u77E2\u72B6\u9762\uFF08\u9ACB\u63A5\u7BA1\uFF09kWtX \u626B\u63CF ===\n");
+console.log("  kWtX kWtVx \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u8EAF\u5E72\u503E\xB0 \u5B58\u6D3B   \u5355\u652F\u6491\u5E27 \u8170\u6307\u4EE4\xB0");
+for (const kx of [0, 0.3, 0.8, 2]) {
+  const fX = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  fX.begin(new Float32Array(fX.params.length));
+  let cx = 0, cz = 0, tPk = 0, ss = 0, cmd = 0;
+  const rX = runCaptureTeacher(sk, fX, { ...FB, kWtX: kx, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0 }, { dur: 4, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: (_t, _s, _o2, _o, _c, _a, dl) => {
+    const c9 = readCom(fX.doll, cTmp);
+    cx = c9.x;
+    cz = c9.z;
+    tPk = Math.max(tPk, fX.doll.tiltOf(fX.doll.torso()));
+    if (!(footGrounded(fX.doll, "l") && footGrounded(fX.doll, "r"))) ss++;
+    cmd = Math.max(cmd, Math.abs(Number(dl?.sWaist ?? 0)));
+  } });
+  console.log(`  ${kx.toFixed(1).padStart(4)}  0.6 ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rX.t.toFixed(2)}s ${String(ss).padStart(8)} ${cmd.toFixed(1).padStart(7)}`);
 }
-console.log("\n  \u5224\u8BFB\uFF1A(0,0)=\u65E0\u989D\u72B6\u9762\u63A7\u5236\u5BF9\u7167\uFF1B\u6709\u6548\u7EC4\u5408\u5E94\u8BA9 |\u4FA7\u79FB| \u660E\u663E\u5C0F\u4E8E\u524D\u540E\u6F02\u79FB\u3002");
+console.log("\n  \u5224\u8BFB\uFF1A\u672BCoM\u524D\u540E\u5E94\u6536\u655B\u3001\u5B58\u6D3B\u2191\u3001\u8EAF\u5E72\u503E\u89D2\u2193\u3002\u8170\u6307\u4EE4\u5E94\u6052 0\uFF08\u4FDD\u6301\u5E73\u8861\u76F8\u8170\u9759\u9ED8\uFF09\u3002");

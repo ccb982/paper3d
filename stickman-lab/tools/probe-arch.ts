@@ -905,21 +905,20 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-// ===== 单腿站立 + 额状面力学链（髋外展 ↔ 踝内外翻）=====
-console.log('\n=== 单腿站立：额状面力学链验证（kVmpP × kVmpAnkle）===\n');
-console.log('  kVmpP kVmpAnk 末CoM前后 末CoM侧移 躯干倾° 存活   单支撑帧');
-for (const kp of [0, 14, 28]) {
-  for (const ka of [0, 9, 20]) {
-    const fT = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
-    fT.begin(new Float32Array(fT.params.length));
-    let cx = 0, cz = 0, tPk = 0, ss = 0;
-    const rT = runCaptureTeacher(sk, fT, { ...FB, kVmpP: kp, kVmpAnkle: ka }, { dur: 4, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
-      const c6 = readCom(fT.doll, cTmp);
-      cx = c6.x; cz = c6.z;
-      tPk = Math.max(tPk, fT.doll.tiltOf(fT.doll.torso()));
-      if (!(footGrounded(fT.doll, 'l') && footGrounded(fT.doll, 'r'))) ss++;
-    } });
-    console.log(`  ${String(kp).padStart(5)} ${String(ka).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rT.t.toFixed(2)}s ${String(ss).padStart(8)}`);
-  }
+// ===== 单腿站立：三平面分工后的矢状面验证 =====
+console.log('\n=== 单腿站立：矢状面（髋接管）kWtX 扫描 ===\n');
+console.log('  kWtX kWtVx 末CoM前后 末CoM侧移 躯干倾° 存活   单支撑帧 腰指令°');
+for (const kx of [0, 0.3, 0.8, 2.0]) {
+  const fX = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  fX.begin(new Float32Array(fX.params.length));
+  let cx = 0, cz = 0, tPk = 0, ss = 0, cmd = 0;
+  const rX = runCaptureTeacher(sk, fX, { ...FB, kWtX: kx, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0 }, { dur: 4, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (_t, _s, _o2, _o, _c, _a, dl): void => {
+    const c9 = readCom(fX.doll, cTmp);
+    cx = c9.x; cz = c9.z;
+    tPk = Math.max(tPk, fX.doll.tiltOf(fX.doll.torso()));
+    if (!(footGrounded(fX.doll, 'l') && footGrounded(fX.doll, 'r'))) ss++;
+    cmd = Math.max(cmd, Math.abs(Number(dl?.sWaist ?? 0)));
+  } });
+  console.log(`  ${kx.toFixed(1).padStart(4)}  0.6 ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rX.t.toFixed(2)}s ${String(ss).padStart(8)} ${cmd.toFixed(1).padStart(7)}`);
 }
-console.log('\n  判读：(0,0)=无额状面控制对照；有效组合应让 |侧移| 明显小于前后漂移。');
+console.log('\n  判读：末CoM前后应收敛、存活↑、躯干倾角↓。腰指令应恒 0（保持平衡相腰静默）。');
