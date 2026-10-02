@@ -15,7 +15,9 @@ import { BRAIN_SHAPE, brainParamCount, type BrainShape } from './brain';
 import {
   blendInto, makeGaussian, makeRng, mutateInto, randomGenome, type Rng,
 } from './genome';
-import { BEST_BALANCER, BEST_PHASE, balancerGenome, phaseGenomeFor } from './phaseSeed';
+import {
+  BEST_BALANCER, BEST_PHASE, CAPTURE_GENOME_0, balancerGenome, captureGenome, phaseGenomeFor,
+} from './phaseSeed';
 import { Sim, type SimConfig } from './sim';
 import type { Skeleton } from './skeleton';
 
@@ -173,6 +175,15 @@ export class Trainer {
       gait.push(balancerGenome(this.shape, BEST_BALANCER));
       gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
       gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
+      // ★★ 摆腿**族群**：把"抬腿幅度 × 载荷耦合 × 相位"扫成一小族全塞进去。
+      //   为什么要族群而不是一个：单一起点要么不动、要么立刻倒，ES 没有梯度可爬
+      //   （实测手写的单点搜索两次都收敛到"站着不动"）。族群保证"在摆腿"这个维度上
+      //   到处都有候选，ES 只需要在已有的摆动里挑出"能走"的那几个。
+      for (const amp of [0.10, 0.22, 0.35]) {
+        for (const kLoad of [0, 0.3]) {
+          gait.push(captureGenome(this.shape, { ...CAPTURE_GENOME_0, amp, kLoad, kneeAmp: amp * 0.9, kneeBias: -0.05 }));
+        }
+      }
       for (const sc of [BEST_PHASE.scale, 0.5, 1.0]) {
         gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
       }
@@ -260,8 +271,12 @@ export class Trainer {
           this.bestNow.set(this.genomes[this.cursor]);
           this.bestDistNow = sim.distance;
           this.bestFallenNow = sim.fallen;
-          // ★ 本代最优个体的分项（无头训练探针/UI 都要看"这一步到底哪项拿了分"）
-          this.bestTermsNow = sim.terms;
+          // ★★ 本代最优个体的分项（无头训练探针/UI 都要看"这一步到底哪项拿了分"）。
+          //   ⚠⚠ 必须**拷贝**：`sim.terms` 是 Sim 上的可变字段，而 Trainer **复用同一个
+          //   Sim** 跑所有个体 ⇒ 直接存引用的话，它会被后面每一个个体覆盖掉，
+          //   历史（和 UI）里"最优个体的分项"其实一直是**最后一个被评测个体**的分项。
+          //   我因此误判了好几轮（表格里抬腿 2.81，同一个体实测 0.00）。
+          this.bestTermsNow = { ...sim.terms };
           const ws = sim.walkStat;
           this.bestSingleNow = ws.singleRatio;
           this.bestMoveFracNow = ws.moveFrac;

@@ -151,3 +151,102 @@ export const CAPTURE_GAIT = {
   /** 实测：4 次真实换脚、0.625 m、存活 4.32 s（零输出基线 1.83 s） */
   measured: { steps: 4, x: 0.625, t: 4.32 },
 } as const;
+
+// ══════════════════════════════════════════════════════════════════════
+// 捕获点控制器的**基因组版**（2026-10-01）
+//
+// ★ 为什么需要这个：捕获点控制器本身是"状态机 + 二连杆 IK"，**没法直接塞进
+//   4228 个权重**（IK 对目标位置是非线性的）。但在这条腿的**工作范围内**
+//   （脚在地面附近、腿接近伸直），IK 几乎是线性的 ⇒ 可以用
+//   "**线性反馈 + 相位锁定振荡**"逼近：
+//     hip = a·俯仰 + b·俯仰角速度 + c·(CoM 偏移≈捕获点误差) + d·CoM 速度 ± A·sin(φ)
+//   换支撑脚那一下不连续，用**反相的 sin**（左右腿差一个符号）来近似 ——
+//   这就是经典的"相位锁定步态"，本身是线性的。
+//   于是：手写控制器能走的姿态，可以作为**基因组建模**给 ES 当种子。
+
+export interface CaptureGenomeSpec {
+  /** 躯干俯仰 → 髋 */
+  kPitch: number;
+  /** 俯仰角速度 → 髋 */
+  kRate: number;
+  /** CoM 相对支撑域偏移 → 髋（近似捕获点误差） */
+  kCom: number;
+  /** CoM 速度 → 髋 */
+  kComV: number;
+  /** 髋的摆动幅度（rad） */
+  amp: number;
+  /** 摆动相位（0 = 与时钟同相） */
+  phase: number;
+  /** 膝的摆动幅度 */
+  kneeAmp: number;
+  /** 膝静态偏置（落地吸能） */
+  kneeBias: number;
+  /** 髋静态偏置 */
+  hipBias: number;
+  /** ★ 载荷差 → 髋：载荷大的那条伸（支撑）、小的屈（摆动）——"哪条腿摆"由载荷决定 */
+  kLoad: number;
+  /** 膝的载荷差增益（落地吸能/收腿） */
+  kLoadKnee: number;
+  /** ★ Raibert 落脚增益：把脚往捕获点 ξ 推（线性写法 hip += kRaib·(HALF·ξ̂ − 脚相对x)） */
+  kRaib: number;
+}
+
+
+
+/** 从手写控制器反推的初值（capture 探针里最好的那组） */
+export const CAPTURE_GENOME_0: CaptureGenomeSpec = {
+  kPitch: 2.544, kRate: 0.542, kCom: -3.1, kComV: 0.0,
+  amp: 0.12, phase: 0, kneeAmp: 0.09, kneeBias: -0.03, hipBias: 0, kLoad: 0.25, kLoadKnee: 0.4, kRaib: 1.2,
+};
+
+export function captureGenome(shape: BrainShape, s: CaptureGenomeSpec = CAPTURE_GENOME_0): Float32Array {
+  const p = new Float32Array(brainParamCount(shape));
+  const L = brainLayout(shape);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L.w1 + 0 * shape.inputs + QX] = 1;     // h0 = 俯仰
+  p[L.w1 + 1 * shape.inputs + WX] = 1;     // h1 = 俯仰角速度
+  p[L.w1 + 2 * shape.inputs + CMX] = 1;    // h2 = CoM 偏移
+  p[L.w1 + 3 * shape.inputs + CVX] = 1;    // h3 = CoM 速度
+  p[L.w1 + 4 * shape.inputs + 0] = 5;      // h4 = sin(φ)
+  p[L.w1 + 5 * shape.inputs + 1] = 5;      // h5 = cos(φ)
+  const FOOT_H = 20 + 2;                   // 观测里两脚高度/载荷的起始下标（见 sim.observe）
+  p[L.w1 + 6 * shape.inputs + FOOT_H + 2] = 1;   // h6 = 左脚载荷份额
+  p[L.w1 + 7 * shape.inputs + FOOT_H + 3] = 1;   // h7 = 右脚载荷份额
+  p[L.w1 + 8 * shape.inputs + FOOT_H + 4] = 1;   // h8 = 左腿摆动窗口 ★
+  p[L.w1 + 9 * shape.inputs + FOOT_H + 5] = 1;   // h9 = 右腿摆动窗口 ★
+  p[L.w1 + 10 * shape.inputs + FOOT_H + 6] = 1;  // h10 = 左脚相对支撑中心的 x
+  p[L.w1 + 11 * shape.inputs + FOOT_H + 7] = 1;  // h11 = 右脚相对 CoM 的 x
+  p[L.w1 + 12 * shape.inputs + 16] = 1;           // h12 = CoM 速度（×2）⇒ 目标落脚位置 ẋ/ω
+  const cs = Math.cos(s.phase), sn = Math.sin(s.phase);
+  // 振荡项 = amp·sin(φ+phase) = amp·(sn·h4 + cs·h5)
+  const oscS = s.amp * sn, oscC = s.amp * cs;
+  const row = (joint: string, w: number[], b: number): void => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    // ⚠ w 的下标是**隐层单元**下标（0..hidden-1），不是观测下标。
+    //   我踩过这个坑：把观测下标（~98）当隐层下标用，整条 Raibert 项写到行外被丢掉，
+    //   表现就是"加了落脚增益但结果一模一样"。要用的观测必须先经 w1 搬进隐层（h10/h11/h12）。
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape.hidden + i] += w[i];
+    p[L.b2 + o] += b;
+  };
+  // 左腿 sin 为正、右腿反相（换支撑脚）
+  // 载荷差项：hip_l 用 (载荷左 − 载荷右)，hip_r 取反 ⇒ **哪条腿被压住就伸直、另一条屈膝摆动**
+  // ★★ 摆腿改成**直接读摆动窗口**（h8/h9），不再靠反相正弦：
+  //   窗口在支撑相是 0 ⇒ 那条腿真的站住；窗口内 sin 抬起来 ⇒ 真的离地。
+  //   这就是"一次抬一条"的**线性写法**。
+  // ★★ Raibert 落脚（线性）：脚相对 x 应该等于捕获点位置（归一化 ξ̂ 换算成米）。
+  //   支撑相时这个误差本来就接近 0（脚正踩在该踩的地方），摆动相时误差很大 ⇒ 脚被推向捕获点。
+  //   目标位置 = ẋ/ω：h12 是 CoM 速度×2（还原要除 2），再乘 1/ω≈0.55 s 换算成米。
+  //   误差 = (脚相对 CoM 的 x) − ẋ/ω ⇒ 写进输出行是 h10/h12 的线性组合（都在 0..12 内 ✔）。
+  // ⚠ 抬腿项是 **+amp·摆动窗口**（不是负）：实测 amp>0 配负号会把脚按在地上
+  //   （脚最高仅 0.019 m、身体被甩出 0.42 m 后扑倒），符号翻过来才真抬得起来（0.074 m）。
+  row('hip_l', [s.kPitch, s.kRate, s.kCom, s.kComV, 0, 0, s.kLoad, -s.kLoad, s.amp, 0,
+    -s.kRaib, 0, s.kRaib * 0.5 * 0.55], s.hipBias);
+  row('hip_r', [s.kPitch, s.kRate, s.kCom, s.kComV, 0, 0, -s.kLoad, s.kLoad, 0, s.amp,
+    -s.kRaib, 0, s.kRaib * 0.5 * 0.55], s.hipBias);
+  row('knee_l', [0, 0, 0, 0, 0, 0, -s.kLoadKnee, s.kLoadKnee, -s.kneeAmp, 0], s.kneeBias);
+  row('knee_r', [0, 0, 0, 0, 0, 0, s.kLoadKnee, -s.kLoadKnee, 0, -s.kneeAmp], s.kneeBias);
+  row('shoulder_l', [0, 0, 0, 0, 0, 0, 0, 0, -s.amp * 0.4, 0], 0);
+  row('shoulder_r', [0, 0, 0, 0, 0, 0, 0, 0, 0, -s.amp * 0.4], 0);
+  return p;
+}

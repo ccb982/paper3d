@@ -114,12 +114,12 @@ log('══════ [A] 观测 / 支撑域口径自检（直接用 posture.t
   log(`       侧向半宽：被动 ${f(sup.halfZ)} m   主动(凸包) ${f(sup.halfZActive)} m   接地脚数 ${sup.contactN}`);
   log(`       绑定姿态 DCM 归一化位置：nx = ${f(nx)}   nz = ${f(nz)}（|n| < 1 = 在域内）`);
 
-  check('A1 观测维数与声明一致（22 + 6N）',
-    SHAPE.inputs === brain.inputCount(sk.joints.length) && SHAPE.inputs === 22 + 6 * sk.joints.length,
+  check('A1 观测维数与声明一致（36 + 6N：脚载荷/摆动窗口/脚 xz/髋→脚向量）',
+    SHAPE.inputs === brain.inputCount(sk.joints.length) && SHAPE.inputs === 36 + 6 * sk.joints.length,
     `inputs=${SHAPE.inputs}  期望=${22 + 6 * sk.joints.length}`);
   check('A2 INPUT_LAYOUT 长度 = 观测维数', brain.INPUT_LAYOUT.length === SHAPE.inputs,
     `${brain.INPUT_LAYOUT.length} vs ${SHAPE.inputs}`);
-  check('A3 INPUT_COUNT 常量 = 12 关节的实际维数', brain.INPUT_COUNT === 22 + 6 * 12,
+  check('A3 INPUT_COUNT 常量 = 12 关节的实际维数', brain.INPUT_COUNT === 36 + 6 * 12,
     `${brain.INPUT_COUNT}`);
   check('A4 CoM 高度 ≈ 0.966 m（对照 probe-stability 的解析值）',
     Math.abs(com.y - 0.9659) < 0.01, `${f(com.y, 4)} m`);

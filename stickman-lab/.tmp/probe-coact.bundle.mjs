@@ -13785,6 +13785,10 @@ var init_ragdoll = __esm({
        */
       createJoints() {
         this.joints.length = 0;
+        this.hipIdx = [
+          this.sk.joints.findIndex((j) => j.name === "hip_l"),
+          this.sk.joints.findIndex((j) => j.name === "hip_r")
+        ];
         this.sk.joints.forEach((j, i) => {
           const pi = this.indexByKey.get(j.parentKey);
           const ci = this.indexByKey.get(j.childKey);
@@ -14133,11 +14137,41 @@ var init_ragdoll = __esm({
         out[1] += t.y;
         out[2] += t.z;
       }
+      /**
+       * ★ 髋关节锚点的世界位置（IK 的固定端）。
+       *   为什么必须有：teacher 的动作是二连杆 IK，函数的自变量就是"髋→脚"这个向量
+       *   （dx, dy, d）。网络之前**看不见自己的腿长** ⇒ 得用 tanh 去硬拟合 acos/atan2，
+       *   行为克隆的 MSE 卡在 0.17 上下、克隆出来的网络不会走（实测位移 −0.832 m、0 步）。
+       *   把 dx/dy/d 直接喂进去之后，IK 退化成"d 的一维平滑函数"，浅层网就能拟合。
+       */
+      hipPoint(side, out) {
+        const i = this.hipIdx[side === "l" ? 0 : 1];
+        const j = this.sk.joints[i];
+        const b = this.bodies[this.indexByKey.get(j.parentKey) ?? 0];
+        const t = b.translation();
+        this.toWorld(b, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
+        out[0] += t.x;
+        out[1] += t.y;
+        out[2] += t.z;
+      }
+      hipIdx = [-1, -1];
       footTmp = new Float64Array(3);
       /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
       soleY(side) {
         this.footPoint(side, this.footTmp);
         return this.footTmp[1];
+      }
+      /**
+       * ★ 脚掌最低点的世界 **x / z**（观测用）。
+       *   为什么必须有：策略要"把支撑脚撑在某个世界位置上"，就必须**看得见脚在哪**。
+       *   之前观测里只有脚底**高度**和捕获点 ξ，没有脚的 x/z ⇒ 线性策略没法表达
+       *   "脚往捕获点落"这条 Raibert 规则，只能两条腿一起蹦（实测脚最高 0.10 m、
+       *   换脚数 0 —— 那是**跳**不是**步**）。加上 x/z 之后，落脚规则可以写成线性的：
+       *   `hip = k·(ξ_x − sole_x)`。
+       */
+      soleXZ(side, out = this.footTmp) {
+        this.footPoint(side, out);
+        return out[1];
       }
       // ------------------------------------------------------------ 重置
       /**

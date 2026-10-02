@@ -295,12 +295,43 @@ let moved = 0;
 for (let i = 0; i < sim.doll.jointCount; i++) moved += Math.abs(sim.doll.jointAngle(i));
 check('随机基因组确实驱动了关节', moved > 0.05, `Σ|angle| = ${moved.toFixed(3)} rad`);
 
+  // ★★ 防"跨 reset 残留状态"的门禁：同一个基因组在**复用的 Sim** 和**新建的 Sim** 上
+  //   必须逐位同分。Trainer 复用 Sim 训练，而新建 Sim 才是干净起点 ——
+  //   两者不一致就说明有状态没在 begin() 里重置（实测踩过：漏重置 lastLoadFrac，
+  //   表现为"存档续训"从第 4 代开始与"一路训到底"分叉）。
+  {
+    const mkG = (i: number): Float32Array => {
+      const a = new Float32Array(SHAPE.inputs * SHAPE.hidden + SHAPE.hidden
+        + SHAPE.outputs * SHAPE.hidden + SHAPE.outputs);
+      for (let k = 0; k < a.length; k++) a[k] = Math.sin(i * 0.7 + k * 0.013) * 0.3;
+      return a;
+    };
+    const cfgW = { ...DEFAULT_SIM, mode: 'walk' as const, duration: 3 };
+    const sc = (s2: InstanceType<typeof Sim>, g: Float32Array): number => {
+      s2.begin(g); while (!s2.finished) s2.advance(1); return s2.fitness;
+    };
+    const reused = new Sim(sk, SHAPE, cfgW);
+    let bad = 0, worst = 0;
+    for (let i = 0; i < 4; i++) {
+      const g = mkG(i);
+      // 先用一个别的基因组把复用的 Sim 弄"脏"，再评估 g
+      reused.begin(mkG(i + 40));
+      while (!reused.finished) reused.advance(1);
+      const a1 = sc(reused, g);
+      const b1 = sc(new Sim(sk, SHAPE, cfgW), g);
+      if (a1 !== b1) { bad++; worst = Math.max(worst, Math.abs(a1 - b1)); }
+    }
+    check('复用的 Sim ≡ 新建的 Sim（无跨 reset 残留状态）', bad === 0,
+      bad === 0 ? '4 个基因组逐位同分' : `${bad}/4 个不同，最大差 ${worst.toExponential(2)}`);
+  }
+
+
 // ------------------------------------------------------------ 2b. ★ 3D 地基
 
 log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
 {
   const RAPIER = (await import('@dimforge/rapier3d')).default;
-  check('网络输入维度与声明一致（22 + 6N：含重心块 6 维）', SHAPE.inputs === inputCount(sk.joints.length),
+  check('网络输入维度与声明一致（30 + 6N：重心块 6 + 脚载荷 2 + 摆动窗口 2 + 脚 x/z 4）', SHAPE.inputs === inputCount(sk.joints.length),
     `inputs=${SHAPE.inputs} 期望=${inputCount(sk.joints.length)}（关节数 ${sk.joints.length}）`);
   check('网络输出 = 关节数 × 3',
     SHAPE.outputs === sk.joints.length * 3, `outputs=${SHAPE.outputs} 关节数=${sk.joints.length}`);

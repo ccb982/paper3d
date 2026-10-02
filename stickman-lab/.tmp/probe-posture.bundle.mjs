@@ -13785,6 +13785,10 @@ var init_ragdoll = __esm({
        */
       createJoints() {
         this.joints.length = 0;
+        this.hipIdx = [
+          this.sk.joints.findIndex((j) => j.name === "hip_l"),
+          this.sk.joints.findIndex((j) => j.name === "hip_r")
+        ];
         this.sk.joints.forEach((j, i) => {
           const pi = this.indexByKey.get(j.parentKey);
           const ci = this.indexByKey.get(j.childKey);
@@ -14133,11 +14137,41 @@ var init_ragdoll = __esm({
         out[1] += t.y;
         out[2] += t.z;
       }
+      /**
+       * ★ 髋关节锚点的世界位置（IK 的固定端）。
+       *   为什么必须有：teacher 的动作是二连杆 IK，函数的自变量就是"髋→脚"这个向量
+       *   （dx, dy, d）。网络之前**看不见自己的腿长** ⇒ 得用 tanh 去硬拟合 acos/atan2，
+       *   行为克隆的 MSE 卡在 0.17 上下、克隆出来的网络不会走（实测位移 −0.832 m、0 步）。
+       *   把 dx/dy/d 直接喂进去之后，IK 退化成"d 的一维平滑函数"，浅层网就能拟合。
+       */
+      hipPoint(side, out) {
+        const i = this.hipIdx[side === "l" ? 0 : 1];
+        const j = this.sk.joints[i];
+        const b = this.bodies[this.indexByKey.get(j.parentKey) ?? 0];
+        const t = b.translation();
+        this.toWorld(b, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
+        out[0] += t.x;
+        out[1] += t.y;
+        out[2] += t.z;
+      }
+      hipIdx = [-1, -1];
       footTmp = new Float64Array(3);
       /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
       soleY(side) {
         this.footPoint(side, this.footTmp);
         return this.footTmp[1];
+      }
+      /**
+       * ★ 脚掌最低点的世界 **x / z**（观测用）。
+       *   为什么必须有：策略要"把支撑脚撑在某个世界位置上"，就必须**看得见脚在哪**。
+       *   之前观测里只有脚底**高度**和捕获点 ξ，没有脚的 x/z ⇒ 线性策略没法表达
+       *   "脚往捕获点落"这条 Raibert 规则，只能两条腿一起蹦（实测脚最高 0.10 m、
+       *   换脚数 0 —— 那是**跳**不是**步**）。加上 x/z 之后，落脚规则可以写成线性的：
+       *   `hip = k·(ξ_x − sole_x)`。
+       */
+      soleXZ(side, out = this.footTmp) {
+        this.footPoint(side, out);
+        return out[1];
       }
       // ------------------------------------------------------------ 重置
       /**
@@ -14179,10 +14213,10 @@ __export(brain_exports, {
   shapeForJoints: () => shapeForJoints
 });
 function shapeForJoints(jointCount) {
-  return { inputs: 22 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+  return { inputs: 36 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
 }
 function inputCount(jointCount) {
-  return 22 + 6 * jointCount;
+  return 36 + 6 * jointCount;
 }
 function inputLayout(jointCount) {
   const out = [
@@ -14219,6 +14253,10 @@ function inputLayout(jointCount) {
   for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].rot.x`, `joint[${i}].rot.y`, `joint[${i}].rot.z`);
   for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].relw.x`, `joint[${i}].relw.y`, `joint[${i}].relw.z`);
   out.push("sole.l.y", "sole.r.y");
+  out.push("foot.l.load", "foot.r.load");
+  out.push("swing.l", "swing.r");
+  out.push("foot.l.dx", "foot.r.dx", "foot.l.dz", "foot.r.dz");
+  out.push("leg.l.dx", "leg.l.dy", "leg.l.len", "leg.r.dx", "leg.r.dy", "leg.r.len");
   return out;
 }
 function brainParamCount(s) {
@@ -14253,7 +14291,7 @@ var init_brain = __esm({
     HIDDEN_UNITS = 32;
     BRAIN_SHAPE = shapeForJoints(9);
     INPUT_LAYOUT = inputLayout(12);
-    INPUT_COUNT = 22 + 6 * 12;
+    INPUT_COUNT = 36 + 6 * 12;
     OUTPUT_PER_JOINT = 3;
   }
 });
@@ -14469,6 +14507,7 @@ var init_sim = __esm({
       gaitHz: 1.15,
       stepVMin: 0.05,
       shiftCapSec: 1.5,
+      swingDuty: 0.45,
       stepMinDx: 0.05,
       // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
       stepMaxDz: 0.06,
@@ -14588,7 +14627,11 @@ var init_sim = __esm({
       accLift = 0;
       // Σ_脚 min(1, 腾空/目标)·dt
       accSingle = 0;
-      // 双脚离地（跳/摔）时间积分，×dt（负）
+      // 单脚支撑时间积分（×dt）
+      gN0 = 0;
+      gN1 = 0;
+      gN2 = 0;
+      // 接地脚数的帧数分布（诊断）
       altCount = 0;
       accSwitchQ = 0;
       // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
@@ -14607,6 +14650,11 @@ var init_sim = __esm({
       // ∫Στ²
       accActRate = 0;
       // ∫Σ|Δq*|²
+      lastLoadFrac = [0.5, 0.5];
+      // 上一拍每脚载荷份额（观测用）
+      footTmpL = new Float64Array(3);
+      footTmpR = new Float64Array(3);
+      hipTmp = new Float64Array(3);
       airL = 0;
       // 左脚连续腾空时间
       airR = 0;
@@ -14775,6 +14823,9 @@ var init_sim = __esm({
         this.accVel = 0;
         this.accClose = 0;
         this.accBalance = 0;
+        this.gN0 = 0;
+        this.gN1 = 0;
+        this.gN2 = 0;
         this.accLift = 0;
         this.accSingle = 0;
         this.accTicks = 0;
@@ -14790,6 +14841,7 @@ var init_sim = __esm({
         this.airL = 0;
         this.airR = 0;
         this.motorPrev.fill(0);
+        this.lastLoadFrac = [0.5, 0.5];
         this.accVelTrack = 0;
         this.accYaw = 0;
         this.accLat = 0;
@@ -14852,6 +14904,10 @@ var init_sim = __esm({
        * ★ 诊断（走路奖励）：腾空/单脚支撑/逐关节移动 —— 经典配方里"交替步态从哪来"的全部证据。
        *   `singleRatio` = 恰好一脚着地的时间占比（"一次抬一条"的直接度量）。
        */
+      /** ★ 调试：接触/腾空的原始计数（一脚着地=0、双脚=1、离地=2 的帧数），用来定位"为什么换脚数是 0" */
+      get rawGround() {
+        return { n0: this.gN0, n1: this.gN1, n2: this.gN2, accSingle: this.accSingle, accLift: this.accLift, switchQ: this.accSwitchQ, alive: this.accTicks > 0 ? this.accAlive / this.accTicks : 0 };
+      }
       get walkStat() {
         const E = Math.max(0.2, this.accTicks);
         const jt = {};
@@ -14877,6 +14933,13 @@ var init_sim = __esm({
         return this.fitness;
       }
       // ------------------------------------------------------------ 每控制周期
+      /**
+       * 最近一帧的观测向量（`x`）。给行为克隆/探针用：teacher 采数据时要记下
+       * "这一刻看到了什么"，才能训出 `观测 → 目标` 的映射。
+       */
+      observation() {
+        return this.x;
+      }
       controlTick() {
         const doll = this.doll;
         const p = this.params;
@@ -14891,6 +14954,10 @@ var init_sim = __esm({
         const c2 = Math.PI * 2;
         x[0] = Math.sin(this.phase * c2);
         x[1] = Math.cos(this.phase * c2);
+        if (this.cfg.obsMask?.clock) {
+          x[0] = 0;
+          x[1] = 0;
+        }
         x[2] = tq.x;
         x[3] = tq.y;
         x[4] = tq.z;
@@ -14916,20 +14983,74 @@ var init_sim = __esm({
         x[19] = nz > 3 ? 3 : nz < -3 ? -3 : nz;
         let k = 20;
         const jb = this.jbuf;
+        const noJoint = this.cfg.obsMask?.joint === true;
+        const noQuat = this.cfg.obsMask?.quat === true;
+        const noVel = this.cfg.obsMask?.vel === true;
         for (let i = 0; i < doll.jointCount; i++) {
           doll.jointRot(i, jb);
-          x[k++] = jb[0];
-          x[k++] = jb[1];
-          x[k++] = jb[2];
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0];
+            x[k++] = jb[1];
+            x[k++] = jb[2];
+          }
         }
         for (let i = 0; i < doll.jointCount; i++) {
           doll.jointRelVel(i, jb);
-          x[k++] = jb[0] * 0.2;
-          x[k++] = jb[1] * 0.2;
-          x[k++] = jb[2] * 0.2;
+          if (noJoint) {
+            x[k] = 0;
+            x[k + 1] = 0;
+            x[k + 2] = 0;
+            k += 3;
+          } else {
+            x[k++] = jb[0] * 0.2;
+            x[k++] = jb[1] * 0.2;
+            x[k++] = jb[2] * 0.2;
+          }
+        }
+        if (noQuat) {
+          for (let q = 2; q <= 5; q++) x[q] = 0;
+        }
+        if (noVel) {
+          for (let q = 6; q <= 11; q++) x[q] = 0;
         }
         x[k] = doll.soleY("l");
         x[k + 1] = doll.soleY("r");
+        const lf = this.lastLoadFrac;
+        x[k + 2] = Math.round(lf[0] * 100) / 100;
+        x[k + 3] = Math.round(lf[1] * 100) / 100;
+        {
+          const duty = Math.max(0.15, Math.min(0.85, this.cfg.swingDuty));
+          const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+          const w1 = (q) => {
+            if (ph >= q || ph < q - 1 + duty) return 0;
+            const s = (ph - (q - 1 + duty) + 1) / duty;
+            return Math.sin(Math.PI * Math.max(0, Math.min(1, s)));
+          };
+          x[k + 4] = w1(0);
+          x[k + 5] = w1(duty);
+        }
+        doll.soleXZ("l", this.footTmpL);
+        doll.soleXZ("r", this.footTmpR);
+        const q1 = (v) => Math.round(v * 1e3) / 1e3;
+        x[k + 6] = q1(this.footTmpL[0] - com.x);
+        x[k + 7] = q1(this.footTmpR[0] - com.x);
+        x[k + 8] = q1(this.footTmpL[2] - com.z);
+        x[k + 9] = q1(this.footTmpR[2] - com.z);
+        for (let s2 = 0; s2 < 2; s2++) {
+          const side = s2 === 0 ? "l" : "r";
+          const fp = s2 === 0 ? this.footTmpL : this.footTmpR;
+          doll.hipPoint(side, this.hipTmp);
+          const dx = q1(fp[0] - this.hipTmp[0]);
+          const dy = q1(fp[1] - this.hipTmp[1]);
+          x[k + 10 + s2 * 3] = dx;
+          x[k + 11 + s2 * 3] = dy;
+          x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
+        }
         brainForward(this.shape, p, x, this.hidden, this.out);
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
         doll.setMotorTargets(this.motor);
@@ -14945,23 +15066,30 @@ var init_sim = __esm({
         this.balanceTicks++;
         const gL = footGrounded(doll, "l"), gR = footGrounded(doll, "r");
         const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        if (nGround === 0) this.gN0++;
+        else if (nGround === 1) this.gN1++;
+        else this.gN2++;
         const stanceNow = nGround === 0 ? 0 : gL ? 1 : 2;
         const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
         if (altNow) this.altCount++;
         this.airL = gL ? 0 : this.airL + dt;
         this.airR = gR ? 0 : this.airR + dt;
-        this.accLift += (Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET)) * dt;
+        const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
+        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt;
         const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
         const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
         this.accAlive += alive * dt;
         const [fl2, fr2] = this.doll.footLoadFrac(dt);
+        this.lastLoadFrac = [fl2, fr2];
         this.accShift += Math.abs(fl2 - fr2) * dt;
         const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
-        if (dom !== 0 && this.doll.altEvent(dom, dt)) {
+        const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
+        const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
+        if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
           this.altCount++;
           this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
         }
-        this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;
+        this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
         this.accTicks += dt;
         let jSpd = 0, jMove = 0;
         for (let i2 = 0; i2 < doll.jointCount; i2++) {
@@ -14971,7 +15099,7 @@ var init_sim = __esm({
           if (MOVE_SET.has(JOINT_ORDER[i2])) {
             const sp = Math.sqrt(jSpd === 0 ? w0 * w0 : w0 * w0 + w1 * w1 + w2 * w2);
             const f2 = Math.min(1, sp / JOINT_MOVE_TARGET);
-            this.accJtMove[JOINT_ORDER[i2]] += f2 * dt;
+            if (nGround === 1) this.accJtMove[JOINT_ORDER[i2]] += f2 * dt;
             jMove += f2;
           }
         }
@@ -14986,7 +15114,7 @@ var init_sim = __esm({
         this.accJointMotion += jSpd * dt;
         this.accActRate += act2 * dt;
         this.accTau += tau2 * dt;
-        this.accMoveSum += jMove * dt;
+        this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
         const tvx = tv.x, tvz = tv.z;
         const ang = torso.angvel();
         this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
@@ -15183,18 +15311,23 @@ __export(genome_exports, {
 });
 function makeRng(seed) {
   let a = seed >>> 0;
-  return () => {
+  const f2 = () => {
     a = a + 1831565813 >>> 0;
     let t = a;
     t = Math.imul(t ^ t >>> 15, t | 1);
     t ^= t + Math.imul(t ^ t >>> 7, t | 61);
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
+  f2.getState = () => ({ s: a });
+  f2.setState = (st) => {
+    a = st.s >>> 0;
+  };
+  return f2;
 }
 function makeGaussian(rng) {
   let spare = 0;
   let hasSpare = false;
-  return () => {
+  const f2 = () => {
     if (hasSpare) {
       hasSpare = false;
       return spare;
@@ -15210,6 +15343,13 @@ function makeGaussian(rng) {
     hasSpare = true;
     return u * m;
   };
+  f2.getState = () => ({ s: rng.getState ? rng.getState().s : 0, spare, hasSpare });
+  f2.setState = (st) => {
+    if (rng.setState && st) rng.setState({ s: st.s });
+    spare = st?.spare ?? 0;
+    hasSpare = st?.hasSpare ?? false;
+  };
+  return f2;
 }
 function randomGenome(s, gauss, scale = 1) {
   const g = new Float32Array(brainParamCount(s));
@@ -15304,13 +15444,115 @@ function phaseGenome(shape, s) {
 function phaseGenomeFor(jointCount, s = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s);
 }
-var BEST_PHASE;
+function balancerGenome(shape, s = BEST_BALANCER) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L = brainLayout(shape);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L.w1 + 0 * shape.inputs + QX] = 1;
+  p[L.w1 + 1 * shape.inputs + WX] = 1;
+  p[L.w1 + 2 * shape.inputs + CMX] = 1;
+  p[L.w1 + 3 * shape.inputs + CVX] = 1;
+  p[L.w1 + 4 * shape.inputs + 0] = 5;
+  p[L.w1 + 5 * shape.inputs + 1] = 5;
+  const row2 = (joint, w, b) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape.hidden + i] += w[i];
+    p[L.b2 + o] += b;
+  };
+  for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
+    row2(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
+  }
+  row2("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row2("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row2("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
+  row2("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  return p;
+}
+function captureGenome(shape, s = CAPTURE_GENOME_0) {
+  const p = new Float32Array(brainParamCount(shape));
+  const L = brainLayout(shape);
+  const QX = 2, WX = 9, CMX = 14, CVX = 16;
+  p[L.w1 + 0 * shape.inputs + QX] = 1;
+  p[L.w1 + 1 * shape.inputs + WX] = 1;
+  p[L.w1 + 2 * shape.inputs + CMX] = 1;
+  p[L.w1 + 3 * shape.inputs + CVX] = 1;
+  p[L.w1 + 4 * shape.inputs + 0] = 5;
+  p[L.w1 + 5 * shape.inputs + 1] = 5;
+  const FOOT_H = 20 + 2;
+  p[L.w1 + 6 * shape.inputs + FOOT_H + 2] = 1;
+  p[L.w1 + 7 * shape.inputs + FOOT_H + 3] = 1;
+  p[L.w1 + 8 * shape.inputs + FOOT_H + 4] = 1;
+  p[L.w1 + 9 * shape.inputs + FOOT_H + 5] = 1;
+  p[L.w1 + 10 * shape.inputs + FOOT_H + 6] = 1;
+  p[L.w1 + 11 * shape.inputs + FOOT_H + 7] = 1;
+  p[L.w1 + 12 * shape.inputs + 16] = 1;
+  const cs = Math.cos(s.phase), sn = Math.sin(s.phase);
+  const oscS = s.amp * sn, oscC = s.amp * cs;
+  const row2 = (joint, w, b) => {
+    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
+    if (o < 0) return;
+    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape.hidden + i] += w[i];
+    p[L.b2 + o] += b;
+  };
+  row2("hip_l", [
+    s.kPitch,
+    s.kRate,
+    s.kCom,
+    s.kComV,
+    0,
+    0,
+    s.kLoad,
+    -s.kLoad,
+    s.amp,
+    0,
+    -s.kRaib,
+    0,
+    s.kRaib * 0.5 * 0.55
+  ], s.hipBias);
+  row2("hip_r", [
+    s.kPitch,
+    s.kRate,
+    s.kCom,
+    s.kComV,
+    0,
+    0,
+    -s.kLoad,
+    s.kLoad,
+    0,
+    s.amp,
+    -s.kRaib,
+    0,
+    s.kRaib * 0.5 * 0.55
+  ], s.hipBias);
+  row2("knee_l", [0, 0, 0, 0, 0, 0, -s.kLoadKnee, s.kLoadKnee, -s.kneeAmp, 0], s.kneeBias);
+  row2("knee_r", [0, 0, 0, 0, 0, 0, s.kLoadKnee, -s.kLoadKnee, 0, -s.kneeAmp], s.kneeBias);
+  row2("shoulder_l", [0, 0, 0, 0, 0, 0, 0, 0, -s.amp * 0.4, 0], 0);
+  row2("shoulder_r", [0, 0, 0, 0, 0, 0, 0, 0, 0, -s.amp * 0.4], 0);
+  return p;
+}
+var BEST_PHASE, BEST_BALANCER, CAPTURE_GENOME_0;
 var init_phaseSeed = __esm({
   "src/core/phaseSeed.ts"() {
     "use strict";
     init_brain();
     init_skeleton();
     BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
+    BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+    CAPTURE_GENOME_0 = {
+      kPitch: 2.544,
+      kRate: 0.542,
+      kCom: -3.1,
+      kComV: 0,
+      amp: 0.12,
+      phase: 0,
+      kneeAmp: 0.09,
+      kneeBias: -0.03,
+      hipBias: 0,
+      kLoad: 0.25,
+      kLoadKnee: 0.4,
+      kRaib: 1.2
+    };
   }
 });
 
@@ -15421,6 +15663,14 @@ var init_evolution = __esm({
         const rnd = randomGenome(this.shape, this.gauss, INIT_WEIGHT_SCALE);
         const gait = [];
         if (this.cfg.seedGait) {
+          gait.push(balancerGenome(this.shape, BEST_BALANCER));
+          gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.15 }));
+          gait.push(balancerGenome(this.shape, { ...BEST_BALANCER, osc: 0.4 }));
+          for (const amp of [0.1, 0.22, 0.35]) {
+            for (const kLoad of [0, 0.3]) {
+              gait.push(captureGenome(this.shape, { ...CAPTURE_GENOME_0, amp, kLoad, kneeAmp: amp * 0.9, kneeBias: -0.05 }));
+            }
+          }
           for (const sc of [BEST_PHASE.scale, 0.5, 1]) {
             gait.push(phaseGenomeFor(this.jointCount, { ...BEST_PHASE, scale: sc }));
           }
@@ -15504,7 +15754,7 @@ var init_evolution = __esm({
               this.bestNow.set(this.genomes[this.cursor]);
               this.bestDistNow = sim.distance;
               this.bestFallenNow = sim.fallen;
-              this.bestTermsNow = sim.terms;
+              this.bestTermsNow = { ...sim.terms };
               const ws = sim.walkStat;
               this.bestSingleNow = ws.singleRatio;
               this.bestMoveFracNow = ws.moveFrac;
@@ -15598,6 +15848,59 @@ var init_evolution = __esm({
         this.startGeneration();
       }
       /** 把一份外部基因组注入当代（导入存档 / 用历史最佳继续跑） */
+      /**
+       * ★ 存档：把整个训练状态打包成纯数据（供 persist.ts 写 localStorage / 导出文件）。
+       *   含**随机数状态** ⇒ 恢复后训练从原来那一步继续，而不是从头再来一遍。
+       */
+      snapshot() {
+        const w = {};
+        const ms2 = {};
+        for (const [k, v] of Object.entries(this.sims[0]?.w ?? {})) {
+          if (typeof v === "number") w[k] = v;
+          else if (k === "moveScale" && v && typeof v === "object") Object.assign(ms2, v);
+        }
+        return {
+          mode: "walk",
+          // Trainer 目前只跑 walk；fight 时由 main 传 mode 覆盖
+          gen: this.gen,
+          sigma: this.sigma,
+          // ★ 高斯采样器也要存（它内部缓存了 Box–Muller 的第二个样本，漏了会导致往返不一致）
+          rng: this.gauss.getState ? this.gauss.getState() : { s: 0, spare: 0, hasSpare: false },
+          // ★ prevMean 也要存：它是 1/5 成功法则的判据，漏了的话读档后第一步的 σ 自适应就分叉
+          //   （实测：状态逐位一致，读档继续训 3 代的结果仍与一路训到底不同）。
+          prevMean: Number.isFinite(this.prevMean) ? this.prevMean : null,
+          genomes: this.genomes.map((g) => Array.from(g)),
+          bestEver: Array.from(this.bestEver),
+          bestEverFitness: this.bestEverFitness,
+          weights: w,
+          moveScale: ms2,
+          shape: { inputs: this.shape.inputs, hidden: this.shape.hidden, outputs: this.shape.outputs },
+          history: this.history.slice(-200).map((h) => ({ gen: h.gen, best: h.best, mean: h.mean }))
+        };
+      }
+      /** 读档：种群/最优/σ/RNG/权重全部还原，然后重新开一代。 */
+      restore(s) {
+        this.gen = s.gen;
+        this.sigma = s.sigma;
+        this.prevMean = s.prevMean ?? -Infinity;
+        if (this.gauss.setState) this.gauss.setState(s.rng);
+        else if (this.rng.setState) this.rng.setState({ s: s.rng.s });
+        for (let i = 0; i < this.genomes.length && i < s.genomes.length; i++) {
+          this.genomes[i].set(s.genomes[i]);
+        }
+        this.bestEver.set(s.bestEver);
+        this.bestEverFitness = s.bestEverFitness;
+        const w = { ...s.weights };
+        for (const sm of this.sims) {
+          sm.setWeights(w);
+          for (const [j, v] of Object.entries(s.moveScale)) {
+            sm.w.moveScale[j] = v;
+          }
+        }
+        this.history.length = 0;
+        for (const h of s.history) this.history.push({ ...h });
+        this.startGeneration();
+      }
       inject(genome2, asBest = true) {
         if (genome2.length !== this.paramCount) {
           throw new Error(`[trainer] \u6CE8\u5165\u7684\u57FA\u56E0\u7EC4\u957F\u5EA6 ${genome2.length} \u2260 ${this.paramCount}`);
@@ -15689,8 +15992,8 @@ log("\u2550\u2550\u2550\u2550\u2550\u2550 [A] \u89C2\u6D4B / \u652F\u6491\u57DF\
   log(`       \u4FA7\u5411\u534A\u5BBD\uFF1A\u88AB\u52A8 ${f(sup.halfZ)} m   \u4E3B\u52A8(\u51F8\u5305) ${f(sup.halfZActive)} m   \u63A5\u5730\u811A\u6570 ${sup.contactN}`);
   log(`       \u7ED1\u5B9A\u59FF\u6001 DCM \u5F52\u4E00\u5316\u4F4D\u7F6E\uFF1Anx = ${f(nx)}   nz = ${f(nz)}\uFF08|n| < 1 = \u5728\u57DF\u5185\uFF09`);
   check(
-    "A1 \u89C2\u6D4B\u7EF4\u6570\u4E0E\u58F0\u660E\u4E00\u81F4\uFF0822 + 6N\uFF09",
-    SHAPE.inputs === brain.inputCount(sk.joints.length) && SHAPE.inputs === 22 + 6 * sk.joints.length,
+    "A1 \u89C2\u6D4B\u7EF4\u6570\u4E0E\u58F0\u660E\u4E00\u81F4\uFF0836 + 6N\uFF1A\u811A\u8F7D\u8377/\u6446\u52A8\u7A97\u53E3/\u811A xz/\u9ACB\u2192\u811A\u5411\u91CF\uFF09",
+    SHAPE.inputs === brain.inputCount(sk.joints.length) && SHAPE.inputs === 36 + 6 * sk.joints.length,
     `inputs=${SHAPE.inputs}  \u671F\u671B=${22 + 6 * sk.joints.length}`
   );
   check(
@@ -15700,7 +16003,7 @@ log("\u2550\u2550\u2550\u2550\u2550\u2550 [A] \u89C2\u6D4B / \u652F\u6491\u57DF\
   );
   check(
     "A3 INPUT_COUNT \u5E38\u91CF = 12 \u5173\u8282\u7684\u5B9E\u9645\u7EF4\u6570",
-    brain.INPUT_COUNT === 22 + 6 * 12,
+    brain.INPUT_COUNT === 36 + 6 * 12,
     `${brain.INPUT_COUNT}`
   );
   check(

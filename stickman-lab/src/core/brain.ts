@@ -23,7 +23,7 @@ export const HIDDEN_UNITS = 32;
  * ★ 按关节数算出网络形状。
  *   inputs  = 2（时钟）+ 4（胸腔四元数）+ 3（线速度）+ 3（角速度）+ 1（高度）+ 1（侧向 z）
  *             + 2（CoM 相对支撑域中心）+ 2（CoM 速度）+ 2（DCM 归一化越界量）
- *             + 3N（关节旋转向量）+ 3N（相对角速度）+ 2（两脚高度）= 22 + 6N
+ *             + 3N（关节旋转向量）+ 3N（相对角速度）+ 2（两脚高度）+ 2（两脚载荷份额）+ 2（两腿摆动窗口）+ 4（两脚世界 x/z）+ 6（两腿髋→脚 dx/dy/d）= 36 + 6N
  *   outputs = 3N（每关节 3 轴**目标角**，见 ragdoll.setMotorTargets）
  *
  * ★ 为什么是函数而不是常量：躯干沿脊柱分段后关节数不再是 9（见 SkeletonConfig.spineSegments），
@@ -36,11 +36,15 @@ export const HIDDEN_UNITS = 32;
  *   实测症状就是这个："直立占比 48~97% 却只前进 0.37 m、**仍判摔**"。
  */
 export function shapeForJoints(jointCount: number): BrainShape {
-  return { inputs: 22 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
+  // ★ +2：每只脚的**载荷份额**（见 sim.ts 里 observe 的注释：没有这一路，
+  //   就没法用线性反馈表达"哪条腿在摆" ⇒ 固定反相正弦会让支撑腿也摆起来）
+  // ★ 再 +2：每条腿的**摆动窗口**（把"该抬哪条腿"这个不连续决策变成线性可读）
+  // ★ 再 +4：两只脚的世界 x/z（Raibert 落脚）；★ 再 +6：每条腿的髋→脚 (dx,dy,d)（IK）
+  return { inputs: 36 + 6 * jointCount, hidden: HIDDEN_UNITS, outputs: 3 * jointCount };
 }
 
 export function inputCount(jointCount: number): number {
-  return 22 + 6 * jointCount;
+  return 36 + 6 * jointCount;
 }
 
 /** 9 关节骨架（spineSegments = 1）的形状：76 / 32 / 27。仅作默认值/参考 */
@@ -77,14 +81,19 @@ export function inputLayout(jointCount: number): string[] {
   for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].rot.x`, `joint[${i}].rot.y`, `joint[${i}].rot.z`);
   for (let i = 0; i < jointCount; i++) out.push(`joint[${i}].relw.x`, `joint[${i}].relw.y`, `joint[${i}].relw.z`);
   out.push('sole.l.y', 'sole.r.y');
+  // ★ 行走必需的那几项（2026-10-01 补齐）：载荷份额 / 摆动窗口 / 脚的 x,z / 髋→脚向量
+  out.push('foot.l.load', 'foot.r.load');
+  out.push('swing.l', 'swing.r');
+  out.push('foot.l.dx', 'foot.r.dx', 'foot.l.dz', 'foot.r.dz');       // 相对 CoM（m）
+  out.push('leg.l.dx', 'leg.l.dy', 'leg.l.len', 'leg.r.dx', 'leg.r.dy', 'leg.r.len');
   return out;
 }
 
-/** 12 关节（spineSegments = 4）的清单，长 94 */
+/** 12 关节（spineSegments = 4）的清单，长 108 */
 export const INPUT_LAYOUT = inputLayout(12);
 
-/** 12 关节（spineSegments = 4）时的观测维数：22 + 6×12 = 94 */
-export const INPUT_COUNT = 22 + 6 * 12;
+/** 12 关节（spineSegments = 4）时的观测维数：36 + 6×12 = 108 */
+export const INPUT_COUNT = 36 + 6 * 12;
 
 /** 输出：每关节 3 个数（**目标关节角**的比例，父体本地三轴 ∈ [-1,1]，见 ragdoll.posRefScale） */
 export const OUTPUT_PER_JOINT = 3;

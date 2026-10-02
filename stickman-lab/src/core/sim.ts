@@ -63,6 +63,8 @@ export interface SimConfig {
   stepMinTotal: number;
   /** ★ 重心转移项的封顶秒数（"会单腿平衡"这件事值多少）；不封顶会被"永远单腿站"刷满 */
   shiftCapSec: number;
+  /** ★ 摆动窗口的占空比（每条腿在一个周期里"抬腿"的时间占比），两腿错开 */
+  swingDuty: number;
   /**
    * ★★ 观测消融开关（**只给 tools/probe-closed 用**，正常训练一律 false/不设）。
    *   用来回答"训练出来的到底是闭环反馈还是一段回放"：把观测的某一部分置零，
@@ -130,6 +132,7 @@ export const DEFAULT_SIM: SimConfig = {
   gaitHz: 1.15,
   stepVMin: 0.05,
   shiftCapSec: 1.5,
+  swingDuty: 0.45,
   stepMinDx: 0.05,     // ★ 一次有效迈步至少净前进 5 cm（**先用小阈值**，见 stepMinDxMax 课程）
   stepMaxDz: 0.06,     // 同一步内横向漂移上限 6 cm（约 27° 航向角 ⇒ 算"直线"）
   stepMinTotal: 0.15,  // 累计前进不足 15 cm 时一律不给步数分
@@ -259,7 +262,8 @@ export class Sim {
   private accEnergy = 0;
   // ══════ 走路奖励（walkReward.ts 的 11 项）══════
   private accLift = 0;          // Σ_脚 min(1, 腾空/目标)·dt
-  private accSingle = 0;        // 双脚离地（跳/摔）时间积分，×dt（负）
+  private accSingle = 0;        // 单脚支撑时间积分（×dt）
+  private gN0 = 0; private gN1 = 0; private gN2 = 0;   // 接地脚数的帧数分布（诊断）
   private altCount = 0;
   private accSwitchQ = 0;         // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
   private accShift = 0;          // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
@@ -270,6 +274,10 @@ export class Sim {
   private accJointMotion = 0;   // ∫Σ|q̇|²
   private accTau = 0;           // ∫Στ²
   private accActRate = 0;       // ∫Σ|Δq*|²
+  private lastLoadFrac: [number, number] = [0.5, 0.5];   // 上一拍每脚载荷份额（观测用）
+  private footTmpL = new Float64Array(3);
+  private footTmpR = new Float64Array(3);
+  private hipTmp = new Float64Array(3);
   private airL = 0;             // 左脚连续腾空时间
   private airR = 0;
   private motorPrev: Float32Array;   // 上一拍的马达目标（action rate）
@@ -442,10 +450,16 @@ export class Sim {
     this.accUpright = 0; this.accHeight = 0; this.accLateral = 0;
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
     // 走路奖励记账器（walkReward.ts）
+    this.gN0 = 0; this.gN1 = 0; this.gN2 = 0;
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
     this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
     this.airL = 0; this.airR = 0; this.motorPrev.fill(0);
+    // ⚠ 观测里的每脚载荷份额也必须重置：漏掉它时，**复用的 Sim** 会把上一代的
+    //   载荷带进下一个个体的第一帧，而新建的 Sim 从默认值开始 ⇒
+    //   "存档→续训"在第 4 代开始与"一路训到底"分叉（实测 1.490 vs 1.508）。
+    //   这条由 verify-core 的"复用 Sim ≡ 新建 Sim"门禁永久盯着。
+    this.lastLoadFrac = [0.5, 0.5];
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
     for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
     this.supInRatio = 0;
@@ -506,6 +520,11 @@ export class Sim {
    * ★ 诊断（走路奖励）：腾空/单脚支撑/逐关节移动 —— 经典配方里"交替步态从哪来"的全部证据。
    *   `singleRatio` = 恰好一脚着地的时间占比（"一次抬一条"的直接度量）。
    */
+  /** ★ 调试：接触/腾空的原始计数（一脚着地=0、双脚=1、离地=2 的帧数），用来定位"为什么换脚数是 0" */
+  get rawGround(): { n0: number; n1: number; n2: number; accSingle: number; accLift: number; switchQ: number; alive: number } {
+    return { n0: this.gN0, n1: this.gN1, n2: this.gN2, accSingle: this.accSingle, accLift: this.accLift, switchQ: this.accSwitchQ, alive: this.accTicks > 0 ? this.accAlive / this.accTicks : 0 };
+  }
+
   get walkStat(): {
     airL: number; airR: number; singleRatio: number; moveFrac: number;
     jtMove: Record<string, number>; supInRatio: number; inDomainRatio: number;
@@ -537,6 +556,14 @@ export class Sim {
 
   // ------------------------------------------------------------ 每控制周期
 
+  /**
+   * 最近一帧的观测向量（`x`）。给行为克隆/探针用：teacher 采数据时要记下
+   * "这一刻看到了什么"，才能训出 `观测 → 目标` 的映射。
+   */
+  observation(): Float32Array {
+    return this.x;
+  }
+
   private controlTick(): void {
     const doll = this.doll;
     const p = this.params;
@@ -545,7 +572,7 @@ export class Sim {
     this.phase += this.cfg.gaitHz / this.cfg.controlHz;
     if (this.phase >= 1) this.phase -= Math.floor(this.phase);
 
-    // ---- 填输入（布局见 brain.ts 的 INPUT_LAYOUT，共 22 + 6N 维）----
+    // ---- 填输入（布局见 brain.ts 的 INPUT_LAYOUT，共 36 + 6N 维）----
     const torso = doll.torso();
     const tp = torso.translation();
     const tv = torso.linvel();
@@ -598,6 +625,69 @@ export class Sim {
     if (noVel) { for (let q = 6; q <= 11; q++) x[q] = 0; }
     x[k] = doll.soleY('l');
     x[k + 1] = doll.soleY('r');
+    // ★★ 新增：每只脚的**载荷份额**（controlTick 里已经算过，这里白拿）。
+    //   为什么必须给网络：真正行走时"哪条腿在摆"是由**载荷**决定的（被压住的是支撑腿，
+    //   卸载的才能摆）。固定的反相正弦做不到 —— 两条腿对称摆 ⇒ 支撑腿也在摆，
+    //   永远没有稳定支撑相。实测没有这一路时线性基因组只能踩 2 步且一路倒退
+    //   （tools/probe-capgen）。有了它，摆腿可以写成线性的：
+    //   hip = A·(载荷左 − 载荷右) —— 载荷大的伸（支撑）、小的屈（摆动），
+    //   差值的正反馈自然形成交替。
+    // ★ 量化到 1%：求解器冲量在不同 Sim 实例之间不是逐位可复现的
+    //   （实测存档往返的适应度会在第 6 位数字上分叉），观测里放未量化的求解量
+    //   会让"同一份基因组重放得分一致"这条门禁失效。1% 的精度对策略完全够用。
+    const lf = this.lastLoadFrac;
+    x[k + 2] = Math.round(lf[0] * 100) / 100;
+    x[k + 3] = Math.round(lf[1] * 100) / 100;
+    // ★★★ 每条腿的**摆动窗口**（0~1 的平滑脉冲，两腿反相、带占空比）。
+    //   为什么必须有：行走里"该抬哪条腿"是一个**不连续**的决策，而网络输入是线性的
+    //   组合 —— 固定反相正弦只能让两条腿**对称**摆（实测：支撑腿也在摆，永远没有支撑相，
+    //   基因组版只能踩 2 步还倒退）。把"摆动窗口"直接喂进去，抬腿就变成
+    //   `hip = −A·swingL` 这样**一行线性**就能写出来的事。
+    //   窗口内是 sin(π·s)（两端为 0 ⇒ 支撑相真的是 0），占空比 cfg.swingDuty。
+    {
+      const duty = Math.max(0.15, Math.min(0.85, this.cfg.swingDuty));
+      const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+      const w1 = (q: number): number => {
+        if (ph >= q || ph < q - 1 + duty) return 0;           // 不在窗口里
+        const s = (ph - (q - 1 + duty) + 1) / duty;            // 窗口内归一化进度 0..1
+        return Math.sin(Math.PI * Math.max(0, Math.min(1, s)));
+      };
+      x[k + 4] = w1(0);                                        // 左腿窗口
+      x[k + 5] = w1(duty);                                     // 右腿窗口（错开一个占空比）
+    }
+    // ★★★ 脚掌的**世界 x / z**（每只脚 2 个，共 4 维）。
+    //   缺了它，策略看不见自己的脚落在哪 ⇒ 无法"把支撑脚撑住"也无法"把摆动脚落到捕获点"，
+    //   线性策略只能两条腿对称运动（实测：脚抬到 0.10 m 但换脚数 0，是跳不是步）。
+    doll.soleXZ('l', this.footTmpL); doll.soleXZ('r', this.footTmpR);
+    // ★★ 用**相对 CoM**的量，不是世界绝对坐标、也不是相对支撑域中心：
+    //   · 绝对 x 会随行走漂到几十米，线性权重没法用；
+    //   · 相对支撑域中心更糟 —— sup.cx 就是两脚中点，于是这一项恒等于 ±半步宽，
+    //     脚的位置信息被**完全抵消**（我踩过这个坑）。
+    //   Raibert 落脚要的就是"脚相对身体在哪"，所以基准取 CoM：x[16] 里还有 CoM 速度，
+    //   目标位置 ẋ/ω 同样是线性的 ⇒ 整条落脚规则可以写成一层线性权重。
+    // ★ 量化到 1 mm：亚毫米的落脚位置对策略没有意义，但**求解器状态**有 ——
+    //   两个 Sim 实例的接触求解顺序会因内存布局不同而差最后几位，策略一旦直接读
+    //   脚的位置，1e-16 的差异会被放大（实测存档往返适应度 1.833 vs 1.505）。
+    //   量化把这种噪声挡在策略外面。仍然不保证逐位一致，见 probe-persist 的说明。
+    const q1 = (v: number): number => Math.round(v * 1000) / 1000;
+    x[k + 6] = q1(this.footTmpL[0] - com.x);
+    x[k + 7] = q1(this.footTmpR[0] - com.x);
+    x[k + 8] = q1(this.footTmpL[2] - com.z);
+    x[k + 9] = q1(this.footTmpR[2] - com.z);
+    // ★★★ 每条腿的**髋→脚向量** (dx, dy, d)，各 3 维、共 6 维。
+    //   为什么非有不可：teacher 的动作就是二连杆 IK（acos/atan2），自变量正是这个向量。
+    //   网络之前看不见自己的腿长，只能用 tanh 硬拟合那套三角函数 —— 行为克隆 MSE 卡在
+    //   0.17、克隆网络实测 −0.832 m / 0 步。喂进去之后 IK 退化成"d 的一维平滑函数"。
+    for (let s2 = 0; s2 < 2; s2++) {
+      const side = s2 === 0 ? 'l' : 'r';
+      const fp = s2 === 0 ? this.footTmpL : this.footTmpR;
+      doll.hipPoint(side, this.hipTmp);
+      const dx = q1(fp[0]! - this.hipTmp[0]!);
+      const dy = q1(fp[1]! - this.hipTmp[1]!);
+      x[k + 10 + s2 * 3] = dx;
+      x[k + 11 + s2 * 3] = dy;
+      x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
+    }
 
     // ---- 前向 → 马达 ----
     // ★ 输出语义 = 目标**关节角**（不是角速度），见 ragdoll.setMotorTargets / posRefScale
@@ -631,13 +721,20 @@ export class Sim {
     //       （Rudin 2022 原文：奖励与动作空间里"没有任何步态相关元素"）。
     const gL = footGrounded(doll, 'l'), gR = footGrounded(doll, 'r');
     const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+    if (nGround === 0) this.gN0++; else if (nGround === 1) this.gN1++; else this.gN2++;
     // ★ 换支撑脚事件（Ragdoll 内部维护上一拍状态；双脚离地/都着地时也要喂进去）
     const stanceNow: 0 | 1 | 2 = nGround === 0 ? 0 : gL ? 1 : 2;
     const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
     if (altNow) this.altCount++;
     this.airL = gL ? 0 : this.airL + dt;
     this.airR = gR ? 0 : this.airR + dt;
-    this.accLift += (Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET)) * dt;
+    // ★★★ 腾空分只在"**恰好一脚离地**"时给满：双脚同时离地（蹦跳）只给一半。
+    //   原来两条腿的腾空时间是各自独立累加的 ⇒ 蹦一下拿双份分。
+    //   实测训练 4 代的收敛方向：抬腿项一路涨到 2.81，而换脚数一直是 0 ——
+    //   策略学会了"两只脚一起跳"，因为那比"一次抬一条"更容易从站桩状态达到。
+    //   交替行走要的是"一次抬一条"，奖励里必须写死这件事。
+    const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
+    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt;
     // ★★ "站得住"门控因子：只有**身体还在控制中**（躯干没歪、没塌下去），
     //   抬腿/单脚支撑/要动这三项才算数。
     //   为什么要：不加的话**摔倒过程本身会拿高分** —— 零输出基因组（纯阻尼、站桩）
@@ -667,6 +764,7 @@ export class Sim {
     //   判据用**接触力分配**而不是几何接触：抬 1~2 cm 的小步几何测不到，而且 Rapier
     //   窄相会保留**预测性接触**（脚离地 9 cm 仍报接触，踩过）。
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
+    this.lastLoadFrac = [fl2, fr2];
     this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
     // ★ 必须"真的单脚着地"才算换支撑脚：载荷份额 >70% **且** 该脚接触地面、另一脚离地。
@@ -682,7 +780,14 @@ export class Sim {
       //   加了之后："迈步"必须同时是"往前走的迈步"，原地抖腿一分不给。
       this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
     }
-    this.accSingle += (nGround === 0 ? -0.5 : 0) * dt;   // 双脚离地（跳/摔）仍按时间罚
+    // ★★★ 这里原来漏了**正项**：只累加了"双脚离地"的罚，从来没记过"恰好一脚着地"的时间。
+    //   后果很致命：Rudin 那套配方里最核心的"单腿支撑"项永远拿不到正分
+    //   （实测 teacher 走完 4 次真实换脚，单腿支撑占比仍是 0.000），
+    //   于是"抬一条腿"在奖励里**一分为二** ⇒ ES 当然去学"两脚都踩着不动"。
+    //   这才是"训练一直偏好站着不动"的根因（不是权重配得不好）。
+    //   判据用**几何接触**（不是载荷）：这一步只要求"确实一脚离地"，能挣到分就行，
+    //   质量更高的部分由上面的 `shift`（载荷转移）和 `accSwitchQ`（换支撑脚）负责。
+    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
     this.accTicks += dt;
 
     //  ② 逐关节"要动"：骨盆(髋)和膝盖必须持续动，站桩得 0。
@@ -696,7 +801,16 @@ export class Sim {
       if (MOVE_SET.has(JOINT_ORDER[i2])) {
         const sp = Math.sqrt(jSpd === 0 ? w0 * w0 : w0 * w0 + w1 * w1 + w2 * w2);
         const f = Math.min(1, sp / JOINT_MOVE_TARGET);
-        this.accJtMove[JOINT_ORDER[i2]] += f * dt;
+        // ★★ 只在"**真的在迈步**"（至少一脚离地）时才给"要动"分。
+        //   否则"两脚踩死在地上疯狂扭关节"是绝对最优解：实测最优个体 jointMove=2.81，
+        //   而同一时刻 lift/single/altCount 全是 0.00（走路项最多只能给 ~0.3 分）。
+        //   这就是"训练永远停在站着不动"的直接原因，比权重配比更根本。
+        //   ⚠ 要门控的是**逐关节累加器 accJtMove**（tt.jointMove 由它算出），
+        //   不是 accMoveSum（那个只喂 moveFrac 诊断）—— 我第一次改错了地方，白跑一轮。
+        //   ⚠ 判据必须是 **nGround === 1**（恰好一脚着地），不能是 `nGround <= 1`：
+        //   后者让"**两只脚同时腾空**"（蹦）也能拿满，而蹦的时候 accSingle 正在被罚
+        //   （实测第 4 代就出现过 jointMove=2.45 却 altCount=0 的蹦跳解）。
+        if (nGround === 1) this.accJtMove[JOINT_ORDER[i2]] += f * dt;
         jMove += f;
       }
     }
@@ -711,7 +825,12 @@ export class Sim {
     this.accJointMotion += jSpd * dt;
     this.accActRate += act2 * dt;
     this.accTau += tau2 * dt;
-    this.accMoveSum += jMove * dt;
+    // ★★ "要动"这一项**只在真的在迈步时才给**（至少一脚离地）。
+    //   原来是无条件累加，而它比所有走路项加起来都大（实测最优个体 jointMove=2.81，
+    //   而当时的 lift/single/shift 全是 0.00）⇒ ES 学会的"最优解"就是
+    //   **站在原地疯狂扭关节**：4.06 分里大头是它，而走路项最多只能给 ~0.3 分。
+    //   这就是"训练一直偏好站着不动"的直接原因（比权重配比更根本）。
+    this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
 
     //  ④ 速度跟踪 / 横向 / 翻滚：★ **逐拍积分**（Rudin 表里每一项都带 dt）。
     //     之前写成"finish() 时取末帧读数"⇒ 6 秒的 episode 只算一瞬间，

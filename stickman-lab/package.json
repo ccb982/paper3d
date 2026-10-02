@@ -28,7 +28,10 @@
     "seed": "node tools/run.mjs probe-seed",
     "persist": "node tools/run.mjs probe-persist",
     "closed": "node tools/run.mjs probe-closed",
-    "capture": "node tools/run.mjs probe-capture"
+    "capture": "node tools/run.mjs probe-capture",
+    "capgen": "node tools/run.mjs probe-capgen",
+    "clone": "node tools/run.mjs probe-clone",
+    "steptrain": "node tools/run.mjs probe-trainwalk 6"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

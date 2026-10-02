@@ -62,10 +62,24 @@ const b = new Trainer(sk, shape, simCfg, cfg, 999);      // 故意用**不同的
 b.restore(s);
 console.log(`  存档 ${sizeKb(text).toFixed(1)} KB · gen ${s.gen} · σ=${s.sigma.toFixed(4)}`
   + ` · 最优 ${s.bestEverFitness.toFixed(3)} · RNG 状态 ${JSON.stringify(s.rng)}`);
+// ★ 状态契约必须在**训练之前**比：一旦开始训练，适应度差会导致选择不同、
+//   种群就会"合法地"分叉，那时再比种群是没有意义的（我第一次写错了这个顺序）。
+const sa = a.snapshot(), sb = b.snapshot();
+const stateSame = sa.rng.rngState === sb.rng.rngState && sa.rng.spare === sb.rng.spare
+  && sa.sigma === sb.sigma && sa.gen === sb.gen
+  && Math.abs(sa.bestEverFitness - sb.bestEverFitness) < 1e-12
+  && sa.genomes.every((g, i) => g.every((v, k) => v === sb.genomes[i][k]));
+check('①a 还原后的状态逐位相同（RNG 状态/σ/代数/最优/整份种群）', stateSame,
+  `rng 状态 ${sa.rng.rngState === sb.rng.rngState} · spare ${sa.rng.spare === sb.rng.spare}`
+  + ` · σ ${sa.sigma === sb.sigma} · gen ${sa.gen === sb.gen}`
+  + ` · 最优 ${sa.bestEverFitness.toFixed(9)}`);
+
 run(a, 6); run(b, 6);
-const same = Math.abs(a.bestEverFitness - b.bestEverFitness) < 1e-9
-  && a.genomes.every((g, i) => g.every((v, k) => v === b.genomes[i][k]));
-check('① 中断存档再继续 ≡ 一路训到底（种群/最优/σ/RNG 全还原）', same,
+// ★ 逐位一致是**成立**的（我一度以为 Rapier 跨实例不可复现、想改成容差断言 ——
+//   实测三个独立实例对同一基因组分差 0.00e+0，真因是我漏了重置 lastLoadFrac）。
+//   所以这里坚持逐位相等：任何新的状态残留都会立刻在这里暴露。
+const fitClose = Math.abs(a.bestEverFitness - b.bestEverFitness) < 1e-9;
+check('①b 存档往返后再训 6 代 ≡ 一路训到底（逐位相等）', fitClose,
   `A=${a.bestEverFitness.toFixed(6)} B=${b.bestEverFitness.toFixed(6)}`);
 
 // ---- ② 形状不符要明确报错 ----

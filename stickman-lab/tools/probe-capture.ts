@@ -3,11 +3,11 @@
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton';
+import { buildSkeleton, DEFAULT_CONFIG } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
-import { readCom, newCom, omegaAt } from '../src/core/posture';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
+import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 
 const require = createRequire(import.meta.url);
 {
@@ -27,100 +27,25 @@ const require = createRequire(import.meta.url);
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SH = shapeForJoints(sk.joints.length);
-const PX2M = 0.00068;
-const Y = (py: number): number => (2899 - py) * PX2M;      // mapY：画布 y=2899 是地面
-const LEN_A = Y(1574.5) - Y(2206);                        // 大腿 0.429 m
-const LEN_B = Y(2206) - Y(2792);                          // 小腿 0.398 m
-const HIP_Z = 0.007;
-const jHip = sk.joints.find((j) => j.name === 'hip_l')!;
-const jKnee = sk.joints.find((j) => j.name === 'knee_l')!;
 
-interface Params { T: number; vDes: number; lift: number; kv: number; kPitch: number; kRate: number; kLat: number; kLatV: number; kLatSwing: number; thresh: number; absorb: number; absorbTau: number }
+type Params = CaptureParams;
 
+/** 跑一段 teacher（实现已搬到 src/core/teacher.ts，那里是单一真源，克隆探针也用它采数据） */
 function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t: number } {
   const sim = new Sim(sk, SH, { ...DEFAULT_SIM, mode: 'walk', duration: dur });
-  const out = new Float32Array(sim.doll.jointCount * 3);
   sim.begin(new Float32Array(sim.params.length));
-  const com = newCom();
-  const dt = 1 / DEFAULT_SIM.controlHz;
-  const iL = sk.bodies.findIndex((b) => b.key === 'shin_l');
-  const iR = sk.bodies.findIndex((b) => b.key === 'shin_r');
-  let plantL = sim.doll.bodies[iL].translation().x;
-  let plantR = sim.doll.bodies[iR].translation().x;
-  let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
-
-  const setAxis = (joint: string, ang: number, j: typeof jHip, ax = 2): void => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
-    if (o < 0) return;
-    out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
-  };
-
-  /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
-  const ik = (hipX: number, hipY: number, fx: number, fy: number): [number, number] => {
-    const dx = fx - hipX, dy = fy - hipY;
-    let d = Math.hypot(dx, dy);
-    d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-    d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
-    const base = Math.atan2(dx, -dy);
-    const cosK = Math.max(-1, Math.min(1, (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)));
-    const interior = Math.acos(cosK);
-    const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
-    return [hipRel, -(Math.PI - interior)];
-  };
-
-  while (!sim.finished && t < dur) {
-    sim.advance(1);
-    const torso = sim.doll.torso();
-    const rot = torso.rotation();
-    const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (rot.w * rot.x + rot.y * rot.z))));
-    const av = torso.angvel();
-    readCom(sim.doll, com);
-    const om = omegaAt(com.y);
-    const xi = com.x + com.vx / om;                 // ★ 捕获点
-    // ★★★ **状态触发**换脚，而不是固定时钟：捕获点 ξ 走出当前支撑脚的落点，
-    //   而且已经超过半个周期（防抖），才换支撑脚。这才是 Raibert/捕获点那条规则本身 ——
-    //   固定时钟的版本在 2.95 s 必定因为"该迈的时候没迈"而前倾失控。
-    const ph = (t / p.T) % 1;
-    let stanceL = prevStance === 1;
-    const plantNow = stanceL ? plantL : plantR;
-    const need = p.thresh;                                  // 捕获点走出支撑脚的阈值 (m)
-    if (Math.abs(xi - plantNow) > need && t - lastSwitch > p.T * 0.5) {
-      stanceL = !stanceL;
-      steps++;
-      lastSwitch = t;
-      if (stanceL) plantL = xi; else plantR = xi;
-      prevStance = stanceL ? 1 : 2;
-    }
-    // 摆动相位：用"迈出去多久"归一，配合最小摆动时间
-    const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    // ★ Raibert 落脚点：x* = ξ + kv·(v_des − v_x)·T_s/2
-    //   （**慢了就把脚放得更靠前**）。之前写成 (v_x − v_des) ⇒ 方向整个反了，
-    //   站得住也走起来了，但一路往后走（实测 −0.26 ~ −1.15 m）。
-    const swingX = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
-    const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
-    // ★ 落地吸能：支撑脚刚落地的一小段时间里额外屈膝，把落地的冲击/前扑动能吃掉
-    //   （膝能屈 −145°，权限足够；这是所有双足行走器必备的一步）。
-    const dtSw = t - lastSwitch;
-    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
-    const corr = p.kPitch * pitch + p.kRate * av.x;
-    for (const side of ['l', 'r'] as const) {
-      const isStance = (side === 'l') === stanceL;
-      const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
-      const [h, k] = isStance
-        ? ik(hipX, com.y - 0.10, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, com.y - 0.10, swingX, swingY);
-      setAxis(`hip_${side}`, h + corr, jHip);
-      setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
-      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      // ★★ 侧向调节（axis 0 = 外展）：站距 0.33 m，只调俯仰是**必然**倒的 ——
-      //   横向平衡没有出口。支撑腿外展把骨盆/重心推向支撑脚，摆动腿外展控制落点宽度。
-      const latCorr = p.kLat * (com.z - (side === 'l' ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz;
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
-    }
-    sim.doll.setMotorTargets(out);
-    t += dt;
-  }
-  return { x: sim.distance, alive: !sim.fallen, steps, t };
+  const r = runCaptureTeacher(sk, sim, p, { dur });
+  // ★ 顺带报 Sim 自己的换脚检测器数（altEvent）——teacher 内部的"换支撑脚"次数
+  //   和"物理上真的出现单腿支撑"不是一回事，必须分开看。
+  // ★ teacher 的**适应度**：用来标定奖励权重 —— 目标很明确：
+  //   "会走的手写控制器"必须是适应度冠军，否则权重配得再漂亮也没用
+  //   （实测 ES 的最优解是"站着扭关节"，jointMove=2.81，而走路项最多 ~0.3）。
+  console.log(`    ↳ teacher 适应度 ${sim.fitness.toFixed(2)}`
+    + ` · lift=${(sim.terms.lift ?? 0).toFixed(2)} single=${(sim.terms.single ?? 0).toFixed(2)}`
+    + ` velTrack=${(sim.terms.velTrack ?? 0).toFixed(2)} jointMove=${(sim.terms.jointMove ?? 0).toFixed(2)}`);
+  console.log(`    ↳ teacher 内部换脚 ${r.steps} 次 · Sim 的 altEvent 检测到 ${sim.terms.altCount ?? 0} 次`
+    + ` · 单腿支撑时间占比 ${sim.walkStat.singleRatio.toFixed(3)}`);   // ⚠ 字段在 walkStat 上，不在 terms 上（我先写错过）
+  return { x: r.x, alive: r.alive, steps: r.steps, t: r.t };
 }
 
 // ── 阶段 1：俯仰反馈的**符号**（之前坐标下降选到 +1.24，而 trace 显示它在放大前扑）──
