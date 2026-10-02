@@ -13760,14 +13760,14 @@ function brainForward(s, p, x, hidden, out) {
   const L = brainLayout(s);
   for (let h = 0; h < s.hidden; h++) {
     let acc = p[L.b1 + h];
-    const row = L.w1 + h * s.inputs;
-    for (let i = 0; i < s.inputs; i++) acc += p[row + i] * x[i];
+    const row2 = L.w1 + h * s.inputs;
+    for (let i = 0; i < s.inputs; i++) acc += p[row2 + i] * x[i];
     hidden[h] = Math.tanh(acc);
   }
   for (let o = 0; o < s.outputs; o++) {
     let acc = p[L.b2 + o];
-    const row = L.w2 + o * s.hidden;
-    for (let h = 0; h < s.hidden; h++) acc += p[row + h] * hidden[h];
+    const row2 = L.w2 + o * s.hidden;
+    for (let h = 0; h < s.hidden; h++) acc += p[row2 + h] * hidden[h];
     out[o] = Math.tanh(acc);
   }
 }
@@ -16152,6 +16152,86 @@ var Sim = class {
   }
 };
 
+// src/core/normGait.ts
+var TIME = [
+  { what: "\u652F\u6491\u76F8\u5360\u6B65\u6001\u5468\u671F", v: 59, unit: "%GC", src: "Stasiu 168 trials / Perry \u516B\u76F8" },
+  { what: "\u6446\u52A8\u76F8\u5360\u6B65\u6001\u5468\u671F", v: 41, unit: "%GC", src: "Stasiu 168 trials / Perry \u516B\u76F8" },
+  { what: "\u53CC\u652F\u6491\u5360\u6B65\u6001\u5468\u671F", v: 9, unit: "%GC", src: "Stasiu 168 trials\uFF08\xB11\uFF09", tol: 0.6 },
+  { what: "\u5355\u652F\u6491\u5360\u6B65\u6001\u5468\u671F", v: 41, unit: "%GC", src: "Stasiu 168 trials\uFF08=100\u221259\uFF09" },
+  // 慢速档（对应我们 ≈0.5 m/s）
+  { what: "\u6162\u901F\uFF1A\u652F\u6491\u76F8", v: 63, unit: "%GC", src: "Pieterraszewski \u7537 1.16 m/s" },
+  { what: "\u6162\u901F\uFF1A\u53CC\u652F\u6491\u76F8", v: 17, unit: "%GC", src: "Pieterraszewski \u7537 1.16 m/s\uFF08\xB11.5\uFF09" },
+  { what: "\u6162\u901F\uFF1A\u53CC\u652F\u6491\u76F8\uFF08\u53E6\u4E00\u6765\u6E90\uFF09", v: 19, unit: "%GC", src: "Oberg slow / 3D gait reference" }
+];
+var SPACE = [
+  { what: "\u6B65\u957F\uFF08\u5FEB\u8D70\uFF09", v: 0.64, unit: "m", src: "Stasiu 1.37 m/s\uFF08\xB10.04\uFF09" },
+  { what: "\u6B65\u957F\uFF08\u6211\u4EEC\u7684 0.5 m/s \u76EE\u6807\uFF09", v: 0.5, unit: "m", src: "\u7531 1.0 s \u6B65\u95F4\u9694 \xD7 0.5 m/s \u63A8\u5F97" },
+  { what: "\u6B65\u5BBD", v: 0.14, unit: "m", src: "Stasiu\uFF08\xB10.02\uFF09", tol: 0.4 },
+  { what: "\u8DE8\u6B65\u65F6\u95F4", v: 1.02, unit: "s", src: "Stasiu\uFF08\xB10.05\uFF09", tol: 0.15 }
+];
+var JOINTS = [
+  { what: "\u819D\uFF1Amidstance\uFF08\u6162\u901F\u6863\uFF09", v: 15.7, unit: "\xB0", src: "Oberg slow \u7537 R\uFF08SD 5.0\uFF09" },
+  { what: "\u819D\uFF1Amidstance\uFF08\u6162\u901F\u6863\xB7\u5973\uFF09", v: 15, unit: "\xB0", src: "Oberg slow \u5973 L\uFF08SD 4.8\uFF09" },
+  { what: "\u819D\uFF1A\u6446\u52A8\u5CF0\u503C\uFF08\u6162\u901F\u6863\uFF09", v: 63, unit: "\xB0", src: "Oberg slow \u7537 R\uFF08SD 6.1\uFF09" },
+  { what: "\u819D\uFF1A\u6446\u52A8\u5CF0\u503C\uFF08\u6B63\u5E38\u6863\uFF09", v: 66.9, unit: "\xB0", src: "Oberg normal \u7537 R\uFF08SD 5.2\uFF09" },
+  { what: "\u9ACB\uFF1Aflex-ext ROM\uFF08\u6162\u901F\u6863\uFF09", v: 46.9, unit: "\xB0", src: "Oberg slow \u7537 R\uFF08SD 5.3\uFF09" },
+  { what: "\u9ACB\uFF1Aflex-ext ROM\uFF08\u6162\u901F\u6863\xB7\u5973\uFF09", v: 47.1, unit: "\xB0", src: "Oberg slow \u5973 L\uFF08SD 6.5\uFF09" },
+  { what: "\u9ACB\uFF1Aflex-ext ROM\uFF08\u6B63\u5E38\u6863\uFF09", v: 46.9, unit: "\xB0", src: "Oberg normal \u7537 R" },
+  { what: "\u8E1D\uFF1A\u77E2\u72B6\u9762 ROM", v: 26.8, unit: "\xB0", src: "Pieterraszewski \u4F4E\u901F\uFF0827.6/27.4/26.8 \u9AD8\u2192\u4F4E\u901F\uFF0C\u51E0\u4E4E\u4E0D\u53D8\uFF09" }
+];
+var UPPER = [
+  {
+    what: "\u80F8\u5ED3\u2212\u9AA8\u76C6 \u8F74\u5411\u76F8\u4F4D\uFF08\u6162\u901F 1 km/h\uFF09",
+    v: -20,
+    unit: "\xB0",
+    src: "Sci Rep 2019 (Takemura/Prins)\uFF1A\u5065\u5EB7\u4EBA 1 km/h \u2248 \u221220\xB0\uFF08\u80F8\u5ED3\u6EDE\u540E\uFF09",
+    bySpeed: { slow: -20, normal: -140, fast: -150 }
+  },
+  {
+    what: "\u80F8\u5ED3\u2212\u9AA8\u76C6 \u8F74\u5411\u76F8\u4F4D\uFF081.5 m/s\uFF09",
+    v: -140,
+    unit: "\xB0",
+    src: "Sci Rep 2019 / Lamoth 2002b",
+    bySpeed: { slow: -20, normal: -140, fast: -150 }
+  },
+  {
+    what: "\u80F8\u5ED3 ROM \xF7 \u9AA8\u76C6 ROM",
+    v: 0.5,
+    unit: "ratio",
+    src: "MacKinnon & Winter 1993\uFF1A\u80F8\u5ED3\u7EA6\u4E3A\u9AA8\u76C6\u7684\u4E00\u534A"
+  },
+  {
+    what: "\u624B\u81C2\u6446\u52A8\uFF1A\u80A9\u5C48\u66F2\u5CF0\u503C",
+    v: 30,
+    unit: "\xB0",
+    src: "\u6210\u4EBA\u6B63\u5E38\u6B65\u884C\u91CF\u7EA7\uFF08Sci Rep 2019 \u8BA8\u8BBA arm swing moment \u65F6\u5F15\u7528\uFF09",
+    tol: 0.6
+  },
+  {
+    what: "\u624B\u81C2\u6446\u52A8\uFF1A\u80A9\u53CD\u76F8\uFF08\u4E0E\u540C\u4FA7\u9ACB\u53CD\u76F8\uFF09",
+    v: 180,
+    unit: "\xB0",
+    src: "\u6B63\u5E38\u6B65\u6001\uFF1A\u80A9\u4E0E\u540C\u4FA7\u9ACB\u53CD\u5411\u6446\u52A8\uFF08\u4E0A\u8EAB\u53D1\u529B\u8282\u5F8B\u7684\u7ECF\u5178\u7ED3\u8BBA\uFF09"
+  },
+  {
+    what: "\u9AA8\u76C6\u503E\u659C\uFF08pelvic obliquity\uFF09\u5CF0\u503C",
+    v: 6,
+    unit: "\xB0",
+    src: "\u6B63\u5E38\u6B65\u884C\u91CF\u7EA7\uFF1B\u968F\u901F\u5EA6\u589E\u5927\uFF08\u4E0A\u884C\u901F\u5EA6\u7814\u7A76\uFF09",
+    tol: 0.8
+  }
+];
+function within(n, got) {
+  const tol = n.tol ?? 0.25;
+  const dev = n.v === 0 ? Math.abs(got) : (got - n.v) / Math.abs(n.v);
+  return { ok: Math.abs(dev) <= tol, tol, dev };
+}
+function row(n, got) {
+  if (got === null || !Number.isFinite(got)) return `  \u2717 ${n.what.padEnd(26)} \u671F\u671B ${n.v}${n.unit} \u2014\u2014 **\u6CA1\u6D4B\u5230**`;
+  const { ok, dev } = within(n, got);
+  return `  ${ok ? "\u2713" : "\u2717"} ${n.what.padEnd(26)} \u6807\u51C6 ${String(n.v).padStart(6)}${n.unit}  \u5B9E\u6D4B ${got.toFixed(1).padStart(7)}  \u504F\u5DEE ${(dev * 100).toFixed(0).padStart(5)}%  [${n.src}]`;
+}
+
 // src/core/phaseSeed.ts
 var CAPTURE_GAIT = {
   /** 摆动周期（秒） */
@@ -16601,6 +16681,95 @@ console.log("\n=== \u2464d \u2605\u2605 \u4E3A\u4EC0\u4E48\u300C\u53EA\u5728\u7A
   } else {
     console.log(`  \u21D2 \u2713 adjust \u76F8\u786E\u5B9E\u5B58\u5728\uFF0C\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D= \u771F\u7684\u53EA\u5728\u7A33\u4F4F\u65F6\u51FA\u529B\u3002`);
   }
+}
+console.log("\n=== \u2464g \u2605\u2605\u2605\u2605 \u4E0E\u6807\u51C6\u6B65\u6001\u6570\u636E\u9010\u9879\u6BD4\u5BF9\uFF08\u542B\u4E0A\u8EAB\u53D1\u529B\uFF09====\n");
+console.log("  \u901F\u5EA6\u53E3\u5F84\uFF1A\u6211\u4EEC rig \u8EAF\u5E72\u9AD8 1.21m \u21D2 \u817F\u957F\u22480.85m \u21D2 \u8FC8\u6B65\u95F4\u96941s \u21D2 \u6B65\u957F\u22480.5m \u21D2 **0.5 m/s\uFF08\u6162\u901F\u6863\uFF09**\n");
+{
+  const s7 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s7.begin(new Float32Array(s7.params.length));
+  const hipR = [], kneeR = [];
+  let kneeMid = 0, nMid = 0, kneeSwing = 0;
+  let armL = 0, armR = 0, shoulderAmp = 0, shoulderPrev = 0;
+  const PELV_YAW = [], THOR_YAW = [];
+  const cb7 = () => {
+    const gL = footGrounded(s7.doll, "l"), gR = footGrounded(s7.doll, "r");
+    const ng = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const rdh = (n2) => {
+      const i = JOINT_ORDER.indexOf(n2);
+      return i < 0 ? 0 : s7.doll.jointAngle(i) + (sk.joints[i]?.restRad[2] ?? 0);
+    };
+    const rh = rdh("hip_r"), rk = rdh("knee_r");
+    hipR.push(Math.abs(rh));
+    kneeR.push(Math.abs(rk));
+    if (ng === 2) {
+      kneeMid += Math.abs(rk);
+      nMid++;
+    }
+    const sh = rdh("shoulder_l") + rdh("shoulder_r");
+    armL += Math.abs(rdh("elbow_l"));
+    armR += Math.abs(rdh("elbow_r"));
+    shoulderAmp = Math.max(shoulderAmp, Math.abs(sh - shoulderPrev));
+    shoulderPrev = sh;
+    const tw = s7.doll.torso().rotation();
+    const thorYaw = Math.atan2(2 * (tw.w * tw.y), 1 - 2 * tw.y * tw.y) * 180 / Math.PI;
+    THOR_YAW.push(thorYaw);
+    const jy = (n2) => {
+      const i = JOINT_ORDER.indexOf(n2);
+      if (i < 0) return 0;
+      const q = s7.doll.jointAngle(i);
+      return sk.joints[i]?.restRad[1] ?? 0;
+    };
+    PELV_YAW.push(jy("hip_l") + jy("hip_r"));
+  };
+  const r7 = runCaptureTeacher(sk, s7, FB, { dur: DUR, clockDriven: true, onFrame: cb7 });
+  const hipROM2 = Math.max(...hipR), kneeROM2 = Math.max(...kneeR);
+  const n = Math.max(1, nMid);
+  const thoraxPhaseOf = (thor) => {
+    if (thor.length < 20) return null;
+    const ref = PELV_YAW;
+    if (ref.length !== thor.length || Math.max(...thor) - Math.min(...thor) < 1e-3) return null;
+    let best = 0, bestC = -Infinity;
+    for (let lag = 0; lag < ref.length; lag++) {
+      let c = 0;
+      for (let i = 0; i + lag < ref.length; i++) c += ref[i + lag] * thor[i];
+      if (c > bestC) {
+        bestC = c;
+        best = lag;
+      }
+    }
+    const period = 100;
+    return best / period * 360;
+  };
+  const pelvAmp = Math.max(...PELV_YAW) - Math.min(...PELV_YAW);
+  const thoraxAmp = Math.max(...THOR_YAW) - Math.min(...THOR_YAW);
+  console.log("  \u3010\u65F6\u95F4\u7ED3\u6784\u3011\n");
+  const dblPct = 100 * mt.dbl / Math.max(1, mt.n);
+  const sglPct = 100 * mt.sgl / Math.max(1, mt.n);
+  const fltPct = 100 * mt.flight / Math.max(1, mt.n);
+  for (const x of [TIME[2], TIME[3]]) {
+    const got = x.what.includes("\u53CC\u652F\u6491") ? dblPct : sglPct;
+    console.log(row(x, got));
+  }
+  console.log(`  \xB7 \u817E\u7A7A\u5360\u6BD4 ${fltPct.toFixed(1)}%\uFF08\u6807\u51C6 0% \u2014\u2014 \u817E\u7A7A\u5C31\u662F"\u8DF3"\uFF09`);
+  console.log("\n  \u3010\u7A7A\u95F4\u7ED3\u6784\u3011\n");
+  const dist = s7.distance;
+  for (const x of SPACE) {
+    const got = x.what.includes("\u6B65\u957F") ? dist : x.what.includes("\u8DE8\u6B65\u65F6\u95F4") ? medianOf(iv) : null;
+    console.log(row(x, got));
+  }
+  console.log("\n  \u3010\u5173\u8282\u89D2\uFF08Oberg N=233\uFF09\u3011\n");
+  console.log(row(JOINTS[0], kneeMid / n * 180 / Math.PI));
+  console.log(row(JOINTS[2], kneeROM2 * 180 / Math.PI));
+  console.log(row(JOINTS[4], hipROM2 * 180 / Math.PI));
+  console.log(row(JOINTS[6], kneeSwing * 180 / Math.PI));
+  console.log("\n  \u3010\u4E0A\u8EAB\u53D1\u529B\uFF08\u7528\u6237\u660E\u786E\u8981\u6C42\uFF09\u3011\n");
+  console.log(row(UPPER[0], thoraxPhaseOf(THOR_YAW) ?? null));
+  console.log(row(UPPER[1], thoraxPhaseOf(THOR_YAW) ?? null));
+  console.log(row(UPPER[2], thoraxAmp / Math.max(1e-9, pelvAmp)));
+  console.log(row(UPPER[3], shoulderAmp * 180 / Math.PI));
+  console.log(`  \xB7 \u8098\u5C48\u66F2\u5747\u5206\uFF1A\u5DE6 ${(armL / Math.max(1, mt.n) * 180 / Math.PI).toFixed(1)}\xB0 / \u53F3 ${(armR / Math.max(1, mt.n) * 180 / Math.PI).toFixed(1)}\xB0`);
+  console.log(`  \xB7 \u6B65\u901F\u4F30\u8BA1\uFF1A\u4F4D\u79FB ${dist.toFixed(3)}m / \u5B58\u6D3B ${r7.t.toFixed(2)}s = ${(dist / Math.max(0.1, r7.t)).toFixed(2)} m/s\uFF08\u6807\u51C6\u6162\u901F 0.50 / \u6B63\u5E38 1.24\uFF09`);
+  console.log('\n  \u5224\u8BFB\uFF1A\u2717 \u7684\u6BCF\u4E00\u9879\u90FD\u5BF9\u5E94"\u6539\u54EA\u4E2A\u53C2\u6570"\uFF0C\u4E0B\u4E00\u8F6E\u6309\u8FD9\u4E2A\u8868\u4FEE\u6B63\u3002');
 }
 console.log("\n=== \u2464f \u2605\u2605\u2605 \u53D1\u4EE4\u8005 / \u4F3A\u670D\u5C42\uFF08\u7528\u6237 2026-10-02\uFF09===\n");
 console.log("  \u53D1\u4EE4\u8005\u53EA\u8BF4\u300C\u54EA\u6761\u817F / \u4EC0\u4E48\u65F6\u5019\u5230\u8170 / \u8BE5\u8D70\u4E86\u6CA1\u6709\u300D\uFF0C\u7EDD\u4E0D\u7ED9\u843D\u70B9\uFF1B\u5176\u4F59\u7531\u4F3A\u670D\u5C42\u5B9E\u65F6\u4FEE\u6B63\u3002\n");

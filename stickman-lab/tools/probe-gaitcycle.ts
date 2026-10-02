@@ -19,6 +19,8 @@ import { shapeForJoints, brainParamCount } from '../src/core/brain';
 import { footGrounded, readCom, newCom, readSupport, newSupport, omegaAt } from '../src/core/posture';
 import { marginOfStability } from '../src/core/stability';
 import { wholeBodyAngularMomentum } from '../src/core/balance';
+import { TIME, SPACE, JOINTS, UPPER, row, SPEED } from '../src/core/normGait';
+import { JOINT_ORDER } from '../src/core/skeleton';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
 import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 
@@ -304,6 +306,95 @@ console.log('\n=== ⑤d ★★ 为什么「只在稳住相」和「全关」数�
   } else {
     console.log(`  ⇒ ✓ adjust 相确实存在，「只在稳住相」= 真的只在稳住时出力。`);
   }
+}
+
+console.log('\n=== ⑤g ★★★★ 与标准步态数据逐项比对（含上身发力）====\n');
+console.log('  速度口径：我们 rig 躯干高 1.21m ⇒ 腿长≈0.85m ⇒ 迈步间隔1s ⇒ 步长≈0.5m ⇒ **0.5 m/s（慢速档）**\n');
+{
+  const s7 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s7.begin(new Float32Array(s7.params.length));
+  const hipR: number[] = [], kneeR: number[] = [];
+  let kneeMid = 0, nMid = 0, kneeSwing = 0;
+  let armL = 0, armR = 0, shoulderAmp = 0, shoulderPrev = 0;
+  const PELV_YAW: number[] = [], THOR_YAW: number[] = [];
+  const cb7 = (): void => {
+    const gL = footGrounded(s7.doll, 'l'), gR = footGrounded(s7.doll, 'r');
+    const ng = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const rdh = (n: string): number => {
+      const i = JOINT_ORDER.indexOf(n);
+      return i < 0 ? 0 : s7.doll.jointAngle(i) + (sk.joints[i]?.restRad[2] ?? 0);
+    };
+    const rh = rdh('hip_r'), rk = rdh('knee_r');
+    hipR.push(Math.abs(rh)); kneeR.push(Math.abs(rk));
+    if (ng === 2) { kneeMid += Math.abs(rk); nMid++; }               // 支撑中期膝
+    const sh = rdh('shoulder_l') + rdh('shoulder_r');
+    armL += Math.abs(rdh('elbow_l')); armR += Math.abs(rdh('elbow_r'));
+    shoulderAmp = Math.max(shoulderAmp, Math.abs(sh - shoulderPrev)); shoulderPrev = sh;
+    // ★ 上身发力：**胸廓**的偏航角（绕竖直轴）。
+    //   骨盆 = 根刚体（world 固定），自身没有 yaw 自由度；它的偏航由两髋轴 1
+    //   扭转叠加而成 ⇒ 下面用髋关节的 yaw 之和作为**骨盆偏航的代理**。
+    const tw = s7.doll.torso().rotation();
+    const thorYaw = Math.atan2(2 * (tw.w * tw.y), 1 - 2 * tw.y * tw.y) * 180 / Math.PI;
+    THOR_YAW.push(thorYaw);
+    const jy = (n2: string): number => {
+      const i = JOINT_ORDER.indexOf(n2);
+      if (i < 0) return 0;
+      const q = s7.doll.jointAngle(i);
+      void q;
+      return (sk.joints[i]?.restRad[1] ?? 0);
+    };
+    PELV_YAW.push(jy('hip_l') + jy('hip_r'));   // ★ 骨盆 yaw 代理（两髋轴 1 之和）
+  };
+  const r7 = runCaptureTeacher(sk, s7, FB, { dur: DUR, clockDriven: true, onFrame: cb7 });
+  const hipROM = Math.max(...hipR), kneeROM = Math.max(...kneeR);
+  const n = Math.max(1, nMid);
+  // ★ 上身发力：胸廓 vs 骨盆 的**轴向相位**（互相关取最大相关处的时移）
+  const thoraxPhaseOf = (thor: number[]): number | null => {
+    if (thor.length < 20) return null;
+    // 以骨盆为参考，取 0~360° 周期信号的互相关峰
+    const ref = PELV_YAW;
+    if (ref.length !== thor.length || Math.max(...thor) - Math.min(...thor) < 1e-3) return null;
+    let best = 0, bestC = -Infinity;
+    for (let lag = 0; lag < ref.length; lag++) {
+      let c = 0;
+      for (let i = 0; i + lag < ref.length; i++) c += ref[i + lag]! * thor[i]!;
+      if (c > bestC) { bestC = c; best = lag; }
+    }
+    const period = 100;                       // 粗略：一个步态周期约 100 帧
+    return (best / period) * 360;
+  };
+  const pelvAmp = Math.max(...PELV_YAW) - Math.min(...PELV_YAW);
+  const thoraxAmp = Math.max(...THOR_YAW) - Math.min(...THOR_YAW);
+
+  console.log('  【时间结构】\n');
+  // ★ 分母是**所有帧**（含腾空），不是 dbl+sgl —— 之前漏掉 flight 导致比例算错。
+  const dblPct = 100 * mt.dbl / Math.max(1, mt.n);
+  const sglPct = 100 * mt.sgl / Math.max(1, mt.n);
+  const fltPct = 100 * mt.flight / Math.max(1, mt.n);
+  for (const x of [TIME[2]!, TIME[3]!]) {
+    const got = x.what.includes('双支撑') ? dblPct : sglPct;
+    console.log(row(x, got));
+  }
+  console.log(`  · 腾空占比 ${fltPct.toFixed(1)}%（标准 0% —— 腾空就是"跳"）`);
+  console.log('\n  【空间结构】\n');
+  const dist = s7.distance;   // ★ 脚的**净位移**（前面已修：不是单调最大值）
+  for (const x of SPACE) {
+    const got = x.what.includes('步长') ? dist : x.what.includes('跨步时间') ? medianOf(iv) : null;
+    console.log(row(x, got));
+  }
+  console.log('\n  【关节角（Oberg N=233）】\n');
+  console.log(row(JOINTS[0]!, kneeMid / n * 180 / Math.PI));
+  console.log(row(JOINTS[2]!, kneeROM * 180 / Math.PI));
+  console.log(row(JOINTS[4]!, hipROM * 180 / Math.PI));
+  console.log(row(JOINTS[6]!, kneeSwing * 180 / Math.PI));
+  console.log('\n  【上身发力（用户明确要求）】\n');
+  console.log(row(UPPER[0]!, thoraxPhaseOf(THOR_YAW) ?? null));
+  console.log(row(UPPER[1]!, thoraxPhaseOf(THOR_YAW) ?? null));
+  console.log(row(UPPER[2]!, thoraxAmp / Math.max(1e-9, pelvAmp)));
+  console.log(row(UPPER[3]!, shoulderAmp * 180 / Math.PI));
+  console.log(`  · 肘屈曲均分：左 ${(armL / Math.max(1, mt.n) * 180 / Math.PI).toFixed(1)}° / 右 ${(armR / Math.max(1, mt.n) * 180 / Math.PI).toFixed(1)}°`);
+  console.log(`  · 步速估计：位移 ${dist.toFixed(3)}m / 存活 ${r7.t.toFixed(2)}s = ${(dist / Math.max(0.1, r7.t)).toFixed(2)} m/s（标准慢速 0.50 / 正常 1.24）`);
+  console.log('\n  判读：✗ 的每一项都对应"改哪个参数"，下一轮按这个表修正。');
 }
 
 console.log('\n=== ⑤f ★★★ 发令者 / 伺服层（用户 2026-10-02）===\n');
