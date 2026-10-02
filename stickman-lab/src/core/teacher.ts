@@ -23,6 +23,8 @@ import { JOINT_ORDER, jointIndexByName, spineJointNames, type Skeleton } from '.
 export const SHIFT_FRAC = 0.25;
 /** ★ 四步循环的第③段起点：**迈出的腿发力、把自己撑成支撑腿**（用户 2026-10-02） */
 export const PUSH_FRAC = 0.75;
+/** ★ 换脚前必须连续"站稳"的时长（s）—— 用户 2026-10-02："迈一条腿后保持稳定" */
+export const STABLE_HOLD = 0.45;
 /** ★ 横向误差限幅（m）：kLat·误差 不得换算成 >~8° 的髋外展（见 latCorr 注释） */
 const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
@@ -254,6 +256,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let wtStage: WtStage = 'idle';
   let wtT = 0;                       // 本阶段已持续时间
   let wtDone = false;                // 本次落地是否已完成转移（防止重复触发）
+  let stableT = 0;                // 连续站稳计时（换脚门控）
   /** 本次落地的目标承重（Frontiers 2022：结束判据 = 该腿 vGRF < 10N）
    *  ⚠ `stanceL` 在下面主循环里才赋值，这里用可变闭包变量延后读取。 */
   let wtLoadOf = (): number => {
@@ -293,6 +296,20 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       // 防抖：迈步相本身就要占掉一半周期，落地后再等一小会儿才换角色
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim.doll, 'l') : footGrounded(sim.doll, 'r');
+      // ══════════════════════════════════════════════════════════════════
+      // ★★★ 换脚必须以「站稳」为前提（用户 2026-10-02："身体没调整过去，先不急迈另一条腿，
+      //   现在需要迈一条腿后保持稳定，而且要求抬高后退后依旧稳定"）
+      //   旧逻辑：只等 `landed && t >= lastSwitch + half·0.55` —— **纯定时器**，
+      //   刚落地就换另一条 ⇒ 重心永远转不完。
+      //   新增门槛（缺一不可）：
+      //     ① 重心转移已完成（wtStage==='done'，即该腿承重 ≥50%，Perry Loading Response）
+      //     ② MoS 有正余量（站得住，不是勉强撑着）
+      //     ③ 上面两条连续满足 STABLE_HOLD 秒
+      // ══════════════════════════════════════════════════════════════════
+      const mosNow = xi - (com.x + com.vx / om);     // 正 = CoM 在支撑边内
+      const stableNow = wtStage === 'done' && mosNow > 0;
+      if (stableNow) stableT += dt; else stableT = 0;
+      const stableEnough = stableT >= STABLE_HOLD;
       // ★ 诊断：换脚卡在哪一条（架构重做的打点，probe-arch 打印）
       //   `s` 在后面才算，这里内联算一份；`sole` = 摆动脚离地高度（判断它到底落没落）
       const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
@@ -305,7 +322,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         });
         if (swapTrace.length > 400) swapTrace.shift();
       }
-      if (landed && t >= readyT) {
+      if (landed && t >= readyT && stableEnough) {   // ★ 必须"站稳"才允许迈下一条
         steps++;
         lastSwitch = t;
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿

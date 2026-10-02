@@ -16377,6 +16377,7 @@ function copTargetZ(stage, stanceZ, swingZ) {
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
 var PUSH_FRAC = 0.75;
+var STABLE_HOLD = 0.45;
 var LAT_MAX_ERR = 0.04;
 var PX2M = 68e-5;
 var Y = (py) => (2899 - py) * PX2M;
@@ -16447,6 +16448,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   let wtStage = "idle";
   let wtT = 0;
   let wtDone = false;
+  let stableT = 0;
   let wtLoadOf = () => {
     const [fl, fr] = sim2.doll.footLoadFrac(dt);
     return stanceLNow ? fl : fr;
@@ -16469,6 +16471,11 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const half = p.T * 0.5;
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim2.doll, "l") : footGrounded(sim2.doll, "r");
+      const mosNow = xi - (com.x + com.vx / om);
+      const stableNow = wtStage === "done" && mosNow > 0;
+      if (stableNow) stableT += dt;
+      else stableT = 0;
+      const stableEnough = stableT >= STABLE_HOLD;
       const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
       sim2.doll.soleXZ("l", footBufL);
       sim2.doll.soleXZ("r", footBufR);
@@ -16484,7 +16491,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         });
         if (swapTrace.length > 400) swapTrace.shift();
       }
-      if (landed && t >= readyT) {
+      if (landed && t >= readyT && stableEnough) {
         steps++;
         lastSwitch = t;
         stanceL = swingIsL;
@@ -17272,3 +17279,24 @@ for (const c of [
   console.log(`  ${c.n.padEnd(24)} ${fbL[1].toFixed(3).padStart(7)}  ${fbR[1].toFixed(3).padStart(7)}   ${fl.toFixed(2)}/${fr.toFixed(2)}      ${c2.z.toFixed(3)}`);
 }
 console.log("\n  \u5224\u8BFB\uFF1A\u811A z \u5206\u5F97\u5F00 \u21D2 \u5916\u5C55\u751F\u6548\uFF1B\u8F7D\u8377\u96C6\u4E2D\u5230\u6307\u4EE4\u652F\u6491\u817F \u21D2 \u7B26\u53F7\u5BF9\u3002");
+console.log("\n=== \u5355\u817F\u4FDD\u6301\uFF1A\u8FC8\u51FA\u4E00\u6761\u817F\u540E\u80FD\u5426\u7AD9\u7A33 ===\n");
+console.log("   t(s)  \u652F\u6491\u811A\u6570  \u627F\u91CD\u5360\u6BD4   CoM\u504F\u79FB  MoS(mm)  \u503E\u89D2\xB0  \u8EAF\u5E72\u9AD8");
+{
+  const sh3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  sh3.begin(new Float32Array(sh3.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, sh3, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL) => {
+    if (m++ % 14 !== 0) return;
+    const gL = footGrounded(sh3.doll, "l"), gR = footGrounded(sh3.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const [fl, fr] = sh3.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const c2 = readCom(sh3.doll, cTmp);
+    sh3.doll.soleXZ("l", fbL);
+    sh3.doll.soleXZ("r", fbR);
+    const stZ = stanceL ? fbL[1] : fbR[1];
+    const om = Math.sqrt(9.81 / Math.max(0.2, c2.y));
+    const xi = c2.x + c2.vx / om;
+    console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}      ${(stanceL ? fl : fr).toFixed(2)}     ${(c2.z - stZ).toFixed(3).padStart(6)}   ${((xi - (c2.x + c2.vx / om)) * 1e3).toFixed(0).padStart(6)}  ${(sh3.doll.tiltOf(sh3.doll.torso()) * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh3.doll.torso().translation().y.toFixed(3)}`);
+  } });
+  console.log('\n  \u5224\u8BFB\uFF1A\u652F\u6491\u811A\u6570=1 \u4E14 \u627F\u91CD\u22650.5 \u4E14 \u8EAF\u5E72\u9AD8\u4E0D\u6389 \u21D2 "\u8FC8\u4E00\u6761\u817F\u540E\u4FDD\u6301\u7A33\u5B9A"\u8FBE\u6210\u3002');
+}

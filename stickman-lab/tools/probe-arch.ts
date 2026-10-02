@@ -589,3 +589,24 @@ for (const c of [
   console.log(`  ${c.n.padEnd(24)} ${fbL[1]!.toFixed(3).padStart(7)}  ${fbR[1]!.toFixed(3).padStart(7)}   ${fl.toFixed(2)}/${fr.toFixed(2)}      ${c2.z.toFixed(3)}`);
 }
 console.log('\n  判读：脚 z 分得开 ⇒ 外展生效；载荷集中到指令支撑腿 ⇒ 符号对。');
+// ===== 单腿站立稳定性：迈一条腿后能不能站住 =====
+console.log('\n=== 单腿保持：迈出一条腿后能否站稳 ===\n');
+console.log('   t(s)  支撑脚数  承重占比   CoM偏移  MoS(mm)  倾角°  躯干高');
+{
+  const sh3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  sh3.begin(new Float32Array(sh3.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, sh3, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL): void => {
+    if (m++ % 14 !== 0) return;
+    const gL = footGrounded(sh3.doll, 'l'), gR = footGrounded(sh3.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const [fl, fr] = sh3.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const c2 = readCom(sh3.doll, cTmp);
+    sh3.doll.soleXZ('l', fbL); sh3.doll.soleXZ('r', fbR);
+    const stZ = stanceL ? fbL[1]! : fbR[1]!;
+    const om = Math.sqrt(9.81 / Math.max(0.2, c2.y));
+    const xi = c2.x + c2.vx / om;
+    console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}      ${(stanceL ? fl : fr).toFixed(2)}     ${(c2.z - stZ).toFixed(3).padStart(6)}   ${((xi - (c2.x + c2.vx / om)) * 1000).toFixed(0).padStart(6)}  ${(sh3.doll.tiltOf(sh3.doll.torso()) * 180 / Math.PI).toFixed(1).padStart(5)}  ${sh3.doll.torso().translation().y.toFixed(3)}`);
+  } });
+  console.log('\n  判读：支撑脚数=1 且 承重≥0.5 且 躯干高不掉 ⇒ "迈一条腿后保持稳定"达成。');
+}
