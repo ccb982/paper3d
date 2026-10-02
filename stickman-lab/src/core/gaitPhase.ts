@@ -34,6 +34,30 @@ export const W_PELVIS = 0.15;     // 盆骨是否先于膝启动
 
 export type GaitPhase = 'both' | 'step' | 'adjust';
 
+/** 单条腿 */
+export type Leg = 'l' | 'r';
+
+/**
+ * ★★ 调试用的状态标签：**该迈哪条腿 + 身体该不该动**（用户 2026-10-02 明确要求）。
+ * 例：`step:L 身体冻结` / `adjust:L 身体可动` / `both 过渡`
+ */
+export function stateLabel(phase: GaitPhase, swing: Leg | null, bodyFree: boolean): string {
+  if (phase === 'both') return 'both 过渡（双脚着地）';
+  const s = swing === 'l' ? '左腿' : '右腿';
+  return phase === 'step' ? `step:${s === '左腿' ? 'L' : 'R'} 迈步中·身体冻结` : `adjust:${s === '左腿' ? 'L' : 'R'} 稳住中·身体可动`;
+}
+
+/** 状态机里发生的一次转移（调试用） */
+export interface StateEvent {
+  t: number;
+  /** 转移后的状态标签 */
+  label: string;
+  /** 该状态**为什么**没通过（空 = 通过）—— 调试时直接指名哪一个状态不合格 */
+  fail: string;
+  /** 该次持续时长（s） */
+  dur: number;
+}
+
 export interface CycleTally {
   nStep: number;
   nAdjustOk: number;
@@ -47,6 +71,10 @@ export interface CycleTally {
 
 export class GaitPhaseMachine {
   private phase: GaitPhase = 'both';
+  /** ★ 该迈哪条腿（由载荷决定： unloaded 的那条迈） */
+  private swing: Leg | null = null;
+  private t = 0;
+  private tPhase = 0;
   private tStep = 0;
   private tAdjust = 0;
   private mosAcc = 0;
@@ -62,6 +90,9 @@ export class GaitPhaseMachine {
   private nAdjustOk = 0;
   private flickers = 0;
   private adjSum = 0;
+  private evs: StateEvent[] = [];
+  private peakClr = 0;   // 本次迈步的离地峰值（诊断）
+  private mosEnd = 0;    // 调整窗末的 MoS（诊断）
 
   reset(): void {
     this.phase = 'both'; this.tStep = 0; this.tAdjust = 0;
@@ -72,6 +103,14 @@ export class GaitPhaseMachine {
   }
 
   get now(): GaitPhase { return this.phase; }
+  /** ★ 该迈哪条腿（null = 双脚着地，没有"该迈的腿"） */
+  get swingLeg(): Leg | null { return this.swing; }
+  /** ★★ 身体该不该动：只有"稳住中"才允许动（用户："迈步时身体别动，落地后再动"） */
+  get bodyFree(): boolean { return this.phase === 'adjust'; }
+  /** 调试标签 */
+  get label(): string { return stateLabel(this.phase, this.swing, this.bodyFree); }
+  /** 状态转移轨迹（含"哪个状态没通过"） */
+  get trace(): readonly StateEvent[] { return this.evs; }
   /** 正在"调整身体"阶段（此时其它项才允许计分） */
   get inAdjust(): boolean { return this.phase === 'adjust'; }
   /** 刚结算完一个循环（那一帧允许把分记进适应度） */
@@ -97,16 +136,33 @@ export class GaitPhaseMachine {
   step(
     nGround: number, clearance: number, mosX: number,
     shape: number, place: number, pelvis: number, dt: number,
+    swingLeg: Leg | null = null,
   ): void {
+    this.t += dt; this.tPhase += dt;
+    // ★ 状态持续够久就结算成一条事件（带"为什么没通过"）—— 调试时直接指名哪一个状态不合格
+    if (this.tPhase > 0.45) {
+      const fail = this.phase === 'step'
+        ? (this.swing === null ? '未指定摆动腿' : `摆动腿未离地达标（峰值 ${(this.peakClr * 1000).toFixed(0)}mm < 30mm）`)
+        : this.phase === 'adjust'
+          ? (this.mosEnd < 0 ? `未稳住（窗末 MoS ${(this.mosEnd * 1000).toFixed(0)}mm < 0）` : `稳住时长不足（${this.tPhase.toFixed(2)}s < ${ADJUST_MIN}s）`)
+          : '';
+      this.evs.push({ t: this.t - this.tPhase, label: this.label, fail, dur: this.tPhase });
+      this.tPhase = 0;
+    }
+    this.swing = swingLeg;
     // ── 相 1：迈步（单支撑）──
     if (nGround === 1) {
+      // ★ 进入新的"迈步相"要清零离地峰值，否则会拿上一次的成绩来判这一次
+      if (this.phase !== 'step') this.peakClr = 0;
+      this.peakClr = Math.max(this.peakClr, clearance);
       if (this.phase !== 'adjust') { this.phase = 'step'; this.tStep += dt; }
       if (this.phase === 'step' && clearance >= 0.03 && this.tStep >= STEP_MIN) {
         // 迈步达标：进入"调整"相
         this.phase = 'adjust';
         this.nStep++;
         this.tAdjust = 0;
-        this.mosAcc = 0; this.mosN = 0; this.placeAcc = 0; this.placeN = 0;
+this.mosAcc = 0; this.mosN = 0; this.placeAcc = 0; this.placeN = 0;
+        this.mosEnd = 0;
         this.shapeAcc = 0; this.shapeN = 0; this.pelvisAcc = 0;
       } else if (this.phase === 'step' && clearance < 0.03) {
         this.flickers++;      // 抖动：离地不够，不算一步
@@ -122,7 +178,7 @@ export class GaitPhaseMachine {
     // ── 相 2：调整（也是单支撑，但是"刚迈完步"的那条腿在撑）──
     if (this.phase === 'adjust') {
       this.tAdjust += dt;
-      this.mosAcc += mosX; this.mosN++;
+      this.mosAcc += mosX; this.mosN++; this.mosEnd = mosX;
       this.placeAcc += place; this.placeN++;
       this.shapeAcc += shape; this.shapeN++;
       this.pelvisAcc += pelvis;

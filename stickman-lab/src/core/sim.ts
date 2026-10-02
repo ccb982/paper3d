@@ -369,6 +369,12 @@ export class Sim {
   private gp = new GaitPhaseMachine();
   private accStill = 0;                        // ★ 摆动相里身体的运动量（要被罚）
   private stillStep = 0; private stillAdjust = 0;   // 诊断：摆动段 vs 调整段的身体运动量
+  /** ★ 调试用的当前状态："该迈哪条腿 + 身体该不该动" */
+  gpLabel = 'both 过渡（双脚着地）';
+  gpSwing: 'l' | 'r' | null = null;
+  gpBodyFree = false;
+  /** 状态机转移轨迹（含"哪个状态没通过"） */
+  get stateTrace() { return this.gp.trace; }
   private accCycle = 0; private gpPaidThisStep = false;
   private cycleN = 0; private cycleFlick = 0; private cycleAdj = 0; private cyclePhase = 'both';
   private lastMosX = 0; private lastSupEdgeX = 0; private lastRefHip = 0; private lastRefKnee = 0;
@@ -952,6 +958,37 @@ export class Sim {
     // ══════ ★★ 文献步态参考分 + 盆骨优先（用户 2026-10-02）══════════════
     //  只在**真单支撑帧**给分：站着不动 / 两脚都在地上 ⇒ 一分不给。
     //  （这一条门控是关键的：之前"要动"项没门控时，站着扭关节反而是全局最优。）
+      {
+        const clr = Math.max(this.airPeakL, this.airPeakR);
+        const mosHere = this.lastMosX;
+        const xiH = this.lastSupEdgeX - mosHere;
+        const footHere = gL ? this.footTmpR[0]! : this.footTmpL[0]!;
+        const eH = Math.abs(footHere - xiH);
+        const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+        const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
+        // ★ 该迈哪条腿 = **载荷较轻的那条**（卸载的才能摆），显式告诉状态机
+        const swingLeg: 'l' | 'r' = gL ? 'r' : 'l';
+        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt, swingLeg);
+        this.gpLabel = this.gp.label;
+        this.gpSwing = this.gp.swingLeg;
+        this.gpBodyFree = this.gp.bodyFree;
+        // ★★ "脚往前迈的时候身体别动"：用状态机的 `bodyFree` 作为**唯一**判据
+        //   （落地后的调整相 bodyFree=true ⇒ 不罚；摆动相 false ⇒ 罚）。
+        const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
+        const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
+        if (nGround === 1) {
+          if (!this.gp.bodyFree) { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
+          else this.stillAdjust += bodyMove * dt;
+        }
+        const cyc = this.gp.tally;
+        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
+          this.accCycle += cyc.lastCredit;
+          this.gpPaidThisStep = true;
+        }
+        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
+        this.cycleN = cyc.nAdjustOk; this.cycleFlick = cyc.flickers;
+        this.cycleAdj = cyc.meanAdjustSec; this.cyclePhase = this.gp.now;
     if (nGround === 1) {
       // 相位：摆动腿在 [STANCE_FRAC, 1)，支撑腿在 [0, STANCE_FRAC)。
       // 用 Sim 的步态时钟推进，两腿天然相差半周期 ⇒ 这就是"交替"的实现。
@@ -993,35 +1030,7 @@ export class Sim {
       //     相 2 调整：**必须单支撑待够 ADJUST_MIN(0.70s)**，期间累计 MoS/落点/形状/盆骨分
       //     相 3 过渡：双脚着地
       //   ⇒ **没走完"迈步→调整"这个循环，一分不给**。这是关住抽搐的结构性办法。
-      {
-        const clr = Math.max(this.airPeakL, this.airPeakR);
-        const mosHere = this.lastMosX;
-        const xiH = this.lastSupEdgeX - mosHere;
-        const footHere = gL ? this.footTmpR[0]! : this.footTmpL[0]!;
-        const eH = Math.abs(footHere - xiH);
-        const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
-        const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
-        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt);
-        // ★★ "脚往前迈的时候身体别动"：摆动相（脚在空中）把身体的运动量记为代价 ——
-        //   横向 CoM 速度为主（支撑面只剩一只脚，横向余量只有 1.23 倍）+ 全身角速度。
-        //   落地之后（adjust 相）不罚 —— 那正是"该动"的窗口。
-        const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
-        const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
-        if (nGround === 1) {
-          if (this.gp.now === 'step') { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
-          else if (this.gp.now === 'adjust') this.stillAdjust += bodyMove * dt;
-        }
-        const cyc = this.gp.tally;
-        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
-          this.accCycle += cyc.lastCredit;
-          this.gpPaidThisStep = true;
-        }
-        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
-        this.cycleN = cyc.nAdjustOk; this.cycleFlick = cyc.flickers;
-        this.cycleAdj = cyc.meanAdjustSec; this.cyclePhase = this.gp.now;
       }
-      void ph2;
     }
     // ══════ ★ 平衡判据 + 脚距离（用户 2026-10-02）════════════════════════
     //  ① 全身体角动量 WBAM（文献：Herr 2008，L(t)≈0）⇒ 不平衡扣分的依据

@@ -64,8 +64,12 @@ interface Meas {
   maxFlightRun: number;
 }
 
+/** 最近一次 measure() 用的 sim（调试状态机轨迹用） */
+let LAST: Sim | null = null;
+
 function measure(teacher: boolean, g?: Float32Array): Meas {
   const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  LAST = sim;
   if (teacher) { sim.begin(new Float32Array(sim.params.length)); }
   else { sim.begin(g!); }
   const com = newCom(), sup = newSupport(), l = new Float64Array(3);
@@ -232,6 +236,39 @@ for (const cfg of [
 console.log('');
 console.log('  解读：离地峰值 <3 cm 的占比高 + 主频高 ⇒ 就是"高频抽搐"，');
 console.log('        奖励里的 MIN_CLEARANCE(3cm) 与 cadenceScore(1Hz) 正是为关住它设的。');
+
+console.log('\n=== ⑤b 状态机轨迹：每一段「该迈哪条腿 + 身体该不该动」+ 哪一个状态没通过 ===\n');
+{
+  const rs: Record<string, { n: number; fail: string[] }> = {};
+  const T = (() => {          // ★ 自己跑一遍 teacher，别用 LAST（后面小节的 sim 会覆盖它）
+    const s = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+    s.begin(new Float32Array(s.params.length));
+    runCaptureTeacher(sk, s, FB, { dur: DUR, clockDriven: true });
+    return s;
+  })();
+  const tr = T.stateTrace;
+  for (const e of tr) {
+    (rs[e.label] ??= { n: 0, fail: [] });
+    rs[e.label].n++;
+    if (e.fail) rs[e.label].fail.push(e.fail);
+  }
+  const rows = Object.entries(rs).sort((a, b) => b[1].n - a[1].n);
+  for (const [lab, r] of rows) {
+    const fs = [...new Set(r.fail)];
+    console.log(`  ${fs.length ? '✗' : '✓'} ${lab.padEnd(26)} ${r.n} 段` +
+      (fs.length ? `  ✗ ${fs.slice(0, 2).join('；')}` : '  ✓ 通过'));
+  }
+  if (!rows.length) console.log('  （轨迹为空：状态机从未跨过 0.45s 的状态段）');
+  const bad = tr.filter(e => e.fail);
+  if (bad.length) {
+    console.log('\n  ✗ 失败的具体片段（前 8 条，指名到段）：');
+    for (const e of bad.slice(0, 8))
+      console.log(`    t=${e.t.toFixed(2)}s  ${e.label}  ✗ ${e.fail}`);
+  }
+  console.log(`\n  终止状态：${T.gpLabel}`);
+  console.log(`    该迈的腿：${T.gpSwing === 'l' ? '左腿' : T.gpSwing === 'r' ? '右腿' : '无（双脚着地）'}`);
+  console.log(`    身体该不该动：${T.gpBodyFree ? '可以动（稳住/调整相）' : '★ 不该动（迈步相·冻结）'}`);
+}
 
 console.log('');
 console.log(FAILS === 0 ? '★ gaitcycle 测量完成' : `★ gaitcycle 有 ${FAILS} 条 FAIL`);

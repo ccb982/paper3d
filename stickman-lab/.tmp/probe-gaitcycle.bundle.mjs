@@ -14481,8 +14481,17 @@ var W_SHAPE = 0.35;
 var W_MOS = 0.3;
 var W_PLACE = 0.2;
 var W_PELVIS = 0.15;
+function stateLabel(phase, swing, bodyFree) {
+  if (phase === "both") return "both \u8FC7\u6E21\uFF08\u53CC\u811A\u7740\u5730\uFF09";
+  const s = swing === "l" ? "\u5DE6\u817F" : "\u53F3\u817F";
+  return phase === "step" ? `step:${s === "\u5DE6\u817F" ? "L" : "R"} \u8FC8\u6B65\u4E2D\xB7\u8EAB\u4F53\u51BB\u7ED3` : `adjust:${s === "\u5DE6\u817F" ? "L" : "R"} \u7A33\u4F4F\u4E2D\xB7\u8EAB\u4F53\u53EF\u52A8`;
+}
 var GaitPhaseMachine = class {
   phase = "both";
+  /** ★ 该迈哪条腿（由载荷决定： unloaded 的那条迈） */
+  swing = null;
+  t = 0;
+  tPhase = 0;
   tStep = 0;
   tAdjust = 0;
   mosAcc = 0;
@@ -14498,6 +14507,11 @@ var GaitPhaseMachine = class {
   nAdjustOk = 0;
   flickers = 0;
   adjSum = 0;
+  evs = [];
+  peakClr = 0;
+  // 本次迈步的离地峰值（诊断）
+  mosEnd = 0;
+  // 调整窗末的 MoS（诊断）
   reset() {
     this.phase = "both";
     this.tStep = 0;
@@ -14518,6 +14532,22 @@ var GaitPhaseMachine = class {
   }
   get now() {
     return this.phase;
+  }
+  /** ★ 该迈哪条腿（null = 双脚着地，没有"该迈的腿"） */
+  get swingLeg() {
+    return this.swing;
+  }
+  /** ★★ 身体该不该动：只有"稳住中"才允许动（用户："迈步时身体别动，落地后再动"） */
+  get bodyFree() {
+    return this.phase === "adjust";
+  }
+  /** 调试标签 */
+  get label() {
+    return stateLabel(this.phase, this.swing, this.bodyFree);
+  }
+  /** 状态转移轨迹（含"哪个状态没通过"） */
+  get trace() {
+    return this.evs;
   }
   /** 正在"调整身体"阶段（此时其它项才允许计分） */
   get inAdjust() {
@@ -14548,8 +14578,18 @@ var GaitPhaseMachine = class {
    * @param pelvis 盆骨先于膝的分数（可为负）
    * @param dt
    */
-  step(nGround, clearance, mosX, shape2, place, pelvis, dt2) {
+  step(nGround, clearance, mosX, shape2, place, pelvis, dt2, swingLeg = null) {
+    this.t += dt2;
+    this.tPhase += dt2;
+    if (this.tPhase > 0.45) {
+      const fail = this.phase === "step" ? this.swing === null ? "\u672A\u6307\u5B9A\u6446\u52A8\u817F" : `\u6446\u52A8\u817F\u672A\u79BB\u5730\u8FBE\u6807\uFF08\u5CF0\u503C ${(this.peakClr * 1e3).toFixed(0)}mm < 30mm\uFF09` : this.phase === "adjust" ? this.mosEnd < 0 ? `\u672A\u7A33\u4F4F\uFF08\u7A97\u672B MoS ${(this.mosEnd * 1e3).toFixed(0)}mm < 0\uFF09` : `\u7A33\u4F4F\u65F6\u957F\u4E0D\u8DB3\uFF08${this.tPhase.toFixed(2)}s < ${ADJUST_MIN}s\uFF09` : "";
+      this.evs.push({ t: this.t - this.tPhase, label: this.label, fail, dur: this.tPhase });
+      this.tPhase = 0;
+    }
+    this.swing = swingLeg;
     if (nGround === 1) {
+      if (this.phase !== "step") this.peakClr = 0;
+      this.peakClr = Math.max(this.peakClr, clearance);
       if (this.phase !== "adjust") {
         this.phase = "step";
         this.tStep += dt2;
@@ -14562,6 +14602,7 @@ var GaitPhaseMachine = class {
         this.mosN = 0;
         this.placeAcc = 0;
         this.placeN = 0;
+        this.mosEnd = 0;
         this.shapeAcc = 0;
         this.shapeN = 0;
         this.pelvisAcc = 0;
@@ -14581,6 +14622,7 @@ var GaitPhaseMachine = class {
       this.tAdjust += dt2;
       this.mosAcc += mosX;
       this.mosN++;
+      this.mosEnd = mosX;
       this.placeAcc += place;
       this.placeN++;
       this.shapeAcc += shape2;
@@ -14898,6 +14940,14 @@ var Sim = class {
   stillStep = 0;
   stillAdjust = 0;
   // 诊断：摆动段 vs 调整段的身体运动量
+  /** ★ 调试用的当前状态："该迈哪条腿 + 身体该不该动" */
+  gpLabel = "both \u8FC7\u6E21\uFF08\u53CC\u811A\u7740\u5730\uFF09";
+  gpSwing = null;
+  gpBodyFree = false;
+  /** 状态机转移轨迹（含"哪个状态没通过"） */
+  get stateTrace() {
+    return this.gp.trace;
+  }
   accCycle = 0;
   gpPaidThisStep = false;
   cycleN = 0;
@@ -15434,62 +15484,66 @@ var Sim = class {
       }
     }
     this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt2;
-    if (nGround === 1) {
-      const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
-      const swingIsL = gL;
-      const tSw = swingIsL ? ph + STANCE_FRAC : ph;
-      const rd = (name) => {
-        const i = JOINT_ORDER.indexOf(name);
-        if (i < 0) return 0;
-        return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
-      };
-      const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
-      const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
-      const a = scoreLeg(tSw, hipSw, kneeSw);
-      const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
-      this.accRefHip += (a.hip + b.hip) * 0.5 * dt2;
-      this.accRefKnee += (a.knee + b.knee) * 0.5 * dt2;
-    }
     {
-      const dt22 = dt2;
-      const vel = (name) => {
-        const i = JOINT_ORDER.indexOf(name);
-        if (i < 0) return 0;
-        doll.jointRelVel(i, this.jbuf);
-        return this.jbuf[2];
-      };
-      const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
-      this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt22);
-      this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt22);
-      if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt2;
+      const clr = Math.max(this.airPeakL, this.airPeakR);
+      const mosHere = this.lastMosX;
+      const xiH = this.lastSupEdgeX - mosHere;
+      const footHere = gL ? this.footTmpR[0] : this.footTmpL[0];
+      const eH = Math.abs(footHere - xiH);
+      const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+      const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+      const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
+      const swingLeg = gL ? "r" : "l";
+      this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt2, swingLeg);
+      this.gpLabel = this.gp.label;
+      this.gpSwing = this.gp.swingLeg;
+      this.gpBodyFree = this.gp.bodyFree;
+      const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
+      const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
+      if (nGround === 1) {
+        if (!this.gp.bodyFree) {
+          this.accStill += bodyMove * dt2;
+          this.stillStep += bodyMove * dt2;
+        } else this.stillAdjust += bodyMove * dt2;
+      }
+      const cyc = this.gp.tally;
+      if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
+        this.accCycle += cyc.lastCredit;
+        this.gpPaidThisStep = true;
+      }
+      if (!this.gp.inAdjust) this.gpPaidThisStep = false;
+      this.cycleN = cyc.nAdjustOk;
+      this.cycleFlick = cyc.flickers;
+      this.cycleAdj = cyc.meanAdjustSec;
+      this.cyclePhase = this.gp.now;
+      if (nGround === 1) {
+        const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+        const swingIsL = gL;
+        const tSw = swingIsL ? ph + STANCE_FRAC : ph;
+        const rd = (name) => {
+          const i = JOINT_ORDER.indexOf(name);
+          if (i < 0) return 0;
+          return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
+        };
+        const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
+        const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
+        const a = scoreLeg(tSw, hipSw, kneeSw);
+        const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
+        this.accRefHip += (a.hip + b.hip) * 0.5 * dt2;
+        this.accRefKnee += (a.knee + b.knee) * 0.5 * dt2;
+      }
       {
-        const clr = Math.max(this.airPeakL, this.airPeakR);
-        const mosHere = this.lastMosX;
-        const xiH = this.lastSupEdgeX - mosHere;
-        const footHere = gL ? this.footTmpR[0] : this.footTmpL[0];
-        const eH = Math.abs(footHere - xiH);
-        const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
-        const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
-        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt2);
-        const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
-        const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
-        if (nGround === 1) {
-          if (this.gp.now === "step") {
-            this.accStill += bodyMove * dt2;
-            this.stillStep += bodyMove * dt2;
-          } else if (this.gp.now === "adjust") this.stillAdjust += bodyMove * dt2;
-        }
-        const cyc = this.gp.tally;
-        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
-          this.accCycle += cyc.lastCredit;
-          this.gpPaidThisStep = true;
-        }
-        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
-        this.cycleN = cyc.nAdjustOk;
-        this.cycleFlick = cyc.flickers;
-        this.cycleAdj = cyc.meanAdjustSec;
-        this.cyclePhase = this.gp.now;
+        const dt22 = dt2;
+        const vel = (name) => {
+          const i = JOINT_ORDER.indexOf(name);
+          if (i < 0) return 0;
+          doll.jointRelVel(i, this.jbuf);
+          return this.jbuf[2];
+        };
+        const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
+        this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt22);
+        this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt22);
+        if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt2;
       }
     }
     {
@@ -15996,8 +16050,10 @@ var FB = {
   kLatV: 0,
   kLatSwing: 0
 };
+var LAST = null;
 function measure(teacher, g) {
   const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  LAST = sim;
   if (teacher) {
     sim.begin(new Float32Array(sim.params.length));
   } else {
@@ -16188,5 +16244,37 @@ for (const cfg of [
 console.log("");
 console.log('  \u89E3\u8BFB\uFF1A\u79BB\u5730\u5CF0\u503C <3 cm \u7684\u5360\u6BD4\u9AD8 + \u4E3B\u9891\u9AD8 \u21D2 \u5C31\u662F"\u9AD8\u9891\u62BD\u6410"\uFF0C');
 console.log("        \u5956\u52B1\u91CC\u7684 MIN_CLEARANCE(3cm) \u4E0E cadenceScore(1Hz) \u6B63\u662F\u4E3A\u5173\u4F4F\u5B83\u8BBE\u7684\u3002");
+console.log("\n=== \u2464b \u72B6\u6001\u673A\u8F68\u8FF9\uFF1A\u6BCF\u4E00\u6BB5\u300C\u8BE5\u8FC8\u54EA\u6761\u817F + \u8EAB\u4F53\u8BE5\u4E0D\u8BE5\u52A8\u300D+ \u54EA\u4E00\u4E2A\u72B6\u6001\u6CA1\u901A\u8FC7 ===\n");
+{
+  const rs = {};
+  const T = (() => {
+    const s = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+    s.begin(new Float32Array(s.params.length));
+    runCaptureTeacher(sk, s, FB, { dur: DUR, clockDriven: true });
+    return s;
+  })();
+  const tr = T.stateTrace;
+  for (const e of tr) {
+    rs[e.label] ??= { n: 0, fail: [] };
+    rs[e.label].n++;
+    if (e.fail) rs[e.label].fail.push(e.fail);
+  }
+  const rows = Object.entries(rs).sort((a, b) => b[1].n - a[1].n);
+  for (const [lab, r] of rows) {
+    const fs2 = [...new Set(r.fail)];
+    console.log(`  ${fs2.length ? "\u2717" : "\u2713"} ${lab.padEnd(26)} ${r.n} \u6BB5` + (fs2.length ? `  \u2717 ${fs2.slice(0, 2).join("\uFF1B")}` : "  \u2713 \u901A\u8FC7"));
+  }
+  if (!rows.length) console.log("  \uFF08\u8F68\u8FF9\u4E3A\u7A7A\uFF1A\u72B6\u6001\u673A\u4ECE\u672A\u8DE8\u8FC7 0.45s \u7684\u72B6\u6001\u6BB5\uFF09");
+  const bad = tr.filter((e) => e.fail);
+  if (bad.length) {
+    console.log("\n  \u2717 \u5931\u8D25\u7684\u5177\u4F53\u7247\u6BB5\uFF08\u524D 8 \u6761\uFF0C\u6307\u540D\u5230\u6BB5\uFF09\uFF1A");
+    for (const e of bad.slice(0, 8))
+      console.log(`    t=${e.t.toFixed(2)}s  ${e.label}  \u2717 ${e.fail}`);
+  }
+  console.log(`
+  \u7EC8\u6B62\u72B6\u6001\uFF1A${T.gpLabel}`);
+  console.log(`    \u8BE5\u8FC8\u7684\u817F\uFF1A${T.gpSwing === "l" ? "\u5DE6\u817F" : T.gpSwing === "r" ? "\u53F3\u817F" : "\u65E0\uFF08\u53CC\u811A\u7740\u5730\uFF09"}`);
+  console.log(`    \u8EAB\u4F53\u8BE5\u4E0D\u8BE5\u52A8\uFF1A${T.gpBodyFree ? "\u53EF\u4EE5\u52A8\uFF08\u7A33\u4F4F/\u8C03\u6574\u76F8\uFF09" : "\u2605 \u4E0D\u8BE5\u52A8\uFF08\u8FC8\u6B65\u76F8\xB7\u51BB\u7ED3\uFF09"}`);
+}
 console.log("");
 console.log(FAILS === 0 ? "\u2605 gaitcycle \u6D4B\u91CF\u5B8C\u6210" : `\u2605 gaitcycle \u6709 ${FAILS} \u6761 FAIL`);
