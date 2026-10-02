@@ -143,7 +143,6 @@ export interface CaptureParams {
   /**
    * ★★ 踝**内翻/外翻**（额状面）反馈增益 —— Liu et al., *J Biomech* 2012 的力学链：
    *   "…a lateral bending (hip abduction/adduction) moment that is equilibrated
-   *    **at the ankle level by supination or pronation of the ankle**"
    *   没有这一项，髋外展造出的额状面力矩无人平衡 ⇒ CoM 反而被推得更偏
    *   （实测 kVmpP 0→80 侧移 0.275~0.337 m 纹丝不动）。
    */
@@ -778,6 +777,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       ankleY: com.y - hipDy,
       bodyMass: totalMass,
       hipHeight: hipDy,
+      hipFlex: sim.doll.jointAngle(jointIndexByName(sk, stanceL ? "hip_l" : "hip_r")),
       singleLeg: singleLeg !== null,
     });
     const qVip = hold.qVip, qVipDot = hold.qVipDot;

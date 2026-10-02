@@ -48,6 +48,11 @@ export interface BalanceHoldParams {
   kHipStiff: number;
   /** 踝 CoP 饱和后髋接管的份额 */
   kHipShare: number;
+  /** ★ 髋的**直立刚度**比例增益（1/rad）：τ ∝ −kHipUpright·θ_hip。
+   *   Morasso Front Comput Neurosci 2022：髋靠 **>K_crit 的被动刚度** 提供上身稳定，
+   *   且 K_crit,hip 只有踝的一半 ⇒ 极小共同收缩即可。
+   *   ⚠ 此前误实现为**常数偏置** −0.048（常数不是刚度）⇒ 髋 0.4s 内屈到 35.5°。 */
+  kHipUpright: number;
   /** ★ 矢状面**髋接管增益**（踝无 CoP 权限时必须用它；单腿站立场景） */
   kWtX: number;
   /** 矢状面：髋接管的 CoM 速度阻尼 */
@@ -70,6 +75,8 @@ export interface BalanceHoldInput {
   ankleY: number;
   /** 全身质量（kg）—— 从 Rapier 各刚体实测求和，不手填 */
   bodyMass: number;
+  /** 承重腿**髋的当前屈角**（rad，正 = 屈）—— 直立刚度的被控量 */
+  hipFlex: number;
   /** 髋高（m），用于 K_crit,hip = m·g·h_hip */
   hipHeight: number;
   /** 是否处于单腿站立（此时髋接管矢状面） */
@@ -85,6 +92,8 @@ export interface BalanceHoldOutput {
   hipSag: number;
   /** 髋外展修正（rad，叠加到 IK 解算出的 h 上） */
   hipAbd: number;
+  /** 髋的直立刚度输出（诊断：髋屈时应为正 = 正在把髋拉回直立） */
+  hipUpright: number;
   /** 躯干旋转指令（rad）—— 平衡相**恒为 0**（见文件头结论 ②） */
   spineCmd: number;
 
@@ -134,14 +143,38 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
 
   // ②b 髋：超临界被动刚度（>1 ⇒ 被动即稳），踝饱和时才主动增大
   const hipStiffRatio = p.kHipStiff - 1;
-  const hipActive = -qVip * p.kHipShare * (1 - copMargin);
 
-  // ── 单腿站立：髋接管矢状面（踝无 CoP 权限，见文件头结论 ①）──────────
-  //   此前把 kWtX 全局归零，是把"迈步"场景的结论误用到"单腿站立"场景，
+// ── 单腿站立：髋接管矢状面（踝无 CoP 权限，见文件头结论 ①）──────────
+  //   此前把 kWtX 全局归零，是把"迈步"场景的结论误用到了"单腿站立"场景，
   //   结果矢状面完全没有控制器，躯干倾角 1.0°→8.8° 后倒下（存活仅 0.6s）。
   const hipSagSteer = i.singleLeg
     ? Math.max(-0.35, Math.min(0.35, -p.kWtX * vipX - p.kWtVx * i.comVx))
     : 0;
+
+// ══════════════════════════════════════════════════════════════════════
+  // ★★★ **髋的直立刚度**（DIP 模型里"超临界刚度"的正确实现）
+  //
+  //   ⚠⚠ 修正（2026-10-02）：此前把超临界刚度写成了**常数偏置**
+  //     `hipStiffRatio * -0.08`（= 0.6 × −0.08 = **−0.048 恒定**）。
+  //     常数**不是刚度** —— 它不随关节角变化，髋一屈就没人拉回来。
+  //     实测后果（单腿平衡）：**髋在 0.4 s 内屈到 35.5°**（脊柱三段都在限位内，
+  //     Σ 仅 15.8°），视觉上就是"腰折了"。躯干倾角才 8.2° —— 折的是髋不是腰。
+  //
+  //   ⚠⚠ 第二个坑（**三重反馈**）：原先 `hipSag = hipUpright + hipActive + hipSagSteer`，
+  //     而这三项**全都随髋屈角同向增大**：
+  //       hipUpright  ∝ −θ_hip
+  //       hipActive   ∝ −q_vip        （q_vip 与 θ_hip 高度相关）
+  //       hipSagSteer ∝ −vip_x − v_x  （同上）
+  //     ⇒ **等效增益 ×3** ⇒ 中等增益（实测 +2.5）就共振发散到 **−24.6 m**。
+  //     DIP 模型里髋**只有一个**刚度项（Morasso 2022）。⇒ 下面拆开：
+  //       · 髋的**姿态刚度**只由 `hipUpright` 承担（对 θ_hip 的比例反馈）
+  //       · `hipActive` 改成**纯速度阻尼**（不再重复姿态通道）
+  //       · `hipSagSteer` 只在**迈步场景**接管（单腿站立时并入刚度，见下）
+  //   ⇒ 拆开三重反馈还不够，**逐项限幅本身也是 bug**（下面 `hipUpright` 处详述）。
+  const hipUprightRaw = -i.hipFlex * p.kHipUpright;
+
+  // 踝饱和时的额状面/矢状面接管：**只做阻尼**（∝ 速度），不重复姿态通道
+  const hipDamp = -(p.kVmpD * qVipDot + p.kWtVx * i.comVx) * (1 - copMargin);
 
   // ── ② 额状面 VMP + 力学链（Liu et al., J Biomech 2012）───────────────
   //   "…a lateral bending (hip abduction/adduction) moment that is equilibrated
@@ -158,8 +191,12 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
   return {
     ankleSag: ankleSagOut,
     ankleLat,
-    hipSag: Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + hipSagSteer)),
+    // ⚠⚠ **限幅只能加在总和上**：逐项限幅会让 hipUpright 饱和成 bang-bang
+    //   （实测 kHipUpright=2.5、髋屈 0.6 rad ⇒ −1.5 被钳到 −0.30 ⇒ 输出只剩
+    //   `±0.30·sign(髋屈)`，另外两项被完全淹没 ⇒ 拆开三重反馈后数字**一位不变**）
+    hipSag: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
     hipAbd,
+    hipUpright: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
     spineCmd: 0,     // ★ 平衡相恒 0（Riemann 2003：躯干是最不重要的纠正来源）
     qVip, qVipDot, qVmp, copOut, copLatOut, kCritAnkle, kCritHip,
   };
@@ -172,6 +209,7 @@ export function holdParamsFrom(src: Record<string, unknown>): BalanceHoldParams 
     kVipP: g('kVipP', 26), kVipD: g('kVipD', 5),
     kAnkleStiff: g('kAnkleStiff', 0.5), kHipStiff: g('kHipStiff', 1.6), kHipShare: g('kHipShare', 0.25),
     kWtX: g('kWtX', 0.6), kWtVx: g('kWtVx', 0.6),
+    kHipUpright: g('kHipUpright', 1.2),
     kVmpP: g('kVmpP', 14), kVmpD: g('kVmpD', 3), kVmpAnkle: g('kVmpAnkle', 0),
   };
 }

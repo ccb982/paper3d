@@ -16616,6 +16616,86 @@ var BalanceGate = class {
   }
 };
 
+// src/core/balanceHold.ts
+var COP_HALF_LEN = 0.075;
+var COP_LAT_LIMIT = COP_HALF_LEN * 0.6;
+function balanceHold(p, i) {
+  const G = 9.81;
+  const vipY = Math.max(0.05, i.ankleY);
+  const vipX = i.comX - i.stanceX;
+  const qVip = Math.atan2(vipX, vipY);
+  const qVipDot = (i.comVx * vipY - vipX * i.comVy) / (vipY * vipY);
+  const kCritAnkle = i.bodyMass * G * vipY;
+  const kCritHip = i.bodyMass * G * (i.hipHeight * 0.55);
+  const copOut = Math.max(0, Math.abs(vipX) - COP_HALF_LEN * vipY);
+  const copMargin = Math.max(0, 1 - copOut / 0.02);
+  const kAnkleActual = 0.7 * kCritAnkle;
+  const kAnkleReq = p.kAnkleStiff * kCritAnkle;
+  const vipTau = -(p.kVipP * qVip + p.kVipD * qVipDot);
+  const ankleSag = (kAnkleReq / kAnkleActual - 1) * -qVip - vipTau;
+  const ankleSagOut = Math.max(-0.26, Math.min(0.26, ankleSag * copMargin * 57.3 * Math.PI / 180));
+  const hipStiffRatio = p.kHipStiff - 1;
+  const hipSagSteer = i.singleLeg ? Math.max(-0.35, Math.min(0.35, -p.kWtX * vipX - p.kWtVx * i.comVx)) : 0;
+  const hipUprightRaw = -i.hipFlex * p.kHipUpright;
+  const hipDamp = -(p.kVmpD * qVipDot + p.kWtVx * i.comVx) * (1 - copMargin);
+  const vmpX = i.comZ - i.stanceZ;
+  const qVmp = Math.atan2(vmpX, vipY);
+  const qVmpDot = i.comVz / vipY;
+  const copLatOut = Math.max(0, Math.abs(vmpX) - COP_LAT_LIMIT * vipY);
+  const latMargin = Math.max(0, 1 - copLatOut / 0.02);
+  const hipAbd = Math.max(-0.3, Math.min(0.3, -(p.kVmpP * qVmp + p.kVmpD * qVmpDot) * latMargin));
+  const ankleLat = Math.max(-0.24, Math.min(0.24, p.kVmpAnkle * qVmp * latMargin));
+  return {
+    ankleSag: ankleSagOut,
+    ankleLat,
+    // ⚠⚠ **限幅只能加在总和上**：逐项限幅会让 hipUpright 饱和成 bang-bang
+    //   （实测 kHipUpright=2.5、髋屈 0.6 rad ⇒ −1.5 被钳到 −0.30 ⇒ 输出只剩
+    //   `±0.30·sign(髋屈)`，另外两项被完全淹没 ⇒ 拆开三重反馈后数字**一位不变**）
+    hipSag: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
+    hipAbd,
+    hipUpright: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
+    spineCmd: 0,
+    // ★ 平衡相恒 0（Riemann 2003：躯干是最不重要的纠正来源）
+    qVip,
+    qVipDot,
+    qVmp,
+    copOut,
+    copLatOut,
+    kCritAnkle,
+    kCritHip
+  };
+}
+function holdParamsFrom(src) {
+  const g = (k, d) => typeof src[k] === "number" ? src[k] : d;
+  return {
+    kVipP: g("kVipP", 26),
+    kVipD: g("kVipD", 5),
+    kAnkleStiff: g("kAnkleStiff", 0.5),
+    kHipStiff: g("kHipStiff", 1.6),
+    kHipShare: g("kHipShare", 0.25),
+    kWtX: g("kWtX", 0.6),
+    kWtVx: g("kWtVx", 0.6),
+    kHipUpright: g("kHipUpright", 1.2),
+    kVmpP: g("kVmpP", 14),
+    kVmpD: g("kVmpD", 3),
+    kVmpAnkle: g("kVmpAnkle", 0)
+  };
+}
+
+// src/core/stepSystem.ts
+function stepParamsFrom(src, halfPeriod) {
+  const g = (k, d) => typeof src[k] === "number" ? src[k] : d;
+  return {
+    halfPeriod,
+    lift: g("lift", 0.32),
+    vDes: g("vDes", 0.39),
+    kGamma: g("kGamma", 0.35),
+    kVerr: g("kVerr", 0.25),
+    ankleSwing: typeof src.ankleSwing === "number" ? src.ankleSwing : void 0,
+    anklePush: typeof src.anklePush === "number" ? src.anklePush : void 0
+  };
+}
+
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
 var PUSH_FRAC = 0.75;
@@ -16629,7 +16709,6 @@ var HIP_Z = 0.05;
 var STANCE_Z = 0.07;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
-var COP_HALF_LEN = 0.075;
 var HIP_Y = Y(1574.5);
 function ik(hipX, hipY, fx, fy, planeScale = 1) {
   const la = LEN_A * planeScale, lb = LEN_B * planeScale;
@@ -16653,6 +16732,11 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   const singleLeg = opts.singleLeg ?? null;
   const liftHold = opts.liftHold ?? 0.25;
   const out = new Float32Array(sim2.doll.jointCount * 3);
+  const holdP = holdParamsFrom(p);
+  const stepP = stepParamsFrom(p, (p.T ?? 2.2) / 2);
+  let totalMass = 0;
+  for (const b of sim2.doll.bodies) totalMass += b.mass();
+  totalMass = Math.max(1, totalMass);
   const com = newCom();
   const dt = 1 / sim2.cfg.controlHz;
   const iL = sk2.bodies.findIndex((b) => b.key === "shin_l");
@@ -16840,43 +16924,35 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
-    const ankleWX = stanceL ? footBufL[0] : footBufR[0];
-    const ankleWY = com.y - hipDy;
-    const vipX = com.x - ankleWX;
-    const vipY = Math.max(0.05, ankleWY);
-    const qVip = Math.atan2(vipX, vipY);
-    const qVipDot = (com.vx * vipY - vipX * com.vy) / (vipY * vipY);
-    let mSum = 0;
-    for (const b of sim2.doll.bodies) mSum += b.mass();
-    const bodyMass = Math.max(1, mSum);
-    const kCritAnkle = bodyMass * 9.81 * vipY;
-    const kCritHip = bodyMass * 9.81 * (hipDy * 0.55);
-    const copLimit = COP_HALF_LEN;
-    const copOut = Math.max(0, Math.abs(vipX) - copLimit * vipY);
+    const hold = balanceHold(holdP, {
+      comX: com.x,
+      comY: com.y,
+      comZ: com.z,
+      comVx: com.vx,
+      comVy: com.vy,
+      comVz: com.vz,
+      stanceX: stanceL ? footBufL[0] : footBufR[0],
+      stanceZ: stanceL ? HIP_Z : -HIP_Z,
+      ankleY: com.y - hipDy,
+      bodyMass: totalMass,
+      hipHeight: hipDy,
+      hipFlex: sim2.doll.jointAngle(jointIndexByName(sk2, stanceL ? "hip_l" : "hip_r")),
+      singleLeg: singleLeg !== null
+    });
+    const qVip = hold.qVip, qVipDot = hold.qVipDot;
+    const qVmp = hold.qVmp;
+    const vipDegDbg = hold.ankleSag * 57.3;
+    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
+    const kCritAnkle = hold.kCritAnkle, kCritHip = hold.kCritHip;
+    const copOut = hold.copOut;
+    const bodyMass = totalMass;
     dbgLog.qVip = +qVip.toFixed(4);
     dbgLog.vipDot = +qVipDot.toFixed(4);
     dbgLog.kCritA = +kCritAnkle.toFixed(1);
     dbgLog.kCritH = +kCritHip.toFixed(1);
     dbgLog.copOut = +copOut.toFixed(4);
-    const kAnkleActual = 0.7 * kCritAnkle;
-    const kAnkleReq = (p.kAnkleStiff ?? 0.5) * kCritAnkle;
-    const vipTau = -(p.kVipP ?? 0.9) * qVip - (p.kVipD ?? 0.18) * qVipDot;
-    const ankleCorr = (kAnkleReq / kAnkleActual - 1) * -qVip + (p.kVipP ?? 0.9) * vipTau * -1;
-    const copMargin = Math.max(0, 1 - copOut / 0.02);
-    const ankleOut = ankleCorr * copMargin;
-    const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));
-    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
-    const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin);
     syncComTarget();
-    const hipSagittal = singleLeg ? Math.max(-0.35, Math.min(
-      0.35,
-      -(p.kWtX ?? 0) * (com.x - comTargetX) - (p.kWtVx ?? 0) * com.vx
-    )) : 0;
-    dbgLog.hipSag = +hipSagittal.toFixed(4);
-    const corrCom = Math.max(-0.45, Math.min(
-      0.45,
-      hipStiffRatio * -0.08 + hipActive + holdDamp + hipSagittal
-    ));
+    const corrCom = Math.max(-0.45, Math.min(0.45, hold.hipSag + holdDamp));
     dbgLog.ankleCorr = +vipDegDbg.toFixed(2);
     dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
@@ -16980,27 +17056,14 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
       const shiftErrRaw2 = copZ - com.z;
       const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
-      const kLatEff = wtStage === "done" ? p.kLat : (p.kLat ?? 0) * 1.8;
-      const stanceZf = stanceL ? HIP_Z : -HIP_Z;
-      const vmpX = com.z - stanceZf;
-      const vmpY = vipY;
-      const qVmp = Math.atan2(vmpX, vmpY);
-      const qVmpDot = com.vz / vmpY;
-      const copLatLimit = COP_HALF_LEN * 0.6;
-      const copLatOut = Math.max(0, Math.abs(vmpX) - copLatLimit * vmpY);
-      const latMargin = Math.max(0, 1 - copLatOut / 0.02);
-      const vmpTau = -qVmp * (p.kVmpP ?? 14) - qVmpDot * (p.kVmpD ?? 3);
-      const vmpDeg = vmpTau * latMargin * 57.3;
       dbgLog.qVmp = +qVmp.toFixed(4);
-      dbgLog.vmpDeg = +vmpDeg.toFixed(2);
-      dbgLog.copLatOut = +copLatOut.toFixed(4);
-      const latCorr = vmpDeg / 57.3 + (isStance ? cmRoll : -cmRoll * 0.3);
-      const ankleEvertCmd = isStance ? qVip * 0 + qVmp * (p.kVmpAnkle ?? 9) * latMargin : 0;
-      dbgLog.ankleEv = +ankleEvertCmd.toFixed(3);
+      dbgLog.copLatOut = +hold.copLatOut.toFixed(4);
+      dbgLog.ankleEv = +hold.ankleLat.toFixed(3);
+      const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
       const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
-      if (ankleEvertCmd !== 0) {
-        const aCmd = Math.max(-14, Math.min(14, ankleEvertCmd * 57.3));
+      if (hold.ankleLat !== 0 && isStance) {
+        const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
         setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
       }
     }
@@ -18002,20 +18065,20 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log("\n=== \u5355\u817F\u7AD9\u7ACB\uFF1A\u77E2\u72B6\u9762\uFF08\u9ACB\u63A5\u7BA1\uFF09kWtX \u626B\u63CF ===\n");
-console.log("  kWtX kWtVx \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u8EAF\u5E72\u503E\xB0 \u5B58\u6D3B   \u5355\u652F\u6491\u5E27 \u8170\u6307\u4EE4\xB0");
-for (const kx of [0, 0.3, 0.8, 2]) {
-  const fX = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
-  fX.begin(new Float32Array(fX.params.length));
-  let cx = 0, cz = 0, tPk = 0, ss = 0, cmd = 0;
-  const rX = runCaptureTeacher(sk, fX, { ...FB, kWtX: kx, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0 }, { dur: 4, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: (_t, _s, _o2, _o, _c, _a, dl) => {
-    const c9 = readCom(fX.doll, cTmp);
-    cx = c9.x;
-    cz = c9.z;
-    tPk = Math.max(tPk, fX.doll.tiltOf(fX.doll.torso()));
-    if (!(footGrounded(fX.doll, "l") && footGrounded(fX.doll, "r"))) ss++;
-    cmd = Math.max(cmd, Math.abs(Number(dl?.sWaist ?? 0)));
+console.log("\n=== \u62C6\u5F00\u4E09\u91CD\u53CD\u9988\u540E\uFF1A\u9ACB\u76F4\u7ACB\u521A\u5EA6\u91CD\u626B ===\n");
+console.log("  kHipUpright  \u9ACB\u5C48\u5CF0\xB0  \u8EAF\u5E72\u503E\xB0  \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u5B58\u6D3B   \u5355\u652F\u6491\u5E27");
+for (const ku of [0, 0.6, 1.2, 2.5, 5, 10]) {
+  const fH2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
+  fH2.begin(new Float32Array(fH2.params.length));
+  const iHr5 = jointIndexByName(sk, "hip_r");
+  let hipPk = 0, tPk = 0, ss = 0, cx = 0, cz = 0;
+  const rH2 = runCaptureTeacher(sk, fH2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: ku }, { dur: 5, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: () => {
+    hipPk = Math.max(hipPk, Math.abs(fH2.doll.jointAngle(iHr5)) * 57.3);
+    tPk = Math.max(tPk, fH2.doll.tiltOf(fH2.doll.torso()));
+    const cC = readCom(fH2.doll, cTmp);
+    cx = cC.x;
+    cz = cC.z;
+    if (!(footGrounded(fH2.doll, "l") && footGrounded(fH2.doll, "r"))) ss++;
   } });
-  console.log(`  ${kx.toFixed(1).padStart(4)}  0.6 ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rX.t.toFixed(2)}s ${String(ss).padStart(8)} ${cmd.toFixed(1).padStart(7)}`);
+  console.log(`  ${ku.toFixed(1).padStart(10)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rH2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
 }
-console.log("\n  \u5224\u8BFB\uFF1A\u672BCoM\u524D\u540E\u5E94\u6536\u655B\u3001\u5B58\u6D3B\u2191\u3001\u8EAF\u5E72\u503E\u89D2\u2193\u3002\u8170\u6307\u4EE4\u5E94\u6052 0\uFF08\u4FDD\u6301\u5E73\u8861\u76F8\u8170\u9759\u9ED8\uFF09\u3002");
