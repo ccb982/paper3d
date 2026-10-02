@@ -43,6 +43,7 @@ const require = createRequire(import.meta.url);
   );
 }
 
+const tmpX = new Float64Array(2);
 let FAILS = 0;
 const check = (name: string, ok: boolean, got: string): void => {
   console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(44)} ${got}`);
@@ -186,6 +187,7 @@ for (let round = 0; round < 4 && stall < 2; round++) {
 }
 
 console.log('\n=== armSwing 消融（肩到底动不动？）===');
+const bm = run(best);
 console.log(`\n=== 最优：cost=${bc.toFixed(3)} ===`);
 console.log(`  ${JSON.stringify({
   T: best.T, vDes: best.vDes, lift: best.lift, thresh: best.thresh,
@@ -208,3 +210,64 @@ check('没摔倒', !bm.fell, bm.fell ? '摔了' : `存活 ${bm.t.toFixed(2)}s`);
 console.log(`\n  速度口径：步长 ${bm.stepLen.toFixed(3)}m ÷ 跨步 ${bm.stepGap.toFixed(2)}s = ${(bm.stepLen / Math.max(0.01, bm.stepGap)).toFixed(2)} m/s`);
 console.log(`  （标准：慢速 ${SPEED.slow} / 正常 ${SPEED.normal} m/s）`);
 console.log(`\n${FAILS === 0 ? '★ 寻优完成且全部达标' : `★ 寻优完成，仍有 ${FAILS} 项未达标`}`);
+// ═══════════════════════════════════════════════════════════════════════
+// ★★ 联合网格：lift × stanceLock —— 目标是让 `adjust` 相**存在**（>0 帧）
+//   背景（npm run roles 回读）：锁住支撑腿后 step 相支撑膝 ROM 30.7°→16.5°（达标），
+//   但单支撑段变短、both 相占到 88% ⇒ `adjust` 相 0 帧 ⇒ 循环跑不完。
+//   这两个参数**互相冲突**：lift 大 ⇒ 抬得久（单支撑长）；stanceLock 大 ⇒ 支撑腿稳。
+//   单参数贪心搜不动，所以做联合网格。
+// ═══════════════════════════════════════════════════════════════════════
+console.log('\n=== 联合网格 lift × stanceLock（目标：让 adjust 相出现）===\n');
+console.log('  lift \ lock' + [0, 0.3, 0.6, 0.9].map(v => String(v).padStart(17)).join(''));
+{
+  const locks = [0, 0.3, 0.6, 0.9];
+  for (const lf of [0.15, 0.20, 0.26, 0.32]) {
+    const rowOut: string[] = [];
+    for (const lk of locks) {
+      const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+      sim.begin(new Float32Array(sim.params.length));
+      const occ = { both: 0, step: 0, adjust: 0 };
+      runCaptureTeacher(sk, sim, { ...FB, lift: lf, stanceLock: lk },
+        { dur: DUR, clockDriven: true, onFrame: (): void => { occ[sim.gp.now]++; } });
+      rowOut.push(`${String(occ.adjust).padStart(6)}帧/${String(occ.step).padStart(4)}`.padStart(17));
+    }
+    console.log(`  ${String(lf).padEnd(11)}` + rowOut.join(''));
+  }
+  console.log('\n  读法：`adjust帧/step帧` —— 单元格第一个数是 adjust 相帧数（目标 >0），第二个是 step 相帧数。');
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ★★★ 抬腿时脚到底往前伸了没有？（用户 2026-10-02："抬腿的时候脚都不往前伸"）
+//   判据：摆动相里脚的**水平前伸量**。文献慢速档步长 0.50 m（2~3 个脚长）。
+// ═══════════════════════════════════════════════════════════════════════
+console.log('\n=== 摆动腿的前伸量（这是"走不起来"的直接原因）===\n');
+console.log('  参数                            摆动脚前伸  落地位置  水平位移');
+{
+  for (const c of [
+    { n: '当前（kv=0.3283）', p: {} as Partial<CaptureParams> },
+    { n: 'kv=0', p: { kv: 0 } },
+    { n: 'kv=1.0', p: { kv: 1.0 } },
+    { n: 'reach=0.25m', p: { reach: 0.25 } },
+    { n: 'reach=0.50m（文献步长）', p: { reach: 0.50 } },
+    { n: 'reach=0.50 + kv=0', p: { reach: 0.50, kv: 0 } },
+  ]) {
+    const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+    sim.begin(new Float32Array(sim.params.length));
+    let reachMax = 0, plantX = 0, startX = 0, started = false;
+    runCaptureTeacher(sk, sim, { ...FB, ...c.p }, {
+      dur: DUR, clockDriven: true,
+      onFrame: (): void => {
+        const gL = footGrounded(sim.doll, 'l'), gR = footGrounded(sim.doll, 'r');
+        const swingL = !gL && gR;                       // 左脚在摆
+        sim.doll.soleXZ("l", tmpX);
+        const x = tmpX[0]!;
+        if (sim.gp.now === 'step') {
+          if (!started) { started = true; startX = x; }
+          reachMax = Math.max(reachMax, x - startX);
+        } else if (started) { plantX = x; started = false; }
+      },
+    });
+    console.log(`  ${c.n.padEnd(30)} ${(reachMax * 1000).toFixed(0).padStart(7)}mm ${(plantX * 1000).toFixed(0).padStart(8)}mm ${(sim.distance * 1000).toFixed(0).padStart(9)}mm`);
+  }
+  console.log('\n  标准：慢速档步长 ≈ 0.50 m（500mm，Stasiu 步长 0.64m @1.37m/s 按速度缩放）');
+}

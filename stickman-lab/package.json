@@ -37,6 +37,9 @@
     "balance": "node tools/run.mjs probe-balance",
     "gaitcycle": "node tools/run.mjs probe-gaitcycle",
     "tune": "node tools/run.mjs tune-teacher",
+    "roles": "node tools/run.mjs probe-roles",
+    "anklesign": "node tools/run.mjs probe-anklesign",
+    "spine": "node tools/run.mjs probe-spine",
     "ankle": "node tools/run.mjs probe-ankle",
     "balancer14": "node tools/run.mjs probe-balancer14"
   },

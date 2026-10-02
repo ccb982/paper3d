@@ -18,7 +18,8 @@ import type { Sim } from './sim';
 import { readCom, newCom, omegaAt } from './posture';
 import { wholeBodyAngularMomentum } from './balance';
 import { ADJUST_MIN } from './gaitPhase';
-import { JOINT_ORDER, type Skeleton } from './skeleton';
+import { JOINT_ORDER, jointIndexByName, spineJointNames, type Skeleton } from './skeleton';
+import { cell } from './normGait';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
 const PX2M = 0.00068;
@@ -26,6 +27,18 @@ const Y = (py: number): number => (2899 - py) * PX2M;
 export const LEN_A = Y(1574.5) - Y(2206);      // 大腿 0.429 m
 export const LEN_B = Y(2206) - Y(2792);        // 小腿 0.398 m
 export const HIP_Z = 0.007;
+/**
+ * ★★ CoM 到**真实髋**的垂直落差（m）。
+ *   腿长（髋→踝）实测 0.828 m、真实髋高 0.901 m、CoM 高约 1.208 m ⇒ 落差 ≈0.307 m。
+ *   **旧值 0.10 是错的**：它把 IK 的虚拟髋点抬到 CoM 下方仅 10 cm，于是 IK 要解
+ *   "|髋−脚| = 腿长" 时垂直落差 = 1.208−0.10−0.012 = **1.096 m > 0.828 m**
+ *   ⇒ 任何前伸都**解不出来**。这就是"抬腿的时候脚都不往前伸"的根因
+ *   （实测前伸 3 mm；`reach`、踝指令全救不了，因为不是能力问题而是无解）。
+ *   改成 0.307 后最大水平步长 ≈ √(0.828² − 0.889²) 无解…… 见下方 sanity：
+ */
+export const HIP_DY = 0.307;
+/** 真实髋高（m），由 limbAxes.json 锚点 Y(1574.5) 换算 */
+export const HIP_Y = Y(1574.5);
 
 export interface CaptureParams {
   /** 步态周期（s）：一左一右两个支撑相 */
@@ -73,10 +86,19 @@ export interface CaptureParams {
    * = 平衡基线 0.16 的 **33.5×** ⇒ 完全没有角动量抵消。
    */
   spineSync: number;
-  /** ★★ 上身发力：手臂摆动幅度（rad）。肩与同侧髋**反相**摆动。
-   *   Sci Rep 2019：摆臂力矩是胸廓-骨盆反相的主因，并抵消摆动腿的垂直轴角动量。
-   *   0 = 关闭（旧行为：肩只是 `-h*0.4` 的装饰，实测只有 4°）。 */
-  armSwing?: number;
+  /** ★ 支撑腿在「迈步相」锁定到文献姿态的权重（0=不锁，1=全锁）。依据 npm run roles：
+   *   step 相支撑腿 髋 ROM 38.5°/膝 ROM 30.7°，而 Oberg slow midstance 要求 15°/15.7°。 */
+  stanceLock?: number;
+  /** ★ 摆动脚**显式前伸**量（m）。用户 2026-10-02："抬腿的时候脚都不往前伸"。
+   *   实测旧行为只前伸 **3mm**（标准慢速步长 ≈500mm）⇒ 等于没迈步。
+   *   0 = 退回旧行为（只跟捕获点 xi）。 */
+  reach?: number;
+  /** ★★ 踝：摆动期背屈峰值（°）—— 勾脚把腿往前送 */
+  ankleSwing?: number;
+  /** ★★ 踝：支撑期起立跖屈（°）—— 顶髋把身体前送 */
+  anklePush?: number;
+  /** ★★ 踝：支撑中期中立角（°） */
+  ankleStance?: number;
 }
 
 /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
@@ -129,18 +151,34 @@ export function runCaptureTeacher(
   let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
   // CMP/Moment-balance 的角动量状态（关于质心，额状/矢状）
   const lbuf = new Float64Array(3);
+  const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
   let prevLz = 0, prevLy = 0, hasL = false;
 
   const jHip = sk.joints.find((j) => j.name === 'hip_l')!;
   const jKnee = sk.joints.find((j) => j.name === "knee_l")!;
-  const jElbow = sk.joints.find((j) => j.name === "elbow_l")!;
+  // ★★ 踝（foot_l/foot_r）—— 之前**从不下指令**，脚掌是自由体。
+  //   这就是"抬腿的时候脚都不往前伸"的直接原因：脚掌朝向恒定（只跟小腿走），
+  //   膝控制的只是小腿，**脚要往前伸必须靠踝**（人走路：摆动期背屈→蹬离跖屈）。
+  const jFoot = sk.joints.find((j) => j.name === "foot_l")!;
+  // ★ 腰（脊柱）关节的实际名字与描述：spineSegments>1 时才存在
+  const spineNames = spineJointNames(sk);
+  const nSpine = spineNames.length;
   // ★ 肩必须用**肩自己的**限位归一化：之前错用 jHip ⇒ 指令幅度被髋的限位缩放了
-  const jShoulder = sk.joints.find((j) => j.name === "shoulder_l")!;
-  const setAxis = (joint: string, ang: number, j: typeof jHip, ax = 2): void => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
-    if (o < 0) return;
-    out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
-  };
+const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2): void => {
+      // ★★★ 查索引必须走 `jointIndexByName`（查**实际关节实例**），
+      //   不能用 `JOINT_ORDER.indexOf` —— 后者是硬编码常量，**不含运行时追加的脊柱关节**：
+      //     spine1/spine2/spine3（腰）在 `spineSegments > 1` 时才被 joints.push 进去，
+      //     indexOf 永远 −1 ⇒ setAxis 静默 return ⇒ **腰从来没被下过指令**。
+      const ji = jointIndexByName(sk, joint);
+      const o = ji * 3 + ax;
+      // ★ 静默失效点（曾让我们误判"某个模块在起作用"）：
+      //   12 关节配置里**没有 ankle**，此时 `j` 为 undefined（踝只存在于 14 关节）
+      if (o < 0 || !j) return;
+      out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
+      nAxes++;
+    };
+  /** 本拍真正下出去的轴数（调试用：0 说明某个角色压根没被控制） */
+  let nAxes = 0;
 
   while (!sim.finished && t < dur) {
     sim.advance(1);
@@ -178,7 +216,18 @@ export function runCaptureTeacher(
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const swingX = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
+    // 原式 `xi + kv·(vDes−vx)·T/2`：xi 是捕获点，跟随身体前进。身体还没动起来时
+    //   `xi ≈ com.x` ⇒ 每只脚都被种在**原来的位置** ⇒ 净位移≈0（实测前伸仅 3mm）。
+    const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
+    // ★ 显式前伸：强制摆动脚至少比**支撑脚**再往前 `reach` 米（文献慢速步长 ≈0.5m）
+    let swingX = swingX0;
+    const reach = p.reach ?? 0;
+    if (reach > 0) {
+      sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
+      const stanceX = stanceL ? footBufL[0]! : footBufR[0]!;
+      swingX = Math.max(swingX0, stanceX + reach);
+    }
+
     const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
     const dtSw = t - lastSwitch;
     const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
@@ -215,32 +264,50 @@ export function runCaptureTeacher(
       const isStance = (side === 'l') === stanceL;
       const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
       const [h, k] = isStance
-        ? ik(hipX, com.y - 0.10, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, com.y - 0.10, swingX, swingY);
+        ? ik(hipX, com.y - HIP_DY, side === 'l' ? plantL : plantR, 0.012)
+        : ik(hipX, com.y - HIP_DY, swingX, swingY);
       // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
-      //   理由是双脚支撑时两腿受同一指令只会产生纯俯仰力矩。**实测更差了**：
-      //   存活 3.85s → 2.43s，双支撑 35% → 71%，步长 0.111m → 0.033m。
-      //   ⇒ 两条腿都需要这个修正（它同时起到"髋策略撑住躯干"的作用）。
-      //   保留原样；要试别的角色分工请先跑 npm run tune + npm run gaitcycle 回读。
-      setAxis(`hip_${side}`, h + corr, jHip);
-      setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
-      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      // ★★ 上身发力（用户 2026-10-02 要求"包括上身发力"）：手臂摆动。
-      //   文献：肩与**同侧髋反向**摆动（相位差 ~180°）；Sci Rep 2019 证明正是这个
-      //   摆动力矩（arm swing moment）把胸廓拉向与骨盆**反相**、并抵消摆动腿的
-      //   垂直轴角动量。旧代码只给 `−h×0.4`（≈同相、幅度仅 4°）⇒ 手臂是摆设。
-      //   改：① 用**摆动进度** sin(πs) 驱动（真实摆臂在摆动相最大）
-      //       ② 与**同侧髋**符号相反（反相）
-      //       ③ 幅度 0.6~0.8 × 髋幅度，肩峰可达 ~25~30°
-      const armSwing = p.armSwing ?? 0;
-      if (armSwing > 0) {
-        const swingNow = Math.sin(Math.PI * Math.min(1, s));
-        // 同侧腿在**摆**时，同侧肩要**向后**；同侧腿在**支撑**时，肩向前
-        const armTarget = (isStance ? 1 : -1) * armSwing * (0.35 + 0.65 * swingNow);
-        setAxis(`shoulder_${side}`, armTarget, jShoulder);
-        // 肘：摆动相微屈（真实步态肘屈 20~40°），支撑相伸直
-        setAxis(`elbow_${side}`, isStance ? -0.12 : 0.55, jElbow);
+      //   **实测更差**（存活 3.85→2.43s、双支撑 35%→71%）。保留原样。
+      //
+      // ★★★★★ 阶段 × 角色 姿态指令表（normGait.PHASE_ROLE）
+      //   目标值全部来自文献（Oberg 膝 15.7°/63°、髋 ROM 46.9°；Sci Rep 2019 腰 −20°），
+      //   用**跟踪误差**把实际姿态拉向该阶段该角色的标准姿态。
+      const phNow = sim.gp.now;
+      const cSwing = cell(phNow, 'swingLeg'), cStance = cell(phNow, 'stanceLeg');
+      const roleCell = isStance ? cStance : cSwing;
+      const stanceLock = p.stanceLock ?? 0;
+      // ⚠ 2026-10-02：把膝**直接**按指令表替换（不做 IK 混合）会更差（存活 3.85→1.37s），
+      //   因为落点必须靠 IK。所以按表的正确用法是：**摆动腿用 IK，支撑腿在迈步相锁定**。
+      let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
+      let hipCmd = h + corr;
+      // ★★★ 支撑腿在「迈步相」锁定（用户："脚往前迈的时候，身体别动"）
+      //   回读依据（npm run roles）：step 相支撑腿 **髋 ROM 38.5° / 膝 ROM 30.7°**，
+      //   而指令表要求 髋 15° / 膝 15.7°（Oberg slow midstance）⇒ 实际是要求的 2 倍。
+      //   原因：`h` 来自 IK，而支撑脚的目标点 plantL/plantR 随身体移动，
+      //   于是"站着的腿"也在不断改角度 —— 这正是"脚身体同时动"。
+      //   修法：迈步相把支撑腿**混向该相的文献姿态**（不再跟随移动的 IK 目标）。
+      if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
+        const w = stanceLock;
+        if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
+        if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
+      setAxis(`hip_${side}`, hipCmd, jHip);
+      setAxis(`knee_${side}`, kneeCmd, jKnee);
+      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      // ★★★ 踝指令（新增，之前完全缺失）
+      //   文献量级：摆动期背屈 ~10°（脚尖上勾，利于前伸）→ 蹬离跖屈 ~15~20°（脚尖下压推髋前送）
+      //   相位 s：0=刚离地  0.5=摆动中  1=落地
+      const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
+      // ★★ 符号约定（用户 2026-10-02："踝关节是不是方向反了" —— 是的，反了，已修）：
+      //   partsMeta: `limitDeg = [低头(plantarflex), 勾脚(dorsiflex)]` = [−10°, +18°]
+      //   ⇒ **负 = 跖屈（脚尖下压）**，**正 = 背屈（脚尖上勾）**。
+      //   我第一版写成「摆动前半 −aSwing = 背屈、支撑起立 +aPush = 跖屈」——**两者都反了**。
+      const ankleDeg = isStance
+        // 支撑相：起立时**跖屈**（脚尖下压，顶髋把身体前送）→ 中后期回中立
+        ? aStance - aPush * Math.max(0, 1 - 2 * s)
+        // 摆动相：前半**背屈**（勾脚往前送）→ 后半跖屈（脚尖先着地）
+        : (s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5));
+      setAxis(`foot_${side}`, ankleDeg * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
@@ -249,8 +316,13 @@ export function runCaptureTeacher(
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;      // 与摆动腿反相（isStance=false 即该腿在摆）
         const yaw = dir * p.spineSync * sw;
-        // 胸廓：spine1..3 绕竖直轴（axis 2）同向转
-        for (const sj of ['spine1', 'spine2', 'spine3']) setAxis(sj, yaw * 0.6, jHip, 2);
+        // 胸廓：**用实际的脊柱关节名**（spineSegments>1 时才有，可能是 spine1..3 或更长）
+        //   旧写法硬编码 ['spine1','spine2','spine3'] + JOINT_ORDER.indexOf ⇒ 永远 −1 ⇒ 腰从未被驱动。
+        //   每段用**它自己的**关节描述做归一化（错用 jHip 会让限位算错）。
+        for (const sj of spineNames) {
+          const sjDesc = sk.joints[jointIndexByName(sk, sj)];
+          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 2);
+        }
         // 骨盆：两髋绕自身长轴反向扭转（axis 1）⇒ 骨盆相对脚反向转
         setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis('hip_r', dir * p.spineSync * 0.5 * sw, jHip, 1);

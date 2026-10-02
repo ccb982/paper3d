@@ -140,3 +140,82 @@ export function row(n: Norm, got: number | null): string {
   const { ok, dev } = within(n, got);
   return `  ${ok ? '✓' : '✗'} ${n.what.padEnd(26)} 标准 ${String(n.v).padStart(6)}${n.unit}  实测 ${got.toFixed(1).padStart(7)}  偏差 ${(dev * 100).toFixed(0).padStart(5)}%  [${n.src}]`;
 }
+// ═══════════════════════════════════════════════════════════════════════
+// ★★★★★ 阶段 × 角色 姿态指令表（用户 2026-10-02 的核心要求）
+//   "我希望就是通过调参还是怎样，让角色移动姿态符合各个阶段的参数"
+//
+// 目标值全部来自上面引用的文献，不是拍脑袋：
+//  - 膝 15.7° / 63°、髋 ROM 46.9°  ← Oberg N=233
+//  - 支撑 59~63% / 摆动 37~41% / 双支撑 9~19%  ← Perry 八相 / Stasiu / Oberg
+//  - 胸廓滞后骨盆 −20°（慢速档）  ← Sci Rep 2019
+//
+// 角色只有三个（用户 2026-10-02 明确："腿、腰、腿"，不含手臂）：
+//  - swingLeg  摆动腿
+//  - stanceLeg 支撑腿
+//  - waist     腰（胸廓轴向协调）
+// ═══════════════════════════════════════════════════════════════════════
+
+export type Role = 'swingLeg' | 'stanceLeg' | 'waist';
+
+/** 一个（相 × 角色）单元：姿态目标 + 出处 + 可调增益 */
+export interface Cell {
+  phase: 'both' | 'step' | 'adjust';
+  role: Role;
+  /** 髋屈伸目标（°，正 = 屈）。null = 本阶段该角色不设这个目标 */
+  hipDeg: number | null;
+  /** 膝屈伸目标（°）。null = 不设 */
+  kneeDeg: number | null;
+  /** 腰（胸廓绕竖直轴）目标偏移（°）。null = 不设 */
+  waistDeg: number | null;
+  src: string;
+  /** 本单元的跟踪权重（0 = 该阶段不激活这个角色） */
+  w: number;
+}
+
+/**
+ * ★ 指令表。数值来自文献；`w` 是"这一阶段这个角色要不要动"的权重，
+ *   由 `npm run tune` 按实测跟踪误差优化（见 tools/tune-roles.ts）。
+ */
+export const PHASE_ROLE: readonly Cell[] = [
+  // ── 双支撑（Perry 0~10% + 50~60%）：两只脚都在地上，身体**居中** ──
+  { phase: 'both', role: 'stanceLeg', hipDeg: 8, kneeDeg: 8, waistDeg: 0,
+    src: 'Perry 初始/终止双支撑：膝微屈 ~10°、髋中立', w: 0.3 },
+  { phase: 'both', role: 'swingLeg', hipDeg: null, kneeDeg: null, waistDeg: null,
+    src: '双支撑相不迈步（文献：摆动尚未开始）', w: 0 },
+  { phase: 'both', role: 'waist', hipDeg: null, kneeDeg: null, waistDeg: 0,
+    src: '双支撑相腰保持中立，等落地', w: 0.2 },
+
+  // ── 迈步相（Perry 10~50%，单支撑）：摆动腿大幅屈曲，支撑腿**稳住不动** ──
+  { phase: 'step', role: 'swingLeg', hipDeg: 30, kneeDeg: 63, waistDeg: null,
+    src: 'Oberg slow：膝摆动峰 63°；髋摆动期屈曲峰值 ~30°', w: 1.0 },
+  { phase: 'step', role: 'stanceLeg', hipDeg: 15, kneeDeg: 15.7, waistDeg: null,
+    src: 'Oberg slow：midstance 膝 15.7°（支撑腿承重、膝微屈）', w: 0.6 },
+  // ★ 用户原话："脚往前迈的时候身体别动" ⇒ 迈步相腰权重 0
+  { phase: 'step', role: 'waist', hipDeg: null, kneeDeg: null, waistDeg: null,
+    src: '用户："迈步时身体别动" ⇒ 腰在迈步相不发力', w: 0 },
+
+  // ── 调整相（落地后）：支撑腿+腰做平衡纠正，摆动腿已经落地 ──
+  { phase: 'step', role: 'swingLeg', hipDeg: null, kneeDeg: null, waistDeg: null, src: '', w: 0 },
+  { phase: 'adjust', role: 'stanceLeg', hipDeg: 18, kneeDeg: 12, waistDeg: null,
+    src: 'Oberg slow：late stance 膝回伸 ~10~15°', w: 0.8 },
+  { phase: 'adjust', role: 'waist', hipDeg: null, kneeDeg: null, waistDeg: -20,
+    src: 'Sci Rep 2019：慢速 1km/h 胸廓**滞后**骨盆 −20°', w: 1.0 },
+  { phase: 'adjust', role: 'swingLeg', hipDeg: null, kneeDeg: null, waistDeg: null,
+    src: '调整相新腿已落地', w: 0 },
+];
+
+/** 查某相某角色的单元（没有就返回 null） */
+export function cell(phase: 'both' | 'step' | 'adjust', role: Role): Cell | null {
+  return PHASE_ROLE.find(c => c.phase === phase && c.role === role && c.w > 0) ?? null;
+}
+
+/** 该相该角色是否有姿态目标（调试打印用） */
+export function cellDesc(phase: 'both' | 'step' | 'adjust', role: Role): string {
+  const c = cell(phase, role);
+  if (!c) return `${phase} / ${role}：本阶段不发力`;
+  const parts: string[] = [];
+  if (c.hipDeg !== null) parts.push(`髋 ${c.hipDeg}°`);
+  if (c.kneeDeg !== null) parts.push(`膝 ${c.kneeDeg}°`);
+  if (c.waistDeg !== null) parts.push(`腰 ${c.waistDeg}°`);
+  return `${phase} / ${role}：${parts.join(' · ')} · w=${c.w} [${c.src}]`;
+}

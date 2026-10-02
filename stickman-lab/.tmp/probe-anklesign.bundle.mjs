@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/tune-teacher.ts
+// tools/probe-anklesign.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -6250,7 +6250,7 @@ var ANKLE_JOINTS = [
   { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
 ];
 var meta = parts_default;
-if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
+if (!meta.joints.some((j2) => j2.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
 var META = meta;
 var PART_BY_KEY = new Map(
   META.parts.map((p) => [p.key, p])
@@ -6412,17 +6412,17 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   let byKeyRef = null;
   const attachTo = (parentKey, wy) => {
     if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
-    let best2 = 0, bestD = Infinity;
+    let best = 0, bestD = Infinity;
     for (let s = 0; s < K; s++) {
       const b = byKeyRef.get(segKey(s));
       if (!b) continue;
       const d = Math.abs(b.cy - wy);
       if (d < bestD) {
         bestD = d;
-        best2 = s;
+        best = s;
       }
     }
-    return segKey(best2);
+    return segKey(best);
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
@@ -6669,7 +6669,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   }
   const byKey = new Map(bodies.map((b) => [b.key, b]));
   byKeyRef = byKey;
-  const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  const jointMetaByName = new Map(META.joints.map((j2) => [j2.name, j2]));
   const joints = [];
   const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
   JOINT_ORDER_ACTIVE.forEach((name, index) => {
@@ -13284,20 +13284,20 @@ var Ragdoll = class {
   createJoints() {
     this.joints.length = 0;
     this.hipIdx = [
-      this.sk.joints.findIndex((j) => j.name === "hip_l"),
-      this.sk.joints.findIndex((j) => j.name === "hip_r")
+      this.sk.joints.findIndex((j2) => j2.name === "hip_l"),
+      this.sk.joints.findIndex((j2) => j2.name === "hip_r")
     ];
-    this.sk.joints.forEach((j, i) => {
-      const pi = this.indexByKey.get(j.parentKey);
-      const ci = this.indexByKey.get(j.childKey);
+    this.sk.joints.forEach((j2, i) => {
+      const pi = this.indexByKey.get(j2.parentKey);
+      const ci = this.indexByKey.get(j2.childKey);
       if (pi === void 0 || ci === void 0) {
-        throw new Error(`[ragdoll] \u5173\u8282 ${j.name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+        throw new Error(`[ragdoll] \u5173\u8282 ${j2.name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
       }
       this.jointBodies[i * 2] = pi;
       this.jointBodies[i * 2 + 1] = ci;
       const jd = rapier_default.JointData.spherical(
-        { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
-        { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
+        { x: j2.parentLocal[0], y: j2.parentLocal[1], z: j2.parentLocal[2] },
+        { x: j2.childLocal[0], y: j2.childLocal[1], z: j2.childLocal[2] }
       );
       this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
@@ -13522,7 +13522,7 @@ var Ragdoll = class {
     const relL = this.relL;
     const jg = this.opt.jointGain ?? {};
     for (let i = 0; i < this.joints.length; i++) {
-      const j = this.sk.joints[i];
+      const j2 = this.sk.joints[i];
       const pi = this.jointBodies[i * 2];
       const ci = this.jointBodies[i * 2 + 1];
       const p = this.bodies[pi];
@@ -13532,7 +13532,7 @@ var Ragdoll = class {
       const wp = p.angvel();
       const wc = c.angvel();
       calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
-      const rr = j.restRad;
+      const rr = j2.restRad;
       rv[0] -= rr[0];
       rv[1] -= rr[1];
       rv[2] -= rr[2];
@@ -13541,8 +13541,8 @@ var Ragdoll = class {
       for (let k = 0; k < 3; k++) {
         this.motorImpulse[i * 3 + k] = 0;
         this.motorDemand[i * 3 + k] = 0;
-        const lo = j.minRad[k];
-        const hi = j.maxRad[k];
+        const lo = j2.minRad[k];
+        const hi = j2.maxRad[k];
         const a = rv[k];
         const idx = i * 3 + k;
         let alpha = this.opt.motorAlpha;
@@ -13557,11 +13557,11 @@ var Ragdoll = class {
         } else {
           const cmd = this.motorTarget[idx];
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-          const ov = jg[j.name];
+          const ov = jg[j2.name];
           err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
         if (err === 0) continue;
-        const tauMax = j.maxTorque[k] * scale;
+        const tauMax = j2.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);
         if (tau > tauMax) tau = tauMax;
         else if (tau < -tauMax) tau = -tauMax;
@@ -13648,10 +13648,10 @@ var Ragdoll = class {
    */
   hipPoint(side, out) {
     const i = this.hipIdx[side === "l" ? 0 : 1];
-    const j = this.sk.joints[i];
-    const b = this.bodies[this.indexByKey.get(j.parentKey) ?? 0];
+    const j2 = this.sk.joints[i];
+    const b = this.bodies[this.indexByKey.get(j2.parentKey) ?? 0];
     const t = b.translation();
-    this.toWorld(b, j.parentLocal[0], j.parentLocal[1], j.parentLocal[2], out);
+    this.toWorld(b, j2.parentLocal[0], j2.parentLocal[1], j2.parentLocal[2], out);
     out[0] += t.x;
     out[1] += t.y;
     out[2] += t.z;
@@ -13684,7 +13684,7 @@ var Ragdoll = class {
   reset(offsetX = 0) {
     this.motorTarget.fill(0);
     if (this.opt.purgeJointCache) {
-      for (const j of this.joints) this.world.removeImpulseJoint(j, true);
+      for (const j2 of this.joints) this.world.removeImpulseJoint(j2, true);
     }
     for (let i = 0; i < this.bodies.length; i++) {
       const b = this.bodies[i];
@@ -13969,17 +13969,17 @@ function monotoneAt(ref, t) {
   const h = x1 - x0;
   if (h <= 1e-9) return y0;
   const u = (x - x0) / h;
-  const secant = (j) => {
-    const [xa, ya] = ref[j];
-    const [xb, yb] = ref[j + 1];
+  const secant = (j2) => {
+    const [xa, ya] = ref[j2];
+    const [xb, yb] = ref[j2 + 1];
     const hh = xb - xa;
     return hh <= 1e-9 ? 0 : (yb - ya) / hh;
   };
-  const d = (j) => {
-    if (j < 0 || j >= n - 1) return 0;
-    const s = secant(j);
-    const sa = j > 0 ? secant(j - 1) : s;
-    const sb = j + 2 < n ? secant(j + 1) : s;
+  const d = (j2) => {
+    if (j2 < 0 || j2 >= n - 1) return 0;
+    const s = secant(j2);
+    const sa = j2 > 0 ? secant(j2 - 1) : s;
+    const sb = j2 + 2 < n ? secant(j2 + 1) : s;
     if (s * sa <= 0 || s * sb <= 0) return 0;
     const m = Math.min(Math.abs(s), 3 * Math.abs(sa), 3 * Math.abs(sb));
     return s > 0 ? m : -m;
@@ -16152,280 +16152,7 @@ var Sim = class {
   }
 };
 
-// src/core/normGait.ts
-var SPEED = { slow: 0.5, normal: 1.24, fast: 1.54 };
-var SPACE = [
-  { what: "\u6B65\u957F\uFF08\u5FEB\u8D70\uFF09", v: 0.64, unit: "m", src: "Stasiu 1.37 m/s\uFF08\xB10.04\uFF09" },
-  { what: "\u6B65\u957F\uFF08\u6211\u4EEC\u7684 0.5 m/s \u76EE\u6807\uFF09", v: 0.5, unit: "m", src: "\u7531 1.0 s \u6B65\u95F4\u9694 \xD7 0.5 m/s \u63A8\u5F97" },
-  { what: "\u6B65\u5BBD", v: 0.14, unit: "m", src: "Stasiu\uFF08\xB10.02\uFF09", tol: 0.4 },
-  { what: "\u8DE8\u6B65\u65F6\u95F4", v: 1.02, unit: "s", src: "Stasiu\uFF08\xB10.05\uFF09", tol: 0.15 }
-];
-var PHASE_ROLE = [
-  // ── 双支撑（Perry 0~10% + 50~60%）：两只脚都在地上，身体**居中** ──
-  {
-    phase: "both",
-    role: "stanceLeg",
-    hipDeg: 8,
-    kneeDeg: 8,
-    waistDeg: 0,
-    src: "Perry \u521D\u59CB/\u7EC8\u6B62\u53CC\u652F\u6491\uFF1A\u819D\u5FAE\u5C48 ~10\xB0\u3001\u9ACB\u4E2D\u7ACB",
-    w: 0.3
-  },
-  {
-    phase: "both",
-    role: "swingLeg",
-    hipDeg: null,
-    kneeDeg: null,
-    waistDeg: null,
-    src: "\u53CC\u652F\u6491\u76F8\u4E0D\u8FC8\u6B65\uFF08\u6587\u732E\uFF1A\u6446\u52A8\u5C1A\u672A\u5F00\u59CB\uFF09",
-    w: 0
-  },
-  {
-    phase: "both",
-    role: "waist",
-    hipDeg: null,
-    kneeDeg: null,
-    waistDeg: 0,
-    src: "\u53CC\u652F\u6491\u76F8\u8170\u4FDD\u6301\u4E2D\u7ACB\uFF0C\u7B49\u843D\u5730",
-    w: 0.2
-  },
-  // ── 迈步相（Perry 10~50%，单支撑）：摆动腿大幅屈曲，支撑腿**稳住不动** ──
-  {
-    phase: "step",
-    role: "swingLeg",
-    hipDeg: 30,
-    kneeDeg: 63,
-    waistDeg: null,
-    src: "Oberg slow\uFF1A\u819D\u6446\u52A8\u5CF0 63\xB0\uFF1B\u9ACB\u6446\u52A8\u671F\u5C48\u66F2\u5CF0\u503C ~30\xB0",
-    w: 1
-  },
-  {
-    phase: "step",
-    role: "stanceLeg",
-    hipDeg: 15,
-    kneeDeg: 15.7,
-    waistDeg: null,
-    src: "Oberg slow\uFF1Amidstance \u819D 15.7\xB0\uFF08\u652F\u6491\u817F\u627F\u91CD\u3001\u819D\u5FAE\u5C48\uFF09",
-    w: 0.6
-  },
-  // ★ 用户原话："脚往前迈的时候身体别动" ⇒ 迈步相腰权重 0
-  {
-    phase: "step",
-    role: "waist",
-    hipDeg: null,
-    kneeDeg: null,
-    waistDeg: null,
-    src: '\u7528\u6237\uFF1A"\u8FC8\u6B65\u65F6\u8EAB\u4F53\u522B\u52A8" \u21D2 \u8170\u5728\u8FC8\u6B65\u76F8\u4E0D\u53D1\u529B',
-    w: 0
-  },
-  // ── 调整相（落地后）：支撑腿+腰做平衡纠正，摆动腿已经落地 ──
-  { phase: "step", role: "swingLeg", hipDeg: null, kneeDeg: null, waistDeg: null, src: "", w: 0 },
-  {
-    phase: "adjust",
-    role: "stanceLeg",
-    hipDeg: 18,
-    kneeDeg: 12,
-    waistDeg: null,
-    src: "Oberg slow\uFF1Alate stance \u819D\u56DE\u4F38 ~10~15\xB0",
-    w: 0.8
-  },
-  {
-    phase: "adjust",
-    role: "waist",
-    hipDeg: null,
-    kneeDeg: null,
-    waistDeg: -20,
-    src: "Sci Rep 2019\uFF1A\u6162\u901F 1km/h \u80F8\u5ED3**\u6EDE\u540E**\u9AA8\u76C6 \u221220\xB0",
-    w: 1
-  },
-  {
-    phase: "adjust",
-    role: "swingLeg",
-    hipDeg: null,
-    kneeDeg: null,
-    waistDeg: null,
-    src: "\u8C03\u6574\u76F8\u65B0\u817F\u5DF2\u843D\u5730",
-    w: 0
-  }
-];
-function cell(phase, role) {
-  return PHASE_ROLE.find((c) => c.phase === phase && c.role === role && c.w > 0) ?? null;
-}
-
-// src/core/teacher.ts
-var PX2M = 68e-5;
-var Y = (py) => (2899 - py) * PX2M;
-var LEN_A = Y(1574.5) - Y(2206);
-var LEN_B = Y(2206) - Y(2792);
-var HIP_Z = 7e-3;
-var HIP_DY = 0.307;
-var HIP_Y = Y(1574.5);
-function ik(hipX, hipY, fx, fy) {
-  const dx = fx - hipX, dy = fy - hipY;
-  let d = Math.hypot(dx, dy);
-  d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-  d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
-  const base = Math.atan2(dx, -dy);
-  const cosK = Math.max(-1, Math.min(
-    1,
-    (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)
-  ));
-  const interior = Math.acos(cosK);
-  const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
-  return [hipRel, -(Math.PI - interior)];
-}
-function runCaptureTeacher(sk2, sim, p, opts = {}) {
-  const dur = opts.dur ?? 8;
-  const clockDriven = opts.clockDriven ?? false;
-  const out = new Float32Array(sim.doll.jointCount * 3);
-  const com = newCom();
-  const dt = 1 / sim.cfg.controlHz;
-  const iL = sk2.bodies.findIndex((b) => b.key === "shin_l");
-  const iR = sk2.bodies.findIndex((b) => b.key === "shin_r");
-  let plantL = sim.doll.bodies[iL].translation().x;
-  let plantR = sim.doll.bodies[iR].translation().x;
-  let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
-  const lbuf = new Float64Array(3);
-  const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
-  let prevLz = 0, prevLy = 0, hasL = false;
-  const jHip = sk2.joints.find((j) => j.name === "hip_l");
-  const jKnee = sk2.joints.find((j) => j.name === "knee_l");
-  const jFoot = sk2.joints.find((j) => j.name === "foot_l");
-  const setAxis = (joint, ang, j, ax = 2) => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
-    if (o < 0 || !j) return;
-    out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
-  };
-  while (!sim.finished && t < dur) {
-    sim.advance(1);
-    const torso = sim.doll.torso();
-    const rot = torso.rotation();
-    const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (rot.w * rot.x + rot.y * rot.z))));
-    const av = torso.angvel();
-    readCom(sim.doll, com);
-    const om = omegaAt(com.y);
-    const xi = com.x + com.vx / om;
-    let stanceL = prevStance === 1;
-    if (clockDriven) {
-      const half = p.T * 0.5;
-      const k = Math.floor(t / half);
-      const wantL = k % 2 === 0;
-      if (wantL !== stanceL) {
-        steps++;
-        lastSwitch = k * half;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        stanceL = wantL;
-        prevStance = stanceL ? 1 : 2;
-      }
-    } else {
-      const plantNow = stanceL ? plantL : plantR;
-      if (Math.abs(xi - plantNow) > p.thresh && t - lastSwitch > p.T * 0.5) {
-        stanceL = !stanceL;
-        steps++;
-        lastSwitch = t;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        prevStance = stanceL ? 1 : 2;
-      }
-    }
-    const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
-    let swingX = swingX0;
-    const reach = p.reach ?? 0;
-    if (reach > 0) {
-      sim.doll.soleXZ("l", footBufL);
-      sim.doll.soleXZ("r", footBufR);
-      const stanceX = stanceL ? footBufL[0] : footBufR[0];
-      swingX = Math.max(swingX0, stanceX + reach);
-    }
-    const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
-    const dtSw = t - lastSwitch;
-    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
-    const corr = p.kPitch * pitch + p.kRate * av.x;
-    const inAdjust = t - lastSwitch < ADJUST_MIN;
-    const postGain = inAdjust ? 1 : 0.15;
-    let cmRoll = 0;
-    const cmOn = p.cmBalance > 0 && sim.mod.active("cmBalance", sim.gp.now, 2, null);
-    if (cmOn) {
-      wholeBodyAngularMomentum(sim.doll, com, lbuf);
-      const lz = lbuf[2];
-      const ly = lbuf[1];
-      const dlz = hasL ? (lz - prevLz) / dt : 0;
-      const dly = hasL ? (ly - prevLy) / dt : 0;
-      prevLz = lz;
-      prevLy = ly;
-      hasL = true;
-      cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02 - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
-    }
-    for (const side of ["l", "r"]) {
-      const isStance = side === "l" === stanceL;
-      const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
-      const [h, k] = isStance ? ik(hipX, com.y - HIP_DY, side === "l" ? plantL : plantR, 0.012) : ik(hipX, com.y - HIP_DY, swingX, swingY);
-      const phNow = sim.gp.now;
-      const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
-      const roleCell = isStance ? cStance : cSwing;
-      const stanceLock = p.stanceLock ?? 0;
-      let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = h + corr;
-      if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
-        const w = stanceLock;
-        if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
-        if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
-      }
-      setAxis(`hip_${side}`, hipCmd, jHip);
-      setAxis(`knee_${side}`, kneeCmd, jKnee);
-      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
-      const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      setAxis(`foot_${side}`, ankleDeg * Math.PI / 180, jFoot);
-      if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
-        const sw = Math.sin(Math.PI * Math.min(1, s));
-        const dir = isStance ? -1 : 1;
-        const yaw = dir * p.spineSync * sw;
-        for (const sj of ["spine1", "spine2", "spine3"]) setAxis(sj, yaw * 0.6, jHip, 2);
-        setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
-        setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
-      }
-      const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
-    }
-    opts.onFrame?.(t, stanceL, s);
-    sim.doll.setMotorTargets(out);
-    if (opts.record && opts.data) {
-      opts.data.X.push(Array.from(sim.observation()));
-      opts.data.A.push(Array.from(out));
-    }
-    t += dt;
-  }
-  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0 };
-}
-
-// src/core/phaseSeed.ts
-var CAPTURE_GAIT = {
-  /** 摆动周期（秒） */
-  T: 1.89,
-  /** 目标速度（m/s） */
-  vDes: 0.39,
-  /** 摆动脚抬升高度（m） */
-  lift: 0.15,
-  /** 落脚点速度修正增益 */
-  kv: 0.3283,
-  /** 躯干俯仰 → 髋（★ 负号才接得住） */
-  kPitch: 2.544,
-  /** 俯仰角速度 → 髋 */
-  kRate: 0.542,
-  /** 捕获点走出当前支撑脚多远才换脚（m） */
-  thresh: 0.0673,
-  /** 落地吸能：支撑膝额外屈多少（rad） */
-  absorb: 0.4,
-  /** 吸能衰减时间常数（s） */
-  absorbTau: 0.25,
-  /** 实测：4 次真实换脚、0.625 m、存活 4.32 s（零输出基线 1.83 s） */
-  measured: { steps: 4, x: 0.625, t: 4.32 }
-};
-
-// tools/tune-teacher.ts
+// tools/probe-anklesign.ts
 var require2 = createRequire(import.meta.url);
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -16436,244 +16163,31 @@ var require2 = createRequire(import.meta.url);
     if (typeof f === "function") (imp[i.module] ??= {})[i.name] = f;
   }
   const r = await WebAssembly.instantiate(c, imp);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
+  __wbg_set_wasm(r.instance ? r.instance.exports : r.exports);
 }
-var tmpX = new Float64Array(2);
-var FAILS = 0;
-var check = (name, ok, got) => {
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${name.padEnd(44)} ${got}`);
-  if (!ok) FAILS++;
-};
-var sk = buildSkeleton(DEFAULT_CONFIG);
+var sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true });
 var shape = shapeForJoints(sk.joints.length);
-var DUR = 6;
-var FB = {
-  T: CAPTURE_GAIT.T,
-  vDes: CAPTURE_GAIT.vDes,
-  lift: CAPTURE_GAIT.lift,
-  kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch,
-  kRate: CAPTURE_GAIT.kRate,
-  thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb,
-  absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 0,
-  kLatV: 0,
-  kLatSwing: 0
-};
-function median(a) {
-  return a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : 0;
-}
-function run(p) {
-  const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+var fi = JOINT_ORDER.indexOf("foot_l");
+var j = sk.joints[fi];
+console.log(`\u8E1D\u5173\u8282 foot_l\uFF1AlimitDeg = [${(j.minRad[2] * 180 / Math.PI).toFixed(1)}\xB0, ${(j.maxRad[2] * 180 / Math.PI).toFixed(1)}\xB0]`);
+console.log("partsMeta \u6CE8\u91CA\uFF1AlimitDeg = [\u4F4E\u5934(plantarflex), \u52FE\u811A(dorsiflex)]\n");
+console.log("  \u6307\u4EE4(rad)   \u5B9E\u6D4B\u8E1D\u89D2(\xB0)   \u811A\u5C16\u9AD8\u5EA6\u53D8\u5316(mm)   \u5224\u5B9A");
+for (const cmd of [-0.3, -0.15, 0, 0.15, 0.3]) {
+  const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3 });
   sim.begin(new Float32Array(sim.params.length));
-  let n = 0, dbl = 0, sgl = 0, flt = 0, nMid = 0, kneeMid = 0, mosAcc = 0, nMos = 0;
-  const knee = [], hip = [], sh = [], gaps = [];
-  let shPrev = 0, lastT = -1, gL = false, gR = false;
-  const cb = (tt0) => {
-    const a = footGrounded(sim.doll, "l"), b = footGrounded(sim.doll, "r");
-    const ng = (a ? 1 : 0) + (b ? 1 : 0);
-    n++;
-    if (ng === 2) dbl++;
-    else if (ng === 1) sgl++;
-    else flt++;
-    const g = a ? gL : b ? gR : null;
-    if (g !== null && !g) {
-      const tt = tt0;
-      if (lastT > 0) gaps.push(tt - lastT);
-      lastT = tt;
-    }
-    gL = a;
-    gR = b;
-    const rdh = (nm) => {
-      const i = JOINT_ORDER.indexOf(nm);
-      if (i < 0) return 0;
-      const v = sim.doll.jointAngle(i) + (sk.joints[i]?.restRad[2] ?? 0);
-      return Number.isFinite(v) ? v : 0;
-    };
-    const rk = Math.abs(rdh("knee_r")), rh = Math.abs(rdh("hip_r"));
-    knee.push(rk);
-    hip.push(rh);
-    if (ng === 2) {
-      kneeMid += rk;
-      nMid++;
-    }
-    const shv = rdh("shoulder_l") + rdh("shoulder_r");
-    sh.push(Math.abs(shv - shPrev));
-    shPrev = shv;
-    if (ng === 1) {
-      mosAcc += sim.lastMosX;
-      nMos++;
-    }
-  };
-  const r = runCaptureTeacher(sk, sim, p, { dur: DUR, clockDriven: true, onFrame: cb });
-  return {
-    t: r.t,
-    n,
-    dbl,
-    sgl,
-    flight: flt,
-    dist: Math.abs(sim.distance),
-    stepLen: Math.abs(sim.distance) / Math.max(1, gaps.length),
-    stepGap: median(gaps),
-    kneeMid: nMid ? kneeMid / nMid * 180 / Math.PI : 0,
-    kneeMax: Math.max(...knee) * 180 / Math.PI,
-    hipMax: Math.max(...hip) * 180 / Math.PI,
-    shMax: Math.max(...sh) * 180 / Math.PI,
-    mosSgl: nMos ? mosAcc / nMos : 0,
-    fell: sim.fallen
-  };
-}
-function cost(m) {
-  const dblP2 = 100 * m.dbl / Math.max(1, m.n), sglP2 = 100 * m.sgl / Math.max(1, m.n);
-  let c = 4 * (dblP2 - 17) / 17;
-  c += 2 * (sglP2 - 41) / 41;
-  if (m.dist < 0.05) c += 6 * (0.05 - m.dist) / 0.05;
-  else c += 1 * (m.dist - 0.35) / 0.35;
-  if (m.stepGap > 0) c += 1.5 * (m.stepGap - 1.02) / 1.02;
-  else c += 2;
-  c += 1.5 * (m.kneeMid - 15.7) / 15.7 + 0.8 * (m.kneeMax - 63) / 63 + 0.8 * (m.hipMax - 46.9) / 46.9;
-  c += 2 * (m.shMax - 20) / 20;
-  c += 10 * (100 * m.flight / Math.max(1, m.n)) / 5;
-  if (m.fell) c += 12;
-  return c;
-}
-var AXES = [
-  { k: "T", grid: [2.6, 2.3, 2, 1.89, 1.7, 1.5] },
-  { k: "vDes", grid: [0.15, 0.22, 0.3, 0.39, 0.5, 0.62] },
-  { k: "lift", grid: [0.06, 0.1, 0.15, 0.2, 0.26] },
-  { k: "thresh", grid: [0.02, 0.045, 0.0673, 0.1, 0.15, 0.22] },
-  { k: "absorb", grid: [0, 0.2, 0.4, 0.7, 1] },
-  { k: "kv", grid: [0, 0.15, 0.3283, 0.55, 0.85] },
-  { k: "kPitch", grid: [-3, -1.6, -0.8, -0.4, 0, 0.8, 1.6, 2.544, 3.6] },
-  { k: "kRate", grid: [0, 0.25, 0.542, 0.9, 1.4] }
-];
-var fmt = (m) => `\u53CC\u652F\u6491 ${(100 * m.dbl / Math.max(1, m.n)).toFixed(0).padStart(2)}% \u5355\u652F\u6491 ${(100 * m.sgl / Math.max(1, m.n)).toFixed(0).padStart(2)}% \u4F4D\u79FB ${m.dist.toFixed(3)}m \u6B65\u957F ${m.stepLen.toFixed(3)}m \u95F4\u9694 ${m.stepGap.toFixed(2)}s \u819D ${m.kneeMid.toFixed(0)}/${m.kneeMax.toFixed(0)}\xB0 \u9ACB ${m.hipMax.toFixed(0)}\xB0 \u80A9 ${m.shMax.toFixed(0)}\xB0`;
-console.log("=== \u6559\u5E08\u63A7\u5236\u5668\u53C2\u6570\u5BFB\u4F18\uFF08\u76EE\u6807\u51FD\u6570 = \u4E0E\u6807\u51C6\u6B65\u6001\u6570\u636E\u7684\u5DEE\u8DDD\uFF09===\n");
-var best = { ...FB };
-var bc = cost(run(best));
-var b0 = run(best);
-console.log(`  \u8D77\u70B9 cost=${bc.toFixed(3)}`);
-console.log(`    \u5E27\u6570 n=${b0.n} \u5B58\u6D3B\u6027=${b0.fell} \u5B58\u6D3B=${b0.t.toFixed(2)}s  \xB7 ${fmt(b0)}
-`);
-if (b0.n === 0) console.log("  \u26A0 onFrame \u4E00\u6B21\u90FD\u6CA1\u88AB\u8C03\u7528 \u21D2 \u63A7\u5236\u5668\u6839\u672C\u6CA1\u9A71\u52A8\uFF0C\u68C0\u67E5 runCaptureTeacher \u7684\u8C03\u7528\u65B9\u5F0F\n");
-console.log(`  \u53C2\u8003\u6807\u51C6\uFF1A\u53CC\u652F\u6491 17% / \u5355\u652F\u6491 41% / \u6B65\u957F ${SPACE[1].v}m / \u8DE8\u6B65 ${SPACE[3].v}s / \u819D 15.7\xB0\xB763\xB0 / \u9ACB 46.9\xB0 / \u80A9 ~20\xB0 / \u817E\u7A7A 0%
-`);
-var stall = 0;
-for (let round = 0; round < 4 && stall < 2; round++) {
-  let improved = false;
-  for (const ax of AXES) {
-    for (const v of ax.grid) {
-      const cand = { ...best, [ax.k]: v };
-      const m = run(cand);
-      const c = cost(m);
-      if (c < bc - 1e-3) {
-        bc = c;
-        best = cand;
-        improved = true;
-        console.log(`  r${round} ${String(ax.k).padEnd(7)}=${String(v).padEnd(6)} cost=${c.toFixed(3)}  ${fmt(m)}`);
-      }
-    }
+  const out = new Float32Array(sim.params.length);
+  out[fi * 3 + 2] = cmd / (0.9 * j.maxRad[2]);
+  sim.doll.setMotorTargets(out);
+  const h0 = sim.doll.soleY("l");
+  for (let i = 0; i < 240; i++) {
+    sim.doll.driveMotors(1 / 120);
+    sim.world.step();
   }
-  if (improved) stall = 0;
-  else stall++;
+  const a = sim.doll.jointAngle(fi);
+  const h1 = sim.doll.soleY("l");
+  const up = (h1 - h0) * 1e3;
+  const verdict = up > 2 ? "\u811A\u5C16\u4E0A\u52FE\uFF08\u80CC\u5C48\uFF09" : up < -2 ? "\u811A\u5C16\u4E0B\u538B\uFF08\u8DD6\u5C48\uFF09" : "\u51E0\u4E4E\u4E0D\u52A8";
+  console.log(`  ${cmd.toFixed(2).padStart(8)}   ${(a * 180 / Math.PI).toFixed(1).padStart(9)}   ${up.toFixed(1).padStart(15)}   ${verdict}`);
 }
-console.log("\n=== armSwing \u6D88\u878D\uFF08\u80A9\u5230\u5E95\u52A8\u4E0D\u52A8\uFF1F\uFF09===");
-var bm = run(best);
-console.log(`
-=== \u6700\u4F18\uFF1Acost=${bc.toFixed(3)} ===`);
-console.log(`  ${JSON.stringify({
-  T: best.T,
-  vDes: best.vDes,
-  lift: best.lift,
-  thresh: best.thresh,
-  absorb: best.absorb,
-  kv: best.kv,
-  kPitch: best.kPitch,
-  kRate: best.kRate
-}, null, 0)}
-`);
-console.log(`  ${fmt(bm)}
-`);
-console.log("  \u4E0E\u6807\u51C6\u6BD4\u5BF9\uFF1A");
-var dblP = 100 * bm.dbl / Math.max(1, bm.n);
-var sglP = 100 * bm.sgl / Math.max(1, bm.n);
-check("\u53CC\u652F\u6491 \u2192 \u6162\u901F\u6863 17%\xB16", dblP > 11 && dblP < 23, `${dblP.toFixed(1)}%`);
-check("\u5355\u652F\u6491 \u2192 41%\xB110", sglP > 31 && sglP < 51, `${sglP.toFixed(1)}%`);
-check("\u811A\u51C0\u4F4D\u79FB\u4E3A\u6B63", bm.dist > 0.02, `${bm.dist.toFixed(3)} m`);
-check("\u8DE8\u6B65\u65F6\u95F4 0.7~1.4 s", bm.stepGap > 0.7 && bm.stepGap < 1.4, `${bm.stepGap.toFixed(2)} s`);
-check("\u819D midstance 15.7\xB15\xB0", Math.abs(bm.kneeMid - 15.7) < 5, `${bm.kneeMid.toFixed(1)}\xB0`);
-check("\u819D\u6446\u52A8\u5CF0 63\xB113\xB0", Math.abs(bm.kneeMax - 63) < 13, `${bm.kneeMax.toFixed(1)}\xB0`);
-check("\u9ACB ROM 46.9\xB19\xB0", Math.abs(bm.hipMax - 46.9) < 9, `${bm.hipMax.toFixed(1)}\xB0`);
-check("\u80A9\u6446\u52A8\u5CF0 \u226512\xB0\uFF08\u4E0A\u8EAB\u53D1\u529B\uFF09", bm.shMax > 12, `${bm.shMax.toFixed(1)}\xB0`);
-check("\u65E0\u817E\u7A7A\uFF08\u4E0D\u662F\u8DF3\uFF09", bm.flight === 0, `${bm.flight} \u5E27`);
-check("\u6CA1\u6454\u5012", !bm.fell, bm.fell ? "\u6454\u4E86" : `\u5B58\u6D3B ${bm.t.toFixed(2)}s`);
-console.log(`
-  \u901F\u5EA6\u53E3\u5F84\uFF1A\u6B65\u957F ${bm.stepLen.toFixed(3)}m \xF7 \u8DE8\u6B65 ${bm.stepGap.toFixed(2)}s = ${(bm.stepLen / Math.max(0.01, bm.stepGap)).toFixed(2)} m/s`);
-console.log(`  \uFF08\u6807\u51C6\uFF1A\u6162\u901F ${SPEED.slow} / \u6B63\u5E38 ${SPEED.normal} m/s\uFF09`);
-console.log(`
-${FAILS === 0 ? "\u2605 \u5BFB\u4F18\u5B8C\u6210\u4E14\u5168\u90E8\u8FBE\u6807" : `\u2605 \u5BFB\u4F18\u5B8C\u6210\uFF0C\u4ECD\u6709 ${FAILS} \u9879\u672A\u8FBE\u6807`}`);
-console.log("\n=== \u8054\u5408\u7F51\u683C lift \xD7 stanceLock\uFF08\u76EE\u6807\uFF1A\u8BA9 adjust \u76F8\u51FA\u73B0\uFF09===\n");
-console.log("  lift  lock" + [0, 0.3, 0.6, 0.9].map((v) => String(v).padStart(17)).join(""));
-{
-  const locks = [0, 0.3, 0.6, 0.9];
-  for (const lf of [0.15, 0.2, 0.26, 0.32]) {
-    const rowOut = [];
-    for (const lk of locks) {
-      const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
-      sim.begin(new Float32Array(sim.params.length));
-      const occ = { both: 0, step: 0, adjust: 0 };
-      runCaptureTeacher(
-        sk,
-        sim,
-        { ...FB, lift: lf, stanceLock: lk },
-        { dur: DUR, clockDriven: true, onFrame: () => {
-          occ[sim.gp.now]++;
-        } }
-      );
-      rowOut.push(`${String(occ.adjust).padStart(6)}\u5E27/${String(occ.step).padStart(4)}`.padStart(17));
-    }
-    console.log(`  ${String(lf).padEnd(11)}` + rowOut.join(""));
-  }
-  console.log("\n  \u8BFB\u6CD5\uFF1A`adjust\u5E27/step\u5E27` \u2014\u2014 \u5355\u5143\u683C\u7B2C\u4E00\u4E2A\u6570\u662F adjust \u76F8\u5E27\u6570\uFF08\u76EE\u6807 >0\uFF09\uFF0C\u7B2C\u4E8C\u4E2A\u662F step \u76F8\u5E27\u6570\u3002");
-}
-console.log('\n=== \u6446\u52A8\u817F\u7684\u524D\u4F38\u91CF\uFF08\u8FD9\u662F"\u8D70\u4E0D\u8D77\u6765"\u7684\u76F4\u63A5\u539F\u56E0\uFF09===\n');
-console.log("  \u53C2\u6570                            \u6446\u52A8\u811A\u524D\u4F38  \u843D\u5730\u4F4D\u7F6E  \u6C34\u5E73\u4F4D\u79FB");
-{
-  for (const c of [
-    { n: "\u5F53\u524D\uFF08kv=0.3283\uFF09", p: {} },
-    { n: "kv=0", p: { kv: 0 } },
-    { n: "kv=1.0", p: { kv: 1 } },
-    { n: "reach=0.25m", p: { reach: 0.25 } },
-    { n: "reach=0.50m\uFF08\u6587\u732E\u6B65\u957F\uFF09", p: { reach: 0.5 } },
-    { n: "reach=0.50 + kv=0", p: { reach: 0.5, kv: 0 } }
-  ]) {
-    const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
-    sim.begin(new Float32Array(sim.params.length));
-    let reachMax = 0, plantX = 0, startX = 0, started = false;
-    runCaptureTeacher(sk, sim, { ...FB, ...c.p }, {
-      dur: DUR,
-      clockDriven: true,
-      onFrame: () => {
-        const gL = footGrounded(sim.doll, "l"), gR = footGrounded(sim.doll, "r");
-        const swingL = !gL && gR;
-        sim.doll.soleXZ("l", tmpX);
-        const x = tmpX[0];
-        if (sim.gp.now === "step") {
-          if (!started) {
-            started = true;
-            startX = x;
-          }
-          reachMax = Math.max(reachMax, x - startX);
-        } else if (started) {
-          plantX = x;
-          started = false;
-        }
-      }
-    });
-    console.log(`  ${c.n.padEnd(30)} ${(reachMax * 1e3).toFixed(0).padStart(7)}mm ${(plantX * 1e3).toFixed(0).padStart(8)}mm ${(sim.distance * 1e3).toFixed(0).padStart(9)}mm`);
-  }
-  console.log("\n  \u6807\u51C6\uFF1A\u6162\u901F\u6863\u6B65\u957F \u2248 0.50 m\uFF08500mm\uFF0CStasiu \u6B65\u957F 0.64m @1.37m/s \u6309\u901F\u5EA6\u7F29\u653E\uFF09");
-}
+console.log('\n  \u7ED3\u8BBA\uFF1A\u82E5"\u6B63\u6307\u4EE4 \u2192 \u811A\u5C16\u4E0A\u52FE"\uFF0C\u5219\u7EA6\u5B9A\u4E3A \u6B63=\u80CC\u5C48\uFF1B\u82E5"\u6B63\u6307\u4EE4 \u2192 \u811A\u5C16\u4E0B\u538B"\uFF0C\u5219 \u6B63=\u8DD6\u5C48\u3002');
+console.log("  teacher \u91CC\u7684\u7EA6\u5B9A\uFF1A\u6446\u52A8\u524D\u534A \u80CC\u5C48 \u6211\u5199\u4E86 **\u8D1F**\u503C\uFF08\u2212aSwing\uFF09\uFF0C\u652F\u6491\u8D77\u7ACB \u8DD6\u5C48 \u5199\u4E86 **\u6B63**\u503C\uFF08+aPush\uFF09\u3002");

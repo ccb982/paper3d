@@ -296,6 +296,29 @@ export const JOINT_ORDER: readonly string[] = [
 ];
 
 /**
+ * ★★ 脊柱（**腰**）关节的真实名字。
+ *
+ * 背景（2026-10-02，用户："再去修腰的问题"）：腰的关节**确实存在**
+ * （`spineSegments = 4` 时会 `joints.push({name: 'spine1'}, 'spine2', 'spine3')`），
+ * 但它们是在构造时**动态追加**的，名字也不在上面这个 `JOINT_ORDER` 里
+ * ⇒ `JOINT_ORDER.indexOf('spine1')` 永远返回 −1 ⇒ `setAxis` 静默 return
+ * ⇒ **腰这个角色从接入到现在一次指令都没收到过**。
+ *
+ * ⇒ 用**关节实例**（`sk.joints[i].name`）查，而不是用这个常量。
+ */
+export function jointIndexByName(sk: Skeleton, name: string): number {
+  for (let i = 0; i < sk.joints.length; i++) if (sk.joints[i]!.name === name) return i;
+  return JOINT_ORDER.indexOf(name);
+}
+
+/** 该骨架里实际存在的脊柱关节名（spine1..spineK-1）；没有分段时返回空 */
+export function spineJointNames(sk: Skeleton): string[] {
+  const out: string[] = [];
+  for (const j of sk.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  return out.sort();
+}
+
+/**
  * ★★ 关节锚点 = `limbAxes.json` 的实测值（`tools/measure-limb-axes.py` 从 alpha 掩膜测）。
  *
  * 演进过程（三次返工，每次都有实测依据）：
