@@ -149,7 +149,7 @@ export function balancerGenome(shape: BrainShape, s: BalancerSpec = BEST_BALANCE
 //   侧向（髋外展）调节实测**无权**：CoM.z 只偏离中线 0.01 m，加了没用。
 export const CAPTURE_GAIT = {
   /** 摆动周期（秒） */
-  T: 1.89,
+  T: 2.20,   // ★ 用户 2026-10-02："迈腿间隔要在 1s 之上" ⇒ 每条腿 T/2 = 1.10s
   /** 目标速度（m/s） */
   vDes: 0.39,
   /** 摆动脚抬升高度（m） */

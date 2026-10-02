@@ -19,6 +19,8 @@ import { readCom, newCom, omegaAt, footGrounded } from './posture';
 import { wholeBodyAngularMomentum } from './balance';
 import { ADJUST_MIN } from './gaitPhase';
 import { JOINT_ORDER, jointIndexByName, spineJointNames, type Skeleton } from './skeleton';
+/** ★ 摆动相前 25% 用于**重心转移**（用户 2026-10-02："迈腿之前需要把重心转移到静止的腿上"） */
+export const SHIFT_FRAC = 0.25;
 import { cell } from './normGait';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
@@ -36,7 +38,7 @@ export const HIP_Z = 0.007;
  *   （实测前伸 3 mm；`reach`、踝指令全救不了，因为不是能力问题而是无解）。
  *   改成 0.307 后最大水平步长 ≈ √(0.828² − 0.889²) 无解…… 见下方 sanity：
  */
-export const HIP_DY = 0.307;
+export const HIP_DY = 0.125;   // ★ 2026-10-02 重标定：CoM.y 实测 0.964，虚拟髋应 ≈0.839（= 腿长 0.827 + 脚高 0.012）
 /** ★ 落地吸能上限（rad）= 20°。Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°。
  *  超过它落地就会把支撑腿压塌（实测 57° ⇒ 脚撑不住）。 */
 export const ABSORB_MAX = 0.35;
@@ -96,6 +98,8 @@ export interface CaptureParams {
   /** ★ 支撑腿在「迈步相」锁定到文献姿态的权重（0=不锁，1=全锁）。依据 npm run roles：
    *   step 相支撑腿 髋 ROM 38.5°/膝 ROM 30.7°，而 Oberg slow midstance 要求 15°/15.7°。 */
   stanceLock?: number;
+  /** 覆盖 IK 虚拟髋点落差 HIP_DY（标定用，见 tools/probe-arch 的 HIP_DY 扫描） */
+  hipDy?: number;
   /** ★ 摆动脚**显式前伸**量（m）。用户 2026-10-02："抬腿的时候脚都不往前伸"。
    *   实测旧行为只前伸 **3mm**（标准慢速步长 ≈500mm）⇒ 等于没迈步。
    *   0 = 退回旧行为（只跟捕获点 xi）。 */
@@ -129,6 +133,10 @@ export interface TeacherResult {
   t: number;
   /** 采样到的样本数（record=true 时） */
   n: number;
+  /** ★ 换脚诊断轨迹：每条含 s / 摆动腿 / landed / ready / 离地高度 */
+  swapTrace?: { t: number; s: number; swing: 'L' | 'R'; landed: boolean; ready: boolean; sole: number }[];
+  /** ★ 支撑腿序列（'L'/'R' 拼接），用来一眼看出有没有左右交替 */
+  stanceSeq?: string;
 }
 
 /**
@@ -143,7 +151,7 @@ export function runCaptureTeacher(
     dur?: number; clockDriven?: boolean; record?: boolean;
     data?: { X: number[][]; A: number[][] };
     /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
-    onFrame?: (t: number, stanceL: boolean, s: number) => void;
+    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>) => void;
   } = {},
 ): TeacherResult {
   const dur = opts.dur ?? 8;
@@ -181,6 +189,8 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       // ★ 静默失效点（曾让我们误判"某个模块在起作用"）：
       //   12 关节配置里**没有 ankle**，此时 `j` 为 undefined（踝只存在于 14 关节）
       if (o < 0 || !j) return;
+      ownerLog.set(joint + '/' + ax, curOwner);   // ★ 谁写了这一轴（probe-arch 读它）
+      angLog[joint + "/" + ax] = +ang.toFixed(4);   // ★ 原始角度值
       // ★★ 归一化必须用该轴的**最大行程**，不能用"这一侧的小限位"。
       //   旧写法 `ang>=0 ? ang/(0.9*maxRad) : ang/(0.9*-minRad)` 在**不对称限位**上
       //   会把正向指令掐死：膝限位 [-145°, +2°] ⇒ 正指令除以 0.9*2° = 1.8°，
@@ -194,6 +204,17 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     };
   /** 本拍真正下出去的轴数（调试用：0 说明某个角色压根没被控制） */
   let nAxes = 0;
+  /** ★ 当前写入者标签（probe-arch 用它看"哪个机制在抢哪个关节"） */
+  let curOwner = '?';
+  /** ★ joint/axis → owner 的本拍记录 */
+  const ownerLog = new Map<string, string>();
+  const angLog: Record<string, number> = {};   // ★ 每次 setAxis 的原始角度（排查"指令为何全 0"）
+  const hipDy = p.hipDy ?? HIP_DY;   // ★ 可标定的 IK 虚拟髋点落差
+  /** ★ 换脚诊断轨迹（probe-arch 打印）：每 0.08 s 一条 */
+  interface SwapDiag { t: number; s: number; swing: 'L' | 'R'; landed: boolean; ready: boolean; sole: number }
+  const swapTrace: SwapDiag[] = [];
+  let stanceSeq = "";
+  let lastDiagT = -1;
 
   while (!sim.finished && t < dur) {
     sim.advance(1);
@@ -206,31 +227,46 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     const xi = com.x + com.vx / om;                    // ★ 捕获点
 
     let stanceL = prevStance === 1;
+    // ★★★ 架构重做（2026-10-02）：换脚触发改成「**摆动腿已落地**」，而不是时钟边界。
+    //
+    //  旧写法（时钟边界 + 接触校验）**必然死锁**：
+    //    校验要求"旧支撑脚已离地"，但旧支撑腿在换脚之前一直被命令为 stance ⇒ 它不会离地
+    //    ⇒ 校验永远不过 ⇒ `stanceL` 8 秒不翻转 ⇒ 实测"指令支撑腿 = 左 21 / 右 0"
+    //    ⇒ 整条左腿都被标成 balance、右腿被标成 step（一瘸一拐的机器级原因）。
+    //
+    //  正确的三步（用户 2026-10-02 原话）：
+    //    ① 迈腿   → swingLeg 摆出去
+    //    ② 变支撑 → 摆动腿**落地**后与旧支撑腿交换角色
+    //    ③ 调重心 → 支撑腿 + 腰 做平衡调整（adjust 相）
+    //  所以交换的触发条件是「**当前摆动腿已落地** 且过了防抖时间」。
+    const swingIsL = !stanceL;                 // 摆动腿 = 非支撑腿
     if (clockDriven) {
-      // ★ 时钟驱动：每个支撑相固定 T/2 秒。好处是"该抬哪条腿、抬到第几步"完全由
-      //   观测里的 sin/cos(2π·phase) 决定 ⇒ teacher 成为观测的纯函数（可克隆）。
       const half = p.T * 0.5;
-      const k = Math.floor(t / half);
-      const wantL = k % 2 === 0;
-      if (wantL !== stanceL) {
-        // ★ 校验：**新支撑腿真的着地，且确实比另一条腿承重更多**，才算换成功。
-        //   没校验就翻 ⇒ 指令与物理脱节（实测右腿从未被指令）。
-        const nl = footGrounded(sim.doll, 'l'), nr = footGrounded(sim.doll, 'r');
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
-        const wantStanceLeft = wantL;
-        const ok = wantStanceLeft ? (nl && fl >= fr) : (nr && fr >= fl);
-        if (ok) {
-          steps++;
-          lastSwitch = t;
-          stanceL = wantL;
-          prevStance = stanceL ? 1 : 2;
-          // 落脚点记**实测落点**（见下）
-          sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
-          const landed = stanceL ? footBufL[0]! : footBufR[0]!;
-          if (stanceL) plantL = landed; else plantR = landed;
-        }
-// ⚠ 校验没过就**保持原指令**（不翻转、不推进相位）——
-      //   不能 `continue`：那会跳过本拍剩下的全部伺服（含马达下发），人就不动了。
+      // 防抖：迈步相本身就要占掉一半周期，落地后再等一小会儿才换角色
+      const readyT = lastSwitch + half * 0.55;
+      const landed = swingIsL ? footGrounded(sim.doll, 'l') : footGrounded(sim.doll, 'r');
+      // ★ 诊断：换脚卡在哪一条（架构重做的打点，probe-arch 打印）
+      //   `s` 在后面才算，这里内联算一份；`sole` = 摆动脚离地高度（判断它到底落没落）
+      const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+      sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
+      if (t - lastDiagT > 0.08) {
+        lastDiagT = t;
+        swapTrace.push({
+          t: +t.toFixed(2), s: +sNow.toFixed(2), swing: swingIsL ? 'L' : 'R',
+          landed, ready: t >= readyT, sole: +(swingIsL ? footBufL[1]! : footBufR[1]!).toFixed(3),
+        });
+        if (swapTrace.length > 400) swapTrace.shift();
+      }
+      if (landed && t >= readyT) {
+        steps++;
+        lastSwitch = t;
+        stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
+        prevStance = stanceL ? 1 : 2;
+        stanceSeq += stanceL ? "L" : "R";
+        // 落脚点记**实测落点**（不是捕获点 xi，否则支撑腿 IK 每帧往错误位置拉）
+        sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
+        const landedX = stanceL ? footBufL[0]! : footBufR[0]!;
+        if (stanceL) plantL = landedX; else plantR = landedX;
       }
     } else {
       // 状态触发：ξ 走出当前支撑脚的落点，且过了半个周期（防抖）才换脚
@@ -244,6 +280,9 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+    // ★ 重心转移期内**前伸也要压住**：先把体重挪过去，再把腿送出去。
+    //   否则腿在体重还没卸掉时就往前甩 ⇒ 既抬不高也甩不远。
+    const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     // 原式 `xi + kv·(vDes−vx)·T/2`：xi 是捕获点，跟随身体前进。身体还没动起来时
     //   `xi ≈ com.x` ⇒ 每只脚都被种在**原来的位置** ⇒ 净位移≈0（实测前伸仅 3mm）。
     const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
@@ -253,10 +292,27 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     if (reach > 0) {
       sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
       const stanceX = stanceL ? footBufL[0]! : footBufR[0]!;
-      swingX = Math.max(swingX0, stanceX + reach);
+      const wantX = stanceX + reach;
+      // 转移期内前伸量只放 25%（权重随转移进度线性放开）
+      const openF = Math.min(1, sSw / 0.5);
+      swingX = Math.max(swingX0, stanceX + reach * openF);
+      void wantX;
     }
 
-    const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
+    // ★★★★ 摆动曲线改成「**先转移重心，再迈出**」（用户 2026-10-02 提醒：
+//   "迈腿之前需要把重心转移到静止的腿上，我给忘了"）
+//
+//   旧式 `swingY = 0.012 + lift·sin(πs)` 从 s=0 就开始抬腿 —— 但此刻**体重还在摆动腿上**，
+//   脚抬不动（实测离地只有 0~5mm），身体却已经在失衡 ⇒ 迈完第一步就倒（实测 0.48s）。
+//
+//   Perry 分期对应的正确顺序（每条腿一个周期）：
+//     ① 前 25%  **重心转移**：双脚着地，CoM 横向挪到支撑腿，摆动腿**先不离地**
+//     ② 25~100% **迈出**：摆动腿离地 → 前伸 → 落地
+// 转移期内摆动腿只抬起一点点（跟着身体被"卸掉"），离地主体在转移之后
+const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
+const swingY = s < SHIFT_FRAC
+      ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC)          // 转移期：几乎不离地
+      : 0.012 + p.lift * Math.sin(Math.PI * sSwing);       // 迈出期：完整抬升曲线
     const dtSw = t - lastSwitch;
     // ★★ 落地吸能**必须限幅**（用户 2026-10-02："脚落地后甚至无法实现支撑"）。
     //   旧式：`absorb = p.absorb · exp(−dtSw/τ)`，触地那一帧 dtSw=0 ⇒ **满量** p.absorb。
@@ -300,8 +356,8 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       const isStance = (side === 'l') === stanceL;
       const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
       const [h, k] = isStance
-        ? ik(hipX, com.y - HIP_DY, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, com.y - HIP_DY, swingX, swingY);
+        ? ik(hipX, com.y - hipDy, side === 'l' ? plantL : plantR, 0.012)
+        : ik(hipX, com.y - hipDy, swingX, swingY);
       // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
       //   **实测更差**（存活 3.85→2.43s、双支撑 35%→71%）。保留原样。
       //
@@ -326,13 +382,23 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       //   回读依据（npm run roles）：step 相支撑腿 **髋 ROM 38.5° / 膝 ROM 30.7°**，
       //   而指令表要求 髋 15° / 膝 15.7°（Oberg slow midstance）⇒ 实际是要求的 2 倍。
       if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
+        // ★ 只对支撑腿生效（架构约束）
         const w = stanceLock;
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
         if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
       // ★★ 支撑腿蹬离（**必须在写马达之前**加！旧代码加在 setAxis 之后 ⇒ 完全无效）
       //   支撑相后半段线性增大的髋伸驱动，把身体推过支撑脚。
-      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;
+      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;   // ★ 仅支撑腿蹬离
+      curOwner = isStance
+        ? `balance(ik+corr${stanceLock > 0 ? '+lock' : ''}${s > 0.5 ? '+push' : ''})`
+        : 'step(ik)';
+      // ★★ 架构硬约束（2026-10-02，probe-arch 体检得出）：**摆动腿的髋只接受 IK**。
+      //   corr / lock / push 都是**支撑腿的平衡机制**，它们进来就等于把迈步冲掉
+      //   （实测：加了 lock+push 后"迈腿都做不到了"）。
+      //   这里用 `Math.abs` 显式区分：摆动侧 hipCmd 本来就等于 h（见上方 `isStance ? h+corr : h`），
+      //   但 lock/push 仍会无条件叠加 —— 必须把它们也限定在支撑腿。
+      if (!isStance) hipCmd = h;
       setAxis(`hip_${side}`, hipCmd, jHip);
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
@@ -393,7 +459,8 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
 
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
-    opts.onFrame?.(t, stanceL, s);
+    // owner 已在各写入点打标
+    opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，
     //    下一帧的观测才能反映它的效果 ⇒ 这里必须记录**这一帧的观测**而不是上一帧）。
@@ -403,5 +470,5 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     }
     t += dt;
   }
-  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0 };
+  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq };
 }

@@ -41,6 +41,7 @@
     "anklesign": "node tools/run.mjs probe-anklesign",
     "spine": "node tools/run.mjs probe-spine",
     "legs": "node tools/run.mjs probe-legs",
+    "arch": "node tools/run.mjs probe-arch",
     "ankle": "node tools/run.mjs probe-ankle",
     "balancer14": "node tools/run.mjs probe-balancer14"
   },
