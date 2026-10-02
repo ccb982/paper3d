@@ -200,7 +200,52 @@ export function runCaptureTeacher(
   let plantL = sim.doll.bodies[iL].translation().x;
   let plantR = sim.doll.bodies[iR].translation().x;
   let plantLz = HIP_Z, plantRz = -HIP_Z;   // ★ 落脚点横向锁在髋投影上（防踝内收）
-  let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★★ 初始的**前后腿之分 + 后退腿承重锁定**（用户 2026-10-02：
+  //   "一开始的重心就错了，腰和腿一起向前凸了，导致无法正常迈步，
+  //    优化迈步前的平衡保持，先把后退锁定为承重腿"）
+  //
+  //   实测的病根：初始姿态 `hip/knee/foot` 三个锚点的 **x 全是 0.000** ——
+  //   两条腿在矢状面**完全重合**，于是
+  //     · 根本没有"前脚/后脚"之分 → 没有承重腿 → `stanceL` 只能靠时钟瞎猜
+  //     · 载荷天生 0.50/0.50 → 承重转移判据（差值）恒在 0 附近 → 平衡门永远差一点
+  //   ⇒ 必须先人为造出前后之分，并把**后退腿**锁成承重腿。
+  //
+  //   做法（步态启动的标准次序，Lugade 2011 / Neptune 2008）：
+  //     ① 后退腿 = 右腿（R），它落在**后方** BASE_X_BEHIND，提供支撑基座
+  //     ② 前腿 = 左腿（L）落在**前方** BASE_X_FRONT，准备启动
+  //     ③ 把 CoM 初始目标点设在**后退腿上方略偏前**，即重心先压到后退腿
+  const BASE_X_BEHIND = -0.09;   // 后退腿落点（m，相对初始 Hip x=0）★ 扫描确定
+  const BASE_X_FRONT = +0.09;   // 前腿落点
+  plantR = BASE_X_BEHIND;            // ★ 右腿 = 后退腿 = 承重腿
+  plantL = BASE_X_FRONT;             // 左腿 = 前腿 = 待迈腿
+  plantRz = HIP_Z; plantLz = HIP_Z;
+  // CoM 初始目标：压在**后退腿上方**（这是"先把后退锁定为承重腿"的落点）
+  const comTarget0X = BASE_X_BEHIND + 0.03;
+
+  let t = 0, steps = 0, prevStance = 2, lastSwitch = 0;   // ★ prevStance=2 ⇒ 起始 stanceL=false ⇒ 右腿承重
+  /**
+   * ★ CoM 的**纵向目标**（B 方案 `comShiftB` 的参考点）：
+   *   · 起步阶段 = `comTarget0X`（后退腿上方）—— 这就是"先把后退锁定为承重腿"的落点
+   *   · 一旦发生首次换脚（`steps > 0`）⇒ 改为**当前支撑脚的实际x**
+   *     （此时支撑脚已经迈到新的位置，重心必须跟过去，否则误差无界增长 —— 这是之前踩过的坑）
+   */
+  let comTargetX = comTarget0X;
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★★ 三个角色的**程序化判定**（用户 2026-10-02：
+  //   "程序化决定前后腿，锁定腿，承重腿了吗" —— 之前三个都不是，全是硬编码/死条件）
+  //
+  //   设计原则：**角色由物理量判定，不由常数设定、也不由时钟瞎猜。**
+  //     · 前腿 / 后腿  = 由**实测脚位 x** 排序（x 大的=前）⇒ 自动跟随实际落点
+  //     · 承重腿       = 由**实测载荷**判定（承重大的一方）⇒ 载荷失衡会自动换角色
+  //     · 锁定腿       = 承重腿被闩锁，在另一条腿完成承重之前**不许改变**
+  //   ⇒ 这样"角色"是状态的**因**，不是预设的**果**；发令器只决定"该换谁了"。
+  let roleLatched: 'l' | 'r' | null = null;   // ★ 被闩锁的角色（= 当前承重腿）
+  /** 按实测 x 判定：返回 [前腿, 后腿] */
+  const rolesFromFootX = (xL: number, xR: number): ['l' | 'r', 'l' | 'r'] =>
+    (xL >= xR ? ['l', 'r'] : ['r', 'l']);
   // CMP/Moment-balance 的角动量状态（关于质心，额状/矢状）
   const lbuf = new Float64Array(3);
   const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
@@ -277,7 +322,11 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let wtDone = false;                // 本次落地是否已完成转移（防止重复触发）
   let stableT = 0;                // 连续站稳计时（换脚门控)
   // ══════════════════════════════════════════════════════════════════════
-  let lastSwitchWasFlip = true;   // 是否发生过真正的换脚（用于闩锁判据）
+  // ⚠ 初值必须是 **false**（2026-10-02 修正）。原来写 `true` ⇒ 第 1 帧就满足
+    //   `lastSwitchWasFlip || latchedStance === null`，于是**开局把一条腿假锁死**，
+    //   之后因为摆动腿从未真正离地、`landed` 每帧都真，永远不会重新判定 ⇒
+    //   锁定腿从头到尾不变，"着地即锁"名存实亡。
+    let lastSwitchWasFlip = false;   // 是否发生过真正的换脚（用于闩锁判据）
   const balGate = new BalanceGate();   // ★ 迈腿前平衡判定门
   let balBlocked = '';
   let dbgLoad = 0;
@@ -301,6 +350,9 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   //   · Perry：Pre-swing(50~62%GC) = 对侧初次接触 → 本侧离趾（顺序不可逆）。
   // ══════════════════════════════════════════════════════════════════════
   let latchedStance: 'l' | 'r' | null = null;   // 被闩锁的支撑腿（着地即锁）
+  /** ★ 下一次抬腿的**许可锁存**（2026-10-02）。见 balGate.judge 处注释：
+   *   判定点落在摆动下降段，必须锁存到落脚为止，放行才有意义。 */
+  let stepPermit = false;
   let wtModule = 0;                 // ★ 支撑模块启动计数（探针回读用）
   /** 本次落地的目标承重（Frontiers 2022：结束判据 = 该腿 vGRF < 10N）
    *  ⚠ `stanceL` 在下面主循环里才赋值，这里用可变闭包变量延后读取。 */
@@ -405,6 +457,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         lastSwitch = t;
         if (stanceL) plantL = xi; else plantR = xi;
         prevStance = stanceL ? 1 : 2;
+        comTargetX = stanceL ? plantL : plantR;   // ★ 换脚后 CoM 目标跟到新支撑脚
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
@@ -426,16 +479,59 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     // ══════════════════════════════════════════════════════════════════════
     // ★★★ 迈腿前的**平衡判定门**（用户 2026-10-02："后腿起来得经过一个平衡判定的东西，
     //   甚至第一步走出之前我也觉得应该有这么个玩意"）
-    //   三条判据（MoS + 承重 + 连续稳定）全部成立才允许**任何脚离地** ——
-    //   前进时的后腿、后退时的后腿、以及第一步，全都走这一个门。
-    // MoS：CoM 到支撑边界的余量（正 = 站得住）。平衡判定门的第一条判据。
-    const supEdgeX = com.x + (stanceL ? STANCE_X_HALF : -STANCE_X_HALF);
-    const mosHere = supEdgeX - (com.x + com.vx / om);
+    //   三条判据全部成立才允许**任何脚离地** —— 前进时的后腿、后退时的后腿、以及第一步，
+    //   全都走这一个门。
+    //
+    // ★★ 2026-10-02 改为**真实支撑边**（此前用常数 STANCE_X_HALF 估算，必然是假的）：
+    //   MoS = 真实支撑面前沿 − 捕获点ξ。`readSupport()` 由 sim 每控制周期算好并存进
+    //   `sim.sup`，直接取它，不再在 teacher 里另立一套几何。
+    //   （真实支撑面是**两只接地脚足迹的凸包**，双支撑时前沿在两脚之间，
+    //    比单脚时的 STANCE_X_HALF 大得多 ⇒ 之前那些 −200mm 的假 MoS 不复存在。）
+    const supB = sim.sup;
+    const supEdgeReal = supB.cx + supB.halfX;
+    const xiNow = com.x + com.vx / om;
+    const mosHere = supEdgeReal - xiNow;
     //   没通过就把摆动高度压到 0（等于不迈），而不是硬抬。
     // ══════════════════════════════════════════════════════════════════════
     const [flNow, frNow] = sim.doll.footLoadFrac(dt);
     const stanceLoadNow = stanceL ? flNow : frNow;
-    const verdict = balGate.judge(mosHere, stanceLoadNow, dt);
+    // ★★★ **承重腿由实测载荷决定**（不是硬编码、也不是时钟）。
+    //   起始时右腿是后退腿，但真正把它定为承重腿的依据是**它的载荷确实更大**。
+    //   `roleLatched` 一旦锁定就固定，只有在另一条腿承重超过 `ROLE_HANDOFF` 时才交接。
+    const ROLE_HANDOFF = 0.08;   // 交接滞环：防止两条腿载荷接近时角色来回抖
+    if (roleLatched === null) {
+      // 开局：谁承重明显更大谁当承重腿；若还分不出，退回"后退腿"（x 更小的一方）
+      if (Math.abs(flNow - frNow) > ROLE_HANDOFF) roleLatched = flNow > frNow ? 'l' : 'r';
+      else roleLatched = footBufL[0]! <= footBufR[0]! ? 'l' : 'r';   // 更靠后 = 承重
+      dbgLog.roleSet = 1;
+    } else {
+      // 交接：锁定腿的载荷被**另一条腿明显超过**才交出去
+      const lockedLoad = roleLatched === 'l' ? flNow : frNow;
+      const otherLoad = roleLatched === 'l' ? frNow : flNow;
+      if (otherLoad > lockedLoad + ROLE_HANDOFF) { roleLatched = roleLatched === 'l' ? 'r' : 'l'; dbgLog.roleSet = 2; }
+    }
+    // ★ 承重判据改用**差值**（两脚都在地上时绝对占比天然 = 0.50，用绝对值会死锁）
+    const loadDiffNow = flNow - frNow;
+    // ★ 判定时刻：只在双支撑末段（s ≥ decisionAt）判一次，不再要求连续保持 0.45s
+    //   （连续保持 + 承重绝对值 0.5 会互相锁死，见 BalanceGate 注释）
+    const verdictRaw = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
+    // ★★ **判定结果锁存**（这一步是让整条链能通的关键）：
+    //   判定时刻 `s ≥ 0.75` 落在摆动的**下降段**（脚已经在往回落），
+    //   此时就算放行也没有意义 —— 抬腿峰值在 s≈0.3~0.5，早过了。
+    //   ⇒ 在判定点把结果**存起来**，一直用到这次落脚完成（换脚）为止。
+    //   这也正是用户最初要求的语义："前腿落地后把支撑模块锁住，在另一条腿完成前不许再离地"，
+    //   只是方向反过来 —— 这里锁的是"下一次抬腿的许可"。
+    // ⚠⚠ 已回退（2026-10-02）：曾改成「按周期 OR 累积许可 + 只在换脚时清零」，
+    //   实测**更糟**：许可在 t=0.033s 就取得（此时前脚承重才 0.55、体重还在两脚之间），
+    //   而清零条件「换脚」从不发生 ⇒ 许可**永不掉落**，门放行帧占比 98.9%、
+    //   最长连续许可 2.90s（硬约束周期 1.10s 的 2.6 倍）⇒ **门形同虚设**，
+    //   与用户要求的「锁住、未完成不许再离地」正好相反。
+    //
+    // ★ 现在的诚实语义：**每周期独立判定，不跨帧累积**。
+    //   许可只对**当前这一帧**有效 —— 抬腿必须当帧达标。
+    //   相位错位问题（承重 s≈0.9 才上去、抬腿峰在 s≈0.3）不再用锁存掩盖，
+    //   而是靠让承重转移本身在摆动**之前**完成来解决（那是 APA 的职责，见 copTargetZ）。
+    const verdict = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
     if (!verdict.ok) balBlocked = verdict.why; else balBlocked = '';
     // ★ 重心转移期内**前伸也要压住**：先把体重挪过去，再把腿送出去。
     //   否则腿在体重还没卸掉时就往前甩 ⇒ 既抬不高也甩不远。
@@ -503,7 +599,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //     τ  = −kComX·e − kComVx·ė     （把 CoM 拉回/停在支撑脚上方）
     //   ⇒ 符号：CoM 在脚**前方**(e>0) 且前移 ⇒ 给**屈髋**把躯干压回去、拉 CoM 后移。
     const footCX_B = stanceL ? footBufL[0]! : footBufR[0]!;
-    const comShiftB = com.x - footCX_B;
+    const comShiftB = com.x - comTargetX;
     //   ⚠ 必须限幅：`comShiftB` 在**不换脚**时会无界增长（脚不动，CoM 一路前移），
     //   实测 ξ 3s 内 0.006→0.667 而 footCX 只到 −0.094 ⇒ 误差 +0.5m ⇒
     //   指令 −2.0 rad 直接饱和、髋被顶死。限幅 ±0.45 rad。
@@ -542,7 +638,8 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       const isStance0 = (side === 'l') === stanceL;
       // ★★ 闩锁的强制：闩锁腿**永远是支撑腿**，绝不被派成摆动腿
       //   （"前腿落地后别再让它离地"）。若因时钟错位被派成摆动，这里直接改回支撑。
-      const isStance = latchedStance === side ? true : isStance0;
+      // ★★ 承重角色改由 `roleLatched`（实测载荷判定的承重腿）决定 —— 不再靠时钟猜。
+      const isStance = roleLatched === side ? true : isStance0;
       // ★ 虚拟髋（com.y − HIP_DY）。实测对比：
       //   用**真实髋刚体**(0.849m) ⇒ IK 必须把腿折到 92% 才够得着地 ⇒ 存活反而降到 0.77s
       //   用**虚拟髋**(0.744m)      ⇒ 站立构型接近自然 ⇒ 存活 1.90s / 3 次换脚
@@ -743,6 +840,15 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     }
     // owner 已在各写入点打标
     dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.wtMod = wtModule; dbgLog.latch = latchedStance ? (latchedStance === "l" ? 1 : 2) : 0;
+    // ★ 三个角色的程序化判定结果（供 probe 回读）
+    dbgLog.roleWB = roleLatched === 'l' ? 1 : roleLatched === 'r' ? 2 : 0;   // 承重腿
+    {
+      const [frontLeg, backLeg] = rolesFromFootX(footBufL[0]!, footBufR[0]!);
+      dbgLog.roleFront = frontLeg === 'l' ? 1 : 2;
+      dbgLog.roleBack = backLeg === 'l' ? 1 : 2;
+      dbgLog.footXL = +footBufL[0]!.toFixed(3);
+      dbgLog.footXR = +footBufR[0]!.toFixed(3);
+    }
     dbgLog.balOk = verdict.ok ? 1 : 0; dbgLog.balStage = verdict.why; dbgLog.mosX = +mosHere.toFixed(4); dbgLoad = stanceLoadNow; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);

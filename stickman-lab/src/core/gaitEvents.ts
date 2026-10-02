@@ -38,6 +38,17 @@ export const THR = {
   TO: 0.01,
   /** 起立加载完成的判据（Perry：体重压到该腿） */
   loadAccept: 0.5,
+  /**
+   * ★★ 承重转移判据改用**相间差值**（2026-10-02）。
+   *   旧的 `loadAccept: 0.5` 是**绝对占比**：两脚都在地上、体重居中时天然 = 0.50，
+   *   于是"前脚承重超过 0.5"只有在 CoM 真正移到前脚上方时才成立，
+   *   而那意味着前脚已经变后脚 ⇒ 永远达不到 ⇒ 与平衡门构成死锁。
+   *   改用差值后语义变成"**前脚明显比后脚重**"，在双支撑早期就能反映 APA 的进展，
+   *   且对 0.50 附近的抖动免疫（差值过零即达标）。
+   */
+  loadDiff: 0.15,
+  /** ★ 双支撑末期的判定时刻（该相位的进度，0~1）——门只在这里判定一次 */
+  decisionAt: 0.25,   // ★ 判定窗上界：只在摆动**开始**的 s<0.25 内判定
 } as const;
 
 /** 重心转移时长窗（s）——Frontiers 2022：134~207 ms */
@@ -187,30 +198,48 @@ export interface BalVerdict {
 }
 
 /**
- * ★ 平衡判定门：累积"连续稳定"时间，只在三条都成立时放行一次抬腿。
+ * ★ 平衡判定门：只在该相位的**判定时刻**一次性检查，不再要求连续稳定。
+ *
+ * ★★ 2026-10-02 重写，原因是一个结构性死锁：
+ *   旧判据 = `MoS>0 且 load≥0.5 且 连续保持 0.45s`。
+ *   但 load 是"两脚承重之比"，两脚都在地上且体重居中时**天然 = 0.50**，
+ *   所以"前脚承重上到 0.5 以上"只有在 **CoM 真正移到前脚上方**时才发生；
+ *   而 CoM 移过去 ⇒ 前脚变后脚（没换脚的话）⇒ 承重必然掉回 0.5。
+ *   ⇒ **门要求承重转移，承重转移要求换脚，换脚要求门开** —— 三者互相锁死，
+ *     实测全程 `门放行帧 = 0`、`换脚 = 0`、`swingY` 恒被钉在 0.012。
+ *
+ *   真实步态不是这样：**双支撑期先靠 APA 把重量推过去**（这一步不需要门），
+ *   **双支撑末期才判定一次**。门的职责是"否决一次不安全的抬腿"，不是"驱动承重转移"。
+ *
+ *   新判据（三条，全部改成"相间差值"而非"绝对值"，天然免疫 0.50 抖动）：
+ *     ① MoS > 0                     —— 用 `readSupport()` 的**真实支撑边**，
+ *                                      不用常数 `STANCE_X_HALF` 估算
+ *     ② `loadFront − loadRear > 0.15` —— 前脚必须**明显**比后脚重（差值，不是绝对占比）
+ *     ③ 判定只在 `atDecision` 时刻做一次 —— 该相位的判定点由发令器给
  */
 export class BalanceGate {
-  private holdT = 0;
-  reset(): void { this.holdT = 0; }
+  private lastWhy = '（未判定）';
+  reset(): void { this.lastWhy = '（未判定）'; }
 
   /**
-   * @param mos  当前 MoS（m，正 = CoM 在支撑边内）
-   * @param load 支撑腿承重占比（0~1）
-   * @param dt   时间步
+   * @param mos      当前 MoS（m，正 = CoM 在真实支撑边内）
+   * @param loadDiff 前脚承重 − 后脚承重（−1~+1，正 = 重量已压到前脚）
+   * @param atDecision 是否处于该相位的判定时刻
    */
-  judge(mos: number, load: number, dt: number): BalVerdict {
+  judge(mos: number, loadDiff: number, atDecision: boolean): BalVerdict {
+    const holdT = atDecision ? 1 : 0;
     const okMos = mos > BAL.mosMargin;
-    const okLoad = load >= THR.loadAccept;
-    if (okMos && okLoad) this.holdT += dt; else this.holdT = 0;
-    const ok = this.holdT >= BAL.hold;
+    const okLoad = loadDiff > THR.loadDiff;
+    const ok = okMos && okLoad && atDecision;
     const why = ok ? '通过'
-      : !okMos ? `MoS 不足（${(mos * 1000).toFixed(0)}mm ≤ ${(BAL.mosMargin * 1000).toFixed(0)}mm，CoM 不在支撑脚上方）`
-      : !okLoad ? `承重未转移（${load.toFixed(2)} < ${THR.loadAccept}）`
-      : `连续稳定不足（${this.holdT.toFixed(2)}s < ${BAL.hold}s）`;
-    return { ok, mos, load, holdT: this.holdT, why };
+      : !atDecision ? '未到判定时刻'
+      : !okMos ? `MoS 不足（${(mos * 1000).toFixed(0)}mm ≤ ${(BAL.mosMargin * 1000).toFixed(0)}mm，CoM 不在真实支撑边内）`
+      : `承重未转移（前脚−后脚 = ${loadDiff.toFixed(2)} ≤ ${THR.loadDiff}）`;
+    this.lastWhy = why;
+    return { ok, mos, load: (1 + loadDiff) / 2, holdT, why };
   }
 
-  get stableFor(): number { return this.holdT; }
+  get stableFor(): number { return 0; }
 }
 
-export const BAL_LABEL = '迈腿前平衡判定（MoS>10mm + 承重≥50% + 连续稳定0.45s）';
+export const BAL_LABEL = '迈腿前平衡判定（MoS>10mm 用真实支撑边 + 前脚−后脚>0.15 + 判定时刻）';

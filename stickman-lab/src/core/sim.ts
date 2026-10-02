@@ -332,7 +332,10 @@ export class Sim {
   private readonly jbuf = new Float64Array(3);
   /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
   private readonly com = newCom();
-  private readonly sup = newSupport();
+  /** ★ 公开给 teacher 的**真实支撑域**（每控制周期由 readSupport 更新）。
+   *   平衡门的 MoS 必须用这个 —— 此前 teacher 自己用常数 STANCE_X_HALF 估算，
+   *   得出的是假 MoS（实测 −200mm），门因此永闭。 */
+  readonly sup = newSupport();
 
   // ---- 评估状态 ----
   private subStep = 0;

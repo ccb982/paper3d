@@ -6320,7 +6320,19 @@ var DEFAULT_CONFIG = {
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
   legStretch: 0.02,
-  // ★ probe-arch 扫描最优：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -6386,6 +6398,7 @@ var JOINT_MAX_TORQUE = {
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   foot_l: 45,
+  // ★ 会被 cfg.ankleMaxTorque 覆盖
   foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
@@ -6705,7 +6718,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
       [wx - parent.cx, wy - parent.cy, wz - parent.cz]
@@ -13316,6 +13329,8 @@ var Ragdoll = class _Ragdoll {
         { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
         { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
       );
+      jd.limitsEnabled = true;
+      jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
       this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
   }
@@ -16328,6 +16343,19 @@ var CAPTURE_GAIT = {
    *   文献：Takemura 2007 / Sci Rep 2019 —— 胸廓与骨盆反相旋转，抵消摆动腿角动量。
    */
   spineSync: 0.25,
+  /** ★ 矢状面承重转移（CoM 反馈 → 踝力矩移 CoP）。PLOS CB 2021 中支撑相增益最高。 */
+  kCop: 3,
+  /**
+   * ★★ B 方案：矢状面重心转移 —— CoM 相对支撑脚的纵向位置/速度反馈 → 支撑髋俯仰。
+   *   注意：与 BalancerSpec.kComX（镇定器用的**矢状反馈**）是**不同的东西**，
+   *   故命名 kWtX 以免混淆。probe-arch 二维扫描最优 (kWtX×kWtVx = 4×0.3)。
+   *   扫描依据：kWtX=4,kWtVx=0.3 ⇒ 位移 0.643m/2.72s（=0.236 m/s，目标 0.39）、
+   *   峰值倾角 21.8°（全表最低）、离地峰 52mm；kWtX=0 时位移仅 0.048m（原地不动）。
+   */
+  kWtX: 0.6,
+  // ★ 重扫定值（原 4.0 饱和式猛冲到 2.0m/s，致 MoS 深度为负、门永闭）
+  /** ★ B 方案的 CoM 速度阻尼项（s）。 */
+  kWtVx: 0.6,
   /** 躯干俯仰 → 髋（★ 负号才接得住） */
   kPitch: 0.4,
   // ★ 重标（见 probe-arch 存活寻优）
@@ -16686,6 +16714,12 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    const footCX_B = stanceL ? footBufL[0] : footBufR[0];
+    const comShiftB = com.x - footCX_B;
+    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
+    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
+    dbgLog.comShiftB = +comShiftB.toFixed(3);
+    dbgLog.corrCom = +corrCom.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
@@ -16719,7 +16753,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const roleCell = isStance ? cStance : cSwing;
       const stanceLock = p.stanceLock ?? 0;
       let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = isStance ? h + corr : h;
+      let hipCmd = isStance ? h + corr + corrCom : h;
       if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
         const w = stanceLock;
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
@@ -16732,6 +16766,14 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
+      const xi2 = com.x + com.vx / om;
+      const footCX = stanceL ? footBufL[0] : footBufR[0];
+      const comShiftErr = xi2 - footCX;
+      const copGainPhase = Math.abs(s - 0.5) < 0.25 ? 1 : 0.45;
+      const copTau = (p.kCop ?? 0) * copGainPhase * comShiftErr;
+      dbgLog.xi = +xi2.toFixed(3);
+      dbgLog.footCX = +footCX.toFixed(3);
+      dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
       const ankleCmd = verdict.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);

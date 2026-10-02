@@ -916,13 +916,19 @@ export class Ragdoll {
           err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
           alpha = MOTOR_ALPHA_RECOVER;
         } else {
-          // ---- 位置环 PD：θ_ref 由网络命令映射到该侧机械量程 ----
           const cmd = this.motorTarget[idx];
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
           // ★ 逐关节增益覆盖（踝专用，见 RagdollOptions.jointGain 的注释）
           const ov = jg[j.name];
           err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
+
+        // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、
+    //   "接触力再大也过不去"。**那个注释是错的** —— `relL` 只是马达的误差项，
+    //   清零它只让马达不再往外推，**不会改变关节的真实角速度**；而且实测踝从 +45°
+    //   恶化到 **+117°**。真要物理限位必须把反向角冲量施加到刚体上，不能靠改目标。
+    if (false && a > hi && relL[k] > 0) relL[k] = 0;
+    else if (false && a < lo && relL[k] < 0) relL[k] = 0;
 
         if (err === 0) continue;
 

@@ -905,21 +905,22 @@ for (const kc of [0, 3, 30, 100]) {
 }
 console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
 
-// ===== 摆动腿指令链逐拍：盆骨/膝/踝到底有没有被下到 =====
-console.log('\n=== 摆动腿指令链（谁被压住了）===\n');
-console.log('   t(s) 门 swingY 摆髋°  摆膝°  摆踝°  实摆脚高  实摆膝°  承重');
+// ===== 三个角色是否程序化决定 =====
+console.log('\n=== 三个角色：前腿 / 后腿 / 承重腿 / 锁定腿 ===\n');
+console.log('   t(s) 左脚x  右脚x 前腿 后腿 承重腿 锁定腿 左载荷 右载荷 换脚');
 {
-  const fD = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
-  fD.begin(new Float32Array(fD.params.length));
-  const sw = 'l', st = 'r';
-  const iHip = jointIndexByName(sk, `hip_${sw}`), iKnee = jointIndexByName(sk, `knee_${sw}`), iFoot = jointIndexByName(sk, `foot_${sw}`);
-  const tg = new Float32Array(sk.joints.length * 3);
-  let m = 0;
-  runCaptureTeacher(sk, fD, FB, { dur: 3, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
-    if (m++ % 10 !== 0) return;
-    const d = Math.abs(fD.doll.motorTarget[iHip * 3 + 2] ?? 0);
-    void d;
-    console.log(`  ${t.toFixed(2).padStart(5)} ${dl?.balOk === 1 ? 'OK' : 'X '} ${String(dl?.swingY ?? 0).padStart(7)} ${(fD.doll.jointAngle(iHip) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iFoot) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.soleY(sw) * 1000).toFixed(0).padStart(8)}mm ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(8)} ${(() => { const [a, b] = fD.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz); return (st === 'l' ? a : b).toFixed(2); })()}`);
-    void tg;
+  const fQ = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
+  fQ.begin(new Float32Array(fQ.params.length));
+  let m = 0, wbChanges = 0, lastWB = 0;
+  runCaptureTeacher(sk, fQ, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl): void => {
+    const [fl, fr] = fQ.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const nm = (v: unknown): string => (v === 1 ? 'L' : v === 2 ? 'R' : '?');
+    if (dl?.roleWB) {
+      if (lastWB && lastWB !== dl.roleWB) wbChanges++;
+      lastWB = dl.roleWB;
+    }
+    if (m++ % 20 !== 0) return;
+    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.footXL ?? 0).padStart(6)} ${String(dl?.footXR ?? 0).padStart(6)}  ${nm(dl?.roleFront)}    ${nm(dl?.roleBack)}    ${nm(dl?.roleWB)}    ${nm(dl?.latch)}   ${fl.toFixed(2).padStart(5)} ${fr.toFixed(2).padStart(6)}`);
   } });
+  console.log(`\n  承重腿交接次数：${wbChanges}   ← >0 说明角色由物理量驱动，不是硬编码`);
 }
