@@ -16288,6 +16288,92 @@ function cell(phase, role) {
   return PHASE_ROLE.find((c) => c.phase === phase && c.role === role && c.w > 0) ?? null;
 }
 
+// src/core/gaitEvents.ts
+var THR = {
+  /** IC 初次接触：载荷占比超过此值 */
+  IC: 0.02,
+  /** TO 离趾：载荷占比低于此值（JAB 2003：离趾要用低阈值） */
+  TO: 0.01,
+  /** 起立加载完成的判据（Perry：体重压到该腿） */
+  loadAccept: 0.5
+};
+var WT = {
+  min: 0.134,
+  max: 0.207,
+  /** APA 预备段占比（Hansen 2016：先反向预备，再正向转移） */
+  apaShare: 0.35
+};
+var LegEventTracker = class {
+  wasAir = true;
+  loadFrac = 0;
+  prevSole = 0;
+  vSole = 0;
+  /** 本支撑相已发生的事件（按时间序） */
+  seen = [];
+  /** 最近一次事件（调试打印用） */
+  last = null;
+  lastT = -1;
+  reset() {
+    this.wasAir = true;
+    this.seen.length = 0;
+    this.last = null;
+    this.lastT = -1;
+  }
+  /**
+   * @param grounded 该脚是否着地
+   * @param loadFrac 该脚载荷占比 0~1
+   * @param soleY    脚底离地高度（m）
+   * @param dt       时间步
+   * @returns 本拍新触发的事件（无则 null）
+   */
+  step(grounded, loadFrac, soleY, dt) {
+    this.vSole = (soleY - this.prevSole) / Math.max(1e-6, dt);
+    this.prevSole = soleY;
+    this.loadFrac = loadFrac;
+    const fire = (e) => {
+      if (this.seen.includes(e)) return null;
+      this.seen.push(e);
+      this.last = e;
+      return e;
+    };
+    if (!grounded) {
+      this.wasAir = true;
+      return null;
+    }
+    if (this.wasAir) {
+      this.wasAir = false;
+      this.seen.length = 0;
+      return fire("IC");
+    }
+    if (this.loadFrac >= THR.loadAccept) fire("load");
+    if (soleY < 0.02 && Math.abs(this.vSole) < 0.1) fire("FF");
+    if (soleY > 0.03) fire("HO");
+    return null;
+  }
+  /** 是否已经进入「已着地且承重」状态（可以承接重心） */
+  get canAcceptWeight() {
+    return this.seen.includes("load");
+  }
+  /** 完成了哪些关键里程碑（调试/奖励门控用） */
+  get progress() {
+    return this.seen.length ? this.seen.join("\u2192") : "\uFF08\u672A\u7740\u5730\uFF09";
+  }
+};
+function copTargetZ(stage, stanceZ, swingZ) {
+  switch (stage) {
+    case "APA-back":
+      return stanceZ;
+    case "APA-toSwing":
+      return stanceZ * 0.5 + swingZ * 0.5;
+    case "toStance":
+      return stanceZ * 1.35;
+    case "done":
+      return stanceZ;
+    default:
+      return stanceZ;
+  }
+}
+
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
 var PUSH_FRAC = 0.75;
@@ -16296,24 +16382,27 @@ var PX2M = 68e-5;
 var Y = (py) => (2899 - py) * PX2M;
 var LEN_A = 0.407;
 var LEN_B = 0.379;
-var HIP_Z = 0.06;
+var HIP_Z = 0.05;
+var STANCE_Z = 0.07;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
-function ik(hipX, hipY, fx, fy) {
+function ik(hipX, hipY, fx, fy, planeScale = 1) {
+  const la = LEN_A * planeScale, lb = LEN_B * planeScale;
   const dx = fx - hipX, dy = fy - hipY;
   let d = Math.hypot(dx, dy);
-  d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-  d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
+  d = Math.min(d, (la + lb) * 0.995);
+  d = Math.max(d, Math.abs(la - lb) + 0.02);
   const base = Math.atan2(dx, -dy);
   const cosK = Math.max(-1, Math.min(
     1,
-    (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)
+    (la * la + lb * lb - d * d) / (2 * la * lb)
   ));
   const interior = Math.acos(cosK);
-  const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
+  const hipRel = base + Math.atan2(lb * Math.sin(interior), la + lb * Math.cos(interior));
   return [hipRel, -(Math.PI - interior)];
 }
+var LEG = LEN_A + LEN_B;
 function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
@@ -16355,6 +16444,14 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   let hipYRef = -1;
   const swapTrace = [];
   let stanceSeq = "";
+  let wtStage = "idle";
+  let wtT = 0;
+  let wtDone = false;
+  let wtLoadOf = () => {
+    const [fl, fr] = sim2.doll.footLoadFrac(dt);
+    return stanceLNow ? fl : fr;
+  };
+  let stanceLNow = true;
   let lastDiagT = -1;
   while (!sim2.finished && t < dur) {
     sim2.advance(1);
@@ -16366,6 +16463,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const om = omegaAt(com.y);
     const xi = com.x + com.vx / om;
     let stanceL = prevStance === 1;
+    stanceLNow = stanceL;
     const swingIsL = !stanceL;
     if (clockDriven) {
       const half = p.T * 0.5;
@@ -16457,7 +16555,13 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
       const hipY = hipYRef;
-      const [h, k] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012) : ik(hipX, hipY, swingX, swingY);
+      const hipZ = side === "l" ? HIP_Z : -HIP_Z;
+      const footZTarget = side === "l" ? STANCE_Z : -STANCE_Z;
+      const dzWant = footZTarget - hipZ;
+      const sinAb = Math.max(-0.7, Math.min(0.7, dzWant / LEG));
+      const abductFF = Math.asin(sinAb);
+      const planeScale = Math.sqrt(Math.max(0.05, 1 - sinAb * sinAb));
+      const [h, k] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012, planeScale) : ik(hipX, hipY, swingX, swingY, planeScale);
       const phNow = sim2.gp.now;
       const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
       const roleCell = isStance ? cStance : cSwing;
@@ -16491,9 +16595,37 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       }
       const stanceZ = stanceL ? HIP_Z : -HIP_Z;
       const shiftErrRaw = stanceZ - com.z;
-      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw));
-      const latCorr = p.kLat * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
-      const swingAbduct = isStance ? latCorr : p.kLatSwing ?? 0;
+      if (wtDone && s < 0.05) {
+        wtStage = "APA-back";
+        wtT = 0;
+        wtDone = false;
+      } else if (wtStage === "idle") {
+        wtStage = "APA-back";
+        wtT = 0;
+      }
+      if (wtStage !== "done") {
+        wtT += dt;
+        const load = wtLoadOf();
+        if (wtStage === "APA-back" && wtT >= WT.min * WT.apaShare) {
+          wtStage = "APA-toSwing";
+          wtT = 0;
+        } else if (wtStage === "APA-toSwing" && wtT >= WT.min * (1 - WT.apaShare)) {
+          wtStage = "toStance";
+          wtT = 0;
+        } else if (wtStage === "toStance" && load >= THR.loadAccept) {
+          wtStage = "done";
+          wtDone = true;
+        } else if (wtStage === "toStance" && wtT > WT.max) {
+          wtStage = "done";
+          wtDone = true;
+        }
+      }
+      const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
+      const shiftErrRaw2 = copZ - com.z;
+      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
+      const kLatEff = wtStage === "done" ? p.kLat : (p.kLat ?? 0) * 1.8;
+      const latCorr = kLatEff * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
+      const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     dbgLog.s = +s.toFixed(3);
@@ -16512,72 +16644,6 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   }
   return { x: sim2.distance, alive: !sim2.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq };
 }
-
-// src/core/gaitEvents.ts
-var THR = {
-  /** IC 初次接触：载荷占比超过此值 */
-  IC: 0.02,
-  /** TO 离趾：载荷占比低于此值（JAB 2003：离趾要用低阈值） */
-  TO: 0.01,
-  /** 起立加载完成的判据（Perry：体重压到该腿） */
-  loadAccept: 0.5
-};
-var LegEventTracker = class {
-  wasAir = true;
-  loadFrac = 0;
-  prevSole = 0;
-  vSole = 0;
-  /** 本支撑相已发生的事件（按时间序） */
-  seen = [];
-  /** 最近一次事件（调试打印用） */
-  last = null;
-  lastT = -1;
-  reset() {
-    this.wasAir = true;
-    this.seen.length = 0;
-    this.last = null;
-    this.lastT = -1;
-  }
-  /**
-   * @param grounded 该脚是否着地
-   * @param loadFrac 该脚载荷占比 0~1
-   * @param soleY    脚底离地高度（m）
-   * @param dt       时间步
-   * @returns 本拍新触发的事件（无则 null）
-   */
-  step(grounded, loadFrac, soleY, dt) {
-    this.vSole = (soleY - this.prevSole) / Math.max(1e-6, dt);
-    this.prevSole = soleY;
-    this.loadFrac = loadFrac;
-    const fire = (e) => {
-      if (this.seen.includes(e)) return null;
-      this.seen.push(e);
-      this.last = e;
-      return e;
-    };
-    if (!grounded) {
-      this.wasAir = true;
-      return null;
-    }
-    if (this.wasAir) {
-      this.wasAir = false;
-      this.seen.length = 0;
-      return fire("IC");
-    }
-    if (this.loadFrac >= THR.loadAccept) fire("load");
-    if (soleY < 0.02 && Math.abs(this.vSole) < 0.1) fire("FF");
-    if (soleY > 0.03) fire("HO");
-    return null;
-  }
-  /** 是否已经进入「已着地且承重」状态（可以承接重心） */
-  get canAcceptWeight() {
-    return this.seen.includes("load");
-  }
-  /** 完成了哪些关键里程碑（调试/奖励门控用） */
-  get progress() {
-    return this.seen.length ? this.seen.join("\u2192") : "\uFF08\u672A\u7740\u5730\uFF09";
-  }
-};
 
 // src/core/phaseSeed.ts
 var CAPTURE_GAIT = {
@@ -16789,17 +16855,17 @@ console.log("\n=== IK \u53EF\u8FBE\u6027\uFF08\u817F\u957F\u5E38\u6570 vs \u5B9E
   const s8 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 2, gaitHz: 1 / FB.T });
   s8.begin(new Float32Array(s8.params.length));
   console.log("   t(s)  \u8EAF\u5E72\u9AD8   \u865A\u62DF\u9ACB\u9AD8(hipDy=0.125)  \u76EE\u6807\u8DDD\u79BB   \u817F\u957F\u5E38\u6570   \u53EF\u8FBE?");
-  const LA = 0.429, LB = 0.398, LEG = LA + LB;
+  const LA = 0.429, LB = 0.398, LEG2 = LA + LB;
   runCaptureTeacher(sk, s8, FB, { dur: 2, clockDriven: true, onFrame: () => {
     const t = s8.ticksDone / DEFAULT_SIM.controlHz;
     if (Math.round(t * 60) % 15 !== 0) return;
     const com = readCom(s8.doll, newCom());
     const hip = com.y - 0.125;
     const d = hip - 0.012;
-    console.log(`  ${t.toFixed(2).padStart(5)}  ${com.y.toFixed(3)}   ${hip.toFixed(3)}                  ${d.toFixed(3)}     ${LEG.toFixed(3)}     ${d <= LEG ? "\u2713" : "\u2605\u591F\u4E0D\u7740"}`);
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${com.y.toFixed(3)}   ${hip.toFixed(3)}                  ${d.toFixed(3)}     ${LEG2.toFixed(3)}     ${d <= LEG2 ? "\u2713" : "\u2605\u591F\u4E0D\u7740"}`);
   } });
   console.log(`
-  \u817F\u957F\u5E38\u6570 LEG = ${LEG.toFixed(3)}m\uFF08\u5927\u817F ${LA} + \u5C0F\u817F ${LB}\uFF0C\u6765\u81EA limbAxes \u951A\u70B9\u6362\u7B97\uFF09`);
+  \u817F\u957F\u5E38\u6570 LEG = ${LEG2.toFixed(3)}m\uFF08\u5927\u817F ${LA} + \u5C0F\u817F ${LB}\uFF0C\u6765\u81EA limbAxes \u951A\u70B9\u6362\u7B97\uFF09`);
   console.log(`  \u2605 \u82E5"\u76EE\u6807\u8DDD\u79BB > \u817F\u957F" \u21D2 IK \u6C42\u4E0D\u51FA\u89E3\u3001\u817F\u88AB\u538B\u5230\u6781\u9650 \u21D2 \u8EAF\u5E72\u4E0B\u6C89\uFF08\u5B9E\u6D4B 1.429\u21921.21\uFF09\u3002`);
 }
 console.log('\n=== \u79BB\u5730\u9AD8\u5EA6\u626B\u63CF\uFF08\u9700\u8981 \u226530mm \u624D\u80FD\u7B97"\u771F\u8FC8\u4E00\u6B65"\uFF09===\n');
@@ -17030,19 +17096,19 @@ console.log('\n=== \u9AA8\u9ABC\u6BD4\u4F8B\u4F53\u68C0\uFF08\u7528\u6237\uFF1A"
 {
   const A2 = (n) => sk.joints.find((q) => q.name === n);
   const hipY = A2("hip_l").wy, ankY = A2("foot_l").wy;
-  const LEG = 0.785;
-  console.log(`  \u9ACB\u9AD8 ${hipY.toFixed(3)}m   \u8E1D\u9AD8 ${ankY.toFixed(3)}m   \u817F\u957F ${LEG.toFixed(3)}m`);
-  console.log(`  \u817F/\u9ACB = ${(LEG / hipY).toFixed(3)}    \u4EBA\u4F53\u5E38\u6001 \u22480.95~1.00`);
-  console.log(`  \u21D2 \u672C rig \u817F\u76F8\u5BF9\u8EAF\u5E72\u504F\u77ED ${((LEG / hipY - 0.97) * 100).toFixed(0)}%`);
+  const LEG2 = 0.785;
+  console.log(`  \u9ACB\u9AD8 ${hipY.toFixed(3)}m   \u8E1D\u9AD8 ${ankY.toFixed(3)}m   \u817F\u957F ${LEG2.toFixed(3)}m`);
+  console.log(`  \u817F/\u9ACB = ${(LEG2 / hipY).toFixed(3)}    \u4EBA\u4F53\u5E38\u6001 \u22480.95~1.00`);
+  console.log(`  \u21D2 \u672C rig \u817F\u76F8\u5BF9\u8EAF\u5E72\u504F\u77ED ${((LEG2 / hipY - 0.97) * 100).toFixed(0)}%`);
   console.log(`
   \u540E\u679C\uFF1A\u7AD9\u7ACB\u65F6\u819D\u5FC5\u987B\u5F2F\u5230 ${(Math.acos(Math.min(1, (0.407 ** 2 + 0.379 ** 2 - (hipY - 0.012) ** 2) / (2 * 0.407 * 0.379))) * 180 / Math.PI).toFixed(0)}\xB0 \u624D\u80FD\u8BA9\u811A\u5E73\u8D34\u5730`);
   console.log(`        \u8E1D\u524D\u6446\u65F6\u817F\u8981\u6298\u5F97\u66F4\u72E0 \u21D2 \u8E1D\u5FC5\u7136\u89E6\u5730\uFF08\u7528\u6237\u62A5\u544A\u7684\u73B0\u8C61\uFF09\u3002`);
   console.log(`
   \u4E24\u6761\u4FEE\u6CD5\uFF1A`);
-  console.log(`   A. \u964D\u9ACB\u951A\u70B9\uFF1A${hipY.toFixed(3)} \u2192 ${(LEG * 0.97).toFixed(3)} m\uFF08\u817F/\u9ACB=0.97\uFF0C\u63A5\u8FD1\u4EBA\u4F53\uFF09`);
-  console.log(`      \u4EE3\u4EF7\uFF1A\u9ACB\u4E0E\u5927\u817F\u7684\u951A\u70B9\u4E0D\u518D\u8D34\u5408\u7D20\u6750 \u21D2 \u5927\u817F\u6839\u90E8\u4F1A\u6709 ${((hipY - LEG * 0.97) * 1e3).toFixed(0)}mm \u89C6\u89C9\u9519\u4F4D`);
-  console.log(`   B. \u4F38\u957F\u817F\u6BB5\uFF1A\u817F ${LEG.toFixed(3)} \u2192 ${(hipY * 0.97).toFixed(3)} m`);
-  console.log(`      \u4EE3\u4EF7\uFF1A\u5927\u817F/\u5C0F\u817F\u521A\u4F53\u8981\u62C9\u957F ${((hipY * 0.97 - LEG) * 1e3).toFixed(0)}mm\uFF0C\u7EB9\u7406\u4F1A\u88AB\u62C9\u4F38\u53D8\u5F62`);
+  console.log(`   A. \u964D\u9ACB\u951A\u70B9\uFF1A${hipY.toFixed(3)} \u2192 ${(LEG2 * 0.97).toFixed(3)} m\uFF08\u817F/\u9ACB=0.97\uFF0C\u63A5\u8FD1\u4EBA\u4F53\uFF09`);
+  console.log(`      \u4EE3\u4EF7\uFF1A\u9ACB\u4E0E\u5927\u817F\u7684\u951A\u70B9\u4E0D\u518D\u8D34\u5408\u7D20\u6750 \u21D2 \u5927\u817F\u6839\u90E8\u4F1A\u6709 ${((hipY - LEG2 * 0.97) * 1e3).toFixed(0)}mm \u89C6\u89C9\u9519\u4F4D`);
+  console.log(`   B. \u4F38\u957F\u817F\u6BB5\uFF1A\u817F ${LEG2.toFixed(3)} \u2192 ${(hipY * 0.97).toFixed(3)} m`);
+  console.log(`      \u4EE3\u4EF7\uFF1A\u5927\u817F/\u5C0F\u817F\u521A\u4F53\u8981\u62C9\u957F ${((hipY * 0.97 - LEG2) * 1e3).toFixed(0)}mm\uFF0C\u7EB9\u7406\u4F1A\u88AB\u62C9\u4F38\u53D8\u5F62`);
   console.log(`
   \u2605 \u4E24\u4E2A\u90FD\u662F**\u9AA8\u67B6\u6539\u52A8**\uFF0C\u4F1A\u52A8\u5230\u539F\u59CB\u7D20\u6750\u7684\u6BD4\u4F8B \u2014\u2014 \u9700\u8981\u4F60\u51B3\u5B9A\u8D70\u54EA\u6761\u3002`);
 }
@@ -17115,7 +17181,6 @@ console.log("   t(s)  \u9ACB\u5916\u5C55\u6307\u4EE4L  \u9ACB\u5916\u5C55\u6307\
   console.log("\n  \u5224\u8BFB\uFF1A\u82E5\u5916\u5C55\u6307\u4EE4\u4E0D\u5C0F\u4F46\u811A\u95F4\u8DDD\u4ECD\u22480 \u21D2 \u5916\u5C55\u88AB\u77E2\u72B6\u9762 IK \u62B5\u6D88\uFF08\u811A\u88AB\u62C9\u56DE\u7AD6\u76F4\u5E73\u9762\uFF09");
 }
 console.log("\n=== \u7740\u5730\u68C0\u6D4B + \u91CD\u5FC3\u8F6C\u79FB\u9636\u6BB5\uFF08\u6587\u732E\u9608\u503C\uFF09===\n");
-console.log("  u91cdu5fc3u8f6cu79fbu7a97 134~207 msuff08Frontiers 2022uff09uff1bAPA u5148u53cdu5411u9884u5907");
 {
   const se2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
   se2.begin(new Float32Array(se2.params.length));
@@ -17172,3 +17237,38 @@ console.log("  \u5173\u8282      \u60F3\u8981\u529B\u77E9   \u5B9E\u9645\u51B2\u
   console.log("\n  \u5224\u8BFB\uFF1A\u300C\u6BD4\u503C\u300D\u226A1 \u21D2 \u88AB\u7A33\u5B9A\u6027\u62A4\u680F\u524A\u6389\uFF08\u4E0D\u6562\u7528\u529B\uFF09\uFF1B\u6BD4\u503C\u22481 \u4F46\u5B9E\u9645\u226A\u4E0A\u9650 \u21D2 \u5173\u8282\u6CA1\u529B\u6C14\u3002");
   console.log("        \u300C\u7528\u6EE1?\u300D\u2717 \u21D2 \u5173\u8282\u51E0\u4E4E\u6CA1\u51FA\u529B \u21D2 \u5B83\u6839\u672C\u6491\u4E0D\u4F4F\u4F53\u91CD\u3002");
 }
+console.log("\n=== \u2461 \u8F7D\u8377\u8F6C\u79FB\uFF1A\u4E24\u6761\u817F\u7684\u627F\u91CD\u5360\u6BD4 ===\n");
+console.log("   t(s)  \u652F\u6491   \u8F7D\u8377L   \u8F7D\u8377R   CoM\u504F\u79FB   \u91CD\u5FC3\u9636\u6BB5");
+{
+  const sl = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  sl.begin(new Float32Array(sl.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, sl, FB, { dur: 3, clockDriven: true, onFrame: (t, stanceL) => {
+    if (m++ % 10 !== 0) return;
+    const [fl, fr] = sl.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const c2 = readCom(sl.doll, cTmp);
+    sl.doll.soleXZ("l", fbL);
+    sl.doll.soleXZ("r", fbR);
+    const stZ = stanceL ? fbL[1] : fbR[1];
+    console.log(`  ${t.toFixed(2).padStart(5)}   ${stanceL ? "L" : "R"}   ${fl.toFixed(2)}    ${fr.toFixed(2)}   ${(c2.z - stZ).toFixed(3).padStart(7)}`);
+  } });
+  console.log("\n  \u5224\u8BFB\uFF1A\u8F7D\u8377\u957F\u671F\u505C\u5728 0.5/0.5 \u21D2 \u91CD\u5FC3\u6CA1\u8F6C\uFF1B\u67D0\u817F\u957F\u671F 0.8+ \u21D2 \u8F6C\u8FC7\u53BB\u4E86\u4F46\u53EF\u80FD\u8F6C\u9519\u817F\u3002");
+}
+console.log("\n=== \u2462 \u6A2A\u5411\u5916\u5C55\u7B26\u53F7\uFF08\u5DE6\u811A z \u5E94\u5F80 +z \u8D70\uFF09===\n");
+console.log("  \u914D\u7F6E                    \u5DE6\u811Az    \u53F3\u811Az    \u8F7D\u8377L/\u8F7D\u8377R   CoM.z");
+for (const c of [
+  { n: "\u5F53\u524D kLat=+3.5", p: { kLat: 3.5, kLatV: 1.2 } },
+  { n: "kLat=-3.5\uFF08\u7FFB\u7B26\u53F7\uFF09", p: { kLat: -3.5, kLatV: -1.2 } },
+  { n: "kLat=+12 \u5F3A", p: { kLat: 12, kLatV: 2 } },
+  { n: "kLat=-12 \u5F3A", p: { kLat: -12, kLatV: -2 } }
+]) {
+  const ss = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 2.5, gaitHz: 1 / FB.T });
+  ss.begin(new Float32Array(ss.params.length));
+  runCaptureTeacher(sk, ss, { ...FB, ...c.p }, { dur: 2.5, clockDriven: true });
+  ss.doll.soleXZ("l", fbL);
+  ss.doll.soleXZ("r", fbR);
+  const [fl, fr] = ss.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+  const c2 = readCom(ss.doll, cTmp);
+  console.log(`  ${c.n.padEnd(24)} ${fbL[1].toFixed(3).padStart(7)}  ${fbR[1].toFixed(3).padStart(7)}   ${fl.toFixed(2)}/${fr.toFixed(2)}      ${c2.z.toFixed(3)}`);
+}
+console.log("\n  \u5224\u8BFB\uFF1A\u811A z \u5206\u5F97\u5F00 \u21D2 \u5916\u5C55\u751F\u6548\uFF1B\u8F7D\u8377\u96C6\u4E2D\u5230\u6307\u4EE4\u652F\u6491\u817F \u21D2 \u7B26\u53F7\u5BF9\u3002");

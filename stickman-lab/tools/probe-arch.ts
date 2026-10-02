@@ -498,7 +498,6 @@ console.log('   t(s)  髋外展指令L  髋外展指令R   左脚z    右脚z   
 
 // ═══════ 着地检测 + 重心转移阶段（文献阈值）═══════
 console.log('\n=== 着地检测 + 重心转移阶段（文献阈值）===\n');
-console.log("  u91cdu5fc3u8f6cu79fbu7a97 134~207 msuff08Frontiers 2022uff09uff1bAPA u5148u53cdu5411u9884u5907");
 {
   const se2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
   se2.begin(new Float32Array(se2.params.length));
@@ -554,3 +553,39 @@ console.log('  关节      想要力矩   实际冲量   比值    声明上限 
   console.log('\n  判读：「比值」≪1 ⇒ 被稳定性护栏削掉（不敢用力）；比值≈1 但实际≪上限 ⇒ 关节没力气。');
   console.log('        「用满?」✗ ⇒ 关节几乎没出力 ⇒ 它根本撑不住体重。');
 }
+
+// ===== 载荷到底转不转过去 =====
+console.log('\n=== ② 载荷转移：两条腿的承重占比 ===\n');
+console.log('   t(s)  支撑   载荷L   载荷R   CoM偏移   重心阶段');
+{
+  const sl = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  sl.begin(new Float32Array(sl.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, sl, FB, { dur: 3, clockDriven: true, onFrame: (t, stanceL): void => {
+    if (m++ % 10 !== 0) return;
+    const [fl, fr] = sl.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const c2 = readCom(sl.doll, cTmp);
+    sl.doll.soleXZ('l', fbL); sl.doll.soleXZ('r', fbR);
+    const stZ = stanceL ? fbL[1]! : fbR[1]!;
+    console.log(`  ${t.toFixed(2).padStart(5)}   ${stanceL ? 'L' : 'R'}   ${fl.toFixed(2)}    ${fr.toFixed(2)}   ${(c2.z - stZ).toFixed(3).padStart(7)}`);
+  } });
+  console.log('\n  判读：载荷长期停在 0.5/0.5 ⇒ 重心没转；某腿长期 0.8+ ⇒ 转过去了但可能转错腿。');
+}
+// ===== 横向外展符号验证 =====
+console.log('\n=== ③ 横向外展符号（左脚 z 应往 +z 走）===\n');
+console.log('  配置                    左脚z    右脚z    载荷L/载荷R   CoM.z');
+for (const c of [
+  { n: '当前 kLat=+3.5', p: { kLat: 3.5, kLatV: 1.2 } as Partial<CaptureParams> },
+  { n: 'kLat=-3.5（翻符号）', p: { kLat: -3.5, kLatV: -1.2 } as Partial<CaptureParams> },
+  { n: 'kLat=+12 强', p: { kLat: 12, kLatV: 2 } as Partial<CaptureParams> },
+  { n: 'kLat=-12 强', p: { kLat: -12, kLatV: -2 } as Partial<CaptureParams> },
+]) {
+  const ss = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 2.5, gaitHz: 1 / FB.T });
+  ss.begin(new Float32Array(ss.params.length));
+  runCaptureTeacher(sk, ss, { ...FB, ...c.p }, { dur: 2.5, clockDriven: true });
+  ss.doll.soleXZ('l', fbL); ss.doll.soleXZ('r', fbR);
+  const [fl, fr] = ss.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+  const c2 = readCom(ss.doll, cTmp);
+  console.log(`  ${c.n.padEnd(24)} ${fbL[1]!.toFixed(3).padStart(7)}  ${fbR[1]!.toFixed(3).padStart(7)}   ${fl.toFixed(2)}/${fr.toFixed(2)}      ${c2.z.toFixed(3)}`);
+}
+console.log('\n  判读：脚 z 分得开 ⇒ 外展生效；载荷集中到指令支撑腿 ⇒ 符号对。');

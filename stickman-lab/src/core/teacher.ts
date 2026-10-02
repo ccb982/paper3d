@@ -26,13 +26,15 @@ export const PUSH_FRAC = 0.75;
 /** ★ 横向误差限幅（m）：kLat·误差 不得换算成 >~8° 的髋外展（见 latCorr 注释） */
 const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
+import { copTargetZ, WT, THR, type WtStage } from './gaitEvents';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
 const PX2M = 0.00068;
 const Y = (py: number): number => (2899 - py) * PX2M;
 export const LEN_A = 0.407;      // ★ 实测髋→膝 0.407（锚点 wx/wy/wz 实算，不用像素换算）
 export const LEN_B = 0.379;      // ★ 实测膝→踝 0.379
-export const HIP_Z = 0.06;     // ★ 两条腿髋参考点的横向半间距：原来 0.007(7mm) ⇒ 双脚实测间距 0~9mm
+export const HIP_Z = 0.05;     // ★ 髋横向半间距（两腿分开的关键）
+export const STANCE_Z = 0.07;   // ★ 脚的目标横向位置（站距 140mm，Stasiu 文献）     // ★ 两条腿髋参考点的横向半间距：原来 0.007(7mm) ⇒ 双脚实测间距 0~9mm
                                   //   （横向支撑面≈0，"迈出的腿无法支撑"）。改后需重标 kLat/kLatV。
 /**
  * ★★ CoM 到**真实髋**的垂直落差（m）。
@@ -118,18 +120,26 @@ export interface CaptureParams {
 }
 
 /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
-export function ik(hipX: number, hipY: number, fx: number, fy: number): [number, number] {
+export function ik(hipX: number, hipY: number, fx: number, fy: number, planeScale = 1): [number, number] {
+  // ★ `planeScale` = **矢状面内可用腿长 / 全腿长**。
+  //   当脚要往横向偏 dz 时，全腿长被分成"平面分量 + 横向分量"：
+  //       dz = L·sin(abduct)，  d_plane = L·cos(abduct)
+  //   平面内解算必须用 d_plane，否则求出的姿态会让腿总长超出 ⇒ 软限位接管 ⇒ 脚回中线。
+  const la = LEN_A * planeScale, lb = LEN_B * planeScale;
   const dx = fx - hipX, dy = fy - hipY;
   let d = Math.hypot(dx, dy);
-  d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-  d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
+  d = Math.min(d, (la + lb) * 0.995);
+  d = Math.max(d, Math.abs(la - lb) + 0.02);
   const base = Math.atan2(dx, -dy);
   const cosK = Math.max(-1, Math.min(1,
-    (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)));
+    (la * la + lb * lb - d * d) / (2 * la * lb)));
   const interior = Math.acos(cosK);
-  const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
+  const hipRel = base + Math.atan2(lb * Math.sin(interior), la + lb * Math.cos(interior));
   return [hipRel, -(Math.PI - interior)];
 }
+
+/** 全腿长（用于横向反解） */
+export const LEG = LEN_A + LEN_B;
 
 export interface TeacherResult {
   x: number;
@@ -231,6 +241,26 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   interface SwapDiag { t: number; s: number; swing: 'L' | 'R'; landed: boolean; ready: boolean; sole: number }
   const swapTrace: SwapDiag[] = [];
   let stanceSeq = "";
+  // ══════════════════════════════════════════════════════════════════════
+  // ★ 重心转移阶段机（文献锚定，用户 2026-10-02："显式写出重心转移的各个变化"）
+  //   ① APA-back    CoP 后退 —— 产生向前的力矩            Hansen 2016 / Breniere 1986
+  //   ② APA-toSwing CoP 移向**摆动腿**（APA 预备）        Hansen 2016
+  //   ③ toStance    CoP 反向移向**支撑腿**（真转移）      Frontiers 2022（134~207ms）
+  //   ④ done        新支撑腿承重 ≥50%                     Perry: Loading Response 结束
+  //
+  //   实测依据：只有 ③ 时，支撑 L 始终触发不了 `load`（承重≥50%），
+  //   而支撑 R 有完整 `IC→load→FF` ⇒ 体重转不过去，髋虽打满力矩也没用。
+  // ══════════════════════════════════════════════════════════════════════
+  let wtStage: WtStage = 'idle';
+  let wtT = 0;                       // 本阶段已持续时间
+  let wtDone = false;                // 本次落地是否已完成转移（防止重复触发）
+  /** 本次落地的目标承重（Frontiers 2022：结束判据 = 该腿 vGRF < 10N）
+   *  ⚠ `stanceL` 在下面主循环里才赋值，这里用可变闭包变量延后读取。 */
+  let wtLoadOf = (): number => {
+    const [fl, fr] = sim.doll.footLoadFrac(dt);
+    return stanceLNow ? fl : fr;
+  };
+  let stanceLNow = true;
   let lastDiagT = -1;
 
   while (!sim.finished && t < dur) {
@@ -245,6 +275,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
 
     let stanceL = prevStance === 1;
     // ★★★ 架构重做（2026-10-02）：换脚触发改成「**摆动腿已落地**」，而不是时钟边界。
+    stanceLNow = stanceL;   // ★ 让 wtLoadOf 读到当前支撑腿
     //
     //  旧写法（时钟边界 + 接触校验）**必然死锁**：
     //    校验要求"旧支撑脚已离地"，但旧支撑腿在换脚之前一直被命令为 stance ⇒ 它不会离地
@@ -402,9 +433,22 @@ const swingY = s < SHIFT_FRAC
       if (hipYRef < 0) hipYRef = com.y - hipDy;   // 锁存，避免 com.y 正反馈把身体拽沉
       const hipY = hipYRef;
       void hipW; void com;
+      // ★★★ 横向自由度（用户 2026-10-02："脚踝向内收而不是向外迈"、"迈出的腿真能承重吗"）
+      //   现象：髋外展指令给到 14°、增益放大 3.4 倍，双脚间距纹丝不动（0~10mm），
+      //   而 CoM 只跟着漂移 ⇒ **矢状面 IK 把脚拽回竖直平面**，外展这条通道对本 rig 无效。
+      //   修法（给它真正的一个自由度）：
+      //     ① 由目标横向偏移 dz 反解髋外展角：sin(abduct) = dz / L
+      //     ② 矢状面 IK 改用**剩余平面腿长** L·cos(abduct) 去解
+      //   这样外展是**前馈**（有明确目标），不再靠 kLat 反馈瞎推。
+      const hipZ = side === 'l' ? HIP_Z : -HIP_Z;
+      const footZTarget = side === 'l' ? STANCE_Z : -STANCE_Z;
+      const dzWant = footZTarget - hipZ;
+      const sinAb = Math.max(-0.7, Math.min(0.7, dzWant / LEG));     // 限幅：≤±45° 外展
+      const abductFF = Math.asin(sinAb);                                // ① 前馈外展
+      const planeScale = Math.sqrt(Math.max(0.05, 1 - sinAb * sinAb)); // ② 剩余平面腿长
       const [h, k] = isStance
-        ? ik(hipX, hipY, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, hipY, swingX, swingY);
+        ? ik(hipX, hipY, side === 'l' ? plantL : plantR, 0.012, planeScale)
+        : ik(hipX, hipY, swingX, swingY, planeScale);
       // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
       //   **实测更差**（存活 3.85→2.43s、双支撑 35%→71%）。保留原样。
       //
@@ -500,17 +544,33 @@ const swingY = s < SHIFT_FRAC
       // ★★ 重心转移（用户 2026-10-02："缺乏迈出的脚着地并转移重心的过程"）
       //   落地后把 CoM 横向挪到**新支撑脚**上。
       //   ⚠ 必须限幅：kLat·误差 在误差 0.17m、kLat=3.5 时会产生 **33° 髋外展**，
-      //     实测重心因此**单调漂移**（偏移 0.003 → 0.151 m，8 秒从不回中），
       //     控制器自己成了漂移源。限到 ±LAT_MAX（≈8°）。
       const stanceZ = stanceL ? HIP_Z : -HIP_Z;
       const shiftErrRaw = stanceZ - com.z;
-      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw));
-      const latCorr = p.kLat * shiftErr + p.kLatV * com.vz
+      // ★ 重心转移阶段推进（在给横向指令之前先更新）
+      //   触发：进入新的支撑相（落地换脚）⇒ 从 APA 开始
+      if (wtDone && s < 0.05) { wtStage = 'APA-back'; wtT = 0; wtDone = false; }
+      else if (wtStage === 'idle') { wtStage = 'APA-back'; wtT = 0; }
+      if (wtStage !== 'done') {
+        wtT += dt;
+        const load = wtLoadOf();
+        if (wtStage === 'APA-back' && wtT >= WT.min * WT.apaShare) { wtStage = 'APA-toSwing'; wtT = 0; }
+        else if (wtStage === 'APA-toSwing' && wtT >= WT.min * (1 - WT.apaShare)) { wtStage = 'toStance'; wtT = 0; }
+        else if (wtStage === 'toStance' && load >= THR.loadAccept) { wtStage = 'done'; wtDone = true; }
+        else if (wtStage === 'toStance' && wtT > WT.max) { wtStage = 'done'; wtDone = true; }   // 超时也放行，避免卡死
+      }
+      // ★ 按阶段给出 CoP 横向目标（APA 先反向预备、再正向转移）
+      const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
+      const shiftErrRaw2 = copZ - com.z;
+      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
+      // 转移阶段用更大的增益（APA 需要明确动作），转移完回到常规增益
+      const kLatEff = wtStage === 'done' ? p.kLat : (p.kLat ?? 0) * 1.8;
+      const latCorr = kLatEff * shiftErr + p.kLatV * com.vz
         + (isStance ? cmRoll : -cmRoll * 0.3);
       // ② 支撑腿发力前送：支撑相后半段线性增大（s∈[0.5,1]），把身体推过支撑脚
 
       // ★ 摆动腿要**向外（外展）**让开支撑腿，原来写的是 `-p.kLatSwing`（向内）⇒ 踝内收
-      const swingAbduct = isStance ? latCorr : (p.kLatSwing ?? 0);
+      const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);   // ★ 前馈外展 + 反馈修正
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     // owner 已在各写入点打标
