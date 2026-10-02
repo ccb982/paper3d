@@ -16538,6 +16538,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   let lastSwitchWasFlip = true;
   const balGate = new BalanceGate();
   let balBlocked = "";
+  let dbgLoad = 0;
   let latchedStance = null;
   let wtModule = 0;
   let wtLoadOf = () => {
@@ -16695,7 +16696,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      setAxis(`foot_${side}`, (ankleDeg + (isStance ? pushTorque : 0)) * Math.PI / 180, jFoot);
+      const ankleCmd = verdict.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
+      setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
@@ -16749,6 +16751,10 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     dbgLog.stanceX = +(stanceL ? footBufL[0] : footBufR[0]).toFixed(3);
     dbgLog.wtMod = wtModule;
     dbgLog.latch = latchedStance ? latchedStance === "l" ? 1 : 2 : 0;
+    dbgLog.balOk = verdict.ok ? 1 : 0;
+    dbgLog.balStage = verdict.why;
+    dbgLog.mosX = +mosHere.toFixed(4);
+    dbgLoad = stanceLoadNow;
     dbgLog.comY = +com.y.toFixed(3);
     dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
@@ -16807,6 +16813,7 @@ var fbL = new Float64Array(2);
 var fbR = new Float64Array(2);
 var cTmp = newCom();
 var balGateDbg = new BalanceGate();
+var gateDbg = { ok: false, mos: 0, load: 0, holdT: 0, why: "(\u672A\u521D\u59CB\u5316)" };
 var shape = shapeForJoints(sk.joints.length);
 var FB = {
   T: CAPTURE_GAIT.T,
@@ -17578,3 +17585,24 @@ for (const c of [
   console.log(`      rH=${d.rH} rT=${d.rT} rD=${d.rD}  \u8EAF\u5E72=${d.torsoY}m \u5934=${d.headY}m \u503E\u89D2=${d.tiltDeg}\xB0\u78B0\u5730\u521A\u4F53=${d.hit || "\uFF08\u65E0\uFF09"}`);
 }
 console.log("\n  \u9608\u503C\uFF1ArH>1 \u8EAF\u5E72\u4F4E\u4E8E 0.75\xD7\u521D\u59CB / rT>1 \u503E\u89D2>83\xB0 / rD>1 \u5934<0.28m / \u78B0\u5730\u521A\u4F53=crash");
+console.log('\n=== \u5E73\u8861\u95E8 \xD7 \u540E\u811A\u62AC\u8D77\uFF08\u7528\u6237\uFF1A"\u524D\u811A\u521A\u843D\u5730\u540E\u811A\u5C31\u62AC\u8D77\u6765\u4E86"\uFF09===\n');
+console.log("   t(s)  \u652F\u6491\u6570  \u524D\u811A\u79BB\u5730  \u540E\u811A\u79BB\u5730  \u95E8\u5224\u5B9A   \u5361\u5728\u54EA\u4E00\u6761");
+{
+  const gg = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  gg.begin(new Float32Array(gg.params.length));
+  let m = 0;
+  let lastAir = 0;
+  runCaptureTeacher(sk, gg, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl) => {
+    const gL = footGrounded(gg.doll, "l"), gR = footGrounded(gg.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const aL = gg.doll.soleY("l"), aR = gg.doll.soleY("r");
+    const swA = stanceL ? aL : aR;
+    const load = stanceL ? gg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz)[0] : gg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz)[1];
+    if (nG === 1) lastAir = Math.max(lastAir, swA);
+    if (m++ % 16 !== 0) return;
+    gateDbg = balGateDbg.judge(Number(dl?.mosX ?? 0), load, 1 / DEFAULT_SIM.controlHz);
+    console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}     ${(aL * 1e3).toFixed(0).padStart(5)}mm  ${(aR * 1e3).toFixed(0).padStart(5)}mm   ${gateDbg.ok ? "OK-\u653E\u884C" : "X-\u6321\u4F4F"}  ${gateDbg.why}`);
+  } });
+  console.log(`
+  \u540E\u811A\u6700\u5927\u79BB\u5730 ${(lastAir * 1e3).toFixed(0)}mm\uFF08\u95E8\u6321\u4F4F\u65F6\u5E94\u22480\uFF09`);
+}

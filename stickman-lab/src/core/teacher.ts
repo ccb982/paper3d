@@ -171,7 +171,7 @@ export function runCaptureTeacher(
     dur?: number; clockDriven?: boolean; record?: boolean;
     data?: { X: number[][]; A: number[][] };
     /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
-    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number>) => void;
+    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number | string>) => void;
   } = {},
 ): TeacherResult {
   const dur = opts.dur ?? 8;
@@ -231,7 +231,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   const ownerLog = new Map<string, string>();
   const hipW = new Float64Array(3);   // ★ 真实髋锚点世界坐标
   const angLog: Record<string, number> = {};   // ★ 每次 setAxis 的原始角度（排查"指令为何全 0"）
-  const dbgLog: Record<string, number> = {};   // ★ 摆动腿指令追踪
+  const dbgLog: Record<string, number | string> = {};   // ★ 摆动腿指令追踪
   const hipDy = p.hipDy ?? HIP_DY;   // ★ 可标定的 IK 虚拟髋点落差
   /**
    * ★★★ IK 虚拟髋高必须锚在**固定参考**上，不能用瞬时 `com.y`。
@@ -264,6 +264,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let lastSwitchWasFlip = true;   // 是否发生过真正的换脚（用于闩锁判据）
   const balGate = new BalanceGate();   // ★ 迈腿前平衡判定门
   let balBlocked = '';
+  let dbgLoad = 0;
   // ★★★ 支撑**闩锁**（用户 2026-10-02）：
   //   "前腿落地后启动一个支撑相关的模块，别再让前腿再离地了"
   //   "落地就得锁定，要是接受50%以上体重再触发，说不定就触发不了了"
@@ -581,7 +582,15 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
         ? aStance - aPush * Math.max(0, 1 - 2 * s)
         // 摆动相：前半**背屈**（勾脚往前送）→ 后半跖屈（脚尖先着地）
         : (s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5));
-      setAxis(`foot_${side}`, (ankleDeg + (isStance ? pushTorque : 0)) * Math.PI / 180, jFoot);
+      // ★★ 平衡判定门**也必须管住踝**（用户 2026-10-02："前脚刚落地，没调整平衡，
+      //   后脚就抬起来了，平衡校验没用吗"）。
+      //   之前只把 `swingY` 压到 0.012（IK 层面不让离地），但**踝的跖屈/背屈指令
+      //   照样在动** —— 脚掌自身一抬，后脚就离开了地面，门形同虚设。
+      //   ⇒ 门没放行时，摆动腿的踝强制归零（平贴地面），一步都不许动。
+      const ankleCmd = verdict.ok
+        ? (ankleDeg + (isStance ? pushTorque : 0))
+        : (isStance ? ankleDeg + pushTorque : 0);      // 摆动腿：门没过 ⇒ 踝锁 0
+      setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
@@ -652,7 +661,8 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     // owner 已在各写入点打标
-    dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.wtMod = wtModule; dbgLog.latch = latchedStance ? (latchedStance === "l" ? 1 : 2) : 0; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+    dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.wtMod = wtModule; dbgLog.latch = latchedStance ? (latchedStance === "l" ? 1 : 2) : 0;
+    dbgLog.balOk = verdict.ok ? 1 : 0; dbgLog.balStage = verdict.why; dbgLog.mosX = +mosHere.toFixed(4); dbgLoad = stanceLoadNow; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，

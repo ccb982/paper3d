@@ -22,6 +22,7 @@ const sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true } as never);
 const fbL = new Float64Array(2), fbR = new Float64Array(2);
 const cTmp = newCom();
 const balGateDbg = new BalanceGate();
+let gateDbg = { ok: false, mos: 0, load: 0, holdT: 0, why: '(未初始化)' };
 const shape = shapeForJoints(sk.joints.length);
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
@@ -773,3 +774,24 @@ for (const c of [{ n: '当前阈值', p: {} as Record<string, number> },
   console.log(`      rH=${d.rH} rT=${d.rT} rD=${d.rD}  躯干=${d.torsoY}m 头=${d.headY}m 倾角=${d.tiltDeg}°碰地刚体=${d.hit || '（无）'}`);
 }
 console.log('\n  阈值：rH>1 躯干低于 0.75×初始 / rT>1 倾角>83° / rD>1 头<0.28m / 碰地刚体=crash');
+
+// ===== 平衡门是否真的挡住了后脚抬起 =====
+console.log('\n=== 平衡门 × 后脚抬起（用户："前脚刚落地后脚就抬起来了"）===\n');
+console.log('   t(s)  支撑数  前脚离地  后脚离地  门判定   卡在哪一条');
+{
+  const gg = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  gg.begin(new Float32Array(gg.params.length));
+  let m = 0; let lastAir = 0;
+  runCaptureTeacher(sk, gg, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
+    const gL = footGrounded(gg.doll, 'l'), gR = footGrounded(gg.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const aL = gg.doll.soleY('l'), aR = gg.doll.soleY('r');
+    const swA = stanceL ? aL : aR;
+    const load = stanceL ? gg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz)[0] : gg.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz)[1];
+    if (nG === 1) lastAir = Math.max(lastAir, swA);
+    if (m++ % 16 !== 0) return;
+    gateDbg = balGateDbg.judge(Number(dl?.mosX ?? 0), load, 1 / DEFAULT_SIM.controlHz);
+    console.log(`  ${t.toFixed(2).padStart(5)}    ${nG}     ${(aL*1000).toFixed(0).padStart(5)}mm  ${(aR*1000).toFixed(0).padStart(5)}mm   ${gateDbg.ok ? 'OK-放行' : 'X-挡住'}  ${gateDbg.why}`);
+  } });
+  console.log(`\n  后脚最大离地 ${(lastAir * 1000).toFixed(0)}mm（门挡住时应≈0）`);
+}
