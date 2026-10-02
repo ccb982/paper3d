@@ -16277,6 +16277,7 @@ var LEN_A = Y(1574.5) - Y(2206);
 var LEN_B = Y(2206) - Y(2792);
 var HIP_Z = 7e-3;
 var HIP_DY = 0.307;
+var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
 function ik(hipX, hipY, fx, fy) {
   const dx = fx - hipX, dy = fy - hipY;
@@ -16366,7 +16367,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     }
     const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
     const dtSw = t - lastSwitch;
-    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
+    const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
@@ -16586,4 +16587,35 @@ console.log("\n=== \u8FC8\u6B65\u76F8\u7684\u79BB\u5730\u9AD8\u5EA6\uFF08MIN_CLE
   console.log(`  \u8FBE\u6807(\u226530mm)\u7684\u6B21\u6570\uFF1A${ok} / ${peaks.length}`);
   console.log("  21d2 82e58fbe680765704e3a 0Ff0c7b2c4e00905395e8Ff0879bb57303cmFf095c318fc74e0d53bbFf0cadjust 76f86c388fdc8fdb4e0d67653002");
   check("\u81F3\u5C11\u6709 1 \u6B21\u79BB\u5730\u8FBE\u6807\uFF08\u226530mm\uFF09", ok > 0, `${ok}/${peaks.length}\uFF0C\u6700\u9AD8 ${(mx * 1e3).toFixed(0)}mm`);
+}
+console.log("\n=== \u843D\u5730\u77AC\u95F4\u652F\u6491\u817F\u59FF\u6001\uFF08Oberg\uFF1A\u521D\u59CB\u63A5\u89E6\u819D\u5C48 ~15\xB0\uFF09===\n");
+{
+  const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s4.begin(new Float32Array(s4.params.length));
+  const rows = [];
+  let wasAir = false, k0 = 0, h0 = 0;
+  runCaptureTeacher(sk, s4, FB, { dur: DUR, clockDriven: true, onFrame: () => {
+    const gL = footGrounded(s4.doll, "l"), gR = footGrounded(s4.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const air = Math.max(s4.doll.soleY("l"), s4.doll.soleY("r"));
+    const rdh = (nm) => {
+      const i = JOINT_ORDER.indexOf(nm);
+      return i < 0 ? 0 : Number.isFinite(s4.doll.jointAngle(i)) ? s4.doll.jointAngle(i) : 0;
+    };
+    if (nG === 1 && air > 0.03) wasAir = true;
+    else if (wasAir && nG === 2) {
+      wasAir = false;
+      const k = Math.min(Math.abs(rdh("knee_l")), Math.abs(rdh("knee_r"))) * 180 / Math.PI;
+      const h = Math.min(Math.abs(rdh("hip_l")), Math.abs(rdh("hip_r"))) * 180 / Math.PI;
+      k0 += k;
+      h0 += h;
+      rows.push(`  \u89E6\u5730: \u652F\u6491\u819D ${k.toFixed(1).padStart(6)}\xB0  \u652F\u6491\u9ACB ${h.toFixed(1).padStart(6)}\xB0`);
+    }
+  } });
+  rows.slice(0, 8).forEach((r) => console.log(r));
+  if (k0 > 0) {
+    console.log(`
+  \u89E6\u5730\u77AC\u95F4\u819D\u5C48\u5747\u503C ${(k0 / rows.length).toFixed(1)}\xB0\uFF08\u6587\u732E ~15\xB0\uFF0C\u4E0A\u9650 ABSORB_MAX=20\xB0\uFF09`);
+    check("\u89E6\u5730\u77AC\u95F4\u652F\u6491\u819D\u5C48 \u2264 25\xB0\uFF08\u6CA1\u88AB\u538B\u584C\uFF09", k0 / rows.length <= 25, `${(k0 / rows.length).toFixed(1)}\xB0`);
+  }
 }

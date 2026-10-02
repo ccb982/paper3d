@@ -37,6 +37,9 @@ export const HIP_Z = 0.007;
  *   改成 0.307 后最大水平步长 ≈ √(0.828² − 0.889²) 无解…… 见下方 sanity：
  */
 export const HIP_DY = 0.307;
+/** ★ 落地吸能上限（rad）= 20°。Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°。
+ *  超过它落地就会把支撑腿压塌（实测 57° ⇒ 脚撑不住）。 */
+export const ABSORB_MAX = 0.35;
 /** 真实髋高（m），由 limbAxes.json 锚点 Y(1574.5) 换算 */
 export const HIP_Y = Y(1574.5);
 
@@ -238,7 +241,15 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
 
     const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
     const dtSw = t - lastSwitch;
-    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
+    // ★★ 落地吸能**必须限幅**（用户 2026-10-02："脚落地后甚至无法实现支撑"）。
+    //   旧式：`absorb = p.absorb · exp(−dtSw/τ)`，触地那一帧 dtSw=0 ⇒ **满量** p.absorb。
+    //   而寻优把 p.absorb 推到 1.0 rad = **57°**（因为目标函数只测摆动膝峰值、
+    //   不测支撑膝，它一路涨没有代价）⇒ 落地瞬间支撑膝被命令屈 57° ⇒ **腿直接塌**，
+    //   脚当然撑不住。
+    //   文献：Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°（midstance 15.7°）。
+    //   ⇒ 上限取 20° = 0.35 rad。
+    const absorb = Math.min(ABSORB_MAX, p.absorb)
+      * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
     //   用状态机在"迈步相/调整相"之间调度增益）。

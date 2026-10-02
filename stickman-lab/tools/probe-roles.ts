@@ -133,3 +133,32 @@ console.log('\n=== 迈步相的离地高度（MIN_CLEARANCE = 3cm 的门）===\n
   console.log("  21d2 82e58fbe680765704e3a 0Ff0c7b2c4e00905395e8Ff0879bb57303cmFf095c318fc74e0d53bbFf0cadjust 76f86c388fdc8fdb4e0d67653002");
   check('至少有 1 次离地达标（≥30mm）', ok > 0, `${ok}/${peaks.length}，最高 ${(mx * 1000).toFixed(0)}mm`);
 }
+
+// ═══════ 落地后支撑腿撑不撑得住：触地瞬间的膝/髋 ═══════
+console.log('\n=== 落地瞬间支撑腿姿态（Oberg：初始接触膝屈 ~15°）===\n');
+{
+  const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s4.begin(new Float32Array(s4.params.length));
+  const rows: string[] = [];
+  let wasAir = false, k0 = 0, h0 = 0;
+  runCaptureTeacher(sk, s4, FB, { dur: DUR, clockDriven: true, onFrame: (): void => {
+    const gL = footGrounded(s4.doll, 'l'), gR = footGrounded(s4.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const air = Math.max(s4.doll.soleY('l'), s4.doll.soleY('r'));
+    const rdh = (nm: string): number => { const i = JOINT_ORDER.indexOf(nm);
+      return i < 0 ? 0 : (Number.isFinite(s4.doll.jointAngle(i)) ? s4.doll.jointAngle(i) : 0); };
+    if (nG === 1 && air > 0.03) wasAir = true;
+    else if (wasAir && nG === 2) {
+      wasAir = false;
+      const k = Math.min(Math.abs(rdh('knee_l')), Math.abs(rdh('knee_r'))) * 180 / Math.PI;
+      const h = Math.min(Math.abs(rdh('hip_l')), Math.abs(rdh('hip_r'))) * 180 / Math.PI;
+      k0 += k; h0 += h;
+      rows.push(`  触地: 支撑膝 ${k.toFixed(1).padStart(6)}°  支撑髋 ${h.toFixed(1).padStart(6)}°`);
+    }
+  } });
+  rows.slice(0, 8).forEach(r => console.log(r));
+  if (k0 > 0) {
+    console.log(`\n  触地瞬间膝屈均值 ${(k0 / rows.length).toFixed(1)}°（文献 ~15°，上限 ABSORB_MAX=20°）`);
+    check('触地瞬间支撑膝屈 ≤ 25°（没被压塌）', k0 / rows.length <= 25, `${(k0 / rows.length).toFixed(1)}°`);
+  }
+}
