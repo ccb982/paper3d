@@ -905,3 +905,21 @@ for (const kc of [0, 3, 30, 100]) {
 }
 console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
 
+// ===== 摆动腿指令链逐拍：盆骨/膝/踝到底有没有被下到 =====
+console.log('\n=== 摆动腿指令链（谁被压住了）===\n');
+console.log('   t(s) 门 swingY 摆髋°  摆膝°  摆踝°  实摆脚高  实摆膝°  承重');
+{
+  const fD = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  fD.begin(new Float32Array(fD.params.length));
+  const sw = 'l', st = 'r';
+  const iHip = jointIndexByName(sk, `hip_${sw}`), iKnee = jointIndexByName(sk, `knee_${sw}`), iFoot = jointIndexByName(sk, `foot_${sw}`);
+  const tg = new Float32Array(sk.joints.length * 3);
+  let m = 0;
+  runCaptureTeacher(sk, fD, FB, { dur: 3, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
+    if (m++ % 10 !== 0) return;
+    const d = Math.abs(fD.doll.motorTarget[iHip * 3 + 2] ?? 0);
+    void d;
+    console.log(`  ${t.toFixed(2).padStart(5)} ${dl?.balOk === 1 ? 'OK' : 'X '} ${String(dl?.swingY ?? 0).padStart(7)} ${(fD.doll.jointAngle(iHip) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iFoot) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.soleY(sw) * 1000).toFixed(0).padStart(8)}mm ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(8)} ${(() => { const [a, b] = fD.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz); return (st === 'l' ? a : b).toFixed(2); })()}`);
+    void tg;
+  } });
+}

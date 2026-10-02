@@ -13329,6 +13329,8 @@ var Ragdoll = class _Ragdoll {
         { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
         { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
       );
+      jd.limitsEnabled = true;
+      jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
       this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
   }
@@ -17757,3 +17759,21 @@ for (const kc of [0, 3, 30, 100]) {
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
 console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
+console.log("\n=== \u6446\u52A8\u817F\u6307\u4EE4\u94FE\uFF08\u8C01\u88AB\u538B\u4F4F\u4E86\uFF09===\n");
+console.log("   t(s) \u95E8 swingY \u6446\u9ACB\xB0  \u6446\u819D\xB0  \u6446\u8E1D\xB0  \u5B9E\u6446\u811A\u9AD8  \u5B9E\u6446\u819D\xB0  \u627F\u91CD");
+{
+  const fD = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  fD.begin(new Float32Array(fD.params.length));
+  const sw = "l", st = "r";
+  const iHip = jointIndexByName(sk, `hip_${sw}`), iKnee = jointIndexByName(sk, `knee_${sw}`), iFoot = jointIndexByName(sk, `foot_${sw}`);
+  const tg = new Float32Array(sk.joints.length * 3);
+  let m = 0;
+  runCaptureTeacher(sk, fD, FB, { dur: 3, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl) => {
+    if (m++ % 10 !== 0) return;
+    const d = Math.abs(fD.doll.motorTarget[iHip * 3 + 2] ?? 0);
+    console.log(`  ${t.toFixed(2).padStart(5)} ${dl?.balOk === 1 ? "OK" : "X "} ${String(dl?.swingY ?? 0).padStart(7)} ${(fD.doll.jointAngle(iHip) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.jointAngle(iFoot) * 57.3).toFixed(1).padStart(6)} ${(fD.doll.soleY(sw) * 1e3).toFixed(0).padStart(8)}mm ${(fD.doll.jointAngle(iKnee) * 57.3).toFixed(1).padStart(8)} ${(() => {
+      const [a, b] = fD.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      return (st === "l" ? a : b).toFixed(2);
+    })()}`);
+  } });
+}

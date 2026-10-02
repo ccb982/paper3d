@@ -574,6 +574,12 @@ export class Ragdoll {
         { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
         { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] },
       );
+// ⚠ 已知**无效**（2026-10-02 实测）：尝试用 `limitsEnabled`/`limits` 给球铰开物理限位，
+      //   Rapier 0.14 **不吃这个格式** —— 打开前后所有回读逐位相同，踝仍跑到 +45°（限位 +18°）。
+      //   ⇒ 目前**没有任何物理限位**，只有 `driveMotors` 里的马达软限位（改目标速度，
+      //     接触力足够大时拉不回来）。保留这两行只为记录事实；若换 Rapier 版本需重测。
+      jd.limitsEnabled = true;
+      jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
       this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
   }
