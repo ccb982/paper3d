@@ -66,7 +66,24 @@ const ANKLE_JOINTS: JointMeta[] = [
   { name: 'foot_r', parent: 'shin_r', child: 'foot_r', x: 1110.5, y: 2792, limitDeg: [-10, 18] },
 ];
 
+/**
+ * ★★ 髋关节限位重设（2026-10-02，用户："脚踝向内收而不是向外迈，脚不可能着地的"）。
+ *
+ * 实测几何：髋锚点高 **0.849 m** > 腿长（髋→踝）**0.785 m**
+ *   ⇒ 素材的**站直姿态膝天生就弯 ~30°**，髋在站立时已经处于屈曲状态。
+ *   而原限位 `[-80°, +60°]` 是按"直腿中性"设定的，于是：
+ *     IK 为把脚放到地面需要 hip ≈ **76°** 屈曲 → **超出 +60° 限位**
+ *     → 软限位接管、髋被往回掰 → 腿伸不到位 → **脚既抬不起来也落不下去**。
+ *   Oberg N=233 给出髋 flex-ext ROM 46.9°（那是相对人体中立位的净摆幅），
+ *   而本 rig 的"中立位"自带 30° 弯曲，必须额外留出这 30° 的行程。
+ * ⇒ 屈曲上限 60° → **100°**，伸展 −80° → −95°（给蹬离更多行程）。
+ */
+const HIP_LIMIT: [number, number] = [-95, 100];
+
 const meta = raw as unknown as PartsMeta;
+for (const j of meta.joints) {
+  if (j.name === 'hip_l' || j.name === 'hip_r') j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
 if (!meta.joints.some((j) => j.name === 'foot_l')) meta.joints.push(...ANKLE_JOINTS);
 
 export const META: PartsMeta = meta;

@@ -6249,7 +6249,11 @@ var ANKLE_JOINTS = [
   { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
   { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
 ];
+var HIP_LIMIT = [-95, 100];
 var meta = parts_default;
+for (const j of meta.joints) {
+  if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
 if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
 var META = meta;
 var PART_BY_KEY = new Map(
@@ -13469,6 +13473,29 @@ var Ragdoll = class {
     this.jointRot(i, buf);
     return buf[2];
   }
+  /**
+   * ★ 关节锚点的**世界坐标**（父刚体变换 × parentLocal）。
+   *   teacher 的 IK 需要真实髋位置 —— 之前用 `com.y − HIP_DY` 推算，
+   *   虚拟髋(0.744m) 和真实髋刚体(0.849m) 差了 10cm ⇒ IK 按错的骨盆高度算腿姿，
+   *   踝前摆时必然扫地（用户："盆骨抬得不够高，导致踝部向前会触地"）。
+   */
+  jointWorld(i, out) {
+    const j = this.sk.joints[i];
+    if (!j) {
+      out[0] = out[1] = out[2] = 0;
+      return;
+    }
+    const p = this.bodies[this.jointBodies[i * 2]];
+    const t = p.translation(), r = p.rotation();
+    const lx = j.parentLocal[0], ly = j.parentLocal[1], lz = j.parentLocal[2];
+    const ix = r.w * lx + r.y * lz - r.z * ly;
+    const iy = r.w * ly + r.z * lx - r.x * lz;
+    const iz = r.w * lz + r.x * ly - r.y * lx;
+    const iw = -r.x * lx - r.y * ly - r.z * lz;
+    out[0] = t.x + ix * r.w + iw * -r.x + iy * -r.z - iz * -r.y;
+    out[1] = t.y + iy * r.w + iw * -r.y + iz * -r.x - ix * -r.z;
+    out[2] = t.z + iz * r.w + iw * -r.z + ix * -r.y - iy * -r.x;
+  }
   /** 兼容标量读数：关节 i 绕本地 Z 的相对角速度（rad/s） */
   jointSpeed(i) {
     const buf = this.rvTmp;
@@ -16263,12 +16290,14 @@ function cell(phase, role) {
 
 // src/core/teacher.ts
 var SHIFT_FRAC = 0.25;
+var PUSH_FRAC = 0.75;
+var LAT_MAX_ERR = 0.04;
 var PX2M = 68e-5;
 var Y = (py) => (2899 - py) * PX2M;
-var LEN_A = Y(1574.5) - Y(2206);
-var LEN_B = Y(2206) - Y(2792);
-var HIP_Z = 7e-3;
-var HIP_DY = 0.18;
+var LEN_A = 0.407;
+var LEN_B = 0.379;
+var HIP_Z = 0.06;
+var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
 function ik(hipX, hipY, fx, fy) {
@@ -16295,6 +16324,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   const iR = sk2.bodies.findIndex((b) => b.key === "shin_r");
   let plantL = sim2.doll.bodies[iL].translation().x;
   let plantR = sim2.doll.bodies[iR].translation().x;
+  let plantLz = HIP_Z, plantRz = -HIP_Z;
   let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
   const lbuf = new Float64Array(3);
   const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
@@ -16318,6 +16348,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   let nAxes = 0;
   let curOwner = "?";
   const ownerLog = /* @__PURE__ */ new Map();
+  const hipW = new Float64Array(3);
   const angLog = {};
   const dbgLog = {};
   const hipDy = p.hipDy ?? HIP_DY;
@@ -16364,6 +16395,13 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         sim2.doll.soleXZ("l", footBufL);
         sim2.doll.soleXZ("r", footBufR);
         const landedX = stanceL ? footBufL[0] : footBufR[0];
+        const landedZ = stanceL ? HIP_Z : -HIP_Z;
+        plantLz = stanceL ? landedZ : plantLz;
+        if (stanceL) {
+          plantL = landedX;
+        } else {
+          plantR = landedX;
+        }
         if (stanceL) plantL = landedX;
         else plantR = landedX;
       }
@@ -16379,6 +16417,9 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+    const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
+    const inPush = s >= PUSH_FRAC;
+    const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
     let swingX = swingX0;
@@ -16415,7 +16456,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const isStance = side === "l" === stanceL;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
-      const [h, k] = isStance ? ik(hipX, hipYRef, side === "l" ? plantL : plantR, 0.012) : ik(hipX, hipYRef, swingX, swingY);
+      const hipY = hipYRef;
+      const [h, k] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012) : ik(hipX, hipY, swingX, swingY);
       const phNow = sim2.gp.now;
       const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
       const roleCell = isStance ? cStance : cSwing;
@@ -16427,7 +16469,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
         if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
-      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;
+      if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
       curOwner = isStance ? `balance(ik+corr${stanceLock > 0 ? "+lock" : ""}${s > 0.5 ? "+push" : ""})` : "step(ik)";
       if (!isStance) hipCmd = h;
       setAxis(`hip_${side}`, hipCmd, jHip);
@@ -16435,7 +16477,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      setAxis(`foot_${side}`, ankleDeg * Math.PI / 180, jFoot);
+      setAxis(`foot_${side}`, (ankleDeg + (isStance ? pushTorque : 0)) * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
         const dir = isStance ? -1 : 1;
@@ -16448,9 +16490,11 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
       }
       const stanceZ = stanceL ? HIP_Z : -HIP_Z;
-      const shiftErr = stanceZ - com.z;
+      const shiftErrRaw = stanceZ - com.z;
+      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw));
       const latCorr = p.kLat * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
+      const swingAbduct = isStance ? latCorr : p.kLatSwing ?? 0;
+      setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     dbgLog.s = +s.toFixed(3);
     dbgLog.swingY = +swingY.toFixed(4);
@@ -16468,6 +16512,72 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   }
   return { x: sim2.distance, alive: !sim2.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq };
 }
+
+// src/core/gaitEvents.ts
+var THR = {
+  /** IC 初次接触：载荷占比超过此值 */
+  IC: 0.02,
+  /** TO 离趾：载荷占比低于此值（JAB 2003：离趾要用低阈值） */
+  TO: 0.01,
+  /** 起立加载完成的判据（Perry：体重压到该腿） */
+  loadAccept: 0.5
+};
+var LegEventTracker = class {
+  wasAir = true;
+  loadFrac = 0;
+  prevSole = 0;
+  vSole = 0;
+  /** 本支撑相已发生的事件（按时间序） */
+  seen = [];
+  /** 最近一次事件（调试打印用） */
+  last = null;
+  lastT = -1;
+  reset() {
+    this.wasAir = true;
+    this.seen.length = 0;
+    this.last = null;
+    this.lastT = -1;
+  }
+  /**
+   * @param grounded 该脚是否着地
+   * @param loadFrac 该脚载荷占比 0~1
+   * @param soleY    脚底离地高度（m）
+   * @param dt       时间步
+   * @returns 本拍新触发的事件（无则 null）
+   */
+  step(grounded, loadFrac, soleY, dt) {
+    this.vSole = (soleY - this.prevSole) / Math.max(1e-6, dt);
+    this.prevSole = soleY;
+    this.loadFrac = loadFrac;
+    const fire = (e) => {
+      if (this.seen.includes(e)) return null;
+      this.seen.push(e);
+      this.last = e;
+      return e;
+    };
+    if (!grounded) {
+      this.wasAir = true;
+      return null;
+    }
+    if (this.wasAir) {
+      this.wasAir = false;
+      this.seen.length = 0;
+      return fire("IC");
+    }
+    if (this.loadFrac >= THR.loadAccept) fire("load");
+    if (soleY < 0.02 && Math.abs(this.vSole) < 0.1) fire("FF");
+    if (soleY > 0.03) fire("HO");
+    return null;
+  }
+  /** 是否已经进入「已着地且承重」状态（可以承接重心） */
+  get canAcceptWeight() {
+    return this.seen.includes("load");
+  }
+  /** 完成了哪些关键里程碑（调试/奖励门控用） */
+  get progress() {
+    return this.seen.length ? this.seen.join("\u2192") : "\uFF08\u672A\u7740\u5730\uFF09";
+  }
+};
 
 // src/core/phaseSeed.ts
 var CAPTURE_GAIT = {
@@ -16510,6 +16620,9 @@ var require2 = createRequire(import.meta.url);
   __wbg_set_wasm(r.instance ? r.instance.exports : r.exports);
 }
 var sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true });
+var fbL = new Float64Array(2);
+var fbR = new Float64Array(2);
+var cTmp = newCom();
 var shape = shapeForJoints(sk.joints.length);
 var FB = {
   T: CAPTURE_GAIT.T,
@@ -16845,15 +16958,217 @@ console.log("  \u5173\u8282      \u9650\u4F4D(\xB0)          \u6307\u4EE4\u5CF0(
   const peak = {};
   runCaptureTeacher(sk, sf, FB, { dur: 2.5, clockDriven: true, onFrame: (_t, _s, _p, _o, _c, al) => {
     if (!al) return;
-    for (const [k, v] of Object.entries(al)) peak[k] = Math.max(peak[k] ?? 0, Math.abs(v));
+    for (const [k, v] of Object.entries(al)) peak[k] = peak[k] === void 0 ? v : v > peak[k] ? v : Math.min(peak[k], v);
   } });
   for (const nm of ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"]) {
     const i = JOINT_ORDER.indexOf(nm);
     if (i < 0) continue;
     const j = sk.joints[i];
     const lo = j.minRad[2] * 180 / Math.PI, hi = j.maxRad[2] * 180 / Math.PI;
-    const pk = (peak[`${nm}/2`] ?? 0) * 180 / Math.PI;
-    console.log(`  ${nm.padEnd(9)} [${lo.toFixed(0)}, ${hi.toFixed(0)}]`.padEnd(26) + `${pk.toFixed(1).padStart(9)}\xB0   ${pk > Math.abs(hi) || pk > Math.abs(lo) ? "\u2605\u8D85\u9650" : ""}`);
+    const pk = peak[`${nm}/2`] ?? 0;
+    const pkd = pk * 180 / Math.PI;
+    const over = pk > j.maxRad[2] + 1e-3 || pk < j.minRad[2] - 1e-3;
+    console.log(`  ${nm.padEnd(9)} [${lo.toFixed(0)}, ${hi.toFixed(0)}]`.padEnd(26) + `${pkd.toFixed(1).padStart(9)}\xB0   ${over ? "\u2605\u8D85\u9650" : "\u2713"}`);
   }
   console.log("\n  \u5224\u8BFB\uFF1A\u2605\u8D85\u9650 \u21D2 IK \u5728\u8981\u6C42\u5173\u8282\u505A\u4E0D\u5230\u7684\u59FF\u6001\uFF0C\u8F6F\u9650\u4F4D\u63A5\u7BA1 \u21D2 \u811A\u5230\u4E0D\u4E86\u76EE\u6807\u4F4D\u7F6E\u3002");
+}
+console.log("\n=== \u9AA8\u9ABC\u51E0\u4F55\u4F53\u68C0\uFF08\u7528\u6237\uFF1A\u76C6\u9AA8\u3001\u8E1D\u9AA8\u4F4D\u7F6E\u90FD\u4E0D\u5BF9\uFF09===\n");
+{
+  const LIMS = ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"];
+  console.log("  \u5173\u8282\u951A\u70B9\uFF08\u6784\u5EFA\u503C\uFF0C\u7C73\uFF09\uFF1A");
+  console.log("   \u5173\u8282        x       y       z");
+  for (const nm of LIMS) {
+    const j = sk.joints.find((q) => q.name === nm);
+    if (!j) continue;
+    console.log(`   ${nm.padEnd(10)} ${j.wx.toFixed(3).padStart(6)}  ${j.wy.toFixed(3).padStart(6)}  ${j.wz.toFixed(3).padStart(6)}`);
+  }
+  const A = (n) => sk.joints.find((q) => q.name === n);
+  const thigh = Math.hypot(A("hip_l").wx - A("knee_l").wx, A("hip_l").wy - A("knee_l").wy, A("hip_l").wz - A("knee_l").wz);
+  const shin = Math.hypot(A("knee_l").wx - A("foot_l").wx, A("knee_l").wy - A("foot_l").wy, A("knee_l").wz - A("foot_l").wz);
+  console.log(`
+  \u771F\u5B9E\u6BB5\u957F\uFF1A thigh=${thigh.toFixed(3)}m  shin=${shin.toFixed(3)}m  LEG=${(thigh + shin).toFixed(3)}m`);
+  console.log(`  teacher \u7528\u7684\u5E38\u6570\uFF1A LEN_A=0.429  LEN_B=0.398  LEG=0.827`);
+  console.log(`  \u9ACB\u9AD8\uFF08\u951A\u70B9 y\uFF09= ${A("hip_l").wy.toFixed(3)}m   \u8E1D\u9AD8 = ${A("foot_l").wy.toFixed(3)}m`);
+  console.log(`
+  \u2605 \u5173\u952E\uFF1A\u9ACB\u9AD8 ${A("hip_l").wy.toFixed(3)}m  vs  \u817F\u957F ${(thigh + shin).toFixed(3)}m` + (A("hip_l").wy > thigh + shin ? "   \u21D2 \u2605\u9ACB\u6BD4\u817F\u8FD8\u9AD8\uFF0C\u817F\u6839\u672C\u4F38\u4E0D\u76F4\u3001\u811A\u591F\u4E0D\u5230\u5730" : "   \u2713 \u591F\u5F97\u5230"));
+  console.log(`  \u9ACB\u95F4\u8DDD\uFF08z\uFF09\uFF1A hip_l=${A("hip_l").wz.toFixed(3)}  hip_r=${A("hip_r").wz.toFixed(3)}  \u21D2 ${(Math.abs(A("hip_l").wz - A("hip_r").wz) * 1e3).toFixed(0)}mm`);
+  console.log(`  \u8E1D\u95F4\u8DDD\uFF08z\uFF09\uFF1A foot_l=${A("foot_l").wz.toFixed(3)}  foot_r=${A("foot_r").wz.toFixed(3)}  \u21D2 ${(Math.abs(A("foot_l").wz - A("foot_r").wz) * 1e3).toFixed(0)}mm`);
+  console.log(`  \u8E1D\u9AD8 ${(A("foot_l").wy * 1e3).toFixed(0)}mm\uFF08\u8E1D\u5E94\u8BE5\u5728\u811A\u638C\u4E0A\u65B9\uFF0C\u811A\u638C\u539A\u5EA6 + \u8E1D\u9AD8\uFF09`);
+}
+console.log("\n=== LEN \u4FEE\u6B63\u4E3A\u5B9E\u6D4B\u503C\u540E\uFF1A\u91CD\u6807 HIP_DY \u2550\u2550\u2550\u2550\u2550\u2550\u2550");
+console.log("  \u817F\u957F LEG = 0.785m\uFF0C\u9ACB\u9AD8 0.849m \u21D2 \u7AD9\u7ACB\u65F6\u819D\u5FC5\u5F2F\uFF08\u6B63\u5E38\uFF09");
+console.log("  HIP_DY   \u9501\u5B9A\u865A\u62DF\u9ACB\u9AD8   \u5B58\u6D3B    \u6362\u811A  \u79BB\u5730\u5CF0  \u8EAF\u5E72\u9AD8");
+for (const dy of [0.02, 0.06, 0.1, 0.14, 0.18, 0.22]) {
+  const sg = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  sg.begin(new Float32Array(sg.params.length));
+  let pk = 0;
+  const rg = runCaptureTeacher(sk, sg, { ...FB, hipDy: dy }, {
+    dur: 4,
+    clockDriven: true,
+    onFrame: () => {
+      pk = Math.max(pk, Math.max(sg.doll.soleY("l"), sg.doll.soleY("r")));
+    }
+  });
+  console.log(`  ${dy.toFixed(2).padStart(6)}   ${(0.964 - dy).toFixed(3)}m      ${rg.t.toFixed(2)}s   ${rg.steps}    ${(pk * 1e3).toFixed(0).padStart(3)}mm  ${sg.doll.torso().translation().y.toFixed(3)}`);
+}
+console.log("\n=== HIP_DY \u7EE7\u7EED\u5F80\u4E0A\u626B ===");
+console.log("  HIP_DY   \u865A\u62DF\u9ACB\u9AD8   \u5B58\u6D3B    \u6362\u811A  \u79BB\u5730\u5CF0  \u8EAF\u5E72\u9AD8");
+for (const dy of [0.22, 0.26, 0.3, 0.34, 0.4]) {
+  const sh2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  sh2.begin(new Float32Array(sh2.params.length));
+  let pk = 0;
+  const rh = runCaptureTeacher(sk, sh2, { ...FB, hipDy: dy }, {
+    dur: 4,
+    clockDriven: true,
+    onFrame: () => {
+      pk = Math.max(pk, Math.max(sh2.doll.soleY("l"), sh2.doll.soleY("r")));
+    }
+  });
+  console.log(`  ${dy.toFixed(2).padStart(6)}   ${(0.964 - dy).toFixed(3)}m      ${rh.t.toFixed(2)}s   ${rh.steps}    ${(pk * 1e3).toFixed(0).padStart(3)}mm  ${sh2.doll.torso().translation().y.toFixed(3)}`);
+}
+console.log('\n=== \u9AA8\u9ABC\u6BD4\u4F8B\u4F53\u68C0\uFF08\u7528\u6237\uFF1A"\u76C6\u9AA8\u62AC\u5F97\u4E0D\u591F\u9AD8\uFF0C\u5BFC\u81F4\u8E1D\u90E8\u5411\u524D\u4F1A\u89E6\u5730"\uFF09===\n');
+{
+  const A2 = (n) => sk.joints.find((q) => q.name === n);
+  const hipY = A2("hip_l").wy, ankY = A2("foot_l").wy;
+  const LEG = 0.785;
+  console.log(`  \u9ACB\u9AD8 ${hipY.toFixed(3)}m   \u8E1D\u9AD8 ${ankY.toFixed(3)}m   \u817F\u957F ${LEG.toFixed(3)}m`);
+  console.log(`  \u817F/\u9ACB = ${(LEG / hipY).toFixed(3)}    \u4EBA\u4F53\u5E38\u6001 \u22480.95~1.00`);
+  console.log(`  \u21D2 \u672C rig \u817F\u76F8\u5BF9\u8EAF\u5E72\u504F\u77ED ${((LEG / hipY - 0.97) * 100).toFixed(0)}%`);
+  console.log(`
+  \u540E\u679C\uFF1A\u7AD9\u7ACB\u65F6\u819D\u5FC5\u987B\u5F2F\u5230 ${(Math.acos(Math.min(1, (0.407 ** 2 + 0.379 ** 2 - (hipY - 0.012) ** 2) / (2 * 0.407 * 0.379))) * 180 / Math.PI).toFixed(0)}\xB0 \u624D\u80FD\u8BA9\u811A\u5E73\u8D34\u5730`);
+  console.log(`        \u8E1D\u524D\u6446\u65F6\u817F\u8981\u6298\u5F97\u66F4\u72E0 \u21D2 \u8E1D\u5FC5\u7136\u89E6\u5730\uFF08\u7528\u6237\u62A5\u544A\u7684\u73B0\u8C61\uFF09\u3002`);
+  console.log(`
+  \u4E24\u6761\u4FEE\u6CD5\uFF1A`);
+  console.log(`   A. \u964D\u9ACB\u951A\u70B9\uFF1A${hipY.toFixed(3)} \u2192 ${(LEG * 0.97).toFixed(3)} m\uFF08\u817F/\u9ACB=0.97\uFF0C\u63A5\u8FD1\u4EBA\u4F53\uFF09`);
+  console.log(`      \u4EE3\u4EF7\uFF1A\u9ACB\u4E0E\u5927\u817F\u7684\u951A\u70B9\u4E0D\u518D\u8D34\u5408\u7D20\u6750 \u21D2 \u5927\u817F\u6839\u90E8\u4F1A\u6709 ${((hipY - LEG * 0.97) * 1e3).toFixed(0)}mm \u89C6\u89C9\u9519\u4F4D`);
+  console.log(`   B. \u4F38\u957F\u817F\u6BB5\uFF1A\u817F ${LEG.toFixed(3)} \u2192 ${(hipY * 0.97).toFixed(3)} m`);
+  console.log(`      \u4EE3\u4EF7\uFF1A\u5927\u817F/\u5C0F\u817F\u521A\u4F53\u8981\u62C9\u957F ${((hipY * 0.97 - LEG) * 1e3).toFixed(0)}mm\uFF0C\u7EB9\u7406\u4F1A\u88AB\u62C9\u4F38\u53D8\u5F62`);
+  console.log(`
+  \u2605 \u4E24\u4E2A\u90FD\u662F**\u9AA8\u67B6\u6539\u52A8**\uFF0C\u4F1A\u52A8\u5230\u539F\u59CB\u7D20\u6750\u7684\u6BD4\u4F8B \u2014\u2014 \u9700\u8981\u4F60\u51B3\u5B9A\u8D70\u54EA\u6761\u3002`);
+}
+console.log('\n=== \u91CD\u5FC3\u8F6C\u79FB\uFF1ACoM \u6A2A\u5411\u4F4D\u7F6E vs \u652F\u6491\u811A\uFF08\u7528\u6237\uFF1A\u7F3A\u4E4F"\u843D\u5730\u5E76\u8F6C\u79FB\u91CD\u5FC3"\uFF09===\n');
+console.log("   t(s)  \u652F\u6491\u811A  \u652F\u6491\u811Az   CoM.z    \u504F\u79FB     \u8F7D\u8377L/R     \u72B6\u6001");
+{
+  const sz = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  sz.begin(new Float32Array(sz.params.length));
+  const dl2 = new Float64Array(2);
+  let n = 0;
+  runCaptureTeacher(sk, sz, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL) => {
+    if (n++ % 10 !== 0) return;
+    const gL = footGrounded(sz.doll, "l"), gR = footGrounded(sz.doll, "r");
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    sz.doll.soleXZ("l", fbL);
+    sz.doll.soleXZ("r", fbR);
+    const stZ = stanceL ? fbL[1] : fbR[1];
+    const c2 = readCom(sz.doll, cTmp);
+    sz.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const [fL, fR] = sz.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    console.log(`  ${t.toFixed(2).padStart(5)}   ${stanceL ? "L" : "R"}    ${stZ.toFixed(3).padStart(6)}  ${c2.z.toFixed(3).padStart(6)}  ${(c2.z - stZ).toFixed(3).padStart(6)}   ${fL.toFixed(2)}/${fR.toFixed(2)}    \u652F\u6491${nG}`);
+  } });
+}
+console.log("\n=== \u91CD\u5FC3\u8F6C\u79FB\u7B26\u53F7\u9A8C\u8BC1\uFF08\u6F02\u79FB\u662F\u5426\u7531\u5B83\u9020\u6210\uFF09===\n");
+console.log("  \u914D\u7F6E              CoM.z \u7EC8\u503C    \u5B58\u6D3B    \u6362\u811A");
+for (const c of [
+  { n: "\u5F53\u524D\uFF08+\uFF09", p: {} },
+  { n: "kLat \u8D1F\u53F7", p: { kLat: -3.5 } },
+  { n: "kLat=0\uFF08\u65E0\u8F6C\u79FB\uFF09", p: { kLat: 0, kLatV: 0 } },
+  { n: "kLatV \u8D1F\u53F7", p: { kLatV: -1.2 } }
+]) {
+  const sw = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  sw.begin(new Float32Array(sw.params.length));
+  const rw = runCaptureTeacher(sk, sw, { ...FB, ...c.p }, { dur: 3, clockDriven: true });
+  const c3 = readCom(sw.doll, cTmp);
+  console.log(`  ${c.n.padEnd(18)} ${c3.z.toFixed(3).padStart(8)}   ${rw.t.toFixed(2)}s   ${rw.steps}`);
+}
+console.log('\n=== \u53CC\u811A\u6A2A\u5411\u4F4D\u7F6E z\uFF08\u7528\u6237\uFF1A"\u811A\u8E1D\u5411\u5185\u6536\u800C\u4E0D\u662F\u5411\u5916\u8FC8"\uFF09===\n');
+console.log("   t(s)   \u5DE6\u811Az    \u53F3\u811Az    \u95F4\u8DDD    \u9ACB\u95F4\u8DDD   \u6307\u4EE4(\u9ACB\u5916\u5C55)");
+{
+  const sz2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  sz2.begin(new Float32Array(sz2.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, sz2, FB, { dur: 3, clockDriven: true, onFrame: (t, _s, _p, _o, _c, _a2, dl) => {
+    if (m++ % 12 !== 0) return;
+    sz2.doll.soleXZ("l", fbL);
+    sz2.doll.soleXZ("r", fbR);
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${fbL[1].toFixed(3).padStart(7)}  ${fbR[1].toFixed(3).padStart(7)}  ${(Math.abs(fbL[1] - fbR[1]) * 1e3).toFixed(0).padStart(5)}mm  ${(2 * HIP_Z * 1e3).toFixed(0).padStart(5)}mm   z=${dl?.comZ ?? 0}`);
+  } });
+  console.log("\n  \u9ACB\u95F4\u8DDD\u5E94 \u2248 250mm\uFF08\u951A\u70B9 \xB10.125\uFF09\uFF1B\u9AA8\u67B6\u8E1D\u95F4\u8DDD 421mm\u3002");
+  console.log("  \u82E5\u53CC\u811A z \u6301\u7EED\u5411 0 \u9760\u62E2 \u21D2 \u8E1D\u5185\u6536\uFF0C\u6A2A\u5411\u652F\u6491\u9762\u6D88\u5931\u3002");
+}
+console.log("\n=== \u6A2A\u5411\u80FD\u529B\u4F53\u68C0 \u2550\u2550\u2550\n");
+console.log("  \u9ACB\u5916\u5C55(\u8F740)\u9650\u4F4D \xB145\xB0   \u819D\u5916\u5C55 \xB16\xB0\uFF08\u51E0\u4E4E\u9501\u6B7B\uFF09");
+console.log("  \u2605 IK \u662F**\u7EAF\u77E2\u72B6\u9762** ik(hipX,hipY,footX,footY) \u2014\u2014 \u6CA1\u6709 z \u8F93\u5165");
+console.log("    \u21D2 \u811A\u7684\u6A2A\u5411\u4F4D\u7F6E**\u5B8C\u5168\u7531\u9ACB\u5916\u5C55\u51B3\u5B9A**\uFF0C\u6CA1\u6709 IK \u53BB\u6446\u4F4D\u3002\n");
+console.log("   t(s)  \u9ACB\u5916\u5C55\u6307\u4EE4L  \u9ACB\u5916\u5C55\u6307\u4EE4R   \u5DE6\u811Az    \u53F3\u811Az   \u95F4\u8DDD");
+{
+  const sx = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 2.5, gaitHz: 1 / FB.T });
+  sx.begin(new Float32Array(sx.params.length));
+  let q = 0;
+  runCaptureTeacher(sk, sx, FB, { dur: 2.5, clockDriven: true, onFrame: (t, _s, _p, _o, _c, al) => {
+    if (q++ % 12 !== 0) return;
+    sx.doll.soleXZ("l", fbL);
+    sx.doll.soleXZ("r", fbR);
+    const l = Number(al?.["hip_l/0"] ?? 0) * 180 / Math.PI;
+    const r = Number(al?.["hip_r/0"] ?? 0) * 180 / Math.PI;
+    console.log(`  ${t.toFixed(2).padStart(5)}   ${l.toFixed(1).padStart(10)}\xB0  ${r.toFixed(1).padStart(10)}\xB0  ${fbL[1].toFixed(3).padStart(7)}  ${fbR[1].toFixed(3).padStart(7)}  ${(Math.abs(fbL[1] - fbR[1]) * 1e3).toFixed(0).padStart(4)}mm`);
+  } });
+  console.log("\n  \u5224\u8BFB\uFF1A\u82E5\u5916\u5C55\u6307\u4EE4\u4E0D\u5C0F\u4F46\u811A\u95F4\u8DDD\u4ECD\u22480 \u21D2 \u5916\u5C55\u88AB\u77E2\u72B6\u9762 IK \u62B5\u6D88\uFF08\u811A\u88AB\u62C9\u56DE\u7AD6\u76F4\u5E73\u9762\uFF09");
+}
+console.log("\n=== \u7740\u5730\u68C0\u6D4B + \u91CD\u5FC3\u8F6C\u79FB\u9636\u6BB5\uFF08\u6587\u732E\u9608\u503C\uFF09===\n");
+console.log("  u91cdu5fc3u8f6cu79fbu7a97 134~207 msuff08Frontiers 2022uff09uff1bAPA u5148u53cdu5411u9884u5907");
+{
+  const se2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  se2.begin(new Float32Array(se2.params.length));
+  const trL = new LegEventTracker(), trR = new LegEventTracker();
+  let tl = "";
+  let lastT = 0;
+  runCaptureTeacher(sk, se2, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL) => {
+    const dt = 1 / DEFAULT_SIM.controlHz;
+    const evL = trL.step(footGrounded(se2.doll, "l"), ...[, se2.doll.footLoadFrac(dt)[0]], se2.doll.soleY("l"), dt);
+    const eR2 = trR.step(footGrounded(se2.doll, "r"), se2.doll.footLoadFrac(dt)[1], se2.doll.soleY("r"), dt);
+    const ev = stanceL ? evL : eR2;
+    if (ev) {
+      tl += `${ev}@${t.toFixed(2)}s `;
+      lastT = t;
+    }
+    if (Math.abs(t - lastT) > 0.12 && t < 3) {
+      console.log(`  t=${t.toFixed(2)}s  \u652F\u6491${stanceL ? "L" : "R"}  ${stanceL ? trL.progress : trR.progress}`);
+      lastT = t;
+    }
+  } });
+  console.log(`
+  \u4E8B\u4EF6\u5E8F\u5217\uFF1A${tl || "\uFF08\u6CA1\u6709\u4EFB\u4F55\u4E8B\u4EF6\u89E6\u53D1\uFF09"}`);
+}
+console.log("\n=== \u2460 \u8FC8\u51FA\u7684\u817F\u80FD\u627F\u91CD\u5417\uFF1F\uFF08\u521A\u4F53\u81EA\u5DF1\u8BB0\u7684\u9A6C\u8FBE\u51B2\u91CF vs \u60F3\u8981\u7684\u529B\u77E9\uFF09===\n");
+console.log("  \u5173\u8282      \u60F3\u8981\u529B\u77E9   \u5B9E\u9645\u51B2\u91CF   \u6BD4\u503C    \u58F0\u660E\u4E0A\u9650   \u7528\u6EE1?");
+{
+  const sm = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 2.5, gaitHz: 1 / FB.T });
+  sm.begin(new Float32Array(sm.params.length));
+  const dem = new Float64Array(sm.doll.jointCount * 3);
+  const imp = new Float64Array(sm.doll.jointCount * 3);
+  const cnt = new Float64Array(sm.doll.jointCount * 3);
+  runCaptureTeacher(sk, sm, FB, { dur: 2.5, clockDriven: true, onFrame: () => {
+    for (let i = 0; i < dem.length; i++) {
+      if (Math.abs(sm.doll.motorDemand[i]) > Math.abs(dem[i])) dem[i] = sm.doll.motorDemand[i];
+      if (Math.abs(sm.doll.motorImpulse[i]) > Math.abs(imp[i])) imp[i] = sm.doll.motorImpulse[i];
+      cnt[i]++;
+    }
+  } });
+  for (const nm of ["hip_l", "hip_r", "knee_l", "knee_r", "foot_l", "foot_r"]) {
+    const i = JOINT_ORDER.indexOf(nm);
+    if (i < 0) continue;
+    const j = sk.joints[i];
+    for (const [ax, lbl] of [[2, "\u5C48\u4F38"], [0, "\u5916\u5C55"]]) {
+      const k = i * 3 + ax;
+      const d = dem[k], mI = imp[k];
+      const dt = 1 / DEFAULT_SIM.physicsHz;
+      const m = mI / dt;
+      const cap = j.maxTorque[ax];
+      const ratio = Math.abs(d) > 1e-6 ? Math.abs(m) / Math.abs(d) : 1;
+      const use = Math.abs(m) / cap;
+      console.log(`  ${nm.padEnd(7)}${lbl}  ${d.toFixed(1).padStart(8)}  ${m.toFixed(1).padStart(8)}  ${ratio.toFixed(2).padStart(5)}   ${cap.toFixed(0).padStart(7)}   ${use > 0.8 ? "\u2713 \u7528\u6EE1" : use > 0.3 ? "\u25B3 " + (100 * use).toFixed(0) + "%" : "\u2717 \u53EA\u7528\u4E86 " + (100 * use).toFixed(0) + "%"}`);
+    }
+  }
+  console.log("\n  \u5224\u8BFB\uFF1A\u300C\u6BD4\u503C\u300D\u226A1 \u21D2 \u88AB\u7A33\u5B9A\u6027\u62A4\u680F\u524A\u6389\uFF08\u4E0D\u6562\u7528\u529B\uFF09\uFF1B\u6BD4\u503C\u22481 \u4F46\u5B9E\u9645\u226A\u4E0A\u9650 \u21D2 \u5173\u8282\u6CA1\u529B\u6C14\u3002");
+  console.log("        \u300C\u7528\u6EE1?\u300D\u2717 \u21D2 \u5173\u8282\u51E0\u4E4E\u6CA1\u51FA\u529B \u21D2 \u5B83\u6839\u672C\u6491\u4E0D\u4F4F\u4F53\u91CD\u3002");
 }

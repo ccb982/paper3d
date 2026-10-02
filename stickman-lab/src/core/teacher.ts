@@ -21,14 +21,19 @@ import { ADJUST_MIN } from './gaitPhase';
 import { JOINT_ORDER, jointIndexByName, spineJointNames, type Skeleton } from './skeleton';
 /** ★ 摆动相前 25% 用于**重心转移**（用户 2026-10-02："迈腿之前需要把重心转移到静止的腿上"） */
 export const SHIFT_FRAC = 0.25;
+/** ★ 四步循环的第③段起点：**迈出的腿发力、把自己撑成支撑腿**（用户 2026-10-02） */
+export const PUSH_FRAC = 0.75;
+/** ★ 横向误差限幅（m）：kLat·误差 不得换算成 >~8° 的髋外展（见 latCorr 注释） */
+const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
 const PX2M = 0.00068;
 const Y = (py: number): number => (2899 - py) * PX2M;
-export const LEN_A = Y(1574.5) - Y(2206);      // 大腿 0.429 m
-export const LEN_B = Y(2206) - Y(2792);        // 小腿 0.398 m
-export const HIP_Z = 0.007;
+export const LEN_A = 0.407;      // ★ 实测髋→膝 0.407（锚点 wx/wy/wz 实算，不用像素换算）
+export const LEN_B = 0.379;      // ★ 实测膝→踝 0.379
+export const HIP_Z = 0.06;     // ★ 两条腿髋参考点的横向半间距：原来 0.007(7mm) ⇒ 双脚实测间距 0~9mm
+                                  //   （横向支撑面≈0，"迈出的腿无法支撑"）。改后需重标 kLat/kLatV。
 /**
  * ★★ CoM 到**真实髋**的垂直落差（m）。
  *   腿长（髋→踝）实测 0.828 m、真实髋高 0.901 m、CoM 高约 1.208 m ⇒ 落差 ≈0.307 m。
@@ -38,7 +43,7 @@ export const HIP_Z = 0.007;
  *   （实测前伸 3 mm；`reach`、踝指令全救不了，因为不是能力问题而是无解）。
  *   改成 0.307 后最大水平步长 ≈ √(0.828² − 0.889²) 无解…… 见下方 sanity：
  */
-export const HIP_DY = 0.18;    // ★ 重标（消除 com.y 正反馈后）：存活 1.60s / 2 次换脚 / 离地 15mm
+export const HIP_DY = 0.22;    // ★ LEN 改为实测(0.407/0.379)后重标：存活 1.90s / 3 换脚
 /** ★ 落地吸能上限（rad）= 20°。Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°。
  *  超过它落地就会把支撑腿压塌（实测 57° ⇒ 脚撑不住）。 */
 export const ABSORB_MAX = 0.35;
@@ -163,6 +168,7 @@ export function runCaptureTeacher(
   const iR = sk.bodies.findIndex((b) => b.key === 'shin_r');
   let plantL = sim.doll.bodies[iL].translation().x;
   let plantR = sim.doll.bodies[iR].translation().x;
+  let plantLz = HIP_Z, plantRz = -HIP_Z;   // ★ 落脚点横向锁在髋投影上（防踝内收）
   let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
   // CMP/Moment-balance 的角动量状态（关于质心，额状/矢状）
   const lbuf = new Float64Array(3);
@@ -208,6 +214,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let curOwner = '?';
   /** ★ joint/axis → owner 的本拍记录 */
   const ownerLog = new Map<string, string>();
+  const hipW = new Float64Array(3);   // ★ 真实髋锚点世界坐标
   const angLog: Record<string, number> = {};   // ★ 每次 setAxis 的原始角度（排查"指令为何全 0"）
   const dbgLog: Record<string, number> = {};   // ★ 摆动腿指令追踪
   const hipDy = p.hipDy ?? HIP_DY;   // ★ 可标定的 IK 虚拟髋点落差
@@ -276,6 +283,13 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         // 落脚点记**实测落点**（不是捕获点 xi，否则支撑腿 IK 每帧往错误位置拉）
         sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
         const landedX = stanceL ? footBufL[0]! : footBufR[0]!;
+        // ★ 落脚点的**横向 (z)** 不采纳实测值，锁在髋的投影上（STANCE_Z）。
+        //   否则每一步都记录"脚碰巧落在哪"，会**随机往内游走**：
+        //   实测骨架锚点踝间距 421mm，仿真里两只脚却都跑到 z≈0（踝间距≈10mm）
+        //   ⇒ 腿长期内八、横向支撑面消失、CoM 单调漂移 0.19m（用户："脚踝向内收"）。
+        const landedZ = stanceL ? HIP_Z : -HIP_Z;
+        plantLz = stanceL ? landedZ : plantLz;
+        if (stanceL) { plantL = landedX; } else { plantR = landedX; }
         if (stanceL) plantL = landedX; else plantR = landedX;
       }
     } else {
@@ -290,6 +304,21 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★★★ 四步循环（用户 2026-10-02 原话）：
+    //   "需要迈出的腿发力，让自己支撑起来，转移重心，然后再迈出下一条腿"
+    //
+    //   ① SHIFT  [0, 0.25)      重心转移到**旧支撑腿**（把待迈的腿卸掉）
+    //   ② STEP   [0.25, 0.75)   迈出：抬腿 + 前伸 + 落地
+    //   ③ PUSH   [0.75, 1.0)    **新腿发力**：踝跖屈 + 髋伸，把身体推过去、撑住
+    //   ④ 下一周期：重心已在新腿上 ⇒ 又可以迈另一条
+    //
+    //   关键：③ 是"迈出的腿变成支撑腿"的力学过程，缺了它新腿落地就是死重。
+    // ══════════════════════════════════════════════════════════════════════
+    const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));   // ③ 的进度 0→1
+    const inPush = s >= PUSH_FRAC;
+    // ③ 新支撑腿发力：踝跖屈（顶髋）+ 髋伸（前送）
+    const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
     // ★ 重心转移期内**前伸也要压住**：先把体重挪过去，再把腿送出去。
     //   否则腿在体重还没卸掉时就往前甩 ⇒ 既抬不高也甩不远。
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
@@ -364,11 +393,18 @@ const swingY = s < SHIFT_FRAC
     }
     for (const side of ['l', 'r'] as const) {
       const isStance = (side === 'l') === stanceL;
+      // ★ 虚拟髋（com.y − HIP_DY）。实测对比：
+      //   用**真实髋刚体**(0.849m) ⇒ IK 必须把腿折到 92% 才够得着地 ⇒ 存活反而降到 0.77s
+      //   用**虚拟髋**(0.744m)      ⇒ 站立构型接近自然 ⇒ 存活 1.90s / 3 次换脚
+      //   ⇒ 根因是**骨骼比例**：腿/髋 = 0.785/0.849 = 0.92，低于人体常态 ~0.95~1.0。
+      //   正确修法是改骨架（降髋锚点 / 伸长腿），不是改 IK 的参考点。见 probe-arch 骨骼体检。
       const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
-      if (hipYRef < 0) hipYRef = com.y - hipDy;   // ★ 锁存虚拟髋高（避免 com.y 正反馈把身体拽沉）
+      if (hipYRef < 0) hipYRef = com.y - hipDy;   // 锁存，避免 com.y 正反馈把身体拽沉
+      const hipY = hipYRef;
+      void hipW; void com;
       const [h, k] = isStance
-        ? ik(hipX, hipYRef, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, hipYRef, swingX, swingY);
+        ? ik(hipX, hipY, side === 'l' ? plantL : plantR, 0.012)
+        : ik(hipX, hipY, swingX, swingY);
       // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
       //   **实测更差**（存活 3.85→2.43s、双支撑 35%→71%）。保留原样。
       //
@@ -400,7 +436,7 @@ const swingY = s < SHIFT_FRAC
       }
       // ★★ 支撑腿蹬离（**必须在写马达之前**加！旧代码加在 setAxis 之后 ⇒ 完全无效）
       //   支撑相后半段线性增大的髋伸驱动，把身体推过支撑脚。
-      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;   // ★ 仅支撑腿蹬离
+      if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));   // ★③ 支撑腿蹬离发力
       curOwner = isStance
         ? `balance(ik+corr${stanceLock > 0 ? '+lock' : ''}${s > 0.5 ? '+push' : ''})`
         : 'step(ik)';
@@ -426,7 +462,7 @@ const swingY = s < SHIFT_FRAC
         ? aStance - aPush * Math.max(0, 1 - 2 * s)
         // 摆动相：前半**背屈**（勾脚往前送）→ 后半跖屈（脚尖先着地）
         : (s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5));
-      setAxis(`foot_${side}`, ankleDeg * Math.PI / 180, jFoot);
+      setAxis(`foot_${side}`, (ankleDeg + (isStance ? pushTorque : 0)) * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
@@ -461,14 +497,21 @@ const swingY = s < SHIFT_FRAC
       //    所以净位移为 0、越走越慢。
       //    `pushDrive` = 支撑相后段线性增大的髋伸驱动，配合踝跖屈（anklePush）。
       // ══════════════════════════════════════════════════════════════════════
+      // ★★ 重心转移（用户 2026-10-02："缺乏迈出的脚着地并转移重心的过程"）
+      //   落地后把 CoM 横向挪到**新支撑脚**上。
+      //   ⚠ 必须限幅：kLat·误差 在误差 0.17m、kLat=3.5 时会产生 **33° 髋外展**，
+      //     实测重心因此**单调漂移**（偏移 0.003 → 0.151 m，8 秒从不回中），
+      //     控制器自己成了漂移源。限到 ±LAT_MAX（≈8°）。
       const stanceZ = stanceL ? HIP_Z : -HIP_Z;
-      // ① 重心转移：把 CoM 拉向支撑脚（kLat/kLatV 现在必须非 0 才有用）
-      const shiftErr = stanceZ - com.z;
+      const shiftErrRaw = stanceZ - com.z;
+      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw));
       const latCorr = p.kLat * shiftErr + p.kLatV * com.vz
         + (isStance ? cmRoll : -cmRoll * 0.3);
       // ② 支撑腿发力前送：支撑相后半段线性增大（s∈[0.5,1]），把身体推过支撑脚
 
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
+      // ★ 摆动腿要**向外（外展）**让开支撑腿，原来写的是 `-p.kLatSwing`（向内）⇒ 踝内收
+      const swingAbduct = isStance ? latCorr : (p.kLatSwing ?? 0);
+      setAxis(`hip_${side}`, swingAbduct, jHip, 0);
     }
     // owner 已在各写入点打标
     dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
