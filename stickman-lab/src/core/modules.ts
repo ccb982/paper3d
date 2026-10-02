@@ -53,7 +53,14 @@ interface Def {
 export const MODULES: readonly Def[] = [
   { id: 'loadShift', label: '载荷转移', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },
   { id: 'altSwitch', label: '换支撑脚', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },
-  { id: 'singleSupport', label: '单支撑时长', part: 'body', phases: ['step', 'adjust'], singleOnly: true },
+  // ★★ 相位放开为 **全部三相**（2026-10-02，站立模式必需）。
+  //   原来只 `['step','adjust']`，于是**站立模式下 `gp.now` 几乎永远是 `both`**
+  //   ⇒ `mod.active('singleSupport', ...)` 恒 false ⇒ `accSingle` 恒 −0.001
+  //   ⇒ 站立模式的**主项是死的** ⇒ 12 代收敛到"两脚着地 359/360 帧"的退化解
+  //   （实测：把 `single` 权重提到 3.0、把 `quiet` 归零，数字**一位不变**）。
+  //   单腿站立本来就不属于任何"迈步相位"，它的判据就是几何接触（一脚离地），
+  //   与相位无关 ⇒ 相位门控在这里没有意义，反而把奖励关掉了。
+  { id: 'singleSupport', label: '单支撑时长', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: true },
   { id: 'cycle', label: '迈步→调整循环', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },
   { id: 'stillSwing', label: '摆动相身体冻结', part: 'body', phases: ['step'], singleOnly: true },
   { id: 'balance', label: 'WBAM/MoS 平衡', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },

@@ -14842,7 +14842,14 @@ var GaitPhaseMachine = class {
 var MODULES = [
   { id: "loadShift", label: "\u8F7D\u8377\u8F6C\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "altSwitch", label: "\u6362\u652F\u6491\u811A", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["step", "adjust"], singleOnly: true },
+  // ★★ 相位放开为 **全部三相**（2026-10-02，站立模式必需）。
+  //   原来只 `['step','adjust']`，于是**站立模式下 `gp.now` 几乎永远是 `both`**
+  //   ⇒ `mod.active('singleSupport', ...)` 恒 false ⇒ `accSingle` 恒 −0.001
+  //   ⇒ 站立模式的**主项是死的** ⇒ 12 代收敛到"两脚着地 359/360 帧"的退化解
+  //   （实测：把 `single` 权重提到 3.0、把 `quiet` 归零，数字**一位不变**）。
+  //   单腿站立本来就不属于任何"迈步相位"，它的判据就是几何接触（一脚离地），
+  //   与相位无关 ⇒ 相位门控在这里没有意义，反而把奖励关掉了。
+  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["both", "step", "adjust"], singleOnly: true },
   { id: "cycle", label: "\u8FC8\u6B65\u2192\u8C03\u6574\u5FAA\u73AF", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
   { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
@@ -15133,6 +15140,19 @@ var WALK_REWARD_KEYS = [
   "energy",
   "survive"
 ];
+var STAND_W = {
+  alive: 1,
+  // 存活（s）
+  single: 3,
+  // ★主项：恰好一脚着地的时间积分
+  upright: 0.8,
+  // 躯干直立
+  height: 1.2,
+  // 高度不塌
+  lateral: 6,
+  // 侧向不漂（单腿时权重调高）
+  tiltRate: 0.05
+};
 var DEFAULT_SIM = {
   physicsHz: 120,
   controlHz: 60,
@@ -15272,6 +15292,7 @@ var W = {
   balance: 2,
   fall: 2
 };
+var STAND_BOTH_FEET = 1.5;
 var ZERO2 = { x: 0, y: 0, z: 0 };
 var Sim = class {
   /** ★ 每次 begin() 都会整世界重建（原因见 buildWorld），所以别在外部长期持有 */
@@ -15978,6 +15999,9 @@ var Sim = class {
     if (this.mod.active("singleSupport", this.gp.now, nGround, null))
       this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+    if (this.cfg.mode === "stand" && nGround === 2) {
+      this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+    }
     {
       const clr = Math.max(this.airPeakL, this.airPeakR);
       const mosHere = this.lastMosX;
@@ -16243,6 +16267,26 @@ var Sim = class {
    */
   fitnessTerms(fallen, elapsed) {
     const w = this.w;
+    if (this.cfg.mode === "stand") {
+      const sw = STAND_W;
+      const ts = {};
+      ts.alive = sw.alive * elapsed;
+      ts.single = sw.single * this.accSingle;
+      ts.upright = sw.upright * (this.accUpright - elapsed);
+      ts.height = -sw.height * this.accHeight;
+      ts.lateral = -sw.lateral * this.accLateral;
+      ts.tiltRate = -sw.tiltRate * this.accMoveSum;
+      ts.quiet = 0;
+      ts.velTrack = 0;
+      ts.lift = 0;
+      ts.jointMove = 0;
+      ts.jointMotion = 0;
+      ts.actRate = 0;
+      ts.torque = 0;
+      ts.yawTrack = 0;
+      ts.total = Object.values(ts).reduce((a, b) => a + b, 0);
+      return ts;
+    }
     if (this.cfg.mode === "walk") {
       const tt = {};
       const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);
@@ -18065,20 +18109,22 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log("\n=== \u62C6\u5F00\u4E09\u91CD\u53CD\u9988\u540E\uFF1A\u9ACB\u76F4\u7ACB\u521A\u5EA6\u91CD\u626B ===\n");
-console.log("  kHipUpright  \u9ACB\u5C48\u5CF0\xB0  \u8EAF\u5E72\u503E\xB0  \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u5B58\u6D3B   \u5355\u652F\u6491\u5E27");
-for (const ku of [0, 0.6, 1.2, 2.5, 5, 10]) {
-  const fH2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
-  fH2.begin(new Float32Array(fH2.params.length));
-  const iHr5 = jointIndexByName(sk, "hip_r");
+console.log("\n=== \u8E1D\u529B\u77E9\u4E0A\u9650\u626B\u63CF\uFF08\u6B64\u524D \xD79 \u65E0\u6548\uFF0C\u73B0\u5DF2\u6709\u9650\u4F4D+VIP\u9A71\u52A8\uFF0C\u91CD\u6D4B\uFF09===\n");
+console.log("  \u8E1D\u4E0A\u9650  \u9ACB\u5C48\u5CF0\xB0 \u8EAF\u5E72\u503E\xB0 \u672BCoM\u524D\u540E \u672BCoM\u4FA7\u79FB \u5B58\u6D3B   \u5355\u652F\u6491\u5E27");
+for (const mt of [45, 80, 120, 160, 220]) {
+  const skA2 = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt });
+  const fA2 = new Sim(skA2, shapeForJoints(skA2.joints.length), { ...DEFAULT_SIM, mode: "stand", duration: 5, gaitHz: 1 / FB.T });
+  fA2.begin(new Float32Array(fA2.params.length));
+  const iHr6 = jointIndexByName(skA2, "hip_r");
   let hipPk = 0, tPk = 0, ss = 0, cx = 0, cz = 0;
-  const rH2 = runCaptureTeacher(sk, fH2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: ku }, { dur: 5, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: () => {
-    hipPk = Math.max(hipPk, Math.abs(fH2.doll.jointAngle(iHr5)) * 57.3);
-    tPk = Math.max(tPk, fH2.doll.tiltOf(fH2.doll.torso()));
-    const cC = readCom(fH2.doll, cTmp);
-    cx = cC.x;
-    cz = cC.z;
-    if (!(footGrounded(fH2.doll, "l") && footGrounded(fH2.doll, "r"))) ss++;
+  const rA2 = runCaptureTeacher(skA2, fA2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6 }, { dur: 5, clockDriven: true, singleLeg: "r", liftHold: 0.25, onFrame: () => {
+    hipPk = Math.max(hipPk, Math.abs(fA2.doll.jointAngle(iHr6)) * 57.3);
+    tPk = Math.max(tPk, fA2.doll.tiltOf(fA2.doll.torso()));
+    const cD = readCom(fA2.doll, cTmp);
+    cx = cD.x;
+    cz = cD.z;
+    if (!(footGrounded(fA2.doll, "l") && footGrounded(fA2.doll, "r"))) ss++;
   } });
-  console.log(`  ${ku.toFixed(1).padStart(10)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rH2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
+  console.log(`  ${String(mt).padStart(5)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rA2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
 }
+console.log('\n  \u5224\u8BFB\uFF1A\u82E5 45\u2192220 \u80FD\u628A\u5B58\u6D3B\u63A8\u5230 3s \u21D2 \u4E4B\u524D"\u8E1D\u65E0\u529B"\u662F\u529B\u77E9\u4E0A\u9650\u95EE\u9898\uFF0C\u5DF2\u89E3\u3002');

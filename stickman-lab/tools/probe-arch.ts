@@ -905,18 +905,20 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log('\n=== 拆开三重反馈后：髋直立刚度重扫 ===\n');
-console.log('  kHipUpright  髋屈峰°  躯干倾°  末CoM前后 末CoM侧移 存活   单支撑帧');
-for (const ku of [0, 0.6, 1.2, 2.5, 5.0, 10.0]) {
-  const fH2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
-  fH2.begin(new Float32Array(fH2.params.length));
-  const iHr5 = jointIndexByName(sk, 'hip_r');
+console.log('\n=== 踝力矩上限扫描（此前 ×9 无效，现已有限位+VIP驱动，重测）===\n');
+console.log('  踝上限  髋屈峰° 躯干倾° 末CoM前后 末CoM侧移 存活   单支撑帧');
+for (const mt of [45, 80, 120, 160, 220]) {
+  const skA2 = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt } as never);
+  const fA2 = new Sim(skA2, shapeForJoints(skA2.joints.length), { ...DEFAULT_SIM, mode: 'stand' as never, duration: 5, gaitHz: 1 / FB.T });
+  fA2.begin(new Float32Array(fA2.params.length));
+  const iHr6 = jointIndexByName(skA2, 'hip_r');
   let hipPk = 0, tPk = 0, ss = 0, cx = 0, cz = 0;
-  const rH2 = runCaptureTeacher(sk, fH2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: ku }, { dur: 5, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
-    hipPk = Math.max(hipPk, Math.abs(fH2.doll.jointAngle(iHr5)) * 57.3);
-    tPk = Math.max(tPk, fH2.doll.tiltOf(fH2.doll.torso()));
-    const cC = readCom(fH2.doll, cTmp); cx = cC.x; cz = cC.z;
-    if (!(footGrounded(fH2.doll, 'l') && footGrounded(fH2.doll, 'r'))) ss++;
+  const rA2 = runCaptureTeacher(skA2, fA2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6 }, { dur: 5, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
+    hipPk = Math.max(hipPk, Math.abs(fA2.doll.jointAngle(iHr6)) * 57.3);
+    tPk = Math.max(tPk, fA2.doll.tiltOf(fA2.doll.torso()));
+    const cD = readCom(fA2.doll, cTmp); cx = cD.x; cz = cD.z;
+    if (!(footGrounded(fA2.doll, 'l') && footGrounded(fA2.doll, 'r'))) ss++;
   } });
-  console.log(`  ${ku.toFixed(1).padStart(10)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rH2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
+  console.log(`  ${String(mt).padStart(5)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rA2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
 }
+console.log('\n  判读：若 45→220 能把存活推到 3s ⇒ 之前"踝无力"是力矩上限问题，已解。');

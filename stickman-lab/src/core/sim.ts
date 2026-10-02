@@ -63,6 +63,31 @@ const WALK_REWARD_KEYS: readonly string[] = [
 
 export type SimMode = 'walk' | 'fight' | 'stand';
 
+/**
+ * ★★ **站立模式专用权重**（2026-10-02）。
+ *   目标：**单腿站立存活 ≥ 3 s**（用户："先优化算法，保证单腿能坚持 3s 以上，
+ *   然后再写迈腿算法"）。
+ *
+ *   设计原则（每条都对应一次实测）：
+ *   · `single` 是**主项** —— 这个模式的存在理由就是"金鸡独立"。
+ *     第一版把它当软加分（walk 权重 2.5，但 `quiet` 同时在白拿）⇒
+ *     12 代收敛到"两脚着地 359/360 帧"的退化解。
+ *   · `quiet` **归零** —— "少动"就是"不动"的直接成因，去掉它退化解才不划算。
+ *   · `alive` 足够大 ⇒ "倒"与"不动"变成**真取舍**：只有抬腿才能拿 single，
+ *     但抬腿更容易倒 ⇒ 优化器必须真的去学"怎么单腿站住"，而不是原地罚分。
+ *   · `lateral` 给足权重 —— 单腿时额状面支撑面只剩一只脚（Liu 2012），
+ *     侧向漂移是主要的倒法。
+ */
+export const STAND_W = {
+  alive: 1.0,      // 存活（s）
+  single: 3.0,     // ★主项：恰好一脚着地的时间积分
+  upright: 0.8,    // 躯干直立
+  height: 1.2,     // 高度不塌
+  lateral: 6.0,    // 侧向不漂（单腿时权重调高）
+  tiltRate: 0.05,
+} as const;
+
+
 export interface SimConfig {
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
   physicsHz: number;
@@ -304,6 +329,11 @@ export const W = {
   fall: 2.0,
 } as const;
 
+/** 站立模式：**两脚都着地**的每秒罚分。双脚站立必须是"贵"的，
+ *  否则退化解（两脚着地 + 不动）永远最优（实测 12 代每一位不变）。 */
+export const STAND_BOTH_FEET = 1.5;
+
+/** 奖励权重表 = `W` 的数值类型（UI 滑块/配置用 `Partial<FitnessWeights>` 覆盖） */
 export type FitnessWeights = typeof W;
 
 const ZERO = { x: 0, y: 0, z: 0 };
@@ -1014,6 +1044,17 @@ export class Sim {
     if (this.mod.active('singleSupport', this.gp.now, nGround, null))
       this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+    // ★★★ 站立模式：**两脚都着地必须罚**（2026-10-02）。
+    //   原来的实现里 `nGround===2` 既不奖也不罚 ⇒ **双脚站立是免费的**
+    //   ⇒ 12 代实测每一代都是 `2脚=359 / accSingle=-0.001`，
+    //     连把 `single` 权重提到 3.0、把 `quiet` 归零、甚至把
+    //     `singleSupport` 模块的相位放开为三相，数字都**一位不变**
+    //     —— 因为惩罚压根不存在，退化解永远是最优解。
+    //   注意：`walkReward.ts` 的注释写着"两脚都着地 −0.15 是实测逼出来的"，
+    //   但那段逻辑**从来没写进 sim.ts**，注释与实现不符（踩过一次的坑）。
+    if (this.cfg.mode === 'stand' && nGround === 2) {
+      this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+    }
 
     // ══════ ★★ 文献步态参考分 + 盆骨优先（用户 2026-10-02）══════════════
     //  只在**真单支撑帧**给分：站着不动 / 两脚都在地上 ⇒ 一分不给。
@@ -1365,36 +1406,34 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
    */
   private fitnessTerms(fallen: boolean, elapsed: number): Record<string, number> {
     const w = this.w;
-    if (this.cfg.mode === 'stand') {
-      // ══════ ★★★ **站立模式：只奖稳定，不奖任何运动**（用户 2026-10-02）
+if (this.cfg.mode === 'stand') {
+      // ══════ ★★★ **站立模式：目标 = 单腿站立存活 ≥ 3 s**（用户 2026-10-02）
       //
-      //   "金鸡独立做好也行啊，我需要能快速收敛出能保持稳定的代码，
-      //    然后再去调前进" / "现在的情况是连持续保持稳定都做不到"
+      //   "先优化算法，保证单腿能坚持 3s 以上，然后再写迈腿算法"
       //
-      //   为什么必须单列一套（12 代实测训练发现的硬问题）：
-      //     `WALK_TERMS` 里**三项**正向奖励在主动破坏稳定：
-      //       velTrack (+1.0)  要它以 0.5 m/s 往前冲
-      //       lift     (+1.0)  要它把脚抬起来
-      //       jointMove(+1.0)  要它关节动
-      //     合计 **+3.0 全在拆台**，惩罚项 −5.3 扳不回来
-      //     ⇒ 12 代实测存活只有 **0.79~0.84 s**、jointMove 0.07（几乎不动）
-      //       —— 训练收敛到了"几乎静止"，而不是"稳定站立"。
+      //   ── 第一版的实测退化解（12 代）──────────────────────────────
+      //     `存活 100%（alive=1.000，5.79 s）`，但接地帧是
+      //       0脚=1  1脚=0  **2脚=359**
+      //     ⇒ 它找到了"**两脚着地、纹丝不动**"这个退化解：
+      //       不倒 ⇒ 拿满存活分；不动 ⇒ 不吃任何惩罚；`accSingle=-0.001` 几乎不罚。
+      //     原因：`quiet`（少动）在各项里最容易被白拿，而 `single` 只是软加分。
       //
-      //   本模式只保留**稳定性相关**的项，前进/抬腿/关节运动全部置 0。
-      //   收敛会快，因为没有任何一项在跟"别倒"对着干。
+      //   ── 修法：把"单腿"从软奖励改成**硬门控** ────────────────────
+      //     ① `single` 提到**主项**（它是这个模式的存在理由）
+      //     ② `quiet` 归零 —— 它就是"不动"的直接成因，必须去掉
+      //     ③ `alive` 权重足以压住其他项 ⇒ 宁可不动也不倒时，会去尝试抬腿
+      //        （因为只有抬腿才能拿 single），于是"倒"与"不动"的取舍变成真取舍
+      //     ④ 惩罚项（upright/height/lateral）保留，把"歪着单脚站"也堵掉
+      const sw = STAND_W;
       const ts: Record<string, number> = {};
-      const w = this.w;
-      ts.alive = elapsed;                            // ① 不倒：存活时间
-      ts.upright = w.upright * (this.accUpright - elapsed);   // ② 躯干直立
-      ts.height = -w.height * this.accHeight;        // ③ 高度不塌
-      ts.lateral = -w.lateral * this.accLateral;      // ④ 侧向不漂（单腿时给足权重）
-      // ⑤ 别翻滚：∫(ωx²+ωz²) —— 没有现成累加器，用 accMoveSum 的近亲：
-    //    这里退化为"关节角速度平方和"的量级代理（accMoveSum 本身已按 MOVE_JOINTS 归一）
-    ts.tiltRate = -w.tiltRate * this.accMoveSum;
-      ts.single = w.single * this.accSingle;          // ⑥ 恰好一脚着地（金鸡独立）
-      ts.quiet = -this.accMoveSum;                    // ⑦ 少动：关节别乱抖（★关键项）
-      // 站立不需要的项：显式置 0（保留通道，方便以后逐步放开）
-      ts.jointMove = 0; ts.lift = 0; ts.velTrack = 0;
+      ts.alive = sw.alive * elapsed;                      // ① 不倒
+      ts.single = sw.single * this.accSingle;              // ② ★主项：恰好一脚着地
+      ts.upright = sw.upright * (this.accUpright - elapsed);
+      ts.height = -sw.height * this.accHeight;
+      ts.lateral = -sw.lateral * this.accLateral;
+      ts.tiltRate = -sw.tiltRate * this.accMoveSum;
+      // 明确置 0 的项（保留通道，以后调迈步时再放开）
+      ts.quiet = 0; ts.velTrack = 0; ts.lift = 0; ts.jointMove = 0;
       ts.jointMotion = 0; ts.actRate = 0; ts.torque = 0; ts.yawTrack = 0;
       ts.total = Object.values(ts).reduce((a, b) => a + b, 0);
       return ts;

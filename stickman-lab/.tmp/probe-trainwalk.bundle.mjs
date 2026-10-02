@@ -14833,7 +14833,14 @@ var GaitPhaseMachine = class {
 var MODULES = [
   { id: "loadShift", label: "\u8F7D\u8377\u8F6C\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "altSwitch", label: "\u6362\u652F\u6491\u811A", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["step", "adjust"], singleOnly: true },
+  // ★★ 相位放开为 **全部三相**（2026-10-02，站立模式必需）。
+  //   原来只 `['step','adjust']`，于是**站立模式下 `gp.now` 几乎永远是 `both`**
+  //   ⇒ `mod.active('singleSupport', ...)` 恒 false ⇒ `accSingle` 恒 −0.001
+  //   ⇒ 站立模式的**主项是死的** ⇒ 12 代收敛到"两脚着地 359/360 帧"的退化解
+  //   （实测：把 `single` 权重提到 3.0、把 `quiet` 归零，数字**一位不变**）。
+  //   单腿站立本来就不属于任何"迈步相位"，它的判据就是几何接触（一脚离地），
+  //   与相位无关 ⇒ 相位门控在这里没有意义，反而把奖励关掉了。
+  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["both", "step", "adjust"], singleOnly: true },
   { id: "cycle", label: "\u8FC8\u6B65\u2192\u8C03\u6574\u5FAA\u73AF", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
   { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
@@ -15124,6 +15131,19 @@ var WALK_REWARD_KEYS = [
   "energy",
   "survive"
 ];
+var STAND_W = {
+  alive: 1,
+  // 存活（s）
+  single: 3,
+  // ★主项：恰好一脚着地的时间积分
+  upright: 0.8,
+  // 躯干直立
+  height: 1.2,
+  // 高度不塌
+  lateral: 6,
+  // 侧向不漂（单腿时权重调高）
+  tiltRate: 0.05
+};
 var DEFAULT_SIM = {
   physicsHz: 120,
   controlHz: 60,
@@ -15263,6 +15283,7 @@ var W = {
   balance: 2,
   fall: 2
 };
+var STAND_BOTH_FEET = 1.5;
 var ZERO2 = { x: 0, y: 0, z: 0 };
 var Sim = class {
   /** ★ 每次 begin() 都会整世界重建（原因见 buildWorld），所以别在外部长期持有 */
@@ -15969,6 +15990,9 @@ var Sim = class {
     if (this.mod.active("singleSupport", this.gp.now, nGround, null))
       this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+    if (this.cfg.mode === "stand" && nGround === 2) {
+      this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+    }
     {
       const clr = Math.max(this.airPeakL, this.airPeakR);
       const mosHere = this.lastMosX;
@@ -16235,18 +16259,18 @@ var Sim = class {
   fitnessTerms(fallen, elapsed) {
     const w = this.w;
     if (this.cfg.mode === "stand") {
+      const sw = STAND_W;
       const ts = {};
-      const w2 = this.w;
-      ts.alive = elapsed;
-      ts.upright = w2.upright * (this.accUpright - elapsed);
-      ts.height = -w2.height * this.accHeight;
-      ts.lateral = -w2.lateral * this.accLateral;
-      ts.tiltRate = -w2.tiltRate * this.accMoveSum;
-      ts.single = w2.single * this.accSingle;
-      ts.quiet = -this.accMoveSum;
-      ts.jointMove = 0;
-      ts.lift = 0;
+      ts.alive = sw.alive * elapsed;
+      ts.single = sw.single * this.accSingle;
+      ts.upright = sw.upright * (this.accUpright - elapsed);
+      ts.height = -sw.height * this.accHeight;
+      ts.lateral = -sw.lateral * this.accLateral;
+      ts.tiltRate = -sw.tiltRate * this.accMoveSum;
+      ts.quiet = 0;
       ts.velTrack = 0;
+      ts.lift = 0;
+      ts.jointMove = 0;
       ts.jointMotion = 0;
       ts.actRate = 0;
       ts.torque = 0;
