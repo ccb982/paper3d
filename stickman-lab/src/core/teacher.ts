@@ -17,6 +17,7 @@
 import type { Sim } from './sim';
 import { readCom, newCom, omegaAt } from './posture';
 import { wholeBodyAngularMomentum } from './balance';
+import { ADJUST_MIN } from './gaitPhase';
 import { JOINT_ORDER, type Skeleton } from './skeleton';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
@@ -175,6 +176,13 @@ export function runCaptureTeacher(
     const dtSw = t - lastSwitch;
     const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
+    //   用状态机在"迈步相/调整相"之间调度增益）。
+    //   实测依据（probe-gaitcycle ④）：脊椎反相**全程开**会把双支撑占比从 83% 顶到 94%
+    //   —— 它让角色更想站住而不是迈步，正是"姿态压过推进"的典型症状。
+    //   ⇒ 调整相（落地后的前 ADJUST_MIN 秒）全力做姿态；迈步相只留一点点。
+    const inAdjust = (t - lastSwitch) < ADJUST_MIN;
+    const postGain = inAdjust ? 1 : 0.15;
     // ★★ CMP / Moment Balance Strategy：主动产生**关于质心的力矩**，把全身角动量调回 0。
     //   为什么必须主动做（Popovic, Hofmann & Herr 2004）：仅靠 CoP 位置控制不够 ——
     //   把 ZMP 放在支撑中心等于一个"静态不稳定、无执行器的倒立摆"。

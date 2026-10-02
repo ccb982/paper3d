@@ -15885,6 +15885,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     const dtSw = t - lastSwitch;
     const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    const inAdjust = t - lastSwitch < ADJUST_MIN;
+    const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
     if (p.cmBalance > 0) {
       wholeBodyAngularMomentum(sim.doll, com, lbuf);
