@@ -14645,6 +14645,7 @@ var WALK_REWARD_KEYS = [
   "stepLen",
   "placement",
   "cycle",
+  "stillSwing",
   // 关节运动与代价
   "jointMove",
   "jointMotion",
@@ -14743,6 +14744,16 @@ var W = {
    *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
    */
   cycle: 3,
+  /**
+   * ★★★ "脚往前迈的时候身体别动，脚落地后身体再动"（用户 2026-10-02 的原话）。
+   *   诊断：脚在空中的那一段（单支撑）**支撑面只剩一只脚**，此时身体任何横向平移或
+   *   转动都会立刻吃掉本来就只有 1.23 倍余量的稳定裕度（实测抬脚后 CoM 离支撑脚
+   *   0.171 m，而单脚侧向半宽只有 0.139 m）。
+   *   ⇒ 摆动相**冻结**身体（横向 CoM 速度 + 全身角速度），落地之后才允许动。
+   *   与文献一致：Perry 八相分期里双支撑（0~10%、50~60%）才是"调整身体"的时间窗
+   *   （见 gaitPhase.ts 的三相状态机）。
+   */
+  stillSwing: 2,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -14882,6 +14893,11 @@ var Sim = class {
   // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   gp = new GaitPhaseMachine();
+  accStill = 0;
+  // ★ 摆动相里身体的运动量（要被罚）
+  stillStep = 0;
+  stillAdjust = 0;
+  // 诊断：摆动段 vs 调整段的身体运动量
   accCycle = 0;
   gpPaidThisStep = false;
   cycleN = 0;
@@ -15145,6 +15161,9 @@ var Sim = class {
     this.gp.reset();
     this.accCycle = 0;
     this.gpPaidThisStep = false;
+    this.accStill = 0;
+    this.stillStep = 0;
+    this.stillAdjust = 0;
     this.cycleN = 0;
     this.cycleFlick = 0;
     this.cycleAdj = 0;
@@ -15453,6 +15472,14 @@ var Sim = class {
         const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
         const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
         this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt2);
+        const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
+        const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
+        if (nGround === 1) {
+          if (this.gp.now === "step") {
+            this.accStill += bodyMove * dt2;
+            this.stillStep += bodyMove * dt2;
+          } else if (this.gp.now === "adjust") this.stillAdjust += bodyMove * dt2;
+        }
         const cyc = this.gp.tally;
         if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
           this.accCycle += cyc.lastCredit;
@@ -15662,6 +15689,9 @@ var Sim = class {
       const cap = (v, m) => v > m ? m : v;
       tt.cadence = cad;
       tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+      tt.stillSwing = -w.stillSwing * this.accStill * aliveAvg;
+      tt.stillStep = this.stillStep;
+      tt.stillAdjust = this.stillAdjust;
       tt.cycleCount = this.cycleN;
       tt.cycleFlick = this.cycleFlick;
       tt.cycleAdjust = this.cycleAdj;

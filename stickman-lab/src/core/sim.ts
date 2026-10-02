@@ -50,7 +50,7 @@ const WALK_REWARD_KEYS: readonly string[] = [
   // 迈步本体
   'lift', 'single', 'shift', 'refHip', 'refKnee', 'pelvisFirst',
   // 迈步 → 调整 的顺序结构
-  'settle', 'stepPace', 'moS', 'imbalance', 'stepLen', 'placement', 'cycle',
+  'settle', 'stepPace', 'moS', 'imbalance', 'stepLen', 'placement', 'cycle', 'stillSwing',
   // 关节运动与代价
   'jointMove', 'jointMotion', 'torque', 'actRate', 'energy', 'survive',
 ];
@@ -248,6 +248,16 @@ export const W = {
    *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
    */
   cycle: 3.0,
+  /**
+   * ★★★ "脚往前迈的时候身体别动，脚落地后身体再动"（用户 2026-10-02 的原话）。
+   *   诊断：脚在空中的那一段（单支撑）**支撑面只剩一只脚**，此时身体任何横向平移或
+   *   转动都会立刻吃掉本来就只有 1.23 倍余量的稳定裕度（实测抬脚后 CoM 离支撑脚
+   *   0.171 m，而单脚侧向半宽只有 0.139 m）。
+   *   ⇒ 摆动相**冻结**身体（横向 CoM 速度 + 全身角速度），落地之后才允许动。
+   *   与文献一致：Perry 八相分期里双支撑（0~10%、50~60%）才是"调整身体"的时间窗
+   *   （见 gaitPhase.ts 的三相状态机）。
+   */
+  stillSwing: 2.0,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -357,6 +367,8 @@ export class Sim {
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   private gp = new GaitPhaseMachine();
+  private accStill = 0;                        // ★ 摆动相里身体的运动量（要被罚）
+  private stillStep = 0; private stillAdjust = 0;   // 诊断：摆动段 vs 调整段的身体运动量
   private accCycle = 0; private gpPaidThisStep = false;
   private cycleN = 0; private cycleFlick = 0; private cycleAdj = 0; private cyclePhase = 'both';
   private lastMosX = 0; private lastSupEdgeX = 0; private lastRefHip = 0; private lastRefKnee = 0;
@@ -585,6 +597,7 @@ export class Sim {
     //   这条由 verify-core 的"复用 Sim ≡ 新建 Sim"门禁永久盯着。
     this.lastLoadFrac = [0.5, 0.5];
     this.gp.reset(); this.accCycle = 0; this.gpPaidThisStep = false;
+    this.accStill = 0; this.stillStep = 0; this.stillAdjust = 0;
     this.cycleN = 0; this.cycleFlick = 0; this.cycleAdj = 0; this.cyclePhase = 'both';
     this.lastMosX = 0; this.lastSupEdgeX = 0; this.lastRefHip = 0; this.lastRefKnee = 0;
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
@@ -990,6 +1003,15 @@ export class Sim {
         const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
         const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
         this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt);
+        // ★★ "脚往前迈的时候身体别动"：摆动相（脚在空中）把身体的运动量记为代价 ——
+        //   横向 CoM 速度为主（支撑面只剩一只脚，横向余量只有 1.23 倍）+ 全身角速度。
+        //   落地之后（adjust 相）不罚 —— 那正是"该动"的窗口。
+        const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
+        const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
+        if (nGround === 1) {
+          if (this.gp.now === 'step') { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
+          else if (this.gp.now === 'adjust') this.stillAdjust += bodyMove * dt;
+        }
         const cyc = this.gp.tally;
         if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
           this.accCycle += cyc.lastCredit;
@@ -1272,6 +1294,10 @@ export class Sim {
       // ★★★ 顺序分：一个完整的"迈步→调整"循环结束时一次性记账
       //   （`settle` 等旧项保留，但它们都被 gate 管着）
       tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+      // ★ 摆动相身体冻结的罚分（落地后的调整相不算）
+      tt.stillSwing = -w.stillSwing * this.accStill * aliveAvg;
+      tt.stillStep = this.stillStep;      // 诊断
+      tt.stillAdjust = this.stillAdjust;  // 诊断
       tt.cycleCount = this.cycleN;         // 诊断：完成了多少个循环
       tt.cycleFlick = this.cycleFlick;     // 诊断：抖动次数
       tt.cycleAdjust = this.cycleAdj;      // 诊断：平均调整时长（s）
