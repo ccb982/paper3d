@@ -53,6 +53,10 @@ export interface BalanceHoldParams {
    *   且 K_crit,hip 只有踝的一半 ⇒ 极小共同收缩即可。
    *   ⚠ 此前误实现为**常数偏置** −0.048（常数不是刚度）⇒ 髋 0.4s 内屈到 35.5°。 */
   kHipUpright: number;
+  /** ★ 膝的**直立刚度**比例增益（1/rad）：锁腿，防止支撑膝折到 −79°（见 kneeUpright 处）。 */
+  kKneeUpright?: number;
+  /** ★ 支撑膝要"锁住"的目标屈角（deg）。文献：单腿站立标准姿势带轻微屈膝 15~20°。 */
+  kneeHoldDeg?: number;
   /** ★ 矢状面**髋接管增益**（踝无 CoP 权限时必须用它；单腿站立场景） */
   kWtX: number;
   /** 矢状面：髋接管的 CoM 速度阻尼 */
@@ -77,6 +81,8 @@ export interface BalanceHoldInput {
   bodyMass: number;
   /** 承重腿**髋的当前屈角**（rad，正 = 屈）—— 直立刚度的被控量 */
   hipFlex: number;
+  /** 承重腿**膝的当前屈角**（rad，正 = 屈）—— 膝直立刚度的被控量 */
+  kneeFlex: number;
   /** 髋高（m），用于 K_crit,hip = m·g·h_hip */
   hipHeight: number;
   /** 是否处于单腿站立（此时髋接管矢状面） */
@@ -94,6 +100,8 @@ export interface BalanceHoldOutput {
   hipAbd: number;
   /** 髋的直立刚度输出（诊断：髋屈时应为正 = 正在把髋拉回直立） */
   hipUpright: number;
+  /** 膝的直立刚度输出（锁腿用；膝越屈它越正 = 越往回顶） */
+  kneeUpright: number;
   /** 躯干旋转指令（rad）—— 平衡相**恒为 0**（见文件头结论 ②） */
   spineCmd: number;
 
@@ -139,6 +147,10 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
   const vipTau = -(p.kVipP * qVip + p.kVipD * qVipDot);   // 归一化反馈量
   const ankleSag = ((kAnkleReq / kAnkleActual) - 1) * -qVip - vipTau;
   // 出界后衰减：踝已饱和再加也没用 ⇒ 把活交给髋（Sci Rep 2025 的 "saturated ankle torque"）
+  //   ⚠ 试过把限幅从 ±15° 收到 ±8°（照 Front Neurorob 2022 的实测背屈 7.21°）⇒
+  //     **全表变差**（存活 1.77s → 0.58~0.77s）：踝本来就没有 CoP 权限（靠大角度
+  //     撬动足底硬膜才产生一点点 CoP 位移），把它的行程砍掉就彻底没用了。
+  //   ⇒ 维持 ±15°。
   const ankleSagOut = Math.max(-0.26, Math.min(0.26, ankleSag * copMargin * 57.3 * Math.PI / 180));
 
   // ②b 髋：超临界被动刚度（>1 ⇒ 被动即稳），踝饱和时才主动增大
@@ -173,6 +185,44 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
   //   ⇒ 拆开三重反馈还不够，**逐项限幅本身也是 bug**（下面 `hipUpright` 处详述）。
   const hipUprightRaw = -i.hipFlex * p.kHipUpright;
 
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★★ **膝的直立刚度**（第三个关节的"锁腿"作用）
+  //
+  //   起因（2026-10-02，"现在只是不停鞠躬"）：把"鞠躬"回读出来才发现它**不是姿态问题，
+  //   是支撑腿的膝完全没有刚性**：
+  //       t(s) 骨盆y  膝R°   躯干倾°
+  //       0.00  1.595   0.0     0.0
+  //       0.50  1.417 -71.0     5.4
+  //       1.70  0.889  -9.1    19.3
+  //   ⇒ **支撑膝屈到 −79°，把骨盆压下去 752 mm**（1.595 → 0.843 m）。
+  //   我之前测了踝、髋、脊柱、躯干，**唯独漏测膝** —— 重大回读疏漏。
+  //
+  //   文献依据 ——
+  //   · Li & Levine 2010, *An optimal control model for human postural regulation*
+  //     (ICRA)："humans **keep their knee angle nearly constant** when dealing with
+  //     small perturbations" ⇒ 膝在支撑期应当近似**刚性**，不参与姿态调整。
+  //   · Riemann, Myers & Lephart 2003, *Arch Phys Med Rehabil* 84：单腿站立的纠正
+  //     动作来自 **ankle / knee / hip / trunk** 四个关节，膝是第三位。
+  //   · PMC8710023：存在一个**膝主导的肌肉协同**（VM / VL / RF，即股四头肌）
+  //     ⇒ 靠**股四头肌共同收缩**提供腿部刚性。
+  //   · 单腿站立的"标准姿势"本身就带轻微屈膝（Promsri 2022 测的就是屈膝状态）。
+  //
+  //   ⇒ 目标不是"把膝顶到 0°"，而是**锁在轻微屈曲 θ0**（文献常见的 15~20°），
+  //     刚度足够大但不硬 —— 这正是股四头肌共同收缩的力学效果。
+  //   ⚠⚠ **符号**（2026-10-02 修正，实测发现方向反了）：
+  //     本 rig 的膝限位是 `[-145°, +2°]` ⇒ **负 = 屈**（实测膝屈到 −53.6°）。
+  //     我原来把目标角写成 `+kneeHoldDeg`（正的）⇒ 膝已经屈了 −53.6° 却被判成
+  //     "不够屈"，于是继续往屈曲方向顶 ⇒ 实测膝力矩 **+150 N·m 且膝角越来越负**
+  //     （越屈越屈，正是"不停鞠躬"的直接来源）。
+  //     而文献要求相反（unilateral flexed-knee support 那段）：
+  //       外力矩 = 屈膝 + 背屈踝 ⇒ 内力矩必须是 **伸膝 + 跖屈踝**
+  //     ⇒ 目标角必须取**同号约定**（负），且膝应**往伸展方向**顶。
+  const kneeTarget = -(p.kneeHoldDeg ?? 15) * Math.PI / 180;
+  const kneeErr = i.kneeFlex - kneeTarget;
+  // 超临界刚度：|膝角 − θ0| 越大，回撑力矩越大；上限限幅防饱和
+  //   符号：`kneeErr < 0`（比目标更屈）⇒ 输出**负** = 伸膝方向（正确）
+  const kneeUpright = Math.max(-0.35, Math.min(0.35, -kneeErr * (p.kKneeUpright ?? 2.0)));
+
   // 踝饱和时的额状面/矢状面接管：**只做阻尼**（∝ 速度），不重复姿态通道
   const hipDamp = -(p.kVmpD * qVipDot + p.kWtVx * i.comVx) * (1 - copMargin);
 
@@ -195,6 +245,8 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
     //   （实测 kHipUpright=2.5、髋屈 0.6 rad ⇒ −1.5 被钳到 −0.30 ⇒ 输出只剩
     //   `±0.30·sign(髋屈)`，另外两项被完全淹没 ⇒ 拆开三重反馈后数字**一位不变**）
     hipSag: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
+    /** 膝的直立刚度输出（锁腿；膝越屈它越正 = 越往回顶） */
+    kneeUpright,
     hipAbd,
     hipUpright: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
     spineCmd: 0,     // ★ 平衡相恒 0（Riemann 2003：躯干是最不重要的纠正来源）
@@ -206,10 +258,11 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
 export function holdParamsFrom(src: Record<string, unknown>): BalanceHoldParams {
   const g = (k: string, d: number): number => (typeof src[k] === 'number' ? src[k] as number : d);
   return {
-    kVipP: g('kVipP', 26), kVipD: g('kVipD', 5),
+    kVipP: g('kVipP', 60), kVipD: g('kVipD', 5),
     kAnkleStiff: g('kAnkleStiff', 0.5), kHipStiff: g('kHipStiff', 1.6), kHipShare: g('kHipShare', 0.25),
     kWtX: g('kWtX', 0.6), kWtVx: g('kWtVx', 0.6),
-    kHipUpright: g('kHipUpright', 1.2),
+    kHipUpright: g("kHipUpright", 1.2),
+    kKneeUpright: g("kKneeUpright", 2.0), kneeHoldDeg: g("kneeHoldDeg", 15),
     kVmpP: g('kVmpP', 14), kVmpD: g('kVmpD', 3), kVmpAnkle: g('kVmpAnkle', 0),
   };
 }

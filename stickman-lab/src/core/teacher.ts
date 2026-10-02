@@ -778,12 +778,23 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       bodyMass: totalMass,
       hipHeight: hipDy,
       hipFlex: sim.doll.jointAngle(jointIndexByName(sk, stanceL ? "hip_l" : "hip_r")),
+      kneeFlex: sim.doll.jointAngle(jointIndexByName(sk, stanceL ? "knee_l" : "knee_r")),
       singleLeg: singleLeg !== null,
     });
     const qVip = hold.qVip, qVipDot = hold.qVipDot;
     const qVmp = hold.qVmp;
     // 以下全部已搬到 `balanceHold()` 里算（见上方调用点），此处只做诊断转发。
-    const vipDegDbg = hold.ankleSag * 57.3;             // 实际下发的踝矢状角偏移（°）
+    const vipDegDbg = hold.ankleSag * 57.3;   // ★ VIP 踝角指令（°）
+    // ★★ 把 VIP 的踝角指令翻译成**虚拟支撑点的位置**（这才是让踝有 CoP 权限的关键）。
+    //   `qVip` 是"CoM 在踝前方多少"（弧度），把它的**正弦**当作 CoP 前移量：
+    //     CoP 前移 ⇒ GRF 对踝产生**后向**力矩 ⇒ 减速前移的 CoM（踝策略的本意）。
+    //   行程用 Sci Rep 2025 的 metatarsal CoP range：±COP_HALF_LEN(0.075 m)。
+    {
+      const side: 0 | 1 = stanceL ? 0 : 1;
+      const cop = Math.sin(qVip) * COP_HALF_LEN;
+      sim.doll.setCoP(side, (side === 0) === stanceLNow ? cop : 0, COP_HALF_LEN);
+      dbgLog.copOff = +cop.toFixed(4);
+    }
     const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;      // >0 ⇒ 超临界，多出来的就是稳定裕度
     const kCritAnkle = hold.kCritAnkle, kCritHip = hold.kCritHip;
     const copOut = hold.copOut;
@@ -898,6 +909,12 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   但 lock/push 仍会无条件叠加 —— 必须把它们也限定在支撑腿。
       if (!isStance) hipCmd = h;
       setAxis(`hip_${side}`, hipCmd, jHip);
+      // ★★★ **支撑膝锁腿**（模块 ① 的 `hold.kneeUpright`）。
+      //   实测（2026-10-02，"不停鞠躬"）：支撑膝自由折到 **−79°**，把骨盆压下去 **752 mm**。
+      //   文献：Li & Levine 2010 —— "humans **keep their knee angle nearly constant**"；
+      //   PMC8710023 —— 靠股四头肌（VM/VL/RF）协同提供腿部刚性。
+      //   ⇒ 承重腿的膝在**单腿站立**时叠加直立刚度，把膝锁在轻微屈曲（默认 15°）。
+      if (singleLeg && isStance) kneeCmd += hold.kneeUpright;
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       // ★★★ 踝指令
@@ -956,10 +973,22 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   它通过"把 CoP 前后移动"来**直接**控制 CoM —— 这是文献里的主力通道，
       //   效率远高于髋（Neptune/Perry 2019：跖屈肌效率是髋的 4 倍）。
       //   旧写法把这份活全压在髋上（`kWtX` 直推 CoM），是**方向性错误**，已废。
+      // ★★★ **承重腿在单腿站立时不走摆动相的踝轨迹**（2026-10-02，两个叠加 bug 之一）。
+      //   实测链路（单腿站立）：`ankleDeg = aStance − aPush·(1−2s) = 0 − 15 = −15°`
+      //   与 VIP 的 `+14.9°` **正好抵消** ⇒ `ankleCmd ≈ 0` ⇒ 踝收不到任何平衡指令，
+      //   而马达却饱和在 120 N·m 往 0° 拉（实际踝角一路涨到 71°）。
+      //   根因：`ankleDeg` 是**摆动相**的踝轨迹（背屈→跖屈），套到**承重腿**上
+      //   就等于给平衡控制施加了一个 −15° 的偏置，把 VIP 顶掉。
+      //   ⇒ 单腿站立时承重腿只听 VIP 的；摆动腿才走 ankleDeg。
+      const stanceAnkleBase = singleLeg ? 0 : (ankleDeg + pushTorque);
       const vipDeg = isStance ? vipDegDbg : 0;
-      const ankleCmd = verdictV.ok
-        ? (ankleDeg + (isStance ? pushTorque + vipDeg : 0))
-        : (isStance ? ankleDeg + pushTorque : 0);      // 摆动腿：门没过 ⇒ 踝锁 0
+      // ★★★ **平衡门绝不能关掉承重腿的平衡指令**（方向性错误）。
+      //   门的职责是"否决一次不安全的**抬腿**"，不是"否决平衡控制"。
+      //   承重腿的踝**永远**带 vipDeg；门只作用于摆动腿。
+      const ankleCmd = isStance
+        ? (stanceAnkleBase + vipDeg)
+        : (verdictV.ok ? ankleDeg : 0);                 // 摆动腿：门没过 ⇒ 踝锁 0
+      dbgLog.ankleCmdDeg = +ankleCmd.toFixed(2); dbgLog.isStanceDbg = isStance ? 1 : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，

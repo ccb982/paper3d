@@ -28,7 +28,7 @@ const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
   spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, kWtX: 0, kWtVx: 0,   // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
-  kVipP: 26, kVipD: 5, kAnkleStiff: 0.5, kHipStiff: 1.6, kHipShare: 0.25,
+  kVipP: 60, kVipD: 5,   // ★ 单腿站立扫描最优（存活 1.28→1.77s、倾角 150°→36°） kAnkleStiff: 0.5, kHipStiff: 1.6, kHipShare: 0.25,
   kVmpP: 14, kVmpD: 3, cmBalance: 0, cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
   kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
@@ -905,20 +905,24 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log('\n=== 踝力矩上限扫描（此前 ×9 无效，现已有限位+VIP驱动，重测）===\n');
-console.log('  踝上限  髋屈峰° 躯干倾° 末CoM前后 末CoM侧移 存活   单支撑帧');
-for (const mt of [45, 80, 120, 160, 220]) {
-  const skA2 = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt } as never);
-  const fA2 = new Sim(skA2, shapeForJoints(skA2.joints.length), { ...DEFAULT_SIM, mode: 'stand' as never, duration: 5, gaitHz: 1 / FB.T });
-  fA2.begin(new Float32Array(fA2.params.length));
-  const iHr6 = jointIndexByName(skA2, 'hip_r');
-  let hipPk = 0, tPk = 0, ss = 0, cx = 0, cz = 0;
-  const rA2 = runCaptureTeacher(skA2, fA2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6 }, { dur: 5, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
-    hipPk = Math.max(hipPk, Math.abs(fA2.doll.jointAngle(iHr6)) * 57.3);
-    tPk = Math.max(tPk, fA2.doll.tiltOf(fA2.doll.torso()));
-    const cD = readCom(fA2.doll, cTmp); cx = cD.x; cz = cD.z;
-    if (!(footGrounded(fA2.doll, 'l') && footGrounded(fA2.doll, 'r'))) ss++;
-  } });
-  console.log(`  ${String(mt).padStart(5)} ${hipPk.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${rA2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
+console.log('\n=== 膝直立刚度 + 目标屈角 扫描（符号已修）===\n');
+console.log('  kKnee kHold° 膝峰° 骨盆y低 法向力%N 滑移m/s 躯干倾° 存活   单支撑帧');
+for (const kk of [0, 2, 5, 10]) {
+  for (const kh of [10, 20]) {
+    const fK2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 8, gaitHz: 1 / FB.T });
+    fK2.begin(new Float32Array(fK2.params.length));
+    const iKn4 = jointIndexByName(sk, 'knee_r');
+    let kPk = 0, pY = 9, tPk = 0, ss = 0, fnP = 0, slip = 0;
+    let mSum = 0; for (const b of fK2.doll.bodies) mSum += b.mass();
+    const W = mSum * 9.81;
+    const rK2 = runCaptureTeacher(sk, fK2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6, kVipP: 60, kKneeUpright: kk, kneeHoldDeg: kh }, { dur: 8, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
+      kPk = Math.max(kPk, Math.abs(fK2.doll.jointAngle(iKn4)) * 57.3);
+      pY = Math.min(pY, fK2.doll.bodyByKey('pelvis').translation().y);
+      tPk = Math.max(tPk, fK2.doll.tiltOf(fK2.doll.torso()));
+      const [fn, ft] = fK2.doll.footGrip(1, 1 / DEFAULT_SIM.physicsHz);
+      if (fn > 50) { fnP = Math.max(fnP, fn / W); slip = Math.max(slip, ft / fn); }
+      if (!(footGrounded(fK2.doll, 'l') && footGrounded(fK2.doll, 'r'))) ss++;
+    } });
+    console.log(`  ${String(kk).padStart(5)} ${String(kh).padStart(5)} ${kPk.toFixed(0).padStart(5)} ${pY.toFixed(3).padStart(7)} ${(fnP * 100).toFixed(0).padStart(7)} ${slip.toFixed(3).padStart(8)} ${(tPk * 57.3).toFixed(0).padStart(7)} ${rK2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
+  }
 }
-console.log('\n  判读：若 45→220 能把存活推到 3s ⇒ 之前"踝无力"是力矩上限问题，已解。');

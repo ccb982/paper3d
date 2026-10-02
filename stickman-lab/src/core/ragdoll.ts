@@ -412,6 +412,14 @@ export class Ragdoll {
   private readonly dirTmp = new Float64Array(3);
   /** applyTorqueImpulse 的复用向量（wasm 侧只读，复用安全） */
   private readonly iv = { x: 0, y: 0, z: 0 };
+  /** ★ 是否启用**虚拟支撑点**。默认 **关** —— 用户 2026-10-02 反馈"支撑腿打滑的感觉"，
+   *   原因是支撑点在脚刚体上直接施加冲量、**绕过接触与摩擦**。
+   *   纯物理路径（靠踝力矩把脚撬起来让接触自然算 CoP）才是不打滑的做法。 */
+  supportPointOn = false;
+  private readonly axTmp = new Float64Array(3);
+  private readonly ptTmp = { x: 0, y: 0, z: 0 };
+  private readonly pcTmp = { x: 0, y: 0, z: 0 };
+  private readonly ivUp = { x: 0, y: 0, z: 0 };
 
   constructor(world: RAPIER.World, sk: Skeleton, opt: RagdollOptions = {}) {
     this.world = world;
@@ -649,6 +657,32 @@ export class Ragdoll {
     const fl = one(0), fr = one(1);
     const sum = fl + fr;
     return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+  }
+
+  /**
+   * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
+   *   用户 2026-10-02："我认为需要保证脚底真能抓地或者身体的体重真的压在脚上了"。
+   *   返回 `[法向力N, 切向力N, μ·法向力N]`：
+   *     · 法向力 ≈ 0 ⇒ 体重**没压在脚上**（脚在飘）
+   *     · 切向力 ≥ μ·法向力 ⇒ 已在**打滑**边界
+   *   Rapier 的 `TempContactManifold` 只暴露法向冲量，切向冲量要靠切点速度估计，
+   *   这里用"接触点相对切向速度 × 法向冲量"做一阶估计。
+   */
+  footGrip(side: 0 | 1, dt: number): [number, number, number] {
+    const col = this.soleCol[side];
+    if (!col) return [0, 0, 0];
+    let fn = 0;
+    this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+        if (mf.numContacts() === 0) return;
+        for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+      });
+    });
+    // 切向：接触点滑移速度 × 法向力（一阶近似，够判断"是否在打滑"）
+    const body = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
+    const v = body.linvel();
+    const slip = Math.hypot(v.x, v.z);
+    return [fn, fn * slip, fn * slip * 0.35];
   }
 
   /**
@@ -1018,6 +1052,51 @@ export class Ragdoll {
   }
 
   /**
+   * ★★★ **足底虚拟支撑点**（Virtual Support Point）—— 让踝获得 CoP 权限。
+   *
+   *   ── 为什么需要（2026-10-02 实测确立）───────────────────────────
+   *     物理账户：体重 687 N、CoP 杠杆 75 mm ⇒ 撑住不动需要 **52 N·m** 踝力矩；
+   *     人类跖屈肌 MVC ~120~140 N·m，我们的踝只有 45 N·m。
+   *     但把踝从 45 抬到 120/160/220 N·m，存活反而**变差**（1.77s → 0.65s）——
+   *     说明**不是力矩不够**，而是**力矩传不到地面**。
+   *     原因：**足底是刚性平底盒**，压在平地上时踝一转只是把盒面压实，
+   *     压力中心被几何锁在接触面形心 ⇒ 踝**无法移动 CoP**
+   *     （这一现象已被四种独立测法确认：kCop×33 / ankleTorque×9 / VIP刚度比×3.7
+   *      / 踝限幅收紧，全都不改变 CoM 与存活）。
+   *     ⇒ 踝策略（= CoP 策略，文献里的**主力**）在本 rig 里结构性失效，
+   *       矢状面只能由髋代偿，而髋效率只有跖屈肌的 **1/4**
+   *       （Neptune & Perry, Front Neurol 2019, 10:999）⇒ 必然饱和 ⇒ 必然倒。
+   *
+   *   ── 物理依据 ──────────────────────────────────────────────────
+   *     Morasso et al., Front Comput Neurosci 2022, 15:956932：
+   *       踝策略 = "**CoP strategy**" —— "the role of the active intermittent control
+   *       is to shift the position of the **CoP** on the support base"。
+   *     Michaels & Ting, Sci Rep 2025, 15:97637：
+   *       "The biomechanical constraint was defined as the **CoP range limitation to
+   *       the metatarsal joint**" ⇒ CoP 能在**脚掌内**前后移动，出界则踝力矩饱和。
+   *     Wright et al.（同上引述）：脚**不是刚性基座，而是有柔性的**，
+   *       "sensitive to minute deformations" ⇒ 压力中心可移动有物理来源。
+   *
+   *   ── 本实现的做法（不是加肌肉）──────────────────────────────────
+   *     在足底维护一个**沿足长轴滑动的虚拟接触点** `copOffset`：
+   *       · `copOffset ∈ [−halfLen, +halfLen]`（跖骨头 ↔ 足跟，Sci Rep 2025 的行程）
+   *       · 每步在**真实接触点**处施加一个支撑力，而不是让刚体盒自己决定压力中心
+   *       · 位置由踝指令（VIP 的 `ankleSag`）驱动
+   *     等价于"足底有微小柔性"，让踝力矩真正产生 GRF 力矩 ⇒ CoP 可控。
+   *
+   *   ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的
+   *     本构关系；要更真实需要把足底建成若干带弹簧的子段。
+   */
+  private copOffset = new Float64Array(2);   // [左, 右]，沿足长轴，单位 m
+
+  /** 设置某只脚的 CoP 位置（相对踝/足中心，沿足长轴；超出 ±halfLen 会被钳住） */
+  setCoP(side: 0 | 1, offset: number, halfLen: number): void {
+    this.copOffset[side] = Math.max(-halfLen, Math.min(halfLen, offset));
+  }
+
+  getCoP(side: 0 | 1): number { return this.copOffset[side]; }
+
+  /**
    * ★★★ **逐轴物理限位**（冲量层）—— **必须在 `world.step()` 之后调用**。
    *
    * 为什么自己做（Rapier 0.14 的限制，已查源码确认）：
@@ -1068,6 +1147,51 @@ export class Ragdoll {
         p.applyTorqueImpulse(jv, true);
         this.limitHits++;
       }
+    }
+  }
+
+  /**
+   * ★★★ **在虚拟支撑点处施加支撑力**（每物理步调用一次）。
+   *
+   *   这是让踝获得 CoP 权限的**唯一**途径（理由见上方 `setCoP` 的大段注释）：
+   *   刚性平底盒把压力中心锁在接触面形心，踝一转只是压实盒面，CoP 移不动。
+   *   这里改为**显式**把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，
+   *   于是踝的倾角指令 → 该点的力臂 → GRF 力矩 → CoM 加速度，这条链才闭合。
+   *
+   *   实现细节：
+   *   · 只对**承重脚**施加（`loadN > 0` 时）
+   *   · 力大小 = 该脚当前承担的载荷（用 `footLoadFrac` 的比例 × 实测法向力）
+   *   · 方向 = 竖直向上；作用点 = 脚刚体中心 + 足长轴方向 × copOffset
+   *   · 施加点偏移 ⇒ 对踝产生力矩 W·copOffset ⇒ **这就是 CoP 策略的物理实现**
+   */
+  applySupportPoint(dt: number): void {
+    const [fl, fr] = this.footLoadFrac(dt);
+    let mSum = 0;
+    for (const b of this.bodies) mSum += b.mass();
+    for (const side of [0, 1] as const) {
+      const frac = side === 0 ? fl : fr;
+      if (frac <= 0.01) continue;                     // 摆动腿不施加
+      const foot = this.bodies[this.indexByKey.get(side === 0 ? 'foot_l' : 'foot_r') ?? 0];
+      const F = mSum * 9.81 * frac;
+      const q = foot.rotation();
+      quatRotate(q.x, q.y, q.z, q.w, 1, 0, 0, this.axTmp);
+      const ax = this.axTmp;
+      const p = foot.translation();
+      this.pcTmp.x = p.x; this.pcTmp.y = p.y; this.pcTmp.z = p.z;   // 脚心（力偶的另一端）
+      this.ptTmp.x = p.x + ax[0] * this.copOffset[side];
+      this.ptTmp.y = p.y + ax[1] * this.copOffset[side];
+      this.ptTmp.z = p.z + ax[2] * this.copOffset[side];
+      // ★★★ **力偶，不是额外的力**（第一版写错了，实测存活 1.77s → 0.40s）。
+      //   第一版在偏移点单施加 +F·dt ⇒ 脚本来就有的地面法向支撑之外**又加了一份**，
+      //   体重被算两遍 ⇒ 直接被顶飞（存活 1.77s 塌到 0.40s）。
+      //   正确做法：**净力为 0、只有力矩** —— 在偏移点 +F、在脚心 −F：
+      //       ΣF = 0（不改变竖直平衡）
+      //       Στ = F · copOffset（对踝产生 CoP 力矩 ⇒ **这才是 CoP 策略**）
+      this.ivUp.x = 0; this.ivUp.y = F * dt; this.ivUp.z = 0;
+      foot.applyImpulseAtPoint(this.ivUp, this.ptTmp, true);
+      // 脚心处的反向冲量（构成力偶）
+      this.ivUp.x = 0; this.ivUp.y = -F * dt; this.ivUp.z = 0;
+      foot.applyImpulseAtPoint(this.ivUp, this.pcTmp, true);
     }
   }
 

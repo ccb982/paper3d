@@ -729,6 +729,9 @@ export class Sim {
       //   我们在冲量层自己做。若放在 driveMotors（= world.step 之前），
       //   求解器在步内产生的接触响应看不见 ⇒ 踝实测跑到 +96.5°（限位 +18°）。
       this.doll.enforceLimits();
+      // ★ 虚拟支撑点：让踝获得 CoP 权限（踝策略=CoP策略，文献里的主力通道）。
+      //   此前踝指令对动力学零效力，根因是刚性平底盒把压力中心锁死。
+      if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
       used++;
       this.subStep++;
       if (this.subStep >= this.stages) {
