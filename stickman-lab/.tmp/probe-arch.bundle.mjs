@@ -6319,6 +6319,20 @@ var DEFAULT_CONFIG = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -6384,6 +6398,7 @@ var JOINT_MAX_TORQUE = {
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   foot_l: 45,
+  // ★ 会被 cfg.ankleMaxTorque 覆盖
   foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
@@ -6697,12 +6712,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
       [wx - parent.cx, wy - parent.cy, wz - parent.cz]
@@ -16695,6 +16711,14 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
+      const xi2 = com.x + com.vx / om;
+      const footCX = stanceL ? footBufL[0] : footBufR[0];
+      const comShiftErr = xi2 - footCX;
+      const copGainPhase = Math.abs(s - 0.5) < 0.25 ? 1 : 0.45;
+      const copTau = (p.kCop ?? 0) * copGainPhase * comShiftErr;
+      dbgLog.xi = +xi2.toFixed(3);
+      dbgLog.footCX = +footCX.toFixed(3);
+      dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
       const ankleCmd = verdict.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
@@ -16704,7 +16728,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         const yaw = dir * p.spineSync * sw;
         for (const sj of spineNames) {
           const sjDesc = sk2.joints[jointIndexByName(sk2, sj)];
-          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 2);
+          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
         }
         setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
@@ -16779,6 +16803,15 @@ var CAPTURE_GAIT = {
   lift: 0.32,
   /** 落脚点速度修正增益 */
   kv: 0.3283,
+  /**
+   * ★ 脊椎-骨盆反相旋转幅度（rad）。**这个参数此前根本没定义** ⇒ `p.spineSync > 0`
+   *   永远为 false ⇒ 腰（spine1..3）一次指令都没收到过（实测脊柱关节角恒为 0.0°）。
+   *   用户 2026-10-02："腰咋动的" ⇒ 先补上这个参数，腰才有可能被驱动。
+   *   文献：Takemura 2007 / Sci Rep 2019 —— 胸廓与骨盆反相旋转，抵消摆动腿角动量。
+   */
+  spineSync: 0.25,
+  /** ★ 矢状面承重转移（CoM 反馈 → 踝力矩移 CoP）。PLOS CB 2021 中支撑相增益最高。 */
+  kCop: 3,
   /** 躯干俯仰 → 髋（★ 负号才接得住） */
   kPitch: 0.4,
   // ★ 重标（见 probe-arch 存活寻优）
@@ -16823,6 +16856,10 @@ var FB = {
   kPitch: CAPTURE_GAIT.kPitch,
   kRate: CAPTURE_GAIT.kRate,
   thresh: CAPTURE_GAIT.thresh,
+  spineSync: CAPTURE_GAIT.spineSync,
+  kCop: CAPTURE_GAIT.kCop,
+  cmBalance: 0,
+  cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb,
   absorbTau: CAPTURE_GAIT.absorbTau,
   kLat: 3.5,
@@ -17606,3 +17643,116 @@ console.log("   t(s)  \u652F\u6491\u6570  \u524D\u811A\u79BB\u5730  \u540E\u811A
   console.log(`
   \u540E\u811A\u6700\u5927\u79BB\u5730 ${(lastAir * 1e3).toFixed(0)}mm\uFF08\u95E8\u6321\u4F4F\u65F6\u5E94\u22480\uFF09`);
 }
+console.log("\n=== \u524D\u811A\u843D\u5730\u540E\uFF1A\u53D7\u529B / \u540E\u811A / \u8170 \u9010\u62CD\u56DE\u653E ===\n");
+console.log("   t(s) \u524D\u811A\u627F\u91CD \u540E\u811A\u79BB\u5730 \u540E\u811A\u6307\u4EE4Y \u95E8  \u81701\u89D2  \u8EAF\u5E72\u503E\xB0     \u03BE      \u811Ax    copTau");
+{
+  const pl = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  pl.begin(new Float32Array(pl.params.length));
+  let m = 0;
+  const spIdx = [0, 1, 2].map((i) => jointIndexByName(sk, `spine${i + 1}`));
+  const rv3 = new Float64Array(3);
+  const ang0 = (i) => {
+    if (i < 0) return 0;
+    pl.doll.jointRot(i, rv3);
+    return rv3[0] * 180 / Math.PI;
+  };
+  runCaptureTeacher(sk, pl, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl) => {
+    if (m++ % 8 !== 0) return;
+    const [fl, fr] = pl.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const fLoad = stanceL ? fl : fr;
+    const bSole = stanceL ? pl.doll.soleY("r") : pl.doll.soleY("l");
+    const c2 = readCom(pl.doll, cTmp);
+    const q = pl.doll.torso().rotation();
+    const tilt = pl.doll.tiltOf(pl.doll.torso());
+    const waistYaw = Math.atan2(2 * (q.w * q.y), 1 - 2 * q.y * q.y) * 180 / Math.PI;
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${fLoad.toFixed(2).padStart(6)}  ${(bSole * 1e3).toFixed(0).padStart(6)}mm ${String(dl?.swingY ?? 0).padStart(8)}  ${dl?.balOk === 1 ? "OK" : "X"}  ${ang0(spIdx[0]).toFixed(1).padStart(5)}  ${(tilt * 180 / Math.PI).toFixed(1).padStart(6)}  ${String(dl?.xi ?? 0).padStart(7)} ${String(dl?.footCX ?? 0).padStart(7)} ${String(dl?.copTau ?? 0).padStart(8)}`);
+  } });
+}
+console.log("\n=== \u8EAF\u5E72\u524D\u503E\u7684\u6765\u6E90 ===\n");
+console.log("  \u914D\u7F6E                        \u5CF0\u503C\u503E\xB0  \u7EC8CoM\u524D\u540E  \u5B58\u6D3B");
+for (const c of [
+  { n: "\u5F53\u524D kPitch=+0.4", p: { kPitch: 0.4, kRate: 0 } },
+  { n: "kPitch=0\uFF08\u65E0\u4FEF\u4EF0\u53CD\u9988\uFF09", p: { kPitch: 0, kRate: 0 } },
+  { n: "kPitch=\u22120.4\uFF08\u7FFB\u7B26\u53F7\uFF09", p: { kPitch: -0.4, kRate: 0 } },
+  { n: "kPitch=\u22121.2 \u5F3A", p: { kPitch: -1.2, kRate: 0 } },
+  { n: "kRate=\u22120.6 \u89D2\u901F\u5EA6\u963B\u5C3C", p: { kPitch: 0.4, kRate: -0.6 } },
+  { n: "\u5168\u5173\uFF08\u7EAF IK\uFF09", p: { kPitch: 0, kRate: 0, kLat: 0, kLatV: 0, stancePush: 0, anklePush: 0 } }
+]) {
+  const f2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  f2.begin(new Float32Array(f2.params.length));
+  let peak = 0, comX = 0;
+  const r2 = runCaptureTeacher(sk, f2, { ...FB, ...c.p }, { dur: 3, clockDriven: true, onFrame: () => {
+    peak = Math.max(peak, f2.doll.tiltOf(f2.doll.torso()));
+    comX = readCom(f2.doll, cTmp).x;
+  } });
+  console.log(`  ${c.n.padEnd(26)} ${(peak * 180 / Math.PI).toFixed(1).padStart(6)}  ${comX.toFixed(3).padStart(9)}  ${r2.t.toFixed(2)}s`);
+}
+console.log("\n  \u5224\u8BFB\uFF1A\u82E5 kRate \u8D1F\u503C\u80FD\u538B\u4F4F\u503E\u89D2 \u21D2 \u662F\u89D2\u901F\u5EA6\u6CA1\u963B\u5C3C\uFF1B\u82E5\u7EAF IK \u4E5F\u503E \u21D2 \u662F\u51E0\u4F55/\u91CD\u5FC3\u95EE\u9898\u3002");
+console.log("\n=== legStretch \u626B\u63CF\uFF08\u9ACB\u9AD8 0.849 / \u817F\u957F 0.785 \u2192 \u76EE\u6807 leg/hip\u22480.97\uFF09===\n");
+console.log("  \u62C9\u4F38(m)  \u817F/\u9ACB   \u5CF0\u503C\u503E\xB0  \u7EC8CoM\u524D\u540E  \u5B58\u6D3B   \u79BB\u5730\u5CF0  \u6362\u811A");
+for (const st of [0, 0.02, 0.04, 0.06, 0.08]) {
+  const skS = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, legStretch: st });
+  const shS = shapeForJoints(skS.joints.length);
+  const f3 = new Sim(skS, shS, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  f3.begin(new Float32Array(f3.params.length));
+  let peak = 0, comX = 0, pk = 0;
+  const r3 = runCaptureTeacher(skS, f3, FB, { dur: 3, clockDriven: true, onFrame: () => {
+    peak = Math.max(peak, f3.doll.tiltOf(f3.doll.torso()));
+    comX = readCom(f3.doll, cTmp).x;
+    pk = Math.max(pk, Math.max(f3.doll.soleY("l"), f3.doll.soleY("r")));
+  } });
+  const hipY = skS.joints.find((q) => q.name === "hip_l").wy;
+  const LEGn = hipY - skS.joints.find((q) => q.name === "foot_l").wy;
+  console.log(`  ${st.toFixed(2).padStart(6)}  ${(LEGn / hipY).toFixed(3)}  ${(peak * 180 / Math.PI).toFixed(1).padStart(6)}  ${comX.toFixed(3).padStart(9)}  ${r3.t.toFixed(2)}s  ${(pk * 1e3).toFixed(0).padStart(5)}mm  ${r3.steps}`);
+}
+console.log("\n  \u76EE\u6807\uFF1A\u5CF0\u503C\u503E\u89D2 \u2193\u2193\u3001\u7EC8 CoM \u21920\u3001\u79BB\u5730\u5CF0 \u2191\u3002\u817F/\u9ACB\u5E94\u63A5\u8FD1 0.97\u3002");
+console.log("\n=== STANCE_Z \u626B\u63CF\uFF08\u6A2A\u5411\u51E0\u4F55\u662F\u4E0D\u662F\u771F\u74F6\u9888\uFF09===\n");
+console.log("  \u7AD9\u8DDD(m) \u7AD9\u8DDD(mm) \u5B9E\u9645\u811A\u8DDD\u5CF0  \u524D\u811A\u627F\u91CD\u5CF0  \u79BB\u5730\u5CF0  \u5CF0\u503C\u503E\xB0  \u5B58\u6D3B");
+for (const sz of [0.07, 0.1, 0.13, 0.16, 0.19]) {
+  const f4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  f4.begin(new Float32Array(f4.params.length));
+  let sepPk = 0, loadPk = 0, clrPk = 0, tiltPk = 0;
+  const wl = new Float64Array(3), wr = new Float64Array(3);
+  const r4 = runCaptureTeacher(sk, f4, { ...FB, STANCE_Z: sz }, { dur: 3, clockDriven: true, onFrame: () => {
+    f4.doll.footPoint("l", wl);
+    f4.doll.footPoint("r", wr);
+    sepPk = Math.max(sepPk, Math.abs(wl[2] - wr[2]));
+    const [fl, fr] = f4.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    loadPk = Math.max(loadPk, Math.max(fl, fr));
+    clrPk = Math.max(clrPk, Math.max(f4.doll.soleY("l"), f4.doll.soleY("r")));
+    tiltPk = Math.max(tiltPk, f4.doll.tiltOf(f4.doll.torso()));
+  } });
+  console.log(`  ${sz.toFixed(2).padStart(6)} ${(sz * 2e3).toFixed(0).padStart(7)}  ${(sepPk * 1e3).toFixed(0).padStart(8)}mm  ${loadPk.toFixed(2).padStart(9)}  ${(clrPk * 1e3).toFixed(0).padStart(5)}mm  ${(tiltPk * 180 / Math.PI).toFixed(1).padStart(6)}  ${r4.t.toFixed(2)}s`);
+}
+console.log("\n  \u5224\u8BFB\uFF1A\u5B9E\u9645\u811A\u8DDD\u5CF0\u82E5\u968F\u7AD9\u8DDD\u4E0A\u5347 \u21D2 \u6A2A\u5411\u63A7\u5236\u901A\u9053\u6253\u5F00\uFF1B\u82E5\u6052\u4E3A 0 \u21D2 IK \u6CA1\u5728\u7528\u6A2A\u5411\u3002");
+console.log("\n=== \u8E1D\u6307\u4EE4\u6709\u6CA1\u6709\u7269\u7406\u6548\u529B\uFF08kCop 0 / 3 / 30 / 100\uFF09===\n");
+console.log("   kCop   \u7EC8\u627F\u91CD   \u5CF0\u503C\u503E\xB0  \u7EC8\u503E\xB0   \u7EC8CoM   \u5B58\u6D3B    \u7EC8\u8E1D\u6307\u4EE4\xB0");
+for (const kc of [0, 3, 30, 100]) {
+  const f5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  f5.begin(new Float32Array(f5.params.length));
+  let pk = 0, tl = 0, ld = 0;
+  const r5 = runCaptureTeacher(sk, f5, { ...FB, kCop: kc }, { dur: 3, clockDriven: true, onFrame: () => {
+    pk = Math.max(pk, f5.doll.tiltOf(f5.doll.torso()));
+    tl = f5.doll.tiltOf(f5.doll.torso());
+    ld = readCom(f5.doll, cTmp).x;
+  } });
+  console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
+}
+console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
+console.log("\n=== A \u5224\u636E\uFF1A\u8E1D\u63A5\u6CA1\u63A5\u8FDB\u52A8\u529B\u5B66 ===\n");
+console.log("  \u8E1D\u4E0A\u9650  \u672BCoM\u524D\u540E  \u5CF0\u503C\u503E\xB0  \u5B58\u6D3B     \u79BB\u5730\u5CF0  \u524D\u811A\u627F\u91CD\u5CF0");
+for (const mt of [45, 150, 400]) {
+  const skA = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt });
+  const fA = new Sim(skA, shapeForJoints(skA.joints.length), { ...DEFAULT_SIM, mode: "walk", duration: 3, gaitHz: 1 / FB.T });
+  fA.begin(new Float32Array(fA.params.length));
+  let pk = 0, cmX = 0, clr = 0, load = 0;
+  const rA = runCaptureTeacher(skA, fA, { ...FB, kCop: 30 }, { dur: 3, clockDriven: true, onFrame: () => {
+    pk = Math.max(pk, fA.doll.tiltOf(fA.doll.torso()));
+    cmX = readCom(fA.doll, cTmp).x;
+    clr = Math.max(clr, Math.max(fA.doll.soleY("l"), fA.doll.soleY("r")));
+    const [fl, fr] = fA.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    load = Math.max(load, Math.max(fl, fr));
+  } });
+  console.log(`  ${String(mt).padStart(5)}  ${cmX.toFixed(4).padStart(9)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${rA.t.toFixed(2)}s  ${(clr * 1e3).toFixed(0).padStart(5)}mm  ${load.toFixed(2).padStart(9)}`);
+}
+console.log("\n  \u4E09\u6863\u82E5\u5B8C\u5168\u4E00\u81F4 \u21D2 \u8E1D\u5728\u7ED3\u6784\u4E0A\u5C31\u6CA1\u63A5\u5165\u52A8\u529B\u5B66 \u21D2 A \u5FC5\u987B\u5199\u663E\u5F0F\u652F\u6491\u70B9\u6A21\u578B\uFF0C\u4E0D\u662F\u8C03\u53C2\u6570\u3002");

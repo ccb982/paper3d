@@ -167,6 +167,10 @@ export interface SkeletonConfig {
    *   —— 弯腰时板子沿脊柱连续弯折，不是把贴图切成 K 条各贴一段。见 viewer.ts。
    */
   spineSegments: number;
+  /** ★ 腿段拉伸（m）：把膝/踝锚点相对髋下沉，等比拉长腿。
+   *   动机：素材髋高 0.849 m > 腿长 0.785 m（leg/hip=0.92，低于人体 0.95~1.0）
+   *   ⇒ 站直时膝折 30°，实测躯干持续前倾 35.8°、CoM 前移 0.46 m。 */
+  legStretch: number;
   /**
    * ★★ 脚掌**足迹**缩放（默认 1.0）。只缩放水平面（长 hx / 宽 hz），不动厚度。
    *
@@ -207,6 +211,12 @@ export interface SkeletonConfig {
   /** 内外翻余量（外八已经在静姿态偏航里） */
   ankleRollDeg: number;
   ankleTorque: number;
+  /** ★ 踝（跖屈肌）力矩上限 N·m —— **A 方案的核心参数**。
+   *   文献：人类跖屈肌 MVC ~120~140 N·m；Neptune/Perry, Front Neurol 2019, 10:999
+   *   —— 跖屈肌是 CoM 推进的**主引擎**，效率是髋肌的 4 倍。
+   *   为什么必须能调：把 CoP 从脚底中心推到脚尖需 ≈ 体重×足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。默认 45 名义够，但实测踝指令对动力学**零效力**（kCop 放大 33 倍、
+   *   本值放大 9 倍，CoM/倾角/存活全部逐位不变）⇒ 不是幅度问题，是踝没接入动力学。 */
   /** 脚部 UV 扭曲的最大额外角度（度）：0 = 只跟物理踝角，>0 = 视觉夸张 */
   footUvWarpDeg: number;
   /**
@@ -233,6 +243,20 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1.0,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -380,7 +404,7 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   knee_r: 150,
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
-  foot_l: 45,
+  foot_l: 45,   // ★ 会被 cfg.ankleMaxTorque 覆盖
   foot_r: 45,
 };
 
@@ -987,13 +1011,20 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     // ★ 锚点收窄必须与子环节一致：否则髋/膝锚点会飘到收窄后的刚体之外
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
+    // ★★ 腿段拉伸（2026-10-02）：素材的**髋高 0.849 m 大于腿长 0.785 m**
+    //   ⇒ 站直时膝天生折 ~30°，腿/髋 = 0.92 低于人体常态 0.95~1.0。
+    //   实测后果：躯干持续前倾 35.8°、CoM 前移 0.46 m、平衡门因此永远不放行。
+    //   `legStretch` 把**膝/踝锚点相对髋下沉**，把腿等比拉长到 leg/hip ≈ 0.97。
+    //   （另一种是降髋锚点，但那会让大腿根部脱开素材 88mm；拉伸只动 39mm。）
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
 
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    // ★ 踝力矩上限：`cfg.ankleTorque`（A 方案核心参数，默认 45 太小，见 SkeletonConfig 注释）
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : (JOINT_MAX_TORQUE[name] ?? 100);
 
     // ★ 局部锚点 = 把世界偏移转到该刚体的局部系（要扣掉它的静倾角，
     //   否则带倾角的肢体上，Rapier 会在错误的点上建铰链 ⇒ 一 reset 就错位）。

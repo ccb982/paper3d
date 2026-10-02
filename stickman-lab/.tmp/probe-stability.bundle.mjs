@@ -510,7 +510,11 @@ var ANKLE_JOINTS = [
   { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
   { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
 ];
+var HIP_LIMIT = [-95, 100];
 var meta = parts_default;
+for (const j of meta.joints) {
+  if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
 if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
 var META = meta;
 var PART_BY_KEY = new Map(
@@ -576,6 +580,8 @@ var DEFAULT_CONFIG = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  // ★ probe-arch 扫描最优：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -944,7 +950,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;

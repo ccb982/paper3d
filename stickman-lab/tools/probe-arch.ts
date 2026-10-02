@@ -2,7 +2,7 @@
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton';
+import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER, jointIndexByName } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
 import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
@@ -27,6 +27,7 @@ const shape = shapeForJoints(sk.joints.length);
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
+  spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, cmBalance: 0, cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
   kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
   ankleSwing: 12, anklePush: 15, ankleStance: 0,
@@ -795,3 +796,130 @@ console.log('   t(s)  支撑数  前脚离地  后脚离地  门判定   卡在�
   } });
   console.log(`\n  后脚最大离地 ${(lastAir * 1000).toFixed(0)}mm（门挡住时应≈0）`);
 }
+
+// ===== 前脚落地后的全过程：受力 / 后脚 / 腰 =====
+console.log('\n=== 前脚落地后：受力 / 后脚 / 腰 逐拍回放 ===\n');
+console.log('   t(s) 前脚承重 后脚离地 后脚指令Y 门  腰1角  躯干倾°     ξ      脚x    copTau');
+{
+  const pl = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  pl.begin(new Float32Array(pl.params.length));
+  let m = 0;
+  const spIdx = [0, 1, 2].map(i => jointIndexByName(sk, `spine${i + 1}`));   // ★ 不能用 JOINT_ORDER（没有 spine）
+  // ★ `jointAngle(i)` **只返回轴 2**（屈伸），而我们命令的是**轴 0**（侧倾/扭转）
+  //   ⇒ 之前测出来恒为 0.0° 是**测量错轴**，不是腰不动。要读全三轴。
+  const rv3 = new Float64Array(3);
+  const ang0 = (i: number): number => {
+    if (i < 0) return 0;
+    pl.doll.jointRot(i, rv3);
+    return rv3[0]! * 180 / Math.PI;      // 轴 0 = 侧倾/扭转（我们命令的就是它）
+  };
+  runCaptureTeacher(sk, pl, FB, { dur: 4, clockDriven: true, onFrame: (t, stanceL, _s, _o, _c, _a, dl): void => {
+    if (m++ % 8 !== 0) return;
+    const [fl, fr] = pl.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    const fLoad = stanceL ? fl : fr;                       // 前脚（= 指令支撑腿）
+    const bSole = stanceL ? pl.doll.soleY('r') : pl.doll.soleY('l');
+    const c2 = readCom(pl.doll, cTmp);
+    const q = pl.doll.torso().rotation();
+    const tilt = pl.doll.tiltOf(pl.doll.torso());
+    const waistYaw = Math.atan2(2 * (q.w * q.y), 1 - 2 * q.y * q.y) * 180 / Math.PI;
+    void waistYaw;
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${fLoad.toFixed(2).padStart(6)}  ${(bSole * 1000).toFixed(0).padStart(6)}mm ${String(dl?.swingY ?? 0).padStart(8)}  ${dl?.balOk === 1 ? 'OK' : 'X'}  ${ang0(spIdx[0]!).toFixed(1).padStart(5)}  ${(tilt * 180 / Math.PI).toFixed(1).padStart(6)}  ${String(dl?.xi ?? 0).padStart(7)} ${String(dl?.footCX ?? 0).padStart(7)} ${String(dl?.copTau ?? 0).padStart(8)}`);
+  } });
+}
+
+// ===== 前倾是谁造成的 =====
+console.log('\n=== 躯干前倾的来源 ===\n');
+console.log('  配置                        峰值倾°  终CoM前后  存活');
+for (const c of [
+  { n: '当前 kPitch=+0.4', p: { kPitch: 0.4, kRate: 0 } as Partial<CaptureParams> },
+  { n: 'kPitch=0（无俯仰反馈）', p: { kPitch: 0, kRate: 0 } as Partial<CaptureParams> },
+  { n: 'kPitch=−0.4（翻符号）', p: { kPitch: -0.4, kRate: 0 } as Partial<CaptureParams> },
+  { n: 'kPitch=−1.2 强', p: { kPitch: -1.2, kRate: 0 } as Partial<CaptureParams> },
+  { n: 'kRate=−0.6 角速度阻尼', p: { kPitch: 0.4, kRate: -0.6 } as Partial<CaptureParams> },
+  { n: '全关（纯 IK）', p: { kPitch: 0, kRate: 0, kLat: 0, kLatV: 0, stancePush: 0, anklePush: 0 } as Partial<CaptureParams> },
+]) {
+  const f2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  f2.begin(new Float32Array(f2.params.length));
+  let peak = 0, comX = 0;
+  const r2 = runCaptureTeacher(sk, f2, { ...FB, ...c.p }, { dur: 3, clockDriven: true, onFrame: (): void => {
+    peak = Math.max(peak, f2.doll.tiltOf(f2.doll.torso()));
+    comX = readCom(f2.doll, cTmp).x;
+  } });
+  console.log(`  ${c.n.padEnd(26)} ${(peak * 180 / Math.PI).toFixed(1).padStart(6)}  ${comX.toFixed(3).padStart(9)}  ${r2.t.toFixed(2)}s`);
+}
+console.log('\n  判读：若 kRate 负值能压住倾角 ⇒ 是角速度没阻尼；若纯 IK 也倾 ⇒ 是几何/重心问题。');
+
+// ===== 腿段拉伸扫描 =====
+console.log('\n=== legStretch 扫描（髋高 0.849 / 腿长 0.785 → 目标 leg/hip≈0.97）===\n');
+console.log('  拉伸(m)  腿/髋   峰值倾°  终CoM前后  存活   离地峰  换脚');
+for (const st of [0, 0.02, 0.04, 0.06, 0.08]) {
+  const skS = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, legStretch: st } as never);
+  const shS = shapeForJoints(skS.joints.length);
+  const f3 = new Sim(skS, shS, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  f3.begin(new Float32Array(f3.params.length));
+  let peak = 0, comX = 0, pk = 0;
+  const r3 = runCaptureTeacher(skS, f3, FB, { dur: 3, clockDriven: true, onFrame: (): void => {
+    peak = Math.max(peak, f3.doll.tiltOf(f3.doll.torso()));
+    comX = readCom(f3.doll, cTmp).x;
+    pk = Math.max(pk, Math.max(f3.doll.soleY('l'), f3.doll.soleY('r')));
+  } });
+  const hipY = skS.joints.find(q => q.name === 'hip_l')!.wy;
+  const LEGn = hipY - skS.joints.find(q => q.name === 'foot_l')!.wy;
+  console.log(`  ${st.toFixed(2).padStart(6)}  ${(LEGn / hipY).toFixed(3)}  ${(peak * 180 / Math.PI).toFixed(1).padStart(6)}  ${comX.toFixed(3).padStart(9)}  ${r3.t.toFixed(2)}s  ${(pk * 1000).toFixed(0).padStart(5)}mm  ${r3.steps}`);
+}
+console.log('\n  目标：峰值倾角 ↓↓、终 CoM →0、离地峰 ↑。腿/髋应接近 0.97。');
+
+// ===== 站距扫描：横向能不能真的把脚分开 =====
+console.log('\n=== STANCE_Z 扫描（横向几何是不是真瓶颈）===\n');
+console.log('  站距(m) 站距(mm) 实际脚距峰  前脚承重峰  离地峰  峰值倾°  存活');
+for (const sz of [0.07, 0.10, 0.13, 0.16, 0.19]) {
+  const f4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  f4.begin(new Float32Array(f4.params.length));
+  let sepPk = 0, loadPk = 0, clrPk = 0, tiltPk = 0;
+  const wl = new Float64Array(3), wr = new Float64Array(3);
+  const r4 = runCaptureTeacher(sk, f4, { ...FB, STANCE_Z: sz } as Partial<CaptureParams>, { dur: 3, clockDriven: true, onFrame: (): void => {
+    f4.doll.footPoint('l', wl); f4.doll.footPoint('r', wr);
+    sepPk = Math.max(sepPk, Math.abs(wl[2] - wr[2]));
+    const [fl, fr] = f4.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    loadPk = Math.max(loadPk, Math.max(fl, fr));
+    clrPk = Math.max(clrPk, Math.max(f4.doll.soleY('l'), f4.doll.soleY('r')));
+    tiltPk = Math.max(tiltPk, f4.doll.tiltOf(f4.doll.torso()));
+  } });
+  console.log(`  ${sz.toFixed(2).padStart(6)} ${(sz * 2000).toFixed(0).padStart(7)}  ${(sepPk * 1000).toFixed(0).padStart(8)}mm  ${loadPk.toFixed(2).padStart(9)}  ${(clrPk * 1000).toFixed(0).padStart(5)}mm  ${(tiltPk * 180 / Math.PI).toFixed(1).padStart(6)}  ${r4.t.toFixed(2)}s`);
+}
+console.log('\n  判读：实际脚距峰若随站距上升 ⇒ 横向控制通道打开；若恒为 0 ⇒ IK 没在用横向。');
+
+// ===== 决定性测试：踝指令到底有没有物理效力 =====
+console.log('\n=== 踝指令有没有物理效力（kCop 0 / 3 / 30 / 100）===\n');
+console.log('   kCop   终承重   峰值倾°  终倾°   终CoM   存活    终踝指令°');
+for (const kc of [0, 3, 30, 100]) {
+  const f5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  f5.begin(new Float32Array(f5.params.length));
+  let pk = 0, tl = 0, ld = 0;
+  const r5 = runCaptureTeacher(sk, f5, { ...FB, kCop: kc }, { dur: 3, clockDriven: true, onFrame: (): void => {
+    pk = Math.max(pk, f5.doll.tiltOf(f5.doll.torso()));
+    tl = f5.doll.tiltOf(f5.doll.torso());
+    ld = readCom(f5.doll, cTmp).x;
+  } });
+  console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
+}
+console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
+
+// ===== A 方案决定性判据：踝到底接没接进动力学 =====
+console.log('\n=== A 判据：踝接没接进动力学 ===\n');
+console.log('  踝上限  末CoM前后  峰值倾°  存活     离地峰  前脚承重峰');
+for (const mt of [45, 150, 400]) {
+  const skA = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: mt } as never);
+  const fA = new Sim(skA, shapeForJoints(skA.joints.length), { ...DEFAULT_SIM, mode: 'walk', duration: 3, gaitHz: 1 / FB.T });
+  fA.begin(new Float32Array(fA.params.length));
+  let pk = 0, cmX = 0, clr = 0, load = 0;
+  const rA = runCaptureTeacher(skA, fA, { ...FB, kCop: 30 }, { dur: 3, clockDriven: true, onFrame: (): void => {
+    pk = Math.max(pk, fA.doll.tiltOf(fA.doll.torso()));
+    cmX = readCom(fA.doll, cTmp).x;
+    clr = Math.max(clr, Math.max(fA.doll.soleY('l'), fA.doll.soleY('r')));
+    const [fl, fr] = fA.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+    load = Math.max(load, Math.max(fl, fr));
+  } });
+  console.log(`  ${String(mt).padStart(5)}  ${cmX.toFixed(4).padStart(9)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${rA.t.toFixed(2)}s  ${(clr * 1000).toFixed(0).padStart(5)}mm  ${load.toFixed(2).padStart(9)}`);
+}
+console.log('\n  三档若完全一致 ⇒ 踝在结构上就没接入动力学 ⇒ A 必须写显式支撑点模型，不是调参数。');

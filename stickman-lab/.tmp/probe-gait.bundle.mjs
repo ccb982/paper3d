@@ -6319,6 +6319,8 @@ var DEFAULT_CONFIG = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  // ★ probe-arch 扫描最优：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -6688,7 +6690,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
@@ -13125,7 +13128,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var Ragdoll = class {
+var Ragdoll = class _Ragdoll {
   sk;
   opt;
   bodies = [];
@@ -13403,10 +13406,35 @@ var Ragdoll = class {
    *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
    *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
    */
+  /**
+    * ★★ 最近一次 `bodyHitGround()` 命中的**刚体名**（空 = 没命中）。
+    *   用于调试："摔倒到底是哪个部位碰地触发的" —— 手/肘在正常低姿态下就接近地面，
+    *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
+    */
+  lastHitKey = "";
+  /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+  lowestY(i) {
+    const b = this.bodies[i];
+    let lo = Infinity;
+    for (let ci = 0; ci < b.numColliders(); ci++) {
+      const c = b.collider(ci);
+      const a = c.aabb?.();
+      if (a && a.min.y < lo) lo = a.min.y;
+    }
+    return lo;
+  }
+  /**
+    * ★★ 不算 crash 的刚体（2026-10-02，用户："摔倒被判定太严了"）。
+    *   实测证据：关掉躯干高度判据后，crash 抓到的是 **hand_l** ——躯干蹲到 0.796m、
+    *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
+    *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
+    */
+  static NOT_CRASH = /* @__PURE__ */ new Set(["shin_l", "shin_r", "foot_l", "foot_r", "arm_l", "arm_r", "hand_l", "hand_r"]);
   bodyHitGround() {
+    this.lastHitKey = "";
     for (let i = 0; i < this.bodies.length; i++) {
       const bd = this.sk.bodies[i];
-      if (bd.key === "shin_l" || bd.key === "shin_r" || bd.key === "foot_l" || bd.key === "foot_r") continue;
+      if (_Ragdoll.NOT_CRASH.has(bd.key)) continue;
       const b = this.bodies[i];
       for (let ci = 0; ci < b.numColliders(); ci++) {
         const col = b.collider(ci);
@@ -13418,7 +13446,10 @@ var Ragdoll = class {
             if (ny > 0.5 || ny < -0.5) hit = true;
           });
         });
-        if (hit) return true;
+        if (hit) {
+          this.lastHitKey = bd.key;
+          return true;
+        }
       }
     }
     return false;
@@ -14996,8 +15027,20 @@ var DEFAULT_SIM = {
    *   而躯干高度还有初始的 70% ⇒ 回合不结束、速度跟踪项被它白拿 0.51 分。
    *   经典配方里 crash ⇒ reset 是"结构上不给退化解留时间"，这里同理。
    */
-  fallHeightRatio: 0.85,
-  fallAngle: 1.25
+  // ★ 2026-10-02 放宽（用户："摔倒被判定太严了"、"修，不用限制躯干高度了"）。
+  //   回读证据（probe-arch「摔倒瞬间」）：
+  //     当前阈值下 存活 3.33s，触发瞬间 rH=1.007 / rT=0.415 / rD=0.232，
+  //     **碰地刚体=（无）** ⇒ crash 判据（bodyHitGround）根本没有误伤，
+  //     真正的杀手是**躯干高度**：躯干 1.064m vs 阈值 0.75×1.429=1.072m，差 8mm 就摔。
+  //     而那姿态是"弯腰低头"（倾角仅 34.5°，远未到 83° 阈值），走路时本来就会这样。
+  //   ⇒ 按用户要求**取消躯干高度作为摔倒判据**（设 0 = 关闭），
+  //     只保留【倾角】与【刚体碰地】两条 —— 后者已验证不会误伤。
+  fallHeightRatio: 0,
+  // ★ 0 = 不再用躯干高度判摔
+  fallAngle: 1.45,
+  // 倾角阈值 83°
+  /** ★ 头高阈值（m）：由 0.45 → 0.28（实测 rD 只到 0.23，从未触发） */
+  headMinHeight: 0.28
 };
 var W = {
   // ══════ 走路：walkReward.ts 的 11 项（顺序同那张表）══════
@@ -15307,6 +15350,8 @@ var Sim = class {
    *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
    */
   fallReason = "";
+  /** ★ 摔倒瞬间的判据快照（用户 2026-10-02：看到底是什么触发摔倒） */
+  fallDiag = { rH: 0, rT: 0, rD: 0, torsoY: 0, headY: 0, tiltDeg: 0, hit: "" };
   /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
   endTorsoY = 0;
   endTilt = 0;
@@ -15537,7 +15582,6 @@ var Sim = class {
     this.balanceTicks = 0;
     this.peakDcmX = 0;
     this.peakDcmZ = 0;
-    this.fallReason = "";
     this.endTorsoY = 0;
     this.endTilt = 0;
     this.endHeadY = 0;
@@ -16023,14 +16067,25 @@ var Sim = class {
     const tilt = this.doll.tiltOf(torso);
     const headY = this.doll.head().translation().y;
     if (this.doll.bodyHitGround()) {
+      this.fallDiag = { rH: +(this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
       this.finish(true);
       return true;
     }
-    const rH = this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y);
+    const useH = this.cfg.fallHeightRatio > 0;
+    const rH = useH ? this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y) : 0;
     const rT = tilt / this.cfg.fallAngle;
-    const rD = 0.45 / Math.max(1e-6, headY);
-    if (rH > 1 || rT > 1 || rD > 1) {
-      this.fallReason = rH >= rT && rH >= rD ? "height" : rT >= rD ? "tilt" : "head";
+    const rD = this.cfg.headMinHeight / Math.max(1e-6, headY);
+    if (useH && rH > 1 || rT > 1 || rD > 1) {
+      this.fallReason = rT > 1 ? "tilt" : "head";
+      this.fallDiag = {
+        rH: +rH.toFixed(3),
+        rT: +rT.toFixed(3),
+        rD: +rD.toFixed(3),
+        torsoY: +tp.y.toFixed(3),
+        headY: +headY.toFixed(3),
+        tiltDeg: +(tilt * 180 / Math.PI).toFixed(1),
+        hit: this.doll.lastHitKey
+      };
       this.finish(true);
       return true;
     }

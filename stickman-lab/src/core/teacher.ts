@@ -71,6 +71,13 @@ export interface CaptureParams {
   kLat: number;
   kLatV: number;
   kLatSwing: number;
+  /**
+   * ★★ 矢状面承重转移增益（rad/m）—— CoM 位置+速度反馈 → 踝力矩 → 移 CoP → 加速 CoM。
+   *   文献：Becker/Banks/Whittle, PLOS Comput Biol 2021, 17(6):e1008369（中支撑相增益最高）；
+   *   Neptune/Perry, Front Neurol 2019, 10:999（跖屈是 CoM 推进主引擎）。
+   *   实现见 teacher.ts 中 xi / comShiftErr / copTau / copGainPhase。
+   */
+  kCop?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -569,7 +576,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       setAxis(`hip_${side}`, hipCmd, jHip);
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      // ★★★ 踝指令（新增，之前完全缺失）
+      // ★★★ 踝指令
       //   文献量级：摆动期背屈 ~10°（脚尖上勾，利于前伸）→ 蹬离跖屈 ~15~20°（脚尖下压推髋前送）
       //   相位 s：0=刚离地  0.5=摆动中  1=落地
       const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
@@ -577,6 +584,39 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   partsMeta: `limitDeg = [低头(plantarflex), 勾脚(dorsiflex)]` = [−10°, +18°]
       //   ⇒ **负 = 跖屈（脚尖下压）**，**正 = 背屈（脚尖上勾）**。
       //   我第一版写成「摆动前半 −aSwing = 背屈、支撑起立 +aPush = 跖屈」——**两者都反了**。
+      //
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★★ 新增：**矢状面承重转移**（用户 2026-10-02："前脚承重都没做"）
+      //   文献依据 —— Becker/Banks/Whittle, *PLOS Comput Biol* 2021, 17(6):e1008369：
+      //     "delayed linear feedback of **center of mass position and velocity** ... can
+      //      explain reactive ankle muscle activity and joint moments in response to
+      //      perturbations of walking"
+      //     "the ankle strategy is mainly used during **mid stance** ... since the CoP is
+      //      approximately in the middle of the foot and **can move forward and backward**"
+      //     "the **proportional feedback of COM kinematics** is modulated to exploit this
+      //      change in potential to adjust the CoP position within the foot"
+      //     增益按相调度：**中支撑相最高**，早期/晚期低（R²: 中支撑 0.7 / 早晚 0.3）
+      //   同源依据 —— Neptune/Perry, *Frontiers Neurology* 2019, 10:999：
+      //     跖屈肌是 CoM 推进的**主引擎**，"the work produced by these muscles has been
+      //     **four times more efficient** than the work produced by the hip muscles to
+      //     sustain the CoM increment during the single-stance period"
+      //
+      //   ⇒ 控制器（阻尼倒立摆 / CoP→CoM 标准形式）：
+      //        捕获点  ξ = com.x + com.vx/ω          （放 ξ 处 ⇒ CoM 恰好停住）
+      //        CoM 误差 e = ξ − 脚中心 x            （脚比 ξ 靠后 ⇒ 需要把 CoM 推过去）
+      //        踝力矩   τ = −kcop·e                  （移 CoP：跖屈把 CoP 前推→减速前移；
+      //                                               背屈把 CoP 后拉→加速前移）
+      //   ⇒ 符号推导：CoP 在 CoM **后**方 ⇒ GRF 对 CoM 产生**前向**力矩 ⇒ CoM 前移。
+      //     跖屈（脚尖下压）把 CoP 推向**前**；故想让 CoM **减速**（前移过快）要跖屈。
+      //     ⇒ τ_ankle = +kcop · (ξ − 脚x)   当 ξ > 脚x（CoM 冲过脚前方）→ 跖屈减速。
+      const xi = com.x + com.vx / om;                    // 捕获点（与上方 MoS 同一定义）
+      const footCX = stanceL ? footBufL[0]! : footBufR[0]!;
+      const comShiftErr = xi - footCX;                   // >0 ⇒ CoM 冲在脚前方，需要减速
+      // 相位调度：中支撑相（s∈[0.25,0.75]）增益最高，早/晚期低 —— PLOS CB 2021 的实测形状
+      const copGainPhase = (Math.abs(s - 0.5) < 0.25 ? 1 : 0.45);
+      const copTau = (p.kCop ?? 0) * copGainPhase * comShiftErr;   // rad，负 = 跖屈（减速）
+      dbgLog.xi = +xi.toFixed(3); dbgLog.footCX = +footCX.toFixed(3);
+      dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance
         // 支撑相：起立时**跖屈**（脚尖下压，顶髋把身体前送）→ 中后期回中立
         ? aStance - aPush * Math.max(0, 1 - 2 * s)
@@ -604,7 +644,12 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
         //   每段用**它自己的**关节描述做归一化（错用 jHip 会让限位算错）。
         for (const sj of spineNames) {
           const sjDesc = sk.joints[jointIndexByName(sk, sj)];
-          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 2);
+          // ★★ 轴修正：旧代码把**偏航(yaw)**值写到**轴 2**。
+          //   而脊柱关节的限位是 `minRad/maxRad = [-xy, -xy, SPINE_FLEX]`，
+          //   即轴 0/1 = 侧倾/扭转、**轴 2 = 前后屈伸** ⇒
+          //   偏航写进屈伸轴 ⇒ 脊柱只会前后弯、不会左右转，实测关节角恒为 0.0°。
+          //   ⇒ 改写到**轴 0**（侧倾/扭转）。
+          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
         }
         // 骨盆：两髋绕自身长轴反向扭转（axis 1）⇒ 骨盆相对脚反向转
         setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
