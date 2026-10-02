@@ -14129,6 +14129,192 @@ var PelvisFirstTracker = class {
   }
 };
 
+// src/core/stability.ts
+var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
+  const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
+  const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
+  return { x: supEdgeX - xcoM, z: supEdgeZ - zcoM };
+}
+var MIN_SWING = 0.28;
+var SETTLE_WIN = 0.45;
+var MOS_TARGET = 0.3;
+var mosBand = (mos) => {
+  if (mos < 0) return -clamp012(-mos / 0.25);
+  if (mos <= MOS_TARGET) return clamp012(mos / MOS_TARGET);
+  return Math.exp(-2 * ((mos - MOS_TARGET) / 0.4) ** 2);
+};
+var StepSettleTracker = class _StepSettleTracker {
+  // ⚠ 初始必须是 **settle**（"正站着"），不是 swing。
+  //   我第一版初始化成 'swing'，结果一条**从不离地**的腿被当成"刚落地、摆动 0 秒"
+  //   ⇒ 站桩的镇定器被判了 26 次"摆动太快"（实测），奖励完全反了。
+  phase = "settle";
+  swungTicks = 0;
+  // 本次离地确实观测到的帧数（0 = 一直踩着）
+  // ★ 接触去抖：Rapier 的接触信号会**抖动**（脚在空中偶发一帧接地）。
+  //   不去抖的话，teacher 实测被判了 9 次"摆动太快"——摆动计时被那一帧清零。
+  airRun = 0;
+  gndRun = 0;
+  static MIN_RUN = 2;
+  // 连续 2 帧才算真的换状态
+  /**
+   * ★ 构成"一步"所需的**最小腾空帧数**（4 帧 ≈ 33 ms）。
+   *   没有它的话，接触抖动（站桩时脚会偶发 2 帧"离地"）会被当成迈步：
+   *   实测站着的镇定器因此拿到 **24 个结算步**。33 ms 的门槛把抖动全部挡掉，
+   *   同时远小于 MIN_SWING=0.28 s，不会误伤真正的短摆动。
+   */
+  static MIN_FLIGHT = 4;
+  tSwing = 0;
+  tSettle = 0;
+  mosMin = Infinity;
+  // 本步 settle 窗内的 MoS 最小值
+  mosEnd = 0;
+  // settle 窗**结束**时的 MoS（"最后稳住了"的判据）
+  mosAtTouch = 0;
+  // 触地瞬间的 MoS（用来判"这一步稳不稳"）
+  credit = 0;
+  // 本步结算出的分
+  accCredit = 0;
+  // 累计结算分（渐进塑形，进适应度用）
+  tooFast = 0;
+  settled = 0;
+  unstableSteps = 0;
+  flights = 0;
+  // 被识别为"一步"的次数（不论稳不稳）
+  recovered = 0;
+  /** 上一结算步的 MoS（−1 = 还没有） */
+  prevTouchMos = -1;
+  stepT = 0;
+  // 本步总时长
+  reset() {
+    this.phase = "settle";
+    this.tSwing = 0;
+    this.tSettle = 0;
+    this.swungTicks = 0;
+    this.accCredit = 0;
+    this.airRun = 0;
+    this.gndRun = 0;
+    this.mosMin = Infinity;
+    this.mosAtTouch = 0;
+    this.credit = 0;
+    this.tooFast = 0;
+    this.settled = 0;
+    this.unstableSteps = 0;
+    this.recovered = 0;
+    this.flights = 0;
+    this.prevTouchMos = -1;
+    this.stepT = 0;
+  }
+  get settleRatio() {
+    return this.settled;
+  }
+  /** 累计结算分（渐进塑形，0..~1 每次） */
+  get creditSum() {
+    return this.accCredit;
+  }
+  /** 诊断快照：为什么没结算（一行看完状态机） */
+  debug() {
+    return `phase=${this.phase} swung=${this.swungTicks} tSwing=${(this.tSwing * 1e3).toFixed(0)}ms tSettle=${(this.tSettle * 1e3).toFixed(0)}ms mosEnd=${(this.mosEnd * 1e3).toFixed(0)}mm settled=${this.settled} tooFast=${this.tooFast} flights=${this.flights} air=${this.airRun} gnd=${this.gndRun}`;
+  }
+  get fastCount() {
+    return this.tooFast;
+  }
+  /** 被识别成"一步"的次数（诊断用：机制有没有在工作） */
+  get flightCount() {
+    return this.flights;
+  }
+  get unstable() {
+    return this.unstableSteps;
+  }
+  get recoveredCount() {
+    return this.recovered;
+  }
+  /**
+   * @param grounded 该脚是否着地（原始接触信号，会抖动）
+   * @param mosX 矢状面 MoS（m，正 = 稳定）
+   * @param dt
+   * @returns 本拍该脚拿到的分（带符号；负 = 罚）
+   */
+  step(grounded, mosX, dt) {
+    if (grounded) {
+      this.gndRun++;
+      this.airRun = 0;
+    } else {
+      this.airRun++;
+      this.gndRun = 0;
+    }
+    const air = this.airRun >= _StepSettleTracker.MIN_RUN;
+    const gnd = this.gndRun >= _StepSettleTracker.MIN_RUN;
+    if (!air && !gnd) return 0;
+    if (air) {
+      if (this.phase === "settle") {
+        this.credit = 0;
+        this.phase = "swing";
+        this.tSwing = 0;
+        this.tSettle = 0;
+        this.mosMin = Infinity;
+        this.stepT = 0;
+      }
+      this.swungTicks++;
+      this.tSwing += dt;
+      return 0;
+    }
+    if (this.phase === "swing") {
+      if (this.swungTicks < _StepSettleTracker.MIN_FLIGHT) {
+        this.phase = "settle";
+        this.tSettle = 0;
+        this.mosMin = mosX;
+        this.mosEnd = mosX;
+        this.swungTicks = 0;
+        return 0;
+      }
+      this.flights++;
+      this.mosAtTouch = mosX;
+      if (this.mosAtTouch < 0) this.unstableSteps++;
+      this.phase = "settle";
+      this.tSettle = 0;
+      this.mosMin = mosX;
+      this.mosEnd = mosX;
+      this.stepT = this.tSwing;
+      if (this.tSwing < MIN_SWING) {
+        this.tooFast++;
+        this.credit = 0;
+        return 0;
+      }
+      return 0;
+    }
+    if (this.swungTicks > 0) this.accCredit -= 0;
+    this.tSettle += dt;
+    this.mosMin = Math.min(this.mosMin, mosX);
+    this.mosEnd = mosX;
+    const gain = mosBand(mosX) * dt;
+    if (this.tSettle >= SETTLE_WIN - dt * 0.5) {
+      const paceFrac = clamp012(this.stepT / MIN_SWING);
+      const okStable = this.mosEnd >= 0;
+      const cleanStable = this.mosMin >= 0;
+      if (okStable) {
+        if (this.stepT >= MIN_SWING) this.settled++;
+        this.credit = paceFrac * (cleanStable ? 1 : 0.7);
+        if (this.mosAtTouch < 0) this.recovered++;
+      } else {
+        this.credit = paceFrac * 0.3;
+      }
+      this.accCredit += this.credit;
+      this.prevTouchMos = this.mosAtTouch;
+      this.phase = "swing";
+      this.tSwing = 0;
+      this.tSettle = 0;
+      this.mosMin = Infinity;
+      this.swungTicks = 0;
+    }
+    return gain;
+  }
+  /** 本步结算出的总分（0 或 1，或 0.3） */
+  get lastCredit() {
+    return this.credit;
+  }
+};
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -14204,6 +14390,9 @@ var W = {
   refHip: 1.5,
   refKnee: 1.5,
   pelvisFirst: 2,
+  settle: 3,
+  stepPace: 1.5,
+  moS: 0.5,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
   moveScale: {},
@@ -14282,6 +14471,19 @@ var Sim = class {
   // 参考分/盆骨优先的时间积分
   pfL = new PelvisFirstTracker();
   pfR = new PelvisFirstTracker();
+  ssL = new StepSettleTracker();
+  ssR = new StepSettleTracker();
+  accSettle = 0;
+  accPace = 0;
+  accMoS = 0;
+  mosMinSeen = Infinity;
+  mosSum = 0;
+  mosN = 0;
+  settleDebug = "";
+  /** 诊断：迈步-稳住状态机的末态（为什么没结算） */
+  get settleState() {
+    return this.settleDebug;
+  }
   altCount = 0;
   accSwitchQ = 0;
   // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
@@ -14481,6 +14683,14 @@ var Sim = class {
     this.accPelvis = 0;
     this.pfL.reset();
     this.pfR.reset();
+    this.ssL.reset();
+    this.ssR.reset();
+    this.accSettle = 0;
+    this.accPace = 0;
+    this.accMoS = 0;
+    this.mosMinSeen = Infinity;
+    this.mosSum = 0;
+    this.mosN = 0;
     this.accLift = 0;
     this.accSingle = 0;
     this.accTicks = 0;
@@ -14774,6 +14984,29 @@ var Sim = class {
       this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
       if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt;
     }
+    {
+      const com2 = readCom(doll, this.com);
+      const sup2 = readSupport(doll, this.sup);
+      const om2 = omegaAt(com2.y);
+      const mos = marginOfStability(
+        com2.x,
+        com2.vx,
+        om2,
+        sup2.cx + sup2.halfX,
+        com2.z,
+        com2.vz,
+        sup2.cz + sup2.halfZ
+      );
+      if (nGround >= 1) {
+        this.mosMinSeen = Math.min(this.mosMinSeen, mos.x);
+        this.mosSum += mos.x;
+        this.mosN++;
+      }
+      const gL2 = this.ssL.step(gL, mos.x, dt);
+      const gR2 = this.ssR.step(gR, mos.x, dt);
+      this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+      if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
+    }
     this.accTicks += dt;
     let jSpd = 0, jMove = 0;
     for (let i2 = 0; i2 < doll.jointCount; i2++) {
@@ -14917,6 +15150,18 @@ var Sim = class {
       tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
+      const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
+      tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
+      tt.stepPace = -w.stepPace * nTooFast * aliveAvg;
+      tt.moS = w.moS * this.accMoS * aliveAvg;
+      tt.settledSteps = this.ssL.settleRatio + this.ssR.settleRatio;
+      tt.tooFastSteps = this.ssL.fastCount + this.ssR.fastCount;
+      tt.flightSteps = this.ssL.flightCount + this.ssR.flightCount;
+      tt.mosMin = this.mosMinSeen === Infinity ? 0 : this.mosMinSeen;
+      tt.mosMean = this.mosN > 0 ? this.mosSum / this.mosN : 0;
+      tt.unstableSteps = this.ssL.unstable + this.ssR.unstable;
+      tt.recoveredSteps = this.ssL.recoveredCount + this.ssR.recoveredCount;
+      this.settleDebug = `L[${this.ssL.debug()}] R[${this.ssR.debug()}]`;
       tt.alive = aliveAvg;
       tt.upright = w.upright * (this.accUpright - elapsed);
       tt.height = -w.height * this.accHeight;

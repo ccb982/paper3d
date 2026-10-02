@@ -22,6 +22,7 @@ import {
   dcm, dcmExcess, footGrounded, newCom, newSupport, omegaAt, readCom, readSupport,
 } from './posture';
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
+import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN } from './stability';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -197,6 +198,9 @@ export const W = {
   refHip: 1.5,
   refKnee: 1.5,
   pelvisFirst: 2.0,
+  settle: 3.0,
+  stepPace: 1.5,
+  moS: 0.5,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
   moveScale: {} as Record<string, number>,
@@ -270,6 +274,12 @@ export class Sim {
   private gN0 = 0; private gN1 = 0; private gN2 = 0;   // 接地脚数的帧数分布（诊断）
   private accRefHip = 0; private accRefKnee = 0; private accPelvis = 0;   // 参考分/盆骨优先的时间积分
   private pfL = new PelvisFirstTracker(); private pfR = new PelvisFirstTracker();
+  private ssL = new StepSettleTracker(); private ssR = new StepSettleTracker();
+  private accSettle = 0; private accPace = 0; private accMoS = 0; private mosMinSeen = Infinity; private mosSum = 0; private mosN = 0;
+  private settleDebug = '';
+
+  /** 诊断：迈步-稳住状态机的末态（为什么没结算） */
+  get settleState(): string { return this.settleDebug; }
   private altCount = 0;
   private accSwitchQ = 0;         // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
   private accShift = 0;          // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
@@ -459,6 +469,8 @@ export class Sim {
     this.gN0 = 0; this.gN1 = 0; this.gN2 = 0;
     this.accRefHip = 0; this.accRefKnee = 0; this.accPelvis = 0;
     this.pfL.reset(); this.pfR.reset();
+    this.ssL.reset(); this.ssR.reset();
+    this.accSettle = 0; this.accPace = 0; this.accMoS = 0; this.mosMinSeen = Infinity; this.mosSum = 0; this.mosN = 0;
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
     this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
@@ -835,6 +847,26 @@ export class Sim {
       if (nGround === 1) this.accPelvis += ((this.pfL.score() + this.pfR.score()) * 0.5) * dt;
       void ph2;
     }
+    // ── 迈步 → 稳住（MoS 课程）──────────────────────────────────────────
+    //  MoS = BoS边缘 − XCoM（Hof 2005）。只在**单支撑**时有支撑域可言，
+    //  但"稳住"这件事恰恰发生在触地之后，所以两腿都要跟踪。
+    {
+      const com2 = readCom(doll, this.com);
+      const sup2 = readSupport(doll, this.sup);
+      const om2 = omegaAt(com2.y);
+      const mos = marginOfStability(
+        com2.x, com2.vx, om2, sup2.cx + sup2.halfX, com2.z, com2.vz, sup2.cz + sup2.halfZ,
+      );
+      if (nGround >= 1) {
+        this.mosMinSeen = Math.min(this.mosMinSeen, mos.x);
+        this.mosSum += mos.x; this.mosN++;
+      }
+      const gL2 = this.ssL.step(gL, mos.x, dt);
+      const gR2 = this.ssR.step(gR, mos.x, dt);
+      this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+      // 摆动太短的罚（负分）
+      if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
+    }
     this.accTicks += dt;
 
     //  ② 逐关节"要动"：骨盆(髋)和膝盖必须持续动，站桩得 0。
@@ -1041,6 +1073,25 @@ export class Sim {
       tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;   // 诊断：膝滞后髋多少秒（>0 才正确）
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;   // 诊断：触地前髋预激活程度
+      // ★★ 按**结算过的步数**计价，不是时间积分：
+      //   时间积分会被"一直站着 MoS 很好"刷分（实测镇定器一度拿到 26 分），
+      //   而且步数越多按时间平均分越高 ⇒ 反而鼓励快抖。
+      //   按"结算步"计价天然限速：摆动 < MIN_SWING 的步**根本不计数**。
+      // ★ 用**累计结算分**（含渐进塑形）而不是"结算步数"：
+      //   步数是二值的、砍掉了梯度；累计分能把"摆动 0.1 s → 0.36 分"这种中间态传给 ES。
+      const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
+      tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
+      tt.stepPace = -w.stepPace * nTooFast * aliveAvg;
+      tt.moS = w.moS * this.accMoS * aliveAvg;
+      tt.settledSteps = this.ssL.settleRatio + this.ssR.settleRatio;      // 诊断：结算过的步数
+      tt.tooFastSteps = this.ssL.fastCount + this.ssR.fastCount;           // 诊断：摆动太短的次数
+      tt.flightSteps = this.ssL.flightCount + this.ssR.flightCount;        // 诊断：被识别成"一步"的次数
+      tt.mosMin = this.mosMinSeen === Infinity ? 0 : this.mosMinSeen;     // 诊断：全程最小 MoS
+      tt.mosMean = this.mosN > 0 ? this.mosSum / this.mosN : 0;            // 诊断：平均 MoS
+      tt.unstableSteps = this.ssL.unstable + this.ssR.unstable;           // 诊断：MoS<0 的步数
+      tt.recoveredSteps = this.ssL.recoveredCount + this.ssR.recoveredCount;  // 诊断：恢复成功的步数
+      this.settleDebug = `L[${this.ssL.debug()}] R[${this.ssR.debug()}]`;
+      void MIN_SWING; void SETTLE_WIN;
       tt.alive = aliveAvg;   // 诊断：'站得住'的时间占比
       tt.upright = w.upright * (this.accUpright - elapsed);
       tt.height = -w.height * this.accHeight;
