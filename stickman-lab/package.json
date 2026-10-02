@@ -36,6 +36,7 @@
     "settle": "node tools/run.mjs probe-settle",
     "balance": "node tools/run.mjs probe-balance",
     "gaitcycle": "node tools/run.mjs probe-gaitcycle",
+    "tune": "node tools/run.mjs tune-teacher",
     "ankle": "node tools/run.mjs probe-ankle",
     "balancer14": "node tools/run.mjs probe-balancer14"
   },
