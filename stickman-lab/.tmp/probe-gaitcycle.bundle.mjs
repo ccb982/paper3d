@@ -14466,6 +14466,144 @@ var BalanceJudge = class {
   }
 };
 
+// src/core/gaitPhase.ts
+var STEP_MIN = 0.28;
+var ADJUST_MIN = 0.7;
+var ADJUST_MOS_TOL = 0;
+var W_SHAPE = 0.35;
+var W_MOS = 0.3;
+var W_PLACE = 0.2;
+var W_PELVIS = 0.15;
+var GaitPhaseMachine = class {
+  phase = "both";
+  tStep = 0;
+  tAdjust = 0;
+  mosAcc = 0;
+  mosN = 0;
+  placeAcc = 0;
+  placeN = 0;
+  shapeAcc = 0;
+  shapeN = 0;
+  pelvisAcc = 0;
+  lastCredit = 0;
+  accCredit = 0;
+  nStep = 0;
+  nAdjustOk = 0;
+  flickers = 0;
+  adjSum = 0;
+  reset() {
+    this.phase = "both";
+    this.tStep = 0;
+    this.tAdjust = 0;
+    this.mosAcc = 0;
+    this.mosN = 0;
+    this.placeAcc = 0;
+    this.placeN = 0;
+    this.shapeAcc = 0;
+    this.shapeN = 0;
+    this.pelvisAcc = 0;
+    this.lastCredit = 0;
+    this.accCredit = 0;
+    this.nStep = 0;
+    this.nAdjustOk = 0;
+    this.flickers = 0;
+    this.adjSum = 0;
+  }
+  get now() {
+    return this.phase;
+  }
+  /** 正在"调整身体"阶段（此时其它项才允许计分） */
+  get inAdjust() {
+    return this.phase === "adjust";
+  }
+  /** 刚结算完一个循环（那一帧允许把分记进适应度） */
+  get justSettled() {
+    return this.lastCredit > 0;
+  }
+  get tally() {
+    return {
+      nStep: this.nStep,
+      nAdjustOk: this.nAdjustOk,
+      lastCredit: this.lastCredit,
+      accCredit: this.accCredit,
+      lastAdjustSec: this.tAdjust,
+      meanAdjustSec: this.nAdjustOk > 0 ? this.adjSum / this.nAdjustOk : 0,
+      flickers: this.flickers
+    };
+  }
+  /**
+   * 每控制拍喂一次。
+   * @param nGround 接地脚数（0/1/2）
+   * @param clearance 本次腾空的最大离地高度（m）—— 用来区分"真迈步"和"抖动"
+   * @param mosX 矢状面 MoS（m）
+   * @param shape 髋/膝贴合文献参考的分数 0..1
+   * @param place 落点贴合捕获点的分数 0..1
+   * @param pelvis 盆骨先于膝的分数（可为负）
+   * @param dt
+   */
+  step(nGround, clearance, mosX, shape2, place, pelvis, dt2) {
+    if (nGround === 1) {
+      if (this.phase !== "adjust") {
+        this.phase = "step";
+        this.tStep += dt2;
+      }
+      if (this.phase === "step" && clearance >= 0.03 && this.tStep >= STEP_MIN) {
+        this.phase = "adjust";
+        this.nStep++;
+        this.tAdjust = 0;
+        this.mosAcc = 0;
+        this.mosN = 0;
+        this.placeAcc = 0;
+        this.placeN = 0;
+        this.shapeAcc = 0;
+        this.shapeN = 0;
+        this.pelvisAcc = 0;
+      } else if (this.phase === "step" && clearance < 0.03) {
+        this.flickers++;
+      }
+      return;
+    }
+    if (nGround === 2) {
+      this.phase = "both";
+      this.tStep = 0;
+      this.tAdjust = 0;
+      this.lastCredit = 0;
+      return;
+    }
+    if (this.phase === "adjust") {
+      this.tAdjust += dt2;
+      this.mosAcc += mosX;
+      this.mosN++;
+      this.placeAcc += place;
+      this.placeN++;
+      this.shapeAcc += shape2;
+      this.shapeN++;
+      this.pelvisAcc += pelvis;
+      if (this.tAdjust >= ADJUST_MIN) {
+        const mosAvg = this.mosN > 0 ? this.mosAcc / this.mosN : 0;
+        const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
+        const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
+        const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
+        const pelvisAvg = this.pelvisAcc;
+        const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
+        this.lastCredit = credit;
+        this.accCredit += credit;
+        this.nAdjustOk++;
+        this.adjSum += this.tAdjust;
+        this.phase = "both";
+        this.tStep = 0;
+        this.tAdjust = 0;
+        this.lastCredit = credit;
+      }
+      return;
+    }
+    this.phase = "both";
+    this.tStep = 0;
+    this.tAdjust = 0;
+    this.lastCredit = 0;
+  }
+};
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -14559,6 +14697,14 @@ var W = {
    *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
    */
   placement: 1,
+  /**
+   * ★★★ 顺序结构项：完成一个"迈步 → 调整身体"循环才给分（`gaitPhase.ts`）。
+   *   用户 2026-10-02："走路大致是迈步，调整身体，再迈步"、
+   *   "迈步间隔太小，无法调整自身平衡"。以前所有走路项都是**独立**时间积分，
+   *   任何"一直在动"的动作都能同时满足（实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）；
+   *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
+   */
+  cycle: 3,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -14696,6 +14842,18 @@ var Sim = class {
   // 本次腾空的最大脚底高度（离地高度判据）
   cycTimes = [];
   // 换支撑脚的时刻（节律门用）
+  // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
+  gp = new GaitPhaseMachine();
+  accCycle = 0;
+  gpPaidThisStep = false;
+  cycleN = 0;
+  cycleFlick = 0;
+  cycleAdj = 0;
+  cyclePhase = "both";
+  lastMosX = 0;
+  lastSupEdgeX = 0;
+  lastRefHip = 0;
+  lastRefKnee = 0;
   flickerCount = 0;
   // 被判定为接触抖动（离地不够）的次数（诊断）
   lastAltT = 0;
@@ -14946,6 +15104,17 @@ var Sim = class {
     this.cycTimes = [];
     this.lastAltT = 0;
     this.lastLoadFrac = [0.5, 0.5];
+    this.gp.reset();
+    this.accCycle = 0;
+    this.gpPaidThisStep = false;
+    this.cycleN = 0;
+    this.cycleFlick = 0;
+    this.cycleAdj = 0;
+    this.cyclePhase = "both";
+    this.lastMosX = 0;
+    this.lastSupEdgeX = 0;
+    this.lastRefHip = 0;
+    this.lastRefKnee = 0;
     this.accVelTrack = 0;
     this.accYaw = 0;
     this.accLat = 0;
@@ -15236,6 +15405,27 @@ var Sim = class {
       this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt22);
       this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt22);
       if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt2;
+      {
+        const clr = Math.max(this.airPeakL, this.airPeakR);
+        const mosHere = this.lastMosX;
+        const xiH = this.lastSupEdgeX - mosHere;
+        const footHere = gL ? this.footTmpR[0] : this.footTmpL[0];
+        const eH = Math.abs(footHere - xiH);
+        const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+        const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
+        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt2);
+        const cyc = this.gp.tally;
+        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
+          this.accCycle += cyc.lastCredit;
+          this.gpPaidThisStep = true;
+        }
+        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
+        this.cycleN = cyc.nAdjustOk;
+        this.cycleFlick = cyc.flickers;
+        this.cycleAdj = cyc.meanAdjustSec;
+        this.cyclePhase = this.gp.now;
+      }
     }
     {
       doll.soleXZ("l", this.footTmpL);
@@ -15431,7 +15621,13 @@ var Sim = class {
       }
       const altGate = Math.min(1, this.altCount / 2);
       const gate = altGate * cad;
+      const cap = (v, m) => v > m ? m : v;
       tt.cadence = cad;
+      tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+      tt.cycleCount = this.cycleN;
+      tt.cycleFlick = this.cycleFlick;
+      tt.cycleAdjust = this.cycleAdj;
+      tt.cyclePhase = this.gp.now === "adjust" ? 2 : this.gp.now === "step" ? 1 : 0;
       tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)] : 0;
       tt.lift = w.lift * this.accLift * aliveAvg * cad;
       tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
@@ -15454,8 +15650,7 @@ var Sim = class {
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
       const paceCap = 1 + Math.floor(this.accTicks / 1.5);
       const altGate2 = altGate;
-      const cap = (v, m) => v > m ? m : v;
-      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
+      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * gate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
       tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
       const lenSum = this.ssL.lenCredit + this.ssR.lenCredit;

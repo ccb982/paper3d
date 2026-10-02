@@ -35,7 +35,8 @@
     "gaitref": "node tools/run.mjs probe-gaitref",
     "settle": "node tools/run.mjs probe-settle",
     "balance": "node tools/run.mjs probe-balance",
-    "gaitcycle": "node tools/run.mjs probe-gaitcycle"
+    "gaitcycle": "node tools/run.mjs probe-gaitcycle",
+    "ankle": "node tools/run.mjs probe-ankle"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

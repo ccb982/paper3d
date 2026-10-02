@@ -156,6 +156,15 @@ export interface RagdollOptions {
    */
   kD?: number;
   /**
+   * ★★ 逐关节的增益覆盖（默认没有 ⇒ 全部用上面的全局 kP/kD）。
+   *
+   * 为什么必须有（用户 2026-10-02 要求重调踝）：踝和膝的**负载惯量差一个量级**
+   * —— 膝要扛整条腿和大半个躯干（Ieff 大），踝只带一只脚掌（Ieff 小）。
+   * 用同一组 kP=48/kD=1 会让踝像一根**极硬的弹簧**：一给角度就抽。
+   * 实测（tools/probe-ankle.ts）：踝关掉能站 8 s，一开就 0.5 s 内塌 41 cm。
+   */
+  jointGain?: Record<string, { kP: number; kD: number }>;
+  /**
    * ★ 网络命令的**角度量程比例**（默认 0.9）。
    *
    * `out[k] ∈ [−1, +1]` 线性映射到关节该轴自己的机械量程：
@@ -211,6 +220,8 @@ const DEFAULTS: Required<RagdollOptions> = {
   torqueScale: 1.0,
   kP: 48.0,
   kD: 1.0,
+  // 逐关节增益：默认空（全部用上面的全局值）
+  jointGain: {} as Record<string, { kP: number; kD: number }>,
   posRefScale: 0.9,
   purgeJointCache: true,
   motorAlpha: MOTOR_ALPHA,
@@ -797,6 +808,7 @@ export class Ragdoll {
     const qRel = this.qRel;
     const rv = this.rv;
     const relL = this.relL;
+    const jg = this.opt.jointGain ?? {};
     for (let i = 0; i < this.joints.length; i++) {
       const j = this.sk.joints[i];
       const pi = this.jointBodies[i * 2];
@@ -845,7 +857,9 @@ export class Ragdoll {
           // ---- 位置环 PD：θ_ref 由网络命令映射到该侧机械量程 ----
           const cmd = this.motorTarget[idx];
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-          err = kP * (thRef - a) - kD * relL[k];
+          // ★ 逐关节增益覆盖（踝专用，见 RagdollOptions.jointGain 的注释）
+          const ov = jg[j.name];
+          err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
 
         if (err === 0) continue;

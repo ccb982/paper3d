@@ -24,6 +24,7 @@ import {
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, MIN_CLEARANCE, cadenceScore, TARGET_CYCLE } from './stability';
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
+import { GaitPhaseMachine } from './gaitPhase';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -217,6 +218,14 @@ export const W = {
    *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
    */
   placement: 1.0,
+  /**
+   * ★★★ 顺序结构项：完成一个"迈步 → 调整身体"循环才给分（`gaitPhase.ts`）。
+   *   用户 2026-10-02："走路大致是迈步，调整身体，再迈步"、
+   *   "迈步间隔太小，无法调整自身平衡"。以前所有走路项都是**独立**时间积分，
+   *   任何"一直在动"的动作都能同时满足（实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）；
+   *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
+   */
+  cycle: 3.0,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -324,6 +333,11 @@ export class Sim {
   private airL = 0;             // 左脚连续腾空时间
   private airPeakL = 0; private airPeakR = 0;   // 本次腾空的最大脚底高度（离地高度判据）
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
+  // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
+  private gp = new GaitPhaseMachine();
+  private accCycle = 0; private gpPaidThisStep = false;
+  private cycleN = 0; private cycleFlick = 0; private cycleAdj = 0; private cyclePhase = 'both';
+  private lastMosX = 0; private lastSupEdgeX = 0; private lastRefHip = 0; private lastRefKnee = 0;
   private flickerCount = 0;                     // 被判定为接触抖动（离地不够）的次数（诊断）
   private lastAltT = 0;
   private airR = 0;
@@ -548,6 +562,9 @@ export class Sim {
     //   "存档→续训"在第 4 代开始与"一路训到底"分叉（实测 1.490 vs 1.508）。
     //   这条由 verify-core 的"复用 Sim ≡ 新建 Sim"门禁永久盯着。
     this.lastLoadFrac = [0.5, 0.5];
+    this.gp.reset(); this.accCycle = 0; this.gpPaidThisStep = false;
+    this.cycleN = 0; this.cycleFlick = 0; this.cycleAdj = 0; this.cyclePhase = 'both';
+    this.lastMosX = 0; this.lastSupEdgeX = 0; this.lastRefHip = 0; this.lastRefKnee = 0;
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
     for (const k of MOVE_JOINTS) this.accJtMove[k] = 0;
     this.supInRatio = 0;
@@ -933,6 +950,33 @@ export class Sim {
       this.pfR.step(vel('hip_r'), vel('knee_r'), gR, dt2);
       // 只在"确实在交替"时计分（单支撑），并且要求髋领先才是正分
       if (nGround === 1) this.accPelvis += ((this.pfL.score() + this.pfR.score()) * 0.5) * dt;
+      // ══════ ★★★ 顺序结构：迈步 → 调整身体 → 再迈步 ══════
+      //   以前所有走路项都是**独立**的时间积分 ⇒ 任何"一直在动"的动作都能同时满足它们
+      //   （实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）。
+      //   现在由 GaitPhaseMachine 强制顺序：
+      //     相 1 迈步：单支撑且离地 ≥3cm 且持续 ≥STEP_MIN(0.28s)
+      //     相 2 调整：**必须单支撑待够 ADJUST_MIN(0.70s)**，期间累计 MoS/落点/形状/盆骨分
+      //     相 3 过渡：双脚着地
+      //   ⇒ **没走完"迈步→调整"这个循环，一分不给**。这是关住抽搐的结构性办法。
+      {
+        const clr = Math.max(this.airPeakL, this.airPeakR);
+        const mosHere = this.lastMosX;
+        const xiH = this.lastSupEdgeX - mosHere;
+        const footHere = gL ? this.footTmpR[0]! : this.footTmpL[0]!;
+        const eH = Math.abs(footHere - xiH);
+        const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+        const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
+        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt);
+        const cyc = this.gp.tally;
+        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
+          this.accCycle += cyc.lastCredit;
+          this.gpPaidThisStep = true;
+        }
+        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
+        this.cycleN = cyc.nAdjustOk; this.cycleFlick = cyc.flickers;
+        this.cycleAdj = cyc.meanAdjustSec; this.cyclePhase = this.gp.now;
+      }
       void ph2;
     }
     // ══════ ★ 平衡判据 + 脚距离（用户 2026-10-02）════════════════════════
@@ -1195,7 +1239,15 @@ export class Sim {
       }
       const altGate = Math.min(1, this.altCount / 2);
       const gate = altGate * cad;
+      const cap = (v: number, m: number): number => (v > m ? m : v);
       tt.cadence = cad;
+      // ★★★ 顺序分：一个完整的"迈步→调整"循环结束时一次性记账
+      //   （`settle` 等旧项保留，但它们都被 gate 管着）
+      tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+      tt.cycleCount = this.cycleN;         // 诊断：完成了多少个循环
+      tt.cycleFlick = this.cycleFlick;     // 诊断：抖动次数
+      tt.cycleAdjust = this.cycleAdj;      // 诊断：平均调整时长（s）
+      tt.cyclePhase = this.gp.now === 'adjust' ? 2 : this.gp.now === 'step' ? 1 : 0;
       tt.medianCycle = this.cycTimes.length >= 2
         ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)]! : 0;
       // ★ `lift` / `single` 也乘节律门：这两个是抽搐最容易刷到的项
@@ -1245,8 +1297,7 @@ export class Sim {
       //  ③ 封顶后新增的走路加分有确定上界（约 13.5 分），与代价项同量级。
       const altGate2 = altGate;
       void altGate2;
-      const cap = (v: number, m: number): number => (v > m ? m : v);
-      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
+      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * gate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
       tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
       // ★★ 步幅分：只对"结算过的步"付费，目标是 2~3 个脚长（Usherwood 2023）。
