@@ -694,6 +694,11 @@ export class Sim {
       // ★ 关节力矩每物理步施加一次（网络只在控制周期被调用，力矩是连续量）
       this.doll.driveMotors(this.dt);
       this.world.step();
+      // ★ 逐轴关节限位约束**必须在步后**施加（2026-10-02）。
+      //   Rapier 0.14 球铰不支持逐轴限位（见 ragdoll.enforceLimits 注释），
+      //   我们在冲量层自己做。若放在 driveMotors（= world.step 之前），
+      //   求解器在步内产生的接触响应看不见 ⇒ 踝实测跑到 +96.5°（限位 +18°）。
+      this.doll.enforceLimits();
       used++;
       this.subStep++;
       if (this.subStep >= this.stages) {

@@ -663,10 +663,23 @@ var JOINT_LIMITS_XY_DEG = {
   hip_r: [45, 40],
   knee_l: [6, 8],
   knee_r: [6, 8],
-  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
-  //   放开会让脚掌乱翻、把支撑面搞丢。
-  foot_l: [8, 6],
-  foot_r: [8, 6]
+  // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+  //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+  //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+  //   成立，但**单腿站立恰恰相反**：
+  //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+  //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+  //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+  //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+  //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+  //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+  //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+  //       that involves axial rotation"
+  //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+  //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+  //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+  foot_l: [14, 10],
+  foot_r: [14, 10]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {

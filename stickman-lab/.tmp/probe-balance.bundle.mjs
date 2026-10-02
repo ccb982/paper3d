@@ -6412,10 +6412,23 @@ var JOINT_LIMITS_XY_DEG = {
   hip_r: [45, 40],
   knee_l: [6, 8],
   knee_r: [6, 8],
-  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
-  //   放开会让脚掌乱翻、把支撑面搞丢。
-  foot_l: [8, 6],
-  foot_r: [8, 6]
+  // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+  //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+  //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+  //   成立，但**单腿站立恰恰相反**：
+  //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+  //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+  //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+  //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+  //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+  //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+  //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+  //       that involves axial rotation"
+  //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+  //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+  //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+  foot_l: [14, 10],
+  foot_r: [14, 10]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -13199,6 +13212,8 @@ var Ragdoll = class _Ragdoll {
    * 除以 dt 就是力矩（N·m）。
    */
   motorImpulse;
+  /** ★ 逐轴限位触发次数（诊断用：>0 说明限位真的在起作用） */
+  limitHits = 0;
   /**
    * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
    *
@@ -13643,8 +13658,6 @@ var Ragdoll = class _Ragdoll {
           const ov = jg[j.name];
           err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
-        if (false) relL[k] = 0;
-        else if (false) relL[k] = 0;
         if (err === 0) continue;
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);
@@ -13670,7 +13683,93 @@ var Ragdoll = class _Ragdoll {
         iv.z = -iv.z;
         p.applyTorqueImpulse(iv, true);
       }
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        let w;
+        if (k === AXIS_X) w = c.angvel().x - p.angvel().x;
+        else if (k === AXIS_Y) w = c.angvel().y - p.angvel().y;
+        else w = c.angvel().z - p.angvel().z;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        const J = -wRel * this.jointIeff[i];
+        const jv = this.iv;
+        jv.x = this.axisW[0] * J;
+        jv.y = this.axisW[1] * J;
+        jv.z = this.axisW[2] * J;
+        c.applyTorqueImpulse(jv, true);
+        jv.x = -jv.x;
+        jv.y = -jv.y;
+        jv.z = -jv.z;
+        p.applyTorqueImpulse(jv, true);
+        this.limitHits++;
+      }
     }
+  }
+  /**
+   * ★★★ **逐轴物理限位**（冲量层）—— **必须在 `world.step()` 之后调用**。
+   *
+   * 为什么自己做（Rapier 0.14 的限制，已查源码确认）：
+   *   · `JointData.spherical()` 的球铰不启用限位；
+   *   · JS 封装只读 `limits[0]`/`limits[1]` —— **单一 (min,max) 对**
+   *     （`dynamics/impulse_joint.js:399-400`），**没有逐轴限位**；
+   *   · `JointData.generic` 只有 1 自由度，替代不了 3 自由度的球铰。
+   *
+   * 机制：越界且还在往外走 ⇒ 施加 `J = −ω_rel·I_eff` 的角冲量，把该轴相对角速度
+   * **归零**（恢复系数 e=0 的限位挡块）。往回走不拦，否则锁死回程。
+   *
+   * ★★ 为什么必须放在步**后**（2026-10-02，两次踩坑）：
+   *   ① 放步前（= `driveMotors` 里，而它在 `world.step()` 之前）⇒ 求解器在步内
+   *      产生的接触响应完全看不见 ⇒ 踝实测跑到 **+96.5°**（限位 +18°，88% 帧越界）。
+   *   ② 惯量不能用 `jointIeff`（它取的是**主惯量的最小值**，`Math.min(I.x,I.y,I.z)`，
+   *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
+   *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
+   */
+  enforceLimits() {
+    for (let i = 0; i < this.sk.joints.length; i++) {
+      const j = this.sk.joints[i];
+      const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
+      const p = this.bodies[pi], c = this.bodies[ci];
+      const qp = p.rotation();
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        const Ip = p.principalInertia(), Ic = c.principalInertia();
+        const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+        const J = -wRel * Iax;
+        const jv = this.iv;
+        jv.x = this.axisW[0] * J;
+        jv.y = this.axisW[1] * J;
+        jv.z = this.axisW[2] * J;
+        c.applyTorqueImpulse(jv, true);
+        jv.x = -jv.x;
+        jv.y = -jv.y;
+        jv.z = -jv.z;
+        p.applyTorqueImpulse(jv, true);
+        this.limitHits++;
+      }
+    }
+  }
+  /** 该关节第 k 轴的当前角度（rad）—— 限位判定用 */
+  jointRotAxis(i, k) {
+    this.jointRot(i, this.rv);
+    return this.rv[k];
   }
   /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
   refAngleOf(joint, axis) {
@@ -15636,6 +15735,7 @@ var Sim = class {
       if (this.subStep === 0) this.controlTick();
       this.doll.driveMotors(this.dt);
       this.world.step();
+      this.doll.enforceLimits();
       used++;
       this.subStep++;
       if (this.subStep >= this.stages) {
@@ -16582,6 +16682,8 @@ var LEG = LEN_A + LEN_B;
 function runCaptureTeacher(sk2, sim, p, opts = {}) {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
+  const singleLeg = opts.singleLeg ?? null;
+  const liftHold = opts.liftHold ?? 0.25;
   const out = new Float32Array(sim.doll.jointCount * 3);
   const com = newCom();
   const dt = 1 / sim.cfg.controlHz;
@@ -16659,9 +16761,9 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     readCom(sim.doll, com);
     const om = omegaAt(com.y);
     const xi = com.x + com.vx / om;
-    let stanceL = prevStance === 1;
+    let stanceL = singleLeg ? singleLeg !== "r" : prevStance === 1;
     stanceLNow = stanceL;
-    const swingIsL = !stanceL;
+    const swingIsL = singleLeg ? singleLeg !== "l" : !stanceL;
     if (clockDriven) {
       const half = p.T * 0.5;
       const readyT = lastSwitch + half * 0.55;
@@ -16692,7 +16794,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         });
         if (swapTrace.length > 400) swapTrace.shift();
       }
-      if (landed && t >= readyT && stableEnough) {
+      if (!singleLeg && landed && t >= readyT && stableEnough) {
         steps++;
         stanceL = swingIsL;
         stanceL = swingIsL;
@@ -16766,7 +16868,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     let swingX = swingX0;
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
-    const swingY = verdictV.ok ? swingYRaw : 0.012;
+    const swingY = singleLeg ? swingIsL === (singleLeg === "l") ? 0.012 : liftHold : verdictV.ok ? swingYRaw : 0.012;
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
@@ -16901,9 +17003,28 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const shiftErrRaw2 = copZ - com.z;
       const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
       const kLatEff = wtStage === "done" ? p.kLat : (p.kLat ?? 0) * 1.8;
-      const latCorr = kLatEff * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
+      const stanceZf = stanceL ? HIP_Z : -HIP_Z;
+      const vmpX = com.z - stanceZf;
+      const vmpY = vipY;
+      const qVmp = Math.atan2(vmpX, vmpY);
+      const qVmpDot = com.vz / vmpY;
+      const copLatLimit = COP_HALF_LEN * 0.6;
+      const copLatOut = Math.max(0, Math.abs(vmpX) - copLatLimit * vmpY);
+      const latMargin = Math.max(0, 1 - copLatOut / 0.02);
+      const vmpTau = -qVmp * (p.kVmpP ?? 14) - qVmpDot * (p.kVmpD ?? 3);
+      const vmpDeg = vmpTau * latMargin * 57.3;
+      dbgLog.qVmp = +qVmp.toFixed(4);
+      dbgLog.vmpDeg = +vmpDeg.toFixed(2);
+      dbgLog.copLatOut = +copLatOut.toFixed(4);
+      const latCorr = vmpDeg / 57.3 + (isStance ? cmRoll : -cmRoll * 0.3);
+      const ankleEvertCmd = isStance ? qVip * 0 + qVmp * (p.kVmpAnkle ?? 9) * latMargin : 0;
+      dbgLog.ankleEv = +ankleEvertCmd.toFixed(3);
       const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
+      if (ankleEvertCmd !== 0) {
+        const aCmd = Math.max(-14, Math.min(14, ankleEvertCmd * 57.3));
+        setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
+      }
     }
     dbgLog.s = +s.toFixed(3);
     dbgLog.swingY = +swingY.toFixed(4);
@@ -16929,7 +17050,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     sim.doll.setMotorTargets(out);
     if (opts.record && opts.data) {
       opts.data.X.push(Array.from(sim.observation()));
-      opts.data.A.push(Array.from(out));
+      const rv = new Float64Array(3);
     }
     t += dt;
   }

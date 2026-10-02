@@ -28,7 +28,8 @@ const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
   spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, kWtX: 0, kWtVx: 0,   // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
-  kVipP: 26, kVipD: 5, kAnkleStiff: 0.5, kHipStiff: 1.6, kHipShare: 0.25, cmBalance: 0, cmBalanceD: 0,
+  kVipP: 26, kVipD: 5, kAnkleStiff: 0.5, kHipStiff: 1.6, kHipShare: 0.25,
+  kVmpP: 14, kVmpD: 3, cmBalance: 0, cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
   kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
   ankleSwing: 12, anklePush: 15, ankleStance: 0,
@@ -904,24 +905,21 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
-// ===== VIP 增益验证扫描 =====
-console.log('\n=== VIP 增益验证（kVipP × kAnkleStiff），kWtX=0 ===\n');
-console.log('  kVipP kAnklStf 峰值倾° 存活   末CoM   末VIP° 踝指令峰 CoP越界峰 承重差峰');
-for (const kp of [4, 12, 26, 50]) {
-  for (const ks of [0.5, 0.9, 1.3]) {
-    const fY = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
-    fY.begin(new Float32Array(fY.params.length));
-    let tPk = 0, cmX = 0, vPk = 0, aPk = 0, coPk = 0, ldPk = 0;
-    runCaptureTeacher(sk, fY, { ...FB, kVipP: kp, kAnkleStiff: ks }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl): void => {
-      tPk = Math.max(tPk, fY.doll.tiltOf(fY.doll.torso()));
-      cmX = readCom(fY.doll, cTmp).x;
-      vPk = Math.max(vPk, Math.abs(Number(dl?.qVip ?? 0)) * 57.3);
-      aPk = Math.max(aPk, Math.abs(Number(dl?.ankleCorr ?? 0)));
-      coPk = Math.max(coPk, Number(dl?.copOut ?? 0));
-      const [fl, fr] = fY.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-      ldPk = Math.max(ldPk, Math.abs(fl - fr));
+// ===== 单腿站立 + 额状面力学链（髋外展 ↔ 踝内外翻）=====
+console.log('\n=== 单腿站立：额状面力学链验证（kVmpP × kVmpAnkle）===\n');
+console.log('  kVmpP kVmpAnk 末CoM前后 末CoM侧移 躯干倾° 存活   单支撑帧');
+for (const kp of [0, 14, 28]) {
+  for (const ka of [0, 9, 20]) {
+    const fT = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+    fT.begin(new Float32Array(fT.params.length));
+    let cx = 0, cz = 0, tPk = 0, ss = 0;
+    const rT = runCaptureTeacher(sk, fT, { ...FB, kVmpP: kp, kVmpAnkle: ka }, { dur: 4, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
+      const c6 = readCom(fT.doll, cTmp);
+      cx = c6.x; cz = c6.z;
+      tPk = Math.max(tPk, fT.doll.tiltOf(fT.doll.torso()));
+      if (!(footGrounded(fT.doll, 'l') && footGrounded(fT.doll, 'r'))) ss++;
     } });
-    console.log(`  ${String(kp).padStart(5)} ${ks.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${String("").padStart(4)}  ${cmX.toFixed(3).padStart(6)} ${vPk.toFixed(1).padStart(6)} ${aPk.toFixed(1).padStart(8)}° ${(coPk * 1000).toFixed(0).padStart(8)}mm ${ldPk.toFixed(2).padStart(7)}`);
+    console.log(`  ${String(kp).padStart(5)} ${String(ka).padStart(7)} ${cx.toFixed(3).padStart(9)} ${cz.toFixed(3).padStart(9)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${rT.t.toFixed(2)}s ${String(ss).padStart(8)}`);
   }
 }
+console.log('\n  判读：(0,0)=无额状面控制对照；有效组合应让 |侧移| 明显小于前后漂移。');

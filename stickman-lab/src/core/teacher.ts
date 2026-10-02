@@ -127,6 +127,25 @@ export interface CaptureParams {
   kHipStiff?: number;
   /** ★ 踝 CoP 饱和后，髋接管（CoM 策略）的份额。 */
   kHipShare?: number;
+  /**
+   * ★★ 额状面 VMP（Virtual Medial Pendulum）反馈增益 —— 矢状面 kVipP 的额状面对偶。
+   *   用户 2026-10-02："我怀疑是因为无法单脚站稳导致的" ⇒ 实测单腿站立 CoM 侧移
+   *   **0.377 m**（与前后 0.343 m 同量级），而此前**额状面没有任何控制器**
+   *   （旧 `shiftErr` 被限幅到 ±40mm / ±8°，连 1/9 的误差都看不见）。
+   *   文献：Morasso Front Comput Neurosci 2022（踝策略=CoP策略 / 髋策略=CoM策略，
+   *   额状面是同一套分工）；Nashner & McCollum 1985（支撑面变小 ⇒ 策略由踝转向髋）。
+   */
+  kVmpP?: number;
+  /** ★ VMP 角速度微分增益。 */
+  kVmpD?: number;
+  /**
+   * ★★ 踝**内翻/外翻**（额状面）反馈增益 —— Liu et al., *J Biomech* 2012 的力学链：
+   *   "…a lateral bending (hip abduction/adduction) moment that is equilibrated
+   *    **at the ankle level by supination or pronation of the ankle**"
+   *   没有这一项，髋外展造出的额状面力矩无人平衡 ⇒ CoM 反而被推得更偏
+   *   （实测 kVmpP 0→80 侧移 0.275~0.337 m 纹丝不动）。
+   */
+  kVmpAnkle?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -228,10 +247,24 @@ export function runCaptureTeacher(
     data?: { X: number[][]; A: number[][] };
     /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
     onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number | string>) => void;
+    /**
+     * ★★ **单腿站立模式**（用户 2026-10-02："我怀疑是因为无法单脚站稳导致的，
+     *   我需要学怎么保证单脚站稳，先维持抬腿后的重心稳定，再考虑迈腿"）。
+     *   置为 `'l' | 'r'` 时：
+     *     · 强制该腿为唯一支撑腿，**不换脚**（关掉时序与落地判定）
+     *     · 另一条腿的 IK 目标抬到 `liftHold`（默认 0.25 m）并**保持**
+     *   ⇒ 这样可以把"能不能单腿站稳"从"能不能迈腿"里**解耦**出来单独验证。
+     *   null = 正常迈腿（默认）。
+     */
+    singleLeg?: 'l' | 'r' | null;
+    /** 单腿模式下摆动腿的保持高度（m） */
+    liftHold?: number;
   } = {},
 ): TeacherResult {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
+  const singleLeg = opts.singleLeg ?? null;
+  const liftHold = opts.liftHold ?? 0.25;
   const out = new Float32Array(sim.doll.jointCount * 3);
   const com = newCom();
   const dt = 1 / sim.cfg.controlHz;
@@ -415,7 +448,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     const om = omegaAt(com.y);
     const xi = com.x + com.vx / om;                    // ★ 捕获点
 
-    let stanceL = prevStance === 1;
+    let stanceL = singleLeg ? (singleLeg !== "r") : prevStance === 1;   // ★ 单腿模式：指定腿为支撑
     // ★★★ 架构重做（2026-10-02）：换脚触发改成「**摆动腿已落地**」，而不是时钟边界。
     stanceLNow = stanceL;   // ★ 让 wtLoadOf 读到当前支撑腿
     //
@@ -429,7 +462,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     //    ② 变支撑 → 摆动腿**落地**后与旧支撑腿交换角色
     //    ③ 调重心 → 支撑腿 + 腰 做平衡调整（adjust 相）
     //  所以交换的触发条件是「**当前摆动腿已落地** 且过了防抖时间」。
-    const swingIsL = !stanceL;                 // 摆动腿 = 非支撑腿
+    const swingIsL = singleLeg ? (singleLeg !== "l") : !stanceL;   // 摆动腿 = 非支撑腿（单腿模式下固定）
     if (clockDriven) {
       const half = p.T * 0.5;
       // 防抖：迈步相本身就要占掉一半周期，落地后再等一小会儿才换角色
@@ -476,7 +509,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         });
         if (swapTrace.length > 400) swapTrace.shift();
       }
-      if (landed && t >= readyT && stableEnough) {   // ★ 必须"站稳"才允许迈下一条
+      if (!singleLeg && landed && t >= readyT && stableEnough) {   // ★ 单腿模式禁用换脚
         steps++;
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
@@ -646,7 +679,11 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       const swingYRaw = s < SHIFT_FRAC
       ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC)          // 转移期：几乎不离地
       : 0.012 + p.lift * Math.sin(Math.PI * sSwing);       // 迈出期：完整抬升曲线
-    const swingY = verdictV.ok ? swingYRaw : 0.012;        // ★ 没过门就贴地
+    // ★★ 单腿站立模式：摆动腿抬到固定高度并**保持**（绕过平衡门与换脚判定）
+    //   目的：把"单腿能不能站稳"从"能不能迈腿"里解耦出来单独验证。
+    const swingY = singleLeg
+      ? (swingIsL === (singleLeg === 'l') ? 0.012 : liftHold)
+      : (verdictV.ok ? swingYRaw : 0.012);             // ★ 没过门就贴地
     const dtSw = t - lastSwitch;
     // ★★ 落地吸能**必须限幅**（用户 2026-10-02："脚落地后甚至无法实现支撑"）。
     //   旧式：`absorb = p.absorb · exp(−dtSw/τ)`，触地那一帧 dtSw=0 ⇒ **满量** p.absorb。
@@ -992,13 +1029,73 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
       // 转移阶段用更大的增益（APA 需要明确动作），转移完回到常规增益
       const kLatEff = wtStage === 'done' ? p.kLat : (p.kLat ?? 0) * 1.8;
-      const latCorr = kLatEff * shiftErr + p.kLatV * com.vz
+
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★★★★ **额状面平衡控制器（VMP）** —— 矢状面 VIP 的额状面对偶
+      //
+      //   为什么必须有（用户 2026-10-02："我怀疑是因为无法单脚站稳导致的，
+      //   我需要学怎么保证单脚站稳"）：单腿站立实测 CoM **侧移 0.377 m**，
+      //   与前后漂移 0.343 m 一样大 —— 而**矢状面才有控制器**（VIP），
+      //   额状面**一个都没有** ⇒ CoM 从支撑脚侧面滑出去，单腿永远站不住。
+      //
+      //   文献依据 ——
+      //   · Morasso et al., Front Comput Neurosci 2022, 15:956932：踝策略 = **CoP 策略**
+      //     （直接控 CoP），髋策略 = **CoM 策略**（控上身局部 CoM）。矢状面两者分工
+      //     我们已按此建好；额状面是**同一套分工**。
+      //   · Nashner & McCollum 1985 / Horak & Nashner：**支撑面变小 ⇒ CoP 行程变短
+      //     ⇒ 策略被迫从踝策略转向髋策略**。单腿站立正是"支撑面从两脚缩到一只脚"
+      //     的典型场景 ⇒ 额状面必须靠髋外展/内收，这就是"髋策略"的额状面版本。
+      //   · 支撑面减半 ⇒ 额状面可用行程也减半 ⇒ 阈值要按**单脚宽**取，不是双脚宽。
+      //
+      //   VMP（Virtual Medial Pendulum）= 从**支撑脚**连到 CoM 的额状面虚拟摆，
+      //   它的摆角**就是 CoP 在该脚上的横向位置**（与矢状面 VIP 同理）。
+      const stanceZf = stanceL ? HIP_Z : -HIP_Z;        // 支撑脚的横向位置
+      const vmpX = com.z - stanceZf;                   // CoM 相对支撑脚的横向偏移
+      const vmpY = vipY;                               // 同一高度（踝到 CoM）
+      const qVmp = Math.atan2(vmpX, vmpY);
+      // VMP 角速度：横向速度（z），不是除以小分母放大噪声
+      const qVmpDot = com.vz / vmpY;
+      // CoP 横向行程限制 = **单脚半宽**（支撑面减半 ⇒ 行程减半，Nashner 的策略转移条件）
+      const copLatLimit = COP_HALF_LEN * 0.6;
+      const copLatOut = Math.max(0, Math.abs(vmpX) - copLatLimit * vmpY);
+      const latMargin = Math.max(0, 1 - copLatOut / 0.02);
+      // 髋外展：超临界被动刚度（kHipStiff 同源）+ VMP 反馈
+      const vmpTau = -qVmp * (p.kVmpP ?? 14) - qVmpDot * (p.kVmpD ?? 3);
+      const vmpDeg = vmpTau * latMargin * 57.3;
+      dbgLog.qVmp = +qVmp.toFixed(4); dbgLog.vmpDeg = +vmpDeg.toFixed(2);
+      dbgLog.copLatOut = +copLatOut.toFixed(4);
+
+// 旧的 `shiftErr`（限幅 40mm）+ `kLat` 只在 APA 转移期用，
+      //   单腿站立时 CoM 侧移 377mm ⇒ 它连 1/9 的误差都看见不到 ⇒ 已被 VMP 取代。
+      const latCorr = vmpDeg / 57.3
         + (isStance ? cmRoll : -cmRoll * 0.3);
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★ 额状面力学链（Liu et al., J Biomech 2012 的原文结构）
+      //   "the whole body center of mass moves away from the supporting leg inducing a
+      //    **lateral bending (hip abduction/adduction) moment** that is equilibrated
+      //    **at the ankle level by supination or pronation of the ankle** that involves
+      //    **axial rotation**"
+      //   ⇒ 髋外展产生额状面力矩 ⇒ **踝必须反向内/外翻把它平衡掉**。
+      //   此前我们只驱动髋（VMP）、踝的额状面自由度**完全没有控制器**
+      //   ⇒ 髋单独外展造出无法平衡的力矩 ⇒ CoM 反而被推得更偏
+      //   （实测 kVmpP 0→80 侧移 0.275~0.337m 纹丝不动）。
+      //   ⚠ 符号：髋外展（正）让支撑侧抬起、CoM 相对脚向外 ⇒ 需要踝**内翻**反向制动。
+      const ankleEvertCmd = isStance
+        ? qVip * 0 + qVmp * (p.kVmpAnkle ?? 9) * latMargin   // ★ 符号已翻转（原为 -qVmp，实测发散）
+        : 0;
+      dbgLog.ankleEv = +ankleEvertCmd.toFixed(3);
       // ② 支撑腿发力前送：支撑相后半段线性增大（s∈[0.5,1]），把身体推过支撑脚
 
       // ★ 摆动腿要**向外（外展）**让开支撑腿，原来写的是 `-p.kLatSwing`（向内）⇒ 踝内收
       const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);   // ★ 前馈外展 + 反馈修正
       setAxis(`hip_${side}`, swingAbduct, jHip, 0);
+      // ★★ 踝的**内翻/外翻**（轴 0，绕足长轴）—— 额状面力学链的执行端（Liu 2012）。
+      //   此前踝的额状面自由度虽已存在（限位已按文献放宽到 ±14°/±10°），
+      //   但**没有任何控制器驱动**，所以髋单独外展造出的额状面力矩无人平衡。
+      if (ankleEvertCmd !== 0) {
+        const aCmd = Math.max(-14, Math.min(14, ankleEvertCmd * 57.3));
+        setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
+      }
     }
     // owner 已在各写入点打标
     dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.wtMod = wtModule; dbgLog.latch = latchedStance ? (latchedStance === "l" ? 1 : 2) : 0;
@@ -1018,7 +1115,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //    下一帧的观测才能反映它的效果 ⇒ 这里必须记录**这一帧的观测**而不是上一帧）。
     if (opts.record && opts.data) {
       opts.data.X.push(Array.from(sim.observation()));
-      opts.data.A.push(Array.from(out));
+    const rv = new Float64Array(3);
     }
     t += dt;
   }

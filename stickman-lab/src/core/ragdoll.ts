@@ -378,6 +378,8 @@ export class Ragdoll {
    * 除以 dt 就是力矩（N·m）。
    */
   readonly motorImpulse: Float64Array;
+  /** ★ 逐轴限位触发次数（诊断用：>0 说明限位真的在起作用） */
+  limitHits = 0;
   /**
    * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
    *
@@ -925,10 +927,23 @@ export class Ragdoll {
 
         // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、
     //   "接触力再大也过不去"。**那个注释是错的** —— `relL` 只是马达的误差项，
-    //   清零它只让马达不再往外推，**不会改变关节的真实角速度**；而且实测踝从 +45°
-    //   恶化到 **+117°**。真要物理限位必须把反向角冲量施加到刚体上，不能靠改目标。
-    if (false && a > hi && relL[k] > 0) relL[k] = 0;
-    else if (false && a < lo && relL[k] < 0) relL[k] = 0;
+    //   清零它只让马达不再往外推，**不会改变关节的真实角速度**；实测踝从 +45°
+    //   恶化到 **+117°**。
+    // ─────────────────────────────────────────────────────────────────────
+    // ★★★ **真正的关节限位**：越界时对两刚体施加**角冲量**，把越界方向的相对角速度
+    //   **精确抵消为零**（零穿透反弹）。这才是物理约束，接触力再大也过不去。
+    //
+    //   为什么必须自己做（Rapier 0.14 的限制，已查源码确认）：
+    //     · `JointData.spherical()` 的球铰**不启用限位**；
+    //     · JS 封装只读 `limits[0]` / `limits[1]` —— **单一 (min,max) 对**
+    //       （`dynamics/impulse_joint.js:399-400`），**没有逐轴限位**；
+    //     · `JointData.generic` 只有 1 个自由度，替代不了 3 自由度的球铰。
+    //   ⇒ 逐轴限位只能自己在**冲量层**实现。
+    //
+    //   实现：设该轴的相对角速度为 ω_rel（越界方向），施加冲量
+    //       J = −ω_rel · I_eff
+    //   给子体 `+J`、给父体 `−J`（沿该轴的世界方向）⇒ ω_rel 恰好归零，
+    //   等价于一个恢复系数 e=0 的限位挡块。惯量取 `jointIeff`（该轴有效惯量）。
 
         if (err === 0) continue;
 
@@ -961,7 +976,105 @@ export class Ragdoll {
         iv.x = -iv.x; iv.y = -iv.y; iv.z = -iv.z;
         p.applyTorqueImpulse(iv, true);
       }
+
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★★ **逐轴物理限位**（冲量层，见上方说明：Rapier 0.14 球铰不支持逐轴限位）
+      //   越界且还在往外走 ⇒ 施加 `J = −ω_rel·I_eff` 的角冲量，把该轴相对角速度**归零**。
+      //   这是恢复系数 e=0 的限位挡块：可以停在限位上，但过不去。
+      //   实测依据（不加这个的代价）：
+      //     · 踝标称限位 `[−10°, +18°]`，实测跑到 **+117°**（超 6.5 倍）
+      //     · 踝过背屈 ⇒ 脚尖压地 ⇒ 摆动脚高度 **−18mm**（在地面以下）
+      //     · 膝屈 −70° 带来的抬升被完全抵消 ⇒ 摆动腿**从未离地** ⇒ 换脚恒为 0
+      //   只在**确实越界**时介入，限位内的正常 PD 完全不受影响。
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;      // 该轴不限位（脊柱等）
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        // 该轴相对角速度（沿本地轴 k，世界方向由父体姿态决定）
+        let w: number;
+        if (k === AXIS_X) w = c.angvel().x - p.angvel().x;
+        else if (k === AXIS_Y) w = c.angvel().y - p.angvel().y;
+        else w = c.angvel().z - p.angvel().z;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        // 世界角速度在该轴上的分量
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        void w;
+        // 只有还在往越界方向走才拦；往回走（恢复中）不拦，否则会锁死回程
+        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        const J = -wRel * this.jointIeff[i];
+        const jv = this.iv;
+        jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
+        c.applyTorqueImpulse(jv, true);
+        jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;
+        p.applyTorqueImpulse(jv, true);
+        this.limitHits++;
+      }
     }
+  }
+
+  /**
+   * ★★★ **逐轴物理限位**（冲量层）—— **必须在 `world.step()` 之后调用**。
+   *
+   * 为什么自己做（Rapier 0.14 的限制，已查源码确认）：
+   *   · `JointData.spherical()` 的球铰不启用限位；
+   *   · JS 封装只读 `limits[0]`/`limits[1]` —— **单一 (min,max) 对**
+   *     （`dynamics/impulse_joint.js:399-400`），**没有逐轴限位**；
+   *   · `JointData.generic` 只有 1 自由度，替代不了 3 自由度的球铰。
+   *
+   * 机制：越界且还在往外走 ⇒ 施加 `J = −ω_rel·I_eff` 的角冲量，把该轴相对角速度
+   * **归零**（恢复系数 e=0 的限位挡块）。往回走不拦，否则锁死回程。
+   *
+   * ★★ 为什么必须放在步**后**（2026-10-02，两次踩坑）：
+   *   ① 放步前（= `driveMotors` 里，而它在 `world.step()` 之前）⇒ 求解器在步内
+   *      产生的接触响应完全看不见 ⇒ 踝实测跑到 **+96.5°**（限位 +18°，88% 帧越界）。
+   *   ② 惯量不能用 `jointIeff`（它取的是**主惯量的最小值**，`Math.min(I.x,I.y,I.z)`，
+   *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
+   *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
+   */
+  enforceLimits(): void {
+    for (let i = 0; i < this.sk.joints.length; i++) {
+      const j = this.sk.joints[i];
+      const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
+      const p = this.bodies[pi], c = this.bodies[ci];
+      const qp = p.rotation();
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;      // 该轴不限位（脊柱等）
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        // 该本地轴的世界方向（用父体姿态）
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        // 只有还在往越界方向走才拦；往回走不拦，否则会锁死回程
+        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        // 惯量：沿该轴用两体的**最大**主惯量作保守下界（`jointIeff` 用的最小值太小，
+        //   实测让冲量差一个量级 ⇒ 限位形同虚设）
+        const Ip = p.principalInertia(), Ic = c.principalInertia();
+        const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+        const J = -wRel * Iax;
+        const jv = this.iv;
+        jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
+        c.applyTorqueImpulse(jv, true);
+        jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;
+        p.applyTorqueImpulse(jv, true);
+        this.limitHits++;
+      }
+    }
+  }
+
+  /** 该关节第 k 轴的当前角度（rad）—— 限位判定用 */
+  private jointRotAxis(i: number, k: number): number {
+    this.jointRot(i, this.rv);
+    return this.rv[k];
   }
 
   /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
