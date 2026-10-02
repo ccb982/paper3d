@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-gaitref.ts
+// tools/probe-balance.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -13753,14 +13753,14 @@ function brainForward(s, p, x, hidden, out) {
   const L = brainLayout(s);
   for (let h = 0; h < s.hidden; h++) {
     let acc = p[L.b1 + h];
-    const row = L.w1 + h * s.inputs;
-    for (let i = 0; i < s.inputs; i++) acc += p[row + i] * x[i];
+    const row2 = L.w1 + h * s.inputs;
+    for (let i = 0; i < s.inputs; i++) acc += p[row2 + i] * x[i];
     hidden[h] = Math.tanh(acc);
   }
   for (let o = 0; o < s.outputs; o++) {
     let acc = p[L.b2 + o];
-    const row = L.w2 + o * s.hidden;
-    for (let h = 0; h < s.hidden; h++) acc += p[row + h] * hidden[h];
+    const row2 = L.w2 + o * s.hidden;
+    for (let h = 0; h < s.hidden; h++) acc += p[row2 + h] * hidden[h];
     out[o] = Math.tanh(acc);
   }
 }
@@ -15482,19 +15482,19 @@ function balancerGenome(shape2, s = BEST_BALANCER) {
   p[L.w1 + 3 * shape2.inputs + CVX] = 1;
   p[L.w1 + 4 * shape2.inputs + 0] = 5;
   p[L.w1 + 5 * shape2.inputs + 1] = 5;
-  const row = (joint, w, b) => {
+  const row2 = (joint, w, b) => {
     const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
     if (o < 0) return;
     for (let i = 0; i < w.length; i++) p[L.w2 + o * shape2.hidden + i] += w[i];
     p[L.b2 + o] += b;
   };
   for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
-    row(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
+    row2(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
   }
-  row("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
-  row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
-  row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
-  row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  row2("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row2("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
+  row2("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
+  row2("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
   return p;
 }
 var CAPTURE_GAIT = {
@@ -15618,7 +15618,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0 };
 }
 
-// tools/probe-gaitref.ts
+// tools/probe-balance.ts
 var require2 = createRequire(import.meta.url);
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -15641,199 +15641,33 @@ var check = (name, ok, detail = "") => {
 var sk = buildSkeleton(DEFAULT_CONFIG);
 var shape = shapeForJoints(sk.joints.length);
 var DUR = 6;
-var iHipL = JOINT_ORDER.indexOf("hip_l");
-var iHipR = JOINT_ORDER.indexOf("hip_r");
-var iKneeL = JOINT_ORDER.indexOf("knee_l");
-var iKneeR = JOINT_ORDER.indexOf("knee_r");
-var restOf = (name) => {
-  const j = sk.joints.find((q) => q.name === name);
-  return j.restRad[2];
-};
-console.log("");
-console.log("=== 1. rig \u7684\u7B26\u53F7\u7EA6\u5B9A\uFF08\u5B9E\u6D4B\uFF0C\u4E0D\u9760\u731C\uFF09===");
+console.log('=== 1. \u6807\u5B9A WBAM \u5C3A\u5EA6\uFF08\u7528"\u5DF2\u77E5\u7AD9\u5F97\u4F4F"\u7684\u9547\u5B9A\u5668\uFF09===\n');
 {
-  const FB = {
-    T: CAPTURE_GAIT.T,
-    vDes: CAPTURE_GAIT.vDes,
-    lift: CAPTURE_GAIT.lift,
-    kv: CAPTURE_GAIT.kv,
-    kPitch: CAPTURE_GAIT.kPitch,
-    kRate: CAPTURE_GAIT.kRate,
-    thresh: CAPTURE_GAIT.thresh,
-    absorb: CAPTURE_GAIT.absorb,
-    absorbTau: CAPTURE_GAIT.absorbTau,
-    kLat: 0,
-    kLatV: 0,
-    kLatSwing: 0
-  };
-  const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
-  sim.begin(new Float32Array(sim.params.length));
-  const swHip = [], stHip = [], swKnee = [], stKnee = [];
-  runCaptureTeacher(sk, sim, FB, {
-    dur: DUR,
-    clockDriven: true,
-    onFrame: () => {
-      const gL = footGrounded(sim.doll, "l"), gR = footGrounded(sim.doll, "r");
-      if (gL === gR) return;
-      const swingIsL = !gL;
-      const rd = (idx, name) => sim.doll.jointAngle(idx) + restOf(name);
-      swHip.push(rd(swingIsL ? iHipL : iHipR, swingIsL ? "hip_l" : "hip_r"));
-      stHip.push(rd(swingIsL ? iHipR : iHipL, swingIsL ? "hip_r" : "hip_l"));
-      swKnee.push(rd(swingIsL ? iKneeL : iKneeR, swingIsL ? "knee_l" : "knee_r"));
-      stKnee.push(rd(swingIsL ? iKneeR : iKneeL, swingIsL ? "knee_r" : "knee_l"));
-    }
-  });
-  const D = 180 / Math.PI;
-  const mean = (v) => v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
-  const mSH = mean(swHip), mST = mean(stHip), mSK = mean(swKnee), mSTK = mean(stKnee);
-  console.log(`  \u6355\u83B7\u70B9 teacher\uFF08\u65F6\u949F\u9A71\u52A8\uFF09\u771F\u5355\u652F\u6491\u5E27 n=${swHip.length}`);
-  console.log(`  \u9ACB\uFF1A\u6446\u52A8\u817F ${(mSH * D).toFixed(1)}\xB0 \xB7 \u652F\u6491\u817F ${(mST * D).toFixed(1)}\xB0  \u2192 \u5DEE ${((mSH - mST) * D).toFixed(1)}\xB0`);
-  console.log(`  \u819D\uFF1A\u6446\u52A8\u817F ${(mSK * D).toFixed(1)}\xB0 \xB7 \u652F\u6491\u817F ${(mSTK * D).toFixed(1)}\xB0  \u2192 \u5DEE ${((mSK - mSTK) * D).toFixed(1)}\xB0`);
-  check(
-    '\u9ACB\uFF1A\u6446\u52A8\u817F\u6BD4\u652F\u6491\u817F\u66F4\u5C48 \u21D2 rig \u91CC"\u817F\u5F80\u524D = \u6B63"\uFF08\u4E0E\u4EBA\u7C7B\u540C\u53F7\uFF09',
-    mSH > mST,
-    `\u5DEE ${((mSH - mST) * D).toFixed(1)}\xB0`
-  );
-  check(
-    '\u819D\uFF1A\u6446\u52A8\u817F\u89D2\u5EA6\u66F4\u5C0F\uFF08\u66F4\u8D1F\uFF09\u21D2 rig \u91CC"\u5C48\u66F2 = \u8D1F"\uFF08\u4E0E\u4EBA\u7C7B\u53CD\u53F7\uFF09',
-    mSK < mSTK,
-    `\u5DEE ${((mSK - mSTK) * D).toFixed(1)}\xB0`
-  );
-}
-console.log("\n=== 2. \u53C2\u8003\u66F2\u7EBF\u672C\u8EAB ===\n");
-{
-  const line = (name, f) => {
-    const parts = [];
-    for (let i = 0; i <= 20; i++) parts.push(f(i / 20).toFixed(0).padStart(4));
-    return `${name} ${parts.join("")}`;
-  };
-  console.log("  \u76F8\u4F4D %   " + Array.from({ length: 21 }, (_, i) => String(i * 5).padStart(4)).join(""));
-  console.log(line("  \u819D\xB0   ", kneeRefDeg));
-  console.log(line("  \u9ACB\xB0   ", hipRefDeg));
-  let kMin = 1e9, kMax = -1e9, hMin = 1e9, hMax = -1e9;
-  for (let i = 0; i <= 2e3; i++) {
-    const t = i / 2e3;
-    kMin = Math.min(kMin, kneeRefDeg(t));
-    kMax = Math.max(kMax, kneeRefDeg(t));
-    hMin = Math.min(hMin, hipRefDeg(t));
-    hMax = Math.max(hMax, hipRefDeg(t));
-  }
-  const kLo = Math.min(...KNEE_REF.map((k) => k[1])), kHi = Math.max(...KNEE_REF.map((k) => k[1]));
-  const hLo = Math.min(...HIP_REF.map((k) => k[1])), hHi = Math.max(...HIP_REF.map((k) => k[1]));
-  console.log(`  \u819D\u8303\u56F4 ${kMin.toFixed(1)}..${kMax.toFixed(1)}\xB0\uFF08\u5173\u952E\u5E27 ${kLo}..${kHi}\xB0\uFF09`);
-  console.log(`  \u9ACB\u8303\u56F4 ${hMin.toFixed(1)}..${hMax.toFixed(1)}\xB0\uFF08\u5173\u952E\u5E27 ${hLo}..${hHi}\xB0\uFF09`);
-  console.log(`  \u6D3B\u52A8\u5EA6\uFF1A\u819D ${kneeROM().toFixed(0)}\xB0 \xB7 \u9ACB ${hipROM().toFixed(0)}\xB0 \xB7 \u5BB9\u5DEE ${TOLERANCE_DEG}\xB0`);
-  check("\u63D2\u503C\u65E0\u8FC7\u51B2\uFF08\u819D\uFF09", kMin >= kLo - 0.5 && kMax <= kHi + 0.5, `${kMin.toFixed(1)}..${kMax.toFixed(1)}`);
-  check("\u63D2\u503C\u65E0\u8FC7\u51B2\uFF08\u9ACB\uFF09", hMin >= hLo - 0.5 && hMax <= hHi + 0.5, `${hMin.toFixed(1)}..${hMax.toFixed(1)}`);
-  check(
-    "\u819D\u6446\u52A8\u5CF0\u503C\u843D\u5728 60~70\xB0\uFF08Oberg \u5B9E\u6D4B 66.9\xB15.2\xB0\uFF09",
-    kneeRefDeg(0.78) >= 60 && kneeRefDeg(0.78) <= 72,
-    `${kneeRefDeg(0.78).toFixed(1)}\xB0`
-  );
-  check(
-    "\u819D midstance \u5728 0~20\xB0\uFF08Oberg \u5B9E\u6D4B 15.7\xB15.0\xB0\uFF09",
-    kneeRefDeg(0.3) >= 0 && kneeRefDeg(0.3) <= 22,
-    `${kneeRefDeg(0.3).toFixed(1)}\xB0`
-  );
-  check(
-    "\u9ACB terminal stance \u662F**\u4F38\u5C55**\uFF08\u8D1F\u503C\uFF0CPerry \u5CF0\u503C\u4F38\u5C55 \u22488\xB0\uFF09",
-    hipRefDeg(0.5) < 0,
-    `${hipRefDeg(0.5).toFixed(1)}\xB0`
-  );
-}
-console.log('\n=== 3. \u8FD9\u4E2A\u5206\u6570\u80FD\u4E0D\u80FD\u533A\u5206"\u4F1A\u8D70"\u548C"\u7AD9\u7740\u4E0D\u52A8" ===\n');
-function refScore(genome, label) {
   const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR });
-  sim.begin(genome);
-  let aHip = 0, aKnee = 0, nSingle = 0, n = 0;
-  const T = sim.cfg.gaitHz > 0 ? 1 / sim.cfg.gaitHz : 1;
+  sim.begin(balancerGenome(shape, BEST_BALANCER));
+  const com = newCom(), l = new Float64Array(3);
+  const samples = [];
   while (!sim.finished) {
     sim.advance(1);
-    const gL = footGrounded(sim.doll, "l"), gR = footGrounded(sim.doll, "r");
-    const single = !gL && gR || gL && !gR;
-    if (!single) continue;
-    nSingle++;
-    const t = sim.clock.phase;
-    const tl = gL ? t : (t + 0.5) % 1;
-    const sL = scoreLeg(
-      tl,
-      sim.doll.jointAngle(iHipL) + restOf("hip_l"),
-      sim.doll.jointAngle(iKneeL) + restOf("knee_l")
-    );
-    const sR = scoreLeg(
-      (t + 0.5) % 1,
-      sim.doll.jointAngle(iHipR) + restOf("hip_r"),
-      sim.doll.jointAngle(iKneeR) + restOf("knee_r")
-    );
-    aHip += (sL.hip + sR.hip) / 2;
-    aKnee += (sL.knee + sR.knee) / 2;
-    n++;
+    readCom(sim.doll, com);
+    wholeBodyAngularMomentum(sim.doll, com, l);
+    samples.push(Math.hypot(l[0], l[1], l[2]));
   }
-  const denom = Math.max(1, n);
-  const singleRatio = sim.walkStat.singleRatio;
-  return {
-    hip: aHip / denom,
-    knee: aKnee / denom,
-    single: singleRatio,
-    x: sim.distance,
-    t: DUR
-  };
+  BalanceJudge.calibrate(samples);
+  const s = [...samples].sort((a, b) => a - b);
+  const p50 = s[Math.floor(s.length * 0.5)], p90 = s[Math.floor(s.length * 0.9)];
+  console.log(`  \u9547\u5B9A\u5668 |WBAM| \u4E2D\u4F4D ${p50.toFixed(2)} \xB7 90\u5206\u4F4D ${p90.toFixed(2)} kg\xB7m\xB2/s`);
+  console.log(`  \u21D2 \u5F52\u4E00\u5316\u5C3A\u5EA6\u5B9A\u4E3A WBAM_NORM = ${BalanceJudge.setNorms ? "" : ""}${p90.toFixed(2)}\uFF08"\u5E73\u8861"= 1.0\uFF0C\u60E9\u7F5A\u7684\u662F\u76F8\u5BF9\u5B83\u7684\u6076\u5316\uFF09`);
+  check(
+    "\u9547\u5B9A\u5668\u7684 |WBAM| \u6709\u5408\u7406\u91CF\u7EA7\uFF08\u4E0D\u662F 0 \u4E5F\u4E0D\u662F\u5929\u6587\u6570\u5B57\uFF09",
+    p50 > 1e-3 && p50 < 200,
+    `\u4E2D\u4F4D ${p50.toFixed(2)}`
+  );
+  check("\u6807\u5B9A\u6210\u529F\uFF08\u5C3A\u5EA6\u975E\u96F6\uFF09", p90 > 1e-3, `WBAM_NORM=${p90.toFixed(2)}`);
 }
-function teacherScore() {
-  const FB = {
-    T: CAPTURE_GAIT.T,
-    vDes: CAPTURE_GAIT.vDes,
-    lift: CAPTURE_GAIT.lift,
-    kv: CAPTURE_GAIT.kv,
-    kPitch: CAPTURE_GAIT.kPitch,
-    kRate: CAPTURE_GAIT.kRate,
-    thresh: CAPTURE_GAIT.thresh,
-    absorb: CAPTURE_GAIT.absorb,
-    absorbTau: CAPTURE_GAIT.absorbTau,
-    kLat: 0,
-    kLatV: 0,
-    kLatSwing: 0
-  };
-  const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
-  sim.begin(new Float32Array(sim.params.length));
-  let aHip = 0, aKnee = 0, n = 0;
-  const swHip = [], swKnee = [], stHip = [], stKnee = [];
-  runCaptureTeacher(sk, sim, FB, {
-    dur: DUR,
-    clockDriven: true,
-    onFrame: (t, stanceL) => {
-      const half = FB.T * 0.5;
-      const kL = Math.floor(t / half);
-      const stanceLNow = kL % 2 === 0;
-      const swingIsL = !stanceLNow;
-      const gL = footGrounded(sim.doll, "l"), gR = footGrounded(sim.doll, "r");
-      if (gL === gR) return;
-      const tSw = swingIsL ? (t / FB.T + 0.5) % 1 : t / FB.T % 1;
-      const hSw = sim.doll.jointAngle(swingIsL ? iHipL : iHipR) + restOf(swingIsL ? "hip_l" : "hip_r");
-      const kSw = sim.doll.jointAngle(swingIsL ? iKneeL : iKneeR) + restOf(swingIsL ? "knee_l" : "knee_r");
-      const hSt = sim.doll.jointAngle(swingIsL ? iHipR : iHipL) + restOf(swingIsL ? "hip_r" : "hip_l");
-      const kSt = sim.doll.jointAngle(swingIsL ? iKneeR : iKneeL) + restOf(swingIsL ? "knee_r" : "knee_l");
-      swHip.push(hSw);
-      swKnee.push(kSw);
-      stHip.push(hSt);
-      stKnee.push(kSt);
-      const sL = scoreLeg(tSw, hSw, kSw);
-      const sR = scoreLeg((tSw + 0.5) % 1, hSt, kSt);
-      aHip += (sL.hip + sR.hip) / 2;
-      aKnee += (sL.knee + sR.knee) / 2;
-      n++;
-    }
-  });
-  const D = 180 / Math.PI, mean = (v) => v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
-  return {
-    hip: aHip / Math.max(1, n),
-    knee: aKnee / Math.max(1, n),
-    single: sim.walkStat.singleRatio,
-    x: sim.distance,
-    angles: `\u6446\u52A8\u9ACB ${(mean(swHip) * D).toFixed(0)}\xB0/\u6446\u52A8\u819D ${(mean(swKnee) * D).toFixed(0)}\xB0 \xB7 \u652F\u6491\u9ACB ${(mean(stHip) * D).toFixed(0)}\xB0/\u652F\u6491\u819D ${(mean(stKnee) * D).toFixed(0)}\xB0`
-  };
-}
-function termRow(name, g, teacher) {
+console.log("\n=== 2. \u4EE5\u811A\u4E3A\u51C6\u7684\u8DDD\u79BB vs \u8EAF\u5E72\u4F4D\u79FB ===\n");
+var lastTerms = {};
+function row(name, g, teacher) {
   const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / (teacher?.T ?? CAPTURE_GAIT.T) });
   if (teacher) {
     sim.begin(new Float32Array(sim.params.length));
@@ -15843,17 +15677,25 @@ function termRow(name, g, teacher) {
     while (!sim.finished) sim.advance(1);
   }
   const t = sim.terms;
+  lastTerms = t;
   return {
     n: name,
-    f: sim.fitness,
-    rh: t.refHip ?? 0,
-    rk: t.refKnee ?? 0,
-    pf: t.pelvisFirst ?? 0,
-    lead: t.hipLeadSec ?? 0,
-    pre: t.preActive ?? 0
+    foot: sim.distance,
+    torso: sim.torsoDistance,
+    flop: t.flopRatio ?? 0,
+    valid: t.validRatio ?? 0,
+    imb: t.imbalance ?? 0,
+    wbamMax: t.wbamMax ?? 0,
+    headMin: t.headRatioMin ?? 1,
+    fell: sim.fallen,
+    imbMean: t.imbMean ?? 0,
+    imbBad: t.imbBadFrac ?? 0,
+    imbAlive: t.imbAlive ?? 0,
+    imbW: t.imbW ?? 0,
+    terms: t
   };
 }
-var FB2 = {
+var FB = {
   T: CAPTURE_GAIT.T,
   vDes: CAPTURE_GAIT.vDes,
   lift: CAPTURE_GAIT.lift,
@@ -15867,114 +15709,62 @@ var FB2 = {
   kLatV: 0,
   kLatSwing: 0
 };
-var trows = [
-  termRow("\u6355\u83B7\u70B9 teacher", null, FB2),
-  termRow("\u9547\u5B9A\u5668\uFF08\u7AD9\u7740\u4E0D\u52A8\uFF09", balancerGenome(shape, BEST_BALANCER)),
-  termRow("\u96F6\u8F93\u51FA", new Float32Array(brainParamCount(shape))),
-  termRow("\u968F\u673A\u57FA\u56E0\u7EC4", (() => {
-    const a = new Float32Array(brainParamCount(shape));
-    for (let i = 0; i < a.length; i++) a[i] = Math.sin(i * 0.37) * 0.25;
-    return a;
-  })())
+var zero = new Float32Array(brainParamCount(shape));
+var rand = new Float32Array(brainParamCount(shape));
+for (let i = 0; i < rand.length; i++) rand[i] = Math.sin(i * 0.37) * 0.25;
+var rows = [
+  row("\u6355\u83B7\u70B9 teacher", null, FB),
+  row("\u9547\u5B9A\u5668\uFF08\u5E73\u8861\uFF09", balancerGenome(shape, BEST_BALANCER)),
+  row("\u76F8\u4F4D\u79CD\u5B50\u6B65\u6001", phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, amp: 0.35 })),
+  row("\u96F6\u8F93\u51FA\uFF08\u4F1A\u81EA\u5DF1\u5012\uFF09", zero),
+  row("\u968F\u673A\u57FA\u56E0\u7EC4", rand)
 ];
-console.log("  \u7AEF\u5230\u7AEF terms\uFF08\u5956\u52B1\u771F\u7684\u63A5\u4E0A\u4E86\u5417\uFF09");
-console.log("  " + "\u5BF9\u8C61".padEnd(20) + "\u9002\u5E94\u5EA6  \u9ACB\u53C2\u8003  \u819D\u53C2\u8003  \u76C6\u9AA8\u4F18\u5148  \u819D\u6EDE\u540E\u9ACB  \u9884\u6FC0\u6D3B");
-for (const r of trows) {
-  console.log("  " + r.n.padEnd(18) + r.f.toFixed(2).padStart(6) + r.rh.toFixed(2).padStart(8) + r.rk.toFixed(2).padStart(8) + r.pf.toFixed(2).padStart(9) + (r.lead * 1e3).toFixed(0).padStart(9) + "ms" + r.pre.toFixed(2).padStart(8));
-}
-console.log("");
-check(
-  "\u2605 \u7AD9\u7740\u4E0D\u52A8\uFF1A\u4E09\u9879\u53C2\u8003\u5206\u5168\u4E3A 0",
-  trows[1].rh === 0 && trows[1].rk === 0 && trows[1].pf === 0,
-  `refHip=${trows[1].rh} refKnee=${trows[1].rk} pelvisFirst=${trows[1].pf}`
-);
-{
-  const sim2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB2.T });
-  sim2.begin(new Float32Array(sim2.params.length));
-  const buf = new Float64Array(3);
-  const mx = {};
-  for (const nm of ["hip_l", "knee_l", "hip_r", "knee_r"]) mx[nm] = 0;
-  runCaptureTeacher(sk, sim2, FB2, {
-    dur: DUR,
-    clockDriven: true,
-    onFrame: () => {
-      for (const nm of ["hip_l", "knee_l", "hip_r", "knee_r"]) {
-        const i = JOINT_ORDER.indexOf(nm);
-        sim2.doll.jointRelVel(i, buf);
-        mx[nm] = Math.max(mx[nm], Math.abs(buf[2]));
-      }
-    }
-  });
-  console.log("  \u5355\u6B65\u5185 |\u76F8\u5BF9\u89D2\u901F\u5EA6| \u5CF0\u503C (rad/s)\uFF1A" + Object.entries(mx).map(([k, v]) => `${k}=${v.toFixed(2)}`).join(" \xB7 "));
-  console.log("  \u21D2 \u542F\u52A8\u9608\u503C\u53D6 0.35 rad/s \u7684\u8BDD\u6C38\u8FDC\u6D4B\u4E0D\u5230 onset\uFF08\u8FD9\u5C31\u662F pelvisFirst \u5168 0 \u7684\u539F\u56E0\uFF09");
-}
-function synth(hipPeakT, kneePeakT) {
-  const tr = new PelvisFirstTracker();
-  const dt = 1 / 120;
-  for (let t = 0; t < 0.8; t += dt) {
-    const hv = 6 * Math.exp(-(((t - hipPeakT) / 0.06) ** 2));
-    const kv = 6 * Math.exp(-(((t - kneePeakT) / 0.06) ** 2));
-    tr.step(hv, kv, t > 0.4, dt);
-  }
-  return { lead: tr.meanLead, score: tr.score() };
-}
-var good = synth(0.1, 0.22);
-var bad = synth(0.22, 0.1);
-var same = synth(0.15, 0.15);
-console.log("  \u76C6\u9AA8\u4F18\u5148\u9879\u7684\u5355\u5143\u6D4B\u8BD5\uFF08\u6784\u9020\u5DF2\u77E5\u65F6\u5E8F\uFF09");
-console.log(`    \u9ACB\u5148\u52A8(\u819D\u6EDE\u540E120ms)  \u9886\u5148 ${(good.lead * 1e3).toFixed(0)}ms  \u5206 ${good.score.toFixed(2)}`);
-console.log(`    \u819D\u5148\u52A8(\u9ACB\u6EDE\u540E120ms)  \u9886\u5148 ${(bad.lead * 1e3).toFixed(0)}ms  \u5206 ${bad.score.toFixed(2)}`);
-console.log(`    \u540C\u65F6\u52A8              \u9886\u5148 ${(same.lead * 1e3).toFixed(0)}ms  \u5206 ${same.score.toFixed(2)}`);
-console.log("    \u2139 teacher \u5B9E\u6D4B\u9886\u5148\u91CF\u53EA\u6709 " + (trows[0].lead * 1e3).toFixed(0) + ' ms \u21D2 \u5B83\u672C\u6765\u5C31\u4E0D\u662F"\u76C6\u9AA8\u4F18\u5148"\uFF0C\u8FD9\u4E00\u9879\u662F\u8981**\u6559\u4F1A**\u7B56\u7565\u7684\u65B0\u4E1C\u897F');
-check(
-  "\u2605 \u76C6\u9AA8\u4F18\u5148\u9879\u80FD\u5206\u8FA8\u65F6\u5E8F\uFF1A\u9ACB\u5148\u52A8 \u21D2 \u9886\u5148\u4E3A\u6B63\u4E14\u5206\u6570\u9AD8",
-  good.lead > 0.05 && good.score > 0.8,
-  `${(good.lead * 1e3).toFixed(0)}ms / ${good.score.toFixed(2)}`
-);
-check(
-  "\u2605 \u76C6\u9AA8\u4F18\u5148\u9879\u80FD\u5206\u8FA8\u65F6\u5E8F\uFF1A\u819D\u5148\u52A8 \u21D2 \u9886\u5148\u4E3A\u8D1F\u4E14**\u88AB\u7F5A**",
-  bad.lead < -0.05 && bad.score < 0,
-  `${(bad.lead * 1e3).toFixed(0)}ms / ${bad.score.toFixed(2)}`
-);
-check('\u2605 \u540C\u65F6\u52A8\u4E0D\u7ED9\u5206\uFF08\u4E0D\u5956\u52B1"\u9ACB\u819D\u4E00\u8D77\u52A8"\uFF09', Math.abs(same.score) < 0.05, `${same.score.toFixed(2)}`);
-check(
-  "\u2605 teacher \u62FF\u5230\u53C2\u8003\u5206",
-  trows[0].rh + trows[0].rk > 0.3,
-  `\u9ACB ${trows[0].rh.toFixed(2)} + \u819D ${trows[0].rk.toFixed(2)}`
-);
-var rows = [];
-var tch = teacherScore();
-rows.push({ name: "\u6355\u83B7\u70B9 teacher\uFF08\u771F\u4F1A\u8D70\uFF09", hip: tch.hip, knee: tch.knee, single: tch.single, x: tch.x, extra: tch.angles });
-rows.push({ name: "\u76F8\u4F4D\u79CD\u5B50\u6B65\u6001", ...refScore(phaseGenomeFor(sk.joints.length, { ...BEST_PHASE, amp: 0.35 }), "phase") });
-rows.push({ name: "\u9547\u5B9A\u5668\uFF08\u7AD9\u7740\u4E0D\u52A8\uFF09", ...refScore(balancerGenome(shape, BEST_BALANCER), "bal") });
-rows.push({ name: "\u96F6\u8F93\u51FA", ...refScore(new Float32Array(brainParamCount(shape)), "zero") });
-rows.push({ name: "\u968F\u673A\u57FA\u56E0\u7EC4", ...(() => {
-  const a = new Float32Array(brainParamCount(shape));
-  for (let i = 0; i < a.length; i++) a[i] = Math.sin(i * 0.37) * 0.25;
-  return refScore(a, "rand");
-})() });
-console.log("  " + "\u6B65\u6001".padEnd(22) + "\u9ACB\u5206   \u819D\u5206   \u5355\u652F\u6491\u5360\u6BD4  \u4F4D\u79FB");
+console.log("  " + "\u5BF9\u8C61".padEnd(20) + "\u811A\u8DDD\u79BB  \u8EAF\u5E72\u4F4D\u79FB  \u6251/\u811A\u6BD4  \u6709\u6548\u5E27  \u4E0D\u5E73\u8861  |WBAM|max  \u6700\u4F4E\u5934\u9AD8  \u5012");
 for (const r of rows) {
-  console.log("  " + r.name.padEnd(20) + r.hip.toFixed(3).padStart(5) + "  " + r.knee.toFixed(3).padStart(5) + "  " + r.single.toFixed(3).padStart(8) + "   " + r.x.toFixed(3).padStart(6) + " m" + (r.extra ? `   ${r.extra}` : ""));
+  console.log("  " + r.n.padEnd(18) + r.foot.toFixed(3).padStart(7) + r.torso.toFixed(3).padStart(9) + r.flop.toFixed(3).padStart(9) + (r.valid * 100).toFixed(0).padStart(7) + "%" + r.imb.toFixed(2).padStart(9) + r.wbamMax.toFixed(1).padStart(10) + (r.headMin * 100).toFixed(0).padStart(9) + "%" + (r.fell ? "  \u662F" : "  \u5426"));
+  console.log("      \u21B3 \u5206\u89E3: imbMean=" + r.imbMean.toFixed(3) + " badHeadFrac=" + r.imbBad.toFixed(3) + " aliveAvg=" + r.imbAlive.toFixed(3) + " w=" + r.imbW);
+  {
+    const t = lastTerms;
+  }
+  {
+    const parts = Object.entries(r.terms).filter(([, v]) => typeof v === "number" && Math.abs(v) > 5e-3).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).map(([k, v]) => `${k}=${v.toFixed(2)}`);
+    console.log("      \u21B3 \u5206\u9879: " + parts.join(" "));
+  }
 }
-var stand = rows.find((r) => r.name.includes("\u9547\u5B9A\u5668"));
 console.log("");
-console.log(`  \u2139 \u652F\u6491\u76F8\u5360 ${(STANCE_FRAC * 100).toFixed(0)}%\u3001\u6446\u52A8 ${((1 - STANCE_FRAC) * 100).toFixed(0)}%`);
+var flop = rows[3];
+var bal = rows[1];
 check(
-  "\u2605 \u7AD9\u7740\u4E0D\u52A8\u62FF 0 \u5206\uFF08\u6CA1\u6709\u5355\u652F\u6491\u5E27\u5C31\u6CA1\u6709\u53C2\u8003\u5206\uFF09",
-  stand.hip + stand.knee < 1e-9,
-  `\u9547\u5B9A\u5668 ${(stand.hip + stand.knee).toFixed(3)}`
+  '\u2605 \u8DDD\u79BB\u4EE5\u811A\u4E3A\u51C6\uFF1A\u96F6\u8F93\u51FA"\u81EA\u5DF1\u5012"\u65F6\u811A\u8DDD\u79BB\u8FDC\u5C0F\u4E8E\u8EAF\u5E72\u4F4D\u79FB',
+  flop.foot < flop.torso,
+  `\u811A ${flop.foot.toFixed(3)} vs \u8EAF\u5E72 ${flop.torso.toFixed(3)}`
 );
 check(
-  "\u2605 \u4F1A\u8D70\u7684 teacher \u660E\u663E\u9AD8\u4E8E 0\uFF08\u53C2\u8003\u5206\u8BA4\u5F97\u51FA\u771F\u6B65\u6001\uFF09",
-  tch.hip + tch.knee > 0.3,
-  `teacher \u9ACB ${tch.hip.toFixed(3)} + \u819D ${tch.knee.toFixed(3)}`
+  '\u2605 "\u6251\u51FA\u53BB\u7684\u8DDD\u79BB"\uFF08\u8EAF\u5E72\u8D70\u4E86\u4F46\u811A\u6CA1\u8D70\uFF09\u88AB\u5355\u72EC\u66B4\u9732\u51FA\u6765',
+  flop.flop > 0.3,
+  `${flop.flop.toFixed(3)} m`
 );
 check(
-  '\u2605 \u53C2\u8003\u5206\u80FD\u533A\u5206"\u50CF\u4EBA"\u548C"\u4E71\u52A8"',
-  tch.hip + tch.knee > rows[4].hip + rows[4].knee,
-  `teacher ${(tch.hip + tch.knee).toFixed(3)} vs \u968F\u673A ${(rows[4].hip + rows[4].knee).toFixed(3)}`
+  "\u2605 \u6709\u6548\u6027\u95F8\u95E8\u5728\u5DE5\u4F5C\uFF1A\u524D\u6251\u5012\u4E0B\u65F6\u6709\u6548\u5E27 < 100%",
+  flop.valid < 0.95,
+  `${(flop.valid * 100).toFixed(0)}%`
+);
+check(
+  "\u2605 \u7AD9\u5F97\u4F4F\u7684\u4EBA\u6709\u6548\u5E27 = 100%\uFF08\u95F8\u95E8\u4E0D\u4F1A\u8BEF\u4F24\u5E73\u8861\uFF09",
+  bal.valid > 0.99,
+  `${(bal.valid * 100).toFixed(0)}%`
+);
+check(
+  "\u2605 \u5E73\u8861\u7684\u4E2A\u4F53\uFF08\u9547\u5B9A\u5668\uFF09\u4E0D\u5E73\u8861\u6263\u5206\u66F4\u5C0F",
+  bal.imb > flop.imb,
+  `\u9547\u5B9A\u5668 ${bal.imb.toFixed(2)} vs \u96F6\u8F93\u51FA ${flop.imb.toFixed(2)}`
+);
+check("\u2605 \u5934\u9AD8\u53C2\u8003\uFF1A\u7AD9\u4F4F\u7684\u4E2A\u4F53\u5934\u9AD8\u6BD4\u63A5\u8FD1 1", bal.headMin > 0.95, `${(bal.headMin * 100).toFixed(0)}%`);
+check(
+  "\u2605 \u5934\u9AD8\u6709\u6548\u533A\u95F4\u5E38\u91CF\u662F\u5408\u7406\u7684",
+  HEAD_MIN > 0.7 && HEAD_MAX < 1.2 && HEAD_MIN < HEAD_MAX,
+  `[${HEAD_MIN}, ${HEAD_MAX}]`
 );
 console.log("");
-console.log(FAILS === 0 ? "\u2605 gaitref \u5168\u7EFF" : `\u2605 gaitref \u6709 ${FAILS} \u6761 FAIL`);
+console.log(FAILS === 0 ? "\u2605 balance \u5168\u7EFF" : `\u2605 balance \u6709 ${FAILS} \u6761 FAIL`);
 if (FAILS > 0) process.exitCode = 1;

@@ -62,14 +62,16 @@ console.log('\n=== 2. 单元测试：合成轨迹 ===\n');
 
 interface Synth { settled: number; tooFast: number; unstable: number; recovered: number; acc: number }
 
-/** 造一串周期：每周期 = 摆动 swingSec（离地）+ 稳住 settleSec（着地，MoS = mosTouch→mosHold） */
-function synth(swingSec: number, mosTouch: number, mosHold: number, cycles: number): Synth {
+/**
+ * 造一串周期：每周期 = 摆动 swingSec（离地）+ 触地后保持 holdSec（着地，MoS 由
+ * mosTouch 渐变到 mosHold）。holdSec 决定**步间隔**：要 ≥ MIN_CYCLE 才算"婴儿式"的一步。
+ */
+function synth(swingSec: number, mosTouch: number, mosHold: number, cycles: number, holdSec = 0.65): Synth {
   const tr = new StepSettleTracker();
-  let acc = 0;
   for (let c = 0; c < cycles; c++) {
     for (let t = 0; t < swingSec; t += dt) tr.step(false, 0, dt);
     for (let t = 0; t < 3 * dt; t += dt) tr.step(true, mosTouch, dt);   // 去抖要连续 2 帧才认落地
-    const nS = Math.max(2, Math.round(SETTLE_WIN / dt) + 3);   // 多跑几帧，确保结算窗口真的走完
+    const nS = Math.max(2, Math.round(holdSec / dt));
     for (let i = 0; i < nS; i++) {
       const f = i / nS;
       tr.step(true, mosTouch + (mosHold - mosTouch) * f, dt);
@@ -78,25 +80,33 @@ function synth(swingSec: number, mosTouch: number, mosHold: number, cycles: numb
   return { settled: tr.settleRatio, tooFast: tr.fastCount, unstable: tr.unstable, recovered: tr.recoveredCount, acc: tr.creditSum };
 }
 
-const jitter = synth(0.08, 0.10, 0.12, 6);      // ★ Maki 说的"30 ms 太快"那一类：快速抖动
-const good = synth(0.35, 0.12, 0.15, 6);       // 摆动够久、MoS 全正
-const slowBad = synth(0.35, -0.15, -0.05, 6);  // 迈出去了但**没稳住**（MoS 一直为负）
-const recover = synth(0.35, -0.10, 0.12, 6);   // 触地时不稳、随后稳住 ⇒ 人类 recovery step
+const jitter = synth(0.08, 0.10, 0.12, 6, 0.65);   // ★ Maki 说的"30 ms 太快"那一类：快速抖动
+const good = synth(0.35, 0.12, 0.15, 6, 0.65);     // 摆动够久、MoS 全正，周期 1.0s ≥ MIN_CYCLE
+const slowBad = synth(0.35, -0.15, -0.05, 6, 0.65);  // 迈出去了但**没稳住**（MoS 一直为负）
+const tooClose = synth(0.35, 0.12, 0.15, 6, 0.45);   // ★ 周期 0.8s < MIN_CYCLE ⇒ 间隔不够
+const recover = synth(0.35, -0.10, 0.12, 6, 0.65);   // 触地时不稳、随后稳住 ⇒ 人类 recovery step
 
 console.log('  ' + '合成轨迹'.padEnd(26) + '结算步  太快  不稳  恢复  累计分');
 const show = (n: string, r: Synth): void => console.log('  ' + n.padEnd(24) +
   String(r.settled).padStart(6) + String(r.tooFast).padStart(6) + String(r.unstable).padStart(6)
   + String(r.recovered).padStart(6) + r.acc.toFixed(2).padStart(8));
 show('快抖 80ms + MoS 正', jitter);
+show('间隔 0.8s (< 0.9s)', tooClose);
 show('正常 350ms + MoS 正', good);
 show('正常 350ms + MoS 负', slowBad);
 show('触地不稳→随后稳住', recover);
 console.log('');
 check('★ 快抖（摆动 80 ms < 280 ms）拿不到**结算步**（但有渐进塑形分）',
-  jitter.settled === 0 && jitter.tooFast === 6, `settled=${jitter.settled} tooFast=${jitter.tooFast} 塑形分=${jitter.acc.toFixed(2)}`);
+  jitter.settled === 0 && jitter.tooFast >= 6,
+  `settled=${jitter.settled} tooFast=${jitter.tooFast}（摆动太快 + 间隔太密都算）塑形分=${jitter.acc.toFixed(2)}`);
 check('★ 正常迈步且稳住 ⇒ 每步都结算', good.settled === 6, `settled=${good.settled}`);
 check('★ 迈出去但没稳住 ⇒ 结算不了（只有很少的分）', slowBad.settled === 0,
   `settled=${slowBad.settled}`);
+// ⚠ 语义说明：**第一步永远不受间隔限制**（tSinceLast 初始为 ∞，因为还没有"上一步"），
+//   所以周期 0.8 s 的轨迹只结算了第 1 步，后面 5 步全被间隔卡掉。
+check('★ 间隔不足 MIN_CYCLE ⇒ 只有第一步能结算（"婴儿学步"的步间隔下限）',
+  tooClose.settled === 1 && good.settled === 6,
+  `周期0.8s→${tooClose.settled} 周期1.0s→${good.settled}`);
 check('★ 触地不稳但随后稳住 ⇒ 记为"恢复"（人类 recovery step）',
   recover.settled === 6 && recover.recovered === 6, `settled=${recover.settled} recovered=${recover.recovered}`);
 check('★ 整窗都稳 ⇒ 满分；起手不稳但收住 ⇒ 少一点（0.7 vs 1.0）',

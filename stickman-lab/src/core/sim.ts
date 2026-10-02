@@ -23,6 +23,7 @@ import {
 } from './posture';
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN } from './stability';
+import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -201,6 +202,8 @@ export const W = {
   settle: 3.0,
   stepPace: 1.5,
   moS: 0.5,
+  imbalance: 2.0,
+  minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
   moveScale: {} as Record<string, number>,
@@ -277,6 +280,15 @@ export class Sim {
   private ssL = new StepSettleTracker(); private ssR = new StepSettleTracker();
   private accSettle = 0; private accPace = 0; private accMoS = 0; private mosMinSeen = Infinity; private mosSum = 0; private mosN = 0;
   private settleDebug = '';
+  private bal = new BalanceJudge();
+  private lbuf = new Float64Array(3);
+  private footFar = 0;                // ★ 脚的最远前伸（"以脚为准"的距离基准）
+  private footDist = 0;                // ★ 有效脚距离（只在头没塌时累加）
+  private torsoDist = 0;
+  private footVel = 0;                // 脚的速度（m/s）
+  private lastFootX = 0;
+  private footStart = 0;
+  private imbAcc = 0; private validTicks = 0; private stepCycleT = 0;
 
   /** 诊断：迈步-稳住状态机的末态（为什么没结算） */
   get settleState(): string { return this.settleDebug; }
@@ -434,7 +446,30 @@ export class Sim {
   get ticksDone(): number { return this.tick; }
   get progress(): number { return this.tick / this.ticksTotal; }
   /** ★ 净前进距离（跑到此刻为止的位移；"最远距离"已弃用，见 W 的注释） */
-  get distance(): number { return this.doll.torso().translation().x - this.startX; }
+  /**
+   * ★★ 距离改为**以脚为准**（用户 2026-10-02："移动距离应该以脚的移动为准"）。
+   * 原来用的是躯干 x —— 于是"整个人往前扑倒"会被算成"走了很远"，
+   * 策略只要向前扑就能拿满速度分（实测零输出基线都能量到 0.65 m）。
+   * 真正的判据是"支撑面（脚）在前进"：Hof 的说法是，走路是**支撑面前进**，
+   * 不是质心前进；质心冲出支撑面而脚没跟上，那就是**摔**。
+   * ★ 而且只在**头没塌**（`valid`）时累加：身体已经塌下去时往前扑**一分不给**。
+   */
+  get distance(): number { return this.footDist; }
+  /** 诊断：躯干位移（用来对比"脚走了多少 vs 人扑了多远"） */
+  get torsoDistance(): number { return this.torsoDist; }
+  /** 诊断：脚的速度（m/s） */
+  get footSpeed(): number { return this.footVel; }
+  /** 诊断：头的世界高度 */
+  private headTopY(): number {
+    let y = -1e9;
+    for (const b of this.doll.bodies) { const t = b.translation(); if (t.y > y) y = t.y; }
+    // 加上该刚体自身半高（用脚掌实测口径近似：这里只关心相对变化，取最高点 + 该体半高）
+    return y + 0.10;
+  }
+  /** 两只脚的最远前伸（x） */
+  private footMaxX(): number {
+    return Math.max(this.footTmpL[0]!, this.footTmpR[0]!);
+  }
   /** 诊断：本回合的电机指令变化率积分（替代旧的抖动积分 Σ(Δτ)²，见 W.actRate） */
   get actionRateCost(): number { return this.accActRate; }
 
@@ -459,6 +494,16 @@ export class Sim {
     this.doll.reset(0);
     this.startX = this.doll.torso().translation().x;
     this.initTorsoY = this.doll.torso().translation().y;
+    // ★ 平衡判据的参考头高：用初始站姿的头顶高度（"头必须在该在的高度"）
+    this.bal.setRefHead(this.headTopY());
+    // ⚠ 必须**先刷新**脚的临时向量再读 footMaxX：footTmpL/R 是逐帧复用的缓冲，
+    //   不刷新的话这里读到的是**上一个个体**残留的脚位置 ⇒ 起点不同 ⇒
+    //   "复用 Sim ≡ 新建 Sim"门禁失败（实测 3/4 个不同，最大差 9.6e-2）。
+    this.doll.soleXZ('l', this.footTmpL);
+    this.doll.soleXZ('r', this.footTmpR);
+    this.lastFootX = this.footMaxX();
+    this.footFar = this.lastFootX;
+    this.footStart = this.lastFootX;
 
     this.subStep = 0;
     this.tick = 0;
@@ -470,7 +515,10 @@ export class Sim {
     this.accRefHip = 0; this.accRefKnee = 0; this.accPelvis = 0;
     this.pfL.reset(); this.pfR.reset();
     this.ssL.reset(); this.ssR.reset();
-    this.accSettle = 0; this.accPace = 0; this.accMoS = 0; this.mosMinSeen = Infinity; this.mosSum = 0; this.mosN = 0;
+    this.accSettle = 0; this.accPace = 0; this.accMoS = 0;
+    this.bal.reset();
+    this.footFar = 0; this.footDist = 0; this.torsoDist = 0; this.footVel = 0;
+    this.lastFootX = 0; this.imbAcc = 0; this.validTicks = 0; this.stepCycleT = 0; this.mosMinSeen = Infinity; this.mosSum = 0; this.mosN = 0;
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
     this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
@@ -798,7 +846,7 @@ export class Sim {
       //   不加这一层的话实测 6 代就学会"原地金鸡独立式交替"（换脚 14 次/6s = 2.3Hz，
       //   而 velTrack −0.18、位移 −0.38 m）—— 交替本身被当成了终点。
       //   加了之后："迈步"必须同时是"往前走的迈步"，原地抖腿一分不给。
-      this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
+      this.accSwitchQ += phi(TARGET_VX - this.footVel);
     }
     // ★★★ 这里原来漏了**正项**：只累加了"双脚离地"的罚，从来没记过"恰好一脚着地"的时间。
     //   后果很致命：Rudin 那套配方里最核心的"单腿支撑"项永远拿不到正分
@@ -846,6 +894,38 @@ export class Sim {
       // 只在"确实在交替"时计分（单支撑），并且要求髋领先才是正分
       if (nGround === 1) this.accPelvis += ((this.pfL.score() + this.pfR.score()) * 0.5) * dt;
       void ph2;
+    }
+    // ══════ ★ 平衡判据 + 脚距离（用户 2026-10-02）════════════════════════
+    //  ① 全身体角动量 WBAM（文献：Herr 2008，L(t)≈0）⇒ 不平衡扣分的依据
+    //  ② 头高比 = 有效性闸门：头塌了 ⇒ 距离/迈步分一律作废（"快倒下的距离不算"）
+    //  ③ 距离以**脚**的前伸为准，且只在 valid 时累加
+    {
+      doll.soleXZ('l', this.footTmpL); doll.soleXZ('r', this.footTmpR);
+      const comB = readCom(doll, this.com);
+      wholeBodyAngularMomentum(doll, comB, this.lbuf);
+      const headY = this.headTopY();
+      const brot = torso.rotation();
+      const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (brot.w * brot.x + brot.y * brot.z))));
+      // 有效性还要看 MoS（Hof 2005）：XCoM 出支撑面 = 正在倒 ⇒ 距离分作废
+      const supB = readSupport(doll, this.sup);
+      const mosB = marginOfStability(
+        comB.x, comB.vx, omegaAt(comB.y), supB.cx + supB.halfX, comB.z, comB.vz, supB.cz + supB.halfZ,
+      );
+      const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
+      // 脚的前伸（单调最大 ⇒ 不会被"来回蹭"骗）
+      const fx = this.footMaxX();
+      if (fx > this.footFar) this.footFar = fx;
+      this.footVel += (Math.max(0, fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+      this.lastFootX = fx;
+      this.torsoDist = doll.torso().translation().x - this.startX;
+      if (b.valid) {
+        this.footDist = Math.max(0, this.footFar - this.footStart);
+        this.validTicks += dt;
+        this.stepCycleT += dt;
+      } else {
+        this.imbAcc += 0.5 * dt;      // 头塌了也算"不平衡"的一部分
+      }
+      void HEAD_MIN; void HEAD_MAX;
     }
     // ── 迈步 → 稳住（MoS 课程）──────────────────────────────────────────
     //  MoS = BoS边缘 − XCoM（Hof 2005）。只在**单支撑**时有支撑域可言，
@@ -914,7 +994,10 @@ export class Sim {
     //  ④ 速度跟踪 / 横向 / 翻滚：★ **逐拍积分**（Rudin 表里每一项都带 dt）。
     //     之前写成"finish() 时取末帧读数"⇒ 6 秒的 episode 只算一瞬间，
     //     于是 velTrack 恒为 0、ES 完全看不到"往 +X 走"的梯度（实测 6 代只走 0.65m、velTrack=0）。
-    const tvx = tv.x, tvz = tv.z;
+    // ★ 速度跟踪改用**脚的前伸速度**（用户："移动距离应该以脚的移动为准"）。
+    //   原来用躯干速度 ⇒ 整个人往前扑就能拿满分（实测零输出基线躯干位移 0.65 m）。
+    //   `footVel` 是脚的最远前伸速度（单调最大 ⇒ 蹭不出速度）。
+    const tvx = -this.footVel, tvz = tv.z;
     const ang = torso.angvel();
     this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;   // 扣掉站桩基线
     this.accYaw += phi(-ang.y) * dt;
@@ -1080,9 +1163,27 @@ export class Sim {
       // ★ 用**累计结算分**（含渐进塑形）而不是"结算步数"：
       //   步数是二值的、砍掉了梯度；累计分能把"摆动 0.1 s → 0.36 分"这种中间态传给 ES。
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
+      // ⚠ 计数类惩罚**必须封顶**：实测零输出触发 18 次"太快"，−1.5×18 = **−27 分**，
+      //   直接淹没其余所有项（而它只是"迈得太快"这一个维度）。
+      //   封顶口径：每 1.5 秒最多算 1 次 ⇒ 6 秒回合最多 4 次。
+      const paceCap = 1 + Math.floor(this.accTicks / 1.5);
       tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
-      tt.stepPace = -w.stepPace * nTooFast * aliveAvg;
+      tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
       tt.moS = w.moS * this.accMoS * aliveAvg;
+      // ★ 不平衡扣分：WBAM 偏离 + 头塌帧
+      const bstat = this.bal.stats;
+      const imbMean = bstat.ticks > 0 ? bstat.accImb / bstat.ticks : 0;
+      const badHeadFrac = bstat.ticks > 0 ? bstat.badHead / bstat.ticks : 0;
+      tt.imbalance = -w.imbalance * (imbMean + badHeadFrac) * aliveAvg;
+      tt.imbMean = imbMean; tt.imbBadFrac = badHeadFrac; tt.imbAlive = aliveAvg; tt.imbW = w.imbalance;
+      tt.wbamMax = bstat.wbamMax;                       // 诊断
+      tt.wbamNorm = this.bal.norms.wbam;                // 诊断：标定尺度
+      tt.headRatioMin = bstat.headMin;                  // 诊断：最低头高比
+      tt.validRatio = this.accTicks > 0 ? this.validTicks / this.accTicks : 0;  // 诊断：有效帧占比
+      tt.footDist = this.footDist;                      // 诊断：以脚为准的距离
+      tt.torsoDist = this.torsoDist;                    // 诊断：躯干位移（扑出去的距离）
+      // "扑出去的距离"：躯干走了但脚没走的那部分（米）—— 比"比值"更好读
+      tt.flopRatio = Math.max(0, this.torsoDist - this.footDist);
       tt.settledSteps = this.ssL.settleRatio + this.ssR.settleRatio;      // 诊断：结算过的步数
       tt.tooFastSteps = this.ssL.fastCount + this.ssR.fastCount;           // 诊断：摆动太短的次数
       tt.flightSteps = this.ssL.flightCount + this.ssR.flightCount;        // 诊断：被识别成"一步"的次数

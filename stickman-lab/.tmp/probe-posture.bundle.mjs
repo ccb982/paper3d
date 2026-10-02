@@ -14685,6 +14685,313 @@ var init_gaitRef = __esm({
   }
 });
 
+// src/core/stability.ts
+function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
+  const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
+  const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
+  return { x: supEdgeX - xcoM, z: supEdgeZ - zcoM };
+}
+var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, mosBand, StepSettleTracker;
+var init_stability = __esm({
+  "src/core/stability.ts"() {
+    "use strict";
+    clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+    MIN_SWING = 0.28;
+    SETTLE_WIN = 0.45;
+    MOS_TARGET = 0.3;
+    MIN_CYCLE = 0.9;
+    mosBand = (mos) => {
+      if (mos < 0) return -clamp012(-mos / 0.25);
+      if (mos <= MOS_TARGET) return clamp012(mos / MOS_TARGET);
+      return Math.exp(-2 * ((mos - MOS_TARGET) / 0.4) ** 2);
+    };
+    StepSettleTracker = class _StepSettleTracker {
+      // ⚠ 初始必须是 **settle**（"正站着"），不是 swing。
+      //   我第一版初始化成 'swing'，结果一条**从不离地**的腿被当成"刚落地、摆动 0 秒"
+      //   ⇒ 站桩的镇定器被判了 26 次"摆动太快"（实测），奖励完全反了。
+      phase = "settle";
+      swungTicks = 0;
+      // 本次离地确实观测到的帧数（0 = 一直踩着）
+      // ★ 接触去抖：Rapier 的接触信号会**抖动**（脚在空中偶发一帧接地）。
+      //   不去抖的话，teacher 实测被判了 9 次"摆动太快"——摆动计时被那一帧清零。
+      airRun = 0;
+      gndRun = 0;
+      static MIN_RUN = 2;
+      // 连续 2 帧才算真的换状态
+      /**
+       * ★ 构成"一步"所需的**最小腾空帧数**（4 帧 ≈ 33 ms）。
+       *   没有它的话，接触抖动（站桩时脚会偶发 2 帧"离地"）会被当成迈步：
+       *   实测站着的镇定器因此拿到 **24 个结算步**。33 ms 的门槛把抖动全部挡掉，
+       *   同时远小于 MIN_SWING=0.28 s，不会误伤真正的短摆动。
+       */
+      static MIN_FLIGHT = 4;
+      tSwing = 0;
+      tSettle = 0;
+      mosMin = Infinity;
+      // 本步 settle 窗内的 MoS 最小值
+      mosEnd = 0;
+      // settle 窗**结束**时的 MoS（"最后稳住了"的判据）
+      mosAtTouch = 0;
+      // 触地瞬间的 MoS（用来判"这一步稳不稳"）
+      credit = 0;
+      // 本步结算出的分
+      tSinceLast = 1e9;
+      // 距上次结算过了多久（用于最小步间隔）
+      accCredit = 0;
+      // 累计结算分（渐进塑形，进适应度用）
+      tooFast = 0;
+      settled = 0;
+      unstableSteps = 0;
+      flights = 0;
+      // 被识别为"一步"的次数（不论稳不稳）
+      recovered = 0;
+      /** 上一结算步的 MoS（−1 = 还没有） */
+      prevTouchMos = -1;
+      stepT = 0;
+      // 本步总时长
+      reset() {
+        this.phase = "settle";
+        this.tSwing = 0;
+        this.tSettle = 0;
+        this.swungTicks = 0;
+        this.accCredit = 0;
+        this.airRun = 0;
+        this.gndRun = 0;
+        this.tSinceLast = 1e9;
+        this.mosMin = Infinity;
+        this.mosAtTouch = 0;
+        this.credit = 0;
+        this.tooFast = 0;
+        this.settled = 0;
+        this.unstableSteps = 0;
+        this.recovered = 0;
+        this.flights = 0;
+        this.prevTouchMos = -1;
+        this.stepT = 0;
+      }
+      get settleRatio() {
+        return this.settled;
+      }
+      /** 累计结算分（渐进塑形，0..~1 每次） */
+      get creditSum() {
+        return this.accCredit;
+      }
+      /** 诊断快照：为什么没结算（一行看完状态机） */
+      debug() {
+        return `phase=${this.phase} swung=${this.swungTicks} tSwing=${(this.tSwing * 1e3).toFixed(0)}ms tSettle=${(this.tSettle * 1e3).toFixed(0)}ms mosEnd=${(this.mosEnd * 1e3).toFixed(0)}mm settled=${this.settled} tooFast=${this.tooFast} flights=${this.flights} air=${this.airRun} gnd=${this.gndRun}`;
+      }
+      get fastCount() {
+        return this.tooFast;
+      }
+      /** 被识别成"一步"的次数（诊断用：机制有没有在工作） */
+      get flightCount() {
+        return this.flights;
+      }
+      get unstable() {
+        return this.unstableSteps;
+      }
+      get recoveredCount() {
+        return this.recovered;
+      }
+      /**
+       * @param grounded 该脚是否着地（原始接触信号，会抖动）
+       * @param mosX 矢状面 MoS（m，正 = 稳定）
+       * @param dt
+       * @returns 本拍该脚拿到的分（带符号；负 = 罚）
+       */
+      step(grounded, mosX, dt) {
+        if (grounded) {
+          this.gndRun++;
+          this.airRun = 0;
+        } else {
+          this.airRun++;
+          this.gndRun = 0;
+        }
+        const air = this.airRun >= _StepSettleTracker.MIN_RUN;
+        const gnd = this.gndRun >= _StepSettleTracker.MIN_RUN;
+        if (!air && !gnd) return 0;
+        this.tSinceLast += dt;
+        if (air) {
+          if (this.phase === "settle") {
+            this.credit = 0;
+            this.phase = "swing";
+            this.tSwing = 0;
+            this.tSettle = 0;
+            this.mosMin = Infinity;
+            this.stepT = 0;
+          }
+          this.swungTicks++;
+          this.tSwing += dt;
+          return 0;
+        }
+        if (this.phase === "swing") {
+          if (this.swungTicks < _StepSettleTracker.MIN_FLIGHT) {
+            this.phase = "settle";
+            this.tSettle = 0;
+            this.mosMin = mosX;
+            this.mosEnd = mosX;
+            this.swungTicks = 0;
+            return 0;
+          }
+          this.flights++;
+          this.mosAtTouch = mosX;
+          if (this.mosAtTouch < 0) this.unstableSteps++;
+          this.phase = "settle";
+          this.tSettle = 0;
+          this.mosMin = mosX;
+          this.mosEnd = mosX;
+          this.stepT = this.tSwing;
+          if (this.tSwing < MIN_SWING) {
+            this.tooFast++;
+            this.credit = 0;
+            return 0;
+          }
+          return 0;
+        }
+        if (this.swungTicks > 0) this.accCredit -= 0;
+        this.tSettle += dt;
+        this.mosMin = Math.min(this.mosMin, mosX);
+        this.mosEnd = mosX;
+        const gain = mosBand(mosX) * dt;
+        if (this.tSettle >= SETTLE_WIN - dt * 0.5) {
+          const paceFrac = clamp012(this.stepT / MIN_SWING);
+          const okStable = this.mosEnd >= 0;
+          const cleanStable = this.mosMin >= 0;
+          const cycleOk = this.tSinceLast >= MIN_CYCLE;
+          if (!cycleOk) this.tooFast++;
+          if (okStable && cycleOk) {
+            if (this.stepT >= MIN_SWING) this.settled++;
+            this.credit = paceFrac * (cleanStable ? 1 : 0.7);
+            if (this.mosAtTouch < 0) this.recovered++;
+          } else {
+            this.credit = okStable ? 0 : paceFrac * 0.3;
+          }
+          this.accCredit += this.credit;
+          this.tSinceLast = 0;
+          this.prevTouchMos = this.mosAtTouch;
+          this.phase = "swing";
+          this.tSwing = 0;
+          this.tSettle = 0;
+          this.mosMin = Infinity;
+          this.swungTicks = 0;
+        }
+        return gain;
+      }
+      /** 本步结算出的总分（0 或 1，或 0.3） */
+      get lastCredit() {
+        return this.credit;
+      }
+    };
+  }
+});
+
+// src/core/balance.ts
+function wholeBodyAngularMomentum(doll, com, out) {
+  let lx = 0, ly = 0, lz = 0;
+  for (const b of doll.bodies) {
+    const m = b.mass();
+    const r = b.translation();
+    const v = b.linvel();
+    const rx = r.x - com.x, ry = r.y - com.y, rz = r.z - com.z;
+    lx += m * (ry * v.z - rz * v.y);
+    ly += m * (rz * v.x - rx * v.z);
+    lz += m * (rx * v.y - ry * v.x);
+  }
+  out[0] = lx;
+  out[1] = ly;
+  out[2] = lz;
+  return out;
+}
+var HEAD_MIN, HEAD_MAX, MAX_PITCH, MOS_VOID, WBAM_NORM, WBAM_RATE_NORM, BalanceJudge;
+var init_balance = __esm({
+  "src/core/balance.ts"() {
+    "use strict";
+    HEAD_MIN = 0.86;
+    HEAD_MAX = 1.06;
+    MAX_PITCH = 0.7;
+    MOS_VOID = -0.02;
+    WBAM_NORM = 6;
+    WBAM_RATE_NORM = 40;
+    BalanceJudge = class {
+      prev = new Float64Array(3);
+      prevL = 0;
+      hasPrev = false;
+      head0 = 0;
+      /** 累积不平衡（供奖励逐拍积分） */
+      accImb = 0;
+      accTicks = 0;
+      /** 无效帧数（头塌了）—— 诊断用 */
+      badHead = 0;
+      wbamMax = 0;
+      headMin = 1;
+      reset() {
+        this.hasPrev = false;
+        this.accImb = 0;
+        this.accTicks = 0;
+        this.badHead = 0;
+        this.wbamMax = 0;
+        this.headMin = 1;
+        this.head0 = 0;
+      }
+      /** 记录初始站姿的头高（`begin()` 时调用） */
+      setRefHead(y) {
+        if (this.head0 <= 0) this.head0 = y;
+      }
+      /** 归一化尺度的标定结果（诊断用） */
+      get norms() {
+        return { wbam: WBAM_NORM, rate: WBAM_RATE_NORM };
+      }
+      get stats() {
+        return { accImb: this.accImb, ticks: this.accTicks, badHead: this.badHead, wbamMax: this.wbamMax, headMin: this.headMin };
+      }
+      /**
+       * @param lbuf  wholeBodyAngularMomentum 的输出（3 元素）
+       * @param headY 当前头（或最高点）世界高度
+       * @param dt
+       */
+      step(lbuf, headY, dt, pitch = 0, mosX = 1) {
+        const mag = Math.hypot(lbuf[0], lbuf[1], lbuf[2]);
+        let rate = 0;
+        if (this.hasPrev) {
+          const dl = Math.hypot(lbuf[0] - this.prev[0], lbuf[1] - this.prev[1], lbuf[2] - this.prev[2]);
+          rate = dl / Math.max(1e-6, dt);
+        }
+        this.prev[0] = lbuf[0];
+        this.prev[1] = lbuf[1];
+        this.prev[2] = lbuf[2];
+        this.hasPrev = true;
+        const wbam = mag / WBAM_NORM;
+        const wbamRate = rate / WBAM_RATE_NORM;
+        const headRatio = this.head0 > 0 ? headY / this.head0 : 1;
+        const valid = headRatio >= HEAD_MIN && headRatio <= HEAD_MAX && Math.abs(pitch) < MAX_PITCH && mosX > MOS_VOID;
+        const imb = Math.tanh(0.7 * wbam) + 0.5 * Math.tanh(0.7 * wbamRate);
+        this.accImb += imb * dt;
+        this.accTicks += dt;
+        if (!valid) this.badHead += dt;
+        this.wbamMax = Math.max(this.wbamMax, mag);
+        this.headMin = Math.min(this.headMin, headRatio);
+        return { wbam, wbamRate, headRatio, valid };
+      }
+      /**
+       * 用一段"已知站得住"的运动标定尺度：取它 |WBAM| 的 90 分位作为 1.0。
+       * ⚠ 没有这一步的话，归一化尺度只能靠猜，而惩罚力度就会变成一个说不清来源的魔法数。
+       */
+      static calibrate(wbamSamples) {
+        if (wbamSamples.length < 8) return;
+        const s = [...wbamSamples].sort((a, b) => a - b);
+        const p90 = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
+        WBAM_NORM = Math.max(1e-3, p90);
+        WBAM_RATE_NORM = Math.max(1e-3, WBAM_NORM * 6);
+      }
+      /** 测试/探针用：直接指定尺度（不做标定） */
+      static setNorms(wbam, rate) {
+        WBAM_NORM = Math.max(1e-6, wbam);
+        WBAM_RATE_NORM = Math.max(1e-6, rate);
+      }
+    };
+  }
+});
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -14716,6 +15023,8 @@ var init_sim = __esm({
     init_brain();
     init_posture();
     init_gaitRef();
+    init_stability();
+    init_balance();
     init_walkReward();
     init_skeleton();
     MOVE_SET = new Set(MOVE_JOINTS);
@@ -14783,6 +15092,11 @@ var init_sim = __esm({
       refHip: 1.5,
       refKnee: 1.5,
       pelvisFirst: 2,
+      settle: 3,
+      stepPace: 1.5,
+      moS: 0.5,
+      imbalance: 2,
+      minCycle: 0.9,
       jointMove: 0.3,
       /** 逐关节倍率（UI 滑块） */
       moveScale: {},
@@ -14861,6 +15175,33 @@ var init_sim = __esm({
       // 参考分/盆骨优先的时间积分
       pfL = new PelvisFirstTracker();
       pfR = new PelvisFirstTracker();
+      ssL = new StepSettleTracker();
+      ssR = new StepSettleTracker();
+      accSettle = 0;
+      accPace = 0;
+      accMoS = 0;
+      mosMinSeen = Infinity;
+      mosSum = 0;
+      mosN = 0;
+      settleDebug = "";
+      bal = new BalanceJudge();
+      lbuf = new Float64Array(3);
+      footFar = 0;
+      // ★ 脚的最远前伸（"以脚为准"的距离基准）
+      footDist = 0;
+      // ★ 有效脚距离（只在头没塌时累加）
+      torsoDist = 0;
+      footVel = 0;
+      // 脚的速度（m/s）
+      lastFootX = 0;
+      footStart = 0;
+      imbAcc = 0;
+      validTicks = 0;
+      stepCycleT = 0;
+      /** 诊断：迈步-稳住状态机的末态（为什么没结算） */
+      get settleState() {
+        return this.settleDebug;
+      }
       altCount = 0;
       accSwitchQ = 0;
       // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
@@ -15020,8 +15361,37 @@ var init_sim = __esm({
         return this.tick / this.ticksTotal;
       }
       /** ★ 净前进距离（跑到此刻为止的位移；"最远距离"已弃用，见 W 的注释） */
+      /**
+       * ★★ 距离改为**以脚为准**（用户 2026-10-02："移动距离应该以脚的移动为准"）。
+       * 原来用的是躯干 x —— 于是"整个人往前扑倒"会被算成"走了很远"，
+       * 策略只要向前扑就能拿满速度分（实测零输出基线都能量到 0.65 m）。
+       * 真正的判据是"支撑面（脚）在前进"：Hof 的说法是，走路是**支撑面前进**，
+       * 不是质心前进；质心冲出支撑面而脚没跟上，那就是**摔**。
+       * ★ 而且只在**头没塌**（`valid`）时累加：身体已经塌下去时往前扑**一分不给**。
+       */
       get distance() {
-        return this.doll.torso().translation().x - this.startX;
+        return this.footDist;
+      }
+      /** 诊断：躯干位移（用来对比"脚走了多少 vs 人扑了多远"） */
+      get torsoDistance() {
+        return this.torsoDist;
+      }
+      /** 诊断：脚的速度（m/s） */
+      get footSpeed() {
+        return this.footVel;
+      }
+      /** 诊断：头的世界高度 */
+      headTopY() {
+        let y = -1e9;
+        for (const b of this.doll.bodies) {
+          const t = b.translation();
+          if (t.y > y) y = t.y;
+        }
+        return y + 0.1;
+      }
+      /** 两只脚的最远前伸（x） */
+      footMaxX() {
+        return Math.max(this.footTmpL[0], this.footTmpR[0]);
       }
       /** 诊断：本回合的电机指令变化率积分（替代旧的抖动积分 Σ(Δτ)²，见 W.actRate） */
       get actionRateCost() {
@@ -15042,6 +15412,12 @@ var init_sim = __esm({
         this.doll.reset(0);
         this.startX = this.doll.torso().translation().x;
         this.initTorsoY = this.doll.torso().translation().y;
+        this.bal.setRefHead(this.headTopY());
+        this.doll.soleXZ("l", this.footTmpL);
+        this.doll.soleXZ("r", this.footTmpR);
+        this.lastFootX = this.footMaxX();
+        this.footFar = this.lastFootX;
+        this.footStart = this.lastFootX;
         this.subStep = 0;
         this.tick = 0;
         this.phase = 0;
@@ -15060,6 +15436,23 @@ var init_sim = __esm({
         this.accPelvis = 0;
         this.pfL.reset();
         this.pfR.reset();
+        this.ssL.reset();
+        this.ssR.reset();
+        this.accSettle = 0;
+        this.accPace = 0;
+        this.accMoS = 0;
+        this.bal.reset();
+        this.footFar = 0;
+        this.footDist = 0;
+        this.torsoDist = 0;
+        this.footVel = 0;
+        this.lastFootX = 0;
+        this.imbAcc = 0;
+        this.validTicks = 0;
+        this.stepCycleT = 0;
+        this.mosMinSeen = Infinity;
+        this.mosSum = 0;
+        this.mosN = 0;
         this.accLift = 0;
         this.accSingle = 0;
         this.accTicks = 0;
@@ -15321,7 +15714,7 @@ var init_sim = __esm({
         const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
         if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
           this.altCount++;
-          this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
+          this.accSwitchQ += phi(TARGET_VX - this.footVel);
         }
         this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
         if (nGround === 1) {
@@ -15353,6 +15746,61 @@ var init_sim = __esm({
           this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
           if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt;
         }
+        {
+          doll.soleXZ("l", this.footTmpL);
+          doll.soleXZ("r", this.footTmpR);
+          const comB = readCom(doll, this.com);
+          wholeBodyAngularMomentum(doll, comB, this.lbuf);
+          const headY = this.headTopY();
+          const brot = torso.rotation();
+          const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (brot.w * brot.x + brot.y * brot.z))));
+          const supB = readSupport(doll, this.sup);
+          const mosB = marginOfStability(
+            comB.x,
+            comB.vx,
+            omegaAt(comB.y),
+            supB.cx + supB.halfX,
+            comB.z,
+            comB.vz,
+            supB.cz + supB.halfZ
+          );
+          const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
+          const fx = this.footMaxX();
+          if (fx > this.footFar) this.footFar = fx;
+          this.footVel += (Math.max(0, fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+          this.lastFootX = fx;
+          this.torsoDist = doll.torso().translation().x - this.startX;
+          if (b.valid) {
+            this.footDist = Math.max(0, this.footFar - this.footStart);
+            this.validTicks += dt;
+            this.stepCycleT += dt;
+          } else {
+            this.imbAcc += 0.5 * dt;
+          }
+        }
+        {
+          const com2 = readCom(doll, this.com);
+          const sup2 = readSupport(doll, this.sup);
+          const om2 = omegaAt(com2.y);
+          const mos = marginOfStability(
+            com2.x,
+            com2.vx,
+            om2,
+            sup2.cx + sup2.halfX,
+            com2.z,
+            com2.vz,
+            sup2.cz + sup2.halfZ
+          );
+          if (nGround >= 1) {
+            this.mosMinSeen = Math.min(this.mosMinSeen, mos.x);
+            this.mosSum += mos.x;
+            this.mosN++;
+          }
+          const gL2 = this.ssL.step(gL, mos.x, dt);
+          const gR2 = this.ssR.step(gR, mos.x, dt);
+          this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+          if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
+        }
         this.accTicks += dt;
         let jSpd = 0, jMove = 0;
         for (let i2 = 0; i2 < doll.jointCount; i2++) {
@@ -15378,7 +15826,7 @@ var init_sim = __esm({
         this.accActRate += act2 * dt;
         this.accTau += tau2 * dt;
         this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
-        const tvx = tv.x, tvz = tv.z;
+        const tvx = -this.footVel, tvz = tv.z;
         const ang = torso.angvel();
         this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
         this.accYaw += phi(-ang.y) * dt;
@@ -15496,6 +15944,34 @@ var init_sim = __esm({
           tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
           tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
           tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
+          const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
+          const paceCap = 1 + Math.floor(this.accTicks / 1.5);
+          tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
+          tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
+          tt.moS = w.moS * this.accMoS * aliveAvg;
+          const bstat = this.bal.stats;
+          const imbMean = bstat.ticks > 0 ? bstat.accImb / bstat.ticks : 0;
+          const badHeadFrac = bstat.ticks > 0 ? bstat.badHead / bstat.ticks : 0;
+          tt.imbalance = -w.imbalance * (imbMean + badHeadFrac) * aliveAvg;
+          tt.imbMean = imbMean;
+          tt.imbBadFrac = badHeadFrac;
+          tt.imbAlive = aliveAvg;
+          tt.imbW = w.imbalance;
+          tt.wbamMax = bstat.wbamMax;
+          tt.wbamNorm = this.bal.norms.wbam;
+          tt.headRatioMin = bstat.headMin;
+          tt.validRatio = this.accTicks > 0 ? this.validTicks / this.accTicks : 0;
+          tt.footDist = this.footDist;
+          tt.torsoDist = this.torsoDist;
+          tt.flopRatio = Math.max(0, this.torsoDist - this.footDist);
+          tt.settledSteps = this.ssL.settleRatio + this.ssR.settleRatio;
+          tt.tooFastSteps = this.ssL.fastCount + this.ssR.fastCount;
+          tt.flightSteps = this.ssL.flightCount + this.ssR.flightCount;
+          tt.mosMin = this.mosMinSeen === Infinity ? 0 : this.mosMinSeen;
+          tt.mosMean = this.mosN > 0 ? this.mosSum / this.mosN : 0;
+          tt.unstableSteps = this.ssL.unstable + this.ssR.unstable;
+          tt.recoveredSteps = this.ssL.recoveredCount + this.ssR.recoveredCount;
+          this.settleDebug = `L[${this.ssL.debug()}] R[${this.ssR.debug()}]`;
           tt.alive = aliveAvg;
           tt.upright = w.upright * (this.accUpright - elapsed);
           tt.height = -w.height * this.accHeight;

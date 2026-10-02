@@ -49,6 +49,14 @@ export const MIN_SWING = 0.28;
 export const SETTLE_WIN = 0.45;
 /** MoS 目标带（m）：下界 0（不倒），上界按"人维持恒定 MoS"取一个够用但不宽松的值 */
 export const MOS_TARGET = 0.30;
+/**
+ * ★ "像婴儿学步"：两次触地之间的**最小间隔**（s），用户 2026-10-02：
+ *   "必须要和婴儿学步一样，再增大每步间隔一点，重点必须是每一步之后的稳定"。
+ *   ⇒ 步频被限制在 1/MIN_CYCLE。发育依据：4 岁前儿童质心垂直/侧向摆幅显著大于
+ *   成人、速度更低（McNair 2004）—— 婴儿式步态就是"慢、晃、每步都停一下"。
+ *   默认 0.9 s ⇒ ≤1.1 步/秒（成人约 1.8~2.0 步/秒，所以这确实更"婴儿"）。
+ */
+export const MIN_CYCLE = 0.9;
 /** MoS 带内得分高于下界的比例（带内线性上升，到 MOS_TARGET 满分） */
 export const mosBand = (mos: number): number => {
   if (mos < 0) return -clamp01(-mos / 0.25);          // 不稳：罚（越负越罚）
@@ -81,6 +89,7 @@ export class StepSettleTracker {
   private mosEnd = 0;                 // settle 窗**结束**时的 MoS（"最后稳住了"的判据）
   private mosAtTouch = 0;             // 触地瞬间的 MoS（用来判"这一步稳不稳"）
   private credit = 0;                 // 本步结算出的分
+  private tSinceLast = 1e9;           // 距上次结算过了多久（用于最小步间隔）
   private accCredit = 0;              // 累计结算分（渐进塑形，进适应度用）
   private tooFast = 0;
   private settled = 0;
@@ -93,7 +102,7 @@ export class StepSettleTracker {
 
   reset(): void {
     this.phase = 'settle'; this.tSwing = 0; this.tSettle = 0; this.swungTicks = 0;
-    this.accCredit = 0; this.airRun = 0; this.gndRun = 0;
+    this.accCredit = 0; this.airRun = 0; this.gndRun = 0; this.tSinceLast = 1e9;
     this.mosMin = Infinity; this.mosAtTouch = 0; this.credit = 0; this.tooFast = 0;
     this.settled = 0; this.unstableSteps = 0; this.recovered = 0; this.flights = 0;
     this.prevTouchMos = -1; this.stepT = 0;
@@ -127,6 +136,7 @@ export class StepSettleTracker {
     const gnd = this.gndRun >= StepSettleTracker.MIN_RUN;      // 真的踩住了
     if (!air && !gnd) return 0;                                // 抖动帧：什么都不做
 
+    this.tSinceLast += dt;
     if (air) {
       // ── 摆动相 ──
       if (this.phase === 'settle') {
@@ -186,16 +196,20 @@ export class StepSettleTracker {
       //   如果用"整窗最小值 ≥ 0"来判，recovery step 永远无法被认定（我踩过）。
       const okStable = this.mosEnd >= 0;
       const cleanStable = this.mosMin >= 0;
-      if (okStable) {
+      // ★ 婴儿学步：间隔不够（上一结算步离现在太近）⇒ 不给结算分，只记一次"太快"
+      const cycleOk = this.tSinceLast >= MIN_CYCLE;
+      if (!cycleOk) this.tooFast++;
+      if (okStable && cycleOk) {
         // ★ 计数只认"步速达标"的步（诊断 + 罚分用）；但**适应度看到的分是渐进的**，
         //   短摆动也能拿 paceFrac 那一部分 —— 这样 ES 才有坡可爬（见上面的注释）。
         if (this.stepT >= MIN_SWING) this.settled++;
         this.credit = paceFrac * (cleanStable ? 1 : 0.7);
         if (this.mosAtTouch < 0) this.recovered++;
       } else {
-        this.credit = paceFrac * 0.3;   // 迈出去了但没稳住：只给很少的分
+        this.credit = okStable ? 0 : paceFrac * 0.3;   // 没稳住：只给很少的分
       }
       this.accCredit += this.credit;
+      this.tSinceLast = 0;
       this.prevTouchMos = this.mosAtTouch;
       this.phase = 'swing';
       this.tSwing = 0; this.tSettle = 0; this.mosMin = Infinity; this.swungTicks = 0;
