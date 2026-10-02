@@ -135,6 +135,8 @@ export interface SimConfig {
   fallHeightRatio: number;
   /** 摔倒判定：躯干"上方向"偏离世界竖直超过该值（弧度） */
   fallAngle: number;
+  /** ★ 头高阈值（m）—— 摔倒判据之一（2026-10-02 由 0.45 放宽到 0.28） */
+  headMinHeight: number;
   /**
    * ★ 覆盖适应度权重（默认全用 W）。
    *
@@ -182,8 +184,18 @@ export const DEFAULT_SIM: SimConfig = {
    *   而躯干高度还有初始的 70% ⇒ 回合不结束、速度跟踪项被它白拿 0.51 分。
    *   经典配方里 crash ⇒ reset 是"结构上不给退化解留时间"，这里同理。
    */
-  fallHeightRatio: 0.85,
-  fallAngle: 1.25,
+  // ★ 2026-10-02 放宽（用户："摔倒被判定太严了"、"修，不用限制躯干高度了"）。
+  //   回读证据（probe-arch「摔倒瞬间」）：
+  //     当前阈值下 存活 3.33s，触发瞬间 rH=1.007 / rT=0.415 / rD=0.232，
+  //     **碰地刚体=（无）** ⇒ crash 判据（bodyHitGround）根本没有误伤，
+  //     真正的杀手是**躯干高度**：躯干 1.064m vs 阈值 0.75×1.429=1.072m，差 8mm 就摔。
+  //     而那姿态是"弯腰低头"（倾角仅 34.5°，远未到 83° 阈值），走路时本来就会这样。
+  //   ⇒ 按用户要求**取消躯干高度作为摔倒判据**（设 0 = 关闭），
+  //     只保留【倾角】与【刚体碰地】两条 —— 后者已验证不会误伤。
+  fallHeightRatio: 0,      // ★ 0 = 不再用躯干高度判摔
+  fallAngle: 1.45,         // 倾角阈值 83°
+  /** ★ 头高阈值（m）：由 0.45 → 0.28（实测 rD 只到 0.23，从未触发） */
+  headMinHeight: 0.28,
 };
 
 /**
@@ -455,6 +467,8 @@ export class Sim {
    *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
    */
   fallReason: '' | 'height' | 'tilt' | 'head' = '';
+  /** ★ 摔倒瞬间的判据快照（用户 2026-10-02：看到底是什么触发摔倒） */
+  fallDiag: { rH: number; rT: number; rD: number; torsoY: number; headY: number; tiltDeg: number; hit: string } = { rH: 0, rT: 0, rD: 0, torsoY: 0, headY: 0, tiltDeg: 0, hit: '' };
   /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
   endTorsoY = 0;
   endTilt = 0;
@@ -648,7 +662,7 @@ export class Sim {
     this.balanceTicks = 0;
     this.peakDcmX = 0;
     this.peakDcmZ = 0;
-    this.fallReason = '';
+
     this.endTorsoY = 0;
     this.endTilt = 0;
     this.endHeadY = 0;
@@ -1310,12 +1324,24 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
     // ★★ crash：任何非脚部刚体碰到地面 ⇒ 截断（Rudin 2022 的原做法）。
     //   只看躯干高度/倾角抓不住"往前塌"（实测：塌 41cm 而躯干仍有 70% 高、倾角几乎不变，
     //   于是一路滑 0.65~1.25 m 还能拿速度跟踪分）。
-    if (this.doll.bodyHitGround()) { this.finish(true); return true; }
-    const rH = (this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y);
+    if (this.doll.bodyHitGround()) {
+      // ★ crash 触发也记录是谁碰的地（用户 2026-10-02）
+      this.fallDiag = { rH: +((this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
+      this.finish(true); return true;
+    }
+    // ★ `fallHeightRatio = 0` ⇒ 关闭躯干高度判据（用户 2026-10-02："不用限制躯干高度了"）
+    const useH = this.cfg.fallHeightRatio > 0;
+    const rH = useH ? (this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y) : 0;
     const rT = tilt / this.cfg.fallAngle;
-    const rD = 0.45 / Math.max(1e-6, headY);
-    if (rH > 1 || rT > 1 || rD > 1) {
-      this.fallReason = rH >= rT && rH >= rD ? 'height' : rT >= rD ? 'tilt' : 'head';
+    const rD = this.cfg.headMinHeight / Math.max(1e-6, headY);
+    if ((useH && rH > 1) || rT > 1 || rD > 1) {
+      this.fallReason = rT > 1 ? 'tilt' : 'head';
+      // ★ 记录触发瞬间的三个比值与 crash 来源（用户 2026-10-02："看看到底什么原因触发摔倒"）
+      this.fallDiag = {
+        rH: +rH.toFixed(3), rT: +rT.toFixed(3), rD: +rD.toFixed(3),
+        torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3),
+        tiltDeg: +(tilt * 180 / Math.PI).toFixed(1), hit: this.doll.lastHitKey,
+      };
       this.finish(true);
       return true;
     }

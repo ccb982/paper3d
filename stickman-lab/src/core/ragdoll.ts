@@ -681,10 +681,38 @@ export class Ragdoll {
    *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
    *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
    */
+  /**
+    * ★★ 最近一次 `bodyHitGround()` 命中的**刚体名**（空 = 没命中）。
+    *   用于调试："摔倒到底是哪个部位碰地触发的" —— 手/肘在正常低姿态下就接近地面，
+    *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
+    */
+  lastHitKey = '';
+
+  /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+  lowestY(i: number): number {
+    const b = this.bodies[i];
+    let lo = Infinity;
+    for (let ci = 0; ci < b.numColliders(); ci++) {
+      const c = b.collider(ci) as unknown as { aabb?: () => { min: { y: number } } };
+      const a = c.aabb?.();
+      if (a && a.min.y < lo) lo = a.min.y;
+    }
+    return lo;
+  }
+
+  /**
+    * ★★ 不算 crash 的刚体（2026-10-02，用户："摔倒被判定太严了"）。
+    *   实测证据：关掉躯干高度判据后，crash 抓到的是 **hand_l** ——躯干蹲到 0.796m、
+    *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
+    *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
+    */
+  private static readonly NOT_CRASH = new Set(['shin_l', 'shin_r', 'foot_l', 'foot_r', 'arm_l', 'arm_r', 'hand_l', 'hand_r']);
+
   bodyHitGround(): boolean {
+    this.lastHitKey = '';
     for (let i = 0; i < this.bodies.length; i++) {
       const bd = this.sk.bodies[i];
-      if (bd.key === 'shin_l' || bd.key === 'shin_r' || bd.key === 'foot_l' || bd.key === 'foot_r') continue;
+      if (Ragdoll.NOT_CRASH.has(bd.key)) continue;
       const b = this.bodies[i];
       for (let ci = 0; ci < b.numColliders(); ci++) {
         const col = b.collider(ci);
@@ -696,7 +724,7 @@ export class Ragdoll {
             if (ny > 0.5 || ny < -0.5) hit = true;
           });
         });
-        if (hit) return true;
+        if (hit) { this.lastHitKey = bd.key; return true; }
       }
     }
     return false;

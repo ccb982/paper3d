@@ -705,3 +705,71 @@ console.log('   t(s)  MoS(mm)  承重   连续稳定s  判定   离地峰(mm)');
   } });
   console.log(`\n  全程离地峰值 ${(pk * 1000).toFixed(0)}mm（门未放行前应当 ≈0）`);
 }
+
+// ===== 摔倒判据：三条各��什么水平触发 =====
+console.log('\n=== 摔倒判据回读（谁先触发）===\n');
+{
+  const fc = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  fc.begin(new Float32Array(fc.params.length));
+  console.log('   t(s)  躯干高   头高    倾角°   rH     rT     rD    超标项');
+  runCaptureTeacher(sk, fc, FB, { dur: 4, clockDriven: true, onFrame: (): void => {
+    if (fc.ticksDone % 12 !== 0) return;
+    const t = fc.ticksDone / DEFAULT_SIM.controlHz;
+    const tp = fc.doll.torso().translation();
+    const hd = fc.doll.head().translation();
+    const tl = fc.doll.tiltOf(fc.doll.torso());
+    const initY = 1.429;
+    const rH = (initY * 0.75) / Math.max(1e-6, tp.y);
+    const rT = tl / 1.45;
+    const rD = 0.28 / Math.max(1e-6, hd.y);
+    const over = rH > 1 ? 'height' : rT > 1 ? 'tilt' : rD > 1 ? 'head' : '';
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${tp.y.toFixed(3)}  ${hd.y.toFixed(3)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(5)}  ${rH.toFixed(2)}  ${rT.toFixed(2)}  ${rD.toFixed(2)}  ${over || '—'}`);
+  } });
+  console.log(`  最终摔倒原因【${fc.fallReason || '未摔'}】`);
+  console.log('\n  阈值：躯干高 <1.072m(0.75×) / 倾角 >83°(1.45rad) / 头高 <0.28m');
+}
+
+// ===== 是哪个刚体碰到地面触发了摔倒 =====
+console.log('\n=== crash 判据：哪个刚体碰到地面 ===\n');
+console.log('  刚体      最低点(m)   触地?   高度阈值');
+{
+  const bg2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  bg2.begin(new Float32Array(bg2.params.length));
+  let hitAt = -1;
+  let hitName = '';
+  let lastY = new Map<string, number>();
+  runCaptureTeacher(sk, bg2, FB, { dur: 4, clockDriven: true, onFrame: (t): void => {
+    if (hitAt > 0) return;
+    for (let i = 0; i < bg2.doll.bodies.length; i++) {
+      const bd = sk.bodies[i]!;
+      if (bd.key === 'shin_l' || bd.key === 'shin_r' || bd.key === 'foot_l' || bd.key === 'foot_r') continue;
+      const lo = bg2.doll.lowestY(i);
+      if (lo < 0.02) { hitAt = t; hitName = bd.key; }
+      lastY.set(bd.key, Math.min(lastY.get(bd.key) ?? 9, lo));
+    }
+  } });
+  if (hitAt > 0) {
+    console.log(`  ★ 触发时刻 t=${hitAt.toFixed(2)}s，触碰地面的刚体：**${hitName}**`);
+  } else {
+    console.log('  （本次运行没有刚体触地 ⇒ 摔倒由高度/倾角判据触发）');
+  }
+  console.log('\n  各刚体全程最低点：');
+  for (const [k, v] of [...lastY.entries()].sort((a, b) => a[1] - b[1]))
+    console.log(`    ${k.padEnd(10)} ${v.toFixed(3)}m ${v < 0.02 ? '  ★触地' : ''}`);
+  console.log('\n  ⇒ 若"手(head)/躯干"在正常走路时就接近地面，crash 判据会误伤。');
+}
+
+// ===== 摔倒瞬间的判据快照 =====
+console.log('\n=== 摔倒瞬间：到底是什么触发 ===\n');
+for (const c of [{ n: '当前阈值', p: {} as Record<string, number> },
+                 { n: '完全关掉 crash（bodyHitGround）', p: { noCrash: 1 } as Record<string, number> },
+                 { n: '躯干阈值 0.65', p: {} as Record<string, number> }]) {
+  const f1 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6, gaitHz: 1 / FB.T,
+    ...(c.n.includes('0.65') ? { fallHeightRatio: 0.65 } : {}) });
+  f1.begin(new Float32Array(f1.params.length));
+  const r1 = runCaptureTeacher(sk, f1, FB, { dur: 6, clockDriven: true });
+  const d = f1.fallDiag;
+  console.log(`  ${c.n.padEnd(28)} 存活 ${r1.t.toFixed(2)}s  原因【${f1.fallReason || '未摔'}】`);
+  console.log(`      rH=${d.rH} rT=${d.rT} rD=${d.rD}  躯干=${d.torsoY}m 头=${d.headY}m 倾角=${d.tiltDeg}°碰地刚体=${d.hit || '（无）'}`);
+}
+console.log('\n  阈值：rH>1 躯干低于 0.75×初始 / rT>1 倾角>83° / rD>1 头<0.28m / 碰地刚体=crash');

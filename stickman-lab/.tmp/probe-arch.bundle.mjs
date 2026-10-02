@@ -13134,7 +13134,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var Ragdoll = class {
+var Ragdoll = class _Ragdoll {
   sk;
   opt;
   bodies = [];
@@ -13412,10 +13412,35 @@ var Ragdoll = class {
    *   实测零输出基因组 0.5 s 内塌 41 cm、躯干高度还有 70%、倾角几乎不变 ⇒
    *   回合不结束，它一路滑出 0.65~1.25 m 还能拿速度跟踪分。
    */
+  /**
+    * ★★ 最近一次 `bodyHitGround()` 命中的**刚体名**（空 = 没命中）。
+    *   用于调试："摔倒到底是哪个部位碰地触发的" —— 手/肘在正常低姿态下就接近地面，
+    *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
+    */
+  lastHitKey = "";
+  /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+  lowestY(i) {
+    const b = this.bodies[i];
+    let lo = Infinity;
+    for (let ci = 0; ci < b.numColliders(); ci++) {
+      const c = b.collider(ci);
+      const a = c.aabb?.();
+      if (a && a.min.y < lo) lo = a.min.y;
+    }
+    return lo;
+  }
+  /**
+    * ★★ 不算 crash 的刚体（2026-10-02，用户："摔倒被判定太严了"）。
+    *   实测证据：关掉躯干高度判据后，crash 抓到的是 **hand_l** ——躯干蹲到 0.796m、
+    *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
+    *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
+    */
+  static NOT_CRASH = /* @__PURE__ */ new Set(["shin_l", "shin_r", "foot_l", "foot_r", "arm_l", "arm_r", "hand_l", "hand_r"]);
   bodyHitGround() {
+    this.lastHitKey = "";
     for (let i = 0; i < this.bodies.length; i++) {
       const bd = this.sk.bodies[i];
-      if (bd.key === "shin_l" || bd.key === "shin_r" || bd.key === "foot_l" || bd.key === "foot_r") continue;
+      if (_Ragdoll.NOT_CRASH.has(bd.key)) continue;
       const b = this.bodies[i];
       for (let ci = 0; ci < b.numColliders(); ci++) {
         const col = b.collider(ci);
@@ -13427,7 +13452,10 @@ var Ragdoll = class {
             if (ny > 0.5 || ny < -0.5) hit = true;
           });
         });
-        if (hit) return true;
+        if (hit) {
+          this.lastHitKey = bd.key;
+          return true;
+        }
       }
     }
     return false;
@@ -15005,8 +15033,20 @@ var DEFAULT_SIM = {
    *   而躯干高度还有初始的 70% ⇒ 回合不结束、速度跟踪项被它白拿 0.51 分。
    *   经典配方里 crash ⇒ reset 是"结构上不给退化解留时间"，这里同理。
    */
-  fallHeightRatio: 0.85,
-  fallAngle: 1.25
+  // ★ 2026-10-02 放宽（用户："摔倒被判定太严了"、"修，不用限制躯干高度了"）。
+  //   回读证据（probe-arch「摔倒瞬间」）：
+  //     当前阈值下 存活 3.33s，触发瞬间 rH=1.007 / rT=0.415 / rD=0.232，
+  //     **碰地刚体=（无）** ⇒ crash 判据（bodyHitGround）根本没有误伤，
+  //     真正的杀手是**躯干高度**：躯干 1.064m vs 阈值 0.75×1.429=1.072m，差 8mm 就摔。
+  //     而那姿态是"弯腰低头"（倾角仅 34.5°，远未到 83° 阈值），走路时本来就会这样。
+  //   ⇒ 按用户要求**取消躯干高度作为摔倒判据**（设 0 = 关闭），
+  //     只保留【倾角】与【刚体碰地】两条 —— 后者已验证不会误伤。
+  fallHeightRatio: 0,
+  // ★ 0 = 不再用躯干高度判摔
+  fallAngle: 1.45,
+  // 倾角阈值 83°
+  /** ★ 头高阈值（m）：由 0.45 → 0.28（实测 rD 只到 0.23，从未触发） */
+  headMinHeight: 0.28
 };
 var W = {
   // ══════ 走路：walkReward.ts 的 11 项（顺序同那张表）══════
@@ -15316,6 +15356,8 @@ var Sim = class {
    *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
    */
   fallReason = "";
+  /** ★ 摔倒瞬间的判据快照（用户 2026-10-02：看到底是什么触发摔倒） */
+  fallDiag = { rH: 0, rT: 0, rD: 0, torsoY: 0, headY: 0, tiltDeg: 0, hit: "" };
   /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
   endTorsoY = 0;
   endTilt = 0;
@@ -15546,7 +15588,6 @@ var Sim = class {
     this.balanceTicks = 0;
     this.peakDcmX = 0;
     this.peakDcmZ = 0;
-    this.fallReason = "";
     this.endTorsoY = 0;
     this.endTilt = 0;
     this.endHeadY = 0;
@@ -16032,14 +16073,25 @@ var Sim = class {
     const tilt = this.doll.tiltOf(torso);
     const headY = this.doll.head().translation().y;
     if (this.doll.bodyHitGround()) {
+      this.fallDiag = { rH: +(this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
       this.finish(true);
       return true;
     }
-    const rH = this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y);
+    const useH = this.cfg.fallHeightRatio > 0;
+    const rH = useH ? this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y) : 0;
     const rT = tilt / this.cfg.fallAngle;
-    const rD = 0.45 / Math.max(1e-6, headY);
-    if (rH > 1 || rT > 1 || rD > 1) {
-      this.fallReason = rH >= rT && rH >= rD ? "height" : rT >= rD ? "tilt" : "head";
+    const rD = this.cfg.headMinHeight / Math.max(1e-6, headY);
+    if (useH && rH > 1 || rT > 1 || rD > 1) {
+      this.fallReason = rT > 1 ? "tilt" : "head";
+      this.fallDiag = {
+        rH: +rH.toFixed(3),
+        rT: +rT.toFixed(3),
+        rD: +rD.toFixed(3),
+        torsoY: +tp.y.toFixed(3),
+        headY: +headY.toFixed(3),
+        tiltDeg: +(tilt * 180 / Math.PI).toFixed(1),
+        hit: this.doll.lastHitKey
+      };
       this.finish(true);
       return true;
     }
@@ -17454,3 +17506,75 @@ console.log("   t(s)  MoS(mm)  \u627F\u91CD   \u8FDE\u7EED\u7A33\u5B9As  \u5224\
   console.log(`
   \u5168\u7A0B\u79BB\u5730\u5CF0\u503C ${(pk * 1e3).toFixed(0)}mm\uFF08\u95E8\u672A\u653E\u884C\u524D\u5E94\u5F53 \u22480\uFF09`);
 }
+console.log("\n=== \u6454\u5012\u5224\u636E\u56DE\u8BFB\uFF08\u8C01\u5148\u89E6\u53D1\uFF09===\n");
+{
+  const fc = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  fc.begin(new Float32Array(fc.params.length));
+  console.log("   t(s)  \u8EAF\u5E72\u9AD8   \u5934\u9AD8    \u503E\u89D2\xB0   rH     rT     rD    \u8D85\u6807\u9879");
+  runCaptureTeacher(sk, fc, FB, { dur: 4, clockDriven: true, onFrame: () => {
+    if (fc.ticksDone % 12 !== 0) return;
+    const t = fc.ticksDone / DEFAULT_SIM.controlHz;
+    const tp = fc.doll.torso().translation();
+    const hd = fc.doll.head().translation();
+    const tl = fc.doll.tiltOf(fc.doll.torso());
+    const initY = 1.429;
+    const rH = initY * 0.75 / Math.max(1e-6, tp.y);
+    const rT = tl / 1.45;
+    const rD = 0.28 / Math.max(1e-6, hd.y);
+    const over = rH > 1 ? "height" : rT > 1 ? "tilt" : rD > 1 ? "head" : "";
+    console.log(`  ${t.toFixed(2).padStart(5)}  ${tp.y.toFixed(3)}  ${hd.y.toFixed(3)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(5)}  ${rH.toFixed(2)}  ${rT.toFixed(2)}  ${rD.toFixed(2)}  ${over || "\u2014"}`);
+  } });
+  console.log(`  \u6700\u7EC8\u6454\u5012\u539F\u56E0\u3010${fc.fallReason || "\u672A\u6454"}\u3011`);
+  console.log("\n  \u9608\u503C\uFF1A\u8EAF\u5E72\u9AD8 <1.072m(0.75\xD7) / \u503E\u89D2 >83\xB0(1.45rad) / \u5934\u9AD8 <0.28m");
+}
+console.log("\n=== crash \u5224\u636E\uFF1A\u54EA\u4E2A\u521A\u4F53\u78B0\u5230\u5730\u9762 ===\n");
+console.log("  \u521A\u4F53      \u6700\u4F4E\u70B9(m)   \u89E6\u5730?   \u9AD8\u5EA6\u9608\u503C");
+{
+  const bg2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T });
+  bg2.begin(new Float32Array(bg2.params.length));
+  let hitAt = -1;
+  let hitName = "";
+  let lastY = /* @__PURE__ */ new Map();
+  runCaptureTeacher(sk, bg2, FB, { dur: 4, clockDriven: true, onFrame: (t) => {
+    if (hitAt > 0) return;
+    for (let i = 0; i < bg2.doll.bodies.length; i++) {
+      const bd = sk.bodies[i];
+      if (bd.key === "shin_l" || bd.key === "shin_r" || bd.key === "foot_l" || bd.key === "foot_r") continue;
+      const lo = bg2.doll.lowestY(i);
+      if (lo < 0.02) {
+        hitAt = t;
+        hitName = bd.key;
+      }
+      lastY.set(bd.key, Math.min(lastY.get(bd.key) ?? 9, lo));
+    }
+  } });
+  if (hitAt > 0) {
+    console.log(`  \u2605 \u89E6\u53D1\u65F6\u523B t=${hitAt.toFixed(2)}s\uFF0C\u89E6\u78B0\u5730\u9762\u7684\u521A\u4F53\uFF1A**${hitName}**`);
+  } else {
+    console.log("  \uFF08\u672C\u6B21\u8FD0\u884C\u6CA1\u6709\u521A\u4F53\u89E6\u5730 \u21D2 \u6454\u5012\u7531\u9AD8\u5EA6/\u503E\u89D2\u5224\u636E\u89E6\u53D1\uFF09");
+  }
+  console.log("\n  \u5404\u521A\u4F53\u5168\u7A0B\u6700\u4F4E\u70B9\uFF1A");
+  for (const [k, v] of [...lastY.entries()].sort((a, b) => a[1] - b[1]))
+    console.log(`    ${k.padEnd(10)} ${v.toFixed(3)}m ${v < 0.02 ? "  \u2605\u89E6\u5730" : ""}`);
+  console.log('\n  \u21D2 \u82E5"\u624B(head)/\u8EAF\u5E72"\u5728\u6B63\u5E38\u8D70\u8DEF\u65F6\u5C31\u63A5\u8FD1\u5730\u9762\uFF0Ccrash \u5224\u636E\u4F1A\u8BEF\u4F24\u3002');
+}
+console.log("\n=== \u6454\u5012\u77AC\u95F4\uFF1A\u5230\u5E95\u662F\u4EC0\u4E48\u89E6\u53D1 ===\n");
+for (const c of [
+  { n: "\u5F53\u524D\u9608\u503C", p: {} },
+  { n: "\u5B8C\u5168\u5173\u6389 crash\uFF08bodyHitGround\uFF09", p: { noCrash: 1 } },
+  { n: "\u8EAF\u5E72\u9608\u503C 0.65", p: {} }
+]) {
+  const f1 = new Sim(sk, shape, {
+    ...DEFAULT_SIM,
+    mode: "walk",
+    duration: 6,
+    gaitHz: 1 / FB.T,
+    ...c.n.includes("0.65") ? { fallHeightRatio: 0.65 } : {}
+  });
+  f1.begin(new Float32Array(f1.params.length));
+  const r1 = runCaptureTeacher(sk, f1, FB, { dur: 6, clockDriven: true });
+  const d = f1.fallDiag;
+  console.log(`  ${c.n.padEnd(28)} \u5B58\u6D3B ${r1.t.toFixed(2)}s  \u539F\u56E0\u3010${f1.fallReason || "\u672A\u6454"}\u3011`);
+  console.log(`      rH=${d.rH} rT=${d.rT} rD=${d.rD}  \u8EAF\u5E72=${d.torsoY}m \u5934=${d.headY}m \u503E\u89D2=${d.tiltDeg}\xB0\u78B0\u5730\u521A\u4F53=${d.hit || "\uFF08\u65E0\uFF09"}`);
+}
+console.log("\n  \u9608\u503C\uFF1ArH>1 \u8EAF\u5E72\u4F4E\u4E8E 0.75\xD7\u521D\u59CB / rT>1 \u503E\u89D2>83\xB0 / rD>1 \u5934<0.28m / \u78B0\u5730\u521A\u4F53=crash");
