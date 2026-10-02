@@ -40,6 +40,7 @@
     "roles": "node tools/run.mjs probe-roles",
     "anklesign": "node tools/run.mjs probe-anklesign",
     "spine": "node tools/run.mjs probe-spine",
+    "legs": "node tools/run.mjs probe-legs",
     "ankle": "node tools/run.mjs probe-ankle",
     "balancer14": "node tools/run.mjs probe-balancer14"
   },

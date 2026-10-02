@@ -174,7 +174,15 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       // ★ 静默失效点（曾让我们误判"某个模块在起作用"）：
       //   12 关节配置里**没有 ankle**，此时 `j` 为 undefined（踝只存在于 14 关节）
       if (o < 0 || !j) return;
-      out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
+      // ★★ 归一化必须用该轴的**最大行程**，不能用"这一侧的小限位"。
+      //   旧写法 `ang>=0 ? ang/(0.9*maxRad) : ang/(0.9*-minRad)` 在**不对称限位**上
+      //   会把正向指令掐死：膝限位 [-145°, +2°] ⇒ 正指令除以 0.9*2° = 1.8°，
+      //   一个 0.5 的指令只产生 **0.9°** 目标 ⇒ 实测膝只动 1.6°/5.1°、肘 4.4°。
+      //   （hip [-80°,+60°] 较对称，所以髋看起来正常 —— 这就是"只有髋像有关节"的错觉。）
+      //   改成按 `max(|min|,|max|)` 双向一致归一化。
+      const span = Math.max(Math.abs(j.minRad[ax]), Math.abs(j.maxRad[ax]));
+      if (span <= 1e-6) return;
+      out[o] = ang / (0.9 * span);
       nAxes++;
     };
   /** 本拍真正下出去的轴数（调试用：0 说明某个角色压根没被控制） */

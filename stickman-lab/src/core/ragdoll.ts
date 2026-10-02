@@ -538,8 +538,14 @@ export class Ragdoll {
     for (let i = 0; i < sk.joints.length; i++) {
       for (let k = 0; k < 3; k++) {
         const s = this.opt.posRefScale;
-        this.refPos[i * 3 + k] = s * Math.max(0, sk.joints[i].maxRad[k]);
-        this.refNeg[i * 3 + k] = s * Math.max(0, -sk.joints[i].minRad[k]);
+        // ★★ 双向都用该轴的**最大行程**做归一化斜率（2026-10-02 修）。
+        //   旧写法按各自一侧的限位取斜率，在**不对称限位**上会把那一侧掐死：
+        //     knee 限位 [-145°, +2°] ⇒ refPos = s·2°，一个 cmd=0.5 只产生 s·1°
+        //     ⇒ 实测膝单轴只动 1.6°/5.1°、肘 4.4°，而髋（[-80°,+60°] 较对称）动 50~72°。
+        //   这就是"看起来只有髋像有关节"的来源：**不是物理推不动，是映射把幅度压没了**。
+        const span = Math.max(Math.abs(sk.joints[i].minRad[k]), Math.abs(sk.joints[i].maxRad[k]));
+        this.refPos[i * 3 + k] = s * span;
+        this.refNeg[i * 3 + k] = s * span;
       }
     }
   }
