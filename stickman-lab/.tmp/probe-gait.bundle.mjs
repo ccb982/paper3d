@@ -13634,6 +13634,8 @@ var Ragdoll = class _Ragdoll {
           const ov = jg[j.name];
           err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
+        if (false) relL[k] = 0;
+        else if (false) relL[k] = 0;
         if (err === 0) continue;
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);
@@ -15173,6 +15175,9 @@ var Sim = class {
   jbuf = new Float64Array(3);
   /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
   com = newCom();
+  /** ★ 公开给 teacher 的**真实支撑域**（每控制周期由 readSupport 更新）。
+   *   平衡门的 MoS 必须用这个 —— 此前 teacher 自己用常数 STANCE_X_HALF 估算，
+   *   得出的是假 MoS（实测 −200mm），门因此永闭。 */
   sup = newSupport();
   // ---- 评估状态 ----
   subStep = 0;

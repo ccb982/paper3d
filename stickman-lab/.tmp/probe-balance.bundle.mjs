@@ -13643,6 +13643,8 @@ var Ragdoll = class _Ragdoll {
           const ov = jg[j.name];
           err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
         }
+        if (false) relL[k] = 0;
+        else if (false) relL[k] = 0;
         if (err === 0) continue;
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);
@@ -15182,6 +15184,9 @@ var Sim = class {
   jbuf = new Float64Array(3);
   /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
   com = newCom();
+  /** ★ 公开给 teacher 的**真实支撑域**（每控制周期由 readSupport 更新）。
+   *   平衡门的 MoS 必须用这个 —— 此前 teacher 自己用常数 STANCE_X_HALF 估算，
+   *   得出的是假 MoS（实测 −200mm），门因此永闭。 */
   sup = newSupport();
   // ---- 评估状态 ----
   subStep = 0;
@@ -16472,7 +16477,19 @@ var THR = {
   /** TO 离趾：载荷占比低于此值（JAB 2003：离趾要用低阈值） */
   TO: 0.01,
   /** 起立加载完成的判据（Perry：体重压到该腿） */
-  loadAccept: 0.5
+  loadAccept: 0.5,
+  /**
+   * ★★ 承重转移判据改用**相间差值**（2026-10-02）。
+   *   旧的 `loadAccept: 0.5` 是**绝对占比**：两脚都在地上、体重居中时天然 = 0.50，
+   *   于是"前脚承重超过 0.5"只有在 CoM 真正移到前脚上方时才成立，
+   *   而那意味着前脚已经变后脚 ⇒ 永远达不到 ⇒ 与平衡门构成死锁。
+   *   改用差值后语义变成"**前脚明显比后脚重**"，在双支撑早期就能反映 APA 的进展，
+   *   且对 0.50 附近的抖动免疫（差值过零即达标）。
+   */
+  loadDiff: 0.15,
+  /** ★ 双支撑末期的判定时刻（该相位的进度，0~1）——门只在这里判定一次 */
+  decisionAt: 0.25
+  // ★ 判定窗上界：只在摆动**开始**的 s<0.25 内判定
 };
 var WT = {
   min: 0.134,
@@ -16501,26 +16518,26 @@ var BAL = {
   hold: 0.45
 };
 var BalanceGate = class {
-  holdT = 0;
+  lastWhy = "\uFF08\u672A\u5224\u5B9A\uFF09";
   reset() {
-    this.holdT = 0;
+    this.lastWhy = "\uFF08\u672A\u5224\u5B9A\uFF09";
   }
   /**
-   * @param mos  当前 MoS（m，正 = CoM 在支撑边内）
-   * @param load 支撑腿承重占比（0~1）
-   * @param dt   时间步
+   * @param mos      当前 MoS（m，正 = CoM 在真实支撑边内）
+   * @param loadDiff 前脚承重 − 后脚承重（−1~+1，正 = 重量已压到前脚）
+   * @param atDecision 是否处于该相位的判定时刻
    */
-  judge(mos, load, dt) {
+  judge(mos, loadDiff, atDecision) {
+    const holdT = atDecision ? 1 : 0;
     const okMos = mos > BAL.mosMargin;
-    const okLoad = load >= THR.loadAccept;
-    if (okMos && okLoad) this.holdT += dt;
-    else this.holdT = 0;
-    const ok = this.holdT >= BAL.hold;
-    const why = ok ? "\u901A\u8FC7" : !okMos ? `MoS \u4E0D\u8DB3\uFF08${(mos * 1e3).toFixed(0)}mm \u2264 ${(BAL.mosMargin * 1e3).toFixed(0)}mm\uFF0CCoM \u4E0D\u5728\u652F\u6491\u811A\u4E0A\u65B9\uFF09` : !okLoad ? `\u627F\u91CD\u672A\u8F6C\u79FB\uFF08${load.toFixed(2)} < ${THR.loadAccept}\uFF09` : `\u8FDE\u7EED\u7A33\u5B9A\u4E0D\u8DB3\uFF08${this.holdT.toFixed(2)}s < ${BAL.hold}s\uFF09`;
-    return { ok, mos, load, holdT: this.holdT, why };
+    const okLoad = loadDiff > THR.loadDiff;
+    const ok = okMos && okLoad && atDecision;
+    const why = ok ? "\u901A\u8FC7" : !atDecision ? "\u672A\u5230\u5224\u5B9A\u65F6\u523B" : !okMos ? `MoS \u4E0D\u8DB3\uFF08${(mos * 1e3).toFixed(0)}mm \u2264 ${(BAL.mosMargin * 1e3).toFixed(0)}mm\uFF0CCoM \u4E0D\u5728\u771F\u5B9E\u652F\u6491\u8FB9\u5185\uFF09` : `\u627F\u91CD\u672A\u8F6C\u79FB\uFF08\u524D\u811A\u2212\u540E\u811A = ${loadDiff.toFixed(2)} \u2264 ${THR.loadDiff}\uFF09`;
+    this.lastWhy = why;
+    return { ok, mos, load: (1 + loadDiff) / 2, holdT, why };
   }
   get stableFor() {
-    return this.holdT;
+    return 0;
   }
 };
 
@@ -16535,7 +16552,6 @@ var LEN_A = 0.407;
 var LEN_B = 0.379;
 var HIP_Z = 0.05;
 var STANCE_Z = 0.07;
-var STANCE_X_HALF = 0.09;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
 var HIP_Y = Y(1574.5);
@@ -16566,7 +16582,20 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let plantL = sim.doll.bodies[iL].translation().x;
   let plantR = sim.doll.bodies[iR].translation().x;
   let plantLz = HIP_Z, plantRz = -HIP_Z;
-  let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
+  const BASE_X_BEHIND = -0.09;
+  const BASE_X_FRONT = 0.09;
+  plantR = BASE_X_BEHIND;
+  plantL = BASE_X_FRONT;
+  plantRz = HIP_Z;
+  plantLz = HIP_Z;
+  const comTarget0X = BASE_X_BEHIND + 0.03;
+  let t = 0, steps = 0, prevStance = 2, lastSwitch = 0;
+  let comTargetX = BASE_X_BEHIND + 0.03;
+  const syncComTarget = () => {
+    comTargetX = (stanceLNow ? plantL : plantR) + 0.03;
+  };
+  let roleLatched = null;
+  const rolesFromFootX = (xL, xR) => xL >= xR ? ["l", "r"] : ["r", "l"];
   const lbuf = new Float64Array(3);
   const footBufL = new Float64Array(2), footBufR = new Float64Array(2);
   let prevLz = 0, prevLy = 0, hasL = false;
@@ -16600,11 +16629,12 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let wtT = 0;
   let wtDone = false;
   let stableT = 0;
-  let lastSwitchWasFlip = true;
+  let lastSwitchWasFlip = false;
   const balGate = new BalanceGate();
   let balBlocked = "";
   let dbgLoad = 0;
   let latchedStance = null;
+  let stepPermit = false;
   let wtModule = 0;
   let wtLoadOf = () => {
     const [fl, fr] = sim.doll.footLoadFrac(dt);
@@ -16683,31 +16713,40 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         if (stanceL) plantL = xi;
         else plantR = xi;
         prevStance = stanceL ? 1 : 2;
+        syncComTarget();
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
     const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
     const inPush = s >= PUSH_FRAC;
     const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
-    const supEdgeX = com.x + (stanceL ? STANCE_X_HALF : -STANCE_X_HALF);
-    const mosHere = supEdgeX - (com.x + com.vx / om);
+    const supB = sim.sup;
+    const supEdgeReal = supB.cx + supB.halfX;
+    const xiNow = com.x + com.vx / om;
+    const mosHere = supEdgeReal - xiNow;
     const [flNow, frNow] = sim.doll.footLoadFrac(dt);
     const stanceLoadNow = stanceL ? flNow : frNow;
-    const verdict = balGate.judge(mosHere, stanceLoadNow, dt);
+    const ROLE_HANDOFF = 0.08;
+    if (roleLatched === null) {
+      if (Math.abs(flNow - frNow) > ROLE_HANDOFF) roleLatched = flNow > frNow ? "l" : "r";
+      else roleLatched = footBufL[0] <= footBufR[0] ? "l" : "r";
+      dbgLog.roleSet = 1;
+    } else {
+      const lockedLoad = roleLatched === "l" ? flNow : frNow;
+      const otherLoad = roleLatched === "l" ? frNow : flNow;
+      if (otherLoad > lockedLoad + ROLE_HANDOFF) {
+        roleLatched = roleLatched === "l" ? "r" : "l";
+        dbgLog.roleSet = 2;
+      }
+    }
+    const loadDiffNow = flNow - frNow;
+    const verdictRaw = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
+    const verdict = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
     if (!verdict.ok) balBlocked = verdict.why;
     else balBlocked = "";
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-    const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
+    const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
     let swingX = swingX0;
-    const reach = p.reach ?? 0;
-    if (reach > 0) {
-      sim.doll.soleXZ("l", footBufL);
-      sim.doll.soleXZ("r", footBufR);
-      const stanceX = stanceL ? footBufL[0] : footBufR[0];
-      const wantX = stanceX + reach;
-      const openF = Math.min(1, sSw / 0.5);
-      swingX = Math.max(swingX0, stanceX + reach * openF);
-    }
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
     const swingY = verdict.ok ? swingYRaw : 0.012;
@@ -16715,7 +16754,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     const footCX_B = stanceL ? footBufL[0] : footBufR[0];
-    const comShiftB = com.x - footCX_B;
+    syncComTarget();
+    const comShiftB = com.x - comTargetX;
     const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
     const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
     dbgLog.comShiftB = +comShiftB.toFixed(3);
@@ -16737,7 +16777,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     }
     for (const side of ["l", "r"]) {
       const isStance0 = side === "l" === stanceL;
-      const isStance = latchedStance === side ? true : isStance0;
+      const isStance = roleLatched === side ? true : isStance0;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
       const hipY = hipYRef;
@@ -16830,6 +16870,14 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     dbgLog.stanceX = +(stanceL ? footBufL[0] : footBufR[0]).toFixed(3);
     dbgLog.wtMod = wtModule;
     dbgLog.latch = latchedStance ? latchedStance === "l" ? 1 : 2 : 0;
+    dbgLog.roleWB = roleLatched === "l" ? 1 : roleLatched === "r" ? 2 : 0;
+    {
+      const [frontLeg, backLeg] = rolesFromFootX(footBufL[0], footBufR[0]);
+      dbgLog.roleFront = frontLeg === "l" ? 1 : 2;
+      dbgLog.roleBack = backLeg === "l" ? 1 : 2;
+      dbgLog.footXL = +footBufL[0].toFixed(3);
+      dbgLog.footXR = +footBufR[0].toFixed(3);
+    }
     dbgLog.balOk = verdict.ok ? 1 : 0;
     dbgLog.balStage = verdict.why;
     dbgLog.mosX = +mosHere.toFixed(4);

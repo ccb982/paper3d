@@ -87,6 +87,15 @@ export interface CaptureParams {
   kWtX?: number;
   /** ★ B 方案的 CoM 速度阻尼项（s）。 */
   kWtVx?: number;
+  /**
+   * ★★ Raibert 落脚点规则的无量纲增益 Γ：脚落在捕获点 ξ 前方 `Γ·vDes`。
+   *   文献：Raibert 1985；Perry《Gait Analysis: Biomechanics and Gait Analysis》步态控制章。
+   *   `Γ·vDes` = 支撑腿把 CoM 推过去的**余量**；Γ=0 则脚正好落在 ξ（CoM 立刻停住）。
+   *   取代了原先硬编码的 `reach`（相对支撑脚的固定偏移，与速度无关 ⇒ 前后腿之分消失）。
+   */
+  kGamma?: number;
+  /** ★ Raibert 规则的速度误差时间常数 K（s）：跑慢了把脚落得更靠前。 */
+  kVerr?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -226,12 +235,14 @@ export function runCaptureTeacher(
 
   let t = 0, steps = 0, prevStance = 2, lastSwitch = 0;   // ★ prevStance=2 ⇒ 起始 stanceL=false ⇒ 右腿承重
   /**
-   * ★ CoM 的**纵向目标**（B 方案 `comShiftB` 的参考点）：
-   *   · 起步阶段 = `comTarget0X`（后退腿上方）—— 这就是"先把后退锁定为承重腿"的落点
-   *   · 一旦发生首次换脚（`steps > 0`）⇒ 改为**当前支撑脚的实际x**
-   *     （此时支撑脚已经迈到新的位置，重心必须跟过去，否则误差无界增长 —— 这是之前踩过的坑）
+   * ★ CoM 的**纵向目标**（B 方案 `comShiftB` 的参考点）= **始终等于当前承重腿的落点**。
+   //   之前初值取硬编码的 `comTarget0X`、且只在 `steps > 0` 后才跟随 —— 而 `steps`
+   //   长期为 0 ⇒ 目标永远钉死在 −0.06 ⇒ kWtX 把身体往那拉、拉过头到 −0.4m
+   //   （实测末 CoM −0.23~−0.42，身体倒着走）。⇒ 现在**从头就跟随承重腿**，
+   //   消掉这一处硬编码与退化。
    */
-  let comTargetX = comTarget0X;
+  let comTargetX = BASE_X_BEHIND + 0.03;
+  const syncComTarget = (): void => { comTargetX = (stanceLNow ? plantL : plantR) + 0.03; };
 
   // ══════════════════════════════════════════════════════════════════════
   // ★★★ 三个角色的**程序化判定**（用户 2026-10-02：
@@ -457,7 +468,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         lastSwitch = t;
         if (stanceL) plantL = xi; else plantR = xi;
         prevStance = stanceL ? 1 : 2;
-        comTargetX = stanceL ? plantL : plantR;   // ★ 换脚后 CoM 目标跟到新支撑脚
+        syncComTarget();   // ★ 换脚后 CoM 目标跟到新支撑脚
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
@@ -538,19 +549,26 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     // 原式 `xi + kv·(vDes−vx)·T/2`：xi 是捕获点，跟随身体前进。身体还没动起来时
     //   `xi ≈ com.x` ⇒ 每只脚都被种在**原来的位置** ⇒ 净位移≈0（实测前伸仅 3mm）。
-    const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
-    // ★ 显式前伸：强制摆动脚至少比**支撑脚**再往前 `reach` 米（文献慢速步长 ≈0.5m）
+    // ─────────────────────────────────────────────────────────────────────
+    // ★★★ 落脚点 = **Raibert 捕获点规则**（程序化，不再有硬编码的固定偏移）
+    //
+    //   Raibert (1985) / Perry 脊椎与步态控制的标准形式：
+    //       x_foot = ξ + Γ·v_des + K·(v_des − v_actual)
+    //   其中 ξ = 捕获点 = com.x + com.vx/ω（放 ξ 处 ⇒ CoM 恰好停住）。
+    //   · Γ（无量纲）把脚放在 ξ **前方** Γ·v_des ⇒ 支撑脚有余量把 CoM 推过去
+    //   · K（时间，s）按速度误差修正：跑慢了把脚落得更靠前
+    //
+    //   为什么必须用它（用户 2026-10-02："程序化决定前后腿了吗"）：
+    //   旧写法 `xi + kv·(vDes−vx)·T/2` 之后又被 `reach` 覆盖成
+    //   `stanceX + reach`（reach=0.5 硬编码常数）⇒
+    //     · 前后间距**与速度无关**，恒为 0.5m 附近的死数
+    //     · 开局两脚 `BASE_X_*=±0.09` 完全重合 ⇒ 根本没有前后之分 ⇒ 无承重腿
+    //   ⇒ 现在前后间距、承重分工、落点全部由 ξ 与速度决定，是**程序化的**。
+    const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
     let swingX = swingX0;
-    const reach = p.reach ?? 0;
-    if (reach > 0) {
-      sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
-      const stanceX = stanceL ? footBufL[0]! : footBufR[0]!;
-      const wantX = stanceX + reach;
-      // 转移期内前伸量只放 25%（权重随转移进度线性放开）
-      const openF = Math.min(1, sSw / 0.5);
-      swingX = Math.max(swingX0, stanceX + reach * openF);
-      void wantX;
-    }
+    // ⚠ `reach`（相对支撑脚的固定偏移）已停用：它是硬编码常数，会把落脚点
+    //   重新钉死到与速度无关的固定间距上，正是前后腿之分消失的根源。
+    //   如需临时扫参请用 `kGamma` / `kVerr`。
 
     // ★★★★ 摆动曲线改成「**先转移重心，再迈出**」（用户 2026-10-02 提醒：
 //   "迈腿之前需要把重心转移到静止的腿上，我给忘了"）
@@ -599,6 +617,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //     τ  = −kComX·e − kComVx·ė     （把 CoM 拉回/停在支撑脚上方）
     //   ⇒ 符号：CoM 在脚**前方**(e>0) 且前移 ⇒ 给**屈髋**把躯干压回去、拉 CoM 后移。
     const footCX_B = stanceL ? footBufL[0]! : footBufR[0]!;
+    syncComTarget();   // ★ 每周期同步：CoM 目标 = 当前承重腿落点（消掉硬编码初值导致的倒退）
     const comShiftB = com.x - comTargetX;
     //   ⚠ 必须限幅：`comShiftB` 在**不换脚**时会无界增长（脚不动，CoM 一路前移），
     //   实测 ξ 3s 内 0.006→0.667 而 footCX 只到 −0.094 ⇒ 误差 +0.5m ⇒

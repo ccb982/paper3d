@@ -905,22 +905,25 @@ for (const kc of [0, 3, 30, 100]) {
 }
 console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
 
-// ===== 三个角色是否程序化决定 =====
-console.log('\n=== 三个角色：前腿 / 后腿 / 承重腿 / 锁定腿 ===\n');
-console.log('   t(s) 左脚x  右脚x 前腿 后腿 承重腿 锁定腿 左载荷 右载荷 换脚');
-{
-  const fQ = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
-  fQ.begin(new Float32Array(fQ.params.length));
-  let m = 0, wbChanges = 0, lastWB = 0;
-  runCaptureTeacher(sk, fQ, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl): void => {
-    const [fl, fr] = fQ.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-    const nm = (v: unknown): string => (v === 1 ? 'L' : v === 2 ? 'R' : '?');
-    if (dl?.roleWB) {
-      if (lastWB && lastWB !== dl.roleWB) wbChanges++;
-      lastWB = dl.roleWB;
-    }
-    if (m++ % 20 !== 0) return;
-    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.footXL ?? 0).padStart(6)} ${String(dl?.footXR ?? 0).padStart(6)}  ${nm(dl?.roleFront)}    ${nm(dl?.roleBack)}    ${nm(dl?.roleWB)}    ${nm(dl?.latch)}   ${fl.toFixed(2).padStart(5)} ${fr.toFixed(2).padStart(6)}`);
-  } });
-  console.log(`\n  承重腿交接次数：${wbChanges}   ← >0 说明角色由物理量驱动，不是硬编码`);
+// ===== 验证：Raibert 落脚点是否让分工稳定 =====
+console.log('\n=== 验证：Raibert 落脚点 Γ/K 扫描（分工稳定性）===\n');
+console.log('   Γ     K   脚距峰  承重差峰 角色交接 离地峰 换脚 存活末CoM');
+for (const kg of [0.20, 0.35, 0.50, 0.70]) {
+  for (const kv2 of [0.0, 0.25]) {
+    const fV = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
+    fV.begin(new Float32Array(fV.params.length));
+    let sep = 0, ldPk = 0, chg = 0, last = 0, clr = 0, cmX = 0;
+    const rV = runCaptureTeacher(sk, fV, { ...FB, kGamma: kg, kVerr: kv2 }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl): void => {
+      sep = Math.max(sep, Math.abs(Number(dl?.footXL ?? 0) - Number(dl?.footXR ?? 0)));
+      const [fl, fr] = fV.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      ldPk = Math.max(ldPk, Math.abs(fl - fr));
+      clr = Math.max(clr, Math.max(fV.doll.soleY('l'), fV.doll.soleY('r')));
+      cmX = readCom(fV.doll, cTmp).x;
+      const wb = Number(dl?.roleWB ?? 0);
+      if (last && wb && wb !== last) chg++;
+      if (wb) last = wb;
+    } });
+    console.log(`  ${kg.toFixed(2)} ${kv2.toFixed(2)} ${(sep * 1000).toFixed(0).padStart(6)}mm ${ldPk.toFixed(2).padStart(8)} ${String(chg).padStart(8)} ${(clr * 1000).toFixed(0).padStart(5)}mm ${String(rV.steps).padStart(4)} ${rV.t.toFixed(2)}s ${cmX.toFixed(3)}`);
+  }
 }
+console.log('\n  理想：脚距峰 ~300-600mm、承重差峰 >0.5、角色交接少（<20）、换脚>0。');

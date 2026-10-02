@@ -16543,7 +16543,10 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
   plantLz = HIP_Z;
   const comTarget0X = BASE_X_BEHIND + 0.03;
   let t = 0, steps = 0, prevStance = 2, lastSwitch = 0;
-  let comTargetX = comTarget0X;
+  let comTargetX = BASE_X_BEHIND + 0.03;
+  const syncComTarget = () => {
+    comTargetX = (stanceLNow ? plantL : plantR) + 0.03;
+  };
   let roleLatched = null;
   const rolesFromFootX = (xL, xR) => xL >= xR ? ["l", "r"] : ["r", "l"];
   const lbuf = new Float64Array(3);
@@ -16663,7 +16666,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
         if (stanceL) plantL = xi;
         else plantR = xi;
         prevStance = stanceL ? 1 : 2;
-        comTargetX = stanceL ? plantL : plantR;
+        syncComTarget();
       }
     }
     const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
@@ -16695,17 +16698,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     if (!verdict.ok) balBlocked = verdict.why;
     else balBlocked = "";
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-    const swingX0 = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
+    const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
     let swingX = swingX0;
-    const reach = p.reach ?? 0;
-    if (reach > 0) {
-      sim2.doll.soleXZ("l", footBufL);
-      sim2.doll.soleXZ("r", footBufR);
-      const stanceX = stanceL ? footBufL[0] : footBufR[0];
-      const wantX = stanceX + reach;
-      const openF = Math.min(1, sSw / 0.5);
-      swingX = Math.max(swingX0, stanceX + reach * openF);
-    }
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
     const swingY = verdict.ok ? swingYRaw : 0.012;
@@ -16713,6 +16707,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
     const footCX_B = stanceL ? footBufL[0] : footBufR[0];
+    syncComTarget();
     const comShiftB = com.x - comTargetX;
     const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
     const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
@@ -17813,22 +17808,24 @@ for (const kc of [0, 3, 30, 100]) {
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
 console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
-console.log("\n=== \u4E09\u4E2A\u89D2\u8272\uFF1A\u524D\u817F / \u540E\u817F / \u627F\u91CD\u817F / \u9501\u5B9A\u817F ===\n");
-console.log("   t(s) \u5DE6\u811Ax  \u53F3\u811Ax \u524D\u817F \u540E\u817F \u627F\u91CD\u817F \u9501\u5B9A\u817F \u5DE6\u8F7D\u8377 \u53F3\u8F7D\u8377 \u6362\u811A");
-{
-  const fQ = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
-  fQ.begin(new Float32Array(fQ.params.length));
-  let m = 0, wbChanges = 0, lastWB = 0;
-  runCaptureTeacher(sk, fQ, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl) => {
-    const [fl, fr] = fQ.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-    const nm = (v) => v === 1 ? "L" : v === 2 ? "R" : "?";
-    if (dl?.roleWB) {
-      if (lastWB && lastWB !== dl.roleWB) wbChanges++;
-      lastWB = dl.roleWB;
-    }
-    if (m++ % 20 !== 0) return;
-    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.footXL ?? 0).padStart(6)} ${String(dl?.footXR ?? 0).padStart(6)}  ${nm(dl?.roleFront)}    ${nm(dl?.roleBack)}    ${nm(dl?.roleWB)}    ${nm(dl?.latch)}   ${fl.toFixed(2).padStart(5)} ${fr.toFixed(2).padStart(6)}`);
-  } });
-  console.log(`
-  \u627F\u91CD\u817F\u4EA4\u63A5\u6B21\u6570\uFF1A${wbChanges}   \u2190 >0 \u8BF4\u660E\u89D2\u8272\u7531\u7269\u7406\u91CF\u9A71\u52A8\uFF0C\u4E0D\u662F\u786C\u7F16\u7801`);
+console.log("\n=== \u9A8C\u8BC1\uFF1ARaibert \u843D\u811A\u70B9 \u0393/K \u626B\u63CF\uFF08\u5206\u5DE5\u7A33\u5B9A\u6027\uFF09===\n");
+console.log("   \u0393     K   \u811A\u8DDD\u5CF0  \u627F\u91CD\u5DEE\u5CF0 \u89D2\u8272\u4EA4\u63A5 \u79BB\u5730\u5CF0 \u6362\u811A \u5B58\u6D3B\u672BCoM");
+for (const kg of [0.2, 0.35, 0.5, 0.7]) {
+  for (const kv2 of [0, 0.25]) {
+    const fV = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
+    fV.begin(new Float32Array(fV.params.length));
+    let sep = 0, ldPk = 0, chg = 0, last = 0, clr = 0, cmX = 0;
+    const rV = runCaptureTeacher(sk, fV, { ...FB, kGamma: kg, kVerr: kv2 }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl) => {
+      sep = Math.max(sep, Math.abs(Number(dl?.footXL ?? 0) - Number(dl?.footXR ?? 0)));
+      const [fl, fr] = fV.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      ldPk = Math.max(ldPk, Math.abs(fl - fr));
+      clr = Math.max(clr, Math.max(fV.doll.soleY("l"), fV.doll.soleY("r")));
+      cmX = readCom(fV.doll, cTmp).x;
+      const wb = Number(dl?.roleWB ?? 0);
+      if (last && wb && wb !== last) chg++;
+      if (wb) last = wb;
+    } });
+    console.log(`  ${kg.toFixed(2)} ${kv2.toFixed(2)} ${(sep * 1e3).toFixed(0).padStart(6)}mm ${ldPk.toFixed(2).padStart(8)} ${String(chg).padStart(8)} ${(clr * 1e3).toFixed(0).padStart(5)}mm ${String(rV.steps).padStart(4)} ${rV.t.toFixed(2)}s ${cmX.toFixed(3)}`);
+  }
 }
+console.log("\n  \u7406\u60F3\uFF1A\u811A\u8DDD\u5CF0 ~300-600mm\u3001\u627F\u91CD\u5DEE\u5CF0 >0.5\u3001\u89D2\u8272\u4EA4\u63A5\u5C11\uFF08<20\uFF09\u3001\u6362\u811A>0\u3002");
