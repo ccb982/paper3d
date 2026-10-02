@@ -14653,6 +14653,103 @@ var GaitPhaseMachine = class {
   }
 };
 
+// src/core/modules.ts
+var MODULES = [
+  { id: "loadShift", label: "\u8F7D\u8377\u8F6C\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "altSwitch", label: "\u6362\u652F\u6491\u811A", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["step", "adjust"], singleOnly: true },
+  { id: "cycle", label: "\u8FC8\u6B65\u2192\u8C03\u6574\u5FAA\u73AF", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
+  { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "distance", label: "\u811A\u51C0\u4F4D\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
+  { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
+  { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
+  { id: "stepClearance", label: "\u79BB\u5730\u9AD8\u5EA6", part: "l", phases: ["step"], singleOnly: true },
+  { id: "stepLength", label: "\u6B65\u957F", part: "l", phases: ["step", "adjust"], singleOnly: false }
+];
+var ModuleSet = class {
+  off = /* @__PURE__ */ new Set();
+  // 代码手动关掉的（总开关优先于其它一切）
+  byPart = /* @__PURE__ */ new Map();
+  constructor() {
+    for (const d of MODULES) {
+      const a = this.byPart.get(d.part);
+      if (a) a.push(d);
+      else this.byPart.set(d.part, [d]);
+    }
+  }
+  /** ★ 代码手动开关某模块（优先级最高）。返回是否成功。 */
+  enable(id, on = true) {
+    if (on) this.off.delete(id);
+    else this.off.add(id);
+    return this;
+  }
+  /** 批量关掉某归属的全部模块，例如"这一段不要动脊椎" */
+  enablePart(part, on) {
+    for (const d of this.byPart.get(part) ?? []) {
+      if (on) this.off.delete(d.id);
+      else this.off.add(d.id);
+    }
+    return this;
+  }
+  reset() {
+    this.off.clear();
+    return this;
+  }
+  isManuallyOff(id) {
+    return this.off.has(id);
+  }
+  /**
+   * ★ 模块 id 定义里写的是 `part: 'l'`（代表"逐腿模块"），
+   *   实际激活要按**具体那条腿**判断：`active('refShape', 'l')` / `active('refShape', 'r')`。
+   *   归属为 'body'/'spine' 的模块忽略 limb 参数。
+   */
+  resolve(id, limb) {
+    const d = MODULES.find((m) => m.id === id);
+    if (!d) return null;
+    if (d.part === "body" || d.part === "spine") return d;
+    return limb === d.part ? d : null;
+  }
+  /** ★ 模块此刻是否起作用 */
+  active(id, phase, nGround, limb = null) {
+    const d = this.resolve(id, limb);
+    if (!d) return false;
+    if (this.off.has(id)) return false;
+    if (!d.phases.includes(phase)) return false;
+    if (d.singleOnly && nGround !== 1) return false;
+    return true;
+  }
+  /** 某模块此刻为什么不起作用（空 = 起着作用）。调试直接打印这句话。 */
+  why(id, phase, nGround, limb = null) {
+    const d = this.resolve(id, limb);
+    if (!d) return limb ? `\u4E0D\u5C5E\u4E8E${limb === "l" ? "\u5DE6\u817F" : "\u53F3\u817F"}\uFF08\u8FD9\u662F\u9010\u817F\u6A21\u5757\uFF09` : "\u672A\u77E5\u6A21\u5757";
+    if (this.off.has(id)) return "\u88AB\u4EE3\u7801\u5173\u95ED";
+    if (!d.phases.includes(phase)) return `\u5F53\u524D\u662F\u300C${phase}\u300D\u76F8\uFF0C\u8BE5\u6A21\u5757\u53EA\u5728 ${d.phases.join("/")} \u76F8\u751F\u6548`;
+    if (d.singleOnly && nGround !== 1) return `\u8981\u6C42\u5355\u652F\u6491\uFF0C\u5F53\u524D\u652F\u6491\u811A\u6570=${nGround}`;
+    return "";
+  }
+  /** ★ 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  report(phase, nGround) {
+    const out = [];
+    for (const leg of ["l", "r"]) {
+      for (const d of this.byPart.get(leg) ?? []) {
+        const w = this.why(d.id, phase, nGround, leg);
+        out.push(`  ${w ? "\u2717" : "\u2713"} [${leg === "l" ? "\u5DE6\u817F" : "\u53F3\u817F"}] ${d.label}${w ? "\uFF1A" + w : "\uFF1A\u751F\u6548"}`);
+      }
+    }
+    for (const part of ["spine", "body"]) {
+      for (const d of this.byPart.get(part) ?? []) {
+        const w = this.why(d.id, phase, nGround, null);
+        out.push(`  ${w ? "\u2717" : "\u2713"} [${part === "spine" ? "\u810A\u690E" : "\u8EAB\u4F53"}] ${d.label}${w ? "\uFF1A" + w : "\uFF1A\u751F\u6548"}`);
+      }
+    }
+    return out;
+  }
+};
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -14679,6 +14776,10 @@ var WALK_REWARD_KEYS = [
   "refHip",
   "refKnee",
   "pelvisFirst",
+  // ★ 诊断：盆骨优先**分腿**（左/右/短板腿）—— 不进 total，只为"说清是哪条腿"
+  "pelvisFirstL",
+  "pelvisFirstR",
+  "pelvisWorst",
   // 迈步 → 调整 的顺序结构
   "settle",
   "stepPace",
@@ -14871,8 +14972,11 @@ var Sim = class {
   // 接地脚数的帧数分布（诊断）
   accRefHip = 0;
   accRefKnee = 0;
-  accPelvis = 0;
-  // 参考分/盆骨优先的时间积分
+  // 参考分的时间积分（身体级：两条腿合起来的形状分）
+  /** ★★ 盆骨优先**分腿**积分：左腿的髋先动只进 accPelvisL，右腿只进 accPelvisR。
+   *  以前是一个 accPelvis 把两腿平均 ⇒ 调试根本说不清"是左腿没过还是右腿没过"。 */
+  accPelvisL = 0;
+  accPelvisR = 0;
   pfL = new PelvisFirstTracker();
   pfR = new PelvisFirstTracker();
   ssL = new StepSettleTracker();
@@ -14935,6 +15039,13 @@ var Sim = class {
   // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   gp = new GaitPhaseMachine();
+  /**
+   * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
+   *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
+   *   所有奖励项的"何时生效"门控**统一**走这里，不再各写各的 `if (nGround === 1)`。
+   *   调试看 `mod.report(gp.now, nGround)`。
+   */
+  mod = new ModuleSet();
   accStill = 0;
   // ★ 摆动相里身体的运动量（要被罚）
   stillStep = 0;
@@ -15167,7 +15278,8 @@ var Sim = class {
     this.gN2 = 0;
     this.accRefHip = 0;
     this.accRefKnee = 0;
-    this.accPelvis = 0;
+    this.accPelvisL = 0;
+    this.accPelvisR = 0;
     this.pfL.reset();
     this.pfR.reset();
     this.ssL.reset();
@@ -15214,6 +15326,7 @@ var Sim = class {
     this.accStill = 0;
     this.stillStep = 0;
     this.stillAdjust = 0;
+    this.mod.reset();
     this.cycleN = 0;
     this.cycleFlick = 0;
     this.cycleAdj = 0;
@@ -15498,13 +15611,14 @@ var Sim = class {
       this.gpLabel = this.gp.label;
       this.gpSwing = this.gp.swingLeg;
       this.gpBodyFree = this.gp.bodyFree;
+      const stillOn = this.mod.active("stillSwing", this.gp.now, nGround, null);
       const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
       const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
       if (nGround === 1) {
-        if (!this.gp.bodyFree) {
+        if (stillOn) {
           this.accStill += bodyMove * dt;
           this.stillStep += bodyMove * dt;
-        } else this.stillAdjust += bodyMove * dt;
+        } else if (this.gp.bodyFree) this.stillAdjust += bodyMove * dt;
       }
       const cyc = this.gp.tally;
       if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
@@ -15516,6 +15630,8 @@ var Sim = class {
       this.cycleFlick = cyc.flickers;
       this.cycleAdj = cyc.meanAdjustSec;
       this.cyclePhase = this.gp.now;
+    }
+    if (this.mod.active("pelvisFirst", this.gp.now, nGround, "l") || this.mod.active("pelvisFirst", this.gp.now, nGround, "r")) {
       if (nGround === 1) {
         const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
         const swingIsL = gL;
@@ -15543,7 +15659,10 @@ var Sim = class {
         const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
         this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
         this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
-        if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt;
+        if (this.mod.active("pelvisFirst", this.gp.now, nGround, "l"))
+          this.accPelvisL += this.pfL.score() * dt;
+        if (this.mod.active("pelvisFirst", this.gp.now, nGround, "r"))
+          this.accPelvisR += this.pfR.score() * dt;
       }
     }
     {
@@ -15766,7 +15885,13 @@ var Sim = class {
       tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
       tt.refHip = w.refHip * this.accRefHip * aliveAvg * Math.min(1, this.altCount / 2);
       tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg * Math.min(1, this.altCount / 2);
-      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg * Math.min(1, this.altCount / 2);
+      const pelL = this.accPelvisL, pelR = this.accPelvisR;
+      const pelMean = (pelL + pelR) * 0.5;
+      const pelWorst = Math.min(pelL, pelR);
+      tt.pelvisFirst = w.pelvisFirst * pelMean * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.pelvisFirstL = pelL * aliveAvg;
+      tt.pelvisFirstR = pelR * aliveAvg;
+      tt.pelvisWorst = pelWorst * aliveAvg;
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
@@ -15979,18 +16104,18 @@ var mk = (spec, scale) => {
 {
   const fwdSpec = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 };
   const fwd = run(mk(fwdSpec, 0.15));
-  const latG = new Float32Array(brainParamCount(SHAPE));
-  latG[L.w1 + 0 * SHAPE.inputs + 0] = 5;
-  latG[L.w1 + 1 * SHAPE.inputs + 1] = 5;
+  const latG2 = new Float32Array(brainParamCount(SHAPE));
+  latG2[L.w1 + 0 * SHAPE.inputs + 0] = 5;
+  latG2[L.w1 + 1 * SHAPE.inputs + 1] = 5;
   for (const [jn, sg] of [["hip_l", 1], ["hip_r", -1]]) {
     const o = JOINT_ORDER.indexOf(jn) * 3 + 0;
-    latG[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg * 0.15;
+    latG2[L.w2 + o * SHAPE.hidden + 0] = 0.6 * sg * 0.15;
   }
-  const lat2 = run(latG);
+  const lat = run(latG2);
   const st = run(new Float32Array(brainParamCount(SHAPE)));
   const T = (r, k) => r.terms[k] ?? 0;
   console.log(`  \u524D\u8FDB\u578B  \u4F4D\u79FB ${fwd.x.toFixed(2)}m  velTrack=${T(fwd, "velTrack").toFixed(2)}  lift=${T(fwd, "lift").toFixed(2)}  single=${T(fwd, "single").toFixed(2)}  \u603B=${T(fwd, "total").toFixed(2)}`);
-  console.log(`  \u4FA7\u5411\u6296  \u4F4D\u79FB ${lat2.x.toFixed(2)}m  velTrack=${T(lat2, "velTrack").toFixed(2)}  \u603B=${T(lat2, "total").toFixed(2)}`);
+  console.log(`  \u4FA7\u5411\u6296  \u4F4D\u79FB ${lat.x.toFixed(2)}m  velTrack=${T(lat, "velTrack").toFixed(2)}  \u603B=${T(lat, "total").toFixed(2)}`);
   console.log(`  \u96F6\u8F93\u51FA  \u4F4D\u79FB ${st.x.toFixed(2)}m  velTrack=${T(st, "velTrack").toFixed(2)}  single=${T(st, "single").toFixed(2)}  \u603B=${T(st, "total").toFixed(2)}`);
   check('\u2460 \u524D\u8FDB\u5206\u88AB"\u8FC8\u6B65\u6570"\u95E8\u63A7\uFF08\u4E0D\u62AC\u811A\u7684\u7B56\u7565\u62FF\u4E0D\u5230\u524D\u8FDB\u5206\uFF09', T(fwd, "velTrack") === 0 && (fwd.terms.altCount ?? 0) === 0, `velTrack=${T(fwd, "velTrack").toFixed(3)} \u6362\u811A\u6570=${fwd.terms.altCount ?? 0}`);
   check("\u2460b \u96F6\u8F93\u51FA\uFF08\u88AB\u52A8\u81EA\u8D70\uFF09\u62FF\u4E0D\u5230\u524D\u8FDB\u5206", T(st, "velTrack") === 0, `${T(st, "velTrack").toFixed(3)}`);
@@ -16009,8 +16134,8 @@ var mk = (spec, scale) => {
       `\u5916\u5C55 ${T(r, "shift").toFixed(2)} vs \u96F6\u8F93\u51FA ${T(st, "shift").toFixed(2)} = ${(T(r, "shift") / Math.max(1e-6, T(st, "shift"))).toFixed(1)}\xD7`
     );
   }
-  console.log(`     \u2139 velTrack \u5355\u72EC\u4E0D\u53EF\u5206\u8FA8\uFF08\u8FD9\u4E2A\u9AA8\u67B6\u4F1A\u88AB\u52A8\u81EA\u8D70\uFF09\uFF1A \u6B65\u6001 ${T(fwd, "velTrack").toFixed(2)} / \u4FA7\u5411 ${T(lat2, "velTrack").toFixed(2)} / \u96F6\u8F93\u51FA ${T(st, "velTrack").toFixed(2)}\uFF1B\u771F\u6B63\u533A\u5206\u7684\u662F single=${T(fwd, "single").toFixed(2)}/${T(lat2, "single").toFixed(2)}/${T(st, "single").toFixed(2)}`);
-  check("\u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u88AB lateral \u9879\u7F5A", T(lat2, "lateral") < 0, `${T(lat2, "lateral").toFixed(3)}`);
+  console.log(`     \u2139 velTrack \u5355\u72EC\u4E0D\u53EF\u5206\u8FA8\uFF08\u8FD9\u4E2A\u9AA8\u67B6\u4F1A\u88AB\u52A8\u81EA\u8D70\uFF09\uFF1A \u6B65\u6001 ${T(fwd, "velTrack").toFixed(2)} / \u4FA7\u5411 ${T(lat, "velTrack").toFixed(2)} / \u96F6\u8F93\u51FA ${T(st, "velTrack").toFixed(2)}\uFF1B\u771F\u6B63\u533A\u5206\u7684\u662F single=${T(fwd, "single").toFixed(2)}/${T(lat, "single").toFixed(2)}/${T(st, "single").toFixed(2)}`);
+  check("\u2461 \u7EAF\u4FA7\u5411\u4F4D\u79FB\u88AB lateral \u9879\u7F5A", T(lat, "lateral") < 0, `${T(lat, "lateral").toFixed(3)}`);
   check(
     "\u2462 \u96F6\u8F93\u51FA\u7684\u603B\u5206\u660E\u663E\u4F4E\u4E8E\u4F1A\u8D70\u8DEF\u7684\u7B56\u7565\uFF08\u8E6D\u5730/\u88AB\u52A8\u6643\u4E0D\u662F\u53EF\u884C\u89E3\uFF09",
     T(st, "total") < 0.5,
@@ -16036,7 +16161,7 @@ for (const [dx, tot, vmin, dz] of [
 ]) {
   const ov = { stepMinDx: dx, stepMinTotal: tot, stepVMin: vmin, stepMaxDz: dz };
   const a = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz, ov);
-  const b = run(lat, 6, DEFAULT_SIM.gaitHz, ov);
+  const b = run(latG, 6, DEFAULT_SIM.gaitHz, ov);
   console.log(`  dx=${dx.toFixed(2)} tot=${tot.toFixed(2)} vx>${vmin.toFixed(2)} |dz|<=${dz.toFixed(2)} | \u524D\u8FDB ${(a.terms.step ?? 0).toFixed(3).padStart(6)}  \u4FA7\u6296 ${(b.terms.step ?? 0).toFixed(3).padStart(6)}  \u95E8\u69DB\u8BA1\u6570 ${JSON.stringify(a.step)}`);
 }
 console.log("\n  === \u5BF9\u7167\uFF1A\u8F93\u51FA\u6574\u4F53\u7F29\u653E\uFF08\u5C0F\u5E45\u5EA6\u5468\u671F\u6270\u52A8\uFF09===");

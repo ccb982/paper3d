@@ -234,7 +234,7 @@ for (const [dx, tot, vmin, dz] of [
 ] as [number, number, number, number][]) {
   const ov = { stepMinDx: dx, stepMinTotal: tot, stepVMin: vmin, stepMaxDz: dz };
   const a = run(mk({ hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2 }, 0.15), 6, DEFAULT_SIM.gaitHz, ov);
-  const b = run(lat, 6, DEFAULT_SIM.gaitHz, ov);
+  const b = run(latG, 6, DEFAULT_SIM.gaitHz, ov);
   console.log(`  dx=${dx.toFixed(2)} tot=${tot.toFixed(2)} vx>${vmin.toFixed(2)} |dz|<=${dz.toFixed(2)}`
     + ` | 前进 ${(a.terms.step ?? 0).toFixed(3).padStart(6)}  侧抖 ${(b.terms.step ?? 0).toFixed(3).padStart(6)}`
     + `  门槛计数 ${JSON.stringify(a.step)}`);

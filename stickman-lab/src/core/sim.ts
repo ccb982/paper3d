@@ -25,6 +25,7 @@ import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, MIN_CLEARANCE, cadenceScore, TARGET_CYCLE } from './stability';
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
 import { GaitPhaseMachine } from './gaitPhase';
+import { ModuleSet } from './modules';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -49,6 +50,8 @@ const WALK_REWARD_KEYS: readonly string[] = [
   'velTrack', 'yawTrack', 'lateral', 'tiltRate', 'upright', 'height',
   // 迈步本体
   'lift', 'single', 'shift', 'refHip', 'refKnee', 'pelvisFirst',
+  // ★ 诊断：盆骨优先**分腿**（左/右/短板腿）—— 不进 total，只为"说清是哪条腿"
+  'pelvisFirstL', 'pelvisFirstR', 'pelvisWorst',
   // 迈步 → 调整 的顺序结构
   'settle', 'stepPace', 'moS', 'imbalance', 'stepLen', 'placement', 'cycle', 'stillSwing',
   // 关节运动与代价
@@ -330,7 +333,10 @@ export class Sim {
   private accLift = 0;          // Σ_脚 min(1, 腾空/目标)·dt
   private accSingle = 0;        // 单脚支撑时间积分（×dt）
   private gN0 = 0; private gN1 = 0; private gN2 = 0;   // 接地脚数的帧数分布（诊断）
-  private accRefHip = 0; private accRefKnee = 0; private accPelvis = 0;   // 参考分/盆骨优先的时间积分
+  private accRefHip = 0; private accRefKnee = 0;   // 参考分的时间积分（身体级：两条腿合起来的形状分）
+  /** ★★ 盆骨优先**分腿**积分：左腿的髋先动只进 accPelvisL，右腿只进 accPelvisR。
+   *  以前是一个 accPelvis 把两腿平均 ⇒ 调试根本说不清"是左腿没过还是右腿没过"。 */
+  private accPelvisL = 0; private accPelvisR = 0;
   private pfL = new PelvisFirstTracker(); private pfR = new PelvisFirstTracker();
   private ssL = new StepSettleTracker(); private ssR = new StepSettleTracker();
   private accSettle = 0; private accPace = 0; private accMoS = 0; private accPlace = 0;
@@ -367,6 +373,13 @@ export class Sim {
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   private gp = new GaitPhaseMachine();
+  /**
+   * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
+   *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
+   *   所有奖励项的"何时生效"门控**统一**走这里，不再各写各的 `if (nGround === 1)`。
+   *   调试看 `mod.report(gp.now, nGround)`。
+   */
+  readonly mod = new ModuleSet();
   private accStill = 0;                        // ★ 摆动相里身体的运动量（要被罚）
   private stillStep = 0; private stillAdjust = 0;   // 诊断：摆动段 vs 调整段的身体运动量
   /** ★ 调试用的当前状态："该迈哪条腿 + 身体该不该动" */
@@ -585,7 +598,7 @@ export class Sim {
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
     // 走路奖励记账器（walkReward.ts）
     this.gN0 = 0; this.gN1 = 0; this.gN2 = 0;
-    this.accRefHip = 0; this.accRefKnee = 0; this.accPelvis = 0;
+    this.accRefHip = 0; this.accRefKnee = 0; this.accPelvisL = 0; this.accPelvisR = 0;
     this.pfL.reset(); this.pfR.reset();
     this.ssL.reset(); this.ssR.reset();
     this.accSettle = 0; this.accPace = 0; this.accMoS = 0; this.accPlace = 0;
@@ -604,6 +617,7 @@ export class Sim {
     this.lastLoadFrac = [0.5, 0.5];
     this.gp.reset(); this.accCycle = 0; this.gpPaidThisStep = false;
     this.accStill = 0; this.stillStep = 0; this.stillAdjust = 0;
+    this.mod.reset();          // ★ 每回合恢复全部模块到默认（代码可中途关）
     this.cycleN = 0; this.cycleFlick = 0; this.cycleAdj = 0; this.cyclePhase = 'both';
     this.lastMosX = 0; this.lastSupEdgeX = 0; this.lastRefHip = 0; this.lastRefKnee = 0;
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
@@ -973,13 +987,13 @@ export class Sim {
         this.gpLabel = this.gp.label;
         this.gpSwing = this.gp.swingLeg;
         this.gpBodyFree = this.gp.bodyFree;
-        // ★★ "脚往前迈的时候身体别动"：用状态机的 `bodyFree` 作为**唯一**判据
-        //   （落地后的调整相 bodyFree=true ⇒ 不罚；摆动相 false ⇒ 罚）。
+        // ★★ "脚往前迈的时候身体别动"：**门控统一走模块表**（摆动相 + 单支撑 + 未被代码关闭）
+        const stillOn = this.mod.active('stillSwing', this.gp.now, nGround, null);
         const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
         const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
         if (nGround === 1) {
-          if (!this.gp.bodyFree) { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
-          else this.stillAdjust += bodyMove * dt;
+          if (stillOn) { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
+          else if (this.gp.bodyFree) this.stillAdjust += bodyMove * dt;
         }
         const cyc = this.gp.tally;
         if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
@@ -989,6 +1003,9 @@ export class Sim {
         if (!this.gp.inAdjust) this.gpPaidThisStep = false;
         this.cycleN = cyc.nAdjustOk; this.cycleFlick = cyc.flickers;
         this.cycleAdj = cyc.meanAdjustSec; this.cyclePhase = this.gp.now;
+    }
+    // ── 盆骨优先：门控走模块表（逐腿：左腿只算左腿、右腿只算右腿）──
+    if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'l') || this.mod.active('pelvisFirst', this.gp.now, nGround, 'r')) {
     if (nGround === 1) {
       // 相位：摆动腿在 [STANCE_FRAC, 1)，支撑腿在 [0, STANCE_FRAC)。
       // 用 Sim 的步态时钟推进，两腿天然相差半周期 ⇒ 这就是"交替"的实现。
@@ -1021,7 +1038,11 @@ export class Sim {
       this.pfL.step(vel('hip_l'), vel('knee_l'), gL, dt2);
       this.pfR.step(vel('hip_r'), vel('knee_r'), gR, dt2);
       // 只在"确实在交替"时计分（单支撑），并且要求髋领先才是正分
-      if (nGround === 1) this.accPelvis += ((this.pfL.score() + this.pfR.score()) * 0.5) * dt;
+      // ★ 逐腿计分：左腿只算左腿的盆骨优先，右腿只算右腿的（模块表按 part 过滤）
+      if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'l'))
+        this.accPelvisL += this.pfL.score() * dt;
+      if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'r'))
+        this.accPelvisR += this.pfR.score() * dt;
       // ══════ ★★★ 顺序结构：迈步 → 调整身体 → 再迈步 ══════
       //   以前所有走路项都是**独立**的时间积分 ⇒ 任何"一直在动"的动作都能同时满足它们
       //   （实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）。
@@ -1336,7 +1357,14 @@ export class Sim {
       // ★★ 文献步态参考分（gaitRef.ts）+ 盆骨优先
       tt.refHip = w.refHip * this.accRefHip * aliveAvg * Math.min(1, this.altCount / 2);
       tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg * Math.min(1, this.altCount / 2);
-      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg * Math.min(1, this.altCount / 2);
+      // ★ 分腿：左腿与右腿**分别**看"髋有没有领先膝"，任何一条腿不达标都会被单独体现
+      const pelL = this.accPelvisL, pelR = this.accPelvisR;
+      const pelMean = (pelL + pelR) * 0.5;
+      const pelWorst = Math.min(pelL, pelR);          // 短板腿（诊断）
+      tt.pelvisFirst = w.pelvisFirst * pelMean * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.pelvisFirstL = pelL * aliveAvg;
+      tt.pelvisFirstR = pelR * aliveAvg;
+      tt.pelvisWorst = pelWorst * aliveAvg;            // ★ 调试：左腿右腿里更差的那个
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;   // 诊断：膝滞后髋多少秒（>0 才正确）
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;   // 诊断：触地前髋预激活程度
       // ★★ 按**结算过的步数**计价，不是时间积分：
