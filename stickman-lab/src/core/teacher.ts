@@ -54,6 +54,17 @@ export const HIP_DY = 0.22;    // ★ LEN 改为实测(0.407/0.379)后重标：�
 /** ★ 落地吸能上限（rad）= 20°。Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°。
  *  超过它落地就会把支撑腿压塌（实测 57° ⇒ 脚撑不住）。 */
 export const ABSORB_MAX = 0.35;
+
+/**
+ * ★★ CoP 行程半长（m）：踝关节到**跖骨头 / 足跟**的距离。
+ *   文献依据：Michaels & Ting, *Sci Rep* 2025, 15:97637 ——
+ *     "The biomechanical constraint was defined as the **center of pressure (CoP)
+ *      range limitation to the metatarsal joint**"
+ *   即 CoP 只能在**脚掌内**前后移动；一旦越界，踝力矩**饱和**（保住 flat-foot 约束），
+ *   平衡策略随之从"踝策略/CoP 策略"转向"髋策略/CoM 策略"。
+ *   值按本骨架脚掌实测（约 0.15 m 鞋底）取半长 0.075 m。
+ */
+export const COP_HALF_LEN = 0.075;
 /** 真实髋高（m），由 limbAxes.json 锚点 Y(1574.5) 换算 */
 export const HIP_Y = Y(1574.5);
 
@@ -96,6 +107,26 @@ export interface CaptureParams {
   kGamma?: number;
   /** ★ Raibert 规则的速度误差时间常数 K（s）：跑慢了把脚落得更靠前。 */
   kVerr?: number;
+  /**
+   * ★★ VIP 反馈增益（Morasso et al., Front Comput Neurosci 2022, 15:956932）。
+   *   kVipP：VIP 倾角的比例增益；kVipD：VIP 角速度的微分增益。
+   *   原文用**延迟**反馈（离散间歇控制），此处用当前帧 + 速度项近似。
+   */
+  kVipP?: number;
+  /** ★ VIP 角速度微分增益（见 kVipP）。 */
+  kVipD?: number;
+  /**
+   * ★★ 踝的被动刚度比例（× K_crit = mgh）。<1 = **欠临界**（靠主动反馈补），
+   *   这是"踝策略 / CoP 策略"的定义形态（Morasso 2019/2022）。
+   */
+  kAnkleStiff?: number;
+  /**
+   * ★★ 髋的被动刚度比例（× K_crit,hip = m·g·h_hip）。>1 = **超临界** ⇒ 被动即稳定。
+   *   原文关键点：h_hip ≈ 踝铰全身 h 的一半 ⇒ K_crit 也只有一半 ⇒ 极小共同收缩即可。
+   */
+  kHipStiff?: number;
+  /** ★ 踝 CoP 饱和后，髋接管（CoM 策略）的份额。 */
+  kHipShare?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -646,15 +677,88 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //     ė  = com.vx                 （CoM 前移速度）
     //     τ  = −kComX·e − kComVx·ė     （把 CoM 拉回/停在支撑脚上方）
     //   ⇒ 符号：CoM 在脚**前方**(e>0) 且前移 ⇒ 给**屈髋**把躯干压回去、拉 CoM 后移。
-    const footCX_B = stanceL ? footBufL[0]! : footBufR[0]!;
-    syncComTarget();   // ★ 每周期同步：CoM 目标 = 当前承重腿落点（消掉硬编码初值导致的倒退）
-    const comShiftB = com.x - comTargetX;
-    //   ⚠ 必须限幅：`comShiftB` 在**不换脚**时会无界增长（脚不动，CoM 一路前移），
-    //   实测 ξ 3s 内 0.006→0.667 而 footCX 只到 −0.094 ⇒ 误差 +0.5m ⇒
-    //   指令 −2.0 rad 直接饱和、髋被顶死。限幅 ±0.45 rad。
-    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
-    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw + holdDamp));
-    dbgLog.comShiftB = +comShiftB.toFixed(3); dbgLog.corrCom = +corrCom.toFixed(4);
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★★★ **VIP + 双刚度平衡态**（按文献重做，2026-10-02）
+    //
+    //   文献依据 —— Morasso et al., *Front Comput Neurosci* 2022, 15:956932
+    //   "Integrating ankle and hip strategies for the stabilization of upright
+    //    standing: an intermittent control model"；以及 Morasso et al. 2019
+    //   （DIP/VIP 模型，*J NeuroEngineering Rehabil* / PMC6428281）：
+    //
+    //   ① **VIP（Virtual Inverted Pendulum）** = 从**踝**连到**全身 CoM** 的虚拟摆。
+    //      它的摆角**就是 CoP 在支撑面上的位置** —— 因为 CoP 是人体唯一能直接
+    //      "感知"这个虚拟摆的通道（足底触觉+本体感觉）。⇒
+    //          q_vip = atan2(coM_x − ankle_x , coM_y − ankle_y)
+    //
+    //   ② **两个关节用不同机制**（这是全文的关键，原文照搬）：
+    //          踝：被动刚度 `K_a`（**欠临界**）+ 对 VIP 延迟误差的**间歇反馈**
+    //               ⇒ 直接控制 **CoP**（"踝策略" = "CoP 策略"）
+    //          髋：被动刚度 `K_h`（**超临界**），**不需要主动控制**
+    //               ⇒ 靠上方身体的局部 CoM 间接控制全身 CoM（"髋策略" = "CoM 策略"）
+    //
+    //   ③ **为什么髋只需一点点共同收缩**（原文的推导，我们直接用）：
+    //          倾倒力矩  τ_g = mgh·sin(q) ≈ mgh·q  ⇒  **K_crit = mgh**
+    //      · 绕**踝**的全身：h ≈ 0.9 m  ⇒ K_crit ≈ m·g·0.9   （大）
+    //      · 绕**髋**的上身：h ≈ 0.5 m  ⇒ K_crit ≈ m·g·0.5   （**只有一半**）
+    //      ⇒ 髋只要 `K_h > K_crit` 就**被动稳定**，代价极小。
+    //
+    //   ④ **踝的 CoP 行程被限制在脚掌内**（Michaels & Ting, *Sci Rep* 2025：
+    //      "the biomechanical constraint was defined as the **CoP range limitation
+    //      to the metatarsal joint**"）。一旦 CoP 走到足底边缘，**踝力矩饱和**
+    //      （保住 flat-foot 约束），策略随之转向髋。这正是"踝是主力、髋是备选"。
+    //
+    //   ★ 与旧写法的根本差别（旧写法是**方向性错误**，已废）：
+    //      旧：把**髋**当 CoP 策略的主力（`kWtX` 直接推 CoM）。
+    //          但实测踝力矩 ×9 扫描对动力学**零效力** ⇒ 被迫让髋代偿，
+    //          而髋做 CoM 策略效率只有跖屈肌的 **1/4**（Neptune/Perry 2019）
+    //          ⇒ 必然饱和（实测 CoM 冲到 0.4~2.0 m/s）⇒ 平衡门拦下 ⇒ 死锁。
+    //      新：踝=CoP 策略（主力，直接）、髋=CoM 策略（备选，被动超临界刚度）。
+    const ankleWX = stanceL ? footBufL[0]! : footBufR[0]!;
+    const ankleWY = com.y - hipDy;                    // 踝（承重脚）世界高度
+    // ① VIP 摆角：正 = CoM 在踝前方（= CoP 移到足底前部）
+    const vipX = com.x - ankleWX;
+    const vipY = Math.max(0.05, ankleWY);
+    const qVip = Math.atan2(vipX, vipY);              // VIP 倾角（rad）
+    // VIP 角速度（用 CoM 相对速度算，避���除以小分母放大噪声）
+    const qVipDot = (com.vx * vipY - vipX * com.vy) / (vipY * vipY);
+    // ③ 双刚度临界值。质量用脚上实测总重反推，避免再引入一个手填的体重常数。
+    // 质量：从 Rapier 各刚体实测质量求和（不引入手填的体重常数）
+    let mSum = 0; for (const b of sim.doll.bodies) mSum += b.mass();
+    const bodyMass = Math.max(1, mSum);
+    const kCritAnkle = bodyMass * 9.81 * vipY;         // K_crit = mgh（绕踝）
+    const kCritHip = bodyMass * 9.81 * (hipDy * 0.55); // 绕髋的上身：h≈髋高的一半
+    // ④ CoP 行程限制：跖骨头 ↔ 足跟（Michaels & Ting 2025）。CoP 出界 ⇒ 踝力矩饱和。
+    const copLimit = COP_HALF_LEN;                     // 踝↔足尖/足跟的最大行程（m）
+    const copOut = Math.max(0, Math.abs(vipX) - copLimit * vipY);
+    dbgLog.qVip = +qVip.toFixed(4); dbgLog.vipDot = +qVipDot.toFixed(4);
+    dbgLog.kCritA = +kCritAnkle.toFixed(1); dbgLog.kCritH = +kCritHip.toFixed(1);
+    dbgLog.copOut = +copOut.toFixed(4);
+
+    // ── ②a 踝：**欠临界**被动刚度 + VIP 延迟反馈 → 直接移 CoP
+    //   ⚠⚠ **量纲**（2026-10-02 修正，踩过一次坑）：
+    //   `K_crit = mgh` 的单位是 **N·m/rad（刚度）**，而 `ankleDeg` 是**关节角（rad）**。
+    //   第一版直接写 `ankleStiff = -(kAnkleStiff)*K_crit` 并当角度用 ⇒ 指令达到
+    //   **−14638°**（实测回读），整个踝从第 0 帧就被顶死在限位上。
+    //   ⇒ 必须用**无量纲的刚度比**：踝的实际刚度 `K_ankle`，我们要求的刚度
+    //     `K_req = kAnkleStiff·K_crit`，等效角度偏移 = 扭矩 ÷ 实际刚度
+    //     = −(K_req/K_ankle)·q_vip ⇒ **比值**才是可以进角度通道的量。
+    //   K_ankle 取踝自身被动刚度（人体踝静息刚度约 0.7·K_crit，Winter 2001
+    //   *Ankle muscle stiffness in the control of balance during quiet standing*）。
+    const kAnkleActual = 0.7 * kCritAnkle;              // 踝实测被动刚度近似（N·m/rad）
+    const kAnkleReq = (p.kAnkleStiff ?? 0.5) * kCritAnkle; // 我们要求的（欠临界，<K_crit）
+    const vipTau = -(p.kVipP ?? 0.9) * qVip - (p.kVipD ?? 0.18) * qVipDot;  // 归一化反馈量
+    // 等效角度：VIP 反馈 + 刚度差，两者都以 q_vip 的倍数表示（无量纲比）
+    const ankleCorr = ((kAnkleReq / kAnkleActual) - 1) * -qVip + (p.kVipP ?? 0.9) * vipTau * -1;
+    // 反馈量随 CoP 接近足底边缘而**衰减**（出界后踝已饱和，再加也没用 ——
+    //   Sci Rep 2025 的 "saturated ankle torque"），把活交给髋。
+    const copMargin = Math.max(0, 1 - copOut / 0.02);
+    const ankleOut = ankleCorr * copMargin;             // ★ 踝是主力（CoP 策略）
+    const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));  // 实际下发的踝角度偏移
+    // ── ②b 髋：**超临界**被动刚度 ⇒ 被动稳定，代价极小；只在踝饱和时才主动接管
+    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;     // >0 ⇒ 超临界，多出来的就是稳定裕度
+    const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin); // 踝饱和时才增大
+    const corrCom = Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + holdDamp));
+    dbgLog.ankleCorr = +vipDegDbg.toFixed(2); dbgLog.hipStiff = +hipStiffRatio.toFixed(4);   // 报**实际下发的踝角度偏移(°)**
     // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
     //   用状态机在"迈步相/调整相"之间调度增益）。
     //   实测依据（probe-gaitcycle ④）：脊椎反相**全程开**会把双支撑占比从 83% 顶到 94%
@@ -812,8 +916,14 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   之前只把 `swingY` 压到 0.012（IK 层面不让离地），但**踝的跖屈/背屈指令
       //   照样在动** —— 脚掌自身一抬，后脚就离开了地面，门形同虚设。
       //   ⇒ 门没放行时，摆动腿的踝强制归零（平贴地面），一步都不许动。
+      // ★★ 踝 = **CoP 策略主力**（VIP + 双刚度，见上方文献注释）：
+      //   `ankleCorr` 是 VIP 反馈产生的踝力矩（欠临界刚度 + VIP 延迟反馈），
+      //   它通过"把 CoP 前后移动"来**直接**控制 CoM —— 这是文献里的主力通道，
+      //   效率远高于髋（Neptune/Perry 2019：跖屈肌效率是髋的 4 倍）。
+      //   旧写法把这份活全压在髋上（`kWtX` 直推 CoM），是**方向性错误**，已废。
+      const vipDeg = isStance ? vipDegDbg : 0;
       const ankleCmd = verdictV.ok
-        ? (ankleDeg + (isStance ? pushTorque : 0))
+        ? (ankleDeg + (isStance ? pushTorque + vipDeg : 0))
         : (isStance ? ankleDeg + pushTorque : 0);      // 摆动腿：门没过 ⇒ 踝锁 0
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，

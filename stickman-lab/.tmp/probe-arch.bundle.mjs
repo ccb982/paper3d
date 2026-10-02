@@ -16514,6 +16514,7 @@ var HIP_Z = 0.05;
 var STANCE_Z = 0.07;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
+var COP_HALF_LEN = 0.075;
 var HIP_Y = Y(1574.5);
 function ik(hipX, hipY, fx, fy, planeScale = 1) {
   const la = LEN_A * planeScale, lb = LEN_B * planeScale;
@@ -16722,13 +16723,36 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
-    const footCX_B = stanceL ? footBufL[0] : footBufR[0];
-    syncComTarget();
-    const comShiftB = com.x - comTargetX;
-    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
-    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw + holdDamp));
-    dbgLog.comShiftB = +comShiftB.toFixed(3);
-    dbgLog.corrCom = +corrCom.toFixed(4);
+    const ankleWX = stanceL ? footBufL[0] : footBufR[0];
+    const ankleWY = com.y - hipDy;
+    const vipX = com.x - ankleWX;
+    const vipY = Math.max(0.05, ankleWY);
+    const qVip = Math.atan2(vipX, vipY);
+    const qVipDot = (com.vx * vipY - vipX * com.vy) / (vipY * vipY);
+    let mSum = 0;
+    for (const b of sim2.doll.bodies) mSum += b.mass();
+    const bodyMass = Math.max(1, mSum);
+    const kCritAnkle = bodyMass * 9.81 * vipY;
+    const kCritHip = bodyMass * 9.81 * (hipDy * 0.55);
+    const copLimit = COP_HALF_LEN;
+    const copOut = Math.max(0, Math.abs(vipX) - copLimit * vipY);
+    dbgLog.qVip = +qVip.toFixed(4);
+    dbgLog.vipDot = +qVipDot.toFixed(4);
+    dbgLog.kCritA = +kCritAnkle.toFixed(1);
+    dbgLog.kCritH = +kCritHip.toFixed(1);
+    dbgLog.copOut = +copOut.toFixed(4);
+    const kAnkleActual = 0.7 * kCritAnkle;
+    const kAnkleReq = (p.kAnkleStiff ?? 0.5) * kCritAnkle;
+    const vipTau = -(p.kVipP ?? 0.9) * qVip - (p.kVipD ?? 0.18) * qVipDot;
+    const ankleCorr = (kAnkleReq / kAnkleActual - 1) * -qVip + (p.kVipP ?? 0.9) * vipTau * -1;
+    const copMargin = Math.max(0, 1 - copOut / 0.02);
+    const ankleOut = ankleCorr * copMargin;
+    const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));
+    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
+    const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin);
+    const corrCom = Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + holdDamp));
+    dbgLog.ankleCorr = +ankleOut.toFixed(4);
+    dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
@@ -16784,7 +16808,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       dbgLog.footCX = +footCX.toFixed(3);
       dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      const ankleCmd = verdictV.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
+      const vipDeg = isStance ? vipDegDbg : 0;
+      const ankleCmd = verdictV.ok ? ankleDeg + (isStance ? pushTorque + vipDeg : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
@@ -16941,8 +16966,14 @@ var FB = {
   thresh: CAPTURE_GAIT.thresh,
   spineSync: CAPTURE_GAIT.spineSync,
   kCop: CAPTURE_GAIT.kCop,
-  kWtX: CAPTURE_GAIT.kWtX,
-  kWtVx: CAPTURE_GAIT.kWtVx,
+  kWtX: 0,
+  kWtVx: 0,
+  // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
+  kVipP: 26,
+  kVipD: 5,
+  kAnkleStiff: 0.5,
+  kHipStiff: 1.6,
+  kHipShare: 0.25,
   cmBalance: 0,
   cmBalanceD: 0,
   absorb: CAPTURE_GAIT.absorb,
@@ -17824,18 +17855,22 @@ for (const kc of [0, 3, 30, 100]) {
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
 console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
-console.log("\n=== \u9A8C\u8BC1\uFF1A\u8FC8\u6B65\u524D\u91CD\u5FC3\u7A33\u5B9A\uFF08\u901F\u5EA6\u5224\u636E vHold=0.06\uFF09===\n");
-console.log("   t(s) CoM\u901F\u5EA6 CoM\u524D\u540E MoS    \u627F\u91CD\u5DEE \u95E8\u653E\u884C \u5931\u8D25\u539F\u56E0");
-{
-  const fH = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
-  fH.begin(new Float32Array(fH.params.length));
-  let m = 0;
-  runCaptureTeacher(sk, fH, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl) => {
-    if (m++ % 18 !== 0) return;
-    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.vHold ?? 0).padStart(7)} ${String(readCom(fH.doll, cTmp).x.toFixed(3)).padStart(7)} ${String(dl?.mosX ?? 0).padStart(7)} ${String(dbgLoadOf(fH)).padStart(7)}   ${dl?.balOk === 1 ? "OK" : "X "}    ${dl?.balStage ?? ""}`);
-  } });
-}
-function dbgLoadOf(f) {
-  const [a, b] = f.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-  return (a - b).toFixed(2);
+console.log("\n=== VIP \u589E\u76CA\u9A8C\u8BC1\uFF08kVipP \xD7 kAnkleStiff\uFF09\uFF0CkWtX=0 ===\n");
+console.log("  kVipP kAnklStf \u5CF0\u503C\u503E\xB0 \u5B58\u6D3B   \u672BCoM   \u672BVIP\xB0 \u8E1D\u6307\u4EE4\u5CF0 CoP\u8D8A\u754C\u5CF0 \u627F\u91CD\u5DEE\u5CF0");
+for (const kp of [4, 12, 26, 50]) {
+  for (const ks of [0.5, 0.9, 1.3]) {
+    const fY = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
+    fY.begin(new Float32Array(fY.params.length));
+    let tPk = 0, cmX = 0, vPk = 0, aPk = 0, coPk = 0, ldPk = 0;
+    runCaptureTeacher(sk, fY, { ...FB, kVipP: kp, kAnkleStiff: ks }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl) => {
+      tPk = Math.max(tPk, fY.doll.tiltOf(fY.doll.torso()));
+      cmX = readCom(fY.doll, cTmp).x;
+      vPk = Math.max(vPk, Math.abs(Number(dl?.qVip ?? 0)) * 57.3);
+      aPk = Math.max(aPk, Math.abs(Number(dl?.ankleCorr ?? 0)));
+      coPk = Math.max(coPk, Number(dl?.copOut ?? 0));
+      const [fl, fr] = fY.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      ldPk = Math.max(ldPk, Math.abs(fl - fr));
+    } });
+    console.log(`  ${String(kp).padStart(5)} ${ks.toFixed(1).padStart(7)} ${(tPk * 57.3).toFixed(1).padStart(7)} ${String("").padStart(4)}  ${cmX.toFixed(3).padStart(6)} ${vPk.toFixed(1).padStart(6)} ${aPk.toFixed(1).padStart(8)}\xB0 ${(coPk * 1e3).toFixed(0).padStart(8)}mm ${ldPk.toFixed(2).padStart(7)}`);
+  }
 }

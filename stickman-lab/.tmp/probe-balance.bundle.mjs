@@ -16487,6 +16487,13 @@ var THR = {
    *   且对 0.50 附近的抖动免疫（差值过零即达标）。
    */
   loadDiff: 0.15,
+  /**
+   * ★★ **迈步前的重心速度上限**（m/s）。用户 2026-10-02："迈步之前先稳定重心"。
+   *   此前门只看位置（MoS）与承重差，不看速度 —— 实测门放行瞬间 CoM 速度高达
+   *   0.8~2.0 m/s，身体还在快速移动就被允许抬腿 ⇒ 落脚点必错、承重接不住 ⇒ 又倒。
+   *   取 0.06 m/s：约为慢速目标步速 0.39 m/s 的 15%，是"真停住了"的严格判据。
+   */
+  vHold: 0.06,
   /** ★ 双支撑末期的判定时刻（该相位的进度，0~1）——门只在这里判定一次 */
   decisionAt: 0.25
   // ★ 判定窗上界：只在摆动**开始**的 s<0.25 内判定
@@ -16554,6 +16561,7 @@ var HIP_Z = 0.05;
 var STANCE_Z = 0.07;
 var HIP_DY = 0.22;
 var ABSORB_MAX = 0.35;
+var COP_HALF_LEN = 0.075;
 var HIP_Y = Y(1574.5);
 function ik(hipX, hipY, fx, fy, planeScale = 1) {
   const la = LEN_A * planeScale, lb = LEN_B * planeScale;
@@ -16659,7 +16667,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim.doll, "l") : footGrounded(sim.doll, "r");
       if (landed && latchedStance !== (swingIsL ? "l" : "r")) {
-        if (lastSwitchWasFlip || latchedStance === null) {
+        if (steps > 0 && latchedStance === null) {
           latchedStance = swingIsL ? "l" : "r";
           wtModule++;
         }
@@ -16687,7 +16695,6 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       if (landed && t >= readyT && stableEnough) {
         steps++;
         stanceL = swingIsL;
-        lastSwitchWasFlip = true;
         stanceL = swingIsL;
         prevStance = stanceL ? 1 : 2;
         stanceSeq += stanceL ? "L" : "R";
@@ -16740,26 +16747,59 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       }
     }
     const loadDiffNow = flNow - frNow;
-    const verdictRaw = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
-    const verdict = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
-    if (!verdict.ok) balBlocked = verdict.why;
+    const verdictRaw = balGate.judge(mosHere, loadDiffNow, true);
+    const verdict = balGate.judge(mosHere, loadDiffNow, true);
+    const vHold = THR.vHold;
+    const comSpeed = Math.hypot(com.vx, com.vz);
+    const okHoldV = comSpeed < vHold;
+    const holdDamp = -Math.min(0.5, comSpeed * 2.2) * Math.sign(com.vx || 1);
+    dbgLog.vHold = +comSpeed.toFixed(3);
+    const verdictV = {
+      ...verdict,
+      ok: verdict.ok && okHoldV,
+      why: verdict.ok && !okHoldV ? `\u91CD\u5FC3\u672A\u7A33\u5B9A\uFF08\u901F\u5EA6 ${comSpeed.toFixed(3)} m/s \u2265 ${vHold}\uFF0C\u5148\u51CF\u901F\u518D\u8FC8\uFF09` : verdict.why
+    };
+    if (!verdictV.ok) balBlocked = verdictV.why;
     else balBlocked = "";
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
     let swingX = swingX0;
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
-    const swingY = verdict.ok ? swingYRaw : 0.012;
+    const swingY = verdictV.ok ? swingYRaw : 0.012;
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
-    const footCX_B = stanceL ? footBufL[0] : footBufR[0];
-    syncComTarget();
-    const comShiftB = com.x - comTargetX;
-    const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
-    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
-    dbgLog.comShiftB = +comShiftB.toFixed(3);
-    dbgLog.corrCom = +corrCom.toFixed(4);
+    const ankleWX = stanceL ? footBufL[0] : footBufR[0];
+    const ankleWY = com.y - hipDy;
+    const vipX = com.x - ankleWX;
+    const vipY = Math.max(0.05, ankleWY);
+    const qVip = Math.atan2(vipX, vipY);
+    const qVipDot = (com.vx * vipY - vipX * com.vy) / (vipY * vipY);
+    let mSum = 0;
+    for (const b of sim.doll.bodies) mSum += b.mass();
+    const bodyMass = Math.max(1, mSum);
+    const kCritAnkle = bodyMass * 9.81 * vipY;
+    const kCritHip = bodyMass * 9.81 * (hipDy * 0.55);
+    const copLimit = COP_HALF_LEN;
+    const copOut = Math.max(0, Math.abs(vipX) - copLimit * vipY);
+    dbgLog.qVip = +qVip.toFixed(4);
+    dbgLog.vipDot = +qVipDot.toFixed(4);
+    dbgLog.kCritA = +kCritAnkle.toFixed(1);
+    dbgLog.kCritH = +kCritHip.toFixed(1);
+    dbgLog.copOut = +copOut.toFixed(4);
+    const kAnkleActual = 0.7 * kCritAnkle;
+    const kAnkleReq = (p.kAnkleStiff ?? 0.5) * kCritAnkle;
+    const vipTau = -(p.kVipP ?? 0.9) * qVip - (p.kVipD ?? 0.18) * qVipDot;
+    const ankleCorr = (kAnkleReq / kAnkleActual - 1) * -qVip + (p.kVipP ?? 0.9) * vipTau * -1;
+    const copMargin = Math.max(0, 1 - copOut / 0.02);
+    const ankleOut = ankleCorr * copMargin;
+    const vipDegDbg = Math.max(-15, Math.min(15, ankleOut * 57.3));
+    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
+    const hipActive = -qVip * (p.kHipShare ?? 0.25) * (1 - copMargin);
+    const corrCom = Math.max(-0.45, Math.min(0.45, hipStiffRatio * -0.08 + hipActive + holdDamp));
+    dbgLog.ankleCorr = +vipDegDbg.toFixed(2);
+    dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
     const postGain = inAdjust ? 1 : 0.15;
     let cmRoll = 0;
@@ -16777,7 +16817,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
     }
     for (const side of ["l", "r"]) {
       const isStance0 = side === "l" === stanceL;
-      const isStance = roleLatched === side ? true : isStance0;
+      const isStance = roleLatched === side || isStance0;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
       const hipY = hipYRef;
@@ -16815,7 +16855,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       dbgLog.footCX = +footCX.toFixed(3);
       dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      const ankleCmd = verdict.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
+      const vipDeg = isStance ? vipDegDbg : 0;
+      const ankleCmd = verdictV.ok ? ankleDeg + (isStance ? pushTorque + vipDeg : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
@@ -16878,8 +16919,8 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       dbgLog.footXL = +footBufL[0].toFixed(3);
       dbgLog.footXR = +footBufR[0].toFixed(3);
     }
-    dbgLog.balOk = verdict.ok ? 1 : 0;
-    dbgLog.balStage = verdict.why;
+    dbgLog.balOk = verdictV.ok ? 1 : 0;
+    dbgLog.balStage = verdictV.why;
     dbgLog.mosX = +mosHere.toFixed(4);
     dbgLoad = stanceLoadNow;
     dbgLog.comY = +com.y.toFixed(3);
