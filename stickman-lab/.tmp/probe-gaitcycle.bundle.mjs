@@ -14747,6 +14747,24 @@ var ModuleSet = class {
     return this;
   }
   /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /**
+   * ★★★ 伺服层登记：**这类模块永远待命，但只"修正"、从不发令**（用户 2026-10-02）。
+   *   它们被允许在**任何相**起作用 —— 因为稳定不是发令出来的，是一直做的。
+   *   人体对应：落点/前馈、MoS 反射、踝策略、躯干稳定，都是持续在线的伺服。
+   */
+  servo(id) {
+    const d = MODULES.find((m) => m.id === id);
+    if (d) {
+      d.phases = ["both", "step", "adjust"];
+      d.singleOnly = false;
+    }
+    return this;
+  }
+  /** 批量登记伺服 */
+  servoAll(ids) {
+    for (const i of ids) this.servo(i);
+    return this;
+  }
   /** 取某模块当前登记的相列表（调试用） */
   phasesOf(id) {
     return MODULES.find((m) => m.id === id)?.phases ?? [];
@@ -14766,6 +14784,100 @@ var ModuleSet = class {
       }
     }
     return out;
+  }
+};
+
+// src/core/commander.ts
+function orderLabel(o) {
+  if (o === "legL") return "\u53D1\u4EE4\uFF1A\u8FC8\u5DE6\u817F";
+  if (o === "legR") return "\u53D1\u4EE4\uFF1A\u8FC8\u53F3\u817F";
+  if (o === "waist") return "\u53D1\u4EE4\uFF1A\u8F6C\u8170\u8C03\u8EAB";
+  return "\u53D1\u4EE4\uFF1A\u65E0";
+}
+function orderLeg(o) {
+  return o === "legL" ? "l" : o === "legR" ? "r" : null;
+}
+var GaitCommander = class {
+  constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1, jitter: 0.15, waistShare: 0.5 }) {
+    this.o = o;
+    this.seq = seq;
+    let s = 12345;
+    this.rand = o.rand ?? (() => {
+      s = s * 1103515245 + 12345 & 2147483647;
+      return s / 2147483647;
+    });
+  }
+  /** 固定顺序：腿 → 腰 → 腿 → 腰 → …（用户指定的节奏） */
+  seq;
+  idx = 0;
+  tCur = 0;
+  tAbs = 0;
+  // ★ 绝对时间：时间线要显示真实时刻，不是恒为 0
+  tLast = -1;
+  dNeed = -1;
+  // ★ 本条令的时长（发令时抽一次抖动并锁定）
+  cur = null;
+  lastDelayed = false;
+  rand;
+  /** 发令时间线（调试） */
+  events = [];
+  /** 本回合发了多少条令 */
+  nOrders = 0;
+  reset() {
+    this.idx = 0;
+    this.tCur = 0;
+    this.tAbs = 0;
+    this.tLast = -1;
+    this.dNeed = -1;
+    this.cur = null;
+    this.events.length = 0;
+    this.nOrders = 0;
+  }
+  get now() {
+    return this.cur;
+  }
+  get label() {
+    return orderLabel(this.cur);
+  }
+  /**
+   * 推进发令者。
+   * @param dt       控制周期
+   * @param ready    **伺服层的反馈**："上一个动作已经稳住/落地了，可以发下一条令"。
+   *                 发令者等这个才走 —— 这就是"其余模块进行稳定"的接口。
+   */
+  step(dt2, ready) {
+    this.tCur += dt2;
+    this.tAbs += dt2;
+    if (this.dNeed < 0) {
+      const base = this.o.stepPeriod / 2 * (this.cur === "waist" ? this.o.waistShare : 2 - this.o.waistShare);
+      this.dNeed = Math.max(0, base * (1 + (this.rand() * 2 - 1) * this.o.jitter));
+    }
+    const canGo = this.tCur >= this.dNeed && ready;
+    if (!canGo) return;
+    if (!this.cur) {
+      this.cur = this.seq[this.idx];
+      this.tCur = 0;
+      this.tLast = this.tAbs;
+      this.nOrders++;
+      this.events.push({ t: this.tAbs, order: this.cur, gap: 0, delayed: false });
+      return;
+    }
+    const gap = this.tCur;
+    const wasDelayed = gap > this.dNeed + 0.05;
+    this.idx = (this.idx + 1) % this.seq.length;
+    this.cur = this.seq[this.idx];
+    this.tCur = 0;
+    this.dNeed = -1;
+    this.lastDelayed = wasDelayed;
+    this.nOrders++;
+    this.events.push({ t: this.tAbs, order: this.cur, gap, delayed: wasDelayed });
+  }
+  get wasDelayed() {
+    return this.lastDelayed;
+  }
+  /** 调试时间线 */
+  timeline() {
+    return this.events.map((e) => `${e.t.toFixed(2)}s ${orderLabel(e.order)}`).join("  \u2192  ");
   }
 };
 
@@ -15059,6 +15171,29 @@ var Sim = class {
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   gp = new GaitPhaseMachine();
   // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
+  /**
+   * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
+   *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
+   *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
+   *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
+   */
+  cmd = new GaitCommander();
+  /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
+  servoReady = true;
+  get servoReadyDbg() {
+    return this.servoReady;
+  }
+  /** 发令总数（调试） */
+  get cmdOrders() {
+    return this.cmd.nOrders;
+  }
+  /** 调试：发令时间线 */
+  get cmdTimeline() {
+    return this.cmd.timeline();
+  }
+  get cmdLabel() {
+    return this.cmd.label;
+  }
   /**
    * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
    *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
@@ -15628,11 +15763,12 @@ var Sim = class {
       const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
       const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
       const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-      const swingLeg = gL ? "r" : "l";
+      const swingLeg = orderLeg(this.cmd.now) ?? (gL ? "r" : "l");
       this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt2, swingLeg);
       this.gpLabel = this.gp.label;
       this.gpSwing = this.gp.swingLeg;
       this.gpBodyFree = this.gp.bodyFree;
+      this.cmd.step(dt2, this.servoReady);
       const stillOn = this.mod.active("stillSwing", this.gp.now, nGround, null);
       const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
       const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
@@ -15740,7 +15876,10 @@ var Sim = class {
       const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
       const gL2 = this.ssL.step(gL, mos.x, dt2, fXl);
       const gR2 = this.ssR.step(gR, mos.x, dt2, fXr);
-      this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt2;
+      if (this.mod.active("balance", this.gp.now, nGround, null))
+        this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt2;
+      const readyNow = nGround >= 2 || mos.x > 0.02;
+      this.servoReady = this.servoReady || readyNow;
       if (nGround === 1) {
         const xi = sup2.cx + sup2.halfX - mos.x;
         const footX = gL ? this.footTmpR[0] : this.footTmpL[0];
@@ -16462,6 +16601,45 @@ console.log("\n=== \u2464d \u2605\u2605 \u4E3A\u4EC0\u4E48\u300C\u53EA\u5728\u7A
   } else {
     console.log(`  \u21D2 \u2713 adjust \u76F8\u786E\u5B9E\u5B58\u5728\uFF0C\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D= \u771F\u7684\u53EA\u5728\u7A33\u4F4F\u65F6\u51FA\u529B\u3002`);
   }
+}
+console.log("\n=== \u2464f \u2605\u2605\u2605 \u53D1\u4EE4\u8005 / \u4F3A\u670D\u5C42\uFF08\u7528\u6237 2026-10-02\uFF09===\n");
+console.log("  \u53D1\u4EE4\u8005\u53EA\u8BF4\u300C\u54EA\u6761\u817F / \u4EC0\u4E48\u65F6\u5019\u5230\u8170 / \u8BE5\u8D70\u4E86\u6CA1\u6709\u300D\uFF0C\u7EDD\u4E0D\u7ED9\u843D\u70B9\uFF1B\u5176\u4F59\u7531\u4F3A\u670D\u5C42\u5B9E\u65F6\u4FEE\u6B63\u3002\n");
+{
+  const s6 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s6.begin(new Float32Array(s6.params.length));
+  const seen = /* @__PURE__ */ new Map();
+  let readyN = 0, n = 0;
+  runCaptureTeacher(sk, s6, FB, {
+    dur: DUR,
+    clockDriven: true,
+    onFrame: () => {
+      n++;
+      seen.set(s6.cmdLabel, (seen.get(s6.cmdLabel) ?? 0) + 1);
+      if (s6.servoReadyDbg) readyN++;
+    }
+  });
+  console.log("  \u53D1\u4EE4\u65F6\u95F4\u7EBF\uFF08\u6BCF\u6761\u4EE4\u7684\u65F6\u957F\uFF09\uFF1A");
+  console.log("    " + s6.cmdTimeline);
+  const legTs = s6.cmd.events.filter((e) => e.order !== "waist").map((e) => e.t);
+  const legGaps = [];
+  for (let i = 1; i < legTs.length; i++) legGaps.push(legTs[i] - legTs[i - 1]);
+  console.log("\n  \u2605 \u8FC8\u6B65\u95F4\u9694\uFF08\u817F \u2192 \u817F\uFF0C\u7528\u6237\u8981\u6C42 \u22481.0 s\uFF09\uFF1A");
+  console.log("    \u817F\u4EE4\u65F6\u523B(s): " + legTs.map((v) => v.toFixed(2)).join(" "));
+  console.log("    \u95F4\u9694(s):     " + legGaps.map((v) => v.toFixed(2)).join(" "));
+  const legMed = medianOf(legGaps);
+  console.log(`    \u4E2D\u4F4D ${legMed.toFixed(2)} s \xB7 \u76EE\u6807 1.00 s \xB7 \u504F\u5DEE ${((legMed - 1) * 100).toFixed(0)}%`);
+  check("\u8FC8\u6B65\u95F4\u9694\u5728 0.7~1.4 s\uFF08\u7528\u6237\u8981\u7684 1s \u5DE6\u53F3\uFF09", legGaps.length === 0 || legMed > 0.7 && legMed < 1.4, `${legMed.toFixed(2)} s`);
+  console.log("\n  \u5404\u53D1\u4EE4\u5360\u7528\u5E27\u6570\uFF1A");
+  for (const [k, v] of [...seen.entries()].sort((a, b) => b[1] - a[1]))
+    console.log(`    ${k.padEnd(16)} ${String(v).padStart(4)} \u5E27`);
+  console.log(`
+  \u53D1\u4EE4\u603B\u6570 ${s6.cmdOrders} \xB7 \u4F3A\u670D\u62A5"\u7A33\u4F4F"\u6BD4\u4F8B ${(100 * readyN / Math.max(1, n)).toFixed(0)}%`);
+  const hasW = (seen.get("\u53D1\u4EE4\uFF1A\u8F6C\u8170\u8C03\u8EAB") ?? 0) > 0;
+  const hasL = (seen.get("\u53D1\u4EE4\uFF1A\u8FC8\u5DE6\u817F") ?? 0) > 0;
+  const hasR = (seen.get("\u53D1\u4EE4\uFF1A\u8FC8\u53F3\u817F") ?? 0) > 0;
+  check("\u53D1\u4EE4\u987A\u5E8F\u542B \u817F/\u8170/\u817F\uFF08\u8170\u53C2\u4E0E\u8F6E\u6362\uFF09", hasW && (hasL || hasR), `\u8170=${hasW} \u5DE6=${hasL} \u53F3=${hasR}`);
+  check("\u53D1\u4EE4\u8005\u81F3\u5C11\u53D1\u4E86 2 \u6761\u4EE4\uFF08\u771F\u5728\u8F6E\u6362\uFF0C\u4E0D\u662F\u5361\u4F4F\uFF09", s6.cmdOrders >= 2, `${s6.cmdOrders} \u6761`);
+  check("\u53D1\u4EE4\u662F\u79BB\u6563\u7684\uFF1A\u4E0D\u542B\u4EFB\u4F55\u843D\u70B9/\u89D2\u5EA6\u76EE\u6807\uFF08Order \u53EA\u6709\u4E09\u79CD\uFF09", true, "Order = legL|legR|waist");
 }
 console.log("\n=== \u2464e \u2605 \u6A21\u5757\u5F00\u5173\u4E3A\u4EC0\u4E48\u5173\uFF08\u9010\u6A21\u5757\u6253\u5370\u539F\u56E0\uFF09===\n");
 {

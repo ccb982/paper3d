@@ -147,6 +147,20 @@ export class ModuleSet {
   }
 
   /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /**
+   * ★★★ 伺服层登记：**这类模块永远待命，但只"修正"、从不发令**（用户 2026-10-02）。
+   *   它们被允许在**任何相**起作用 —— 因为稳定不是发令出来的，是一直做的。
+   *   人体对应：落点/前馈、MoS 反射、踝策略、躯干稳定，都是持续在线的伺服。
+   */
+  servo(id: ModuleId): this {
+    const d = MODULES.find(m => m.id === id);
+    if (d) { d.phases = ['both', 'step', 'adjust']; d.singleOnly = false; }
+    return this;
+  }
+
+  /** 批量登记伺服 */
+  servoAll(ids: ModuleId[]): this { for (const i of ids) this.servo(i); return this; }
+
   /** 取某模块当前登记的相列表（调试用） */
   phasesOf(id: ModuleId): readonly GaitPhase[] {
     return MODULES.find(m => m.id === id)?.phases ?? [];

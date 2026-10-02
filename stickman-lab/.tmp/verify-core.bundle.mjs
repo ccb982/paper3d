@@ -15318,6 +15318,24 @@ var init_modules = __esm({
         return this;
       }
       /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+      /**
+       * ★★★ 伺服层登记：**这类模块永远待命，但只"修正"、从不发令**（用户 2026-10-02）。
+       *   它们被允许在**任何相**起作用 —— 因为稳定不是发令出来的，是一直做的。
+       *   人体对应：落点/前馈、MoS 反射、踝策略、躯干稳定，都是持续在线的伺服。
+       */
+      servo(id) {
+        const d = MODULES.find((m) => m.id === id);
+        if (d) {
+          d.phases = ["both", "step", "adjust"];
+          d.singleOnly = false;
+        }
+        return this;
+      }
+      /** 批量登记伺服 */
+      servoAll(ids) {
+        for (const i of ids) this.servo(i);
+        return this;
+      }
       /** 取某模块当前登记的相列表（调试用） */
       phasesOf(id) {
         return MODULES.find((m) => m.id === id)?.phases ?? [];
@@ -15337,6 +15355,106 @@ var init_modules = __esm({
           }
         }
         return out;
+      }
+    };
+  }
+});
+
+// src/core/commander.ts
+function orderLabel(o) {
+  if (o === "legL") return "\u53D1\u4EE4\uFF1A\u8FC8\u5DE6\u817F";
+  if (o === "legR") return "\u53D1\u4EE4\uFF1A\u8FC8\u53F3\u817F";
+  if (o === "waist") return "\u53D1\u4EE4\uFF1A\u8F6C\u8170\u8C03\u8EAB";
+  return "\u53D1\u4EE4\uFF1A\u65E0";
+}
+function orderLeg(o) {
+  return o === "legL" ? "l" : o === "legR" ? "r" : null;
+}
+var GaitCommander;
+var init_commander = __esm({
+  "src/core/commander.ts"() {
+    "use strict";
+    GaitCommander = class {
+      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1, jitter: 0.15, waistShare: 0.5 }) {
+        this.o = o;
+        this.seq = seq;
+        let s = 12345;
+        this.rand = o.rand ?? (() => {
+          s = s * 1103515245 + 12345 & 2147483647;
+          return s / 2147483647;
+        });
+      }
+      /** 固定顺序：腿 → 腰 → 腿 → 腰 → …（用户指定的节奏） */
+      seq;
+      idx = 0;
+      tCur = 0;
+      tAbs = 0;
+      // ★ 绝对时间：时间线要显示真实时刻，不是恒为 0
+      tLast = -1;
+      dNeed = -1;
+      // ★ 本条令的时长（发令时抽一次抖动并锁定）
+      cur = null;
+      lastDelayed = false;
+      rand;
+      /** 发令时间线（调试） */
+      events = [];
+      /** 本回合发了多少条令 */
+      nOrders = 0;
+      reset() {
+        this.idx = 0;
+        this.tCur = 0;
+        this.tAbs = 0;
+        this.tLast = -1;
+        this.dNeed = -1;
+        this.cur = null;
+        this.events.length = 0;
+        this.nOrders = 0;
+      }
+      get now() {
+        return this.cur;
+      }
+      get label() {
+        return orderLabel(this.cur);
+      }
+      /**
+       * 推进发令者。
+       * @param dt       控制周期
+       * @param ready    **伺服层的反馈**："上一个动作已经稳住/落地了，可以发下一条令"。
+       *                 发令者等这个才走 —— 这就是"其余模块进行稳定"的接口。
+       */
+      step(dt, ready) {
+        this.tCur += dt;
+        this.tAbs += dt;
+        if (this.dNeed < 0) {
+          const base = this.o.stepPeriod / 2 * (this.cur === "waist" ? this.o.waistShare : 2 - this.o.waistShare);
+          this.dNeed = Math.max(0, base * (1 + (this.rand() * 2 - 1) * this.o.jitter));
+        }
+        const canGo = this.tCur >= this.dNeed && ready;
+        if (!canGo) return;
+        if (!this.cur) {
+          this.cur = this.seq[this.idx];
+          this.tCur = 0;
+          this.tLast = this.tAbs;
+          this.nOrders++;
+          this.events.push({ t: this.tAbs, order: this.cur, gap: 0, delayed: false });
+          return;
+        }
+        const gap = this.tCur;
+        const wasDelayed = gap > this.dNeed + 0.05;
+        this.idx = (this.idx + 1) % this.seq.length;
+        this.cur = this.seq[this.idx];
+        this.tCur = 0;
+        this.dNeed = -1;
+        this.lastDelayed = wasDelayed;
+        this.nOrders++;
+        this.events.push({ t: this.tAbs, order: this.cur, gap, delayed: wasDelayed });
+      }
+      get wasDelayed() {
+        return this.lastDelayed;
+      }
+      /** 调试时间线 */
+      timeline() {
+        return this.events.map((e) => `${e.t.toFixed(2)}s ${orderLabel(e.order)}`).join("  \u2192  ");
       }
     };
   }
@@ -15377,6 +15495,7 @@ var init_sim = __esm({
     init_balance();
     init_gaitPhase();
     init_modules();
+    init_commander();
     init_walkReward();
     init_skeleton();
     MOVE_SET = new Set(MOVE_JOINTS);
@@ -15659,6 +15778,29 @@ var init_sim = __esm({
       // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
       gp = new GaitPhaseMachine();
       // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
+      /**
+       * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
+       *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
+       *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
+       *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
+       */
+      cmd = new GaitCommander();
+      /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
+      servoReady = true;
+      get servoReadyDbg() {
+        return this.servoReady;
+      }
+      /** 发令总数（调试） */
+      get cmdOrders() {
+        return this.cmd.nOrders;
+      }
+      /** 调试：发令时间线 */
+      get cmdTimeline() {
+        return this.cmd.timeline();
+      }
+      get cmdLabel() {
+        return this.cmd.label;
+      }
       /**
        * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
        *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
@@ -16228,11 +16370,12 @@ var init_sim = __esm({
           const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
           const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
           const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-          const swingLeg = gL ? "r" : "l";
+          const swingLeg = orderLeg(this.cmd.now) ?? (gL ? "r" : "l");
           this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt, swingLeg);
           this.gpLabel = this.gp.label;
           this.gpSwing = this.gp.swingLeg;
           this.gpBodyFree = this.gp.bodyFree;
+          this.cmd.step(dt, this.servoReady);
           const stillOn = this.mod.active("stillSwing", this.gp.now, nGround, null);
           const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
           const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
@@ -16340,7 +16483,10 @@ var init_sim = __esm({
           const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
           const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
           const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
-          this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+          if (this.mod.active("balance", this.gp.now, nGround, null))
+            this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+          const readyNow = nGround >= 2 || mos.x > 0.02;
+          this.servoReady = this.servoReady || readyNow;
           if (nGround === 1) {
             const xi = sup2.cx + sup2.halfX - mos.x;
             const footX = gL ? this.footTmpR[0] : this.footTmpL[0];

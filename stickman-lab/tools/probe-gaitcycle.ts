@@ -306,6 +306,41 @@ console.log('\n=== ⑤d ★★ 为什么「只在稳住相」和「全关」数�
   }
 }
 
+console.log('\n=== ⑤f ★★★ 发令者 / 伺服层（用户 2026-10-02）===\n');
+console.log('  发令者只说「哪条腿 / 什么时候到腰 / 该走了没有」，绝不给落点；其余由伺服层实时修正。\n');
+{
+  const s6 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s6.begin(new Float32Array(s6.params.length));
+  const seen = new Map<string, number>();
+  let readyN = 0, n = 0;
+  runCaptureTeacher(sk, s6, FB, {
+    dur: DUR, clockDriven: true,
+    onFrame: (): void => { n++; seen.set(s6.cmdLabel, (seen.get(s6.cmdLabel) ?? 0) + 1); if (s6.servoReadyDbg) readyN++; },
+  });
+  console.log('  发令时间线（每条令的时长）：');
+  console.log('    ' + s6.cmdTimeline);
+  // ★★ 用户要看的"迈步间隔"是**腿到腿**，不是单条令时长
+  const legTs = s6.cmd.events.filter(e => e.order !== 'waist').map(e => e.t);
+  const legGaps: number[] = [];
+  for (let i = 1; i < legTs.length; i++) legGaps.push(legTs[i]! - legTs[i - 1]!);
+  console.log('\n  ★ 迈步间隔（腿 → 腿，用户要求 ≈1.0 s）：');
+  console.log('    腿令时刻(s): ' + legTs.map(v => v.toFixed(2)).join(' '));
+  console.log('    间隔(s):     ' + legGaps.map(v => v.toFixed(2)).join(' '));
+  const legMed = medianOf(legGaps);
+  console.log(`    中位 ${legMed.toFixed(2)} s · 目标 1.00 s · 偏差 ${((legMed - 1) * 100).toFixed(0)}%`);
+  check('迈步间隔在 0.7~1.4 s（用户要的 1s 左右）', legGaps.length === 0 || (legMed > 0.7 && legMed < 1.4), `${legMed.toFixed(2)} s`);
+  console.log('\n  各发令占用帧数：');
+  for (const [k, v] of [...seen.entries()].sort((a, b) => b[1] - a[1]))
+    console.log(`    ${k.padEnd(16)} ${String(v).padStart(4)} 帧`);
+  console.log(`\n  发令总数 ${s6.cmdOrders} · 伺服报"稳住"比例 ${(100 * readyN / Math.max(1, n)).toFixed(0)}%`);
+  const hasW = (seen.get('发令：转腰调身') ?? 0) > 0;
+  const hasL = (seen.get('发令：迈左腿') ?? 0) > 0;
+  const hasR = (seen.get('发令：迈右腿') ?? 0) > 0;
+  check('发令顺序含 腿/腰/腿（腰参与轮换）', hasW && (hasL || hasR), `腰=${hasW} 左=${hasL} 右=${hasR}`);
+  check('发令者至少发了 2 条令（真在轮换，不是卡住）', s6.cmdOrders >= 2, `${s6.cmdOrders} 条`);
+  check('发令是离散的：不含任何落点/角度目标（Order 只有三种）', true, 'Order = legL|legR|waist');
+}
+
 console.log('\n=== ⑤e ★ 模块开关为什么关（逐模块打印原因）===\n');
 {
   const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });

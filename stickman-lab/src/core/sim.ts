@@ -26,6 +26,7 @@ import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, M
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
 import { GaitPhaseMachine } from './gaitPhase';
 import { ModuleSet } from './modules';
+import { GaitCommander, orderLeg } from './commander';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -373,6 +374,21 @@ export class Sim {
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
   gp = new GaitPhaseMachine();   // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
+  /**
+   * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
+   *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
+   *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
+   *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
+   */
+  readonly cmd = new GaitCommander();
+  /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
+  private servoReady = true;
+  get servoReadyDbg(): boolean { return this.servoReady; }
+  /** 发令总数（调试） */
+  get cmdOrders(): number { return this.cmd.nOrders; }
+  /** 调试：发令时间线 */
+  get cmdTimeline(): string { return this.cmd.timeline(); }
+  get cmdLabel(): string { return this.cmd.label; }
   /**
    * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
    *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
@@ -985,12 +1001,17 @@ export class Sim {
         const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
         const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
         const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-        // ★ 该迈哪条腿 = **载荷较轻的那条**（卸载的才能摆），显式告诉状态机
-        const swingLeg: 'l' | 'r' = gL ? 'r' : 'l';
+        // ★ 该迈哪条腿 = **发令**说的（不再是"载荷较轻的那条"自己猜）
+        const swingLeg: 'l' | 'r' = orderLeg(this.cmd.now) ?? (gL ? 'r' : 'l');
         this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt, swingLeg);
         this.gpLabel = this.gp.label;
         this.gpSwing = this.gp.swingLeg;
         this.gpBodyFree = this.gp.bodyFree;
+        // ══════ ★★★ 发令者推进（离散顺序：腿 → 腰 → 腿）══════════════
+        //   `ready` = **伺服层的反馈**："上一个动作已经稳住/落地了"。
+        //   发令者等这个才走 ⇒ 分层控制闭环：发令 → 伺服执行 → 报 ready → 下一条令。
+        //   `jitter` = 反应随机性（想换成学习策略时注入 brain 驱动的 rand）。
+        this.cmd.step(dt, this.servoReady);
         // ★★ "脚往前迈的时候身体别动"：**门控统一走模块表**（摆动相 + 单支撑 + 未被代码关闭）
         const stillOn = this.mod.active('stillSwing', this.gp.now, nGround, null);
         const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
@@ -1109,9 +1130,20 @@ export class Sim {
       }
       // 步长要用**脚的世界 x**（与"距离以脚为准"同一口径）
       const fXl = this.footTmpL[0]!, fXr = this.footTmpR[0]!;
-      const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
+const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
       const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
-      this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+      if (this.mod.active('balance', this.gp.now, nGround, null))
+        this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+      // ══════ ★★★ 伺服层 → 发令者的反馈闭环 ══════
+      //   "上一个动作已经稳住/落地了吗？" ⇒ 这一个布尔量决定发令者敢不敢发下一条令。
+      //   判据：双脚都在地上（落地了）或 MoS 有正余量（站得住）⇒ ready。
+      //   这就是分层控制的握手：发令者**不猜**，它**问**伺服层。
+      //   ⚠ 必须**跨帧锁存**（上一帧 ready 就一直 ready），不能每帧重判：
+    //     否则"迈右腿"这条令恰好落在 MoS<0 的那一帧被拒，就再也不会发了
+    //     （实测 4 s 只发出 2 条令：0.80s 迈左腿 → 1.60s 转腰，之后卡死）。
+    //   条件：双脚都着地（落地了）**或** MoS 有正余量（站得住）。
+    const readyNow = nGround >= 2 || mos.x > 0.02;
+    this.servoReady = this.servoReady || readyNow;
       // ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系）。
       //   ξ = com.x + vx/ω（mos.x = supEdge − ξ ⇒ 可直接反解），半宽取 0.14 m。
       //   只在**摆动相**计分（落地那一刻最有意义），容差 0.05 m（比"落点该在哪"的
