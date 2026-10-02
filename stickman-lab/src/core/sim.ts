@@ -22,7 +22,7 @@ import {
   dcm, dcmExcess, footGrounded, newCom, newSupport, omegaAt, readCom, readSupport,
 } from './posture';
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
-import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN } from './stability';
+import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, MIN_CLEARANCE, cadenceScore, TARGET_CYCLE } from './stability';
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
@@ -322,6 +322,10 @@ export class Sim {
   private footTmpR = new Float64Array(3);
   private hipTmp = new Float64Array(3);
   private airL = 0;             // 左脚连续腾空时间
+  private airPeakL = 0; private airPeakR = 0;   // 本次腾空的最大脚底高度（离地高度判据）
+  private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
+  private flickerCount = 0;                     // 被判定为接触抖动（离地不够）的次数（诊断）
+  private lastAltT = 0;
   private airR = 0;
   private motorPrev: Float32Array;   // 上一拍的马达目标（action rate）
   private accVelTrack = 0;   // ∫(φ(v*−vx) − φ(v*))dt  （扣基线，站桩 = 0）
@@ -538,6 +542,7 @@ export class Sim {
     this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
     this.airL = 0; this.airR = 0; this.motorPrev.fill(0);
+    this.airPeakL = 0; this.airPeakR = 0; this.cycTimes = []; this.lastAltT = 0;
     // ⚠ 观测里的每脚载荷份额也必须重置：漏掉它时，**复用的 Sim** 会把上一代的
     //   载荷带进下一个个体的第一帧，而新建的 Sim 从默认值开始 ⇒
     //   "存档→续训"在第 4 代开始与"一路训到底"分叉（实测 1.490 vs 1.508）。
@@ -811,13 +816,21 @@ export class Sim {
     if (altNow) this.altCount++;
     this.airL = gL ? 0 : this.airL + dt;
     this.airR = gR ? 0 : this.airR + dt;
+    // ★ 记录本次腾空的**最大脚底高度**（离地高度判据用，见 MIN_CLEARANCE）
+    if (gL) this.airPeakL = 0; else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY('l'));
+    if (gR) this.airPeakR = 0; else this.airPeakR = Math.max(this.airPeakR, this.doll.soleY('r'));
     // ★★★ 腾空分只在"**恰好一脚离地**"时给满：双脚同时离地（蹦跳）只给一半。
     //   原来两条腿的腾空时间是各自独立累加的 ⇒ 蹦一下拿双份分。
     //   实测训练 4 代的收敛方向：抬腿项一路涨到 2.81，而换脚数一直是 0 ——
     //   策略学会了"两只脚一起跳"，因为那比"一次抬一条"更容易从站桩状态达到。
     //   交替行走要的是"一次抬一条"，奖励里必须写死这件事。
+    // ★★ 离地**高度**门槛：一步必须真的抬起来 ≥ MIN_CLEARANCE 才算数。
+    //   没有它，`single`(2.5)+`lift`(1.0) 只看"有没有一脚离地"，
+    //   高频小幅抖动就能全额刷 ≈3.5 分 ⇒ 这就是"高频抽搐"的奖励根源。
     const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
-    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt;
+    const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
+    const cl = (nGround === 1) ? (gL ? clR : clL) : (nGround === 0 ? (clL && clR) : false);
+    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt;
     // ★★ "站得住"门控因子：只有**身体还在控制中**（躯干没歪、没塌下去），
     //   抬腿/单脚支撑/要动这三项才算数。
     //   为什么要：不加的话**摔倒过程本身会拿高分** —— 零输出基因组（纯阻尼、站桩）
@@ -856,12 +869,24 @@ export class Sim {
     const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
     const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
     if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
+      // ★★★ 换支撑脚也必须"**真的抬起来了**"（离地峰值 ≥ MIN_CLEARANCE）。
+      //   实测（probe-gaitcycle ⑤）：脚高信号主频 **3.90 Hz**、离地峰值中位 **0 mm**、
+      //   88% 的"离地"不到 3 cm ⇒ 之前的"单支撑/换脚"大多是**接触抖动**（contact flicker），
+      //   脚还踩在地上。`footGrounded`（contactDist ≤ 2 mm）在这种抖动里会闪，
+      //   于是 altCount / altGate 全被假的"迈步"点亮 —— 这就是"高频抽搐"的物理来源。
+      const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;   // 离地那只脚
+      if (airPeak < MIN_CLEARANCE) { this.flickerCount++; } else {
       this.altCount++;
+      // ★ 记录换支撑脚时刻，供**节律门**用（高频抽搐在这一步就会被量出来）
+      const tNow = this.tick / this.cfg.controlHz;
+      if (this.lastAltT > 0) this.cycTimes.push(tNow - this.lastAltT);
+      this.lastAltT = tNow;
       // ★★ 换脚**只有在正在推进时才计价**：φ(v*−v_x)。
       //   不加这一层的话实测 6 代就学会"原地金鸡独立式交替"（换脚 14 次/6s = 2.3Hz，
       //   而 velTrack −0.18、位移 −0.38 m）—— 交替本身被当成了终点。
       //   加了之后："迈步"必须同时是"往前走的迈步"，原地抖腿一分不给。
       this.accSwitchQ += phi(TARGET_VX - this.footVel);
+      }
     }
     // ★★★ 这里原来漏了**正项**：只累加了"双脚离地"的罚，从来没记过"恰好一脚着地"的时间。
     //   后果很致命：Rudin 那套配方里最核心的"单腿支撑"项永远拿不到正分
@@ -870,7 +895,7 @@ export class Sim {
     //   这才是"训练一直偏好站着不动"的根因（不是权重配得不好）。
     //   判据用**几何接触**（不是载荷）：这一步只要求"确实一脚离地"，能挣到分就行，
     //   质量更高的部分由上面的 `shift`（载荷转移）和 `accSwitchQ`（换支撑脚）负责。
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
+    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
 
     // ══════ ★★ 文献步态参考分 + 盆骨优先（用户 2026-10-02）══════════════
     //  只在**真单支撑帧**给分：站着不动 / 两脚都在地上 ⇒ 一分不给。
@@ -1159,10 +1184,26 @@ export class Sim {
       tt.yawTrack = w.yawTrack * this.accYaw;
       tt.lateral = -w.lateral * this.accLat;
       tt.tiltRate = -w.tiltRate * this.accTilt;
-      tt.lift = w.lift * this.accLift * aliveAvg;
+      // ★★★ **节律门**：按实测步间隔给 0..1 分，挂在**所有走路项**上。
+      //   没有它：一个 3 Hz、每次抬 3 cm 的抖动仍能刷满 single/lift/moS/placement。
+      //   有了它：乱颤的实测间隔远离 TARGET_CYCLE=1.0 s ⇒ 这一项直接压到 ~0。
+      //   （离地高度门负责"幅度"，节律门负责"频率"，两个一起才关得住抽搐。）
+      let cad = 1;
+      if (this.cycTimes.length >= 2) {
+        const sc = [...this.cycTimes].sort((a, b) => a - b);
+        cad = cadenceScore(sc[Math.floor(sc.length / 2)]!, TARGET_CYCLE);
+      }
+      const altGate = Math.min(1, this.altCount / 2);
+      const gate = altGate * cad;
+      tt.cadence = cad;
+      tt.medianCycle = this.cycTimes.length >= 2
+        ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)]! : 0;
+      // ★ `lift` / `single` 也乘节律门：这两个是抽搐最容易刷到的项
+      //   （accLift 内部已有"离地高度"门，这里再加"频率"门）
+      tt.lift = w.lift * this.accLift * aliveAvg * cad;
+      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
       // ★ 换支撑脚拿分（主）+ 双脚离地时间罚（次）。**没有"两脚都着地"的负分**了 ——
       //   那是姿态式判据，在现几何下会把"滑行"也罚掉（而滑行是这个骨架的被动行为）。
-      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
       tt.altCount = this.altCount;   // 诊断：换支撑脚次数
       // ★ 重心转移：**封顶**的"能力门槛"，不是无限得分项。
       //   实测：不封顶的话，策略只要**永远把体重压在一只脚上**就能拿满（6s × 2.0 ≈ 20 分，
@@ -1202,7 +1243,8 @@ export class Sim {
       //     不封顶的话"零输出滑 0.65 m"能拿 26~33 分，把代价项（力矩/能量/不平衡）
       //     全部淹没 —— 站立类门禁（posture/gait/verify）就是这么被顶穿的。
       //  ③ 封顶后新增的走路加分有确定上界（约 13.5 分），与代价项同量级。
-      const altGate = Math.min(1, this.altCount / 2);
+      const altGate2 = altGate;
+      void altGate2;
       const cap = (v: number, m: number): number => (v > m ? m : v);
       tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;

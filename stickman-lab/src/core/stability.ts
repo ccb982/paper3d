@@ -58,6 +58,30 @@ export const MOS_TARGET = 0.30;
  */
 export const MIN_CYCLE = 1.0;
 /**
+ * ★★ 最小离地高度（m）：一步必须真的把脚**抬起来**这么高才算数。
+ *   为什么必需：`single`（权重 2.5）和 `lift`（1.0）原先只看"有没有一脚离地"，
+ *   于是一个**高频、幅度很小**的抖动就能全额刷到 ≈3.5 分，而真实迈步其实很难达到 ——
+ *   这就是"高频抽搐"在奖励里的直接来源（用户 2026-10-02："现在依旧是高频抽搐"）。
+ *   文献口径：正常人平地步态的**足间隙**（foot clearance）在摆动中期约 1~2 cm；
+ *   这里是位置型 PD 电机、又没有踝，取 3 cm 作为"确实抬了脚"的门槛。
+ */
+export const MIN_CLEARANCE = 0.03;
+/** 目标步间隔（s）：与 MIN_CYCLE 同义，单独命名是为了让"节律门"读起来清楚 */
+export const TARGET_CYCLE = 1.0;
+
+/**
+ * ★★ 节律门：按**实测**的步间隔给 0..1 分，偏离目标越远越接近 0。
+ *   为什么必需：光是"离地高度"还不够 —— 一个 3 Hz、每次抬 3 cm 的抖动仍能刷分。
+ *   文献依据：正常步行步频约 1.8~2.0 步/秒、幼儿更慢且**变异大**；
+ *   而**摆动相与双支撑相的占比**是步态最稳定的特征（Perry 八相分期）。
+ *   ⇒ 把"实际节律"本身变成一个得分项，让"乱颤"在奖励上不划算。
+ */
+export function cadenceScore(medianCycleSec: number, target = TARGET_CYCLE, sigma = 0.45): number {
+  if (!(medianCycleSec > 0)) return 0;
+  const d = (medianCycleSec - target) / sigma;
+  return Math.exp(-d * d);
+}
+/**
  * ★★ 步幅目标：**2~3 个脚长**。
  *   文献：Usherwood 2023（*The collisional geometry of economical walking*,
  *   J R Soc Interface）用碰撞力学推出：一步长度 S = 2（点质量模型）或 3（无限转动惯量

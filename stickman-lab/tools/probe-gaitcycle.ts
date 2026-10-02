@@ -185,5 +185,53 @@ console.log('  目标：|WBAM| 中位往 0.16（平衡基线）压、单支撑 M
 console.log('  （文献：成人双支撑 20%、幼儿 30~40%；我们此前 82.7% ⇒ 此前根本不是"一次迈一个脚"）');
 
 console.log('');
+console.log('=== ⑤ 抽搐检测（用户："现在依旧是高频抽搐"）===\n');
+console.log('  判据：① 换支撑脚频率 ② 脚底高度信号的主频 ③ 每次"离地"的峰值高度');
+console.log('  真实迈步：频率 ≈1 Hz、离地峰值 ≥3 cm、单支撑占比高');
+console.log('  抽搐：频率 ≫1 Hz、离地峰值很小（<3 cm）');
+console.log('');
+console.log('  ' + '对象'.padEnd(20) + '换脚频率  离地峰值中位  离地峰值<3cm占比  主频(脚高)  双支撑');
+for (const cfg of [
+  { n: '捕获点 teacher', p: {} as Partial<CaptureParams> },
+  { n: 'CMP cm=0.15', p: { cmBalance: 0.15, cmBalanceD: 0.4 } as Partial<CaptureParams> },
+]) {
+  const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s3.begin(new Float32Array(s3.params.length));
+  const solo = new Float64Array(3), sro = new Float64Array(3);
+  const peaks: number[] = [];
+  const hL: number[] = [];
+  let nD = 0, nS = 0, nF = 0, air = false, peak = 0, t3 = 0;
+  const cb3 = (): void => {
+    s3.doll.soleXZ('l', solo); s3.doll.soleXZ('r', sro);
+    const gL = footGrounded(s3.doll, 'l'), gR = footGrounded(s3.doll, 'r');
+    const ng = (gL ? 1 : 0) + (gR ? 1 : 0);
+    t3 += dt;
+    hL.push(Math.max(s3.doll.soleY('l'), s3.doll.soleY('r')));
+    const anyAir = !gL || !gR;
+    if (anyAir) peak = Math.max(peak, Math.max(s3.doll.soleY('l'), s3.doll.soleY('r')));
+    if (anyAir && !air) { air = true; peak = 0; }
+    if (!anyAir && air) { air = false; peaks.push(peak); }
+    if (ng === 2) nD++; else if (ng === 1) nS++; else nF++;
+    t3 += 0;
+  };
+  const r3 = runCaptureTeacher(sk, s3, { ...FB, ...cfg.p }, { dur: DUR, clockDriven: true, onFrame: cb3 });
+  // 脚高信号的主频（零穿越计数法）
+  let cross = 0;
+  const mh = hL.reduce((a, b) => a + b, 0) / Math.max(1, hL.length);
+  for (let i = 1; i < hL.length; i++) if ((hL[i - 1]! - mh) * (hL[i]! - mh) < 0) cross++;
+  const dom = cross / 2 / (hL.length * dt);
+  const sp = [...peaks].sort((a, b) => a - b);
+  const pm = sp.length ? sp[Math.floor(sp.length / 2)]! : 0;
+  const lowFrac = sp.length ? sp.filter((v) => v < 0.03).length / sp.length : 1;
+  const hz = r3.t > 0 ? (r3.steps / r3.t) : 0;
+  console.log('  ' + cfg.n.padEnd(18) + (hz.toFixed(2) + 'Hz').padStart(8)
+    + (pm * 1000).toFixed(0).padStart(13) + 'mm' + (lowFrac * 100).toFixed(0).padStart(14) + '%'
+    + (dom.toFixed(2) + 'Hz').padStart(12) + (nD / Math.max(1, nD + nS + nF) * 100).toFixed(0).padStart(8) + '%');
+}
+console.log('');
+console.log('  解读：离地峰值 <3 cm 的占比高 + 主频高 ⇒ 就是"高频抽搐"，');
+console.log('        奖励里的 MIN_CLEARANCE(3cm) 与 cadenceScore(1Hz) 正是为关住它设的。');
+
+console.log('');
 console.log(FAILS === 0 ? '★ gaitcycle 测量完成' : `★ gaitcycle 有 ${FAILS} 条 FAIL`);
 void brainParamCount;

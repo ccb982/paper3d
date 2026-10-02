@@ -14140,6 +14140,13 @@ var MIN_SWING = 0.28;
 var SETTLE_WIN = 0.45;
 var MOS_TARGET = 0.3;
 var MIN_CYCLE = 1;
+var MIN_CLEARANCE = 0.03;
+var TARGET_CYCLE = 1;
+function cadenceScore(medianCycleSec, target = TARGET_CYCLE, sigma = 0.45) {
+  if (!(medianCycleSec > 0)) return 0;
+  const d = (medianCycleSec - target) / sigma;
+  return Math.exp(-d * d);
+}
 var STEP_LEN_IN_FEET = [2, 3];
 function stepLenScore(stepLenM, footLenM) {
   if (footLenM <= 1e-6) return 0;
@@ -14684,6 +14691,14 @@ var Sim = class {
   hipTmp = new Float64Array(3);
   airL = 0;
   // 左脚连续腾空时间
+  airPeakL = 0;
+  airPeakR = 0;
+  // 本次腾空的最大脚底高度（离地高度判据）
+  cycTimes = [];
+  // 换支撑脚的时刻（节律门用）
+  flickerCount = 0;
+  // 被判定为接触抖动（离地不够）的次数（诊断）
+  lastAltT = 0;
   airR = 0;
   motorPrev;
   // 上一拍的马达目标（action rate）
@@ -14926,6 +14941,10 @@ var Sim = class {
     this.airL = 0;
     this.airR = 0;
     this.motorPrev.fill(0);
+    this.airPeakL = 0;
+    this.airPeakR = 0;
+    this.cycTimes = [];
+    this.lastAltT = 0;
     this.lastLoadFrac = [0.5, 0.5];
     this.accVelTrack = 0;
     this.accYaw = 0;
@@ -15159,8 +15178,14 @@ var Sim = class {
     if (altNow) this.altCount++;
     this.airL = gL ? 0 : this.airL + dt2;
     this.airR = gR ? 0 : this.airR + dt2;
+    if (gL) this.airPeakL = 0;
+    else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY("l"));
+    if (gR) this.airPeakR = 0;
+    else this.airPeakR = Math.max(this.airPeakR, this.doll.soleY("r"));
     const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
-    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt2;
+    const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
+    const cl = nGround === 1 ? gL ? clR : clL : nGround === 0 ? clL && clR : false;
+    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt2;
     const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
     const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
     this.accAlive += alive * dt2;
@@ -15171,10 +15196,18 @@ var Sim = class {
     const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
     const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
     if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt2)) {
-      this.altCount++;
-      this.accSwitchQ += phi(TARGET_VX - this.footVel);
+      const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;
+      if (airPeak < MIN_CLEARANCE) {
+        this.flickerCount++;
+      } else {
+        this.altCount++;
+        const tNow = this.tick / this.cfg.controlHz;
+        if (this.lastAltT > 0) this.cycTimes.push(tNow - this.lastAltT);
+        this.lastAltT = tNow;
+        this.accSwitchQ += phi(TARGET_VX - this.footVel);
+      }
     }
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt2;
+    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt2;
     if (nGround === 1) {
       const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
       const swingIsL = gL;
@@ -15391,8 +15424,17 @@ var Sim = class {
       tt.yawTrack = w.yawTrack * this.accYaw;
       tt.lateral = -w.lateral * this.accLat;
       tt.tiltRate = -w.tiltRate * this.accTilt;
-      tt.lift = w.lift * this.accLift * aliveAvg;
-      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
+      let cad = 1;
+      if (this.cycTimes.length >= 2) {
+        const sc = [...this.cycTimes].sort((a, b) => a - b);
+        cad = cadenceScore(sc[Math.floor(sc.length / 2)], TARGET_CYCLE);
+      }
+      const altGate = Math.min(1, this.altCount / 2);
+      const gate = altGate * cad;
+      tt.cadence = cad;
+      tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)] : 0;
+      tt.lift = w.lift * this.accLift * aliveAvg * cad;
+      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
       tt.altCount = this.altCount;
       tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
       tt.shiftRaw = this.accShift;
@@ -15411,7 +15453,7 @@ var Sim = class {
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
       const paceCap = 1 + Math.floor(this.accTicks / 1.5);
-      const altGate = Math.min(1, this.altCount / 2);
+      const altGate2 = altGate;
       const cap = (v, m) => v > m ? m : v;
       tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
@@ -15821,5 +15863,58 @@ for (const cfg of [
 console.log("");
 console.log("  \u76EE\u6807\uFF1A|WBAM| \u4E2D\u4F4D\u5F80 0.16\uFF08\u5E73\u8861\u57FA\u7EBF\uFF09\u538B\u3001\u5355\u652F\u6491 MoS \u5F80 0 \u6536\u3001\u53CC\u652F\u6491\u5360\u6BD4\u5F80 60~70% \u8D70");
 console.log('  \uFF08\u6587\u732E\uFF1A\u6210\u4EBA\u53CC\u652F\u6491 20%\u3001\u5E7C\u513F 30~40%\uFF1B\u6211\u4EEC\u6B64\u524D 82.7% \u21D2 \u6B64\u524D\u6839\u672C\u4E0D\u662F"\u4E00\u6B21\u8FC8\u4E00\u4E2A\u811A"\uFF09');
+console.log("");
+console.log('=== \u2464 \u62BD\u6410\u68C0\u6D4B\uFF08\u7528\u6237\uFF1A"\u73B0\u5728\u4F9D\u65E7\u662F\u9AD8\u9891\u62BD\u6410"\uFF09===\n');
+console.log('  \u5224\u636E\uFF1A\u2460 \u6362\u652F\u6491\u811A\u9891\u7387 \u2461 \u811A\u5E95\u9AD8\u5EA6\u4FE1\u53F7\u7684\u4E3B\u9891 \u2462 \u6BCF\u6B21"\u79BB\u5730"\u7684\u5CF0\u503C\u9AD8\u5EA6');
+console.log("  \u771F\u5B9E\u8FC8\u6B65\uFF1A\u9891\u7387 \u22481 Hz\u3001\u79BB\u5730\u5CF0\u503C \u22653 cm\u3001\u5355\u652F\u6491\u5360\u6BD4\u9AD8");
+console.log("  \u62BD\u6410\uFF1A\u9891\u7387 \u226B1 Hz\u3001\u79BB\u5730\u5CF0\u503C\u5F88\u5C0F\uFF08<3 cm\uFF09");
+console.log("");
+console.log("  " + "\u5BF9\u8C61".padEnd(20) + "\u6362\u811A\u9891\u7387  \u79BB\u5730\u5CF0\u503C\u4E2D\u4F4D  \u79BB\u5730\u5CF0\u503C<3cm\u5360\u6BD4  \u4E3B\u9891(\u811A\u9AD8)  \u53CC\u652F\u6491");
+for (const cfg of [
+  { n: "\u6355\u83B7\u70B9 teacher", p: {} },
+  { n: "CMP cm=0.15", p: { cmBalance: 0.15, cmBalanceD: 0.4 } }
+]) {
+  const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s3.begin(new Float32Array(s3.params.length));
+  const solo = new Float64Array(3), sro = new Float64Array(3);
+  const peaks = [];
+  const hL = [];
+  let nD = 0, nS = 0, nF = 0, air = false, peak = 0, t3 = 0;
+  const cb3 = () => {
+    s3.doll.soleXZ("l", solo);
+    s3.doll.soleXZ("r", sro);
+    const gL = footGrounded(s3.doll, "l"), gR = footGrounded(s3.doll, "r");
+    const ng = (gL ? 1 : 0) + (gR ? 1 : 0);
+    t3 += dt;
+    hL.push(Math.max(s3.doll.soleY("l"), s3.doll.soleY("r")));
+    const anyAir = !gL || !gR;
+    if (anyAir) peak = Math.max(peak, Math.max(s3.doll.soleY("l"), s3.doll.soleY("r")));
+    if (anyAir && !air) {
+      air = true;
+      peak = 0;
+    }
+    if (!anyAir && air) {
+      air = false;
+      peaks.push(peak);
+    }
+    if (ng === 2) nD++;
+    else if (ng === 1) nS++;
+    else nF++;
+    t3 += 0;
+  };
+  const r3 = runCaptureTeacher(sk, s3, { ...FB, ...cfg.p }, { dur: DUR, clockDriven: true, onFrame: cb3 });
+  let cross = 0;
+  const mh = hL.reduce((a, b) => a + b, 0) / Math.max(1, hL.length);
+  for (let i = 1; i < hL.length; i++) if ((hL[i - 1] - mh) * (hL[i] - mh) < 0) cross++;
+  const dom = cross / 2 / (hL.length * dt);
+  const sp = [...peaks].sort((a, b) => a - b);
+  const pm = sp.length ? sp[Math.floor(sp.length / 2)] : 0;
+  const lowFrac = sp.length ? sp.filter((v) => v < 0.03).length / sp.length : 1;
+  const hz = r3.t > 0 ? r3.steps / r3.t : 0;
+  console.log("  " + cfg.n.padEnd(18) + (hz.toFixed(2) + "Hz").padStart(8) + (pm * 1e3).toFixed(0).padStart(13) + "mm" + (lowFrac * 100).toFixed(0).padStart(14) + "%" + (dom.toFixed(2) + "Hz").padStart(12) + (nD / Math.max(1, nD + nS + nF) * 100).toFixed(0).padStart(8) + "%");
+}
+console.log("");
+console.log('  \u89E3\u8BFB\uFF1A\u79BB\u5730\u5CF0\u503C <3 cm \u7684\u5360\u6BD4\u9AD8 + \u4E3B\u9891\u9AD8 \u21D2 \u5C31\u662F"\u9AD8\u9891\u62BD\u6410"\uFF0C');
+console.log("        \u5956\u52B1\u91CC\u7684 MIN_CLEARANCE(3cm) \u4E0E cadenceScore(1Hz) \u6B63\u662F\u4E3A\u5173\u4F4F\u5B83\u8BBE\u7684\u3002");
 console.log("");
 console.log(FAILS === 0 ? "\u2605 gaitcycle \u6D4B\u91CF\u5B8C\u6210" : `\u2605 gaitcycle \u6709 ${FAILS} \u6761 FAIL`);

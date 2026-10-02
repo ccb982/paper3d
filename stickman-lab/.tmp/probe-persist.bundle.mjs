@@ -14140,6 +14140,13 @@ var MIN_SWING = 0.28;
 var SETTLE_WIN = 0.45;
 var MOS_TARGET = 0.3;
 var MIN_CYCLE = 1;
+var MIN_CLEARANCE = 0.03;
+var TARGET_CYCLE = 1;
+function cadenceScore(medianCycleSec, target = TARGET_CYCLE, sigma = 0.45) {
+  if (!(medianCycleSec > 0)) return 0;
+  const d = (medianCycleSec - target) / sigma;
+  return Math.exp(-d * d);
+}
 var STEP_LEN_IN_FEET = [2, 3];
 function stepLenScore(stepLenM, footLenM) {
   if (footLenM <= 1e-6) return 0;
@@ -14684,6 +14691,14 @@ var Sim = class {
   hipTmp = new Float64Array(3);
   airL = 0;
   // 左脚连续腾空时间
+  airPeakL = 0;
+  airPeakR = 0;
+  // 本次腾空的最大脚底高度（离地高度判据）
+  cycTimes = [];
+  // 换支撑脚的时刻（节律门用）
+  flickerCount = 0;
+  // 被判定为接触抖动（离地不够）的次数（诊断）
+  lastAltT = 0;
   airR = 0;
   motorPrev;
   // 上一拍的马达目标（action rate）
@@ -14926,6 +14941,10 @@ var Sim = class {
     this.airL = 0;
     this.airR = 0;
     this.motorPrev.fill(0);
+    this.airPeakL = 0;
+    this.airPeakR = 0;
+    this.cycTimes = [];
+    this.lastAltT = 0;
     this.lastLoadFrac = [0.5, 0.5];
     this.accVelTrack = 0;
     this.accYaw = 0;
@@ -15159,8 +15178,14 @@ var Sim = class {
     if (altNow) this.altCount++;
     this.airL = gL ? 0 : this.airL + dt;
     this.airR = gR ? 0 : this.airR + dt;
+    if (gL) this.airPeakL = 0;
+    else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY("l"));
+    if (gR) this.airPeakR = 0;
+    else this.airPeakR = Math.max(this.airPeakR, this.doll.soleY("r"));
     const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
-    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt;
+    const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
+    const cl = nGround === 1 ? gL ? clR : clL : nGround === 0 ? clL && clR : false;
+    this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt;
     const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
     const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
     this.accAlive += alive * dt;
@@ -15171,10 +15196,18 @@ var Sim = class {
     const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
     const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
     if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
-      this.altCount++;
-      this.accSwitchQ += phi(TARGET_VX - this.footVel);
+      const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;
+      if (airPeak < MIN_CLEARANCE) {
+        this.flickerCount++;
+      } else {
+        this.altCount++;
+        const tNow = this.tick / this.cfg.controlHz;
+        if (this.lastAltT > 0) this.cycTimes.push(tNow - this.lastAltT);
+        this.lastAltT = tNow;
+        this.accSwitchQ += phi(TARGET_VX - this.footVel);
+      }
     }
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
+    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 1) {
       const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
       const swingIsL = gL;
@@ -15391,8 +15424,17 @@ var Sim = class {
       tt.yawTrack = w.yawTrack * this.accYaw;
       tt.lateral = -w.lateral * this.accLat;
       tt.tiltRate = -w.tiltRate * this.accTilt;
-      tt.lift = w.lift * this.accLift * aliveAvg;
-      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
+      let cad = 1;
+      if (this.cycTimes.length >= 2) {
+        const sc = [...this.cycTimes].sort((a2, b2) => a2 - b2);
+        cad = cadenceScore(sc[Math.floor(sc.length / 2)], TARGET_CYCLE);
+      }
+      const altGate = Math.min(1, this.altCount / 2);
+      const gate = altGate * cad;
+      tt.cadence = cad;
+      tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a2, b2) => a2 - b2)[Math.floor(this.cycTimes.length / 2)] : 0;
+      tt.lift = w.lift * this.accLift * aliveAvg * cad;
+      tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
       tt.altCount = this.altCount;
       tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
       tt.shiftRaw = this.accShift;
@@ -15411,7 +15453,7 @@ var Sim = class {
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
       const paceCap = 1 + Math.floor(this.accTicks / 1.5);
-      const altGate = Math.min(1, this.altCount / 2);
+      const altGate2 = altGate;
       const cap = (v, m) => v > m ? m : v;
       tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
