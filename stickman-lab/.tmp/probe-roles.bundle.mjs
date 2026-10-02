@@ -16337,12 +16337,21 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const k = Math.floor(t / half);
       const wantL = k % 2 === 0;
       if (wantL !== stanceL) {
-        steps++;
-        lastSwitch = k * half;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        stanceL = wantL;
-        prevStance = stanceL ? 1 : 2;
+        const nl = footGrounded(sim.doll, "l"), nr = footGrounded(sim.doll, "r");
+        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const wantStanceLeft = wantL;
+        const ok = wantStanceLeft ? nl && fl >= fr : nr && fr >= fl;
+        if (ok) {
+          steps++;
+          lastSwitch = t;
+          stanceL = wantL;
+          prevStance = stanceL ? 1 : 2;
+          sim.doll.soleXZ("l", footBufL);
+          sim.doll.soleXZ("r", footBufR);
+          const landed = stanceL ? footBufL[0] : footBufR[0];
+          if (stanceL) plantL = landed;
+          else plantR = landed;
+        }
       }
     } else {
       const plantNow = stanceL ? plantL : plantR;
@@ -16393,12 +16402,13 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       const roleCell = isStance ? cStance : cSwing;
       const stanceLock = p.stanceLock ?? 0;
       let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = h + corr;
+      let hipCmd = isStance ? h + corr : h;
       if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
         const w = stanceLock;
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
         if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
+      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;
       setAxis(`hip_${side}`, hipCmd, jHip);
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
@@ -16416,7 +16426,9 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
         setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
       }
-      const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
+      const stanceZ = stanceL ? HIP_Z : -HIP_Z;
+      const shiftErr = stanceZ - com.z;
+      const latCorr = p.kLat * shiftErr + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
     opts.onFrame?.(t, stanceL, s);
@@ -16487,9 +16499,13 @@ var FB = {
   thresh: CAPTURE_GAIT.thresh,
   absorb: CAPTURE_GAIT.absorb,
   absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 0,
-  kLatV: 0,
-  kLatSwing: 0,
+  kLat: 2,
+  kLatV: 0.6,
+  kLatSwing: 0.1,
+  stancePush: 0.18,
+  ankleSwing: 12,
+  anklePush: 15,
+  ankleStance: 0,
   stanceLock: 0.6
 };
 console.log("=== \u9636\u6BB5 \xD7 \u89D2\u8272 \u59FF\u6001\u6307\u4EE4\u8868\uFF08\u76EE\u6807\u5168\u90E8\u6765\u81EA\u6587\u732E\uFF09===\n");
@@ -16618,4 +16634,38 @@ console.log("\n=== \u843D\u5730\u77AC\u95F4\u652F\u6491\u817F\u59FF\u6001\uFF08O
   \u89E6\u5730\u77AC\u95F4\u819D\u5C48\u5747\u503C ${(k0 / rows.length).toFixed(1)}\xB0\uFF08\u6587\u732E ~15\xB0\uFF0C\u4E0A\u9650 ABSORB_MAX=20\xB0\uFF09`);
     check("\u89E6\u5730\u77AC\u95F4\u652F\u6491\u819D\u5C48 \u2264 25\xB0\uFF08\u6CA1\u88AB\u538B\u584C\uFF09", k0 / rows.length <= 25, `${(k0 / rows.length).toFixed(1)}\xB0`);
   }
+}
+console.log("\n=== \u843D\u5730\u817F\u662F\u5426\u771F\u7684\u6210\u4E3A\u652F\u6491\u817F\uFF08\u6307\u4EE4 stanceL vs \u5B9E\u9645\u627F\u91CD\uFF09===\n");
+{
+  const s5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s5.begin(new Float32Array(s5.params.length));
+  const dl = new Float64Array(2);
+  let n = 0, cmdL = 0, agree = 0, disagree = 0;
+  const seq = [];
+  runCaptureTeacher(sk, s5, FB, {
+    dur: DUR,
+    clockDriven: true,
+    onFrame: (_t, stanceL) => {
+      const gL = footGrounded(s5.doll, "l"), gR = footGrounded(s5.doll, "r");
+      const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+      if (nG !== 1) {
+        const [fl0, fr0] = s5.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+        dl[0] = fl0;
+        dl[1] = fr0;
+        return;
+      }
+      n++;
+      s5.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      const fL = dl[0], fR = dl[1];
+      const realStanceL = fL > fR;
+      if (realStanceL === stanceL) agree++;
+      else disagree++;
+      if (stanceL) cmdL++;
+      if (seq.length < 24) seq.push(`${stanceL ? "L" : "R"}${realStanceL === stanceL ? "\u2713" : "\u2717"}`);
+    }
+  });
+  console.log(`  \u5355\u652F\u6491\u5E27 ${n}\uFF1A\u6307\u4EE4\u652F\u6491\u817F = \u5DE6 ${cmdL} / \u53F3 ${n - cmdL}`);
+  console.log(`  \u6307\u4EE4\u4E0E\u5B9E\u9645\u627F\u91CD\u4E00\u81F4 ${agree} / \u4E0D\u4E00\u81F4 ${disagree}  \u2192 \u4E00\u81F4\u7387 ${(100 * agree / Math.max(1, n)).toFixed(0)}%`);
+  console.log(`  \u5E8F\u5217\uFF08\u6307\u4EE4\u817F+\u662F\u5426\u5339\u914D\uFF09: ${seq.join(" ")}`);
+  check("\u6307\u4EE4\u652F\u6491\u817F\u4E0E\u5B9E\u9645\u627F\u91CD\u817F\u4E00\u81F4\u7387 \u226580%", agree / Math.max(1, n) >= 0.8, `${(100 * agree / Math.max(1, n)).toFixed(0)}%`);
 }

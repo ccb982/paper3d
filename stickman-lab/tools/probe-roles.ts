@@ -40,7 +40,7 @@ const DUR = 8;
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 0, kLatV: 0, kLatSwing: 0,
+  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 2.0, kLatV: 0.6, kLatSwing: 0.10, stancePush: 0.18, ankleSwing: 12, anklePush: 15, ankleStance: 0,
   stanceLock: 0.6,
 };
 
@@ -161,4 +161,34 @@ console.log('\n=== 落地瞬间支撑腿姿态（Oberg：初始接触膝屈 ~15�
     console.log(`\n  触地瞬间膝屈均值 ${(k0 / rows.length).toFixed(1)}°（文献 ~15°，上限 ABSORB_MAX=20°）`);
     check('触地瞬间支撑膝屈 ≤ 25°（没被压塌）', k0 / rows.length <= 25, `${(k0 / rows.length).toFixed(1)}°`);
   }
+}
+
+// ═══════ 迈出的腿落地后，真的在承重吗？（指令与实际接触是否一致）
+console.log('\n=== 落地腿是否真的成为支撑腿（指令 stanceL vs 实际承重）===\n');
+{
+  const s5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s5.begin(new Float32Array(s5.params.length));
+  const dl = new Float64Array(2);
+  let n = 0, cmdL = 0, agree = 0, disagree = 0;
+  const seq: string[] = [];
+  runCaptureTeacher(sk, s5, FB, {
+    dur: DUR, clockDriven: true,
+    onFrame: (_t: number, stanceL: boolean): void => {
+      const gL = footGrounded(s5.doll, 'l'), gR = footGrounded(s5.doll, 'r');
+      const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+      if (nG !== 1) { const [fl0, fr0] = s5.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+        dl[0] = fl0; dl[1] = fr0; return; }
+      n++;
+      s5.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+      const fL = dl[0]!, fR = dl[1]!;
+      const realStanceL = fL > fR;             // 实际承重多的那条腿
+      if (realStanceL === stanceL) agree++; else disagree++;
+      if (stanceL) cmdL++;
+      if (seq.length < 24) seq.push(`${stanceL ? 'L' : 'R'}${realStanceL === stanceL ? '✓' : '✗'}`);
+    },
+  });
+  console.log(`  单支撑帧 ${n}：指令支撑腿 = 左 ${cmdL} / 右 ${n - cmdL}`);
+  console.log(`  指令与实际承重一致 ${agree} / 不一致 ${disagree}  → 一致率 ${(100 * agree / Math.max(1, n)).toFixed(0)}%`);
+  console.log(`  序列（指令腿+是否匹配）: ${seq.join(' ')}`);
+  check('指令支撑腿与实际承重腿一致率 ≥80%', agree / Math.max(1, n) >= 0.8, `${(100 * agree / Math.max(1, n)).toFixed(0)}%`);
 }

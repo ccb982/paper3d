@@ -15,7 +15,7 @@
  */
 
 import type { Sim } from './sim';
-import { readCom, newCom, omegaAt } from './posture';
+import { readCom, newCom, omegaAt, footGrounded } from './posture';
 import { wholeBodyAngularMomentum } from './balance';
 import { ADJUST_MIN } from './gaitPhase';
 import { JOINT_ORDER, jointIndexByName, spineJointNames, type Skeleton } from './skeleton';
@@ -57,6 +57,10 @@ export interface CaptureParams {
   kLat: number;
   kLatV: number;
   kLatSwing: number;
+  /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
+   *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
+   *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
+  stancePush?: number;
   /** 捕获点走出支撑脚的换脚阈值（m），仅 clockDriven=false 时用 */
   thresh: number;
   /** 落地吸能强度（rad） */
@@ -208,12 +212,25 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       const half = p.T * 0.5;
       const k = Math.floor(t / half);
       const wantL = k % 2 === 0;
-      if (wantL !== stanceL) {                          // 跨过边界 ⇒ 换支撑脚
-        steps++;
-        lastSwitch = k * half;
-        if (stanceL) plantL = xi; else plantR = xi;    // 落脚点 = 换脚瞬间的捕获点
-        stanceL = wantL;
-        prevStance = stanceL ? 1 : 2;
+      if (wantL !== stanceL) {
+        // ★ 校验：**新支撑腿真的着地，且确实比另一条腿承重更多**，才算换成功。
+        //   没校验就翻 ⇒ 指令与物理脱节（实测右腿从未被指令）。
+        const nl = footGrounded(sim.doll, 'l'), nr = footGrounded(sim.doll, 'r');
+        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const wantStanceLeft = wantL;
+        const ok = wantStanceLeft ? (nl && fl >= fr) : (nr && fr >= fl);
+        if (ok) {
+          steps++;
+          lastSwitch = t;
+          stanceL = wantL;
+          prevStance = stanceL ? 1 : 2;
+          // 落脚点记**实测落点**（见下）
+          sim.doll.soleXZ('l', footBufL); sim.doll.soleXZ('r', footBufR);
+          const landed = stanceL ? footBufL[0]! : footBufR[0]!;
+          if (stanceL) plantL = landed; else plantR = landed;
+        }
+// ⚠ 校验没过就**保持原指令**（不翻转、不推进相位）——
+      //   不能 `continue`：那会跳过本拍剩下的全部伺服（含马达下发），人就不动了。
       }
     } else {
       // 状态触发：ξ 走出当前支撑脚的落点，且过了半个周期（防抖）才换脚
@@ -298,18 +315,24 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       // ⚠ 2026-10-02：把膝**直接**按指令表替换（不做 IK 混合）会更差（存活 3.85→1.37s），
       //   因为落点必须靠 IK。所以按表的正确用法是：**摆动腿用 IK，支撑腿在迈步相锁定**。
       let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = h + corr;
+      // ★★★ 用户 2026-10-02："先迈出去，再启动支撑的过程啊，迈出去的过程被覆盖了吗"
+      //   —— 是的，被覆盖了。旧写法 `hipCmd = h + corr` 把**平衡修正加在两条腿上**，
+      //      kPitch=2.544 时躯干一个俯仰就能往摆动腿的髋上叠几十度，把 IK 的迈步冲掉。
+      //   正确分工：**摆动腿只吃 IK**（纯迈步），`corr` 只给支撑腿。
+      //   （注：早期试过"corr 只给支撑腿"更差，但那是**归一化还坏着**的时候测的
+      //     ——膝只能动 1.6°，结论不可信；现在重测。）
+      let hipCmd = isStance ? h + corr : h;
       // ★★★ 支撑腿在「迈步相」锁定（用户："脚往前迈的时候，身体别动"）
       //   回读依据（npm run roles）：step 相支撑腿 **髋 ROM 38.5° / 膝 ROM 30.7°**，
       //   而指令表要求 髋 15° / 膝 15.7°（Oberg slow midstance）⇒ 实际是要求的 2 倍。
-      //   原因：`h` 来自 IK，而支撑脚的目标点 plantL/plantR 随身体移动，
-      //   于是"站着的腿"也在不断改角度 —— 这正是"脚身体同时动"。
-      //   修法：迈步相把支撑腿**混向该相的文献姿态**（不再跟随移动的 IK 目标）。
       if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
         const w = stanceLock;
         if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
         if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
       }
+      // ★★ 支撑腿蹬离（**必须在写马达之前**加！旧代码加在 setAxis 之后 ⇒ 完全无效）
+      //   支撑相后半段线性增大的髋伸驱动，把身体推过支撑脚。
+      if (isStance && s > 0.5) hipCmd += (p.stancePush ?? 0) * (s - 0.5) * 2;
       setAxis(`hip_${side}`, hipCmd, jHip);
       setAxis(`knee_${side}`, kneeCmd, jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
@@ -346,11 +369,28 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
         setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis('hip_r', dir * p.spineSync * 0.5 * sw, jHip, 1);
       }
-      // ★ 把 CMP 力矩加进**支撑腿的髋外展**（这是我们唯一能产生额状面力矩的通道，
-      //   因为没有踝关节）。cmRoll > 0 ⇒ 骨盆往 +z 挪（把上身质量推向支撑脚对侧…，
-      //   符号由实测调，见 tools/probe-gaitcycle 的开关对比）。
-      const latCorr = p.kLat * (com.z - (side === 'l' ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★★ 两个用户点名要调、但参数一直是 0（等于没接）的机制：
+      //
+      // ① **重心转移**（用户："这个重心转移…都得调"）
+      //    迈步前必须先把体重**横向挪到支撑脚上**，才能把摆动腿卸掉抬起来。
+      //    现在 `kLat/kLatV` 全是 0 ⇒ 从来没有主动转移 ⇒ 摆动腿抬不起来（离地峰值
+      //    长期只有 0~6mm）。文献：成人单支撑期 CoM 横向偏移 ≈ 步宽的一半（~7cm）。
+      //    `latCorr` = kLat·(com.z − 目标) + kLatV·com.vz：把 CoM 拉向**支撑脚**。
+      //
+      // ② **支撑腿保持发力 / 蹬离**（用户："迈出的腿保持发力"）
+      //    支撑腿不是"站住"，而是要**持续把身体推过支撑脚**（跖屈 + 髋伸）。
+      //    现在支撑腿的指令 = IK(落脚点) + corr，没有任何前送项 ⇒ 纯被动站立，
+      //    所以净位移为 0、越走越慢。
+      //    `pushDrive` = 支撑相后段线性增大的髋伸驱动，配合踝跖屈（anklePush）。
+      // ══════════════════════════════════════════════════════════════════════
+      const stanceZ = stanceL ? HIP_Z : -HIP_Z;
+      // ① 重心转移：把 CoM 拉向支撑脚（kLat/kLatV 现在必须非 0 才有用）
+      const shiftErr = stanceZ - com.z;
+      const latCorr = p.kLat * shiftErr + p.kLatV * com.vz
         + (isStance ? cmRoll : -cmRoll * 0.3);
+      // ② 支撑腿发力前送：支撑相后半段线性增大（s∈[0.5,1]），把身体推过支撑脚
+
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
     opts.onFrame?.(t, stanceL, s);
