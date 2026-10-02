@@ -996,14 +996,18 @@ export class Sim {
         comB.x, comB.vx, omegaAt(comB.y), supB.cx + supB.halfX, comB.z, comB.vz, supB.cz + supB.halfZ,
       );
       const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
-      // 脚的前伸（单调最大 ⇒ 不会被"来回蹭"骗）
+      // 脚的前伸：`footFar` = 单调最大值（诊断用）；`footDist` = **净位移**（真正的"移动距离"）
       const fx = this.footMaxX();
       if (fx > this.footFar) this.footFar = fx;
-      this.footVel += (Math.max(0, fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+      // ★ 速度用**净变化**（可正可负），原来用 `max(0, …)` 等于把后退也当成前进
+      this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
       this.lastFootX = fx;
       this.torsoDist = doll.torso().translation().x - this.startX;
       if (b.valid) {
-        this.footDist = Math.max(0, this.footFar - this.footStart);
+        // ★★ 距离 = **脚的净位移**，不是"最远够到哪儿"。
+        //   原来用单调最大值 `footFar - footStart`：一旦往前够出一次就永远不回来，
+        //   于是"扑出去 0.6 m 再倒回来"仍然记 0.6 m ⇒ 距离严重虚高（用户 2026-10-02 报告）。
+        this.footDist = fx - this.footStart;
         this.validTicks += dt;
         this.stepCycleT += dt;
       } else {
@@ -1092,8 +1096,10 @@ export class Sim {
     //     于是 velTrack 恒为 0、ES 完全看不到"往 +X 走"的梯度（实测 6 代只走 0.65m、velTrack=0）。
     // ★ 速度跟踪改用**脚的前伸速度**（用户："移动距离应该以脚的移动为准"）。
     //   原来用躯干速度 ⇒ 整个人往前扑就能拿满分（实测零输出基线躯干位移 0.65 m）。
-    //   `footVel` 是脚的最远前伸速度（单调最大 ⇒ 蹭不出速度）。
-    const tvx = -this.footVel, tvz = tv.z;
+    // ⚠⚠ 这里原来写成 `const tvx = -this.footVel` ⇒ `phi(TARGET_VX - tvx)` 变成
+    //   `phi(TARGET_VX + footVel)` ⇒ **脚动得越快分越高、而且没有上限**。
+    //   这一个符号错误同时毁掉了速度跟踪项、并直接喂了"高频抽搐"（快速蹭脚得分最高）。
+    const tvx = this.footVel, tvz = tv.z;
     const ang = torso.angvel();
     this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;   // 扣掉站桩基线
     this.accYaw += phi(-ang.y) * dt;

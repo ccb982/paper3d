@@ -932,7 +932,13 @@ export class Ragdoll {
    *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
    */
   footPoint(side: 'l' | 'r', out: Float64Array): void {
-    const key = side === 'l' ? 'shin_l' : 'shin_r';
+    // ★★ 踝开启时脚掌是**独立刚体**（`foot_l`/`foot_r`），必须量它，不能量小腿。
+    //   之前这里无条件用 `shin_l/shin_r` 的 cuboid 当"鞋底"，于是踝一开：
+    //   ① `soleY()` 量到的是**被缩短的小腿**底部（实测离地 +0.0536 m，纯属量错）；
+    //   ② 观测里的脚 x/z、离地高度门、步长计算**全部在读小腿** ⇒ 奖励也跟着错。
+    const footKey = side === 'l' ? 'foot_l' : 'foot_r';
+    const useFoot = this.indexByKey.has(footKey);
+    const key = useFoot ? footKey : (side === 'l' ? 'shin_l' : 'shin_r');
     const idx = this.indexByKey.get(key) ?? 0;
     const b = this.bodies[idx];
     const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === 'cuboid');

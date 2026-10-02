@@ -6384,6 +6384,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_GROUND_CORR = 0.0536;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -6487,7 +6488,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -13619,6 +13620,8 @@ var init_ragdoll = __esm({
       torqueScale: 1,
       kP: 48,
       kD: 1,
+      // 逐关节增益：默认空（全部用上面的全局值）
+      jointGain: {},
       posRefScale: 0.9,
       purgeJointCache: true,
       motorAlpha: MOTOR_ALPHA
@@ -14022,6 +14025,7 @@ var init_ragdoll = __esm({
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
+        const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
@@ -14058,7 +14062,8 @@ var init_ragdoll = __esm({
             } else {
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-              err = kP * (thRef - a) - kD * relL[k];
+              const ov = jg[j.name];
+              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -14126,7 +14131,9 @@ var init_ragdoll = __esm({
        *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
        */
       footPoint(side, out) {
-        const key = side === "l" ? "shin_l" : "shin_r";
+        const footKey = side === "l" ? "foot_l" : "foot_r";
+        const useFoot = this.indexByKey.has(footKey);
+        const key = useFoot ? footKey : side === "l" ? "shin_l" : "shin_r";
         const idx = this.indexByKey.get(key) ?? 0;
         const b = this.bodies[idx];
         const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");

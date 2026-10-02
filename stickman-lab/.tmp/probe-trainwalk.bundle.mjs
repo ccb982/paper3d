@@ -6426,6 +6426,7 @@ function buildSkeleton(cfg2 = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_GROUND_CORR = 0.0536;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -6529,7 +6530,7 @@ function buildSkeleton(cfg2 = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -13625,7 +13626,9 @@ var Ragdoll = class {
    *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
    */
   footPoint(side, out) {
-    const key = side === "l" ? "shin_l" : "shin_r";
+    const footKey = side === "l" ? "foot_l" : "foot_r";
+    const useFoot = this.indexByKey.has(footKey);
+    const key = useFoot ? footKey : side === "l" ? "shin_l" : "shin_r";
     const idx = this.indexByKey.get(key) ?? 0;
     const b = this.bodies[idx];
     const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");
@@ -15452,11 +15455,11 @@ var Sim = class {
       const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
       const fx = this.footMaxX();
       if (fx > this.footFar) this.footFar = fx;
-      this.footVel += (Math.max(0, fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+      this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
       this.lastFootX = fx;
       this.torsoDist = doll.torso().translation().x - this.startX;
       if (b.valid) {
-        this.footDist = Math.max(0, this.footFar - this.footStart);
+        this.footDist = fx - this.footStart;
         this.validTicks += dt;
         this.stepCycleT += dt;
       } else {
@@ -15518,7 +15521,7 @@ var Sim = class {
     this.accActRate += act2 * dt;
     this.accTau += tau2 * dt;
     this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
-    const tvx = -this.footVel, tvz = tv.z;
+    const tvx = this.footVel, tvz = tv.z;
     const ang = torso.angvel();
     this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
     this.accYaw += phi(-ang.y) * dt;

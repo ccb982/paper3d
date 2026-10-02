@@ -686,6 +686,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_GROUND_CORR = 0.0536;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -789,7 +790,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,

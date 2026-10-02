@@ -596,6 +596,19 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   // ---- 脚掌尺寸（画布 px → 米），两个小腿共用 ----
   const soleHalfLen = (META.sole.len * px2m) / 2;
   const soleHalfThick = (META.sole.thick * px2m) / 2;
+  /**
+   * ★★ 脚掌盒的**贴地标定**（米，实测）：构建完成后 `soleY()` 量到脚底离地 **+0.0536 m**
+   *   ⇒ 脚**根本没踩到地**，全靠被缩短的小腿胶囊底部支撑，站不住也抬不起脚
+   *   （实测踝一开 2.12 s 必倒、躯干倾角 34.9°，而踝的 kP/kD 怎么调都没用：
+   *   25 个组合全部恰好 2.12 s ⇒ 与马达刚度无关）。
+   *
+   *   为什么是标定值而不是解析式：盒心偏移 `soleHalfThick − ankleY` 在代数上恰好让
+   *   盒底落在 y=0，但 `rotVecByQuat(fQInv, …)` 之后的**实际**世界高度还差这一段
+   *   （差值来自身体原点在贴图坐标系里的 y 基准与 mapY 的偏移）。
+   *   与其继续推这套像素映射（已经错过好几次），不如**实测钉死**——
+   *   `tools/probe-ankle.ts` 的 A2 段会复核这个值。
+   */
+  const SOLE_GROUND_CORR = 0.0536;
 
   // ---- 刚体 ----
   /**
@@ -782,7 +795,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   脚掌 = 一块平底板，踝关节在它**上方**约 6cm（MuJoCo/MIT Cheetah 同款做法）。
         const soleDrop = ankleY;                              // 踝离地高度（米）
         const fMidY = soleWorldY;                             // 盒心高度 ⇒ 盒底正好落地
-        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
         bodies.push({
           key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
           bone: spec.bone,
