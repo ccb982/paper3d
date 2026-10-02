@@ -78,7 +78,12 @@ export function runCaptureTeacher(
   sk: Skeleton,
   sim: Sim,
   p: CaptureParams,
-  opts: { dur?: number; clockDriven?: boolean; record?: boolean; data?: { X: number[][]; A: number[][] } } = {},
+  opts: {
+    dur?: number; clockDriven?: boolean; record?: boolean;
+    data?: { X: number[][]; A: number[][] };
+    /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
+    onFrame?: (t: number, stanceL: boolean, s: number) => void;
+  } = {},
 ): TeacherResult {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
@@ -152,6 +157,7 @@ export function runCaptureTeacher(
       const latCorr = p.kLat * (com.z - (side === 'l' ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz;
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
+    opts.onFrame?.(t, stanceL, s);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，
     //    下一帧的观测才能反映它的效果 ⇒ 这里必须记录**这一帧的观测**而不是上一帧）。

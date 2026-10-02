@@ -31,7 +31,8 @@
     "capture": "node tools/run.mjs probe-capture",
     "capgen": "node tools/run.mjs probe-capgen",
     "clone": "node tools/run.mjs probe-clone",
-    "steptrain": "node tools/run.mjs probe-trainwalk 6"
+    "steptrain": "node tools/run.mjs probe-trainwalk 6",
+    "gaitref": "node tools/run.mjs probe-gaitref"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

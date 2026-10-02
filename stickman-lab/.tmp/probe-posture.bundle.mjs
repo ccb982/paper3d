@@ -14466,6 +14466,225 @@ var init_posture = __esm({
   }
 });
 
+// src/core/gaitRef.ts
+function monotoneAt(ref, t) {
+  const n = ref.length;
+  const x = (t % 1 + 1) % 1 * 100;
+  let i = 0;
+  while (i < n - 2 && x > ref[i + 1][0]) i++;
+  const [x0, y0] = ref[i];
+  const [x1, y1] = ref[i + 1];
+  const h = x1 - x0;
+  if (h <= 1e-9) return y0;
+  const u = (x - x0) / h;
+  const secant = (j) => {
+    const [xa, ya] = ref[j];
+    const [xb, yb] = ref[j + 1];
+    const hh = xb - xa;
+    return hh <= 1e-9 ? 0 : (yb - ya) / hh;
+  };
+  const d = (j) => {
+    if (j < 0 || j >= n - 1) return 0;
+    const s = secant(j);
+    const sa = j > 0 ? secant(j - 1) : s;
+    const sb = j + 2 < n ? secant(j + 1) : s;
+    if (s * sa <= 0 || s * sb <= 0) return 0;
+    const m = Math.min(Math.abs(s), 3 * Math.abs(sa), 3 * Math.abs(sb));
+    return s > 0 ? m : -m;
+  };
+  const u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * y0 + (u3 - 2 * u2 + u) * (d(i) * h) + (-2 * u3 + 3 * u2) * y1 + (u3 - u2) * (d(i + 1) * h);
+}
+function scoreLeg(t, hipRad, kneeRad, ampScale = AMP_SCALE_DEFAULT) {
+  const hipDeg = hipRad * R2D * RIG_SIGN.hip;
+  const kneeDeg = kneeRad * R2D * RIG_SIGN.knee;
+  const hipRef = hipRefDeg(t);
+  const kneeRef = kneeRefDeg(t);
+  const hipAmp = hipROM() * ampScale;
+  const kneeAmp = kneeROM() * ampScale;
+  const hipCtr = (hipRef + hipRefDeg(t + 0.5)) / 2;
+  const kneeCtr = (kneeRef + kneeRefDeg(t + 0.5)) / 2;
+  const hipTgt = hipCtr + (hipRef - hipCtr) * ampScale;
+  const kneeTgt = kneeCtr + (kneeRef - kneeCtr) * ampScale;
+  return {
+    hip: shapeScore(hipDeg, hipTgt, hipAmp),
+    knee: shapeScore(kneeDeg, kneeTgt, kneeAmp),
+    phase: (t % 1 + 1) % 1
+  };
+}
+function shapeScore(actual, target, amp) {
+  const e = Math.abs(actual - target);
+  const tol = TOLERANCE_DEG;
+  if (e <= tol) return 1;
+  const over = (e - tol) / Math.max(1e-6, amp);
+  return Math.exp(-3 * over * over);
+}
+var clamp01, D2R, GC_IC, GC_LR, GC_MS, GC_TS, GC_PS, GC_SW, GC_PEAK, GC_LATE, GC_END, KNEE_REF, HIP_REF, STANCE_FRAC, TOLERANCE_DEG, kneeRefDeg, hipRefDeg, RIG_SIGN, AMP_SCALE_DEFAULT, R2D, hipROM, kneeROM, LEAD_MIN, LEAD_MAX, PREACT_RATIO, PelvisFirstTracker;
+var init_gaitRef = __esm({
+  "src/core/gaitRef.ts"() {
+    "use strict";
+    clamp01 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
+    D2R = Math.PI / 180;
+    GC_IC = 0;
+    GC_LR = 10;
+    GC_MS = 30;
+    GC_TS = 50;
+    GC_PS = 62;
+    GC_SW = 70;
+    GC_PEAK = 78;
+    GC_LATE = 90;
+    GC_END = 100;
+    KNEE_REF = [
+      [GC_IC, 5],
+      [GC_LR, 18],
+      [GC_MS, 8],
+      [GC_TS, 20],
+      [GC_PS, 40],
+      [GC_SW, 58],
+      [GC_PEAK, 66],
+      [GC_LATE, 20],
+      [GC_END, 5]
+    ];
+    HIP_REF = [
+      [GC_IC, 25],
+      [GC_LR, 25],
+      [GC_MS, 2],
+      [GC_TS, -8],
+      [GC_PS, 15],
+      [GC_SW, 28],
+      [GC_PEAK, 30],
+      [GC_LATE, 27],
+      [GC_END, 25]
+    ];
+    STANCE_FRAC = 0.6;
+    TOLERANCE_DEG = 5;
+    kneeRefDeg = (t) => monotoneAt(KNEE_REF, t);
+    hipRefDeg = (t) => monotoneAt(HIP_REF, t);
+    RIG_SIGN = { hip: 1, knee: -1 };
+    AMP_SCALE_DEFAULT = 1;
+    R2D = 180 / Math.PI;
+    hipROM = () => 30 - -8;
+    kneeROM = () => 66 - 0;
+    LEAD_MIN = 0.05;
+    LEAD_MAX = 0.25;
+    PREACT_RATIO = 0.3;
+    PelvisFirstTracker = class {
+      /** 低通后的髋/膝角速度（rad/s），EMA */
+      hv = 0;
+      kv = 0;
+      hvMax = 0;
+      // 本步髋速度峰值（用来归一化"用力"）
+      // ★ 用**峰值时刻**而不是"启动时刻"：实测本 rig 髋/膝的 |相对角速度| 峰值有
+      //   11~19 rad/s，而阈值只要 0.35 rad/s —— 两者会在**同一控制拍内**先后越过，
+      //   于是"膝滞后髋"恒等于 0 ms，完全测不出东西（我第一版就是这么白测的）。
+      //   峰值时刻是同一个意思的稳健版本：一整步里髋的速度峰值应该**先于**膝出现。
+      hipPeakT = -1;
+      kneePeakT = -1;
+      hipPeakV = 0;
+      kneePeakV = 0;
+      t = 0;
+      /** 预激活采样窗（触地前 100 ms 内的髋速度均值） */
+      preAcc = 0;
+      preN = 0;
+      wasGround = true;
+      /** 本步的髋是否在**触地前**就已经动（文献①的核心指标） */
+      preActive = 0;
+      lastLead = 0;
+      // 最近一次完整测出的领先量（s）
+      leadSum = 0;
+      leadN = 0;
+      reset() {
+        this.hv = 0;
+        this.kv = 0;
+        this.hvMax = 0;
+        this.hipPeakT = -1;
+        this.kneePeakT = -1;
+        this.hipPeakV = 0;
+        this.kneePeakV = 0;
+        this.t = 0;
+        this.preAcc = 0;
+        this.preN = 0;
+        this.wasGround = true;
+        this.preActive = 0;
+        this.leadSum = 0;
+        this.leadN = 0;
+      }
+      /** 最近一次测出的"膝滞后髋"多少秒（正 = 髋先动，正确的方向） */
+      get leadSec() {
+        return this.lastLead;
+      }
+      /** 迄今测到的平均领先量 */
+      get meanLead() {
+        return this.leadN > 0 ? this.leadSum / this.leadN : 0;
+      }
+      get preActiveRatio() {
+        return this.preActive;
+      }
+      /**
+       * @param hipVel  髋矢状角速度（rad/s，正 = 屈曲方向）
+       * @param kneeVel 膝矢状角速度（rad/s）
+       * @param grounded 该脚是否着地
+       * @param onsetThr 启动阈值（rad/s），低于它算"静止"
+       */
+      step(hipVel, kneeVel, grounded, dt, peakThr = 0.8) {
+        const a = 1 - Math.exp(-dt / 0.03);
+        this.hv += (hipVel - this.hv) * a;
+        this.kv += (kneeVel - this.kv) * a;
+        this.t += dt;
+        this.hvMax = Math.max(this.hvMax, Math.abs(this.hv));
+        if (Math.abs(this.hv) > peakThr && Math.abs(this.hv) > Math.abs(this.hipPeakV)) {
+          this.hipPeakV = this.hv;
+          this.hipPeakT = this.t;
+        }
+        if (Math.abs(this.kv) > peakThr && Math.abs(this.kv) > Math.abs(this.kneePeakV)) {
+          this.kneePeakV = this.kv;
+          this.kneePeakT = this.t;
+        }
+        if (!grounded) {
+          this.preAcc += Math.abs(this.hv);
+          this.preN++;
+        }
+        if (grounded && !this.wasGround) {
+          if (this.preN > 0 && this.hvMax > 1e-6) {
+            this.preActive = this.preAcc / this.preN / this.hvMax;
+          }
+          if (this.hipPeakT >= 0 && this.kneePeakT >= 0) {
+            this.lastLead = this.kneePeakT - this.hipPeakT;
+            this.leadSum += this.lastLead;
+            this.leadN++;
+          }
+          this.t = 0;
+          this.hipPeakT = -1;
+          this.kneePeakT = -1;
+          this.hipPeakV = 0;
+          this.kneePeakV = 0;
+          this.hvMax = 0;
+          this.preAcc = 0;
+          this.preN = 0;
+          this.preActive = 0;
+        }
+        this.wasGround = grounded;
+      }
+      /**
+       * 逐帧"盆骨优先"分（0..1）：当前这一步的领先关系好不好。
+       * · 髋领先 50~250 ms ⇒ 满分（文献口径）
+       * · 膝先动（领先量 < 0）⇒ **负分**（这是要治的病）
+       * · 髋领先太多 ⇒ 衰减（脱节）
+       * · 还没测出领先量（还没触地）⇒ 用"预激活程度"给部分分
+       */
+      score() {
+        const pre = this.preActive > 0 ? clamp01(this.preActive / PREACT_RATIO) : 0;
+        if (this.leadN === 0) return pre * 0.5;
+        const L = this.lastLead;
+        if (L < 0) return -Math.min(1, -L / 0.2);
+        if (L < LEAD_MIN) return L / LEAD_MIN * 0.9;
+        if (L <= LEAD_MAX) return 1;
+        return Math.exp(-3 * ((L - LEAD_MAX) / 0.15) ** 2);
+      }
+    };
+  }
+});
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -14496,6 +14715,7 @@ var init_sim = __esm({
     init_ragdoll();
     init_brain();
     init_posture();
+    init_gaitRef();
     init_walkReward();
     init_skeleton();
     MOVE_SET = new Set(MOVE_JOINTS);
@@ -14560,6 +14780,9 @@ var init_sim = __esm({
        * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
        *   而不是走 —— 实测 jointMove=1.0 时最好个体 5 代只走 0.03 m，训练全部靠抖腿拿分。
        */
+      refHip: 1.5,
+      refKnee: 1.5,
+      pelvisFirst: 2,
       jointMove: 0.3,
       /** 逐关节倍率（UI 滑块） */
       moveScale: {},
@@ -14632,6 +14855,12 @@ var init_sim = __esm({
       gN1 = 0;
       gN2 = 0;
       // 接地脚数的帧数分布（诊断）
+      accRefHip = 0;
+      accRefKnee = 0;
+      accPelvis = 0;
+      // 参考分/盆骨优先的时间积分
+      pfL = new PelvisFirstTracker();
+      pfR = new PelvisFirstTracker();
       altCount = 0;
       accSwitchQ = 0;
       // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
@@ -14826,6 +15055,11 @@ var init_sim = __esm({
         this.gN0 = 0;
         this.gN1 = 0;
         this.gN2 = 0;
+        this.accRefHip = 0;
+        this.accRefKnee = 0;
+        this.accPelvis = 0;
+        this.pfL.reset();
+        this.pfR.reset();
         this.accLift = 0;
         this.accSingle = 0;
         this.accTicks = 0;
@@ -15090,6 +15324,35 @@ var init_sim = __esm({
           this.accSwitchQ += phi(TARGET_VX - this.doll.torso().linvel().x);
         }
         this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
+        if (nGround === 1) {
+          const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+          const swingIsL = gL;
+          const tSw = swingIsL ? ph + STANCE_FRAC : ph;
+          const rd = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
+          };
+          const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
+          const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
+          const a = scoreLeg(tSw, hipSw, kneeSw);
+          const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
+          this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
+          this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
+        }
+        {
+          const dt2 = dt;
+          const vel = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            doll.jointRelVel(i, this.jbuf);
+            return this.jbuf[2];
+          };
+          const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
+          this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
+          this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
+          if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt;
+        }
         this.accTicks += dt;
         let jSpd = 0, jMove = 0;
         for (let i2 = 0; i2 < doll.jointCount; i2++) {
@@ -15228,6 +15491,11 @@ var init_sim = __esm({
             nJm++;
           }
           tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
+          tt.refHip = w.refHip * this.accRefHip * aliveAvg;
+          tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg;
+          tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
+          tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
+          tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
           tt.alive = aliveAvg;
           tt.upright = w.upright * (this.accUpright - elapsed);
           tt.height = -w.height * this.accHeight;

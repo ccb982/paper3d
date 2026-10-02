@@ -21,6 +21,7 @@ import { BRAIN_SHAPE, brainParamCount, brainForward, type BrainShape } from './b
 import {
   dcm, dcmExcess, footGrounded, newCom, newSupport, omegaAt, readCom, readSupport,
 } from './posture';
+import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -193,6 +194,9 @@ export const W = {
    * ★ 权重必须**小于 velTrack 的潜在收益**（φ(1)−φ(0.5) = 0.63）：否则策略会去"原地抖"
    *   而不是走 —— 实测 jointMove=1.0 时最好个体 5 代只走 0.03 m，训练全部靠抖腿拿分。
    */
+  refHip: 1.5,
+  refKnee: 1.5,
+  pelvisFirst: 2.0,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
   moveScale: {} as Record<string, number>,
@@ -264,6 +268,8 @@ export class Sim {
   private accLift = 0;          // Σ_脚 min(1, 腾空/目标)·dt
   private accSingle = 0;        // 单脚支撑时间积分（×dt）
   private gN0 = 0; private gN1 = 0; private gN2 = 0;   // 接地脚数的帧数分布（诊断）
+  private accRefHip = 0; private accRefKnee = 0; private accPelvis = 0;   // 参考分/盆骨优先的时间积分
+  private pfL = new PelvisFirstTracker(); private pfR = new PelvisFirstTracker();
   private altCount = 0;
   private accSwitchQ = 0;         // Σ 换脚事件时的 φ(v*−v_x)（推进中的换脚才计价）
   private accShift = 0;          // ∫|载荷左−载荷右|dt（重心转移，0..1/秒）          // ★ 换支撑脚次数（"一次抬一条"的事件计数）
@@ -451,6 +457,8 @@ export class Sim {
     this.accEnergy = 0; this.accVel = 0; this.accClose = 0; this.accBalance = 0;
     // 走路奖励记账器（walkReward.ts）
     this.gN0 = 0; this.gN1 = 0; this.gN2 = 0;
+    this.accRefHip = 0; this.accRefKnee = 0; this.accPelvis = 0;
+    this.pfL.reset(); this.pfR.reset();
     this.accLift = 0; this.accSingle = 0; this.accTicks = 0; this.accMoveSum = 0; this.accAlive = 0;
     this.altCount = 0; this.accShift = 0; this.accSwitchQ = 0; this.doll.resetAlt();
     this.accJointMotion = 0; this.accTau = 0; this.accActRate = 0;
@@ -788,6 +796,45 @@ export class Sim {
     //   判据用**几何接触**（不是载荷）：这一步只要求"确实一脚离地"，能挣到分就行，
     //   质量更高的部分由上面的 `shift`（载荷转移）和 `accSwitchQ`（换支撑脚）负责。
     this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
+
+    // ══════ ★★ 文献步态参考分 + 盆骨优先（用户 2026-10-02）══════════════
+    //  只在**真单支撑帧**给分：站着不动 / 两脚都在地上 ⇒ 一分不给。
+    //  （这一条门控是关键的：之前"要动"项没门控时，站着扭关节反而是全局最优。）
+    if (nGround === 1) {
+      // 相位：摆动腿在 [STANCE_FRAC, 1)，支撑腿在 [0, STANCE_FRAC)。
+      // 用 Sim 的步态时钟推进，两腿天然相差半周期 ⇒ 这就是"交替"的实现。
+      const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+      const swingIsL = gL;                       // 右脚离地 ⇒ 左腿是支撑腿
+      const tSw = swingIsL ? ph + STANCE_FRAC : ph;
+      const rd = (name: string): number => {
+        const i = JOINT_ORDER.indexOf(name);
+        if (i < 0) return 0;
+        return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
+      };
+      const hipSw = rd(swingIsL ? 'hip_l' : 'hip_r'), kneeSw = rd(swingIsL ? 'knee_l' : 'knee_r');
+      const hipSt = rd(swingIsL ? 'hip_r' : 'hip_l'), kneeSt = rd(swingIsL ? 'knee_r' : 'knee_l');
+      const a = scoreLeg(tSw, hipSw, kneeSw);
+      const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
+      this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
+      this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
+    }
+    // ── 盆骨优先：髋先动、膝滞后；且髋在触地前就在动（文献 −100 ms 预激活）──
+    {
+      const dt2 = dt;
+      const vel = (name: string): number => {
+        const i = JOINT_ORDER.indexOf(name);
+        if (i < 0) return 0;
+        doll.jointRelVel(i, this.jbuf);
+        return this.jbuf[2]!;
+      };
+      // 用**摆动相的相位**给每条腿自己的步态时钟（两腿差半周期）
+      const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
+      this.pfL.step(vel('hip_l'), vel('knee_l'), gL, dt2);
+      this.pfR.step(vel('hip_r'), vel('knee_r'), gR, dt2);
+      // 只在"确实在交替"时计分（单支撑），并且要求髋领先才是正分
+      if (nGround === 1) this.accPelvis += ((this.pfL.score() + this.pfR.score()) * 0.5) * dt;
+      void ph2;
+    }
     this.accTicks += dt;
 
     //  ② 逐关节"要动"：骨盆(髋)和膝盖必须持续动，站桩得 0。
@@ -988,6 +1035,12 @@ export class Sim {
         jm += v; nJm++;
       }
       tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
+      // ★★ 文献步态参考分（gaitRef.ts）+ 盆骨优先
+      tt.refHip = w.refHip * this.accRefHip * aliveAvg;
+      tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg;
+      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
+      tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;   // 诊断：膝滞后髋多少秒（>0 才正确）
+      tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;   // 诊断：触地前髋预激活程度
       tt.alive = aliveAvg;   // 诊断：'站得住'的时间占比
       tt.upright = w.upright * (this.accUpright - elapsed);
       tt.height = -w.height * this.accHeight;
