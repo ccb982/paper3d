@@ -16,6 +16,7 @@
 
 import type { Sim } from './sim';
 import { readCom, newCom, omegaAt } from './posture';
+import { wholeBodyAngularMomentum } from './balance';
 import { JOINT_ORDER, type Skeleton } from './skeleton';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
@@ -45,6 +46,18 @@ export interface CaptureParams {
   absorb: number;
   /** 吸能时间常数（s） */
   absorbTau: number;
+  /**
+   * ★★ CMP / Moment Balance Strategy 增益（用户 2026-10-02："迈出脚后为啥不能自主调整平衡"）。
+   *   文献：Popovic, Hofmann & Herr (2004) —— 把 CoP 稳在支撑中心**并不能**保证平衡
+   *   （那等于一个静态不稳定、无执行器的倒立摆）；**唯一出路是产生关于质心的非零力矩**，
+   *   即 CMP ≠ ZMP（"Moment Balance Strategy"）。恢复力由"质心地面投影与 CMP 的间距"调制。
+   *   人在走路时 **CMP 全程被约束在支撑面内**（Herr 2008：CMP 与实测 CoP 距离仅足长 14±2%）。
+   *   我们的执行器：支撑腿的**髋外展**（把骨盆挪向支撑脚）+ **脊柱侧屈**（上身反向配重）。
+   *   这是落地后那一层"自主调整"，此前 teacher 里**完全没有**。
+   */
+  cmBalance: number;
+  /** 角动量变化率（dL/dt）的阻尼增益 */
+  cmBalanceD: number;
 }
 
 /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
@@ -95,6 +108,9 @@ export function runCaptureTeacher(
   let plantL = sim.doll.bodies[iL].translation().x;
   let plantR = sim.doll.bodies[iR].translation().x;
   let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
+  // CMP/Moment-balance 的角动量状态（关于质心，额状/矢状）
+  const lbuf = new Float64Array(3);
+  let prevLz = 0, prevLy = 0, hasL = false;
 
   const jHip = sk.joints.find((j) => j.name === 'hip_l')!;
   const jKnee = sk.joints.find((j) => j.name === 'knee_l')!;
@@ -145,6 +161,24 @@ export function runCaptureTeacher(
     const dtSw = t - lastSwitch;
     const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
+    // ★★ CMP / Moment Balance Strategy：主动产生**关于质心的力矩**，把全身角动量调回 0。
+    //   为什么必须主动做（Popovic, Hofmann & Herr 2004）：仅靠 CoP 位置控制不够 ——
+    //   把 ZMP 放在支撑中心等于一个"静态不稳定、无执行器的倒立摆"。
+    //   为什么用角动量当被控量（Herr 2008 / Sci Rep 2023）：正常走路 WBAM≈0，
+    //   段间抵消 70~95%；偏离它就说明身体在"整体转"，必须靠髋/脊柱配重来抵消。
+    //   实测（probe-gaitcycle）：未启用时单支撑 |WBAM| 中位 5.36 = 平衡基线 0.16 的 **33.5×**。
+    let cmRoll = 0;
+    if (p.cmBalance > 0) {
+      wholeBodyAngularMomentum(sim.doll, com, lbuf);
+      const lz = lbuf[2]!;                       // 额状面：绕竖直轴（左右转）
+      const ly = lbuf[1]!;                       // 矢状面：绕侧向轴（前扑后仰的转动）
+      const dlz = hasL ? (lz - prevLz) / dt : 0;
+      const dly = hasL ? (ly - prevLy) / dt : 0;
+      prevLz = lz; prevLy = ly; hasL = true;
+      // PD：力矩 ∝ −k·L − kd·dL/dt
+      cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02
+        - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
+    }
     for (const side of ['l', 'r'] as const) {
       const isStance = (side === 'l') === stanceL;
       const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
@@ -154,7 +188,11 @@ export function runCaptureTeacher(
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      const latCorr = p.kLat * (com.z - (side === 'l' ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz;
+      // ★ 把 CMP 力矩加进**支撑腿的髋外展**（这是我们唯一能产生额状面力矩的通道，
+      //   因为没有踝关节）。cmRoll > 0 ⇒ 骨盆往 +z 挪（把上身质量推向支撑脚对侧…，
+      //   符号由实测调，见 tools/probe-gaitcycle 的开关对比）。
+      const latCorr = p.kLat * (com.z - (side === 'l' ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz
+        + (isStance ? cmRoll : -cmRoll * 0.3);
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
     opts.onFrame?.(t, stanceL, s);
