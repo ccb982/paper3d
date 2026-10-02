@@ -14139,13 +14139,24 @@ function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
 var MIN_SWING = 0.28;
 var SETTLE_WIN = 0.45;
 var MOS_TARGET = 0.3;
-var MIN_CYCLE = 0.9;
+var MIN_CYCLE = 1;
+var STEP_LEN_IN_FEET = [2, 3];
+function stepLenScore(stepLenM, footLenM) {
+  if (footLenM <= 1e-6) return 0;
+  const f = stepLenM / footLenM;
+  const [lo, hi] = STEP_LEN_IN_FEET;
+  if (f >= lo && f <= hi) return 1;
+  const d = f < lo ? lo - f : f - hi;
+  return Math.max(0, 1 - d / 1.5);
+}
 var mosBand = (mos) => {
   if (mos < 0) return -clamp012(-mos / 0.25);
   if (mos <= MOS_TARGET) return clamp012(mos / MOS_TARGET);
   return Math.exp(-2 * ((mos - MOS_TARGET) / 0.4) ** 2);
 };
 var StepSettleTracker = class _StepSettleTracker {
+  /** 脚长（m）：步长目标"2~3 个脚长"要用（见 STEP_LEN_IN_FEET） */
+  footLenM = 0.22;
   // ⚠ 初始必须是 **settle**（"正站着"），不是 swing。
   //   我第一版初始化成 'swing'，结果一条**从不离地**的腿被当成"刚落地、摆动 0 秒"
   //   ⇒ 站桩的镇定器被判了 26 次"摆动太快"（实测），奖励完全反了。
@@ -14179,6 +14190,12 @@ var StepSettleTracker = class _StepSettleTracker {
   // 距上次结算过了多久（用于最小步间隔）
   accCredit = 0;
   // 累计结算分（渐进塑形，进适应度用）
+  // ★ 步长记账：**只在结算步上累计**（稳不住 ⇒ 步长一分不给，这是"先稳定步幅"的落点）
+  accLenScore = 0;
+  lenSum = 0;
+  lenSumN = 0;
+  prevTouchX = NaN;
+  lastStepLen = 0;
   tooFast = 0;
   settled = 0;
   unstableSteps = 0;
@@ -14216,6 +14233,17 @@ var StepSettleTracker = class _StepSettleTracker {
   get creditSum() {
     return this.accCredit;
   }
+  /** ★ 累计"结算步的步长分"（只有稳住且间隔够的步才计入） */
+  get lenCredit() {
+    return this.accLenScore;
+  }
+  /** 结算步的平均步长（m），诊断用 */
+  get meanStepLen() {
+    return this.lenSumN > 0 ? this.lenSum / this.lenSumN : 0;
+  }
+  get settledCount() {
+    return this.lenSumN;
+  }
   /** 诊断快照：为什么没结算（一行看完状态机） */
   debug() {
     return `phase=${this.phase} swung=${this.swungTicks} tSwing=${(this.tSwing * 1e3).toFixed(0)}ms tSettle=${(this.tSettle * 1e3).toFixed(0)}ms mosEnd=${(this.mosEnd * 1e3).toFixed(0)}mm settled=${this.settled} tooFast=${this.tooFast} flights=${this.flights} air=${this.airRun} gnd=${this.gndRun}`;
@@ -14239,7 +14267,7 @@ var StepSettleTracker = class _StepSettleTracker {
    * @param dt
    * @returns 本拍该脚拿到的分（带符号；负 = 罚）
    */
-  step(grounded, mosX, dt2) {
+  step(grounded, mosX, dt2, footX = NaN) {
     if (grounded) {
       this.gndRun++;
       this.airRun = 0;
@@ -14274,6 +14302,10 @@ var StepSettleTracker = class _StepSettleTracker {
         return 0;
       }
       this.flights++;
+      if (Number.isFinite(footX)) {
+        if (Number.isFinite(this.prevTouchX)) this.lastStepLen = footX - this.prevTouchX;
+        this.prevTouchX = footX;
+      }
       this.mosAtTouch = mosX;
       if (this.mosAtTouch < 0) this.unstableSteps++;
       this.phase = "settle";
@@ -14301,6 +14333,9 @@ var StepSettleTracker = class _StepSettleTracker {
       if (!cycleOk) this.tooFast++;
       if (okStable && cycleOk) {
         if (this.stepT >= MIN_SWING) this.settled++;
+        this.lenSum += this.lastStepLen;
+        this.lenSumN++;
+        this.accLenScore += stepLenScore(this.lastStepLen, this.footLenM);
         this.credit = paceFrac * (cleanStable ? 1 : 0.7);
         if (this.mosAtTouch < 0) this.recovered++;
       } else {
@@ -14503,6 +14538,20 @@ var W = {
   stepPace: 1.5,
   moS: 0.5,
   imbalance: 2,
+  /**
+   * ★★ 步幅分：**只对"结算过的步"付费**（稳住了、间隔够），目标是 **2~3 个脚长**
+   *   （Usherwood 2023 碰撞力学：S = 2 或 3 个脚长；原文明确"短于 2 或长于 3 个脚长
+   *   的步态显得别扭、也很少观察到"）。
+   *   ★ 这就是"先稳定步幅"的落点：抽搐式的高速蹭脚拿不到任何步长分，
+   *   速度再快也换不来钱。
+   */
+  stepLen: 3,
+  /**
+   * ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系；综述见
+   *   *Control of human gait stability through foot placement*：人主要靠**摆动相的
+   *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
+   */
+  placement: 1,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -14587,6 +14636,7 @@ var Sim = class {
   accSettle = 0;
   accPace = 0;
   accMoS = 0;
+  accPlace = 0;
   mosMinSeen = Infinity;
   mosSum = 0;
   mosN = 0;
@@ -14848,6 +14898,7 @@ var Sim = class {
     this.accSettle = 0;
     this.accPace = 0;
     this.accMoS = 0;
+    this.accPlace = 0;
     this.bal.reset();
     this.footFar = 0;
     this.footDist = 0;
@@ -15203,9 +15254,16 @@ var Sim = class {
         this.mosSum += mos.x;
         this.mosN++;
       }
-      const gL2 = this.ssL.step(gL, mos.x, dt2);
-      const gR2 = this.ssR.step(gR, mos.x, dt2);
+      const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
+      const gL2 = this.ssL.step(gL, mos.x, dt2, fXl);
+      const gR2 = this.ssR.step(gR, mos.x, dt2, fXr);
       this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt2;
+      if (nGround === 1) {
+        const xi = sup2.cx + sup2.halfX - mos.x;
+        const footX = gL ? this.footTmpR[0] : this.footTmpL[0];
+        const err = Math.abs(footX - xi);
+        this.accPlace += (err <= 0.05 ? 1 : Math.max(0, 1 - (err - 0.05) / 0.25)) * dt2;
+      }
       if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt2;
     }
     this.accTicks += dt2;
@@ -15346,16 +15404,23 @@ var Sim = class {
         nJm++;
       }
       tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
-      tt.refHip = w.refHip * this.accRefHip * aliveAvg;
-      tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg;
-      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
+      tt.refHip = w.refHip * this.accRefHip * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg * Math.min(1, this.altCount / 2);
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
       const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
       const paceCap = 1 + Math.floor(this.accTicks / 1.5);
-      tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
+      const altGate = Math.min(1, this.altCount / 2);
+      const cap = (v, m) => v > m ? m : v;
+      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
-      tt.moS = w.moS * this.accMoS * aliveAvg;
+      tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
+      const lenSum = this.ssL.lenCredit + this.ssR.lenCredit;
+      tt.stepLen = cap(w.stepLen * lenSum * aliveAvg * altGate, 4);
+      tt.meanStepLen = (this.ssL.meanStepLen + this.ssR.meanStepLen) / 2;
+      tt.settledCount = this.ssL.settledCount + this.ssR.settledCount;
+      tt.placement = cap(w.placement * this.accPlace * aliveAvg * altGate, 2);
       const bstat = this.bal.stats;
       const imbMean = bstat.ticks > 0 ? bstat.accImb / bstat.ticks : 0;
       const badHeadFrac = bstat.ticks > 0 ? bstat.badHead / bstat.ticks : 0;

@@ -56,7 +56,28 @@ export const MOS_TARGET = 0.30;
  *   成人、速度更低（McNair 2004）—— 婴儿式步态就是"慢、晃、每步都停一下"。
  *   默认 0.9 s ⇒ ≤1.1 步/秒（成人约 1.8~2.0 步/秒，所以这确实更"婴儿"）。
  */
-export const MIN_CYCLE = 0.9;
+export const MIN_CYCLE = 1.0;
+/**
+ * ★★ 步幅目标：**2~3 个脚长**。
+ *   文献：Usherwood 2023（*The collisional geometry of economical walking*,
+ *   J R Soc Interface）用碰撞力学推出：一步长度 S = 2（点质量模型）或 3（无限转动惯量
+ *   模型）个**脚长**，并明确指出"明显短于 2 脚长或长于 3 脚长的步态显得别扭、
+ *   也很少观察到"。
+ *   用户 2026-10-02："先稳定步幅"——步幅必须**有目标**，否则"越快越好"会让策略抽搐。
+ *   脚长用实测值（rig 的鞋底长约 0.22 m，见 src/data/limbAxes.json）。
+ */
+export const STEP_LEN_IN_FEET = [2.0, 3.0] as const;
+
+/** 把实际步长换算成"脚长"单位的目标分：落在 [2,3] 得 1，偏离按脚长数衰减 */
+export function stepLenScore(stepLenM: number, footLenM: number): number {
+  if (footLenM <= 1e-6) return 0;
+  const f = stepLenM / footLenM;
+  const [lo, hi] = STEP_LEN_IN_FEET;
+  if (f >= lo && f <= hi) return 1;
+  // 偏离按"脚长"归一，超出 1.5 个脚长就得 0
+  const d = f < lo ? lo - f : f - hi;
+  return Math.max(0, 1 - d / 1.5);
+}
 /** MoS 带内得分高于下界的比例（带内线性上升，到 MOS_TARGET 满分） */
 export const mosBand = (mos: number): number => {
   if (mos < 0) return -clamp01(-mos / 0.25);          // 不稳：罚（越负越罚）
@@ -67,6 +88,8 @@ export const mosBand = (mos: number): number => {
 
 /** 单腿的迈步-稳住跟踪器。 */
 export class StepSettleTracker {
+  /** 脚长（m）：步长目标"2~3 个脚长"要用（见 STEP_LEN_IN_FEET） */
+  footLenM = 0.22;
   // ⚠ 初始必须是 **settle**（"正站着"），不是 swing。
   //   我第一版初始化成 'swing'，结果一条**从不离地**的腿被当成"刚落地、摆动 0 秒"
   //   ⇒ 站桩的镇定器被判了 26 次"摆动太快"（实测），奖励完全反了。
@@ -91,6 +114,12 @@ export class StepSettleTracker {
   private credit = 0;                 // 本步结算出的分
   private tSinceLast = 1e9;           // 距上次结算过了多久（用于最小步间隔）
   private accCredit = 0;              // 累计结算分（渐进塑形，进适应度用）
+  // ★ 步长记账：**只在结算步上累计**（稳不住 ⇒ 步长一分不给，这是"先稳定步幅"的落点）
+  private accLenScore = 0;
+  private lenSum = 0;
+  private lenSumN = 0;
+  private prevTouchX = NaN;
+  private lastStepLen = 0;
   private tooFast = 0;
   private settled = 0;
   private unstableSteps = 0;
@@ -111,6 +140,11 @@ export class StepSettleTracker {
   get settleRatio(): number { return this.settled; }
   /** 累计结算分（渐进塑形，0..~1 每次） */
   get creditSum(): number { return this.accCredit; }
+  /** ★ 累计"结算步的步长分"（只有稳住且间隔够的步才计入） */
+  get lenCredit(): number { return this.accLenScore; }
+  /** 结算步的平均步长（m），诊断用 */
+  get meanStepLen(): number { return this.lenSumN > 0 ? this.lenSum / this.lenSumN : 0; }
+  get settledCount(): number { return this.lenSumN; }
   /** 诊断快照：为什么没结算（一行看完状态机） */
   debug(): string {
     return `phase=${this.phase} swung=${this.swungTicks} tSwing=${(this.tSwing * 1000).toFixed(0)}ms`
@@ -129,7 +163,7 @@ export class StepSettleTracker {
    * @param dt
    * @returns 本拍该脚拿到的分（带符号；负 = 罚）
    */
-  step(grounded: boolean, mosX: number, dt: number): number {
+  step(grounded: boolean, mosX: number, dt: number, footX = NaN): number {
     // ---- 接触去抖：连续 2 帧才算真的换了状态 ----
     if (grounded) { this.gndRun++; this.airRun = 0; } else { this.airRun++; this.gndRun = 0; }
     const air = this.airRun >= StepSettleTracker.MIN_RUN;      // 真的离地了
@@ -160,6 +194,11 @@ export class StepSettleTracker {
         return 0;
       }
       this.flights++;
+      // ★ 步长 = 本次落点 − 上次落点（**脚的世界 x**，与"距离以脚为准"同一口径）
+      if (Number.isFinite(footX)) {
+        if (Number.isFinite(this.prevTouchX)) this.lastStepLen = footX - this.prevTouchX;
+        this.prevTouchX = footX;
+      }
       this.mosAtTouch = mosX;
       if (this.mosAtTouch < 0) this.unstableSteps++;
       this.phase = 'settle';
@@ -203,6 +242,10 @@ export class StepSettleTracker {
         // ★ 计数只认"步速达标"的步（诊断 + 罚分用）；但**适应度看到的分是渐进的**，
         //   短摆动也能拿 paceFrac 那一部分 —— 这样 ES 才有坡可爬（见上面的注释）。
         if (this.stepT >= MIN_SWING) this.settled++;
+        // ★★ 步幅只在**结算步**上计价，目标 2~3 个脚长（Usherwood 2023）。
+        //   抽搐式的高速蹭脚：步长再大也拿不到这一分。
+        this.lenSum += this.lastStepLen; this.lenSumN++;
+        this.accLenScore += stepLenScore(this.lastStepLen, this.footLenM);
         this.credit = paceFrac * (cleanStable ? 1 : 0.7);
         if (this.mosAtTouch < 0) this.recovered++;
       } else {

@@ -123,6 +123,14 @@ for (const r of rows) {
     const t = lastTerms;
     void t;
   }
+  // ★ 直接验算：terms.total 是否等于所有分项之和？不等就是记账 bug。
+  {
+    const vs = Object.entries(r.terms).filter(([k]) => k !== 'total')
+      .reduce((a, [, v]) => a + (typeof v === 'number' ? v : 0), 0);
+    const d = (r.terms.total ?? 0) - vs;
+    console.log('      ↳ 记账: total=' + (r.terms.total ?? 0).toFixed(2)
+      + ' Σ分项=' + vs.toFixed(2) + ' 差=' + d.toFixed(2) + (Math.abs(d) > 0.01 ? '  ★★ 不一致！' : ''));
+  }
   {
     const parts = Object.entries(r.terms).filter(([, v]) => typeof v === 'number' && Math.abs(v) > 0.005)
       .sort((a, b) => Math.abs(b[1] as number) - Math.abs(a[1] as number))

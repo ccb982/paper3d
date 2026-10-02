@@ -203,6 +203,20 @@ export const W = {
   stepPace: 1.5,
   moS: 0.5,
   imbalance: 2.0,
+  /**
+   * ★★ 步幅分：**只对"结算过的步"付费**（稳住了、间隔够），目标是 **2~3 个脚长**
+   *   （Usherwood 2023 碰撞力学：S = 2 或 3 个脚长；原文明确"短于 2 或长于 3 个脚长
+   *   的步态显得别扭、也很少观察到"）。
+   *   ★ 这就是"先稳定步幅"的落点：抽搐式的高速蹭脚拿不到任何步长分，
+   *   速度再快也换不来钱。
+   */
+  stepLen: 3.0,
+  /**
+   * ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系；综述见
+   *   *Control of human gait stability through foot placement*：人主要靠**摆动相的
+   *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
+   */
+  placement: 1.0,
   minCycle: 0.9,
   jointMove: 0.3,
   /** 逐关节倍率（UI 滑块） */
@@ -278,7 +292,8 @@ export class Sim {
   private accRefHip = 0; private accRefKnee = 0; private accPelvis = 0;   // 参考分/盆骨优先的时间积分
   private pfL = new PelvisFirstTracker(); private pfR = new PelvisFirstTracker();
   private ssL = new StepSettleTracker(); private ssR = new StepSettleTracker();
-  private accSettle = 0; private accPace = 0; private accMoS = 0; private mosMinSeen = Infinity; private mosSum = 0; private mosN = 0;
+  private accSettle = 0; private accPace = 0; private accMoS = 0; private accPlace = 0;
+  private mosMinSeen = Infinity; private mosSum = 0; private mosN = 0;
   private settleDebug = '';
   private bal = new BalanceJudge();
   private lbuf = new Float64Array(3);
@@ -515,7 +530,7 @@ export class Sim {
     this.accRefHip = 0; this.accRefKnee = 0; this.accPelvis = 0;
     this.pfL.reset(); this.pfR.reset();
     this.ssL.reset(); this.ssR.reset();
-    this.accSettle = 0; this.accPace = 0; this.accMoS = 0;
+    this.accSettle = 0; this.accPace = 0; this.accMoS = 0; this.accPlace = 0;
     this.bal.reset();
     this.footFar = 0; this.footDist = 0; this.torsoDist = 0; this.footVel = 0;
     this.lastFootX = 0; this.imbAcc = 0; this.validTicks = 0; this.stepCycleT = 0; this.mosMinSeen = Infinity; this.mosSum = 0; this.mosN = 0;
@@ -941,9 +956,21 @@ export class Sim {
         this.mosMinSeen = Math.min(this.mosMinSeen, mos.x);
         this.mosSum += mos.x; this.mosN++;
       }
-      const gL2 = this.ssL.step(gL, mos.x, dt);
-      const gR2 = this.ssR.step(gR, mos.x, dt);
+      // 步长要用**脚的世界 x**（与"距离以脚为准"同一口径）
+      const fXl = this.footTmpL[0]!, fXr = this.footTmpR[0]!;
+      const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
+      const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
       this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+      // ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系）。
+      //   ξ = com.x + vx/ω（mos.x = supEdge − ξ ⇒ 可直接反解），半宽取 0.14 m。
+      //   只在**摆动相**计分（落地那一刻最有意义），容差 0.05 m（比"落点该在哪"的
+      //   生理精度宽松一档：我们只有位置型 PD 电机，不是人）。
+      if (nGround === 1) {
+        const xi = sup2.cx + sup2.halfX - mos.x;
+        const footX = gL ? this.footTmpR[0]! : this.footTmpL[0]!;
+        const err = Math.abs(footX - xi);
+        this.accPlace += (err <= 0.05 ? 1 : Math.max(0, 1 - (err - 0.05) / 0.25)) * dt;
+      }
       // 摆动太短的罚（负分）
       if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
     }
@@ -1151,9 +1178,9 @@ export class Sim {
       }
       tt.jointMove = nJm > 0 ? w.jointMove * (jm / nJm) * aliveAvg : 0;
       // ★★ 文献步态参考分（gaitRef.ts）+ 盆骨优先
-      tt.refHip = w.refHip * this.accRefHip * aliveAvg;
-      tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg;
-      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg;
+      tt.refHip = w.refHip * this.accRefHip * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.refKnee = w.refKnee * this.accRefKnee * aliveAvg * Math.min(1, this.altCount / 2);
+      tt.pelvisFirst = w.pelvisFirst * this.accPelvis * aliveAvg * Math.min(1, this.altCount / 2);
       tt.hipLeadSec = (this.pfL.meanLead + this.pfR.meanLead) / 2;   // 诊断：膝滞后髋多少秒（>0 才正确）
       tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;   // 诊断：触地前髋预激活程度
       // ★★ 按**结算过的步数**计价，不是时间积分：
@@ -1167,9 +1194,27 @@ export class Sim {
       //   直接淹没其余所有项（而它只是"迈得太快"这一个维度）。
       //   封顶口径：每 1.5 秒最多算 1 次 ⇒ 6 秒回合最多 4 次。
       const paceCap = 1 + Math.floor(this.accTicks / 1.5);
-      tt.settle = w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg;
+      // ★★★ 三个防"白拿分"的闸门，一次说清（都是本轮实测逼出来的）：
+      //  ① altGate：没有真正的换支撑脚（载荷 >70% 从一只脚换到另一只脚）之前不给分。
+      //     这把尺子在 velTrack 上已被验证（零输出的 velTrack = 0.000）。
+      //  ② cap：这些项都是"时间积分 × 权重"，6 秒能堆到几十上分
+      //     （refHip 1.5 + refKnee 1.5 + pelvisFirst 2.0 + settle 3.0 + moS 0.5 = 8.5/s）。
+      //     不封顶的话"零输出滑 0.65 m"能拿 26~33 分，把代价项（力矩/能量/不平衡）
+      //     全部淹没 —— 站立类门禁（posture/gait/verify）就是这么被顶穿的。
+      //  ③ 封顶后新增的走路加分有确定上界（约 13.5 分），与代价项同量级。
+      const altGate = Math.min(1, this.altCount / 2);
+      const cap = (v: number, m: number): number => (v > m ? m : v);
+      tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
       tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
-      tt.moS = w.moS * this.accMoS * aliveAvg;
+      tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
+      // ★★ 步幅分：只对"结算过的步"付费，目标是 2~3 个脚长（Usherwood 2023）。
+      //   ★ 这是"先稳定步幅"的落点：抽搐式的高速蹭脚**拿不到任何步长分**。
+      const lenSum = this.ssL.lenCredit + this.ssR.lenCredit;
+      tt.stepLen = cap(w.stepLen * lenSum * aliveAvg * altGate, 4);
+      tt.meanStepLen = (this.ssL.meanStepLen + this.ssR.meanStepLen) / 2;   // 诊断
+      tt.settledCount = this.ssL.settledCount + this.ssR.settledCount;      // 诊断
+      // ★ 落点分：摆动脚落点 vs 捕获点 ξ（髋外展肌在摆动相调节落点）
+      tt.placement = cap(w.placement * this.accPlace * aliveAvg * altGate, 2);
       // ★ 不平衡扣分：WBAM 偏离 + 头塌帧
       const bstat = this.bal.stats;
       const imbMean = bstat.ticks > 0 ? bstat.accImb / bstat.ticks : 0;
