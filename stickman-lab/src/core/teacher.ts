@@ -38,7 +38,7 @@ export const HIP_Z = 0.007;
  *   （实测前伸 3 mm；`reach`、踝指令全救不了，因为不是能力问题而是无解）。
  *   改成 0.307 后最大水平步长 ≈ √(0.828² − 0.889²) 无解…… 见下方 sanity：
  */
-export const HIP_DY = 0.125;   // ★ 2026-10-02 重标定：CoM.y 实测 0.964，虚拟髋应 ≈0.839（= 腿长 0.827 + 脚高 0.012）
+export const HIP_DY = 0.18;    // ★ 重标（消除 com.y 正反馈后）：存活 1.60s / 2 次换脚 / 离地 15mm
 /** ★ 落地吸能上限（rad）= 20°。Oberg 初始接触膝屈 ~15°、负重反应峰 ~20°。
  *  超过它落地就会把支撑腿压塌（实测 57° ⇒ 脚撑不住）。 */
 export const ABSORB_MAX = 0.35;
@@ -151,7 +151,7 @@ export function runCaptureTeacher(
     dur?: number; clockDriven?: boolean; record?: boolean;
     data?: { X: number[][]; A: number[][] };
     /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
-    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>) => void;
+    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number>) => void;
   } = {},
 ): TeacherResult {
   const dur = opts.dur ?? 8;
@@ -209,7 +209,17 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   /** ★ joint/axis → owner 的本拍记录 */
   const ownerLog = new Map<string, string>();
   const angLog: Record<string, number> = {};   // ★ 每次 setAxis 的原始角度（排查"指令为何全 0"）
+  const dbgLog: Record<string, number> = {};   // ★ 摆动腿指令追踪
   const hipDy = p.hipDy ?? HIP_DY;   // ★ 可标定的 IK 虚拟髋点落差
+  /**
+   * ★★★ IK 虚拟髋高必须锚在**固定参考**上，不能用瞬时 `com.y`。
+   *   旧式 `hipY = com.y − HIP_DY` 是一个**正反馈**：
+   *     身体沉一点 → com.y 降 → 虚拟髋跟着降 → 目标距离变短 → 腿折得更多 → 沉更多 …
+   *   实测就是它把躯干从 1.429 m 一路拽到 1.214 m（正好撞上 `height` 摔倒阈值），
+   *   而且**所有参数消融都无效**（改什么都不影响这个下沉）。
+   *   修法：第一次采到 CoM 时锁存 `hipYRef = com.y − HIP_DY`，之后一直用它。
+   */
+  let hipYRef = -1;
   /** ★ 换脚诊断轨迹（probe-arch 打印）：每 0.08 s 一条 */
   interface SwapDiag { t: number; s: number; swing: 'L' | 'R'; landed: boolean; ready: boolean; sole: number }
   const swapTrace: SwapDiag[] = [];
@@ -355,9 +365,10 @@ const swingY = s < SHIFT_FRAC
     for (const side of ['l', 'r'] as const) {
       const isStance = (side === 'l') === stanceL;
       const hipX = com.x + (side === 'l' ? HIP_Z : -HIP_Z);
+      if (hipYRef < 0) hipYRef = com.y - hipDy;   // ★ 锁存虚拟髋高（避免 com.y 正反馈把身体拽沉）
       const [h, k] = isStance
-        ? ik(hipX, com.y - hipDy, side === 'l' ? plantL : plantR, 0.012)
-        : ik(hipX, com.y - hipDy, swingX, swingY);
+        ? ik(hipX, hipYRef, side === 'l' ? plantL : plantR, 0.012)
+        : ik(hipX, hipYRef, swingX, swingY);
       // ⚠ 2026-10-02 记录：这里**曾经**试过"平衡修正只给支撑腿"（摆动腿不加 corr），
       //   **实测更差**（存活 3.85→2.43s、双支撑 35%→71%）。保留原样。
       //
@@ -460,7 +471,8 @@ const swingY = s < SHIFT_FRAC
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
     // owner 已在各写入点打标
-    opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog);
+    dbgLog.s = +s.toFixed(3); dbgLog.swingY = +swingY.toFixed(4); dbgLog.swingX = +swingX.toFixed(3); dbgLog.stanceX = +(stanceL ? footBufL[0]! : footBufR[0]!).toFixed(3); dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+    opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，
     //    下一帧的观测才能反映它的效果 ⇒ 这里必须记录**这一帧的观测**而不是上一帧）。

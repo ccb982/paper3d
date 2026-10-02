@@ -6300,10 +6300,12 @@ __export(skeleton_exports, {
   assertMassBudget: () => assertMassBudget,
   buildSkeleton: () => buildSkeleton,
   invQuatOf: () => invQuatOf,
+  jointIndexByName: () => jointIndexByName,
   quatToRotVec: () => quatToRotVec,
   restQuatOf: () => restQuatOf,
   restVisualQuatOf: () => restVisualQuatOf,
-  rotVecByQuat: () => rotVecByQuat
+  rotVecByQuat: () => rotVecByQuat,
+  spineJointNames: () => spineJointNames
 });
 function restQuatOf(tiltRad, yawRad) {
   const ht = tiltRad / 2, hy = yawRad / 2;
@@ -6349,6 +6351,15 @@ function rotVecByQuat(q, v2) {
     vy + qw * ty + (qz * tx - qx * tz),
     vz + qw * tz + (qx * ty - qy * tx)
   ];
+}
+function jointIndexByName(sk2, name) {
+  for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
+  return JOINT_ORDER.indexOf(name);
+}
+function spineJointNames(sk2) {
+  const out = [];
+  for (const j of sk2.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  return out.sort();
 }
 function anchorPx(name, jm) {
   const a = LIMB_AXES.anchors[name];
@@ -13783,8 +13794,9 @@ var init_ragdoll = __esm({
         for (let i = 0; i < sk2.joints.length; i++) {
           for (let k = 0; k < 3; k++) {
             const s = this.opt.posRefScale;
-            this.refPos[i * 3 + k] = s * Math.max(0, sk2.joints[i].maxRad[k]);
-            this.refNeg[i * 3 + k] = s * Math.max(0, -sk2.joints[i].minRad[k]);
+            const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+            this.refPos[i * 3 + k] = s * span;
+            this.refNeg[i * 3 + k] = s * span;
           }
         }
       }
@@ -15044,8 +15056,8 @@ var STEP_MIN, ADJUST_MIN, ADJUST_MOS_TOL, W_SHAPE, W_MOS, W_PLACE, W_PELVIS, Gai
 var init_gaitPhase = __esm({
   "src/core/gaitPhase.ts"() {
     "use strict";
-    STEP_MIN = 0.28;
-    ADJUST_MIN = 0.7;
+    STEP_MIN = 0.13;
+    ADJUST_MIN = 0.9;
     ADJUST_MOS_TOL = 0;
     W_SHAPE = 0.35;
     W_MOS = 0.3;
@@ -15177,38 +15189,39 @@ var init_gaitPhase = __esm({
           return;
         }
         if (nGround === 2) {
+          if (this.phase === "adjust") {
+            this.tAdjust += dt;
+            if (mosX > 0) {
+              this.mosAcc += mosX;
+              this.mosN++;
+            }
+            this.mosEnd = mosX;
+            this.placeAcc += place;
+            this.placeN++;
+            this.shapeAcc += shape;
+            this.shapeN++;
+            this.pelvisAcc += pelvis;
+            if (this.tAdjust >= ADJUST_MIN && this.mosN > 0) {
+              const mosAvg = this.mosAcc / this.mosN;
+              const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
+              const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
+              const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
+              const pelvisAvg = this.pelvisAcc;
+              const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
+              this.accCredit += credit;
+              this.nAdjustOk++;
+              this.adjSum += this.tAdjust;
+              this.lastCredit = credit;
+              this.phase = "both";
+              this.tStep = 0;
+              this.tAdjust = 0;
+            }
+            return;
+          }
           this.phase = "both";
           this.tStep = 0;
           this.tAdjust = 0;
           this.lastCredit = 0;
-          return;
-        }
-        if (this.phase === "adjust") {
-          this.tAdjust += dt;
-          this.mosAcc += mosX;
-          this.mosN++;
-          this.mosEnd = mosX;
-          this.placeAcc += place;
-          this.placeN++;
-          this.shapeAcc += shape;
-          this.shapeN++;
-          this.pelvisAcc += pelvis;
-          if (this.tAdjust >= ADJUST_MIN) {
-            const mosAvg = this.mosN > 0 ? this.mosAcc / this.mosN : 0;
-            const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
-            const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
-            const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
-            const pelvisAvg = this.pelvisAcc;
-            const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
-            this.lastCredit = credit;
-            this.accCredit += credit;
-            this.nAdjustOk++;
-            this.adjSum += this.tAdjust;
-            this.phase = "both";
-            this.tStep = 0;
-            this.tAdjust = 0;
-            this.lastCredit = credit;
-          }
           return;
         }
         this.phase = "both";
@@ -15375,7 +15388,7 @@ var init_commander = __esm({
   "src/core/commander.ts"() {
     "use strict";
     GaitCommander = class {
-      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1, jitter: 0.15, waistShare: 0.5 }) {
+      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
         this.o = o;
         this.seq = seq;
         let s = 12345;
@@ -15482,7 +15495,7 @@ __export(sim_exports, {
   Sim: () => Sim,
   W: () => W
 });
-var MOVE_SET, WALK_REWARD_KEYS, DEFAULT_SIM, W, ZERO2, Sim;
+var SETTLE_HOLD, MOVE_SET, WALK_REWARD_KEYS, DEFAULT_SIM, W, ZERO2, Sim;
 var init_sim = __esm({
   "src/core/sim.ts"() {
     "use strict";
@@ -15498,6 +15511,7 @@ var init_sim = __esm({
     init_commander();
     init_walkReward();
     init_skeleton();
+    SETTLE_HOLD = 0.45;
     MOVE_SET = new Set(MOVE_JOINTS);
     WALK_REWARD_KEYS = [
       // 前进 / 姿态
@@ -15787,6 +15801,8 @@ var init_sim = __esm({
       cmd = new GaitCommander();
       /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
       servoReady = true;
+      /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
+      settleHold = 0;
       get servoReadyDbg() {
         return this.servoReady;
       }
@@ -16485,8 +16501,10 @@ var init_sim = __esm({
           const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
           if (this.mod.active("balance", this.gp.now, nGround, null))
             this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
-          const readyNow = nGround >= 2 || mos.x > 0.02;
-          this.servoReady = this.servoReady || readyNow;
+          const stableNow = nGround >= 2 && mos.x > 0.02;
+          if (stableNow) this.settleHold += dt;
+          else this.settleHold = 0;
+          this.servoReady = this.settleHold >= SETTLE_HOLD;
           if (nGround === 1) {
             const xi = sup2.cx + sup2.halfX - mos.x;
             const footX = gL ? this.footTmpR[0] : this.footTmpL[0];

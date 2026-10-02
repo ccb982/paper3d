@@ -6294,10 +6294,12 @@ __export(skeleton_exports, {
   assertMassBudget: () => assertMassBudget,
   buildSkeleton: () => buildSkeleton,
   invQuatOf: () => invQuatOf,
+  jointIndexByName: () => jointIndexByName,
   quatToRotVec: () => quatToRotVec,
   restQuatOf: () => restQuatOf,
   restVisualQuatOf: () => restVisualQuatOf,
-  rotVecByQuat: () => rotVecByQuat
+  rotVecByQuat: () => rotVecByQuat,
+  spineJointNames: () => spineJointNames
 });
 function restQuatOf(tiltRad, yawRad) {
   const ht = tiltRad / 2, hy = yawRad / 2;
@@ -6343,6 +6345,15 @@ function rotVecByQuat(q, v) {
     vy + qw * ty + (qz * tx - qx * tz),
     vz + qw * tz + (qx * ty - qy * tx)
   ];
+}
+function jointIndexByName(sk2, name) {
+  for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
+  return JOINT_ORDER.indexOf(name);
+}
+function spineJointNames(sk2) {
+  const out = [];
+  for (const j of sk2.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  return out.sort();
 }
 function anchorPx(name, jm) {
   const a = LIMB_AXES.anchors[name];
@@ -13777,8 +13788,9 @@ var init_ragdoll = __esm({
         for (let i = 0; i < sk2.joints.length; i++) {
           for (let k = 0; k < 3; k++) {
             const s = this.opt.posRefScale;
-            this.refPos[i * 3 + k] = s * Math.max(0, sk2.joints[i].maxRad[k]);
-            this.refNeg[i * 3 + k] = s * Math.max(0, -sk2.joints[i].minRad[k]);
+            const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+            this.refPos[i * 3 + k] = s * span;
+            this.refNeg[i * 3 + k] = s * span;
           }
         }
       }

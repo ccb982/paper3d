@@ -40,7 +40,7 @@ const DUR = 8;
 const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 2.0, kLatV: 0.6, kLatSwing: 0.10, stancePush: 0.18, ankleSwing: 12, anklePush: 15, ankleStance: 0,
+  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, ankleSwing: 12, anklePush: 15, ankleStance: 0,
   stanceLock: 0.6,
 };
 

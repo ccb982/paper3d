@@ -2,7 +2,7 @@
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { buildSkeleton, DEFAULT_CONFIG } from '../src/core/skeleton';
+import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
 import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
@@ -22,7 +22,7 @@ const FB: CaptureParams = {
   T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
   kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
   absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 2.0, kLatV: 0.6, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
+  kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
   ankleSwing: 12, anklePush: 15, ankleStance: 0,
 };
 
@@ -77,13 +77,13 @@ console.log('\n=== 摔倒解剖（重心转移 + 迈腿顺序已加，还是 0.4
 console.log('\n=== HIP_DY 标定（虚拟髋高 = CoM.y − HIP_DY；腿长 0.827m）===\n');
 console.log('  目标：站立时躯干高 ≈ 1.429 m（改动前的基准），离地峰值要 ≥30mm');
 console.log('  HIP_DY   虚拟髋高   躯干高    离地峰值   存活     换脚');
-for (const dy of [0.10, 0.20, 0.307, 0.38, 0.42, 0.46]) {
+for (const dy of [0.05, 0.10, 0.125, 0.15, 0.20, 0.25, 0.30]) {
   const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
   s3.begin(new Float32Array(s3.params.length));
   let peak = 0;
   const c3 = (): void => { peak = Math.max(peak, Math.max(s3.doll.soleY('l'), s3.doll.soleY('r'))); };
   const r3 = runCaptureTeacher(sk, s3, { ...FB, hipDy: dy }, { dur: 4, clockDriven: true, onFrame: c3 });
-  const hipY = 1.208 - dy;
+  const hipY = 0.964 - dy;   // ★ CoM.y 实测 0.964（不是躯干高 1.429）
   console.log(`  ${dy.toFixed(3)}    ${hipY.toFixed(3)}m    ${s3.doll.torso().translation().y.toFixed(3)}    `
     + `${(peak * 1000).toFixed(0).padStart(5)}mm   ${r3.t.toFixed(2)}s   ${r3.steps}`);
 }
@@ -183,4 +183,164 @@ console.log('\n=== IK 可达性（腿长常数 vs 实际目标距离）===\n');
   } });
   console.log(`\n  腿长常数 LEG = ${LEG.toFixed(3)}m（大腿 ${LA} + 小腿 ${LB}，来自 limbAxes 锚点换算）`);
   console.log(`  ★ 若"目标距离 > 腿长" ⇒ IK 求不出解、腿被压到极限 ⇒ 躯干下沉（实测 1.429→1.21）。`);
+}
+
+// ═══════ 离地高度：lift × 踝 × 重心转移期占比 ═══════
+console.log('\n=== 离地高度扫描（需要 ≥30mm 才能算"真迈一步"）===\n');
+console.log('  lift   SHIFT  踝    离地峰   存活    换脚');
+for (const c of [
+  { lf: 0.26, sf: 0.25, an: 12, aw: 15, n: '当前' },
+  { lf: 0.26, sf: 0.25, an: 0, aw: 0, n: '踝关' },
+  { lf: 0.35, sf: 0.25, an: 12, aw: 15, n: 'lift↑' },
+  { lf: 0.35, sf: 0.25, an: 0, aw: 0, n: 'lift↑+踝关' },
+  { lf: 0.45, sf: 0.25, an: 0, aw: 0, n: 'lift↑↑+踝关' },
+  { lf: 0.35, sf: 0.10, an: 0, aw: 0, n: '转移期10%+踝关' },
+  { lf: 0.35, sf: 0.40, an: 0, aw: 0, n: '转移期40%+踝关' },
+]) {
+  const s9 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 4, gaitHz: 1 / FB.T });
+  s9.begin(new Float32Array(s9.params.length));
+  let pk = 0;
+  const r9 = runCaptureTeacher(sk, s9, { ...FB, lift: c.lf, ankleSwing: c.an, anklePush: c.aw }, { dur: 4, clockDriven: true,
+    onFrame: (): void => { pk = Math.max(pk, Math.max(s9.doll.soleY('l'), s9.doll.soleY('r'))); } });
+  console.log(`  ${c.lf.toFixed(2)}   ${c.sf.toFixed(2)}   ${c.an > 0 ? '开' : '关'}   ${(pk * 1000).toFixed(0).padStart(4)}mm  ${r9.t.toFixed(2)}s   ${r9.steps}   ${c.n}`);
+}
+
+// ═══════ 摆动腿到底被命令成什么样 ═══════
+console.log('\n=== 摆动腿指令追踪（s / swingY / swingX / 实际髋膝角）===\n');
+{
+  const sa = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 2, gaitHz: 1 / FB.T });
+  sa.begin(new Float32Array(sa.params.length));
+  let printed = 0;
+  runCaptureTeacher(sk, sa, FB, { dur: 2, clockDriven: true, onFrame: (_t, _s, _p, _ol, _co, al, dl): void => {
+    if (!dl || printed > 9) return;
+    printed++;
+    const sole = Math.max(sa.doll.soleY('l'), sa.doll.soleY('r'));
+    console.log(`  s=${dl.s}  swingY=${dl.swingY}m  swingX=${dl.swingX}m  支撑脚X=${dl.stanceX}m  虚拟髋=${dl.hipY}m`
+      + `  |  实际离地 ${(sole * 1000).toFixed(0)}mm  髋指令 ${al?.['hip_r/2']}/${al?.['hip_l/2']}  膝指令 ${al?.['knee_r/2']}/${al?.['knee_l/2']}`);
+  } });
+}
+
+// ═══════ 存活优先寻优（IK 已修好，这次消融/寻优才有意义）═══════
+console.log('\n=== 存活寻优（坐标下降；目标：先站得住，再谈迈步）===\n');
+{
+  const evalP = (p: Partial<CaptureParams>): { t: number; steps: number; pk: number; torso: number } => {
+    const sx = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6, gaitHz: 1 / FB.T });
+    sx.begin(new Float32Array(sx.params.length));
+    let pk = 0;
+    const r = runCaptureTeacher(sk, sx, { ...FB, ...p }, { dur: 6, clockDriven: true,
+      onFrame: (): void => { pk = Math.max(pk, Math.max(sx.doll.soleY('l'), sx.doll.soleY('r'))); } });
+    return { t: r.t, steps: r.steps, pk, torso: sx.doll.torso().translation().y };
+  };
+  const AX: { k: keyof CaptureParams; g: number[] }[] = [
+    { k: 'kPitch', g: [-2.0, -1.2, -0.8, -0.4, 0, 0.4, 0.8, 1.6, 2.544] },
+    { k: 'kRate', g: [-1.4, -0.8, -0.4, 0, 0.25, 0.542, 1.0] },
+    { k: 'kLat', g: [0, 0.5, 1.0, 2.0, 3.5] },
+    { k: 'kLatV', g: [0, 0.3, 0.6, 1.2] },
+    { k: 'absorb', g: [0, 0.2, 0.4, 0.7, 1.0] },
+    { k: 'stancePush', g: [0, 0.05, 0.12, 0.18, 0.28] },
+    { k: 'stanceLock', g: [0, 0.3, 0.6, 0.9] },
+    { k: 'lift', g: [0.15, 0.20, 0.26, 0.32] },
+  ];
+  const cost = (r: { t: number; steps: number; pk: number; torso: number }): number =>
+    -r.t * 2 - r.steps * 0.6 + Math.max(0, 0.03 - r.pk) * 40 + Math.max(0, 1.35 - r.torso) * 8;
+  let best: Partial<CaptureParams> = {};
+  let bc = cost(evalP(best));
+  const b0 = evalP(best);
+  console.log(`  起点：存活 ${b0.t.toFixed(2)}s 换脚 ${b0.steps} 离地峰 ${(b0.pk * 1000).toFixed(0)}mm cost=${bc.toFixed(2)}`);
+  for (let round = 0; round < 3; round++) {
+    let imp = false;
+    for (const ax of AX) for (const v of ax.g) {
+      const c = cost(evalP({ ...best, [ax.k]: v }));
+      if (c < bc - 1e-3) { bc = c; best = { ...best, [ax.k]: v }; imp = true;
+        console.log(`  r${round} ${String(ax.k).padEnd(11)}=${String(v).padEnd(6)} cost=${c.toFixed(2)}`); }
+    }
+    if (!imp) break;
+  }
+  const bF = evalP(best);
+  console.log(`\n  最优：存活 ${bF.t.toFixed(2)}s  换脚 ${bF.steps}  离地峰 ${(bF.pk * 1000).toFixed(0)}mm  躯干高 ${bF.torso.toFixed(3)}`);
+  console.log(`  参数：${JSON.stringify(best)}`);
+}
+
+// ═══════ 正反馈消除后，重新标定 HIP_DY ═══════
+console.log('\n=== HIP_DY 重标（正反馈已消除）===\n');
+console.log('  HIP_DY   锁定虚拟髋高   存活     换脚  离地峰  躯干高(终)');
+for (const dy of [0.15, 0.18, 0.22, 0.25, 0.28]) {
+  const sb = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
+  sb.begin(new Float32Array(sb.params.length));
+  let pk = 0;
+  const rb = runCaptureTeacher(sk, sb, { ...FB, hipDy: dy }, { dur: 5, clockDriven: true,
+    onFrame: (): void => { pk = Math.max(pk, Math.max(sb.doll.soleY('l'), sb.doll.soleY('r'))); } });
+  console.log(`  ${dy.toFixed(2).padStart(6)}   ${(0.964 - dy).toFixed(3)}m       ${rb.t.toFixed(2)}s   ${rb.steps}    ${(pk * 1000).toFixed(0).padStart(3)}mm  ${sb.doll.torso().translation().y.toFixed(3)}`);
+}
+
+// ═══════ 摆动脚：指令高度 vs 实际高度 ═══════
+console.log('\n=== 摆动脚 指令 vs 实际（接地问题）===\n');
+{
+  const sc = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 2.4, gaitHz: 1 / FB.T });
+  sc.begin(new Float32Array(sc.params.length));
+  console.log('   t(s)   s    摆动腿  指令高度   实际高度   差值     膝指令   膝实际');
+  let n = 0;
+  runCaptureTeacher(sk, sc, FB, { dur: 2.4, clockDriven: true, onFrame: (_t, stanceL, _s, _ol, _co, al, dl): void => {
+    if (!dl || n++ % 8 !== 0) return;
+    const sw = stanceL ? 'R' : 'L';
+    const sole = stanceL ? sc.doll.soleY('r') : sc.doll.soleY('l');
+    const ki = JOINT_ORDER.indexOf(stanceL ? 'knee_r' : 'knee_l');
+    const kAct = sc.doll.jointAngle(ki) * 180 / Math.PI;
+    console.log(`  ${String(dl.s).padStart(5)}  ${sw}   ${Number(dl.swingY).toFixed(3)}m   ${sole.toFixed(3)}m    ${(sole - Number(dl.swingY)).toFixed(3).padStart(6)}`
+      + `   ${(Number(al?.[`knee_${sw.toLowerCase()}/2`]) * 180 / Math.PI).toFixed(1).padStart(6)}°  ${kAct.toFixed(1).padStart(6)}°`);
+  } });
+}
+
+// ═══════ 膝的力矩权限：单独给屈曲指令能到多少 ═══════
+console.log('\n=== 膝权限测试（站立时单给屈曲指令）===\n');
+console.log('  指令θ_ref   实际膝角    误差     脚高度');
+{
+  const ki = JOINT_ORDER.indexOf('knee_r');
+  for (const wantDeg of [-30, -60, -90, -120, -145]) {
+    const sd = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 1.2 });
+    sd.begin(new Float32Array(sd.params.length));
+    const out = new Float32Array(sd.params.length);
+    const span = Math.max(Math.abs(sk.joints[ki]!.minRad[2]), Math.abs(sk.joints[ki]!.maxRad[2]));
+    out[ki * 3 + 2] = (wantDeg * Math.PI / 180) / (0.9 * span);
+    sd.doll.setMotorTargets(out);
+    for (let i = 0; i < 90; i++) { sd.doll.driveMotors(1 / 120); sd.world.step(); }
+    const got = sd.doll.jointAngle(ki) * 180 / Math.PI;
+    console.log(`  ${String(wantDeg).padStart(7)}°  ${got.toFixed(1).padStart(8)}°  ${(got - wantDeg).toFixed(1).padStart(7)}°  ${(sd.doll.soleY('r') * 1000).toFixed(0).padStart(5)}mm`);
+  }
+  console.log('\n  膝限位 [-145°, +2°]，力矩 150 N·m。若误差很大 ⇒ 是**被体重压住**，不是权限不足。');
+}
+
+// ═══════ 马达 kP：解决"移动目标追不上" ═══════
+console.log('\n=== 马达 kP / kD 扫描（追踪滞后）===\n');
+console.log('   kP    kD    离地峰   存活    换脚');
+for (const [kp, kd] of [[9, 1], [18, 1], [30, 1], [45, 1], [45, 2], [70, 2], [100, 3]] as [number, number][]) {
+  const se = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 4, gaitHz: 1 / FB.T, doll: { kP: kp, kD: kd } } as never);
+  se.begin(new Float32Array(se.params.length));
+  let pk = 0;
+  const re = runCaptureTeacher(sk, se, FB, { dur: 4, clockDriven: true,
+    onFrame: (): void => { pk = Math.max(pk, Math.max(se.doll.soleY('l'), se.doll.soleY('r'))); } });
+  console.log(`  ${String(kp).padStart(4)}  ${String(kd).padStart(4)}   ${(pk * 1000).toFixed(0).padStart(4)}mm  ${re.t.toFixed(2)}s   ${re.steps}`);
+}
+
+// ═══════ 关节指令 vs 限位：是否在要求不可能的姿态 ═══════
+console.log('\n=== 指令 vs 限位（IK 是否在要求超限姿态）===\n');
+console.log('  关节      限位(°)          指令峰(°)   超限?');
+{
+  const sf = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 2.5, gaitHz: 1 / FB.T });
+  sf.begin(new Float32Array(sf.params.length));
+  const peak: Record<string, number> = {};
+  runCaptureTeacher(sk, sf, FB, { dur: 2.5, clockDriven: true, onFrame: (_t, _s, _p, _o, _c, al): void => {
+    if (!al) return;
+    for (const [k, v] of Object.entries(al)) peak[k] = Math.max(peak[k] ?? 0, Math.abs(v));
+  } });
+  for (const nm of ['hip_l', 'hip_r', 'knee_l', 'knee_r', 'foot_l', 'foot_r']) {
+    const i = JOINT_ORDER.indexOf(nm);
+    if (i < 0) continue;
+    const j = sk.joints[i]!;
+    const lo = j.minRad[2] * 180 / Math.PI, hi = j.maxRad[2] * 180 / Math.PI;
+    const pk = (peak[`${nm}/2`] ?? 0) * 180 / Math.PI;
+    console.log(`  ${nm.padEnd(9)} [${lo.toFixed(0)}, ${hi.toFixed(0)}]`.padEnd(26)
+      + `${pk.toFixed(1).padStart(9)}°   ${pk > Math.abs(hi) || pk > Math.abs(lo) ? '★超限' : ''}`);
+  }
+  console.log('\n  判读：★超限 ⇒ IK 在要求关节做不到的姿态，软限位接管 ⇒ 脚到不了目标位置。');
 }

@@ -13272,8 +13272,9 @@ var Ragdoll = class {
     for (let i = 0; i < sk2.joints.length; i++) {
       for (let k = 0; k < 3; k++) {
         const s = this.opt.posRefScale;
-        this.refPos[i * 3 + k] = s * Math.max(0, sk2.joints[i].maxRad[k]);
-        this.refNeg[i * 3 + k] = s * Math.max(0, -sk2.joints[i].minRad[k]);
+        const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+        this.refPos[i * 3 + k] = s * span;
+        this.refNeg[i * 3 + k] = s * span;
       }
     }
   }
@@ -14474,8 +14475,8 @@ var BalanceJudge = class {
 };
 
 // src/core/gaitPhase.ts
-var STEP_MIN = 0.28;
-var ADJUST_MIN = 0.7;
+var STEP_MIN = 0.13;
+var ADJUST_MIN = 0.9;
 var ADJUST_MOS_TOL = 0;
 var W_SHAPE = 0.35;
 var W_MOS = 0.3;
@@ -14612,38 +14613,39 @@ var GaitPhaseMachine = class {
       return;
     }
     if (nGround === 2) {
+      if (this.phase === "adjust") {
+        this.tAdjust += dt;
+        if (mosX > 0) {
+          this.mosAcc += mosX;
+          this.mosN++;
+        }
+        this.mosEnd = mosX;
+        this.placeAcc += place;
+        this.placeN++;
+        this.shapeAcc += shape;
+        this.shapeN++;
+        this.pelvisAcc += pelvis;
+        if (this.tAdjust >= ADJUST_MIN && this.mosN > 0) {
+          const mosAvg = this.mosAcc / this.mosN;
+          const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
+          const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
+          const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
+          const pelvisAvg = this.pelvisAcc;
+          const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
+          this.accCredit += credit;
+          this.nAdjustOk++;
+          this.adjSum += this.tAdjust;
+          this.lastCredit = credit;
+          this.phase = "both";
+          this.tStep = 0;
+          this.tAdjust = 0;
+        }
+        return;
+      }
       this.phase = "both";
       this.tStep = 0;
       this.tAdjust = 0;
       this.lastCredit = 0;
-      return;
-    }
-    if (this.phase === "adjust") {
-      this.tAdjust += dt;
-      this.mosAcc += mosX;
-      this.mosN++;
-      this.mosEnd = mosX;
-      this.placeAcc += place;
-      this.placeN++;
-      this.shapeAcc += shape;
-      this.shapeN++;
-      this.pelvisAcc += pelvis;
-      if (this.tAdjust >= ADJUST_MIN) {
-        const mosAvg = this.mosN > 0 ? this.mosAcc / this.mosN : 0;
-        const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
-        const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
-        const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
-        const pelvisAvg = this.pelvisAcc;
-        const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
-        this.lastCredit = credit;
-        this.accCredit += credit;
-        this.nAdjustOk++;
-        this.adjSum += this.tAdjust;
-        this.phase = "both";
-        this.tStep = 0;
-        this.tAdjust = 0;
-        this.lastCredit = credit;
-      }
       return;
     }
     this.phase = "both";
@@ -14798,7 +14800,7 @@ function orderLeg(o) {
   return o === "legL" ? "l" : o === "legR" ? "r" : null;
 }
 var GaitCommander = class {
-  constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1, jitter: 0.15, waistShare: 0.5 }) {
+  constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
     this.o = o;
     this.seq = seq;
     let s = 12345;
@@ -14891,6 +14893,7 @@ var TARGET_VX = 0.5;
 var MOVE_JOINTS = ["hip_l", "hip_r", "knee_l", "knee_r"];
 
 // src/core/sim.ts
+var SETTLE_HOLD = 0.45;
 var MOVE_SET = new Set(MOVE_JOINTS);
 var WALK_REWARD_KEYS = [
   // 前进 / 姿态
@@ -15180,6 +15183,8 @@ var Sim = class {
   cmd = new GaitCommander();
   /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
   servoReady = true;
+  /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
+  settleHold = 0;
   get servoReadyDbg() {
     return this.servoReady;
   }
@@ -15878,8 +15883,10 @@ var Sim = class {
       const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
       if (this.mod.active("balance", this.gp.now, nGround, null))
         this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
-      const readyNow = nGround >= 2 || mos.x > 0.02;
-      this.servoReady = this.servoReady || readyNow;
+      const stableNow = nGround >= 2 && mos.x > 0.02;
+      if (stableNow) this.settleHold += dt;
+      else this.settleHold = 0;
+      this.servoReady = this.settleHold >= SETTLE_HOLD;
       if (nGround === 1) {
         const xi = sup2.cx + sup2.halfX - mos.x;
         const footX = gL ? this.footTmpR[0] : this.footTmpL[0];
