@@ -6426,7 +6426,7 @@ function buildSkeleton(cfg2 = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
-  const SOLE_GROUND_CORR = 0.0536;
+  const SOLE_GROUND_CORR = 0;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -6530,7 +6530,7 @@ function buildSkeleton(cfg2 = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -14622,6 +14622,37 @@ var MOVE_JOINTS = ["hip_l", "hip_r", "knee_l", "knee_r"];
 
 // src/core/sim.ts
 var MOVE_SET = new Set(MOVE_JOINTS);
+var WALK_REWARD_KEYS = [
+  // 前进 / 姿态
+  "velTrack",
+  "yawTrack",
+  "lateral",
+  "tiltRate",
+  "upright",
+  "height",
+  // 迈步本体
+  "lift",
+  "single",
+  "shift",
+  "refHip",
+  "refKnee",
+  "pelvisFirst",
+  // 迈步 → 调整 的顺序结构
+  "settle",
+  "stepPace",
+  "moS",
+  "imbalance",
+  "stepLen",
+  "placement",
+  "cycle",
+  // 关节运动与代价
+  "jointMove",
+  "jointMotion",
+  "torque",
+  "actRate",
+  "energy",
+  "survive"
+];
 var DEFAULT_SIM = {
   physicsHz: 120,
   controlHz: 60,
@@ -15697,11 +15728,9 @@ var Sim = class {
       tt.energy = -w.energy * this.accEnergy;
       tt.survive = w.survive * elapsed;
       tt.fallen = fallen ? 1 : 0;
-      tt.total = 0;
-      for (const [k, v] of Object.entries(tt)) {
-        if (k === "total" || k === "fallen" || k === "alive" || k.startsWith("mv.")) continue;
-        tt.total += v;
-      }
+      let sum = 0;
+      for (const k of WALK_REWARD_KEYS) sum += tt[k] ?? 0;
+      tt.total = sum;
       return tt;
     }
     const t = {

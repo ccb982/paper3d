@@ -33,6 +33,28 @@ import { JOINT_ORDER, type Skeleton } from './skeleton';
 /** 要"鼓励移动"的关节集合（骨盆=髋、膝盖），见 walkReward.MOVE_JOINTS */
 const MOVE_SET = new Set(MOVE_JOINTS);
 
+/**
+ * ★★★ 走路模式**参与适应度求和**的项（白名单）。
+ *
+ * 为什么必须是白名单而不是黑名单：黑名单只能挡住"已知是诊断"的字段，
+ * 而 2026-10-01~02 两天陆续加了三十多个诊断字段（cadence / cycleFlick / imbMean /
+ * mosMin / wbamNorm / validRatio / footDist / meanStepLen …），它们**全部被当成得分
+ * 加进了 total** —— 实测镇定器 total 24.88、零输出 33.11，而站立类门禁
+ * （posture/gait/verify）要求"零输出总分很低"，因此一直红着。
+ * 白名单的代价是：新增**得分项**时必须往这里加一条；忘了的后果是"该项权重为 0"，
+ * 这个失败模式（不生效）比"虚高"安全得多。
+ */
+const WALK_REWARD_KEYS: readonly string[] = [
+  // 前进 / 姿态
+  'velTrack', 'yawTrack', 'lateral', 'tiltRate', 'upright', 'height',
+  // 迈步本体
+  'lift', 'single', 'shift', 'refHip', 'refKnee', 'pelvisFirst',
+  // 迈步 → 调整 的顺序结构
+  'settle', 'stepPace', 'moS', 'imbalance', 'stepLen', 'placement', 'cycle',
+  // 关节运动与代价
+  'jointMove', 'jointMotion', 'torque', 'actRate', 'energy', 'survive',
+];
+
 export type SimMode = 'walk' | 'fight';
 
 export interface SimConfig {
@@ -1346,13 +1368,15 @@ export class Sim {
       tt.energy = -w.energy * this.accEnergy;
       tt.survive = w.survive * elapsed;
       tt.fallen = fallen ? 1 : 0;              // 只做标记，不进 total
-      // ★★ 只有**非诊断**的项进 total。逐关节明细（mv.*）和 alive/fallen 是给人看的，
-      //   一起累加会把"要动"这项的权重变成 4 倍（实测零输出基因组 total 虚高 1.0）。
-      tt.total = 0;
-      for (const [k, v] of Object.entries(tt)) {
-        if (k === 'total' || k === 'fallen' || k === 'alive' || k.startsWith('mv.')) continue;
-        tt.total += v;
-      }
+      // ★★★ 只有**白名单**里的项进 total（2026-10-02 修）。
+      //   原来是**黑名单**（只排除 total/fallen/alive/mv.*），于是这两天加的三十多个
+      //   **诊断字段**（cadence / imbMean / mosMin / wbamNorm / validRatio / footDist …）
+      //   全被当成得分加了进去 —— 实测镇定器 total 24.88、零输出 33.11，
+      //   而站立类门禁（posture/gait/verify）要求"零输出总分很低"，所以一直红着。
+      //   改成白名单后，新增诊断字段再也不可能影响适应度。
+      let sum = 0;
+      for (const k of WALK_REWARD_KEYS) sum += tt[k] ?? 0;
+      tt.total = sum;
       return tt;
     }
     // 战斗：命中为主，但**必须带姿态塑形**（否则全员摔倒时适应度全是负数、梯度恒为零）。

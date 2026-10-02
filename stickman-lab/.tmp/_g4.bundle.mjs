@@ -5733,7 +5733,7 @@ function __wbindgen_memory() {
   return addHeapObject(ret);
 }
 
-// tools/probe-ankle.ts
+// tools/_g4.ts
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
@@ -6412,17 +6412,17 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   let byKeyRef = null;
   const attachTo = (parentKey, wy) => {
     if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
-    let best2 = 0, bestD = Infinity;
+    let best = 0, bestD = Infinity;
     for (let s = 0; s < K; s++) {
       const b = byKeyRef.get(segKey(s));
       if (!b) continue;
       const d = Math.abs(b.cy - wy);
       if (d < bestD) {
         bestD = d;
-        best2 = s;
+        best = s;
       }
     }
-    return segKey(best2);
+    return segKey(best);
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
@@ -6520,7 +6520,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const hx = soleHalfLen * sfx;
       const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const soleWorldY = soleHalfThick;
-      const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
+      const soleWorldZ = anklePx ? mapZ(anklePx[0], true) : mapZ(part.cx, true);
       const soleMassTotal = mainMass + soleMass;
       if (anklePx && cfg.ankleEnabled) {
         const ankleY = mapY(anklePx[1]);
@@ -15782,169 +15782,7 @@ var Sim = class {
   }
 };
 
-// src/core/phaseSeed.ts
-var BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
-function balancerGenome(shape, s = BEST_BALANCER) {
-  const p = new Float32Array(brainParamCount(shape));
-  const L = brainLayout(shape);
-  const QX = 2, WX = 9, CMX = 14, CVX = 16;
-  p[L.w1 + 0 * shape.inputs + QX] = 1;
-  p[L.w1 + 1 * shape.inputs + WX] = 1;
-  p[L.w1 + 2 * shape.inputs + CMX] = 1;
-  p[L.w1 + 3 * shape.inputs + CVX] = 1;
-  p[L.w1 + 4 * shape.inputs + 0] = 5;
-  p[L.w1 + 5 * shape.inputs + 1] = 5;
-  const row = (joint, w, b) => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + 2;
-    if (o < 0) return;
-    for (let i = 0; i < w.length; i++) p[L.w2 + o * shape.hidden + i] += w[i];
-    p[L.b2 + o] += b;
-  };
-  for (const [j, sgn] of [["hip_l", 1], ["hip_r", 1]]) {
-    row(j, [sgn * s.kPitch, sgn * s.kRate, sgn * s.kComX, 0, sgn * s.osc * 0.09, 0], s.bias);
-  }
-  row("knee_l", [0, 0, 0, 0, -s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
-  row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
-  row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
-  row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
-  return p;
-}
-var CAPTURE_GAIT = {
-  /** 摆动周期（秒） */
-  T: 1.89,
-  /** 目标速度（m/s） */
-  vDes: 0.39,
-  /** 摆动脚抬升高度（m） */
-  lift: 0.15,
-  /** 落脚点速度修正增益 */
-  kv: 0.3283,
-  /** 躯干俯仰 → 髋（★ 负号才接得住） */
-  kPitch: 2.544,
-  /** 俯仰角速度 → 髋 */
-  kRate: 0.542,
-  /** 捕获点走出当前支撑脚多远才换脚（m） */
-  thresh: 0.0673,
-  /** 落地吸能：支撑膝额外屈多少（rad） */
-  absorb: 0.4,
-  /** 吸能衰减时间常数（s） */
-  absorbTau: 0.25,
-  /** 实测：4 次真实换脚、0.625 m、存活 4.32 s（零输出基线 1.83 s） */
-  measured: { steps: 4, x: 0.625, t: 4.32 }
-};
-
-// src/core/teacher.ts
-var PX2M = 68e-5;
-var Y = (py) => (2899 - py) * PX2M;
-var LEN_A = Y(1574.5) - Y(2206);
-var LEN_B = Y(2206) - Y(2792);
-var HIP_Z = 7e-3;
-function ik(hipX, hipY, fx, fy) {
-  const dx = fx - hipX, dy = fy - hipY;
-  let d = Math.hypot(dx, dy);
-  d = Math.min(d, (LEN_A + LEN_B) * 0.995);
-  d = Math.max(d, Math.abs(LEN_A - LEN_B) + 0.02);
-  const base = Math.atan2(dx, -dy);
-  const cosK = Math.max(-1, Math.min(
-    1,
-    (LEN_A * LEN_A + LEN_B * LEN_B - d * d) / (2 * LEN_A * LEN_B)
-  ));
-  const interior = Math.acos(cosK);
-  const hipRel = base + Math.atan2(LEN_B * Math.sin(interior), LEN_A + LEN_B * Math.cos(interior));
-  return [hipRel, -(Math.PI - interior)];
-}
-function runCaptureTeacher(sk, sim, p, opts = {}) {
-  const dur = opts.dur ?? 8;
-  const clockDriven = opts.clockDriven ?? false;
-  const out = new Float32Array(sim.doll.jointCount * 3);
-  const com = newCom();
-  const dt = 1 / sim.cfg.controlHz;
-  const iL = sk.bodies.findIndex((b) => b.key === "shin_l");
-  const iR = sk.bodies.findIndex((b) => b.key === "shin_r");
-  let plantL = sim.doll.bodies[iL].translation().x;
-  let plantR = sim.doll.bodies[iR].translation().x;
-  let t = 0, steps = 0, prevStance = 1, lastSwitch = 0;
-  const lbuf = new Float64Array(3);
-  let prevLz = 0, prevLy = 0, hasL = false;
-  const jHip = sk.joints.find((j) => j.name === "hip_l");
-  const jKnee = sk.joints.find((j) => j.name === "knee_l");
-  const setAxis = (joint, ang, j, ax = 2) => {
-    const o = JOINT_ORDER.indexOf(joint) * 3 + ax;
-    if (o < 0) return;
-    out[o] = ang >= 0 ? ang / (0.9 * j.maxRad[ax]) : ang / (0.9 * -j.minRad[ax]);
-  };
-  while (!sim.finished && t < dur) {
-    sim.advance(1);
-    const torso = sim.doll.torso();
-    const rot = torso.rotation();
-    const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (rot.w * rot.x + rot.y * rot.z))));
-    const av = torso.angvel();
-    readCom(sim.doll, com);
-    const om = omegaAt(com.y);
-    const xi = com.x + com.vx / om;
-    let stanceL = prevStance === 1;
-    if (clockDriven) {
-      const half = p.T * 0.5;
-      const k = Math.floor(t / half);
-      const wantL = k % 2 === 0;
-      if (wantL !== stanceL) {
-        steps++;
-        lastSwitch = k * half;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        stanceL = wantL;
-        prevStance = stanceL ? 1 : 2;
-      }
-    } else {
-      const plantNow = stanceL ? plantL : plantR;
-      if (Math.abs(xi - plantNow) > p.thresh && t - lastSwitch > p.T * 0.5) {
-        stanceL = !stanceL;
-        steps++;
-        lastSwitch = t;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        prevStance = stanceL ? 1 : 2;
-      }
-    }
-    const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const swingX = xi + p.kv * (p.vDes - com.vx) * p.T * 0.5;
-    const swingY = 0.012 + p.lift * Math.sin(Math.PI * Math.min(1, s));
-    const dtSw = t - lastSwitch;
-    const absorb = p.absorb * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
-    const corr = p.kPitch * pitch + p.kRate * av.x;
-    let cmRoll = 0;
-    if (p.cmBalance > 0) {
-      wholeBodyAngularMomentum(sim.doll, com, lbuf);
-      const lz = lbuf[2];
-      const ly = lbuf[1];
-      const dlz = hasL ? (lz - prevLz) / dt : 0;
-      const dly = hasL ? (ly - prevLy) / dt : 0;
-      prevLz = lz;
-      prevLy = ly;
-      hasL = true;
-      cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02 - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
-    }
-    for (const side of ["l", "r"]) {
-      const isStance = side === "l" === stanceL;
-      const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
-      const [h, k] = isStance ? ik(hipX, com.y - 0.1, side === "l" ? plantL : plantR, 0.012) : ik(hipX, com.y - 0.1, swingX, swingY);
-      setAxis(`hip_${side}`, h + corr, jHip);
-      setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
-      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
-      setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
-    }
-    opts.onFrame?.(t, stanceL, s);
-    sim.doll.setMotorTargets(out);
-    if (opts.record && opts.data) {
-      opts.data.X.push(Array.from(sim.observation()));
-      opts.data.A.push(Array.from(out));
-    }
-    t += dt;
-  }
-  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0 };
-}
-
-// tools/probe-ankle.ts
+// tools/_g4.ts
 var require2 = createRequire(import.meta.url);
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -15955,115 +15793,17 @@ var require2 = createRequire(import.meta.url);
     if (typeof f === "function") (imp[i.module] ??= {})[i.name] = f;
   }
   const r = await WebAssembly.instantiate(c, imp);
-  __wbg_set_wasm(
-    r.instance ? r.instance.exports : r.exports
-  );
+  __wbg_set_wasm(r.instance ? r.instance.exports : r.exports);
 }
-var FAILS = 0;
-var check = (name, ok, detail = "") => {
-  if (!ok) FAILS++;
-  console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? "   " + detail : ""}`);
-};
-var DUR = 8;
-var FB = {
-  T: CAPTURE_GAIT.T,
-  vDes: CAPTURE_GAIT.vDes,
-  lift: CAPTURE_GAIT.lift,
-  kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch,
-  kRate: CAPTURE_GAIT.kRate,
-  thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb,
-  absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 0,
-  kLatV: 0,
-  kLatSwing: 0,
-  cmBalance: 0,
-  cmBalanceD: 0
-};
-function standTest(ankle, kP, kD, teacher, sole = 0) {
-  const sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: ankle, balanceAnkleSoleMassPct: sole });
+for (const a of [false, true]) {
+  const sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: a });
   const shape = shapeForJoints(sk.joints.length);
-  const sim = new Sim(
-    sk,
-    shape,
-    { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T },
-    { jointGain: ankle ? { foot_l: { kP, kD }, foot_r: { kP, kD } } : void 0 }
-  );
-  const g = balancerGenome(shape, BEST_BALANCER);
-  let clear = 0, cyc = 0;
-  if (teacher) {
-    sim.begin(new Float32Array(sim.params.length));
-  } else {
-    sim.begin(g);
-  }
-  const dt = 1 / 120;
-  let n = 0;
-  const onF = () => {
-    const h = Math.max(sim.doll.soleY("l"), sim.doll.soleY("r"));
-    if (!footGrounded(sim.doll, "l") || !footGrounded(sim.doll, "r")) clear = Math.max(clear, h);
-  };
-  if (teacher) runCaptureTeacher(sk, sim, FB, { dur: DUR, clockDriven: true, onFrame: onF });
-  else {
-    while (!sim.finished) {
-      sim.advance(1);
-      onF();
-      n++;
-    }
-  }
-  if (!teacher) {
-    while (!sim.finished) {
-      sim.advance(1);
-      n++;
-    }
-  }
-  return {
-    t: n / 120,
-    y: sim.doll.torso().translation().y,
-    tilt: sim.doll.tiltOf(sim.doll.torso()),
-    fell: sim.fallen,
-    clear,
-    cyc: sim.terms.cycleCount ?? 0
-  };
+  const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 1e-3 });
+  sim.begin(new Float32Array(sim.params.length));
+  const com = newCom();
+  readCom(sim.doll, com);
+  const sl = new Float64Array(3), sr = new Float64Array(3);
+  sim.doll.soleXZ("l", sl);
+  sim.doll.soleXZ("r", sr);
+  console.log(`\u8E1D${a ? "\u5F00" : "\u5173"}: \u8EAF\u5E72y=${sim.doll.torso().translation().y.toFixed(4)} \u811A\u5E95y=${sim.doll.soleY("l").toFixed(4)} \u811Az=${sl[2].toFixed(4)}/${sr[2].toFixed(4)} \u7AD9\u8DDD=${(sl[2] - sr[2]).toFixed(4)} CoM.y=${com.y.toFixed(4)}`);
 }
-console.log("=== A. \u57FA\u7EBF\uFF1A\u8E1D\u5173 vs \u8E1D\u5F00\uFF08\u5168\u5C40 kP=48/kD=1\uFF09===\n");
-{
-  const off = standTest(false, 48, 1, false);
-  const on = standTest(true, 48, 1, false);
-  console.log(`  \u8E1D\u5173\uFF1A\u5B58\u6D3B ${off.t.toFixed(2)}s \u8EAF\u5E72\u9AD8 ${off.y.toFixed(3)}m \u503E\u89D2 ${(off.tilt * 180 / Math.PI).toFixed(1)}\xB0 \u5012=${off.fell}`);
-  console.log(`  \u8E1D\u5F00\uFF1A\u5B58\u6D3B ${on.t.toFixed(2)}s \u8EAF\u5E72\u9AD8 ${on.y.toFixed(3)}m \u503E\u89D2 ${(on.tilt * 180 / Math.PI).toFixed(1)}\xB0 \u5012=${on.fell}`);
-  check("\u8E1D\u5173\u65F6\u80FD\u7AD9\u6EE1\uFF08\u5BF9\u7167\uFF09", off.t >= 7.5, `${off.t.toFixed(2)}s`);
-  check("\u8E1D\u5F00 + \u5168\u5C40\u589E\u76CA\u4F1A\u584C\uFF08\u590D\u73B0\u5DF2\u77E5\u95EE\u9898\uFF09", on.t < off.t - 1 || on.fell, `${on.t.toFixed(2)}s`);
-}
-console.log("\n=== B. \u626B\u8E1D\u7684 kP \xD7 kD\uFF08\u7528\u9547\u5B9A\u5668\uFF0C\u53EA\u770B\u80FD\u4E0D\u80FD\u7AD9\u4F4F\uFF09===\n");
-console.log("  " + "kP\\kD".padEnd(8) + [0.5, 1, 2, 4, 8].map((d) => `${d}`.padStart(8)).join(""));
-var best = null;
-for (const kP of [4, 8, 12, 20, 48]) {
-  const cells = [];
-  for (const kD of [0.5, 1, 2, 4, 8]) {
-    const r = standTest(true, kP, kD, false);
-    cells.push((r.t >= 7.5 && !r.fell ? "  \u7AD9\u4F4F" : `${r.t.toFixed(1)}s`).padStart(8));
-    if (!best || r.t > best.r.t || r.t === best.r.t && !r.fell && best.r.fell) best = { kP, kD, r };
-  }
-  console.log("  " + String(kP).padEnd(8) + cells.join(""));
-}
-console.log("");
-if (best) {
-  console.log(`  \u2605 \u6700\u4F73\uFF1AkP=${best.kP} kD=${best.kD} \u2192 \u5B58\u6D3B ${best.r.t.toFixed(2)}s \u8EAF\u5E72\u9AD8 ${best.r.y.toFixed(3)}m \u5012=${best.r.fell}`);
-  check("\u5B58\u5728\u80FD\u7AD9\u6EE1 8 s \u7684\u8E1D\u589E\u76CA\u7EC4\u5408", best.r.t >= 7.5 && !best.r.fell, `${best.r.t.toFixed(2)}s`);
-}
-console.log("\n=== C. \u7AD9\u4F4F\u4E4B\u540E\uFF1A\u6446\u52A8\u76F8\u80FD\u4E0D\u80FD\u771F\u7684\u628A\u811A\u62AC\u8D77\u6765 ===\n");
-console.log("  " + "\u914D\u7F6E".padEnd(34) + "\u5B58\u6D3B   \u79BB\u5730\u5CF0\u503C  \u5B8C\u6210\u5FAA\u73AF");
-for (const cfg of [
-  { n: "teacher + \u8E1D\u5173\uFF08\u73B0\u72B6\uFF09", a: false, kP: 48, kD: 1 },
-  { n: "teacher + \u8E1D\u5173 + CMP", a: false, kP: 48, kD: 1, cm: 0.15 },
-  ...best ? [{ n: `teacher + \u8E1D\u5F00 kP=${best.kP} kD=${best.kD}`, a: true, kP: best.kP, kD: best.kD }] : [],
-  ...best ? [{ n: `teacher + \u8E1D\u5F00 + CMP0.15`, a: true, kP: best.kP, kD: best.kD, cm: 0.15 }] : []
-]) {
-  const r = standTest(cfg.a, cfg.kP, cfg.kD, true);
-  console.log("  " + cfg.n.padEnd(32) + r.t.toFixed(2) + "s" + (r.clear * 1e3).toFixed(0).padStart(8) + "mm" + String(r.cyc).padStart(9));
-}
-check("\u8BDA\u5B9E\u8BB0\u5F55\uFF1A\u73B0\u72B6\uFF08\u8E1D\u5173\uFF09\u79BB\u5730\u5CF0\u503C\u8FDC\u5C0F\u4E8E 3 cm \u95E8\u69DB", true, "\u89C1\u4E0A\u8868");
-console.log("");
-console.log(FAILS === 0 ? "\u2605 ankle \u5168\u7EFF" : `\u2605 ankle \u6709 ${FAILS} \u6761 FAIL`);
-if (FAILS > 0) process.exitCode = 1;

@@ -14622,6 +14622,37 @@ var MOVE_JOINTS = ["hip_l", "hip_r", "knee_l", "knee_r"];
 
 // src/core/sim.ts
 var MOVE_SET = new Set(MOVE_JOINTS);
+var WALK_REWARD_KEYS = [
+  // 前进 / 姿态
+  "velTrack",
+  "yawTrack",
+  "lateral",
+  "tiltRate",
+  "upright",
+  "height",
+  // 迈步本体
+  "lift",
+  "single",
+  "shift",
+  "refHip",
+  "refKnee",
+  "pelvisFirst",
+  // 迈步 → 调整 的顺序结构
+  "settle",
+  "stepPace",
+  "moS",
+  "imbalance",
+  "stepLen",
+  "placement",
+  "cycle",
+  // 关节运动与代价
+  "jointMove",
+  "jointMotion",
+  "torque",
+  "actRate",
+  "energy",
+  "survive"
+];
 var DEFAULT_SIM = {
   physicsHz: 120,
   controlHz: 60,
@@ -15697,11 +15728,9 @@ var Sim = class {
       tt.energy = -w.energy * this.accEnergy;
       tt.survive = w.survive * elapsed;
       tt.fallen = fallen ? 1 : 0;
-      tt.total = 0;
-      for (const [k, v] of Object.entries(tt)) {
-        if (k === "total" || k === "fallen" || k === "alive" || k.startsWith("mv.")) continue;
-        tt.total += v;
-      }
+      let sum = 0;
+      for (const k of WALK_REWARD_KEYS) sum += tt[k] ?? 0;
+      tt.total = sum;
       return tt;
     }
     const t = {

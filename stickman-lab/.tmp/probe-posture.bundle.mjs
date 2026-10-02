@@ -6384,6 +6384,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const soleHalfLen = META.sole.len * px2m / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_GROUND_CORR = 0.0536;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -6487,7 +6488,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY, soleWorldZ - ankleZ]);
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -13619,6 +13620,8 @@ var init_ragdoll = __esm({
       torqueScale: 1,
       kP: 48,
       kD: 1,
+      // 逐关节增益：默认空（全部用上面的全局值）
+      jointGain: {},
       posRefScale: 0.9,
       purgeJointCache: true,
       motorAlpha: MOTOR_ALPHA
@@ -14022,6 +14025,7 @@ var init_ragdoll = __esm({
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
+        const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
@@ -14058,7 +14062,8 @@ var init_ragdoll = __esm({
             } else {
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-              err = kP * (thRef - a) - kD * relL[k];
+              const ov = jg[j.name];
+              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -14126,7 +14131,9 @@ var init_ragdoll = __esm({
        *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
        */
       footPoint(side, out) {
-        const key = side === "l" ? "shin_l" : "shin_r";
+        const footKey = side === "l" ? "foot_l" : "foot_r";
+        const useFoot = this.indexByKey.has(footKey);
+        const key = useFoot ? footKey : side === "l" ? "shin_l" : "shin_r";
         const idx = this.indexByKey.get(key) ?? 0;
         const b = this.bodies[idx];
         const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");
@@ -14691,6 +14698,11 @@ function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
   const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
   return { x: supEdgeX - xcoM, z: supEdgeZ - zcoM };
 }
+function cadenceScore(medianCycleSec, target = TARGET_CYCLE, sigma = 0.45) {
+  if (!(medianCycleSec > 0)) return 0;
+  const d = (medianCycleSec - target) / sigma;
+  return Math.exp(-d * d);
+}
 function stepLenScore(stepLenM, footLenM) {
   if (footLenM <= 1e-6) return 0;
   const f2 = stepLenM / footLenM;
@@ -14699,7 +14711,7 @@ function stepLenScore(stepLenM, footLenM) {
   const d = f2 < lo ? lo - f2 : f2 - hi;
   return Math.max(0, 1 - d / 1.5);
 }
-var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, STEP_LEN_IN_FEET, mosBand, StepSettleTracker;
+var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, MIN_CLEARANCE, TARGET_CYCLE, STEP_LEN_IN_FEET, mosBand, StepSettleTracker;
 var init_stability = __esm({
   "src/core/stability.ts"() {
     "use strict";
@@ -14708,6 +14720,8 @@ var init_stability = __esm({
     SETTLE_WIN = 0.45;
     MOS_TARGET = 0.3;
     MIN_CYCLE = 1;
+    MIN_CLEARANCE = 0.03;
+    TARGET_CYCLE = 1;
     STEP_LEN_IN_FEET = [2, 3];
     mosBand = (mos) => {
       if (mos < 0) return -clamp012(-mos / 0.25);
@@ -15027,6 +15041,150 @@ var init_balance = __esm({
   }
 });
 
+// src/core/gaitPhase.ts
+var STEP_MIN, ADJUST_MIN, ADJUST_MOS_TOL, W_SHAPE, W_MOS, W_PLACE, W_PELVIS, GaitPhaseMachine;
+var init_gaitPhase = __esm({
+  "src/core/gaitPhase.ts"() {
+    "use strict";
+    STEP_MIN = 0.28;
+    ADJUST_MIN = 0.7;
+    ADJUST_MOS_TOL = 0;
+    W_SHAPE = 0.35;
+    W_MOS = 0.3;
+    W_PLACE = 0.2;
+    W_PELVIS = 0.15;
+    GaitPhaseMachine = class {
+      phase = "both";
+      tStep = 0;
+      tAdjust = 0;
+      mosAcc = 0;
+      mosN = 0;
+      placeAcc = 0;
+      placeN = 0;
+      shapeAcc = 0;
+      shapeN = 0;
+      pelvisAcc = 0;
+      lastCredit = 0;
+      accCredit = 0;
+      nStep = 0;
+      nAdjustOk = 0;
+      flickers = 0;
+      adjSum = 0;
+      reset() {
+        this.phase = "both";
+        this.tStep = 0;
+        this.tAdjust = 0;
+        this.mosAcc = 0;
+        this.mosN = 0;
+        this.placeAcc = 0;
+        this.placeN = 0;
+        this.shapeAcc = 0;
+        this.shapeN = 0;
+        this.pelvisAcc = 0;
+        this.lastCredit = 0;
+        this.accCredit = 0;
+        this.nStep = 0;
+        this.nAdjustOk = 0;
+        this.flickers = 0;
+        this.adjSum = 0;
+      }
+      get now() {
+        return this.phase;
+      }
+      /** 正在"调整身体"阶段（此时其它项才允许计分） */
+      get inAdjust() {
+        return this.phase === "adjust";
+      }
+      /** 刚结算完一个循环（那一帧允许把分记进适应度） */
+      get justSettled() {
+        return this.lastCredit > 0;
+      }
+      get tally() {
+        return {
+          nStep: this.nStep,
+          nAdjustOk: this.nAdjustOk,
+          lastCredit: this.lastCredit,
+          accCredit: this.accCredit,
+          lastAdjustSec: this.tAdjust,
+          meanAdjustSec: this.nAdjustOk > 0 ? this.adjSum / this.nAdjustOk : 0,
+          flickers: this.flickers
+        };
+      }
+      /**
+       * 每控制拍喂一次。
+       * @param nGround 接地脚数（0/1/2）
+       * @param clearance 本次腾空的最大离地高度（m）—— 用来区分"真迈步"和"抖动"
+       * @param mosX 矢状面 MoS（m）
+       * @param shape 髋/膝贴合文献参考的分数 0..1
+       * @param place 落点贴合捕获点的分数 0..1
+       * @param pelvis 盆骨先于膝的分数（可为负）
+       * @param dt
+       */
+      step(nGround, clearance, mosX, shape, place, pelvis, dt) {
+        if (nGround === 1) {
+          if (this.phase !== "adjust") {
+            this.phase = "step";
+            this.tStep += dt;
+          }
+          if (this.phase === "step" && clearance >= 0.03 && this.tStep >= STEP_MIN) {
+            this.phase = "adjust";
+            this.nStep++;
+            this.tAdjust = 0;
+            this.mosAcc = 0;
+            this.mosN = 0;
+            this.placeAcc = 0;
+            this.placeN = 0;
+            this.shapeAcc = 0;
+            this.shapeN = 0;
+            this.pelvisAcc = 0;
+          } else if (this.phase === "step" && clearance < 0.03) {
+            this.flickers++;
+          }
+          return;
+        }
+        if (nGround === 2) {
+          this.phase = "both";
+          this.tStep = 0;
+          this.tAdjust = 0;
+          this.lastCredit = 0;
+          return;
+        }
+        if (this.phase === "adjust") {
+          this.tAdjust += dt;
+          this.mosAcc += mosX;
+          this.mosN++;
+          this.placeAcc += place;
+          this.placeN++;
+          this.shapeAcc += shape;
+          this.shapeN++;
+          this.pelvisAcc += pelvis;
+          if (this.tAdjust >= ADJUST_MIN) {
+            const mosAvg = this.mosN > 0 ? this.mosAcc / this.mosN : 0;
+            const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
+            const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
+            const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
+            const pelvisAvg = this.pelvisAcc;
+            const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
+            this.lastCredit = credit;
+            this.accCredit += credit;
+            this.nAdjustOk++;
+            this.adjSum += this.tAdjust;
+            this.phase = "both";
+            this.tStep = 0;
+            this.tAdjust = 0;
+            this.lastCredit = credit;
+          }
+          return;
+        }
+        this.phase = "both";
+        this.tStep = 0;
+        this.tAdjust = 0;
+        this.lastCredit = 0;
+      }
+    };
+  }
+});
+
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -15049,7 +15207,7 @@ __export(sim_exports, {
   Sim: () => Sim,
   W: () => W
 });
-var MOVE_SET, DEFAULT_SIM, W, ZERO2, Sim;
+var MOVE_SET, WALK_REWARD_KEYS, DEFAULT_SIM, W, ZERO2, Sim;
 var init_sim = __esm({
   "src/core/sim.ts"() {
     "use strict";
@@ -15060,9 +15218,41 @@ var init_sim = __esm({
     init_gaitRef();
     init_stability();
     init_balance();
+    init_gaitPhase();
     init_walkReward();
     init_skeleton();
     MOVE_SET = new Set(MOVE_JOINTS);
+    WALK_REWARD_KEYS = [
+      // 前进 / 姿态
+      "velTrack",
+      "yawTrack",
+      "lateral",
+      "tiltRate",
+      "upright",
+      "height",
+      // 迈步本体
+      "lift",
+      "single",
+      "shift",
+      "refHip",
+      "refKnee",
+      "pelvisFirst",
+      // 迈步 → 调整 的顺序结构
+      "settle",
+      "stepPace",
+      "moS",
+      "imbalance",
+      "stepLen",
+      "placement",
+      "cycle",
+      // 关节运动与代价
+      "jointMove",
+      "jointMotion",
+      "torque",
+      "actRate",
+      "energy",
+      "survive"
+    ];
     DEFAULT_SIM = {
       physicsHz: 120,
       controlHz: 60,
@@ -15145,6 +15335,14 @@ var init_sim = __esm({
        *   髋外展肌**调节落点 —— 与"盆骨优先"是同一件事）。
        */
       placement: 1,
+      /**
+       * ★★★ 顺序结构项：完成一个"迈步 → 调整身体"循环才给分（`gaitPhase.ts`）。
+       *   用户 2026-10-02："走路大致是迈步，调整身体，再迈步"、
+       *   "迈步间隔太小，无法调整自身平衡"。以前所有走路项都是**独立**时间积分，
+       *   任何"一直在动"的动作都能同时满足（实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）；
+       *   改成顺序后，**没走完循环一分不给** —— 这是关住抽搐的结构性办法。
+       */
+      cycle: 3,
       minCycle: 0.9,
       jointMove: 0.3,
       /** 逐关节倍率（UI 滑块） */
@@ -15277,6 +15475,26 @@ var init_sim = __esm({
       hipTmp = new Float64Array(3);
       airL = 0;
       // 左脚连续腾空时间
+      airPeakL = 0;
+      airPeakR = 0;
+      // 本次腾空的最大脚底高度（离地高度判据）
+      cycTimes = [];
+      // 换支撑脚的时刻（节律门用）
+      // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
+      gp = new GaitPhaseMachine();
+      accCycle = 0;
+      gpPaidThisStep = false;
+      cycleN = 0;
+      cycleFlick = 0;
+      cycleAdj = 0;
+      cyclePhase = "both";
+      lastMosX = 0;
+      lastSupEdgeX = 0;
+      lastRefHip = 0;
+      lastRefKnee = 0;
+      flickerCount = 0;
+      // 被判定为接触抖动（离地不够）的次数（诊断）
+      lastAltT = 0;
       airR = 0;
       motorPrev;
       // 上一拍的马达目标（action rate）
@@ -15519,7 +15737,22 @@ var init_sim = __esm({
         this.airL = 0;
         this.airR = 0;
         this.motorPrev.fill(0);
+        this.airPeakL = 0;
+        this.airPeakR = 0;
+        this.cycTimes = [];
+        this.lastAltT = 0;
         this.lastLoadFrac = [0.5, 0.5];
+        this.gp.reset();
+        this.accCycle = 0;
+        this.gpPaidThisStep = false;
+        this.cycleN = 0;
+        this.cycleFlick = 0;
+        this.cycleAdj = 0;
+        this.cyclePhase = "both";
+        this.lastMosX = 0;
+        this.lastSupEdgeX = 0;
+        this.lastRefHip = 0;
+        this.lastRefKnee = 0;
         this.accVelTrack = 0;
         this.accYaw = 0;
         this.accLat = 0;
@@ -15752,8 +15985,14 @@ var init_sim = __esm({
         if (altNow) this.altCount++;
         this.airL = gL ? 0 : this.airL + dt;
         this.airR = gR ? 0 : this.airR + dt;
+        if (gL) this.airPeakL = 0;
+        else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY("l"));
+        if (gR) this.airPeakR = 0;
+        else this.airPeakR = Math.max(this.airPeakR, this.doll.soleY("r"));
         const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
-        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * dt;
+        const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
+        const cl = nGround === 1 ? gL ? clR : clL : nGround === 0 ? clL && clR : false;
+        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt;
         const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
         const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
         this.accAlive += alive * dt;
@@ -15764,10 +16003,18 @@ var init_sim = __esm({
         const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
         const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
         if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
-          this.altCount++;
-          this.accSwitchQ += phi(TARGET_VX - this.footVel);
+          const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;
+          if (airPeak < MIN_CLEARANCE) {
+            this.flickerCount++;
+          } else {
+            this.altCount++;
+            const tNow = this.tick / this.cfg.controlHz;
+            if (this.lastAltT > 0) this.cycTimes.push(tNow - this.lastAltT);
+            this.lastAltT = tNow;
+            this.accSwitchQ += phi(TARGET_VX - this.footVel);
+          }
         }
-        this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * dt;
+        this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
         if (nGround === 1) {
           const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
           const swingIsL = gL;
@@ -15796,6 +16043,27 @@ var init_sim = __esm({
           this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
           this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
           if (nGround === 1) this.accPelvis += (this.pfL.score() + this.pfR.score()) * 0.5 * dt;
+          {
+            const clr = Math.max(this.airPeakL, this.airPeakR);
+            const mosHere = this.lastMosX;
+            const xiH = this.lastSupEdgeX - mosHere;
+            const footHere = gL ? this.footTmpR[0] : this.footTmpL[0];
+            const eH = Math.abs(footHere - xiH);
+            const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
+            const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
+            const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
+            this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt);
+            const cyc = this.gp.tally;
+            if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
+              this.accCycle += cyc.lastCredit;
+              this.gpPaidThisStep = true;
+            }
+            if (!this.gp.inAdjust) this.gpPaidThisStep = false;
+            this.cycleN = cyc.nAdjustOk;
+            this.cycleFlick = cyc.flickers;
+            this.cycleAdj = cyc.meanAdjustSec;
+            this.cyclePhase = this.gp.now;
+          }
         }
         {
           doll.soleXZ("l", this.footTmpL);
@@ -15818,11 +16086,11 @@ var init_sim = __esm({
           const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
           const fx = this.footMaxX();
           if (fx > this.footFar) this.footFar = fx;
-          this.footVel += (Math.max(0, fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+          this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
           this.lastFootX = fx;
           this.torsoDist = doll.torso().translation().x - this.startX;
           if (b.valid) {
-            this.footDist = Math.max(0, this.footFar - this.footStart);
+            this.footDist = fx - this.footStart;
             this.validTicks += dt;
             this.stepCycleT += dt;
           } else {
@@ -15884,7 +16152,7 @@ var init_sim = __esm({
         this.accActRate += act2 * dt;
         this.accTau += tau2 * dt;
         this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
-        const tvx = -this.footVel, tvz = tv.z;
+        const tvx = this.footVel, tvz = tv.z;
         const ang = torso.angvel();
         this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
         this.accYaw += phi(-ang.y) * dt;
@@ -15984,8 +16252,23 @@ var init_sim = __esm({
           tt.yawTrack = w.yawTrack * this.accYaw;
           tt.lateral = -w.lateral * this.accLat;
           tt.tiltRate = -w.tiltRate * this.accTilt;
-          tt.lift = w.lift * this.accLift * aliveAvg;
-          tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle);
+          let cad = 1;
+          if (this.cycTimes.length >= 2) {
+            const sc = [...this.cycTimes].sort((a, b) => a - b);
+            cad = cadenceScore(sc[Math.floor(sc.length / 2)], TARGET_CYCLE);
+          }
+          const altGate = Math.min(1, this.altCount / 2);
+          const gate = altGate * cad;
+          const cap = (v, m) => v > m ? m : v;
+          tt.cadence = cad;
+          tt.cycle = cap(w.cycle * this.accCycle * aliveAvg, 6);
+          tt.cycleCount = this.cycleN;
+          tt.cycleFlick = this.cycleFlick;
+          tt.cycleAdjust = this.cycleAdj;
+          tt.cyclePhase = this.gp.now === "adjust" ? 2 : this.gp.now === "step" ? 1 : 0;
+          tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)] : 0;
+          tt.lift = w.lift * this.accLift * aliveAvg * cad;
+          tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
           tt.altCount = this.altCount;
           tt.shift = w.shift * Math.min(this.accShift, this.cfg.shiftCapSec) * aliveAvg;
           tt.shiftRaw = this.accShift;
@@ -16004,9 +16287,8 @@ var init_sim = __esm({
           tt.preActive = (this.pfL.preActiveRatio + this.pfR.preActiveRatio) / 2;
           const nTooFast = this.ssL.fastCount + this.ssR.fastCount;
           const paceCap = 1 + Math.floor(this.accTicks / 1.5);
-          const altGate = Math.min(1, this.altCount / 2);
-          const cap = (v, m) => v > m ? m : v;
-          tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * altGate, 4);
+          const altGate2 = altGate;
+          tt.settle = cap(w.settle * (this.ssL.creditSum + this.ssR.creditSum) * aliveAvg * gate, 4);
           tt.stepPace = -w.stepPace * Math.min(nTooFast, paceCap) * aliveAvg;
           tt.moS = cap(w.moS * this.accMoS * aliveAvg * altGate, 1.5);
           const lenSum = this.ssL.lenCredit + this.ssR.lenCredit;
@@ -16046,11 +16328,9 @@ var init_sim = __esm({
           tt.energy = -w.energy * this.accEnergy;
           tt.survive = w.survive * elapsed;
           tt.fallen = fallen ? 1 : 0;
-          tt.total = 0;
-          for (const [k, v] of Object.entries(tt)) {
-            if (k === "total" || k === "fallen" || k === "alive" || k.startsWith("mv.")) continue;
-            tt.total += v;
-          }
+          let sum = 0;
+          for (const k of WALK_REWARD_KEYS) sum += tt[k] ?? 0;
+          tt.total = sum;
           return tt;
         }
         const t = {

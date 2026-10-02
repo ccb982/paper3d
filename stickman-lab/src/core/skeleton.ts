@@ -597,18 +597,16 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   const soleHalfLen = (META.sole.len * px2m) / 2;
   const soleHalfThick = (META.sole.thick * px2m) / 2;
   /**
-   * ★★ 脚掌盒的**贴地标定**（米，实测）：构建完成后 `soleY()` 量到脚底离地 **+0.0536 m**
-   *   ⇒ 脚**根本没踩到地**，全靠被缩短的小腿胶囊底部支撑，站不住也抬不起脚
-   *   （实测踝一开 2.12 s 必倒、躯干倾角 34.9°，而踝的 kP/kD 怎么调都没用：
-   *   25 个组合全部恰好 2.12 s ⇒ 与马达刚度无关）。
+   * ★ 脚掌盒的贴地标定（米）：**当前为 0，即不做任何人为修正**。
    *
-   *   为什么是标定值而不是解析式：盒心偏移 `soleHalfThick − ankleY` 在代数上恰好让
-   *   盒底落在 y=0，但 `rotVecByQuat(fQInv, …)` 之后的**实际**世界高度还差这一段
-   *   （差值来自身体原点在贴图坐标系里的 y 基准与 mapY 的偏移）。
-   *   与其继续推这套像素映射（已经错过好几次），不如**实测钉死**——
-   *   `tools/probe-ankle.ts` 的 A2 段会复核这个值。
+   * 背景（2026-10-02）：我曾把它设成 0.0536 —— 那是**量错了**得来的。
+   * `Ragdoll.footPoint()` 当时无条件用 `shin_l/shin_r` 的 cuboid 当"鞋底"，
+   * 踝开启后它量的是**被缩短的小腿**底部，于是报出"+5.36 cm 悬空"。
+   * 那个 bug 已修（优先查 `foot_l/foot_r`），所以这个标定值必须撤销 ——
+   * 留着它等于把一个 5.36 cm 的错误偏移真正写进几何里。
+   * `tools/probe-ankle.ts` 的 A2 段会复核脚底是否真的落在 y=0。
    */
-  const SOLE_GROUND_CORR = 0.0536;
+  const SOLE_GROUND_CORR = 0;
 
   // ---- 刚体 ----
   /**
@@ -769,6 +767,12 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //   盒宽取实测靴宽，所以盒子会从靴子内侧探出去一点 —— 这是"骨骼正确、纹理不动"
       //   的必然代价（线框视图可见），已在文档里记明。
       const soleWorldY = soleHalfThick;
+      // ★ 保持"盒心吊在膝正下方"这个既有约定（外八由 footSplayDeg 单独控制）。
+      //   ⚠ 我曾把它改成用踝锚点（想修踝开启时站距偏宽 9.4 cm），
+      //   但 `soleWorldZ` 在**踝关闭路径**上也被用到 —— 一改就把踝关时的几何也带偏了，
+      //   连带 `gaitref`（髋符号）、`settle`/`gaitcycle`（MoS 项归零）、
+      //   `verify`（重放逐位一致）三条门禁搞红。已回退。
+      //   踝开启时的站距问题改由"碰撞体偏移取纯 y"那一处解决（见下面）。
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
       void soleMassTotal;
@@ -795,7 +799,14 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   脚掌 = 一块平底板，踝关节在它**上方**约 6cm（MuJoCo/MIT Cheetah 同款做法）。
         const soleDrop = ankleY;                              // 踝离地高度（米）
         const fMidY = soleWorldY;                             // 盒心高度 ⇒ 盒底正好落地
-        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, soleWorldZ - ankleZ]);
+        // ★★ 碰撞体偏移**只取 y**：脚掌本来就吊在踝正下方。
+        //   原来还带一个 z 分量（`soleWorldZ − ankleZ`，即"膝到踝的外八差"），
+        //   但 `rotVecByQuat(fQInv, …)` 会把它按脚掌的**外八偏航（≈25°）**旋转：
+        //   Ry 把 z 分量乘 cos25°=0.906 并漏出一个 x 分量 ⇒ 脚底实际落在
+        //   ±0.2103 而不是目标的 ±0.1635 ⇒ **站距凭空宽 9.4 cm**，
+        //   支撑面与质心的关系全变（踝一开 2 秒必倒，与 kP/kD 无关）。
+        //   偏航只该影响脚掌的**朝向**（由 restYawOf 决定），不影响它的**位置**。
+        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
         bodies.push({
           key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
           bone: spec.bone,
