@@ -5,6 +5,7 @@
 // 保证"改 UI"和"改算法"互不影响。
 
 import type { GenStat } from '../core/evolution';
+import type { SimMode } from '../core/sim';
 
 export interface HudHooks {
   onPause: () => void;
@@ -18,7 +19,7 @@ export interface HudHooks {
   onSigma: (v: number) => void;
   onBudget: (v: number) => void;
   onSpeed: (v: number) => void;
-  onPhase: (mode: 'walk' | 'fight') => void;
+  onPhase: (mode: SimMode) => void;
   /** ★ 步态奖励可调（用户 2026-10-01） */
   onGaitTune: (o: {
     velTrack?: number; lift?: number; single?: number; jointMove?: number;
@@ -29,7 +30,7 @@ export interface HudHooks {
 
 export interface HudState {
   paused: boolean;
-  mode: 'walk' | 'fight';
+  mode: 'walk' | 'fight' | 'stand';
   gen: number;
   evaluated: number;
   population: number;
@@ -130,7 +131,7 @@ export class Hud {
 
   update(s: HudState): void {
     const e = this.el;
-    e.stage.textContent = s.mode === 'walk' ? '学走路' : '学战斗';
+    e.stage.textContent = s.mode === 'walk' ? '学走路' : (s.mode === 'fight' ? '学战斗' : '学站立');
     e.gen.textContent = String(s.gen);
     e.pop.textContent = `${s.evaluated} / ${s.population}`;
     e.best.textContent = Number.isFinite(s.bestNow) ? s.bestNow.toFixed(2) : '—';

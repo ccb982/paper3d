@@ -61,7 +61,7 @@ const WALK_REWARD_KEYS: readonly string[] = [
   'jointMove', 'jointMotion', 'torque', 'actRate', 'energy', 'survive',
 ];
 
-export type SimMode = 'walk' | 'fight';
+export type SimMode = 'walk' | 'fight' | 'stand';
 
 export interface SimConfig {
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
@@ -1365,6 +1365,41 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
    */
   private fitnessTerms(fallen: boolean, elapsed: number): Record<string, number> {
     const w = this.w;
+    if (this.cfg.mode === 'stand') {
+      // ══════ ★★★ **站立模式：只奖稳定，不奖任何运动**（用户 2026-10-02）
+      //
+      //   "金鸡独立做好也行啊，我需要能快速收敛出能保持稳定的代码，
+      //    然后再去调前进" / "现在的情况是连持续保持稳定都做不到"
+      //
+      //   为什么必须单列一套（12 代实测训练发现的硬问题）：
+      //     `WALK_TERMS` 里**三项**正向奖励在主动破坏稳定：
+      //       velTrack (+1.0)  要它以 0.5 m/s 往前冲
+      //       lift     (+1.0)  要它把脚抬起来
+      //       jointMove(+1.0)  要它关节动
+      //     合计 **+3.0 全在拆台**，惩罚项 −5.3 扳不回来
+      //     ⇒ 12 代实测存活只有 **0.79~0.84 s**、jointMove 0.07（几乎不动）
+      //       —— 训练收敛到了"几乎静止"，而不是"稳定站立"。
+      //
+      //   本模式只保留**稳定性相关**的项，前进/抬腿/关节运动全部置 0。
+      //   收敛会快，因为没有任何一项在跟"别倒"对着干。
+      const ts: Record<string, number> = {};
+      const w = this.w;
+      ts.alive = elapsed;                            // ① 不倒：存活时间
+      ts.upright = w.upright * (this.accUpright - elapsed);   // ② 躯干直立
+      ts.height = -w.height * this.accHeight;        // ③ 高度不塌
+      ts.lateral = -w.lateral * this.accLateral;      // ④ 侧向不漂（单腿时给足权重）
+      // ⑤ 别翻滚：∫(ωx²+ωz²) —— 没有现成累加器，用 accMoveSum 的近亲：
+    //    这里退化为"关节角速度平方和"的量级代理（accMoveSum 本身已按 MOVE_JOINTS 归一）
+    ts.tiltRate = -w.tiltRate * this.accMoveSum;
+      ts.single = w.single * this.accSingle;          // ⑥ 恰好一脚着地（金鸡独立）
+      ts.quiet = -this.accMoveSum;                    // ⑦ 少动：关节别乱抖（★关键项）
+      // 站立不需要的项：显式置 0（保留通道，方便以后逐步放开）
+      ts.jointMove = 0; ts.lift = 0; ts.velTrack = 0;
+      ts.jointMotion = 0; ts.actRate = 0; ts.torque = 0; ts.yawTrack = 0;
+      ts.total = Object.values(ts).reduce((a, b) => a + b, 0);
+      return ts;
+    }
+
     if (this.cfg.mode === 'walk') {
       // ══════ ★★ 走路：walkReward.ts 的 11 项，一项一行 ══════
       //  ★ 跌倒**不给负分**，直接截断（finish(true) 提前结束）。

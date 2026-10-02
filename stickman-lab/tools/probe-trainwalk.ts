@@ -40,7 +40,7 @@ const nums = process.argv.map(Number).filter((n) => Number.isFinite(n) && n > 0)
 const GENS = nums[0] ?? 4;
 const SEED = nums[1] ?? 20261001;
 const cfg: TrainerConfig = { ...DEFAULT_TRAINER, population: 48, seedGait: true };
-const tr = new Trainer(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6 }, cfg, SEED);
+const tr = new Trainer(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 6 }, cfg, SEED);
 
 console.log(`\n=== 无头训练 ${GENS} 代（walk，相位步态种子开，pop=48，每回合 6 s）===\n`);
 // ⚠ 表头必须和下面的取值顺序**逐列对齐**（之前错位一格："换脚数"那列印的是 lift，
@@ -67,13 +67,13 @@ for (let g = 1; g <= GENS; g++) {
     //   之前一个用 bestTerms、一个用 bestEver，比的是两个不同个体，误判了好几轮。
     let bg: Float32Array | null = null, bf = -1e9, bt: Record<string, unknown> | null = null;
     for (const g of tr.genomes) {
-      const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
+      const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 6 });
       s2.begin(g);
       while (!s2.finished) s2.advance(1);
       if (s2.fitness > bf) { bf = s2.fitness; bg = g; bt = s2.terms as unknown as Record<string, unknown>; }
     }
     if (bg) {
-      const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 6 });
+      const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 6 });
       s2.begin(bg);
       while (!s2.finished) s2.advance(1);
       const g2 = s2.rawGround;
