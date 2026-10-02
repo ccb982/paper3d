@@ -15904,6 +15904,14 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      if (p.spineSync > 0) {
+        const sw = Math.sin(Math.PI * Math.min(1, s));
+        const dir = isStance ? -1 : 1;
+        const yaw = dir * p.spineSync * sw;
+        for (const sj of ["spine1", "spine2", "spine3"]) setAxis(sj, yaw * 0.6, jHip, 2);
+        setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
+        setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
+      }
       const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }
@@ -16062,11 +16070,12 @@ check(
 console.log("\n=== \u2463 CMP / Moment Balance Strategy \u5F00 vs \u5173\uFF08\u843D\u5730\u540E\u81EA\u4E3B\u8C03\u5E73\u8861\uFF09===\n");
 console.log("  " + "\u53C2\u6570".padEnd(22) + "\u5B58\u6D3B    \u6362\u811A  \u5355\u652F\u6491MoS\u5747  |WBAM|\u4E2D\u4F4D  \u53CC\u652F\u6491\u5360\u6BD4");
 for (const cfg of [
-  { n: "\u5173\u95ED\uFF08\u6B64\u524D\uFF09", p: {} },
-  { n: "cm=0.05", p: { cmBalance: 0.05, cmBalanceD: 0.2 } },
+  { n: "\u5168\u5173\uFF08\u6B64\u524D\uFF09", p: {} },
   { n: "cm=0.15", p: { cmBalance: 0.15, cmBalanceD: 0.4 } },
-  { n: "cm=0.4", p: { cmBalance: 0.4, cmBalanceD: 1 } },
-  { n: "cm=1.0", p: { cmBalance: 1, cmBalanceD: 2 } }
+  { n: "\u810A\u690E\u53CD\u76F8 0.10", p: { spineSync: 0.1 } },
+  { n: "\u810A\u690E\u53CD\u76F8 0.25", p: { spineSync: 0.25 } },
+  { n: "\u810A\u690E\u53CD\u76F8 0.50", p: { spineSync: 0.5 } },
+  { n: "cm0.15+\u810A\u690E0.25", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 } }
 ]) {
   const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
   s2.begin(new Float32Array(s2.params.length));

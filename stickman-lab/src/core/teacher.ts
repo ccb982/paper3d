@@ -58,6 +58,20 @@ export interface CaptureParams {
   cmBalance: number;
   /** 角动量变化率（dL/dt）的阻尼增益 */
   cmBalanceD: number;
+  /**
+   * ★★ 脊椎/骨盆**反相旋转**增益（用户 2026-10-02："身体调整需要脊椎同步发力对吧"——对）。
+   *
+   * 文献：Takemura et al. 2007（*Dynamic Walk of Humanoids: Momentum Compensation
+   * Based on the Optimal Pelvic Rotation*）—— 正常走路里摆动腿产生的角动量是靠
+   * **胸廓/肩的反相旋转**抵消的（van Emmerik & Wagenaar 1996；Lamoth 2002；
+   * LaFiandra 2003）；而"trunk-twistless walk"更直接：**骨盆与摆动腿反相**，
+   * 骨盆旋转本身就抵消腿的动量。HRP-2 实测：垂直轴**峰值动量降 13%、积分降 18%**；
+   * 动捕数据上最优骨盆旋转降 **42%**。最优旋转由**最小化垂直轴动量**求得。
+   *
+   * 实测依据（probe-gaitcycle ③）：未做这一项时单支撑 |WBAM| 中位 **5.36**
+   * = 平衡基线 0.16 的 **33.5×** ⇒ 完全没有角动量抵消。
+   */
+  spineSync: number;
 }
 
 /** 二连杆 IK：髋 (hipX,hipY) → 脚 (fx,fy)，返回 [髋屈伸, 膝屈伸]（膝屈为负） */
@@ -188,6 +202,20 @@ export function runCaptureTeacher(
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
+      //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
+      //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
+      //   摆动腿是左 ⇒ 胸廓往 +yaw 走（右转），反之亦然；幅度随摆动进度 sin(πs) 起伏。
+      if (p.spineSync > 0) {
+        const sw = Math.sin(Math.PI * Math.min(1, s));
+        const dir = isStance ? -1 : 1;      // 与摆动腿反相（isStance=false 即该腿在摆）
+        const yaw = dir * p.spineSync * sw;
+        // 胸廓：spine1..3 绕竖直轴（axis 2）同向转
+        for (const sj of ['spine1', 'spine2', 'spine3']) setAxis(sj, yaw * 0.6, jHip, 2);
+        // 骨盆：两髋绕自身长轴反向扭转（axis 1）⇒ 骨盆相对脚反向转
+        setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
+        setAxis('hip_r', dir * p.spineSync * 0.5 * sw, jHip, 1);
+      }
       // ★ 把 CMP 力矩加进**支撑腿的髋外展**（这是我们唯一能产生额状面力矩的通道，
       //   因为没有踝关节）。cmRoll > 0 ⇒ 骨盆往 +z 挪（把上身质量推向支撑脚对侧…，
       //   符号由实测调，见 tools/probe-gaitcycle 的开关对比）。

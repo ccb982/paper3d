@@ -15956,6 +15956,14 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
       setAxis(`hip_${side}`, h + corr, jHip);
       setAxis(`knee_${side}`, k + (isStance ? -Math.abs(absorb) : 0), jKnee);
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+      if (p.spineSync > 0) {
+        const sw = Math.sin(Math.PI * Math.min(1, s));
+        const dir = isStance ? -1 : 1;
+        const yaw = dir * p.spineSync * sw;
+        for (const sj of ["spine1", "spine2", "spine3"]) setAxis(sj, yaw * 0.6, jHip, 2);
+        setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
+        setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
+      }
       const latCorr = p.kLat * (com.z - (side === "l" ? HIP_Z : -HIP_Z)) + p.kLatV * com.vz + (isStance ? cmRoll : -cmRoll * 0.3);
       setAxis(`hip_${side}`, isStance ? latCorr : -p.kLatSwing, jHip, 0);
     }

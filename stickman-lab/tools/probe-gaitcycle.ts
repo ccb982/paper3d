@@ -150,11 +150,12 @@ check('诚实记录：teacher 的 |WBAM| 明显高于平衡基线（未做主动
 console.log('\n=== ④ CMP / Moment Balance Strategy 开 vs 关（落地后自主调平衡）===\n');
 console.log('  ' + '参数'.padEnd(22) + '存活    换脚  单支撑MoS均  |WBAM|中位  双支撑占比');
 for (const cfg of [
-  { n: '关闭（此前）', p: {} as Partial<CaptureParams> },
-  { n: 'cm=0.05', p: { cmBalance: 0.05, cmBalanceD: 0.2 } as Partial<CaptureParams> },
+  { n: '全关（此前）', p: {} as Partial<CaptureParams> },
   { n: 'cm=0.15', p: { cmBalance: 0.15, cmBalanceD: 0.4 } as Partial<CaptureParams> },
-  { n: 'cm=0.4', p: { cmBalance: 0.4, cmBalanceD: 1.0 } as Partial<CaptureParams> },
-  { n: 'cm=1.0', p: { cmBalance: 1.0, cmBalanceD: 2.0 } as Partial<CaptureParams> },
+  { n: '脊椎反相 0.10', p: { spineSync: 0.10 } as Partial<CaptureParams> },
+  { n: '脊椎反相 0.25', p: { spineSync: 0.25 } as Partial<CaptureParams> },
+  { n: '脊椎反相 0.50', p: { spineSync: 0.50 } as Partial<CaptureParams> },
+  { n: 'cm0.15+脊椎0.25', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 } as Partial<CaptureParams> },
 ]) {
   const s2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
   s2.begin(new Float32Array(s2.params.length));
