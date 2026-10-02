@@ -147,6 +147,16 @@ export interface CaptureParams {
    *   （实测 kVmpP 0→80 侧移 0.275~0.337 m 纹丝不动）。
    */
   kVmpAnkle?: number;
+  /**
+   * ★★ **骨盆执行器**增益（1/rad）：`spine1` 轴 2（屈伸）的力线对齐。
+   *   这是让角色挺起来、消除鞠躬的执行器（用户 2026-10-02 指出）。
+   *   骨架里没有独立骨盆刚体：`torso` 占 49.70% 质量兼作根，
+   *   `spine1` 轴 2（限位 ±25°、力矩 120 N·m）= 骨盆↔上半身。
+   *   ⚠ 此前被误关（错把"躯干该安静"推广成"骨盆也该安静"），已恢复。
+   */
+  kPelvis?: number;
+  /** 骨盆前倾偏置（deg）：>0 让骨盆略前倾迎向 GRF 力线。 */
+  pelvisLeanDeg?: number;
   /** ★ 支撑腿发力前送（rad）：支撑相后半段线性增大的髋伸驱动。
    *   文献：支撑腿要持续把身体推过支撑脚（跖屈+髋伸），不是被动站立。
    *   之前完全没有这一项 ⇒ 净位移 0、越走越慢。 */
@@ -414,6 +424,8 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     let lastSwitchWasFlip = false;   // 是否发生过真正的换脚（用于闩锁判据）
   const balGate = new BalanceGate();   // ★ 迈腿前平衡判定门
   let balBlocked = '';
+  /** ★ GRF 横/竖比（切向/法向）—— 由 `footGrip` 估出，供"力线对齐"用（治鞠躬）。 */
+  let grfRatioNow = 0;
   let dbgLoad = 0;
   // ★★★ 支撑**闩锁**（用户 2026-10-02）：
   //   "前腿落地后启动一个支撑相关的模块，别再让前腿再离地了"
@@ -766,6 +778,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //   用户 2026-10-02："我的设计分两个模块，一个承重腿和腰的平衡维持系统，
     //   另一个迈步系统"。本文件原先把两套逻辑**缠在同一个循环里**，
     //   导致"关掉迈步相关的东西就把平衡也关了"（kWtX 全局归零那次）。
+    { const [fnn, ftt] = sim.doll.footGrip(stanceL ? 0 : 1, dt); grfRatioNow = fnn > 1 ? ftt / fnn : 0; }
     //   ⇒ 现在平衡全部由 balanceHold() 一个**纯函数**算出，本模块不持有任何状态。
     //
     //   平面分工与全部文献依据见 balanceHold.ts 文件头。
@@ -779,6 +792,8 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       hipHeight: hipDy,
       hipFlex: sim.doll.jointAngle(jointIndexByName(sk, stanceL ? "hip_l" : "hip_r")),
       kneeFlex: sim.doll.jointAngle(jointIndexByName(sk, stanceL ? "knee_l" : "knee_r")),
+      grfX: grfRatioNow,   // ★ GRF 横/竖比（切向力 / 法向力）
+      grfY: 1,
       singleLeg: singleLeg !== null,
     });
     const qVip = hold.qVip, qVipDot = hold.qVipDot;
@@ -791,6 +806,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //   行程用 Sci Rep 2025 的 metatarsal CoP range：±COP_HALF_LEN(0.075 m)。
     {
       const side: 0 | 1 = stanceL ? 0 : 1;
+      dbgLog.grfRatio = +grfRatioNow.toFixed(3);
       const cop = Math.sin(qVip) * COP_HALF_LEN;
       sim.doll.setCoP(side, (side === 0) === stanceLNow ? cop : 0, COP_HALF_LEN);
       dbgLog.copOff = +cop.toFixed(4);
@@ -1014,6 +1030,31 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
         // 骨盆：两髋绕自身长轴反向扭转（axis 1）⇒ 骨盆相对脚反向转
         setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis('hip_r', dir * p.spineSync * 0.5 * sw, jHip, 1);
+      }
+      // ══════════════════════════════════════════════════════════════════════
+      // ★★★★ **骨盆执行器**（用户 2026-10-02："盆骨不能施力让角色挺起来"）
+      //
+      //   骨架事实：**没有独立骨盆刚体** —— `torso` 一个刚体占 49.70% 质量、
+      //   兼作根，上接 `spine1..3`、下接两髋。脊柱关节限位
+      //   `[-xy, -xy, SPINE_FLEX]` ⇒ **轴 2 = 屈伸**，力矩上限 120 N·m。
+      //   ⇒ **`spine1` 轴 2 就是"骨盆 ↔ 上半身"的屈伸执行器**，
+      //     是唯一能让角色**挺起来**、对抗鞠躬的关节。
+      //
+      //   ⚠ 之前我把它关了，理由是错的。Riemann 2003 说"trunk 是最不重要的
+      //     纠正来源"，指的是**躯干**惯大、来不及参与快速扰动响应；同一篇的下一句
+      //     才是关键："significantly **more corrective action occurred between the
+      //     pelvis and thigh** than between the pelvis and trunk"
+      //     ⇒ **骨盆恰恰是应该发力的那个**，我把"躯干该安静"错推成了"骨盆也该安静"。
+      //
+      //   作用：把骨盆顶向 **GRF 力线**（`hold.pelvisUpright`），与髋**力矩方向一致**
+      //   ⇒ 力矩分配到骨盆+髋两个关节，而不是全压在髋上把躯干折向前。
+      {
+        const sp0 = spineNames[0];
+        const jSp0 = sp0 !== undefined ? sk.joints[jointIndexByName(sk, sp0)] : undefined;
+        if (jSp0 && (p.kPelvis ?? 0) > 0) {
+          setAxis(sp0, hold.pelvisUpright, jSp0, 2);
+          dbgLog.pelvisCmd = +(hold.pelvisUpright * 57.3).toFixed(2);
+        }
       }
       // ══════════════════════════════════════════════════════════════════════
       // ★★★ 两个用户点名要调、但参数一直是 0（等于没接）的机制：

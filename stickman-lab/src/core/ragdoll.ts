@@ -416,6 +416,8 @@ export class Ragdoll {
    *   原因是支撑点在脚刚体上直接施加冲量、**绕过接触与摩擦**。
    *   纯物理路径（靠踝力矩把脚撬起来让接触自然算 CoP）才是不打滑的做法。 */
   supportPointOn = false;
+  /** 最近一次 driveMotors 的 dt（enforceLimits 的角度投影需要它换算角冲量）。 */
+  private lastDt = 1 / 120;
   private readonly axTmp = new Float64Array(3);
   private readonly ptTmp = { x: 0, y: 0, z: 0 };
   private readonly pcTmp = { x: 0, y: 0, z: 0 };
@@ -901,6 +903,7 @@ export class Ragdoll {
    */
   driveMotors(dt: number): void {
     const scale = this.opt.torqueScale;
+    this.lastDt = dt;   // 供 enforceLimits 的角度投影用
     const kP = this.opt.kP;
     const kD = this.opt.kD;
     const qRel = this.qRel;
@@ -1133,36 +1136,38 @@ export class Ragdoll {
         else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
         const av = c.angvel(), ap = p.angvel();
         const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-        // 只有还在往越界方向走才拦；往回走不拦，否则会锁死回程
-        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
         // 惯量：沿该轴用两体的**最大**主惯量作保守下界（`jointIeff` 用的最小值太小，
         //   实测让冲量差一个量级 ⇒ 限位形同虚设）
         const Ip = p.principalInertia(), Ic = c.principalInertia();
         const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
-        const J = -wRel * Iax;
         const jv = this.iv;
-        jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
-        c.applyTorqueImpulse(jv, true);
-        jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;
-        p.applyTorqueImpulse(jv, true);
-        this.limitHits++;
+        // ── ① 速度级：仍在往越界方向走就精确抵消该轴相对角速度（恢复系数 e=0）
+        if (out > 0 ? wRel > 0 : wRel < 0) {
+          const J = -wRel * Iax;
+          jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
+          c.applyTorqueImpulse(jv, true);
+          jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;
+          p.applyTorqueImpulse(jv, true);
+          this.limitHits++;
+        }
       }
     }
   }
-
   /**
-   * ★★★ **在虚拟支撑点处施加支撑力**（每物理步调用一次）。
+   * ★★★ **在虚拟支撑点处施加支撑力**（力偶）。
    *
-   *   这是让踝获得 CoP 权限的**唯一**途径（理由见上方 `setCoP` 的大段注释）：
-   *   刚性平底盒把压力中心锁在接触面形心，踝一转只是压实盒面，CoP 移不动。
-   *   这里改为**显式**把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，
-   *   于是踝的倾角指令 → 该点的力臂 → GRF 力矩 → CoM 加速度，这条链才闭合。
+   * 让踝获得 CoP 权限的唯一途径。此前踝指令对动力学**零效力**
+   * （`kCop`×33 / `ankleTorque`×9 / VIP 刚度比×3.7 三种测法结果**逐位相同**），
+   * 根因是**刚性平底盒**把压力中心锁死在接触面形心 —— 踝一转只是压实盒面，CoP 移不动。
+   * 改为显式把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，闭合
+   * 「踝倾角 → 力臂 → GRF 力矩 → CoM 加速度」这条链（Morasso 2022 的 CoP 策略）。
    *
-   *   实现细节：
-   *   · 只对**承重脚**施加（`loadN > 0` 时）
-   *   · 力大小 = 该脚当前承担的载荷（用 `footLoadFrac` 的比例 × 实测法向力）
-   *   · 方向 = 竖直向上；作用点 = 脚刚体中心 + 足长轴方向 × copOffset
-   *   · 施加点偏移 ⇒ 对踝产生力矩 W·copOffset ⇒ **这就是 CoP 策略的物理实现**
+   * ⚠ 必须是**力偶**（偏移点 +F、脚心 −F）：净力为 0、只有力矩 F·copOffset。
+   *   第一版写成"额外的力"，体重被算两遍，存活 1.77s → 0.40s。
+   * ⚠ 默认关闭（`supportPointOn = false`）：用户反馈"支撑腿打滑的感觉" ——
+   *   它绕过接触与摩擦，物理上不成立。纯物理路径（靠踝力矩撬脚）才不打滑。
+   * ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的本构关系；
+   *   要更真实需要把足底建成若干带弹簧的子段。
    */
   applySupportPoint(dt: number): void {
     const [fl, fr] = this.footLoadFrac(dt);

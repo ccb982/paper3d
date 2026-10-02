@@ -53,6 +53,16 @@ export interface BalanceHoldParams {
    *   且 K_crit,hip 只有踝的一半 ⇒ 极小共同收缩即可。
    *   ⚠ 此前误实现为**常数偏置** −0.048（常数不是刚度）⇒ 髋 0.4s 内屈到 35.5°。 */
   kHipUpright: number;
+  /** ★ **GRF 力线对齐**增益（1/rad）：让躯干去迎合力线，使髋的力臂归零（治鞠躬）。 */
+  kHipAlign?: number;
+  /** ★★ **骨盆执行器**（`spine1` 轴2 屈伸）的力线对齐增益（1/rad）。
+   *   这是让角色挺起来、消除鞠躬的执行器（用户 2026-10-02 指出）。
+   *   注意：它作用在**骨盆↔上半身**，与髋**力矩方向一致**，力矩分配到两个关节。 */
+  kPelvis?: number;
+  /** 骨盆的前倾偏置（deg）：>0 让骨盆略前倾迎向 GRF 力线。 */
+  pelvisLeanDeg?: number;
+  /** 旧的"竖直刚度"保留比例（1 = 保留原行为；0 = 完全交给力线对齐）。 */
+  kHipUprightBlend?: number;
   /** ★ 膝的**直立刚度**比例增益（1/rad）：锁腿，防止支撑膝折到 −79°（见 kneeUpright 处）。 */
   kKneeUpright?: number;
   /** ★ 支撑膝要"锁住"的目标屈角（deg）。文献：单腿站立标准姿势带轻微屈膝 15~20°。 */
@@ -83,6 +93,15 @@ export interface BalanceHoldInput {
   hipFlex: number;
   /** 承重腿**膝的当前屈角**（rad，正 = 屈）—— 膝直立刚度的被控量 */
   kneeFlex: number;
+  /**
+   * ★★ 地面反力（GRF）的方向（单位向量，已归一化）—— 由接触切/法向冲量估出。
+   *   用户 2026-10-02："力是自下往上传导的，如果腰部和腿部发力方向不一致，
+   *   那么鞠躬也是在所难免" ⇒ 必须让躯干**对准** GRF 力线，而不是硬撑竖直。
+   *   实测 GRF 横/竖比 0.074~0.333（歪 4°~18°），力线落到**髋后方** 11~65 cm
+   *   ⇒ 对髋产生屈曲力矩 ⇒ 髋被折向前 = 鞠躬。
+   */
+  grfX: number;
+  grfY: number;
   /** 髋高（m），用于 K_crit,hip = m·g·h_hip */
   hipHeight: number;
   /** 是否处于单腿站立（此时髋接管矢状面） */
@@ -102,6 +121,8 @@ export interface BalanceHoldOutput {
   hipUpright: number;
   /** 膝的直立刚度输出（锁腿用；膝越屈它越正 = 越往回顶） */
   kneeUpright: number;
+  /** ★★ 骨盆执行器输出（`spine1` 轴2 屈伸）—— 让角色挺起来、消掉鞠躬。 */
+  pelvisUpright: number;
   /** 躯干旋转指令（rad）—— 平衡相**恒为 0**（见文件头结论 ②） */
   spineCmd: number;
 
@@ -186,6 +207,64 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
   const hipUprightRaw = -i.hipFlex * p.kHipUpright;
 
   // ══════════════════════════════════════════════════════════════════════
+  // ★★★ **GRF 力线对齐**（用户 2026-10-02："力是自下往上传导的，
+  //   如果腰部和腿部发力方向不一致，那么鞠躬也是在所难免"）
+  //
+  //   力学（逆动力学）：一个关节的净力矩 = **GRF 力线到该关节的垂直距离 × F**。
+  //   要让髋/腰**零力矩**（不折不弯），不是要"躯干竖直"，而是要
+  //   **GRF 力线正好穿过髋关节**。
+  //
+  //   实测（此前回读）：
+  //       GRF 横/竖 = 0.074~0.333（力线歪 4°~18°）
+  //       力线 − 髋x = **−0.115 ~ −0.646 m**（力线在髋**后方**）
+  //   ⇒ 对髋产生 11~65 cm 力臂的**屈曲**力矩 ⇒ 髋被折向前 = **鞠躬**。
+  //
+  //   ⇒ 修法：髋的直立刚度目标不是 0°，而是让躯干**倾斜去迎合力线方向**：
+  //       θ_align = −atan2(grfX, grfY)     （GRF 往前倒 ⇒ 躯干也往前倾）
+  //   误差 = θ_hip − θ_align，髋往误差回零的方向出力 ⇒ 力臂归零 ⇒ 鞠躬消失。
+  //
+  //   ⚠ 这**不是**放弃姿态控制 —— 恰恰相反：它是把"竖直"这个错误的绝对目标
+  //     换成"力线对齐"这个物理上正确的目标（文献里的 moment balance / WBAM
+  //     就是在做这件事：Riemann 2003 明确把"about the pelvis and thigh"的
+  //     纠正看得比"pelvis and trunk"更重要，因为躯干惯量大、来不及响应）。
+  const grfAngle = Math.atan2(i.grfX, Math.max(0.2, i.grfY));   // GRF 倾角（rad）
+  const hipAlign = i.hipFlex - grfAngle;
+  const hipAlignCorr = Math.max(-0.30, Math.min(0.30, -hipAlign * (p.kHipAlign ?? 1.0)));
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ★★★ **骨盆执行器（`spine1` 轴 2 屈伸）** —— 让角色挺起来的那个关节
+  //
+  //   用户 2026-10-02："没有能持续产生反向力矩的执行器，这个东西在哪，
+  //   我认为在盆骨，我发现一直在鞠躬，盆骨不能施力让角色挺起来" —— **找对了**。
+  //
+  //   骨架事实（src/core/skeleton.ts）：
+  //     · **没有独立的骨盆刚体**：`torso` 一个刚体占 **49.70%** 质量、
+  //       `proximal:'bottom'`（兼作根），上接脊柱 `spine1..3`、下接两髋。
+  //     · 脊柱关节限位是 `[-xy, -xy, SPINE_FLEX]` ⇒ **轴 2 = 屈伸**，
+  //       力矩上限 `SPINE_TAU = 120 N·m`。
+  //   ⇒ **`spine1` 的轴 2 就是"骨盆 ↔ 上半身"的屈伸执行器**，也是唯一能让
+  //     角色挺起来的关节（髋只能推躯干、不能给上半身反向力矩）。
+  //
+  //   ⚠⚠ 我之前把它关掉了，而且**理由是错的**（2026-10-02 修正）：
+  //     依据 Riemann 2003 "the **trunk** is the **least important** source of
+  //     corrective action" ⇒ 我把 `spineSync` 收窄到仅摆动相、并写 `spineCmd ≡ 0`。
+  //   但那篇文献**下一句**才是关键，我一直没重视：
+  //     "significantly **more corrective action occurred between the pelvis and thigh
+  //      than between the pelvis and trunk**"；"the **higher inertia** associated with
+  //      the trunk may **preclude it from contributing to the quick adjustments**"
+  //   ⇒ 它说的是**躯干（trunk）**惯量大、来不及参与快速扰动响应，
+  //     所以纠正动作落在**骨盆（pelvis）**这一侧 —— **骨盆恰恰是应该发力的那个**。
+  //   我把"躯干该安静"错误地推广成了"骨盆也该安静"，于是把唯一能挺身的
+  //     执行器关掉了 ⇒ 鞠躬无人对抗。
+  //
+  //   正确分工：**骨盆顶住 GRF 力线的屈曲力矩**（与髋做同一件事，但作用在更上位），
+  //     这样髋与腰**力矩方向一致**（用户原话），力矩分配到两个关节而不是全压在髋上。
+  //
+  //   目标角取 `grfAngle`：让上半身**倾斜去迎合力线**，力臂归零 ⇒ 鞠躬消失。
+  const pelvisAlign = -(grfAngle + (p.pelvisLeanDeg ?? 0) * Math.PI / 180);
+  const pelvisUpright = Math.max(-0.45, Math.min(0.45, -pelvisAlign * (p.kPelvis ?? 1.5)));
+
+  // ══════════════════════════════════════════════════════════════════════
   // ★★★ **膝的直立刚度**（第三个关节的"锁腿"作用）
   //
   //   起因（2026-10-02，"现在只是不停鞠躬"）：把"鞠躬"回读出来才发现它**不是姿态问题，
@@ -244,7 +323,9 @@ export function balanceHold(p: BalanceHoldParams, i: BalanceHoldInput): BalanceH
     // ⚠⚠ **限幅只能加在总和上**：逐项限幅会让 hipUpright 饱和成 bang-bang
     //   （实测 kHipUpright=2.5、髋屈 0.6 rad ⇒ −1.5 被钳到 −0.30 ⇒ 输出只剩
     //   `±0.30·sign(髋屈)`，另外两项被完全淹没 ⇒ 拆开三重反馈后数字**一位不变**）
-    hipSag: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
+    hipSag: Math.max(-0.45, Math.min(0.45, hipAlignCorr + hipUprightRaw * (p.kHipUprightBlend ?? 0.0) + hipDamp + hipSagSteer)),
+    /** ★ 骨盆执行器输出（走 `spine1` 轴 2 = 屈伸）。这就是"挺起来"的力矩。 */
+    pelvisUpright,
     /** 膝的直立刚度输出（锁腿；膝越屈它越正 = 越往回顶） */
     kneeUpright,
     hipAbd,
@@ -261,7 +342,8 @@ export function holdParamsFrom(src: Record<string, unknown>): BalanceHoldParams 
     kVipP: g('kVipP', 60), kVipD: g('kVipD', 5),
     kAnkleStiff: g('kAnkleStiff', 0.5), kHipStiff: g('kHipStiff', 1.6), kHipShare: g('kHipShare', 0.25),
     kWtX: g('kWtX', 0.6), kWtVx: g('kWtVx', 0.6),
-    kHipUpright: g("kHipUpright", 1.2),
+    kHipUpright: g("kHipUpright", 1.2), kHipAlign: g("kHipAlign", 1.0),
+    kPelvis: g("kPelvis", 1.5), pelvisLeanDeg: g("pelvisLeanDeg", 0), kHipUprightBlend: g("kHipUprightBlend", 0.0),
     kKneeUpright: g("kKneeUpright", 2.0), kneeHoldDeg: g("kneeHoldDeg", 15),
     kVmpP: g('kVmpP', 14), kVmpD: g('kVmpD', 3), kVmpAnkle: g('kVmpAnkle', 0),
   };

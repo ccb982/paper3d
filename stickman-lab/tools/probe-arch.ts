@@ -905,24 +905,20 @@ for (const kc of [0, 3, 30, 100]) {
   } });
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
-console.log('\n=== 膝直立刚度 + 目标屈角 扫描（符号已修）===\n');
-console.log('  kKnee kHold° 膝峰° 骨盆y低 法向力%N 滑移m/s 躯干倾° 存活   单支撑帧');
-for (const kk of [0, 2, 5, 10]) {
-  for (const kh of [10, 20]) {
-    const fK2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 8, gaitHz: 1 / FB.T });
-    fK2.begin(new Float32Array(fK2.params.length));
-    const iKn4 = jointIndexByName(sk, 'knee_r');
-    let kPk = 0, pY = 9, tPk = 0, ss = 0, fnP = 0, slip = 0;
-    let mSum = 0; for (const b of fK2.doll.bodies) mSum += b.mass();
-    const W = mSum * 9.81;
-    const rK2 = runCaptureTeacher(sk, fK2, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6, kVipP: 60, kKneeUpright: kk, kneeHoldDeg: kh }, { dur: 8, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
-      kPk = Math.max(kPk, Math.abs(fK2.doll.jointAngle(iKn4)) * 57.3);
-      pY = Math.min(pY, fK2.doll.bodyByKey('pelvis').translation().y);
-      tPk = Math.max(tPk, fK2.doll.tiltOf(fK2.doll.torso()));
-      const [fn, ft] = fK2.doll.footGrip(1, 1 / DEFAULT_SIM.physicsHz);
-      if (fn > 50) { fnP = Math.max(fnP, fn / W); slip = Math.max(slip, ft / fn); }
-      if (!(footGrounded(fK2.doll, 'l') && footGrounded(fK2.doll, 'r'))) ss++;
-    } });
-    console.log(`  ${String(kk).padStart(5)} ${String(kh).padStart(5)} ${kPk.toFixed(0).padStart(5)} ${pY.toFixed(3).padStart(7)} ${(fnP * 100).toFixed(0).padStart(7)} ${slip.toFixed(3).padStart(8)} ${(tPk * 57.3).toFixed(0).padStart(7)} ${rK2.t.toFixed(2)}s ${String(ss).padStart(8)}`);
-  }
+console.log('\n=== 角度投影限位：各关节是否回到限位内 ===\n');
+console.log('  kPelvis 踝峰° 膝峰° spine1Z° 躯干倾° 骨盆y低 存活   限位触发');
+for (const kp of [0, 0.1, 0.25, 0.6]) {
+  const fLj = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'stand' as never, duration: 8, gaitHz: 1 / FB.T });
+  fLj.begin(new Float32Array(fLj.params.length));
+  const iA3 = jointIndexByName(sk, 'foot_r'), iK5 = jointIndexByName(sk, 'knee_r'), iS3 = jointIndexByName(sk, 'spine1');
+  let aPk = 0, kPk = 0, sPk = 0, tPk = 0, pY = 9;
+  const rLj = runCaptureTeacher(sk, fLj, { ...FB, kWtX: 0.6, kWtVx: 0.6, kVmpP: 28, kVmpAnkle: 0, kHipUpright: 0.6, kVipP: 60, kKneeUpright: 2, kneeHoldDeg: 20, kPelvis: kp }, { dur: 8, clockDriven: true, singleLeg: 'r', liftHold: 0.25, onFrame: (): void => {
+    aPk = Math.max(aPk, Math.abs(fLj.doll.jointAngle(iA3)) * 57.3);
+    kPk = Math.max(kPk, Math.abs(fLj.doll.jointAngle(iK5)) * 57.3);
+    sPk = Math.max(sPk, Math.abs(fLj.doll.jointAngle(iS3)) * 57.3);
+    tPk = Math.max(tPk, fLj.doll.tiltOf(fLj.doll.torso()));
+    pY = Math.min(pY, fLj.doll.bodyByKey('pelvis').translation().y);
+  } });
+  console.log(`  ${kp.toFixed(2).padStart(7)} ${aPk.toFixed(0).padStart(5)} ${kPk.toFixed(0).padStart(5)} ${sPk.toFixed(0).padStart(8)} ${(tPk * 57.3).toFixed(0).padStart(7)} ${pY.toFixed(3).padStart(7)} ${rLj.t.toFixed(2)}s ${String(fLj.doll.limitHits).padStart(8)}`);
 }
+console.log('\n  限位：踝 18°/膝 145°/spine1 25°。触发数应大幅上升且各峰不再爆表。');
