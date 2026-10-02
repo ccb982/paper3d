@@ -58,8 +58,13 @@ export const MODULES: readonly Def[] = [
   { id: 'stillSwing', label: '摆动相身体冻结', part: 'body', phases: ['step'], singleOnly: true },
   { id: 'balance', label: 'WBAM/MoS 平衡', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },
   { id: 'distance', label: '脚净位移', part: 'body', phases: ['both', 'step', 'adjust'], singleOnly: false },
-  { id: 'spineSync', label: '骨盆-脊椎反相', part: 'spine', phases: ['both', 'step', 'adjust'], singleOnly: false },
-  { id: 'cmBalance', label: 'CMP 质心力矩', part: 'spine', phases: ['both', 'step', 'adjust'], singleOnly: false },
+  // ★★ 脊椎/CMP 默认**只在「稳住中」相**出力（实测 2026-10-02）：
+  //   三相都开着时，单支撑 MoS 从 −487mm 拉到 +79mm（站得住），
+  //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
+  //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
+  //     只在落地后的调整相用来纠正身体。
+  { id: 'spineSync', label: '骨盆-脊椎反相', part: 'spine', phases: ['adjust'], singleOnly: false },
+  { id: 'cmBalance', label: 'CMP 质心力矩', part: 'spine', phases: ['adjust'], singleOnly: false },
   { id: 'pelvisFirst', label: '盆骨/髋优先', part: 'l', phases: ['step', 'adjust'], singleOnly: true },
   { id: 'refShape', label: '文献髋膝形状', part: 'l', phases: ['step', 'adjust'], singleOnly: true },
   { id: 'placement', label: '落点/捕获点', part: 'l', phases: ['step', 'adjust'], singleOnly: true },
@@ -130,7 +135,23 @@ export class ModuleSet {
     return '';
   }
 
-  /** ★ 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /**
+   * ★ 改某模块**在哪些相**生效（用户："需要代码操控什么时候什么模块起作用"）。
+   *   实测用途：脊椎三相全开 ⇒ MoS 变好但换脚减半；只在 `adjust` 相 ⇒ 两头都要。
+   *   传空数组 = 等价于永远关闭。
+   */
+  setPhases(id: ModuleId, phases: GaitPhase[]): this {
+    const d = MODULES.find(m => m.id === id);
+    if (d) d.phases = phases.slice();
+    return this;
+  }
+
+  /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /** 取某模块当前登记的相列表（调试用） */
+  phasesOf(id: ModuleId): readonly GaitPhase[] {
+    return MODULES.find(m => m.id === id)?.phases ?? [];
+  }
+
   report(phase: GaitPhase, nGround: number): string[] {
     const out: string[] = [];
     for (const leg of ['l', 'r'] as Leg[]) {

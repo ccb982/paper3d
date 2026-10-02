@@ -14662,8 +14662,13 @@ var MODULES = [
   { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
   { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "distance", label: "\u811A\u51C0\u4F4D\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  // ★★ 脊椎/CMP 默认**只在「稳住中」相**出力（实测 2026-10-02）：
+  //   三相都开着时，单支撑 MoS 从 −487mm 拉到 +79mm（站得住），
+  //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
+  //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
+  //     只在落地后的调整相用来纠正身体。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["adjust"], singleOnly: false },
+  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -14731,7 +14736,21 @@ var ModuleSet = class {
     if (d.singleOnly && nGround !== 1) return `\u8981\u6C42\u5355\u652F\u6491\uFF0C\u5F53\u524D\u652F\u6491\u811A\u6570=${nGround}`;
     return "";
   }
-  /** ★ 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /**
+   * ★ 改某模块**在哪些相**生效（用户："需要代码操控什么时候什么模块起作用"）。
+   *   实测用途：脊椎三相全开 ⇒ MoS 变好但换脚减半；只在 `adjust` 相 ⇒ 两头都要。
+   *   传空数组 = 等价于永远关闭。
+   */
+  setPhases(id, phases) {
+    const d = MODULES.find((m) => m.id === id);
+    if (d) d.phases = phases.slice();
+    return this;
+  }
+  /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /** 取某模块当前登记的相列表（调试用） */
+  phasesOf(id) {
+    return MODULES.find((m) => m.id === id)?.phases ?? [];
+  }
   report(phase, nGround) {
     const out = [];
     for (const leg of ["l", "r"]) {
@@ -15598,7 +15617,8 @@ var Sim = class {
       }
     }
     if (this.mod.active("singleSupport", this.gp.now, nGround, null))
-      this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt2;
+      this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt2;
+    if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt2;
     {
       const clr = Math.max(this.airPeakL, this.airPeakR);
       const mosHere = this.lastMosX;
@@ -16377,17 +16397,19 @@ console.log("\n=== \u2464c \u2605 \u6A21\u5757\u5F00\u5173\u5BF9\u7167\u5B9E\u9A
 console.log("  \u540C\u4E00\u4E2A teacher\uFF0C\u53EA\u6539\u300C\u54EA\u4E9B\u6A21\u5757\u5F00\u7740\u300D\uFF0C\u770B\u5DEE\u522B\uFF08\u4E0D\u662F\u770B MoS \u53D8\u6CA1\u53D8\uFF0C\u662F\u770B\u6574\u4F53\u53D8\u597D\u8FD8\u662F\u53D8\u5DEE\uFF09");
 console.log("\n  " + "\u914D\u7F6E".padEnd(30) + "\u5B58\u6D3B    \u6362\u811A  \u5355\u652F\u6491MoS\u5747  |WBAM|\u4E2D\u4F4D  \u53CC\u652F\u6491%  \u6446\u52A8\u51BB\u7ED3\u5206");
 {
+  const SPINE_ALL = ["both", "step", "adjust"];
   const cases = [
-    { n: "\u5168\u5F00\uFF08cm0.15+\u810A\u690E0.25\uFF09", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: [] },
-    { n: "\u2605 \u5173\u6389\u810A\u690E\u5168\u90E8\u6A21\u5757", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ["spineSync", "cmBalance"] },
-    { n: "\u2605 \u5173\u6389\u810A\u690E+\u8EAB\u4F53\u5E73\u8861\u9879", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ["spineSync", "cmBalance", "balance"] },
-    { n: "\u2605 \u5173\u6389\u8EAB\u4F53\u5168\u90E8\u6A21\u5757", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ["loadShift", "altSwitch", "singleSupport", "cycle", "stillSwing", "balance", "distance", "spineSync", "cmBalance"] },
-    { n: "\u2605 \u53EA\u7559\u9010\u817F\u6A21\u5757\uFF08\u9ACB/\u843D\u70B9/\u6B65\u957F\uFF09", p: {}, off: ["loadShift", "altSwitch", "singleSupport", "cycle", "stillSwing", "balance", "distance", "spineSync", "cmBalance", "stepClearance"] }
+    { n: "\u810A\u690E\u4E09\u76F8\u5168\u5F00\uFF08\u65E7\uFF09", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: SPINE_ALL, extraOff: [] },
+    { n: "\u2605 \u810A\u690E\u53EA\u5728\u7A33\u4F4F\u76F8", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: ["adjust"], extraOff: [] },
+    { n: "\u2605 \u810A\u690E\u53EA\u5728\u7A33\u4F4F\u76F8\xB7\u5F3A", p: { cmBalance: 0.25, cmBalanceD: 0.6, spineSync: 0.4 }, spine: ["adjust"], extraOff: [] },
+    { n: "\u2605 \u810A\u690E\u53EA\u5728\u8FC7\u6E21\u76F8", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: ["both"], extraOff: [] },
+    { n: "\u2605 \u810A\u690E\u5168\u5173\uFF08\u5BF9\u7167\uFF09", p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: [], extraOff: ["spineSync", "cmBalance"] }
   ];
   for (const c of cases) {
     const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
     s3.begin(new Float32Array(s3.params.length));
-    for (const id of c.off) s3.mod.enable(id, false);
+    for (const id of ["spineSync", "cmBalance"]) s3.mod.setPhases(id, c.spine);
+    for (const id of c.extraOff) s3.mod.enable(id, false);
     const d3 = { n: 0, dbl: 0, mos: [], wb: [] };
     const c3 = newCom(), sp3 = newSupport(), l3 = new Float64Array(3);
     const cb3 = () => {
@@ -16410,7 +16432,38 @@ console.log("\n  " + "\u914D\u7F6E".padEnd(30) + "\u5B58\u6D3B    \u6362\u811A  
   console.log("\n  \u5224\u8BFB\uFF1A`stillSwing` \u4E00\u5217\u8D8A\u63A5\u8FD1 0 = \u6446\u52A8\u76F8\u8EAB\u4F53\u8D8A\u51BB\u7ED3\uFF08\u8D8A\u597D\uFF09");
   console.log("        \u5B58\u6D3B/\u6362\u811A\u6389\u4E86 = \u90A3\u6279\u6A21\u5757\u662F\u5728\u6491\u547D\uFF1B\u6389\u4E86\u4F46 MoS \u53D8\u597D = \u5B83\u5728\u62FF\u7A33\u5F53\u884C\u8D70");
 }
-console.log("\n=== \u2464d \u2605 \u6A21\u5757\u5F00\u5173\u4E3A\u4EC0\u4E48\u5173\uFF08\u9010\u6A21\u5757\u6253\u5370\u539F\u56E0\uFF09===\n");
+console.log("\n=== \u2464d \u2605\u2605 \u4E3A\u4EC0\u4E48\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D\u548C\u300C\u5168\u5173\u300D\u6570\u5B57\u4E00\u6A21\u4E00\u6837\uFF1F\uFF08\u76F8\u4F4D\u5360\u7528\u65F6\u957F\uFF09===\n");
+{
+  const s5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
+  s5.begin(new Float32Array(s5.params.length));
+  const occ = { both: 0, step: 0, adjust: 0 };
+  const cnt = { both: 0, step: 0, adjust: 0 };
+  runCaptureTeacher(
+    sk,
+    s5,
+    { ...FB, cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 },
+    { dur: DUR, clockDriven: true, onFrame: () => {
+      occ[s5.gp.now] += 1 / DEFAULT_SIM.controlHz;
+      cnt[s5.gp.now]++;
+    } }
+  );
+  const tot = occ.both + occ.step + occ.adjust;
+  console.log("  \u76F8\u4F4D          \u5360\u7528\u65F6\u957F   \u5360\u6BD4   \u5E27\u6570");
+  for (const k of ["both", "step", "adjust"])
+    console.log(`  ${k.padEnd(12)} ${occ[k].toFixed(2).padStart(6)}s  ${(100 * occ[k] / Math.max(1e-9, tot)).toFixed(0).padStart(4)}%  ${String(cnt[k]).padStart(5)}`);
+  console.log(`
+  \u21D2 \u2605\u300C\u7A33\u4F4F\u76F8\u300D(adjust) \u5360\u7528 ${occ.adjust.toFixed(2)}s`);
+  if (occ.adjust < 0.05) {
+    console.log(`  \u21D2\u2717 adjust \u76F8**\u51E0\u4E4E\u4ECE\u672A\u53D1\u751F** \u21D2 \u4EFB\u4F55 phases=['adjust'] \u7684\u6A21\u5757\u7B49\u4E8E\u6C38\u8FDC\u5173\u95ED\uFF0C`);
+    console.log(`     \u6240\u4EE5\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D\u548C\u300C\u5168\u5173\u300D\u6570\u5B57\u5B8C\u5168\u4E00\u6837\uFF08\u4E0D\u662F bug\uFF0C\u662F adjust \u76F8\u8FDB\u4E0D\u53BB\uFF09\u3002`);
+    console.log(`     \u6839\u56E0\uFF1AGaitPhaseMachine \u8981\u6C42**\u8FDE\u7EED\u5355\u652F\u6491 \u2265 ADJUST_MIN(0.70s)** \u624D\u8FDB adjust\uFF0C`);
+    console.log(`     \u800C\u5B9E\u6D4B\u53CC\u652F\u6491\u5360 ${(100 * (occ.both / Math.max(1e-9, tot))).toFixed(0)}% \u21D2 \u5355\u652F\u6491\u6BB5\u88AB\u5207\u5F97\u5F88\u788E\uFF0C`);
+    console.log(`     \u6BCF\u6BB5\u90FD\u6512\u4E0D\u591F 0.70s\u3002\u8981\u8BA9 adjust \u76F8\u5B58\u5728\uFF0C\u5F97\u5148\u8BA9\u5355\u652F\u6491\u6BB5\u53D8\u957F\uFF08\u8FDE\u7EED\u6446\u52A8\u76F8\u66F4\u4E45\uFF09\u3002`);
+  } else {
+    console.log(`  \u21D2 \u2713 adjust \u76F8\u786E\u5B9E\u5B58\u5728\uFF0C\u300C\u53EA\u5728\u7A33\u4F4F\u76F8\u300D= \u771F\u7684\u53EA\u5728\u7A33\u4F4F\u65F6\u51FA\u529B\u3002`);
+  }
+}
+console.log("\n=== \u2464e \u2605 \u6A21\u5757\u5F00\u5173\u4E3A\u4EC0\u4E48\u5173\uFF08\u9010\u6A21\u5757\u6253\u5370\u539F\u56E0\uFF09===\n");
 {
   const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: DUR, gaitHz: 1 / FB.T });
   s4.begin(new Float32Array(s4.params.length));

@@ -243,18 +243,21 @@ console.log('\n=== ⑤c ★ 模块开关对照实验：脊椎模块到底帮了�
 console.log('  同一个 teacher，只改「哪些模块开着」，看差别（不是看 MoS 变没变，是看整体变好还是变差）');
 console.log('\n  ' + '配置'.padEnd(30) + '存活    换脚  单支撑MoS均  |WBAM|中位  双支撑%  摆动冻结分');
 {
-  const cases: { n: string; p: Partial<CaptureParams>; off: Parameters<typeof ModuleSet.prototype.enable>[0][] }[] = [
-    { n: '全开（cm0.15+脊椎0.25）', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: [] },
-    { n: '★ 关掉脊椎全部模块', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['spineSync', 'cmBalance'] },
-    { n: '★ 关掉脊椎+身体平衡项', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['spineSync', 'cmBalance', 'balance'] },
-    { n: '★ 关掉身体全部模块', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, off: ['loadShift', 'altSwitch', 'singleSupport', 'cycle', 'stillSwing', 'balance', 'distance', 'spineSync', 'cmBalance'] },
-    { n: '★ 只留逐腿模块（髋/落点/步长）', p: {}, off: ['loadShift', 'altSwitch', 'singleSupport', 'cycle', 'stillSwing', 'balance', 'distance', 'spineSync', 'cmBalance', 'stepClearance'] },
+  // 脊椎"三相全开"的旧定义（覆盖 modules.ts 里新设的 ['adjust']）
+  const SPINE_ALL: GaitPhase[] = ['both', 'step', 'adjust'];
+  const cases: { n: string; p: Partial<CaptureParams>; spine: GaitPhase[]; extraOff: ModuleId[] }[] = [
+    { n: '脊椎三相全开（旧）', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: SPINE_ALL, extraOff: [] },
+    { n: '★ 脊椎只在稳住相', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: ['adjust'], extraOff: [] },
+    { n: '★ 脊椎只在稳住相·强', p: { cmBalance: 0.25, cmBalanceD: 0.6, spineSync: 0.40 }, spine: ['adjust'], extraOff: [] },
+    { n: '★ 脊椎只在过渡相', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: ['both'], extraOff: [] },
+    { n: '★ 脊椎全关（对照）', p: { cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 }, spine: [], extraOff: ['spineSync', 'cmBalance'] },
   ];
   for (const c of cases) {
     const s3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
     s3.begin(new Float32Array(s3.params.length));
-    // ★ 代码层面关模块（这就是用户要的"代码操控什么模块起作用"）
-    for (const id of c.off) s3.mod.enable(id, false);
+    // ★ 代码层面控制脊椎模块在**哪些相**起作用（不必手工逐个 enable）
+    for (const id of ['spineSync', 'cmBalance'] as ModuleId[]) s3.mod.setPhases(id, c.spine);
+    for (const id of c.extraOff) s3.mod.enable(id, false);
     const d3 = { n: 0, dbl: 0, mos: [] as number[], wb: [] as number[] };
     const c3 = newCom(), sp3 = newSupport(), l3 = new Float64Array(3);
     const cb3 = (): void => {
@@ -279,7 +282,31 @@ console.log('\n  ' + '配置'.padEnd(30) + '存活    换脚  单支撑MoS均  |
   console.log('        存活/换脚掉了 = 那批模块是在撑命；掉了但 MoS 变好 = 它在拿稳当行走');
 }
 
-console.log('\n=== ⑤d ★ 模块开关为什么关（逐模块打印原因）===\n');
+console.log('\n=== ⑤d ★★ 为什么「只在稳住相」和「全关」数字一模一样？（相位占用时长）===\n');
+{
+  const s5 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  s5.begin(new Float32Array(s5.params.length));
+  const occ = { both: 0, step: 0, adjust: 0 };
+  const cnt = { both: 0, step: 0, adjust: 0 };
+  runCaptureTeacher(sk, s5, { ...FB, cmBalance: 0.15, cmBalanceD: 0.4, spineSync: 0.25 },
+    { dur: DUR, clockDriven: true, onFrame: (): void => { occ[s5.gp.now] += 1 / DEFAULT_SIM.controlHz; cnt[s5.gp.now]++; } });
+  const tot = occ.both + occ.step + occ.adjust;
+  console.log('  相位          占用时长   占比   帧数');
+  for (const k of ['both', 'step', 'adjust'] as const)
+    console.log(`  ${k.padEnd(12)} ${occ[k].toFixed(2).padStart(6)}s  ${(100 * occ[k] / Math.max(1e-9, tot)).toFixed(0).padStart(4)}%  ${String(cnt[k]).padStart(5)}`);
+  console.log(`\n  ⇒ ★「稳住相」(adjust) 占用 ${occ.adjust.toFixed(2)}s`);
+  if (occ.adjust < 0.05) {
+    console.log(`  ⇒✗ adjust 相**几乎从未发生** ⇒ 任何 phases=['adjust'] 的模块等于永远关闭，`);
+    console.log(`     所以「只在稳住相」和「全关」数字完全一样（不是 bug，是 adjust 相进不去）。`);
+    console.log(`     根因：GaitPhaseMachine 要求**连续单支撑 ≥ ADJUST_MIN(0.70s)** 才进 adjust，`);
+    console.log(`     而实测双支撑占 ${(100 * (occ.both / Math.max(1e-9, tot))).toFixed(0)}% ⇒ 单支撑段被切得很碎，`);
+    console.log(`     每段都攒不够 0.70s。要让 adjust 相存在，得先让单支撑段变长（连续摆动相更久）。`);
+  } else {
+    console.log(`  ⇒ ✓ adjust 相确实存在，「只在稳住相」= 真的只在稳住时出力。`);
+  }
+}
+
+console.log('\n=== ⑤e ★ 模块开关为什么关（逐模块打印原因）===\n');
 {
   const s4 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
   s4.begin(new Float32Array(s4.params.length));

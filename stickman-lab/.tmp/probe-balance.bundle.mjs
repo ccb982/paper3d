@@ -14662,8 +14662,13 @@ var MODULES = [
   { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
   { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "distance", label: "\u811A\u51C0\u4F4D\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  // ★★ 脊椎/CMP 默认**只在「稳住中」相**出力（实测 2026-10-02）：
+  //   三相都开着时，单支撑 MoS 从 −487mm 拉到 +79mm（站得住），
+  //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
+  //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
+  //     只在落地后的调整相用来纠正身体。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["adjust"], singleOnly: false },
+  { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -14731,7 +14736,21 @@ var ModuleSet = class {
     if (d.singleOnly && nGround !== 1) return `\u8981\u6C42\u5355\u652F\u6491\uFF0C\u5F53\u524D\u652F\u6491\u811A\u6570=${nGround}`;
     return "";
   }
-  /** ★ 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /**
+   * ★ 改某模块**在哪些相**生效（用户："需要代码操控什么时候什么模块起作用"）。
+   *   实测用途：脊椎三相全开 ⇒ MoS 变好但换脚减半；只在 `adjust` 相 ⇒ 两头都要。
+   *   传空数组 = 等价于永远关闭。
+   */
+  setPhases(id, phases) {
+    const d = MODULES.find((m) => m.id === id);
+    if (d) d.phases = phases.slice();
+    return this;
+  }
+  /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
+  /** 取某模块当前登记的相列表（调试用） */
+  phasesOf(id) {
+    return MODULES.find((m) => m.id === id)?.phases ?? [];
+  }
   report(phase, nGround) {
     const out = [];
     for (const leg of ["l", "r"]) {
@@ -15581,7 +15600,7 @@ var Sim = class {
     this.accAlive += alive * dt;
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.lastLoadFrac = [fl2, fr2];
-    this.accShift += Math.abs(fl2 - fr2) * dt;
+    if (this.mod.active("loadShift", this.gp.now, nGround, null)) this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
     const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
     const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
@@ -15597,7 +15616,9 @@ var Sim = class {
         this.accSwitchQ += phi(TARGET_VX - this.footVel);
       }
     }
-    this.accSingle += (nGround === 1 ? 1 : nGround === 0 ? -0.5 : 0) * (cl ? 1 : 0.1) * dt;
+    if (this.mod.active("singleSupport", this.gp.now, nGround, null))
+      this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
+    if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
     {
       const clr = Math.max(this.airPeakL, this.airPeakR);
       const mosHere = this.lastMosX;
