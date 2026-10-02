@@ -79,11 +79,17 @@ export interface BalancerSpec {
   knee: number;
   /** ★ 同时叠加的步态振荡幅度（0 = 纯镇定器；>0 = 边平衡边摆腿） */
   osc: number;
+  /** ★★ 踝：躯干俯仰 → 踝 pitch（矢状面踝策略，14 关节才有） */
+  kAnkPitch: number;
+  /** 踝：俯仰角速度 → 踝 pitch */
+  kAnkRate: number;
+  /** 踝：CoM 横向偏移 → 踝 roll（把 CoP 推向 CoM 底下） */
+  kAnkRoll: number;
 }
 
-/** 搜出来的镇定器（坐标下降，目标 = 站满 8 s + 倾角小） */
+/** 搜出来的镇定器（坐标下降，目标 = 站满 8 s + 倾角小），**12 关节**几何 */
 export const BEST_BALANCER: BalancerSpec =
-  { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+  { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0, kAnkPitch: 0, kAnkRate: 0, kAnkRoll: 0 };
 
 /**
  * 构造"镇定器 (+ 可选振荡器)"基因组。
@@ -114,6 +120,18 @@ export function balancerGenome(shape: BrainShape, s: BalancerSpec = BEST_BALANCE
   row('knee_r', [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
   row('shoulder_l', [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
   row('shoulder_r', [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  // ★★ 踝自身的反馈（14 关节才有；此前踝输出恒为 0 = 纯被动关节，对平衡零贡献）。
+  //   矢状面：躯干俯仰 → 踝 pitch（即 sagittal 方向的"踝策略"：用踝力矩把 CoP 前后移）
+  //   额状面：CoM 横向偏移 → 踝 roll（把 CoP 往 CoM 底下推）
+  //   ⚠ 必须判 `shape.outputs`：踝关闭时 `JOINT_ORDER.indexOf('foot_l')` = 12，
+  //     而输出只有 36 项 ⇒ 直接写会越界串到别的关节上。
+  if (shape.outputs >= 3 * 13) {
+    // ⚠ 俯仰项**取负**：与髋同理（探针实测"kPitch=−1 才接得住前扑"），
+    //   第一次写成 +kAnkPitch 时三个踝增益全部撞到**负向边界**且存活更差（4.96 → 2.69 s），
+    //   典型的"符号反了、搜索一路顶到栏杆"。
+    row('foot_l', [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+    row('foot_r', [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+  }
   return p;
 }
 

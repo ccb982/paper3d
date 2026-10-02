@@ -15879,7 +15879,7 @@ function phaseGenome(shape2, s) {
 function phaseGenomeFor(jointCount, s = BEST_PHASE) {
   return phaseGenome(shapeForJoints(jointCount), s);
 }
-var BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+var BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0, kAnkPitch: 0, kAnkRate: 0, kAnkRoll: 0 };
 function balancerGenome(shape2, s = BEST_BALANCER) {
   const p = new Float32Array(brainParamCount(shape2));
   const L = brainLayout(shape2);
@@ -15903,6 +15903,10 @@ function balancerGenome(shape2, s = BEST_BALANCER) {
   row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
   row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
   row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  if (shape2.outputs >= 3 * 13) {
+    row("foot_l", [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+    row("foot_r", [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+  }
   return p;
 }
 var CAPTURE_GENOME_0 = {

@@ -16549,6 +16549,10 @@ function balancerGenome(shape, s = BEST_BALANCER) {
   row("knee_r", [0, 0, 0, 0, s.osc * 0.075, s.osc * 0.027], s.knee + s.osc * 0.048);
   row("shoulder_l", [0, 0, 0, 0, -s.osc * 0.045, 0], 0);
   row("shoulder_r", [0, 0, 0, 0, s.osc * 0.045, 0], 0);
+  if (shape.outputs >= 3 * 13) {
+    row("foot_l", [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+    row("foot_r", [-s.kAnkPitch, -s.kAnkRate, s.kAnkRoll, 0, 0, 0], 0);
+  }
   return p;
 }
 function captureGenome(shape, s = CAPTURE_GENOME_0) {
@@ -16620,7 +16624,7 @@ var init_phaseSeed = __esm({
     init_brain();
     init_skeleton();
     BEST_PHASE = { hip: 0.6, knee: 0.5, duty: 0.8, legPhase: 1, arm: 0.3, waist: 0.2, scale: 0.15 };
-    BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0 };
+    BEST_BALANCER = { kPitch: 0.028, kRate: -0.028, kComX: -3.102, bias: 0, knee: 0.028, osc: 0, kAnkPitch: 0, kAnkRate: 0, kAnkRoll: 0 };
     CAPTURE_GENOME_0 = {
       kPitch: 2.544,
       kRate: 0.542,
