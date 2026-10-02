@@ -905,25 +905,16 @@ for (const kc of [0, 3, 30, 100]) {
 }
 console.log('\n  判读：kCop 放大 33 倍若数字不变 ⇒ **踝指令对动力学零效力**（接触是平底盒，不滚动 ⇒ CoP 移不动）。');
 
-// ===== 验证：Raibert 落脚点是否让分工稳定 =====
-console.log('\n=== 验证：Raibert 落脚点 Γ/K 扫描（分工稳定性）===\n');
-console.log('   Γ     K   脚距峰  承重差峰 角色交接 离地峰 换脚 存活末CoM');
-for (const kg of [0.20, 0.35, 0.50, 0.70]) {
-  for (const kv2 of [0.0, 0.25]) {
-    const fV = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
-    fV.begin(new Float32Array(fV.params.length));
-    let sep = 0, ldPk = 0, chg = 0, last = 0, clr = 0, cmX = 0;
-    const rV = runCaptureTeacher(sk, fV, { ...FB, kGamma: kg, kVerr: kv2 }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl): void => {
-      sep = Math.max(sep, Math.abs(Number(dl?.footXL ?? 0) - Number(dl?.footXR ?? 0)));
-      const [fl, fr] = fV.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-      ldPk = Math.max(ldPk, Math.abs(fl - fr));
-      clr = Math.max(clr, Math.max(fV.doll.soleY('l'), fV.doll.soleY('r')));
-      cmX = readCom(fV.doll, cTmp).x;
-      const wb = Number(dl?.roleWB ?? 0);
-      if (last && wb && wb !== last) chg++;
-      if (wb) last = wb;
-    } });
-    console.log(`  ${kg.toFixed(2)} ${kv2.toFixed(2)} ${(sep * 1000).toFixed(0).padStart(6)}mm ${ldPk.toFixed(2).padStart(8)} ${String(chg).padStart(8)} ${(clr * 1000).toFixed(0).padStart(5)}mm ${String(rV.steps).padStart(4)} ${rV.t.toFixed(2)}s ${cmX.toFixed(3)}`);
-  }
+// ===== 验证：迈步前重心稳定 =====
+console.log('\n=== 验证：迈步前重心稳定（速度判据 vHold=0.06）===\n');
+console.log('   t(s) CoM速度 CoM前后 MoS    承重差 门放行 失败原因');
+{
+  const fH = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 5, gaitHz: 1 / FB.T });
+  fH.begin(new Float32Array(fH.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, fH, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl): void => {
+    if (m++ % 18 !== 0) return;
+    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.vHold ?? 0).padStart(7)} ${String(readCom(fH.doll, cTmp).x.toFixed(3)).padStart(7)} ${String(dl?.mosX ?? 0).padStart(7)} ${String(dbgLoadOf(fH)).padStart(7)}   ${dl?.balOk === 1 ? 'OK' : 'X '}    ${dl?.balStage ?? ''}`);
+  } });
 }
-console.log('\n  理想：脚距峰 ~300-600mm、承重差峰 >0.5、角色交接少（<20）、换脚>0。');
+function dbgLoadOf(f: Sim): string { const [a, b] = f.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz); return (a - b).toFixed(2); }

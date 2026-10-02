@@ -408,8 +408,13 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       //   一旦摆动腿触地（IC 事件），立刻把它闩为支撑腿并启动支撑模块：
       //   在另一条腿着地之前，**它不允许再离地**。
       if (landed && latchedStance !== (swingIsL ? 'l' : 'r')) {
-        // ⚠ 只有当"另一条腿已被换下去"时才算这次落地，否则是同一条腿反复触地
-        if (lastSwitchWasFlip || latchedStance === null) {
+        // ⚠ 只有当"另一条腿已被换下去"时才算这次落地，否则是同一条腿反复触地。
+        // ★ 修 bug（2026-10-02）：原来判据是 `lastSwitchWasFlip || latchedStance === null`，
+        //   而 `lastSwitchWasFlip` 一旦为 true **再也不会被清回 false** ⇒ 换脚之后
+        //   条件恒真；又因为摆动腿从不离地、`landed` 每帧为真 ⇒ 锁定腿每帧来回翻，
+        //   "着地即锁"名存实亡（实测锁定腿全程不变，交接数却是 72 次）。
+        //   ⇒ 改成**必须真的发生过一次换脚**（`steps > 0`）才认这次落地。
+        if (steps > 0 && latchedStance === null) {
           latchedStance = swingIsL ? 'l' : 'r';
           wtModule++;
         }
@@ -443,7 +448,6 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       if (landed && t >= readyT && stableEnough) {   // ★ 必须"站稳"才允许迈下一条
         steps++;
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
-        lastSwitchWasFlip = true;
         stanceL = swingIsL;                    // 摆动腿落地 ⇒ 它变成新的支撑腿
         prevStance = stanceL ? 1 : 2;
         stanceSeq += stanceL ? "L" : "R";
@@ -525,7 +529,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     const loadDiffNow = flNow - frNow;
     // ★ 判定时刻：只在双支撑末段（s ≥ decisionAt）判一次，不再要求连续保持 0.45s
     //   （连续保持 + 承重绝对值 0.5 会互相锁死，见 BalanceGate 注释）
-    const verdictRaw = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
+    const verdictRaw = balGate.judge(mosHere, loadDiffNow, true);
     // ★★ **判定结果锁存**（这一步是让整条链能通的关键）：
     //   判定时刻 `s ≥ 0.75` 落在摆动的**下降段**（脚已经在往回落），
     //   此时就算放行也没有意义 —— 抬腿峰值在 s≈0.3~0.5，早过了。
@@ -542,8 +546,34 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
     //   许可只对**当前这一帧**有效 —— 抬腿必须当帧达标。
     //   相位错位问题（承重 s≈0.9 才上去、抬腿峰在 s≈0.3）不再用锁存掩盖，
     //   而是靠让承重转移本身在摆动**之前**完成来解决（那是 APA 的职责，见 copTargetZ）。
-    const verdict = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
-    if (!verdict.ok) balBlocked = verdict.why; else balBlocked = '';
+    const verdict = balGate.judge(mosHere, loadDiffNow, true);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ★★★ **迈步之前先稳定重心**（用户 2026-10-02 原话）
+    //
+    //   之前门只看**位置**（MoS 在支撑边内）与**承重差**，不看**速度**。
+    //   实测：门放行的瞬间 CoM 速度高达 0.8~2.0 m/s（前面B 控制器饱和时更甚），
+    //   身体还在快速移动就被允许抬腿 ⇒ 落脚点必然错、承重必然接不住 ⇒ 又倒。
+    //   真实步态的双支撑末期本来就是**停下来**的一小段（Perry：Loading Response 短制动），
+    //   "站稳了才迈下一条" —— 所以必须把**重心速度**纳入判据。
+    //
+    //   判据：`|vx|` 与 `|vz|` 同时低于 `vHold`（默认 0.06 m/s，比文献慢速步速 0.39 的 15% 更严）。
+    //   并且在**未达标时主动阻尼**（下面 corrCom 已含 kWtVx 项，这里再补一个专门的
+    //   稳定项），把"迈步前"这段真正用来**减速**而不是用来倒计时。
+    const vHold = THR.vHold;
+    const comSpeed = Math.hypot(com.vx, com.vz);
+    const okHoldV = comSpeed < vHold;
+    // 主动稳定力矩：CoM 越快，髋俯仰阻尼越大（只加减速，不改目标位置）
+    const holdDamp = -Math.min(0.5, comSpeed * 2.2) * Math.sign(com.vx || 1);
+    dbgLog.vHold = +comSpeed.toFixed(3);
+    const verdictV: typeof verdict = {
+      ...verdict,
+      ok: verdict.ok && okHoldV,
+      why: verdict.ok && !okHoldV
+        ? `重心未稳定（速度 ${comSpeed.toFixed(3)} m/s ≥ ${vHold}，先减速再迈）`
+        : verdict.why,
+    };
+    if (!verdictV.ok) balBlocked = verdictV.why; else balBlocked = '';
     // ★ 重心转移期内**前伸也要压住**：先把体重挪过去，再把腿送出去。
     //   否则腿在体重还没卸掉时就往前甩 ⇒ 既抬不高也甩不远。
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
@@ -585,7 +615,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       const swingYRaw = s < SHIFT_FRAC
       ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC)          // 转移期：几乎不离地
       : 0.012 + p.lift * Math.sin(Math.PI * sSwing);       // 迈出期：完整抬升曲线
-    const swingY = verdict.ok ? swingYRaw : 0.012;        // ★ 没过门就贴地
+    const swingY = verdictV.ok ? swingYRaw : 0.012;        // ★ 没过门就贴地
     const dtSw = t - lastSwitch;
     // ★★ 落地吸能**必须限幅**（用户 2026-10-02："脚落地后甚至无法实现支撑"）。
     //   旧式：`absorb = p.absorb · exp(−dtSw/τ)`，触地那一帧 dtSw=0 ⇒ **满量** p.absorb。
@@ -623,7 +653,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     //   实测 ξ 3s 内 0.006→0.667 而 footCX 只到 −0.094 ⇒ 误差 +0.5m ⇒
     //   指令 −2.0 rad 直接饱和、髋被顶死。限幅 ±0.45 rad。
     const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
-    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
+    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw + holdDamp));
     dbgLog.comShiftB = +comShiftB.toFixed(3); dbgLog.corrCom = +corrCom.toFixed(4);
     // ★★ 状态机增益调度（iCub 框架 arXiv 1707.08359 的做法：**姿态是低优先级任务**，
     //   用状态机在"迈步相/调整相"之间调度增益）。
@@ -658,7 +688,10 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       // ★★ 闩锁的强制：闩锁腿**永远是支撑腿**，绝不被派成摆动腿
       //   （"前腿落地后别再让它离地"）。若因时钟错位被派成摆动，这里直接改回支撑。
       // ★★ 承重角色改由 `roleLatched`（实测载荷判定的承重腿）决定 —— 不再靠时钟猜。
-      const isStance = roleLatched === side ? true : isStance0;
+      // ★ 承重角色：`roleLatched`（实测载荷判定）与 `stanceL`（时钟）**取或**，
+      //   两者任一认为该腿是支撑腿就按支撑腿处理 —— 这样即使时钟与载荷判定
+      //   短暂不一致，也不会把正在承重的那条腿误判成摆动腿去抬。
+      const isStance = roleLatched === side || isStance0;
       // ★ 虚拟髋（com.y − HIP_DY）。实测对比：
       //   用**真实髋刚体**(0.849m) ⇒ IK 必须把腿折到 92% 才够得着地 ⇒ 存活反而降到 0.77s
       //   用**虚拟髋**(0.744m)      ⇒ 站立构型接近自然 ⇒ 存活 1.90s / 3 次换脚
@@ -779,7 +812,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   之前只把 `swingY` 压到 0.012（IK 层面不让离地），但**踝的跖屈/背屈指令
       //   照样在动** —— 脚掌自身一抬，后脚就离开了地面，门形同虚设。
       //   ⇒ 门没放行时，摆动腿的踝强制归零（平贴地面），一步都不许动。
-      const ankleCmd = verdict.ok
+      const ankleCmd = verdictV.ok
         ? (ankleDeg + (isStance ? pushTorque : 0))
         : (isStance ? ankleDeg + pushTorque : 0);      // 摆动腿：门没过 ⇒ 踝锁 0
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
@@ -868,7 +901,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       dbgLog.footXL = +footBufL[0]!.toFixed(3);
       dbgLog.footXR = +footBufR[0]!.toFixed(3);
     }
-    dbgLog.balOk = verdict.ok ? 1 : 0; dbgLog.balStage = verdict.why; dbgLog.mosX = +mosHere.toFixed(4); dbgLoad = stanceLoadNow; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+    dbgLog.balOk = verdictV.ok ? 1 : 0; dbgLog.balStage = verdictV.why; dbgLog.mosX = +mosHere.toFixed(4); dbgLoad = stanceLoadNow; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，

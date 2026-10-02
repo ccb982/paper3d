@@ -16384,6 +16384,13 @@ var THR = {
    *   且对 0.50 附近的抖动免疫（差值过零即达标）。
    */
   loadDiff: 0.15,
+  /**
+   * ★★ **迈步前的重心速度上限**（m/s）。用户 2026-10-02："迈步之前先稳定重心"。
+   *   此前门只看位置（MoS）与承重差，不看速度 —— 实测门放行瞬间 CoM 速度高达
+   *   0.8~2.0 m/s，身体还在快速移动就被允许抬腿 ⇒ 落脚点必错、承重接不住 ⇒ 又倒。
+   *   取 0.06 m/s：约为慢速目标步速 0.39 m/s 的 15%，是"真停住了"的严格判据。
+   */
+  vHold: 0.06,
   /** ★ 双支撑末期的判定时刻（该相位的进度，0~1）——门只在这里判定一次 */
   decisionAt: 0.25
   // ★ 判定窗上界：只在摆动**开始**的 s<0.25 内判定
@@ -16612,7 +16619,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       const readyT = lastSwitch + half * 0.55;
       const landed = swingIsL ? footGrounded(sim2.doll, "l") : footGrounded(sim2.doll, "r");
       if (landed && latchedStance !== (swingIsL ? "l" : "r")) {
-        if (lastSwitchWasFlip || latchedStance === null) {
+        if (steps > 0 && latchedStance === null) {
           latchedStance = swingIsL ? "l" : "r";
           wtModule++;
         }
@@ -16640,7 +16647,6 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       if (landed && t >= readyT && stableEnough) {
         steps++;
         stanceL = swingIsL;
-        lastSwitchWasFlip = true;
         stanceL = swingIsL;
         prevStance = stanceL ? 1 : 2;
         stanceSeq += stanceL ? "L" : "R";
@@ -16693,16 +16699,26 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       }
     }
     const loadDiffNow = flNow - frNow;
-    const verdictRaw = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
-    const verdict = balGate.judge(mosHere, loadDiffNow, s < THR.decisionAt);
-    if (!verdict.ok) balBlocked = verdict.why;
+    const verdictRaw = balGate.judge(mosHere, loadDiffNow, true);
+    const verdict = balGate.judge(mosHere, loadDiffNow, true);
+    const vHold = THR.vHold;
+    const comSpeed = Math.hypot(com.vx, com.vz);
+    const okHoldV = comSpeed < vHold;
+    const holdDamp = -Math.min(0.5, comSpeed * 2.2) * Math.sign(com.vx || 1);
+    dbgLog.vHold = +comSpeed.toFixed(3);
+    const verdictV = {
+      ...verdict,
+      ok: verdict.ok && okHoldV,
+      why: verdict.ok && !okHoldV ? `\u91CD\u5FC3\u672A\u7A33\u5B9A\uFF08\u901F\u5EA6 ${comSpeed.toFixed(3)} m/s \u2265 ${vHold}\uFF0C\u5148\u51CF\u901F\u518D\u8FC8\uFF09` : verdict.why
+    };
+    if (!verdictV.ok) balBlocked = verdictV.why;
     else balBlocked = "";
     const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
     let swingX = swingX0;
     const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
     const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
-    const swingY = verdict.ok ? swingYRaw : 0.012;
+    const swingY = verdictV.ok ? swingYRaw : 0.012;
     const dtSw = t - lastSwitch;
     const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
     const corr = p.kPitch * pitch + p.kRate * av.x;
@@ -16710,7 +16726,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     syncComTarget();
     const comShiftB = com.x - comTargetX;
     const corrComRaw = -(p.kWtX ?? 0) * comShiftB - (p.kWtVx ?? 0) * com.vx;
-    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw));
+    const corrCom = Math.max(-0.45, Math.min(0.45, corrComRaw + holdDamp));
     dbgLog.comShiftB = +comShiftB.toFixed(3);
     dbgLog.corrCom = +corrCom.toFixed(4);
     const inAdjust = t - lastSwitch < ADJUST_MIN;
@@ -16730,7 +16746,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
     }
     for (const side of ["l", "r"]) {
       const isStance0 = side === "l" === stanceL;
-      const isStance = roleLatched === side ? true : isStance0;
+      const isStance = roleLatched === side || isStance0;
       const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
       if (hipYRef < 0) hipYRef = com.y - hipDy;
       const hipY = hipYRef;
@@ -16768,7 +16784,7 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       dbgLog.footCX = +footCX.toFixed(3);
       dbgLog.copTau = +copTau.toFixed(4);
       const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      const ankleCmd = verdict.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
+      const ankleCmd = verdictV.ok ? ankleDeg + (isStance ? pushTorque : 0) : isStance ? ankleDeg + pushTorque : 0;
       setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       if (p.spineSync > 0 && sim2.mod.active("spineSync", sim2.gp.now, 2, null)) {
         const sw = Math.sin(Math.PI * Math.min(1, s));
@@ -16831,8 +16847,8 @@ function runCaptureTeacher(sk2, sim2, p, opts = {}) {
       dbgLog.footXL = +footBufL[0].toFixed(3);
       dbgLog.footXR = +footBufR[0].toFixed(3);
     }
-    dbgLog.balOk = verdict.ok ? 1 : 0;
-    dbgLog.balStage = verdict.why;
+    dbgLog.balOk = verdictV.ok ? 1 : 0;
+    dbgLog.balStage = verdictV.why;
     dbgLog.mosX = +mosHere.toFixed(4);
     dbgLoad = stanceLoadNow;
     dbgLog.comY = +com.y.toFixed(3);
@@ -17808,24 +17824,18 @@ for (const kc of [0, 3, 30, 100]) {
   console.log(`  ${String(kc).padStart(5)}  ${ld.toFixed(3).padStart(7)}  ${(pk * 180 / Math.PI).toFixed(1).padStart(7)}  ${(tl * 180 / Math.PI).toFixed(1).padStart(6)}  ${ld.toFixed(3).padStart(7)}  ${r5.t.toFixed(2)}s`);
 }
 console.log("\n  \u5224\u8BFB\uFF1AkCop \u653E\u5927 33 \u500D\u82E5\u6570\u5B57\u4E0D\u53D8 \u21D2 **\u8E1D\u6307\u4EE4\u5BF9\u52A8\u529B\u5B66\u96F6\u6548\u529B**\uFF08\u63A5\u89E6\u662F\u5E73\u5E95\u76D2\uFF0C\u4E0D\u6EDA\u52A8 \u21D2 CoP \u79FB\u4E0D\u52A8\uFF09\u3002");
-console.log("\n=== \u9A8C\u8BC1\uFF1ARaibert \u843D\u811A\u70B9 \u0393/K \u626B\u63CF\uFF08\u5206\u5DE5\u7A33\u5B9A\u6027\uFF09===\n");
-console.log("   \u0393     K   \u811A\u8DDD\u5CF0  \u627F\u91CD\u5DEE\u5CF0 \u89D2\u8272\u4EA4\u63A5 \u79BB\u5730\u5CF0 \u6362\u811A \u5B58\u6D3B\u672BCoM");
-for (const kg of [0.2, 0.35, 0.5, 0.7]) {
-  for (const kv2 of [0, 0.25]) {
-    const fV = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
-    fV.begin(new Float32Array(fV.params.length));
-    let sep = 0, ldPk = 0, chg = 0, last = 0, clr = 0, cmX = 0;
-    const rV = runCaptureTeacher(sk, fV, { ...FB, kGamma: kg, kVerr: kv2 }, { dur: 5, clockDriven: true, onFrame: (_t, _s, _x, _o, _c, _a, dl) => {
-      sep = Math.max(sep, Math.abs(Number(dl?.footXL ?? 0) - Number(dl?.footXR ?? 0)));
-      const [fl, fr] = fV.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
-      ldPk = Math.max(ldPk, Math.abs(fl - fr));
-      clr = Math.max(clr, Math.max(fV.doll.soleY("l"), fV.doll.soleY("r")));
-      cmX = readCom(fV.doll, cTmp).x;
-      const wb = Number(dl?.roleWB ?? 0);
-      if (last && wb && wb !== last) chg++;
-      if (wb) last = wb;
-    } });
-    console.log(`  ${kg.toFixed(2)} ${kv2.toFixed(2)} ${(sep * 1e3).toFixed(0).padStart(6)}mm ${ldPk.toFixed(2).padStart(8)} ${String(chg).padStart(8)} ${(clr * 1e3).toFixed(0).padStart(5)}mm ${String(rV.steps).padStart(4)} ${rV.t.toFixed(2)}s ${cmX.toFixed(3)}`);
-  }
+console.log("\n=== \u9A8C\u8BC1\uFF1A\u8FC8\u6B65\u524D\u91CD\u5FC3\u7A33\u5B9A\uFF08\u901F\u5EA6\u5224\u636E vHold=0.06\uFF09===\n");
+console.log("   t(s) CoM\u901F\u5EA6 CoM\u524D\u540E MoS    \u627F\u91CD\u5DEE \u95E8\u653E\u884C \u5931\u8D25\u539F\u56E0");
+{
+  const fH = new Sim(sk, shape, { ...DEFAULT_SIM, mode: "walk", duration: 5, gaitHz: 1 / FB.T });
+  fH.begin(new Float32Array(fH.params.length));
+  let m = 0;
+  runCaptureTeacher(sk, fH, FB, { dur: 5, clockDriven: true, onFrame: (t, _s, _x, _o, _c, _a, dl) => {
+    if (m++ % 18 !== 0) return;
+    console.log(`  ${t.toFixed(2).padStart(5)} ${String(dl?.vHold ?? 0).padStart(7)} ${String(readCom(fH.doll, cTmp).x.toFixed(3)).padStart(7)} ${String(dl?.mosX ?? 0).padStart(7)} ${String(dbgLoadOf(fH)).padStart(7)}   ${dl?.balOk === 1 ? "OK" : "X "}    ${dl?.balStage ?? ""}`);
+  } });
 }
-console.log("\n  \u7406\u60F3\uFF1A\u811A\u8DDD\u5CF0 ~300-600mm\u3001\u627F\u91CD\u5DEE\u5CF0 >0.5\u3001\u89D2\u8272\u4EA4\u63A5\u5C11\uFF08<20\uFF09\u3001\u6362\u811A>0\u3002");
+function dbgLoadOf(f) {
+  const [a, b] = f.doll.footLoadFrac(1 / DEFAULT_SIM.controlHz);
+  return (a - b).toFixed(2);
+}
