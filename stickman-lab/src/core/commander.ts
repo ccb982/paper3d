@@ -86,7 +86,7 @@ export class GaitCommander {
   /** 本回合发了多少条令 */
   nOrders = 0;
 
-  constructor(seq: readonly Order[] = ['legL', 'waist', 'legR', 'waist'], private o: CommanderOpts = { stepPeriod: 1.0, jitter: 0.15, waistShare: 0.5 }) {
+  constructor(seq: readonly Order[] = ['legL', 'waist', 'legR', 'waist'], private o: CommanderOpts = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
     this.seq = seq;
     // 确定性 LCG（可注入真正的 policy 输出来替换 —— 见 note）
     let s = 12345;

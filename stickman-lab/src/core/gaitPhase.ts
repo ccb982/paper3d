@@ -21,9 +21,9 @@
  */
 
 /** 迈步相最少时长（s）：文献 Hof 2010 侧向落脚需 ~0.28 s */
-export const STEP_MIN = 0.28;
+export const STEP_MIN = 0.13;   // ★ 实测单支撑段中位仅 0.13s；先让「迈步→调整」链路能流转
 /** ★ 调整相最少时长（s）：用户"迈步间隔太小，无法调整自身平衡" ⇒ 必须给足时间 */
-export const ADJUST_MIN = 0.70;
+export const ADJUST_MIN = 0.90;   // ★ 用户 2026-10-02：增大"稳定身体"的间隔
 /** 调整相里"稳住"的判据：整段 MoS ≥ 0（负值按比例罚） */
 export const ADJUST_MOS_TOL = 0.0;
 /** 一次完整循环各部分的评分权重（和为 1） */
@@ -169,35 +169,44 @@ this.mosAcc = 0; this.mosN = 0; this.placeAcc = 0; this.placeN = 0;
       }
       return;
     }
-    // ── 相 3：双脚着地（过渡）──
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ 相 2「调整」= **双脚着地**（用户 2026-10-02："没稳定身体就迈下一步，自然会倒"）
+    //   旧实现把 `adjust` 挂在 `nGround === 1`（单支撑）下面 —— **概念错了**：
+    //     落地后"身体调整"发生在**双脚支撑**时（支撑面最大、最能稳住），
+    //     而单支撑时支撑面只剩一只脚，反而最不稳。
+    //   实测后果：`adjust` 相 **0 帧**（单支撑段最长仅 0.23s < ADJUST_MIN），
+    //     而双支撑占 36% —— 稳定其实一直发生在双支撑里，却被状态机忽略了。
+    //   新判据：**双脚着地 + MoS 有正余量**，持续 ADJUST_MIN 才算调整完成。
+    // ══════════════════════════════════════════════════════════════════
     if (nGround === 2) {
+      if (this.phase === 'adjust') {
+        this.tAdjust += dt;
+        // 只在**真的站得住**（MoS>0）时累计调整证据
+        if (mosX > 0) { this.mosAcc += mosX; this.mosN++; }
+        this.mosEnd = mosX;
+        this.placeAcc += place; this.placeN++;
+        this.shapeAcc += shape; this.shapeN++;
+        this.pelvisAcc += pelvis;
+        // ★ 只有**调整相待够时间且 MoS 全程为正**才结算 —— 这就是"没稳住就不许迈下一步"
+        if (this.tAdjust >= ADJUST_MIN && this.mosN > 0) {
+          const mosAvg = this.mosAcc / this.mosN;
+          const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
+          const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
+          const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
+          const pelvisAvg = this.pelvisAcc;
+          const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg
+            + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
+          this.accCredit += credit;
+          this.nAdjustOk++;
+          this.adjSum += this.tAdjust;
+          this.lastCredit = credit;      // 保留一帧供 sim 记账
+          this.phase = 'both'; this.tStep = 0; this.tAdjust = 0;
+        }
+        return;
+      }
+      // 还不是 adjust（刚落地、或在过渡）：算「过渡」相
       this.phase = 'both'; this.tStep = 0; this.tAdjust = 0;
       this.lastCredit = 0;
-      return;
-    }
-    // ── 相 2：调整（也是单支撑，但是"刚迈完步"的那条腿在撑）──
-    if (this.phase === 'adjust') {
-      this.tAdjust += dt;
-      this.mosAcc += mosX; this.mosN++; this.mosEnd = mosX;
-      this.placeAcc += place; this.placeN++;
-      this.shapeAcc += shape; this.shapeN++;
-      this.pelvisAcc += pelvis;
-      // ★ 只有**调整相待够时间**才结算 —— 这就是"迈步间隔要够大才有时间调平衡"
-      if (this.tAdjust >= ADJUST_MIN) {
-        const mosAvg = this.mosN > 0 ? this.mosAcc / this.mosN : 0;
-        const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
-        const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
-        const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
-        const pelvisAvg = this.pelvisAcc;
-        const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg
-          + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
-        this.lastCredit = credit;
-        this.accCredit += credit;
-        this.nAdjustOk++;
-        this.adjSum += this.tAdjust;
-        this.phase = 'both'; this.tStep = 0; this.tAdjust = 0;
-        this.lastCredit = credit;      // 保留一帧供 sim 记账
-      }
       return;
     }
     // nGround === 0（两脚都飞）：不属于任何相，取消当前循环

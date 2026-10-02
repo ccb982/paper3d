@@ -26,6 +26,8 @@ import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, M
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
 import { GaitPhaseMachine } from './gaitPhase';
 import { ModuleSet } from './modules';
+/** ★ 连续稳住多久才允许发下一条令（s）—— "没稳住就不许迈下一步" */
+const SETTLE_HOLD = 0.45;
 import { GaitCommander, orderLeg } from './commander';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
@@ -383,6 +385,8 @@ export class Sim {
   readonly cmd = new GaitCommander();
   /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
   private servoReady = true;
+  /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
+  private settleHold = 0;
   get servoReadyDbg(): boolean { return this.servoReady; }
   /** 发令总数（调试） */
   get cmdOrders(): number { return this.cmd.nOrders; }
@@ -1138,12 +1142,18 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
       //   "上一个动作已经稳住/落地了吗？" ⇒ 这一个布尔量决定发令者敢不敢发下一条令。
       //   判据：双脚都在地上（落地了）或 MoS 有正余量（站得住）⇒ ready。
       //   这就是分层控制的握手：发令者**不猜**，它**问**伺服层。
-      //   ⚠ 必须**跨帧锁存**（上一帧 ready 就一直 ready），不能每帧重判：
-    //     否则"迈右腿"这条令恰好落在 MoS<0 的那一帧被拒，就再也不会发了
-    //     （实测 4 s 只发出 2 条令：0.80s 迈左腿 → 1.60s 转腰，之后卡死）。
-    //   条件：双脚都着地（落地了）**或** MoS 有正余量（站得住）。
-    const readyNow = nGround >= 2 || mos.x > 0.02;
-    this.servoReady = this.servoReady || readyNow;
+//   ⚠ 必须**跨帧锁存**（上一帧 ready 就一直 ready），不能每帧重判：
+    //     否则"迈右腿"那条令恰好落在 MoS<0 的那一帧被拒，就再也不会发了。
+    //
+    // ★★★ 用户 2026-10-02："我想增大迈步，稳定身体的间隔，再优化稳定身体的算法。
+    //   现在没稳定身体就迈下一步，自然会倒。"
+    //   ⇒ `servoReady` 判据收紧：**必须连续稳住 `SETTLE_HOLD` 秒**才放行下一条令。
+    //   旧判据 `nGround>=2 || mos.x>0.02` 是**瞬时**的 —— 双脚刚着地就放行，
+    //   等于"没稳定就迈下一步"，这正是摔倒的直接原因。
+    const stableNow = nGround >= 2 && mos.x > 0.02;
+    if (stableNow) this.settleHold += dt;
+    else this.settleHold = 0;
+    this.servoReady = this.settleHold >= SETTLE_HOLD;
       // ★ 落点分：摆动脚落点相对**捕获点 ξ** 的误差（Hof 的 XCoM/MoS 体系）。
       //   ξ = com.x + vx/ω（mos.x = supEdge − ξ ⇒ 可直接反解），半宽取 0.14 m。
       //   只在**摆动相**计分（落地那一刻最有意义），容差 0.05 m（比"落点该在哪"的

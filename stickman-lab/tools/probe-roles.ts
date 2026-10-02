@@ -11,6 +11,7 @@ import { shapeForJoints } from '../src/core/brain';
 import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
 import { PHASE_ROLE, cell, cellDesc, type Role } from '../src/core/normGait';
+import { footGrounded } from '../src/core/posture';
 
 const require = createRequire(import.meta.url);
 {
@@ -82,3 +83,53 @@ const acc: Record<string, { hip: number[]; knee: number[]; n: number }> = {};
   check('调整相（adjust）有帧占用', (acc.adjust?.n ?? 0) > 0, `${acc.adjust?.n ?? 0} 帧`);
 }
 console.log(`\n${FAILS === 0 ? '★ 角色回读完成' : `★ 角色回读完成，${FAILS} 项未达标`}`);
+
+// ═══════ 调整相为什么进不去：单支撑段长度 vs 需求 ═══════
+console.log('\n=== 单支撑段长度 vs 「迈步→调整」所需时间 ===\n');
+{
+  const sim2 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  sim2.begin(new Float32Array(sim2.params.length));
+  const segs: number[] = [];
+  let cur = 0;
+  runCaptureTeacher(sk, sim2, FB, { dur: DUR, clockDriven: true, onFrame: (): void => {
+    if (sim2.gp.now === 'step') cur += 1 / DEFAULT_SIM.controlHz;
+    else if (cur > 0) { segs.push(cur); cur = 0; }
+  } });
+  if (cur > 0) segs.push(cur);
+  segs.sort((a, b) => a - b);
+  const med = segs.length ? segs[Math.floor(segs.length / 2)]! : 0;
+  const mx = segs.length ? segs[segs.length - 1]! : 0;
+  console.log(`  单支撑段数 ${segs.length} · 长度(s): ${segs.map(v => v.toFixed(2)).join(' ')}`);
+  console.log(`  中位 ${med.toFixed(2)}s · 最长 ${mx.toFixed(2)}s`);
+  console.log(`\n  需求：STEP_MIN(迈步) 0.28s + ADJUST_MIN(调整) 0.70s = **0.98s 连续单支撑**`);
+  console.log(`  最长单支撑段 ${mx.toFixed(2)}s ⇒ 差 ${(0.98 - mx).toFixed(2)}s`);
+  console.log(`  发令迈步间隔 1.00s ⇒ 一个周期里留给调整的余量 = 1.00 − 0.28 = 0.72s ≈ ADJUST_MIN 0.70s`);
+  console.log(`  ⇒ **余量只有 0.02s**：单支撑段必须连续满 0.98s 才行，而实测最长只有 ${mx.toFixed(2)}s。`);
+  console.log(`\n  ★ 结论：不是"没做调整"，是**时间预算不够**。三个数必须同时改：`);
+  console.log(`      STEP_MIN ↓（0.28→0.20）/ ADJUST_MIN ↓（0.70→0.40）或 发令间隔 ↑（1.0→1.3s）`);
+  check('最长单支撑段 ≥ STEP_MIN + ADJUST_MIN', mx >= 0.98, `${mx.toFixed(2)}s / 需要 0.98s`);
+}
+
+// ═══════ 迈步为什么完不成？离地高度够不够 3cm ═══════
+console.log('\n=== 迈步相的离地高度（MIN_CLEARANCE = 3cm 的门）===\n');
+{
+  const sim3 = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: DUR, gaitHz: 1 / FB.T });
+  sim3.begin(new Float32Array(sim3.params.length));
+  const peaks: number[] = []; let cur = 0, tracking = false;
+  runCaptureTeacher(sk, sim3, FB, { dur: DUR, clockDriven: true, onFrame: (): void => {
+    const gL = footGrounded(sim3.doll, 'l'), gR = footGrounded(sim3.doll, 'r');
+    const nG = (gL ? 1 : 0) + (gR ? 1 : 0);
+    const air = Math.max(sim3.doll.soleY('l'), sim3.doll.soleY('r'));
+    if (nG === 1) { tracking = true; cur = Math.max(cur, air); }
+    else if (tracking) { if (cur > 0.001) peaks.push(cur); cur = 0; tracking = false; }
+  } });
+  peaks.sort((a, b) => a - b);
+  const mx = peaks.length ? peaks[peaks.length - 1]! : 0;
+  const md = peaks.length ? peaks[Math.floor(peaks.length / 2)]! : 0;
+  console.log(`  单支撑事件 ${peaks.length} 次 · 离地峰值(m): ${peaks.map(v => (v * 1000).toFixed(0)).join(' ')}`);
+  console.log(`  中位 ${(md * 1000).toFixed(0)}mm · 最��� ${(mx * 1000).toFixed(0)}mm · 门槛 MIN_CLEARANCE = 30mm`);
+  const ok = peaks.filter(v => v >= 0.03).length;
+  console.log(`  达标(≥30mm)的次数：${ok} / ${peaks.length}`);
+  console.log("  21d2 82e58fbe680765704e3a 0Ff0c7b2c4e00905395e8Ff0879bb57303cmFf095c318fc74e0d53bbFf0cadjust 76f86c388fdc8fdb4e0d67653002");
+  check('至少有 1 次离地达标（≥30mm）', ok > 0, `${ok}/${peaks.length}，最高 ${(mx * 1000).toFixed(0)}mm`);
+}
