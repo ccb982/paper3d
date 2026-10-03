@@ -127,6 +127,13 @@ export class GaitState {
     //   一份身份、一个来源。
     const supSide: Side = rs.supportLeg();
     const swing: Side = rs.swingLeg();
+
+    // ★ 锁的语义（用户 2026-10-03 定调）：
+    //   · **触地即锁** —— 迈出去的腿再次落地后锁死，杜绝"刚落地又抬"
+    //   · **不许预先锁** —— "前腿肯定不能一上来锁死"
+    //   · 承重腿"可以锁也可以不锁"（它已经在承重，锁不锁无所谓）
+    // ⇒ 所以这里**不做任何预先锁定**；锁定只发生在 STEP 相的 touchdown 那一刻。
+    //   （曾在这里锁支撑腿 ⇒ 前腿一上来就锁死，与用户要求相反。）
     const bothGrounded = rs.grounded.l && rs.grounded.r;
     if (bothGrounded) this.doubleT += dt; else this.doubleT = 0;
 
@@ -170,7 +177,13 @@ export class GaitState {
 
     // ── P1..P4 迈步许可（双钥匙：许可 AND 摆动腿确实离地/可离地）────
     const swingLocked = rs.locked[swing];
-    const P1 = rs.loadBearer !== null;
+    // ★★ P1 必须是「**准支撑腿**载荷达标」，而**不是**「承重标识已授予」。
+    //   否则死锁：承重标识要等摆动腿抬起来（载荷转移）才授予，
+    //   而抬腿又要等承重标识 —— 两者互为前提，实测 P1 永远 false、
+    //   摆动腿一次都没抬起来（单支撑占比 0.0%）。
+    //   正确顺序（也是 Hof 起步的 APA）：平衡系统**先把重心移到支撑腿上**
+    //   ⇒ 该腿载荷份额上升 ⇒ 迈步系统才抬另一条。
+    const P1 = rs.bearerCriteria.flags['B2_载荷'] === true;
     const P2 = !swingLocked;
     const P3 = rs.mos >= this.cfg.permitMosMin;
     const P4 = this.doubleT >= this.cfg.permitDoubleSupportSec;

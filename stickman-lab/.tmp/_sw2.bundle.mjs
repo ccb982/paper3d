@@ -17383,6 +17383,12 @@ var init_rigState = __esm({
       torsoY = 0;
       tiltDeg = 0;
       soleX = { l: 0, r: 0 };
+      /**
+       * 脚底中心的**横向**位置（m）。
+       * ★ 两脚在 Z 向分开（z ≈ ±0.10）⇒ **左右载荷分配由 CoM.z 决定**，
+       *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
+       */
+      soleZ = { l: 0, r: 0 };
       /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
       soleY = { l: 0, r: 0 };
       /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
@@ -17833,7 +17839,7 @@ var init_gaitState = __esm({
           }
         }
         const swingLocked = rs.locked[swing];
-        const P1 = rs.loadBearer !== null;
+        const P1 = rs.bearerCriteria.flags["B2_\u8F7D\u8377"] === true;
         const P2 = !swingLocked;
         const P3 = rs.mos >= this.cfg.permitMosMin;
         const P4 = this.doubleT >= this.cfg.permitDoubleSupportSec;
@@ -17937,21 +17943,26 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   }
   const clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
+  const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const on = (ch) => !OFF.has(ch);
   const ex = rs.com.x;
   let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
   hipTgt = clamp(hipTgt, p.maxHip);
-  rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
+  if (on("hip")) rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
   const kneeNow = rs.angle(jKnee, 2);
-  const kneeTgt = -Math.abs(p.kneeHoldDeg) * D2R2;
-  const kk = Math.max(0, Math.min(1, p.kKnee));
-  rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * kk, "balance", "\u819D\u9501\u5B9A");
+  const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
+  if (on("knee") && kneeNow < kneeLimit) {
+    const kk = Math.max(0, Math.min(1, p.kKnee));
+    rs.requestAngle(jKnee, 2, kneeLimit + (kneeNow - kneeLimit) * (1 - kk), "balance", "\u819D\u5B88\u536B");
+  }
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
   const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
-  rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
-  const ez = rs.com.z - rs.support.cz;
+  if (on("torso")) rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
+  const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+  const ez = rs.com.z - stanceZ;
   const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
-  rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
-  if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  if (on("lat")) rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
+  if (jSp2 >= 0 && on("torso")) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
   if (jAnk >= 0) {
     const cop = rs.cop[sup];
     const copErr = rs.dcm.x - cop.x;
@@ -17972,7 +17983,8 @@ var init_balance2 = __esm({
       kSagP: 2.2,
       kSagD: 0,
       kTorsoAlign: 1,
-      kLatP: 6,
+      // 目标改成"支撑脚"后误差量级从 ~0.003m 变成 ~0.10m ⇒ 增益要重标
+      kLatP: 1.2,
       kLatD: 0,
       kneeHoldDeg: 15,
       kKnee: 0.6,
@@ -18016,7 +18028,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const hipDeg = p.hipFlexPeakDeg * bell;
   rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R2, 0.6), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell;
-  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, -1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
+  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55", false);
   if (jSp1 >= 0) {
     const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
@@ -18101,8 +18113,10 @@ var init_controller = __esm({
         rs.grounded.r = sim.doll.footGrounded(1);
         sim.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
+        rs.soleZ.l = TMP_A[2];
         sim.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
+        rs.soleZ.r = TMP_B[2];
         const n = sim.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
@@ -18152,7 +18166,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-balsweep.ts
+// tools/_sw2.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18176,52 +18190,33 @@ var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (in
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
-var DUR = Number(process.argv[3] ?? 8) || 8;
-var SUPARG = process.argv[4] ?? "both";
-var SUP = SUPARG === "r" ? "r" : "l";
-var SINGLE = SUPARG === "both" ? null : SUP;
 var dtC = 1 / 60;
 var dtP = 1 / 120;
-var stages = 2;
-console.log(`\u589E\u76CA\u626B\u63CF \xB7 ${SINGLE ? "\u5355\u817F(" + SUP + ")" : "\u53CC\u811A\u652F\u6491(\u4E0D\u62AC\u817F)"} \xB7 ${DUR}s`);
-console.log("  kSagP  kLatP kKnee  \u5B58\u6D3B    \u7EC8\u503E\xB0  \u7EC8\u8EAF\u5E72y  MoS\u6700\u5C0F  \u8D8A\u754C\u62CD  \u6446\u52A8\u89E6\u5730  \u627F\u91CD\u6388\u4E88");
-console.log("  " + "\u2500".repeat(76));
-var GRID = process.env.GRID ?? "sag";
-var SAG = GRID === "sag" ? [0, 1.1, 2.2, 4.4, -2.2] : [2.2];
-var LAT = GRID === "lat" ? [0, 3, 6, 12, 20] : [6];
-var KNEE = GRID === "knee" ? [0, 1, 2, 4] : [2];
-for (const kKnee of KNEE) {
-  for (const kSagP of SAG) {
-    for (const kLatP of LAT) {
-      const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, driver: "controller" });
-      sim.begin(new Float32Array(sim.params.length));
-      const ctrl = new Controller2(sk, sim, {
-        ...DEFAULT_CONTROLLER2,
-        gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: SINGLE },
-        balance: { ...DEFAULT_CONTROLLER2.balance, kSagP, kLatP, kKnee }
-      });
-      let n = 0, bearer = 0, minMos = Infinity, outN = 0, touched = false, single = 0;
-      const steps = Math.round(DUR / dtP);
-      for (let i = 0; i < steps && !sim.finished; i++) {
-        if (i % stages === 0) {
-          sim.doll.setMotorTargets(ctrl.step(dtC));
-          ctrl.soleClearance("l");
-          ctrl.soleClearance("r");
-          const s2 = ctrl.snapshot;
-          n++;
-          if (s2.loadBearer) bearer++;
-          if (s2.mos < minMos) minMos = s2.mos;
-          if (s2.mos < 0) outN++;
-          const swY = SUP === "l" ? s2.legs.r.soleY : s2.legs.l.soleY;
-          if (i > 10 && swY < 5e-3 && SINGLE) touched = true;
-          const supG = s2.legs[SUP].grounded, oG = s2.legs[SUP === "l" ? "r" : "l"].grounded;
-          if (supG && !oG) single++;
-        }
-        sim.advance(1);
-      }
-      const s = ctrl.snapshot;
-      const alive = sim.ticksDone / 60;
-      console.log(`  ${kSagP.toFixed(1).padStart(5)} ${kLatP.toFixed(0).padStart(6)} ${kKnee.toFixed(1).padStart(5)} ${(alive >= DUR - 0.05 ? "\u7AD9\u6EE1" : alive.toFixed(2) + "s").padStart(7)} ${s.tiltDeg.toFixed(1).padStart(7)} ${s.torsoY.toFixed(3).padStart(9)} ${(minMos * 1e3).toFixed(0).padStart(8)}mm ${String(outN).padStart(6)}/${n}` + `  ${touched ? "\u662F" : "\u5426"}`.padStart(9) + `  ${bearer > 0 ? "\u662F" : "\u5426"}`);
+var st = 2;
+var DUR = 6;
+console.log("\u652F\u6491 kLatP  \u5B58\u6D3B   \u7EC8\u503E\xB0  \u7EC8\u8EAF\u5E72  \u5355\u652F\u6491% \u6446\u52A8mm  \u7EC8comZ  \u03BEz\u5CF0  stanceZ");
+for (const side of ["l", "r"]) for (const kLatP of [-1.2, -0.6, 1.2]) {
+  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, driver: "controller" });
+  sim.begin(new Float32Array(sim.params.length));
+  const ctrl = new Controller2(sk, sim, {
+    ...DEFAULT_CONTROLLER2,
+    gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: side },
+    balance: { ...DEFAULT_CONTROLLER2.balance, kLatP, kSagP: 2.2 }
+  });
+  let single = 0, n = 0, clr = 0, xiZ = 0, sz = 0;
+  for (let i = 0; i < Math.round(DUR / dtP) && !sim.finished; i++) {
+    if (i % st === 0) {
+      sim.doll.setMotorTargets(ctrl.step(dtC));
+      const s2 = ctrl.snapshot;
+      n++;
+      const sup = s2.legs[side].grounded, oth = side === "l" ? "r" : "l";
+      if (sup && !s2.legs[oth].grounded) single++;
+      if (s2.legs[oth].soleY > clr) clr = s2.legs[oth].soleY;
+      if (Math.abs(s2.dcm.z) > Math.abs(xiZ)) xiZ = s2.dcm.z;
+      sz = side === "l" ? s2.legs.l.cop.z * 0 + ctrl.rs.soleZ.l : ctrl.rs.soleZ.r;
     }
+    sim.advance(1);
   }
+  const s = ctrl.snapshot, a = sim.ticksDone / 60;
+  console.log(` ${side}    ${kLatP.toFixed(1).padStart(5)} ${(a >= DUR - 0.05 ? "\u7AD9\u6EE1" : a.toFixed(2) + "s").padStart(7)} ${s.tiltDeg.toFixed(1).padStart(6)} ${s.torsoY.toFixed(3).padStart(7)} ${(single / n * 100).toFixed(0).padStart(7)} ${(clr * 1e3).toFixed(0).padStart(6)} ${(s.com.z * 1e3).toFixed(0).padStart(7)} ${(xiZ * 1e3).toFixed(0).padStart(7)} ${(sz * 1e3).toFixed(0).padStart(8)}`);
 }

@@ -40,7 +40,11 @@ export interface BalanceParams {
   /** 额状面：躯干（唯一通道 spine1/0）比例增益 */
   kLatP: number;
   kLatD: number;
-  /** 膝锁定目标屈角（deg）。文献：单腿站立标准姿势带轻微屈膝 */
+  /**
+   * 膝的**屈曲限位**（deg）—— 超过就顶回来。
+   * ★ 不是目标角：站立时膝角近似恒定（Li & Levine 2010），零输出时 PD 已保持绑定角。
+   *   实测把它当目标用 ⇒ 只留膝这一条就把存活从"站满 8s"打成 2.6s。
+   */
   kneeHoldDeg: number;
   kKnee: number;
   kHipUpright: number;
@@ -57,16 +61,28 @@ export interface BalanceParams {
   pushDeg: number;
   maxAnkleSag: number;
   maxAnkleLat: number;
+  /**
+   * ★ 通道消融（诊断用）：要**关掉**的通道名逗号分隔。
+   *   空 = 全开。`probe-balsweep` 用它回答"是哪一条在 destabilize"。
+   *   ⚠ 关掉之后其余通道照旧，所以这是"逐条摘除"而不是"单条测试"。
+   */
+  ablate?: string;
 }
 
 export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   kSagP: 2.2,
   kSagD: 0.0,
   kTorsoAlign: 1.0,
-  kLatP: 6.0,
+  // ★★ 默认 0：横向回路目前**不稳定**。实测 kLatP = ±0.6 / ±1.2 全部发散
+  //   （com.z → −528 / +814 mm，ξz 峰 −790 / +1065 mm），且**正负号结果与支撑腿是哪条无关**
+  //   ⇒ 这个回路既没稳定、也没在跟踪"支撑脚"。
+  //   根因：额状面只有 spine1/0 一个通道，实测权限仅 **35 mm**（见 probe-authority），
+  //   而单腿站立要把重心横移约 **100 mm**（半个站距）⇒ 需求是权限的 3 倍。
+  //   ⇒ 先置 0（等价于不主动横移），等摆动腿配重方案落地再开。
+  kLatP: 0.0,
   kLatD: 0.0,
   kneeHoldDeg: 15,
-  kKnee: 2.0,
+  kKnee: 0.6,
   kHipUpright: 0.8,
   maxHip: 0.52,
   maxKnee: 0.35,
@@ -106,6 +122,8 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
 
   const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
   const D2R = Math.PI / 180;
+  const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
+  const on = (ch: string): boolean => !OFF.has(ch);
 
   // ══════════════════════════════════════════════════════════════
   // ① 矢状面：髋策略。x_com > 0 ⇒ 髋伸，把躯干往回拉。
@@ -115,15 +133,25 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
   const ex = rs.com.x;
   let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
   hipTgt = clamp(hipTgt, p.maxHip);
-  rs.requestAngle(jHip, 2, hipTgt, 'balance', '髋策略');
+  if (on('hip')) rs.requestAngle(jHip, 2, hipTgt, 'balance', '髋策略');
 
   // ══════════════════════════════════════════════════════════════
   // ② 膝：锁在轻微屈曲。⚠ 本 rig 膝限位 [-145°, +2°] ⇒ **负 = 屈**
   // ══════════════════════════════════════════════════════════════
   // 膝：直接命令到轻微屈曲的**目标角**。kKnee 现在是"偏离目标时往回顶的比例"
+  //   ⚠⚠ **膝是单侧守卫，不是"驱向屈曲目标"**（消融实测：只留膝 ⇒ 2.6s 倒；
+  //      零输出/只留髋/只留躯干 ⇒ 站满 8s、倾角 0.5°）。
+  //   Li & Levine 2010：站立时"膝角近似恒定"；股四头肌**共同收缩**提供腿部刚性
+  //   ——那是**刚度**，不是目标角。
+  //   而零输出时关节 PD 已经把膝保持在绑定角（本 rig ≈0°），**本来就不需要管**。
+  //   ⇒ 只需在**超过屈曲限位**时顶回来，绝不主动命令弯曲。
   const kneeNow = rs.angle(jKnee, 2);
-  const kneeTgt = -Math.abs(p.kneeHoldDeg) * D2R;
-  rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * (1 - p.kKnee), 'balance', '膝锁定');
+  const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R;
+  if (on('knee') && kneeNow < kneeLimit) {
+    // 越过了限位 ⇒ 顶回限位（kk 决定顶多硬）
+    const kk = Math.max(0, Math.min(1, p.kKnee));
+    rs.requestAngle(jKnee, 2, kneeLimit + (kneeNow - kneeLimit) * (1 - kk), 'balance', '膝守卫');
+  }
 
   // ══════════════════════════════════════════════════════════════
   // ③ 躯干姿态（平衡维持独占，优先级 1）
@@ -131,20 +159,27 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
   // ══════════════════════════════════════════════════════════════
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
   const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
-  rs.requestAngle(jSp1, 2, sp1Sag, 'balance', '躯干力线');
+  if (on('torso')) rs.requestAngle(jSp1, 2, sp1Sag, 'balance', '躯干力线');
 
   // ══════════════════════════════════════════════════════════════
   // ④ 额状面：**唯一通道 spine1/0**（实测 Δz = 35 mm；髋外展 = 0）
   //   z_com > 支撑域中心 ⇒ 躯干往支撑脚侧倾，把重心搬回来
   // ══════════════════════════════════════════════════════════════
-  const ez = rs.com.z - rs.support.cz;
+  // ★★ 横向目标必须是**支撑脚自己**，不是支撑域中心。
+  //   两只脚在 Z 向分开（z ≈ ±0.10），所以**左右载荷分配由 CoM.z 决定**。
+  //   `support.cz` 是两脚中点（≈0）⇒ 用它当目标时 com.z≈0.003 ⇒ **一条指令都不发**
+  //   ⇒ 载荷永远 50/50 ⇒ B2 永不达标 ⇒ 迈步许可 P1 永远 false ⇒ 摆动腿抬不起来
+  //   （实测：单腿站满 6s、单支撑占比 0.0%、摆动脚离地 0mm）。
+  //   单腿站立要的正是"把重心横移到**支撑脚**上"，目标取支撑脚。
+  const stanceZ = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+  const ez = rs.com.z - stanceZ;
   const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
-  rs.requestAngle(jSp1, 0, lat, 'balance', '躯干额状');
+  if (on('lat')) rs.requestAngle(jSp1, 0, lat, 'balance', '躯干额状');
 
   // ══════════════════════════════════════════════════════════════
   // ⑤ 腰上段：只跟下段走一小段，避免"折腰"全堆在 spine1
   // ══════════════════════════════════════════════════════════════
-  if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), 'balance', '腰上段');
+  if (jSp2 >= 0 && on('torso')) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), 'balance', '腰上段');
 
   // ══════════════════════════════════════════════════════════════
   // ⑥ ★★★ **踝：CoP 策略 —— 整条力链的起点**（用户 2026-10-03：

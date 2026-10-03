@@ -76,8 +76,8 @@ export class Controller {
     rs.loadFrac.l = fl; rs.loadFrac.r = fr;
     rs.grounded.l = sim.doll.footGrounded(0);
     rs.grounded.r = sim.doll.footGrounded(1);
-    sim.doll.soleXZ('l', TMP_A); rs.soleX.l = TMP_A[0]!;
-    sim.doll.soleXZ('r', TMP_B); rs.soleX.r = TMP_B[0]!;
+    sim.doll.soleXZ('l', TMP_A); rs.soleX.l = TMP_A[0]!; rs.soleZ.l = TMP_A[2]!;
+    sim.doll.soleXZ('r', TMP_B); rs.soleX.r = TMP_B[0]!; rs.soleZ.r = TMP_B[2]!;
     // 逐关节读数（两系统共享同一份）
     const n = sim.doll.jointCount;
     for (let j = 0; j < n; j++) {

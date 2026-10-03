@@ -17383,6 +17383,12 @@ var init_rigState = __esm({
       torsoY = 0;
       tiltDeg = 0;
       soleX = { l: 0, r: 0 };
+      /**
+       * 脚底中心的**横向**位置（m）。
+       * ★ 两脚在 Z 向分开（z ≈ ±0.10）⇒ **左右载荷分配由 CoM.z 决定**，
+       *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
+       */
+      soleZ = { l: 0, r: 0 };
       /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
       soleY = { l: 0, r: 0 };
       /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
@@ -17833,7 +17839,7 @@ var init_gaitState = __esm({
           }
         }
         const swingLocked = rs.locked[swing];
-        const P1 = rs.loadBearer !== null;
+        const P1 = rs.bearerCriteria.flags["B2_\u8F7D\u8377"] === true;
         const P2 = !swingLocked;
         const P3 = rs.mos >= this.cfg.permitMosMin;
         const P4 = this.doubleT >= this.cfg.permitDoubleSupportSec;
@@ -17937,20 +17943,26 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   }
   const clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
+  const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const on = (ch) => !OFF.has(ch);
   const ex = rs.com.x;
   let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
   hipTgt = clamp(hipTgt, p.maxHip);
-  rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
+  if (on("hip")) rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
   const kneeNow = rs.angle(jKnee, 2);
-  const kneeTgt = -Math.abs(p.kneeHoldDeg) * D2R2;
-  rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * (1 - p.kKnee), "balance", "\u819D\u9501\u5B9A");
+  const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
+  if (on("knee") && kneeNow < kneeLimit) {
+    const kk = Math.max(0, Math.min(1, p.kKnee));
+    rs.requestAngle(jKnee, 2, kneeLimit + (kneeNow - kneeLimit) * (1 - kk), "balance", "\u819D\u5B88\u536B");
+  }
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
   const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
-  rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
-  const ez = rs.com.z - rs.support.cz;
+  if (on("torso")) rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
+  const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+  const ez = rs.com.z - stanceZ;
   const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
-  rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
-  if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  if (on("lat")) rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
+  if (jSp2 >= 0 && on("torso")) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
   if (jAnk >= 0) {
     const cop = rs.cop[sup];
     const copErr = rs.dcm.x - cop.x;
@@ -17971,10 +17983,16 @@ var init_balance2 = __esm({
       kSagP: 2.2,
       kSagD: 0,
       kTorsoAlign: 1,
-      kLatP: 6,
+      // ★★ 默认 0：横向回路目前**不稳定**。实测 kLatP = ±0.6 / ±1.2 全部发散
+      //   （com.z → −528 / +814 mm，ξz 峰 −790 / +1065 mm），且**正负号结果与支撑腿是哪条无关**
+      //   ⇒ 这个回路既没稳定、也没在跟踪"支撑脚"。
+      //   根因：额状面只有 spine1/0 一个通道，实测权限仅 **35 mm**（见 probe-authority），
+      //   而单腿站立要把重心横移约 **100 mm**（半个站距）⇒ 需求是权限的 3 倍。
+      //   ⇒ 先置 0（等价于不主动横移），等摆动腿配重方案落地再开。
+      kLatP: 0,
       kLatD: 0,
       kneeHoldDeg: 15,
-      kKnee: 2,
+      kKnee: 0.6,
       kHipUpright: 0.8,
       maxHip: 0.52,
       maxKnee: 0.35,
@@ -18015,7 +18033,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const hipDeg = p.hipFlexPeakDeg * bell;
   rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R2, 0.6), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell;
-  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, -1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
+  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55", false);
   if (jSp1 >= 0) {
     const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
@@ -18100,8 +18118,10 @@ var init_controller = __esm({
         rs.grounded.r = sim2.doll.footGrounded(1);
         sim2.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
+        rs.soleZ.l = TMP_A[2];
         sim2.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
+        rs.soleZ.r = TMP_B[2];
         const n = sim2.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {

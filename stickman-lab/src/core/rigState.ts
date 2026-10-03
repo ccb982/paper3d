@@ -178,6 +178,12 @@ export class RigState {
   torsoY = 0;
   tiltDeg = 0;
   soleX: Record<Side, number> = { l: 0, r: 0 };
+  /**
+   * 脚底中心的**横向**位置（m）。
+   * ★ 两脚在 Z 向分开（z ≈ ±0.10）⇒ **左右载荷分配由 CoM.z 决定**，
+   *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
+   */
+  soleZ: Record<Side, number> = { l: 0, r: 0 };
   /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
   readonly soleY: Record<Side, number> = { l: 0, r: 0 };
   /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */

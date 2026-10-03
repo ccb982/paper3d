@@ -64,6 +64,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   const jSp3 = jointIndexByName(sk, 'spine3');
   if (jHip < 0 || jKnee < 0) return;
 
+  /** 限到 ±m。⚠ m 必须为正 —— 传负值会让 `v > m` 恒真而恒返回 m（已踩过）。 */
   const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
   const D2R = Math.PI / 180;
 
@@ -96,7 +97,11 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   膝的符号与髋相反约定：膝"屈" = 目标角更负
   // ══════════════════════════════════════════════════════════════
   const kneeDeg = p.kneeFlexPeakDeg * bell;
-  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R, -1.2), '摆动膝屈', lift > 0.01);
+  // ⚠⚠ `clamp(v, m)` 的第二个参数是**上限幅值**（限到 ±m），必须为正。
+  //   这里曾写成 `clamp(..., -1.2)` ⇒ `v > -1.2` 恒真 ⇒ **恒返回 −1.2**
+  //   ⇒ 摆动腿膝被永久命令到 −69°，与相位无关 ⇒ 开局就塌，存活 0.98s。
+  //   而且它在**迈步系统**里，所以把平衡系统的通道全部消融也照样触发。
+  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R, 1.2), '摆动膝屈', lift > 0.01);
 
   // ══════════════════════════════════════════════════════════════
   // ④ 摆动相髋外展（让开支撑腿；注意：单支撑时这也是搬 CoM 的配重）

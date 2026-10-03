@@ -17937,21 +17937,23 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   }
   const clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
+  const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const on = (ch) => !OFF.has(ch);
   const ex = rs.com.x;
   let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
   hipTgt = clamp(hipTgt, p.maxHip);
-  rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
+  if (on("hip")) rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
   const kneeNow = rs.angle(jKnee, 2);
   const kneeTgt = -Math.abs(p.kneeHoldDeg) * D2R2;
   const kk = Math.max(0, Math.min(1, p.kKnee));
-  rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * kk, "balance", "\u819D\u9501\u5B9A");
+  if (on("knee")) rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * kk, "balance", "\u819D\u9501\u5B9A");
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
   const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
-  rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
+  if (on("torso")) rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
   const ez = rs.com.z - rs.support.cz;
   const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
-  rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
-  if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  if (on("lat")) rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
+  if (jSp2 >= 0 && on("torso")) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
   if (jAnk >= 0) {
     const cop = rs.cop[sup];
     const copErr = rs.dcm.x - cop.x;
@@ -18066,10 +18068,10 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim;
+      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim2;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim.shape);
+        this.rigReport = assertRigInvariants(sk2, sim2.shape);
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
         this.snapshot = this.rs.snapshot();
@@ -18086,43 +18088,43 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim = this.sim;
+        const sim2 = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim.doll, rs.com);
-        readSupport(sim.doll, rs.support);
+        const com = readCom(sim2.doll, rs.com);
+        readSupport(sim2.doll, rs.support);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const [fl, fr] = sim2.doll.footLoadFrac(dt);
         rs.loadFrac.l = fl;
         rs.loadFrac.r = fr;
-        rs.grounded.l = sim.doll.footGrounded(0);
-        rs.grounded.r = sim.doll.footGrounded(1);
-        sim.doll.soleXZ("l", TMP_A);
+        rs.grounded.l = sim2.doll.footGrounded(0);
+        rs.grounded.r = sim2.doll.footGrounded(1);
+        sim2.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
-        sim.doll.soleXZ("r", TMP_B);
+        sim2.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
-        const n = sim.doll.jointCount;
+        const n = sim2.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim.doll.jointRot(j, TMP_RV);
+            sim2.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim.doll.jointRelVel(j, TMP_RV);
+            sim2.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim.doll.readCoP(0, TMP_COP_L);
-        sim.doll.readCoP(1, TMP_COP_R);
+        sim2.doll.readCoP(0, TMP_COP_L);
+        sim2.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim.doll.torso().translation().y;
-        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        rs.torsoY = sim2.doll.torso().translation().y;
+        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
@@ -18152,7 +18154,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-balsweep.ts
+// tools/_ab3.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18176,52 +18178,21 @@ var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (in
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
-var DUR = Number(process.argv[3] ?? 8) || 8;
-var SUPARG = process.argv[4] ?? "both";
-var SUP = SUPARG === "r" ? "r" : "l";
-var SINGLE = SUPARG === "both" ? null : SUP;
-var dtC = 1 / 60;
-var dtP = 1 / 120;
-var stages = 2;
-console.log(`\u589E\u76CA\u626B\u63CF \xB7 ${SINGLE ? "\u5355\u817F(" + SUP + ")" : "\u53CC\u811A\u652F\u6491(\u4E0D\u62AC\u817F)"} \xB7 ${DUR}s`);
-console.log("  kSagP  kLatP kKnee  \u5B58\u6D3B    \u7EC8\u503E\xB0  \u7EC8\u8EAF\u5E72y  MoS\u6700\u5C0F  \u8D8A\u754C\u62CD  \u6446\u52A8\u89E6\u5730  \u627F\u91CD\u6388\u4E88");
-console.log("  " + "\u2500".repeat(76));
-var GRID = process.env.GRID ?? "sag";
-var SAG = GRID === "sag" ? [0, 1.1, 2.2, 4.4, -2.2] : [2.2];
-var LAT = GRID === "lat" ? [0, 3, 6, 12, 20] : [6];
-var KNEE = GRID === "knee" ? [0, 1, 2, 4] : [2];
-for (const kKnee of KNEE) {
-  for (const kSagP of SAG) {
-    for (const kLatP of LAT) {
-      const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, driver: "controller" });
-      sim.begin(new Float32Array(sim.params.length));
-      const ctrl = new Controller2(sk, sim, {
-        ...DEFAULT_CONTROLLER2,
-        gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: SINGLE },
-        balance: { ...DEFAULT_CONTROLLER2.balance, kSagP, kLatP, kKnee }
-      });
-      let n = 0, bearer = 0, minMos = Infinity, outN = 0, touched = false, single = 0;
-      const steps = Math.round(DUR / dtP);
-      for (let i = 0; i < steps && !sim.finished; i++) {
-        if (i % stages === 0) {
-          sim.doll.setMotorTargets(ctrl.step(dtC));
-          ctrl.soleClearance("l");
-          ctrl.soleClearance("r");
-          const s2 = ctrl.snapshot;
-          n++;
-          if (s2.loadBearer) bearer++;
-          if (s2.mos < minMos) minMos = s2.mos;
-          if (s2.mos < 0) outN++;
-          const swY = SUP === "l" ? s2.legs.r.soleY : s2.legs.l.soleY;
-          if (i > 10 && swY < 5e-3 && SINGLE) touched = true;
-          const supG = s2.legs[SUP].grounded, oG = s2.legs[SUP === "l" ? "r" : "l"].grounded;
-          if (supG && !oG) single++;
-        }
-        sim.advance(1);
-      }
-      const s = ctrl.snapshot;
-      const alive = sim.ticksDone / 60;
-      console.log(`  ${kSagP.toFixed(1).padStart(5)} ${kLatP.toFixed(0).padStart(6)} ${kKnee.toFixed(1).padStart(5)} ${(alive >= DUR - 0.05 ? "\u7AD9\u6EE1" : alive.toFixed(2) + "s").padStart(7)} ${s.tiltDeg.toFixed(1).padStart(7)} ${s.torsoY.toFixed(3).padStart(9)} ${(minMos * 1e3).toFixed(0).padStart(8)}mm ${String(outN).padStart(6)}/${n}` + `  ${touched ? "\u662F" : "\u5426"}`.padStart(9) + `  ${bearer > 0 ? "\u662F" : "\u5426"}`);
-    }
+var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 8, driver: "controller" });
+sim.begin(new Float32Array(sim.params.length));
+var ctrl = new Controller2(sk, sim, {
+  ...DEFAULT_CONTROLLER2,
+  gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: null },
+  balance: { ...DEFAULT_CONTROLLER2.balance, ablate: "hip,knee,torso,lat,ankle" }
+});
+for (let t = 0; t < 5; t++) {
+  const out = ctrl.step(1 / 60);
+  const nz = [];
+  for (let i = 0; i < out.length; i++) {
+    const v = out[i];
+    if (v !== 0 || Number.isNaN(v)) nz.push(`${Math.floor(i / 3)}/${i % 3}=${Number.isNaN(v) ? "NaN" : v.toFixed(4)}`);
   }
+  console.log(`t${t}: phase=${ctrl.snapshot.phase} req=${ctrl.rs.requestCount} bad=${ctrl.rs.badRequests} \u975E\u96F6\u8F74: ${nz.join(" ") || "\uFF08\u5168\u96F6\uFF09"}`);
+  sim.doll.setMotorTargets(out);
+  for (let q = 0; q < 2; q++) sim.advance(1);
 }
