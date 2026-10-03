@@ -46,6 +46,20 @@ export interface BalanceParams {
   ksagD: number;
   /** 矢状髋目标角限幅（rad） */
   maxHipDeg: number;
+  // -- Gear I (position servo): waist sagittal posture hold --------------
+  /**
+   * 腰（脊柱）矢状**姿态保持**增益（rad per degree of trunk pitch）。
+   *   判据是躯干自己的俯仰角 `rs.pitchDeg`，**不是** CoM 偏差 ——
+   *   矢状安静站立里躯干不负责追 CoM（那是踝策略的职责，踝在本 rig 是关的），
+   *   躯干这一段唯一该做的就是**保持刚性**。
+   *   缺失后果：腰完全无控制 ⇒ 躯干（占体重 49.7%）在自重下前折
+   *   （实测 pitch 2.7° → 91.6°，用户 2026-10-03「前后折腰」）。
+   */
+  kTorsoHold: number;
+  /** 腰姿态保持的阻尼（rad per m/s） */
+  kTorsoHoldD: number;
+  /** 腰矢状目标角限幅（rad）。spine 限位 ±15~25°，超过会顶到软限位 */
+  maxTorsoDeg: number;
   // ── 踝（CoP 策略）─────────────────────────────────────────
   /** 矢状面：踝 CoP 比例增益（rad per m）。目标量是**捕获点**，不是躯干角 */
   kCopSag: number;
@@ -143,6 +157,10 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   ksagP: 1.2,
   ksagD: 0.1,
   maxHipDeg: 0.52,
+  // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
+  kTorsoHold: 0.02,
+  kTorsoHoldD: 0.02,
+  maxTorsoDeg: 0.26,
   // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
   //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
   //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -215,6 +233,7 @@ export function balanceSystem(
   const jKnee = jointIndexByName(sk, sup === 'l' ? 'knee_l' : 'knee_r');
   const jSp1 = jointIndexByName(sk, 'spine1');
   const jSp2 = jointIndexByName(sk, 'spine2');
+  const jSp3 = jointIndexByName(sk, 'spine3');
   // ★ 踝（`ankleEnabled=false` 时 jointIndexByName 返回 -1 ⇒ 自然跳过，不静默假装在控制）
   const jAnk = jointIndexByName(sk, sup === 'l' ? 'foot_l' : 'foot_r');
   // ★ 不静默失败：这几个关节由 rig.ts 的启动断言保证存在
@@ -252,6 +271,29 @@ export function balanceSystem(
     const hipTgt = clamp(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
     if (on('hip') && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, 'balance', '矢状髋(位置挡)');
+    }
+    // ── 腰（脊柱）矢状**姿态保持** ────────────────────────────
+    //   ⚠ 这段控制器我重构时当"手写 P 控制器"删掉了，**没有替代物** ⇒
+    //     腰在挡位 I 里**完全无控制**，躯干（占体重 49.7% 的长体）
+    //     在自重下前折 —— 用户 2026-10-03 亲眼所见「前后折腰」，
+    //     实测 pitch 2.7° → 91.6° 单调增长。
+    //   （同一个错误我在髋上犯了又修，这次是腰。）
+    //
+    //   ★ 判据用**躯干自己的俯仰角** `rs.pitchDeg`，**不是** CoM 偏差：
+    //     矢状安静站立里躯干不该去追 CoM —— 那是踝策略的职责
+    //     （Horak & Nashner 1986：踝策略 = 身体整体绕踝的倒立摆，
+    //       躯干不参与）。踝关着 ⇒ 躯干这一段唯一该做的就是**保持刚性**。
+    //
+    //   符号（实测，tools/_sp：腿自由、人在空中、只给 spine1 矢状角）：
+    //     spine1 +10.2° ⇒ 躯干 pitch +21.3°   ⇒ **脊柱正 = 躯干前倾**
+    //     spine1 −11.1° ⇒ 躯干 pitch −25.1°
+    //     spine1 ±20° ⇒ 实际只到 ±14°（**τmax=120 N·m 处饱和**）⇒ 俯仰权限约 ±45°
+    //   ⇒ 前倾（pitch>0）用**负**脊柱角去顶。
+    const spineTgt = clamp(-p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.com.vx, p.maxTorsoDeg);
+    for (const j of [jSp1, jSp2, jSp3]) {
+      if (j !== undefined && j >= 0 && on('torso')) {
+        rs.requestAngle(j, 2, spineTgt, 'balance', '腰矢状姿态保持');
+      }
     }
   }
   // ══════════════════════════════════════════════════════════════

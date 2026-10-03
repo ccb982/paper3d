@@ -16772,7 +16772,7 @@ var init_sim = __esm({
       }
       /** ★ 诊断：当前观测里的时钟两项（clock.sin, clock.cos）与步态相位。 */
       get clock() {
-        const c2 = Math.PI * 2;
+        const c22 = Math.PI * 2;
         return { phase: this.phase, sin: this.x[0], cos: this.x[1] };
       }
       /** 一次性跑完（离屏验收 / 无渲染时用） */
@@ -16799,9 +16799,9 @@ var init_sim = __esm({
         const tw = torso.angvel();
         const tq = torso.rotation();
         const x = this.x;
-        const c2 = Math.PI * 2;
-        x[0] = Math.sin(this.phase * c2);
-        x[1] = Math.cos(this.phase * c2);
+        const c22 = Math.PI * 2;
+        x[0] = Math.sin(this.phase * c22);
+        x[1] = Math.cos(this.phase * c22);
         if (this.cfg.obsMask?.clock) {
           x[0] = 0;
           x[1] = 0;
@@ -16889,15 +16889,15 @@ var init_sim = __esm({
         x[k + 7] = q1(this.footTmpR[0] - com.x);
         x[k + 8] = q1(this.footTmpL[2] - com.z);
         x[k + 9] = q1(this.footTmpR[2] - com.z);
-        for (let s2 = 0; s2 < 2; s2++) {
-          const side = s2 === 0 ? "l" : "r";
-          const fp = s2 === 0 ? this.footTmpL : this.footTmpR;
+        for (let s22 = 0; s22 < 2; s22++) {
+          const side = s22 === 0 ? "l" : "r";
+          const fp = s22 === 0 ? this.footTmpL : this.footTmpR;
           doll.hipPoint(side, this.hipTmp);
           const dx = q1(fp[0] - this.hipTmp[0]);
           const dy = q1(fp[1] - this.hipTmp[1]);
-          x[k + 10 + s2 * 3] = dx;
-          x[k + 11 + s2 * 3] = dy;
-          x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
+          x[k + 10 + s22 * 3] = dx;
+          x[k + 11 + s22 * 3] = dy;
+          x[k + 12 + s22 * 3] = q1(Math.hypot(dx, dy));
         }
         if (this.cfg.driver === "controller") return;
         brainForward(this.shape, p, x, this.hidden, this.out);
@@ -17566,6 +17566,8 @@ var init_rigState = __esm({
       grf = { x: 0, y: 0 };
       torsoY = 0;
       tiltDeg = 0;
+      pitchDeg = 0;
+      rollDeg = 0;
       soleX = { l: 0, r: 0 };
       /**
        * 脚底中心的**横向**位置（m）。
@@ -18067,6 +18069,8 @@ var init_rigState = __esm({
           swingClearance: this.swingClearance,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
+          pitchDeg: this.pitchDeg,
+          rollDeg: this.rollDeg,
           legs: {
             l: {
               side: "l",
@@ -18483,6 +18487,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
   const jSp2 = jointIndexByName(sk2, "spine2");
+  const jSp3 = jointIndexByName(sk2, "spine3");
   const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
@@ -18492,6 +18497,22 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const D2R2 = Math.PI / 180;
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
+  if (p.torqueControl) {
+    if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
+    if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
+  } else {
+    const ex = rs.com.x;
+    const hipTgt = clamp2(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
+    if (on("hip") && jHip >= 0) {
+      rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
+    }
+    const spineTgt = clamp2(-p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.com.vx, p.maxTorsoDeg);
+    for (const j of [jSp1, jSp2, jSp3]) {
+      if (j !== void 0 && j >= 0 && on("torso")) {
+        rs.requestAngle(j, 2, spineTgt, "balance", "\u8170\u77E2\u72B6\u59FF\u6001\u4FDD\u6301");
+      }
+    }
+  }
   if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   const kneeNow = rs.angle(jKnee, 2);
@@ -18570,6 +18591,14 @@ var init_balance2 = __esm({
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
       kneeHoldDeg: 15,
+      // Gear I sagittal hip: com forward => negative angle (hip extension)
+      ksagP: 1.2,
+      ksagD: 0.1,
+      maxHipDeg: 0.52,
+      // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
+      kTorsoHold: 0.02,
+      kTorsoHoldD: 0.02,
+      maxTorsoDeg: 0.26,
       // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
       //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
       //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -18781,6 +18810,15 @@ var init_controller = __esm({
         rs.cop.r.load = TMP_COP_R[3];
         rs.torsoY = sim.doll.torso().translation().y;
         rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        {
+          const q = sim.doll.torso().rotation();
+          const ax = 2 * (q.x * q.y + q.w * q.z);
+          const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
+          const az = 2 * (q.y * q.z - q.w * q.x);
+          const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+          rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
+          rs.rollDeg = Math.atan2(az, uy) * 57.2958;
+        }
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
@@ -18837,26 +18875,20 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
-var SHAPE = shapeForJoints2(sk.joints.length);
-var s1 = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 20, driver: "controller" });
+var S = shapeForJoints2(sk.joints.length);
+var s1 = new Sim2(sk, S, { ...DEFAULT_SIM2, mode: "stand", duration: 20, driver: "controller" });
 s1.begin(new Float32Array(s1.params.length));
 var z = new Float32Array(sk.joints.length * 3);
 for (let i = 0; i < Math.round(20 / (1 / 120)) && !s1.finished; i++) {
   s1.doll.setMotorTargets(z);
   s1.advance(1);
 }
-console.log(`\u96F6\u8F93\u51FA 20s   \uFF1A${(s1.ticksDone / 60).toFixed(2)}s \u503E=${(s1.doll.tiltOf(s1.doll.torso()) * 57.3).toFixed(2)}\xB0 ${s1.fallen ? "\u6454" : "\u2713"}`);
-for (const tc of [false, true]) {
-  const s2 = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 15, driver: "controller" });
-  s2.begin(new Float32Array(s2.params.length));
-  const c2 = new Controller2(sk, s2, {
-    ...DEFAULT_CONTROLLER2,
-    gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
-    balance: { ...DEFAULT_CONTROLLER2.balance, torqueControl: tc }
-  });
-  for (let i = 0; i < Math.round(15 / (1 / 120)) && !s2.finished; i++) {
-    if (i % 2 === 0) s2.doll.setMotorTargets(c2.step(1 / 60));
-    s2.advance(1);
-  }
-  console.log(`\u5355\u817F tc=${String(tc).padEnd(5)} \uFF1A${(s2.ticksDone / 60).toFixed(2)}s ${s2.fallen ? "\u6454:" + s2.fallReason : "\u2713"} \u76F8=${c2.snapshot.phase} \u8EAF\u5E72y=${c2.snapshot.torsoY.toFixed(3)}`);
+console.log(`\u96F6\u8F93\u51FA 20s \uFF1A${(s1.ticksDone / 60).toFixed(2)}s \u503E${(s1.doll.tiltOf(s1.doll.torso()) * 57.3).toFixed(2)}\xB0 ${s1.fallen ? "\u6454" : "\u2713"}`);
+var s2 = new Sim2(sk, S, { ...DEFAULT_SIM2, mode: "stand", duration: 12, driver: "controller" });
+s2.begin(new Float32Array(s2.params.length));
+var c2 = new Controller2(sk, s2, DEFAULT_CONTROLLER2);
+for (let i = 0; i < Math.round(12 / (1 / 120)) && !s2.finished; i++) {
+  if (i % 2 === 0) s2.doll.setMotorTargets(c2.step(1 / 60));
+  s2.advance(1);
 }
+console.log(`\u5355\u817F 12s  \uFF1A${(s2.ticksDone / 60).toFixed(2)}s ${s2.fallen ? "\u6454:" + s2.fallReason : "\u2713"} \u76F8=${c2.snapshot.phase} pitch=${c2.snapshot.pitchDeg.toFixed(1)}\xB0 roll=${c2.snapshot.rollDeg.toFixed(1)}\xB0`);

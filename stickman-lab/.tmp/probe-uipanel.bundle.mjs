@@ -18834,6 +18834,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
   const jSp2 = jointIndexByName(sk2, "spine2");
+  const jSp3 = jointIndexByName(sk2, "spine3");
   const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
@@ -18851,6 +18852,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const hipTgt = clamp2(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
     if (on("hip") && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
+    }
+    const spineTgt = clamp2(-p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.com.vx, p.maxTorsoDeg);
+    for (const j of [jSp1, jSp2, jSp3]) {
+      if (j !== void 0 && j >= 0 && on("torso")) {
+        rs.requestAngle(j, 2, spineTgt, "balance", "\u8170\u77E2\u72B6\u59FF\u6001\u4FDD\u6301");
+      }
     }
   }
   if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
@@ -18935,6 +18942,10 @@ var init_balance2 = __esm({
       ksagP: 1.2,
       ksagD: 0.1,
       maxHipDeg: 0.52,
+      // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
+      kTorsoHold: 0.02,
+      kTorsoHoldD: 0.02,
+      maxTorsoDeg: 0.26,
       // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
       //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
       //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
