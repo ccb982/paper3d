@@ -6811,7 +6811,15 @@ var init_skeleton = __esm({
       // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
       anklePitchDeg: [0, 0],
       ankleRollDeg: 0,
-      ankleTorque: 45,
+      // ★★ 踝力矩上限（N·m）。原来 45 —— **解剖学上错了近 3 倍**。
+      //   文献：踝跖屈（比目鱼肌+腓肠肌）是人体最大的肌群，年轻人最大自主收缩
+      //   ~110~140 N·m（Noble & Norkowitz；Winter 1990 的踝策略力矩同量级）。
+      //   45 经 TORQUE_AXIS_FACTOR 后三轴只有 27/15.8/45 N·m ⇒
+      //     · 蹬离做不出来（实测 PUSH 相膝已 150/150 打满而踝只有 27）
+      //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
+      //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
+      //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
+      ankleTorque: 120,
       footUvWarpDeg: 0,
       ankleEnabled: false
     };
