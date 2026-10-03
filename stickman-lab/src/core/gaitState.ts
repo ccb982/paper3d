@@ -59,9 +59,9 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   liftHold: 0.25,
 };
 
-const PHASE_ORDER: Phase[] = ['DOUBLE', 'SHIFT', 'SINGLE', 'STEP'];
+const PHASE_ORDER: Phase[] = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'];
 const PHASE_LABEL: Record<Phase, string> = {
-  DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', STEP: '摆动相',
+  DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相',
 };
 
 /** 正常正态 CDF（HugWBC 的平滑接触概率用它） */
@@ -218,14 +218,19 @@ export class GaitState {
 
       case 'SHIFT':
         // ★ 承重判据达标 ⇒ 换到 SINGLE；否则继续转移
-        if (rs.bearerCriteria.all) rs.phase = 'SINGLE';
+        if (rs.bearerCriteria.all) { rs.phase = 'SINGLE'; rs.phaseT = 0; }
         else if (rs.phaseT > 1.5) rs.phase = 'DOUBLE';   // 超时回退，别卡死
         break;
 
       case 'SINGLE':
-        // 进入 STEP：许可齐 + 双支撑时长够（R2：交接必须落在双支撑相内）
+        // 进入 PUSH：先把重心推出去（**前进的唯一来源**，见 §13.5）
+        if (rs.phaseT > 0.15) rs.phase = 'PUSH';
+        break;
+
+      case 'PUSH':
+        // PUSH → STEP：许可齐 + 双支撑时长够（R2：交接必须落在双支撑相内）
         if (rs.stepPermit.all && both) rs.phase = 'STEP';
-        else if (rs.phaseT > 2.0) rs.phase = 'DOUBLE';
+        else if (rs.phaseT > 0.5) rs.phase = 'SINGLE';
         break;
 
       case 'STEP':

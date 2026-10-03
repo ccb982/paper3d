@@ -15808,6 +15808,7 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
+      driver: "brain",
       physicsHz: 120,
       controlHz: 60,
       duration: 6,
@@ -16606,6 +16607,7 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
+        if (this.cfg.driver === "controller") return;
         brainForward(this.shape, p, x, this.hidden, this.out);
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
         doll.setMotorTargets(this.motor);
@@ -17120,7 +17122,9 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { newCom: newCom2, readCom: readCom2 } = await Promise.resolve().then(() => (init_posture(), posture_exports));
-var sk = buildSkeleton2(DEFAULT_CONFIG2);
+var ANKLE_ON = process.env.ANKLE === "1";
+var ANK_TAU = Number(process.env.ANKLE_TAU ?? 60);
+var sk = buildSkeleton2(ANKLE_ON ? { ...DEFAULT_CONFIG2, ankleEnabled: true, ankleTorque: ANK_TAU } : DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
 var DT = 1 / 120;
 var HOLD = 1;
@@ -17143,6 +17147,7 @@ var CH = [
 ];
 log("\u9010\u901A\u9053\u5F00\u73AF\u6743\u9650\uFF08\u6052\u5B9A\u76EE\u6807\u89D2\uFF0C1.0 s \u7A97\uFF0C\u96F6\u8F93\u51FA\u57FA\u7EBF\u4E3A\u57FA\u51C6\uFF09");
 log(`  \u771F\u5B9E\u5173\u8282 ${sk.joints.length} \u4E2A\uFF1A${sk.joints.map((j) => j.name).join(" ")}`);
+log(`  \u8E1D\uFF1A${ANKLE_ON ? `**\u5F00**\uFF08ankleTorque=${ANK_TAU} N\xB7m\uFF09` : "\u5173\uFF08\u811A\u638C\u662F\u5C0F\u817F\u7B2C\u4E8C\u4E2A collider\uFF09"}`);
 log("");
 var rows = [];
 for (const name of CH) {

@@ -47,6 +47,16 @@ export interface BalanceParams {
   maxHip: number;
   maxKnee: number;
   maxTorso: number;
+  // ── 踝（CoP 策略）─────────────────────────────────────────
+  /** 矢状面：踝 CoP 比例增益（rad per m）。目标量是**捕获点**，不是躯干角 */
+  kCopSag: number;
+  kCopSagD: number;
+  /** 额状面：踝内/外翻的 CoP 增益（实测权限很弱，只作微调） */
+  kCopLat: number;
+  /** 蹬离（PUSH 相）跖屈幅度（deg）—— 前 Neurorob 2022 预摆动跖屈 17.2° */
+  pushDeg: number;
+  maxAnkleSag: number;
+  maxAnkleLat: number;
 }
 
 export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
@@ -61,6 +71,17 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   maxHip: 0.52,
   maxKnee: 0.35,
   maxTorso: 0.14,
+  // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
+  //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
+  //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
+  //   LIPM：CoP 在 CoM **前方** ⇒ 力矩把 CoM 往**后**拉
+  //   ⇒ 要把 ξ 拉回 0（ζ 超前）就要 CoP 前移 ⇒ 踝角 = +k·ξ
+  kCopSag: 1.2,
+  kCopSagD: 0.15,
+  kCopLat: 0.5,
+  pushDeg: 12,
+  maxAnkleSag: 0.26,
+  maxAnkleLat: 0.14,
 };
 
 /**
@@ -74,6 +95,8 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
   const jKnee = jointIndexByName(sk, sup === 'l' ? 'knee_l' : 'knee_r');
   const jSp1 = jointIndexByName(sk, 'spine1');
   const jSp2 = jointIndexByName(sk, 'spine2');
+  // ★ 踝（`ankleEnabled=false` 时 jointIndexByName 返回 -1 ⇒ 自然跳过，不静默假装在控制）
+  const jAnk = jointIndexByName(sk, sup === 'l' ? 'foot_l' : 'foot_r');
   // ★ 不静默失败：这几个关节由 rig.ts 的启动断言保证存在
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, 'balance', '骨架缺支撑腿/腰关节');
@@ -121,4 +144,28 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
   // ⑤ 腰上段：只跟下段走一小段，避免"折腰"全堆在 spine1
   // ══════════════════════════════════════════════════════════════
   if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), 'balance', '腰上段');
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑥ ★★★ **踝：CoP 策略 —— 整条力链的起点**（用户 2026-10-03：
+  //        「力是自下往上传导的」「脚踝关节应该写的，足部还要学会发力」）
+  //
+  //   力链：地面反力(足底某点) → 踝力矩 τ=F_z×(CoP−踝) → 膝 → 髋 → 骨盆 → 脊柱 → 躯干
+  //
+  //   这里用的是 **LIPM 捕获点**（Hof 2005 / Prince 1994）：
+  //       ξ = x_com + ẋ_com/ω        CoP 放在 ξ 处 ⇒ CoM 恰好停住
+  //   符号（实测）：正踝角（跖屈）⇒ CoP 前移 ⇒ CoM 被往**后**拉 ⇒ 用来消 ξ。
+  // ══════════════════════════════════════════════════════════════
+  if (jAnk >= 0) {
+    const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;
+    const xi = rs.dcm.x;                       // 捕获点（已含速度项）
+    let ankSag = p.kCopSag * (xi - stanceX) + p.kCopSagD * rs.com.vx;
+    // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
+    if (rs.phase === 'PUSH') ankSag += Math.abs(p.pushDeg) * D2R;
+    ankSag = clamp(ankSag, p.maxAnkleSag);
+    rs.requestAngle(jAnk, 2, ankSag, 'balance', '踝CoP/蹬离');
+
+    // 额状面踝：实测权限很弱（Δz≈4mm），只做微调，主力仍是 spine1/0
+    const ankLat = clamp(-p.kCopLat * (rs.dcm.z - rs.support.cz), p.maxAnkleLat);
+    rs.requestAngle(jAnk, 0, ankLat, 'balance', '踝额状');
+  }
 }

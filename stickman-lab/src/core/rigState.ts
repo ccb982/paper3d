@@ -27,7 +27,8 @@ import { jointIndexByName } from './skeleton';
 
 export type Side = 'l' | 'r';
 /** 四相状态机（交换协议见 gaitState.ts） */
-export type Phase = 'DOUBLE' | 'SHIFT' | 'SINGLE' | 'STEP';
+/** 四相 + 蹬离（`PUSH`）—— 见重构方案 §13.5：蹬离是前进的唯一来源 */
+export type Phase = 'DOUBLE' | 'SHIFT' | 'SINGLE' | 'PUSH' | 'STEP';
 
 /** 两套系统的标识 */
 export type SystemId = 'balance' | 'step';

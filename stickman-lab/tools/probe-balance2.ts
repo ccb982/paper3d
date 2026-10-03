@@ -32,7 +32,12 @@ const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const { DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
 
-const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 可选开踝（用户 2026-10-03："脚踝关节应该写的，而且足部还要学会发力"）
+const ANKLE_ON = process.env.ANKLE === '1';
+const ANK_TAU = Number(process.env.ANKLE_TAU ?? 60);
+const sk = buildSkeleton(ANKLE_ON
+  ? { ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: ANK_TAU }
+  : DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 // ★ 与其它探针一致：参数从 argv[3] 起（argv[2] 是探针名）
 const DUR = Number(process.argv[3] ?? 8) || 8;
@@ -49,7 +54,7 @@ const ctrl = new Controller(sk, sim, {
 
 log('══ 重构后验收：单腿站立（考核平衡维持系统）══');
 log(`  骨架 ${ctrl.summary}`);
-log(`  支撑腿 = ${SUP === 'l' ? '左' : '右'}   回合 ${DUR}s`);
+log(`  支撑腿 = ${SUP === 'l' ? '左' : '右'}   回合 ${DUR}s   踝=${ANKLE_ON ? `开 ${ANK_TAU}N·m` : '关'}`);
 log('');
 log('  体检发现的问题（这些决定了控制器能写哪些轴）：');
 for (const pr of ctrl.rigReport.problems.slice(0, 6)) log(`    · ${pr}`);

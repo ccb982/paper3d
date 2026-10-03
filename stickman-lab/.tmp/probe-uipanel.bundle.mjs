@@ -17625,11 +17625,12 @@ var init_gaitState = __esm({
       singleLeg: "l",
       liftHold: 0.25
     };
-    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "STEP"];
+    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
     PHASE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
       SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
       SINGLE: "\u5355\u652F\u6491",
+      PUSH: "\u8E6C\u79BB",
       STEP: "\u6446\u52A8\u76F8"
     };
     GaitState = class {
@@ -17750,12 +17751,17 @@ var init_gaitState = __esm({
             if (rs.phaseT > 0.15 && (rs.loadFrac[swing] > 0.25 || rs.touchdown[swing])) rs.phase = "SHIFT";
             break;
           case "SHIFT":
-            if (rs.bearerCriteria.all) rs.phase = "SINGLE";
-            else if (rs.phaseT > 1.5) rs.phase = "DOUBLE";
+            if (rs.bearerCriteria.all) {
+              rs.phase = "SINGLE";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > 1.5) rs.phase = "DOUBLE";
             break;
           case "SINGLE":
+            if (rs.phaseT > 0.15) rs.phase = "PUSH";
+            break;
+          case "PUSH":
             if (rs.stepPermit.all && both) rs.phase = "STEP";
-            else if (rs.phaseT > 2) rs.phase = "DOUBLE";
+            else if (rs.phaseT > 0.5) rs.phase = "SINGLE";
             break;
           case "STEP":
             if (rs.touchdown[swing]) {
@@ -17796,6 +17802,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
   const jSp2 = jointIndexByName(sk2, "spine2");
+  const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
     return;
@@ -17816,6 +17823,16 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
   rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
   if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  if (jAnk >= 0) {
+    const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
+    const xi = rs.dcm.x;
+    let ankSag = p.kCopSag * (xi - stanceX) + p.kCopSagD * rs.com.vx;
+    if (rs.phase === "PUSH") ankSag += Math.abs(p.pushDeg) * D2R2;
+    ankSag = clamp(ankSag, p.maxAnkleSag);
+    rs.requestAngle(jAnk, 2, ankSag, "balance", "\u8E1DCoP/\u8E6C\u79BB");
+    const ankLat = clamp(-p.kCopLat * (rs.dcm.z - rs.support.cz), p.maxAnkleLat);
+    rs.requestAngle(jAnk, 0, ankLat, "balance", "\u8E1D\u989D\u72B6");
+  }
 }
 var DEFAULT_BALANCE_PARAMS;
 var init_balance2 = __esm({
@@ -17833,7 +17850,18 @@ var init_balance2 = __esm({
       kHipUpright: 0.8,
       maxHip: 0.52,
       maxKnee: 0.35,
-      maxTorso: 0.14
+      maxTorso: 0.14,
+      // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
+      //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
+      //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
+      //   LIPM：CoP 在 CoM **前方** ⇒ 力矩把 CoM 往**后**拉
+      //   ⇒ 要把 ξ 拉回 0（ζ 超前）就要 CoP 前移 ⇒ 踝角 = +k·ξ
+      kCopSag: 1.2,
+      kCopSagD: 0.15,
+      kCopLat: 0.5,
+      pushDeg: 12,
+      maxAnkleSag: 0.26,
+      maxAnkleLat: 0.14
     };
   }
 });
@@ -18245,7 +18273,7 @@ var init_hud = __esm({
           el.dataset.r = L.locked ? "stance" : L.isFront ? "front" : "";
           el.querySelector("span").textContent = tags.join(" \xB7 ");
         }
-        const PH2 = { DOUBLE: "\u53CC\u811A\u652F\u6491", SHIFT: "\u91CD\u5FC3\u8F6C\u79FB", SINGLE: "\u5355\u652F\u6491", STEP: "\u6446\u52A8\u76F8" };
+        const PH2 = { DOUBLE: "\u53CC\u811A\u652F\u6491", SHIFT: "\u91CD\u5FC3\u8F6C\u79FB", SINGLE: "\u5355\u652F\u6491", PUSH: "\u8E6C\u79BB", STEP: "\u6446\u52A8\u76F8" };
         e.ownPhase.textContent = `${PH2[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
         e.ownGround.textContent = `${d.support.contactN} \u53EA`;
         e.ownMos.textContent = `${(d.mos * 1e3).toFixed(0)} mm`;

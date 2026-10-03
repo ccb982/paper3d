@@ -32,7 +32,12 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { newCom, readCom } = await import('../src/core/posture');
 
-const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 可选：开踝（用户 2026-10-03："脚踝关节应该写的，而且足部还要学会发力"）
+const ANKLE_ON = process.env.ANKLE === '1';
+const ANK_TAU = Number(process.env.ANKLE_TAU ?? 60);
+const sk = buildSkeleton(ANKLE_ON
+  ? { ...DEFAULT_CONFIG, ankleEnabled: true, ankleTorque: ANK_TAU }
+  : DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 const DT = 1 / 120;
 const HOLD = 1.0;
@@ -49,6 +54,7 @@ const CH = [
 
 log('逐通道开环权限（恒定目标角，1.0 s 窗，零输出基线为基准）');
 log(`  真实关节 ${sk.joints.length} 个：${sk.joints.map((j) => j.name).join(' ')}`);
+log(`  踝：${ANKLE_ON ? `**开**（ankleTorque=${ANK_TAU} N·m）` : '关（脚掌是小腿第二个 collider）'}`);
 log('');
 
 interface Row { name: string; ax: number; tau: number; axExists: boolean; dvx: number; dvz: number; dx: number; dz: number; spd: number }

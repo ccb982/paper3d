@@ -197,7 +197,7 @@ export class Hud {
       el.querySelector('span')!.textContent = tags.join(' · ');
     }
 
-    const PH = { DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', STEP: '摆动相' } as Record<string, string>;
+    const PH = { DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相' } as Record<string, string>;
     e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
     e.ownGround.textContent = `${d.support.contactN} 只`;
     e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;

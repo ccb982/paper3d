@@ -15795,6 +15795,7 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
+      driver: "brain",
       physicsHz: 120,
       controlHz: 60,
       duration: 6,
@@ -16593,6 +16594,7 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
+        if (this.cfg.driver === "controller") return;
         brainForward(this.shape, p, x, this.hidden, this.out);
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
         doll.setMotorTargets(this.motor);
@@ -17263,7 +17265,16 @@ var init_rigState = __esm({
       /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
       soleY = { l: 0, r: 0 };
       // ── 仲裁
+      //  ⚠⚠ 用**固定长度 + fill(undefined)** 清空，**不要**用 `length = 0`：
+      //     那会把数组真的清空，于是 `i >= this.req.length` 恒成立 ⇒
+      //     `request()` 全部静默 return ⇒ 控制器退化成开环，而所有指标看起来"正常"，
+      //     只有增益扫描会暴露（16 行逐位相同）。已踩过。
       req = [];
+      /** 本拍真正被登记的需求数（诊断用：0 ⇒ 控制器根本没在控制） */
+      requestCount = 0;
+      /** 越界请求累计（应当恒为 0；非 0 说明有调用方用了不存在的关节/轴） */
+      badRequests = 0;
+      nAxes;
       tgt = [];
       prevTarget;
       // ── 事件
@@ -17281,10 +17292,11 @@ var init_rigState = __esm({
         this.sk = sk2;
         this.cfg = cfg;
         const n = sk2.joints.length * 3;
+        this.nAxes = n;
         this.pos = new Float64Array(n);
         this.vel = new Float64Array(n);
-        this.prevTarget = new Float64Array(n);
-        this.prevOut = new Float64Array(n);
+        this.prevTarget = new Float32Array(n);
+        this.prevOut = new Float32Array(n);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
             value: 0,
@@ -17301,13 +17313,25 @@ var init_rigState = __esm({
       bearer() {
         return this.loadBearer;
       }
-      /** 承重腿；没有标识时退化为唯一支撑脚 */
+      /**
+       * 承重腿；**没有标识时退化为"当前实际在承重的那条"**。
+       *
+       * ⚠ 双支撑时**必须取载荷大的那条**，不能写死 `'l'`：
+       *   曾写死左脚，于是判据在评估一条只承担 29% 的腿，而右腿承担 71%
+       *   ⇒ B2 永远不达标 ⇒ 承重标识永远授不出来 ⇒ 迈步许可 P1 永远为 false
+       *   ⇒ 表现是"控制器完全不动"，但所有指标看起来都在正常回读。
+       */
       supportLeg() {
         if (this.loadBearer) return this.loadBearer;
         if (this.grounded.l && !this.grounded.r) return "l";
         if (this.grounded.r && !this.grounded.l) return "r";
-        if (this.locked.l) return "l";
-        if (this.locked.r) return "r";
+        if (this.grounded.l && this.grounded.r) {
+          if (this.loadFrac.l > this.loadFrac.r + 1e-3) return "l";
+          if (this.loadFrac.r > this.loadFrac.l + 1e-3) return "r";
+          if (this.locked.l) return "l";
+          if (this.locked.r) return "r";
+          return "l";
+        }
         return "l";
       }
       swingLeg() {
@@ -17338,8 +17362,12 @@ var init_rigState = __esm({
        */
       request(joint, axis, value, system, label) {
         const i = joint * 3 + axis;
-        if (i < 0 || i >= this.req.length) return;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
         const cur = this.req[i];
+        this.requestCount++;
         if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
           this.tgt[i].suppressed.push({ system, label });
           return;
@@ -17347,14 +17375,49 @@ var init_rigState = __esm({
         if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: cur.label });
         this.req[i] = { value, system, label };
       }
+      /**
+       * ★★ 按**角度**提需求（内部换算成该轴量程的比例）。
+       *
+       *   为什么需要它：`request()` 收的是**目标角比例**（`-1..1`，映射到该轴量程），
+       *   直接传 PD 的输出是**量纲错误** —— 会把"膝该往回顶一点"变成
+       *   "命令膝弯 46°"，实测开局就深蹲塌下去。
+       *   ⇒ 控制器里凡是"我要这个角"的语义，都必须走这个接口。
+       */
+      requestAngle(joint, axis, rad, system, label) {
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        this.request(joint, axis, rad * 0.9 / span, system, label);
+      }
       /** 锁定闸门：被锁定腿上的抬腿需求**直接丢弃**（不是加权、不是夹紧） */
       requestSwingLeg(side, joint, axis, value, label, isLift) {
         if (isLift && this.locked[side]) {
           const i = joint * 3 + axis;
-          if (i >= 0 && i < this.tgt.length) this.tgt[i].vetoed.push({ system: "step", label });
+          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
           return;
         }
         this.request(joint, axis, value, "step", label);
+      }
+      /** 同上，但按**角度**提需求 */
+      requestSwingLegAngle(side, joint, axis, rad, label, isLift) {
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        if (isLift && this.locked[side]) {
+          const i = joint * 3 + axis;
+          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
+          return;
+        }
+        this.requestAngle(joint, axis, rad, "step", label);
       }
       /**
        * ★ 腰的**受限修正槽**：迈步系统只能提一个**有界**的修正量。
@@ -17362,17 +17425,34 @@ var init_rigState = __esm({
        *   且乘上权限预算 α(t)。
        *   超出部分被夹住并标记 —— 可见，不静默。
        */
-      requestWaistSlot(joint, axis, value, label) {
-        const cap = this.cfg.waistSlotMax * this.authority;
-        const v = Math.max(-cap, Math.min(cap, value));
-        this.request(joint, axis, v, "step", label + (Math.abs(v - value) > 1e-9 ? `(\u5939\u5230${(cap * 57.3).toFixed(1)}\xB0)` : ""));
+      requestWaistSlot(joint, axis, rad, label) {
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[0]), Math.abs(def.maxRad[0]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        const capRad = this.cfg.waistSlotMax * this.authority;
+        const v = Math.max(-capRad, Math.min(capRad, rad));
+        this.requestAngle(
+          joint,
+          axis,
+          v,
+          "step",
+          label + (Math.abs(v - rad) > 1e-9 ? `(\u5939\u5230${(capRad * 57.3).toFixed(1)}\xB0)` : "")
+        );
       }
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
         this.tickNo++;
         this.tSec += dt;
-        this.req.length = 0;
+        this.req.fill(void 0);
+        this.requestCount = 0;
         for (let i = 0; i < this.tgt.length; i++) {
           const t = this.tgt[i];
           t.suppressed.length = 0;
@@ -17392,7 +17472,7 @@ var init_rigState = __esm({
       arbitrate(dt) {
         const out = this.prevOut;
         const maxStep = this.cfg.slewLimit * dt;
-        for (let i = 0; i < this.req.length; i++) {
+        for (let i = 0; i < this.nAxes; i++) {
           const r = this.req[i];
           const t = this.tgt[i];
           if (!r || !t) {
@@ -17545,11 +17625,12 @@ var init_gaitState = __esm({
       singleLeg: "l",
       liftHold: 0.25
     };
-    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "STEP"];
+    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
     PHASE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
       SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
       SINGLE: "\u5355\u652F\u6491",
+      PUSH: "\u8E6C\u79BB",
       STEP: "\u6446\u52A8\u76F8"
     };
     GaitState = class {
@@ -17580,8 +17661,8 @@ var init_gaitState = __esm({
         this.event.kind = "none";
         this.event.note = "";
         this.event.side = void 0;
-        const supSide = rs.loadBearer ?? (rs.grounded.l && !rs.grounded.r ? "l" : rs.grounded.r && !rs.grounded.l ? "r" : rs.loadBearer ?? "l");
-        const swing = supSide === "l" ? "r" : "l";
+        const supSide = rs.supportLeg();
+        const swing = rs.swingLeg();
         const bothGrounded = rs.grounded.l && rs.grounded.r;
         if (bothGrounded) this.doubleT += dt;
         else this.doubleT = 0;
@@ -17670,12 +17751,17 @@ var init_gaitState = __esm({
             if (rs.phaseT > 0.15 && (rs.loadFrac[swing] > 0.25 || rs.touchdown[swing])) rs.phase = "SHIFT";
             break;
           case "SHIFT":
-            if (rs.bearerCriteria.all) rs.phase = "SINGLE";
-            else if (rs.phaseT > 1.5) rs.phase = "DOUBLE";
+            if (rs.bearerCriteria.all) {
+              rs.phase = "SINGLE";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > 1.5) rs.phase = "DOUBLE";
             break;
           case "SINGLE":
+            if (rs.phaseT > 0.15) rs.phase = "PUSH";
+            break;
+          case "PUSH":
             if (rs.stepPermit.all && both) rs.phase = "STEP";
-            else if (rs.phaseT > 2) rs.phase = "DOUBLE";
+            else if (rs.phaseT > 0.5) rs.phase = "SINGLE";
             break;
           case "STEP":
             if (rs.touchdown[swing]) {
@@ -17721,6 +17807,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
   const jSp2 = jointIndexByName(sk2, "spine2");
+  const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
     return;
@@ -17728,22 +17815,29 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   const clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
   const ex = rs.com.x;
-  const hipNow = rs.angle(jHip, 2);
-  let hipSag = p.kSagP * ex + p.kSagD * rs.com.vx - p.kHipUpright * hipNow;
-  hipSag = clamp(hipSag, p.maxHip);
-  rs.request(jHip, 2, hipSag, "balance", "\u9ACB\u7B56\u7565");
+  let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
+  hipTgt = clamp(hipTgt, p.maxHip);
+  rs.requestAngle(jHip, 2, hipTgt, "balance", "\u9ACB\u7B56\u7565");
   const kneeNow = rs.angle(jKnee, 2);
   const kneeTgt = -Math.abs(p.kneeHoldDeg) * D2R2;
-  const kneeCmd = clamp(-(kneeNow - kneeTgt) * p.kKnee, p.maxKnee);
-  rs.request(jKnee, 2, kneeCmd, "balance", "\u819D\u9501\u5B9A");
+  rs.requestAngle(jKnee, 2, kneeTgt + (kneeNow - kneeTgt) * (1 - p.kKnee), "balance", "\u819D\u9501\u5B9A");
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
-  let sp1Sag = -grfAng * p.kTorsoAlign - ex * 0.8;
-  sp1Sag = clamp(sp1Sag, p.maxTorso);
-  rs.request(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
+  const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
+  rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
   const ez = rs.com.z - rs.support.cz;
-  const lat = clamp(p.kLatP * ez + p.kLatD * rs.com.vz, p.maxTorso);
-  rs.request(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
-  if (jSp2 >= 0) rs.request(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
+  rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
+  if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
+  if (jAnk >= 0) {
+    const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
+    const xi = rs.dcm.x;
+    let ankSag = p.kCopSag * (xi - stanceX) + p.kCopSagD * rs.com.vx;
+    if (rs.phase === "PUSH") ankSag += Math.abs(p.pushDeg) * D2R2;
+    ankSag = clamp(ankSag, p.maxAnkleSag);
+    rs.requestAngle(jAnk, 2, ankSag, "balance", "\u8E1DCoP/\u8E6C\u79BB");
+    const ankLat = clamp(-p.kCopLat * (rs.dcm.z - rs.support.cz), p.maxAnkleLat);
+    rs.requestAngle(jAnk, 0, ankLat, "balance", "\u8E1D\u989D\u72B6");
+  }
 }
 var DEFAULT_BALANCE_PARAMS;
 var init_balance2 = __esm({
@@ -17761,7 +17855,18 @@ var init_balance2 = __esm({
       kHipUpright: 0.8,
       maxHip: 0.52,
       maxKnee: 0.35,
-      maxTorso: 0.14
+      maxTorso: 0.14,
+      // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
+      //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
+      //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
+      //   LIPM：CoP 在 CoM **前方** ⇒ 力矩把 CoM 往**后**拉
+      //   ⇒ 要把 ξ 拉回 0（ζ 超前）就要 CoP 前移 ⇒ 踝角 = +k·ξ
+      kCopSag: 1.2,
+      kCopSagD: 0.15,
+      kCopLat: 0.5,
+      pushDeg: 12,
+      maxAnkleSag: 0.26,
+      maxAnkleLat: 0.14
     };
   }
 });
@@ -17784,13 +17889,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const hold = rs.phase === "SINGLE" || rs.phase === "STEP";
   const lift = permit && hold ? p.lift * bell + (s2 >= 1 ? p.liftHold : 0) : rs.phase === "SINGLE" ? p.liftHold : 0;
   const hipDeg = p.hipFlexPeakDeg * bell;
-  rs.requestSwingLeg(swing, jHip, 2, clamp(-hipDeg * D2R2, 0.6), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
+  rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R2, 0.6), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell;
-  const kneeNow = rs.angle(jKnee, 2);
-  const kneeTgt = -kneeDeg * D2R2;
-  const kneeCmd = clamp((kneeTgt - kneeNow) * 1.2, 0.7);
-  rs.requestSwingLeg(swing, jKnee, 2, kneeCmd, "\u6446\u52A8\u819D\u5C48", lift > 0.01);
-  if (lift > 0.01) rs.requestSwingLeg(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55", false);
+  rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, -1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
+  if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55", false);
   if (jSp1 >= 0) {
     const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
     rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
@@ -17938,13 +18040,15 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
-var sk = buildSkeleton2(DEFAULT_CONFIG2);
+var ANKLE_ON = process.env.ANKLE === "1";
+var ANK_TAU = Number(process.env.ANKLE_TAU ?? 60);
+var sk = buildSkeleton2(ANKLE_ON ? { ...DEFAULT_CONFIG2, ankleEnabled: true, ankleTorque: ANK_TAU } : DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
 var DUR = Number(process.argv[3] ?? 8) || 8;
 var SUP = process.argv[4] ?? "l";
 if (SUP !== "l" && SUP !== "r") throw new Error(`\u652F\u6491\u817F\u53C2\u6570\u5FC5\u987B\u662F l \u6216 r\uFF0C\u6536\u5230 ${JSON.stringify(SUP)}`);
 var log = console.log;
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR });
+var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, driver: "controller" });
 sim.begin(new Float32Array(sim.params.length));
 var ctrl = new Controller2(sk, sim, {
   ...DEFAULT_CONTROLLER2,
@@ -17952,7 +18056,7 @@ var ctrl = new Controller2(sk, sim, {
 });
 log("\u2550\u2550 \u91CD\u6784\u540E\u9A8C\u6536\uFF1A\u5355\u817F\u7AD9\u7ACB\uFF08\u8003\u6838\u5E73\u8861\u7EF4\u6301\u7CFB\u7EDF\uFF09\u2550\u2550");
 log(`  \u9AA8\u67B6 ${ctrl.summary}`);
-log(`  \u652F\u6491\u817F = ${SUP === "l" ? "\u5DE6" : "\u53F3"}   \u56DE\u5408 ${DUR}s`);
+log(`  \u652F\u6491\u817F = ${SUP === "l" ? "\u5DE6" : "\u53F3"}   \u56DE\u5408 ${DUR}s   \u8E1D=${ANKLE_ON ? `\u5F00 ${ANK_TAU}N\xB7m` : "\u5173"}`);
 log("");
 log("  \u4F53\u68C0\u53D1\u73B0\u7684\u95EE\u9898\uFF08\u8FD9\u4E9B\u51B3\u5B9A\u4E86\u63A7\u5236\u5668\u80FD\u5199\u54EA\u4E9B\u8F74\uFF09\uFF1A");
 for (const pr of ctrl.rigReport.problems.slice(0, 6)) log(`    \xB7 ${pr}`);
