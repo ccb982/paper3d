@@ -46,6 +46,8 @@ export class Controller {
   /** ★ 每拍整体替换的不可变快照。UI / 探针 / 冒烟测试只读它 */
   snapshot: RigSnapshot;
   readonly rigReport: RigReport;
+  /** 载荷比的低通状态（τ=60 ms）。理由见 `step()` 里赋值处的注释。 */
+  private readonly loadFilt = { l: 0.5, r: 0.5 };
 
   constructor(sk: Skeleton, private sim: Sim, cfg: ControllerConfig = DEFAULT_CONTROLLER) {
     this.cfg = cfg;
@@ -74,7 +76,21 @@ export class Controller {
     // MoS：支撑面前沿 − 捕获点（Hof 2005）
     rs.mos = (rs.support.cx + rs.support.halfX) - rs.dcm.x;
     const [fl, fr] = sim.doll.footLoadFrac(dt);
-    rs.loadFrac.l = fl; rs.loadFrac.r = fr;
+    // ★★ 载荷分配必须**滤波**，否则 `supportLeg` 会跟着噪声翻转。
+    //   实测未滤波时载荷比在 0.1 s 内这样跳：
+    //     0.50/0.50 → 0.99/0.01 → 0.49/0.51 → 0.44/0.56 → 0.87/0.13 → …
+    //   后果是连锁的：
+    //     ① `supportLeg` 抖动 → 相位 DOUBLE↔SHIFT 来回切
+    //     ② B4「持续 80 ms」每次翻转都重置 ⇒ **承重标识永远授予不了**（实测 B4 恒为 0）
+    //     ③ SHIFT 一出现就打开额状面主通道 `τ = JᵀF`，把髋打到 ±15°（实测）
+    //        ⇒ 双脚支撑从"站满 8 s"退化成 1.68 s
+    //   物理上载荷不会在 100 ms 内从 50/50 跳到 99/1 —— 这是接触求解噪声，不是真实力。
+    //   一阶低通，τ=60 ms：必须**快于** B4 的 80 ms 窗口，否则滤波本身
+    //   又会把承重标识的授予推迟到窗口之外（实测 τ=120 ms 时双脚仍只有 2.63 s）。
+    const kL = 1 - Math.exp(-dt / 0.06);
+    this.loadFilt.l += (fl - this.loadFilt.l) * kL;
+    this.loadFilt.r += (fr - this.loadFilt.r) * kL;
+    rs.loadFrac.l = this.loadFilt.l; rs.loadFrac.r = this.loadFilt.r;
     rs.grounded.l = sim.doll.footGrounded(0);
     rs.grounded.r = sim.doll.footGrounded(1);
     sim.doll.soleXZ('l', TMP_A); rs.soleX.l = TMP_A[0]!; rs.soleZ.l = TMP_A[2]!;
@@ -125,6 +141,7 @@ export class Controller {
   }
 
   reset(): void {
+    this.loadFilt.l = 0.5; this.loadFilt.r = 0.5;
     this.gait.reset();
     this.rs.beginTick(0);
     this.snapshot = this.rs.snapshot();

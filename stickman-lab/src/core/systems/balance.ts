@@ -76,6 +76,10 @@ export interface BalanceParams {
   maxGrfX: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
+  /** 支撑腿伸展刚度（0~1）：1 = 完全顶回原位。臀肌+股四头肌共同收缩的等效刚度 */
+  kStanceExt: number;
+  /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
+  kneeStanceDeg: number;
   /**
    * ★ 通道消融（诊断用）：要**关掉**的通道名逗号分隔。
    *   空 = 全开。`probe-balsweep` 用它回答"是哪一条在 destabilize"。
@@ -114,11 +118,14 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   kTrunkLean: 0.35,
   maxTrunkLean: 0.14,
   // 捕获点 → 支撑脚的二阶比例增益（×ω₀²）
-  kXRatio: 1.6,
+  kXRatio: 0.4,
   // 横向 GRF 限幅 500 N（≈0.7 倍体重；静态需求只要 49 N）
   maxGrfX: 500,
   // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲
   hipExtendLimit: 0.12,
+  // 支撑腿伸展刚度与膝目标角
+  kStanceExt: 0.5,
+  kneeStanceDeg: 5,
 };
 
 /**
@@ -158,6 +165,18 @@ export function balanceSystem(
   //   髋：偏前 ⇒ 往髋伸方向顶（把躯干拉回支撑脚上方）
   const ex = rs.com.x;
   let hipTgt = -p.kSagP * ex - p.kSagD * rs.com.vx;
+  // ★★ 单支撑时叠加**支撑腿伸展**（臀大肌等效刚度）。
+  //   必须**合并进同一个请求**，不能另发一条：同系统同优先级时
+  //   `request()` 只保留**第一次**（后来的记入 suppressed）——
+  //   实测另发一条时 `kStanceExt` 扫 0.3/0.6/0.9 三行结果**逐位相同**，通道根本没执行。
+  //   文献：Neumann 2010 / Inman 1947（骨盆水平需 ≈52 N·m）、
+  //        Li & Levine 2010（站立时膝角近似恒定，刚度来自共同收缩）。
+  //   证据：横向已经收准（com.z −81mm vs 支撑脚 +10mm）时躯干仍从 1.427 塌到 0.34m
+  //        ⇒ 缺的是**垂直支撑刚度**，不是额状面控制。
+  const singleSupNow = rs.phase === 'SINGLE' || rs.phase === 'PUSH' || rs.phase === 'STEP';
+  if (singleSupNow && on('stanceExt') && hipTgt < 0) {
+    hipTgt = hipTgt * (1 - p.kStanceExt);
+  }
   hipTgt = clamp(hipTgt, p.maxHip);
   if (on('hip')) rs.requestAngle(jHip, 2, hipTgt, 'balance', '髋策略');
 
@@ -173,6 +192,11 @@ export function balanceSystem(
   //   ⇒ 只需在**超过屈曲限位**时顶回来，绝不主动命令弯曲。
   const kneeNow = rs.angle(jKnee, 2);
   const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R;
+  // ★ 单支撑时膝要有**主动刚度**（命令到轻微屈曲的目标角），不是只靠越界守卫。
+  //   同样必须合并进这一次请求，否则被守卫分支或优先级吞掉。
+  if (on('knee') && singleSupNow && on('stanceExt')) {
+    rs.requestAngle(jKnee, 2, -Math.abs(p.kneeStanceDeg) * D2R, 'balance', '支撑膝伸展');
+  }
   if (on('knee') && kneeNow < kneeLimit) {
     // ⚠⚠ 必须**直接顶回限位**，不能插值。
     //   原式 `kneeLimit + (kneeNow-kneeLimit)*(1-kk)`：膝屈到 −57°（kneeNow=−1.0）时
@@ -227,8 +251,15 @@ export function balanceSystem(
   //     双脚支撑且承重未授予时，支撑腿是"两脚中点"，此时外展**无权限却仍在出力**
   //     ⇒ 实测把双脚支撑从"站满 8 s"打成 **1.75 s**（消融全表退化）。
   //   启用条件：已授予承重标识，或已处于单支撑/重心转移相。
+  // ★★ 门控：额状面主通道只在**支撑腿已确定**时启用。
+  //   `SHIFT` **不算** —— 那是"准备转移重心"的过渡相，此时支撑腿本身还在变，
+  //   打开主通道等于在一个还没稳定的构型上施加定量前馈。
+  //   实测（未滤波载荷时）：SHIFT 一出现 `τ=JᵀF` 就把支撑髋打到 ±15°，
+  //   把双脚支撑从"站满 8 s"打成 1.68 s。
+  //   附加条件：载荷必须真的**占优**（>0.55），否则"支撑腿"是噪声挑出来的。
   const latArmed = rs.loadBearer !== null || rs.phase === 'SINGLE'
-    || rs.phase === 'SHIFT' || rs.phase === 'PUSH';
+    || rs.phase === 'PUSH' || rs.phase === 'STEP'
+    || ((rs.phase === 'SHIFT') && Math.max(rs.loadFrac.l, rs.loadFrac.r) > 0.62);
 
   // ══════════════════════════════════════════════════════════════
   // ④ ★★★ 额状面 = `τ = JᵀF`（重构方案 §18）
@@ -264,9 +295,13 @@ export function balanceSystem(
     //     而 CoM 加速度恰恰就是我们要控的量 —— 把它当扰动前馈等于重复计入，
     //     实测直接把 F_y 推到 ±996 N（1.4 倍体重的横向力）把人掀翻。）
     const mTot = 70, zc = h;
-    const Fz = Math.max(150, mTot * 9.81);
-    const Fy = clamp(mTot * zc * aDes, p.maxGrfX);
-    rs.grfCmd.x = Fy; rs.grfCmd.y = Fz;
+    // ⚠⚠ 轴约定：`rs.grf.y = 686.7×载荷` 说明 **y = 竖直**，
+    //   x = 矢状（前），**z = 额状（侧）**。
+    //   额状面要的水平力必须沿 **z**，之前错传给了 jacobianTorque 的第 1 个参数
+    //   （= fx，矢状）⇒ 横向力在推人前后，额状面根本没人管
+    //   ⇒ 实测 `com.z` 一路跑到 −387~−665 mm（支撑脚在 +164 mm）。
+    const FLat = clamp(mTot * zc * aDes, p.maxGrfX);
+    rs.grfCmd.x = 0; rs.grfCmd.y = mTot * 9.81; rs.grfCmd.z = FLat;
     // 分配：支撑链（髋/膝/踝）+ 脊柱链（躯干姿态）
     const chain: number[] = [];
     for (const nm of [`hip_${sup}`, `knee_${sup}`, `foot_${sup}`, 'spine1', 'spine2', 'spine3']) {
@@ -277,8 +312,8 @@ export function balanceSystem(
     //   再把 mg 通过 τ=JᵀF 注入 = **重力被算两遍** ⇒ 关节被灌爆
     //   （实测 F_y 在任何增益下都钉在 ±500 N 限幅、髋/1 钉在 ±70 N·m，0.4~0.8 s 就倒）。
     //   额状面真正缺的信息只有**水平分量** —— 位置环的轴由腿的几何决定，给不了它。
-    //   τ = Jᵀ(F_y ŷ)
-    doll.jacobianTorque(Fy, 0, 0, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+    //   横向沿 z ⇒ `τ = Jᵀ(F_lat ẑ)`
+    doll.jacobianTorque(0, 0, FLat, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
     for (const i2 of chain) {
       for (let k2 = 0; k2 < 3; k2++) {
         const v = TMP_TAU[i2 * 3 + k2]!;
@@ -286,7 +321,14 @@ export function balanceSystem(
       }
     }
 
-    // ④b 躯干**向支撑腿侧倾**（Xu & Sher / Costume & Wattenhofer / Horak 2006）
+    // ④c ★★ 支撑腿**伸展执行器**（单支撑专用）
+  //   文献：单腿站立时躯干/骨盆的重量会把髋压向屈曲、膝压向屈曲，
+  //   靠**臀大肌 + 股四头肌共同收缩**产生的**刚度**顶住（不是"驱向某个目标角"）。
+  //     · Neumann 2010 / Inman 1947：单支撑骨盆水平所需 ≈52 N·m 静态髋力矩
+  //     · Li & Levine 2010：站立时"膝角近似恒定"，刚度来自共同收缩
+  //   只靠"膝守卫"（越界才顶回）不够：实测单支撑躯干从 1.427 塌到 0.34~0.97 m
+  //   ——`com.z` 已经收准（−81 mm vs 支撑脚 +10 mm）但人还是往下坐。
+  // ④b 躯干**向支撑腿侧倾**（Xu & Sher / Costume & Wattenhofer / Horak 2006）
     //   这不是"为了平衡"，是**用重力力矩卸载髋**：单支撑时躯干侧倾能降低 CoM 高度、
     //   把一部分髋力矩转成重力力矩（文献报告省 15~30%）。同时腰侧屈把骨盆摆平。
     if (on('latwaist') && p.kTrunkLean !== 0) {

@@ -286,8 +286,12 @@ export class RigState {
     if (this.grounded.r && !this.grounded.l) return 'r';
     if (this.grounded.l && this.grounded.r) {
       // 双支撑：取载荷大的那条（相等时取已锁定的那条，再相等取 l）
-      if (this.loadFrac.l > this.loadFrac.r + 1e-3) return 'l';
-      if (this.loadFrac.r > this.loadFrac.l + 1e-3) return 'r';
+      // ★ 迟滞必须是**载荷量级**的 0.08，不是 1e-3。
+      //   1e-3 等于没有迟滞：接触噪声让两条腿的载荷在 50.1/49.9 之间来回跳，
+      //   `supportLeg` 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关
+      //   ⇒ 双脚支撑被自己搞垮（实测 8s → 1.68s）。
+      if (this.loadFrac.l > this.loadFrac.r + 0.08) return 'l';
+      if (this.loadFrac.r > this.loadFrac.l + 0.08) return 'r';
       if (this.locked.l) return 'l';
       if (this.locked.r) return 'r';
       return 'l';
