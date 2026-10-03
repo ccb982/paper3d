@@ -144,7 +144,16 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     : (s >= 1 ? 1 : (() => { const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom); return u * u * (3 - 2 * u); })());
   const hipDeg = p.hipFlexPeakDeg * bell + holdHip
     - p.hipExtendDeg * sReach * (permit || rs.phase === 'STEP' ? 1 : 0);
-  rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R, 1.05), '摆动髋屈', lift > 0.01);
+  //   ↑ 末端伸展是**减去**伸展量（往 −x 收回）—— 与髋"正=屈"的约定一致。
+  // ⚠⚠⚠ **髋与膝的屈伸符号约定相反**，别再照抄：
+  //   实测（tools/_fs，腿自由摆 1.5 s，人物朝 +x）：
+  //     髋 +20° → 脚 **+76mm 前** ／ 髋 −20° → 脚 **−100mm 后**
+  //     髋 +40° → 脚 **+313mm 前** ／ 髋 −40° → 脚 **−309mm 后**
+  //   ⇒ **髋：正 = 屈曲 = 脚往前**
+  //   膝限位 [−145°, +2°] ⇒ **膝：负 = 屈曲**（膝不能反屈）
+  //   历史实现把膝的 `-` 符号照抄给了髋，注释写着"摆动髋屈"而实际发的是**伸**，
+  //   于是摆动脚往身后走 —— 用户报"前脚向后迈"（实测 Δx −644mm、躯干 x 恒为 0）。
+  rs.requestSwingLegAngle(swing, jHip, 2, clamp(hipDeg * D2R, 1.05), '摆动髋屈', lift > 0.01);
 
   // ══════════════════════════════════════════════════════════════
   // ③ 摆动腿膝屈（Oberg/Perry 63°，峰值在摆动中段）
