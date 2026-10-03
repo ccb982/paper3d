@@ -14869,22 +14869,22 @@ function footRect(doll, side, out) {
   const hy = sole && sole.shape === "cuboid" ? sole.hy : 0.01;
   const hz = sole && sole.shape === "cuboid" ? sole.hz : 0.02;
   const oy = (sole ? sole.offsetY : -bd.length / 2) - hy;
-  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, minY = Infinity;
+  let x02 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, minY = Infinity;
   for (let si = 0; si < 4; si++) {
     rotQ(q.x, q.y, q.z, q.w, (si & 1 ? 1 : -1) * hx, oy, (si & 2 ? 1 : -1) * hz, V3);
     const wx = t.x + V3[0], wy = t.y + V3[1], wz = t.z + V3[2];
-    if (wx < x0) x0 = wx;
+    if (wx < x02) x02 = wx;
     if (wx > x1) x1 = wx;
     if (wz < z0) z0 = wz;
     if (wz > z1) z1 = wz;
     if (wy < minY) minY = wy;
   }
-  out.x0 = x0;
+  out.x0 = x02;
   out.x1 = x1;
   out.z0 = z0;
   out.z1 = z1;
   out.minY = minY;
-  out.cx = (x0 + x1) / 2;
+  out.cx = (x02 + x1) / 2;
   out.cz = (z0 + z1) / 2;
   return minY <= CONTACT_Y;
 }
@@ -14896,23 +14896,23 @@ function readSupport(doll, out) {
   const inR = footRect(doll, "r", RECT_R) && doll.footGrounded(1);
   const wLx = RECT_L.x1 - RECT_L.x0, wRx = RECT_R.x1 - RECT_R.x0;
   const wLz = RECT_L.z1 - RECT_L.z0, wRz = RECT_R.z1 - RECT_R.z0;
-  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
+  let x02 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
   if (inL) {
-    x0 = Math.min(x0, RECT_L.x0);
+    x02 = Math.min(x02, RECT_L.x0);
     x1 = Math.max(x1, RECT_L.x1);
     z0 = Math.min(z0, RECT_L.z0);
     z1 = Math.max(z1, RECT_L.z1);
     n++;
   }
   if (inR) {
-    x0 = Math.min(x0, RECT_R.x0);
+    x02 = Math.min(x02, RECT_R.x0);
     x1 = Math.max(x1, RECT_R.x1);
     z0 = Math.min(z0, RECT_R.z0);
     z1 = Math.max(z1, RECT_R.z1);
     n++;
   }
   if (n === 0) {
-    x0 = Math.min(RECT_L.x0, RECT_R.x0);
+    x02 = Math.min(RECT_L.x0, RECT_R.x0);
     x1 = Math.max(RECT_L.x1, RECT_R.x1);
     z0 = Math.min(RECT_L.z0, RECT_R.z0);
     z1 = Math.max(RECT_L.z1, RECT_R.z1);
@@ -14970,11 +14970,11 @@ function monotoneAt(ref, t) {
   const x = (t % 1 + 1) % 1 * 100;
   let i = 0;
   while (i < n - 2 && x > ref[i + 1][0]) i++;
-  const [x0, y0] = ref[i];
+  const [x02, y0] = ref[i];
   const [x1, y1] = ref[i + 1];
-  const h = x1 - x0;
+  const h = x1 - x02;
   if (h <= 1e-9) return y0;
-  const u = (x - x0) / h;
+  const u = (x - x02) / h;
   const secant = (j) => {
     const [xa, ya] = ref[j];
     const [xb, yb] = ref[j + 1];
@@ -18447,10 +18447,10 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim;
+      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim2;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim.shape);
+        this.rigReport = assertRigInvariants(sk2, sim2.shape);
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
         this.snapshot = this.rs.snapshot();
@@ -18469,49 +18469,49 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim = this.sim;
+        const sim2 = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim.doll, rs.com);
-        readSupport(sim.doll, rs.support);
+        const com = readCom(sim2.doll, rs.com);
+        readSupport(sim2.doll, rs.support);
         rs.updateComAccel(dt);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const [fl, fr] = sim2.doll.footLoadFrac(dt);
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim.doll.footGrounded(0);
-        rs.grounded.r = sim.doll.footGrounded(1);
-        sim.doll.soleXZ("l", TMP_A);
+        rs.grounded.l = sim2.doll.footGrounded(0);
+        rs.grounded.r = sim2.doll.footGrounded(1);
+        sim2.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
-        sim.doll.soleXZ("r", TMP_B);
+        sim2.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
         rs.soleZ.r = TMP_B[2];
-        const n = sim.doll.jointCount;
+        const n = sim2.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim.doll.jointRot(j, TMP_RV);
+            sim2.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim.doll.jointRelVel(j, TMP_RV);
+            sim2.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim.doll.readCoP(0, TMP_COP_L);
-        sim.doll.readCoP(1, TMP_COP_R);
+        sim2.doll.readCoP(0, TMP_COP_L);
+        sim2.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim.doll.torso().translation().y;
-        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        rs.torsoY = sim2.doll.torso().translation().y;
+        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
@@ -18544,7 +18544,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/_ab.ts
+// tools/_bk.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18567,30 +18567,29 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
-console.log("\u6D88\u878D\u7684\u901A\u9053            | \u627F\u91CD\u6388\u4E88 \u503E\u89D2>5\xB0 \u5B58\u6D3B   \u5355\u652F\u6491% \u6446\u52A8\u51C0\u7A7A \u8EAF\u5E72y");
-for (const ab of ["", "pelvicLift", "lat", "pelvicLift,lat", "latwaist", "pelvicLift,latwaist"]) {
-  const sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 8, driver: "controller" });
-  sim.begin(new Float32Array(sim.params.length));
-  const ctrl = new Controller2(sk, sim, {
-    ...DEFAULT_CONTROLLER2,
-    gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: "l" },
-    balance: { ...DEFAULT_CONTROLLER2.balance, ablate: ab }
-  });
-  let t5 = -1, bT = -1, sg = 0, n = 0, clr = 0;
-  for (let i = 0; i < Math.round(8 / (1 / 120)) && !sim.finished; i++) {
-    if (i % 2 === 0) {
-      sim.doll.setMotorTargets(ctrl.step(1 / 60));
-      ctrl.soleClearance("l");
-      ctrl.soleClearance("r");
-      const s2 = ctrl.snapshot;
-      n++;
-      if (bT < 0 && s2.loadBearer) bT = i / 120;
-      if (t5 < 0 && Math.abs(s2.tiltDeg) > 5) t5 = i / 120;
-      if (s2.legs.l.grounded && !s2.legs.r.grounded) sg++;
-      if (s2.legs.r.soleY > clr) clr = s2.legs.r.soleY;
+var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 8, driver: "controller" });
+sim.begin(new Float32Array(sim.params.length));
+var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2, gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: "l" } });
+console.log(" t     \u76F8      com.x   com.vx  \u503E\xB0   \u8EAF\u5E72y  \u63A5\u5730  \u6446\u52A8\u51C0\u7A7A  \u0394x(\u6446-\u652F)");
+var tiltAt = null;
+var xAt = null;
+var x0 = null;
+for (let i = 0; i < Math.round(8 / (1 / 120)) && !sim.finished; i++) {
+  if (i % 4 === 0) {
+    sim.doll.setMotorTargets(ctrl.step(1 / 60));
+    ctrl.soleClearance("l");
+    ctrl.soleClearance("r");
+    const s = ctrl.snapshot;
+    if (x0 === null) x0 = s.com.x;
+    const dx = s.legs.r.footX - s.legs.l.footX;
+    if (tiltAt === null && Math.abs(s.tiltDeg) > 18) {
+      tiltAt = i / 120;
+      xAt = s.com.x;
     }
-    sim.advance(1);
+    console.log(`${(i / 120).toFixed(2).padStart(4)} ${s.phase.padEnd(8)} ${((s.com.x - x0) * 1e3).toFixed(0).padStart(6)} ${(s.com.vx * 1e3).toFixed(0).padStart(7)} ${s.tiltDeg.toFixed(1).padStart(6)} ${s.torsoY.toFixed(3)}  ${s.legs.l.grounded ? "L" : "-"}${s.legs.r.grounded ? "R" : "-"} ${(s.legs.r.soleY * 1e3).toFixed(0).padStart(7)} ${(dx * 1e3).toFixed(0).padStart(9)}`);
   }
-  const s = ctrl.snapshot;
-  console.log(`${(ab || "\uFF08\u5168\u5F00\uFF09").padEnd(20)} | ${bT < 0 ? "\u2014" : bT.toFixed(2) + "s"} ${t5 < 0 ? "\u672A\u53D1\u751F" : t5.toFixed(2) + "s"} ${(sim.ticksDone / 60).toFixed(2).padStart(5)}s ${(sg / n * 100).toFixed(0).padStart(7)} ${(clr * 1e3).toFixed(0).padStart(8)} ${s.torsoY.toFixed(3)}`);
+  sim.advance(1);
 }
+console.log(`
+\u503E\u89D2\u9996\u6B21\u8D85 18\xB0 \u7684\u65F6\u523B\uFF1A${tiltAt?.toFixed(2)}s\uFF0C\u6B64\u65F6 com.x \u4F4D\u79FB = ${xAt !== null ? ((xAt - x0) * 1e3).toFixed(0) : "?"}mm`);
+console.log(`\u6454\u5012\u65F6 com.x \u4F4D\u79FB = ${((sim.doll.readCoM?.() ?? { x: 0 }).x - x0) * 1e3 | 0}mm\uFF08\u7EC8\u503C\uFF0C\u542B\u5012\u5730\uFF09`);

@@ -18447,10 +18447,10 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim;
+      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim2;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim.shape);
+        this.rigReport = assertRigInvariants(sk2, sim2.shape);
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
         this.snapshot = this.rs.snapshot();
@@ -18469,49 +18469,49 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim = this.sim;
+        const sim2 = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim.doll, rs.com);
-        readSupport(sim.doll, rs.support);
+        const com = readCom(sim2.doll, rs.com);
+        readSupport(sim2.doll, rs.support);
         rs.updateComAccel(dt);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const [fl, fr] = sim2.doll.footLoadFrac(dt);
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim.doll.footGrounded(0);
-        rs.grounded.r = sim.doll.footGrounded(1);
-        sim.doll.soleXZ("l", TMP_A);
+        rs.grounded.l = sim2.doll.footGrounded(0);
+        rs.grounded.r = sim2.doll.footGrounded(1);
+        sim2.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
-        sim.doll.soleXZ("r", TMP_B);
+        sim2.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
         rs.soleZ.r = TMP_B[2];
-        const n = sim.doll.jointCount;
+        const n = sim2.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim.doll.jointRot(j, TMP_RV);
+            sim2.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim.doll.jointRelVel(j, TMP_RV);
+            sim2.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim.doll.readCoP(0, TMP_COP_L);
-        sim.doll.readCoP(1, TMP_COP_R);
+        sim2.doll.readCoP(0, TMP_COP_L);
+        sim2.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim.doll.torso().translation().y;
-        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        rs.torsoY = sim2.doll.torso().translation().y;
+        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
@@ -18544,7 +18544,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/_ab.ts
+// tools/_td.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -18567,30 +18567,26 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
-console.log("\u6D88\u878D\u7684\u901A\u9053            | \u627F\u91CD\u6388\u4E88 \u503E\u89D2>5\xB0 \u5B58\u6D3B   \u5355\u652F\u6491% \u6446\u52A8\u51C0\u7A7A \u8EAF\u5E72y");
-for (const ab of ["", "pelvicLift", "lat", "pelvicLift,lat", "latwaist", "pelvicLift,latwaist"]) {
-  const sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 8, driver: "controller" });
-  sim.begin(new Float32Array(sim.params.length));
-  const ctrl = new Controller2(sk, sim, {
-    ...DEFAULT_CONTROLLER2,
-    gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: "l" },
-    balance: { ...DEFAULT_CONTROLLER2.balance, ablate: ab }
-  });
-  let t5 = -1, bT = -1, sg = 0, n = 0, clr = 0;
-  for (let i = 0; i < Math.round(8 / (1 / 120)) && !sim.finished; i++) {
-    if (i % 2 === 0) {
-      sim.doll.setMotorTargets(ctrl.step(1 / 60));
-      ctrl.soleClearance("l");
-      ctrl.soleClearance("r");
-      const s2 = ctrl.snapshot;
-      n++;
-      if (bT < 0 && s2.loadBearer) bT = i / 120;
-      if (t5 < 0 && Math.abs(s2.tiltDeg) > 5) t5 = i / 120;
-      if (s2.legs.l.grounded && !s2.legs.r.grounded) sg++;
-      if (s2.legs.r.soleY > clr) clr = s2.legs.r.soleY;
-    }
-    sim.advance(1);
+var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 6, driver: "controller" });
+sim.begin(new Float32Array(sim.params.length));
+var ctrl = new Controller2(sk, sim, {
+  ...DEFAULT_CONTROLLER2,
+  gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: null },
+  balance: { ...DEFAULT_CONTROLLER2.balance, ablate: "latwaist" }
+});
+console.log("\u7EAF\u5E73\u8861\u7CFB\u7EDF\uFF08\u65E0\u8FC8\u817F\uFF09\uFF1At   com.x   \u8EAF\u5E72vx   \u503E\xB0   \u8EAF\u5E72y  \u9ACB\u76EE\u6807\xB0 \u819D\u76EE\u6807\xB0 \u8EAF\u5E72z\u89D2\xB0");
+for (let i = 0; i < Math.round(6 / (1 / 120)) && !sim.finished; i++) {
+  if (i % 15 === 0) {
+    sim.doll.setMotorTargets(ctrl.step(1 / 60));
+    ctrl.soleClearance("l");
+    ctrl.soleClearance("r");
+    const s = ctrl.snapshot, tb = sim.doll.torso();
+    const q = tb.rotation();
+    const angZ = Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z)) * 57.3;
+    console.log(`${(i / 120).toFixed(2).padStart(4)} ${(s.com.x * 1e3).toFixed(0).padStart(7)} ${(s.com.vx * 1e3).toFixed(0).padStart(8)} ${s.tiltDeg.toFixed(1).padStart(6)} ${s.torsoY.toFixed(3)} ${(sim.doll.refAngleOf(2, 2) * 57.3).toFixed(1).padStart(7)} ${(sim.doll.refAngleOf(3, 2) * 57.3).toFixed(1).padStart(7)} ${angZ.toFixed(1).padStart(9)}`);
   }
-  const s = ctrl.snapshot;
-  console.log(`${(ab || "\uFF08\u5168\u5F00\uFF09").padEnd(20)} | ${bT < 0 ? "\u2014" : bT.toFixed(2) + "s"} ${t5 < 0 ? "\u672A\u53D1\u751F" : t5.toFixed(2) + "s"} ${(sim.ticksDone / 60).toFixed(2).padStart(5)}s ${(sg / n * 100).toFixed(0).padStart(7)} ${(clr * 1e3).toFixed(0).padStart(8)} ${s.torsoY.toFixed(3)}`);
+  sim.advance(1);
 }
+console.log(`
+\u503E\u5012\u65B9\u5411\uFF1AtiltDeg \u4E0E\u8EAF\u5E72\u7ED5z\u89D2\u540C\u6B65\uFF1B\u6B63 = \u7ED5 +z \u8F6C = \u9876\u90E8\u671D +x \u5012\uFF08\u524D\u503E\uFF09`);
+console.log(`\u6700\u7EC8\uFF1A\u5B58\u6D3B=${(sim.ticksDone / 60).toFixed(2)}s ${sim.fallen ? "\u6454:" + sim.fallReason : "\u672A\u6454"}`);
