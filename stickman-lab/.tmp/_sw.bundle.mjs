@@ -13549,7 +13549,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, DEFAULTS, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13566,7 +13566,6 @@ var init_ragdoll = __esm({
     LIMIT_SOFT_ZONE = 0.3;
     AXIS_X = 0;
     AXIS_Y = 1;
-    AXIS_Z = 2;
     DEFAULTS = {
       groundFriction: 1,
       bodyFriction: 0.9,
@@ -13580,7 +13579,7 @@ var init_ragdoll = __esm({
       posRefScale: 0.9,
       purgeJointCache: true,
       motorAlpha: MOTOR_ALPHA,
-      ankleGroundFactor: 1
+      ankleGroundFactor: 20
       // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
     };
     Ragdoll = class _Ragdoll {
@@ -13762,6 +13761,68 @@ var init_ragdoll = __esm({
         this.groundFactor.fill(1);
         this.ankleGroundFactorUsed.fill(1);
         {
+          const footKeys = ["foot_l", "foot_r", "shin_l", "shin_r"];
+          const hasFootBelow = /* @__PURE__ */ new Map();
+          const walk = (k) => {
+            const hit = hasFootBelow.get(k);
+            if (hit !== void 0) return hit;
+            let r = false;
+            for (const jj of sk2.joints) {
+              if (jj.parentKey === k) {
+                if (walk(jj.childKey)) {
+                  r = true;
+                  break;
+                }
+              }
+            }
+            hasFootBelow.set(k, r);
+            return r;
+          };
+          for (const k of footKeys) hasFootBelow.set(k, true);
+          for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            const k = sk2.bodies[bi].key;
+            if (!footKeys.includes(k)) continue;
+            hasFootBelow.set(k, true);
+          }
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const jn = sk2.joints[i];
+            if (!walk(jn.childKey)) continue;
+            const aj = this.bodies[this.jointBodies[i * 2 + 1]];
+            const ap = aj.translation();
+            const inSub = /* @__PURE__ */ new Set();
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            }
+            let frontier = [jn.childKey];
+            while (frontier.length) {
+              const k = frontier.pop();
+              for (let bi = 0; bi < sk2.bodies.length; bi++) {
+                const bd = sk2.bodies[bi];
+                if (inSub.has(bi)) continue;
+                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                  inSub.add(bi);
+                  frontier.push(bd.key);
+                }
+              }
+            }
+            let sum = 0;
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              const t = this.bodies[bi].translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[i];
+            const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
+            this.groundFactor[i] = Math.max(1, Math.min(
+              this.opt.ankleGroundFactor,
+              sum / Math.max(1e-9, free),
+              need / Math.max(1e-9, free)
+            ));
+            this.ankleGroundFactorUsed[i] = this.groundFactor[i];
+          }
+        }
+        if (false) {
           const ank = jointIndexByName(sk2, "foot_l");
           const ankR = jointIndexByName(sk2, "foot_r");
           for (const jn of [ank, ankR]) {
@@ -13892,15 +13953,20 @@ var init_ragdoll = __esm({
       footAuthUsed;
       /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
       ankleGroundFactorUsed;
-      /** 该关节是否是"承重的踝"（脚接地 ⇒ 用被约束的等效惯量） */
+      /**
+       * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
+       * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
+       */
       footLoadedFlag(joint) {
-        if (this.ankleJoint < 0 || joint !== this.ankleJoint) {
-          if (this.ankleJointR < 0 || joint !== this.ankleJointR) return false;
-          return this.copTmp[3] === 0 ? this.footGrounded(1) : this.copTmp[3] > 0;
-        }
         this.readCoP(0, this.copTmp);
-        return this.copTmp[3] > 0;
+        const gl = this.copTmp[3] > 0;
+        this.readCoP(1, this.copTmp);
+        const gr = this.copTmp[3] > 0;
+        this.footLoadedCache = { l: gl, r: gr };
+        return gl || gr;
       }
+      /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
+      footLoadedCache = { l: false, r: false };
       footGrounded(side) {
         const col = this.soleCol[side];
         if (!col) return false;
@@ -14195,7 +14261,7 @@ var init_ragdoll = __esm({
           rv[1] -= rr[1];
           rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-          const gf = this.footLoadedFlag(i) ? this.groundFactor[i] : 1;
+          const gf = this.footLoadedFlag(i) && this.groundFactor[i] > 1 ? this.groundFactor[i] : 1;
           const Ieff = this.jointIeff[i] * gf;
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
@@ -17952,16 +18018,29 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   const kneeNow = rs.angle(jKnee, 2);
   const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
   if (on("knee") && kneeNow < kneeLimit) {
-    const kk = Math.max(0, Math.min(1, p.kKnee));
-    rs.requestAngle(jKnee, 2, kneeLimit + (kneeNow - kneeLimit) * (1 - kk), "balance", "\u819D\u5B88\u536B");
+    rs.requestAngle(jKnee, 2, kneeLimit, "balance", "\u819D\u5B88\u536B");
+  }
+  const hipNow2 = rs.angle(jHip, 2);
+  if (on("hip") && hipNow2 < -p.hipExtendLimit) {
+    rs.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
   }
   const grfAng = Math.atan2(rs.grf.x, Math.max(0.2, rs.grf.y));
   const sp1Sag = clamp(-grfAng * p.kTorsoAlign - ex * 0.8, p.maxTorso);
   if (on("torso")) rs.requestAngle(jSp1, 2, sp1Sag, "balance", "\u8EAF\u5E72\u529B\u7EBF");
-  const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-  const ez = rs.com.z - stanceZ;
-  const lat = clamp(-(p.kLatP * ez + p.kLatD * rs.com.vz), p.maxTorso);
-  if (on("lat")) rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
+  const latArmed = rs.loadBearer !== null || rs.phase === "SINGLE" || rs.phase === "SHIFT" || rs.phase === "PUSH";
+  if (latArmed) {
+    const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+    const dz = rs.com.z - stanceZ;
+    const hipAbd = clamp(
+      p.hipAbdSign * (p.kHipAbd * dz + p.kHipAbdD * rs.com.vz),
+      p.maxHipAbd
+    );
+    if (on("lat")) rs.requestAngle(jHip, 1, hipAbd, "balance", "\u652F\u6491\u9ACB\u5916\u5C55");
+    if (on("latwaist")) {
+      const wl = clamp(p.hipAbdSign * p.kWaistLat * dz, p.maxWaistLat);
+      rs.requestAngle(jSp1, 0, wl, "balance", "\u8170\u989D\u72B6\u4FEE\u8FB9");
+    }
+  }
   if (jSp2 >= 0 && on("torso")) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
   if (jAnk >= 0) {
     const cop = rs.cop[sup];
@@ -17983,8 +18062,9 @@ var init_balance2 = __esm({
       kSagP: 2.2,
       kSagD: 0,
       kTorsoAlign: 1,
-      // 目标改成"支撑脚"后误差量级从 ~0.003m 变成 ~0.10m ⇒ 增益要重标
-      kLatP: 1.2,
+      // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
+      //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
+      kLatP: 0,
       kLatD: 0,
       kneeHoldDeg: 15,
       kKnee: 0.6,
@@ -18003,7 +18083,18 @@ var init_balance2 = __esm({
       kCopLat: 2,
       pushDeg: 12,
       maxAnkleSag: 0.2,
-      maxAnkleLat: 0.12
+      maxAnkleLat: 0.12,
+      // 目标角限幅：髋/1 量程 ±40°，取 ±18° 留裕度
+      kHipAbd: 3,
+      kHipAbdD: 0,
+      maxHipAbd: 0.31,
+      // 腰只做修边：幅度给到髋的 ~1/3
+      kWaistLat: 0.5,
+      maxWaistLat: 0.09,
+      // ★ 实测标定：+1 发散（com.z → +521~640 mm），−1 收敛（+48~194 mm）
+      hipAbdSign: -1,
+      // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲
+      hipExtendLimit: 0.12
     };
   }
 });
@@ -18190,32 +18281,31 @@ var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (in
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
-var dtC = 1 / 60;
+var DUR = 8;
 var dtP = 1 / 120;
-var st = 2;
-var DUR = 6;
-console.log("kLatP kSagP  \u5B58\u6D3B   \u7EC8\u503E\xB0  \u7EC8\u8EAF\u5E72  \u5355\u652F\u6491%  \u6446\u52A8\u79BB\u5730mm  \u7EC8comZ  \u03BEz\u5CF0");
-for (const kLatP of [0, 0.6, 1.2, 2.5]) for (const kSagP of [1.1, 2.2]) {
+console.log("kHipAbd maxHip \u8170\u4FEE\u8FB9  \u5B58\u6D3B    \u76F8       \u8EAF\u5E72y  \u503E\xB0  \u5355\u652F\u6491% \u6446\u52A8mm \u7EC8comZ \u627F\u91CD");
+for (const k of [0.3, 0.6, 1, 1.6]) for (const mx of [0.12, 0.2, 0.31]) for (const wl of [0, 0.5]) {
   const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, driver: "controller" });
   sim.begin(new Float32Array(sim.params.length));
   const ctrl = new Controller2(sk, sim, {
     ...DEFAULT_CONTROLLER2,
     gait: { ...DEFAULT_CONTROLLER2.gait, singleLeg: "l" },
-    balance: { ...DEFAULT_CONTROLLER2.balance, kLatP, kSagP }
+    balance: { ...DEFAULT_CONTROLLER2.balance, kHipAbd: k, maxHipAbd: mx, kWaistLat: wl }
   });
-  let single = 0, n = 0, clr = 0, xiZ = 0;
+  let single = 0, n = 0, clr = 0, bearer = 0;
   for (let i = 0; i < Math.round(DUR / dtP) && !sim.finished; i++) {
-    if (i % st === 0) {
-      sim.doll.setMotorTargets(ctrl.step(dtC));
+    if (i % 2 === 0) {
+      sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      ctrl.soleClearance("l");
+      ctrl.soleClearance("r");
       const s2 = ctrl.snapshot;
       n++;
-      const sup = s2.legs.l.grounded, sw = s2.legs.r.grounded;
-      if (sup && !sw) single++;
+      if (s2.legs.l.grounded && !s2.legs.r.grounded) single++;
       if (s2.legs.r.soleY > clr) clr = s2.legs.r.soleY;
-      if (Math.abs(s2.dcm.z) > Math.abs(xiZ)) xiZ = s2.dcm.z;
+      if (s2.loadBearer) bearer++;
     }
     sim.advance(1);
   }
   const s = ctrl.snapshot, a = sim.ticksDone / 60;
-  console.log(`${kLatP.toFixed(1).padStart(5)} ${kSagP.toFixed(1).padStart(5)} ${(a >= DUR - 0.05 ? "\u7AD9\u6EE1" : a.toFixed(2) + "s").padStart(7)} ${s.tiltDeg.toFixed(1).padStart(6)} ${s.torsoY.toFixed(3).padStart(7)} ${(single / n * 100).toFixed(0).padStart(7)} ${(clr * 1e3).toFixed(0).padStart(10)} ${(s.com.z * 1e3).toFixed(0).padStart(8)} ${(xiZ * 1e3).toFixed(0).padStart(7)}`);
+  console.log(`${k.toFixed(1).padStart(6)} ${mx.toFixed(2).padStart(6)} ${wl.toFixed(1).padStart(5)}  ${(a >= DUR - 0.05 ? "\u7AD9\u6EE1" : a.toFixed(2) + "s").padStart(7)} ${s.phase.padEnd(8)} ${s.torsoY.toFixed(3)} ${s.tiltDeg.toFixed(1).padStart(5)} ${(single / n * 100).toFixed(0).padStart(6)} ${(clr * 1e3).toFixed(0).padStart(6)} ${(s.com.z * 1e3).toFixed(0).padStart(6)}  ${bearer > 0 ? "\u662F" : "\u5426"}`);
 }

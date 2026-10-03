@@ -67,6 +67,7 @@ export class Controller {
     // ── 2. 从物理回读 → 写进 rigState ──────────────────────
     const com = readCom(sim.doll, rs.com);
     readSupport(sim.doll, rs.support);
+    rs.updateComAccel(dt);
     const om = omegaAt(com.y);
     rs.dcm.x = dcm(com.x, com.vx, om);
     rs.dcm.z = dcm(com.z, com.vz, om);
@@ -102,11 +103,14 @@ export class Controller {
     this.gait.update(dt);
 
     // ── 4/5. 两系统**并发**提需求 ──────────────────────────
-    balanceSystem(rs, this.cfg.balance);
+    balanceSystem(rs, this.cfg.balance, this.sim.doll);
     stepSystem(rs, this.cfg.step);
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
     const out = rs.arbitrate(dt);
+    // ★ 力矩通道（`τ = JᵀF` 的产物）与角度通道**并联**送进马达。
+    //   必须在 arbitrate 之后 —— `tauOut` 是仲裁的结果。
+    this.sim.doll.setTorqueTargets(rs.tauOut);
 
     // ── 7. 快照（唯一出口）────────────────────────────────
     this.snapshot = rs.snapshot();

@@ -80,7 +80,7 @@ hud.setOwnership(snap);
 
 const $ = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 const txt = (id: string): string => ($(id).textContent ?? '').trim();
-const PH: Record<string, string> = { DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', STEP: '摆动相' };
+import { PHASE_LABEL as PH } from '../src/ui/hud';   // ★ 与 HUD 同一份，不再复制
 
 log('同源门禁 —— UI 与冒烟测试读同一个 RigSnapshot');
 log(`  配置 ${labHash(DEFAULT_LAB)}`);

@@ -13680,7 +13680,7 @@ var init_ragdoll = __esm({
       posRefScale: 0.9,
       purgeJointCache: true,
       motorAlpha: MOTOR_ALPHA,
-      ankleGroundFactor: 1
+      ankleGroundFactor: 20
       // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
     };
     Ragdoll = class _Ragdoll {
@@ -13801,6 +13801,8 @@ var init_ragdoll = __esm({
         this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
         this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
         this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
+        this.torqueCmd = new Float32Array(sk2.joints.length * 3);
+        this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
         let topSpine = -1;
@@ -13862,6 +13864,68 @@ var init_ragdoll = __esm({
         this.groundFactor.fill(1);
         this.ankleGroundFactorUsed.fill(1);
         {
+          const footKeys = ["foot_l", "foot_r", "shin_l", "shin_r"];
+          const hasFootBelow = /* @__PURE__ */ new Map();
+          const walk = (k) => {
+            const hit = hasFootBelow.get(k);
+            if (hit !== void 0) return hit;
+            let r = false;
+            for (const jj of sk2.joints) {
+              if (jj.parentKey === k) {
+                if (walk(jj.childKey)) {
+                  r = true;
+                  break;
+                }
+              }
+            }
+            hasFootBelow.set(k, r);
+            return r;
+          };
+          for (const k of footKeys) hasFootBelow.set(k, true);
+          for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            const k = sk2.bodies[bi].key;
+            if (!footKeys.includes(k)) continue;
+            hasFootBelow.set(k, true);
+          }
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const jn = sk2.joints[i];
+            if (!walk(jn.childKey)) continue;
+            const aj = this.bodies[this.jointBodies[i * 2 + 1]];
+            const ap = aj.translation();
+            const inSub = /* @__PURE__ */ new Set();
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            }
+            let frontier = [jn.childKey];
+            while (frontier.length) {
+              const k = frontier.pop();
+              for (let bi = 0; bi < sk2.bodies.length; bi++) {
+                const bd = sk2.bodies[bi];
+                if (inSub.has(bi)) continue;
+                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                  inSub.add(bi);
+                  frontier.push(bd.key);
+                }
+              }
+            }
+            let sum = 0;
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              const t2 = this.bodies[bi].translation();
+              const dx = t2.x - ap.x, dy = t2.y - ap.y, dz = t2.z - ap.z;
+              sum += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[i];
+            const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
+            this.groundFactor[i] = Math.max(1, Math.min(
+              this.opt.ankleGroundFactor,
+              sum / Math.max(1e-9, free),
+              need / Math.max(1e-9, free)
+            ));
+            this.ankleGroundFactorUsed[i] = this.groundFactor[i];
+          }
+        }
+        if (false) {
           const ank = jointIndexByName(sk2, "foot_l");
           const ankR = jointIndexByName(sk2, "foot_r");
           for (const jn of [ank, ankR]) {
@@ -13992,15 +14056,33 @@ var init_ragdoll = __esm({
       footAuthUsed;
       /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
       ankleGroundFactorUsed;
-      /** 该关节是否是"承重的踝"（脚接地 ⇒ 用被约束的等效惯量） */
+      // ── 直接力矩通道（τ = JᵀF 的产物）─────────────────────────────
+      /**
+       * ★ 与 `motorTarget`（归一化目标角）**完全分开**的一条通道。
+       *   位置环算的是 `τ = kP·(θ_ref−θ)·τmax/ωmax` —— 反馈量；
+       *   这里放的是由 `τ = JᵀF` 直接算出的**前馈力矩**，单位 N·m。
+       *   两者相加后再按 τmax 饱和。
+       */
+      torqueCmd;
+      /** `jacobianTorque` 的临时向量（避免每关节分配） */
+      jw = new Float64Array(3);
+      ja = new Float64Array(3);
+      /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
+      tauApplied;
+      /**
+       * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
+       * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
+       */
       footLoadedFlag(joint) {
-        if (this.ankleJoint < 0 || joint !== this.ankleJoint) {
-          if (this.ankleJointR < 0 || joint !== this.ankleJointR) return false;
-          return this.copTmp[3] === 0 ? this.footGrounded(1) : this.copTmp[3] > 0;
-        }
         this.readCoP(0, this.copTmp);
-        return this.copTmp[3] > 0;
+        const gl = this.copTmp[3] > 0;
+        this.readCoP(1, this.copTmp);
+        const gr = this.copTmp[3] > 0;
+        this.footLoadedCache = { l: gl, r: gr };
+        return gl || gr;
       }
+      /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
+      footLoadedCache = { l: false, r: false };
       footGrounded(side) {
         const col = this.soleCol[side];
         if (!col) return false;
@@ -14233,6 +14315,64 @@ var init_ragdoll = __esm({
        *
        * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
        */
+      /**
+       * ★ 直接力矩通道（N·m，逐轴）。与 `setMotorTargets` 的角度通道**并联相加**。
+       *   这不是"把护栏调松"：位置环的 `err` 稳定性护栏对**反馈**成立
+       *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
+       *   本来就知道该多大，不该再被位置误差的护栏砍。
+       */
+      setTorqueTargets(taus) {
+        const n = Math.min(this.torqueCmd.length, taus.length);
+        for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * ★★ `τ = Jᵀ F` —— 把一个**世界系力** F 作用在点 p 上，投影成各关节力矩。
+       *
+       *   文献依据（这才是平衡的标准律，不是"关节角 P 控制"）：
+       *     · Yin & Zhou 2004 / Horak 2006 / Reitsma 2013 / van Mierlo 2022/2024
+       *       —— 上层只决定**需要的地面反力矢量 F**（由倒立摆 / Capture Point / Houska
+       *          balance point 反解），关节力矩由**虚功**唯一确定：`τ = Jᵀ F`。
+       *     · 好处：各关节按**力臂几何自动分配**，没有可调的符号旋钮。
+       *       （旧实现"关节角 = P·ΔCoM.z"的符号与增益完全由被控对象决定，
+       *         护栏一改就翻面 —— 实测半权限 sign=−1 收敛、满权限 sign=+1 才收敛。）
+       *
+       *   公式：对切点 i（父侧 = 被 F 作用的那一侧），
+       *       τ_i = û_i · [ (a_i − p) × F ]
+       *   其中 û_i 是关节轴的世界方向、a_i 是关节世界锚点。
+       *   只沿 `chain` 上给的关节分配（一般是支撑腿 + 脊柱链）。
+       *
+       *   @param chain 允许参与分配的关节下标（其余轴写 0）
+       * @param copMoment 额外的支撑面力矩（N·m，绕世界 Z/绕踝），用于设定 CoP
+       */
+      jacobianTorque(fx, fy, fz, px, py, pz, chain, out) {
+        out.fill(0);
+        const ax = this.jw;
+        for (const i of chain) {
+          const j = this.sk.joints[i];
+          if (!j) continue;
+          const pi = this.jointBodies[i * 2];
+          const p = this.bodies[pi];
+          const q = p.rotation();
+          const pt = p.translation();
+          const pl = j.parentLocal;
+          quatRotate(q.x, q.y, q.z, q.w, pl[0], pl[1], pl[2], this.ja);
+          const axw = pt.x + this.ja[0], ayw = pt.y + this.ja[1], azw = pt.z + this.ja[2];
+          const rx = axw - px, ry = ayw - py, rz = azw - pz;
+          const cx = ry * fz - rz * fy;
+          const cy = rz * fx - rx * fz;
+          const cz = rx * fy - ry * fx;
+          for (let k = 0; k < 3; k++) {
+            const lx = k === AXIS_X ? 1 : 0, ly = k === AXIS_Y ? 1 : 0, lz = k === AXIS_Z ? 1 : 0;
+            quatRotate(q.x, q.y, q.z, q.w, lx, ly, lz, ax);
+            const idx = i * 3 + k;
+            out[idx] = ax[0] * cx + ax[1] * cy + ax[2] * cz;
+            const tmax = j.maxTorque[k];
+            if (out[idx] > tmax) out[idx] = tmax;
+            else if (out[idx] < -tmax) out[idx] = -tmax;
+          }
+        }
+      }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
           const t2 = targets[i];
@@ -14295,7 +14435,7 @@ var init_ragdoll = __esm({
           rv[1] -= rr[1];
           rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-          const gf = this.footLoadedFlag(i) ? this.groundFactor[i] : 1;
+          const gf = this.footLoadedFlag(i) && this.groundFactor[i] > 1 ? this.groundFactor[i] : 1;
           const Ieff = this.jointIeff[i] * gf;
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
@@ -14324,9 +14464,17 @@ var init_ragdoll = __esm({
             let tau = err * (tauMax / JOINT_MAX_SPEED);
             if (tau > tauMax) tau = tauMax;
             else if (tau < -tauMax) tau = -tauMax;
+            const tq = this.torqueCmd[idx];
+            if (tq !== 0) {
+              tau += tq;
+              if (tau > tauMax) tau = tauMax;
+              else if (tau < -tauMax) tau = -tauMax;
+            }
+            this.tauApplied[idx] = tau;
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
-            const impStable = alpha * Math.abs(err) * Ieff;
+            const ff = this.torqueCmd[idx];
+            const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
             const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;

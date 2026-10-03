@@ -36,6 +36,13 @@ export type SystemId = 'balance' | 'step';
 /** 三类系统标签（UI 上色用） */
 export type SystemTag = 'hold' | 'step' | 'servo' | 'none';
 
+/** 力矩通道的一条需求（单位 N·m，不是归一化比例） */
+export interface TorqueRequest {
+  value: number;
+  system: SystemId;
+  label: string;
+}
+
 // ─────────────────────────────────────────────────── 判据（逐条可回读）
 
 export interface Criteria {
@@ -139,6 +146,13 @@ export interface RigSnapshot {
   support: { cx: number; cz: number; halfX: number; halfZ: number; contactN: number };
   mos: number;
   grf: { x: number; y: number };
+  /**
+   * ★ 上层**命令**的 GRF（`τ = JᵀF` 里那个 F），N。
+   *   与 `grf`（实测）分开：`grf.x` 是从接触反推的，`grfCmd.x` 是控制器要的。
+   *   单腿站立能不能"施加横向力"，直接看这个量 —— 之前 `grf.x` 恒为 0，
+   *   所以"横向力"这件事在诊断里根本不可见。
+   */
+  grfCmd: { x: number; y: number; z: number };
   torsoY: number;
   tiltDeg: number;
   legs: Record<Side, SideSnapshot>;
@@ -184,6 +198,16 @@ export class RigState {
    *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
    */
   soleZ: Record<Side, number> = { l: 0, r: 0 };
+  // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
+  /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
+  comAz = 0;
+  /** 上一拍的 vz（算 comAz 用） */
+  private vzPrev = 0;
+  /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
+  /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
+  grfCmd = { x: 0, y: 0, z: 0 };
+  /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
+  tauJ = new Float32Array(0);
   /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
   readonly soleY: Record<Side, number> = { l: 0, r: 0 };
   /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
@@ -201,6 +225,11 @@ export class RigState {
   requestCount = 0;
   /** 越界请求累计（应当恒为 0；非 0 说明有调用方用了不存在的关节/轴） */
   badRequests = 0;
+  /** 力矩请求（与 `req` 并立；单位 N·m） */
+  private readonly treq: (TorqueRequest | undefined)[] = [];
+  private torqueRequestCount = 0;
+  /** 本拍仲裁出的力矩（N·m），可直接喂 `Ragdoll.setTorqueTargets` */
+  tauOut = new Float32Array(0);
   private readonly nAxes: number;
   private readonly tgt: AxisTarget[] = [];
   private readonly prevTarget: Float32Array;
@@ -228,6 +257,9 @@ export class RigState {
     this.vel = new Float64Array(n);
     this.prevTarget = new Float32Array(n);
     this.prevOut = new Float32Array(n);
+    this.tauOut = new Float32Array(n);
+    this.tauJ = new Float32Array(n);
+    this.treq.fill(undefined);
     for (let i = 0; i < n; i++) {
       this.tgt.push({
         value: 0, owner: 'none', ownerLabel: '—', tag: 'none',
@@ -263,6 +295,23 @@ export class RigState {
     return 'l';
   }
 
+  /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
+  omega0(): number {
+    const h = Math.max(0.2, this.com.y - Math.max(0, this.soleY[this.supportLeg()] ?? 0) - 0.0);
+    return Math.sqrt(9.81 / Math.max(0.3, h - 0.05));
+  }
+  /**
+   * 更新 `comAz`（低通后的横向加速度，仅供诊断/上层参考）。
+   * ⚠ 必须传**物理步长**。曾用控制拍 dt=1/60 差分，而拍内物理走了 2 步
+   *   ⇒ 算出的加速度是真实值的 **2 倍**且带噪 ⇒ 上层输出 ±996 N 的荒谬横向力。
+   */
+  updateComAccel(dtPhys: number): void {
+    if (dtPhys <= 1e-6) { this.vzPrev = this.com.vz; return; }
+    const raw = (this.com.vz - this.vzPrev) / dtPhys;
+    this.vzPrev = this.com.vz;
+    // 一阶低通（τ≈50 ms）：捕获点律对加速度噪声很敏感，未滤波会自激
+    this.comAz = this.comAz * 0.75 + raw * 0.25;
+  }
   swingLeg(): Side { return this.supportLeg() === 'l' ? 'r' : 'l'; }
   isLocked(s: Side): boolean { return this.locked[s]; }
 
@@ -316,6 +365,37 @@ export class RigState {
     this.request(joint, axis, (rad * 0.9) / span, system, label);
   }
 
+  // ── 力矩请求通道（`τ = JᵀF` 的产物，N·m）────────────────────────
+  /**
+   * ★ 与角度通道**并联**的第二条通道。单位是 N·m，不是归一化比例。
+   *   为什么必须分开：角度通道会被 `Ragdoll` 的位置环换算成
+   *   `τ = kP·(θ_ref−θ)·τmax/ωmax`（反馈量），而 `τ = JᵀF` 是**定量前馈** ——
+   *   单腿站立需要 ~52 N·m 的静态髋力矩**在位**，不能等误差长出来。
+   *   两者在 `driveMotors` 里相加后再按 τmax 饱和。
+   *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
+   */
+  requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    const cur = this.treq[i];
+    this.torqueRequestCount++;
+    if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+      this.tgt[i]!.suppressed.push({ system, label: `${label}(力矩)` });
+      return;
+    }
+    if (cur) this.tgt[i]!.suppressed.push({ system: cur.system, label: `${cur.label}(力矩)` });
+    this.treq[i] = { value: tau, system, label };
+  }
+  /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
+  requestSwingLegTorque(side: Side, joint: number, axis: number, tau: number, label: string, isLift: boolean): void {
+    if (isLift && this.locked[side]) {
+      const i = joint * 3 + axis;
+      if (i >= 0 && i < this.nAxes) this.tgt[i]!.vetoed.push({ system: 'step', label: `${label}(力矩)` });
+      return;
+    }
+    this.requestTorque(joint, axis, tau, 'step', label);
+  }
+
   /** 锁定闸门：被锁定腿上的抬腿需求**直接丢弃**（不是加权、不是夹紧） */
   requestSwingLeg(side: Side, joint: number, axis: number, value: number, label: string, isLift: boolean): void {
     if (isLift && this.locked[side]) {
@@ -362,6 +442,8 @@ export class RigState {
     this.tickNo++;
     this.tSec += dt;
     this.req.fill(undefined);
+    this.treq.fill(undefined);
+    this.torqueRequestCount = 0;
     this.requestCount = 0;
     for (let i = 0; i < this.tgt.length; i++) {
       const t = this.tgt[i]!;
@@ -397,6 +479,19 @@ export class RigState {
       if (!this.req[i]) { out[i] = this.prevTarget[i] ?? 0; const t = this.tgt[i]!; if (t.owner === 'none') { t.owner = 'bind'; t.ownerLabel = '保持'; t.tag = 'servo'; } }
     }
     for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i]!;
+    // 力矩通道仲裁（规则同角度通道：balance > step），再按 τmax 饱和
+    for (let i = 0; i < this.nAxes; i++) {
+      const r = this.treq[i];
+      if (!r) { this.tauOut[i] = 0; continue; }
+      const j = this.sk.joints[Math.floor(i / 3)];
+      const k = i % 3;
+      const tmax = j ? j.maxTorque[k]! : 0;
+      let v = r.value;
+      if (v > tmax) v = tmax; else if (v < -tmax) v = -tmax;
+      this.tauOut[i] = v;
+      const t = this.tgt[i];
+      if (t && t.ownerLabel === '—') { t.owner = r.system; t.ownerLabel = `${r.label}(τ)`; }
+    }
     return out;
   }
 
@@ -432,7 +527,7 @@ export class RigState {
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
-      mos: this.mos, grf: { ...this.grf },
+      mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd },
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       legs: {
         l: {

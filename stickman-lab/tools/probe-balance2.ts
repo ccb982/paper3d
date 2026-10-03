@@ -114,6 +114,11 @@ const grade = sim.fallen ? 'Failure' : (!supFootHopped && !swingFootTouched ? 'P
 
 log('── 结果 ──');
 log(`  存活        ${alive >= DUR - 0.05 ? `站满 ${DUR}s` : `${alive.toFixed(2)}s`}   ${sim.fallen ? `✗ 摔（${sim.fallReason}）` : '✓ 未摔'}`);
+if (sim.fallen) log(`  摔因详情    ${JSON.stringify(sim.fallDiag)}`);
+{
+  // 末 0.6 s 逐拍：谁在往下掉
+  log('  末段逐拍（0.1s 采样）：t  comZ   ξz    躯干y  倾°  左踝°  右踝°  接地  摆动离地mm');
+}
 log(`  评分档      ${grade}`);
 log(`  单支撑占比  ${(ratio * 100).toFixed(1)}%`);
 log(`  承重腿      ${s.loadBearer ?? '（未授予）'}   锁定 l=${s.locked.l} r=${s.locked.r}`);

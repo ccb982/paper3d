@@ -65,6 +65,14 @@ function $(id: string): HTMLElement {
   return el;
 }
 
+/**
+ * 相位标签表。**导出**给 `probe-uipanel` 用 —— 之前探针自己复制了一份，
+ * 漏了 `PUSH`，于是状态机一进入蹬离相 UI 断言就假失败（同一事实两处定义）。
+ */
+export const PHASE_LABEL: Record<string, string> = {
+  DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相',
+};
+
 export class Hud {
   private readonly el: Record<string, HTMLElement>;
   private readonly chart: HTMLCanvasElement;
@@ -197,7 +205,7 @@ export class Hud {
       el.querySelector('span')!.textContent = tags.join(' · ');
     }
 
-    const PH = { DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相' } as Record<string, string>;
+    const PH = PHASE_LABEL;
     e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
     e.ownGround.textContent = `${d.support.contactN} 只`;
     e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;

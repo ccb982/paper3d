@@ -240,7 +240,7 @@ const DEFAULTS: Required<RagdollOptions> = {
   posRefScale: 0.9,
   purgeJointCache: true,
   motorAlpha: MOTOR_ALPHA,
-  ankleGroundFactor: 1,   // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
+  ankleGroundFactor: 20,   // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
 };
 
 // ---------------------------------------------------------------- 四元数工具
@@ -473,6 +473,8 @@ export class Ragdoll {
     this.groundFactor = new Float32Array(sk.joints.length).fill(1);
     this.footAuthUsed = new Float32Array(sk.joints.length * 3).fill(1);
     this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
+    this.torqueCmd = new Float32Array(sk.joints.length * 3);
+    this.tauApplied = new Float32Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
@@ -609,6 +611,77 @@ export class Ragdoll {
     this.groundFactor.fill(1);
     this.ankleGroundFactorUsed.fill(1);
     {
+      // ── 推广到**所有子侧子树含脚**的关节（踝、髋、膝）────────────
+      //   病根：`Ieff = 1/(1/I_父 + 1/I_子)` 是**两个自由体**的折合惯量。
+      //   但单腿站立时**大腿/小腿被地面约束住**，它在髋/膝处的等效惯量
+      //   应该是"脚以上整个身体绕该关节"的惯量（点质量近似 Σmᵢrᵢ²），大得多。
+      //   不做这一步：护栏把髋卡在 **51%**（实测 τ 105/200 N·m、权限 0.52），
+      //   而单腿要撑 58.7 kg ⇒ **发力不够 ⇒ 髋屈 −21.6°、膝反折 ⇒ 整体塌下去**
+      //   （实测 `hit=torso`、tilt=0°、躯干 y 1.427→0.346）。
+      // ⚠ 关踝时 `foot_l/r` **不是独立刚体**（焊在小腿上），所以只查 foot_* 会永远
+      //   判成 false，髋/膝拿不到任何 groundFactor（实测 groundF=1.00、权威卡 51%）。
+      //   ⇒ 接地判定按"这条链的**末端刚体**"：开踝是 foot_*，关踝是 shin_*。
+      const footKeys = ['foot_l', 'foot_r', 'shin_l', 'shin_r'];
+      const hasFootBelow = new Map<string, boolean>();
+      const walk = (k: string): boolean => {
+        const hit = hasFootBelow.get(k);
+        if (hit !== undefined) return hit;
+        let r = false;
+        for (const jj of sk.joints) {
+          if (jj.parentKey === k) { if (walk(jj.childKey)) { r = true; break; } }
+        }
+        hasFootBelow.set(k, r);
+        return r;
+      };
+      for (const k of footKeys) hasFootBelow.set(k, true);
+      // 末端刚体自身也当作"含接地端"，以便 shin→(无踝)→world 的情况
+      for (let bi = 0; bi < sk.bodies.length; bi++) {
+        const k = sk.bodies[bi]!.key;
+        if (!footKeys.includes(k)) continue;
+        hasFootBelow.set(k, true);
+      }
+      for (let i = 0; i < sk.joints.length; i++) {
+        const jn = sk.joints[i]!;
+        // ⚠ 必须调 `walk()`，不能用 `hasFootBelow.get()`：
+        //   种子只填了末端刚体（shin_*），中间的 thigh_* 从没被 walk 过，
+        //   `.get()` 返回 undefined ⇒ 被判成"不含脚" ⇒ **只有膝拿到 groundFactor，
+        //   髋永远是 1.00**（实测 hip groundF=1.00、knee=1.56）。
+        if (!walk(jn.childKey)) continue;
+        const aj = this.bodies[this.jointBodies[i * 2 + 1]]!;    // 子体侧锚点
+        const ap = aj.translation();
+        // 子侧子树（含脚）的 body 下标集合
+        const inSub = new Set<number>();
+        for (let bi = 0; bi < sk.bodies.length; bi++) {
+          if (sk.bodies[bi]!.key === jn.childKey) inSub.add(bi);
+        }
+        let frontier = [jn.childKey];
+        while (frontier.length) {
+          const k = frontier.pop()!;
+          for (let bi = 0; bi < sk.bodies.length; bi++) {
+            const bd = sk.bodies[bi]!;
+            if (inSub.has(bi)) continue;
+            if (sk.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+              inSub.add(bi);
+              frontier.push(bd.key);
+            }
+          }
+        }
+        // 父侧（脚以上）所有刚体绕该关节的 Σ mᵢ·rᵢ²
+        let sum = 0;
+        for (let bi = 0; bi < sk.bodies.length; bi++) {
+          if (inSub.has(bi)) continue;
+          const t = this.bodies[bi]!.translation();
+          const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+          sum += sk.bodies[bi]!.mass * (dx * dx + dy * dy + dz * dz);
+        }
+        const free = this.jointIeff[i]!;
+        const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
+        this.groundFactor[i] = Math.max(1, Math.min(this.opt.ankleGroundFactor,
+          sum / Math.max(1e-9, free), need / Math.max(1e-9, free)));
+        this.ankleGroundFactorUsed[i] = this.groundFactor[i]!;
+      }
+    }
+    if (false) {
       const ank = jointIndexByName(sk, 'foot_l');
       const ankR = jointIndexByName(sk, 'foot_r');
       for (const jn of [ank, ankR]) {
@@ -758,16 +831,35 @@ export class Ragdoll {
   private readonly footAuthUsed: Float32Array;
   /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
   readonly ankleGroundFactorUsed: Float32Array;
+  // ── 直接力矩通道（τ = JᵀF 的产物）─────────────────────────────
+  /**
+   * ★ 与 `motorTarget`（归一化目标角）**完全分开**的一条通道。
+   *   位置环算的是 `τ = kP·(θ_ref−θ)·τmax/ωmax` —— 反馈量；
+   *   这里放的是由 `τ = JᵀF` 直接算出的**前馈力矩**，单位 N·m。
+   *   两者相加后再按 τmax 饱和。
+   */
+  private readonly torqueCmd: Float32Array;
+  /** `jacobianTorque` 的临时向量（避免每关节分配） */
+  private readonly jw = new Float64Array(3);
+  private readonly ja = new Float64Array(3);
+  /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
+  readonly tauApplied: Float32Array;
 
-  /** 该关节是否是"承重的踝"（脚接地 ⇒ 用被约束的等效惯量） */
+  /**
+   * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
+   * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
+   */
   private footLoadedFlag(joint: number): boolean {
-    if (this.ankleJoint < 0 || joint !== this.ankleJoint) {
-      if (this.ankleJointR < 0 || joint !== this.ankleJointR) return false;
-      return this.copTmp[3] === 0 ? this.footGrounded(1) : this.copTmp[3]! > 0;
-    }
+    void joint;
     this.readCoP(0, this.copTmp);
-    return this.copTmp[3]! > 0;
+    const gl = this.copTmp[3]! > 0;
+    this.readCoP(1, this.copTmp);
+    const gr = this.copTmp[3]! > 0;
+    this.footLoadedCache = { l: gl, r: gr };
+    return gl || gr;
   }
+  /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
+  private footLoadedCache = { l: false, r: false };
 
   footGrounded(side: 0 | 1): boolean {
     const col = this.soleCol[side];
@@ -1018,6 +1110,73 @@ export class Ragdoll {
    *
    * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
    */
+  /**
+   * ★ 直接力矩通道（N·m，逐轴）。与 `setMotorTargets` 的角度通道**并联相加**。
+   *   这不是"把护栏调松"：位置环的 `err` 稳定性护栏对**反馈**成立
+   *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
+   *   本来就知道该多大，不该再被位置误差的护栏砍。
+   */
+  setTorqueTargets(taus: Float32Array): void {
+    const n = Math.min(this.torqueCmd.length, taus.length);
+    for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i]!;
+  }
+
+  /**
+   * ══════════════════════════════════════════════════════════════
+   * ★★ `τ = Jᵀ F` —— 把一个**世界系力** F 作用在点 p 上，投影成各关节力矩。
+   *
+   *   文献依据（这才是平衡的标准律，不是"关节角 P 控制"）：
+   *     · Yin & Zhou 2004 / Horak 2006 / Reitsma 2013 / van Mierlo 2022/2024
+   *       —— 上层只决定**需要的地面反力矢量 F**（由倒立摆 / Capture Point / Houska
+   *          balance point 反解），关节力矩由**虚功**唯一确定：`τ = Jᵀ F`。
+   *     · 好处：各关节按**力臂几何自动分配**，没有可调的符号旋钮。
+   *       （旧实现"关节角 = P·ΔCoM.z"的符号与增益完全由被控对象决定，
+   *         护栏一改就翻面 —— 实测半权限 sign=−1 收敛、满权限 sign=+1 才收敛。）
+   *
+   *   公式：对切点 i（父侧 = 被 F 作用的那一侧），
+   *       τ_i = û_i · [ (a_i − p) × F ]
+   *   其中 û_i 是关节轴的世界方向、a_i 是关节世界锚点。
+   *   只沿 `chain` 上给的关节分配（一般是支撑腿 + 脊柱链）。
+   *
+   *   @param chain 允许参与分配的关节下标（其余轴写 0）
+   * @param copMoment 额外的支撑面力矩（N·m，绕世界 Z/绕踝），用于设定 CoP
+   */
+  jacobianTorque(
+    fx: number, fy: number, fz: number,
+    px: number, py: number, pz: number,
+    chain: readonly number[], out: Float32Array,
+  ): void {
+    out.fill(0);
+    const ax = this.jw;
+    for (const i of chain) {
+      const j = this.sk.joints[i];
+      if (!j) continue;
+      const pi = this.jointBodies[i * 2];
+      const p = this.bodies[pi]!;
+      const q = p.rotation();
+      // 锚点用**当前**位姿算（不是 rest 的 wx/wy/wz）：关节会动，锚点跟着动
+      const pt = p.translation();
+      const pl = j.parentLocal;
+      quatRotate(q.x, q.y, q.z, q.w, pl[0], pl[1], pl[2], this.ja);
+      const axw = pt.x + this.ja[0]!, ayw = pt.y + this.ja[1]!, azw = pt.z + this.ja[2]!;
+      const rx = axw - px, ry = ayw - py, rz = azw - pz;
+      // (r × F)
+      const cx = ry * fz - rz * fy;
+      const cy = rz * fx - rx * fz;
+      const cz = rx * fy - ry * fx;
+      for (let k = 0; k < 3; k++) {
+        const lx = k === AXIS_X ? 1 : 0, ly = k === AXIS_Y ? 1 : 0, lz = k === AXIS_Z ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, lx, ly, lz, ax);
+        const idx = i * 3 + k;
+        out[idx] = ax[0]! * cx + ax[1]! * cy + ax[2]! * cz;
+        // 按该轴 τmax 夹紧（虚功解可能超过硬件能力，必须可见地饱和）
+        const tmax = j.maxTorque[k]!;
+        if (out[idx]! > tmax) out[idx] = tmax;
+        else if (out[idx]! < -tmax) out[idx] = -tmax;
+      }
+    }
+  }
+
   setMotorTargets(targets: Float32Array): void {
     for (let i = 0; i < this.motorTarget.length; i++) {
       const t = targets[i];
@@ -1082,8 +1241,8 @@ export class Ragdoll {
       const rr = j.restRad;
       rv[0] -= rr[0]; rv[1] -= rr[1]; rv[2] -= rr[2];
       calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-      // ★ 踝接地时用被地面约束放大的等效惯量（见构造里 groundFactor 的注释）
-      const gf = this.footLoadedFlag(i) ? this.groundFactor[i]! : 1;
+      // ★ 子侧有脚承重时，用被地面约束放大的等效惯量（见构造里 groundFactor 的注释）
+      const gf = (this.footLoadedFlag(i) && this.groundFactor[i]! > 1) ? this.groundFactor[i]! : 1;
       const Ieff = this.jointIeff[i]! * gf;
 
       for (let k = 0; k < 3; k++) {
@@ -1145,11 +1304,25 @@ export class Ragdoll {
         let tau = err * (tauMax / JOINT_MAX_SPEED);
         if (tau > tauMax) tau = tauMax;
         else if (tau < -tauMax) tau = -tauMax;
+        // ★★★ 与 `τ = JᵀF` 的直接力矩通道**相加**后再饱和。
+        //   位置环给反馈、力矩通道给前馈；不叠加就只能二选一，而单腿站立
+        //   需要前馈（52 N·m 量级的静态髋力矩）在位。
+        const tq = this.torqueCmd[idx]!;
+        if (tq !== 0) {
+          tau += tq;
+          if (tau > tauMax) tau = tauMax;
+          else if (tau < -tauMax) tau = -tauMax;
+        }
+        this.tauApplied[idx] = tau;
         this.motorDemand[idx] = tau;   // ★ 削之前的"想要值"，供诊断
         let imp = tau * dt;
 
         // ★ 稳定性上限：|imp| ≤ α·|err|·Ieff ⇒ 每步最多吃掉 α 比例的相对角速度误差
-        const impStable = alpha * Math.abs(err) * Ieff;
+        // ★ 有 `τ = JᵀF` 前馈在该轴时，稳定性护栏对**前馈部分**不适用
+        //   （护栏的物理含义是"每步最多吃掉 α 比例的相对角速度误差"，
+        //    只对反馈项有意义）。前馈单独记账、不受此限。
+        const ff = this.torqueCmd[idx]!;
+        const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
         const impWant = imp;
         if (imp > impStable) imp = impStable;
         else if (imp < -impStable) imp = -impStable;
