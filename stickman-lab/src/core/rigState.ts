@@ -176,6 +176,17 @@ export interface RigSnapshot {
   omega0Val: number;
   torsoY: number;
   tiltDeg: number;
+  /**
+   * ★★ 倾角**按平面分解**（度）。轴约定：x=矢状(前) y=竖直 z=额状(左)
+   *   - `pitchDeg` 绕 z 轴 => 顶部倒向 ±x => **前倾 / 后倾**
+   *   - `rollDeg`  绕 x 轴 => 顶部倒向 ±z => **左倾 / 右倾**
+   *
+   *   只看合成的 `tiltDeg`（平面无关的大小）**分不出是前倾还是侧倒**
+   *   —— 我曾因此把「腰向前折」误判成侧倒，来回排查了很久
+   *   （用户 2026-10-03：「之前还是侧向折，现在只是向前折」）。
+   */
+  pitchDeg: number;
+  rollDeg: number;
   legs: Record<Side, SideSnapshot>;
   axes: AxisSnapshot[];
   criteria: {
@@ -214,6 +225,8 @@ export class RigState {
   grf = { x: 0, y: 0 };
   torsoY = 0;
   tiltDeg = 0;
+  pitchDeg = 0;
+  rollDeg = 0;
   soleX: Record<Side, number> = { l: 0, r: 0 };
   /**
    * 脚底中心的**横向**位置（m）。
@@ -654,6 +667,7 @@ export class RigState {
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
+      pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,
       legs: {
         l: {
           side: 'l', grounded: this.grounded.l, loadFrac: this.loadFrac.l, soleY: this.soleY.l,

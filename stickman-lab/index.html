@@ -260,6 +260,13 @@
         <span class="own-k">接地</span><span class="own-v" id="own-ground">—</span>
         <span class="own-k">MoS</span><span class="own-v" id="own-mos">—</span>
       </div>
+      <!-- 倾角**按平面分开**显示。只看一个合成的倾角大小，分不出
+           是「腰向前折」还是「向侧倒」（用户 2026-10-03 指出这个盲区）。
+           约定：x=前 y=上 z=左；pitch 绕 z = 前/后倾，roll 绕 x = 左/右倾。 -->
+      <div class="own-bar">
+        <span class="own-k">前/后倾</span><span class="own-v" id="own-pitch">—</span>
+        <span class="own-k">左/右倾</span><span class="own-v" id="own-roll">—</span>
+      </div>
       <div class="own-bar">
         <span class="own-k">α 腰权限</span><span class="own-v" id="own-alpha">—</span>
       </div>

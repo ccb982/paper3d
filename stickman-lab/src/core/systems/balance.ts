@@ -39,6 +39,13 @@ export interface BalanceParams {
    *   实测把它当目标用 ⇒ 只留膝这一条就把存活从"站满 8s"打成 2.6s。
    */
   kneeHoldDeg: number;
+  // ── Gear I (position servo): sagittal hip position controller ──────
+  /** 矢状髋比例增益（rad/m）。com 前 ⇒ 发负角 = 髋伸 ⇒ 把躯干拉回支撑脚上方 */
+  ksagP: number;
+  /** 矢状髋阻尼（rad/(m/s)） */
+  ksagD: number;
+  /** 矢状髋目标角限幅（rad） */
+  maxHipDeg: number;
   // ── 踝（CoP 策略）─────────────────────────────────────────
   /** 矢状面：踝 CoP 比例增益（rad per m）。目标量是**捕获点**，不是躯干角 */
   kCopSag: number;
@@ -132,6 +139,10 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
   //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
   kneeHoldDeg: 15,
+  // Gear I sagittal hip: com forward => negative angle (hip extension)
+  ksagP: 1.2,
+  ksagD: 0.1,
+  maxHipDeg: 0.52,
   // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
   //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
   //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -219,9 +230,30 @@ export function balanceSystem(
   const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
   const on = (ch: string): boolean => !OFF.has(ch);
 
-  // ══════════════════════════════════════════════════════════════
   // ★ 支撑腿是否已确定：**唯一判定在 `wantedForce.stanceResolved()`**
   //   （此前 `latArmed` 在本文件算一遍、相位机在 gaitState 再算一遍 ⇒ 边界不清）
+  // ══════════════════════════════════════════════════════════════
+  if (p.torqueControl) {
+    // ══ 挡位 II：逆动力学 ══
+    //   支撑链**让位**（位置环只剩阻尼），定量支撑全交给 `τ = JᵀF`。
+    //   ⚠ 必须与 `weight`(=mg) 成对开启，否则既无位置刚度也无定量支撑
+    //     ⇒ 腿直接软掉（实测 1.05 s）。
+    if (jHip >= 0) rs.requestHold(jHip, 2, 'balance', '支撑髋让位给τ=JᵀF');
+    if (jKnee >= 0) rs.requestHold(jKnee, 2, 'balance', '支撑膝让位给τ=JᵀF');
+  } else {
+    // ══ 挡位 I：纯位置伺服 ══
+    //   `τ = JᵀF` 完全关闭（见下面那个 lambda），矢状面**必须**由位置目标提供。
+    //   ⚠ 这段控制器我一度删掉过（理由是"两套哲学并存"），结果默认挡位直接丢了
+    //     矢状控制 ⇒ 实测腰**向前折** 80.6°、2.45 s 倒（用户 2026-10-03 亲眼所见）。
+    //   ⇒ 正确结论不是"删掉位置环控制器"，而是**它们属于另一挡**：
+    //     位置伺服挡用位置控制器，逆动力学挡用 `τ = JᵀF`，**两挡互斥不叠加**。
+    //   符号（实测标定，tools/_fs）：**髋正 = 屈曲 = 脚往前**；膝负 = 屈曲。
+    const ex = rs.com.x;
+    const hipTgt = clamp(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
+    if (on('hip') && jHip >= 0) {
+      rs.requestAngle(jHip, 2, hipTgt, 'balance', '矢状髋(位置挡)');
+    }
+  }
   // ══════════════════════════════════════════════════════════════
   // ① 矢状面：**不再有手写 P 控制器**
   //   原式 `hipTgt = -kSagP·ex - kSagD·vx`（直接给目标角）已删除 ——

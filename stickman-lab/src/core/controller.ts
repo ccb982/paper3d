@@ -112,6 +112,21 @@ export class Controller {
     rs.cop.r.x = TMP_COP_R[0]!; rs.cop.r.z = TMP_COP_R[2]!; rs.cop.r.load = TMP_COP_R[3]!;
     rs.torsoY = sim.doll.torso().translation().y;
     rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+    // ★★ 倾角按平面分解（否则分不出"腰向前折"还是"向侧倒"）。
+    //   我的盲区：一直只报合成倾角大小，把前倾误当侧倒排查了很久
+    //   （用户 2026-10-03：「之前还是侧向折，现在只是向前折」）。
+    //   约定：x=矢状(前) y=竖直 z=额状(左)
+    //     pitch 绕 z ⇒ 顶部倒向 ±x ⇒ 前/后倾
+    //     roll  绕 x ⇒ 顶部倒向 ±z ⇒ 左/右倾
+    {
+      const q = sim.doll.torso().rotation();
+      const ax = 2 * (q.x * q.y + q.w * q.z);
+      const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
+      const az = 2 * (q.y * q.z - q.w * q.x);
+      const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+      rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
+      rs.rollDeg = Math.atan2(az, uy) * 57.2958;
+    }
     // GRF：用法向载荷 + 接触切向估计的合力方向（横/竖比实测 0.074~0.333）
     rs.grf.x = 0; rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
 

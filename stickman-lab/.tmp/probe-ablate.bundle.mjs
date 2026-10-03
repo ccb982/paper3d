@@ -17566,6 +17566,8 @@ var init_rigState = __esm({
       grf = { x: 0, y: 0 };
       torsoY = 0;
       tiltDeg = 0;
+      pitchDeg = 0;
+      rollDeg = 0;
       soleX = { l: 0, r: 0 };
       /**
        * 脚底中心的**横向**位置（m）。
@@ -18067,6 +18069,8 @@ var init_rigState = __esm({
           swingClearance: this.swingClearance,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
+          pitchDeg: this.pitchDeg,
+          rollDeg: this.rollDeg,
           legs: {
             l: {
               side: "l",
@@ -18492,6 +18496,16 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const D2R2 = Math.PI / 180;
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
+  if (p.torqueControl) {
+    if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
+    if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
+  } else {
+    const ex = rs.com.x;
+    const hipTgt = clamp2(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
+    if (on("hip") && jHip >= 0) {
+      rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
+    }
+  }
   if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   const kneeNow = rs.angle(jKnee, 2);
@@ -18570,6 +18584,10 @@ var init_balance2 = __esm({
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
       kneeHoldDeg: 15,
+      // Gear I sagittal hip: com forward => negative angle (hip extension)
+      ksagP: 1.2,
+      ksagD: 0.1,
+      maxHipDeg: 0.52,
       // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
       //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
       //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -18781,6 +18799,15 @@ var init_controller = __esm({
         rs.cop.r.load = TMP_COP_R[3];
         rs.torsoY = sim.doll.torso().translation().y;
         rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        {
+          const q = sim.doll.torso().rotation();
+          const ax = 2 * (q.x * q.y + q.w * q.z);
+          const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
+          const az = 2 * (q.y * q.z - q.w * q.x);
+          const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
+          rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
+          rs.rollDeg = Math.atan2(az, uy) * 57.2958;
+        }
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);

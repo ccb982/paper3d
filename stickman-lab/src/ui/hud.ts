@@ -98,7 +98,7 @@ export class Hud {
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
-      ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'),
+      ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
       ownPelv: $('own-pelv'), ownClr: $('own-clr'), ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
       ownGate: $('own-gate'), ownGrid: $('own-grid'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
@@ -198,6 +198,7 @@ export class Hud {
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
       e.ownPhase.textContent = '—'; e.ownGround.textContent = '—'; e.ownMos.textContent = '—';
+      e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
       e.ownPelv.textContent = '—'; e.ownClr.textContent = '—';
       e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
@@ -220,6 +221,9 @@ export class Hud {
     e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
     e.ownGround.textContent = `${d.support.contactN} 只`;
     e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;
+    // 前/后倾 与 左/右倾 分开显示：合成的倾角大小分不出平面
+    e.ownPitch.textContent = `${d.pitchDeg.toFixed(1)}°`;
+    e.ownRoll.textContent = `${d.rollDeg.toFixed(1)}°`;
     // 骨盆抬升 / 摆动净空（与 3D 方向标同一份快照，同源）
     e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}°`;
     e.ownClr.textContent = `${(d.swingClearance * 1000).toFixed(0)} mm`;
