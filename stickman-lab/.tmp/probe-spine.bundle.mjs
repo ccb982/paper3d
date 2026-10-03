@@ -6249,7 +6249,11 @@ var ANKLE_JOINTS = [
   { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
   { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
 ];
+var HIP_LIMIT = [-95, 100];
 var meta = parts_default;
+for (const j of meta.joints) {
+  if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
 if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
 var META = meta;
 var PART_BY_KEY = new Map(
@@ -6315,6 +6319,20 @@ var DEFAULT_CONFIG = {
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -6379,6 +6397,7 @@ var JOINT_MAX_TORQUE = {
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   foot_l: 45,
+  // ★ 会被 cfg.ankleMaxTorque 覆盖
   foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
@@ -6392,10 +6411,23 @@ var JOINT_LIMITS_XY_DEG = {
   hip_r: [45, 40],
   knee_l: [6, 8],
   knee_r: [6, 8],
-  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
-  //   放开会让脚掌乱翻、把支撑面搞丢。
-  foot_l: [8, 6],
-  foot_r: [8, 6]
+  // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+  //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+  //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+  //   成立，但**单腿站立恰恰相反**：
+  //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+  //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+  //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+  //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+  //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+  //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+  //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+  //       that involves axial rotation"
+  //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+  //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+  //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+  foot_l: [14, 10],
+  foot_r: [14, 10]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -6692,12 +6724,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
       [wx - parent.cx, wy - parent.cy, wz - parent.cz]

@@ -565,7 +565,7 @@ log(`  ${'基因组'.padEnd(22)} ${'存活'.padStart(7)} ${'Σ|τ| N·m'.padStar
   const W_SMOOTH = simStand.w.smooth;
   const effort = (genome: Float32Array, label: string) => {
     simStand.begin(genome);
-    let sumAbs = 0, sumJerk = 0, flips = 0, samples = 0;
+    let sumAbs = 0, sumJerk = 0, flips = 0, samples = 0, sc = 0;
     const steps = Math.round(4 * simStand.cfg.physicsHz);
     for (let i = 0; i < steps && !simStand.finished; i++) {
       simStand.advance(1);
@@ -574,6 +574,8 @@ log(`  ${'基因组'.padEnd(22)} ${'存活'.padStart(7)} ${'Σ|τ| N·m'.padStar
         sumAbs += Math.abs(t);
         if (i > 0) {
           sumJerk += Math.abs(t - prev[k]);
+          const dd = t - prev[k];
+          sc += dd * dd;
           if (t * prev[k] < 0) flips++;
         }
         prev[k] = t;
@@ -581,7 +583,8 @@ log(`  ${'基因组'.padEnd(22)} ${'存活'.padStart(7)} ${'Σ|τ| N·m'.padStar
       samples++;
     }
     const secs = samples * simStand.dt;
-    const sc = simStand.smoothCost;
+    // ⚠⚠ `Sim.smoothCost` 已随 `accSmooth → accActRate` 改名被删除，这里就地统计 Σ(Δτ)²。
+    //   （原来直接读那个字段 ⇒ undefined.toFixed() 崩在这里，[C3] 之后全段没跑过。）
     log(`  ${label.padEnd(22)} ${(f(simStand.ticksDone / simStand.cfg.controlHz, 2) + 's').padStart(7)} `
       + `${f(sumAbs / secs, 0).padStart(10)} ${f(sumJerk / secs, 0).padStart(11)} `
       + `${f(flips / (n * secs), 2).padStart(11)} ${f(sc, 0).padStart(11)} `

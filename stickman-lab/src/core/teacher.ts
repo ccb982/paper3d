@@ -30,6 +30,7 @@ const LAT_MAX_ERR = 0.04;
 import { cell } from './normGait';
 import { copTargetZ, WT, THR, BalanceGate, type WtStage } from './gaitEvents';
 import { balanceHold, holdParamsFrom, type BalanceHoldParams } from './balanceHold';
+import type { GaitPhase } from './gaitPhase';
 import { stepSystem, stepParamsFrom } from './stepSystem';
 
 // ── 腿长/髋偏置：全部从纹理像素换算（px2m = 0.00068，画布 y=2899 是地面）──
@@ -246,32 +247,94 @@ export interface TeacherResult {
 }
 
 /**
- * 跑一整段 teacher。
- * @param record  true 时把 (观测, 归一化目标) 存进 `data`，供行为克隆用
+ * ★★ teacher 的**可分帧会话**（2026-10-03）。
+ *
+ * 为什么要这个：网页（`src/main.ts`）此前**只能渲染 ES 神经网络的输出**，
+ * 而 `balanceHold` / `stepSystem` 这套平衡维持系统只被 `tools/*.ts` 引用
+ * ⇒ **你在网页上调平衡维持系统时，网页上根本没有那个系统**。
+ * 于是网页显示的和探针测的是两个不同的东西，对不上。
+ *
+ * 解法：把主循环的闭包状态封进 `TeacherSession`，让网页用 rAF 一帧一帧地
+ * `session.step(n)` 推进。这样网页与 `tools/probe-*.ts` 跑的是**同一份代码**。
  */
-export function runCaptureTeacher(
+/**
+ * 三套系统的归属标签 —— 网页「模块归属」面板按它上色。
+ *   `hold`  = 平衡维持系统（balanceHold.ts）
+ *   `step`  = 迈步系统（stepSystem.ts）
+ *   `servo` = 伺服/条件化修正
+ */
+export type HoldSystem = 'hold' | 'step' | 'servo';
+
+/** ★ 网页每帧读的诊断快照（用户 2026-10-03 要求 UI 明确区分两套系统 + 前后腿） */
+export interface TeacherDiag {
+  /** 关节/轴 → 系统归属（形如 `hip_l/2`） */
+  sys: Map<string, HoldSystem>;
+  /** 关节/轴 → 机制标签（形如 `balance(ik+corr)`） */
+  owner: Map<string, string>;
+  /** 关节/轴 → 本拍原始角度（rad） */
+  ang: Record<string, number>;
+  /** 前腿 / 后腿（按脚的 x 位置实测，**不是硬编码左右**） */
+  frontLeg: 'l' | 'r';
+  backLeg: 'l' | 'r';
+  /** 承重腿（loadFrac + 迟滞判出来的） */
+  stanceLeg: 'l' | 'r';
+  /** 摆动腿 */
+  swingLeg: 'l' | 'r';
+  /** 两脚是否接地 */
+  groundL: boolean;
+  groundR: boolean;
+  /** 步态相 */
+  phase: GaitPhase;
+  /** 此刻真正下出去的轴数（0 = 某个角色压根没被控制） */
+  nAxes: number;
+  /** 平衡门判定（'' = 放行） */
+  balOk: boolean;
+  balWhy: string;
+  /** 支撑域内的 MoS（m，负 = 已越界） */
+  mosX: number;
+}
+
+export interface TeacherSession {
+  /** 推进 n 个物理步（每步 = sim.advance(1) + 算指令 + setMotorTargets） */
+  step(n: number): void;
+  /** ★ 每拍刷新的诊断快照（UI 读这个，不要自己去猜归属） */
+  readonly diag: TeacherDiag;
+  /** 已推进的仿真时间（s） */
+  readonly t: number;
+  /** 已完成的控制拍数 */
+  readonly steps: number;
+  /** 结算（等价于旧的返回值） */
+  result(): TeacherResult;
+}
+
+export interface TeacherOpts {
+  dur?: number; clockDriven?: boolean; record?: boolean;
+  data?: { X: number[][]; A: number[][] };
+  /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
+  onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number | string>) => void;
+  /**
+   * ★★ **单腿站立模式**（用户 2026-10-02："我怀疑是因为无法单脚站稳导致的，
+   *   我需要学怎么保证单脚站稳，先维持抬腿后的重心稳定，再考虑迈腿"）。
+   *   置为 `'l' | 'r'` 时：
+   *     · 强制该腿为唯一支撑腿，**不换脚**（关掉时序与落地判定）
+   *     · 另一条腿的 IK 目标抬到 `liftHold`（默认 0.25 m）并**保持**
+   *   ⇒ 这样可以把"能不能单腿站稳"从"能不能迈腿"里**解耦**出来单独验证。
+   *   null = 正常迈腿（默认）。
+   */
+  singleLeg?: 'l' | 'r' | null;
+  /** 单腿模式下摆动腿的保持高度（m） */
+  liftHold?: number;
+}
+
+/**
+ * 建一个 teacher 会话（**不自动跑**）。网页用它做分帧驱动。
+ */
+export function makeTeacherSession(
   sk: Skeleton,
   sim: Sim,
   p: CaptureParams,
-  opts: {
-    dur?: number; clockDriven?: boolean; record?: boolean;
-    data?: { X: number[][]; A: number[][] };
-    /** 每控制拍的回调（探针用它取角度/接触状态做逐帧统计） */
-    onFrame?: (t: number, stanceL: boolean, s: number, ownerLog?: Map<string, string>, curOwner?: string, angLog?: Record<string, number>, dbgLog?: Record<string, number | string>) => void;
-    /**
-     * ★★ **单腿站立模式**（用户 2026-10-02："我怀疑是因为无法单脚站稳导致的，
-     *   我需要学怎么保证单脚站稳，先维持抬腿后的重心稳定，再考虑迈腿"）。
-     *   置为 `'l' | 'r'` 时：
-     *     · 强制该腿为唯一支撑腿，**不换脚**（关掉时序与落地判定）
-     *     · 另一条腿的 IK 目标抬到 `liftHold`（默认 0.25 m）并**保持**
-     *   ⇒ 这样可以把"能不能单腿站稳"从"能不能迈腿"里**解耦**出来单独验证。
-     *   null = 正常迈腿（默认）。
-     */
-    singleLeg?: 'l' | 'r' | null;
-    /** 单腿模式下摆动腿的保持高度（m） */
-    liftHold?: number;
-  } = {},
-): TeacherResult {
+  opts: TeacherOpts = {},
+): TeacherSession {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
   const singleLeg = opts.singleLeg ?? null;
@@ -351,7 +414,12 @@ export function runCaptureTeacher(
   // ★★ 踝（foot_l/foot_r）—— 之前**从不下指令**，脚掌是自由体。
   //   这就是"抬腿的时候脚都不往前伸"的直接原因：脚掌朝向恒定（只跟小腿走），
   //   膝控制的只是小腿，**脚要往前伸必须靠踝**（人走路：摆动期背屈→蹬离跖屈）。
-  const jFoot = sk.joints.find((j) => j.name === "foot_l")!;
+  // ★★ `ankleEnabled=false` ⇒ 骨架里**没有 foot_l/foot_r 关节**（脚掌是小腿的第二个
+  //   collider）。这里查不到就是查不到，**不要**用 `jointIndexByName` 的旧回退
+  //   （它会返回 9 = spine1 ⇒ 指令下到腰上，见 skeleton.jointIndexByName 的注释）。
+  //   `setAxis` 的 `!j` 分支会让踝指令静默丢弃 —— 这是**已知且正确**的行为：
+  //   前提是调用方知道"没有踝"，所以 UI 会把它显示成"未驱动"而不是假装在控制。
+  const jFoot = sk.joints.find((j) => j.name === 'foot_l');
   // ★ 腰（脊柱）关节的实际名字与描述：spineSegments>1 时才存在
   const spineNames = spineJointNames(sk);
   const nSpine = spineNames.length;
@@ -367,6 +435,7 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       //   12 关节配置里**没有 ankle**，此时 `j` 为 undefined（踝只存在于 14 关节）
       if (o < 0 || !j) return;
       ownerLog.set(joint + '/' + ax, curOwner);   // ★ 谁写了这一轴（probe-arch 读它）
+      sysLog.set(joint + '/' + ax, curSys);      // ★ 这一轴属于**哪个系统**（网页「模块归属」面板读它）
       angLog[joint + "/" + ax] = +ang.toFixed(4);   // ★ 原始角度值
       // ★★ 归一化必须用该轴的**最大行程**，不能用"这一侧的小限位"。
       //   旧写法 `ang>=0 ? ang/(0.9*maxRad) : ang/(0.9*-minRad)` 在**不对称限位**上
@@ -380,13 +449,40 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
       nAxes++;
     };
   /** 本拍真正下出去的轴数（调试用：0 说明某个角色压根没被控制） */
+  /** ★ **本拍**真正下出去的轴数（每拍开头清零 —— 它原来是累计值，
+   *   面板会显示成"这一整局一共下了多少轴"。诊断口径必须是每拍。 */
   let nAxes = 0;
   /** ★ 当前写入者标签（probe-arch 用它看"哪个机制在抢哪个关节"） */
   let curOwner = '?';
+  /**
+   * ★★★ **这一轴属于哪套系统** —— 网页「模块归属」面板的核心字段。
+   *
+   *   用户 2026-10-03："我需要一个 UI 明确表示哪部分属于平衡维持，
+   *   哪部分属于迈步系统，从而让我区分前后腿。"
+   *
+   *   三类：
+   *     · `hold`  —— **平衡维持系统**（`balanceHold.ts` 纯函数）
+   *     · `step`  —— **迈步系统**（`stepSystem.ts` 纯函数）
+   *     · `servo` —— 伺服/条件化修正（落点、摆动腿自由度…）
+   *   `ownerLog` 记的是"哪个机制"（如 `balance(ik+corr+lock+push)`），
+   *   `sysLog` 记的是"哪套系统"，两者正交：前者用于查机制打架，后者用于看归属。
+   */
+  let curSys: HoldSystem = 'servo';
+  /** ★ joint/axis → 系统归属 的本拍记录（'hold' | 'step' | 'servo'） */
+  const sysLog = new Map<string, HoldSystem>();
   /** ★ joint/axis → owner 的本拍记录 */
   const ownerLog = new Map<string, string>();
   const hipW = new Float64Array(3);   // ★ 真实髋锚点世界坐标
   const angLog: Record<string, number> = {};   // ★ 每次 setAxis 的原始角度（排查"指令为何全 0"）
+  /** ★ UI 读的那一份（每拍整体替换，避免前端拿到半更新的数据） */
+  const sys = new Map<string, HoldSystem>();
+  const diag: TeacherDiag = {
+    sys, owner: ownerLog, ang: angLog,
+    frontLeg: 'l', backLeg: 'r', stanceLeg: 'l', swingLeg: 'r',
+    groundL: true, groundR: true, phase: 'both', nAxes: 0,
+    balOk: true, balWhy: '', mosX: 0,
+  };
+
   const dbgLog: Record<string, number | string> = {};   // ★ 摆动腿指令追踪
   const hipDy = p.hipDy ?? HIP_DY;   // ★ 可标定的 IK 虚拟髋点落差
   /**
@@ -460,7 +556,16 @@ const setAxis = (joint: string, ang: number, j: typeof jHip | undefined, ax = 2)
   let stanceLNow = true;
   let lastDiagT = -1;
 
-  while (!sim.finished && t < dur) {
+  // ★★★ 分帧驱动：`step(n)` 推进 n 个物理步。网页用 rAF 一帧一帧调它，
+  //   探针仍然可以用下面的 `runCaptureTeacher` 一次跑完 —— 两条路径同一份代码。
+  const step = (n: number): void => {
+    for (let k = 0; k < n; k++) {
+    if (sim.finished || t >= dur) return;
+    // ★ 每拍清空"本拍记录"，否则 UI 看到的是**至今所有拍**的并集
+    //   （看着像"到处都在控制"，实际那些轴早就没人管了）。
+    nAxes = 0; ownerLog.clear(); sysLog.clear();
+    for (const k of Object.keys(angLog)) delete angLog[k];
+    curOwner = '—';
     sim.advance(1);
     const torso = sim.doll.torso();
     const rot = torso.rotation();
@@ -915,6 +1020,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       // ★★ 支撑腿蹬离（**必须在写马达之前**加！旧代码加在 setAxis 之后 ⇒ 完全无效）
       //   支撑相后半段线性增大的髋伸驱动，把身体推过支撑脚。
       if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));   // ★③ 支撑腿蹬离发力
+      curSys = isStance ? 'hold' : 'servo';
       curOwner = isStance
         ? `balance(ik+corr${stanceLock > 0 ? '+lock' : ''}${s > 0.5 ? '+push' : ''})`
         : 'step(ik)';
@@ -924,6 +1030,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   这里用 `Math.abs` 显式区分：摆动侧 hipCmd 本来就等于 h（见上方 `isStance ? h+corr : h`），
       //   但 lock/push 仍会无条件叠加 —— 必须把它们也限定在支撑腿。
       if (!isStance) hipCmd = h;
+      curSys = 'hold';
       setAxis(`hip_${side}`, hipCmd, jHip);
       // ★★★ **支撑膝锁腿**（模块 ① 的 `hold.kneeUpright`）。
       //   实测（2026-10-02，"不停鞠躬"）：支撑膝自由折到 **−79°**，把骨盆压下去 **752 mm**。
@@ -931,7 +1038,9 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       //   PMC8710023 —— 靠股四头肌（VM/VL/RF）协同提供腿部刚性。
       //   ⇒ 承重腿的膝在**单腿站立**时叠加直立刚度，把膝锁在轻微屈曲（默认 15°）。
       if (singleLeg && isStance) kneeCmd += hold.kneeUpright;
+      curSys = 'hold';
       setAxis(`knee_${side}`, kneeCmd, jKnee);
+      curSys = 'hold';
       setAxis(`shoulder_${side}`, -h * 0.4, jHip);
       // ★★★ 踝指令
       //   文献量级：摆动期背屈 ~10°（脚尖上勾，利于前伸）→ 蹬离跖屈 ~15~20°（脚尖下压推髋前送）
@@ -1005,7 +1114,8 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
         ? (stanceAnkleBase + vipDeg)
         : (verdictV.ok ? ankleDeg : 0);                 // 摆动腿：门没过 ⇒ 踝锁 0
       dbgLog.ankleCmdDeg = +ankleCmd.toFixed(2); dbgLog.isStanceDbg = isStance ? 1 : 0;
-      setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
+      curSys = 'hold';
+        setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
       // ★★ 脊椎同步发力（Takemura 2007）：摆动相里让**胸廓（脊椎）绕竖直轴反相旋转**，
       //   抵消摆动腿产生的垂直轴角动量。本 rig 的"胸廓"= spine1..3，
       //   "骨盆"= 根刚体（由两髋的轴 1 扭转反向叠加得到）。
@@ -1025,9 +1135,11 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
           //   即轴 0/1 = 侧倾/扭转、**轴 2 = 前后屈伸** ⇒
           //   偏航写进屈伸轴 ⇒ 脊柱只会前后弯、不会左右转，实测关节角恒为 0.0°。
           //   ⇒ 改写到**轴 0**（侧倾/扭转）。
-          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
+          if (sjDesc) curSys = 'servo';
+        setAxis(sj, yaw * 0.6, sjDesc, 0);
         }
         // 骨盆：两髋绕自身长轴反向扭转（axis 1）⇒ 骨盆相对脚反向转
+        curSys = 'step';
         setAxis('hip_l', -dir * p.spineSync * 0.5 * sw, jHip, 1);
         setAxis('hip_r', dir * p.spineSync * 0.5 * sw, jHip, 1);
       }
@@ -1052,6 +1164,7 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
         const sp0 = spineNames[0];
         const jSp0 = sp0 !== undefined ? sk.joints[jointIndexByName(sk, sp0)] : undefined;
         if (jSp0 && (p.kPelvis ?? 0) > 0) {
+          curSys = 'hold';
           setAxis(sp0, hold.pelvisUpright, jSp0, 2);
           dbgLog.pelvisCmd = +(hold.pelvisUpright * 57.3).toFixed(2);
         }
@@ -1106,12 +1219,21 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
 
       // ★ 摆动腿要**向外（外展）**让开支撑腿，原来写的是 `-p.kLatSwing`（向内）⇒ 踝内收
       const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);   // ★ 前馈外展 + 反馈修正
-      setAxis(`hip_${side}`, swingAbduct, jHip, 0);
+      // ★ `curOwner` 必须**跟着** `curSys` 一起改：它是上一分支（承重腿 IK）留下的值，
+      //   于是 UI 上会出现「底色=迈步、机制=balance(...)」的自相矛盾格子（已实测到）。
+      curSys = 'step';
+      curOwner = isStance ? 'balance(abductFF+latCorr)' : 'step(abductFF+swing)';
+    setAxis(`hip_${side}`, swingAbduct, jHip, 0);
       // ★★ 踝的**内翻/外翻**（轴 0，绕足长轴）—— 额状面力学链的执行端（Liu 2012）。
       //   限位已按文献放宽到 ±14°/±10°；指令由模块 ① 的 `hold.ankleLat` 给出。
+      //   ⚠ 本 rig `ankleEnabled=false` ⇒ 没有 foot_* 关节 ⇒ 这段**永不生效**
+      //     （`jFoot` 为 undefined，`setAxis` 静默 return）。额状面因此只剩髋外展，
+      //     而它的权限实测≈0（见 tools/probe-auth2.ts）—— 这是单腿站不住的物理原因。
       if (hold.ankleLat !== 0 && isStance) {
         const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
-        setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
+        curSys = 'hold';
+        curOwner = 'balance(ankleLat)';
+      setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
       }
     }
     // owner 已在各写入点打标
@@ -1126,15 +1248,100 @@ const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
       dbgLog.footXR = +footBufR[0]!.toFixed(3);
     }
     dbgLog.balOk = verdictV.ok ? 1 : 0; dbgLog.balStage = verdictV.why; dbgLog.mosX = +mosHere.toFixed(4); dbgLoad = stanceLoadNow; dbgLog.comY = +com.y.toFixed(3); dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+    // ────────────────────────────────────────────────────────────────
+    // ★ 刷新 UI 诊断快照：系统归属 + 前后腿 + 承重腿 + 平衡门
+    //   （用户 2026-10-03："UI 明确表示哪部分属于平衡维持，哪部分属于迈步，
+    //     从而让我区分前后腿"）
+    // ────────────────────────────────────────────────────────────────
+    {
+      const [fL, bL] = rolesFromFootX(footBufL[0] ?? 0, footBufR[0] ?? 0);
+      const swingSide: 'l' | 'r' = stanceL ? 'r' : 'l';
+      diag.frontLeg = fL; diag.backLeg = bL;
+      diag.stanceLeg = stanceL ? 'l' : 'r';
+      diag.swingLeg = swingSide;
+      diag.groundL = sim.doll.footGrounded(0);
+      diag.groundR = sim.doll.footGrounded(1);
+      diag.phase = sim.gp.now;
+      diag.nAxes = nAxes;
+      diag.balOk = verdictV.ok;
+      diag.balWhy = verdictV.why;
+      diag.mosX = mosHere;
+      sys.clear();
+      for (const [k, v] of sysLog) sys.set(k, v);
+      // 逐拍把 sysLog 整份替换成 sys（避免每帧 42 个 Map.set 的开销）
+    }
     opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
     sim.doll.setMotorTargets(out);
     // ★★ 采样：观测是 advance 之后取的（与训练时的时序一致：控制目标由上一帧状态算出，
     //    下一帧的观测才能反映它的效果 ⇒ 这里必须记录**这一帧的观测**而不是上一帧）。
     if (opts.record && opts.data) {
       opts.data.X.push(Array.from(sim.observation()));
-    const rv = new Float64Array(3);
+      opts.data.A.push(Array.from(out));
     }
     t += dt;
-  }
-  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq };
+    }
+  };
+
+  const result = (): TeacherResult =>
+    ({ x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq });
+
+  return {
+    step,
+    diag,
+    get t() { return t; },
+    get steps() { return steps; },
+    result,
+  };
 }
+
+/**
+ * 跑一整段 teacher（**一次性跑完**）。
+ * ★ 网页请改用 `makeTeacherSession` + `session.step(n)`（分帧驱动），
+ *   否则网页跑的是 ES 大脑、探针跑的是 teacher，两边对不上。
+ */
+export function runCaptureTeacher(
+  sk: Skeleton,
+  sim: Sim,
+  p: CaptureParams,
+  opts: TeacherOpts = {},
+): TeacherResult {
+  const session = makeTeacherSession(sk, sim, p, opts);
+  while (!sim.finished && session.t < (opts.dur ?? 8)) session.step(1);
+  return session.result();
+}
+
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * ★★★ **平衡维持系统的唯一一份参数**（2026-10-03）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 此前每个探针各自内联一份 `FB`，实测三者**互不相同**：
+ *   probe-arch     kLat=3.5 kLatV=1.2 kWtX=0   kVipP=60   （最完整）
+ *   probe-capture  kLat=0                      （侧向控制为零 ⇒ 它测的不是同一个控制器）
+ *   probe-ankle    kLat=0
+ *   probe-balance  kLat=0
+ * ⇒ 「探针之间」就已经不同步，网页更是只跑 ES 大脑。
+ *
+ * ★ 这里取 **probe-arch 那一份**（它是当前唯一在调的、字段最全的）。
+ *   网页（`driver='teacher'`）与所有探针都必须 import 这个对象，
+ *   要改平衡维持系统就改这里一处 —— 改完网页立刻能看到。
+ *
+ * ⚠ 调参时用 `tools/tune-teacher.ts`，它输出可直接粘回下面。
+ */
+import { CAPTURE_GAIT } from './phaseSeed';
+
+export const CAPTURE_DEFAULT: CaptureParams = {
+  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
+  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
+  spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop,
+  // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
+  kWtX: 0, kWtVx: 0,
+  kVipP: 60, kVipD: 5,
+  kVmpP: 14, kVmpD: 3, cmBalance: 0, cmBalanceD: 0,
+  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
+  // ★★ 侧向**不能是 0**：`probe-capture` 用 kLat=0 时 1.45s 就倒，
+  //   `probe-arch` 用 3.5 时能跑 3.1s。之前两者被当成同一个 teacher 比过。
+  kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10,
+  stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
+  ankleSwing: 12, anklePush: 15, ankleStance: 0,
+};

@@ -17,7 +17,7 @@ import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints, brainParamCount } from '../src/core/brain';
 import { StepSettleTracker, mosBand, marginOfStability, MIN_SWING, SETTLE_WIN, MOS_TARGET } from '../src/core/stability';
 import { BEST_BALANCER, balancerGenome, phaseGenomeFor, BEST_PHASE, CAPTURE_GAIT } from '../src/core/phaseSeed';
-import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
+import { CAPTURE_DEFAULT, runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 
 const require = createRequire(import.meta.url);
 {
@@ -140,11 +140,11 @@ function termRow(name: string, g: Float32Array | null, teacher?: CaptureParams):
   };
 }
 
-const FB: CaptureParams = {
-  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 0, kLatV: 0, kLatSwing: 0,
-};
+/** // ★ 参数来自 core/teacher.ts 的 CAPTURE_DEFAULT（唯一真源）。
+//   此前每个探针各内联一份 FB，实测互不相同：probe-capture 的 kLat=0（侧向全关）
+//   与 probe-arch 的 kLat=3.5 是两个不同的控制器，却一直被当成同一个在比。
+ */
+const FB: CaptureParams = CAPTURE_DEFAULT;
 const rand = new Float32Array(brainParamCount(shape));
 for (let i = 0; i < rand.length; i++) rand[i] = Math.sin(i * 0.37) * 0.25;
 

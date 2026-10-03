@@ -75,6 +75,46 @@
       #boot {
         left: 12px; bottom: 12px; padding: 7px 12px; color: var(--ink-dim);
       }
+
+      /* ── 「模块归属」面板 ───────────────────────────────────────── */
+      #own {
+        left: 12px; top: 300px; width: 340px; padding: 9px 11px;
+        font-size: 11px; max-height: 46vh; overflow-y: auto;
+      }
+      #own h2 { margin: 0 0 7px; font-size: 11px; display: flex; gap: 6px; align-items: baseline; }
+      #own h2 small { font-weight: 400; color: var(--ink-dim); font-size: 10px; }
+      .own-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
+      .own-role {
+        border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px;
+        background: #fff; line-height: 1.5;
+      }
+      .own-role span { display: block; color: var(--ink-dim); font-size: 10px; }
+      .own-role[data-r="front"]   { border-color: #1d6fb8; background: #eef5fc; }
+      .own-role[data-r="stance"]  { border-color: #b8560f; background: #fdf2e8; font-weight: 600; }
+      .own-bar { display: grid; grid-template-columns: auto 1fr auto 1fr auto 1fr; gap: 3px 5px; margin-bottom: 5px; }
+      .own-k { color: var(--ink-dim); }
+      .own-v { font-variant-numeric: tabular-nums; font-weight: 600; }
+      .own-gate {
+        border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px;
+        margin-bottom: 7px; background: #f4faf4; font-size: 10.5px;
+      }
+      .own-gate[data-ok="0"] { background: #fdeceb; border-color: #e3b4ae; color: #a3140a; }
+      .own-grid { width: 100%; border-collapse: collapse; font-size: 10px; }
+      .own-grid th {
+        font-weight: 600; color: var(--ink-dim); text-align: left;
+        border-bottom: 1px solid var(--line); padding: 2px 4px;
+      }
+      .own-grid td { padding: 1px 4px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+      .own-grid td.ax { color: var(--ink-dim); width: 14px; }
+      .own-grid td.jn { width: 62px; font-weight: 600; }
+      .own-grid td.owner { color: var(--ink-dim); font-size: 9.5px; }
+      .own-cell { display: block; border-radius: 3px; padding: 1px 4px; }
+      .sw-hold  { background: #cfe3f7; border: 1px solid #7fb0dd; }
+      .sw-step  { background: #fbe0bf; border: 1px solid #dfa45c; }
+      .sw-servo { background: #e6e6e6; border: 1px solid #bbb; }
+      .sw-none  { background: #fafafa; border: 1px dashed #ccc; }
+      .own-legend { margin-top: 6px; display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+      .own-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-left: 5px; }
       #boot.err { color: #a3140a; border-color: #e3b4ae; }
       .hint { color: var(--ink-dim); font-size: 10.5px; margin-top: 6px; line-height: 1.45; }
       kbd {
@@ -113,8 +153,22 @@
       <label>播放速度 <b id="v-speed">—</b></label>
       <input id="i-speed" type="range" min="0.1" max="3" step="0.1" />
 
-      <label>训练阶段（默认走路）<b id="v-speedgoal">—</b></label>
-      <input id="i-speedgoal" type="range" min="0" max="1" step="1" value="0" />
+      <label>训练阶段 <b id="v-speedgoal">—</b></label>
+      <!-- ★ 三档而不是两档：`stand`（站立/单腿站立）才是平衡的验收口径，
+           此前这里是二值的 walk/fight，导致 stand 在网页上根本选不到。 -->
+      <input id="i-speedgoal" type="range" min="0" max="2" step="1" value="1" />
+
+      <label>驱动源 <b id="v-driver">—</b></label>
+      <input id="i-driver" type="range" min="0" max="1" step="1" value="1" />
+
+      <label>支撑腿（单腿站立） <b id="v-singleleg">—</b></label>
+      <input id="i-singleleg" type="range" min="0" max="2" step="1" value="0" />
+
+      <label>摆动腿抬高 (m) <b id="v-lifthold">—</b></label>
+      <input id="i-lifthold" type="range" min="0.05" max="0.5" step="0.01" value="0.25" />
+
+      <label>回合时长 (s) <b id="v-dur">—</b></label>
+      <input id="i-dur" type="range" min="2" max="30" step="1" value="8" />
 
       <h2>走路奖励（walkReward.ts 的 11 项）</h2>
 
@@ -147,6 +201,7 @@
 
       <div class="btns">
         <button id="b-pause">暂停</button>
+        <button id="b-driver">切换驱动源</button>
         <button id="b-reset">重开种群</button>
         <button id="b-respawn">重开当前</button>
         <button id="b-export">导出基因组</button>
@@ -160,6 +215,35 @@
         双击地面 = 重开个体 · <kbd>空格</kbd> 暂停 · <kbd>R</kbd> 重开当前 ·
         <kbd>G</kbd> 整代 · <kbd>E</kbd> 导出
       </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         ★★ 「模块归属」面板 —— 明确区分**平衡维持系统**与**迈步系统**，
+            并标出前腿 / 后腿 / 承重腿（用户 2026-10-03）。
+            数据源：`TeacherSession.diag`（teacher.ts 每拍刷新）。
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="panel" id="own">
+      <h2>模块归属<small>平衡维持 / 迈步 · 前后腿</small></h2>
+
+      <div class="own-roles">
+        <div class="own-role" id="own-role-l"><b>左腿</b><span>—</span></div>
+        <div class="own-role" id="own-role-r"><b>右腿</b><span>—</span></div>
+      </div>
+
+      <div class="own-bar">
+        <span class="own-k">相</span><span class="own-v" id="own-phase">—</span>
+        <span class="own-k">接地</span><span class="own-v" id="own-ground">—</span>
+        <span class="own-k">MoS</span><span class="own-v" id="own-mos">—</span>
+      </div>
+      <div class="own-gate" id="own-gate">平衡门 —</div>
+
+      <table class="own-grid" id="own-grid"></table>
+
+      <div class="own-legend">
+        <i class="sw-hold"></i>平衡维持 <i class="sw-step"></i>迈步 <i class="sw-servo"></i>伺服
+        <i class="sw-none"></i>未驱动
+      </div>
+      <div class="hint" id="own-hint">格子里是该轴的<b>机制</b>标签；底色 = 归属哪套系统。</div>
     </div>
 
     <div class="panel" id="boot">初始化…</div>

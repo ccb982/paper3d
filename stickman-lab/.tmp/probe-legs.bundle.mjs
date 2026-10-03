@@ -6320,7 +6320,19 @@ var DEFAULT_CONFIG = {
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
   legStretch: 0.02,
-  // ★ probe-arch 扫描最优：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
@@ -6377,6 +6389,7 @@ var JOINT_MAX_TORQUE = {
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
   foot_l: 45,
+  // ★ 会被 cfg.ankleMaxTorque 覆盖
   foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
@@ -6390,10 +6403,23 @@ var JOINT_LIMITS_XY_DEG = {
   hip_r: [45, 40],
   knee_l: [6, 8],
   knee_r: [6, 8],
-  // 踝：X/Y（外展·内外翻）只给 ±8°，踝的侧向自由度不是走路的主自由度，
-  //   放开会让脚掌乱翻、把支撑面搞丢。
-  foot_l: [8, 6],
-  foot_r: [8, 6]
+  // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+  //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+  //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+  //   成立，但**单腿站立恰恰相反**：
+  //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+  //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+  //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+  //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+  //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+  //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+  //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+  //       that involves axial rotation"
+  //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+  //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+  //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+  foot_l: [14, 10],
+  foot_r: [14, 10]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -6696,7 +6722,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = jm.limitDeg[0] * DEG;
     const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
       [wx - parent.cx, wy - parent.cy, wz - parent.cz]
@@ -13177,6 +13203,8 @@ var Ragdoll = class _Ragdoll {
    * 除以 dt 就是力矩（N·m）。
    */
   motorImpulse;
+  /** ★ 逐轴限位触发次数（诊断用：>0 说明限位真的在起作用） */
+  limitHits = 0;
   /**
    * ★★ 本步**想要**施加的力矩（N·m）—— 即被 `α·|err|·Ieff` 稳定性上限削掉**之前**的值。
    *
@@ -13207,6 +13235,16 @@ var Ragdoll = class _Ragdoll {
   dirTmp = new Float64Array(3);
   /** applyTorqueImpulse 的复用向量（wasm 侧只读，复用安全） */
   iv = { x: 0, y: 0, z: 0 };
+  /** ★ 是否启用**虚拟支撑点**。默认 **关** —— 用户 2026-10-02 反馈"支撑腿打滑的感觉"，
+   *   原因是支撑点在脚刚体上直接施加冲量、**绕过接触与摩擦**。
+   *   纯物理路径（靠踝力矩把脚撬起来让接触自然算 CoP）才是不打滑的做法。 */
+  supportPointOn = false;
+  /** 最近一次 driveMotors 的 dt（enforceLimits 的角度投影需要它换算角冲量）。 */
+  lastDt = 1 / 120;
+  axTmp = new Float64Array(3);
+  ptTmp = { x: 0, y: 0, z: 0 };
+  pcTmp = { x: 0, y: 0, z: 0 };
+  ivUp = { x: 0, y: 0, z: 0 };
   constructor(world, sk2, opt = {}) {
     this.world = world;
     this.sk = sk2;
@@ -13307,6 +13345,8 @@ var Ragdoll = class _Ragdoll {
         { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
         { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
       );
+      jd.limitsEnabled = true;
+      jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
       this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
     });
   }
@@ -13368,6 +13408,30 @@ var Ragdoll = class _Ragdoll {
     const fl = one(0), fr = one(1);
     const sum = fl + fr;
     return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+  }
+  /**
+   * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
+   *   用户 2026-10-02："我认为需要保证脚底真能抓地或者身体的体重真的压在脚上了"。
+   *   返回 `[法向力N, 切向力N, μ·法向力N]`：
+   *     · 法向力 ≈ 0 ⇒ 体重**没压在脚上**（脚在飘）
+   *     · 切向力 ≥ μ·法向力 ⇒ 已在**打滑**边界
+   *   Rapier 的 `TempContactManifold` 只暴露法向冲量，切向冲量要靠切点速度估计，
+   *   这里用"接触点相对切向速度 × 法向冲量"做一阶估计。
+   */
+  footGrip(side, dt) {
+    const col = this.soleCol[side];
+    if (!col) return [0, 0, 0];
+    let fn = 0;
+    this.world.contactPairsWith(col, (other) => {
+      this.world.contactPair(col, other, (mf) => {
+        if (mf.numContacts() === 0) return;
+        for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+      });
+    });
+    const body = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
+    const v = body.linvel();
+    const slip = Math.hypot(v.x, v.z);
+    return [fn, fn * slip, fn * slip * 0.35];
   }
   /**
    * ★★ 交替支撑脚（"一次抬一条"）的**事件**判据，返回 true 表示"这一拍发生了换脚"。
@@ -13574,6 +13638,7 @@ var Ragdoll = class _Ragdoll {
    */
   driveMotors(dt) {
     const scale = this.opt.torqueScale;
+    this.lastDt = dt;
     const kP = this.opt.kP;
     const kD = this.opt.kD;
     const qRel = this.qRel;
@@ -13644,7 +13709,184 @@ var Ragdoll = class _Ragdoll {
         iv.z = -iv.z;
         p.applyTorqueImpulse(iv, true);
       }
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        let w;
+        if (k === AXIS_X) w = c.angvel().x - p.angvel().x;
+        else if (k === AXIS_Y) w = c.angvel().y - p.angvel().y;
+        else w = c.angvel().z - p.angvel().z;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
+        const J = -wRel * this.jointIeff[i];
+        const jv = this.iv;
+        jv.x = this.axisW[0] * J;
+        jv.y = this.axisW[1] * J;
+        jv.z = this.axisW[2] * J;
+        c.applyTorqueImpulse(jv, true);
+        jv.x = -jv.x;
+        jv.y = -jv.y;
+        jv.z = -jv.z;
+        p.applyTorqueImpulse(jv, true);
+        this.limitHits++;
+      }
     }
+  }
+  /**
+   * ★★★ **足底虚拟支撑点**（Virtual Support Point）—— 让踝获得 CoP 权限。
+   *
+   *   ── 为什么需要（2026-10-02 实测确立）───────────────────────────
+   *     物理账户：体重 687 N、CoP 杠杆 75 mm ⇒ 撑住不动需要 **52 N·m** 踝力矩；
+   *     人类跖屈肌 MVC ~120~140 N·m，我们的踝只有 45 N·m。
+   *     但把踝从 45 抬到 120/160/220 N·m，存活反而**变差**（1.77s → 0.65s）——
+   *     说明**不是力矩不够**，而是**力矩传不到地面**。
+   *     原因：**足底是刚性平底盒**，压在平地上时踝一转只是把盒面压实，
+   *     压力中心被几何锁在接触面形心 ⇒ 踝**无法移动 CoP**
+   *     （这一现象已被四种独立测法确认：kCop×33 / ankleTorque×9 / VIP刚度比×3.7
+   *      / 踝限幅收紧，全都不改变 CoM 与存活）。
+   *     ⇒ 踝策略（= CoP 策略，文献里的**主力**）在本 rig 里结构性失效，
+   *       矢状面只能由髋代偿，而髋效率只有跖屈肌的 **1/4**
+   *       （Neptune & Perry, Front Neurol 2019, 10:999）⇒ 必然饱和 ⇒ 必然倒。
+   *
+   *   ── 物理依据 ──────────────────────────────────────────────────
+   *     Morasso et al., Front Comput Neurosci 2022, 15:956932：
+   *       踝策略 = "**CoP strategy**" —— "the role of the active intermittent control
+   *       is to shift the position of the **CoP** on the support base"。
+   *     Michaels & Ting, Sci Rep 2025, 15:97637：
+   *       "The biomechanical constraint was defined as the **CoP range limitation to
+   *       the metatarsal joint**" ⇒ CoP 能在**脚掌内**前后移动，出界则踝力矩饱和。
+   *     Wright et al.（同上引述）：脚**不是刚性基座，而是有柔性的**，
+   *       "sensitive to minute deformations" ⇒ 压力中心可移动有物理来源。
+   *
+   *   ── 本实现的做法（不是加肌肉）──────────────────────────────────
+   *     在足底维护一个**沿足长轴滑动的虚拟接触点** `copOffset`：
+   *       · `copOffset ∈ [−halfLen, +halfLen]`（跖骨头 ↔ 足跟，Sci Rep 2025 的行程）
+   *       · 每步在**真实接触点**处施加一个支撑力，而不是让刚体盒自己决定压力中心
+   *       · 位置由踝指令（VIP 的 `ankleSag`）驱动
+   *     等价于"足底有微小柔性"，让踝力矩真正产生 GRF 力矩 ⇒ CoP 可控。
+   *
+   *   ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的
+   *     本构关系；要更真实需要把足底建成若干带弹簧的子段。
+   */
+  copOffset = new Float64Array(2);
+  // [左, 右]，沿足长轴，单位 m
+  /** 设置某只脚的 CoP 位置（相对踝/足中心，沿足长轴；超出 ±halfLen 会被钳住） */
+  setCoP(side, offset, halfLen) {
+    this.copOffset[side] = Math.max(-halfLen, Math.min(halfLen, offset));
+  }
+  getCoP(side) {
+    return this.copOffset[side];
+  }
+  /**
+   * ★★★ **逐轴物理限位**（冲量层）—— **必须在 `world.step()` 之后调用**。
+   *
+   * 为什么自己做（Rapier 0.14 的限制，已查源码确认）：
+   *   · `JointData.spherical()` 的球铰不启用限位；
+   *   · JS 封装只读 `limits[0]`/`limits[1]` —— **单一 (min,max) 对**
+   *     （`dynamics/impulse_joint.js:399-400`），**没有逐轴限位**；
+   *   · `JointData.generic` 只有 1 自由度，替代不了 3 自由度的球铰。
+   *
+   * 机制：越界且还在往外走 ⇒ 施加 `J = −ω_rel·I_eff` 的角冲量，把该轴相对角速度
+   * **归零**（恢复系数 e=0 的限位挡块）。往回走不拦，否则锁死回程。
+   *
+   * ★★ 为什么必须放在步**后**（2026-10-02，两次踩坑）：
+   *   ① 放步前（= `driveMotors` 里，而它在 `world.step()` 之前）⇒ 求解器在步内
+   *      产生的接触响应完全看不见 ⇒ 踝实测跑到 **+96.5°**（限位 +18°，88% 帧越界）。
+   *   ② 惯量不能用 `jointIeff`（它取的是**主惯量的最小值**，`Math.min(I.x,I.y,I.z)`，
+   *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
+   *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
+   */
+  enforceLimits() {
+    for (let i = 0; i < this.sk.joints.length; i++) {
+      const j = this.sk.joints[i];
+      const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
+      const p = this.bodies[pi], c = this.bodies[ci];
+      const qp = p.rotation();
+      for (let k = 0; k < 3; k++) {
+        const lo2 = j.minRad[k], hi2 = j.maxRad[k];
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;
+        const a2 = this.jointRotAxis(i, k);
+        const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
+        if (out === 0) continue;
+        if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
+        else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
+        else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
+        const av = c.angvel(), ap = p.angvel();
+        const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
+        const Ip = p.principalInertia(), Ic = c.principalInertia();
+        const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+        const jv = this.iv;
+        if (out > 0 ? wRel > 0 : wRel < 0) {
+          const J = -wRel * Iax;
+          jv.x = this.axisW[0] * J;
+          jv.y = this.axisW[1] * J;
+          jv.z = this.axisW[2] * J;
+          c.applyTorqueImpulse(jv, true);
+          jv.x = -jv.x;
+          jv.y = -jv.y;
+          jv.z = -jv.z;
+          p.applyTorqueImpulse(jv, true);
+          this.limitHits++;
+        }
+      }
+    }
+  }
+  /**
+   * ★★★ **在虚拟支撑点处施加支撑力**（力偶）。
+   *
+   * 让踝获得 CoP 权限的唯一途径。此前踝指令对动力学**零效力**
+   * （`kCop`×33 / `ankleTorque`×9 / VIP 刚度比×3.7 三种测法结果**逐位相同**），
+   * 根因是**刚性平底盒**把压力中心锁死在接触面形心 —— 踝一转只是压实盒面，CoP 移不动。
+   * 改为显式把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，闭合
+   * 「踝倾角 → 力臂 → GRF 力矩 → CoM 加速度」这条链（Morasso 2022 的 CoP 策略）。
+   *
+   * ⚠ 必须是**力偶**（偏移点 +F、脚心 −F）：净力为 0、只有力矩 F·copOffset。
+   *   第一版写成"额外的力"，体重被算两遍，存活 1.77s → 0.40s。
+   * ⚠ 默认关闭（`supportPointOn = false`）：用户反馈"支撑腿打滑的感觉" ——
+   *   它绕过接触与摩擦，物理上不成立。纯物理路径（靠踝力矩撬脚）才不打滑。
+   * ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的本构关系；
+   *   要更真实需要把足底建成若干带弹簧的子段。
+   */
+  applySupportPoint(dt) {
+    const [fl, fr] = this.footLoadFrac(dt);
+    let mSum = 0;
+    for (const b of this.bodies) mSum += b.mass();
+    for (const side of [0, 1]) {
+      const frac = side === 0 ? fl : fr;
+      if (frac <= 0.01) continue;
+      const foot = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
+      const F = mSum * 9.81 * frac;
+      const q = foot.rotation();
+      quatRotate(q.x, q.y, q.z, q.w, 1, 0, 0, this.axTmp);
+      const ax = this.axTmp;
+      const p = foot.translation();
+      this.pcTmp.x = p.x;
+      this.pcTmp.y = p.y;
+      this.pcTmp.z = p.z;
+      this.ptTmp.x = p.x + ax[0] * this.copOffset[side];
+      this.ptTmp.y = p.y + ax[1] * this.copOffset[side];
+      this.ptTmp.z = p.z + ax[2] * this.copOffset[side];
+      this.ivUp.x = 0;
+      this.ivUp.y = F * dt;
+      this.ivUp.z = 0;
+      foot.applyImpulseAtPoint(this.ivUp, this.ptTmp, true);
+      this.ivUp.x = 0;
+      this.ivUp.y = -F * dt;
+      this.ivUp.z = 0;
+      foot.applyImpulseAtPoint(this.ivUp, this.pcTmp, true);
+    }
+  }
+  /** 该关节第 k 轴的当前角度（rad）—— 限位判定用 */
+  jointRotAxis(i, k) {
+    this.jointRot(i, this.rv);
+    return this.rv[k];
   }
   /** 诊断用：读出某轴当前的 θ_ref（弧度）。探针要核对"命令 → 目标角"的映射是否对 */
   refAngleOf(joint, axis) {
@@ -14717,7 +14959,14 @@ var GaitPhaseMachine = class {
 var MODULES = [
   { id: "loadShift", label: "\u8F7D\u8377\u8F6C\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "altSwitch", label: "\u6362\u652F\u6491\u811A", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["step", "adjust"], singleOnly: true },
+  // ★★ 相位放开为 **全部三相**（2026-10-02，站立模式必需）。
+  //   原来只 `['step','adjust']`，于是**站立模式下 `gp.now` 几乎永远是 `both`**
+  //   ⇒ `mod.active('singleSupport', ...)` 恒 false ⇒ `accSingle` 恒 −0.001
+  //   ⇒ 站立模式的**主项是死的** ⇒ 12 代收敛到"两脚着地 359/360 帧"的退化解
+  //   （实测：把 `single` 权重提到 3.0、把 `quiet` 归零，数字**一位不变**）。
+  //   单腿站立本来就不属于任何"迈步相位"，它的判据就是几何接触（一脚离地），
+  //   与相位无关 ⇒ 相位门控在这里没有意义，反而把奖励关掉了。
+  { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["both", "step", "adjust"], singleOnly: true },
   { id: "cycle", label: "\u8FC8\u6B65\u2192\u8C03\u6574\u5FAA\u73AF", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
   { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
@@ -14731,7 +14980,22 @@ var MODULES = [
   //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
   //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
   //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
-  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
+  // ★★ 相位收窄为 **`['step']`（仅摆动/迈腿相）**（2026-10-02，文献依据）：
+  //   `spineSync` 是**步态反相旋转**机制（Takemura 2007, Sci Rep 2019：
+  //   胸廓与骨盆反相旋转，抵消摆动腿的垂直轴角动量）—— 它的**服务对象是摆动腿**，
+  //   在没有摆动腿的**静态平衡保持**下没有任何力学理由要开。
+  //   而单腿站立的文献结论正相反（Riemann, Myers & Lephart 2003,
+  //   *Arch Phys Med Rehabil* 84:36-42）：
+  //     · "The **trunk**... appeared to be the **least important** source of
+  //       corrective action"
+  //     · "significantly **more corrective action occurred between the pelvis and thigh
+  //       than between the pelvis and trunk**"
+  //     · "the **higher inertia** associated with the trunk may **preclude it from
+  //       contributing to the quick adjustments** necessary for single-leg stance
+  //       equilibrium"
+  //   实测的代价（此前误设为三相全开）：单腿保持平衡时腰仍收到 **−14°** 的躯干旋转指令，
+  //   而躯干只实际动了 −2.7° ⇒ 给本就不稳的系统又加了一个大惯量扰动源。
+  { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8\uFF08\u4EC5\u6446\u52A8\u76F8\uFF09", part: "spine", phases: ["step"], singleOnly: false },
   { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
   { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
   { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
@@ -14993,6 +15257,19 @@ var WALK_REWARD_KEYS = [
   "energy",
   "survive"
 ];
+var STAND_W = {
+  alive: 1,
+  // 存活（s）
+  single: 3,
+  // ★主项：恰好一脚着地的时间积分
+  upright: 0.8,
+  // 躯干直立
+  height: 1.2,
+  // 高度不塌
+  lateral: 6,
+  // 侧向不漂（单腿时权重调高）
+  tiltRate: 0.05
+};
 var DEFAULT_SIM = {
   physicsHz: 120,
   controlHz: 60,
@@ -15132,6 +15409,7 @@ var W = {
   balance: 2,
   fall: 2
 };
+var STAND_BOTH_FEET = 1.5;
 var ZERO2 = { x: 0, y: 0, z: 0 };
 var Sim = class {
   /** ★ 每次 begin() 都会整世界重建（原因见 buildWorld），所以别在外部长期持有 */
@@ -15158,6 +15436,9 @@ var Sim = class {
   jbuf = new Float64Array(3);
   /** ★ 重心 / 支撑域缓冲（posture.ts，零分配） */
   com = newCom();
+  /** ★ 公开给 teacher 的**真实支撑域**（每控制周期由 readSupport 更新）。
+   *   平衡门的 MoS 必须用这个 —— 此前 teacher 自己用常数 STANCE_X_HALF 估算，
+   *   得出的是假 MoS（实测 −200mm），门因此永闭。 */
   sup = newSupport();
   // ---- 评估状态 ----
   subStep = 0;
@@ -15607,6 +15888,8 @@ var Sim = class {
       if (this.subStep === 0) this.controlTick();
       this.doll.driveMotors(this.dt);
       this.world.step();
+      this.doll.enforceLimits();
+      if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
       used++;
       this.subStep++;
       if (this.subStep >= this.stages) {
@@ -15834,6 +16117,9 @@ var Sim = class {
     if (this.mod.active("singleSupport", this.gp.now, nGround, null))
       this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+    if (this.cfg.mode === "stand" && nGround === 2) {
+      this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+    }
     {
       const clr = Math.max(this.airPeakL, this.airPeakR);
       const mosHere = this.lastMosX;
@@ -16099,6 +16385,26 @@ var Sim = class {
    */
   fitnessTerms(fallen, elapsed) {
     const w = this.w;
+    if (this.cfg.mode === "stand") {
+      const sw = STAND_W;
+      const ts = {};
+      ts.alive = sw.alive * elapsed;
+      ts.single = sw.single * this.accSingle;
+      ts.upright = sw.upright * (this.accUpright - elapsed);
+      ts.height = -sw.height * this.accHeight;
+      ts.lateral = -sw.lateral * this.accLateral;
+      ts.tiltRate = -sw.tiltRate * this.accMoveSum;
+      ts.quiet = 0;
+      ts.velTrack = 0;
+      ts.lift = 0;
+      ts.jointMove = 0;
+      ts.jointMotion = 0;
+      ts.actRate = 0;
+      ts.torque = 0;
+      ts.yawTrack = 0;
+      ts.total = Object.values(ts).reduce((a, b) => a + b, 0);
+      return ts;
+    }
     if (this.cfg.mode === "walk") {
       const tt = {};
       const aliveAvg = this.accAlive / Math.max(0.2, this.accTicks);

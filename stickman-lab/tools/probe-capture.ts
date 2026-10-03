@@ -7,7 +7,7 @@ import { buildSkeleton, DEFAULT_CONFIG } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
-import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
+import { CAPTURE_DEFAULT, runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 
 const require = createRequire(import.meta.url);
 {
@@ -50,12 +50,11 @@ function run(p: Params, dur = 8): { x: number; alive: boolean; steps: number; t:
 
 // ── 阶段 1：俯仰反馈的**符号**（之前坐标下降选到 +1.24，而 trace 显示它在放大前扑）──
 // ★ 参数真源 = phaseSeed.CAPTURE_GAIT（探针搜出来的，UI/训练共用同一份）
-const FB: Params = {
-  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 0, kLatV: 0, kLatSwing: 0,
-};
+/** // ★ 参数来自 core/teacher.ts 的 CAPTURE_DEFAULT（唯一真源）。
+//   此前每个探针各内联一份 FB，实测互不相同：probe-capture 的 kLat=0（侧向全关）
+//   与 probe-arch 的 kLat=3.5 是两个不同的控制器，却一直被当成同一个在比。
+ */
+const FB: Params = CAPTURE_DEFAULT;
 console.log('  阶段 1：俯仰反馈符号 × 落地吸能');
 console.log('   kPitch  kRate  absorb   位移     存活   换脚');
 let best = { ...FB }, bs = run(best);

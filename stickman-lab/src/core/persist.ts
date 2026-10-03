@@ -9,10 +9,19 @@
 // 而不是把一个长度不对的基因组塞进去然后行为诡异地跑。
 
 import type { RngState } from './genome';
+import { LAB_VERSION } from './lab';
 
 
 /** localStorage 的键（带版本号，将来改格式不冲突） */
-export const SAVE_KEY = 'stickman-lab/session/v1';
+/**
+ * ★ v2（2026-10-03）：键里带上 `LAB_VERSION` 的指纹。
+ *
+ *   此前是固定 `v1`，于是**旧适应度/旧观测下训出的基因组会被静默恢复**——
+ *   网页显示的是一个历史遗留策略，而你调的是新代码。这是"网页和探针对不上"
+ *   的第三个来源（另两个：网页只跑 ES 大脑、stand 模式 UI 不可达）。
+ *   ⇒ 换版本即自动作废旧档，宁可重训也不加载来路不明的权重。
+ */
+export const SAVE_KEY = `stickman-lab/session/${LAB_VERSION}`;
 /** 存档格式版本 */
 export const SAVE_VERSION = 1;
 

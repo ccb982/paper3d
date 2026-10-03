@@ -499,7 +499,7 @@ export class Sim {
    *   （倒 ⇒ 补侧向控制；蹲塌 ⇒ 看动作空间/阈值）。
    *   取值 = 三条里**超标最狠**的那一条，比按 || 短路顺序取更利于诊断。
    */
-  fallReason: '' | 'height' | 'tilt' | 'head' = '';
+  fallReason: '' | 'height' | 'tilt' | 'head' | 'crash' = '';
   /** ★ 摔倒瞬间的判据快照（用户 2026-10-02：看到底是什么触发摔倒） */
   fallDiag: { rH: number; rT: number; rD: number; torsoY: number; headY: number; tiltDeg: number; hit: string } = { rH: 0, rT: 0, rD: 0, torsoY: 0, headY: 0, tiltDeg: 0, hit: '' };
   /** ★ 诊断：中止瞬间的姿态（跑满时长 = 结束瞬间），用于区分"倒"与"蹲塌" */
@@ -515,6 +515,24 @@ export class Sim {
   private balanceTicks = 0;
 
   constructor(sk: Skeleton, shape: BrainShape = BRAIN_SHAPE, cfg: SimConfig = DEFAULT_SIM) {
+    // ★★★ **形状硬断言**（2026-10-03）：网络的输入/输出维数必须与骨架关节数一致。
+    //
+    //   为什么必须硬抛：`BRAIN_SHAPE = shapeForJoints(9)`，而本 rig 是 **12 关节**。
+    //   任何 `new Sim(sk)` / `new Sim(sk, undefined, cfg)` 都会拿到 9 关节的脑子：
+    //     · `params` 长度按 9 关节算（3803 而不是 4676）
+    //     · `controlTick` 往 90 维的 `x` 里写 108 维 ⇒ **超出的 18 维被静默丢弃**
+    //     · `setMotorTargets` 只下到第 9 个关节 ⇒ 后面的膝/踝/腰**完全没有指令**
+    //   全程**不报错**，只是行为诡异地退化（实测：10 个物理步内 com 全变 NaN）。
+    //   ⇒ 这里直接抛，别让它安静地跑出假数据。
+    const n = sk.joints.length;
+    const expIn = 36 + 6 * n, expOut = 3 * n;
+    if (shape.inputs !== expIn || shape.outputs !== expOut) {
+      throw new Error(
+        `[sim] 网络形状与骨架不符：shape ${shape.inputs}→${shape.outputs}，`
+        + `但骨架 ${n} 关节要求 ${expIn}→${expOut}。`
+        + '请传 shapeForJoints(sk.joints.length)（BRAIN_SHAPE 是 9 关节的默认值，不能用于本 rig）。',
+      );
+    }
     this.sk = sk;
     this.cfg = cfg;
     this.shape = shape;
@@ -1378,6 +1396,9 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
     //   于是一路滑 0.65~1.25 m 还能拿速度跟踪分）。
     if (this.doll.bodyHitGround()) {
       // ★ crash 触发也记录是谁碰的地（用户 2026-10-02）
+      //   ⚠ 必须同时设 `fallReason`：漏设会让探针把"四肢碰地摔倒"读成 `fallReason === ''`
+      //   而误报成"跑满"（已踩过：零输出明明 5.53s 倒了，却打印"跑满"）。
+      this.fallReason = 'crash';
       this.fallDiag = { rH: +((this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
       this.finish(true); return true;
     }

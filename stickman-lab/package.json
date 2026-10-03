@@ -43,7 +43,14 @@
     "legs": "node tools/run.mjs probe-legs",
     "arch": "node tools/run.mjs probe-arch",
     "ankle": "node tools/run.mjs probe-ankle",
-    "balancer14": "node tools/run.mjs probe-balancer14"
+    "balancer14": "node tools/run.mjs probe-balancer14",
+    "web": "node tools/run.mjs probe-web",
+    "stand": "node tools/run.mjs probe-stand",
+    "oneleg": "node tools/run.mjs probe-oneleg",
+    "auth": "node tools/run.mjs probe-auth2",
+    "fitdir": "node tools/run.mjs probe-fitdir",
+    "own": "node tools/run.mjs probe-own",
+    "uipanel": "node tools/run-uipanel.mjs"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

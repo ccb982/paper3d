@@ -22,7 +22,7 @@ import { wholeBodyAngularMomentum } from '../src/core/balance';
 import { TIME, SPACE, JOINTS, UPPER, row, SPEED } from '../src/core/normGait';
 import { JOINT_ORDER } from '../src/core/skeleton';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
-import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
+import { CAPTURE_DEFAULT, runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 
 const require = createRequire(import.meta.url);
 {
@@ -50,11 +50,11 @@ const shape = shapeForJoints(sk.joints.length);
 const DUR = 8;
 const dt = 1 / 120;
 
-const FB: CaptureParams = {
-  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 0, kLatV: 0, kLatSwing: 0,
-};
+/** // ★ 参数来自 core/teacher.ts 的 CAPTURE_DEFAULT（唯一真源）。
+//   此前每个探针各内联一份 FB，实测互不相同：probe-capture 的 kLat=0（侧向全关）
+//   与 probe-arch 的 kLat=3.5 是两个不同的控制器，却一直被当成同一个在比。
+ */
+const FB: CaptureParams = CAPTURE_DEFAULT;
 
 interface Meas {
   n: number; dbl: number; sgl: number; flight: number;

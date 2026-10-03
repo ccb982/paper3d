@@ -43,6 +43,10 @@ export async function buildAndRun(entryTs) {
     outfile,
     logLevel: 'warning',
     sourcemap: false,
+    // ★ 可选外部依赖：`PROBE_EXTERNAL=jsdom npm run uipanel`
+    //   产物落在 `.tmp/`，node 从那里向上找 `.tmp/node_modules` ⇒ 能解析到。
+    //   （本项目 node_modules 是指向别的项目的 junction，不能往里塞东西。）
+    external: (process.env.PROBE_EXTERNAL ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     plugins: [
       {
         name: 'rapier-wasm-stub',

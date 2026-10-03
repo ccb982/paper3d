@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
-import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
+import { CAPTURE_DEFAULT, runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 import { CAPTURE_GAIT } from '../src/core/phaseSeed';
 import { PHASE_ROLE, cell, cellDesc, type Role } from '../src/core/normGait';
 import { footGrounded } from '../src/core/posture';
@@ -37,12 +37,11 @@ const check = (n: string, ok: boolean, got: string): void => {
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const shape = shapeForJoints(sk.joints.length);
 const DUR = 8;
-const FB: CaptureParams = {
-  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau, kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, ankleSwing: 12, anklePush: 15, ankleStance: 0,
-  stanceLock: 0.6,
-};
+/** // ★ 参数来自 core/teacher.ts 的 CAPTURE_DEFAULT（唯一真源）。
+//   此前每个探针各内联一份 FB，实测互不相同：probe-capture 的 kLat=0（侧向全关）
+//   与 probe-arch 的 kLat=3.5 是两个不同的控制器，却一直被当成同一个在比。
+ */
+const FB: CaptureParams = CAPTURE_DEFAULT;
 
 console.log('=== 阶段 × 角色 姿态指令表（目标全部来自文献）===\n');
 for (const ph of ['both', 'step', 'adjust'] as const)

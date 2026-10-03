@@ -13248,6 +13248,8 @@ var Ragdoll = class _Ragdoll {
    *   原因是支撑点在脚刚体上直接施加冲量、**绕过接触与摩擦**。
    *   纯物理路径（靠踝力矩把脚撬起来让接触自然算 CoP）才是不打滑的做法。 */
   supportPointOn = false;
+  /** 最近一次 driveMotors 的 dt（enforceLimits 的角度投影需要它换算角冲量）。 */
+  lastDt = 1 / 120;
   axTmp = new Float64Array(3);
   ptTmp = { x: 0, y: 0, z: 0 };
   pcTmp = { x: 0, y: 0, z: 0 };
@@ -13645,6 +13647,7 @@ var Ragdoll = class _Ragdoll {
    */
   driveMotors(dt) {
     const scale = this.opt.torqueScale;
+    this.lastDt = dt;
     const kP = this.opt.kP;
     const kD = this.opt.kD;
     const qRel = this.qRel;
@@ -13826,36 +13829,39 @@ var Ragdoll = class _Ragdoll {
         else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
         const av = c.angvel(), ap = p.angvel();
         const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-        if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
         const Ip = p.principalInertia(), Ic = c.principalInertia();
         const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
-        const J = -wRel * Iax;
         const jv = this.iv;
-        jv.x = this.axisW[0] * J;
-        jv.y = this.axisW[1] * J;
-        jv.z = this.axisW[2] * J;
-        c.applyTorqueImpulse(jv, true);
-        jv.x = -jv.x;
-        jv.y = -jv.y;
-        jv.z = -jv.z;
-        p.applyTorqueImpulse(jv, true);
-        this.limitHits++;
+        if (out > 0 ? wRel > 0 : wRel < 0) {
+          const J = -wRel * Iax;
+          jv.x = this.axisW[0] * J;
+          jv.y = this.axisW[1] * J;
+          jv.z = this.axisW[2] * J;
+          c.applyTorqueImpulse(jv, true);
+          jv.x = -jv.x;
+          jv.y = -jv.y;
+          jv.z = -jv.z;
+          p.applyTorqueImpulse(jv, true);
+          this.limitHits++;
+        }
       }
     }
   }
   /**
-   * ★★★ **在虚拟支撑点处施加支撑力**（每物理步调用一次）。
+   * ★★★ **在虚拟支撑点处施加支撑力**（力偶）。
    *
-   *   这是让踝获得 CoP 权限的**唯一**途径（理由见上方 `setCoP` 的大段注释）：
-   *   刚性平底盒把压力中心锁在接触面形心，踝一转只是压实盒面，CoP 移不动。
-   *   这里改为**显式**把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，
-   *   于是踝的倾角指令 → 该点的力臂 → GRF 力矩 → CoM 加速度，这条链才闭合。
+   * 让踝获得 CoP 权限的唯一途径。此前踝指令对动力学**零效力**
+   * （`kCop`×33 / `ankleTorque`×9 / VIP 刚度比×3.7 三种测法结果**逐位相同**），
+   * 根因是**刚性平底盒**把压力中心锁死在接触面形心 —— 踝一转只是压实盒面，CoP 移不动。
+   * 改为显式把支撑力作用在足底沿长轴偏移 `copOffset` 的点上，闭合
+   * 「踝倾角 → 力臂 → GRF 力矩 → CoM 加速度」这条链（Morasso 2022 的 CoP 策略）。
    *
-   *   实现细节：
-   *   · 只对**承重脚**施加（`loadN > 0` 时）
-   *   · 力大小 = 该脚当前承担的载荷（用 `footLoadFrac` 的比例 × 实测法向力）
-   *   · 方向 = 竖直向上；作用点 = 脚刚体中心 + 足长轴方向 × copOffset
-   *   · 施加点偏移 ⇒ 对踝产生力矩 W·copOffset ⇒ **这就是 CoP 策略的物理实现**
+   * ⚠ 必须是**力偶**（偏移点 +F、脚心 −F）：净力为 0、只有力矩 F·copOffset。
+   *   第一版写成"额外的力"，体重被算两遍，存活 1.77s → 0.40s。
+   * ⚠ 默认关闭（`supportPointOn = false`）：用户反馈"支撑腿打滑的感觉" ——
+   *   它绕过接触与摩擦，物理上不成立。纯物理路径（靠踝力矩撬脚）才不打滑。
+   * ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的本构关系；
+   *   要更真实需要把足底建成若干带弹簧的子段。
    */
   applySupportPoint(dt) {
     const [fl, fr] = this.footLoadFrac(dt);
@@ -16356,6 +16362,7 @@ var Sim = class {
     const tilt = this.doll.tiltOf(torso);
     const headY = this.doll.head().translation().y;
     if (this.doll.bodyHitGround()) {
+      this.fallReason = "crash";
       this.fallDiag = { rH: +(this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
       this.finish(true);
       return true;
@@ -16849,6 +16856,11 @@ function balanceHold(p, i) {
   const hipStiffRatio = p.kHipStiff - 1;
   const hipSagSteer = i.singleLeg ? Math.max(-0.35, Math.min(0.35, -p.kWtX * vipX - p.kWtVx * i.comVx)) : 0;
   const hipUprightRaw = -i.hipFlex * p.kHipUpright;
+  const grfAngle = Math.atan2(i.grfX, Math.max(0.2, i.grfY));
+  const hipAlign = i.hipFlex - grfAngle;
+  const hipAlignCorr = Math.max(-0.3, Math.min(0.3, -hipAlign * (p.kHipAlign ?? 1)));
+  const pelvisAlign = -(grfAngle + (p.pelvisLeanDeg ?? 0) * Math.PI / 180);
+  const pelvisUpright = Math.max(-0.45, Math.min(0.45, -pelvisAlign * (p.kPelvis ?? 1.5)));
   const kneeTarget = -(p.kneeHoldDeg ?? 15) * Math.PI / 180;
   const kneeErr = i.kneeFlex - kneeTarget;
   const kneeUpright = Math.max(-0.35, Math.min(0.35, -kneeErr * (p.kKneeUpright ?? 2)));
@@ -16866,7 +16878,9 @@ function balanceHold(p, i) {
     // ⚠⚠ **限幅只能加在总和上**：逐项限幅会让 hipUpright 饱和成 bang-bang
     //   （实测 kHipUpright=2.5、髋屈 0.6 rad ⇒ −1.5 被钳到 −0.30 ⇒ 输出只剩
     //   `±0.30·sign(髋屈)`，另外两项被完全淹没 ⇒ 拆开三重反馈后数字**一位不变**）
-    hipSag: Math.max(-0.45, Math.min(0.45, hipUprightRaw + hipDamp + hipSagSteer)),
+    hipSag: Math.max(-0.45, Math.min(0.45, hipAlignCorr + hipUprightRaw * (p.kHipUprightBlend ?? 0) + hipDamp + hipSagSteer)),
+    /** ★ 骨盆执行器输出（走 `spine1` 轴 2 = 屈伸）。这就是"挺起来"的力矩。 */
+    pelvisUpright,
     /** 膝的直立刚度输出（锁腿；膝越屈它越正 = 越往回顶） */
     kneeUpright,
     hipAbd,
@@ -16893,6 +16907,10 @@ function holdParamsFrom(src) {
     kWtX: g("kWtX", 0.6),
     kWtVx: g("kWtVx", 0.6),
     kHipUpright: g("kHipUpright", 1.2),
+    kHipAlign: g("kHipAlign", 1),
+    kPelvis: g("kPelvis", 1.5),
+    pelvisLeanDeg: g("pelvisLeanDeg", 0),
+    kHipUprightBlend: g("kHipUprightBlend", 0),
     kKneeUpright: g("kKneeUpright", 2),
     kneeHoldDeg: g("kneeHoldDeg", 15),
     kVmpP: g("kVmpP", 14),
@@ -16946,7 +16964,7 @@ function ik(hipX, hipY, fx, fy, planeScale = 1) {
   return [hipRel, -(Math.PI - interior)];
 }
 var LEG = LEN_A + LEN_B;
-function runCaptureTeacher(sk2, sim, p, opts = {}) {
+function makeTeacherSession(sk2, sim, p, opts = {}) {
   const dur = opts.dur ?? 8;
   const clockDriven = opts.clockDriven ?? false;
   const singleLeg = opts.singleLeg ?? null;
@@ -17014,6 +17032,7 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   let lastSwitchWasFlip = false;
   const balGate = new BalanceGate();
   let balBlocked = "";
+  let grfRatioNow = 0;
   let dbgLoad = 0;
   let latchedStance = null;
   let stepPermit = false;
@@ -17024,310 +17043,377 @@ function runCaptureTeacher(sk2, sim, p, opts = {}) {
   };
   let stanceLNow = true;
   let lastDiagT = -1;
-  while (!sim.finished && t < dur) {
-    sim.advance(1);
-    const torso = sim.doll.torso();
-    const rot = torso.rotation();
-    const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (rot.w * rot.x + rot.y * rot.z))));
-    const av = torso.angvel();
-    readCom(sim.doll, com);
-    const om = omegaAt(com.y);
-    const xi = com.x + com.vx / om;
-    let stanceL = singleLeg ? singleLeg !== "r" : prevStance === 1;
-    stanceLNow = stanceL;
-    const swingIsL = singleLeg ? singleLeg !== "l" : !stanceL;
-    if (clockDriven) {
-      const half = p.T * 0.5;
-      const readyT = lastSwitch + half * 0.55;
-      const landed = swingIsL ? footGrounded(sim.doll, "l") : footGrounded(sim.doll, "r");
-      if (landed && latchedStance !== (swingIsL ? "l" : "r")) {
-        if (steps > 0 && latchedStance === null) {
-          latchedStance = swingIsL ? "l" : "r";
-          wtModule++;
+  const step = (n) => {
+    for (let k = 0; k < n; k++) {
+      if (sim.finished || t >= dur) return;
+      sim.advance(1);
+      const torso = sim.doll.torso();
+      const rot = torso.rotation();
+      const pitch = Math.asin(Math.max(-1, Math.min(1, 2 * (rot.w * rot.x + rot.y * rot.z))));
+      const av = torso.angvel();
+      readCom(sim.doll, com);
+      const om = omegaAt(com.y);
+      const xi = com.x + com.vx / om;
+      let stanceL = singleLeg ? singleLeg !== "r" : prevStance === 1;
+      stanceLNow = stanceL;
+      const swingIsL = singleLeg ? singleLeg !== "l" : !stanceL;
+      if (clockDriven) {
+        const half = p.T * 0.5;
+        const readyT = lastSwitch + half * 0.55;
+        const landed = swingIsL ? footGrounded(sim.doll, "l") : footGrounded(sim.doll, "r");
+        if (landed && latchedStance !== (swingIsL ? "l" : "r")) {
+          if (steps > 0 && latchedStance === null) {
+            latchedStance = swingIsL ? "l" : "r";
+            wtModule++;
+          }
         }
-      }
-      const mosNow = xi - (com.x + com.vx / om);
-      const stableNow = wtStage === "done" && mosNow > 0;
-      if (stableNow) stableT += dt;
-      else stableT = 0;
-      const stableEnough = stableT >= STABLE_HOLD;
-      const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-      sim.doll.soleXZ("l", footBufL);
-      sim.doll.soleXZ("r", footBufR);
-      if (t - lastDiagT > 0.08) {
-        lastDiagT = t;
-        swapTrace.push({
-          t: +t.toFixed(2),
-          s: +sNow.toFixed(2),
-          swing: swingIsL ? "L" : "R",
-          landed,
-          ready: t >= readyT,
-          sole: +(swingIsL ? footBufL[1] : footBufR[1]).toFixed(3)
-        });
-        if (swapTrace.length > 400) swapTrace.shift();
-      }
-      if (!singleLeg && landed && t >= readyT && stableEnough) {
-        steps++;
-        stanceL = swingIsL;
-        stanceL = swingIsL;
-        prevStance = stanceL ? 1 : 2;
-        stanceSeq += stanceL ? "L" : "R";
+        const mosNow = xi - (com.x + com.vx / om);
+        const stableNow = wtStage === "done" && mosNow > 0;
+        if (stableNow) stableT += dt;
+        else stableT = 0;
+        const stableEnough = stableT >= STABLE_HOLD;
+        const sNow = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
         sim.doll.soleXZ("l", footBufL);
         sim.doll.soleXZ("r", footBufR);
-        const landedX = stanceL ? footBufL[0] : footBufR[0];
-        const landedZ = stanceL ? HIP_Z : -HIP_Z;
-        plantLz = stanceL ? landedZ : plantLz;
-        if (stanceL) {
-          plantL = landedX;
-        } else {
-          plantR = landedX;
+        if (t - lastDiagT > 0.08) {
+          lastDiagT = t;
+          swapTrace.push({
+            t: +t.toFixed(2),
+            s: +sNow.toFixed(2),
+            swing: swingIsL ? "L" : "R",
+            landed,
+            ready: t >= readyT,
+            sole: +(swingIsL ? footBufL[1] : footBufR[1]).toFixed(3)
+          });
+          if (swapTrace.length > 400) swapTrace.shift();
         }
-        if (stanceL) plantL = landedX;
-        else plantR = landedX;
-      }
-    } else {
-      const plantNow = stanceL ? plantL : plantR;
-      if (Math.abs(xi - plantNow) > p.thresh && t - lastSwitch > p.T * 0.5) {
-        stanceL = !stanceL;
-        steps++;
-        lastSwitch = t;
-        if (stanceL) plantL = xi;
-        else plantR = xi;
-        prevStance = stanceL ? 1 : 2;
-        syncComTarget();
-      }
-    }
-    const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
-    const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
-    const inPush = s >= PUSH_FRAC;
-    const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
-    const supB = sim.sup;
-    const supEdgeReal = supB.cx + supB.halfX;
-    const xiNow = com.x + com.vx / om;
-    const mosHere = supEdgeReal - xiNow;
-    const [flNow, frNow] = sim.doll.footLoadFrac(dt);
-    const stanceLoadNow = stanceL ? flNow : frNow;
-    const ROLE_HANDOFF = 0.08;
-    if (roleLatched === null) {
-      if (Math.abs(flNow - frNow) > ROLE_HANDOFF) roleLatched = flNow > frNow ? "l" : "r";
-      else roleLatched = footBufL[0] <= footBufR[0] ? "l" : "r";
-      dbgLog.roleSet = 1;
-    } else {
-      const lockedLoad = roleLatched === "l" ? flNow : frNow;
-      const otherLoad = roleLatched === "l" ? frNow : flNow;
-      if (otherLoad > lockedLoad + ROLE_HANDOFF) {
-        roleLatched = roleLatched === "l" ? "r" : "l";
-        dbgLog.roleSet = 2;
-      }
-    }
-    const loadDiffNow = flNow - frNow;
-    const verdictRaw = balGate.judge(mosHere, loadDiffNow, true);
-    const verdict = balGate.judge(mosHere, loadDiffNow, true);
-    const vHold = THR.vHold;
-    const comSpeed = Math.hypot(com.vx, com.vz);
-    const okHoldV = comSpeed < vHold;
-    const holdDamp = -Math.min(0.5, comSpeed * 2.2) * Math.sign(com.vx || 1);
-    dbgLog.vHold = +comSpeed.toFixed(3);
-    const verdictV = {
-      ...verdict,
-      ok: verdict.ok && okHoldV,
-      why: verdict.ok && !okHoldV ? `\u91CD\u5FC3\u672A\u7A33\u5B9A\uFF08\u901F\u5EA6 ${comSpeed.toFixed(3)} m/s \u2265 ${vHold}\uFF0C\u5148\u51CF\u901F\u518D\u8FC8\uFF09` : verdict.why
-    };
-    if (!verdictV.ok) balBlocked = verdictV.why;
-    else balBlocked = "";
-    const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-    const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
-    let swingX = swingX0;
-    const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
-    const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
-    const swingY = singleLeg ? swingIsL === (singleLeg === "l") ? 0.012 : liftHold : verdictV.ok ? swingYRaw : 0.012;
-    const dtSw = t - lastSwitch;
-    const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
-    const corr = p.kPitch * pitch + p.kRate * av.x;
-    const hold = balanceHold(holdP, {
-      comX: com.x,
-      comY: com.y,
-      comZ: com.z,
-      comVx: com.vx,
-      comVy: com.vy,
-      comVz: com.vz,
-      stanceX: stanceL ? footBufL[0] : footBufR[0],
-      stanceZ: stanceL ? HIP_Z : -HIP_Z,
-      ankleY: com.y - hipDy,
-      bodyMass: totalMass,
-      hipHeight: hipDy,
-      hipFlex: sim.doll.jointAngle(jointIndexByName(sk2, stanceL ? "hip_l" : "hip_r")),
-      kneeFlex: sim.doll.jointAngle(jointIndexByName(sk2, stanceL ? "knee_l" : "knee_r")),
-      singleLeg: singleLeg !== null
-    });
-    const qVip = hold.qVip, qVipDot = hold.qVipDot;
-    const qVmp = hold.qVmp;
-    const vipDegDbg = hold.ankleSag * 57.3;
-    {
-      const side = stanceL ? 0 : 1;
-      const cop = Math.sin(qVip) * COP_HALF_LEN2;
-      sim.doll.setCoP(side, side === 0 === stanceLNow ? cop : 0, COP_HALF_LEN2);
-      dbgLog.copOff = +cop.toFixed(4);
-    }
-    const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
-    const kCritAnkle = hold.kCritAnkle, kCritHip = hold.kCritHip;
-    const copOut = hold.copOut;
-    const bodyMass = totalMass;
-    dbgLog.qVip = +qVip.toFixed(4);
-    dbgLog.vipDot = +qVipDot.toFixed(4);
-    dbgLog.kCritA = +kCritAnkle.toFixed(1);
-    dbgLog.kCritH = +kCritHip.toFixed(1);
-    dbgLog.copOut = +copOut.toFixed(4);
-    syncComTarget();
-    const corrCom = Math.max(-0.45, Math.min(0.45, hold.hipSag + holdDamp));
-    dbgLog.ankleCorr = +vipDegDbg.toFixed(2);
-    dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
-    const inAdjust = t - lastSwitch < ADJUST_MIN;
-    const postGain = inAdjust ? 1 : 0.15;
-    let cmRoll = 0;
-    const cmOn = p.cmBalance > 0 && sim.mod.active("cmBalance", sim.gp.now, 2, null);
-    if (cmOn) {
-      wholeBodyAngularMomentum(sim.doll, com, lbuf);
-      const lz = lbuf[2];
-      const ly = lbuf[1];
-      const dlz = hasL ? (lz - prevLz) / dt : 0;
-      const dly = hasL ? (ly - prevLy) / dt : 0;
-      prevLz = lz;
-      prevLy = ly;
-      hasL = true;
-      cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02 - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
-    }
-    for (const side of ["l", "r"]) {
-      const isStance0 = side === "l" === stanceL;
-      const isStance = roleLatched === side || isStance0;
-      const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
-      if (hipYRef < 0) hipYRef = com.y - hipDy;
-      const hipY = hipYRef;
-      const hipZ = side === "l" ? HIP_Z : -HIP_Z;
-      const footZTarget = side === "l" ? STANCE_Z : -STANCE_Z;
-      const dzWant = footZTarget - hipZ;
-      const sinAb = Math.max(-0.7, Math.min(0.7, dzWant / LEG));
-      const abductFF = Math.asin(sinAb);
-      const planeScale = Math.sqrt(Math.max(0.05, 1 - sinAb * sinAb));
-      const [h, k] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012, planeScale) : ik(hipX, hipY, swingX, swingY, planeScale);
-      const phNow = sim.gp.now;
-      const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
-      const roleCell = isStance ? cStance : cSwing;
-      const stanceLock = p.stanceLock ?? 0;
-      let kneeCmd = k + (isStance ? -Math.abs(absorb) : 0);
-      let hipCmd = isStance ? h + corr + corrCom : h;
-      if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
-        const w = stanceLock;
-        if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
-        if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
-      }
-      if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
-      curOwner = isStance ? `balance(ik+corr${stanceLock > 0 ? "+lock" : ""}${s > 0.5 ? "+push" : ""})` : "step(ik)";
-      if (!isStance) hipCmd = h;
-      setAxis(`hip_${side}`, hipCmd, jHip);
-      if (singleLeg && isStance) kneeCmd += hold.kneeUpright;
-      setAxis(`knee_${side}`, kneeCmd, jKnee);
-      setAxis(`shoulder_${side}`, -h * 0.4, jHip);
-      const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
-      const xi2 = com.x + com.vx / om;
-      const footCX = stanceL ? footBufL[0] : footBufR[0];
-      const comShiftErr = xi2 - footCX;
-      const copGainPhase = Math.abs(s - 0.5) < 0.25 ? 1 : 0.45;
-      const copTau = (p.kCop ?? 0) * copGainPhase * comShiftErr;
-      dbgLog.xi = +xi2.toFixed(3);
-      dbgLog.footCX = +footCX.toFixed(3);
-      dbgLog.copTau = +copTau.toFixed(4);
-      const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
-      const stanceAnkleBase = singleLeg ? 0 : ankleDeg + pushTorque;
-      const vipDeg = isStance ? vipDegDbg : 0;
-      const ankleCmd = isStance ? stanceAnkleBase + vipDeg : verdictV.ok ? ankleDeg : 0;
-      dbgLog.ankleCmdDeg = +ankleCmd.toFixed(2);
-      dbgLog.isStanceDbg = isStance ? 1 : 0;
-      setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
-      if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null) && !singleLeg) {
-        const sw = Math.sin(Math.PI * Math.min(1, s));
-        const dir = isStance ? -1 : 1;
-        const yaw = dir * p.spineSync * sw;
-        dbgLog.sWaist = +(yaw * 57.3).toFixed(2);
-        for (const sj of spineNames) {
-          const sjDesc = sk2.joints[jointIndexByName(sk2, sj)];
-          if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
+        if (!singleLeg && landed && t >= readyT && stableEnough) {
+          steps++;
+          stanceL = swingIsL;
+          stanceL = swingIsL;
+          prevStance = stanceL ? 1 : 2;
+          stanceSeq += stanceL ? "L" : "R";
+          sim.doll.soleXZ("l", footBufL);
+          sim.doll.soleXZ("r", footBufR);
+          const landedX = stanceL ? footBufL[0] : footBufR[0];
+          const landedZ = stanceL ? HIP_Z : -HIP_Z;
+          plantLz = stanceL ? landedZ : plantLz;
+          if (stanceL) {
+            plantL = landedX;
+          } else {
+            plantR = landedX;
+          }
+          if (stanceL) plantL = landedX;
+          else plantR = landedX;
         }
-        setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
-        setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
+      } else {
+        const plantNow = stanceL ? plantL : plantR;
+        if (Math.abs(xi - plantNow) > p.thresh && t - lastSwitch > p.T * 0.5) {
+          stanceL = !stanceL;
+          steps++;
+          lastSwitch = t;
+          if (stanceL) plantL = xi;
+          else plantR = xi;
+          prevStance = stanceL ? 1 : 2;
+          syncComTarget();
+        }
       }
-      const stanceZ = stanceL ? HIP_Z : -HIP_Z;
-      const shiftErrRaw = stanceZ - com.z;
-      if (wtDone && s < 0.05) {
-        wtStage = "APA-back";
-        wtT = 0;
-        wtDone = false;
-      } else if (wtStage === "idle") {
-        wtStage = "APA-back";
-        wtT = 0;
+      const s = Math.max(0, Math.min(1, (t - lastSwitch) / Math.max(0.2, p.T * 0.5)));
+      const sPush = Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
+      const inPush = s >= PUSH_FRAC;
+      const pushTorque = inPush ? (p.anklePush ?? 0) * 2.2 * sPush : 0;
+      const supB = sim.sup;
+      const supEdgeReal = supB.cx + supB.halfX;
+      const xiNow = com.x + com.vx / om;
+      const mosHere = supEdgeReal - xiNow;
+      const [flNow, frNow] = sim.doll.footLoadFrac(dt);
+      const stanceLoadNow = stanceL ? flNow : frNow;
+      const ROLE_HANDOFF = 0.08;
+      if (roleLatched === null) {
+        if (Math.abs(flNow - frNow) > ROLE_HANDOFF) roleLatched = flNow > frNow ? "l" : "r";
+        else roleLatched = footBufL[0] <= footBufR[0] ? "l" : "r";
+        dbgLog.roleSet = 1;
+      } else {
+        const lockedLoad = roleLatched === "l" ? flNow : frNow;
+        const otherLoad = roleLatched === "l" ? frNow : flNow;
+        if (otherLoad > lockedLoad + ROLE_HANDOFF) {
+          roleLatched = roleLatched === "l" ? "r" : "l";
+          dbgLog.roleSet = 2;
+        }
       }
-      if (wtStage !== "done") {
-        wtT += dt;
-        const load = wtLoadOf();
-        if (wtStage === "APA-back" && wtT >= WT.min * WT.apaShare) {
-          wtStage = "APA-toSwing";
+      const loadDiffNow = flNow - frNow;
+      const verdictRaw = balGate.judge(mosHere, loadDiffNow, true);
+      const verdict = balGate.judge(mosHere, loadDiffNow, true);
+      const vHold = THR.vHold;
+      const comSpeed = Math.hypot(com.vx, com.vz);
+      const okHoldV = comSpeed < vHold;
+      const holdDamp = -Math.min(0.5, comSpeed * 2.2) * Math.sign(com.vx || 1);
+      dbgLog.vHold = +comSpeed.toFixed(3);
+      const verdictV = {
+        ...verdict,
+        ok: verdict.ok && okHoldV,
+        why: verdict.ok && !okHoldV ? `\u91CD\u5FC3\u672A\u7A33\u5B9A\uFF08\u901F\u5EA6 ${comSpeed.toFixed(3)} m/s \u2265 ${vHold}\uFF0C\u5148\u51CF\u901F\u518D\u8FC8\uFF09` : verdict.why
+      };
+      if (!verdictV.ok) balBlocked = verdictV.why;
+      else balBlocked = "";
+      const sSw = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
+      const swingX0 = xi + (p.kGamma ?? 0.35) * p.vDes + (p.kVerr ?? 0.25) * (p.vDes - com.vx);
+      let swingX = swingX0;
+      const sSwing = Math.max(0, (Math.min(1, s) - SHIFT_FRAC) / (1 - SHIFT_FRAC));
+      const swingYRaw = s < SHIFT_FRAC ? 0.012 + p.lift * 0.12 * (s / SHIFT_FRAC) : 0.012 + p.lift * Math.sin(Math.PI * sSwing);
+      const swingY = singleLeg ? swingIsL === (singleLeg === "l") ? 0.012 : liftHold : verdictV.ok ? swingYRaw : 0.012;
+      const dtSw = t - lastSwitch;
+      const absorb = Math.min(ABSORB_MAX, p.absorb) * Math.exp(-dtSw / Math.max(0.05, p.absorbTau));
+      const corr = p.kPitch * pitch + p.kRate * av.x;
+      {
+        const [fnn, ftt] = sim.doll.footGrip(stanceL ? 0 : 1, dt);
+        grfRatioNow = fnn > 1 ? ftt / fnn : 0;
+      }
+      const hold = balanceHold(holdP, {
+        comX: com.x,
+        comY: com.y,
+        comZ: com.z,
+        comVx: com.vx,
+        comVy: com.vy,
+        comVz: com.vz,
+        stanceX: stanceL ? footBufL[0] : footBufR[0],
+        stanceZ: stanceL ? HIP_Z : -HIP_Z,
+        ankleY: com.y - hipDy,
+        bodyMass: totalMass,
+        hipHeight: hipDy,
+        hipFlex: sim.doll.jointAngle(jointIndexByName(sk2, stanceL ? "hip_l" : "hip_r")),
+        kneeFlex: sim.doll.jointAngle(jointIndexByName(sk2, stanceL ? "knee_l" : "knee_r")),
+        grfX: grfRatioNow,
+        // ★ GRF 横/竖比（切向力 / 法向力）
+        grfY: 1,
+        singleLeg: singleLeg !== null
+      });
+      const qVip = hold.qVip, qVipDot = hold.qVipDot;
+      const qVmp = hold.qVmp;
+      const vipDegDbg = hold.ankleSag * 57.3;
+      {
+        const side = stanceL ? 0 : 1;
+        dbgLog.grfRatio = +grfRatioNow.toFixed(3);
+        const cop = Math.sin(qVip) * COP_HALF_LEN2;
+        sim.doll.setCoP(side, side === 0 === stanceLNow ? cop : 0, COP_HALF_LEN2);
+        dbgLog.copOff = +cop.toFixed(4);
+      }
+      const hipStiffRatio = (p.kHipStiff ?? 1.6) - 1;
+      const kCritAnkle = hold.kCritAnkle, kCritHip = hold.kCritHip;
+      const copOut = hold.copOut;
+      const bodyMass = totalMass;
+      dbgLog.qVip = +qVip.toFixed(4);
+      dbgLog.vipDot = +qVipDot.toFixed(4);
+      dbgLog.kCritA = +kCritAnkle.toFixed(1);
+      dbgLog.kCritH = +kCritHip.toFixed(1);
+      dbgLog.copOut = +copOut.toFixed(4);
+      syncComTarget();
+      const corrCom = Math.max(-0.45, Math.min(0.45, hold.hipSag + holdDamp));
+      dbgLog.ankleCorr = +vipDegDbg.toFixed(2);
+      dbgLog.hipStiff = +hipStiffRatio.toFixed(4);
+      const inAdjust = t - lastSwitch < ADJUST_MIN;
+      const postGain = inAdjust ? 1 : 0.15;
+      let cmRoll = 0;
+      const cmOn = p.cmBalance > 0 && sim.mod.active("cmBalance", sim.gp.now, 2, null);
+      if (cmOn) {
+        wholeBodyAngularMomentum(sim.doll, com, lbuf);
+        const lz = lbuf[2];
+        const ly = lbuf[1];
+        const dlz = hasL ? (lz - prevLz) / dt : 0;
+        const dly = hasL ? (ly - prevLy) / dt : 0;
+        prevLz = lz;
+        prevLy = ly;
+        hasL = true;
+        cmRoll = -(p.cmBalance * lz + p.cmBalanceD * dlz) * 0.02 - (p.cmBalance * ly + p.cmBalanceD * dly) * 0.02;
+      }
+      for (const side of ["l", "r"]) {
+        const isStance0 = side === "l" === stanceL;
+        const isStance = roleLatched === side || isStance0;
+        const hipX = com.x + (side === "l" ? HIP_Z : -HIP_Z);
+        if (hipYRef < 0) hipYRef = com.y - hipDy;
+        const hipY = hipYRef;
+        const hipZ = side === "l" ? HIP_Z : -HIP_Z;
+        const footZTarget = side === "l" ? STANCE_Z : -STANCE_Z;
+        const dzWant = footZTarget - hipZ;
+        const sinAb = Math.max(-0.7, Math.min(0.7, dzWant / LEG));
+        const abductFF = Math.asin(sinAb);
+        const planeScale = Math.sqrt(Math.max(0.05, 1 - sinAb * sinAb));
+        const [h, k2] = isStance ? ik(hipX, hipY, side === "l" ? plantL : plantR, 0.012, planeScale) : ik(hipX, hipY, swingX, swingY, planeScale);
+        const phNow = sim.gp.now;
+        const cSwing = cell(phNow, "swingLeg"), cStance = cell(phNow, "stanceLeg");
+        const roleCell = isStance ? cStance : cSwing;
+        const stanceLock = p.stanceLock ?? 0;
+        let kneeCmd = k2 + (isStance ? -Math.abs(absorb) : 0);
+        let hipCmd = isStance ? h + corr + corrCom : h;
+        if (isStance && roleCell && stanceLock > 0 && phNow === "step") {
+          const w = stanceLock;
+          if (roleCell.hipDeg != null) hipCmd = hipCmd * (1 - w) + roleCell.hipDeg * Math.PI / 180 * w;
+          if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
+        }
+        if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
+        curOwner = isStance ? `balance(ik+corr${stanceLock > 0 ? "+lock" : ""}${s > 0.5 ? "+push" : ""})` : "step(ik)";
+        if (!isStance) hipCmd = h;
+        setAxis(`hip_${side}`, hipCmd, jHip);
+        if (singleLeg && isStance) kneeCmd += hold.kneeUpright;
+        setAxis(`knee_${side}`, kneeCmd, jKnee);
+        setAxis(`shoulder_${side}`, -h * 0.4, jHip);
+        const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
+        const xi2 = com.x + com.vx / om;
+        const footCX = stanceL ? footBufL[0] : footBufR[0];
+        const comShiftErr = xi2 - footCX;
+        const copGainPhase = Math.abs(s - 0.5) < 0.25 ? 1 : 0.45;
+        const copTau = (p.kCop ?? 0) * copGainPhase * comShiftErr;
+        dbgLog.xi = +xi2.toFixed(3);
+        dbgLog.footCX = +footCX.toFixed(3);
+        dbgLog.copTau = +copTau.toFixed(4);
+        const ankleDeg = isStance ? aStance - aPush * Math.max(0, 1 - 2 * s) : s < 0.5 ? aSwing * (s / 0.5) : -aSwing * (1 - (s - 0.5) / 0.5);
+        const stanceAnkleBase = singleLeg ? 0 : ankleDeg + pushTorque;
+        const vipDeg = isStance ? vipDegDbg : 0;
+        const ankleCmd = isStance ? stanceAnkleBase + vipDeg : verdictV.ok ? ankleDeg : 0;
+        dbgLog.ankleCmdDeg = +ankleCmd.toFixed(2);
+        dbgLog.isStanceDbg = isStance ? 1 : 0;
+        setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
+        if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null) && !singleLeg) {
+          const sw = Math.sin(Math.PI * Math.min(1, s));
+          const dir = isStance ? -1 : 1;
+          const yaw = dir * p.spineSync * sw;
+          dbgLog.sWaist = +(yaw * 57.3).toFixed(2);
+          for (const sj of spineNames) {
+            const sjDesc = sk2.joints[jointIndexByName(sk2, sj)];
+            if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
+          }
+          setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
+          setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
+        }
+        {
+          const sp0 = spineNames[0];
+          const jSp0 = sp0 !== void 0 ? sk2.joints[jointIndexByName(sk2, sp0)] : void 0;
+          if (jSp0 && (p.kPelvis ?? 0) > 0) {
+            setAxis(sp0, hold.pelvisUpright, jSp0, 2);
+            dbgLog.pelvisCmd = +(hold.pelvisUpright * 57.3).toFixed(2);
+          }
+        }
+        const stanceZ = stanceL ? HIP_Z : -HIP_Z;
+        const shiftErrRaw = stanceZ - com.z;
+        if (wtDone && s < 0.05) {
+          wtStage = "APA-back";
           wtT = 0;
-        } else if (wtStage === "APA-toSwing" && wtT >= WT.min * (1 - WT.apaShare)) {
-          wtStage = "toStance";
+          wtDone = false;
+        } else if (wtStage === "idle") {
+          wtStage = "APA-back";
           wtT = 0;
-        } else if (wtStage === "toStance" && load >= THR.loadAccept) {
-          wtStage = "done";
-          wtDone = true;
-          wtModule++;
-        } else if (wtStage === "toStance" && wtT > WT.max) {
-          wtStage = "done";
-          wtDone = true;
+        }
+        if (wtStage !== "done") {
+          wtT += dt;
+          const load = wtLoadOf();
+          if (wtStage === "APA-back" && wtT >= WT.min * WT.apaShare) {
+            wtStage = "APA-toSwing";
+            wtT = 0;
+          } else if (wtStage === "APA-toSwing" && wtT >= WT.min * (1 - WT.apaShare)) {
+            wtStage = "toStance";
+            wtT = 0;
+          } else if (wtStage === "toStance" && load >= THR.loadAccept) {
+            wtStage = "done";
+            wtDone = true;
+            wtModule++;
+          } else if (wtStage === "toStance" && wtT > WT.max) {
+            wtStage = "done";
+            wtDone = true;
+          }
+        }
+        const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
+        const shiftErrRaw2 = copZ - com.z;
+        const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
+        dbgLog.qVmp = +qVmp.toFixed(4);
+        dbgLog.copLatOut = +hold.copLatOut.toFixed(4);
+        dbgLog.ankleEv = +hold.ankleLat.toFixed(3);
+        const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
+        const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
+        setAxis(`hip_${side}`, swingAbduct, jHip, 0);
+        if (hold.ankleLat !== 0 && isStance) {
+          const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
+          setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
         }
       }
-      const copZ = copTargetZ(wtStage, stanceZ, -stanceZ);
-      const shiftErrRaw2 = copZ - com.z;
-      const shiftErr = Math.max(-LAT_MAX_ERR, Math.min(LAT_MAX_ERR, shiftErrRaw2));
-      dbgLog.qVmp = +qVmp.toFixed(4);
-      dbgLog.copLatOut = +hold.copLatOut.toFixed(4);
-      dbgLog.ankleEv = +hold.ankleLat.toFixed(3);
-      const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
-      const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
-      setAxis(`hip_${side}`, swingAbduct, jHip, 0);
-      if (hold.ankleLat !== 0 && isStance) {
-        const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
-        setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
+      dbgLog.s = +s.toFixed(3);
+      dbgLog.swingY = +swingY.toFixed(4);
+      dbgLog.swingX = +swingX.toFixed(3);
+      dbgLog.stanceX = +(stanceL ? footBufL[0] : footBufR[0]).toFixed(3);
+      dbgLog.wtMod = wtModule;
+      dbgLog.latch = latchedStance ? latchedStance === "l" ? 1 : 2 : 0;
+      dbgLog.roleWB = roleLatched === "l" ? 1 : roleLatched === "r" ? 2 : 0;
+      {
+        const [frontLeg, backLeg] = rolesFromFootX(footBufL[0], footBufR[0]);
+        dbgLog.roleFront = frontLeg === "l" ? 1 : 2;
+        dbgLog.roleBack = backLeg === "l" ? 1 : 2;
+        dbgLog.footXL = +footBufL[0].toFixed(3);
+        dbgLog.footXR = +footBufR[0].toFixed(3);
       }
+      dbgLog.balOk = verdictV.ok ? 1 : 0;
+      dbgLog.balStage = verdictV.why;
+      dbgLog.mosX = +mosHere.toFixed(4);
+      dbgLoad = stanceLoadNow;
+      dbgLog.comY = +com.y.toFixed(3);
+      dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+      opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
+      sim.doll.setMotorTargets(out);
+      if (opts.record && opts.data) {
+        opts.data.X.push(Array.from(sim.observation()));
+        opts.data.A.push(Array.from(out));
+      }
+      t += dt;
     }
-    dbgLog.s = +s.toFixed(3);
-    dbgLog.swingY = +swingY.toFixed(4);
-    dbgLog.swingX = +swingX.toFixed(3);
-    dbgLog.stanceX = +(stanceL ? footBufL[0] : footBufR[0]).toFixed(3);
-    dbgLog.wtMod = wtModule;
-    dbgLog.latch = latchedStance ? latchedStance === "l" ? 1 : 2 : 0;
-    dbgLog.roleWB = roleLatched === "l" ? 1 : roleLatched === "r" ? 2 : 0;
-    {
-      const [frontLeg, backLeg] = rolesFromFootX(footBufL[0], footBufR[0]);
-      dbgLog.roleFront = frontLeg === "l" ? 1 : 2;
-      dbgLog.roleBack = backLeg === "l" ? 1 : 2;
-      dbgLog.footXL = +footBufL[0].toFixed(3);
-      dbgLog.footXR = +footBufR[0].toFixed(3);
-    }
-    dbgLog.balOk = verdictV.ok ? 1 : 0;
-    dbgLog.balStage = verdictV.why;
-    dbgLog.mosX = +mosHere.toFixed(4);
-    dbgLoad = stanceLoadNow;
-    dbgLog.comY = +com.y.toFixed(3);
-    dbgLog.hipY = +(com.y - hipDy).toFixed(3);
-    opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
-    sim.doll.setMotorTargets(out);
-    if (opts.record && opts.data) {
-      opts.data.X.push(Array.from(sim.observation()));
-      const rv = new Float64Array(3);
-    }
-    t += dt;
-  }
-  return { x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq };
+  };
+  const result = () => ({ x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq });
+  return {
+    step,
+    get t() {
+      return t;
+    },
+    get steps() {
+      return steps;
+    },
+    result
+  };
 }
+function runCaptureTeacher(sk2, sim, p, opts = {}) {
+  const session = makeTeacherSession(sk2, sim, p, opts);
+  while (!sim.finished && session.t < (opts.dur ?? 8)) session.step(1);
+  return session.result();
+}
+var CAPTURE_DEFAULT = {
+  T: CAPTURE_GAIT.T,
+  vDes: CAPTURE_GAIT.vDes,
+  lift: CAPTURE_GAIT.lift,
+  kv: CAPTURE_GAIT.kv,
+  kPitch: CAPTURE_GAIT.kPitch,
+  kRate: CAPTURE_GAIT.kRate,
+  thresh: CAPTURE_GAIT.thresh,
+  spineSync: CAPTURE_GAIT.spineSync,
+  kCop: CAPTURE_GAIT.kCop,
+  // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
+  kWtX: 0,
+  kWtVx: 0,
+  kVipP: 60,
+  kVipD: 5,
+  kVmpP: 14,
+  kVmpD: 3,
+  cmBalance: 0,
+  cmBalanceD: 0,
+  absorb: CAPTURE_GAIT.absorb,
+  absorbTau: CAPTURE_GAIT.absorbTau,
+  // ★★ 侧向**不能是 0**：`probe-capture` 用 kLat=0 时 1.45s 就倒，
+  //   `probe-arch` 用 3.5 时能跑 3.1s。之前两者被当成同一个 teacher 比过。
+  kLat: 3.5,
+  kLatV: 1.2,
+  kLatSwing: 0.1,
+  stancePush: 0.18,
+  stanceLock: 0.6,
+  reach: 0.5,
+  ankleSwing: 12,
+  anklePush: 15,
+  ankleStance: 0
+};
 
 // tools/probe-balance.ts
 var require2 = createRequire(import.meta.url);
@@ -17406,20 +17492,7 @@ function row(name, g, teacher) {
     terms: t
   };
 }
-var FB = {
-  T: CAPTURE_GAIT.T,
-  vDes: CAPTURE_GAIT.vDes,
-  lift: CAPTURE_GAIT.lift,
-  kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch,
-  kRate: CAPTURE_GAIT.kRate,
-  thresh: CAPTURE_GAIT.thresh,
-  absorb: CAPTURE_GAIT.absorb,
-  absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 0,
-  kLatV: 0,
-  kLatSwing: 0
-};
+var FB = CAPTURE_DEFAULT;
 var zero = new Float32Array(brainParamCount(shape));
 var rand = new Float32Array(brainParamCount(shape));
 for (let i = 0; i < rand.length; i++) rand[i] = Math.sin(i * 0.37) * 0.25;

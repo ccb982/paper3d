@@ -332,7 +332,25 @@ export const JOINT_ORDER: readonly string[] = [
  */
 export function jointIndexByName(sk: Skeleton, name: string): number {
   for (let i = 0; i < sk.joints.length; i++) if (sk.joints[i]!.name === name) return i;
-  return JOINT_ORDER.indexOf(name);
+  // ★★ 查不到就返回 -1，**不再回退到 JOINT_ORDER**。
+  //
+  //   旧写法 `return JOINT_ORDER.indexOf(name)` 是个**静默指错关节**的陷阱：
+  //   `JOINT_ORDER` 是硬编码常量，含 `foot_l`/`foot_r`（索引 9/10），
+  //   但 `ankleEnabled=false` 时骨架里**根本没有踝关节**，
+  //   真实 `sk.joints` 只有 12 个 ⇒ 索引 9/10 实际是 **`spine1`/`spine2`**。
+  //   ⇒ 任何 `jointIndexByName(sk,'foot_l')` 都会拿到 spine1，
+  //     指令下到腰上，而代码/探针都以为是踝。已实测踩到：
+  //     "踝 CoP 权限"那一组数（a_x/a_理论≈1.2~1.7）其实是 spine1 屈伸的权限；
+  //     "踝 CoP 反馈站满 20s"其实是 spine1 的 0.2° 指令。
+  //
+  //   与 `JOINT_ORDER.indexOf` 对脊柱的坑是同一个病（见 teacher.setAxis 的注释），
+  //   只不过脊柱那次是 -1（静默不驱动），这次是**指错**（更坏：看起来在工作）。
+  return -1;
+}
+
+/** 该关节在**这个骨架**里是否真的存在（UI/探针据此说明"没有踝"，而不是默默下错地方） */
+export function hasJoint(sk: Skeleton, name: string): boolean {
+  return sk.joints.some((j) => j.name === name);
 }
 
 /** 该骨架里实际存在的脊柱关节名（spine1..spineK-1）；没有分段时返回空 */

@@ -6,6 +6,7 @@
 
 import type { GenStat } from '../core/evolution';
 import type { SimMode } from '../core/sim';
+import type { HoldSystem, TeacherDiag } from '../core/teacher';
 
 export interface HudHooks {
   onPause: () => void;
@@ -20,6 +21,12 @@ export interface HudHooks {
   onBudget: (v: number) => void;
   onSpeed: (v: number) => void;
   onPhase: (mode: SimMode) => void;
+  /** ★ 驱动源切换：ES 大脑 ↔ 手写平衡维持系统（调平衡时必须切到 teacher） */
+  onDriver: (d: 'brain' | 'teacher') => void;
+  /** ★ 单腿站立：强制支撑腿 + 不换脚（解耦「站稳」与「迈腿」） */
+  onSingleLeg: (side: 'l' | 'r' | null, liftHold: number) => void;
+  /** ★ 回合时长（改它要重建 Sim） */
+  onDur: (d: number) => void;
   /** ★ 步态奖励可调（用户 2026-10-01） */
   onGaitTune: (o: {
     velTrack?: number; lift?: number; single?: number; jointMove?: number;
@@ -31,6 +38,8 @@ export interface HudHooks {
 export interface HudState {
   paused: boolean;
   mode: 'walk' | 'fight' | 'stand';
+  driver: 'brain' | 'teacher';
+  singleLeg: 'l' | 'r' | null;
   gen: number;
   evaluated: number;
   population: number;
@@ -62,6 +71,9 @@ export class Hud {
   private readonly ctx: CanvasRenderingContext2D;
   private history: GenStat[] = [];
   private lastPaintedGen = -1;
+  private ownAxes: string[] = [];
+  private ownParts: [string, string][] = [];
+  private ownBuilt = false;
 
   constructor(hooks: HudHooks) {
     this.el = {
@@ -74,7 +86,20 @@ export class Hud {
     vMHipL: $('v-mhip_l'), vMHipR: $('v-mhip_r'), vMKneeL: $('v-mknee_l'), vMKneeR: $('v-mknee_r'),
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
+      // ── 「模块归属」面板（用户 2026-10-03）
+      ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'),
+      ownGate: $('own-gate'), ownGrid: $('own-grid'),
+      ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
     };
+    // 归属表头：轴 0/1/2 与身体部位一一对应（与 skeleton 的 AXIS_* 约定一致）
+    this.ownAxes = ['轴0 内外旋', '轴1 外展', '轴2 屈伸'];
+    this.ownParts = [
+      ['neck', '颈'], ['shoulder_l', '左肩'], ['shoulder_r', '右肩'],
+      ['elbow_l', '左肘'], ['elbow_r', '右肘'],
+      ['hip_l', '左髋'], ['hip_r', '右髋'], ['knee_l', '左膝'], ['knee_r', '右膝'],
+      ['foot_l', '左踝'], ['foot_r', '右踝'],
+      ['spine1', '腰1'], ['spine2', '腰2'], ['spine3', '腰3'],
+    ];
     this.chart = $('chart') as HTMLCanvasElement;
     const ctx = this.chart.getContext('2d');
     if (!ctx) throw new Error('[hud] 无法获取 2d 上下文');
@@ -104,8 +129,25 @@ export class Hud {
     bindRange('i-sigma', 'vSigma', hooks.onSigma, (v) => v.toFixed(2));
     bindRange('i-budget', 'vBudget', hooks.onBudget, (v) => `${v.toFixed(0)} ms`);
     bindRange('i-speed', 'vSpeed', hooks.onSpeed, (v) => `${v.toFixed(1)}×`);
-    bindRange('i-speedgoal', 'vPhase', (v) => hooks.onPhase(v < 0.5 ? 'walk' : 'fight'),
-      (v) => (v < 0.5 ? '学走路' : '学战斗'));
+    // ★ 三档：走路 / **站立** / 战斗。站立必须在里面 —— 它是平衡的验收口径。
+    const PHASE = ['walk', 'stand', 'fight'] as const;
+    bindRange('i-speedgoal', 'vPhase',
+      (v) => hooks.onPhase(PHASE[Math.round(v)] ?? 'stand'),
+      (v) => ({ walk: '学走路', stand: '学站立', fight: '学战斗' })[PHASE[Math.round(v)] ?? 'stand']);
+
+    const DRV = ['brain', 'teacher'] as const;
+    bindRange('i-driver', 'vDriver',
+      (v) => hooks.onDriver(DRV[Math.round(v)] ?? 'teacher'),
+      (v) => (DRV[Math.round(v)] === 'teacher' ? '手写平衡模块' : 'ES 神经网络'));
+
+    const SL = ['l', 'r', null] as const;
+    let lift = 0.25;
+    const pushSL = (v: number) => hooks.onSingleLeg(SL[Math.round(v)] ?? null, lift);
+    bindRange('i-singleleg', 'vSingleLeg', pushSL,
+      (v) => ({ l: '左腿支撑', r: '右腿支撑', null: '双脚（正常迈步）' })[Math.round(v)] ?? '双脚');
+    bindRange('i-lifthold', 'vLiftHold', (v) => { lift = v; pushSL(Number((document.getElementById('i-singleleg') as HTMLInputElement).value)); },
+      (v) => v.toFixed(2));
+    bindRange('i-dur', 'vDur', (v) => hooks.onDur(v), (v) => `${v.toFixed(0)} s`);
 
     // ---- 步态奖励可调项（用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项"）----
     bindRange('i-veltrack', 'vVelTrack', (v) => hooks.onGaitTune({ velTrack: v }), (v) => v.toFixed(2));
@@ -122,6 +164,70 @@ export class Hud {
     }
   }
 
+  /**
+   * ★★ 「模块归属」面板 —— 区分**平衡维持系统** / **迈步系统** / 伺服，
+   *    并标出前腿 / 后腿 / 承重腿（用户 2026-10-03）。
+   *
+   *    数据全部来自 `TeacherSession.diag`，**前端不自己推断归属** ——
+   *    否则 UI 说的和控制器实际做的是两件事，又是一处失同步。
+   */
+  setOwnership(d: TeacherDiag | null): void {
+    const e = this.el;
+    if (!d) {
+      e.ownGate.textContent = '平衡门 —（当前不是 teacher 驱动）';
+      e.ownGate.dataset.ok = '1';
+      if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
+      for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
+      e.ownPhase.textContent = '—'; e.ownGround.textContent = '—'; e.ownMos.textContent = '—';
+      return;
+    }
+
+    // ---- 腿角色：前腿 / 后腿 / 承重腿 / 摆动腿 ----
+    for (const [el, side] of [[e.ownRoleL, 'l'], [e.ownRoleR, 'r']] as [HTMLElement, 'l' | 'r'][]) {
+      const tags: string[] = [];
+      if (d.frontLeg === side) tags.push('前腿');
+      if (d.backLeg === side) tags.push('后腿');
+      if (d.stanceLeg === side) tags.push('承重');
+      else tags.push('摆动');
+      tags.push(side === 'l' ? (d.groundL ? '左脚接地' : '左脚离地') : (d.groundR ? '右脚接地' : '右脚离地'));
+      // 承重腿优先高亮（蓝=前后，红=承重，橙底=承重）
+      el.dataset.r = d.stanceLeg === side ? 'stance' : (d.frontLeg === side ? 'front' : '');
+      el.querySelector('span')!.textContent = tags.join(' · ');
+    }
+
+    const PH = { both: '双脚支撑', step: '摆动相', adjust: '调整相' } as Record<string, string>;
+    e.ownPhase.textContent = PH[d.phase] ?? d.phase;
+    e.ownGround.textContent = `${(d.groundL ? 1 : 0) + (d.groundR ? 1 : 0)} 只`;
+    e.ownMos.textContent = `${(d.mosX * 1000).toFixed(0)} mm`;
+    e.ownGate.textContent = d.balOk
+      ? `平衡门 放行（可抬腿）· 本拍下发 ${d.nAxes} 轴`
+      : `平衡门 挡住：${d.balWhy || '未知'} → 摆动腿压回地面`;
+    e.ownGate.dataset.ok = d.balOk ? '1' : '0';
+
+    // ---- 关节 × 轴 归属网格（结构只建一次，之后只改 class/text）----
+    if (!this.ownBuilt) {
+      const head = '<tr><th>部位</th>' + this.ownAxes.map((a) => `<th>${a}</th>`).join('') + '</tr>';
+      const rows = this.ownParts.map(([key, label]) =>
+        `<tr><td class="jn">${label}<span class="hint"> ${key}</span></td>`
+        + [0, 1, 2].map((ax) => `<td class="ax"><span class="own-cell sw-none" id="oc-${key}-${ax}">—</span></td>`).join('')
+        + '</tr>').join('');
+      e.ownGrid.innerHTML = head + rows;
+      this.ownBuilt = true;
+    }
+    const SW: Record<HoldSystem, string> = { hold: 'sw-hold', step: 'sw-step', servo: 'sw-servo' };
+    for (const [key] of this.ownParts) {
+      for (let ax = 0; ax < 3; ax++) {
+        const cell = document.getElementById(`oc-${key}-${ax}`) as HTMLElement | null;
+        if (!cell) continue;
+        const k = `${key}/${ax}`;
+        const sys = d.sys.get(k);
+        cell.className = `own-cell ${sys ? SW[sys] : 'sw-none'}`;
+        cell.textContent = sys ? (d.owner.get(k) ?? sys) : '—';
+        cell.title = sys ? `${k} → ${sys}｜${d.owner.get(k) ?? ''}｜${d.ang[k] ?? 0} rad` : `${k} 本拍未驱动`;
+      }
+    }
+  }
+
   setStatus(text: string, isError = false): void {
     this.el.boot.textContent = text;
     this.el.boot.classList.toggle('err', isError);
@@ -131,7 +237,10 @@ export class Hud {
 
   update(s: HudState): void {
     const e = this.el;
-    e.stage.textContent = s.mode === 'walk' ? '学走路' : (s.mode === 'fight' ? '学战斗' : '学站立');
+    e.stage.textContent = (s.mode === 'walk' ? '学走路' : (s.mode === 'fight' ? '学战斗' : '学站立'))
+      + (s.driver === 'teacher'
+        ? ` · ${s.singleLeg === null ? '双脚' : (s.singleLeg === 'l' ? '左腿支撑' : '右腿支撑')}`
+        : ' · ES 脑');
     e.gen.textContent = String(s.gen);
     e.pop.textContent = `${s.evaluated} / ${s.population}`;
     e.best.textContent = Number.isFinite(s.bestNow) ? s.bestNow.toFixed(2) : '—';

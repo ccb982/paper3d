@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { buildSkeleton, DEFAULT_CONFIG, JOINT_ORDER, jointIndexByName } from '../src/core/skeleton';
 import { Sim, DEFAULT_SIM } from '../src/core/sim';
 import { shapeForJoints } from '../src/core/brain';
-import { runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
+import { CAPTURE_DEFAULT, runCaptureTeacher, type CaptureParams } from '../src/core/teacher';
 import { footGrounded, readCom, newCom } from '../src/core/posture';
 import { HIP_Z } from '../src/core/teacher';
 import { LegEventTracker, EVENT_LABEL, WT, THR, BalanceGate } from '../src/core/gaitEvents';
@@ -24,16 +24,11 @@ const cTmp = newCom();
 const balGateDbg = new BalanceGate();
 let gateDbg = { ok: false, mos: 0, load: 0, holdT: 0, why: '(未初始化)' };
 const shape = shapeForJoints(sk.joints.length);
-const FB: CaptureParams = {
-  T: CAPTURE_GAIT.T, vDes: CAPTURE_GAIT.vDes, lift: CAPTURE_GAIT.lift, kv: CAPTURE_GAIT.kv,
-  kPitch: CAPTURE_GAIT.kPitch, kRate: CAPTURE_GAIT.kRate, thresh: CAPTURE_GAIT.thresh,
-  spineSync: CAPTURE_GAIT.spineSync, kCop: CAPTURE_GAIT.kCop, kWtX: 0, kWtVx: 0,   // ★ 髋不再是 CoP 主力 ⇒ 直推 CoM 的增益归零（VIP 结构接管）
-  kVipP: 60, kVipD: 5,   // ★ 单腿站立扫描最优（存活 1.28→1.77s、倾角 150°→36°） kAnkleStiff: 0.5, kHipStiff: 1.6, kHipShare: 0.25,
-  kVmpP: 14, kVmpD: 3, cmBalance: 0, cmBalanceD: 0,
-  absorb: CAPTURE_GAIT.absorb, absorbTau: CAPTURE_GAIT.absorbTau,
-  kLat: 3.5, kLatV: 1.2, kLatSwing: 0.10, stancePush: 0.18, stanceLock: 0.6, reach: 0.5,
-  ankleSwing: 12, anklePush: 15, ankleStance: 0,
-};
+/** // ★ 参数来自 core/teacher.ts 的 CAPTURE_DEFAULT（唯一真源）。
+//   此前每个探针各内联一份 FB，实测互不相同：probe-capture 的 kLat=0（侧向全关）
+//   与 probe-arch 的 kLat=3.5 是两个不同的控制器，却一直被当成同一个在比。
+ */
+const FB: CaptureParams = CAPTURE_DEFAULT;
 
 console.log('=== 架构体检：每个关节轴的「唯一 owner」===\n');
 const sim = new Sim(sk, shape, { ...DEFAULT_SIM, mode: 'walk', duration: 8, gaitHz: 1 / FB.T });
