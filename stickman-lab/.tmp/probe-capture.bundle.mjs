@@ -6373,7 +6373,7 @@ var JOINT_ORDER = [
 ];
 function jointIndexByName(sk2, name) {
   for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
-  return JOINT_ORDER.indexOf(name);
+  return -1;
 }
 function spineJointNames(sk2) {
   const out = [];
@@ -15280,6 +15280,7 @@ var STAND_W = {
   tiltRate: 0.05
 };
 var DEFAULT_SIM = {
+  driver: "brain",
   physicsHz: 120,
   controlHz: 60,
   duration: 6,
@@ -15654,6 +15655,13 @@ var Sim = class {
   inDomainTicks = 0;
   balanceTicks = 0;
   constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+    const n = sk2.joints.length;
+    const expIn = 36 + 6 * n, expOut = 3 * n;
+    if (shape.inputs !== expIn || shape.outputs !== expOut) {
+      throw new Error(
+        `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
+      );
+    }
     this.sk = sk2;
     this.cfg = cfg;
     this.shape = shape;
@@ -16071,6 +16079,7 @@ var Sim = class {
       x[k + 11 + s2 * 3] = dy;
       x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
     }
+    if (this.cfg.driver === "controller") return;
     brainForward(this.shape, p, x, this.hidden, this.out);
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
     doll.setMotorTargets(this.motor);
@@ -16953,6 +16962,7 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
     const o = ji * 3 + ax;
     if (o < 0 || !j) return;
     ownerLog.set(joint + "/" + ax, curOwner);
+    sysLog.set(joint + "/" + ax, curSys);
     angLog[joint + "/" + ax] = +ang.toFixed(4);
     const span = Math.max(Math.abs(j.minRad[ax]), Math.abs(j.maxRad[ax]));
     if (span <= 1e-6) return;
@@ -16961,9 +16971,28 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
   };
   let nAxes = 0;
   let curOwner = "?";
+  let curSys = "servo";
+  const sysLog = /* @__PURE__ */ new Map();
   const ownerLog = /* @__PURE__ */ new Map();
   const hipW = new Float64Array(3);
   const angLog = {};
+  const sys = /* @__PURE__ */ new Map();
+  const diag = {
+    sys,
+    owner: ownerLog,
+    ang: angLog,
+    frontLeg: "l",
+    backLeg: "r",
+    stanceLeg: "l",
+    swingLeg: "r",
+    groundL: true,
+    groundR: true,
+    phase: "both",
+    nAxes: 0,
+    balOk: true,
+    balWhy: "",
+    mosX: 0
+  };
   const dbgLog = {};
   const hipDy = p.hipDy ?? HIP_DY;
   let hipYRef = -1;
@@ -16990,6 +17019,11 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
   const step = (n) => {
     for (let k = 0; k < n; k++) {
       if (sim.finished || t >= dur) return;
+      nAxes = 0;
+      ownerLog.clear();
+      sysLog.clear();
+      for (const k2 of Object.keys(angLog)) delete angLog[k2];
+      curOwner = "\u2014";
       sim.advance(1);
       const torso = sim.doll.torso();
       const rot = torso.rotation();
@@ -17195,11 +17229,15 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
           if (roleCell.kneeDeg != null) kneeCmd = kneeCmd * (1 - w) + roleCell.kneeDeg * Math.PI / 180 * w;
         }
         if (isStance) hipCmd += (p.stancePush ?? 0) * Math.max(0, (s - PUSH_FRAC) / (1 - PUSH_FRAC));
+        curSys = isStance ? "hold" : "servo";
         curOwner = isStance ? `balance(ik+corr${stanceLock > 0 ? "+lock" : ""}${s > 0.5 ? "+push" : ""})` : "step(ik)";
         if (!isStance) hipCmd = h;
+        curSys = "hold";
         setAxis(`hip_${side}`, hipCmd, jHip);
         if (singleLeg && isStance) kneeCmd += hold.kneeUpright;
+        curSys = "hold";
         setAxis(`knee_${side}`, kneeCmd, jKnee);
+        curSys = "hold";
         setAxis(`shoulder_${side}`, -h * 0.4, jHip);
         const aStance = p.ankleStance ?? 0, aPush = p.anklePush ?? 0, aSwing = p.ankleSwing ?? 0;
         const xi2 = com.x + com.vx / om;
@@ -17216,6 +17254,7 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
         const ankleCmd = isStance ? stanceAnkleBase + vipDeg : verdictV.ok ? ankleDeg : 0;
         dbgLog.ankleCmdDeg = +ankleCmd.toFixed(2);
         dbgLog.isStanceDbg = isStance ? 1 : 0;
+        curSys = "hold";
         setAxis(`foot_${side}`, ankleCmd * Math.PI / 180, jFoot);
         if (p.spineSync > 0 && sim.mod.active("spineSync", sim.gp.now, 2, null) && !singleLeg) {
           const sw = Math.sin(Math.PI * Math.min(1, s));
@@ -17224,8 +17263,10 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
           dbgLog.sWaist = +(yaw * 57.3).toFixed(2);
           for (const sj of spineNames) {
             const sjDesc = sk2.joints[jointIndexByName(sk2, sj)];
-            if (sjDesc) setAxis(sj, yaw * 0.6, sjDesc, 0);
+            if (sjDesc) curSys = "servo";
+            setAxis(sj, yaw * 0.6, sjDesc, 0);
           }
+          curSys = "step";
           setAxis("hip_l", -dir * p.spineSync * 0.5 * sw, jHip, 1);
           setAxis("hip_r", dir * p.spineSync * 0.5 * sw, jHip, 1);
         }
@@ -17233,6 +17274,7 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
           const sp0 = spineNames[0];
           const jSp0 = sp0 !== void 0 ? sk2.joints[jointIndexByName(sk2, sp0)] : void 0;
           if (jSp0 && (p.kPelvis ?? 0) > 0) {
+            curSys = "hold";
             setAxis(sp0, hold.pelvisUpright, jSp0, 2);
             dbgLog.pelvisCmd = +(hold.pelvisUpright * 57.3).toFixed(2);
           }
@@ -17273,9 +17315,13 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
         dbgLog.ankleEv = +hold.ankleLat.toFixed(3);
         const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
         const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
+        curSys = "step";
+        curOwner = isStance ? "balance(abductFF+latCorr)" : "step(abductFF+swing)";
         setAxis(`hip_${side}`, swingAbduct, jHip, 0);
         if (hold.ankleLat !== 0 && isStance) {
           const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
+          curSys = "hold";
+          curOwner = "balance(ankleLat)";
           setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
         }
       }
@@ -17299,6 +17345,23 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
       dbgLoad = stanceLoadNow;
       dbgLog.comY = +com.y.toFixed(3);
       dbgLog.hipY = +(com.y - hipDy).toFixed(3);
+      {
+        const [fL, bL] = rolesFromFootX(footBufL[0] ?? 0, footBufR[0] ?? 0);
+        const swingSide = stanceL ? "r" : "l";
+        diag.frontLeg = fL;
+        diag.backLeg = bL;
+        diag.stanceLeg = stanceL ? "l" : "r";
+        diag.swingLeg = swingSide;
+        diag.groundL = sim.doll.footGrounded(0);
+        diag.groundR = sim.doll.footGrounded(1);
+        diag.phase = sim.gp.now;
+        diag.nAxes = nAxes;
+        diag.balOk = verdictV.ok;
+        diag.balWhy = verdictV.why;
+        diag.mosX = mosHere;
+        sys.clear();
+        for (const [k2, v] of sysLog) sys.set(k2, v);
+      }
       opts.onFrame?.(t, stanceL, s, ownerLog, curOwner, angLog, dbgLog);
       sim.doll.setMotorTargets(out);
       if (opts.record && opts.data) {
@@ -17311,6 +17374,7 @@ function makeTeacherSession(sk2, sim, p, opts = {}) {
   const result = () => ({ x: sim.distance, alive: !sim.fallen, steps, t, n: opts.data?.X.length ?? 0, swapTrace, stanceSeq });
   return {
     step,
+    diag,
     get t() {
       return t;
     },

@@ -12,7 +12,7 @@ import {
 } from './core/skeleton';
 import { shapeForJoints, type BrainShape } from './core/brain';
 import { DEFAULT_TRAINER, Trainer } from './core/evolution';
-import { makeTeacherSession, CAPTURE_DEFAULT, type TeacherSession } from './core/teacher';
+import { Controller, DEFAULT_CONTROLLER, type ControllerConfig } from './core/controller';
 import { DEFAULT_LAB, labHash, labFromQuery, labToQuery, type LabState } from './core/lab';
 import { DEFAULT_SIM, Sim, type SimConfig, type SimMode } from './core/sim';
 import { packGenome, unpackGenome } from './core/genome';
@@ -176,17 +176,20 @@ let stepsPerSec = 0;
  *   `balanceHold` 那套平衡维持系统**。现在改成同一个 `TeacherSession` 分帧推进，
  *   网页与 `tools/probe-*.ts` 跑的是同一份代码。
  */
-let session: TeacherSession | null = null;
+let session: Controller | null = null;
 
+/**
+ * ★ 重建控制器。`Sim` 必须以 `driver:'controller'` 跑，
+ *   否则 `controlTick` 会把控制器的马达目标覆盖成零基因组的输出
+ *   （历史事故：控制器全程开环，表现为"增益扫描所有行结果一样"）。
+ */
 function resetSession(): void {
-  const dur = state.dur;
   showcase.begin(trainer.showcase());
-  session = makeTeacherSession(sk, showcase, CAPTURE_DEFAULT, {
-    dur,
-    clockDriven: true,
-    singleLeg: state.singleLeg,
-    liftHold: state.liftHold,
-  });
+  showcase.cfg.driver = 'controller';
+  session = new Controller(sk, showcase, {
+    ...DEFAULT_CONTROLLER,
+    gait: { ...DEFAULT_CONTROLLER.gait, singleLeg: state.singleLeg, liftHold: state.liftHold },
+  } as ControllerConfig);
 }
 
 function frame(now: number): void {
@@ -206,10 +209,19 @@ function frame(now: number): void {
     const want = Math.max(1, Math.round(dt * DEFAULT_SIM.physicsHz * state.speed));
     if (state.driver === 'teacher') {
       if (!session) resetSession();
-      session!.step(want);
-      if (showcase.finished) resetSession();
+      // 每个控制拍跑一次控制器，其余物理步只推进
+      const cdt = 1 / showcase.cfg.controlHz;
+      const per = Math.max(1, Math.round(1 / showcase.cfg.physicsHz / cdt));
+      for (let k = 0; k < Math.max(1, Math.round(want / per)); k++) {
+        if (showcase.finished) { resetSession(); break; }
+        const out = session!.step(cdt);
+        showcase.doll.setMotorTargets(out);
+        session!.soleClearance('l'); session!.soleClearance('r');
+        for (let q = 0; q < per; q++) showcase.advance(1);
+      }
     } else {
       session = null;
+      showcase.cfg.driver = 'brain';
       showcase.advance(want);
       if (showcase.finished) showcase.begin(trainer.showcase());
     }
@@ -238,12 +250,9 @@ function frame(now: number): void {
   hud.setHistory(trainer.history);
   // ★★ 「模块归属」面板：平衡维持 vs 迈步 + 前后腿/承重腿（用户 2026-10-03）。
   //   数据全部来自 teacher 会话自己的 diag，UI 不自己推断归属。
-  if (state.driver === 'teacher') {
-    if (!session) resetSession();
-    hud.setOwnership(session!.diag);
-  } else {
-    hud.setOwnership(null);
-  }
+  // ★ 只把 `Controller` 的快照交给 UI —— 冒烟测试读的是同一份对象
+  if (state.driver === 'teacher' && session) hud.setOwnership(session.snapshot);
+  else hud.setOwnership(null);
   //★★ 配置指纹：状态栏常驻显示，探针也打印同一个串 —— 两边对不上就能一眼看出。
   hud.setStatus(`配置 ${labHash(state)}  ·  ${labToQuery(state)}`);
   hud.update({

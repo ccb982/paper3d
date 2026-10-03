@@ -15280,6 +15280,7 @@ var STAND_W = {
   tiltRate: 0.05
 };
 var DEFAULT_SIM = {
+  driver: "brain",
   physicsHz: 120,
   controlHz: 60,
   duration: 6,
@@ -15654,6 +15655,13 @@ var Sim = class {
   inDomainTicks = 0;
   balanceTicks = 0;
   constructor(sk2, shape2 = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+    const n = sk2.joints.length;
+    const expIn = 36 + 6 * n, expOut = 3 * n;
+    if (shape2.inputs !== expIn || shape2.outputs !== expOut) {
+      throw new Error(
+        `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape2.inputs}\u2192${shape2.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
+      );
+    }
     this.sk = sk2;
     this.cfg = cfg;
     this.shape = shape2;
@@ -16071,6 +16079,7 @@ var Sim = class {
       x[k + 11 + s2 * 3] = dy;
       x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
     }
+    if (this.cfg.driver === "controller") return;
     brainForward(this.shape, p, x, this.hidden, this.out);
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
     doll.setMotorTargets(this.motor);
@@ -17363,10 +17372,12 @@ function makeTeacherSession(sk2, sim2, p, opts = {}) {
         const latCorr = hold.hipAbd + (isStance ? cmRoll : -cmRoll * 0.3);
         const swingAbduct = isStance ? abductFF + latCorr : abductFF + (p.kLatSwing ?? 0);
         curSys = "step";
+        curOwner = isStance ? "balance(abductFF+latCorr)" : "step(abductFF+swing)";
         setAxis(`hip_${side}`, swingAbduct, jHip, 0);
         if (hold.ankleLat !== 0 && isStance) {
           const aCmd = Math.max(-14, Math.min(14, hold.ankleLat * 57.3));
-          curSys = "step";
+          curSys = "hold";
+          curOwner = "balance(ankleLat)";
           setAxis(`foot_${side}`, aCmd * Math.PI / 180, jFoot, 0);
         }
       }

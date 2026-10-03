@@ -89,6 +89,19 @@ export const STAND_W = {
 
 
 export interface SimConfig {
+  /**
+   * ★★ **谁在驱动关节**（2026-10-03）。
+   *
+   *   · `'brain'`（默认）：`controlTick` 调 `brainForward` 并写马达目标（ES 训练路径）
+   *   · `'controller'`：**不写**马达目标 —— 由外部的 `Controller` 负责
+   *     （`controller.step()` 返回仲裁结果，调用方自己 `setMotorTargets`）
+   *
+   *   ★ 为什么必须显式开关：`controlTick` 原本无条件 `setMotorTargets(this.motor)`，
+   *     会把 `Controller` 刚写进去的目标**覆盖成零基因组的输出** ⇒
+   *     控制器退化成开环，而所有指标看起来"正常"（增益扫描 16 行逐位相同）。
+   *     这类"被静默覆盖"只有靠显式的所有权声明才能避免。
+   */
+  driver: 'brain' | 'controller';
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
   physicsHz: number;
   /** 控制（决策）频率；网络只在控制周期被调用 */
@@ -184,6 +197,7 @@ export interface SimConfig {
 }
 
 export const DEFAULT_SIM: SimConfig = {
+  driver: 'brain',
   physicsHz: 120,
   controlHz: 60,
   duration: 6,
@@ -944,6 +958,10 @@ export class Sim {
 
     // ---- 前向 → 马达 ----
     // ★ 输出语义 = 目标**关节角**（不是角速度），见 ragdoll.setMotorTargets / posRefScale
+    //   ⚠ `driver === 'controller'` 时**跳过**：马达目标由 `Controller` 拥有。
+    //     这里若继续写，就会把控制器的输出覆盖掉（历史事故：控制器全程开环，
+    //     表现为"增益扫描所有行结果一样"）。
+    if (this.cfg.driver === 'controller') return;
     brainForward(this.shape, p, x, this.hidden, this.out);
     for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
     doll.setMotorTargets(this.motor);

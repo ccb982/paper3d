@@ -6,7 +6,7 @@
 
 import type { GenStat } from '../core/evolution';
 import type { SimMode } from '../core/sim';
-import type { HoldSystem, TeacherDiag } from '../core/teacher';
+import type { RigSnapshot, SystemTag } from '../core/rigState';
 
 export interface HudHooks {
   onPause: () => void;
@@ -90,6 +90,7 @@ export class Hud {
       ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'),
       ownGate: $('own-gate'), ownGrid: $('own-grid'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
+      ownAlpha: $('own-alpha'), ownCrit: $('own-crit'),
     };
     // 归属表头：轴 0/1/2 与身体部位一一对应（与 skeleton 的 AXIS_* 约定一致）
     this.ownAxes = ['轴0 内外旋', '轴1 外展', '轴2 屈伸'];
@@ -165,16 +166,17 @@ export class Hud {
   }
 
   /**
-   * ★★ 「模块归属」面板 —— 区分**平衡维持系统** / **迈步系统** / 伺服，
-   *    并标出前腿 / 后腿 / 承重腿（用户 2026-10-03）。
+   * ★★ 「模块归属 + 状态」面板 —— **只消费 `RigSnapshot`**。
    *
-   *    数据全部来自 `TeacherSession.diag`，**前端不自己推断归属** ——
-   *    否则 UI 说的和控制器实际做的是两件事，又是一处失同步。
+   *   ★ 契约（重构方案 §8）：UI **不做推导**。前后腿/承重/锁定/相位/判据
+   *     全部由控制器直接产出，UI 只做上色与排版。
+   *     冒烟测试（`tools/probe-uipanel.ts`）消费的是**同一份快照**，
+   *     所以"你看到的"和"我回读的"在机械上必然一致。
    */
-  setOwnership(d: TeacherDiag | null): void {
+  setOwnership(d: RigSnapshot | null): void {
     const e = this.el;
     if (!d) {
-      e.ownGate.textContent = '平衡门 —（当前不是 teacher 驱动）';
+      e.ownGate.textContent = '—（当前不是 controller 驱动）';
       e.ownGate.dataset.ok = '1';
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
@@ -182,49 +184,65 @@ export class Hud {
       return;
     }
 
-    // ---- 腿角色：前腿 / 后腿 / 承重腿 / 摆动腿 ----
-    for (const [el, side] of [[e.ownRoleL, 'l'], [e.ownRoleR, 'r']] as [HTMLElement, 'l' | 'r'][]) {
+    // ---- 腿角色：承重 / 锁定 / 前后（全部来自快照，UI 不自己算）----
+    for (const [el, s] of [[e.ownRoleL, 'l'], [e.ownRoleR, 'r']] as [HTMLElement, 'l' | 'r'][]) {
+      const L = d.legs[s];
       const tags: string[] = [];
-      if (d.frontLeg === side) tags.push('前腿');
-      if (d.backLeg === side) tags.push('后腿');
-      if (d.stanceLeg === side) tags.push('承重');
-      else tags.push('摆动');
-      tags.push(side === 'l' ? (d.groundL ? '左脚接地' : '左脚离地') : (d.groundR ? '右脚接地' : '右脚离地'));
-      // 承重腿优先高亮（蓝=前后，红=承重，橙底=承重）
-      el.dataset.r = d.stanceLeg === side ? 'stance' : (d.frontLeg === side ? 'front' : '');
+      if (L.isFront) tags.push('前腿'); else tags.push('后腿');
+      tags.push(L.isBearer ? '★承重' : '摆动');
+      if (L.locked) tags.push('🔒锁定');
+      tags.push(L.grounded ? '接地' : `离地${(L.soleY * 1000).toFixed(0)}mm`);
+      tags.push(`载荷${(L.loadFrac * 100).toFixed(0)}%`);
+      el.dataset.r = L.locked ? 'stance' : (L.isFront ? 'front' : '');
       el.querySelector('span')!.textContent = tags.join(' · ');
     }
 
-    const PH = { both: '双脚支撑', step: '摆动相', adjust: '调整相' } as Record<string, string>;
-    e.ownPhase.textContent = PH[d.phase] ?? d.phase;
-    e.ownGround.textContent = `${(d.groundL ? 1 : 0) + (d.groundR ? 1 : 0)} 只`;
-    e.ownMos.textContent = `${(d.mosX * 1000).toFixed(0)} mm`;
-    e.ownGate.textContent = d.balOk
-      ? `平衡门 放行（可抬腿）· 本拍下发 ${d.nAxes} 轴`
-      : `平衡门 挡住：${d.balWhy || '未知'} → 摆动腿压回地面`;
-    e.ownGate.dataset.ok = d.balOk ? '1' : '0';
+    const PH = { DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', STEP: '摆动相' } as Record<string, string>;
+    e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
+    e.ownGround.textContent = `${d.support.contactN} 只`;
+    e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;
+    e.ownAlpha.textContent = d.authority.toFixed(2);
+    e.ownGate.textContent = `α(腰权限)=${d.authority.toFixed(2)}  ξ=(${d.dcm.x.toFixed(3)}, ${d.dcm.z.toFixed(3)})  倾角 ${d.tiltDeg.toFixed(1)}°`;
+    e.ownGate.dataset.ok = '1';
 
-    // ---- 关节 × 轴 归属网格（结构只建一次，之后只改 class/text）----
+    // ---- 判据逐条回显（"为什么没迈步"不用推断）----
+    const cf = (c: typeof d.criteria.bearer): string =>
+      Object.entries(c.flags).map(([k, v]) => `${v ? '✓' : '✗'}${k}`).join(' ');
+    e.ownCrit.textContent =
+      `承重 ${cf(d.criteria.bearer)} ${d.criteria.bearer.all ? '【达成】' : ''}
+`
+      + `解锁 ${cf(d.criteria.unlock)} ${d.criteria.unlock.all ? '【达成】' : ''}
+`
+      + `迈步 ${cf(d.criteria.stepPermit)} ${d.criteria.stepPermit.all ? '【放行】' : ''}`;
+    e.ownCrit.dataset.ok = d.criteria.stepPermit.all ? '1' : '0';
+
+    // ---- 关节 × 轴 归属网格（结构只建一次）----
     if (!this.ownBuilt) {
-      const head = '<tr><th>部位</th>' + this.ownAxes.map((a) => `<th>${a}</th>`).join('') + '</tr>';
+      const head = '<tr><th>部位</th><th>轴0 旋</th><th>轴1 展/倾</th><th>轴2 屈伸</th><th>被压制</th></tr>';
       const rows = this.ownParts.map(([key, label]) =>
-        `<tr><td class="jn">${label}<span class="hint"> ${key}</span></td>`
+        `<tr><td class="jn">${label}</td>`
         + [0, 1, 2].map((ax) => `<td class="ax"><span class="own-cell sw-none" id="oc-${key}-${ax}">—</span></td>`).join('')
-        + '</tr>').join('');
+        + `<td class="ax"><span class="own-cell sw-none" id="ocx-${key}">—</span></td></tr>`).join('');
       e.ownGrid.innerHTML = head + rows;
       this.ownBuilt = true;
     }
-    const SW: Record<HoldSystem, string> = { hold: 'sw-hold', step: 'sw-step', servo: 'sw-servo' };
+    const SW: Record<SystemTag, string> = { hold: 'sw-hold', step: 'sw-step', servo: 'sw-servo', none: 'sw-none' };
+    for (const a of d.axes) {
+      const cell = document.getElementById(`oc-${a.key.replace('/', '-')}`) as HTMLElement | null;
+      if (!cell) continue;
+      cell.className = `own-cell ${SW[a.tag]}`;
+      cell.textContent = a.ownerLabel;
+      cell.title = `${a.key} → ${a.owner}｜${a.ownerLabel}｜target=${a.target.toFixed(3)}`
+        + ` pos=${(a.pos * 57.3).toFixed(1)}° vel=${a.vel.toFixed(2)}`
+        + (a.suppressed.length ? `｜压制 ${a.suppressed.map((s) => s.system).join(',')}` : '')
+        + (a.vetoed.length ? `｜锁定否决` : '') + (a.clamped ? '｜斜率限幅' : '');
+    }
     for (const [key] of this.ownParts) {
-      for (let ax = 0; ax < 3; ax++) {
-        const cell = document.getElementById(`oc-${key}-${ax}`) as HTMLElement | null;
-        if (!cell) continue;
-        const k = `${key}/${ax}`;
-        const sys = d.sys.get(k);
-        cell.className = `own-cell ${sys ? SW[sys] : 'sw-none'}`;
-        cell.textContent = sys ? (d.owner.get(k) ?? sys) : '—';
-        cell.title = sys ? `${k} → ${sys}｜${d.owner.get(k) ?? ''}｜${d.ang[k] ?? 0} rad` : `${k} 本拍未驱动`;
-      }
+      const x = document.getElementById(`ocx-${key}`) as HTMLElement | null;
+      if (!x) continue;
+      const mine = d.axes.filter((a) => a.key.startsWith(key + '/') && a.suppressed.length > 0);
+      x.className = `own-cell ${mine.length ? 'sw-veto' : 'sw-none'}`;
+      x.textContent = mine.length ? mine.map((a) => `${a.key.split('/')[1]}<${a.suppressed.map((s) => s.system).join('/')}`).join(' ') : '—';
     }
   }
 

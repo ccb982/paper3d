@@ -6297,6 +6297,7 @@ __export(skeleton_exports, {
   assertJointAnchors: () => assertJointAnchors,
   assertMassBudget: () => assertMassBudget,
   buildSkeleton: () => buildSkeleton,
+  hasJoint: () => hasJoint,
   invQuatOf: () => invQuatOf,
   jointIndexByName: () => jointIndexByName,
   quatToRotVec: () => quatToRotVec,
@@ -6352,7 +6353,10 @@ function rotVecByQuat(q, v) {
 }
 function jointIndexByName(sk2, name) {
   for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
-  return JOINT_ORDER.indexOf(name);
+  return -1;
+}
+function hasJoint(sk2, name) {
+  return sk2.joints.some((j) => j.name === name);
 }
 function spineJointNames(sk2) {
   const out = [];
@@ -15898,6 +15902,7 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
+      driver: "brain",
       physicsHz: 120,
       controlHz: 60,
       duration: 6,
@@ -16272,6 +16277,13 @@ var init_sim = __esm({
       inDomainTicks = 0;
       balanceTicks = 0;
       constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+        const n = sk2.joints.length;
+        const expIn = 36 + 6 * n, expOut = 3 * n;
+        if (shape.inputs !== expIn || shape.outputs !== expOut) {
+          throw new Error(
+            `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
+          );
+        }
         this.sk = sk2;
         this.cfg = cfg;
         this.shape = shape;
@@ -16689,6 +16701,7 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
+        if (this.cfg.driver === "controller") return;
         brainForward(this.shape, p, x, this.hidden, this.out);
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
         doll.setMotorTargets(this.motor);
@@ -16980,6 +16993,7 @@ var init_sim = __esm({
         const tilt = this.doll.tiltOf(torso);
         const headY = this.doll.head().translation().y;
         if (this.doll.bodyHitGround()) {
+          this.fallReason = "crash";
           this.fallDiag = { rH: +(this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
           this.finish(true);
           return true;
