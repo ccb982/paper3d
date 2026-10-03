@@ -50,7 +50,28 @@ const DEFAULT_DIST = 4.4;
 export interface ViewerOptions {
   /** 贴图根路径（public 下） */
   assetBase?: string;
+  /**
+   * ★ 是否画 3D 方向标（左/右/前/后的地面箭头 + 文字）。默认开。
+   *   见 `buildAxisMarkers`：本 rig 的左右**不在 X 上而在 Z 上**，
+   *   且 `+Z = 左`（实测左脚 z=+164mm、右脚 z=−164mm）——
+   *   不标出来几乎必然看反。
+   */
+  showAxisMarkers?: boolean;
 }
+
+/**
+ * ★★ 本 rig 的**轴约定**（实测，不是猜的；`ragdoll.ts` 的 `rs.grf.y = 686.7×载荷`
+ *   是竖直分量，据此可确认 y=竖直）：
+ *
+ *       **x = 矢状（+x 朝前）　y = 竖直（+y 朝上）　z = 额状（+z = 左）**
+ *
+ *   左/右为什么落在 z 上：素材是正面视图，`mapZ` 取负 ⇒ 画布 x 小的**左脚
+ *   在世界 +Z**、右脚在 −Z（实测 ±164mm）。所以 `+Z = 左`。
+ *   这个约定与 Three.js 相机默认（+X 右）**相反**，所以必须在画面上标出来。
+ */
+export const AXIS_CONVENTION = {
+  x: '前 +x', y: '上 +y', z: '左 +z（−z = 右）',
+} as const;
 
 /**
  * ★★ 躯干护甲蒙皮 —— 纯函数部分（不含 WebGL），故意从 Viewer 里拆出来：
@@ -344,6 +365,10 @@ export class Viewer {
 
     // ---- 地面 + 三维距离网格 ----
     this.scene.add(this.buildGround());
+    // ★ 方向标：地面箭头 + 文字，标清 `+Z = 左` / `−Z = 右`（见 AXIS_CONVENTION）
+    this.axisG = this.buildAxisMarkers();
+    this.axisG.visible = opt.showAxisMarkers ?? true;
+    this.scene.add(this.axisG);
 
     // ★★ 一块板 = 一张贴图。躯干虽然被切成 K 段物理刚体，这里仍然只建 **一个 mesh**，
     //   靠逐顶点线性混合蒙皮把它绑到各段上（见文件头 + buildSkinGroup）。
@@ -538,6 +563,106 @@ export class Viewer {
   }
 
   /** 三维地面网格：沿 X 的行走刻度 + 沿 Z 的侧向刻度 */
+  /** 方向标图层（可整体开关） */
+  private readonly axisG: THREE.Group;
+
+  /**
+   * ★ 3D 方向标：地面上的箭头 + 文字标签。
+   *   为什么必须有：本 rig 的左右在 **Z** 轴上而不是 X，且 `+Z = 左`，
+   *   与 Three.js 相机默认相反 —— 不标出来看反是必然的（用户要求）。
+   *   判据：文字用 CanvasTexture 画（不依赖字体文件），箭头用扁平三角，
+   *   贴地放置（y 略高于 0 免得和网格 z-fighting），`renderOrder` 排在网格之前。
+   */
+  private buildAxisMarkers(): THREE.Group {
+    const g = new THREE.Group();
+    const mkText = (txt: string, sub: string, color: string) => {
+      const cv = document.createElement('canvas');
+      cv.width = 256; cv.height = 128;
+      const g2 = cv.getContext('2d')!;
+      g2.clearRect(0, 0, 256, 128);
+      g2.textAlign = 'center'; g2.textBaseline = 'middle';
+      g2.fillStyle = color;
+      g2.font = 'bold 64px system-ui, "Segoe UI", sans-serif';
+      g2.fillText(txt, 128, 44);
+      g2.font = '30px system-ui, "Segoe UI", sans-serif';
+      g2.fillStyle = 'rgba(255,255,255,0.72)';
+      g2.fillText(sub, 128, 96);
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex, transparent: true, depthTest: false, depthWrite: false,
+      }));
+      sp.scale.set(0.62, 0.31, 1);
+      sp.renderOrder = 999;
+      return sp;
+    };
+    // 一个箭头：起点 (x, z0)，指向 (x, z1)
+    const mkArrow = (x: number, z0: number, z1: number, color: number) => {
+      const s = Math.sign(z1 - z0);
+      const shaftEnd = z1 - s * 0.22;
+      const halfW = 0.07;
+      const pts = [
+        x, 0, z0,
+        x, 0, shaftEnd,
+        // 三角头
+        x, 0, z1,
+        x - halfW, 0, shaftEnd,
+        x, 0, z1,
+        x + halfW, 0, shaftEnd,
+      ];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+        depthTest: false, depthWrite: false,
+      }));
+      m.renderOrder = 998;
+      m.frustumCulled = false;
+      return m;
+    };
+
+    const LEFT = 0x3b82f6;    // 蓝
+    const RIGHT = 0xf97316;   // 橙
+    const Z = 1.6;            // 放在人两侧（人站距只有 ±0.16 m）
+    const X0 = -0.35;         // 略微在身后，避免挡住腿
+
+    // 左：+Z
+    g.add(mkArrow(X0, 0.45, Z, LEFT));
+    const tl = mkText('左 L', '+Z', '#93c5fd');
+    tl.position.set(X0, 0.46, Z + 0.42);
+    g.add(tl);
+    // 右：−Z
+    g.add(mkArrow(X0, -0.45, -Z, RIGHT));
+    const tr = mkText('右 R', '−Z', '#fdba74');
+    tr.position.set(X0, 0.46, -Z - 0.42);
+    g.add(tr);
+    // 前：+X。`mkArrow` 是沿 z 画的，这里单独给一个沿 +x 的（顺便标上，
+    // 因为 x 是矢状轴、也容易被和左右搞混）。
+    {
+      const halfW = 0.07, x0 = 0.45, x1 = 1.6, shaft = x1 - 0.22;
+      const pts = [
+        x0, 0, 0, x1, 0, 0,
+        x1, 0, 0, shaft, 0, -halfW,
+        x1, 0, 0, shaft, 0, halfW,
+      ];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0x22c55e, transparent: true, opacity: 0.85, side: THREE.DoubleSide,
+        depthTest: false, depthWrite: false,
+      }));
+      m.renderOrder = 998; m.frustumCulled = false;
+      g.add(m);
+    }
+    const tf = mkText('前', '+X', '#86efac');
+    tf.position.set(2.05, 0.46, 0);
+    g.add(tf);
+    return g;
+  }
+
+  /** 切换 3D 方向标（UI 按钮用） */
+  setAxisMarkers(on: boolean): void { this.axisG.visible = on; }
+
   private buildGround(): THREE.Object3D {
     const g = new THREE.Group();
     const main: number[] = [];   // 主网格

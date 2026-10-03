@@ -34,6 +34,7 @@ const state = {
   paused: false,
   budgetMs: 6,
   speed: 1,
+  axisMarkers: true,
   ghost: false,
   joints: false,
   textures: true,
@@ -64,6 +65,8 @@ const hud = new Hud({
   onExport: () => { if (booted) doExport(); },
   onImport: () => { if (booted) doImport(); },
   onGhost: () => { if (booted) { state.ghost = !state.ghost; viewer.showGhost = state.ghost; } },
+  // ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X，见 viewer 的 AXIS_CONVENTION）
+  onAxisMarkers: (on: boolean) => { state.axisMarkers = on; if (booted) viewer.setAxisMarkers(on); },
   onJoints: () => { if (booted) { state.joints = !state.joints; viewer.showJoints = state.joints; } },
   onTextures: () => { if (booted) { state.textures = !state.textures; viewer.showTextures = state.textures; } },
   onSigma: (v) => { if (booted) trainer.sigma = v; },
@@ -108,7 +111,12 @@ function boot(): void {
 
   trainer = new Trainer(sk, SHAPE, simCfg(state), DEFAULT_TRAINER);
   showcase = new Sim(sk, SHAPE, simCfg(state));
-  viewer = new Viewer(canvas, sk, trainer.population);
+  viewer = new Viewer(canvas, sk, trainer.population, { showAxisMarkers: state.axisMarkers });
+  {
+    // 把 checkbox 的初值同步进 viewer（Hud 构造期的回调被 booted 挡掉了）
+    const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;
+    if (cb) { cb.checked = state.axisMarkers; viewer.setAxisMarkers(state.axisMarkers); }
+  }
 
   showcase.begin(trainer.showcase());
   booted = true;

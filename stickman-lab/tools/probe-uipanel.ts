@@ -81,6 +81,12 @@ hud.setOwnership(snap);
 const $ = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 const txt = (id: string): string => ($(id).textContent ?? '').trim();
 import { PHASE_LABEL as PH } from '../src/ui/hud';   // ★ 与 HUD 同一份，不再复制
+import type { Skeleton } from '../src/core/skeleton';
+
+/** 绑定姿态下某刚体的中心 z（**米**，与仿真帧无关）。用于校验轴约定。 */
+function skBodyZ(sk: Skeleton, key: string): number {
+  return sk.bodies.find((b) => b.key === key)?.cz ?? NaN;
+}
 
 log('同源门禁 —— UI 与冒烟测试读同一个 RigSnapshot');
 log(`  配置 ${labHash(DEFAULT_LAB)}`);
@@ -119,6 +125,23 @@ check('UI 的 MoS === 快照.mos', Math.abs(uiMos - snap.mos * 1000) < 1.5,
   `UI ${uiMos} vs 快照 ${(snap.mos * 1000).toFixed(0)}`);
 check('UI 的相 === 快照.phase', txt('own-phase').startsWith(PH[snap.phase] ?? '?'));
 check('UI 的 alpha === 快照.authority', Math.abs(Number(txt('own-alpha')) - snap.authority) < 0.01);
+// ★ 轴约定自证：约定是 `+Z = 左`。
+//   ⚠ 必须用**绑定姿态**（t=0、未受力）来验证，**不能**用仿真中的某一帧：
+//     身体会偏航/倒地，live z 会翻（曾实测到右脚 z=+223mm），那是姿态不是约定。
+//   绑定姿态里 4 个左侧刚体（thigh/shin/arm/hand）应全部为正 z。
+{
+  const L = ['thigh_l', 'shin_l', 'arm_l', 'hand_l'].map((k) => skBodyZ(sk, k));
+  const R = ['thigh_r', 'shin_r', 'arm_r', 'hand_r'].map((k) => skBodyZ(sk, k));
+  const okL = L.every((v) => v > 0.02), okR = R.every((v) => v < -0.02);
+  check('轴约定：绑定姿态 左侧 4 刚体全在 +Z、右侧全在 −Z', okL && okR,
+    `左 [${L.map((v) => (v * 1000).toFixed(0)).join('/')}]mm  右 [${R.map((v) => (v * 1000).toFixed(0)).join('/')}]mm`);
+  const txtL = txt('own-ax-l').replace(/[^0-9.\-+]/g, '');
+  const txtR = txt('own-ax-r').replace(/[^0-9.\-+]/g, '');
+  check('图例显示的本帧脚 z === 快照（不校验符号，那是姿态）',
+    Math.abs(Number(txtL) - snap.legs.l.footZ * 1000) < 1.5
+    && Math.abs(Number(txtR) - snap.legs.r.footZ * 1000) < 1.5,
+    `UI ${txtL}/${txtR} vs 快照 ${(snap.legs.l.footZ * 1000).toFixed(0)}/${(snap.legs.r.footZ * 1000).toFixed(0)}`);
+}
 check('承重腿卡与快照一致',
   snap.loadBearer === null || (txt('own-role-l') + txt('own-role-r')).includes('★承重'));
 

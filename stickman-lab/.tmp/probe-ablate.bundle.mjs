@@ -17565,6 +17565,14 @@ var init_rigState = __esm({
       /** 上一拍的 vz（算 comAz 用） */
       vzPrev = 0;
       /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
+      /**
+       * ★ 骨盆抬升偏置（rad）：支撑髋外展里**专门给摆动侧骨盆抬高**的那一份
+       *   （Saunders 1953：摆动侧骨盆抬 2~5cm 是最小足净空的决定因素）。
+       *   与额状面平衡**共用**支撑髋外展这一个执行器。
+       */
+      pelvicLift = 0;
+      /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
+      swingClearance = 0;
       /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
       grfCmd = { x: 0, y: 0, z: 0 };
       /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
@@ -17945,6 +17953,8 @@ var init_rigState = __esm({
           mos: this.mos,
           grf: { ...this.grf },
           grfCmd: { ...this.grfCmd },
+          pelvicLift: this.pelvicLift,
+          swingClearance: this.swingClearance,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
           legs: {
@@ -17953,6 +17963,8 @@ var init_rigState = __esm({
               grounded: this.grounded.l,
               loadFrac: this.loadFrac.l,
               soleY: this.soleY.l,
+              footX: this.soleX.l,
+              footZ: this.soleZ.l,
               cop: { ...this.cop.l },
               isFront: front === "l",
               isBack: front !== "l",
@@ -17964,6 +17976,8 @@ var init_rigState = __esm({
               grounded: this.grounded.r,
               loadFrac: this.loadFrac.r,
               soleY: this.soleY.r,
+              footX: this.soleX.r,
+              footZ: this.soleZ.r,
               cop: { ...this.cop.r },
               isFront: front === "r",
               isBack: front !== "r",
@@ -18245,6 +18259,17 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.grfCmd.x = 0;
     rs.grfCmd.y = mTot * 9.81;
     rs.grfCmd.z = FLat;
+    if (on("pelvicLift") && (p.kPelvicLift > 0 || p.targetClearance > 0)) {
+      const sw = rs.swingLeg();
+      const clr = rs.soleY[sw] ?? 0;
+      rs.swingClearance = clr;
+      const pelv = clamp(
+        p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
+        p.maxPelvicLift
+      );
+      rs.pelvicLift = pelv;
+      if (jHip >= 0) rs.requestAngle(jHip, 1, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u7ED9\u8FC8\u817F\u7559\u7A7A\u95F4)");
+    }
     const chain = [];
     for (const nm of [`hip_${sup2}`, `knee_${sup2}`, `foot_${sup2}`, "spine1", "spine2", "spine3"]) {
       const i2 = jointIndexByName(rs.sk, nm);
@@ -18310,6 +18335,17 @@ var init_balance2 = __esm({
       maxTrunkLean: 0.14,
       // 捕获点 → 支撑脚的二阶比例增益（×ω₀²）
       kXRatio: 0.4,
+      // 骨盆抬升：初始偏置 0（由外环自己找到），上限 6°（Saunders 1953 的 2~5cm 对应 ≈2~4°）
+      kPelvicLift: 5 * Math.PI / 180,
+      maxPelvicLift: 0.105,
+      // 净空外环：目标 50mm，实测不足就顶（Saunders 1953 的最小足净空）
+      targetClearance: 0.05,
+      kClearance: 0.4,
+      // ★ 符号**实测标定**（判据 = 摆动脚净空，不是端点扫描猜）：
+      //   sign=+1 ⇒ 净空均值 46→72→91 mm、单支撑 3→7→17%、存活 2.47/2.65/2.38 s
+      //   sign=−1 ⇒ 净空虽也高（105~160mm）但**存活明显更差**（1.08~1.97 s），
+      //            说明反号把骨盆抬成了 Trendelenburg（支撑侧下沉）而不是对侧抬高。
+      pelvicLiftSign: 1,
       // 横向 GRF 限幅 500 N（≈0.7 倍体重；静态需求只要 49 N）
       maxGrfX: 500,
       // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲

@@ -83,6 +83,24 @@
       }
       #own h2 { margin: 0 0 7px; font-size: 11px; display: flex; gap: 6px; align-items: baseline; }
       #own h2 small { font-weight: 400; color: var(--ink-dim); font-size: 10px; }
+      /* 轴约定图例：常驻显示，左右靠颜色与箭头区分 */
+      #own .own-axis {
+        display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline;
+        margin: 6px 0 4px; padding: 5px 7px; border-radius: 5px;
+        background: rgba(30,41,59,.06); font-size: 10.5px; line-height: 1.5;
+      }
+      #own .own-axis b { font-weight: 600; color: var(--ink-dim); }
+      #own .own-axis .ax-l { color: #1d4ed8; font-weight: 600; }
+      #own .own-axis .ax-r { color: #c2410c; font-weight: 600; }
+      #own .own-axis .ax-f { color: #15803d; font-weight: 600; }
+      #own .own-axis code {
+        font-family: ui-monospace, Consolas, monospace; font-size: 10px;
+        background: rgba(0,0,0,.07); padding: 0 3px; border-radius: 3px;
+      }
+      #own .own-axis i { font-style: normal; opacity: .62; font-weight: 400;
+        font-family: ui-monospace, Consolas, monospace; }
+      #own .own-tgl { display: flex; align-items: center; gap: 5px;
+        font-size: 10.5px; color: var(--ink-dim); margin-bottom: 4px; cursor: pointer; }
       .own-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
       .own-role {
         border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px;
@@ -245,8 +263,22 @@
       <div class="own-bar">
         <span class="own-k">α 腰权限</span><span class="own-v" id="own-alpha">—</span>
       </div>
+      <div class="own-bar">
+        <span class="own-k">骨盆抬升</span><span class="own-v" id="own-pelv">—</span>
+        <span class="own-k">摆动净空</span><span class="own-v" id="own-clr">—</span>
+      </div>
       <div class="own-gate" id="own-gate">—</div>
       <pre class="own-crit" id="own-crit">判据 —</pre>
+      <!-- ★ 轴约定图例：必须常驻。3D 画面里的左右在 **Z** 轴上（+Z = 左），
+           与 Three.js 相机默认（+X 右）相反，相机一转就分不清。
+           3D 场景里有对应箭头（蓝=左/+Z，橙=右/−Z，绿=前/+X），这里给文字版。 -->
+      <div class="own-axis" id="own-axis">
+        <b>轴约定</b>
+        <span class="ax-l">◀ 左 = <code>+Z</code> <i id="own-ax-l">z —</i></span>
+        <span class="ax-r">右 = <code>−Z</code> <i id="own-ax-r">z —</i> ▶</span>
+        <span class="ax-f">前 = <code>+X</code></span>
+      </div>
+      <label class="own-tgl"><input type="checkbox" id="own-axis3d" checked> 3D 地面方向标</label>
 
       <table class="own-grid" id="own-grid"></table>
 

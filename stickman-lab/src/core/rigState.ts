@@ -120,6 +120,14 @@ export interface SideSnapshot {
   loadFrac: number;
   /** 离地高度（m，脚底相对地面） */
   soleY: number;
+  /**
+   * ★ 脚底的**世界 z**（m）。存在的理由：轴约定里左右在 z 上（`+Z = 左`），
+   *   而这个约定很容易看反 —— 所以把实测 z 放进快照，让 UI 图例**用数据自证**
+   *   （左腿应恒为正 z、右腿恒为负 z），而不是只印一行说明文字。
+   */
+  footZ: number;
+  /** 脚底世界 x（m） */
+  footX: number;
   /** 是否为前腿（实测脚 x，不是硬编码左右） */
   isFront: boolean;
   isBack: boolean;
@@ -153,6 +161,10 @@ export interface RigSnapshot {
    *   所以"横向力"这件事在诊断里根本不可见。
    */
   grfCmd: { x: number; y: number; z: number };
+  /** 骨盆抬升偏置（rad）。见 `RigState.pelvicLift` */
+  pelvicLift: number;
+  /** 摆动脚净空（m） */
+  swingClearance: number;
   torsoY: number;
   tiltDeg: number;
   legs: Record<Side, SideSnapshot>;
@@ -204,6 +216,14 @@ export class RigState {
   /** 上一拍的 vz（算 comAz 用） */
   private vzPrev = 0;
   /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
+  /**
+   * ★ 骨盆抬升偏置（rad）：支撑髋外展里**专门给摆动侧骨盆抬高**的那一份
+   *   （Saunders 1953：摆动侧骨盆抬 2~5cm 是最小足净空的决定因素）。
+   *   与额状面平衡**共用**支撑髋外展这一个执行器。
+   */
+  pelvicLift = 0;
+  /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
+  swingClearance = 0;
   /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
   grfCmd = { x: 0, y: 0, z: 0 };
   /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
@@ -531,17 +551,20 @@ export class RigState {
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
-      mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd },
+      mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
+      swingClearance: this.swingClearance,
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       legs: {
         l: {
           side: 'l', grounded: this.grounded.l, loadFrac: this.loadFrac.l, soleY: this.soleY.l,
+          footX: this.soleX.l, footZ: this.soleZ.l,
           cop: { ...this.cop.l },
           isFront: front === 'l', isBack: front !== 'l',
           isBearer: this.loadBearer === 'l', locked: this.locked.l,
         },
         r: {
           side: 'r', grounded: this.grounded.r, loadFrac: this.loadFrac.r, soleY: this.soleY.r,
+          footX: this.soleX.r, footZ: this.soleZ.r,
           cop: { ...this.cop.r },
           isFront: front === 'r', isBack: front !== 'r',
           isBearer: this.loadBearer === 'r', locked: this.locked.r,

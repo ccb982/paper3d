@@ -15,6 +15,8 @@ export interface HudHooks {
   onExport: () => void;
   onImport: () => void;
   onGhost: () => void;
+  /** ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X） */
+  onAxisMarkers: (on: boolean) => void;
   onJoints: () => void;
   onTextures: () => void;
   onSigma: (v: number) => void;
@@ -96,6 +98,7 @@ export class Hud {
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
       ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'),
+      ownPelv: $('own-pelv'), ownClr: $('own-clr'), ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
       ownGate: $('own-gate'), ownGrid: $('own-grid'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
       ownAlpha: $('own-alpha'), ownCrit: $('own-crit'),
@@ -124,6 +127,11 @@ export class Hud {
     wire('b-export', 'click', hooks.onExport);
     wire('b-import', 'click', hooks.onImport);
     wire('b-ghost', 'click', hooks.onGhost);
+    // 3D 方向标开关（change 而非 click：要拿到 checkbox 的 checked）
+    {
+      const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;
+      cb?.addEventListener('change', () => hooks.onAxisMarkers(cb.checked));
+    }
     wire('b-joints', 'click', hooks.onJoints);
     wire('b-tex', 'click', hooks.onTextures);
 
@@ -189,6 +197,8 @@ export class Hud {
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
       e.ownPhase.textContent = '—'; e.ownGround.textContent = '—'; e.ownMos.textContent = '—';
+      e.ownPelv.textContent = '—'; e.ownClr.textContent = '—';
+      e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
     }
 
@@ -209,6 +219,12 @@ export class Hud {
     e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
     e.ownGround.textContent = `${d.support.contactN} 只`;
     e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;
+    // 骨盆抬升 / 摆动净空（与 3D 方向标同一份快照，同源）
+    e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}°`;
+    e.ownClr.textContent = `${(d.swingClearance * 1000).toFixed(0)} mm`;
+    // ★ 轴约定：用**实测脚 z** 自证左右（约定 +Z=左，静态打印很容易看反）
+    e.ownAxL.textContent = `z ${d.legs.l.footZ >= 0 ? '+' : ''}${(d.legs.l.footZ * 1000).toFixed(0)}mm`;
+    e.ownAxR.textContent = `z ${d.legs.r.footZ >= 0 ? '+' : ''}${(d.legs.r.footZ * 1000).toFixed(0)}mm`;
     e.ownAlpha.textContent = d.authority.toFixed(2);
     e.ownGate.textContent = `α(腰权限)=${d.authority.toFixed(2)}  ξ=(${d.dcm.x.toFixed(3)}, ${d.dcm.z.toFixed(3)})  倾角 ${d.tiltDeg.toFixed(1)}°`;
     e.ownGate.dataset.ok = '1';

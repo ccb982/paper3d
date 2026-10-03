@@ -80,6 +80,38 @@ export interface BalanceParams {
   kStanceExt: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
   kneeStanceDeg: number;
+  // ── 骨盆抬升（pelvic hike）────────────────────────────────────────
+  /**
+   * ★★ 骨盆抬升**固定偏置**（rad，支撑髋外展）。
+   *
+   *   用户（2026-10-03）：「腰、胯腰在平衡的状态下向上抬一抬，给迈腿留空间」。
+   *
+   *   机理（Saunders et al. 1953, "The classic index of gait"）：
+   *     正常步态**摆动侧骨盆抬高 2~5 cm**，是最小足净空的决定因素之一；
+   *     抬高由**支撑侧髋外展**产生 —— 支撑腿外展使支撑侧骨盆下沉、
+   *     **对侧（摆动侧）骨盆升高**（Trendelenburg 的反向）。
+   *   ⇒ **平衡与迈腿留空间共用同一个执行器**（支撑髋外展）；
+   *     不需要另加"提腰"动作：抬骨盆的就是支撑髋。
+   */
+  kPelvicLift: number;
+  /** 骨盆抬升上限（rad）。Saunders 的 2~5cm 对应 ≈2~4°，留到 6° */
+  maxPelvicLift: number;
+  /**
+   * ★ 骨盆抬升的**外环**：目标净空（m）。
+   *   判据用**摆动脚净空**这个可直接观测的物理量：不足就往上顶，够了就回落
+   *   （不白抬骨盆、不白占额状面权限）。用外环而非固定偏置，是因为所需偏置
+   *   随姿态/负载/摆动相位变，开环给不准。
+   */
+  targetClearance: number;
+  /** 净空外环比例增益（rad/m 净空） */
+  kClearance: number;
+  /**
+   * ★ 骨盆抬升的整体符号（+1/−1）。**实测标定**，判据是摆动脚净空：
+   *   sign=+1 ⇒ 净空均值 46→72→91 mm、单支撑 3→7→17%、存活 2.47/2.65/2.38 s
+   *   sign=−1 ⇒ 净空也高（105~160mm）但**存活明显更差**（1.08~1.97 s）
+   *            ⇒ 反号把骨盆抬成了 Trendelenburg（支撑侧下沉）而非对侧抬高。
+   */
+  pelvicLiftSign: number;
   /**
    * ★ 通道消融（诊断用）：要**关掉**的通道名逗号分隔。
    *   空 = 全开。`probe-balsweep` 用它回答"是哪一条在 destabilize"。
@@ -119,6 +151,17 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   maxTrunkLean: 0.14,
   // 捕获点 → 支撑脚的二阶比例增益（×ω₀²）
   kXRatio: 0.4,
+  // 骨盆抬升：初始偏置 0（由外环自己找到），上限 6°（Saunders 1953 的 2~5cm 对应 ≈2~4°）
+  kPelvicLift: 5 * Math.PI / 180,
+  maxPelvicLift: 0.105,
+  // 净空外环：目标 50mm，实测不足就顶（Saunders 1953 的最小足净空）
+  targetClearance: 0.05,
+  kClearance: 0.4,
+  // ★ 符号**实测标定**（判据 = 摆动脚净空，不是端点扫描猜）：
+  //   sign=+1 ⇒ 净空均值 46→72→91 mm、单支撑 3→7→17%、存活 2.47/2.65/2.38 s
+  //   sign=−1 ⇒ 净空虽也高（105~160mm）但**存活明显更差**（1.08~1.97 s），
+  //            说明反号把骨盆抬成了 Trendelenburg（支撑侧下沉）而不是对侧抬高。
+  pelvicLiftSign: 1,
   // 横向 GRF 限幅 500 N（≈0.7 倍体重；静态需求只要 49 N）
   maxGrfX: 500,
   // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲
@@ -302,6 +345,40 @@ export function balanceSystem(
     //   ⇒ 实测 `com.z` 一路跑到 −387~−665 mm（支撑脚在 +164 mm）。
     const FLat = clamp(mTot * zc * aDes, p.maxGrfX);
     rs.grfCmd.x = 0; rs.grfCmd.y = mTot * 9.81; rs.grfCmd.z = FLat;
+
+    // ══════════════════════════════════════════════════════════════
+    // ④a ★★★ 骨盆抬升（pelvic hike）—— **平衡与迈腿留空间共用支撑髋外展**
+    //
+    //   用户（2026-10-03）：「腰、胯腰在平衡的状态下向上抬一抬，给迈腿留空间」。
+    //
+    //   机理（Saunders et al. 1953, "The classic index of gait"）：
+    //     正常步态**摆动侧骨盆抬高 2~5 cm**，是最小足净空的决定因素之一；
+    //     抬高由**支撑侧髋外展**产生 —— 支撑腿外展使支撑侧骨盆下沉、
+    //     **对侧（摆动侧）骨盆升高**（Trendelenburg 的反向）。
+    //   ⇒ 同一个执行器同时满足两条要求：
+    //     ① 额状面平衡（单支撑额状面主执行器就是支撑髋外展）
+    //     ② 给迈腿留空间（摆动脚净空）
+    //     **不需要另加"提腰"动作：抬骨盆的就是支撑髋。**
+    //
+    //   ★ 为什么用**外环**而不是固定偏置：所需偏置随姿态/负载/摆动腿相位变，
+    //     开环给不准。外环判据用**摆动脚净空**这个可直接观测的物理量：
+    //     净空不足就往上顶，够了就回落（不白抬骨盆、不白占额状面权限）。
+    //
+    //   ★ 位置通道（θ_ref）而非力矩通道：文献里骨盆抬升是**肌肉收缩产生的
+    //     位置/刚度效应**，走 θ_ref 才能形成"抬起来并保持"的刚度。
+    //     而额状面平衡走的是 `τ=JᵀF` 力矩通道 —— 两者**并联叠加**，
+    //     互不覆盖（角度与力矩是两条独立通道）。
+    if (on('pelvicLift') && (p.kPelvicLift > 0 || p.targetClearance > 0)) {
+      const sw = rs.swingLeg();
+      const clr = rs.soleY[sw] ?? 0;                    // 摆动脚净空（m）
+      rs.swingClearance = clr;
+      const pelv = clamp(
+        p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
+        p.maxPelvicLift,
+      );
+      rs.pelvicLift = pelv;
+      if (jHip >= 0) rs.requestAngle(jHip, 1, pelv, 'balance', '骨盆抬升(给迈腿留空间)');
+    }
     // 分配：支撑链（髋/膝/踝）+ 脊柱链（躯干姿态）
     const chain: number[] = [];
     for (const nm of [`hip_${sup}`, `knee_${sup}`, `foot_${sup}`, 'spine1', 'spine2', 'spine3']) {

@@ -5805,6 +5805,10 @@ var init_hud = __esm({
           ownPhase: $("own-phase"),
           ownGround: $("own-ground"),
           ownMos: $("own-mos"),
+          ownPelv: $("own-pelv"),
+          ownClr: $("own-clr"),
+          ownAxL: $("own-ax-l"),
+          ownAxR: $("own-ax-r"),
           ownGate: $("own-gate"),
           ownGrid: $("own-grid"),
           ownRoleL: $("own-role-l"),
@@ -5843,6 +5847,10 @@ var init_hud = __esm({
         wire("b-export", "click", hooks.onExport);
         wire("b-import", "click", hooks.onImport);
         wire("b-ghost", "click", hooks.onGhost);
+        {
+          const cb = document.getElementById("own-axis3d");
+          cb?.addEventListener("change", () => hooks.onAxisMarkers(cb.checked));
+        }
         wire("b-joints", "click", hooks.onJoints);
         wire("b-tex", "click", hooks.onTextures);
         const bindRange = (id, label, hooks2, fmt) => {
@@ -5930,6 +5938,10 @@ var init_hud = __esm({
           e.ownPhase.textContent = "\u2014";
           e.ownGround.textContent = "\u2014";
           e.ownMos.textContent = "\u2014";
+          e.ownPelv.textContent = "\u2014";
+          e.ownClr.textContent = "\u2014";
+          e.ownAxL.textContent = "z \u2014";
+          e.ownAxR.textContent = "z \u2014";
           return;
         }
         for (const [el, s] of [[e.ownRoleL, "l"], [e.ownRoleR, "r"]]) {
@@ -5948,6 +5960,10 @@ var init_hud = __esm({
         e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
         e.ownGround.textContent = `${d.support.contactN} \u53EA`;
         e.ownMos.textContent = `${(d.mos * 1e3).toFixed(0)} mm`;
+        e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}\xB0`;
+        e.ownClr.textContent = `${(d.swingClearance * 1e3).toFixed(0)} mm`;
+        e.ownAxL.textContent = `z ${d.legs.l.footZ >= 0 ? "+" : ""}${(d.legs.l.footZ * 1e3).toFixed(0)}mm`;
+        e.ownAxR.textContent = `z ${d.legs.r.footZ >= 0 ? "+" : ""}${(d.legs.r.footZ * 1e3).toFixed(0)}mm`;
         e.ownAlpha.textContent = d.authority.toFixed(2);
         e.ownGate.textContent = `\u03B1(\u8170\u6743\u9650)=${d.authority.toFixed(2)}  \u03BE=(${d.dcm.x.toFixed(3)}, ${d.dcm.z.toFixed(3)})  \u503E\u89D2 ${d.tiltDeg.toFixed(1)}\xB0`;
         e.ownGate.dataset.ok = "1";
@@ -17890,6 +17906,14 @@ var init_rigState = __esm({
       /** 上一拍的 vz（算 comAz 用） */
       vzPrev = 0;
       /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
+      /**
+       * ★ 骨盆抬升偏置（rad）：支撑髋外展里**专门给摆动侧骨盆抬高**的那一份
+       *   （Saunders 1953：摆动侧骨盆抬 2~5cm 是最小足净空的决定因素）。
+       *   与额状面平衡**共用**支撑髋外展这一个执行器。
+       */
+      pelvicLift = 0;
+      /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
+      swingClearance = 0;
       /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
       grfCmd = { x: 0, y: 0, z: 0 };
       /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
@@ -18270,6 +18294,8 @@ var init_rigState = __esm({
           mos: this.mos,
           grf: { ...this.grf },
           grfCmd: { ...this.grfCmd },
+          pelvicLift: this.pelvicLift,
+          swingClearance: this.swingClearance,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
           legs: {
@@ -18278,6 +18304,8 @@ var init_rigState = __esm({
               grounded: this.grounded.l,
               loadFrac: this.loadFrac.l,
               soleY: this.soleY.l,
+              footX: this.soleX.l,
+              footZ: this.soleZ.l,
               cop: { ...this.cop.l },
               isFront: front === "l",
               isBack: front !== "l",
@@ -18289,6 +18317,8 @@ var init_rigState = __esm({
               grounded: this.grounded.r,
               loadFrac: this.loadFrac.r,
               soleY: this.soleY.r,
+              footX: this.soleX.r,
+              footZ: this.soleZ.r,
               cop: { ...this.cop.r },
               isFront: front === "r",
               isBack: front !== "r",
@@ -18570,6 +18600,17 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.grfCmd.x = 0;
     rs.grfCmd.y = mTot * 9.81;
     rs.grfCmd.z = FLat;
+    if (on("pelvicLift") && (p.kPelvicLift > 0 || p.targetClearance > 0)) {
+      const sw = rs.swingLeg();
+      const clr = rs.soleY[sw] ?? 0;
+      rs.swingClearance = clr;
+      const pelv = clamp(
+        p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
+        p.maxPelvicLift
+      );
+      rs.pelvicLift = pelv;
+      if (jHip >= 0) rs.requestAngle(jHip, 1, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u7ED9\u8FC8\u817F\u7559\u7A7A\u95F4)");
+    }
     const chain = [];
     for (const nm of [`hip_${sup2}`, `knee_${sup2}`, `foot_${sup2}`, "spine1", "spine2", "spine3"]) {
       const i2 = jointIndexByName(rs.sk, nm);
@@ -18635,6 +18676,17 @@ var init_balance2 = __esm({
       maxTrunkLean: 0.14,
       // 捕获点 → 支撑脚的二阶比例增益（×ω₀²）
       kXRatio: 0.4,
+      // 骨盆抬升：初始偏置 0（由外环自己找到），上限 6°（Saunders 1953 的 2~5cm 对应 ≈2~4°）
+      kPelvicLift: 5 * Math.PI / 180,
+      maxPelvicLift: 0.105,
+      // 净空外环：目标 50mm，实测不足就顶（Saunders 1953 的最小足净空）
+      targetClearance: 0.05,
+      kClearance: 0.4,
+      // ★ 符号**实测标定**（判据 = 摆动脚净空，不是端点扫描猜）：
+      //   sign=+1 ⇒ 净空均值 46→72→91 mm、单支撑 3→7→17%、存活 2.47/2.65/2.38 s
+      //   sign=−1 ⇒ 净空虽也高（105~160mm）但**存活明显更差**（1.08~1.97 s），
+      //            说明反号把骨盆抬成了 Trendelenburg（支撑侧下沉）而不是对侧抬高。
+      pelvicLiftSign: 1,
       // 横向 GRF 限幅 500 N（≈0.7 倍体重；静态需求只要 49 N）
       maxGrfX: 500,
       // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲
@@ -19007,6 +19059,9 @@ var hud = new Hud2({
 hud.setOwnership(snap);
 var $2 = (id) => document2.getElementById(id);
 var txt = (id) => ($2(id).textContent ?? "").trim();
+function skBodyZ(sk2, key) {
+  return sk2.bodies.find((b) => b.key === key)?.cz ?? NaN;
+}
 log("\u540C\u6E90\u95E8\u7981 \u2014\u2014 UI \u4E0E\u5192\u70DF\u6D4B\u8BD5\u8BFB\u540C\u4E00\u4E2A RigSnapshot");
 log(`  \u914D\u7F6E ${labHash2(DEFAULT_LAB2)}`);
 log(`  \u5FEB\u7167 tick=${snap.tick} t=${snap.t.toFixed(2)}s phase=${snap.phase} \u627F\u91CD=${snap.loadBearer ?? "-"}`);
@@ -19046,6 +19101,23 @@ check(
 );
 check("UI \u7684\u76F8 === \u5FEB\u7167.phase", txt("own-phase").startsWith(PHASE_LABEL[snap.phase] ?? "?"));
 check("UI \u7684 alpha === \u5FEB\u7167.authority", Math.abs(Number(txt("own-alpha")) - snap.authority) < 0.01);
+{
+  const L = ["thigh_l", "shin_l", "arm_l", "hand_l"].map((k) => skBodyZ(sk, k));
+  const R = ["thigh_r", "shin_r", "arm_r", "hand_r"].map((k) => skBodyZ(sk, k));
+  const okL = L.every((v) => v > 0.02), okR = R.every((v) => v < -0.02);
+  check(
+    "\u8F74\u7EA6\u5B9A\uFF1A\u7ED1\u5B9A\u59FF\u6001 \u5DE6\u4FA7 4 \u521A\u4F53\u5168\u5728 +Z\u3001\u53F3\u4FA7\u5168\u5728 \u2212Z",
+    okL && okR,
+    `\u5DE6 [${L.map((v) => (v * 1e3).toFixed(0)).join("/")}]mm  \u53F3 [${R.map((v) => (v * 1e3).toFixed(0)).join("/")}]mm`
+  );
+  const txtL = txt("own-ax-l").replace(/[^0-9.\-+]/g, "");
+  const txtR = txt("own-ax-r").replace(/[^0-9.\-+]/g, "");
+  check(
+    "\u56FE\u4F8B\u663E\u793A\u7684\u672C\u5E27\u811A z === \u5FEB\u7167\uFF08\u4E0D\u6821\u9A8C\u7B26\u53F7\uFF0C\u90A3\u662F\u59FF\u6001\uFF09",
+    Math.abs(Number(txtL) - snap.legs.l.footZ * 1e3) < 1.5 && Math.abs(Number(txtR) - snap.legs.r.footZ * 1e3) < 1.5,
+    `UI ${txtL}/${txtR} vs \u5FEB\u7167 ${(snap.legs.l.footZ * 1e3).toFixed(0)}/${(snap.legs.r.footZ * 1e3).toFixed(0)}`
+  );
+}
 check(
   "\u627F\u91CD\u817F\u5361\u4E0E\u5FEB\u7167\u4E00\u81F4",
   snap.loadBearer === null || (txt("own-role-l") + txt("own-role-r")).includes("\u2605\u627F\u91CD")
