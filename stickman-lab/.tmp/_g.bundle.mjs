@@ -14251,6 +14251,98 @@ var init_ragdoll = __esm({
         const n = Math.min(this.holdCmd.length, mask.length);
         for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
       }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * ★★ **关节传递力**（子树约束力）—— 这才是"从脚传上来的力"。
+       *
+       *   物理：对某关节的**子侧子树**做牛顿第二定律。
+       *       F_constraint = m·(a_com − g) − F_ext
+       *   其中 a_com 用**速度差分**（需配 `primeVelocities()` 在 `advance` 前采一次），
+       *   F_ext 只有重力（接触力通过地面作用在子树的足部，已包含在 m·a_com 里）。
+       *
+       *   为什么不用马达力矩倒推：马达力矩是**控制器要的**，不是**实际传的**。
+       *   约束力是刚体动力学的结果，包含接触、摩擦、惯量耦合 —— 才是可视化要的东西。
+       *
+       *   输出写到 `out`（长度 ≥ nJoints），索引 = 关节下标，每项 {fx,fy,fz,f,m}。
+       *   轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       */
+      jointForce(out, dt) {
+        const g = 9.81;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          if (o + 4 >= out.length) break;
+          const idx = this.subtreeOf(i);
+          let mt = 0, ax = 0, ay = 0, az = 0, usable = false;
+          for (let k = 0; k < idx.length; k++) {
+            const bi = idx[k];
+            const b = this.bodies[bi];
+            if (!b) continue;
+            const m = b.mass(), v = b.linvel();
+            const pv = this.velPrev[bi];
+            if (!pv) continue;
+            usable = true;
+            mt += m;
+            ax += m * (v.x - pv.x) / dt;
+            ay += m * (v.y - pv.y) / dt;
+            az += m * (v.z - pv.z) / dt;
+          }
+          if (!usable || mt <= 0) {
+            out[o] = 0;
+            out[o + 1] = 0;
+            out[o + 2] = 0;
+            out[o + 3] = 0;
+            out[o + 4] = 0;
+            continue;
+          }
+          const fx = ax, fy = ay + mt * g, fz = az;
+          out[o] = fx;
+          out[o + 1] = fy;
+          out[o + 2] = fz;
+          out[o + 3] = Math.hypot(fx, fy, fz);
+          out[o + 4] = mt;
+        }
+      }
+      /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
+      subtreeCache = null;
+      subtreeOf(i) {
+        if (!this.subtreeCache) {
+          this.subtreeCache = /* @__PURE__ */ new Map();
+          const kidsOf = (key) => {
+            const r = [];
+            for (const j of this.sk.joints) if (j.parentKey === key) r.push(j.childKey);
+            return r;
+          };
+          for (let i2 = 0; i2 < this.sk.joints.length; i2++) {
+            const keys = [];
+            const st = [this.sk.joints[i2].childKey];
+            while (st.length) {
+              const c = st.pop();
+              if (keys.includes(c)) continue;
+              keys.push(c);
+              st.push(...kidsOf(c));
+            }
+            this.subtreeCache.set(i2, keys.map((k) => this.indexByKey.get(k)).filter((x) => x !== void 0));
+          }
+        }
+        return this.subtreeCache.get(i) ?? [];
+      }
+      /**
+       * ★ 在 `advance()` **之前**采一次速度快照（`jointForce` 的差分基准）。
+       *   不采的话 `a_com` 全是 0，力链读数会是 0 —— 一个"看起来正常"的静默失效。
+       */
+      primeVelocities() {
+        if (this.velPrev.length !== this.bodies.length) {
+          this.velPrev = this.bodies.map(() => ({ x: 0, y: 0, z: 0 }));
+        }
+        for (let i = 0; i < this.bodies.length; i++) {
+          const v = this.bodies[i].linvel();
+          const p = this.velPrev[i];
+          p.x = v.x;
+          p.y = v.y;
+          p.z = v.z;
+        }
+      }
+      velPrev = [];
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
@@ -17589,6 +17681,10 @@ var init_rigState = __esm({
       pelvicLift = 0;
       /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
       swingClearance = 0;
+      /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
+      waistTrim = 0;
+      /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
+      hipLatTau = 0;
       /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
       captureX = 0;
       captureZ = 0;
@@ -18067,6 +18163,8 @@ var init_rigState = __esm({
           captureZ: this.captureZ,
           omega0Val: this.omega0Val,
           swingClearance: this.swingClearance,
+          waistTrim: this.waistTrim,
+          hipLatTau: this.hipLatTau,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
           pitchDeg: this.pitchDeg,
@@ -18512,6 +18610,16 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.requestAngle(j, 2, spineTgt, "balance", "\u8170\u77E2\u72B6\u59FF\u6001\u4FDD\u6301");
       }
     }
+    const stanceZLat = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+    const dzLat = rs.com.z - stanceZLat;
+    const dead = p.waistTrimDead;
+    const errLat = Math.abs(dzLat) <= dead ? 0 : dzLat - Math.sign(dzLat) * dead;
+    rs.waistTrim = clamp2(errLat * p.kWaistTrim, p.maxWaistTrim);
+    if (on("latwaist") && jSp1 >= 0 && rs.waistTrim !== 0) {
+      for (const j of [jSp1, jSp2, jSp3]) {
+        if (j !== void 0 && j >= 0) rs.requestAngle(j, 0, rs.waistTrim / 3, "balance", "\u8170\u989D\u72B6\u7CBE\u8C03/\u5378\u8F7D\u9ACB");
+      }
+    }
   }
   if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
@@ -18557,6 +18665,22 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         if (Math.abs(v) > 0.5) rs.requestTorque(i2, k2, v, "balance", `\u03C4=J\u1D40F\xB7${rs.sk.joints[i2].name}/${k2}`);
       }
     }
+    if (latArmed && doll && p.lateralEnabled) {
+      const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+      const dead = p.latHipDead;
+      const dzHip = rs.com.z - stanceZl;
+      const errHip = Math.abs(dzHip) <= dead ? 0 : dzHip - Math.sign(dzHip) * dead;
+      rs.waistTrim = errHip;
+      const vTerm = -p.latHipDamp * rs.com.vz;
+      const tauHip = clamp2((errHip * p.kLatHip + vTerm) * p.latHipArm, p.maxLatHipTau);
+      rs.hipLatTau = tauHip;
+      if (jHip >= 0 && Math.abs(tauHip) > 0.5) {
+        rs.requestTorque(jHip, 1, tauHip, "balance", "\u989D\u72B6\u4E3B\u529B\xB7\u652F\u6491\u9ACB\u5916\u5C55(\u6587\u732E)");
+      }
+    } else if (jHip >= 0) {
+      rs.hipLatTau = 0;
+      rs.waistTrim = 0;
+    }
     if (on("pelvicLift") && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
       const sw = rs.swingLeg();
       const clr = rs.soleY[sw] ?? 0;
@@ -18599,6 +18723,10 @@ var init_balance2 = __esm({
       kTorsoHold: 0.02,
       kTorsoHoldD: 0.02,
       maxTorsoDeg: 0.26,
+      // 腰额状精调：~0.06 rad/m => 100mm 误差给 5.4 deg，限幅 8 deg，死区 50mm
+      kWaistTrim: 0.06,
+      maxWaistTrim: 0.14,
+      waistTrimDead: 0.05,
       // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
       //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
       //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -18627,7 +18755,13 @@ var init_balance2 = __esm({
        *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
        */
       torqueControl: false,
-      lateralEnabled: false,
+      lateralEnabled: true,
+      // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
+      kLatHip: 500,
+      latHipDamp: 60,
+      latHipArm: 0.5,
+      maxLatHipTau: 60,
+      latHipDead: 0.05,
       /**
        * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
        *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
@@ -18891,4 +19025,4 @@ for (let i = 0; i < Math.round(12 / (1 / 120)) && !s2.finished; i++) {
   if (i % 2 === 0) s2.doll.setMotorTargets(c2.step(1 / 60));
   s2.advance(1);
 }
-console.log(`\u5355\u817F 12s  \uFF1A${(s2.ticksDone / 60).toFixed(2)}s ${s2.fallen ? "\u6454:" + s2.fallReason : "\u2713"} \u76F8=${c2.snapshot.phase} pitch=${c2.snapshot.pitchDeg.toFixed(1)}\xB0 roll=${c2.snapshot.rollDeg.toFixed(1)}\xB0`);
+console.log(`\u5355\u817F 12s  \uFF1A${(s2.ticksDone / 60).toFixed(2)}s ${s2.fallen ? "\u6454:" + s2.fallReason : "\u2713"} \u76F8=${c2.snapshot.phase} pitch=${c2.snapshot.pitchDeg.toFixed(1)}\xB0`);

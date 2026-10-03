@@ -14351,6 +14351,98 @@ var init_ragdoll = __esm({
         const n = Math.min(this.holdCmd.length, mask.length);
         for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
       }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * ★★ **关节传递力**（子树约束力）—— 这才是"从脚传上来的力"。
+       *
+       *   物理：对某关节的**子侧子树**做牛顿第二定律。
+       *       F_constraint = m·(a_com − g) − F_ext
+       *   其中 a_com 用**速度差分**（需配 `primeVelocities()` 在 `advance` 前采一次），
+       *   F_ext 只有重力（接触力通过地面作用在子树的足部，已包含在 m·a_com 里）。
+       *
+       *   为什么不用马达力矩倒推：马达力矩是**控制器要的**，不是**实际传的**。
+       *   约束力是刚体动力学的结果，包含接触、摩擦、惯量耦合 —— 才是可视化要的东西。
+       *
+       *   输出写到 `out`（长度 ≥ nJoints），索引 = 关节下标，每项 {fx,fy,fz,f,m}。
+       *   轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       */
+      jointForce(out, dt) {
+        const g = 9.81;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          if (o + 4 >= out.length) break;
+          const idx = this.subtreeOf(i);
+          let mt = 0, ax = 0, ay = 0, az = 0, usable = false;
+          for (let k = 0; k < idx.length; k++) {
+            const bi = idx[k];
+            const b = this.bodies[bi];
+            if (!b) continue;
+            const m = b.mass(), v2 = b.linvel();
+            const pv = this.velPrev[bi];
+            if (!pv) continue;
+            usable = true;
+            mt += m;
+            ax += m * (v2.x - pv.x) / dt;
+            ay += m * (v2.y - pv.y) / dt;
+            az += m * (v2.z - pv.z) / dt;
+          }
+          if (!usable || mt <= 0) {
+            out[o] = 0;
+            out[o + 1] = 0;
+            out[o + 2] = 0;
+            out[o + 3] = 0;
+            out[o + 4] = 0;
+            continue;
+          }
+          const fx = ax, fy = ay + mt * g, fz = az;
+          out[o] = fx;
+          out[o + 1] = fy;
+          out[o + 2] = fz;
+          out[o + 3] = Math.hypot(fx, fy, fz);
+          out[o + 4] = mt;
+        }
+      }
+      /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
+      subtreeCache = null;
+      subtreeOf(i) {
+        if (!this.subtreeCache) {
+          this.subtreeCache = /* @__PURE__ */ new Map();
+          const kidsOf = (key) => {
+            const r = [];
+            for (const j of this.sk.joints) if (j.parentKey === key) r.push(j.childKey);
+            return r;
+          };
+          for (let i2 = 0; i2 < this.sk.joints.length; i2++) {
+            const keys = [];
+            const st = [this.sk.joints[i2].childKey];
+            while (st.length) {
+              const c = st.pop();
+              if (keys.includes(c)) continue;
+              keys.push(c);
+              st.push(...kidsOf(c));
+            }
+            this.subtreeCache.set(i2, keys.map((k) => this.indexByKey.get(k)).filter((x) => x !== void 0));
+          }
+        }
+        return this.subtreeCache.get(i) ?? [];
+      }
+      /**
+       * ★ 在 `advance()` **之前**采一次速度快照（`jointForce` 的差分基准）。
+       *   不采的话 `a_com` 全是 0，力链读数会是 0 —— 一个"看起来正常"的静默失效。
+       */
+      primeVelocities() {
+        if (this.velPrev.length !== this.bodies.length) {
+          this.velPrev = this.bodies.map(() => ({ x: 0, y: 0, z: 0 }));
+        }
+        for (let i = 0; i < this.bodies.length; i++) {
+          const v2 = this.bodies[i].linvel();
+          const p = this.velPrev[i];
+          p.x = v2.x;
+          p.y = v2.y;
+          p.z = v2.z;
+        }
+      }
+      velPrev = [];
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];

@@ -174,6 +174,10 @@ export interface RigSnapshot {
   captureZ: number;
   /** 倒立摆自然频率 ω₀（rad/s） */
   omega0Val: number;
+  /** 腰额状精调输出（rad）。正 = 把重心推向 +Z */
+  waistTrim: number;
+  /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
+  hipLatTau: number;
   torsoY: number;
   tiltDeg: number;
   /**
@@ -248,6 +252,10 @@ export class RigState {
   pelvicLift = 0;
   /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
   swingClearance = 0;
+  /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
+  waistTrim = 0;
+  /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
+  hipLatTau = 0;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
   captureX = 0;
   captureZ = 0;
@@ -666,6 +674,7 @@ export class RigState {
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
+      waistTrim: this.waistTrim, hipLatTau: this.hipLatTau,
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,
       legs: {

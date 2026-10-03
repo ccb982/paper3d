@@ -60,6 +60,22 @@ export interface BalanceParams {
   kTorsoHoldD: number;
   /** 腰矢状目标角限幅（rad）。spine 限位 ±15~25°，超过会顶到软限位 */
   maxTorsoDeg: number;
+  // ── Gear I (position servo): waist lateral trim (see long comment) ──
+  /**
+   * 腰**额状精调**增益（rad/m 横向误差）。
+   *   实测：腰把重心推向支撑腿的速率只有 ~1.2mm/度，而需要的横移是 141mm
+   *   ⇒ 腰**搬不动**重心（要 118°），只能做精调。
+   *   真正搬重心的是地面侧的 `τ=JᵀF`（CoP/GRF 方向），腰负责收尾与卸载髋。
+   */
+  kWaistTrim: number;
+  /** 腰额状精调限幅（rad）。文献步态躯干侧倾 ~5~10°，取 8° */
+  maxWaistTrim: number;
+  /**
+   * 腰额状精调的**死区**（m）：|com.z − stanceZ| ≤ 此值就不推。
+   *   这是「**不能太过**」的实现 —— 交接只需 MoS ≥ 0，不需要把重心推到脚心；
+   *   没有死区它会一直往里推、撞上 `τ=JᵀF` 限幅把人掀翻。
+   */
+  waistTrimDead: number;
   // ── 踝（CoP 策略）─────────────────────────────────────────
   /** 矢状面：踝 CoP 比例增益（rad per m）。目标量是**捕获点**，不是躯干角 */
   kCopSag: number;
@@ -105,6 +121,29 @@ export interface BalanceParams {
    *   ⇒ 是 `τ=JᵀF` 的**力矩分配位置**问题，不是限幅问题。查清前默认关闭。
    */
   lateralEnabled: boolean;
+  /**
+   * ★★ 额状面**主力 = 支撑髋外展**（走力矩通道、只驱动髋 axis 1）
+   *
+   *   文献：Horak & Nashner 1986 / Runge 1999 —— 双脚并立时额状面
+   *   「a separate **hip load/unload strategy by the hip abd/adductors is the
+   *   totally dominant defence**」，踝内外翻肌作用 insignificant。
+   *   静态需求 ≈52 N·m（Neumann 2010 / Inman 1947），rig 上限 70 N·m。
+   *
+   *   为什么只驱动髋：此前 `τ=JᵀF` 分到髋+膝+踝+脊柱，实测**任何限幅**
+   *   （30~500 N）都在 1.1~1.5 s 倒，且 30N 与 500N 结果几乎一样
+   *   ⇒ 与力的大小无关，是**分配位置**的问题。文献的主力就是髋。
+   *
+   *   为什么在挡位 I 不算双计：位置伺服在挡位 I 只驱动髋的**矢状轴 axis 2**，
+   *   **额状轴 axis 1 是空的** ⇒ 在这一轴上用力矩通道不与位置环重复。
+   */
+  kLatHip: number;
+  latHipDamp: number;
+  /** 横向等效力臂（m）：力矩 = F × 摆高。≈ 摆高的一半 */
+  latHipArm: number;
+  /** 力矩限幅（N·m）：文献需求 52、rig 上限 70 ⇒ 取 60 留裕度 */
+  maxLatHipTau: number;
+  /** 死区（m）：|com.z − stanceZ| ≤ 此值不再推。这是「不能太过」的实现 */
+  latHipDead: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
@@ -161,6 +200,10 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   kTorsoHold: 0.02,
   kTorsoHoldD: 0.02,
   maxTorsoDeg: 0.26,
+  // 腰额状精调：~0.06 rad/m => 100mm 误差给 5.4 deg，限幅 8 deg，死区 50mm
+  kWaistTrim: 0.06,
+  maxWaistTrim: 0.14,
+  waistTrimDead: 0.05,
   // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
   //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
   //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -189,7 +232,13 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
    */
   torqueControl: false,
-  lateralEnabled: false,
+  lateralEnabled: true,
+  // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
+  kLatHip: 500,
+  latHipDamp: 60,
+  latHipArm: 0.5,
+  maxLatHipTau: 60,
+  latHipDead: 0.05,
   /**
    * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
    *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
@@ -293,6 +342,45 @@ export function balanceSystem(
     for (const j of [jSp1, jSp2, jSp3]) {
       if (j !== undefined && j >= 0 && on('torso')) {
         rs.requestAngle(j, 2, spineTgt, 'balance', '腰矢状姿态保持');
+      }
+    }
+
+    // ── 腰（额状）精调 + 骨盆载荷转移 ───────────────────────────
+    //   用户 2026-10-04：「查腰和盆骨的发力情况…腰和盆骨在平衡保持的
+    //   情况下，还要尽可能把重心移到支撑腿上，**而且不能太过**」。
+    //
+    //   ★ 实测定量结论（tools/_sg2，腿自由、人悬空、开环给角）：
+    //       腰 spine1/0：+4°→CoM.z +5mm、+8°→+9mm、+14°→+199mm（失控）
+    //       髋 hip_l/1 ：+4°→0mm、+8°→0mm、+14°→+8mm
+    //     ⇒ 符号：**腰正 = 把重心推向 +Z**（左脚在 +Z，符号由此标定）
+    //     ⇒ **腰搬不动重心**：要把重心从 z=+23mm 搬到支撑脚 z=+164mm（141mm），
+    //       按腰的 1.2mm/度需要 **118°**，远超脊柱 ±15~25° 限位；髋外展更弱（0.6mm/度）。
+    //     ⇒ 原因是物理的：**脚踩在地上时腰侧倾推不动重心** —— 躯干倾、髋膝代偿，
+    //       重心几乎不动（刚性体估算 10° 应给 170mm，实测只给 9mm，差 20 倍）。
+    //     ⇒ 那 141mm 必须来自**地面**（CoP 偏移 / 摩擦 / GRF 方向改变）：
+    //       0.5 s 移 141mm 只需 a=1.13 m/s²、F≈79 N —— 力很小，但通道是 `τ=JᵀF`。
+    //
+    //   ⇒ 所以腰/盆骨在这里的职责是三件事（不是搬重心）：
+    //       ① **精调**：把残余横向误差收掉（度数小、力矩小，安全）
+    //       ② **卸载髋**：朝支撑腿侧倾，把一部分髋力矩转成重力力矩
+    //          （Xu & Sher / Horak 2006，报告省 15~30%）
+    //       ③ **骨盆抬升**：给迈腿留空间（Saunders 1953，见 `pelvicLift`）
+    //
+    //   ★「不能太过」的实现 = **死区 + 限幅**：
+    //       重心进了容差带（`waistTrimDead`，默认 50mm，与 `handoverTolZ` 同量级）
+    //       就**不再推** —— 交接只需要 MoS ≥ 0，不需要把重心精确推到脚心。
+    //       再加硬限幅 `maxWaistTrim`（默认 8°，文献步态躯干侧倾 ~5~10°）。
+    //       没有死区的话它会一直往里推，撞上 `τ=JᵀF` 的限幅，把人掀翻
+    //       （实测额状力开到 500N 时 1.10 s 倒，而关掉能站满）。
+    const stanceZLat = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+    const dzLat = rs.com.z - stanceZLat;
+    const dead = p.waistTrimDead;
+    const errLat = Math.abs(dzLat) <= dead ? 0 : (dzLat - Math.sign(dzLat) * dead);
+    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);
+    if (on('latwaist') && jSp1 >= 0 && rs.waistTrim !== 0) {
+      // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角
+      for (const j of [jSp1, jSp2, jSp3]) {
+        if (j !== undefined && j >= 0) rs.requestAngle(j, 0, rs.waistTrim / 3, 'balance', '腰额状精调/卸载髋');
       }
     }
   }
@@ -453,14 +541,50 @@ export function balanceSystem(
       }
     }
 
-    // ④a ★★ 骨盆抬升（pelvic hike）—— 平衡与迈腿留空间**共用**支撑髋外展
-    //   机理（Saunders 1953, "The classic index of gait"）：摆动侧骨盆抬高
-    //   2~5 cm 是最小足净空的决定因素，由**支撑侧髋外展**产生（Trendelenburg 的反向）。
-    //   ⚠ 与上面的 `τ=JᵀF` **同轴**（髋/1）。所以它是**偏置**：走位置通道，
-    //     形成"抬起来并保持"的刚度；`τ=JᵀF` 走力矩通道做定量平衡。二者并联叠加。
-    //   ⚠ 且该轴已在上面 `requestHold` 让位 ⇒ 位置环只剩阻尼，不会产生刚度。
-    //     ⇒ 所以抬升必须作为**独立的 JᵀF 分量**或走常规模型，不能靠让位后的位置环。
-    //     这里保留为显式的位置请求（把让位排除在该轴之外）：
+    if (latArmed && doll && p.lateralEnabled) {
+      // ══════════════════════════════════════════════════════════════
+      // ★★ 额状面主力 = **支撑髋外展**，走**力矩通道**，且**只驱动髋这一轴**
+      //
+      //   文献依据（Horak & Nashner 1986 / Runge 1999 重述）：
+      //     「a **separate hip load/unload strategy by the hip abd/adductors is
+      //     the totally dominant defence** in the [frontal] direction when
+      //     standing with feet side by side」，且模型预测**踝内外翻肌作用
+      //     insignificant**。静态需求（Neumann 2010 / Inman 1947）≈52 N·m。
+      //
+      //   ★ 为什么**只驱动髋**（而不是整条支撑链）：此前把 `τ=JᵀF` 分配到
+      //     髋+膝+踝+脊柱四段，实测**任何**限幅（30~500 N）下都在 1.1~1.5 s 倒，
+      //     而限幅 30N 与 500N 结果几乎一样 ⇒ **与力的大小无关，是分配位置的问题**。
+      //     分到脊柱会把躯干拧转、分到膝会去拧腿。文献说的主力就是**髋**。
+      //
+      //   ★ 为什么在挡位 I（位置伺服）下**不算双计**：
+      //     位置伺服在挡位 I 只驱动髋的**矢状轴 axis 2**（矢状髋策略）与膝 axis 2，
+      //     **额状轴 axis 1 是空的** ⇒ 在这一轴上用力矩通道不与位置环重复。
+      //     （这也是为什么 `pelvicLift` 原来占着 axis 1、现在被替换掉。）
+      //
+      //   「**不能太过**」= 死区（`latHipDead`）+ 限幅（`maxLatHipTau`）：
+      //     交接只需 MoS ≥ 0，不需要把重心精确推到脚心；一直往里推会撞上
+      //     髋的 70 N·m 上限、把人掀翻。
+      const stanceZl = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+      const dead = p.latHipDead;
+      const dzHip = rs.com.z - stanceZl;
+      const errHip = Math.abs(dzHip) <= dead ? 0 : (dzHip - Math.sign(dzHip) * dead);
+      rs.waistTrim = errHip;    // 供 UI 回读"还差多少"
+      // 捕获点二次项：速度也要压住，否则只有比例项会振荡
+      const vTerm = -p.latHipDamp * rs.com.vz;
+      // 力矩：需要的横向力 F=m·a ⇒ 髋外展力矩 ≈ F ×摆高，且按实测标定的符号
+      const tauHip = clamp((errHip * p.kLatHip + vTerm) * p.latHipArm, p.maxLatHipTau);
+      rs.hipLatTau = tauHip;
+      if (jHip >= 0 && Math.abs(tauHip) > 0.5) {
+        rs.requestTorque(jHip, 1, tauHip, 'balance', '额状主力·支撑髋外展(文献)');
+      }
+    } else if (jHip >= 0) {
+      rs.hipLatTau = 0; rs.waistTrim = 0;
+    }
+
+    // ④a 骨盆抬升（pelvic hike）：摆动侧骨盆抬高 2~5cm 是最小足净空的决定因素
+    //   （Saunders 1953），由支撑侧髋外展产生（Trendelenburg 的反向）。
+    //   ⚠ 与上面同轴（髋/1），所以默认**关闭** —— 上面的髋外展力矩通道
+    //     优先拿到这个轴。曾经实测开pelvicLift 只活 2.33 s、关掉才站满 8 s。
     if (on('pelvicLift') && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
       const sw = rs.swingLeg();
       const clr = rs.soleY[sw] ?? 0;
@@ -470,7 +594,6 @@ export function balanceSystem(
         p.maxPelvicLift,
       );
       rs.pelvicLift = pelv;
-      // 该轴交回给位置伺服（抬升是位置/刚度效应，不是定量力矩）
       rs.clearHold(jHip, 1);
       rs.requestAngle(jHip, 1, pelv, 'balance', '骨盆抬升(给迈腿留空间)');
     }
