@@ -43,6 +43,15 @@ export interface StepParams {
    */
   hipHoldDeg: number;
   kneeHoldDeg: number;
+  /**
+   * ★ 末端摆动**髋伸展**峰值（deg，正值 = 伸展）。这是**步长**的来源。
+   *   正常步态 terminal swing 把小腿送出去，足跟着地落在身体**前方**；
+   *   缺了它（历史实现）脚只落在原地/身后 ⇒ 实测 Δx −644mm、躯干 x 恒为 0。
+   *   允许为负（= 仍在屈曲）以便做对照消融。
+   */
+  hipExtendDeg: number;
+  /** 末端伸展的起始相位（0~1），约 0.55~0.7（摆动后半程） */
+  reachFrom: number;
 }
 
 export const DEFAULT_STEP_PARAMS: StepParams = {
@@ -53,6 +62,17 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   liftHold: 0.25,
   hipHoldDeg: 32,
   kneeHoldDeg: 68,
+  // 末端髋伸展：Perry 正常步态 terminal swing 约 10~20°。
+  //   实测（扫 0/10/18/28°，判据 = Δx(摆动−支撑) 与存活）：
+  //     0°  → Δx 最小 −529mm（脚落在支撑脚**后方** 529mm）  存活 2.38s
+  //     10° → Δx 最小 −106mm、净空 405mm                    存活 2.43s
+  //     18° → Δx 最小 −401mm（不单调）                      存活 2.77s
+  //     28° → Δx 最小 −14mm、最多 +335mm（落在身前）         但净空飙到 1107mm、存活仅 0.75s
+  //   ⇒ 取 10°：把脚从"身后 529mm"救回到"身前可放"，且不把腿甩飞。
+  //   ⚠ 18°/28° 的 Δx 不单调 ⇒ 幅度一大就变成"甩腿"而不是"送腿"，
+  //     末端伸展必须与摆动髋屈曲峰值一起限，不能单独加大。
+  hipExtendDeg: 10,
+  reachFrom: 0.6,
 };
 
 /**
@@ -111,7 +131,19 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   （实测不门控：0.85 s 倒、倾 50~83°、`com.z` 离支撑脚仍有 350~400 mm）。
   const holdHip = (s >= 1 && permit) ? p.hipHoldDeg : 0;
   const holdKnee = (s >= 1 && permit) ? p.kneeHoldDeg : 0;
-  const hipDeg = p.hipFlexPeakDeg * bell + holdHip;
+  // ★★ 末端摆动**髋伸展**（terminal swing extension）—— 决定落脚点在身前还是身后。
+  //   实测（tools/_sx，2026-10-03，用户报"前脚向后迈"）：
+  //     STEP 期间 Δx(摆动脚−支撑脚) = **−644 ~ −1 mm**，躯干 x **恒为 0**。
+  //   病根：髋目标全程是 `−hipDeg`（**屈曲**），而**髋屈曲把脚往身后摆**；
+  //   `bell = sin(πs)` 只负责抬起和落回**原处**，**没有任何落脚位置控制**。
+  //   正常步态（Perry & Burnfield / Winter）：摆动早期屈髋抬高足，
+  //   **末端伸展**把小腿送出去 ⇒ 足跟着地落在**身体前方** —— 这才是步长的来源。
+  //   缺了这一段，脚只会落在原地或身后，重心永远传不到前脚。
+  //   形状：s ∈ [reachFrom, 1] 的平滑上升（0→1），s=1 时最大伸展。
+  const sReach = s <= p.reachFrom ? 0
+    : (s >= 1 ? 1 : (() => { const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom); return u * u * (3 - 2 * u); })());
+  const hipDeg = p.hipFlexPeakDeg * bell + holdHip
+    - p.hipExtendDeg * sReach * (permit || rs.phase === 'STEP' ? 1 : 0);
   rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R, 1.05), '摆动髋屈', lift > 0.01);
 
   // ══════════════════════════════════════════════════════════════

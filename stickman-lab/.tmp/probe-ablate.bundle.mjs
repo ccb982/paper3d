@@ -18377,7 +18377,11 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const lift = permit && hold ? p.lift * bell + (s >= 1 ? p.liftHold : 0) : rs.phase === "SINGLE" ? p.liftHold : 0;
   const holdHip = s >= 1 && permit ? p.hipHoldDeg : 0;
   const holdKnee = s >= 1 && permit ? p.kneeHoldDeg : 0;
-  const hipDeg = p.hipFlexPeakDeg * bell + holdHip;
+  const sReach = s <= p.reachFrom ? 0 : s >= 1 ? 1 : (() => {
+    const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom);
+    return u * u * (3 - 2 * u);
+  })();
+  const hipDeg = p.hipFlexPeakDeg * bell + holdHip - p.hipExtendDeg * sReach * (permit || rs.phase === "STEP" ? 1 : 0);
   rs.requestSwingLegAngle(swing, jHip, 2, clamp(-hipDeg * D2R2, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
   rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
@@ -18402,7 +18406,18 @@ var init_step = __esm({
       kneeFlexPeakDeg: KNEE_FLEX_PEAK,
       liftHold: 0.25,
       hipHoldDeg: 32,
-      kneeHoldDeg: 68
+      kneeHoldDeg: 68,
+      // 末端髋伸展：Perry 正常步态 terminal swing 约 10~20°。
+      //   实测（扫 0/10/18/28°，判据 = Δx(摆动−支撑) 与存活）：
+      //     0°  → Δx 最小 −529mm（脚落在支撑脚**后方** 529mm）  存活 2.38s
+      //     10° → Δx 最小 −106mm、净空 405mm                    存活 2.43s
+      //     18° → Δx 最小 −401mm（不单调）                      存活 2.77s
+      //     28° → Δx 最小 −14mm、最多 +335mm（落在身前）         但净空飙到 1107mm、存活仅 0.75s
+      //   ⇒ 取 10°：把脚从"身后 529mm"救回到"身前可放"，且不把腿甩飞。
+      //   ⚠ 18°/28° 的 Δx 不单调 ⇒ 幅度一大就变成"甩腿"而不是"送腿"，
+      //     末端伸展必须与摆动髋屈曲峰值一起限，不能单独加大。
+      hipExtendDeg: 10,
+      reachFrom: 0.6
     };
   }
 });
