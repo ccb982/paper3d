@@ -485,6 +485,7 @@ export class Ragdoll {
     this.footAuthUsed = new Float32Array(sk.joints.length * 3).fill(1);
     this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
     this.torqueCmd = new Float32Array(sk.joints.length * 3);
+    this.holdCmd = new Array(sk.joints.length * 3).fill(0);
     this.tauApplied = new Float32Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
@@ -850,6 +851,8 @@ export class Ragdoll {
    *   两者相加后再按 τmax 饱和。
    */
   private readonly torqueCmd: Float32Array;
+  /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
+  private readonly holdCmd: number[] = [];
   /** `jacobianTorque` 的临时向量（避免每关节分配） */
   private readonly jw = new Float64Array(3);
   private readonly ja = new Float64Array(3);
@@ -1127,6 +1130,16 @@ export class Ragdoll {
    *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
    *   本来就知道该多大，不该再被位置误差的护栏砍。
    */
+  /**
+   * ★ 让位掩码（逐轴，1=balance / 2=step）：该轴的位置伺服**只做阻尼**（P 项置零）。
+   *   见 `RigState.requestHold` 的注释：定量支撑交给 `τ = JᵀF`，
+   *   位置环只留 `−kD·ω_rel` 提供关节阻尼，两者职责不重叠、不会互相顶。
+   */
+  setHoldMask(mask: readonly number[]): void {
+    const n = Math.min(this.holdCmd.length, mask.length);
+    for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i]!;
+  }
+
   setTorqueTargets(taus: Float32Array): void {
     const n = Math.min(this.torqueCmd.length, taus.length);
     for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i]!;
@@ -1285,6 +1298,11 @@ export class Ragdoll {
         } else if (a < lo) {
           err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
           alpha = MOTOR_ALPHA_RECOVER;
+        } else if (this.holdCmd[idx]) {
+          // ★★ 让位模式：位置伺服**只做阻尼**，P 项置零。
+          //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
+          //   两者职责不重叠 ⇒ 不会再在同一轴上互相顶。
+          err = -(this.opt.kD) * relL[k];
         } else {
           const cmd = this.motorTarget[idx];
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];

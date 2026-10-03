@@ -169,6 +169,11 @@ export interface RigSnapshot {
   pelvicLift: number;
   /** 摆动脚净空（m） */
   swingClearance: number;
+  /** 捕获点 ξ_x / ξ_z（Houska balance point） */
+  captureX: number;
+  captureZ: number;
+  /** 倒立摆自然频率 ω₀（rad/s） */
+  omega0Val: number;
   torsoY: number;
   tiltDeg: number;
   legs: Record<Side, SideSnapshot>;
@@ -230,6 +235,11 @@ export class RigState {
   pelvicLift = 0;
   /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
   swingClearance = 0;
+  /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
+  captureX = 0;
+  captureZ = 0;
+  /** 倒立摆自然频率 ω₀ = √(g/h)（由上层 wantedForce 写入，供 UI 回读） */
+  omega0Val = 3.1;
   /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
   grfCmd = { x: 0, y: 0, z: 0 };
   /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
@@ -467,6 +477,44 @@ export class RigState {
     this.requestTorque(joint, axis, tau, 'step', label);
   }
 
+  // ── 位置伺服「让位」通道（阻抗/纯阻尼）─────────────────────────
+  /**
+   * ★★ 让某个轴的**位置伺服退化为纯阻尼**：`err = −kD·ω_rel`（P 项置零）。
+   *
+   *   为什么需要（这是本项目最隐蔽的一类冲突）：
+   *     位置环是 `τ = kP·(θ_ref−θ)·τmax/ωmax`，而 `τ = JᵀF` 是**定量前馈**。
+   *     两者**相加**（在 `driveMotors` 里）本该没问题，但历史实现里它们
+   *     在**同一轴上互相顶**：位置环发"目标角"、力矩通道发"定量力矩"，
+   *     加上 `request()` 同级只保留第一次，于是谁先到谁说了算、另一个被静默吞掉
+   *     （实测：`kStanceExt` 扫 0.3/0.6/0.9 **三行逐位相同**，通道根本没执行）。
+   *
+   *   正确分工：**定量支撑交给 `τ = JᵀF`，位置环只留阻尼**（提供关节阻尼、
+   *   抑制数值发散，但不再贡献刚度）。这样两者**职责不重叠、不会互相顶**。
+   *
+   *   ⚠ 不用 `requestAngle(j, a, 当前角)` 代替：那样有量纲错误 ——
+   *     `requestAngle` 内部会按量程归一化（`(rad·0.9)/span`），再乘回去
+   *     得到 `θ_ref ≈ 0.81·θ`，P 项并不为零（还剩 19% 的刚度）。
+   */
+  requestHold(joint: number, axis: number, system: SystemId, label: string): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    if (this.hold[i]) return;                 // 已让位，不重复登记
+    this.hold[i] = true;
+    this.holdList.push({ i, system, label });
+    this.requestCount++;
+  }
+  /** 撤销让位（让该轴交回给常规位置伺服）—— `τ=JᵀF` 与位置偏置共存时用 */
+  clearHold(joint: number, axis: number): void {
+    const i = joint * 3 + axis;
+    if (i >= 0 && i < this.nAxes) { this.hold[i] = false; this.holdMask[i] = 0; }
+  }
+
+  /** 内部用：让位标记（每拍清空） */
+  private readonly hold: boolean[] = [];
+  private holdList: { i: number; system: SystemId; label: string }[] = [];
+  /** 本拍让位的轴（供快照回读：谁在让位给 `τ=JᵀF`） */
+  holdMask: number[] = [];
+
   /** 锁定闸门：被锁定腿上的抬腿需求**直接丢弃**（不是加权、不是夹紧） */
   requestSwingLeg(side: Side, joint: number, axis: number, value: number, label: string, isLift: boolean): void {
     if (isLift && this.locked[side]) {
@@ -514,6 +562,9 @@ export class RigState {
     this.tSec += dt;
     this.req.fill(undefined);
     this.treq.fill(undefined);
+    this.hold.fill(false);
+    for (const h of this.holdList) this.holdMask[h.i] = h.system === 'balance' ? 1 : 2;
+    this.holdList.length = 0;
     this.torqueRequestCount = 0;
     this.requestCount = 0;
     for (let i = 0; i < this.tgt.length; i++) {
@@ -600,6 +651,7 @@ export class RigState {
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
       mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
+      captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       legs: {

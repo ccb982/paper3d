@@ -127,6 +127,8 @@ export class Controller {
     // ★ 力矩通道（`τ = JᵀF` 的产物）与角度通道**并联**送进马达。
     //   必须在 arbitrate 之后 —— `tauOut` 是仲裁的结果。
     this.sim.doll.setTorqueTargets(rs.tauOut);
+    // ★ 让位掩码：让 `τ=JᵀF` 接管的轴，位置伺服退化为纯阻尼
+    this.sim.doll.setHoldMask(rs.holdMask);
 
     // ── 7. 快照（唯一出口）────────────────────────────────
     this.snapshot = rs.snapshot();
