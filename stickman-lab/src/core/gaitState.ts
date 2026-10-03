@@ -35,6 +35,29 @@ export interface GaitConfig {
   unlockTiltMaxDeg: number;
   /** P3 迈步许可：支撑腿 MoS 下限（m） */
   permitMosMin: number;
+  /**
+   * ★★ 迈步**间隔**（s）：两次抬腿起点的最小间隔（用户 2026-10-03：
+   *   「增长迈步的间隔，每次迈步间隔 1s 左右，要有足够时间调整平衡」）。
+   *   这是**节奏**约束，与"重心是否移到位"（判据）正交 —— 判据管*能不能*，
+   *   间隔管*多久一次*。间隔给足，平衡系统才有时间把重心稳在前脚上。
+   */
+  stepIntervalSec: number;
+  /** 交接驻留：重心已在**前脚**上连续满足多久才算交接（s） */
+  handoverDwellSec: number;
+  /** DOUBLE（交接阶段）最短停留：给平衡系统把重心搬过去的时间（s） */
+  handoverMinSec: number;
+  /** SHIFT 超时回 DOUBLE（s） */
+  handoverTimeoutSec: number;
+  /** SINGLE 单支撑驻留（s）：用户「要有足够时间调整平衡」 */
+  singleDwellSec: number;
+  /** PUSH 超时回 DOUBLE（s）。**不能回 SINGLE**，否则与 SINGLE→PUSH 死循环 */
+  pushTimeoutSec: number;
+  /** STEP 超时回 DOUBLE（s） */
+  stepTimeoutSec: number;
+  /** 重心矢状允许的超出量（m）：`comOverFootX ≤ 0` 即"已在前脚上" */
+  handoverTolX: number;
+  /** 重心额状允许的偏移（m） */
+  handoverTolZ: number;
   /** P4 迈步许可：双支撑相最小剩余时长（s） */
   permitDoubleSupportSec: number;
   /** α(t) 的软化宽度（相进度占比）。见 HugWBC arXiv:2502.03206 Eq.5 */
@@ -45,6 +68,16 @@ export interface GaitConfig {
   liftHold: number;
 }
 
+/**
+ * ★ 迈步间隔与交接判据的默认值。
+ *   `1.0` s 来自用户定调：「增长迈步的间隔，每次迈步间隔 1s 左右，
+ *   要有足够时间调整平衡」——这是**节奏**约束，与位置判据正交。
+ */
+const DEFAULT_STEP_INTERVAL = 1.0;
+const DEFAULT_HANDOVER_DWELL = 0.30;
+const DEFAULT_HANDOVER_TOL_X = 0.02;
+const DEFAULT_HANDOVER_TOL_Z = 0.05;
+
 export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   bearerLoad: 0.60,
   bearerLoadHyst: 0.45,
@@ -54,6 +87,17 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   unlockTiltMaxDeg: 20,
   permitMosMin: 0.0,
   permitDoubleSupportSec: 0.05,
+  // ★ 迈步间隔 1s（用户定调）+ 交接驻留与位置容差
+  stepIntervalSec: DEFAULT_STEP_INTERVAL,
+  handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+  handoverTolX: DEFAULT_HANDOVER_TOL_X,
+  handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+  // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+  handoverMinSec: 0.40,
+  handoverTimeoutSec: 2.0,
+  singleDwellSec: 0.50,
+  pushTimeoutSec: 0.60,
+  stepTimeoutSec: 1.60,
   alphaSigma: 0.08,
   singleLeg: 'l',
   liftHold: 0.25,
@@ -107,6 +151,15 @@ export class GaitState {
   private doubleT = 0;
   /** 本拍刚触地（边沿） */
   private wasGrounded: Record<Side, boolean> = { l: false, r: false };
+  /**
+   * 状态机自己的时钟（s）。`RigState.tSec` 是 private，这里不越界访问。
+   * 迈步间隔（用户：「每次迈步间隔 1s 左右」）从它算起。
+   */
+  private t = 0;
+  /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
+  private lastStepT = -1e9;
+  /** 交接驻留计时（s）：重心连续落在**前腿**上的时长（防抖） */
+  private handoverT = 0;
   readonly event: ExchangeEvent = { kind: 'none', note: '' };
 
   constructor(private rs: RigState, cfg: GaitConfig = DEFAULT_GAIT_CONFIG) {
@@ -119,6 +172,7 @@ export class GaitState {
   /** ★ 每拍调用一次：更新判据 → 迁移状态 → 写回 rigState（含 α） */
   update(dt: number): ExchangeEvent {
     const rs = this.rs;
+    this.t += dt;
     this.event.kind = 'none'; this.event.note = ''; this.event.side = undefined;
 
     // ★ 承重腿的身份**只能**来自 rs.supportLeg()。
@@ -156,40 +210,84 @@ export class GaitState {
       { loadFrac: lf, thr, mos: rs.mos, holdSec: this.bearerT, otherLoad: rf },
     );
 
-    // ── U1..U3 解锁判据（锁定解除 = 允许再抬）──────────────
-    const U1 = rs.loadBearer !== null;
-    const U2 = rs.mos >= this.cfg.permitMosMin;
-    const U3 = rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
-    if (U2 && U3) this.unlockT += dt; else this.unlockT = 0;
-    const U4 = this.unlockT >= this.cfg.unlockMosHoldSec;
+    // ══════════════════════════════════════════════════════════════
+    // ── 交接判据 H1..H4：**满足 1s 间隔 且 重心真在前腿** 才解锁后腿 ──
+    //   用户 2026-10-03 两次纠正：
+    //     ①「要显式的把重心移动到前腿，然后才允许动后腿，
+    //        锁定前腿，前腿是支撑腿并且解锁后腿」
+    //     ②「交接瞬间锁前腿、解后腿 也不对啊，
+    //        肯定是满足 **1s 间隔**并且**重心真在前腿了**，才能解锁后腿」
+    //   ⇒ 解锁是**两个条件的合取**，不是瞬时交换。
+    //     锁定规则不变：**触地即锁**（前腿一落地就锁，杜绝"刚落地又抬"）。
+    //
+    //   ⚠ 「重心在前腿」用**位置判据**（矢状 + 额状），不用载荷：
+    //     载荷是结果、位置是原因。用户说"显式"，指的就是位置。
+    const front = rs.frontLeg();      // 按实测脚 x，前进方向为 +x
+    const rear = rs.rearLeg();
+    const dxOver = rs.comOverFootX(front);   // ≤ handoverTolX 即"重心已在前脚上"
+    const dzOver = rs.comOverFootZ(front);
+    const H1 = dxOver <= this.cfg.handoverTolX && dzOver <= this.cfg.handoverTolZ;
+    if (H1) this.handoverT += dt; else this.handoverT = 0;
+    const H2 = this.handoverT >= this.cfg.handoverDwellSec;   // 驻留确认（防抖）
+    // 间隔：距**上一次抬腿起点**的时长
+    const intervalOk = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
+    // 前腿承重（结果侧佐证，与位置判据互为印证）
+    const H3 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
+    const H4 = rs.mos >= this.cfg.permitMosMin && rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
+    const handOver = H1 && H2 && intervalOk && H3 && H4;
+    rs.frontLegSide = front; rs.rearLegSide = rear;   // 供快照/UI 回读
+    rs.handoverCriteria = makeCriteria(
+      {
+        H1_重心在前腿: H1, H2_驻留: H2, H3_前腿承重: H3, H4_稳定: H4,
+        I_间隔1s: intervalOk,
+      },
+      {
+        dxOverMm: dxOver * 1000, dzOverMm: dzOver * 1000, tolXmm: this.cfg.handoverTolX * 1000,
+        tolZmm: this.cfg.handoverTolZ * 1000, dwellSec: this.handoverT, needSec: this.cfg.handoverDwellSec,
+        frontLoad: rs.loadFrac[front], intervalSec: this.t - this.lastStepT,
+        needInterval: this.cfg.stepIntervalSec, mos: rs.mos, tiltDeg: rs.tiltDeg,
+      },
+    );
+
+    // ★ 解锁**只发生在后腿**，且必须 handOver 全成立：
+    //     「满足 1s 间隔 且 重心真在前腿 ⇒ 才解锁后腿」
     for (const s of ['l', 'r'] as Side[]) {
-      const held = U1 && rs.loadBearer === s && U4;
       rs.unlockCriteria = makeCriteria(
-        { U1_承重达标: held, U2_MoS: U2, U3_倾角: U3, U4_稳定窗: U4 },
-        { mos: rs.mos, tiltDeg: rs.tiltDeg, winSec: this.unlockT, needSec: this.cfg.unlockMosHoldSec, held: held ? 1 : 0 },
+        {
+          U1_是后腿: s === rear, U2_重心在前腿: H1, U3_驻留: H2,
+          U4_间隔1s: intervalOk, U5_前腿承重: H3, U6_稳定: H4,
+        },
+        {
+          handOver: handOver ? 1 : 0, isRear: s === rear ? 1 : 0,
+          dxOverMm: dxOver * 1000, intervalSec: this.t - this.lastStepT,
+        },
       );
-      if (rs.locked[s] && held) {
-        // ★ 交换点 3：承重达标 **且** 稳定窗满足 ⇒ 解锁
+      if (rs.locked[s] && s === rear && handOver) {
         rs.locked[s] = false; rs.lockReleased[s] = true;
-        this.event.kind = 'lock_released'; this.event.side = s; this.event.note = '解锁，允许再抬';
+        this.event.kind = 'lock_released'; this.event.side = s;
+        this.event.note = `解锁后腿（间隔 ${(this.t - this.lastStepT).toFixed(2)}s、重心在前腿 ${(dxOver * 1000).toFixed(0)}mm）`;
       }
     }
 
-    // ── P1..P4 迈步许可（双钥匙：许可 AND 摆动腿确实离地/可离地）────
-    const swingLocked = rs.locked[swing];
-    // ★★ P1 必须是「**准支撑腿**载荷达标」，而**不是**「承重标识已授予」。
-    //   否则死锁：承重标识要等摆动腿抬起来（载荷转移）才授予，
-    //   而抬腿又要等承重标识 —— 两者互为前提，实测 P1 永远 false、
-    //   摆动腿一次都没抬起来（单支撑占比 0.0%）。
-    //   正确顺序（也是 Hof 起步的 APA）：平衡系统**先把重心移到支撑腿上**
-    //   ⇒ 该腿载荷份额上升 ⇒ 迈步系统才抬另一条。
-    const P1 = rs.bearerCriteria.flags['B2_载荷'] === true;
-    const P2 = !swingLocked;
-    const P3 = rs.mos >= this.cfg.permitMosMin;
-    const P4 = this.doubleT >= this.cfg.permitDoubleSupportSec;
+    // ── P1..P5 迈步许可（抬**后腿**）─────────────────────────
+    //   P1 = 重心已在前腿（位置判据，带驻留）  ← 用户"显式把重心移到前腿"
+    //   P2 = 后腿**已解锁**                    ← 交接完成才允许动
+    //   P3 = 间隔 ≥1s                          ← 用户"每次迈步间隔 1s 左右"
+    //   P4 = MoS 达标
+    //   P5 = 前腿承重（结果佐证）
+    const rearLocked = rs.locked[rear];
+    const P1 = H1 && H2;
+    const P2 = !rearLocked;
+    const P3 = intervalOk;
+    const P4 = rs.mos >= this.cfg.permitMosMin;
+    const P5 = H3;
     rs.stepPermit = makeCriteria(
-      { P1_重心到位: P1, P2_未锁定: P2, P3_MoS: P3, P4_双支撑时长: P4 },
-      { mos: rs.mos, doubleSec: this.doubleT, swingLocked: swingLocked ? 1 : 0 },
+      { P1_重心在前腿: P1, P2_后腿已解锁: P2, P3_间隔1s: P3, P4_MoS: P4, P5_前腿承重: P5 },
+      {
+        dxOverMm: dxOver * 1000, rearLocked: rearLocked ? 1 : 0,
+        intervalSec: this.t - this.lastStepT, needInterval: this.cfg.stepIntervalSec,
+        mos: rs.mos, frontLoad: rs.loadFrac[front],
+      },
     );
 
     // ── 迁移 ────────────────────────────────────────────────
@@ -220,48 +318,76 @@ export class GaitState {
     return this.event;
   }
 
+  /**
+   * ══════════════════════════════════════════════════════════════
+   * 相位迁移。用户 2026-10-03 定调的形状：
+   *
+   *   「**计时状态允许两脚接地，这时候的工作就是重心交接**」
+   *
+   *   ⇒ **DOUBLE 就是交接阶段**：双脚站在地上，把重心从后腿**显式**搬到前腿。
+   *     单支撑（SINGLE）只在**交接验证通过**之后才进入 ——
+   *     不是"时间到了就进"，也不是"singleLeg 模式直接跳进去"。
+   *
+   *   修复的两个具体缺陷：
+   *   ① 原 `DOUBLE` 有 `if (cfg.singleLeg) { 0.2s 后直接进 SINGLE }`
+   *      ⇒ **整个重心交接阶段被跳过**（用户要的"两脚接地做交接"从来没发生过）。
+   *   ② 原 `PUSH` 超时回 `SINGLE` ⇒ 与 `SINGLE→PUSH`（0.15s）构成
+   *      **永久振荡** SINGLE(0.15s)↔PUSH(0.5s)，实测相位一直在这两者之间跳、
+   *      永远不回到 DOUBLE、也永远进不了 STEP。
+   *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
+   */
   private migrate(prev: Phase, dt: number, both: boolean, supSide: Side, swing: Side): void {
     const rs = this.rs;
+    const hv = rs.handoverCriteria.flags;
+    /** 交接验证通过 = 重心已在前腿（位置判据 + 驻留）**且** 间隔 ≥1s */
+    const handoverOk = hv['H1_重心在前腿'] === true && hv['H2_驻留'] === true
+      && hv['I_间隔1s'] === true;
     switch (prev) {
       case 'DOUBLE':
-        // 进入 SHIFT：摆动腿已抬且正在落地（或单腿模式下已完成抬腿）
-        if (this.cfg.singleLeg) { if (rs.phaseT > 0.2) { rs.phase = 'SINGLE'; } break; }
-        if (rs.phaseT > 0.15 && (rs.loadFrac[swing] > 0.25 || rs.touchdown[swing])) rs.phase = 'SHIFT';
+        // ★ 两脚接地、专门做重心交接。允许双脚接地就是用户要的形态。
+        //   停留至少 `handoverMinSec`，并且交接验证通过才准进 SINGLE。
+        if (rs.phaseT >= this.cfg.handoverMinSec && handoverOk) {
+          rs.phase = 'SINGLE'; rs.phaseT = 0;
+        }
         break;
 
       case 'SHIFT':
-        // ★ 承重判据达标 ⇒ 换到 SINGLE；否则继续转移
-        if (rs.bearerCriteria.all) { rs.phase = 'SINGLE'; rs.phaseT = 0; }
-        else if (rs.phaseT > 1.5) rs.phase = 'DOUBLE';   // 超时回退，别卡死
+        // 交接中。进 SINGLE 的唯一条件是**交接验证通过**（不是载荷判据）。
+        if (handoverOk) { rs.phase = 'SINGLE'; rs.phaseT = 0; }
+        else if (rs.phaseT > this.cfg.handoverTimeoutSec) {
+          rs.phase = 'DOUBLE'; rs.phaseT = 0;          // 交接没成 ⇒ 回双脚重新来
+        }
         break;
 
       case 'SINGLE':
-        // 进入 PUSH：先把重心推出去（**前进的唯一来源**，见 §13.5）
-        if (rs.phaseT > 0.15) rs.phase = 'PUSH';
+        // 单支撑**驻留期**：给平衡系统时间（用户「要有足够时间调整平衡」）
+        if (rs.phaseT >= this.cfg.singleDwellSec) { rs.phase = 'PUSH'; rs.phaseT = 0; }
         break;
 
       case 'PUSH':
-        // PUSH → STEP：许可齐 + 双支撑时长够（R2：交接必须落在双支撑相内）
-        if (rs.stepPermit.all && both) rs.phase = 'STEP';
-        else if (rs.phaseT > 0.5) rs.phase = 'SINGLE';
+        // 只有许可齐 **且** 双脚接地才进 STEP（交接必须落在双支撑相内）
+        if (rs.stepPermit.all && both) { rs.phase = 'STEP'; rs.phaseT = 0; }
+        else if (rs.phaseT > this.cfg.pushTimeoutSec) {
+          // ★ 回 DOUBLE 而不是 SINGLE —— 否则与 SINGLE→PUSH 构成死循环
+          rs.phase = 'DOUBLE'; rs.phaseT = 0;
+        }
         break;
 
       case 'STEP':
-        // 触地 ⇒ SHIFT；落地时无条件锁定该腿（交换点 2）
+        // 触地 ⇒ 锁定该腿（触地即锁），回到 SHIFT 做下一次交接
         if (rs.touchdown[swing]) {
           rs.locked[swing] = true;      // ★ 无条件，不等达标
           rs.phase = 'SHIFT'; rs.phaseT = 0;
-        } else if (rs.phaseT > 1.5) {   // 没迈成/没落地 ⇒ 回落
+        } else if (rs.phaseT > this.cfg.stepTimeoutSec) {   // 没迈成/没落地 ⇒ 回落
           rs.phase = 'DOUBLE'; rs.phaseT = 0;
         }
         break;
     }
-    // 单腿模式：不做交替，锁定恒久
-    if (this.cfg.singleLeg && rs.phase === 'DOUBLE' && rs.phaseT > 0.6) rs.phase = 'SINGLE';
     void dt; void supSide;
   }
 
   reset(): void {
+    this.t = 0; this.lastStepT = -1e9; this.handoverT = 0;
     this.bearerT = 0; this.unlockT = 0; this.hadBearer = false; this.doubleT = 0;
     this.wasGrounded.l = false; this.wasGrounded.r = false;
     this.rs.loadBearer = null; this.rs.locked.l = false; this.rs.locked.r = false;

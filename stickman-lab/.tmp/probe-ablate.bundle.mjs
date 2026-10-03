@@ -17608,6 +17608,14 @@ var init_rigState = __esm({
       // ── 判据（由 gaitState 写入，逐条回读）
       bearerCriteria = { flags: {}, values: {}, all: false };
       unlockCriteria = { flags: {}, values: {}, all: false };
+      /**
+       * ★ 交接判据 H1..H4 + I（重心在前腿 / 驻留 / 前腿承重 / 稳定 / 间隔 1s）。
+       *   用户的交接定义：「满足 1s 间隔并且重心真在前腿了，才能解锁后腿」。
+       */
+      handoverCriteria = { flags: {}, values: {}, all: false };
+      /** 当前的前腿 / 后腿（按实测脚 x）。字段名带 Side 以免与 `frontLeg()` 方法同名 */
+      frontLegSide = "l";
+      rearLegSide = "r";
       stepPermit = { flags: {}, values: {}, all: false };
       tickNo = 0;
       tSec = 0;
@@ -17683,6 +17691,39 @@ var init_rigState = __esm({
       }
       swingLeg() {
         return this.supportLeg() === "l" ? "r" : "l";
+      }
+      /**
+       * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。
+       *
+       *   用户原话：「要显式的把重心移动到前腿，然后才允许动后腿，
+       *   锁定前腿，前腿是支撑腿并且解锁后腿」。
+       *
+       *   ⚠ 必须按**实测脚 x** 判定，不能写死左右、也不能用载荷：
+       *     · 左右在 **z** 轴上（+z=左），前后在 **x** 轴上（+x 朝前）——两轴不同
+       *     · 前后腿在步态过程中会**互换**，写死就必错
+       *   约定：**x 大的是前腿**。x 差小于 3mm 视为并齐 ⇒ 用承重腿兜底。
+       */
+      frontLeg() {
+        const dz = this.soleX.l - this.soleX.r;
+        if (Math.abs(dz) > 3e-3) return dz > 0 ? "l" : "r";
+        return this.loadBearer ?? this.supportLeg();
+      }
+      /** 后腿（要动的那条） */
+      rearLeg() {
+        return this.frontLeg() === "l" ? "r" : "l";
+      }
+      /**
+       * ★ 重心的**矢状**位置误差：重心是否落在指定脚**前方**（m）。
+       *   >0 = 重心在前脚前方（该脚接不住，重心会继续前移）
+       *   ≤0 = 重心已在前脚**上方或后方** ⇒ 该脚可以承重（交接条件）
+       *   归一化到腿长量级便于设阈值：`com.x − foot.x − halfLen`，`halfLen ≈ 0.06m`。
+       */
+      comOverFootX(side) {
+        return this.com.x - this.soleX[side] - 0.06;
+      }
+      /** 重心的**额状**偏移（m）：|com.z − foot.z| 才是横向支撑裕度 */
+      comOverFootZ(side) {
+        return Math.abs(this.com.z - this.soleZ[side]);
       }
       isLocked(s) {
         return this.locked[s];
@@ -17954,6 +17995,8 @@ var init_rigState = __esm({
           grf: { ...this.grf },
           grfCmd: { ...this.grfCmd },
           pelvicLift: this.pelvicLift,
+          frontLegSide: this.frontLegSide,
+          rearLegSide: this.rearLegSide,
           swingClearance: this.swingClearance,
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
@@ -17988,6 +18031,7 @@ var init_rigState = __esm({
           axes,
           criteria: {
             bearer: cloneCriteria(this.bearerCriteria),
+            handover: cloneCriteria(this.handoverCriteria),
             unlock: cloneCriteria(this.unlockCriteria),
             stepPermit: cloneCriteria(this.stepPermit)
           },
@@ -18017,11 +18061,15 @@ function smoothAuthority(phase, phaseT, ramp, sigma) {
   const ramped = Math.min(1, 1.5 * p);
   return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
 }
-var DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_LABEL, GaitState;
+var DEFAULT_STEP_INTERVAL, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_LABEL, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
     init_rigState();
+    DEFAULT_STEP_INTERVAL = 1;
+    DEFAULT_HANDOVER_DWELL = 0.3;
+    DEFAULT_HANDOVER_TOL_X = 0.02;
+    DEFAULT_HANDOVER_TOL_Z = 0.05;
     DEFAULT_GAIT_CONFIG = {
       bearerLoad: 0.6,
       bearerLoadHyst: 0.45,
@@ -18031,6 +18079,17 @@ var init_gaitState = __esm({
       unlockTiltMaxDeg: 20,
       permitMosMin: 0,
       permitDoubleSupportSec: 0.05,
+      // ★ 迈步间隔 1s（用户定调）+ 交接驻留与位置容差
+      stepIntervalSec: DEFAULT_STEP_INTERVAL,
+      handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+      handoverTolX: DEFAULT_HANDOVER_TOL_X,
+      handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+      // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+      handoverMinSec: 0.4,
+      handoverTimeoutSec: 2,
+      singleDwellSec: 0.5,
+      pushTimeoutSec: 0.6,
+      stepTimeoutSec: 1.6,
       alphaSigma: 0.08,
       singleLeg: "l",
       liftHold: 0.25
@@ -18058,6 +18117,15 @@ var init_gaitState = __esm({
       doubleT = 0;
       /** 本拍刚触地（边沿） */
       wasGrounded = { l: false, r: false };
+      /**
+       * 状态机自己的时钟（s）。`RigState.tSec` 是 private，这里不越界访问。
+       * 迈步间隔（用户：「每次迈步间隔 1s 左右」）从它算起。
+       */
+      t = 0;
+      /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
+      lastStepT = -1e9;
+      /** 交接驻留计时（s）：重心连续落在**前腿**上的时长（防抖） */
+      handoverT = 0;
       event = { kind: "none", note: "" };
       phaseLabel(p) {
         return PHASE_LABEL[p];
@@ -18068,6 +18136,7 @@ var init_gaitState = __esm({
       /** ★ 每拍调用一次：更新判据 → 迁移状态 → 写回 rigState（含 α） */
       update(dt) {
         const rs = this.rs;
+        this.t += dt;
         this.event.kind = "none";
         this.event.note = "";
         this.event.side = void 0;
@@ -18094,34 +18163,83 @@ var init_gaitState = __esm({
           { B1_\u63A5\u5730: B1, B2_\u8F7D\u8377: B2, B3_MoS: B3, B4_\u6301\u7EED: B4 },
           { loadFrac: lf, thr, mos: rs.mos, holdSec: this.bearerT, otherLoad: rf }
         );
-        const U1 = rs.loadBearer !== null;
-        const U2 = rs.mos >= this.cfg.permitMosMin;
-        const U3 = rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
-        if (U2 && U3) this.unlockT += dt;
-        else this.unlockT = 0;
-        const U4 = this.unlockT >= this.cfg.unlockMosHoldSec;
+        const front = rs.frontLeg();
+        const rear = rs.rearLeg();
+        const dxOver = rs.comOverFootX(front);
+        const dzOver = rs.comOverFootZ(front);
+        const H1 = dxOver <= this.cfg.handoverTolX && dzOver <= this.cfg.handoverTolZ;
+        if (H1) this.handoverT += dt;
+        else this.handoverT = 0;
+        const H2 = this.handoverT >= this.cfg.handoverDwellSec;
+        const intervalOk = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
+        const H3 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
+        const H4 = rs.mos >= this.cfg.permitMosMin && rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
+        const handOver = H1 && H2 && intervalOk && H3 && H4;
+        rs.frontLegSide = front;
+        rs.rearLegSide = rear;
+        rs.handoverCriteria = makeCriteria(
+          {
+            H1_\u91CD\u5FC3\u5728\u524D\u817F: H1,
+            H2_\u9A7B\u7559: H2,
+            H3_\u524D\u817F\u627F\u91CD: H3,
+            H4_\u7A33\u5B9A: H4,
+            I_\u95F4\u96941s: intervalOk
+          },
+          {
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3,
+            tolXmm: this.cfg.handoverTolX * 1e3,
+            tolZmm: this.cfg.handoverTolZ * 1e3,
+            dwellSec: this.handoverT,
+            needSec: this.cfg.handoverDwellSec,
+            frontLoad: rs.loadFrac[front],
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs.mos,
+            tiltDeg: rs.tiltDeg
+          }
+        );
         for (const s of ["l", "r"]) {
-          const held = U1 && rs.loadBearer === s && U4;
           rs.unlockCriteria = makeCriteria(
-            { U1_\u627F\u91CD\u8FBE\u6807: held, U2_MoS: U2, U3_\u503E\u89D2: U3, U4_\u7A33\u5B9A\u7A97: U4 },
-            { mos: rs.mos, tiltDeg: rs.tiltDeg, winSec: this.unlockT, needSec: this.cfg.unlockMosHoldSec, held: held ? 1 : 0 }
+            {
+              U1_\u662F\u540E\u817F: s === rear,
+              U2_\u91CD\u5FC3\u5728\u524D\u817F: H1,
+              U3_\u9A7B\u7559: H2,
+              U4_\u95F4\u96941s: intervalOk,
+              U5_\u524D\u817F\u627F\u91CD: H3,
+              U6_\u7A33\u5B9A: H4
+            },
+            {
+              handOver: handOver ? 1 : 0,
+              isRear: s === rear ? 1 : 0,
+              dxOverMm: dxOver * 1e3,
+              intervalSec: this.t - this.lastStepT
+            }
           );
-          if (rs.locked[s] && held) {
+          if (rs.locked[s] && s === rear && handOver) {
             rs.locked[s] = false;
             rs.lockReleased[s] = true;
             this.event.kind = "lock_released";
             this.event.side = s;
-            this.event.note = "\u89E3\u9501\uFF0C\u5141\u8BB8\u518D\u62AC";
+            this.event.note = `\u89E3\u9501\u540E\u817F\uFF08\u95F4\u9694 ${(this.t - this.lastStepT).toFixed(2)}s\u3001\u91CD\u5FC3\u5728\u524D\u817F ${(dxOver * 1e3).toFixed(0)}mm\uFF09`;
           }
         }
-        const swingLocked = rs.locked[swing];
-        const P1 = rs.bearerCriteria.flags["B2_\u8F7D\u8377"] === true;
-        const P2 = !swingLocked;
-        const P3 = rs.mos >= this.cfg.permitMosMin;
-        const P4 = this.doubleT >= this.cfg.permitDoubleSupportSec;
+        const rearLocked = rs.locked[rear];
+        const P1 = H1 && H2;
+        const P2 = !rearLocked;
+        const P3 = intervalOk;
+        const P4 = rs.mos >= this.cfg.permitMosMin;
+        const P5 = H3;
         rs.stepPermit = makeCriteria(
-          { P1_\u91CD\u5FC3\u5230\u4F4D: P1, P2_\u672A\u9501\u5B9A: P2, P3_MoS: P3, P4_\u53CC\u652F\u6491\u65F6\u957F: P4 },
-          { mos: rs.mos, doubleSec: this.doubleT, swingLocked: swingLocked ? 1 : 0 }
+          { P1_\u91CD\u5FC3\u5728\u524D\u817F: P1, P2_\u540E\u817F\u5DF2\u89E3\u9501: P2, P3_\u95F4\u96941s: P3, P4_MoS: P4, P5_\u524D\u817F\u627F\u91CD: P5 },
+          {
+            dxOverMm: dxOver * 1e3,
+            rearLocked: rearLocked ? 1 : 0,
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs.mos,
+            frontLoad: rs.loadFrac[front]
+          }
         );
         const prev = rs.phase;
         this.migrate(prev, dt, bothGrounded, supSide, swing);
@@ -18148,45 +18266,75 @@ var init_gaitState = __esm({
         rs.authority = smoothAuthority(rs.phase, rs.phaseT, ramp, this.cfg.alphaSigma);
         return this.event;
       }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * 相位迁移。用户 2026-10-03 定调的形状：
+       *
+       *   「**计时状态允许两脚接地，这时候的工作就是重心交接**」
+       *
+       *   ⇒ **DOUBLE 就是交接阶段**：双脚站在地上，把重心从后腿**显式**搬到前腿。
+       *     单支撑（SINGLE）只在**交接验证通过**之后才进入 ——
+       *     不是"时间到了就进"，也不是"singleLeg 模式直接跳进去"。
+       *
+       *   修复的两个具体缺陷：
+       *   ① 原 `DOUBLE` 有 `if (cfg.singleLeg) { 0.2s 后直接进 SINGLE }`
+       *      ⇒ **整个重心交接阶段被跳过**（用户要的"两脚接地做交接"从来没发生过）。
+       *   ② 原 `PUSH` 超时回 `SINGLE` ⇒ 与 `SINGLE→PUSH`（0.15s）构成
+       *      **永久振荡** SINGLE(0.15s)↔PUSH(0.5s)，实测相位一直在这两者之间跳、
+       *      永远不回到 DOUBLE、也永远进不了 STEP。
+       *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
+       */
       migrate(prev, dt, both, supSide, swing) {
         const rs = this.rs;
+        const hv = rs.handoverCriteria.flags;
+        const handoverOk = hv["H1_\u91CD\u5FC3\u5728\u524D\u817F"] === true && hv["H2_\u9A7B\u7559"] === true && hv["I_\u95F4\u96941s"] === true;
         switch (prev) {
           case "DOUBLE":
-            if (this.cfg.singleLeg) {
-              if (rs.phaseT > 0.2) {
-                rs.phase = "SINGLE";
-              }
-              break;
-            }
-            if (rs.phaseT > 0.15 && (rs.loadFrac[swing] > 0.25 || rs.touchdown[swing])) rs.phase = "SHIFT";
-            break;
-          case "SHIFT":
-            if (rs.bearerCriteria.all) {
+            if (rs.phaseT >= this.cfg.handoverMinSec && handoverOk) {
               rs.phase = "SINGLE";
               rs.phaseT = 0;
-            } else if (rs.phaseT > 1.5) rs.phase = "DOUBLE";
+            }
+            break;
+          case "SHIFT":
+            if (handoverOk) {
+              rs.phase = "SINGLE";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > this.cfg.handoverTimeoutSec) {
+              rs.phase = "DOUBLE";
+              rs.phaseT = 0;
+            }
             break;
           case "SINGLE":
-            if (rs.phaseT > 0.15) rs.phase = "PUSH";
+            if (rs.phaseT >= this.cfg.singleDwellSec) {
+              rs.phase = "PUSH";
+              rs.phaseT = 0;
+            }
             break;
           case "PUSH":
-            if (rs.stepPermit.all && both) rs.phase = "STEP";
-            else if (rs.phaseT > 0.5) rs.phase = "SINGLE";
+            if (rs.stepPermit.all && both) {
+              rs.phase = "STEP";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > this.cfg.pushTimeoutSec) {
+              rs.phase = "DOUBLE";
+              rs.phaseT = 0;
+            }
             break;
           case "STEP":
             if (rs.touchdown[swing]) {
               rs.locked[swing] = true;
               rs.phase = "SHIFT";
               rs.phaseT = 0;
-            } else if (rs.phaseT > 1.5) {
+            } else if (rs.phaseT > this.cfg.stepTimeoutSec) {
               rs.phase = "DOUBLE";
               rs.phaseT = 0;
             }
             break;
         }
-        if (this.cfg.singleLeg && rs.phase === "DOUBLE" && rs.phaseT > 0.6) rs.phase = "SINGLE";
       }
       reset() {
+        this.t = 0;
+        this.lastStepT = -1e9;
+        this.handoverT = 0;
         this.bearerT = 0;
         this.unlockT = 0;
         this.hadBearer = false;

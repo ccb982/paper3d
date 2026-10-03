@@ -161,6 +161,10 @@ export interface RigSnapshot {
    *   所以"横向力"这件事在诊断里根本不可见。
    */
   grfCmd: { x: number; y: number; z: number };
+  /** 当前前腿（按实测脚 x）—— 交接判据与 UI 用 */
+  frontLegSide: Side;
+  /** 当前后腿（要动的那条） */
+  rearLegSide: Side;
   /** 骨盆抬升偏置（rad）。见 `RigState.pelvicLift` */
   pelvicLift: number;
   /** 摆动脚净空（m） */
@@ -171,6 +175,8 @@ export interface RigSnapshot {
   axes: AxisSnapshot[];
   criteria: {
     bearer: Criteria;
+    /** 交接判据（重心在前腿 + 间隔 1s） */
+    handover: Criteria;
     unlock: Criteria;
     stepPermit: Criteria;
   };
@@ -261,6 +267,14 @@ export class RigState {
   // ── 判据（由 gaitState 写入，逐条回读）
   bearerCriteria: Criteria = { flags: {}, values: {}, all: false };
   unlockCriteria: Criteria = { flags: {}, values: {}, all: false };
+  /**
+   * ★ 交接判据 H1..H4 + I（重心在前腿 / 驻留 / 前腿承重 / 稳定 / 间隔 1s）。
+   *   用户的交接定义：「满足 1s 间隔并且重心真在前腿了，才能解锁后腿」。
+   */
+  handoverCriteria: Criteria = { flags: {}, values: {}, all: false };
+  /** 当前的前腿 / 后腿（按实测脚 x）。字段名带 Side 以免与 `frontLeg()` 方法同名 */
+  frontLegSide: Side = 'l';
+  rearLegSide: Side = 'r';
   stepPermit: Criteria = { flags: {}, values: {}, all: false };
 
   private tickNo = 0;
@@ -337,6 +351,39 @@ export class RigState {
     this.comAz = this.comAz * 0.75 + raw * 0.25;
   }
   swingLeg(): Side { return this.supportLeg() === 'l' ? 'r' : 'l'; }
+
+  /**
+   * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。
+   *
+   *   用户原话：「要显式的把重心移动到前腿，然后才允许动后腿，
+   *   锁定前腿，前腿是支撑腿并且解锁后腿」。
+   *
+   *   ⚠ 必须按**实测脚 x** 判定，不能写死左右、也不能用载荷：
+   *     · 左右在 **z** 轴上（+z=左），前后在 **x** 轴上（+x 朝前）——两轴不同
+   *     · 前后腿在步态过程中会**互换**，写死就必错
+   *   约定：**x 大的是前腿**。x 差小于 3mm 视为并齐 ⇒ 用承重腿兜底。
+   */
+  frontLeg(): Side {
+    const dz = this.soleX.l - this.soleX.r;
+    if (Math.abs(dz) > 0.003) return dz > 0 ? 'l' : 'r';
+    return this.loadBearer ?? this.supportLeg();
+  }
+  /** 后腿（要动的那条） */
+  rearLeg(): Side { return this.frontLeg() === 'l' ? 'r' : 'l'; }
+
+  /**
+   * ★ 重心的**矢状**位置误差：重心是否落在指定脚**前方**（m）。
+   *   >0 = 重心在前脚前方（该脚接不住，重心会继续前移）
+   *   ≤0 = 重心已在前脚**上方或后方** ⇒ 该脚可以承重（交接条件）
+   *   归一化到腿长量级便于设阈值：`com.x − foot.x − halfLen`，`halfLen ≈ 0.06m`。
+   */
+  comOverFootX(side: Side): number {
+    return this.com.x - this.soleX[side] - 0.06;
+  }
+  /** 重心的**额状**偏移（m）：|com.z − foot.z| 才是横向支撑裕度 */
+  comOverFootZ(side: Side): number {
+    return Math.abs(this.com.z - this.soleZ[side]);
+  }
   isLocked(s: Side): boolean { return this.locked[s]; }
 
   jointPos(joint: number, axis: number): number { return this.pos[joint * 3 + axis] ?? 0; }
@@ -552,6 +599,7 @@ export class RigState {
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
       mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
+      frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       swingClearance: this.swingClearance,
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       legs: {
@@ -573,6 +621,7 @@ export class RigState {
       axes,
       criteria: {
         bearer: cloneCriteria(this.bearerCriteria),
+        handover: cloneCriteria(this.handoverCriteria),
         unlock: cloneCriteria(this.unlockCriteria),
         stepPermit: cloneCriteria(this.stepPermit),
       },
