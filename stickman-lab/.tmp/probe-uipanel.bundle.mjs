@@ -13549,7 +13549,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, DEFAULTS, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13566,6 +13566,7 @@ var init_ragdoll = __esm({
     LIMIT_SOFT_ZONE = 0.3;
     AXIS_X = 0;
     AXIS_Y = 1;
+    AXIS_Z = 2;
     DEFAULTS = {
       groundFriction: 1,
       bodyFriction: 0.9,
@@ -13578,7 +13579,9 @@ var init_ragdoll = __esm({
       jointGain: {},
       posRefScale: 0.9,
       purgeJointCache: true,
-      motorAlpha: MOTOR_ALPHA
+      motorAlpha: MOTOR_ALPHA,
+      ankleGroundFactor: 1
+      // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
     };
     Ragdoll = class _Ragdoll {
       sk;
@@ -13586,6 +13589,17 @@ var init_ragdoll = __esm({
       bodies = [];
       /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
       soleCol = [null, null];
+      /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
+      copTmp = new Float64Array(4);
+      /**
+       * ★★ **每轴权限**：`driveMotors` 的稳定性护栏放行了百分之多少（0~1）。
+       *   1 = 完全放行；<1 = 冲量被 `α·|err|·Ieff` 卡住。
+       *   必须可回读：**"马达没力"和"指令太小"在别的指标里看起来一模一样**
+       *   （历史事故：踝只能出 3% 的力矩，而存活/倾角指标全都"正常"）。
+       */
+      motorAuthority;
+      /** 接地时 Ieff 的放大倍数（踝专用；离地时用 1） */
+      groundFactor;
       /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
       joints = [];
       /** key → 刚体下标 */
@@ -13683,6 +13697,12 @@ var init_ragdoll = __esm({
         this.motorTarget = new Float32Array(sk2.joints.length * 3);
         this.motorImpulse = new Float64Array(sk2.joints.length * 3);
         this.motorDemand = new Float64Array(sk2.joints.length * 3);
+        this.motorAuthority = new Float32Array(sk2.joints.length * 3);
+        this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
+        this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
+        this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
+        this.ankleJoint = jointIndexByName(sk2, "foot_l");
+        this.ankleJointR = jointIndexByName(sk2, "foot_r");
         let topSpine = -1;
         for (const b of sk2.bodies) {
           const m = /^spine(\d+)$/.exec(b.key);
@@ -13731,12 +13751,39 @@ var init_ragdoll = __esm({
         const bodyI = new Float64Array(this.bodies.length);
         for (let i = 0; i < this.bodies.length; i++) {
           const I = this.bodies[i].principalInertia();
-          bodyI[i] = Math.max(1e-6, Math.min(I.x, I.y, I.z));
+          bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
         }
         for (let i = 0; i < sk2.joints.length; i++) {
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+        }
+        this.motorAuthority.fill(1);
+        this.groundFactor.fill(1);
+        this.ankleGroundFactorUsed.fill(1);
+        {
+          const ank = jointIndexByName(sk2, "foot_l");
+          const ankR = jointIndexByName(sk2, "foot_r");
+          for (const jn of [ank, ankR]) {
+            if (jn < 0) continue;
+            const footBody = jn === ank ? 0 : 1;
+            const aj = this.bodies[this.jointBodies[jn * 2 + 1]];
+            const ap = aj.translation();
+            let sum = 0;
+            for (const b of this.bodies) {
+              if (b === aj) continue;
+              const t = b.translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum += b.mass() * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[jn];
+            const tauMax = sk2.joints[jn].maxTorque[AXIS_Z] ?? 45;
+            const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
+            const need = want / Math.max(1e-9, free);
+            const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum / Math.max(1e-9, free), need));
+            this.groundFactor[jn] = f;
+            this.ankleGroundFactorUsed[jn] = f;
+          }
         }
         this.refPos = new Float64Array(sk2.joints.length * 3);
         this.refNeg = new Float64Array(sk2.joints.length * 3);
@@ -13793,6 +13840,67 @@ var init_ragdoll = __esm({
        *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
        *   仍被判成着地 ⇒ `lift` 项恒为 0。
        */
+      /**
+       * ★★★ **真·压力中心（CoP）** —— 直接由接触冲量加权算出（重构方案 §14.5 F1/F2 的验收量）。
+       *
+       *     CoP = Σ(P_i · λ_i) / Σλ_i        λ_i = 该接触点的法向冲量
+       *
+       * 为什么要直接读，而不是像以前那样从 ΔCoM 反推：
+       *   反推量的是"身体怎么动了"，混着惯量与耦合；直接读压力分布才是**足底发力**本身。
+       *   并且它是判定"接触柔度有没有用"的唯一干净指标：
+       *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
+       *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
+       *
+       * @param side 0=左 1=右
+       * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
+       */
+      readCoP(side, out) {
+        const col = this.soleCol[side];
+        out[0] = out[1] = out[2] = out[3] = 0;
+        if (!col) return;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (mf) => {
+            const n = mf.numSolverContacts();
+            for (let i = 0; i < n; i++) {
+              const ny = mf.normal().y;
+              if (Math.abs(ny) < 0.5) continue;
+              const p = mf.solverContactPoint(i);
+              const l = Math.abs(mf.contactImpulse(i));
+              if (!(l > 0)) continue;
+              sx += p.x * l;
+              sy += p.y * l;
+              sz += p.z * l;
+              sl += l;
+            }
+          });
+        });
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
+      footLoaded(side) {
+        this.readCoP(side, this.copTmp);
+        return this.copTmp[3] > 0;
+      }
+      ankleJoint;
+      ankleJointR;
+      footAuthUsed;
+      /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
+      ankleGroundFactorUsed;
+      /** 该关节是否是"承重的踝"（脚接地 ⇒ 用被约束的等效惯量） */
+      footLoadedFlag(joint) {
+        if (this.ankleJoint < 0 || joint !== this.ankleJoint) {
+          if (this.ankleJointR < 0 || joint !== this.ankleJointR) return false;
+          return this.copTmp[3] === 0 ? this.footGrounded(1) : this.copTmp[3] > 0;
+        }
+        this.readCoP(0, this.copTmp);
+        return this.copTmp[3] > 0;
+      }
       footGrounded(side) {
         const col = this.soleCol[side];
         if (!col) return false;
@@ -14087,7 +14195,8 @@ var init_ragdoll = __esm({
           rv[1] -= rr[1];
           rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-          const Ieff = this.jointIeff[i];
+          const gf = this.footLoadedFlag(i) ? this.groundFactor[i] : 1;
+          const Ieff = this.jointIeff[i] * gf;
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
             this.motorDemand[i * 3 + k] = 0;
@@ -14118,9 +14227,12 @@ var init_ragdoll = __esm({
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const impStable = alpha * Math.abs(err) * Ieff;
+            const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
             if (imp === 0) continue;
+            this.motorAuthority[idx] = Math.min(1, Math.abs(imp) / Math.max(1e-12, Math.abs(impWant)));
+            this.footAuthUsed[idx] = gf;
             if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
             else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
@@ -15822,6 +15934,9 @@ var init_sim = __esm({
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
+      contactHz: 0,
+      // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+      contactDamping: 1,
       /**
        * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
        * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
@@ -16215,6 +16330,12 @@ var init_sim = __esm({
         w.timestep = this.dt;
         w.numSolverIterations = this.cfg.solverIterations;
         w.numAdditionalFrictionIterations = Math.max(1, this.cfg.solverIterations >> 1);
+        if (this.cfg.contactHz > 0) {
+          const ip = w.integrationParameters;
+          ip.contact_natural_frequency = this.cfg.contactHz;
+          const dr = ip;
+          if ("contact_damping_ratio" in dr) dr.contact_damping_ratio = this.cfg.contactDamping;
+        }
         this.world = w;
         this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
         this.puppet = void 0;
@@ -17264,6 +17385,11 @@ var init_rigState = __esm({
       soleX = { l: 0, r: 0 };
       /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
       soleY = { l: 0, r: 0 };
+      /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
+      cop = {
+        l: { x: 0, z: 0, load: 0 },
+        r: { x: 0, z: 0, load: 0 }
+      };
       // ── 仲裁
       //  ⚠⚠ 用**固定长度 + fill(undefined)** 清空，**不要**用 `length = 0`：
       //     那会把数组真的清空，于是 `i >= this.req.length` 恒成立 ⇒
@@ -17559,6 +17685,7 @@ var init_rigState = __esm({
               grounded: this.grounded.l,
               loadFrac: this.loadFrac.l,
               soleY: this.soleY.l,
+              cop: { ...this.cop.l },
               isFront: front === "l",
               isBack: front !== "l",
               isBearer: this.loadBearer === "l",
@@ -17569,6 +17696,7 @@ var init_rigState = __esm({
               grounded: this.grounded.r,
               loadFrac: this.loadFrac.r,
               soleY: this.soleY.r,
+              cop: { ...this.cop.r },
               isFront: front === "r",
               isBack: front !== "r",
               isBearer: this.loadBearer === "r",
@@ -17824,14 +17952,14 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS) {
   rs.requestAngle(jSp1, 0, lat, "balance", "\u8EAF\u5E72\u989D\u72B6");
   if (jSp2 >= 0) rs.requestAngle(jSp2, 2, clamp(sp1Sag * 0.4, p.maxTorso * 0.6), "balance", "\u8170\u4E0A\u6BB5");
   if (jAnk >= 0) {
-    const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
-    const xi = rs.dcm.x;
-    let ankSag = p.kCopSag * (xi - stanceX) + p.kCopSagD * rs.com.vx;
+    const cop = rs.cop[sup];
+    const copErr = rs.dcm.x - cop.x;
+    let ankSag = -p.kCopSag * copErr - p.kCopSagD * rs.com.vx;
     if (rs.phase === "PUSH") ankSag += Math.abs(p.pushDeg) * D2R2;
     ankSag = clamp(ankSag, p.maxAnkleSag);
-    rs.requestAngle(jAnk, 2, ankSag, "balance", "\u8E1DCoP/\u8E6C\u79BB");
-    const ankLat = clamp(-p.kCopLat * (rs.dcm.z - rs.support.cz), p.maxAnkleLat);
-    rs.requestAngle(jAnk, 0, ankLat, "balance", "\u8E1D\u989D\u72B6");
+    rs.requestAngle(jAnk, 2, ankSag, "balance", "\u8E1DCoP\u8C03\u8282");
+    const latErr = rs.dcm.z - cop.z;
+    rs.requestAngle(jAnk, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u8E1D\u989D\u72B6CoP");
   }
 }
 var DEFAULT_BALANCE_PARAMS;
@@ -17856,12 +17984,13 @@ var init_balance2 = __esm({
       //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
       //   LIPM：CoP 在 CoM **前方** ⇒ 力矩把 CoM 往**后**拉
       //   ⇒ 要把 ξ 拉回 0（ζ 超前）就要 CoP 前移 ⇒ 踝角 = +k·ξ
-      kCopSag: 1.2,
-      kCopSagD: 0.15,
-      kCopLat: 0.5,
+      // 闭环在 CoP 上：单位是 m/m = 无量纲 ⇒ 增益就是"角度/误差"
+      kCopSag: 6,
+      kCopSagD: 0,
+      kCopLat: 2,
       pushDeg: 12,
-      maxAnkleSag: 0.26,
-      maxAnkleLat: 0.14
+      maxAnkleSag: 0.2,
+      maxAnkleLat: 0.12
     };
   }
 });
@@ -17919,7 +18048,7 @@ __export(controller_exports, {
   auditJoints: () => auditJoints,
   rigSummary: () => rigSummary
 });
-var DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV;
+var DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R;
 var init_controller = __esm({
   "src/core/controller.ts"() {
     "use strict";
@@ -17983,6 +18112,14 @@ var init_controller = __esm({
             rs.vel[i] = TMP_RV[a];
           }
         }
+        sim2.doll.readCoP(0, TMP_COP_L);
+        sim2.doll.readCoP(1, TMP_COP_R);
+        rs.cop.l.x = TMP_COP_L[0];
+        rs.cop.l.z = TMP_COP_L[2];
+        rs.cop.l.load = TMP_COP_L[3];
+        rs.cop.r.x = TMP_COP_R[0];
+        rs.cop.r.z = TMP_COP_R[2];
+        rs.cop.r.load = TMP_COP_R[3];
         rs.torsoY = sim2.doll.torso().translation().y;
         rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         rs.grf.x = 0;
@@ -18009,6 +18146,8 @@ var init_controller = __esm({
     TMP_A = new Float64Array(3);
     TMP_B = new Float64Array(3);
     TMP_RV = new Float64Array(3);
+    TMP_COP_L = new Float64Array(4);
+    TMP_COP_R = new Float64Array(4);
   }
 });
 

@@ -50,6 +50,10 @@
     "auth": "node tools/run.mjs probe-auth2",
     "fitdir": "node tools/run.mjs probe-fitdir",
     "own": "node tools/run.mjs probe-own",
+    "copauth": "node tools/run.mjs probe-copauth",
+    "balsweep": "node tools/run.mjs probe-balsweep",
+    "balance2": "node tools/run.mjs probe-balance2",
+    "authority": "node tools/run.mjs probe-authority",
     "uipanel": "node tools/run-uipanel.mjs"
   },
   "dependencies": {

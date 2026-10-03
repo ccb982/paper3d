@@ -45,7 +45,9 @@ const SUP = (process.argv[4] ?? 'l') as 'l' | 'r';
 if (SUP !== 'l' && SUP !== 'r') throw new Error(`支撑腿参数必须是 l 或 r，收到 ${JSON.stringify(SUP)}`);
 const log = console.log;
 
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller' });
+const AGF = Number(process.env.AGF ?? 6);
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller',
+  doll: { ankleGroundFactor: AGF } });
 sim.begin(new Float32Array(sim.params.length));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
@@ -54,7 +56,7 @@ const ctrl = new Controller(sk, sim, {
 
 log('══ 重构后验收：单腿站立（考核平衡维持系统）══');
 log(`  骨架 ${ctrl.summary}`);
-log(`  支撑腿 = ${SUP === 'l' ? '左' : '右'}   回合 ${DUR}s   踝=${ANKLE_ON ? `开 ${ANK_TAU}N·m` : '关'}`);
+log(`  支撑腿 = ${SUP === 'l' ? '左' : '右'}   回合 ${DUR}s   踝=${ANKLE_ON ? `开 ${ANK_TAU}N·m，接地惯量×${AGF}` : '关'}`);
 log('');
 log('  体检发现的问题（这些决定了控制器能写哪些轴）：');
 for (const pr of ctrl.rigReport.problems.slice(0, 6)) log(`    · ${pr}`);

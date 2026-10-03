@@ -118,6 +118,8 @@ export interface SideSnapshot {
   isBack: boolean;
   isBearer: boolean;
   locked: boolean;
+  /** 压力中心相对该脚踝点的偏移（m，矢状 x / 额状 z） */
+  cop: { x: number; z: number; load: number };
 }
 
 export interface RigSnapshot {
@@ -178,6 +180,10 @@ export class RigState {
   soleX: Record<Side, number> = { l: 0, r: 0 };
   /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
   readonly soleY: Record<Side, number> = { l: 0, r: 0 };
+  /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
+  readonly cop: Record<Side, { x: number; z: number; load: number }> = {
+    l: { x: 0, z: 0, load: 0 }, r: { x: 0, z: 0, load: 0 },
+  };
 
   // ── 仲裁
   //  ⚠⚠ 用**固定长度 + fill(undefined)** 清空，**不要**用 `length = 0`：
@@ -425,11 +431,13 @@ export class RigState {
       legs: {
         l: {
           side: 'l', grounded: this.grounded.l, loadFrac: this.loadFrac.l, soleY: this.soleY.l,
+          cop: { ...this.cop.l },
           isFront: front === 'l', isBack: front !== 'l',
           isBearer: this.loadBearer === 'l', locked: this.locked.l,
         },
         r: {
           side: 'r', grounded: this.grounded.r, loadFrac: this.loadFrac.r, soleY: this.soleY.r,
+          cop: { ...this.cop.r },
           isFront: front === 'r', isBack: front !== 'r',
           isBearer: this.loadBearer === 'r', locked: this.locked.r,
         },

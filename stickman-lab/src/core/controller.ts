@@ -89,6 +89,10 @@ export class Controller {
         rs.vel[i] = TMP_RV[a]!;
       }
     }
+    // ★ 真·压力中心（足部发力的直接测量，见 Ragdoll.readCoP）
+    sim.doll.readCoP(0, TMP_COP_L); sim.doll.readCoP(1, TMP_COP_R);
+    rs.cop.l.x = TMP_COP_L[0]!; rs.cop.l.z = TMP_COP_L[2]!; rs.cop.l.load = TMP_COP_L[3]!;
+    rs.cop.r.x = TMP_COP_R[0]!; rs.cop.r.z = TMP_COP_R[2]!; rs.cop.r.load = TMP_COP_R[3]!;
     rs.torsoY = sim.doll.torso().translation().y;
     rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
     // GRF：用法向载荷 + 接触切向估计的合力方向（横/竖比实测 0.074~0.333）
@@ -126,5 +130,7 @@ export class Controller {
 const TMP_A = new Float64Array(3);
 const TMP_B = new Float64Array(3);
 const TMP_RV = new Float64Array(3);
+const TMP_COP_L = new Float64Array(4);
+const TMP_COP_R = new Float64Array(4);
 export { auditJoints, rigSummary };
 export type { RigReport, RigSnapshot };

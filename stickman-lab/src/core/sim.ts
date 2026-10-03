@@ -169,6 +169,22 @@ export interface SimConfig {
    *   16 是默认档；要更硬的关节就 32（物理开销 +66%）。
    */
   solverIterations: number;
+  /**
+   * ★★ **接触柔度**（重构方案 §14.5 F1）—— 足底/地面的法向柔顺性。
+   *
+   *   Rapier 0.14 **原生支持**：`world.integrationParameters.contact_natural_frequency`
+   *   与 `contact_damping_ratio`。这是把"刚性足"变成"柔性足"的最低成本手段：
+   *   压力分布从"几何决定"变成"法向柔度加权决定" ⇒ **CoP 变成连续可控量**。
+   *
+   *   `contactHz = 0` ⇒ 完全刚性（Rapier 默认行为，≈ 无限刚度）。
+   *   文献锚点：Loram & Lakie 2002 —— 人类踝的被动刚度是 `mgh` 的 **91%**，
+   *   且位于踝的**远端**（足 + 跟腱串联）；Sasagawa 2009 —— **80% mgh 时直立姿态是鞍点**。
+   *   ⇒ 目标是把被动刚度抬到 77~109% mgh 那个量级（Lakie 2018：被动背屈 18.7°
+   *     可把刚度从 50% 抬到 77% mgh）。
+   */
+  contactHz: number;
+  /** 接触阻尼比（0 = 无阻尼，容易振荡；1 = 临界阻尼）。默认 1 */
+  contactDamping: number;
   /** 摔倒判定：躯干高度低于初始的该比例 */
   fallHeightRatio: number;
   /** 摔倒判定：躯干"上方向"偏离世界竖直超过该值（弧度） */
@@ -216,6 +232,8 @@ export const DEFAULT_SIM: SimConfig = {
   stillGrace: 0.25,   // ★ 收紧：循环外只免费站 0.25 s，静止罚很快就上
   stillRamp: 1.5,     // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
   solverIterations: 16,
+  contactHz: 0,            // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+  contactDamping: 1,
   /**
    * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
    * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
@@ -590,6 +608,13 @@ export class Sim {
     w.timestep = this.dt;
     w.numSolverIterations = this.cfg.solverIterations;
     w.numAdditionalFrictionIterations = Math.max(1, this.cfg.solverIterations >> 1);
+    // ★★ F1：接触柔度。contactHz=0 ⇒ 不设置（Rapier 默认刚性 ⇒ 与旧行为逐位一致）
+    if (this.cfg.contactHz > 0) {
+      const ip = w.integrationParameters;
+      ip.contact_natural_frequency = this.cfg.contactHz;
+      const dr = (ip as unknown as { contact_damping_ratio?: number });
+      if ('contact_damping_ratio' in dr) dr.contact_damping_ratio = this.cfg.contactDamping;
+    }
     this.world = w;
     this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
 

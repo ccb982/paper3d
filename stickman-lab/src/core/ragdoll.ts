@@ -39,7 +39,7 @@
 //   是数值发散的温床。代价是左右腿可以互穿 —— 对"纸片人偶"这个视觉风格反而是好事。
 
 import RAPIER from '@dimforge/rapier3d';
-import { JOINT_MAX_SPEED, restQuatOf, type BodyDef, type JointDef, type Skeleton } from './skeleton';
+import { JOINT_MAX_SPEED, jointIndexByName, restQuatOf, type BodyDef, type JointDef, type Skeleton } from './skeleton';
 
 // ---------------------------------------------------------------- 碰撞分组
 // groups = (membership << 16) | filter，双方都要放行才算碰撞。
@@ -210,6 +210,21 @@ export interface RagdollOptions {
    * ★ 越界回程用 MOTOR_ALPHA_RECOVER（同为 1.0）—— 回程是保命动作，不受这个旋钮影响。
    */
   motorAlpha?: number;
+  /**
+   * ★★ **踝接地时的等效惯量放大倍数**（"踝权限 ↔ 稳定性"的唯一旋钮）。
+   *
+   *   背景：稳定性护栏 `|imp| ≤ α·|err|·Ieff` 里的 Ieff 若只用**自由**脚掌的惯量
+   *   （1.5 kg 薄盒 ⇒ ≈0.0047 kg·m²），要放行 τmax=60 N·m 需要 Ieff ≥ 0.0556
+   *   ⇒ **踝只能拿到 8.4% 的力矩**（实测 τ_demand 60 / τ_applied 5.02），
+   *   而存活/倾角指标全都"正常"。
+   *
+   *   物理上，**承重的脚被地面反作用约束住**，它在踝处的等效惯量应该是
+   *   "脚掌之上整个身体绕踝的惯量"（点质量近似 ≈ 0.5~1 kg·m²），不是脚掌自身的质量。
+   *
+   *   ⚠ 但不能一���放大：实测 factor 很大时**脚会被踹飞**（接触 Σλ 归零 ⇒ 整条力链断）。
+   *   ⇒ 必须扫参，取"权限够但脚不离地"的那一档。
+   */
+  ankleGroundFactor?: number;
 }
 
 const DEFAULTS: Required<RagdollOptions> = {
@@ -225,6 +240,7 @@ const DEFAULTS: Required<RagdollOptions> = {
   posRefScale: 0.9,
   purgeJointCache: true,
   motorAlpha: MOTOR_ALPHA,
+  ankleGroundFactor: 1,   // ★ 默认 1 = 不放大（保持重构前的行为）。放大必须先重调踝的 PD/惯量，见 probe-ankle
 };
 
 // ---------------------------------------------------------------- 四元数工具
@@ -335,6 +351,17 @@ export class Ragdoll {
   readonly bodies: RAPIER.RigidBody[] = [];
   /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
   readonly soleCol: [RAPIER.Collider | null, RAPIER.Collider | null] = [null, null];
+  /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
+  private readonly copTmp = new Float64Array(4);
+  /**
+   * ★★ **每轴权限**：`driveMotors` 的稳定性护栏放行了百分之多少（0~1）。
+   *   1 = 完全放行；<1 = 冲量被 `α·|err|·Ieff` 卡住。
+   *   必须可回读：**"马达没力"和"指令太小"在别的指标里看起来一模一样**
+   *   （历史事故：踝只能出 3% 的力矩，而存活/倾角指标全都"正常"）。
+   */
+  readonly motorAuthority: Float32Array;
+  /** 接地时 Ieff 的放大倍数（踝专用；离地时用 1） */
+  private readonly groundFactor: Float32Array;
   /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
   readonly joints: RAPIER.ImpulseJoint[] = [];
   /** key → 刚体下标 */
@@ -442,6 +469,12 @@ export class Ragdoll {
     this.motorTarget = new Float32Array(sk.joints.length * 3);
     this.motorImpulse = new Float64Array(sk.joints.length * 3);
     this.motorDemand = new Float64Array(sk.joints.length * 3);
+    this.motorAuthority = new Float32Array(sk.joints.length * 3);
+    this.groundFactor = new Float32Array(sk.joints.length).fill(1);
+    this.footAuthUsed = new Float32Array(sk.joints.length * 3).fill(1);
+    this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
+    this.ankleJoint = jointIndexByName(sk, 'foot_l');
+    this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
     // ★ 身体参考点：脊柱最上一段（spineN）；没有分段就是 'torso'
     let topSpine = -1;
@@ -533,15 +566,78 @@ export class Ragdoll {
     //         Δω_rel = imp·(1/I_c + 1/I_p) = imp / Ieff，Ieff = 1/(1/Ic + 1/Ip)
     //       显式 P 控制稳定的充要条件是每步吃掉的比例 α < 2，取 0.35 留足余量。
     this.jointIeff = new Float64Array(sk.joints.length);
+    // ★★★ **每轴有效惯量**：必须用**最大**主惯量，不能用 `min`。
+    //
+    //   历史事故（同一个坑修过两次，第二次漏在这里）：
+    //     `min(I.x,I.y,I.z)` 对**薄盒形脚掌**极小（实测 ≈0.0022 kg·m²），
+    //     于是稳定性护栏 `|imp| ≤ α·|err|·Ieff` 把踝的冲量卡到只剩 **3%**
+    //     ⇒ 踝实际只能出 ~1 N·m（τmax 是 60）⇒ CoP 权限≈0，
+    //       而所有指标看起来都"正常"。
+    //     `enforceLimits` 早就发现并修过（见那里的注释），**但 driveMotors 没跟着修**。
+    //
+    //   护栏的物理目的是"别过冲速度误差"，它应该用**该轴**的惯量；
+    //   取最大主惯量是保守的**上界**（护栏更宽松），实测不发散。
     const bodyI = new Float64Array(this.bodies.length);
     for (let i = 0; i < this.bodies.length; i++) {
       const I = this.bodies[i].principalInertia();
-      bodyI[i] = Math.max(1e-6, Math.min(I.x, I.y, I.z));
+      bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
     }
     for (let i = 0; i < sk.joints.length; i++) {
       const ip = bodyI[this.jointBodies[i * 2]];
       const ic = bodyI[this.jointBodies[i * 2 + 1]];
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+    }
+    // ★ 权限诊断：护栏放行了-demanded 的百分之多少（0~1）。<1 就是被护栏卡住。
+    //   这个量必须可回读 —— 否则"马达没力"和"指令太小"看起来一模一样。
+    this.motorAuthority.fill(1);
+
+    // ─────────────────────────────────────────────────────────────
+    // ★★★ **接地时的等效惯量**（第二次修同一个坑，仍然漏在 driveMotors）
+    //
+    //   护栏 `|imp| ≤ α·|err|·Ieff` 里的 Ieff 若只用**自由**脚掌的主惯量，
+    //   一只 1.5 kg 的薄盒脚 Ieff ≈ 0.0047 kg·m²，而"要放行 τmax=60 需 Ieff ≥ 0.0556"
+    //   ⇒ **踝只能拿到 8.4% 的力矩**（实测 τ_demand 60 / τ_applied 5.02 N·m）。
+    //
+    //   物理上这是错的：**承重的脚被地面反作用约束住**，它在踝处的等效惯量
+    //   不是脚掌的质量，而是"脚掌之上整个身体绕踝的惯量"（点质量近似
+    //   `Σ mᵢ·rᵢ²`，≈ 0.5~1 kg·m²）—— 大得多。
+    //   自由脚掌那个值只在**脚离地**时才该用（那时确实可以瞬间加速）。
+    //
+    //   ⇒ 预计算 `groundFactor[i] = Ieff_接地 / Ieff_自由`，接地时乘上去。
+    //   这不是"把护栏调松"，是**把护栏用在对的地方**。
+    // ─────────────────────────────────────────────────────────────
+    this.groundFactor.fill(1);
+    this.ankleGroundFactorUsed.fill(1);
+    {
+      const ank = jointIndexByName(sk, 'foot_l');
+      const ankR = jointIndexByName(sk, 'foot_r');
+      for (const jn of [ank, ankR]) {
+        if (jn < 0) continue;
+        const footBody = jn === ank ? 0 : 1;
+        void footBody;
+        const aj = this.bodies[this.jointBodies[jn * 2 + 1]]!;   // 子体 = 脚
+        const ap = aj.translation();
+        // 点质量近似：踝以上所有刚体绕踝的 Σ mᵢ·rᵢ²（排除脚自身）
+        let sum = 0;
+        for (const b of this.bodies) {
+          if (b === aj) continue;
+          const t = b.translation();
+          const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+          sum += b.mass() * (dx * dx + dy * dy + dz * dz);
+        }
+        void ap;
+        const free = this.jointIeff[jn]!;
+        // 限制放大倍数：护栏还必须留一点（不然真会发散），但要够放行 τmax
+        // 要放行 τmax 所需的 Ieff 下限：τmax·dt/(JOINT_MAX_SPEED·α)，α=1
+        const tauMax = sk.joints[jn]!.maxTorque[AXIS_Z] ?? 45;
+        const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
+        // ★ 放大倍数是"踝权限 ↔ 稳定性"的唯一旋钮，必须可调、可扫：
+        //   太大 ⇒ 脚被踹飞（实测 Σλ 归零）；太小 ⇒ 权限上不来（实测 8.4%）。
+        const need = want / Math.max(1e-9, free);
+        const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum / Math.max(1e-9, free), need));
+        this.groundFactor[jn] = f;
+        this.ankleGroundFactorUsed[jn] = f;
+      }
     }
 
     // ---- ★ 位置命令的 θ_ref 斜率（每轴一份，构造时算一次）----
@@ -614,6 +710,65 @@ export class Ragdoll {
    *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
    *   仍被判成着地 ⇒ `lift` 项恒为 0。
    */
+  /**
+   * ★★★ **真·压力中心（CoP）** —— 直接由接触冲量加权算出（重构方案 §14.5 F1/F2 的验收量）。
+   *
+   *     CoP = Σ(P_i · λ_i) / Σλ_i        λ_i = 该接触点的法向冲量
+   *
+   * 为什么要直接读，而不是像以前那样从 ΔCoM 反推：
+   *   反推量的是"身体怎么动了"，混着惯量与耦合；直接读压力分布才是**足底发力**本身。
+   *   并且它是判定"接触柔度有没有用"的唯一干净指标：
+   *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
+   *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
+   *
+   * @param side 0=左 1=右
+   * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
+   */
+  readCoP(side: 0 | 1, out: Float64Array): void {
+    const col = this.soleCol[side];
+    out[0] = out[1] = out[2] = out[3] = 0;
+    if (!col) return;
+    let sx = 0, sy = 0, sz = 0, sl = 0;
+    this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
+      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+        const n = mf.numSolverContacts();
+        for (let i = 0; i < n; i++) {
+          // ★ 只要法向分量：切向冲量是摩擦，不是"压力中心"的定义
+          const ny = mf.normal().y;
+          if (Math.abs(ny) < 0.5) continue;
+          const p = mf.solverContactPoint(i);
+          const l = Math.abs(mf.contactImpulse(i));
+          if (!(l > 0)) continue;
+          sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
+        }
+      });
+    });
+    if (sl > 0) { out[0] = sx / sl; out[1] = sy / sl; out[2] = sz / sl; }
+    out[3] = sl;
+  }
+
+  /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
+  footLoaded(side: 0 | 1): boolean {
+    this.readCoP(side, this.copTmp);
+    return this.copTmp[3]! > 0;
+  }
+
+  private readonly ankleJoint: number;
+  private readonly ankleJointR: number;
+  private readonly footAuthUsed: Float32Array;
+  /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
+  readonly ankleGroundFactorUsed: Float32Array;
+
+  /** 该关节是否是"承重的踝"（脚接地 ⇒ 用被约束的等效惯量） */
+  private footLoadedFlag(joint: number): boolean {
+    if (this.ankleJoint < 0 || joint !== this.ankleJoint) {
+      if (this.ankleJointR < 0 || joint !== this.ankleJointR) return false;
+      return this.copTmp[3] === 0 ? this.footGrounded(1) : this.copTmp[3]! > 0;
+    }
+    this.readCoP(0, this.copTmp);
+    return this.copTmp[3]! > 0;
+  }
+
   footGrounded(side: 0 | 1): boolean {
     const col = this.soleCol[side];
     if (!col) return false;
@@ -927,7 +1082,9 @@ export class Ragdoll {
       const rr = j.restRad;
       rv[0] -= rr[0]; rv[1] -= rr[1]; rv[2] -= rr[2];
       calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-      const Ieff = this.jointIeff[i];
+      // ★ 踝接地时用被地面约束放大的等效惯量（见构造里 groundFactor 的注释）
+      const gf = this.footLoadedFlag(i) ? this.groundFactor[i]! : 1;
+      const Ieff = this.jointIeff[i]! * gf;
 
       for (let k = 0; k < 3; k++) {
         // 记账：本步该轴实际施加 / 想要施加的马达冲量（0 = 该轴没出力，skip 分支不会漏）
@@ -993,9 +1150,13 @@ export class Ragdoll {
 
         // ★ 稳定性上限：|imp| ≤ α·|err|·Ieff ⇒ 每步最多吃掉 α 比例的相对角速度误差
         const impStable = alpha * Math.abs(err) * Ieff;
+        const impWant = imp;
         if (imp > impStable) imp = impStable;
         else if (imp < -impStable) imp = -impStable;
         if (imp === 0) continue;
+        // ★ 记录权限：护栏放行了百分之多少。<1 ⇒ 被护栏卡住（不是"指令小"）
+        this.motorAuthority[idx] = Math.min(1, Math.abs(imp) / Math.max(1e-12, Math.abs(impWant)));
+        this.footAuthUsed[idx] = gf;
 
         // 本地轴 k → 世界轴（父体姿态）
         if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);

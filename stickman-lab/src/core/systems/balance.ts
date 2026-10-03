@@ -76,12 +76,13 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
   //   LIPM：CoP 在 CoM **前方** ⇒ 力矩把 CoM 往**后**拉
   //   ⇒ 要把 ξ 拉回 0（ζ 超前）就要 CoP 前移 ⇒ 踝角 = +k·ξ
-  kCopSag: 1.2,
-  kCopSagD: 0.15,
-  kCopLat: 0.5,
+  // 闭环在 CoP 上：单位是 m/m = 无量纲 ⇒ 增益就是"角度/误差"
+  kCopSag: 6,
+  kCopSagD: 0.0,
+  kCopLat: 2.0,
   pushDeg: 12,
-  maxAnkleSag: 0.26,
-  maxAnkleLat: 0.14,
+  maxAnkleSag: 0.20,
+  maxAnkleLat: 0.12,
 };
 
 /**
@@ -156,16 +157,29 @@ export function balanceSystem(rs: RigState, p: BalanceParams = DEFAULT_BALANCE_P
   //   符号（实测）：正踝角（跖屈）⇒ CoP 前移 ⇒ CoM 被往**后**拉 ⇒ 用来消 ξ。
   // ══════════════════════════════════════════════════════════════
   if (jAnk >= 0) {
-    const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;
-    const xi = rs.dcm.x;                       // 捕获点（已含速度项）
-    let ankSag = p.kCopSag * (xi - stanceX) + p.kCopSagD * rs.com.vx;
+    // ★★★ **CoP 直接调节器**（不是"猜符号的踝角 PD"）
+    //
+    //   实测（tools/probe-copauth）：刚性/柔性足上 **正踝角 ⇒ CoP 后移**（−5.2mm @ +12°）。
+    //   机理：平底绕踝转 ⇒ 脚尖离地、脚跟吃重 ⇒ 接触形心自然后退。
+    //   ⇒ 要让 CoP **前移**必须给**负**角。所以：
+    //
+    //       目标：CoP → 捕获点 ξ（放 ξ 处 ⇒ CoM 恰好停住，Hof 2005）
+    //       律：  θ_ref = −k · (ξ − CoP_实测) − kd·(CoP 移动速度)
+    //
+    //   ★ 为什么必须闭环在 CoP 上而不是"角度 PD"：
+    //     角度 PD 在平衡点自然停下（实测只出 1 N·m ⇒ CoP 只移 1.5mm），
+    //     而 CoP 是**力**的直接读数，闭环在它上面才既有的放矢又不用猜符号。
+    const cop = rs.cop[sup];
+    const copErr = rs.dcm.x - cop.x;
+    let ankSag = -p.kCopSag * copErr - p.kCopSagD * rs.com.vx;
     // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
     if (rs.phase === 'PUSH') ankSag += Math.abs(p.pushDeg) * D2R;
+    // ★ 斜率限制：踝有力矩了（护栏修好后权限 1.0），必须限速否则一帧砸下去
     ankSag = clamp(ankSag, p.maxAnkleSag);
-    rs.requestAngle(jAnk, 2, ankSag, 'balance', '踝CoP/蹬离');
+    rs.requestAngle(jAnk, 2, ankSag, 'balance', '踝CoP调节');
 
-    // 额状面踝：实测权限很弱（Δz≈4mm），只做微调，主力仍是 spine1/0
-    const ankLat = clamp(-p.kCopLat * (rs.dcm.z - rs.support.cz), p.maxAnkleLat);
-    rs.requestAngle(jAnk, 0, ankLat, 'balance', '踝额状');
+    // 额状面同样闭环在实测 CoP 上（目标 = 侧向捕获点）
+    const latErr = rs.dcm.z - cop.z;
+    rs.requestAngle(jAnk, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '踝额状CoP');
   }
 }
