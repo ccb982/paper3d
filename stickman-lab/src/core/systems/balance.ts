@@ -33,26 +33,12 @@ import type { Ragdoll } from '../ragdoll';
 import type { RigState, Side } from '../rigState';
 
 export interface BalanceParams {
-  /** 矢状面：髋策略比例增益（rad/s per m） */
-  kSagP: number;
-  /** 矢状面：髋策略阻尼。★ 实测纯 P 已足够，加 D 会共振 */
-  kSagD: number;
-  /** 矢状面：躯干对齐 GRF 力线的增益 */
-  kTorsoAlign: number;
-  /** 额状面：躯干（唯一通道 spine1/0）比例增益 */
-  kLatP: number;
-  kLatD: number;
   /**
    * 膝的**屈曲限位**（deg）—— 超过就顶回来。
    * ★ 不是目标角：站立时膝角近似恒定（Li & Levine 2010），零输出时 PD 已保持绑定角。
    *   实测把它当目标用 ⇒ 只留膝这一条就把存活从"站满 8s"打成 2.6s。
    */
   kneeHoldDeg: number;
-  kKnee: number;
-  kHipUpright: number;
-  maxHip: number;
-  maxKnee: number;
-  maxTorso: number;
   // ── 踝（CoP 策略）─────────────────────────────────────────
   /** 矢状面：踝 CoP 比例增益（rad per m）。目标量是**捕获点**，不是躯干角 */
   kCopSag: number;
@@ -73,12 +59,33 @@ export interface BalanceParams {
    * 1.0 = 临界阻尼的自然选择；实测 2.5（即固定 25）会把人掀翻 tilt 133°。
    */
   kXRatio: number;
-  /** 横向 GRF 限幅（N）。文献单腿静态需求约 49 N（52 N·m / 1.06 m），留 ~10 倍裕度 */
-  maxGrfX: number;
+  /** 额状水平力限幅（N）。文献静态需求约 49N（Neumann 2010） */
+  maxLateral: number;
+  /**
+   * ★★ **支撑链控制方式** —— 两条路径**彻底互斥**，不允许中间态。
+   *
+   *   `false`（默认）= **纯位置伺服**：`τ = kP·(θ_ref−θ)·τmax/ωmax`，
+   *     力矩通道**完全关闭**。
+   *   `true` = **逆动力学**：支撑链让位（`requestHold`，位置环只剩阻尼），
+   *     定量支撑全部由 `τ = JᵀF` 给出（**必须**同时含 `weight`=mg）。
+   *
+   *   ⚠ 半吊子状态（只做一半）会直接软掉，且两次把我引到错误结论：
+   *     · 让位了但 mg 没开 ⇒ 既无位置刚度也无定量支撑 ⇒ 腿塌（实测 1.05 s）
+   *     · 位置伺服还在、却注入水平 `Fx` ⇒ **水平方向也双计**
+   *       （θ_ref 本来就随位移变化、已在抵抗外力）⇒ 实测 2.58 s
+   *   ⇒ 所以这不是"两个可叠加的通道"，而是**换挡**。
+   */
+  torqueControl: boolean;
+  /**
+   * ★★ 额状面主通道总开关（**只在 `torqueControl=true` 时有意义**），默认关。
+   *   架构开关真实接线后的实测：`maxLateral` ∈ {30,60,120,200,500} N ×
+   *   `kXRatio` ∈ {0.15,0.4} —— 全部在 1.07~1.48 s 倒，`lat` 关掉则站满。
+   *   方向和量级都对（横向偏差 158 → 90 mm）但**伤害身体**，且**与力的大小无关**
+   *   ⇒ 是 `τ=JᵀF` 的**力矩分配位置**问题，不是限幅问题。查清前默认关闭。
+   */
+  lateralEnabled: boolean;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
-  /** 支撑腿伸展刚度（0~1）：1 = 完全顶回原位。臀肌+股四头肌共同收缩的等效刚度 */
-  kStanceExt: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
   kneeStanceDeg: number;
   // ── 骨盆抬升（pelvic hike）────────────────────────────────────────
@@ -122,19 +129,9 @@ export interface BalanceParams {
 }
 
 export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
-  kSagP: 2.2,
-  kSagD: 0.0,
-  kTorsoAlign: 1.0,
   // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
   //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
-  kLatP: 0.0,
-  kLatD: 0.0,
   kneeHoldDeg: 15,
-  kKnee: 0.6,
-  kHipUpright: 0.8,
-  maxHip: 0.52,
-  maxKnee: 0.35,
-  maxTorso: 0.14,
   // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
   //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
   //   ⇒ **正角（跖屈，脚尖下压）把 CoP / CoM 往前推**
@@ -152,6 +149,25 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   maxTrunkLean: 0.14,
   // 捕获点 → 支撑脚的二阶比例增益（×ω₀²）
   kXRatio: 0.4,
+  /**
+   * ★★ 额状面主通道总开关。**默认关** —— 架构开关已真实接线后的实测结论：
+   *   `maxLateral` ∈ {30, 60, 120, 200, 500} N × `kXRatio` ∈ {0.15, 0.4}
+   *   —— **全部**在 1.07~1.48 s 倒；`lat` 关掉则站满。
+   *   额状力**方向和量级都对**（重心横向偏差 158 → 90 mm），
+   *   但 `τ = JᵀF` 把它分配到支撑链的方式**在伤害身体**，且**与力的大小无关**
+   *   （限幅从 30N 到 500N 结果几乎一样）⇒ 不是限幅问题，是**力矩分配位置**问题。
+   *   在查清之前默认关闭，不让已知有害的通道进默认路径。
+   *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
+   */
+  torqueControl: false,
+  lateralEnabled: false,
+  /**
+   * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
+   *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
+   *   交接只需把重心横移半个站距 ≈164mm ⇒ 静态力 ≈49N（Neumann 2010：
+   *   单支撑骨盆水平 52 N·m ÷ 1.06 m 摆高）。所以限幅应贴着需求，不是需求的 10 倍。
+   */
+  maxLateral: 500,
   // 骨盆抬升：初始偏置 0（由外环自己找到），上限 6°（Saunders 1953 的 2~5cm 对应 ≈2~4°）
   kPelvicLift: 5 * Math.PI / 180,
   maxPelvicLift: 0.105,
@@ -164,11 +180,9 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //            说明反号把骨盆抬成了 Trendelenburg（支撑侧下沉）而不是对侧抬高。
   pelvicLiftSign: 1,
   // 横向 GRF 限幅 500 N（≈0.7 倍体重；静态需求只要 49 N）
-  maxGrfX: 500,
   // 髋允许的屈曲上限：绑姿态 ≈0，单支撑时超过就会整体下蹲
   hipExtendLimit: 0.12,
   // 支撑腿伸展刚度与膝目标角
-  kStanceExt: 0.5,
   kneeStanceDeg: 5,
 };
 
@@ -327,7 +341,23 @@ export function balanceSystem(
       kXRatio: p.kXRatio,
       kTrunkLean: p.kTrunkLean,
       maxTrunkLeanRad: p.maxTrunkLean,
-    }, on);
+      maxLateral: p.maxLateral,
+    }, (ch: string) => {
+      // ★★★ 两条控制路径**彻底互斥**，不允许半吊子状态：
+      //
+      //   `torqueControl = false`（默认）⇒ **纯位置伺服**。
+      //     位置伺服的 `θ_ref` 本来就随位移变化、已经在抵抗外力
+      //     （`τ = kP·(θ_ref−θ)·τmax/ωmax`）。此时再注入 `τ = JᵀF` 的
+      //     **任何**分量都是**双计** —— 水平方向同样如此。
+      //     实测：注入 `Fx=196N` 时单腿只活 2.58s，关掉才恢复。
+      //   `torqueControl = true` ⇒ **逆动力学**。
+      //     支撑链让位给 `τ = JᵀF`（`requestHold`，位置环只剩阻尼），
+      //     定量支撑**全部**由虚投影给出，因此 `weight`(=mg) 必须同时开
+      //     —— 否则既无位置刚度也无定量支撑，腿直接软掉（实测 1.05 s）。
+      if (!p.torqueControl) return false;
+      if (ch === 'lat') return p.lateralEnabled && on('lat');
+      return on(ch);
+    });
     rs.grfCmd.x = F.fx; rs.grfCmd.y = F.fy; rs.grfCmd.z = F.fz;
     rs.captureX = F.captureX; rs.captureZ = F.captureZ; rs.omega0Val = F.omega0;
 

@@ -25,8 +25,8 @@ export interface HudHooks {
   onPhase: (mode: SimMode) => void;
   /** ★ 驱动源切换：ES 大脑 ↔ 手写平衡维持系统（调平衡时必须切到 teacher） */
   onDriver: (d: 'brain' | 'teacher') => void;
-  /** ★ 单腿站立：强制支撑腿 + 不换脚（解耦「站稳」与「迈腿」） */
-  onSingleLeg: (side: 'l' | 'r' | null, liftHold: number) => void;
+  /** ★ 起始支撑腿 + 抬腿驻留（不换脚）。**不是"单腿模式开关"** —— 相位机是唯一概念 */
+  onSingleLeg: (side: 'l' | 'r', liftHold: number) => void;
   /** ★ 回合时长（改它要重建 Sim） */
   onDur: (d: number) => void;
   /** ★ 步态奖励可调（用户 2026-10-01） */
@@ -41,7 +41,8 @@ export interface HudState {
   paused: boolean;
   mode: 'walk' | 'fight' | 'stand';
   driver: 'brain' | 'teacher';
-  singleLeg: 'l' | 'r' | null;
+  /** 起始支撑腿。**不是"模式开关"** —— 相位机是唯一的单腿概念（见 GaitConfig.startBearer） */
+  startBearer: 'l' | 'r';
   gen: number;
   evaluated: number;
   population: number;
@@ -159,7 +160,7 @@ export class Hud {
 
     const SL = ['l', 'r', null] as const;
     let lift = 0.25;
-    const pushSL = (v: number) => hooks.onSingleLeg(SL[Math.round(v)] ?? null, lift);
+    const pushSL = (v: number) => hooks.onSingleLeg(SL[Math.round(v)] === 'r' ? 'r' : 'l', lift);
     bindRange('i-singleleg', 'vSingleLeg', pushSL,
       (v) => ({ l: '左腿支撑', r: '右腿支撑', null: '双脚（正常迈步）' })[Math.round(v)] ?? '双脚');
     bindRange('i-lifthold', 'vLiftHold', (v) => { lift = v; pushSL(Number((document.getElementById('i-singleleg') as HTMLInputElement).value)); },
@@ -281,7 +282,7 @@ export class Hud {
     const e = this.el;
     e.stage.textContent = (s.mode === 'walk' ? '学走路' : (s.mode === 'fight' ? '学战斗' : '学站立'))
       + (s.driver === 'teacher'
-        ? ` · ${s.singleLeg === null ? '双脚' : (s.singleLeg === 'l' ? '左腿支撑' : '右腿支撑')}`
+        ? ` · 起始支撑腿 ${s.startBearer === 'l' ? '左' : '右'}`
         : ' · ES 脑');
     e.gen.textContent = String(s.gen);
     e.pop.textContent = `${s.evaluated} / ${s.population}`;

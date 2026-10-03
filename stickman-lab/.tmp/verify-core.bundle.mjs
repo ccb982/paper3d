@@ -13820,6 +13820,7 @@ var init_ragdoll = __esm({
         this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
         this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
         this.torqueCmd = new Float32Array(sk2.joints.length * 3);
+        this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
@@ -14082,6 +14083,8 @@ var init_ragdoll = __esm({
        *   两者相加后再按 τmax 饱和。
        */
       torqueCmd;
+      /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
+      holdCmd = [];
       /** `jacobianTorque` 的临时向量（避免每关节分配） */
       jw = new Float64Array(3);
       ja = new Float64Array(3);
@@ -14339,6 +14342,15 @@ var init_ragdoll = __esm({
        *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
        *   本来就知道该多大，不该再被位置误差的护栏砍。
        */
+      /**
+       * ★ 让位掩码（逐轴，1=balance / 2=step）：该轴的位置伺服**只做阻尼**（P 项置零）。
+       *   见 `RigState.requestHold` 的注释：定量支撑交给 `τ = JᵀF`，
+       *   位置环只留 `−kD·ω_rel` 提供关节阻尼，两者职责不重叠、不会互相顶。
+       */
+      setHoldMask(mask) {
+        const n = Math.min(this.holdCmd.length, mask.length);
+        for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
+      }
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
@@ -14475,6 +14487,8 @@ var init_ragdoll = __esm({
             } else if (a < lo) {
               err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
+            } else if (this.holdCmd[idx]) {
+              err = -this.opt.kD * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];

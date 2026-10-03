@@ -80,9 +80,9 @@ const hud = new Hud({
     state.driver = d; session = null;
     if (d === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
   },
-  onSingleLeg: (side, liftHold) => {
+  onSingleLeg: (side: 'l' | 'r', liftHold: number) => {
     if (!booted) return;
-    state.singleLeg = side; state.liftHold = liftHold;
+    state.startBearer = side; state.liftHold = liftHold;
     session = null;
     if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
   },
@@ -196,7 +196,7 @@ function resetSession(): void {
   showcase.cfg.driver = 'controller';
   session = new Controller(sk, showcase, {
     ...DEFAULT_CONTROLLER,
-    gait: { ...DEFAULT_CONTROLLER.gait, singleLeg: state.singleLeg, liftHold: state.liftHold },
+    gait: { ...DEFAULT_CONTROLLER.gait, startBearer: state.startBearer, liftHold: state.liftHold },
   } as ControllerConfig);
 }
 
@@ -267,7 +267,7 @@ function frame(now: number): void {
     paused: state.paused,
     mode: state.mode,
     driver: state.driver,
-    singleLeg: state.singleLeg,
+    startBearer: state.startBearer,
     gen: trainer.gen,
     evaluated: trainer.evaluated,
     population: trainer.population,

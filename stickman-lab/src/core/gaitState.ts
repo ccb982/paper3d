@@ -63,7 +63,12 @@ export interface GaitConfig {
   /** α(t) 的软化宽度（相进度占比）。见 HugWBC arXiv:2502.03206 Eq.5 */
   alphaSigma: number;
   /** 单腿模式：强制支撑腿（不换脚）；null = 正常交替 */
-  singleLeg: Side | null;
+  /**
+   * ★ 起始支撑腿（只影响 t=0 时哪条腿算前腿）。**不是模式开关**。
+   *   历史实现把它当"单腿模式"用（有一条旁路直接跳 SINGLE），于是相位机之外
+   *   又有一套"单腿"概念。用户只有一个概念：**相位机**。
+   */
+  startBearer: Side;
   /** 单腿模式下摆动腿保持高度（m） */
   liftHold: number;
 }
@@ -99,7 +104,7 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   pushTimeoutSec: 0.60,
   stepTimeoutSec: 1.60,
   alphaSigma: 0.08,
-  singleLeg: 'l',
+  startBearer: 'l',
   liftHold: 0.25,
 };
 
@@ -143,8 +148,6 @@ export interface ExchangeEvent {
 export class GaitState {
   cfg: GaitConfig;
   /** 上一次的承重判据连续满足时长 */
-  private bearerT = 0;
-  private unlockT = 0;
   /** 上一次是否已授予承重（用于迟滞撤销） */
   private hadBearer = false;
   /** 双支撑相已持续时长 */
@@ -197,96 +200,102 @@ export class GaitState {
       else if (!rs.grounded[s]) this.wasGrounded[s] = false;
     }
 
-    // ── B1..B4 承重判据（**达标才授予标识**）────────────────
-    const lf = rs.loadFrac[supSide], rf = rs.loadFrac[swing];
-    const thr = this.hadBearer ? this.cfg.bearerLoadHyst : this.cfg.bearerLoad;
-    const B1 = rs.grounded[supSide];
-    const B2 = lf >= thr;
-    const B3 = rs.mos >= this.cfg.bearerMosMin;
-    const B4 = this.bearerT >= this.cfg.bearerHoldSec;
-    if (B1 && B2 && B3) this.bearerT += dt; else this.bearerT = 0;
-    rs.bearerCriteria = makeCriteria(
-      { B1_接地: B1, B2_载荷: B2, B3_MoS: B3, B4_持续: B4 },
-      { loadFrac: lf, thr, mos: rs.mos, holdSec: this.bearerT, otherLoad: rf },
-    );
-
     // ══════════════════════════════════════════════════════════════
-    // ── 交接判据 H1..H4：**满足 1s 间隔 且 重心真在前腿** 才解锁后腿 ──
-    //   用户 2026-10-03 两次纠正：
-    //     ①「要显式的把重心移动到前腿，然后才允许动后腿，
-    //        锁定前腿，前腿是支撑腿并且解锁后腿」
-    //     ②「交接瞬间锁前腿、解后腿 也不对啊，
-    //        肯定是满足 **1s 间隔**并且**重心真在前腿了**，才能解锁后腿」
-    //   ⇒ 解锁是**两个条件的合取**，不是瞬时交换。
-    //     锁定规则不变：**触地即锁**（前腿一落地就锁，杜绝"刚落地又抬"）。
+    // ★★ **唯一的交接判据** X1..X8（单一真源）
     //
-    //   ⚠ 「重心在前腿」用**位置判据**（矢状 + 额状），不用载荷：
-    //     载荷是结果、位置是原因。用户说"显式"，指的就是位置。
-    const front = rs.frontLeg();      // 按实测脚 x，前进方向为 +x
+    //   重构理由：此前有**三套**判据在回答同一个问题"重心在不在对的那条腿上"：
+    //     · B1-B4  承重判据（接地/载荷/MoS/持续）
+    //     · H1-H4+I 交接判据（重心在前腿/驻留/前腿承重/稳定/间隔）
+    //     · P1-P5  迈步许可（重心在前腿/后腿已解锁/间隔/MoS/前腿承重）
+    //   而 `B2` 与 `H3` 都看载荷、`H4` 与 `P4` 都看 MoS、`H1` 与 `P1` 完全相同。
+    //   同一事实三处定义 ⇒ 改一处忘另一处 ⇒ 判据互相矛盾时无法判断是谁错。
+    //
+    //   现在：**只有 X1..X8 一套**，`loadBearer` 与 `stepPermit` 都是它的**派生视图**
+    //   （不是独立判据）。用户 2026-10-03 的定义直接对应：
+    //     「显式的把重心移动到前腿」      ⇒ X2（矢状）+ X3（额状）+ X4（驻留）
+    //     「然后才允许动后腿」            ⇒ canSwingRear
+    //     「锁定前腿」                    ⇒ 触地即锁（见 STEP 相）
+    //     「满足 1s 间隔且重心真在前腿才解锁后腿」 ⇒ handoverOk && X6
+    // ══════════════════════════════════════════════════════════════
+    const front = rs.frontLeg();      // 按实测脚 x，前进方向 +x
     const rear = rs.rearLeg();
-    const dxOver = rs.comOverFootX(front);   // ≤ handoverTolX 即"重心已在前脚上"
-    const dzOver = rs.comOverFootZ(front);
-    const H1 = dxOver <= this.cfg.handoverTolX && dzOver <= this.cfg.handoverTolZ;
-    if (H1) this.handoverT += dt; else this.handoverT = 0;
-    const H2 = this.handoverT >= this.cfg.handoverDwellSec;   // 驻留确认（防抖）
-    // 间隔：距**上一次抬腿起点**的时长
-    const intervalOk = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
-    // 前腿承重（结果侧佐证，与位置判据互为印证）
-    const H3 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
-    const H4 = rs.mos >= this.cfg.permitMosMin && rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
-    const handOver = H1 && H2 && intervalOk && H3 && H4;
-    rs.frontLegSide = front; rs.rearLegSide = rear;   // 供快照/UI 回读
+
+    const dxOver = rs.comOverFootX(front);   // >0 = 重心还在前脚前方
+    const dzOver = rs.comOverFootZ(front);   // 横向偏移
+    const X1 = rs.grounded[front];
+    const X2 = dxOver <= this.cfg.handoverTolX;
+    const X3 = dzOver <= this.cfg.handoverTolZ;
+    if (X2 && X3) this.handoverT += dt; else this.handoverT = 0;
+    const X4 = this.handoverT >= this.cfg.handoverDwellSec;
+    const X5 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
+    const X6 = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
+    const X7 = rs.mos >= this.cfg.permitMosMin;
+    const X8 = rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
+
     rs.handoverCriteria = makeCriteria(
       {
-        H1_重心在前腿: H1, H2_驻留: H2, H3_前腿承重: H3, H4_稳定: H4,
-        I_间隔1s: intervalOk,
+        X1_前腿接地: X1, X2_矢状到位: X2, X3_额状到位: X3, X4_驻留: X4,
+        X5_前腿承重: X5, X6_间隔1s: X6, X7_MoS: X7, X8_倾角: X8,
       },
       {
-        dxOverMm: dxOver * 1000, dzOverMm: dzOver * 1000, tolXmm: this.cfg.handoverTolX * 1000,
-        tolZmm: this.cfg.handoverTolZ * 1000, dwellSec: this.handoverT, needSec: this.cfg.handoverDwellSec,
-        frontLoad: rs.loadFrac[front], intervalSec: this.t - this.lastStepT,
-        needInterval: this.cfg.stepIntervalSec, mos: rs.mos, tiltDeg: rs.tiltDeg,
+        dxOverMm: dxOver * 1000, dzOverMm: dzOver * 1000,
+        tolXmm: this.cfg.handoverTolX * 1000, tolZmm: this.cfg.handoverTolZ * 1000,
+        dwellSec: this.handoverT, needSec: this.cfg.handoverDwellSec,
+        frontLoad: rs.loadFrac[front], loadThr: this.cfg.bearerLoadHyst,
+        intervalSec: this.t - this.lastStepT, needInterval: this.cfg.stepIntervalSec,
+        mos: rs.mos, tiltDeg: rs.tiltDeg,
+        frontIsL: front === 'l' ? 1 : 0, rearIsL: rear === 'l' ? 1 : 0,
       },
     );
 
-    // ★ 解锁**只发生在后腿**，且必须 handOver 全成立：
-    //     「满足 1s 间隔 且 重心真在前腿 ⇒ 才解锁后腿」
-    for (const s of ['l', 'r'] as Side[]) {
+    /** 交接**完成**（位置 + 稳定；不含间隔 —— 间隔是节奏，不是资格） */
+    const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
+    /** 可动后腿 = 交接完成 **且** 间隔满足 **且** 后腿未锁（用户的合取条件） */
+    const rearLocked = rs.locked[rear];
+    const canSwingRear = handoverOk && X6 && !rearLocked;
+
+    // ── 承重标识：**派生**（不再是独立判据）──────────────────
+    //   只有当前腿**同时**接地且载荷达标才授予；否则退回"载荷大的那条"，
+    //   但**只用于显示/参考**（`stanceResolved` 已不再依赖它 —— 那会循环依赖）。
+    const bearer = X1 && X5 ? front
+      : (rs.loadFrac.l > rs.loadFrac.r ? 'l' : 'r');
+    rs.loadBearer = bearer;
+    this.hadBearer = this.hadBearer || handoverOk;
+    // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）
+    rs.bearerCriteria = makeCriteria(
+      { B1_接地: X1, B2_载荷: X5, B3_MoS: X7, B4_驻留: X4 },
+      {
+        frontIsL: front === 'l' ? 1 : 0, rearIsL: rear === 'l' ? 1 : 0,
+        loadFrac: rs.loadFrac[front], thr: this.cfg.bearerLoadHyst,
+        mos: rs.mos, holdSec: this.handoverT, dxOverMm: dxOver * 1000, dzOverMm: dzOver * 1000,
+      },
+    );
+
+    // ── 解锁：只在后腿，且必须 handoverOk && 间隔满足 ──────────
+    for (const sd of ['l', 'r'] as Side[]) {
       rs.unlockCriteria = makeCriteria(
         {
-          U1_是后腿: s === rear, U2_重心在前腿: H1, U3_驻留: H2,
-          U4_间隔1s: intervalOk, U5_前腿承重: H3, U6_稳定: H4,
+          U1_交接完成: handoverOk, U2_间隔1s: X6, U3_是后腿: sd === rear,
+          U4_未锁定: sd === rear && !rs.locked[sd], U5_稳定: X7 && X8,
         },
-        {
-          handOver: handOver ? 1 : 0, isRear: s === rear ? 1 : 0,
-          dxOverMm: dxOver * 1000, intervalSec: this.t - this.lastStepT,
-        },
+        { handoverOk: handoverOk ? 1 : 0, intervalSec: this.t - this.lastStepT, isRear: sd === rear ? 1 : 0 },
       );
-      if (rs.locked[s] && s === rear && handOver) {
-        rs.locked[s] = false; rs.lockReleased[s] = true;
-        this.event.kind = 'lock_released'; this.event.side = s;
-        this.event.note = `解锁后腿（间隔 ${(this.t - this.lastStepT).toFixed(2)}s、重心在前腿 ${(dxOver * 1000).toFixed(0)}mm）`;
+      if (rs.locked[sd] && sd === rear && handoverOk && X6) {
+        rs.locked[sd] = false; rs.lockReleased[sd] = true;
+        this.event.kind = 'lock_released'; this.event.side = sd;
+        this.event.note = `解锁后腿（间隔 ${(this.t - this.lastStepT).toFixed(2)}s、`
+          + `重心在前腿 矢${(dxOver * 1000).toFixed(0)}mm/额${(dzOver * 1000).toFixed(0)}mm）`;
       }
     }
 
-    // ── P1..P5 迈步许可（抬**后腿**）─────────────────────────
-    //   P1 = 重心已在前腿（位置判据，带驻留）  ← 用户"显式把重心移到前腿"
-    //   P2 = 后腿**已解锁**                    ← 交接完成才允许动
-    //   P3 = 间隔 ≥1s                          ← 用户"每次迈步间隔 1s 左右"
-    //   P4 = MoS 达标
-    //   P5 = 前腿承重（结果佐证）
-    const rearLocked = rs.locked[rear];
-    const P1 = H1 && H2;
-    const P2 = !rearLocked;
-    const P3 = intervalOk;
-    const P4 = rs.mos >= this.cfg.permitMosMin;
-    const P5 = H3;
+    // ── 迈步许可：**派生** ────────────────────────────────────
     rs.stepPermit = makeCriteria(
-      { P1_重心在前腿: P1, P2_后腿已解锁: P2, P3_间隔1s: P3, P4_MoS: P4, P5_前腿承重: P5 },
+      { P1_交接完成: handoverOk, P2_间隔1s: X6, P3_后腿未锁: !rearLocked, P4_MoS: X7, P5_稳定: X8 },
       {
-        dxOverMm: dxOver * 1000, rearLocked: rearLocked ? 1 : 0,
-        intervalSec: this.t - this.lastStepT, needInterval: this.cfg.stepIntervalSec,
-        mos: rs.mos, frontLoad: rs.loadFrac[front],
+        dxOverMm: dxOver * 1000, dzOverMm: dzOver * 1000,
+        rearLocked: rearLocked ? 1 : 0, intervalSec: this.t - this.lastStepT,
+        needInterval: this.cfg.stepIntervalSec, mos: rs.mos, tiltDeg: rs.tiltDeg,
+        canSwingRear: canSwingRear ? 1 : 0,
       },
     );
 
@@ -299,20 +308,14 @@ export class GaitState {
     }
     rs.phaseT += dt;
 
-    // ── 承重标识的授予/撤销（带迟滞）────────────────────────
-    if (!this.hadBearer && rs.bearerCriteria.all) {
-      rs.loadBearer = supSide; this.hadBearer = true;
-      this.event.kind = 'bearer_granted'; this.event.side = supSide;
-      this.event.note = `承重标识授予 ${supSide}（载荷 ${lf.toFixed(2)} / MoS ${(rs.mos * 1000).toFixed(0)}mm）`;
-    } else if (this.hadBearer && rs.loadBearer) {
-      const cur = rs.loadBearer;
-      if (!rs.grounded[cur] || rs.loadFrac[cur] < this.cfg.bearerLoadHyst) {
-        rs.loadBearer = null; this.hadBearer = false; this.bearerT = 0;
-      }
-    }
+    // ★ 承重标识已在上面的 X1..X8 里**派生**完成，这里不再有第二套授予/撤销逻辑。
+    //   （原实现在此处独立判定 `bearerCriteria.all` 又改一遍 `loadBearer`，
+    //     与派生值互相覆盖 —— 同一事实两处定义。）
 
     // ── α(t)：腰的修正权限预算 ──────────────────────────────
-    const ramp = this.cfg.singleLeg ? 1.2 : 0.4;
+    // ★ 去掉 `singleLeg` 对 α 斜坡的影响：相位机本身已区分单/双支撑相，
+    //   再叠一个"单腿模式"开关就是**两套"单腿"概念**（用户只应有一个）。
+    const ramp = 0.4;
     rs.authority = smoothAuthority(rs.phase, rs.phaseT, ramp, this.cfg.alphaSigma);
 
     return this.event;
@@ -338,10 +341,12 @@ export class GaitState {
    */
   private migrate(prev: Phase, dt: number, both: boolean, supSide: Side, swing: Side): void {
     const rs = this.rs;
+    // ★ 交接验证：位置（矢状+额状）+ 驻留 + 承重 + MoS + 倾角（**不含间隔**，
+    //   间隔是节奏约束，在 `canSwingRear` 里单独判）。
     const hv = rs.handoverCriteria.flags;
-    /** 交接验证通过 = 重心已在前腿（位置判据 + 驻留）**且** 间隔 ≥1s */
-    const handoverOk = hv['H1_重心在前腿'] === true && hv['H2_驻留'] === true
-      && hv['I_间隔1s'] === true;
+    const handoverOk = hv['X1_前腿接地'] === true && hv['X2_矢状到位'] === true
+      && hv['X3_额状到位'] === true && hv['X4_驻留'] === true
+      && hv['X5_前腿承重'] === true && hv['X7_MoS'] === true && hv['X8_倾角'] === true;
     switch (prev) {
       case 'DOUBLE':
         // ★ 两脚接地、专门做重心交接。允许双脚接地就是用户要的形态。
@@ -388,7 +393,7 @@ export class GaitState {
 
   reset(): void {
     this.t = 0; this.lastStepT = -1e9; this.handoverT = 0;
-    this.bearerT = 0; this.unlockT = 0; this.hadBearer = false; this.doubleT = 0;
+    this.hadBearer = false; this.doubleT = 0;
     this.wasGrounded.l = false; this.wasGrounded.r = false;
     this.rs.loadBearer = null; this.rs.locked.l = false; this.rs.locked.r = false;
     this.rs.phase = 'DOUBLE'; this.rs.phaseT = 0; this.rs.authority = 0;

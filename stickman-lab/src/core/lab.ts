@@ -37,7 +37,7 @@ export interface LabState {
   /** 驱动源。★ 调平衡维持系统时必须选 `teacher`，否则网页上看的是大脑不是它 */
   driver: Driver;
   /** 单腿模式：强制该腿为唯一支撑腿、不换脚（解耦「站稳」与「迈步」） */
-  singleLeg: 'l' | 'r' | null;
+  startBearer: 'l' | 'r';
   /** 单腿模式下摆动腿的保持高度（m） */
   liftHold: number;
   /** 单回合时长（s） */
@@ -49,7 +49,7 @@ export const DEFAULT_LAB: LabState = {
   //   （此前是 walk，导致网页一打开就在跑走路适应度，显示的东西与调平衡无关。）
   mode: 'stand',
   driver: 'teacher',
-  singleLeg: 'l',
+  startBearer: 'l',
   liftHold: 0.25,
   dur: 8,
 };
@@ -63,7 +63,7 @@ export function labHash(s: LabState): string {
     LAB_VERSION,
     `mode=${s.mode}`,
     `driver=${s.driver}`,
-    `singleLeg=${s.singleLeg ?? '-'}`,
+    `startBearer=${s.startBearer}`,
     `liftHold=${s.liftHold.toFixed(3)}`,
     `dur=${s.dur.toFixed(2)}`,
   ].join(' | ');
@@ -73,7 +73,7 @@ export function labHash(s: LabState): string {
 export function labToQuery(s: LabState): string {
   return new URLSearchParams({
     mode: s.mode, driver: s.driver,
-    sl: s.singleLeg ?? '', lift: String(s.liftHold), dur: String(s.dur),
+    sl: s.startBearer, lift: String(s.liftHold), dur: String(s.dur),
   }).toString();
 }
 
@@ -89,7 +89,7 @@ export function labFromQuery(q: string): LabState | null {
     const dur = Number(u.get('dur'));
     return {
       mode, driver,
-      singleLeg: sl === 'l' || sl === 'r' ? sl : null,
+      startBearer: sl === 'r' ? 'r' : 'l',   // `sl` 只取 l/r（默认 l）
       liftHold: Number.isFinite(lift) && lift > 0 ? lift : DEFAULT_LAB.liftHold,
       dur: Number.isFinite(dur) && dur > 0 ? dur : DEFAULT_LAB.dur,
     };
