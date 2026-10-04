@@ -116,10 +116,6 @@ export const kneeRefDeg = (t: number): number => monotoneAt(KNEE_REF, t);
 /** 髋屈曲参考角（度） */
 export const hipRefDeg = (t: number): number => monotoneAt(HIP_REF, t);
 
-/** 该相位是否在摆动相（给定支撑占比） */
-export const isSwing = (t: number, stanceFrac = STANCE_FRAC): boolean =>
-  ((t % 1) + 1) % 1 >= stanceFrac;
-
 /**
  * 符号/偏置标定：把"人类屈曲为正"翻译成**本 rig 的关节角**。
  * 实测（tools/probe-gaitref.ts）：
@@ -193,14 +189,6 @@ function shapeScore(actual: number, target: number, amp: number): number {
   return Math.exp(-3 * over * over);
 }
 
-/** 摆动窗口脉冲（0~1），与 sim 观测里的摆动窗口同源，方便对照 */
-export const swingPulse = (t: number, stanceFrac = STANCE_FRAC): number => {
-  const p = ((t % 1) + 1) % 1;
-  if (p < stanceFrac) return 0;
-  const s = (p - stanceFrac) / (1 - stanceFrac);
-  return Math.sin(Math.PI * clamp01(s)) * smoothstep(0, 0.15, s);
-};
-
 // ══════════════════════════════════════════════════════════════════════
 // ★★★ 盆骨优先（近端先动）—— 用户 2026-10-02："必须教会盆骨优先发力才好"
 //
@@ -221,14 +209,12 @@ export const swingPulse = (t: number, stanceFrac = STANCE_FRAC): number => {
 // PREACT_MS   触地前预激活窗口（文献 100 ms）
 // LEAD_MIN/MAX 膝相对髋的期望滞后区间（文献口径：髋 ~0 ms、股四头 ~150~200 ms）
 // STEP_TOL    髋"用多大力"相对于该步峰值的门槛
-export const PREACT_SEC = 0.100;      // 触地前 100 ms 预激活窗口
 export const LEAD_MIN = 0.05;         // 膝至少要滞后 50 ms（否则就是膝先动）
 export const LEAD_MAX = 0.25;         // 最多滞后 250 ms（再久就脱节了）
 export const PREACT_RATIO = 0.30;     // 触地前髋的速度 ≥ 本步峰值的 30%
 
 /** 单腿的"盆骨优先"跟踪器：一帧喂一次，出一帧的分。 */
 export class PelvisFirstTracker {
-  /** 低通后的髋/膝角速度（rad/s），EMA */
   private hv = 0;
   private kv = 0;
   private hvMax = 0;                   // 本步髋速度峰值（用来归一化"用力"）

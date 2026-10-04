@@ -642,6 +642,22 @@ function comOffset(length: number, comRatio: number, proximal: Proximal): number
  * 从元数据 + 配置算出完整骨架。
  * 纯函数：同样输入永远同样输出 —— 离屏验收时可以拿它做断言，不需要开浏览器。
  */
+/**
+ * ★★ 每关节的**轴数** = 3。
+ *
+ * 这是全 rig 的**轴步长约定**：所有按 (关节, 轴) 寻址的扁平数组都用
+ * `joint * AXES_PER_JOINT + axis`。此前这个 3 在几十处写成魔数，改轴数就得全改。
+ *
+ * 它同时是**神经网络每关节的输出数**（`brain.ts` 的 `OUTPUT_PER_JOINT`）——
+ * 两者是同一个约定，所以只有这一处定义。
+ *
+ * ⚠ 三轴的**物理含义**见 `JOINT_AXIS_SEMANTICS` 附近的注释：
+ *   0 = 绕 X = 外展/侧摆、1 = 绕 Y = 扭转、2 = 绕 Z = 屈伸。
+ *   写错索引会让控制器作用在**解剖上错误的肌肉**上且毫无症状
+ *   （曾把髋外展通道写在 axis 1 = 扭转轴，力臂差 10 倍而 τ 只有 0.9 N·m）。
+ */
+export const AXES_PER_JOINT = 3;
+
 export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   const { extent } = META;
   const px2m = cfg.height / extent.h;

@@ -9,6 +9,8 @@
 // ★ 前向过程零 new：所有中间 buffer 由调用方（Sim）预分配并复用，
 //   否则一代几百个个体就会产生几十万次 GC —— 参见本体的"每帧零 new"约定。
 
+import { AXES_PER_JOINT } from './skeleton';
+
 /** 网络形状 */
 export interface BrainShape {
   inputs: number;
@@ -95,8 +97,10 @@ export const INPUT_LAYOUT = inputLayout(12);
 /** 12 关节（spineSegments = 4）时的观测维数：36 + 6×12 = 108 */
 export const INPUT_COUNT = 36 + 6 * 12;
 
-/** 输出：每关节 3 个数（**目标关节角**的比例，父体本地三轴 ∈ [-1,1]，见 ragdoll.posRefScale） */
-export const OUTPUT_PER_JOINT = 3;
+/** 输出：每关节 3 个数（**目标关节角**的比例，父体本地三轴 ∈ [-1,1]，见 ragdoll.posRefScale）
+ *  ⚠ 这个 3 不是巧合 —— 它就是 rig 的轴步长 `AXES_PER_JOINT`（见 skeleton.ts）。
+ *    此前这里是独立写死的 3（且从未被引用），等于同一约定有两份定义。 */
+export const OUTPUT_PER_JOINT = AXES_PER_JOINT;
 
 /** 参数总数 */
 export function brainParamCount(s: BrainShape): number {

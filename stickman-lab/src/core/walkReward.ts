@@ -20,54 +20,46 @@ export function phi(err: number): number {
   return Math.exp(-(err * err) / 0.25);
 }
 
-/** 奖励项定义（名字 = 分项键 = UI 滑块 id 的来源） */
-export interface WalkTerm {
-  key: string;
-  /** 单位时间权重（乘 dt 积分，量纲 = 分/秒） */
-  weight: number;
-  /** 方向：+1 加分项、-1 罚项 */
-  sign: 1 | -1;
-  doc: string;
-  /** 对应文献/设计决定 */
-  from: string;
-}
-
 /**
- * ★ 11 项。前 9 项直接对应 Rudin 的 9 项（顺序也按他的表），
- *   后两项是本项目的硬需求（"骨盆和膝盖要动"）。
+ * ══════════════════════════════════════════════════════════════════
+ * 📌 **原 `WALK_TERMS` 规格表已删除**（本轮审计清掉）
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 它列了 11 项奖励的 key / weight / sign / 文献出处，看上去是奖励的**真源**，
+ * 但 `sim.ts` 的实现**根本不用它** —— 实现读的是 `STAND_W`（`sim.ts:81`）
+ * 与 `SimConfig.w`，逐项硬写。两边的权重**早已不一致**：
+ *
+ *     项          WALK_TERMS     实际实现（STAND_W / 实现注释）
+ *     lateral        4.0    vs      6.0
+ *     upright        0.5    vs      0.8
+ *     height         0.8    vs      1.2
+ *     yawTrack       0.5    vs     「默认权重 0」
+ *
+ * ⇒ 这是一张**过期且误导**的表：照它调权重不会有任何效果。
+ *   这正是"同一决策写两遍"的典型危害 —— 本轮已因此出了三次实测故障。
+ *
+ * ✅ **文献出处保留在这里**（原本只存在于这张死表里，直接删会丢）：
+ *
+ *   · `velTrack`   φ(v*−v_x)，v*=0.5 m/s —— Rudin 线性速度跟踪，
+ *                  **唯一说"往哪儿走"的一项**（替代旧的 distance/step/step2）
+ *   · `yawTrack`   φ(ω*−ω_y)，ω*=0 —— Rudin 角速度跟踪（不许自转）
+ *   · `lateral`    −v_z² —— Rudin 侧向速度罚（任务沿 +X，横向漂移直接罚）
+ *   · `tiltRate`   −(ω_x²+ω_z²) —— Rudin 角速度罚（不许翻滚/俯仰）
+ *   · `lift`       Σ_脚 min(1, 腾空时间/目标腾空时间)·dt —— 改造版 Rudin feet
+ *                  air time。**抬腿项**，站桩得 0。原式 Σ(t_air−0.5) 在双足下会
+ *                  退化成"两脚一起飞"（跳），故改成饱和形式。
+ *   · `single`     恰好一脚着地的时间积分 —— **主项**，本模式存在理由是"金鸡独立"
+ *   · `jointMove`  骨盆与膝要动（用户硬需求）
+ *   · `upright`    −(躯干倾角²)·dt，别弯腰驼背
+ *   · `height`     −(身高 − y)²·dt，别塌下去
+ *   · `jointMotion` −Σ(ċ_j)²·dt，关节别乱抖
+ *   · `torque`     −Στ_j²·dt，省力
+ *   · `actRate`    −Σ|Δq*_j|²·dt —— Rudin action rate，电机指令别阶跃。
+ *                  **替代旧的 accSmooth**；旧版符号写反过一次，"疯狂抽风"反而
+ *                  加分，把总分顶到 800~1400。
+ *
+ * 要改奖励，请改 `sim.ts` 里真正被读的那份（`STAND_W` / `SimConfig.w`）。
  */
-export const WALK_TERMS: readonly WalkTerm[] = [
-  { key: 'velTrack', weight: 1.0, sign: 1, from: 'Rudin 线性速度跟踪',
-    doc: 'φ(v*−v_x)，v*=0.5 m/s。**唯一说"往哪儿走"的一项**，替代旧的 distance/step/step2。' },
-  { key: 'yawTrack', weight: 0.5, sign: 1, from: 'Rudin 角速度跟踪',
-    doc: 'φ(ω*−ω_y)，ω*=0（不许自转）。' },
-  { key: 'lateral', weight: 4.0, sign: -1, from: 'Rudin 侧向速度罚',
-    doc: '−v_z²。任务沿 +X，横向漂移直接罚。' },
-  { key: 'tiltRate', weight: 0.05, sign: -1, from: 'Rudin 角速度罚',
-    doc: '−(ω_x²+ω_z²)：不许翻滚/俯仰。' },
-  { key: 'lift', weight: 1.0, sign: 1, from: '★ Rudin feet air time（改造版）',
-    doc: 'Σ_脚 min(1, 腾空时间/目标腾空时间)·dt。**抬腿项**：站桩得 0。'
-      + 'Rudin 原式是 Σ(t_air−0.5)，双足会退化成"两脚一起飞"（跳），所以这里改成饱和形式，'
-      + '再用下面的 single 挡住"两脚同时离地"。' },
-  { key: 'single', weight: 1.5, sign: 1, from: '★ Rudin 双足补充项（"encourage standing on a single foot"）',
-    doc: '**恰好一脚着地 +1**；两脚都离地 −0.5（跳/摔）；**两脚都着地 −0.15**（站桩/蹭地滑行）。'
-      + '**这就是"一次抬一条"**，替代旧的 alt/excl/overlap/hold/rush/still 那一整串。'
-      + '"两脚都着地"给负分是实测逼出来的（否则 ES 会找到"两脚不离地滑行"）。' },
-  { key: 'jointMove', weight: 1.0, sign: 1, from: '本项目需求（"鼓励盆骨和膝盖骨的移动"）',
-    doc: '**逐关节** min(1, |q̇_j|/目标角速度)·dt，每关节一个独立分项与滑块。'
-      + '腾空时间只管"脚离地了"，管不了骨盆摆没摆，所以这一项必须留。' },
-  { key: 'upright', weight: 0.5, sign: -1, from: '本项目（姿态正则）',
-    doc: '∫(cos(tilt)−1)dt ≤ 0：不许弯腰驼背。' },
-  { key: 'height', weight: 0.8, sign: -1, from: '本项目（姿态正则）',
-    doc: '∫|胸腔高度−初始|dt：别塌下去也别跳起来。' },
-  { key: 'jointMotion', weight: 0.001, sign: -1, from: 'Rudin joint motion',
-    doc: '−(Σ|q̇_j|² + Σ|q̈_j|²)·dt：关节别乱抖。' },
-  { key: 'torque', weight: 0.00002, sign: -1, from: 'Rudin joint torques',
-    doc: '−Στ_j²·dt：省力。' },
-  { key: 'actRate', weight: 0.25, sign: -1, from: 'Rudin action rate',
-    doc: '−Σ|Δq*_j|²·dt：电机指令别阶跃（这一项替代旧的 accSmooth，'
-      + '而且旧版符号写反过一次，"疯狂抽风"反而加分，把总分顶到 800~1400）。' },
-];
 
 /** 抬腿项的目标腾空时间（秒）。0.5 s @ 1.5 步频 ≈ 一次完整摆动。 */
 export const AIR_TARGET = 0.5;

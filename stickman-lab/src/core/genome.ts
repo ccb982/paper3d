@@ -113,11 +113,6 @@ export function mutateInto(
   }
 }
 
-/** 均匀杂交（逐参数二选一），dst 可与 a/b 之一重合 */
-export function crossover(a: Float32Array, b: Float32Array, dst: Float32Array, rng: Rng): void {
-  for (let i = 0; i < a.length; i++) dst[i] = rng() < 0.5 ? a[i] : b[i];
-}
-
 /** 混合杂交（每个参数按随机比例混合）—— 比均匀杂交更平滑，ES 里更常用 */
 export function blendInto(a: Float32Array, b: Float32Array, dst: Float32Array, rng: Rng): void {
   for (let i = 0; i < a.length; i++) {

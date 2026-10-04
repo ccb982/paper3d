@@ -98,16 +98,6 @@ export const MODULES: readonly Def[] = [
   { id: 'stepLength', label: '步长', part: 'l', phases: ['step', 'adjust'], singleOnly: false },
 ];
 
-/** 某模块的开关状态（供调试打印） */
-export interface ModuleState {
-  id: ModuleId;
-  label: string;
-  part: Part;
-  on: boolean;
-  /** 没开的话，说清是被哪一条规则关掉的 */
-  off: string;
-}
-
 export class ModuleSet {
   private off = new Set<ModuleId>();     // 代码手动关掉的（总开关优先于其它一切）
   private byPart = new Map<Part, Def[]>();

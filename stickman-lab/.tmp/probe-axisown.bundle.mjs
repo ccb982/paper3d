@@ -6286,6 +6286,7 @@ var init_partsMeta = __esm({
 // src/core/skeleton.ts
 var skeleton_exports = {};
 __export(skeleton_exports, {
+  AXES_PER_JOINT: () => AXES_PER_JOINT,
   DEFAULT_CONFIG: () => DEFAULT_CONFIG,
   JOINT_LIMITS_XY_DEG: () => JOINT_LIMITS_XY_DEG,
   JOINT_MAX_SPEED: () => JOINT_MAX_SPEED,
@@ -6773,7 +6774,7 @@ function assertJointAnchors(sk2) {
   }
   return worst;
 }
-var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG;
+var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG, AXES_PER_JOINT;
 var init_skeleton = __esm({
   "src/core/skeleton.ts"() {
     "use strict";
@@ -6897,6 +6898,7 @@ var init_skeleton = __esm({
       foot_r: [14, 10]
     };
     DEG = Math.PI / 180;
+    AXES_PER_JOINT = 3;
   }
 });
 
@@ -14930,11 +14932,12 @@ var HIDDEN_UNITS, BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
 var init_brain = __esm({
   "src/core/brain.ts"() {
     "use strict";
+    init_skeleton();
     HIDDEN_UNITS = 32;
     BRAIN_SHAPE = shapeForJoints(9);
     INPUT_LAYOUT = inputLayout(12);
     INPUT_COUNT = 36 + 6 * 12;
-    OUTPUT_PER_JOINT = 3;
+    OUTPUT_PER_JOINT = AXES_PER_JOINT;
   }
 });
 
@@ -15198,7 +15201,6 @@ var init_gaitRef = __esm({
     LEAD_MAX = 0.25;
     PREACT_RATIO = 0.3;
     PelvisFirstTracker = class {
-      /** 低通后的髋/膝角速度（rad/s），EMA */
       hv = 0;
       kv = 0;
       hvMax = 0;
@@ -17772,7 +17774,7 @@ var init_rigState = __esm({
       constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
         this.sk = sk2;
         this.cfg = cfg;
-        const n = sk2.joints.length * 3;
+        const n = sk2.joints.length * AXES_PER_JOINT;
         this.nAxes = n;
         this.pos = new Float64Array(n);
         this.vel = new Float64Array(n);
@@ -19384,14 +19386,16 @@ log("\u2550\u2550 D. \u89D2\u8272\u6807\u7B7E\u7A33\u5B9A\u6027\uFF08\u627F\u91C
 log("");
 log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987B\u5728 AXIS_OWNERSHIP \u91CC\u767B\u8BB0 \u2550\u2550");
 {
-  const { axisRole: axisRole2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
+  const { axisRole: axisRole2, ANKLE_ABSENT: ANKLE_ABSENT2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
   const seenAxes = /* @__PURE__ */ new Map();
+  const allWritten = /* @__PURE__ */ new Set();
   for (const [tag, bal] of [
     ["\u6321\u4F4D I \u9ED8\u8BA4", {}],
     ["\u6321\u4F4D II \u7EAF\u4FA7\u5411 \u03C4", { torqueControl: true, lateralEnabled: true }],
     ["\u6321\u4F4D I + \u9AA8\u76C6\u62AC\u5347", { kPelvicLift: 0.06 }]
   ]) {
     for (const w of run(bal, 8).written) {
+      allWritten.add(w);
       const key = w.replace(/_[lr]$/, "");
       if (!seenAxes.has(key)) seenAxes.set(key, tag);
     }
@@ -19406,6 +19410,12 @@ log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987
     bad(`\u8FD9\u4E9B\u8F74\u88AB\u5199\u4E86\u4F46\u6CA1\u5728 AXIS_OWNERSHIP \u767B\u8BB0\uFF1A${unregistered.join(", ")}`);
   } else {
     ok(`\u5168\u90E8\u5DF2\u767B\u8BB0\uFF08\u7ECF ${seenAxes.size} \u6839\u8F74\u30013 \u79CD\u914D\u7F6E\u9A8C\u8BC1\uFF09`);
+  }
+  const ankleWritten = [...allWritten].filter((w) => w.startsWith("ankle"));
+  if (ANKLE_ABSENT2 && ankleWritten.length) {
+    bad(`\u58F0\u660E ANKLE_ABSENT=true\uFF0C\u4F46\u8E1D\u8F74\u88AB\u5199\u4E86\uFF1A${ankleWritten.join(", ")}`);
+  } else if (ANKLE_ABSENT2) {
+    ok("ANKLE_ABSENT \u4E0E\u5B9E\u9645\u4E00\u81F4\uFF08\u65E0\u8E1D\u8F74\u88AB\u5199\uFF09\uFF1B\u9AA8\u67B6\u4E00\u65E6\u52A0\u8E1D\uFF0C\u6B64\u5904\u4F1A\u5F3A\u5236\u767B\u8BB0");
   }
 }
 log("");

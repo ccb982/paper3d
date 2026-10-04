@@ -5,7 +5,7 @@
  *   1. `node tools/run.mjs probe-web` → 打印配置指纹 + 一条 URL
  *   2. 把那条 URL 粘进浏览器
  *   3. 比对网页左下角状态栏显示的指纹
- *   指纹一致 ⇒ 网页跑的就是探针刚测的那份配置（同一份 `CAPTURE_DEFAULT`、
+ *   指纹一致 ⇒ 网页跑的就是探针刚测的那份配置（同一份 `DEFAULT_CONTROLLER`、
  *   同一个 `LabState`、同一个 `DEFAULT_SIM`）；不一致 ⇒ 两边漂了，当场可见。
  *
  * ★ 修这个之前根本做不到这件事，因为失同步有三个来源：
@@ -38,7 +38,6 @@ await import('../src/core/ragdoll');
 }
 
 const { DEFAULT_LAB, labHash, labToQuery } = await import('../src/core/lab');
-const { CAPTURE_DEFAULT } = await import('../src/core/teacher');
 const { DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { STAND_W } = await import('../src/core/sim');
@@ -66,8 +65,7 @@ console.log(`  物理      ${DEFAULT_SIM.physicsHz} Hz   控制 ${DEFAULT_SIM.co
 console.log(`  模式      ${lab.mode}   驱动 ${lab.driver}   支撑腿 ${lab.singleLeg ?? '双脚'}   抬腿 ${lab.liftHold}m`);
 console.log(`  站立权重  ${JSON.stringify(STAND_W)}`);
 console.log('');
-console.log('平衡维持系统参数（`CAPTURE_DEFAULT`，网页与所有探针共用这一份）：');
-console.log(`  ${JSON.stringify(CAPTURE_DEFAULT)}`);
+console.log('平衡维持系统参数：`DEFAULT_CONTROLLER`（见 src/core/systems/balance.ts）');
 console.log('');
 console.log('★ 若指纹一致，网页上看到的就是探针测的那个控制器。');
 console.log('★ 若不一致：先确认两边都在跑最新的 `npm run dev`（旧 dev server 不会热更新 lab.ts 的默认值）。');

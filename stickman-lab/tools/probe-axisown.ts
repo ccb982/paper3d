@@ -229,14 +229,16 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
 {
   // 用 `axisRole()` 查表：若某个轴被写了却查不到角色 ⇒ 归属表漏了它，
   // 门禁就形同虚设（这正是"新加一条通道忘了登记"的典型失败方式）。
-  const { axisRole } = await import('../src/core/systems/balance');
+  const { axisRole, ANKLE_ABSENT } = await import('../src/core/systems/balance');
   const seenAxes = new Map<string, string>();
+  const allWritten = new Set<string>();
   for (const [tag, bal] of [
     ['挡位 I 默认', {}],
     ['挡位 II 纯侧向 τ', { torqueControl: true, lateralEnabled: true }],
     ['挡位 I + 骨盆抬升', { kPelvicLift: 0.06 }],
   ] as [string, Record<string, unknown>][]) {
     for (const w of run(bal, 8).written) {
+      allWritten.add(w);
       const key = w.replace(/_[lr]$/, '');
       if (!seenAxes.has(key)) seenAxes.set(key, tag);
     }
@@ -251,6 +253,16 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
     bad(`这些轴被写了但没在 AXIS_OWNERSHIP 登记：${unregistered.join(', ')}`);
   } else {
     ok(`全部已登记（经 ${seenAxes.size} 根轴、3 种配置验证）`);
+  }
+
+  // `ANKLE_ABSENT`：本 rig 骨架里没有踝关节 ⇒ 踝 CoP 通道恒不执行。
+  //   一旦有人给骨架加了踝，这个断言会失败，强制他在 AXIS_OWNERSHIP 里登记
+  //   （否则就会重演"通道存在但没人知道它归谁"的老问题）。
+  const ankleWritten = [...allWritten].filter((w) => w.startsWith('ankle'));
+  if (ANKLE_ABSENT && ankleWritten.length) {
+    bad(`声明 ANKLE_ABSENT=true，但踝轴被写了：${ankleWritten.join(', ')}`);
+  } else if (ANKLE_ABSENT) {
+    ok('ANKLE_ABSENT 与实际一致（无踝轴被写）；骨架一旦加踝，此处会强制登记');
   }
 }
 

@@ -6286,6 +6286,7 @@ var init_partsMeta = __esm({
 // src/core/skeleton.ts
 var skeleton_exports = {};
 __export(skeleton_exports, {
+  AXES_PER_JOINT: () => AXES_PER_JOINT,
   DEFAULT_CONFIG: () => DEFAULT_CONFIG,
   JOINT_LIMITS_XY_DEG: () => JOINT_LIMITS_XY_DEG,
   JOINT_MAX_SPEED: () => JOINT_MAX_SPEED,
@@ -6773,7 +6774,7 @@ function assertJointAnchors(sk2) {
   }
   return worst;
 }
-var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG;
+var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG, AXES_PER_JOINT;
 var init_skeleton = __esm({
   "src/core/skeleton.ts"() {
     "use strict";
@@ -6897,6 +6898,7 @@ var init_skeleton = __esm({
       foot_r: [14, 10]
     };
     DEG = Math.PI / 180;
+    AXES_PER_JOINT = 3;
   }
 });
 
@@ -14930,11 +14932,12 @@ var HIDDEN_UNITS, BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
 var init_brain = __esm({
   "src/core/brain.ts"() {
     "use strict";
+    init_skeleton();
     HIDDEN_UNITS = 32;
     BRAIN_SHAPE = shapeForJoints(9);
     INPUT_LAYOUT = inputLayout(12);
     INPUT_COUNT = 36 + 6 * 12;
-    OUTPUT_PER_JOINT = 3;
+    OUTPUT_PER_JOINT = AXES_PER_JOINT;
   }
 });
 
@@ -15198,7 +15201,6 @@ var init_gaitRef = __esm({
     LEAD_MAX = 0.25;
     PREACT_RATIO = 0.3;
     PelvisFirstTracker = class {
-      /** 低通后的髋/膝角速度（rad/s），EMA */
       hv = 0;
       kv = 0;
       hvMax = 0;
@@ -17772,7 +17774,7 @@ var init_rigState = __esm({
       constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
         this.sk = sk2;
         this.cfg = cfg;
-        const n = sk2.joints.length * 3;
+        const n = sk2.joints.length * AXES_PER_JOINT;
         this.nAxes = n;
         this.pos = new Float64Array(n);
         this.vel = new Float64Array(n);

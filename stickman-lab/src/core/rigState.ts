@@ -21,7 +21,7 @@
  */
 
 import type { Skeleton } from './skeleton';
-import { jointIndexByName } from './skeleton';
+import { AXES_PER_JOINT, jointIndexByName } from './skeleton';
 
 // ─────────────────────────────────────────────────── 身份
 
@@ -78,7 +78,7 @@ export interface AxisTarget {
 const PRIORITY: Record<SystemId, number> = { balance: 0, step: 1 };
 
 /**
- * ★ 承重判定的**载荷迟滞**（量级 = 载荷比例，不是"几乎相等"）。
+ * 承重判定的**载荷迟滞**（量级 = 载荷比例，不是"几乎相等"）。
  *   本 rig 双支撑时各约 0.5，所以 0.08 相当于"要领先 8 个百分点才算换腿"。
  *   ⚠ 调成 1e-3 级别 = 没有迟滞 ⇒ 接触噪声直接变成每拍翻转
  *     （见 `loadDominant()` 的病历）。
@@ -387,7 +387,7 @@ export class RigState {
   constructor(sk: Skeleton, cfg: RigStateConfig = DEFAULT_RIGSTATE_CONFIG) {
     this.sk = sk;
     this.cfg = cfg;
-    const n = sk.joints.length * 3;
+    const n = sk.joints.length * AXES_PER_JOINT;
     this.nAxes = n;
     this.pos = new Float64Array(n);
     this.vel = new Float64Array(n);
