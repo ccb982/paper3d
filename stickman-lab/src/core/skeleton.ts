@@ -782,8 +782,21 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   };
 
   // ---- 脚掌尺寸（画布 px → 米），两个小腿共用 ----
-  const soleHalfLen = (META.sole.len * px2m) / 2;
+  // ★★ 足长按**文献人体测量**定，不再直接用素材的 `META.sole.len`
+  //   （2026-10-04，用户：「按照文献，设定合适的脚的大小」）。
+  //   依据：足长/身高 人类 **14.3~16.1%**（Topinard 1877 / Martin 1914，经
+  //   Giles & Vallandigham 1991 美国陆军 6682 男+1330 女验证：男 15.35%、女 14.93%；
+  //   香港激光扫描队列独立复核 14.94~15.13%）⇒ 取中值 **15.6%**。
+  //   身高 1.8 m ⇒ 足长 **0.281 m**（素材给的 0.214 m 只有身高的 11.9%，
+  //   低于整个人类区间下限，矢状 CoP 权限先天打折）。
+  //   交叉校验：Millard & Sloot 2025 [H] 实测人类真正使用的支撑面 fBOS 只有
+  //   脚的 **49% 长 / 43% 宽**；0.281 m 的脚 ⇒ fBOS 长约 0.138 m，与他们测到的
+  //   14.8 cm 对得上；0.214 m 的脚只剩 0.105 m。
+  const soleLenTarget = 0.156 * cfg.height;      // 米
+  const soleHalfLen = soleLenTarget / 2;
   const soleHalfThick = (META.sole.thick * px2m) / 2;
+  /** ★ 足的目标**全宽**（米）。人类参考脚 30 cm × 10 cm（Millard & Sloot 2025）⇒ 0.10 m */
+  const SOLE_WIDTH_TARGET = 0.10;
   /**
    * ★ 脚掌盒的贴地标定（米）：**当前为 0，即不做任何人为修正**。
    *
@@ -977,7 +990,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //   ⚠ 横向从实测靴宽 204mm 收到 65mm：collider 比画出来的靴子窄很多。
       //     这是"骨架是长方形 + 长边=脚方向"的必然代价（线框视图可见）。
       const hx = hxRaw;
-      const hz = hx * 0.30;
+      //   ★ 横向半宽按**人类参考脚宽 10 cm**取半 ⇒ `hz = 0.05 m`。
+      //   原来是 `hx × 0.30`（我为修"脚变正方形"自己拍的系数），把盒子压到
+      //   66 mm 宽、长宽比只剩 2.4（人类参考脚 30/10 = 3.0）
+      //   ⇒ 额状 CoP 权限不足，踝扛不住 mg×站距半宽 ⇒ 表现为「崴脚」。
+      const hz = (SOLE_WIDTH_TARGET / 2) * sfx;
       // ★ 盒心横向 = **膝锚点正下方**（膝到脚尖铅垂），不是画出来的靴心：
       //   素材靴心比膝锚点外偏 60~100px，那正是"外八"；盒心挂靴心 ⇒ 膝到脚尖朝外。
       //   脚尖朝向由 `footSplayDeg`（外八）单独控制，两者互不干涉。
