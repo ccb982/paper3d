@@ -17651,12 +17651,13 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var PRIORITY, DEFAULT_RIGSTATE_CONFIG, RigState;
+var PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
     init_skeleton();
     PRIORITY = { balance: 0, step: 1 };
+    LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
       waistSlotMax: 6 * Math.PI / 180,
@@ -17811,17 +17812,35 @@ var init_rigState = __esm({
        *   ⇒ B2 永远不达标 ⇒ 承重标识永远授不出来 ⇒ 迈步许可 P1 永远为 false
        *   ⇒ 表现是"控制器完全不动"，但所有指标看起来都在正常回读。
        */
+      /**
+       * ★ **载荷优势腿**（带迟滞）—— 承重判定的**唯一实现**。
+       *
+       * 双支撑时两条腿都在承重，"承重腿"只是个约定，必须**迟滞**否则噪声会让它
+       * 每拍翻转。实测代价（两条路径犯过同一个错）：
+       *   · `supportLeg()` 早先用 1e-3 迟滞 ⇒ 接触噪声让载荷在 50.1/49.9 之间跳
+       *     ⇒ 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关 ⇒ **8s → 1.68s**；
+       *   · `gaitState` 里给 `loadBearer` 的兜底干脆写成裸比较 `loadFrac.l > loadFrac.r`
+       *     ⇒ **零迟滞** ⇒ UI 的"★承重"标签逐帧闪（用户 2026-10-04 亲见）。
+       * ⇒ 迟滞取**载荷量级** 0.08（本 rig 双支撑各约 0.5），且必须是**同一个**函数。
+       *
+       * @param prev 上一拍的结论（用来做迟滞）；不传则用当前 `loadBearer`
+       */
+      loadDominant(prev) {
+        const l = this.loadFrac.l;
+        const r = this.loadFrac.r;
+        const H = LOAD_HYSTERESIS;
+        if (l > r + H) return "l";
+        if (r > l + H) return "r";
+        if (prev) return prev;
+        if (this.locked.l) return "l";
+        if (this.locked.r) return "r";
+        return "l";
+      }
       supportLeg() {
         if (this.loadBearer) return this.loadBearer;
         if (this.grounded.l && !this.grounded.r) return "l";
         if (this.grounded.r && !this.grounded.l) return "r";
-        if (this.grounded.l && this.grounded.r) {
-          if (this.loadFrac.l > this.loadFrac.r + 0.08) return "l";
-          if (this.loadFrac.r > this.loadFrac.l + 0.08) return "r";
-          if (this.locked.l) return "l";
-          if (this.locked.r) return "r";
-          return "l";
-        }
+        if (this.grounded.l && this.grounded.r) return this.loadDominant();
         return "l";
       }
       /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
@@ -18508,7 +18527,7 @@ var init_gaitState = __esm({
         const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
         const rearLocked = rs.locked[rear];
         const canSwingRear = handoverOk && X6 && !rearLocked;
-        const bearer = X1 && X5 ? front : rs.loadFrac.l > rs.loadFrac.r ? "l" : "r";
+        const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
         rs.loadBearer = bearer;
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(

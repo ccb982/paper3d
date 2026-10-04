@@ -77,6 +77,14 @@ export interface AxisTarget {
 /** 固定优先级（§6.2）。索引小 = 优先。 */
 const PRIORITY: Record<SystemId, number> = { balance: 0, step: 1 };
 
+/**
+ * ★ 承重判定的**载荷迟滞**（量级 = 载荷比例，不是"几乎相等"）。
+ *   本 rig 双支撑时各约 0.5，所以 0.08 相当于"要领先 8 个百分点才算换腿"。
+ *   ⚠ 调成 1e-3 级别 = 没有迟滞 ⇒ 接触噪声直接变成每拍翻转
+ *     （见 `loadDominant()` 的病历）。
+ */
+export const LOAD_HYSTERESIS = 0.08;
+
 export interface RigStateConfig {
   /** 目标角变化率上限（单位：目标比例/秒）。防止抖。 */
   slewLimit: number;
@@ -414,22 +422,37 @@ export class RigState {
    *   ⇒ B2 永远不达标 ⇒ 承重标识永远授不出来 ⇒ 迈步许可 P1 永远为 false
    *   ⇒ 表现是"控制器完全不动"，但所有指标看起来都在正常回读。
    */
+  /**
+   * ★ **载荷优势腿**（带迟滞）—— 承重判定的**唯一实现**。
+   *
+   * 双支撑时两条腿都在承重，"承重腿"只是个约定，必须**迟滞**否则噪声会让它
+   * 每拍翻转。实测代价（两条路径犯过同一个错）：
+   *   · `supportLeg()` 早先用 1e-3 迟滞 ⇒ 接触噪声让载荷在 50.1/49.9 之间跳
+   *     ⇒ 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关 ⇒ **8s → 1.68s**；
+   *   · `gaitState` 里给 `loadBearer` 的兜底干脆写成裸比较 `loadFrac.l > loadFrac.r`
+   *     ⇒ **零迟滞** ⇒ UI 的"★承重"标签逐帧闪（用户 2026-10-04 亲见）。
+   * ⇒ 迟滞取**载荷量级** 0.08（本 rig 双支撑各约 0.5），且必须是**同一个**函数。
+   *
+   * @param prev 上一拍的结论（用来做迟滞）；不传则用当前 `loadBearer`
+   */
+  loadDominant(prev?: Side | null): Side {
+    const l = this.loadFrac.l;
+    const r = this.loadFrac.r;
+    const H = LOAD_HYSTERESIS;
+    if (l > r + H) return 'l';
+    if (r > l + H) return 'r';
+    // 落在死区内 ⇒ 保持上一拍（这就是迟滞），再退化为已锁定的那条
+    if (prev) return prev;
+    if (this.locked.l) return 'l';
+    if (this.locked.r) return 'r';
+    return 'l';
+  }
+
   supportLeg(): Side {
     if (this.loadBearer) return this.loadBearer;
     if (this.grounded.l && !this.grounded.r) return 'l';
     if (this.grounded.r && !this.grounded.l) return 'r';
-    if (this.grounded.l && this.grounded.r) {
-      // 双支撑：取载荷大的那条（相等时取已锁定的那条，再相等取 l）
-      // ★ 迟滞必须是**载荷量级**的 0.08，不是 1e-3。
-      //   1e-3 等于没有迟滞：接触噪声让两条腿的载荷在 50.1/49.9 之间来回跳，
-      //   `supportLeg` 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关
-      //   ⇒ 双脚支撑被自己搞垮（实测 8s → 1.68s）。
-      if (this.loadFrac.l > this.loadFrac.r + 0.08) return 'l';
-      if (this.loadFrac.r > this.loadFrac.l + 0.08) return 'r';
-      if (this.locked.l) return 'l';
-      if (this.locked.r) return 'r';
-      return 'l';
-    }
+    if (this.grounded.l && this.grounded.r) return this.loadDominant();
     return 'l';
   }
 

@@ -255,10 +255,16 @@ export class GaitState {
     const canSwingRear = handoverOk && X6 && !rearLocked;
 
     // ── 承重标识：**派生**（不再是独立判据）──────────────────
-    //   只有当前腿**同时**接地且载荷达标才授予；否则退回"载荷大的那条"，
-    //   但**只用于显示/参考**（`stanceResolved` 已不再依赖它 —— 那会循环依赖）。
-    const bearer = X1 && X5 ? front
-      : (rs.loadFrac.l > rs.loadFrac.r ? 'l' : 'r');
+    //   只有当前腿**同时**接地且载荷达标才授予；否则退"载荷大的那条"。
+    //
+    //   ⚠⚠ 兜底**必须**走 `rs.loadDominant(prev)`（带 0.08 载荷迟滞），
+    //     绝不能写裸比较 `loadFrac.l > loadFrac.r`。
+    //     裸比较是**零迟滞**：接触噪声让两条腿载荷在 0.50/0.50 附近抖动时
+    //     `loadBearer` **逐帧翻转** ⇒ UI 的"★承重"标签闪烁（用户 2026-10-04 亲见），
+    //     而且 `frontLeg()` 在双脚并齐（|Δx|<3mm）时以 `loadBearer` 兜底
+    //     ⇒ 连**前腿/后腿**都跟着闪 ⇒ 整套交接判据跟着抖。
+    //     （同一个坑 `supportLeg()` 犯过一次：1e-3 迟滞 ⇒ 8s 掉到 1.68s。）
+    const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
     rs.loadBearer = bearer;
     this.hadBearer = this.hadBearer || handoverOk;
     // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）
