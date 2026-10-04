@@ -189,9 +189,38 @@ export function readSupport(doll: Ragdoll, out: Support): Support {
   // 中心与**被动**半宽：净 CoP = 接地脚 CoP 的平均 ⇒ 范围 = 各脚足迹宽度的平均 / 2
   let cx: number, cz: number, halfX: number, halfZ: number;
   if (inL && inR) {
-    cx = (RECT_L.cx + RECT_R.cx) / 2; cz = (RECT_L.cz + RECT_R.cz) / 2;
-    halfX = (wLx + wRx) / 4;
-    halfZ = (wLz + wRz) / 4;
+    // ★★ 双脚都着地时，**按法向载荷加权**，不是简单平均。
+    //
+    //   用户 2026-10-04 明确：「我不要双脚着地均匀受力的情况，
+    //   我只想要尽可能重心向一只脚移动」。
+    //
+    //   原来的 `(L+R)/2` 有一个隐蔽后果：**双脚均匀承重被固化成"正常基准"**。
+    //   双脚各承 50% 时 `cz` = 两脚中点、`halfZ` = 平均半宽 ⇒ 无论人怎么把重心
+    //   往左偏，只要右脚还碰着地，基准就跟着往中点漂 ⇒ 控制器永远觉得"居中"，
+    //   **单腿交接永远不会启动**。这正是此前 `loadL/loadR` 能从 0.28/0.72 一路爬
+    //   却在 20s 内反复换腿、CoM 峰值只有 34mm 的结构性原因。
+    //
+    //   加权后语义才对：
+    //   · 某脚载荷 → 0 ⇒ 权重 → 0 ⇒ 基准**自动倒向另一只脚**（交接发生）
+    //   · 两脚相等 ⇒ 退化为原来的中点（与旧行为一致，不引入新偏置）
+    //   · 一脚独承 ⇒ `cz` 完全等于那只脚自己的中心（等价于单腿分支）
+    //
+    //   权重用 `footLoadFrac`（正规回读接口，Σ 载荷归一）。任一项读不到则退回平均。
+    const fL = inL ? doll.footLoadFrac(0)[0] : 0;
+    const fR = inR ? doll.footLoadFrac(0)[1] : 0;
+    const sum = fL + fR;
+    if (Number.isFinite(sum) && sum > 1e-6) {
+      const uL = fL / sum, uR = fR / sum;
+      cx = RECT_L.cx * uL + RECT_R.cx * uR;
+      cz = RECT_L.cz * uL + RECT_R.cz * uR;
+      // 半宽同样按权重：**主力腿的足迹宽度**才是有效支撑宽度
+      halfX = wLx * uL * 0.5 + wRx * uR * 0.5;
+      halfZ = wLz * uL * 0.5 + wRz * uR * 0.5;
+    } else {
+      cx = (RECT_L.cx + RECT_R.cx) / 2; cz = (RECT_L.cz + RECT_R.cz) / 2;
+      halfX = (wLx + wRx) / 4;
+      halfZ = (wLz + wRz) / 4;
+    }
   } else if (inL) {
     cx = RECT_L.cx; cz = RECT_L.cz; halfX = wLx / 2; halfZ = wLz / 2;
   } else if (inR) {

@@ -201,7 +201,16 @@ export interface RigSnapshot {
   /** 倒立摆自然频率 ω₀（rad/s） */
   omega0Val: number;
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z */
+  /** ★ 腰额状**控制目标**（弧度），由 `balance.ts` 的捕获点余量驱动写入 */
   waistTrim: number;
+  /**
+   * ★ 腰到支撑脚的**诊断量**（米）：`com.z − soleZ[support]`。
+   *   此前它和 `waistTrim`（控制目标，弧度）**共用一个字段**，且写入顺序在
+   *   控制目标之后 ⇒ 把控制目标覆盖成一个米制诊断量（用户 2026-10-04 期间实测：
+   *   腰的目标 −0.051 m 被读成 −9.20°，捕获点余量驱动完全没生效）。
+   *   ⇒ 两者彻底分开：`waistTrim` 只做控制，`waistGapM` 只做诊断/UI。
+   */
+  waistGapM: number;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau: number;
   torsoY: number;
@@ -261,6 +270,8 @@ export interface ComTransfer {
   hist: number[];
   cmdHipLatTau: number;
   cmdWaistTrim: number;
+  /** 腰到支撑脚的诊断量（米）`com.z − soleZ[support]`，UI 用 */
+  waistGapM: number;
   cmdGrfLat: number;
   cmdPelvicLift: number;
   /** 载荷分配与稳定裕度 —— 转移的真正"果" */
@@ -337,6 +348,7 @@ export class RigState {
   forceReady = false;
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
   waistTrim = 0;
+  waistGapM = 0;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -446,11 +458,18 @@ export class RigState {
    * ⇒ 迟滞取**载荷量级** 0.08（本 rig 双支撑各约 0.5），且必须是**同一个**函数。
    *
    * @param prev 上一拍的结论（用来做迟滞）；不传则用当前 `loadBearer`
+   * @param hyst 载荷迟滞阈值。**必须由调用方（`gaitState`）传它自己的
+   *   `cfg.bearerLoadHyst`**，否则会与 `X5` 用两套阈值打架（实测 6 次抽换腿）：
+   *     · `gaitState.X5` 用 `bearerLoadHyst = 0.45`（前腿载荷 ≥45% 才算承重腿）
+   *     · 本函数默认 `LOAD_HYSTERESIS = 0.08`（载荷差 8% 就换边）
+   *   载荷掉到 0.44 时 `X5` 判"不算承重腿"、本函数判"还是同一只脚"
+   *   ⇒ 两个判据给出相反结论 ⇒ 承重腿来回抽换，**永远进不了单腿站立**。
+   *   默认值保留仅为兼容旧调用方，状态机路径必须显式传参。
    */
-  loadDominant(prev?: Side | null): Side {
+  loadDominant(prev?: Side | null, hyst: number = LOAD_HYSTERESIS): Side {
     const l = this.loadFrac.l;
     const r = this.loadFrac.r;
-    const H = LOAD_HYSTERESIS;
+    const H = hyst;
     if (l > r + H) return 'l';
     if (r > l + H) return 'r';
     // 落在死区内 ⇒ 保持上一拍（这就是迟滞），再退化为已锁定的那条
@@ -853,7 +872,7 @@ export class RigState {
     return {
       errLat: this.comErrLat, errSag: this.comErrSag, rateLat: this.comRateLat,
       hist: this.comTransferHist.slice(-240),
-      cmdHipLatTau: this.hipLatTau, cmdWaistTrim: this.waistTrim,
+      cmdHipLatTau: this.hipLatTau, cmdWaistTrim: this.waistTrim, waistGapM: this.waistGapM,
       cmdGrfLat: this.cmdGrfLat, cmdPelvicLift: this.pelvicLift,
       loadFront: this.loadFrac[this.frontLegSide],
       loadRear: this.loadFrac[this.rearLegSide],
@@ -915,7 +934,7 @@ export class RigState {
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
-      waistTrim: this.waistTrim, hipLatTau: this.hipLatTau,
+      waistTrim: this.waistTrim, waistGapM: this.waistGapM, hipLatTau: this.hipLatTau,
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,

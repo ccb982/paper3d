@@ -348,7 +348,9 @@ export class GaitState {
     //     需要驻留 >0.75s，那会让真实交接变得迟钝到不可用。
     //     ⇒ 这不是判据抖动，而是**真实的物理侧向摇摆**，要治得先找到摇摆来源，
     //        不能在判据层加滤波。驻留代码已撤掉（`advanceBearerDwell` 等）。
-    const bearer = rs.loadDominant(rs.loadBearer);
+    //   ★ 传 `bearerLoadHyst`（本状态机的唯一载荷阈值），否则会与 `X5` 用两套阈值
+    //     （0.45 vs 硬编码 0.08）打架 ⇒ 承重腿来回抽换（实测 20s 内 6 次）。
+    const bearer = rs.loadDominant(rs.loadBearer, this.cfg.bearerLoadHyst);
     rs.loadBearer = bearer;
     this.hadBearer = this.hadBearer || handoverOk;
     // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）

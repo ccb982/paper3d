@@ -6402,8 +6402,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     }
     return segKey(best);
   };
-  const soleHalfLen = META.sole.len * px2m / 2;
+  const soleLenTarget = 0.156 * cfg.height;
+  const soleHalfLen = soleLenTarget / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_WIDTH_TARGET = 0.1;
   const SOLE_GROUND_CORR = 0;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
@@ -6499,7 +6501,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const hxRaw = soleHalfLen * sfx;
       const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const hx = hxRaw;
-      const hz = hx * 0.3;
+      const hz = SOLE_WIDTH_TARGET / 2 * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6839,6 +6841,7 @@ var init_skeleton = __esm({
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
       stance: 1,
+      // ★ 改回 1.0：0.45 实测没降低站距（半宽 0.216→0.211）却把脚压坏、存活 20s→2.1s
       limbRadiusScale: 0.6,
       // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
       // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
@@ -6882,7 +6885,12 @@ var init_skeleton = __esm({
       //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
       ankleTorque: 120,
       footUvWarpDeg: 0,
-      ankleEnabled: false
+      // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
+      //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
+      //   DEFAULT_LAB.ankle = true）有踝，所有探针/默认配置都建成 12 关节无踝骨架。
+      //   ⚠ 踝提供的是**转向**（roll/pitch/twist 三轴）+ 足底 CoP 权限；
+      //     额状面平衡的主动力仍在髋（Winter 1995 [H]：并立站位 M/L 归髋不归踝）。
+      ankleEnabled: true
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -7046,6 +7054,7 @@ var init_rigState = __esm({
       forceReady = false;
       /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
       waistTrim = 0;
+      waistGapM = 0;
       /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
       hipLatTau = 0;
       /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -7604,6 +7613,7 @@ var init_rigState = __esm({
           hist: this.comTransferHist.slice(-240),
           cmdHipLatTau: this.hipLatTau,
           cmdWaistTrim: this.waistTrim,
+          waistGapM: this.waistGapM,
           cmdGrfLat: this.cmdGrfLat,
           cmdPelvicLift: this.pelvicLift,
           loadFront: this.loadFrac[this.frontLegSide],
@@ -7680,6 +7690,7 @@ var init_rigState = __esm({
           omega0Val: this.omega0Val,
           swingClearance: this.swingClearance,
           waistTrim: this.waistTrim,
+          waistGapM: this.waistGapM,
           hipLatTau: this.hipLatTau,
           forceChain: this.forceChain(),
           comTransfer: this.comTransfer(),
@@ -15799,7 +15810,8 @@ var init_ragdoll = __esm({
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
             if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
-            const J = -wRel * this.jointIeff[i];
+            const Iax = this.axisInertia(i, k);
+            const J = -wRel * Iax;
             const jv = this.iv;
             jv.x = this.axisW[0] * J;
             jv.y = this.axisW[1] * J;
@@ -15877,6 +15889,29 @@ var init_ragdoll = __esm({
        *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
        *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
        */
+      /**
+       * 某关节某轴的**并联折合惯量**（限位冲量用）。
+       *
+       * ★ 必须按**该轴**取值，不能用 `jointIeff`（那是两个刚体各自主惯量**最大值**
+       *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
+       *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
+       */
+      axisInertia(i, k) {
+        const p = this.bodies[this.jointBodies[i * 2]];
+        const c = this.bodies[this.jointBodies[i * 2 + 1]];
+        const ip = p.principalInertia(), ic = c.principalInertia();
+        const q = p.rotation();
+        const ax = [0, 0, 0];
+        ax[0] = k === 0 ? 1 : 0;
+        ax[1] = k === 1 ? 1 : 0;
+        ax[2] = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
+        const a = this.axisW;
+        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+        return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]));
+      }
       enforceLimits() {
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
@@ -18108,6 +18143,7 @@ var init_sim = __esm({
             this.doll.driveMotors(this.dt);
             this.world.step();
             this.doll.enforceLimits();
+            this.doll.primeVelocities();
             if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
             this.deathLeft--;
             n++;
@@ -18120,6 +18156,7 @@ var init_sim = __esm({
           this.doll.driveMotors(this.dt);
           this.world.step();
           this.doll.enforceLimits();
+          this.doll.primeVelocities();
           if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
           used++;
           this.subStep++;
@@ -18945,9 +18982,17 @@ function computeWantedForce(rs, p, on) {
     const capZ = rs.com.z + rs.com.vz / om0;
     const kp = p.kXRatio * om0 * om0;
     const kd = 2 * p.zeta * om0;
-    const aDesZ = -kp * (capZ - stanceZ) - kd * rs.com.vz;
+    const errZ = capZ - stanceZ;
+    const errZDead = Math.abs(errZ) <= LAT_ERR_DEAD ? 0 : errZ - Math.sign(errZ) * LAT_ERR_DEAD;
+    const vzDead = Math.abs(rs.com.vz) <= LAT_VZ_DEAD ? 0 : rs.com.vz;
+    const aDesZ = -kp * errZDead - kd * vzDead;
     const mass = p.weight / 9.81;
-    if (on("lat")) comp.lateral = clamp(mass * h * aDesZ, p.maxLateral);
+    if (on("lat")) {
+      const halfZ = Math.max(0.02, rs.support.halfZ);
+      const marginZ = Math.max(0, halfZ * LAT_MARGIN_RHO - Math.abs(errZ));
+      const fMaxLat = Math.min(p.maxLateral, mass * 9.81 * marginZ / Math.max(0.2, h));
+      comp.lateral = clamp(mass * h * aDesZ, fMaxLat);
+    }
     const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
     const capX = rs.com.x + rs.com.vx / om0;
     const aDesX = -kp * (capX - stanceX) - kd * rs.com.vx;
@@ -18981,7 +19026,7 @@ function computeWantedForce(rs, p, on) {
     omega0: 3.1
   };
 }
-var DEFAULT_WANTED_FORCE, clamp;
+var DEFAULT_WANTED_FORCE, clamp, LAT_ERR_DEAD, LAT_VZ_DEAD, LAT_MARGIN_RHO;
 var init_wantedForce = __esm({
   "src/core/systems/wantedForce.ts"() {
     "use strict";
@@ -18995,6 +19040,9 @@ var init_wantedForce = __esm({
       maxTrunkLean: 250
     };
     clamp = (v, m) => v > m ? m : v < -m ? -m : v;
+    LAT_ERR_DEAD = 0.05;
+    LAT_VZ_DEAD = 0.02;
+    LAT_MARGIN_RHO = 0.6;
   }
 });
 
@@ -19037,7 +19085,15 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const dzLat = rs.com.z - stanceZLat;
     const dead = p.waistTrimDead;
     const errLat = Math.abs(dzLat) <= dead ? 0 : dzLat - Math.sign(dzLat) * dead;
-    rs.waistTrim = clamp2(errLat * p.kWaistTrim, p.maxWaistTrim);
+    const om0Lat = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05));
+    const capZLat = rs.com.z + rs.com.vz / om0Lat;
+    const halfZLat = Math.max(0.02, rs.support.halfZ);
+    const marginLat = halfZLat * 0.6 - Math.abs(capZLat - stanceZLat);
+    const shortFrac = Math.max(0, Math.min(1, -marginLat / Math.max(1e-3, halfZLat * 0.6)));
+    rs.waistTrim = clamp2(
+      Math.sign(dzLat || 1) * shortFrac * p.maxWaistTrim,
+      p.maxWaistTrim
+    );
     if (on("latwaist") && jSp1 >= 0 && rs.waistTrim !== 0) {
       for (const j of [jSp1, jSp2, jSp3]) {
         if (j !== void 0 && j >= 0) rs.requestAngle(j, 0, rs.waistTrim / 3, "balance", "\u8170\u989D\u72B6\u7CBE\u8C03/\u5378\u8F7D\u9ACB");
@@ -19109,7 +19165,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     }
     {
       const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-      rs.waistTrim = rs.com.z - stanceZl;
+      rs.waistGapM = rs.com.z - stanceZl;
     }
     if (on("pelvicLift") && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
       const sw = rs.swingLeg();
@@ -19204,7 +19260,27 @@ var init_balance = __esm({
        *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
        */
       torqueControl: false,
-      lateralEnabled: false,
+      // ★ 额状面主通道**常开**（2026-10-04，按文献 Winter 1995 [H] + Delp 1996 [H]）。
+      //   之前默认关着 ⇒ `wantedForce` 里 `comp.lateral ≡ 0` ⇒ 额状面 `τ=JᵀF`
+      //   分量恒为 0 ⇒ `motorTarget` 恒定、`com.z` 单调漂到 0.87 m 而无人纠正。
+      //
+      //   文献依据：
+      //     · Winter 1995 [H]：并立站位时 M/L 平衡**完全由髋内/外展肌主导**，
+      //       踝内/外翻肌"negligible involvement"（只有并脚站位才反过来）。
+      //     · Delp et al. 1996 [H]：髋外展肌力臂 5.6 cm，平衡躯干需 **51 N·m**，
+      //       平均能出 **88 N·m**（余量 73%）⇒ 额状面主动力在髋是有余量的，
+      //       而踝的横向 τmax 只有 72 N·m 而需求高达 mg×站距半宽。
+      //     · Harter et al. 2024 [JRSI]：`τ_align = k_x·(x_fp − x_hp)`，
+      //       k_x = 395.7 N，等效于把有效脚点移向髋 44.65%（虚拟 CoP 权限）。
+      //
+      //   ⚠ 配套约束（代码里已有，不重写）：
+      //     · `torqueControl` 仍为 false ⇒ 走**纯位置伺服**，不注入 τ=JᵀF 的定量分量
+      //       （`F_desired` 只决定 `θ_ref`）。这避免与位置环双计
+      //       （Feng et al. 2014：把 ID 的 q̈ 积分成 q_d 会"rapidly leads to
+      //        constraint violation and instability"）。
+      //     · 髋额状轴归属唯一：`AXIS_OWNERSHIP` 里 `hip/HIP_ABD_AXIS` 的
+      //       `latTransfer`（mode='tau'），腰的 `latwaist` 是**派生精调**通道。
+      lateralEnabled: true,
       latHipDead: 8,
       /**
        * 额状水平力限幅（N）。**唯一需要的量级旋钮**。

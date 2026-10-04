@@ -128,9 +128,21 @@ export interface BalanceParams {
   kneeHoldDeg: number;
   // ── Gear I (position servo): sagittal hip position controller ──────
   /** 矢状髋比例增益（rad/m）。com 前 ⇒ 发负角 = 髋伸 ⇒ 把躯干拉回支撑脚上方 */
-  ksagP: number;
-  /** 矢状髋阻尼（rad/(m/s)） */
-  ksagD: number;
+  /**
+   * ★ 矢状 P 增益，以**自然频率归一化**：`kp = ksagRatio·ω₀²`。
+   *   与 `wantedForce` 的 `kXRatio` 同一套约定 —— 姿态下沉时 ω₀ 自动变小，
+   *   增益跟着变小，不会变欠阻尼。
+   */
+  ksagRatio: number;
+  /**
+   * ★ 矢状阻尼比 ζ：`kd = 2ζω₀`。⇒ 阻尼/位置比 = 2ζ/ω₀ ≈ **0.56**（ζ=0.9）。
+   *
+   *   ⚠ 原先是手调 `ksagP=1.2 / ksagD=0.1`，比值仅 **0.083**，比正确值小 **6.7 倍**
+   *     ⇒ 捕获点前馈形同没有、纯 P 正反馈原样保留。实测 `com.x` 单调发散
+   *     到 −0.0415、`com.vx` 递增到 −0.13 m/s；`capX = −0.081 m` 只换来 **3.3°**
+   *     髋角，而阻尼项仅 0.75°（P 的 13%）⇒ 压不住。
+   */
+  ksagZeta: number;
   /** 矢状髋目标角限幅（rad） */
   maxHipDeg: number;
   // -- Gear I (position servo): waist sagittal posture hold --------------
@@ -282,9 +294,9 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
   kneeHoldDeg: 15,
   // Gear I sagittal hip: com forward => negative angle (hip extension)
-  ksagP: 1.2,
-  ksagD: 0.1,
   maxHipDeg: 0.52,
+  ksagRatio: 0.2,
+  ksagZeta: 0.9,
   // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
   kTorsoHold: 0.02,
   kTorsoHoldD: 0.02,
@@ -431,8 +443,40 @@ export function balanceSystem(
     //   ⇒ 正确结论不是"删掉位置环控制器"，而是**它们属于另一挡**：
     //     位置伺服挡用位置控制器，逆动力学挡用 `τ = JᵀF`，**两挡互斥不叠加**。
     //   符号（实测标定，tools/_fs）：**髋正 = 屈曲 = 脚往前**；膝负 = 屈曲。
-    const ex = rs.com.x;
-    const hipTgt = clamp(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
+    // ★★★ 矢状髋改用**捕获点**，不再是裸 `com.x`（2026-10-04）。
+    //
+    //   实测的崩掉机制（tools/_s，2.5s 逐拍）：
+    //     · `pitch` 全程只有 3.3° ⇒ 「pitch 74° 饱和」是**倒完之后**的现象，
+    //       不是原因（我先前把它当根因是错的）
+    //     · `hipTgt = -ksagP·com.x` 是**纯 P**：误差 ∝ 位移、位移 ∝ 速度
+    //       ⇒ 构成「位移–速度正反馈」。实测 `com.x` −0.0012 → −0.0683 单调发散，
+    //       `com.vx` −0.015 → **−0.197 m/s** 递增
+    //     · `ksagD = 0.1` 对 `ksagP = 1.2`（1:12）⇒ 阻尼项太小，压不住
+    //
+    //   修正：和额状面**同一套律**（`wantedForce.ts` 已在用）：
+    //       ξ_x = com.x + com.vx/ω₀     （MacKinnon & Winter 1993 / Houska 1995）
+    //       反馈对**捕获点**做 PD ⇒ 速度项变成真正的阻尼（相位提前 90°），
+    //       纯 P 的正反馈被消除。
+    //   `ω₀ = sqrt(g/h)`，h = CoM 高 − 脚底，与 `wantedForce` 同源。
+    //   摆高 h = CoM 高 − 脚底（实测 0.964 m）。LIPM 标准取 `com.y − soleY`，
+    //   原代码多减 0.05 m 使 ω₀ 偏小 2.7%（次要，但顺手改对）。
+    const om0Sag = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0)));
+    const capXSag = rs.com.x + rs.com.vx / om0Sag;
+    const stanceXSag = sup === 'l' ? rs.soleX.l : rs.soleX.r;
+    //   ★ 增益按**自然频率归一化**，与 `wantedForce` 的 `kp = kXRatio·ω₀²`
+    //     同一套约定（姿态下沉时不会变欠阻尼）：
+    //       kp = ksagRatio·ω₀²      kd = 2·ksagZeta·ω₀
+    //     ⇒ 阻尼/位置比 = 2ζ/ω₀ ≈ 2×0.9/3.19 ≈ **0.56**（临界阻尼附近）
+    //
+    //   ⚠ 原来的 `ksagP=1.2 / ksagD=0.1` 比值仅 **0.083**，比正确值小 **6.7 倍**
+    //     ⇒ 捕获点前馈形同没有、纯 P 正反馈原样保留。
+    //     实测（tools/_s2，`com.x` 走 −0.0026 → −0.0415、`com.vx` 递增到 −0.13）：
+    //     `capX = −0.081 m` 只换来 **3.3°** 髋角，而阻尼项仅 0.75°（P 的 13%）。
+    const kpSag = p.ksagRatio * om0Sag * om0Sag;
+    const kdSag = 2 * p.ksagZeta * om0Sag;
+    const hipTgt = clamp(
+      -kpSag * (capXSag - stanceXSag) - kdSag * rs.com.vx,
+      p.maxHipDeg);
     if (on('hip') && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, 'balance', '矢状髋(位置挡)');
     }
@@ -459,6 +503,11 @@ export function balanceSystem(
     //   （实测峰 |pitch| 在所有增益下都是 80~86°：+80° 前折、−79° 后折）。
     //   符号（tools/_sp 实测）：**脊柱正 = 躯干前倾** ⇒ 前倾用负角顶。
     //   单位换算：pitchDeg 是度、pitchRate 是度/秒 ⇒ 增益按 度/(度/秒) 理解。
+    //  ⚠ 试过 `kTorsoHold 0.02 → 0.10` / `maxTorsoDeg 0.26 → 0.44`：**更糟**。
+    //    pitch 只到 3.3° 时腰请求就到 **−52°**，超 spine 限位（±25°）**2 倍**
+    //    ⇒ `enforceLimits` 每帧硬拉回，净效果比饱和更差，且与髋反向。
+    //    ⇒ 腰矢状保持 `0.02 / 15°`（= 关节限位内、请求不越界）。
+    //    矢状稳定交给**矢状髋的捕获点律**（下面 `ksagRatio/ksagZeta`）。
     const spineTgt = clamp(
       -p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.pitchRate,
       p.maxTorsoDeg,
@@ -496,11 +545,69 @@ export function balanceSystem(
     //       再加硬限幅 `maxWaistTrim`（默认 8°，文献步态躯干侧倾 ~5~10°）。
     //       没有死区的话它会一直往里推，撞上 `τ=JᵀF` 的限幅，把人掀翻
     //       （实测额状力开到 500N 时 1.10 s 倒，而关掉能站满）。
+    //   ★★★ 目标改成**捕获点余量驱动**，不再是「位置误差 × 手调增益」
+    //   （2026-10-04）。理由是实测出来的**系统级矛盾**：
+    //     · 额状主通道（`wantedForce`）已经用捕获点 `capZ = com.z + vz/ω₀`，
+    //       带死区 50mm、带「到支撑边余量」限幅 ⇒ 三重约束；
+    //     · 而腰通道原来只看 `com.z - stanceZ`，**捕获点余量完全不参与**
+    //       ⇒ 捕获点已经居中（该停）时腰仍在按位置误差推。
+    //     实测：开局捕获点 0.0029（几乎居中）腰就顶到 **−9.2°**（限幅 8°）
+    //     ⇒ **腰在和额状通道对着干**，这是「侧移幅度过大」的主因，
+    //        不是额状通道的增益。
+    //
+    //   改法：腰的目标 = f(捕获点离支撑边的余量)，逻辑上与额状通道**同源**：
+    //     · 余量充足 ⇒ 目标 0（腰不动，让踝/髋处理）
+    //     · 余量不足 ⇒ 腰按差多少推，推到捕获点回中为止
+    //   幅度仍受 `maxWaistTrim`（8°，文献步态躯干侧倾 5~10°）硬限幅。
     const stanceZLat = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
     const dzLat = rs.com.z - stanceZLat;
     const dead = p.waistTrimDead;
     const errLat = Math.abs(dzLat) <= dead ? 0 : (dzLat - Math.sign(dzLat) * dead);
-    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);
+    // 捕获点（与 `wantedForce` 同一套：ξ = z + vz/ω₀）
+    const om0Lat = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05));
+    const capZLat = rs.com.z + rs.com.vz / om0Lat;
+    //
+    // ★★ 基准必须和 `support` 一致，否则整条公式的量纲错位（实测踩过）：
+    //   · `rs.support.halfZ` = **并立时各脚足迹宽度平均 / 2**（双脚 ⇒ 75mm）
+    //   · `rs.soleZ[sup]`   = **单脚自己的 z**（≈164mm）
+    //   ⇒ 拿 75mm 配 164mm 会出现 `dzLat = −161mm` 那种量级错位，
+    //     且 `support.cz`（双脚中心）与 `soleZ[sup]`（单脚）**不同基准**。
+    //
+    //   正确做法：捕获点相对**支撑面包围盒中心**算，用**单脚净半宽**做余量。
+    //   · 中心取 `rs.support.cz`（与 `halfZ` 同源，见 `posture.ts:190-206`）
+    //   · 单脚净半宽从 collider 拿（足宽 100mm ⇒ 半宽 50mm），退化时用 `halfZ`
+    //
+    // ★★★ 目标基准 = **承重腿自己的脚心** `soleZ[sup]`，**不是** `support.cz`
+    //   （用户 2026-10-04 明确：「这就是我的设计目标，承重腿的目标」；
+    //    用户原话：「我不要双脚着地均匀受力的情况，我只想要尽可能重心向一只脚移动」）。
+    //
+    //   为什么 `support.cz` 是错的：双脚都着地时它是**双脚中点**（实测恒为 0.000），
+    //   于是「重心回到支撑面中心」这个目标**恰好就是"双脚均匀承重"**，
+    //   控制器会主动把重心推回中点、阻止任何交接。实测后果：
+    //     · `com.z` 只走到 −45mm，而 `soleZ.l = +164mm` ⇒ **差 133mm 根本没走过去**
+    //     · `MoS` 反而从 84mm 涨到 314mm（脚已倒，但重心回到"双脚中点"，
+    //       在**双脚并立**的包围盒里算出来余量"很足"）⇒ MoS 虚高，掩盖了倾倒
+    //   ⇒ 换成 `soleZ[sup]`：捕获点必须回到**承重腿正上方**才算出余量充足，
+    //     这就是"把重心压到一只脚上"的字面实现。
+    //
+    //   半宽同样用**单脚净半宽**（足宽 100mm ⇒ 50mm），不是双脚平均值 75mm。
+    const supCz = stanceZLat;
+    const supHalf = Math.max(0.02, Math.min(rs.support.halfZ, 0.05));
+    const capErrLat = capZLat - supCz;
+    // 到支撑边的余量（同 `wantedForce` 的 ρ=0.6）
+    const marginLat = supHalf * 0.6 - Math.abs(capErrLat);
+    // 余量不足的份额 [0,1]：1 = 完全靠腰
+    const shortFrac = Math.max(0, Math.min(1, -marginLat / Math.max(1e-3, supHalf * 0.6)));
+    // 符号：腰侧倾把**躯干质量**推向它倒的方向 ⇒ 腰角符号 = CoM 要走的方向。
+    //   要 `com.z → +soleZ`（左脚）就得腰往 **+Z** 倒（正）。
+    //   ⚠ 原精调用的是 `sign(dzLat)`（把 CoM **拉回**原处，符号相反）。
+    //     那在"居中即目标"的语义下是对的；换成承重腿目标后它是**反的**
+    //     —— 实测腰顶死 −8° 限幅、CoM 一路往 −Z 走到 −45mm，
+    //        偏差从 161mm 涨到 208mm，离目标越来越远。
+    //   ⇒ 这里是"**移动到**承重腿上方"，不是"拉回中心"，符号必须同向。
+    rs.waistTrim = clamp(
+      -Math.sign(capErrLat || 1) * shortFrac * p.maxWaistTrim,
+      p.maxWaistTrim);
     if (on('latwaist') && jSp1 >= 0 && rs.waistTrim !== 0) {
       // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角
       for (const j of [jSp1, jSp2, jSp3]) {
@@ -701,8 +808,14 @@ export function balanceSystem(
       rs.hipLatTau = 0;
     }
     {
+      // ★★ 这里原来写 `rs.waistTrim = rs.com.z - stanceZl`（UI 诊断，单位**米**），
+      //   而上面 529 行写的是**控制目标**（单位**弧度**）。同一字段被两处写、
+      //   且本处在**后面** ⇒ 覆盖掉控制目标。
+      //   后果实测：腰的目标被换成一个米制诊断量（−0.051 m 读成 −9.20°），
+      //   控制目标等于没写 ⇒ 捕获点余量驱动形同虚设。
+      //   ⇒ 诊断量另起字段（`waistGapM`），`waistTrim` 专供控制。
       const stanceZl = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
-      rs.waistTrim = rs.com.z - stanceZl;   // UI：「还差多少到支撑脚」
+      rs.waistGapM = rs.com.z - stanceZl;   // UI：「还差多少到支撑脚」（米）
     }
 
 // ④a 骨盆抬升（pelvic hike）：摆动侧骨盆抬高 2~5cm 是最小足净空的决定因素
