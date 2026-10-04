@@ -299,6 +299,11 @@ interface PlateSlot {
   qRestInv: THREE.Quaternion;
   /** 脚掌板绕竖直轴的额外 90°（其余板子为单位四元数） */
   qYaw90: THREE.Quaternion;
+  /**
+   * ★ 断口锚点：若这块是脚掌板，指向它对应**小腿板**在 `plates` 里的下标；
+   *   用来把脚掌板的**断口中心**钉死在小腿板断口中心上（强制对齐）。-1 = 不锚。
+   */
+  breakAnchor: number;
 }
 
 export class Viewer {
@@ -331,6 +336,7 @@ export class Viewer {
   /** 相对静姿态的增量朝向（qBody ⊗ restTilt⁻¹） */
   private readonly qRel = new THREE.Quaternion();
   private readonly tmpV = new THREE.Vector3();
+  private readonly tmpV2 = new THREE.Vector3();
   private readonly sortDir = new THREE.Vector3();
   private readonly camDir = new THREE.Vector3();
   private readonly depths: Float64Array;
@@ -431,15 +437,34 @@ export class Viewer {
         //   ⇒ 板面法线从 `+X`（正前）转到 `+Z`（左侧），靴子以**侧面**呈现，
         //   和 collider 长边落到前后向（`skeleton.ts` 的 `hx`/`hz`）配套。
         //   只作用于 `foot_l/foot_r`，其余板子（含手臂）一律单位四元数。
+        // ★ 脚掌板绕**竖直轴**转 90°（用户 2026-10-04：「纹理是沿着竖直的轴转90度」
+        //   +「两个脚都反了，给两个脚同时转180」⇒ 左 +90° / 右 −90°）。
+        //   ⚠ 只作用于 `foot_l/foot_r`；其余板子（含手臂）一律单位四元数。
         qYaw90: (b.key === 'foot_l' || b.key === 'foot_r')
           ? new THREE.Quaternion().setFromAxisAngle(
               new THREE.Vector3(0, 1, 0),
-              // 两只脚同时再转 180°（用户 2026-10-04：「现在是两个脚都反了，给两个脚同时转180」）
-              (b.key === "foot_l" ? 1 : -1) * Math.PI / 2,
+              (b.key === 'foot_l' ? 1 : -1) * Math.PI / 2,
             )
           : new THREE.Quaternion(),
+        breakAnchor: -1,
       });
       this.scene.add(mesh);
+    }
+
+    // ---- 断口锚点表：脚掌板 -> 同侧小腿板 ----
+    //   ★ 只按**同侧配对**写死（foot_l↔shin_l / foot_r↔shin_r）。
+    //     上一版我遍历**所有**关节去填这张表，结果手臂/大腿也被套进去、
+    //     跟着转歪了（用户 2026-10-04：「你这么一搞，手臂也出问题了」）。别再那样写。
+    for (let i = 0; i < this.plates.length; i++) {
+      const key = sk.bodies[this.plates[i].drivers[0]]?.key;
+      const side = key === 'foot_l' ? 'l' : key === 'foot_r' ? 'r' : '';
+      if (!side) continue;
+      for (let j = 0; j < this.plates.length; j++) {
+        if (sk.bodies[this.plates[j].drivers[0]]?.key === `shin_${side}`) {
+          this.plates[i].breakAnchor = j;
+          break;
+        }
+      }
     }
 
     if (groups.skinned.length > 0) {
@@ -448,6 +473,7 @@ export class Viewer {
       this.plates.push({
         mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
         qYaw90: new THREE.Quaternion(),
+        breakAnchor: -1,
         // 躯干不设静倾角（脊柱 LBS 蒙皮要求各段同朝向）
         qRestInv: new THREE.Quaternion(),
       });
@@ -844,6 +870,26 @@ export class Viewer {
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
       slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix).multiply(slot.qYaw90);
       slot.sortPos.set(t.x, t.y, t.z);
+    }
+
+    // ---- ★ 强制对齐断口中心（脚仍可自由旋转）----
+    //   脚掌板与小腿板取的是**同一张贴图**的互补 UV 区间，接缝那一行是同一行像素。
+    //   但两者挂在**不同刚体**上（踝关节有 1.4° 残余偏转），脚掌板会偏离断口一点。
+    //   这里把脚掌板的**断口中心**（板心沿板内 +h/2）钉到小腿板的**断口中心**
+    //   （板心沿板内 −h/2）的世界位置上 —— 只对齐**一个点**，朝向完全保留，
+    //   所以脚仍然可以自由旋转（用户 2026-10-04：「只对齐一个中心点，脚是允许旋转的」）。
+    for (const slot of this.plates) {
+      if (slot.breakAnchor < 0) continue;
+      const sh = this.plates[slot.breakAnchor];
+      const shHalf = (sh.mesh.geometry as THREE.PlaneGeometry).parameters.height / 2;
+      const ftHalf = (slot.mesh.geometry as THREE.PlaneGeometry).parameters.height / 2;
+      // 小腿板断口中心 / 脚掌板断口中心（世界坐标）
+      this.tmpV.set(0, -shHalf, 0).applyQuaternion(sh.mesh.quaternion).add(sh.mesh.position);
+      this.tmpV2.set(0, ftHalf, 0).applyQuaternion(slot.mesh.quaternion).add(slot.mesh.position);
+      // ★ 只把**横向（Z）**错位抹掉，竖直（Y）与前后（X）一律保留。
+      //   ⚠ 之前把整个 position 重算成「断口中心重合」，结果板子脱离物理脚掌、
+      //     **脚悬空了**（用户 2026-10-04：「脚现在悬空了」）。所以只补 Z。
+      slot.mesh.position.z += this.tmpV.z - this.tmpV2.z;
     }
 
     // ---- 深度排序（远 → 近）----
