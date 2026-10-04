@@ -113,6 +113,17 @@ export function stanceResolved(rs: RigState): boolean {
  * @param on 分量开关。**每个都必须真实接线**到下面的求和，否则消融实验无效
  *           （此前 `lat` 是死开关，害得所有对照实验作废）。
  */
+/** 额状面位置死区（米）：捕获点离支撑脚中心多近就不动作。与 `waistTrimDead` 同量级 */
+export const LAT_ERR_DEAD = 0.05;
+/** 额状面速度死区（m/s）：低于此值视为噪声（`com.vz` 是有限差分量） */
+export const LAT_VZ_DEAD = 0.02;
+/**
+ * 额状面安全系数 ρ（Li, Zhou, Zhu & Xiong, IEEE T-RO）：
+ *   限幅按「支撑边 × ρ − |误差|」，ρ=0.6 留 40% 余量。
+ *   该文实测 ρ=0.5 会让平衡能力下降 50%，所以不宜再低。
+ */
+export const LAT_MARGIN_RHO = 0.6;
+
 export function computeWantedForce(
   rs: RigState,
   p: WantedForceParams,
@@ -134,10 +145,46 @@ export function computeWantedForce(
     const capZ = rs.com.z + rs.com.vz / om0;
     const kp = p.kXRatio * om0 * om0;
     const kd = 2 * p.zeta * om0;
-    const aDesZ = -kp * (capZ - stanceZ) - kd * rs.com.vz;
+    // ★★ 加死区（2026-10-04，文献对齐）。
+    //   ① 位置死区：`LAT_ERR_DEAD` = 50mm，与腰额状精调通道
+    //      （`balance.ts` 的 `waistTrimDead`，默认 50mm）**同量级** ⇒ 两个
+    //      额状通道的"不作为区间"一致，不会一个在推一个在停。
+    //      原来 `capZ - stanceZ` 无死区 ⇒ 站直时 CoM 偏 1mm 就持续出力。
+    //   ② 速度死区：`LAT_VZ_DEAD` = 0.02 m/s。`com.vz` 是有限差分量（LIPM 里
+    //      也是），噪声直接进反馈 ⇒ 与 ① 叠加会形成"噪声→力→更吵"的正反馈。
+    //   人类侧的对应量级：Winter et al. 1998 [H] 实测 COP−COM 误差信号
+    //   只有 **≈0.5mm（额状）/ 0.8mm（矢状）** —— 人只在误差真的超过噪声底
+    //   （0.27mm）时才动作。⇒ "误差很小就不动作"是文献常态，不是保守。
+    const errZ = capZ - stanceZ;
+    const errZDead = Math.abs(errZ) <= LAT_ERR_DEAD ? 0
+      : errZ - Math.sign(errZ) * LAT_ERR_DEAD;
+    const vzDead = Math.abs(rs.com.vz) <= LAT_VZ_DEAD ? 0 : rs.com.vz;
+    const aDesZ = -kp * errZDead - kd * vzDead;
     // `F = m·h·a_des`（h = 摆高）。m 由 weight 反推，避免两处各写一个 70。
     const mass = p.weight / 9.81;
-    if (on('lat')) comp.lateral = clamp(mass * h * aDesZ, p.maxLateral);
+    if (on('lat')) {
+      // ★★★ 限幅改成「**到支撑边的余量**」，不是常数（2026-10-04）。
+      //   文献判据（Pratt 2006 / Stephens & Goswami 2007 式(4)）：
+      //       **捕获点必须留在支撑多边形内** —— 限的是「捕获点」，不是「力」。
+      //   Li, Zhou, Zhu & Xiong, IEEE T-RO：安全系数 ρ<1，
+      //       "a safety margin of ρ = 0.5 would proportionally downgrade
+      //       50% of balance capability" ⇒ 取 ρ = 0.6（留 40% 余量）。
+      //
+      //   原来 `maxLateral = 500N` 对 1.8m 人形**等于不限幅**：
+      //       F_x = F_z·(x_com − x_cop)/z_com ⇒ 500 N 对应 CoM 偏移
+      //       500/687 × 1.0 = **0.73 m**，而脚只有 0.27 m ⇒ 必然直接侧翻。
+      //   现在：可用力随「捕获点到支撑边的余量」线性收缩 ⇒ 越靠近脚边越推不动，
+      //   **物理上自动"有度"**，不靠魔法数。
+      //
+      //   ⚠ 这样做的附带好处：**平衡系统和状态机用同一个判据**。
+      //      `gaitState.ts:302` 的 `X7 = rs.mos >= permitMosMin`（捕获点出界就
+      //      迈步）此前与本通道完全脱节 —— 状态机知道要迈步，平衡系统还在
+      //      同方向加力，两个系统互相打架。现在两者都挂在捕获点上。
+      const halfZ = Math.max(0.02, rs.support.halfZ);
+      const marginZ = Math.max(0, halfZ * LAT_MARGIN_RHO - Math.abs(errZ));
+      const fMaxLat = Math.min(p.maxLateral, mass * 9.81 * marginZ / Math.max(0.2, h));
+      comp.lateral = clamp(mass * h * aDesZ, fMaxLat);
+    }
 
     // ── 矢状：同一套律（x 向前为正，目标 = 支撑脚 x）──────────
     const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;

@@ -1655,7 +1655,28 @@ export class Ragdoll {
         void w;
         // 只有还在往越界方向走才拦；往回走（恢复中）不拦，否则会锁死回程
         if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
-        const J = -wRel * this.jointIeff[i];
+        // ★★ 冲量惯量必须是「**该轴**」的并联折合惯量，不能用预存的
+        //   `jointIeff`（2026-10-04 修踝限位失效）。
+        //
+        //   `jointIeff[i]` 在构造里算的是**两个刚体各自主惯量的最大值**的并联
+        //   （`1/(1/max(I_s) + 1/max(I_f))`）—— 那是给**马达稳定性护栏**用的
+        //   "保守上界"，因为护栏卡紧不会破坏物理。
+        //   但**限位冲量要的是"恰好归零"**，用偏大的惯量 ⇒ 实际角速度变化
+        //   `Δω = J / I_该轴` 远超需要的 `−ω_rel` ⇒ **过冲并反向** ⇒ 再次越界
+        //   ⇒ 再过冲（正反馈）。
+        //
+        //   实测（踝 foot_l，脚掌 m=1.01kg、主惯量 I=(1.07e-2, 5.88e-3, 6.70e-3)）：
+        //     jointIeff(踝) = 8.77e-3（用两个 max 的并联）
+        //     轴0 roll  该轴真实惯量 5.88e-3 ⇒ 冲量偏大 **1.5×**
+        //     轴1 twist 该轴真实惯量 4.12e-3 ⇒ 冲量偏大 **2.1×**
+        //   过冲被驱动力平衡 ⇒ 角度**停在稳定值**（实测 +87.1° / −59.7°，
+        //   而限位是 ±14 / −10）—— 这也解释了为什么改判据（角速度→位置）
+        //   或把增益放大 33 倍都只改善个位数度数：**错的不是判据也不是增益，
+        //   是惯量**。
+        //
+        //   这里按 `axisW` 把两体的主惯量旋到该轴上再取分量，做真正的轴向折合。
+        const Iax = this.axisInertia(i, k);
+        const J = -wRel * Iax;
         const jv = this.iv;
         jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
         c.applyTorqueImpulse(jv, true);
@@ -1730,6 +1751,30 @@ export class Ragdoll {
    *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
    *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
    */
+  /**
+   * 某关节某轴的**并联折合惯量**（限位冲量用）。
+   *
+   * ★ 必须按**该轴**取值，不能用 `jointIeff`（那是两个刚体各自主惯量**最大值**
+   *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
+   *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
+   */
+  private axisInertia(i: number, k: number): number {
+    const p = this.bodies[this.jointBodies[i * 2]];
+    const c = this.bodies[this.jointBodies[i * 2 + 1]];
+    const ip = p.principalInertia(), ic = c.principalInertia();
+    // 把该局部轴旋到世界（用父体姿态，和 enforceLimits 里 axisW 一致）
+    const q = p.rotation();
+    const ax = [0, 0, 0];
+    ax[0] = k === 0 ? 1 : 0; ax[1] = k === 1 ? 1 : 0; ax[2] = k === 2 ? 1 : 0;
+    quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
+    const a = this.axisW;
+    // I_world = R · diag(Ix,Iy,Iz) · Rᵀ ⇒ 取该轴分量 I_k = a·(I∘a)
+    const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+    const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+    const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+    return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]!));
+  }
+
   enforceLimits(): void {
     for (let i = 0; i < this.sk.joints.length; i++) {
       const j = this.sk.joints[i];
