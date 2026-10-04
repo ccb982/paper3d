@@ -5752,6 +5752,11 @@ function $(id) {
   if (!el) throw new Error(`[hud] \u7F3A\u5C11\u5143\u7D20 #${id}`);
   return el;
 }
+function $cv(id) {
+  const el = document.getElementById(id);
+  if (!el || typeof el.getContext !== "function") throw new Error(`[hud] #${id} \u4E0D\u662F canvas`);
+  return el;
+}
 var PHASE_LABEL, Hud;
 var init_hud = __esm({
   "src/ui/hud.ts"() {
@@ -5807,6 +5812,10 @@ var init_hud = __esm({
           ownMos: $("own-mos"),
           ownPitch: $("own-pitch"),
           ownRoll: $("own-roll"),
+          ownFcState: $("own-fc-state"),
+          ownFcTb: $("own-fc-tb"),
+          ownCtCv: $cv("own-ct-cv"),
+          ownCtTb: $("own-ct-tb"),
           ownPelv: $("own-pelv"),
           ownClr: $("own-clr"),
           ownAxL: $("own-ax-l"),
@@ -5925,6 +5934,110 @@ var init_hud = __esm({
        *     冒烟测试（`tools/probe-uipanel.ts`）消费的是**同一份快照**，
        *     所以"你看到的"和"我回读的"在机械上必然一致。
        */
+      /**
+      * ★★ 力链渲染：**自下而上**（踝 → 膝 → 髋），每行是那个关节**下方子树**的传递力。
+      *
+      *   为什么自下而上：用户 2026-10-04「力应该是自脚往上传的，盆骨只是运用了
+      *   这股力」。子树的定义天然给出这个顺序（踝的子树只有脚掌、髋的子树含整条腿），
+      *   所以数值应当自下而上递增 —— **一旦看到不递增，就说明力在那一级被卸掉了**。
+      *
+      *   着色阈值用体重（70kg ⇒ 687N）：绿 <体重、黄 <1.5×体重、红更大。
+      *
+      *   ⚠ `ready=false` 时数值不可信（`Ragdoll` 的速度环还没填满 5 帧，
+      *     窗口差分拿不到"N 步前"的值）⇒ 必须显式写"未就绪"，**不能显示 0**
+      *     —— 显示 0 会被读成"没有力"，那正是之前踩过的静默失效。
+      */
+      renderForceChain(fc) {
+        const e = this.el;
+        const W2 = 70 * 9.81;
+        if (!fc.ready) {
+          e.ownFcState.textContent = "\u672A\u5C31\u7EEA";
+          e.ownFcState.dataset.ok = "0";
+          e.ownFcTb.innerHTML = '<tr><td class="nm" colspan="4">\u901F\u5EA6\u73AF\u586B\u5145\u4E2D\u2026\uFF08\u524D 42ms \u7684\u6570\u4E0D\u53EF\u4FE1\uFF09</td></tr>';
+          return;
+        }
+        e.ownFcState.textContent = "\u5C31\u7EEA";
+        e.ownFcState.dataset.ok = "1";
+        const keep = /* @__PURE__ */ new Set(["foot_l", "foot_r", "knee_l", "knee_r", "hip_l", "hip_r"]);
+        const rows = fc.joints.filter((j) => keep.has(j.name)).map((j) => {
+          const lv = j.f < W2 ? 0 : j.f < W2 * 1.5 ? 1 : 2;
+          const [side, part] = j.name.split("_");
+          const tag = part === "foot" ? "\u8E1D\u2192\u811A\u638C" : part === "knee" ? "\u819D\u2192\u5C0F\u817F+\u811A" : "\u9ACB\u2192\u6574\u6761\u817F";
+          return `<tr data-lv="${lv}"><td class="nm">${side === "l" ? "\u5DE6" : "\u53F3"} ${tag}</td><td class="f">${j.f.toFixed(0)}</td><td class="c">${j.fx.toFixed(0)}, ${j.fy.toFixed(0)}, ${j.fz.toFixed(0)}</td><td class="c">${j.mass.toFixed(1)}kg</td></tr>`;
+        }).join("");
+        e.ownFcTb.innerHTML = rows;
+      }
+      /**
+       * ★★ 重心转移诊断渲染。
+       *
+       *   面板的设计意图：把「**谁在出力**」和「**谁真的在动**」并排放。
+       *   若命令很大而 `rateLat ≈ 0`，就直接证明"力发出去但没作用到重心"——
+       *   这是之前反复靠猜的那件事（实测髋外展 60 N·m 而重心横向只动 1mm）。
+       *
+       *   曲线画横向误差 `com.z − stanceZ` 的滚动趋势，并画出容差带（±50mm）与 0 线：
+       *   一眼看出是**收敛 / 卡住 / 发散**。
+       */
+      renderComTransfer(ct) {
+        const e = this.el;
+        const DEAD = 0.05;
+        const mm = (v) => `${v >= 0 ? "+" : ""}${(v * 1e3).toFixed(0)}mm`;
+        const cmdN = Math.max(
+          Math.abs(ct.cmdHipLatTau) / 60,
+          Math.abs(ct.cmdGrfLat) / 500,
+          Math.abs(ct.cmdWaistTrim) / 0.14
+        );
+        const stalled = cmdN > 0.25 && Math.abs(ct.rateLat) < 4e-3;
+        const r = (k, v, cls = "") => `<tr class="${cls}"><td class="k">${k}</td><td class="v">${v}</td></tr>`;
+        e.ownCtTb.innerHTML = [
+          r("\u6A2A\u5411\u8BEF\u5DEE", mm(ct.errLat)),
+          r("\u3000\u901F\u7387 d(com.z)/dt", `${(ct.rateLat * 1e3).toFixed(1)} mm/s`, stalled ? "stall" : ""),
+          r("\u77E2\u72B6\u8BEF\u5DEE", mm(ct.errSag)),
+          r("\u8F7D\u8377 \u524D/\u540E", `${ct.loadFront.toFixed(2)} / ${ct.loadRear.toFixed(2)}`),
+          r("MoS", `${ct.mosMm.toFixed(0)}mm`),
+          r("\u547D\u4EE4 \u9ACBN\xB7m", ct.cmdHipLatTau.toFixed(0)),
+          r("\u3000\u3000 \u8170\xB0", (ct.cmdWaistTrim * 57.3).toFixed(1)),
+          r("\u3000\u3000 GRF N", ct.cmdGrfLat.toFixed(0)),
+          r("\u3000\u3000 \u62AC\u5347\xB0", (ct.cmdPelvicLift * 57.3).toFixed(1)),
+          r("\u4EA4\u63A5\u5224\u636E", Object.entries(ct.handover.flags).map(([kk, vv]) => `${vv ? "\u2713" : "\u2717"}${kk.slice(1)}`).join(" "))
+        ].join("");
+        const cv = e.ownCtCv;
+        const g = cv.getContext("2d");
+        if (!g) return;
+        const W2 = cv.width, H = cv.height;
+        g.clearRect(0, 0, W2, H);
+        const hist = ct.hist;
+        let ext = 0.2;
+        for (const v of hist) {
+          const a = Math.abs(v);
+          if (a > ext) ext = a;
+        }
+        const yOf = (v) => H / 2 - v / ext * (H / 2 - 3);
+        g.fillStyle = "rgba(34,197,94,.16)";
+        g.fillRect(0, yOf(DEAD), W2, yOf(-DEAD) - yOf(DEAD));
+        g.strokeStyle = "rgba(30,41,59,.35)";
+        g.lineWidth = 1;
+        g.beginPath();
+        g.moveTo(0, yOf(0));
+        g.lineTo(W2, yOf(0));
+        g.stroke();
+        if (hist.length > 1) {
+          g.strokeStyle = "#2563eb";
+          g.lineWidth = 1.6;
+          g.beginPath();
+          const x0 = W2 - (hist.length - 1) * (W2 / 240);
+          for (let i = 0; i < hist.length; i++) {
+            const x = x0 + i * (W2 / 240);
+            const y = yOf(hist[i]);
+            if (i === 0) g.moveTo(x, y);
+            else g.lineTo(x, y);
+          }
+          g.stroke();
+        }
+        g.fillStyle = "rgba(30,41,59,.55)";
+        g.font = "9px ui-monospace, Consolas, monospace";
+        g.fillText(`${(ext * 1e3).toFixed(0)}`, 2, 9);
+        g.fillText("\xB150mm \u5BB9\u5DEE", W2 - 58, H - 3);
+      }
       setOwnership(d) {
         const e = this.el;
         if (!d) {
@@ -5966,6 +6079,8 @@ var init_hud = __esm({
         e.ownMos.textContent = `${(d.mos * 1e3).toFixed(0)} mm`;
         e.ownPitch.textContent = `${d.pitchDeg.toFixed(1)}\xB0`;
         e.ownRoll.textContent = `${d.rollDeg.toFixed(1)}\xB0`;
+        this.renderForceChain(d.forceChain);
+        this.renderComTransfer(d.comTransfer);
         e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}\xB0`;
         e.ownClr.textContent = `${(d.swingClearance * 1e3).toFixed(0)} mm`;
         e.ownAxL.textContent = `z ${d.legs.l.footZ >= 0 ? "+" : ""}${(d.legs.l.footZ * 1e3).toFixed(0)}mm`;
@@ -13904,7 +14019,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13948,6 +14063,7 @@ var init_ragdoll = __esm({
       //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
       ankleGroundFactor: 1
     };
+    VEL_WIN = 5;
     Ragdoll = class _Ragdoll {
       sk;
       opt;
@@ -14599,22 +14715,29 @@ var init_ragdoll = __esm({
         for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
       }
       /**
-       * ══════════════════════════════════════════════════════════════
-       * ★★ **关节传递力**（子树约束力）—— 这才是"从脚传上来的力"。
+       * ★★ **关节传递力（力链）** —— 这才是"从脚往上"的力。
        *
-       *   物理：对某关节的**子侧子树**做牛顿第二定律。
-       *       F_constraint = m·(a_com − g) − F_ext
-       *   其中 a_com 用**速度差分**（需配 `primeVelocities()` 在 `advance` 前采一次），
-       *   F_ext 只有重力（接触力通过地面作用在子树的足部，已包含在 m·a_com 里）。
+       *   物理：对某关节的**子侧子树**做牛顿第二定律
+       *       F_constraint = m·(a_com − g)
+       *   `a_com` 用**窗口差分**（跨 `VEL_WIN` 个物理步的**平均加速度**）。
        *
-       *   为什么不用马达力矩倒推：马达力矩是**控制器要的**，不是**实际传的**。
-       *   约束力是刚体动力学的结果，包含接触、摩擦、惯量耦合 —— 才是可视化要的东西。
+       *   ★★ 为什么必须是窗口而不是单步差分：
+       *     单步 `Δv/dt` 会把**接触冲击**算进去 —— 实测开踝时脚掌落地那一步
+       *     读到 **109 kN** 的"传递力"（真实值是体重的 1/60）。
+       *     窗口平均等价于低通，代价是丢掉 30ms 内的真峰值（对力链可接受）。
        *
-       *   输出写到 `out`（长度 ≥ nJoints），索引 = 关节下标，每项 {fx,fy,fz,f,m}。
-       *   轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   ★ 为什么不用马达力矩倒推：马达力矩是**控制器要的**，约束力是
+       *     **动力学结果**（含接触、摩擦、惯量耦合）—— 只有后者是"传上来的力"。
+       *
+       *   ★ 轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   输出到 `out`（长度 ≥ 5·nJoints），每关节 {fx,fy,fz,|F|,subtreeMass}。
+       *   **这是自下而上的读数**：foot 的子树 = 脚掌；knee 的子树 = 小腿+脚；
+       *   hip 的子树 = 大腿+小腿+脚 ⇒ 数值应当**自下而上递增**。
        */
       jointForce(out, dt) {
         const g = 9.81;
+        const win = Math.max(1, Math.min(this.velRing.length / Math.max(1, this.bodies.length), VEL_WIN));
+        const dtW = dt * win;
         for (let i = 0; i < this.sk.joints.length; i++) {
           const o = i * 5;
           if (o + 4 >= out.length) break;
@@ -14625,15 +14748,15 @@ var init_ragdoll = __esm({
             const b = this.bodies[bi];
             if (!b) continue;
             const m = b.mass(), v = b.linvel();
-            const pv = this.velPrev[bi];
+            const pv = this.velOld(bi);
             if (!pv) continue;
             usable = true;
             mt += m;
-            ax += m * (v.x - pv.x) / dt;
-            ay += m * (v.y - pv.y) / dt;
-            az += m * (v.z - pv.z) / dt;
+            ax += m * (v.x - pv.x) / dtW;
+            ay += m * (v.y - pv.y) / dtW;
+            az += m * (v.z - pv.z) / dtW;
           }
-          if (!usable || mt <= 0) {
+          if (!usable || mt <= 0 || dtW <= 0) {
             out[o] = 0;
             out[o + 1] = 0;
             out[o + 2] = 0;
@@ -14648,6 +14771,18 @@ var init_ragdoll = __esm({
           out[o + 3] = Math.hypot(fx, fy, fz);
           out[o + 4] = mt;
         }
+      }
+      /** 速度环：每步写一帧，供窗口差分取"N 步前"的值 */
+      velRing = new Float64Array(0);
+      velRingPos = 0;
+      velFrames = 0;
+      /** N 步之前的速度（环未满时返回 null ⇒ 不输出，避免"看起来正常的 0"） */
+      velOld(bi) {
+        const n = this.bodies.length;
+        if (n === 0 || this.velFrames < VEL_WIN) return null;
+        const b = this.velRingPos * n + bi;
+        if (b + 2 >= this.velRing.length) return null;
+        return { x: this.velRing[b], y: this.velRing[b + 1], z: this.velRing[b + 2] };
       }
       /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
       subtreeCache = null;
@@ -14674,22 +14809,27 @@ var init_ragdoll = __esm({
         return this.subtreeCache.get(i) ?? [];
       }
       /**
-       * ★ 在 `advance()` **之前**采一次速度快照（`jointForce` 的差分基准）。
-       *   不采的话 `a_com` 全是 0，力链读数会是 0 —— 一个"看起来正常"的静默失效。
+       * ★ 在 `advance()` **之后**采一帧速度，供 `jointForce` 做**窗口差分**。
+       *   环未满 `VEL_WIN` 帧时 `jointForce` 不输出（而不是输出 0 —— 后者会
+       *   让力链看起来"正常"但全是零，是个静默失效）。
        */
       primeVelocities() {
-        if (this.velPrev.length !== this.bodies.length) {
-          this.velPrev = this.bodies.map(() => ({ x: 0, y: 0, z: 0 }));
-        }
-        for (let i = 0; i < this.bodies.length; i++) {
+        const n = this.bodies.length;
+        if (this.velRing.length !== VEL_WIN * n) this.velRing = new Float64Array(VEL_WIN * n);
+        const base = this.velRingPos * n;
+        for (let i = 0; i < n; i++) {
           const v = this.bodies[i].linvel();
-          const p = this.velPrev[i];
-          p.x = v.x;
-          p.y = v.y;
-          p.z = v.z;
+          this.velRing[base + i] = v.x;
+          this.velRing[base + i + 1] = v.y;
+          this.velRing[base + i + 2] = v.z;
         }
+        this.velRingPos = (this.velRingPos + 1) % VEL_WIN;
+        if (this.velFrames < VEL_WIN) this.velFrames++;
       }
-      velPrev = [];
+      /** 力链是否已就绪（环已满）—— UI 显示用，避免展示未初始化的 0 */
+      forceChainReady() {
+        return this.velFrames >= VEL_WIN;
+      }
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
@@ -18028,6 +18168,9 @@ var init_rigState = __esm({
       pelvicLift = 0;
       /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
       swingClearance = 0;
+      /** 力链缓冲（N·m/分量，逐关节 5 个数）与就绪标志。由 `updateForceChain` 写 */
+      forceBuf = new Float64Array(0);
+      forceReady = false;
       /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
       waistTrim = 0;
       /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
@@ -18096,6 +18239,7 @@ var init_rigState = __esm({
         this.prevOut = new Float32Array(n);
         this.tauOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
+        this.forceBuf = new Float64Array(sk2.joints.length * 5);
         this.treq.fill(void 0);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
@@ -18461,6 +18605,65 @@ var init_rigState = __esm({
         return this.tgt;
       }
       // ── 快照（唯一可读出口）─────────────────────────────────
+      /**
+       * 力链打包（供快照 / UI）。`ready=false` 时数值**不可信**（速度环未填满），
+       * UI 必须显示"未就绪"，不能把 0 当成"没有力"—— 那正是之前踩过的静默失效。
+       */
+      forceChain() {
+        const joints = [];
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          joints.push({
+            name: this.sk.joints[i].name,
+            fx: this.forceBuf[o] ?? 0,
+            fy: this.forceBuf[o + 1] ?? 0,
+            fz: this.forceBuf[o + 2] ?? 0,
+            f: this.forceBuf[o + 3] ?? 0,
+            mass: this.forceBuf[o + 4] ?? 0
+          });
+        }
+        return { ready: this.forceReady, joints };
+      }
+      /** 重心转移诊断（供快照/UI）。历史环形缓冲，240 帧 = 4s @60Hz */
+      comTransferHist = [];
+      rateLatPrev = 0;
+      rateLatHave = false;
+      /**
+       * 每拍更新重心转移诊断。`dt` 用**控制拍**长（历史按拍推）。
+       * `cmdGrfLat` 由平衡系统写入（`grfCmd.z`），这里只读，避免两个系统互写。
+       */
+      updateComTransfer(dt) {
+        const front = this.frontLegSide;
+        const stanceZ = front === "l" ? this.soleZ.l : this.soleZ.r;
+        const stanceX = front === "l" ? this.soleX.l : this.soleX.r;
+        this.comErrLat = this.com.z - stanceZ;
+        this.comErrSag = this.com.x - stanceX;
+        if (this.rateLatHave && dt > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt;
+        this.rateLatPrev = this.comErrLat;
+        this.rateLatHave = true;
+        this.comTransferHist.push(this.comErrLat);
+        if (this.comTransferHist.length > 240) this.comTransferHist.shift();
+      }
+      comErrLat = 0;
+      comErrSag = 0;
+      comRateLat = 0;
+      cmdGrfLat = 0;
+      comTransfer() {
+        return {
+          errLat: this.comErrLat,
+          errSag: this.comErrSag,
+          rateLat: this.comRateLat,
+          hist: this.comTransferHist.slice(-240),
+          cmdHipLatTau: this.hipLatTau,
+          cmdWaistTrim: this.waistTrim,
+          cmdGrfLat: this.cmdGrfLat,
+          cmdPelvicLift: this.pelvicLift,
+          loadFront: this.loadFrac[this.frontLegSide],
+          loadRear: this.loadFrac[this.rearLegSide],
+          mosMm: this.mos * 1e3,
+          handover: { flags: { ...this.handoverCriteria.flags }, values: { ...this.handoverCriteria.values }, all: false }
+        };
+      }
       /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
       snapshot(limitHit = []) {
         const footL = this.soleX.l, footR = this.soleX.r;
@@ -18512,6 +18715,8 @@ var init_rigState = __esm({
           swingClearance: this.swingClearance,
           waistTrim: this.waistTrim,
           hipLatTau: this.hipLatTau,
+          forceChain: this.forceChain(),
+          comTransfer: this.comTransfer(),
           torsoY: this.torsoY,
           tiltDeg: this.tiltDeg,
           pitchDeg: this.pitchDeg,
@@ -19308,6 +19513,11 @@ var init_controller = __esm({
         const out = rs.arbitrate(dt);
         this.sim.doll.setTorqueTargets(rs.tauOut);
         this.sim.doll.setHoldMask(rs.holdMask);
+        this.sim.doll.primeVelocities();
+        this.sim.doll.jointForce(rs.forceBuf, dt);
+        rs.forceReady = this.sim.doll.forceChainReady();
+        rs.cmdGrfLat = rs.grfCmd.z;
+        rs.updateComTransfer(dt);
         this.snapshot = rs.snapshot();
         return out;
       }

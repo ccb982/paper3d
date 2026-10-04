@@ -13657,7 +13657,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13701,6 +13701,7 @@ var init_ragdoll = __esm({
       //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
       ankleGroundFactor: 1
     };
+    VEL_WIN = 5;
     Ragdoll = class _Ragdoll {
       sk;
       opt;
@@ -14352,22 +14353,29 @@ var init_ragdoll = __esm({
         for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
       }
       /**
-       * ══════════════════════════════════════════════════════════════
-       * ★★ **关节传递力**（子树约束力）—— 这才是"从脚传上来的力"。
+       * ★★ **关节传递力（力链）** —— 这才是"从脚往上"的力。
        *
-       *   物理：对某关节的**子侧子树**做牛顿第二定律。
-       *       F_constraint = m·(a_com − g) − F_ext
-       *   其中 a_com 用**速度差分**（需配 `primeVelocities()` 在 `advance` 前采一次），
-       *   F_ext 只有重力（接触力通过地面作用在子树的足部，已包含在 m·a_com 里）。
+       *   物理：对某关节的**子侧子树**做牛顿第二定律
+       *       F_constraint = m·(a_com − g)
+       *   `a_com` 用**窗口差分**（跨 `VEL_WIN` 个物理步的**平均加速度**）。
        *
-       *   为什么不用马达力矩倒推：马达力矩是**控制器要的**，不是**实际传的**。
-       *   约束力是刚体动力学的结果，包含接触、摩擦、惯量耦合 —— 才是可视化要的东西。
+       *   ★★ 为什么必须是窗口而不是单步差分：
+       *     单步 `Δv/dt` 会把**接触冲击**算进去 —— 实测开踝时脚掌落地那一步
+       *     读到 **109 kN** 的"传递力"（真实值是体重的 1/60）。
+       *     窗口平均等价于低通，代价是丢掉 30ms 内的真峰值（对力链可接受）。
        *
-       *   输出写到 `out`（长度 ≥ nJoints），索引 = 关节下标，每项 {fx,fy,fz,f,m}。
-       *   轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   ★ 为什么不用马达力矩倒推：马达力矩是**控制器要的**，约束力是
+       *     **动力学结果**（含接触、摩擦、惯量耦合）—— 只有后者是"传上来的力"。
+       *
+       *   ★ 轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   输出到 `out`（长度 ≥ 5·nJoints），每关节 {fx,fy,fz,|F|,subtreeMass}。
+       *   **这是自下而上的读数**：foot 的子树 = 脚掌；knee 的子树 = 小腿+脚；
+       *   hip 的子树 = 大腿+小腿+脚 ⇒ 数值应当**自下而上递增**。
        */
       jointForce(out, dt) {
         const g = 9.81;
+        const win = Math.max(1, Math.min(this.velRing.length / Math.max(1, this.bodies.length), VEL_WIN));
+        const dtW = dt * win;
         for (let i = 0; i < this.sk.joints.length; i++) {
           const o = i * 5;
           if (o + 4 >= out.length) break;
@@ -14378,15 +14386,15 @@ var init_ragdoll = __esm({
             const b = this.bodies[bi];
             if (!b) continue;
             const m = b.mass(), v2 = b.linvel();
-            const pv = this.velPrev[bi];
+            const pv = this.velOld(bi);
             if (!pv) continue;
             usable = true;
             mt += m;
-            ax += m * (v2.x - pv.x) / dt;
-            ay += m * (v2.y - pv.y) / dt;
-            az += m * (v2.z - pv.z) / dt;
+            ax += m * (v2.x - pv.x) / dtW;
+            ay += m * (v2.y - pv.y) / dtW;
+            az += m * (v2.z - pv.z) / dtW;
           }
-          if (!usable || mt <= 0) {
+          if (!usable || mt <= 0 || dtW <= 0) {
             out[o] = 0;
             out[o + 1] = 0;
             out[o + 2] = 0;
@@ -14401,6 +14409,18 @@ var init_ragdoll = __esm({
           out[o + 3] = Math.hypot(fx, fy, fz);
           out[o + 4] = mt;
         }
+      }
+      /** 速度环：每步写一帧，供窗口差分取"N 步前"的值 */
+      velRing = new Float64Array(0);
+      velRingPos = 0;
+      velFrames = 0;
+      /** N 步之前的速度（环未满时返回 null ⇒ 不输出，避免"看起来正常的 0"） */
+      velOld(bi) {
+        const n = this.bodies.length;
+        if (n === 0 || this.velFrames < VEL_WIN) return null;
+        const b = this.velRingPos * n + bi;
+        if (b + 2 >= this.velRing.length) return null;
+        return { x: this.velRing[b], y: this.velRing[b + 1], z: this.velRing[b + 2] };
       }
       /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
       subtreeCache = null;
@@ -14427,22 +14447,27 @@ var init_ragdoll = __esm({
         return this.subtreeCache.get(i) ?? [];
       }
       /**
-       * ★ 在 `advance()` **之前**采一次速度快照（`jointForce` 的差分基准）。
-       *   不采的话 `a_com` 全是 0，力链读数会是 0 —— 一个"看起来正常"的静默失效。
+       * ★ 在 `advance()` **之后**采一帧速度，供 `jointForce` 做**窗口差分**。
+       *   环未满 `VEL_WIN` 帧时 `jointForce` 不输出（而不是输出 0 —— 后者会
+       *   让力链看起来"正常"但全是零，是个静默失效）。
        */
       primeVelocities() {
-        if (this.velPrev.length !== this.bodies.length) {
-          this.velPrev = this.bodies.map(() => ({ x: 0, y: 0, z: 0 }));
-        }
-        for (let i = 0; i < this.bodies.length; i++) {
+        const n = this.bodies.length;
+        if (this.velRing.length !== VEL_WIN * n) this.velRing = new Float64Array(VEL_WIN * n);
+        const base = this.velRingPos * n;
+        for (let i = 0; i < n; i++) {
           const v2 = this.bodies[i].linvel();
-          const p = this.velPrev[i];
-          p.x = v2.x;
-          p.y = v2.y;
-          p.z = v2.z;
+          this.velRing[base + i] = v2.x;
+          this.velRing[base + i + 1] = v2.y;
+          this.velRing[base + i + 2] = v2.z;
         }
+        this.velRingPos = (this.velRingPos + 1) % VEL_WIN;
+        if (this.velFrames < VEL_WIN) this.velFrames++;
       }
-      velPrev = [];
+      /** 力链是否已就绪（环已满）—— UI 显示用，避免展示未初始化的 0 */
+      forceChainReady() {
+        return this.velFrames >= VEL_WIN;
+      }
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];

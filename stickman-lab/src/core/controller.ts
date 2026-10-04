@@ -145,7 +145,22 @@ export class Controller {
     // ★ 让位掩码：让 `τ=JᵀF` 接管的轴，位置伺服退化为纯阻尼
     this.sim.doll.setHoldMask(rs.holdMask);
 
-    // ── 7. 快照（唯一出口）────────────────────────────────
+    // ── 7. 力链（自下而上的传递力）──────────────────────────
+    //   ★ 用户 2026-10-04：「力应该是自脚往上传的，盆骨只是运用了这股力」
+    //   ⇒ 顺序是刚性的：**先采样速度 → 再算子树约束力 → 最后打包快照**。
+    //     换序会退化成单步差分（实测把落地冲击读成 109 kN）。
+    this.sim.doll.primeVelocities();
+    this.sim.doll.jointForce(rs.forceBuf, dt);
+    rs.forceReady = this.sim.doll.forceChainReady();
+
+    // ── 8. 重心转移诊断 ────────────────────────────────────
+    //   ★ 用户 2026-10-04：「我需要看的是**如何把重心转移到单腿中**」。
+    //     单腿力链看不到是因为转移做不到（因果反了）⇒ 这里画转移过程本身。
+    //     `cmdGrfLat` 回填平衡系统写的 `grfCmd.z`（只读，不让两个系统互写）。
+    rs.cmdGrfLat = rs.grfCmd.z;
+    rs.updateComTransfer(dt);
+
+    // ── 9. 快照（唯一出口）────────────────────────────────
     this.snapshot = rs.snapshot();
     return out;
   }

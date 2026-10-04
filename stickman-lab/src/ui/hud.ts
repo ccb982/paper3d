@@ -69,6 +69,18 @@ function $(id: string): HTMLElement {
 }
 
 /**
+ * 取 canvas 元素。
+ * ⚠ 用**鸭子类型**（有 `getContext`）而不是 `instanceof HTMLCanvasElement` ——
+ *   jsdom（`probe-uipanel` 的同源门禁）不提供全局 `HTMLCanvasElement` 构造器，
+ *   用 instanceof 会直接 ReferenceError，把门禁搞红。
+ */
+function $cv(id: string): HTMLCanvasElement {
+  const el = document.getElementById(id) as HTMLCanvasElement | null;
+  if (!el || typeof el.getContext !== 'function') throw new Error(`[hud] #${id} 不是 canvas`);
+  return el;
+}
+
+/**
  * 相位标签表。**导出**给 `probe-uipanel` 用 —— 之前探针自己复制了一份，
  * 漏了 `PUSH`，于是状态机一进入蹬离相 UI 断言就假失败（同一事实两处定义）。
  */
@@ -77,7 +89,7 @@ export const PHASE_LABEL: Record<string, string> = {
 };
 
 export class Hud {
-  private readonly el: Record<string, HTMLElement>;
+  private readonly el: Record<string, HTMLElement> & { ownCtCv: HTMLCanvasElement };
   private readonly chart: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private history: GenStat[] = [];
@@ -99,6 +111,8 @@ export class Hud {
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
       ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
+      ownFcState: $('own-fc-state'), ownFcTb: $('own-fc-tb'),
+      ownCtCv: $cv('own-ct-cv'), ownCtTb: $('own-ct-tb'),
       ownPelv: $('own-pelv'), ownClr: $('own-clr'), ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
       ownGate: $('own-gate'), ownGrid: $('own-grid'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
@@ -190,7 +204,108 @@ export class Hud {
    *     冒烟测试（`tools/probe-uipanel.ts`）消费的是**同一份快照**，
    *     所以"你看到的"和"我回读的"在机械上必然一致。
    */
-  setOwnership(d: RigSnapshot | null): void {
+  /**
+ * ★★ 力链渲染：**自下而上**（踝 → 膝 → 髋），每行是那个关节**下方子树**的传递力。
+ *
+ *   为什么自下而上：用户 2026-10-04「力应该是自脚往上传的，盆骨只是运用了
+ *   这股力」。子树的定义天然给出这个顺序（踝的子树只有脚掌、髋的子树含整条腿），
+ *   所以数值应当自下而上递增 —— **一旦看到不递增，就说明力在那一级被卸掉了**。
+ *
+ *   着色阈值用体重（70kg ⇒ 687N）：绿 <体重、黄 <1.5×体重、红更大。
+ *
+ *   ⚠ `ready=false` 时数值不可信（`Ragdoll` 的速度环还没填满 5 帧，
+ *     窗口差分拿不到"N 步前"的值）⇒ 必须显式写"未就绪"，**不能显示 0**
+ *     —— 显示 0 会被读成"没有力"，那正是之前踩过的静默失效。
+ */
+private renderForceChain(fc: RigSnapshot['forceChain']): void {
+  const e = this.el;
+  const W = 70 * 9.81;
+  if (!fc.ready) {
+    e.ownFcState.textContent = '未就绪';
+    e.ownFcState.dataset.ok = '0';
+    e.ownFcTb.innerHTML = '<tr><td class="nm" colspan="4">速度环填充中…（前 42ms 的数不可信）</td></tr>';
+    return;
+  }
+  e.ownFcState.textContent = '就绪';
+  e.ownFcState.dataset.ok = '1';
+  // 只画腿链 + 躯干根，省得把 12 个关节全列出来
+  const keep = new Set(['foot_l', 'foot_r', 'knee_l', 'knee_r', 'hip_l', 'hip_r']);
+  const rows = fc.joints.filter((j) => keep.has(j.name))
+    .map((j) => {
+      const lv = j.f < W ? 0 : (j.f < W * 1.5 ? 1 : 2);
+      const [side, part] = j.name.split('_');
+      const tag = part === 'foot' ? '踝→脚掌' : part === 'knee' ? '膝→小腿+脚' : '髋→整条腿';
+      return `<tr data-lv="${lv}"><td class="nm">${side === 'l' ? '左' : '右'} ${tag}</td>`
+        + `<td class="f">${j.f.toFixed(0)}</td>`
+        + `<td class="c">${j.fx.toFixed(0)}, ${j.fy.toFixed(0)}, ${j.fz.toFixed(0)}</td>`
+        + `<td class="c">${j.mass.toFixed(1)}kg</td></tr>`;
+    }).join('');
+  e.ownFcTb.innerHTML = rows;
+}
+
+/**
+ * ★★ 重心转移诊断渲染。
+ *
+ *   面板的设计意图：把「**谁在出力**」和「**谁真的在动**」并排放。
+ *   若命令很大而 `rateLat ≈ 0`，就直接证明"力发出去但没作用到重心"——
+ *   这是之前反复靠猜的那件事（实测髋外展 60 N·m 而重心横向只动 1mm）。
+ *
+ *   曲线画横向误差 `com.z − stanceZ` 的滚动趋势，并画出容差带（±50mm）与 0 线：
+ *   一眼看出是**收敛 / 卡住 / 发散**。
+ */
+private renderComTransfer(ct: RigSnapshot['comTransfer']): void {
+  const e = this.el;
+  const DEAD = 0.05;
+  const mm = (v: number): string => `${v >= 0 ? '+' : ''}${(v * 1000).toFixed(0)}mm`;
+  const cmdN = Math.max(Math.abs(ct.cmdHipLatTau) / 60, Math.abs(ct.cmdGrfLat) / 500,
+    Math.abs(ct.cmdWaistTrim) / 0.14);
+  const stalled = cmdN > 0.25 && Math.abs(ct.rateLat) < 0.004;
+  const r = (k: string, v: string, cls = ''): string =>
+    `<tr class="${cls}"><td class="k">${k}</td><td class="v">${v}</td></tr>`;
+  e.ownCtTb.innerHTML = [
+    r('横向误差', mm(ct.errLat)),
+    r('　速率 d(com.z)/dt', `${(ct.rateLat * 1000).toFixed(1)} mm/s`, stalled ? 'stall' : ''),
+    r('矢状误差', mm(ct.errSag)),
+    r('载荷 前/后', `${ct.loadFront.toFixed(2)} / ${ct.loadRear.toFixed(2)}`),
+    r('MoS', `${ct.mosMm.toFixed(0)}mm`),
+    r('命令 髋N·m', ct.cmdHipLatTau.toFixed(0)),
+    r('　　 腰°', (ct.cmdWaistTrim * 57.3).toFixed(1)),
+    r('　　 GRF N', ct.cmdGrfLat.toFixed(0)),
+    r('　　 抬升°', (ct.cmdPelvicLift * 57.3).toFixed(1)),
+    r('交接判据', Object.entries(ct.handover.flags).map(([kk, vv]) => `${vv ? '✓' : '✗'}${kk.slice(1)}`).join(' ')),
+  ].join('');
+
+  const cv = e.ownCtCv;
+  const g = cv.getContext('2d');
+  if (!g) return;
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  const hist = ct.hist;
+  let ext = 0.2;
+  for (const v of hist) { const a = Math.abs(v); if (a > ext) ext = a; }
+  const yOf = (v: number): number => H / 2 - (v / ext) * (H / 2 - 3);
+  g.fillStyle = 'rgba(34,197,94,.16)';
+  g.fillRect(0, yOf(DEAD), W, yOf(-DEAD) - yOf(DEAD));
+  g.strokeStyle = 'rgba(30,41,59,.35)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(0, yOf(0)); g.lineTo(W, yOf(0)); g.stroke();
+  if (hist.length > 1) {
+    g.strokeStyle = '#2563eb'; g.lineWidth = 1.6;
+    g.beginPath();
+    const x0 = W - (hist.length - 1) * (W / 240);
+    for (let i = 0; i < hist.length; i++) {
+      const x = x0 + i * (W / 240);
+      const y = yOf(hist[i]!);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  g.fillStyle = 'rgba(30,41,59,.55)';
+  g.font = '9px ui-monospace, Consolas, monospace';
+  g.fillText(`${(ext * 1000).toFixed(0)}`, 2, 9);
+  g.fillText('±50mm 容差', W - 58, H - 3);
+}
+
+setOwnership(d: RigSnapshot | null): void {
     const e = this.el;
     if (!d) {
       e.ownGate.textContent = '—（当前不是 controller 驱动）';
@@ -224,6 +339,8 @@ export class Hud {
     // 前/后倾 与 左/右倾 分开显示：合成的倾角大小分不出平面
     e.ownPitch.textContent = `${d.pitchDeg.toFixed(1)}°`;
     e.ownRoll.textContent = `${d.rollDeg.toFixed(1)}°`;
+    this.renderForceChain(d.forceChain);
+    this.renderComTransfer(d.comTransfer);
     // 骨盆抬升 / 摆动净空（与 3D 方向标同一份快照，同源）
     e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}°`;
     e.ownClr.textContent = `${(d.swingClearance * 1000).toFixed(0)} mm`;

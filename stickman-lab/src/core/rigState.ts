@@ -167,6 +167,25 @@ export interface RigSnapshot {
   rearLegSide: Side;
   /** 骨盆抬升偏置（rad）。见 `RigState.pelvicLift` */
   pelvicLift: number;
+  /**
+   * ★★ **力链**（自下而上的关节传递力）。用户 2026-10-04：
+   *   「力应该是自脚往上传的，盆骨只是运用了这股力」「应该从下往上查」。
+   *
+   *   每项 = 一个关节的**子侧子树**约束力 `F = m·(a_com − g)`（`Ragdoll.jointForce`）。
+   *   关节的 `subtree` 是它**下方**的刚体，所以读数天然自下而上递增：
+   *     踝 → 只有脚掌；膝 → 小腿+脚；髋 → 大腿+小腿+脚。
+   *   轴：x=矢状(前) y=竖直 z=额状(左)。`ready=false` 表示速度环未填满，
+   *   此时数值为 0 但**不可信**（UI 必须显示"未就绪"，不能显示 0）。
+   */
+  forceChain: {
+    ready: boolean;
+    joints: { name: string; fx: number; fy: number; fz: number; f: number; mass: number }[];
+  };
+  /**
+   * ★★ **重心转移诊断** —— 用户 2026-10-04：「我需要看的是**如何把重心转移到单腿中**」。
+   *   单腿力链看不到是因为转移做不到（因果反了）⇒ 这里画**转移过程本身**。
+   */
+  comTransfer: ComTransfer;
   /** 摆动脚净空（m） */
   swingClearance: number;
   /** 捕获点 ξ_x / ξ_z（Houska balance point） */
@@ -205,6 +224,37 @@ export interface RigSnapshot {
 }
 
 // ─────────────────────────────────────────────────── 主体
+
+/**
+ * ★★ **重心转移诊断** —— 用户 2026-10-04：「我需要看的是**如何把重心转移到单腿中**」。
+ *
+ *   单腿力链看不到，是因为重心转移做不到（因果反了）。所以这里**不画力，画转移过程本身**，
+ *   并且刻意把「谁在出力」和「谁真的在动」并排放：
+ *     · `cmdHipLatTau` / `cmdWaistTrim` / `cmdGrfLat` = 各执行器的命令
+ *     · `rateLat` = **实测** d(com.z)/dt —— 若命令很大而它≈0，就直接证明
+ *       "力发出去了但没作用到重心"，而不是让人猜。
+ *     · `hist` = 横向误差的滚动历史，用来看**趋势**（收敛 / 卡住 / 发散）。
+ */
+export interface ComTransfer {
+  /** 横向误差 com.z − stanceZ（m）。正 = 重心在支撑腿那一侧 */
+  errLat: number;
+  /** 矢状误差 com.x − stanceX（m）。正 = 重心在支撑脚前方 */
+  errSag: number;
+  /** 横向误差速率（m/s），实测有限差分 */
+  rateLat: number;
+  /** 横向误差滚动历史（m），最新在末尾 */
+  hist: number[];
+  cmdHipLatTau: number;
+  cmdWaistTrim: number;
+  cmdGrfLat: number;
+  cmdPelvicLift: number;
+  /** 载荷分配与稳定裕度 —— 转移的真正"果" */
+  loadFront: number;
+  loadRear: number;
+  mosMm: number;
+  /** 交接判据逐条（UI 直接显示，"为什么没转移"不用推断） */
+  handover: Criteria;
+}
 
 export class RigState {
   readonly sk: Skeleton;
@@ -252,6 +302,9 @@ export class RigState {
   pelvicLift = 0;
   /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
   swingClearance = 0;
+  /** 力链缓冲（N·m/分量，逐关节 5 个数）与就绪标志。由 `updateForceChain` 写 */
+  readonly forceBuf = new Float64Array(0);
+  forceReady = false;
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
   waistTrim = 0;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
@@ -324,6 +377,7 @@ export class RigState {
     this.prevOut = new Float32Array(n);
     this.tauOut = new Float32Array(n);
     this.tauJ = new Float32Array(n);
+    this.forceBuf = new Float64Array(sk.joints.length * 5);
     this.treq.fill(undefined);
     for (let i = 0; i < n; i++) {
       this.tgt.push({
@@ -642,6 +696,63 @@ export class RigState {
 
   // ── 快照（唯一可读出口）─────────────────────────────────
 
+  /**
+   * 力链打包（供快照 / UI）。`ready=false` 时数值**不可信**（速度环未填满），
+   * UI 必须显示"未就绪"，不能把 0 当成"没有力"—— 那正是之前踩过的静默失效。
+   */
+  forceChain(): RigSnapshot['forceChain'] {
+    const joints: RigSnapshot['forceChain']['joints'] = [];
+    for (let i = 0; i < this.sk.joints.length; i++) {
+      const o = i * 5;
+      joints.push({
+        name: this.sk.joints[i]!.name,
+        fx: this.forceBuf[o] ?? 0, fy: this.forceBuf[o + 1] ?? 0,
+        fz: this.forceBuf[o + 2] ?? 0, f: this.forceBuf[o + 3] ?? 0,
+        mass: this.forceBuf[o + 4] ?? 0,
+      });
+    }
+    return { ready: this.forceReady, joints };
+  }
+
+  /** 重心转移诊断（供快照/UI）。历史环形缓冲，240 帧 = 4s @60Hz */
+  comTransferHist: number[] = [];
+  private rateLatPrev = 0;
+  private rateLatHave = false;
+
+  /**
+   * 每拍更新重心转移诊断。`dt` 用**控制拍**长（历史按拍推）。
+   * `cmdGrfLat` 由平衡系统写入（`grfCmd.z`），这里只读，避免两个系统互写。
+   */
+  updateComTransfer(dt: number): void {
+    const front = this.frontLegSide;
+    const stanceZ = front === 'l' ? this.soleZ.l : this.soleZ.r;
+    const stanceX = front === 'l' ? this.soleX.l : this.soleX.r;
+    this.comErrLat = this.com.z - stanceZ;
+    this.comErrSag = this.com.x - stanceX;
+    if (this.rateLatHave && dt > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt;
+    this.rateLatPrev = this.comErrLat;
+    this.rateLatHave = true;
+    this.comTransferHist.push(this.comErrLat);
+    if (this.comTransferHist.length > 240) this.comTransferHist.shift();
+  }
+  comErrLat = 0;
+  comErrSag = 0;
+  comRateLat = 0;
+  cmdGrfLat = 0;
+
+  comTransfer(): ComTransfer {
+    return {
+      errLat: this.comErrLat, errSag: this.comErrSag, rateLat: this.comRateLat,
+      hist: this.comTransferHist.slice(-240),
+      cmdHipLatTau: this.hipLatTau, cmdWaistTrim: this.waistTrim,
+      cmdGrfLat: this.cmdGrfLat, cmdPelvicLift: this.pelvicLift,
+      loadFront: this.loadFrac[this.frontLegSide],
+      loadRear: this.loadFrac[this.rearLegSide],
+      mosMm: this.mos * 1000,
+      handover: { flags: { ...this.handoverCriteria.flags }, values: { ...this.handoverCriteria.values }, all: false },
+    };
+  }
+
   /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
   snapshot(limitHit: boolean[] = []): RigSnapshot {
     const footL = this.soleX.l, footR = this.soleX.r;
@@ -675,6 +786,7 @@ export class RigState {
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
       waistTrim: this.waistTrim, hipLatTau: this.hipLatTau,
+      forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,
       legs: {
