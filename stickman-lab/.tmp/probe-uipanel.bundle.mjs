@@ -6488,6 +6488,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       inertiaZ: mainIz,
       inertiaXY: mainIz * 0.5
     });
+    let shinPlateUv;
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const sfx = Math.max(0.1, cfg.soleFootScale);
@@ -6506,16 +6507,19 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fTilt = 0;
         const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
-        const texH = part.h;
-        const texTopPx = part.cy - part.bh / 2;
-        const cutTopLocal = anklePx[1] - texTopPx;
-        const cutBotLocal = cutTopLocal + META.sole.len;
-        const footUv = (() => {
-          const y0 = cutBotLocal / texH;
-          const h = Math.max(0.02, (cutBotLocal - cutTopLocal) / texH);
-          const yc = Math.min(Math.max(y0, 0), 1 - h);
-          return { x: 0, y: 1 - (yc + h), width: 1, height: h };
+        const plateH = part.bh * px2m;
+        const cutFrac = (() => {
+          const texTopPx = part.cy - part.bh / 2;
+          const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+          return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
         })();
+        const slack = Math.min(
+          0.25,
+          Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac)
+        );
+        const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+        const shinY = Math.max(0, cutFrac - slack);
+        shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
         const yawDip = cfg.soleGroundCorr;
@@ -6535,9 +6539,15 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   「把小腿的脚裁剪出来附着在脚上」）。
           //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
           //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
-          //   ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          // ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
           //     而素材坐标原点在左上 ⇒ y 要翻转。
-          plateOffset: [0, 0, 0],
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
           plateUv: footUv,
           length: soleDrop,
           radius: 0,
@@ -6588,6 +6598,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           restTiltRad: tilt,
           restYawRad: yaw,
           plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
           length,
           radius,
           halfHeight,
@@ -6839,6 +6852,11 @@ var init_skeleton = __esm({
        */
       //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
       soleFootScale: 1,
+      // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+      footCropUpMm: 0.123,
+      footCropOverlapMm: 0.01,
+      // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+      footCropOverlapFrac: 0.1,
       soleGroundCorr: 0,
       soleSplit: true,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。

@@ -808,14 +808,24 @@ export class Viewer {
       this.qRel.copy(this.qBody).multiply(slot.qRestInv);
       const bd = doll.sk.bodies[slot.drivers[0]];
       const off = bd.plateOffset;
-      // ★★ 裁剪板（`plateUv`）要沿板自身高度下移**半个裁剪区**。
-      //   板心默认落在刚体原点，而脚掌刚体原点 = **踝锚点**（几何中心在踝），
-      //   被裁出来的是**踝以下那块** ⇒ 板心必须下移才落在靴子中央。
-      //   否则脚掌板会有一半浮在踝上方、另一半陷进小腿。
-      const halfDrop = bd.plateUv
-        ? (bd.part.bh * doll.sk.px2m * bd.plateUv.height) / 2
+      // ★★★ 裁剪板的板心必须按**几何**重新定位，否则会跑到裁剪区之外。
+      //
+      //   mesh 建成 `uv.height × 原板高`，它显示贴图里 UV ∈ [uv.y, uv.y+uv.height]
+      //   那一带。该带中心相对**原贴图中心**（UV 0.5）的世界 y 位移：
+      //
+      //       shift = 原板高 × (uv.y + uv.height/2 − 0.5)      正 = 上
+      //
+      //   代入本项目的两块：
+      //     · 小腿 uv.y=0.124 h=0.876 ⇒ **+0.062** × 原板高（上移，下沿落到踝线）
+      //     · 脚掌 uv.y=0     h=0.124 ⇒ **−0.438** × 原板高（下移到踝下方的靴子）
+      //
+      //   ⚠⚠ 我第一版写成 `−原板高 × uv.height / 2`：方向反了（把"下移"套到了
+      //     **上半块**的小腿上）、量级也差约 7 倍 ⇒ **小腿纹理往下伸到地面**
+      //     （用户 2026-10-04 两次亲见）。教训：没验证过的公式不能交。
+      const shift = bd.plateUv
+        ? bd.part.bh * doll.sk.px2m * (bd.plateUv.y + bd.plateUv.height / 2 - 0.5)
         : 0;
-      this.tmpV.set(off[0], off[1] - halfDrop, off[2]).applyQuaternion(this.qBody);
+      this.tmpV.set(off[0], off[1] + shift, off[2]).applyQuaternion(this.qBody);
       slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
       slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix);

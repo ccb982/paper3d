@@ -187,6 +187,34 @@ export interface SkeletonConfig {
    */
   soleFootScale: number;
   /**
+   * ★ 裁剪线相对**踝锚点**上移多少（米，随 `ankleEnabled` 生效）。
+   *
+   * 小腿贴图沿高度被切成两块（踝以上 = 小腿板、踝以下 = 脚掌板）。
+   * 切线不放在踝锚点上，而是**往上挪**一段，好让脚掌板把靴子上方那圈
+   * 脚踝/袜口也带上——素材里靴子的上沿本来就比踝锚点高一点，按锚点切会
+   * 把靴子上沿切掉一截，视觉上脚会"太短"。
+   *
+   * ★ 物理高度不变（脚掌刚体与碰撞体完全不受它影响），**只影响贴图裁剪**。
+   */
+  footCropUpMm: number;
+  /**
+   * ★ 裁剪线两侧各留多少**冗余**（米，随 `ankleEnabled` 生效）。
+   *
+   * 小腿板下沿和脚掌板上沿各自越过切线这么多 ⇒ 两块**重叠** `2×` 该值。
+   * 重叠区的像素来自同一张贴图、位置完全重合 ⇒ 静止时看不出接缝；
+   * 好处是踝关节转动/两板相对位姿有微小误差时**不会露缝**，也容得下
+   * "踝锚点测偏了"这种误差（用户 2026-10-04：给两边都留点冗余）。
+   */
+  footCropOverlapMm: number;
+  /**
+   * ★ 同上，但按**脚掌板高度的比例**给（随 `ankleEnabled` 生效）。
+   *
+   * 加高踝线时，**绝对毫米往往跟不上**——脚掌板从 100mm 长到 200mm，
+   * 固定 10mm 的冗余在比例上就薄了一半。所以这里再给一个比例旋钮，
+   * 两者取**较大值**生效 ⇒ 踝线抬高时冗余自动按比例跟着长。
+   */
+  footCropOverlapFrac: number;
+  /**
    * ★ 足底贴地标定（米，随 `ankleEnabled` 生效）：脚掌刚体额外**下沉**多少。
    *
    * ⚠⚠ **本轮实测结论：几何本来是精确的，这个修正 unnecessary 且默认应为 0。**
@@ -286,6 +314,11 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
    */
   //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1.0,
+  // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+  footCropUpMm: 0.123,
+  footCropOverlapMm: 0.01,
+  // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+  footCropOverlapFrac: 0.1,
   soleGroundCorr: 0,
   soleSplit: true,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
@@ -901,6 +934,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //     · 盒心竖向 = 盒底贴地（世界 Y = hy），不再用"胶囊底端"倒推
     //     · 侧向半宽 = 实测 lateralHalf × soleFootScale
     //   前后长度（hx）仍是手填设计参数：正面视图**测不出**脚的前后长度（见 soleFootScale 注释）。
+    // ★ 小腿板的裁剪窗口（踝以上那半）。声明在踝分支**之外**，
+    //   因为小腿刚体是在分支之后才 push 的，而两块必须共用同一个 `footFrac`
+    //   才拼得回原图（用户 2026-10-04：「小腿和脚掌的纹理是独立的，
+    //   只是从相同的纹理上裁剪罢了」）。
+    let shinPlateUv: { x: number; y: number; width: number; height: number } | undefined;
     if (solePct > 0) {
       const soleMass = (solePct / 100) * cfg.mass;
       const sfx = Math.max(0.1, cfg.soleFootScale);
@@ -943,17 +981,38 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   `anklePx` 是**画布 px**（踝在 y≈2792），而这张贴图只有 `part.h` ≈ 408 px 高
         //   （它只是画布裁出来的一块）⇒ 直接除会得到 y = −6.7 这种越界值。
         //   正确做法：先减去贴图自身的左上角 (`part.cx − part.bw/2`, `part.cy − part.bh/2`)。
-        const texH = part.h;
-        const texTopPx = part.cy - part.bh / 2;               // 该贴图左上角的画布 y
-        const cutTopLocal = anklePx[1] - texTopPx;            // 踝在贴图内的 y（局部 px）
-        const cutBotLocal = cutTopLocal + META.sole.len;      // 鞋底
-        const footUv = (() => {
-          const y0 = cutBotLocal / texH;                     // 局部 → 0..1
-          const h = Math.max(0.02, (cutBotLocal - cutTopLocal) / texH);
-          // 越界（素材里靴子超出小腿贴图下沿）就夹到贴图内，并保留下沿
-          const yc = Math.min(Math.max(y0, 0), 1 - h);
-          return { x: 0, y: 1 - (yc + h), width: 1, height: h };
-        })();
+        // ★★★ 小腿贴图沿高度**按踝锚点切成两块**（用户 2026-10-04：
+      //   「小腿和脚掌的纹理是独立的，只是从相同的纹理上裁剪罢了」
+      //   「脚是很小的底部一小块，你需要去除掉小腿的脚，然后使用裁剪下来的脚」）。
+      //
+      //   两块**各自独立成板**（各自的 mesh / 尺寸 / 位置），只是都从**同一张**
+      //   小腿贴图取不同的 UV 窗口：
+      //     · 小腿板 = 踝**以上**   uv.y = footFrac, height = 1 − footFrac
+      //     · 脚掌板 = 踝**以下**   uv.y = 0,         height = footFrac
+      //   合起来正好是原贴图 ⇒ **无缝**，且画面上只有一只脚。
+      //
+      //   ⚠⚠ 归一化分母用 **`part.bh`（内容框高，画布 px）**，不是 `part.h`：
+      //   `part.h` 是降采样后的贴图像素高（408）、`part.bh` 是内容框（817），
+      //   而 `anklePx` / `part.cy` 全是画布 px ⇒ 必须同量纲，否则差 1/scale = 2 倍。
+      const plateH = part.bh * px2m;          // 该贴图内容框的世界高度（米）
+      // ① 切线：以踝锚点为基准**上移** `footCropUpMm`
+      //    （画布 y 向下，所以"上移" = 锚点 y 减小）
+      const cutFrac = (() => {
+        const texTopPx = part.cy - part.bh / 2;      // 内容框上沿（画布 y）
+        const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+        return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
+      })();
+      // ② 冗余：切线两侧各让出这么多 ⇒ 两块重叠 2×。
+      //    「绝对毫米」与「脚掌高度的比例」取**较大者** —— 踝线抬高、脚掌板变高时，
+      //    固定毫米在比例上会变薄，靠比例项把它拉回来。
+      const slack = Math.min(
+        0.25,
+        Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac),
+      );
+      const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+      // ★ 小腿那半：下沿**也**越过切线 `slack`（冗余），于是两板重叠而非硬对接
+      const shinY = Math.max(0, cutFrac - slack);
+      shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
         // ★ 脚掌盒从**踝一直罩到鞋底**（不是只盖鞋底那一片）：
         //   ① 踝锚点必须落在自己刚体的碰撞体内，否则门禁"锚点不越出胶囊"必失败，
         //      物理上踝也确实在脚掌实体的上端；
@@ -1002,9 +1061,15 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   「把小腿的脚裁剪出来附着在脚上」）。
           //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
           //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
-          //   ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+// ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
           //     而素材坐标原点在左上 ⇒ y 要翻转。
-          plateOffset: [0, 0, 0],
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
           plateUv: footUv,
           length: soleDrop,
           radius: 0,
@@ -1052,6 +1117,9 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           restTiltRad: tilt,
           restYawRad: yaw,
           plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
           length,
           radius,
           halfHeight,
