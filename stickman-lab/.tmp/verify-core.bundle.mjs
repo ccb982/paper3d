@@ -6502,8 +6502,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
       const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
-      const hx = soleHalfLen * sfx;
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = hx * 0.3;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6538,7 +6540,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           // 贴图仍借小腿那张（下面裁出靴子那块）
           cx: 0,
           cy: ankleY,
-          cz: ankleZ,
+          // ★ 对齐（用户 2026-10-04：「让脚部关节对称轴对着小腿的对称轴」）：
+          //   脚掌刚体的横坐标必须用**小腿的对称轴 `centerZ`**，而不是素材实测的
+          //   `ankleZ = mapZ(anklePx[0])` —— 后者带着"外八"的横向偏移（膝到踝不是铅垂），
+          //   于是踝关节落在小腿中线之外，脚看着是歪的。
+          //   偏航（外八）由 `restYawRad = restYawOf(...)` 单独表达，和位置无关。
+          cz: centerZ,
           restTiltRad: fTilt,
           restYawRad: fYaw,
           // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
