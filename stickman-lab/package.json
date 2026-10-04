@@ -9,10 +9,11 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "typecheck:tools": "tsc -p tsconfig.tools.json --noEmit",
     "parts": "python tools/build-parts.py",
     "size": "node tools/measure-size.mjs",
     "verify": "node tools/run.mjs verify-core",
-    "probe:axisown": "node tools/run.mjs probe-axisown",
+    "probe:axisown": "npm run typecheck:tools && node tools/run.mjs probe-axisown",
     "forces": "node tools/run.mjs probe-forces",
     "forces:walk": "node tools/run.mjs probe-forces walk 30",
     "ground": "node tools/run.mjs probe-ground",
@@ -62,6 +63,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@types/node": "^26.6.4",
     "@types/three": "^0.170.0",
     "typescript": "~5.5.3",
     "vite": "^5.4.0",

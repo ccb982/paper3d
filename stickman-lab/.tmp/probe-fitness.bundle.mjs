@@ -8,7 +8,7 @@ var __export = (target, all) => {
 import fs from "node:fs";
 import { createRequire } from "node:module";
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
+// node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
 var rapier_wasm3d_bg_exports = {};
 __export(rapier_wasm3d_bg_exports, {
   RawBroadPhase: () => RawBroadPhase,
@@ -6809,7 +6809,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
 }
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/exports.js
+// node_modules/@dimforge/rapier3d/exports.js
 var exports_exports = {};
 __export(exports_exports, {
   ActiveCollisionTypes: () => ActiveCollisionTypes,
@@ -6904,7 +6904,7 @@ __export(exports_exports, {
   version: () => version2
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/math.js
+// node_modules/@dimforge/rapier3d/math.js
 var Vector3 = class {
   constructor(x, y, z) {
     this.x = x;
@@ -7032,7 +7032,7 @@ var SdpMatrix3Ops = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
 var RigidBodyType;
 (function(RigidBodyType2) {
   RigidBodyType2[RigidBodyType2["Dynamic"] = 0] = "Dynamic";
@@ -8037,7 +8037,7 @@ var RigidBodyDesc = class _RigidBodyDesc {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/coarena.js
+// node_modules/@dimforge/rapier3d/coarena.js
 var Coarena = class {
   constructor() {
     this.fconv = new Float64Array(1);
@@ -8091,7 +8091,7 @@ var Coarena = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
 var RigidBodySet = class {
   constructor(raw) {
     this.raw = raw || new RawRigidBodySet();
@@ -8247,7 +8247,7 @@ var RigidBodySet = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
+// node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
 var IntegrationParameters = class {
   constructor(raw) {
     this.raw = raw || new RawIntegrationParameters();
@@ -8373,7 +8373,7 @@ var IntegrationParameters = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
 var JointType;
 (function(JointType2) {
   JointType2[JointType2["Revolute"] = 0] = "Revolute";
@@ -8765,7 +8765,7 @@ var JointData = class _JointData {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
 var ImpulseJointSet = class {
   constructor(raw) {
     this.raw = raw || new RawImpulseJointSet();
@@ -8877,7 +8877,7 @@ var ImpulseJointSet = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
 var MultibodyJoint = class _MultibodyJoint {
   constructor(rawSet, handle) {
     this.rawSet = rawSet;
@@ -8996,7 +8996,7 @@ var RevoluteMultibodyJoint = class extends UnitMultibodyJoint {
 var SphericalMultibodyJoint = class extends MultibodyJoint {
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
 var MultibodyJointSet = class {
   constructor(raw) {
     this.raw = raw || new RawMultibodyJointSet();
@@ -9103,7 +9103,7 @@ var MultibodyJointSet = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
+// node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
 var CoefficientCombineRule;
 (function(CoefficientCombineRule2) {
   CoefficientCombineRule2[CoefficientCombineRule2["Average"] = 0] = "Average";
@@ -9112,7 +9112,7 @@ var CoefficientCombineRule;
   CoefficientCombineRule2[CoefficientCombineRule2["Max"] = 3] = "Max";
 })(CoefficientCombineRule || (CoefficientCombineRule = {}));
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
+// node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
 var CCDSolver = class {
   constructor(raw) {
     this.raw = raw || new RawCCDSolver();
@@ -9128,7 +9128,7 @@ var CCDSolver = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/island_manager.js
+// node_modules/@dimforge/rapier3d/dynamics/island_manager.js
 var IslandManager = class {
   constructor(raw) {
     this.raw = raw || new RawIslandManager();
@@ -9154,7 +9154,7 @@ var IslandManager = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/broad_phase.js
+// node_modules/@dimforge/rapier3d/geometry/broad_phase.js
 var BroadPhase = class {
   constructor(raw) {
     this.raw = raw || new RawBroadPhase();
@@ -9170,7 +9170,7 @@ var BroadPhase = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
+// node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
 var NarrowPhase = class {
   constructor(raw) {
     this.raw = raw || new RawNarrowPhase();
@@ -9308,7 +9308,7 @@ var TempContactManifold = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/contact.js
+// node_modules/@dimforge/rapier3d/geometry/contact.js
 var ShapeContact = class _ShapeContact {
   constructor(dist, point1, point2, normal1, normal2) {
     this.distance = dist;
@@ -9326,7 +9326,7 @@ var ShapeContact = class _ShapeContact {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/feature.js
+// node_modules/@dimforge/rapier3d/geometry/feature.js
 var FeatureType;
 (function(FeatureType2) {
   FeatureType2[FeatureType2["Vertex"] = 0] = "Vertex";
@@ -9335,7 +9335,7 @@ var FeatureType;
   FeatureType2[FeatureType2["Unknown"] = 3] = "Unknown";
 })(FeatureType || (FeatureType = {}));
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/point.js
+// node_modules/@dimforge/rapier3d/geometry/point.js
 var PointProjection = class _PointProjection {
   constructor(point, isInside) {
     this.point = point;
@@ -9370,7 +9370,7 @@ var PointColliderProjection = class _PointColliderProjection {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/ray.js
+// node_modules/@dimforge/rapier3d/geometry/ray.js
 var Ray = class {
   /**
    * Builds a ray from its origin and direction.
@@ -9445,7 +9445,7 @@ var RayColliderHit = class _RayColliderHit {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/toi.js
+// node_modules/@dimforge/rapier3d/geometry/toi.js
 var ShapeCastHit = class _ShapeCastHit {
   constructor(time_of_impact, witness1, witness2, normal1, normal2) {
     this.time_of_impact = time_of_impact;
@@ -9476,7 +9476,7 @@ var ColliderShapeCastHit = class _ColliderShapeCastHit extends ShapeCastHit {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/shape.js
+// node_modules/@dimforge/rapier3d/geometry/shape.js
 var Shape = class {
   /**
    * instant mode without cache
@@ -10100,7 +10100,7 @@ var RoundCone = class extends Shape {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
 var PhysicsPipeline = class {
   constructor(raw) {
     this.raw = raw || new RawPhysicsPipeline();
@@ -10122,7 +10122,7 @@ var PhysicsPipeline = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
 var QueryFilterFlags;
 (function(QueryFilterFlags2) {
   QueryFilterFlags2[QueryFilterFlags2["EXCLUDE_FIXED"] = 1] = "EXCLUDE_FIXED";
@@ -10357,7 +10357,7 @@ var QueryPipeline = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
 var SerializationPipeline = class {
   constructor(raw) {
     this.raw = raw || new RawSerializationPipeline();
@@ -10398,7 +10398,7 @@ var SerializationPipeline = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
 var DebugRenderBuffers = class {
   constructor(vertices, colors) {
     this.vertices = vertices;
@@ -10427,7 +10427,7 @@ var DebugRenderPipeline = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/character_controller.js
+// node_modules/@dimforge/rapier3d/control/character_controller.js
 var CharacterCollision = class {
 };
 var KinematicCharacterController = class {
@@ -10696,7 +10696,7 @@ var KinematicCharacterController = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
+// node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
 var DynamicRayCastVehicleController = class {
   constructor(chassis, bodies, colliders, queries) {
     this.raw = new RawDynamicRayCastVehicleController(chassis.handle);
@@ -11070,7 +11070,7 @@ var DynamicRayCastVehicleController = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/world.js
+// node_modules/@dimforge/rapier3d/pipeline/world.js
 var World = class _World {
   constructor(gravity, rawIntegrationParameters, rawIslands, rawBroadPhase, rawNarrowPhase, rawBodies, rawColliders, rawImpulseJoints, rawMultibodyJoints, rawCCDSolver, rawQueryPipeline, rawPhysicsPipeline, rawSerializationPipeline, rawDebugRenderPipeline) {
     this.gravity = gravity;
@@ -11697,7 +11697,7 @@ var World = class _World {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/event_queue.js
+// node_modules/@dimforge/rapier3d/pipeline/event_queue.js
 var ActiveEvents;
 (function(ActiveEvents2) {
   ActiveEvents2[ActiveEvents2["NONE"] = 0] = "NONE";
@@ -11808,7 +11808,7 @@ var EventQueue = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
 var ActiveHooks;
 (function(ActiveHooks2) {
   ActiveHooks2[ActiveHooks2["NONE"] = 0] = "NONE";
@@ -11821,7 +11821,7 @@ var SolverFlags;
   SolverFlags2[SolverFlags2["COMPUTE_IMPULSE"] = 1] = "COMPUTE_IMPULSE";
 })(SolverFlags || (SolverFlags = {}));
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider.js
+// node_modules/@dimforge/rapier3d/geometry/collider.js
 var ActiveCollisionTypes;
 (function(ActiveCollisionTypes2) {
   ActiveCollisionTypes2[ActiveCollisionTypes2["DYNAMIC_DYNAMIC"] = 1] = "DYNAMIC_DYNAMIC";
@@ -12938,7 +12938,7 @@ var ColliderDesc = class _ColliderDesc {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider_set.js
+// node_modules/@dimforge/rapier3d/geometry/collider_set.js
 var ColliderSet = class {
   constructor(raw) {
     this.raw = raw || new RawColliderSet();
@@ -13091,12 +13091,12 @@ var ColliderSet = class {
   }
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/exports.js
+// node_modules/@dimforge/rapier3d/exports.js
 function version2() {
   return version();
 }
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier.js
+// node_modules/@dimforge/rapier3d/rapier.js
 var rapier_default = exports_exports;
 
 // src/core/ragdoll.ts
@@ -14917,6 +14917,54 @@ var PelvisFirstTracker = class {
   }
 };
 
+// src/core/rigState.ts
+var DEFAULT_RIGSTATE_CONFIG = {
+  slewLimit: 8,
+  waistSlotMax: 6 * Math.PI / 180,
+  mosBudgetZ: 25e-4
+};
+
+// src/core/gaitState.ts
+var DEFAULT_STEP_INTERVAL = 1;
+var STEP_CYCLE_SEC = 1.6;
+var DEFAULT_HANDOVER_DWELL = 0.3;
+var DEFAULT_HANDOVER_TOL_X = 0.02;
+var DEFAULT_HANDOVER_TOL_Z = 0.05;
+var DEFAULT_GAIT_CONFIG = {
+  bearerLoad: 0.6,
+  bearerLoadHyst: 0.45,
+  bearerMosMin: 0,
+  bearerHoldSec: 0.08,
+  unlockMosHoldSec: 0.12,
+  unlockTiltMaxDeg: 20,
+  permitMosMin: 0,
+  permitDoubleSupportSec: 0.05,
+  // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+  //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+  //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
+  stepIntervalSec: DEFAULT_STEP_INTERVAL,
+  handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+  handoverTolX: DEFAULT_HANDOVER_TOL_X,
+  handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+  // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+  handoverMinSec: 0.4,
+  handoverTimeoutSec: 2,
+  singleDwellSec: 0.5,
+  pushTimeoutSec: 0.6,
+  stepTimeoutSec: 1.6,
+  alphaSigma: 0.08,
+  startBearer: "l",
+  liftHold: 0.25
+};
+var PHASE_TO_SCORING = Object.freeze({
+  DOUBLE: "adjust",
+  SHIFT: "adjust",
+  SINGLE: "step",
+  PUSH: "step",
+  STEP: "step"
+});
+var SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
+
 // src/core/stability.ts
 var clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
 function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
@@ -14927,9 +14975,9 @@ function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
 var MIN_SWING = 0.28;
 var SETTLE_WIN = 0.45;
 var MOS_TARGET = 0.3;
-var MIN_CYCLE = 1;
+var MIN_CYCLE = DEFAULT_GAIT_CONFIG.stepIntervalSec;
 var MIN_CLEARANCE = 0.03;
-var TARGET_CYCLE = 1;
+var TARGET_CYCLE = STEP_CYCLE_SEC;
 function cadenceScore(medianCycleSec, target = TARGET_CYCLE, sigma = 0.45) {
   if (!(medianCycleSec > 0)) return 0;
   const d = (medianCycleSec - target) / sigma;
@@ -15153,7 +15201,7 @@ var StepSettleTracker = class _StepSettleTracker {
   }
 };
 
-// src/core/balance.ts
+// src/core/balanceJudge.ts
 var HEAD_MIN = 0.86;
 var HEAD_MAX = 1.06;
 var MAX_PITCH = 0.7;
@@ -15606,7 +15654,7 @@ function orderLeg(o) {
   return o === "legL" ? "l" : o === "legR" ? "r" : null;
 }
 var GaitCommander = class {
-  constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
+  constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: STEP_CYCLE_SEC, jitter: 0.15, waistShare: 0.5 }) {
     this.o = o;
     this.seq = seq;
     let s = 12345;
@@ -16215,6 +16263,22 @@ var Sim = class {
   }
   get ticksDone() {
     return this.tick;
+  }
+  /**
+   * ★ 只读访问器：**给探针/门禁用**（它们需要 `new Float32Array(sim.params.length)`
+   *   来填一个零基因组）。
+   *
+   *   ⚠ 之前探针直接读 `sim.params`（private）—— 10 处类型错误，
+   *     而 `tools/` 长期不做类型检查，所以没人发现"探针在戳私有成员"。
+   *     与其放宽 TS 的 private，不如给一个**文档化的只读口**：
+   *     探针本来只需要"参数个数"，不需要那个数组本身。
+   */
+  get paramCount() {
+    return this.params.length;
+  }
+  /** 只读：当前基因组的参数（探针诊断用；改动它会污染模拟，故不给 setter） */
+  get paramView() {
+    return this.params;
   }
   get progress() {
     return this.tick / this.ticksTotal;

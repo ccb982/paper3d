@@ -8,7 +8,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
+// node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
 var rapier_wasm3d_bg_exports = {};
 __export(rapier_wasm3d_bg_exports, {
   RawBroadPhase: () => RawBroadPhase,
@@ -285,7 +285,7 @@ function __wbindgen_memory() {
 }
 var wasm, heap, heap_next, cachedFloat64Memory0, cachedInt32Memory0, lTextDecoder, cachedTextDecoder, cachedUint8Memory0, cachedFloat32Memory0, stack_pointer, cachedUint32Memory0, WASM_VECTOR_LEN, RawFeatureType, RawShapeType, RawJointAxis, RawRigidBodyType, RawMotorModel, RawJointType, RawBroadPhaseFinalization, RawBroadPhase, RawCCDSolverFinalization, RawCCDSolver, RawCharacterCollisionFinalization, RawCharacterCollision, RawColliderSetFinalization, RawColliderSet, RawColliderShapeCastHitFinalization, RawColliderShapeCastHit, RawContactForceEventFinalization, RawContactForceEvent, RawContactManifoldFinalization, RawContactManifold, RawContactPairFinalization, RawContactPair, RawDebugRenderPipelineFinalization, RawDebugRenderPipeline, RawDeserializedWorldFinalization, RawDeserializedWorld, RawDynamicRayCastVehicleControllerFinalization, RawDynamicRayCastVehicleController, RawEventQueueFinalization, RawEventQueue, RawGenericJointFinalization, RawGenericJoint, RawImpulseJointSetFinalization, RawImpulseJointSet, RawIntegrationParametersFinalization, RawIntegrationParameters, RawIslandManagerFinalization, RawIslandManager, RawKinematicCharacterControllerFinalization, RawKinematicCharacterController, RawMultibodyJointSetFinalization, RawMultibodyJointSet, RawNarrowPhaseFinalization, RawNarrowPhase, RawPhysicsPipelineFinalization, RawPhysicsPipeline, RawPointColliderProjectionFinalization, RawPointColliderProjection, RawPointProjectionFinalization, RawPointProjection, RawQueryPipelineFinalization, RawQueryPipeline, RawRayColliderHitFinalization, RawRayColliderHit, RawRayColliderIntersectionFinalization, RawRayColliderIntersection, RawRayIntersectionFinalization, RawRayIntersection, RawRigidBodySetFinalization, RawRigidBodySet, RawRotationFinalization, RawRotation, RawSdpMatrix3Finalization, RawSdpMatrix3, RawSerializationPipelineFinalization, RawSerializationPipeline, RawShapeFinalization, RawShape, RawShapeCastHitFinalization, RawShapeCastHit, RawShapeContactFinalization, RawShapeContact, RawVectorFinalization, RawVector;
 var init_rapier_wasm3d_bg = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js"() {
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js"() {
     heap = new Array(128).fill(void 0);
     heap.push(void 0, null, true, false);
     heap_next = heap.length;
@@ -6920,9 +6920,9 @@ var init_rapier_wasm3d_bg2 = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier_wasm3d.js
+// node_modules/@dimforge/rapier3d/rapier_wasm3d.js
 var init_rapier_wasm3d = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier_wasm3d.js"() {
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d.js"() {
     init_rapier_wasm3d_bg2();
     init_rapier_wasm3d_bg();
     init_rapier_wasm3d_bg();
@@ -6930,17 +6930,17 @@ var init_rapier_wasm3d = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/raw.js
+// node_modules/@dimforge/rapier3d/raw.js
 var init_raw = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/raw.js"() {
+  "node_modules/@dimforge/rapier3d/raw.js"() {
     init_rapier_wasm3d();
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/math.js
+// node_modules/@dimforge/rapier3d/math.js
 var Vector3, VectorOps, Quaternion, RotationOps, SdpMatrix3, SdpMatrix3Ops;
 var init_math = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/math.js"() {
+  "node_modules/@dimforge/rapier3d/math.js"() {
     init_raw();
     Vector3 = class {
       constructor(x, y, z) {
@@ -7071,10 +7071,10 @@ var init_math = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
 var RigidBodyType, RigidBody, RigidBodyDesc;
 var init_rigid_body = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/rigid_body.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body.js"() {
     init_math();
     init_math();
     (function(RigidBodyType2) {
@@ -8082,10 +8082,10 @@ var init_rigid_body = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/coarena.js
+// node_modules/@dimforge/rapier3d/coarena.js
 var Coarena;
 var init_coarena = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/coarena.js"() {
+  "node_modules/@dimforge/rapier3d/coarena.js"() {
     Coarena = class {
       constructor() {
         this.fconv = new Float64Array(1);
@@ -8141,10 +8141,10 @@ var init_coarena = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
 var RigidBodySet;
 var init_rigid_body_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js"() {
     init_raw();
     init_coarena();
     init_math();
@@ -8306,10 +8306,10 @@ var init_rigid_body_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
+// node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
 var IntegrationParameters;
 var init_integration_parameters = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js"() {
     init_raw();
     IntegrationParameters = class {
       constructor(raw) {
@@ -8438,10 +8438,10 @@ var init_integration_parameters = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
 var JointType, MotorModel, JointAxesMask, ImpulseJoint, UnitImpulseJoint, FixedImpulseJoint, RopeImpulseJoint, SpringImpulseJoint, PrismaticImpulseJoint, RevoluteImpulseJoint, GenericImpulseJoint, SphericalImpulseJoint, JointData;
 var init_impulse_joint = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js"() {
     init_math();
     init_raw();
     (function(JointType2) {
@@ -8834,10 +8834,10 @@ var init_impulse_joint = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
 var ImpulseJointSet;
 var init_impulse_joint_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js"() {
     init_raw();
     init_coarena();
     init_impulse_joint();
@@ -8954,10 +8954,10 @@ var init_impulse_joint_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
 var MultibodyJoint, UnitMultibodyJoint, FixedMultibodyJoint, PrismaticMultibodyJoint, RevoluteMultibodyJoint, SphericalMultibodyJoint;
 var init_multibody_joint = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js"() {
     init_raw();
     MultibodyJoint = class _MultibodyJoint {
       constructor(rawSet, handle) {
@@ -9079,10 +9079,10 @@ var init_multibody_joint = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
 var MultibodyJointSet;
 var init_multibody_joint_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js"() {
     init_raw();
     init_coarena();
     init_multibody_joint();
@@ -9194,10 +9194,10 @@ var init_multibody_joint_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
+// node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
 var CoefficientCombineRule;
 var init_coefficient_combine_rule = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js"() {
     (function(CoefficientCombineRule2) {
       CoefficientCombineRule2[CoefficientCombineRule2["Average"] = 0] = "Average";
       CoefficientCombineRule2[CoefficientCombineRule2["Min"] = 1] = "Min";
@@ -9207,10 +9207,10 @@ var init_coefficient_combine_rule = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
+// node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
 var CCDSolver;
 var init_ccd_solver = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js"() {
     init_raw();
     CCDSolver = class {
       constructor(raw) {
@@ -9229,10 +9229,10 @@ var init_ccd_solver = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/island_manager.js
+// node_modules/@dimforge/rapier3d/dynamics/island_manager.js
 var IslandManager;
 var init_island_manager = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/island_manager.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/island_manager.js"() {
     init_raw();
     IslandManager = class {
       constructor(raw) {
@@ -9261,9 +9261,9 @@ var init_island_manager = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/index.js
+// node_modules/@dimforge/rapier3d/dynamics/index.js
 var init_dynamics = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/index.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/index.js"() {
     init_rigid_body();
     init_rigid_body_set();
     init_integration_parameters();
@@ -9277,10 +9277,10 @@ var init_dynamics = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/broad_phase.js
+// node_modules/@dimforge/rapier3d/geometry/broad_phase.js
 var BroadPhase;
 var init_broad_phase = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/broad_phase.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/broad_phase.js"() {
     init_raw();
     BroadPhase = class {
       constructor(raw) {
@@ -9299,10 +9299,10 @@ var init_broad_phase = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
+// node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
 var NarrowPhase, TempContactManifold;
 var init_narrow_phase = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/narrow_phase.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/narrow_phase.js"() {
     init_raw();
     init_math();
     NarrowPhase = class {
@@ -9444,10 +9444,10 @@ var init_narrow_phase = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/contact.js
+// node_modules/@dimforge/rapier3d/geometry/contact.js
 var ShapeContact;
 var init_contact = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/contact.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/contact.js"() {
     init_math();
     ShapeContact = class _ShapeContact {
       constructor(dist, point1, point2, normal1, normal2) {
@@ -9468,10 +9468,10 @@ var init_contact = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/feature.js
+// node_modules/@dimforge/rapier3d/geometry/feature.js
 var FeatureType;
 var init_feature = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/feature.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/feature.js"() {
     (function(FeatureType2) {
       FeatureType2[FeatureType2["Vertex"] = 0] = "Vertex";
       FeatureType2[FeatureType2["Edge"] = 1] = "Edge";
@@ -9481,10 +9481,10 @@ var init_feature = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/point.js
+// node_modules/@dimforge/rapier3d/geometry/point.js
 var PointProjection, PointColliderProjection;
 var init_point = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/point.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/point.js"() {
     init_math();
     init_feature();
     PointProjection = class _PointProjection {
@@ -9523,10 +9523,10 @@ var init_point = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/ray.js
+// node_modules/@dimforge/rapier3d/geometry/ray.js
 var Ray, RayIntersection, RayColliderIntersection, RayColliderHit;
 var init_ray = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/ray.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/ray.js"() {
     init_math();
     init_feature();
     Ray = class {
@@ -9605,10 +9605,10 @@ var init_ray = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/toi.js
+// node_modules/@dimforge/rapier3d/geometry/toi.js
 var ShapeCastHit, ColliderShapeCastHit;
 var init_toi = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/toi.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/toi.js"() {
     init_math();
     ShapeCastHit = class _ShapeCastHit {
       constructor(time_of_impact, witness1, witness2, normal1, normal2) {
@@ -9642,10 +9642,10 @@ var init_toi = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/shape.js
+// node_modules/@dimforge/rapier3d/geometry/shape.js
 var Shape, ShapeType, HeightFieldFlags, TriMeshFlags, Ball, HalfSpace, Cuboid, RoundCuboid, Capsule, Segment, Triangle, RoundTriangle, Polyline, TriMesh, ConvexPolyhedron, RoundConvexPolyhedron, Heightfield, Cylinder, RoundCylinder, Cone, RoundCone;
 var init_shape = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/shape.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/shape.js"() {
     init_math();
     init_raw();
     init_contact();
@@ -10274,10 +10274,10 @@ var init_shape = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
 var PhysicsPipeline;
 var init_physics_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js"() {
     init_raw();
     init_math();
     PhysicsPipeline = class {
@@ -10303,10 +10303,10 @@ var init_physics_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
 var QueryFilterFlags, QueryPipeline;
 var init_query_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js"() {
     init_raw();
     init_geometry();
     init_math();
@@ -10545,10 +10545,10 @@ var init_query_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
 var SerializationPipeline;
 var init_serialization_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js"() {
     init_raw();
     init_math();
     init_world();
@@ -10594,10 +10594,10 @@ var init_serialization_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
 var DebugRenderBuffers, DebugRenderPipeline;
 var init_debug_render_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js"() {
     init_raw();
     DebugRenderBuffers = class {
       constructor(vertices, colors) {
@@ -10629,10 +10629,10 @@ var init_debug_render_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/character_controller.js
+// node_modules/@dimforge/rapier3d/control/character_controller.js
 var CharacterCollision, KinematicCharacterController;
 var init_character_controller = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/character_controller.js"() {
+  "node_modules/@dimforge/rapier3d/control/character_controller.js"() {
     init_raw();
     init_math();
     CharacterCollision = class {
@@ -10905,10 +10905,10 @@ var init_character_controller = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
+// node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
 var DynamicRayCastVehicleController;
 var init_ray_cast_vehicle_controller = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js"() {
+  "node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js"() {
     init_raw();
     init_math();
     DynamicRayCastVehicleController = class {
@@ -11286,18 +11286,18 @@ var init_ray_cast_vehicle_controller = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/index.js
+// node_modules/@dimforge/rapier3d/control/index.js
 var init_control = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/index.js"() {
+  "node_modules/@dimforge/rapier3d/control/index.js"() {
     init_character_controller();
     init_ray_cast_vehicle_controller();
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/world.js
+// node_modules/@dimforge/rapier3d/pipeline/world.js
 var World;
 var init_world = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/world.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/world.js"() {
     init_geometry();
     init_dynamics();
     init_math();
@@ -11935,10 +11935,10 @@ var init_world = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/event_queue.js
+// node_modules/@dimforge/rapier3d/pipeline/event_queue.js
 var ActiveEvents, TempContactForceEvent, EventQueue;
 var init_event_queue = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/event_queue.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/event_queue.js"() {
     init_raw();
     init_math();
     (function(ActiveEvents2) {
@@ -12052,10 +12052,10 @@ var init_event_queue = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
 var ActiveHooks, SolverFlags;
 var init_physics_hooks = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js"() {
     (function(ActiveHooks2) {
       ActiveHooks2[ActiveHooks2["NONE"] = 0] = "NONE";
       ActiveHooks2[ActiveHooks2["FILTER_CONTACT_PAIRS"] = 1] = "FILTER_CONTACT_PAIRS";
@@ -12068,9 +12068,9 @@ var init_physics_hooks = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/index.js
+// node_modules/@dimforge/rapier3d/pipeline/index.js
 var init_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/index.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/index.js"() {
     init_world();
     init_physics_pipeline();
     init_serialization_pipeline();
@@ -12081,10 +12081,10 @@ var init_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider.js
+// node_modules/@dimforge/rapier3d/geometry/collider.js
 var ActiveCollisionTypes, Collider, MassPropsMode, ColliderDesc;
 var init_collider = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/collider.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/collider.js"() {
     init_math();
     init_dynamics();
     init_pipeline();
@@ -13209,10 +13209,10 @@ var init_collider = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider_set.js
+// node_modules/@dimforge/rapier3d/geometry/collider_set.js
 var ColliderSet;
 var init_collider_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/collider_set.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/collider_set.js"() {
     init_raw();
     init_coarena();
     init_math();
@@ -13371,15 +13371,15 @@ var init_collider_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/interaction_groups.js
+// node_modules/@dimforge/rapier3d/geometry/interaction_groups.js
 var init_interaction_groups = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/interaction_groups.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/interaction_groups.js"() {
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/index.js
+// node_modules/@dimforge/rapier3d/geometry/index.js
 var init_geometry = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/index.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/index.js"() {
     init_broad_phase();
     init_narrow_phase();
     init_shape();
@@ -13394,13 +13394,13 @@ var init_geometry = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/init.js
+// node_modules/@dimforge/rapier3d/init.js
 var init_init = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/init.js"() {
+  "node_modules/@dimforge/rapier3d/init.js"() {
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/exports.js
+// node_modules/@dimforge/rapier3d/exports.js
 var exports_exports = {};
 __export(exports_exports, {
   ActiveCollisionTypes: () => ActiveCollisionTypes,
@@ -13498,7 +13498,7 @@ function version2() {
   return version();
 }
 var init_exports = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/exports.js"() {
+  "node_modules/@dimforge/rapier3d/exports.js"() {
     init_raw();
     init_math();
     init_dynamics();
@@ -13509,7 +13509,7 @@ var init_exports = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier.js
+// node_modules/@dimforge/rapier3d/rapier.js
 var rapier_exports = {};
 __export(rapier_exports, {
   ActiveCollisionTypes: () => ActiveCollisionTypes,
@@ -13606,7 +13606,7 @@ __export(rapier_exports, {
 });
 var rapier_default;
 var init_rapier = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier.js"() {
+  "node_modules/@dimforge/rapier3d/rapier.js"() {
     init_exports();
     init_exports();
     rapier_default = exports_exports;
@@ -15480,6 +15480,68 @@ var init_gaitRef = __esm({
   }
 });
 
+// src/core/rigState.ts
+var DEFAULT_RIGSTATE_CONFIG;
+var init_rigState = __esm({
+  "src/core/rigState.ts"() {
+    "use strict";
+    init_skeleton();
+    DEFAULT_RIGSTATE_CONFIG = {
+      slewLimit: 8,
+      waistSlotMax: 6 * Math.PI / 180,
+      mosBudgetZ: 25e-4
+    };
+  }
+});
+
+// src/core/gaitState.ts
+var DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_TO_SCORING, SCORING_TO_STANCE;
+var init_gaitState = __esm({
+  "src/core/gaitState.ts"() {
+    "use strict";
+    init_rigState();
+    DEFAULT_STEP_INTERVAL = 1;
+    STEP_CYCLE_SEC = 1.6;
+    DEFAULT_HANDOVER_DWELL = 0.3;
+    DEFAULT_HANDOVER_TOL_X = 0.02;
+    DEFAULT_HANDOVER_TOL_Z = 0.05;
+    DEFAULT_GAIT_CONFIG = {
+      bearerLoad: 0.6,
+      bearerLoadHyst: 0.45,
+      bearerMosMin: 0,
+      bearerHoldSec: 0.08,
+      unlockMosHoldSec: 0.12,
+      unlockTiltMaxDeg: 20,
+      permitMosMin: 0,
+      permitDoubleSupportSec: 0.05,
+      // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+      //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+      //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
+      stepIntervalSec: DEFAULT_STEP_INTERVAL,
+      handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+      handoverTolX: DEFAULT_HANDOVER_TOL_X,
+      handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+      // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+      handoverMinSec: 0.4,
+      handoverTimeoutSec: 2,
+      singleDwellSec: 0.5,
+      pushTimeoutSec: 0.6,
+      stepTimeoutSec: 1.6,
+      alphaSigma: 0.08,
+      startBearer: "l",
+      liftHold: 0.25
+    };
+    PHASE_TO_SCORING = Object.freeze({
+      DOUBLE: "adjust",
+      SHIFT: "adjust",
+      SINGLE: "step",
+      PUSH: "step",
+      STEP: "step"
+    });
+    SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
+  }
+});
+
 // src/core/stability.ts
 function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
   const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
@@ -15503,13 +15565,14 @@ var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, MIN_CLEARANCE, TARGE
 var init_stability = __esm({
   "src/core/stability.ts"() {
     "use strict";
+    init_gaitState();
     clamp012 = (v2) => v2 < 0 ? 0 : v2 > 1 ? 1 : v2;
     MIN_SWING = 0.28;
     SETTLE_WIN = 0.45;
     MOS_TARGET = 0.3;
-    MIN_CYCLE = 1;
+    MIN_CYCLE = DEFAULT_GAIT_CONFIG.stepIntervalSec;
     MIN_CLEARANCE = 0.03;
-    TARGET_CYCLE = 1;
+    TARGET_CYCLE = STEP_CYCLE_SEC;
     STEP_LEN_IN_FEET = [2, 3];
     mosBand = (mos) => {
       if (mos < 0) return -clamp012(-mos / 0.25);
@@ -15722,7 +15785,7 @@ var init_stability = __esm({
   }
 });
 
-// src/core/balance.ts
+// src/core/balanceJudge.ts
 function wholeBodyAngularMomentum(doll, com, out) {
   let lx = 0, ly = 0, lz = 0;
   for (const b of doll.bodies) {
@@ -15740,8 +15803,8 @@ function wholeBodyAngularMomentum(doll, com, out) {
   return out;
 }
 var HEAD_MIN, HEAD_MAX, MAX_PITCH, MOS_VOID, WBAM_NORM, WBAM_RATE_NORM, BalanceJudge;
-var init_balance = __esm({
-  "src/core/balance.ts"() {
+var init_balanceJudge = __esm({
+  "src/core/balanceJudge.ts"() {
     "use strict";
     HEAD_MIN = 0.86;
     HEAD_MAX = 1.06;
@@ -16196,8 +16259,9 @@ var GaitCommander;
 var init_commander = __esm({
   "src/core/commander.ts"() {
     "use strict";
+    init_gaitState();
     GaitCommander = class {
-      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
+      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: STEP_CYCLE_SEC, jitter: 0.15, waistShare: 0.5 }) {
         this.o = o;
         this.seq = seq;
         let s = 12345;
@@ -16316,7 +16380,7 @@ var init_sim = __esm({
     init_posture();
     init_gaitRef();
     init_stability();
-    init_balance();
+    init_balanceJudge();
     init_gaitPhase();
     init_modules();
     init_commander();
@@ -16838,6 +16902,22 @@ var init_sim = __esm({
       }
       get ticksDone() {
         return this.tick;
+      }
+      /**
+       * ★ 只读访问器：**给探针/门禁用**（它们需要 `new Float32Array(sim.params.length)`
+       *   来填一个零基因组）。
+       *
+       *   ⚠ 之前探针直接读 `sim.params`（private）—— 10 处类型错误，
+       *     而 `tools/` 长期不做类型检查，所以没人发现"探针在戳私有成员"。
+       *     与其放宽 TS 的 private，不如给一个**文档化的只读口**：
+       *     探针本来只需要"参数个数"，不需要那个数组本身。
+       */
+      get paramCount() {
+        return this.params.length;
+      }
+      /** 只读：当前基因组的参数（探针诊断用；改动它会污染模拟，故不给 setter） */
+      get paramView() {
+        return this.params;
       }
       get progress() {
         return this.tick / this.ticksTotal;
@@ -18679,7 +18759,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
       w.step();
     }
     d.jointRot(hip, rv);
-    log(`  \u9ACB\u4EC5\u9A71\u52A8\u8F74 ${ax}\uFF08${["X \u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"][ax]}\uFF091.5s \u2192 \u5173\u8282\u89D2[${rv.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0`);
+    log(`  \u9ACB\u4EC5\u9A71\u52A8\u8F74 ${ax}\uFF08${["X \u5916\u5C55", "Y \u626D\u8F6C", "Z \u5C48\u4F38"][ax]}\uFF091.5s \u2192 \u5173\u8282\u89D2[${Array.from(rv).map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0`);
     check(`\u2605 \u9ACB\u7684\u8F74 ${ax} \u53EF\u72EC\u7ACB\u9A71\u52A8`, Math.abs(rv[ax]) > 0.15, `|rv[${ax}]|=${Math.abs(rv[ax]).toFixed(3)} rad`);
   }
   {
@@ -18703,7 +18783,7 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
       const q1 = d.bodyByKey("head").rotation();
       const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
       const headDeg = 2 * Math.acos(dot) * 180 / Math.PI;
-      log(`    \u9888\u4EC5\u9A71\u52A8\u8F74${ax}\uFF08${axisName[ax]}\uFF092s \u2192 \u5173\u8282\u89D2[${rv2.map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0  \u5934\u504F\u8F6C ${headDeg.toFixed(1)}\xB0`);
+      log(`    \u9888\u4EC5\u9A71\u52A8\u8F74${ax}\uFF08${axisName[ax]}\uFF092s \u2192 \u5173\u8282\u89D2[${Array.from(rv2).map((v2) => (v2 * 180 / Math.PI).toFixed(0)).join(",")}]\xB0  \u5934\u504F\u8F6C ${headDeg.toFixed(1)}\xB0`);
       check(
         `\u2605 \u9888\u90E8\u8F74 ${ax}\uFF08${axisName[ax]}\uFF09\u53EF\u9A71\u52A8\u4E14\u5934\u8DDF\u7740\u8F6C`,
         Math.abs(rv2[ax]) > 0.15 && headDeg > 3,
@@ -18870,8 +18950,8 @@ log("\n=== 3b. \u6700\u4F73\u4E2A\u4F53\u884C\u4E3A\u89E3\u5256\uFF08walk\uFF09=
   const marks = [];
   while (!anat.finished) {
     anat.advance(1);
-    if (anat.tick !== lastTick) {
-      lastTick = anat.tick;
+    if (anat.ticksDone !== lastTick) {
+      lastTick = anat.ticksDone;
       totTicks++;
       const tp = anat.doll.torso().translation();
       const tilt = anat.doll.tiltOf(anat.doll.torso());

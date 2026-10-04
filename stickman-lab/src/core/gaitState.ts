@@ -79,6 +79,24 @@ export interface GaitConfig {
  *   要有足够时间调整平衡」——这是**节奏**约束，与位置判据正交。
  */
 const DEFAULT_STEP_INTERVAL = 1.0;
+/**
+ * ★★ **步态周期的唯一真源**（收敛点：控制路径与 ES 路径共用）
+ *
+ * 这个数此前被写了**三遍**且互不相干：
+ *   · `commander.stepPeriod = 1.6`      —— ES 路径的**节拍目标**
+ *   · `stability.TARGET_CYCLE = 1.0`   —— 奖励的节拍项目标
+ *   · `gaitState.stepIntervalSec = 1.0` —— 控制路径的**间隔下限**（`X6: >=`）
+ *
+ * ⚠ 注意后两者**角色不同、不是重复**：
+ *   · 「下限」= 至少隔这么久才允许换腿（安全约束）
+ *   · 「节拍目标」= 打算多久换一次（性能/风格）
+ *   ⇒ 所以正确做法是**一个真源 + 显式的不变式 `下限 ≤ 目标`**，
+ *     而不是把三个数强行改成一样（那会让 ES 的节拍被安全下限绑住）。
+ *
+ * 取 1.6 的依据：它是 ES 路径**实测能走**的值（腿令 1.2s + 腰令 0.4s，
+ * 左腿起点→右腿起点 = 1.6s）。1.0 是用户的下限要求。
+ */
+export const STEP_CYCLE_SEC = 1.6;
 const DEFAULT_HANDOVER_DWELL = 0.30;
 const DEFAULT_HANDOVER_TOL_X = 0.02;
 const DEFAULT_HANDOVER_TOL_Z = 0.05;
@@ -92,7 +110,9 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   unlockTiltMaxDeg: 20,
   permitMosMin: 0.0,
   permitDoubleSupportSec: 0.05,
-  // ★ 迈步间隔 1s（用户定调）+ 交接驻留与位置容差
+  // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+  //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+  //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
   stepIntervalSec: DEFAULT_STEP_INTERVAL,
   handoverDwellSec: DEFAULT_HANDOVER_DWELL,
   handoverTolX: DEFAULT_HANDOVER_TOL_X,

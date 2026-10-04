@@ -26,6 +26,10 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 import type { Leg } from './gaitPhase';
+// ★ 步态周期的唯一真源（见 `gaitState.STEP_CYCLE_SEC` 的说明）。
+//   只 import 一个**常数**、不引入状态 ⇒ 对 ES 路径没有运行时耦合，
+//   但把"节拍周期是多少"这件事收敛到一处。
+import { STEP_CYCLE_SEC } from './gaitState';
 
 /** 一条发令：只表示"该动哪一块"，不含任何位置/角度目标 */
 export type Order = 'legL' | 'legR' | 'waist';
@@ -55,8 +59,15 @@ export interface OrderEvent {
 
 export interface CommanderOpts {
   /**
-   * ★ **迈步间隔**（s）：从"迈左腿"到"迈右腿"的**目标**周期。
-   *   用户要求 ≈1.0 s（"迈步间隔 1s 左右"）。
+   * ★ **迈步间隔**（s）：从"迈左腿"到"迈右腿"的**节拍目标**周期。
+   *
+   *   ⚠ 它与 `gaitState.stepIntervalSec`（**下限**，用户定调 ≥1s）**角色不同**：
+   *     本值是"打算多久换一次"，那个是"至少隔多久才允许换"。
+   *     ⇒ 不变式 `下限 ≤ 目标` 由门禁 `probe:axisown` G7 断言。
+   *   ⚠ 默认值取自 `STEP_CYCLE_SEC`（唯一真源）。此前这里硬写 `1.6`，
+   *     而 `stability.TARGET_CYCLE` 硬写 `1.0`、`stepIntervalSec` 也硬写 `1.0`
+   *     —— 同一个物理量三处互不相干。
+   *
    *   注意：这是**腿到腿**的周期，不是单条令的时长 —— 一个周期里有
    *   `迈腿 → 转腰` 两条令，所以每条令的时长 ≈ stepPeriod/2。
    *   （之前只给了 `minDur` 而没有"迈步间隔"这个量，导致实测腿到腿只有 0.57 s。）
@@ -86,7 +97,7 @@ export class GaitCommander {
   /** 本回合发了多少条令 */
   nOrders = 0;
 
-  constructor(seq: readonly Order[] = ['legL', 'waist', 'legR', 'waist'], private o: CommanderOpts = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
+  constructor(seq: readonly Order[] = ['legL', 'waist', 'legR', 'waist'], private o: CommanderOpts = { stepPeriod: STEP_CYCLE_SEC, jitter: 0.15, waistShare: 0.5 }) {
     this.seq = seq;
     // 确定性 LCG（可注入真正的 policy 输出来替换 —— 见 note）
     let s = 12345;

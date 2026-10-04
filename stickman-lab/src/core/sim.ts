@@ -23,7 +23,7 @@ import {
 } from './posture';
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, MIN_CLEARANCE, cadenceScore, TARGET_CYCLE } from './stability';
-import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balance';
+import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balanceJudge';
 import { GaitPhaseMachine } from './gaitPhase';
 import { ModuleSet } from './modules';
 /** ★ 连续稳住多久才允许发下一条令（s）—— "没稳住就不许迈下一步" */
@@ -654,6 +654,18 @@ export class Sim {
   }
 
   get ticksDone(): number { return this.tick; }
+  /**
+   * ★ 只读访问器：**给探针/门禁用**（它们需要 `new Float32Array(sim.params.length)`
+   *   来填一个零基因组）。
+   *
+   *   ⚠ 之前探针直接读 `sim.params`（private）—— 10 处类型错误，
+   *     而 `tools/` 长期不做类型检查，所以没人发现"探针在戳私有成员"。
+   *     与其放宽 TS 的 private，不如给一个**文档化的只读口**：
+   *     探针本来只需要"参数个数"，不需要那个数组本身。
+   */
+  get paramCount(): number { return this.params.length; }
+  /** 只读：当前基因组的参数（探针诊断用；改动它会污染模拟，故不给 setter） */
+  get paramView(): Readonly<Float32Array> { return this.params; }
   get progress(): number { return this.tick / this.ticksTotal; }
   /** ★ 净前进距离（跑到此刻为止的位移；"最远距离"已弃用，见 W 的注释） */
   /**

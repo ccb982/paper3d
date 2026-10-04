@@ -404,7 +404,7 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
     d.setMotorTargets(t);
     for (let i = 0; i < 180; i++) { d.driveMotors(1 / 120); w.step(); }
     d.jointRot(hip, rv);
-    log(`  髋仅驱动轴 ${ax}（${['X 外展', 'Y 扭转', 'Z 屈伸'][ax]}）1.5s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°`);
+    log(`  髋仅驱动轴 ${ax}（${['X 外展', 'Y 扭转', 'Z 屈伸'][ax]}）1.5s → 关节角[${Array.from(rv).map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°`);
     check(`★ 髋的轴 ${ax} 可独立驱动`, Math.abs(rv[ax]) > 0.15, `|rv[${ax}]|=${Math.abs(rv[ax]).toFixed(3)} rad`);
   }
 
@@ -433,7 +433,7 @@ log('\n=== 2b. ★ 3D 地基：三转动自由度 / 平面锁定已解除 ===');
       // 头刚体朝向相对初始的偏转角（度）
       const dot = Math.min(1, Math.abs(q0.x * q1.x + q0.y * q1.y + q0.z * q1.z + q0.w * q1.w));
       const headDeg = (2 * Math.acos(dot) * 180) / Math.PI;
-      log(`    颈仅驱动轴${ax}（${axisName[ax]}）2s → 关节角[${rv.map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°  头偏转 ${headDeg.toFixed(1)}°`);
+      log(`    颈仅驱动轴${ax}（${axisName[ax]}）2s → 关节角[${Array.from(rv).map((v) => ((v * 180) / Math.PI).toFixed(0)).join(',')}]°  头偏转 ${headDeg.toFixed(1)}°`);
       check(`★ 颈部轴 ${ax}（${axisName[ax]}）可驱动且头跟着转`,
         Math.abs(rv[ax]) > 0.15 && headDeg > 3,
         `|rv|=${Math.abs(rv[ax]).toFixed(3)} rad，头偏 ${headDeg.toFixed(1)}°`);
@@ -625,8 +625,8 @@ log('\n=== 3b. 最佳个体行为解剖（walk）===');
   const marks: string[] = [];
   while (!anat.finished) {
     anat.advance(1);
-    if (anat.tick !== lastTick) {
-      lastTick = anat.tick;
+    if (anat.ticksDone !== lastTick) {
+      lastTick = anat.ticksDone;
       totTicks++;
       const tp = anat.doll.torso().translation();
       const tilt = anat.doll.tiltOf(anat.doll.torso());

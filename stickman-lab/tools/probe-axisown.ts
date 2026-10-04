@@ -99,7 +99,7 @@ interface Result {
 
 function run(bal: Record<string, unknown>, secs: number): Result {
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: secs, driver: 'controller' });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
     balance: { ...DEFAULT_CONTROLLER.balance, ...bal },
@@ -121,10 +121,12 @@ function run(bal: Record<string, unknown>, secs: number): Result {
       for (const c of ctrl.snapshot.axisConflicts) {
         conflicts.add(`${c.joint}/${c.axis % 3} ${c.mode}←${c.by} vs ${c.against}`);
       }
-      // 实际被写过的轴（owner !== 'none'）：用来验证"每根被写的轴都在表里登记"
-      for (let k = 0; k < ctrl.rs.tgt.length; k++) {
-        const t = ctrl.rs.tgt[k]!;
-        if (t.owner === 'none' || t.owner === 'bind') continue;
+      // 实际被写过的轴（owner !== 'none'/'bind'）：验证"每根被写的轴都在表里登记"
+      // ★ 走 `rs.axisOwner()` / `rs.axisCount` 这两个**文档化只读口**，
+      //   而不是戳 `rs.tgt`（private）—— 那正是 `tsconfig.tools.json` 抓出来的。
+      for (let k = 0; k < ctrl.rs.axisCount; k++) {
+        const owner = ctrl.rs.axisOwner(k);
+        if (owner === 'none' || owner === 'bind') continue;
         const j = Math.floor(k / 3);
         written.add(`${sk.joints[j]!.name}/${k % 3}`);
       }
@@ -148,7 +150,7 @@ log('══ B. 零输出等价（全消融 ⇒ 逐轴 τ≡0、让位≡0、且�
 {
   // 参照：完全不经过 Controller，直接喂零目标
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS, driver: 'controller' });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const z = new Float32Array(sk.joints.length * 3);
   let yRef = 9;
   for (let i = 0; i < Math.round(SECS * 120) && !sim.finished; i++) {
@@ -197,7 +199,7 @@ log('');
 log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
 {
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS, driver: 'controller' });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
   let n = 0, swB = 0, swF = 0, pb = '', pf = '';
   const viol: string[] = [];
@@ -390,6 +392,46 @@ log('══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽�
   const rsHas = /stanceSingle\s*=\s*false/.test(read('src/core/rigState.ts'));
   if (ctrlUses && rsHas) ok('控制侧已接入收敛判据（controller → rigState.stanceSingle）');
   else bad(`收敛判据未被控制侧接入（controller=${ctrlUses} rigState字段=${rsHas}）`);
+}
+
+log('');
+log('══ H. 步态周期只有一个真源，且「下限 ≤ 目标」══');
+{
+  const { STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG } = await import('../src/core/gaitState');
+  const { TARGET_CYCLE, MIN_CYCLE } = await import('../src/core/stability');
+  const floor = DEFAULT_GAIT_CONFIG.stepIntervalSec;
+
+  log(`  真源 STEP_CYCLE_SEC = ${STEP_CYCLE_SEC}s（ES 节拍目标）`);
+  log(`  下限 stepIntervalSec = ${floor}s（控制路径 X6）`);
+  log(`  stability.TARGET_CYCLE = ${TARGET_CYCLE}s   MIN_CYCLE = ${MIN_CYCLE}s`);
+
+  // H1：奖励侧必须引用真源，不能自己写死
+  if (TARGET_CYCLE === STEP_CYCLE_SEC) ok(`TARGET_CYCLE 引用真源（=${STEP_CYCLE_SEC}）`);
+  else bad(`TARGET_CYCLE=${TARGET_CYCLE} ≠ STEP_CYCLE_SEC=${STEP_CYCLE_SEC} —— 又写死了一份`);
+
+  if (MIN_CYCLE === floor) ok(`MIN_CYCLE 引用控制下限（=${floor}）`);
+  else bad(`MIN_CYCLE=${MIN_CYCLE} ≠ stepIntervalSec=${floor} —— 又写死了一份`);
+
+  // H2：★ 不变式：下限 ≤ 目标。否则"至少隔 1.6s"与"打算 1.0s 换一次"互相矛盾。
+  if (floor <= STEP_CYCLE_SEC) ok(`不变式成立：下限 ${floor} ≤ 目标 ${STEP_CYCLE_SEC}`);
+  else bad(`矛盾：下限 ${floor}s > 目标 ${STEP_CYCLE_SEC}s（ES 会被安全下限绑住，反之亦然）`);
+
+  // H3：commander 的默认节拍必须是真源（不是硬写 1.6）
+  const cmdS = read('src/core/commander.ts');
+  if (/stepPeriod:\s*STEP_CYCLE_SEC/.test(cmdS)) ok('commander 默认节拍引用真源');
+  else if (/stepPeriod:\s*[\d.]+/.test(cmdS)) {
+    const m = /stepPeriod:\s*([\d.]+)/.exec(cmdS)!;
+    bad(`commander 仍硬写 stepPeriod=${m[1]}，未引用 STEP_CYCLE_SEC`);
+  } else bad('commander 的 stepPeriod 找不到');
+
+  // H4：ES 路径只能 import **常数**，不得引入控制侧状态（否则两条路径耦合）
+  const cmdStateImports = /import\s*\{[^}]*GaitState[^}]*\}\s*from\s*'\.\/gaitState'/.test(cmdS);
+  const stabStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(read('src/core/stability.ts'));
+  if (cmdStateImports || stabStateImports) {
+    bad('ES 路径 import 了控制侧的 GaitState 类 —— 只允许 import 常数');
+  } else {
+    ok('ES 路径只 import 常数（无运行时耦合）');
+  }
 }
 
 log('');

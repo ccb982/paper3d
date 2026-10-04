@@ -22,7 +22,10 @@ await import('../src/core/ragdoll');
   const p: string = require.resolve('@dimforge/rapier3d/rapier_wasm3d_bg.wasm');
   const c = await WebAssembly.compile(fs.readFileSync(p));
   const bg = bgNs as Record<string, (...a: unknown[]) => unknown>;
-  const im: Record<string, Record<string, unknown>> = {};
+  // 类型必须是 ModuleImport（ExportValue 的联合），否则 `WebAssembly.instantiate`
+  // 的重载匹配不上 —— 这里全是函数，窄化成函数签名即可。
+  type WasmFn = (...a: unknown[]) => unknown;
+  const im: Record<string, Record<string, WasmFn>> = {};
   for (const i of WebAssembly.Module.imports(c)) { const f = bg[i.name]; if (typeof f !== 'function') throw new Error(i.name); (im[i.module] ??= {})[i.name] = f; }
   (bgNs as unknown as { __wbg_set_wasm(v: unknown): void }).__wbg_set_wasm((await WebAssembly.instantiate(c, im)).exports);
 }
@@ -51,10 +54,10 @@ const log = console.log;
 const AGF = Number(process.env.AGF ?? 1) || 1;
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller',
   doll: { ankleGroundFactor: AGF } });
-sim.begin(new Float32Array(sim.params.length));
+sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
-  gait: { ...DEFAULT_CONTROLLER.gait, singleLeg: SUP, liftHold: 0.25 },
+  gait: { ...DEFAULT_CONTROLLER.gait, startBearer: SUP, liftHold: 0.25 },
 });
 
 log('══ 重构后验收：单腿站立（考核平衡维持系统）══');

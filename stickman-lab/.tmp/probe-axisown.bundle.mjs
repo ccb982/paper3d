@@ -8,7 +8,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
+// node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js
 var rapier_wasm3d_bg_exports = {};
 __export(rapier_wasm3d_bg_exports, {
   RawBroadPhase: () => RawBroadPhase,
@@ -285,7 +285,7 @@ function __wbindgen_memory() {
 }
 var wasm, heap, heap_next, cachedFloat64Memory0, cachedInt32Memory0, lTextDecoder, cachedTextDecoder, cachedUint8Memory0, cachedFloat32Memory0, stack_pointer, cachedUint32Memory0, WASM_VECTOR_LEN, RawFeatureType, RawShapeType, RawJointAxis, RawRigidBodyType, RawMotorModel, RawJointType, RawBroadPhaseFinalization, RawBroadPhase, RawCCDSolverFinalization, RawCCDSolver, RawCharacterCollisionFinalization, RawCharacterCollision, RawColliderSetFinalization, RawColliderSet, RawColliderShapeCastHitFinalization, RawColliderShapeCastHit, RawContactForceEventFinalization, RawContactForceEvent, RawContactManifoldFinalization, RawContactManifold, RawContactPairFinalization, RawContactPair, RawDebugRenderPipelineFinalization, RawDebugRenderPipeline, RawDeserializedWorldFinalization, RawDeserializedWorld, RawDynamicRayCastVehicleControllerFinalization, RawDynamicRayCastVehicleController, RawEventQueueFinalization, RawEventQueue, RawGenericJointFinalization, RawGenericJoint, RawImpulseJointSetFinalization, RawImpulseJointSet, RawIntegrationParametersFinalization, RawIntegrationParameters, RawIslandManagerFinalization, RawIslandManager, RawKinematicCharacterControllerFinalization, RawKinematicCharacterController, RawMultibodyJointSetFinalization, RawMultibodyJointSet, RawNarrowPhaseFinalization, RawNarrowPhase, RawPhysicsPipelineFinalization, RawPhysicsPipeline, RawPointColliderProjectionFinalization, RawPointColliderProjection, RawPointProjectionFinalization, RawPointProjection, RawQueryPipelineFinalization, RawQueryPipeline, RawRayColliderHitFinalization, RawRayColliderHit, RawRayColliderIntersectionFinalization, RawRayColliderIntersection, RawRayIntersectionFinalization, RawRayIntersection, RawRigidBodySetFinalization, RawRigidBodySet, RawRotationFinalization, RawRotation, RawSdpMatrix3Finalization, RawSdpMatrix3, RawSerializationPipelineFinalization, RawSerializationPipeline, RawShapeFinalization, RawShape, RawShapeCastHitFinalization, RawShapeCastHit, RawShapeContactFinalization, RawShapeContact, RawVectorFinalization, RawVector;
 var init_rapier_wasm3d_bg = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js"() {
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d_bg.js"() {
     heap = new Array(128).fill(void 0);
     heap.push(void 0, null, true, false);
     heap_next = heap.length;
@@ -6914,9 +6914,9 @@ var init_rapier_wasm3d_bg2 = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier_wasm3d.js
+// node_modules/@dimforge/rapier3d/rapier_wasm3d.js
 var init_rapier_wasm3d = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier_wasm3d.js"() {
+  "node_modules/@dimforge/rapier3d/rapier_wasm3d.js"() {
     init_rapier_wasm3d_bg2();
     init_rapier_wasm3d_bg();
     init_rapier_wasm3d_bg();
@@ -6924,17 +6924,17 @@ var init_rapier_wasm3d = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/raw.js
+// node_modules/@dimforge/rapier3d/raw.js
 var init_raw = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/raw.js"() {
+  "node_modules/@dimforge/rapier3d/raw.js"() {
     init_rapier_wasm3d();
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/math.js
+// node_modules/@dimforge/rapier3d/math.js
 var Vector3, VectorOps, Quaternion, RotationOps, SdpMatrix3, SdpMatrix3Ops;
 var init_math = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/math.js"() {
+  "node_modules/@dimforge/rapier3d/math.js"() {
     init_raw();
     Vector3 = class {
       constructor(x, y, z) {
@@ -7065,10 +7065,10 @@ var init_math = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body.js
 var RigidBodyType, RigidBody, RigidBodyDesc;
 var init_rigid_body = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/rigid_body.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body.js"() {
     init_math();
     init_math();
     (function(RigidBodyType2) {
@@ -8076,10 +8076,10 @@ var init_rigid_body = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/coarena.js
+// node_modules/@dimforge/rapier3d/coarena.js
 var Coarena;
 var init_coarena = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/coarena.js"() {
+  "node_modules/@dimforge/rapier3d/coarena.js"() {
     Coarena = class {
       constructor() {
         this.fconv = new Float64Array(1);
@@ -8135,10 +8135,10 @@ var init_coarena = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
+// node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js
 var RigidBodySet;
 var init_rigid_body_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/rigid_body_set.js"() {
     init_raw();
     init_coarena();
     init_math();
@@ -8300,10 +8300,10 @@ var init_rigid_body_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
+// node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js
 var IntegrationParameters;
 var init_integration_parameters = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/integration_parameters.js"() {
     init_raw();
     IntegrationParameters = class {
       constructor(raw) {
@@ -8432,10 +8432,10 @@ var init_integration_parameters = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js
 var JointType, MotorModel, JointAxesMask, ImpulseJoint, UnitImpulseJoint, FixedImpulseJoint, RopeImpulseJoint, SpringImpulseJoint, PrismaticImpulseJoint, RevoluteImpulseJoint, GenericImpulseJoint, SphericalImpulseJoint, JointData;
 var init_impulse_joint = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint.js"() {
     init_math();
     init_raw();
     (function(JointType2) {
@@ -8828,10 +8828,10 @@ var init_impulse_joint = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js
 var ImpulseJointSet;
 var init_impulse_joint_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/impulse_joint_set.js"() {
     init_raw();
     init_coarena();
     init_impulse_joint();
@@ -8948,10 +8948,10 @@ var init_impulse_joint_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js
 var MultibodyJoint, UnitMultibodyJoint, FixedMultibodyJoint, PrismaticMultibodyJoint, RevoluteMultibodyJoint, SphericalMultibodyJoint;
 var init_multibody_joint = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint.js"() {
     init_raw();
     MultibodyJoint = class _MultibodyJoint {
       constructor(rawSet, handle) {
@@ -9073,10 +9073,10 @@ var init_multibody_joint = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
+// node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js
 var MultibodyJointSet;
 var init_multibody_joint_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/multibody_joint_set.js"() {
     init_raw();
     init_coarena();
     init_multibody_joint();
@@ -9188,10 +9188,10 @@ var init_multibody_joint_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
+// node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js
 var CoefficientCombineRule;
 var init_coefficient_combine_rule = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/coefficient_combine_rule.js"() {
     (function(CoefficientCombineRule2) {
       CoefficientCombineRule2[CoefficientCombineRule2["Average"] = 0] = "Average";
       CoefficientCombineRule2[CoefficientCombineRule2["Min"] = 1] = "Min";
@@ -9201,10 +9201,10 @@ var init_coefficient_combine_rule = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
+// node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js
 var CCDSolver;
 var init_ccd_solver = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/ccd_solver.js"() {
     init_raw();
     CCDSolver = class {
       constructor(raw) {
@@ -9223,10 +9223,10 @@ var init_ccd_solver = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/island_manager.js
+// node_modules/@dimforge/rapier3d/dynamics/island_manager.js
 var IslandManager;
 var init_island_manager = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/island_manager.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/island_manager.js"() {
     init_raw();
     IslandManager = class {
       constructor(raw) {
@@ -9255,9 +9255,9 @@ var init_island_manager = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/dynamics/index.js
+// node_modules/@dimforge/rapier3d/dynamics/index.js
 var init_dynamics = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/dynamics/index.js"() {
+  "node_modules/@dimforge/rapier3d/dynamics/index.js"() {
     init_rigid_body();
     init_rigid_body_set();
     init_integration_parameters();
@@ -9271,10 +9271,10 @@ var init_dynamics = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/broad_phase.js
+// node_modules/@dimforge/rapier3d/geometry/broad_phase.js
 var BroadPhase;
 var init_broad_phase = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/broad_phase.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/broad_phase.js"() {
     init_raw();
     BroadPhase = class {
       constructor(raw) {
@@ -9293,10 +9293,10 @@ var init_broad_phase = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
+// node_modules/@dimforge/rapier3d/geometry/narrow_phase.js
 var NarrowPhase, TempContactManifold;
 var init_narrow_phase = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/narrow_phase.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/narrow_phase.js"() {
     init_raw();
     init_math();
     NarrowPhase = class {
@@ -9438,10 +9438,10 @@ var init_narrow_phase = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/contact.js
+// node_modules/@dimforge/rapier3d/geometry/contact.js
 var ShapeContact;
 var init_contact = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/contact.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/contact.js"() {
     init_math();
     ShapeContact = class _ShapeContact {
       constructor(dist, point1, point2, normal1, normal2) {
@@ -9462,10 +9462,10 @@ var init_contact = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/feature.js
+// node_modules/@dimforge/rapier3d/geometry/feature.js
 var FeatureType;
 var init_feature = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/feature.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/feature.js"() {
     (function(FeatureType2) {
       FeatureType2[FeatureType2["Vertex"] = 0] = "Vertex";
       FeatureType2[FeatureType2["Edge"] = 1] = "Edge";
@@ -9475,10 +9475,10 @@ var init_feature = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/point.js
+// node_modules/@dimforge/rapier3d/geometry/point.js
 var PointProjection, PointColliderProjection;
 var init_point = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/point.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/point.js"() {
     init_math();
     init_feature();
     PointProjection = class _PointProjection {
@@ -9517,10 +9517,10 @@ var init_point = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/ray.js
+// node_modules/@dimforge/rapier3d/geometry/ray.js
 var Ray, RayIntersection, RayColliderIntersection, RayColliderHit;
 var init_ray = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/ray.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/ray.js"() {
     init_math();
     init_feature();
     Ray = class {
@@ -9599,10 +9599,10 @@ var init_ray = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/toi.js
+// node_modules/@dimforge/rapier3d/geometry/toi.js
 var ShapeCastHit, ColliderShapeCastHit;
 var init_toi = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/toi.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/toi.js"() {
     init_math();
     ShapeCastHit = class _ShapeCastHit {
       constructor(time_of_impact, witness1, witness2, normal1, normal2) {
@@ -9636,10 +9636,10 @@ var init_toi = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/shape.js
+// node_modules/@dimforge/rapier3d/geometry/shape.js
 var Shape, ShapeType, HeightFieldFlags, TriMeshFlags, Ball, HalfSpace, Cuboid, RoundCuboid, Capsule, Segment, Triangle, RoundTriangle, Polyline, TriMesh, ConvexPolyhedron, RoundConvexPolyhedron, Heightfield, Cylinder, RoundCylinder, Cone, RoundCone;
 var init_shape = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/shape.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/shape.js"() {
     init_math();
     init_raw();
     init_contact();
@@ -10268,10 +10268,10 @@ var init_shape = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js
 var PhysicsPipeline;
 var init_physics_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/physics_pipeline.js"() {
     init_raw();
     init_math();
     PhysicsPipeline = class {
@@ -10297,10 +10297,10 @@ var init_physics_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js
 var QueryFilterFlags, QueryPipeline;
 var init_query_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/query_pipeline.js"() {
     init_raw();
     init_geometry();
     init_math();
@@ -10539,10 +10539,10 @@ var init_query_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js
 var SerializationPipeline;
 var init_serialization_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/serialization_pipeline.js"() {
     init_raw();
     init_math();
     init_world();
@@ -10588,10 +10588,10 @@ var init_serialization_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
+// node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js
 var DebugRenderBuffers, DebugRenderPipeline;
 var init_debug_render_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/debug_render_pipeline.js"() {
     init_raw();
     DebugRenderBuffers = class {
       constructor(vertices, colors) {
@@ -10623,10 +10623,10 @@ var init_debug_render_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/character_controller.js
+// node_modules/@dimforge/rapier3d/control/character_controller.js
 var CharacterCollision, KinematicCharacterController;
 var init_character_controller = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/character_controller.js"() {
+  "node_modules/@dimforge/rapier3d/control/character_controller.js"() {
     init_raw();
     init_math();
     CharacterCollision = class {
@@ -10899,10 +10899,10 @@ var init_character_controller = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
+// node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js
 var DynamicRayCastVehicleController;
 var init_ray_cast_vehicle_controller = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js"() {
+  "node_modules/@dimforge/rapier3d/control/ray_cast_vehicle_controller.js"() {
     init_raw();
     init_math();
     DynamicRayCastVehicleController = class {
@@ -11280,18 +11280,18 @@ var init_ray_cast_vehicle_controller = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/control/index.js
+// node_modules/@dimforge/rapier3d/control/index.js
 var init_control = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/control/index.js"() {
+  "node_modules/@dimforge/rapier3d/control/index.js"() {
     init_character_controller();
     init_ray_cast_vehicle_controller();
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/world.js
+// node_modules/@dimforge/rapier3d/pipeline/world.js
 var World;
 var init_world = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/world.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/world.js"() {
     init_geometry();
     init_dynamics();
     init_math();
@@ -11929,10 +11929,10 @@ var init_world = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/event_queue.js
+// node_modules/@dimforge/rapier3d/pipeline/event_queue.js
 var ActiveEvents, TempContactForceEvent, EventQueue;
 var init_event_queue = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/event_queue.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/event_queue.js"() {
     init_raw();
     init_math();
     (function(ActiveEvents2) {
@@ -12046,10 +12046,10 @@ var init_event_queue = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
+// node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js
 var ActiveHooks, SolverFlags;
 var init_physics_hooks = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/physics_hooks.js"() {
     (function(ActiveHooks2) {
       ActiveHooks2[ActiveHooks2["NONE"] = 0] = "NONE";
       ActiveHooks2[ActiveHooks2["FILTER_CONTACT_PAIRS"] = 1] = "FILTER_CONTACT_PAIRS";
@@ -12062,9 +12062,9 @@ var init_physics_hooks = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/pipeline/index.js
+// node_modules/@dimforge/rapier3d/pipeline/index.js
 var init_pipeline = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/pipeline/index.js"() {
+  "node_modules/@dimforge/rapier3d/pipeline/index.js"() {
     init_world();
     init_physics_pipeline();
     init_serialization_pipeline();
@@ -12075,10 +12075,10 @@ var init_pipeline = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider.js
+// node_modules/@dimforge/rapier3d/geometry/collider.js
 var ActiveCollisionTypes, Collider, MassPropsMode, ColliderDesc;
 var init_collider = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/collider.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/collider.js"() {
     init_math();
     init_dynamics();
     init_pipeline();
@@ -13203,10 +13203,10 @@ var init_collider = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/collider_set.js
+// node_modules/@dimforge/rapier3d/geometry/collider_set.js
 var ColliderSet;
 var init_collider_set = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/collider_set.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/collider_set.js"() {
     init_raw();
     init_coarena();
     init_math();
@@ -13365,15 +13365,15 @@ var init_collider_set = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/interaction_groups.js
+// node_modules/@dimforge/rapier3d/geometry/interaction_groups.js
 var init_interaction_groups = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/interaction_groups.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/interaction_groups.js"() {
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/geometry/index.js
+// node_modules/@dimforge/rapier3d/geometry/index.js
 var init_geometry = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/geometry/index.js"() {
+  "node_modules/@dimforge/rapier3d/geometry/index.js"() {
     init_broad_phase();
     init_narrow_phase();
     init_shape();
@@ -13388,13 +13388,13 @@ var init_geometry = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/init.js
+// node_modules/@dimforge/rapier3d/init.js
 var init_init = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/init.js"() {
+  "node_modules/@dimforge/rapier3d/init.js"() {
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/exports.js
+// node_modules/@dimforge/rapier3d/exports.js
 var exports_exports = {};
 __export(exports_exports, {
   ActiveCollisionTypes: () => ActiveCollisionTypes,
@@ -13492,7 +13492,7 @@ function version2() {
   return version();
 }
 var init_exports = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/exports.js"() {
+  "node_modules/@dimforge/rapier3d/exports.js"() {
     init_raw();
     init_math();
     init_dynamics();
@@ -13503,10 +13503,10 @@ var init_exports = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/@dimforge/rapier3d/rapier.js
+// node_modules/@dimforge/rapier3d/rapier.js
 var rapier_default;
 var init_rapier = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/@dimforge/rapier3d/rapier.js"() {
+  "node_modules/@dimforge/rapier3d/rapier.js"() {
     init_exports();
     init_exports();
     rapier_default = exports_exports;
@@ -15380,7 +15380,1104 @@ var init_gaitRef = __esm({
   }
 });
 
+// src/core/rigState.ts
+function cloneCriteria(c) {
+  return { flags: { ...c.flags }, values: { ...c.values }, all: c.all };
+}
+function makeCriteria(flags, values) {
+  const ks = Object.keys(flags);
+  return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
+}
+var PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var init_rigState = __esm({
+  "src/core/rigState.ts"() {
+    "use strict";
+    init_skeleton();
+    PRIORITY = { balance: 0, step: 1 };
+    LOAD_HYSTERESIS = 0.08;
+    DEFAULT_RIGSTATE_CONFIG = {
+      slewLimit: 8,
+      waistSlotMax: 6 * Math.PI / 180,
+      mosBudgetZ: 25e-4
+    };
+    RigState = class {
+      sk;
+      cfg;
+      // ── 身份（唯一真源）
+      loadBearer = null;
+      locked = { l: false, r: false };
+      phase = "DOUBLE";
+      phaseT = 0;
+      authority = 0;
+      // ── 读数（每拍从物理回读一次，两系统共享）
+      pos;
+      vel;
+      loadFrac = { l: 0, r: 0 };
+      grounded = { l: false, r: false };
+      /**
+       * ★★ **"现在是真单支撑吗"** —— 控制与计分的**收敛判据**，由
+       *   `Ragdoll.stanceIsSingleSupport()` 统一给出（接触数 + 净空门槛 + 滞回）。
+       *
+       * ⚠ 与 `grounded` 的区别：`grounded` 是**逐脚原始接地事实**（B1 与 UI 用），
+       *   本字段是由它派生出的**单支撑判断**。不要拿它当"某只脚着地了吗"。
+       *
+       * ⚠ 为什么不直接用裸接触数 `nGround === 1`：计分侧注释实测
+       *   「88% 的离地不到 3 cm ⇒ 多数是接触抖动」，裸接触数在抖动帧里会闪。
+       */
+      stanceSingle = false;
+      com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+      dcm = { x: 0, z: 0 };
+      support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
+      mos = 0;
+      grf = { x: 0, y: 0 };
+      torsoY = 0;
+      tiltDeg = 0;
+      pitchDeg = 0;
+      rollDeg = 0;
+      pitchRate = 0;
+      rollRate = 0;
+      soleX = { l: 0, r: 0 };
+      /**
+       * 脚底中心的**横向**位置（m）。
+       * ★ 两脚在 Z 向分开（z ≈ ±0.10）⇒ **左右载荷分配由 CoM.z 决定**，
+       *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
+       */
+      soleZ = { l: 0, r: 0 };
+      // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
+      /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
+      comAz = 0;
+      /** 上一拍的 vz（算 comAz 用） */
+      vzPrev = 0;
+      /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
+      /**
+       * ★ 骨盆抬升偏置（rad）：支撑髋外展里**专门给摆动侧骨盆抬高**的那一份
+       *   （Saunders 1953：摆动侧骨盆抬 2~5cm 是最小足净空的决定因素）。
+       *   与额状面平衡**共用**支撑髋外展这一个执行器。
+       */
+      pelvicLift = 0;
+      /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
+      swingClearance = 0;
+      /** 力链缓冲（N·m/分量，逐关节 5 个数）与就绪标志。由 `updateForceChain` 写 */
+      forceBuf = new Float64Array(0);
+      forceReady = false;
+      /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
+      waistTrim = 0;
+      /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
+      hipLatTau = 0;
+      /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
+      captureX = 0;
+      captureZ = 0;
+      /** 倒立摆自然频率 ω₀ = √(g/h)（由上层 wantedForce 写入，供 UI 回读） */
+      omega0Val = 3.1;
+      /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
+      grfCmd = { x: 0, y: 0, z: 0 };
+      /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
+      tauJ = new Float32Array(0);
+      /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
+      soleY = { l: 0, r: 0 };
+      /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
+      cop = {
+        l: { x: 0, z: 0, load: 0 },
+        r: { x: 0, z: 0, load: 0 }
+      };
+      // ── 仲裁
+      //  ⚠⚠ 用**固定长度 + fill(undefined)** 清空，**不要**用 `length = 0`：
+      //     那会把数组真的清空，于是 `i >= this.req.length` 恒成立 ⇒
+      //     `request()` 全部静默 return ⇒ 控制器退化成开环，而所有指标看起来"正常"，
+      //     只有增益扫描会暴露（16 行逐位相同）。已踩过。
+      req = [];
+      /** 本拍真正被登记的需求数（诊断用：0 ⇒ 控制器根本没在控制） */
+      requestCount = 0;
+      /** 越界请求累计（应当恒为 0；非 0 说明有调用方用了不存在的关节/轴） */
+      badRequests = 0;
+      /** 力矩请求（与 `req` 并立；单位 N·m） */
+      treq = [];
+      torqueRequestCount = 0;
+      /** 本拍仲裁出的力矩（N·m），可直接喂 `Ragdoll.setTorqueTargets` */
+      tauOut = new Float32Array(0);
+      nAxes;
+      tgt = [];
+      prevTarget;
+      // ── 事件
+      touchdown = { l: false, r: false };
+      lockReleased = { l: false, r: false };
+      // ── 判据（由 gaitState 写入，逐条回读）
+      bearerCriteria = { flags: {}, values: {}, all: false };
+      unlockCriteria = { flags: {}, values: {}, all: false };
+      /**
+       * ★ 交接判据 H1..H4 + I（重心在前腿 / 驻留 / 前腿承重 / 稳定 / 间隔 1s）。
+       *   用户的交接定义：「满足 1s 间隔并且重心真在前腿了，才能解锁后腿」。
+       */
+      handoverCriteria = { flags: {}, values: {}, all: false };
+      /** 当前的前腿 / 后腿（按实测脚 x）。字段名带 Side 以免与 `frontLeg()` 方法同名 */
+      frontLegSide = "l";
+      rearLegSide = "r";
+      stepPermit = { flags: {}, values: {}, all: false };
+      tickNo = 0;
+      tSec = 0;
+      /** 上一拍的 target，供斜率限制 */
+      prevOut;
+      constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
+        this.sk = sk2;
+        this.cfg = cfg;
+        const n = sk2.joints.length * AXES_PER_JOINT;
+        this.nAxes = n;
+        this.pos = new Float64Array(n);
+        this.vel = new Float64Array(n);
+        this.prevTarget = new Float32Array(n);
+        this.prevOut = new Float32Array(n);
+        this.hold.fill(false);
+        for (let i = 0; i < n; i++) {
+          this.hold[i] = false;
+          this.axisMode[i] = 0;
+          this.holdMask[i] = 0;
+        }
+        this.tauOut = new Float32Array(n);
+        this.tauJ = new Float32Array(n);
+        this.forceBuf = new Float64Array(sk2.joints.length * 5);
+        this.treq.fill(void 0);
+        for (let i = 0; i < n; i++) {
+          this.tgt.push({
+            value: 0,
+            owner: "none",
+            ownerLabel: "\u2014",
+            tag: "none",
+            suppressed: [],
+            vetoed: [],
+            clamped: false
+          });
+        }
+      }
+      // ── 读写接口（两系统只能用这些）────────────────────────────
+      bearer() {
+        return this.loadBearer;
+      }
+      /**
+       * 承重腿；**没有标识时退化为"当前实际在承重的那条"**。
+       *
+       * ⚠ 双支撑时**必须取载荷大的那条**，不能写死 `'l'`：
+       *   曾写死左脚，于是判据在评估一条只承担 29% 的腿，而右腿承担 71%
+       *   ⇒ B2 永远不达标 ⇒ 承重标识永远授不出来 ⇒ 迈步许可 P1 永远为 false
+       *   ⇒ 表现是"控制器完全不动"，但所有指标看起来都在正常回读。
+       */
+      /**
+       * ★ **载荷优势腿**（带迟滞）—— 承重判定的**唯一实现**。
+       *
+       * 双支撑时两条腿都在承重，"承重腿"只是个约定，必须**迟滞**否则噪声会让它
+       * 每拍翻转。实测代价（两条路径犯过同一个错）：
+       *   · `supportLeg()` 早先用 1e-3 迟滞 ⇒ 接触噪声让载荷在 50.1/49.9 之间跳
+       *     ⇒ 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关 ⇒ **8s → 1.68s**；
+       *   · `gaitState` 里给 `loadBearer` 的兜底干脆写成裸比较 `loadFrac.l > loadFrac.r`
+       *     ⇒ **零迟滞** ⇒ UI 的"★承重"标签逐帧闪（用户 2026-10-04 亲见）。
+       * ⇒ 迟滞取**载荷量级** 0.08（本 rig 双支撑各约 0.5），且必须是**同一个**函数。
+       *
+       * @param prev 上一拍的结论（用来做迟滞）；不传则用当前 `loadBearer`
+       */
+      loadDominant(prev) {
+        const l = this.loadFrac.l;
+        const r = this.loadFrac.r;
+        const H = LOAD_HYSTERESIS;
+        if (l > r + H) return "l";
+        if (r > l + H) return "r";
+        if (prev) return prev;
+        if (this.locked.l) return "l";
+        if (this.locked.r) return "r";
+        return "l";
+      }
+      supportLeg() {
+        if (this.loadBearer) return this.loadBearer;
+        if (this.grounded.l && !this.grounded.r) return "l";
+        if (this.grounded.r && !this.grounded.l) return "r";
+        if (this.grounded.l && this.grounded.r) return this.loadDominant();
+        return "l";
+      }
+      /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
+      omega0() {
+        const h = Math.max(0.2, this.com.y - Math.max(0, this.soleY[this.supportLeg()] ?? 0) - 0);
+        return Math.sqrt(9.81 / Math.max(0.3, h - 0.05));
+      }
+      /**
+       * 更新 `comAz`（低通后的横向加速度，仅供诊断/上层参考）。
+       * ⚠ 必须传**物理步长**。曾用控制拍 dt=1/60 差分，而拍内物理走了 2 步
+       *   ⇒ 算出的加速度是真实值的 **2 倍**且带噪 ⇒ 上层输出 ±996 N 的荒谬横向力。
+       */
+      updateComAccel(dtPhys) {
+        if (dtPhys <= 1e-6) {
+          this.vzPrev = this.com.vz;
+          return;
+        }
+        const raw = (this.com.vz - this.vzPrev) / dtPhys;
+        this.vzPrev = this.com.vz;
+        this.comAz = this.comAz * 0.75 + raw * 0.25;
+      }
+      swingLeg() {
+        return this.supportLeg() === "l" ? "r" : "l";
+      }
+      /**
+       * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。
+       *
+       *   用户原话：「要显式的把重心移动到前腿，然后才允许动后腿，
+       *   锁定前腿，前腿是支撑腿并且解锁后腿」。
+       *
+       *   ⚠ 必须按**实测脚 x** 判定，不能写死左右、也不能用载荷：
+       *     · 左右在 **z** 轴上（+z=左），前后在 **x** 轴上（+x 朝前）——两轴不同
+       *     · 前后腿在步态过程中会**互换**，写死就必错
+       *   约定：**x 大的是前腿**。x 差小于 3mm 视为并齐 ⇒ 用承重腿兜底。
+       */
+      frontLeg() {
+        const dz = this.soleX.l - this.soleX.r;
+        if (Math.abs(dz) > 3e-3) return dz > 0 ? "l" : "r";
+        return this.loadBearer ?? this.supportLeg();
+      }
+      /** 后腿（要动的那条） */
+      rearLeg() {
+        return this.frontLeg() === "l" ? "r" : "l";
+      }
+      /**
+       * ★ 重心的**矢状**位置误差：重心是否落在指定脚**前方**（m）。
+       *   >0 = 重心在前脚前方（该脚接不住，重心会继续前移）
+       *   ≤0 = 重心已在前脚**上方或后方** ⇒ 该脚可以承重（交接条件）
+       *   归一化到腿长量级便于设阈值：`com.x − foot.x − halfLen`，`halfLen ≈ 0.06m`。
+       */
+      comOverFootX(side) {
+        return this.com.x - this.soleX[side] - 0.06;
+      }
+      /** 重心的**额状**偏移（m）：|com.z − foot.z| 才是横向支撑裕度 */
+      comOverFootZ(side) {
+        return Math.abs(this.com.z - this.soleZ[side]);
+      }
+      isLocked(s) {
+        return this.locked[s];
+      }
+      jointPos(joint, axis) {
+        return this.pos[joint * 3 + axis] ?? 0;
+      }
+      /** 按真实索引取角（重构后的内部统一用这个；名字查询只用于外部配置） */
+      angle(joint, axis = 2) {
+        return this.pos[joint * 3 + axis] ?? 0;
+      }
+      jointVel(joint, axis) {
+        return this.vel[joint * 3 + axis] ?? 0;
+      }
+      /** 按名字取当前角；关节不存在返回 NaN（**调用方必须处理，不许静默当 0**） */
+      angleOf(name, axis = 2) {
+        const i = jointIndexByName(this.sk, name);
+        if (i < 0) return NaN;
+        return this.pos[i * 3 + axis] ?? 0;
+      }
+      /**
+       * ★ 提需求。两个系统**并发**调用同一个 `rigState`，由 `arbitrate()` 合并。
+       *   注意语义：这是"登记意图"，**不直接改 target**。
+       */
+      request(joint, axis, value, system, label) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        const cur = this.req[i];
+        this.requestCount++;
+        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+          this.tgt[i].suppressed.push({ system, label });
+          return;
+        }
+        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: cur.label });
+        this.req[i] = { value, system, label };
+      }
+      /**
+       * ★★ 按**角度**提需求（内部换算成该轴量程的比例）。
+       *
+       *   为什么需要它：`request()` 收的是**目标角比例**（`-1..1`，映射到该轴量程），
+       *   直接传 PD 的输出是**量纲错误** —— 会把"膝该往回顶一点"变成
+       *   "命令膝弯 46°"，实测开局就深蹲塌下去。
+       *   ⇒ 控制器里凡是"我要这个角"的语义，都必须走这个接口。
+       */
+      // ── 轴模式声明与冲突检测（重构不变量）─────────────────────────
+      /**
+       * ★★ 每个 (关节,轴) 在 `balance.AXIS_OWNERSHIP` 里**恰好一个模式**
+       *   （`pos` 位置伺服 / `tau` 力矩通道）。本字段在运行时**检测**违反：
+       *   同一根轴同时被位置和力矩两个通道以**不同系统**申领 ⇒ 记一次冲突。
+       *
+       *   为什么是"检测"而不是"直接拒收"：拒收会改变行为、可能引入新的塌陷；
+       *   先把它变成**可断言的量**（`axisConflicts`），由 `tools/probe-axisown.ts`
+       *   门禁要求默认路径下为 0。等它稳定为 0 之后就可以升级成硬拒收。
+       *
+       *   这条不变量对应本轮的三次实测故障（见 `systems/balance.ts` 顶部注释）：
+       *   `hip/1` 三写者、`requestHold` 双副本、消融工具说谎。
+       */
+      axisMode = [];
+      // 0=无 1=pos 2=tau
+      axisModeOwner = [];
+      /** 本拍观测到的轴归属冲突（UI/门禁回读） */
+      axisConflicts = [];
+      claimAxis(joint, axis, mode, system) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) return;
+        if (this.axisMode[i] === 0) {
+          this.axisMode[i] = mode;
+          this.axisModeOwner[i] = system;
+          return;
+        }
+        if (this.axisMode[i] === mode) return;
+        this.axisConflicts.push({
+          axis: i,
+          joint: this.sk.joints[joint]?.name ?? `?${joint}`,
+          mode: mode === 1 ? "pos" : "tau",
+          by: system,
+          against: this.axisModeOwner[i] ?? "none"
+        });
+      }
+      requestAngle(joint, axis, rad, system, label) {
+        this.claimAxis(joint, axis, 1, system);
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        this.request(joint, axis, rad * 0.9 / span, system, label);
+      }
+      // ── 力矩请求通道（`τ = JᵀF` 的产物，N·m）────────────────────────
+      /**
+       * ★ 与角度通道**并联**的第二条通道。单位是 N·m，不是归一化比例。
+       *   为什么必须分开：角度通道会被 `Ragdoll` 的位置环换算成
+       *   `τ = kP·(θ_ref−θ)·τmax/ωmax`（反馈量），而 `τ = JᵀF` 是**定量前馈** ——
+       *   单腿站立需要 ~52 N·m 的静态髋力矩**在位**，不能等误差长出来。
+       *   两者在 `driveMotors` 里相加后再按 τmax 饱和。
+       *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
+       */
+      requestTorque(joint, axis, tau, system, label) {
+        this.claimAxis(joint, axis, 2, system);
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        const cur = this.treq[i];
+        this.torqueRequestCount++;
+        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+          this.tgt[i].suppressed.push({ system, label: `${label}(\u529B\u77E9)` });
+          return;
+        }
+        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
+        this.treq[i] = { value: tau, system, label };
+      }
+      /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
+      requestSwingLegTorque(side, joint, axis, tau, label, isLift) {
+        if (isLift && this.locked[side]) {
+          const i = joint * 3 + axis;
+          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label: `${label}(\u529B\u77E9)` });
+          return;
+        }
+        this.requestTorque(joint, axis, tau, "step", label);
+      }
+      // ── 位置伺服「让位」通道（阻抗/纯阻尼）─────────────────────────
+      /**
+       * ★★ 让某个轴的**位置伺服退化为纯阻尼**：`err = −kD·ω_rel`（P 项置零）。
+       *
+       *   为什么需要（这是本项目最隐蔽的一类冲突）：
+       *     位置环是 `τ = kP·(θ_ref−θ)·τmax/ωmax`，而 `τ = JᵀF` 是**定量前馈**。
+       *     两者**相加**（在 `driveMotors` 里）本该没问题，但历史实现里它们
+       *     在**同一轴上互相顶**：位置环发"目标角"、力矩通道发"定量力矩"，
+       *     加上 `request()` 同级只保留第一次，于是谁先到谁说了算、另一个被静默吞掉
+       *     （实测：`kStanceExt` 扫 0.3/0.6/0.9 **三行逐位相同**，通道根本没执行）。
+       *
+       *   正确分工：**定量支撑交给 `τ = JᵀF`，位置环只留阻尼**（提供关节阻尼、
+       *   抑制数值发散，但不再贡献刚度）。这样两者**职责不重叠、不会互相顶**。
+       *
+       *   ⚠ 不用 `requestAngle(j, a, 当前角)` 代替：那样有量纲错误 ——
+       *     `requestAngle` 内部会按量程归一化（`(rad·0.9)/span`），再乘回去
+       *     得到 `θ_ref ≈ 0.81·θ`，P 项并不为零（还剩 19% 的刚度）。
+       */
+      requestHold(joint, axis, system, label) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        if (this.hold[i]) return;
+        this.hold[i] = true;
+        this.holdList.push({ i, system, label });
+        this.requestCount++;
+      }
+      /** 撤销让位（让该轴交回给常规位置伺服）—— `τ=JᵀF` 与位置偏置共存时用 */
+      clearHold(joint, axis) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) return;
+        this.hold[i] = false;
+        this.holdMask[i] = 0;
+        for (let k = this.holdList.length - 1; k >= 0; k--) {
+          if (this.holdList[k].i === i) this.holdList.splice(k, 1);
+        }
+      }
+      /** 内部用：让位标记（每拍清空） */
+      hold = [];
+      holdList = [];
+      /** 本拍让位的轴（供快照回读：谁在让位给 `τ=JᵀF`） */
+      holdMask = [];
+      /** 锁定闸门：被锁定腿上的抬腿需求**直接丢弃**（不是加权、不是夹紧） */
+      requestSwingLeg(side, joint, axis, value, label, isLift) {
+        if (isLift && this.locked[side]) {
+          const i = joint * 3 + axis;
+          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
+          return;
+        }
+        this.request(joint, axis, value, "step", label);
+      }
+      /** 同上，但按**角度**提需求 */
+      requestSwingLegAngle(side, joint, axis, rad, label, isLift) {
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        if (isLift && this.locked[side]) {
+          const i = joint * 3 + axis;
+          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
+          return;
+        }
+        this.requestAngle(joint, axis, rad, "step", label);
+      }
+      /**
+       * ★ 腰的**受限修正槽**：迈步系统只能提一个**有界**的修正量。
+       *   幅度上限 `waistSlotMax`（文献：骨盆横断面旋转 6°）
+       *   且乘上权限预算 α(t)。
+       *   超出部分被夹住并标记 —— 可见，不静默。
+       */
+      requestWaistSlot(joint, axis, rad, label) {
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[0]), Math.abs(def.maxRad[0]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        const capRad = this.cfg.waistSlotMax * this.authority;
+        const v = Math.max(-capRad, Math.min(capRad, rad));
+        this.requestAngle(
+          joint,
+          axis,
+          v,
+          "step",
+          label + (Math.abs(v - rad) > 1e-9 ? `(\u5939\u5230${(capRad * 57.3).toFixed(1)}\xB0)` : "")
+        );
+      }
+      // ── 仲裁 ────────────────────────────────────────────────
+      /** 每拍开始：清空需求与仲裁痕迹 */
+      beginTick(dt) {
+        this.tickNo++;
+        this.tSec += dt;
+        this.req.fill(void 0);
+        this.treq.fill(void 0);
+        this.hold.fill(false);
+        for (let i = 0; i < this.axisMode.length; i++) {
+          this.axisMode[i] = 0;
+          this.axisModeOwner[i] = "balance";
+        }
+        this.axisConflicts.length = 0;
+        for (const h of this.holdList) this.holdMask[h.i] = h.system === "balance" ? 1 : 2;
+        this.holdList.length = 0;
+        this.torqueRequestCount = 0;
+        this.requestCount = 0;
+        for (let i = 0; i < this.tgt.length; i++) {
+          const t = this.tgt[i];
+          t.suppressed.length = 0;
+          t.vetoed.length = 0;
+          t.clamped = false;
+          t.owner = "none";
+          t.ownerLabel = "\u2014";
+          t.tag = "none";
+          t.value = 0;
+        }
+        this.touchdown.l = false;
+        this.touchdown.r = false;
+        this.lockReleased.l = false;
+        this.lockReleased.r = false;
+      }
+      /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
+      arbitrate(dt) {
+        const out = this.prevOut;
+        const maxStep = this.cfg.slewLimit * dt;
+        for (let i = 0; i < this.nAxes; i++) {
+          const r = this.req[i];
+          const t = this.tgt[i];
+          if (!r || !t) {
+            out[i] = this.prevTarget[i] ?? 0;
+            continue;
+          }
+          t.value = r.value;
+          t.owner = r.system;
+          t.ownerLabel = r.label;
+          t.tag = r.system === "balance" ? "hold" : "step";
+          const prev = this.prevTarget[i] ?? 0;
+          const d = r.value - prev;
+          if (Math.abs(d) > maxStep) {
+            out[i] = prev + Math.sign(d) * maxStep;
+            t.clamped = true;
+          } else {
+            out[i] = r.value;
+          }
+        }
+        for (let i = 0; i < out.length; i++) {
+          if (!this.req[i]) {
+            out[i] = this.prevTarget[i] ?? 0;
+            const t = this.tgt[i];
+            if (t.owner === "none") {
+              t.owner = "bind";
+              t.ownerLabel = "\u4FDD\u6301";
+              t.tag = "servo";
+            }
+          }
+        }
+        for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i];
+        for (let i = 0; i < this.nAxes; i++) {
+          const r = this.treq[i];
+          if (!r) {
+            this.tauOut[i] = 0;
+            continue;
+          }
+          const j = this.sk.joints[Math.floor(i / 3)];
+          const k = i % 3;
+          const tmax = j ? j.maxTorque[k] : 0;
+          let v = r.value;
+          if (v > tmax) v = tmax;
+          else if (v < -tmax) v = -tmax;
+          this.tauOut[i] = v;
+          const t = this.tgt[i];
+          if (t && t.ownerLabel === "\u2014") {
+            t.owner = r.system;
+            t.ownerLabel = `${r.label}(\u03C4)`;
+          }
+        }
+        return out;
+      }
+      targets() {
+        return this.tgt;
+      }
+      // ── 快照（唯一可读出口）─────────────────────────────────
+      /**
+       * 力链打包（供快照 / UI）。`ready=false` 时数值**不可信**（速度环未填满），
+       * UI 必须显示"未就绪"，不能把 0 当成"没有力"—— 那正是之前踩过的静默失效。
+       */
+      forceChain() {
+        const joints = [];
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          joints.push({
+            name: this.sk.joints[i].name,
+            fx: this.forceBuf[o] ?? 0,
+            fy: this.forceBuf[o + 1] ?? 0,
+            fz: this.forceBuf[o + 2] ?? 0,
+            f: this.forceBuf[o + 3] ?? 0,
+            mass: this.forceBuf[o + 4] ?? 0
+          });
+        }
+        return { ready: this.forceReady, joints };
+      }
+      /** 重心转移诊断（供快照/UI）。历史环形缓冲，240 帧 = 4s @60Hz */
+      comTransferHist = [];
+      rateLatPrev = 0;
+      rateLatHave = false;
+      /**
+       * 每拍更新重心转移诊断。`dt` 用**控制拍**长（历史按拍推）。
+       * `cmdGrfLat` 由平衡系统写入（`grfCmd.z`），这里只读，避免两个系统互写。
+       */
+      updateComTransfer(dt) {
+        const front = this.frontLegSide;
+        const stanceZ = front === "l" ? this.soleZ.l : this.soleZ.r;
+        const stanceX = front === "l" ? this.soleX.l : this.soleX.r;
+        this.comErrLat = this.com.z - stanceZ;
+        this.comErrSag = this.com.x - stanceX;
+        if (this.rateLatHave && dt > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt;
+        this.rateLatPrev = this.comErrLat;
+        this.rateLatHave = true;
+        this.comTransferHist.push(this.comErrLat);
+        if (this.comTransferHist.length > 240) this.comTransferHist.shift();
+      }
+      comErrLat = 0;
+      comErrSag = 0;
+      comRateLat = 0;
+      cmdGrfLat = 0;
+      comTransfer() {
+        return {
+          errLat: this.comErrLat,
+          errSag: this.comErrSag,
+          rateLat: this.comRateLat,
+          hist: this.comTransferHist.slice(-240),
+          cmdHipLatTau: this.hipLatTau,
+          cmdWaistTrim: this.waistTrim,
+          cmdGrfLat: this.cmdGrfLat,
+          cmdPelvicLift: this.pelvicLift,
+          loadFront: this.loadFrac[this.frontLegSide],
+          loadRear: this.loadFrac[this.rearLegSide],
+          mosMm: this.mos * 1e3,
+          handover: { flags: { ...this.handoverCriteria.flags }, values: { ...this.handoverCriteria.values }, all: false }
+        };
+      }
+      /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
+      /**
+       * ★ 只读：某根轴当前**由谁在驱动**（`balance` / `step` / `bind` / `none`…）。
+       *
+       * 存在的理由：门禁 `probe:axisown` 的检查 E「每根被写过的轴都必须登记在
+       * `AXIS_OWNERSHIP`」需要读"这根轴有没有主人"，而 `tgt` 是 private ——
+       * 探针此前直接读 `rs.tgt`（private），且 `tools/` 长期不做类型检查，
+       *   所以"探针在戳私有成员"这件事一直没人管。
+       * 与其放宽 TS 的 private，不如给一个**文档化的只读口**。
+       *
+       * @param flatIndex 扁平轴索引（`joint * AXES_PER_JOINT + axis`）
+       */
+      axisOwner(flatIndex) {
+        return this.tgt[flatIndex]?.owner ?? "none";
+      }
+      /** 轴总数（`joints.length * AXES_PER_JOINT`） */
+      get axisCount() {
+        return this.nAxes;
+      }
+      snapshot(limitHit = []) {
+        const footL = this.soleX.l, footR = this.soleX.r;
+        const front = this.frontLeg();
+        const axes = [];
+        for (let j = 0; j < this.sk.joints.length; j++) {
+          for (let a = 0; a < 3; a++) {
+            const i = j * 3 + a;
+            const t = this.tgt[i];
+            axes.push({
+              key: `${this.sk.joints[j].name}/${a}`,
+              joint: j,
+              axis: a,
+              pos: this.pos[i] ?? 0,
+              vel: this.vel[i] ?? 0,
+              target: this.prevTarget[i] ?? 0,
+              owner: t.owner,
+              ownerLabel: t.ownerLabel,
+              tag: t.tag,
+              suppressed: t.suppressed.map((x) => ({ ...x })),
+              vetoed: t.vetoed.map((x) => ({ ...x })),
+              clamped: t.clamped,
+              limitHit: !!limitHit[i]
+            });
+          }
+        }
+        return {
+          tick: this.tickNo,
+          t: this.tSec,
+          phase: this.phase,
+          phaseT: this.phaseT,
+          loadBearer: this.loadBearer,
+          supportLeg: this.supportLeg(),
+          swingLeg: this.swingLeg(),
+          locked: { ...this.locked },
+          authority: this.authority,
+          com: { ...this.com },
+          dcm: { ...this.dcm },
+          support: { ...this.support },
+          mos: this.mos,
+          grf: { ...this.grf },
+          grfCmd: { ...this.grfCmd },
+          pelvicLift: this.pelvicLift,
+          frontLegSide: this.frontLegSide,
+          rearLegSide: this.rearLegSide,
+          captureX: this.captureX,
+          captureZ: this.captureZ,
+          omega0Val: this.omega0Val,
+          swingClearance: this.swingClearance,
+          waistTrim: this.waistTrim,
+          hipLatTau: this.hipLatTau,
+          forceChain: this.forceChain(),
+          comTransfer: this.comTransfer(),
+          torsoY: this.torsoY,
+          tiltDeg: this.tiltDeg,
+          pitchDeg: this.pitchDeg,
+          rollDeg: this.rollDeg,
+          pitchRate: this.pitchRate,
+          rollRate: this.rollRate,
+          axisConflicts: this.axisConflicts.map((c) => ({ ...c })),
+          legs: {
+            l: {
+              side: "l",
+              grounded: this.grounded.l,
+              loadFrac: this.loadFrac.l,
+              soleY: this.soleY.l,
+              footX: this.soleX.l,
+              footZ: this.soleZ.l,
+              cop: { ...this.cop.l },
+              isFront: front === "l",
+              isBack: front !== "l",
+              isBearer: this.loadBearer === "l",
+              locked: this.locked.l
+            },
+            r: {
+              side: "r",
+              grounded: this.grounded.r,
+              loadFrac: this.loadFrac.r,
+              soleY: this.soleY.r,
+              footX: this.soleX.r,
+              footZ: this.soleZ.r,
+              cop: { ...this.cop.r },
+              isFront: front === "r",
+              isBack: front !== "r",
+              isBearer: this.loadBearer === "r",
+              locked: this.locked.r
+            }
+          },
+          axes,
+          criteria: {
+            bearer: cloneCriteria(this.bearerCriteria),
+            handover: cloneCriteria(this.handoverCriteria),
+            unlock: cloneCriteria(this.unlockCriteria),
+            stepPermit: cloneCriteria(this.stepPermit)
+          },
+          events: {
+            touchdownL: this.touchdown.l,
+            touchdownR: this.touchdown.r,
+            lockReleasedL: this.lockReleased.l,
+            lockReleasedR: this.lockReleased.r
+          }
+        };
+      }
+    };
+  }
+});
+
+// src/core/gaitState.ts
+var gaitState_exports = {};
+__export(gaitState_exports, {
+  DEFAULT_GAIT_CONFIG: () => DEFAULT_GAIT_CONFIG,
+  GaitState: () => GaitState,
+  PHASE_LABEL: () => PHASE_LABEL,
+  PHASE_TO_SCORING: () => PHASE_TO_SCORING,
+  SCORING_TO_STANCE: () => SCORING_TO_STANCE,
+  STEP_CYCLE_SEC: () => STEP_CYCLE_SEC,
+  phaseStance: () => phaseStance,
+  smoothAuthority: () => smoothAuthority
+});
+function phaseStance(p) {
+  return SCORING_TO_STANCE[PHASE_TO_SCORING[p]];
+}
+function cdf(x) {
+  const s = x < 0 ? -1 : 1;
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * z);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  return 0.5 * (1 + s * y);
+}
+function smoothAuthority(phase, phaseT, ramp, sigma) {
+  if (phase !== "STEP") return 0;
+  const p = Math.max(0, Math.min(1, phaseT / Math.max(1e-6, ramp)));
+  const ramped = Math.min(1, 1.5 * p);
+  return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
+}
+var DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_TO_SCORING, SCORING_TO_STANCE, PHASE_LABEL, GaitState;
+var init_gaitState = __esm({
+  "src/core/gaitState.ts"() {
+    "use strict";
+    init_rigState();
+    DEFAULT_STEP_INTERVAL = 1;
+    STEP_CYCLE_SEC = 1.6;
+    DEFAULT_HANDOVER_DWELL = 0.3;
+    DEFAULT_HANDOVER_TOL_X = 0.02;
+    DEFAULT_HANDOVER_TOL_Z = 0.05;
+    DEFAULT_GAIT_CONFIG = {
+      bearerLoad: 0.6,
+      bearerLoadHyst: 0.45,
+      bearerMosMin: 0,
+      bearerHoldSec: 0.08,
+      unlockMosHoldSec: 0.12,
+      unlockTiltMaxDeg: 20,
+      permitMosMin: 0,
+      permitDoubleSupportSec: 0.05,
+      // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+      //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+      //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
+      stepIntervalSec: DEFAULT_STEP_INTERVAL,
+      handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+      handoverTolX: DEFAULT_HANDOVER_TOL_X,
+      handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+      // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+      handoverMinSec: 0.4,
+      handoverTimeoutSec: 2,
+      singleDwellSec: 0.5,
+      pushTimeoutSec: 0.6,
+      stepTimeoutSec: 1.6,
+      alphaSigma: 0.08,
+      startBearer: "l",
+      liftHold: 0.25
+    };
+    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
+    PHASE_TO_SCORING = Object.freeze({
+      DOUBLE: "adjust",
+      SHIFT: "adjust",
+      SINGLE: "step",
+      PUSH: "step",
+      STEP: "step"
+    });
+    SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
+    PHASE_LABEL = {
+      DOUBLE: "\u53CC\u811A\u652F\u6491",
+      SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
+      SINGLE: "\u5355\u652F\u6491",
+      PUSH: "\u8E6C\u79BB",
+      STEP: "\u6446\u52A8\u76F8"
+    };
+    GaitState = class {
+      constructor(rs, cfg = DEFAULT_GAIT_CONFIG) {
+        this.rs = rs;
+        this.cfg = cfg;
+      }
+      cfg;
+      /** 上一次的承重判据连续满足时长 */
+      /** 上一次是否已授予承重（用于迟滞撤销） */
+      hadBearer = false;
+      /** 双支撑相已持续时长 */
+      doubleT = 0;
+      /** 本拍刚触地（边沿） */
+      wasGrounded = { l: false, r: false };
+      /**
+       * 状态机自己的时钟（s）。`RigState.tSec` 是 private，这里不越界访问。
+       * 迈步间隔（用户：「每次迈步间隔 1s 左右」）从它算起。
+       */
+      t = 0;
+      /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
+      lastStepT = -1e9;
+      /** 交接驻留计时（s）：重心连续落在**前腿**上的时长（防抖） */
+      handoverT = 0;
+      event = { kind: "none", note: "" };
+      phaseLabel(p) {
+        return PHASE_LABEL[p];
+      }
+      phaseOrder(p) {
+        return PHASE_ORDER.indexOf(p);
+      }
+      /** ★ 每拍调用一次：更新判据 → 迁移状态 → 写回 rigState（含 α） */
+      update(dt) {
+        const rs = this.rs;
+        this.t += dt;
+        this.event.kind = "none";
+        this.event.note = "";
+        this.event.side = void 0;
+        const supSide = rs.supportLeg();
+        const swing = rs.swingLeg();
+        const bothGrounded = rs.grounded.l && rs.grounded.r;
+        if (bothGrounded) this.doubleT += dt;
+        else this.doubleT = 0;
+        for (const s of ["l", "r"]) {
+          if (rs.grounded[s] && !this.wasGrounded[s]) {
+            rs.touchdown[s] = true;
+            this.wasGrounded[s] = true;
+          } else if (!rs.grounded[s]) this.wasGrounded[s] = false;
+        }
+        const front = rs.frontLeg();
+        const rear = rs.rearLeg();
+        const dxOver = rs.comOverFootX(front);
+        const dzOver = rs.comOverFootZ(front);
+        const X1 = rs.grounded[front];
+        const X2 = dxOver <= this.cfg.handoverTolX;
+        const X3 = dzOver <= this.cfg.handoverTolZ;
+        if (X2 && X3) this.handoverT += dt;
+        else this.handoverT = 0;
+        const X4 = this.handoverT >= this.cfg.handoverDwellSec;
+        const X5 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
+        const X6 = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
+        const X7 = rs.mos >= this.cfg.permitMosMin;
+        const X8 = rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
+        rs.handoverCriteria = makeCriteria(
+          {
+            X1_\u524D\u817F\u63A5\u5730: X1,
+            X2_\u77E2\u72B6\u5230\u4F4D: X2,
+            X3_\u989D\u72B6\u5230\u4F4D: X3,
+            X4_\u9A7B\u7559: X4,
+            X5_\u524D\u817F\u627F\u91CD: X5,
+            X6_\u95F4\u96941s: X6,
+            X7_MoS: X7,
+            X8_\u503E\u89D2: X8
+          },
+          {
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3,
+            tolXmm: this.cfg.handoverTolX * 1e3,
+            tolZmm: this.cfg.handoverTolZ * 1e3,
+            dwellSec: this.handoverT,
+            needSec: this.cfg.handoverDwellSec,
+            frontLoad: rs.loadFrac[front],
+            loadThr: this.cfg.bearerLoadHyst,
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs.mos,
+            tiltDeg: rs.tiltDeg,
+            frontIsL: front === "l" ? 1 : 0,
+            rearIsL: rear === "l" ? 1 : 0
+          }
+        );
+        const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
+        const rearLocked = rs.locked[rear];
+        const canSwingRear = handoverOk && X6 && !rearLocked;
+        const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
+        rs.loadBearer = bearer;
+        this.hadBearer = this.hadBearer || handoverOk;
+        rs.bearerCriteria = makeCriteria(
+          { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
+          {
+            frontIsL: front === "l" ? 1 : 0,
+            rearIsL: rear === "l" ? 1 : 0,
+            loadFrac: rs.loadFrac[front],
+            thr: this.cfg.bearerLoadHyst,
+            mos: rs.mos,
+            holdSec: this.handoverT,
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3
+          }
+        );
+        for (const sd of ["l", "r"]) {
+          rs.unlockCriteria = makeCriteria(
+            {
+              U1_\u4EA4\u63A5\u5B8C\u6210: handoverOk,
+              U2_\u95F4\u96941s: X6,
+              U3_\u662F\u540E\u817F: sd === rear,
+              U4_\u672A\u9501\u5B9A: sd === rear && !rs.locked[sd],
+              U5_\u7A33\u5B9A: X7 && X8
+            },
+            { handoverOk: handoverOk ? 1 : 0, intervalSec: this.t - this.lastStepT, isRear: sd === rear ? 1 : 0 }
+          );
+          if (rs.locked[sd] && sd === rear && handoverOk && X6) {
+            rs.locked[sd] = false;
+            rs.lockReleased[sd] = true;
+            this.event.kind = "lock_released";
+            this.event.side = sd;
+            this.event.note = `\u89E3\u9501\u540E\u817F\uFF08\u95F4\u9694 ${(this.t - this.lastStepT).toFixed(2)}s\u3001\u91CD\u5FC3\u5728\u524D\u817F \u77E2${(dxOver * 1e3).toFixed(0)}mm/\u989D${(dzOver * 1e3).toFixed(0)}mm\uFF09`;
+          }
+        }
+        rs.stepPermit = makeCriteria(
+          { P1_\u4EA4\u63A5\u5B8C\u6210: handoverOk, P2_\u95F4\u96941s: X6, P3_\u540E\u817F\u672A\u9501: !rearLocked, P4_MoS: X7, P5_\u7A33\u5B9A: X8 },
+          {
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3,
+            rearLocked: rearLocked ? 1 : 0,
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs.mos,
+            tiltDeg: rs.tiltDeg,
+            canSwingRear: canSwingRear ? 1 : 0
+          }
+        );
+        const prev = rs.phase;
+        this.migrate(prev, dt, bothGrounded, supSide, swing);
+        if (rs.phase !== prev && this.event.kind === "none") {
+          this.event.kind = rs.phase === "STEP" ? "enter_step" : "none";
+          this.event.note = `${prev} \u2192 ${rs.phase}`;
+        }
+        rs.phaseT += dt;
+        const ramp = 0.4;
+        rs.authority = smoothAuthority(rs.phase, rs.phaseT, ramp, this.cfg.alphaSigma);
+        return this.event;
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * 相位迁移。用户 2026-10-03 定调的形状：
+       *
+       *   「**计时状态允许两脚接地，这时候的工作就是重心交接**」
+       *
+       *   ⇒ **DOUBLE 就是交接阶段**：双脚站在地上，把重心从后腿**显式**搬到前腿。
+       *     单支撑（SINGLE）只在**交接验证通过**之后才进入 ——
+       *     不是"时间到了就进"，也不是"singleLeg 模式直接跳进去"。
+       *
+       *   修复的两个具体缺陷：
+       *   ① 原 `DOUBLE` 有 `if (cfg.singleLeg) { 0.2s 后直接进 SINGLE }`
+       *      ⇒ **整个重心交接阶段被跳过**（用户要的"两脚接地做交接"从来没发生过）。
+       *   ② 原 `PUSH` 超时回 `SINGLE` ⇒ 与 `SINGLE→PUSH`（0.15s）构成
+       *      **永久振荡** SINGLE(0.15s)↔PUSH(0.5s)，实测相位一直在这两者之间跳、
+       *      永远不回到 DOUBLE、也永远进不了 STEP。
+       *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
+       */
+      migrate(prev, dt, both, supSide, swing) {
+        const rs = this.rs;
+        const hv = rs.handoverCriteria.flags;
+        const handoverOk = hv["X1_\u524D\u817F\u63A5\u5730"] === true && hv["X2_\u77E2\u72B6\u5230\u4F4D"] === true && hv["X3_\u989D\u72B6\u5230\u4F4D"] === true && hv["X4_\u9A7B\u7559"] === true && hv["X5_\u524D\u817F\u627F\u91CD"] === true && hv["X7_MoS"] === true && hv["X8_\u503E\u89D2"] === true;
+        switch (prev) {
+          case "DOUBLE":
+            if (rs.phaseT >= this.cfg.handoverMinSec && handoverOk) {
+              rs.phase = "SINGLE";
+              rs.phaseT = 0;
+            }
+            break;
+          case "SHIFT":
+            if (handoverOk) {
+              rs.phase = "SINGLE";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > this.cfg.handoverTimeoutSec) {
+              rs.phase = "DOUBLE";
+              rs.phaseT = 0;
+            }
+            break;
+          case "SINGLE":
+            if (rs.phaseT >= this.cfg.singleDwellSec) {
+              rs.phase = "PUSH";
+              rs.phaseT = 0;
+            }
+            break;
+          case "PUSH":
+            if (rs.stepPermit.all && both) {
+              rs.phase = "STEP";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > this.cfg.pushTimeoutSec) {
+              rs.phase = "DOUBLE";
+              rs.phaseT = 0;
+            }
+            break;
+          case "STEP":
+            if (rs.touchdown[swing]) {
+              rs.locked[swing] = true;
+              rs.phase = "SHIFT";
+              rs.phaseT = 0;
+            } else if (rs.phaseT > this.cfg.stepTimeoutSec) {
+              rs.phase = "DOUBLE";
+              rs.phaseT = 0;
+            }
+            break;
+        }
+      }
+      reset() {
+        this.t = 0;
+        this.lastStepT = -1e9;
+        this.handoverT = 0;
+        this.hadBearer = false;
+        this.doubleT = 0;
+        this.wasGrounded.l = false;
+        this.wasGrounded.r = false;
+        this.rs.loadBearer = null;
+        this.rs.locked.l = false;
+        this.rs.locked.r = false;
+        this.rs.phase = "DOUBLE";
+        this.rs.phaseT = 0;
+        this.rs.authority = 0;
+      }
+    };
+  }
+});
+
 // src/core/stability.ts
+var stability_exports = {};
+__export(stability_exports, {
+  MIN_CLEARANCE: () => MIN_CLEARANCE,
+  MIN_CYCLE: () => MIN_CYCLE,
+  MIN_SWING: () => MIN_SWING,
+  MOS_TARGET: () => MOS_TARGET,
+  SETTLE_WIN: () => SETTLE_WIN,
+  STEP_LEN_IN_FEET: () => STEP_LEN_IN_FEET,
+  StepSettleTracker: () => StepSettleTracker,
+  TARGET_CYCLE: () => TARGET_CYCLE,
+  cadenceScore: () => cadenceScore,
+  clamp01: () => clamp012,
+  marginOfStability: () => marginOfStability,
+  mosBand: () => mosBand,
+  stepLenScore: () => stepLenScore
+});
 function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
   const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
   const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
@@ -15403,13 +16500,14 @@ var clamp012, MIN_SWING, SETTLE_WIN, MOS_TARGET, MIN_CYCLE, MIN_CLEARANCE, TARGE
 var init_stability = __esm({
   "src/core/stability.ts"() {
     "use strict";
+    init_gaitState();
     clamp012 = (v) => v < 0 ? 0 : v > 1 ? 1 : v;
     MIN_SWING = 0.28;
     SETTLE_WIN = 0.45;
     MOS_TARGET = 0.3;
-    MIN_CYCLE = 1;
+    MIN_CYCLE = DEFAULT_GAIT_CONFIG.stepIntervalSec;
     MIN_CLEARANCE = 0.03;
-    TARGET_CYCLE = 1;
+    TARGET_CYCLE = STEP_CYCLE_SEC;
     STEP_LEN_IN_FEET = [2, 3];
     mosBand = (mos) => {
       if (mos < 0) return -clamp012(-mos / 0.25);
@@ -15622,7 +16720,7 @@ var init_stability = __esm({
   }
 });
 
-// src/core/balance.ts
+// src/core/balanceJudge.ts
 function wholeBodyAngularMomentum(doll, com, out) {
   let lx = 0, ly = 0, lz = 0;
   for (const b of doll.bodies) {
@@ -15640,8 +16738,8 @@ function wholeBodyAngularMomentum(doll, com, out) {
   return out;
 }
 var HEAD_MIN, HEAD_MAX, MAX_PITCH, MOS_VOID, WBAM_NORM, WBAM_RATE_NORM, BalanceJudge;
-var init_balance = __esm({
-  "src/core/balance.ts"() {
+var init_balanceJudge = __esm({
+  "src/core/balanceJudge.ts"() {
     "use strict";
     HEAD_MIN = 0.86;
     HEAD_MAX = 1.06;
@@ -16096,8 +17194,9 @@ var GaitCommander;
 var init_commander = __esm({
   "src/core/commander.ts"() {
     "use strict";
+    init_gaitState();
     GaitCommander = class {
-      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: 1.6, jitter: 0.15, waistShare: 0.5 }) {
+      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: STEP_CYCLE_SEC, jitter: 0.15, waistShare: 0.5 }) {
         this.o = o;
         this.seq = seq;
         let s = 12345;
@@ -16216,7 +17315,7 @@ var init_sim = __esm({
     init_posture();
     init_gaitRef();
     init_stability();
-    init_balance();
+    init_balanceJudge();
     init_gaitPhase();
     init_modules();
     init_commander();
@@ -16738,6 +17837,22 @@ var init_sim = __esm({
       }
       get ticksDone() {
         return this.tick;
+      }
+      /**
+       * ★ 只读访问器：**给探针/门禁用**（它们需要 `new Float32Array(sim.params.length)`
+       *   来填一个零基因组）。
+       *
+       *   ⚠ 之前探针直接读 `sim.params`（private）—— 10 处类型错误，
+       *     而 `tools/` 长期不做类型检查，所以没人发现"探针在戳私有成员"。
+       *     与其放宽 TS 的 private，不如给一个**文档化的只读口**：
+       *     探针本来只需要"参数个数"，不需要那个数组本身。
+       */
+      get paramCount() {
+        return this.params.length;
+      }
+      /** 只读：当前基因组的参数（探针诊断用；改动它会污染模拟，故不给 setter） */
+      get paramView() {
+        return this.params;
       }
       get progress() {
         return this.tick / this.ticksTotal;
@@ -17711,1065 +18826,6 @@ var init_rig = __esm({
   }
 });
 
-// src/core/rigState.ts
-function cloneCriteria(c) {
-  return { flags: { ...c.flags }, values: { ...c.values }, all: c.all };
-}
-function makeCriteria(flags, values) {
-  const ks = Object.keys(flags);
-  return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
-}
-var PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
-var init_rigState = __esm({
-  "src/core/rigState.ts"() {
-    "use strict";
-    init_skeleton();
-    PRIORITY = { balance: 0, step: 1 };
-    LOAD_HYSTERESIS = 0.08;
-    DEFAULT_RIGSTATE_CONFIG = {
-      slewLimit: 8,
-      waistSlotMax: 6 * Math.PI / 180,
-      mosBudgetZ: 25e-4
-    };
-    RigState = class {
-      sk;
-      cfg;
-      // ── 身份（唯一真源）
-      loadBearer = null;
-      locked = { l: false, r: false };
-      phase = "DOUBLE";
-      phaseT = 0;
-      authority = 0;
-      // ── 读数（每拍从物理回读一次，两系统共享）
-      pos;
-      vel;
-      loadFrac = { l: 0, r: 0 };
-      grounded = { l: false, r: false };
-      /**
-       * ★★ **"现在是真单支撑吗"** —— 控制与计分的**收敛判据**，由
-       *   `Ragdoll.stanceIsSingleSupport()` 统一给出（接触数 + 净空门槛 + 滞回）。
-       *
-       * ⚠ 与 `grounded` 的区别：`grounded` 是**逐脚原始接地事实**（B1 与 UI 用），
-       *   本字段是由它派生出的**单支撑判断**。不要拿它当"某只脚着地了吗"。
-       *
-       * ⚠ 为什么不直接用裸接触数 `nGround === 1`：计分侧注释实测
-       *   「88% 的离地不到 3 cm ⇒ 多数是接触抖动」，裸接触数在抖动帧里会闪。
-       */
-      stanceSingle = false;
-      com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
-      dcm = { x: 0, z: 0 };
-      support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
-      mos = 0;
-      grf = { x: 0, y: 0 };
-      torsoY = 0;
-      tiltDeg = 0;
-      pitchDeg = 0;
-      rollDeg = 0;
-      pitchRate = 0;
-      rollRate = 0;
-      soleX = { l: 0, r: 0 };
-      /**
-       * 脚底中心的**横向**位置（m）。
-       * ★ 两脚在 Z 向分开（z ≈ ±0.10）⇒ **左右载荷分配由 CoM.z 决定**，
-       *   所以额状面平衡的目标量必须是这个，不是支撑域中心（两脚中点）。
-       */
-      soleZ = { l: 0, r: 0 };
-      // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
-      /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
-      comAz = 0;
-      /** 上一拍的 vz（算 comAz 用） */
-      vzPrev = 0;
-      /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
-      /**
-       * ★ 骨盆抬升偏置（rad）：支撑髋外展里**专门给摆动侧骨盆抬高**的那一份
-       *   （Saunders 1953：摆动侧骨盆抬 2~5cm 是最小足净空的决定因素）。
-       *   与额状面平衡**共用**支撑髋外展这一个执行器。
-       */
-      pelvicLift = 0;
-      /** 摆动脚净空（m）。骨盆抬升外环的判据量（Saunders 1953 的最小足净空） */
-      swingClearance = 0;
-      /** 力链缓冲（N·m/分量，逐关节 5 个数）与就绪标志。由 `updateForceChain` 写 */
-      forceBuf = new Float64Array(0);
-      forceReady = false;
-      /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
-      waistTrim = 0;
-      /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
-      hipLatTau = 0;
-      /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
-      captureX = 0;
-      captureZ = 0;
-      /** 倒立摆自然频率 ω₀ = √(g/h)（由上层 wantedForce 写入，供 UI 回读） */
-      omega0Val = 3.1;
-      /** 上层命令的 GRF（`τ = JᵀF` 的那个 F），N。`grf` 是实测、`grfCmd` 是命令 */
-      grfCmd = { x: 0, y: 0, z: 0 };
-      /** 本拍 `τ = JᵀF` 分配到的各轴力矩（诊断/回读；N·m） */
-      tauJ = new Float32Array(0);
-      /** 脚底离地高度（m）。UI 显示用；必须与快照同源，所以存在状态里 */
-      soleY = { l: 0, r: 0 };
-      /** ★ 真·压力中心（由接触冲量加权，`Ragdoll.readCoP`）—— 足部"发力"的直接测量 */
-      cop = {
-        l: { x: 0, z: 0, load: 0 },
-        r: { x: 0, z: 0, load: 0 }
-      };
-      // ── 仲裁
-      //  ⚠⚠ 用**固定长度 + fill(undefined)** 清空，**不要**用 `length = 0`：
-      //     那会把数组真的清空，于是 `i >= this.req.length` 恒成立 ⇒
-      //     `request()` 全部静默 return ⇒ 控制器退化成开环，而所有指标看起来"正常"，
-      //     只有增益扫描会暴露（16 行逐位相同）。已踩过。
-      req = [];
-      /** 本拍真正被登记的需求数（诊断用：0 ⇒ 控制器根本没在控制） */
-      requestCount = 0;
-      /** 越界请求累计（应当恒为 0；非 0 说明有调用方用了不存在的关节/轴） */
-      badRequests = 0;
-      /** 力矩请求（与 `req` 并立；单位 N·m） */
-      treq = [];
-      torqueRequestCount = 0;
-      /** 本拍仲裁出的力矩（N·m），可直接喂 `Ragdoll.setTorqueTargets` */
-      tauOut = new Float32Array(0);
-      nAxes;
-      tgt = [];
-      prevTarget;
-      // ── 事件
-      touchdown = { l: false, r: false };
-      lockReleased = { l: false, r: false };
-      // ── 判据（由 gaitState 写入，逐条回读）
-      bearerCriteria = { flags: {}, values: {}, all: false };
-      unlockCriteria = { flags: {}, values: {}, all: false };
-      /**
-       * ★ 交接判据 H1..H4 + I（重心在前腿 / 驻留 / 前腿承重 / 稳定 / 间隔 1s）。
-       *   用户的交接定义：「满足 1s 间隔并且重心真在前腿了，才能解锁后腿」。
-       */
-      handoverCriteria = { flags: {}, values: {}, all: false };
-      /** 当前的前腿 / 后腿（按实测脚 x）。字段名带 Side 以免与 `frontLeg()` 方法同名 */
-      frontLegSide = "l";
-      rearLegSide = "r";
-      stepPermit = { flags: {}, values: {}, all: false };
-      tickNo = 0;
-      tSec = 0;
-      /** 上一拍的 target，供斜率限制 */
-      prevOut;
-      constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
-        this.sk = sk2;
-        this.cfg = cfg;
-        const n = sk2.joints.length * AXES_PER_JOINT;
-        this.nAxes = n;
-        this.pos = new Float64Array(n);
-        this.vel = new Float64Array(n);
-        this.prevTarget = new Float32Array(n);
-        this.prevOut = new Float32Array(n);
-        this.hold.fill(false);
-        for (let i = 0; i < n; i++) {
-          this.hold[i] = false;
-          this.axisMode[i] = 0;
-          this.holdMask[i] = 0;
-        }
-        this.tauOut = new Float32Array(n);
-        this.tauJ = new Float32Array(n);
-        this.forceBuf = new Float64Array(sk2.joints.length * 5);
-        this.treq.fill(void 0);
-        for (let i = 0; i < n; i++) {
-          this.tgt.push({
-            value: 0,
-            owner: "none",
-            ownerLabel: "\u2014",
-            tag: "none",
-            suppressed: [],
-            vetoed: [],
-            clamped: false
-          });
-        }
-      }
-      // ── 读写接口（两系统只能用这些）────────────────────────────
-      bearer() {
-        return this.loadBearer;
-      }
-      /**
-       * 承重腿；**没有标识时退化为"当前实际在承重的那条"**。
-       *
-       * ⚠ 双支撑时**必须取载荷大的那条**，不能写死 `'l'`：
-       *   曾写死左脚，于是判据在评估一条只承担 29% 的腿，而右腿承担 71%
-       *   ⇒ B2 永远不达标 ⇒ 承重标识永远授不出来 ⇒ 迈步许可 P1 永远为 false
-       *   ⇒ 表现是"控制器完全不动"，但所有指标看起来都在正常回读。
-       */
-      /**
-       * ★ **载荷优势腿**（带迟滞）—— 承重判定的**唯一实现**。
-       *
-       * 双支撑时两条腿都在承重，"承重腿"只是个约定，必须**迟滞**否则噪声会让它
-       * 每拍翻转。实测代价（两条路径犯过同一个错）：
-       *   · `supportLeg()` 早先用 1e-3 迟滞 ⇒ 接触噪声让载荷在 50.1/49.9 之间跳
-       *     ⇒ 每拍翻转 ⇒ 相位抖动 ⇒ 额状面主通道反复开关 ⇒ **8s → 1.68s**；
-       *   · `gaitState` 里给 `loadBearer` 的兜底干脆写成裸比较 `loadFrac.l > loadFrac.r`
-       *     ⇒ **零迟滞** ⇒ UI 的"★承重"标签逐帧闪（用户 2026-10-04 亲见）。
-       * ⇒ 迟滞取**载荷量级** 0.08（本 rig 双支撑各约 0.5），且必须是**同一个**函数。
-       *
-       * @param prev 上一拍的结论（用来做迟滞）；不传则用当前 `loadBearer`
-       */
-      loadDominant(prev) {
-        const l = this.loadFrac.l;
-        const r = this.loadFrac.r;
-        const H = LOAD_HYSTERESIS;
-        if (l > r + H) return "l";
-        if (r > l + H) return "r";
-        if (prev) return prev;
-        if (this.locked.l) return "l";
-        if (this.locked.r) return "r";
-        return "l";
-      }
-      supportLeg() {
-        if (this.loadBearer) return this.loadBearer;
-        if (this.grounded.l && !this.grounded.r) return "l";
-        if (this.grounded.r && !this.grounded.l) return "r";
-        if (this.grounded.l && this.grounded.r) return this.loadDominant();
-        return "l";
-      }
-      /** 横向倒立摆的自然频率 `ω₀ = √(g/h)`（h = CoM 高出支撑面的高度） */
-      omega0() {
-        const h = Math.max(0.2, this.com.y - Math.max(0, this.soleY[this.supportLeg()] ?? 0) - 0);
-        return Math.sqrt(9.81 / Math.max(0.3, h - 0.05));
-      }
-      /**
-       * 更新 `comAz`（低通后的横向加速度，仅供诊断/上层参考）。
-       * ⚠ 必须传**物理步长**。曾用控制拍 dt=1/60 差分，而拍内物理走了 2 步
-       *   ⇒ 算出的加速度是真实值的 **2 倍**且带噪 ⇒ 上层输出 ±996 N 的荒谬横向力。
-       */
-      updateComAccel(dtPhys) {
-        if (dtPhys <= 1e-6) {
-          this.vzPrev = this.com.vz;
-          return;
-        }
-        const raw = (this.com.vz - this.vzPrev) / dtPhys;
-        this.vzPrev = this.com.vz;
-        this.comAz = this.comAz * 0.75 + raw * 0.25;
-      }
-      swingLeg() {
-        return this.supportLeg() === "l" ? "r" : "l";
-      }
-      /**
-       * ★★ **前腿 / 后腿**（用户 2026-10-03 的交接定义）。
-       *
-       *   用户原话：「要显式的把重心移动到前腿，然后才允许动后腿，
-       *   锁定前腿，前腿是支撑腿并且解锁后腿」。
-       *
-       *   ⚠ 必须按**实测脚 x** 判定，不能写死左右、也不能用载荷：
-       *     · 左右在 **z** 轴上（+z=左），前后在 **x** 轴上（+x 朝前）——两轴不同
-       *     · 前后腿在步态过程中会**互换**，写死就必错
-       *   约定：**x 大的是前腿**。x 差小于 3mm 视为并齐 ⇒ 用承重腿兜底。
-       */
-      frontLeg() {
-        const dz = this.soleX.l - this.soleX.r;
-        if (Math.abs(dz) > 3e-3) return dz > 0 ? "l" : "r";
-        return this.loadBearer ?? this.supportLeg();
-      }
-      /** 后腿（要动的那条） */
-      rearLeg() {
-        return this.frontLeg() === "l" ? "r" : "l";
-      }
-      /**
-       * ★ 重心的**矢状**位置误差：重心是否落在指定脚**前方**（m）。
-       *   >0 = 重心在前脚前方（该脚接不住，重心会继续前移）
-       *   ≤0 = 重心已在前脚**上方或后方** ⇒ 该脚可以承重（交接条件）
-       *   归一化到腿长量级便于设阈值：`com.x − foot.x − halfLen`，`halfLen ≈ 0.06m`。
-       */
-      comOverFootX(side) {
-        return this.com.x - this.soleX[side] - 0.06;
-      }
-      /** 重心的**额状**偏移（m）：|com.z − foot.z| 才是横向支撑裕度 */
-      comOverFootZ(side) {
-        return Math.abs(this.com.z - this.soleZ[side]);
-      }
-      isLocked(s) {
-        return this.locked[s];
-      }
-      jointPos(joint, axis) {
-        return this.pos[joint * 3 + axis] ?? 0;
-      }
-      /** 按真实索引取角（重构后的内部统一用这个；名字查询只用于外部配置） */
-      angle(joint, axis = 2) {
-        return this.pos[joint * 3 + axis] ?? 0;
-      }
-      jointVel(joint, axis) {
-        return this.vel[joint * 3 + axis] ?? 0;
-      }
-      /** 按名字取当前角；关节不存在返回 NaN（**调用方必须处理，不许静默当 0**） */
-      angleOf(name, axis = 2) {
-        const i = jointIndexByName(this.sk, name);
-        if (i < 0) return NaN;
-        return this.pos[i * 3 + axis] ?? 0;
-      }
-      /**
-       * ★ 提需求。两个系统**并发**调用同一个 `rigState`，由 `arbitrate()` 合并。
-       *   注意语义：这是"登记意图"，**不直接改 target**。
-       */
-      request(joint, axis, value, system, label) {
-        const i = joint * 3 + axis;
-        if (i < 0 || i >= this.nAxes) {
-          this.badRequests++;
-          return;
-        }
-        const cur = this.req[i];
-        this.requestCount++;
-        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
-          this.tgt[i].suppressed.push({ system, label });
-          return;
-        }
-        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: cur.label });
-        this.req[i] = { value, system, label };
-      }
-      /**
-       * ★★ 按**角度**提需求（内部换算成该轴量程的比例）。
-       *
-       *   为什么需要它：`request()` 收的是**目标角比例**（`-1..1`，映射到该轴量程），
-       *   直接传 PD 的输出是**量纲错误** —— 会把"膝该往回顶一点"变成
-       *   "命令膝弯 46°"，实测开局就深蹲塌下去。
-       *   ⇒ 控制器里凡是"我要这个角"的语义，都必须走这个接口。
-       */
-      // ── 轴模式声明与冲突检测（重构不变量）─────────────────────────
-      /**
-       * ★★ 每个 (关节,轴) 在 `balance.AXIS_OWNERSHIP` 里**恰好一个模式**
-       *   （`pos` 位置伺服 / `tau` 力矩通道）。本字段在运行时**检测**违反：
-       *   同一根轴同时被位置和力矩两个通道以**不同系统**申领 ⇒ 记一次冲突。
-       *
-       *   为什么是"检测"而不是"直接拒收"：拒收会改变行为、可能引入新的塌陷；
-       *   先把它变成**可断言的量**（`axisConflicts`），由 `tools/probe-axisown.ts`
-       *   门禁要求默认路径下为 0。等它稳定为 0 之后就可以升级成硬拒收。
-       *
-       *   这条不变量对应本轮的三次实测故障（见 `balance.ts` 顶部注释）：
-       *   `hip/1` 三写者、`requestHold` 双副本、消融工具说谎。
-       */
-      axisMode = [];
-      // 0=无 1=pos 2=tau
-      axisModeOwner = [];
-      /** 本拍观测到的轴归属冲突（UI/门禁回读） */
-      axisConflicts = [];
-      claimAxis(joint, axis, mode, system) {
-        const i = joint * 3 + axis;
-        if (i < 0 || i >= this.nAxes) return;
-        if (this.axisMode[i] === 0) {
-          this.axisMode[i] = mode;
-          this.axisModeOwner[i] = system;
-          return;
-        }
-        if (this.axisMode[i] === mode) return;
-        this.axisConflicts.push({
-          axis: i,
-          joint: this.sk.joints[joint]?.name ?? `?${joint}`,
-          mode: mode === 1 ? "pos" : "tau",
-          by: system,
-          against: this.axisModeOwner[i] ?? "none"
-        });
-      }
-      requestAngle(joint, axis, rad, system, label) {
-        this.claimAxis(joint, axis, 1, system);
-        const def = this.sk.joints[joint];
-        if (!def) {
-          this.badRequests++;
-          return;
-        }
-        const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
-        if (span <= 1e-6) {
-          this.badRequests++;
-          return;
-        }
-        this.request(joint, axis, rad * 0.9 / span, system, label);
-      }
-      // ── 力矩请求通道（`τ = JᵀF` 的产物，N·m）────────────────────────
-      /**
-       * ★ 与角度通道**并联**的第二条通道。单位是 N·m，不是归一化比例。
-       *   为什么必须分开：角度通道会被 `Ragdoll` 的位置环换算成
-       *   `τ = kP·(θ_ref−θ)·τmax/ωmax`（反馈量），而 `τ = JᵀF` 是**定量前馈** ——
-       *   单腿站立需要 ~52 N·m 的静态髋力矩**在位**，不能等误差长出来。
-       *   两者在 `driveMotors` 里相加后再按 τmax 饱和。
-       *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
-       */
-      requestTorque(joint, axis, tau, system, label) {
-        this.claimAxis(joint, axis, 2, system);
-        const i = joint * 3 + axis;
-        if (i < 0 || i >= this.nAxes) {
-          this.badRequests++;
-          return;
-        }
-        const cur = this.treq[i];
-        this.torqueRequestCount++;
-        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
-          this.tgt[i].suppressed.push({ system, label: `${label}(\u529B\u77E9)` });
-          return;
-        }
-        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
-        this.treq[i] = { value: tau, system, label };
-      }
-      /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
-      requestSwingLegTorque(side, joint, axis, tau, label, isLift) {
-        if (isLift && this.locked[side]) {
-          const i = joint * 3 + axis;
-          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label: `${label}(\u529B\u77E9)` });
-          return;
-        }
-        this.requestTorque(joint, axis, tau, "step", label);
-      }
-      // ── 位置伺服「让位」通道（阻抗/纯阻尼）─────────────────────────
-      /**
-       * ★★ 让某个轴的**位置伺服退化为纯阻尼**：`err = −kD·ω_rel`（P 项置零）。
-       *
-       *   为什么需要（这是本项目最隐蔽的一类冲突）：
-       *     位置环是 `τ = kP·(θ_ref−θ)·τmax/ωmax`，而 `τ = JᵀF` 是**定量前馈**。
-       *     两者**相加**（在 `driveMotors` 里）本该没问题，但历史实现里它们
-       *     在**同一轴上互相顶**：位置环发"目标角"、力矩通道发"定量力矩"，
-       *     加上 `request()` 同级只保留第一次，于是谁先到谁说了算、另一个被静默吞掉
-       *     （实测：`kStanceExt` 扫 0.3/0.6/0.9 **三行逐位相同**，通道根本没执行）。
-       *
-       *   正确分工：**定量支撑交给 `τ = JᵀF`，位置环只留阻尼**（提供关节阻尼、
-       *   抑制数值发散，但不再贡献刚度）。这样两者**职责不重叠、不会互相顶**。
-       *
-       *   ⚠ 不用 `requestAngle(j, a, 当前角)` 代替：那样有量纲错误 ——
-       *     `requestAngle` 内部会按量程归一化（`(rad·0.9)/span`），再乘回去
-       *     得到 `θ_ref ≈ 0.81·θ`，P 项并不为零（还剩 19% 的刚度）。
-       */
-      requestHold(joint, axis, system, label) {
-        const i = joint * 3 + axis;
-        if (i < 0 || i >= this.nAxes) {
-          this.badRequests++;
-          return;
-        }
-        if (this.hold[i]) return;
-        this.hold[i] = true;
-        this.holdList.push({ i, system, label });
-        this.requestCount++;
-      }
-      /** 撤销让位（让该轴交回给常规位置伺服）—— `τ=JᵀF` 与位置偏置共存时用 */
-      clearHold(joint, axis) {
-        const i = joint * 3 + axis;
-        if (i < 0 || i >= this.nAxes) return;
-        this.hold[i] = false;
-        this.holdMask[i] = 0;
-        for (let k = this.holdList.length - 1; k >= 0; k--) {
-          if (this.holdList[k].i === i) this.holdList.splice(k, 1);
-        }
-      }
-      /** 内部用：让位标记（每拍清空） */
-      hold = [];
-      holdList = [];
-      /** 本拍让位的轴（供快照回读：谁在让位给 `τ=JᵀF`） */
-      holdMask = [];
-      /** 锁定闸门：被锁定腿上的抬腿需求**直接丢弃**（不是加权、不是夹紧） */
-      requestSwingLeg(side, joint, axis, value, label, isLift) {
-        if (isLift && this.locked[side]) {
-          const i = joint * 3 + axis;
-          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
-          return;
-        }
-        this.request(joint, axis, value, "step", label);
-      }
-      /** 同上，但按**角度**提需求 */
-      requestSwingLegAngle(side, joint, axis, rad, label, isLift) {
-        const def = this.sk.joints[joint];
-        if (!def) {
-          this.badRequests++;
-          return;
-        }
-        if (isLift && this.locked[side]) {
-          const i = joint * 3 + axis;
-          if (i >= 0 && i < this.nAxes) this.tgt[i].vetoed.push({ system: "step", label });
-          return;
-        }
-        this.requestAngle(joint, axis, rad, "step", label);
-      }
-      /**
-       * ★ 腰的**受限修正槽**：迈步系统只能提一个**有界**的修正量。
-       *   幅度上限 `waistSlotMax`（文献：骨盆横断面旋转 6°）
-       *   且乘上权限预算 α(t)。
-       *   超出部分被夹住并标记 —— 可见，不静默。
-       */
-      requestWaistSlot(joint, axis, rad, label) {
-        const def = this.sk.joints[joint];
-        if (!def) {
-          this.badRequests++;
-          return;
-        }
-        const span = Math.max(Math.abs(def.minRad[0]), Math.abs(def.maxRad[0]));
-        if (span <= 1e-6) {
-          this.badRequests++;
-          return;
-        }
-        const capRad = this.cfg.waistSlotMax * this.authority;
-        const v = Math.max(-capRad, Math.min(capRad, rad));
-        this.requestAngle(
-          joint,
-          axis,
-          v,
-          "step",
-          label + (Math.abs(v - rad) > 1e-9 ? `(\u5939\u5230${(capRad * 57.3).toFixed(1)}\xB0)` : "")
-        );
-      }
-      // ── 仲裁 ────────────────────────────────────────────────
-      /** 每拍开始：清空需求与仲裁痕迹 */
-      beginTick(dt) {
-        this.tickNo++;
-        this.tSec += dt;
-        this.req.fill(void 0);
-        this.treq.fill(void 0);
-        this.hold.fill(false);
-        for (let i = 0; i < this.axisMode.length; i++) {
-          this.axisMode[i] = 0;
-          this.axisModeOwner[i] = "balance";
-        }
-        this.axisConflicts.length = 0;
-        for (const h of this.holdList) this.holdMask[h.i] = h.system === "balance" ? 1 : 2;
-        this.holdList.length = 0;
-        this.torqueRequestCount = 0;
-        this.requestCount = 0;
-        for (let i = 0; i < this.tgt.length; i++) {
-          const t = this.tgt[i];
-          t.suppressed.length = 0;
-          t.vetoed.length = 0;
-          t.clamped = false;
-          t.owner = "none";
-          t.ownerLabel = "\u2014";
-          t.tag = "none";
-          t.value = 0;
-        }
-        this.touchdown.l = false;
-        this.touchdown.r = false;
-        this.lockReleased.l = false;
-        this.lockReleased.r = false;
-      }
-      /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
-      arbitrate(dt) {
-        const out = this.prevOut;
-        const maxStep = this.cfg.slewLimit * dt;
-        for (let i = 0; i < this.nAxes; i++) {
-          const r = this.req[i];
-          const t = this.tgt[i];
-          if (!r || !t) {
-            out[i] = this.prevTarget[i] ?? 0;
-            continue;
-          }
-          t.value = r.value;
-          t.owner = r.system;
-          t.ownerLabel = r.label;
-          t.tag = r.system === "balance" ? "hold" : "step";
-          const prev = this.prevTarget[i] ?? 0;
-          const d = r.value - prev;
-          if (Math.abs(d) > maxStep) {
-            out[i] = prev + Math.sign(d) * maxStep;
-            t.clamped = true;
-          } else {
-            out[i] = r.value;
-          }
-        }
-        for (let i = 0; i < out.length; i++) {
-          if (!this.req[i]) {
-            out[i] = this.prevTarget[i] ?? 0;
-            const t = this.tgt[i];
-            if (t.owner === "none") {
-              t.owner = "bind";
-              t.ownerLabel = "\u4FDD\u6301";
-              t.tag = "servo";
-            }
-          }
-        }
-        for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i];
-        for (let i = 0; i < this.nAxes; i++) {
-          const r = this.treq[i];
-          if (!r) {
-            this.tauOut[i] = 0;
-            continue;
-          }
-          const j = this.sk.joints[Math.floor(i / 3)];
-          const k = i % 3;
-          const tmax = j ? j.maxTorque[k] : 0;
-          let v = r.value;
-          if (v > tmax) v = tmax;
-          else if (v < -tmax) v = -tmax;
-          this.tauOut[i] = v;
-          const t = this.tgt[i];
-          if (t && t.ownerLabel === "\u2014") {
-            t.owner = r.system;
-            t.ownerLabel = `${r.label}(\u03C4)`;
-          }
-        }
-        return out;
-      }
-      targets() {
-        return this.tgt;
-      }
-      // ── 快照（唯一可读出口）─────────────────────────────────
-      /**
-       * 力链打包（供快照 / UI）。`ready=false` 时数值**不可信**（速度环未填满），
-       * UI 必须显示"未就绪"，不能把 0 当成"没有力"—— 那正是之前踩过的静默失效。
-       */
-      forceChain() {
-        const joints = [];
-        for (let i = 0; i < this.sk.joints.length; i++) {
-          const o = i * 5;
-          joints.push({
-            name: this.sk.joints[i].name,
-            fx: this.forceBuf[o] ?? 0,
-            fy: this.forceBuf[o + 1] ?? 0,
-            fz: this.forceBuf[o + 2] ?? 0,
-            f: this.forceBuf[o + 3] ?? 0,
-            mass: this.forceBuf[o + 4] ?? 0
-          });
-        }
-        return { ready: this.forceReady, joints };
-      }
-      /** 重心转移诊断（供快照/UI）。历史环形缓冲，240 帧 = 4s @60Hz */
-      comTransferHist = [];
-      rateLatPrev = 0;
-      rateLatHave = false;
-      /**
-       * 每拍更新重心转移诊断。`dt` 用**控制拍**长（历史按拍推）。
-       * `cmdGrfLat` 由平衡系统写入（`grfCmd.z`），这里只读，避免两个系统互写。
-       */
-      updateComTransfer(dt) {
-        const front = this.frontLegSide;
-        const stanceZ = front === "l" ? this.soleZ.l : this.soleZ.r;
-        const stanceX = front === "l" ? this.soleX.l : this.soleX.r;
-        this.comErrLat = this.com.z - stanceZ;
-        this.comErrSag = this.com.x - stanceX;
-        if (this.rateLatHave && dt > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt;
-        this.rateLatPrev = this.comErrLat;
-        this.rateLatHave = true;
-        this.comTransferHist.push(this.comErrLat);
-        if (this.comTransferHist.length > 240) this.comTransferHist.shift();
-      }
-      comErrLat = 0;
-      comErrSag = 0;
-      comRateLat = 0;
-      cmdGrfLat = 0;
-      comTransfer() {
-        return {
-          errLat: this.comErrLat,
-          errSag: this.comErrSag,
-          rateLat: this.comRateLat,
-          hist: this.comTransferHist.slice(-240),
-          cmdHipLatTau: this.hipLatTau,
-          cmdWaistTrim: this.waistTrim,
-          cmdGrfLat: this.cmdGrfLat,
-          cmdPelvicLift: this.pelvicLift,
-          loadFront: this.loadFrac[this.frontLegSide],
-          loadRear: this.loadFrac[this.rearLegSide],
-          mosMm: this.mos * 1e3,
-          handover: { flags: { ...this.handoverCriteria.flags }, values: { ...this.handoverCriteria.values }, all: false }
-        };
-      }
-      /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
-      snapshot(limitHit = []) {
-        const footL = this.soleX.l, footR = this.soleX.r;
-        const front = this.frontLeg();
-        const axes = [];
-        for (let j = 0; j < this.sk.joints.length; j++) {
-          for (let a = 0; a < 3; a++) {
-            const i = j * 3 + a;
-            const t = this.tgt[i];
-            axes.push({
-              key: `${this.sk.joints[j].name}/${a}`,
-              joint: j,
-              axis: a,
-              pos: this.pos[i] ?? 0,
-              vel: this.vel[i] ?? 0,
-              target: this.prevTarget[i] ?? 0,
-              owner: t.owner,
-              ownerLabel: t.ownerLabel,
-              tag: t.tag,
-              suppressed: t.suppressed.map((x) => ({ ...x })),
-              vetoed: t.vetoed.map((x) => ({ ...x })),
-              clamped: t.clamped,
-              limitHit: !!limitHit[i]
-            });
-          }
-        }
-        return {
-          tick: this.tickNo,
-          t: this.tSec,
-          phase: this.phase,
-          phaseT: this.phaseT,
-          loadBearer: this.loadBearer,
-          supportLeg: this.supportLeg(),
-          swingLeg: this.swingLeg(),
-          locked: { ...this.locked },
-          authority: this.authority,
-          com: { ...this.com },
-          dcm: { ...this.dcm },
-          support: { ...this.support },
-          mos: this.mos,
-          grf: { ...this.grf },
-          grfCmd: { ...this.grfCmd },
-          pelvicLift: this.pelvicLift,
-          frontLegSide: this.frontLegSide,
-          rearLegSide: this.rearLegSide,
-          captureX: this.captureX,
-          captureZ: this.captureZ,
-          omega0Val: this.omega0Val,
-          swingClearance: this.swingClearance,
-          waistTrim: this.waistTrim,
-          hipLatTau: this.hipLatTau,
-          forceChain: this.forceChain(),
-          comTransfer: this.comTransfer(),
-          torsoY: this.torsoY,
-          tiltDeg: this.tiltDeg,
-          pitchDeg: this.pitchDeg,
-          rollDeg: this.rollDeg,
-          pitchRate: this.pitchRate,
-          rollRate: this.rollRate,
-          axisConflicts: this.axisConflicts.map((c) => ({ ...c })),
-          legs: {
-            l: {
-              side: "l",
-              grounded: this.grounded.l,
-              loadFrac: this.loadFrac.l,
-              soleY: this.soleY.l,
-              footX: this.soleX.l,
-              footZ: this.soleZ.l,
-              cop: { ...this.cop.l },
-              isFront: front === "l",
-              isBack: front !== "l",
-              isBearer: this.loadBearer === "l",
-              locked: this.locked.l
-            },
-            r: {
-              side: "r",
-              grounded: this.grounded.r,
-              loadFrac: this.loadFrac.r,
-              soleY: this.soleY.r,
-              footX: this.soleX.r,
-              footZ: this.soleZ.r,
-              cop: { ...this.cop.r },
-              isFront: front === "r",
-              isBack: front !== "r",
-              isBearer: this.loadBearer === "r",
-              locked: this.locked.r
-            }
-          },
-          axes,
-          criteria: {
-            bearer: cloneCriteria(this.bearerCriteria),
-            handover: cloneCriteria(this.handoverCriteria),
-            unlock: cloneCriteria(this.unlockCriteria),
-            stepPermit: cloneCriteria(this.stepPermit)
-          },
-          events: {
-            touchdownL: this.touchdown.l,
-            touchdownR: this.touchdown.r,
-            lockReleasedL: this.lockReleased.l,
-            lockReleasedR: this.lockReleased.r
-          }
-        };
-      }
-    };
-  }
-});
-
-// src/core/gaitState.ts
-var gaitState_exports = {};
-__export(gaitState_exports, {
-  DEFAULT_GAIT_CONFIG: () => DEFAULT_GAIT_CONFIG,
-  GaitState: () => GaitState,
-  PHASE_LABEL: () => PHASE_LABEL,
-  PHASE_TO_SCORING: () => PHASE_TO_SCORING,
-  SCORING_TO_STANCE: () => SCORING_TO_STANCE,
-  phaseStance: () => phaseStance,
-  smoothAuthority: () => smoothAuthority
-});
-function phaseStance(p) {
-  return SCORING_TO_STANCE[PHASE_TO_SCORING[p]];
-}
-function cdf(x) {
-  const s = x < 0 ? -1 : 1;
-  const z = Math.abs(x) / Math.SQRT2;
-  const t = 1 / (1 + 0.3275911 * z);
-  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
-  return 0.5 * (1 + s * y);
-}
-function smoothAuthority(phase, phaseT, ramp, sigma) {
-  if (phase !== "STEP") return 0;
-  const p = Math.max(0, Math.min(1, phaseT / Math.max(1e-6, ramp)));
-  const ramped = Math.min(1, 1.5 * p);
-  return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
-}
-var DEFAULT_STEP_INTERVAL, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_TO_SCORING, SCORING_TO_STANCE, PHASE_LABEL, GaitState;
-var init_gaitState = __esm({
-  "src/core/gaitState.ts"() {
-    "use strict";
-    init_rigState();
-    DEFAULT_STEP_INTERVAL = 1;
-    DEFAULT_HANDOVER_DWELL = 0.3;
-    DEFAULT_HANDOVER_TOL_X = 0.02;
-    DEFAULT_HANDOVER_TOL_Z = 0.05;
-    DEFAULT_GAIT_CONFIG = {
-      bearerLoad: 0.6,
-      bearerLoadHyst: 0.45,
-      bearerMosMin: 0,
-      bearerHoldSec: 0.08,
-      unlockMosHoldSec: 0.12,
-      unlockTiltMaxDeg: 20,
-      permitMosMin: 0,
-      permitDoubleSupportSec: 0.05,
-      // ★ 迈步间隔 1s（用户定调）+ 交接驻留与位置容差
-      stepIntervalSec: DEFAULT_STEP_INTERVAL,
-      handoverDwellSec: DEFAULT_HANDOVER_DWELL,
-      handoverTolX: DEFAULT_HANDOVER_TOL_X,
-      handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
-      // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
-      handoverMinSec: 0.4,
-      handoverTimeoutSec: 2,
-      singleDwellSec: 0.5,
-      pushTimeoutSec: 0.6,
-      stepTimeoutSec: 1.6,
-      alphaSigma: 0.08,
-      startBearer: "l",
-      liftHold: 0.25
-    };
-    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
-    PHASE_TO_SCORING = Object.freeze({
-      DOUBLE: "adjust",
-      SHIFT: "adjust",
-      SINGLE: "step",
-      PUSH: "step",
-      STEP: "step"
-    });
-    SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
-    PHASE_LABEL = {
-      DOUBLE: "\u53CC\u811A\u652F\u6491",
-      SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
-      SINGLE: "\u5355\u652F\u6491",
-      PUSH: "\u8E6C\u79BB",
-      STEP: "\u6446\u52A8\u76F8"
-    };
-    GaitState = class {
-      constructor(rs, cfg = DEFAULT_GAIT_CONFIG) {
-        this.rs = rs;
-        this.cfg = cfg;
-      }
-      cfg;
-      /** 上一次的承重判据连续满足时长 */
-      /** 上一次是否已授予承重（用于迟滞撤销） */
-      hadBearer = false;
-      /** 双支撑相已持续时长 */
-      doubleT = 0;
-      /** 本拍刚触地（边沿） */
-      wasGrounded = { l: false, r: false };
-      /**
-       * 状态机自己的时钟（s）。`RigState.tSec` 是 private，这里不越界访问。
-       * 迈步间隔（用户：「每次迈步间隔 1s 左右」）从它算起。
-       */
-      t = 0;
-      /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
-      lastStepT = -1e9;
-      /** 交接驻留计时（s）：重心连续落在**前腿**上的时长（防抖） */
-      handoverT = 0;
-      event = { kind: "none", note: "" };
-      phaseLabel(p) {
-        return PHASE_LABEL[p];
-      }
-      phaseOrder(p) {
-        return PHASE_ORDER.indexOf(p);
-      }
-      /** ★ 每拍调用一次：更新判据 → 迁移状态 → 写回 rigState（含 α） */
-      update(dt) {
-        const rs = this.rs;
-        this.t += dt;
-        this.event.kind = "none";
-        this.event.note = "";
-        this.event.side = void 0;
-        const supSide = rs.supportLeg();
-        const swing = rs.swingLeg();
-        const bothGrounded = rs.grounded.l && rs.grounded.r;
-        if (bothGrounded) this.doubleT += dt;
-        else this.doubleT = 0;
-        for (const s of ["l", "r"]) {
-          if (rs.grounded[s] && !this.wasGrounded[s]) {
-            rs.touchdown[s] = true;
-            this.wasGrounded[s] = true;
-          } else if (!rs.grounded[s]) this.wasGrounded[s] = false;
-        }
-        const front = rs.frontLeg();
-        const rear = rs.rearLeg();
-        const dxOver = rs.comOverFootX(front);
-        const dzOver = rs.comOverFootZ(front);
-        const X1 = rs.grounded[front];
-        const X2 = dxOver <= this.cfg.handoverTolX;
-        const X3 = dzOver <= this.cfg.handoverTolZ;
-        if (X2 && X3) this.handoverT += dt;
-        else this.handoverT = 0;
-        const X4 = this.handoverT >= this.cfg.handoverDwellSec;
-        const X5 = rs.loadFrac[front] >= this.cfg.bearerLoadHyst;
-        const X6 = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
-        const X7 = rs.mos >= this.cfg.permitMosMin;
-        const X8 = rs.tiltDeg <= this.cfg.unlockTiltMaxDeg;
-        rs.handoverCriteria = makeCriteria(
-          {
-            X1_\u524D\u817F\u63A5\u5730: X1,
-            X2_\u77E2\u72B6\u5230\u4F4D: X2,
-            X3_\u989D\u72B6\u5230\u4F4D: X3,
-            X4_\u9A7B\u7559: X4,
-            X5_\u524D\u817F\u627F\u91CD: X5,
-            X6_\u95F4\u96941s: X6,
-            X7_MoS: X7,
-            X8_\u503E\u89D2: X8
-          },
-          {
-            dxOverMm: dxOver * 1e3,
-            dzOverMm: dzOver * 1e3,
-            tolXmm: this.cfg.handoverTolX * 1e3,
-            tolZmm: this.cfg.handoverTolZ * 1e3,
-            dwellSec: this.handoverT,
-            needSec: this.cfg.handoverDwellSec,
-            frontLoad: rs.loadFrac[front],
-            loadThr: this.cfg.bearerLoadHyst,
-            intervalSec: this.t - this.lastStepT,
-            needInterval: this.cfg.stepIntervalSec,
-            mos: rs.mos,
-            tiltDeg: rs.tiltDeg,
-            frontIsL: front === "l" ? 1 : 0,
-            rearIsL: rear === "l" ? 1 : 0
-          }
-        );
-        const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
-        const rearLocked = rs.locked[rear];
-        const canSwingRear = handoverOk && X6 && !rearLocked;
-        const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
-        rs.loadBearer = bearer;
-        this.hadBearer = this.hadBearer || handoverOk;
-        rs.bearerCriteria = makeCriteria(
-          { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
-          {
-            frontIsL: front === "l" ? 1 : 0,
-            rearIsL: rear === "l" ? 1 : 0,
-            loadFrac: rs.loadFrac[front],
-            thr: this.cfg.bearerLoadHyst,
-            mos: rs.mos,
-            holdSec: this.handoverT,
-            dxOverMm: dxOver * 1e3,
-            dzOverMm: dzOver * 1e3
-          }
-        );
-        for (const sd of ["l", "r"]) {
-          rs.unlockCriteria = makeCriteria(
-            {
-              U1_\u4EA4\u63A5\u5B8C\u6210: handoverOk,
-              U2_\u95F4\u96941s: X6,
-              U3_\u662F\u540E\u817F: sd === rear,
-              U4_\u672A\u9501\u5B9A: sd === rear && !rs.locked[sd],
-              U5_\u7A33\u5B9A: X7 && X8
-            },
-            { handoverOk: handoverOk ? 1 : 0, intervalSec: this.t - this.lastStepT, isRear: sd === rear ? 1 : 0 }
-          );
-          if (rs.locked[sd] && sd === rear && handoverOk && X6) {
-            rs.locked[sd] = false;
-            rs.lockReleased[sd] = true;
-            this.event.kind = "lock_released";
-            this.event.side = sd;
-            this.event.note = `\u89E3\u9501\u540E\u817F\uFF08\u95F4\u9694 ${(this.t - this.lastStepT).toFixed(2)}s\u3001\u91CD\u5FC3\u5728\u524D\u817F \u77E2${(dxOver * 1e3).toFixed(0)}mm/\u989D${(dzOver * 1e3).toFixed(0)}mm\uFF09`;
-          }
-        }
-        rs.stepPermit = makeCriteria(
-          { P1_\u4EA4\u63A5\u5B8C\u6210: handoverOk, P2_\u95F4\u96941s: X6, P3_\u540E\u817F\u672A\u9501: !rearLocked, P4_MoS: X7, P5_\u7A33\u5B9A: X8 },
-          {
-            dxOverMm: dxOver * 1e3,
-            dzOverMm: dzOver * 1e3,
-            rearLocked: rearLocked ? 1 : 0,
-            intervalSec: this.t - this.lastStepT,
-            needInterval: this.cfg.stepIntervalSec,
-            mos: rs.mos,
-            tiltDeg: rs.tiltDeg,
-            canSwingRear: canSwingRear ? 1 : 0
-          }
-        );
-        const prev = rs.phase;
-        this.migrate(prev, dt, bothGrounded, supSide, swing);
-        if (rs.phase !== prev && this.event.kind === "none") {
-          this.event.kind = rs.phase === "STEP" ? "enter_step" : "none";
-          this.event.note = `${prev} \u2192 ${rs.phase}`;
-        }
-        rs.phaseT += dt;
-        const ramp = 0.4;
-        rs.authority = smoothAuthority(rs.phase, rs.phaseT, ramp, this.cfg.alphaSigma);
-        return this.event;
-      }
-      /**
-       * ══════════════════════════════════════════════════════════════
-       * 相位迁移。用户 2026-10-03 定调的形状：
-       *
-       *   「**计时状态允许两脚接地，这时候的工作就是重心交接**」
-       *
-       *   ⇒ **DOUBLE 就是交接阶段**：双脚站在地上，把重心从后腿**显式**搬到前腿。
-       *     单支撑（SINGLE）只在**交接验证通过**之后才进入 ——
-       *     不是"时间到了就进"，也不是"singleLeg 模式直接跳进去"。
-       *
-       *   修复的两个具体缺陷：
-       *   ① 原 `DOUBLE` 有 `if (cfg.singleLeg) { 0.2s 后直接进 SINGLE }`
-       *      ⇒ **整个重心交接阶段被跳过**（用户要的"两脚接地做交接"从来没发生过）。
-       *   ② 原 `PUSH` 超时回 `SINGLE` ⇒ 与 `SINGLE→PUSH`（0.15s）构成
-       *      **永久振荡** SINGLE(0.15s)↔PUSH(0.5s)，实测相位一直在这两者之间跳、
-       *      永远不回到 DOUBLE、也永远进不了 STEP。
-       *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
-       */
-      migrate(prev, dt, both, supSide, swing) {
-        const rs = this.rs;
-        const hv = rs.handoverCriteria.flags;
-        const handoverOk = hv["X1_\u524D\u817F\u63A5\u5730"] === true && hv["X2_\u77E2\u72B6\u5230\u4F4D"] === true && hv["X3_\u989D\u72B6\u5230\u4F4D"] === true && hv["X4_\u9A7B\u7559"] === true && hv["X5_\u524D\u817F\u627F\u91CD"] === true && hv["X7_MoS"] === true && hv["X8_\u503E\u89D2"] === true;
-        switch (prev) {
-          case "DOUBLE":
-            if (rs.phaseT >= this.cfg.handoverMinSec && handoverOk) {
-              rs.phase = "SINGLE";
-              rs.phaseT = 0;
-            }
-            break;
-          case "SHIFT":
-            if (handoverOk) {
-              rs.phase = "SINGLE";
-              rs.phaseT = 0;
-            } else if (rs.phaseT > this.cfg.handoverTimeoutSec) {
-              rs.phase = "DOUBLE";
-              rs.phaseT = 0;
-            }
-            break;
-          case "SINGLE":
-            if (rs.phaseT >= this.cfg.singleDwellSec) {
-              rs.phase = "PUSH";
-              rs.phaseT = 0;
-            }
-            break;
-          case "PUSH":
-            if (rs.stepPermit.all && both) {
-              rs.phase = "STEP";
-              rs.phaseT = 0;
-            } else if (rs.phaseT > this.cfg.pushTimeoutSec) {
-              rs.phase = "DOUBLE";
-              rs.phaseT = 0;
-            }
-            break;
-          case "STEP":
-            if (rs.touchdown[swing]) {
-              rs.locked[swing] = true;
-              rs.phase = "SHIFT";
-              rs.phaseT = 0;
-            } else if (rs.phaseT > this.cfg.stepTimeoutSec) {
-              rs.phase = "DOUBLE";
-              rs.phaseT = 0;
-            }
-            break;
-        }
-      }
-      reset() {
-        this.t = 0;
-        this.lastStepT = -1e9;
-        this.handoverT = 0;
-        this.hadBearer = false;
-        this.doubleT = 0;
-        this.wasGrounded.l = false;
-        this.wasGrounded.r = false;
-        this.rs.loadBearer = null;
-        this.rs.locked.l = false;
-        this.rs.locked.r = false;
-        this.rs.phase = "DOUBLE";
-        this.rs.phaseT = 0;
-        this.rs.authority = 0;
-      }
-    };
-  }
-});
-
 // src/core/systems/wantedForce.ts
 function stanceResolved(rs) {
   return rs.tiltDeg < 90;
@@ -18992,7 +19048,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
 }
 var HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT;
-var init_balance2 = __esm({
+var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
@@ -19170,7 +19226,7 @@ var init_controller = __esm({
     init_rig();
     init_rigState();
     init_gaitState();
-    init_balance2();
+    init_balance();
     init_step();
     DEFAULT_CONTROLLER = {
       rig: DEFAULT_RIGSTATE_CONFIG,
@@ -19326,7 +19382,7 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
-var { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
+var { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
 var log = console.log;
 var read = (p) => fs.readFileSync(p, "utf8");
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
@@ -19366,7 +19422,7 @@ var ALL_CHANNELS = Object.freeze([
 ]);
 function run(bal, secs) {
   const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: secs, driver: "controller" });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller2(sk, sim, {
     ...DEFAULT_CONTROLLER2,
     balance: { ...DEFAULT_CONTROLLER2.balance, ...bal }
@@ -19391,9 +19447,9 @@ function run(bal, secs) {
       for (const c of ctrl.snapshot.axisConflicts) {
         conflicts.add(`${c.joint}/${c.axis % 3} ${c.mode}\u2190${c.by} vs ${c.against}`);
       }
-      for (let k = 0; k < ctrl.rs.tgt.length; k++) {
-        const t = ctrl.rs.tgt[k];
-        if (t.owner === "none" || t.owner === "bind") continue;
+      for (let k = 0; k < ctrl.rs.axisCount; k++) {
+        const owner = ctrl.rs.axisOwner(k);
+        if (owner === "none" || owner === "bind") continue;
         const j = Math.floor(k / 3);
         written.add(`${sk.joints[j].name}/${k % 3}`);
       }
@@ -19416,7 +19472,7 @@ log("");
 log("\u2550\u2550 B. \u96F6\u8F93\u51FA\u7B49\u4EF7\uFF08\u5168\u6D88\u878D \u21D2 \u9010\u8F74 \u03C4\u22610\u3001\u8BA9\u4F4D\u22610\u3001\u4E14\u7AD9\u5F97\u4F4F\uFF09\u2550\u2550");
 {
   const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS, driver: "controller" });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const z = new Float32Array(sk.joints.length * 3);
   let yRef = 9;
   for (let i = 0; i < Math.round(SECS * 120) && !sim.finished; i++) {
@@ -19458,7 +19514,7 @@ log("");
 log("\u2550\u2550 D. \u89D2\u8272\u6807\u7B7E\u7A33\u5B9A\u6027\uFF08\u627F\u91CD\u817F / \u524D\u817F\u4E0D\u5F97\u95EA\uFF09\u2550\u2550");
 {
   const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS, driver: "controller" });
-  sim.begin(new Float32Array(sim.params.length));
+  sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
   let n = 0, swB = 0, swF = 0, pb = "", pf = "";
   const viol = [];
@@ -19495,7 +19551,7 @@ log("\u2550\u2550 D. \u89D2\u8272\u6807\u7B7E\u7A33\u5B9A\u6027\uFF08\u627F\u91C
 log("");
 log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987B\u5728 AXIS_OWNERSHIP \u91CC\u767B\u8BB0 \u2550\u2550");
 {
-  const { axisRole: axisRole2, ANKLE_ABSENT: ANKLE_ABSENT2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
+  const { axisRole: axisRole2, ANKLE_ABSENT: ANKLE_ABSENT2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
   const seenAxes = /* @__PURE__ */ new Map();
   const allWritten = /* @__PURE__ */ new Set();
   for (const [tag, bal] of [
@@ -19632,6 +19688,35 @@ log("\u2550\u2550 G. \u4E24\u53F0\u72B6\u6001\u673A\u7684\u6536\u655B\uFF08\u8BC
   const rsHas = /stanceSingle\s*=\s*false/.test(read("src/core/rigState.ts"));
   if (ctrlUses && rsHas) ok("\u63A7\u5236\u4FA7\u5DF2\u63A5\u5165\u6536\u655B\u5224\u636E\uFF08controller \u2192 rigState.stanceSingle\uFF09");
   else bad(`\u6536\u655B\u5224\u636E\u672A\u88AB\u63A7\u5236\u4FA7\u63A5\u5165\uFF08controller=${ctrlUses} rigState\u5B57\u6BB5=${rsHas}\uFF09`);
+}
+log("");
+log("\u2550\u2550 H. \u6B65\u6001\u5468\u671F\u53EA\u6709\u4E00\u4E2A\u771F\u6E90\uFF0C\u4E14\u300C\u4E0B\u9650 \u2264 \u76EE\u6807\u300D\u2550\u2550");
+{
+  const { STEP_CYCLE_SEC: STEP_CYCLE_SEC2, DEFAULT_GAIT_CONFIG: DEFAULT_GAIT_CONFIG2 } = await Promise.resolve().then(() => (init_gaitState(), gaitState_exports));
+  const { TARGET_CYCLE: TARGET_CYCLE2, MIN_CYCLE: MIN_CYCLE2 } = await Promise.resolve().then(() => (init_stability(), stability_exports));
+  const floor = DEFAULT_GAIT_CONFIG2.stepIntervalSec;
+  log(`  \u771F\u6E90 STEP_CYCLE_SEC = ${STEP_CYCLE_SEC2}s\uFF08ES \u8282\u62CD\u76EE\u6807\uFF09`);
+  log(`  \u4E0B\u9650 stepIntervalSec = ${floor}s\uFF08\u63A7\u5236\u8DEF\u5F84 X6\uFF09`);
+  log(`  stability.TARGET_CYCLE = ${TARGET_CYCLE2}s   MIN_CYCLE = ${MIN_CYCLE2}s`);
+  if (TARGET_CYCLE2 === STEP_CYCLE_SEC2) ok(`TARGET_CYCLE \u5F15\u7528\u771F\u6E90\uFF08=${STEP_CYCLE_SEC2}\uFF09`);
+  else bad(`TARGET_CYCLE=${TARGET_CYCLE2} \u2260 STEP_CYCLE_SEC=${STEP_CYCLE_SEC2} \u2014\u2014 \u53C8\u5199\u6B7B\u4E86\u4E00\u4EFD`);
+  if (MIN_CYCLE2 === floor) ok(`MIN_CYCLE \u5F15\u7528\u63A7\u5236\u4E0B\u9650\uFF08=${floor}\uFF09`);
+  else bad(`MIN_CYCLE=${MIN_CYCLE2} \u2260 stepIntervalSec=${floor} \u2014\u2014 \u53C8\u5199\u6B7B\u4E86\u4E00\u4EFD`);
+  if (floor <= STEP_CYCLE_SEC2) ok(`\u4E0D\u53D8\u5F0F\u6210\u7ACB\uFF1A\u4E0B\u9650 ${floor} \u2264 \u76EE\u6807 ${STEP_CYCLE_SEC2}`);
+  else bad(`\u77DB\u76FE\uFF1A\u4E0B\u9650 ${floor}s > \u76EE\u6807 ${STEP_CYCLE_SEC2}s\uFF08ES \u4F1A\u88AB\u5B89\u5168\u4E0B\u9650\u7ED1\u4F4F\uFF0C\u53CD\u4E4B\u4EA6\u7136\uFF09`);
+  const cmdS = read("src/core/commander.ts");
+  if (/stepPeriod:\s*STEP_CYCLE_SEC/.test(cmdS)) ok("commander \u9ED8\u8BA4\u8282\u62CD\u5F15\u7528\u771F\u6E90");
+  else if (/stepPeriod:\s*[\d.]+/.test(cmdS)) {
+    const m = /stepPeriod:\s*([\d.]+)/.exec(cmdS);
+    bad(`commander \u4ECD\u786C\u5199 stepPeriod=${m[1]}\uFF0C\u672A\u5F15\u7528 STEP_CYCLE_SEC`);
+  } else bad("commander \u7684 stepPeriod \u627E\u4E0D\u5230");
+  const cmdStateImports = /import\s*\{[^}]*GaitState[^}]*\}\s*from\s*'\.\/gaitState'/.test(cmdS);
+  const stabStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(read("src/core/stability.ts"));
+  if (cmdStateImports || stabStateImports) {
+    bad("ES \u8DEF\u5F84 import \u4E86\u63A7\u5236\u4FA7\u7684 GaitState \u7C7B \u2014\u2014 \u53EA\u5141\u8BB8 import \u5E38\u6570");
+  } else {
+    ok("ES \u8DEF\u5F84\u53EA import \u5E38\u6570\uFF08\u65E0\u8FD0\u884C\u65F6\u8026\u5408\uFF09");
+  }
 }
 log("");
 if (fails) {

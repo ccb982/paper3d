@@ -46,7 +46,7 @@ const log = console.log;
 
 function run(label: string, seed: number | null): void {
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, duration: DUR, mode: 'stand' });
-  sim.begin(seed === null ? new Float32Array(sim.params.length) : randomGenome(SHAPE, makeGaussian(makeRng(seed))));
+  sim.begin(seed === null ? new Float32Array(sim.paramCount) : randomGenome(SHAPE, makeGaussian(makeRng(seed))));
   const com = newCom();
   const sup = sim.sup;
   log(`\n── ${label} ──`);

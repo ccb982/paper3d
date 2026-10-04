@@ -62,7 +62,7 @@ console.log('');
 console.log('指纹覆盖的东西：');
 console.log(`  骨架      ${sk.bodies.length} 刚体 / ${sk.joints.length} 关节 / ${SHAPE.inputs}→${SHAPE.hidden}→${SHAPE.outputs}`);
 console.log(`  物理      ${DEFAULT_SIM.physicsHz} Hz   控制 ${DEFAULT_SIM.controlHz} Hz   回合 ${lab.dur}s`);
-console.log(`  模式      ${lab.mode}   驱动 ${lab.driver}   支撑腿 ${lab.singleLeg ?? '双脚'}   抬腿 ${lab.liftHold}m`);
+console.log(`  模式      ${lab.mode}   驱动 ${lab.driver}   支撑腿 ${lab.startBearer}   抬腿 ${lab.liftHold}m`);
 console.log(`  站立权重  ${JSON.stringify(STAND_W)}`);
 console.log('');
 console.log('平衡维持系统参数：`DEFAULT_CONTROLLER`（见 src/core/systems/balance.ts）');

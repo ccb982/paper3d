@@ -23,7 +23,10 @@ await import('../src/core/ragdoll');
   const p: string = require.resolve('@dimforge/rapier3d/rapier_wasm3d_bg.wasm');
   const c = await WebAssembly.compile(fs.readFileSync(p));
   const bg = bgNs as Record<string, (...a: unknown[]) => unknown>;
-  const im: Record<string, Record<string, unknown>> = {};
+  // 类型必须是 ModuleImport（ExportValue 的联合），否则 `WebAssembly.instantiate`
+  // 的重载匹配不上 —— 这里全是函数，窄化成函数签名即可。
+  type WasmFn = (...a: unknown[]) => unknown;
+  const im: Record<string, Record<string, WasmFn>> = {};
   for (const i2 of WebAssembly.Module.imports(c)) {
     const f = bg[i2.name];
     if (typeof f !== 'function') throw new Error(i2.name);
@@ -57,10 +60,10 @@ const document = dom.window.document;
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 8, driver: 'controller' });
-sim.begin(new Float32Array(sim.params.length));
+sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
-  gait: { ...DEFAULT_CONTROLLER.gait, singleLeg: DEFAULT_LAB.singleLeg, liftHold: DEFAULT_LAB.liftHold },
+  gait: { ...DEFAULT_CONTROLLER.gait, startBearer: DEFAULT_LAB.startBearer, liftHold: DEFAULT_LAB.liftHold },
 });
 const dtC = 1 / sim.cfg.controlHz, dtP = 1 / sim.cfg.physicsHz;
 const stages = Math.max(1, Math.round(dtP / dtC));
@@ -75,6 +78,11 @@ const hud = new Hud({
   onPause() {}, onResetPopulation() {}, onRespawn() {}, onExport() {}, onImport() {},
   onGhost() {}, onJoints() {}, onTextures() {}, onSigma() {}, onBudget() {}, onSpeed() {},
   onPhase() {}, onDriver() {}, onSingleLeg() {}, onDur() {}, onGaitTune() {},
+  // ★ 这个以前**漏了** —— `HudHooks` 要求 `onAxisMarkers`，探针没提供。
+  //   于是 UI 门禁**根本没覆盖方向标控件**（+X 前 / +Z 左 / -Z 右 那三个标记），
+  //   而 typecheck 之前不检查 tools/ ⇒ 这个覆盖缺口一直没人发现。
+  //   发现途径：`tsconfig.tools.json`（见该文件顶部说明）。
+  onAxisMarkers() {},
 });
 hud.setOwnership(snap);
 

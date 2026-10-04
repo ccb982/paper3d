@@ -20,8 +20,7 @@
  *   两者是**独立字段**。用同一个 bool 表达它们 ⇒ 永远分不开。
  */
 
-import type { Skeleton } from './skeleton';
-import { AXES_PER_JOINT, jointIndexByName } from './skeleton';
+import { AXES_PER_JOINT, jointIndexByName, type Skeleton } from './skeleton';
 
 // ─────────────────────────────────────────────────── 身份
 
@@ -334,7 +333,7 @@ export class RigState {
   /** 力链缓冲（N·m/分量，逐关节 5 个数）与就绪标志。由 `updateForceChain` 写 */
   readonly forceBuf = new Float64Array(0);
   forceReady = false;
-  /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 balance.ts） */
+  /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
   waistTrim = 0;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
@@ -571,7 +570,7 @@ export class RigState {
    *   先把它变成**可断言的量**（`axisConflicts`），由 `tools/probe-axisown.ts`
    *   门禁要求默认路径下为 0。等它稳定为 0 之后就可以升级成硬拒收。
    *
-   *   这条不变量对应本轮的三次实测故障（见 `balance.ts` 顶部注释）：
+   *   这条不变量对应本轮的三次实测故障（见 `systems/balance.ts` 顶部注释）：
    *   `hip/1` 三写者、`requestHold` 双副本、消融工具说谎。
    */
   private readonly axisMode: number[] = [];       // 0=无 1=pos 2=tau
@@ -853,6 +852,22 @@ export class RigState {
   }
 
   /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
+  /**
+   * ★ 只读：某根轴当前**由谁在驱动**（`balance` / `step` / `bind` / `none`…）。
+   *
+   * 存在的理由：门禁 `probe:axisown` 的检查 E「每根被写过的轴都必须登记在
+   * `AXIS_OWNERSHIP`」需要读"这根轴有没有主人"，而 `tgt` 是 private ——
+   * 探针此前直接读 `rs.tgt`（private），且 `tools/` 长期不做类型检查，
+   *   所以"探针在戳私有成员"这件事一直没人管。
+   * 与其放宽 TS 的 private，不如给一个**文档化的只读口**。
+   *
+   * @param flatIndex 扁平轴索引（`joint * AXES_PER_JOINT + axis`）
+   */
+  axisOwner(flatIndex: number): string { return this.tgt[flatIndex]?.owner ?? 'none'; }
+
+  /** 轴总数（`joints.length * AXES_PER_JOINT`） */
+  get axisCount(): number { return this.nAxes; }
+
   snapshot(limitHit: boolean[] = []): RigSnapshot {
     const footL = this.soleX.l, footR = this.soleX.r;
     void footL; void footR;   // 仅遗留局部量，判定已统一到 frontLeg()

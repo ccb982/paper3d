@@ -56,7 +56,13 @@ export const MOS_TARGET = 0.30;
  *   成人、速度更低（McNair 2004）—— 婴儿式步态就是"慢、晃、每步都停一下"。
  *   默认 0.9 s ⇒ ≤1.1 步/秒（成人约 1.8~2.0 步/秒，所以这确实更"婴儿"）。
  */
-export const MIN_CYCLE = 1.0;
+// ★ 步态周期的唯一真源在 `gaitState.STEP_CYCLE_SEC`（ES 节拍目标），
+//   其安全**下限**在 `gaitState.DEFAULT_GAIT_CONFIG.stepIntervalSec`。
+//   这里只 import **常数**、不引入状态 ⇒ 对 ES 路径没有运行时耦合。
+import { STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG } from './gaitState';
+
+/** 步间隔的**下限**（s）：奖励的节律门用它当"太慢"的门槛。 */
+export const MIN_CYCLE = DEFAULT_GAIT_CONFIG.stepIntervalSec;
 /**
  * ★★ 最小离地高度（m）：一步必须真的把脚**抬起来**这么高才算数。
  *   为什么必需：`single`（权重 2.5）和 `lift`（1.0）原先只看"有没有一脚离地"，
@@ -66,8 +72,9 @@ export const MIN_CYCLE = 1.0;
  *   这里是位置型 PD 电机、又没有踝，取 3 cm 作为"确实抬了脚"的门槛。
  */
 export const MIN_CLEARANCE = 0.03;
-/** 目标步间隔（s）：与 MIN_CYCLE 同义，单独命名是为了让"节律门"读起来清楚 */
-export const TARGET_CYCLE = 1.0;
+/** 目标步间隔（s）：与 MIN_CYCLE 同义，单独命名是为了让"节律门"读起来清楚。
+ *  ★ 唯一真源见 `gaitState.STEP_CYCLE_SEC`（ES 节拍目标）与其下限。 */
+export const TARGET_CYCLE = STEP_CYCLE_SEC;
 
 /**
  * ★★ 节律门：按**实测**的步间隔给 0..1 分，偏离目标越远越接近 0。

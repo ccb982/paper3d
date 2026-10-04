@@ -87,7 +87,7 @@ const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
 /**
  * ★ 支撑腿"是否已确定"的**唯一判定处**。
  *
- *   此前 `latArmed` 在 balance.ts 里自己算一遍、相位机在 gaitState 再算一遍，
+ *   此前 `latArmed` 在 systems/balance.ts 里自己算一遍、相位机在 gaitState 再算一遍，
  *   两个系统各自判断 ⇒ 边界不清、行为无法解释。现在只有这里判。
  *
  * ── 判据修正（2026-10-03，曾造成循环依赖）──────────────────────

@@ -44,7 +44,6 @@ const posture = await import('../src/core/posture');
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);   // ★ 12 关节；BRAIN_SHAPE 是 9 关节的默认值
-const SHAPE = shapeForJoints(sk.joints.length);
 const GENS = Number(process.argv[3] ?? 20) || 20;
 const POP = Number(process.argv[4] ?? 24) || 24;
 const DUR = Number(process.argv[5] ?? 3.5) || 3.5;
