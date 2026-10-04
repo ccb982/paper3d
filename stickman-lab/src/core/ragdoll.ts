@@ -97,6 +97,21 @@ const LIMIT_SOFT_ZONE = 0.3;
 const AXIS_X = 0, AXIS_Y = 1, AXIS_Z = 2;
 
 /**
+ * ★ 限位**位置级投影**的回收速率（1/s）。20 ⇒ 时间常数 50 ms。
+ *
+ *   2026-10-04 新增。此前 `enforceLimits()` **只有速度级**：越界就归零 `wRel`，
+ *   归零后条件 `out>0 ? wRel>0 : wRel<0` 不再成立 ⇒ **限位永久失效**，
+ *   角度停在限位外、没有任何回复力。而 `RAPIER.JointData.revolute`
+ *   **默认没有角度限位**（只锁 5 自由度、放开 1 转动）⇒ 本函数是唯一的角度约束。
+ *   ⇒ 实测踝屈伸轴（轴2 = 绕 Z = 前视里脚长边的旋转方向）能转到 **±174°**、
+ *     越限 20~30% ⇒ 脚在前视图里侧翻 40~90°（用户 2026-10-04 亲手画的框证实），
+ *     这也是站不住的根本原因：支撑面朝向失控，平衡系统无从下手。
+ */
+const LIMIT_BIAS_RATE = 20;
+/** 位置级投影的最大回收角速度（rad/s），限制单步回收量防冲量爆炸 */
+const LIMIT_MAX_BIAS = 12;
+
+/**
  * ★ "真单支撑"判据的三个常数（控制与计分**共用**，见 `stanceIsSingleSupport`）。
  *
  * `STANCE_CLEAR_MIN = 0.03`：离地净空门槛。取 `stability.MIN_CLEARANCE` 的同一
@@ -1813,9 +1828,26 @@ export class Ragdoll {
         //     改成求和，方向反了。
         const Iax = this.jointIeff[i];
         const jv = this.iv;
-        // ── ① 速度级：仍在往越界方向走就精确抵消该轴相对角速度（恢复系数 e=0）
-        if (out > 0 ? wRel > 0 : wRel < 0) {
-          const J = -wRel * Iax;
+        // ── ① 速度级 + **位置级投影**（2026-10-04）
+        //
+        //   ⚠⚠ 此前这里**只有速度级**：`out>0 ? wRel>0 : wRel<0` 时把 `wRel` 归零
+        //   （恢复系数 e=0）。**越界后 `wRel` 被归零 ⇒ 下一子步条件不再成立
+        //   ⇒ 限位永久失效**，角度停在限位外、没有任何回复力。
+        //   而 `RAPIER.JointData.revolute` **默认没有角度限位**
+        //   （只锁 5 自由度、放开 1 转动）⇒ 本函数是唯一的角度约束。
+        //   ⇒ 踝屈伸轴（轴2 = 绕 Z = 前视里脚长边的旋转方向）能一路转到 ±174°、
+        //     越限 20~30% ⇒ 脚在前视图里侧翻 40~90°。
+        //
+        //   位置投影：给越界后的**目标角速度**一个指向限位内的偏置
+        //       w_target = −clamp(20·excess, 0, 12)     （时间常数 50 ms）
+        //   再把 `wRel` 驱到 `w_target`（而不是驱到 0）⇒ 关节被推回限位内。
+        //   ⚠ **不能沿用原来那个方向守卫**：有了目标角速度之后，
+        //     上侧限位（out=+1，需 `wRel` 变负）会因 `wErr > 0` 永不成立而**完全失效**。
+        const excess = out > 0 ? a2 - hi2 : lo2 - a2;          // 超出量（>0）
+        const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, LIMIT_MAX_BIAS);
+        const wErr = bias - wRel;
+        if (wErr > 1e-6 || wErr < -1e-6) {
+          const J = wErr * Iax;
           jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
           c.applyTorqueImpulse(jv, true);
           jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;

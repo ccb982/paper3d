@@ -431,13 +431,13 @@ export class Viewer {
         //   ⇒ 板面法线从 `+X`（正前）转到 `+Z`（左侧），靴子以**侧面**呈现，
         //   和 collider 长边落到前后向（`skeleton.ts` 的 `hx`/`hz`）配套。
         //   只作用于 `foot_l/foot_r`，其余板子（含手臂）一律单位四元数。
-        qYaw90: (b.key === 'foot_l' || b.key === 'foot_r')
-          ? new THREE.Quaternion().setFromAxisAngle(
-              new THREE.Vector3(0, 1, 0),
-              // 两只脚同时再转 180°（用户 2026-10-04：「现在是两个脚都反了，给两个脚同时转180」）
-              (b.key === "foot_l" ? 1 : -1) * Math.PI / 2,
-            )
-          : new THREE.Quaternion(),
+        // ★★★ 2026-10-04 去掉脚掌的 qYaw90（绕 Y 转 90°）—— 它把脚转成侧翻了。
+        //   实测：collider 长边(局部X) 世界 =(0.90,0.43) 指向前(+X) ✔ 物理正确；
+        //   而贴图板 X 轴 =(0.00,−1.00) 指向侧向 ✘、法线 =(1.00,0.00) 指向前 ⇒ 侧对相机。
+        //   根因：脚掌板是 `PlaneGeometry`（法线 +Z、宽沿 X 的**竖直平面**），
+        //   而 `qRestInv` **已经把** restYaw=−25°（外八）抵消掉了 ⇒ 板已是单位朝向、
+        //   法线 +Z 正对相机。此时再 Ry(±90°) 就是多转一次。
+        qYaw90: new THREE.Quaternion(),
       });
       this.scene.add(mesh);
     }
@@ -480,7 +480,11 @@ export class Viewer {
       for (const c of b.colliders) {
         if (c.shape !== 'cuboid') continue;
         const box = new THREE.Mesh(new THREE.BoxGeometry(c.hx * 2, c.hy * 2, c.hz * 2), boneMat);
-        box.position.set(0, c.offsetY, c.offsetZ);
+        // ★ 必须用 `c.offsetX`：脚掌拆成「前脚掌/脚跟」（柔性足后 4 块）时
+        //   它们的 offsetX 是 ±70mm，X 方向必须分开。原来写死 0 ⇒ 4 块全叠在 X=0，
+        //   画出一块 140×52×50mm 的板，而真实脚是 281mm 长 ⇒ 线框短一半、位置也错。
+        //   与 `ragdoll.ts` 的 `setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ)` 对应。
+        box.position.set(c.offsetX ?? 0, c.offsetY, c.offsetZ);
         box.renderOrder = 85;
         g.add(box);
       }
