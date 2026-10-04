@@ -264,6 +264,29 @@ export interface SkeletonConfig {
    */
   /** [低头(plantarflex, 蹬地/尖脚), 勾脚(dorsiflex, 脚跟先着地)]，单位度 */
   anklePitchDeg: readonly [number, number];
+  /**
+   * ★★ 踝**屈伸机械硬限位**（度），独立于素材的 `limitDeg`。
+   *
+   *   为什么需要（用户 2026-10-04：「需要给脚踝加限位，脚踝这个位置受力很大」）：
+   *     素材 `limitDeg` 给出的是**画出来的姿态范围**，不是**力学承载范围**。
+   *     实测：开VIP 踝刚度后（`K_a = 0.88·K_crit`），踝屈伸轴冲到 **−35°**，
+   *     而当时生效的限位只有 `[−10°, +18°]` ⇒ **超限 17°**。
+   *     而踝是**唯一**能把地面反力作用点（CoP）搬动的执行器，
+   *     它一旦被甩出去，CoP 就跟着跑到接触面外 ⇒ 脚翻 ⇒ 崴脚。
+   *     现实里踝之所以能扛住这么大力矩，是因为**副韧带/肌腱把活动度限死**、
+   *     且距骨滑车（trochlea）在背屈时**楔紧**（mortise 的几何锁定）。
+   *     ⇒ 这里给它一个**比素材更紧的硬限位**，模拟那个几何锁定。
+   *
+   *   取值按文献的踝 ROM 与本 rig 的力学需求：
+   *     · 背屈（勾脚，勾脚尖向下）**−12°** —— 略宽于素材的 −10°，
+   *       因为摆动相踝背屈要能跟住腿（Front Neurorob 2022：摆动相 ~7.2°，
+   *       蹬离相跖屈 ~17.2° ⇒ 背屈留到 −12° 足够）
+   *     · 跖屈（尖脚，蹬地）**+18°** —— 与素材一致，对应文献的 17.2°
+   *   ⇒ 总活动度 30°，而 VIP 刚度实测只需要约 12.5°（= τmax/K_a）⇒ **有余量**。
+   *
+   *   ⚠ 这**只限活动度，不限力矩**。力矩上限由 `ankleTorque`（默认 120N·m）管。
+   */
+  ankleLimitDeg: readonly [number, number];
   /** 内外翻余量（外八已经在静姿态偏航里） */
   ankleRollDeg: number;
   ankleTorque: number;
@@ -336,6 +359,9 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
   //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
   ankleTorque: 120,
+  // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
+  //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
+  ankleLimitDeg: [-12, 18],
   footUvWarpDeg: 0,
   // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
   //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
@@ -1330,8 +1356,12 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     const wz = mapZ(axPx, stanceHere);
 
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
-    const flexMin = jm.limitDeg[0] * DEG;
-    const flexMax = jm.limitDeg[1] * DEG;
+    // ★ 踝的屈伸限位改用 `cfg.ankleLimitDeg`（机械硬限位，见 SkeletonConfig 注释），
+    //   **不用**素材的 `limitDeg`：后者是画出来的姿态范围，实测会被力矩甩出去 −35°
+    //   （超素材限位 17°）⇒ 脚翻 / 崴脚。踝是唯一能搬 CoP 的执行器，必须锁死。
+    //   `isAnkle` 已在上方定义（按子刚体判定）
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
     // ★ 踝力矩上限：`cfg.ankleTorque`（A 方案核心参数，默认 45 太小，见 SkeletonConfig 注释）
     const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : (JOINT_MAX_TORQUE[name] ?? 100);
 
