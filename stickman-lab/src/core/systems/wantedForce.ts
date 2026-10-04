@@ -69,8 +69,6 @@ export interface WantedForceParams {
   kTrunkLean: number;
   /** 躯干侧倾产生的水平力限幅（N） */
   maxTrunkLean: number;
-  /** 躯干侧倾目标角限幅（rad） */
-  maxTrunkLeanRad: number;
 }
 
 export const DEFAULT_WANTED_FORCE: WantedForceParams = {
@@ -81,7 +79,7 @@ export const DEFAULT_WANTED_FORCE: WantedForceParams = {
   weight: 70 * 9.81,
   kTrunkLean: 0.35,
   maxTrunkLean: 250,
-  maxTrunkLeanRad: 0.14,
+
 };
 
 const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);

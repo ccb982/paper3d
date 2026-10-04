@@ -93,15 +93,30 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift', subordinateTo: 'latTransfer' },
-  { joint: 'spine', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
-  { joint: 'spine', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
-  { joint: 'ankle', axis: 2, role: 'ankleCop', mode: 'pos', channel: 'ankleCop' },
-  { joint: 'ankle', axis: 0, role: 'ankleCop', mode: 'pos', channel: 'ankleCop' },
+  // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
+  //   曾图省事写 `joint: 'spine'`，而 `axisRole()` 是精确匹配 ⇒ 永远查不到
+  //   ⇒ 门禁 E（"每根被写过的轴必须已登记"）直接把这 6 根轴报成未登记。
+  //   ⇒ **表看着权威、实际没接上**，这比没有表更坏。
+  { joint: 'spine1', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
+  { joint: 'spine2', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
+  { joint: 'spine3', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
+  { joint: 'spine1', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
+  { joint: 'spine2', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
+  { joint: 'spine3', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
 ]);
+
+/** 本 rig **没有**踝关节（`skeleton` 的关节表里不存在 `ankle_*`）。
+ *  踝 CoP 通道因此恒不执行（`jAnk = jointIndexByName('ankle_l') = -1`）。
+ *  保留这条说明是为了让"额状面没有踝通道"这个事实显式可见 ——
+ *  `AXIS_OWNERSHIP` 里**故意不列踝**，门禁 E 会因为踝没被写过而通过。
+ *  一旦骨架真的加了踝，必须同时在此登记，否则门禁 E 会报未登记。 */
+export const ANKLE_ABSENT = true;
 
 /** 取某轴的角色（供门禁与 UI 回读）。找不到 = 未登记 ⇒ 属于架构错误。 */
 export function axisRole(jointName: string, axis: number): AxisSpec | undefined {
-  return AXIS_OWNERSHIP.find((a) => a.joint === jointName && a.axis === axis);
+  const norm = jointName.replace(/_\w+$/, '');   // hip_l → hip、spine1 → spine1
+  return AXIS_OWNERSHIP.find((a) => a.joint === jointName)
+    ?? AXIS_OWNERSHIP.find((a) => a.joint === norm);
 }
 
 export interface BalanceParams {
@@ -206,15 +221,15 @@ export interface BalanceParams {
    *   ⇒ 与力的大小无关，是**分配位置**的问题。文献的主力就是髋。
    *
    *   为什么在挡位 I 不算双计：位置伺服在挡位 I 只驱动髋的**矢状轴 axis 2**，
-   *   **额状轴 axis 1 是空的** ⇒ 在这一轴上用力矩通道不与位置环重复。
-   */
-  kLatHip: number;
-  latHipDamp: number;
-  /** 横向等效力臂（m）：力矩 = F × 摆高。≈ 摆高的一半 */
-  latHipArm: number;
-  /** 力矩限幅（N·m）：文献需求 52、rig 上限 70 ⇒ 取 60 留裕度 */
-  maxLatHipTau: number;
-  /** 髋外展力矩死区（**N·m**，直接是力矩门限）。
+   *   **额状轴 HIP_ABD_AXIS 是空的** ⇒ 在这一轴上用力矩通道不与位置环重复。
+   *
+   * 📌 **已删除的手写侧向 P 律参数**（重构时清掉，留档以免再犯）：
+   *   `kLatHip`(500) / `latHipDamp`(60) / `latHipArm`(0.5) / `maxLatHipTau`(60)。
+   *   它们与 `τ = Jᵀ(F_lat)` 在**同一根轴**上并行 ⇒ 后者被完全盖掉，
+   *   `maxLateral` 因此变成**死参数**（80N→500N 结果逐位相同、τ 恒 30 N·m）。
+   *   现在侧向只有一条路：量级由 `maxLateral` 唯一决定、限幅由该轴 τmax 唯一决定。
+   *
+   * 髋外展力矩死区（**N·m**，直接是力矩门限）。
    *  ⚠ 原注释写的是「死区（m）」，但它被当力矩用 ⇒ 单位与语义不符。
    *  「不能太过」= 进死区就不推：交接只需 MoS ≥ 0，不需要把重心精确推到脚心。 */
   latHipDead: number;
@@ -307,15 +322,6 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    */
   torqueControl: false,
   lateralEnabled: false,
-  // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
-  // ⛔ `kLatHip`/`latHipDamp`/`latHipArm`/`maxLatHipTau`/`latHipDead` 已随那条
-  //   手写侧向 P 律一起删除（它抢占了 `hip/1`，把 `maxLateral` 变成死参数）。
-  //   侧向现在只由 `wantedForce` 的 `maxLateral` 决定，走 `Jᵀ(F_lat)`。
-  // 下面这几项仅为兼容旧配置保留，已不参与控制：
-  kLatHip: 500,
-  latHipDamp: 60,
-  latHipArm: 0.5,
-  maxLatHipTau: 60,
   latHipDead: 8,
   /**
    * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
@@ -594,7 +600,7 @@ export function balanceSystem(
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
       kTrunkLean: p.kTrunkLean,
-      maxTrunkLeanRad: p.maxTrunkLean,
+
       maxLateral: p.maxLateral,
     }, (ch: string) => {
       // ★★★ 两条控制路径**彻底互斥**，不允许半吊子状态：

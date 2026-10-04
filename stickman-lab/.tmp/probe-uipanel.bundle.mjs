@@ -19198,8 +19198,7 @@ var init_wantedForce = __esm({
       maxSagittal: 400,
       weight: 70 * 9.81,
       kTrunkLean: 0.35,
-      maxTrunkLean: 250,
-      maxTrunkLeanRad: 0.14
+      maxTrunkLean: 250
     };
     clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   }
@@ -19268,7 +19267,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
       kTrunkLean: p.kTrunkLean,
-      maxTrunkLeanRad: p.maxTrunkLean,
       maxLateral: p.maxLateral
     }, (ch) => {
       if (!p.torqueControl) return false;
@@ -19357,10 +19355,16 @@ var init_balance2 = __esm({
       { joint: "knee", axis: 2, role: "sagSupport", mode: "pos", channel: "knee" },
       { joint: "hip", axis: HIP_ABD_AXIS, role: "latTransfer", mode: "tau", channel: "lat" },
       { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift", subordinateTo: "latTransfer" },
-      { joint: "spine", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
-      { joint: "spine", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
-      { joint: "ankle", axis: 2, role: "ankleCop", mode: "pos", channel: "ankleCop" },
-      { joint: "ankle", axis: 0, role: "ankleCop", mode: "pos", channel: "ankleCop" }
+      // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
+      //   曾图省事写 `joint: 'spine'`，而 `axisRole()` 是精确匹配 ⇒ 永远查不到
+      //   ⇒ 门禁 E（"每根被写过的轴必须已登记"）直接把这 6 根轴报成未登记。
+      //   ⇒ **表看着权威、实际没接上**，这比没有表更坏。
+      { joint: "spine1", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine2", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine3", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine1", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine2", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine3", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" }
     ]);
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
@@ -19407,15 +19411,6 @@ var init_balance2 = __esm({
        */
       torqueControl: false,
       lateralEnabled: false,
-      // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
-      // ⛔ `kLatHip`/`latHipDamp`/`latHipArm`/`maxLatHipTau`/`latHipDead` 已随那条
-      //   手写侧向 P 律一起删除（它抢占了 `hip/1`，把 `maxLateral` 变成死参数）。
-      //   侧向现在只由 `wantedForce` 的 `maxLateral` 决定，走 `Jᵀ(F_lat)`。
-      // 下面这几项仅为兼容旧配置保留，已不参与控制：
-      kLatHip: 500,
-      latHipDamp: 60,
-      latHipArm: 0.5,
-      maxLatHipTau: 60,
       latHipDead: 8,
       /**
        * 额状水平力限幅（N）。**唯一需要的量级旋钮**。

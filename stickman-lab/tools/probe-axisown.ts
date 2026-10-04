@@ -21,6 +21,10 @@
  *     （这条就是抓 ② ③ 的那一条。）
  *  C. **无轴归属冲突**：默认路径与各挡位下 `snapshot.axisConflicts` 恒为空
  *     （抓 ①）。
+ *  D. **角色标签不闪**：20s 内 `loadBearer` / `isFront` 各切换 ≤ 3 次，
+ *     且不得同时出现"两条腿都承重""两条腿都是前腿""没有腿承重"。
+ *     （抓「同一决策多份实现」—— 承重腿曾有裸比较版、前腿曾在 `snapshot()`
+ *      里另写一份 `footL >= footR`，两者都无迟滞 ⇒ UI 标签逐帧闪。）
  *
  * 用法：node tools/run.mjs probe-axisown
  */
@@ -87,6 +91,8 @@ interface Result {
   tauAxes: number[];
   heldAxes: number[];
   conflicts: string[];
+  /** 实际被写过（位置或力矩）的轴，形如 `hip_l/0` */
+  written: string[];
 }
 
 function run(bal: Record<string, unknown>, secs: number): Result {
@@ -101,6 +107,7 @@ function run(bal: Record<string, unknown>, secs: number): Result {
   const tauAxes = new Set<number>();
   const heldAxes = new Set<number>();
   const conflicts = new Set<string>();
+  const written = new Set<string>();
   for (let i = 0; i < Math.round(secs * 120) && !sim.finished; i++) {
     if (i % 2 === 0) {
       sim.doll.setMotorTargets(ctrl.step(1 / 60));
@@ -112,6 +119,13 @@ function run(bal: Record<string, unknown>, secs: number): Result {
       for (const c of ctrl.snapshot.axisConflicts) {
         conflicts.add(`${c.joint}/${c.axis % 3} ${c.mode}←${c.by} vs ${c.against}`);
       }
+      // 实际被写过的轴（owner !== 'none'）：用来验证"每根被写的轴都在表里登记"
+      for (let k = 0; k < ctrl.rs.tgt.length; k++) {
+        const t = ctrl.rs.tgt[k]!;
+        if (t.owner === 'none' || t.owner === 'bind') continue;
+        const j = Math.floor(k / 3);
+        written.add(`${sk.joints[j]!.name}/${k % 3}`);
+      }
     }
     sim.advance(1);
     if (i % 6 === 0) yMin = Math.min(yMin, ctrl.snapshot.torsoY);
@@ -121,6 +135,7 @@ function run(bal: Record<string, unknown>, secs: number): Result {
     tauAxes: [...tauAxes].sort((a, b) => a - b),
     heldAxes: [...heldAxes].sort((a, b) => a - b),
     conflicts: [...conflicts],
+    written: [...written].sort(),
   };
 }
 
@@ -177,8 +192,71 @@ log('══ C. 轴归属冲突（默认路径与各挡位都应为 0）══');
 }
 
 log('');
+log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
+{
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS, driver: 'controller' });
+  sim.begin(new Float32Array(sim.params.length));
+  const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
+  let n = 0, swB = 0, swF = 0, pb = '', pf = '';
+  const viol: string[] = [];
+  for (let i = 0; i < Math.round(SECS * 120) && !sim.finished; i++) {
+    if (i % 2 === 0) {
+      sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      const s = ctrl.snapshot;
+      const L = s.legs.l, R = s.legs.r;
+      const b = String(s.loadBearer);
+      const f = L.isFront ? 'l' : 'r';
+      if (b !== pb) { swB++; pb = b; }
+      if (f !== pf) { swF++; pf = f; }
+      if (L.isBearer && R.isBearer) viol.push(`t=${(i / 120).toFixed(2)} 两条腿同时标承重`);
+      if (!L.isBearer && !R.isBearer) viol.push(`t=${(i / 120).toFixed(2)} 没有腿被标承重`);
+      if (L.isFront === R.isFront) viol.push(`t=${(i / 120).toFixed(2)} 两条腿同为主前`);
+      n++;
+    }
+    sim.advance(1);
+  }
+  log(`  ${SECS}s / ${n} 拍：承重腿切换 ${swB} 次，前腿切换 ${swF} 次`);
+  if (swB > 3) bad(`承重腿切换 ${swB} 次（>3）—— 迟滞没生效或存在第二份判据`);
+  else ok(`承重腿稳定（${swB} 次切换）`);
+  if (swF > 3) bad(`前腿切换 ${swF} 次（>3）—— snapshot() 与 frontLeg() 不是同一份实现`);
+  else ok(`前腿稳定（${swF} 次切换）`);
+  if (viol.length) bad(`角色一致性违例 ${viol.length} 条：${viol.slice(0, 2).join(' | ')}`);
+  else ok('角色一致性（承重/前后）无违例');
+}
+
+log('');
+log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══');
+{
+  // 用 `axisRole()` 查表：若某个轴被写了却查不到角色 ⇒ 归属表漏了它，
+  // 门禁就形同虚设（这正是"新加一条通道忘了登记"的典型失败方式）。
+  const { axisRole } = await import('../src/core/systems/balance');
+  const seenAxes = new Map<string, string>();
+  for (const [tag, bal] of [
+    ['挡位 I 默认', {}],
+    ['挡位 II 纯侧向 τ', { torqueControl: true, lateralEnabled: true }],
+    ['挡位 I + 骨盆抬升', { kPelvicLift: 0.06 }],
+  ] as [string, Record<string, unknown>][]) {
+    for (const w of run(bal, 8).written) {
+      const key = w.replace(/_[lr]$/, '');
+      if (!seenAxes.has(key)) seenAxes.set(key, tag);
+    }
+  }
+  const unregistered = [...seenAxes.keys()].filter((k) => {
+    const m = /^(\w+?)_?[lr]?\/(\d)$/.exec(k);
+    if (!m) return true;
+    return axisRole(m[1]!, Number(m[2])) === undefined;
+  });
+  log(`  实际写过的轴（去腿侧后）：${[...seenAxes.keys()].sort().join(', ')}`);
+  if (unregistered.length) {
+    bad(`这些轴被写了但没在 AXIS_OWNERSHIP 登记：${unregistered.join(', ')}`);
+  } else {
+    ok(`全部已登记（经 ${seenAxes.size} 根轴、3 种配置验证）`);
+  }
+}
+
+log('');
 if (fails) {
   log(`✗ 轴归属门禁失败 ${fails} 项`);
   process.exit(1);
 }
-log('★ 轴归属门禁全绿：每轴一个主人，全消融 == 零输出，无同轴异模式');
+log('★ 轴归属门禁全绿：每轴一个主人，全消融 == 零输出，无同轴异模式，角色标签不闪');

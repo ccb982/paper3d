@@ -18733,8 +18733,7 @@ var init_wantedForce = __esm({
       maxSagittal: 400,
       weight: 70 * 9.81,
       kTrunkLean: 0.35,
-      maxTrunkLean: 250,
-      maxTrunkLeanRad: 0.14
+      maxTrunkLean: 250
     };
     clamp = (v, m) => v > m ? m : v < -m ? -m : v;
   }
@@ -18743,6 +18742,7 @@ var init_wantedForce = __esm({
 // src/core/systems/balance.ts
 var balance_exports = {};
 __export(balance_exports, {
+  ANKLE_ABSENT: () => ANKLE_ABSENT,
   AXIS_OWNERSHIP: () => AXIS_OWNERSHIP,
   DEFAULT_BALANCE_PARAMS: () => DEFAULT_BALANCE_PARAMS,
   HIP_ABD_AXIS: () => HIP_ABD_AXIS,
@@ -18750,7 +18750,8 @@ __export(balance_exports, {
   balanceSystem: () => balanceSystem
 });
 function axisRole(jointName, axis) {
-  return AXIS_OWNERSHIP.find((a) => a.joint === jointName && a.axis === axis);
+  const norm = jointName.replace(/_\w+$/, "");
+  return AXIS_OWNERSHIP.find((a) => a.joint === jointName) ?? AXIS_OWNERSHIP.find((a) => a.joint === norm);
 }
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const sk2 = rs.sk;
@@ -18814,7 +18815,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
       kTrunkLean: p.kTrunkLean,
-      maxTrunkLeanRad: p.maxTrunkLean,
       maxLateral: p.maxLateral
     }, (ch) => {
       if (!p.torqueControl) return false;
@@ -18891,7 +18891,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.requestAngle(jAnk, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u8E1D\u989D\u72B6CoP");
   }
 }
-var HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT;
+var HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT;
 var init_balance2 = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -18903,11 +18903,18 @@ var init_balance2 = __esm({
       { joint: "knee", axis: 2, role: "sagSupport", mode: "pos", channel: "knee" },
       { joint: "hip", axis: HIP_ABD_AXIS, role: "latTransfer", mode: "tau", channel: "lat" },
       { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift", subordinateTo: "latTransfer" },
-      { joint: "spine", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
-      { joint: "spine", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
-      { joint: "ankle", axis: 2, role: "ankleCop", mode: "pos", channel: "ankleCop" },
-      { joint: "ankle", axis: 0, role: "ankleCop", mode: "pos", channel: "ankleCop" }
+      // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
+      //   曾图省事写 `joint: 'spine'`，而 `axisRole()` 是精确匹配 ⇒ 永远查不到
+      //   ⇒ 门禁 E（"每根被写过的轴必须已登记"）直接把这 6 根轴报成未登记。
+      //   ⇒ **表看着权威、实际没接上**，这比没有表更坏。
+      { joint: "spine1", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine2", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine3", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine1", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine2", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine3", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" }
     ]);
+    ANKLE_ABSENT = true;
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
@@ -18953,15 +18960,6 @@ var init_balance2 = __esm({
        */
       torqueControl: false,
       lateralEnabled: false,
-      // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
-      // ⛔ `kLatHip`/`latHipDamp`/`latHipArm`/`maxLatHipTau`/`latHipDead` 已随那条
-      //   手写侧向 P 律一起删除（它抢占了 `hip/1`，把 `maxLateral` 变成死参数）。
-      //   侧向现在只由 `wantedForce` 的 `maxLateral` 决定，走 `Jᵀ(F_lat)`。
-      // 下面这几项仅为兼容旧配置保留，已不参与控制：
-      kLatHip: 500,
-      latHipDamp: 60,
-      latHipArm: 0.5,
-      maxLatHipTau: 60,
       latHipDead: 8,
       /**
        * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
@@ -19267,6 +19265,7 @@ function run(bal, secs) {
   const tauAxes = /* @__PURE__ */ new Set();
   const heldAxes = /* @__PURE__ */ new Set();
   const conflicts = /* @__PURE__ */ new Set();
+  const written = /* @__PURE__ */ new Set();
   for (let i = 0; i < Math.round(secs * 120) && !sim.finished; i++) {
     if (i % 2 === 0) {
       sim.doll.setMotorTargets(ctrl.step(1 / 60));
@@ -19281,6 +19280,12 @@ function run(bal, secs) {
       for (const c of ctrl.snapshot.axisConflicts) {
         conflicts.add(`${c.joint}/${c.axis % 3} ${c.mode}\u2190${c.by} vs ${c.against}`);
       }
+      for (let k = 0; k < ctrl.rs.tgt.length; k++) {
+        const t = ctrl.rs.tgt[k];
+        if (t.owner === "none" || t.owner === "bind") continue;
+        const j = Math.floor(k / 3);
+        written.add(`${sk.joints[j].name}/${k % 3}`);
+      }
     }
     sim.advance(1);
     if (i % 6 === 0) yMin = Math.min(yMin, ctrl.snapshot.torsoY);
@@ -19291,7 +19296,8 @@ function run(bal, secs) {
     tauMax,
     tauAxes: [...tauAxes].sort((a, b) => a - b),
     heldAxes: [...heldAxes].sort((a, b) => a - b),
-    conflicts: [...conflicts]
+    conflicts: [...conflicts],
+    written: [...written].sort()
   };
 }
 var SECS = 20;
@@ -19338,8 +19344,73 @@ log("\u2550\u2550 C. \u8F74\u5F52\u5C5E\u51B2\u7A81\uFF08\u9ED8\u8BA4\u8DEF\u5F8
   }
 }
 log("");
+log("\u2550\u2550 D. \u89D2\u8272\u6807\u7B7E\u7A33\u5B9A\u6027\uFF08\u627F\u91CD\u817F / \u524D\u817F\u4E0D\u5F97\u95EA\uFF09\u2550\u2550");
+{
+  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS, driver: "controller" });
+  sim.begin(new Float32Array(sim.params.length));
+  const ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
+  let n = 0, swB = 0, swF = 0, pb = "", pf = "";
+  const viol = [];
+  for (let i = 0; i < Math.round(SECS * 120) && !sim.finished; i++) {
+    if (i % 2 === 0) {
+      sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      const s = ctrl.snapshot;
+      const L = s.legs.l, R = s.legs.r;
+      const b = String(s.loadBearer);
+      const f = L.isFront ? "l" : "r";
+      if (b !== pb) {
+        swB++;
+        pb = b;
+      }
+      if (f !== pf) {
+        swF++;
+        pf = f;
+      }
+      if (L.isBearer && R.isBearer) viol.push(`t=${(i / 120).toFixed(2)} \u4E24\u6761\u817F\u540C\u65F6\u6807\u627F\u91CD`);
+      if (!L.isBearer && !R.isBearer) viol.push(`t=${(i / 120).toFixed(2)} \u6CA1\u6709\u817F\u88AB\u6807\u627F\u91CD`);
+      if (L.isFront === R.isFront) viol.push(`t=${(i / 120).toFixed(2)} \u4E24\u6761\u817F\u540C\u4E3A\u4E3B\u524D`);
+      n++;
+    }
+    sim.advance(1);
+  }
+  log(`  ${SECS}s / ${n} \u62CD\uFF1A\u627F\u91CD\u817F\u5207\u6362 ${swB} \u6B21\uFF0C\u524D\u817F\u5207\u6362 ${swF} \u6B21`);
+  if (swB > 3) bad(`\u627F\u91CD\u817F\u5207\u6362 ${swB} \u6B21\uFF08>3\uFF09\u2014\u2014 \u8FDF\u6EDE\u6CA1\u751F\u6548\u6216\u5B58\u5728\u7B2C\u4E8C\u4EFD\u5224\u636E`);
+  else ok(`\u627F\u91CD\u817F\u7A33\u5B9A\uFF08${swB} \u6B21\u5207\u6362\uFF09`);
+  if (swF > 3) bad(`\u524D\u817F\u5207\u6362 ${swF} \u6B21\uFF08>3\uFF09\u2014\u2014 snapshot() \u4E0E frontLeg() \u4E0D\u662F\u540C\u4E00\u4EFD\u5B9E\u73B0`);
+  else ok(`\u524D\u817F\u7A33\u5B9A\uFF08${swF} \u6B21\u5207\u6362\uFF09`);
+  if (viol.length) bad(`\u89D2\u8272\u4E00\u81F4\u6027\u8FDD\u4F8B ${viol.length} \u6761\uFF1A${viol.slice(0, 2).join(" | ")}`);
+  else ok("\u89D2\u8272\u4E00\u81F4\u6027\uFF08\u627F\u91CD/\u524D\u540E\uFF09\u65E0\u8FDD\u4F8B");
+}
+log("");
+log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987B\u5728 AXIS_OWNERSHIP \u91CC\u767B\u8BB0 \u2550\u2550");
+{
+  const { axisRole: axisRole2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
+  const seenAxes = /* @__PURE__ */ new Map();
+  for (const [tag, bal] of [
+    ["\u6321\u4F4D I \u9ED8\u8BA4", {}],
+    ["\u6321\u4F4D II \u7EAF\u4FA7\u5411 \u03C4", { torqueControl: true, lateralEnabled: true }],
+    ["\u6321\u4F4D I + \u9AA8\u76C6\u62AC\u5347", { kPelvicLift: 0.06 }]
+  ]) {
+    for (const w of run(bal, 8).written) {
+      const key = w.replace(/_[lr]$/, "");
+      if (!seenAxes.has(key)) seenAxes.set(key, tag);
+    }
+  }
+  const unregistered = [...seenAxes.keys()].filter((k) => {
+    const m = /^(\w+?)_?[lr]?\/(\d)$/.exec(k);
+    if (!m) return true;
+    return axisRole2(m[1], Number(m[2])) === void 0;
+  });
+  log(`  \u5B9E\u9645\u5199\u8FC7\u7684\u8F74\uFF08\u53BB\u817F\u4FA7\u540E\uFF09\uFF1A${[...seenAxes.keys()].sort().join(", ")}`);
+  if (unregistered.length) {
+    bad(`\u8FD9\u4E9B\u8F74\u88AB\u5199\u4E86\u4F46\u6CA1\u5728 AXIS_OWNERSHIP \u767B\u8BB0\uFF1A${unregistered.join(", ")}`);
+  } else {
+    ok(`\u5168\u90E8\u5DF2\u767B\u8BB0\uFF08\u7ECF ${seenAxes.size} \u6839\u8F74\u30013 \u79CD\u914D\u7F6E\u9A8C\u8BC1\uFF09`);
+  }
+}
+log("");
 if (fails) {
   log(`\u2717 \u8F74\u5F52\u5C5E\u95E8\u7981\u5931\u8D25 ${fails} \u9879`);
   process.exit(1);
 }
-log("\u2605 \u8F74\u5F52\u5C5E\u95E8\u7981\u5168\u7EFF\uFF1A\u6BCF\u8F74\u4E00\u4E2A\u4E3B\u4EBA\uFF0C\u5168\u6D88\u878D == \u96F6\u8F93\u51FA\uFF0C\u65E0\u540C\u8F74\u5F02\u6A21\u5F0F");
+log("\u2605 \u8F74\u5F52\u5C5E\u95E8\u7981\u5168\u7EFF\uFF1A\u6BCF\u8F74\u4E00\u4E2A\u4E3B\u4EBA\uFF0C\u5168\u6D88\u878D == \u96F6\u8F93\u51FA\uFF0C\u65E0\u540C\u8F74\u5F02\u6A21\u5F0F\uFF0C\u89D2\u8272\u6807\u7B7E\u4E0D\u95EA");
