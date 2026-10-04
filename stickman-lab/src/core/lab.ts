@@ -24,8 +24,6 @@ export const LAB_VERSION = 'lab/2026-10-03-r1';
 
 /** 谁在驱动关节 */
 export type Driver =
-  /** ES 神经网络（`brainForward`，走 `Sim.controlTick`） */
-  | 'brain'
   /**
    * 手写控制器 = `Controller`（平衡系统 + 迈步系统 + `gaitState` 相位机）。
    *
@@ -37,6 +35,9 @@ export type Driver =
    *   · 但 `'teacher'` 这个**取值本身不能改** —— 它出现在用户可见的 URL
    *     （`?driver=teacher`）与 localStorage 里，改名会废掉已保存的链接。
    * ⇒ 保留 wire 值、改正文档。真正描述实现的名字是「手写控制器 / Controller」。
+   *
+   * ★ 2026-10-04：取值 `'brain'` **已删除**（ES 驱动路径整体移除，`Sim` 只剩
+   *   一个驱动者 `Controller`）⇒ `Driver` 现在是单取值类型。
    */
   | 'teacher';
 

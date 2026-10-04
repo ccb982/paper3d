@@ -59,7 +59,7 @@ const document = dom.window.document;
 
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 8, driver: 'controller' });
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 8 });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,

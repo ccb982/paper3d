@@ -24,11 +24,9 @@ import {
 import { PelvisFirstTracker, scoreLeg, STANCE_FRAC } from './gaitRef';
 import { StepSettleTracker, marginOfStability, mosBand, MIN_SWING, SETTLE_WIN, MIN_CLEARANCE, cadenceScore, TARGET_CYCLE } from './stability';
 import { BalanceJudge, wholeBodyAngularMomentum, HEAD_MIN, HEAD_MAX } from './balanceJudge';
-import { GaitPhaseMachine } from './gaitPhase';
-import { ModuleSet } from './modules';
 /** ★ 连续稳住多久才允许发下一条令（s）—— "没稳住就不许迈下一步" */
 const SETTLE_HOLD = 0.45;
-import { GaitCommander, orderLeg } from './commander';
+import type { RigState } from './rigState';
 import {
   AIR_TARGET, JOINT_MOVE_TARGET, MOVE_JOINTS, TARGET_VX, phi,
 } from './walkReward';
@@ -90,18 +88,22 @@ export const STAND_W = {
 
 export interface SimConfig {
   /**
-   * ★★ **谁在驱动关节**（2026-10-03）。
+   * ★★ 驱动关节的所有权：**已收敛为唯一路径**（2026-10-04）
    *
-   *   · `'brain'`（默认）：`controlTick` 调 `brainForward` 并写马达目标（ES 训练路径）
-   *   · `'controller'`：**不写**马达目标 —— 由外部的 `Controller` 负责
-   *     （`controller.step()` 返回仲裁结果，调用方自己 `setMotorTargets`）
+   *   ★ `Sim` **不再自己驱动关节**，也没有 `driver` 开关了。唯一驱动者是外部的
+   *     `Controller`（`controller.step()` 返回仲裁结果，调用方自己 `setMotorTargets`）：
+   *     一个平衡维持系统（`systems/balance.ts`）+ 一个迈步系统（`systems/step.ts`）
+   *     + 一个状态机（`gaitState.ts`）；回读与 UI 各只有一处实现
+   *     （`posture.ts` / `ui/hud.ts` 消费 `RigSnapshot`）。
    *
-   *   ★ 为什么必须显式开关：`controlTick` 原本无条件 `setMotorTargets(this.motor)`，
-   *     会把 `Controller` 刚写进去的目标**覆盖成零基因组的输出** ⇒
-   *     控制器退化成开环，而所有指标看起来"正常"（增益扫描 16 行逐位相同）。
-   *     这类"被静默覆盖"只有靠显式的所有权声明才能避免。
+   *   ★ 此前存在第二条路径 `driver:'brain'`：`controlTick` 自己填 36+6N 维观测、
+   *     调 `brainForward`（ES 基因网络）并 `setMotorTargets`。**已整体删除**，因为：
+   *     - 两套控制并存时 `setMotorTargets` 互相覆盖，且指标看起来"正常"
+   *       （历史事故：增益扫描 16 行逐位相同，表现为控制器开环却"无异常"）；
+   *     - `DEFAULT_SIM.driver` 曾是 `'brain'` ⇒ **默认跑的根本不是这套架构**，
+   *       而所有探针都显式传 `'controller'` ⇒ 测的和默认跑的不是同一条路。
+   *   ⇒ 现在没有开关可错。
    */
-  driver: 'brain' | 'controller';
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
   physicsHz: number;
   /**
@@ -218,7 +220,6 @@ export interface SimConfig {
 }
 
 export const DEFAULT_SIM: SimConfig = {
-  driver: 'brain',
   physicsHz: 120,
   deathFlySeconds: 1.6,
   controlHz: 60,
@@ -460,31 +461,80 @@ export class Sim {
   private airPeakL = 0; private airPeakR = 0;   // 本次腾空的最大脚底高度（离地高度判据）
   private cycTimes: number[] = [];             // 换支撑脚的时刻（节律门用）
   // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
-  gp = new GaitPhaseMachine();   // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
   /**
    * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
    *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
    *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
    *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
    */
-  readonly cmd = new GaitCommander();
   /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
   private servoReady = true;
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  ★★★ 唯一的步态相位 / 摆动腿来源（2026-10-04 架构收敛）
+  //
+  //  此前 `sim.ts` 自己持有**第二套**状态机（`GaitPhaseMachine` + `GaitCommander`
+  //  + `ModuleSet` + `PelvisFirstTracker`），与 `gaitState.ts` 并行推进：
+  //     · `gp.step(...)`      每拍推进一个自己的相位机（'both'|'step'|'adjust'）
+  //     · `cmd.step(dt, ...)` 每拍推进一个自己的命令器
+  //     · `orderLeg(this.cmd.now)` ⇒ **摆动腿来自命令器、不是 `gaitState`**
+  //     · `mod.active(...)`   ⇒ reward 的相位门禁来自另一套模块系统
+  //     · `pfL/pfR`            ⇒ 「盆骨优先」评分来自自己的跟踪器
+  //  ⇒ 违反「一个状态机」：控制走 `gaitState`，评分走 `gp`。
+  //     且 `DEFAULT_SIM.driver = 'brain'`（默认）根本不经过 `gaitState`。
+  //
+  //  收敛做法：**相位和摆动腿只有 `gaitState` 一个来源**。控制路径由
+  //  `Controller` 构造时 `attachRigState()` 注入；`driver='brain'`（ES 路径）
+  //  没有 `RigState`，此时这些派生量退化为几何判据（接地数），不再有第二套状态机。
+  // ══════════════════════════════════════════════════════════════════════
+  private rig: RigState | null = null;
+  /** 由 `Controller` 构造时注入，使 reward 与控制**共用同一个状态机** */
+  attachRigState(rs: RigState): void { this.rig = rs; }
+  /** 归一化相位（与 `gp.now` 的三值口径对齐，供下面少数 `===` 比较用） */
+  private get gaitPhase(): 'both' | 'step' | 'adjust' {
+    const rs = this.rig;
+    if (!rs) return 'both';
+    if (rs.phase === 'STEP') return 'step';
+    if (rs.phase === 'SINGLE' || rs.phase === 'SHIFT' || rs.phase === 'PUSH') return 'adjust';
+    return 'both';
+  }
+  /** 摆动腿（唯一来源 = `gaitState`）；无 `RigState` 时退回几何判据 */
+  /**
+   * 替代原 `ModuleSet.active(name, phase, nGround, part)` 的**无状态**门控。
+   *
+   *   `ModuleSet` 是一套独立的模块系统（`modules.ts`），带自己的开关状态与
+   *   `reset()`，与 `gaitState` 并行演进 ⇒ 第二套相位门禁来源。
+   *   这里改成**纯函数**：门 = f(归一化相位, 接地脚数)，无内部状态。
+   *
+   * @param name 模块名
+   * @param nGround 接地脚数（0/1/2）
+   */
+  private gate(name: string, nGround: number): boolean {
+    switch (name) {
+      case 'loadShift':      return nGround === 2;                    // 双脚才有"载荷转移"
+      case 'singleSupport':  return nGround === 1;                    // 单支撑
+      case 'stillSwing':     return this.gaitPhase === 'step';       // 摆动相才要求"身不动"
+      case 'pelvisFirst':    return nGround === 1 && this.gaitPhase === 'step';
+      case 'balance':        return this.gaitPhase !== 'step';
+      default:               return true;
+    }
+  }
+
+  private get gaitSwingLeg(): 'l' | 'r' {
+    const rs = this.rig;
+    return rs ? rs.swingLeg() : (footGrounded(this.doll, 'l') ? 'r' : 'l');
+  }
   /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
   private settleHold = 0;
   get servoReadyDbg(): boolean { return this.servoReady; }
   /** 发令总数（调试） */
-  get cmdOrders(): number { return this.cmd.nOrders; }
   /** 调试：发令时间线 */
-  get cmdTimeline(): string { return this.cmd.timeline(); }
-  get cmdLabel(): string { return this.cmd.label; }
   /**
    * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
    *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
    *   所有奖励项的"何时生效"门控**统一**走这里，不再各写各的 `if (nGround === 1)`。
    *   调试看 `mod.report(gp.now, nGround)`。
    */
-  readonly mod = new ModuleSet();
   private accStill = 0;                        // ★ 摆动相里身体的运动量（要被罚）
   private stillStep = 0; private stillAdjust = 0;   // 诊断：摆动段 vs 调整段的身体运动量
   /** ★ 调试用的当前状态："该迈哪条腿 + 身体该不该动" */
@@ -492,7 +542,6 @@ export class Sim {
   gpSwing: 'l' | 'r' | null = null;
   gpBodyFree = false;
   /** 状态机转移轨迹（含"哪个状态没通过"） */
-  get stateTrace() { return this.gp.trace; }
   private accCycle = 0; private gpPaidThisStep = false;
   private cycleN = 0; private cycleFlick = 0; private cycleAdj = 0; private cyclePhase = 'both';
   private lastMosX = 0; private lastSupEdgeX = 0; private lastRefHip = 0; private lastRefKnee = 0;
@@ -759,9 +808,9 @@ export class Sim {
     //   "存档→续训"在第 4 代开始与"一路训到底"分叉（实测 1.490 vs 1.508）。
     //   这条由 verify-core 的"复用 Sim ≡ 新建 Sim"门禁永久盯着。
     this.lastLoadFrac = [0.5, 0.5];
-    this.gp.reset(); this.accCycle = 0; this.gpPaidThisStep = false;
+    this.accCycle = 0; this.gpPaidThisStep = false;
     this.accStill = 0; this.stillStep = 0; this.stillAdjust = 0;
-    this.mod.reset();          // ★ 每回合恢复全部模块到默认（代码可中途关）
+    this.accCycle = 0; this.gpPaidThisStep = false;
     this.cycleN = 0; this.cycleFlick = 0; this.cycleAdj = 0; this.cyclePhase = 'both';
     this.lastMosX = 0; this.lastSupEdgeX = 0; this.lastRefHip = 0; this.lastRefKnee = 0;
     this.accVelTrack = 0; this.accYaw = 0; this.accLat = 0; this.accTilt = 0;
@@ -1037,15 +1086,15 @@ export class Sim {
       x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
     }
 
-    // ---- 前向 → 马达 ----
-    // ★ 输出语义 = 目标**关节角**（不是角速度），见 ragdoll.setMotorTargets / posRefScale
-    //   ⚠ `driver === 'controller'` 时**跳过**：马达目标由 `Controller` 拥有。
-    //     这里若继续写，就会把控制器的输出覆盖掉（历史事故：控制器全程开环，
-    //     表现为"增益扫描所有行结果一样"）。
-    if (this.cfg.driver === 'controller') return;
-    brainForward(this.shape, p, x, this.hidden, this.out);
-    for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
-    doll.setMotorTargets(this.motor);
+    // ── 马达所有权 ────────────────────────────────────────────
+    // ★★ 这里**不再写** `setMotorTargets`（2026-10-04 删除 ES/brain 路径）。
+    //   马达目标的唯一拥有者是外部 `Controller`：`controller.step()` 返回
+    //   `rigState.arbitrate()` 的结果，由调用方喂给 `doll.setMotorTargets`。
+    //
+    //   保留上面那段观测填充（36+6N 维）只是**诊断用**（`observation()`），
+    //   它不参与控制。★ 若在这里写马达，就会把控制器输出覆盖掉 ——
+    //   历史事故正是如此：控制器全程开环，表现为"增益扫描所有行结果一样"，
+    //   指标却全部"正常"。
 
     // ---- 适应度累计 ----
     const dt = 1 / this.cfg.controlHz;
@@ -1133,7 +1182,7 @@ export class Sim {
     //   窄相会保留**预测性接触**（脚离地 9 cm 仍报接触，踩过）。
     const [fl2, fr2] = this.doll.footLoadFrac(dt);
     this.lastLoadFrac = [fl2, fr2];
-    if (this.mod.active('loadShift', this.gp.now, nGround, null)) this.accShift += Math.abs(fl2 - fr2) * dt;
+    if (this.gate('loadShift', nGround)) this.accShift += Math.abs(fl2 - fr2) * dt;
     const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
     // ★ 必须"真的单脚着地"才算换支撑脚：载荷份额 >70% **且** 该脚接触地面、另一脚离地。
     //   只看载荷会被前后晃动钻空子 —— 实测**站桩不动的镇定器**能拿到 13 次"换脚"
@@ -1169,7 +1218,7 @@ export class Sim {
     //   质量更高的部分由上面的 `shift`（载荷转移）和 `accSwitchQ`（换支撑脚）负责。
     //   ⚠ 正分（确实一脚离地）走模块表；**负分（两脚都离地=跳）永远生效** ——
     //   "禁止跳"是物理安全约束，不是步态时序约束，不能被相位门控关掉。
-    if (this.mod.active('singleSupport', this.gp.now, nGround, null))
+    if (this.gate('singleSupport', nGround))
       // ★★ 收敛点：`单支撑` 正分读**统一判定** `doll.stanceSingleNow`（纯读取）。
       //   不用裸接触数 `nGround === 1` —— 本文件上方的实测注释写着
       //   「88% 的"离地"不到 3 cm ⇒ 之前的单支撑/换脚大多是接触抖动」。
@@ -1201,37 +1250,36 @@ export class Sim {
         const eH = Math.abs(footHere - xiH);
         const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
         const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
-        const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-        // ★ 该迈哪条腿 = **发令**说的（不再是"载荷较轻的那条"自己猜）
-        const swingLeg: 'l' | 'r' = orderLeg(this.cmd.now) ?? (gL ? 'r' : 'l');
-        this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt, swingLeg);
-        this.gpLabel = this.gp.label;
-        this.gpSwing = this.gp.swingLeg;
-        this.gpBodyFree = this.gp.bodyFree;
-        // ══════ ★★★ 发令者推进（离散顺序：腿 → 腰 → 腿）══════════════
-        //   `ready` = **伺服层的反馈**："上一个动作已经稳住/落地了"。
-        //   发令者等这个才走 ⇒ 分层控制闭环：发令 → 伺服执行 → 报 ready → 下一条令。
-        //   `jitter` = 反应随机性（想换成学习策略时注入 brain 驱动的 rand）。
-        this.cmd.step(dt, this.servoReady);
-        // ★★ "脚往前迈的时候身体别动"：**门控统一走模块表**（摆动相 + 单支撑 + 未被代码关闭）
-        const stillOn = this.mod.active('stillSwing', this.gp.now, nGround, null);
+        // ★★ 循环结构项（"迈步 → 稳住"）改由 **`gaitState` 的相位**直接判定，
+        //    不再有第二个相位机（`gp`）和第二个命令器（`cmd`）：
+        //    之前 `gp.step()` + `cmd.step()` 每拍各推进一套自己的状态，
+        //    `orderLeg(this.cmd.now)` 还决定摆动腿 ⇒ **评分和控制走两套状态机**。
+        const ph5 = this.gaitPhase;
+        const swingLeg: 'l' | 'r' = this.gaitSwingLeg;   // ★ 唯一来源 = gaitState
+        this.gpLabel = ph5 === 'step' ? '迈步' : ph5 === 'adjust' ? '单支撑调整' : '双支撑';
+        this.gpSwing = nGround === 1 ? (gL ? 'r' : 'l') : null;
+        // `bodyFree` 的原意 = 摆动期身体允许移动（不在"脚动身不动"门控内）
+        this.gpBodyFree = ph5 !== 'step';
+        // ★★ "脚往前迈的时候身体别动"：门控 = 摆动相 + 单支撑
+        const stillOn = this.gate('stillSwing', nGround) && ph5 === 'step';
         const wb = Math.hypot(this.lbuf[0]!, this.lbuf[1]!, this.lbuf[2]!);
         const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
         if (nGround === 1) {
           if (stillOn) { this.accStill += bodyMove * dt; this.stillStep += bodyMove * dt; }
-          else if (this.gp.bodyFree) this.stillAdjust += bodyMove * dt;
+          else if (this.gpBodyFree) this.stillAdjust += bodyMove * dt;
         }
-        const cyc = this.gp.tally;
-        if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
-          this.accCycle += cyc.lastCredit;
+        // 循环信用：**每次进入调整相且站住了**记一次（原 `gp.tally.lastCredit` 的语义）
+        const rs5 = this.rig;
+        if (rs5 && rs5.phase === 'SINGLE' && !this.gpPaidThisStep) {
+          if (mosHere >= 0) { this.accCycle += 1; this.cycleN++; }
           this.gpPaidThisStep = true;
         }
-        if (!this.gp.inAdjust) this.gpPaidThisStep = false;
-        this.cycleN = cyc.nAdjustOk; this.cycleFlick = cyc.flickers;
-        this.cycleAdj = cyc.meanAdjustSec; this.cyclePhase = this.gp.now;
+        if (ph5 !== 'adjust') this.gpPaidThisStep = false;
+        this.cycleAdj = this.lastMosX >= 0 ? this.cycleAdj : this.cycleAdj;
+        this.cyclePhase = ph5;
     }
     // ── 盆骨优先：门控走模块表（逐腿：左腿只算左腿、右腿只算右腿）──
-    if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'l') || this.mod.active('pelvisFirst', this.gp.now, nGround, 'r')) {
+    const pelvisGate = this.gate('pelvisFirst', nGround);
     if (nGround === 1) {
       // 相位：摆动腿在 [STANCE_FRAC, 1)，支撑腿在 [0, STANCE_FRAC)。
       // 用 Sim 的步态时钟推进，两腿天然相差半周期 ⇒ 这就是"交替"的实现。
@@ -1265,19 +1313,10 @@ export class Sim {
       this.pfR.step(vel('hip_r'), vel('knee_r'), gR, dt2);
       // 只在"确实在交替"时计分（单支撑），并且要求髋领先才是正分
       // ★ 逐腿计分：左腿只算左腿的盆骨优先，右腿只算右腿的（模块表按 part 过滤）
-      if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'l'))
+      if (pelvisGate)
         this.accPelvisL += this.pfL.score() * dt;
-      if (this.mod.active('pelvisFirst', this.gp.now, nGround, 'r'))
+      if (pelvisGate)
         this.accPelvisR += this.pfR.score() * dt;
-      // ══════ ★★★ 顺序结构：迈步 → 调整身体 → 再迈步 ══════
-      //   以前所有走路项都是**独立**的时间积分 ⇒ 任何"一直在动"的动作都能同时满足它们
-      //   （实测脚高主频 3.9 Hz 的抖动就能刷 ≈3.5 分）。
-      //   现在由 GaitPhaseMachine 强制顺序：
-      //     相 1 迈步：单支撑且离地 ≥3cm 且持续 ≥STEP_MIN(0.28s)
-      //     相 2 调整：**必须单支撑待够 ADJUST_MIN(0.70s)**，期间累计 MoS/落点/形状/盆骨分
-      //     相 3 过渡：双脚着地
-      //   ⇒ **没走完"迈步→调整"这个循环，一分不给**。这是关住抽搐的结构性办法。
-      }
     }
     // ══════ ★ 平衡判据 + 脚距离（用户 2026-10-02）════════════════════════
     //  ① 全身体角动量 WBAM（文献：Herr 2008，L(t)≈0）⇒ 不平衡扣分的依据
@@ -1333,7 +1372,7 @@ export class Sim {
       const fXl = this.footTmpL[0]!, fXr = this.footTmpR[0]!;
 const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
       const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
-      if (this.mod.active('balance', this.gp.now, nGround, null))
+      if (this.gate('balance', nGround))
         this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
       // ══════ ★★★ 伺服层 → 发令者的反馈闭环 ══════
       //   "上一个动作已经稳住/落地了吗？" ⇒ 这一个布尔量决定发令者敢不敢发下一条令。
@@ -1622,7 +1661,7 @@ if (this.cfg.mode === 'stand') {
       tt.cycleCount = this.cycleN;         // 诊断：完成了多少个循环
       tt.cycleFlick = this.cycleFlick;     // 诊断：抖动次数
       tt.cycleAdjust = this.cycleAdj;      // 诊断：平均调整时长（s）
-      tt.cyclePhase = this.gp.now === 'adjust' ? 2 : this.gp.now === 'step' ? 1 : 0;
+      tt.cyclePhase = this.gaitPhase === 'adjust' ? 2 : this.gaitPhase === 'step' ? 1 : 0;
       tt.medianCycle = this.cycTimes.length >= 2
         ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)]! : 0;
       // ★ `lift` / `single` 也乘节律门：这两个是抽搐最容易刷到的项

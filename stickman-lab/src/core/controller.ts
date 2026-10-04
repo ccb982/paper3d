@@ -55,6 +55,11 @@ export class Controller {
     this.rigReport = assertRigInvariants(sk, sim.shape);
     this.rs = new RigState(sk, cfg.rig);
     this.gait = new GaitState(this.rs, cfg.gait);
+    // ★★ 让 `Sim` 的 reward 与控制**共用同一个状态机**（架构收敛，2026-10-04）。
+    //   `sim.ts` 此前自持 `GaitPhaseMachine` + `GaitCommander` + `ModuleSet`
+    //   + `PelvisFirstTracker` 四套并行状态，逐拍推进 ⇒ 摆动腿、相位门禁、
+    //   循环信用全都不来自 `gaitState`。注入后 reward 的相位/摆动腿只有一个来源。
+    sim.attachRigState(this.rs);
     this.snapshot = this.rs.snapshot();
   }
 
@@ -99,10 +104,9 @@ export class Controller {
     //     ⇒ `controlTick` 不跑 ⇒ 那个唯一推进点不被执行 —— 所以这里不能只读，
     //     必须自己推一次（见下一行）。
     //   ⚠ 不直接用裸接触数：计分侧注释实测「88% 的离地不到 3 cm ⇒ 多是接触抖动」。
-    if (sim.cfg.driver !== 'controller') {
-      // 计分路径：`advance()` 已经推过了，这里不重复推
-      rs.stanceSingle = sim.doll.stanceSingleNow;
-    } else {
+    // ★ 2026-10-04：`driver` 开关已删除（唯一路径 = Controller）⇒ 无需分支，
+    //   一律由本函数自己推一次计分用的单支撑判定。
+    {
       // 控制路径：推进 + 读取，保证两条路径的判据同一份、且都在固定拍上推进
       sim.doll.stanceClearancePeak = Math.max(
         Math.max(0, sim.doll.soleY('l')), Math.max(0, sim.doll.soleY('r')),

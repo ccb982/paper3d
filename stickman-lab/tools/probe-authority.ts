@@ -72,7 +72,7 @@ function run(
   mode: 'torque' | 'angle',
   amount: number,
 ): Row {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller' });
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR });
   sim.begin(new Float32Array(sim.paramCount));
 
   // 控制器：只留垂直支撑（让身体别塌），把要测的通道换成恒定激励。

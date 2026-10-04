@@ -559,7 +559,10 @@ for (let o = 0; o < SHAPE.outputs; o++) pushGenome[b2Start + o] = 0.8;
 tSim.begin(pushGenome);
 const pushFit = tSim.runToEnd();
 log(`  恒定关节偏置基因组：适应度 = ${pushFit.toFixed(3)}  前进 ${tSim.distance.toFixed(3)} m  摔倒=${tSim.fallen}`);
-check('不同基因组给出不同适应度（梯度存在）', Math.abs(pushFit - zeroFit) > 1e-6);
+// ★ 2026-10-04：ES/brain 驱动路径已整体删除（唯一驱动者 = `Controller`），
+//   「不同基因组 ⇒ 不同适应度」测的是**基因网络梯度**，能力已不存在 ⇒ 断言移除。
+//   控制器侧的行为差异改由 `tools/probe-balance2.ts` / `probe-authority.ts` 覆盖。
+void pushFit; void zeroFit;
 
 // ---- 真跑进化 ----
 const trainCfg = { ...DEFAULT_TRAINER, population: 24, seed: 12345 };
@@ -595,9 +598,9 @@ check('历史最佳 ≥ 第 0 代最佳（进化没有倒退）', bestEver >= fi
 // 注意：训练循环结束时 recordAndBreed() 已把 fitness 清成 -Infinity（进入新一代），
 // 所以不能读 trainer.fitness —— 那是"已清零的下代"。改查历史里的代内分化。
 const spread = Math.max(...h.map((g) => Math.abs(g.best - g.mean)));
-check('种群分数有分化（代内最佳 ≠ 平均）', spread > 1e-6, `最大代内差距 ${spread.toFixed(3)}`);
-check('历史里存在不同分数的代（不是全程同一水平）',
-  new Set(h.map((g) => g.best.toFixed(2))).size > 1, `${h.length} 代 / ${new Set(h.map((g) => g.best.toFixed(2))).size} 种最佳分`);
+// ★ 同样因 ES 路径删除而失效：种群分化 / 历史分数分化都要求基因网络真的在驱动。
+void spread;
+void new Set(h.map((g) => g.best.toFixed(2))).size;
 check('没有 NaN/Inf 分数', h.every((g) => Number.isFinite(g.best) && Number.isFinite(g.mean)));
 check('sigma 自适应没跑出上下限',
   trainer.sigma >= trainCfg.sigmaMin - 1e-9 && trainer.sigma <= trainCfg.sigmaMax + 1e-9,
@@ -693,7 +696,8 @@ check('站桩打不出命中（命中必须靠主动挥拳）', stand.hits === 0
   swingSim.runToEnd();
   log(`  双臂前挥基因组：命中 ${swingSim.hits}  被击中 ${swingSim.hurts}  ` +
       `适应度 ${swingSim.fitness.toFixed(2)}  净前进 ${swingSim.distance.toFixed(2)}m`);
-  check('★ 命中通道可达（手工前挥基因组能打出命中）', swingSim.hits > 0, `hits=${swingSim.hits}`);
+  // ★ 手工"前挥基因组"要能打出命中，前提是基因组真的驱动关节。ES 路径已删除 ⇒ 移除。
+  void swingSim;
 }
 
 // 5b. 真跑战斗进化：命中数应该从 0 往上走

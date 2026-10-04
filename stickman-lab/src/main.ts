@@ -60,7 +60,7 @@ const hud = new Hud({
   onRespawn: () => {
     if (!booted) return;
     // ★ teacher 驱动下，光 begin() 不够 —— 会话状态（闩锁/计时）也要清
-    if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+    resetSession();
   },
   onExport: () => { if (booted) doExport(); },
   onImport: () => { if (booted) doImport(); },
@@ -73,18 +73,18 @@ const hud = new Hud({
   onBudget: (v) => { state.budgetMs = v; },
   onSpeed: (v) => { state.speed = v; },
   onPhase: (m) => { if (booted && m !== state.mode) rebuild(m); },
-  // ★ 切驱动源：teacher ⇄ ES 大脑。调平衡维持系统时必须切到 teacher ——
-  //   否则网页渲染的是大脑输出，你在 balanceHold.ts 里的改动在网页上看不到。
-  onDriver: (d) => {
+  // ★ 2026-10-04：ES/brain 驱动路径已删除，`Driver` 只剩 `'teacher'` 一个取值，
+  //   `Sim` 的唯一驱动者是 `Controller` ⇒ 这个切换回调退化为「(重)建控制器会话」。
+  onDriver: () => {
     if (!booted) return;
-    state.driver = d; session = null;
-    if (d === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+    session = null;
+    resetSession();
   },
   onSingleLeg: (side: 'l' | 'r', liftHold: number) => {
     if (!booted) return;
     state.startBearer = side; state.liftHold = liftHold;
     session = null;
-    if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+    resetSession();
   },
   onDur: (d) => { if (!booted || Math.abs(d - state.dur) < 1e-6) return; state.dur = d; rebuild(state.mode); },
   // ★ 步态奖励可调项：直通到 Trainer（转发给整代 Sim，下一 tick 生效）
@@ -195,13 +195,13 @@ let stepsPerSec = 0;
 let session: Controller | null = null;
 
 /**
- * ★ 重建控制器。`Sim` 必须以 `driver:'controller'` 跑，
- *   否则 `controlTick` 会把控制器的马达目标覆盖成零基因组的输出
- *   （历史事故：控制器全程开环，表现为"增益扫描所有行结果一样"）。
+ * ★ 重建控制器。★ 2026-10-04 起 `Sim` **只有一个驱动者**（`Controller`），
+ *   `driver` 开关与 ES/brain 路径已整体删除 ⇒ 这里不再需要设置 `cfg.driver`。
+ *   （历史事故记录：`controlTick` 曾无条件 `setMotorTargets`，把控制器输出覆盖成
+ *    零基因组，表现为"控制器全程开环、增益扫描所有行结果一样"却指标全正常。）
  */
 function resetSession(): void {
   showcase.begin(trainer.showcase());
-  showcase.cfg.driver = 'controller';
   session = new Controller(sk, showcase, {
     ...DEFAULT_CONTROLLER,
     gait: { ...DEFAULT_CONTROLLER.gait, startBearer: state.startBearer, liftHold: state.liftHold },
@@ -223,23 +223,17 @@ function frame(now: number): void {
 
     // ---- 展示个体：按真实时间推进（受播放速度倍率控制） ----
     const want = Math.max(1, Math.round(dt * DEFAULT_SIM.physicsHz * state.speed));
-    if (state.driver === 'teacher') {
-      if (!session) resetSession();
-      // 每个控制拍跑一次控制器，其余物理步只推进
-      const cdt = 1 / showcase.cfg.controlHz;
-      const per = Math.max(1, Math.round(1 / showcase.cfg.physicsHz / cdt));
-      for (let k = 0; k < Math.max(1, Math.round(want / per)); k++) {
-        if (showcase.finished) { resetSession(); break; }
-        const out = session!.step(cdt);
-        showcase.doll.setMotorTargets(out);
-        session!.soleClearance('l'); session!.soleClearance('r');
-        for (let q = 0; q < per; q++) showcase.advance(1);
-      }
-    } else {
-      session = null;
-      showcase.cfg.driver = 'brain';
-      showcase.advance(want);
-      if (showcase.finished) showcase.begin(trainer.showcase());
+    // ★ 唯一驱动路径：`Controller`（平衡系统 + 迈步系统 + `gaitState`）。
+    //   每个控制拍跑一次控制器，其余物理步只推进。
+    if (!session) resetSession();
+    const cdt = 1 / showcase.cfg.controlHz;
+    const per = Math.max(1, Math.round(1 / showcase.cfg.physicsHz / cdt));
+    for (let k = 0; k < Math.max(1, Math.round(want / per)); k++) {
+      if (showcase.finished) { resetSession(); break; }
+      const out = session!.step(cdt);
+      showcase.doll.setMotorTargets(out);
+      session!.soleClearance('l'); session!.soleClearance('r');
+      for (let q = 0; q < per; q++) showcase.advance(1);
     }
   }
 
@@ -313,7 +307,7 @@ function wireKeyboard(canvas: HTMLCanvasElement): void {
     }
   });
   canvas.addEventListener('dblclick', () => {
-    if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+    resetSession();
   });
 }
 
@@ -387,7 +381,7 @@ function tryRestore(): boolean {
     const s = unpackSession(text, SHAPE, trainer.paramCount, trainer.population);
     if (s.mode !== state.mode) return false;             // 模式不同就不自动加载
     trainer.restore(s);
-    if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+    resetSession();
     lastSavedGen = trainer.gen;
     hud.setStatus(`已从存档恢复：gen ${trainer.gen} · σ=${trainer.sigma.toFixed(4)}`
       + ` · 历史最优 ${trainer.bestEverFitness.toFixed(2)}`);
@@ -422,7 +416,7 @@ function doImport(): void {
       try {
         const s = unpackSession(text, SHAPE, trainer.paramCount, trainer.population);
         trainer.restore(s);
-        if (state.driver === 'teacher') resetSession(); else showcase.begin(trainer.showcase());
+        resetSession();
         lastSavedGen = trainer.gen;
         autosave(true);
         hud.setStatus(`已导入训练会话：gen ${s.gen} · σ=${s.sigma.toFixed(4)}`

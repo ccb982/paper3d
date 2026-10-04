@@ -46,7 +46,13 @@ export interface HudHooks {
 export interface HudState {
   paused: boolean;
   mode: 'walk' | 'fight' | 'stand';
-  driver: 'brain' | 'teacher';
+  /**
+   * ★ 历史遗留的 UI 名（`main.ts` 的 `?driver=teacher` 与 localStorage 里都用它）。
+   *   `'teacher'` 指的是**手写控制器会话**，不是被删除的 ES teacher。
+   *   ★ 2026-10-04：`Sim` 只剩一个驱动者（`Controller`），ES/brain 路径已删除
+   *   ⇒ `'brain'` 这个取值不再有对应实现，保留仅为旧 URL/localStorage 兼容。
+   */
+  driver: 'teacher';
   /** 起始支撑腿。**不是"模式开关"** —— 相位机是唯一的单腿概念（见 GaitConfig.startBearer） */
   startBearer: 'l' | 'r';
   gen: number;

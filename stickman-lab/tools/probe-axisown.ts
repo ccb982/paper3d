@@ -98,7 +98,7 @@ interface Result {
 }
 
 function run(bal: Record<string, unknown>, secs: number): Result {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: secs, driver: 'controller' });
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: secs });
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
@@ -149,7 +149,7 @@ log('');
 log('══ B. 零输出等价（全消融 ⇒ 逐轴 τ≡0、让位≡0、且站得住）══');
 {
   // 参照：完全不经过 Controller，直接喂零目标
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS, driver: 'controller' });
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS });
   sim.begin(new Float32Array(sim.paramCount));
   const z = new Float32Array(sk.joints.length * 3);
   let yRef = 9;
@@ -198,7 +198,7 @@ log('══ C. 轴归属冲突（默认路径与各挡位都应为 0）══');
 log('');
 log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
 {
-  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS, driver: 'controller' });
+  const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS });
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
   let n = 0, swB = 0, swF = 0, pb = '', pf = '';
@@ -291,7 +291,9 @@ log('══ F. 唯一性：相位 / 角色标签只有一份定义 ══');
   for (const f of files) {
     if (!fs.existsSync(f)) continue;
     const s = read(f);
-    const n = (s.match(/\brs\.(phase|phaseT|locked)\w*\s*=/g) || []).length;
+    // ⚠ `\s*=` 会把**比较** `rs.phase === 'STEP'` 也算成写入（`===` 的首字符就是 `=`）
+    //   ⇒ 必须排除 `==` / `===` / `=>`，只认真赋值。
+    const n = (s.match(/\brs\.(phase|phaseT|locked)\w*\s*=(?![=>])/g) || []).length;
     if (n) writers.add(`${f}(${n})`);
   }
   const nonGs = [...writers].filter((w) => !w.startsWith('src/core/gaitState.ts'));
@@ -416,18 +418,36 @@ log('══ H. 步态周期只有一个真源，且「下限 ≤ 目标」══
   if (floor <= STEP_CYCLE_SEC) ok(`不变式成立：下限 ${floor} ≤ 目标 ${STEP_CYCLE_SEC}`);
   else bad(`矛盾：下限 ${floor}s > 目标 ${STEP_CYCLE_SEC}s（ES 会被安全下限绑住，反之亦然）`);
 
-  // H3：commander 的默认节拍必须是真源（不是硬写 1.6）
-  const cmdS = read('src/core/commander.ts');
-  if (/stepPeriod:\s*STEP_CYCLE_SEC/.test(cmdS)) ok('commander 默认节拍引用真源');
-  else if (/stepPeriod:\s*[\d.]+/.test(cmdS)) {
-    const m = /stepPeriod:\s*([\d.]+)/.exec(cmdS)!;
-    bad(`commander 仍硬写 stepPeriod=${m[1]}，未引用 STEP_CYCLE_SEC`);
-  } else bad('commander 的 stepPeriod 找不到');
+  // ── H3（2026-10-04 架构收敛后重写）──────────────────────────────
+  //   原来查 `commander.ts` 的 `stepPeriod` 是否引用 `STEP_CYCLE_SEC`。
+  //   `commander.ts` / `gaitPhase.ts` / `modules.ts` 三个**并行状态机文件已删除**
+  //   （sim.ts 曾自持 `GaitPhaseMachine` + `GaitCommander` + `ModuleSet`，
+  //     与 `gaitState.ts` 并行逐拍推进 ⇒ 摆动腿/相位门禁/循环信用三处判据分叉）。
+  //   ⇒ 现在检查「**相位只有 gaitState 一个来源**」这条更强的架构不变式。
+  const simS = read('src/core/sim.ts');
+  const parallelImports = ['gaitPhase', 'commander', 'modules'].filter(
+    (m) => new RegExp(`from\s*'\./${m}'`).test(simS),
+  );
+  if (parallelImports.length === 0) ok('sim.ts 不再 import 任何并行状态机模块');
+  else bad(`sim.ts 仍 import 并行状态机：${parallelImports.join(', ')}`);
+
+  if (/this\.gp|this\.cmd|this\.mod/.test(simS)) {
+    bad('sim.ts 仍持有并行状态机实例（this.gp / this.cmd / this.mod）');
+  } else ok('sim.ts 无并行状态机实例');
+
+  if (/attachRigState/.test(simS) && /attachRigState\(this\.rs\)/.test(read('src/core/controller.ts'))) {
+    ok('reward 的相位/摆动腿来源 = gaitState（Controller 注入 RigState）');
+  } else bad('sim.ts 未接入 gaitState 的 RigState —— 相位仍有两套来源');
+
+  // 步态周期真源仍在 gaitState
+  if (/export const STEP_CYCLE_SEC/.test(read('src/core/gaitState.ts'))) {
+    ok('步态周期真源 STEP_CYCLE_SEC 在 gaitState.ts');
+  } else bad('STEP_CYCLE_SEC 不在 gaitState.ts');
 
   // H4：ES 路径只能 import **常数**，不得引入控制侧状态（否则两条路径耦合）
-  const cmdStateImports = /import\s*\{[^}]*GaitState[^}]*\}\s*from\s*'\.\/gaitState'/.test(cmdS);
+  const simStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(simS);
   const stabStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(read('src/core/stability.ts'));
-  if (cmdStateImports || stabStateImports) {
+  if (simStateImports || stabStateImports) {
     bad('ES 路径 import 了控制侧的 GaitState 类 —— 只允许 import 常数');
   } else {
     ok('ES 路径只 import 常数（无运行时耦合）');

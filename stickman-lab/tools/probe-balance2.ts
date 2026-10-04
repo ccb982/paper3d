@@ -52,7 +52,7 @@ const log = console.log;
 //   AGF=1 → 终躯干高 1.421m、倾角 9.9°；AGF=6 → 终躯干高 0.613m、倾角 23.7°。
 //   这个非 1 的默认值曾把「站不住」误判成控制器/交接的问题。
 const AGF = Number(process.env.AGF ?? 1) || 1;
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller',
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, 
   doll: { ankleGroundFactor: AGF } });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
