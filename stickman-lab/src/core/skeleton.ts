@@ -1092,10 +1092,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //   （152px），而实测踝锚点 2792 正落在最宽处，所以断口只能按踝线定。
           // ★ 对齐（用户 2026-10-04）：脚部刚体与贴图都以**踝线像素中心**为轴，
           //   腿的 `centerZ`（膝轴）保持不动 —— 用户明确「和膝关节没关系」。
-          //   ⚠⚠ **物理位置必须留在小腿中线**（用户 2026-10-04：「脚部关节中线没对准
-          //   小腿中线导致站不起来」）。踝关节偏离小腿轴 51mm 时脚踩不到支撑域中心，
-          //   站立直接失败。像素轴只用于**贴图**（`plateOffset.z`），不参与物理。
-          cz: centerZ,
+          cz: mapZ(spec.key === 'shin_l' ? 447.5 : 1087.0, true),
           restTiltRad: fTilt,
           restYawRad: fYaw,
           // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
@@ -1125,12 +1122,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           plateOffset: [
             0,
             (anklePx[1] - part.cy) * px2m - (spec.key === 'shin_l' ? 0.0069 : 0.0061),
-            // ★★ 两块板是**同一张贴图**的互补裁剪，所以贴图偏移必须**沿用小腿的
-            //   `plateOffset`**（含 z），否则接缝横向错开 ⇒ 脚看起来脱离小腿
-            //   （实测错位 −33.6mm 左 / +19.4mm 右）。
-            //   `plateOffset` 只影响渲染，**不参与物理**，所以这样对齐踝线像素轴
-            //   不会动踝关节位置，站姿不受影响。
-            plateOffset[2],
+            0,   // 脚掌体已落在踝线像素轴上 ⇒ 贴图 Z 向无需再偏
           ],
           plateUv: footUv,
           length: soleDrop,
