@@ -811,6 +811,7 @@ export class Sim {
         this.doll.driveMotors(this.dt);
         this.world.step();
         this.doll.enforceLimits();
+        this.doll.primeVelocities();   // ★ 同上：死亡演出也要维持力链
         if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
         this.deathLeft--; n++;
       }
@@ -827,6 +828,20 @@ export class Sim {
       //   我们在冲量层自己做。若放在 driveMotors（= world.step 之前），
       //   求解器在步内产生的接触响应看不见 ⇒ 踝实测跑到 +96.5°（限位 +18°）。
       this.doll.enforceLimits();
+      // ★★ 采一帧速度，供 `Ragdoll.jointForce` 做**窗口差分**（2026-10-04 补）。
+      //
+      //   为什么必须在这里：`jointForce` 算的是「子树净力 = m·(a_com − g)」，
+      //   其中 a_com 要用**N 步之前**的速度做差分（VEL_WIN=5 步 ≈ 42ms，
+      //   单步差分会把落地冲击读成 109 kN）。写环的**唯一**入口是
+      //   `primeVelocities()`，而它此前**从不被调用** ⇒ `velFrames` 永远
+      //   < VEL_WIN ⇒ `velOld()` 一直返回 null ⇒ `jointForce` **整条力链
+      //   全部返回 0**（连子树质量都是 0）。
+      //
+      //   ⇒ `controller.ts:178` 写进 `rigState.forceBuf` 的一直是全零，
+      //   HUD 的自下而上力链一直在显示**假数据**（"没力"而不是"接口坏了"）。
+      //
+      //   位置 = `world.step()` 之后（契约如此，且要看到接触响应后的速度）。
+      this.doll.primeVelocities();
       // ★ 虚拟支撑点：让踝获得 CoP 权限（踝策略=CoP策略，文献里的主力通道）。
       //   此前踝指令对动力学零效力，根因是刚性平底盒把压力中心锁死。
       if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);

@@ -337,7 +337,12 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
   ankleTorque: 120,
   footUvWarpDeg: 0,
-  ankleEnabled: false,
+  // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
+  //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
+  //   DEFAULT_LAB.ankle = true）有踝，所有探针/默认配置都建成 12 关节无踝骨架。
+  //   ⚠ 踝提供的是**转向**（roll/pitch/twist 三轴）+ 足底 CoP 权限；
+  //     额状面平衡的主动力仍在髋（Winter 1995 [H]：并立站位 M/L 归髋不归踝）。
+  ankleEnabled: true,
 };
 
 // ---------------------------------------------------------------- 环节规格
