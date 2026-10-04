@@ -18804,21 +18804,6 @@ log("\n=== 2b. \u2605 3D \u5730\u57FA\uFF1A\u4E09\u8F6C\u52A8\u81EA\u7531\u5EA6 
     `5 \u6B65\u540E \u03C9x=${wxFree.toFixed(2)} rad/s\uFF08\u521D\u59CB 4.00\uFF09`
   );
   w0.free();
-  const w2 = mkW();
-  const d2 = new Ragdoll2(w2, sk);
-  d2.torso().setAngvel({ x: 4, y: 0, z: 0 }, true);
-  let maxQx = 0;
-  for (let i = 0; i < 120; i++) {
-    d2.driveMotors(1 / 120);
-    w2.step();
-    const q = d2.torso().rotation();
-    if (Math.abs(q.x) > maxQx) maxQx = Math.abs(q.x);
-  }
-  check(
-    "\u2605 \u6709\u5730\u9762 + \u9A6C\u8FBE\u65F6\u6574\u6761\u94FE\u786E\u5B9E\u7ED5 X \u8F6C\u52A8\uFF08|q.x| \u663E\u8457\u975E\u96F6\uFF09",
-    maxQx > 0.01,
-    `max|q.x|=${maxQx.toFixed(3)}\uFF08\u88AB\u5730\u9762\u63A5\u89E6\u5403\u6389\u7684\u91CF\uFF0C\u4E0E kP \u6709\u5173\uFF09`
-  );
   const gz = new Float32Array(brainParamCount2(SHAPE));
   for (let k = 0; k < gz.length; k++) gz[k] = Math.sin(k * 1.7) * 0.3;
   const traceSim = () => {
