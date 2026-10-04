@@ -595,13 +595,28 @@ var DEFAULT_CONFIG = {
    */
   //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
+  // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+  footCropUpMm: 0.123,
+  footCropOverlapMm: 0.01,
+  // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+  footCropOverlapFrac: 0.1,
+  soleGroundCorr: 0,
+  soleSplit: true,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
   footSplayDeg: 25,
   // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
   anklePitchDeg: [0, 0],
   ankleRollDeg: 0,
-  ankleTorque: 45,
+  // ★★ 踝力矩上限（N·m）。原来 45 —— **解剖学上错了近 3 倍**。
+  //   文献：踝跖屈（比目鱼肌+腓肠肌）是人体最大的肌群，年轻人最大自主收缩
+  //   ~110~140 N·m（Noble & Norkowitz；Winter 1990 的踝策略力矩同量级）。
+  //   45 经 TORQUE_AXIS_FACTOR 后三轴只有 27/15.8/45 N·m ⇒
+  //     · 蹬离做不出来（实测 PUSH 相膝已 150/150 打满而踝只有 27）
+  //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
+  //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
+  //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
+  ankleTorque: 120,
   footUvWarpDeg: 0,
   ankleEnabled: false
 };
@@ -802,6 +817,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       inertiaZ: mainIz,
       inertiaXY: mainIz * 0.5
     });
+    let shinPlateUv;
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const sfx = Math.max(0.1, cfg.soleFootScale);
@@ -809,8 +825,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
       const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
-      const hx = soleHalfLen * sfx;
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = hx * 0.3;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -820,42 +838,89 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fTilt = 0;
         const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const plateH = part.bh * px2m;
+        const cutFrac = (() => {
+          const texTopPx = part.cy - part.bh / 2;
+          const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+          return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
+        })();
+        const slack = Math.min(
+          0.25,
+          Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac)
+        );
+        const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+        const shinY = Math.max(0, cutFrac - slack);
+        shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
           label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
           part,
-          // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          // 贴图仍借小腿那张（下面裁出靴子那块）
           cx: 0,
           cy: ankleY,
-          cz: ankleZ,
+          // ★ 对齐（用户 2026-10-04：「让脚部关节对称轴对着小腿的对称轴」）：
+          //   脚掌刚体的横坐标必须用**小腿的对称轴 `centerZ`**，而不是素材实测的
+          //   `ankleZ = mapZ(anklePx[0])` —— 后者带着"外八"的横向偏移（膝到踝不是铅垂），
+          //   于是踝关节落在小腿中线之外，脚看着是歪的。
+          //   偏航（外八）由 `restYawRad = restYawOf(...)` 单独表达，和位置无关。
+          cz: centerZ,
           restTiltRad: fTilt,
           restYawRad: fYaw,
-          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
-          plateOffset: [0, 0, 0],
-          plateHidden: true,
-          // ★ 渲染层据此跳过这块板
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          // ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
+          plateUv: footUv,
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
-          colliders: [{
-            shape: "cuboid",
-            halfHeight: 0,
-            radius: 0,
-            hx,
-            hy: soleHalfThick,
-            hz,
-            offsetY: local2[1],
-            offsetZ: local2[2],
-            mass: soleMass,
-            comY: 0,
-            inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
-            inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
-          }],
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          colliders: (() => {
+            const two = cfg.soleSplit;
+            const hxBall = two ? hx * 0.5 : hx;
+            const hxHeel = two ? hx * 0.5 : 0;
+            const offBall = two ? hx * 0.5 : 0;
+            const offHeel = two ? -hx * 0.5 : 0;
+            const mBall = two ? soleMass * 0.6 : soleMass;
+            const mHeel = two ? soleMass * 0.4 : 0;
+            const mk = (dx, mx, m) => ({
+              shape: "cuboid",
+              halfHeight: 0,
+              radius: 0,
+              hx: two ? dx > 0 ? hxBall : hxHeel : hx,
+              hy: soleHalfThick,
+              hz,
+              offsetX: dx,
+              offsetY: local2[1],
+              offsetZ: local2[2],
+              mass: m,
+              comY: 0,
+              inertiaZ: m * ((two ? dx > 0 ? hxBall : hxHeel : hx) ** 2 + soleHalfThick ** 2) / 3,
+              inertiaXY: m * (hz * hz + soleHalfThick * soleHalfThick) / 3
+            });
+            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+          })(),
           leg: true
         });
         bodies.push({
@@ -869,6 +934,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           restTiltRad: tilt,
           restYawRad: yaw,
           plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
           length,
           radius,
           halfHeight,

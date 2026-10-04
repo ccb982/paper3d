@@ -104,6 +104,11 @@ export interface SimConfig {
   driver: 'brain' | 'controller';
   /** 物理步频，越大越稳越贵（120 是刚体-马达链的稳妥档） */
   physicsHz: number;
+  /**
+   * ★ 死亡后继续推进多少秒的物理（瘫软演出，见 advance）。
+   *   这段时间**不再参与评估**（fitness/terms 在 finish() 时已定），纯演出。
+   */
+  deathFlySeconds?: number;
   /** 控制（决策）频率；网络只在控制周期被调用 */
   controlHz: number;
   /** 单次评估时长（秒） */
@@ -215,6 +220,7 @@ export interface SimConfig {
 export const DEFAULT_SIM: SimConfig = {
   driver: 'brain',
   physicsHz: 120,
+  deathFlySeconds: 1.6,
   controlHz: 60,
   duration: 6,
   mode: 'walk',
@@ -401,6 +407,8 @@ export class Sim {
 
   // ---- 评估状态 ----
   private subStep = 0;
+  /** 死亡后还要推进多少物理步（瘫软演出，见 advance） */
+  private deathLeft = 0;
   private tick = 0;
   private phase = 0;
   private startX = 0;
@@ -785,8 +793,29 @@ export class Sim {
    * 推进最多 budgetSteps 个物理步，返回实际消耗的步数。
    * 评估跑完（或摔倒）即提前返回。
    */
+  /**
+   * ★ 死亡后继续推进物理（`deathSteps` 步），让瘫软的角色被带着飞出去
+   *   （用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）。
+   *
+   *   之前 `finish()` 之后 `advance()` 直接 return，所以尸体站着不动、像卡住。
+   *   现在：死亡 ⇒ 只结束**评估**（fitness/terms 已定、不再变），物理照跑，
+   *   马达已瘫软（`setLimp`），于是重力 + 接触 + 残余动量接管，角色被甩出去。
+   *   跑完 `deathSteps` 后彻底停止。
+   */
   advance(budgetSteps: number): number {
-    if (this.finished) return 0;
+    if (this.finished) {
+      if (this.deathLeft <= 0) return 0;
+      const used0 = this.deathLeft;
+      let n = 0;
+      while (n < budgetSteps && this.deathLeft > 0) {
+        this.doll.driveMotors(this.dt);
+        this.world.step();
+        this.doll.enforceLimits();
+        if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
+        this.deathLeft--; n++;
+      }
+      return Math.min(used0, n);
+    }
     let used = 0;
     while (used < budgetSteps && !this.finished) {
       if (this.subStep === 0) this.controlTick();
@@ -1717,9 +1746,18 @@ if (this.cfg.mode === 'stand') {
     const f = this.terms.total;
     this.fitness = f;
     this.finished = true;
-    // 停下马达，避免展示视图里刚体还在挣扎
-    for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
-    this.doll.setMotorTargets(this.motor);
+    // ★★ 死亡时**瘫软**，让角色被残余动量+重力带着飞出去
+    //   （用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）。
+    //   原来只把 motorTarget 归零，但 kP=48 的位置伺服仍在把四肢拉回姿态
+    //   ⇒ 尸体站在原地挣扎，像卡住了。
+    if (fallen) {
+      this.doll.setLimp(true);
+      this.deathLeft = Math.round((this.cfg.deathFlySeconds ?? 1.6) * this.cfg.physicsHz);
+    } else {
+      // 跑满时长（非摔倒）：仍然停下马达，避免展示视图里刚体继续挣扎
+      for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
+      this.doll.setMotorTargets(this.motor);
+    }
   }
 
   private progressRaw(): number { return this.tick / this.ticksTotal; }
@@ -1727,6 +1765,8 @@ if (this.cfg.mode === 'stand') {
   /** 重新对齐物理世界（展示视图用：跑完一轮后让角色重新站好） */
   restand(): void {
     this.doll.reset(0);
+    this.doll.setLimp(false);   // ★ 解除瘫软（死亡演出后要能重新站起来）
+    this.deathLeft = 0;
     this.finished = false;
     this.fallen = false;
     this.subStep = 0;

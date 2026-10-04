@@ -6488,6 +6488,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       inertiaZ: mainIz,
       inertiaXY: mainIz * 0.5
     });
+    let shinPlateUv;
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const sfx = Math.max(0.1, cfg.soleFootScale);
@@ -6495,8 +6496,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
       const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
-      const hx = soleHalfLen * sfx;
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = hx * 0.3;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6506,42 +6509,89 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fTilt = 0;
         const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const plateH = part.bh * px2m;
+        const cutFrac = (() => {
+          const texTopPx = part.cy - part.bh / 2;
+          const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+          return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
+        })();
+        const slack = Math.min(
+          0.25,
+          Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac)
+        );
+        const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+        const shinY = Math.max(0, cutFrac - slack);
+        shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
           label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
           part,
-          // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          // 贴图仍借小腿那张（下面裁出靴子那块）
           cx: 0,
           cy: ankleY,
-          cz: ankleZ,
+          // ★ 对齐（用户 2026-10-04：「让脚部关节对称轴对着小腿的对称轴」）：
+          //   脚掌刚体的横坐标必须用**小腿的对称轴 `centerZ`**，而不是素材实测的
+          //   `ankleZ = mapZ(anklePx[0])` —— 后者带着"外八"的横向偏移（膝到踝不是铅垂），
+          //   于是踝关节落在小腿中线之外，脚看着是歪的。
+          //   偏航（外八）由 `restYawRad = restYawOf(...)` 单独表达，和位置无关。
+          cz: centerZ,
           restTiltRad: fTilt,
           restYawRad: fYaw,
-          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
-          plateOffset: [0, 0, 0],
-          plateHidden: true,
-          // ★ 渲染层据此跳过这块板
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          // ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
+          plateUv: footUv,
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
-          colliders: [{
-            shape: "cuboid",
-            halfHeight: 0,
-            radius: 0,
-            hx,
-            hy: soleHalfThick,
-            hz,
-            offsetY: local2[1],
-            offsetZ: local2[2],
-            mass: soleMass,
-            comY: 0,
-            inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
-            inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
-          }],
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          colliders: (() => {
+            const two = cfg.soleSplit;
+            const hxBall = two ? hx * 0.5 : hx;
+            const hxHeel = two ? hx * 0.5 : 0;
+            const offBall = two ? hx * 0.5 : 0;
+            const offHeel = two ? -hx * 0.5 : 0;
+            const mBall = two ? soleMass * 0.6 : soleMass;
+            const mHeel = two ? soleMass * 0.4 : 0;
+            const mk = (dx, mx, m) => ({
+              shape: "cuboid",
+              halfHeight: 0,
+              radius: 0,
+              hx: two ? dx > 0 ? hxBall : hxHeel : hx,
+              hy: soleHalfThick,
+              hz,
+              offsetX: dx,
+              offsetY: local2[1],
+              offsetZ: local2[2],
+              mass: m,
+              comY: 0,
+              inertiaZ: m * ((two ? dx > 0 ? hxBall : hxHeel : hx) ** 2 + soleHalfThick ** 2) / 3,
+              inertiaXY: m * (hz * hz + soleHalfThick * soleHalfThick) / 3
+            });
+            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+          })(),
           leg: true
         });
         bodies.push({
@@ -6555,6 +6605,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           restTiltRad: tilt,
           restYawRad: yaw,
           plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
           length,
           radius,
           halfHeight,
@@ -6806,6 +6859,13 @@ var init_skeleton = __esm({
        */
       //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
       soleFootScale: 1,
+      // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+      footCropUpMm: 0.123,
+      footCropOverlapMm: 0.01,
+      // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+      footCropOverlapFrac: 0.1,
+      soleGroundCorr: 0,
+      soleSplit: true,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
       //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
       footSplayDeg: 25,
@@ -13612,6 +13672,15 @@ var init_ragdoll = __esm({
       opt;
       bodies = [];
       /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+      /**
+       * ★ 鞋底 collider **列表**（每只脚可能有多块：脚跟 + 前脚掌）。
+       *
+       * 此前是单数 `soleCol`。脚掌拆成两块后（`SkeletonConfig.soleSplit`），
+       * 单数只能存下**一块** ⇒ CoP / 接地判定 / 载荷分配全都在读**半个脚**
+       * （实测拆分后 CoP 基线从 214mm 变成 191mm，而踝角没变）。
+       * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
+       */
+      soleCols = [[], []];
       soleCol = [null, null];
       /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
       copTmp = new Float64Array(4);
@@ -13759,7 +13828,7 @@ var init_ragdoll = __esm({
           this.bodies.push(body);
           for (const c of b.colliders) {
             const cd = c.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c.halfHeight, c.radius) : rapier_default.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
-            cd.setTranslation(0, c.offsetY, c.offsetZ).setMassProperties(
+            cd.setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ).setMassProperties(
               c.mass,
               { x: 0, y: c.comY, z: 0 },
               { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
@@ -13767,8 +13836,13 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l") this.soleCol[0] = col;
-              else if (b.key === "shin_r" || b.key === "foot_r") this.soleCol[1] = col;
+              if (b.key === "shin_l" || b.key === "foot_l") {
+                this.soleCols[0].push(col);
+                this.soleCol[0] ??= col;
+              } else if (b.key === "shin_r" || b.key === "foot_r") {
+                this.soleCols[1].push(col);
+                this.soleCol[1] ??= col;
+              }
             }
           }
         });
@@ -13944,26 +14018,26 @@ var init_ragdoll = __esm({
        * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
        */
       readCoP(side, out) {
-        const col = this.soleCol[side];
         out[0] = out[1] = out[2] = out[3] = 0;
-        if (!col) return;
         let sx = 0, sy = 0, sz = 0, sl = 0;
-        this.world.contactPairsWith(col, (other) => {
-          this.world.contactPair(col, other, (mf) => {
-            const n = mf.numSolverContacts();
-            for (let i = 0; i < n; i++) {
-              const ny = mf.normal().y;
-              if (Math.abs(ny) < 0.5) continue;
-              const p = mf.solverContactPoint(i);
-              const l = Math.abs(mf.contactImpulse(i));
-              if (!(l > 0)) continue;
-              sx += p.x * l;
-              sy += p.y * l;
-              sz += p.z * l;
-              sl += l;
-            }
+        for (const col of this.soleCols[side]) {
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const ny = mf.normal().y;
+                if (Math.abs(ny) < 0.5) continue;
+                const p = mf.solverContactPoint(i);
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                sx += p.x * l;
+                sy += p.y * l;
+                sz += p.z * l;
+                sl += l;
+              }
+            });
           });
-        });
+        }
         if (sl > 0) {
           out[0] = sx / sl;
           out[1] = sy / sl;
@@ -14011,16 +14085,17 @@ var init_ragdoll = __esm({
       /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
       footLoadedCache = { l: false, r: false };
       footGrounded(side) {
-        const col = this.soleCol[side];
-        if (!col) return false;
         let hit = false;
-        this.world.contactPairsWith(col, (other) => {
-          this.world.contactPair(col, other, (mf) => {
-            if (mf.numContacts() === 0) return;
-            const ny = mf.normal().y;
-            if (ny > 0.5 || ny < -0.5) hit = true;
+        for (const col of this.soleCols[side]) {
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              const ny = mf.normal().y;
+              if (ny > 0.5 || ny < -0.5) hit = true;
+            });
           });
-        });
+          if (hit) return true;
+        }
         return hit;
       }
       /**
@@ -14725,8 +14800,7 @@ var init_ragdoll = __esm({
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-            const Ip = p.principalInertia(), Ic = c.principalInertia();
-            const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+            const Iax = this.jointIeff[i];
             const jv = this.iv;
             if (out > 0 ? wRel > 0 : wRel < 0) {
               const J = -wRel * Iax;

@@ -14900,8 +14900,7 @@ var init_ragdoll = __esm({
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-            const Ip = p.principalInertia(), Ic = c.principalInertia();
-            const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+            const Iax = this.jointIeff[i];
             const jv = this.iv;
             if (out > 0 ? wRel > 0 : wRel < 0) {
               const J = -wRel * Iax;

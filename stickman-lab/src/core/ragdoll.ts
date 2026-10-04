@@ -419,6 +419,8 @@ export class Ragdoll {
    *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
    */
   readonly jointIeff: Float64Array;
+  /** 瘫软标记：位置环增益置 0（死亡演出，见 setLimp） */
+  limp = false;
   /**
    * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
    * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
@@ -1428,6 +1430,21 @@ export class Ragdoll {
     }
   }
 
+  /**
+   * ★★ **瘫软（死亡演出用）**：把位置环增益降到 0，只留重力/接触/残余动量。
+   *
+   *   动机（用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）：
+   *   原来 `Sim.finish()` 只是把 `motorTarget` 归零，但 `kP=48` 的位置伺服
+   *   仍然在用力矩把四肢**拉回绑定姿态** ⇒ 尸体站在原地挣扎，像"卡住"了。
+   *   瘫软之后关节不再出力，角色会被残余动量和重力带走 ⇒ 自然地被甩出去。
+   *
+   *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
+   *   否则关节会无限转圈）。
+   */
+  setLimp(on: boolean): void {
+    this.limp = on;
+  }
+
   setMotorTargets(targets: Float32Array): void {
     for (let i = 0; i < this.motorTarget.length; i++) {
       const t = targets[i];
@@ -1469,8 +1486,12 @@ export class Ragdoll {
   driveMotors(dt: number): void {
     const scale = this.opt.torqueScale;
     this.lastDt = dt;   // 供 enforceLimits 的角度投影用
-    const kP = this.opt.kP;
-    const kD = this.opt.kD;
+    // ★ 瘫软（死亡演出）：位置环增益置 0 ⇒ 马达不再把四肢拉回姿态，
+    //   关节交给重力/接触/残余动量，角色会被带着飞出去。见 setLimp。
+    //   `enforceLimits` 不受影响（关节限位必须留着）。
+    const limp = this.limp;
+    const kP = limp ? 0 : this.opt.kP;
+    const kD = limp ? 0 : this.opt.kD;
     const qRel = this.qRel;
     const rv = this.rv;
     const relL = this.relL;
@@ -1507,6 +1528,7 @@ export class Ragdoll {
 
         let alpha = this.opt.motorAlpha;
         let err: number;
+        const kDd = limp ? 0 : kD;
 
         // ---- 软限位（逐轴）：只在**越界之后**才介入，直接接管目标速度 ----
         // ★★ 不要提前量（这里踩过一次大坑，别改回去）：膝的限位是 [−145°, +2°]，
@@ -1525,13 +1547,13 @@ export class Ragdoll {
           // ★★ 让位模式：位置伺服**只做阻尼**，P 项置零。
           //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
           //   两者职责不重叠 ⇒ 不会再在同一轴上互相顶。
-          err = -(this.opt.kD) * relL[k];
+          err = -kDd * relL[k];
         } else {
           const cmd = this.motorTarget[idx];
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
           // ★ 逐关节增益覆盖（踝专用，见 RagdollOptions.jointGain 的注释）
           const ov = jg[j.name];
-          err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
+          err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kDd) * relL[k];
         }
 
         // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、
@@ -1726,10 +1748,25 @@ export class Ragdoll {
         else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
         const av = c.angvel(), ap = p.angvel();
         const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
-        // 惯量：沿该轴用两体的**最大**主惯量作保守下界（`jointIeff` 用的最小值太小，
-        //   实测让冲量差一个量级 ⇒ 限位形同虚设）
-        const Ip = p.principalInertia(), Ic = c.principalInertia();
-        const Iax = Math.max(Ip.x, Ip.y, Ip.z) + Math.max(Ic.x, Ic.y, Ic.z);
+        // ★★★ 惯量必须用**并联折合惯量**，不是两个主惯量**求和**（2026-10-04 修）。
+        //   限位冲量的意义是"恰好把越界方向的相对角速度归零"（恢复系数 e=0），
+        //   这要求 `J = wRel × I_reduced`，其中两体被冲量耦合时的折合惯量是
+        //       I_reduced = 1 / (1/I_parent + 1/I_child)   ← 并联，正是 `jointIeff`
+        //   原来写成 `max(Ip) + max(Ic)`（**求和**），比折合值大 2~9 倍
+        //   （等惯量时 sum = 2×harmonic；主惯量各不相等时可到 9×）⇒ 施加后
+        //   实际角速度变化 `J/I_real` 远超 `wRel` ⇒ **不是归零而是过冲并反向**
+        //   ⇒ 再次越界 → 再次触发 → 每子步放大 4~9 倍的正反馈
+        //   ⇒ 肢体指数自旋（用户说的「到处乱飞」）。
+        //
+        //   实测（30 个随机基因组，walk 模式）：关掉本函数后最差 ωmax
+        //   从 **157441** 降到 **104**；只关马达只能压到 5461（只是不触发）。
+        //   诊断：逐子步对比 `|ω_rel|` 前后，neck 1.0→4.3 (4.2×)、
+        //   shoulder_l 2.2→21.0 (9.4×)、elbow_l 26.6→96.7 (3.6×)。
+        //
+        //   ⚠ `jointIeff` 用的是两体**最大**主惯量的并联（见构造处注释），
+        //     那条注释里"取最小值太小"是旧结论，早已改成 max；此处曾按旧结论
+        //     改成求和，方向反了。
+        const Iax = this.jointIeff[i];
         const jv = this.iv;
         // ── ① 速度级：仍在往越界方向走就精确抵消该轴相对角速度（恢复系数 e=0）
         if (out > 0 ? wRel > 0 : wRel < 0) {
