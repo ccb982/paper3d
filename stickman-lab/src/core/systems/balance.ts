@@ -321,7 +321,27 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
    */
   torqueControl: false,
-  lateralEnabled: false,
+  // ★ 额状面主通道**常开**（2026-10-04，按文献 Winter 1995 [H] + Delp 1996 [H]）。
+  //   之前默认关着 ⇒ `wantedForce` 里 `comp.lateral ≡ 0` ⇒ 额状面 `τ=JᵀF`
+  //   分量恒为 0 ⇒ `motorTarget` 恒定、`com.z` 单调漂到 0.87 m 而无人纠正。
+  //
+  //   文献依据：
+  //     · Winter 1995 [H]：并立站位时 M/L 平衡**完全由髋内/外展肌主导**，
+  //       踝内/外翻肌"negligible involvement"（只有并脚站位才反过来）。
+  //     · Delp et al. 1996 [H]：髋外展肌力臂 5.6 cm，平衡躯干需 **51 N·m**，
+  //       平均能出 **88 N·m**（余量 73%）⇒ 额状面主动力在髋是有余量的，
+  //       而踝的横向 τmax 只有 72 N·m 而需求高达 mg×站距半宽。
+  //     · Harter et al. 2024 [JRSI]：`τ_align = k_x·(x_fp − x_hp)`，
+  //       k_x = 395.7 N，等效于把有效脚点移向髋 44.65%（虚拟 CoP 权限）。
+  //
+  //   ⚠ 配套约束（代码里已有，不重写）：
+  //     · `torqueControl` 仍为 false ⇒ 走**纯位置伺服**，不注入 τ=JᵀF 的定量分量
+  //       （`F_desired` 只决定 `θ_ref`）。这避免与位置环双计
+  //       （Feng et al. 2014：把 ID 的 q̈ 积分成 q_d 会"rapidly leads to
+  //        constraint violation and instability"）。
+  //     · 髋额状轴归属唯一：`AXIS_OWNERSHIP` 里 `hip/HIP_ABD_AXIS` 的
+  //       `latTransfer`（mode='tau'），腰的 `latwaist` 是**派生精调**通道。
+  lateralEnabled: true,
   latHipDead: 8,
   /**
    * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
