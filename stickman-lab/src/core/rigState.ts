@@ -210,8 +210,16 @@ export interface RigSnapshot {
    */
   pitchDeg: number;
   rollDeg: number;
+  /** pitchDeg / rollDeg 的**角速度**（deg/s）。腰的姿态保持必须用 PD：
+   *  纯 P 的指令会被 spine 的 ±15~25° 限幅打饱和 ⇒ 过冲 ⇒ 折向翻转
+   *  （实测前折 +80°，加腰控制器后变成后折 −79°，就是过冲）。 */
+  pitchRate: number;
+  rollRate: number;
   legs: Record<Side, SideSnapshot>;
   axes: AxisSnapshot[];
+  /** ★ 轴归属冲突（同一轴被位置与力矩两个通道、不同系统申领）。
+   *  对应 `balance.AXIS_OWNERSHIP` 不变量；门禁要求默认路径下恒为 0。 */
+  axisConflicts: { axis: number; joint: string; mode: string; by: string; against: string }[];
   criteria: {
     bearer: Criteria;
     /** 交接判据（重心在前腿 + 间隔 1s） */
@@ -281,6 +289,8 @@ export class RigState {
   tiltDeg = 0;
   pitchDeg = 0;
   rollDeg = 0;
+  pitchRate = 0;
+  rollRate = 0;
   soleX: Record<Side, number> = { l: 0, r: 0 };
   /**
    * 脚底中心的**横向**位置（m）。
@@ -375,6 +385,11 @@ export class RigState {
     this.vel = new Float64Array(n);
     this.prevTarget = new Float32Array(n);
     this.prevOut = new Float32Array(n);
+    // ⚠ 这两个必须**按轴数初始化**。曾声明成 `=[]`（长度 0），
+    //   于是 `this.hold[i]` 恒为 `undefined`（falsy）⇒ `requestHold` 的
+    //   「已让位就不重复登记」永不命中、`hold[i]=true` 写不进去。
+    this.hold.fill(false);
+    for (let i = 0; i < n; i++) { this.hold[i] = false; this.axisMode[i] = 0; this.holdMask[i] = 0; }
     this.tauOut = new Float32Array(n);
     this.tauJ = new Float32Array(n);
     this.forceBuf = new Float64Array(sk.joints.length * 5);
@@ -512,7 +527,45 @@ export class RigState {
    *   "命令膝弯 46°"，实测开局就深蹲塌下去。
    *   ⇒ 控制器里凡是"我要这个角"的语义，都必须走这个接口。
    */
+  // ── 轴模式声明与冲突检测（重构不变量）─────────────────────────
+  /**
+   * ★★ 每个 (关节,轴) 在 `balance.AXIS_OWNERSHIP` 里**恰好一个模式**
+   *   （`pos` 位置伺服 / `tau` 力矩通道）。本字段在运行时**检测**违反：
+   *   同一根轴同时被位置和力矩两个通道以**不同系统**申领 ⇒ 记一次冲突。
+   *
+   *   为什么是"检测"而不是"直接拒收"：拒收会改变行为、可能引入新的塌陷；
+   *   先把它变成**可断言的量**（`axisConflicts`），由 `tools/probe-axisown.ts`
+   *   门禁要求默认路径下为 0。等它稳定为 0 之后就可以升级成硬拒收。
+   *
+   *   这条不变量对应本轮的三次实测故障（见 `balance.ts` 顶部注释）：
+   *   `hip/1` 三写者、`requestHold` 双副本、消融工具说谎。
+   */
+  private readonly axisMode: number[] = [];       // 0=无 1=pos 2=tau
+  private readonly axisModeOwner: SystemId[] = [];
+  /** 本拍观测到的轴归属冲突（UI/门禁回读） */
+  axisConflicts: { axis: number; joint: string; mode: string; by: string; against: string }[] = [];
+
+  private claimAxis(joint: number, axis: number, mode: number, system: SystemId): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) return;
+    if (this.axisMode[i] === 0) {
+      this.axisMode[i] = mode;
+      this.axisModeOwner[i] = system;
+      return;
+    }
+    if (this.axisMode[i] === mode) return;          // 同模式：交给既有优先级仲裁
+    // 模式冲突：记下来，但**不改变行为**（保持既有仲裁结果）
+    this.axisConflicts.push({
+      axis: i,
+      joint: this.sk.joints[joint]?.name ?? `?${joint}`,
+      mode: mode === 1 ? 'pos' : 'tau',
+      by: system,
+      against: this.axisModeOwner[i] ?? 'none',
+    });
+  }
+
   requestAngle(joint: number, axis: number, rad: number, system: SystemId, label: string): void {
+    this.claimAxis(joint, axis, 1, system);
     const def = this.sk.joints[joint];
     if (!def) { this.badRequests++; return; }
     const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
@@ -531,6 +584,7 @@ export class RigState {
    *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
    */
   requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
+    this.claimAxis(joint, axis, 2, system);
     const i = joint * 3 + axis;
     if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
     const cur = this.treq[i];
@@ -581,7 +635,15 @@ export class RigState {
   /** 撤销让位（让该轴交回给常规位置伺服）—— `τ=JᵀF` 与位置偏置共存时用 */
   clearHold(joint: number, axis: number): void {
     const i = joint * 3 + axis;
-    if (i >= 0 && i < this.nAxes) { this.hold[i] = false; this.holdMask[i] = 0; }
+    if (i < 0 || i >= this.nAxes) return;
+    this.hold[i] = false;
+    this.holdMask[i] = 0;
+    // ⚠⚠ 必须同时从 `holdList` 移除：每拍 `reset()` 会用 `holdList`
+    //   重新填 `holdMask`，只清 `hold[i]`/`holdMask[i]` 会被**下一拍复活**。
+    //   （旧实现只清这两个 ⇒ `clearHold` 实际上无效。）
+    for (let k = this.holdList.length - 1; k >= 0; k--) {
+      if (this.holdList[k]!.i === i) this.holdList.splice(k, 1);
+    }
   }
 
   /** 内部用：让位标记（每拍清空） */
@@ -638,6 +700,9 @@ export class RigState {
     this.req.fill(undefined);
     this.treq.fill(undefined);
     this.hold.fill(false);
+    // 轴声明是**每拍**重新申领的（通道可能按相位开关）⇒ 一并清零
+    for (let i = 0; i < this.axisMode.length; i++) { this.axisMode[i] = 0; this.axisModeOwner[i] = 'balance'; }
+    this.axisConflicts.length = 0;
     for (const h of this.holdList) this.holdMask[h.i] = h.system === 'balance' ? 1 : 2;
     this.holdList.length = 0;
     this.torqueRequestCount = 0;
@@ -789,6 +854,8 @@ export class RigState {
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,
+      pitchRate: this.pitchRate, rollRate: this.rollRate,
+      axisConflicts: this.axisConflicts.map((c) => ({ ...c })),
       legs: {
         l: {
           side: 'l', grounded: this.grounded.l, loadFrac: this.loadFrac.l, soleY: this.soleY.l,

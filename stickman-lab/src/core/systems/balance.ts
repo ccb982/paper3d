@@ -32,6 +32,78 @@ import { computeWantedForce, stanceResolved, DEFAULT_WANTED_FORCE } from './want
 import type { Ragdoll } from '../ragdoll';
 import type { RigState, Side } from '../rigState';
 
+// ══════════════════════════════════════════════════════════════════
+// ★★★ **轴归属表（AXIS_OWNERSHIP）—— 平衡系统的唯一真源**
+// ══════════════════════════════════════════════════════════════════
+//
+//  为什么需要它：这轮重构前，同一根轴上有**多个写者**，靠 `priority`
+//  参数 + 代码执行顺序决定谁赢。三次实测故障都源于此：
+//   ① `hip/1` 同时被 `τ=JᵀF`、手写 `kLatHip` 律、`pelvicLift` 三个写者写
+//      ⇒ 后者盖掉前者 ⇒ `maxLateral` 变成**死参数**（80→500N 结果逐位相同）；
+//   ② `requestHold(hip/2)`+`requestHold(knee/2)` 有**两份逐字相同的副本**、
+//      门控不同 ⇒ 任一份都能单独让位掉唯一撑体重的轴 ⇒ 站 2.35s/2.45s 塌；
+//   ③ 「平衡全消融」仍发出 τ[hip/1]=29 N·m ⇒ **消融工具本身在说谎**，
+//      当时所有"是哪一条在搞破坏"的判断都不可信。
+//
+//  规则（由 `tools/probe-axisown.ts` 门禁强制）：
+//   · 每个 (关节, 轴) 在表里**恰好一行**；
+//   · `mode` 决定该轴走**位置伺服**还是**力矩通道**，二者**互斥**；
+//   · 一个轴上出现第二个不同模式的请求 = **冲突**，
+//     `rigState` 会拒收并计入 `axisConflicts`（不是静默吞掉）。
+export type AxisRole =
+  | 'sagSupport'      // 垂直 + 矢状支撑：已验证站满 20s，**位置伺服**
+  | 'latTransfer'     // 侧向重心转移：**力矩通道**（唯一写者 = τ=Jᵀ(F_lat)）
+  | 'pelvicLift'      // 骨盆抬升：从属于 latTransfer（侧向无需求时才占轴）
+  | 'postureSag'      // 腰矢状姿态 PD
+  | 'postureLat'      // 腰额状精调（死区 + 限幅）
+  | 'ankleCop';       // 踝 CoP 调节
+
+export interface AxisSpec {
+  joint: string;
+  axis: number;
+  role: AxisRole;
+  mode: 'pos' | 'tau';
+  /** 该轴允许的消融通道名（`ablate`）—— 保证「全关 == 零输出」 */
+  channel: string;
+  /** 从属轴：有主轴需求时必须让位（`role==='pelvicLift'` 依赖 `latTransfer`） */
+  subordinateTo?: AxisRole;
+}
+
+/** ★ 髋外展轴的索引 —— **必须是 0**。
+ *
+ *  骨架三轴口径（`skeleton.ts:405`，唯一真源）：
+ *      索引 0 = 绕 X = **外展/侧摆**
+ *      索引 1 = 绕 Y = 扭转（绕肢体自身长轴）
+ *      索引 2 = 绕 Z = 屈伸
+ *
+ *  ⚠⚠ 本重构查出：侧向通道一直写在 `axis 1` = **扭转**轴上。
+ *    代价（三处症状全由此来）：
+ *      ① 侧向力矩几乎为 0 —— 实测 `Fz=100N` 时 `hip/1` 只有 −1.15 N·m
+ *         （力臂 11.5mm），而 `hip/0` 有 −11.88 N·m（力臂 119mm），**差 10 倍**；
+ *      ② 重心横移几乎不动（148→129mm，且那点改善是 JᵀF 泄漏，不是外展在做功）；
+ *      ③ `pelvicLift` 也写 axis 1 ⇒ 它在**拧腿**而不是抬骨盆，
+ *         这才是"开 pelvicLift 只活 2.33s"的真因（不是它"抢轴"）。
+ *    ⇒ 轴索引错位是这个 rig 的**第二次**同类故障（第一次是脊柱正负号），
+ *      所以现在把它写成常量并在轴归属表里显式声明，不再散落字面量。
+ */
+export const HIP_ABD_AXIS = 0;
+
+export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
+  { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip' },
+  { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee' },
+  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat' },
+  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift', subordinateTo: 'latTransfer' },
+  { joint: 'spine', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
+  { joint: 'spine', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
+  { joint: 'ankle', axis: 2, role: 'ankleCop', mode: 'pos', channel: 'ankleCop' },
+  { joint: 'ankle', axis: 0, role: 'ankleCop', mode: 'pos', channel: 'ankleCop' },
+]);
+
+/** 取某轴的角色（供门禁与 UI 回读）。找不到 = 未登记 ⇒ 属于架构错误。 */
+export function axisRole(jointName: string, axis: number): AxisSpec | undefined {
+  return AXIS_OWNERSHIP.find((a) => a.joint === jointName && a.axis === axis);
+}
+
 export interface BalanceParams {
   /**
    * 膝的**屈曲限位**（deg）—— 超过就顶回来。
@@ -142,7 +214,9 @@ export interface BalanceParams {
   latHipArm: number;
   /** 力矩限幅（N·m）：文献需求 52、rig 上限 70 ⇒ 取 60 留裕度 */
   maxLatHipTau: number;
-  /** 死区（m）：|com.z − stanceZ| ≤ 此值不再推。这是「不能太过」的实现 */
+  /** 髋外展力矩死区（**N·m**，直接是力矩门限）。
+   *  ⚠ 原注释写的是「死区（m）」，但它被当力矩用 ⇒ 单位与语义不符。
+   *  「不能太过」= 进死区就不推：交接只需 MoS ≥ 0，不需要把重心精确推到脚心。 */
   latHipDead: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
@@ -232,13 +306,17 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
    *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
    */
   torqueControl: false,
-  lateralEnabled: true,
+  lateralEnabled: false,
   // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
+  // ⛔ `kLatHip`/`latHipDamp`/`latHipArm`/`maxLatHipTau`/`latHipDead` 已随那条
+  //   手写侧向 P 律一起删除（它抢占了 `hip/1`，把 `maxLateral` 变成死参数）。
+  //   侧向现在只由 `wantedForce` 的 `maxLateral` 决定，走 `Jᵀ(F_lat)`。
+  // 下面这几项仅为兼容旧配置保留，已不参与控制：
   kLatHip: 500,
   latHipDamp: 60,
   latHipArm: 0.5,
   maxLatHipTau: 60,
-  latHipDead: 0.05,
+  latHipDead: 8,
   /**
    * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
    *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
@@ -269,6 +347,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
  * @param rs 唯一状态（读判据/读数，写需求）
  */
 const TMP_TAU = new Float32Array(256);
+/** `jointWorld` 的接收缓冲（髋外展策略要读髋的世界 z/y 才知道力臂） */
+const TMP_JOINT = new Float64Array(3);
 
 export function balanceSystem(
   rs: RigState, p: BalanceParams = DEFAULT_BALANCE_PARAMS, doll?: Ragdoll,
@@ -278,6 +358,13 @@ export function balanceSystem(
   // ★ 支撑腿是否已确定：**唯一判定在 `wantedForce.stanceResolved()`**
   //   （此前 `latArmed` 在本文件算一遍、相位机在 gaitState 再算一遍 ⇒ 边界不清）
   const latArmed = stanceResolved(rs);
+  // ★ `hip/0`（髋外展轴）本拍的**唯一归属判据**。
+  //   侧向转移（τ 通道）与骨盆抬升（位置通道）共用这根轴，必须共用同一个判据，
+  //   否则同一 tick 内会出现两种模式 —— 轴归属门禁会报
+  //   `hip_r/0 pos←balance vs balance`。
+  //   ⚠ 只能看"装不 armed"，**不能**看 |F.fz| 之类量值：重心掠过支撑脚时
+  //     F.fz 过零会让归属每拍翻转。
+  const latOwnsAbduction = latArmed && p.lateralEnabled;
   const jHip = jointIndexByName(sk, sup === 'l' ? 'hip_l' : 'hip_r');
   const jKnee = jointIndexByName(sk, sup === 'l' ? 'knee_l' : 'knee_r');
   const jSp1 = jointIndexByName(sk, 'spine1');
@@ -301,16 +388,18 @@ export function balanceSystem(
   // ★ 支撑腿是否已确定：**唯一判定在 `wantedForce.stanceResolved()`**
   //   （此前 `latArmed` 在本文件算一遍、相位机在 gaitState 再算一遍 ⇒ 边界不清）
   // ══════════════════════════════════════════════════════════════
-  if (p.torqueControl) {
-    // ══ 挡位 II：逆动力学 ══
-    //   支撑链**让位**（位置环只剩阻尼），定量支撑全交给 `τ = JᵀF`。
-    //   ⚠ 必须与 `weight`(=mg) 成对开启，否则既无位置刚度也无定量支撑
-    //     ⇒ 腿直接软掉（实测 1.05 s）。
-    if (jHip >= 0) rs.requestHold(jHip, 2, 'balance', '支撑髋让位给τ=JᵀF');
-    if (jKnee >= 0) rs.requestHold(jKnee, 2, 'balance', '支撑膝让位给τ=JᵀF');
-  } else {
-    // ══ 挡位 I：纯位置伺服 ══
-    //   `τ = JᵀF` 完全关闭（见下面那个 lambda），矢状面**必须**由位置目标提供。
+  // ══════════════════════════════════════════════════════════════
+  // 挡位 I：纯位置伺服 —— **矢状与垂直永远走这里**（无条件执行）
+  //
+  //   ⚠ 这里原来包着一个 `if (p.torqueControl)`：挡位 II 会让位 hip/2、knee/2
+  //     把支撑交给 `τ = JᵀF`。该分支**已删除**，因为按 `AXIS_OWNERSHIP`：
+  //     τ 通道现在**只驱动 `hip/1`（外展）**，而垂直/矢状归 `hip/2`、`knee/2`
+  //     的位置伺服 —— 两者在**不同的轴**上，本来就不需要让位。
+  //     保留让位反而制造同轴双计（门禁实测 3 处冲突）。
+  //   ⇒ `torqueControl` 现在的唯一含义 = **侧向外展轴的 τ 通道开关**。
+  {
+    // `τ = JᵀF` 在非侧向分量上完全关闭（见下面那个 lambda），
+    // 矢状面**必须**由位置目标提供。
     //   ⚠ 这段控制器我一度删掉过（理由是"两套哲学并存"），结果默认挡位直接丢了
     //     矢状控制 ⇒ 实测腰**向前折** 80.6°、2.45 s 倒（用户 2026-10-03 亲眼所见）。
     //   ⇒ 正确结论不是"删掉位置环控制器"，而是**它们属于另一挡**：
@@ -338,7 +427,16 @@ export function balanceSystem(
     //     spine1 −11.1° ⇒ 躯干 pitch −25.1°
     //     spine1 ±20° ⇒ 实际只到 ±14°（**τmax=120 N·m 处饱和**）⇒ 俯仰权限约 ±45°
     //   ⇒ 前倾（pitch>0）用**负**脊柱角去顶。
-    const spineTgt = clamp(-p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.com.vx, p.maxTorsoDeg);
+    // ★★ 腰矢状姿态保持：**PD**，阻尼项用**俯仰角速度**而不是 CoM 速度。
+    //   之前用 `-kTorsoHoldD * rs.com.vx` 是量纲错的（CoM 速度 ≠ 躯干俯仰角速度），
+    //   等于没有阻尼 ⇒ 纯 P ⇒ 指令打到 spine 限幅饱和 ⇒ 过冲 ⇒ 折向翻转
+    //   （实测峰 |pitch| 在所有增益下都是 80~86°：+80° 前折、−79° 后折）。
+    //   符号（tools/_sp 实测）：**脊柱正 = 躯干前倾** ⇒ 前倾用负角顶。
+    //   单位换算：pitchDeg 是度、pitchRate 是度/秒 ⇒ 增益按 度/(度/秒) 理解。
+    const spineTgt = clamp(
+      -p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.pitchRate,
+      p.maxTorsoDeg,
+    );
     for (const j of [jSp1, jSp2, jSp3]) {
       if (j !== undefined && j >= 0 && on('torso')) {
         rs.requestAngle(j, 2, spineTgt, 'balance', '腰矢状姿态保持');
@@ -384,17 +482,11 @@ export function balanceSystem(
       }
     }
   }
-  // ══════════════════════════════════════════════════════════════
-  // ① 矢状面：**不再有手写 P 控制器**
-  //   原式 `hipTgt = -kSagP·ex - kSagD·vx`（直接给目标角）已删除 ——
-  //   它与 `τ = JᵀF` 是**两套控制哲学并存**，而且符号只能靠实测猜
-  //   （已猜反过一次：髋 **正**才是屈曲）。
-  //   现在矢状面与额状面、垂直支撑走**同一条** `τ = JᵀF`：
-  //   区别只在 `F_desired` 的哪个分量非零。
-  //
-  //   位置伺服在此轴**让位**（只留阻尼），定量支撑全部由力矩通道给。
-  if (jHip >= 0) rs.requestHold(jHip, 2, 'balance', '支撑髋让位给τ=JᵀF');
-  if (jKnee >= 0) rs.requestHold(jKnee, 2, 'balance', '支撑膝让位给τ=JᵀF');
+// ══════════════════════════════════════════════════════════════
+  //   ⚠ 这里原来**又抄了一份** `requestHold(hip/2)`+`requestHold(knee/2)`
+  //     （与上面 L308 那份逐字相同、门控却不同）。两份都能独立触发"让位"，
+  //     于是「平衡全消融」仍然让位了唯一撑体重的两个轴 ⇒ 站 2.35s 就塌。
+  //     ⇒ 已删除。**让位只有一个地方能做**：L308，按 `AXIS_OWNERSHIP` 判定。
 
   // ══════════════════════════════════════════════════════════════
   // ② 膝：锁在轻微屈曲。⚠ 本 rig 膝限位 [-145°, +2°] ⇒ **负 = 屈**
@@ -533,59 +625,65 @@ export function balanceSystem(
       if (i2 >= 0) chain.push(i2);
     }
     doll.jacobianTorque(F.fx, F.fy, F.fz, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
-    // 累加后**一次性**请求：同优先级下 `requestTorque()` 只保留第一次
-    for (const i2 of chain) {
-      for (let k2 = 0; k2 < 3; k2++) {
-        const v = TMP_TAU[i2 * 3 + k2]!;
-        if (Math.abs(v) > 0.5) rs.requestTorque(i2, k2, v, 'balance', `τ=JᵀF·${rs.sk.joints[i2]!.name}/${k2}`);
-      }
-    }
-
-    if (latArmed && doll && p.lateralEnabled) {
-      // ══════════════════════════════════════════════════════════════
-      // ★★ 额状面主力 = **支撑髋外展**，走**力矩通道**，且**只驱动髋这一轴**
-      //
-      //   文献依据（Horak & Nashner 1986 / Runge 1999 重述）：
-      //     「a **separate hip load/unload strategy by the hip abd/adductors is
-      //     the totally dominant defence** in the [frontal] direction when
-      //     standing with feet side by side」，且模型预测**踝内外翻肌作用
-      //     insignificant**。静态需求（Neumann 2010 / Inman 1947）≈52 N·m。
-      //
-      //   ★ 为什么**只驱动髋**（而不是整条支撑链）：此前把 `τ=JᵀF` 分配到
-      //     髋+膝+踝+脊柱四段，实测**任何**限幅（30~500 N）下都在 1.1~1.5 s 倒，
-      //     而限幅 30N 与 500N 结果几乎一样 ⇒ **与力的大小无关，是分配位置的问题**。
-      //     分到脊柱会把躯干拧转、分到膝会去拧腿。文献说的主力就是**髋**。
-      //
-      //   ★ 为什么在挡位 I（位置伺服）下**不算双计**：
-      //     位置伺服在挡位 I 只驱动髋的**矢状轴 axis 2**（矢状髋策略）与膝 axis 2，
-      //     **额状轴 axis 1 是空的** ⇒ 在这一轴上用力矩通道不与位置环重复。
-      //     （这也是为什么 `pelvicLift` 原来占着 axis 1、现在被替换掉。）
-      //
-      //   「**不能太过**」= 死区（`latHipDead`）+ 限幅（`maxLatHipTau`）：
-      //     交接只需 MoS ≥ 0，不需要把重心精确推到脚心；一直往里推会撞上
-      //     髋的 70 N·m 上限、把人掀翻。
-      const stanceZl = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
-      const dead = p.latHipDead;
-      const dzHip = rs.com.z - stanceZl;
-      const errHip = Math.abs(dzHip) <= dead ? 0 : (dzHip - Math.sign(dzHip) * dead);
-      rs.waistTrim = errHip;    // 供 UI 回读"还差多少"
-      // 捕获点二次项：速度也要压住，否则只有比例项会振荡
-      const vTerm = -p.latHipDamp * rs.com.vz;
-      // 力矩：需要的横向力 F=m·a ⇒ 髋外展力矩 ≈ F ×摆高，且按实测标定的符号
-      const tauHip = clamp((errHip * p.kLatHip + vTerm) * p.latHipArm, p.maxLatHipTau);
-      rs.hipLatTau = tauHip;
-      if (jHip >= 0 && Math.abs(tauHip) > 0.5) {
-        rs.requestTorque(jHip, 1, tauHip, 'balance', '额状主力·支撑髋外展(文献)');
+// ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
+    //   strategy ... the totally dominant defence」；定量见 Neumann 2010 /
+    //   Inman 1947 / Pandy 2010），作用在 `hip_${sup}/${HIP_ABD_AXIS}`。
+    //
+    //   ⚠⚠⚠ **不要用 `τ = JᵀF`（横向力）做这件事。** 实测本 rig 髋锚点与整机
+    //     CoM 只差 **12 cm**（CoM.y=0.965、髋≈0.85，力臂 0.119 m）：
+    //         要凑出文献的 52 N·m 需要 **433 N** 的横向力，力通道根本给不出
+    //         （实测 `maxLateral` 500N 时 τ 恒为 8.1 N·m，`errLat` 148→148mm）。
+    //     力臂太短是**几何事实**，不是增益问题 —— 再怎么调 `kXRatio` 也没用。
+    //
+    //   正确公式：髋外展肌的作用是**托住重心相对该髋的横向偏移**
+    //   （单腿站立的经典力学：重力作用在髋内侧 d 处 ⇒ 产生外展需求）
+    //
+    //       τ_abd = m·g·(z_com − z_hip)   ← 静态项（文献 50~110 N·m）
+    //             + m·a_des_z·(y_com − y_hip)  ← 动态项（产生横移加速度）
+    //
+    //   ⚠ 由此得到一条**硬约束**，必须写进设计余量里：
+    //       τmax(hip 外展) = 70 N·m、m·g ≈ 686 N
+    //       ⇒ 重心相对该髋的横向偏移**不得超过 70/686 ≈ 102 mm**。
+    //     而 X3 要求重心离脚 ≤ `handoverTolZ` = 50 mm、髋离脚约 30 mm
+    //     ⇒ 可用余量只有 **~20 mm**。所以这条通道只能**精调**、必须带死区，
+    //     绝不能一路推到底（撞 τmax 会把人掀翻）。
+    if (jHip >= 0 && latOwnsAbduction) {
+      doll.jointWorld(jHip, TMP_JOINT);
+      const hipY = TMP_JOINT[1]!;
+      const hipZ = TMP_JOINT[2]!;
+      const dz = rs.com.z - hipZ;
+      const dy = rs.com.y - hipY;
+      const m = DEFAULT_WANTED_FORCE.weight / 9.81;   // 体重真源在 wantedForce，不在本文件
+      const h = Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05);
+      const aDes = h > 1e-6 ? F.fz / (m * h) : 0;      // F.fz = m·h·a_des
+      const tauStatic = m * 9.81 * dz;
+      const tauDyn = m * aDes * dy;
+      // 「不能太过」= **死区**（`latHipDead`，单位 N·m，直接就是力矩门限）
+      // ⚠ 之前写成 `dead / max(0.05,|dy|)`（把位移门限换算成力矩），
+      //   结果 dead=0.05 → 门限 0.43 N·m，而 τ 动辄 100 N·m ⇒ **恒不生效**，
+      //   扫 0/0.02/0.05 三档结果逐位相同 —— 又一个"死参数"。
+      const tauRaw = tauStatic + tauDyn;
+      const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
+      const tmax = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS]!;
+      rs.hipLatTau = clamp(tauAdj, tmax);
+      if (Math.abs(rs.hipLatTau) > 0.5) {
+        rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
+          `髋外展·单腿策略(τ静=${tauStatic.toFixed(0)}+τ动=${tauDyn.toFixed(0)}N·m)`);
+        rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
-      rs.hipLatTau = 0; rs.waistTrim = 0;
+      rs.hipLatTau = 0;
+    }
+    {
+      const stanceZl = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+      rs.waistTrim = rs.com.z - stanceZl;   // UI：「还差多少到支撑脚」
     }
 
-    // ④a 骨盆抬升（pelvic hike）：摆动侧骨盆抬高 2~5cm 是最小足净空的决定因素
-    //   （Saunders 1953），由支撑侧髋外展产生（Trendelenburg 的反向）。
-    //   ⚠ 与上面同轴（髋/1），所以默认**关闭** —— 上面的髋外展力矩通道
-    //     优先拿到这个轴。曾经实测开pelvicLift 只活 2.33 s、关掉才站满 8 s。
-    if (on('pelvicLift') && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
+// ④a 骨盆抬升（pelvic hike）：摆动侧骨盆抬高 2~5cm 是最小足净空的决定因素
+  //   （Saunders 1953），由支撑侧髋外展产生（Trendelenburg 的反向）。
+// ⚠⚠ 与侧向转移**同轴**（`hip/0`）⇒ 按 `AXIS_OWNERSHIP` 它是**从属**的：
+  //     判据见上面 `latOwnsAbduction`（与外展通道共用，绝不能用 |F.fz| 量值）。
+  if (on('pelvicLift') && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
       const sw = rs.swingLeg();
       const clr = rs.soleY[sw] ?? 0;
       rs.swingClearance = clr;
@@ -594,8 +692,10 @@ export function balanceSystem(
         p.maxPelvicLift,
       );
       rs.pelvicLift = pelv;
-      rs.clearHold(jHip, 1);
-      rs.requestAngle(jHip, 1, pelv, 'balance', '骨盆抬升(给迈腿留空间)');
+      rs.clearHold(jHip, HIP_ABD_AXIS);
+      rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, 'balance', '骨盆抬升(侧向无需求时才占轴)');
+    } else if (jHip >= 0) {
+      rs.pelvicLift = 0;
     }
   }
 
@@ -617,7 +717,7 @@ export function balanceSystem(
   //       ξ = x_com + ẋ_com/ω        CoP 放在 ξ 处 ⇒ CoM 恰好停住
   //   符号（实测）：正踝角（跖屈）⇒ CoP 前移 ⇒ CoM 被往**后**拉 ⇒ 用来消 ξ。
   // ══════════════════════════════════════════════════════════════
-  if (jAnk >= 0) {
+  if (jAnk >= 0 && on('ankleCop')) {
     // ★★★ **CoP 直接调节器**（不是"猜符号的踝角 PD"）
     //
     //   实测（tools/probe-copauth）：刚性/柔性足上 **正踝角 ⇒ CoP 后移**（−5.2mm @ +12°）。

@@ -126,6 +126,12 @@ export class Controller {
       const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
       rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
       rs.rollDeg = Math.atan2(az, uy) * 57.2958;
+      // ★ 俯仰/侧倾**角速度**（deg/s）：腰的姿态保持必须是 PD 而不是纯 P。
+      //   纯 P 的指令会被 spine 的 ±15~25° 限幅打饱和 ⇒ 过冲 ⇒ 折向翻转
+      //   （实测前折 +80°；加腰控制器后变成后折 −79°，就是过冲造成的）。
+      const av = sim.doll.torso().angvel();
+      rs.pitchRate = av.z * 57.2958;
+      rs.rollRate = av.x * 57.2958;
     }
     // GRF：用法向载荷 + 接触切向估计的合力方向（横/竖比实测 0.074~0.333）
     rs.grf.x = 0; rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));

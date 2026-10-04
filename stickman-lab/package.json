@@ -12,6 +12,7 @@
     "parts": "python tools/build-parts.py",
     "size": "node tools/measure-size.mjs",
     "verify": "node tools/run.mjs verify-core",
+    "probe:axisown": "node tools/run.mjs probe-axisown",
     "forces": "node tools/run.mjs probe-forces",
     "forces:walk": "node tools/run.mjs probe-forces walk 30",
     "ground": "node tools/run.mjs probe-ground",

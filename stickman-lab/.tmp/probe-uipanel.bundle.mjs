@@ -18147,6 +18147,8 @@ var init_rigState = __esm({
       tiltDeg = 0;
       pitchDeg = 0;
       rollDeg = 0;
+      pitchRate = 0;
+      rollRate = 0;
       soleX = { l: 0, r: 0 };
       /**
        * 脚底中心的**横向**位置（m）。
@@ -18237,6 +18239,12 @@ var init_rigState = __esm({
         this.vel = new Float64Array(n);
         this.prevTarget = new Float32Array(n);
         this.prevOut = new Float32Array(n);
+        this.hold.fill(false);
+        for (let i = 0; i < n; i++) {
+          this.hold[i] = false;
+          this.axisMode[i] = 0;
+          this.holdMask[i] = 0;
+        }
         this.tauOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
         this.forceBuf = new Float64Array(sk2.joints.length * 5);
@@ -18379,7 +18387,43 @@ var init_rigState = __esm({
        *   "命令膝弯 46°"，实测开局就深蹲塌下去。
        *   ⇒ 控制器里凡是"我要这个角"的语义，都必须走这个接口。
        */
+      // ── 轴模式声明与冲突检测（重构不变量）─────────────────────────
+      /**
+       * ★★ 每个 (关节,轴) 在 `balance.AXIS_OWNERSHIP` 里**恰好一个模式**
+       *   （`pos` 位置伺服 / `tau` 力矩通道）。本字段在运行时**检测**违反：
+       *   同一根轴同时被位置和力矩两个通道以**不同系统**申领 ⇒ 记一次冲突。
+       *
+       *   为什么是"检测"而不是"直接拒收"：拒收会改变行为、可能引入新的塌陷；
+       *   先把它变成**可断言的量**（`axisConflicts`），由 `tools/probe-axisown.ts`
+       *   门禁要求默认路径下为 0。等它稳定为 0 之后就可以升级成硬拒收。
+       *
+       *   这条不变量对应本轮的三次实测故障（见 `balance.ts` 顶部注释）：
+       *   `hip/1` 三写者、`requestHold` 双副本、消融工具说谎。
+       */
+      axisMode = [];
+      // 0=无 1=pos 2=tau
+      axisModeOwner = [];
+      /** 本拍观测到的轴归属冲突（UI/门禁回读） */
+      axisConflicts = [];
+      claimAxis(joint, axis, mode, system) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) return;
+        if (this.axisMode[i] === 0) {
+          this.axisMode[i] = mode;
+          this.axisModeOwner[i] = system;
+          return;
+        }
+        if (this.axisMode[i] === mode) return;
+        this.axisConflicts.push({
+          axis: i,
+          joint: this.sk.joints[joint]?.name ?? `?${joint}`,
+          mode: mode === 1 ? "pos" : "tau",
+          by: system,
+          against: this.axisModeOwner[i] ?? "none"
+        });
+      }
       requestAngle(joint, axis, rad, system, label) {
+        this.claimAxis(joint, axis, 1, system);
         const def = this.sk.joints[joint];
         if (!def) {
           this.badRequests++;
@@ -18402,6 +18446,7 @@ var init_rigState = __esm({
        *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
        */
       requestTorque(joint, axis, tau, system, label) {
+        this.claimAxis(joint, axis, 2, system);
         const i = joint * 3 + axis;
         if (i < 0 || i >= this.nAxes) {
           this.badRequests++;
@@ -18457,9 +18502,11 @@ var init_rigState = __esm({
       /** 撤销让位（让该轴交回给常规位置伺服）—— `τ=JᵀF` 与位置偏置共存时用 */
       clearHold(joint, axis) {
         const i = joint * 3 + axis;
-        if (i >= 0 && i < this.nAxes) {
-          this.hold[i] = false;
-          this.holdMask[i] = 0;
+        if (i < 0 || i >= this.nAxes) return;
+        this.hold[i] = false;
+        this.holdMask[i] = 0;
+        for (let k = this.holdList.length - 1; k >= 0; k--) {
+          if (this.holdList[k].i === i) this.holdList.splice(k, 1);
         }
       }
       /** 内部用：让位标记（每拍清空） */
@@ -18525,6 +18572,11 @@ var init_rigState = __esm({
         this.req.fill(void 0);
         this.treq.fill(void 0);
         this.hold.fill(false);
+        for (let i = 0; i < this.axisMode.length; i++) {
+          this.axisMode[i] = 0;
+          this.axisModeOwner[i] = "balance";
+        }
+        this.axisConflicts.length = 0;
         for (const h of this.holdList) this.holdMask[h.i] = h.system === "balance" ? 1 : 2;
         this.holdList.length = 0;
         this.torqueRequestCount = 0;
@@ -18721,6 +18773,9 @@ var init_rigState = __esm({
           tiltDeg: this.tiltDeg,
           pitchDeg: this.pitchDeg,
           rollDeg: this.rollDeg,
+          pitchRate: this.pitchRate,
+          rollRate: this.rollRate,
+          axisConflicts: this.axisConflicts.map((c) => ({ ...c })),
           legs: {
             l: {
               side: "l",
@@ -19133,6 +19188,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const sk2 = rs.sk;
   const sup = rs.supportLeg();
   const latArmed = stanceResolved(rs);
+  const latOwnsAbduction = latArmed && p.lateralEnabled;
   const jHip = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
   const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
@@ -19147,16 +19203,16 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const D2R2 = Math.PI / 180;
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
-  if (p.torqueControl) {
-    if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
-    if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
-  } else {
+  {
     const ex = rs.com.x;
     const hipTgt = clamp2(-p.ksagP * ex - p.ksagD * rs.com.vx, p.maxHipDeg);
     if (on("hip") && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
     }
-    const spineTgt = clamp2(-p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.com.vx, p.maxTorsoDeg);
+    const spineTgt = clamp2(
+      -p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.pitchRate,
+      p.maxTorsoDeg
+    );
     for (const j of [jSp1, jSp2, jSp3]) {
       if (j !== void 0 && j >= 0 && on("torso")) {
         rs.requestAngle(j, 2, spineTgt, "balance", "\u8170\u77E2\u72B6\u59FF\u6001\u4FDD\u6301");
@@ -19173,8 +19229,6 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       }
     }
   }
-  if (jHip >= 0) rs.requestHold(jHip, 2, "balance", "\u652F\u6491\u9ACB\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
-  if (jKnee >= 0) rs.requestHold(jKnee, 2, "balance", "\u652F\u6491\u819D\u8BA9\u4F4D\u7ED9\u03C4=J\u1D40F");
   const kneeNow = rs.angle(jKnee, 2);
   const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
   if (on("knee") && latArmed && on("stanceExt")) {
@@ -19211,29 +19265,39 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (i2 >= 0) chain.push(i2);
     }
     doll.jacobianTorque(F.fx, F.fy, F.fz, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
-    for (const i2 of chain) {
-      for (let k2 = 0; k2 < 3; k2++) {
-        const v = TMP_TAU[i2 * 3 + k2];
-        if (Math.abs(v) > 0.5) rs.requestTorque(i2, k2, v, "balance", `\u03C4=J\u1D40F\xB7${rs.sk.joints[i2].name}/${k2}`);
-      }
-    }
-    if (latArmed && doll && p.lateralEnabled) {
-      const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-      const dead = p.latHipDead;
-      const dzHip = rs.com.z - stanceZl;
-      const errHip = Math.abs(dzHip) <= dead ? 0 : dzHip - Math.sign(dzHip) * dead;
-      rs.waistTrim = errHip;
-      const vTerm = -p.latHipDamp * rs.com.vz;
-      const tauHip = clamp2((errHip * p.kLatHip + vTerm) * p.latHipArm, p.maxLatHipTau);
-      rs.hipLatTau = tauHip;
-      if (jHip >= 0 && Math.abs(tauHip) > 0.5) {
-        rs.requestTorque(jHip, 1, tauHip, "balance", "\u989D\u72B6\u4E3B\u529B\xB7\u652F\u6491\u9ACB\u5916\u5C55(\u6587\u732E)");
+    if (jHip >= 0 && latOwnsAbduction) {
+      doll.jointWorld(jHip, TMP_JOINT);
+      const hipY = TMP_JOINT[1];
+      const hipZ = TMP_JOINT[2];
+      const dz = rs.com.z - hipZ;
+      const dy = rs.com.y - hipY;
+      const m = DEFAULT_WANTED_FORCE.weight / 9.81;
+      const h = Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05);
+      const aDes = h > 1e-6 ? F.fz / (m * h) : 0;
+      const tauStatic = m * 9.81 * dz;
+      const tauDyn = m * aDes * dy;
+      const tauRaw = tauStatic + tauDyn;
+      const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
+      const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
+      rs.hipLatTau = clamp2(tauAdj, tmax);
+      if (Math.abs(rs.hipLatTau) > 0.5) {
+        rs.requestTorque(
+          jHip,
+          HIP_ABD_AXIS,
+          rs.hipLatTau,
+          "balance",
+          `\u9ACB\u5916\u5C55\xB7\u5355\u817F\u7B56\u7565(\u03C4\u9759=${tauStatic.toFixed(0)}+\u03C4\u52A8=${tauDyn.toFixed(0)}N\xB7m)`
+        );
+        rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
       rs.hipLatTau = 0;
-      rs.waistTrim = 0;
     }
-    if (on("pelvicLift") && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
+    {
+      const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+      rs.waistTrim = rs.com.z - stanceZl;
+    }
+    if (on("pelvicLift") && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
       const sw = rs.swingLeg();
       const clr = rs.soleY[sw] ?? 0;
       rs.swingClearance = clr;
@@ -19242,11 +19306,13 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         p.maxPelvicLift
       );
       rs.pelvicLift = pelv;
-      rs.clearHold(jHip, 1);
-      rs.requestAngle(jHip, 1, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u7ED9\u8FC8\u817F\u7559\u7A7A\u95F4)");
+      rs.clearHold(jHip, HIP_ABD_AXIS);
+      rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u4FA7\u5411\u65E0\u9700\u6C42\u65F6\u624D\u5360\u8F74)");
+    } else if (jHip >= 0) {
+      rs.pelvicLift = 0;
     }
   }
-  if (jAnk >= 0) {
+  if (jAnk >= 0 && on("ankleCop")) {
     const cop = rs.cop[sup];
     const copErr = rs.dcm.x - cop.x;
     let ankSag = -p.kCopSag * copErr - p.kCopSagD * rs.com.vx;
@@ -19257,12 +19323,23 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.requestAngle(jAnk, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u8E1D\u989D\u72B6CoP");
   }
 }
-var DEFAULT_BALANCE_PARAMS, TMP_TAU;
+var HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT;
 var init_balance2 = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
     init_wantedForce();
+    HIP_ABD_AXIS = 0;
+    AXIS_OWNERSHIP = Object.freeze([
+      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip" },
+      { joint: "knee", axis: 2, role: "sagSupport", mode: "pos", channel: "knee" },
+      { joint: "hip", axis: HIP_ABD_AXIS, role: "latTransfer", mode: "tau", channel: "lat" },
+      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift", subordinateTo: "latTransfer" },
+      { joint: "spine", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "ankle", axis: 2, role: "ankleCop", mode: "pos", channel: "ankleCop" },
+      { joint: "ankle", axis: 0, role: "ankleCop", mode: "pos", channel: "ankleCop" }
+    ]);
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
@@ -19307,13 +19384,17 @@ var init_balance2 = __esm({
        *   开它请显式设 `lateralEnabled: true`（`ablate: 'lat'` 仍然是可用的消融名）。
        */
       torqueControl: false,
-      lateralEnabled: true,
+      lateralEnabled: false,
       // 额状主力（支撑髋外展，力矩通道）：误差 141mm × 500 × 0.5 ≈ 35 N·m，落在 60 限幅内
+      // ⛔ `kLatHip`/`latHipDamp`/`latHipArm`/`maxLatHipTau`/`latHipDead` 已随那条
+      //   手写侧向 P 律一起删除（它抢占了 `hip/1`，把 `maxLateral` 变成死参数）。
+      //   侧向现在只由 `wantedForce` 的 `maxLateral` 决定，走 `Jᵀ(F_lat)`。
+      // 下面这几项仅为兼容旧配置保留，已不参与控制：
       kLatHip: 500,
       latHipDamp: 60,
       latHipArm: 0.5,
       maxLatHipTau: 60,
-      latHipDead: 0.05,
+      latHipDead: 8,
       /**
        * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
        *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
@@ -19339,6 +19420,7 @@ var init_balance2 = __esm({
       kneeStanceDeg: 5
     };
     TMP_TAU = new Float32Array(256);
+    TMP_JOINT = new Float64Array(3);
   }
 });
 
@@ -19504,6 +19586,9 @@ var init_controller = __esm({
           const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
           rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
           rs.rollDeg = Math.atan2(az, uy) * 57.2958;
+          const av = sim2.doll.torso().angvel();
+          rs.pitchRate = av.z * 57.2958;
+          rs.rollRate = av.x * 57.2958;
         }
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));

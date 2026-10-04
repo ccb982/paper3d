@@ -45,7 +45,10 @@ const SUP = (process.argv[4] ?? 'l') as 'l' | 'r';
 if (SUP !== 'l' && SUP !== 'r') throw new Error(`支撑腿参数必须是 l 或 r，收到 ${JSON.stringify(SUP)}`);
 const log = console.log;
 
-const AGF = Number(process.env.AGF ?? 6);
+// ⚠ 默认必须是 1。AGF=6（踝接地惯量×6）本身就会把站立打崩：
+//   AGF=1 → 终躯干高 1.421m、倾角 9.9°；AGF=6 → 终躯干高 0.613m、倾角 23.7°。
+//   这个非 1 的默认值曾把「站不住」误判成控制器/交接的问题。
+const AGF = Number(process.env.AGF ?? 1) || 1;
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: DUR, driver: 'controller',
   doll: { ankleGroundFactor: AGF } });
 sim.begin(new Float32Array(sim.params.length));
