@@ -6560,7 +6560,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
           //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
           //                 = (anklePx[1] − part.cy) × px2m
-          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
+          //
+          // ★★ 再**下移**一点把接缝闭死（用户 2026-10-04：「允许把脚下移」）。
+          //   实测（站姿，两板零冗余、UV 严格互补 0.3584）：脚掌板上沿比小腿板
+          //   下沿**高** 6.9mm(左) / 6.1mm(右) ⇒ 接缝处两块错开。
+          //   左右**独立**取值（用户：「左右腿独立的」），这是实测标定值。
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m - (spec.key === "shin_l" ? 69e-4 : 61e-4), 0],
           plateUv: footUv,
           length: soleDrop,
           radius: 0,
@@ -6867,9 +6872,12 @@ var init_skeleton = __esm({
       soleFootScale: 1,
       // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
       footCropUpMm: 0.123,
-      footCropOverlapMm: 0.01,
-      // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
-      footCropOverlapFrac: 0.1,
+      // ★ 冗余归零（用户 2026-10-04：「把小腿和脚的纹理的冗余距离全归零，
+      //   现在对齐的纹理会互相挤」）。两板改为在裁剪线上**精确对接**。
+      //   之前 10mm/侧 + 10% 联动 ⇒ 约 36mm 重叠，两块板叠在一起互相挤。
+      footCropOverlapMm: 0,
+      // 比例项也归零（两者取大者，全 0 ⇒ 无重叠，两板精确对接）
+      footCropOverlapFrac: 0,
       soleGroundCorr: 0,
       soleSplit: true,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
