@@ -396,10 +396,23 @@ export class Viewer {
       //   ⚠ 这个标志此前**只声明、只赋值，从没被读过** ⇒ 是一枚死标志
       //     （与 `Ragdoll` 的 `jointGain` 同类）。
       if (b.plateHidden) continue;
+      // ★★ `plateUv`：这块板只画贴图的**一个子区域**（脚掌 = 从小腿贴图里裁出靴子）。
+      //   不裁的话只有两个坏结果：脚随踝转动时**消失**，或者**画出两只脚**
+      //   （因为脚掌刚体借的是小腿那张贴图）。
+      //   实现：贴图 set + UV 变换（THREE 的 uv 原点在左下，与素材坐标相反 ⇒ y 已翻转）。
+      const uv = b.plateUv;
+      let tex = loadTex(b.part.file);
+      if (uv) {
+        tex = tex.clone();
+        tex.needsUpdate = true;
+        tex.repeat.set(uv.width, uv.height);
+        tex.offset.set(uv.x, uv.y);
+      }
+      // 裁剪后板子的**世界高度**按子区域比例缩，否则脚会被拉伸成整条小腿那么高
       const w = b.part.bw * sk.px2m;
-      const h = b.part.bh * sk.px2m;
+      const h = b.part.bh * sk.px2m * (uv ? uv.height : 1);
       const mat = new THREE.MeshBasicMaterial({
-        map: loadTex(b.part.file), transparent: true, depthTest: false, depthWrite: false,
+        map: tex, transparent: true, depthTest: false, depthWrite: false,
         // ★ DoubleSide：相机绕到背面时板子不能凭空消失
         side: THREE.DoubleSide,
       });
@@ -793,8 +806,16 @@ export class Viewer {
       //     但刚体本身是倾斜的，板心的偏移向量必须跟着刚体一起转。
       this.qBody.set(q.x, q.y, q.z, q.w);
       this.qRel.copy(this.qBody).multiply(slot.qRestInv);
-      const off = doll.sk.bodies[slot.drivers[0]].plateOffset;
-      this.tmpV.set(off[0], off[1], off[2]).applyQuaternion(this.qBody);
+      const bd = doll.sk.bodies[slot.drivers[0]];
+      const off = bd.plateOffset;
+      // ★★ 裁剪板（`plateUv`）要沿板自身高度下移**半个裁剪区**。
+      //   板心默认落在刚体原点，而脚掌刚体原点 = **踝锚点**（几何中心在踝），
+      //   被裁出来的是**踝以下那块** ⇒ 板心必须下移才落在靴子中央。
+      //   否则脚掌板会有一半浮在踝上方、另一半陷进小腿。
+      const halfDrop = bd.plateUv
+        ? (bd.part.bh * doll.sk.px2m * bd.plateUv.height) / 2
+        : 0;
+      this.tmpV.set(off[0], off[1] - halfDrop, off[2]).applyQuaternion(this.qBody);
       slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
       slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix);

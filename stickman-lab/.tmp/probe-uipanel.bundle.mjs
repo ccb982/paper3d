@@ -6506,6 +6506,16 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fTilt = 0;
         const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const texH = part.h;
+        const texTopPx = part.cy - part.bh / 2;
+        const cutTopLocal = anklePx[1] - texTopPx;
+        const cutBotLocal = cutTopLocal + META.sole.len;
+        const footUv = (() => {
+          const y0 = cutBotLocal / texH;
+          const h = Math.max(0.02, (cutBotLocal - cutTopLocal) / texH);
+          const yc = Math.min(Math.max(y0, 0), 1 - h);
+          return { x: 0, y: 1 - (yc + h), width: 1, height: h };
+        })();
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
         const yawDip = cfg.soleGroundCorr;
@@ -6515,16 +6525,20 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           bone: spec.bone,
           label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
           part,
-          // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          // 贴图仍借小腿那张（下面裁出靴子那块）
           cx: 0,
           cy: ankleY,
           cz: ankleZ,
           restTiltRad: fTilt,
           restYawRad: fYaw,
-          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          //   ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
           plateOffset: [0, 0, 0],
-          plateHidden: true,
-          // ★ 渲染层据此跳过这块板
+          plateUv: footUv,
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,

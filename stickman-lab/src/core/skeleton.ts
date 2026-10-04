@@ -594,6 +594,17 @@ export interface BodyDef {
    *   靠渲染层对脚部区域做 UV 扭曲来表现踝的转动。
    */
   plateHidden?: boolean;
+  /**
+   * ★ 贴图的**子区域**（UV 归一化，`x/y` 左下原点，THREE 的 uv 约定）。
+   *
+   * 用途：脚掌要独立随踝转动，就必须从小腿那张贴图里**裁出靴子那块**
+   * （用户 2026-10-04：「把小腿的脚裁剪出来附着在脚上」）。
+   * 没有它只有两个选择：都不画（脚在踝转动时**消失**）或都画（**两只脚**）。
+   *
+   * ⚠ 只裁**纵向**（沿贴图高度切一刀），横向取整张 —— 靴子宽度与小腿等宽。
+   *   `y` 是子区域下沿，`height` 是其高度，三者都用 0..1 归一化。
+   */
+  plateUv?: { x: number; y: number; width: number; height: number };
   /** 长轴长度（米） */
   length: number;
   /** 主胶囊半径（米） */
@@ -927,6 +938,22 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         const fTilt = 0;                       // 脚掌在物理里保持水平（盒底贴地）
         const fYaw = restYawOf(spec.key === 'shin_l' ? 'foot_l' : 'foot_r');
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        // ★★★ 脚掌贴图的**裁剪区域**（UV 归一化）—— 从小腿那张里切出靴子。
+        //   ⚠⚠ 裁剪线必须在**贴图局部坐标**里算，不能直接用画布坐标：
+        //   `anklePx` 是**画布 px**（踝在 y≈2792），而这张贴图只有 `part.h` ≈ 408 px 高
+        //   （它只是画布裁出来的一块）⇒ 直接除会得到 y = −6.7 这种越界值。
+        //   正确做法：先减去贴图自身的左上角 (`part.cx − part.bw/2`, `part.cy − part.bh/2`)。
+        const texH = part.h;
+        const texTopPx = part.cy - part.bh / 2;               // 该贴图左上角的画布 y
+        const cutTopLocal = anklePx[1] - texTopPx;            // 踝在贴图内的 y（局部 px）
+        const cutBotLocal = cutTopLocal + META.sole.len;      // 鞋底
+        const footUv = (() => {
+          const y0 = cutBotLocal / texH;                     // 局部 → 0..1
+          const h = Math.max(0.02, (cutBotLocal - cutTopLocal) / texH);
+          // 越界（素材里靴子超出小腿贴图下沿）就夹到贴图内，并保留下沿
+          const yc = Math.min(Math.max(y0, 0), 1 - h);
+          return { x: 0, y: 1 - (yc + h), width: 1, height: h };
+        })();
         // ★ 脚掌盒从**踝一直罩到鞋底**（不是只盖鞋底那一片）：
         //   ① 踝锚点必须落在自己刚体的碰撞体内，否则门禁"锚点不越出胶囊"必失败，
         //      物理上踝也确实在脚掌实体的上端；
@@ -965,15 +992,20 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
           bone: spec.bone,
           label: spec.key === 'shin_l' ? '左脚掌' : '右脚掌',
-          part,                       // 贴图仍借小腿那张（渲染层按脚部区域做 UV 扭曲）
+          part,                       // 贴图仍借小腿那张（下面裁出靴子那块）
           cx: 0,
           cy: ankleY,
           cz: ankleZ,
           restTiltRad: fTilt,
           restYawRad: fYaw,
-          // 贴图板偏移：脚掌**不单独画贴图** ⇒ 用一个大偏移把它藏到小腿板之外
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          //   ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
           plateOffset: [0, 0, 0],
-          plateHidden: true,          // ★ 渲染层据此跳过这块板
+          plateUv: footUv,
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
