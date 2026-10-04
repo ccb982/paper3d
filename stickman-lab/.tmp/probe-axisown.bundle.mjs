@@ -18276,7 +18276,7 @@ var init_rigState = __esm({
       /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
       snapshot(limitHit = []) {
         const footL = this.soleX.l, footR = this.soleX.r;
-        const front = footL >= footR ? "l" : "r";
+        const front = this.frontLeg();
         const axes = [];
         for (let j = 0; j < this.sk.joints.length; j++) {
           for (let a = 0; a < 3; a++) {

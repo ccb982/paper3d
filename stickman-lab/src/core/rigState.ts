@@ -844,7 +844,12 @@ export class RigState {
   /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
   snapshot(limitHit: boolean[] = []): RigSnapshot {
     const footL = this.soleX.l, footR = this.soleX.r;
-    const front: Side = footL >= footR ? 'l' : 'r';
+    void footL; void footR;   // 仅遗留局部量，判定已统一到 frontLeg()
+    // ⚠ 这里原来另写了一份 `footL >= footR ? 'l' : 'r'`（裸比较、无死区），
+    //   而 HUD 读的正是这份快照 ⇒ **UI 的「前腿/后腿」标签逐帧闪**
+    //   （实测 20s 切 4 次；Δx 实测只有 ±1mm，正好在 3mm 死区内抖）。
+    //   这已是同一个决策的**第三份实现**（前两份：承重腿的双实现）。
+    const front: Side = this.frontLeg();
     const axes: AxisSnapshot[] = [];
     for (let j = 0; j < this.sk.joints.length; j++) {
       for (let a = 0; a < 3; a++) {

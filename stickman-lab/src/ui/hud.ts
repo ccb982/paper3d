@@ -324,7 +324,14 @@ setOwnership(d: RigSnapshot | null): void {
       const L = d.legs[s];
       const tags: string[] = [];
       if (L.isFront) tags.push('前腿'); else tags.push('后腿');
-      tags.push(L.isBearer ? '★承重' : '摆动');
+      // ⚠ 双支撑时**两条腿都在支撑**，把非承重那条标成"摆动"是错的
+      //   （原实现 `L.isBearer ? '★承重' : '摆动'`）。用户看到的"角色在不停变化"
+      //   有一部分来自这个标签语义错误：它随载荷噪声在"承重/摆动"之间跳。
+      //   ⇒ 摆动只在**真的离地**时才叫摆动；否则按接地/承重如实显示。
+      const bothDown = d.legs.l.grounded && d.legs.r.grounded;
+      if (!L.grounded) tags.push('摆动');
+      else if (L.isBearer) tags.push(bothDown ? '★承重(双支撑)' : '★承重');
+      else tags.push('支撑');
       if (L.locked) tags.push('🔒锁定');
       tags.push(L.grounded ? '接地' : `离地${(L.soleY * 1000).toFixed(0)}mm`);
       tags.push(`载荷${(L.loadFrac * 100).toFixed(0)}%`);

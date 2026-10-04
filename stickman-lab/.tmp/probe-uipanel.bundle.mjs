@@ -6066,7 +6066,10 @@ var init_hud = __esm({
           const tags = [];
           if (L.isFront) tags.push("\u524D\u817F");
           else tags.push("\u540E\u817F");
-          tags.push(L.isBearer ? "\u2605\u627F\u91CD" : "\u6446\u52A8");
+          const bothDown = d.legs.l.grounded && d.legs.r.grounded;
+          if (!L.grounded) tags.push("\u6446\u52A8");
+          else if (L.isBearer) tags.push(bothDown ? "\u2605\u627F\u91CD(\u53CC\u652F\u6491)" : "\u2605\u627F\u91CD");
+          else tags.push("\u652F\u6491");
           if (L.locked) tags.push("\u{1F512}\u9501\u5B9A");
           tags.push(L.grounded ? "\u63A5\u5730" : `\u79BB\u5730${(L.soleY * 1e3).toFixed(0)}mm`);
           tags.push(`\u8F7D\u8377${(L.loadFrac * 100).toFixed(0)}%`);
@@ -18738,7 +18741,7 @@ var init_rigState = __esm({
       /** 每拍产出一次，**整体替换** ⇒ 持有旧快照不会被后续 tick 改变 */
       snapshot(limitHit = []) {
         const footL = this.soleX.l, footR = this.soleX.r;
-        const front = footL >= footR ? "l" : "r";
+        const front = this.frontLeg();
         const axes = [];
         for (let j = 0; j < this.sk.joints.length; j++) {
           for (let a = 0; a < 3; a++) {
