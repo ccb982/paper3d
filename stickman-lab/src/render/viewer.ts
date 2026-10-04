@@ -297,6 +297,8 @@ interface PlateSlot {
    * 按 restTilt⁻¹ 折算好），保证静姿态下精确落回素材位置。
    */
   qRestInv: THREE.Quaternion;
+  /** 脚掌板绕竖直轴的额外 90°（其余板子为单位四元数） */
+  qYaw90: THREE.Quaternion;
 }
 
 export class Viewer {
@@ -425,6 +427,17 @@ export class Viewer {
           const [x, y, z, w] = invQuatOf(restVisualQuatOf(b.restTiltRad));
           return new THREE.Quaternion(x, y, z, w);
         })(),
+        // ★ 脚掌板绕**竖直轴（Y）**转 90°（用户 2026-10-04：「纹理是沿着竖直的轴转90度」）。
+        //   ⇒ 板面法线从 `+X`（正前）转到 `+Z`（左侧），靴子以**侧面**呈现，
+        //   和 collider 长边落到前后向（`skeleton.ts` 的 `hx`/`hz`）配套。
+        //   只作用于 `foot_l/foot_r`，其余板子（含手臂）一律单位四元数。
+        qYaw90: (b.key === 'foot_l' || b.key === 'foot_r')
+          ? new THREE.Quaternion().setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              // 两只脚同时再转 180°（用户 2026-10-04：「现在是两个脚都反了，给两个脚同时转180」）
+              (b.key === "foot_l" ? 1 : -1) * Math.PI / 2,
+            )
+          : new THREE.Quaternion(),
       });
       this.scene.add(mesh);
     }
@@ -434,6 +447,7 @@ export class Viewer {
       const g = this.buildSkinGroup(sk, groups.skinned, tex);
       this.plates.push({
         mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
+        qYaw90: new THREE.Quaternion(),
         // 躯干不设静倾角（脊柱 LBS 蒙皮要求各段同朝向）
         qRestInv: new THREE.Quaternion(),
       });
@@ -828,7 +842,7 @@ export class Viewer {
       this.tmpV.set(off[0], off[1] + shift, off[2]).applyQuaternion(this.qBody);
       slot.mesh.position.set(t.x + this.tmpV.x, t.y + this.tmpV.y, t.z + this.tmpV.z);
       // ★ 板子的世界朝向 = 增量朝向 ⊗ 板子固定朝向（先 qFix 后 qRel）
-      slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix);
+      slot.mesh.quaternion.copy(this.qRel).multiply(this.qFix).multiply(slot.qYaw90);
       slot.sortPos.set(t.x, t.y, t.z);
     }
 

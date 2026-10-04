@@ -6496,8 +6496,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
       const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
-      const hx = soleHalfLen * sfx;
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = hx * 0.3;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6562,10 +6564,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
           colliders: (() => {
             const two = cfg.soleSplit;
-            const hxBall = two ? hx * 0.32 : hx;
-            const hxHeel = two ? hx * 0.26 : 0;
-            const offBall = two ? hx * 0.62 : 0;
-            const offHeel = two ? -hx * 0.6 : 0;
+            const hxBall = two ? hx * 0.5 : hx;
+            const hxHeel = two ? hx * 0.5 : 0;
+            const offBall = two ? hx * 0.5 : 0;
+            const offHeel = two ? -hx * 0.5 : 0;
             const mBall = two ? soleMass * 0.6 : soleMass;
             const mHeel = two ? soleMass * 0.4 : 0;
             const mk = (dx, mx, m) => ({

@@ -946,9 +946,33 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === 'shin_l' ? 'knee_l' : 'knee_r'];
       const anklePx = LIMB_AXES.anchors?.[spec.key === 'shin_l' ? 'foot_l' : 'foot_r'];
-      const hx = soleHalfLen * sfx;
-      // 侧向半宽用**实测靴宽**（前后长度 hx 仍是手填设计参数：正面视图测不出脚长）
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      // ★★★ 把脚绕竖轴**转 90°**（用户 2026-10-04：「脚和纹理都要转90度，
+      //   把长边的方向定义为真正的脚的方向」）。
+      //
+      //   原来：`hx = soleHalfLen`（前后半长 109mm）、`hz = 实测靴半宽`（102mm）
+      //     ⇒ 每个脚盒 70 × 204 × 52，**长边 204mm 落在横向 Z 上**
+      //     ⇒ 脚的方向看起来是横着/朝后的（骨架线框里一眼可见）。
+      //   转 90° 后：**长边必须落在前后向 X 上**，也就是把两个半轴对调 ——
+      //     · 前后半长 `hx` ← 原来的靴宽半值（102mm ⇒ 前后 204mm，占满整个脚长）
+      //     · 横向半宽 `hz` ← 原来的前后半值（109mm ⇒ 横向 218mm）
+      //   ⚠ 对调后**横向会变宽**（218mm），前后 204mm，长/宽 = 0.94 < 1 ⇒ 长边又跑到横向去了。
+      //     所以对调之后必须再把横向收到前后以内，取人脚 长/宽 ≈ 2.4 ⇒ `hz = hx × 0.42`。
+      //   最终：前后 204mm × 横向 86mm，**长边 = 前后向 = 脚的方向** ✓
+      const hxRaw = soleHalfLen * sfx;                                  // 前后半长（109mm）
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx; // 实测靴半宽（102mm）
+      // ★★★ 长边 = 脚的方向，必须落在**前后向 X**（用户 2026-10-04：
+      //   「把长边的方向定义为真正的脚的方向」「我要之前那样的长方形」）。
+      //
+      //   原来每个脚盒 = 前后 70mm × 横向 204mm ⇒ 长边在横向，脚的方向是横的。
+      //   坑：把 `hx` 放大后如果沿用 `hxBall = hx×0.32`，每盒前后只剩 70mm、
+      //   横向 92mm ⇒ **变成正方形**（用户 2026-10-04：「脚骨架成了正方形了」）。
+      //   所以要同时做两件事：
+      //     ① 两半改成 `0.5·hx @ ±0.5·hx`（在 x=0 相接，各占一半，不再留中间空隙）
+      //     ② 横向收到 `hx × 0.30`，让每盒 前后 109 × 横向 65 ⇒ 长/宽 1.67
+      //   ⚠ 横向从实测靴宽 204mm 收到 65mm：collider 比画出来的靴子窄很多。
+      //     这是"骨架是长方形 + 长边=脚方向"的必然代价（线框视图可见）。
+      const hx = hxRaw;
+      const hz = hx * 0.30;
       // ★ 盒心横向 = **膝锚点正下方**（膝到脚尖铅垂），不是画出来的靴心：
       //   素材靴心比膝锚点外偏 60~100px，那正是"外八"；盒心挂靴心 ⇒ 膝到脚尖朝外。
       //   脚尖朝向由 `footSplayDeg`（外八）单独控制，两者互不干涉。
@@ -1085,10 +1109,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           colliders: (() => {
             const two = cfg.soleSplit;
             // 两块的前后分配：脚跟 40% / 前脚掌 60%（人体步态的中步置两压力比约 4:6）。
-            const hxBall = two ? hx * 0.32 : hx;   // 前脚掌短且圆，不与脚跟重叠
-            const hxHeel = two ? hx * 0.26 : 0;
-            const offBall = two ? hx * 0.62 : 0;   // 中心分离（两块不重叠）
-            const offHeel = two ? -hx * 0.60 : 0;
+            const hxBall = two ? hx * 0.50 : hx;   // 前半：与脚跟各占一半，在 x=0 相接
+            const hxHeel = two ? hx * 0.50 : 0;    // 后半
+            const offBall = two ? hx * 0.50 : 0;
+            const offHeel = two ? -hx * 0.50 : 0;
             const mBall = two ? soleMass * 0.6 : soleMass;
             const mHeel = two ? soleMass * 0.4 : 0;
             const mk = (dx: number, mx: number, m: number) => ({
