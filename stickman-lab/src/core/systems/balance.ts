@@ -500,7 +500,7 @@ export function balanceSystem(
     const dzLat = rs.com.z - stanceZLat;
     const dead = p.waistTrimDead;
     const errLat = Math.abs(dzLat) <= dead ? 0 : (dzLat - Math.sign(dzLat) * dead);
-    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);
+    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);    rs.waistTrim = clamp(errLat * p.kWaistTrim, p.maxWaistTrim);
     if (on('latwaist') && jSp1 >= 0 && rs.waistTrim !== 0) {
       // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角
       for (const j of [jSp1, jSp2, jSp3]) {

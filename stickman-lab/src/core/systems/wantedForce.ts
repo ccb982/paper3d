@@ -113,9 +113,9 @@ export function stanceResolved(rs: RigState): boolean {
  * @param on 分量开关。**每个都必须真实接线**到下面的求和，否则消融实验无效
  *           （此前 `lat` 是死开关，害得所有对照实验作废）。
  */
-/** 额状面位置死区（米）：捕获点离支撑脚中心多近就不动作。与 `waistTrimDead` 同量级 */
+/** 额状面位置死区（米）：捕获点离支撑脚中心多近就不动作 */
 export const LAT_ERR_DEAD = 0.05;
-/** 额状面速度死区（m/s）：低于此值视为噪声（`com.vz` 是有限差分量） */
+/** 额状面速度死区（m/s）：低于此值视为噪声 */
 export const LAT_VZ_DEAD = 0.02;
 /**
  * 额状面安全系数 ρ（Li, Zhou, Zhu & Xiong, IEEE T-RO）：
