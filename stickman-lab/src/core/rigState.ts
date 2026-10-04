@@ -288,6 +288,17 @@ export class RigState {
   readonly vel: Float64Array;
   readonly loadFrac: Record<Side, number> = { l: 0, r: 0 };
   readonly grounded: Record<Side, boolean> = { l: false, r: false };
+  /**
+   * ★★ **"现在是真单支撑吗"** —— 控制与计分的**收敛判据**，由
+   *   `Ragdoll.stanceIsSingleSupport()` 统一给出（接触数 + 净空门槛 + 滞回）。
+   *
+   * ⚠ 与 `grounded` 的区别：`grounded` 是**逐脚原始接地事实**（B1 与 UI 用），
+   *   本字段是由它派生出的**单支撑判断**。不要拿它当"某只脚着地了吗"。
+   *
+   * ⚠ 为什么不直接用裸接触数 `nGround === 1`：计分侧注释实测
+   *   「88% 的离地不到 3 cm ⇒ 多数是接触抖动」，裸接触数在抖动帧里会闪。
+   */
+  stanceSingle = false;
   com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
   dcm = { x: 0, z: 0 };
   support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };

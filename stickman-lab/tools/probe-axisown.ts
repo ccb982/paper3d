@@ -317,6 +317,63 @@ log('══ F. 唯一性：相位 / 角色标签只有一份定义 ══');
 }
 
 log('');
+log('══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽）══');
+{
+  const { PHASE_TO_SCORING, SCORING_TO_STANCE, phaseStance } =
+    await import('../src/core/gaitState');
+  const CTRL = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'] as const;
+  const SCORE = ['both', 'step', 'adjust'] as const;
+
+  // G1：每个控制相位都必须有映射（漏一个 = 两台机器对同一时刻说法不同）
+  const missing = CTRL.filter((p) => PHASE_TO_SCORING[p] === undefined);
+  if (missing.length) bad(`这些控制相位没有映射到计分相位：${missing.join(', ')}`);
+  else ok(`${CTRL.length} 个控制相位全部有映射`);
+
+  // G2：映射目标必须是合法的计分相位
+  const badTarget = CTRL.filter((p) => !SCORE.includes(PHASE_TO_SCORING[p]!));
+  if (badTarget.length) bad(`映射到了非法计分相位：${badTarget.join(', ')}`);
+  else ok('映射目标全部合法');
+
+  // G3：★ `phaseStance()` 必须与映射表一致（这就是"同一物理时刻同一个说法"）
+  //     控制侧的既有事实：`DOUBLE`/`SHIFT` 双脚、`SINGLE`/`PUSH`/`STEP` 单支撑。
+  const EXPECT: Record<string, string> = {
+    DOUBLE: 'double', SHIFT: 'double',
+    SINGLE: 'single', PUSH: 'single', STEP: 'single',
+  };
+  const wrong = CTRL.filter((p) => phaseStance(p) !== EXPECT[p]);
+  if (wrong.length) {
+    bad(`phaseStance 与控制侧语义不符：${wrong.map((p) => `${p}=${phaseStance(p)}(应 ${EXPECT[p]})`).join(', ')}`);
+  } else {
+    ok('phaseStance 与控制侧语义一致（DOUBLE/SHIFT=双，SINGLE/PUSH/STEP=单）');
+  }
+
+  // G4：计分三相必须都有支撑分类
+  const noStance = SCORE.filter((s) => SCORING_TO_STANCE[s] === undefined);
+  if (noStance.length) bad(`这些计分相位没有支撑分类：${noStance.join(', ')}`);
+  else ok(`${SCORE.length} 个计分相位全部有支撑分类`);
+
+  // G5：收敛判据"真单支撑"必须是**单一实现** —— 谁在定义它
+  //     ⚠ 必须**剥掉注释**再数：`rigState.ts` 的字段文档里就写了
+  //     `Ragdoll.stanceIsSingleSupport()`，那是引用不是实现。
+  const stripComments = (s: string): string =>
+    s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const defs: string[] = [];
+  for (const f of ['src/core/ragdoll.ts', 'src/core/gaitState.ts', 'src/core/sim.ts',
+    'src/core/rigState.ts', 'src/core/systems/step.ts', 'src/core/systems/balance.ts']) {
+    if (!fs.existsSync(f)) continue;
+    if (/stanceIsSingleSupport\s*\(/.test(stripComments(read(f)))) defs.push(f);
+  }
+  if (defs.length !== 1) bad(`"真单支撑"判据的实现处应恰好 1 个，实际 ${defs.length} 个：${defs.join(', ')}`);
+  else ok(`"真单支撑"唯一实现（${defs[0]}）`);
+
+  // G6：两条路径都真的读了它（不然只是"有个统一判据"却没人用）
+  const ctrlUses = read('src/core/controller.ts').includes('stanceIsSingleSupport');
+  const rsHas = /stanceSingle\s*=\s*false/.test(read('src/core/rigState.ts'));
+  if (ctrlUses && rsHas) ok('控制侧已接入收敛判据（controller → rigState.stanceSingle）');
+  else bad(`收敛判据未被控制侧接入（controller=${ctrlUses} rigState字段=${rsHas}）`);
+}
+
+log('');
 if (fails) {
   log(`✗ 轴归属门禁失败 ${fails} 项`);
   process.exit(1);

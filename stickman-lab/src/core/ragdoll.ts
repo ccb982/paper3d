@@ -96,6 +96,20 @@ const LIMIT_SOFT_ZONE = 0.3;
 /** 本地三轴（世界初始 = 骨架初始姿态的坐标系） */
 const AXIS_X = 0, AXIS_Y = 1, AXIS_Z = 2;
 
+/**
+ * ★ "真单支撑"判据的三个常数（控制与计分**共用**，见 `stanceIsSingleSupport`）。
+ *
+ * `STANCE_CLEAR_MIN = 0.03`：离地净空门槛。取 `stability.MIN_CLEARANCE` 的同一
+ *   个口径 —— `sim.ts` 的注释实测"88% 的离地不到 3 cm ⇒ 多是接触抖动"。
+ *   重新定义成局部常量而不是 import，是为了不让物理层依赖计分层。
+ * ⚠ 若要改，必须**同时**改 `stability.MIN_CLEARANCE`，否则两处口径又分家。
+ */
+const STANCE_CLEAR_MIN = 0.03;
+/** 进入单支撑所需的连续时长（s）：滤掉一瞬的接触抖动 */
+const STANCE_ENTER = 0.05;
+/** 退出单支撑所需的连续时长（s）：比进入**慢**，形成滞回防来回跳 */
+const STANCE_EXIT = 0.10;
+
 export interface RagdollOptions {
   /** 地面摩擦 */
   groundFriction?: number;
@@ -983,7 +997,63 @@ export class Ragdoll {
     return false;
   }
 
-  resetAlt(): void { this.lastStance = 0; this.stanceAge = 0; }
+  /**
+   * ★★★ **"真单支撑"的唯一判定**（收敛点：控制与计分共用）
+   *
+   * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+   *
+   * 问题：`sim.ts` 用裸接触数 `nGround === 1` 判单支撑，而它**自己的注释**
+   * 就承认这是噪声源：脚高信号 3.90 Hz、离地峰值中位 0 mm、**88% 的"离地"
+   * 不到 3 cm** ⇒ 大多是接触抖动。`gaitState` 那边则用 `X1`（前腿接地 **且**
+   * 载荷达标）判 —— 两者对"现在是单支撑吗"给出不同答案。
+   *
+   * 收敛办法：**只保留一个带滞回 + 净空门限的判定**，两条路径都读它。
+   * 判据（三条全满足才算单支撑）：
+   *   ① 接触数恰为 1（真的只有一只脚有接触对）
+   *   ② 离地那只脚的**净空峰值** ≥ `STANCE_CLEAR_MIN`（滤掉接触抖动）
+   *   ③ 滞回：进入要连续 `STANCE_ENTER` 秒、退出要连续 `STANCE_EXIT` 秒
+   *
+   * ⚠ 这是**新增**接口，不改动既有 `footGrounded()` / `altEvent()` 行为 ——
+   *   切换调用方会改变计分门控，属于行为变更，需要单独评估。
+   */
+  private stanceSingle = false;
+  private stanceEnterT = 0;
+  private stanceExitT = 0;
+  /** 接触数恰为 1 且离地脚净空峰值达标、已滞回确认 ⇒ 现在是真的单支撑 */
+  stanceIsSingleSupport(clearancePeak: number, dt: number): boolean {
+    const gL = this.footGrounded(0);
+    const gR = this.footGrounded(1);
+    const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+    // 离地那只脚的当前净空。⚠ 用 `soleY`（脚掌最低点世界 y）—— 这是 rig 里
+    //   **唯一**的净空真源（`sim.ts` 的 `airPeakL/R` 也是从它累积的）。
+    //   地面在 y=0 ⇒ 离地时 soleY > 0。
+    const clr = gL ? Math.max(0, this.soleY('r')) : gR ? Math.max(0, this.soleY('l')) : 0;
+    const raw = nGround === 1 && Math.max(clearancePeak, clr) >= STANCE_CLEAR_MIN;
+    if (raw) {
+      this.stanceExitT = 0;
+      this.stanceEnterT += dt;
+      if (this.stanceEnterT >= STANCE_ENTER) this.stanceSingle = true;
+    } else {
+      this.stanceEnterT = 0;
+      this.stanceExitT += dt;
+      if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
+    }
+    return this.stanceSingle;
+  }
+
+  /** 摆动腿抬高阶段的接触计数（收敛判据的原始输入，供诊断回读） */
+  get stanceRawSingle(): boolean {
+    return ((this.footGrounded(0) ? 1 : 0) + (this.footGrounded(1) ? 1 : 0)) === 1;
+  }
+
+  /**
+   * 离地脚的**净空峰值**（本拍离地那只脚到目前为止抬多高）。
+   * `sim.ts` 的 `airPeakL/R` 是同一件事的私账；这里给出公共读数，
+   * 好让"真单支撑"的判据在两条路径上用**同一个数**。
+   */
+  stanceClearancePeak = 0;
+
+  resetAlt(): void { this.lastStance = 0; this.stanceAge = 0; this.stanceSingle = false; this.stanceEnterT = 0; this.stanceExitT = 0; }
 
   /**
    * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。

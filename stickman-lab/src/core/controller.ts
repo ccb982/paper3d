@@ -93,6 +93,13 @@ export class Controller {
     rs.loadFrac.l = this.loadFilt.l; rs.loadFrac.r = this.loadFilt.r;
     rs.grounded.l = sim.doll.footGrounded(0);
     rs.grounded.r = sim.doll.footGrounded(1);
+    // ★★ **收敛点**："现在是真单支撑吗"由 `Ragdoll.stanceIsSingleSupport()`
+    //   统一判定（接触数 + 净空门槛 + 滞回），控制侧与计分侧读**同一份**。
+    //   ⚠ 不直接用裸接触数：计分侧的注释实测「88% 的离地不到 3 cm ⇒ 多是
+    //     接触抖动」，而裸接触数会让 X1 在抖动帧里闪烁。
+    //   ⚠ `rs.grounded` 仍保留**逐脚原始接地**（B1 与 UI 的"接地/离地"要用），
+    //     单支撑是**派生**判断，不替代逐脚事实。
+    rs.stanceSingle = sim.doll.stanceIsSingleSupport(sim.doll.stanceClearancePeak, dt);
     sim.doll.soleXZ('l', TMP_A); rs.soleX.l = TMP_A[0]!; rs.soleZ.l = TMP_A[2]!;
     sim.doll.soleXZ('r', TMP_B); rs.soleX.r = TMP_B[0]!; rs.soleZ.r = TMP_B[2]!;
     // 逐关节读数（两系统共享同一份）

@@ -13559,7 +13559,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13577,6 +13577,9 @@ var init_ragdoll = __esm({
     AXIS_X = 0;
     AXIS_Y = 1;
     AXIS_Z = 2;
+    STANCE_CLEAR_MIN = 0.03;
+    STANCE_ENTER = 0.05;
+    STANCE_EXIT = 0.1;
     DEFAULTS = {
       groundFriction: 1,
       bodyFriction: 0.9,
@@ -14099,9 +14102,62 @@ var init_ragdoll = __esm({
         if (stanceNow === 0) this.stanceAge = 0;
         return false;
       }
+      /**
+       * ★★★ **"真单支撑"的唯一判定**（收敛点：控制与计分共用）
+       *
+       * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+       *
+       * 问题：`sim.ts` 用裸接触数 `nGround === 1` 判单支撑，而它**自己的注释**
+       * 就承认这是噪声源：脚高信号 3.90 Hz、离地峰值中位 0 mm、**88% 的"离地"
+       * 不到 3 cm** ⇒ 大多是接触抖动。`gaitState` 那边则用 `X1`（前腿接地 **且**
+       * 载荷达标）判 —— 两者对"现在是单支撑吗"给出不同答案。
+       *
+       * 收敛办法：**只保留一个带滞回 + 净空门限的判定**，两条路径都读它。
+       * 判据（三条全满足才算单支撑）：
+       *   ① 接触数恰为 1（真的只有一只脚有接触对）
+       *   ② 离地那只脚的**净空峰值** ≥ `STANCE_CLEAR_MIN`（滤掉接触抖动）
+       *   ③ 滞回：进入要连续 `STANCE_ENTER` 秒、退出要连续 `STANCE_EXIT` 秒
+       *
+       * ⚠ 这是**新增**接口，不改动既有 `footGrounded()` / `altEvent()` 行为 ——
+       *   切换调用方会改变计分门控，属于行为变更，需要单独评估。
+       */
+      stanceSingle = false;
+      stanceEnterT = 0;
+      stanceExitT = 0;
+      /** 接触数恰为 1 且离地脚净空峰值达标、已滞回确认 ⇒ 现在是真的单支撑 */
+      stanceIsSingleSupport(clearancePeak, dt) {
+        const gL = this.footGrounded(0);
+        const gR = this.footGrounded(1);
+        const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        const clr = gL ? Math.max(0, this.soleY("r")) : gR ? Math.max(0, this.soleY("l")) : 0;
+        const raw = nGround === 1 && Math.max(clearancePeak, clr) >= STANCE_CLEAR_MIN;
+        if (raw) {
+          this.stanceExitT = 0;
+          this.stanceEnterT += dt;
+          if (this.stanceEnterT >= STANCE_ENTER) this.stanceSingle = true;
+        } else {
+          this.stanceEnterT = 0;
+          this.stanceExitT += dt;
+          if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
+        }
+        return this.stanceSingle;
+      }
+      /** 摆动腿抬高阶段的接触计数（收敛判据的原始输入，供诊断回读） */
+      get stanceRawSingle() {
+        return (this.footGrounded(0) ? 1 : 0) + (this.footGrounded(1) ? 1 : 0) === 1;
+      }
+      /**
+       * 离地脚的**净空峰值**（本拍离地那只脚到目前为止抬多高）。
+       * `sim.ts` 的 `airPeakL/R` 是同一件事的私账；这里给出公共读数，
+       * 好让"真单支撑"的判据在两条路径上用**同一个数**。
+       */
+      stanceClearancePeak = 0;
       resetAlt() {
         this.lastStance = 0;
         this.stanceAge = 0;
+        this.stanceSingle = false;
+        this.stanceEnterT = 0;
+        this.stanceExitT = 0;
       }
       /**
        * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
@@ -17679,6 +17735,17 @@ var init_rigState = __esm({
       vel;
       loadFrac = { l: 0, r: 0 };
       grounded = { l: false, r: false };
+      /**
+       * ★★ **"现在是真单支撑吗"** —— 控制与计分的**收敛判据**，由
+       *   `Ragdoll.stanceIsSingleSupport()` 统一给出（接触数 + 净空门槛 + 滞回）。
+       *
+       * ⚠ 与 `grounded` 的区别：`grounded` 是**逐脚原始接地事实**（B1 与 UI 用），
+       *   本字段是由它派生出的**单支撑判断**。不要拿它当"某只脚着地了吗"。
+       *
+       * ⚠ 为什么不直接用裸接触数 `nGround === 1`：计分侧注释实测
+       *   「88% 的离地不到 3 cm ⇒ 多数是接触抖动」，裸接触数在抖动帧里会闪。
+       */
+      stanceSingle = false;
       com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
       dcm = { x: 0, z: 0 };
       support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
@@ -18383,6 +18450,19 @@ var init_rigState = __esm({
 });
 
 // src/core/gaitState.ts
+var gaitState_exports = {};
+__export(gaitState_exports, {
+  DEFAULT_GAIT_CONFIG: () => DEFAULT_GAIT_CONFIG,
+  GaitState: () => GaitState,
+  PHASE_LABEL: () => PHASE_LABEL,
+  PHASE_TO_SCORING: () => PHASE_TO_SCORING,
+  SCORING_TO_STANCE: () => SCORING_TO_STANCE,
+  phaseStance: () => phaseStance,
+  smoothAuthority: () => smoothAuthority
+});
+function phaseStance(p) {
+  return SCORING_TO_STANCE[PHASE_TO_SCORING[p]];
+}
 function cdf(x) {
   const s = x < 0 ? -1 : 1;
   const z = Math.abs(x) / Math.SQRT2;
@@ -18396,7 +18476,7 @@ function smoothAuthority(phase, phaseT, ramp, sigma) {
   const ramped = Math.min(1, 1.5 * p);
   return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
 }
-var DEFAULT_STEP_INTERVAL, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_LABEL, GaitState;
+var DEFAULT_STEP_INTERVAL, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_TO_SCORING, SCORING_TO_STANCE, PHASE_LABEL, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18430,6 +18510,14 @@ var init_gaitState = __esm({
       liftHold: 0.25
     };
     PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
+    PHASE_TO_SCORING = Object.freeze({
+      DOUBLE: "adjust",
+      SHIFT: "adjust",
+      SINGLE: "step",
+      PUSH: "step",
+      STEP: "step"
+    });
+    SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
     PHASE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
       SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
@@ -19120,6 +19208,7 @@ var init_controller = __esm({
         rs.loadFrac.r = this.loadFilt.r;
         rs.grounded.l = sim.doll.footGrounded(0);
         rs.grounded.r = sim.doll.footGrounded(1);
+        rs.stanceSingle = sim.doll.stanceIsSingleSupport(sim.doll.stanceClearancePeak, dt);
         sim.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
@@ -19465,6 +19554,54 @@ log("\u2550\u2550 F. \u552F\u4E00\u6027\uFF1A\u76F8\u4F4D / \u89D2\u8272\u6807\u
   } else {
     ok(`\u65E0\u6307\u5411\u5DF2\u5220\u6A21\u5757\u7684 import\uFF08\u5DF2\u5220\uFF1A${deadFiles.join(", ") || "\u65E0"}\uFF09`);
   }
+}
+log("");
+log("\u2550\u2550 G. \u4E24\u53F0\u72B6\u6001\u673A\u7684\u6536\u655B\uFF08\u8BCD\u6C47\u6620\u5C04\u5FC5\u987B\u5168\u8986\u76D6\u4E14\u81EA\u6D3D\uFF09\u2550\u2550");
+{
+  const { PHASE_TO_SCORING: PHASE_TO_SCORING2, SCORING_TO_STANCE: SCORING_TO_STANCE2, phaseStance: phaseStance2 } = await Promise.resolve().then(() => (init_gaitState(), gaitState_exports));
+  const CTRL = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
+  const SCORE = ["both", "step", "adjust"];
+  const missing = CTRL.filter((p) => PHASE_TO_SCORING2[p] === void 0);
+  if (missing.length) bad(`\u8FD9\u4E9B\u63A7\u5236\u76F8\u4F4D\u6CA1\u6709\u6620\u5C04\u5230\u8BA1\u5206\u76F8\u4F4D\uFF1A${missing.join(", ")}`);
+  else ok(`${CTRL.length} \u4E2A\u63A7\u5236\u76F8\u4F4D\u5168\u90E8\u6709\u6620\u5C04`);
+  const badTarget = CTRL.filter((p) => !SCORE.includes(PHASE_TO_SCORING2[p]));
+  if (badTarget.length) bad(`\u6620\u5C04\u5230\u4E86\u975E\u6CD5\u8BA1\u5206\u76F8\u4F4D\uFF1A${badTarget.join(", ")}`);
+  else ok("\u6620\u5C04\u76EE\u6807\u5168\u90E8\u5408\u6CD5");
+  const EXPECT = {
+    DOUBLE: "double",
+    SHIFT: "double",
+    SINGLE: "single",
+    PUSH: "single",
+    STEP: "single"
+  };
+  const wrong = CTRL.filter((p) => phaseStance2(p) !== EXPECT[p]);
+  if (wrong.length) {
+    bad(`phaseStance \u4E0E\u63A7\u5236\u4FA7\u8BED\u4E49\u4E0D\u7B26\uFF1A${wrong.map((p) => `${p}=${phaseStance2(p)}(\u5E94 ${EXPECT[p]})`).join(", ")}`);
+  } else {
+    ok("phaseStance \u4E0E\u63A7\u5236\u4FA7\u8BED\u4E49\u4E00\u81F4\uFF08DOUBLE/SHIFT=\u53CC\uFF0CSINGLE/PUSH/STEP=\u5355\uFF09");
+  }
+  const noStance = SCORE.filter((s) => SCORING_TO_STANCE2[s] === void 0);
+  if (noStance.length) bad(`\u8FD9\u4E9B\u8BA1\u5206\u76F8\u4F4D\u6CA1\u6709\u652F\u6491\u5206\u7C7B\uFF1A${noStance.join(", ")}`);
+  else ok(`${SCORE.length} \u4E2A\u8BA1\u5206\u76F8\u4F4D\u5168\u90E8\u6709\u652F\u6491\u5206\u7C7B`);
+  const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const defs = [];
+  for (const f of [
+    "src/core/ragdoll.ts",
+    "src/core/gaitState.ts",
+    "src/core/sim.ts",
+    "src/core/rigState.ts",
+    "src/core/systems/step.ts",
+    "src/core/systems/balance.ts"
+  ]) {
+    if (!fs.existsSync(f)) continue;
+    if (/stanceIsSingleSupport\s*\(/.test(stripComments(read(f)))) defs.push(f);
+  }
+  if (defs.length !== 1) bad(`"\u771F\u5355\u652F\u6491"\u5224\u636E\u7684\u5B9E\u73B0\u5904\u5E94\u6070\u597D 1 \u4E2A\uFF0C\u5B9E\u9645 ${defs.length} \u4E2A\uFF1A${defs.join(", ")}`);
+  else ok(`"\u771F\u5355\u652F\u6491"\u552F\u4E00\u5B9E\u73B0\uFF08${defs[0]}\uFF09`);
+  const ctrlUses = read("src/core/controller.ts").includes("stanceIsSingleSupport");
+  const rsHas = /stanceSingle\s*=\s*false/.test(read("src/core/rigState.ts"));
+  if (ctrlUses && rsHas) ok("\u63A7\u5236\u4FA7\u5DF2\u63A5\u5165\u6536\u655B\u5224\u636E\uFF08controller \u2192 rigState.stanceSingle\uFF09");
+  else bad(`\u6536\u655B\u5224\u636E\u672A\u88AB\u63A7\u5236\u4FA7\u63A5\u5165\uFF08controller=${ctrlUses} rigState\u5B57\u6BB5=${rsHas}\uFF09`);
 }
 log("");
 if (fails) {

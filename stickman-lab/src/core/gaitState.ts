@@ -109,6 +109,47 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
 };
 
 const PHASE_ORDER: Phase[] = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'];
+
+/**
+ * ★★★ **控制相位 ⇄ 计分相位的映射表**（两台状态机之间的收敛点）
+ *
+ * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+ *
+ * 两台机器**必须分开**（触发条件根本不同）：
+ *   · 控制相位（`gaitState`，本文件）：由 `X1..X8` 判据驱动 —— 重心是否
+ *     到前腿、间隔是否满 1s、MoS、倾角。**回答"哪条腿现在可以抬"**。
+ *   · 计分相位（`gaitPhase.GaitPhaseMachine`，ES 路径）：由接触数 `nGround`
+ *     与离地净空驱动。**回答"这一项奖励现在该不该给分"**。
+ *   把它们合并会让"能不能抬腿"被"离地够不够高"绑死 —— 概念错误。
+ *
+ * 但两者的**词汇**必须收敛，否则同一个物理时刻在两处被描述成两个词，
+ * 于是"为什么 UI 说 A 而计分说 B"无法推断。
+ *
+ * 语义对齐（依据 `gaitPhase.ts:153`/`:174` 的实测注释）：
+ *   计分 `step`   = **单支撑**（`nGround === 1`）
+ *   计分 `adjust` = **双脚支撑**（`nGround === 2`）
+ *   控制侧：`SINGLE`/`PUSH`/`STEP` 全是单支撑；`DOUBLE`/`SHIFT` 全是双脚
+ *   （`SHIFT` 是双脚支撑期内的重心搬运，脚还没离地）。
+ */
+export const PHASE_TO_SCORING: Readonly<Record<Phase, 'both' | 'step' | 'adjust'>> = Object.freeze({
+  DOUBLE: 'adjust',
+  SHIFT: 'adjust',
+  SINGLE: 'step',
+  PUSH: 'step',
+  STEP: 'step',
+});
+
+/**
+ * 反向：计分相位 ⇒ 属于哪一类支撑（`'single' | 'double'`）。
+ * 计分机只有三相、没有 SHIFT/PUSH 这些细节，所以反向是多对一。
+ */
+export const SCORING_TO_STANCE: Readonly<Record<'both' | 'step' | 'adjust', 'single' | 'double'>> =
+  Object.freeze({ both: 'double', step: 'single', adjust: 'double' });
+
+/** 分类：某个控制相位是单支撑还是双脚支撑。**门禁用它断言与映射表一致。 */
+export function phaseStance(p: Phase): 'single' | 'double' {
+  return SCORING_TO_STANCE[PHASE_TO_SCORING[p]];
+}
 /**
  * 相位标签表。**导出**给 `ui/hud.ts` 与 `tools/probe-uipanel.ts` 引用。
  *
