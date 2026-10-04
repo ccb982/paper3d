@@ -53,6 +53,18 @@ export interface LabState {
   liftHold: number;
   /** 单回合时长（s） */
   dur: number;
+  /**
+   * 足底（踝关节）是否存在。
+   *
+   * ★ 为什么做成运行期可切换：骨架在 `boot()` 里**只构建一次**
+   *   （关节数 12→14 会改变网络输出维度），所以这里用 **URL 驱动**（`?ankle=1`），
+   *   按钮只改 URL 重载。
+   *
+   * ★ 历史：用户第一天就要求加脚踝，代码 2026-10-01 就写好了，
+   *   但 `ankleEnabled` 一直默认 false，且**网页上没有任何开关** ——
+   *   所以网页上看到的始终是无踝版本（用户 2026-10-04 亲见）。
+   */
+  ankle: boolean;
 }
 
 export const DEFAULT_LAB: LabState = {
@@ -63,6 +75,8 @@ export const DEFAULT_LAB: LabState = {
   startBearer: 'l',
   liftHold: 0.25,
   dur: 8,
+  // ★ 默认关（保持既有行为不变）；要在网页上看踝，点按钮 / 用 ?ankle=1
+  ankle: false,
 };
 
 /**
@@ -77,6 +91,7 @@ export function labHash(s: LabState): string {
     `startBearer=${s.startBearer}`,
     `liftHold=${s.liftHold.toFixed(3)}`,
     `dur=${s.dur.toFixed(2)}`,
+    `ankle=${s.ankle ? 1 : 0}`,
   ].join(' | ');
 }
 
@@ -85,6 +100,7 @@ export function labToQuery(s: LabState): string {
   return new URLSearchParams({
     mode: s.mode, driver: s.driver,
     sl: s.startBearer, lift: String(s.liftHold), dur: String(s.dur),
+    ankle: s.ankle ? '1' : '0',
   }).toString();
 }
 
@@ -92,17 +108,25 @@ export function labFromQuery(q: string): LabState | null {
   try {
     const u = new URLSearchParams(q);
     const mode = u.get('mode');
-    if (mode !== 'walk' && mode !== 'fight' && mode !== 'stand') return null;
+    // ⚠ **缺省项从 `DEFAULT_LAB` 补，只有"给了但非法"才拒绝整份。**
+    //   原来 mode/driver 任一缺失就 `return null` ⇒ 网页从裸页打开时
+    //   点一下「踝关节」按钮，URL 变成 `?ankle=1`（没有 mode/driver）
+    //   ⇒ 整份被丢弃 ⇒ `state.ankle` 保持默认 false
+    //   ⇒ **按钮点了永远显示"关"**（用户 2026-10-04 亲见）。
+    if (mode !== null && mode !== 'walk' && mode !== 'fight' && mode !== 'stand') return null;
     const driver = u.get('driver');
-    if (driver !== 'brain' && driver !== 'teacher') return null;
+    if (driver !== null && driver !== 'brain' && driver !== 'teacher') return null;
     const sl = u.get('sl');
     const lift = Number(u.get('lift'));
     const dur = Number(u.get('dur'));
+    const ankle = u.get('ankle');
     return {
-      mode, driver,
+      mode: (mode ?? DEFAULT_LAB.mode) as LabMode,
+      driver: (driver ?? DEFAULT_LAB.driver) as Driver,
       startBearer: sl === 'r' ? 'r' : 'l',   // `sl` 只取 l/r（默认 l）
       liftHold: Number.isFinite(lift) && lift > 0 ? lift : DEFAULT_LAB.liftHold,
       dur: Number.isFinite(dur) && dur > 0 ? dur : DEFAULT_LAB.dur,
+      ankle: ankle === null ? DEFAULT_LAB.ankle : (ankle === '1' || ankle === 'true'),
     };
   } catch { return null; }
 }

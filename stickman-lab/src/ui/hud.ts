@@ -22,6 +22,8 @@ export interface HudHooks {
   onGhost: () => void;
   /** ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X） */
   onAxisMarkers: (on: boolean) => void;
+  /** 踝关节（足底）开关。骨架只构建一次 ⇒ 实现是改 URL 重载，不是重建 */
+  onAnkle: (on: boolean) => void;
   onJoints: () => void;
   onTextures: () => void;
   onSigma: (v: number) => void;
@@ -104,7 +106,7 @@ export class Hud {
       vVelTrack: $('v-veltrack'), vLift: $('v-lift'), vSingle: $('v-single'),
     vJointMove: $('v-jointmove'), vLateral: $('v-lateral'), vActRate: $('v-actrate'),
     vMHipL: $('v-mhip_l'), vMHipR: $('v-mhip_r'), vMKneeL: $('v-mknee_l'), vMKneeR: $('v-mknee_r'),
-      boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
+      boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'), ankle: $('b-ankle'),
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
       ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
@@ -139,6 +141,11 @@ export class Hud {
     wire('b-export', 'click', hooks.onExport);
     wire('b-import', 'click', hooks.onImport);
     wire('b-ghost', 'click', hooks.onGhost);
+    // 踝开关：按钮文字本身就是当前态（`main.ts` 在 boot 后按 state.ankle 写入）
+    wire('b-ankle', 'click', () => {
+      const b = document.getElementById('b-ankle');
+      hooks.onAnkle(!(b?.dataset.on === '1'));
+    });
     // 3D 方向标开关（change 而非 click：要拿到 checkbox 的 checked）
     {
       const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;

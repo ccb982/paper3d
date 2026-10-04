@@ -6514,7 +6514,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -6812,6 +6813,7 @@ var init_skeleton = __esm({
        */
       //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
       soleFootScale: 1,
+      soleGroundCorr: 0,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
       //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
       footSplayDeg: 25,

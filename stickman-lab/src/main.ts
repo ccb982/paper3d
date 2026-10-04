@@ -65,6 +65,13 @@ const hud = new Hud({
   onExport: () => { if (booted) doExport(); },
   onImport: () => { if (booted) doImport(); },
   onGhost: () => { if (booted) { state.ghost = !state.ghost; viewer.showGhost = state.ghost; } },
+  // ★ 踝（足底）开关：骨架只在 boot() 构建一次（关节 12→14 会改网络输出维度），
+  //   所以这里改 URL 重载，而不是尝试运行期重建。
+  onAnkle: (on: boolean) => {
+    const u = new URLSearchParams(location.search);
+    u.set('ankle', on ? '1' : '0');
+    location.search = u.toString();
+  },
   // ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X，见 viewer 的 AXIS_CONVENTION）
   onAxisMarkers: (on: boolean) => { state.axisMarkers = on; if (booted) viewer.setAxisMarkers(on); },
   onJoints: () => { if (booted) { state.joints = !state.joints; viewer.showJoints = state.joints; } },
@@ -104,7 +111,11 @@ function boot(): void {
 
   // ---- 骨架自检（先证伪再做昂贵的初始化） ----
   assertMassBudget();
-  sk = buildSkeleton(DEFAULT_CONFIG);
+  // ★★ 踝（足底）开关：这是**唯一**能让网页上出现踝关节的地方。
+  //   之前 `buildSkeleton(DEFAULT_CONFIG)` 写死，`DEFAULT_CONFIG.ankleEnabled=false`
+  //   ⇒ 网页上永远看不到踝（用户 2026-10-04：「我在网页上看不到踝关节」）。
+  //   骨架只构建一次（关节数 12→14 会改网络输出维度），所以用 URL 驱动。
+  sk = buildSkeleton({ ...DEFAULT_CONFIG, ankleEnabled: state.ankle });
   assertColliderMass(sk);
   // ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
   SHAPE = shapeForJoints(sk.joints.length);
@@ -116,6 +127,11 @@ function boot(): void {
     // 把 checkbox 的初值同步进 viewer（Hud 构造期的回调被 booted 挡掉了）
     const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;
     if (cb) { cb.checked = state.axisMarkers; viewer.setAxisMarkers(state.axisMarkers); }
+    // 踝按钮的初值（骨架已按 state.ankle 重建）
+    {
+      const b = document.getElementById('b-ankle') as HTMLButtonElement | null;
+      if (b) { b.dataset.on = state.ankle ? '1' : '0'; b.textContent = `踝关节：${state.ankle ? '开' : '关'}`; }
+    }
   }
 
   showcase.begin(trainer.showcase());

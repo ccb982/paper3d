@@ -6508,7 +6508,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
         const soleDrop = ankleY;
         const fMidY = soleWorldY;
-        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -6806,6 +6807,7 @@ var init_skeleton = __esm({
        */
       //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
       soleFootScale: 1,
+      soleGroundCorr: 0,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
       //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
       footSplayDeg: 25,
@@ -19332,7 +19334,8 @@ function labHash(s) {
     `driver=${s.driver}`,
     `startBearer=${s.startBearer}`,
     `liftHold=${s.liftHold.toFixed(3)}`,
-    `dur=${s.dur.toFixed(2)}`
+    `dur=${s.dur.toFixed(2)}`,
+    `ankle=${s.ankle ? 1 : 0}`
   ].join(" | ");
 }
 function labToQuery(s) {
@@ -19341,26 +19344,29 @@ function labToQuery(s) {
     driver: s.driver,
     sl: s.startBearer,
     lift: String(s.liftHold),
-    dur: String(s.dur)
+    dur: String(s.dur),
+    ankle: s.ankle ? "1" : "0"
   }).toString();
 }
 function labFromQuery(q) {
   try {
     const u = new URLSearchParams(q);
     const mode = u.get("mode");
-    if (mode !== "walk" && mode !== "fight" && mode !== "stand") return null;
+    if (mode !== null && mode !== "walk" && mode !== "fight" && mode !== "stand") return null;
     const driver = u.get("driver");
-    if (driver !== "brain" && driver !== "teacher") return null;
+    if (driver !== null && driver !== "brain" && driver !== "teacher") return null;
     const sl = u.get("sl");
     const lift = Number(u.get("lift"));
     const dur = Number(u.get("dur"));
+    const ankle = u.get("ankle");
     return {
-      mode,
-      driver,
+      mode: mode ?? DEFAULT_LAB.mode,
+      driver: driver ?? DEFAULT_LAB.driver,
       startBearer: sl === "r" ? "r" : "l",
       // `sl` 只取 l/r（默认 l）
       liftHold: Number.isFinite(lift) && lift > 0 ? lift : DEFAULT_LAB.liftHold,
-      dur: Number.isFinite(dur) && dur > 0 ? dur : DEFAULT_LAB.dur
+      dur: Number.isFinite(dur) && dur > 0 ? dur : DEFAULT_LAB.dur,
+      ankle: ankle === null ? DEFAULT_LAB.ankle : ankle === "1" || ankle === "true"
     };
   } catch {
     return null;
@@ -19378,7 +19384,9 @@ var init_lab = __esm({
       driver: "teacher",
       startBearer: "l",
       liftHold: 0.25,
-      dur: 8
+      dur: 8,
+      // ★ 默认关（保持既有行为不变）；要在网页上看踝，点按钮 / 用 ?ankle=1
+      ankle: false
     };
   }
 });
@@ -19439,6 +19447,7 @@ var init_hud = __esm({
           boot: $("boot"),
           pause: $("b-pause"),
           ghost: $("b-ghost"),
+          ankle: $("b-ankle"),
           joints: $("b-joints"),
           tex: $("b-tex"),
           // ── 「模块归属」面板（用户 2026-10-03）
@@ -19493,6 +19502,10 @@ var init_hud = __esm({
         wire("b-export", "click", hooks.onExport);
         wire("b-import", "click", hooks.onImport);
         wire("b-ghost", "click", hooks.onGhost);
+        wire("b-ankle", "click", () => {
+          const b = document.getElementById("b-ankle");
+          hooks.onAnkle(!(b?.dataset.on === "1"));
+        });
         {
           const cb = document.getElementById("own-axis3d");
           cb?.addEventListener("change", () => hooks.onAxisMarkers(cb.checked));
@@ -19965,6 +19978,8 @@ var hud = new Hud2({
   //   而 typecheck 之前不检查 tools/ ⇒ 这个覆盖缺口一直没人发现。
   //   发现途径：`tsconfig.tools.json`（见该文件顶部说明）。
   onAxisMarkers() {
+  },
+  onAnkle() {
   }
 });
 hud.setOwnership(snap);

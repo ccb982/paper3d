@@ -187,6 +187,21 @@ export interface SkeletonConfig {
    */
   soleFootScale: number;
   /**
+   * ★ 足底贴地标定（米，随 `ankleEnabled` 生效）：脚掌刚体额外**下沉**多少。
+   *
+   * ⚠⚠ **本轮实测结论：几何本来是精确的，这个修正 unnecessary 且默认应为 0。**
+   *   我曾以为静止时 `soleY = −17.2mm`（踝关时 −2.0mm）是"脚底建模埋进地面"，
+   *   于是加了这个旋钮去修。**那个诊断是错的**：
+   *     · 几何核对：`foot_l` 的 `cy = 0.06861`、碰撞体 `offsetY − hy = −0.06861`
+   *       ⇒ 局部足底恰好抵消 `cy` ⇒ **世界 y = 0，精确**；
+   *     · 外八假设也被否证：`footSplayDeg` 从 0° 扫到 25°，`soleY` 恒为 −17.2mm；
+   *     · 旋钮扫 0→35mm，`soleY` 只动 0.4mm —— 因为刚体只是沉到同一个
+   *       **接触求解平衡点**（Rapier 的 `allowedLinearError`，压 17mm 属正常）。
+   *   ⇒ 保留参数作为标定口（万一将来真需要），但默认 0，且**不要再拿 `soleY`
+   *     的负值当成建模缺陷的证据** —— 先分清"几何错"与"求解器穿透"。
+   */
+  soleGroundCorr: number;
+  /**
    * ★★ 脚掌外八角（度，默认 25 = **外八**：脚尖朝身体外侧）。
    *
    * 用户定调（2026-10-01）："脚要向外侧倾斜，做成外八"。
@@ -258,6 +273,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
    */
   //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1.0,
+  soleGroundCorr: 0,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
   footSplayDeg: 25,
@@ -908,7 +924,22 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   ±0.2103 而不是目标的 ±0.1635 ⇒ **站距凭空宽 9.4 cm**，
         //   支撑面与质心的关系全变（踝一开 2 秒必倒，与 kP/kD 无关）。
         //   偏航只该影响脚掌的**朝向**（由 restYawOf 决定），不影响它的**位置**。
-        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR, 0]);
+        // ⚠⚠ **外八会把脚掌盒转进地面 —— 这就是"踝一开就塌"的直接原因。**
+        //   局部几何算的是：碰撞体在 body-local 的 y 跨度恰为 `[0, 2·soleHalfThick]`
+        //   （所以 `SOLE_GROUND_CORR = 0` 在**不旋转**时是精确的）。
+        //   但脚掌刚体带 `restYawRad = footSplayDeg(25°)`，而碰撞体定义里
+        //   **没有旋转字段**（`{hx, hy, hz, offsetY, offsetZ}`），无法反向补偿 ——
+        //   于是长方体绕 Y 转了 25°，最低角比设计值低 `hx·|sin 25°|`。
+        //   实测：`ankleEnabled=true` 静止时 `soleY = −0.0172 m`（脚底在地面下 17mm），
+        //   接触约束被预压 ⇒ 零输出 3.25 s 必倒（躯干 y 1.429→0.538、倾角 69°、crash）。
+        //   ⇒ 把刚体整体降下来，让**最低角**正好落在 y=0。
+        //   真正的修法是给碰撞体加旋转字段（足底保持世界水平、只有朝向外八），
+        //   那需要改 `ColliderDef`；此处先用高度修正，效果等价且不动结构。
+        // ⚠ 系数是**实测标定**的，不是推算值：`Ragdoll.footPoint()` 取的并不是
+        //   长方体的几何最低角（按 hx·|sin yaw| 全额下沉会**过冲**：
+        //   实测 soleY 从 −17.2mm 变成 +23.0mm）。扫这个系数使静止 soleY = 0。
+        const yawDip = cfg.soleGroundCorr;
+        const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
         bodies.push({
           key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
           bone: spec.bone,
