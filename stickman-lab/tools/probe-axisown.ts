@@ -352,22 +352,41 @@ log('══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽�
   if (noStance.length) bad(`这些计分相位没有支撑分类：${noStance.join(', ')}`);
   else ok(`${SCORE.length} 个计分相位全部有支撑分类`);
 
-  // G5：收敛判据"真单支撑"必须是**单一实现** —— 谁在定义它
-  //     ⚠ 必须**剥掉注释**再数：`rigState.ts` 的字段文档里就写了
-  //     `Ragdoll.stanceIsSingleSupport()`，那是引用不是实现。
-  const stripComments = (s: string): string =>
-    s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-  const defs: string[] = [];
-  for (const f of ['src/core/ragdoll.ts', 'src/core/gaitState.ts', 'src/core/sim.ts',
-    'src/core/rigState.ts', 'src/core/systems/step.ts', 'src/core/systems/balance.ts']) {
-    if (!fs.existsSync(f)) continue;
-    if (/stanceIsSingleSupport\s*\(/.test(stripComments(read(f)))) defs.push(f);
+  // G5：「真单支撑」判据 —— 状态只能在**一个**地方推进，读取必须纯
+  //   ⚠ 判据用「有没有 `.` 前缀」区分**定义**与**调用**，不靠剥注释 ——
+  //     剥注释的写法曾被 ragdoll.ts 里某个 `/*` 弄坏（把后面全吃掉），
+  //     门禁自己先假失败了一次。
+  const SRC = ['src/core/ragdoll.ts', 'src/core/gaitState.ts', 'src/core/sim.ts',
+    'src/core/rigState.ts', 'src/core/controller.ts', 'src/core/systems/step.ts',
+    'src/core/systems/balance.ts'];
+  // 定义 = `advanceStance(` 且**前面不是 `.`**（调用是 `.advanceStance(`）
+  const definedIn = SRC.filter((f) => fs.existsSync(f)
+    && /(?<![.\w])advanceStance\s*\(/.test(read(f)));
+  if (definedIn.length !== 1) {
+    bad(`"真单支撑"的**定义**应恰好 1 处，实际 ${definedIn.length} 处：${definedIn.join(', ') || '无'}`);
+  } else {
+    ok(`定义唯一（${definedIn[0]}）`);
   }
-  if (defs.length !== 1) bad(`"真单支撑"判据的实现处应恰好 1 个，实际 ${defs.length} 个：${defs.join(', ')}`);
-  else ok(`"真单支撑"唯一实现（${defs[0]}）`);
+  // 推进（调用）点可以有多个，但必须都显式带 `dt`
+  const callers = SRC.filter((f) => fs.existsSync(f) && /\.advanceStance\s*\(/.test(read(f)));
+
+  // ★ 关键不变量：**读的地方不得推进状态**。
+  //   踩过的坑：把 `stanceIsSingleSupport()`（读时推进）直接放进奖励表达式 ⇒
+  //   "读诊断"产生副作用 ⇒ 奖励求值顺序一变滤波器状态就分叉
+  //   （实测 probe-fitness 的首次不一致从第 21 代提前到第 13 代）。
+  if (fs.existsSync('src/core/sim.ts') && /stanceIsSingleSupport/.test(read('src/core/sim.ts'))) {
+    bad('sim.ts 的奖励路径里仍出现"读时推进"的 stanceIsSingleSupport —— 必须改成纯读取 stanceSingleNow');
+  } else {
+    ok('奖励路径是纯读取（stanceSingleNow），无"读时推进"副作用');
+  }
+  if (callers.includes('src/core/sim.ts') && callers.includes('src/core/controller.ts')) {
+    ok(`两条路径都在固定拍上推进（${callers.length} 个调用点：${callers.map((f) => f.replace('src/core/', '')).join(', ')}）`);
+  } else {
+    bad(`推进未被两条路径都接入（调用点：${callers.join(', ') || '无'}）`);
+  }
 
   // G6：两条路径都真的读了它（不然只是"有个统一判据"却没人用）
-  const ctrlUses = read('src/core/controller.ts').includes('stanceIsSingleSupport');
+  const ctrlUses = read('src/core/controller.ts').includes('stanceSingleNow');
   const rsHas = /stanceSingle\s*=\s*false/.test(read('src/core/rigState.ts'));
   if (ctrlUses && rsHas) ok('控制侧已接入收敛判据（controller → rigState.stanceSingle）');
   else bad(`收敛判据未被控制侧接入（controller=${ctrlUses} rigState字段=${rsHas}）`);

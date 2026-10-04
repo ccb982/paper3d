@@ -6286,6 +6286,7 @@ var init_partsMeta = __esm({
 // src/core/skeleton.ts
 var skeleton_exports = {};
 __export(skeleton_exports, {
+  AXES_PER_JOINT: () => AXES_PER_JOINT,
   DEFAULT_CONFIG: () => DEFAULT_CONFIG,
   JOINT_LIMITS_XY_DEG: () => JOINT_LIMITS_XY_DEG,
   JOINT_MAX_SPEED: () => JOINT_MAX_SPEED,
@@ -6297,6 +6298,7 @@ __export(skeleton_exports, {
   assertJointAnchors: () => assertJointAnchors,
   assertMassBudget: () => assertMassBudget,
   buildSkeleton: () => buildSkeleton,
+  hasJoint: () => hasJoint,
   invQuatOf: () => invQuatOf,
   jointIndexByName: () => jointIndexByName,
   quatToRotVec: () => quatToRotVec,
@@ -6352,7 +6354,10 @@ function rotVecByQuat(q, v) {
 }
 function jointIndexByName(sk2, name) {
   for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
-  return JOINT_ORDER.indexOf(name);
+  return -1;
+}
+function hasJoint(sk2, name) {
+  return sk2.joints.some((j) => j.name === name);
 }
 function spineJointNames(sk2) {
   const out = [];
@@ -6769,7 +6774,7 @@ function assertJointAnchors(sk2) {
   }
   return worst;
 }
-var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG;
+var DEFAULT_CONFIG, SEGMENTS, JOINT_ORDER, JOINT_MAX_SPEED, JOINT_MAX_TORQUE, TORQUE_AXIS_FACTOR, JOINT_LIMITS_XY_DEG, DEG, AXES_PER_JOINT;
 var init_skeleton = __esm({
   "src/core/skeleton.ts"() {
     "use strict";
@@ -6807,7 +6812,15 @@ var init_skeleton = __esm({
       // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
       anklePitchDeg: [0, 0],
       ankleRollDeg: 0,
-      ankleTorque: 45,
+      // ★★ 踝力矩上限（N·m）。原来 45 —— **解剖学上错了近 3 倍**。
+      //   文献：踝跖屈（比目鱼肌+腓肠肌）是人体最大的肌群，年轻人最大自主收缩
+      //   ~110~140 N·m（Noble & Norkowitz；Winter 1990 的踝策略力矩同量级）。
+      //   45 经 TORQUE_AXIS_FACTOR 后三轴只有 27/15.8/45 N·m ⇒
+      //     · 蹬离做不出来（实测 PUSH 相膝已 150/150 打满而踝只有 27）
+      //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
+      //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
+      //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
+      ankleTorque: 120,
       footUvWarpDeg: 0,
       ankleEnabled: false
     };
@@ -6885,6 +6898,7 @@ var init_skeleton = __esm({
       foot_r: [14, 10]
     };
     DEG = Math.PI / 180;
+    AXES_PER_JOINT = 3;
   }
 });
 
@@ -13545,7 +13559,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, DEFAULTS, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13562,6 +13576,10 @@ var init_ragdoll = __esm({
     LIMIT_SOFT_ZONE = 0.3;
     AXIS_X = 0;
     AXIS_Y = 1;
+    AXIS_Z = 2;
+    STANCE_CLEAR_MIN = 0.03;
+    STANCE_ENTER = 0.05;
+    STANCE_EXIT = 0.1;
     DEFAULTS = {
       groundFriction: 1,
       bodyFriction: 0.9,
@@ -13574,14 +13592,38 @@ var init_ragdoll = __esm({
       jointGain: {},
       posRefScale: 0.9,
       purgeJointCache: true,
-      motorAlpha: MOTOR_ALPHA
+      motorAlpha: MOTOR_ALPHA,
+      // ★★ 保持 **1 = 不放大**。曾设 20 想修"髋权限被护栏卡在 0.52"，但方向错了：
+      //   隔离实测（零电机输出、20 s）：
+      //     groundFactor=1  → 站满 20.00 s，躯干 1.427 m，倾 0.55°  ✓
+      //     groundFactor=20 →  3.05 s 倒，躯干 0.218 m，倾 83.35°   ✗
+      //   原因：`Ieff` 同时是**位置反馈环**稳定性护栏 `|imp| ≤ α·|err|·Ieff` 的分母。
+      //     放大 Ieff = 放大位置伺服的权限 = 撑破它的稳定性 ⇒ 泵能量 ⇒ 塌。
+      //   而"髋权限不足"其实**不需要**靠放大解决：`τ = JᵀF` 的前馈力矩在
+      //   `driveMotors` 里单独记账、**不受这条护栏约束**（见 impStable 处的注释），
+      //   额状面平衡要的那几十 N·m 走的就是那条路。
+      //   ⇒ 位置反馈环保持原始护栏（站得住），前馈走无护栏通道（力矩够）。
+      //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
+      ankleGroundFactor: 1
     };
+    VEL_WIN = 5;
     Ragdoll = class _Ragdoll {
       sk;
       opt;
       bodies = [];
       /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
       soleCol = [null, null];
+      /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
+      copTmp = new Float64Array(4);
+      /**
+       * ★★ **每轴权限**：`driveMotors` 的稳定性护栏放行了百分之多少（0~1）。
+       *   1 = 完全放行；<1 = 冲量被 `α·|err|·Ieff` 卡住。
+       *   必须可回读：**"马达没力"和"指令太小"在别的指标里看起来一模一样**
+       *   （历史事故：踝只能出 3% 的力矩，而存活/倾角指标全都"正常"）。
+       */
+      motorAuthority;
+      /** 接地时 Ieff 的放大倍数（踝专用；离地时用 1） */
+      groundFactor;
       /** ★ 每次 reset 都会整体重建（见 purgeJointCache），所以别缓存元素引用 */
       joints = [];
       /** key → 刚体下标 */
@@ -13679,6 +13721,15 @@ var init_ragdoll = __esm({
         this.motorTarget = new Float32Array(sk2.joints.length * 3);
         this.motorImpulse = new Float64Array(sk2.joints.length * 3);
         this.motorDemand = new Float64Array(sk2.joints.length * 3);
+        this.motorAuthority = new Float32Array(sk2.joints.length * 3);
+        this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
+        this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
+        this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
+        this.torqueCmd = new Float32Array(sk2.joints.length * 3);
+        this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
+        this.tauApplied = new Float32Array(sk2.joints.length * 3);
+        this.ankleJoint = jointIndexByName(sk2, "foot_l");
+        this.ankleJointR = jointIndexByName(sk2, "foot_r");
         let topSpine = -1;
         for (const b of sk2.bodies) {
           const m = /^spine(\d+)$/.exec(b.key);
@@ -13727,12 +13778,101 @@ var init_ragdoll = __esm({
         const bodyI = new Float64Array(this.bodies.length);
         for (let i = 0; i < this.bodies.length; i++) {
           const I = this.bodies[i].principalInertia();
-          bodyI[i] = Math.max(1e-6, Math.min(I.x, I.y, I.z));
+          bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
         }
         for (let i = 0; i < sk2.joints.length; i++) {
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+        }
+        this.motorAuthority.fill(1);
+        this.groundFactor.fill(1);
+        this.ankleGroundFactorUsed.fill(1);
+        {
+          const footKeys = ["foot_l", "foot_r", "shin_l", "shin_r"];
+          const hasFootBelow = /* @__PURE__ */ new Map();
+          const walk = (k) => {
+            const hit = hasFootBelow.get(k);
+            if (hit !== void 0) return hit;
+            let r = false;
+            for (const jj of sk2.joints) {
+              if (jj.parentKey === k) {
+                if (walk(jj.childKey)) {
+                  r = true;
+                  break;
+                }
+              }
+            }
+            hasFootBelow.set(k, r);
+            return r;
+          };
+          for (const k of footKeys) hasFootBelow.set(k, true);
+          for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            const k = sk2.bodies[bi].key;
+            if (!footKeys.includes(k)) continue;
+            hasFootBelow.set(k, true);
+          }
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const jn = sk2.joints[i];
+            if (!walk(jn.childKey)) continue;
+            const aj = this.bodies[this.jointBodies[i * 2 + 1]];
+            const ap = aj.translation();
+            const inSub = /* @__PURE__ */ new Set();
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            }
+            let frontier = [jn.childKey];
+            while (frontier.length) {
+              const k = frontier.pop();
+              for (let bi = 0; bi < sk2.bodies.length; bi++) {
+                const bd = sk2.bodies[bi];
+                if (inSub.has(bi)) continue;
+                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                  inSub.add(bi);
+                  frontier.push(bd.key);
+                }
+              }
+            }
+            let sum = 0;
+            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              const t = this.bodies[bi].translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[i];
+            const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
+            this.groundFactor[i] = Math.max(1, Math.min(
+              this.opt.ankleGroundFactor,
+              sum / Math.max(1e-9, free),
+              need / Math.max(1e-9, free)
+            ));
+            this.ankleGroundFactorUsed[i] = this.groundFactor[i];
+          }
+        }
+        if (false) {
+          const ank = jointIndexByName(sk2, "foot_l");
+          const ankR = jointIndexByName(sk2, "foot_r");
+          for (const jn of [ank, ankR]) {
+            if (jn < 0) continue;
+            const footBody = jn === ank ? 0 : 1;
+            const aj = this.bodies[this.jointBodies[jn * 2 + 1]];
+            const ap = aj.translation();
+            let sum = 0;
+            for (const b of this.bodies) {
+              if (b === aj) continue;
+              const t = b.translation();
+              const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+              sum += b.mass() * (dx * dx + dy * dy + dz * dz);
+            }
+            const free = this.jointIeff[jn];
+            const tauMax = sk2.joints[jn].maxTorque[AXIS_Z] ?? 45;
+            const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
+            const need = want / Math.max(1e-9, free);
+            const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum / Math.max(1e-9, free), need));
+            this.groundFactor[jn] = f;
+            this.ankleGroundFactorUsed[jn] = f;
+          }
         }
         this.refPos = new Float64Array(sk2.joints.length * 3);
         this.refNeg = new Float64Array(sk2.joints.length * 3);
@@ -13789,6 +13929,87 @@ var init_ragdoll = __esm({
        *   为什么不用几何：几何判据（鞋底 4 角最低点 ≤ 3cm）有死区，实测脚抬到 9cm
        *   仍被判成着地 ⇒ `lift` 项恒为 0。
        */
+      /**
+       * ★★★ **真·压力中心（CoP）** —— 直接由接触冲量加权算出（重构方案 §14.5 F1/F2 的验收量）。
+       *
+       *     CoP = Σ(P_i · λ_i) / Σλ_i        λ_i = 该接触点的法向冲量
+       *
+       * 为什么要直接读，而不是像以前那样从 ΔCoM 反推：
+       *   反推量的是"身体怎么动了"，混着惯量与耦合；直接读压力分布才是**足底发力**本身。
+       *   并且它是判定"接触柔度有没有用"的唯一干净指标：
+       *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
+       *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
+       *
+       * @param side 0=左 1=右
+       * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
+       */
+      readCoP(side, out) {
+        const col = this.soleCol[side];
+        out[0] = out[1] = out[2] = out[3] = 0;
+        if (!col) return;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        this.world.contactPairsWith(col, (other) => {
+          this.world.contactPair(col, other, (mf) => {
+            const n = mf.numSolverContacts();
+            for (let i = 0; i < n; i++) {
+              const ny = mf.normal().y;
+              if (Math.abs(ny) < 0.5) continue;
+              const p = mf.solverContactPoint(i);
+              const l = Math.abs(mf.contactImpulse(i));
+              if (!(l > 0)) continue;
+              sx += p.x * l;
+              sy += p.y * l;
+              sz += p.z * l;
+              sl += l;
+            }
+          });
+        });
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
+      footLoaded(side) {
+        this.readCoP(side, this.copTmp);
+        return this.copTmp[3] > 0;
+      }
+      ankleJoint;
+      ankleJointR;
+      footAuthUsed;
+      /** 实际采用的接地惯量放大倍数（诊断：扫参时看它） */
+      ankleGroundFactorUsed;
+      // ── 直接力矩通道（τ = JᵀF 的产物）─────────────────────────────
+      /**
+       * ★ 与 `motorTarget`（归一化目标角）**完全分开**的一条通道。
+       *   位置环算的是 `τ = kP·(θ_ref−θ)·τmax/ωmax` —— 反馈量；
+       *   这里放的是由 `τ = JᵀF` 直接算出的**前馈力矩**，单位 N·m。
+       *   两者相加后再按 τmax 饱和。
+       */
+      torqueCmd;
+      /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
+      holdCmd = [];
+      /** `jacobianTorque` 的临时向量（避免每关节分配） */
+      jw = new Float64Array(3);
+      ja = new Float64Array(3);
+      /** 本拍由 `jacobianTorque` 写入的、供诊断/回读的力矩（N·m） */
+      tauApplied;
+      /**
+       * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
+       * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
+       */
+      footLoadedFlag(joint) {
+        this.readCoP(0, this.copTmp);
+        const gl = this.copTmp[3] > 0;
+        this.readCoP(1, this.copTmp);
+        const gr = this.copTmp[3] > 0;
+        this.footLoadedCache = { l: gl, r: gr };
+        return gl || gr;
+      }
+      /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
+      footLoadedCache = { l: false, r: false };
       footGrounded(side) {
         const col = this.soleCol[side];
         if (!col) return false;
@@ -13881,9 +14102,70 @@ var init_ragdoll = __esm({
         if (stanceNow === 0) this.stanceAge = 0;
         return false;
       }
+      /**
+       * ★★★ **"真单支撑"的唯一判定**（收敛点：控制与计分共用）
+       *
+       * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+       *
+       * 问题：`sim.ts` 用裸接触数 `nGround === 1` 判单支撑，而它**自己的注释**
+       * 就承认这是噪声源：脚高信号 3.90 Hz、离地峰值中位 0 mm、**88% 的"离地"
+       * 不到 3 cm** ⇒ 大多是接触抖动。`gaitState` 那边则用 `X1`（前腿接地 **且**
+       * 载荷达标）判 —— 两者对"现在是单支撑吗"给出不同答案。
+       *
+       * 收敛办法：**只保留一个带滞回 + 净空门限的判定**，两条路径都读它。
+       * 判据（三条全满足才算单支撑）：
+       *   ① 接触数恰为 1（真的只有一只脚有接触对）
+       *   ② 离地那只脚的**净空峰值** ≥ `STANCE_CLEAR_MIN`（滤掉接触抖动）
+       *   ③ 滞回：进入要连续 `STANCE_ENTER` 秒、退出要连续 `STANCE_EXIT` 秒
+       *
+       * ⚠⚠⚠ **有状态 ⇒ 必须只在固定时间线上推进一次，绝不能在被读取的地方推进。**
+       *   我第一版把它写成 `stanceIsSingleSupport(...)`（读时推进），直接放进奖励表达式：
+       *   `accSingle += (doll.stanceIsSingleSupport(...) ? 1 : 0) * ...`
+       *   ⇒ **"读诊断"产生了副作用**，于是奖励求值的调用顺序/次数一变，滤波器状态就分叉。
+       *   实测代价：`probe-fitness` 的「首次不一致」从**第 21 代**提前到**第 13 代**
+       *   （不一致本身是既有 bug，但我把它**放大**了）。
+       *   ⇒ 现在拆成两个职责明确的接口：
+       *      · `advanceStance(clearancePeak, dt)` —— **唯一推进点**，与 `altEvent` 同一处；
+       *      · `stanceSingleNow` —— **纯读取**，任何调用顺序都安全。
+       */
+      stanceSingle = false;
+      stanceEnterT = 0;
+      stanceExitT = 0;
+      /** 离地脚的**净空峰值**。`sim.ts` 的 `airPeakL/R` 是同一件事的私账；
+       *  这里给出公共读数，好让"真单支撑"的判据在两条路径上用**同一个数**。 */
+      stanceClearancePeak = 0;
+      /** ★ 唯一推进点：每个控制拍调一次（与 `altEvent` 同一处）。 */
+      advanceStance(dt) {
+        const gL = this.footGrounded(0);
+        const gR = this.footGrounded(1);
+        const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
+        const clr = gL ? Math.max(0, this.soleY("r")) : gR ? Math.max(0, this.soleY("l")) : 0;
+        const raw = nGround === 1 && Math.max(this.stanceClearancePeak, clr) >= STANCE_CLEAR_MIN;
+        if (raw) {
+          this.stanceExitT = 0;
+          this.stanceEnterT += dt;
+          if (this.stanceEnterT >= STANCE_ENTER) this.stanceSingle = true;
+        } else {
+          this.stanceEnterT = 0;
+          this.stanceExitT += dt;
+          if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
+        }
+      }
+      /** ★ 纯读取：现在是否"真单支撑"。**任何调用顺序都安全**（不推进状态）。 */
+      get stanceSingleNow() {
+        return this.stanceSingle;
+      }
+      /** 收敛判据的原始输入（裸接触数），仅供诊断对照 */
+      get stanceRawSingle() {
+        return (this.footGrounded(0) ? 1 : 0) + (this.footGrounded(1) ? 1 : 0) === 1;
+      }
       resetAlt() {
         this.lastStance = 0;
         this.stanceAge = 0;
+        this.stanceSingle = false;
+        this.stanceEnterT = 0;
+        this.stanceExitT = 0;
+        this.stanceClearancePeak = 0;
       }
       /**
        * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
@@ -14021,6 +14303,193 @@ var init_ragdoll = __esm({
        *
        * 只存不施加 —— 真正的力矩在 driveMotors() 里按物理步施加。
        */
+      /**
+       * ★ 直接力矩通道（N·m，逐轴）。与 `setMotorTargets` 的角度通道**并联相加**。
+       *   这不是"把护栏调松"：位置环的 `err` 稳定性护栏对**反馈**成立
+       *   （|imp| ≤ α·|err|·Ieff），而这里是 `τ = JᵀF` 算出的**定量前馈**，
+       *   本来就知道该多大，不该再被位置误差的护栏砍。
+       */
+      /**
+       * ★ 让位掩码（逐轴，1=balance / 2=step）：该轴的位置伺服**只做阻尼**（P 项置零）。
+       *   见 `RigState.requestHold` 的注释：定量支撑交给 `τ = JᵀF`，
+       *   位置环只留 `−kD·ω_rel` 提供关节阻尼，两者职责不重叠、不会互相顶。
+       */
+      setHoldMask(mask) {
+        const n = Math.min(this.holdCmd.length, mask.length);
+        for (let i = 0; i < n; i++) this.holdCmd[i] = mask[i];
+      }
+      /**
+       * ★★ **关节传递力（力链）** —— 这才是"从脚往上"的力。
+       *
+       *   物理：对某关节的**子侧子树**做牛顿第二定律
+       *       F_constraint = m·(a_com − g)
+       *   `a_com` 用**窗口差分**（跨 `VEL_WIN` 个物理步的**平均加速度**）。
+       *
+       *   ★★ 为什么必须是窗口而不是单步差分：
+       *     单步 `Δv/dt` 会把**接触冲击**算进去 —— 实测开踝时脚掌落地那一步
+       *     读到 **109 kN** 的"传递力"（真实值是体重的 1/60）。
+       *     窗口平均等价于低通，代价是丢掉 30ms 内的真峰值（对力链可接受）。
+       *
+       *   ★ 为什么不用马达力矩倒推：马达力矩是**控制器要的**，约束力是
+       *     **动力学结果**（含接触、摩擦、惯量耦合）—— 只有后者是"传上来的力"。
+       *
+       *   ★ 轴约定：x=矢状(前) y=竖直 z=额状(左)。
+       *   输出到 `out`（长度 ≥ 5·nJoints），每关节 {fx,fy,fz,|F|,subtreeMass}。
+       *   **这是自下而上的读数**：foot 的子树 = 脚掌；knee 的子树 = 小腿+脚；
+       *   hip 的子树 = 大腿+小腿+脚 ⇒ 数值应当**自下而上递增**。
+       */
+      jointForce(out, dt) {
+        const g = 9.81;
+        const win = Math.max(1, Math.min(this.velRing.length / Math.max(1, this.bodies.length), VEL_WIN));
+        const dtW = dt * win;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          const o = i * 5;
+          if (o + 4 >= out.length) break;
+          const idx = this.subtreeOf(i);
+          let mt = 0, ax = 0, ay = 0, az = 0, usable = false;
+          for (let k = 0; k < idx.length; k++) {
+            const bi = idx[k];
+            const b = this.bodies[bi];
+            if (!b) continue;
+            const m = b.mass(), v = b.linvel();
+            const pv = this.velOld(bi);
+            if (!pv) continue;
+            usable = true;
+            mt += m;
+            ax += m * (v.x - pv.x) / dtW;
+            ay += m * (v.y - pv.y) / dtW;
+            az += m * (v.z - pv.z) / dtW;
+          }
+          if (!usable || mt <= 0 || dtW <= 0) {
+            out[o] = 0;
+            out[o + 1] = 0;
+            out[o + 2] = 0;
+            out[o + 3] = 0;
+            out[o + 4] = 0;
+            continue;
+          }
+          const fx = ax, fy = ay + mt * g, fz = az;
+          out[o] = fx;
+          out[o + 1] = fy;
+          out[o + 2] = fz;
+          out[o + 3] = Math.hypot(fx, fy, fz);
+          out[o + 4] = mt;
+        }
+      }
+      /** 速度环：每步写一帧，供窗口差分取"N 步前"的值 */
+      velRing = new Float64Array(0);
+      velRingPos = 0;
+      velFrames = 0;
+      /** N 步之前的速度（环未满时返回 null ⇒ 不输出，避免"看起来正常的 0"） */
+      velOld(bi) {
+        const n = this.bodies.length;
+        if (n === 0 || this.velFrames < VEL_WIN) return null;
+        const b = this.velRingPos * n + bi;
+        if (b + 2 >= this.velRing.length) return null;
+        return { x: this.velRing[b], y: this.velRing[b + 1], z: this.velRing[b + 2] };
+      }
+      /** 子树刚体下标（绑定姿态下不变 ⇒ 缓存）。`out` 复用写入避免每帧分配 */
+      subtreeCache = null;
+      subtreeOf(i) {
+        if (!this.subtreeCache) {
+          this.subtreeCache = /* @__PURE__ */ new Map();
+          const kidsOf = (key) => {
+            const r = [];
+            for (const j of this.sk.joints) if (j.parentKey === key) r.push(j.childKey);
+            return r;
+          };
+          for (let i2 = 0; i2 < this.sk.joints.length; i2++) {
+            const keys = [];
+            const st = [this.sk.joints[i2].childKey];
+            while (st.length) {
+              const c = st.pop();
+              if (keys.includes(c)) continue;
+              keys.push(c);
+              st.push(...kidsOf(c));
+            }
+            this.subtreeCache.set(i2, keys.map((k) => this.indexByKey.get(k)).filter((x) => x !== void 0));
+          }
+        }
+        return this.subtreeCache.get(i) ?? [];
+      }
+      /**
+       * ★ 在 `advance()` **之后**采一帧速度，供 `jointForce` 做**窗口差分**。
+       *   环未满 `VEL_WIN` 帧时 `jointForce` 不输出（而不是输出 0 —— 后者会
+       *   让力链看起来"正常"但全是零，是个静默失效）。
+       */
+      primeVelocities() {
+        const n = this.bodies.length;
+        if (this.velRing.length !== VEL_WIN * n) this.velRing = new Float64Array(VEL_WIN * n);
+        const base = this.velRingPos * n;
+        for (let i = 0; i < n; i++) {
+          const v = this.bodies[i].linvel();
+          this.velRing[base + i] = v.x;
+          this.velRing[base + i + 1] = v.y;
+          this.velRing[base + i + 2] = v.z;
+        }
+        this.velRingPos = (this.velRingPos + 1) % VEL_WIN;
+        if (this.velFrames < VEL_WIN) this.velFrames++;
+      }
+      /** 力链是否已就绪（环已满）—— UI 显示用，避免展示未初始化的 0 */
+      forceChainReady() {
+        return this.velFrames >= VEL_WIN;
+      }
+      setTorqueTargets(taus) {
+        const n = Math.min(this.torqueCmd.length, taus.length);
+        for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * ★★ `τ = Jᵀ F` —— 把一个**世界系力** F 作用在点 p 上，投影成各关节力矩。
+       *
+       * ⚠⚠ **轴约定：`fx` = 矢状(前)、`fy` = 竖直、`fz` = 额状(侧)**。
+       *   （依据：`rs.grf.y = 686.7 × 载荷` 是竖直分量。）额状面平衡的水平力
+       *   必须传 `fz`；传成 `fx` 会变成前后推，横向完全失控。
+       *
+       *   文献依据（这才是平衡的标准律，不是"关节角 P 控制"）：
+       *     · Yin & Zhou 2004 / Horak 2006 / Reitsma 2013 / van Mierlo 2022/2024
+       *       —— 上层只决定**需要的地面反力矢量 F**（由倒立摆 / Capture Point / Houska
+       *          balance point 反解），关节力矩由**虚功**唯一确定：`τ = Jᵀ F`。
+       *     · 好处：各关节按**力臂几何自动分配**，没有可调的符号旋钮。
+       *       （旧实现"关节角 = P·ΔCoM.z"的符号与增益完全由被控对象决定，
+       *         护栏一改就翻面 —— 实测半权限 sign=−1 收敛、满权限 sign=+1 才收敛。）
+       *
+       *   公式：对切点 i（父侧 = 被 F 作用的那一侧），
+       *       τ_i = û_i · [ (a_i − p) × F ]
+       *   其中 û_i 是关节轴的世界方向、a_i 是关节世界锚点。
+       *   只沿 `chain` 上给的关节分配（一般是支撑腿 + 脊柱链）。
+       *
+       *   @param chain 允许参与分配的关节下标（其余轴写 0）
+       * @param copMoment 额外的支撑面力矩（N·m，绕世界 Z/绕踝），用于设定 CoP
+       */
+      jacobianTorque(fx, fy, fz, px, py, pz, chain, out) {
+        out.fill(0);
+        const ax = this.jw;
+        for (const i of chain) {
+          const j = this.sk.joints[i];
+          if (!j) continue;
+          const pi = this.jointBodies[i * 2];
+          const p = this.bodies[pi];
+          const q = p.rotation();
+          const pt = p.translation();
+          const pl = j.parentLocal;
+          quatRotate(q.x, q.y, q.z, q.w, pl[0], pl[1], pl[2], this.ja);
+          const axw = pt.x + this.ja[0], ayw = pt.y + this.ja[1], azw = pt.z + this.ja[2];
+          const rx = axw - px, ry = ayw - py, rz = azw - pz;
+          const cx = ry * fz - rz * fy;
+          const cy = rz * fx - rx * fz;
+          const cz = rx * fy - ry * fx;
+          for (let k = 0; k < 3; k++) {
+            const lx = k === AXIS_X ? 1 : 0, ly = k === AXIS_Y ? 1 : 0, lz = k === AXIS_Z ? 1 : 0;
+            quatRotate(q.x, q.y, q.z, q.w, lx, ly, lz, ax);
+            const idx = i * 3 + k;
+            out[idx] = ax[0] * cx + ax[1] * cy + ax[2] * cz;
+            const tmax = j.maxTorque[k];
+            if (out[idx] > tmax) out[idx] = tmax;
+            else if (out[idx] < -tmax) out[idx] = -tmax;
+          }
+        }
+      }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
           const t = targets[i];
@@ -14083,7 +14552,8 @@ var init_ragdoll = __esm({
           rv[1] -= rr[1];
           rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
-          const Ieff = this.jointIeff[i];
+          const gf = this.footLoadedFlag(i) && this.groundFactor[i] > 1 ? this.groundFactor[i] : 1;
+          const Ieff = this.jointIeff[i] * gf;
           for (let k = 0; k < 3; k++) {
             this.motorImpulse[i * 3 + k] = 0;
             this.motorDemand[i * 3 + k] = 0;
@@ -14100,6 +14570,8 @@ var init_ragdoll = __esm({
             } else if (a < lo) {
               err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
+            } else if (this.holdCmd[idx]) {
+              err = -this.opt.kD * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
@@ -14111,12 +14583,23 @@ var init_ragdoll = __esm({
             let tau = err * (tauMax / JOINT_MAX_SPEED);
             if (tau > tauMax) tau = tauMax;
             else if (tau < -tauMax) tau = -tauMax;
+            const tq = this.torqueCmd[idx];
+            if (tq !== 0) {
+              tau += tq;
+              if (tau > tauMax) tau = tauMax;
+              else if (tau < -tauMax) tau = -tauMax;
+            }
+            this.tauApplied[idx] = tau;
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
-            const impStable = alpha * Math.abs(err) * Ieff;
+            const ff = this.torqueCmd[idx];
+            const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
+            const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
             if (imp === 0) continue;
+            this.motorAuthority[idx] = Math.min(1, Math.abs(imp) / Math.max(1e-12, Math.abs(impWant)));
+            this.footAuthUsed[idx] = gf;
             if (k === AXIS_X) quatRotate(qp.x, qp.y, qp.z, qp.w, 1, 0, 0, this.axisW);
             else if (k === AXIS_Y) quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 1, 0, this.axisW);
             else quatRotate(qp.x, qp.y, qp.z, qp.w, 0, 0, 1, this.axisW);
@@ -14513,11 +14996,12 @@ var HIDDEN_UNITS, BRAIN_SHAPE, INPUT_LAYOUT, INPUT_COUNT, OUTPUT_PER_JOINT;
 var init_brain = __esm({
   "src/core/brain.ts"() {
     "use strict";
+    init_skeleton();
     HIDDEN_UNITS = 32;
     BRAIN_SHAPE = shapeForJoints(9);
     INPUT_LAYOUT = inputLayout(12);
     INPUT_COUNT = 36 + 6 * 12;
-    OUTPUT_PER_JOINT = 3;
+    OUTPUT_PER_JOINT = AXES_PER_JOINT;
   }
 });
 
@@ -14794,7 +15278,6 @@ var init_gaitRef = __esm({
     LEAD_MAX = 0.25;
     PREACT_RATIO = 0.3;
     PelvisFirstTracker = class {
-      /** 低通后的髋/膝角速度（rad/s），EMA */
       hv = 0;
       kv = 0;
       hvMax = 0;
@@ -15804,6 +16287,7 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
+      driver: "brain",
       physicsHz: 120,
       controlHz: 60,
       duration: 6,
@@ -15830,6 +16314,9 @@ var init_sim = __esm({
       stillRamp: 1.5,
       // 之后 1.5 s 内扣分速率爬到 1×，再往上封 3×   // 位移门槛课程上限（见 SimConfig.stepMinDxMax）
       solverIterations: 16,
+      contactHz: 0,
+      // ★ 默认关 ⇒ 行为与重构前逐位一致（改它必须重跑全部门禁）
+      contactDamping: 1,
       /**
        * 躯干高度低于初始的 (1−ratio) ⇒ 判摔倒（截断）。
        * ★ 从 0.62 收紧到 **0.85**：0.62 太松，**往前塌**不算摔 ——
@@ -16178,6 +16665,13 @@ var init_sim = __esm({
       inDomainTicks = 0;
       balanceTicks = 0;
       constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+        const n = sk2.joints.length;
+        const expIn = 36 + 6 * n, expOut = 3 * n;
+        if (shape.inputs !== expIn || shape.outputs !== expOut) {
+          throw new Error(
+            `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
+          );
+        }
         this.sk = sk2;
         this.cfg = cfg;
         this.shape = shape;
@@ -16216,6 +16710,12 @@ var init_sim = __esm({
         w.timestep = this.dt;
         w.numSolverIterations = this.cfg.solverIterations;
         w.numAdditionalFrictionIterations = Math.max(1, this.cfg.solverIterations >> 1);
+        if (this.cfg.contactHz > 0) {
+          const ip = w.integrationParameters;
+          ip.contact_natural_frequency = this.cfg.contactHz;
+          const dr = ip;
+          if ("contact_damping_ratio" in dr) dr.contact_damping_ratio = this.cfg.contactDamping;
+        }
         this.world = w;
         this.doll = new Ragdoll(w, this.sk, this.cfg.doll);
         this.puppet = void 0;
@@ -16595,6 +17095,7 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
+        if (this.cfg.driver === "controller") return;
         brainForward(this.shape, p, x, this.hidden, this.out);
         for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
         doll.setMotorTargets(this.motor);
@@ -16616,6 +17117,8 @@ var init_sim = __esm({
         const stanceNow = nGround === 0 ? 0 : gL ? 1 : 2;
         const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
         if (altNow) this.altCount++;
+        this.doll.stanceClearancePeak = Math.max(this.airPeakL, this.airPeakR);
+        this.doll.advanceStance(dt);
         this.airL = gL ? 0 : this.airL + dt;
         this.airR = gR ? 0 : this.airR + dt;
         if (gL) this.airPeakL = 0;
@@ -16648,7 +17151,7 @@ var init_sim = __esm({
           }
         }
         if (this.mod.active("singleSupport", this.gp.now, nGround, null))
-          this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
+          this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
         if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
         if (this.cfg.mode === "stand" && nGround === 2) {
           this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
@@ -17091,7 +17594,6 @@ var init_sim = __esm({
 var genome_exports = {};
 __export(genome_exports, {
   blendInto: () => blendInto,
-  crossover: () => crossover,
   genomeFromBase64: () => genomeFromBase64,
   genomeToBase64: () => genomeToBase64,
   makeGaussian: () => makeGaussian,
@@ -17162,9 +17664,6 @@ function mutateInto(src, dst, sigma, prob, rng, gauss) {
   for (let i = 0; i < src.length; i++) {
     dst[i] = rng() < prob ? src[i] + gauss() * sigma : src[i];
   }
-}
-function crossover(a, b, dst, rng) {
-  for (let i = 0; i < a.length; i++) dst[i] = rng() < 0.5 ? a[i] : b[i];
 }
 function blendInto(a, b, dst, rng) {
   for (let i = 0; i < a.length; i++) {
@@ -17242,7 +17741,6 @@ var log = console.log;
 function run(label, seed) {
   const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, duration: DUR, mode: "stand" });
   sim.begin(seed === null ? new Float32Array(sim.params.length) : randomGenome2(SHAPE, makeGaussian2(makeRng2(seed))));
-  log(`  ticksTotal=${sim.ticksTotal} dur=${DUR} finished=${sim.finished}`);
   const com = newCom2();
   const sup = sim.sup;
   log(`
@@ -17278,7 +17776,7 @@ function run(label, seed) {
     }
   }
   const alive = sim.ticksDone / sim.cfg.controlHz;
-  log(alive >= DUR - 0.05 ? `  \u2713 \u7AD9\u6EE1 ${DUR}s` : `  \u2717 \u4E2D\u6B62\u4E8E t = ${alive.toFixed(2)}s \xB7 ${sim.fallReason || "\u8DD1\u6EE1"} \xB7 \u7EC8\u503E\u89D2 ${(sim.endTilt * 57.2958).toFixed(1)}\xB0`);
+  log(alive >= DUR - 0.05 ? `  \u2713 \u7AD9\u6EE1 ${DUR}s` : `  \u2717 \u5012\u4E8E t = ${alive.toFixed(2)}s \xB7 \u6B7B\u56E0[${sim.fallReason}] \xB7 \u7EC8\u503E\u89D2 ${(sim.endTilt * 57.2958).toFixed(1)}\xB0`);
 }
 run("\u96F6\u8F93\u51FA\uFF08\u03B8_ref \u2261 0\uFF0C\u4FDD\u6301\u7ED1\u5B9A\u59FF\u6001\uFF09", null);
 run("\u968F\u673A\u57FA\u56E0\u7EC4\uFF08\u5BF9\u7167\uFF09", 20261003);

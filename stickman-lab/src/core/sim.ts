@@ -1022,6 +1022,14 @@ export class Sim {
     const stanceNow: 0 | 1 | 2 = nGround === 0 ? 0 : gL ? 1 : 2;
     const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
     if (altNow) this.altCount++;
+    // ★★★ **收敛点的唯一推进处**：把离地净空峰值交给统一判定，并在固定时间线上
+    //   推进它一次（与 `altEvent` 同一处、同一拍）。
+    //   ⚠⚠ 必须在这里推进、而不是在被读取的地方 —— 见 `Ragdoll.advanceStance`
+    //     的病历：读时推进会让"读诊断"产生副作用，奖励求值顺序一变状态就分叉
+    //     （实测 `probe-fitness` 首次不一致从第 21 代提前到第 13 代）。
+    //   净空峰值用 `max(L,R)`：任一脚离地才算单支撑，不预设是哪只。
+    this.doll.stanceClearancePeak = Math.max(this.airPeakL, this.airPeakR);
+    this.doll.advanceStance(dt);
     this.airL = gL ? 0 : this.airL + dt;
     this.airR = gR ? 0 : this.airR + dt;
     // ★ 记录本次腾空的**最大脚底高度**（离地高度判据用，见 MIN_CLEARANCE）
@@ -1106,7 +1114,13 @@ export class Sim {
     //   ⚠ 正分（确实一脚离地）走模块表；**负分（两脚都离地=跳）永远生效** ——
     //   "禁止跳"是物理安全约束，不是步态时序约束，不能被相位门控关掉。
     if (this.mod.active('singleSupport', this.gp.now, nGround, null))
-      this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
+      // ★★ 收敛点：`单支撑` 正分读**统一判定** `doll.stanceSingleNow`（纯读取）。
+      //   不用裸接触数 `nGround === 1` —— 本文件上方的实测注释写着
+      //   「88% 的"离地"不到 3 cm ⇒ 之前的单支撑/换脚大多是接触抖动」。
+      //   ⚠ `nGround` 保留给"**有几只脚在接触**"这个**事实性**用途
+      //     （`gN0/gN1/gN2` 记账、`altEvent` 换脚事件、`nGround===0` 禁跳罚分）——
+      //     那是接触数，不是"是否真单支撑"的判断，两者不该混用。
+      this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
     if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
     // ★★★ 站立模式：**两脚都着地必须罚**（2026-10-02）。
     //   原来的实现里 `nGround===2` 既不奖也不罚 ⇒ **双脚站立是免费的**

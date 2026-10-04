@@ -15164,19 +15164,29 @@ var init_ragdoll = __esm({
        *   ② 离地那只脚的**净空峰值** ≥ `STANCE_CLEAR_MIN`（滤掉接触抖动）
        *   ③ 滞回：进入要连续 `STANCE_ENTER` 秒、退出要连续 `STANCE_EXIT` 秒
        *
-       * ⚠ 这是**新增**接口，不改动既有 `footGrounded()` / `altEvent()` 行为 ——
-       *   切换调用方会改变计分门控，属于行为变更，需要单独评估。
+       * ⚠⚠⚠ **有状态 ⇒ 必须只在固定时间线上推进一次，绝不能在被读取的地方推进。**
+       *   我第一版把它写成 `stanceIsSingleSupport(...)`（读时推进），直接放进奖励表达式：
+       *   `accSingle += (doll.stanceIsSingleSupport(...) ? 1 : 0) * ...`
+       *   ⇒ **"读诊断"产生了副作用**，于是奖励求值的调用顺序/次数一变，滤波器状态就分叉。
+       *   实测代价：`probe-fitness` 的「首次不一致」从**第 21 代**提前到**第 13 代**
+       *   （不一致本身是既有 bug，但我把它**放大**了）。
+       *   ⇒ 现在拆成两个职责明确的接口：
+       *      · `advanceStance(clearancePeak, dt)` —— **唯一推进点**，与 `altEvent` 同一处；
+       *      · `stanceSingleNow` —— **纯读取**，任何调用顺序都安全。
        */
       stanceSingle = false;
       stanceEnterT = 0;
       stanceExitT = 0;
-      /** 接触数恰为 1 且离地脚净空峰值达标、已滞回确认 ⇒ 现在是真的单支撑 */
-      stanceIsSingleSupport(clearancePeak, dt) {
+      /** 离地脚的**净空峰值**。`sim.ts` 的 `airPeakL/R` 是同一件事的私账；
+       *  这里给出公共读数，好让"真单支撑"的判据在两条路径上用**同一个数**。 */
+      stanceClearancePeak = 0;
+      /** ★ 唯一推进点：每个控制拍调一次（与 `altEvent` 同一处）。 */
+      advanceStance(dt) {
         const gL = this.footGrounded(0);
         const gR = this.footGrounded(1);
         const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
         const clr = gL ? Math.max(0, this.soleY("r")) : gR ? Math.max(0, this.soleY("l")) : 0;
-        const raw = nGround === 1 && Math.max(clearancePeak, clr) >= STANCE_CLEAR_MIN;
+        const raw = nGround === 1 && Math.max(this.stanceClearancePeak, clr) >= STANCE_CLEAR_MIN;
         if (raw) {
           this.stanceExitT = 0;
           this.stanceEnterT += dt;
@@ -15186,24 +15196,22 @@ var init_ragdoll = __esm({
           this.stanceExitT += dt;
           if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
         }
+      }
+      /** ★ 纯读取：现在是否"真单支撑"。**任何调用顺序都安全**（不推进状态）。 */
+      get stanceSingleNow() {
         return this.stanceSingle;
       }
-      /** 摆动腿抬高阶段的接触计数（收敛判据的原始输入，供诊断回读） */
+      /** 收敛判据的原始输入（裸接触数），仅供诊断对照 */
       get stanceRawSingle() {
         return (this.footGrounded(0) ? 1 : 0) + (this.footGrounded(1) ? 1 : 0) === 1;
       }
-      /**
-       * 离地脚的**净空峰值**（本拍离地那只脚到目前为止抬多高）。
-       * `sim.ts` 的 `airPeakL/R` 是同一件事的私账；这里给出公共读数，
-       * 好让"真单支撑"的判据在两条路径上用**同一个数**。
-       */
-      stanceClearancePeak = 0;
       resetAlt() {
         this.lastStance = 0;
         this.stanceAge = 0;
         this.stanceSingle = false;
         this.stanceEnterT = 0;
         this.stanceExitT = 0;
+        this.stanceClearancePeak = 0;
       }
       /**
        * ★★ 摔倒（crash）判据：**任何非脚部刚体碰到地面**。
@@ -18142,6 +18150,8 @@ var init_sim = __esm({
         const stanceNow = nGround === 0 ? 0 : gL ? 1 : 2;
         const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
         if (altNow) this.altCount++;
+        this.doll.stanceClearancePeak = Math.max(this.airPeakL, this.airPeakR);
+        this.doll.advanceStance(dt);
         this.airL = gL ? 0 : this.airL + dt;
         this.airR = gR ? 0 : this.airR + dt;
         if (gL) this.airPeakL = 0;
@@ -18174,7 +18184,7 @@ var init_sim = __esm({
           }
         }
         if (this.mod.active("singleSupport", this.gp.now, nGround, null))
-          this.accSingle += (nGround === 1 ? 1 : 0) * (cl ? 1 : 0.1) * dt;
+          this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
         if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
         if (this.cfg.mode === "stand" && nGround === 2) {
           this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
@@ -19181,7 +19191,16 @@ var init_controller = __esm({
         rs.loadFrac.r = this.loadFilt.r;
         rs.grounded.l = sim2.doll.footGrounded(0);
         rs.grounded.r = sim2.doll.footGrounded(1);
-        rs.stanceSingle = sim2.doll.stanceIsSingleSupport(sim2.doll.stanceClearancePeak, dt);
+        if (sim2.cfg.driver !== "controller") {
+          rs.stanceSingle = sim2.doll.stanceSingleNow;
+        } else {
+          sim2.doll.stanceClearancePeak = Math.max(
+            Math.max(0, sim2.doll.soleY("l")),
+            Math.max(0, sim2.doll.soleY("r"))
+          );
+          sim2.doll.advanceStance(dt);
+          rs.stanceSingle = sim2.doll.stanceSingleNow;
+        }
         sim2.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
