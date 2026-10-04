@@ -65,13 +65,6 @@ const hud = new Hud({
   onExport: () => { if (booted) doExport(); },
   onImport: () => { if (booted) doImport(); },
   onGhost: () => { if (booted) { state.ghost = !state.ghost; viewer.showGhost = state.ghost; } },
-  // ★ 踝（足底）开关：骨架只在 boot() 构建一次（关节 12→14 会改网络输出维度），
-  //   所以这里改 URL 重载，而不是尝试运行期重建。
-  onAnkle: (on: boolean) => {
-    const u = new URLSearchParams(location.search);
-    u.set('ankle', on ? '1' : '0');
-    location.search = u.toString();
-  },
   // ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X，见 viewer 的 AXIS_CONVENTION）
   onAxisMarkers: (on: boolean) => { state.axisMarkers = on; if (booted) viewer.setAxisMarkers(on); },
   onJoints: () => { if (booted) { state.joints = !state.joints; viewer.showJoints = state.joints; } },
@@ -127,11 +120,6 @@ function boot(): void {
     // 把 checkbox 的初值同步进 viewer（Hud 构造期的回调被 booted 挡掉了）
     const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;
     if (cb) { cb.checked = state.axisMarkers; viewer.setAxisMarkers(state.axisMarkers); }
-    // 踝按钮的初值（骨架已按 state.ankle 重建）
-    {
-      const b = document.getElementById('b-ankle') as HTMLButtonElement | null;
-      if (b) { b.dataset.on = state.ankle ? '1' : '0'; b.textContent = `踝关节：${state.ankle ? '开' : '关'}`; }
-    }
   }
 
   showcase.begin(trainer.showcase());

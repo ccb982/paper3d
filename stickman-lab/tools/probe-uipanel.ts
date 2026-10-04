@@ -83,7 +83,6 @@ const hud = new Hud({
   //   而 typecheck 之前不检查 tools/ ⇒ 这个覆盖缺口一直没人发现。
   //   发现途径：`tsconfig.tools.json`（见该文件顶部说明）。
   onAxisMarkers() {},
-  onAnkle() {},
 });
 hud.setOwnership(snap);
 

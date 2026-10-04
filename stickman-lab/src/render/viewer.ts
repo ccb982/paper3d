@@ -388,6 +388,14 @@ export class Viewer {
 
     for (const i of groups.plain) {
       const b = sk.bodies[i];
+      // ★★ `plateHidden` 的刚体**不建板**。
+      //   脚掌刚体（`foot_l/foot_r`，仅 `ankleEnabled` 时存在）借的是**小腿那张贴图**
+      //   （`part` 相同，物理上脚掌 collider 在踝以下），画出来就是**第二只脚**
+      //   （用户 2026-10-04：「有了踝关节现在纹理变成两个脚了」）。
+      //   脚掌的正确画法需要**把小腿贴图横向裁一刀**，目前没做 ⇒ 先不画。
+      //   ⚠ 这个标志此前**只声明、只赋值，从没被读过** ⇒ 是一枚死标志
+      //     （与 `Ragdoll` 的 `jointGain` 同类）。
+      if (b.plateHidden) continue;
       const w = b.part.bw * sk.px2m;
       const h = b.part.bh * sk.px2m;
       const mat = new THREE.MeshBasicMaterial({

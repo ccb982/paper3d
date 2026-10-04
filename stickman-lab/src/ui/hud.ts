@@ -23,7 +23,6 @@ export interface HudHooks {
   /** ★ 3D 地面方向标开关（左=+Z / 右=−Z / 前=+X） */
   onAxisMarkers: (on: boolean) => void;
   /** 踝关节（足底）开关。骨架只构建一次 ⇒ 实现是改 URL 重载，不是重建 */
-  onAnkle: (on: boolean) => void;
   onJoints: () => void;
   onTextures: () => void;
   onSigma: (v: number) => void;
@@ -106,7 +105,7 @@ export class Hud {
       vVelTrack: $('v-veltrack'), vLift: $('v-lift'), vSingle: $('v-single'),
     vJointMove: $('v-jointmove'), vLateral: $('v-lateral'), vActRate: $('v-actrate'),
     vMHipL: $('v-mhip_l'), vMHipR: $('v-mhip_r'), vMKneeL: $('v-mknee_l'), vMKneeR: $('v-mknee_r'),
-      boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'), ankle: $('b-ankle'),
+      boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
       ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
@@ -141,11 +140,6 @@ export class Hud {
     wire('b-export', 'click', hooks.onExport);
     wire('b-import', 'click', hooks.onImport);
     wire('b-ghost', 'click', hooks.onGhost);
-    // 踝开关：按钮文字本身就是当前态（`main.ts` 在 boot 后按 state.ankle 写入）
-    wire('b-ankle', 'click', () => {
-      const b = document.getElementById('b-ankle');
-      hooks.onAnkle(!(b?.dataset.on === '1'));
-    });
     // 3D 方向标开关（change 而非 click：要拿到 checkbox 的 checked）
     {
       const cb = document.getElementById('own-axis3d') as HTMLInputElement | null;
@@ -237,7 +231,11 @@ private renderForceChain(fc: RigSnapshot['forceChain']): void {
   const rows = fc.joints.filter((j) => keep.has(j.name))
     .map((j) => {
       const lv = j.f < W ? 0 : (j.f < W * 1.5 ? 1 : 2);
-      const [side, part] = j.name.split('_');
+      // ⚠⚠ 解构顺序：`"foot_l".split('_')` = `["foot", "l"]` ⇒ **part 在前、side 在后**。
+      //   原来写成 `const [side, part] = …`，于是 `part === 'foot'` 永不成立、
+      //   `side === 'l'` 永不成立 ⇒ **每一行都渲染成"右 髋→整条腿"**
+      //   （踝/膝/髋根本区分不出来，用户看不到踝）。已修。
+      const [part, side] = j.name.split('_');
       const tag = part === 'foot' ? '踝→脚掌' : part === 'knee' ? '膝→小腿+脚' : '髋→整条腿';
       return `<tr data-lv="${lv}"><td class="nm">${side === 'l' ? '左' : '右'} ${tag}</td>`
         + `<td class="f">${j.f.toFixed(0)}</td>`

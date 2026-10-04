@@ -381,6 +381,15 @@ export class Ragdoll {
   readonly opt: Required<RagdollOptions>;
   readonly bodies: RAPIER.RigidBody[] = [];
   /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+  /**
+   * ★ 鞋底 collider **列表**（每只脚可能有多块：脚跟 + 前脚掌）。
+   *
+   * 此前是单数 `soleCol`。脚掌拆成两块后（`SkeletonConfig.soleSplit`），
+   * 单数只能存下**一块** ⇒ CoP / 接地判定 / 载荷分配全都在读**半个脚**
+   * （实测拆分后 CoP 基线从 214mm 变成 191mm，而踝角没变）。
+   * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
+   */
+  readonly soleCols: [RAPIER.Collider[], RAPIER.Collider[]] = [[], []];
   readonly soleCol: [RAPIER.Collider | null, RAPIER.Collider | null] = [null, null];
   /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
   private readonly copTmp = new Float64Array(4);
@@ -562,8 +571,10 @@ export class Ragdoll {
           ? RAPIER.ColliderDesc.capsule(c.halfHeight, c.radius)
           : RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
         // ★ ColliderDesc.setTranslation 是 (x,y,z) 三个数，不是 Vector
+        // ★ offsetX：脚掌拆成"脚跟 + 前脚掌"两块时用（沿足长方向分离）。
+        //   CoP 权限的关键 —— 见 `ColliderDef.offsetX` 的说明。
         // ★ offsetZ：脚掌盒要按纹理实测的靴心侧偏摆（否则盒心挂在小腿中轴上，靴子对不上）
-        cd.setTranslation(0, c.offsetY, c.offsetZ)
+        cd.setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ)
           // ★ 质量必须逐个 collider 给：不给就按默认密度 1.0 凭空加质量。
           //   已用 body.mass() 读回校验过：偏差 < 1e-6 kg（见 probe-motor A 段）。
           .setMassProperties(
@@ -579,8 +590,13 @@ export class Ragdoll {
         // ★ 记住鞋底 collider：腾空时间/单脚支撑要用**真实接触**判定
         //   （几何判据有 3cm 死区，实测脚能抬 9cm 却被判成一直着地）。
         if (c.shape === 'cuboid') {
-          if (b.key === 'shin_l' || b.key === 'foot_l') this.soleCol[0] = col;
-          else if (b.key === 'shin_r' || b.key === 'foot_r') this.soleCol[1] = col;
+          if (b.key === 'shin_l' || b.key === 'foot_l') {
+            this.soleCols[0].push(col);
+            this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
+          } else if (b.key === 'shin_r' || b.key === 'foot_r') {
+            this.soleCols[1].push(col);
+            this.soleCol[1] ??= col;
+          }
         }
       }
     });
@@ -830,24 +846,26 @@ export class Ragdoll {
    * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
    */
   readCoP(side: 0 | 1, out: Float64Array): void {
-    const col = this.soleCol[side];
     out[0] = out[1] = out[2] = out[3] = 0;
-    if (!col) return;
+    // ★ 遍历**全部**鞋底 collider（脚跟 + 前脚掌）。单数版只读一块 ⇒ 拆成两块后
+    //   CoP 变成"半只脚的压力中心"，权限失真（实测基线从 214mm 漂到 191mm）。
     let sx = 0, sy = 0, sz = 0, sl = 0;
-    this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
-      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
-        const n = mf.numSolverContacts();
-        for (let i = 0; i < n; i++) {
-          // ★ 只要法向分量：切向冲量是摩擦，不是"压力中心"的定义
-          const ny = mf.normal().y;
-          if (Math.abs(ny) < 0.5) continue;
-          const p = mf.solverContactPoint(i);
-          const l = Math.abs(mf.contactImpulse(i));
-          if (!(l > 0)) continue;
-          sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
-        }
+    for (const col of this.soleCols[side]) {
+      this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
+        this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            // ★ 只要法向分量：切向冲量是摩擦，不是"压力中心"的定义
+            const ny = mf.normal().y;
+            if (Math.abs(ny) < 0.5) continue;
+            const p = mf.solverContactPoint(i);
+            const l = Math.abs(mf.contactImpulse(i));
+            if (!(l > 0)) continue;
+            sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
+          }
+        });
       });
-    });
+    }
     if (sl > 0) { out[0] = sx / sl; out[1] = sy / sl; out[2] = sz / sl; }
     out[3] = sl;
   }
@@ -896,16 +914,20 @@ export class Ragdoll {
   private footLoadedCache = { l: false, r: false };
 
   footGrounded(side: 0 | 1): boolean {
-    const col = this.soleCol[side];
-    if (!col) return false;
+    // ★ 遍历**全部**鞋底 collider。任一块有接触就算着地。
+    //   单数版只读一块 ⇒ 前脚掌离地、脚跟仍着地时会被误判成"整只脚离地"
+    //   （那会让腾空时间与单脚支撑判定提前触发）。
     let hit = false;
-    this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
-      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
-        if (mf.numContacts() === 0) return;
-        const ny = mf.normal().y;
-        if (ny > 0.5 || ny < -0.5) hit = true;
+    for (const col of this.soleCols[side]) {
+      this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
+        this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+          if (mf.numContacts() === 0) return;
+          const ny = mf.normal().y;
+          if (ny > 0.5 || ny < -0.5) hit = true;
+        });
       });
-    });
+      if (hit) return true;
+    }
     return hit;
   }
 

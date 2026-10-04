@@ -202,6 +202,19 @@ export interface SkeletonConfig {
    */
   soleGroundCorr: number;
   /**
+   * ★ 脚掌碰撞体**拆成两块**（脚跟 + 前脚掌），随 `ankleEnabled` 生效。
+   *
+   * 为什么（实测依据）：单块刚性脚掌平放时，接触形心**不随倾转移动** ——
+   *   要让 CoP 移动只能把脚**翻到边缘**。而几何上刚好卡死：
+   *     半宽 `hz = 102mm`，滚转上限 14° ⇒ 内侧缘抬 `102·sin14° = 25mm`，
+   *     而脚半厚 `hy = 26mm` ⇒ 滚到限位才刚刚好触边。
+   *   实测滚转 −0.2…+0.24 rad 全程 **CoP 只动 4 mm**（等于零权限）。
+   * 拆成两块后，载荷在脚跟↔前脚掌之间**连续**转移 ⇒ CoP 沿足长连续可调。
+   *
+   * 单块（`false`）保留以便 A/B 对照。
+   */
+  soleSplit: boolean;
+  /**
    * ★★ 脚掌外八角（度，默认 25 = **外八**：脚尖朝身体外侧）。
    *
    * 用户定调（2026-10-01）："脚要向外侧倾斜，做成外八"。
@@ -274,6 +287,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1.0,
   soleGroundCorr: 0,
+  soleSplit: true,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
   footSplayDeg: 25,
@@ -513,6 +527,13 @@ export interface ColliderDef {
   hz: number;
   /** 相对刚体几何中心的偏移（本地，米） */
   offsetY: number;
+  /**
+   * ★ **前后**偏移（本地米，+X 前）。脚掌拆成"脚跟 + 前脚掌"两个碰撞体时必需：
+   *   载荷在两者之间连续转移 ⇒ CoP 能在足长范围内连续调节，
+   *   **不必把脚翻到边缘**（刚性单块脚掌只有"翻起来"才能移动接触形心，
+   *   实测滚转 ±14° 全程 CoP 只动 4mm）。
+   */
+  offsetX?: number;
   /**
    * ★ 侧向偏移（本地米，+Z）。脚掌要加这个：纹理里画出来的靴子相对小腿中轴是**偏**的
    * （左靴心 x=440px / 右靴心 x=1096px，而小腿中轴在 ~460/~1075px），
@@ -957,16 +978,33 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
-          colliders: [{
-            shape: 'cuboid',
-            halfHeight: 0, radius: 0,
-            hx, hy: soleHalfThick, hz,
-            offsetY: local[1], offsetZ: local[2],
-            mass: soleMass,
-            comY: 0,
-            inertiaZ: (soleMass * (hx * hx + soleHalfThick * soleHalfThick)) / 3,
-            inertiaXY: (soleMass * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
-          }],
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          colliders: (() => {
+            const two = cfg.soleSplit;
+            // 两块的前后分配：脚跟 40% / 前脚掌 60%（人体步态的中步置两压力比约 4:6）。
+            const hxBall = two ? hx * 0.32 : hx;   // 前脚掌短且圆，不与脚跟重叠
+            const hxHeel = two ? hx * 0.26 : 0;
+            const offBall = two ? hx * 0.62 : 0;   // 中心分离（两块不重叠）
+            const offHeel = two ? -hx * 0.60 : 0;
+            const mBall = two ? soleMass * 0.6 : soleMass;
+            const mHeel = two ? soleMass * 0.4 : 0;
+            const mk = (dx: number, mx: number, m: number) => ({
+              shape: 'cuboid' as const, halfHeight: 0, radius: 0,
+              hx: two ? (dx > 0 ? hxBall : hxHeel) : hx,
+              hy: soleHalfThick, hz,
+              offsetX: dx, offsetY: local[1], offsetZ: local[2],
+              mass: m, comY: 0,
+              inertiaZ: (m * ((two ? (dx > 0 ? hxBall : hxHeel) : hx) ** 2 + soleHalfThick ** 2)) / 3,
+              inertiaXY: (m * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
+            });
+            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+          })(),
           leg: true,
         });
         // ★ 小腿胶囊**只到踝**（上面已把刚体中心/长度重算到"膝→踝"这一段），

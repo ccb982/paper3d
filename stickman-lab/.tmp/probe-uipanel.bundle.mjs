@@ -6529,20 +6529,38 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
-          colliders: [{
-            shape: "cuboid",
-            halfHeight: 0,
-            radius: 0,
-            hx,
-            hy: soleHalfThick,
-            hz,
-            offsetY: local2[1],
-            offsetZ: local2[2],
-            mass: soleMass,
-            comY: 0,
-            inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
-            inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
-          }],
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          colliders: (() => {
+            const two = cfg.soleSplit;
+            const hxBall = two ? hx * 0.32 : hx;
+            const hxHeel = two ? hx * 0.26 : 0;
+            const offBall = two ? hx * 0.62 : 0;
+            const offHeel = two ? -hx * 0.6 : 0;
+            const mBall = two ? soleMass * 0.6 : soleMass;
+            const mHeel = two ? soleMass * 0.4 : 0;
+            const mk = (dx, mx, m) => ({
+              shape: "cuboid",
+              halfHeight: 0,
+              radius: 0,
+              hx: two ? dx > 0 ? hxBall : hxHeel : hx,
+              hy: soleHalfThick,
+              hz,
+              offsetX: dx,
+              offsetY: local2[1],
+              offsetZ: local2[2],
+              mass: m,
+              comY: 0,
+              inertiaZ: m * ((two ? dx > 0 ? hxBall : hxHeel : hx) ** 2 + soleHalfThick ** 2) / 3,
+              inertiaXY: m * (hz * hz + soleHalfThick * soleHalfThick) / 3
+            });
+            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+          })(),
           leg: true
         });
         bodies.push({
@@ -6808,6 +6826,7 @@ var init_skeleton = __esm({
       //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
       soleFootScale: 1,
       soleGroundCorr: 0,
+      soleSplit: true,
       // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
       //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
       footSplayDeg: 25,
@@ -14681,6 +14700,15 @@ var init_ragdoll = __esm({
       opt;
       bodies = [];
       /** [左, 右] 鞋底 collider（腾空时间/单脚支撑的真实接触判据） */
+      /**
+       * ★ 鞋底 collider **列表**（每只脚可能有多块：脚跟 + 前脚掌）。
+       *
+       * 此前是单数 `soleCol`。脚掌拆成两块后（`SkeletonConfig.soleSplit`），
+       * 单数只能存下**一块** ⇒ CoP / 接地判定 / 载荷分配全都在读**半个脚**
+       * （实测拆分后 CoP 基线从 214mm 变成 191mm，而踝角没变）。
+       * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
+       */
+      soleCols = [[], []];
       soleCol = [null, null];
       /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
       copTmp = new Float64Array(4);
@@ -14828,7 +14856,7 @@ var init_ragdoll = __esm({
           this.bodies.push(body);
           for (const c of b.colliders) {
             const cd = c.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c.halfHeight, c.radius) : rapier_default.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
-            cd.setTranslation(0, c.offsetY, c.offsetZ).setMassProperties(
+            cd.setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ).setMassProperties(
               c.mass,
               { x: 0, y: c.comY, z: 0 },
               { x: c.inertiaXY, y: c.inertiaXY, z: c.inertiaZ },
@@ -14836,8 +14864,13 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l") this.soleCol[0] = col;
-              else if (b.key === "shin_r" || b.key === "foot_r") this.soleCol[1] = col;
+              if (b.key === "shin_l" || b.key === "foot_l") {
+                this.soleCols[0].push(col);
+                this.soleCol[0] ??= col;
+              } else if (b.key === "shin_r" || b.key === "foot_r") {
+                this.soleCols[1].push(col);
+                this.soleCol[1] ??= col;
+              }
             }
           }
         });
@@ -15013,26 +15046,26 @@ var init_ragdoll = __esm({
        * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
        */
       readCoP(side, out) {
-        const col = this.soleCol[side];
         out[0] = out[1] = out[2] = out[3] = 0;
-        if (!col) return;
         let sx = 0, sy = 0, sz = 0, sl = 0;
-        this.world.contactPairsWith(col, (other) => {
-          this.world.contactPair(col, other, (mf) => {
-            const n = mf.numSolverContacts();
-            for (let i = 0; i < n; i++) {
-              const ny = mf.normal().y;
-              if (Math.abs(ny) < 0.5) continue;
-              const p = mf.solverContactPoint(i);
-              const l = Math.abs(mf.contactImpulse(i));
-              if (!(l > 0)) continue;
-              sx += p.x * l;
-              sy += p.y * l;
-              sz += p.z * l;
-              sl += l;
-            }
+        for (const col of this.soleCols[side]) {
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const ny = mf.normal().y;
+                if (Math.abs(ny) < 0.5) continue;
+                const p = mf.solverContactPoint(i);
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                sx += p.x * l;
+                sy += p.y * l;
+                sz += p.z * l;
+                sl += l;
+              }
+            });
           });
-        });
+        }
         if (sl > 0) {
           out[0] = sx / sl;
           out[1] = sy / sl;
@@ -15080,16 +15113,17 @@ var init_ragdoll = __esm({
       /** 两侧脚的承重缓存（由 `footLoadedFlag` 刷新） */
       footLoadedCache = { l: false, r: false };
       footGrounded(side) {
-        const col = this.soleCol[side];
-        if (!col) return false;
         let hit = false;
-        this.world.contactPairsWith(col, (other) => {
-          this.world.contactPair(col, other, (mf) => {
-            if (mf.numContacts() === 0) return;
-            const ny = mf.normal().y;
-            if (ny > 0.5 || ny < -0.5) hit = true;
+        for (const col of this.soleCols[side]) {
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              const ny = mf.normal().y;
+              if (ny > 0.5 || ny < -0.5) hit = true;
+            });
           });
-        });
+          if (hit) return true;
+        }
         return hit;
       }
       /**
@@ -19385,8 +19419,9 @@ var init_lab = __esm({
       startBearer: "l",
       liftHold: 0.25,
       dur: 8,
-      // ★ 默认关（保持既有行为不变）；要在网页上看踝，点按钮 / 用 ?ankle=1
-      ankle: false
+      // ★ 默认**开**（用户 2026-10-04：「不需要开关，一直打开就行」）。
+      //   `?ankle=0` 仍可关掉做 A/B 对照。
+      ankle: true
     };
   }
 });
@@ -19447,7 +19482,6 @@ var init_hud = __esm({
           boot: $("boot"),
           pause: $("b-pause"),
           ghost: $("b-ghost"),
-          ankle: $("b-ankle"),
           joints: $("b-joints"),
           tex: $("b-tex"),
           // ── 「模块归属」面板（用户 2026-10-03）
@@ -19502,10 +19536,6 @@ var init_hud = __esm({
         wire("b-export", "click", hooks.onExport);
         wire("b-import", "click", hooks.onImport);
         wire("b-ghost", "click", hooks.onGhost);
-        wire("b-ankle", "click", () => {
-          const b = document.getElementById("b-ankle");
-          hooks.onAnkle(!(b?.dataset.on === "1"));
-        });
         {
           const cb = document.getElementById("own-axis3d");
           cb?.addEventListener("change", () => hooks.onAxisMarkers(cb.checked));
@@ -19609,7 +19639,7 @@ var init_hud = __esm({
         const keep = /* @__PURE__ */ new Set(["foot_l", "foot_r", "knee_l", "knee_r", "hip_l", "hip_r"]);
         const rows = fc.joints.filter((j) => keep.has(j.name)).map((j) => {
           const lv = j.f < W2 ? 0 : j.f < W2 * 1.5 ? 1 : 2;
-          const [side, part] = j.name.split("_");
+          const [part, side] = j.name.split("_");
           const tag = part === "foot" ? "\u8E1D\u2192\u811A\u638C" : part === "knee" ? "\u819D\u2192\u5C0F\u817F+\u811A" : "\u9ACB\u2192\u6574\u6761\u817F";
           return `<tr data-lv="${lv}"><td class="nm">${side === "l" ? "\u5DE6" : "\u53F3"} ${tag}</td><td class="f">${j.f.toFixed(0)}</td><td class="c">${j.fx.toFixed(0)}, ${j.fy.toFixed(0)}, ${j.fz.toFixed(0)}</td><td class="c">${j.mass.toFixed(1)}kg</td></tr>`;
         }).join("");
@@ -19978,8 +20008,6 @@ var hud = new Hud2({
   //   而 typecheck 之前不检查 tools/ ⇒ 这个覆盖缺口一直没人发现。
   //   发现途径：`tsconfig.tools.json`（见该文件顶部说明）。
   onAxisMarkers() {
-  },
-  onAnkle() {
   }
 });
 hud.setOwnership(snap);
