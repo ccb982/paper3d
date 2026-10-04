@@ -1134,24 +1134,58 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   拆成两块后，载荷可在两者之间**连续**转移
           //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
           colliders: (() => {
+            // ══════════════════════════════════════════════════════════════════
+            // ★★★ 柔性足的**分布式接触**（2026-10-04，按文献）
+            //
+            //   动机（实测）：原布局是「跟 / 前脚掌」两块，`offsetZ` **都是 0**，
+            //   只有 X 方向分开 ⇒ 接触压力无论怎么分布，**CoP 的 z 期望恒 ≈ 0**。
+            //   换句话说：**脚掌几何本身没有侧向 CoP 权限**，移动 CoP 的唯一途径是
+            //   刚性脚绕踝转动，而踝只剩约 7° 权限（实测踝角只走到 −3°/限 −10°）
+            //   ⇒ 额状面怎么推都不动。
+            //
+            //   文献依据：内侧弓 / 外侧柱是**两条独立的载荷路径**，足就是靠它们
+            //   在支撑相内迁移 CoP 的：
+            //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
+            //        允许柔性活动**」（Jeon & Cho 的压力垫综述）
+            //     · 「**内侧弓把重量传递到足的外侧缘**」
+            //   ⇒ 把接触面按**内侧柱 / 外侧柱**再各自分成跟/前脚掌，
+            //     求解器就能通过**压力重分布**在足宽内迁移 CoP，**不需要踝转动**。
+            //
+            //   定量目标：Lugade & Kaufman 2014（Gait & Posture 34:161-168）
+            //   实测平足步行 **CoP 行程 = 足宽的 27%**（内外侧）⇒ 足宽 100mm 时
+            //   **侧向 CoP 权限 ±13.5mm（总 27mm）**，且**持续可用**（踝不动）。
+            //
+            //   布局（局部坐标，z 为内外侧）：每侧两柱，柱宽 = 半足宽，
+            //   两柱在 z = ±hz/2 分开、共覆盖整个足宽 ⇒ 合起来仍是完整鞋底，
+            //   **不会改变外观轮廓，只改变接触面的内部划分**。
+            // ══════════════════════════════════════════════════════════════════
             const two = cfg.soleSplit;
-            // 两块的前后分配：脚跟 40% / 前脚掌 60%（人体步态的中步置两压力比约 4:6）。
+            // 前后分配：脚跟 40% / 前脚掌 60%（人体步态中步置两压力比约 4:6）。
             const hxBall = two ? hx * 0.50 : hx;   // 前半：与脚跟各占一半，在 x=0 相接
             const hxHeel = two ? hx * 0.50 : 0;    // 后半
             const offBall = two ? hx * 0.50 : 0;
             const offHeel = two ? -hx * 0.50 : 0;
-            const mBall = two ? soleMass * 0.6 : soleMass;
-            const mHeel = two ? soleMass * 0.4 : 0;
-            const mk = (dx: number, mx: number, m: number) => ({
+            // ★ 每根柱的宽度：内外侧各占一半足宽。
+            const hzCol = hz * 0.5;
+            const offColIn = +(hz * 0.5).toFixed(6);   // 内侧柱中心
+            const offColOut = -(hz * 0.5).toFixed(6);  // 外侧柱中心
+            const mCol = soleMass / (two ? 4 : 2);
+            const mkCol = (dx: number, dz: number, m: number) => ({
               shape: 'cuboid' as const, halfHeight: 0, radius: 0,
               hx: two ? (dx > 0 ? hxBall : hxHeel) : hx,
-              hy: soleHalfThick, hz,
-              offsetX: dx, offsetY: local[1], offsetZ: local[2],
+              hy: soleHalfThick, hz: hzCol,
+              offsetX: dx, offsetY: local[1], offsetZ: +(local[2] + dz).toFixed(6),
               mass: m, comY: 0,
               inertiaZ: (m * ((two ? (dx > 0 ? hxBall : hxHeel) : hx) ** 2 + soleHalfThick ** 2)) / 3,
-              inertiaXY: (m * (hz * hz + soleHalfThick * soleHalfThick)) / 3,
+              inertiaXY: (m * (hzCol * hzCol + soleHalfThick * soleHalfThick)) / 3,
             });
-            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+            // 内外侧 × (前脚掌, 脚跟) = 4 块；`soleSplit=false` 时退化为 2 块
+            return two
+              ? [
+                  mkCol(offBall, offColIn, mCol), mkCol(offBall, offColOut, mCol),
+                  mkCol(offHeel, offColIn, mCol), mkCol(offHeel, offColOut, mCol),
+                ]
+              : [mkCol(0, offColIn, soleMass * 0.5), mkCol(0, offColOut, soleMass * 0.5)];
           })(),
           leg: true,
         });

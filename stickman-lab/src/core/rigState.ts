@@ -158,6 +158,17 @@ export interface RigSnapshot {
   authority: number;
   com: { x: number; y: number; z: number; vx: number; vy: number; vz: number };
   dcm: { x: number; z: number };
+  /**
+   * ★ VIP 摆角 `q_vip`（rad，矢状）。
+   *   Morasso2019 (PLOS ONE 14:e0213870) 的 DIP+VIP 模型里，
+   *   这条「踝 → 全身 CoM」的虚拟摆的摆角**在物理上就等于 CoP 在支撑面上的位置**
+   *   （CoP 必须落在重力垂线上）。它是踝刚度 `τ = K_a·q_vip` 的输入。
+   */
+  qVip: number;
+  /** 踝 VIP 刚度律输出的力矩（N·m，矢状） */
+  ankleTauVip: number;
+  /** 踝 VIP 力矩是否已饱和（> `τmax`）⇒ flat-foot 约束触发 */
+  ankleTauSat: boolean;
   support: { cx: number; cz: number; halfX: number; halfZ: number; contactN: number };
   mos: number;
   grf: { x: number; y: number };
@@ -349,6 +360,16 @@ export class RigState {
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
   waistTrim = 0;
   waistGapM = 0;
+  /** ★ VIP 摆角 `q_vip = atan2(com.x − ankle.x, com.y − ankle.y)`（rad，矢状） */
+  qVip = 0;
+  /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
+  ankleTauVip = 0;
+  /**
+   * ★ 踝 VIP 力矩**是否已饱和**（请求值 > `τmax`）。
+   *   对应文献的 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩自动饱和，
+   *   策略随之让位给髋（Michaels & Ting 2025）。
+   */
+  ankleTauSat = false;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -930,6 +951,7 @@ export class RigState {
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
+      qVip: this.qVip, ankleTauVip: this.ankleTauVip, ankleTauSat: this.ankleTauSat,
       mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,

@@ -133,6 +133,33 @@ export interface BalanceParams {
    *   与 `wantedForce` 的 `kXRatio` 同一套约定 —— 姿态下沉时 ω₀ 自动变小，
    *   增益跟着变小，不会变欠阻尼。
    */
+  // ── VIP 踝刚度（《平衡态设计.md》§4.1②）─────────────────────────
+  /**
+   * ★★ 矢状踝刚度 `K_a`，单位 **N·m/rad**（不是无量纲比例 —— 直接给物理量，
+   *   免得「比例×ω₀²」在姿态下沉时悄悄变形）。
+   *
+   *   物理含义（Morasso2019, PLOS ONE 14:e0213870）：
+   *     重力倾覆力矩 `τ_g = m·g·h·sin(q) ≈ m·g·h·q` ⇒ **临界刚度 `K_crit = m·g·h`**。
+   *   本 rig 实测（tools 探针，1s 站姿）：
+   *     `m = 70.0 kg`、`h_ankle = CoM.y − 踝 = 0.959 − 0.046 = 0.913 m`
+   *     ⇒ `K_crit = 70.0 × 9.81 × 0.913 =` **627 N·m/rad**
+   *
+   *   取 **0.88 × K_crit = 552 N·m/rad**（欠临界 12%），依据是人体实测：
+   *     Loram & Lakie 2002, *J Physiol* 545:1041-1053 —— 安静站立时踝固有机械刚度
+   *     实测 `5.2 ± 1.2 N·m/deg`（= 298 N·m/rad），折合 **91 ± 23%** 的临界刚度，
+   *     原文结论「**insufficient to stabilise**」⇒ **刻意欠临界，最后一段交给反馈**。
+   *
+   *   ⚠ 为什么「刚度」比「位置伺服」对：位置环的有效刚度是 `kP/量程`，
+   *     随护栏 `α` 和量程漂移，无法保证落在临界的 88%。
+   *     而 `τ = K_a·q` **直接就是 CoP 权限**（CoP 位移 = τ/F_z，F_z = m·g`）。
+   *   ⚠ 上限校验：`τmax(foot/2) = 120 N·m` ⇒ 饱和角 = 120/552 = **0.217 rad (12.5°)**。
+   *     实测 `com.x` 偏 24 mm 时 `q_vip = atan2(−0.024, 0.913) = −0.026 rad`
+   *     ⇒ `τ = −14.5 N·m`，与「把 24 mm 拉回所需的 m·g·Δx = 16.5 N·m」同量级 ✓
+   */
+  kVipAnkle: number;
+  /** VIP 阻尼 `C_a`（N·m·s/rad）。按 `C_a = 2ζ√(K_a·I)` 由 `vipZeta` 算出 */
+  vipZeta: number;
+  /** 矢状 P 增益 / ω₀²（无量纲）。与 VIP 踝刚度并联时此项只做残余修正 */
   ksagRatio: number;
   /**
    * ★ 矢状阻尼比 ζ：`kd = 2ζω₀`。⇒ 阻尼/位置比 = 2ζ/ω₀ ≈ **0.56**（ζ=0.9）。
@@ -295,6 +322,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   kneeHoldDeg: 15,
   // Gear I sagittal hip: com forward => negative angle (hip extension)
   maxHipDeg: 0.52,
+  kVipAnkle: 552,
+  vipZeta: 0.9,
   ksagRatio: 0.2,
   ksagZeta: 0.9,
   // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
@@ -894,17 +923,70 @@ export function balanceSystem(
     //   ★ 为什么必须闭环在 CoP 上而不是"角度 PD"：
     //     角度 PD 在平衡点自然停下（实测只出 1 N·m ⇒ CoP 只移 1.5mm），
     //     而 CoP 是**力**的直接读数，闭环在它上面才既有的放矢又不用猜符号。
-    const cop = rs.cop[sup];
-    const copErr = rs.dcm.x - cop.x;
-    let ankSag = -p.kCopSag * copErr - p.kCopSagD * rs.com.vx;
-    // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
-    if (rs.phase === 'PUSH') ankSag += Math.abs(p.pushDeg) * D2R;
-    // ★ 斜率限制：踝有力矩了（护栏修好后权限 1.0），必须限速否则一帧砸下去
-    ankSag = clamp(ankSag, p.maxAnkleSag);
-    rs.requestAngle(jAnk, 2, ankSag, 'balance', '踝CoP调节');
+    // ══════════════════════════════════════════════════════════════════
+    // ★★★ 矢状踝：**VIP 刚度**（力矩输出），2026-10-04 按《平衡态设计.md》§4.1②
+    //
+    //   改的是什么：原来是「位置伺服追一个 CoP 目标角」
+    //       θ_ref = −kCopSag·(ξ−CoP) − kCopSagD·vx
+    //   —— 它把「要多少 CoP 位移」翻译成「要多少踝角」，中间多了一层间接映射，
+    //   而且有效刚度 = `kP/量程`，随护栏 `α` 与量程漂移，**无法保证落在临界的 88%**。
+    //
+    //   换成文献的结构（Morasso2019, PLOS ONE 14:e0213870）：
+    //       q_vip = atan2(com.x − ankle.x , com.y − ankle.y)   ← VIP 摆角
+    //       τ_ankle = K_a · q_vip  +  C_a · q̇_vip
+    //   依据：`τ_g = m·g·h·sin(q) ≈ m·g·h·q` ⇒ **K_crit = m·g·h**。
+    //   本 rig 实测 `m=70.0 kg`、`h = CoM.y − 踝 = 0.913 m`
+    //   ⇒ `K_crit = 627 N·m/rad`；取 **K_a = 552 = 0.88·K_crit**（欠临界 12%）。
+    //   人体实测依据：Loram & Lakie 2002 实测踝刚度 = 临界的 **91 ± 23%**，
+    //   原文「insufficient to stabilise」⇒ **刻意欠临界**。
+    //
+    //   ★ 为什么这层映射是对的（关键）：
+    //     静力平衡时 CoP 必须落在重力垂线上，而 `τ_ankle` 恰好把 CoP 移到 `q_vip`
+    //     （CoP 位移 = τ/F_z，F_z = m·g）⇒ **`τ = K_a·q_vip` 直接就是 CoP 权限**，
+    //     不经过「目标角 → 位置环 → 力矩」这条会失准的路。
+    //   ★ 量级自洽：实测 `com.x` 偏 24 mm 时 `q_vip = −0.026 rad`
+    //     ⇒ `τ = 552 × −0.026 = −14.5 N·m`，与「m·g·Δx = 16.5 N·m」同量级 ✓
+    //
+    //   ★ `mode: 'tau'`（见 `AXIS_OWNERSHIP`）：与位置伺服**互斥**，同轴双计= 门禁冲突。
+    //   ★ S1 只上**刚度**（不加延迟反馈）：按文献 12% 的欠临界，
+    //     纯被动刚度只能给**边缘稳定**，预期仍会缓慢发散 —— S3 再补间歇反馈。
+    //     这次的验收看的是「刚度有没有把发散速率压下来」，不是「能不能站住」。
+    // ══════════════════════════════════════════════════════════════════
+    if (doll) {
+      const ankW = new Float64Array(3);
+      doll.jointWorld(jAnk, ankW);
+      const dxv = rs.com.x - ankW[0];
+      const hv = Math.max(0.2, rs.com.y - ankW[1]);
+      // VIP 摆角：从踝指向全身 CoM 的倒立摆角
+      const qVip = Math.atan2(dxv, hv);
+      // q̇_vip：解析求导 `q = atan2(dx, h)` ⇒ `q̇ = (h·ẋ − dx·ḣ)/(dx²+h²)`
+      //   （标准 LIPM 假设：把踝当固定支点 ⇒ ẋ=com.vx、ḣ=com.vy）
+      const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
+      // 阻尼 `C_a = 2ζ√(K_a·I)`，I = 该轴的**并联等效惯量**（正规读回）
+      const iAnk = Math.max(1e-4, doll.jointIeff[jAnk * 3 + 2] ?? 8.77e-3);
+      const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
+      let tauAnk = p.kVipAnkle * qVip + cVip * qVipRate;
+      // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
+      if (rs.phase === 'PUSH') tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R;
+      // ── 安全钳位：**必须**把请求值限在马达力矩上限内 ──────────────
+      //   实测（无钳位）：末端 `q_vip = −77°` ⇒ 请求 **−757 N·m**，
+      //   而 `τmax(foot/2) = 120 N·m` ⇒ **超出 6.3 倍**。
+      //   冲量级通道（`requestTorque` → `applyTorqueImpulse`）**不经过马达限幅**
+      //   （《架构设计.md》`enforceLimits` 修复记录第 2 条），所以请求值必须自己钳。
+      //   文献上这正是 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩**自动饱和**
+      //   （Michaels & Ting 2025：「limited ankle torque coupled with
+      //   increased hip joint kinematics」）⇒ 饱和不是 bug，是策略的切换点。
+      const tauMaxAnk = sk.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      rs.ankleTauVip = clamp(tauAnk, tauMaxAnk);   // 本文件 clamp 是对称两参版
+      rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;   // 饱和标志（切髋策略用）
+      rs.qVip = qVip;
+      rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度');
+    }
 
     // 额状面同样闭环在实测 CoP 上（目标 = 侧向捕获点）
-    const latErr = rs.dcm.z - cop.z;
+    //   ⚠ 侧向 CoP 用 `rs.support.cz`（支撑面中心）而不是被我删掉的局部 `cop`：
+    //   `posture.readSupport` 是唯一回读实现，侧向基准与腰、状态机一致。
+    const latErr = rs.dcm.z - rs.support.cz;
     rs.requestAngle(jAnk, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '踝额状CoP');
   }
 }
