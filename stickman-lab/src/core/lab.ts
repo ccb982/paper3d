@@ -26,7 +26,18 @@ export const LAB_VERSION = 'lab/2026-10-03-r1';
 export type Driver =
   /** ES 神经网络（`brainForward`，走 `Sim.controlTick`） */
   | 'brain'
-  /** 手写平衡维持 + 迈步（`makeTeacherSession`，走 `teacher.ts`） */
+  /**
+   * 手写控制器 = `Controller`（平衡系统 + 迈步系统 + `gaitState` 相位机）。
+   *
+   * ⚠⚠ **名字是历史遗留，与实现已脱节**：
+   *   · 它曾经指 `core/teacher.ts` 的 `makeTeacherSession`（"教师手写策略"），
+   *     那个文件已随重构删除；
+   *   · 现在 `main.ts` 的 `resetSession()` 建的是 **`new Controller(...)`**，
+   *     走的是与探针完全相同的那套重构后代码；
+   *   · 但 `'teacher'` 这个**取值本身不能改** —— 它出现在用户可见的 URL
+   *     （`?driver=teacher`）与 localStorage 里，改名会废掉已保存的链接。
+   * ⇒ 保留 wire 值、改正文档。真正描述实现的名字是「手写控制器 / Controller」。
+   */
   | 'teacher';
 
 export type LabMode = 'walk' | 'fight' | 'stand';

@@ -53,6 +53,8 @@ const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller'
 const { AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
 
 const log = console.log;
+/** 门禁 F 要读源码文本（唯一性检查），所以需要一个文本读取器 */
+const read = (p: string): string => fs.readFileSync(p, 'utf8');
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 
@@ -263,6 +265,54 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
     bad(`声明 ANKLE_ABSENT=true，但踝轴被写了：${ankleWritten.join(', ')}`);
   } else if (ANKLE_ABSENT) {
     ok('ANKLE_ABSENT 与实际一致（无踝轴被写）；骨架一旦加踝，此处会强制登记');
+  }
+}
+
+log('');
+log('══ F. 唯一性：相位 / 角色标签只有一份定义 ══');
+{
+  const files = ['src/core/gaitState.ts', 'src/ui/hud.ts', 'src/core/rigState.ts',
+    'src/core/controller.ts', 'src/core/sim.ts', 'src/main.ts'];
+  // F1：相位标签表只能有一份定义（内容相同的第二份 = "同一事实两处定义"）
+  const defs: string[] = [];
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    const s = read(f);
+    if (/PHASE_LABEL[^=]*=\s*\{[\s\S]{0,200}?DOUBLE:/.test(s)) defs.push(f);
+  }
+  if (defs.length > 1) bad(`相位标签表有 ${defs.length} 份定义：${defs.join(', ')}`);
+  else if (defs.length === 1) ok(`相位标签表唯一（${defs[0]}）`);
+  else bad('找不到相位标签表定义');
+
+  // F2：`rs.phase` / `rs.locked` 的写入者只能有 gaitState 一个模块
+  const writers = new Set<string>();
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    const s = read(f);
+    const n = (s.match(/\brs\.(phase|phaseT|locked)\w*\s*=/g) || []).length;
+    if (n) writers.add(`${f}(${n})`);
+  }
+  const nonGs = [...writers].filter((w) => !w.startsWith('src/core/gaitState.ts'));
+  if (nonGs.length) bad(`rs.phase / rs.locked 被这些模块写：${nonGs.join(', ')} —— 状态机必须独占`);
+  else ok('rs.phase / rs.locked 只有 gaitState 写');
+
+  // F3：driver 不得**真的 import** 已删除的模块（注释里提历史名是允许的）
+  const deadMods = ['teacher', 'balanceHold', 'stepSystem', 'gaitEvents', 'normGait'];
+  const deadFiles = deadMods.filter((m) => !fs.existsSync(`src/core/${m}.ts`));
+  const liveRefs: string[] = [];
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    for (const m of deadMods) {
+      // 只认 import 语句，不认注释里的历史说明
+      if (new RegExp(`from ['"][^'"]*/${m}['"]`).test(read(f))) {
+        liveRefs.push(`${f} → ${m}`);
+      }
+    }
+  }
+  if (liveRefs.length) {
+    bad(`仍 import 已删除的模块：${liveRefs.join(', ')}`);
+  } else {
+    ok(`无指向已删模块的 import（已删：${deadFiles.join(', ') || '无'}）`);
   }
 }
 

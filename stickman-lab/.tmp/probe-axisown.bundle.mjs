@@ -19220,6 +19220,7 @@ var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (in
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance2(), balance_exports));
 var log = console.log;
+var read = (p) => fs.readFileSync(p, "utf8");
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
 var fails = 0;
@@ -19416,6 +19417,53 @@ log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987
     bad(`\u58F0\u660E ANKLE_ABSENT=true\uFF0C\u4F46\u8E1D\u8F74\u88AB\u5199\u4E86\uFF1A${ankleWritten.join(", ")}`);
   } else if (ANKLE_ABSENT2) {
     ok("ANKLE_ABSENT \u4E0E\u5B9E\u9645\u4E00\u81F4\uFF08\u65E0\u8E1D\u8F74\u88AB\u5199\uFF09\uFF1B\u9AA8\u67B6\u4E00\u65E6\u52A0\u8E1D\uFF0C\u6B64\u5904\u4F1A\u5F3A\u5236\u767B\u8BB0");
+  }
+}
+log("");
+log("\u2550\u2550 F. \u552F\u4E00\u6027\uFF1A\u76F8\u4F4D / \u89D2\u8272\u6807\u7B7E\u53EA\u6709\u4E00\u4EFD\u5B9A\u4E49 \u2550\u2550");
+{
+  const files = [
+    "src/core/gaitState.ts",
+    "src/ui/hud.ts",
+    "src/core/rigState.ts",
+    "src/core/controller.ts",
+    "src/core/sim.ts",
+    "src/main.ts"
+  ];
+  const defs = [];
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    const s = read(f);
+    if (/PHASE_LABEL[^=]*=\s*\{[\s\S]{0,200}?DOUBLE:/.test(s)) defs.push(f);
+  }
+  if (defs.length > 1) bad(`\u76F8\u4F4D\u6807\u7B7E\u8868\u6709 ${defs.length} \u4EFD\u5B9A\u4E49\uFF1A${defs.join(", ")}`);
+  else if (defs.length === 1) ok(`\u76F8\u4F4D\u6807\u7B7E\u8868\u552F\u4E00\uFF08${defs[0]}\uFF09`);
+  else bad("\u627E\u4E0D\u5230\u76F8\u4F4D\u6807\u7B7E\u8868\u5B9A\u4E49");
+  const writers = /* @__PURE__ */ new Set();
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    const s = read(f);
+    const n = (s.match(/\brs\.(phase|phaseT|locked)\w*\s*=/g) || []).length;
+    if (n) writers.add(`${f}(${n})`);
+  }
+  const nonGs = [...writers].filter((w) => !w.startsWith("src/core/gaitState.ts"));
+  if (nonGs.length) bad(`rs.phase / rs.locked \u88AB\u8FD9\u4E9B\u6A21\u5757\u5199\uFF1A${nonGs.join(", ")} \u2014\u2014 \u72B6\u6001\u673A\u5FC5\u987B\u72EC\u5360`);
+  else ok("rs.phase / rs.locked \u53EA\u6709 gaitState \u5199");
+  const deadMods = ["teacher", "balanceHold", "stepSystem", "gaitEvents", "normGait"];
+  const deadFiles = deadMods.filter((m) => !fs.existsSync(`src/core/${m}.ts`));
+  const liveRefs = [];
+  for (const f of files) {
+    if (!fs.existsSync(f)) continue;
+    for (const m of deadMods) {
+      if (new RegExp(`from ['"][^'"]*/${m}['"]`).test(read(f))) {
+        liveRefs.push(`${f} \u2192 ${m}`);
+      }
+    }
+  }
+  if (liveRefs.length) {
+    bad(`\u4ECD import \u5DF2\u5220\u9664\u7684\u6A21\u5757\uFF1A${liveRefs.join(", ")}`);
+  } else {
+    ok(`\u65E0\u6307\u5411\u5DF2\u5220\u6A21\u5757\u7684 import\uFF08\u5DF2\u5220\uFF1A${deadFiles.join(", ") || "\u65E0"}\uFF09`);
   }
 }
 log("");

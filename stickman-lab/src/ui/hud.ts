@@ -7,6 +7,11 @@
 import type { GenStat } from '../core/evolution';
 import type { SimMode } from '../core/sim';
 import type { RigSnapshot, SystemTag } from '../core/rigState';
+// ★ 相位标签表的**真源在状态机那边**（相位是状态机的概念，标签理应跟它走）。
+//   本文件曾自带一份，与 `core/gaitState.ts` 内容相同但独立；那份的注释还说
+//   "导出给 probe-uipanel，之前探针自己复制了一份漏了 PUSH" —— 探针那份副本修掉了，
+//   **本文件这份原始副本却留了下来**，于是"同一事实两处定义"从探针搬到了 UI 与状态机之间。
+import { PHASE_LABEL } from '../core/gaitState';
 
 export interface HudHooks {
   onPause: () => void;
@@ -79,14 +84,6 @@ function $cv(id: string): HTMLCanvasElement {
   if (!el || typeof el.getContext !== 'function') throw new Error(`[hud] #${id} 不是 canvas`);
   return el;
 }
-
-/**
- * 相位标签表。**导出**给 `probe-uipanel` 用 —— 之前探针自己复制了一份，
- * 漏了 `PUSH`，于是状态机一进入蹬离相 UI 断言就假失败（同一事实两处定义）。
- */
-export const PHASE_LABEL: Record<string, string> = {
-  DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相',
-};
 
 export class Hud {
   private readonly el: Record<string, HTMLElement> & { ownCtCv: HTMLCanvasElement };

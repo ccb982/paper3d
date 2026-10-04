@@ -178,11 +178,15 @@ let stepsWindowStart = performance.now();
 let stepsPerSec = 0;
 
 /**
- * ★★★ teacher 驱动会话（`driver === 'teacher'` 时用它推进 showcase）。
+ * ★★★ 手写控制器的会话（`driver === 'teacher'` 时用它推进 showcase）。
  *
- *   此前网页只会 `showcase.advance()`，也就是只跑 ES 大脑 ⇒ **网页上根本看不到
- *   `balanceHold` 那套平衡维持系统**。现在改成同一个 `TeacherSession` 分帧推进，
- *   网页与 `tools/probe-*.ts` 跑的是同一份代码。
+ *   ⚠ `driver` 的取值 `'teacher'` 是**历史遗留名**：它原本指已删除的
+ *   `core/teacher.ts`（`TeacherSession`），现在这里建的是 `Controller` ——
+ *   与 `tools/probe-*.ts` 跑的是同一份重构后代码。
+ *   取值不能改（它在用户可见的 `?driver=teacher` 与 localStorage 里）。
+ *
+ *   历史：此前网页只会 `showcase.advance()`，也就是只跑 ES 大脑 ⇒ 网页上
+ *   根本看不到手写平衡维持系统；改成由 Controller 分帧推进后才一致。
  */
 let session: Controller | null = null;
 

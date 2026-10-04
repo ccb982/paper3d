@@ -109,7 +109,16 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
 };
 
 const PHASE_ORDER: Phase[] = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'];
-const PHASE_LABEL: Record<Phase, string> = {
+/**
+ * 相位标签表。**导出**给 `ui/hud.ts` 与 `tools/probe-uipanel.ts` 引用。
+ *
+ * ⚠ 这里曾有**两份**定义：本文件一份（`const`，不导出）、`hud.ts` 一份（`export`）。
+ *   `hud.ts` 的注释说"探针曾自己复制了一份漏了 PUSH，所以导出给探针共用" ——
+ *   也就是说**探针那份副本被修掉了，本文件这份原始副本却留了下来**，
+ *   于是"同一事实两处定义"从探针搬到了 UI 与状态机之间。
+ *   ⇒ 现在真源唯一：`hud.ts` 反向引用本文件，不再自带一份。
+ */
+export const PHASE_LABEL: Record<Phase, string> = {
   DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相',
 };
 

@@ -80,7 +80,7 @@ hud.setOwnership(snap);
 
 const $ = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 const txt = (id: string): string => ($(id).textContent ?? '').trim();
-import { PHASE_LABEL as PH } from '../src/ui/hud';   // ★ 与 HUD 同一份，不再复制
+import { PHASE_LABEL as PH } from '../src/core/gaitState';   // ★ 与 HUD 同一份，不再复制
 import type { Skeleton } from '../src/core/skeleton';
 
 /** 绑定姿态下某刚体的中心 z（**米**，与仿真帧无关）。用于校验轴约定。 */
