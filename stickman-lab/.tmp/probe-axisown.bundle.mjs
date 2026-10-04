@@ -13710,6 +13710,8 @@ var init_ragdoll = __esm({
        *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
        */
       jointIeff;
+      /** 瘫软标记：位置环增益置 0（死亡演出，见 setLimp） */
+      limp = false;
       /**
        * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
        * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
@@ -14565,6 +14567,20 @@ var init_ragdoll = __esm({
           }
         }
       }
+      /**
+       * ★★ **瘫软（死亡演出用）**：把位置环增益降到 0，只留重力/接触/残余动量。
+       *
+       *   动机（用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）：
+       *   原来 `Sim.finish()` 只是把 `motorTarget` 归零，但 `kP=48` 的位置伺服
+       *   仍然在用力矩把四肢**拉回绑定姿态** ⇒ 尸体站在原地挣扎，像"卡住"了。
+       *   瘫软之后关节不再出力，角色会被残余动量和重力带走 ⇒ 自然地被甩出去。
+       *
+       *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
+       *   否则关节会无限转圈）。
+       */
+      setLimp(on) {
+        this.limp = on;
+      }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
           const t = targets[i];
@@ -14605,8 +14621,9 @@ var init_ragdoll = __esm({
       driveMotors(dt) {
         const scale = this.opt.torqueScale;
         this.lastDt = dt;
-        const kP = this.opt.kP;
-        const kD = this.opt.kD;
+        const limp = this.limp;
+        const kP = limp ? 0 : this.opt.kP;
+        const kD = limp ? 0 : this.opt.kD;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
@@ -14638,6 +14655,7 @@ var init_ragdoll = __esm({
             const idx = i * 3 + k;
             let alpha = this.opt.motorAlpha;
             let err;
+            const kDd = limp ? 0 : kD;
             const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
             if (a > hi) {
               err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
@@ -14646,12 +14664,12 @@ var init_ragdoll = __esm({
               err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
             } else if (this.holdCmd[idx]) {
-              err = -this.opt.kD * relL[k];
+              err = -kDd * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
+              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kDd) * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -15479,6 +15497,8 @@ var init_rigState = __esm({
       cfg;
       // ── 身份（唯一真源）
       loadBearer = null;
+      /** 上一拍的前腿（并齐时保持用，避免与 loadBearer 循环依赖，见 frontLeg） */
+      frontPrev = null;
       locked = { l: false, r: false };
       phase = "DOUBLE";
       phaseT = 0;
@@ -15700,8 +15720,15 @@ var init_rigState = __esm({
        */
       frontLeg() {
         const dz = this.soleX.l - this.soleX.r;
-        if (Math.abs(dz) > 3e-3) return dz > 0 ? "l" : "r";
-        return this.loadBearer ?? this.supportLeg();
+        if (dz > 3e-3) {
+          this.frontPrev = "l";
+          return "l";
+        }
+        if (dz < -3e-3) {
+          this.frontPrev = "r";
+          return "r";
+        }
+        return this.frontPrev ?? "l";
       }
       /** 后腿（要动的那条） */
       rearLeg() {
@@ -16392,7 +16419,7 @@ var init_gaitState = __esm({
         const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
         const rearLocked = rs.locked[rear];
         const canSwingRear = handoverOk && X6 && !rearLocked;
-        const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
+        const bearer = rs.loadDominant(rs.loadBearer);
         rs.loadBearer = bearer;
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(
@@ -17449,6 +17476,7 @@ var init_sim = __esm({
     DEFAULT_SIM = {
       driver: "brain",
       physicsHz: 120,
+      deathFlySeconds: 1.6,
       controlHz: 60,
       duration: 6,
       mode: "walk",
@@ -17622,6 +17650,8 @@ var init_sim = __esm({
       sup = newSupport();
       // ---- 评估状态 ----
       subStep = 0;
+      /** 死亡后还要推进多少物理步（瘫软演出，见 advance） */
+      deathLeft = 0;
       tick = 0;
       phase = 0;
       startX = 0;
@@ -18090,8 +18120,30 @@ var init_sim = __esm({
        * 推进最多 budgetSteps 个物理步，返回实际消耗的步数。
        * 评估跑完（或摔倒）即提前返回。
        */
+      /**
+       * ★ 死亡后继续推进物理（`deathSteps` 步），让瘫软的角色被带着飞出去
+       *   （用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）。
+       *
+       *   之前 `finish()` 之后 `advance()` 直接 return，所以尸体站着不动、像卡住。
+       *   现在：死亡 ⇒ 只结束**评估**（fitness/terms 已定、不再变），物理照跑，
+       *   马达已瘫软（`setLimp`），于是重力 + 接触 + 残余动量接管，角色被甩出去。
+       *   跑完 `deathSteps` 后彻底停止。
+       */
       advance(budgetSteps) {
-        if (this.finished) return 0;
+        if (this.finished) {
+          if (this.deathLeft <= 0) return 0;
+          const used0 = this.deathLeft;
+          let n = 0;
+          while (n < budgetSteps && this.deathLeft > 0) {
+            this.doll.driveMotors(this.dt);
+            this.world.step();
+            this.doll.enforceLimits();
+            if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
+            this.deathLeft--;
+            n++;
+          }
+          return Math.min(used0, n);
+        }
         let used = 0;
         while (used < budgetSteps && !this.finished) {
           if (this.subStep === 0) this.controlTick();
@@ -18742,8 +18794,13 @@ var init_sim = __esm({
         const f = this.terms.total;
         this.fitness = f;
         this.finished = true;
-        for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
-        this.doll.setMotorTargets(this.motor);
+        if (fallen) {
+          this.doll.setLimp(true);
+          this.deathLeft = Math.round((this.cfg.deathFlySeconds ?? 1.6) * this.cfg.physicsHz);
+        } else {
+          for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
+          this.doll.setMotorTargets(this.motor);
+        }
       }
       progressRaw() {
         return this.tick / this.ticksTotal;
@@ -18751,6 +18808,8 @@ var init_sim = __esm({
       /** 重新对齐物理世界（展示视图用：跑完一轮后让角色重新站好） */
       restand() {
         this.doll.reset(0);
+        this.doll.setLimp(false);
+        this.deathLeft = 0;
         this.finished = false;
         this.fallen = false;
         this.subStep = 0;

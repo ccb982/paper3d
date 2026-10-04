@@ -334,7 +334,21 @@ export class GaitState {
     //     而且 `frontLeg()` 在双脚并齐（|Δx|<3mm）时以 `loadBearer` 兜底
     //     ⇒ 连**前腿/后腿**都跟着闪 ⇒ 整套交接判据跟着抖。
     //     （同一个坑 `supportLeg()` 犯过一次：1e-3 迟滞 ⇒ 8s 掉到 1.68s。）
-    const bearer = X1 && X5 ? front : rs.loadDominant(rs.loadBearer);
+    // ★★ 承重腿**只由载荷决定**（用户 2026-10-04 修「第二份判据 + 循环依赖」）。
+    //   原来 `bearer = X1 && X5 ? front : loadDominant(prev)` 有两个问题：
+    //     ① `X1 && X5` 分支**整条旁路迟滞** ⇒ 站立时经常走这条路，
+    //        `loadDominant` 的 0.08 迟滞根本没被用到；
+    //     ② `front` 在两脚并齐时又回落 `loadBearer`（见 frontLeg 已修）
+    //        ⇒ 两者互为对方 ⇒ **自激振荡**，20s 切 5 次。
+    //   现在承重 = 载荷（唯一判据 + 迟滞），前后 = 几何 x（唯一判据），解耦。
+    //   `X1`/`X5` 仍作为**交接判据** X1..X8 的成员展示给 UI，不参与承重赋值。
+    //   ⚠ 试过再加一层「驻留拍数」的时间条件，**实测无效**（5 → 5）：因为
+    //     载荷是真的在以 ~0.75s 周期左右大幅摆动（|loadL-loadR| 摆到 0.328，
+    //     ≫ 迟滞带宽 0.08），挑战者连续占优远超任何合理驻留拍数；要压住它
+    //     需要驻留 >0.75s，那会让真实交接变得迟钝到不可用。
+    //     ⇒ 这不是判据抖动，而是**真实的物理侧向摇摆**，要治得先找到摇摆来源，
+    //        不能在判据层加滤波。驻留代码已撤掉（`advanceBearerDwell` 等）。
+    const bearer = rs.loadDominant(rs.loadBearer);
     rs.loadBearer = bearer;
     this.hadBearer = this.hadBearer || handoverOk;
     // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）

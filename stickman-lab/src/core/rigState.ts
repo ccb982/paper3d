@@ -277,6 +277,8 @@ export class RigState {
 
   // ── 身份（唯一真源）
   loadBearer: Side | null = null;
+  /** 上一拍的前腿（并齐时保持用，避免与 loadBearer 循环依赖，见 frontLeg） */
+  frontPrev: Side | null = null;
   readonly locked: { l: boolean; r: boolean } = { l: false, r: false };
   phase: Phase = 'DOUBLE';
   phaseT = 0;
@@ -498,8 +500,17 @@ export class RigState {
    */
   frontLeg(): Side {
     const dz = this.soleX.l - this.soleX.r;
-    if (Math.abs(dz) > 0.003) return dz > 0 ? 'l' : 'r';
-    return this.loadBearer ?? this.supportLeg();
+    if (dz > 0.003) { this.frontPrev = 'l'; return 'l'; }
+    if (dz < -0.003) { this.frontPrev = 'r'; return 'r'; }
+    // ★ 并齐（|Δx| ≤ 3mm）时保持**上一拍的前腿**，不再回落到 `loadBearer`。
+    //   原来这里回落 `loadBearer`，而 `gaitState` 里又有
+    //   `bearer = X1 && X5 ? front : …` ⇒ 两者互为对方 ⇒ **自激振荡**：
+    //   站立时两脚 x 差长期 <3mm ⇒ 20s 里承重/前腿各切 5 次（门禁阈值 ≤3，
+    //   历史基线 1 次），且迟滞被 `X1 && X5` 分支整条旁路 ⇒ 门禁报
+    //   「迟滞没生效或存在第二份判据」。实测确认：`loadDominant` 加驻留
+    //   完全无效（5→5），因为它根本没被走到。
+    //   现在前后腿**只由几何 x 决定**，承重腿**只由载荷决定**，互不依赖。
+    return this.frontPrev ?? 'l';
   }
   /** 后腿（要动的那条） */
   rearLeg(): Side { return this.frontLeg() === 'l' ? 'r' : 'l'; }
