@@ -128,6 +128,23 @@ const STANCE_EXIT = 0.10;
 export interface RagdollOptions {
   /** 地面摩擦 */
   groundFriction?: number;
+  /**
+   * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
+   *
+   *   柔性足 F1（2026-10-04）：内侧弓是**有限刚度**的 —— 站立承重时压缩、
+   *   离载时回弹（arch recoil / windlass；Jeon & Cho 压力垫综述 / Welte 2023
+   *   「Mobility of the human foot's medial arch」）。revolute 若完全自由，
+   *   前足会被接触力压到限位并打滑 ⇒ 必须给弹簧。
+   *
+   *   量级参考：踝 `ankleTorque = 120 N·m`、行程 30°（0.52 rad）⇒ 等效刚度量级
+   *   ~230 N·m/rad。中足肌肉远小于踝 ⇒ 取 **30 N·m/rad**（约 1/8），
+   *   阻尼按临界附近 `2√(k·I)` 的量级 ⇒ **1.5 N·m·s/rad**。
+   *   ⚠ 这两个数是**量级选取，不是实测标定**。验收判据是「髋外展力矩扫描下
+   *     CoP_z 能迁到 **±13.5mm**」（Lugade & Kaufman 2014：CoP 行程 = 足宽 27%）。
+   *     达不到就调 `midfootStiffness`，不要动别的地方。
+   */
+  midfootStiffness?: number;
+  midfootDamping?: number;
   /** 角色碰撞体摩擦 */
   bodyFriction?: number;
   /** 线性阻尼 */
@@ -258,6 +275,23 @@ export interface RagdollOptions {
 
 const DEFAULTS: Required<RagdollOptions> = {
   groundFriction: 1.0,
+  // ★ 中足被动弹簧（量级选取，见接口注释）
+  midfootStiffness: 30,
+  midfootDamping: 1.5,
+  /**
+   * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
+   *
+   *   柔性足 F1（2026-10-04）：内侧弓是**有限刚度**的，站立时承重会压缩它、
+   *   离载时回弹（arch recoil / windlass，Jeon&Cho 综述 / Welte 2023）。
+   *   revolute 完全自由会让前足被接触力压到限位、打滑 ⇒ 必须给弹簧。
+   *
+   *   量级参考：踝的 `ankleTorque = 120 N·m`、行程 30°（0.52 rad）⇒ 等效刚度
+   *   量级 ~230 N·m/rad。中足比踝**弱**得多（足内小肌肉），取 **30 N·m/rad**
+   *   （约为踝的 1/8），阻尼取临界附近 `2·√(k·I)` 的量级 ⇒ **1.5 N·m·s/rad**。
+   *   ⚠ 这两个数是**量级选取**，不是实测标定。验收标准是「髋外展力矩扫描下
+   *     CoP_z 能迁到 ±13.5mm」（Lugade&Kaufman 2014 的足宽 27%），
+   *     达不到就调 `midfootStiffness`，而不是改别的地方。
+   */
   bodyFriction: 0.9,
   linearDamping: 0.0,
   angularDamping: 0.04,
@@ -607,10 +641,12 @@ export class Ragdoll {
         // ★ 记住鞋底 collider：腾空时间/单脚支撑要用**真实接触**判定
         //   （几何判据有 3cm 死区，实测脚能抬 9cm 却被判成一直着地）。
         if (c.shape === 'cuboid') {
-          if (b.key === 'shin_l' || b.key === 'foot_l') {
+          // ★ `forefoot_*` 是柔性足 F1 的前足刚体，它的 collider **也是鞋底**
+          //   （前脚掌内侧柱/外侧柱）⇒ 必须一起登记，否则 CoP / 载荷只统计后足。
+          if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l') {
             this.soleCols[0].push(col);
             this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
-          } else if (b.key === 'shin_r' || b.key === 'foot_r') {
+          } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r') {
             this.soleCols[1].push(col);
             this.soleCol[1] ??= col;
           }
@@ -848,8 +884,23 @@ export class Ragdoll {
       //     （实测其原型上只有 anchor/body/configureMotor/raw 那些）⇒ 球铰确实无法有
       //     引擎级角度限位，其余关节只能靠 `enforceLimits()` 的手写冲量。
       if (j.revoluteAxis && typeof (joint as { setLimits?: unknown }).setLimits === 'function') {
+        // revolute 的限位取**与 revoluteAxis 对应的那一轴**（踝 = 轴2，中足 = 轴0）
+        const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
         (joint as unknown as { setLimits(a: number, b: number): void })
-          .setLimits(j.minRad[2], j.maxRad[2]);
+          .setLimits(j.minRad[ax], j.maxRad[ax]);
+      }
+      // ★★ 柔性足 F1：中足关节装**被动弹簧**（2026-10-04）。
+      //   revolute 若完全自由，前足会被接触力压到任意角度、打滑；
+      //   文献里的内侧弓是**有限刚度**的（arch recoil / windlass）。
+      //   用 `configureMotorPosition(target=0, stiffness, damping)` 当被动弹簧：
+      //   没有系统对它下指令（不在 `AXIS_OWNERSHIP` 里），只是给关节一个回复力矩。
+      if (j.name.startsWith('midfoot_') && typeof (joint as { configureMotorPosition?: unknown }).configureMotorPosition === 'function') {
+        (joint as unknown as {
+          configureMotorModel(m: number): void;
+          configureMotorPosition(t: number, s: number, d: number): void;
+        }).configureMotorModel(0);           // 0 = AccelerationBased
+        (joint as unknown as { configureMotorPosition(t: number, s: number, d: number): void })
+          .configureMotorPosition(0, this.opt.midfootStiffness, this.opt.midfootDamping);
       }
       this.joints.push(joint);
     });
@@ -1160,7 +1211,15 @@ export class Ragdoll {
     *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
     *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
     */
-  private static readonly NOT_CRASH = new Set(['shin_l', 'shin_r', 'foot_l', 'foot_r', 'arm_l', 'arm_r', 'hand_l', 'hand_r']);
+  // ★ `forefoot_l/r` 是柔性足 F1（2026-10-04）新增的**前足刚体** ——
+  //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
+  //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
+  //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
+  private static readonly NOT_CRASH = new Set([
+    'shin_l', 'shin_r', 'foot_l', 'foot_r',
+    'forefoot_l', 'forefoot_r',          // ★ 柔性足 F1 的前足
+    'arm_l', 'arm_r', 'hand_l', 'hand_r',
+  ]);
 
   bodyHitGround(): boolean {
     this.lastHitKey = '';

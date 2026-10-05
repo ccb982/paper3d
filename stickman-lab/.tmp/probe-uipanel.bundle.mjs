@@ -6422,6 +6422,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
+  const midfootJoints = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -6528,6 +6529,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fMidY = soleWorldY;
         const yawDip = cfg.soleGroundCorr;
         const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
+        const midX = cfg.soleFootScale * hx * (cfg.forefootAtFrac * 2 - 1);
+        const two = cfg.soleSplit;
+        const hxBall = two ? hx * 0.5 : hx;
+        const offBall = two ? hx * 0.5 : 0;
+        const hzCol = hz * 0.5;
+        const offColIn = +(hz * 0.5).toFixed(6);
+        const offColOut = -(hz * 0.5).toFixed(6);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -6561,7 +6569,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
-          mass: soleMass,
+          // ★ 后足只拿一半脚掌质量（另一半给 `forefoot_*`，见下方 `fore` push）
+          mass: soleMass * 0.5,
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -6570,31 +6579,85 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   拆成两块后，载荷可在两者之间**连续**转移
           //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
           colliders: (() => {
-            const two = cfg.soleSplit;
-            const hxBall = two ? hx * 0.5 : hx;
             const hxHeel = two ? hx * 0.5 : 0;
-            const offBall = two ? hx * 0.5 : 0;
             const offHeel = two ? -hx * 0.5 : 0;
-            const mBall = two ? soleMass * 0.6 : soleMass;
-            const mHeel = two ? soleMass * 0.4 : 0;
-            const mk = (dx, mx, m) => ({
+            const mCol = soleMass * 0.5 / 2;
+            const mkCol = (dx, dz, m) => ({
               shape: "cuboid",
               halfHeight: 0,
               radius: 0,
               hx: two ? dx > 0 ? hxBall : hxHeel : hx,
               hy: soleHalfThick,
-              hz,
+              hz: hzCol,
               offsetX: dx,
               offsetY: local2[1],
-              offsetZ: local2[2],
+              offsetZ: +(local2[2] + dz).toFixed(6),
               mass: m,
               comY: 0,
               inertiaZ: m * ((two ? dx > 0 ? hxBall : hxHeel : hx) ** 2 + soleHalfThick ** 2) / 3,
-              inertiaXY: m * (hz * hz + soleHalfThick * soleHalfThick) / 3
+              inertiaXY: m * (hzCol * hzCol + soleHalfThick * soleHalfThick) / 3
             });
-            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+            return two ? [mkCol(offHeel, offColIn, mCol), mkCol(offHeel, offColOut, mCol)] : [mkCol(0, offColIn, soleMass * 0.5), mkCol(0, offColOut, soleMass * 0.5)];
           })(),
           leg: true
+        });
+        const massFore = soleMass * 0.5;
+        const mColFore = massFore / 2;
+        const hxFore = two ? hxBall : hx;
+        const offForeX = offBall - midX;
+        const mkFore = (dz) => ({
+          shape: "cuboid",
+          halfHeight: 0,
+          radius: 0,
+          hx: hxFore,
+          hy: soleHalfThick,
+          hz: hzCol,
+          offsetX: +offForeX.toFixed(6),
+          offsetY: local2[1],
+          offsetZ: +dz.toFixed(6),
+          mass: mColFore,
+          comY: 0,
+          inertiaZ: mColFore * (hxFore ** 2 + soleHalfThick ** 2) / 3,
+          inertiaXY: mColFore * (hzCol * hzCol + soleHalfThick ** 2) / 3
+        });
+        bodies.push({
+          key: side === "l" ? "forefoot_l" : "forefoot_r",
+          bone: spec.bone,
+          label: side === "l" ? "\u5DE6\u524D\u811A\u638C" : "\u53F3\u524D\u811A\u638C",
+          part,
+          // 借小腿那张（同 foot_*，但 plateHidden 不画）
+          // ★ 前足刚体原点与 `foot_*` **同一点**（都在踝），中足点靠 collider 偏移表达
+          cx: 0,
+          cy: ankleY,
+          cz: centerZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          plateOffset: [0, 0, 0],
+          // ★ 不画贴图：靴子那张图已由 `foot_*` 整张画，两边都画会「两只脚」
+          plateHidden: true,
+          length: hxFore * 2,
+          radius: 0,
+          halfHeight: hxFore,
+          mass: massFore,
+          colliders: [mkFore(offColIn), mkFore(offColOut)],
+          leg: true
+        });
+        midfootJoints.push({
+          name: `midfoot_${side}`,
+          index: 0,
+          // 下面统一编号
+          parentKey: spec.key === "shin_l" ? "foot_l" : "foot_r",
+          childKey: side === "l" ? "forefoot_l" : "forefoot_r",
+          wx: 0,
+          wy: local2[1],
+          wz: 0,
+          parentLocal: [midX, local2[1], 0],
+          childLocal: [midX, local2[1], 0],
+          restRad: [0, 0, 0],
+          minRad: [-cfg.midfootPronDeg * DEG, -1e-3, -1e-3],
+          maxRad: [cfg.midfootPronDeg * DEG, 1e-3, 1e-3],
+          revoluteAxis: [1, 0, 0],
+          maxTorque: [cfg.ankleTorque * 0.5, 1, 1]
         });
         bodies.push({
           key: spec.key,
@@ -6721,8 +6784,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
-    const flexMin = jm.limitDeg[0] * DEG;
-    const flexMax = jm.limitDeg[1] * DEG;
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
     const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
@@ -6749,6 +6812,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
+      // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
+      revoluteAxis: isAnkle ? [0, 0, 1] : void 0,
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
     });
   });
@@ -6786,6 +6851,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     }
   }
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
+  for (const j of midfootJoints) joints.push({ ...j, index: joints.length });
   return {
     cfg,
     px2m,
@@ -6884,6 +6950,20 @@ var init_skeleton = __esm({
       //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
       //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
       ankleTorque: 120,
+      // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
+      //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
+      ankleLimitDeg: [-12, 18],
+      // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
+      forefootAtFrac: 0.5,
+      // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
+      // ★ 中足（距下关节）旋前/旋后行程。
+      //   ⚠ 2026-10-04 实测：**12° 不够**。要让内侧缘**离地**（从而卸载内侧柱、
+      //   把载荷转到外侧柱），必须 `tanθ > 足厚/足宽 = 52/100` ⇒ **θ > 27.5°**；
+      //   12° 只能把内侧缘抬 5mm，对着 26mm 的半厚根本脱离不了接触。
+      //   实测佐证：刚度从 30 扫到 2000 N·m/rad，CoP_z 幅度恒为 18~19mm（全是单柱受力），
+      //   随刚度零变化 ⇒ 柔性**没参与**。
+      //   取 **±34°**（解剖学距下关节内翻 ~35°，见 `JOINT_LIMITS_XY_DEG` 踝条目注释）。
+      midfootPronDeg: 34,
       footUvWarpDeg: 0,
       // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
       //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
@@ -7055,6 +7135,16 @@ var init_rigState = __esm({
       /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
       waistTrim = 0;
       waistGapM = 0;
+      /** ★ VIP 摆角 `q_vip = atan2(com.x − ankle.x, com.y − ankle.y)`（rad，矢状） */
+      qVip = 0;
+      /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
+      ankleTauVip = 0;
+      /**
+       * ★ 踝 VIP 力矩**是否已饱和**（请求值 > `τmax`）。
+       *   对应文献的 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩自动饱和，
+       *   策略随之让位给髋（Michaels & Ting 2025）。
+       */
+      ankleTauSat = false;
       /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
       hipLatTau = 0;
       /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -7686,6 +7776,9 @@ var init_rigState = __esm({
           com: { ...this.com },
           dcm: { ...this.dcm },
           support: { ...this.support },
+          qVip: this.qVip,
+          ankleTauVip: this.ankleTauVip,
+          ankleTauSat: this.ankleTauSat,
           mos: this.mos,
           grf: { ...this.grf },
           grfCmd: { ...this.grfCmd },
@@ -14713,7 +14806,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14731,11 +14824,30 @@ var init_ragdoll = __esm({
     AXIS_X = 0;
     AXIS_Y = 1;
     AXIS_Z = 2;
+    LIMIT_BIAS_RATE = 20;
+    LIMIT_MAX_BIAS = 12;
     STANCE_CLEAR_MIN = 0.03;
     STANCE_ENTER = 0.05;
     STANCE_EXIT = 0.1;
     DEFAULTS = {
       groundFriction: 1,
+      // ★ 中足被动弹簧（量级选取，见接口注释）
+      midfootStiffness: 30,
+      midfootDamping: 1.5,
+      /**
+       * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
+       *
+       *   柔性足 F1（2026-10-04）：内侧弓是**有限刚度**的，站立时承重会压缩它、
+       *   离载时回弹（arch recoil / windlass，Jeon&Cho 综述 / Welte 2023）。
+       *   revolute 完全自由会让前足被接触力压到限位、打滑 ⇒ 必须给弹簧。
+       *
+       *   量级参考：踝的 `ankleTorque = 120 N·m`、行程 30°（0.52 rad）⇒ 等效刚度
+       *   量级 ~230 N·m/rad。中足比踝**弱**得多（足内小肌肉），取 **30 N·m/rad**
+       *   （约为踝的 1/8），阻尼取临界附近 `2·√(k·I)` 的量级 ⇒ **1.5 N·m·s/rad**。
+       *   ⚠ 这两个数是**量级选取**，不是实测标定。验收标准是「髋外展力矩扫描下
+       *     CoP_z 能迁到 ±13.5mm」（Lugade&Kaufman 2014 的足宽 27%），
+       *     达不到就调 `midfootStiffness`，而不是改别的地方。
+       */
       bodyFriction: 0.9,
       linearDamping: 0,
       angularDamping: 0.04,
@@ -14932,10 +15044,10 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l") {
                 this.soleCols[0].push(col);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r") {
                 this.soleCols[1].push(col);
                 this.soleCol[1] ??= col;
               }
@@ -15073,13 +15185,27 @@ var init_ragdoll = __esm({
           }
           this.jointBodies[i * 2] = pi;
           this.jointBodies[i * 2 + 1] = ci;
-          const jd = rapier_default.JointData.spherical(
-            { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
-            { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
-          );
-          jd.limitsEnabled = true;
-          jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
-          this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
+          const anch1 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
+          const anch2 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
+          let jd;
+          if (j.revoluteAxis) {
+            const ax = j.revoluteAxis;
+            jd = rapier_default.JointData.revolute(anch1, anch2, { x: ax[0], y: ax[1], z: ax[2] });
+            jd.limitsEnabled = true;
+            jd.limits = [j.minRad[2], j.maxRad[2]];
+          } else {
+            jd = rapier_default.JointData.spherical(anch1, anch2);
+          }
+          const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if (j.revoluteAxis && typeof joint.setLimits === "function") {
+            const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
+            joint.setLimits(j.minRad[ax], j.maxRad[ax]);
+          }
+          if (j.name.startsWith("midfoot_") && typeof joint.configureMotorPosition === "function") {
+            joint.configureMotorModel(0);
+            joint.configureMotorPosition(0, this.opt.midfootStiffness, this.opt.midfootDamping);
+          }
+          this.joints.push(joint);
         });
       }
       get jointCount() {
@@ -15368,7 +15494,23 @@ var init_ragdoll = __esm({
         *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
         *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
         */
-      static NOT_CRASH = /* @__PURE__ */ new Set(["shin_l", "shin_r", "foot_l", "foot_r", "arm_l", "arm_r", "hand_l", "hand_r"]);
+      // ★ `forefoot_l/r` 是柔性足 F1（2026-10-04）新增的**前足刚体** ——
+      //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
+      //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
+      //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
+      static NOT_CRASH = /* @__PURE__ */ new Set([
+        "shin_l",
+        "shin_r",
+        "foot_l",
+        "foot_r",
+        "forefoot_l",
+        "forefoot_r",
+        // ★ 柔性足 F1 的前足
+        "arm_l",
+        "arm_r",
+        "hand_l",
+        "hand_r"
+      ]);
       bodyHitGround() {
         this.lastHitKey = "";
         for (let i = 0; i < this.bodies.length; i++) {
@@ -15938,8 +16080,11 @@ var init_ragdoll = __esm({
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
             const Iax = this.jointIeff[i];
             const jv = this.iv;
-            if (out > 0 ? wRel > 0 : wRel < 0) {
-              const J = -wRel * Iax;
+            const excess = out > 0 ? a2 - hi2 : lo2 - a2;
+            const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, LIMIT_MAX_BIAS);
+            const wErr = bias - wRel;
+            if (wErr > 1e-6 || wErr < -1e-6) {
+              const J = wErr * Iax;
               jv.x = this.axisW[0] * J;
               jv.y = this.axisW[1] * J;
               jv.z = this.axisW[2] * J;
@@ -18791,13 +18936,24 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     }
   }
   if (jAnk >= 0 && on("ankleCop")) {
-    const cop = rs.cop[sup];
-    const copErr = rs.dcm.x - cop.x;
-    let ankSag = -p.kCopSag * copErr - p.kCopSagD * rs.com.vx;
-    if (rs.phase === "PUSH") ankSag += Math.abs(p.pushDeg) * D2R2;
-    ankSag = clamp2(ankSag, p.maxAnkleSag);
-    rs.requestAngle(jAnk, 2, ankSag, "balance", "\u8E1DCoP\u8C03\u8282");
-    const latErr = rs.dcm.z - cop.z;
+    if (doll) {
+      const ankW = new Float64Array(3);
+      doll.jointWorld(jAnk, ankW);
+      const dxv = rs.com.x - ankW[0];
+      const hv = Math.max(0.2, rs.com.y - ankW[1]);
+      const qVip = Math.atan2(dxv, hv);
+      const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
+      const iAnk = Math.max(1e-4, doll.jointIeff[jAnk * 3 + 2] ?? 877e-5);
+      const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
+      let tauAnk = p.kVipAnkle * qVip + cVip * qVipRate;
+      if (rs.phase === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
+      const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
+      rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
+      rs.qVip = qVip;
+      rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
+    }
+    const latErr = rs.dcm.z - rs.support.cz;
     rs.requestAngle(jAnk, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u8E1D\u989D\u72B6CoP");
   }
 }
@@ -18830,6 +18986,8 @@ var init_balance = __esm({
       kneeHoldDeg: 15,
       // Gear I sagittal hip: com forward => negative angle (hip extension)
       maxHipDeg: 0.52,
+      kVipAnkle: 552,
+      vipZeta: 0.9,
       ksagRatio: 0.2,
       ksagZeta: 0.9,
       // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）

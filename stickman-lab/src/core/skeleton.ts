@@ -287,6 +287,26 @@ export interface SkeletonConfig {
    *   ⚠ 这**只限活动度，不限力矩**。力矩上限由 `ankleTorque`（默认 120N·m）管。
    */
   ankleLimitDeg: readonly [number, number];
+
+  /**
+   * ★ 前足刚体的**中足关节**在足长上的相对位置（0 = 足跟端，1 = 脚尖端）。
+   *
+   *   柔性足 F1（2026-10-04）：前足独立成刚体后需要一个中足关节位置。
+   *   解剖上跖跗关节约在足长 35~40% 处；这里默认 **0.5**（几何中心）——
+   *   取几何中心是为了让两段等长、力臂对称，**不是**解剖值。
+   *   ⚠ 它只影响「中足关节装在哪」，**不影响**侧向 CoP 的总权限
+   *     （那由前足绕足长轴的旋前/旋后幅度决定）。
+   */
+  forefootAtFrac: number;
+
+  /**
+   * ★ 中足关节（距下关节）的**旋前/旋后行程**（度，±对称）。
+   *
+   *   人体被动 ROM：内翻 ~35°、外翻 ~14°（见 `JOINT_LIMITS_XY_DEG` 的踝条目注释）。
+   *   柔性足 F1 取 **±12°**：站立期功能性使用远小于被动 ROM，
+   *   而**过大的行程会让前足在接触面上打滑**（实测前足 collider 只有 26mm 厚）。
+   */
+  midfootPronDeg: number;
   /** 内外翻余量（外八已经在静姿态偏航里） */
   ankleRollDeg: number;
   ankleTorque: number;
@@ -362,6 +382,17 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
   //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
   ankleLimitDeg: [-12, 18],
+  // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
+  forefootAtFrac: 0.5,
+  // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
+  // ★ 中足（距下关节）旋前/旋后行程。
+  //   ⚠ 2026-10-04 实测：**12° 不够**。要让内侧缘**离地**（从而卸载内侧柱、
+  //   把载荷转到外侧柱），必须 `tanθ > 足厚/足宽 = 52/100` ⇒ **θ > 27.5°**；
+  //   12° 只能把内侧缘抬 5mm，对着 26mm 的半厚根本脱离不了接触。
+  //   实测佐证：刚度从 30 扫到 2000 N·m/rad，CoP_z 幅度恒为 18~19mm（全是单柱受力），
+  //   随刚度零变化 ⇒ 柔性**没参与**。
+  //   取 **±34°**（解剖学距下关节内翻 ~35°，见 `JOINT_LIMITS_XY_DEG` 踝条目注释）。
+  midfootPronDeg: 34,
   footUvWarpDeg: 0,
   // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
   //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
@@ -910,6 +941,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   };
 
   const bodies: BodyDef[] = [];
+  /** ★ 柔性足 F1（2026-10-04）：中足关节，在腿循环里收集、循环外统一编号 */
+  const midfootJoints: JointDef[] = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json 缺少组件 ${spec.key}`);
@@ -1149,6 +1182,16 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   实测 soleY 从 −17.2mm 变成 +23.0mm）。扫这个系数使静止 soleY = 0。
         const yawDip = cfg.soleGroundCorr;
         const local = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
+        // ── 柔性足 F1（2026-10-04）：中足关节在足长上的位置（足局部 X）──
+        //   `forefootAtFrac`：0 = 足跟端，1 = 脚尖端；0.5 ⇒ 几何中心（两段等长）
+        const midX = (cfg.soleFootScale * hx) * (cfg.forefootAtFrac * 2 - 1);
+        // ── 脚掌 collider 的前后/柱分配（原先在 IIFE 里，柔性足需要在外面复用）──
+        const two = cfg.soleSplit;
+        const hxBall = two ? hx * 0.50 : hx;
+        const offBall = two ? hx * 0.50 : 0;
+        const hzCol = hz * 0.5;
+        const offColIn = +(hz * 0.5).toFixed(6);   // 内侧柱中心
+        const offColOut = -(hz * 0.5).toFixed(6);  // 外侧柱中心
         bodies.push({
           key: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
           bone: spec.bone,
@@ -1181,7 +1224,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
-          mass: soleMass,
+          // ★ 后足只拿一半脚掌质量（另一半给 `forefoot_*`，见下方 `fore` push）
+          mass: soleMass * 0.5,
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -1215,17 +1259,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             //   两柱在 z = ±hz/2 分开、共覆盖整个足宽 ⇒ 合起来仍是完整鞋底，
             //   **不会改变外观轮廓，只改变接触面的内部划分**。
             // ══════════════════════════════════════════════════════════════════
-            const two = cfg.soleSplit;
-            // 前后分配：脚跟 40% / 前脚掌 60%（人体步态中步置两压力比约 4:6）。
-            const hxBall = two ? hx * 0.50 : hx;   // 前半：与脚跟各占一半，在 x=0 相接
+            // 前后分配：脚跟 40% / 前脚掌 60%（中步置两压力比约 4:6）—— 常量已提到外层
             const hxHeel = two ? hx * 0.50 : 0;    // 后半
-            const offBall = two ? hx * 0.50 : 0;
             const offHeel = two ? -hx * 0.50 : 0;
-            // ★ 每根柱的宽度：内外侧各占一半足宽。
-            const hzCol = hz * 0.5;
-            const offColIn = +(hz * 0.5).toFixed(6);   // 内侧柱中心
-            const offColOut = -(hz * 0.5).toFixed(6);  // 外侧柱中心
-            const mCol = soleMass / (two ? 4 : 2);
+            const mCol = (soleMass * 0.5) / 2;      // 后足两块
             const mkCol = (dx: number, dz: number, m: number) => ({
               shape: 'cuboid' as const, halfHeight: 0, radius: 0,
               hx: two ? (dx > 0 ? hxBall : hxHeel) : hx,
@@ -1235,15 +1272,108 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
               inertiaZ: (m * ((two ? (dx > 0 ? hxBall : hxHeel) : hx) ** 2 + soleHalfThick ** 2)) / 3,
               inertiaXY: (m * (hzCol * hzCol + soleHalfThick * soleHalfThick)) / 3,
             });
-            // 内外侧 × (前脚掌, 脚跟) = 4 块；`soleSplit=false` 时退化为 2 块
+            // ★★ 柔性足 F1（2026-10-04）：**前脚掌独立成刚体**（`forefoot_*`），
+            //   本刚体（`foot_*`）只留**后足**两块。
+            //
+            //   为什么必须拆两个刚体 —— 我先只做了「4 块 collider 切分」（同一刚体内），
+            //   **实测无效**（tools 探针，髋外展力矩 −120N → +120N）：
+            //     内侧柱Σ 162.8N / 外侧柱Σ 14.2N（比值 **14:1**），CoP_z 只动 **0.9mm**
+            //   根因：足处于**内翻**，载荷根本不在外侧柱上 ⇒ 接触求解器**没有可迁移的压力**。
+            //
+            //   文献机制（Jeon & Cho 压力垫综述 / Welte 2023 内侧弓）：
+            //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
+            //        允许柔性活动**」  ← 需要**中足有自由度**
+            //     · 「**内侧弓把重量传递到足的外侧缘**」
+            //   ⇒ 侧向 CoP 迁移的前提是**中足本身能变形**。只切 collider 不给自由度 = 白做。
+            //
+            //   拆分方案：**绕足长轴（局部 X）** 的 revolute = 距下关节的旋前/旋后。
+            //   前足绕它旋前/旋后 ⇒ 前足的内侧缘抬起、外侧缘压下 ⇒ **载荷在内/外侧柱之间转移**
+            //   ⇒ 侧向 CoP 可迁移（目标 ±13.5mm，Lugade & Kaufman 2014 的足宽 27%）。
+            //
+            //   前足 collider 的 `offsetX` 要减去前足刚体自身原点的偏移（见下方 `fore` push）。
             return two
-              ? [
-                  mkCol(offBall, offColIn, mCol), mkCol(offBall, offColOut, mCol),
-                  mkCol(offHeel, offColIn, mCol), mkCol(offHeel, offColOut, mCol),
-                ]
+              ? [mkCol(offHeel, offColIn, mCol), mkCol(offHeel, offColOut, mCol)]
               : [mkCol(0, offColIn, soleMass * 0.5), mkCol(0, offColOut, soleMass * 0.5)];
           })(),
           leg: true,
+        });
+
+        // ══════════════════════════════════════════════════════════════
+        // ★★★ 柔性足 F1：**前足刚体**（`forefoot_l` / `forefoot_r`）
+        // ══════════════════════════════════════════════════════════════
+        //   · 位置：中足关节处（足长的 `forefootAtFrac`，默认 0.5 = 几何中心）
+        //   · collider：原「前脚掌」那两块（内/外侧柱），`offsetX` 减掉自身原点偏移
+        //   · `plateHidden`：前足**不画贴图** —— 靴子那张图已由 `foot_*` 整张画，
+        //     两边都画会出现「两只脚」（用户 2026-10-04：「有了踝关节现在纹理变成两个脚了」）
+        //   · 关节：`midfoot_l` revolute **绕足长轴（局部 X）** = 距下关节旋前/旋后
+        // ── 柔性足 F1（2026-10-04）：前足刚体 ──
+        //   collider = 原「前脚掌」那两块（内/外侧柱），`offsetX` 改为相对**中足点**
+        const massFore = soleMass * 0.5;
+        const mColFore = massFore / 2;
+        const hxFore = two ? hxBall : hx;
+        const offForeX = offBall - midX;
+        const mkFore = (dz: number) => ({
+          shape: 'cuboid' as const, halfHeight: 0, radius: 0,
+          hx: hxFore, hy: soleHalfThick, hz: hzCol,
+          offsetX: +offForeX.toFixed(6), offsetY: local[1], offsetZ: +dz.toFixed(6),
+          mass: mColFore, comY: 0,
+          inertiaZ: (mColFore * (hxFore ** 2 + soleHalfThick ** 2)) / 3,
+          inertiaXY: (mColFore * (hzCol * hzCol + soleHalfThick ** 2)) / 3,
+        });
+        bodies.push({
+          key: side === 'l' ? 'forefoot_l' : 'forefoot_r',
+          bone: spec.bone,
+          label: side === 'l' ? '左前脚掌' : '右前脚掌',
+          part,                       // 借小腿那张（同 foot_*，但 plateHidden 不画）
+          // ★ 前足刚体原点与 `foot_*` **同一点**（都在踝），中足点靠 collider 偏移表达
+          cx: 0, cy: ankleY, cz: centerZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          plateOffset: [0, 0, 0],
+          // ★ 不画贴图：靴子那张图已由 `foot_*` 整张画，两边都画会「两只脚」
+          plateHidden: true,
+          length: hxFore * 2,
+          radius: 0,
+          halfHeight: hxFore,
+          mass: massFore,
+          colliders: [mkFore(offColIn), mkFore(offColOut)],
+          leg: true,
+        });
+
+        // ══════════════════════════════════════════════════════════════
+        // ★★★ 柔性足 F1：**中足关节** `midfoot_l/r`（在腿循环内创建，
+        //   因为要复用这里的 `midX` / `local[1]` / `hx`）
+        // ══════════════════════════════════════════════════════════════
+        //   revolute **绕足长轴（局部 X）** = 距下关节的旋前/旋后。
+        //
+        //   文献依据：
+        //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
+        //        允许柔性活动**」（Jeon & Cho 压力垫综述）
+        //     · 「**内侧弓把重量传递到足的外侧缘**」（同上 / Welte 2023）
+        //   ⇒ 侧向 CoP 迁移靠的就是这个自由度：前足旋前/旋后 ⇒ 前足内/外侧缘
+        //     一抬一压 ⇒ 载荷在前足的内侧柱/外侧柱之间转移。
+        //
+        //   ★ 为什么只切 collider 不够（我先做过、**实测无效**）：
+        //     同一刚体内切 4 块时，髋外展力矩 −120N→+120N 期间 CoP_z 只动 **0.9mm**
+        //     —— 内侧柱承 175N、外侧柱只承 12N（**14:1**），
+        //     载荷根本不在外侧柱上 ⇒ 接触求解器没有可迁移的压力。
+        //
+        //   锚点：两个刚体原点**相同**（都在踝）⇒ `parentLocal == childLocal`。
+        //   限位：绕 X 轴的旋前/旋后行程 ±`cfg.midfootPronDeg`（人体内翻 ~35°/外翻 ~14°）。
+        //   ★ **不注册进 `AXIS_OWNERSHIP`** —— 没有任何系统对它下指令（被动关节）。
+        midfootJoints.push({
+          name: `midfoot_${side}`,
+          index: 0,                       // 下面统一编号
+          parentKey: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
+          childKey: side === 'l' ? 'forefoot_l' : 'forefoot_r',
+          wx: 0, wy: local[1], wz: 0,
+          parentLocal: [midX, local[1], 0],
+          childLocal: [midX, local[1], 0],
+          restRad: [0, 0, 0],
+          minRad: [-cfg.midfootPronDeg * DEG, -1e-3, -1e-3],
+          maxRad: [cfg.midfootPronDeg * DEG, 1e-3, 1e-3],
+          revoluteAxis: [1, 0, 0] as const,
+          maxTorque: [cfg.ankleTorque * 0.5, 1, 1],
         });
         // ★ 小腿胶囊**只到踝**（上面已把刚体中心/长度重算到"膝→踝"这一段），
         //   靴子那段归脚掌刚体 ⇒ 小腿胶囊不会戳到地面、也不与脚掌盒互穿。
@@ -1353,6 +1483,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   // ---- 关节 ----
   const jointMetaByName = new Map<string, JointMeta>(META.joints.map((j) => [j.name, j]));
   const joints: JointDef[] = [];
+  // ★ 柔性足 F1：中足关节在腿循环里收集（那里才有 `midX`/`local[1]`），此处统一编号
   // ★ 踝关节受 `ankleEnabled` 控制（默认关）。JOINT_ORDER 里始终有 foot_l/foot_r
   //   （网络维度按它算，保持稳定），关掉时**不建这两个关节**、脚掌也不拆成独立刚体。
   const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith('foot_'));
@@ -1456,12 +1587,20 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
 
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
 
+  // ★ 柔性足 F1：中足关节**追加到末尾**（2026-10-04）。
+  //   ⚠⚠ 绝不能插在前面 —— `JointDef.index` 是 `JOINT_ORDER` 里的位置，
+  //     插在前面会把**所有原有关节的索引整体推后**，
+  //     而 `JOINT_ORDER` / `axisRole` / 轴归属门禁都按位置查
+  //     ⇒ 关节名与刚体错配、build 后立即崩溃（实测站立 0.0s crash）。
+  for (const j of midfootJoints) joints.push({ ...j, index: joints.length });
+
   return {
     cfg,
     px2m,
     centerPx,
     groundPx,
     bodies,
+
     joints,
     totalHeight: extent.h * px2m,
     massTotal,
