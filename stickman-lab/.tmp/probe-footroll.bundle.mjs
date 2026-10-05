@@ -6571,6 +6571,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
+          // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -6664,9 +6665,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
             ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
             ARCH_OUT.archMass = archMass;
+            const footMass = soleMass - ARCH_OUT.archMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
-              const m = soleMass * (b._vol / volTot);
+              const m = footMass * (b._vol / volTot);
               b.mass = m;
               b.inertiaZ = m * (b.hx * b.hx + b.hy * b.hy) / 3;
               b.inertiaXY = m * (b.hz * b.hz + b.hy * b.hy) / 3;
@@ -6698,13 +6700,22 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             colliders: ARCH_OUT.archBlocks,
             leg: true
           });
+          const ab = ARCH_OUT.archBlocks;
+          const mOff = (f) => ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
           ARCH_SPEC.push({
             side: isL ? "l" : "r",
             footKey,
             archKey,
-            wx: (cfg.archAtFrac * 2 - 1) * (cfg.soleFootScale * hx),
-            wy: ARCH_OUT.archRise,
-            wz: ARCH_OUT.archCz,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0 + mOff("offsetX"),
+            // 脚体 cx = 0
+            wy: cy + mOff("offsetY"),
+            // 与弓刚体同一个 cy
+            wz: centerZ + mOff("offsetZ"),
+            // 与弓刚体同一个 cz
             massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
           });
         }
@@ -6815,6 +6826,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const byKey = new Map(bodies.map((b) => [b.key, b]));
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  for (const b of bodies) {
+    if (!b.colliders || b.colliders.length === 0) continue;
+    b.mass = b.colliders.reduce((a, c) => a + (c.mass ?? 0), 0);
+  }
   const joints = [];
   const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
   JOINT_ORDER_ACTIVE.forEach((name, index) => {
@@ -13931,8 +13946,13 @@ var init_ragdoll = __esm({
       //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
       //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
       //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-      archStiffness: 100,
-      archDamping: 15,
+      // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
+      //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
+      //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
+      //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
+      //   免得读代码的人以为"弓该是 100 那么硬"。
+      archStiffness: 6,
+      archDamping: 0.025,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14070,6 +14090,10 @@ var init_ragdoll = __esm({
       torsoKey;
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
+      /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
+      physicsDt = 0;
+      /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
+      archGainClamp = null;
       /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -14247,6 +14271,27 @@ var init_ragdoll = __esm({
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+        }
+        this.archGainClamp = null;
+        const dt0 = this.physicsDt || 1 / 120;
+        for (let i = 0; i < sk2.joints.length; i++) {
+          const j = sk2.joints[i];
+          if (!j.name.startsWith("arch_") || !j.revoluteAxis) continue;
+          const g = this.opt.jointGain?.[j.name];
+          if (!g) continue;
+          const Iax = this.jointAxisInertia(i, j.revoluteAxis);
+          const kMax = 4 * Iax / (dt0 * dt0);
+          const bMax = 2 * Iax / dt0;
+          const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
+          const tmax = Math.max(1e-6, j.maxTorque[ax]);
+          const kNm = Math.min(g.kP * tmax / JOINT_MAX_SPEED, kMax);
+          const bNm = Math.min(g.kD * tmax / JOINT_MAX_SPEED, bMax);
+          this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
+            kNm: g.kP * tmax / JOINT_MAX_SPEED,
+            bNm: g.kD * tmax / JOINT_MAX_SPEED
+          } };
+          g.kP = kNm * JOINT_MAX_SPEED / tmax;
+          g.kD = bNm * JOINT_MAX_SPEED / tmax;
         }
         this.motorAuthority.fill(1);
         this.groundFactor.fill(1);
@@ -15210,6 +15255,22 @@ var init_ragdoll = __esm({
         calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
       }
       /** 兼容标量读数：关节 i 的屈伸角（绕本地 Z 的分量，弧度） */
+      /**
+       * ★ 关节绕**指定自由轴**的转动惯量（kg·m²）—— 数值稳定性上限要用它。
+       *
+       * ⚠⚠ **不要**用 `this.jointIeff` 代替：那个是**过冲护栏**用的，取的是
+       *   **最大**主惯量（故意宽松，理由见构造函数里那段"同一个坑修过两次"）。
+       *   而显式积分的稳定性取决于**绕该轴真实转动惯量**，对薄弓体绕长轴旋转
+       *   来说那是**最小**主惯量（≈1e-4，比 max 小两个数量级）。
+       *   用 max 去算上限 ⇒ 会把 K/B 的合法上限高估两个数量级 ⇒ 弓必然高频抖动。
+       *
+       * @param axis 主轴单位向量（柔性足就是 `[1,0,0]`）
+       */
+      jointAxisInertia(i, axis) {
+        const ic = this.bodies[this.jointBodies[i * 2 + 1]].principalInertia();
+        const [ax, ay, az] = axis;
+        return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
+      }
       jointAngle(i) {
         const buf = this.rvTmp;
         this.jointRot(i, buf);
@@ -15494,6 +15555,7 @@ var init_ragdoll = __esm({
        *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
       driveMotors(dt) {
+        this.physicsDt = dt;
         const scale = this.opt.torqueScale;
         this.lastDt = dt;
         const limp = this.limp;

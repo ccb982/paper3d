@@ -83,12 +83,15 @@ row('髋 z', hl, hr, true);
 row('踝 z', s.legs.l.footZ, s.legs.r.footZ, true);
 row('CoP z', s.cop?.l?.z ?? 0, s.cop?.r?.z ?? 0, true);
 row('足外八/外张', 0, 0);
-// ★ 总质量 = Σ刚体主质量 + Σ collider 质量（**两者都要算**：脚掌的 soleMass
-//   挂在 collider 上，不在 BodyDef.mass 里）
+// ★ 总质量 = Σ刚体主质量。**不要再加 Σcollider 质量** ——
+//   skeleton 里已加不变式后处理「刚体质量 := Σ其 collider 质量」，两者按构造相等，
+//   相加会得到 140kg 的假警报（之前一直显示「140.00 应为 70.00」，误导了好几轮）。
 const mBody = sk.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
 const mCol = sk.bodies.reduce((a, b) =>
   a + (b.colliders ?? []).reduce((x, c: any) => x + (c.mass ?? 0), 0), 0);
-log(`   ★ 总质量 = 刚体 ${mBody.toFixed(2)} + collider ${mCol.toFixed(2)} = ${(mBody + mCol).toFixed(2)} kg（应为 70.00）`);
+const mMassOk = Math.abs(mBody - DEFAULT_CONFIG.mass) < 1e-6;
+log(`   ★ 总质量 = Σ刚体 ${mBody.toFixed(2)} kg（目标 ${DEFAULT_CONFIG.mass.toFixed(2)}）`
+  + `  ${mMassOk ? '✓' : '✗ 不符'}   [collider 和 ${mCol.toFixed(2)} = 一致，不重复计]`);
 log(`   com.z = ${(s.com.z * 1000).toFixed(0)}mm   站距/髋间距 = ${s.strideRatio.toFixed(2)}×`);
 log(`   进支撑面需横移 = ${(s.supportEntryZ * 1000).toFixed(0)}mm`);
 const BB = new Float64Array(4);

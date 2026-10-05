@@ -8,7 +8,7 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
-// ../全新的游戏/node_modules/three/build/three.core.js
+// node_modules/three/build/three.core.js
 function arrayNeedsUint32(array) {
   for (let i = array.length - 1; i >= 0; --i) {
     if (array[i] >= 65535) return true;
@@ -1630,7 +1630,7 @@ function getTextureTypeByteLength(type) {
 }
 var REVISION, MOUSE, TOUCH, CullFaceNone, CullFaceBack, CullFaceFront, CullFaceFrontBack, BasicShadowMap, PCFShadowMap, PCFSoftShadowMap, VSMShadowMap, FrontSide, BackSide, DoubleSide, NoBlending, NormalBlending, AdditiveBlending, SubtractiveBlending, MultiplyBlending, CustomBlending, MaterialBlending, AddEquation, SubtractEquation, ReverseSubtractEquation, MinEquation, MaxEquation, ZeroFactor, OneFactor, SrcColorFactor, OneMinusSrcColorFactor, SrcAlphaFactor, OneMinusSrcAlphaFactor, DstAlphaFactor, OneMinusDstAlphaFactor, DstColorFactor, OneMinusDstColorFactor, SrcAlphaSaturateFactor, ConstantColorFactor, OneMinusConstantColorFactor, ConstantAlphaFactor, OneMinusConstantAlphaFactor, NeverDepth, AlwaysDepth, LessDepth, LessEqualDepth, EqualDepth, GreaterEqualDepth, GreaterDepth, NotEqualDepth, MultiplyOperation, MixOperation, AddOperation, NoToneMapping, LinearToneMapping, ReinhardToneMapping, CineonToneMapping, ACESFilmicToneMapping, CustomToneMapping, AgXToneMapping, NeutralToneMapping, AttachedBindMode, DetachedBindMode, UVMapping, CubeReflectionMapping, CubeRefractionMapping, EquirectangularReflectionMapping, EquirectangularRefractionMapping, CubeUVReflectionMapping, RepeatWrapping, ClampToEdgeWrapping, MirroredRepeatWrapping, NearestFilter, NearestMipmapNearestFilter, NearestMipMapNearestFilter, NearestMipmapLinearFilter, NearestMipMapLinearFilter, LinearFilter, LinearMipmapNearestFilter, LinearMipMapNearestFilter, LinearMipmapLinearFilter, LinearMipMapLinearFilter, UnsignedByteType, ByteType, ShortType, UnsignedShortType, IntType, UnsignedIntType, FloatType, HalfFloatType, UnsignedShort4444Type, UnsignedShort5551Type, UnsignedInt248Type, UnsignedInt5999Type, UnsignedInt101111Type, AlphaFormat, RGBFormat, RGBAFormat, DepthFormat, DepthStencilFormat, RedFormat, RedIntegerFormat, RGFormat, RGIntegerFormat, RGBIntegerFormat, RGBAIntegerFormat, RGB_S3TC_DXT1_Format, RGBA_S3TC_DXT1_Format, RGBA_S3TC_DXT3_Format, RGBA_S3TC_DXT5_Format, RGB_PVRTC_4BPPV1_Format, RGB_PVRTC_2BPPV1_Format, RGBA_PVRTC_4BPPV1_Format, RGBA_PVRTC_2BPPV1_Format, RGB_ETC1_Format, RGB_ETC2_Format, RGBA_ETC2_EAC_Format, R11_EAC_Format, SIGNED_R11_EAC_Format, RG11_EAC_Format, SIGNED_RG11_EAC_Format, RGBA_ASTC_4x4_Format, RGBA_ASTC_5x4_Format, RGBA_ASTC_5x5_Format, RGBA_ASTC_6x5_Format, RGBA_ASTC_6x6_Format, RGBA_ASTC_8x5_Format, RGBA_ASTC_8x6_Format, RGBA_ASTC_8x8_Format, RGBA_ASTC_10x5_Format, RGBA_ASTC_10x6_Format, RGBA_ASTC_10x8_Format, RGBA_ASTC_10x10_Format, RGBA_ASTC_12x10_Format, RGBA_ASTC_12x12_Format, RGBA_BPTC_Format, RGB_BPTC_SIGNED_Format, RGB_BPTC_UNSIGNED_Format, RED_RGTC1_Format, SIGNED_RED_RGTC1_Format, RED_GREEN_RGTC2_Format, SIGNED_RED_GREEN_RGTC2_Format, LoopOnce, LoopRepeat, LoopPingPong, InterpolateDiscrete, InterpolateLinear, InterpolateSmooth, InterpolateBezier, ZeroCurvatureEnding, ZeroSlopeEnding, WrapAroundEnding, NormalAnimationBlendMode, AdditiveAnimationBlendMode, TrianglesDrawMode, TriangleStripDrawMode, TriangleFanDrawMode, BasicDepthPacking, RGBADepthPacking, RGBDepthPacking, RGDepthPacking, TangentSpaceNormalMap, ObjectSpaceNormalMap, NoColorSpace, SRGBColorSpace, LinearSRGBColorSpace, LinearTransfer, SRGBTransfer, NoNormalPacking, NormalRGPacking, NormalGAPacking, ZeroStencilOp, KeepStencilOp, ReplaceStencilOp, IncrementStencilOp, DecrementStencilOp, IncrementWrapStencilOp, DecrementWrapStencilOp, InvertStencilOp, NeverStencilFunc, LessStencilFunc, EqualStencilFunc, LessEqualStencilFunc, GreaterStencilFunc, NotEqualStencilFunc, GreaterEqualStencilFunc, AlwaysStencilFunc, NeverCompare, LessCompare, EqualCompare, LessEqualCompare, GreaterCompare, NotEqualCompare, GreaterEqualCompare, AlwaysCompare, StaticDrawUsage, DynamicDrawUsage, StreamDrawUsage, StaticReadUsage, DynamicReadUsage, StreamReadUsage, StaticCopyUsage, DynamicCopyUsage, StreamCopyUsage, GLSL1, GLSL3, WebGLCoordinateSystem, WebGPUCoordinateSystem, TimestampQuery, InterpolationSamplingType, InterpolationSamplingMode, Compatibility, TYPED_ARRAYS, _cache, _setConsoleFunction, ReversedDepthFuncs, EventDispatcher, _lut, _seed, DEG2RAD, RAD2DEG, MathUtils, Vector2, Quaternion, Vector3, _vector$c, _quaternion$5, Matrix3, _m3, LINEAR_REC709_TO_XYZ, XYZ_TO_LINEAR_REC709, ColorManagement, _canvas, ImageUtils, _sourceId, Source, _textureId, _tempVec3, Texture, Vector4, RenderTarget, WebGLRenderTarget, DataArrayTexture, WebGLArrayRenderTarget, Data3DTexture, WebGL3DRenderTarget, Matrix4, _v1$7, _m1$2, _zero, _one, _x, _y, _z, _matrix$2, _quaternion$4, Euler, Layers, _object3DId, _v1$6, _q1, _m1$1, _target, _position$4, _scale$3, _quaternion$3, _xAxis, _yAxis, _zAxis, _addedEvent, _removedEvent, _childaddedEvent, _childremovedEvent, Object3D, Group, _moveEvent, WebXRController, _colorKeywords, _hslA, _hslB, Color, _color, FogExp2, Fog, Scene, _v0$2, _v1$5, _v2$4, _v3$2, _vab, _vac, _vbc, _vap, _vbp, _vcp, _v40, _v41, _v42, Triangle, Box3, _points, _vector$b, _box$4, _v0$1, _v1$4, _v2$3, _f0, _f1, _f2, _center, _extents, _triangleNormal, _testAxis, _tables, DataUtils, _vector$a, _vector2$1, _id$2, BufferAttribute, Int8BufferAttribute, Uint8BufferAttribute, Uint8ClampedBufferAttribute, Int16BufferAttribute, Uint16BufferAttribute, Int32BufferAttribute, Uint32BufferAttribute, Float16BufferAttribute, Float32BufferAttribute, _box$3, _v1$3, _v2$2, Sphere, _id$1, _m1, _obj, _offset, _box$2, _boxMorphTargets, _vector$9, BufferGeometry, InterleavedBuffer, _vector$8, InterleavedBufferAttribute, _materialId, Material, SpriteMaterial, _geometry, _intersectPoint, _worldScale, _mvPosition, _alignedPosition, _rotatedPosition, _viewWorldMatrix, _vA$1, _vB$1, _vC$1, _uvA, _uvB, _uvC, Sprite, _v1$2, _v2$1, LOD, _vector$7, _segCenter, _segDir, _diff, _edge1, _edge2, _normal$1, Ray, MeshBasicMaterial, _inverseMatrix$3, _ray$3, _sphere$6, _sphereHitAt, _vA, _vB, _vC, _tempA, _morphA, _intersectionPoint, _intersectionPointWorld, Mesh, _baseVector, _skinIndex, _skinWeight, _vector4, _matrix4, _vertex, _sphere$5, _inverseMatrix$2, _ray$2, SkinnedMesh, Bone, DataTexture, _offsetMatrix, _identityMatrix, Skeleton, InstancedBufferAttribute, _instanceLocalMatrix, _instanceWorldMatrix, _instanceIntersects, _box3, _identity, _mesh$1, _sphere$4, InstancedMesh, _vector1, _vector2, _normalMatrix, Plane, _sphere$3, _defaultSpriteCenter, _vector$6, Frustum, _projScreenMatrix$1, FrustumArray, MultiDrawRenderList, _matrix$1, _whiteColor, _frustum, _frustumArray, _box$1, _sphere$2, _vector$5, _forward$1, _temp, _renderList, _mesh, _batchIntersects, BatchedMesh, LineBasicMaterial, _vStart, _vEnd, _inverseMatrix$1, _ray$1, _sphere$1, _intersectPointOnRay, _intersectPointOnSegment, Line, _start, _end, LineSegments, LineLoop, PointsMaterial, _inverseMatrix, _ray, _sphere, _position$3, Points, VideoTexture, VideoFrameTexture, FramebufferTexture, CompressedTexture, CompressedArrayTexture, CompressedCubeTexture, CubeTexture, CanvasTexture, HTMLTexture, DepthTexture, CubeDepthTexture, ExternalTexture, BoxGeometry, CapsuleGeometry, CircleGeometry, CylinderGeometry, ConeGeometry, PolyhedronGeometry, DodecahedronGeometry, _v0, _v1$1, _normal, _triangle, EdgesGeometry, Curve, EllipseCurve, ArcCurve, tmp, tmp2, px, py, pz, CatmullRomCurve3, CubicBezierCurve, CubicBezierCurve3, LineCurve, LineCurve3, QuadraticBezierCurve, QuadraticBezierCurve3, SplineCurve, Curves, CurvePath, Path, Shape, Earcut, ShapeUtils, ExtrudeGeometry, WorldUVGenerator, IcosahedronGeometry, LatheGeometry, OctahedronGeometry, PlaneGeometry, RingGeometry, ShapeGeometry, SphereGeometry, TetrahedronGeometry, TorusGeometry, TorusKnotGeometry, TubeGeometry, WireframeGeometry, Geometries, ShadowMaterial, UniformsUtils, default_vertex, default_fragment, ShaderMaterial, RawShaderMaterial, MeshStandardMaterial, MeshPhysicalMaterial, MeshPhongMaterial, MeshToonMaterial, MeshNormalMaterial, MeshLambertMaterial, MeshDepthMaterial, MeshDistanceMaterial, MeshMatcapMaterial, LineDashedMaterial, AnimationUtils, Interpolant, CubicInterpolant, LinearInterpolant, DiscreteInterpolant, BezierInterpolant, KeyframeTrack, BooleanKeyframeTrack, ColorKeyframeTrack, NumberKeyframeTrack, QuaternionLinearInterpolant, QuaternionKeyframeTrack, StringKeyframeTrack, VectorKeyframeTrack, AnimationClip, Cache, LoadingManager, DefaultLoadingManager, Loader, loading, HttpError, FileLoader, AnimationLoader, CompressedTextureLoader, _loading, ImageLoader, CubeTextureLoader, DataTextureLoader, TextureLoader, Light, HemisphereLight, _projScreenMatrix, _lightPositionWorld, _lookTarget, LightShadow, _position$2, _quaternion$2, _scale$2, Camera, _v3$1, _minTarget, _maxTarget, PerspectiveCamera, SpotLightShadow, SpotLight, PointLightShadow, PointLight, OrthographicCamera, DirectionalLightShadow, DirectionalLight, AmbientLight, RectAreaLight, SphericalHarmonics3, LightProbe, _customMaterials, MaterialLoader, LoaderUtils, InstancedBufferGeometry, BufferGeometryLoader, _customGeometries, ObjectLoader, TEXTURE_MAPPING, TEXTURE_WRAPPING, TEXTURE_FILTER, _errorMap, ImageBitmapLoader, _context, AudioContext, AudioLoader, _eyeRight, _eyeLeft, _projectionMatrix, StereoCamera, fov, aspect, CubeCamera, ArrayCamera, Timer, _position$1, _quaternion$1, _scale$1, _forward, _up, AudioListener, Audio, _position, _quaternion, _scale, _orientation, PositionalAudio, AudioAnalyser, PropertyMixer, _RESERVED_CHARS_RE, _reservedRe, _wordChar, _wordCharOrDot, _directoryRe, _nodeRe, _objectRe, _propertyRe, _trackRe, _supportedObjectNames, Composite, PropertyBinding, AnimationObjectGroup, AnimationAction, _controlInterpolantsResultBuffer, AnimationMixer, RenderTarget3D, Uniform, _id, UniformsGroup, InstancedInterleavedBuffer, GLBufferAttribute, _matrix, Raycaster, Clock, Spherical, Cylindrical, Matrix2, _vector$4, Box2, _startP, _startEnd, _d1, _d2, _r, _c1, _c2, Line3, _vector$3, SpotLightHelper, _vector$2, _boneMatrix, _matrixWorldInv, SkeletonHelper, PointLightHelper, _vector$1, _color1, _color2, HemisphereLightHelper, GridHelper, PolarGridHelper, _v1, _v2, _v3, DirectionalLightHelper, _vector, _camera, CameraHelper, _box, BoxHelper, Box3Helper, PlaneHelper, _axis, _lineGeometry, _coneGeometry, ArrowHelper, AxesHelper, ShapePath, Controls, TextureUtils;
 var init_three_core = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/three/build/three.core.js"() {
+  "node_modules/three/build/three.core.js"() {
     REVISION = "185";
     MOUSE = { LEFT: 0, MIDDLE: 1, RIGHT: 2, ROTATE: 0, DOLLY: 1, PAN: 2 };
     TOUCH = { ROTATE: 0, PAN: 1, DOLLY_PAN: 2, DOLLY_ROTATE: 3 };
@@ -4962,10 +4962,10 @@ var init_three_core = __esm({
        * @return {Object} A JSON object representing the serialized source.
        * @see {@link ObjectLoader#parse}
        */
-      toJSON(meta) {
-        const isRootObject = meta === void 0 || typeof meta === "string";
-        if (!isRootObject && meta.images[this.uuid] !== void 0) {
-          return meta.images[this.uuid];
+      toJSON(meta2) {
+        const isRootObject = meta2 === void 0 || typeof meta2 === "string";
+        if (!isRootObject && meta2.images[this.uuid] !== void 0) {
+          return meta2.images[this.uuid];
         }
         const output = {
           uuid: this.uuid,
@@ -4989,7 +4989,7 @@ var init_three_core = __esm({
           output.url = url;
         }
         if (!isRootObject) {
-          meta.images[this.uuid] = output;
+          meta2.images[this.uuid] = output;
         }
         return output;
       }
@@ -5182,10 +5182,10 @@ var init_three_core = __esm({
        * @return {Object} A JSON object representing the serialized texture.
        * @see {@link ObjectLoader#parse}
        */
-      toJSON(meta) {
-        const isRootObject = meta === void 0 || typeof meta === "string";
-        if (!isRootObject && meta.textures[this.uuid] !== void 0) {
-          return meta.textures[this.uuid];
+      toJSON(meta2) {
+        const isRootObject = meta2 === void 0 || typeof meta2 === "string";
+        if (!isRootObject && meta2.textures[this.uuid] !== void 0) {
+          return meta2.textures[this.uuid];
         }
         const output = {
           metadata: {
@@ -5195,7 +5195,7 @@ var init_three_core = __esm({
           },
           uuid: this.uuid,
           name: this.name,
-          image: this.source.toJSON(meta).uuid,
+          image: this.source.toJSON(meta2).uuid,
           mapping: this.mapping,
           channel: this.channel,
           repeat: [this.repeat.x, this.repeat.y],
@@ -5218,7 +5218,7 @@ var init_three_core = __esm({
         };
         if (Object.keys(this.userData).length > 0) output.userData = this.userData;
         if (!isRootObject) {
-          meta.textures[this.uuid] = output;
+          meta2.textures[this.uuid] = output;
         }
         return output;
       }
@@ -8577,11 +8577,11 @@ var init_three_core = __esm({
        * @return {Object} A JSON object representing the serialized 3D object.
        * @see {@link ObjectLoader#parse}
        */
-      toJSON(meta) {
-        const isRootObject = meta === void 0 || typeof meta === "string";
+      toJSON(meta2) {
+        const isRootObject = meta2 === void 0 || typeof meta2 === "string";
         const output = {};
         if (isRootObject) {
-          meta = {
+          meta2 = {
             geometries: {},
             materials: {},
             textures: {},
@@ -8642,10 +8642,10 @@ var init_three_core = __esm({
           object.maxVertexCount = this._maxVertexCount;
           object.maxIndexCount = this._maxIndexCount;
           object.geometryInitialized = this._geometryInitialized;
-          object.matricesTexture = this._matricesTexture.toJSON(meta);
-          object.indirectTexture = this._indirectTexture.toJSON(meta);
+          object.matricesTexture = this._matricesTexture.toJSON(meta2);
+          object.indirectTexture = this._indirectTexture.toJSON(meta2);
           if (this._colorsTexture !== null) {
-            object.colorsTexture = this._colorsTexture.toJSON(meta);
+            object.colorsTexture = this._colorsTexture.toJSON(meta2);
           }
           if (this.boundingSphere !== null) {
             object.boundingSphere = this.boundingSphere.toJSON();
@@ -8656,7 +8656,7 @@ var init_three_core = __esm({
         }
         function serialize(library, element) {
           if (library[element.uuid] === void 0) {
-            library[element.uuid] = element.toJSON(meta);
+            library[element.uuid] = element.toJSON(meta2);
           }
           return element.uuid;
         }
@@ -8665,24 +8665,24 @@ var init_three_core = __esm({
             if (this.background.isColor) {
               object.background = this.background.toJSON();
             } else if (this.background.isTexture) {
-              object.background = this.background.toJSON(meta).uuid;
+              object.background = this.background.toJSON(meta2).uuid;
             }
           }
           if (this.environment && this.environment.isTexture && this.environment.isRenderTargetTexture !== true) {
-            object.environment = this.environment.toJSON(meta).uuid;
+            object.environment = this.environment.toJSON(meta2).uuid;
           }
         } else if (this.isMesh || this.isLine || this.isPoints) {
-          object.geometry = serialize(meta.geometries, this.geometry);
+          object.geometry = serialize(meta2.geometries, this.geometry);
           const parameters = this.geometry.parameters;
           if (parameters !== void 0 && parameters.shapes !== void 0) {
             const shapes = parameters.shapes;
             if (Array.isArray(shapes)) {
               for (let i = 0, l = shapes.length; i < l; i++) {
                 const shape = shapes[i];
-                serialize(meta.shapes, shape);
+                serialize(meta2.shapes, shape);
               }
             } else {
-              serialize(meta.shapes, shapes);
+              serialize(meta2.shapes, shapes);
             }
           }
         }
@@ -8690,7 +8690,7 @@ var init_three_core = __esm({
           object.bindMode = this.bindMode;
           object.bindMatrix = this.bindMatrix.toArray();
           if (this.skeleton !== void 0) {
-            serialize(meta.skeletons, this.skeleton);
+            serialize(meta2.skeletons, this.skeleton);
             object.skeleton = this.skeleton.uuid;
           }
         }
@@ -8698,35 +8698,35 @@ var init_three_core = __esm({
           if (Array.isArray(this.material)) {
             const uuids = [];
             for (let i = 0, l = this.material.length; i < l; i++) {
-              uuids.push(serialize(meta.materials, this.material[i]));
+              uuids.push(serialize(meta2.materials, this.material[i]));
             }
             object.material = uuids;
           } else {
-            object.material = serialize(meta.materials, this.material);
+            object.material = serialize(meta2.materials, this.material);
           }
         }
         if (this.children.length > 0) {
           object.children = [];
           for (let i = 0; i < this.children.length; i++) {
-            object.children.push(this.children[i].toJSON(meta).object);
+            object.children.push(this.children[i].toJSON(meta2).object);
           }
         }
         if (this.animations.length > 0) {
           object.animations = [];
           for (let i = 0; i < this.animations.length; i++) {
             const animation = this.animations[i];
-            object.animations.push(serialize(meta.animations, animation));
+            object.animations.push(serialize(meta2.animations, animation));
           }
         }
         if (isRootObject) {
-          const geometries = extractFromCache(meta.geometries);
-          const materials = extractFromCache(meta.materials);
-          const textures = extractFromCache(meta.textures);
-          const images = extractFromCache(meta.images);
-          const shapes = extractFromCache(meta.shapes);
-          const skeletons = extractFromCache(meta.skeletons);
-          const animations = extractFromCache(meta.animations);
-          const nodes = extractFromCache(meta.nodes);
+          const geometries = extractFromCache(meta2.geometries);
+          const materials = extractFromCache(meta2.materials);
+          const textures = extractFromCache(meta2.textures);
+          const images = extractFromCache(meta2.images);
+          const shapes = extractFromCache(meta2.shapes);
+          const skeletons = extractFromCache(meta2.skeletons);
+          const animations = extractFromCache(meta2.animations);
+          const nodes = extractFromCache(meta2.nodes);
           if (geometries.length > 0) output.geometries = geometries;
           if (materials.length > 0) output.materials = materials;
           if (textures.length > 0) output.textures = textures;
@@ -9910,8 +9910,8 @@ var init_three_core = __esm({
         this.matrixAutoUpdate = source.matrixAutoUpdate;
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         if (this.fog !== null) data.object.fog = this.fog.toJSON();
         if (this.backgroundBlurriness > 0) data.object.backgroundBlurriness = this.backgroundBlurriness;
         if (this.backgroundIntensity !== 1) data.object.backgroundIntensity = this.backgroundIntensity;
@@ -13147,10 +13147,10 @@ var init_three_core = __esm({
        * @return {Object} A JSON object representing the serialized material.
        * @see {@link ObjectLoader#parse}
        */
-      toJSON(meta) {
-        const isRootObject = meta === void 0 || typeof meta === "string";
+      toJSON(meta2) {
+        const isRootObject = meta2 === void 0 || typeof meta2 === "string";
         if (isRootObject) {
-          meta = {
+          meta2 = {
             textures: {},
             images: {}
           };
@@ -13180,69 +13180,69 @@ var init_three_core = __esm({
         if (this.clearcoat !== void 0) data.clearcoat = this.clearcoat;
         if (this.clearcoatRoughness !== void 0) data.clearcoatRoughness = this.clearcoatRoughness;
         if (this.clearcoatMap && this.clearcoatMap.isTexture) {
-          data.clearcoatMap = this.clearcoatMap.toJSON(meta).uuid;
+          data.clearcoatMap = this.clearcoatMap.toJSON(meta2).uuid;
         }
         if (this.clearcoatRoughnessMap && this.clearcoatRoughnessMap.isTexture) {
-          data.clearcoatRoughnessMap = this.clearcoatRoughnessMap.toJSON(meta).uuid;
+          data.clearcoatRoughnessMap = this.clearcoatRoughnessMap.toJSON(meta2).uuid;
         }
         if (this.clearcoatNormalMap && this.clearcoatNormalMap.isTexture) {
-          data.clearcoatNormalMap = this.clearcoatNormalMap.toJSON(meta).uuid;
+          data.clearcoatNormalMap = this.clearcoatNormalMap.toJSON(meta2).uuid;
           data.clearcoatNormalScale = this.clearcoatNormalScale.toArray();
         }
         if (this.sheenColorMap && this.sheenColorMap.isTexture) {
-          data.sheenColorMap = this.sheenColorMap.toJSON(meta).uuid;
+          data.sheenColorMap = this.sheenColorMap.toJSON(meta2).uuid;
         }
         if (this.sheenRoughnessMap && this.sheenRoughnessMap.isTexture) {
-          data.sheenRoughnessMap = this.sheenRoughnessMap.toJSON(meta).uuid;
+          data.sheenRoughnessMap = this.sheenRoughnessMap.toJSON(meta2).uuid;
         }
         if (this.dispersion !== void 0) data.dispersion = this.dispersion;
         if (this.iridescence !== void 0) data.iridescence = this.iridescence;
         if (this.iridescenceIOR !== void 0) data.iridescenceIOR = this.iridescenceIOR;
         if (this.iridescenceThicknessRange !== void 0) data.iridescenceThicknessRange = this.iridescenceThicknessRange;
         if (this.iridescenceMap && this.iridescenceMap.isTexture) {
-          data.iridescenceMap = this.iridescenceMap.toJSON(meta).uuid;
+          data.iridescenceMap = this.iridescenceMap.toJSON(meta2).uuid;
         }
         if (this.iridescenceThicknessMap && this.iridescenceThicknessMap.isTexture) {
-          data.iridescenceThicknessMap = this.iridescenceThicknessMap.toJSON(meta).uuid;
+          data.iridescenceThicknessMap = this.iridescenceThicknessMap.toJSON(meta2).uuid;
         }
         if (this.anisotropy !== void 0) data.anisotropy = this.anisotropy;
         if (this.anisotropyRotation !== void 0) data.anisotropyRotation = this.anisotropyRotation;
         if (this.anisotropyMap && this.anisotropyMap.isTexture) {
-          data.anisotropyMap = this.anisotropyMap.toJSON(meta).uuid;
+          data.anisotropyMap = this.anisotropyMap.toJSON(meta2).uuid;
         }
-        if (this.map && this.map.isTexture) data.map = this.map.toJSON(meta).uuid;
-        if (this.matcap && this.matcap.isTexture) data.matcap = this.matcap.toJSON(meta).uuid;
-        if (this.alphaMap && this.alphaMap.isTexture) data.alphaMap = this.alphaMap.toJSON(meta).uuid;
+        if (this.map && this.map.isTexture) data.map = this.map.toJSON(meta2).uuid;
+        if (this.matcap && this.matcap.isTexture) data.matcap = this.matcap.toJSON(meta2).uuid;
+        if (this.alphaMap && this.alphaMap.isTexture) data.alphaMap = this.alphaMap.toJSON(meta2).uuid;
         if (this.lightMap && this.lightMap.isTexture) {
-          data.lightMap = this.lightMap.toJSON(meta).uuid;
+          data.lightMap = this.lightMap.toJSON(meta2).uuid;
           data.lightMapIntensity = this.lightMapIntensity;
         }
         if (this.aoMap && this.aoMap.isTexture) {
-          data.aoMap = this.aoMap.toJSON(meta).uuid;
+          data.aoMap = this.aoMap.toJSON(meta2).uuid;
           data.aoMapIntensity = this.aoMapIntensity;
         }
         if (this.bumpMap && this.bumpMap.isTexture) {
-          data.bumpMap = this.bumpMap.toJSON(meta).uuid;
+          data.bumpMap = this.bumpMap.toJSON(meta2).uuid;
           data.bumpScale = this.bumpScale;
         }
         if (this.normalMap && this.normalMap.isTexture) {
-          data.normalMap = this.normalMap.toJSON(meta).uuid;
+          data.normalMap = this.normalMap.toJSON(meta2).uuid;
           data.normalMapType = this.normalMapType;
           data.normalScale = this.normalScale.toArray();
         }
         if (this.displacementMap && this.displacementMap.isTexture) {
-          data.displacementMap = this.displacementMap.toJSON(meta).uuid;
+          data.displacementMap = this.displacementMap.toJSON(meta2).uuid;
           data.displacementScale = this.displacementScale;
           data.displacementBias = this.displacementBias;
         }
-        if (this.roughnessMap && this.roughnessMap.isTexture) data.roughnessMap = this.roughnessMap.toJSON(meta).uuid;
-        if (this.metalnessMap && this.metalnessMap.isTexture) data.metalnessMap = this.metalnessMap.toJSON(meta).uuid;
-        if (this.emissiveMap && this.emissiveMap.isTexture) data.emissiveMap = this.emissiveMap.toJSON(meta).uuid;
-        if (this.specularMap && this.specularMap.isTexture) data.specularMap = this.specularMap.toJSON(meta).uuid;
-        if (this.specularIntensityMap && this.specularIntensityMap.isTexture) data.specularIntensityMap = this.specularIntensityMap.toJSON(meta).uuid;
-        if (this.specularColorMap && this.specularColorMap.isTexture) data.specularColorMap = this.specularColorMap.toJSON(meta).uuid;
+        if (this.roughnessMap && this.roughnessMap.isTexture) data.roughnessMap = this.roughnessMap.toJSON(meta2).uuid;
+        if (this.metalnessMap && this.metalnessMap.isTexture) data.metalnessMap = this.metalnessMap.toJSON(meta2).uuid;
+        if (this.emissiveMap && this.emissiveMap.isTexture) data.emissiveMap = this.emissiveMap.toJSON(meta2).uuid;
+        if (this.specularMap && this.specularMap.isTexture) data.specularMap = this.specularMap.toJSON(meta2).uuid;
+        if (this.specularIntensityMap && this.specularIntensityMap.isTexture) data.specularIntensityMap = this.specularIntensityMap.toJSON(meta2).uuid;
+        if (this.specularColorMap && this.specularColorMap.isTexture) data.specularColorMap = this.specularColorMap.toJSON(meta2).uuid;
         if (this.envMap && this.envMap.isTexture) {
-          data.envMap = this.envMap.toJSON(meta).uuid;
+          data.envMap = this.envMap.toJSON(meta2).uuid;
           if (this.combine !== void 0) data.combine = this.combine;
         }
         if (this.envMapRotation !== void 0) data.envMapRotation = this.envMapRotation.toArray();
@@ -13250,12 +13250,12 @@ var init_three_core = __esm({
         if (this.reflectivity !== void 0) data.reflectivity = this.reflectivity;
         if (this.refractionRatio !== void 0) data.refractionRatio = this.refractionRatio;
         if (this.gradientMap && this.gradientMap.isTexture) {
-          data.gradientMap = this.gradientMap.toJSON(meta).uuid;
+          data.gradientMap = this.gradientMap.toJSON(meta2).uuid;
         }
         if (this.transmission !== void 0) data.transmission = this.transmission;
-        if (this.transmissionMap && this.transmissionMap.isTexture) data.transmissionMap = this.transmissionMap.toJSON(meta).uuid;
+        if (this.transmissionMap && this.transmissionMap.isTexture) data.transmissionMap = this.transmissionMap.toJSON(meta2).uuid;
         if (this.thickness !== void 0) data.thickness = this.thickness;
-        if (this.thicknessMap && this.thicknessMap.isTexture) data.thicknessMap = this.thicknessMap.toJSON(meta).uuid;
+        if (this.thicknessMap && this.thicknessMap.isTexture) data.thicknessMap = this.thicknessMap.toJSON(meta2).uuid;
         if (this.attenuationDistance !== void 0 && this.attenuationDistance !== Infinity) data.attenuationDistance = this.attenuationDistance;
         if (this.attenuationColor !== void 0) data.attenuationColor = this.attenuationColor.getHex();
         if (this.size !== void 0) data.size = this.size;
@@ -13320,8 +13320,8 @@ var init_three_core = __esm({
           return values;
         }
         if (isRootObject) {
-          const textures = extractFromCache(meta.textures);
-          const images = extractFromCache(meta.images);
+          const textures = extractFromCache(meta2.textures);
+          const images = extractFromCache(meta2.images);
           if (textures.length > 0) data.textures = textures;
           if (images.length > 0) data.images = images;
         }
@@ -13856,8 +13856,8 @@ var init_three_core = __esm({
           }
         }
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         if (this.autoUpdate === false) data.object.autoUpdate = false;
         data.object.levels = [];
         const levels = this.levels;
@@ -17309,8 +17309,8 @@ var init_three_core = __esm({
         this.compareFunction = source.compareFunction;
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         if (this.compareFunction !== null) data.compareFunction = this.compareFunction;
         return data;
       }
@@ -21364,8 +21364,8 @@ var init_three_core = __esm({
         this.uniformsNeedUpdate = source.uniformsNeedUpdate;
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.glslVersion = this.glslVersion;
         data.uniforms = {};
         for (const name in this.uniforms) {
@@ -21374,7 +21374,7 @@ var init_three_core = __esm({
           if (value && value.isTexture) {
             data.uniforms[name] = {
               type: "t",
-              value: value.toJSON(meta).uuid
+              value: value.toJSON(meta2).uuid
             };
           } else if (value && value.isColor) {
             data.uniforms[name] = {
@@ -24188,8 +24188,8 @@ var init_three_core = __esm({
         this.intensity = source.intensity;
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.color = this.color.getHex();
         data.object.intensity = this.intensity;
         return data;
@@ -24216,8 +24216,8 @@ var init_three_core = __esm({
         this.groundColor.copy(source.groundColor);
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.groundColor = this.groundColor.getHex();
         return data;
       }
@@ -24682,8 +24682,8 @@ var init_three_core = __esm({
         this.projectionMatrix.makePerspective(left, left + width, top, top - height, near, this.far, this.coordinateSystem, this.reversedDepth);
         this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.fov = this.fov;
         data.object.zoom = this.zoom;
         data.object.near = this.near;
@@ -24777,14 +24777,14 @@ var init_three_core = __esm({
         this.shadow = source.shadow.clone();
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.distance = this.distance;
         data.object.angle = this.angle;
         data.object.decay = this.decay;
         data.object.penumbra = this.penumbra;
         data.object.target = this.target.uuid;
-        if (this.map && this.map.isTexture) data.object.map = this.map.toJSON(meta).uuid;
+        if (this.map && this.map.isTexture) data.object.map = this.map.toJSON(meta2).uuid;
         data.object.shadow = this.shadow.toJSON();
         return data;
       }
@@ -24838,8 +24838,8 @@ var init_three_core = __esm({
         this.shadow = source.shadow.clone();
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.distance = this.distance;
         data.object.decay = this.decay;
         data.object.shadow = this.shadow.toJSON();
@@ -24949,8 +24949,8 @@ var init_three_core = __esm({
         this.projectionMatrix.makeOrthographic(left, right, top, bottom, this.near, this.far, this.coordinateSystem, this.reversedDepth);
         this.projectionMatrixInverse.copy(this.projectionMatrix).invert();
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.zoom = this.zoom;
         data.object.left = this.left;
         data.object.right = this.right;
@@ -24997,8 +24997,8 @@ var init_three_core = __esm({
         this.shadow = source.shadow.clone();
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.shadow = this.shadow.toJSON();
         data.object.target = this.target.uuid;
         return data;
@@ -25051,8 +25051,8 @@ var init_three_core = __esm({
         this.height = source.height;
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.width = this.width;
         data.object.height = this.height;
         return data;
@@ -25284,8 +25284,8 @@ var init_three_core = __esm({
         this.sh.copy(source.sh);
         return this;
       }
-      toJSON(meta) {
-        const data = super.toJSON(meta);
+      toJSON(meta2) {
+        const data = super.toJSON(meta2);
         data.object.sh = this.sh.toArray();
         return data;
       }
@@ -31600,7 +31600,7 @@ var init_three_core = __esm({
   }
 });
 
-// ../全新的游戏/node_modules/three/build/three.module.js
+// node_modules/three/build/three.module.js
 var three_module_exports = {};
 __export(three_module_exports, {
   ACESFilmicToneMapping: () => ACESFilmicToneMapping,
@@ -39235,7 +39235,7 @@ function getDFGLUT() {
 }
 var alphahash_fragment, alphahash_pars_fragment, alphamap_fragment, alphamap_pars_fragment, alphatest_fragment, alphatest_pars_fragment, aomap_fragment, aomap_pars_fragment, batching_pars_vertex, batching_vertex, begin_vertex, beginnormal_vertex, bsdfs, iridescence_fragment, bumpmap_pars_fragment, clipping_planes_fragment, clipping_planes_pars_fragment, clipping_planes_pars_vertex, clipping_planes_vertex, color_fragment, color_pars_fragment, color_pars_vertex, color_vertex, common, cube_uv_reflection_fragment, defaultnormal_vertex, displacementmap_pars_vertex, displacementmap_vertex, emissivemap_fragment, emissivemap_pars_fragment, colorspace_fragment, colorspace_pars_fragment, envmap_fragment, envmap_common_pars_fragment, envmap_pars_fragment, envmap_pars_vertex, envmap_vertex, fog_vertex, fog_pars_vertex, fog_fragment, fog_pars_fragment, gradientmap_pars_fragment, lightmap_pars_fragment, lights_lambert_fragment, lights_lambert_pars_fragment, lights_pars_begin, envmap_physical_pars_fragment, lights_toon_fragment, lights_toon_pars_fragment, lights_phong_fragment, lights_phong_pars_fragment, lights_physical_fragment, lights_physical_pars_fragment, lights_fragment_begin, lights_fragment_maps, lights_fragment_end, lightprobes_pars_fragment, logdepthbuf_fragment, logdepthbuf_pars_fragment, logdepthbuf_pars_vertex, logdepthbuf_vertex, map_fragment, map_pars_fragment, map_particle_fragment, map_particle_pars_fragment, metalnessmap_fragment, metalnessmap_pars_fragment, morphinstance_vertex, morphcolor_vertex, morphnormal_vertex, morphtarget_pars_vertex, morphtarget_vertex, normal_fragment_begin, normal_fragment_maps, normal_pars_fragment, normal_pars_vertex, normal_vertex, normalmap_pars_fragment, clearcoat_normal_fragment_begin, clearcoat_normal_fragment_maps, clearcoat_pars_fragment, iridescence_pars_fragment, opaque_fragment, packing, premultiplied_alpha_fragment, project_vertex, dithering_fragment, dithering_pars_fragment, roughnessmap_fragment, roughnessmap_pars_fragment, shadowmap_pars_fragment, shadowmap_pars_vertex, shadowmap_vertex, shadowmask_pars_fragment, skinbase_vertex, skinning_pars_vertex, skinning_vertex, skinnormal_vertex, specularmap_fragment, specularmap_pars_fragment, tonemapping_fragment, tonemapping_pars_fragment, transmission_fragment, transmission_pars_fragment, uv_pars_fragment, uv_pars_vertex, uv_vertex, worldpos_vertex, vertex$h, fragment$h, vertex$g, fragment$g, vertex$f, fragment$f, vertex$e, fragment$e, vertex$d, fragment$d, vertex$c, fragment$c, vertex$b, fragment$b, vertex$a, fragment$a, vertex$9, fragment$9, vertex$8, fragment$8, vertex$7, fragment$7, vertex$6, fragment$6, vertex$5, fragment$5, vertex$4, fragment$4, vertex$3, fragment$3, vertex$2, fragment$2, vertex$1, fragment$1, ShaderChunk, UniformsLib, ShaderLib, _rgb, _m1$12, _m$1, LOD_MIN, EXTRA_LOD_SIGMA, MAX_SAMPLES, GGX_SAMPLES, _flatCamera, _clearColor, _oldTarget, _oldActiveCubeFace, _oldActiveMipmapLevel, _oldXrEnabled, _origin, PMREMGenerator, WebGLCubeRenderTarget, toneMappingMap, emptyTexture, emptyShadowTexture, emptyArrayTexture, empty3dTexture, emptyCubeTexture, arrayCacheF32, arrayCacheI32, mat4array, mat3array, mat2array, SingleUniform, PureArrayUniform, StructuredUniform, RePathPart, WebGLUniforms, COMPLETION_STATUS_KHR, programIdCount, _m0, toneMappingFunctions, _v02, includePattern, shaderChunkMap, unrollLoopPattern, shadowMapTypeDefines, envMapTypeDefines, envMapModeDefines, envMapBlendingDefines, _id2, WebGLShaderCache, WebGLShaderStage, nextVersion, vertex, fragment, _cubeDirections, _cubeUps, _projScreenMatrix2, _lightPositionWorld2, _lookTarget2, _occlusion_vertex, _occlusion_fragment, WebXRDepthSensing, WebXRManager, _m12, _m, DATA, lut, WebGLRenderer;
 var init_three_module = __esm({
-  "../\u5168\u65B0\u7684\u6E38\u620F/node_modules/three/build/three.module.js"() {
+  "node_modules/three/build/three.module.js"() {
     init_three_core();
     init_three_core();
     alphahash_fragment = "#ifdef USE_ALPHAHASH\n	if ( diffuseColor.a < getAlphaHashThreshold( vPosition ) ) discard;\n#endif";
@@ -43912,6 +43912,14 @@ var limbAxes_default = {
     knee_r: [
       1037.5,
       2206
+    ],
+    foot_l: [
+      454.5,
+      2792
+    ],
+    foot_r: [
+      1110.5,
+      2792
     ]
   },
   margin: {
@@ -43946,11 +43954,22 @@ var limbAxes_default = {
       pawHeightPx: 103,
       slopeDeg: 0.82
     }
-  }
+  },
+  anchorsNote: "foot_l/foot_r = \u8E1D\u951A\u70B9\uFF1Ay \u53D6 paw.yWide\uFF08\u9774\u5B50\u9876\u7AEF\uFF0C\u5B9E\u6D4B 2792\uFF09\uFF0Cx \u53D6 paw.centerX\uFF08\u5B9E\u6D4B\u9774\u5FC3\uFF09\u30022026-10-01 \u52A0\u8E1D\u5173\u8282\u65F6\u52A0\u5165\u3002"
 };
 
 // src/core/partsMeta.ts
-var META = parts_default;
+var ANKLE_JOINTS = [
+  { name: "foot_l", parent: "shin_l", child: "foot_l", x: 454.5, y: 2792, limitDeg: [-10, 18] },
+  { name: "foot_r", parent: "shin_r", child: "foot_r", x: 1110.5, y: 2792, limitDeg: [-10, 18] }
+];
+var HIP_LIMIT = [-95, 100];
+var meta = parts_default;
+for (const j of meta.joints) {
+  if (j.name === "hip_l" || j.name === "hip_r") j.limitDeg = [HIP_LIMIT[0], HIP_LIMIT[1]];
+}
+if (!meta.joints.some((j) => j.name === "foot_l")) meta.joints.push(...ANKLE_JOINTS);
+var META = meta;
 var PART_BY_KEY = new Map(
   META.parts.map((p) => [p.key, p])
 );
@@ -44008,16 +44027,123 @@ var DEFAULT_CONFIG = {
   // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
   //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
   //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
+  // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
+  //
+  // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+  //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+  //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+  //
+  // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+  //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+  //   "Sway amplitude **decreased** as stance width increased, and **Ke
+  //   increased with stance width**"（sway ∝ Ke^−0.55）
+  //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+  //
+  // ★ 身高换算（本 rig 身高 **1.80 m**）：
+  //   · Perry step width 0.075 m = **4.2% 身高**
+  //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+  //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+  //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+  //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+  //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+  //   重心爬不进去。
+  //
+  // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+  //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+  //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+  //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+  //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+  //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+  //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
+  // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
+  //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
+  // ★★ 2026-10-05 用户决定：**回到 stance = 1.0**（原值）。
+  //   理由：0.35 的站距**观感不成立** —— 这是要放进游戏里的 boss 角色，
+  //   两脚几乎相切看起来不像人形。⇒ 站距是**角色设计参数**，
+  //   不是可以为了指标牺牲的自由量。
+  //   ⚠ 回退曾**静默失败**（编辑的字符串没匹配上，而脚本无条件打印 'ok'）。
+  //     `tools/probe-readback.ts` 就是为此写的：任何配置改动后必须回读实际数值。
+  //   代价（已知并接受）：`stance=1.00` 时重心进入支撑面需横移 **117mm**
+  //   （`stance=0.35` 只要 28mm），X3 驻留回到 0.00s。
+  //   ⇒ 重心转移必须从**别的方向**解决（伺服/迈步的平衡、相位时长对齐、
+  //     髋外展权限、脚宽），**不再靠缩站距**。
   stance: 1,
   limbRadiusScale: 0.6,
   // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
   // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
   // 惯量趋近于 0，正是 probe-motor 里那种"数值爆炸"的温床）。
   spineSegments: 4,
+  legStretch: 0.02,
+  /**
+   * ★ 踝（跖屈肌）力矩上限 N·m。**A 方案的核心参数。**
+   *   文献依据：人类跖屈肌 MVC ~120~140 N·m；
+   *   Neptune/Perry, Front Neurol 2019, 10:999 —— 跖屈肌是 CoM 推进的**主引擎**，
+   *   "the work produced by these muscles has been **four times more efficient** than
+   *    the work produced by the hip muscles to sustain the CoM increment during
+   *    the single-stance period"。
+   *   为什么必须抬：把 CoP 从脚底中心推到脚尖需要 ≈ 体重 × 足半长 ≈ 30×9.81×0.10 ≈ 29 N·m，
+   *   推到边缘 ≈ 35 N·m。原来的 45 N·m 名义上够，但实测只用到声明值的 18~28%
+   *   ⇒ 踝力矩对动力学**零效力**，CoP 移不动 ⇒ 承重转移无法发生。
+   *   留空/默认 = JOINT_MAX_TORQUE 的 45（探针按此档扫描）。
+   */
+  //   legStretch=0.02 由 probe-arch 扫描定值：终 CoM +0.048（其余档 −0.25~−0.66）、离地峰 103mm
   soleFootScale: 1,
+  // 裁剪线上移到踝锚点以上 123mm ⇒ 脚掌板高约 202mm（原 101mm 的两倍）
+  footCropUpMm: 0.123,
+  footCropOverlapMm: 0.01,
+  // 冗余：绝对 10mm 与"脚掌高度的 10%"取大者 ⇒ 脚加高时自动跟着长
+  footCropOverlapFrac: 0.1,
+  soleGroundCorr: 0,
+  soleSplit: true,
   // ★★ 脚掌外八 25°（用户定调："脚要向外侧倾斜，做成外八"，随后"再向外一点"）。
   //   脚掌盒的**横向位置**仍按膝锚点摆（膝到脚尖铅垂），外八只改脚尖的朝向。
-  footSplayDeg: 25
+  footSplayDeg: 25,
+  // 踝：低头 25°（蹬地/尖脚）… 勾脚 20°（脚跟先着地）。保守取值，避免刚体互穿。
+  anklePitchDeg: [0, 0],
+  ankleRollDeg: 0,
+  // ★★ 踝力矩上限（N·m）。原来 45 —— **解剖学上错了近 3 倍**。
+  //   文献：踝跖屈（比目鱼肌+腓肠肌）是人体最大的肌群，年轻人最大自主收缩
+  //   ~110~140 N·m（Noble & Norkowitz；Winter 1990 的踝策略力矩同量级）。
+  //   45 经 TORQUE_AXIS_FACTOR 后三轴只有 27/15.8/45 N·m ⇒
+  //     · 蹬离做不出来（实测 PUSH 相膝已 150/150 打满而踝只有 27）
+  //     · CoP 可偏移仅 τ/F_z = 27/687 = **39mm**，做不了额状面主通道
+  //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
+  //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
+  ankleTorque: 120,
+  /**
+   * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
+   *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
+   *   可扫，因为放开权限后实测**反而更差**（15 档刚度/阻尼组合全部驻留 0.00s，
+   *   而 τmax=120 时同一律能到驻留 0.42s / 最小 X3 = 2mm）⇒ 髋外展权限
+   *   **不是瓶颈**，多给会让它冲过目标。Inman 的 112 N·m 静态需求在 120 时
+   *   已占 93%，实测那个余量恰好够用。
+   */
+  hipAbdTorqueFactor: 0.6,
+  // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+  archLimitDeg: [-4, 16],
+  /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+  archAtFrac: 0.22,
+  // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
+  //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
+  ankleLimitDeg: [-12, 18],
+  // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
+  forefootAtFrac: 0.5,
+  // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
+  // ★ 中足（距下关节）旋前/旋后行程。
+  //   ⚠ 2026-10-04 实测：**12° 不够**。要让内侧缘**离地**（从而卸载内侧柱、
+  //   把载荷转到外侧柱），必须 `tanθ > 足厚/足宽 = 52/100` ⇒ **θ > 27.5°**；
+  //   12° 只能把内侧缘抬 5mm，对着 26mm 的半厚根本脱离不了接触。
+  //   实测佐证：刚度从 30 扫到 2000 N·m/rad，CoP_z 幅度恒为 18~19mm（全是单柱受力），
+  //   随刚度零变化 ⇒ 柔性**没参与**。
+  //   取 **±34°**（解剖学距下关节内翻 ~35°，见 `JOINT_LIMITS_XY_DEG` 踝条目注释）。
+  midfootPronDeg: 34,
+  footUvWarpDeg: 0,
+  // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
+  //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
+  //   DEFAULT_LAB.ankle = true）有踝，所有探针/默认配置都建成 12 关节无踝骨架。
+  //   ⚠ 踝提供的是**转向**（roll/pitch/twist 三轴）+ 足底 CoP 权限；
+  //     额状面平衡的主动力仍在髋（Winter 1995 [H]：并立站位 M/L 归髋不归踝）。
+  ankleEnabled: true
 };
 var SEGMENTS = [
   { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -44040,7 +44166,11 @@ var JOINT_ORDER = [
   "hip_l",
   "hip_r",
   "knee_l",
-  "knee_r"
+  "knee_r",
+  // ★ 踝（2026-10-01 新增）：脚掌是独立刚体，这两项是它的俯仰/内外翻。
+  //   放在最后 ⇒ 已有的 0~7 号马达索引不变（旧基因组的权重仍对得上前 8 个关节）。
+  "foot_l",
+  "foot_r"
 ];
 function anchorPx(name, jm) {
   const a = LIMB_AXES.anchors[name];
@@ -44052,10 +44182,29 @@ var JOINT_MAX_TORQUE = {
   shoulder_r: 100,
   elbow_l: 40,
   elbow_r: 40,
+  // ★ 额状面力矩预算（文献数字，记在这里备用；**暂时保持 200**，见下）：
+  //     Inman 1947：单腿站立理论最小髋外展力矩 = 体重 × 半髋间距
+  //                  = 687 N × 0.163 m = **112 N·m**
+  //     hip=200 × TORQUE_AXIS_FACTOR[0]=0.60 ⇒ 外展轴 **120 N·m** ⇒ 占用 **93%**
+  //     （文献实测：健康青年男 ~50%、健康老年女 ~82%）
+  //   2026-10-04 实测把 hip 提到 250（外展 150 N·m、占用 75%）与
+  //   SPINE_TAU 提到 180（侧屈 108 N·m，依据「腰椎侧屈半程 ⇒ 髋外展需求 −37%」）：
+  //     侧向权限没变好、单支撑仍然 0.00s，**存活反而从 2.37s 掉到 1.97s**。
+  //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
+  //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
+  //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: 200,
   hip_r: 200,
   knee_l: 150,
-  knee_r: 150
+  knee_r: 150,
+  // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
+  //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+  // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
+  //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
+  //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
+  //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
+  foot_l: 45,
+  foot_r: 45
 };
 var TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
 var JOINT_LIMITS_XY_DEG = {
@@ -44067,7 +44216,24 @@ var JOINT_LIMITS_XY_DEG = {
   hip_l: [45, 40],
   hip_r: [45, 40],
   knee_l: [6, 8],
-  knee_r: [6, 8]
+  knee_r: [6, 8],
+  // ★★ 踝：**额状面自由度按单腿站立文献放宽**（2026-10-02）。
+  //   X = 内翻/外翻（pronation/supination，绕足长轴）；Y = 轴向内外旋。
+  //   原值 `[8, 6]` 的注释写"踝的侧向自由度不是走路的主自由度" —— 这在**双脚站立**
+  //   成立，但**单腿站立恰恰相反**：
+  //     · Liu et al., J Biomech 2012 —— "Unlike double-limb stance during which small
+  //       body sway is found primarily in the sagittal plane, **single limb stance** showed
+  //       the inter-joint coordination mainly in the **transverse** and **frontal** plane
+  //       (ankle and hip internal/external rotations, **ankle inversion/eversion**)"
+  //     · 同文给出额状面力学链："the whole body center of mass moves away from the
+  //       supporting leg inducing a **lateral bending (hip abduction/adduction) moment
+  //       that is equilibrated at the ankle level by supination or pronation of the ankle**
+  //       that involves axial rotation"
+  //     · 人体踝的被动 ROM：内翻 ~35°、外翻 ~14°；站立期功能性使用更小，
+  //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
+  //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
+  foot_l: [14, 10],
+  foot_r: [14, 10]
 };
 var DEG = Math.PI / 180;
 function capsuleFromBox(w, h, radiusScale) {
@@ -44104,8 +44270,11 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     }
     return segKey(best);
   };
-  const soleHalfLen = META.sole.len * px2m / 2;
+  const soleLenTarget = 0.156 * cfg.height;
+  const soleHalfLen = soleLenTarget / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_WIDTH_TARGET = 0.1;
+  const SOLE_GROUND_CORR = 0;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
   const restTiltOf = (key, leg) => {
@@ -44116,11 +44285,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return Math.atan(ax.k * (leg ? cfg.stance : 1));
   };
   const restYawOf = (key) => {
-    if (key !== "shin_l" && key !== "shin_r") return 0;
+    if (key !== "shin_l" && key !== "shin_r" && key !== "foot_l" && key !== "foot_r") return 0;
     const s = cfg.footSplayDeg * DEG;
-    return key === "shin_l" ? -s : s;
+    return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
+  const ARCH_SPEC = [];
+  const ARCH_OUT = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -44148,6 +44319,22 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       centerY = mapY(midY);
       centerZ = mapZ(midX, !!spec.leg);
     }
+    let footAnkle = null;
+    if (cfg.ankleEnabled && spec.leg && (spec.soleMassPct ?? 0) > 0) {
+      const side2 = spec.key === "shin_l" ? "l" : "r";
+      const ak = LIMB_AXES.anchors?.[`foot_${side2}`];
+      const kn = LIMB_AXES.anchors?.[`knee_${side2}`];
+      if (ak && kn) {
+        footAnkle = [kn[0], ak[1]];
+        const shankLen = Math.abs(mapY(ak[1]) - mapY(kn[1]));
+        const newLen = shankLen + 2 * PIVOT_PAD;
+        const newHalfH = Math.max(1e-3, newLen / 2 - radius);
+        length = newLen;
+        halfHeight = newHalfH;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2 - cfg.legStretch;
+        centerZ = mapZ(kn[0], true);
+      }
+    }
     const plateOffset = rotVecByQuat(
       qVisInv,
       [0, mapY(part.cy) - centerY, mapZ(part.cx, !!spec.leg) - centerZ]
@@ -44173,16 +44360,256 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       inertiaZ: mainIz,
       inertiaXY: mainIz * 0.5
     });
+    let shinPlateUv;
     if (solePct > 0) {
       const soleMass = solePct / 100 * cfg.mass;
       const sfx = Math.max(0.1, cfg.soleFootScale);
       const side = spec.key === "shin_l" ? "l" : "r";
       const paw = LIMB_AXES.paw?.[side];
       const knee = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "knee_l" : "knee_r"];
-      const hx = soleHalfLen * sfx;
-      const hz = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const anklePx = LIMB_AXES.anchors?.[spec.key === "shin_l" ? "foot_l" : "foot_r"];
+      const hxRaw = soleHalfLen * sfx;
+      const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
+      const hx = hxRaw;
+      const hz = SOLE_WIDTH_TARGET / 2 * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
+      const soleMassTotal = mainMass + soleMass;
+      if (anklePx && cfg.ankleEnabled) {
+        const ankleY = mapY(anklePx[1]);
+        const ankleZ = mapZ(anklePx[0], true);
+        const fTilt = 0;
+        const fYaw = restYawOf(spec.key === "shin_l" ? "foot_l" : "foot_r");
+        const fQInv = invQuatOf(restQuatOf(fTilt, fYaw));
+        const plateH = part.bh * px2m;
+        const cutFrac = (() => {
+          const texTopPx = part.cy - part.bh / 2;
+          const cutPx = anklePx[1] - cfg.footCropUpMm / px2m;
+          return Math.min(0.95, Math.max(0.02, 1 - (cutPx - texTopPx) / part.bh));
+        })();
+        const slack = Math.min(
+          0.25,
+          Math.max(cfg.footCropOverlapMm / plateH, cfg.footCropOverlapFrac * cutFrac)
+        );
+        const footUv = { x: 0, y: 0, width: 1, height: Math.min(1, cutFrac + slack) };
+        const shinY = Math.max(0, cutFrac - slack);
+        shinPlateUv = { x: 0, y: shinY, width: 1, height: 1 - shinY };
+        const soleDrop = ankleY;
+        const fMidY = soleWorldY;
+        const yawDip = cfg.soleGroundCorr;
+        const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
+        const midX = cfg.soleFootScale * hx * (cfg.forefootAtFrac * 2 - 1);
+        const two = cfg.soleSplit;
+        const hxBall = two ? hx * 0.5 : hx;
+        const offBall = two ? hx * 0.5 : 0;
+        const hzCol = hz * 0.5;
+        const offColIn = +(hz * 0.5).toFixed(6);
+        const offColOut = -(hz * 0.5).toFixed(6);
+        bodies.push({
+          key: spec.key === "shin_l" ? "foot_l" : "foot_r",
+          bone: spec.bone,
+          label: spec.key === "shin_l" ? "\u5DE6\u811A\u638C" : "\u53F3\u811A\u638C",
+          part,
+          // 贴图仍借小腿那张（下面裁出靴子那块）
+          cx: 0,
+          cy: ankleY,
+          // ★ 对齐（用户 2026-10-04：「让脚部关节对称轴对着小腿的对称轴」）：
+          //   脚掌刚体的横坐标必须用**小腿的对称轴 `centerZ`**，而不是素材实测的
+          //   `ankleZ = mapZ(anklePx[0])` —— 后者带着"外八"的横向偏移（膝到踝不是铅垂），
+          //   于是踝关节落在小腿中线之外，脚看着是歪的。
+          //   偏航（外八）由 `restYawRad = restYawOf(...)` 单独表达，和位置无关。
+          cz: centerZ,
+          restTiltRad: fTilt,
+          restYawRad: fYaw,
+          // ★★★ 脚掌板：**从小腿贴图里裁出踝下方那块**（用户 2026-10-04：
+          //   「把小腿的脚裁剪出来附着在脚上」）。
+          //   裁剪边界用**实测的踝锚点**（`jointsMeta` 的 `foot_*`，画布 y=2792）
+          //   与 `META.sole.len/thick`（素材实测）算，都不是猜的。
+          // ⚠ 归一化按**整张贴图**（`META.parts[key].h`），THREE 的 uv 原点在左下，
+          //     而素材坐标原点在左上 ⇒ y 要翻转。
+          //
+          // ★ `plateOffset` 必须把脚掌刚体原点（= **踝**）换算到 viewer 裁剪公式
+          //   所假设的基准（= **原贴图中心**），否则脚掌板会被推到地面以下
+          //   （实测脚埋进地下）。画布 y 向下、世界 y 向上，故取负号：
+          //     plateOffset.y = mapY(part.cy) − mapY(anklePx[1])
+          //                 = (anklePx[1] − part.cy) × px2m
+          plateOffset: [0, (anklePx[1] - part.cy) * px2m, 0],
+          plateUv: footUv,
+          length: soleDrop,
+          radius: 0,
+          halfHeight: soleDrop / 2,
+          mass: soleMass,
+          // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
+          // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
+          //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
+          //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
+          //     半宽 hz=102mm，滚转 14° 使内侧缘抬9 hz·sin14°=25mm
+          //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
+          //   拆成两块后，载荷可在两者之间**连续**转移
+          //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          // ══════════════════════════════════════════════════════════════════
+          // ★★★ 足骨架按**真实人脚形状**重建（2026-10-04）
+          // ══════════════════════════════════════════════════════════════════
+          //   之前是 **281×100×52mm 的等厚平板**（外八 25°）。两个致命问题：
+          //     ① **内侧柱与外侧柱同时着地** ⇒ 载荷已在两柱上，接触求解器
+          //        **没有可迁移的压力**。实测髋外展力矩 −120N→+120N 期间
+          //        CoP_z 只动 **0.9mm**（内侧柱 175N : 外侧柱 12N = **14:1**）。
+          //     ② 要卸载内侧柱得把 52mm 厚的板翘起来 ⇒ `tanθ > 52/100`
+          //        ⇒ 需要 **>27.5°** 的中足行程，所需力矩超出前足质量能提供的量。
+          //        实测：中足行程给到 55°、刚度 2000 N·m/rad，CoP_z 幅度恒为
+          //        18~19mm 且随两者**零变化** ⇒ 柔性根本没参与。
+          //
+          //   **真实人脚不是平板** —— 关键在**内侧弓**：
+          //     · Jeon & Cho 压力垫综述：「第一接触点通常在踝关节中心**外侧**，
+          //       在**距下关节产生旋前力矩**，允许柔性活动」
+          //       「**内侧弓把重量传递到足的外侧缘**」
+          //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
+          //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
+          //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
+          //
+          //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
+          //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
+          //     弓区 22–57%   外侧柱 30mm 厚 10mm 接地 · 内侧弓 30mm **离地 22mm**
+          //     跖球 57–89%   宽 100mm（最宽）厚 20mm 全宽接地
+          //     趾   89–100%  宽 76mm   厚 12mm  接地
+          //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
+          // ══════════════════════════════════════════════════════════════════
+          colliders: (() => {
+            const archRise = 0.022;
+            const L = cfg.soleFootScale * hx;
+            const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
+            const soleBottom = local2[1] - soleHalfThick;
+            const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
+              const hy = hyMm / 1e3 * cfg.soleFootScale;
+              const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
+              const cxm = (fx0 + fx1) / 2 * L, czm = (fz0 + fz1) / 2 * HW;
+              const vol = 4 * hxm * hzm * hy;
+              return {
+                shape: "cuboid",
+                halfHeight: 0,
+                radius: 0,
+                hx: hxm,
+                hy,
+                hz: hzm,
+                offsetX: cxm,
+                offsetY: soleBottom + hy + rise,
+                offsetZ: czm,
+                mass: vol,
+                comY: 0,
+                inertiaZ: 0,
+                inertiaXY: 0,
+                _vol: vol,
+                _label: label
+              };
+            };
+            const blocks = [
+              blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
+              blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
+              blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
+              blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
+            ];
+            const archBlocks = [
+              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
+              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
+            ];
+            const archVol = archBlocks.reduce((a, b2) => a + b2._vol, 0);
+            const allVol = archVol + blocks.reduce((a, b2) => a + b2._vol, 0);
+            const archMass = soleMass * (archVol / allVol);
+            for (const b2 of archBlocks) {
+              b2.mass = archMass * (b2._vol / archVol);
+              b2.inertiaZ = b2.mass * (b2.hx * b2.hx + b2.hy * b2.hy) / 3;
+              b2.inertiaXY = b2.mass * (b2.hz * b2.hz + b2.hy * b2.hy) / 3;
+            }
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
+            ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
+            ARCH_OUT.archMass = archMass;
+            const footMass = soleMass - ARCH_OUT.archMass;
+            const volTot = blocks.reduce((a, b2) => a + b2._vol, 0);
+            for (const b2 of blocks) {
+              const m = footMass * (b2._vol / volTot);
+              b2.mass = m;
+              b2.inertiaZ = m * (b2.hx * b2.hx + b2.hy * b2.hy) / 3;
+              b2.inertiaXY = m * (b2.hz * b2.hz + b2.hy * b2.hy) / 3;
+            }
+            return blocks;
+          })(),
+          leg: true
+        });
+        {
+          const isL = spec.key === "shin_l";
+          const footKey = isL ? "foot_l" : "foot_r";
+          const archKey = isL ? "arch_l" : "arch_r";
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u5F13" : "\u53F3\u5185\u4FA7\u5F13",
+            part,
+            cx: 0,
+            cy,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            length,
+            radius,
+            halfHeight,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true
+          });
+          const ab = ARCH_OUT.archBlocks;
+          const mOff = (f2) => ab.reduce((a, c) => a + (c[f2] ?? 0), 0) / Math.max(1, ab.length);
+          ARCH_SPEC.push({
+            side: isL ? "l" : "r",
+            footKey,
+            archKey,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0 + mOff("offsetX"),
+            // 脚体 cx = 0
+            wy: cy + mOff("offsetY"),
+            // 与弓刚体同一个 cy
+            wz: centerZ + mOff("offsetZ"),
+            // 与弓刚体同一个 cz
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+          });
+        }
+        bodies.push({
+          key: spec.key,
+          bone: spec.bone,
+          label: spec.label,
+          part,
+          cx: 0,
+          cy,
+          cz: centerZ,
+          restTiltRad: tilt,
+          restYawRad: yaw,
+          plateOffset,
+          // ★ 去掉底部那块靴子（它归脚掌板）⇒ 画面上只有一只脚，
+          //   且两块拼回原图（uv 互补，见上面 footFrac 处的注释）。
+          plateUv: shinPlateUv,
+          length,
+          radius,
+          halfHeight,
+          mass: mainMass,
+          colliders: [colliders[0]],
+          leg: true
+        });
+        continue;
+      }
       const local = rotVecByQuat(qRestInv, [0, soleWorldY - centerY, soleWorldZ - centerZ]);
       colliders.push({
         shape: "cuboid",
@@ -44195,7 +44622,6 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         offsetZ: local[2],
         mass: soleMass,
         comY: 0,
-        // 脚掌自己的质心就在它中心；到刚体总质心的平行轴项由 Rapier 承担
         inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
         inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
       });
@@ -44268,11 +44694,18 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const byKey = new Map(bodies.map((b2) => [b2.key, b2]));
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  for (const b2 of bodies) {
+    if (!b2.colliders || b2.colliders.length === 0) continue;
+    b2.mass = b2.colliders.reduce((a, c) => a + (c.mass ?? 0), 0);
+  }
   const joints = [];
-  JOINT_ORDER.forEach((name, index) => {
+  const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
+  JOINT_ORDER_ACTIVE.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
-    const childPart = PART_BY_KEY.get(jm.child);
+    const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
+    const isHip = /^hip_[lr]$/.test(jm.name);
+    const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
     if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
     const [axPx, ayPx] = anchorPx(name, jm);
     const parent = byKey.get(attachTo(jm.parent, mapY(ayPx)));
@@ -44280,12 +44713,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
-    const wy = mapY(ayPx);
-    const wz = mapZ(axPx, stanceHere);
+    const wz = isAnkle ? parent.cz : mapZ(axPx, stanceHere);
+    const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
+    const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
-    const flexMin = jm.limitDeg[0] * DEG;
-    const flexMax = jm.limitDeg[1] * DEG;
-    const tau = JOINT_MAX_TORQUE[name] ?? 100;
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
+    const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
       [wx - parent.cx, wy - parent.cy, wz - parent.cz]
@@ -44311,9 +44745,62 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
-      maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
+      // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
+      revoluteAxis: isAnkle ? [0, 0, 1] : void 0,
+      // ★★ 髋**外展轴**用独立倍率（不动全局 `TORQUE_AXIS_FACTOR`，否则
+      //   颈/肩/肘的外展轴会跟着变粗 —— 那三个的次要轴是**刻意压小**的，
+      //   见 `JOINT_LIMITS_XY_DEG` 的注释）。
+      //
+      //   为什么撤掉"不超人"的余量（用户 2026-10-05 明确）：
+      //   「人体骨骼承重很大的，不要设承重上限」。
+      //   此前 hip=200 × 0.60 = **120 N·m**，而 Inman 1947 的静态需求
+      //   （体重 × 半髋间距 = 687 × 0.163 = 112 N·m）就占掉 93% ——
+      //   剩下 29% 余量不足以同时**托住**和**搬运**重心。
+      //   2026-10-04 曾试 hip=250（外展 150）而无效，当时的判定是
+      //   「矢状面没稳住，额度是假象」；现在额状机制（Winter 刚度伺服 +
+      //   锁定承诺 + 载荷依赖张力）已就位，值得重测。
+      //
+      //   口径：髋外展轴取**与屈伸轴同量级**（1.00 而非 0.60），
+      //   即 τmax(hip/0) = hip_l 的 τ = 200 N·m。
+      //   ⚠ 这是**工程余量**，不是解剖上限；真实股骨/髋臼能承受的远高于此。
+      maxTorque: [
+        tau * (isHip ? cfg.hipAbdTorqueFactor : TORQUE_AXIS_FACTOR[0]),
+        tau * TORQUE_AXIS_FACTOR[1],
+        tau * TORQUE_AXIS_FACTOR[2]
+      ]
     });
   });
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] \u5F13\u5173\u8282 ${as.archKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]
+    );
+    const tauArch = cfg.ankleTorque * 0.25;
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx,
+      wy: as.wy,
+      wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+  }
   if (K2 > 1) {
     const SPINE_XY_DEG = [15, 20];
     const SPINE_FLEX_DEG = [-25, 25];
@@ -44361,7 +44848,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
 }
 
 // src/render/viewer.ts
-function buildSkinBinding(sk2, segIdx2, sub = 6) {
+function buildSkinBinding(sk2, segIdx2, sub = 6, cols = 1) {
   const segs = [...segIdx2].sort(
     (a, b2) => sk2.bodies[a].texSlice.index - sk2.bodies[b2].texSlice.index
   );
@@ -44378,7 +44865,7 @@ function buildSkinBinding(sk2, segIdx2, sub = 6) {
   const cz = sk2.bodies[segs[0]].cz;
   const w = sk2.bodies[segs[0]].part.bw * sk2.px2m;
   const rows = Math.max(1, Math.round(K2 * sub));
-  const vCount = (rows + 1) * 2;
+  const vCount = (rows + 1) * (cols + 1);
   const vS0 = new Int32Array(vCount);
   const vS1 = new Int32Array(vCount);
   const vW1 = new Float32Array(vCount);
@@ -44386,10 +44873,10 @@ function buildSkinBinding(sk2, segIdx2, sub = 6) {
   const loc1 = new Float32Array(vCount * 3);
   const bindPos = new Float32Array(vCount * 3);
   for (let i = 0; i < vCount; i++) {
-    const iy = i / 2 | 0;
-    const ix = i % 2;
+    const iy = i / (cols + 1) | 0;
+    const ix = i % (cols + 1);
     const py2 = H / 2 - iy / rows * H;
-    const px2 = ix * w - w / 2;
+    const px2 = ix / cols * w - w / 2;
     const by = cyC + py2;
     const bz = cz - px2;
     let v = (py2 + H / 2) / H * K2 - 0.5;
@@ -44412,15 +44899,33 @@ function buildSkinBinding(sk2, segIdx2, sub = 6) {
     bindPos[i * 3 + 1] = by;
     bindPos[i * 3 + 2] = bz;
   }
-  return { segBody: segs, vCount, vS0, vS1, vW1, loc0, loc1, bindPos, w, H, cyC, cz, rows };
+  const segBindT = new Float64Array(segs.length * 3);
+  for (let s2 = 0; s2 < segs.length; s2++) {
+    const bd = sk2.bodies[segs[s2]];
+    segBindT[s2 * 3] = bd.cx;
+    segBindT[s2 * 3 + 1] = bd.cy;
+    segBindT[s2 * 3 + 2] = bd.cz;
+  }
+  return {
+    segBody: segs,
+    vCount,
+    vS0,
+    vS1,
+    vW1,
+    loc0,
+    loc1,
+    bindPos,
+    w,
+    H,
+    cyC,
+    cz,
+    rows,
+    cols,
+    segBindT
+  };
 }
 function bindSegPositions(sk2, b2, out) {
-  for (let s = 0; s < b2.segBody.length; s++) {
-    const body = sk2.bodies[b2.segBody[s]];
-    out[s * 3] = body.cx;
-    out[s * 3 + 1] = body.cy;
-    out[s * 3 + 2] = body.cz;
-  }
+  out.set(b2.segBindT);
 }
 function identitySegRotations(b2, out) {
   for (let s = 0; s < b2.segBody.length; s++) {
@@ -44477,7 +44982,24 @@ function groupPlates(sk2) {
     else plain.push(i);
   }
   skinned.sort((a, b2) => sk2.bodies[a].texSlice.index - sk2.bodies[b2].texSlice.index);
-  return { plain, skinned };
+  const feet = [];
+  const ji = (k) => sk2.joints.find((j) => j.childKey === k && j.name.startsWith("arch")) ?? null;
+  for (let i = 0; i < sk2.bodies.length; i++) {
+    const key = sk2.bodies[i].key;
+    if (key !== "foot_l" && key !== "foot_r") continue;
+    const joint = ji(key === "foot_l" ? "arch_l" : "arch_r");
+    const ai = sk2.bodies.findIndex((b2) => b2.key === (key === "foot_l" ? "arch_l" : "arch_r"));
+    if (!joint || ai < 0) continue;
+    let ax0 = Infinity, ax1 = -Infinity;
+    for (const c of sk2.bodies[ai].colliders) {
+      const ox = c.offsetX ?? 0;
+      ax0 = Math.min(ax0, ox - c.hx);
+      ax1 = Math.max(ax1, ox + c.hx);
+    }
+    plain.splice(plain.indexOf(i), 1);
+    feet.push({ foot: i, arch: ai, joint, ax0, ax1 });
+  }
+  return { plain, skinned, feet };
 }
 var EXPECTED_PLATES = META.parts.length;
 

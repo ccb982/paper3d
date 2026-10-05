@@ -38,7 +38,7 @@
 
 import * as THREE from 'three';
 import { META } from '../core/partsMeta';
-import { invQuatOf, restVisualQuatOf, type Skeleton } from '../core/skeleton';
+import { invQuatOf, restVisualQuatOf, type JointDef, type Skeleton, type Vec3 } from '../core/skeleton';
 import type { Ragdoll } from '../core/ragdoll';
 import type { Trainer } from '../core/evolution';
 
@@ -99,15 +99,40 @@ export interface SkinBinding {
   loc1: Float32Array;
   /** 绑定姿态下的世界位置 —— 蒙皮收敛性判据（单位旋转时输出必须等于它） */
   bindPos: Float32Array;
-  /** 板面几何（米）：宽 / 高 / 板心 y / 板心 z / 网格行数 */
+  /** 板面几何（米）：宽 / 高 / 板心 y / 板心 z / 网格行数 / 网格列数 */
   w: number;
   H: number;
   cyC: number;
   cz: number;
   rows: number;
+  /**
+   * ★ 网格列数（躯干固定 1 ⇒ `vCount=(rows+1)*2`，与原实现逐位一致）。
+   *   柔性足需要 >1：权重沿**足长**变化才能显示弓的旋前，而躯干是沿**高度**变化。
+   */
+  cols: number;
+  /**
+   * ★ 绑定姿态下各驱动段的**平移**（K×3）。
+   *   躯干 = 各段刚体中心；柔性足 = `[foot 中心, 弓的**关节锚点**]`。
+   *   为什么要单独存：`skinPositions` 算的是 `R·loc + T`，旋转绕的是 **T**。
+   *   弓若绕**刚体中心**转，近端会与脚掌脱开（实测锚点离中心 41mm）⇒
+   *   靴子侧面会出现一条缝。绕**锚点**转才能保证近端焊死在脚掌上。
+   */
+  segBindT: Float64Array;
+  /**
+   * ★ 柔性足专用：第 `anchorSeg + 1` 段的旋转原点**不在自己刚体中心**，
+   *   而在 `anchorSeg` 段刚体上的 `anchorLocal`（= 弓关节的 `parentLocal`）。
+   *   `syncSkin` 每帧据此改写那一段的 `segT`：
+   *       anchorWorld = segT[anchorSeg] + R[anchorSeg] · anchorLocal
+   *   躯干为 `undefined`（各段绕自己中心转）。
+   */
+  anchorSeg?: number;
+  anchorLocal?: Vec3;
 }
 
-export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6): SkinBinding {
+/** 脚掌贴图借小腿那张图、只画踝下方的靴子 —— uv 子区域 */
+export interface FootUVRect { x: number; y: number; width: number; height: number }
+
+export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6, cols = 1): SkinBinding {
   const segs = [...segIdx].sort(
     (a, b) => sk.bodies[a].texSlice!.index - sk.bodies[b].texSlice!.index,
   );
@@ -129,7 +154,7 @@ export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6): SkinB
   const w = sk.bodies[segs[0]].part.bw * sk.px2m;
 
   const rows = Math.max(1, Math.round(K * sub));
-  const vCount = (rows + 1) * 2;
+  const vCount = (rows + 1) * (cols + 1);
 
   const vS0 = new Int32Array(vCount);
   const vS1 = new Int32Array(vCount);
@@ -139,10 +164,10 @@ export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6): SkinB
   const bindPos = new Float32Array(vCount * 3);
 
   for (let i = 0; i < vCount; i++) {
-    const iy = (i / 2) | 0;
-    const ix = i % 2;
+    const iy = (i / (cols + 1)) | 0;
+    const ix = i % (cols + 1);
     const py = H / 2 - (iy / rows) * H;   // 板内高度（米），+ 朝上
-    const px = ix * w - w / 2;            // 板内横向（米），+ 朝画布右
+    const px = (ix / cols) * w - w / 2;   // 板内横向（米），+ 朝画布右
 
     const by = cyC + py;
     const bz = cz - px;
@@ -172,17 +197,125 @@ export function buildSkinBinding(sk: Skeleton, segIdx: number[], sub = 6): SkinB
     bindPos[i * 3 + 2] = bz;
   }
 
-  return { segBody: segs, vCount, vS0, vS1, vW1, loc0, loc1, bindPos, w, H, cyC, cz, rows };
+  const segBindT = new Float64Array(segs.length * 3);
+  for (let s2 = 0; s2 < segs.length; s2++) {
+    const bd = sk.bodies[segs[s2]];
+    segBindT[s2 * 3] = bd.cx; segBindT[s2 * 3 + 1] = bd.cy; segBindT[s2 * 3 + 2] = bd.cz;
+  }
+  return {
+    segBody: segs, vCount, vS0, vS1, vW1, loc0, loc1, bindPos,
+    w, H, cyC, cz, rows, cols, segBindT,
+  };
+}
+
+/**
+ * ★★ 柔性足顶点解算：脚掌板 = `foot_*` 与 `arch_*` 的**两骨 LBS**。
+ *
+ * 为什么要单独一套绑定（`柔性足设计.md` §4）：
+ *   弓的 collider 已从鞋底里**拿走**（`plateHidden` 的弓不画图），所以靴子那张
+ *   图只能由 `foot_*` 整张画 —— 但那样弓转 16° 时**网格一动不动**，
+ *   视觉上"弓在动、靴子是块硬板"。这里让弓区的顶点按权重跟着弓刚体走。
+ *
+ * 为什么权重沿**足长 x**、不是躯干那套沿**高度 y**：
+ *   弓的自由轴是 `[1,0,0]` = **足长轴**（`skeleton.ts` 的 arch 关节），
+ *   即旋前/旋后。脚掌板以**侧面**呈现、长边落在世界 X（`qFix` 绕 Y+90° 再
+ *   `qYaw90`），所以沿足长铺列才有非平凡的权重梯度；沿高度铺列的话
+ *   旋前在侧视图里几乎不可见。
+ *
+ * 权重曲线：弓区 `[ax0,ax1]` 内 smoothstep 0→1，两端各留 `fade` 的过渡带，
+ *   避免出现折角。`archAtFrac=0.22` ⇒ 弓近端在 x = `(2·0.22−1)·hx`。
+ */
+export function buildFootBinding(
+  sk: Skeleton, footIdx: number, archIdx: number, archJoint: JointDef,
+  ax0: number, ax1: number, cols = 24, rows = 4,
+): SkinBinding {
+  const foot = sk.bodies[footIdx];
+  const arch = sk.bodies[archIdx];
+  // 板面尺寸：与 viewer 里 `PlaneGeometry(w, h)` 的取法保持一致
+  const uv = foot.plateUv;
+  const w = foot.part.bw * sk.px2m;                                  // 板宽 = 足长方向
+  const h = foot.part.bh * sk.px2m * (uv ? uv.height : 1);          // 板高
+  const shift = uv
+    ? foot.part.bh * sk.px2m * (uv.y + uv.height / 2 - 0.5)
+    : 0;
+
+  // ★ 绑定姿态下的板心世界位置。静止时 `qRel = 单位阵`（viewer 的定调："纹理别动"），
+  //   所以板心 = 刚体中心 + plateOffset(+uv 裁剪位移)，**不乘**任何旋转。
+  const ox = foot.cx + foot.plateOffset[0];
+  const oy = foot.cy + foot.plateOffset[1] + shift;
+  const oz = foot.cz + foot.plateOffset[2];
+
+  const vCount = (rows + 1) * (cols + 1);
+  const vS0 = new Int32Array(vCount);
+  const vS1 = new Int32Array(vCount);
+  const vW1 = new Float32Array(vCount);
+  const loc0 = new Float32Array(vCount * 3);
+  const loc1 = new Float32Array(vCount * 3);
+  const bindPos = new Float32Array(vCount * 3);
+
+  // ★ 弓权重：弓区内 1，两端各一条**过渡带** smoothstep 回落。
+  //   ⚠ 过渡带宽度必须**跟着网格走**，不能写死比例：原来 `fade=0.06·span`
+  //   ≈ 4.9mm，而列间距 `w/cols` ≈ 10mm ⇒ 整条过渡带落在**一个列间隔内**，
+  //   权重退化成 0/1 硬阶跃（实测"相邻权重最大跳变 1.0000"），
+  //   接缝处网格会被撕开。这里取 **≥2.5 个列间隔**，保证至少有 3 列在渐变。
+  const colW = w / Math.max(1, cols);
+  const fade = Math.max((ax1 - ax0) * 0.25, colW * 2.5);
+  const wArch = (x: number): number => {
+    if (x <= ax0 - fade || x >= ax1 + fade) return 0;
+    if (x >= ax0 && x <= ax1) return 1;
+    const t = x < ax0 ? (x - (ax0 - fade)) / fade : ((ax1 + fade) - x) / fade;
+    const c = Math.min(1, Math.max(0, t));
+    return c * c * (3 - 2 * c);          // smoothstep
+  };
+
+  for (let i = 0; i < vCount; i++) {
+    const iy = (i / (cols + 1)) | 0;
+    const ix = i % (cols + 1);
+    const px = (ix / cols) * w - w / 2;      // 板内横向 → 足长方向
+    const py = h / 2 - (iy / rows) * h;     // 板内高度，+ 朝上
+
+    // ★ 板内 (px,py) → 世界 (0,py,−px)（qFix 绕 Y+90°）→ 再 qYaw90 → 足长落 X。
+    //   逐轴推符号（别照抄注释，`qYaw90` 是 `(key==='foot_l' ? 1 : -1)·90°`）：
+    //     R_y(+90°) = [[0,0,1],[0,1,0],[-1,0,0]] ⇒ (0,py,−px) 的 x' = +1·(−px) = −px
+    //     R_y(−90°) = [[0,0,−1],[0,1,0],[1,0,0]] ⇒ x' = −1·(−px) = +px
+    //   ⇒ foot_l 沿 −X、foot_r 沿 +X。
+    //   ⚠ 我第一版写成 `sgn * -px`（sgn 左 −1 右 +1）⇒ **两只脚都前后反了**
+    //     （用户：「脚纹理前后反了」）。`−px` 那一步已由 qFix 做完，
+    //     这里只需再乘 qYaw90 的符号。
+    const sgn = foot.key === 'foot_l' ? -1 : 1;
+    const bx = ox + sgn * px;
+    const by = oy + py;
+    const bz = oz + 0;
+
+    const g = wArch(px);
+    vS0[i] = 0; vS1[i] = 1; vW1[i] = g;
+    loc0[i * 3] = bx - foot.cx;
+    loc0[i * 3 + 1] = by - foot.cy;
+    loc0[i * 3 + 2] = bz - foot.cz;
+    loc1[i * 3] = bx - archJoint.wx;
+    loc1[i * 3 + 1] = by - archJoint.wy;
+    loc1[i * 3 + 2] = bz - archJoint.wz;
+    bindPos[i * 3] = bx; bindPos[i * 3 + 1] = by; bindPos[i * 3 + 2] = bz;
+  }
+
+  // 弓段的绑定平移 = **关节锚点**（不是刚体中心）⇒ 旋转绕锚点，近端焊死在脚掌上
+  const segBindT = new Float64Array([foot.cx, foot.cy, foot.cz,
+                                     archJoint.wx, archJoint.wy, archJoint.wz]);
+  return {
+    segBody: [footIdx, archIdx], vCount, vS0, vS1, vW1, loc0, loc1, bindPos,
+    w, H: h, cyC: oy, cz: oz, rows, cols, segBindT,
+    // ★ 弓段绕**弓关节锚点**转（锚点挂在 foot 刚体上）⇒ 近端随脚掌一起动，永不脱开
+    anchorSeg: 0,
+    anchorLocal: [archJoint.parentLocal[0], archJoint.parentLocal[1], archJoint.parentLocal[2]],
+  };
 }
 
 /** 绑定姿态下各段刚体的平移（= 板心 + 段偏移），可直接喂给 skinPositions 做恒等检查 */
 export function bindSegPositions(sk: Skeleton, b: SkinBinding, out: Float64Array): void {
-  for (let s = 0; s < b.segBody.length; s++) {
-    const body = sk.bodies[b.segBody[s]];
-    out[s * 3] = body.cx;
-    out[s * 3 + 1] = body.cy;
-    out[s * 3 + 2] = body.cz;
-  }
+  // ★ 直接用 binding 自带的 `segBindT`，不再重新查刚体中心 ——
+  //   躯干那里 `segBindT` 就是各段中心（行为不变），
+  //   柔性足那里弓段是**关节锚点**（绕锚点转才能让弓近端焊死在脚掌上）。
+  out.set(b.segBindT);
 }
 
 /** 单位旋转矩阵（行主序 3×3）逐段铺开 —— 与 bindSegPositions 配对做收敛性检查 */
@@ -263,7 +396,21 @@ interface SkinGroup {
  *          skinned 组成**那一个**蒙皮组的刚体下标（从骨盆到胸腔）。
  *                  空数组 = 躯干未分段（spineSegments = 1）⇒ 躯干也走 plain。
  */
-export function groupPlates(sk: Skeleton): { plain: number[]; skinned: number[] } {
+export interface FootPair {
+  /** `foot_l/foot_r`：靴子那张图由它整张画 */
+  foot: number;
+  /** `arch_l/arch_r`：`plateHidden`，不画图，但驱动弓区顶点 */
+  arch: number;
+  /** 弓的**关节定义**（蒙皮要绕它的锚点转，近端才能焊死在脚掌上） */
+  joint: JointDef;
+  /** 弓区的足长范围（从 arch collider 实际偏移求，不是配置比例反推） */
+  ax0: number;
+  ax1: number;
+}
+
+export function groupPlates(sk: Skeleton): {
+  plain: number[]; skinned: number[]; feet: FootPair[];
+} {
   const plain: number[] = [];
   const skinned: number[] = [];
   for (let i = 0; i < sk.bodies.length; i++) {
@@ -272,7 +419,30 @@ export function groupPlates(sk: Skeleton): { plain: number[]; skinned: number[] 
   }
   // 按切片下标排序，保证"从骨盆到胸腔"的顺序与蒙皮绑定一致
   skinned.sort((a, b) => sk.bodies[a].texSlice!.index - sk.bodies[b].texSlice!.index);
-  return { plain, skinned };
+
+  // ★★ 柔性足：脚掌从 `plain` 里拿出来，单独做**两骨蒙皮组**。
+  //   弓刚体 `plateHidden` ⇒ 不进 `plain`（否则会画出第二只靴子）。
+  //   脚掌必须走蒙皮，否则弓转 16° 时靴子网格纹丝不动 ⇒ 视觉上"弓在动、靴子是硬板"。
+  const feet: FootPair[] = [];
+  const ji = (k: string): JointDef | null =>
+    sk.joints.find((j) => j.childKey === k && j.name.startsWith('arch')) ?? null;
+  for (let i = 0; i < sk.bodies.length; i++) {
+    const key = sk.bodies[i].key;
+    if (key !== 'foot_l' && key !== 'foot_r') continue;
+    const joint = ji(key === 'foot_l' ? 'arch_l' : 'arch_r');
+    const ai = sk.bodies.findIndex((b) => b.key === (key === 'foot_l' ? 'arch_l' : 'arch_r'));
+    if (!joint || ai < 0) continue;                 // 没弓 = 退回刚性脚掌
+    // 弓区足长范围：arch collider 的 offsetX ± hx
+    let ax0 = Infinity, ax1 = -Infinity;
+    for (const c of sk.bodies[ai].colliders) {
+      const ox = c.offsetX ?? 0;
+      ax0 = Math.min(ax0, ox - c.hx);
+      ax1 = Math.max(ax1, ox + c.hx);
+    }
+    plain.splice(plain.indexOf(i), 1);
+    feet.push({ foot: i, arch: ai, joint, ax0, ax1 });
+  }
+  return { plain, skinned, feet };
 }
 
 /** 一块护甲板的渲染槽位 —— ★ 槽位数 = 组件数，不是刚体数 */
@@ -304,6 +474,15 @@ interface PlateSlot {
 export class Viewer {
   /** 每段脊柱刚体上再细分几行 —— 越大弯折越圆滑。顶点数 = 2·(K·SUB+1)，可忽略 */
   private static readonly SKIN_SUB = 6;
+  /**
+   * ★ 柔性足顶点解算的网格密度。
+   *   足长方向 24 列：弓区（`ax0..ax1`，实测 81mm）在板上占约 1/3，
+   *   24 列 ⇒ 弓区内 ~8 列、再加两端各 2.5 列过渡带 ⇒ smoothstep 有足够列渐变
+   *   （离屏验收 `probe-footskin` 的 [V] 判据：最大缩短比 > 0.9）。
+   *   高度方向 4 行够用 —— 弓绕**足长轴**转，侧视图上的弯曲主要体现在高度方向。
+   */
+  private static readonly FOOT_COLS = 24;
+  private static readonly FOOT_ROWS = 4;
 
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
@@ -453,6 +632,26 @@ export class Viewer {
       this.scene.add(mesh);
     }
 
+    // ★★ 柔性足：脚掌 = `foot_*` 与 `arch_*` 的两骨蒙皮组。
+    //   ⚠ 这两组**必须在这里建 mesh** —— `groupPlates` 已把脚掌从 `plain` 里拿走
+    //     （否则弓会再画一只靴子 = 用户 2026-10-04 报的「纹理变成两个脚」），
+    //     所以脚掌不再走下面的刚性 plain 分支；忘了建 ⇒ **脚纹理整块消失**。
+    for (const fp of groups.feet) {
+      const fd = sk.bodies[fp.foot];
+      const ftex = loadTex(fd.part.file);
+      const fb = buildFootBinding(sk, fp.foot, fp.arch, fp.joint, fp.ax0, fp.ax1,
+                                  Viewer.FOOT_COLS, Viewer.FOOT_ROWS);
+      const g = this.skinGroupFromBinding(sk, fb, ftex, fd.plateUv ?? null);
+      this.plates.push({
+        mesh: g.mesh, drivers: g.b.segBody, skin: g, sortPos: g.sortPos,
+        // 蒙皮网格每帧写世界坐标 ⇒ 朝向已烘进顶点，这里必须是单位四元数，
+        // 否则会再转一次（躯干那组同理）。
+        qYaw90: new THREE.Quaternion(),
+        qRestInv: new THREE.Quaternion(),
+      });
+      this.scene.add(g.mesh);
+    }
+
     if (groups.skinned.length > 0) {
       const tex = loadTex(sk.bodies[groups.skinned[0]].part.file);
       const g = this.buildSkinGroup(sk, groups.skinned, tex);
@@ -560,7 +759,32 @@ export class Viewer {
    */
   private buildSkinGroup(sk: Skeleton, segIdx: number[], tex: THREE.Texture): SkinGroup {
     const b = buildSkinBinding(sk, segIdx, Viewer.SKIN_SUB);
-    const geo = new THREE.PlaneGeometry(b.w, b.H, 1, b.rows);
+    return this.skinGroupFromBinding(sk, b, tex, null);
+  }
+
+  /**
+   * ★ 从一个已建好的 `SkinBinding` 组装蒙皮 mesh。躯干与柔性足共用 ——
+   *   差别只在**绑定怎么建**和**UV 取哪块子区域**。
+   * @param uvRect `plateUv`：把 [0,1]² 的 uv 烘进贴图的子区域。
+   *   脚掌借的是小腿那张图、只画踝下方那块靴子（用户 2026-10-04「纹理变成两个脚」）。
+   *   ⚠ 蒙皮网格**不**用 `tex.repeat/offset`：那两条路径给的是同一张图的不同区域，
+   *     而蒙皮网格的 uv 已被顶点重排覆盖，直接烘进属性少一次纹理状态切换，
+   *     也和刚性脚掌那条路径（plain 分支用 repeat/offset）保持同一口径。
+   */
+  private skinGroupFromBinding(
+    sk: Skeleton, b: SkinBinding, tex: THREE.Texture, uvRect: FootUVRect | null,
+  ): SkinGroup {
+    // ★ 列数必须用 `b.cols`：躯干是 1（`(rows+1)*2` 顶点），
+    //   柔性足是 24（`(rows+1)*25`）。写死 1 会让脚掌顶点数与 binding 对不上。
+    const geo = new THREE.PlaneGeometry(b.w, b.H, b.cols, b.rows);
+    if (uvRect) {
+      const uvA = geo.getAttribute('uv') as THREE.BufferAttribute;
+      for (let i = 0; i < uvA.count; i++) {
+        uvA.setXY(i, uvRect.x + uvA.getX(i) * uvRect.width,
+                     uvRect.y + uvA.getY(i) * uvRect.height);
+      }
+      uvA.needsUpdate = true;
+    }
     if (geo.getAttribute('position').count !== b.vCount) {
       throw new Error(`[viewer] 蒙皮顶点数对不上：geo ${geo.getAttribute('position').count} ≠ binding ${b.vCount}`);
     }
@@ -606,6 +830,17 @@ export class Viewer {
       segR[rp] = 1 - (yy + zz); segR[rp + 1] = xy - wz;       segR[rp + 2] = xz + wy;
       segR[rp + 3] = xy + wz;   segR[rp + 4] = 1 - (xx + zz); segR[rp + 5] = yz - wx;
       segR[rp + 6] = xz - wy;   segR[rp + 7] = yz + wx;       segR[rp + 8] = 1 - (xx + yy);
+    }
+
+    // ★ 柔性足：弓段的旋转原点改成**弓关节锚点**（挂在 foot 段上），不是弓刚体中心。
+    //   不改的话靴子侧面在弓近端会裂开一道缝（锚点离弓中心实测 41mm）。
+    const aSeg = g.b.anchorSeg;
+    if (aSeg !== undefined && g.b.anchorLocal) {
+      const L = g.b.anchorLocal;
+      const rp = aSeg * 9, tp = aSeg * 3, dp = (aSeg + 1) * 3;
+      segT[dp] = segR[rp] * L[0] + segR[rp + 1] * L[1] + segR[rp + 2] * L[2] + segT[tp];
+      segT[dp + 1] = segR[rp + 3] * L[0] + segR[rp + 4] * L[1] + segR[rp + 5] * L[2] + segT[tp + 1];
+      segT[dp + 2] = segR[rp + 6] * L[0] + segR[rp + 7] * L[1] + segR[rp + 8] * L[2] + segT[tp + 2];
     }
 
     skinPositions(g.b, segT, segR, g.pos);

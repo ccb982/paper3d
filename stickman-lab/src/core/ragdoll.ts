@@ -39,7 +39,7 @@
 //   是数值发散的温床。代价是左右腿可以互穿 —— 对"纸片人偶"这个视觉风格反而是好事。
 
 import RAPIER from '@dimforge/rapier3d';
-import { JOINT_MAX_SPEED, jointIndexByName, restQuatOf, type BodyDef, type JointDef, type Skeleton } from './skeleton';
+import { JOINT_MAX_SPEED, jointIndexByName, restQuatOf, type BodyDef, type JointDef, type Skeleton, type Vec3 } from './skeleton';
 
 // ---------------------------------------------------------------- 碰撞分组
 // groups = (membership << 16) | filter，双方都要放行才算碰撞。
@@ -325,8 +325,13 @@ export const DEFAULTS: Required<RagdollOptions> = {
   //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
   //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
   //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-  archStiffness: 100,
-  archDamping: 15,
+  // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
+  //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
+  //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
+  //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
+  //   免得读代码的人以为"弓该是 100 那么硬"。
+  archStiffness: 6,
+  archDamping: 0.025,
   /**
    * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
    *
@@ -572,6 +577,11 @@ export class Ragdoll {
   readonly torsoKey: string;
   /** 关节 i → [父刚体下标, 子刚体下标] */
   readonly jointBodies: Int32Array;
+  /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
+  private physicsDt = 0;
+  /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
+  archGainClamp: { kNm: number; bNm: number; kMax: number; bMax: number;
+                    requested: { kNm: number; bNm: number } } | null = null;
   /**
    * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
    * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -838,6 +848,38 @@ export class Ragdoll {
       const ip = bodyI[this.jointBodies[i * 2]];
       const ic = bodyI[this.jointBodies[i * 2 + 1]];
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+    }
+
+    // ★★ 弓（`arch_*`）的 K/B 按**显式积分数值稳定上限**夹紧。
+    //   必须放在这里（`jointBodies` 建好之后）—— 增益是在 joints 声明前算的，
+    //   那时 `jointAxisInertia` 读不到子刚体。
+    //   自研马达每步显式加冲量 ⇒ 等价于对 θ 显式积分：
+    //     刚度项 ω=√(K/I) 稳定需 ω·dt<2 ⇒ K < 4I/dt²
+    //     阻尼项 |1−B·dt/I|≤1   ⇒ B ≤ 2I/dt
+    //   弓绕**长轴**转、惯量极小（实测沿自由轴 I≈7e-5 kg·m²）、dt=1/120 s
+    //   ⇒ 上限 **K<7.3 N·m/rad、B<0.031 N·m·s/rad**；
+    //   原默认 100/15 是 **14× / 500× 超限** ⇒ 站立不承重时看不出来，
+    //   一压上就高频抖（用户实测「脚一直在抖」）。
+    //   ⚠ 上限必须用**绕自由轴**的惯量（薄弓体 = `min` 主惯量），
+    //     **不能**用 `this.jointIeff`（过冲护栏用的、故意取 `max`，会高估两个数量级）。
+    this.archGainClamp = null;
+    const dt0 = this.physicsDt || 1 / 120;
+    for (let i = 0; i < sk.joints.length; i++) {
+      const j = sk.joints[i]!;
+      if (!j.name.startsWith('arch_') || !j.revoluteAxis) continue;
+      const g = this.opt.jointGain?.[j.name];
+      if (!g) continue;
+      const Iax = this.jointAxisInertia(i, j.revoluteAxis);
+      const kMax = (4 * Iax) / (dt0 * dt0);
+      const bMax = (2 * Iax) / dt0;
+      const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
+      const tmax = Math.max(1e-6, j.maxTorque[ax]!);
+      const kNm = Math.min((g.kP * tmax) / JOINT_MAX_SPEED, kMax);
+      const bNm = Math.min((g.kD * tmax) / JOINT_MAX_SPEED, bMax);
+      this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
+        kNm: (g.kP * tmax) / JOINT_MAX_SPEED, bNm: (g.kD * tmax) / JOINT_MAX_SPEED } };
+      g.kP = (kNm * JOINT_MAX_SPEED) / tmax;
+      g.kD = (bNm * JOINT_MAX_SPEED) / tmax;
     }
     // ★ 权限诊断：护栏放行了-demanded 的百分之多少（0~1）。<1 就是被护栏卡住。
     //   这个量必须可回读 —— 否则"马达没力"和"指令太小"看起来一模一样。
@@ -1918,6 +1960,25 @@ soleBlockLabels(side: 0 | 1): string[] {
   }
 
   /** 兼容标量读数：关节 i 的屈伸角（绕本地 Z 的分量，弧度） */
+  /**
+   * ★ 关节绕**指定自由轴**的转动惯量（kg·m²）—— 数值稳定性上限要用它。
+   *
+   * ⚠⚠ **不要**用 `this.jointIeff` 代替：那个是**过冲护栏**用的，取的是
+   *   **最大**主惯量（故意宽松，理由见构造函数里那段"同一个坑修过两次"）。
+   *   而显式积分的稳定性取决于**绕该轴真实转动惯量**，对薄弓体绕长轴旋转
+   *   来说那是**最小**主惯量（≈1e-4，比 max 小两个数量级）。
+   *   用 max 去算上限 ⇒ 会把 K/B 的合法上限高估两个数量级 ⇒ 弓必然高频抖动。
+   *
+   * @param axis 主轴单位向量（柔性足就是 `[1,0,0]`）
+   */
+  jointAxisInertia(i: number, axis: Vec3): number {
+    // 弓的自由轴是**主轴**之一（[1,0,0]），所以沿该轴的惯量就是对应的主惯量；
+    // 写成加权通式是为了将来自由轴不是主轴时也不至于静默算错。
+    const ic = this.bodies[this.jointBodies[i * 2 + 1]]!.principalInertia();
+    const [ax, ay, az] = axis;
+    return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
+  }
+
   jointAngle(i: number): number {
     const buf = this.rvTmp;
     this.jointRot(i, buf);
@@ -2216,6 +2277,7 @@ soleBlockLabels(side: 0 | 1): string[] {
    *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
    */
   driveMotors(dt: number): void {
+    this.physicsDt = dt;
     const scale = this.opt.torqueScale;
     this.lastDt = dt;   // 供 enforceLimits 的角度投影用
     // ★ 瘫软（死亡演出）：位置环增益置 0 ⇒ 马达不再把四肢拉回姿态，
