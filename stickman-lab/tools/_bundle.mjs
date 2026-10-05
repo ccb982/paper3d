@@ -21,7 +21,11 @@ import { mkdirSync, existsSync } from 'node:fs';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, '..');
 
-export async function buildAndRun(entryTs) {
+/**
+ * @param entryTs 入口 TS
+ * @param argList 透传给探针的命令行参数（见 run.mjs 的说明）
+ */
+export async function buildAndRun(entryTs, argList = []) {
   const outDir = join(root, '.tmp');
   mkdirSync(outDir, { recursive: true });
   const outfile = join(outDir, basename(entryTs).replace(/\.ts$/, '.bundle.mjs'));
@@ -65,5 +69,9 @@ export async function buildAndRun(entryTs) {
   });
 
   if (!existsSync(outfile)) throw new Error(`[run] 打包产物缺失: ${outfile}`);
+  // ★ 写成一个模块可读的全局，探针里用 `PROBE_ARGS()` 取。
+  //   不能用 process.env / process.argv：打包产物是独立文件、用 import() 加载，
+  //   它看到的只有【打包器】参数（实测三次都拿不到）。
+  globalThis.__PROBE_ARGS = argList;
   await import(pathToFileURL(outfile).href);
 }

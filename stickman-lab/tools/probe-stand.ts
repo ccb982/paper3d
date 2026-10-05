@@ -37,10 +37,15 @@ const { shapeForJoints } = await import('../src/core/brain');
 const { randomGenome, makeRng, makeGaussian } = await import('../src/core/genome');
 const { newCom, readCom, readSupport, omegaAt, dcm } = await import('../src/core/posture');
 
-const sk = buildSkeleton(DEFAULT_CONFIG);
+// ★ 消融对照：灵性足开 / 关。用环境变量选择，不改探针源码。
+// ⚠ 不能用 process.env：打包后不透传（已实测，CTL/ARCH 都是占位的）。
+//   而且每个工具进程隔离，环境变量传不过去。改用模块内常量。
+const ARCH_ON = !((globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? []).includes('noarch');
+const sk = buildSkeleton({ ...DEFAULT_CONFIG, flexibleArch: ARCH_ON });
+console.log(`══ 灵性足 flexibleArch = ${ARCH_ON} ══`);
 const SHAPE = shapeForJoints(sk.joints.length);
 // ★ 与其它探针一致：参数从 argv[3] 起（argv[2] 是探针名）
-const DUR = Number(process.argv[3] ?? 30) || 30;
+const DUR = Number(((globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [])[0] ?? 30) || 30;
 const DT = 1 / 120;
 const log = console.log;
 

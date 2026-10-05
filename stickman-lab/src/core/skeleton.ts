@@ -368,6 +368,12 @@ export interface SkeletonConfig {
    *   等重调 kP/kD 或把踝做成刚性锁，再打开。
    */
   ankleEnabled: boolean;
+  /**
+   * ★ 总开关：是否拆出**弓刚体 + 内侧前足刚体**（灵性足 F2）。
+   *   关掉 = 回退到单刚体脚掉。
+   *   用途：消融实验。灵性足对站立 / 重心调整 / 弹性的影响只能靠它对照定。
+   */
+  flexibleArch?: boolean;
 }
 
 export const DEFAULT_CONFIG: SkeletonConfig = {
@@ -1501,6 +1507,9 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             const mfootBlocks: Blk[] = [
               blk(0.145, 0.785, 0.00, 1.00, 20, 0, '跖骨头·内侧'),
             ];
+            // ⚠ 消融对照：`flexibleArch=false` 时必须把这块归回脚体，
+            //   否则关掉灵性足时总质量会少 0.70kg（实测 69.30，应为 70.00）。
+            if (cfg.flexibleArch === false) blocks.push(mfootBlocks[0]!);
             // ★★★ 弓刚体的两块（**已从 foot_* 上拆走**）：它们是唯一需要
             //   **相对足体运动**的部分 —— 旋前时向下踩实、承重后回弹。
             //   留在 foot_* 上就永远离地（见上面被更正的错误注释）。
@@ -1512,11 +1521,16 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             ];
             // 弓的质量占比（按体积，鞋底总质量 soleMass 为单位）
             // ★ 三个“拆走的”部件（弓 / 内侧前足）按体积从 soleMass 里拆。
+            // ⚠ 开关关掉时，弓的两块也必须归回脚体。
+            //   否则它们的质量从鞋底里拆走了、又没归给任何刚体 ⇒ 丢掉它们的质量。
+            if (cfg.flexibleArch === false) blocks.push(...archBlocks);
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
             const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
-            const archMass = soleMass * (archVol / allVol);
-            const mfootMass = soleMass * (mfootVol / allVol);
+            const archVolAll = cfg.flexibleArch === false ? 0 : archVol;
+            const mfootVolAll = cfg.flexibleArch === false ? 0 : mfootVol;
+            const allVol = archVolAll + mfootVolAll + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVolAll / allVol);
+            const mfootMass = soleMass * (mfootVolAll / allVol);
             for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]] as const) {
               const gv = grp.reduce((a, b) => a + b._vol, 0);
               for (const b of grp) {
@@ -1587,7 +1601,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //     弓转动时靴子网格由**顶点解算**跟着弓走（见 `柔性足设计.md` §4）。
         //   · 关节 `arch_*` 在**第二段**建（`joints` 声明之后）——
         //     因为 `joints` 的数组在 bodies 循环**之后**才声明。
-        {
+        // ══ 下面这个块（弓 + 内侧前足）整体受 `flexibleArch` 开关控制。
+        //   关掉 = 回退到“单刚体脚掉”（弓与内侧前足的 collider 都归回脚体、质量归回。
+        //   用途 = **消融实验**。主动关掉时输出必须自洽（无 `undefined`、无漏刚体）。
+        if (cfg.flexibleArch !== false) {
           const isL = spec.key === 'shin_l';
           const footKey = isL ? 'foot_l' : 'foot_r';
           const archKey = isL ? 'arch_l' : 'arch_r';

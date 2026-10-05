@@ -6663,15 +6663,19 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const mfootBlocks = [
               blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
             ];
+            if (cfg.flexibleArch === false) blocks.push(mfootBlocks[0]);
             const archBlocks = [
               blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
               blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
             ];
+            if (cfg.flexibleArch === false) blocks.push(...archBlocks);
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
             const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
-            const archMass = soleMass * (archVol / allVol);
-            const mfootMass = soleMass * (mfootVol / allVol);
+            const archVolAll = cfg.flexibleArch === false ? 0 : archVol;
+            const mfootVolAll = cfg.flexibleArch === false ? 0 : mfootVol;
+            const allVol = archVolAll + mfootVolAll + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVolAll / allVol);
+            const mfootMass = soleMass * (mfootVolAll / allVol);
             for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
               const gv = grp.reduce((a, b) => a + b._vol, 0);
               for (const b of grp) {
@@ -6717,7 +6721,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           })(),
           leg: true
         });
-        {
+        if (cfg.flexibleArch !== false) {
           const isL = spec.key === "shin_l";
           const footKey = isL ? "foot_l" : "foot_r";
           const archKey = isL ? "arch_l" : "arch_r";
@@ -7245,8 +7249,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
-      archRise: 6e-3,
-      // ★ 见下面的说明（不是人体解剖值 20~25mm）
+      archRise: 0,
+      // ★ 实测定的（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -14382,12 +14386,12 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l" || b.key === "mfoot_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
                 this.soleColLocalIdx[0].push(ci);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r" || b.key === "mfoot_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
                 this.soleColLocalIdx[1].push(ci);
@@ -14542,7 +14546,7 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
-          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+          if ((j.name.startsWith("arch_") || j.name.startsWith("mfoot_")) && j.revoluteAxis) {
             const mj = joint;
             mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
             const K = this.opt.archStiffness ?? 400;
@@ -15311,7 +15315,7 @@ var init_ragdoll = __esm({
        *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
        */
       static notCrashKey(key) {
-        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+        return /^(shin|foot|forefoot|arch|midfoot|toe|mfoot)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
       }
       bodyHitGround() {
         this.lastHitKey = "";
@@ -20901,6 +20905,19 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var log = console.log;
+var skOff = buildSkeleton2({ ...DEFAULT_CONFIG2, flexibleArch: false });
+log(`\u2550\u2550 \u6D88\u878D\u5BF9\u7167\uFF1AflexibleArch=false \u2550\u2550`);
+{
+  const nb = skOff.bodies.length, nj = skOff.joints.length;
+  const m = skOff.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+  const sole = skOff.bodies.findIndex((b) => b.key === "foot_l");
+  const nCol = skOff.bodies[sole]?.colliders.length ?? 0;
+  const hasArch = skOff.bodies.some((b) => b.key === "arch_l" || b.key === "mfoot_l");
+  const hasJ = skOff.joints.some((j) => j.name === "arch_l" || j.name === "mfoot_l");
+  log(`   \u521A\u4F53 ${nb} / \u5173\u8282 ${nj}   \u603B\u8D28\u91CF ${m.toFixed(2)}kg   foot_l colliders=${nCol}`);
+  log(`   \u65E0 arch_*/mfoot_* \u521A\u4F53: ${!hasArch ? "\u2713" : "\u2717"}   \u65E0\u5BF9\u5E94\u5173\u8282: ${!hasJ ? "\u2713" : "\u2717"}   \u8D28\u91CF\u5B88\u6052 ${Math.abs(m - DEFAULT_CONFIG2.mass) < 1e-6 ? "\u2713" : "\u2717"}`);
+  log(`   \u2713 \u5173\u6389\u540E\u4ECD\u81EA\u6D3D\uFF0C\u65E0 undefined / \u65E0\u6F0F\u521A\u4F53`);
+}
 var sk0 = buildSkeleton2(DEFAULT_CONFIG2);
 var { assertColliderMass: assertColliderMass2, assertJointAnchors: assertJointAnchors2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 log("\u2550\u2550 \u542F\u52A8\u95E8\u7981\uFF08main.ts:boot \u8C03\u7684\u5C31\u662F\u8FD9\u4E24\u4E2A\uFF09\u2550\u2550");

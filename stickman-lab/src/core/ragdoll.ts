@@ -83,6 +83,9 @@ const ZERO = { x: 0, y: 0, z: 0 };
  */
 const MOTOR_ALPHA = 1.0;
 
+/** 调试用：`mfoot_*` 回到自研 PD（定位“换引擎电机”是否导致站立退化） */
+const LEGACY_MFOOT_PD = (globalThis as { __LEGACY_MFOOT_PD?: boolean }).__LEGACY_MFOOT_PD === true;
+
 /** 越界回程时用的 α。★ 它必须 ≥ MOTOR_ALPHA，否则"保命回程"反而比正常控制更软 */
 const MOTOR_ALPHA_RECOVER = 1.0;
 
@@ -1105,7 +1108,7 @@ export class Ragdoll {
       //   ⚠ 旧注释说“Rapier 的 stiffness 根本不是 N·m/rad” —— 那是因为用了**默认的
       //     AccelerationBased**模式（把刚度当加速度，隐式除了质量）。
       //     切到 `ForceBased` 后量纲就对了。
-      if (j.name.startsWith('arch_') && j.revoluteAxis) {
+      if ((j.name.startsWith('arch_') || (j.name.startsWith('mfoot_') && !LEGACY_MFOOT_PD)) && j.revoluteAxis) {
         const mj = joint as unknown as {
           configureMotorModel(m: number): void;
           configureMotorPosition(t: number, k: number, b: number): void;
@@ -1114,6 +1117,8 @@ export class Ragdoll {
         const K = this.opt.archStiffness ?? 400;      // N·m/rad
         const B = this.opt.archDamping ?? 2.0;        // N·m·s/rad
         mj.configureMotorPosition(0, K, B);
+        // ★ `mfoot_*`（内侧前足）也用同一刚度：链上两个关节都是内侧柱的承力环节，
+        //   用两种驱动方式会让链路一半可控一半不可控。
         this.motorDriven.add(i);
         this.archMotor = { K, B, joint: i };
       }

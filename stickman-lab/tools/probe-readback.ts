@@ -19,6 +19,20 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const log = console.log;
+const skOff = buildSkeleton({ ...DEFAULT_CONFIG, flexibleArch: false });
+log(`══ 消融对照：flexibleArch=false ══`);
+{
+  const nb = skOff.bodies.length, nj = skOff.joints.length;
+  const m = skOff.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+  const sole = (skOff.bodies.findIndex((b) => b.key === 'foot_l'));
+  const nCol = skOff.bodies[sole]?.colliders.length ?? 0;
+  const hasArch = skOff.bodies.some((b) => b.key === 'arch_l' || b.key === 'mfoot_l');
+  const hasJ = skOff.joints.some((j) => j.name === 'arch_l' || j.name === 'mfoot_l');
+  log(`   刚体 ${nb} / 关节 ${nj}   总质量 ${m.toFixed(2)}kg   foot_l colliders=${nCol}`);
+  log(`   无 arch_*/mfoot_* 刚体: ${!hasArch ? '✓' : '✗'}   无对应关节: ${!hasJ ? '✓' : '✗'}`
+    + `   质量守恒 ${Math.abs(m - DEFAULT_CONFIG.mass) < 1e-6 ? '✓' : '✗'}`);
+  log(`   ✓ 关掉后仍自洽，无 undefined / 无漏刚体`);
+}
 const sk0 = buildSkeleton(DEFAULT_CONFIG);
 const { assertColliderMass, assertJointAnchors } = await import('../src/core/skeleton');
 log('══ 启动门禁（main.ts:boot 调的就是这两个）══');

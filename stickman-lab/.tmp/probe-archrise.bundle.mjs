@@ -6663,15 +6663,19 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const mfootBlocks = [
               blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
             ];
+            if (cfg.flexibleArch === false) blocks.push(mfootBlocks[0]);
             const archBlocks = [
               blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
               blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
             ];
+            if (cfg.flexibleArch === false) blocks.push(...archBlocks);
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
             const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
-            const archMass = soleMass * (archVol / allVol);
-            const mfootMass = soleMass * (mfootVol / allVol);
+            const archVolAll = cfg.flexibleArch === false ? 0 : archVol;
+            const mfootVolAll = cfg.flexibleArch === false ? 0 : mfootVol;
+            const allVol = archVolAll + mfootVolAll + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVolAll / allVol);
+            const mfootMass = soleMass * (mfootVolAll / allVol);
             for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
               const gv = grp.reduce((a, b) => a + b._vol, 0);
               for (const b of grp) {
@@ -6717,7 +6721,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           })(),
           leg: true
         });
-        {
+        if (cfg.flexibleArch !== false) {
           const isL = spec.key === "shin_l";
           const footKey = isL ? "foot_l" : "foot_r";
           const archKey = isL ? "arch_l" : "arch_r";
@@ -14636,7 +14640,7 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
-          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+          if ((j.name.startsWith("arch_") || j.name.startsWith("mfoot_")) && j.revoluteAxis) {
             const mj = joint;
             mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
             const K = this.opt.archStiffness ?? 400;
