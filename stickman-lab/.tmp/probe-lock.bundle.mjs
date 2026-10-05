@@ -6621,7 +6621,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const soleBottom = local2[1] - soleHalfThick;
             const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
               const hy = hyMm / 1e3 * cfg.soleFootScale;
-              const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
+              const gap = (cfg.soleBlockGap ?? 0) / 2;
+              const hxm = Math.max(1e-4, (fx1 - fx0) * L / 2 - gap);
+              const hzm = Math.max(1e-4, (fz1 - fz0) * HW / 2 - gap);
               const cxm = (fx0 + fx1) / 2 * L, czm = (fz0 + fz1) / 2 * HW;
               const vol = 4 * hxm * hzm * hy;
               return {
@@ -7146,6 +7148,11 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
+      // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
+      //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
+      //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
+      //   开关保留着，等找到真正的接触层解法后再调。
+      soleBlockGap: 0,
       // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
       //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
       ankleLimitDeg: [-12, 18],
@@ -15189,24 +15196,25 @@ var init_ragdoll = __esm({
       //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
       //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
       //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
-      static NOT_CRASH = /* @__PURE__ */ new Set([
-        "shin_l",
-        "shin_r",
-        "foot_l",
-        "foot_r",
-        "forefoot_l",
-        "forefoot_r",
-        // ★ 柔性足 F1 的前足
-        "arm_l",
-        "arm_r",
-        "hand_l",
-        "hand_r"
-      ]);
+      /**
+       * ★★ 判为"支撑/肢体"而**不算 crash** 的刚体 —— 改成**前缀模式**而不是硬编码名单。
+       *
+       *   为什么必须模式化：这是**第三次**被"改名漏掉"咬到了。名单里原本只有
+       *   `forefoot_*`（柔性足 F1 的前足命名），F2 把中足改名成 `arch_*` 之后
+       *   名单没跟着改 ⇒ **弓合法着地做旋前时 `bodyHitGround()` 立刻返回 true**、
+       *   `lastHitKey='arch_l'` ⇒ 回合被判 `fallReason='crash'`。
+       *   也就是说：**柔性足做得越对，越容易被判摔倒**（用户实测「摔倒会误判」）。
+       *
+       *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
+       */
+      static notCrashKey(key) {
+        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+      }
       bodyHitGround() {
         this.lastHitKey = "";
         for (let i = 0; i < this.bodies.length; i++) {
           const bd = this.sk.bodies[i];
-          if (_Ragdoll.NOT_CRASH.has(bd.key)) continue;
+          if (_Ragdoll.notCrashKey(bd.key)) continue;
           const b = this.bodies[i];
           for (let ci = 0; ci < b.numColliders(); ci++) {
             const col = b.collider(ci);
@@ -15775,7 +15783,10 @@ var init_ragdoll = __esm({
         const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
         return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]));
       }
+      /** 调试用：跳过逐轴限位投影（测探 60Hz 周期-2 振动可否来自它） */
+      skipLimits = false;
       enforceLimits() {
+        if (this.skipLimits) return;
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
           const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;
@@ -18412,9 +18423,10 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
-      physicsHz: 120,
+      physicsHz: 240,
+      // ★ 120Hz 下外侧柱的 λ 帧间摆幅是均值的 9.6~14.1倍（period-2），240Hz 下降到 0.2倍
       deathFlySeconds: 1.6,
-      controlHz: 60,
+      controlHz: 120,
       duration: 6,
       mode: "walk",
       gaitHz: 1.15,
