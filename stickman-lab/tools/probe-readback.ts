@@ -29,6 +29,52 @@ catch (e) { log(`   ✗ ${(e as Error).message}`); }
 const sk = sk0;
 const SHAPE = shapeForJoints(sk.joints.length);
 log(`   DEFAULT_CONFIG.stance = ${DEFAULT_CONFIG.stance}`);
+// ★ 关节锚点回读：比较各关节的锚点偏移量，找出“突兀的巨大关节”
+log('══ 骨骼调试包围盒尺寸对比（viewer 对每个刚体都画一个胶囊）══');
+log('   刚体              长度     半长(hh)   半径(rad)   调试胶囊总长');
+{
+  const rows = sk.bodies.map((b, i) => ({ k: b.key, len: b.length, hh: b.halfHeight, r: b.radius }))
+    .sort((a, b) => (b.hh * 2 + b.r * 2) - (a.hh * 2 + a.r * 2));
+  for (const r of rows.slice(0, 6)) {
+    log(`   ${r.k.padEnd(18)} ${(r.len * 1000).toFixed(0).padStart(6)}mm`
+      + ` ${(r.hh * 1000).toFixed(1).padStart(9)}mm`
+      + ` ${(r.r * 1000).toFixed(1).padStart(9)}mm`
+      + `   ${((r.hh * 2 + r.r * 2) * 1000).toFixed(0).padStart(6)}mm`
+      + `   ${r.k.startsWith('arch') ? '  ★ 弓' : ''}`);
+  }
+  const arch = rows.find((r) => r.k.startsWith('arch'))!;
+  const shin = rows.find((r) => r.k === 'shin_l')!;
+  log(`   弓胶囊 ${((arch.hh * 2 + arch.r * 2) * 1000).toFixed(0)}mm`
+    + `  vs 小腿 ${((shin.hh * 2 + shin.r * 2) * 1000).toFixed(0)}mm`
+    + `  比值 ${((arch.hh * 2 + arch.r * 2) / (shin.hh * 2 + shin.r * 2) * 100).toFixed(0)}%`
+    + `  ${(arch.hh * 2 + arch.r * 2) > 0.2 ? '✗ 仍是小腿量级' : '✓ 已缩到弓的尺寸'}`);
+}
+log('══ 关节锚点偏移量对比（官方绘图按这个绘）══');
+log('   关节            父锚点(腿身)   子锚点(腿身)   两锚点间距  父体心→锚点');
+{
+  const rows: { n: string; p: number; c: number; d: number; pc: number }[] = [];
+  for (let i = 0; i < sk.joints.length; i++) {
+    const j = sk.joints[i]!;
+    const pl = j.parentLocal, cl = j.childLocal;
+    const pm = Math.hypot(pl[0], pl[1], pl[2]);
+    const cm = Math.hypot(cl[0], cl[1], cl[2]);
+    rows.push({ n: j.name, p: pm, c: cm, d: Math.hypot(
+      (pl[0] - cl[0]), (pl[1] - cl[1]), (pl[2] - cl[2])), pc: pm });
+  }
+  rows.sort((a, b) => b.pc - a.pc);
+  const worst = rows[0]!.pc;
+  for (const r of rows.slice(0, 8)) {
+    log(`   ${r.n.padEnd(16)}`
+      + ` ${(r.p * 1000).toFixed(1).padStart(8)}mm`
+      + ` ${(r.c * 1000).toFixed(1).padStart(8)}mm`
+      + ` ${(r.d * 1000).toFixed(1).padStart(8)}mm`
+      + `   ${(r.pc * 1000).toFixed(1).padStart(8)}mm`
+      + `   ${r.pc === worst ? '  ★ 最大' : ''}`);
+  }
+  log(`   → 最大锚点偏移 ${(worst * 1000).toFixed(1)}mm`
+    + `  中位数 ${(rows.map((r) => r.pc).sort((a, b) => a - b)[rows.length >> 1]! * 1000).toFixed(1)}mm`
+    + `  最小 ${(rows[rows.length - 1]!.pc * 1000).toFixed(1)}mm`);
+}
 const hips = ['hip_l', 'hip_r'].map((n) => jointIndexByName(sk, n));
 log(`══ 静态回读（t=0.3s）══`);
 log('   量                左        右      差/合计');

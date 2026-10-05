@@ -326,6 +326,12 @@ export interface SkeletonConfig {
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 */
   archAtFrac: number;
   /**
+   * 内侧弓顶点离地高度（米）。人脚惠态弧高约 20~25mm，
+   * 但**不能直接拿来当稳态值**：它必须小到脚能旋前到的量，
+   * 否则弓永远悬空、灵性足退化为“多两块碰撞体的刚性脚”。用 `probe-archwork` 扫。
+   */
+  archRise: number;
+  /**
    * ★ 鞋底分块之间的记缝（米，每块两侧各收一半）。
    *   用途：避免**相邻共面 cuboid 边缘相接**产生重合接触点（接触层抖动的
    *   主要来源）。详见 `blk()` 里的注释。
@@ -454,6 +460,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   archLimitDeg: [-4, 16],
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
   archAtFrac: 0.22,
+  archRise: 0.022,
   // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
   //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
   //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -1067,8 +1074,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   interface ArchOut {
     archBlocks: ColliderDef[];
     archRise: number; archCx: number; archCz: number; archMass: number;
+  /** 弓的调试包围盒（不得继承小腿尺寸，否则调试视图在脚部画出小腿那么长的胶囊） */
+  archDims: { len: number; rad: number; hh: number };
   }
-  const ARCH_OUT: ArchOut = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
+  const ARCH_OUT: ArchOut = {
+    archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0,
+    archDims: { len: 0.081, rad: 0.007, hh: 0.010 },
+  };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json 缺少组件 ${spec.key}`);
@@ -1400,7 +1412,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            const archRise = 0.022;   // 内侧弓顶点离地 22mm（人脚约 20~25mm）
+            // ★ 提成配置项（原硬编码 0.022）—— 它决定「弓能不能真的承重」。
+            //   实测（240Hz 站立）：脚的倾角只有 1.93°…7.45°，而弓区底面比鞋底高 22mm，
+            //   所以弓 **480 帧一次都没碰到地面**（接触帧 0/480、弓角行程 0.03°）。
+            //   几何：弓区在内侧（fz 0.40..1.00），承重窄条在外侧（fz ≈−63mm），
+            //   两者间距 126mm ⇒ 要让弓落地需旋前 `sinθ = rise/126`。
+            //   rise=22mm ⇒ θ≈10°，超过实测可达的旋前量。
+            const archRise = cfg.archRise;
             interface Blk extends ColliderDef { _vol: number; _label: string }
             const L = cfg.soleFootScale * hx;
             const HW = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;
@@ -1469,6 +1487,25 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             ARCH_OUT.archCz = ((0.40 + 1.00) / 2) * HW;
             ARCH_OUT.archMass = archMass;
 
+            // ★ 弓的调试包围盒（从弓块实际偏移推，不写死）
+            {
+              const aLo = [Infinity, Infinity, Infinity];
+              const aHi = [-Infinity, -Infinity, -Infinity];
+              for (const c of archBlocks) {
+                const o = [c.offsetX ?? 0, c.offsetY ?? 0, c.offsetZ ?? 0];
+                const h = [c.hx, c.hy, c.hz];
+                for (let a = 0; a < 3; a++) {
+                  aLo[a] = Math.min(aLo[a]!, o[a]! - h[a]!);
+                  aHi[a] = Math.max(aHi[a]!, o[a]! + h[a]!);
+                }
+              }
+              ARCH_OUT.archDims = {
+                len: aHi[0]! - aLo[0]!,
+                rad: Math.max(aHi[1]! - aLo[1]!, aHi[2]! - aLo[2]!) / 4,
+                hh: (aHi[1]! - aLo[1]!) / 2,
+              };
+            }
+
             // 体积 → 质量归一。
             // ⚠⚠ `blocks` **已不含弓的两块**（它们归弓刚体），所以这里的
             //   归一化基准必须是「脚体自己那份质量」= `soleMass − archMass`，
@@ -1525,7 +1562,16 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             restYawRad: yaw,
             plateHidden: true,
             plateOffset,
-            length, radius, halfHeight,
+            // ★ 弓的 `length/radius/halfHeight` 必须用**弓自己**的尺寸，不能继承小腿的。
+            //   这三个字段对弓的**物理**无用（弓的 collider 全是 `archBlocks`），
+            //   但骨骼调试视图对**每个刚体**都画一个胶囊：
+            //       new THREE.CapsuleGeometry(b.radius, b.halfHeight * 2, ...)
+            //   继承小腿尺寸 ⇒ 在脚掉位置画出一个**小腿那么长的胶囊垂到地面**，
+            //   用户见到“巨长的关节”。
+            //   改成弓自己的包围盒：长 81mm、厚 20mm、宽 28mm。
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
             mass: ARCH_OUT.archMass,
             colliders: ARCH_OUT.archBlocks,
             leg: true,
@@ -1543,20 +1589,38 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   ⇒ `local[1]` 不是"鞋底相对体心的偏移"（推导前提就错了）。
           //   改用**弓 collider 的实际偏移均值**：该点**必然在弓体内**，
           //   而弓与鞋底在足长/足宽上重叠 ⇒ 父侧也必然落在 foot_l 的 collider 内。
-          const ab = ARCH_OUT.archBlocks;
-          const mOff = (f: 'offsetX' | 'offsetY' | 'offsetZ'): number =>
-            ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
+          // ★★★ 旋前轴（revolute 的自由轴 = 局部 X）的位置**决定弓能不能被压下去**。
+          //
+          //   绕 X 轴旋转时，高度变化 = Δy(cosθ−1) ≈ **−Δy·θ²/2**（二阶小量）
+          //   —— 只有当被转的点与轴有**Δz** 间隔时，才有 Δy ≈ θ·Δz 的一阶竖向位移。
+          //   ⚠ 我原来把锚点放在**弓块自己的中心**（`mOff`），而弓块的 z 与该轴相同
+          //     ⇒ Δz = 0 ⇒ 旋前几乎不产生竖向位移，弓永远压不到地面
+          //     （实测 `probe-archrise`：rise 从 22mm 降到 3mm，弓接触帧恒为 0%）。
+          //
+          //   解剖上真实的旋前轴 = 足底**外缘那条接地棱**，在**鞋底高度**、偏外侧。
+          //   这样弓块（在 fz 0.40..1.00 的内侧）与轴的 Δz ≈ 131mm，
+          //   压下 rise 需要的旋前角 θ = asin(rise / Δz)。
+          const HWm = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;
+          const rollZ = centerZ + (-0.70) * HWm;          // 外侧接地棱（fz≈−0.70）
+          // ⚠⚠ 必须用 **`ankleY`**（脚掉/踝的体心），不能用 `cy`（**小腿腹**的体心，0.2365m）。
+          //   用错了会让锚点落到 y=0.190（而非鞋底 0.022），
+          //   表现为关节渲染出现一条**很长的关节线垂到地面**（用户见到）。
+          //   这是本任务里**第二次栽在“用错体心变量”上（第一次是弓体心）。
+          // 鞋底**平面**（y=0）—— 不是弓的底面。弓的底面比鞋底高 `archRise`，
+          // 少减这一项锚点会落在 22mm 处（实测 0.022），旋前轴就不在接地棱上了。
+          const rollY = ankleY + (ARCH_OUT.archBlocks[0]!.offsetY ?? 0)
+                            - (ARCH_OUT.archBlocks[0]!.hy) - ARCH_OUT.archRise;
           ARCH_SPEC.push({
             side: isL ? 'l' : 'r',
             footKey,
             archKey,
             // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
             //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
-            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   这是本任务里第**三**次栽在“局部/世界混用”上（前两次：`wy=archRise`、
             //   `local[1]` 推导），所以这里把三个分量一次性写全。
-            wx: 0 + mOff('offsetX'),          // 脚体 cx = 0
-            wy: cy + mOff('offsetY'),         // 与弓刚体同一个 cy
-            wz: centerZ + mOff('offsetZ'),    // 与弓刚体同一个 cz
+            wx: 0,                        // 脚体 cx = 0
+            wy: rollY,                    // 鞋底底面（旋前轴的高度）
+            wz: rollZ,                    // 外侧接地棱（旋前轴的侧向位置）
             massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
           });
         }
