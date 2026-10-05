@@ -172,7 +172,16 @@ export class Controller {
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
     const out = rs.arbitrate(dt);
-    // ★ 力矩通道（`τ = JᵀF` 的产物）与角度通道**并联**送进马达。
+    // ★★★ 角度通道（位置伺服）：`out` 就是它，但**这条线一直缺着**。
+    //   实测（tools/probe-motortarget）：480 拍里 `setMotorTargets` 被调用
+    //   **0 次**，`motorTarget` 54 项全为 0，而仲裁器明明算出了 10 项非零目标
+    //   （最大 |1.0|）—— 算完就丢。⇒ 全部位置 PD（`sagSupport` 的髋/膝）
+    //   与步态关键帧**一直是死的**，只有力矩通道在出力。
+    //   git 查证：controller.ts 的 12 个历史版本里 `setMotorTargets` 出现次数
+    //   **全为 0** ⇒ 不是被改坏的，是从第一天就没接。
+    //   这解释了"两种模式 com.y 都塌"：塌的不只是平衡，支撑本身就没在工作。
+    this.sim.doll.setMotorTargets(out);
+    // ★ 力矩通道（`τ = JᵀF` 与全链 QP 的产物）与角度通道**并联**送进马达。
     //   必须在 arbitrate 之后 —— `tauOut` 是仲裁的结果。
     this.sim.doll.setTorqueTargets(rs.tauOut);
     // ★ 让位掩码：让 `τ=JᵀF` 接管的轴，位置伺服退化为纯阻尼

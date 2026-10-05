@@ -6352,16 +6352,16 @@ function rotVecByQuat(q, v) {
     vz + qw * tz + (qx * ty - qy * tx)
   ];
 }
-function jointIndexByName(sk2, name) {
-  for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
+function jointIndexByName(sk, name) {
+  for (let i = 0; i < sk.joints.length; i++) if (sk.joints[i].name === name) return i;
   return -1;
 }
-function hasJoint(sk2, name) {
-  return sk2.joints.some((j) => j.name === name);
+function hasJoint(sk, name) {
+  return sk.joints.some((j) => j.name === name);
 }
-function spineJointNames(sk2) {
+function spineJointNames(sk) {
   const out = [];
-  for (const j of sk2.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  for (const j of sk.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
   return out.sort();
 }
 function anchorPx(name, jm) {
@@ -7098,15 +7098,15 @@ function assertMassBudget() {
   }
   return sum;
 }
-function assertColliderMass(sk2) {
-  for (const b of sk2.bodies) {
+function assertColliderMass(sk) {
+  for (const b of sk.bodies) {
     const s = b.colliders.reduce((a, c) => a + c.mass, 0);
     if (Math.abs(s - b.mass) > 1e-9) {
       throw new Error(`[skeleton] ${b.key} collider \u8D28\u91CF\u548C ${s} \u2260 \u521A\u4F53\u8D28\u91CF ${b.mass}`);
     }
   }
 }
-function assertJointAnchors(sk2) {
+function assertJointAnchors(sk) {
   const reachOf = (b) => {
     let r = 0;
     for (const c of b.colliders) {
@@ -7127,9 +7127,9 @@ function assertJointAnchors(sk2) {
     return r;
   };
   let worst = 0;
-  for (const j of sk2.joints) {
-    const p = sk2.bodies.find((b) => b.key === j.parentKey);
-    const c = sk2.bodies.find((b) => b.key === j.childKey);
+  for (const j of sk.joints) {
+    const p = sk.bodies.find((b) => b.key === j.parentKey);
+    const c = sk.bodies.find((b) => b.key === j.childKey);
     for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
       const reach = reachOf(b);
       const d = Math.hypot(l[0], l[1], l[2]);
@@ -14308,34 +14308,34 @@ var init_ragdoll = __esm({
       ptTmp = { x: 0, y: 0, z: 0 };
       pcTmp = { x: 0, y: 0, z: 0 };
       ivUp = { x: 0, y: 0, z: 0 };
-      constructor(world, sk2, opt = {}) {
+      constructor(world, sk, opt = {}) {
         this.world = world;
-        this.sk = sk2;
+        this.sk = sk;
         this.opt = { ...DEFAULTS, ...opt };
         for (const key of Object.keys(opt)) {
           if (!(key in DEFAULTS)) {
             console.warn(`[ragdoll] \u26A0 \u672A\u77E5\u914D\u7F6E\u9879 "${key}" \u88AB\u5FFD\u7565\uFF08\u662F\u4E0D\u662F\u6539\u540D\u4E86\uFF1F\u89C1 RagdollOptions\uFF09`);
           }
         }
-        this.motorTarget = new Float32Array(sk2.joints.length * 3);
-        this.motorImpulse = new Float64Array(sk2.joints.length * 3);
-        this.motorDemand = new Float64Array(sk2.joints.length * 3);
-        this.motorAuthority = new Float32Array(sk2.joints.length * 3);
-        this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
-        this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
-        this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
-        this.torqueCmd = new Float32Array(sk2.joints.length * 3);
-        this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
-        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
-        this.tauApplied = new Float32Array(sk2.joints.length * 3);
-        this.ankleJoint = jointIndexByName(sk2, "foot_l");
-        this.ankleJointR = jointIndexByName(sk2, "foot_r");
+        this.motorTarget = new Float32Array(sk.joints.length * 3);
+        this.motorImpulse = new Float64Array(sk.joints.length * 3);
+        this.motorDemand = new Float64Array(sk.joints.length * 3);
+        this.motorAuthority = new Float32Array(sk.joints.length * 3);
+        this.groundFactor = new Float32Array(sk.joints.length).fill(1);
+        this.footAuthUsed = new Float32Array(sk.joints.length * 3).fill(1);
+        this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
+        this.torqueCmd = new Float32Array(sk.joints.length * 3);
+        this.holdCmd = new Array(sk.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk.joints.length * 3).fill(1);
+        this.tauApplied = new Float32Array(sk.joints.length * 3);
+        this.ankleJoint = jointIndexByName(sk, "foot_l");
+        this.ankleJointR = jointIndexByName(sk, "foot_r");
         const archK = this.opt.archStiffness ?? 6;
         const archB = this.opt.archDamping ?? 1.2;
         if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
           const gain = { ...this.opt.jointGain ?? {} };
-          for (let i = 0; i < sk2.joints.length; i++) {
-            const j = sk2.joints[i];
+          for (let i = 0; i < sk.joints.length; i++) {
+            const j = sk.joints[i];
             if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
             if (j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
@@ -14350,7 +14350,7 @@ var init_ragdoll = __esm({
           this.opt.jointGain = gain;
         }
         let topSpine = -1;
-        for (const b of sk2.bodies) {
+        for (const b of sk.bodies) {
           const m = /^spine(\d+)$/.exec(b.key);
           if (m) topSpine = Math.max(topSpine, Number(m[1]));
         }
@@ -14360,14 +14360,14 @@ var init_ragdoll = __esm({
           rapier_default.ColliderDesc.cuboid(60, 0.5, 12).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
           ground
         );
-        this.initX = new Float64Array(sk2.bodies.length);
-        this.initY = new Float64Array(sk2.bodies.length);
-        this.initZ = new Float64Array(sk2.bodies.length);
-        this.restQ = sk2.bodies.map((b) => {
+        this.initX = new Float64Array(sk.bodies.length);
+        this.initY = new Float64Array(sk.bodies.length);
+        this.initZ = new Float64Array(sk.bodies.length);
+        this.restQ = sk.bodies.map((b) => {
           const [x, y, z, w] = restQuatOf(b.restTiltRad, b.restYawRad);
           return { x, y, z, w };
         });
-        sk2.bodies.forEach((b, i) => {
+        sk.bodies.forEach((b, i) => {
           this.indexByKey.set(b.key, i);
           this.initX[i] = b.cx;
           this.initY[i] = b.cy;
@@ -14401,15 +14401,15 @@ var init_ragdoll = __esm({
             }
           }
         });
-        this.jointBodies = new Int32Array(sk2.joints.length * 2);
+        this.jointBodies = new Int32Array(sk.joints.length * 2);
         this.createJoints();
-        this.jointIeff = new Float64Array(sk2.joints.length);
+        this.jointIeff = new Float64Array(sk.joints.length);
         const bodyI = new Float64Array(this.bodies.length);
         for (let i = 0; i < this.bodies.length; i++) {
           const I = this.bodies[i].principalInertia();
           bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
         }
-        for (let i = 0; i < sk2.joints.length; i++) {
+        for (let i = 0; i < sk.joints.length; i++) {
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
@@ -14424,7 +14424,7 @@ var init_ragdoll = __esm({
             const hit = hasFootBelow.get(k);
             if (hit !== void 0) return hit;
             let r = false;
-            for (const jj of sk2.joints) {
+            for (const jj of sk.joints) {
               if (jj.parentKey === k) {
                 if (walk(jj.childKey)) {
                   r = true;
@@ -14436,38 +14436,38 @@ var init_ragdoll = __esm({
             return r;
           };
           for (const k of footKeys) hasFootBelow.set(k, true);
-          for (let bi = 0; bi < sk2.bodies.length; bi++) {
-            const k = sk2.bodies[bi].key;
+          for (let bi = 0; bi < sk.bodies.length; bi++) {
+            const k = sk.bodies[bi].key;
             if (!footKeys.includes(k)) continue;
             hasFootBelow.set(k, true);
           }
-          for (let i = 0; i < sk2.joints.length; i++) {
-            const jn = sk2.joints[i];
+          for (let i = 0; i < sk.joints.length; i++) {
+            const jn = sk.joints[i];
             if (!walk(jn.childKey)) continue;
             const aj = this.bodies[this.jointBodies[i * 2 + 1]];
             const ap = aj.translation();
             const inSub = /* @__PURE__ */ new Set();
-            for (let bi = 0; bi < sk2.bodies.length; bi++) {
-              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            for (let bi = 0; bi < sk.bodies.length; bi++) {
+              if (sk.bodies[bi].key === jn.childKey) inSub.add(bi);
             }
             let frontier = [jn.childKey];
             while (frontier.length) {
               const k = frontier.pop();
-              for (let bi = 0; bi < sk2.bodies.length; bi++) {
-                const bd = sk2.bodies[bi];
+              for (let bi = 0; bi < sk.bodies.length; bi++) {
+                const bd = sk.bodies[bi];
                 if (inSub.has(bi)) continue;
-                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                if (sk.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
                   inSub.add(bi);
                   frontier.push(bd.key);
                 }
               }
             }
             let sum = 0;
-            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            for (let bi = 0; bi < sk.bodies.length; bi++) {
               if (inSub.has(bi)) continue;
               const t = this.bodies[bi].translation();
               const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
-              sum += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+              sum += sk.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
             }
             const free = this.jointIeff[i];
             const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
@@ -14483,8 +14483,8 @@ var init_ragdoll = __esm({
           }
         }
         if (false) {
-          const ank = jointIndexByName(sk2, "foot_l");
-          const ankR = jointIndexByName(sk2, "foot_r");
+          const ank = jointIndexByName(sk, "foot_l");
+          const ankR = jointIndexByName(sk, "foot_r");
           for (const jn of [ank, ankR]) {
             if (jn < 0) continue;
             const footBody = jn === ank ? 0 : 1;
@@ -14498,7 +14498,7 @@ var init_ragdoll = __esm({
               sum += b.mass() * (dx * dx + dy * dy + dz * dz);
             }
             const free = this.jointIeff[jn];
-            const tauMax = sk2.joints[jn].maxTorque[AXIS_Z] ?? 45;
+            const tauMax = sk.joints[jn].maxTorque[AXIS_Z] ?? 45;
             const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
             const need = want / Math.max(1e-9, free);
             const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum / Math.max(1e-9, free), need));
@@ -14506,12 +14506,12 @@ var init_ragdoll = __esm({
             this.ankleGroundFactorUsed[jn] = f;
           }
         }
-        this.refPos = new Float64Array(sk2.joints.length * 3);
-        this.refNeg = new Float64Array(sk2.joints.length * 3);
-        for (let i = 0; i < sk2.joints.length; i++) {
+        this.refPos = new Float64Array(sk.joints.length * 3);
+        this.refNeg = new Float64Array(sk.joints.length * 3);
+        for (let i = 0; i < sk.joints.length; i++) {
           for (let k = 0; k < 3; k++) {
             const s = this.opt.posRefScale;
-            const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+            const span = Math.max(Math.abs(sk.joints[i].minRad[k]), Math.abs(sk.joints[i].maxRad[k]));
             this.refPos[i * 3 + k] = s * span;
             this.refNeg[i * 3 + k] = s * span;
           }
@@ -17116,10 +17116,10 @@ var init_rigState = __esm({
       tSec = 0;
       /** 上一拍的 target，供斜率限制 */
       prevOut;
-      constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
-        this.sk = sk2;
+      constructor(sk, cfg = DEFAULT_RIGSTATE_CONFIG) {
+        this.sk = sk;
         this.cfg = cfg;
-        const n = sk2.joints.length * AXES_PER_JOINT;
+        const n = sk.joints.length * AXES_PER_JOINT;
         this.nAxes = n;
         this.pos = new Float64Array(n);
         this.vel = new Float64Array(n);
@@ -17133,7 +17133,7 @@ var init_rigState = __esm({
         }
         this.tauOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
-        this.forceBuf = new Float64Array(sk2.joints.length * 5);
+        this.forceBuf = new Float64Array(sk.joints.length * 5);
         this.treq.fill(void 0);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
@@ -19059,15 +19059,15 @@ var init_sim = __esm({
       supTicks = 0;
       inDomainTicks = 0;
       balanceTicks = 0;
-      constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
-        const n = sk2.joints.length;
+      constructor(sk, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+        const n = sk.joints.length;
         const expIn = 36 + 6 * n, expOut = 3 * n;
         if (shape.inputs !== expIn || shape.outputs !== expOut) {
           throw new Error(
             `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
           );
         }
-        this.sk = sk2;
+        this.sk = sk;
         this.cfg = cfg;
         this.shape = shape;
         this.w = { ...W, ...cfg.weights };
@@ -20041,16 +20041,16 @@ function groupOf(n) {
   if (n.startsWith("foot") || n.startsWith("ankle")) return "\u8E1D";
   return "\u5176\u5B83";
 }
-function auditJoints(sk2) {
+function auditJoints(sk) {
   const joints = [];
   const problems = [];
   const order = ["\u9888", "\u80A9", "\u8098", "\u9ACB", "\u819D", "\u8E1D", "\u8170", "\u5176\u5B83"];
-  const names = [...sk2.joints.map((j) => j.name), ...PHANTOM_JOINTS];
+  const names = [...sk.joints.map((j) => j.name), ...PHANTOM_JOINTS];
   for (const name of names) {
-    const idx = jointIndexByName(sk2, name);
-    const exists = hasJoint(sk2, name);
+    const idx = jointIndexByName(sk, name);
+    const exists = hasJoint(sk, name);
     const base = JOINT_MAX_TORQUE[name] ?? 100;
-    const def = exists ? sk2.joints[idx] : void 0;
+    const def = exists ? sk.joints[idx] : void 0;
     const axes = [];
     const jp = [];
     if (!exists) {
@@ -20084,12 +20084,12 @@ function auditJoints(sk2) {
   }
   joints.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.name.localeCompare(b.name));
   const inv = [];
-  const realAxes = sk2.joints.length * 3;
+  const realAxes = sk.joints.length * 3;
   inv.push({
     id: "I3",
     ok: true,
     // 槽位多于实际轴不是错，但要**显式记账**，否则会以为踝在被控制
-    msg: `\u5B9E\u9645\u53D7\u63A7\u8F74 ${realAxes}\uFF08${sk2.joints.length} \u5173\u8282 \xD73\uFF09\uFF1BPHANTOM_JOINTS \u58F0\u660E\u4E86 ${PHANTOM_JOINTS.length * 3} \u4E2A\u4E0D\u5B58\u5728\u7684\u8F74`
+    msg: `\u5B9E\u9645\u53D7\u63A7\u8F74 ${realAxes}\uFF08${sk.joints.length} \u5173\u8282 \xD73\uFF09\uFF1BPHANTOM_JOINTS \u58F0\u660E\u4E86 ${PHANTOM_JOINTS.length * 3} \u4E2A\u4E0D\u5B58\u5728\u7684\u8F74`
   });
   const hipAb = joints.find((j) => j.name === "hip_l")?.axes[1];
   if (hipAb?.usable) {
@@ -20116,20 +20116,20 @@ function auditJoints(sk2) {
     });
   }
   return {
-    bodyCount: sk2.bodies.length,
-    jointCount: sk2.joints.length,
-    axisSlots: (sk2.joints.length + PHANTOM_JOINTS.length) * 3,
+    bodyCount: sk.bodies.length,
+    jointCount: sk.joints.length,
+    axisSlots: (sk.joints.length + PHANTOM_JOINTS.length) * 3,
     joints,
     invariants: inv,
     problems,
     ok: inv.every((v) => v.ok)
   };
 }
-function assertRigInvariants(sk2, shape) {
-  const report = auditJoints(sk2);
-  for (let i = 0; i < sk2.joints.length; i++) {
-    const nm = sk2.joints[i].name;
-    const back = jointIndexByName(sk2, nm);
+function assertRigInvariants(sk, shape) {
+  const report = auditJoints(sk);
+  for (let i = 0; i < sk.joints.length; i++) {
+    const nm = sk.joints[i].name;
+    const back = jointIndexByName(sk, nm);
     if (back !== i) {
       throw new Error(
         `[rig] \u5173\u8282\u540D\u4E0E\u7D22\u5F15\u4E0D\u4E00\u81F4\uFF1Ask.joints[${i}].name="${nm}"\uFF0C\u4F46 jointIndexByName \u67E5\u56DE ${back}\u3002\u8FD9\u4F1A\u8BA9\u6309\u540D\u5B57\u9A71\u52A8\u9759\u9ED8\u4F5C\u7528\u5230\u522B\u7684\u5173\u8282\u4E0A\u3002`
@@ -20137,14 +20137,14 @@ function assertRigInvariants(sk2, shape) {
     }
   }
   for (const nm of PHANTOM_JOINTS) {
-    if (hasJoint(sk2, nm)) continue;
+    if (hasJoint(sk, nm)) continue;
   }
-  const sh = shape ?? shapeForJoints(sk2.joints.length);
-  const expIn = 36 + 6 * sk2.joints.length;
-  const expOut = 3 * sk2.joints.length;
+  const sh = shape ?? shapeForJoints(sk.joints.length);
+  const expIn = 36 + 6 * sk.joints.length;
+  const expOut = 3 * sk.joints.length;
   if (sh.inputs !== expIn || sh.outputs !== expOut) {
     throw new Error(
-      `[rig] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1A${sh.inputs}\u2192${sh.outputs}\uFF0C\u4F46 ${sk2.joints.length} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\uFF08\u5386\u53F2\u4E8B\u6545\uFF1ABRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u7528\u5728 12 \u5173\u8282\u9AA8\u67B6\u4E0A \u21D2 \u89C2\u6D4B\u9759\u9ED8\u622A 18 \u7EF4\u3001\u53EA\u9A71\u52A8 9/12 \u5173\u8282\u300110 \u6B65\u5185 com \u5168 NaN \u800C\u4E0D\u62A5\u9519\uFF09`
+      `[rig] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1A${sh.inputs}\u2192${sh.outputs}\uFF0C\u4F46 ${sk.joints.length} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\uFF08\u5386\u53F2\u4E8B\u6545\uFF1ABRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u7528\u5728 12 \u5173\u8282\u9AA8\u67B6\u4E0A \u21D2 \u89C2\u6D4B\u9759\u9ED8\u622A 18 \u7EF4\u3001\u53EA\u9A71\u52A8 9/12 \u5173\u8282\u300110 \u6B65\u5185 com \u5168 NaN \u800C\u4E0D\u62A5\u9519\uFF09`
     );
   }
   return report;
@@ -20396,9 +20396,9 @@ function supportPolygon(doll) {
   return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, x: [x0, x1], z: [z0, z1], nFeet: n };
 }
 function buildQpAxes(rs, doll, sup, ankleMul = 4) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const out = [];
-  const idx = (nm) => sk2.joints.findIndex((j) => j.name === nm);
+  const idx = (nm) => sk.joints.findIndex((j) => j.name === nm);
   const supW = new Float64Array(3);
   doll.jointWorld(idx(`foot_${sup}`), supW);
   const BBt = new Float64Array(4);
@@ -20424,7 +20424,7 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
   for (const [nm, ax] of spec) {
     const ji = idx(nm);
     if (ji < 0) continue;
-    const j = sk2.joints[ji];
+    const j = sk.joints[ji];
     if (!j.revoluteAxis && ax === 2 && j.name.startsWith("foot")) continue;
     const pw = doll.bodyWorldAxis(ji, ax);
     const jw = new Float64Array(3);
@@ -20466,11 +20466,11 @@ function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   return { fx, fz, xiX, xiZ, sat };
 }
 function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const axes = buildQpAxes(rs, doll, sup, opt.ankleMul ?? 4);
   const g = opt.gain ?? 1;
   const SP = supportPolygon(doll);
-  const grf = desiredGrfFromXi(rs, sk2.massTotal, { x: SP.cx, z: SP.cz });
+  const grf = desiredGrfFromXi(rs, sk.massTotal, { x: SP.cx, z: SP.cz });
   const fx = grf.fx * g, fz = grf.fz * g;
   const out = solveWholeBodyQp({
     axes,
@@ -20483,7 +20483,7 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
   const names = [];
   for (let i = 0; i < axes.length; i++) {
     const a = axes[i];
-    const nm = `${sk2.joints[a.joint].name}/${a.axis}`;
+    const nm = `${sk.joints[a.joint].name}/${a.axis}`;
     names.push(nm);
     const t = out.tau[i];
     if (Math.abs(t) < 1e-6) continue;
@@ -20510,30 +20510,17 @@ var init_wholeBodyQp = __esm({
 });
 
 // src/core/systems/balance.ts
-var balance_exports = {};
-__export(balance_exports, {
-  ANKLE_ABSENT: () => ANKLE_ABSENT,
-  AXIS_OWNERSHIP: () => AXIS_OWNERSHIP,
-  DEFAULT_BALANCE_PARAMS: () => DEFAULT_BALANCE_PARAMS,
-  HIP_ABD_AXIS: () => HIP_ABD_AXIS,
-  axisRole: () => axisRole,
-  balanceSystem: () => balanceSystem
-});
-function axisRole(jointName, axis) {
-  const norm = jointName.replace(/_\w+$/, "");
-  return AXIS_OWNERSHIP.find((a) => a.joint === jointName) ?? AXIS_OWNERSHIP.find((a) => a.joint === norm);
-}
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const sup = rs.supportLeg();
   const latArmed = stanceResolved(rs);
   const latOwnsAbduction = latArmed && p.lateralEnabled;
-  const jHip = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
-  const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
-  const jSp1 = jointIndexByName(sk2, "spine1");
-  const jSp2 = jointIndexByName(sk2, "spine2");
-  const jSp3 = jointIndexByName(sk2, "spine3");
-  const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
+  const jHip = jointIndexByName(sk, sup === "l" ? "hip_l" : "hip_r");
+  const jKnee = jointIndexByName(sk, sup === "l" ? "knee_l" : "knee_r");
+  const jSp1 = jointIndexByName(sk, "spine1");
+  const jSp2 = jointIndexByName(sk, "spine2");
+  const jSp3 = jointIndexByName(sk, "spine3");
+  const jAnk = jointIndexByName(sk, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
     return;
@@ -20668,7 +20655,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const zRefLat = rs.soleZ[sup] ?? rs.com.z;
       const w0Lat = rs.omega0();
       const armLat = 0.119;
-      const mLat = sk2.cfg.mass;
+      const mLat = sk.cfg.mass;
       const kLatBase = armLat * mLat * w0Lat * w0Lat;
       const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
       const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
@@ -20757,7 +20744,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
         const omega0 = Math.sqrt(Math.max(
           1e-6,
-          sk2.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
+          sk.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
         ));
         const a = p.vipOmegaFrac * omega0;
         rs.vipOmega = omega0;
@@ -20789,27 +20776,27 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.settleOffPhase(qVip);
       }
       if (rs.phase === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
-      const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      const tauMaxAnk = sk.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
       rs.qVip = qVip;
       rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
     }
-    const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
+    const jMid = jointIndexByName(sk, sup === "l" ? "midfoot_l" : "midfoot_r");
     if (jMid >= 0) {
       const latErr = rs.dcm.z - rs.support.cz;
       rs.requestAngle(jMid, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u4E2D\u8DB3\u989D\u72B6CoP");
     }
   }
   if (doll && on("hipStiff")) {
-    const jHipS = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
+    const jHipS = jointIndexByName(sk, sup === "l" ? "hip_l" : "hip_r");
     if (jHipS >= 0) {
       const side = sup === "l" ? "l" : "r";
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
       const qHip = rs.pos[jHipS * 3 + 2];
       const qHipRate = rs.vel[jHipS * 3 + 2];
-      const tauMaxHip = sk2.joints[jHipS]?.maxTorque?.[2] ?? 200;
+      const tauMaxHip = sk.joints[jHipS]?.maxTorque?.[2] ?? 200;
       const qLim = p.maxHipStiffDeg * D2R2;
       const qEff = clamp2(qHip, qLim);
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
@@ -20819,7 +20806,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     }
   }
 }
-var HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -20866,7 +20853,6 @@ var init_balance = __esm({
       // ★ 中足（额状）：踝的额状轴被引擎锁死 ⇒ 侧向 CoP 权限归中足的旋前/旋后。
       { joint: "midfoot", axis: 0, role: "ankleLat", mode: "pos", channel: "ankleLat" }
     ]);
-    ANKLE_ABSENT = false;
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
@@ -21070,13 +21056,13 @@ var init_balance = __esm({
 
 // src/core/systems/step.ts
 function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const swing = rs.swingLeg();
-  const jHip = jointIndexByName(sk2, swing === "l" ? "hip_l" : "hip_r");
-  const jKnee = jointIndexByName(sk2, swing === "l" ? "knee_l" : "knee_r");
-  const jSp1 = jointIndexByName(sk2, "spine1");
-  const jSp2 = jointIndexByName(sk2, "spine2");
-  const jSp3 = jointIndexByName(sk2, "spine3");
+  const jHip = jointIndexByName(sk, swing === "l" ? "hip_l" : "hip_r");
+  const jKnee = jointIndexByName(sk, swing === "l" ? "knee_l" : "knee_r");
+  const jSp1 = jointIndexByName(sk, "spine1");
+  const jSp2 = jointIndexByName(sk, "spine2");
+  const jSp3 = jointIndexByName(sk, "spine3");
   if (jHip < 0 || jKnee < 0) return;
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
@@ -21086,7 +21072,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   if ((rs.phase === "SHIFT" || rs.phase === "DOUBLE") && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
-    const mTot = sk2.cfg.mass;
+    const mTot = sk.cfg.mass;
     const raw = mTot * (w0 * w0 * (zRef - rs.com.z) + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
     const ramp = p.shiftRamp > 0 ? Math.min(1, rs.phaseT / p.shiftRamp) : 1;
@@ -21120,7 +21106,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     const kp = keySwing(s);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
-    const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
+    const jFt = jointIndexByName(sk, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
@@ -21205,13 +21191,13 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim2;
+      constructor(sk, sim, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim2.shape);
-        this.rs = new RigState(sk2, cfg.rig);
+        this.rigReport = assertRigInvariants(sk, sim.shape);
+        this.rs = new RigState(sk, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
-        sim2.attachRigState(this.rs);
+        sim.attachRigState(this.rs);
         this.snapshot = this.rs.snapshot();
       }
       rs;
@@ -21228,66 +21214,66 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim2 = this.sim;
+        const sim = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim2.doll, rs.com);
-        readSupport(sim2.doll, rs.support);
+        const com = readCom(sim.doll, rs.com);
+        readSupport(sim.doll, rs.support);
         rs.updateComAccel(dt);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim2.doll.footLoadFrac(dt);
+        const [fl, fr] = sim.doll.footLoadFrac(dt);
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim2.doll.footGrounded(0);
-        rs.grounded.r = sim2.doll.footGrounded(1);
+        rs.grounded.l = sim.doll.footGrounded(0);
+        rs.grounded.r = sim.doll.footGrounded(1);
         {
-          sim2.doll.stanceClearancePeak = Math.max(
-            Math.max(0, sim2.doll.soleY("l")),
-            Math.max(0, sim2.doll.soleY("r"))
+          sim.doll.stanceClearancePeak = Math.max(
+            Math.max(0, sim.doll.soleY("l")),
+            Math.max(0, sim.doll.soleY("r"))
           );
-          sim2.doll.advanceStance(dt);
-          rs.stanceSingle = sim2.doll.stanceSingleNow;
+          sim.doll.advanceStance(dt);
+          rs.stanceSingle = sim.doll.stanceSingleNow;
         }
-        sim2.doll.soleXZ("l", TMP_A);
+        sim.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
-        sim2.doll.soleXZ("r", TMP_B);
+        sim.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
         rs.soleZ.r = TMP_B[2];
-        const n = sim2.doll.jointCount;
+        const n = sim.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim2.doll.jointRot(j, TMP_RV);
+            sim.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim2.doll.jointRelVel(j, TMP_RV);
+            sim.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim2.doll.readCoP(0, TMP_COP_L);
-        sim2.doll.readCoP(1, TMP_COP_R);
+        sim.doll.readCoP(0, TMP_COP_L);
+        sim.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim2.doll.torso().translation().y;
-        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
+        rs.torsoY = sim.doll.torso().translation().y;
+        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
         {
-          const q = sim2.doll.torso().rotation();
+          const q = sim.doll.torso().rotation();
           const ax = 2 * (q.x * q.y + q.w * q.z);
           const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
           const az = 2 * (q.y * q.z - q.w * q.x);
           const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
           rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
           rs.rollDeg = Math.atan2(az, uy) * 57.2958;
-          const av = sim2.doll.torso().angvel();
+          const av = sim.doll.torso().angvel();
           rs.pitchRate = av.z * 57.2958;
           rs.rollRate = av.x * 57.2958;
         }
@@ -21330,7 +21316,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-qplive.ts
+// tools/probe-axisdir.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -21352,79 +21338,38 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
-var { DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
 var log = console.log;
-var ARGS = globalThis.__PROBE_ARGS ?? [];
-var ABLATE = ARGS[0] ?? "qp";
-var DUR = Number(ARGS[1] ?? 8) || 8;
-var PHz = DEFAULT_SIM2.physicsHz ?? 240;
-var sk = buildSkeleton2(DEFAULT_CONFIG2);
-var SHAPE = shapeForJoints2(sk.joints.length);
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: DUR, physicsHz: PHz });
-sim.begin(new Float32Array(sim.paramCount));
-var ctrl = new Controller2(sk, sim, {
-  ...DEFAULT_CONTROLLER2,
-  balance: { ...DEFAULT_BALANCE_PARAMS2, ablate: ABLATE }
-});
-log(`\u2550\u2550 QP \u63A5\u7EBF\u9A8C\u6536\uFF08ablate="${ABLATE}" \u2192 ${ABLATE.includes("qp") ? "QP \u5173" : "QP \u5F00"}\uFF09\u2550\u2550`);
-log("   t/s   \u03BEx      \u03BEz    F_des_x  F_des_z  \u8F74\u6570  \u6B8B\u5DEEN  \u53EF\u884C  \u51B2\u7A81  \u7535\u673A\u5B9E\u6536");
-var last = null;
-for (let f = 0; f < Math.round(DUR * (DEFAULT_SIM2.physicsHz ?? 240)); f++) {
-  ctrl.step(1 / (DEFAULT_SIM2.controlHz ?? 120));
-  sim.advance(1);
-  const rs = sim.rig;
-  const q = rs?.qpTick;
-  if (!q) continue;
-  last = { t: f / PHz, q, rs, xiX: q.xiX, xiZ: q.xiZ };
-  if (f === 0 || f === PHz) {
-    const BB0 = new Float64Array(4);
-    sim.doll.footSoleBounds(0, BB0);
-    log("  \u2605 t=" + (f / PHz).toFixed(2) + " com=(" + rs.com.x.toFixed(4) + ", " + rs.com.y.toFixed(4) + ", " + rs.com.z.toFixed(4) + ")  soleBounds X=[" + BB0[0].toFixed(3) + "," + BB0[1].toFixed(3) + "] Z=[" + BB0[2].toFixed(3) + "," + BB0[3].toFixed(3) + "]  ref=(" + ((BB0[0] + BB0[1]) / 2).toFixed(3) + "," + ((BB0[2] + BB0[3]) / 2).toFixed(3) + ")  \u03BE=(" + q.xiX.toFixed(3) + "," + q.xiZ.toFixed(3) + ")");
+var TAU = 40;
+var STEPS = Math.round(0.35 * (DEFAULT_SIM2.physicsHz ?? 240));
+function run(jname, axis) {
+  const sk = buildSkeleton2(DEFAULT_CONFIG2);
+  const sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 2 });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
+  const rs = ctrl.rs;
+  const ji = sk.joints.findIndex((j) => j.name === jname);
+  if (ji < 0) throw new Error("no joint " + jname);
+  const c0 = { x: rs.com.x, y: rs.com.y, z: rs.com.z };
+  let lastTau = NaN;
+  for (let k = 0; k < STEPS; k++) {
+    rs.beginTick(1 / (DEFAULT_SIM2.controlHz ?? 120));
+    rs.forceTorque(ji, axis, TAU, "balance", "axisdir");
+    const out = rs.arbitrate(1 / (DEFAULT_SIM2.controlHz ?? 120));
+    sim.doll.setMotorTargets(out);
+    sim.doll.setTorqueTargets(rs.tauOut);
+    sim.doll.setHoldMask(rs.holdMask);
+    if (k === 0) lastTau = rs.tauOut[ji * 3 + axis] ?? NaN;
+    sim.advance(1);
   }
-  if (f % Math.round(PHz * 0.5) !== 0) continue;
-  const qq = last.q;
-  let bi = -1, bv = 0;
-  qq.tau.forEach((v, i) => {
-    if (Math.abs(v) > Math.abs(bv)) {
-      bv = v;
-      bi = i;
-    }
-  });
-  const axName = bi >= 0 ? qq.names[bi] : "\u2014";
-  const qj = sk.joints.findIndex((j) => axName.startsWith(j.name + "/"));
-  const qa = bi >= 0 ? Number(axName.split("/")[1]) : 0;
-  const tRec = qj >= 0 ? rs.tauOut?.[qj * 3 + qa] ?? 0 : 0;
-  last.axName = axName;
-  log("  " + last.t.toFixed(2).padStart(5) + " " + last.xiX.toFixed(3).padStart(8) + " " + last.xiZ.toFixed(3).padStart(7) + " " + qq.fDesX.toFixed(1).padStart(8) + " " + qq.fDesZ.toFixed(1).padStart(7) + " " + String(qq.nAxes).padStart(4) + " " + qq.residual.toFixed(1).padStart(7) + "  " + (qq.feasible ? "\u2713" : "\u2717") + (qq.grfSat ? " SAT" : "    ") + String(rs.axisConflicts?.length ?? 0).padStart(3) + " " + axName.padEnd(12) + " QP " + bv.toFixed(1).padStart(7) + "  \u7535\u673A " + tRec.toFixed(1).padStart(7));
+  return { ax: rs.com.x - c0.x, az: rs.com.z - c0.z, ay: rs.com.y - c0.y, tau: lastTau };
 }
-{
-  const rs = sim.rig;
-  const head = sim.doll?.headHitGround?.() ?? false;
-  log("  \u2550\u2550 \u7ED3\u5C40 \u2550\u2550");
-  log("   com.y \u6700\u7EC8 = " + rs.com.y.toFixed(4) + "   (\u521D\u59CB 0.9623)");
-  log("   \u5934\u78B0\u5730 = " + (head ? "\u2717 \u5DF2\u78B0" : "\u2713 \u672A\u78B0") + '   finishReason = "' + String(sim.finishReason ?? "") + '"');
-  log("   com \u6F02\u79FB = (" + rs.com.x.toFixed(3) + ", " + rs.com.z.toFixed(3) + ")");
-}
-if (!last) {
-  log("   \u2605 QP \u4E00\u6B21\u90FD\u6CA1\u88AB\u8C03\u7528\uFF08qpTick \u59CB\u7EC8\u4E3A null\uFF09");
-  log(`     \u68C0\u67E5\uFF1Aablate="${ABLATE}" \u542B 'qp' \u21D2 \u88AB\u5173\u6389\uFF08\u8FD9\u662F\u9884\u671F\uFF09`);
-  log(`     \u8981\u5F00\u5B83\uFF1Aablate \u91CC**\u4E0D\u5199** 'qp'\uFF0C\u6216\u8BBE balance.qpEnable = true`);
-} else {
-  const q = last.q;
-  log("");
-  log("   \u2460 \u8F74\u6570 = " + q.nAxes + (q.nAxes >= 6 ? "  \u2713 \u6574\u94FE\u90FD\u8FDB\u4E86" : "  \u2717 \u592A\u5C11\uFF0C\u8F74\u6CA1\u53D6\u5168"));
-  log(`   \u2461 \u672B\u62CD F_des=(${q.fDesX.toFixed(1)}, ${q.fDesZ.toFixed(1)})N  \u6B8B\u5DEE ${q.residual.toFixed(2)}N  \u53EF\u884C=${q.feasible ? "\u2713" : "\u2717"}`);
-  log("   \u2462 \u5404\u8F74\u89E3\uFF08N\xB7m\uFF0C\u62EC\u53F7\u5185\u662F \u03C4max\uFF09:");
-  q.tau.forEach((v, i) => {
-    log(`        ${q.names[i].padEnd(14)} ${v.toFixed(1).padStart(8)}`);
-  });
-  const qpAxes = new Set(q.names.map((n) => n));
-  const qpConflicts = (last.rs.axisConflicts ?? []).filter((c) => qpAxes.has(`${c.joint}/${c.axis}`));
-  log(`   \u2463 \u8F74\u51B2\u7A81\u5171 ${last.rs.axisConflicts?.length ?? 0} \u5904\uFF0C\u5176\u4E2D**\u5C5E\u4E8E QP** \u7684 ${qpConflicts.length} \u5904  ${qpConflicts.length === 0 ? "\u2713 QP \u672A\u88AB\u62D2\u6536" : "\u2717 QP \u9759\u9ED8\u5931\u6548"}`);
-  for (const c of qpConflicts) {
-    log(`        ${c.joint}/${c.axis}  mode=${c.mode}  by=${c.by}  against=${c.against}`);
-  }
-  for (const c of (last.rs.axisConflicts ?? []).slice(0, 12)) {
-    log(`        ${c.joint}/${c.axis}  mode=${c.mode}  by=${c.by}  against=${c.against}`);
+log("\u2550\u2550 \u5355\u8F74\u6052\u529B\u77E9\u4E0B com \u7684\u4F4D\u79FB\u65B9\u5411\uFF08\u5B9E\u6D4B\uFF09\u2550\u2550");
+log("   " + `\u03C4=${TAU} N\xB7m, ${STEPS} \u6B65 (0.35s)`.padEnd(26) + "\u0394com.x(\u524D\u540E)   \u0394com.z(\u4FA7\u5411)   \u5224\u5B9A");
+for (const jn of ["hip_l", "knee_l", "spine1"]) {
+  for (let a = 0; a < 3; a++) {
+    const r = run(jn, a);
+    const mag = Math.hypot(r.ax, r.az);
+    const dom = mag < 1e-4 ? "\u6C34\u5E73\u9760\u8FD1 0" : Math.abs(r.ax) > Math.abs(r.az) ? "\u2192 \u524D\u540E(X)" : "\u2192 \u4FA7\u5411(Z)";
+    log("   " + `${jn}/${a}`.padEnd(28) + r.ax.toFixed(5).padStart(10) + "   " + r.az.toFixed(5).padStart(11) + "   \u0394y=" + r.ay.toFixed(4).padStart(8) + "   \u03C4\u5B9E\u6536=" + r.tau.toFixed(1).padStart(6) + "   " + dom);
   }
 }
