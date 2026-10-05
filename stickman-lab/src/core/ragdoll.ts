@@ -325,13 +325,14 @@ export const DEFAULTS: Required<RagdollOptions> = {
   //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
   //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
   //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-  // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
-  //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
-  //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
-  //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
-  //   免得读代码的人以为"弓该是 100 那么硬"。
-  archStiffness: 6,
-  archDamping: 0.025,
+  // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+  //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+  //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+  //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+  //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+  //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+  archStiffness: 400,
+  archDamping: 2.0,
   /**
    * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
    *
@@ -577,11 +578,17 @@ export class Ragdoll {
   readonly torsoKey: string;
   /** 关节 i → [父刚体下标, 子刚体下标] */
   readonly jointBodies: Int32Array;
+  /**
+   * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+   *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+   *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+   *   外观指标却全部“正常”。
+   */
+  private motorDriven = new Set<number>();
   /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
   private physicsDt = 0;
   /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
-  archGainClamp: { kNm: number; bNm: number; kMax: number; bMax: number;
-                    requested: { kNm: number; bNm: number } } | null = null;
+  archMotor: { K: number; B: number; joint: number } | null = null;
   /**
    * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
    * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -706,6 +713,11 @@ export class Ragdoll {
         const j = sk.joints[i]!;
         // ★ 同时覆盖 `midfoot_*`（旧命名）与 **`arch_*`**（柔性足 F2 的弓关节）。
         if (!j.name.startsWith('midfoot_') && !j.name.startsWith('arch_')) continue;
+        // ★ 弓不进自研阵别：它由 **Rapier 力模式电机**驱动（见 createJoints）。
+        //   原因：自研是每步**663e式**加冲量，稳定上限 K < 4I/dt² ≈ 7.3 N·m/rad，
+        //   而真实足弧要的刚度是 **≈400**（负荷下只变形 2°）。
+        //   低足够“有弹性”的柔软弓不是足弓，是弹精。
+        if (j.name.startsWith('arch_')) continue;
         if (gain[j.name]) continue;            // 调用方显式给了就不覆盖
         const ax = j.revoluteAxis
           ? (j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2)
@@ -850,37 +862,6 @@ export class Ragdoll {
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
     }
 
-    // ★★ 弓（`arch_*`）的 K/B 按**显式积分数值稳定上限**夹紧。
-    //   必须放在这里（`jointBodies` 建好之后）—— 增益是在 joints 声明前算的，
-    //   那时 `jointAxisInertia` 读不到子刚体。
-    //   自研马达每步显式加冲量 ⇒ 等价于对 θ 显式积分：
-    //     刚度项 ω=√(K/I) 稳定需 ω·dt<2 ⇒ K < 4I/dt²
-    //     阻尼项 |1−B·dt/I|≤1   ⇒ B ≤ 2I/dt
-    //   弓绕**长轴**转、惯量极小（实测沿自由轴 I≈7e-5 kg·m²）、dt=1/120 s
-    //   ⇒ 上限 **K<7.3 N·m/rad、B<0.031 N·m·s/rad**；
-    //   原默认 100/15 是 **14× / 500× 超限** ⇒ 站立不承重时看不出来，
-    //   一压上就高频抖（用户实测「脚一直在抖」）。
-    //   ⚠ 上限必须用**绕自由轴**的惯量（薄弓体 = `min` 主惯量），
-    //     **不能**用 `this.jointIeff`（过冲护栏用的、故意取 `max`，会高估两个数量级）。
-    this.archGainClamp = null;
-    const dt0 = this.physicsDt || 1 / 120;
-    for (let i = 0; i < sk.joints.length; i++) {
-      const j = sk.joints[i]!;
-      if (!j.name.startsWith('arch_') || !j.revoluteAxis) continue;
-      const g = this.opt.jointGain?.[j.name];
-      if (!g) continue;
-      const Iax = this.jointAxisInertia(i, j.revoluteAxis);
-      const kMax = (4 * Iax) / (dt0 * dt0);
-      const bMax = (2 * Iax) / dt0;
-      const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
-      const tmax = Math.max(1e-6, j.maxTorque[ax]!);
-      const kNm = Math.min((g.kP * tmax) / JOINT_MAX_SPEED, kMax);
-      const bNm = Math.min((g.kD * tmax) / JOINT_MAX_SPEED, bMax);
-      this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
-        kNm: (g.kP * tmax) / JOINT_MAX_SPEED, bNm: (g.kD * tmax) / JOINT_MAX_SPEED } };
-      g.kP = (kNm * JOINT_MAX_SPEED) / tmax;
-      g.kD = (bNm * JOINT_MAX_SPEED) / tmax;
-    }
     // ★ 权限诊断：护栏放行了-demanded 的百分之多少（0~1）。<1 就是被护栏卡住。
     //   这个量必须可回读 —— 否则"马达没力"和"指令太小"看起来一模一样。
     this.motorAuthority.fill(1);
@@ -1096,6 +1077,31 @@ export class Ragdoll {
       //   ⚠ 球铰（`GenericImpulseJoint`）**没有任何 limits 方法**
       //     （实测其原型上只有 anchor/body/configureMotor/raw 那些）⇒ 球铰确实无法有
       //     引擎级角度限位，其余关节只能靠 `enforceLimits()` 的手写冲量。
+      // ★★★ 灵性足 F2：**弓用 Rapier 力模式电机，不用自研 PD**。
+      //
+      //   弓是**剔性梁架**，不是弹粽（真实足弧在负荷下只变形 2~3mm）：
+      //     · 刚度要求：负荷弓前力矩 ≈ 686N×0.02m ≈ 13.7 N·m，
+      //       只让它变 2°(0.035rad) ⇒ **K ≈ 400 N·m/rad**。
+      //     而自研显式 PD 在 dt=1/120s 下的稳定上限只有 **7.3**（归因是弓沿自由轴惯量只有 7e-5 kg·m²）。
+      //   ⇓ 两者差 **55 倍**，弹精在显式集成下不可能实现。
+      //
+      //   `MotorModel.ForceBased` 的刚度/阻尼就是真实量纲 N·m/rad，且由求解器**隐式**积分
+      //   ⇒ 无显式稳定上限，可以直接给几百 N·m/rad。
+      //   ⚠ 旧注释说“Rapier 的 stiffness 根本不是 N·m/rad” —— 那是因为用了**默认的
+      //     AccelerationBased**模式（把刚度当加速度，隐式除了质量）。
+      //     切到 `ForceBased` 后量纲就对了。
+      if (j.name.startsWith('arch_') && j.revoluteAxis) {
+        const mj = joint as unknown as {
+          configureMotorModel(m: number): void;
+          configureMotorPosition(t: number, k: number, b: number): void;
+        };
+        mj.configureMotorModel(RAPIER.MotorModel.ForceBased);
+        const K = this.opt.archStiffness ?? 400;      // N·m/rad
+        const B = this.opt.archDamping ?? 2.0;        // N·m·s/rad
+        mj.configureMotorPosition(0, K, B);
+        this.motorDriven.add(i);
+        this.archMotor = { K, B, joint: i };
+      }
       if (j.revoluteAxis && typeof (joint as { setLimits?: unknown }).setLimits === 'function') {
         // revolute 的限位取**与 revoluteAxis 对应的那一轴**（踝 = 轴2，中足 = 轴0）
         const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
@@ -1890,17 +1896,27 @@ soleBlockLabels(side: 0 | 1): string[] {
   //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
   //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
   //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
-  private static readonly NOT_CRASH = new Set([
-    'shin_l', 'shin_r', 'foot_l', 'foot_r',
-    'forefoot_l', 'forefoot_r',          // ★ 柔性足 F1 的前足
-    'arm_l', 'arm_r', 'hand_l', 'hand_r',
-  ]);
+  /**
+   * ★★ 判为"支撑/肢体"而**不算 crash** 的刚体 —— 改成**前缀模式**而不是硬编码名单。
+   *
+   *   为什么必须模式化：这是**第三次**被"改名漏掉"咬到了。名单里原本只有
+   *   `forefoot_*`（柔性足 F1 的前足命名），F2 把中足改名成 `arch_*` 之后
+   *   名单没跟着改 ⇒ **弓合法着地做旋前时 `bodyHitGround()` 立刻返回 true**、
+   *   `lastHitKey='arch_l'` ⇒ 回合被判 `fallReason='crash'`。
+   *   也就是说：**柔性足做得越对，越容易被判摔倒**（用户实测「摔倒会误判」）。
+   *
+   *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
+   */
+  private static notCrashKey(key: string): boolean {
+    return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key)
+      || /^(arm|hand|forearm)_[lr]$/.test(key);
+  }
 
   bodyHitGround(): boolean {
     this.lastHitKey = '';
     for (let i = 0; i < this.bodies.length; i++) {
       const bd = this.sk.bodies[i];
-      if (Ragdoll.NOT_CRASH.has(bd.key)) continue;
+      if (Ragdoll.notCrashKey(bd.key)) continue;
       const b = this.bodies[i];
       for (let ci = 0; ci < b.numColliders(); ci++) {
         const col = b.collider(ci);
@@ -2291,6 +2307,10 @@ soleBlockLabels(side: 0 | 1): string[] {
     const relL = this.relL;
     const jg = this.opt.jointGain ?? {};
     for (let i = 0; i < this.joints.length; i++) {
+      // ★★ 跳过**引擎电机**驱动的关节（当前只有弓）。双驱动 = 一个关节被两个
+      //   不同量纲的刚度同时拉向 0 ⇒ 柔性足被"焊死"，而外观指标全部看起来正常
+      //   （中足已经栽过这个坑，见 createJoints 里那段注释）。
+      if (this.motorDriven.has(i)) continue;
       const j = this.sk.joints[i];
       const pi = this.jointBodies[i * 2];
       const ci = this.jointBodies[i * 2 + 1];

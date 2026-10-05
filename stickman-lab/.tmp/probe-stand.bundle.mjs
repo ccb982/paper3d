@@ -6402,8 +6402,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     }
     return segKey(best);
   };
-  const soleHalfLen = META.sole.len * px2m / 2;
+  const soleLenTarget = 0.156 * cfg.height;
+  const soleHalfLen = soleLenTarget / 2;
   const soleHalfThick = META.sole.thick * px2m / 2;
+  const SOLE_WIDTH_TARGET = 0.1;
   const SOLE_GROUND_CORR = 0;
   const PIVOT_PAD = 0.015;
   const TILTED = /* @__PURE__ */ new Set(["arm_l", "arm_r", "hand_l", "hand_r", "thigh_l", "thigh_r", "shin_l", "shin_r"]);
@@ -6420,6 +6422,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
+  const ARCH_SPEC = [];
+  const ARCH_OUT = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -6459,7 +6463,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const newHalfH = Math.max(1e-3, newLen / 2 - radius);
         length = newLen;
         halfHeight = newHalfH;
-        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2 - cfg.legStretch;
         centerZ = mapZ(kn[0], true);
       }
     }
@@ -6499,7 +6503,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const hxRaw = soleHalfLen * sfx;
       const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const hx = hxRaw;
-      const hz = hx * 0.3;
+      const hz = SOLE_WIDTH_TARGET / 2 * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6526,6 +6530,13 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const fMidY = soleWorldY;
         const yawDip = cfg.soleGroundCorr;
         const local2 = rotVecByQuat(fQInv, [0, fMidY - ankleY - SOLE_GROUND_CORR - yawDip, 0]);
+        const midX = cfg.soleFootScale * hx * (cfg.forefootAtFrac * 2 - 1);
+        const two = cfg.soleSplit;
+        const hxBall = two ? hx * 0.5 : hx;
+        const offBall = two ? hx * 0.5 : 0;
+        const hzCol = hz * 0.5;
+        const offColIn = +(hz * 0.5).toFixed(6);
+        const offColOut = -(hz * 0.5).toFixed(6);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -6560,6 +6571,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
+          // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -6567,33 +6579,156 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
           //   拆成两块后，载荷可在两者之间**连续**转移
           //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          // ══════════════════════════════════════════════════════════════════
+          // ★★★ 足骨架按**真实人脚形状**重建（2026-10-04）
+          // ══════════════════════════════════════════════════════════════════
+          //   之前是 **281×100×52mm 的等厚平板**（外八 25°）。两个致命问题：
+          //     ① **内侧柱与外侧柱同时着地** ⇒ 载荷已在两柱上，接触求解器
+          //        **没有可迁移的压力**。实测髋外展力矩 −120N→+120N 期间
+          //        CoP_z 只动 **0.9mm**（内侧柱 175N : 外侧柱 12N = **14:1**）。
+          //     ② 要卸载内侧柱得把 52mm 厚的板翘起来 ⇒ `tanθ > 52/100`
+          //        ⇒ 需要 **>27.5°** 的中足行程，所需力矩超出前足质量能提供的量。
+          //        实测：中足行程给到 55°、刚度 2000 N·m/rad，CoP_z 幅度恒为
+          //        18~19mm 且随两者**零变化** ⇒ 柔性根本没参与。
+          //
+          //   **真实人脚不是平板** —— 关键在**内侧弓**：
+          //     · Jeon & Cho 压力垫综述：「第一接触点通常在踝关节中心**外侧**，
+          //       在**距下关节产生旋前力矩**，允许柔性活动」
+          //       「**内侧弓把重量传递到足的外侧缘**」
+          //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
+          //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
+          //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
+          //
+          //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
+          //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
+          //     弓区 22–57%   外侧柱 30mm 厚 10mm 接地 · 内侧弓 30mm **离地 22mm**
+          //     跖球 57–89%   宽 100mm（最宽）厚 20mm 全宽接地
+          //     趾   89–100%  宽 76mm   厚 12mm  接地
+          //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
+          // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            const two = cfg.soleSplit;
-            const hxBall = two ? hx * 0.5 : hx;
-            const hxHeel = two ? hx * 0.5 : 0;
-            const offBall = two ? hx * 0.5 : 0;
-            const offHeel = two ? -hx * 0.5 : 0;
-            const mBall = two ? soleMass * 0.6 : soleMass;
-            const mHeel = two ? soleMass * 0.4 : 0;
-            const mk = (dx, mx, m) => ({
-              shape: "cuboid",
-              halfHeight: 0,
-              radius: 0,
-              hx: two ? dx > 0 ? hxBall : hxHeel : hx,
-              hy: soleHalfThick,
-              hz,
-              offsetX: dx,
-              offsetY: local2[1],
-              offsetZ: local2[2],
-              mass: m,
-              comY: 0,
-              inertiaZ: m * ((two ? dx > 0 ? hxBall : hxHeel : hx) ** 2 + soleHalfThick ** 2) / 3,
-              inertiaXY: m * (hz * hz + soleHalfThick * soleHalfThick) / 3
-            });
-            return two ? [mk(offBall, 0, mBall), mk(offHeel, 0, mHeel)] : [mk(0, 0, soleMass)];
+            const archRise = 0.022;
+            const L = cfg.soleFootScale * hx;
+            const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
+            const soleBottom = local2[1] - soleHalfThick;
+            const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
+              const hy = hyMm / 1e3 * cfg.soleFootScale;
+              const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
+              const cxm = (fx0 + fx1) / 2 * L, czm = (fz0 + fz1) / 2 * HW;
+              const vol = 4 * hxm * hzm * hy;
+              return {
+                shape: "cuboid",
+                halfHeight: 0,
+                radius: 0,
+                hx: hxm,
+                hy,
+                hz: hzm,
+                offsetX: cxm,
+                offsetY: soleBottom + hy + rise,
+                offsetZ: czm,
+                mass: vol,
+                comY: 0,
+                inertiaZ: 0,
+                inertiaXY: 0,
+                _vol: vol,
+                _label: label
+              };
+            };
+            const blocks = [
+              blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
+              blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
+              blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
+              blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
+            ];
+            const archBlocks = [
+              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
+              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
+            ];
+            const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVol / allVol);
+            for (const b of archBlocks) {
+              b.mass = archMass * (b._vol / archVol);
+              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            }
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
+            ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
+            ARCH_OUT.archMass = archMass;
+            const footMass = soleMass - ARCH_OUT.archMass;
+            const volTot = blocks.reduce((a, b) => a + b._vol, 0);
+            for (const b of blocks) {
+              const m = footMass * (b._vol / volTot);
+              b.mass = m;
+              b.inertiaZ = m * (b.hx * b.hx + b.hy * b.hy) / 3;
+              b.inertiaXY = m * (b.hz * b.hz + b.hy * b.hy) / 3;
+            }
+            return blocks;
           })(),
           leg: true
         });
+        {
+          const isL = spec.key === "shin_l";
+          const footKey = isL ? "foot_l" : "foot_r";
+          const archKey = isL ? "arch_l" : "arch_r";
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u5F13" : "\u53F3\u5185\u4FA7\u5F13",
+            part,
+            // ★★★ 体心必须与 `foot_*` **完全相同** ⇒ 用 `ankleY`，不是 `cy`。
+            //   `cy` 是**小腿肚**中心（实测 236.5mm），`ankleY` 才是踝/脚掌中心
+            //   （实测 68.6mm）—— 两者差 168mm。
+            //   弓的 collider 偏移 `offsetY` 是按**鞋底平面**（体心下方 68.6mm）算的，
+            //   一旦体心放到小腿肚上，弓就整体**浮到膝盖附近 190mm 高空**（实测）。
+            //   后果：踝上多出一坨 0.123kg 的单摆 ⇒ 腿的动力学全变，
+            //   表现为「脚在自身重量下上下弹 + 打滑」，但短期看着反而更稳
+            //   （那坨质量在膝附近蹭到了地面，形成虚假支撑）。
+            //   ⚠ 上面那段注释写的「与 foot_* 同一个几何中心（cx/cy/cz 全同）」
+            //     在 `cy` 这一项上一直是**假的** —— 注释说了，做法没跟上。
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            length,
+            radius,
+            halfHeight,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true
+          });
+          const ab = ARCH_OUT.archBlocks;
+          const mOff = (f) => ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
+          ARCH_SPEC.push({
+            side: isL ? "l" : "r",
+            footKey,
+            archKey,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0 + mOff("offsetX"),
+            // 脚体 cx = 0
+            wy: cy + mOff("offsetY"),
+            // 与弓刚体同一个 cy
+            wz: centerZ + mOff("offsetZ"),
+            // 与弓刚体同一个 cz
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+          });
+        }
         bodies.push({
           key: spec.key,
           bone: spec.bone,
@@ -6701,12 +6836,17 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const byKey = new Map(bodies.map((b) => [b.key, b]));
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  for (const b of bodies) {
+    if (!b.colliders || b.colliders.length === 0) continue;
+    b.mass = b.colliders.reduce((a, c) => a + (c.mass ?? 0), 0);
+  }
   const joints = [];
   const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
   JOINT_ORDER_ACTIVE.forEach((name, index) => {
     const jm = jointMetaByName.get(name);
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
     const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
+    const isHip = /^hip_[lr]$/.test(jm.name);
     const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
     if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
     const [axPx, ayPx] = anchorPx(name, jm);
@@ -6715,12 +6855,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
+    const wz = isAnkle ? parent.cz : mapZ(axPx, stanceHere);
     const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
     const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
-    const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
-    const flexMin = jm.limitDeg[0] * DEG;
-    const flexMax = jm.limitDeg[1] * DEG;
+    const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
+    const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
     const tau = /^(foot|ankle)_/.test(name) ? cfg.ankleTorque : JOINT_MAX_TORQUE[name] ?? 100;
     const dParent = rotVecByQuat(
       invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
@@ -6747,9 +6887,62 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
-      maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]]
+      // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
+      revoluteAxis: isAnkle ? [0, 0, 1] : void 0,
+      // ★★ 髋**外展轴**用独立倍率（不动全局 `TORQUE_AXIS_FACTOR`，否则
+      //   颈/肩/肘的外展轴会跟着变粗 —— 那三个的次要轴是**刻意压小**的，
+      //   见 `JOINT_LIMITS_XY_DEG` 的注释）。
+      //
+      //   为什么撤掉"不超人"的余量（用户 2026-10-05 明确）：
+      //   「人体骨骼承重很大的，不要设承重上限」。
+      //   此前 hip=200 × 0.60 = **120 N·m**，而 Inman 1947 的静态需求
+      //   （体重 × 半髋间距 = 687 × 0.163 = 112 N·m）就占掉 93% ——
+      //   剩下 29% 余量不足以同时**托住**和**搬运**重心。
+      //   2026-10-04 曾试 hip=250（外展 150）而无效，当时的判定是
+      //   「矢状面没稳住，额度是假象」；现在额状机制（Winter 刚度伺服 +
+      //   锁定承诺 + 载荷依赖张力）已就位，值得重测。
+      //
+      //   口径：髋外展轴取**与屈伸轴同量级**（1.00 而非 0.60），
+      //   即 τmax(hip/0) = hip_l 的 τ = 200 N·m。
+      //   ⚠ 这是**工程余量**，不是解剖上限；真实股骨/髋臼能承受的远高于此。
+      maxTorque: [
+        tau * (isHip ? cfg.hipAbdTorqueFactor : TORQUE_AXIS_FACTOR[0]),
+        tau * TORQUE_AXIS_FACTOR[1],
+        tau * TORQUE_AXIS_FACTOR[2]
+      ]
     });
   });
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] \u5F13\u5173\u8282 ${as.archKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]
+    );
+    const tauArch = cfg.ankleTorque * 0.25;
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx,
+      wy: as.wy,
+      wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+  }
   if (K > 1) {
     const SPINE_XY_DEG = [15, 20];
     const SPINE_FLEX_DEG = [-25, 25];
@@ -6811,17 +7004,36 @@ function assertColliderMass(sk2) {
   }
 }
 function assertJointAnchors(sk2) {
+  const reachOf = (b) => {
+    let r = 0;
+    for (const c of b.colliders) {
+      const ox = c.offsetX ?? 0;
+      let d;
+      if (c.shape === "capsule") {
+        const ay = c.offsetY - c.halfHeight, by = c.offsetY + c.halfHeight;
+        d = Math.max(Math.hypot(ox, ay, c.offsetZ), Math.hypot(ox, by, c.offsetZ)) + c.radius;
+      } else {
+        d = Math.hypot(
+          Math.abs(ox) + c.hx,
+          Math.abs(c.offsetY) + c.hy,
+          Math.abs(c.offsetZ) + c.hz
+        );
+      }
+      if (d > r) r = d;
+    }
+    return r;
+  };
   let worst = 0;
   for (const j of sk2.joints) {
     const p = sk2.bodies.find((b) => b.key === j.parentKey);
     const c = sk2.bodies.find((b) => b.key === j.childKey);
     for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
-      const reach = b.halfHeight + b.radius;
+      const reach = reachOf(b);
       const d = Math.hypot(l[0], l[1], l[2]);
       const over = d - reach;
       if (over > worst) worst = over;
       if (over > 1e-4) {
-        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm |d|=${(d * 1e3).toFixed(1)}mm > reach=${(reach * 1e3).toFixed(1)}mm  \u8D8A ${(over * 1e3).toFixed(1)}mm`);
+        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm \u8D85\u51FA ${b.key} \u7684\u5305\u56F4\u7403 ${(over * 1e3).toFixed(1)}mm\uFF08reach=${(reach * 1e3).toFixed(1)}mm\uFF09`);
       }
     }
   }
@@ -6838,6 +7050,46 @@ var init_skeleton = __esm({
       // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
+      // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
+      //
+      // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+      //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+      //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+      //
+      // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+      //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+      //   "Sway amplitude **decreased** as stance width increased, and **Ke
+      //   increased with stance width**"（sway ∝ Ke^−0.55）
+      //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+      //
+      // ★ 身高换算（本 rig 身高 **1.80 m**）：
+      //   · Perry step width 0.075 m = **4.2% 身高**
+      //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+      //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+      //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+      //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+      //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+      //   重心爬不进去。
+      //
+      // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+      //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+      //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+      //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+      //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+      //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+      //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
+      // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
+      //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
+      // ★★ 2026-10-05 用户决定：**回到 stance = 1.0**（原值）。
+      //   理由：0.35 的站距**观感不成立** —— 这是要放进游戏里的 boss 角色，
+      //   两脚几乎相切看起来不像人形。⇒ 站距是**角色设计参数**，
+      //   不是可以为了指标牺牲的自由量。
+      //   ⚠ 回退曾**静默失败**（编辑的字符串没匹配上，而脚本无条件打印 'ok'）。
+      //     `tools/probe-readback.ts` 就是为此写的：任何配置改动后必须回读实际数值。
+      //   代价（已知并接受）：`stance=1.00` 时重心进入支撑面需横移 **117mm**
+      //   （`stance=0.35` 只要 28mm），X3 驻留回到 0.00s。
+      //   ⇒ 重心转移必须从**别的方向**解决（伺服/迈步的平衡、相位时长对齐、
+      //     髋外展权限、脚宽），**不再靠缩站距**。
       stance: 1,
       limbRadiusScale: 0.6,
       // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
@@ -6881,8 +7133,40 @@ var init_skeleton = __esm({
       //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
       //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
       ankleTorque: 120,
+      /**
+       * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
+       *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
+       *   可扫，因为放开权限后实测**反而更差**（15 档刚度/阻尼组合全部驻留 0.00s，
+       *   而 τmax=120 时同一律能到驻留 0.42s / 最小 X3 = 2mm）⇒ 髋外展权限
+       *   **不是瓶颈**，多给会让它冲过目标。Inman 的 112 N·m 静态需求在 120 时
+       *   已占 93%，实测那个余量恰好够用。
+       */
+      hipAbdTorqueFactor: 0.6,
+      // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+      archLimitDeg: [-4, 16],
+      /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+      archAtFrac: 0.22,
+      // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
+      //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
+      ankleLimitDeg: [-12, 18],
+      // ★ 中足关节位置（足长相对）：0.5 = 几何中心（两段等长、力臂对称）
+      forefootAtFrac: 0.5,
+      // ★ 中足（距下关节）旋前/旋后行程 ±12°（人体被动 ROM 是内翻 35°/外翻 14°）
+      // ★ 中足（距下关节）旋前/旋后行程。
+      //   ⚠ 2026-10-04 实测：**12° 不够**。要让内侧缘**离地**（从而卸载内侧柱、
+      //   把载荷转到外侧柱），必须 `tanθ > 足厚/足宽 = 52/100` ⇒ **θ > 27.5°**；
+      //   12° 只能把内侧缘抬 5mm，对着 26mm 的半厚根本脱离不了接触。
+      //   实测佐证：刚度从 30 扫到 2000 N·m/rad，CoP_z 幅度恒为 18~19mm（全是单柱受力），
+      //   随刚度零变化 ⇒ 柔性**没参与**。
+      //   取 **±34°**（解剖学距下关节内翻 ~35°，见 `JOINT_LIMITS_XY_DEG` 踝条目注释）。
+      midfootPronDeg: 34,
       footUvWarpDeg: 0,
-      ankleEnabled: false
+      // ★ 踝**常开**（用户 2026-10-04：「脚踝是要一直开的，脚踝是肯定有用的，
+      //   脚需要转向」）。之前这里是 false，导致只有 web 端（lab.ts 的
+      //   DEFAULT_LAB.ankle = true）有踝，所有探针/默认配置都建成 12 关节无踝骨架。
+      //   ⚠ 踝提供的是**转向**（roll/pitch/twist 三轴）+ 足底 CoP 权限；
+      //     额状面平衡的主动力仍在髋（Winter 1995 [H]：并立站位 M/L 归髋不归踝）。
+      ankleEnabled: true
     };
     SEGMENTS = [
       { key: "head", bone: "head", label: "\u5934", massPct: 8.1, comRatio: 0.495, gyrationRatio: 0.495, proximal: "bottom" },
@@ -6918,14 +7202,28 @@ var init_skeleton = __esm({
       shoulder_r: 100,
       elbow_l: 40,
       elbow_r: 40,
+      // ★ 额状面力矩预算（文献数字，记在这里备用；**暂时保持 200**，见下）：
+      //     Inman 1947：单腿站立理论最小髋外展力矩 = 体重 × 半髋间距
+      //                  = 687 N × 0.163 m = **112 N·m**
+      //     hip=200 × TORQUE_AXIS_FACTOR[0]=0.60 ⇒ 外展轴 **120 N·m** ⇒ 占用 **93%**
+      //     （文献实测：健康青年男 ~50%、健康老年女 ~82%）
+      //   2026-10-04 实测把 hip 提到 250（外展 150 N·m、占用 75%）与
+      //   SPINE_TAU 提到 180（侧屈 108 N·m，依据「腰椎侧屈半程 ⇒ 髋外展需求 −37%」）：
+      //     侧向权限没变好、单支撑仍然 0.00s，**存活反而从 2.37s 掉到 1.97s**。
+      //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
+      //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
+      //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
       hip_l: 200,
       hip_r: 200,
       knee_l: 150,
       knee_r: 150,
       // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
       //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
+      // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
+      //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
+      //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
+      //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
       foot_l: 45,
-      // ★ 会被 cfg.ankleMaxTorque 覆盖
       foot_r: 45
     };
     TORQUE_AXIS_FACTOR = [0.6, 0.35, 1];
@@ -13576,6 +13874,7 @@ var init_rapier = __esm({
 // src/core/ragdoll.ts
 var ragdoll_exports = {};
 __export(ragdoll_exports, {
+  DEFAULTS: () => DEFAULTS,
   Ragdoll: () => Ragdoll
 });
 function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
@@ -13619,7 +13918,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13637,14 +13936,81 @@ var init_ragdoll = __esm({
     AXIS_X = 0;
     AXIS_Y = 1;
     AXIS_Z = 2;
+    LIMIT_BIAS_RATE = 20;
+    LIMIT_MAX_BIAS = 12;
     STANCE_CLEAR_MIN = 0.03;
     STANCE_ENTER = 0.05;
     STANCE_EXIT = 0.1;
+    SOLE_NORMAL_TOL = 0.7;
     DEFAULTS = {
       groundFriction: 1,
+      // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
+      midfootStiffness: 120,
+      midfootDamping: 8,
+      // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
+      //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
+      //   踩实一部分才有用；压到底就成平板、丧失 CoP 行程（Lugade & Kaufman 2014）。
+      //   τmax 只有 30 N·m，K=6 ⇒ 满偏 5 rad；K 再大就压不动了。
+      // ★ 实测选定（20 档扫描，K=35~260 × B=2~30）：
+      //   K=100 / B=15 ⇒ 弓角摆幅 **4.0°**、CoP 内侧余量 **228mm**（最好）
+      //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
+      //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
+      //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
+      // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+      //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+      //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+      //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+      //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+      //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+      archStiffness: 400,
+      archDamping: 2,
+      /**
+       * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
+       *
+       *   柔性足 F1（2026-10-04）：内侧弓是**有限刚度**的，站立时承重会压缩它、
+       *   离载时回弹（arch recoil / windlass，Jeon&Cho 综述 / Welte 2023）。
+       *   revolute 完全自由会让前足被接触力压到限位、打滑 ⇒ 必须给弹簧。
+       *
+       *   量级参考：踝的 `ankleTorque = 120 N·m`、行程 30°（0.52 rad）⇒ 等效刚度
+       *   量级 ~230 N·m/rad。中足比踝**弱**得多（足内小肌肉），取 **30 N·m/rad**
+       *   （约为踝的 1/8），阻尼取临界附近 `2·√(k·I)` 的量级 ⇒ **1.5 N·m·s/rad**。
+       *   ⚠ 这两个数是**量级选取**，不是实测标定。验收标准是「髋外展力矩扫描下
+       *     CoP_z 能迁到 ±13.5mm」（Lugade&Kaufman 2014 的足宽 27%），
+       *     达不到就调 `midfootStiffness`，而不是改别的地方。
+       */
       bodyFriction: 0.9,
       linearDamping: 0,
+      // ★★★ 2026-10-04：0.04 → **12**。这不是调参，是补上一个**缺失的物理机制**。
+      //
+      //   现象（用户）：「脚打滑，膝盖和盆骨乱飞」。
+      //   实测（tools/probe-midfoot.ts K 段，扫角阻尼）：
+      //       角阻尼   鞋底滑移   全关节峰值角速   >300°/s 的关节
+      //        0.04        86mm         1520°/s     foot_l,foot_r,knee_r
+      //        0.5        78mm          789°/s     knee_r,foot_r,foot_l
+      //        2         88mm         1244°/s     foot_l,foot_r,knee_r
+      //        5        106mm          625°/s     knee_r,foot_r,hip_r
+      //       12     **12mm**     **109°/s**     （无）   ← 取这个
+      //       30          8mm          316°/s     knee_r
+      //
+      //   为什么角阻尼是**对症**的而不是掩盖：前足是 0.5 kg 的薄长盒
+      //   （绕长轴 I ≈ m(hz²+hy²)/3 ≈ 0.0018 kg·m²），接触冲量在 50 mm 力臂上
+      //   给 15 N·m 力矩 ⇒ 1/120 s 内 Δω ≈ 4000°/s —— **这个角速度物理上是真的**，
+      //   不是求解器发散。真实的人脚靠**肌腱/足底筋膜/肌肉的黏弹**把它压住，
+      //   而这里原本 `0.04` 几乎等于**没有被动阻尼** ⇒ 脚像鞭子一样抽动，
+      //   反作用力把膝/盆骨抽飞，同时摩擦力被横向速度带跑 ⇒ 打滑。
+      //   阻尼**不注入能量**，所以不像放松护栏/加刚度那样把脚踹飞（实测刚度方案滑移 1113mm）。
+      //
+      //   ⚠ 代价：Rapier 的 `angularDamping` 是**所有刚体**统一值。12 对躯干偏大
+      //   （会显得"肉"）。更细的做法是按部位给（脚/前足高、躯干低），
+      //   那需要把 `RagdollOptions` 拆成分组阻尼 —— 留作后续。
+      // ★ 2026-10-04：**全身回退到 0.04**，高阻尼只给脚掌。
+      //   实测（tools/probe-midfoot.ts E3，站距 326mm ⇒ 单支撑需 |CoM.z| ≈ 160mm）：
+      //     全身12 / 脚12 ⇒ |CoM.z| =  53mm   ✗ 侧向权重转移被压掉 3.8 倍
+      //     全身 0.04 / 脚12 ⇒ **296mm**  ✓ 鞋底滑移 0mm
+      //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
+      //   全局高阻尼会直接把它堵死。
       angularDamping: 0.04,
+      footAngularDamping: 12,
       torqueScale: 1,
       kP: 48,
       kD: 1,
@@ -13664,7 +14030,31 @@ var init_ragdoll = __esm({
       //   额状面平衡要的那几十 N·m 走的就是那条路。
       //   ⇒ 位置反馈环保持原始护栏（站得住），前馈走无护栏通道（力矩够）。
       //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
-      ankleGroundFactor: 1
+      //
+      // ★★★ 2026-10-04 修：`1` 让这整条机制**恒等于死代码**。
+      //   `Math.max(1, Math.min(ankleGroundFactor, sum/free, need/free))` 在系数 = 1 时
+      //   永远返回 1 ⇒ 柔性足/踝的接地惯量放大**从未生效**（实测 16 个关节全是 1.00）。
+      //   后果：薄盒脚掌 Ieff ≈ 0.0015 kg·m² ⇒ 位置环护栏把踝/中足反馈掐到 **1% 权限**
+      //   （实测 motorAuthority = 0.01），踝与中足实际都是**自由铰**。
+      //   取 8：让髋/膝拿到它们本来该拿的量级，踝拿到够用的刚度而脚仍不脱离地面。
+      //   ⚠ 这个数**只在 VIP 刚度 + 髋被动刚度（文献结构）就位之后**才有意义 ——
+      //   在那之前放松护栏只会把脚踹飞（实测 factor 32/64 ⇒ 0.9~1.2 s 倒地）。
+      //   扫参见 tools/probe-midfoot.ts D3；改这个数必须重跑它。
+      // ⚠ 2026-10-04 二次调整：全局系数**只对踝/中足生效**（见 `groundFactorFootKg`）。
+      //   之前它是全局的，一动就把髋/膝的稳定性护栏也放松（实测关踝基线 6.00→1.53 s）。
+      //   踝/中足要权限走这里；**不要**再靠调 `driveMotors` 的 kP 去救踝。
+      //   ⚠⚠ 2026-10-04 **实测否决**：这个系数不能用来给踝/中足补权限。
+      //   `groundFactorFootKg`（只作用于踝/中足）确实让它们拿到了权限，但**代价是打滑**：
+      //     gf=1 → 鞋底滑移   87mm、踝角速峰值 1815°/s
+      //     gf=8 →           174mm、           2676°/s
+      //     gf=72→           507mm、           3199°/s
+      //     gf=120→         **1113mm**、       3062°/s
+      //   角速上千度/秒（每秒 5~9 转）是**数值爆炸**不是"动作大"，求解器在用它甩脚，
+      //   反作用力把膝/盆骨抽飞（用户现象：「脚打滑，膝盖和盆骨乱飞」）。
+      //   ⇒ 回到 1。踝/中足的权限问题要用**几何不穿地**来解决，不是靠放松护栏。
+      //   扫参见 tools/probe-midfoot.ts J 段（逐关节角速 + 鞋底滑移）。
+      ankleGroundFactor: 1,
+      groundFactorFootKg: 2
     };
     VEL_WIN = 5;
     Ragdoll = class _Ragdoll {
@@ -13681,6 +14071,13 @@ var init_ragdoll = __esm({
        * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
        */
       soleCols = [[], []];
+      /**
+       * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
+       *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
+       *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
+       *   （`foot_*` 与 `forefoot_*` 是**两个**刚体，姿态各不相同。）
+       */
+      soleColBody = [[], []];
       soleCol = [null, null];
       /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
       copTmp = new Float64Array(4);
@@ -13705,11 +14102,24 @@ var init_ragdoll = __esm({
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
       /**
+       * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+       *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+       *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+       *   外观指标却全部“正常”。
+       */
+      motorDriven = /* @__PURE__ */ new Set();
+      /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
+      physicsDt = 0;
+      /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
+      archMotor = null;
+      /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
        *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
        */
       jointIeff;
+      /** 瘫软标记：位置环增益置 0（死亡演出，见 setLimp） */
+      limp = false;
       /**
        * 关节目标**角**命令（无量纲，∈ [−1, 1]，长度 = 关节数 × 3）。
        * ★ 语义已从"目标角速度系数"改成"目标角系数"（见 RagdollOptions.posRefScale）：
@@ -13796,9 +14206,29 @@ var init_ragdoll = __esm({
         this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
         this.torqueCmd = new Float32Array(sk2.joints.length * 3);
         this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
+        const archK = this.opt.archStiffness ?? 6;
+        const archB = this.opt.archDamping ?? 1.2;
+        if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
+          const gain = { ...this.opt.jointGain ?? {} };
+          for (let i = 0; i < sk2.joints.length; i++) {
+            const j = sk2.joints[i];
+            if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
+            if (j.name.startsWith("arch_")) continue;
+            if (gain[j.name]) continue;
+            const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
+            const tmax = Math.max(1e-6, j.maxTorque[ax]);
+            const isArch = j.name.startsWith("arch_");
+            gain[j.name] = {
+              kP: (isArch ? archK : this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
+              kD: (isArch ? archB : this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
+            };
+          }
+          this.opt.jointGain = gain;
+        }
         let topSpine = -1;
         for (const b of sk2.bodies) {
           const m = /^spine(\d+)$/.exec(b.key);
@@ -13823,7 +14253,7 @@ var init_ragdoll = __esm({
           this.initY[i] = b.cy;
           this.initZ[i] = b.cz;
           const body = this.world.createRigidBody(
-            rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(this.opt.angularDamping).setCanSleep(false)
+            rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(/^foot_/.test(b.key) ? this.opt.footAngularDamping ?? this.opt.angularDamping : this.opt.angularDamping).setCanSleep(false)
           );
           this.bodies.push(body);
           for (const c of b.colliders) {
@@ -13836,11 +14266,13 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
                 this.soleCols[0].push(col);
+                this.soleColBody[0].push(i);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
                 this.soleCols[1].push(col);
+                this.soleColBody[1].push(i);
                 this.soleCol[1] ??= col;
               }
             }
@@ -13863,7 +14295,7 @@ var init_ragdoll = __esm({
         this.groundFactor.fill(1);
         this.ankleGroundFactorUsed.fill(1);
         {
-          const footKeys = ["foot_l", "foot_r", "shin_l", "shin_r"];
+          const footKeys = ["foot_l", "foot_r", "forefoot_l", "forefoot_r", "shin_l", "shin_r"];
           const hasFootBelow = /* @__PURE__ */ new Map();
           const walk = (k) => {
             const hit = hasFootBelow.get(k);
@@ -13916,11 +14348,14 @@ var init_ragdoll = __esm({
             }
             const free = this.jointIeff[i];
             const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
-            this.groundFactor[i] = Math.max(1, Math.min(
+            let subMass = 0;
+            for (const bi of inSub) subMass += this.sk.bodies[bi].mass;
+            const footAnchored = subMass <= this.opt.groundFactorFootKg;
+            this.groundFactor[i] = footAnchored ? Math.max(1, Math.min(
               this.opt.ankleGroundFactor,
               sum / Math.max(1e-9, free),
               need / Math.max(1e-9, free)
-            ));
+            )) : 1;
             this.ankleGroundFactorUsed[i] = this.groundFactor[i];
           }
         }
@@ -13977,13 +14412,32 @@ var init_ragdoll = __esm({
           }
           this.jointBodies[i * 2] = pi;
           this.jointBodies[i * 2 + 1] = ci;
-          const jd = rapier_default.JointData.spherical(
-            { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
-            { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] }
-          );
-          jd.limitsEnabled = true;
-          jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
-          this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
+          const anch1 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
+          const anch2 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
+          let jd;
+          if (j.revoluteAxis) {
+            const ax = j.revoluteAxis;
+            jd = rapier_default.JointData.revolute(anch1, anch2, { x: ax[0], y: ax[1], z: ax[2] });
+            jd.limitsEnabled = true;
+            jd.limits = [j.minRad[2], j.maxRad[2]];
+          } else {
+            jd = rapier_default.JointData.spherical(anch1, anch2);
+          }
+          const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+            const mj = joint;
+            mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            const K = this.opt.archStiffness ?? 400;
+            const B = this.opt.archDamping ?? 2;
+            mj.configureMotorPosition(0, K, B);
+            this.motorDriven.add(i);
+            this.archMotor = { K, B, joint: i };
+          }
+          if (j.revoluteAxis && typeof joint.setLimits === "function") {
+            const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
+            joint.setLimits(j.minRad[ax], j.maxRad[ax]);
+          }
+          this.joints.push(joint);
         });
       }
       get jointCount() {
@@ -14014,22 +14468,45 @@ var init_ragdoll = __esm({
        *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
        *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
        *
+       * ★★★ 2026-10-04 修：**接触面筛选**从"世界竖直"改成"**该鞋底块自己的底面**"。
+       *
+       *   原来只判 `|n·y| ≥ 0.5`。但鞋底是**扁盒**，倾倒时它的**侧面**也会贴到地面，
+       *   而侧面的法线在侧向 ⇒ `|n·y|` 可能仍然不小 ⇒ 侧面的接触点被算进 CoP。
+       *   后果（实测）：`CoP_z` 读出 **391 mm**，而整只脚宽只有 **204 mm** ——
+       *   物理上不可能，正是"侧面被当成底面"的证据。这类读数会让人误判
+       *   "柔性足权限巨大"，其实测的是倾倒瞬态。
+       *   ⇒ 第一版改成"法线与该块底面外法线对齐（|n·bottom| ≥ 0.7）"，**实测仍不够**：
+       *     强制跖屈到 29° 时读出 CoP_z 相对脚掌 **70.1mm**，而所有鞋底块的
+       *     z 跨度只有 ±50mm ⇒ 还是有侧面接触被算进来（29° 倾角下侧面法线
+       *     与底面法线夹角仍可能 < 45°）。
+       *   ⇒ 改成**直接验证接触点落在这块底面的矩形范围内**：把接触点变换到
+       *     该刚体局部系，要求 `|x| ≤ hx+ε` 且 `|z| ≤ hz+ε`（y 不判，因为
+       *     接触点就在面上）。这与"底面"是几何等价定义，没有夹角可漏。
+       *
        * @param side 0=左 1=右
        * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
        */
       readCoP(side, out) {
         out[0] = out[1] = out[2] = out[3] = 0;
         let sx = 0, sy = 0, sz = 0, sl = 0;
-        for (const col of this.soleCols[side]) {
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const EPS = 2e-3;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
               const n = mf.numSolverContacts();
               for (let i = 0; i < n; i++) {
-                const ny = mf.normal().y;
-                if (Math.abs(ny) < 0.5) continue;
-                const p = mf.solverContactPoint(i);
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
                 sx += p.x * l;
                 sy += p.y * l;
                 sz += p.z * l;
@@ -14044,6 +14521,368 @@ var init_ragdoll = __esm({
           out[2] = sz / sl;
         }
         out[3] = sl;
+      }
+      /**
+       * ★★ **鞋底逐柱法向载荷**：内侧柱 / 外侧柱各承担多少（N·s/拍，除 120 即 N）。
+       *
+       * 柔性足 F1 真正提供的机制**不是**"CoP 能跑多远"，而是
+       * 「**载荷能在内/外侧柱之间连续转移**」（文献：内侧弓/外侧柱是两条独立载荷路径；
+       *  Jeon & Cho 压力垫综述 / Welte 2023 内侧弓）。
+       * 骨架注释里记的失败模式正是这个：
+       *     「内侧柱 Σ 162.8N / 外侧柱 Σ 14.2N（比值 **14:1**），CoP_z 只动 **0.9mm**」
+       *   —— 只切 collider 不给中足自由度时，两柱载荷严重失衡，CoP 动不了。
+       *
+       * ⇒ 这个比值就是判据本身：比值从 14:1 收敛到 ~1:1 ⇒ 前足真的在"分配载荷"。
+       *   柱归属用**接触点在所属刚体局部系里的 z 符号**（+Z 为内侧，见 `offColIn`）。
+       *
+       * @param out 写入 [内侧柱Σλ, 外侧柱Σλ]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+       */
+      soleColumnLoad(side, out) {
+        const tmp = this.footTmp;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const bbMidZ = (bb[2] + bb[3]) / 2;
+        for (let i = 0; i < out.length; i++) out[i] = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const body = this.bodies[bi];
+          const q = body.rotation();
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) return;
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (p.z >= bbMidZ) out[0] += l;
+                else out[1] += l;
+              }
+            });
+          });
+        }
+      }
+      /**
+       * ★★ **摩擦占用**：鞋底切向冲量合计 / 法向冲量合计。
+       *
+       * 判读（这是"打滑"和"只是重心在动"的唯一分界）：
+       *   `|Σf_t| / (μ·Σf_n) ≈ 1` ⇒ 摩擦**饱和**，脚正在被拖着走（真打滑）
+       *   远小于 1            ⇒ 摩擦没用满，位移来自别的原因
+       *                            （通常是**绕棱转动** rocking：刚体中心几乎不动，
+       *                              但接触点在扫——`soleCoPLocal` 能看出来）
+       *
+       * @param out 写入 [Σ|f_t|, Σf_n]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+       */
+      soleFrictionUse(side, out) {
+        let ft = 0, fn = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+                if (Number.isFinite(tx) || Number.isFinite(ty)) {
+                  ft += Math.hypot(tx || 0, ty || 0);
+                }
+                fn += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+        out[0] = ft;
+        out[1] = fn;
+      }
+      /**
+       * ★★ 鞋底 **CoP 的世界坐标**（写入 out[0..2]）+ Σλ（out[3]）。
+       *
+       * ⚠ 2026-10-04：函数名还叫 `soleCoPLocal`，但**已改成返回世界坐标**。
+       *   原本想返回"脚刚体局部系"，实测不可靠 —— 脚掌有外八偏航 ~25°，
+       *   而刚体局部系算出来不可信（见 `soleNormalAligned` 上面的踩坑说明）。
+       *   需要"沿足长/内外"的语义时，用**块的 `_label` + `footSoleBounds`** 表达，
+       *   不要依赖这个局部系。名字保留是为了少动调用点。
+       *
+       * 为什么要有局部系版本：`soleXZ` / `footSoleBounds` 给的是世界量，而脚有
+       * **外八偏航（~25°）**，世界 x/z 和"脚的前后/内外"不是一回事。
+       * 局部系里 `x` = 沿足长（−跟 … +趾）、`z` = 内(+)/外(−)，语义直接可比。
+       * 用它区分两种"位移"：
+       *   · 局部 CoP 基本不动、刚体原点却在走 ⇒ **摩擦打滑**（压力点被拖着走）
+       *   · 局部 CoP 在鞋底上扫、刚体原点不动   ⇒ **绕棱 rocking**（不是打滑）
+       */
+      soleCoPLocal(side, out) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        const bi0 = this.soleColBody[side][0];
+        if (bi0 === void 0) return;
+        const q0 = this.bodies[bi0].rotation();
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                sx += p.x * l;
+                sy += p.y * l;
+                sz += p.z * l;
+                sl += l;
+              }
+            });
+          });
+        }
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /** 某刚体的世界原点（诊断"刚体平移 vs 绕棱转动"用；不存在返回 false） */
+      bodyOrigin(key, out) {
+        const i = this.indexByKey.get(key);
+        if (i === void 0) return false;
+        const t = this.bodies[i].translation();
+        out[0] = t.x;
+        out[1] = t.y;
+        out[2] = t.z;
+        return true;
+      }
+      /**
+       * ★ 诊断：数接触点。out = [manifold 总接触数, 通过底面过滤的接触数, Σf_n]
+       *   用来区分"接触本来就少"和"被我的底面过滤丢掉了"。
+       */
+      soleContactAudit(side, out) {
+        out[0] = 0;
+        out[1] = 0;
+        out[2] = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                out[0]++;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                out[1]++;
+                out[2] += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+      }
+      /**
+       * ★★ 鞋底接触的**权威判据**（frame-independent，两个条件都要满足）：
+       *   ① 接触法线与该鞋底块所在刚体的**底面外法线**对齐：`|n·axisW| ≥ soleNormalTol`
+       *   ② 接触点落在该脚的**世界系鞋底包围盒**内（`footSoleBounds`，已实测正确）
+       *
+       * ★★ 为什么**不能**用局部系判"接触点是否在底面矩形内"（2026-10-04 实测踩坑）：
+       *   我先写了局部系版本（`|local.x − offsetX| ≤ hx` 且 `|local.z − offsetZ| ≤ hz`），
+       *   看着最精确，结果 **16 个接触点只放过 2 个**、Σf_n 只有静止值的 11%。
+       *   逐点 dump 显示局部 z 读出 **−29 ~ −128 mm**（应 ±50 mm）。
+       *   根因：脚掌有**外八偏航 `restYaw ≈ 25°`**，而 `restTiltRad = 0`（脚保持水平）
+       *   ⇒ **y 分量对不对完全检验不出旋转对不对**（偏航绕 Y、不动 y）。
+       *   我当时就是被"y = −68.6mm 正好等于鞋底平面"骗过去的 —— y 对 ≠ 局部系对。
+       *   ⇒ 改用①+②：都与局部系无关，也不需要反旋转。
+       */
+      /** ① 法线是否与该块底面外法线对齐 */
+      soleNormalAligned(bi, n) {
+        const q = this.bodies[bi].rotation();
+        quatRotate(q.x, q.y, q.z, q.w, 0, -1, 0, this.soleAxisW);
+        this.soleAl = Math.abs(n.x * this.soleAxisW[0] + n.y * this.soleAxisW[1] + n.z * this.soleAxisW[2]);
+      }
+      soleAxisW = new Float64Array(3);
+      soleAl = 0;
+      /** 各鞋底读回函数共用的"世界系鞋底包围盒"缓冲 */
+      soleBB = new Float64Array(4);
+      /**
+       * 世界点 → 刚体局部系。**必须先减掉刚体平移**再反旋转。
+       *
+       * ★★ 2026-10-04 修一个我自己写错的 bug：此前各处都写成
+       *   `quatRotate(-q…, p.x, p.y, p.z, out)` —— 漏了 `− translation`。
+       *   后果实测（tools/probe-midfoot.ts L 段）：脚掌本体在 z = 0.164 m、
+       *   局部 z 只该在 ±50 mm 内，却读出 **56~281 mm** ⇒ 底面过滤把
+       *   **16 个接触点里的 15 个**误判为"不在底面"⇒ CoP 只剩 1 个接触点、
+       *   Σ|λ| 只有体重的 4%（静止应 5.72 N·s）、压力点被钉死在足跟角上。
+       *   ⇒ 凡是"压力点钉住不动""载荷只有几个百分点"这类异常，先查这个。
+       */
+      toLocal(bodyIdx, wx, wy, wz, out) {
+        const b = this.bodies[bodyIdx];
+        const t = b.translation();
+        const q = b.rotation();
+        quatRotate(-q.x, -q.y, -q.z, -q.w, wx - t.x, wy - t.y, wz - t.z, out);
+      }
+      /**
+       * ★ 诊断：把某侧鞋底**所有**接触点的局部坐标与所属块的范围全部列出。
+       *   实测发现底面过滤把 16 个接触点里的 15 个丢掉了（只剩 1 个），
+       *   所以必须看原始数据才能定位是"过滤写错了"还是"接触点坐标不对"。
+       * @param cb 每行一个：`块名 x z |lx-cd.offsetX| hx |lz-cd.offsetZ| hz 判定`
+       */
+      soleContactDump(side, cb) {
+        const cols = this.soleCols[side];
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const lb = cd._label ?? `#${ci}`;
+          const q = this.bodies[bi].rotation();
+          const tr = this.bodies[bi].translation();
+          const cdOx = cd.offsetX ?? 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p = mf.solverContactPoint(i);
+                this.toLocal(bi, p.x, p.y, p.z, this.footTmp);
+                const t = this.footTmp;
+                const dx = Math.abs(t[0] - cdOx), dz = Math.abs(t[2] - cd.offsetZ);
+                const ok = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
+                cb(`     ${lb.padEnd(12)} \u672C\u4F53(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)}) \u5C40\u90E8(${(t[0] * 1e3).toFixed(0)},${(t[1] * 1e3).toFixed(0)},${(t[2] * 1e3).toFixed(0)})mm  \u0394x${(dx * 1e3).toFixed(0)}/${(cd.hx * 1e3).toFixed(0)} \u0394z${(dz * 1e3).toFixed(0)}/${(cd.hz * 1e3).toFixed(0)}  ${ok ? "\u2713" : "\u2717"}`);
+              }
+            });
+          });
+        }
+      }
+      /** 该侧鞋底的有效摩擦系数（Rapier 默认 Average 合成规则） */
+      soleFriction(side) {
+        const bi = this.soleColBody[side][0];
+        const col = bi !== void 0 ? this.soleCols[side][0] : void 0;
+        if (!col) return 0;
+        return (col.friction() + this.opt.groundFriction) / 2;
+      }
+      /**
+       * ★★ **逐块鞋底法向载荷**（`out[i]` = 第 i 块鞋底 collider 的 Σ|λ|）。
+       *
+       * 真实人脚形状的鞋底是 6 块（`skeleton.buildSoleBlocks`）：
+       *   足跟 / 外侧柱 / 内侧弓·后 / 内侧弓·前 / 跖骨头 / 趾
+       *   其中**内侧弓两块天生离地 `archRise = 22 mm`**（`buildSoleBlocks` 的注释与依据：
+       *   Jeon & Cho 压力垫综述 / Welte 2023 —— 内侧弓是独立载荷路径，把重量传到足的外侧缘）。
+       *
+       * ⇒ 这 6 个数直接回答"侧向载荷到底走哪条路"：
+       *     重心压到支撑腿内侧 ⇒ 内侧弓应该**接近 0**（它离地），
+       *     外侧柱 / 跖骨头承重 ⇒ **侧向 CoP 权限就是这么来的**（不需要中足关节）。
+       *   块的名字在 `skeleton` 里以 `_label` 挂在 collider 上（运行时可读，仅供诊断/UI）。
+       *
+       * @param out 长度 ≥ 该侧鞋底 collider 数的 `Float64Array`（复用缓冲，零分配）
+       */
+      soleBlockLoad(side, out) {
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let i = 0; i < out.length; i++) out[i] = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const body = this.bodies[bi];
+          const q = body.rotation();
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) return;
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                out[ci] += l;
+              }
+            });
+          });
+        }
+      }
+      /** 该侧鞋底 collider 的块名（诊断/UI 用；`skeleton` 挂在 collider 上的 `_label`） */
+      soleBlockLabels(side) {
+        const out = [];
+        for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+          const bi = this.soleColBody[side][ci];
+          const c = bi !== void 0 ? this.sk.bodies[bi].colliders[ci] : void 0;
+          out.push(c?._label ?? `#${ci}`);
+        }
+        return out;
+      }
+      /**
+       * ★ 该侧**鞋底在世界系**的轴对齐包围盒 `[minX, maxX, minZ, maxZ]`（m）。
+       *
+       * 为什么要它：脚掌有**外八偏航**（`restYawRad`，实测约 25°），
+       * 于是"刚体局部 x"会经 `sinψ` 混进**世界 z**。拿 CoP 的世界 z 去和
+       * "刚体轴"比会得到假误差（实测局部 z=0 的跟块接触点，世界 z 偏 59mm）。
+       * ⇒ 任何"CoP 有没有超出鞋底"的判据都必须用**世界系鞋底包围盒**做参照。
+       */
+      footSoleBounds(side, out) {
+        let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        const t = this.footTmp;
+        for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const body = this.bodies[bi];
+          const q = body.rotation();
+          const tr = body.translation();
+          const ox = cd.offsetX ?? 0;
+          for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+            quatRotate(q.x, q.y, q.z, q.w, ox + sx * cd.hx, cd.offsetY - cd.hy, cd.offsetZ + sz * cd.hz, t);
+            const wx = t[0] + tr.x, wz = t[2] + tr.z;
+            if (wx < x0) x0 = wx;
+            if (wx > x1) x1 = wx;
+            if (wz < z0) z0 = wz;
+            if (wz > z1) z1 = wz;
+          }
+        }
+        out[0] = x0;
+        out[1] = x1;
+        out[2] = z0;
+        out[3] = z1;
       }
       /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
       footLoaded(side) {
@@ -14065,6 +14904,37 @@ var init_ragdoll = __esm({
       torqueCmd;
       /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
       holdCmd = [];
+      /**
+       * ★★ **载荷依赖的姿势张力**（每轴缩放系数，默认 1）。
+       *
+       * 位置伺服原来只有固定 `kP=48`：它把每个关节当"刹车"，锁在绑定姿态，
+       * **对载荷毫无反应**。后果（逐帧实测，锁定承诺修好之后）：
+       *   · `spine1/0` 目标 −2.7°（=腰 8° / 三段均分），**实际被扭到 −35°**
+       *     ⇒ 位置伺服被打输，躯干在转移过程中先塌；
+       *   · `hip/0` 力矩**全程饱和在 −120 = τmax**，没有任何调节余量。
+       *
+       * 文献依据（**载荷依赖的姿势张力**）：
+       *   · **Horak & Nashner 1986**：CoP 向哪只脚移动，那条腿的肌张力就上升
+       *     —— 这是"支撑面约束 /腿部僵化"的经典表述；
+       *   · **J Ab 2021 单侧负重步行**（PMC8628027）：承重侧 GMED 激活 **+58%**、
+       *     TFL **+65%**，而**非承重侧无变化**（p≥0.790）⇒ 张力是**按腿不对称**调节的，
+       *     而且由载荷驱动；
+       *   * 姿势张力的经典表述（referent configuration）：肌张力随支撑负荷连续变化。
+       *
+       * 机制：位置环增益按该关节所属腿的**载荷份额**放大
+       *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
+       * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
+       */
+      toneScale = [];
+      /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
+      setToneScale(joint, axis, scale) {
+        const i = joint * 3 + axis;
+        if (i >= 0 && i < this.toneScale.length) this.toneScale[i] = scale > 0 ? scale : 0.01;
+      }
+      /** 复位到 1（每拍开头调；漏调会把上一拍的增益带进这一拍） */
+      resetToneScale() {
+        for (let i = 0; i < this.toneScale.length; i++) this.toneScale[i] = 1;
+      }
       /** `jacobianTorque` 的临时向量（避免每关节分配） */
       jw = new Float64Array(3);
       ja = new Float64Array(3);
@@ -14255,14 +15125,57 @@ var init_ragdoll = __esm({
         *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
         */
       lastHitKey = "";
-      /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+      /**
+       * ★★ **所有与地面有竖直接触的刚体名**（诊断用）。
+       *
+       * 为什么要它：`bodyHitGround()` 只报**非脚部**刚体（`NOT_CRASH` 过滤掉了腿和脚），
+       * 所以"身体到底被什么撑住"这个问题它答不了。
+       * 而这个问题很关键：实测出现「躯干竖直速度 ≈0（没自由落体）但两脚 Σ|λ| 只有
+       * 体重的 4%」—— 说明支撑力来自**脚之外**的碰撞体。
+       *
+       * 判据与 `bodyHitGround` 同源（真实接触对 + |n·y| ≥ 0.5），但**不过滤**脚部。
+       */
+      groundTouching() {
+        const out = [];
+        for (let i = 0; i < this.bodies.length; i++) {
+          const b = this.bodies[i];
+          let hit = false;
+          for (let ci = 0; ci < b.numColliders() && !hit; ci++) {
+            const col = b.collider(ci);
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+                const ny = mf.normal().y;
+                if (Math.abs(ny) > 0.5) hit = true;
+              });
+            });
+          }
+          if (hit) out.push(this.sk.bodies[i].key);
+        }
+        return out;
+      }
+      /**
+       * 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity
+       *
+       * ⚠ 2026-10-04：这个函数以前是**死的** —— 它调 `collider.aabb?.()`，
+       *   而 Rapier 0.14 的 `Collider` **没有 `aabb()` 方法**（AABB 在 `World` 上），
+       *   所以可选链永远取 undefined ⇒ 恒返回 `+Infinity`。
+       *   静默失效比报错更坏：任何依赖它的判据都会得到"永不触地"的结论。
+       *   改为**真去查接触**（与 `groundTouching` 同一套判据），并保留几何回退。
+       */
       lowestY(i) {
         const b = this.bodies[i];
         let lo = Infinity;
         for (let ci = 0; ci < b.numColliders(); ci++) {
-          const c = b.collider(ci);
-          const a = c.aabb?.();
-          if (a && a.min.y < lo) lo = a.min.y;
+          const col = b.collider(ci);
+          let hit = false;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+              if (Math.abs(mf.normal().y) > 0.5) hit = true;
+            });
+          });
+          if (hit) lo = Math.min(lo, 0);
         }
         return lo;
       }
@@ -14272,12 +15185,29 @@ var init_ragdoll = __esm({
         *   头 0.925m、倾角 0°，这是"弯腰用手撑一下"的正常姿态，不是摔倒。
         *   ⇒ 手/前臂不参与 crash 判据；躯干、头、大腿、小腿仍参与（那才是真摔）。
         */
-      static NOT_CRASH = /* @__PURE__ */ new Set(["shin_l", "shin_r", "foot_l", "foot_r", "arm_l", "arm_r", "hand_l", "hand_r"]);
+      // ★ `forefoot_l/r` 是柔性足 F1（2026-10-04）新增的**前足刚体** ——
+      //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
+      //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
+      //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
+      /**
+       * ★★ 判为"支撑/肢体"而**不算 crash** 的刚体 —— 改成**前缀模式**而不是硬编码名单。
+       *
+       *   为什么必须模式化：这是**第三次**被"改名漏掉"咬到了。名单里原本只有
+       *   `forefoot_*`（柔性足 F1 的前足命名），F2 把中足改名成 `arch_*` 之后
+       *   名单没跟着改 ⇒ **弓合法着地做旋前时 `bodyHitGround()` 立刻返回 true**、
+       *   `lastHitKey='arch_l'` ⇒ 回合被判 `fallReason='crash'`。
+       *   也就是说：**柔性足做得越对，越容易被判摔倒**（用户实测「摔倒会误判」）。
+       *
+       *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
+       */
+      static notCrashKey(key) {
+        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+      }
       bodyHitGround() {
         this.lastHitKey = "";
         for (let i = 0; i < this.bodies.length; i++) {
           const bd = this.sk.bodies[i];
-          if (_Ragdoll.NOT_CRASH.has(bd.key)) continue;
+          if (_Ragdoll.notCrashKey(bd.key)) continue;
           const b = this.bodies[i];
           for (let ci = 0; ci < b.numColliders(); ci++) {
             const col = b.collider(ci);
@@ -14333,6 +15263,22 @@ var init_ragdoll = __esm({
         calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, out);
       }
       /** 兼容标量读数：关节 i 的屈伸角（绕本地 Z 的分量，弧度） */
+      /**
+       * ★ 关节绕**指定自由轴**的转动惯量（kg·m²）—— 数值稳定性上限要用它。
+       *
+       * ⚠⚠ **不要**用 `this.jointIeff` 代替：那个是**过冲护栏**用的，取的是
+       *   **最大**主惯量（故意宽松，理由见构造函数里那段"同一个坑修过两次"）。
+       *   而显式积分的稳定性取决于**绕该轴真实转动惯量**，对薄弓体绕长轴旋转
+       *   来说那是**最小**主惯量（≈1e-4，比 max 小两个数量级）。
+       *   用 max 去算上限 ⇒ 会把 K/B 的合法上限高估两个数量级 ⇒ 弓必然高频抖动。
+       *
+       * @param axis 主轴单位向量（柔性足就是 `[1,0,0]`）
+       */
+      jointAxisInertia(i, axis) {
+        const ic = this.bodies[this.jointBodies[i * 2 + 1]].principalInertia();
+        const [ax, ay, az] = axis;
+        return Math.max(1e-9, ax * ax * ic.x + ay * ay * ic.y + az * az * ic.z);
+      }
       jointAngle(i) {
         const buf = this.rvTmp;
         this.jointRot(i, buf);
@@ -14565,6 +15511,20 @@ var init_ragdoll = __esm({
           }
         }
       }
+      /**
+       * ★★ **瘫软（死亡演出用）**：把位置环增益降到 0，只留重力/接触/残余动量。
+       *
+       *   动机（用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）：
+       *   原来 `Sim.finish()` 只是把 `motorTarget` 归零，但 `kP=48` 的位置伺服
+       *   仍然在用力矩把四肢**拉回绑定姿态** ⇒ 尸体站在原地挣扎，像"卡住"了。
+       *   瘫软之后关节不再出力，角色会被残余动量和重力带走 ⇒ 自然地被甩出去。
+       *
+       *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
+       *   否则关节会无限转圈）。
+       */
+      setLimp(on) {
+        this.limp = on;
+      }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
           const t = targets[i];
@@ -14603,15 +15563,18 @@ var init_ragdoll = __esm({
        *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
       driveMotors(dt) {
+        this.physicsDt = dt;
         const scale = this.opt.torqueScale;
         this.lastDt = dt;
-        const kP = this.opt.kP;
-        const kD = this.opt.kD;
+        const limp = this.limp;
+        const kP = limp ? 0 : this.opt.kP;
+        const kD = limp ? 0 : this.opt.kD;
         const qRel = this.qRel;
         const rv = this.rv;
         const relL = this.relL;
         const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
+          if (this.motorDriven.has(i)) continue;
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
           const ci = this.jointBodies[i * 2 + 1];
@@ -14638,6 +15601,8 @@ var init_ragdoll = __esm({
             const idx = i * 3 + k;
             let alpha = this.opt.motorAlpha;
             let err;
+            const kDd = limp ? 0 : kD;
+            let thRef = 0, kPSpring = 0, kDdEff = kDd, ts = 1;
             const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
             if (a > hi) {
               err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
@@ -14646,12 +15611,14 @@ var init_ragdoll = __esm({
               err = JOINT_MAX_SPEED * Math.min(1, (lo - a) / ramp) - relL[k];
               alpha = MOTOR_ALPHA_RECOVER;
             } else if (this.holdCmd[idx]) {
-              err = -this.opt.kD * relL[k];
+              err = -kDd * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
-              const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+              thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kD) * relL[k];
+              ts = this.toneScale[idx] || 1;
+              kPSpring = ov ? ov.kP : kP;
+              err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -14668,7 +15635,9 @@ var init_ragdoll = __esm({
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
-            const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
@@ -14705,7 +15674,8 @@ var init_ragdoll = __esm({
             const av = c.angvel(), ap = p.angvel();
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
             if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
-            const J = -wRel * this.jointIeff[i];
+            const Iax = this.axisInertia(i, k);
+            const J = -wRel * Iax;
             const jv = this.iv;
             jv.x = this.axisW[0] * J;
             jv.y = this.axisW[1] * J;
@@ -14783,13 +15753,38 @@ var init_ragdoll = __esm({
        *      对细长的脚掌极小）⇒ 冲量严重不足。这里改用**两体沿该轴的惯量之和**，
        *      由 `principalInertia()` 在该轴上的分量估一个保守下界。
        */
+      /**
+       * 某关节某轴的**并联折合惯量**（限位冲量用）。
+       *
+       * ★ 必须按**该轴**取值，不能用 `jointIeff`（那是两个刚体各自主惯量**最大值**
+       *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
+       *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
+       */
+      axisInertia(i, k) {
+        const p = this.bodies[this.jointBodies[i * 2]];
+        const c = this.bodies[this.jointBodies[i * 2 + 1]];
+        const ip = p.principalInertia(), ic = c.principalInertia();
+        const q = p.rotation();
+        const ax = [0, 0, 0];
+        ax[0] = k === 0 ? 1 : 0;
+        ax[1] = k === 1 ? 1 : 0;
+        ax[2] = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
+        const a = this.axisW;
+        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+        return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]));
+      }
       enforceLimits() {
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
+          const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;
           const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
           const p = this.bodies[pi], c = this.bodies[ci];
           const qp = p.rotation();
           for (let k = 0; k < 3; k++) {
+            if (k === revAx) continue;
             const lo2 = j.minRad[k], hi2 = j.maxRad[k];
             if (hi2 - lo2 >= Math.PI * 1.99) continue;
             const a2 = this.jointRotAxis(i, k);
@@ -14802,8 +15797,11 @@ var init_ragdoll = __esm({
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
             const Iax = this.jointIeff[i];
             const jv = this.iv;
-            if (out > 0 ? wRel > 0 : wRel < 0) {
-              const J = -wRel * Iax;
+            const excess = out > 0 ? a2 - hi2 : lo2 - a2;
+            const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, LIMIT_MAX_BIAS);
+            const wErr = bias - wRel;
+            if (wErr > 1e-6 || wErr < -1e-6) {
+              const J = wErr * Iax;
               jv.x = this.axisW[0] * J;
               jv.y = this.axisW[1] * J;
               jv.z = this.axisW[2] * J;
@@ -14901,6 +15899,56 @@ var init_ragdoll = __esm({
         return this.bodies[this.indexByKey.get(key) ?? 0];
       }
       /**
+       * 刚体系统绕某个关节的**当前姿态**转动惯量（kg·m²）。
+       *
+       * ★ 为什么必须有这个读回（DIP/VIP 的阻尼项要它）：
+       *   文献的临界阻尼是 `B = 2ζ√(K·I)`，其中 `I` 是**摆绕其铰链**的惯量
+       *   （Morasso 2019 PLOS ONE 14:e0213870：`I` = 刚体绕踝的转动惯量），
+       *   **不是** `jointIeff`。后者是"两个自由体的折合惯量"
+       *   （踝实测 0.0015 kg·m²），拿它算阻尼会**低估两个数量级**
+       *   ⇒ 阻尼系数 4 而不是 323 ⇒ 等效阻尼比 0.01 ⇒ 踝无阻尼 ⇒ 必然发散。
+       *
+       *   算法：`I = Σᵢ [ mᵢ·|rᵢ|² + I_com,ᵢ ]`，`rᵢ` = 质心到铰链的向量。
+       *   （平行轴定理；`principalInertia` 给的是绕自身质心的主惯量。）
+       *
+       * @param jointIdx 关节下标（`sk.joints` 的下标）
+       * @param side     只统计某一侧子树时传 `'l'`/`'r'`（髋的 DIP 只管上身 ⇒ 传侧别）
+       */
+      inertiaAboutJoint(jointIdx, side, excludeLegs) {
+        const j = this.sk.joints[jointIdx];
+        if (!j) return 0;
+        const aj = this.bodies[this.jointBodies[jointIdx * 2 + 1]];
+        const ap = aj.translation();
+        const inSub = /* @__PURE__ */ new Set();
+        if (side) {
+          inSub.add(this.jointBodies[jointIdx * 2 + 1]);
+          let frontier = [this.sk.joints[jointIdx].childKey];
+          while (frontier.length) {
+            const k = frontier.pop();
+            for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+              if (inSub.has(bi)) continue;
+              if (this.sk.joints.some((jj) => jj.parentKey === k && jj.childKey === this.sk.bodies[bi].key)) {
+                inSub.add(bi);
+                frontier.push(this.sk.bodies[bi].key);
+              }
+            }
+          }
+        }
+        const LEG = /^(thigh|shin|foot|forefoot)_/;
+        let sum = 0;
+        for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+          if (side && !inSub.has(bi)) continue;
+          if (excludeLegs && LEG.test(this.sk.bodies[bi].key)) continue;
+          const b = this.bodies[bi];
+          const t = b.translation();
+          const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+          const Ic = b.principalInertia();
+          const selfI = Math.max(Ic.x, Math.max(Ic.y, Ic.z));
+          sum += this.sk.bodies[bi].mass * (dx * dx + dy * dy + dz * dz) + selfI;
+        }
+        return sum;
+      }
+      /**
        * 脚掌某点的世界坐标写入 out[0..2]。
        * ★ 3D 之后不能再写 `body.y − length/2`：刚体会转，最低点必须按姿态算。
        *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
@@ -14910,14 +15958,39 @@ var init_ragdoll = __esm({
         const useFoot = this.indexByKey.has(footKey);
         const key = useFoot ? footKey : side === "l" ? "shin_l" : "shin_r";
         const idx = this.indexByKey.get(key) ?? 0;
-        const b = this.bodies[idx];
-        const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");
-        const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
-        const t = b.translation();
-        this.toWorld(b, 0, ly, 0, out);
-        out[0] += t.x;
-        out[1] += t.y;
-        out[2] += t.z;
+        const heelPt = this.heelTmp;
+        {
+          const b = this.bodies[idx];
+          const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === "cuboid");
+          const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
+          const t = b.translation();
+          this.toWorld(b, 0, ly, 0, heelPt);
+          heelPt[0] += t.x;
+          heelPt[1] += t.y;
+          heelPt[2] += t.z;
+        }
+        out[0] = heelPt[0];
+        out[1] = heelPt[1];
+        out[2] = heelPt[2];
+        const foreKey = side === "l" ? "forefoot_l" : "forefoot_r";
+        const fidx = this.indexByKey.get(foreKey);
+        if (fidx !== void 0) {
+          const fb = this.bodies[fidx];
+          const fc = this.sk.bodies[fidx].colliders.find((c) => c.shape === "cuboid");
+          if (fc) {
+            const forePt = this.foreTmp;
+            const ft = fb.translation();
+            this.toWorld(fb, 0, fc.offsetY - fc.hy, 0, forePt);
+            forePt[0] += ft.x;
+            forePt[1] += ft.y;
+            forePt[2] += ft.z;
+            if (forePt[1] < out[1]) {
+              out[0] = forePt[0];
+              out[1] = forePt[1];
+              out[2] = forePt[2];
+            }
+          }
+        }
       }
       /**
        * ★ 髋关节锚点的世界位置（IK 的固定端）。
@@ -14938,6 +16011,9 @@ var init_ragdoll = __esm({
       }
       hipIdx = [-1, -1];
       footTmp = new Float64Array(3);
+      /** `footPoint` 的两块鞋底中间量（跟块 / 前掌），避免调用方的 out 被踩 */
+      heelTmp = new Float64Array(3);
+      foreTmp = new Float64Array(3);
       /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
       soleY(side) {
         this.footPoint(side, this.footTmp);
@@ -15204,10 +16280,21 @@ function readSupport(doll, out) {
   }
   let cx, cz, halfX, halfZ;
   if (inL && inR) {
-    cx = (RECT_L.cx + RECT_R.cx) / 2;
-    cz = (RECT_L.cz + RECT_R.cz) / 2;
-    halfX = (wLx + wRx) / 4;
-    halfZ = (wLz + wRz) / 4;
+    const fL = inL ? doll.footLoadFrac(0)[0] : 0;
+    const fR = inR ? doll.footLoadFrac(0)[1] : 0;
+    const sum = fL + fR;
+    if (Number.isFinite(sum) && sum > 1e-6) {
+      const uL = fL / sum, uR = fR / sum;
+      cx = RECT_L.cx * uL + RECT_R.cx * uR;
+      cz = RECT_L.cz * uL + RECT_R.cz * uR;
+      halfX = wLx * uL * 0.5 + wRx * uR * 0.5;
+      halfZ = wLz * uL * 0.5 + wRz * uR * 0.5;
+    } else {
+      cx = (RECT_L.cx + RECT_R.cx) / 2;
+      cz = (RECT_L.cz + RECT_R.cz) / 2;
+      halfX = (wLx + wRx) / 4;
+      halfZ = (wLz + wRz) / 4;
+    }
   } else if (inL) {
     cx = RECT_L.cx;
     cz = RECT_L.cz;
@@ -15467,12 +16554,139 @@ var init_gaitRef = __esm({
   }
 });
 
+// src/core/keyframe.ts
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT;
+var init_keyframe = __esm({
+  "src/core/keyframe.ts"() {
+    "use strict";
+    GAIT_KEY_RANGE = Object.freeze({
+      IC: [0, 2],
+      LR: [2, 12],
+      MSt: [12, 31],
+      TSt: [31, 50],
+      PSw: [50, 62],
+      ISw: [62, 75],
+      MSw: [75, 87],
+      TSw: [87, 100]
+    });
+    D = Math.PI / 180;
+    KEY_POSES = Object.freeze({
+      IC: {
+        supHipFlex: 25 * D,
+        swHipFlex: 25 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 2 * D,
+        supAnkle: 0,
+        swAnkle: -2 * D,
+        trunkPitch: 4 * D,
+        trunkLat: 0,
+        primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
+      },
+      LR: {
+        // 「Shock absorption」：膝屈到 15~20°，踝**受控**跖屈 10~15°
+        supHipFlex: 25 * D,
+        swHipFlex: 24 * D,
+        supKneeFlex: 17.5 * D,
+        swKneeFlex: 18 * D,
+        supAnkle: 12.5 * D,
+        swAnkle: -5 * D,
+        trunkPitch: 2 * D,
+        trunkLat: 0,
+        primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
+      },
+      MSt: {
+        // ★★★ 重心转移的目标帧。Perry 原文：「Body weight passes over supporting foot」
+        //   骨盆 0°、髋 0°、膝 5°屈、踝 5°背屈。
+        //   主肌 = **臀中肌 / 阔筋膜张肌**（髋外展）⇒ 额状刚度在这里（Winter 1998）。
+        supHipFlex: 0,
+        swHipFlex: 15 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 40 * D,
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: 0,
+        trunkLat: 0,
+        primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
+      },
+      TSt: {
+        // 「Body weight moves ahead of the forefoot」：髋伸 0~20°、膝近伸、踝背屈最大 10°
+        supHipFlex: -10 * D,
+        swHipFlex: 5 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 45 * D,
+        supAnkle: -10 * D,
+        swAnkle: -18 * D,
+        trunkPitch: -2 * D,
+        trunkLat: 0,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
+      },
+      PSw: {
+        // 第二段双支撑：膝快速屈到 40°、踝被动作跖屈到 20°、髋回中立
+        supHipFlex: 0,
+        swHipFlex: 2 * D,
+        supKneeFlex: 40 * D,
+        swKneeFlex: 20 * D,
+        supAnkle: 20 * D,
+        swAnkle: -20 * D,
+        trunkPitch: 0,
+        trunkLat: 0,
+        primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
+      },
+      ISw: {
+        supHipFlex: -5 * D,
+        swHipFlex: 20 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 60 * D,
+        // 膝屈峰 = 足净空
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: -3 * D,
+        trunkLat: 0,
+        primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
+      },
+      MSw: {
+        supHipFlex: 0,
+        swHipFlex: 30 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 30 * D,
+        // 「tibia vertical」髋膝屈曲相等
+        supAnkle: 0,
+        swAnkle: 0,
+        trunkPitch: -2 * D,
+        trunkLat: 0,
+        primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
+      },
+      TSw: {
+        // 「Prepare for stance」：膝伸到 0~5°、踝中立、髋保持 25°屈
+        supHipFlex: 0,
+        swHipFlex: 25 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 3 * D,
+        supAnkle: -2 * D,
+        swAnkle: -3 * D,
+        trunkPitch: 3 * D,
+        trunkLat: 0,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
+      }
+    });
+    PHASE_TO_GAIT = Object.freeze({
+      // DOUBLE/SHIFT = 双支撑的前后两段 + 交接
+      DOUBLE: "MSt",
+      SHIFT: "LR",
+      SINGLE: "MSt",
+      PUSH: "PSw",
+      STEP: "ISw"
+    });
+  }
+});
+
 // src/core/rigState.ts
 var DEFAULT_RIGSTATE_CONFIG;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
     init_skeleton();
+    init_keyframe();
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
       waistSlotMax: 6 * Math.PI / 180,
@@ -15487,6 +16701,7 @@ var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
     init_rigState();
+    init_keyframe();
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
     DEFAULT_HANDOVER_DWELL = 0.3;
@@ -15879,460 +17094,6 @@ var init_balanceJudge = __esm({
   }
 });
 
-// src/core/gaitPhase.ts
-function stateLabel(phase, swing, bodyFree) {
-  if (phase === "both") return "both \u8FC7\u6E21\uFF08\u53CC\u811A\u7740\u5730\uFF09";
-  const s = swing === "l" ? "\u5DE6\u817F" : "\u53F3\u817F";
-  return phase === "step" ? `step:${s === "\u5DE6\u817F" ? "L" : "R"} \u8FC8\u6B65\u4E2D\xB7\u8EAB\u4F53\u51BB\u7ED3` : `adjust:${s === "\u5DE6\u817F" ? "L" : "R"} \u7A33\u4F4F\u4E2D\xB7\u8EAB\u4F53\u53EF\u52A8`;
-}
-var STEP_MIN, ADJUST_MIN, ADJUST_MOS_TOL, W_SHAPE, W_MOS, W_PLACE, W_PELVIS, GaitPhaseMachine;
-var init_gaitPhase = __esm({
-  "src/core/gaitPhase.ts"() {
-    "use strict";
-    STEP_MIN = 0.13;
-    ADJUST_MIN = 0.9;
-    ADJUST_MOS_TOL = 0;
-    W_SHAPE = 0.35;
-    W_MOS = 0.3;
-    W_PLACE = 0.2;
-    W_PELVIS = 0.15;
-    GaitPhaseMachine = class {
-      phase = "both";
-      /** ★ 该迈哪条腿（由载荷决定： unloaded 的那条迈） */
-      swing = null;
-      t = 0;
-      tPhase = 0;
-      tStep = 0;
-      tAdjust = 0;
-      mosAcc = 0;
-      mosN = 0;
-      placeAcc = 0;
-      placeN = 0;
-      shapeAcc = 0;
-      shapeN = 0;
-      pelvisAcc = 0;
-      lastCredit = 0;
-      accCredit = 0;
-      nStep = 0;
-      nAdjustOk = 0;
-      flickers = 0;
-      adjSum = 0;
-      evs = [];
-      peakClr = 0;
-      // 本次迈步的离地峰值（诊断）
-      mosEnd = 0;
-      // 调整窗末的 MoS（诊断）
-      reset() {
-        this.phase = "both";
-        this.tStep = 0;
-        this.tAdjust = 0;
-        this.mosAcc = 0;
-        this.mosN = 0;
-        this.placeAcc = 0;
-        this.placeN = 0;
-        this.shapeAcc = 0;
-        this.shapeN = 0;
-        this.pelvisAcc = 0;
-        this.lastCredit = 0;
-        this.accCredit = 0;
-        this.nStep = 0;
-        this.nAdjustOk = 0;
-        this.flickers = 0;
-        this.adjSum = 0;
-      }
-      get now() {
-        return this.phase;
-      }
-      /** ★ 该迈哪条腿（null = 双脚着地，没有"该迈的腿"） */
-      get swingLeg() {
-        return this.swing;
-      }
-      /** ★★ 身体该不该动：只有"稳住中"才允许动（用户："迈步时身体别动，落地后再动"） */
-      get bodyFree() {
-        return this.phase === "adjust";
-      }
-      /** 调试标签 */
-      get label() {
-        return stateLabel(this.phase, this.swing, this.bodyFree);
-      }
-      /** 状态转移轨迹（含"哪个状态没通过"） */
-      get trace() {
-        return this.evs;
-      }
-      /** 正在"调整身体"阶段（此时其它项才允许计分） */
-      get inAdjust() {
-        return this.phase === "adjust";
-      }
-      /** 刚结算完一个循环（那一帧允许把分记进适应度） */
-      get justSettled() {
-        return this.lastCredit > 0;
-      }
-      get tally() {
-        return {
-          nStep: this.nStep,
-          nAdjustOk: this.nAdjustOk,
-          lastCredit: this.lastCredit,
-          accCredit: this.accCredit,
-          lastAdjustSec: this.tAdjust,
-          meanAdjustSec: this.nAdjustOk > 0 ? this.adjSum / this.nAdjustOk : 0,
-          flickers: this.flickers
-        };
-      }
-      /**
-       * 每控制拍喂一次。
-       * @param nGround 接地脚数（0/1/2）
-       * @param clearance 本次腾空的最大离地高度（m）—— 用来区分"真迈步"和"抖动"
-       * @param mosX 矢状面 MoS（m）
-       * @param shape 髋/膝贴合文献参考的分数 0..1
-       * @param place 落点贴合捕获点的分数 0..1
-       * @param pelvis 盆骨先于膝的分数（可为负）
-       * @param dt
-       */
-      step(nGround, clearance, mosX, shape, place, pelvis, dt, swingLeg = null) {
-        this.t += dt;
-        this.tPhase += dt;
-        if (this.tPhase > 0.45) {
-          const fail = this.phase === "step" ? this.swing === null ? "\u672A\u6307\u5B9A\u6446\u52A8\u817F" : `\u6446\u52A8\u817F\u672A\u79BB\u5730\u8FBE\u6807\uFF08\u5CF0\u503C ${(this.peakClr * 1e3).toFixed(0)}mm < 30mm\uFF09` : this.phase === "adjust" ? this.mosEnd < 0 ? `\u672A\u7A33\u4F4F\uFF08\u7A97\u672B MoS ${(this.mosEnd * 1e3).toFixed(0)}mm < 0\uFF09` : `\u7A33\u4F4F\u65F6\u957F\u4E0D\u8DB3\uFF08${this.tPhase.toFixed(2)}s < ${ADJUST_MIN}s\uFF09` : "";
-          this.evs.push({ t: this.t - this.tPhase, label: this.label, fail, dur: this.tPhase });
-          this.tPhase = 0;
-        }
-        this.swing = swingLeg;
-        if (nGround === 1) {
-          if (this.phase !== "step") this.peakClr = 0;
-          this.peakClr = Math.max(this.peakClr, clearance);
-          if (this.phase !== "adjust") {
-            this.phase = "step";
-            this.tStep += dt;
-          }
-          if (this.phase === "step" && clearance >= 0.03 && this.tStep >= STEP_MIN) {
-            this.phase = "adjust";
-            this.nStep++;
-            this.tAdjust = 0;
-            this.mosAcc = 0;
-            this.mosN = 0;
-            this.placeAcc = 0;
-            this.placeN = 0;
-            this.mosEnd = 0;
-            this.shapeAcc = 0;
-            this.shapeN = 0;
-            this.pelvisAcc = 0;
-          } else if (this.phase === "step" && clearance < 0.03) {
-            this.flickers++;
-          }
-          return;
-        }
-        if (nGround === 2) {
-          if (this.phase === "adjust") {
-            this.tAdjust += dt;
-            if (mosX > 0) {
-              this.mosAcc += mosX;
-              this.mosN++;
-            }
-            this.mosEnd = mosX;
-            this.placeAcc += place;
-            this.placeN++;
-            this.shapeAcc += shape;
-            this.shapeN++;
-            this.pelvisAcc += pelvis;
-            if (this.tAdjust >= ADJUST_MIN && this.mosN > 0) {
-              const mosAvg = this.mosAcc / this.mosN;
-              const mosScore = mosAvg > ADJUST_MOS_TOL ? 1 : Math.max(0, 1 + mosAvg / 0.25);
-              const placeAvg = this.placeN > 0 ? this.placeAcc / this.placeN : 0;
-              const shapeAvg = this.shapeN > 0 ? this.shapeAcc / this.shapeN : 0;
-              const pelvisAvg = this.pelvisAcc;
-              const credit = W_SHAPE * shapeAvg + W_MOS * mosScore + W_PLACE * placeAvg + W_PELVIS * Math.max(0, Math.min(1, pelvisAvg));
-              this.accCredit += credit;
-              this.nAdjustOk++;
-              this.adjSum += this.tAdjust;
-              this.lastCredit = credit;
-              this.phase = "both";
-              this.tStep = 0;
-              this.tAdjust = 0;
-            }
-            return;
-          }
-          this.phase = "both";
-          this.tStep = 0;
-          this.tAdjust = 0;
-          this.lastCredit = 0;
-          return;
-        }
-        this.phase = "both";
-        this.tStep = 0;
-        this.tAdjust = 0;
-        this.lastCredit = 0;
-      }
-    };
-  }
-});
-
-// src/core/modules.ts
-var MODULES, ModuleSet;
-var init_modules = __esm({
-  "src/core/modules.ts"() {
-    "use strict";
-    MODULES = [
-      { id: "loadShift", label: "\u8F7D\u8377\u8F6C\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-      { id: "altSwitch", label: "\u6362\u652F\u6491\u811A", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-      // ★★ 相位放开为 **全部三相**（2026-10-02，站立模式必需）。
-      //   原来只 `['step','adjust']`，于是**站立模式下 `gp.now` 几乎永远是 `both`**
-      //   ⇒ `mod.active('singleSupport', ...)` 恒 false ⇒ `accSingle` 恒 −0.001
-      //   ⇒ 站立模式的**主项是死的** ⇒ 12 代收敛到"两脚着地 359/360 帧"的退化解
-      //   （实测：把 `single` 权重提到 3.0、把 `quiet` 归零，数字**一位不变**）。
-      //   单腿站立本来就不属于任何"迈步相位"，它的判据就是几何接触（一脚离地），
-      //   与相位无关 ⇒ 相位门控在这里没有意义，反而把奖励关掉了。
-      { id: "singleSupport", label: "\u5355\u652F\u6491\u65F6\u957F", part: "body", phases: ["both", "step", "adjust"], singleOnly: true },
-      { id: "cycle", label: "\u8FC8\u6B65\u2192\u8C03\u6574\u5FAA\u73AF", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-      { id: "stillSwing", label: "\u6446\u52A8\u76F8\u8EAB\u4F53\u51BB\u7ED3", part: "body", phases: ["step"], singleOnly: true },
-      { id: "balance", label: "WBAM/MoS \u5E73\u8861", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-      { id: "distance", label: "\u811A\u51C0\u4F4D\u79FB", part: "body", phases: ["both", "step", "adjust"], singleOnly: false },
-      // ★★ 脊椎/CMP 默认**只在「稳住中」相**出力（实测 2026-10-02）：
-      //   三相都开着时，单支撑 MoS 从 −487mm 拉到 +79mm（站得住），
-      //   但换脚从 4 次掉到 2 次 —— 它在**拿停止前进换稳定**。
-      //   ⇒ 摆动相不许脊椎介入（否则躯干跟着摆腿晃，破坏"迈步时身体别动"），
-      //     只在落地后的调整相用来纠正身体。
-      // ★ 2026-10-02 修正：原来写 `phases: ['adjust']`，但 adjust 相实测 **0 帧**
-      //   （连续单支撑攒不够 ADJUST_MIN）⇒ `mod.active('spineSync', ...)` 永远 false
-      //   ⇒ **腰一次都没被驱动**，却又是个"看起来在起作用"的假开关（用户："腰部的移动不太对"）。
-      //   腰按 Perry 分期应该在**整个支撑相**都能反相旋转（Takemura 2007），不必等 adjust。
-      // ★★ 相位收窄为 **`['step']`（仅摆动/迈腿相）**（2026-10-02，文献依据）：
-      //   `spineSync` 是**步态反相旋转**机制（Takemura 2007, Sci Rep 2019：
-      //   胸廓与骨盆反相旋转，抵消摆动腿的垂直轴角动量）—— 它的**服务对象是摆动腿**，
-      //   在没有摆动腿的**静态平衡保持**下没有任何力学理由要开。
-      //   而单腿站立的文献结论正相反（Riemann, Myers & Lephart 2003,
-      //   *Arch Phys Med Rehabil* 84:36-42）：
-      //     · "The **trunk**... appeared to be the **least important** source of
-      //       corrective action"
-      //     · "significantly **more corrective action occurred between the pelvis and thigh
-      //       than between the pelvis and trunk**"
-      //     · "the **higher inertia** associated with the trunk may **preclude it from
-      //       contributing to the quick adjustments** necessary for single-leg stance
-      //       equilibrium"
-      //   实测的代价（此前误设为三相全开）：单腿保持平衡时腰仍收到 **−14°** 的躯干旋转指令，
-      //   而躯干只实际动了 −2.7° ⇒ 给本就不稳的系统又加了一个大惯量扰动源。
-      { id: "spineSync", label: "\u9AA8\u76C6-\u810A\u690E\u53CD\u76F8\uFF08\u4EC5\u6446\u52A8\u76F8\uFF09", part: "spine", phases: ["step"], singleOnly: false },
-      { id: "cmBalance", label: "CMP \u8D28\u5FC3\u529B\u77E9", part: "spine", phases: ["both", "step", "adjust"], singleOnly: false },
-      { id: "pelvisFirst", label: "\u76C6\u9AA8/\u9ACB\u4F18\u5148", part: "l", phases: ["step", "adjust"], singleOnly: true },
-      { id: "refShape", label: "\u6587\u732E\u9ACB\u819D\u5F62\u72B6", part: "l", phases: ["step", "adjust"], singleOnly: true },
-      { id: "placement", label: "\u843D\u70B9/\u6355\u83B7\u70B9", part: "l", phases: ["step", "adjust"], singleOnly: true },
-      { id: "stepClearance", label: "\u79BB\u5730\u9AD8\u5EA6", part: "l", phases: ["step"], singleOnly: true },
-      { id: "stepLength", label: "\u6B65\u957F", part: "l", phases: ["step", "adjust"], singleOnly: false }
-    ];
-    ModuleSet = class {
-      off = /* @__PURE__ */ new Set();
-      // 代码手动关掉的（总开关优先于其它一切）
-      byPart = /* @__PURE__ */ new Map();
-      constructor() {
-        for (const d of MODULES) {
-          const a = this.byPart.get(d.part);
-          if (a) a.push(d);
-          else this.byPart.set(d.part, [d]);
-        }
-      }
-      /** ★ 代码手动开关某模块（优先级最高）。返回是否成功。 */
-      enable(id, on = true) {
-        if (on) this.off.delete(id);
-        else this.off.add(id);
-        return this;
-      }
-      /** 批量关掉某归属的全部模块，例如"这一段不要动脊椎" */
-      enablePart(part, on) {
-        for (const d of this.byPart.get(part) ?? []) {
-          if (on) this.off.delete(d.id);
-          else this.off.add(d.id);
-        }
-        return this;
-      }
-      reset() {
-        this.off.clear();
-        return this;
-      }
-      isManuallyOff(id) {
-        return this.off.has(id);
-      }
-      /**
-       * ★ 模块 id 定义里写的是 `part: 'l'`（代表"逐腿模块"），
-       *   实际激活要按**具体那条腿**判断：`active('refShape', 'l')` / `active('refShape', 'r')`。
-       *   归属为 'body'/'spine' 的模块忽略 limb 参数。
-       */
-      resolve(id, limb) {
-        const d = MODULES.find((m) => m.id === id);
-        if (!d) return null;
-        if (d.part === "body" || d.part === "spine") return d;
-        return limb === d.part ? d : null;
-      }
-      /** ★ 模块此刻是否起作用 */
-      active(id, phase, nGround, limb = null) {
-        const d = this.resolve(id, limb);
-        if (!d) return false;
-        if (this.off.has(id)) return false;
-        if (!d.phases.includes(phase)) return false;
-        if (d.singleOnly && nGround !== 1) return false;
-        return true;
-      }
-      /** 某模块此刻为什么不起作用（空 = 起着作用）。调试直接打印这句话。 */
-      why(id, phase, nGround, limb = null) {
-        const d = this.resolve(id, limb);
-        if (!d) return limb ? `\u4E0D\u5C5E\u4E8E${limb === "l" ? "\u5DE6\u817F" : "\u53F3\u817F"}\uFF08\u8FD9\u662F\u9010\u817F\u6A21\u5757\uFF09` : "\u672A\u77E5\u6A21\u5757";
-        if (this.off.has(id)) return "\u88AB\u4EE3\u7801\u5173\u95ED";
-        if (!d.phases.includes(phase)) return `\u5F53\u524D\u662F\u300C${phase}\u300D\u76F8\uFF0C\u8BE5\u6A21\u5757\u53EA\u5728 ${d.phases.join("/")} \u76F8\u751F\u6548`;
-        if (d.singleOnly && nGround !== 1) return `\u8981\u6C42\u5355\u652F\u6491\uFF0C\u5F53\u524D\u652F\u6491\u811A\u6570=${nGround}`;
-        return "";
-      }
-      /**
-       * ★ 改某模块**在哪些相**生效（用户："需要代码操控什么时候什么模块起作用"）。
-       *   实测用途：脊椎三相全开 ⇒ MoS 变好但换脚减半；只在 `adjust` 相 ⇒ 两头都要。
-       *   传空数组 = 等价于永远关闭。
-       */
-      setPhases(id, phases) {
-        const d = MODULES.find((m) => m.id === id);
-        if (d) d.phases = phases.slice();
-        return this;
-      }
-      /** 调试：当前每个模块 开/关 + 原因（左腿右腿分列，脊椎单列） */
-      /**
-       * ★★★ 伺服层登记：**这类模块永远待命，但只"修正"、从不发令**（用户 2026-10-02）。
-       *   它们被允许在**任何相**起作用 —— 因为稳定不是发令出来的，是一直做的。
-       *   人体对应：落点/前馈、MoS 反射、踝策略、躯干稳定，都是持续在线的伺服。
-       */
-      servo(id) {
-        const d = MODULES.find((m) => m.id === id);
-        if (d) {
-          d.phases = ["both", "step", "adjust"];
-          d.singleOnly = false;
-        }
-        return this;
-      }
-      /** 批量登记伺服 */
-      servoAll(ids) {
-        for (const i of ids) this.servo(i);
-        return this;
-      }
-      /** 取某模块当前登记的相列表（调试用） */
-      phasesOf(id) {
-        return MODULES.find((m) => m.id === id)?.phases ?? [];
-      }
-      report(phase, nGround) {
-        const out = [];
-        for (const leg of ["l", "r"]) {
-          for (const d of this.byPart.get(leg) ?? []) {
-            const w = this.why(d.id, phase, nGround, leg);
-            out.push(`  ${w ? "\u2717" : "\u2713"} [${leg === "l" ? "\u5DE6\u817F" : "\u53F3\u817F"}] ${d.label}${w ? "\uFF1A" + w : "\uFF1A\u751F\u6548"}`);
-          }
-        }
-        for (const part of ["spine", "body"]) {
-          for (const d of this.byPart.get(part) ?? []) {
-            const w = this.why(d.id, phase, nGround, null);
-            out.push(`  ${w ? "\u2717" : "\u2713"} [${part === "spine" ? "\u810A\u690E" : "\u8EAB\u4F53"}] ${d.label}${w ? "\uFF1A" + w : "\uFF1A\u751F\u6548"}`);
-          }
-        }
-        return out;
-      }
-    };
-  }
-});
-
-// src/core/commander.ts
-function orderLabel(o) {
-  if (o === "legL") return "\u53D1\u4EE4\uFF1A\u8FC8\u5DE6\u817F";
-  if (o === "legR") return "\u53D1\u4EE4\uFF1A\u8FC8\u53F3\u817F";
-  if (o === "waist") return "\u53D1\u4EE4\uFF1A\u8F6C\u8170\u8C03\u8EAB";
-  return "\u53D1\u4EE4\uFF1A\u65E0";
-}
-function orderLeg(o) {
-  return o === "legL" ? "l" : o === "legR" ? "r" : null;
-}
-var GaitCommander;
-var init_commander = __esm({
-  "src/core/commander.ts"() {
-    "use strict";
-    init_gaitState();
-    GaitCommander = class {
-      constructor(seq = ["legL", "waist", "legR", "waist"], o = { stepPeriod: STEP_CYCLE_SEC, jitter: 0.15, waistShare: 0.5 }) {
-        this.o = o;
-        this.seq = seq;
-        let s = 12345;
-        this.rand = o.rand ?? (() => {
-          s = s * 1103515245 + 12345 & 2147483647;
-          return s / 2147483647;
-        });
-      }
-      /** 固定顺序：腿 → 腰 → 腿 → 腰 → …（用户指定的节奏） */
-      seq;
-      idx = 0;
-      tCur = 0;
-      tAbs = 0;
-      // ★ 绝对时间：时间线要显示真实时刻，不是恒为 0
-      tLast = -1;
-      dNeed = -1;
-      // ★ 本条令的时长（发令时抽一次抖动并锁定）
-      cur = null;
-      lastDelayed = false;
-      rand;
-      /** 发令时间线（调试） */
-      events = [];
-      /** 本回合发了多少条令 */
-      nOrders = 0;
-      reset() {
-        this.idx = 0;
-        this.tCur = 0;
-        this.tAbs = 0;
-        this.tLast = -1;
-        this.dNeed = -1;
-        this.cur = null;
-        this.events.length = 0;
-        this.nOrders = 0;
-      }
-      get now() {
-        return this.cur;
-      }
-      get label() {
-        return orderLabel(this.cur);
-      }
-      /**
-       * 推进发令者。
-       * @param dt       控制周期
-       * @param ready    **伺服层的反馈**："上一个动作已经稳住/落地了，可以发下一条令"。
-       *                 发令者等这个才走 —— 这就是"其余模块进行稳定"的接口。
-       */
-      step(dt, ready) {
-        this.tCur += dt;
-        this.tAbs += dt;
-        if (this.dNeed < 0) {
-          const base = this.o.stepPeriod / 2 * (this.cur === "waist" ? this.o.waistShare : 2 - this.o.waistShare);
-          this.dNeed = Math.max(0, base * (1 + (this.rand() * 2 - 1) * this.o.jitter));
-        }
-        const canGo = this.tCur >= this.dNeed && ready;
-        if (!canGo) return;
-        if (!this.cur) {
-          this.cur = this.seq[this.idx];
-          this.tCur = 0;
-          this.tLast = this.tAbs;
-          this.nOrders++;
-          this.events.push({ t: this.tAbs, order: this.cur, gap: 0, delayed: false });
-          return;
-        }
-        const gap = this.tCur;
-        const wasDelayed = gap > this.dNeed + 0.05;
-        this.idx = (this.idx + 1) % this.seq.length;
-        this.cur = this.seq[this.idx];
-        this.tCur = 0;
-        this.dNeed = -1;
-        this.lastDelayed = wasDelayed;
-        this.nOrders++;
-        this.events.push({ t: this.tAbs, order: this.cur, gap, delayed: wasDelayed });
-      }
-      get wasDelayed() {
-        return this.lastDelayed;
-      }
-      /** 调试时间线 */
-      timeline() {
-        return this.events.map((e) => `${e.t.toFixed(2)}s ${orderLabel(e.order)}`).join("  \u2192  ");
-      }
-    };
-  }
-});
-
 // src/core/walkReward.ts
 function phi(err) {
   return Math.exp(-(err * err) / 0.25);
@@ -16368,9 +17129,6 @@ var init_sim = __esm({
     init_gaitRef();
     init_stability();
     init_balanceJudge();
-    init_gaitPhase();
-    init_modules();
-    init_commander();
     init_walkReward();
     init_skeleton();
     SETTLE_HOLD = 0.45;
@@ -16425,8 +17183,8 @@ var init_sim = __esm({
       tiltRate: 0.05
     };
     DEFAULT_SIM = {
-      driver: "brain",
       physicsHz: 120,
+      deathFlySeconds: 1.6,
       controlHz: 60,
       duration: 6,
       mode: "walk",
@@ -16600,6 +17358,8 @@ var init_sim = __esm({
       sup = newSupport();
       // ---- 评估状态 ----
       subStep = 0;
+      /** 死亡后还要推进多少物理步（瘫软演出，见 advance） */
+      deathLeft = 0;
       tick = 0;
       phase = 0;
       startX = 0;
@@ -16685,40 +17445,88 @@ var init_sim = __esm({
       cycTimes = [];
       // 换支撑脚的时刻（节律门用）
       // ── 顺序步态状态机（迈步 → 调整 → 迈步）+ 它需要的逐拍量 ──
-      gp = new GaitPhaseMachine();
-      // ★ teacher 也要读当前相（否则脊椎模块的开关是假的）
       /**
        * ★★★ 发令者（用户 2026-10-02："主动发令控制一个模块，其余模块进行调整和平衡的稳定；
        *   发令顺序是腿、腰、腿；但只发令，别精确控制腿部落点"）。
        *   它只说**哪条腿 / 什么时候到腰 / 该走了没有**，绝不给位置目标。
        *   顺序固定：左腿 → 腰 → 右腿 → 腰 → …；`jitter` 提供反应随机性。
        */
-      cmd = new GaitCommander();
       /** 伺服层反馈：上一个动作稳住/落地了才发下一条令（由稳定跟踪器更新） */
       servoReady = true;
+      // ══════════════════════════════════════════════════════════════════════
+      //  ★★★ 唯一的步态相位 / 摆动腿来源（2026-10-04 架构收敛）
+      //
+      //  此前 `sim.ts` 自己持有**第二套**状态机（`GaitPhaseMachine` + `GaitCommander`
+      //  + `ModuleSet` + `PelvisFirstTracker`），与 `gaitState.ts` 并行推进：
+      //     · `gp.step(...)`      每拍推进一个自己的相位机（'both'|'step'|'adjust'）
+      //     · `cmd.step(dt, ...)` 每拍推进一个自己的命令器
+      //     · `orderLeg(this.cmd.now)` ⇒ **摆动腿来自命令器、不是 `gaitState`**
+      //     · `mod.active(...)`   ⇒ reward 的相位门禁来自另一套模块系统
+      //     · `pfL/pfR`            ⇒ 「盆骨优先」评分来自自己的跟踪器
+      //  ⇒ 违反「一个状态机」：控制走 `gaitState`，评分走 `gp`。
+      //     且 `DEFAULT_SIM.driver = 'brain'`（默认）根本不经过 `gaitState`。
+      //
+      //  收敛做法：**相位和摆动腿只有 `gaitState` 一个来源**。控制路径由
+      //  `Controller` 构造时 `attachRigState()` 注入；`driver='brain'`（ES 路径）
+      //  没有 `RigState`，此时这些派生量退化为几何判据（接地数），不再有第二套状态机。
+      // ══════════════════════════════════════════════════════════════════════
+      rig = null;
+      /** 由 `Controller` 构造时注入，使 reward 与控制**共用同一个状态机** */
+      attachRigState(rs) {
+        this.rig = rs;
+      }
+      /** 归一化相位（与 `gp.now` 的三值口径对齐，供下面少数 `===` 比较用） */
+      get gaitPhase() {
+        const rs = this.rig;
+        if (!rs) return "both";
+        if (rs.phase === "STEP") return "step";
+        if (rs.phase === "SINGLE" || rs.phase === "SHIFT" || rs.phase === "PUSH") return "adjust";
+        return "both";
+      }
+      /** 摆动腿（唯一来源 = `gaitState`）；无 `RigState` 时退回几何判据 */
+      /**
+       * 替代原 `ModuleSet.active(name, phase, nGround, part)` 的**无状态**门控。
+       *
+       *   `ModuleSet` 是一套独立的模块系统（`modules.ts`），带自己的开关状态与
+       *   `reset()`，与 `gaitState` 并行演进 ⇒ 第二套相位门禁来源。
+       *   这里改成**纯函数**：门 = f(归一化相位, 接地脚数)，无内部状态。
+       *
+       * @param name 模块名
+       * @param nGround 接地脚数（0/1/2）
+       */
+      gate(name, nGround) {
+        switch (name) {
+          case "loadShift":
+            return nGround === 2;
+          case "singleSupport":
+            return nGround === 1;
+          case "stillSwing":
+            return this.gaitPhase === "step";
+          case "pelvisFirst":
+            return nGround === 1 && this.gaitPhase === "step";
+          case "balance":
+            return this.gaitPhase !== "step";
+          default:
+            return true;
+        }
+      }
+      get gaitSwingLeg() {
+        const rs = this.rig;
+        return rs ? rs.swingLeg() : footGrounded(this.doll, "l") ? "r" : "l";
+      }
       /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
       settleHold = 0;
       get servoReadyDbg() {
         return this.servoReady;
       }
       /** 发令总数（调试） */
-      get cmdOrders() {
-        return this.cmd.nOrders;
-      }
       /** 调试：发令时间线 */
-      get cmdTimeline() {
-        return this.cmd.timeline();
-      }
-      get cmdLabel() {
-        return this.cmd.label;
-      }
       /**
        * ★★★ 算法模块开关（用户 2026-10-02："左腿就是左腿，右腿就是右腿，脊椎就是脊椎；
        *   需要代码操控什么时候什么模块起作用，什么不起作用"）。
        *   所有奖励项的"何时生效"门控**统一**走这里，不再各写各的 `if (nGround === 1)`。
        *   调试看 `mod.report(gp.now, nGround)`。
        */
-      mod = new ModuleSet();
       accStill = 0;
       // ★ 摆动相里身体的运动量（要被罚）
       stillStep = 0;
@@ -16729,9 +17537,6 @@ var init_sim = __esm({
       gpSwing = null;
       gpBodyFree = false;
       /** 状态机转移轨迹（含"哪个状态没通过"） */
-      get stateTrace() {
-        return this.gp.trace;
-      }
       accCycle = 0;
       gpPaidThisStep = false;
       cycleN = 0;
@@ -17024,13 +17829,13 @@ var init_sim = __esm({
         this.cycTimes = [];
         this.lastAltT = 0;
         this.lastLoadFrac = [0.5, 0.5];
-        this.gp.reset();
         this.accCycle = 0;
         this.gpPaidThisStep = false;
         this.accStill = 0;
         this.stillStep = 0;
         this.stillAdjust = 0;
-        this.mod.reset();
+        this.accCycle = 0;
+        this.gpPaidThisStep = false;
         this.cycleN = 0;
         this.cycleFlick = 0;
         this.cycleAdj = 0;
@@ -17068,14 +17873,38 @@ var init_sim = __esm({
        * 推进最多 budgetSteps 个物理步，返回实际消耗的步数。
        * 评估跑完（或摔倒）即提前返回。
        */
+      /**
+       * ★ 死亡后继续推进物理（`deathSteps` 步），让瘫软的角色被带着飞出去
+       *   （用户 2026-10-04：「当角色死亡的时候我觉得可以恢复这个状态让他飞出去」）。
+       *
+       *   之前 `finish()` 之后 `advance()` 直接 return，所以尸体站着不动、像卡住。
+       *   现在：死亡 ⇒ 只结束**评估**（fitness/terms 已定、不再变），物理照跑，
+       *   马达已瘫软（`setLimp`），于是重力 + 接触 + 残余动量接管，角色被甩出去。
+       *   跑完 `deathSteps` 后彻底停止。
+       */
       advance(budgetSteps) {
-        if (this.finished) return 0;
+        if (this.finished) {
+          if (this.deathLeft <= 0) return 0;
+          const used0 = this.deathLeft;
+          let n = 0;
+          while (n < budgetSteps && this.deathLeft > 0) {
+            this.doll.driveMotors(this.dt);
+            this.world.step();
+            this.doll.enforceLimits();
+            this.doll.primeVelocities();
+            if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
+            this.deathLeft--;
+            n++;
+          }
+          return Math.min(used0, n);
+        }
         let used = 0;
         while (used < budgetSteps && !this.finished) {
           if (this.subStep === 0) this.controlTick();
           this.doll.driveMotors(this.dt);
           this.world.step();
           this.doll.enforceLimits();
+          this.doll.primeVelocities();
           if (this.doll.supportPointOn) this.doll.applySupportPoint(this.dt);
           used++;
           this.subStep++;
@@ -17249,10 +18078,6 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
-        if (this.cfg.driver === "controller") return;
-        brainForward(this.shape, p, x, this.hidden, this.out);
-        for (let i = 0; i < this.motor.length; i++) this.motor[i] = this.out[i];
-        doll.setMotorTargets(this.motor);
         const dt = 1 / this.cfg.controlHz;
         this.accVel += tv.x * dt;
         this.accUpright += Math.cos(doll.tiltOf(torso)) * dt;
@@ -17288,7 +18113,7 @@ var init_sim = __esm({
         this.accAlive += alive * dt;
         const [fl2, fr2] = this.doll.footLoadFrac(dt);
         this.lastLoadFrac = [fl2, fr2];
-        if (this.mod.active("loadShift", this.gp.now, nGround, null)) this.accShift += Math.abs(fl2 - fr2) * dt;
+        if (this.gate("loadShift", nGround)) this.accShift += Math.abs(fl2 - fr2) * dt;
         const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
         const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
         const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
@@ -17304,7 +18129,7 @@ var init_sim = __esm({
             this.accSwitchQ += phi(TARGET_VX - this.footVel);
           }
         }
-        if (this.mod.active("singleSupport", this.gp.now, nGround, null))
+        if (this.gate("singleSupport", nGround))
           this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
         if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
         if (this.cfg.mode === "stand" && nGround === 2) {
@@ -17318,66 +18143,64 @@ var init_sim = __esm({
           const eH = Math.abs(footHere - xiH);
           const placeHere = eH <= 0.05 ? 1 : Math.max(0, 1 - (eH - 0.05) / 0.25);
           const shpHere = (this.lastRefHip + this.lastRefKnee) * 0.5;
-          const pelHere = (this.pfL.score() + this.pfR.score()) * 0.5;
-          const swingLeg = orderLeg(this.cmd.now) ?? (gL ? "r" : "l");
-          this.gp.step(nGround, clr, mosHere, shpHere, placeHere, pelHere, dt, swingLeg);
-          this.gpLabel = this.gp.label;
-          this.gpSwing = this.gp.swingLeg;
-          this.gpBodyFree = this.gp.bodyFree;
-          this.cmd.step(dt, this.servoReady);
-          const stillOn = this.mod.active("stillSwing", this.gp.now, nGround, null);
+          const ph5 = this.gaitPhase;
+          const swingLeg = this.gaitSwingLeg;
+          this.gpLabel = ph5 === "step" ? "\u8FC8\u6B65" : ph5 === "adjust" ? "\u5355\u652F\u6491\u8C03\u6574" : "\u53CC\u652F\u6491";
+          this.gpSwing = nGround === 1 ? gL ? "r" : "l" : null;
+          this.gpBodyFree = ph5 !== "step";
+          const stillOn = this.gate("stillSwing", nGround) && ph5 === "step";
           const wb = Math.hypot(this.lbuf[0], this.lbuf[1], this.lbuf[2]);
           const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
           if (nGround === 1) {
             if (stillOn) {
               this.accStill += bodyMove * dt;
               this.stillStep += bodyMove * dt;
-            } else if (this.gp.bodyFree) this.stillAdjust += bodyMove * dt;
+            } else if (this.gpBodyFree) this.stillAdjust += bodyMove * dt;
           }
-          const cyc = this.gp.tally;
-          if (cyc.lastCredit > 0 && !this.gpPaidThisStep) {
-            this.accCycle += cyc.lastCredit;
+          const rs5 = this.rig;
+          if (rs5 && rs5.phase === "SINGLE" && !this.gpPaidThisStep) {
+            if (mosHere >= 0) {
+              this.accCycle += 1;
+              this.cycleN++;
+            }
             this.gpPaidThisStep = true;
           }
-          if (!this.gp.inAdjust) this.gpPaidThisStep = false;
-          this.cycleN = cyc.nAdjustOk;
-          this.cycleFlick = cyc.flickers;
-          this.cycleAdj = cyc.meanAdjustSec;
-          this.cyclePhase = this.gp.now;
+          if (ph5 !== "adjust") this.gpPaidThisStep = false;
+          this.cycleAdj = this.lastMosX >= 0 ? this.cycleAdj : this.cycleAdj;
+          this.cyclePhase = ph5;
         }
-        if (this.mod.active("pelvisFirst", this.gp.now, nGround, "l") || this.mod.active("pelvisFirst", this.gp.now, nGround, "r")) {
-          if (nGround === 1) {
-            const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
-            const swingIsL = gL;
-            const tSw = swingIsL ? ph + STANCE_FRAC : ph;
-            const rd = (name) => {
-              const i = JOINT_ORDER.indexOf(name);
-              if (i < 0) return 0;
-              return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
-            };
-            const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
-            const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
-            const a = scoreLeg(tSw, hipSw, kneeSw);
-            const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
-            this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
-            this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
-          }
-          {
-            const dt2 = dt;
-            const vel = (name) => {
-              const i = JOINT_ORDER.indexOf(name);
-              if (i < 0) return 0;
-              doll.jointRelVel(i, this.jbuf);
-              return this.jbuf[2];
-            };
-            const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
-            this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
-            this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
-            if (this.mod.active("pelvisFirst", this.gp.now, nGround, "l"))
-              this.accPelvisL += this.pfL.score() * dt;
-            if (this.mod.active("pelvisFirst", this.gp.now, nGround, "r"))
-              this.accPelvisR += this.pfR.score() * dt;
-          }
+        const pelvisGate = this.gate("pelvisFirst", nGround);
+        if (nGround === 1) {
+          const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
+          const swingIsL = gL;
+          const tSw = swingIsL ? ph + STANCE_FRAC : ph;
+          const rd = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            return doll.jointAngle(i) + (this.sk.joints[i]?.restRad[2] ?? 0);
+          };
+          const hipSw = rd(swingIsL ? "hip_l" : "hip_r"), kneeSw = rd(swingIsL ? "knee_l" : "knee_r");
+          const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
+          const a = scoreLeg(tSw, hipSw, kneeSw);
+          const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
+          this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
+          this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
+        }
+        {
+          const dt2 = dt;
+          const vel = (name) => {
+            const i = JOINT_ORDER.indexOf(name);
+            if (i < 0) return 0;
+            doll.jointRelVel(i, this.jbuf);
+            return this.jbuf[2];
+          };
+          const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
+          this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
+          this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
+          if (pelvisGate)
+            this.accPelvisL += this.pfL.score() * dt;
+          if (pelvisGate)
+            this.accPelvisR += this.pfR.score() * dt;
         }
         {
           doll.soleXZ("l", this.footTmpL);
@@ -17432,7 +18255,7 @@ var init_sim = __esm({
           const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
           const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
           const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
-          if (this.mod.active("balance", this.gp.now, nGround, null))
+          if (this.gate("balance", nGround))
             this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
           const stableNow = nGround >= 2 && mos.x > 0.02;
           if (stableNow) this.settleHold += dt;
@@ -17619,7 +18442,7 @@ var init_sim = __esm({
           tt.cycleCount = this.cycleN;
           tt.cycleFlick = this.cycleFlick;
           tt.cycleAdjust = this.cycleAdj;
-          tt.cyclePhase = this.gp.now === "adjust" ? 2 : this.gp.now === "step" ? 1 : 0;
+          tt.cyclePhase = this.gaitPhase === "adjust" ? 2 : this.gaitPhase === "step" ? 1 : 0;
           tt.medianCycle = this.cycTimes.length >= 2 ? [...this.cycTimes].sort((a, b) => a - b)[Math.floor(this.cycTimes.length / 2)] : 0;
           tt.lift = w.lift * this.accLift * aliveAvg * cad;
           tt.single = w.single * (this.accSwitchQ * aliveAvg + this.accSingle * cad);
@@ -17720,8 +18543,13 @@ var init_sim = __esm({
         const f = this.terms.total;
         this.fitness = f;
         this.finished = true;
-        for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
-        this.doll.setMotorTargets(this.motor);
+        if (fallen) {
+          this.doll.setLimp(true);
+          this.deathLeft = Math.round((this.cfg.deathFlySeconds ?? 1.6) * this.cfg.physicsHz);
+        } else {
+          for (let i = 0; i < this.motor.length; i++) this.motor[i] = 0;
+          this.doll.setMotorTargets(this.motor);
+        }
       }
       progressRaw() {
         return this.tick / this.ticksTotal;
@@ -17729,6 +18557,8 @@ var init_sim = __esm({
       /** 重新对齐物理世界（展示视图用：跑完一轮后让角色重新站好） */
       restand() {
         this.doll.reset(0);
+        this.doll.setLimp(false);
+        this.deathLeft = 0;
         this.finished = false;
         this.fallen = false;
         this.subStep = 0;
@@ -17931,6 +18761,14 @@ function run(label, seed) {
   }
   const alive = sim.ticksDone / sim.cfg.controlHz;
   log(alive >= DUR - 0.05 ? `  \u2713 \u7AD9\u6EE1 ${DUR}s` : `  \u2717 \u5012\u4E8E t = ${alive.toFixed(2)}s \xB7 \u6B7B\u56E0[${sim.fallReason}] \xB7 \u7EC8\u503E\u89D2 ${(sim.endTilt * 57.2958).toFixed(1)}\xB0`);
+  if (sim.fallReason) {
+    const d = sim.fallDiag ?? {};
+    const g = sim.doll.groundTouching();
+    log(`     \u251C \u5224\u636E\u6BD4\u503C rH=${d.rH} rT=${d.rT} rD=${d.rD}  \uFF08>1 \u5373\u89E6\u53D1\uFF09`);
+    log(`     \u251C \u89E6\u53D1\u77AC\u95F4 \u89E6\u5730\u975E\u811A\u521A\u4F53 = ${d.hit || "\uFF08\u65E0 \u21D2 \u4E0D\u662F crash \u89E6\u53D1\uFF09"}`);
+    log(`     \u251C \u5F53\u524D\u89E6\u5730\u521A\u4F53 = ${g.join(",") || "\uFF08\u65E0\uFF09"}`);
+    log(`     \u2514 \u53CC\u811A\u63A5\u5730 = ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0)} / 2   ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0) === 0 ? "  \u2605 \u4E24\u811A\u817E\u7A7A" : ""}`);
+  }
 }
 run("\u96F6\u8F93\u51FA\uFF08\u03B8_ref \u2261 0\uFF0C\u4FDD\u6301\u7ED1\u5B9A\u59FF\u6001\uFF09", null);
 run("\u968F\u673A\u57FA\u56E0\u7EC4\uFF08\u5BF9\u7167\uFF09", 20261003);

@@ -83,6 +83,18 @@ function run(label: string, seed: number | null): void {
   log(alive >= DUR - 0.05
     ? `  ✓ 站满 ${DUR}s`
     : `  ✗ 倒于 t = ${alive.toFixed(2)}s · 死因[${sim.fallReason}] · 终倾角 ${(sim.endTilt * 57.2958).toFixed(1)}°`);
+  // ★ 死因三判据的比值 + 触地刚体名 + 双脚接地情况。
+  //   「误判摔倒」几乎总是其中一条：arch/forefoot 合法着地被判 crash、
+  //   或 60Hz 弹跳让倾角/头高瞬时超线。
+  if (sim.fallReason) {
+    const d = sim.fallDiag ?? {};
+    const g = sim.doll.groundTouching();
+    log(`     ├ 判据比值 rH=${d.rH} rT=${d.rT} rD=${d.rD}  （>1 即触发）`);
+    log(`     ├ 触发瞬间 触地非脚刚体 = ${d.hit || '（无 ⇒ 不是 crash 触发）'}`);
+    log(`     ├ 当前触地刚体 = ${g.join(',') || '（无）'}`);
+    log(`     └ 双脚接地 = ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0)} / 2`
+      + `   ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0) === 0 ? '  ★ 两脚腾空' : ''}`);
+  }
 }
 
 run('零输出（θ_ref ≡ 0，保持绑定姿态）', null);

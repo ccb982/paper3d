@@ -29,7 +29,7 @@ const bi = (k: string) => doll.sk.bodies.findIndex((b) => b.key === k);
 const iFoot = bi('foot_l'), iArch = bi('arch_l'), iShin = bi('shin_l'), iTorso = bi('torso');
 const ja = jointIndexByName(sk, 'arch_l');
 
-const N = 100;   // ★ 只取站立最初 100 帧（≈0.83s）：再往后角色已摔倒，
+const N = 360;   // 3 秒，要够分辨 60Hz 控制环与物理振动（≈0.83s）：再往后角色已摔倒，
                     //   躺平后位移恒 0，统计出来全是 0.00 会掩盖真正的抖动
 const series = { arch: [] as number[], footY: [] as number[], shinY: [] as number[], torsoY: [] as number[] };
 for (let f = 0; f < N; f++) {
@@ -41,7 +41,7 @@ for (let f = 0; f < N; f++) {
   series.torsoY.push(doll.bodies[iTorso]!.translation().y);
 }
 // 只统计后半段（跳过落地瞬态）
-const H = 20;   // 跳过落地瞬态的前 20 帧
+const H = 60;   // 跳过落地瞬态
 const stat = (a: number[], scale = 1, unit = '') => {
   const v = a.slice(H);
   const mean = v.reduce((x, y) => x + y, 0) / v.length;
@@ -96,6 +96,31 @@ log(`   相关系数 弓角~足体高 = ${cov.toFixed(3)}`
 const aMean = am * 57.3;
 log(`   弓角均值 ${aMean.toFixed(2)}°`
   + `  ${Math.abs(aMean) > 1 ? '✗ 长期偏罬=' + Math.abs(aMean).toFixed(1) + '° → 软弹精在承重' : '✓ 无长期偏罬'}`);
+// ★ 主频：自相关函数。60Hz = 控制环限环（30 帧一周期），
+//   低频 = 物理振动。用自相关而不用 FFT（算法简单且不会漂移）。
+const sig = series.footY.slice(H);
+const m0 = sig.reduce((a, b) => a + b, 0) / sig.length;
+const c0 = sig.map((v) => v - m0);
+let bestLag = 0, bestR = -2;
+const rAt = (lag: number): number => {
+  let num = 0, d1 = 0, d2 = 0;
+  for (let i = 0; i + lag < c0.length; i++) {
+    num += c0[i]! * c0[i + lag]!;
+    d1 += c0[i]! * c0[i]!; d2 += c0[i + lag]! * c0[i + lag]!;
+  }
+  return d1 > 1e-18 && d2 > 1e-18 ? num / Math.sqrt(d1 * d2) : 0;
+};
+for (let lag = 2; lag <= 60; lag++) { const r = rAt(lag); if (r > bestR) { bestR = r; bestLag = lag; } }
+const hz = (1 / DEFAULT_SIM.physicsHz!) * 1000 / 1000;
+log(`   自相关主周期 = ${bestLag} 帧 = ${(bestLag * 8.333).toFixed(1)} ms`
+  + `  频率 ${(1000 / (bestLag * 8.333)).toFixed(1)} Hz   r=${bestR.toFixed(3)}`);
+log(`   控制频率 ${DEFAULT_SIM.controlHz} Hz = ${(DEFAULT_SIM.physicsHz! / DEFAULT_SIM.controlHz!).toFixed(0)} 物理帧/控制帧`
+  + `  ${bestLag === DEFAULT_SIM.physicsHz! / DEFAULT_SIM.controlHz! ? '✗ 正好是控制环限环' : ''}`);
+// 帧间步长模式：奇偶交替 = 控制帧限环
+let alt = 0;
+for (let i = 1; i < sig.length; i++) if (Math.abs(sig[i]! - sig[i - 1]!) > 1e-9) alt++;
+log(`   有变化的帧比例 ${(alt / sig.length * 100).toFixed(0)}%`
+  + `  ${alt / sig.length > 0.9 ? '✗ 每帧都动 = 控制环限环' : '✓ 有一段完全不动(达制动位)'}`);
 // 弓角态参数
 let atLim = 0;
 for (let i = H; i < N; i++) {

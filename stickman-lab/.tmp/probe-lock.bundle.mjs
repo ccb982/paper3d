@@ -13956,13 +13956,14 @@ var init_ragdoll = __esm({
       //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
       //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
       //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-      // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
-      //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
-      //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
-      //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
-      //   免得读代码的人以为"弓该是 100 那么硬"。
-      archStiffness: 6,
-      archDamping: 0.025,
+      // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+      //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+      //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+      //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+      //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+      //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+      archStiffness: 400,
+      archDamping: 2,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14100,10 +14101,17 @@ var init_ragdoll = __esm({
       torsoKey;
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
+      /**
+       * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+       *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+       *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+       *   外观指标却全部“正常”。
+       */
+      motorDriven = /* @__PURE__ */ new Set();
       /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
       physicsDt = 0;
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
-      archGainClamp = null;
+      archMotor = null;
       /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -14209,6 +14217,7 @@ var init_ragdoll = __esm({
           for (let i = 0; i < sk2.joints.length; i++) {
             const j = sk2.joints[i];
             if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
+            if (j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
             const tmax = Math.max(1e-6, j.maxTorque[ax]);
@@ -14281,27 +14290,6 @@ var init_ragdoll = __esm({
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
-        }
-        this.archGainClamp = null;
-        const dt0 = this.physicsDt || 1 / 120;
-        for (let i = 0; i < sk2.joints.length; i++) {
-          const j = sk2.joints[i];
-          if (!j.name.startsWith("arch_") || !j.revoluteAxis) continue;
-          const g = this.opt.jointGain?.[j.name];
-          if (!g) continue;
-          const Iax = this.jointAxisInertia(i, j.revoluteAxis);
-          const kMax = 4 * Iax / (dt0 * dt0);
-          const bMax = 2 * Iax / dt0;
-          const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
-          const tmax = Math.max(1e-6, j.maxTorque[ax]);
-          const kNm = Math.min(g.kP * tmax / JOINT_MAX_SPEED, kMax);
-          const bNm = Math.min(g.kD * tmax / JOINT_MAX_SPEED, bMax);
-          this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
-            kNm: g.kP * tmax / JOINT_MAX_SPEED,
-            bNm: g.kD * tmax / JOINT_MAX_SPEED
-          } };
-          g.kP = kNm * JOINT_MAX_SPEED / tmax;
-          g.kD = bNm * JOINT_MAX_SPEED / tmax;
         }
         this.motorAuthority.fill(1);
         this.groundFactor.fill(1);
@@ -14436,6 +14424,15 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+            const mj = joint;
+            mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            const K = this.opt.archStiffness ?? 400;
+            const B = this.opt.archDamping ?? 2;
+            mj.configureMotorPosition(0, K, B);
+            this.motorDriven.add(i);
+            this.archMotor = { K, B, joint: i };
+          }
           if (j.revoluteAxis && typeof joint.setLimits === "function") {
             const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
             joint.setLimits(j.minRad[ax], j.maxRad[ax]);
@@ -15576,6 +15573,7 @@ var init_ragdoll = __esm({
         const relL = this.relL;
         const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
+          if (this.motorDriven.has(i)) continue;
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
           const ci = this.jointBodies[i * 2 + 1];

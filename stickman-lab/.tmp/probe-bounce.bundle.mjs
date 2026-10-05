@@ -5138,8 +5138,8 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} hz
       * @returns {RawShape}
       */
-      static cuboid(hx, hy, hz) {
-        const ret = wasm.rawshape_cuboid(hx, hy, hz);
+      static cuboid(hx, hy, hz2) {
+        const ret = wasm.rawshape_cuboid(hx, hy, hz2);
         return _RawShape.__wrap(ret);
       }
       /**
@@ -5149,8 +5149,8 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number} borderRadius
       * @returns {RawShape}
       */
-      static roundCuboid(hx, hy, hz, borderRadius) {
-        const ret = wasm.rawshape_roundCuboid(hx, hy, hz, borderRadius);
+      static roundCuboid(hx, hy, hz2, borderRadius) {
+        const ret = wasm.rawshape_roundCuboid(hx, hy, hz2, borderRadius);
         return _RawShape.__wrap(ret);
       }
       /**
@@ -6503,7 +6503,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const hxRaw = soleHalfLen * sfx;
       const hzRaw = (paw ? paw.lateralHalf * px2m : radius * 0.9) * sfx;
       const hx = hxRaw;
-      const hz = SOLE_WIDTH_TARGET / 2 * sfx;
+      const hz2 = SOLE_WIDTH_TARGET / 2 * sfx;
       const soleWorldY = soleHalfThick;
       const soleWorldZ = mapZ(knee ? knee[0] : part.cx, true);
       const soleMassTotal = mainMass + soleMass;
@@ -6534,9 +6534,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const two = cfg.soleSplit;
         const hxBall = two ? hx * 0.5 : hx;
         const offBall = two ? hx * 0.5 : 0;
-        const hzCol = hz * 0.5;
-        const offColIn = +(hz * 0.5).toFixed(6);
-        const offColOut = -(hz * 0.5).toFixed(6);
+        const hzCol = hz2 * 0.5;
+        const offColIn = +(hz2 * 0.5).toFixed(6);
+        const offColOut = -(hz2 * 0.5).toFixed(6);
         bodies.push({
           key: spec.key === "shin_l" ? "foot_l" : "foot_r",
           bone: spec.bone,
@@ -6759,23 +6759,23 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         radius: 0,
         hx,
         hy: soleHalfThick,
-        hz,
+        hz: hz2,
         offsetY: local[1],
         offsetZ: local[2],
         mass: soleMass,
         comY: 0,
         inertiaZ: soleMass * (hx * hx + soleHalfThick * soleHalfThick) / 3,
-        inertiaXY: soleMass * (hz * hz + soleHalfThick * soleHalfThick) / 3
+        inertiaXY: soleMass * (hz2 * hz2 + soleHalfThick * soleHalfThick) / 3
       });
     }
     if (spec.key === "torso" && K > 1) {
       const segLen = length / K;
       const segMass = totalMass / K;
-      const hx = radius, hz = radius * 0.9;
+      const hx = radius, hz2 = radius * 0.9;
       for (let s = 0; s < K; s++) {
         const cyS = cy - length / 2 + (s + 0.5) * segLen;
         const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
-        const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
+        const iX = segMass * (segLen / 2 * (segLen / 2) + hz2 * hz2) / 3;
         bodies.push({
           key: s === 0 ? "torso" : `spine${s + 1}`,
           bone: spec.bone,
@@ -6799,7 +6799,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             radius: 0,
             hx,
             hy: segLen / 2,
-            hz,
+            hz: hz2,
             offsetY: 0,
             offsetZ: 0,
             mass: segMass,
@@ -10320,10 +10320,10 @@ var init_shape = __esm({
        * @param hy - The half height of the cuboid.
        * @param hz - The half depth of the cuboid.
        */
-      constructor(hx, hy, hz) {
+      constructor(hx, hy, hz2) {
         super();
         this.type = ShapeType.Cuboid;
-        this.halfExtents = VectorOps.new(hx, hy, hz);
+        this.halfExtents = VectorOps.new(hx, hy, hz2);
       }
       // #endif
       intoRaw() {
@@ -10340,10 +10340,10 @@ var init_shape = __esm({
        * @param borderRadius - The radius of the borders of this cuboid. This will
        *   effectively increase the half-extents of the cuboid by this radius.
        */
-      constructor(hx, hy, hz, borderRadius) {
+      constructor(hx, hy, hz2, borderRadius) {
         super();
         this.type = ShapeType.RoundCuboid;
-        this.halfExtents = VectorOps.new(hx, hy, hz);
+        this.halfExtents = VectorOps.new(hx, hy, hz2);
         this.borderRadius = borderRadius;
       }
       // #endif
@@ -13232,8 +13232,8 @@ var init_collider = __esm({
        * @param hy - The half-width of the rectangle along its local `y` axis.
        * @param hz - The half-width of the rectangle along its local `z` axis.
        */
-      static cuboid(hx, hy, hz) {
-        const shape = new Cuboid(hx, hy, hz);
+      static cuboid(hx, hy, hz2) {
+        const shape = new Cuboid(hx, hy, hz2);
         return new _ColliderDesc(shape);
       }
       /**
@@ -13244,8 +13244,8 @@ var init_collider = __esm({
        * @param hz - The half-width of the rectangle along its local `z` axis.
        * @param borderRadius - The radius of the cuboid's borders.
        */
-      static roundCuboid(hx, hy, hz, borderRadius) {
-        const shape = new RoundCuboid(hx, hy, hz, borderRadius);
+      static roundCuboid(hx, hy, hz2, borderRadius) {
+        const shape = new RoundCuboid(hx, hy, hz2, borderRadius);
         return new _ColliderDesc(shape);
       }
       /**
@@ -13956,13 +13956,14 @@ var init_ragdoll = __esm({
       //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
       //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
       //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-      // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
-      //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
-      //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
-      //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
-      //   免得读代码的人以为"弓该是 100 那么硬"。
-      archStiffness: 6,
-      archDamping: 0.025,
+      // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+      //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+      //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+      //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+      //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+      //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+      archStiffness: 400,
+      archDamping: 2,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14100,10 +14101,17 @@ var init_ragdoll = __esm({
       torsoKey;
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
+      /**
+       * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+       *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+       *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+       *   外观指标却全部“正常”。
+       */
+      motorDriven = /* @__PURE__ */ new Set();
       /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
       physicsDt = 0;
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
-      archGainClamp = null;
+      archMotor = null;
       /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -14209,6 +14217,7 @@ var init_ragdoll = __esm({
           for (let i = 0; i < sk2.joints.length; i++) {
             const j = sk2.joints[i];
             if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
+            if (j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
             const tmax = Math.max(1e-6, j.maxTorque[ax]);
@@ -14281,27 +14290,6 @@ var init_ragdoll = __esm({
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
-        }
-        this.archGainClamp = null;
-        const dt0 = this.physicsDt || 1 / 120;
-        for (let i = 0; i < sk2.joints.length; i++) {
-          const j = sk2.joints[i];
-          if (!j.name.startsWith("arch_") || !j.revoluteAxis) continue;
-          const g = this.opt.jointGain?.[j.name];
-          if (!g) continue;
-          const Iax = this.jointAxisInertia(i, j.revoluteAxis);
-          const kMax = 4 * Iax / (dt0 * dt0);
-          const bMax = 2 * Iax / dt0;
-          const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
-          const tmax = Math.max(1e-6, j.maxTorque[ax]);
-          const kNm = Math.min(g.kP * tmax / JOINT_MAX_SPEED, kMax);
-          const bNm = Math.min(g.kD * tmax / JOINT_MAX_SPEED, bMax);
-          this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
-            kNm: g.kP * tmax / JOINT_MAX_SPEED,
-            bNm: g.kD * tmax / JOINT_MAX_SPEED
-          } };
-          g.kP = kNm * JOINT_MAX_SPEED / tmax;
-          g.kD = bNm * JOINT_MAX_SPEED / tmax;
         }
         this.motorAuthority.fill(1);
         this.groundFactor.fill(1);
@@ -14436,6 +14424,15 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+            const mj = joint;
+            mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            const K = this.opt.archStiffness ?? 400;
+            const B = this.opt.archDamping ?? 2;
+            mj.configureMotorPosition(0, K, B);
+            this.motorDriven.add(i);
+            this.archMotor = { K, B, joint: i };
+          }
           if (j.revoluteAxis && typeof joint.setLimits === "function") {
             const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
             joint.setLimits(j.minRad[ax], j.maxRad[ax]);
@@ -15576,6 +15573,7 @@ var init_ragdoll = __esm({
         const relL = this.relL;
         const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
+          if (this.motorDriven.has(i)) continue;
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
           const ci = this.jointBodies[i * 2 + 1];
@@ -16216,11 +16214,11 @@ function footRect(doll2, side, out) {
   const sole = bd.colliders.find((c) => c.shape === "cuboid");
   const hx = sole && sole.shape === "cuboid" ? sole.hx : 0.02;
   const hy = sole && sole.shape === "cuboid" ? sole.hy : 0.01;
-  const hz = sole && sole.shape === "cuboid" ? sole.hz : 0.02;
+  const hz2 = sole && sole.shape === "cuboid" ? sole.hz : 0.02;
   const oy = (sole ? sole.offsetY : -bd.length / 2) - hy;
   let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, minY = Infinity;
   for (let si = 0; si < 4; si++) {
-    rotQ(q.x, q.y, q.z, q.w, (si & 1 ? 1 : -1) * hx, oy, (si & 2 ? 1 : -1) * hz, V3);
+    rotQ(q.x, q.y, q.z, q.w, (si & 1 ? 1 : -1) * hx, oy, (si & 2 ? 1 : -1) * hz2, V3);
     const wx = t.x + V3[0], wy = t.y + V3[1], wz = t.z + V3[2];
     if (wx < x0) x0 = wx;
     if (wx > x1) x1 = wx;
@@ -20800,7 +20798,7 @@ var iArch = bi("arch_l");
 var iShin = bi("shin_l");
 var iTorso = bi("torso");
 var ja = jointIndexByName2(sk, "arch_l");
-var N = 100;
+var N = 360;
 var series = { arch: [], footY: [], shinY: [], torsoY: [] };
 for (let f = 0; f < N; f++) {
   sim.motor.set(ctrl.step(1 / (DEFAULT_SIM2.controlHz ?? 60)));
@@ -20810,7 +20808,7 @@ for (let f = 0; f < N; f++) {
   series.shinY.push(doll.bodies[iShin].translation().y);
   series.torsoY.push(doll.bodies[iTorso].translation().y);
 }
-var H = 20;
+var H = 60;
 var stat = (a, scale = 1, unit = "") => {
   const v = a.slice(H);
   const mean = v.reduce((x, y) => x + y, 0) / v.length;
@@ -20872,6 +20870,33 @@ cov = sa > 1e-12 && sy > 1e-12 ? sc / Math.sqrt(sa * sy) : NaN;
 log(`   \u76F8\u5173\u7CFB\u6570 \u5F13\u89D2~\u8DB3\u4F53\u9AD8 = ${cov.toFixed(3)}  ${cov > 0.5 ? "\u2713 \u5F13\u5728\u9876\u8DB3\u4F53 = \u4E0A\u4E0B\u8DF3\u7684\u5F52\u56E0" : "\u2717 \u5F13\u89D2\u4E0E\u8DF3\u52A8\u65E0\u5173"}`);
 var aMean = am * 57.3;
 log(`   \u5F13\u89D2\u5747\u503C ${aMean.toFixed(2)}\xB0  ${Math.abs(aMean) > 1 ? "\u2717 \u957F\u671F\u504F\u7F6C=" + Math.abs(aMean).toFixed(1) + "\xB0 \u2192 \u8F6F\u5F39\u7CBE\u5728\u627F\u91CD" : "\u2713 \u65E0\u957F\u671F\u504F\u7F6C"}`);
+var sig = series.footY.slice(H);
+var m0 = sig.reduce((a, b) => a + b, 0) / sig.length;
+var c0 = sig.map((v) => v - m0);
+var bestLag = 0;
+var bestR = -2;
+var rAt = (lag) => {
+  let num = 0, d1 = 0, d2 = 0;
+  for (let i = 0; i + lag < c0.length; i++) {
+    num += c0[i] * c0[i + lag];
+    d1 += c0[i] * c0[i];
+    d2 += c0[i + lag] * c0[i + lag];
+  }
+  return d1 > 1e-18 && d2 > 1e-18 ? num / Math.sqrt(d1 * d2) : 0;
+};
+for (let lag = 2; lag <= 60; lag++) {
+  const r = rAt(lag);
+  if (r > bestR) {
+    bestR = r;
+    bestLag = lag;
+  }
+}
+var hz = 1 / DEFAULT_SIM2.physicsHz * 1e3 / 1e3;
+log(`   \u81EA\u76F8\u5173\u4E3B\u5468\u671F = ${bestLag} \u5E27 = ${(bestLag * 8.333).toFixed(1)} ms  \u9891\u7387 ${(1e3 / (bestLag * 8.333)).toFixed(1)} Hz   r=${bestR.toFixed(3)}`);
+log(`   \u63A7\u5236\u9891\u7387 ${DEFAULT_SIM2.controlHz} Hz = ${(DEFAULT_SIM2.physicsHz / DEFAULT_SIM2.controlHz).toFixed(0)} \u7269\u7406\u5E27/\u63A7\u5236\u5E27  ${bestLag === DEFAULT_SIM2.physicsHz / DEFAULT_SIM2.controlHz ? "\u2717 \u6B63\u597D\u662F\u63A7\u5236\u73AF\u9650\u73AF" : ""}`);
+var alt = 0;
+for (let i = 1; i < sig.length; i++) if (Math.abs(sig[i] - sig[i - 1]) > 1e-9) alt++;
+log(`   \u6709\u53D8\u5316\u7684\u5E27\u6BD4\u4F8B ${(alt / sig.length * 100).toFixed(0)}%  ${alt / sig.length > 0.9 ? "\u2717 \u6BCF\u5E27\u90FD\u52A8 = \u63A7\u5236\u73AF\u9650\u73AF" : "\u2713 \u6709\u4E00\u6BB5\u5B8C\u5168\u4E0D\u52A8(\u8FBE\u5236\u52A8\u4F4D)"}`);
 var atLim = 0;
 for (let i = H; i < N; i++) {
   const d = series.arch[i] * 57.3;
