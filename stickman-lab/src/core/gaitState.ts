@@ -435,6 +435,20 @@ export class GaitState {
    *      永远不回到 DOUBLE、也永远进不了 STEP。
    *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
    */
+  /**
+   * ★★ 本次交接**承诺**的目标腿（`null` = 未开始）。
+   *
+   * ⚠⚠ 修掉的 bug：加锁入口前移后，我在 `DOUBLE` 分支里**每拍**用
+   *   `rs.frontLeg()` 重新决定锁哪条腿。而 `frontLeg()` 本身按几何 x 判定、
+   *   并齐时回落 `loadBearer` ⇒ 它会翻转 ⇒ **锁定变成翻转器**
+   *   （实测 3.10s 内支撑腿翻转 **14 次**，腰 8° 下 X3 已达 3mm 却只驻留 0.05s）。
+   *
+   * 锁定必须是**一次承诺**：交接窗口打开时定一次，整个交接期间不变，
+   * 直到交接失败/超时/触地才释放。否则"锁定"和"载荷测量"一样会抖，
+   * 转移目标一直跳，任何驱动都在追移动目标（实测加驱动反而更早倒）。
+   */
+  private handoverTarget: Side | null = null;
+
   private migrate(prev: Phase, dt: number, both: boolean, supSide: Side, swing: Side): void {
     const rs = this.rs;
     // ★ 交接验证：位置（矢状+额状）+ 驻留 + 承重 + MoS + 倾角（**不含间隔**，
@@ -447,6 +461,20 @@ export class GaitState {
       case 'DOUBLE':
         // ★ 两脚接地、专门做重心交接。允许双脚接地就是用户要的形态。
         //   停留至少 `handoverMinSec`，并且交接验证通过才准进 SINGLE。
+        //
+        // ── ★★ 加锁入口**前移到这里**（原来是 `STEP` 触地，`gaitState.ts` STEP 分支）
+        //   原入口是死路径：`STEP` 要求 `stepPermit.all`（要 `handoverOk`）
+        //   ⇒ 进不了 STEP ⇒ 永远不加锁 ⇒ 34 帧实测 `locked` 从未置真。
+        //   正确时机就是**交接开始**：用户原始定义「显式把重心移到前腿，
+        //   然后才允许动后腿，**锁定前腿**，前腿是支撑腿并且**解锁后腿**」。
+        //   ⇒ 锁前腿（它是承重腿，不许动）+ 解后腿（它才有资格被抬）。
+        if (rs.phaseT >= this.cfg.handoverMinSec && this.handoverTarget === null) {
+          // ★ **只定一次**，之后整段交接都不改（见 handoverTarget 的注释）
+          this.handoverTarget = rs.frontLeg();
+          const rear: Side = this.handoverTarget === 'l' ? 'r' : 'l';
+          rs.locked[this.handoverTarget] = true;
+          rs.locked[rear] = false;
+        }
         if (rs.phaseT >= this.cfg.handoverMinSec && handoverOk) {
           rs.phase = 'SINGLE'; rs.phaseT = 0;
         }
@@ -456,7 +484,11 @@ export class GaitState {
         // 交接中。进 SINGLE 的唯一条件是**交接验证通过**（不是载荷判据）。
         if (handoverOk) { rs.phase = 'SINGLE'; rs.phaseT = 0; }
         else if (rs.phaseT > this.cfg.handoverTimeoutSec) {
-          rs.phase = 'DOUBLE'; rs.phaseT = 0;          // 交接没成 ⇒ 回双脚重新来
+          // ★ 回 DOUBLE 前必须解锁：否则"锁前腿"会永久留下，
+          //   而 `supportLeg()` 现在锁定优先 ⇒ 支撑腿再也回不到载荷决定。
+          rs.locked.l = false; rs.locked.r = false;
+          rs.phase = 'DOUBLE'; rs.phaseT = 0;
+          this.handoverTarget = null;   // ★ 释放承诺，让下一次交接重新选目标
         }
         break;
 
@@ -470,6 +502,8 @@ export class GaitState {
         if (rs.stepPermit.all && both) { rs.phase = 'STEP'; rs.phaseT = 0; }
         else if (rs.phaseT > this.cfg.pushTimeoutSec) {
           // ★ 回 DOUBLE 而不是 SINGLE —— 否则与 SINGLE→PUSH 构成死循环
+          rs.locked.l = false; rs.locked.r = false;
+          this.handoverTarget = null;
           rs.phase = 'DOUBLE'; rs.phaseT = 0;
         }
         break;
@@ -478,8 +512,11 @@ export class GaitState {
         // 触地 ⇒ 锁定该腿（触地即锁），回到 SHIFT 做下一次交接
         if (rs.touchdown[swing]) {
           rs.locked[swing] = true;      // ★ 无条件，不等达标
+          this.handoverTarget = swing;  // ★ 承诺交给落地这条腿，下一段交接不再重选
           rs.phase = 'SHIFT'; rs.phaseT = 0;
         } else if (rs.phaseT > this.cfg.stepTimeoutSec) {   // 没迈成/没落地 ⇒ 回落
+          rs.locked.l = false; rs.locked.r = false;
+          this.handoverTarget = null;
           rs.phase = 'DOUBLE'; rs.phaseT = 0;
         }
         break;
@@ -493,5 +530,6 @@ export class GaitState {
     this.wasGrounded.l = false; this.wasGrounded.r = false;
     this.rs.loadBearer = null; this.rs.locked.l = false; this.rs.locked.r = false;
     this.rs.phase = 'DOUBLE'; this.rs.phaseT = 0; this.rs.authority = 0;
+    this.handoverTarget = null;
   }
 }

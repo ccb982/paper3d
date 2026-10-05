@@ -234,6 +234,8 @@ export interface RigSnapshot {
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z */
   /** ★ 腰额状**控制目标**（弧度），由 `balance.ts` 的捕获点余量驱动写入 */
   waistTrim: number;
+  /** 捕获点相对支撑脚的额状误差（米）—— UI/探针回读 */
+  waistErrLat: number;
   /**
    * ★ 腰到支撑脚的**诊断量**（米）：`com.z − soleZ[support]`。
    *   此前它和 `waistTrim`（控制目标，弧度）**共用一个字段**，且写入顺序在
@@ -245,20 +247,28 @@ export interface RigSnapshot {
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau: number;
   /**
-   * ★★ 迈步系统申报的**重心侧移意图**（N·m，加在支撑髋外展轴上）。
+   * ★★ 迈步系统申报的**横向驱动意图**（N，额状面地面反力分量）。
    *
-   * 职责划分（用户 2026-10-05 拍板）：
-   *   · **迈步系统（step）拥有"故意把重心搬过去"这个意图** —— 它在 SHIFT 相
-   *     写这个字段，因为"何时搬、搬多少"是迈步计划的一部分（APA 先于抬腿，
-   *     Kuindersma R1：感知+计划接触都成立才能离地）。
-   *   · **平衡系统（balance）只做保护伺服** —— 它读这个字段当偏置，但
-   *     τmax 限幅、CoP 侧缘余量门限全部由它把关；`shiftDemandTau=0` 时
-   *     平衡系统只输出静态保持量，绝不主动发起转移。
+   * ★★ 这条是**按文献重做**后的唯一驱动通道。两次被证伪的旧实现已删除：
+   *   ① 支撑侧髋外展加"推相位"偏置 —— 实测帮倒忙（存活 3.25s→1.87s，X3 更差）。
+   *   ② 躯干侧倾转移通道 —— 实测单调扣存活、零收益（3.25s→1.25s，X3 不变）。
    *
-   * 单位 N·m。符号：正 = 把重心推向 +Z（与 `hipLatTau` 同口径）。
+   * 文献依据：
+   *   · **Pandy 2010**（JB Biomech，10段23自由度54肌肉分解）：
+   *     髋外展肌把重心加速向**内**；把重心加速向外的是
+   *     **髋内收肌 + 跖屈肌外翻肌**。
+   *   · **Batenie 2014**（Gait & Posture，倒立摆 + PD 拟合 75 人）：
+   *     "**the leg OPPOSITE the shift direction** generates an increased GRF with a
+   *     lateral component that accelerates the CoM toward the target"
+   *     ⇒ 驱动来自**摆动侧（轻）腿蹬地**，不是支撑侧髋把身体拽过去。
+   *
+   * 符号：正 = 把重心推向 +Z。单位 N（力，不是力矩）—— 力矩映射 `τ=JᵀF`
+   * 由 balance 做，因为它同时掌握该轴的 τmax 与 CoP 护栏。
    */
-  shiftDemandTau: number;
-  /** 髋外展「推相位」**实际施加**力矩（N·m）—— 由 balance 写，含护栏后的结果 */
+  shiftDemandF: number;
+  /** 提供驱动力的那条腿（=摆动侧/轻腿）；null = 本拍不驱动 */
+  shiftDriveSide: Side | null;
+  /** 驱动经护栏后**实际**施加的力矩幅值（N·m，回读用） */
   shiftPushTau: number;
   /** 推相位残余误差 `stanceZ − com.z`（米，正 = 重心还没到支撑脚上方） */
   shiftErrZ: number;
@@ -319,7 +329,8 @@ export interface ComTransfer {
   hist: number[];
   cmdHipLatTau: number;
   /** 迈步系统申报的重心侧移意图 / 平衡系统实际施加（含护栏后）/ 残余误差（米） */
-  shiftDemandTau: number;
+  shiftDemandF: number;
+  shiftDriveSide: Side | null;
   cmdShiftPushTau: number;
   shiftErrZ: number;
   cmdWaistTrim: number;
@@ -402,6 +413,8 @@ export class RigState {
   /** 腰额状精调输出（rad）。正 = 把重心推向 +Z（实测标定，见 systems/balance.ts） */
   waistTrim = 0;
   waistGapM = 0;
+  /** 捕获点相对支撑脚的额状误差（米）—— UI/探针回读 */
+  waistErrLat = 0;
   /** ★ VIP 摆角 `q_vip = atan2(com.x − ankle.x, com.y − ankle.y)`（rad，矢状） */
   qVip = 0;
   /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
@@ -498,7 +511,8 @@ export class RigState {
   hipLatTau = 0;
   shiftPushTau = 0;
   shiftErrZ = 0;
-  shiftDemandTau = 0;
+  shiftDemandF = 0;
+  shiftDriveSide: Side | null = null;
   /** 交接验证是否全过（`GaitState` 每拍写）。false = 迈步系统还有活：主动侧移 */
   handoverOk = false;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -629,7 +643,30 @@ export class RigState {
     return 'l';
   }
 
+  /**
+   * ★★ 支撑腿 —— **锁定优先于载荷**。
+   *
+   * 两种"哪条腿在支撑"必须分清：
+   *   · `loadBearer`（**承重腿**）= **测量**：由载荷+迟滞决定。它会因为物理摇摆
+   *     来回变（实测 3s 内翻转 1~4 次），这是**真实物理**，不该被抑制。
+   *   · `locked`（**锁定腿**）= **计划约束**：本步的支撑腿已经定了，不许变。
+   *
+   * ⚠⚠ 原实现第一行 `if (this.loadBearer) return this.loadBearer` **直接绕过锁定**
+   *   ⇒ 锁定机制形同虚设。实测：34 帧里 `locked` 从未置真（唯一加锁入口在
+   *   `STEP` 触地，而 `STEP` 永远进不去）；`supportLeg` 翻转 1~4 次。
+   *   ⇒ 转移控制律的**目标一直在跳**，`X3` 驻留恒为 0.00s，
+   *      任何驱动都变成"追一个移动的目标"（实测加驱动反而更早倒）。
+   *
+   * 修正后：锁定期内支撑腿**恒定**，`ω₀`、`waistTrim` 符号、驱动目标 `soleZ[sup]`
+   *   与 CoP 护栏全部拿到固定目标。
+   *
+   * 顺序依据（用户 2026-10-05）：**先完成重心转移才允许抬另一条腿**。
+   *   锁定 = "这条腿已经是承重腿，不许动"；承重腿 = "载荷实测在哪条腿"。
+   */
   supportLeg(): Side {
+    // ★ 锁定优先（计划约束 > 测量）
+    if (this.locked.l && !this.locked.r) return 'l';
+    if (this.locked.r && !this.locked.l) return 'r';
     if (this.loadBearer) return this.loadBearer;
     if (this.grounded.l && !this.grounded.r) return 'l';
     if (this.grounded.r && !this.grounded.l) return 'r';
@@ -1026,7 +1063,7 @@ export class RigState {
       hist: this.comTransferHist.slice(-240),
       cmdHipLatTau: this.hipLatTau, cmdWaistTrim: this.waistTrim, waistGapM: this.waistGapM,
       cmdShiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
-      shiftDemandTau: this.shiftDemandTau,
+      shiftDemandF: this.shiftDemandF, shiftDriveSide: this.shiftDriveSide,
       cmdGrfLat: this.cmdGrfLat, cmdPelvicLift: this.pelvicLift,
       loadFront: this.loadFrac[this.frontLegSide],
       loadRear: this.loadFrac[this.rearLegSide],
@@ -1093,8 +1130,9 @@ export class RigState {
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
-      waistTrim: this.waistTrim, waistGapM: this.waistGapM, hipLatTau: this.hipLatTau,
-      shiftDemandTau: this.shiftDemandTau, shiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
+      waistTrim: this.waistTrim, waistGapM: this.waistGapM, waistErrLat: this.waistErrLat, hipLatTau: this.hipLatTau,
+      shiftDemandF: this.shiftDemandF, shiftDriveSide: this.shiftDriveSide,
+      shiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,

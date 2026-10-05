@@ -325,6 +325,21 @@ export interface BalanceParams {
   /** 腰额状精调限幅（rad）。文献步态躯干侧倾 ~5~10°，取 8° */
   maxWaistTrim: number;
   /**
+   * ★ 腰额状 **PD 比例增益**（rad 每米横向误差）。
+   *   142mm 误差 ⇒ 0.14 rad = 8°（正好用满 `maxWaistTrim`）。
+   *   实测依据：腰 8° 时 `com.z` 差只剩 **8mm** ⇒ 腰是这个 rig 唯一有权限
+   *   把重心送到支撑脚上方的执行器（限到 1.7° 时差 161mm，完全到不了）。
+   */
+  waistKp: number;
+  /**
+   * ★ 腰额状 **PD 阻尼增益**（rad 每 m/s）。**这一项决定能不能停住**。
+   *   旧式 `-sign(err)·frac·max` 是纯 P + 饱和、无阻尼 ⇒ 实测
+   *   `com.vz` 峰值 **871 mm/s**、冲过头 **349mm**、X3 驻留仅 0.08s（需 1.00s）。
+   *   Batenie 2014（Gait & Posture）用 PD 拟合 75 人侧向体重移动，
+   *   平均速度误差 0.35% —— 侧向控制**本来就该是 PD**。
+   */
+  waistKd: number;
+  /**
    * 腰额状精调的**死区**（m）：|com.z − stanceZ| ≤ 此值就不推。
    *   这是「**不能太过**」的实现 —— 交接只需 MoS ≥ 0，不需要把重心推到脚心；
    *   没有死区它会一直往里推、撞上 `τ=JᵀF` 限幅把人掀翻。
@@ -405,6 +420,22 @@ export interface BalanceParams {
    * 压力中心被推出支撑面就不可救 ⇒ 推之前必须留够。
    */
   latShiftCopMargin: number;
+  /**
+   * ★★ 髋外展的**横向阻尼**（N·m 每 m/s）。
+   *
+   * ⚠⚠ 逐帧实测（锁定承诺修好之后）：`hip/0` 的力矩**全程顶在 −120 = τmax 饱和**，
+   *   而 `com.z` 在 0.5s 内从 −161mm 摆到 +195mm（横向速度峰值 432~920 mm/s）。
+   *   原因：`τ = m·g·(com.z − hip.z)` 是**纯刚度、零阻尼**。线性倒立摆
+   *   `z̈ = ω₀²(z_ref − z)` 在**无阻尼**时是等幅振荡 —— 加刚度只会
+   *   提高振荡频率，不会让它停下来（这与矢状面 VIP 的经验完全一致）。
+   *
+   *   文献：横向倒立摆同样需要阻尼才能定位。Batenie 2014（Gait & Posture）
+   *   正是用 **PD** 拟合 75 人的侧向体重移动（速度误差 0.35%）。
+   *
+   *   量级：`vz = 0.4 m/s` 时 D 项要给几十 N·m 才压得住 ⇒ 0.4×80 ≈ 32 N·m，
+   *   与静态项同量级但不同相位（静态项看位置、阻尼项看速度）。
+   */
+  latDamp: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
@@ -492,6 +523,9 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   // 腰额状精调：~0.06 rad/m => 100mm 误差给 5.4 deg，限幅 8 deg，死区 50mm
   kWaistTrim: 0.06,
   maxWaistTrim: 0.14,
+  // 142mm 误差 → 8°（= maxWaistTrim）。阻尼 0.9 ⇒ vz 871mm/s 时给 0.78rad（顶到限幅）
+  waistKp: 1.0,
+  waistKd: 0.9,
   waistTrimDead: 0.05,
   // ★ 符号由实测定（tools/probe-authority.ts，ANKLE=1）：
   //   foot_l/2 目标角 +7.2° ⇒ ΔCoM_x = +22 mm
@@ -568,6 +602,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //       `latTransfer`（mode='tau'），腰的 `latwaist` 是**派生精调**通道。
   lateralEnabled: true,
   latHipDead: 8,
+  // 横向阻尼：vz=0.4m/s 时给 32N·m（与静态项同量级、不同相位）
+  latDamp: 80,
   // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
   latShiftCopMargin: 0.04,
   /**
@@ -825,11 +861,35 @@ export function balanceSystem(
     //     —— 实测腰顶死 −8° 限幅、CoM 一路往 −Z 走到 −45mm，
     //        偏差从 161mm 涨到 208mm，离目标越来越远。
     //   ⇒ 这里是"**移动到**承重腿上方"，不是"拉回中心"，符号必须同向。
-    rs.waistTrim = clamp(
-      -Math.sign(capErrLat || 1) * shortFrac * p.maxWaistTrim,
-      p.maxWaistTrim);
+    // ★★ 腰额状 = **PD 伺服**（不是饱和 bang-bang）。
+    //
+    //   实测（锁定修好、翻转=0 之后）：腰 8° 时 `com.z` 差只剩 **8mm**（门限 50mm）
+    //   ⇒ **腰是唯一有权限把重心送到支撑脚上方的执行器**。但旧式
+    //   `-sign(err)·shortFrac·max` 是**纯 P + 饱和**，没有任何阻尼：
+    //   实测 `vz` 峰值 **871 mm/s**、`com.z` 冲过头 **349mm**，
+    //   X3 驻留只有 0.08s（需要 1.00s）—— 到位了但停不住。
+    //
+    //   加 D 项直接对 `com.vz` 制动。文献依据：Batenie 2014（Gait & Posture）
+    //   用 **PD**（不是 P/ bang-bang）拟合 75 人的侧向体重移动，
+    //   平均速度误差 0.35%。
+    //
+    //   ⚠ 目标仍是 `soleZ[支撑腿]`（见上面长注释），符号与旧式同向。
+    const waistErr = rs.com.z - (rs.soleZ[sup] ?? 0);   // >0 = 重心还在支撑脚外侧
+    const waistCmd = -(p.waistKp * waistErr + p.waistKd * rs.com.vz);
+    // `shortFrac` 仍参与：余量充足时不需要满幅腰倾（省能量、避免代偿姿态）
+    const gate = 0.35 + 0.65 * shortFrac;
+    rs.waistTrim = clamp(waistCmd * gate, p.maxWaistTrim);
+    rs.waistErrLat = capErrLat;
+    // ── ★ 躯干侧倾：本通道的**主力**，精调退化为附加小量 ──────────────
+    //   `rs.shiftLeanDemand` 由 **stepSystem** 在转移相申报（见 step.ts ⓪）。
+    //   平衡系统对它只做一件事：**限幅**（`shiftLeanMax` 与 `maxWaistTrim`
+    //   取小），保证不撞脊柱关节限位、不进入 Inman 表里那个靠"力臂变长"
+    //   才能把外展肌活动归零的代偿档位。
+    //   意图为 0 时本系统仍然是纯保护伺服（只有静态保持 + 阻尼）。
     if (on('latwaist') && jSp1 >= 0 && rs.waistTrim !== 0) {
-      // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角
+      // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角。
+      // ⚠ 主/精调必须**同向叠加**：文献里两者都是"把躯干倒向支撑侧"，
+      //   反向叠加会互相抵消 ⇒ 又变成一个"看着在接线、实际互相抵消"通道。
       for (const j of [jSp1, jSp2, jSp3]) {
         if (j !== undefined && j >= 0) rs.requestAngle(j, 0, rs.waistTrim / 3, 'balance', '腰额状精调/卸载髋');
       }
@@ -1015,32 +1075,19 @@ export function balanceSystem(
       // ⚠ 之前写成 `dead / max(0.05,|dy|)`（把位移门限换算成力矩），
       //   结果 dead=0.05 → 门限 0.43 N·m，而 τ 动辄 100 N·m ⇒ **恒不生效**，
       //   扫 0/0.02/0.05 三档结果逐位相同 —— 又一个"死参数"。
-      let tauRaw = tauStatic + tauDyn;
-      // ── ★ 保护伺服：只加「迈步系统申报的转移意图」，**自己不发起转移** ──
-      //   `rs.shiftDemandTau` 由 **stepSystem** 在 SHIFT 相写（见 step.ts ⓪）。
-      //   本系统对它的职责只有两条护栏，**不做任何主动判断**：
-      //     ① CoP 侧缘余量不足 ⇒ 一律不加（压力中心跑出支撑面无法挽救，
-      //        van Mierlo 2022/2024 CMP 论）；
-      //     ② 总量仍被该轴 τmax 唯一夹住（下一行 `clamp(tauAdj, tmax)`）。
-      //   `shiftDemandTau = 0` 时本系统退化为纯静态保持 + 阻尼 = **保护伺服**。
-      rs.shiftErrZ = (rs.soleZ[sup] ?? 0) - rs.com.z;
-      rs.shiftPushTau = 0;
-      if (rs.shiftDemandTau !== 0 && doll) {
-        const supIdx = sup === 'l' ? 0 : 1;
-        doll.readCoP(supIdx as 0 | 1, TMP_COP);
-        doll.footSoleBounds(supIdx as 0 | 1, TMP_BB);
-        const medOk = (TMP_COP[2]! - TMP_BB[2]!) >= p.latShiftCopMargin;
-        if (medOk) {
-          rs.shiftPushTau = rs.shiftDemandTau;
-          tauRaw += rs.shiftDemandTau;
-        }
-      }
+      // ★ 横向阻尼项：纯刚度控制会等幅振荡（见 latDamp 注释的逐帧实测）。
+      //   阻尼对**速度**、静态项对**位置**，两者同轴叠加（hip/0 = 内收/外展同轴）。
+      const tauDamp = -p.latDamp * rs.com.vz;
+      const tauRaw = tauStatic + tauDyn + tauDamp;
+      // ★ 驱动**不在这里**。髋外展回到它的文献职责：**托住**重心（Pandy 2010：
+      //   abductors 把 CoM 加速向内 = 保持/承重），不是搬运重心。
+      //   搬运由「摆动侧腿蹬地横向 GRF」做，见本文件末尾的 `τ=JᵀF` 驱动段。
       const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
       const tmax = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS]!;
       rs.hipLatTau = clamp(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
         rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
-          `髋外展·单腿策略(τ静=${tauStatic.toFixed(0)}+τ动=${tauDyn.toFixed(0)}N·m)`);
+          `髋外展·单腿(静${tauStatic.toFixed(0)}+动${tauDyn.toFixed(0)}+阻${tauDamp.toFixed(0)})`);
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
@@ -1074,6 +1121,60 @@ export function balanceSystem(
       rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, 'balance', '骨盆抬升(侧向无需求时才占轴)');
     } else if (jHip >= 0) {
       rs.pelvicLift = 0;
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑤ ★ 横向重心**驱动**：`τ = JᵀF`，链 = **摆动侧（轻）腿** + 脊柱
+  // ══════════════════════════════════════════════════════════════
+  //   文献：
+  //   · **Pandy 2010**（JB Biomech）：把 CoM 加速向外的是**髋内收肌**，
+  //     髋外展肌是加速向内的 —— 所以驱动通道必须在**内收方向**，
+  //     且力矩走 `hip/0`（内收/外展同轴，见 `HIP_ABD_AXIS`）。
+  //   · **Batenie 2014**（Gait & Posture）：横向 GRF 来自**反向腿**（轻腿）蹬地。
+  //
+  //   ★ 职责边界（保持干净）：
+  //     · step 决定「**要多大力**」（`rs.shiftDemandF`，N）—— 已含 ω₀/ζ 控制律；
+  //     · balance 只做「**能不能给**」：三条护栏 + `τ=JᵀF` 映射。
+  //       `rs.shiftDemandF === 0` 时本系统**完全不驱动** = 纯保护伺服。
+  //   护栏（任一不过 ⇒ 本拍不驱动）：
+  //     ① **驱动脚** CoP 侧缘余量：蹬地会把压力中心推出支撑面，跑出去救不回；
+  //     ② **支撑脚** CoP 侧缘余量：横向力改变载荷分配，支撑脚先到边就翻；
+  //     ③ 力矩由各轴 τmax 物理夹住（`arbitrate` 里），这里不重复限。
+  if (rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
+    const drive: Side = rs.shiftDriveSide;
+    // ── 护栏①：驱动脚 ──
+    const dIdx = drive === 'l' ? 0 : 1;
+    doll.readCoP(dIdx as 0 | 1, TMP_COP);
+    doll.footSoleBounds(dIdx as 0 | 1, TMP_BB);
+    const driveMed = TMP_COP[2]! - TMP_BB[2]!;
+    // ── 护栏②：支撑脚 ──
+    const sIdx = sup === 'l' ? 0 : 1;
+    doll.readCoP(sIdx as 0 | 1, TMP_COP);
+    doll.footSoleBounds(sIdx as 0 | 1, TMP_BB);
+    const supMed = TMP_COP[2]! - TMP_BB[2]!;
+    if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
+      const chain: number[] = [];
+      for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, 'spine1', 'spine2', 'spine3']) {
+        const i2 = jointIndexByName(rs.sk, nm);
+        if (i2 >= 0) chain.push(i2);
+      }
+      // 作用点 = CoM；`fz` 就是横向力（正 = 把重心推向 +Z）
+      doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+      const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
+      let applied = 0;
+      for (let i2 = 0; i2 < chain.length; i2++) {
+        const jj = chain[i2]!;
+        for (let ax = 0; ax < 3; ax++) {
+          const t = TMP_TAU[jj * 3 + ax]!;
+          if (Math.abs(t) > 0.05) {
+            rs.requestTorque(jj, ax, t, 'balance', `横向驱动·${drive}腿(JᵀF)`);
+            applied += Math.abs(t);
+          }
+        }
+      }
+      rs.shiftPushTau = applied;
+      if (dHip >= 0) rs.clearHold(dHip, HIP_ABD_AXIS);
     }
   }
 

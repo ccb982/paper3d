@@ -30,19 +30,21 @@ const log = console.log;
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 
-log('── 重心主动侧移增益扫描（step.shiftPushGain；balance 只做护栏）');
-const gains = [0, 200, 400, 800, 1400];
+log('── 重心转移双通道扫描（step 申报意图 / balance 只做护栏）');
+// 行 = 髋外展推力增益, 列 = 躯干侧倾增益(rad/m)
+const PUSH = [0];
+const LEAN = [0, 0.15, 0.3, 0.5, 0.8];
 const COP = new Float64Array(4);
 const BB = new Float64Array(4);
-for (const gain of gains) {
+for (const push of PUSH) for (const lean of LEAN) {
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk' });
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
-    step: { ...DEFAULT_STEP_PARAMS, shiftPushGain: gain },
+    step: { ...DEFAULT_STEP_PARAMS, shiftPushGain: push, shiftLeanGain: lean },
   });
   let peakL = 0, singleT = 0, minMed = 1e9, maxPush = 0, alive = 0;
-  let worstFail = '—', failCount = 99, tiltMax = 0, dzMin = 1e9;
+  let worstFail = '—', failCount = 99, tiltMax = 0, dzMin = 1e9, leanMax = 0;
   for (let i = 0; i < 120 * 14 && !sim.finished; i++) {
     if (i % 2 === 0) {
       const out = ctrl.step(1 / 60);
@@ -58,6 +60,7 @@ for (const gain of gains) {
     if (COP[3]! > 0) minMed = Math.min(minMed, COP[2]! - BB[2]!);
     maxPush = Math.max(maxPush, Math.abs(s.shiftPushTau ?? 0));
     tiltMax = Math.max(tiltMax, s.tiltDeg);
+    leanMax = Math.max(leanMax, Math.abs(s.shiftLeanApplied ?? 0));
     // 统计"离 SINGLE 最近"的那一帧：哪些判据还在拖后腿
     const hv: any = (s.criteria as any).handover;
     if (hv) {
@@ -75,9 +78,9 @@ for (const gain of gains) {
     if (s.tiltDeg >= 25) break;
     alive = s.t;
   }
-  log(`   gain=${String(gain).padStart(4)}  L峰=${(peakL * 100).toFixed(0).padStart(3)}%`
+  log(`   推=${String(push).padStart(4)} 倾=${String(lean).padStart(5)}  L峰=${(peakL * 100).toFixed(0).padStart(3)}%`
     + `  SINGLE=${singleT.toFixed(2)}s  侧缘余量=${(minMed * 1000).toFixed(0).padStart(4)}mm`
-    + `  实加推力=${maxPush.toFixed(0).padStart(3)}N·m  存活=${alive.toFixed(2)}s`
+    + `  实加推力=${maxPush.toFixed(0).padStart(3)}N·m  侧倾=${(leanMax! * 180 / Math.PI).toFixed(1).padStart(4)}°  存活=${alive.toFixed(2)}s`
     + `  倾角峰=${tiltMax.toFixed(0).padStart(2)}°`);
   log(`         └ |com.z − 左脚z| 最小 = ${(dzMin * 1000).toFixed(0)}mm （X3 门限 50mm）`);
   log(`         └ 交接最少差 ${failCount} 项: ${worstFail}`);

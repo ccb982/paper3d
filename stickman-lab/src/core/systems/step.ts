@@ -55,26 +55,16 @@ export interface StepParams {
 
   // ── 重心主动侧移（**本系统拥有这个意图**，balance 只做保护伺服）──────────
   /**
-   * ★★ 髋外展「推相位」增益（N·m 每米横向误差）。
-   *
-   * 为什么必须有它：平衡系统里那条 `τ = m·g·(com.z − hip.z)` 是**静态平衡值**，
-   * 恰好抵消重力倾力矩 ⇒ 净力矩 = 0 ⇒ 重心**只会维持、永远不会被驱动**。
-   * 实测（stand 逐帧）：`com.z` 被从 +3mm 推到 +17mm 的过程中，请求力矩从 −84
-   * 单调**衰减**到 −54 N·m（因为 `|com.z − hip.z|` 变小），载荷卡在 **65%**
-   * 上不去，够不到 `SINGLE` 门限 —— 这就是"重心永远转不过来"的真因。
-   *
-   * 文献启动侧向体重移动靠**外展肌先超调**：先给净向外力矩把重心推过支撑脚，
-   * 过脚之后回落到静态值（jjrmc 54:618; Neumann 2010 额状面骨盆平衡）。
-   * 这一项就是那个"净向外"的偏置。单位 N·m/m：50mm 误差 → 0.8×50 ≈ 40 N·m。
+   * ★ 横向驱动固有频率 `ω₀`（rad/s）。本 rig 实测倒立摆 ≈2.0。
+   *   线性倒立摆：`z̈ = ω₀²(z_ref − z) − 2ζω₀ ż`。
    */
-  shiftPushGain: number;
-  /** 推相位附加力矩上限（N·m）。50mm→40，与髋外展 τmax=120 同量级 */
-  shiftPushMax: number;
-  /**
-   * 推相位进入/退出的平滑时长（s）。意图按 `smoothstep` 渐入渐出，
-   * 避免 SHIFT 相一进入就阶跃力矩（实测阶跃会把 CoP 直接推出支撑面）。
-   */
-  shiftPushRamp: number;
+  shiftOmega: number;
+  /** 横向驱动阻尼比 ζ（1 = 临界阻尼，不振荡） */
+  shiftZeta: number;
+  /** 横向驱动**力**上限（N）。50mm 误差 @ω₀=2 ⇒ 70×4×0.05 ≈ 14N */
+  shiftFMax: number;
+  /** 驱动渐入渐出时长（s），避免阶跃力把 CoP 打出支撑面 */
+  shiftRamp: number;
 }
 
 export const DEFAULT_STEP_PARAMS: StepParams = {
@@ -96,9 +86,10 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   //     末端伸展必须与摆动髋屈曲峰值一起限，不能单独加大。
   hipExtendDeg: 10,
   reachFrom: 0.6,
-  shiftPushGain: 0,
-  shiftPushMax: 45,
-  shiftPushRamp: 0.25,
+  shiftOmega: 2.0,
+  shiftZeta: 1.0,
+  shiftFMax: 60,
+  shiftRamp: 0.25,
 };
 
 /**
@@ -126,39 +117,53 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   // ══════════════════════════════════════════════════════════════
   // ⓪ 重心**主动侧移** —— 本系统的核心意图，**先于抬腿**
   // ══════════════════════════════════════════════════════════════
-  //   文献：侧向体重移动由支撑侧髋外展**先超调推动**把重心推过支撑脚，
-  //   过脚后回落到静态值（jjrmc 54:618; Neumann 2010）。平衡系统那条
-  //   `τ = m·g·(com.z − hip.z)` 只是**静态保持量**，净力矩为零 ⇒ 重心不动。
+  // ══════════════════════════════════════════════════════════════
+  // ⓪ 横向重心驱动 —— **摆动侧腿蹬地产生横向地面反力**（唯一驱动通道）
+  // ══════════════════════════════════════════════════════════════
+  //   ★ 这段是**按文献重做**的结果。两次被实测证伪的旧实现已删除：
+  //     ① 支撑侧髋外展加"推相位"偏置（帮倒忙：存活 3.25s→1.87s、X3 更差）
+  //     ② 躯干侧倾转移通道（单调扣存活、零收益：3.25s→1.25s、X3 不变）
   //
-  //   ★ 职责边界：这里**只申报意图**（写 `rs.shiftDemandTau`），不碰力矩限幅、
-  //     CoP 余量门限、τmax —— 那些护栏全部留在 balance（保护伺服）。
-  //     所以"要不要搬、搬多少"归迈步计划；"能不能搬得动"归平衡保护。
+  //   文献依据：
+  //   · **Pandy 2010**（JB Biomech，10 段 23 自由度 54 肌肉力分解）：
+  //     "The hip abductors ... actively controlled balance by accelerating the
+  //     CoM **medially**"；把重心加速向外的是 **hip adductors**。
+  //     ⇒ **髋外展是"托住"，内收才是"搬运"** —— 旧实现方向完全反了。
+  //   · **Batenie 2014**（Gait & Posture，倒立摆+PD 拟合 75 人）：
+  //     "the leg **OPPOSITE** the shift direction generates an increased GRF
+  //     with a lateral component that accelerates the CoM toward the target"
+  //     ⇒ 驱动来自**摆动侧（轻）腿蹬地**，不是支撑侧髋把身体拽过去。
   //
-  //   误差用**捕获点** `captureZ = com.z + com.vz/ω₀`（Houska）而不是裸 `com.z`：
-  //   有速度时提前动手，正是倒立摆不可救区域之前该做的事（van Mierlo 2022）。
+  //   控制律：线性倒立摆 `z̈ = ω₀²(z_ref − z) − 2ζω₀·ż`（Batenie 用 PD 拟合
+  //   75 人，平均速度误差 0.35%）⇒ **反解成力**：
+  //       F = m·(ω₀²·(z_ref − z) + 2ζω₀·(ż_ref − ż))
+  //   ⚠ **申报的是力（N），不是力矩**：`τ = JᵀF` 的映射、以及该轴的 τmax 和
+  //     CoP 护栏，全部留在 balance（保护伺服）。职责边界与旧实现一致、干净。
+  //
+  //   ★ `z_ref = soleZ[支撑腿]`（重心目标 = 支撑脚正上方），`ż_ref = 0`。
+  //   142mm 误差 @ω₀=2、ζ=1 ⇒ F ≈ 70×4×0.142 ≈ **40N**（`shiftFMax=60` 内），
+  //   经 `JᵀF`（髋力臂约 0.10m）⇒ 髋力矩约 **4 N·m**，远在 τmax=120 之内 ——
+  //   这才是文献量级；旧的"外展推"要 98N·m（τmax 的 82%）才推得动一点点。
   const sup: Side = rs.supportLeg();
-  rs.shiftDemandTau = 0;                 // 默认：本系统不发意图 ⇒ 平衡系统纯保护
-  // ⚠⚠ 相位门必须含 **DOUBLE**，不能只写 SHIFT：
-  //   `GaitState.migrate` 里 `DOUBLE` 是**直接跳 `SINGLE`**（gaitState.ts:443-448），
-  //   `SHIFT` 只能从 `STEP` 触地进入 ⇒ **第一次交接根本没有 SHIFT 相**。
-  //   只判 `SHIFT` 的话这个推力永远不会触发（又一个"看着接线、实际没接上"）。
-  //   `handoverOk === false` 表示交接**还没成** = 本系统还有活要干；
-  //   交接一旦达成就自动撤推（`errZ>0` 也会自然归零）。
-  if ((rs.phase === 'SHIFT' || rs.phase === 'DOUBLE') && !rs.handoverOk
-      && p.shiftPushGain > 0) {
-    const soleZ = rs.soleZ[sup];
-    const w0 = rs.omega0Val || 1;
-    const errZ = soleZ - (rs.com.z + rs.com.vz / w0);
-    if (errZ > 0) {
-      // 意图渐入渐出：SHIFT 相刚开始不阶跃（阶跃会把 CoP 直接推出支撑面）
-      const ramp = p.shiftPushRamp > 0 ? Math.min(1, rs.phaseT / p.shiftPushRamp) : 1;
-      const smooth = ramp * ramp * (3 - 2 * ramp);
-      const raw = p.shiftPushGain * errZ;
-      const lim = raw > p.shiftPushMax ? p.shiftPushMax
-        : raw < -p.shiftPushMax ? -p.shiftPushMax : raw;
-      // 符号：左脚支撑要把重心推向 −Z（内收），右脚支撑推向 +Z
-      rs.shiftDemandTau = (sup === 'l' ? -lim : lim) * smooth;
-    }
+  rs.shiftDemandF = 0;                   // 默认：本系统不发意图 ⇒ 平衡系统纯保护
+  rs.shiftDriveSide = null;
+  // ⚠ 相位门必须含 **DOUBLE**：`GaitState.migrate` 里 `DOUBLE` 是**直接跳
+  //   `SINGLE`**（gaitState.ts:443-448），`SHIFT` 只能从 `STEP` 触地进入
+  //   ⇒ **第一次交接根本没有 SHIFT 相**（只判 SHIFT 的通道永不触发）。
+  //   `handoverOk === false` = 交接还没成 = 本系统还有活要干；一旦达成自动撤力。
+  if ((rs.phase === 'SHIFT' || rs.phase === 'DOUBLE') && !rs.handoverOk) {
+    const zRef = rs.soleZ[sup];
+    const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
+    // 体重真源在 `sk.cfg.mass`（骨架唯一真源，`skeleton.ts:335`）
+    const mTot = sk.cfg.mass;
+    const raw = mTot * (w0 * w0 * (zRef - rs.com.z)
+      + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
+    const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
+    // 渐入渐出：阶跃力会把 CoP 直接推出支撑面
+    const ramp = p.shiftRamp > 0 ? Math.min(1, rs.phaseT / p.shiftRamp) : 1;
+    const smooth = ramp * ramp * (3 - 2 * ramp);
+    rs.shiftDemandF = lim * smooth;
+    rs.shiftDriveSide = rs.swingLeg();   // ★ 对侧（轻）腿蹬地
   }
 
   // ══════════════════════════════════════════════════════════════
