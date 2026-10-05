@@ -6429,7 +6429,14 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const bodies = [];
   const ARCH_SPEC = [];
-  const ARCH_OUT = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
+  const ARCH_OUT = {
+    archBlocks: [],
+    archRise: 0,
+    archCx: 0,
+    archCz: 0,
+    archMass: 0,
+    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 }
+  };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -6621,7 +6628,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            const archRise = 0.022;
+            const archRise = cfg.archRise;
             const L2 = cfg.soleFootScale * hx;
             const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
             const soleBottom = local2[1] - soleHalfThick;
@@ -6673,6 +6680,23 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L2;
             ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
             ARCH_OUT.archMass = archMass;
+            {
+              const aLo = [Infinity, Infinity, Infinity];
+              const aHi = [-Infinity, -Infinity, -Infinity];
+              for (const c of archBlocks) {
+                const o = [c.offsetX ?? 0, c.offsetY ?? 0, c.offsetZ ?? 0];
+                const h2 = [c.hx, c.hy, c.hz];
+                for (let a = 0; a < 3; a++) {
+                  aLo[a] = Math.min(aLo[a], o[a] - h2[a]);
+                  aHi[a] = Math.max(aHi[a], o[a] + h2[a]);
+                }
+              }
+              ARCH_OUT.archDims = {
+                len: aHi[0] - aLo[0],
+                rad: Math.max(aHi[1] - aLo[1], aHi[2] - aLo[2]) / 4,
+                hh: (aHi[1] - aLo[1]) / 2
+              };
+            }
             const footMass = soleMass - ARCH_OUT.archMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
@@ -6711,29 +6735,37 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             restYawRad: yaw,
             plateHidden: true,
             plateOffset,
-            length,
-            radius,
-            halfHeight,
+            // ★ 弓的 `length/radius/halfHeight` 必须用**弓自己**的尺寸，不能继承小腿的。
+            //   这三个字段对弓的**物理**无用（弓的 collider 全是 `archBlocks`），
+            //   但骨骼调试视图对**每个刚体**都画一个胶囊：
+            //       new THREE.CapsuleGeometry(b.radius, b.halfHeight * 2, ...)
+            //   继承小腿尺寸 ⇒ 在脚掉位置画出一个**小腿那么长的胶囊垂到地面**，
+            //   用户见到“巨长的关节”。
+            //   改成弓自己的包围盒：长 81mm、厚 20mm、宽 28mm。
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
             mass: ARCH_OUT.archMass,
             colliders: ARCH_OUT.archBlocks,
             leg: true
           });
-          const ab = ARCH_OUT.archBlocks;
-          const mOff = (f) => ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
+          const HWm = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
+          const rollZ = centerZ + -0.7 * HWm;
+          const rollY = ankleY + (ARCH_OUT.archBlocks[0].offsetY ?? 0) - ARCH_OUT.archBlocks[0].hy - ARCH_OUT.archRise;
           ARCH_SPEC.push({
             side: isL ? "l" : "r",
             footKey,
             archKey,
             // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
             //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
-            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   这是本任务里第**三**次栽在“局部/世界混用”上（前两次：`wy=archRise`、
             //   `local[1]` 推导），所以这里把三个分量一次性写全。
-            wx: 0 + mOff("offsetX"),
+            wx: 0,
             // 脚体 cx = 0
-            wy: cy + mOff("offsetY"),
-            // 与弓刚体同一个 cy
-            wz: centerZ + mOff("offsetZ"),
-            // 与弓刚体同一个 cz
+            wy: rollY,
+            // 鞋底底面（旋前轴的高度）
+            wz: rollZ,
+            // 外侧接地棱（旋前轴的侧向位置）
             massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
           });
         }
@@ -7154,6 +7186,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
+      archRise: 6e-3,
+      // ★ 见下面的说明（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -14179,6 +14213,15 @@ var init_ragdoll = __esm({
        */
       soleCols = [[], []];
       /**
+       * ★ 与 `soleCols` / `soleColBody` **一一对应**的「该 collider 在**所属刚体**自己的
+       *   `colliders[]` 里的下标」。
+       *
+       *   为什么必须另存：`soleCols` 的下标是**全脚**顺序（左脚 6 块 = foot 4 + arch 2），
+       *   而 collider **定义**要在**所属刚体**的 `colliders[]` 里取。
+       *   直接拿 `ci` 去索引 `sk.bodies[bi].colliders[ci]` 对弓那两块一定是 `undefined`。
+       */
+      soleColLocalIdx = [[], []];
+      /**
        * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
        *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
        *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
@@ -14363,7 +14406,8 @@ var init_ragdoll = __esm({
             rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(/^foot_/.test(b.key) ? this.opt.footAngularDamping ?? this.opt.angularDamping : this.opt.angularDamping).setCanSleep(false)
           );
           this.bodies.push(body);
-          for (const c of b.colliders) {
+          for (let ci = 0; ci < b.colliders.length; ci++) {
+            const c = b.colliders[ci];
             const cd = c.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c.halfHeight, c.radius) : rapier_default.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
             cd.setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ).setMassProperties(
               c.mass,
@@ -14376,10 +14420,12 @@ var init_ragdoll = __esm({
               if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
+                this.soleColLocalIdx[0].push(ci);
                 this.soleCol[0] ??= col;
               } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
+                this.soleColLocalIdx[1].push(ci);
                 this.soleCol[1] ??= col;
               }
             }
@@ -14657,10 +14703,9 @@ var init_ragdoll = __esm({
           if (bi === void 0) continue;
           const body = this.bodies[bi];
           const q = body.rotation();
-          const cd = this.sk.bodies[bi].colliders[ci];
-          if (!cd) return;
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
           const cdOx = cd.offsetX ?? 0;
-          const EPS = 2e-3;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               const n = mf.numSolverContacts();
@@ -14668,7 +14713,7 @@ var init_ragdoll = __esm({
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
-                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (Math.abs(mf.normal().y) < 0.5) continue;
                 if (p.z >= bbMidZ) out[0] += l;
                 else out[1] += l;
               }
@@ -14920,27 +14965,20 @@ var init_ragdoll = __esm({
        */
       soleBlockLoad(side, out) {
         const cols = this.soleCols[side];
-        const bb = this.soleBB;
-        this.footSoleBounds(side, bb);
         for (let i = 0; i < out.length; i++) out[i] = 0;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
           const bi = this.soleColBody[side][ci];
           if (bi === void 0) continue;
-          const body = this.bodies[bi];
-          const q = body.rotation();
-          const cd = this.sk.bodies[bi].colliders[ci];
-          if (!cd) return;
-          const cdOx = cd.offsetX ?? 0;
-          const EPS = 2e-3;
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               const n = mf.numSolverContacts();
               for (let i = 0; i < n; i++) {
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
-                const p = mf.solverContactPoint(i);
-                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (Math.abs(mf.normal().y) < 0.5) continue;
                 out[ci] += l;
               }
             });
@@ -14952,7 +14990,7 @@ var init_ragdoll = __esm({
         const out = [];
         for (let ci = 0; ci < this.soleCols[side].length; ci++) {
           const bi = this.soleColBody[side][ci];
-          const c = bi !== void 0 ? this.sk.bodies[bi].colliders[ci] : void 0;
+          const c = bi !== void 0 ? this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci] : void 0;
           out.push(c?._label ?? `#${ci}`);
         }
         return out;

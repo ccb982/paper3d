@@ -28,6 +28,8 @@ const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const log = console.log;
 const PHz = DEFAULT_SIM.physicsHz ?? 240;
+/** 只扫这一档（默认当前配置的 archRise）；想扫全谱把序列改回 [0,4,6,9,12,16,22] */
+const RISE_ONLY = (DEFAULT_CONFIG.archRise ?? 0) * 1000;
 
 function trial(riseMm: number) {
   const sk = buildSkeleton({ ...DEFAULT_CONFIG, archRise: riseMm / 1000 });
@@ -45,7 +47,9 @@ function trial(riseMm: number) {
   const ROT = new Float64Array(3);
   let frames = 0, hit = 0, aMin = 9, aMax = -9, lamSum = 0, lamPk = 0;
   const cops: number[] = [], tilt: number[] = [];
-  const N = Math.round(PHz * 3), skip = Math.round(PHz * 1.0);
+  // ⚠ 帧数直接决定耗时：每个 rise 都要**重建 Rapier World**（wasm 初始化 + 碰撞体构建）。
+  //   3 个 rise × 720 帧 → 几十秒；改成 1 个 rise × 240 帧 → 几秒。扫描时把帧数加回去。
+  const N = Math.round(PHz * 1.0), skip = Math.round(PHz * 0.4);
   for (let f = 0; f < N; f++) {
     sim.motor.set(ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 120)));
     sim.advance(1);
@@ -106,7 +110,7 @@ log('══ 弓升起高度扫描：多低才承重？══');
 log('   （需旋前角 = asin(rise/126mm)；脚实测只能倾 ~2~7°）');
 log('');
 log('   rise   需旋前   弓接触帧   弓角行程   弓角均值   弓载荷峰   弓承重%   CoP行程   足倾角行程');
-for (const r of [0, 4, 6]) {
+for (const r of [RISE_ONLY]) {
   const t = trial(r);
   const need = (Math.asin(Math.min(1, r / 126)) * 57.3).toFixed(1);
   log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}°`

@@ -7180,7 +7180,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
-      archRise: 0.022,
+      archRise: 6e-3,
+      // ★ 见下面的说明（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -14605,7 +14606,6 @@ var init_ragdoll = __esm({
           const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
           if (!cd) continue;
           const cdOx = cd.offsetX ?? 0;
-          const EPS = 2e-3;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               const n = mf.numSolverContacts();
@@ -14613,7 +14613,7 @@ var init_ragdoll = __esm({
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
-                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (Math.abs(mf.normal().y) < 0.5) continue;
                 if (p.z >= bbMidZ) out[0] += l;
                 else out[1] += l;
               }
@@ -14865,27 +14865,20 @@ var init_ragdoll = __esm({
        */
       soleBlockLoad(side, out) {
         const cols = this.soleCols[side];
-        const bb = this.soleBB;
-        this.footSoleBounds(side, bb);
         for (let i = 0; i < out.length; i++) out[i] = 0;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
           const bi = this.soleColBody[side][ci];
           if (bi === void 0) continue;
-          const body = this.bodies[bi];
-          const q = body.rotation();
-          const cd = this.sk.bodies[bi].colliders[ci];
-          if (!cd) return;
-          const cdOx = cd.offsetX ?? 0;
-          const EPS = 2e-3;
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               const n = mf.numSolverContacts();
               for (let i = 0; i < n; i++) {
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
-                const p = mf.solverContactPoint(i);
-                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (Math.abs(mf.normal().y) < 0.5) continue;
                 out[ci] += l;
               }
             });
@@ -14897,7 +14890,7 @@ var init_ragdoll = __esm({
         const out = [];
         for (let ci = 0; ci < this.soleCols[side].length; ci++) {
           const bi = this.soleColBody[side][ci];
-          const c = bi !== void 0 ? this.sk.bodies[bi].colliders[ci] : void 0;
+          const c = bi !== void 0 ? this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci] : void 0;
           out.push(c?._label ?? `#${ci}`);
         }
         return out;

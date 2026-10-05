@@ -7180,7 +7180,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
-      archRise: 0.022,
+      archRise: 6e-3,
+      // ★ 见下面的说明（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -20931,6 +20932,7 @@ var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (in
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var log = console.log;
 var PHz = DEFAULT_SIM2.physicsHz ?? 240;
+var RISE_ONLY = (DEFAULT_CONFIG2.archRise ?? 0) * 1e3;
 function trial(riseMm) {
   const sk = buildSkeleton2({ ...DEFAULT_CONFIG2, archRise: riseMm / 1e3 });
   const SHAPE = shapeForJoints2(sk.joints.length);
@@ -20947,7 +20949,7 @@ function trial(riseMm) {
   const ROT = new Float64Array(3);
   let frames = 0, hit = 0, aMin = 9, aMax = -9, lamSum = 0, lamPk = 0;
   const cops = [], tilt = [];
-  const N = Math.round(PHz * 3), skip = Math.round(PHz * 1);
+  const N = Math.round(PHz * 1), skip = Math.round(PHz * 0.4);
   for (let f = 0; f < N; f++) {
     sim.motor.set(ctrl.step(1 / (DEFAULT_SIM2.controlHz ?? 120)));
     sim.advance(1);
@@ -21016,7 +21018,7 @@ log("\u2550\u2550 \u5F13\u5347\u8D77\u9AD8\u5EA6\u626B\u63CF\uFF1A\u591A\u4F4E\u
 log("   \uFF08\u9700\u65CB\u524D\u89D2 = asin(rise/126mm)\uFF1B\u811A\u5B9E\u6D4B\u53EA\u80FD\u503E ~2~7\xB0\uFF09");
 log("");
 log("   rise   \u9700\u65CB\u524D   \u5F13\u63A5\u89E6\u5E27   \u5F13\u89D2\u884C\u7A0B   \u5F13\u89D2\u5747\u503C   \u5F13\u8F7D\u8377\u5CF0   \u5F13\u627F\u91CD%   CoP\u884C\u7A0B   \u8DB3\u503E\u89D2\u884C\u7A0B");
-for (const r of [0, 4, 6]) {
+for (const r of [RISE_ONLY]) {
   const t = trial(r);
   const need = (Math.asin(Math.min(1, r / 126)) * 57.3).toFixed(1);
   log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}\xB0   \u5757[${t.names.join("|")}]   \u76F4\u8BFB\u03BB[${t.direct.map((v) => v.toFixed(3)).join("|")}]   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join("|")}]   bb z[${t.bbZ}]   ${t.hitPct.toFixed(0).padStart(6)}%   ${t.aRange.toFixed(2).padStart(7)}\xB0   ${t.aMean.toFixed(2).padStart(7)}\xB0   ${t.lamPk.toFixed(3).padStart(8)}   ${t.archShare.toFixed(1).padStart(6)}%   ${t.copR.toFixed(1).padStart(6)}mm   ${t.tiltR.toFixed(2).padStart(7)}\xB0   ${t.hitPct > 20 ? "\u2713 \u627F\u91CD" : ""}`);
