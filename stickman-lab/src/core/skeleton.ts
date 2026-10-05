@@ -703,6 +703,36 @@ export interface JointDef {
   parentLocal: Vec3;
   childLocal: Vec3;
   /**
+   * ★ 若非 `undefined`，该关节用 **revolute（铰链）** 建造，值是**自由转轴**
+   * 在**父刚体局部系**里的方向。这是 Rapier 唯一支持**引擎级角度限位**的关节类型
+   * （`JointData.revolute` + `limitsEnabled` + `limits = [min, max]`）。
+   *
+   *   **为什么踝必须是 revolute（2026-10-04，用户：「脚踝关节实现的有问题，
+   *   为啥没有紧密连接脚和小腿呢，为啥其他关节正常」）**
+   *
+   *   此前**所有**关节都用 `JointData.spherical`（球铰，3 旋转全放），
+   *   且代码里那两行 `limitsEnabled/limits` 被标注为**实测无效**：
+   *     「Rapier 0.14 不吃这个格式 —— 打开前后所有回读逐位相同」
+   *   查证：`ImpulseJoint.limitsMin()/limitsMax()` 是**单对标量**
+   *   （给 revolute/prismatic 设计的），球铰没有三轴限位 API
+   *   ⇒ **整个骨架一个物理限位都没有**，角度全靠 `enforceLimits()` 的手写冲量。
+   *
+   *   为什么只有踝暴露：
+   *     · 踝要驱动 CoP ⇒ 马达 `τmax = 120 N·m`（小腿才 72）
+   *     · 踝屈伸行程只有 **30°**（`ankleLimitDeg = [−12°, 18°]`），最容易撞限
+   *     · 脚掌刚体轻 ⇒ 角度一失控整只脚就甩出去
+   *   其他关节行程宽、力矩小，速度级冲量**恰好**够用 ⇒ 看起来"正常"。
+   *
+   *   实测（未改前）：踝屈伸轴跑到 **±174°**、越限 20~30%
+   *   ⇒ 脚在前视图里侧翻 40~90°（用户亲手画的框证实）⇒ 支撑面朝向失控，
+   *     平衡系统无从下手 ⇒ 这是站不住的根本原因。
+   *
+   *   改后：踝拿到**引擎级**限位，物理上不可能侧翻，不依赖手写冲量。
+   *   代价：内翻/扭转（轴 0/1）被铰死 —— 但那正是解剖学上踝在正常步态里的
+   *   绝大部分行为（踝只做背屈/跖屈）。
+   */
+  revoluteAxis?: Vec3;
+  /**
    * ★★ 静姿态下的关节角读数（弧度，三轴）—— 关节的"零点偏置"。
    *
    * ragdoll 的 `jointRot` 算的是 `conj(q父) ⊗ q子` 的旋转矢量，而父子刚体**静倾角不同**
@@ -1387,6 +1417,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       )),
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
+      // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
+      revoluteAxis: isAnkle ? ([0, 0, 1] as const) : undefined,
       maxTorque: [tau * TORQUE_AXIS_FACTOR[0], tau * TORQUE_AXIS_FACTOR[1], tau * TORQUE_AXIS_FACTOR[2]],
     });
   });

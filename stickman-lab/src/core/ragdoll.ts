@@ -816,17 +816,42 @@ export class Ragdoll {
       this.jointBodies[i * 2] = pi;
       this.jointBodies[i * 2 + 1] = ci;
 
-      const jd = RAPIER.JointData.spherical(
-        { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] },
-        { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] },
-      );
-// ⚠ 已知**无效**（2026-10-02 实测）：尝试用 `limitsEnabled`/`limits` 给球铰开物理限位，
-      //   Rapier 0.14 **不吃这个格式** —— 打开前后所有回读逐位相同，踝仍跑到 +45°（限位 +18°）。
-      //   ⇒ 目前**没有任何物理限位**，只有 `driveMotors` 里的马达软限位（改目标速度，
-      //     接触力足够大时拉不回来）。保留这两行只为记录事实；若换 Rapier 版本需重测。
-      jd.limitsEnabled = true;
-      jd.limits = [j.minRad[0], j.maxRad[0], j.minRad[1], j.maxRad[1], j.minRad[2], j.maxRad[2]];
-      this.joints.push(this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true));
+      const anch1 = { x: j.parentLocal[0], y: j.parentLocal[1], z: j.parentLocal[2] };
+      const anch2 = { x: j.childLocal[0], y: j.childLocal[1], z: j.childLocal[2] };
+      let jd: RAPIER.JointData;
+      if (j.revoluteAxis) {
+        // ★★ 踝：真正的 **revolute 铰链**，带**引擎级**角度限位（2026-10-04）。
+        //   这是唯一能让物理层拒绝侧翻的途径 —— 球铰没有三轴限位 API。
+        const ax = j.revoluteAxis;
+        jd = RAPIER.JointData.revolute(anch1, anch2, { x: ax[0], y: ax[1], z: ax[2] });
+        jd.limitsEnabled = true;
+        // revolute 的 `limits` 是**单对标量**（只约束那一个自由转轴）⇒ 用轴2（屈伸）
+        jd.limits = [j.minRad[2], j.maxRad[2]];
+      } else {
+        jd = RAPIER.JointData.spherical(anch1, anch2);
+        // ⚠ 球铰**不设** limits：Rapier 0.14 的 `limitsMin()/limitsMax()` 是单对标量
+        //   （给 revolute/prismatic 设计），给球铰写 limits 是**实测无效**的
+        //   （2026-10-02：打开前后所有回读逐位相同）。
+        //   ⇒ 球铰的角度约束只能靠 `enforceLimits()` 的手写冲量
+        //     （2026-10-04 补了**位置级投影**，此前只有速度级、越界即永久失效）。
+      }
+      const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true) as RAPIER.ImpulseJoint;
+      // ★★★ 限位**必须用关节对象上的 `setLimits()`**，不能只写 `jd.limitsEnabled`（2026-10-04 实测）。
+      //
+      //   实测证据：踝已经建成 `RevoluteImpulseJoint`，但引擎读回
+      //     `limitsEnabled() = false`、`limitsMin() = -3.4e38`、`limitsMax() = +3.4e38`
+      //   ⇒ **`JointData` 上的 `limitsEnabled/limits` 不会传给创建出来的关节**（空操作）。
+      //   这也解释了旧注释「Rapier 0.14 不吃这个格式」的**真正原因** —— 不是格式错，
+      //   是**设置点错了**：得在 `createImpulseJoint()` 返回的对象上调 `setLimits()`。
+      //
+      //   ⚠ 球铰（`GenericImpulseJoint`）**没有任何 limits 方法**
+      //     （实测其原型上只有 anchor/body/configureMotor/raw 那些）⇒ 球铰确实无法有
+      //     引擎级角度限位，其余关节只能靠 `enforceLimits()` 的手写冲量。
+      if (j.revoluteAxis && typeof (joint as { setLimits?: unknown }).setLimits === 'function') {
+        (joint as unknown as { setLimits(a: number, b: number): void })
+          .setLimits(j.minRad[2], j.maxRad[2]);
+      }
+      this.joints.push(joint);
     });
   }
 
