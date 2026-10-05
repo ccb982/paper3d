@@ -681,8 +681,15 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
   postureLoadGain: 1.0,
   postureLoadSpine: true,
-  // 脊柱前馈基线张力倍率（2025 J Neurophysiol 的前馈通路）
-  postureSpineTonic: 3.0,
+  // 脊柱前馈基线张力倍率（2025 J Neurophysiol 的前馈通路）。
+  // ⚠ 实测是**单调权衡**，默认取 1.0（不额外加）：
+  //   1.0× → 脊柱轴0 峰值 69°、X3=83mm、存活 2.98s
+  //   1.5× → 54°、145mm、2.28s
+  //   2.0× → 26°、141mm、**0.73s**
+  //   2.5× → 14°、161mm、**0.67s**
+  //   ⇒ 脊柱一硬，腰就不动、重心也不动（腰侧倾是本 rig 搬运重心的执行器）。
+  //   这个权衡的解法不是调张力，而是**调站距**（见 架构设计.md 附录 A.6）。
+  postureSpineTonic: 1.0,
   // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
   latShiftCopMargin: 0.04,
   /**

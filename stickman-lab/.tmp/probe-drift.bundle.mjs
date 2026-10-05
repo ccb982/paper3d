@@ -16288,6 +16288,139 @@ var init_gaitRef = __esm({
   }
 });
 
+// src/core/keyframe.ts
+function strideWidth(soleZl, soleZr) {
+  return Math.abs(soleZl - soleZr);
+}
+function strideWidthRatio(soleZl, soleZr) {
+  return strideWidth(soleZl, soleZr) / NORMATIVE_STRIDE_WIDTH;
+}
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT, NORMATIVE_STRIDE_WIDTH;
+var init_keyframe = __esm({
+  "src/core/keyframe.ts"() {
+    "use strict";
+    GAIT_KEY_RANGE = Object.freeze({
+      IC: [0, 2],
+      LR: [2, 12],
+      MSt: [12, 31],
+      TSt: [31, 50],
+      PSw: [50, 62],
+      ISw: [62, 75],
+      MSw: [75, 87],
+      TSw: [87, 100]
+    });
+    D = Math.PI / 180;
+    KEY_POSES = Object.freeze({
+      IC: {
+        supHipFlex: 25 * D,
+        swHipFlex: 25 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 2 * D,
+        supAnkle: 0,
+        swAnkle: -2 * D,
+        trunkPitch: 4 * D,
+        trunkLat: 0,
+        primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
+      },
+      LR: {
+        // 「Shock absorption」：膝屈到 15~20°，踝**受控**跖屈 10~15°
+        supHipFlex: 25 * D,
+        swHipFlex: 24 * D,
+        supKneeFlex: 17.5 * D,
+        swKneeFlex: 18 * D,
+        supAnkle: 12.5 * D,
+        swAnkle: -5 * D,
+        trunkPitch: 2 * D,
+        trunkLat: 0,
+        primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
+      },
+      MSt: {
+        // ★★★ 重心转移的目标帧。Perry 原文：「Body weight passes over supporting foot」
+        //   骨盆 0°、髋 0°、膝 5°屈、踝 5°背屈。
+        //   主肌 = **臀中肌 / 阔筋膜张肌**（髋外展）⇒ 额状刚度在这里（Winter 1998）。
+        supHipFlex: 0,
+        swHipFlex: 15 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 40 * D,
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: 0,
+        trunkLat: 0,
+        primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
+      },
+      TSt: {
+        // 「Body weight moves ahead of the forefoot」：髋伸 0~20°、膝近伸、踝背屈最大 10°
+        supHipFlex: -10 * D,
+        swHipFlex: 5 * D,
+        supKneeFlex: 2 * D,
+        swKneeFlex: 45 * D,
+        supAnkle: -10 * D,
+        swAnkle: -18 * D,
+        trunkPitch: -2 * D,
+        trunkLat: 0,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
+      },
+      PSw: {
+        // 第二段双支撑：膝快速屈到 40°、踝被动作跖屈到 20°、髋回中立
+        supHipFlex: 0,
+        swHipFlex: 2 * D,
+        supKneeFlex: 40 * D,
+        swKneeFlex: 20 * D,
+        supAnkle: 20 * D,
+        swAnkle: -20 * D,
+        trunkPitch: 0,
+        trunkLat: 0,
+        primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
+      },
+      ISw: {
+        supHipFlex: -5 * D,
+        swHipFlex: 20 * D,
+        supKneeFlex: 5 * D,
+        swKneeFlex: 60 * D,
+        // 膝屈峰 = 足净空
+        supAnkle: -5 * D,
+        swAnkle: -10 * D,
+        trunkPitch: -3 * D,
+        trunkLat: 0,
+        primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
+      },
+      MSw: {
+        supHipFlex: 0,
+        swHipFlex: 30 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 30 * D,
+        // 「tibia vertical」髋膝屈曲相等
+        supAnkle: 0,
+        swAnkle: 0,
+        trunkPitch: -2 * D,
+        trunkLat: 0,
+        primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
+      },
+      TSw: {
+        // 「Prepare for stance」：膝伸到 0~5°、踝中立、髋保持 25°屈
+        supHipFlex: 0,
+        swHipFlex: 25 * D,
+        supKneeFlex: 3 * D,
+        swKneeFlex: 3 * D,
+        supAnkle: -2 * D,
+        swAnkle: -3 * D,
+        trunkPitch: 3 * D,
+        trunkLat: 0,
+        primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
+      }
+    });
+    PHASE_TO_GAIT = Object.freeze({
+      // DOUBLE/SHIFT = 双支撑的前后两段 + 交接
+      DOUBLE: "MSt",
+      SHIFT: "LR",
+      SINGLE: "MSt",
+      PUSH: "PSw",
+      STEP: "ISw"
+    });
+    NORMATIVE_STRIDE_WIDTH = 0.075;
+  }
+});
+
 // src/core/rigState.ts
 function cloneCriteria(c) {
   return { flags: { ...c.flags }, values: { ...c.values }, all: c.all };
@@ -16301,6 +16434,7 @@ var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
     init_skeleton();
+    init_keyframe();
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
@@ -16477,6 +16611,9 @@ var init_rigState = __esm({
       /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
       hipLatTau = 0;
       shiftPushTau = 0;
+      keyPose = KEY_POSES.MSt;
+      gaitKey = "MSt";
+      strideRatio = 4.4;
       shiftErrZ = 0;
       shiftDemandF = 0;
       shiftDriveSide = null;
@@ -17167,6 +17304,9 @@ var init_rigState = __esm({
           shiftDriveSide: this.shiftDriveSide,
           shiftPushTau: this.shiftPushTau,
           shiftErrZ: this.shiftErrZ,
+          keyPose: this.keyPose,
+          gaitKey: this.gaitKey,
+          strideRatio: this.strideRatio,
           forceChain: this.forceChain(),
           comTransfer: this.comTransfer(),
           torsoY: this.torsoY,
@@ -17242,6 +17382,7 @@ var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
     init_rigState();
+    init_keyframe();
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
     DEFAULT_HANDOVER_DWELL = 0.3;
@@ -17384,6 +17525,10 @@ var init_gaitState = __esm({
         const canSwingRear = handoverOk && X6 && !rearLocked;
         const bearer = rs.loadDominant(rs.loadBearer, this.cfg.bearerLoadHyst);
         rs.loadBearer = bearer;
+        const gk = PHASE_TO_GAIT[rs.phase] ?? "MSt";
+        rs.gaitKey = gk;
+        rs.keyPose = KEY_POSES[gk];
+        rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(
           { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },

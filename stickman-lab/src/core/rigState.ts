@@ -21,6 +21,7 @@
  */
 
 import { AXES_PER_JOINT, jointIndexByName, type Skeleton } from './skeleton';
+import { KEY_POSES, type GaitKey, type KeyPose } from './keyframe';
 
 // ─────────────────────────────────────────────────── 身份
 
@@ -302,6 +303,12 @@ export interface RigSnapshot {
     unlock: Criteria;
     stepPermit: Criteria;
   };
+  /** ★ 当前 Perry 关键帧名（状态机写，两系统读） */
+  gaitKey: GaitKey;
+  /** ★ 当前关键帧姿态目标（两套系统的共同收敛目标，见 `keyframe.ts`） */
+  keyPose: KeyPose;
+  /** 本 rig 步宽 / 人类规范步宽（4.4 ⇒ 重心横移需求也是人类的 4 倍） */
+  strideRatio: number;
   /** 事件（每拍增量） */
   events: { touchdownL: boolean; touchdownR: boolean; lockReleasedL: boolean; lockReleasedR: boolean };
 }
@@ -510,6 +517,9 @@ export class RigState {
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
   shiftPushTau = 0;
+  keyPose: KeyPose = KEY_POSES.MSt;
+  gaitKey: GaitKey = 'MSt';
+  strideRatio = 4.4;
   shiftErrZ = 0;
   shiftDemandF = 0;
   shiftDriveSide: Side | null = null;
@@ -1133,6 +1143,7 @@ export class RigState {
       waistTrim: this.waistTrim, waistGapM: this.waistGapM, waistErrLat: this.waistErrLat, hipLatTau: this.hipLatTau,
       shiftDemandF: this.shiftDemandF, shiftDriveSide: this.shiftDriveSide,
       shiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
+      keyPose: this.keyPose, gaitKey: this.gaitKey, strideRatio: this.strideRatio,
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,

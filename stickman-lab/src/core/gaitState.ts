@@ -19,6 +19,7 @@
  */
 
 import { RigState, makeCriteria, type Phase, type Side } from './rigState';
+import { PHASE_TO_GAIT, KEY_POSES, strideWidthRatio } from './keyframe';
 
 export interface GaitConfig {
   /** B2 承重判据：载荷占比阈值 */
@@ -356,6 +357,15 @@ export class GaitState {
     //     （0.45 vs 硬编码 0.08）打架 ⇒ 承重腿来回抽换（实测 20s 内 6 次）。
     const bearer = rs.loadDominant(rs.loadBearer, this.cfg.bearerLoadHyst);
     rs.loadBearer = bearer;
+    // ── ★★ 状态机是**关键帧映射的唯一真源** ──
+    //   用户 2026-10-05：「两套系统根据状态机就分别往这几个关键帧状态去靠拢」。
+    //   相位 → Perry 关键帧的映射集中在 `keyframe.ts` 的 `PHASE_TO_GAIT`，
+    //   状态机每拍写一次 `rs.gaitKey` / `rs.keyPose`；balance 与 step 只**读**。
+    //   ⇒ 两套系统从此有同一个、可审计的收敛目标，不再互相猜对方要什么。
+    const gk = PHASE_TO_GAIT[rs.phase] ?? 'MSt';
+    rs.gaitKey = gk;
+    rs.keyPose = KEY_POSES[gk];
+    rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
     this.hadBearer = this.hadBearer || handoverOk;
     // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）
     rs.bearerCriteria = makeCriteria(
