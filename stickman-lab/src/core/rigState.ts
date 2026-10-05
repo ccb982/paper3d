@@ -476,6 +476,9 @@ export class RigState {
   private vipPrevOn = false;
   /** ω₀ = √(mgh/I)：off 相鞍点的特征频率（rad/s） */
   vipOmega = 0;
+  /** 中间量诊断（闭环判据的四项 + 实际强度） */
+  vipDiag: { qD: number; qdD: number; a: number; prod: number;
+             delayTicks: number; omega0: number; q: number; qVipRate: number } | null = null;
   /** 本拍控制间隔（s）—— 延迟拍数 = δ / dtCtrl，beginTick 时写入 */
   dtCtrl = 1 / 60;
   /** `vipDelayed` 的复用输出缓冲：[q_δ, q̇_δ] */

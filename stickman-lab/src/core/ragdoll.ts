@@ -2423,7 +2423,18 @@ soleBlockLabels(side: 0 | 1): string[] {
     //   给子体 `+J`、给父体 `−J`（沿该轴的世界方向）⇒ ω_rel 恰好归零，
     //   等价于一个恢复系数 e=0 的限位挡块。惯量取 `jointIeff`（该轴有效惯量）。
 
-        if (err === 0) continue;
+        // ★★ 不能在这里短路：力矩通道与位置环**是两条独立的路径**。
+        //   旧代码 `if (err === 0) continue;` 在加上力矩之前就跳过了整个关节，
+        //   于是 `torqueCmd` 也一起被丢掉。
+        //   后果（实测，箭態站立）：
+        //     大脑算出 `q_vip = 25.5°` → `τ = −120 N·m`（顶到限位），
+        //     但那一轴**没有人写角度目标** ⇒ `err = thRef−a → 0` 位于平衡点
+        //     → 短路触发 ⇒ 力矩从未下发。
+        //   实测体现：腰台归属“保持”（= bind，未有人提询）、腰力矩权限仅 **30%**。
+        //   → “正常的身体、神经系统、大脑不发令”——大脑发了，令被中途丢掉。
+        const ffEarly = this.torqueCmd[idx]!;
+        // 只有“位置环错差为 0 **且**力矩通道也没使用”才真的无事可做。
+        if (err === 0 && ffEarly === 0) continue;
 
         const tauMax = j.maxTorque[k] * scale;
         let tau = err * (tauMax / JOINT_MAX_SPEED);

@@ -1426,6 +1426,9 @@ export function balanceSystem(
         const qD = rs.vipD1[0]!, qdD = rs.vipD1[1]!;
         // ★ 切换：ON ⟺ q_δ·(q̇_δ − a·q_δ) < 0（离开稳定流形才需要主动推）
         const wantOn = qD * (qdD - a * qD) < 0;
+        // ★ 诊断回读：判据的四项全部可读，否则“vipOn 为 false”无从分辨。
+        rs.vipDiag = { qD, qdD, a, prod: qD * (qdD - a * qD),
+          delayTicks: p.vipDelaySec / dtC, omega0, q: qVip, qVipRate };
         if (wantOn !== rs.vipOn) { rs.vipOn = wantOn; rs.vipSwitches++; }
         // ★ 诊断 γoff：**带符号**，这样才能区分稳定/不稳定流形。
         //   γoff = −q̇/(ω₀·q)：稳定流形 q̇ = −ω₀q ⇒ **+1**；不稳定流形 ⇒ **−1**。
