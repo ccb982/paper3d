@@ -941,8 +941,6 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   };
 
   const bodies: BodyDef[] = [];
-  /** ★ 柔性足 F1（2026-10-04）：中足关节，在腿循环里收集、循环外统一编号 */
-  const midfootJoints: JointDef[] = [];
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json 缺少组件 ${spec.key}`);
@@ -1224,8 +1222,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
-          // ★ 后足只拿一半脚掌质量（另一半给 `forefoot_*`，见下方 `fore` push）
-          mass: soleMass * 0.5,
+          mass: soleMass,
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -1233,67 +1230,79 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //     而脚半厚 hy=26mm → 刚好触边，实测 CoP 全程只动 4mm。
           //   拆成两块后，载荷可在两者之间**连续**转移
           //   ⇒ CoP 在足长范围内连续可调，不必翻脚。
+          // ══════════════════════════════════════════════════════════════════
+          // ★★★ 足骨架按**真实人脚形状**重建（2026-10-04）
+          // ══════════════════════════════════════════════════════════════════
+          //   之前是 **281×100×52mm 的等厚平板**（外八 25°）。两个致命问题：
+          //     ① **内侧柱与外侧柱同时着地** ⇒ 载荷已在两柱上，接触求解器
+          //        **没有可迁移的压力**。实测髋外展力矩 −120N→+120N 期间
+          //        CoP_z 只动 **0.9mm**（内侧柱 175N : 外侧柱 12N = **14:1**）。
+          //     ② 要卸载内侧柱得把 52mm 厚的板翘起来 ⇒ `tanθ > 52/100`
+          //        ⇒ 需要 **>27.5°** 的中足行程，所需力矩超出前足质量能提供的量。
+          //        实测：中足行程给到 55°、刚度 2000 N·m/rad，CoP_z 幅度恒为
+          //        18~19mm 且随两者**零变化** ⇒ 柔性根本没参与。
+          //
+          //   **真实人脚不是平板** —— 关键在**内侧弓**：
+          //     · Jeon & Cho 压力垫综述：「第一接触点通常在踝关节中心**外侧**，
+          //       在**距下关节产生旋前力矩**，允许柔性活动」
+          //       「**内侧弓把重量传递到足的外侧缘**」
+          //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
+          //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
+          //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
+          //     而且弓本身就是**拱形柔顺结构**（承重压缩、离载回弹 = arch recoil），
+          //     不需要额外的中足关节去模拟。
+          //
+          //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
+          //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
+          //     弓区 22–57%   外侧柱 30mm 厚 10mm 接地 · 内侧弓 30mm **离地 22mm**
+          //     跖球 57–89%   宽 100mm（最宽）厚 20mm 全宽接地
+          //     趾   89–100%  宽 76mm   厚 12mm  接地
+          //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
+          // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            // ══════════════════════════════════════════════════════════════════
-            // ★★★ 柔性足的**分布式接触**（2026-10-04，按文献）
-            //
-            //   动机（实测）：原布局是「跟 / 前脚掌」两块，`offsetZ` **都是 0**，
-            //   只有 X 方向分开 ⇒ 接触压力无论怎么分布，**CoP 的 z 期望恒 ≈ 0**。
-            //   换句话说：**脚掌几何本身没有侧向 CoP 权限**，移动 CoP 的唯一途径是
-            //   刚性脚绕踝转动，而踝只剩约 7° 权限（实测踝角只走到 −3°/限 −10°）
-            //   ⇒ 额状面怎么推都不动。
-            //
-            //   文献依据：内侧弓 / 外侧柱是**两条独立的载荷路径**，足就是靠它们
-            //   在支撑相内迁移 CoP 的：
-            //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
-            //        允许柔性活动**」（Jeon & Cho 的压力垫综述）
-            //     · 「**内侧弓把重量传递到足的外侧缘**」
-            //   ⇒ 把接触面按**内侧柱 / 外侧柱**再各自分成跟/前脚掌，
-            //     求解器就能通过**压力重分布**在足宽内迁移 CoP，**不需要踝转动**。
-            //
-            //   定量目标：Lugade & Kaufman 2014（Gait & Posture 34:161-168）
-            //   实测平足步行 **CoP 行程 = 足宽的 27%**（内外侧）⇒ 足宽 100mm 时
-            //   **侧向 CoP 权限 ±13.5mm（总 27mm）**，且**持续可用**（踝不动）。
-            //
-            //   布局（局部坐标，z 为内外侧）：每侧两柱，柱宽 = 半足宽，
-            //   两柱在 z = ±hz/2 分开、共覆盖整个足宽 ⇒ 合起来仍是完整鞋底，
-            //   **不会改变外观轮廓，只改变接触面的内部划分**。
-            // ══════════════════════════════════════════════════════════════════
-            // 前后分配：脚跟 40% / 前脚掌 60%（中步置两压力比约 4:6）—— 常量已提到外层
-            const hxHeel = two ? hx * 0.50 : 0;    // 后半
-            const offHeel = two ? -hx * 0.50 : 0;
-            const mCol = (soleMass * 0.5) / 2;      // 后足两块
-            const mkCol = (dx: number, dz: number, m: number) => ({
-              shape: 'cuboid' as const, halfHeight: 0, radius: 0,
-              hx: two ? (dx > 0 ? hxBall : hxHeel) : hx,
-              hy: soleHalfThick, hz: hzCol,
-              offsetX: dx, offsetY: local[1], offsetZ: +(local[2] + dz).toFixed(6),
-              mass: m, comY: 0,
-              inertiaZ: (m * ((two ? (dx > 0 ? hxBall : hxHeel) : hx) ** 2 + soleHalfThick ** 2)) / 3,
-              inertiaXY: (m * (hzCol * hzCol + soleHalfThick * soleHalfThick)) / 3,
-            });
-            // ★★ 柔性足 F1（2026-10-04）：**前脚掌独立成刚体**（`forefoot_*`），
-            //   本刚体（`foot_*`）只留**后足**两块。
-            //
-            //   为什么必须拆两个刚体 —— 我先只做了「4 块 collider 切分」（同一刚体内），
-            //   **实测无效**（tools 探针，髋外展力矩 −120N → +120N）：
-            //     内侧柱Σ 162.8N / 外侧柱Σ 14.2N（比值 **14:1**），CoP_z 只动 **0.9mm**
-            //   根因：足处于**内翻**，载荷根本不在外侧柱上 ⇒ 接触求解器**没有可迁移的压力**。
-            //
-            //   文献机制（Jeon & Cho 压力垫综述 / Welte 2023 内侧弓）：
-            //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
-            //        允许柔性活动**」  ← 需要**中足有自由度**
-            //     · 「**内侧弓把重量传递到足的外侧缘**」
-            //   ⇒ 侧向 CoP 迁移的前提是**中足本身能变形**。只切 collider 不给自由度 = 白做。
-            //
-            //   拆分方案：**绕足长轴（局部 X）** 的 revolute = 距下关节的旋前/旋后。
-            //   前足绕它旋前/旋后 ⇒ 前足的内侧缘抬起、外侧缘压下 ⇒ **载荷在内/外侧柱之间转移**
-            //   ⇒ 侧向 CoP 可迁移（目标 ±13.5mm，Lugade & Kaufman 2014 的足宽 27%）。
-            //
-            //   前足 collider 的 `offsetX` 要减去前足刚体自身原点的偏移（见下方 `fore` push）。
-            return two
-              ? [mkCol(offHeel, offColIn, mCol), mkCol(offHeel, offColOut, mCol)]
-              : [mkCol(0, offColIn, soleMass * 0.5), mkCol(0, offColOut, soleMass * 0.5)];
+            const L = cfg.soleFootScale * hx;                             // 半长 140mm
+            const HW = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;        // 半宽 50mm
+            const soleBottom = local[1] - soleHalfThick;                  // 鞋底平面（body-local y）
+            const archRise = 0.022;   // 内侧弓顶点离地 22mm（人脚约 20~25mm）
+            interface Blk extends ColliderDef { _vol: number; _label: string }
+            /** 一块 collider：给 x0..x1 / z0..z1（相对半长半宽的比例）+ 厚度 + 离地抬升 */
+            const blk = (fx0: number, fx1: number, fz0: number, fz1: number,
+                         hyMm: number, rise: number, label: string): Blk => {
+              const hy = (hyMm / 1000) * cfg.soleFootScale;
+              // ★ 半轴 = **长度的一半**。`fx∈[-1,1] ↔ x∈[-L,+L]`，
+              //   所以长度 = `(f1−f0)·L`，半长 `hx` 要再除以 2
+              //   （漏掉 /2 会让足长变 336mm、最宽 200mm —— 实测踩到）
+              const hxm = ((fx1 - fx0) * L) / 2, hzm = ((fz1 - fz0) * HW) / 2;
+              const cxm = ((fx0 + fx1) / 2) * L, czm = ((fz0 + fz1) / 2) * HW;
+              const vol = 4 * hxm * hzm * hy;   // = (2hx)(2hz)(2hy)/2
+              return {
+                shape: 'cuboid', halfHeight: 0, radius: 0,
+                hx: hxm, hy, hz: hzm,
+                offsetX: cxm,
+                offsetY: soleBottom + hy + rise,
+                offsetZ: czm,
+                mass: vol, comY: 0, inertiaZ: 0, inertiaXY: 0,
+                _vol: vol, _label: label,
+              };
+            };
+            // ── 六块。Z 为内侧（+Z）；左列=外侧（接地），右列=内侧弓（抬起）──
+            const blocks: Blk[] = [
+              blk(-1.00, -0.435, -0.60, 0.60, 26, 0, '足跟'),
+              blk(-0.435, 0.145, -1.00, -0.40, 10, 0, '外侧柱'),
+              blk(-0.435, -0.145, 0.40, 1.00, 20, archRise, '内侧弓·后'),
+              blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
+              blk(0.145, 0.785, -1.00, 1.00, 20, 0, '跖骨头(最宽)'),
+              blk(0.785, 1.00, -0.76, 0.76, 12, 0, '趾'),
+            ];
+            // 体积 → 质量归一（总质量 = soleMass，与旧实现一致）
+            const volTot = blocks.reduce((a, b) => a + b._vol, 0);
+            for (const b of blocks) {
+              const m = soleMass * (b._vol / volTot);
+              b.mass = m;
+              b.inertiaZ = (m * (b.hx * b.hx + b.hy * b.hy)) / 3;
+              b.inertiaXY = (m * (b.hz * b.hz + b.hy * b.hy)) / 3;
+            }
+            return blocks;
           })(),
           leg: true,
         });
@@ -1306,75 +1315,8 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         //   · `plateHidden`：前足**不画贴图** —— 靴子那张图已由 `foot_*` 整张画，
         //     两边都画会出现「两只脚」（用户 2026-10-04：「有了踝关节现在纹理变成两个脚了」）
         //   · 关节：`midfoot_l` revolute **绕足长轴（局部 X）** = 距下关节旋前/旋后
-        // ── 柔性足 F1（2026-10-04）：前足刚体 ──
-        //   collider = 原「前脚掌」那两块（内/外侧柱），`offsetX` 改为相对**中足点**
-        const massFore = soleMass * 0.5;
-        const mColFore = massFore / 2;
-        const hxFore = two ? hxBall : hx;
-        const offForeX = offBall - midX;
-        const mkFore = (dz: number) => ({
-          shape: 'cuboid' as const, halfHeight: 0, radius: 0,
-          hx: hxFore, hy: soleHalfThick, hz: hzCol,
-          offsetX: +offForeX.toFixed(6), offsetY: local[1], offsetZ: +dz.toFixed(6),
-          mass: mColFore, comY: 0,
-          inertiaZ: (mColFore * (hxFore ** 2 + soleHalfThick ** 2)) / 3,
-          inertiaXY: (mColFore * (hzCol * hzCol + soleHalfThick ** 2)) / 3,
-        });
-        bodies.push({
-          key: side === 'l' ? 'forefoot_l' : 'forefoot_r',
-          bone: spec.bone,
-          label: side === 'l' ? '左前脚掌' : '右前脚掌',
-          part,                       // 借小腿那张（同 foot_*，但 plateHidden 不画）
-          // ★ 前足刚体原点与 `foot_*` **同一点**（都在踝），中足点靠 collider 偏移表达
-          cx: 0, cy: ankleY, cz: centerZ,
-          restTiltRad: fTilt,
-          restYawRad: fYaw,
-          plateOffset: [0, 0, 0],
-          // ★ 不画贴图：靴子那张图已由 `foot_*` 整张画，两边都画会「两只脚」
-          plateHidden: true,
-          length: hxFore * 2,
-          radius: 0,
-          halfHeight: hxFore,
-          mass: massFore,
-          colliders: [mkFore(offColIn), mkFore(offColOut)],
-          leg: true,
-        });
 
-        // ══════════════════════════════════════════════════════════════
-        // ★★★ 柔性足 F1：**中足关节** `midfoot_l/r`（在腿循环内创建，
-        //   因为要复用这里的 `midX` / `local[1]` / `hx`）
-        // ══════════════════════════════════════════════════════════════
-        //   revolute **绕足长轴（局部 X）** = 距下关节的旋前/旋后。
-        //
-        //   文献依据：
-        //     · 「第一接触点通常在踝关节中心**外侧**，在**距下关节产生旋前力矩，
-        //        允许柔性活动**」（Jeon & Cho 压力垫综述）
-        //     · 「**内侧弓把重量传递到足的外侧缘**」（同上 / Welte 2023）
-        //   ⇒ 侧向 CoP 迁移靠的就是这个自由度：前足旋前/旋后 ⇒ 前足内/外侧缘
-        //     一抬一压 ⇒ 载荷在前足的内侧柱/外侧柱之间转移。
-        //
-        //   ★ 为什么只切 collider 不够（我先做过、**实测无效**）：
-        //     同一刚体内切 4 块时，髋外展力矩 −120N→+120N 期间 CoP_z 只动 **0.9mm**
-        //     —— 内侧柱承 175N、外侧柱只承 12N（**14:1**），
-        //     载荷根本不在外侧柱上 ⇒ 接触求解器没有可迁移的压力。
-        //
-        //   锚点：两个刚体原点**相同**（都在踝）⇒ `parentLocal == childLocal`。
-        //   限位：绕 X 轴的旋前/旋后行程 ±`cfg.midfootPronDeg`（人体内翻 ~35°/外翻 ~14°）。
-        //   ★ **不注册进 `AXIS_OWNERSHIP`** —— 没有任何系统对它下指令（被动关节）。
-        midfootJoints.push({
-          name: `midfoot_${side}`,
-          index: 0,                       // 下面统一编号
-          parentKey: spec.key === 'shin_l' ? 'foot_l' : 'foot_r',
-          childKey: side === 'l' ? 'forefoot_l' : 'forefoot_r',
-          wx: 0, wy: local[1], wz: 0,
-          parentLocal: [midX, local[1], 0],
-          childLocal: [midX, local[1], 0],
-          restRad: [0, 0, 0],
-          minRad: [-cfg.midfootPronDeg * DEG, -1e-3, -1e-3],
-          maxRad: [cfg.midfootPronDeg * DEG, 1e-3, 1e-3],
-          revoluteAxis: [1, 0, 0] as const,
-          maxTorque: [cfg.ankleTorque * 0.5, 1, 1],
-        });
+
         // ★ 小腿胶囊**只到踝**（上面已把刚体中心/长度重算到"膝→踝"这一段），
         //   靴子那段归脚掌刚体 ⇒ 小腿胶囊不会戳到地面、也不与脚掌盒互穿。
         bodies.push({
@@ -1587,12 +1529,6 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
 
   const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
 
-  // ★ 柔性足 F1：中足关节**追加到末尾**（2026-10-04）。
-  //   ⚠⚠ 绝不能插在前面 —— `JointDef.index` 是 `JOINT_ORDER` 里的位置，
-  //     插在前面会把**所有原有关节的索引整体推后**，
-  //     而 `JOINT_ORDER` / `axisRole` / 轴归属门禁都按位置查
-  //     ⇒ 关节名与刚体错配、build 后立即崩溃（实测站立 0.0s crash）。
-  for (const j of midfootJoints) joints.push({ ...j, index: joints.length });
 
   return {
     cfg,
