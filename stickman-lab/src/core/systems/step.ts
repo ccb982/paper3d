@@ -52,6 +52,29 @@ export interface StepParams {
   hipExtendDeg: number;
   /** 末端伸展的起始相位（0~1），约 0.55~0.7（摆动后半程） */
   reachFrom: number;
+
+  // ── 重心主动侧移（**本系统拥有这个意图**，balance 只做保护伺服）──────────
+  /**
+   * ★★ 髋外展「推相位」增益（N·m 每米横向误差）。
+   *
+   * 为什么必须有它：平衡系统里那条 `τ = m·g·(com.z − hip.z)` 是**静态平衡值**，
+   * 恰好抵消重力倾力矩 ⇒ 净力矩 = 0 ⇒ 重心**只会维持、永远不会被驱动**。
+   * 实测（stand 逐帧）：`com.z` 被从 +3mm 推到 +17mm 的过程中，请求力矩从 −84
+   * 单调**衰减**到 −54 N·m（因为 `|com.z − hip.z|` 变小），载荷卡在 **65%**
+   * 上不去，够不到 `SINGLE` 门限 —— 这就是"重心永远转不过来"的真因。
+   *
+   * 文献启动侧向体重移动靠**外展肌先超调**：先给净向外力矩把重心推过支撑脚，
+   * 过脚之后回落到静态值（jjrmc 54:618; Neumann 2010 额状面骨盆平衡）。
+   * 这一项就是那个"净向外"的偏置。单位 N·m/m：50mm 误差 → 0.8×50 ≈ 40 N·m。
+   */
+  shiftPushGain: number;
+  /** 推相位附加力矩上限（N·m）。50mm→40，与髋外展 τmax=120 同量级 */
+  shiftPushMax: number;
+  /**
+   * 推相位进入/退出的平滑时长（s）。意图按 `smoothstep` 渐入渐出，
+   * 避免 SHIFT 相一进入就阶跃力矩（实测阶跃会把 CoP 直接推出支撑面）。
+   */
+  shiftPushRamp: number;
 }
 
 export const DEFAULT_STEP_PARAMS: StepParams = {
@@ -73,6 +96,9 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   //     末端伸展必须与摆动髋屈曲峰值一起限，不能单独加大。
   hipExtendDeg: 10,
   reachFrom: 0.6,
+  shiftPushGain: 0,
+  shiftPushMax: 45,
+  shiftPushRamp: 0.25,
 };
 
 /**
@@ -96,6 +122,44 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   /** 限到 ±m。⚠ m 必须为正 —— 传负值会让 `v > m` 恒真而恒返回 m（已踩过）。 */
   const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
   const D2R = Math.PI / 180;
+
+  // ══════════════════════════════════════════════════════════════
+  // ⓪ 重心**主动侧移** —— 本系统的核心意图，**先于抬腿**
+  // ══════════════════════════════════════════════════════════════
+  //   文献：侧向体重移动由支撑侧髋外展**先超调推动**把重心推过支撑脚，
+  //   过脚后回落到静态值（jjrmc 54:618; Neumann 2010）。平衡系统那条
+  //   `τ = m·g·(com.z − hip.z)` 只是**静态保持量**，净力矩为零 ⇒ 重心不动。
+  //
+  //   ★ 职责边界：这里**只申报意图**（写 `rs.shiftDemandTau`），不碰力矩限幅、
+  //     CoP 余量门限、τmax —— 那些护栏全部留在 balance（保护伺服）。
+  //     所以"要不要搬、搬多少"归迈步计划；"能不能搬得动"归平衡保护。
+  //
+  //   误差用**捕获点** `captureZ = com.z + com.vz/ω₀`（Houska）而不是裸 `com.z`：
+  //   有速度时提前动手，正是倒立摆不可救区域之前该做的事（van Mierlo 2022）。
+  const sup: Side = rs.supportLeg();
+  rs.shiftDemandTau = 0;                 // 默认：本系统不发意图 ⇒ 平衡系统纯保护
+  // ⚠⚠ 相位门必须含 **DOUBLE**，不能只写 SHIFT：
+  //   `GaitState.migrate` 里 `DOUBLE` 是**直接跳 `SINGLE`**（gaitState.ts:443-448），
+  //   `SHIFT` 只能从 `STEP` 触地进入 ⇒ **第一次交接根本没有 SHIFT 相**。
+  //   只判 `SHIFT` 的话这个推力永远不会触发（又一个"看着接线、实际没接上"）。
+  //   `handoverOk === false` 表示交接**还没成** = 本系统还有活要干；
+  //   交接一旦达成就自动撤推（`errZ>0` 也会自然归零）。
+  if ((rs.phase === 'SHIFT' || rs.phase === 'DOUBLE') && !rs.handoverOk
+      && p.shiftPushGain > 0) {
+    const soleZ = rs.soleZ[sup];
+    const w0 = rs.omega0Val || 1;
+    const errZ = soleZ - (rs.com.z + rs.com.vz / w0);
+    if (errZ > 0) {
+      // 意图渐入渐出：SHIFT 相刚开始不阶跃（阶跃会把 CoP 直接推出支撑面）
+      const ramp = p.shiftPushRamp > 0 ? Math.min(1, rs.phaseT / p.shiftPushRamp) : 1;
+      const smooth = ramp * ramp * (3 - 2 * ramp);
+      const raw = p.shiftPushGain * errZ;
+      const lim = raw > p.shiftPushMax ? p.shiftPushMax
+        : raw < -p.shiftPushMax ? -p.shiftPushMax : raw;
+      // 符号：左脚支撑要把重心推向 −Z（内收），右脚支撑推向 +Z
+      rs.shiftDemandTau = (sup === 'l' ? -lim : lim) * smooth;
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════
   // ① 抬腿许可 —— **双钥匙**：状态机许可 AND 摆动腿确实未锁定

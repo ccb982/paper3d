@@ -1206,7 +1206,12 @@ export class Ragdoll {
           for (let i = 0; i < n; i++) {
             const p = mf.solverContactPoint(i);
             if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
-            ft += Math.hypot(mf.contactTangentImpulseX(i), mf.contactTangentImpulseY(i));
+            // ⚠ `contactTangentImpulseX/Y` 在某些接触上返回 **NaN**
+            //   （实测：站立期恒 NaN ⇒ 摩擦占用指标一直是坏的，"占用 0%"是假象）
+            const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+            if (Number.isFinite(tx) || Number.isFinite(ty)) {
+              ft += Math.hypot(tx || 0, ty || 0);
+            }
             fn += Math.abs(mf.contactImpulse(i));
           }
         });

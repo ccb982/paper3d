@@ -606,143 +606,202 @@ log('   逐个消融，看 γoff（负 = 沿不稳定流形发散）能不能变
   log('   判读：γoff 一直为负 ⇒ VIP 从出发就在发散；哪一行变正 ⇒ 那个通道是元凶。');
 }
 
-log('══ L. ★★ 左脚（承重脚）为什么"打滑" ══');
-log('   先分清三件事：① 摩擦饱和的真实打滑  ② 绕棱 rocking  ③ 整体平移（人被带着走）');
-log('   ★ 只看**站立期**（0.3~1.5s），把倒下那段的整体位移剔掉');
+log('══ L. ★★ 承重脚到底有没有在滑（全程 + 切向冲量真实性检查）══');
+log('   判据：脚位移与 CoM 位移同步 ⇒ 被一起带着走（没锚住）；');
+log('         只有 CoM 在走、脚不动 ⇒ 正常绕踝的倒立摆（不是滑）');
+log('   ★ 先验证 Rapier 是否真的在算切向冲量（占用恒 0% 可疑）');
 {
   const s2 = buildSkeleton(DEFAULT_CONFIG);
-  const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 3 });
+  const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 4 });
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(s2, sim, {
-    ...DEFAULT_CONTROLLER,
-    gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+    ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
     balance: DEFAULT_CONTROLLER.balance,
   });
   const d = sim.doll;
-  const foot = new Float64Array(3), shin = new Float64Array(3), sole = new Float64Array(3);
-  const copL = new Float64Array(4), fr = new Float64Array(2);
+  const foot = new Float64Array(3), org = new Float64Array(3), fr = new Float64Array(2);
   const mu = d.soleFriction(0);
-  d.bodyOrigin('foot_l', foot); d.bodyOrigin('shin_l', shin);
-  const fx0 = foot[0]!, fz0 = foot[2]!, sx0 = shin[0]!, sz0 = shin[2]!;
-  let pFootX = fx0, pFootZ = fz0;
-  let footPath = 0, shinPath = 0, muPk = 0, nL = 0;
-  const lcx: number[] = [], lcz: number[] = [];
-  log(`   μ = ${mu.toFixed(2)}（body ${d.opt.bodyFriction} ⊕ ground ${d.opt.groundFriction}，Rapier 默认 Average）`);
-  log('     t     足x    足z   小腿x   小腿z   CoP.x(世界) CoP.z(世界)  摩擦占用   |τ踝|');
-  for (let i = 0; i < 360 && !sim.finished; i++) {
+  d.bodyOrigin('foot_l', foot);
+  const fx0 = foot[0]!, fz0 = foot[2]!;
+  let pf = { x: fx0, z: fz0 }, pc = { x: 0, z: 0 }, t0 = 0;
+  let ftSum = 0, fnSum = 0, ftPk = 0, nL = 0, vPk = 0;
+  const dt = 1 / 120;
+  log(`   μ=${mu.toFixed(2)}   （切向/法向冲量比 = 摩擦占用；1.0 = 饱和）`);
+  log('     t     足x位移  足z位移  CoMx位移 CoMz位移  足速mm/s  摩擦占用  Σ|ft|   Σ|fn|  相位');
+  for (let i = 0; i < 480 && !sim.finished; i++) {
     if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
     sim.advance(1);
-    if (i < 36) continue;
-    const stand = i < 180;                    // ★ 站立期
-    d.bodyOrigin('foot_l', foot); d.bodyOrigin('shin_l', shin);
-    if (stand) {
-      footPath += Math.hypot(foot[0]! - pFootX, foot[2]! - pFootZ);
-      shinPath += Math.hypot(shin[0]! - sx0, shin[2]! - sz0) * 0;   // 见下：累计
-    }
-    shinPath = Math.hypot(shin[0]! - sx0, shin[2]! - sz0);
-    pFootX = foot[0]!; pFootZ = foot[2]!;
-    if (!stand) continue;
-    d.soleFrictionUse(0, fr);
-    d.soleCoPLocal(0, copL);
-    if (fr[1]! > 1e-6 && isFinite(fr[0]!)) { nL++; muPk = Math.max(muPk, fr[0]! / (mu * fr[1]!)); }
-    if (copL[3]! > 0) { lcx.push(copL[0]!); lcz.push(copL[2]!); }
-    if (i % 12 === 0) {
-      log(`   ${(i / 120).toFixed(2).padStart(5)}s ${((foot[0]! - fx0) * 1000).toFixed(0).padStart(6)}`
-        + ` ${((foot[2]! - fz0) * 1000).toFixed(0).padStart(6)}`
-        + ` ${((shin[0]! - sx0) * 1000).toFixed(0).padStart(7)}`
-        + ` ${((shin[2]! - sz0) * 1000).toFixed(0).padStart(7)}`
-        + ` ${(copL[0]! * 1000).toFixed(0).padStart(9)}mm ${(copL[2]! * 1000).toFixed(0).padStart(9)}mm`
-        + `   ${(muPk * 100).toFixed(0).padStart(5)}%  ${(ctrl.snapshot.ankleTauVip ?? 0).toFixed(0).padStart(6)}`);
-    }
-  }
-  log('');
-  log(`   站立期（0.3~1.5s）位移：左脚 ${(footPath * 1000).toFixed(0)}mm   小腿 ${(shinPath * 1000).toFixed(0)}mm`);
-  log(`   摩擦占用峰值 ${(muPk * 100).toFixed(0)}%（100% = 饱和）`);
-  if (lcx.length) {
-    log(`   CoP 世界 x（前后）：${(Math.min(...lcx) * 1000).toFixed(0)} ~ ${(Math.max(...lcx) * 1000).toFixed(0)}mm（鞋底 x 跨度见 footSoleBounds）`);
-    log(`   CoP 世界 z（内外）：${(Math.min(...lcz) * 1000).toFixed(0)} ~ ${(Math.max(...lcz) * 1000).toFixed(0)}mm（左脚在 z≈+164mm）`);
-  }
-  // ★★★ 到底是谁在撑住身体？逐刚体看最低点与接地情况
-  {
-    const s4 = buildSkeleton(DEFAULT_CONFIG);
-    const sim4 = new Sim(s4, shapeForJoints(s4.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 1.5 });
-    sim4.begin(new Float32Array(sim4.paramCount));
-    const c4 = new Controller(s4, sim4, {
-      ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
-      balance: DEFAULT_CONTROLLER.balance,
-    });
-    let n4 = 0;
-    const touchCount: Record<string, number> = {};
-    for (let i = 0; i < 180 && !sim4.finished; i++) {
-      if (i % 2 === 0) sim4.doll.setMotorTargets(c4.step(1 / 60));
-      sim4.advance(1);
-      if (i < 36) continue;
-      n4++;
-      for (const k of sim4.doll.groundTouching()) touchCount[k] = (touchCount[k] ?? 0) + 1;
-    }
-    // ★ 接触点审计：过滤前 vs 过滤后 + 逐点 dump
-    {
-      const au = new Float64Array(3);
-      for (const [sd, nm] of [[0, '左脚'], [1, '右脚']] as [number, string][]) {
-        sim4.doll.soleContactAudit(sd as 0 | 1, au);
-        log(`   ${nm}：manifold 接触点 ${au[0]} → 通过底面过滤 ${au[1]}  Σf_n=${au[2]!.toFixed(4)} N·s`
-          + `（静止应 ${(70 * 9.81 / 120).toFixed(3)}）`);
+    d.bodyOrigin('foot_l', foot);
+    const fx = foot[0]! - fx0, fz = foot[2]! - fz0;
+    const cx = ctrl.snapshot.com.x, cz = ctrl.snapshot.com.z;
+    const v = Math.hypot(foot[0]! - pf.x, foot[2]! - pf.z) / dt;
+    vPk = Math.max(vPk, v);
+    if (i % 15 === 0) {
+      d.soleFrictionUse(0, fr);
+      if (fr[1]! > 1e-6) {
+        nL++; ftSum += fr[0]!; fnSum += fr[1]!;
+        ftPk = Math.max(ftPk, fr[0]! / (mu * fr[1]!));
       }
-      log(`   ── 左脚接触点逐点明细（Δx/hx、Δz/hz 超过就是被过滤掉的）：`);
-      sim4.doll.soleContactDump(0, (l) => log(l));
+      log(`   ${(i / 120).toFixed(2).padStart(5)}s ${(fx * 1000).toFixed(0).padStart(8)}`
+        + ` ${(fz * 1000).toFixed(0).padStart(8)} ${(cx * 1000).toFixed(0).padStart(9)}`
+        + ` ${(cz * 1000).toFixed(0).padStart(9)} ${(v * 1000).toFixed(0).padStart(9)}`
+        + ` ${(fr[1]! > 1e-6 ? (fr[0]! / (mu * fr[1]!) * 100).toFixed(0) + '%' : '—').padStart(8)}`
+        + ` ${fr[0]!.toFixed(4).padStart(7)} ${fr[1]!.toFixed(3).padStart(7)}  ${ctrl.snapshot.phase}`);
     }
-    const ord = Object.entries(touchCount).sort((a2, b2) => b2[1] - a2[1]);
-    log(`   站立期(${n4} 拍) 各刚体与地面竖直接触的拍数：`);
-    for (const [k, v] of ord) log(`     ${k.padEnd(12)} ${String(v).padStart(4)} 拍  ${(v / n4 * 100).toFixed(0)}%`);
-    const touching = ord.map(([k]) => k);
-    const NOT_SOLE = touching.filter((k) => !/^foot_/.test(k));
-    log(`   ⇒ 触地刚体：${touching.join(', ') || '（无）'}`);
-    check('★ 只有脚掌触地（小腿/大腿/手不应碰地）', NOT_SOLE.length === 0,
-      NOT_SOLE.length ? `非脚掌触地：${NOT_SOLE.join(', ')}` : touching.join(', '));
+    pf.x = foot[0]!; pf.z = foot[2]!; pc.x = cx; pc.z = cz; t0 = i;
   }
-
-  // ★ 两条腿各承多少（决定"左脚到底有没有在承重"）
+  void pc; void t0;
+  // ★★ CoP 有没有从鞋底后缘走出去（踝策略的经典失效模式）
   {
-    const s3 = buildSkeleton(DEFAULT_CONFIG);
-    const sim3 = new Sim(s3, shapeForJoints(s3.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 1.5 });
-    sim3.begin(new Float32Array(sim3.paramCount));
-    const c3 = new Controller(s3, sim3, {
+    const s5 = buildSkeleton(DEFAULT_CONFIG);
+    const sim5 = new Sim(s5, shapeForJoints(s5.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 4 });
+    sim5.begin(new Float32Array(sim5.paramCount));
+    const c5 = new Controller(s5, sim5, {
       ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
       balance: DEFAULT_CONTROLLER.balance,
     });
-    const L = new Float64Array(6), R = new Float64Array(6);
-    let sl = 0, sr = 0, n3 = 0, yPrev = 0, yNow = 0, vPrev = 0, vNow = 0;
-    const W = 70 * 9.81, HZ = 120;
-    for (let i = 0; i < 180 && !sim3.finished; i++) {
-      if (i % 2 === 0) sim3.doll.setMotorTargets(c3.step(1 / 60));
-      sim3.advance(1);
-      const ty = sim3.doll.torso().translation().y;
-      if (i === 36) { yPrev = ty; vPrev = 0; }
-      if (i < 36) continue;
-      vNow = (ty - yPrev) * HZ; yPrev = ty;
-      sim3.doll.soleBlockLoad(0, L); sim3.doll.soleBlockLoad(1, R);
-      sl += Array.from(L).reduce((a, b) => a + b, 0);
-      sr += Array.from(R).reduce((a, b) => a + b, 0);
-      n3++;
+    const d5 = sim5.doll;
+    const bb = new Float64Array(4); const cp = new Float64Array(4);
+    log('');
+    log('   ★ CoP 相对**鞋底足迹**的位置（CoP 走出后缘 = 踝策略失效、必然倒）：');
+    log('      t     鞋底x跨度        CoP.x     后缘余量   CoM.x   踝角    状态');
+    for (let i = 0; i < 400 && !sim5.finished; i++) {
+      if (i % 2 === 0) d5.setMotorTargets(c5.step(1 / 60));
+      sim5.advance(1);
+      if (i % 20) continue;
+      d5.footSoleBounds(0, bb);
+      d5.readCoP(0, cp);
+      const rv5 = new Float64Array(3);
+      d5.jointRot(jointIndexByName(s5, 'foot_l'), rv5);
+      const margin = cp[3]! > 0 ? (cp[0]! - bb[0]!) * 1000 : NaN;
+      log(`      ${(i / 120).toFixed(2).padStart(5)}s [${(bb[0]! * 1000).toFixed(0)},${(bb[1]! * 1000).toFixed(0)}]mm`
+        + ` ${cp[3]! > 0 ? (cp[0]! * 1000).toFixed(0).padStart(6) + 'mm' : '     —'}`
+        + ` ${isFinite(margin) ? margin.toFixed(0).padStart(8) + 'mm' : '       —'}`
+        + ` ${(c5.snapshot.com.x * 1000).toFixed(0).padStart(7)}mm ${(rv5[2]! * DEG).toFixed(1).padStart(6)}°`
+        + `  ${sim5.finished ? '✗ ' + sim5.fallReason : ''}`);
     }
-    const rawL = sl / n3, rawR = sr / n3;
-    const exp = W / HZ;          // 静止时全脚 Σ|λ| 应为 W·dt = W/120
-    log(`   ── 标定：静止时 Σ|λ|(全脚) 应 = m·g/120 = ${exp.toFixed(3)} N·s`);
-    log(`      实测原始 Σ|λ|：左 ${rawL.toFixed(4)}  右 ${rawR.toFixed(4)}  合计 ${(rawL + rawR).toFixed(4)} N·s`
-      + `  ⇒ 相当于 ${((rawL + rawR) * HZ).toFixed(0)} N，是体重的 ${((rawL + rawR) * HZ / W * 100).toFixed(0)}%`);
-    log(`      躯干竖直速度 ${vNow.toFixed(3)} m/s（自由落体 1.2s 后应为 −11.8 ⇒ 若≈0 说明被托住）`);
-    const share = rawL / Math.max(1e-9, rawL + rawR);
-    log(`   ⇒ **载荷份额**（这个比值与单位无关，可用）：左 ${(share * 100).toFixed(0)}%  右 ${((1 - share) * 100).toFixed(0)}%`);
-    var leftShare = share;
   }
-  const heelOnly = false; void heelOnly;
-  check('★ 站立期摩擦**未**饱和（<85%）⇒ 不是摩擦打滑', muPk < 0.85, `峰值 ${(muPk * 100).toFixed(0)}%`);
-  check('★ 压力点在鞋底**前后中段**（不在跟端/趾端边缘）',
-    lcx.length > 20 && Math.max(...lcx) < 60 && Math.min(...lcx) > -60,
-    `CoP.x ∈ ${lcx.length ? ((Math.min(...lcx) * 1000).toFixed(0) + '~' + (Math.max(...lcx) * 1000).toFixed(0)) : '—'}mm`);
-  check('★ 站立期左脚几乎不平移（<20mm）', footPath * 1000 < 20, `${(footPath * 1000).toFixed(1)}mm`);
-  check('★ 左脚确实在承重（>30% 体重），否则"承重脚打滑"这个描述不成立',
-    (leftShare ?? 0) > 0.30, `左脚承担 ${((leftShare ?? 0) * 100).toFixed(0)}%`);
+  const lastFx = (foot[0]! - fx0) * 1000, lastFz = (foot[2]! - fz0) * 1000;
+  log('');
+  log(`   切向冲量：Σ|ft| = ${ftSum.toFixed(4)}   Σ|fn| = ${fnSum.toFixed(4)}   比值 = ${(ftSum / Math.max(1e-9, fnSum)).toFixed(3)}（μ=${mu.toFixed(2)}）`);
+  log(`   摩擦占用峰值 ${(ftPk * 100).toFixed(0)}%   足速峰值 ${(vPk * 1000).toFixed(0)} mm/s   承重采样 ${nL}`);
+  log(`   终态：足位移 (${lastFx.toFixed(0)}, ${lastFz.toFixed(0)}) mm   CoM 位移 (${(ctrl.snapshot.com.x * 1000).toFixed(0)}, ${(ctrl.snapshot.com.z * 1000).toFixed(0)}) mm`);
+  const dFx = Math.abs(lastFx) + Math.abs(lastFz);
+  const dCx = Math.abs(ctrl.snapshot.com.x * 1000) + Math.abs(ctrl.snapshot.com.z * 1000);
+  log(`   ⇒ 足/CoM 位移比 = ${(dFx / Math.max(1, dCx)).toFixed(2)}（≈1 = 脚被带着一起走，没有锚）`);
+  check('★ Rapier 确实在算切向冲量（Σ|ft| > 0）', ftSum > 1e-4, `Σ|ft| = ${ftSum.toFixed(5)}`);
+  check('★ 承重脚位移 < 30mm（锚住了）', dFx < 30, `${dFx.toFixed(0)}mm`);
+}
+
+log('══ M. ★ 把踝从"欠临界"改成"过临界"（用户选项 1）══');
+log('   K_crit = mgh = 687 × 0.913 = 627 N·m/rad；现在 K_a=552 = 0.88·K_crit（欠临界）');
+log('   ★ 数据给出的甜点预测：CoP 后缘耗尽时 q_vip ≈ −0.157 rad，');
+log('     踝 τmax=120 ⇒ 要在那一刻还有力矩余量需 K_a ≥ 120/0.157 ≈ **765**');
+log('     同时要过临界 627 ⇒ 甜点 800~1000。');
+{
+  const run = (kA: number, vipP: number, dur = 6) => {
+    const s2 = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const c2 = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: { ...DEFAULT_CONTROLLER.balance, kVipAnkle: kA, vipP },
+    });
+    const d = sim.doll;
+    const bb = new Float64Array(4), cp = new Float64Array(4);
+    const rv = new Float64Array(3);
+    let minMargin = 1e9, at = 0, maxQ = 0, maxTau = 0, satFrac = 0, n = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) d.setMotorTargets(c2.step(1 / 60));
+      sim.advance(1);
+      const sn = c2.snapshot;
+      maxQ = Math.max(maxQ, Math.abs(sn.qVip ?? 0));
+      maxTau = Math.max(maxTau, Math.abs(sn.ankleTauVip ?? 0));
+      if (Math.abs(sn.ankleTauVip ?? 0) > 118) satFrac++;
+      d.footSoleBounds(0, bb); d.readCoP(0, cp);
+      if (cp[3]! > 0) {
+        n++;
+        const m = (cp[0]! - bb[0]!) * 1000;
+        if (m < minMargin) { minMargin = m; at = i / 120; }
+      }
+    }
+    return {
+      margin: minMargin, at, maxQ, maxTau, satFrac: satFrac / Math.max(1, dur * 120),
+      secs: sim.ticksDone / 60, fell: String(sim.fallReason), g: c2.snapshot.vipGamma,
+      on: c2.snapshot.vipSwitches,
+    };
+  };
+  const KCRIT = 627;
+  log('     K_a     /K_crit   vipP   最小后缘余量(发生时刻)  |q_vip|max  τ踝峰值  饱和占比  存活');
+  let best = '', bestM = -1e9;
+  for (const [kA, vP] of [[552, 60], [627, 60], [800, 60], [1000, 60], [1200, 60], [800, 0], [1000, 0], [1000, 200]] as [number, number][]) {
+    const r = run(kA, vP);
+    const alive = r.fell === 'null' || r.fell === 'undefined';
+    if (r.margin > bestM) { bestM = r.margin; best = `K_a=${kA} vipP=${vP}`; }
+    log(`     ${String(kA).padStart(5)}  ${(kA / KCRIT).toFixed(2).padStart(6)}× ${String(vP).padStart(5)}`
+      + `   ${r.margin.toFixed(0).padStart(8)}mm @${r.at.toFixed(2)}s`.padEnd(1)
+      + `   ${r.margin.toFixed(0).padStart(8)}mm @${r.at.toFixed(2)}s`
+      + `   ${(r.maxQ * 1000).toFixed(0).padStart(7)}mrad ${r.maxTau.toFixed(0).padStart(7)}`
+      + ` ${(r.satFrac * 100).toFixed(0).padStart(6)}%  ${r.secs.toFixed(2)}s ${alive ? '✓ 站住' : '✗ ' + r.fell}`);
+  }
+  log(`   ⇒ 后缘余量最大：${best}（${bestM.toFixed(0)}mm）`);
+  check('★ 有配置能把 CoP 后缘余量撑到 > 60mm（ CoP 不再走出鞋底）', bestM > 60, `${bestM.toFixed(0)}mm`);
+}
+
+log('══ N. ★★★ 逐帧追踪：重心转移 + 每个关节的工作 + 脚侧滑怎么发生 ═══');
+{
+  const FRAME = (mode: 'stand' | 'walk', dur = 2.5) => {
+    const s2 = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode, duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const c2 = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: DEFAULT_CONTROLLER.balance,
+    });
+    const d = sim.doll;
+    const J = (n: string) => jointIndexByName(s2, n);
+    const iAnk = J('foot_l'), iHip = J('hip_l'), iKnee = J('knee_l'), iSp = J('spine1');
+    const rv = new Float64Array(3), foot = new Float64Array(3);
+    const cp = new Float64Array(4), bb = new Float64Array(4), fr = new Float64Array(2);
+    const mu = d.soleFriction(0);
+    d.bodyOrigin('foot_l', foot);
+    const fx0 = foot[0]!, fz0 = foot[2]!;
+    log(`   ── mode=${mode}   （足位置为**绝对**世界坐标的偏移，mm）`);
+    log('      t   相位   L载荷  CoM.z  足z  CoP内侧 腰角  腰角/0  腰τ/0 | 髋角/0 髋τ/0 髋LatTau  死区门限 | τmax  踝角  踝τ');
+    let tick = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) {
+        d.setMotorTargets(c2.step(1 / 60));
+        tick++;
+        if (tick % 2) continue;                 // 30 Hz 打印
+        const sn = c2.snapshot;
+        d.bodyOrigin('foot_l', foot);
+        d.footSoleBounds(0, bb); d.readCoP(0, cp);
+        d.soleFrictionUse(0, fr);
+        const a = (n: number, ax = 2) => { d.jointRot(n, rv); return rv[ax]! * DEG; };
+        const tau = (n: number, ax = 2) => Math.abs(d.tauApplied[n * 3 + ax] ?? 0);
+        const med = cp[3]! > 0 ? ((cp[2]! - bb[2]!) * 1000).toFixed(0) : '—';
+        const tmax0 = s2.joints[iHip]!.maxTorque[0]!;
+        const dl = DEFAULT_CONTROLLER.balance.latHipDead ?? 0;
+        log(`   ${(tick / 60).toFixed(2).padStart(5)} ${sn.phase.padEnd(6)}`
+          + ` ${(sn.legs.l.loadFrac * 100).toFixed(0).padStart(4)}%`
+          + ` ${(sn.com.z * 1000).toFixed(0).padStart(6)}`
+          + ` ${((foot[2]! - fz0) * 1000).toFixed(0).padStart(4)}`
+          + ` ${String(med).padStart(7)}`
+          + ` ${a(iSp, 0).toFixed(1).padStart(5)}° ${a(iSp, 0).toFixed(1).padStart(6)}`
+          + ` ${tau(iSp, 0).toFixed(0).padStart(5)} |`
+          + ` ${a(iHip, 0).toFixed(1).padStart(6)}° ${tau(iHip, 0).toFixed(0).padStart(5)}`
+          + ` ${(sn.hipLatTau ?? 0).toFixed(0).padStart(8)}  ${dl.toFixed(1).padStart(7)}`
+          + ` ${tmax0.toFixed(0).padStart(5)}`
+          + ` ${a(iAnk).toFixed(1).padStart(5)}° ${tau(iAnk).toFixed(0).padStart(4)}`);
+      }
+      sim.advance(1);
+    }
+    log(`   ⇒ 存活 ${(sim.ticksDone / 60).toFixed(2)}s  死因=${sim.fallReason || '未倒'}  相位计数=${JSON.stringify(c2.snapshot.phase)}`);
+  };
+  FRAME('stand');
+  log('');
+  FRAME('walk');
 }
 
 log('══ G. DIP/VIP 接线（Morasso 2019/2022）══');

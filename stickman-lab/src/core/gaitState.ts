@@ -320,6 +320,10 @@ export class GaitState {
 
     /** 交接**完成**（位置 + 稳定；不含间隔 —— 间隔是节奏，不是资格） */
     const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
+    // ★ 存到 rigState：**迈步系统据此决定要不要主动侧移重心**。
+    //   交接**尚未**完成 = 迈步系统还有活要干（把重心搬过去），
+    //   平衡系统只做保护。判据 = 交接验证全过且后腿已解锁/可解锁。
+    rs.handoverOk = handoverOk;
     /** 可动后腿 = 交接完成 **且** 间隔满足 **且** 后腿未锁（用户的合取条件） */
     const rearLocked = rs.locked[rear];
     const canSwingRear = handoverOk && X6 && !rearLocked;

@@ -162,9 +162,13 @@ export class Controller {
     // ── 3. 状态机 ──────────────────────────────────────────
     this.gait.update(dt);
 
-    // ── 4/5. 两系统**并发**提需求 ──────────────────────────
-    balanceSystem(rs, this.cfg.balance, this.sim.doll);
+    // ── 4/5. 两系统提需求。**顺序不可交换**（用户 2026-10-05 定职责）──────
+    //   step 先跑：它申报"要把重心搬过去"的**意图**（`rs.shiftDemandTau`）。
+    //   balance 后跑：把它当偏置读进去，再叠 τmax / CoP 余量两道**护栏**。
+    //   反过来 ⇒ balance 读到的是上一拍的意图，控制律整整滞后一帧（16.7ms），
+    //   而且 SHIFT 相刚进入时推力阶跃会晚一拍才生效。
     stepSystem(rs, this.cfg.step);
+    balanceSystem(rs, this.cfg.balance, this.sim.doll);
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
     const out = rs.arbitrate(dt);

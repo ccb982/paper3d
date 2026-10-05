@@ -400,6 +400,11 @@ export interface BalanceParams {
    *  ⚠ 原注释写的是「死区（m）」，但它被当力矩用 ⇒ 单位与语义不符。
    *  「不能太过」= 进死区就不推：交接只需 MoS ≥ 0，不需要把重心精确推到脚心。 */
   latHipDead: number;
+  /**
+   * 推相位允许消耗的 CoP 侧缘余量（米，从 CoP 到鞋底内侧边缘）。
+   * 压力中心被推出支撑面就不可救 ⇒ 推之前必须留够。
+   */
+  latShiftCopMargin: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
@@ -563,6 +568,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //       `latTransfer`（mode='tau'），腰的 `latwaist` 是**派生精调**通道。
   lateralEnabled: true,
   latHipDead: 8,
+  // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
+  latShiftCopMargin: 0.04,
   /**
    * 额状水平力限幅（N）。**唯一需要的量级旋钮**。
    *   500N（曾用）= 文献静态需求的 10 倍 ⇒ 把身体掀翻（lat 关 8.47s / 开 1.10s）。
@@ -595,6 +602,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
 const TMP_TAU = new Float32Array(256);
 /** `jointWorld` 的接收缓冲（髋外展策略要读髋的世界 z/y 才知道力臂） */
 const TMP_JOINT = new Float64Array(3);
+const TMP_COP = new Float64Array(4);
+const TMP_BB = new Float64Array(4);
 
 export function balanceSystem(
   rs: RigState, p: BalanceParams = DEFAULT_BALANCE_PARAMS, doll?: Ragdoll,
@@ -1006,7 +1015,26 @@ export function balanceSystem(
       // ⚠ 之前写成 `dead / max(0.05,|dy|)`（把位移门限换算成力矩），
       //   结果 dead=0.05 → 门限 0.43 N·m，而 τ 动辄 100 N·m ⇒ **恒不生效**，
       //   扫 0/0.02/0.05 三档结果逐位相同 —— 又一个"死参数"。
-      const tauRaw = tauStatic + tauDyn;
+      let tauRaw = tauStatic + tauDyn;
+      // ── ★ 保护伺服：只加「迈步系统申报的转移意图」，**自己不发起转移** ──
+      //   `rs.shiftDemandTau` 由 **stepSystem** 在 SHIFT 相写（见 step.ts ⓪）。
+      //   本系统对它的职责只有两条护栏，**不做任何主动判断**：
+      //     ① CoP 侧缘余量不足 ⇒ 一律不加（压力中心跑出支撑面无法挽救，
+      //        van Mierlo 2022/2024 CMP 论）；
+      //     ② 总量仍被该轴 τmax 唯一夹住（下一行 `clamp(tauAdj, tmax)`）。
+      //   `shiftDemandTau = 0` 时本系统退化为纯静态保持 + 阻尼 = **保护伺服**。
+      rs.shiftErrZ = (rs.soleZ[sup] ?? 0) - rs.com.z;
+      rs.shiftPushTau = 0;
+      if (rs.shiftDemandTau !== 0 && doll) {
+        const supIdx = sup === 'l' ? 0 : 1;
+        doll.readCoP(supIdx as 0 | 1, TMP_COP);
+        doll.footSoleBounds(supIdx as 0 | 1, TMP_BB);
+        const medOk = (TMP_COP[2]! - TMP_BB[2]!) >= p.latShiftCopMargin;
+        if (medOk) {
+          rs.shiftPushTau = rs.shiftDemandTau;
+          tauRaw += rs.shiftDemandTau;
+        }
+      }
       const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
       const tmax = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS]!;
       rs.hipLatTau = clamp(tauAdj, tmax);

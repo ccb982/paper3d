@@ -244,6 +244,24 @@ export interface RigSnapshot {
   waistGapM: number;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau: number;
+  /**
+   * ★★ 迈步系统申报的**重心侧移意图**（N·m，加在支撑髋外展轴上）。
+   *
+   * 职责划分（用户 2026-10-05 拍板）：
+   *   · **迈步系统（step）拥有"故意把重心搬过去"这个意图** —— 它在 SHIFT 相
+   *     写这个字段，因为"何时搬、搬多少"是迈步计划的一部分（APA 先于抬腿，
+   *     Kuindersma R1：感知+计划接触都成立才能离地）。
+   *   · **平衡系统（balance）只做保护伺服** —— 它读这个字段当偏置，但
+   *     τmax 限幅、CoP 侧缘余量门限全部由它把关；`shiftDemandTau=0` 时
+   *     平衡系统只输出静态保持量，绝不主动发起转移。
+   *
+   * 单位 N·m。符号：正 = 把重心推向 +Z（与 `hipLatTau` 同口径）。
+   */
+  shiftDemandTau: number;
+  /** 髋外展「推相位」**实际施加**力矩（N·m）—— 由 balance 写，含护栏后的结果 */
+  shiftPushTau: number;
+  /** 推相位残余误差 `stanceZ − com.z`（米，正 = 重心还没到支撑脚上方） */
+  shiftErrZ: number;
   torsoY: number;
   tiltDeg: number;
   /**
@@ -300,6 +318,10 @@ export interface ComTransfer {
   /** 横向误差滚动历史（m），最新在末尾 */
   hist: number[];
   cmdHipLatTau: number;
+  /** 迈步系统申报的重心侧移意图 / 平衡系统实际施加（含护栏后）/ 残余误差（米） */
+  shiftDemandTau: number;
+  cmdShiftPushTau: number;
+  shiftErrZ: number;
   cmdWaistTrim: number;
   /** 腰到支撑脚的诊断量（米）`com.z − soleZ[support]`，UI 用 */
   waistGapM: number;
@@ -474,6 +496,11 @@ export class RigState {
   }
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
+  shiftPushTau = 0;
+  shiftErrZ = 0;
+  shiftDemandTau = 0;
+  /** 交接验证是否全过（`GaitState` 每拍写）。false = 迈步系统还有活：主动侧移 */
+  handoverOk = false;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
   captureX = 0;
   captureZ = 0;
@@ -998,6 +1025,8 @@ export class RigState {
       errLat: this.comErrLat, errSag: this.comErrSag, rateLat: this.comRateLat,
       hist: this.comTransferHist.slice(-240),
       cmdHipLatTau: this.hipLatTau, cmdWaistTrim: this.waistTrim, waistGapM: this.waistGapM,
+      cmdShiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
+      shiftDemandTau: this.shiftDemandTau,
       cmdGrfLat: this.cmdGrfLat, cmdPelvicLift: this.pelvicLift,
       loadFront: this.loadFrac[this.frontLegSide],
       loadRear: this.loadFrac[this.rearLegSide],
@@ -1065,6 +1094,7 @@ export class RigState {
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
       swingClearance: this.swingClearance,
       waistTrim: this.waistTrim, waistGapM: this.waistGapM, hipLatTau: this.hipLatTau,
+      shiftDemandTau: this.shiftDemandTau, shiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,
