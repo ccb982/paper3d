@@ -28,6 +28,12 @@ log('   量                左        右      差/合计');
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand' });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
+const { jointIndexByName: jin } = await import('../src/core/skeleton');
+for (const nm of ['hip_l', 'knee_l', 'foot_l', 'spine1']) {
+  const j = jin(sk, nm); const d = sk.joints[j];
+  log(`   ${nm.padEnd(8)} τmax = [${d!.maxTorque.map((v) => v.toFixed(0)).join(', ')}] N·m`
+    + `   限位 ${d!.minRad.map((v) => (v * 180 / Math.PI).toFixed(0)).join('/')}°`);
+}
 const jw = new Float64Array(3);
 for (let i = 0; i < 36; i++) {
   if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
