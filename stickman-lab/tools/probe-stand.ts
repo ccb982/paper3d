@@ -36,6 +36,9 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { randomGenome, makeRng, makeGaussian } = await import('../src/core/genome');
 const { newCom, readCom, readSupport, omegaAt, dcm } = await import('../src/core/posture');
+const { assessStanding, formatStandVerdict, printStandCurve, STAND_THRESH } = await import('../src/core/standing');
+const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
+const { DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
 
 // ★ 消融对照：灵性足开 / 关。用环境变量选择，不改探针源码。
 // ⚠ 不能用 process.env：打包后不透传（已实测，CTL/ARCH 都是占位的）。
@@ -49,58 +52,31 @@ const DUR = Number(((globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? 
 const DT = 1 / 120;
 const log = console.log;
 
-function run(label: string, seed: number | null): void {
+/**
+ * 站立的**唯一**入口。
+ *
+ * ★ 参数是 `ablate`（消融通道名），**不是基因组种子** ——
+ *   `begin(params)` 的 `params` 在「删除 driver 开关与 ES/brain 路径」之后
+ *   **已无消费者**，传随机基因组进去两组输出逐位相同（实测），
+ *   拿它当"对照组"是假的。消融（关掉某个平衡通道）才是真对照。
+ */
+function run(label: string, ablate: string): void {
+  log(`
+── ${label}──`);
   const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, duration: DUR, mode: 'stand' });
-  sim.begin(seed === null ? new Float32Array(sim.paramCount) : randomGenome(SHAPE, makeGaussian(makeRng(seed))));
-  const com = newCom();
-  const sup = sim.sup;
-  log(`\n── ${label} ──`);
-  log('  t/s    胸y    骨盆y   comY   comX    ξx     ξz    倾角°  接地  τ应用 τ需求 占比');
-  const steps = Math.round(DUR / DT);
-  const n = sim.doll.motorImpulse.length;
-  let nextReport = 2;
-  for (let i = 0; i < steps && !sim.finished; i++) {
-    sim.advance(1);
-    const t = i * DT;
-    if (t >= nextReport - 1e-9) {
-      nextReport += 2;
-      const d = sim.doll;
-      readCom(d, com);
-      readSupport(d, sup);
-      const torsoBody = d.torso();
-      const torso = torsoBody.translation();
-      const root = d.root().translation();
-      const w = omegaAt(com.y);
-      const xi = dcm(com.x, com.vx, w), zi = dcm(com.z, com.vz, w);
-      let ta = 0, td = 0;
-      for (let k = 0; k < n; k++) { ta += Math.abs(d.motorImpulse[k]); td += Math.abs(d.motorDemand[k]); }
-      ta /= DT; td /= DT;
-      const ng = (d.footGrounded(0) ? 1 : 0) + (d.footGrounded(1) ? 1 : 0);
-      log(
-        `  ${t.toFixed(1).padStart(4)}  ${torso.y.toFixed(3)}  ${root.y.toFixed(3)}  ` +
-        `${com.y.toFixed(3)}  ${com.x.toFixed(3)}  ${xi.toFixed(3)}  ${zi.toFixed(3)}  ` +
-        `${(d.tiltOf(torsoBody) * 57.2958).toFixed(1).padStart(5)}   ${ng}    ` +
-        `${ta.toFixed(0).padStart(5)}  ${td.toFixed(0).padStart(5)}  ${((ta / Math.max(1, td)) * 100).toFixed(0).padStart(3)}%`,
-      );
-    }
-  }
-  const alive = sim.ticksDone / sim.cfg.controlHz;
-  log(alive >= DUR - 0.05
-    ? `  ✓ 站满 ${DUR}s`
-    : `  ✗ 倒于 t = ${alive.toFixed(2)}s · 死因[${sim.fallReason}] · 终倾角 ${(sim.endTilt * 57.2958).toFixed(1)}°`);
-  // ★ 死因三判据的比值 + 触地刚体名 + 双脚接地情况。
-  //   「误判摔倒」几乎总是其中一条：arch/forefoot 合法着地被判 crash、
-  //   或 60Hz 弹跳让倾角/头高瞬时超线。
-  if (sim.fallReason) {
-    const d = sim.fallDiag ?? {};
-    const g = sim.doll.groundTouching();
-    log(`     ├ 判据比值 rH=${d.rH} rT=${d.rT} rD=${d.rD}  （>1 即触发）`);
-    log(`     ├ 触发瞬间 触地非脚刚体 = ${d.hit || '（无 ⇒ 不是 crash 触发）'}`);
-    log(`     ├ 当前触地刚体 = ${g.join(',') || '（无）'}`);
-    log(`     └ 双脚接地 = ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0)} / 2`
-      + `   ${(sim.doll.footGrounded(0) ? 1 : 0) + (sim.doll.footGrounded(1) ? 1 : 0) === 0 ? '  ★ 两脚腾空' : ''}`);
-  }
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller(sk, sim, {
+    ...DEFAULT_CONTROLLER,
+    balance: { ...DEFAULT_BALANCE_PARAMS, ...(ablate ? { ablate } : {}) },
+  });
+  // ★ 判据独占推进模拟；`Controller.step()` 内部已把仲裁结果写进 doll
+  const v = assessStanding(sim, sim.doll, DUR, STAND_THRESH, 25,
+    () => { ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 60)); });
+  printStandCurve(v, DUR / 12);
+  log(formatStandVerdict(v));
 }
 
-run('零输出（θ_ref ≡ 0，保持绑定姿态）', null);
-run('随机基因组（对照）', 20261003);
+run('完整平衡', '');
+run('关掉踝 VIP 刚度', 'ankleCop');
+run('关掉载荷依赖张力', 'postureLoad');
+run('关掉腰额状精调', 'latwaist');

@@ -33,6 +33,7 @@ await import('../src/core/ragdoll');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
+const { DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
 const { newCom, readCom, omegaAt } = await import('../src/core/posture');
 const log = console.log;
 const PHz = DEFAULT_SIM.physicsHz ?? 240;
@@ -42,9 +43,19 @@ const ARCH_ON = !((globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? []
 
 const sk = buildSkeleton({ ...DEFAULT_CONFIG, flexibleArch: ARCH_ON });
 const SHAPE = shapeForJoints(sk.joints.length);
+// ★ 扫 `kVipAnkle`（与文献实测对照）：人体实测 5.2 N·m/deg = 298 N·m/rad
+const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
+const KVA = Number(ARGS[0] ?? 0) || 0;
+const VP = Number(ARGS[1] ?? 0) || 0;
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', physicsHz: PHz });
+const ctrl = new Controller(sk, sim, {
+  ...DEFAULT_CONTROLLER,
+  // ★ `kVipAnkle` 走 Controller 的 `balance` 参数（不走 Sim 配置）
+  balance: { ...DEFAULT_BALANCE_PARAMS, ...(KVA ? { kVipAnkle: KVA } : {}),
+             ...(VP ? { vipP: VP } : {}) },
+});
+console.log(`══ kVipAnkle=${KVA || '默认'}  vipP=${VP || '默认'}  ══`);
 sim.begin(new Float32Array(sim.paramCount));
-const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
 const d = sim.doll;
 const ja = jointIndexByName(sk, 'foot_l');
 const jk = jointIndexByName(sk, 'knee_l');
@@ -68,7 +79,7 @@ const rows: { t: number; copX: number; dCop: number; ank: number; auth: number; 
 const steps = Math.round(6 / DT);
 let nxt = 0;
 for (let i = 0; i < steps; i++) {
-  sim.motor.set(ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 120)));
+  ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 120));   // 内部已写入 doll
   sim.advance(1);
   const t = i * DT;
   if (t < nxt) continue;

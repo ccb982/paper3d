@@ -20154,6 +20154,19 @@ var init_wantedForce = __esm({
 });
 
 // src/core/systems/balance.ts
+var balance_exports = {};
+__export(balance_exports, {
+  ANKLE_ABSENT: () => ANKLE_ABSENT,
+  AXIS_OWNERSHIP: () => AXIS_OWNERSHIP,
+  DEFAULT_BALANCE_PARAMS: () => DEFAULT_BALANCE_PARAMS,
+  HIP_ABD_AXIS: () => HIP_ABD_AXIS,
+  axisRole: () => axisRole,
+  balanceSystem: () => balanceSystem
+});
+function axisRole(jointName, axis) {
+  const norm = jointName.replace(/_\w+$/, "");
+  return AXIS_OWNERSHIP.find((a) => a.joint === jointName) ?? AXIS_OWNERSHIP.find((a) => a.joint === norm);
+}
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const sk2 = rs.sk;
   const sup = rs.supportLeg();
@@ -20384,7 +20397,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.pushVip(qVip, qVipRate);
         rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
         const qD = rs.vipD1[0], qdD = rs.vipD1[1];
-        const wantOn = qD * (qdD - a * qD) < 0;
+        const wantOn = qD * (qdD - a * qD) > 0;
         rs.vipDiag = {
           qD,
           qdD,
@@ -20439,7 +20452,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     }
   }
 }
-var HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -20469,6 +20482,7 @@ var init_balance = __esm({
       // ★ 中足（额状）：踝的额状轴被引擎锁死 ⇒ 侧向 CoP 权限归中足的旋前/旋后。
       { joint: "midfoot", axis: 0, role: "ankleLat", mode: "pos", channel: "ankleLat" }
     ]);
+    ANKLE_ABSENT = false;
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
@@ -20499,6 +20513,7 @@ var init_balance = __esm({
       vipD: 0,
       vipDelaySec: 0.1,
       vipOmegaFrac: -1,
+      // a = −ω₀（切换边界 = 稳定流形）
       vipZetaHip: 0.7,
       maxHipStiffDeg: 22,
       // ★ 默认 true：矢状面按论文的 DIP，撤掉髋上的连续位置伺服（见 `dipSagittal`）
@@ -20931,6 +20946,7 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
+var { DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
 var { newCom: newCom2, readCom: readCom2, omegaAt: omegaAt2 } = await Promise.resolve().then(() => (init_posture(), posture_exports));
 var log = console.log;
 var PHz = DEFAULT_SIM2.physicsHz ?? 240;
@@ -20939,9 +20955,21 @@ var g = 9.81;
 var ARCH_ON = !(globalThis.__PROBE_ARGS ?? []).includes("noarch");
 var sk = buildSkeleton2({ ...DEFAULT_CONFIG2, flexibleArch: ARCH_ON });
 var SHAPE = shapeForJoints2(sk.joints.length);
+var ARGS = globalThis.__PROBE_ARGS ?? [];
+var KVA = Number(ARGS[0] ?? 0) || 0;
+var VP = Number(ARGS[1] ?? 0) || 0;
 var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", physicsHz: PHz });
+var ctrl = new Controller2(sk, sim, {
+  ...DEFAULT_CONTROLLER2,
+  // ★ `kVipAnkle` 走 Controller 的 `balance` 参数（不走 Sim 配置）
+  balance: {
+    ...DEFAULT_BALANCE_PARAMS2,
+    ...KVA ? { kVipAnkle: KVA } : {},
+    ...VP ? { vipP: VP } : {}
+  }
+});
+console.log(`\u2550\u2550 kVipAnkle=${KVA || "\u9ED8\u8BA4"}  vipP=${VP || "\u9ED8\u8BA4"}  \u2550\u2550`);
 sim.begin(new Float32Array(sim.paramCount));
-var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
 var d = sim.doll;
 var ja = jointIndexByName2(sk, "foot_l");
 var jk = jointIndexByName2(sk, "knee_l");

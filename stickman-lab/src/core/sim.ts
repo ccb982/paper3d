@@ -1535,37 +1535,36 @@ const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
   }
 
   /** 摔倒判定：躯干塌下去 / 倾角太大 / 头贴地 → 提前结束 */
+  /**
+   * ★★ **跌倒判定：只看"头碰地"一条**（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+   *
+   * 为什么砍掉另外两条：
+   *   · `bodyHitGround()`（任何非脚刚体触地）—— 误伤太重。弓/内侧前足**合法承重时
+   *     就要接地**，把它们判成摔倒等于"脚一承重就死"（这个坑当天栽过一次：
+   *     `notCrashKey` 漏了 `mfoot`，脚一碰地回合就在 t=0 结束）。
+   *   · 躯干高度比 —— 姿态下沉过程中必然穿越，早判无意义（该判据此前已被关过一次）。
+   *   · 倾角 `rT` —— 在我们这里会把"还在恢复过程中的大倾角"当成终点，
+   *     而用户要的是"真的摔了没有"。倾角读数保留在 `fallDiag` 里做诊断，不参与判定。
+   *
+   * ⇒ 判据：`头` 与地面有竖直接触（`headHitGround()`）⇒ 跌倒。
+   *   这是唯一一条**不会**在正常动作过程中误触的：站着、走路、单腿站、
+   *   弓承重、足趾抓地时，头都不可能碰地。
+   */
   private checkFall(): boolean {
     if (this.finished) return true;
-    const torso = this.doll.torso();
-    const tp = torso.translation();
-    const tilt = this.doll.tiltOf(torso);
+    const tp = this.doll.torso().translation();
+    const tilt = this.doll.tiltOf(this.doll.torso());
     const headY = this.doll.head().translation().y;
-    // ★ 写成"超标倍数"而不是三条 || 短路：判据完全等价（r > 1 ⟺ 原条件），
-    //   但能顺带说出**是哪一条**、以及超标最狠的是哪一条（见 fallReason）。
-    // ★★ crash：任何非脚部刚体碰到地面 ⇒ 截断（Rudin 2022 的原做法）。
-    //   只看躯干高度/倾角抓不住"往前塌"（实测：塌 41cm 而躯干仍有 70% 高、倾角几乎不变，
-    //   于是一路滑 0.65~1.25 m 还能拿速度跟踪分）。
-    if (this.doll.bodyHitGround()) {
-      // ★ crash 触发也记录是谁碰的地（用户 2026-10-02）
-      //   ⚠ 必须同时设 `fallReason`：漏设会让探针把"四肢碰地摔倒"读成 `fallReason === ''`
-      //   而误报成"跑满"（已踩过：零输出明明 5.53s 倒了，却打印"跑满"）。
-      this.fallReason = 'crash';
-      this.fallDiag = { rH: +((this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
-      this.finish(true); return true;
-    }
-    // ★ `fallHeightRatio = 0` ⇒ 关闭躯干高度判据（用户 2026-10-02："不用限制躯干高度了"）
-    const useH = this.cfg.fallHeightRatio > 0;
-    const rH = useH ? (this.initTorsoY * this.cfg.fallHeightRatio) / Math.max(1e-6, tp.y) : 0;
-    const rT = tilt / this.cfg.fallAngle;
-    const rD = this.cfg.headMinHeight / Math.max(1e-6, headY);
-    if ((useH && rH > 1) || rT > 1 || rD > 1) {
-      this.fallReason = rT > 1 ? 'tilt' : 'head';
-      // ★ 记录触发瞬间的三个比值与 crash 来源（用户 2026-10-02："看看到底什么原因触发摔倒"）
+
+    if (this.doll.headHitGround()) {
+      this.fallReason = 'head';
       this.fallDiag = {
-        rH: +rH.toFixed(3), rT: +rT.toFixed(3), rD: +rD.toFixed(3),
+        rH: 0,
+        rT: +(tilt / Math.max(1e-6, this.cfg.fallAngle)).toFixed(3),
+        rD: +(this.cfg.headMinHeight / Math.max(1e-6, headY)).toFixed(3),
         torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3),
-        tiltDeg: +(tilt * 180 / Math.PI).toFixed(1), hit: this.doll.lastHitKey,
+        tiltDeg: +(tilt * 180 / Math.PI).toFixed(1),
+        hit: 'head',
       };
       this.finish(true);
       return true;

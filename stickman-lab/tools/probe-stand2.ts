@@ -39,16 +39,19 @@ const DT = 1 / PHz;
 log(`══ 站立逐步退化（柔性足=${ARCH_ON} 限时关=${LIM}）physics=${PHz}Hz══`);
 log('   t/s   胸y   骨盆y   comY   comX    ξx     ξz   倾角°  承重  触地刚体                ξ趋势');
 
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', physicsHz: PHz });
+// ★ 回合长度可配（默认 6s 就是 duration，到点会 finish(false)=“跑满”，
+//   不是摔倒 —— 已被误读作“倒地”不次）。这里拉到 30s。
+const DUR2 = Number(((globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [])[1] ?? 30) || 30;
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', physicsHz: PHz, duration: DUR2 });
 if (LIM) (sim.doll as any).enforceLimits = () => {};   // 关逐轴限位：看它是不是限位在杀
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
 const com = newCom();
-const steps = Math.round(6 / DT);
+const steps = Math.round(DUR2 / DT);
 const hist: { t: number; xi: number; z: number }[] = [];
 let nxt = 0;
 for (let i = 0; i < steps; i++) {
-  sim.motor.set(ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 120)));
+  ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 120));   // 内部已写入 doll
   sim.advance(1);
   const t = i * DT;
   if (t < nxt) continue;
@@ -71,5 +74,13 @@ for (let i = 0; i < steps; i++) {
     + ` ${com.x.toFixed(3)} ${xi.toFixed(3).padStart(6)} ${zi.toFixed(3).padStart(6)}`
     + ` ${tilt.toFixed(1).padStart(6)}   ${sup}   ${(gnd || '（腾空）').padEnd(22)}`
     + ` ${trend >= 0 ? '↑发散' : '↓收敛'} ${trend.toFixed(3)}`);
-  if (tilt > 25 || sim.finished) { log(`  ⇒ 倾角超 25° 于 t=${t.toFixed(2)}s（死亡判定 sim.finished=${sim.finished}）`); break; }
+  if (sim.finished || tilt > 25) {
+    // ★ 分开报：死亡判定触发的是哪一条，与倾角是否有关。
+    const d2: any = sim.doll;
+    log(`  ⇒ t=${t.toFixed(2)}s  sim.finished=${sim.finished}  fallReason=[${sim.fallReason}]`
+      + `  倾角=${tilt.toFixed(1)}°`);
+    log(`     触地非脚刚体 = ${d2.lastHitKey || '（无）'}`);
+    log(`     当前触地刚体 = ${d2.groundTouching().join(',') || '（无）'}`);
+    break;
+  }
 }

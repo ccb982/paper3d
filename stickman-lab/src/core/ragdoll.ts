@@ -1939,6 +1939,34 @@ soleBlockLabels(side: 0 | 1): string[] {
       || /^(arm|hand|forearm)_[lr]$/.test(key);
   }
 
+  /**
+   * ★★ **头是否碰到地面** —— 跌倒的唯一判据（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+   *
+   *   为什么必须是"头"而不是任何别的部位：
+   *     · 弓/内侧前足/足趾**合法承重时就要接地** ⇒ 用它们当判据等于"脚一干活就死"
+   *       （`notCrashKey` 漏 `mfoot` 时就是这么炸的：回合 t=0 结束）。
+   *     · 躯干高度、倾角在**恢复过程中**必然穿越，早判等于把"正在纠正"当"已经倒了"。
+   *     · 而站着、走路、单腿站、弓承重、足趾抓地时，**头不可能碰地** ⇒ 零误伤。
+   *
+   * 判据与 `bodyHitGround()` 同源（真实接触对 + |n·y| ≥ 0.5），只作用在**头**这���刚体上。
+   */
+  headHitGround(): boolean {
+    const b = this.bodies[this.indexByKey.get('head')!];
+    if (!b) return false;
+    for (let ci = 0; ci < b.numColliders(); ci++) {
+      const col = b.collider(ci);
+      let hit = false;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          if (mf.numContacts() === 0) return;
+          if (Math.abs(mf.normal().y) > 0.5) hit = true;
+        });
+      });
+      if (hit) return true;
+    }
+    return false;
+  }
+
   bodyHitGround(): boolean {
     this.lastHitKey = '';
     for (let i = 0; i < this.bodies.length; i++) {

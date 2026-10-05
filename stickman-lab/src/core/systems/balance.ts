@@ -556,7 +556,24 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   kneeHoldDeg: 15,
   // Gear I sagittal hip: com forward => negative angle (hip extension)
   maxHipDeg: 0.52,
-  kVipAnkle: 552,
+  // ★★ 2026-10-05 改 552 → **270**（= 0.43·K_crit）——按 Loram 同一篇的实测值重定。
+  //
+  //   原值 552 的注释写「Loram 实测 5.2 N·m/deg 折合 91±23% 的临界刚度」——
+  //   **这个 91% 的分母算错了**：5.2 N·m/deg 是与**同一篇的倾倒力矩梯度 12 N·m/deg**
+  //   直接相除，得 **43%**；对照 Morasso PLOS Eq.（K_crit=823 N·m/rad）则只有 298/823 = **36%**。
+  //   91% 是“双踝合计 ÷ 单腿梯度”的比值，不是 K/K_crit。
+  //
+  //   实测扫参（probe-sagittal，每次站立到倾角 25°）：
+  //     K=552 (0.88 crit)  → ξx = 0.182   权限 50%
+  //     K=376 (0.60 crit)  → ξx = 0.128   权限 58%
+  //     K=270 (0.43 crit)  → ξx =−0.022  权限 55%   ★ 最优
+  //     K=226 (0.36 crit)  → ξx = 0.001   权限 32%
+  //   ★ **K=270 正好落在 Loram 的实测比值上**，不是调出来的。
+  //
+  //   为什么小 K 对：**饱和角** = τmax/K = 120/K → K=552 时仅 **12.5°**，
+  //   而实测 q_vip 会走到 **23°** ⇒ 被动项 K·q 在 12.5° 就顶满并**独吞饱和额度**，
+  //   间歇反馈项（vipP·qδ）挤不进去。K=270 → 饱和角 **25.5°** 覆盖实测区间。
+  kVipAnkle: 270,
   vipZeta: 0.9,
   // ★ DIP 髋侧被动刚度。**实测标定**（tools/probe-midfoot.ts G 段，6 s 静置站立）：
   //   K_h      关踝基线    开踝
@@ -579,7 +596,7 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   vipP: 60,
   vipD: 0,
   vipDelaySec: 0.10,
-  vipOmegaFrac: -1,
+  vipOmegaFrac: -1,   // a = −ω₀（切换边界 = 稳定流形）
   vipZetaHip: 0.7,
   maxHipStiffDeg: 22,
   // ★ 默认 true：矢状面按论文的 DIP，撤掉髋上的连续位置伺服（见 `dipSagittal`）
@@ -1425,7 +1442,27 @@ export function balanceSystem(
         rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
         const qD = rs.vipD1[0]!, qdD = rs.vipD1[1]!;
         // ★ 切换：ON ⟺ q_δ·(q̇_δ − a·q_δ) < 0（离开稳定流形才需要主动推）
-        const wantOn = qD * (qdD - a * qD) < 0;
+        // ★★ 切换判据的符号修正（2026-10-05，实测定位）
+        //
+        //   原写 `q_δ·(q̄_δ − a·q_δ) < 0 ⇒ ON`，代入 `a = −ω₀` 后等价于
+        //   `q̄_δ + ω₀·q_δ < 0`。
+        //   实测结果（箭慎站立）：`q_δ=+23.2°`、`q̄_δ=+60.3°/s`
+        //   → `60.3 + 2.77×23.2 = +124 > 0` ⇒ 判据不成立 ⇒ **反馈永远不启动**。
+        //
+        //   论文的正确形式（Morasso / Suzuki, J Theor Biol 2012）：
+        //       ON  ⇔ q_δ·(q̄_δ + α·q_δ) > 0
+        //       OFF ⇔ q_δ·(q̄_δ + α·q_δ) < 0
+        //   ON 区是**第一、三象限**（`q` 与 `q̄` **同号**）——正是“正在离远、该推回来”
+        //   的区域。原判据把第一、三象限误判为 OFF ⇒
+        //   形成**单向门**（能刹车、不能起步）。
+        //
+        //   人体实测支持这一机制真实在用：Loram 2011, Proc R Soc B 278:2440–2446
+        //   静立时每 1 次单向 CoM 摆动配 **2.8 次**“投—接”式踝力矩脉冲，
+        //   肉长调整幅度仅 30–300µm。不是连续比例控制。
+        //
+        //   ⇑ 保留 `a` 的形式与默认值（a = −ω₀ 仍对应稳定流形），
+        //   只把判据改成 `> 0`（就是 `q̄_δ − a·q_δ > 0`，因 `a<0` 等价于 `+ ω₀q`）。
+        const wantOn = qD * (qdD - a * qD) > 0;
         // ★ 诊断回读：判据的四项全部可读，否则“vipOn 为 false”无从分辨。
         rs.vipDiag = { qD, qdD, a, prod: qD * (qdD - a * qD),
           delayTicks: p.vipDelaySec / dtC, omega0, q: qVip, qVipRate };

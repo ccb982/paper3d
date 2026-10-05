@@ -15735,7 +15735,8 @@ var init_ragdoll = __esm({
               kPSpring = ov ? ov.kP : kP;
               err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
-            if (err === 0) continue;
+            const ffEarly = this.torqueCmd[idx];
+            if (err === 0 && ffEarly === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
             let tau = err * (tauMax / JOINT_MAX_SPEED);
             if (tau > tauMax) tau = tauMax;
@@ -16962,6 +16963,8 @@ var init_rigState = __esm({
       vipPrevOn = false;
       /** ω₀ = √(mgh/I)：off 相鞍点的特征频率（rad/s） */
       vipOmega = 0;
+      /** 中间量诊断（闭环判据的四项 + 实际强度） */
+      vipDiag = null;
       /** 本拍控制间隔（s）—— 延迟拍数 = δ / dtCtrl，beginTick 时写入 */
       dtCtrl = 1 / 60;
       /** `vipDelayed` 的复用输出缓冲：[q_δ, q̇_δ] */
@@ -20381,7 +20384,17 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.pushVip(qVip, qVipRate);
         rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
         const qD = rs.vipD1[0], qdD = rs.vipD1[1];
-        const wantOn = qD * (qdD - a * qD) < 0;
+        const wantOn = qD * (qdD - a * qD) > 0;
+        rs.vipDiag = {
+          qD,
+          qdD,
+          a,
+          prod: qD * (qdD - a * qD),
+          delayTicks: p.vipDelaySec / dtC,
+          omega0,
+          q: qVip,
+          qVipRate
+        };
         if (wantOn !== rs.vipOn) {
           rs.vipOn = wantOn;
           rs.vipSwitches++;
@@ -20462,7 +20475,24 @@ var init_balance = __esm({
       kneeHoldDeg: 15,
       // Gear I sagittal hip: com forward => negative angle (hip extension)
       maxHipDeg: 0.52,
-      kVipAnkle: 552,
+      // ★★ 2026-10-05 改 552 → **270**（= 0.43·K_crit）——按 Loram 同一篇的实测值重定。
+      //
+      //   原值 552 的注释写「Loram 实测 5.2 N·m/deg 折合 91±23% 的临界刚度」——
+      //   **这个 91% 的分母算错了**：5.2 N·m/deg 是与**同一篇的倾倒力矩梯度 12 N·m/deg**
+      //   直接相除，得 **43%**；对照 Morasso PLOS Eq.（K_crit=823 N·m/rad）则只有 298/823 = **36%**。
+      //   91% 是“双踝合计 ÷ 单腿梯度”的比值，不是 K/K_crit。
+      //
+      //   实测扫参（probe-sagittal，每次站立到倾角 25°）：
+      //     K=552 (0.88 crit)  → ξx = 0.182   权限 50%
+      //     K=376 (0.60 crit)  → ξx = 0.128   权限 58%
+      //     K=270 (0.43 crit)  → ξx =−0.022  权限 55%   ★ 最优
+      //     K=226 (0.36 crit)  → ξx = 0.001   权限 32%
+      //   ★ **K=270 正好落在 Loram 的实测比值上**，不是调出来的。
+      //
+      //   为什么小 K 对：**饱和角** = τmax/K = 120/K → K=552 时仅 **12.5°**，
+      //   而实测 q_vip 会走到 **23°** ⇒ 被动项 K·q 在 12.5° 就顶满并**独吞饱和额度**，
+      //   间歇反馈项（vipP·qδ）挤不进去。K=270 → 饱和角 **25.5°** 覆盖实测区间。
+      kVipAnkle: 270,
       vipZeta: 0.9,
       // ★ DIP 髋侧被动刚度。**实测标定**（tools/probe-midfoot.ts G 段，6 s 静置站立）：
       //   K_h      关踝基线    开踝
@@ -20486,6 +20516,7 @@ var init_balance = __esm({
       vipD: 0,
       vipDelaySec: 0.1,
       vipOmegaFrac: -1,
+      // a = −ω₀（切换边界 = 稳定流形）
       vipZetaHip: 0.7,
       maxHipStiffDeg: 22,
       // ★ 默认 true：矢状面按论文的 DIP，撤掉髋上的连续位置伺服（见 `dipSagittal`）
@@ -20928,13 +20959,14 @@ var PHz = DEFAULT_SIM2.physicsHz ?? 240;
 var DT = 1 / PHz;
 log(`\u2550\u2550 \u7AD9\u7ACB\u9010\u6B65\u9000\u5316\uFF08\u67D4\u6027\u8DB3=${ARCH_ON} \u9650\u65F6\u5173=${LIM}\uFF09physics=${PHz}Hz\u2550\u2550`);
 log("   t/s   \u80F8y   \u9AA8\u76C6y   comY   comX    \u03BEx     \u03BEz   \u503E\u89D2\xB0  \u627F\u91CD  \u89E6\u5730\u521A\u4F53                \u03BE\u8D8B\u52BF");
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", physicsHz: PHz });
+var DUR2 = Number((globalThis.__PROBE_ARGS ?? [])[1] ?? 30) || 30;
+var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", physicsHz: PHz, duration: DUR2 });
 if (LIM) sim.doll.enforceLimits = () => {
 };
 sim.begin(new Float32Array(sim.paramCount));
 var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
 var com = newCom2();
-var steps = Math.round(6 / DT);
+var steps = Math.round(DUR2 / DT);
 var hist = [];
 var nxt = 0;
 for (let i = 0; i < steps; i++) {
@@ -20956,8 +20988,11 @@ for (let i = 0; i < steps; i++) {
   const older = hist.find((h) => h.t <= t - 1);
   const trend = older ? (Math.abs(zi) - Math.abs(older.z)) / (t - older.t) : 0;
   log(`  ${t.toFixed(2).padStart(5)} ${torso.translation().y.toFixed(3)} ${root.translation().y.toFixed(3)} ${com.y.toFixed(3)} ${com.x.toFixed(3)} ${xi.toFixed(3).padStart(6)} ${zi.toFixed(3).padStart(6)} ${tilt.toFixed(1).padStart(6)}   ${sup}   ${(gnd || "\uFF08\u817E\u7A7A\uFF09").padEnd(22)} ${trend >= 0 ? "\u2191\u53D1\u6563" : "\u2193\u6536\u655B"} ${trend.toFixed(3)}`);
-  if (tilt > 25 || sim.finished) {
-    log(`  \u21D2 \u503E\u89D2\u8D85 25\xB0 \u4E8E t=${t.toFixed(2)}s\uFF08\u6B7B\u4EA1\u5224\u5B9A sim.finished=${sim.finished}\uFF09`);
+  if (sim.finished || tilt > 25) {
+    const d2 = sim.doll;
+    log(`  \u21D2 t=${t.toFixed(2)}s  sim.finished=${sim.finished}  fallReason=[${sim.fallReason}]  \u503E\u89D2=${tilt.toFixed(1)}\xB0`);
+    log(`     \u89E6\u5730\u975E\u811A\u521A\u4F53 = ${d2.lastHitKey || "\uFF08\u65E0\uFF09"}`);
+    log(`     \u5F53\u524D\u89E6\u5730\u521A\u4F53 = ${d2.groundTouching().join(",") || "\uFF08\u65E0\uFF09"}`);
     break;
   }
 }
