@@ -40,8 +40,8 @@ const BB = new Float64Array(4);
 const LD = new Float64Array(8);
 log('══ 弓关节刚度/阻尼扫描（K=N·m/rad, B=N·m·s/rad）══');
 log('     K      B   弓角min  弓角max  摆幅  弓承重峰  CoP内侧余量  存活倾角');
-for (const K of [35, 60, 100, 160, 260]) {
-  for (const B of [2, 6, 15, 30]) {
+for (const K of [1, 2, 4, 6, 7.3]) {
+  for (const B of [0.005, 0.012, 0.025, 0.03]) {
     DEFAULTS.archStiffness = K;      // ⚠ 必须在构造前（K/B 是构造时折算的）
     DEFAULTS.archDamping = B;
     const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk' });
