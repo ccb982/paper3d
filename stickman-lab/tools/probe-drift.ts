@@ -31,11 +31,10 @@ const DEG = 180 / Math.PI;
 const { jointIndexByName } = await import('../src/core/skeleton');
 const SP1 = jointIndexByName(sk, 'spine1');
 
-interface C { ld: number; kd: number; tone: number; ks: number }
+interface C { ld: number; kd: number; tone: number; ks: number; st: number }
 const CS: C[] = [];
-for (const ks of [0.6, 1.0, 1.4, 2.0])
-  for (const kd of [0.8, 1.0, 1.4])
-    CS.push({ ld: kd, kd, tone: 0.5, ks });
+for (const t of [1.0, 1.5, 2.0, 2.5])
+    CS.push({ ld: 1.4, kd: 1.4, tone: 0.5, ks: 0.6, st: t });
 log('══ 残余漂移源 + 权限扫描（锁定已生效）══');
 log('   消融                          FMAX 腰限幅  最小X3  驻留  腰峰   vz峰   com.z末  存活  翻转');
 for (const c of CS) {
@@ -44,7 +43,7 @@ for (const c of CS) {
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
     step: { ...DEFAULT_STEP_PARAMS, shiftFMax: 0 },
-    balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: 0.6, waistKd: c.kd, latDamp: c.ld, postureLoadGain: c.tone, latStiff: c.ks },
+    balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: 0.6, waistKd: c.kd, latDamp: c.ld, postureLoadGain: c.tone, latStiff: c.ks, postureSpineTonic: c.st },
   });
   let vzMax = 0, zEnd = 0, dzMin = 1e9, alive = 0, flips = 0, prevSup = '';
   let run = 0, bestRun = 0, wMax = 0, spMax = 0;
@@ -66,7 +65,7 @@ for (const c of CS) {
     if (s.tiltDeg >= 25) break;
     alive = s.t;
   }
-  log(`   ${c.ks.toFixed(1).padStart(6)}× ${c.ld.toFixed(1).padStart(6)}×`
+  log(`   脊柱张力=${c.st.toFixed(1)}×`
     + ` ${(dzMin * 1000).toFixed(0).padStart(6)}mm`
     + ` ${(bestRun / 60).toFixed(2).padStart(5)}s${bestRun / 60 >= 1 ? '✓' : '✗'}`
     + ` ${(wMax * DEG).toFixed(1).padStart(5)}° ${(spMax * DEG).toFixed(1).padStart(6)}°`

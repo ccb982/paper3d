@@ -486,6 +486,26 @@ export interface BalanceParams {
   postureLoadGain: number;
   /** 脊柱三段是否也吃这份张力（躯干被外力扭到 35° 的主要受害者） */
   postureLoadSpine: boolean;
+  /**
+   * ★★ 脊柱的**前馈肌张力**倍率（乘在 `kP` 上，与载荷无关的那一份）。
+   *
+   * ⚠ 逐帧实测：脊柱角度被限位压在 ±15° 内，但在 **±17° 之间来回甩**
+   *   （0.52s: −17.1° → 1.02s: +14.2° → 1.12s: +7.3°），**停不住** ⇒ 用户说的
+   *   「脊柱还是软的」。它软不是因为限位坏，而是因为**只有比例伺服在追一个
+   *   逐帧抖动的指令**（腰 PD 的目标在 ±2.7° 内每帧变号）。
+   *
+   * 文献：2025 J Neurophysiol「Center of mass states render multijoint torques
+   *   throughout standing balance recovery」——
+   *   · "Stabilizing joint torques arise from neurally-mediated **feedforward
+   *     tonic muscle activation that modulates muscle short-range stiffness**,
+   *     which provides **instantaneous mechanical feedback**"；
+   *   · 髋/膝**同时**有前馈与反馈分量，**踝只有反馈**（跟腱顺应性削弱短程刚度）。
+   *   ⇒ 前馈张力是与反馈**并联**的一条独立通路，缺失它 ⇒ 只有延迟反馈
+   *     ⇒ 必然抖动。这正是"软"的机制。
+   *
+   * 所以脊柱需要一份**与载荷无关的基线张力**，否则只有延迟反馈在起作用。
+   */
+  postureSpineTonic: number;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
@@ -661,6 +681,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
   postureLoadGain: 1.0,
   postureLoadSpine: true,
+  // 脊柱前馈基线张力倍率（2025 J Neurophysiol 的前馈通路）
+  postureSpineTonic: 3.0,
   // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
   latShiftCopMargin: 0.04,
   /**
@@ -754,7 +776,10 @@ export function balanceSystem(
     if (p.postureLoadSpine) {
       for (const nm of ['spine1', 'spine2', 'spine3']) {
         const j = jointIndexByName(rs.sk, nm);
-        if (j >= 0) doll.setToneScale(j, 0, 1 + gain * supLoad);
+        // ★ 前馈基线张力（与载荷无关的那一份）+ 载荷依赖的那一份，两者相乘
+        if (j >= 0) doll.setToneScale(j, 0, p.postureSpineTonic * (1 + gain * supLoad));
+        // 矢状轴也吃前馈张力：躯干前后倾同样只有延迟反馈时会甩
+        if (j >= 0) doll.setToneScale(j, 2, p.postureSpineTonic * (1 + gain * supLoad));
       }
     }
   } else if (doll) {

@@ -19647,7 +19647,8 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     if (p.postureLoadSpine) {
       for (const nm of ["spine1", "spine2", "spine3"]) {
         const j = jointIndexByName(rs.sk, nm);
-        if (j >= 0) doll.setToneScale(j, 0, 1 + gain * supLoad);
+        if (j >= 0) doll.setToneScale(j, 0, p.postureSpineTonic * (1 + gain * supLoad));
+        if (j >= 0) doll.setToneScale(j, 2, p.postureSpineTonic * (1 + gain * supLoad));
       }
     }
   } else if (doll) {
@@ -20049,6 +20050,8 @@ var init_balance = __esm({
       // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
       postureLoadGain: 1,
       postureLoadSpine: true,
+      // 脊柱前馈基线张力倍率（2025 J Neurophysiol 的前馈通路）
+      postureSpineTonic: 3,
       // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
       latShiftCopMargin: 0.04,
       /**
@@ -20350,9 +20353,8 @@ var DEG2 = 180 / Math.PI;
 var { jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 var SP1 = jointIndexByName2(sk, "spine1");
 var CS = [];
-for (const ks of [0.6, 1, 1.4, 2])
-  for (const kd of [0.8, 1, 1.4])
-    CS.push({ ld: kd, kd, tone: 0.5, ks });
+for (const t of [1, 1.5, 2, 2.5])
+  CS.push({ ld: 1.4, kd: 1.4, tone: 0.5, ks: 0.6, st: t });
 log("\u2550\u2550 \u6B8B\u4F59\u6F02\u79FB\u6E90 + \u6743\u9650\u626B\u63CF\uFF08\u9501\u5B9A\u5DF2\u751F\u6548\uFF09\u2550\u2550");
 log("   \u6D88\u878D                          FMAX \u8170\u9650\u5E45  \u6700\u5C0FX3  \u9A7B\u7559  \u8170\u5CF0   vz\u5CF0   com.z\u672B  \u5B58\u6D3B  \u7FFB\u8F6C");
 for (const c of CS) {
@@ -20361,7 +20363,7 @@ for (const c of CS) {
   const ctrl = new Controller2(sk, sim, {
     ...DEFAULT_CONTROLLER2,
     step: { ...DEFAULT_STEP_PARAMS2, shiftFMax: 0 },
-    balance: { ...DEFAULT_BALANCE_PARAMS2, waistKp: 0.6, waistKd: c.kd, latDamp: c.ld, postureLoadGain: c.tone, latStiff: c.ks }
+    balance: { ...DEFAULT_BALANCE_PARAMS2, waistKp: 0.6, waistKd: c.kd, latDamp: c.ld, postureLoadGain: c.tone, latStiff: c.ks, postureSpineTonic: c.st }
   });
   let vzMax = 0, zEnd = 0, dzMin = 1e9, alive = 0, flips = 0, prevSup = "";
   let run = 0, bestRun = 0, wMax = 0, spMax = 0;
@@ -20386,5 +20388,5 @@ for (const c of CS) {
     if (s.tiltDeg >= 25) break;
     alive = s.t;
   }
-  log(`   ${c.ks.toFixed(1).padStart(6)}\xD7 ${c.ld.toFixed(1).padStart(6)}\xD7 ${(dzMin * 1e3).toFixed(0).padStart(6)}mm ${(bestRun / 60).toFixed(2).padStart(5)}s${bestRun / 60 >= 1 ? "\u2713" : "\u2717"} ${(wMax * DEG2).toFixed(1).padStart(5)}\xB0 ${(spMax * DEG2).toFixed(1).padStart(6)}\xB0 ${(vzMax * 1e3).toFixed(0).padStart(5)} ${(zEnd * 1e3).toFixed(0).padStart(6)}mm ${alive.toFixed(2)}s ${flips}`);
+  log(`   \u810A\u67F1\u5F20\u529B=${c.st.toFixed(1)}\xD7 ${(dzMin * 1e3).toFixed(0).padStart(6)}mm ${(bestRun / 60).toFixed(2).padStart(5)}s${bestRun / 60 >= 1 ? "\u2713" : "\u2717"} ${(wMax * DEG2).toFixed(1).padStart(5)}\xB0 ${(spMax * DEG2).toFixed(1).padStart(6)}\xB0 ${(vzMax * 1e3).toFixed(0).padStart(5)} ${(zEnd * 1e3).toFixed(0).padStart(6)}mm ${alive.toFixed(2)}s ${flips}`);
 }
