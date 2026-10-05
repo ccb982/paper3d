@@ -152,6 +152,20 @@ export interface RagdollOptions {
   /** 角阻尼（关节内摩擦之外的整体衰减） */
   angularDamping?: number;
   /**
+   * ★ 脚掌刚体（`foot_*`）**单独**的角阻尼。
+   *
+   *   为什么要单独一份（2026-10-04 实测）：全局 `angularDamping = 12` 确实把
+   *   "脚打滑"压掉了（鞋底滑移 86→7mm、峰值角速 1520→82°/s），**但代价是
+   *   侧向权重转移权限被压掉 3.8 倍**：
+   *     全局 12                   ⇒ |CoM.z|max =  53mm（站距 326mm，需 ±160mm）
+   *     全局 5                    ⇒             137mm
+   *     额状全开 + 全局 0.04       ⇒             **202mm**
+   *   而"把重心压到一条腿"正是单支撑（进而迈步）的第一道门
+   *   （用户 2026-10-04：「刻意让重心转移到左腿上，并且维持平衡，然后才能实现迈腿」）。
+   *   ⇒ 阻尼只给**脚**（打滑发生在脚上），躯干/腿保持低阻尼（侧向动力学在那里）。
+   */
+  footAngularDamping?: number;
+  /**
    * 关节力矩的全局缩放（1 = 完全按 MuJoCo gear）。
    * 想让火柴人"力气更大/更软"时调它，而不是去调每个关节。
    */
@@ -324,7 +338,14 @@ const DEFAULTS: Required<RagdollOptions> = {
   //   ⚠ 代价：Rapier 的 `angularDamping` 是**所有刚体**统一值。12 对躯干偏大
   //   （会显得"肉"）。更细的做法是按部位给（脚/前足高、躯干低），
   //   那需要把 `RagdollOptions` 拆成分组阻尼 —— 留作后续。
-  angularDamping: 12,
+  // ★ 2026-10-04：**全身回退到 0.04**，高阻尼只给脚掌。
+  //   实测（tools/probe-midfoot.ts E3，站距 326mm ⇒ 单支撑需 |CoM.z| ≈ 160mm）：
+  //     全身12 / 脚12 ⇒ |CoM.z| =  53mm   ✗ 侧向权重转移被压掉 3.8 倍
+  //     全身 0.04 / 脚12 ⇒ **296mm**  ✓ 鞋底滑移 0mm
+  //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
+  //   全局高阻尼会直接把它堵死。
+  angularDamping: 0.04,
+  footAngularDamping: 12,
   torqueScale: 1.0,
   kP: 48.0,
   kD: 1.0,
@@ -493,6 +514,13 @@ export class Ragdoll {
    * ⇒ 全部改成遍历列表。`soleCol` 保留为「第一块」以兼容既有调用点。
    */
   readonly soleCols: [RAPIER.Collider[], RAPIER.Collider[]] = [[], []];
+  /**
+   * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
+   *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
+   *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
+   *   （`foot_*` 与 `forefoot_*` 是**两个**刚体，姿态各不相同。）
+   */
+  private readonly soleColBody: [number[], number[]] = [[], []];
   readonly soleCol: [RAPIER.Collider | null, RAPIER.Collider | null] = [null, null];
   /** `readCoP` 的复用缓冲：[copX, copY, copZ, Σλ] */
   private readonly copTmp = new Float64Array(4);
@@ -691,7 +719,11 @@ export class Ragdoll {
           .setRotation(this.restQ[i])
           // ★ 3D：六自由度全开，不再锁任何轴（2D 版这里是 (T,T,F)+(F,F,T)）
           .setLinearDamping(this.opt.linearDamping)
-          .setAngularDamping(this.opt.angularDamping)
+          // ★ 脚掌用单独的高角阻尼：打滑是脚上的现象，而侧向权重转移的
+          //   动力学在躯干/腿上，全局高阻尼会把它压掉 3.8 倍。
+          .setAngularDamping(/^foot_/.test(b.key)
+            ? (this.opt.footAngularDamping ?? this.opt.angularDamping)
+            : this.opt.angularDamping)
           .setCanSleep(false),
       );
       this.bodies.push(body);
@@ -724,9 +756,11 @@ export class Ragdoll {
           //   （前脚掌内侧柱/外侧柱）⇒ 必须一起登记，否则 CoP / 载荷只统计后足。
           if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l') {
             this.soleCols[0].push(col);
+            this.soleColBody[0].push(i);      // ★ 记下所属刚体（readCoP 筛底面要用）
             this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
           } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r') {
             this.soleCols[1].push(col);
+            this.soleColBody[1].push(i);
             this.soleCol[1] ??= col;
           }
         }
@@ -1042,6 +1076,21 @@ export class Ragdoll {
    *     刚性足 ⇒ CoP 被钉在接触面形心附近，踝怎么转都几乎不动；
    *     柔性足 ⇒ CoP 随踝力矩**连续移动**，且可能超过 `τ/(mg)` 的刚性上限。
    *
+   * ★★★ 2026-10-04 修：**接触面筛选**从"世界竖直"改成"**该鞋底块自己的底面**"。
+   *
+   *   原来只判 `|n·y| ≥ 0.5`。但鞋底是**扁盒**，倾倒时它的**侧面**也会贴到地面，
+   *   而侧面的法线在侧向 ⇒ `|n·y|` 可能仍然不小 ⇒ 侧面的接触点被算进 CoP。
+   *   后果（实测）：`CoP_z` 读出 **391 mm**，而整只脚宽只有 **204 mm** ——
+   *   物理上不可能，正是"侧面被当成底面"的证据。这类读数会让人误判
+   *   "柔性足权限巨大"，其实测的是倾倒瞬态。
+   *   ⇒ 第一版改成"法线与该块底面外法线对齐（|n·bottom| ≥ 0.7）"，**实测仍不够**：
+   *     强制跖屈到 29° 时读出 CoP_z 相对脚掌 **70.1mm**，而所有鞋底块的
+   *     z 跨度只有 ±50mm ⇒ 还是有侧面接触被算进来（29° 倾角下侧面法线
+   *     与底面法线夹角仍可能 < 45°）。
+   *   ⇒ 改成**直接验证接触点落在这块底面的矩形范围内**：把接触点变换到
+   *     该刚体局部系，要求 `|x| ≤ hx+ε` 且 `|z| ≤ hz+ε`（y 不判，因为
+   *     接触点就在面上）。这与"底面"是几何等价定义，没有夹角可漏。
+   *
    * @param side 0=左 1=右
    * @param out  写入 [copX, copY, copZ, Σλ]（世界系；无接触时 Σλ=0）
    */
@@ -1050,17 +1099,28 @@ export class Ragdoll {
     // ★ 遍历**全部**鞋底 collider（脚跟 + 前脚掌）。单数版只读一块 ⇒ 拆成两块后
     //   CoP 变成"半只脚的压力中心"，权限失真（实测基线从 214mm 漂到 191mm）。
     let sx = 0, sy = 0, sz = 0, sl = 0;
-    for (const col of this.soleCols[side]) {
-      this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
-        this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+    const cols = this.soleCols[side];
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const q = this.bodies[bi]!.rotation();
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
           const n = mf.numSolverContacts();
           for (let i = 0; i < n; i++) {
-            // ★ 只要法向分量：切向冲量是摩擦，不是"压力中心"的定义
-            const ny = mf.normal().y;
-            if (Math.abs(ny) < 0.5) continue;
-            const p = mf.solverContactPoint(i);
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
+            const p = mf.solverContactPoint(i);
+            // 世界 → 该块局部；接触点必须落在它自己底面那块矩形内
+            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
+            const t = this.footTmp;
+            if (Math.abs(t[0]! - cdOx) > cd.hx + EPS) continue;
+            if (Math.abs(t[2]! - cd.offsetZ) > cd.hz + EPS) continue;
             sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
           }
         });
@@ -1068,6 +1128,139 @@ export class Ragdoll {
     }
     if (sl > 0) { out[0] = sx / sl; out[1] = sy / sl; out[2] = sz / sl; }
     out[3] = sl;
+  }
+
+  /**
+   * ★★ **鞋底逐柱法向载荷**：内侧柱 / 外侧柱各承担多少（N·s/拍，除 120 即 N）。
+   *
+   * 柔性足 F1 真正提供的机制**不是**"CoP 能跑多远"，而是
+   * 「**载荷能在内/外侧柱之间连续转移**」（文献：内侧弓/外侧柱是两条独立载荷路径；
+   *  Jeon & Cho 压力垫综述 / Welte 2023 内侧弓）。
+   * 骨架注释里记的失败模式正是这个：
+   *     「内侧柱 Σ 162.8N / 外侧柱 Σ 14.2N（比值 **14:1**），CoP_z 只动 **0.9mm**」
+   *   —— 只切 collider 不给中足自由度时，两柱载荷严重失衡，CoP 动不了。
+   *
+   * ⇒ 这个比值就是判据本身：比值从 14:1 收敛到 ~1:1 ⇒ 前足真的在"分配载荷"。
+   *   柱归属用**接触点在所属刚体局部系里的 z 符号**（+Z 为内侧，见 `offColIn`）。
+   *
+   * @param out 写入 [内侧柱Σλ, 外侧柱Σλ]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+   */
+  soleColumnLoad(side: 0 | 1, out: Float64Array): void {
+    const tmp = this.footTmp;
+    const cols = this.soleCols[side];
+    for (let i = 0; i < out.length; i++) out[i] = 0;
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const body = this.bodies[bi]!;
+      const q = body.rotation();
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) return;
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const l = Math.abs(mf.contactImpulse(i));
+            if (!(l > 0)) continue;
+            const p = mf.solverContactPoint(i);
+            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, tmp);
+            if (Math.abs(tmp[0]! - cdOx) > cd.hx + EPS) continue;
+            if (Math.abs(tmp[2]! - cd.offsetZ) > cd.hz + EPS) continue;
+            if (tmp[2]! >= 0) out[0] += l; else out[1] += l;
+          }
+        });
+      });
+    }
+  }
+
+  /**
+   * ★★ **逐块鞋底法向载荷**（`out[i]` = 第 i 块鞋底 collider 的 Σ|λ|）。
+   *
+   * 真实人脚形状的鞋底是 6 块（`skeleton.buildSoleBlocks`）：
+   *   足跟 / 外侧柱 / 内侧弓·后 / 内侧弓·前 / 跖骨头 / 趾
+   *   其中**内侧弓两块天生离地 `archRise = 22 mm`**（`buildSoleBlocks` 的注释与依据：
+   *   Jeon & Cho 压力垫综述 / Welte 2023 —— 内侧弓是独立载荷路径，把重量传到足的外侧缘）。
+   *
+   * ⇒ 这 6 个数直接回答"侧向载荷到底走哪条路"：
+   *     重心压到支撑腿内侧 ⇒ 内侧弓应该**接近 0**（它离地），
+   *     外侧柱 / 跖骨头承重 ⇒ **侧向 CoP 权限就是这么来的**（不需要中足关节）。
+   *   块的名字在 `skeleton` 里以 `_label` 挂在 collider 上（运行时可读，仅供诊断/UI）。
+   *
+   * @param out 长度 ≥ 该侧鞋底 collider 数的 `Float64Array`（复用缓冲，零分配）
+   */
+  soleBlockLoad(side: 0 | 1, out: Float64Array): void {
+    const cols = this.soleCols[side];
+    for (let i = 0; i < out.length; i++) out[i] = 0;
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const body = this.bodies[bi]!;
+      const q = body.rotation();
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) return;
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const l = Math.abs(mf.contactImpulse(i));
+            if (!(l > 0)) continue;
+            const p = mf.solverContactPoint(i);
+            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
+            const t = this.footTmp;
+            if (Math.abs(t[0]! - cdOx) > cd.hx + EPS) continue;
+            if (Math.abs(t[2]! - cd.offsetZ) > cd.hz + EPS) continue;
+            out[ci] += l;
+          }
+        });
+      });
+    }
+  }
+
+/** 该侧鞋底 collider 的块名（诊断/UI 用；`skeleton` 挂在 collider 上的 `_label`） */
+soleBlockLabels(side: 0 | 1): string[] {
+    const out: string[] = [];
+    for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+      const bi = this.soleColBody[side]![ci];
+      const c = bi !== undefined ? this.sk.bodies[bi]!.colliders[ci] : undefined;
+      out.push(((c as unknown as { _label?: string } | undefined)?._label) ?? `#${ci}`);
+    }
+    return out;
+  }
+
+  /**
+   * ★ 该侧**鞋底在世界系**的轴对齐包围盒 `[minX, maxX, minZ, maxZ]`（m）。
+   *
+   * 为什么要它：脚掌有**外八偏航**（`restYawRad`，实测约 25°），
+   * 于是"刚体局部 x"会经 `sinψ` 混进**世界 z**。拿 CoP 的世界 z 去和
+   * "刚体轴"比会得到假误差（实测局部 z=0 的跟块接触点，世界 z 偏 59mm）。
+   * ⇒ 任何"CoP 有没有超出鞋底"的判据都必须用**世界系鞋底包围盒**做参照。
+   */
+  footSoleBounds(side: 0 | 1, out: Float64Array): void {
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    const t = this.footTmp;
+    for (let ci = 0; ci < this.soleCols[side].length; ci++) {
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const body = this.bodies[bi]!;
+      const q = body.rotation();
+      const tr = body.translation();
+      const ox = cd.offsetX ?? 0;
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+        quatRotate(q.x, q.y, q.z, q.w, ox + sx * cd.hx, cd.offsetY - cd.hy, cd.offsetZ + sz * cd.hz, t);
+        const wx = t[0]! + tr.x, wz = t[2]! + tr.z;
+        if (wx < x0) x0 = wx; if (wx > x1) x1 = wx;
+        if (wz < z0) z0 = wz; if (wz > z1) z1 = wz;
+      }
+    }
+    out[0] = x0; out[1] = x1; out[2] = z0; out[3] = z1;
   }
 
   /** 只取竖向分量是否受力（比 footGrounded 更严：必须有正冲量） */
