@@ -19,7 +19,7 @@
  */
 
 import { RigState, makeCriteria, type Phase, type Side } from './rigState';
-import { PHASE_TO_GAIT, KEY_POSES, strideWidthRatio } from './keyframe';
+import { PHASE_TO_GAIT, KEY_POSES, stanceWidthRatio, supportEntry } from './keyframe';
 
 export interface GaitConfig {
   /** B2 承重判据：载荷占比阈值 */
@@ -365,7 +365,10 @@ export class GaitState {
     const gk = PHASE_TO_GAIT[rs.phase] ?? 'MSt';
     rs.gaitKey = gk;
     rs.keyPose = KEY_POSES[gk];
-    rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
+    // Winter 1998 口径：站距 / 髋间距（其实测区间 0.5~1.5）
+    rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
+    // 重心进入支撑面所需的最小横移（米）—— `handoverTolZ` 难度的直接度量
+    rs.supportEntryZ = supportEntry(rs.soleZ[rs.supportLeg()]);
     this.hadBearer = this.hadBearer || handoverOk;
     // 派生视图（供 UI/探针回显同一份事实，不是第二套判据）
     rs.bearerCriteria = makeCriteria(

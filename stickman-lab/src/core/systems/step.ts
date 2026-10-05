@@ -20,6 +20,7 @@
  */
 
 import { jointIndexByName } from '../skeleton';
+import { lerpKeyPose, type GaitKey } from '../keyframe';
 import type { RigState, Side } from '../rigState';
 
 /** 摆动相膝屈峰值（deg）—— Oberg / Perry */
@@ -65,6 +66,19 @@ export interface StepParams {
   shiftFMax: number;
   /** 驱动渐入渐出时长（s），避免阶跃力把 CoP 打出支撑面 */
   shiftRamp: number;
+
+  /**
+   * ★★ 摆动腿**用关键帧表**（Perry 8 相）还是用本文件自己那套 `hipFlexPeakDeg`
+   *   /`kneeFlexPeakDeg`/`bell` 钟形。默认 **true**。
+   *
+   * 用户 2026-10-05：「两套系统根据状态机就分别往这几个关键帧状态去靠拢」。
+   * ⇒ 摆动腿的角度律不再是"钟形 + 峰值常数"这种手调量，而是沿
+   *   **Perry 的角-时间曲线**走过去：`PSw → ISw → MSw → TSw`。
+   *
+   * ⚠ 消融意义：关掉它就退回旧律，两者可直接对照 —— 这是"关键帧表是否
+   *   真的更好"的唯一判据，不能因为新方案更好就删掉旧路径。
+   */
+  useKeyFrame: boolean;
 }
 
 export const DEFAULT_STEP_PARAMS: StepParams = {
@@ -90,6 +104,7 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   shiftZeta: 1.0,
   shiftFMax: 60,
   shiftRamp: 0.25,
+  useKeyFrame: true,
 };
 
 /**
@@ -183,6 +198,48 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     ? p.lift * bell + (s >= 1 ? p.liftHold : 0)
     : (rs.phase === 'SINGLE' ? p.liftHold : 0);
 
+  // ══════════════════════════════════════════════════════════════
+  // ★★ ② 摆动腿：**沿 Perry 关键帧曲线走**（`keyframe.ts` 唯一真源）
+  // ══════════════════════════════════════════════════════════════
+  //   相内进度 s 的映射（Perry GC%）：摆动相跨 ISw(62-75) → MSw(75-87) → TSw(87-100)
+  //     s=0    → PSw 末（膝 40°、踝 20°跖屈）
+  //     s=0.33 → ISw（膝 60° 峰、髋 20°）
+  //     s=0.70 → MSw（髋 30°、膝 30°、胫骨垂直）
+  //     s=1    → TSw（膝 0-5°、踝中立、髋 25°）= **准备触地**
+  //   与旧律的差别：旧律是"钟形 + 峰值常数 + 末端伸展手工项"，
+  //   新律是**规范角-时间曲线**，膝屈峰、胫骨垂直时刻、末端准备都是数据给的。
+  const KF_SWING_SEG: readonly (readonly [number, GaitKey])[] = [
+    [0.00, 'PSw'], [0.33, 'ISw'], [0.70, 'MSw'], [1.00, 'TSw'],
+  ];
+  function keySwing(sIn: number) {
+    const u = sIn < 0 ? 0 : sIn > 1 ? 1 : sIn;
+    for (let i = 0; i + 1 < KF_SWING_SEG.length; i++) {
+      const [s0, k0] = KF_SWING_SEG[i]!, [s1, k1] = KF_SWING_SEG[i + 1]!;
+      if (u <= s1) {
+        const w = (u - s0) / Math.max(1e-6, s1 - s0);
+        return lerpKeyPose(k0, k1, w);
+      }
+    }
+    return rs.keyPose;
+  }
+  if (p.useKeyFrame) {
+    const kp = keySwing(s);
+    // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
+    rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex, 1.05), '摆动髋·关键帧', lift > 0.01);
+    rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), '摆动膝·关键帧', lift > 0.01);
+    // 踝：正 = 跖屈（本 rig 约定）
+    const jFt = jointIndexByName(sk, swing === 'l' ? 'foot_l' : 'foot_r');
+    if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp(kp.swAnkle, 0.5), '摆动踝·关键帧', false);
+    // 躯干矢状倾（Perry：IC 前倾 4°、摆动相后倾）
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, '躯干矢状·关键帧');
+    // 腰的**代偿**侧倾（Mann 1975 只有 5~10°，绝不当主执行器）
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, '躯干额状代偿');
+    // 摆动腿髋外展只做"让开"，不参与重心搬运（Winter 1998：搬运归支撑侧髋外展）
+    if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, '摆动外展·让开', false);
+    return;   // 关键帧分支已完整覆盖摆动腿，旧律不再执行
+  }
+
+  // ── 旧律（消融用）：钟形 + 峰值常数 + 手工末端伸展 ──
   // ══════════════════════════════════════════════════════════════
   // ② 摆动腿髋屈（Oberg/Perry 30°）
   //   ⚠ 髋限位不对称（[−95°, +100°]），膝限位 [−145°, +2°] ⇒ **负 = 屈**

@@ -679,7 +679,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   latDamp: 1.4,
   latZeta: 1.0,
   // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
-  postureLoadGain: 1.0,
+  // 实测：0.5 最优（驻留 0.33s）；1.0/2.0/4.0 全部更差
+  postureLoadGain: 0.5,
   postureLoadSpine: true,
   // 脊柱前馈基线张力倍率（2025 J Neurophysiol 的前馈通路）。
   // ⚠ 实测是**单调权衡**，默认取 1.0（不额外加）：

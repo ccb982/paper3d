@@ -6352,16 +6352,16 @@ function rotVecByQuat(q, v) {
     vz + qw * tz + (qx * ty - qy * tx)
   ];
 }
-function jointIndexByName(sk2, name) {
-  for (let i = 0; i < sk2.joints.length; i++) if (sk2.joints[i].name === name) return i;
+function jointIndexByName(sk, name) {
+  for (let i = 0; i < sk.joints.length; i++) if (sk.joints[i].name === name) return i;
   return -1;
 }
-function hasJoint(sk2, name) {
-  return sk2.joints.some((j) => j.name === name);
+function hasJoint(sk, name) {
+  return sk.joints.some((j) => j.name === name);
 }
-function spineJointNames(sk2) {
+function spineJointNames(sk) {
   const out = [];
-  for (const j of sk2.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
+  for (const j of sk.joints) if (/^spine\d+$/.test(j.name)) out.push(j.name);
   return out.sort();
 }
 function anchorPx(name, jm) {
@@ -6862,15 +6862,15 @@ function assertMassBudget() {
   }
   return sum;
 }
-function assertColliderMass(sk2) {
-  for (const b of sk2.bodies) {
+function assertColliderMass(sk) {
+  for (const b of sk.bodies) {
     const s = b.colliders.reduce((a, c) => a + c.mass, 0);
     if (Math.abs(s - b.mass) > 1e-9) {
       throw new Error(`[skeleton] ${b.key} collider \u8D28\u91CF\u548C ${s} \u2260 \u521A\u4F53\u8D28\u91CF ${b.mass}`);
     }
   }
 }
-function assertJointAnchors(sk2) {
+function assertJointAnchors(sk) {
   const reachOf = (b) => {
     let r = 0;
     for (const c of b.colliders) {
@@ -6891,9 +6891,9 @@ function assertJointAnchors(sk2) {
     return r;
   };
   let worst = 0;
-  for (const j of sk2.joints) {
-    const p = sk2.bodies.find((b) => b.key === j.parentKey);
-    const c = sk2.bodies.find((b) => b.key === j.childKey);
+  for (const j of sk.joints) {
+    const p = sk.bodies.find((b) => b.key === j.parentKey);
+    const c = sk.bodies.find((b) => b.key === j.childKey);
     for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
       const reach = reachOf(b);
       const d = Math.hypot(l[0], l[1], l[2]);
@@ -6917,18 +6917,36 @@ var init_skeleton = __esm({
       // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
-      // ★★ 站距 = 重心横移需求的第一因（Perry & Burnfield：人类步宽 **0.070~0.080 m**）。
-      //   实测站距扫描（`tools/probe-stance.ts`）：
-      //     stance=1.00 → 步宽 347mm(4.63×规范)、X3 误差 106mm、**驻留 0.00s**
-      //     stance=0.60 → 226mm(3.01×)、      X3   1mm、驻留 0.23s
-      //     stance=0.35 → 162mm(2.16×)、      X3  54mm、驻留 0.00s
-      //     stance=0.15 → 101mm(1.35×)、      X3   1mm、驻留 **0.52s**
-      //   ⇒ 站距越大，重心横移需求越大，`handoverTolZ=50mm` 越不可达。**这是几何事实，不是增益问题。**
+      // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
       //
+      // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+      //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+      //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+      //
+      // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+      //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+      //   "Sway amplitude **decreased** as stance width increased, and **Ke
+      //   increased with stance width**"（sway ∝ Ke^−0.55）
+      //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+      //
+      // ★ 身高换算（本 rig 身高 **1.80 m**）：
+      //   · Perry step width 0.075 m = **4.2% 身高**
+      //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+      //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+      //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+      //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+      //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+      //   重心爬不进去。
+      //
+      // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+      //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+      //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+      //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+      //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+      //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+      //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
       // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
-      //   所以 0.35（踝距 156mm、两脚刚好相切）是**物理下限**，仍是规范的 2.16×。
-      //   要真正对齐人类 0.075m，必须**同时把脚变窄**（真实足宽约 100mm，这里 150mm）。
-      //   0.15 档虽然数据最好（驻留 0.52s）但**几何不成立**，不采用。
+      //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
       stance: 0.35,
       limbRadiusScale: 0.6,
       // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
@@ -13982,32 +14000,32 @@ var init_ragdoll = __esm({
       ptTmp = { x: 0, y: 0, z: 0 };
       pcTmp = { x: 0, y: 0, z: 0 };
       ivUp = { x: 0, y: 0, z: 0 };
-      constructor(world, sk2, opt = {}) {
+      constructor(world, sk, opt = {}) {
         this.world = world;
-        this.sk = sk2;
+        this.sk = sk;
         this.opt = { ...DEFAULTS, ...opt };
         for (const key of Object.keys(opt)) {
           if (!(key in DEFAULTS)) {
             console.warn(`[ragdoll] \u26A0 \u672A\u77E5\u914D\u7F6E\u9879 "${key}" \u88AB\u5FFD\u7565\uFF08\u662F\u4E0D\u662F\u6539\u540D\u4E86\uFF1F\u89C1 RagdollOptions\uFF09`);
           }
         }
-        this.motorTarget = new Float32Array(sk2.joints.length * 3);
-        this.motorImpulse = new Float64Array(sk2.joints.length * 3);
-        this.motorDemand = new Float64Array(sk2.joints.length * 3);
-        this.motorAuthority = new Float32Array(sk2.joints.length * 3);
-        this.groundFactor = new Float32Array(sk2.joints.length).fill(1);
-        this.footAuthUsed = new Float32Array(sk2.joints.length * 3).fill(1);
-        this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
-        this.torqueCmd = new Float32Array(sk2.joints.length * 3);
-        this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
-        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
-        this.tauApplied = new Float32Array(sk2.joints.length * 3);
-        this.ankleJoint = jointIndexByName(sk2, "foot_l");
-        this.ankleJointR = jointIndexByName(sk2, "foot_r");
+        this.motorTarget = new Float32Array(sk.joints.length * 3);
+        this.motorImpulse = new Float64Array(sk.joints.length * 3);
+        this.motorDemand = new Float64Array(sk.joints.length * 3);
+        this.motorAuthority = new Float32Array(sk.joints.length * 3);
+        this.groundFactor = new Float32Array(sk.joints.length).fill(1);
+        this.footAuthUsed = new Float32Array(sk.joints.length * 3).fill(1);
+        this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
+        this.torqueCmd = new Float32Array(sk.joints.length * 3);
+        this.holdCmd = new Array(sk.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk.joints.length * 3).fill(1);
+        this.tauApplied = new Float32Array(sk.joints.length * 3);
+        this.ankleJoint = jointIndexByName(sk, "foot_l");
+        this.ankleJointR = jointIndexByName(sk, "foot_r");
         if (this.opt.midfootStiffness || this.opt.midfootDamping) {
           const gain = { ...this.opt.jointGain ?? {} };
-          for (let i = 0; i < sk2.joints.length; i++) {
-            const j = sk2.joints[i];
+          for (let i = 0; i < sk.joints.length; i++) {
+            const j = sk.joints[i];
             if (!j.name.startsWith("midfoot_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
@@ -14020,7 +14038,7 @@ var init_ragdoll = __esm({
           this.opt.jointGain = gain;
         }
         let topSpine = -1;
-        for (const b of sk2.bodies) {
+        for (const b of sk.bodies) {
           const m = /^spine(\d+)$/.exec(b.key);
           if (m) topSpine = Math.max(topSpine, Number(m[1]));
         }
@@ -14030,14 +14048,14 @@ var init_ragdoll = __esm({
           rapier_default.ColliderDesc.cuboid(60, 0.5, 12).setTranslation(0, -0.5, 0).setFriction(this.opt.groundFriction).setCollisionGroups(GROUPS_GROUND),
           ground
         );
-        this.initX = new Float64Array(sk2.bodies.length);
-        this.initY = new Float64Array(sk2.bodies.length);
-        this.initZ = new Float64Array(sk2.bodies.length);
-        this.restQ = sk2.bodies.map((b) => {
+        this.initX = new Float64Array(sk.bodies.length);
+        this.initY = new Float64Array(sk.bodies.length);
+        this.initZ = new Float64Array(sk.bodies.length);
+        this.restQ = sk.bodies.map((b) => {
           const [x, y, z, w] = restQuatOf(b.restTiltRad, b.restYawRad);
           return { x, y, z, w };
         });
-        sk2.bodies.forEach((b, i) => {
+        sk.bodies.forEach((b, i) => {
           this.indexByKey.set(b.key, i);
           this.initX[i] = b.cx;
           this.initY[i] = b.cy;
@@ -14068,15 +14086,15 @@ var init_ragdoll = __esm({
             }
           }
         });
-        this.jointBodies = new Int32Array(sk2.joints.length * 2);
+        this.jointBodies = new Int32Array(sk.joints.length * 2);
         this.createJoints();
-        this.jointIeff = new Float64Array(sk2.joints.length);
+        this.jointIeff = new Float64Array(sk.joints.length);
         const bodyI = new Float64Array(this.bodies.length);
         for (let i = 0; i < this.bodies.length; i++) {
           const I = this.bodies[i].principalInertia();
           bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
         }
-        for (let i = 0; i < sk2.joints.length; i++) {
+        for (let i = 0; i < sk.joints.length; i++) {
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
@@ -14091,7 +14109,7 @@ var init_ragdoll = __esm({
             const hit = hasFootBelow.get(k);
             if (hit !== void 0) return hit;
             let r = false;
-            for (const jj of sk2.joints) {
+            for (const jj of sk.joints) {
               if (jj.parentKey === k) {
                 if (walk(jj.childKey)) {
                   r = true;
@@ -14103,38 +14121,38 @@ var init_ragdoll = __esm({
             return r;
           };
           for (const k of footKeys) hasFootBelow.set(k, true);
-          for (let bi = 0; bi < sk2.bodies.length; bi++) {
-            const k = sk2.bodies[bi].key;
+          for (let bi = 0; bi < sk.bodies.length; bi++) {
+            const k = sk.bodies[bi].key;
             if (!footKeys.includes(k)) continue;
             hasFootBelow.set(k, true);
           }
-          for (let i = 0; i < sk2.joints.length; i++) {
-            const jn = sk2.joints[i];
+          for (let i = 0; i < sk.joints.length; i++) {
+            const jn = sk.joints[i];
             if (!walk(jn.childKey)) continue;
             const aj = this.bodies[this.jointBodies[i * 2 + 1]];
             const ap = aj.translation();
             const inSub = /* @__PURE__ */ new Set();
-            for (let bi = 0; bi < sk2.bodies.length; bi++) {
-              if (sk2.bodies[bi].key === jn.childKey) inSub.add(bi);
+            for (let bi = 0; bi < sk.bodies.length; bi++) {
+              if (sk.bodies[bi].key === jn.childKey) inSub.add(bi);
             }
             let frontier = [jn.childKey];
             while (frontier.length) {
               const k = frontier.pop();
-              for (let bi = 0; bi < sk2.bodies.length; bi++) {
-                const bd = sk2.bodies[bi];
+              for (let bi = 0; bi < sk.bodies.length; bi++) {
+                const bd = sk.bodies[bi];
                 if (inSub.has(bi)) continue;
-                if (sk2.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
+                if (sk.joints.some((jj) => jj.parentKey === k && jj.childKey === bd.key)) {
                   inSub.add(bi);
                   frontier.push(bd.key);
                 }
               }
             }
             let sum = 0;
-            for (let bi = 0; bi < sk2.bodies.length; bi++) {
+            for (let bi = 0; bi < sk.bodies.length; bi++) {
               if (inSub.has(bi)) continue;
               const t = this.bodies[bi].translation();
               const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
-              sum += sk2.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
+              sum += sk.bodies[bi].mass * (dx * dx + dy * dy + dz * dz);
             }
             const free = this.jointIeff[i];
             const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
@@ -14150,8 +14168,8 @@ var init_ragdoll = __esm({
           }
         }
         if (false) {
-          const ank = jointIndexByName(sk2, "foot_l");
-          const ankR = jointIndexByName(sk2, "foot_r");
+          const ank = jointIndexByName(sk, "foot_l");
+          const ankR = jointIndexByName(sk, "foot_r");
           for (const jn of [ank, ankR]) {
             if (jn < 0) continue;
             const footBody = jn === ank ? 0 : 1;
@@ -14165,7 +14183,7 @@ var init_ragdoll = __esm({
               sum += b.mass() * (dx * dx + dy * dy + dz * dz);
             }
             const free = this.jointIeff[jn];
-            const tauMax = sk2.joints[jn].maxTorque[AXIS_Z] ?? 45;
+            const tauMax = sk.joints[jn].maxTorque[AXIS_Z] ?? 45;
             const want = tauMax * (1 / 120) / JOINT_MAX_SPEED;
             const need = want / Math.max(1e-9, free);
             const f = Math.max(1, Math.min(this.opt.ankleGroundFactor, sum / Math.max(1e-9, free), need));
@@ -14173,12 +14191,12 @@ var init_ragdoll = __esm({
             this.ankleGroundFactorUsed[jn] = f;
           }
         }
-        this.refPos = new Float64Array(sk2.joints.length * 3);
-        this.refNeg = new Float64Array(sk2.joints.length * 3);
-        for (let i = 0; i < sk2.joints.length; i++) {
+        this.refPos = new Float64Array(sk.joints.length * 3);
+        this.refNeg = new Float64Array(sk.joints.length * 3);
+        for (let i = 0; i < sk.joints.length; i++) {
           for (let k = 0; k < 3; k++) {
             const s = this.opt.posRefScale;
-            const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
+            const span = Math.max(Math.abs(sk.joints[i].minRad[k]), Math.abs(sk.joints[i].maxRad[k]));
             this.refPos[i * 3 + k] = s * span;
             this.refNeg[i * 3 + k] = s * span;
           }
@@ -16300,6 +16318,24 @@ var init_gaitRef = __esm({
 });
 
 // src/core/keyframe.ts
+var keyframe_exports = {};
+__export(keyframe_exports, {
+  GAIT_KEY_RANGE: () => GAIT_KEY_RANGE,
+  KEY_POSES: () => KEY_POSES,
+  NORMATIVE_ANKLE_SPAN: () => NORMATIVE_ANKLE_SPAN,
+  NORMATIVE_BIILIAC: () => NORMATIVE_BIILIAC,
+  NORMATIVE_STEP_WIDTH: () => NORMATIVE_STEP_WIDTH,
+  PHASE_TO_GAIT: () => PHASE_TO_GAIT,
+  keyPose: () => keyPose,
+  lerpKeyPose: () => lerpKeyPose,
+  otherSide: () => otherSide,
+  stanceSpan: () => stanceSpan,
+  stanceWidthRatio: () => stanceWidthRatio,
+  supportEntry: () => supportEntry
+});
+function keyPose(key) {
+  return KEY_POSES[key];
+}
 function lerpKeyPose(from, to, s) {
   const a = KEY_POSES[from], b = KEY_POSES[to];
   const u = s < 0 ? 0 : s > 1 ? 1 : s;
@@ -16316,13 +16352,19 @@ function lerpKeyPose(from, to, s) {
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
-function strideWidth(soleZl, soleZr) {
+function stanceSpan(soleZl, soleZr) {
   return Math.abs(soleZl - soleZr);
 }
-function strideWidthRatio(soleZl, soleZr) {
-  return strideWidth(soleZl, soleZr) / NORMATIVE_STRIDE_WIDTH;
+function stanceWidthRatio(soleZl, soleZr, biiliac = 0.25) {
+  return stanceSpan(soleZl, soleZr) / Math.max(1e-3, biiliac);
 }
-var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT, NORMATIVE_STRIDE_WIDTH;
+function supportEntry(soleZl, footHalfWidth = 0.05) {
+  return Math.abs(soleZl) - footHalfWidth;
+}
+function otherSide(s) {
+  return s === "l" ? "r" : "l";
+}
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT, NORMATIVE_STEP_WIDTH, NORMATIVE_BIILIAC, NORMATIVE_ANKLE_SPAN;
 var init_keyframe = __esm({
   "src/core/keyframe.ts"() {
     "use strict";
@@ -16444,7 +16486,9 @@ var init_keyframe = __esm({
       PUSH: "PSw",
       STEP: "ISw"
     });
-    NORMATIVE_STRIDE_WIDTH = 0.075;
+    NORMATIVE_STEP_WIDTH = 0.075;
+    NORMATIVE_BIILIAC = 0.28;
+    NORMATIVE_ANKLE_SPAN = { min: 0.1, max: 0.15 };
   }
 });
 
@@ -16640,7 +16684,8 @@ var init_rigState = __esm({
       shiftPushTau = 0;
       keyPose = KEY_POSES.MSt;
       gaitKey = "MSt";
-      strideRatio = 4.4;
+      strideRatio = 0.65;
+      supportEntryZ = 0;
       shiftErrZ = 0;
       shiftDemandF = 0;
       shiftDriveSide = null;
@@ -16699,10 +16744,10 @@ var init_rigState = __esm({
       tSec = 0;
       /** 上一拍的 target，供斜率限制 */
       prevOut;
-      constructor(sk2, cfg = DEFAULT_RIGSTATE_CONFIG) {
-        this.sk = sk2;
+      constructor(sk, cfg = DEFAULT_RIGSTATE_CONFIG) {
+        this.sk = sk;
         this.cfg = cfg;
-        const n = sk2.joints.length * AXES_PER_JOINT;
+        const n = sk.joints.length * AXES_PER_JOINT;
         this.nAxes = n;
         this.pos = new Float64Array(n);
         this.vel = new Float64Array(n);
@@ -16716,7 +16761,7 @@ var init_rigState = __esm({
         }
         this.tauOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
-        this.forceBuf = new Float64Array(sk2.joints.length * 5);
+        this.forceBuf = new Float64Array(sk.joints.length * 5);
         this.treq.fill(void 0);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
@@ -17334,6 +17379,7 @@ var init_rigState = __esm({
           keyPose: this.keyPose,
           gaitKey: this.gaitKey,
           strideRatio: this.strideRatio,
+          supportEntryZ: this.supportEntryZ,
           forceChain: this.forceChain(),
           comTransfer: this.comTransfer(),
           torsoY: this.torsoY,
@@ -17555,7 +17601,8 @@ var init_gaitState = __esm({
         const gk = PHASE_TO_GAIT[rs.phase] ?? "MSt";
         rs.gaitKey = gk;
         rs.keyPose = KEY_POSES[gk];
-        rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.supportEntryZ = supportEntry(rs.soleZ[rs.supportLeg()]);
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(
           { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
@@ -18590,15 +18637,15 @@ var init_sim = __esm({
       supTicks = 0;
       inDomainTicks = 0;
       balanceTicks = 0;
-      constructor(sk2, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
-        const n = sk2.joints.length;
+      constructor(sk, shape = BRAIN_SHAPE, cfg = DEFAULT_SIM) {
+        const n = sk.joints.length;
         const expIn = 36 + 6 * n, expOut = 3 * n;
         if (shape.inputs !== expIn || shape.outputs !== expOut) {
           throw new Error(
             `[sim] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1Ashape ${shape.inputs}\u2192${shape.outputs}\uFF0C\u4F46\u9AA8\u67B6 ${n} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\u8BF7\u4F20 shapeForJoints(sk.joints.length)\uFF08BRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u4E0D\u80FD\u7528\u4E8E\u672C rig\uFF09\u3002`
           );
         }
-        this.sk = sk2;
+        this.sk = sk;
         this.cfg = cfg;
         this.shape = shape;
         this.w = { ...W, ...cfg.weights };
@@ -19568,16 +19615,16 @@ function groupOf(n) {
   if (n.startsWith("foot") || n.startsWith("ankle")) return "\u8E1D";
   return "\u5176\u5B83";
 }
-function auditJoints(sk2) {
+function auditJoints(sk) {
   const joints = [];
   const problems = [];
   const order = ["\u9888", "\u80A9", "\u8098", "\u9ACB", "\u819D", "\u8E1D", "\u8170", "\u5176\u5B83"];
-  const names = [...sk2.joints.map((j) => j.name), ...PHANTOM_JOINTS];
+  const names = [...sk.joints.map((j) => j.name), ...PHANTOM_JOINTS];
   for (const name of names) {
-    const idx = jointIndexByName(sk2, name);
-    const exists = hasJoint(sk2, name);
+    const idx = jointIndexByName(sk, name);
+    const exists = hasJoint(sk, name);
     const base = JOINT_MAX_TORQUE[name] ?? 100;
-    const def = exists ? sk2.joints[idx] : void 0;
+    const def = exists ? sk.joints[idx] : void 0;
     const axes = [];
     const jp = [];
     if (!exists) {
@@ -19611,12 +19658,12 @@ function auditJoints(sk2) {
   }
   joints.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.name.localeCompare(b.name));
   const inv = [];
-  const realAxes = sk2.joints.length * 3;
+  const realAxes = sk.joints.length * 3;
   inv.push({
     id: "I3",
     ok: true,
     // 槽位多于实际轴不是错，但要**显式记账**，否则会以为踝在被控制
-    msg: `\u5B9E\u9645\u53D7\u63A7\u8F74 ${realAxes}\uFF08${sk2.joints.length} \u5173\u8282 \xD73\uFF09\uFF1BPHANTOM_JOINTS \u58F0\u660E\u4E86 ${PHANTOM_JOINTS.length * 3} \u4E2A\u4E0D\u5B58\u5728\u7684\u8F74`
+    msg: `\u5B9E\u9645\u53D7\u63A7\u8F74 ${realAxes}\uFF08${sk.joints.length} \u5173\u8282 \xD73\uFF09\uFF1BPHANTOM_JOINTS \u58F0\u660E\u4E86 ${PHANTOM_JOINTS.length * 3} \u4E2A\u4E0D\u5B58\u5728\u7684\u8F74`
   });
   const hipAb = joints.find((j) => j.name === "hip_l")?.axes[1];
   if (hipAb?.usable) {
@@ -19643,20 +19690,20 @@ function auditJoints(sk2) {
     });
   }
   return {
-    bodyCount: sk2.bodies.length,
-    jointCount: sk2.joints.length,
-    axisSlots: (sk2.joints.length + PHANTOM_JOINTS.length) * 3,
+    bodyCount: sk.bodies.length,
+    jointCount: sk.joints.length,
+    axisSlots: (sk.joints.length + PHANTOM_JOINTS.length) * 3,
     joints,
     invariants: inv,
     problems,
     ok: inv.every((v) => v.ok)
   };
 }
-function assertRigInvariants(sk2, shape) {
-  const report = auditJoints(sk2);
-  for (let i = 0; i < sk2.joints.length; i++) {
-    const nm = sk2.joints[i].name;
-    const back = jointIndexByName(sk2, nm);
+function assertRigInvariants(sk, shape) {
+  const report = auditJoints(sk);
+  for (let i = 0; i < sk.joints.length; i++) {
+    const nm = sk.joints[i].name;
+    const back = jointIndexByName(sk, nm);
     if (back !== i) {
       throw new Error(
         `[rig] \u5173\u8282\u540D\u4E0E\u7D22\u5F15\u4E0D\u4E00\u81F4\uFF1Ask.joints[${i}].name="${nm}"\uFF0C\u4F46 jointIndexByName \u67E5\u56DE ${back}\u3002\u8FD9\u4F1A\u8BA9\u6309\u540D\u5B57\u9A71\u52A8\u9759\u9ED8\u4F5C\u7528\u5230\u522B\u7684\u5173\u8282\u4E0A\u3002`
@@ -19664,14 +19711,14 @@ function assertRigInvariants(sk2, shape) {
     }
   }
   for (const nm of PHANTOM_JOINTS) {
-    if (hasJoint(sk2, nm)) continue;
+    if (hasJoint(sk, nm)) continue;
   }
-  const sh = shape ?? shapeForJoints(sk2.joints.length);
-  const expIn = 36 + 6 * sk2.joints.length;
-  const expOut = 3 * sk2.joints.length;
+  const sh = shape ?? shapeForJoints(sk.joints.length);
+  const expIn = 36 + 6 * sk.joints.length;
+  const expOut = 3 * sk.joints.length;
   if (sh.inputs !== expIn || sh.outputs !== expOut) {
     throw new Error(
-      `[rig] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1A${sh.inputs}\u2192${sh.outputs}\uFF0C\u4F46 ${sk2.joints.length} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\uFF08\u5386\u53F2\u4E8B\u6545\uFF1ABRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u7528\u5728 12 \u5173\u8282\u9AA8\u67B6\u4E0A \u21D2 \u89C2\u6D4B\u9759\u9ED8\u622A 18 \u7EF4\u3001\u53EA\u9A71\u52A8 9/12 \u5173\u8282\u300110 \u6B65\u5185 com \u5168 NaN \u800C\u4E0D\u62A5\u9519\uFF09`
+      `[rig] \u7F51\u7EDC\u5F62\u72B6\u4E0E\u9AA8\u67B6\u4E0D\u7B26\uFF1A${sh.inputs}\u2192${sh.outputs}\uFF0C\u4F46 ${sk.joints.length} \u5173\u8282\u8981\u6C42 ${expIn}\u2192${expOut}\u3002\uFF08\u5386\u53F2\u4E8B\u6545\uFF1ABRAIN_SHAPE \u662F 9 \u5173\u8282\u7684\u9ED8\u8BA4\u503C\uFF0C\u7528\u5728 12 \u5173\u8282\u9AA8\u67B6\u4E0A \u21D2 \u89C2\u6D4B\u9759\u9ED8\u622A 18 \u7EF4\u3001\u53EA\u9A71\u52A8 9/12 \u5173\u8282\u300110 \u6B65\u5185 com \u5168 NaN \u800C\u4E0D\u62A5\u9519\uFF09`
     );
   }
   return report;
@@ -19773,16 +19820,16 @@ var init_wantedForce = __esm({
 
 // src/core/systems/balance.ts
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const sup = rs.supportLeg();
   const latArmed = stanceResolved(rs);
   const latOwnsAbduction = latArmed && p.lateralEnabled;
-  const jHip = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
-  const jKnee = jointIndexByName(sk2, sup === "l" ? "knee_l" : "knee_r");
-  const jSp1 = jointIndexByName(sk2, "spine1");
-  const jSp2 = jointIndexByName(sk2, "spine2");
-  const jSp3 = jointIndexByName(sk2, "spine3");
-  const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
+  const jHip = jointIndexByName(sk, sup === "l" ? "hip_l" : "hip_r");
+  const jKnee = jointIndexByName(sk, sup === "l" ? "knee_l" : "knee_r");
+  const jSp1 = jointIndexByName(sk, "spine1");
+  const jSp2 = jointIndexByName(sk, "spine2");
+  const jSp3 = jointIndexByName(sk, "spine3");
+  const jAnk = jointIndexByName(sk, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
     rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
     return;
@@ -19906,7 +19953,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const zRefLat = rs.soleZ[sup] ?? rs.com.z;
       const w0Lat = rs.omega0();
       const armLat = 0.119;
-      const mLat = sk2.cfg.mass;
+      const mLat = sk.cfg.mass;
       const kLatBase = armLat * mLat * w0Lat * w0Lat;
       const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
       const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
@@ -19995,7 +20042,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
         const omega0 = Math.sqrt(Math.max(
           1e-6,
-          sk2.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
+          sk.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
         ));
         const a = p.vipOmegaFrac * omega0;
         rs.vipOmega = omega0;
@@ -20017,27 +20064,27 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.settleOffPhase(qVip);
       }
       if (rs.phase === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
-      const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      const tauMaxAnk = sk.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
       rs.qVip = qVip;
       rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
     }
-    const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
+    const jMid = jointIndexByName(sk, sup === "l" ? "midfoot_l" : "midfoot_r");
     if (jMid >= 0) {
       const latErr = rs.dcm.z - rs.support.cz;
       rs.requestAngle(jMid, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u4E2D\u8DB3\u989D\u72B6CoP");
     }
   }
   if (doll && on("hipStiff")) {
-    const jHipS = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
+    const jHipS = jointIndexByName(sk, sup === "l" ? "hip_l" : "hip_r");
     if (jHipS >= 0) {
       const side = sup === "l" ? "l" : "r";
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
       const qHip = rs.pos[jHipS * 3 + 2];
       const qHipRate = rs.vel[jHipS * 3 + 2];
-      const tauMaxHip = sk2.joints[jHipS]?.maxTorque?.[2] ?? 200;
+      const tauMaxHip = sk.joints[jHipS]?.maxTorque?.[2] ?? 200;
       const qLim = p.maxHipStiffDeg * D2R2;
       const qEff = clamp2(qHip, qLim);
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
@@ -20253,13 +20300,13 @@ var init_balance = __esm({
 
 // src/core/systems/step.ts
 function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
-  const sk2 = rs.sk;
+  const sk = rs.sk;
   const swing = rs.swingLeg();
-  const jHip = jointIndexByName(sk2, swing === "l" ? "hip_l" : "hip_r");
-  const jKnee = jointIndexByName(sk2, swing === "l" ? "knee_l" : "knee_r");
-  const jSp1 = jointIndexByName(sk2, "spine1");
-  const jSp2 = jointIndexByName(sk2, "spine2");
-  const jSp3 = jointIndexByName(sk2, "spine3");
+  const jHip = jointIndexByName(sk, swing === "l" ? "hip_l" : "hip_r");
+  const jKnee = jointIndexByName(sk, swing === "l" ? "knee_l" : "knee_r");
+  const jSp1 = jointIndexByName(sk, "spine1");
+  const jSp2 = jointIndexByName(sk, "spine2");
+  const jSp3 = jointIndexByName(sk, "spine3");
   if (jHip < 0 || jKnee < 0) return;
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
@@ -20269,7 +20316,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   if ((rs.phase === "SHIFT" || rs.phase === "DOUBLE") && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
-    const mTot = sk2.cfg.mass;
+    const mTot = sk.cfg.mass;
     const raw = mTot * (w0 * w0 * (zRef - rs.com.z) + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
     const ramp = p.shiftRamp > 0 ? Math.min(1, rs.phaseT / p.shiftRamp) : 1;
@@ -20303,7 +20350,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     const kp = keySwing(s);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
-    const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
+    const jFt = jointIndexByName(sk, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
@@ -20388,13 +20435,13 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim2;
+      constructor(sk, sim, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim2.shape);
-        this.rs = new RigState(sk2, cfg.rig);
+        this.rigReport = assertRigInvariants(sk, sim.shape);
+        this.rs = new RigState(sk, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
-        sim2.attachRigState(this.rs);
+        sim.attachRigState(this.rs);
         this.snapshot = this.rs.snapshot();
       }
       rs;
@@ -20411,66 +20458,66 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim2 = this.sim;
+        const sim = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim2.doll, rs.com);
-        readSupport(sim2.doll, rs.support);
+        const com = readCom(sim.doll, rs.com);
+        readSupport(sim.doll, rs.support);
         rs.updateComAccel(dt);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim2.doll.footLoadFrac(dt);
+        const [fl, fr] = sim.doll.footLoadFrac(dt);
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim2.doll.footGrounded(0);
-        rs.grounded.r = sim2.doll.footGrounded(1);
+        rs.grounded.l = sim.doll.footGrounded(0);
+        rs.grounded.r = sim.doll.footGrounded(1);
         {
-          sim2.doll.stanceClearancePeak = Math.max(
-            Math.max(0, sim2.doll.soleY("l")),
-            Math.max(0, sim2.doll.soleY("r"))
+          sim.doll.stanceClearancePeak = Math.max(
+            Math.max(0, sim.doll.soleY("l")),
+            Math.max(0, sim.doll.soleY("r"))
           );
-          sim2.doll.advanceStance(dt);
-          rs.stanceSingle = sim2.doll.stanceSingleNow;
+          sim.doll.advanceStance(dt);
+          rs.stanceSingle = sim.doll.stanceSingleNow;
         }
-        sim2.doll.soleXZ("l", TMP_A);
+        sim.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
-        sim2.doll.soleXZ("r", TMP_B);
+        sim.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
         rs.soleZ.r = TMP_B[2];
-        const n = sim2.doll.jointCount;
+        const n = sim.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim2.doll.jointRot(j, TMP_RV);
+            sim.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim2.doll.jointRelVel(j, TMP_RV);
+            sim.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim2.doll.readCoP(0, TMP_COP_L);
-        sim2.doll.readCoP(1, TMP_COP_R);
+        sim.doll.readCoP(0, TMP_COP_L);
+        sim.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim2.doll.torso().translation().y;
-        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
+        rs.torsoY = sim.doll.torso().translation().y;
+        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
         {
-          const q = sim2.doll.torso().rotation();
+          const q = sim.doll.torso().rotation();
           const ax = 2 * (q.x * q.y + q.w * q.z);
           const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
           const az = 2 * (q.y * q.z - q.w * q.x);
           const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
           rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
           rs.rollDeg = Math.atan2(az, uy) * 57.2958;
-          const av = sim2.doll.torso().angvel();
+          const av = sim.doll.torso().angvel();
           rs.pitchRate = av.z * 57.2958;
           rs.rollRate = av.x * 57.2958;
         }
@@ -20512,7 +20559,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-lock.ts
+// tools/probe-stance.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -20535,40 +20582,34 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var log = console.log;
-var sk = buildSkeleton2(DEFAULT_CONFIG2);
-var SHAPE = shapeForJoints2(sk.joints.length);
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
-sim.begin(new Float32Array(sim.paramCount));
-var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
-var everLockedL = 0;
-var everLockedR = 0;
-var bothLocked = 0;
-var supportDisagreesWithLock = 0;
-var flips = 0;
-var prevSup = "";
-var firstLockAt = -1;
-for (let i = 0; i < 120 * 5 && !sim.finished; i++) {
-  if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
-  sim.advance(1);
-  if (i % 2) continue;
-  const s = ctrl.snapshot;
-  const lk = s.locked;
-  if (lk.l) everLockedL++;
-  if (lk.r) everLockedR++;
-  if (lk.l && lk.r) bothLocked++;
-  if (lk.l && !lk.r && s.supportLeg !== "l") supportDisagreesWithLock++;
-  if (lk.r && !lk.l && s.supportLeg !== "r") supportDisagreesWithLock++;
-  if (prevSup && s.supportLeg !== prevSup) flips++;
-  if ((lk.l || lk.r) && firstLockAt < 0) firstLockAt = s.t;
-  prevSup = s.supportLeg;
-  if (s.tiltDeg >= 25) break;
+log("\u2550\u2550 \u7AD9\u8DDD\u626B\u63CF\uFF08Winter 1998 \u53E3\u5F84\uFF1A\u7AD9\u8DDD/\u9ACB\u95F4\u8DDD\uFF0C\u5B9E\u6D4B\u533A\u95F4 0.5~1.5\uFF09\u2550\u2550");
+log("   stance  \u534A\u7AD9\u8DDD  \u7AD9\u8DDD   /\u9ACB\u95F4\u8DDD  \u8FDB\u652F\u6491\u9762  \u6700\u5C0FX3  \u9A7B\u7559   \u5B58\u6D3B");
+for (const stance of [1, 0.6, 0.35, 0.15, 0]) {
+  const sk = buildSkeleton2({ ...DEFAULT_CONFIG2, stance });
+  const SHAPE = shapeForJoints2(sk.joints.length);
+  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
+  let dzMin = 1e9, alive = 0, run = 0, best = 0, lz = 0, rz = 0;
+  for (let i = 0; i < 120 * 6 && !sim.finished; i++) {
+    if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i % 2) continue;
+    const s = ctrl.snapshot;
+    if (i < 60) {
+      lz = s.legs.l.footZ;
+      rz = s.legs.r.footZ;
+    }
+    const dz = Math.abs(s.com.z - s.legs[s.supportLeg].footZ);
+    dzMin = Math.min(dzMin, dz);
+    if (dz <= 0.05) {
+      run++;
+      best = Math.max(best, run);
+    } else run = 0;
+    if (s.tiltDeg >= 25) break;
+    alive = s.t;
+  }
+  const w = Math.abs(lz - rz);
+  const { stanceWidthRatio: stanceWidthRatio2, supportEntry: supportEntry2 } = await Promise.resolve().then(() => (init_keyframe(), keyframe_exports));
+  log(`   ${stance.toFixed(2)}    ${(Math.abs(lz) * 1e3).toFixed(0).padStart(4)}mm ${(w * 1e3).toFixed(0).padStart(4)}mm  ${stanceWidthRatio2(lz, rz).toFixed(2).padStart(6)}\xD7 ${(supportEntry2(lz) * 1e3).toFixed(0).padStart(7)}mm ${(dzMin * 1e3).toFixed(0).padStart(6)}mm ${(best / 60).toFixed(2).padStart(5)}s ${alive.toFixed(2)}s`);
 }
-var frames = Math.max(1, Math.round(ctrl.snapshot.t * 60));
-log("\u2550\u2550 \u9501\u5B9A\u817F\u673A\u5236\u53EF\u7528\u6027\u68C0\u67E5 \u2550\u2550");
-log(`   \u8FD0\u884C\u5E27\u6570              ${frames}`);
-log(`   locked.l \u7F6E\u771F\u5E27\u6570     ${everLockedL}`);
-log(`   locked.r \u7F6E\u771F\u5E27\u6570     ${everLockedR}`);
-log(`   \u4E24\u817F\u540C\u65F6\u9501\u6B7B\u5E27\u6570      ${bothLocked}`);
-log(`   \u9996\u6B21\u9501\u5B9A\u65F6\u523B          ${firstLockAt < 0 ? "\u4ECE\u672A\u9501\u5B9A" : firstLockAt.toFixed(2) + "s"}`);
-log(`   \u2605\u9501\u5B9A\u751F\u6548\u4F46 supportLeg \u4E0D\u7B26\u7684\u5E27\u6570  ${supportDisagreesWithLock}`);
-log(`   supportLeg \u7FFB\u8F6C\u6B21\u6570   ${flips}`);

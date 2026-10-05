@@ -192,23 +192,51 @@ export function lerpKeyPose(from: GaitKey, to: GaitKey, s: number): KeyPose {
   };
 }
 
-/**
- * ★ 规范步宽（m）。Perry & Burnfield：女 7cm / 男 8cm。
- * ⚠ 本 rig 实际 **0.327m**（footZ ±163mm）⇒ 是规范的 **4 倍**。
- *   这不是 bug，是设计选择（站得开 ⇒ 稳），但它意味着**重心横移需求
- *   也是规范的 4 倍**（≈142mm vs ≈40mm）。要按人类标准评判 `handoverTolZ`，
- *   必须先把这个倍率算进去。
- */
-export const NORMATIVE_STRIDE_WIDTH = 0.075;
+// ══════════════════════════════════════════════════════════════
+// ★ 站距的**正确**文献基准（2026-10-05 更正）
+// ══════════════════════════════════════════════════════════════
+//
+// ⚠⚠ 曾经的量纲错误：把本 rig 的**踝间距**去比 Perry 的 **step width
+//   0.075 m**，得出"4.4× 人类"。**两者不是同一个量**：
+//     · step width = **相邻两步落点**的横向间距（Perry & Burnfield）
+//     · 站距 = **站立时双脚**的间距
+//
+// ★ 站距的正确基准是 **hip-to-hip 的百分比** —— **Winter 1998**
+//   （J Neurophysiology 80:1211）实测了 **50% / 100% / 150%** 三档：
+//   "Sway amplitude **decreased** as stance width increased, and **Ke
+//   increased with stance width**"（sway ∝ Ke^−0.55）
+//   ⇒ **宽站距更稳**，不是更不稳。
+//
+// ★ 身高 1.80 m 的等比换算：
+//   · step width 0.075 m = **4.2% 身高**
+//   · biiliac（髋间距）≈ 0.28 m = **15.6% 身高**
+//   · 站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+//   本 rig 髋间距 0.25 m（≈人类 ✓）⇒ 对应 `stance ≈ 0.25~0.40`
+//
+// ★★ 站距影响**重心转移**的真实机制是**支撑面位置**，不是"稳不稳"：
+//   重心不必到脚心，只需进入脚掌横向范围（足宽≈100mm，半 50mm）。
+//   `handoverTolZ = 50mm` 要求重心到脚心 50mm 内 ⇒ 支撑面离中线越近越可达。
+export const NORMATIVE_STEP_WIDTH = 0.075;      // Perry：相邻落点横向间距
+export const NORMATIVE_BIILIAC = 0.28;          // 身高 1.80m 的髋间距
+/** 人类站立踝间距区间（m）＝ 髋间距的 35~55% */
+export const NORMATIVE_ANKLE_SPAN = { min: 0.10, max: 0.15 };
 
-/** 本 rig 的实际步宽（m）—— 由两脚 `soleZ` 之差得到，运行时算。 */
-export function strideWidth(soleZl: number, soleZr: number): number {
+/** 站立站距（m）＝ 两脚 `soleZ` 之差。 */
+export function stanceSpan(soleZl: number, soleZr: number): number {
   return Math.abs(soleZl - soleZr);
 }
 
-/** 站距相对规范值的倍率（诊断用）：>1 表示比人类站得开。 */
-export function strideWidthRatio(soleZl: number, soleZr: number): number {
-  return strideWidth(soleZl, soleZr) / NORMATIVE_STRIDE_WIDTH;
+/** 站距 / 髋间距（Winter 1998 的口径，0.5~1.5 为其实测区间）。 */
+export function stanceWidthRatio(soleZl: number, soleZr: number, biiliac = 0.25): number {
+  return stanceSpan(soleZl, soleZr) / Math.max(1e-3, biiliac);
+}
+
+/**
+ * 重心进入支撑面所需的最小横移（m）：脚心 − 足半宽。
+ * 这才是 `handoverTolZ` 难度的真正度量，比站距本身直接。
+ */
+export function supportEntry(soleZl: number, footHalfWidth = 0.05): number {
+  return Math.abs(soleZl) - footHalfWidth;
 }
 
 /** 侧别工具：给定支撑腿，返回摆动腿。 */

@@ -307,8 +307,10 @@ export interface RigSnapshot {
   gaitKey: GaitKey;
   /** ★ 当前关键帧姿态目标（两套系统的共同收敛目标，见 `keyframe.ts`） */
   keyPose: KeyPose;
-  /** 本 rig 步宽 / 人类规范步宽（4.4 ⇒ 重心横移需求也是人类的 4 倍） */
+  /** 站距 / 髋间距（Winter 1998 口径；其实测区间 0.5~1.5） */
   strideRatio: number;
+  /** 重心进入支撑面所需的最小横移（米）＝ |soleZ| − 足半宽 */
+  supportEntryZ: number;
   /** 事件（每拍增量） */
   events: { touchdownL: boolean; touchdownR: boolean; lockReleasedL: boolean; lockReleasedR: boolean };
 }
@@ -519,7 +521,8 @@ export class RigState {
   shiftPushTau = 0;
   keyPose: KeyPose = KEY_POSES.MSt;
   gaitKey: GaitKey = 'MSt';
-  strideRatio = 4.4;
+  strideRatio = 0.65;
+  supportEntryZ = 0;
   shiftErrZ = 0;
   shiftDemandF = 0;
   shiftDriveSide: Side | null = null;
@@ -1144,6 +1147,7 @@ export class RigState {
       shiftDemandF: this.shiftDemandF, shiftDriveSide: this.shiftDriveSide,
       shiftPushTau: this.shiftPushTau, shiftErrZ: this.shiftErrZ,
       keyPose: this.keyPose, gaitKey: this.gaitKey, strideRatio: this.strideRatio,
+      supportEntryZ: this.supportEntryZ,
       forceChain: this.forceChain(), comTransfer: this.comTransfer(),
       torsoY: this.torsoY, tiltDeg: this.tiltDeg,
       pitchDeg: this.pitchDeg, rollDeg: this.rollDeg,

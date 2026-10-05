@@ -6917,18 +6917,36 @@ var init_skeleton = __esm({
       // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
-      // ★★ 站距 = 重心横移需求的第一因（Perry & Burnfield：人类步宽 **0.070~0.080 m**）。
-      //   实测站距扫描（`tools/probe-stance.ts`）：
-      //     stance=1.00 → 步宽 347mm(4.63×规范)、X3 误差 106mm、**驻留 0.00s**
-      //     stance=0.60 → 226mm(3.01×)、      X3   1mm、驻留 0.23s
-      //     stance=0.35 → 162mm(2.16×)、      X3  54mm、驻留 0.00s
-      //     stance=0.15 → 101mm(1.35×)、      X3   1mm、驻留 **0.52s**
-      //   ⇒ 站距越大，重心横移需求越大，`handoverTolZ=50mm` 越不可达。**这是几何事实，不是增益问题。**
+      // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
       //
+      // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+      //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+      //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+      //
+      // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+      //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+      //   "Sway amplitude **decreased** as stance width increased, and **Ke
+      //   increased with stance width**"（sway ∝ Ke^−0.55）
+      //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+      //
+      // ★ 身高换算（本 rig 身高 **1.80 m**）：
+      //   · Perry step width 0.075 m = **4.2% 身高**
+      //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+      //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+      //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+      //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+      //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+      //   重心爬不进去。
+      //
+      // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+      //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+      //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+      //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+      //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+      //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+      //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
       // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
-      //   所以 0.35（踝距 156mm、两脚刚好相切）是**物理下限**，仍是规范的 2.16×。
-      //   要真正对齐人类 0.075m，必须**同时把脚变窄**（真实足宽约 100mm，这里 150mm）。
-      //   0.15 档虽然数据最好（驻留 0.52s）但**几何不成立**，不采用。
+      //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
       stance: 0.35,
       limbRadiusScale: 0.6,
       // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
@@ -16316,13 +16334,16 @@ function lerpKeyPose(from, to, s) {
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
-function strideWidth(soleZl, soleZr) {
+function stanceSpan(soleZl, soleZr) {
   return Math.abs(soleZl - soleZr);
 }
-function strideWidthRatio(soleZl, soleZr) {
-  return strideWidth(soleZl, soleZr) / NORMATIVE_STRIDE_WIDTH;
+function stanceWidthRatio(soleZl, soleZr, biiliac = 0.25) {
+  return stanceSpan(soleZl, soleZr) / Math.max(1e-3, biiliac);
 }
-var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT, NORMATIVE_STRIDE_WIDTH;
+function supportEntry(soleZl, footHalfWidth = 0.05) {
+  return Math.abs(soleZl) - footHalfWidth;
+}
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT;
 var init_keyframe = __esm({
   "src/core/keyframe.ts"() {
     "use strict";
@@ -16444,7 +16465,6 @@ var init_keyframe = __esm({
       PUSH: "PSw",
       STEP: "ISw"
     });
-    NORMATIVE_STRIDE_WIDTH = 0.075;
   }
 });
 
@@ -16640,7 +16660,8 @@ var init_rigState = __esm({
       shiftPushTau = 0;
       keyPose = KEY_POSES.MSt;
       gaitKey = "MSt";
-      strideRatio = 4.4;
+      strideRatio = 0.65;
+      supportEntryZ = 0;
       shiftErrZ = 0;
       shiftDemandF = 0;
       shiftDriveSide = null;
@@ -17334,6 +17355,7 @@ var init_rigState = __esm({
           keyPose: this.keyPose,
           gaitKey: this.gaitKey,
           strideRatio: this.strideRatio,
+          supportEntryZ: this.supportEntryZ,
           forceChain: this.forceChain(),
           comTransfer: this.comTransfer(),
           torsoY: this.torsoY,
@@ -17555,7 +17577,8 @@ var init_gaitState = __esm({
         const gk = PHASE_TO_GAIT[rs.phase] ?? "MSt";
         rs.gaitKey = gk;
         rs.keyPose = KEY_POSES[gk];
-        rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.supportEntryZ = supportEntry(rs.soleZ[rs.supportLeg()]);
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(
           { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
@@ -20252,6 +20275,12 @@ var init_balance = __esm({
 });
 
 // src/core/systems/step.ts
+var step_exports = {};
+__export(step_exports, {
+  DEFAULT_STEP_PARAMS: () => DEFAULT_STEP_PARAMS,
+  KNEE_FLEX_PEAK: () => KNEE_FLEX_PEAK,
+  stepSystem: () => stepSystem
+});
 function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const sk2 = rs.sk;
   const swing = rs.swingLeg();
@@ -20388,13 +20417,13 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim2;
+      constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim2.shape);
+        this.rigReport = assertRigInvariants(sk2, sim.shape);
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
-        sim2.attachRigState(this.rs);
+        sim.attachRigState(this.rs);
         this.snapshot = this.rs.snapshot();
       }
       rs;
@@ -20411,66 +20440,66 @@ var init_controller = __esm({
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
       step(dt) {
         const rs = this.rs;
-        const sim2 = this.sim;
+        const sim = this.sim;
         rs.beginTick(dt);
-        const com = readCom(sim2.doll, rs.com);
-        readSupport(sim2.doll, rs.support);
+        const com = readCom(sim.doll, rs.com);
+        readSupport(sim.doll, rs.support);
         rs.updateComAccel(dt);
         const om = omegaAt(com.y);
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim2.doll.footLoadFrac(dt);
+        const [fl, fr] = sim.doll.footLoadFrac(dt);
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim2.doll.footGrounded(0);
-        rs.grounded.r = sim2.doll.footGrounded(1);
+        rs.grounded.l = sim.doll.footGrounded(0);
+        rs.grounded.r = sim.doll.footGrounded(1);
         {
-          sim2.doll.stanceClearancePeak = Math.max(
-            Math.max(0, sim2.doll.soleY("l")),
-            Math.max(0, sim2.doll.soleY("r"))
+          sim.doll.stanceClearancePeak = Math.max(
+            Math.max(0, sim.doll.soleY("l")),
+            Math.max(0, sim.doll.soleY("r"))
           );
-          sim2.doll.advanceStance(dt);
-          rs.stanceSingle = sim2.doll.stanceSingleNow;
+          sim.doll.advanceStance(dt);
+          rs.stanceSingle = sim.doll.stanceSingleNow;
         }
-        sim2.doll.soleXZ("l", TMP_A);
+        sim.doll.soleXZ("l", TMP_A);
         rs.soleX.l = TMP_A[0];
         rs.soleZ.l = TMP_A[2];
-        sim2.doll.soleXZ("r", TMP_B);
+        sim.doll.soleXZ("r", TMP_B);
         rs.soleX.r = TMP_B[0];
         rs.soleZ.r = TMP_B[2];
-        const n = sim2.doll.jointCount;
+        const n = sim.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim2.doll.jointRot(j, TMP_RV);
+            sim.doll.jointRot(j, TMP_RV);
             rs.pos[i] = TMP_RV[a];
-            sim2.doll.jointRelVel(j, TMP_RV);
+            sim.doll.jointRelVel(j, TMP_RV);
             rs.vel[i] = TMP_RV[a];
           }
         }
-        sim2.doll.readCoP(0, TMP_COP_L);
-        sim2.doll.readCoP(1, TMP_COP_R);
+        sim.doll.readCoP(0, TMP_COP_L);
+        sim.doll.readCoP(1, TMP_COP_R);
         rs.cop.l.x = TMP_COP_L[0];
         rs.cop.l.z = TMP_COP_L[2];
         rs.cop.l.load = TMP_COP_L[3];
         rs.cop.r.x = TMP_COP_R[0];
         rs.cop.r.z = TMP_COP_R[2];
         rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim2.doll.torso().translation().y;
-        rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
+        rs.torsoY = sim.doll.torso().translation().y;
+        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
         {
-          const q = sim2.doll.torso().rotation();
+          const q = sim.doll.torso().rotation();
           const ax = 2 * (q.x * q.y + q.w * q.z);
           const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
           const az = 2 * (q.y * q.z - q.w * q.x);
           const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
           rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
           rs.rollDeg = Math.atan2(az, uy) * 57.2958;
-          const av = sim2.doll.torso().angvel();
+          const av = sim.doll.torso().angvel();
           rs.pitchRate = av.z * 57.2958;
           rs.rollRate = av.x * 57.2958;
         }
@@ -20512,7 +20541,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-lock.ts
+// tools/probe-kf.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -20534,41 +20563,39 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
+var { DEFAULT_STEP_PARAMS: DEFAULT_STEP_PARAMS2 } = await Promise.resolve().then(() => (init_step(), step_exports));
 var log = console.log;
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
-sim.begin(new Float32Array(sim.paramCount));
-var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
-var everLockedL = 0;
-var everLockedR = 0;
-var bothLocked = 0;
-var supportDisagreesWithLock = 0;
-var flips = 0;
-var prevSup = "";
-var firstLockAt = -1;
-for (let i = 0; i < 120 * 5 && !sim.finished; i++) {
-  if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
-  sim.advance(1);
-  if (i % 2) continue;
-  const s = ctrl.snapshot;
-  const lk = s.locked;
-  if (lk.l) everLockedL++;
-  if (lk.r) everLockedR++;
-  if (lk.l && lk.r) bothLocked++;
-  if (lk.l && !lk.r && s.supportLeg !== "l") supportDisagreesWithLock++;
-  if (lk.r && !lk.l && s.supportLeg !== "r") supportDisagreesWithLock++;
-  if (prevSup && s.supportLeg !== prevSup) flips++;
-  if ((lk.l || lk.r) && firstLockAt < 0) firstLockAt = s.t;
-  prevSup = s.supportLeg;
-  if (s.tiltDeg >= 25) break;
+log("\u2550\u2550 \u6446\u52A8\u817F\u89D2\u5EA6\u5F8B\u6D88\u878D\uFF1APerry \u5173\u952E\u5E27 vs \u65E7\u624B\u8C03\u5F8B \u2550\u2550");
+log("   \u914D\u7F6E              \u6700\u5C0FX3  \u9A7B\u7559   vz\u5CF0  com.z\u672B \u5B58\u6D3B  \u7FFB\u8F6C  \u5173\u952E\u5E27");
+for (const useKF of [true, false]) {
+  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller2(sk, sim, {
+    ...DEFAULT_CONTROLLER2,
+    step: { ...DEFAULT_STEP_PARAMS2, useKeyFrame: useKF }
+  });
+  let dzMin = 1e9, vz = 0, zEnd = 0, alive = 0, flips = 0, prev = "", keys = "";
+  let run = 0, best = 0;
+  for (let i = 0; i < 120 * 8 && !sim.finished; i++) {
+    if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i % 2) continue;
+    const s = ctrl.snapshot;
+    const dz = Math.abs(s.com.z - s.legs[s.supportLeg].footZ);
+    dzMin = Math.min(dzMin, dz);
+    if (dz <= 0.05) {
+      run++;
+      best = Math.max(best, run);
+    } else run = 0;
+    vz = Math.max(vz, Math.abs(s.com.vz));
+    zEnd = s.com.z;
+    if (prev && s.supportLeg !== prev) flips++;
+    prev = s.supportLeg;
+    if (!keys.includes(s.gaitKey)) keys += s.gaitKey + " ";
+    if (s.tiltDeg >= 25) break;
+    alive = s.t;
+  }
+  log(`   ${(useKF ? "Perry \u5173\u952E\u5E27" : "\u65E7\u624B\u8C03\u5F8B   ").padEnd(16)} ${(dzMin * 1e3).toFixed(0).padStart(5)}mm ${(best / 60).toFixed(2).padStart(5)}s ${(vz * 1e3).toFixed(0).padStart(5)} ${(zEnd * 1e3).toFixed(0).padStart(6)}mm ${alive.toFixed(2)}s ${String(flips).padStart(4)}  ${keys}`);
 }
-var frames = Math.max(1, Math.round(ctrl.snapshot.t * 60));
-log("\u2550\u2550 \u9501\u5B9A\u817F\u673A\u5236\u53EF\u7528\u6027\u68C0\u67E5 \u2550\u2550");
-log(`   \u8FD0\u884C\u5E27\u6570              ${frames}`);
-log(`   locked.l \u7F6E\u771F\u5E27\u6570     ${everLockedL}`);
-log(`   locked.r \u7F6E\u771F\u5E27\u6570     ${everLockedR}`);
-log(`   \u4E24\u817F\u540C\u65F6\u9501\u6B7B\u5E27\u6570      ${bothLocked}`);
-log(`   \u9996\u6B21\u9501\u5B9A\u65F6\u523B          ${firstLockAt < 0 ? "\u4ECE\u672A\u9501\u5B9A" : firstLockAt.toFixed(2) + "s"}`);
-log(`   \u2605\u9501\u5B9A\u751F\u6548\u4F46 supportLeg \u4E0D\u7B26\u7684\u5E27\u6570  ${supportDisagreesWithLock}`);
-log(`   supportLeg \u7FFB\u8F6C\u6B21\u6570   ${flips}`);

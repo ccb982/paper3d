@@ -6325,10 +6325,10 @@ function invQuatOf(q) {
 function quatToRotVec(q) {
   const w = q[3] > 1 ? 1 : q[3] < -1 ? -1 : q[3];
   const half = Math.acos(w);
-  const s = Math.sin(half);
-  if (Math.abs(s) < 1e-7) return [0, 0, 0];
+  const s2 = Math.sin(half);
+  if (Math.abs(s2) < 1e-7) return [0, 0, 0];
   const ang = 2 * half;
-  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s2 : ang / s2;
   return [q[0] * k, q[1] * k, q[2] * k];
 }
 function quatRel(a, b) {
@@ -6383,21 +6383,21 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const groundPx = extent.y1;
   const mapZ = (px, applyStance) => -(px - centerPx) * px2m * (applyStance ? cfg.stance : 1);
   const mapY = (px) => (groundPx - px) * px2m;
-  const legKeys = new Set(SEGMENTS.filter((s) => s.leg).map((s) => s.key));
+  const legKeys = new Set(SEGMENTS.filter((s2) => s2.leg).map((s2) => s2.key));
   const K = Math.max(1, Math.floor(cfg.spineSegments));
   const CHEST = K > 1 ? `spine${K}` : "torso";
-  const segKey = (s) => s === 0 ? "torso" : `spine${s + 1}`;
+  const segKey = (s2) => s2 === 0 ? "torso" : `spine${s2 + 1}`;
   let byKeyRef = null;
   const attachTo = (parentKey, wy) => {
     if (parentKey !== "torso" || K <= 1 || !byKeyRef) return parentKey;
     let best = 0, bestD = Infinity;
-    for (let s = 0; s < K; s++) {
-      const b = byKeyRef.get(segKey(s));
+    for (let s2 = 0; s2 < K; s2++) {
+      const b = byKeyRef.get(segKey(s2));
       if (!b) continue;
       const d = Math.abs(b.cy - wy);
       if (d < bestD) {
         bestD = d;
-        best = s;
+        best = s2;
       }
     }
     return segKey(best);
@@ -6418,8 +6418,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
   const restYawOf = (key) => {
     if (key !== "shin_l" && key !== "shin_r" && key !== "foot_l" && key !== "foot_r") return 0;
-    const s = cfg.footSplayDeg * DEG;
-    return key === "shin_l" || key === "foot_l" ? -s : s;
+    const s2 = cfg.footSplayDeg * DEG;
+    return key === "shin_l" || key === "foot_l" ? -s2 : s2;
   };
   const bodies = [];
   for (const spec of SEGMENTS) {
@@ -6695,14 +6695,14 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       const segLen = length / K;
       const segMass = totalMass / K;
       const hx = radius, hz = radius * 0.9;
-      for (let s = 0; s < K; s++) {
-        const cyS = cy - length / 2 + (s + 0.5) * segLen;
+      for (let s2 = 0; s2 < K; s2++) {
+        const cyS = cy - length / 2 + (s2 + 0.5) * segLen;
         const iZ = segMass * (hx * hx + segLen / 2 * (segLen / 2)) / 3;
         const iX = segMass * (segLen / 2 * (segLen / 2) + hz * hz) / 3;
         bodies.push({
-          key: s === 0 ? "torso" : `spine${s + 1}`,
+          key: s2 === 0 ? "torso" : `spine${s2 + 1}`,
           bone: spec.bone,
-          label: s === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s + 1}`,
+          label: s2 === 0 ? "\u9AA8\u76C6" : `\u810A\u690E${s2 + 1}`,
           part,
           cx: 0,
           cy: cyS,
@@ -6731,7 +6731,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             inertiaXY: iX
           }],
           leg: false,
-          texSlice: { index: s, count: K }
+          texSlice: { index: s2, count: K }
         });
       }
       continue;
@@ -6814,14 +6814,14 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     const SPINE_XY_DEG = [15, 20];
     const SPINE_FLEX_DEG = [-25, 25];
     const SPINE_TAU = 120;
-    for (let s = 0; s < K - 1; s++) {
-      const p = byKey.get(segKey(s));
-      const c = byKey.get(segKey(s + 1));
-      if (!p || !c) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s} \u4E0D\u5B58\u5728`);
+    for (let s2 = 0; s2 < K - 1; s2++) {
+      const p = byKey.get(segKey(s2));
+      const c = byKey.get(segKey(s2 + 1));
+      if (!p || !c) throw new Error(`[skeleton] \u810A\u67F1\u6BB5 ${s2} \u4E0D\u5B58\u5728`);
       const wy = (p.cy + c.cy) / 2;
       const wx = 0, wz = 0;
       joints.push({
-        name: `spine${s + 1}`,
+        name: `spine${s2 + 1}`,
         index: joints.length,
         // ★ 接在 JOINT_ORDER 之后 = 网络输出接在后面
         parentKey: p.key,
@@ -6843,7 +6843,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       });
     }
   }
-  const massTotal = bodies.reduce((s, b) => s + b.mass, 0);
+  const massTotal = bodies.reduce((s2, b) => s2 + b.mass, 0);
   return {
     cfg,
     px2m,
@@ -6856,7 +6856,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   };
 }
 function assertMassBudget() {
-  const sum = SEGMENTS.reduce((s, x) => s + x.massPct, 0);
+  const sum = SEGMENTS.reduce((s2, x) => s2 + x.massPct, 0);
   if (Math.abs(sum - 100) > 1e-6) {
     throw new Error(`[skeleton] \u73AF\u8282\u8D28\u91CF\u6BD4\u4E4B\u548C = ${sum}%\uFF0C\u5E94\u4E3A 100%`);
   }
@@ -6864,9 +6864,9 @@ function assertMassBudget() {
 }
 function assertColliderMass(sk2) {
   for (const b of sk2.bodies) {
-    const s = b.colliders.reduce((a, c) => a + c.mass, 0);
-    if (Math.abs(s - b.mass) > 1e-9) {
-      throw new Error(`[skeleton] ${b.key} collider \u8D28\u91CF\u548C ${s} \u2260 \u521A\u4F53\u8D28\u91CF ${b.mass}`);
+    const s2 = b.colliders.reduce((a, c) => a + c.mass, 0);
+    if (Math.abs(s2 - b.mass) > 1e-9) {
+      throw new Error(`[skeleton] ${b.key} collider \u8D28\u91CF\u548C ${s2} \u2260 \u521A\u4F53\u8D28\u91CF ${b.mass}`);
     }
   }
 }
@@ -6917,19 +6917,47 @@ var init_skeleton = __esm({
       // ★ 2D 时代用 0.5 是为了在**同一个平面内**减少双腿互穿；3D 之后双腿分开在 Z 上，
       //   再并拢反而让两个大腿胶囊（半径 6.9cm、间距 10cm）重叠。取 1.0 = 素材原样的
       //   自然站姿宽度（大腿中心间距 ≈ 0.20m）。
-      // ★★ 站距 = 重心横移需求的第一因（Perry & Burnfield：人类步宽 **0.070~0.080 m**）。
-      //   实测站距扫描（`tools/probe-stance.ts`）：
-      //     stance=1.00 → 步宽 347mm(4.63×规范)、X3 误差 106mm、**驻留 0.00s**
-      //     stance=0.60 → 226mm(3.01×)、      X3   1mm、驻留 0.23s
-      //     stance=0.35 → 162mm(2.16×)、      X3  54mm、驻留 0.00s
-      //     stance=0.15 → 101mm(1.35×)、      X3   1mm、驻留 **0.52s**
-      //   ⇒ 站距越大，重心横移需求越大，`handoverTolZ=50mm` 越不可达。**这是几何事实，不是增益问题。**
+      // ★★ 站距。**判据 = 支撑面位置**，不是"对齐 Perry 的 step width"。
       //
+      // ⚠⚠ 曾经的量纲错误（已更正）：把本 rig 的**踝间距**去比 Perry 的
+      //   **step width 0.075m** ⇒ 得出"4.4× 人类"的错误结论。两者不是同一个量：
+      //   step width = **相邻两步落点的横向间距**；站距 = **站立时双脚间距**。
+      //
+      // ★ 正确的文献基准 —— **Winter 1998**（J Neurophysiology 80:1211）按
+      //   **hip-to-hip 的百分比**给站距，扫了 **50% / 100% / 150%** 三档：
+      //   "Sway amplitude **decreased** as stance width increased, and **Ke
+      //   increased with stance width**"（sway ∝ Ke^−0.55）
+      //   ⇒ **宽站距 = 更稳**（刚度更高），不是更不稳。
+      //
+      // ★ 身高换算（本 rig 身高 **1.80 m**）：
+      //   · Perry step width 0.075 m = **4.2% 身高**
+      //   · 真实髋间距（biiliac）≈ 0.28 m = **15.6% 身高**
+      //   · 真实站立踝间距 ≈ 0.10~0.15 m = 髋间距的 **35~55%**
+      //   本 rig 髋间距 **0.25 m**（≈人类 0.28 m ✓）⇒ 站距 0.10~0.15 m 即
+      //   `stance ≈ 0.25~0.40`。**本 rig 原来的 `stance=1.0`（站距 0.347m =
+      //   髋的 139%）落在 Winter 实测区间内，并不离谱**，只是支撑面太靠外、
+      //   重心爬不进去。
+      //
+      // ★★ 站距影响重心转移的**真实机制**（不是"稳不稳"，而是"进不进得去"）：
+      //   重心不必到脚心，只需进入**脚掌横向范围**（真实足宽≈100mm，半 50mm）：
+      //     stance=0.35 → 脚心 ±78mm ⇒ 支撑面 z∈[28,128]mm，重心到 **28mm** 即进入
+      //     stance=1.00 → 脚心 ±163mm ⇒ 支撑面 z∈[113,213]mm，重心要爬到 **113mm**
+      //   而 `handoverTolZ=50mm` 要重心到脚心 50mm 内 ⇒ 两者难度天差地别。
+      //   实测（`tools/probe-stance.ts`）：0.00s(347mm) / 0.23s(226mm) /
+      //   0.00s(162mm) / 0.52s(101mm) / 0.58s(29mm)。
       // ⚠ 下限受**脚宽**约束：脚掌半宽 ≈75mm ⇒ 踝距 <150mm 时两脚互相穿模。
-      //   所以 0.35（踝距 156mm、两脚刚好相切）是**物理下限**，仍是规范的 2.16×。
-      //   要真正对齐人类 0.075m，必须**同时把脚变窄**（真实足宽约 100mm，这里 150mm）。
-      //   0.15 档虽然数据最好（驻留 0.52s）但**几何不成立**，不采用。
-      stance: 0.35,
+      //   所以 **0.35（踝距 156mm、两脚刚好相切 = 髋的 65%）是物理下限**。
+      // ★★ 2026-10-05 用户决定：**回到 stance = 1.0**（原值）。
+      //   理由：0.35 的站距**观感不成立** —— 这是要放进游戏里的 boss 角色，
+      //   两脚几乎相切看起来不像人形。⇒ 站距是**角色设计参数**，
+      //   不是可以为了指标牺牲的自由量。
+      //   ⚠ 回退曾**静默失败**（编辑的字符串没匹配上，而脚本无条件打印 'ok'）。
+      //     `tools/probe-readback.ts` 就是为此写的：任何配置改动后必须回读实际数值。
+      //   代价（已知并接受）：`stance=1.00` 时重心进入支撑面需横移 **117mm**
+      //   （`stance=0.35` 只要 28mm），X3 驻留回到 0.00s。
+      //   ⇒ 重心转移必须从**别的方向**解决（伺服/迈步的平衡、相位时长对齐、
+      //     髋外展权限、脚宽），**不再靠缩站距**。
+      stance: 1,
       limbRadiusScale: 0.6,
       // 4 段 ⇒ 骨盆 + 3 节脊椎（腰-胸-颈），脊柱关节 3 个，转动自由度 36。
       // 段数不宜再多：每段都要有独立质量与惯量，切太细 ES 的搜索空间会爆炸（且小段的
@@ -13720,15 +13748,15 @@ function quatRel2(ax, ay, az, aw, bx, by, bz, bw, out) {
 function quatToRotVec2(qx, qy, qz, qw, out) {
   const w = qw > 1 ? 1 : qw < -1 ? -1 : qw;
   const half = Math.acos(w);
-  const s = Math.sin(half);
-  if (s < 1e-7) {
+  const s2 = Math.sin(half);
+  if (s2 < 1e-7) {
     out[0] = 0;
     out[1] = 0;
     out[2] = 0;
     return;
   }
   const ang = 2 * half;
-  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s : ang / s;
+  const k = ang > Math.PI ? -(2 * Math.PI - ang) / s2 : ang / s2;
   out[0] = qx * k;
   out[1] = qy * k;
   out[2] = qz * k;
@@ -14177,10 +14205,10 @@ var init_ragdoll = __esm({
         this.refNeg = new Float64Array(sk2.joints.length * 3);
         for (let i = 0; i < sk2.joints.length; i++) {
           for (let k = 0; k < 3; k++) {
-            const s = this.opt.posRefScale;
+            const s2 = this.opt.posRefScale;
             const span = Math.max(Math.abs(sk2.joints[i].minRad[k]), Math.abs(sk2.joints[i].maxRad[k]));
-            this.refPos[i * 3 + k] = s * span;
-            this.refNeg[i * 3 + k] = s * span;
+            this.refPos[i * 3 + k] = s2 * span;
+            this.refNeg[i * 3 + k] = s2 * span;
           }
         }
       }
@@ -15875,28 +15903,28 @@ function inputLayout(jointCount) {
   out.push("leg.l.dx", "leg.l.dy", "leg.l.len", "leg.r.dx", "leg.r.dy", "leg.r.len");
   return out;
 }
-function brainParamCount(s) {
-  return s.inputs * s.hidden + s.hidden + s.hidden * s.outputs + s.outputs;
+function brainParamCount(s2) {
+  return s2.inputs * s2.hidden + s2.hidden + s2.hidden * s2.outputs + s2.outputs;
 }
-function brainLayout(s) {
+function brainLayout(s2) {
   const w1 = 0;
-  const b1 = s.inputs * s.hidden;
-  const w2 = b1 + s.hidden;
-  const b2 = w2 + s.hidden * s.outputs;
-  return { w1, b1, w2, b2, total: b2 + s.outputs };
+  const b1 = s2.inputs * s2.hidden;
+  const w2 = b1 + s2.hidden;
+  const b2 = w2 + s2.hidden * s2.outputs;
+  return { w1, b1, w2, b2, total: b2 + s2.outputs };
 }
-function brainForward(s, p, x, hidden, out) {
-  const L = brainLayout(s);
-  for (let h = 0; h < s.hidden; h++) {
+function brainForward(s2, p, x, hidden, out) {
+  const L = brainLayout(s2);
+  for (let h = 0; h < s2.hidden; h++) {
     let acc = p[L.b1 + h];
-    const row = L.w1 + h * s.inputs;
-    for (let i = 0; i < s.inputs; i++) acc += p[row + i] * x[i];
+    const row2 = L.w1 + h * s2.inputs;
+    for (let i = 0; i < s2.inputs; i++) acc += p[row2 + i] * x[i];
     hidden[h] = Math.tanh(acc);
   }
-  for (let o = 0; o < s.outputs; o++) {
+  for (let o = 0; o < s2.outputs; o++) {
     let acc = p[L.b2 + o];
-    const row = L.w2 + o * s.hidden;
-    for (let h = 0; h < s.hidden; h++) acc += p[row + h] * hidden[h];
+    const row2 = L.w2 + o * s2.hidden;
+    for (let h = 0; h < s2.hidden; h++) acc += p[row2 + h] * hidden[h];
     out[o] = Math.tanh(acc);
   }
 }
@@ -16100,12 +16128,12 @@ function monotoneAt(ref, t) {
   };
   const d = (j) => {
     if (j < 0 || j >= n - 1) return 0;
-    const s = secant(j);
-    const sa = j > 0 ? secant(j - 1) : s;
-    const sb = j + 2 < n ? secant(j + 1) : s;
-    if (s * sa <= 0 || s * sb <= 0) return 0;
-    const m = Math.min(Math.abs(s), 3 * Math.abs(sa), 3 * Math.abs(sb));
-    return s > 0 ? m : -m;
+    const s2 = secant(j);
+    const sa = j > 0 ? secant(j - 1) : s2;
+    const sb = j + 2 < n ? secant(j + 1) : s2;
+    if (s2 * sa <= 0 || s2 * sb <= 0) return 0;
+    const m = Math.min(Math.abs(s2), 3 * Math.abs(sa), 3 * Math.abs(sb));
+    return s2 > 0 ? m : -m;
   };
   const u2 = u * u, u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * y0 + (u3 - 2 * u2 + u) * (d(i) * h) + (-2 * u3 + 3 * u2) * y1 + (u3 - u2) * (d(i + 1) * h);
@@ -16300,9 +16328,9 @@ var init_gaitRef = __esm({
 });
 
 // src/core/keyframe.ts
-function lerpKeyPose(from, to, s) {
+function lerpKeyPose(from, to, s2) {
   const a = KEY_POSES[from], b = KEY_POSES[to];
-  const u = s < 0 ? 0 : s > 1 ? 1 : s;
+  const u = s2 < 0 ? 0 : s2 > 1 ? 1 : s2;
   const L = (x, y) => x + (y - x) * u;
   return {
     supHipFlex: L(a.supHipFlex, b.supHipFlex),
@@ -16316,13 +16344,16 @@ function lerpKeyPose(from, to, s) {
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
-function strideWidth(soleZl, soleZr) {
+function stanceSpan(soleZl, soleZr) {
   return Math.abs(soleZl - soleZr);
 }
-function strideWidthRatio(soleZl, soleZr) {
-  return strideWidth(soleZl, soleZr) / NORMATIVE_STRIDE_WIDTH;
+function stanceWidthRatio(soleZl, soleZr, biiliac = 0.25) {
+  return stanceSpan(soleZl, soleZr) / Math.max(1e-3, biiliac);
 }
-var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT, NORMATIVE_STRIDE_WIDTH;
+function supportEntry(soleZl, footHalfWidth = 0.05) {
+  return Math.abs(soleZl) - footHalfWidth;
+}
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT;
 var init_keyframe = __esm({
   "src/core/keyframe.ts"() {
     "use strict";
@@ -16444,7 +16475,6 @@ var init_keyframe = __esm({
       PUSH: "PSw",
       STEP: "ISw"
     });
-    NORMATIVE_STRIDE_WIDTH = 0.075;
   }
 });
 
@@ -16640,7 +16670,8 @@ var init_rigState = __esm({
       shiftPushTau = 0;
       keyPose = KEY_POSES.MSt;
       gaitKey = "MSt";
-      strideRatio = 4.4;
+      strideRatio = 0.65;
+      supportEntryZ = 0;
       shiftErrZ = 0;
       shiftDemandF = 0;
       shiftDriveSide = null;
@@ -16864,8 +16895,8 @@ var init_rigState = __esm({
       comOverFootZ(side) {
         return Math.abs(this.com.z - this.soleZ[side]);
       }
-      isLocked(s) {
-        return this.locked[s];
+      isLocked(s2) {
+        return this.locked[s2];
       }
       jointPos(joint, axis) {
         return this.pos[joint * 3 + axis] ?? 0;
@@ -17334,6 +17365,7 @@ var init_rigState = __esm({
           keyPose: this.keyPose,
           gaitKey: this.gaitKey,
           strideRatio: this.strideRatio,
+          supportEntryZ: this.supportEntryZ,
           forceChain: this.forceChain(),
           comTransfer: this.comTransfer(),
           torsoY: this.torsoY,
@@ -17392,11 +17424,11 @@ var init_rigState = __esm({
 
 // src/core/gaitState.ts
 function cdf(x) {
-  const s = x < 0 ? -1 : 1;
+  const s2 = x < 0 ? -1 : 1;
   const z = Math.abs(x) / Math.SQRT2;
   const t = 1 / (1 + 0.3275911 * z);
   const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
-  return 0.5 * (1 + s * y);
+  return 0.5 * (1 + s2 * y);
 }
 function smoothAuthority(phase, phaseT, ramp, sigma) {
   if (phase !== "STEP") return 0;
@@ -17498,11 +17530,11 @@ var init_gaitState = __esm({
         const bothGrounded = rs.grounded.l && rs.grounded.r;
         if (bothGrounded) this.doubleT += dt;
         else this.doubleT = 0;
-        for (const s of ["l", "r"]) {
-          if (rs.grounded[s] && !this.wasGrounded[s]) {
-            rs.touchdown[s] = true;
-            this.wasGrounded[s] = true;
-          } else if (!rs.grounded[s]) this.wasGrounded[s] = false;
+        for (const s2 of ["l", "r"]) {
+          if (rs.grounded[s2] && !this.wasGrounded[s2]) {
+            rs.touchdown[s2] = true;
+            this.wasGrounded[s2] = true;
+          } else if (!rs.grounded[s2]) this.wasGrounded[s2] = false;
         }
         const front = rs.frontLeg();
         const rear = rs.rearLeg();
@@ -17555,7 +17587,8 @@ var init_gaitState = __esm({
         const gk = PHASE_TO_GAIT[rs.phase] ?? "MSt";
         rs.gaitKey = gk;
         rs.keyPose = KEY_POSES[gk];
-        rs.strideRatio = strideWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
+        rs.supportEntryZ = supportEntry(rs.soleZ[rs.supportLeg()]);
         this.hadBearer = this.hadBearer || handoverOk;
         rs.bearerCriteria = makeCriteria(
           { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
@@ -18063,8 +18096,8 @@ var init_balanceJudge = __esm({
        */
       static calibrate(wbamSamples) {
         if (wbamSamples.length < 8) return;
-        const s = [...wbamSamples].sort((a, b) => a - b);
-        const p90 = s[Math.min(s.length - 1, Math.floor(s.length * 0.9))];
+        const s2 = [...wbamSamples].sort((a, b) => a - b);
+        const p90 = s2[Math.min(s2.length - 1, Math.floor(s2.length * 0.9))];
         WBAM_NORM = Math.max(1e-3, p90);
         WBAM_RATE_NORM = Math.max(1e-3, WBAM_NORM * 6);
       }
@@ -19038,8 +19071,8 @@ var init_sim = __esm({
           const ph = this.phase >= 1 ? this.phase - 1 : this.phase;
           const w1 = (q) => {
             if (ph >= q || ph < q - 1 + duty) return 0;
-            const s = (ph - (q - 1 + duty) + 1) / duty;
-            return Math.sin(Math.PI * Math.max(0, Math.min(1, s)));
+            const s2 = (ph - (q - 1 + duty) + 1) / duty;
+            return Math.sin(Math.PI * Math.max(0, Math.min(1, s2)));
           };
           x[k + 4] = w1(0);
           x[k + 5] = w1(duty);
@@ -19677,7 +19710,7 @@ function assertRigInvariants(sk2, shape) {
   return report;
 }
 function rigSummary(r) {
-  const usable = r.joints.reduce((s, j) => s + j.usableAxes, 0);
+  const usable = r.joints.reduce((s2, j) => s2 + j.usableAxes, 0);
   return `${r.bodyCount} \u521A\u4F53 / ${r.jointCount} \u5173\u8282 / \u53EF\u9A71\u52A8\u8F74 ${usable} / \u5E7D\u7075\u5173\u8282 ${PHANTOM_JOINTS.length}\uFF08\u8E1D\uFF09`;
 }
 var AXIS_NAME, PHANTOM_JOINTS;
@@ -20278,10 +20311,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     rs.shiftDriveSide = rs.swingLeg();
   }
   const permit = rs.stepPermit.all;
-  const s = rs.phase === "STEP" ? Math.max(0, Math.min(1, rs.phaseT / Math.max(1e-6, p.halfPeriod))) : rs.phase === "DOUBLE" || rs.phase === "SHIFT" ? 0 : 1;
-  const bell = Math.sin(Math.PI * s);
+  const s2 = rs.phase === "STEP" ? Math.max(0, Math.min(1, rs.phaseT / Math.max(1e-6, p.halfPeriod))) : rs.phase === "DOUBLE" || rs.phase === "SHIFT" ? 0 : 1;
+  const bell = Math.sin(Math.PI * s2);
   const hold = rs.phase === "SINGLE" || rs.phase === "STEP";
-  const lift = permit && hold ? p.lift * bell + (s >= 1 ? p.liftHold : 0) : rs.phase === "SINGLE" ? p.liftHold : 0;
+  const lift = permit && hold ? p.lift * bell + (s2 >= 1 ? p.liftHold : 0) : rs.phase === "SINGLE" ? p.liftHold : 0;
   const KF_SWING_SEG = [
     [0, "PSw"],
     [0.33, "ISw"],
@@ -20300,7 +20333,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     return rs.keyPose;
   }
   if (p.useKeyFrame) {
-    const kp = keySwing(s);
+    const kp = keySwing(s2);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
@@ -20310,17 +20343,17 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55\xB7\u8BA9\u5F00", false);
     return;
   }
-  const holdHip = s >= 1 && permit ? p.hipHoldDeg : 0;
-  const holdKnee = s >= 1 && permit ? p.kneeHoldDeg : 0;
-  const sReach = s <= p.reachFrom ? 0 : s >= 1 ? 1 : (() => {
-    const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom);
+  const holdHip = s2 >= 1 && permit ? p.hipHoldDeg : 0;
+  const holdKnee = s2 >= 1 && permit ? p.kneeHoldDeg : 0;
+  const sReach = s2 <= p.reachFrom ? 0 : s2 >= 1 ? 1 : (() => {
+    const u = (s2 - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom);
     return u * u * (3 - 2 * u);
   })();
   const hipDeg = p.hipFlexPeakDeg * bell + holdHip - p.hipExtendDeg * sReach * (permit || rs.phase === "STEP" ? 1 : 0);
   rs.requestSwingLegAngle(swing, jHip, 2, clamp2(hipDeg * D2R2, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
   rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
-  if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
+  if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s2 >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
   if (jSp1 >= 0) {
     const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
     rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
@@ -20512,12 +20545,12 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-lock.ts
+// tools/probe-readback.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
 var require2 = createRequire(import.meta.url);
-var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+var { buildSkeleton: buildSkeleton2, DEFAULT_CONFIG: DEFAULT_CONFIG2, jointIndexByName: jointIndexByName2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
 await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 {
   const p = require2.resolve("@dimforge/rapier3d/rapier_wasm3d_bg.wasm");
@@ -20537,38 +20570,34 @@ var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await
 var log = console.log;
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var SHAPE = shapeForJoints2(sk.joints.length);
-var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
+log(`   DEFAULT_CONFIG.stance = ${DEFAULT_CONFIG2.stance}`);
+var hips = ["hip_l", "hip_r"].map((n) => jointIndexByName2(sk, n));
+log(`\u2550\u2550 \u9759\u6001\u56DE\u8BFB\uFF08t=0.3s\uFF09\u2550\u2550`);
+log("   \u91CF                \u5DE6        \u53F3      \u5DEE/\u5408\u8BA1");
+var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand" });
 sim.begin(new Float32Array(sim.paramCount));
 var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2 });
-var everLockedL = 0;
-var everLockedR = 0;
-var bothLocked = 0;
-var supportDisagreesWithLock = 0;
-var flips = 0;
-var prevSup = "";
-var firstLockAt = -1;
-for (let i = 0; i < 120 * 5 && !sim.finished; i++) {
+var jw = new Float64Array(3);
+for (let i = 0; i < 36; i++) {
   if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
   sim.advance(1);
-  if (i % 2) continue;
-  const s = ctrl.snapshot;
-  const lk = s.locked;
-  if (lk.l) everLockedL++;
-  if (lk.r) everLockedR++;
-  if (lk.l && lk.r) bothLocked++;
-  if (lk.l && !lk.r && s.supportLeg !== "l") supportDisagreesWithLock++;
-  if (lk.r && !lk.l && s.supportLeg !== "r") supportDisagreesWithLock++;
-  if (prevSup && s.supportLeg !== prevSup) flips++;
-  if ((lk.l || lk.r) && firstLockAt < 0) firstLockAt = s.t;
-  prevSup = s.supportLeg;
-  if (s.tiltDeg >= 25) break;
 }
-var frames = Math.max(1, Math.round(ctrl.snapshot.t * 60));
-log("\u2550\u2550 \u9501\u5B9A\u817F\u673A\u5236\u53EF\u7528\u6027\u68C0\u67E5 \u2550\u2550");
-log(`   \u8FD0\u884C\u5E27\u6570              ${frames}`);
-log(`   locked.l \u7F6E\u771F\u5E27\u6570     ${everLockedL}`);
-log(`   locked.r \u7F6E\u771F\u5E27\u6570     ${everLockedR}`);
-log(`   \u4E24\u817F\u540C\u65F6\u9501\u6B7B\u5E27\u6570      ${bothLocked}`);
-log(`   \u9996\u6B21\u9501\u5B9A\u65F6\u523B          ${firstLockAt < 0 ? "\u4ECE\u672A\u9501\u5B9A" : firstLockAt.toFixed(2) + "s"}`);
-log(`   \u2605\u9501\u5B9A\u751F\u6548\u4F46 supportLeg \u4E0D\u7B26\u7684\u5E27\u6570  ${supportDisagreesWithLock}`);
-log(`   supportLeg \u7FFB\u8F6C\u6B21\u6570   ${flips}`);
+var s = ctrl.snapshot;
+sim.doll.jointWorld(hips[0], jw);
+var hl = jw[2];
+sim.doll.jointWorld(hips[1], jw);
+var hr = jw[2];
+var row = (nm, a, b, sum = false) => {
+  log(`   ${nm.padEnd(16)} ${(a * 1e3).toFixed(0).padStart(6)}mm ${(b * 1e3).toFixed(0).padStart(7)}mm  ${(sum ? a + b : Math.abs(a - b)) === 0 ? "" : ((sum ? a + b : Math.abs(a - b)) * 1e3).toFixed(0).padStart(6)}mm`);
+};
+row("\u9ACB z", hl, hr, true);
+row("\u8E1D z", s.legs.l.footZ, s.legs.r.footZ, true);
+row("CoP z", s.cop?.l?.z ?? 0, s.cop?.r?.z ?? 0, true);
+row("\u8DB3\u5916\u516B/\u5916\u5F20", 0, 0);
+log(`   com.z = ${(s.com.z * 1e3).toFixed(0)}mm   \u7AD9\u8DDD/\u9ACB\u95F4\u8DDD = ${s.strideRatio.toFixed(2)}\xD7`);
+log(`   \u8FDB\u652F\u6491\u9762\u9700\u6A2A\u79FB = ${(s.supportEntryZ * 1e3).toFixed(0)}mm`);
+var BB = new Float64Array(4);
+for (const [nm, i] of [["\u5DE6", 0], ["\u53F3", 1]]) {
+  sim.doll.footSoleBounds(i, BB);
+  log(`   ${nm}\u811A\u978B\u5E95 z \u8303\u56F4 [${(BB[2] * 1e3).toFixed(0)}, ${(BB[3] * 1e3).toFixed(0)}]mm  \u534A\u5BBD ${((BB[3] - BB[2]) / 2 * 1e3).toFixed(0)}mm`);
+}
