@@ -175,6 +175,20 @@ export interface RigSnapshot {
    *   这是"踝刚度刻意欠临界"能成立的前提 —— 缺它则踝在 ±0.217 rad 饱和后必倒。
    */
   hipTauStiff: number;
+  /**
+   * ★★ 踝的**间歇延迟反馈**诊断（Bottaro 2008 / Asai 2009 / Morasso 2019）。
+   *   `on` = 当前在 ON 相（反馈输出）；`gamma` = 距稳定流形的比值；
+   *   `tCross` = off 相过零时间，稳定要求 `tCross > delaySec`；
+   *   `omega` = off 相鞍点特征频率 √(mgh/I)；`switches` = 开关次数（抖振诊断）。
+   */
+  vipOn: boolean;
+  vipGamma: number;
+  vipTCross: number;
+  vipOmega: number;
+  vipSwitches: number;
+  /** off 相收缩/扩张次数（论文的稳定性机制判据，见 RigState.vipOffShrink） */
+  vipOffShrink: number;
+  vipOffGrow: number;
   support: { cx: number; cz: number; halfX: number; halfZ: number; contactN: number };
   mos: number;
   grf: { x: number; y: number };
@@ -378,6 +392,86 @@ export class RigState {
   ankleTauSat = false;
   /** ★ DIP 髋侧被动刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
   hipTauStiff = 0;
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★★ 踝的**间歇延迟反馈**状态（Bottaro 2008 / Asai 2009 / Morasso 2019）
+  // ══════════════════════════════════════════════════════════════════
+  //   文献要点（全部记在代码里，理由见 balance.ts 的 vipFeedback 段）：
+  //     · 开关判据作用在 **VIP 的相平面 (q, q̇)**，不是踝角
+  //       （Morasso 2019：「the phase plane used by the switching rule was not
+  //         that of the ankle joint but the plane of a virtual inverted pendulum」）
+  //     · ON  ⟺ `q_δ · (q̇_δ − a·q_δ) < 0`，OFF ⟺ `≥ 0`，`a = −ω₀`
+  //     · 反馈延迟 δ（感觉通路）必须进入判据 ⇒ 需要**延迟环形缓冲**
+  //   这些量必须可回读：`on/off` 决定有没有输出、`γoff` 决定 off 相是不是
+  //   真的在收缩（γ<1）、`tCross` 决定稳定性（`tCross > δ`，见论文式 16）。
+  private readonly vipCap = 64;
+  /** VIP (q, q̇) 的延迟环形缓冲；按 `vipLen` 覆盖最旧的 */
+  private readonly vipQ = new Float32Array(64);
+  private readonly vipQd = new Float32Array(64);
+  private vipHead = 0;
+  private vipLen = 0;
+  /** 当前是否在 ON 相（反馈开启） */
+  vipOn = false;
+  /** 距稳定流形的比值 γoff：=1 在流形上，<1 在流形下方，>1 上方 */
+  vipGamma = 1;
+  /** off 相的过零时间（论文式 9）：`δ·ln((1+γ)/|1−γ|)`。稳定要求 > δ */
+  vipTCross = 0;
+  /** 开关次数（诊断：抖振会很高） */
+  vipSwitches = 0;
+  /**
+   * ★ **off 相收缩计数**（论文的稳定性机制本身）：
+   *   > "such contracting properties of the off-phases may compensate, on average,
+   *      the expanding properties of the spiral/nodal segments during the on-phases,
+   *      supporting the emergence of limit-cycle oscillations."
+   * 每个 off 相开始时记 |q|，off 相结束时（切回 ON 时）再记一次；变小=收缩。
+   * 这是判据"间歇机制有没有真的在起作用"，比看 ON 占比或开关次数都硬。
+   */
+  vipOffShrink = 0;
+  vipOffGrow = 0;
+  private vipOffStartQ = 0;
+  private vipPrevOn = false;
+  /** ω₀ = √(mgh/I)：off 相鞍点的特征频率（rad/s） */
+  vipOmega = 0;
+  /** 本拍控制间隔（s）—— 延迟拍数 = δ / dtCtrl，beginTick 时写入 */
+  dtCtrl = 1 / 60;
+  /** `vipDelayed` 的复用输出缓冲：[q_δ, q̇_δ] */
+  readonly vipD1 = new Float64Array(2);
+
+  /** 推入一拍 VIP 状态（控制拍调用一次） */
+  pushVip(q: number, qd: number): void {
+    this.vipQ[this.vipHead] = q;
+    this.vipQd[this.vipHead] = qd;
+    this.vipHead = (this.vipHead + 1) % this.vipCap;
+    if (this.vipLen < this.vipCap) this.vipLen++;
+  }
+  /**
+   * 取 `delayTicks` 拍之前的 VIP 状态，写入 out[0]=q, out[1]=q̇。
+   * 历史不够时返回**最早**的一条（等价于"从 0 开始"，不外推、不造值）。
+   */
+  vipDelayed(delayTicks: number, out: Float64Array): void {
+    const k = Math.max(0, Math.min(this.vipLen - 1, Math.round(delayTicks)));
+    const idx = (this.vipHead - 1 - k + this.vipCap * 2) % this.vipCap;
+    out[0] = this.vipQ[idx]!;
+    out[1] = this.vipQd[idx]!;
+  }
+  /** 清空（回合/会话重置时） */
+  resetVip(): void {
+    this.vipHead = 0; this.vipLen = 0;
+    this.vipOn = false; this.vipGamma = 1; this.vipTCross = 0; this.vipSwitches = 0;
+    this.vipOffShrink = 0; this.vipOffGrow = 0; this.vipPrevOn = false;
+  }
+  /**
+   * 每拍调用（在切换判定**之后**）：结算上一个 off 相是收缩还是扩张。
+   * @param qNow 本拍的 VIP 摆角
+   */
+  settleOffPhase(qNow: number): void {
+    if (this.vipPrevOn && !this.vipOn) this.vipOffStartQ = Math.abs(qNow);   // 进入 off
+    else if (!this.vipPrevOn && this.vipOn) {                                 // 离开 off
+      const a0 = this.vipOffStartQ, a1 = Math.abs(qNow);
+      if (a0 > 1e-5) { if (a1 < a0) this.vipOffShrink++; else this.vipOffGrow++; }
+    }
+    this.vipPrevOn = this.vipOn;
+  }
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -787,6 +881,8 @@ export class RigState {
 
   /** 每拍开始：清空需求与仲裁痕迹 */
   beginTick(dt: number): void {
+    this.dtCtrl = dt > 1e-6 ? dt : 1 / 60;
+    // ⚠ 不在这里 resetVip()：延迟环形缓冲必须**跨拍连续**，否则 δ 永远取不到历史。
     this.tickNo++;
     this.tSec += dt;
     this.req.fill(undefined);
@@ -961,6 +1057,9 @@ export class RigState {
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
       qVip: this.qVip, ankleTauVip: this.ankleTauVip, ankleTauSat: this.ankleTauSat,
       hipTauStiff: this.hipTauStiff,
+      vipOn: this.vipOn, vipGamma: this.vipGamma, vipTCross: this.vipTCross,
+      vipOmega: this.vipOmega, vipSwitches: this.vipSwitches,
+      vipOffShrink: this.vipOffShrink, vipOffGrow: this.vipOffGrow,
       mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,

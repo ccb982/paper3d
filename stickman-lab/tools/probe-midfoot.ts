@@ -440,9 +440,9 @@ log('══ E5. 真正的堵点：矢状面发散（"维持平衡"是第一道�
       sim.advance(1);
       if (i % 24) continue;
       const sn = ctrl.snapshot;
-      sim.doll.jointRot(ankI, rv);
+      if (ankI >= 0) sim.doll.jointRot(ankI, rv); else rv.fill(0);
       log(`      ${(i / 120).toFixed(2).padStart(5)}s ${(sn.qVip ?? 0).toFixed(3).padStart(6)}`
-        + ` ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(rv[2]! * DEG).toFixed(1).padStart(6)}°`
+        + ` ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(ankI >= 0 ? (rv[2]! * DEG).toFixed(1) : '—').padStart(6)}`
         + ` ${sim.doll.torso().translation().y.toFixed(3).padStart(6)}`
         + ` ${sn.tiltDeg.toFixed(0).padStart(5)}° ${(sn.com.x * 1000).toFixed(0).padStart(6)}mm`
         + `   ${sim.finished ? sim.fallReason : ''}`);
@@ -451,7 +451,115 @@ log('══ E5. 真正的堵点：矢状面发散（"维持平衡"是第一道�
   }
 }
 
-log('══ F. DIP/VIP 接线（Morasso 2019/2022）══');
+log('══ F. ★ 踝的间歇延迟反馈（Bottaro 2008 / Asai 2009 / Morasso 2019）══');
+log('   相平面 = VIP 的 (q, q̇)；ON ⟺ q_δ·(q̇_δ − a·q_δ) < 0，a = −ω₀');
+log('   论文式 9：off 相过零时间 tCross = δ·ln((1+γ)/|1−γ|)；稳定要求 **tCross > δ**');
+{
+  const run = (balOv: Record<string, unknown>, dur = 6) => {
+    const s2 = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER,
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: { ...DEFAULT_CONTROLLER.balance, ...balOv },
+    });
+    let onTicks = 0, n = 0, sumGamma = 0, gCount = 0, minTCross = Infinity, comX = 0, comZ = 0;
+    let tOk = 0, tBad = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      const sn = ctrl.snapshot;
+      if (sn.vipOn) onTicks++;
+      if (i > 120) {
+        n++;
+        comX = Math.max(comX, Math.abs(sn.com.x));
+        comZ = Math.max(comZ, Math.abs(sn.com.z));
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) { sumGamma += sn.vipGamma; gCount++; }
+        if (isFinite(sn.vipTCross)) { minTCross = Math.min(minTCross, sn.vipTCross); if (sn.vipTCross > sn.vipOmega * 0 + 0.10) tOk++; else tBad++; }
+      }
+    }
+    return {
+      onFrac: onTicks / Math.max(1, n), gamma: gCount ? sumGamma / gCount : NaN,
+      minTCross, tOk, tBad, comXmm: comX * 1000, comZmm: comZ * 1000,
+      switches: ctrl.snapshot.vipSwitches, secs: sim.ticksDone / 60, fell: String(sim.fallReason),
+      omega: ctrl.snapshot.vipOmega,
+      shrink: ctrl.snapshot.vipOffShrink, grow: ctrl.snapshot.vipOffGrow,
+    };
+  };
+
+  const CASES: [string, Record<string, unknown>][] = [
+    ['关掉间歇反馈（现状基线）', { vipP: 0 }],
+    ['P=30 δ=0.10（D=0）', { vipP: 30 }],
+    ['P=60 δ=0.10（D=0）', { vipP: 60 }],
+    ['P=120 δ=0.10（D=0）', { vipP: 120 }],
+    ['P=60 δ=0.06', { vipP: 60, vipDelaySec: 0.06 }],
+    ['P=60 δ=0.20（人体延迟域）', { vipP: 60, vipDelaySec: 0.20 }],
+    ['P=60 δ=0.10 a=0（象限切换）', { vipP: 60, vipOmegaFrac: 0 }],
+    ['P=60 D=20 δ=0.10', { vipP: 60, vipD: 20 }],
+  ];
+  log('     配置                     ON占比   平均γoff  off相收缩/扩张   |CoM.x|   存活');
+  for (const [tag, bal] of CASES) {
+    const r = run(bal);
+    const alive = r.fell === 'null' || r.fell === 'undefined';
+    log(`     ${tag.padEnd(24)} ${(r.onFrac * 100).toFixed(0).padStart(4)}%`
+      + `  ${isFinite(r.gamma) ? r.gamma.toFixed(2).padStart(8) : '       —'}`
+      + `  ${String(r.shrink).padStart(9)}/${String(r.grow).padEnd(8)}`
+      + ` ${r.comXmm.toFixed(0).padStart(6)}mm`
+      + `  ${r.secs.toFixed(2)}s ${alive ? '✓' : '✗ ' + r.fell}`);
+  }
+  log(`   （ω₀ = √(mgh/I) ≈ ${run({ vipP: 0 }).omega.toFixed(2)} rad/s；tCross 的判据门限是 δ = 0.10s）`);
+  const good = run({ vipP: 60 });
+  check('★ off 相在**收缩**（收缩 > 扩张）—— 这是间歇机制的真实判据',
+    good.shrink > good.grow, `收缩 ${good.shrink} / 扩张 ${good.grow}`);
+  check('★ 平均 γoff > 0（在稳定流形一侧；<0 表示沿不稳定流形发散）',
+    isFinite(good.gamma) && good.gamma > 0, `γoff = ${good.gamma.toFixed(2)}`);
+}
+
+log('══ F2. ★ DIP 两半的联合扫（Morasso 2019：踝欠临界+间歇，髋**过临界**）══');
+log('   K_crit,hip = m₂gr₂ ≈ 183 N·m/rad；原文要求 ≥1.2×，默认 2× ⇒ 220~366');
+{
+  const run = (balOv: Record<string, unknown>, dur = 8) => {
+    const s2 = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER,
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: { ...DEFAULT_CONTROLLER.balance, ...balOv },
+    });
+    let on = 0, n = 0, comX = 0, gSum = 0, gN = 0, tilt = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      if (i > 120) {
+        const sn = ctrl.snapshot; n++;
+        comX = Math.max(comX, Math.abs(sn.com.x));
+        tilt = Math.max(tilt, Math.abs(sn.tiltDeg));
+        if (sn.vipOn) on++;
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) { gSum += sn.vipGamma; gN++; }
+      }
+    }
+    return { on: on / Math.max(1, n), comXmm: comX * 1000, tilt, g: gN ? gSum / gN : NaN, sw: ctrl.snapshot.vipSwitches, secs: sim.ticksDone / 60, fell: String(sim.fallReason) };
+  };
+  log('     K_h    vipP    ON占比  开关数  平均γ   |CoM.x|   最大倾角   存活');
+  let bestSec = 0, bestTag = '';
+  for (const kh of [0, 120, 250, 366]) {
+    for (const vp of [0, 120, 300]) {
+      const r = run({ kVipHip: kh, vipP: vp });
+      const alive = r.fell === 'null' || r.fell === 'undefined';
+      if (r.secs > bestSec) { bestSec = r.secs; bestTag = `K_h=${kh} vipP=${vp}`; }
+      log(`     ${String(kh).padStart(4)} ${String(vp).padStart(6)}  ${(r.on * 100).toFixed(0).padStart(5)}%`
+        + ` ${String(r.sw).padStart(7)} ${(isFinite(r.g) ? r.g.toFixed(2) : '—').padStart(7)}`
+        + ` ${r.comXmm.toFixed(0).padStart(7)}mm ${r.tilt.toFixed(0).padStart(8)}°`
+        + `  ${r.secs.toFixed(2).padStart(5)}s ${alive ? '✓ 站住' : '✗ ' + r.fell}`);
+    }
+  }
+  log(`   ⇒ 最好：${bestTag} 存活 ${bestSec.toFixed(2)}s`);
+  check('★ 存在能站满 8 s 的 DIP 参数组合', bestSec > 7.9, `${bestTag} → ${bestSec.toFixed(2)}s`);
+}
+
+log('══ G. DIP/VIP 接线（Morasso 2019/2022）══');
 {
   const { AXIS_OWNERSHIP, ANKLE_ABSENT, axisRole } = await import('../src/core/systems/balance');
   check('踝矢状 = 力矩通道（VIP 刚度）已登记',

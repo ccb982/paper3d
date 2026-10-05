@@ -212,6 +212,55 @@ export interface BalanceParams {
   vipZetaHip: number;
   /** 髋侧刚度的力矩上限（rad，超过即退化成"髋策略"的大幅摆动）。默认用 hip τmax */
   maxHipStiffDeg: number;
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★★ 踝的**间歇延迟反馈**（S3）—— Bottaro 2008 / Asai 2009 / Suzuki 2012
+  //    / Morasso 2019 (PLOS ONE 14:e0213870) / Morasso 2022。
+  //    这是欠临界踝刚度**唯一**能站住的前提。
+  // ══════════════════════════════════════════════════════════════════
+  /**
+   * ON 相的比例增益 `P_θ`（N·m/rad）。
+   *
+   * 原文明确它可以**远小于**连续 PD：
+   *   > "the intermittent controller can use feedback parameters that are much
+   *      smaller than the standard model"（Bottaro 2008, PLOS ONE 3:e6169）
+   * 原因：反馈不是要把状态拉回原点，而是把状态赶回**稳定流形**（见 `vipDelaySec`）。
+   * 连续 PD 要压住发散必须给很大的 P（于是延迟引起不稳定）；
+   * 间歇控制靠 on/off 切换承担绝大部分稳定性，PD 只做"温和推一把"。
+   */
+  vipP: number;
+  /**
+   * ON 相的速度增益 `D_ω`（N·m·s/rad）。**默认 0，这是文献结论不是省事**：
+   *   > "stability is very little sensitive to the value of D [...]
+   *      the inverted pendulum can be stabilized even by the zero value of D"
+   *      （同上；其图 6 的稳定带几乎垂直）
+   * 连续模型必须给 D 才能压住延迟诱导的振荡；间歇模型不需要。
+   */
+  vipD: number;
+  /**
+   * 感觉反馈延迟 `δ`（s）。**判据必须作用在延迟样本上**，这是整个机制的关键：
+   *   原文：> "the switching rule is not applied to the current state vector
+   *      but to the corresponding delayed sample [...] thus the off-phase will
+   *      be terminated not at the time of crossing the border [...] but
+   *      δ milliseconds later: t_on = t_c + δ."
+   *
+   * 取值：人体多感觉通路 ~0.2 s（Milton 2016）。
+   *   ⚠ 但 2019 年的定量结论是：标准间歇策略只在 **δ < 100 ms** 时成立
+   *     （CIP 杆长 >50 cm、δ<100 ms；Yoshikawa 2016）。δ=230 ms 需要 2019 年的
+   *     改进版（内模型 + 相位重置），本实现**不含**那部分。
+   *   ⇒ 默认取 **0.10 s**（文献里标准策略的成立域上界），不要设成 0.2。
+   */
+  vipDelaySec: number;
+  /**
+   * 切换参数 `a`（rad/s），判据是 `q_δ·(q̇_δ − a·q_δ) < 0` ⇒ ON。
+   *
+   * 论文里 `a` 是"切换边界的斜率"，`a = 0` 时切换边界就是坐标轴（第一、三象限为 ON）；
+   * `a = −∞` 时 off 区消失、退化成连续 PD。
+   * **`a = −ω₀` 时切换边界正好是稳定流形本身**（`θ̇ = −ω₀θ`），
+   * 于是"关反馈"= "放它沿流形自由收缩"，这才是 `affordance` 的字面含义。
+   * ⇒ 用 `vipOmegaFrac = a/ω₀`，默认 **−1**（= −ω₀）。
+   */
+  vipOmegaFrac: number;
   /** 矢状 P 增益 / ω₀²（无量纲）。与 VIP 踝刚度并联时此项只做残余修正 */
   ksagRatio: number;
   /**
@@ -390,6 +439,11 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //     文献里髋是**纯被动**（没有主动髋控制），本 rig 不是 ⇒ 只能取"不打架"的量级。
   //   ⚠ 开踝时 K_h 几乎不影响结果（2.22~2.25 s）⇒ 踝开着的瓶颈**不在髋**。
   kVipHip: 120,
+  // ★ 间歇延迟反馈（S3）：文献起点，不是标定值 ⇒ 扫参见 tools/probe-midfoot.ts F 段
+  vipP: 60,
+  vipD: 0,
+  vipDelaySec: 0.10,
+  vipOmegaFrac: -1,
   vipZetaHip: 0.7,
   maxHipStiffDeg: 22,
   ksagRatio: 0.2,
@@ -1041,6 +1095,50 @@ export function balanceSystem(
       const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
       const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
       let tauAnk = p.kVipAnkle * qVip - cVip * qVipRate;
+
+      // ══════════════════════════════════════════════════════════════
+      // ★★ S3：踝的**间歇延迟反馈**（Bottaro 2008 / Asai 2009 / Morasso 2019）
+      // ══════════════════════════════════════════════════════════════
+      //   被动刚度 `K_a·q_vip` 是**常开**的（它就是"踝肌肉的本征刚度"，
+      //   刻意欠临界：Loram & Lakie 2002 实测踝刚度只有临界的 60~91%，
+      //   Morasso 原文明确 *insufficient to stabilise*）。
+      //   欠临界刚度单独只能给**边缘稳定** —— 必须再叠这个间歇反馈才站得住。
+      //   实测依据（tools/probe-midfoot.ts E5）：没有它时 CoM.x 单调漂到 +207mm、
+      //   τ踝 饱和 −120 N·m、2.37s 倒地。
+      if (on('ankleCop')) {
+        const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+        // ω₀ = √(K_crit / I) = √(m·g·h / I)（K_crit = mgh，见 params 注释）
+        // ★ 2026-10-04 修：**漏了质量 m**（写成 √(g·h/I)）⇒ ω₀ 小了 √70 ≈ 8.4 倍
+        //   （实测 0.26 而不是 3.28 rad/s）⇒ `a = −ω₀ ≈ 0` ⇒ 切换边界退化成
+        //   坐标轴（论文里 a=0 的"象限版"）⇒ γoff 读出 51~91、开关只有 4 次，
+        //   整个间歇机制等于常开。
+        const omega0 = Math.sqrt(Math.max(1e-6,
+          sk.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1])
+          / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))));
+        const a = p.vipOmegaFrac * omega0;
+        rs.vipOmega = omega0;
+        // 推入本拍状态，判据用 `delayTicks` 拍之前的样本
+        rs.pushVip(qVip, qVipRate);
+        rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
+        const qD = rs.vipD1[0]!, qdD = rs.vipD1[1]!;
+        // ★ 切换：ON ⟺ q_δ·(q̇_δ − a·q_δ) < 0（离开稳定流形才需要主动推）
+        const wantOn = qD * (qdD - a * qD) < 0;
+        if (wantOn !== rs.vipOn) { rs.vipOn = wantOn; rs.vipSwitches++; }
+        // ★ 诊断 γoff：**带符号**，这样才能区分稳定/不稳定流形。
+        //   γoff = −q̇/(ω₀·q)：稳定流形 q̇ = −ω₀q ⇒ **+1**；不稳定流形 ⇒ **−1**。
+        //   ⚠ 2026-10-04 修：原来用 (q̇/ω₀)²/q²（无符号）⇒ 在**两条流形上都等于 1**，
+        //     于是读出 γ≈0.7~1.2 看起来"贴流形"，其实分不清正在收缩还是在发散 ——
+        //     实测正是这样：γ≈0.8、ON占比 0%，而 CoM.x 仍冲到 600mm（**沿不稳定流形跑**）。
+        const qAbs = Math.abs(qD);
+        rs.vipGamma = qAbs > 1e-5 ? -qdD / (omega0 * qD) : Infinity;
+        // off 相过零时间（论文式 9）：γ>1 才谈得上"还要多久过零"
+        const g = rs.vipGamma;
+        rs.vipTCross = g > 1 ? p.vipDelaySec * Math.log((1 + g) / Math.abs(1 - g)) : 0;
+        if (rs.vipOn) {
+          tauAnk += p.vipP * qD + p.vipD * qdD;
+        }
+        rs.settleOffPhase(qVip);
+      }
       // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
       if (rs.phase === 'PUSH') tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R;
       // ── 安全钳位：**必须**把请求值限在马达力矩上限内 ──────────────

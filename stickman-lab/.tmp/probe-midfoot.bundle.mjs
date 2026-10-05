@@ -16084,6 +16084,93 @@ var init_rigState = __esm({
       ankleTauSat = false;
       /** ★ DIP 髋侧被动刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
       hipTauStiff = 0;
+      // ══════════════════════════════════════════════════════════════════
+      // ★★ 踝的**间歇延迟反馈**状态（Bottaro 2008 / Asai 2009 / Morasso 2019）
+      // ══════════════════════════════════════════════════════════════════
+      //   文献要点（全部记在代码里，理由见 balance.ts 的 vipFeedback 段）：
+      //     · 开关判据作用在 **VIP 的相平面 (q, q̇)**，不是踝角
+      //       （Morasso 2019：「the phase plane used by the switching rule was not
+      //         that of the ankle joint but the plane of a virtual inverted pendulum」）
+      //     · ON  ⟺ `q_δ · (q̇_δ − a·q_δ) < 0`，OFF ⟺ `≥ 0`，`a = −ω₀`
+      //     · 反馈延迟 δ（感觉通路）必须进入判据 ⇒ 需要**延迟环形缓冲**
+      //   这些量必须可回读：`on/off` 决定有没有输出、`γoff` 决定 off 相是不是
+      //   真的在收缩（γ<1）、`tCross` 决定稳定性（`tCross > δ`，见论文式 16）。
+      vipCap = 64;
+      /** VIP (q, q̇) 的延迟环形缓冲；按 `vipLen` 覆盖最旧的 */
+      vipQ = new Float32Array(64);
+      vipQd = new Float32Array(64);
+      vipHead = 0;
+      vipLen = 0;
+      /** 当前是否在 ON 相（反馈开启） */
+      vipOn = false;
+      /** 距稳定流形的比值 γoff：=1 在流形上，<1 在流形下方，>1 上方 */
+      vipGamma = 1;
+      /** off 相的过零时间（论文式 9）：`δ·ln((1+γ)/|1−γ|)`。稳定要求 > δ */
+      vipTCross = 0;
+      /** 开关次数（诊断：抖振会很高） */
+      vipSwitches = 0;
+      /**
+       * ★ **off 相收缩计数**（论文的稳定性机制本身）：
+       *   > "such contracting properties of the off-phases may compensate, on average,
+       *      the expanding properties of the spiral/nodal segments during the on-phases,
+       *      supporting the emergence of limit-cycle oscillations."
+       * 每个 off 相开始时记 |q|，off 相结束时（切回 ON 时）再记一次；变小=收缩。
+       * 这是判据"间歇机制有没有真的在起作用"，比看 ON 占比或开关次数都硬。
+       */
+      vipOffShrink = 0;
+      vipOffGrow = 0;
+      vipOffStartQ = 0;
+      vipPrevOn = false;
+      /** ω₀ = √(mgh/I)：off 相鞍点的特征频率（rad/s） */
+      vipOmega = 0;
+      /** 本拍控制间隔（s）—— 延迟拍数 = δ / dtCtrl，beginTick 时写入 */
+      dtCtrl = 1 / 60;
+      /** `vipDelayed` 的复用输出缓冲：[q_δ, q̇_δ] */
+      vipD1 = new Float64Array(2);
+      /** 推入一拍 VIP 状态（控制拍调用一次） */
+      pushVip(q, qd) {
+        this.vipQ[this.vipHead] = q;
+        this.vipQd[this.vipHead] = qd;
+        this.vipHead = (this.vipHead + 1) % this.vipCap;
+        if (this.vipLen < this.vipCap) this.vipLen++;
+      }
+      /**
+       * 取 `delayTicks` 拍之前的 VIP 状态，写入 out[0]=q, out[1]=q̇。
+       * 历史不够时返回**最早**的一条（等价于"从 0 开始"，不外推、不造值）。
+       */
+      vipDelayed(delayTicks, out) {
+        const k = Math.max(0, Math.min(this.vipLen - 1, Math.round(delayTicks)));
+        const idx = (this.vipHead - 1 - k + this.vipCap * 2) % this.vipCap;
+        out[0] = this.vipQ[idx];
+        out[1] = this.vipQd[idx];
+      }
+      /** 清空（回合/会话重置时） */
+      resetVip() {
+        this.vipHead = 0;
+        this.vipLen = 0;
+        this.vipOn = false;
+        this.vipGamma = 1;
+        this.vipTCross = 0;
+        this.vipSwitches = 0;
+        this.vipOffShrink = 0;
+        this.vipOffGrow = 0;
+        this.vipPrevOn = false;
+      }
+      /**
+       * 每拍调用（在切换判定**之后**）：结算上一个 off 相是收缩还是扩张。
+       * @param qNow 本拍的 VIP 摆角
+       */
+      settleOffPhase(qNow) {
+        if (this.vipPrevOn && !this.vipOn) this.vipOffStartQ = Math.abs(qNow);
+        else if (!this.vipPrevOn && this.vipOn) {
+          const a0 = this.vipOffStartQ, a1 = Math.abs(qNow);
+          if (a0 > 1e-5) {
+            if (a1 < a0) this.vipOffShrink++;
+            else this.vipOffGrow++;
+          }
+        }
+        this.vipPrevOn = this.vipOn;
+      }
       /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
       hipLatTau = 0;
       /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -16508,6 +16595,7 @@ var init_rigState = __esm({
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
+        this.dtCtrl = dt > 1e-6 ? dt : 1 / 60;
         this.tickNo++;
         this.tSec += dt;
         this.req.fill(void 0);
@@ -16719,6 +16807,13 @@ var init_rigState = __esm({
           ankleTauVip: this.ankleTauVip,
           ankleTauSat: this.ankleTauSat,
           hipTauStiff: this.hipTauStiff,
+          vipOn: this.vipOn,
+          vipGamma: this.vipGamma,
+          vipTCross: this.vipTCross,
+          vipOmega: this.vipOmega,
+          vipSwitches: this.vipSwitches,
+          vipOffShrink: this.vipOffShrink,
+          vipOffGrow: this.vipOffGrow,
           mos: this.mos,
           grf: { ...this.grf },
           grfCmd: { ...this.grfCmd },
@@ -19302,6 +19397,31 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
       const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
       let tauAnk = p.kVipAnkle * qVip - cVip * qVipRate;
+      if (on("ankleCop")) {
+        const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+        const omega0 = Math.sqrt(Math.max(
+          1e-6,
+          sk2.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
+        ));
+        const a = p.vipOmegaFrac * omega0;
+        rs.vipOmega = omega0;
+        rs.pushVip(qVip, qVipRate);
+        rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
+        const qD = rs.vipD1[0], qdD = rs.vipD1[1];
+        const wantOn = qD * (qdD - a * qD) < 0;
+        if (wantOn !== rs.vipOn) {
+          rs.vipOn = wantOn;
+          rs.vipSwitches++;
+        }
+        const qAbs = Math.abs(qD);
+        rs.vipGamma = qAbs > 1e-5 ? -qdD / (omega0 * qD) : Infinity;
+        const g = rs.vipGamma;
+        rs.vipTCross = g > 1 ? p.vipDelaySec * Math.log((1 + g) / Math.abs(1 - g)) : 0;
+        if (rs.vipOn) {
+          tauAnk += p.vipP * qD + p.vipD * qdD;
+        }
+        rs.settleOffPhase(qVip);
+      }
       if (rs.phase === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
       const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
@@ -19385,6 +19505,11 @@ var init_balance = __esm({
       //     文献里髋是**纯被动**（没有主动髋控制），本 rig 不是 ⇒ 只能取"不打架"的量级。
       //   ⚠ 开踝时 K_h 几乎不影响结果（2.22~2.25 s）⇒ 踝开着的瓶颈**不在髋**。
       kVipHip: 120,
+      // ★ 间歇延迟反馈（S3）：文献起点，不是标定值 ⇒ 扫参见 tools/probe-midfoot.ts F 段
+      vipP: 60,
+      vipD: 0,
+      vipDelaySec: 0.1,
+      vipOmegaFrac: -1,
       vipZetaHip: 0.7,
       maxHipStiffDeg: 22,
       ksagRatio: 0.2,
@@ -20162,13 +20287,140 @@ log('\u2550\u2550 E5. \u771F\u6B63\u7684\u5835\u70B9\uFF1A\u77E2\u72B6\u9762\u53
       sim.advance(1);
       if (i % 24) continue;
       const sn = ctrl.snapshot;
-      sim.doll.jointRot(ankI, rv);
-      log(`      ${(i / 120).toFixed(2).padStart(5)}s ${(sn.qVip ?? 0).toFixed(3).padStart(6)} ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(rv[2] * DEG2).toFixed(1).padStart(6)}\xB0 ${sim.doll.torso().translation().y.toFixed(3).padStart(6)} ${sn.tiltDeg.toFixed(0).padStart(5)}\xB0 ${(sn.com.x * 1e3).toFixed(0).padStart(6)}mm   ${sim.finished ? sim.fallReason : ""}`);
+      if (ankI >= 0) sim.doll.jointRot(ankI, rv);
+      else rv.fill(0);
+      log(`      ${(i / 120).toFixed(2).padStart(5)}s ${(sn.qVip ?? 0).toFixed(3).padStart(6)} ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(ankI >= 0 ? (rv[2] * DEG2).toFixed(1) : "\u2014").padStart(6)} ${sim.doll.torso().translation().y.toFixed(3).padStart(6)} ${sn.tiltDeg.toFixed(0).padStart(5)}\xB0 ${(sn.com.x * 1e3).toFixed(0).padStart(6)}mm   ${sim.finished ? sim.fallReason : ""}`);
     }
     log(`      \u21D2 \u5B58\u6D3B ${(sim.ticksDone / 60).toFixed(2)}s  \u6B7B\u56E0=${sim.fallReason || "\uFF08\u672A\u5012\uFF09"}  \u78B0\u5730\u521A\u4F53=${sim.doll.lastHitKey || "\u65E0"}`);
   }
 }
-log("\u2550\u2550 F. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
+log("\u2550\u2550 F. \u2605 \u8E1D\u7684\u95F4\u6B47\u5EF6\u8FDF\u53CD\u9988\uFF08Bottaro 2008 / Asai 2009 / Morasso 2019\uFF09\u2550\u2550");
+log("   \u76F8\u5E73\u9762 = VIP \u7684 (q, q\u0307)\uFF1BON \u27FA q_\u03B4\xB7(q\u0307_\u03B4 \u2212 a\xB7q_\u03B4) < 0\uFF0Ca = \u2212\u03C9\u2080");
+log("   \u8BBA\u6587\u5F0F 9\uFF1Aoff \u76F8\u8FC7\u96F6\u65F6\u95F4 tCross = \u03B4\xB7ln((1+\u03B3)/|1\u2212\u03B3|)\uFF1B\u7A33\u5B9A\u8981\u6C42 **tCross > \u03B4**");
+{
+  const run = (balOv, dur = 6) => {
+    const s2 = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s2, sim, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: { ...DEFAULT_CONTROLLER2.balance, ...balOv }
+    });
+    let onTicks = 0, n = 0, sumGamma = 0, gCount = 0, minTCross = Infinity, comX = 0, comZ = 0;
+    let tOk = 0, tBad = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      const sn = ctrl.snapshot;
+      if (sn.vipOn) onTicks++;
+      if (i > 120) {
+        n++;
+        comX = Math.max(comX, Math.abs(sn.com.x));
+        comZ = Math.max(comZ, Math.abs(sn.com.z));
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) {
+          sumGamma += sn.vipGamma;
+          gCount++;
+        }
+        if (isFinite(sn.vipTCross)) {
+          minTCross = Math.min(minTCross, sn.vipTCross);
+          if (sn.vipTCross > sn.vipOmega * 0 + 0.1) tOk++;
+          else tBad++;
+        }
+      }
+    }
+    return {
+      onFrac: onTicks / Math.max(1, n),
+      gamma: gCount ? sumGamma / gCount : NaN,
+      minTCross,
+      tOk,
+      tBad,
+      comXmm: comX * 1e3,
+      comZmm: comZ * 1e3,
+      switches: ctrl.snapshot.vipSwitches,
+      secs: sim.ticksDone / 60,
+      fell: String(sim.fallReason),
+      omega: ctrl.snapshot.vipOmega,
+      shrink: ctrl.snapshot.vipOffShrink,
+      grow: ctrl.snapshot.vipOffGrow
+    };
+  };
+  const CASES = [
+    ["\u5173\u6389\u95F4\u6B47\u53CD\u9988\uFF08\u73B0\u72B6\u57FA\u7EBF\uFF09", { vipP: 0 }],
+    ["P=30 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 30 }],
+    ["P=60 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 60 }],
+    ["P=120 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 120 }],
+    ["P=60 \u03B4=0.06", { vipP: 60, vipDelaySec: 0.06 }],
+    ["P=60 \u03B4=0.20\uFF08\u4EBA\u4F53\u5EF6\u8FDF\u57DF\uFF09", { vipP: 60, vipDelaySec: 0.2 }],
+    ["P=60 \u03B4=0.10 a=0\uFF08\u8C61\u9650\u5207\u6362\uFF09", { vipP: 60, vipOmegaFrac: 0 }],
+    ["P=60 D=20 \u03B4=0.10", { vipP: 60, vipD: 20 }]
+  ];
+  log("     \u914D\u7F6E                     ON\u5360\u6BD4   \u5E73\u5747\u03B3off  off\u76F8\u6536\u7F29/\u6269\u5F20   |CoM.x|   \u5B58\u6D3B");
+  for (const [tag, bal] of CASES) {
+    const r = run(bal);
+    const alive = r.fell === "null" || r.fell === "undefined";
+    log(`     ${tag.padEnd(24)} ${(r.onFrac * 100).toFixed(0).padStart(4)}%  ${isFinite(r.gamma) ? r.gamma.toFixed(2).padStart(8) : "       \u2014"}  ${String(r.shrink).padStart(9)}/${String(r.grow).padEnd(8)} ${r.comXmm.toFixed(0).padStart(6)}mm  ${r.secs.toFixed(2)}s ${alive ? "\u2713" : "\u2717 " + r.fell}`);
+  }
+  log(`   \uFF08\u03C9\u2080 = \u221A(mgh/I) \u2248 ${run({ vipP: 0 }).omega.toFixed(2)} rad/s\uFF1BtCross \u7684\u5224\u636E\u95E8\u9650\u662F \u03B4 = 0.10s\uFF09`);
+  const good = run({ vipP: 60 });
+  check(
+    "\u2605 off \u76F8\u5728**\u6536\u7F29**\uFF08\u6536\u7F29 > \u6269\u5F20\uFF09\u2014\u2014 \u8FD9\u662F\u95F4\u6B47\u673A\u5236\u7684\u771F\u5B9E\u5224\u636E",
+    good.shrink > good.grow,
+    `\u6536\u7F29 ${good.shrink} / \u6269\u5F20 ${good.grow}`
+  );
+  check(
+    "\u2605 \u5E73\u5747 \u03B3off > 0\uFF08\u5728\u7A33\u5B9A\u6D41\u5F62\u4E00\u4FA7\uFF1B<0 \u8868\u793A\u6CBF\u4E0D\u7A33\u5B9A\u6D41\u5F62\u53D1\u6563\uFF09",
+    isFinite(good.gamma) && good.gamma > 0,
+    `\u03B3off = ${good.gamma.toFixed(2)}`
+  );
+}
+log("\u2550\u2550 F2. \u2605 DIP \u4E24\u534A\u7684\u8054\u5408\u626B\uFF08Morasso 2019\uFF1A\u8E1D\u6B20\u4E34\u754C+\u95F4\u6B47\uFF0C\u9ACB**\u8FC7\u4E34\u754C**\uFF09\u2550\u2550");
+log("   K_crit,hip = m\u2082gr\u2082 \u2248 183 N\xB7m/rad\uFF1B\u539F\u6587\u8981\u6C42 \u22651.2\xD7\uFF0C\u9ED8\u8BA4 2\xD7 \u21D2 220~366");
+{
+  const run = (balOv, dur = 8) => {
+    const s2 = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s2, sim, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: { ...DEFAULT_CONTROLLER2.balance, ...balOv }
+    });
+    let on = 0, n = 0, comX = 0, gSum = 0, gN = 0, tilt = 0;
+    for (let i = 0; i < dur * 120 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      if (i > 120) {
+        const sn = ctrl.snapshot;
+        n++;
+        comX = Math.max(comX, Math.abs(sn.com.x));
+        tilt = Math.max(tilt, Math.abs(sn.tiltDeg));
+        if (sn.vipOn) on++;
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) {
+          gSum += sn.vipGamma;
+          gN++;
+        }
+      }
+    }
+    return { on: on / Math.max(1, n), comXmm: comX * 1e3, tilt, g: gN ? gSum / gN : NaN, sw: ctrl.snapshot.vipSwitches, secs: sim.ticksDone / 60, fell: String(sim.fallReason) };
+  };
+  log("     K_h    vipP    ON\u5360\u6BD4  \u5F00\u5173\u6570  \u5E73\u5747\u03B3   |CoM.x|   \u6700\u5927\u503E\u89D2   \u5B58\u6D3B");
+  let bestSec = 0, bestTag = "";
+  for (const kh of [0, 120, 250, 366]) {
+    for (const vp of [0, 120, 300]) {
+      const r = run({ kVipHip: kh, vipP: vp });
+      const alive = r.fell === "null" || r.fell === "undefined";
+      if (r.secs > bestSec) {
+        bestSec = r.secs;
+        bestTag = `K_h=${kh} vipP=${vp}`;
+      }
+      log(`     ${String(kh).padStart(4)} ${String(vp).padStart(6)}  ${(r.on * 100).toFixed(0).padStart(5)}% ${String(r.sw).padStart(7)} ${(isFinite(r.g) ? r.g.toFixed(2) : "\u2014").padStart(7)} ${r.comXmm.toFixed(0).padStart(7)}mm ${r.tilt.toFixed(0).padStart(8)}\xB0  ${r.secs.toFixed(2).padStart(5)}s ${alive ? "\u2713 \u7AD9\u4F4F" : "\u2717 " + r.fell}`);
+    }
+  }
+  log(`   \u21D2 \u6700\u597D\uFF1A${bestTag} \u5B58\u6D3B ${bestSec.toFixed(2)}s`);
+  check("\u2605 \u5B58\u5728\u80FD\u7AD9\u6EE1 8 s \u7684 DIP \u53C2\u6570\u7EC4\u5408", bestSec > 7.9, `${bestTag} \u2192 ${bestSec.toFixed(2)}s`);
+}
+log("\u2550\u2550 G. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
 {
   const { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, ANKLE_ABSENT: ANKLE_ABSENT2, axisRole: axisRole2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
   check(
