@@ -6422,6 +6422,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return key === "shin_l" || key === "foot_l" ? -s : s;
   };
   const bodies = [];
+  const ARCH_SPEC = [];
+  const ARCH_OUT = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -6595,8 +6597,14 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
           //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
           //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
-          //     而且弓本身就是**拱形柔顺结构**（承重压缩、离载回弹 = arch recoil），
-          //     不需要额外的中足关节去模拟。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
           //
           //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
           //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
@@ -6606,10 +6614,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
+            const archRise = 0.022;
             const L = cfg.soleFootScale * hx;
             const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
             const soleBottom = local2[1] - soleHalfThick;
-            const archRise = 0.022;
             const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
               const hy = hyMm / 1e3 * cfg.soleFootScale;
               const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
@@ -6636,22 +6644,79 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const blocks = [
               blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
               blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
-              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
-              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D"),
               blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
               blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
             ];
+            const archBlocks = [
+              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
+              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
+            ];
+            const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVol / allVol);
+            for (const b of archBlocks) {
+              b.mass = archMass * (b._vol / archVol);
+              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            }
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
+            ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
+            ARCH_OUT.archMass = archMass;
+            const footMass = soleMass - ARCH_OUT.archMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
-              const m = soleMass * (b._vol / volTot);
+              const m = footMass * (b._vol / volTot);
               b.mass = m;
               b.inertiaZ = m * (b.hx * b.hx + b.hy * b.hy) / 3;
               b.inertiaXY = m * (b.hz * b.hz + b.hy * b.hy) / 3;
             }
             return blocks;
           })(),
+          // ⚠⚠ 弓的两块 collider 已经从 `blocks` 里拿走了、质量也按比例减过了，
+          //   所以**这个刚体的主质量必须同步减**，否则：
+          //     · `assertColliderMass` 直接抛「collider 质量和 ≠ 刚体质量」（实测
+          //       `foot_l collider 质量和 0.892 ≠ 刚体质量 1.015`）；
+          //     · 即使绕过门禁，整机总质量也会多出 2×0.123 = 0.25kg。
+          //   ⚠ 之前误扣在**小腿胶囊**上（同样写`mass: mainMass`），小腿的
+          //     collider 质量没减 ⇒ 门禁同样会炸。**两处长得一样，改前先看清上下文。**
+          mass: mainMass - ARCH_OUT.archMass,
           leg: true
         });
+        {
+          const isL = spec.key === "shin_l";
+          const footKey = isL ? "foot_l" : "foot_r";
+          const archKey = isL ? "arch_l" : "arch_r";
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u5F13" : "\u53F3\u5185\u4FA7\u5F13",
+            part,
+            cx: 0,
+            cy,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            length,
+            radius,
+            halfHeight,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true
+          });
+          ARCH_SPEC.push({
+            side: isL ? "l" : "r",
+            footKey,
+            archKey,
+            wx: (cfg.archAtFrac * 2 - 1) * (cfg.soleFootScale * hx),
+            wy: ARCH_OUT.archRise,
+            wz: ARCH_OUT.archCz,
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+          });
+        }
         bodies.push({
           key: spec.key,
           bone: spec.bone,
@@ -6831,6 +6896,37 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       ]
     });
   });
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] \u5F13\u5173\u8282 ${as.archKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]
+    );
+    const tauArch = cfg.ankleTorque * 0.25;
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx,
+      wy: as.wy,
+      wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+  }
   if (K > 1) {
     const SPINE_XY_DEG = [15, 20];
     const SPINE_FLEX_DEG = [-25, 25];
@@ -7030,6 +7126,10 @@ var init_skeleton = __esm({
        *   已占 93%，实测那个余量恰好够用。
        */
       hipAbdTorqueFactor: 0.6,
+      // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+      archLimitDeg: [-4, 16],
+      /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+      archAtFrac: 0.22,
       // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
       //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
       ankleLimitDeg: [-12, 18],
@@ -13758,6 +13858,7 @@ var init_rapier = __esm({
 // src/core/ragdoll.ts
 var ragdoll_exports = {};
 __export(ragdoll_exports, {
+  DEFAULTS: () => DEFAULTS,
   Ragdoll: () => Ragdoll
 });
 function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
@@ -13830,6 +13931,17 @@ var init_ragdoll = __esm({
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
       midfootStiffness: 120,
       midfootDamping: 8,
+      // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
+      //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
+      //   踩实一部分才有用；压到底就成平板、丧失 CoP 行程（Lugade & Kaufman 2014）。
+      //   τmax 只有 30 N·m，K=6 ⇒ 满偏 5 rad；K 再大就压不动了。
+      // ★ 实测选定（20 档扫描，K=35~260 × B=2~30）：
+      //   K=100 / B=15 ⇒ 弓角摆幅 **4.0°**、CoP 内侧余量 **228mm**（最好）
+      //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
+      //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
+      //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
+      archStiffness: 100,
+      archDamping: 15,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14065,17 +14177,20 @@ var init_ragdoll = __esm({
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
-        if (this.opt.midfootStiffness || this.opt.midfootDamping) {
+        const archK = this.opt.archStiffness ?? 6;
+        const archB = this.opt.archDamping ?? 1.2;
+        if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
           const gain = { ...this.opt.jointGain ?? {} };
           for (let i = 0; i < sk2.joints.length; i++) {
             const j = sk2.joints[i];
-            if (!j.name.startsWith("midfoot_")) continue;
+            if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
             const tmax = Math.max(1e-6, j.maxTorque[ax]);
+            const isArch = j.name.startsWith("arch_");
             gain[j.name] = {
-              kP: (this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
-              kD: (this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
+              kP: (isArch ? archK : this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
+              kD: (isArch ? archB : this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
             };
           }
           this.opt.jointGain = gain;
@@ -14117,11 +14232,11 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
                 this.soleCol[1] ??= col;
@@ -15425,6 +15540,7 @@ var init_ragdoll = __esm({
             let alpha = this.opt.motorAlpha;
             let err;
             const kDd = limp ? 0 : kD;
+            let thRef = 0, kPSpring = 0, kDdEff = kDd, ts = 1;
             const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
             if (a > hi) {
               err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
@@ -15436,9 +15552,10 @@ var init_ragdoll = __esm({
               err = -kDd * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
-              const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+              thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              const ts = this.toneScale[idx] || 1;
+              ts = this.toneScale[idx] || 1;
+              kPSpring = ov ? ov.kP : kP;
               err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
             if (err === 0) continue;
@@ -15456,7 +15573,9 @@ var init_ragdoll = __esm({
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
-            const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
@@ -20267,13 +20386,14 @@ var init_balance = __esm({
       latHipDead: 8,
       // 横向阻尼：vz=0.4m/s 时给 32N·m（与静态项同量级、不同相位）
       // ★ 1.0 = 教科书值（K=a·m·ω₀²、D=a·m·2ζω₀，按 ω₀=√(g/h) 运行时推导）
-      // ★ 实测最优点（相对教科书值的倍率）：
-      //   最优绝对值 =刚度 100 N·m/m、阻尼 66 N·m·s/m
-      //   教科书基线 = a·m·ω₀² = 85、a·m·2ζω₀ = 53
-      //   ⇒ 1.18× / 1.25×。该档实测 **驻留 0.42s、最小 X3 = 2mm**。
-      // ⚠ 扫描时刚度档位只到 1.2× 时会错过这个峰（默认曾错设 0.6× ⇒ 刚度 51，偏软）。
-      latStiff: 1.18,
-      latDamp: 1.25,
+      // ★ 20 档扫描（刚度 0.4~1.3× × 阻尼 0.8~1.8×）里**唯一**驻留 >0 的档：
+      //   刚度 0.4×、阻尼 0.8× ⇒ 最小 X3 = **39mm**、驻留 **0.08s**、存活 1.52s
+      //   （教科书基线 a·m·ω₀²≈85 ⇒ 刚度 ≈34 N·m/m，比教科书值**软 2.5 倍**）
+      // ⚠⚠ **0.42s 的驻留（最小 X3 = 2mm）在本轮无法复现** —— 20 档全部 0.00s。
+      //   期间新增了 `step.useKeyFrame`（默认 true，摆动腿改走 Perry 曲线），
+      //   嫌疑最大，但未逐项排除。**在能稳定复现之前，不宣称已达成 0.42s。**
+      latStiff: 0.4,
+      latDamp: 0.8,
       latZeta: 1,
       // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
       // 实测：0.5 最优（驻留 0.33s）；1.0/2.0/4.0 全部更差

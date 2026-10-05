@@ -6422,6 +6422,8 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     return key === "shin_l" || key === "foot_l" ? -s2 : s2;
   };
   const bodies = [];
+  const ARCH_SPEC = [];
+  const ARCH_OUT = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u7EC4\u4EF6 ${spec.key}`);
@@ -6569,6 +6571,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           radius: 0,
           halfHeight: soleDrop / 2,
           mass: soleMass,
+          // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -6595,8 +6598,14 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
           //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
           //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
-          //     而且弓本身就是**拱形柔顺结构**（承重压缩、离载回弹 = arch recoil），
-          //     不需要额外的中足关节去模拟。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
           //
           //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
           //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
@@ -6606,10 +6615,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
+            const archRise = 0.022;
             const L = cfg.soleFootScale * hx;
             const HW = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
             const soleBottom = local2[1] - soleHalfThick;
-            const archRise = 0.022;
             const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
               const hy = hyMm / 1e3 * cfg.soleFootScale;
               const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
@@ -6636,14 +6645,30 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const blocks = [
               blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
               blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
-              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
-              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D"),
               blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
               blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
             ];
+            const archBlocks = [
+              blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
+              blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
+            ];
+            const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVol / allVol);
+            for (const b of archBlocks) {
+              b.mass = archMass * (b._vol / archVol);
+              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            }
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
+            ARCH_OUT.archCz = (0.4 + 1) / 2 * HW;
+            ARCH_OUT.archMass = archMass;
+            const footMass = soleMass - ARCH_OUT.archMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
-              const m = soleMass * (b._vol / volTot);
+              const m = footMass * (b._vol / volTot);
               b.mass = m;
               b.inertiaZ = m * (b.hx * b.hx + b.hy * b.hy) / 3;
               b.inertiaXY = m * (b.hz * b.hz + b.hy * b.hy) / 3;
@@ -6652,6 +6677,48 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           })(),
           leg: true
         });
+        {
+          const isL = spec.key === "shin_l";
+          const footKey = isL ? "foot_l" : "foot_r";
+          const archKey = isL ? "arch_l" : "arch_r";
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u5F13" : "\u53F3\u5185\u4FA7\u5F13",
+            part,
+            cx: 0,
+            cy,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            length,
+            radius,
+            halfHeight,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true
+          });
+          const ab = ARCH_OUT.archBlocks;
+          const mOff = (f) => ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
+          ARCH_SPEC.push({
+            side: isL ? "l" : "r",
+            footKey,
+            archKey,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0 + mOff("offsetX"),
+            // 脚体 cx = 0
+            wy: cy + mOff("offsetY"),
+            // 与弓刚体同一个 cy
+            wz: centerZ + mOff("offsetZ"),
+            // 与弓刚体同一个 cz
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+          });
+        }
         bodies.push({
           key: spec.key,
           bone: spec.bone,
@@ -6759,6 +6826,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
   const byKey = new Map(bodies.map((b) => [b.key, b]));
   byKeyRef = byKey;
   const jointMetaByName = new Map(META.joints.map((j) => [j.name, j]));
+  for (const b of bodies) {
+    if (!b.colliders || b.colliders.length === 0) continue;
+    b.mass = b.colliders.reduce((a, c) => a + (c.mass ?? 0), 0);
+  }
   const joints = [];
   const JOINT_ORDER_ACTIVE = JOINT_ORDER.filter((n) => cfg.ankleEnabled || !n.startsWith("foot_"));
   JOINT_ORDER_ACTIVE.forEach((name, index) => {
@@ -6831,6 +6902,37 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       ]
     });
   });
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] \u5F13\u5173\u8282 ${as.archKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const dParent = rotVecByQuat(
+      invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]
+    );
+    const dChild = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]
+    );
+    const tauArch = cfg.ankleTorque * 0.25;
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx,
+      wy: as.wy,
+      wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+  }
   if (K > 1) {
     const SPINE_XY_DEG = [15, 20];
     const SPINE_FLEX_DEG = [-25, 25];
@@ -7030,6 +7132,10 @@ var init_skeleton = __esm({
        *   已占 93%，实测那个余量恰好够用。
        */
       hipAbdTorqueFactor: 0.6,
+      // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+      archLimitDeg: [-4, 16],
+      /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+      archAtFrac: 0.22,
       // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
       //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
       ankleLimitDeg: [-12, 18],
@@ -13758,6 +13864,7 @@ var init_rapier = __esm({
 // src/core/ragdoll.ts
 var ragdoll_exports = {};
 __export(ragdoll_exports, {
+  DEFAULTS: () => DEFAULTS,
   Ragdoll: () => Ragdoll
 });
 function quatRotate(qx, qy, qz, qw, vx, vy, vz, out) {
@@ -13830,6 +13937,17 @@ var init_ragdoll = __esm({
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
       midfootStiffness: 120,
       midfootDamping: 8,
+      // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
+      //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
+      //   踩实一部分才有用；压到底就成平板、丧失 CoP 行程（Lugade & Kaufman 2014）。
+      //   τmax 只有 30 N·m，K=6 ⇒ 满偏 5 rad；K 再大就压不动了。
+      // ★ 实测选定（20 档扫描，K=35~260 × B=2~30）：
+      //   K=100 / B=15 ⇒ 弓角摆幅 **4.0°**、CoP 内侧余量 **228mm**（最好）
+      //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
+      //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
+      //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
+      archStiffness: 100,
+      archDamping: 15,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14065,17 +14183,20 @@ var init_ragdoll = __esm({
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
-        if (this.opt.midfootStiffness || this.opt.midfootDamping) {
+        const archK = this.opt.archStiffness ?? 6;
+        const archB = this.opt.archDamping ?? 1.2;
+        if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
           const gain = { ...this.opt.jointGain ?? {} };
           for (let i = 0; i < sk2.joints.length; i++) {
             const j = sk2.joints[i];
-            if (!j.name.startsWith("midfoot_")) continue;
+            if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
             const tmax = Math.max(1e-6, j.maxTorque[ax]);
+            const isArch = j.name.startsWith("arch_");
             gain[j.name] = {
-              kP: (this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
-              kD: (this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
+              kP: (isArch ? archK : this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED / tmax,
+              kD: (isArch ? archB : this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED / tmax
             };
           }
           this.opt.jointGain = gain;
@@ -14117,11 +14238,11 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
                 this.soleCol[1] ??= col;
@@ -15425,6 +15546,7 @@ var init_ragdoll = __esm({
             let alpha = this.opt.motorAlpha;
             let err;
             const kDd = limp ? 0 : kD;
+            let thRef = 0, kPSpring = 0, kDdEff = kDd, ts = 1;
             const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
             if (a > hi) {
               err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
@@ -15436,9 +15558,10 @@ var init_ragdoll = __esm({
               err = -kDd * relL[k];
             } else {
               const cmd = this.motorTarget[idx];
-              const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+              thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              const ts = this.toneScale[idx] || 1;
+              ts = this.toneScale[idx] || 1;
+              kPSpring = ov ? ov.kP : kP;
               err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
             if (err === 0) continue;
@@ -15456,7 +15579,9 @@ var init_ragdoll = __esm({
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
-            const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
@@ -20606,7 +20731,22 @@ var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() =
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var log = console.log;
-var sk = buildSkeleton2(DEFAULT_CONFIG2);
+var sk0 = buildSkeleton2(DEFAULT_CONFIG2);
+var { assertColliderMass: assertColliderMass2, assertJointAnchors: assertJointAnchors2 } = await Promise.resolve().then(() => (init_skeleton(), skeleton_exports));
+log("\u2550\u2550 \u542F\u52A8\u95E8\u7981\uFF08main.ts:boot \u8C03\u7684\u5C31\u662F\u8FD9\u4E24\u4E2A\uFF09\u2550\u2550");
+try {
+  assertColliderMass2(sk0);
+  log("   \u2713 assertColliderMass \u901A\u8FC7");
+} catch (e) {
+  log(`   \u2717 ${e.message}`);
+}
+try {
+  assertJointAnchors2(sk0);
+  log("   \u2713 assertJointAnchors \u901A\u8FC7");
+} catch (e) {
+  log(`   \u2717 ${e.message}`);
+}
+var sk = sk0;
 var SHAPE = shapeForJoints2(sk.joints.length);
 log(`   DEFAULT_CONFIG.stance = ${DEFAULT_CONFIG2.stance}`);
 var hips = ["hip_l", "hip_r"].map((n) => jointIndexByName2(sk, n));
@@ -20622,11 +20762,21 @@ for (const nm of ["hip_l", "knee_l", "foot_l", "spine1"]) {
   log(`   ${nm.padEnd(8)} \u03C4max = [${d.maxTorque.map((v) => v.toFixed(0)).join(", ")}] N\xB7m   \u9650\u4F4D ${d.minRad.map((v) => (v * 180 / Math.PI).toFixed(0)).join("/")}\xB0`);
 }
 log('\u2550\u2550 \u811A\u5185\u90E8\u81EA\u7531\u5EA6\u68C0\u67E5\uFF08"\u67D4\u6027\u8DB3"\u662F\u5426\u771F\u7684\u6709\u67D4\u6027\uFF09\u2550\u2550');
+log(`   \u521A\u4F53\u6570 ${sk.bodies.length} / \u5173\u8282\u6570 ${sk.joints.length}   \uFF08\u67D4\u6027\u8DB3\u524D\u662F15 / 14\uFF09`);
 for (const fn of ["foot_l", "foot_r"]) {
-  const fi = (sk.bodies ?? []).findIndex((b) => b.key === fn);
+  const fi = sk.bodies.findIndex((b) => b.key === fn);
+  const ai = sk.bodies.findIndex((b) => b.key === fn.replace("foot", "arch"));
+  const foot = sk.bodies[fi];
+  const arch = ai >= 0 ? sk.bodies[ai] : null;
   const childJoints = sk.joints.filter((j) => j.parentKey === fn || j.childKey === fn);
-  log(`   \u521A\u4F53 ${fn}: idx=${fi}  colliders=${sk.colliders?.filter((c) => c.body === fn).length ?? "?"}`);
-  log(`   \u6302\u5728${fn} \u4E0A\u7684\u5173\u8282: ${childJoints.length ? childJoints.map((j) => j.name).join(", ") : "\u2605 \u65E0 \u2014\u2014 \u8FD9\u53EA\u811A\u662F\u5355\u4E2A\u521A\u4F53"}`);
+  log(`   \u521A\u4F53 ${fn}: idx=${fi} colliders=${foot.colliders?.length ?? 0}  \u5F13\u521A\u4F53 ${arch ? `idx=${ai} colliders=${arch.colliders?.length ?? 0} m=${arch.mass.toFixed(3)}kg` : "\u2605\u65E0"}`);
+  log(`      \u6302\u5728 ${fn} \u4E0A\u7684\u5173\u8282: ${childJoints.map((j) => j.name).join(", ")}`);
+  for (const j of childJoints) {
+    if (j.name.startsWith("arch_")) {
+      log(`      ${j.name}: \u81EA\u7531\u8F74=${JSON.stringify(j.revoluteAxis)} \u9650\u4F4D=[${(j.minRad[0] * 180 / Math.PI).toFixed(0)}\xB0,${(j.maxRad[0] * 180 / Math.PI).toFixed(0)}\xB0] \u03C4max=${j.maxTorque[0].toFixed(0)}N\xB7m \u951A\u70B9\u4E16\u754C=(${j.wx?.toFixed(3)},${j.wy?.toFixed(3)},${j.wz?.toFixed(3)})`);
+    }
+  }
+  if (arch) log(`      \u5F13 collider: ${arch.colliders?.map((c) => `${c.offsetX?.toFixed(3)},${c.offsetY?.toFixed(3)},${c.offsetZ?.toFixed(3)}`).join("  ")}`);
 }
 log(`\u2550\u2550 \u5173\u8282\u8868\uFF08\u5171 ${sk.joints.length} \u4E2A\uFF0C\u6309\u771F\u5B9E\u7D22\u5F15\uFF09\u2550\u2550`);
 sk.joints.forEach((d, i) => {
@@ -20649,6 +20799,9 @@ row("\u9ACB z", hl, hr, true);
 row("\u8E1D z", s.legs.l.footZ, s.legs.r.footZ, true);
 row("CoP z", s.cop?.l?.z ?? 0, s.cop?.r?.z ?? 0, true);
 row("\u8DB3\u5916\u516B/\u5916\u5F20", 0, 0);
+var mBody = sk.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+var mCol = sk.bodies.reduce((a, b) => a + (b.colliders ?? []).reduce((x, c) => x + (c.mass ?? 0), 0), 0);
+log(`   \u2605 \u603B\u8D28\u91CF = \u521A\u4F53 ${mBody.toFixed(2)} + collider ${mCol.toFixed(2)} = ${(mBody + mCol).toFixed(2)} kg\uFF08\u5E94\u4E3A 70.00\uFF09`);
 log(`   com.z = ${(s.com.z * 1e3).toFixed(0)}mm   \u7AD9\u8DDD/\u9ACB\u95F4\u8DDD = ${s.strideRatio.toFixed(2)}\xD7`);
 log(`   \u8FDB\u652F\u6491\u9762\u9700\u6A2A\u79FB = ${(s.supportEntryZ * 1e3).toFixed(0)}mm`);
 var BB = new Float64Array(4);

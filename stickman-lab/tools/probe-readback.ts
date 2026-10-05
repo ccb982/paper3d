@@ -19,7 +19,14 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const log = console.log;
-const sk = buildSkeleton(DEFAULT_CONFIG);
+const sk0 = buildSkeleton(DEFAULT_CONFIG);
+const { assertColliderMass, assertJointAnchors } = await import('../src/core/skeleton');
+log('══ 启动门禁（main.ts:boot 调的就是这两个）══');
+try { assertColliderMass(sk0); log('   ✓ assertColliderMass 通过'); }
+catch (e) { log(`   ✗ ${(e as Error).message}`); }
+try { assertJointAnchors(sk0); log('   ✓ assertJointAnchors 通过'); }
+catch (e) { log(`   ✗ ${(e as Error).message}`); }
+const sk = sk0;
 const SHAPE = shapeForJoints(sk.joints.length);
 log(`   DEFAULT_CONFIG.stance = ${DEFAULT_CONFIG.stance}`);
 const hips = ['hip_l', 'hip_r'].map((n) => jointIndexByName(sk, n));
@@ -35,11 +42,25 @@ for (const nm of ['hip_l', 'knee_l', 'foot_l', 'spine1']) {
     + `   限位 ${d!.minRad.map((v) => (v * 180 / Math.PI).toFixed(0)).join('/')}°`);
 }
 log('══ 脚内部自由度检查（"柔性足"是否真的有柔性）══');
+log(`   刚体数 ${sk.bodies.length} / 关节数 ${sk.joints.length}   （柔性足前是15 / 14）`);
 for (const fn of ['foot_l', 'foot_r'] as const) {
-  const fi = (sk.bodies ?? []).findIndex((b: any) => b.key === fn);
+  const fi = sk.bodies.findIndex((b: any) => b.key === fn);
+  const ai = sk.bodies.findIndex((b: any) => b.key === fn.replace('foot', 'arch'));
+  const foot = sk.bodies[fi]!;
+  const arch = ai >= 0 ? sk.bodies[ai]! : null;
   const childJoints = sk.joints.filter((j: any) => j.parentKey === fn || j.childKey === fn);
-  log(`   刚体 ${fn}: idx=${fi}  colliders=${(sk as any).colliders?.filter((c: any) => c.body === fn).length ?? '?'}`);
-  log(`   挂在${fn} 上的关节: ${childJoints.length ? childJoints.map((j: any) => j.name).join(', ') : '★ 无 —— 这只脚是单个刚体'}`);
+  log(`   刚体 ${fn}: idx=${fi} colliders=${foot.colliders?.length ?? 0}`
+    + `  弓刚体 ${arch ? `idx=${ai} colliders=${arch.colliders?.length ?? 0} m=${arch.mass.toFixed(3)}kg` : '★无'}`);
+  log(`      挂在 ${fn} 上的关节: ${childJoints.map((j: any) => j.name).join(', ')}`);
+  for (const j of childJoints) {
+    if (j.name.startsWith('arch_')) {
+      log(`      ${j.name}: 自由轴=${JSON.stringify(j.revoluteAxis)}`
+        + ` 限位=[${(j.minRad![0]! * 180 / Math.PI).toFixed(0)}°,${(j.maxRad![0]! * 180 / Math.PI).toFixed(0)}°]`
+        + ` τmax=${j.maxTorque![0]!.toFixed(0)}N·m`
+        + ` 锚点世界=(${j.wx?.toFixed(3)},${j.wy?.toFixed(3)},${j.wz?.toFixed(3)})`);
+    }
+  }
+  if (arch) log(`      弓 collider: ${arch.colliders?.map((c: any) => `${c.offsetX?.toFixed(3)},${c.offsetY?.toFixed(3)},${c.offsetZ?.toFixed(3)}`).join('  ')}`);
 }
 log(`══ 关节表（共 ${sk.joints.length} 个，按真实索引）══`);
 sk.joints.forEach((d, i) => {
@@ -62,6 +83,12 @@ row('髋 z', hl, hr, true);
 row('踝 z', s.legs.l.footZ, s.legs.r.footZ, true);
 row('CoP z', s.cop?.l?.z ?? 0, s.cop?.r?.z ?? 0, true);
 row('足外八/外张', 0, 0);
+// ★ 总质量 = Σ刚体主质量 + Σ collider 质量（**两者都要算**：脚掌的 soleMass
+//   挂在 collider 上，不在 BodyDef.mass 里）
+const mBody = sk.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+const mCol = sk.bodies.reduce((a, b) =>
+  a + (b.colliders ?? []).reduce((x, c: any) => x + (c.mass ?? 0), 0), 0);
+log(`   ★ 总质量 = 刚体 ${mBody.toFixed(2)} + collider ${mCol.toFixed(2)} = ${(mBody + mCol).toFixed(2)} kg（应为 70.00）`);
 log(`   com.z = ${(s.com.z * 1000).toFixed(0)}mm   站距/髋间距 = ${s.strideRatio.toFixed(2)}×`);
 log(`   进支撑面需横移 = ${(s.supportEntryZ * 1000).toFixed(0)}mm`);
 const BB = new Float64Array(4);

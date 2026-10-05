@@ -144,6 +144,16 @@ export interface RagdollOptions {
    *     达不到就调 `midfootStiffness`，不要动别的地方。
    */
   midfootStiffness?: number;
+  /**
+   * ★ 弓关节（`arch_*`）的**被动刚度**（N·m/rad）。
+   * ⚠ 中足关节当初被删掉的原因就是**塌陷**，但正确结论是「缺限位 + 缺阻尼」。
+   *   限位在骨架侧（`cfg.archLimitDeg`），阻尼在这里。
+   *   默认给**适中的刚度 + 明确的阻尼** —— 阻尼不足时弓在受载/离载
+   *   会像弹簧一样抽，把侧向 CoP 变成高频噪声。
+   */
+  archStiffness?: number;
+  /** ★ 弓关节的**被动阻尼**（N·m·s/rad）。见 `archStiffness` 的注释。 */
+  archDamping?: number;
   midfootDamping?: number;
   /** 角色碰撞体摩擦 */
   bodyFriction?: number;
@@ -297,11 +307,26 @@ export interface RagdollOptions {
 /** 鞋底接触法线与该块底面外法线的对齐门槛（|cos| ≥ 0.7 ⇒ 夹角 ≤ ~45°） */
 const SOLE_NORMAL_TOL = 0.7;
 
-const DEFAULTS: Required<RagdollOptions> = {
+/**
+ * ★ 默认 ragdoll 选项（**导出以便探针扫参**：弓刚度/阻尼是在**构造时**折算进
+ *   `jointGain` 的，运行中改 `doll.opt` **不生效** ⇒ 扫描必须在构造前设置）。
+ */
+export const DEFAULTS: Required<RagdollOptions> = {
   groundFriction: 1.0,
   // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
   midfootStiffness: 120,
   midfootDamping: 8,
+  // ★ 弓关节（`arch_*`）的被动刚度/阻尼。**默认比 midfoot 软得多**：
+  //   midfoot 是"中足"（脚掌中部），arch 是**内侧弓** —— 弓必须能被压下、
+  //   踩实一部分才有用；压到底就成平板、丧失 CoP 行程（Lugade & Kaufman 2014）。
+  //   τmax 只有 30 N·m，K=6 ⇒ 满偏 5 rad；K 再大就压不动了。
+  // ★ 实测选定（20 档扫描，K=35~260 × B=2~30）：
+  //   K=100 / B=15 ⇒ 弓角摆幅 **4.0°**、CoP 内侧余量 **228mm**（最好）
+  //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
+  //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
+  //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
+  archStiffness: 100,
+  archDamping: 15,
   /**
    * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
    *
@@ -663,19 +688,23 @@ export class Ragdoll {
     //   ⇒ 反解 `kP = K·ωmax/τmax`。
     //   这样 `midfootStiffness` 的单位**真的是 N·m/rad**（与文献同量纲），
     //   而不是 Rapier 马达那种无量纲增益 —— 见 createJoints 里被删掉的那段注释。
-    if (this.opt.midfootStiffness || this.opt.midfootDamping) {
+    const archK = this.opt.archStiffness ?? 6;      // N·m/rad：软到能被压下、硬到不塌
+    const archB = this.opt.archDamping ?? 1.2;     // N·m·s/rad：临界阻尼量级
+    if (this.opt.midfootStiffness || this.opt.midfootDamping || true) {
       const gain: Record<string, { kP: number; kD: number }> = { ...(this.opt.jointGain ?? {}) };
       for (let i = 0; i < sk.joints.length; i++) {
         const j = sk.joints[i]!;
-        if (!j.name.startsWith('midfoot_')) continue;
+        // ★ 同时覆盖 `midfoot_*`（旧命名）与 **`arch_*`**（柔性足 F2 的弓关节）。
+        if (!j.name.startsWith('midfoot_') && !j.name.startsWith('arch_')) continue;
         if (gain[j.name]) continue;            // 调用方显式给了就不覆盖
         const ax = j.revoluteAxis
           ? (j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2)
           : 0;
         const tmax = Math.max(1e-6, j.maxTorque[ax]!);
+        const isArch = j.name.startsWith('arch_');
         gain[j.name] = {
-          kP: ((this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED) / tmax,
-          kD: ((this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED) / tmax,
+          kP: ((isArch ? archK : (this.opt.midfootStiffness ?? 0)) * JOINT_MAX_SPEED) / tmax,
+          kD: ((isArch ? archB : (this.opt.midfootDamping ?? 0)) * JOINT_MAX_SPEED) / tmax,
         };
       }
       this.opt.jointGain = gain;
@@ -758,11 +787,14 @@ export class Ragdoll {
         if (c.shape === 'cuboid') {
           // ★ `forefoot_*` 是柔性足 F1 的前足刚体，它的 collider **也是鞋底**
           //   （前脚掌内侧柱/外侧柱）⇒ 必须一起登记，否则 CoP / 载荷只统计后足。
-          if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l') {
+          // ★ `arch_l/arch_r`（柔性足 F2 的**弓刚体**）也要登记：
+          //   内侧弓是唯一能**旋前踩实**的部分，它不登记 ⇒ CoP / 逐块载荷
+          //   永远看不到它 ⇒ 又会得出"弓不承重"的错误结论（正是本设计要修的）。
+          if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l' || b.key === 'arch_l') {
             this.soleCols[0].push(col);
-            this.soleColBody[0].push(i);      // ★ 记下所属刚体（readCoP 筛底面要用）
+            this.soleColBody[0].push(i);      // ★ 记下所属刚体（readCoP筛底面要用）
             this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
-          } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r') {
+          } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r' || b.key === 'arch_r') {
             this.soleCols[1].push(col);
             this.soleColBody[1].push(i);
             this.soleCol[1] ??= col;
@@ -2236,6 +2268,8 @@ soleBlockLabels(side: 0 | 1): string[] {
         //    就判定膝盖越界、全力把它往后掰 —— 实测躯干从 1.128 m 一路塌到 0.698 m，
         //    整个人形自己跪下去，而且"站桩"直接踩到摔倒阈值。提前量对小范围关节是灾难。
         //    越界量与回程速度的关系仍保留 LIMIT_SOFT_ZONE 的斜坡（越界越多回程越快）。
+        // 下面 `impSpring`/`impDamp` 要用这两个量，而它们只在 else 分支里赋值
+        let thRef = 0, kPSpring = 0, kDdEff = kDd, ts = 1;
         const ramp = Math.min(LIMIT_SOFT_ZONE, hi - lo);
         if (a > hi) {
           err = -JOINT_MAX_SPEED * Math.min(1, (a - hi) / ramp) - relL[k];
@@ -2250,12 +2284,13 @@ soleBlockLabels(side: 0 | 1): string[] {
           err = -kDd * relL[k];
         } else {
           const cmd = this.motorTarget[idx];
-          const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
-          // ★ 逐关节增益覆盖（踝专用，见 RagdollOptions.jointGain 的注释）
+          thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
+          // ★ 逐关节增益覆盖（踝/弓专用，见 RagdollOptions.jointGain 的注释）
           const ov = jg[j.name];
           // ★ 载荷依赖的姿势张力：P/D 同时按 `toneScale` 缩放。
           //   只放大 P 会让系统变"硬但嗡"(过阻尼不足)；D 同比例放大才保持阻尼比。
-          const ts = this.toneScale[idx] || 1;
+          ts = this.toneScale[idx] || 1;
+          kPSpring = ov ? ov.kP : kP;
           err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
         }
 
@@ -2303,7 +2338,27 @@ soleBlockLabels(side: 0 | 1): string[] {
         //   （护栏的物理含义是"每步最多吃掉 α 比例的相对角速度误差"，
         //    只对反馈项有意义）。前馈单独记账、不受此限。
         const ff = this.torqueCmd[idx]!;
-        const impStable = alpha * Math.abs(err) * Ieff + Math.abs(ff) * dt;
+        // 弹簧分量的冲量（护栏要用，见下面的说明）
+        const impSpring = Math.abs(kPSpring * ts * (thRef - a))
+          * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+        // ★★★ **护栏只该管阻尼项，不管弹簧项**（2026-10-05 修，柔性足 F2 逼出来的）。
+        //
+        //   原式 `|imp| ≤ α·|err|·Ieff + |ff|·dt` 里的 `err = kP·Δθ + kD·ω`
+        //   **混了弹簧与阻尼**。物理上：
+        //     · **阻尼项** `kD·ω` 的作用就是"每步吃掉 α 比例的相对角速度误差"
+        //       ⇒ 对它用 `α·|kD·ω|·Ieff` 是**正确**的稳定上限；
+        //     · **弹簧项** `kP·Δθ` 的职责是**对抗外载**（重力、地面反力），
+        //       它要多大由**平衡**决定，上限本来就该由 **τmax** 兜底
+        //       （上面 `tau` 已经夹过一次）。把它也套进 `α·Ieff` 是错的。
+        //
+        //   ⚠⚠ 对**小惯量刚体**这个错误是致命的：弓 `m=0.123kg`、质心离关节
+        //   ~40mm ⇒ `Ieff ≈ 2e-4 kg·m²`。护栏上限 = `1×9×2e-4 = 1.8e-3`，
+        //   而弹簧项需要的冲量是 `τ=16.8 N·m × dt(1/120) = 0.14`
+        //   ⇒ **被限到 1.3%**。实测后果：`archStiffness` 从 3 扫到 **260
+        //   N·m/rad，弓角摆幅恒为 20°（满限位）、结果逐位相同** ——
+        //   马达根本推不动，弓被地面反力直接压到限位。
+        const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+        const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
         const impWant = imp;
         if (imp > impStable) imp = impStable;
         else if (imp < -impStable) imp = -impStable;

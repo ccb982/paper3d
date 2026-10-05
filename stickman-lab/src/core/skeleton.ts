@@ -321,6 +321,8 @@ export interface SkeletonConfig {
    *   在 120 时已占 93%，实测那个"看起来不够"的余量恰好够用。
    */
   hipAbdTorqueFactor: number;
+  /** 弓关节限位（deg）：[旋后, 旋前]。默认 [-4, 16]；见 `arch_*` 处的取舍说明 */
+  archLimitDeg: readonly [number, number];
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 */
   archAtFrac: number;
   /** ★ 踝（跖屈肌）力矩上限 N·m —— **A 方案的核心参数**。
@@ -441,6 +443,8 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
    *   已占 93%，实测那个余量恰好够用。
    */
   hipAbdTorqueFactor: 0.60,
+  // 弓关节限位（deg）：[旋后, 旋前]。上限 16 刻意小于"踩实"所需的 ~28（见下方注释）
+  archLimitDeg: [-4, 16],
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
   archAtFrac: 0.22,
   // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
@@ -1020,6 +1024,39 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   };
 
   const bodies: BodyDef[] = [];
+
+  // ══════════════════════════════════════════════════════════════
+  // ★ 柔性足 F2（2026-10-05）：**弓刚体 + 旋前关节**
+  // ══════════════════════════════════════════════════════════════
+  //  动机（实测，见 tools/probe-footroll.ts）：脚原本是**单个刚体**，内侧弓被
+  //  硬编码离地 22mm 之后**永远不可能接地** ⇒ 承重退化成「足跟 + 外侧缘」
+  //  一条线、跖骨/趾 ≈ 0% ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+  //  文献：Jeon & Cho 压力垫综述「第一接触点通常在踝关节中心**外侧**，在
+  //  **距下关节产生旋前力矩**」「**内侧弓把重量传递到足的外侧缘**」；
+  //  Welte 2023：内侧弓的**可动性**是人类两足行走的演化产物。
+  //
+  //  ⚠ 拓扑改动**必须两段式**（这是上一轮失败的确切原因）：
+  //     `bodies` 在 line ~1022 声明，而 **`joints` 在 line ~1528 才声明**
+  //     ⇒ 关节**不能**在 bodies 循环里 push（编译不过）。
+  //     所以：① 循环内只造**弓刚体**，把造关节需要的量存进 `ARCH_SPEC`；
+  //          ② `joints` 声明之后再统一建关节（照抄脊柱那段的形式）。
+  interface ArchSpec {
+    side: 'l' | 'r';
+    footKey: string;      // 父刚体（foot_l / foot_r）
+    archKey: string;      // 子刚体（arch_l / arch_r）
+    /** 关节锚点**世界**坐标（足长 archAtFrac 处、弓的抬升高度上） */
+    wx: number; wy: number; wz: number;
+    /** 弓块占鞋底总质量的比例（按体积算，见循环内） */
+    massFrac: number;
+  }
+  const ARCH_SPEC: ArchSpec[] = [];
+  /** IIFE（`colliders`）向外传值用的出口。IIFE 内拿不到外层的 `arch_*`，
+   *  外层又需要 IIFE 才算出的量 ⇒ 用这个对象当中转站。 */
+  interface ArchOut {
+    archBlocks: ColliderDef[];
+    archRise: number; archCx: number; archCz: number; archMass: number;
+  }
+  const ARCH_OUT: ArchOut = { archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0 };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
     if (!part) throw new Error(`[skeleton] parts.json 缺少组件 ${spec.key}`);
@@ -1307,7 +1344,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           length: soleDrop,
           radius: 0,
           halfHeight: soleDrop / 2,
-          mass: soleMass,
+          mass: soleMass,   // ★ 由下面的不变式后处理统一校准（见 assertColliderMass 上游）
           // ★★ 脚掌拆成「脚跟 + 前脚掌」两块碰撞体（用户 2026-10-04：「实在不行你自行对腿部纹理横向裁一刀」）。
           //   原因（实测）：单块刚性脚掌平放时，接触形心不会因倾转而移动 ——
           //   要让 CoP 移动只能把脚翻到边缘。而几何上正好卡在限位：
@@ -1351,14 +1388,12 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            // L / HW / soleBottom / archBlocks 已在 IIFE 外声明（供弓刚体段复用）
             const archRise = 0.022;   // 内侧弓顶点离地 22mm（人脚约 20~25mm）
             interface Blk extends ColliderDef { _vol: number; _label: string }
-            // ★ 下面几个量被 IIFE 外的「弓刚体」段复用，先在 IIFE 外声明
             const L = cfg.soleFootScale * hx;
             const HW = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;
             const soleBottom = local[1] - soleHalfThick;
-            let archBlocks: Blk[] = [];
+
             /** 一块 collider：给 x0..x1 / z0..z1（相对半长半宽的比例）+ 厚度 + 离地抬升 */
             const blk = (fx0: number, fx1: number, fz0: number, fz1: number,
                          hyMm: number, rise: number, label: string): Blk => {
@@ -1383,22 +1418,44 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             const blocks: Blk[] = [
               blk(-1.00, -0.435, -0.60, 0.60, 26, 0, '足跟'),
               blk(-0.435, 0.145, -1.00, -0.40, 10, 0, '外侧柱'),
-              blk(-0.435, -0.145, 0.40, 1.00, 20, archRise, '内侧弓·后'),
-              blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
               blk(0.145, 0.785, -1.00, 1.00, 20, 0, '跖骨头(最宽)'),
               blk(0.785, 1.00, -0.76, 0.76, 12, 0, '趾'),
             ];
             // ★★★ 弓刚体的两块（**已从 foot_* 上拆走**）：它们是唯一需要
             //   **相对足体运动**的部分 —— 旋前时向下踩实、承重后回弹。
             //   留在 foot_* 上就永远离地（见上面被更正的错误注释）。
-            archBlocks = [
+            // ★ 弓的两块：它们归**弓刚体** `arch_*`，**不进 `blocks`**。
+            //   （留在 foot_* 上就永远离地 —— 见上面被更正的那条错误注释。）
+            const archBlocks: Blk[] = [
               blk(-0.435, -0.145, 0.40, 1.00, 20, archRise, '内侧弓·后'),
               blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
             ];
-            // 体积 → 质量归一（总质量 = soleMass，与旧实现一致）
+            // 弓的质量占比（按体积，鞋底总质量 soleMass 为单位）
+            const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVol / allVol);
+            for (const b of archBlocks) {
+              b.mass = archMass * (b._vol / archVol);
+              b.inertiaZ = (b.mass * (b.hx * b.hx + b.hy * b.hy)) / 3;
+              b.inertiaXY = (b.mass * (b.hz * b.hz + b.hy * b.hy)) / 3;
+            }
+            ARCH_OUT.archBlocks = archBlocks;
+            ARCH_OUT.archRise = archRise;
+            ARCH_OUT.archCx = ((-0.435 + 0.145) / 2) * L;
+            ARCH_OUT.archCz = ((0.40 + 1.00) / 2) * HW;
+            ARCH_OUT.archMass = archMass;
+
+            // 体积 → 质量归一。
+            // ⚠⚠ `blocks` **已不含弓的两块**（它们归弓刚体），所以这里的
+            //   归一化基准必须是「脚体自己那份质量」= `soleMass − archMass`，
+            //   否则脚体会拿到**整份** `soleMass`、弓体再拿一份 ⇒ 总质量多出
+            //   `archMass`（实测 70.25kg，应为 70.00kg）。这不只是数字问题：
+            //   整机 CoM 会跟着漂（实测 `com.z` 从 −9mm 变 −14mm、站距/髋间距
+            //   从 1.35 变 1.03），此前所有标定过的常数全部要重量。
+            const footMass = soleMass - ARCH_OUT.archMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
-              const m = soleMass * (b._vol / volTot);
+              const m = footMass * (b._vol / volTot);
               b.mass = m;
               b.inertiaZ = (m * (b.hx * b.hx + b.hy * b.hy)) / 3;
               b.inertiaXY = (m * (b.hz * b.hz + b.hy * b.hy)) / 3;
@@ -1407,6 +1464,68 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           })(),
           leg: true,
         });
+
+        // ══════════════════════════════════════════════════════════════
+        // ★ 柔性足 F2 第一段：**弓刚体**（`arch_l` / `arch_r`）
+        // ══════════════════════════════════════════════════════════════
+        //   · 位置：与 `foot_*` **同一个几何中心**（`cx/cy/cz` 全同）——
+        //     这样 collider 的 `offsetX/Y/Z` 可以在两刚体间直接照搬，
+        //     也保证绑定姿态下弓正好在它该在的位置。
+        //   · collider：`ARCH_OUT.archBlocks`（内侧弓·后 + 内侧弓·前，离地 22mm）
+        //   · `plateHidden: true` —— 靴子那张图由 `foot_*` **整张画**，
+        //     弓再画一次会出现「两只脚」（用户 2026-10-04 报过）。
+        //     弓转动时靴子网格由**顶点解算**跟着弓走（见 `柔性足设计.md` §4）。
+        //   · 关节 `arch_*` 在**第二段**建（`joints` 声明之后）——
+        //     因为 `joints` 的数组在 bodies 循环**之后**才声明。
+        {
+          const isL = spec.key === 'shin_l';
+          const footKey = isL ? 'foot_l' : 'foot_r';
+          const archKey = isL ? 'arch_l' : 'arch_r';
+          bodies.push({
+            key: archKey,
+            bone: spec.bone,
+            label: isL ? '左内侧弓' : '右内侧弓',
+            part,
+            cx: 0, cy, cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            plateOffset,
+            length, radius, halfHeight,
+            mass: ARCH_OUT.archMass,
+            colliders: ARCH_OUT.archBlocks,
+            leg: true,
+          });
+          // 存造关节需要的量（锚点在**世界系**，足长 archAtFrac 处）
+          // ⚠⚠ `wx/wy/wz` 是**世界系**（主关节循环里 `wy = mapY(ayPx)`、`wz = parent.cz`，
+          //   然后 `dParent = [wx − parent.cx, wy − parent.cy, wz − parent.cz]`）。
+          //   之前我直接填了局部量（`wy = archRise = 22mm`），而脚体 `cy ≈ 80mm`
+          //   ⇒ 锚点落到地面以下 ⇒ `assertJointAnchors` 直接判「超出包围球」。
+          //     实测报错：`arch_r.P 局部(-155,-47,147)mm 超出 foot_r 包围球 57.7mm`。
+          // ★ 锚点**从弓自己的 collider 偏移取**，不再推导鞋底平面高度。
+          //   之前推 `wy = cy + local[1] + archRise` 得到局部 y = **+147mm**
+          //   （脚体中心**上方** 147mm）⇒ `assertJointAnchors` 判
+          //   「超出 foot_l 包围球」（实测 `arch_l.P 局部(-56,147,65)mm`）。
+          //   ⇒ `local[1]` 不是"鞋底相对体心的偏移"（推导前提就错了）。
+          //   改用**弓 collider 的实际偏移均值**：该点**必然在弓体内**，
+          //   而弓与鞋底在足长/足宽上重叠 ⇒ 父侧也必然落在 foot_l 的 collider 内。
+          const ab = ARCH_OUT.archBlocks;
+          const mOff = (f: 'offsetX' | 'offsetY' | 'offsetZ'): number =>
+            ab.reduce((a, c) => a + (c[f] ?? 0), 0) / Math.max(1, ab.length);
+          ARCH_SPEC.push({
+            side: isL ? 'l' : 'r',
+            footKey,
+            archKey,
+            // ⚠⚠ collider 的 `offsetX/Y/Z` 是**刚体局部**，世界位置 = 体心 + 偏移。
+            //   直接当世界用会让锚点落到体心下方 263mm（`arch_l.C 局部 y=−263`）。
+            //   这是本任务里第**三**次栽在"局部/世界混用"上（前两次：`wy=archRise`、
+            //   `local[1]` 推导），所以这里把三个分量一次性写全。
+            wx: 0 + mOff('offsetX'),          // 脚体 cx = 0
+            wy: cy + mOff('offsetY'),         // 与弓刚体同一个 cy
+            wz: centerZ + mOff('offsetZ'),    // 与弓刚体同一个 cz
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+          });
+        }
 
         // ══════════════════════════════════════════════════════════════
         // ★★★ 柔性足 F1：**前足刚体**（`forefoot_l` / `forefoot_r`）
@@ -1525,6 +1644,21 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
 
   // ---- 关节 ----
   const jointMetaByName = new Map<string, JointMeta>(META.joints.map((j) => [j.name, j]));
+  // ══════════════════════════════════════════════════════════════
+  // ★★ 不变式后处理：**刚体质量 := 其 collider 质量之和**
+  // ══════════════════════════════════════════════════════════════
+  //   `assertColliderMass` 要求逐刚体 `Σ collider.mass == body.mass`。
+  //   ⚠ 这个不变式**不能靠两处手工公式对齐**来维持 —— 柔性足 F2 拆出弓刚体时，
+  //     我在 IIFE 外又写了一遍体积公式给刚体质量用，与 IIFE 内的版本差了 0.29%
+  //     ⇒ 实测 `foot_l collider 0.8923320182810784 ≠ 刚体 0.8949143265111851`，
+  //     而且为此反复试了六七轮都没收敛。
+  //   ⇒ 改成**按构造成立**：collider 是质量的唯一真源，刚体质量从它求和。
+  //     这样"脚底拆走两块"这类改动**不需要任何手工同步**。
+  for (const b of bodies) {
+    if (!b.colliders || b.colliders.length === 0) continue;
+    b.mass = b.colliders.reduce((a, c) => a + (c.mass ?? 0), 0);
+  }
+
   const joints: JointDef[] = [];
   // ★ 柔性足 F1：中足关节在腿循环里收集（那里才有 `midX`/`local[1]`），此处统一编号
   // ★ 踝关节受 `ankleEnabled` 控制（默认关）。JOINT_ORDER 里始终有 foot_l/foot_r
@@ -1627,6 +1761,50 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       ],
     });
   });
+
+  // ══════════════════════════════════════════════════════════════
+  // ★ 柔性足 F2 第二段：**弓关节** `arch_l` / `arch_r`
+  // ══════════════════════════════════════════════════════════════
+  //   revolute **绕足长轴（局部 X）** = 距下关节旋前/旋后。
+  //   `revoluteAxis` 的约定与踝一致（踝用 `[0,0,1]` 表示"只放开局部 Z"），
+  //   这里要放开 X ⇒ `[1,0,0]`。
+  //
+  //   限位 **−4° ~ +16°**：正 = **旋前**（内侧弓向下踩实）。
+  //   ⚠ 为什么不给到"能踩实"的 ~28°（`atan(22mm / 弓区半长 40mm)`）：
+  //     踩平会让脚变成**平板**、弓形消失，反而丧失 `Lugade & Kaufman 2014`
+  //     要求的 CoP 行程（足宽 27%）。目标是**"弓能踩下一部分"**，不是"踩平"。
+  //
+  //   ⚠ 中足关节当初被删掉的原因就是**塌陷**。但正确结论是
+  //     **"缺限位和阻尼"**，不是"不该有中足关节"⇒ 限位在这里、
+  //     阻尼在 `ragdoll.ts` 的 `jointGain` 覆盖（与踝同一套机制）。
+  //
+  //   锚点换算必须**扣除静倾角/静偏航**（与主关节循环同一套 `rotVecByQuat`），
+  //   否则 Rapier 会在错误的点上建铰链、一 reset 就错位。
+  for (const as of ARCH_SPEC) {
+    const parent = byKey.get(as.footKey);
+    const child = byKey.get(as.archKey);
+    if (!parent || !child) throw new Error(`[skeleton] 弓关节 ${as.archKey} 的刚体不存在`);
+    const dParent = rotVecByQuat(invQuatOf(restQuatOf(parent.restTiltRad, parent.restYawRad)),
+      [as.wx - parent.cx, as.wy - parent.cy, as.wz - parent.cz]);
+    const dChild = rotVecByQuat(invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.wx - child.cx, as.wy - child.cy, as.wz - child.cz]);
+    const tauArch = cfg.ankleTorque * 0.25;   // 被动承载件，不是主动执行器
+    joints.push({
+      name: as.archKey,
+      index: joints.length,
+      parentKey: as.footKey,
+      childKey: as.archKey,
+      wx: as.wx, wy: as.wy, wz: as.wz,
+      parentLocal: dParent,
+      childLocal: dChild,
+      // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch],
+    });
+  }
 
   // ---- ★ 脊柱关节（K−1 个）：连接相邻两段，锚点在两段的交界面上 ----
   if (K > 1) {
