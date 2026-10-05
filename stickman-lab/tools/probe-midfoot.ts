@@ -489,14 +489,17 @@ log('   论文式 9：off 相过零时间 tCross = δ·ln((1+γ)/|1−γ|)；稳
   };
 
   const CASES: [string, Record<string, unknown>][] = [
-    ['关掉间歇反馈（现状基线）', { vipP: 0 }],
-    ['P=30 δ=0.10（D=0）', { vipP: 30 }],
-    ['P=60 δ=0.10（D=0）', { vipP: 60 }],
-    ['P=120 δ=0.10（D=0）', { vipP: 120 }],
-    ['P=60 δ=0.06', { vipP: 60, vipDelaySec: 0.06 }],
-    ['P=60 δ=0.20（人体延迟域）', { vipP: 60, vipDelaySec: 0.20 }],
-    ['P=60 δ=0.10 a=0（象限切换）', { vipP: 60, vipOmegaFrac: 0 }],
-    ['P=60 D=20 δ=0.10', { vipP: 60, vipD: 20 }],
+    ['DIP + 旧髋伺服 + 无间歇', { dipSagittal: false, vipP: 0 }],
+    ['DIP + 旧髋伺服 + 间歇', { dipSagittal: false, vipP: 60 }],
+    ['DIP 挡（无髋伺服）K_h=0', { kVipHip: 0, vipP: 60 }],
+    ['DIP 挡 K_h=120(欠临界)', { kVipHip: 120, vipP: 60 }],
+    ['DIP 挡 K_h=220(1.2×)', { kVipHip: 220, vipP: 60 }],
+    ['★ DIP 挡 K_h=366(2×)', { kVipHip: 366, vipP: 60 }],
+    ['★ K_h=366 vipP=0', { kVipHip: 366, vipP: 0 }],
+    ['★ K_h=366 vipP=30', { kVipHip: 366, vipP: 30 }],
+    ['★ K_h=366 vipP=120', { kVipHip: 366, vipP: 120 }],
+    ['★ K_h=366 vipP=300', { kVipHip: 366, vipP: 300 }],
+    ['★ K_h=800 vipP=120', { kVipHip: 800, vipP: 120 }],
   ];
   log('     配置                     ON占比   平均γoff  off相收缩/扩张   |CoM.x|   存活');
   for (const [tag, bal] of CASES) {
@@ -557,6 +560,50 @@ log('   K_crit,hip = m₂gr₂ ≈ 183 N·m/rad；原文要求 ≥1.2×，默认
   }
   log(`   ⇒ 最好：${bestTag} 存活 ${bestSec.toFixed(2)}s`);
   check('★ 存在能站满 8 s 的 DIP 参数组合', bestSec > 7.9, `${bestTag} → ${bestSec.toFixed(2)}s`);
+}
+
+log('══ F3. ★ 隔离：发散到底是"植物固有"还是"别的通道在推" ══');
+log('   逐个消融，看 γoff（负 = 沿不稳定流形发散）能不能变正');
+{
+  const run = (ablate: string, tag: string) => {
+    const s2 = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 6 });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER,
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: { ...DEFAULT_CONTROLLER.balance, ablate },
+    });
+    let g = 0, n = 0, on = 0, q0 = 0, qMax = 0, tSettle = 0;
+    for (let i = 0; i < 360 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      const sn = ctrl.snapshot;
+      if (i === 30) q0 = Math.abs(sn.qVip ?? 0);
+      if (i > 30) {
+        n++;
+        qMax = Math.max(qMax, Math.abs(sn.qVip ?? 0));
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) { g += sn.vipGamma; }
+        if (sn.vipOn) on++;
+        if (Math.abs(sn.qVip ?? 0) < 0.02 && tSettle === 0) tSettle = i / 120;
+      }
+    }
+    const r: [string, string, number, number, number, string] = [tag,
+      isFinite(g / Math.max(1, n)) ? (g / Math.max(1, n)).toFixed(2) : '—',
+      (on / Math.max(1, n) * 100).toFixed(0), qMax.toFixed(3),
+      (sim.ticksDone / 60).toFixed(2) + 's ' + (sim.fallReason || '站住')];
+    log(`     ${tag.padEnd(42)} γoff=${r[1].padStart(6)}  ON=${String(r[2]).padStart(3)}%  qmax=${r[3]}  ${r[4]}`);
+  };
+  run('hip,knee,torso,lat,latwaist,pelvicLift,stanceExt,ankleLat', '只留踝VIP刚度+髋被动刚度+间歇');
+  run('knee,torso,lat,latwaist,pelvicLift,stanceExt,ankleLat', '＋髋膝位置伺服');
+  run('torso,lat,latwaist,pelvicLift,stanceExt,ankleLat', '＋腰矢状');
+  run('lat,latwaist,pelvicLift,stanceExt,ankleLat', '＋额状全部');
+  run('lat,latwaist,pelvicLift,ankleLat', '＋stanceExt');
+  run('latwaist,pelvicLift,ankleLat', '＋latwaist+pelvicLift（默认其余全开）');
+  run('pelvicLift,ankleLat', '＋lat');
+  run('ankleLat', '默认全开');
+  log('');
+  log('   判读：γoff 一直为负 ⇒ VIP 从出发就在发散；哪一行变正 ⇒ 那个通道是元凶。');
 }
 
 log('══ G. DIP/VIP 接线（Morasso 2019/2022）══');

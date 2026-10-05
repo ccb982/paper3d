@@ -272,8 +272,34 @@ export interface BalanceParams {
    *     髋角，而阻尼项仅 0.75°（P 的 13%）⇒ 压不住。
    */
   ksagZeta: number;
-  /** 矢状髋目标角限幅（rad） */
+  /** 矢状髋目标角限幅（rad）。仅 `dipSagittal=false`（旧伺服挡）时用 */
   maxHipDeg: number;
+  /**
+   * ★★ 矢状面走哪一套（2026-10-04，默认 `true` = 论文的 DIP）
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * `true` = **Morasso 2019/2022 的 DIP/VIP**，矢状面只有三个环节：
+   *   · 踝：**欠临界**被动刚度 `K_a = 0.88·K_crit = 552 N·m/rad`（常开）
+   *         + **间歇延迟反馈**（`vipP/vipD/vipDelaySec`）
+   *   · 髋：**过临界**被动刚度 `K_h ≥ 1.2·K_crit,hip`，**纯被动、无主动控制**
+   *     （原文："the hip joint is stabilized by a passive stiffness mechanism"）
+   *   · 腰：保持躯干自身刚性（DIP 的第二条连杆要求它是一根刚杆）
+   *
+   * `false` = 旧的**连续捕获点位置伺服**（髋上 `τ = kP(ξ−stance) − kD·ẋ`）。
+   *
+   * ★★ 为什么默认必须是 `true`（实测，不是偏好）：
+   *   间歇反馈的**前提**是"off 相里被控对象是裸的欠临界摆"，这样才有
+   *   affordance（状态沿稳定流形自由收缩）。而旧的连续伺服等效刚度
+   *   `kP·τmax/ωmax = 48×200/9 ≈ 1067 N·m/rad`，是踝刚度 552 的**两倍**
+   *   ⇒ off 相里有一个比被测对象本身强得多的控制器在撑，
+   *   状态永远进不了安全区。
+   *   实测（tools/probe-midfoot.ts F 段）：带旧伺服时
+   *     平均 γoff = **−0.76 ~ −1.01（全程为负）**、off 相 **0 收缩 / 1 扩张**
+   *   ⇒ VIP 摆角从第一拍就单调变大、沿**不稳定流形**发散，
+   *      间歇机制**一次都没被触发过**（γoff<0 = q̇ 与 q 同号）。
+   *   扫描 P = 30/60/120 全都无效（γoff 不变）⇒ 不是增益问题。
+   */
+  dipSagittal: boolean;
   // -- Gear I (position servo): waist sagittal posture hold --------------
   /**
    * 腰（脊柱）矢状**姿态保持**增益（rad per degree of trunk pitch）。
@@ -438,7 +464,11 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //     ⇒ 实测关踝基线从 6.00 s 掉到 3.50 s。
   //     文献里髋是**纯被动**（没有主动髋控制），本 rig 不是 ⇒ 只能取"不打架"的量级。
   //   ⚠ 开踝时 K_h 几乎不影响结果（2.22~2.25 s）⇒ 踝开着的瓶颈**不在髋**。
-  kVipHip: 120,
+  // ★ DIP 的髋侧被动刚度：按 Morasso 2019 取 **2 × K_crit,hip**
+  //   （K_crit,hip = m₂gr₂ = 47.5 × 9.81 × 0.392 ≈ 183 N·m/rad ⇒ 366）。
+  //   原文："we used over-critical values [...] the default value for most
+  //   simulation was twice the critical hip stiffness"，且「≥1.2× 即可稳定」。
+  kVipHip: 366,
   // ★ 间歇延迟反馈（S3）：文献起点，不是标定值 ⇒ 扫参见 tools/probe-midfoot.ts F 段
   vipP: 60,
   vipD: 0,
@@ -446,6 +476,8 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   vipOmegaFrac: -1,
   vipZetaHip: 0.7,
   maxHipStiffDeg: 22,
+  // ★ 默认 true：矢状面按论文的 DIP，撤掉髋上的连续位置伺服（见 `dipSagittal`）
+  dipSagittal: true,
   ksagRatio: 0.2,
   ksagZeta: 0.9,
   // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
@@ -653,7 +685,10 @@ export function balanceSystem(
     const hipTgt = clamp(
       -kpSag * (capXSag - stanceXSag) - kdSag * rs.com.vx,
       p.maxHipDeg);
-    if (on('hip') && jHip >= 0) {
+    // ★ 只有旧伺服挡才上这条；DIP 挡下髋**只**有 `hipStiff` 被动刚度。
+    //   论文里髋是纯被动的（Morasso 2019：「stabilized by a passive stiffness
+    //   mechanism」），而 K_h 必须**过临界**才稳得住上身。
+    if (!p.dipSagittal && on('hip') && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, 'balance', '矢状髋(位置挡)');
     }
     // ── 腰（脊柱）矢状**姿态保持** ────────────────────────────

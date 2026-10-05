@@ -19271,7 +19271,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       -kpSag * (capXSag - stanceXSag) - kdSag * rs.com.vx,
       p.maxHipDeg
     );
-    if (on("hip") && jHip >= 0) {
+    if (!p.dipSagittal && on("hip") && jHip >= 0) {
       rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
     }
     const spineTgt = clamp2(
@@ -19504,7 +19504,11 @@ var init_balance = __esm({
       //     ⇒ 实测关踝基线从 6.00 s 掉到 3.50 s。
       //     文献里髋是**纯被动**（没有主动髋控制），本 rig 不是 ⇒ 只能取"不打架"的量级。
       //   ⚠ 开踝时 K_h 几乎不影响结果（2.22~2.25 s）⇒ 踝开着的瓶颈**不在髋**。
-      kVipHip: 120,
+      // ★ DIP 的髋侧被动刚度：按 Morasso 2019 取 **2 × K_crit,hip**
+      //   （K_crit,hip = m₂gr₂ = 47.5 × 9.81 × 0.392 ≈ 183 N·m/rad ⇒ 366）。
+      //   原文："we used over-critical values [...] the default value for most
+      //   simulation was twice the critical hip stiffness"，且「≥1.2× 即可稳定」。
+      kVipHip: 366,
       // ★ 间歇延迟反馈（S3）：文献起点，不是标定值 ⇒ 扫参见 tools/probe-midfoot.ts F 段
       vipP: 60,
       vipD: 0,
@@ -19512,6 +19516,8 @@ var init_balance = __esm({
       vipOmegaFrac: -1,
       vipZetaHip: 0.7,
       maxHipStiffDeg: 22,
+      // ★ 默认 true：矢状面按论文的 DIP，撤掉髋上的连续位置伺服（见 `dipSagittal`）
+      dipSagittal: true,
       ksagRatio: 0.2,
       ksagZeta: 0.9,
       // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
@@ -20346,14 +20352,17 @@ log("   \u8BBA\u6587\u5F0F 9\uFF1Aoff \u76F8\u8FC7\u96F6\u65F6\u95F4 tCross = \u
     };
   };
   const CASES = [
-    ["\u5173\u6389\u95F4\u6B47\u53CD\u9988\uFF08\u73B0\u72B6\u57FA\u7EBF\uFF09", { vipP: 0 }],
-    ["P=30 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 30 }],
-    ["P=60 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 60 }],
-    ["P=120 \u03B4=0.10\uFF08D=0\uFF09", { vipP: 120 }],
-    ["P=60 \u03B4=0.06", { vipP: 60, vipDelaySec: 0.06 }],
-    ["P=60 \u03B4=0.20\uFF08\u4EBA\u4F53\u5EF6\u8FDF\u57DF\uFF09", { vipP: 60, vipDelaySec: 0.2 }],
-    ["P=60 \u03B4=0.10 a=0\uFF08\u8C61\u9650\u5207\u6362\uFF09", { vipP: 60, vipOmegaFrac: 0 }],
-    ["P=60 D=20 \u03B4=0.10", { vipP: 60, vipD: 20 }]
+    ["DIP + \u65E7\u9ACB\u4F3A\u670D + \u65E0\u95F4\u6B47", { dipSagittal: false, vipP: 0 }],
+    ["DIP + \u65E7\u9ACB\u4F3A\u670D + \u95F4\u6B47", { dipSagittal: false, vipP: 60 }],
+    ["DIP \u6321\uFF08\u65E0\u9ACB\u4F3A\u670D\uFF09K_h=0", { kVipHip: 0, vipP: 60 }],
+    ["DIP \u6321 K_h=120(\u6B20\u4E34\u754C)", { kVipHip: 120, vipP: 60 }],
+    ["DIP \u6321 K_h=220(1.2\xD7)", { kVipHip: 220, vipP: 60 }],
+    ["\u2605 DIP \u6321 K_h=366(2\xD7)", { kVipHip: 366, vipP: 60 }],
+    ["\u2605 K_h=366 vipP=0", { kVipHip: 366, vipP: 0 }],
+    ["\u2605 K_h=366 vipP=30", { kVipHip: 366, vipP: 30 }],
+    ["\u2605 K_h=366 vipP=120", { kVipHip: 366, vipP: 120 }],
+    ["\u2605 K_h=366 vipP=300", { kVipHip: 366, vipP: 300 }],
+    ["\u2605 K_h=800 vipP=120", { kVipHip: 800, vipP: 120 }]
   ];
   log("     \u914D\u7F6E                     ON\u5360\u6BD4   \u5E73\u5747\u03B3off  off\u76F8\u6536\u7F29/\u6269\u5F20   |CoM.x|   \u5B58\u6D3B");
   for (const [tag, bal] of CASES) {
@@ -20419,6 +20428,54 @@ log("   K_crit,hip = m\u2082gr\u2082 \u2248 183 N\xB7m/rad\uFF1B\u539F\u6587\u89
   }
   log(`   \u21D2 \u6700\u597D\uFF1A${bestTag} \u5B58\u6D3B ${bestSec.toFixed(2)}s`);
   check("\u2605 \u5B58\u5728\u80FD\u7AD9\u6EE1 8 s \u7684 DIP \u53C2\u6570\u7EC4\u5408", bestSec > 7.9, `${bestTag} \u2192 ${bestSec.toFixed(2)}s`);
+}
+log('\u2550\u2550 F3. \u2605 \u9694\u79BB\uFF1A\u53D1\u6563\u5230\u5E95\u662F"\u690D\u7269\u56FA\u6709"\u8FD8\u662F"\u522B\u7684\u901A\u9053\u5728\u63A8" \u2550\u2550');
+log("   \u9010\u4E2A\u6D88\u878D\uFF0C\u770B \u03B3off\uFF08\u8D1F = \u6CBF\u4E0D\u7A33\u5B9A\u6D41\u5F62\u53D1\u6563\uFF09\u80FD\u4E0D\u80FD\u53D8\u6B63");
+{
+  const run = (ablate, tag) => {
+    const s2 = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 6 });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s2, sim, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: { ...DEFAULT_CONTROLLER2.balance, ablate }
+    });
+    let g = 0, n = 0, on = 0, q0 = 0, qMax = 0, tSettle = 0;
+    for (let i = 0; i < 360 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      const sn = ctrl.snapshot;
+      if (i === 30) q0 = Math.abs(sn.qVip ?? 0);
+      if (i > 30) {
+        n++;
+        qMax = Math.max(qMax, Math.abs(sn.qVip ?? 0));
+        if (isFinite(sn.vipGamma) && sn.vipGamma < 1e3) {
+          g += sn.vipGamma;
+        }
+        if (sn.vipOn) on++;
+        if (Math.abs(sn.qVip ?? 0) < 0.02 && tSettle === 0) tSettle = i / 120;
+      }
+    }
+    const r = [
+      tag,
+      isFinite(g / Math.max(1, n)) ? (g / Math.max(1, n)).toFixed(2) : "\u2014",
+      (on / Math.max(1, n) * 100).toFixed(0),
+      qMax.toFixed(3),
+      (sim.ticksDone / 60).toFixed(2) + "s " + (sim.fallReason || "\u7AD9\u4F4F")
+    ];
+    log(`     ${tag.padEnd(42)} \u03B3off=${r[1].padStart(6)}  ON=${String(r[2]).padStart(3)}%  qmax=${r[3]}  ${r[4]}`);
+  };
+  run("hip,knee,torso,lat,latwaist,pelvicLift,stanceExt,ankleLat", "\u53EA\u7559\u8E1DVIP\u521A\u5EA6+\u9ACB\u88AB\u52A8\u521A\u5EA6+\u95F4\u6B47");
+  run("knee,torso,lat,latwaist,pelvicLift,stanceExt,ankleLat", "\uFF0B\u9ACB\u819D\u4F4D\u7F6E\u4F3A\u670D");
+  run("torso,lat,latwaist,pelvicLift,stanceExt,ankleLat", "\uFF0B\u8170\u77E2\u72B6");
+  run("lat,latwaist,pelvicLift,stanceExt,ankleLat", "\uFF0B\u989D\u72B6\u5168\u90E8");
+  run("lat,latwaist,pelvicLift,ankleLat", "\uFF0BstanceExt");
+  run("latwaist,pelvicLift,ankleLat", "\uFF0Blatwaist+pelvicLift\uFF08\u9ED8\u8BA4\u5176\u4F59\u5168\u5F00\uFF09");
+  run("pelvicLift,ankleLat", "\uFF0Blat");
+  run("ankleLat", "\u9ED8\u8BA4\u5168\u5F00");
+  log("");
+  log("   \u5224\u8BFB\uFF1A\u03B3off \u4E00\u76F4\u4E3A\u8D1F \u21D2 VIP \u4ECE\u51FA\u53D1\u5C31\u5728\u53D1\u6563\uFF1B\u54EA\u4E00\u884C\u53D8\u6B63 \u21D2 \u90A3\u4E2A\u901A\u9053\u662F\u5143\u51F6\u3002");
 }
 log("\u2550\u2550 G. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
 {
