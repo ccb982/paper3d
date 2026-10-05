@@ -29,6 +29,7 @@
 
 import { jointIndexByName } from '../skeleton';
 import { computeWantedForce, stanceResolved, DEFAULT_WANTED_FORCE } from './wantedForce';
+import { wholeBodyBalanceTick, type QpTick } from './wholeBodyQp';
 import type { Ragdoll } from '../ragdoll';
 import type { RigState, Side } from '../rigState';
 
@@ -62,7 +63,14 @@ export type AxisRole =
   // ★★ 载荷依赖姿势张力：**不是新主人**，而是给 `sagSupport`/`postureLat` 的
   //   位置环**增益调制**（Horak & Nashner 1986；J Ab 2021 承重侧 GMED +58%）。
   //   它不申领任何轴、不产生第二个 target，只改 `kP/kD` 的缩放。
-  | 'postureLoad';
+  // 载荷依赖姿势张力同样**不是新主人**（见上面 `postureLoad` 的说明）
+  | 'postureLoad'
+  // ★★★ **全链 QP**（附录 C.1）—— **从属实现**，与 `sagSupport`/`latTransfer` **并联**。
+  //   它求解的是**同一条链**（髋/膝/踝 + 腰）的矢状 + 额状力矩，
+  //   所以在轴归属表里必须登记成从属记录而不是第二个主人，
+  //   否则 `rigState` 会把"同一根轴两个 tau 写者"计入 `axisConflicts` 并拒收
+  //   ⇒ QP 静默失效，而所有指标看起来正常。这个坑本项目栽过 3 次。
+  | 'wholeBodyQp';
 
 export interface AxisSpec {
   joint: string;
@@ -100,6 +108,22 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   //   语义是"支撑角色的下属实现"，所以登记成从属记录而不是第二个主人。
   { joint: 'hip', axis: 2, role: 'hipStiff', mode: 'tau', channel: 'hipStiff', subordinateTo: 'sagSupport' },
   { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee' },
+  // ★★ 全链 QP 要写的轴（承重腿整链 + 腰，矢状 + 额状），**逐根**登记。
+  //   mode='tau' 与 `sagSupport`(pos) **并联** ⇒ `subordinateTo: 'sagSupport'`
+  //   语义与 `hipStiff` 相同：QP 是该支撑角色的第二种实现，不是新主人。
+  //   ⚠ 不登记的后果（实测）：`rigState` 把"同一轴第二个 tau 写者"计入
+  //     `axisConflicts` 并**拒收** ⇒ QP 静默失效，而所有指标看起来正常。
+  //     这个坑本项目栽过 3 次（见 AXIS_OWNERSHIP 上方注释），所以这里逐根写全。
+    // ⚠ `hip/0`（外展轴）**不给** QP：它的主人已经是 `latTransfer`。
+  //   两个真主人 ⇒ 双写 ⇒ `axisConflicts` 增并拒收
+  //   （实测 6 处冲突⇒ QP 静默失效）。
+  //   ⇑ QP 不写该轴，侧向交给 `latTransfer`；QP 仅管知道的其余轴。
+  { joint: 'hip', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
+  { joint: 'knee', axis: 0, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
+  { joint: 'knee', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
+  { joint: 'foot', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
+  { joint: 'spine1', axis: 0, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'postureLat' },
+  { joint: 'spine1', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'postureSag' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift', subordinateTo: 'latTransfer' },
   // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
@@ -173,6 +197,26 @@ export interface BalanceParams {
    *     实测 `com.x` 偏 24 mm 时 `q_vip = atan2(−0.024, 0.913) = −0.026 rad`
    *     ⇒ `τ = −14.5 N·m`，与「把 24 mm 拉回所需的 m·g·Δx = 16.5 N·m」同量级 ✓
    */
+  // ── 全链 QP（附录 C.1）────────────────────────────────────────────
+  /**
+   * ★ 是否启用**全链 QP**（附录 C.1）。
+   *
+   * ★★ 默认 **false** —— QP 的机制已实现并通过离线验收（`probe-qp` 四项全过），
+   *   但**尚未在真实状态验证过**。逐关节 PD 仍是当前唯一被实测过的路径。
+   *   所以默认关着，用 `ablate` 反过来开：`ablate` 里**不含** `'qp'` 就启用。
+   *   ⚠ 反过来是刻意的：`ablate` 的语义是"关掉某通道"，列进来的通道被关。
+   *     如果 QP 默认开，那么"想测纯 PD"就得专门写 `qp` 进 ablate —— 更符合直觉。
+   *   ⚠ 不要因为"默认关着看着像没做完"就翻过来。翻之前先看 `probe-qp` 的
+   *     真实状态读数（见 `架构设计.md` C.4 第一条）。
+   */
+  qpEnable?: boolean;
+  /** QP 的踝权重倍数（Kim 2022：踝取髋的 3~5 倍；0 = 完全排除踝） */
+  qpAnkleMul?: number;
+  /** ξ → F_des 的额外增益（1 = 按物理量；>1 更激进） */
+  qpGain?: number;
+  /** QP 迭代上限 */
+  qpIters?: number;
+
   kVipAnkle: number;
   /** VIP 阻尼 `C_a`（N·m·s/rad）。按 `C_a = 2ζ√(K_a·I)` 由 `vipZeta` 算出 */
   vipZeta: number;
@@ -574,6 +618,10 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   而实测 q_vip 会走到 **23°** ⇒ 被动项 K·q 在 12.5° 就顶满并**独吞饱和额度**，
   //   间歇反馈项（vipP·qδ）挤不进去。K=270 → 饱和角 **25.5°** 覆盖实测区间。
   kVipAnkle: 270,
+  qpEnable: false,
+  qpAnkleMul: 4,
+  qpGain: 1,
+  qpIters: 40,
   vipZeta: 0.9,
   // ★ DIP 髋侧被动刚度。**实测标定**（tools/probe-midfoot.ts G 段，6 s 静置站立）：
   //   K_h      关踝基线    开踝
@@ -786,6 +834,37 @@ export function balanceSystem(
 
 
   const on = (ch: string): boolean => !OFF.has(ch);
+
+  // ══════════════════════════════════════════════════════════════
+  // ★★★ **全链 QP**（附录 C.1）—— 静态伺服平衡的机制本体
+  // ══════════════════════════════════════════════════════════════
+  //
+  //  放在**所有其它通道之后**：QP 与它们**并联**在同一批轴上（轴归属表里
+  //  登记为从属实现），执行顺序决定谁覆盖谁。让 QP 最后跑 ⇒ 它的解是本拍的
+  //  最终值，语义上它就是"整条链的最终修正"。
+  //
+  //  ★ 开关语义：`ablate` **不含** `'qp'` 时才启用（见 `qpEnable` 的注释）。
+  //    这样"想测纯逐关节 PD"只需要 `ablate: 'qp'`，符合 `ablate` 的直觉。
+  // 启用条件：`qpEnable` 为 true，或 `ablate` 里**没有** `'qp'`（= 默认启用）
+  if (doll && (p.qpEnable || on('qp'))) {
+    const qp = wholeBodyBalanceTick(rs, doll, sup, {
+      ankleMul: p.qpAnkleMul ?? 4,
+      gain: p.qpGain ?? 1,
+      iters: p.qpIters ?? 40,
+      // ★★ **必须**允许 QP 覆盖同拍更早写的通道。
+      //   `requestTorque` 是先到先得（`PRIORITY[cur] <= PRIORITY[system]` 就压制后来者），
+      //   而 QP 跑在 `balanceSystem` **末尾** ⇒ 同优先级的先写者（VIP 踝、载荷张力…）
+      //   全部把 QP 压掉。实测：QP 解出 −0.2 … 32 N·m（残差 0.00N），
+      //   而电机实收恒为 ±0.0 —— **解被静默丢弃**。
+      //   ⇒ QP 是"整条链的最终修正"，必须能覆盖各通道的中间结果。
+      overwrite: true,
+    });
+    rs.qpTick = qp;
+    // ★ 可行性必须回读：QP 不可行时它给的是"尽力而为"的盒内点，
+    //   此时必须让下游知道，否则会当成有效修正（又是静默失效）。
+    rs.qpFeasible = qp.feasible;
+    rs.qpResidual = qp.residual;
+  }
 
   // ★★ 载荷依赖姿势张力：每拍重算（漏算会把上一拍带进来）。
   if (doll && on('postureLoad')) {

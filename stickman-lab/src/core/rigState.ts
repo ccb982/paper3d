@@ -476,6 +476,13 @@ export class RigState {
   private vipPrevOn = false;
   /** ω₀ = √(mgh/I)：off 相鞍点的特征频率（rad/s） */
   vipOmega = 0;
+  // ── 全链 QP 的本拍读数（附录 C.1）────────────────────────────────
+  // ★ 必须可回读：QP 不可行时给的是"尽力而为"的盒内点，
+  //   下游若不知道就会当成有效修正 ⇒ 又一次静默失效。
+  qpTick: { tau: Float64Array; names: string[]; feasible: boolean;
+            residual: number; fDesX: number; fDesZ: number; nAxes: number } | null = null;
+  qpFeasible = true;
+  qpResidual = 0;
   /** 中间量诊断（闭环判据的四项 + 实际强度） */
   vipDiag: { qD: number; qdD: number; a: number; prod: number;
              delayTicks: number; omega0: number; q: number; qVipRate: number } | null = null;
@@ -849,6 +856,23 @@ export class RigState {
    *   两者在 `driveMotors` 里相加后再按 τmax 饱和。
    *   仲裁规则与角度通道一致（balance 优先于 step），锁腿仍然否决。
    */
+  /**
+   * ★ **强制**写入力矩通道，覆盖该轴上已有的请求（不产生 `suppressed`）。
+   *
+   * 用途只有一个：**全链 QP**（附录 C.1）。它跑在 `balanceSystem` 末尾，
+   * 而 `requestTorque` 是先到先得（`PRIORITY[cur] <= PRIORITY[system]` 就压制后来者），
+   * 于是同拍更早的通道（VIP 踝、载荷依赖张力…）会把 QP 的解**静默压掉** ——
+   * 实测 QP 残差 0.00N、解出 −0.2…32 N·m，而电机实收恒为 ±0.0。
+   *
+   * ⚠ 只给"最终修正"用。若拿它当普通通道，就等于取消了仲裁。
+   */
+  forceTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    this.torqueRequestCount++;
+    this.treq[i] = { value: tau, system, label };
+  }
+
   requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
     this.claimAxis(joint, axis, 2, system);
     const i = joint * 3 + axis;

@@ -305,7 +305,10 @@ export function buildQpAxes(
   const spec: [string, number][] = [
     [`foot_${sup}`, 0], [`foot_${sup}`, 1], [`foot_${sup}`, 2],
     [`knee_${sup}`, 0], [`knee_${sup}`, 1], [`knee_${sup}`, 2],
-    [`hip_${sup}`, 0], [`hip_${sup}`, 1], [`hip_${sup}`, 2],
+    // ★ `hip/0`（外展轴）不进 QP —— 它的主人是 `latTransfer`，
+    //   两个真主人 ⇒ `axisConflicts` 增并拒收 ⇒ QP 静默失效（实测 6 处冲突）。
+    //   ⇑ 侧向由 `latTransfer` 负责，QP 管知道其余轴。
+    [`hip_${sup}`, 1], [`hip_${sup}`, 2],
     ['spine1', 0], ['spine1', 2],
     ['spine2', 0], ['spine2', 2],
   ];
@@ -365,7 +368,7 @@ export function desiredGrfFromXi(rs: RigState, m: number): { fx: number; fz: num
  */
 export function wholeBodyBalanceTick(
   rs: RigState, doll: Ragdoll, sup: Side,
-  opt: { ankleMul?: number; gain?: number; iters?: number } = {},
+  opt: { ankleMul?: number; gain?: number; iters?: number; overwrite?: boolean } = {},
 ): QpTick {
   const sk = rs.sk;
   const axes = buildQpAxes(rs, doll, sup, opt.ankleMul ?? 4);
@@ -388,8 +391,10 @@ export function wholeBodyBalanceTick(
     names.push(nm);
     const t = out.tau[i]!;
     if (Math.abs(t) < 1e-6) continue;      // 不写 0，避免把轴标成"有人管"
-    // 力矩 → 沿该轴的世界方向。符号约定：`requestTorque` 的正值 = 推子体正转。
-    rs.requestTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
+    // ★ `overwrite`：QP 是整条链的**最终**修正，必须能覆盖同拍更早写的通道。
+    //   不加这个时 `requestTorque` 的先到先得会把 QP 全部压掉（实测电机实收 ±0.0）。
+    if (opt.overwrite) rs.forceTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
+    else rs.requestTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
   }
   void DEFAULT_WANTED_FORCE;
   return { tau: out.tau, names, feasible: out.feasible, residual: out.residual,
