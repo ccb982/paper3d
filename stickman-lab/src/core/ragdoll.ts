@@ -822,12 +822,15 @@ export class Ragdoll {
           // ★ `arch_l/arch_r`（柔性足 F2 的**弓刚体**）也要登记：
           //   内侧弓是唯一能**旋前踩实**的部分，它不登记 ⇒ CoP / 逐块载荷
           //   永远看不到它 ⇒ 又会得出"弓不承重"的错误结论（正是本设计要修的）。
-          if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l' || b.key === 'arch_l') {
+          // ★ `mfoot_*`（内侧前足 / 第一跳骨头）也是鞋底，一样要登记。
+          if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l'
+              || b.key === 'arch_l' || b.key === 'mfoot_l') {
             this.soleCols[0].push(col);
             this.soleColBody[0].push(i);      // ★ 记下所属刚体（readCoP筛底面要用）
             this.soleColLocalIdx[0].push(ci);
             this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
-          } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r' || b.key === 'arch_r') {
+          } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r'
+              || b.key === 'arch_r' || b.key === 'mfoot_r') {
             this.soleCols[1].push(col);
             this.soleColBody[1].push(i);
             this.soleColLocalIdx[1].push(ci);
@@ -1927,7 +1930,7 @@ soleBlockLabels(side: 0 | 1): string[] {
    *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
    */
   private static notCrashKey(key: string): boolean {
-    return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key)
+    return /^(shin|foot|forefoot|arch|midfoot|toe|mfoot)_[lr]$/.test(key)
       || /^(arm|hand|forearm)_[lr]$/.test(key);
   }
 

@@ -472,7 +472,7 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   archLimitDeg: [-4, 16],
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
   archAtFrac: 0.22,
-  archRise: 0.006,   // ★ 见下面的说明（不是人体解剖值 20~25mm）
+  archRise: 0.000,   // ★ 实测定的（不是人体解剖值 20~25mm）
   // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
   //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
   //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -1079,6 +1079,14 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     wx: number; wy: number; wz: number;
     /** 弓块占鞋底总质量的比例（按体积算，见循环内） */
     massFrac: number;
+    /**
+     * ★ 内侧前足（`mfoot_*`）的位置与关节锚点。
+     * 链路：`foot` → `arch` → `mfoot`（见循环内的拆分说明）。
+     * `mfoot` 的锚点在**弓的远侧端**（fx = +0.145）且同样在旋前轴（鞋底外侧接地棱）上。
+     */
+    mfootKey: string;
+    /** mfoot 的连接锚点世界坐标 */
+    mwx: number; mwy: number; mwz: number;
   }
   const ARCH_SPEC: ArchSpec[] = [];
   /** IIFE（`colliders`）向外传值用的出口。IIFE 内拿不到外层的 `arch_*`，
@@ -1088,10 +1096,15 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     archRise: number; archCx: number; archCz: number; archMass: number;
   /** 弓的调试包围盒（不得继承小腿尺寸，否则调试视图在脚部画出小腿那么长的胶囊） */
   archDims: { len: number; rad: number; hh: number };
+  /** 内侧前足（第一跳骨头）的块 / 质量 / 位置 */
+    mfootBlocks: ColliderDef[];
+  mfootMass: number;
+  mfootCx: number;
   }
   const ARCH_OUT: ArchOut = {
     archBlocks: [], archRise: 0, archCx: 0, archCz: 0, archMass: 0,
     archDims: { len: 0.081, rad: 0.007, hh: 0.010 },
+    mfootBlocks: [], mfootMass: 0, mfootCx: 0,
   };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -1472,8 +1485,21 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             const blocks: Blk[] = [
               blk(-1.00, -0.435, -0.60, 0.60, 26, 0, '足跟'),
               blk(-0.435, 0.145, -1.00, -0.40, 10, 0, '外侧柱'),
-              blk(0.145, 0.785, -1.00, 1.00, 20, 0, '跖骨头(最宽)'),
+              blk(0.145, 0.785, -1.00, 0.00, 20, 0, '跖骨头·外侧'),
               blk(0.785, 1.00, -0.76, 0.76, 12, 0, '趾'),
+            ];
+            // ★★★ 内侧前足（第一跖骨头）归**新刚体 `mfoot_*`**，不进 `blocks`。
+            //
+            //   拆它的理由（用户 2026-10-05：「足弓可能不接地，但理论上也在承重」）：
+            //     真实内侧柱是**串联**链：足跟→距骨→舟骨→楔骨→第一跖骨头→地面。
+            //     足弓在这条链**上**，所以不接地也承重（像弓弦一样受拉）。
+            //     原来的拆法是「脚掌全部 collider 直接落地 + 弓为死端悬臂」——
+            //     实测弓关节力仅 **1N**（恰好弓自身重 0.123kg×9.81），踝关节力 10N
+            //     ⇒ 弓一条载荷都不传，再怎么调重心侧移都没用。
+            //   拆出后链路变成：
+            //     foot(后足/外侧) → arch(内侧中足) → mfoot(内侧前足) → 地面
+            const mfootBlocks: Blk[] = [
+              blk(0.145, 0.785, 0.00, 1.00, 20, 0, '跖骨头·内侧'),
             ];
             // ★★★ 弓刚体的两块（**已从 foot_* 上拆走**）：它们是唯一需要
             //   **相对足体运动**的部分 —— 旋前时向下踩实、承重后回弹。
@@ -1485,14 +1511,23 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
               blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
             ];
             // 弓的质量占比（按体积，鞋底总质量 soleMass 为单位）
+            // ★ 三个“拆走的”部件（弓 / 内侧前足）按体积从 soleMass 里拆。
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
             const archMass = soleMass * (archVol / allVol);
-            for (const b of archBlocks) {
-              b.mass = archMass * (b._vol / archVol);
-              b.inertiaZ = (b.mass * (b.hx * b.hx + b.hy * b.hy)) / 3;
-              b.inertiaXY = (b.mass * (b.hz * b.hz + b.hy * b.hy)) / 3;
+            const mfootMass = soleMass * (mfootVol / allVol);
+            for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]] as const) {
+              const gv = grp.reduce((a, b) => a + b._vol, 0);
+              for (const b of grp) {
+                b.mass = gm * (b._vol / gv);
+                b.inertiaZ = (b.mass * (b.hx * b.hx + b.hy * b.hy)) / 3;
+                b.inertiaXY = (b.mass * (b.hz * b.hz + b.hy * b.hy)) / 3;
+              }
             }
+            ARCH_OUT.mfootBlocks = mfootBlocks;
+            ARCH_OUT.mfootMass = mfootMass;
+            ARCH_OUT.mfootCx = 0.145 * L;   // 弓的远端（内侧前足与弓的连接靠这一点）
             ARCH_OUT.archBlocks = archBlocks;
             ARCH_OUT.archRise = archRise;
             ARCH_OUT.archCx = ((-0.435 + 0.145) / 2) * L;
@@ -1525,7 +1560,9 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             //   `archMass`（实测 70.25kg，应为 70.00kg）。这不只是数字问题：
             //   整机 CoM 会跟着漂（实测 `com.z` 从 −9mm 变 −14mm、站距/髋间距
             //   从 1.35 变 1.03），此前所有标定过的常数全部要重量。
-            const footMass = soleMass - ARCH_OUT.archMass;
+            // ★ 必须同时减掉**内侧前足**的邨分，不只减弓。
+            //   只减弓时总质量 = 70.45kg（多 0.45kg，正好是内侧前足那一块）。
+            const footMass = soleMass - ARCH_OUT.archMass - ARCH_OUT.mfootMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
               const m = footMass * (b._vol / volTot);
@@ -1588,6 +1625,29 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             colliders: ARCH_OUT.archBlocks,
             leg: true,
           });
+          // ═══════════════════════════════════════════════════════════
+          // ★ 内侧前足刚体 `mfoot_l/mfoot_r`（第一跳骨头）
+          // ═══════════════════════════════════════════════════════════════
+          //   │ 它是**串联链的末端**：`foot` → `arch` → **`mfoot`** → 地面。
+          //   ├ 此前弓是脚掉内侧的**死端悬臂**，实测关节力仅 1N（自身重）。
+          //   └ 当前添加：将**跳骨头的内侧半边**（第一跳骨头）分出来给它。
+          bodies.push({
+            key: isL ? 'mfoot_l' : 'mfoot_r',
+            bone: spec.bone,
+            label: isL ? '左内侧前足' : '右内侧前足',
+            part,
+            cx: 0, cy: ankleY, cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,           // 靿子那张图由 foot_* 整张画，再画会出现「两只脚」
+            plateOffset,
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.mfootMass,
+            colliders: ARCH_OUT.mfootBlocks,
+            leg: true,
+          });
           // 存造关节需要的量（锚点在**世界系**，足长 archAtFrac 处）
           // ⚠⚠ `wx/wy/wz` 是**世界系**（主关节循环里 `wy = mapY(ayPx)`、`wz = parent.cz`，
           //   然后 `dParent = [wx − parent.cx, wy − parent.cy, wz − parent.cz]`）。
@@ -1634,6 +1694,11 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
             wy: rollY,                    // 鞋底底面（旋前轴的高度）
             wz: rollZ,                    // 外侧接地棱（旋前轴的侧向位置）
             massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+            // ★ 内侧前足接在弓的远侧端：弓的远端 fx = +0.145
+            mfootKey: isL ? 'mfoot_l' : 'mfoot_r',
+            mwx: ARCH_OUT.mfootCx,
+            mwy: rollY,
+            mwz: rollZ,
           });
         }
 
@@ -1908,6 +1973,29 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       parentLocal: dParent,
       childLocal: dChild,
       // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch],
+    });
+    // ★★ 内侧前足关节：父 = **弓**（不是 foot）。
+    //   这一个引擎才是整个串联拉整的关键：足跟传力给弓、弓再传给
+    //   内侧前足、内侧前足接地——足弧从此在载荷路径上，不接地也承重。
+    const mfoot = byKey.get(as.mfootKey);
+    if (!mfoot) throw new Error(`[skeleton] 内侧前足 ${as.mfootKey} 的刚体不存在`);
+    const mParent = rotVecByQuat(invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.mwx - child.cx, as.mwy - child.cy, as.mwz - child.cz]);
+    const mChild = rotVecByQuat(invQuatOf(restQuatOf(mfoot.restTiltRad, mfoot.restYawRad)),
+      [as.mwx - mfoot.cx, as.mwy - mfoot.cy, as.mwz - mfoot.cz]);
+    joints.push({
+      name: as.mfootKey,
+      index: joints.length,
+      parentKey: as.archKey,
+      childKey: as.mfootKey,
+      wx: as.mwx, wy: as.mwy, wz: as.mwz,
+      parentLocal: mParent,
+      childLocal: mChild,
       restRad: [0, 0, 0],
       minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
       maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],

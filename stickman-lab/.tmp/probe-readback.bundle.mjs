@@ -6429,7 +6429,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     archCx: 0,
     archCz: 0,
     archMass: 0,
-    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 }
+    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 },
+    mfootBlocks: [],
+    mfootMass: 0,
+    mfootCx: 0
   };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -6654,21 +6657,32 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const blocks = [
               blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
               blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
-              blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
+              blk(0.145, 0.785, -1, 0, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5916\u4FA7"),
               blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
+            ];
+            const mfootBlocks = [
+              blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
             ];
             const archBlocks = [
               blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
               blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
             ];
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
             const archMass = soleMass * (archVol / allVol);
-            for (const b of archBlocks) {
-              b.mass = archMass * (b._vol / archVol);
-              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
-              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            const mfootMass = soleMass * (mfootVol / allVol);
+            for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
+              const gv = grp.reduce((a, b) => a + b._vol, 0);
+              for (const b of grp) {
+                b.mass = gm * (b._vol / gv);
+                b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+                b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+              }
             }
+            ARCH_OUT.mfootBlocks = mfootBlocks;
+            ARCH_OUT.mfootMass = mfootMass;
+            ARCH_OUT.mfootCx = 0.145 * L;
             ARCH_OUT.archBlocks = archBlocks;
             ARCH_OUT.archRise = archRise;
             ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
@@ -6691,7 +6705,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
                 hh: (aHi[1] - aLo[1]) / 2
               };
             }
-            const footMass = soleMass - ARCH_OUT.archMass;
+            const footMass = soleMass - ARCH_OUT.archMass - ARCH_OUT.mfootMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
               const m = footMass * (b._vol / volTot);
@@ -6743,6 +6757,26 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             colliders: ARCH_OUT.archBlocks,
             leg: true
           });
+          bodies.push({
+            key: isL ? "mfoot_l" : "mfoot_r",
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u524D\u8DB3" : "\u53F3\u5185\u4FA7\u524D\u8DB3",
+            part,
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            // 靿子那张图由 foot_* 整张画，再画会出现「两只脚」
+            plateOffset,
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.mfootMass,
+            colliders: ARCH_OUT.mfootBlocks,
+            leg: true
+          });
           const HWm = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
           const rollZ = centerZ + -0.7 * HWm;
           const rollY = ankleY + (ARCH_OUT.archBlocks[0].offsetY ?? 0) - ARCH_OUT.archBlocks[0].hy - ARCH_OUT.archRise;
@@ -6760,7 +6794,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             // 鞋底底面（旋前轴的高度）
             wz: rollZ,
             // 外侧接地棱（旋前轴的侧向位置）
-            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+            // ★ 内侧前足接在弓的远侧端：弓的远端 fx = +0.145
+            mfootKey: isL ? "mfoot_l" : "mfoot_r",
+            mwx: ARCH_OUT.mfootCx,
+            mwy: rollY,
+            mwz: rollZ
           });
         }
         bodies.push({
@@ -6970,6 +7009,32 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       parentLocal: dParent,
       childLocal: dChild,
       // 弓的静姿态与足体**相同**（建模时就是同姿态）⇒ 关节零位 = 素材姿势
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
+    const mfoot = byKey.get(as.mfootKey);
+    if (!mfoot) throw new Error(`[skeleton] \u5185\u4FA7\u524D\u8DB3 ${as.mfootKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const mParent = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.mwx - child.cx, as.mwy - child.cy, as.mwz - child.cz]
+    );
+    const mChild = rotVecByQuat(
+      invQuatOf(restQuatOf(mfoot.restTiltRad, mfoot.restYawRad)),
+      [as.mwx - mfoot.cx, as.mwy - mfoot.cy, as.mwz - mfoot.cz]
+    );
+    joints.push({
+      name: as.mfootKey,
+      index: joints.length,
+      parentKey: as.archKey,
+      childKey: as.mfootKey,
+      wx: as.mwx,
+      wy: as.mwy,
+      wz: as.mwz,
+      parentLocal: mParent,
+      childLocal: mChild,
       restRad: [0, 0, 0],
       minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
       maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],

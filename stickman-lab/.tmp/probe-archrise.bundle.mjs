@@ -6429,7 +6429,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     archCx: 0,
     archCz: 0,
     archMass: 0,
-    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 }
+    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 },
+    mfootBlocks: [],
+    mfootMass: 0,
+    mfootCx: 0
   };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -6654,21 +6657,32 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const blocks = [
               blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
               blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
-              blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
+              blk(0.145, 0.785, -1, 0, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5916\u4FA7"),
               blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
+            ];
+            const mfootBlocks = [
+              blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
             ];
             const archBlocks = [
               blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
               blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
             ];
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
+            const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
+            const allVol = archVol + mfootVol + blocks.reduce((a, b) => a + b._vol, 0);
             const archMass = soleMass * (archVol / allVol);
-            for (const b of archBlocks) {
-              b.mass = archMass * (b._vol / archVol);
-              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
-              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            const mfootMass = soleMass * (mfootVol / allVol);
+            for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
+              const gv = grp.reduce((a, b) => a + b._vol, 0);
+              for (const b of grp) {
+                b.mass = gm * (b._vol / gv);
+                b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+                b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+              }
             }
+            ARCH_OUT.mfootBlocks = mfootBlocks;
+            ARCH_OUT.mfootMass = mfootMass;
+            ARCH_OUT.mfootCx = 0.145 * L;
             ARCH_OUT.archBlocks = archBlocks;
             ARCH_OUT.archRise = archRise;
             ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L;
@@ -6691,7 +6705,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
                 hh: (aHi[1] - aLo[1]) / 2
               };
             }
-            const footMass = soleMass - ARCH_OUT.archMass;
+            const footMass = soleMass - ARCH_OUT.archMass - ARCH_OUT.mfootMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
               const m = footMass * (b._vol / volTot);
@@ -6743,6 +6757,26 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             colliders: ARCH_OUT.archBlocks,
             leg: true
           });
+          bodies.push({
+            key: isL ? "mfoot_l" : "mfoot_r",
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u524D\u8DB3" : "\u53F3\u5185\u4FA7\u524D\u8DB3",
+            part,
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            // 靿子那张图由 foot_* 整张画，再画会出现「两只脚」
+            plateOffset,
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.mfootMass,
+            colliders: ARCH_OUT.mfootBlocks,
+            leg: true
+          });
           const HWm = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
           const rollZ = centerZ + -0.7 * HWm;
           const rollY = ankleY + (ARCH_OUT.archBlocks[0].offsetY ?? 0) - ARCH_OUT.archBlocks[0].hy - ARCH_OUT.archRise;
@@ -6760,7 +6794,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             // 鞋底底面（旋前轴的高度）
             wz: rollZ,
             // 外侧接地棱（旋前轴的侧向位置）
-            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+            // ★ 内侧前足接在弓的远侧端：弓的远端 fx = +0.145
+            mfootKey: isL ? "mfoot_l" : "mfoot_r",
+            mwx: ARCH_OUT.mfootCx,
+            mwy: rollY,
+            mwz: rollZ
           });
         }
         bodies.push({
@@ -6976,6 +7015,32 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       revoluteAxis: [1, 0, 0],
       maxTorque: [tauArch, tauArch, tauArch]
     });
+    const mfoot = byKey.get(as.mfootKey);
+    if (!mfoot) throw new Error(`[skeleton] \u5185\u4FA7\u524D\u8DB3 ${as.mfootKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const mParent = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.mwx - child.cx, as.mwy - child.cy, as.mwz - child.cz]
+    );
+    const mChild = rotVecByQuat(
+      invQuatOf(restQuatOf(mfoot.restTiltRad, mfoot.restYawRad)),
+      [as.mwx - mfoot.cx, as.mwy - mfoot.cy, as.mwz - mfoot.cz]
+    );
+    joints.push({
+      name: as.mfootKey,
+      index: joints.length,
+      parentKey: as.archKey,
+      childKey: as.mfootKey,
+      wx: as.mwx,
+      wy: as.mwy,
+      wz: as.mwz,
+      parentLocal: mParent,
+      childLocal: mChild,
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
   }
   if (K > 1) {
     const SPINE_XY_DEG = [15, 20];
@@ -7180,8 +7245,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
-      archRise: 6e-3,
-      // ★ 见下面的说明（不是人体解剖值 20~25mm）
+      archRise: 0,
+      // ★ 实测定的（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -14411,12 +14476,12 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l" || b.key === "mfoot_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
                 this.soleColLocalIdx[0].push(ci);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r" || b.key === "mfoot_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
                 this.soleColLocalIdx[1].push(ci);
@@ -15340,7 +15405,7 @@ var init_ragdoll = __esm({
        *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
        */
       static notCrashKey(key) {
-        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+        return /^(shin|foot|forefoot|arch|midfoot|toe|mfoot)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
       }
       bodyHitGround() {
         this.lastHitKey = "";
@@ -20943,14 +21008,16 @@ function trial(riseMm) {
   const wd = d.world;
   const ja = jointIndexByName2(sk, "arch_l");
   const jAnkle = jointIndexByName2(sk, "foot_l");
+  const jMfoot = jointIndexByName2(sk, "mfoot_l");
   const JF = new Float64Array(sk.joints.length * 5);
   const iA = sk.bodies.findIndex((b) => b.key === "arch_l");
   const iF = sk.bodies.findIndex((b) => b.key === "foot_l");
   const archB = d.bodies[iA], nC = archB.numColliders();
   const COP = new Float64Array(8), BB = new Float64Array(4), LD = new Float64Array(8);
   const ROT = new Float64Array(3);
+  const ROT2 = new Float64Array(3);
   let frames = 0, hit = 0, aMin = 9, aMax = -9, lamSum = 0, lamPk = 0;
-  const archF = [], ankleF = [];
+  const archF = [], ankleF = [], mfootF = [], jm = [];
   const cops = [], tilt = [];
   const N = Math.round(PHz * 1), skip = Math.round(PHz * 0.4);
   for (let f = 0; f < N; f++) {
@@ -20976,8 +21043,11 @@ function trial(riseMm) {
     lamSum += lam;
     lamPk = Math.max(lamPk, lam);
     d.jointForce(JF, 1 / PHz);
+    d.jointRot(jMfoot, ROT2);
+    jm.push(ROT2[0]);
     archF.push(Math.hypot(JF[ja * 5], JF[ja * 5 + 1], JF[ja * 5 + 2]));
     ankleF.push(Math.hypot(JF[jAnkle * 5], JF[jAnkle * 5 + 1], JF[jAnkle * 5 + 2]));
+    mfootF.push(Math.hypot(JF[jMfoot * 5], JF[jMfoot * 5 + 1], JF[jMfoot * 5 + 2]));
     d.readCoP(0, COP);
     d.footSoleBounds(0, BB);
     d.soleBlockLoad(0, LD);
@@ -21010,7 +21080,6 @@ function trial(riseMm) {
     archIdx,
     direct,
     viaLd: [...LD.slice(0, n)],
-    bbZ: `${(BB[2] * 1e3).toFixed(0)}..${(BB[3] * 1e3).toFixed(0)}`,
     hitPct: hit / Math.max(1, frames) * 100,
     aRange: (aMax - aMin) * 57.3,
     aMean: (aMin + aMax) / 2 * 57.3,
@@ -21019,7 +21088,9 @@ function trial(riseMm) {
     copR: (Math.max(...cops) - Math.min(...cops)) * 1e3,
     archF: archF.reduce((a, b) => a + b, 0) / Math.max(1, archF.length),
     ankleF: ankleF.reduce((a, b) => a + b, 0) / Math.max(1, ankleF.length),
+    mfootF: mfootF.reduce((a, b) => a + b, 0) / Math.max(1, mfootF.length),
     archFMax: archF.reduce((a, b) => Math.max(a, b), 0),
+    jMfoot: jm.reduce((a, b) => a + b, 0) / Math.max(1, jm.length),
     tiltR: (Math.max(...tilt) - Math.min(...tilt)) * 57.3
   };
 }
@@ -21030,5 +21101,5 @@ log("   rise   \u9700\u65CB\u524D   \u5F13\u63A5\u89E6\u5E27   \u5F13\u89D2\u884
 for (const r of [RISE_ONLY]) {
   const t = trial(r);
   const need = (Math.asin(Math.min(1, r / 126)) * 57.3).toFixed(1);
-  log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}\xB0   \u5757[${t.names.join("|")}]   \u76F4\u8BFB\u03BB[${t.direct.map((v) => v.toFixed(3)).join("|")}]   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join("|")}]   bb z[${t.bbZ}]   \u5F13\u5173\u8282\u529B\u5747 ${t.archF.toFixed(0).padStart(5)}N \u5CF0 ${t.archFMax.toFixed(0).padStart(4)}N  (\u8DF3\u5173\u8282\u529B\u5747 ${t.ankleF.toFixed(0)}N)   ${t.hitPct.toFixed(0).padStart(5)}%   ${t.aRange.toFixed(2).padStart(7)}\xB0   ${t.aMean.toFixed(2).padStart(7)}\xB0   ${t.lamPk.toFixed(3).padStart(8)}   ${t.archShare.toFixed(1).padStart(6)}%   ${t.copR.toFixed(1).padStart(6)}mm   ${t.tiltR.toFixed(2).padStart(7)}\xB0   ${t.hitPct > 20 ? "\u2713 \u627F\u91CD" : ""}`);
+  log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}\xB0   \u5757[${t.names.join("|")}]   \u76F4\u8BFB\u03BB[${t.direct.map((v) => v.toFixed(3)).join("|")}]   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join("|")}]` + + +`   \u8DF3\u5173\u8282\u529B\u5747 ${t.archF.toFixed(0).padStart(5)}N \u5CF0 ${t.archFMax.toFixed(0).padStart(4)}N` + `  \u8DF3${t.ankleF.toFixed(0)}N \u5185\u4FA7\u524D\u8DB3${t.mfootF.toFixed(0)}N)   ${t.hitPct.toFixed(0).padStart(5)}%   ${t.aRange.toFixed(2).padStart(7)}\xB0   ${t.aMean.toFixed(2).padStart(7)}\xB0   ${t.lamPk.toFixed(3).padStart(8)}   ${t.archShare.toFixed(1).padStart(6)}%   ${t.copR.toFixed(1).padStart(6)}mm   ${t.tiltR.toFixed(2).padStart(7)}\xB0   ${t.hitPct > 20 ? "\u2713 \u627F\u91CD" : ""}`);
 }
