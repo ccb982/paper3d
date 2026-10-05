@@ -293,6 +293,29 @@ export interface RigSnapshot {
   rollRate: number;
   legs: Record<Side, SideSnapshot>;
   axes: AxisSnapshot[];
+  /**
+   * ★★ **实际送进马达的两个通道**（唯一权威回读口）。
+   *
+   *  为什么必须有：探针此前只能去戳 `doll` 的私有 `motorTarget`/`torqueCmd`，
+   *  于���每个探针各写一遍取法 —— 本轮实测因此踩到两次假结论：
+   *    ① 读 `foot_l/2` 的电机实收，而 QP 主要出力在膝/髋/腰 ⇒ 误报"解被丢弃"；
+   *    ② 在裸循环里不调 `ctrl.step()`，`sim.advance` 实际没推进，
+   *       却把"com 连 y 都不动"当成"该轴不产生水平力"。
+   *  ⇒ 送达值必须由**仲裁器自己**产出并进快照，而不是各处现取。
+   *
+   *  · `motorTarget` —— 角度通道（位置伺服）的目标，已按 ±1 归一（`setMotorTargets` 的输入）
+   *  · `torqueOut`   —— 力矩通道的 N·m，已按各轴 τmax 饱和（`setTorqueTargets` 的输入）
+   */
+  channels: { motorTarget: Float32Array; torqueOut: Float32Array };
+  /**
+   * 全链 QP 的本拍读数（附录 C.1）。`null` = 本拍没跑。
+   * `feasible=false` 或 `grfSat=true` 时，下游**必须知道**（控制理论前提已不成立）。
+   */
+  qp: {
+    feasible: boolean; residual: number;
+    fDesX: number; fDesZ: number; xiX: number; xiZ: number; grfSat: boolean;
+    names: readonly string[]; tau: Float64Array;
+  } | null;
   /** ★ 轴归属冲突（同一轴被位置与力矩两个通道、不同系统申领）。
    *  对应 `balance.AXIS_OWNERSHIP` 不变量；门禁要求默认路径下恒为 0。 */
   axisConflicts: { axis: number; joint: string; mode: string; by: string; against: string }[];
@@ -571,6 +594,12 @@ export class RigState {
   private torqueRequestCount = 0;
   /** 本拍仲裁出的力矩（N·m），可直接喂 `Ragdoll.setTorqueTargets` */
   tauOut = new Float32Array(0);
+  /**
+   * ★ 仲裁器**自己**算出的角度通道目标（即 `setMotorTargets` 的输入）。
+   *   由 `arbitrate()` 在返回前写入 —— 这样快照里���的送达值与真正下发的
+   *   是**同一份**，不再需要各探针去戳 `doll` 的私有 `motorTarget`。
+   */
+  tgtOut = new Float32Array(0);
   private readonly nAxes: number;
   private readonly tgt: AxisTarget[] = [];
   private readonly prevTarget: Float32Array;
@@ -612,6 +641,7 @@ export class RigState {
     this.hold.fill(false);
     for (let i = 0; i < n; i++) { this.hold[i] = false; this.axisMode[i] = 0; this.holdMask[i] = 0; }
     this.tauOut = new Float32Array(n);
+    this.tgtOut = new Float32Array(n);
     this.tauJ = new Float32Array(n);
     this.forceBuf = new Float64Array(sk.joints.length * 5);
     this.treq.fill(undefined);
@@ -1073,6 +1103,7 @@ export class RigState {
       const t = this.tgt[i];
       if (t && t.ownerLabel === '—') { t.owner = r.system; t.ownerLabel = `${r.label}(τ)`; }
     }
+    this.tgtOut.set(out);      // ★ 见 `tgtOut` 的注释：送达值由仲裁器自己存
     return out;
   }
 
@@ -1224,6 +1255,13 @@ export class RigState {
         },
       },
       axes,
+      channels: { motorTarget: this.tgtOut.slice(), torqueOut: this.tauOut.slice() },
+      qp: this.qpTick ? {
+        feasible: this.qpTick.feasible, residual: this.qpTick.residual,
+        fDesX: this.qpTick.fDesX, fDesZ: this.qpTick.fDesZ,
+        xiX: this.qpTick.xiX, xiZ: this.qpTick.xiZ, grfSat: this.qpTick.grfSat,
+        names: this.qpTick.names.slice(), tau: this.qpTick.tau.slice(),
+      } : null,
       criteria: {
         bearer: cloneCriteria(this.bearerCriteria),
         handover: cloneCriteria(this.handoverCriteria),
