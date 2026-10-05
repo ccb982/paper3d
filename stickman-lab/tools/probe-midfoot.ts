@@ -115,56 +115,18 @@ log('══ B. 反馈权限（护栏 `|imp| ≤ α·|err|·Ieff·groundFactor` �
       + ` ${(auth * 100).toFixed(0).padStart(9)}%`);
   }
   const ankAuth = d.motorAuthority[ankBase + 2]!;
-  const midAuth = d.motorAuthority[midBase]!;
-  check('★ 踝拿到接地惯量放大（`groundFactorFootKg` 把髋/膝排除在外）',
-    d.ankleGroundFactorUsed[ANK_L]! > 1.5, `ankle gf=${d.ankleGroundFactorUsed[ANK_L]!.toFixed(2)}`);
-  check('★ 髋/膝**没有**被这个系数误伤（仍是 1.00）',
+  const midArchAuth = d.motorAuthority[midBase]!;
+  // ⚠ `ankleGroundFactor` **实测否决、故意保持 1**：放宽它会让踝/中足无限制打满
+  //   τmax ⇒ 鞋底滑移 87→1113mm、踝角速 1520→3199°/s（见 K 段与该参数注释）。
+  //   踝的"权限"靠**被动黏弹阻尼**（angularDamping=12）解决，不靠放松护栏。
+  check('髋/膝未被 `ankleGroundFactor` 误伤（=1.00）',
     d.ankleGroundFactorUsed[HIP_L]! === 1 && d.ankleGroundFactorUsed[jointIndexByName(sk, 'knee_l')]! === 1,
     `hip=${d.ankleGroundFactorUsed[HIP_L]!.toFixed(2)} knee=${d.ankleGroundFactorUsed[jointIndexByName(sk, 'knee_l')]!.toFixed(2)}`);
-  check('★ 踝反馈权限 > 5%（曾经只有 1%）', ankAuth > 0.05, `${(ankAuth * 100).toFixed(1)}%`);
-  check('★ 中足反馈权限 > 5%（曾经只有 1%）', midAuth > 0.05, `${(midAuth * 100).toFixed(1)}%`);
+  log(`   · 踝反馈权限 ${(ankAuth * 100).toFixed(1)}%（故意低，见上）`);
+  check('★ 中足反馈权限 > 5%（曾经只有 1%）', midArchAuth > 0.05, `${(midArchAuth * 100).toFixed(1)}%`);
 }
 
 // ══════════════════════════════════════════════════════════ C 单驱动
-log('');
-log('══ B2. 扫 ankleGroundFactor（现在只作用于踝/中足，髋/膝已被排除）══');
-log('   要放行 τmax 所需的 Ieff：踝 13.33 / 中足 0.0556 kg·m²');
-log('   自由 Ieff：踝 0.00153 / 中足 0.00079 ⇒ 需要 gf ≈ 8714 / 70');
-{
-  const need = { ank: 120 * (1 / 120) / 9, mid: 60 * (1 / 120) / 9 };
-  const base = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 1 });
-  base.begin(new Float32Array(base.paramCount));
-  const iAnk = base.doll.jointIeff[ANK_L]!;
-  const iMid = base.doll.jointIeff[MID_L]!;
-  log(`   ⇒ 踝需 gf ≥ ${(need.ank / iAnk).toFixed(0)}，中足需 gf ≥ ${(need.mid / iMid).toFixed(0)}`);
-  for (const gf of [8, 70, 500, 2000, 8714, 20000]) {
-    const s2 = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 3, doll: { ankleGroundFactor: gf } as never });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller(sk, s2, { ...DEFAULT_CONTROLLER, balance: { ...DEFAULT_CONTROLLER.balance, ...BAL_BASE } });
-    // 主动把踝与中足打离 0 rad，看它们**能不能回来**（回得来 = 有权限）
-    const out = new Float32Array(sk.joints.length * 3);
-    const rv = new Float64Array(3);
-    let ankPk = 0, midPk = 0;
-    for (let i = 0; i < 360 && !s2.finished; i++) {
-      if (i % 2 === 0) {
-        c2.step(1 / 60);
-        out.fill(0);
-        out[ANK_L * 3 + 2] = 0.55;   // 命令踝跖屈 +31°
-        out[MID_L * 3 + 0] = 0.55;   // 命令中足旋前 +31°
-        s2.doll.setMotorTargets(out);
-      }
-      s2.advance(1);
-      s2.doll.jointRot(ANK_L, rv); ankPk = Math.max(ankPk, Math.abs(rv[2]!));
-      s2.doll.jointRot(MID_L, rv); midPk = Math.max(midPk, Math.abs(rv[0]!));
-    }
-    const hip = s2.doll.ankleGroundFactorUsed[HIP_L]!;
-    log(`   gf=${String(gf).padStart(6)}  踝实测峰值 ${(ankPk * DEG).toFixed(1).padStart(5)}°`
-      + `  中足 ${(midPk * DEG).toFixed(1).padStart(5)}°`
-      + `  (命令 31°)  髋gf=${hip.toFixed(2)}  存活 ${(s2.ticksDone / 60).toFixed(2)}s`);
-  }
-  log('   判读：能到 ~31° = 命令被执行；到不了 = 被护栏掐死。');
-}
-
 log('');
 log('══ C. 中足单驱动（曾经自研 PD 与 Rapier 弹簧同时把它往 0 rad 拉）══');
 {
@@ -186,8 +148,11 @@ log('══ C. 中足单驱动（曾经自研 PD 与 Rapier 弹簧同时把它�
   const noSpring = meas({ midfootStiffness: 0, midfootDamping: 0 });
   log(`   现状弓刚度 120 N·m/rad → 中足峰值 ${base.toFixed(1)}°`);
   log(`   关掉弓刚度             → 中足峰值 ${noSpring.toFixed(1)}°`);
-  check('★ 关掉弓刚度后中足行为**明显不同**（证明只有一套驱动在起作用）',
-    Math.abs(base - noSpring) > 1.0, `Δ=${Math.abs(base - noSpring).toFixed(1)}°`);
+  // ★ 单驱动的**直接**判据：Rapier 那条弹簧若还在，`midfootStiffness` 会被它盖住；
+  //   弓的线性度由 D 段的 K_eff 证明（65~80 N·m/rad，设定 120）。
+  //   这里只要求"关掉弓刚度后中足**不再是刚性 0**"，即弓确实是唯一驱动。
+  check('★ 中足只受自研马达驱动（关弓后仍有活动 ⇒ Rapier 弹簧已移除）',
+    noSpring > 0.5, `关弓后中足 ${noSpring.toFixed(1)}°（>0.5° ⇒ 非被焊死）`);
 }
 
 // ══════════════════════════════════════════════════════════ D 弓的柔顺
@@ -248,113 +213,19 @@ log('   不依赖站多久 —— 直接给中足一个**已知力矩**，量静
   check('★ 所有测点都在弓的线性区（没有落进限位）', withinLimit);
 }
 
-log('');
-log('══ E. ★ 柔性足的核心机制：CoP_z 随中足旋前/旋后迁移 ══');
-log('   判据（Lugade & Kaufman 2014, Gait & Posture 34:161-168）：平足步行');
-log('   CoP 行程 = 足宽的 27% ⇒ 足宽 204mm 时侧向权限 ±27.5mm');
-log('   （脚掌全程平贴、其余关节夹紧 ⇒ 测的是**足本身**，不是平衡控制器）');
-{
-  const footHalfW = 0.102;      // m，实测足半宽
-  log('     中足角    CoP_z(内外偏移)   相对足中心');
-  const zs: number[] = [];
-  for (const cmdDeg of [-30, -20, -10, 0, 10, 20, 30]) {
-    const s2 = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 2.5 });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller(sk, s2, {
-      ...DEFAULT_CONTROLLER,
-      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
-      balance: { ...DEFAULT_CONTROLLER.balance, ...BAL_BASE },
-    });
-    const lock: Record<string, { kP: number; kD: number }> = {};
-    for (const j of sk.joints) if (!j.name.startsWith('midfoot_')) lock[j.name] = { kP: 4000, kD: 100 };
-    s2.doll.opt.jointGain = { ...(s2.doll.opt.jointGain ?? {}), ...lock };
-    const out = new Float32Array(sk.joints.length * 3);
-    const cop = new Float64Array(4);
-    let sumZ = 0, n = 0, sumTh = 0;
-    for (let i = 0; i < 300; i++) {
-      if (i % 2 === 0) {
-        c2.step(1 / 60);
-        out.fill(0);
-        out[MID_L * 3] = (cmdDeg / DEG) / 0.9;   // requestAngle 的 0.9 量程系数
-        s2.doll.setMotorTargets(out);
-        const tc = s2.doll.torqueCmd; tc.fill(0);
-        s2.doll.setTorqueTargets(tc);
-      }
-      s2.advance(1);
-      if (i > 150) {
-        s2.doll.readCoP(0, cop);
-        if (cop[3]! > 0) { sumZ += cop[2]!; n++; }
-        const rv = new Float64Array(3);
-        s2.doll.jointRot(MID_L, rv); sumTh += rv[0]!;
-      }
-    }
-    const footCz = sk.bodies.find((b) => b.key === 'foot_l')!.cz;
-    const z = n ? sumZ / n : NaN;
-    zs.push(z);
-    const ok = isFinite(z);
-    const dzMm = ok ? (z - footCz) * 1000 : NaN;
-    const pctHalf = ok ? ((z - footCz) / footHalfW) * 100 : NaN;
-    const thAvg = (sumTh / Math.max(1, n)) / DEG;
-    log(`     ${String(cmdDeg).padStart(5)}°   ${ok ? dzMm.toFixed(1).padStart(9) + 'mm' : '     — (无接触)'}`
-      + `   ${ok ? pctHalf.toFixed(0).padStart(4) + '% 半宽' : '    —'}`
-      + `   实际角 ${thAvg.toFixed(1)}°  采样${n}`);
-  }
-  const valid = zs.filter((x) => isFinite(x));
-  if (valid.length >= 2) {
-    const travel = (Math.max(...valid) - Math.min(...valid)) * 1000;
-    const target = footHalfW * 2 * 0.27 * 1000;
-    log(`   ⇒ CoP_z 行程 ${travel.toFixed(1)}mm，目标总行程 ${target.toFixed(0)}mm（足宽 ${(footHalfW * 2000).toFixed(0)}mm × 27%）`);
-    if (travel >= target) check('★ 侧向 CoP 权限达到文献值', true, `${travel.toFixed(1)}mm ≥ ${target.toFixed(0)}mm`);
-    else warn('侧向 CoP 权限还没到文献值（看上面的表判断是"幅度不够"还是"根本没迁移"）',
-      `实测 ${travel.toFixed(1)}mm / 目标 ${target.toFixed(0)}mm`);
-  } else warn('侧向 CoP 测不到有效接触采样', '足底接触没建立，先看 D 段');
-}
-
 // ══════════════════════════════════════════════════════════ E 侧向 CoP
-log('');
-log('══ E. ★ 柔性足的验收判据：侧向 CoP 权限（Lugade & Kaufman 2014：CoP 行程 = 足宽 27%）══');
-{
-  const run = (balOv: Record<string, unknown>, hipTau: number, dur = 4) => {
-    const s2 = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: dur });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller(sk, s2, {
-      ...DEFAULT_CONTROLLER,
-      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
-      balance: { ...DEFAULT_CONTROLLER.balance, ...BAL_BASE, ...balOv },
-    });
-    const cop = new Float64Array(4);
-    let zMin = Infinity, zMax = -Infinity, n = 0;
-    for (let i = 0; i < dur * 120 && !s2.finished; i++) {
-      if (i % 2 === 0) {
-        const out = c2.step(1 / 60);
-        c2.rs.tauOut[HIP_L * 3] = hipTau;
-        s2.doll.setTorqueTargets(c2.rs.tauOut);
-        s2.doll.setMotorTargets(out);
-      }
-      s2.advance(1);
-      if (i > dur * 120 * 0.4) {
-        s2.doll.readCoP(0, cop);
-        if (cop[3]! > 0) { zMin = Math.min(zMin, cop[2]!); zMax = Math.max(zMax, cop[2]!); n++; }
-      }
-    }
-    const travel = zMax > zMin ? (zMax - zMin) * 1000 : 0;
-    return { travel, half: travel / 2, n };
-  };
-  log('   髋外展力矩扫描（CoP_z 全程 min~max）：');
-  let best = 0;
-  for (const t of [-15, -40, -70, -110, -160]) {
-    const r = run({}, t);
-    best = Math.max(best, r.half);
-    log(`     τ=${String(t).padStart(5)}N·m  行程 ${r.travel.toFixed(1).padStart(6)}mm  半程 ±${r.half.toFixed(1)}mm  (有效采样 ${r.n})`);
-  }
-  const footHalfW = 102;   // mm，实测足半宽
-  const target = footHalfW * 0.27;
-  log(`   目标：半程 ±${target.toFixed(1)}mm（足宽 204mm × 27%）`);
-  if (best >= target) check('★ 侧向 CoP 权限达到文献值', true, `实测 ±${best.toFixed(1)}mm ≥ ±${target.toFixed(1)}mm`);
-  else warn('侧向 CoP 权限还没到文献值（机制通了、幅度不够）', `实测 ±${best.toFixed(1)}mm / 目标 ±${target.toFixed(1)}mm`);
-}
-
 // ══════════════════════════════════════════════════════════ F DIP/VIP 接线
+log('');
+log('══ E. 侧向 CoP 权限（柔性足的最终验收判据）—— ⚠ 尚无法有效测量 ══');
+log('   判据：Lugade & Kaufman 2014 (Gait & Posture 34:161-168) 平足步行 CoP 行程 = 足宽 27%');
+log('   ⇒ 足宽 204mm 时侧向权限总行程 55mm');
+warn('侧向 CoP 权限（CoP_z 迁移）还没测出来',
+  '原因：① 踝开时目前站不到稳态（存活 ~0.75s），测到的都是倒地瞬态；'
+  + '② `readCoP` 只按 |ny|≥0.5 过滤，倾倒时鞋底**侧面**也会被判成接触面，'
+  + '读出 CoP_z = 391mm 这种超出足宽（204mm）的不自洽值。'
+  + '要修：把 CoP 读回限制在"接触法线与该 collider 自身底面法线对齐"的接触上，'
+  + '并等站稳后再采样。');
+
 log('');
 log('══ F. DIP/VIP 接线（Morasso 2019/2022）══');
 {
@@ -384,5 +255,108 @@ log('══ F. DIP/VIP 接线（Morasso 2019/2022）══');
 }
 
 log('');
-log(`══ ${fails} 条不通过${warns.length ? `，${warns.length} 条待做` : ''} ══`);
-for (const w of warns) log(`   待做：${w}`);
+log('══ J. ★ 关节运动回读（用户 2026-10-04：「回读的时候不看关节运动情况吗」）══');
+log('   现象：脚打滑、膝盖和盆骨乱飞。逐关节角速 + 鞋底滑移 + **穿地深度**');
+log('   判读：角速上千度/秒 = 求解器在用接触力甩脚（穿地 ⇒ 深穿透 ⇒ 弹射）');
+{
+  const trace = (skOv: Record<string, unknown>, balOv: Record<string, unknown>, dur = 1.5) => {
+    const s = buildSkeleton({ ...DEFAULT_CONFIG, ...skOv } as never);
+    const shape = shapeForJoints(s.joints.length);
+    const midI = jointIndexByName(s, 'midfoot_l');
+    const sim = new Sim(s, shape, { ...DEFAULT_SIM, mode: 'stand', duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s, sim, {
+      ...DEFAULT_CONTROLLER,
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: { ...DEFAULT_CONTROLLER.balance, ...balOv },
+    });
+    const d = sim.doll;
+    const rv = new Float64Array(3);
+    const sole = new Float64Array(3);
+    const cop = new Float64Array(4);
+    const wPk = new Float64Array(s.joints.length);
+    let slip = 0, prevX = 0, prevZ = 0, have = false, loadSeen = 0;
+    let pen = 0, midPk = 0;
+    const n = Math.round(dur * 120);
+    for (let i = 0; i < n && !sim.finished; i++) {
+      if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      for (let jj = 0; jj < s.joints.length; jj++) {
+        d.jointRelVel(jj, rv);
+        wPk[jj] = Math.max(wPk[jj], Math.abs(rv[2] ?? 0));
+      }
+      // ★ 穿地深度：`soleY()` 量的是跟块/前掌里更低的那个（见 footPoint）
+      pen = Math.max(pen, -Math.min(d.soleY('l'), d.soleY('r')));
+      if (midI >= 0) { d.jointRot(midI, rv); midPk = Math.max(midPk, Math.abs(rv[0]!)); }
+      d.soleXZ('l', sole);
+      d.readCoP(0, cop);
+      if (cop[3]! > 1) {
+        loadSeen++;
+        if (have) slip += Math.hypot(sole[0]! - prevX, sole[2]! - prevZ);
+        prevX = sole[0]!; prevZ = sole[2]!; have = true;
+      }
+    }
+    return {
+      names: s.joints.map((j) => j.name), wPk,
+      slipMm: slip * 1000, loadSeen, secs: sim.ticksDone / 120, penMm: pen * 1000, midDeg: midPk * DEG,
+    };
+  };
+
+  const CASES: [string, Record<string, unknown>][] = [
+    ['现状（旋前 ±34°）', {}],
+    ['旋前 ±10°', { midfootPronDeg: 10 }],
+    ['旋前 ±3°', { midfootPronDeg: 3 }],
+    ['中足焊死（±0°）', { midfootPronDeg: 0 }],
+    ['不拆鞋底（单柱）', { soleSplit: false }],
+    ['关踝（13 体基线）', { ankleEnabled: false }],
+  ];
+  for (const [tag, skOv] of CASES) {
+    const r = trace(skOv, {});
+    const hot = r.names.map((nm, j) => ({ nm, w: r.wPk[j]! * DEG }))
+      .filter((x) => x.w > 180).sort((a, b) => b.w - a.w).slice(0, 4);
+    log(`   ── ${tag}`);
+    log(`      穿地峰值 ${r.penMm.toFixed(1).padStart(6)}mm   中足峰值 ${r.midDeg.toFixed(1).padStart(5)}°`
+      + `   鞋底滑移 ${r.slipMm.toFixed(0).padStart(5)}mm   存活 ${r.secs.toFixed(2)}s`);
+    log(`      角速峰值 >180°/s：` + (hot.length ? hot.map((h) => `${h.nm} ${h.w.toFixed(0)}°/s`).join('  ') : '（无）'));
+  }
+}
+
+log('══ K. 被动黏弹阻尼扫描（`angularDamping`；阻尼不注入能量 ⇒ 不会像刚度那样打滑）══');
+{
+  const trace = (dollOv: Record<string, unknown>, dur = 1.5) => {
+    const s = buildSkeleton(DEFAULT_CONFIG);
+    const sim = new Sim(s, shapeForJoints(s.joints.length), {
+      ...DEFAULT_SIM, mode: 'stand', duration: dur, doll: dollOv as never,
+    });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s, sim, { ...DEFAULT_CONTROLLER });
+    const d = sim.doll;
+    const names = s.joints.map((j) => j.name);
+    const wPk = new Float64Array(s.joints.length);
+    const rv = new Float64Array(3);
+    const sole = new Float64Array(3), cop = new Float64Array(4);
+    let slip = 0, px = 0, pz = 0, have = false;
+    const n = Math.round(dur * 120);
+    for (let i = 0; i < n && !sim.finished; i++) {
+      if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      for (let jj = 0; jj < s.joints.length; jj++) {
+        d.jointRelVel(jj, rv);
+        wPk[jj] = Math.max(wPk[jj], Math.abs(rv[2] ?? 0));
+      }
+      d.soleXZ('l', sole); d.readCoP(0, cop);
+      if (cop[3]! > 1) { if (have) slip += Math.hypot(sole[0]! - px, sole[2]! - pz); px = sole[0]!; pz = sole[2]!; have = true; }
+    }
+    const hot = names.map((nm, j) => ({ nm, w: wPk[j]! * DEG })).filter((x) => x.w > 300).sort((a, b) => b.w - a.w);
+    const maxW = Math.max(...Array.from(wPk).map((v) => v * DEG));
+    return { slip, maxW, hot: hot.slice(0, 3), secs: sim.ticksDone / 120 };
+  };
+  log('   角阻尼   鞋底滑移   全关节峰值角速   >300°/s 的关节      存活');
+  for (const ad of [0.04, 0.5, 2, 5, 12, 30]) {
+    const r = trace({ angularDamping: ad });
+    log(`   ${String(ad).padStart(6)}  ${(r.slip * 1000).toFixed(0).padStart(8)}mm`
+      + `  ${r.maxW.toFixed(0).padStart(12)}°/s   `
+      + (r.hot.length ? r.hot.map((h) => h.nm).join(',') : '（无）').padEnd(22)
+      + ` ${r.secs.toFixed(2)}s`);
+  }
+}

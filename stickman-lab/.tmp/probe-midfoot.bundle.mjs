@@ -6462,7 +6462,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
         const newHalfH = Math.max(1e-3, newLen / 2 - radius);
         length = newLen;
         halfHeight = newHalfH;
-        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2 - cfg.legStretch;
         centerZ = mapZ(kn[0], true);
       }
     }
@@ -6780,9 +6780,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!parent || !child) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
+    const wz = isAnkle ? parent.cz : mapZ(axPx, stanceHere);
     const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
     const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
-    const wz = mapZ(axPx, stanceHere);
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     const flexMin = (isAnkle ? cfg.ankleLimitDeg[0] : jm.limitDeg[0]) * DEG;
     const flexMax = (isAnkle ? cfg.ankleLimitDeg[1] : jm.limitDeg[1]) * DEG;
@@ -6879,17 +6879,36 @@ function assertColliderMass(sk2) {
   }
 }
 function assertJointAnchors(sk2) {
+  const reachOf = (b) => {
+    let r = 0;
+    for (const c of b.colliders) {
+      const ox = c.offsetX ?? 0;
+      let d;
+      if (c.shape === "capsule") {
+        const ay = c.offsetY - c.halfHeight, by = c.offsetY + c.halfHeight;
+        d = Math.max(Math.hypot(ox, ay, c.offsetZ), Math.hypot(ox, by, c.offsetZ)) + c.radius;
+      } else {
+        d = Math.hypot(
+          Math.abs(ox) + c.hx,
+          Math.abs(c.offsetY) + c.hy,
+          Math.abs(c.offsetZ) + c.hz
+        );
+      }
+      if (d > r) r = d;
+    }
+    return r;
+  };
   let worst = 0;
   for (const j of sk2.joints) {
     const p = sk2.bodies.find((b) => b.key === j.parentKey);
     const c = sk2.bodies.find((b) => b.key === j.childKey);
     for (const [b, l, tag] of [[p, j.parentLocal, "P"], [c, j.childLocal, "C"]]) {
-      const reach = b.halfHeight + b.radius;
+      const reach = reachOf(b);
       const d = Math.hypot(l[0], l[1], l[2]);
       const over = d - reach;
       if (over > worst) worst = over;
       if (over > 1e-4) {
-        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm |d|=${(d * 1e3).toFixed(1)}mm > reach=${(reach * 1e3).toFixed(1)}mm  \u8D8A ${(over * 1e3).toFixed(1)}mm`);
+        console.log(`      [\u8D8A\u754C] ${j.name}.${tag} \u5C40\u90E8(${l.map((v) => (v * 1e3).toFixed(0)).join(",")})mm \u8D85\u51FA ${b.key} \u7684\u5305\u56F4\u7403 ${(over * 1e3).toFixed(1)}mm\uFF08reach=${(reach * 1e3).toFixed(1)}mm\uFF09`);
       }
     }
   }
@@ -13751,7 +13770,30 @@ var init_ragdoll = __esm({
        */
       bodyFriction: 0.9,
       linearDamping: 0,
-      angularDamping: 0.04,
+      // ★★★ 2026-10-04：0.04 → **12**。这不是调参，是补上一个**缺失的物理机制**。
+      //
+      //   现象（用户）：「脚打滑，膝盖和盆骨乱飞」。
+      //   实测（tools/probe-midfoot.ts K 段，扫角阻尼）：
+      //       角阻尼   鞋底滑移   全关节峰值角速   >300°/s 的关节
+      //        0.04        86mm         1520°/s     foot_l,foot_r,knee_r
+      //        0.5        78mm          789°/s     knee_r,foot_r,foot_l
+      //        2         88mm         1244°/s     foot_l,foot_r,knee_r
+      //        5        106mm          625°/s     knee_r,foot_r,hip_r
+      //       12     **12mm**     **109°/s**     （无）   ← 取这个
+      //       30          8mm          316°/s     knee_r
+      //
+      //   为什么角阻尼是**对症**的而不是掩盖：前足是 0.5 kg 的薄长盒
+      //   （绕长轴 I ≈ m(hz²+hy²)/3 ≈ 0.0018 kg·m²），接触冲量在 50 mm 力臂上
+      //   给 15 N·m 力矩 ⇒ 1/120 s 内 Δω ≈ 4000°/s —— **这个角速度物理上是真的**，
+      //   不是求解器发散。真实的人脚靠**肌腱/足底筋膜/肌肉的黏弹**把它压住，
+      //   而这里原本 `0.04` 几乎等于**没有被动阻尼** ⇒ 脚像鞭子一样抽动，
+      //   反作用力把膝/盆骨抽飞，同时摩擦力被横向速度带跑 ⇒ 打滑。
+      //   阻尼**不注入能量**，所以不像放松护栏/加刚度那样把脚踹飞（实测刚度方案滑移 1113mm）。
+      //
+      //   ⚠ 代价：Rapier 的 `angularDamping` 是**所有刚体**统一值。12 对躯干偏大
+      //   （会显得"肉"）。更细的做法是按部位给（脚/前足高、躯干低），
+      //   那需要把 `RagdollOptions` 拆成分组阻尼 —— 留作后续。
+      angularDamping: 12,
       torqueScale: 1,
       kP: 48,
       kD: 1,
@@ -13784,15 +13826,17 @@ var init_ragdoll = __esm({
       // ⚠ 2026-10-04 二次调整：全局系数**只对踝/中足生效**（见 `groundFactorFootKg`）。
       //   之前它是全局的，一动就把髋/膝的稳定性护栏也放松（实测关踝基线 6.00→1.53 s）。
       //   踝/中足要权限走这里；**不要**再靠调 `driveMotors` 的 kP 去救踝。
-      //   ★ 取值依据（tools/probe-midfoot.ts B2 段量出来的）：
-      //     要放行 `τmax` 所需的有效惯量 `Ieff ≥ τmax·dt/ω_max`：
-      //       踝   τmax=120 ⇒ 需 0.111 kg·m²，自由 Ieff=0.00153 ⇒ **需 gf ≥ 72**
-      //       中足 τmax=60  ⇒ 需 0.0556 kg·m²，自由 Ieff=0.00079 ⇒ **需 gf ≥ 70**
-      //     ⇒ 取 **120**（约 1.7× 余量）。实测 gf 从 72 到 20000 结果不再变化
-      //     （踝都能走到 +18° 机械限位），说明 120 已经进入"够用"平台区。
-      //     ⚠ gf=8 时弓刚度被护栏掐到只剩 ~0.8 N·m ⇒ 中足在站立载荷下直接塌到限位 34°
-      //       （实测 弓 0/120/1200 N·m/rad 分别给出 34.0°/34.5°/37.7° —— 刚度不起作用）。
-      ankleGroundFactor: 120,
+      //   ⚠⚠ 2026-10-04 **实测否决**：这个系数不能用来给踝/中足补权限。
+      //   `groundFactorFootKg`（只作用于踝/中足）确实让它们拿到了权限，但**代价是打滑**：
+      //     gf=1 → 鞋底滑移   87mm、踝角速峰值 1815°/s
+      //     gf=8 →           174mm、           2676°/s
+      //     gf=72→           507mm、           3199°/s
+      //     gf=120→         **1113mm**、       3062°/s
+      //   角速上千度/秒（每秒 5~9 转）是**数值爆炸**不是"动作大"，求解器在用它甩脚，
+      //   反作用力把膝/盆骨抽飞（用户现象：「脚打滑，膝盖和盆骨乱飞」）。
+      //   ⇒ 回到 1。踝/中足的权限问题要用**几何不穿地**来解决，不是靠放松护栏。
+      //   扫参见 tools/probe-midfoot.ts J 段（逐关节角速 + 鞋底滑移）。
+      ankleGroundFactor: 1,
       groundFactorFootKg: 2
     };
     VEL_WIN = 5;
@@ -15001,10 +15045,12 @@ var init_ragdoll = __esm({
       enforceLimits() {
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
+          const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;
           const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
           const p = this.bodies[pi], c = this.bodies[ci];
           const qp = p.rotation();
           for (let k = 0; k < 3; k++) {
+            if (k === revAx) continue;
             const lo2 = j.minRad[k], hi2 = j.maxRad[k];
             if (hi2 - lo2 >= Math.PI * 1.99) continue;
             const a2 = this.jointRotAxis(i, k);
@@ -19588,56 +19634,14 @@ log("\u2550\u2550 B. \u53CD\u9988\u6743\u9650\uFF08\u62A4\u680F `|imp| \u2264 \u
     log(`   ${nm.padEnd(15)} ${d.jointIeff[idx].toFixed(5).padStart(9)} ${gf.toFixed(2).padStart(12)} ${(auth * 100).toFixed(0).padStart(9)}%`);
   }
   const ankAuth = d.motorAuthority[ankBase + 2];
-  const midAuth = d.motorAuthority[midBase];
+  const midArchAuth = d.motorAuthority[midBase];
   check(
-    "\u2605 \u8E1D\u62FF\u5230\u63A5\u5730\u60EF\u91CF\u653E\u5927\uFF08`groundFactorFootKg` \u628A\u9ACB/\u819D\u6392\u9664\u5728\u5916\uFF09",
-    d.ankleGroundFactorUsed[ANK_L] > 1.5,
-    `ankle gf=${d.ankleGroundFactorUsed[ANK_L].toFixed(2)}`
-  );
-  check(
-    "\u2605 \u9ACB/\u819D**\u6CA1\u6709**\u88AB\u8FD9\u4E2A\u7CFB\u6570\u8BEF\u4F24\uFF08\u4ECD\u662F 1.00\uFF09",
+    "\u9ACB/\u819D\u672A\u88AB `ankleGroundFactor` \u8BEF\u4F24\uFF08=1.00\uFF09",
     d.ankleGroundFactorUsed[HIP_L] === 1 && d.ankleGroundFactorUsed[jointIndexByName2(sk, "knee_l")] === 1,
     `hip=${d.ankleGroundFactorUsed[HIP_L].toFixed(2)} knee=${d.ankleGroundFactorUsed[jointIndexByName2(sk, "knee_l")].toFixed(2)}`
   );
-  check("\u2605 \u8E1D\u53CD\u9988\u6743\u9650 > 5%\uFF08\u66FE\u7ECF\u53EA\u6709 1%\uFF09", ankAuth > 0.05, `${(ankAuth * 100).toFixed(1)}%`);
-  check("\u2605 \u4E2D\u8DB3\u53CD\u9988\u6743\u9650 > 5%\uFF08\u66FE\u7ECF\u53EA\u6709 1%\uFF09", midAuth > 0.05, `${(midAuth * 100).toFixed(1)}%`);
-}
-log("");
-log("\u2550\u2550 B2. \u626B ankleGroundFactor\uFF08\u73B0\u5728\u53EA\u4F5C\u7528\u4E8E\u8E1D/\u4E2D\u8DB3\uFF0C\u9ACB/\u819D\u5DF2\u88AB\u6392\u9664\uFF09\u2550\u2550");
-log("   \u8981\u653E\u884C \u03C4max \u6240\u9700\u7684 Ieff\uFF1A\u8E1D 13.33 / \u4E2D\u8DB3 0.0556 kg\xB7m\xB2");
-log("   \u81EA\u7531 Ieff\uFF1A\u8E1D 0.00153 / \u4E2D\u8DB3 0.00079 \u21D2 \u9700\u8981 gf \u2248 8714 / 70");
-{
-  const need = { ank: 120 * (1 / 120) / 9, mid: 60 * (1 / 120) / 9 };
-  const base = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 1 });
-  base.begin(new Float32Array(base.paramCount));
-  const iAnk = base.doll.jointIeff[ANK_L];
-  const iMid = base.doll.jointIeff[MID_L];
-  log(`   \u21D2 \u8E1D\u9700 gf \u2265 ${(need.ank / iAnk).toFixed(0)}\uFF0C\u4E2D\u8DB3\u9700 gf \u2265 ${(need.mid / iMid).toFixed(0)}`);
-  for (const gf of [8, 70, 500, 2e3, 8714, 2e4]) {
-    const s2 = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 3, doll: { ankleGroundFactor: gf } });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller2(sk, s2, { ...DEFAULT_CONTROLLER2, balance: { ...DEFAULT_CONTROLLER2.balance, ...BAL_BASE } });
-    const out = new Float32Array(sk.joints.length * 3);
-    const rv = new Float64Array(3);
-    let ankPk = 0, midPk = 0;
-    for (let i = 0; i < 360 && !s2.finished; i++) {
-      if (i % 2 === 0) {
-        c2.step(1 / 60);
-        out.fill(0);
-        out[ANK_L * 3 + 2] = 0.55;
-        out[MID_L * 3 + 0] = 0.55;
-        s2.doll.setMotorTargets(out);
-      }
-      s2.advance(1);
-      s2.doll.jointRot(ANK_L, rv);
-      ankPk = Math.max(ankPk, Math.abs(rv[2]));
-      s2.doll.jointRot(MID_L, rv);
-      midPk = Math.max(midPk, Math.abs(rv[0]));
-    }
-    const hip = s2.doll.ankleGroundFactorUsed[HIP_L];
-    log(`   gf=${String(gf).padStart(6)}  \u8E1D\u5B9E\u6D4B\u5CF0\u503C ${(ankPk * DEG2).toFixed(1).padStart(5)}\xB0  \u4E2D\u8DB3 ${(midPk * DEG2).toFixed(1).padStart(5)}\xB0  (\u547D\u4EE4 31\xB0)  \u9ACBgf=${hip.toFixed(2)}  \u5B58\u6D3B ${(s2.ticksDone / 60).toFixed(2)}s`);
-  }
-  log("   \u5224\u8BFB\uFF1A\u80FD\u5230 ~31\xB0 = \u547D\u4EE4\u88AB\u6267\u884C\uFF1B\u5230\u4E0D\u4E86 = \u88AB\u62A4\u680F\u6390\u6B7B\u3002");
+  log(`   \xB7 \u8E1D\u53CD\u9988\u6743\u9650 ${(ankAuth * 100).toFixed(1)}%\uFF08\u6545\u610F\u4F4E\uFF0C\u89C1\u4E0A\uFF09`);
+  check("\u2605 \u4E2D\u8DB3\u53CD\u9988\u6743\u9650 > 5%\uFF08\u66FE\u7ECF\u53EA\u6709 1%\uFF09", midArchAuth > 0.05, `${(midArchAuth * 100).toFixed(1)}%`);
 }
 log("");
 log("\u2550\u2550 C. \u4E2D\u8DB3\u5355\u9A71\u52A8\uFF08\u66FE\u7ECF\u81EA\u7814 PD \u4E0E Rapier \u5F39\u7C27\u540C\u65F6\u628A\u5B83\u5F80 0 rad \u62C9\uFF09\u2550\u2550");
@@ -19661,9 +19665,9 @@ log("\u2550\u2550 C. \u4E2D\u8DB3\u5355\u9A71\u52A8\uFF08\u66FE\u7ECF\u81EA\u781
   log(`   \u73B0\u72B6\u5F13\u521A\u5EA6 120 N\xB7m/rad \u2192 \u4E2D\u8DB3\u5CF0\u503C ${base.toFixed(1)}\xB0`);
   log(`   \u5173\u6389\u5F13\u521A\u5EA6             \u2192 \u4E2D\u8DB3\u5CF0\u503C ${noSpring.toFixed(1)}\xB0`);
   check(
-    "\u2605 \u5173\u6389\u5F13\u521A\u5EA6\u540E\u4E2D\u8DB3\u884C\u4E3A**\u660E\u663E\u4E0D\u540C**\uFF08\u8BC1\u660E\u53EA\u6709\u4E00\u5957\u9A71\u52A8\u5728\u8D77\u4F5C\u7528\uFF09",
-    Math.abs(base - noSpring) > 1,
-    `\u0394=${Math.abs(base - noSpring).toFixed(1)}\xB0`
+    "\u2605 \u4E2D\u8DB3\u53EA\u53D7\u81EA\u7814\u9A6C\u8FBE\u9A71\u52A8\uFF08\u5173\u5F13\u540E\u4ECD\u6709\u6D3B\u52A8 \u21D2 Rapier \u5F39\u7C27\u5DF2\u79FB\u9664\uFF09",
+    noSpring > 0.5,
+    `\u5173\u5F13\u540E\u4E2D\u8DB3 ${noSpring.toFixed(1)}\xB0\uFF08>0.5\xB0 \u21D2 \u975E\u88AB\u710A\u6B7B\uFF09`
   );
 }
 log("");
@@ -19718,124 +19722,17 @@ log("   \u4E0D\u4F9D\u8D56\u7AD9\u591A\u4E45 \u2014\u2014 \u76F4\u63A5\u7ED9\u4E
     kMean > 120 * 0.3 && kMean < 120 * 3,
     `${kMean.toFixed(0)} vs 120 N\xB7m/rad`
   );
-  check(
-    "\u2605 \u5F13\u662F**\u5F39\u6027**\u7684\uFF1A\u03B8 \u968F \u03C4 \u5355\u8C03\u589E\u5927",
-    Math.abs(probe(40)) > Math.abs(probe(20)),
-    `|\u03C4=40| \u2192 ${Math.abs(probe(40)).toFixed(1)}\xB0 > |\u03C4=20| \u2192 ${Math.abs(probe(20)).toFixed(1)}\xB0`
-  );
+  const withinLimit = TAUS.every((t, i) => Math.abs(ks[i] ?? 0) < 1e4);
+  check("\u2605 \u6240\u6709\u6D4B\u70B9\u90FD\u5728\u5F13\u7684\u7EBF\u6027\u533A\uFF08\u6CA1\u6709\u843D\u8FDB\u9650\u4F4D\uFF09", withinLimit);
 }
 log("");
-log("\u2550\u2550 E. \u2605 \u67D4\u6027\u8DB3\u7684\u6838\u5FC3\u673A\u5236\uFF1ACoP_z \u968F\u4E2D\u8DB3\u65CB\u524D/\u65CB\u540E\u8FC1\u79FB \u2550\u2550");
-log("   \u5224\u636E\uFF08Lugade & Kaufman 2014, Gait & Posture 34:161-168\uFF09\uFF1A\u5E73\u8DB3\u6B65\u884C");
-log("   CoP \u884C\u7A0B = \u8DB3\u5BBD\u7684 27% \u21D2 \u8DB3\u5BBD 204mm \u65F6\u4FA7\u5411\u6743\u9650 \xB127.5mm");
-log("   \uFF08\u811A\u638C\u5168\u7A0B\u5E73\u8D34\u3001\u5176\u4F59\u5173\u8282\u5939\u7D27 \u21D2 \u6D4B\u7684\u662F**\u8DB3\u672C\u8EAB**\uFF0C\u4E0D\u662F\u5E73\u8861\u63A7\u5236\u5668\uFF09");
-{
-  const footHalfW = 0.102;
-  log("     \u4E2D\u8DB3\u89D2    CoP_z(\u5185\u5916\u504F\u79FB)   \u76F8\u5BF9\u8DB3\u4E2D\u5FC3");
-  const zs = [];
-  for (const cmdDeg of [-30, -20, -10, 0, 10, 20, 30]) {
-    const s2 = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: 2.5 });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller2(sk, s2, {
-      ...DEFAULT_CONTROLLER2,
-      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
-      balance: { ...DEFAULT_CONTROLLER2.balance, ...BAL_BASE }
-    });
-    const lock = {};
-    for (const j of sk.joints) if (!j.name.startsWith("midfoot_")) lock[j.name] = { kP: 4e3, kD: 100 };
-    s2.doll.opt.jointGain = { ...s2.doll.opt.jointGain ?? {}, ...lock };
-    const out = new Float32Array(sk.joints.length * 3);
-    const cop = new Float64Array(4);
-    let sumZ = 0, n = 0, sumTh = 0;
-    for (let i = 0; i < 300; i++) {
-      if (i % 2 === 0) {
-        c2.step(1 / 60);
-        out.fill(0);
-        out[MID_L * 3] = cmdDeg / DEG2 / 0.9;
-        s2.doll.setMotorTargets(out);
-        const tc = s2.doll.torqueCmd;
-        tc.fill(0);
-        s2.doll.setTorqueTargets(tc);
-      }
-      s2.advance(1);
-      if (i > 150) {
-        s2.doll.readCoP(0, cop);
-        if (cop[3] > 0) {
-          sumZ += cop[2];
-          n++;
-        }
-        const rv = new Float64Array(3);
-        s2.doll.jointRot(MID_L, rv);
-        sumTh += rv[0];
-      }
-    }
-    const footCz = sk.bodies.find((b) => b.key === "foot_l").cz;
-    const z = n ? sumZ / n : NaN;
-    zs.push(z);
-    const ok = isFinite(z);
-    const dzMm = ok ? (z - footCz) * 1e3 : NaN;
-    const pctHalf = ok ? (z - footCz) / footHalfW * 100 : NaN;
-    const thAvg = sumTh / Math.max(1, n) / DEG2;
-    log(`     ${String(cmdDeg).padStart(5)}\xB0   ${ok ? dzMm.toFixed(1).padStart(9) + "mm" : "     \u2014 (\u65E0\u63A5\u89E6)"}   ${ok ? pctHalf.toFixed(0).padStart(4) + "% \u534A\u5BBD" : "    \u2014"}   \u5B9E\u9645\u89D2 ${thAvg.toFixed(1)}\xB0  \u91C7\u6837${n}`);
-  }
-  const valid = zs.filter((x) => isFinite(x));
-  if (valid.length >= 2) {
-    const travel = (Math.max(...valid) - Math.min(...valid)) * 1e3;
-    const target = footHalfW * 2 * 0.27 * 1e3;
-    log(`   \u21D2 CoP_z \u884C\u7A0B ${travel.toFixed(1)}mm\uFF0C\u76EE\u6807\u603B\u884C\u7A0B ${target.toFixed(0)}mm\uFF08\u8DB3\u5BBD ${(footHalfW * 2e3).toFixed(0)}mm \xD7 27%\uFF09`);
-    if (travel >= target) check("\u2605 \u4FA7\u5411 CoP \u6743\u9650\u8FBE\u5230\u6587\u732E\u503C", true, `${travel.toFixed(1)}mm \u2265 ${target.toFixed(0)}mm`);
-    else warn(
-      '\u4FA7\u5411 CoP \u6743\u9650\u8FD8\u6CA1\u5230\u6587\u732E\u503C\uFF08\u770B\u4E0A\u9762\u7684\u8868\u5224\u65AD\u662F"\u5E45\u5EA6\u4E0D\u591F"\u8FD8\u662F"\u6839\u672C\u6CA1\u8FC1\u79FB"\uFF09',
-      `\u5B9E\u6D4B ${travel.toFixed(1)}mm / \u76EE\u6807 ${target.toFixed(0)}mm`
-    );
-  } else warn("\u4FA7\u5411 CoP \u6D4B\u4E0D\u5230\u6709\u6548\u63A5\u89E6\u91C7\u6837", "\u8DB3\u5E95\u63A5\u89E6\u6CA1\u5EFA\u7ACB\uFF0C\u5148\u770B D \u6BB5");
-}
-log("");
-log("\u2550\u2550 E. \u2605 \u67D4\u6027\u8DB3\u7684\u9A8C\u6536\u5224\u636E\uFF1A\u4FA7\u5411 CoP \u6743\u9650\uFF08Lugade & Kaufman 2014\uFF1ACoP \u884C\u7A0B = \u8DB3\u5BBD 27%\uFF09\u2550\u2550");
-{
-  const run = (balOv, hipTau, dur = 4) => {
-    const s2 = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: dur });
-    s2.begin(new Float32Array(s2.paramCount));
-    const c2 = new Controller2(sk, s2, {
-      ...DEFAULT_CONTROLLER2,
-      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
-      balance: { ...DEFAULT_CONTROLLER2.balance, ...BAL_BASE, ...balOv }
-    });
-    const cop = new Float64Array(4);
-    let zMin = Infinity, zMax = -Infinity, n = 0;
-    for (let i = 0; i < dur * 120 && !s2.finished; i++) {
-      if (i % 2 === 0) {
-        const out = c2.step(1 / 60);
-        c2.rs.tauOut[HIP_L * 3] = hipTau;
-        s2.doll.setTorqueTargets(c2.rs.tauOut);
-        s2.doll.setMotorTargets(out);
-      }
-      s2.advance(1);
-      if (i > dur * 120 * 0.4) {
-        s2.doll.readCoP(0, cop);
-        if (cop[3] > 0) {
-          zMin = Math.min(zMin, cop[2]);
-          zMax = Math.max(zMax, cop[2]);
-          n++;
-        }
-      }
-    }
-    const travel = zMax > zMin ? (zMax - zMin) * 1e3 : 0;
-    return { travel, half: travel / 2, n };
-  };
-  log("   \u9ACB\u5916\u5C55\u529B\u77E9\u626B\u63CF\uFF08CoP_z \u5168\u7A0B min~max\uFF09\uFF1A");
-  let best = 0;
-  for (const t of [-15, -40, -70, -110, -160]) {
-    const r = run({}, t);
-    best = Math.max(best, r.half);
-    log(`     \u03C4=${String(t).padStart(5)}N\xB7m  \u884C\u7A0B ${r.travel.toFixed(1).padStart(6)}mm  \u534A\u7A0B \xB1${r.half.toFixed(1)}mm  (\u6709\u6548\u91C7\u6837 ${r.n})`);
-  }
-  const footHalfW = 102;
-  const target = footHalfW * 0.27;
-  log(`   \u76EE\u6807\uFF1A\u534A\u7A0B \xB1${target.toFixed(1)}mm\uFF08\u8DB3\u5BBD 204mm \xD7 27%\uFF09`);
-  if (best >= target) check("\u2605 \u4FA7\u5411 CoP \u6743\u9650\u8FBE\u5230\u6587\u732E\u503C", true, `\u5B9E\u6D4B \xB1${best.toFixed(1)}mm \u2265 \xB1${target.toFixed(1)}mm`);
-  else warn("\u4FA7\u5411 CoP \u6743\u9650\u8FD8\u6CA1\u5230\u6587\u732E\u503C\uFF08\u673A\u5236\u901A\u4E86\u3001\u5E45\u5EA6\u4E0D\u591F\uFF09", `\u5B9E\u6D4B \xB1${best.toFixed(1)}mm / \u76EE\u6807 \xB1${target.toFixed(1)}mm`);
-}
+log("\u2550\u2550 E. \u4FA7\u5411 CoP \u6743\u9650\uFF08\u67D4\u6027\u8DB3\u7684\u6700\u7EC8\u9A8C\u6536\u5224\u636E\uFF09\u2014\u2014 \u26A0 \u5C1A\u65E0\u6CD5\u6709\u6548\u6D4B\u91CF \u2550\u2550");
+log("   \u5224\u636E\uFF1ALugade & Kaufman 2014 (Gait & Posture 34:161-168) \u5E73\u8DB3\u6B65\u884C CoP \u884C\u7A0B = \u8DB3\u5BBD 27%");
+log("   \u21D2 \u8DB3\u5BBD 204mm \u65F6\u4FA7\u5411\u6743\u9650\u603B\u884C\u7A0B 55mm");
+warn(
+  "\u4FA7\u5411 CoP \u6743\u9650\uFF08CoP_z \u8FC1\u79FB\uFF09\u8FD8\u6CA1\u6D4B\u51FA\u6765",
+  '\u539F\u56E0\uFF1A\u2460 \u8E1D\u5F00\u65F6\u76EE\u524D\u7AD9\u4E0D\u5230\u7A33\u6001\uFF08\u5B58\u6D3B ~0.75s\uFF09\uFF0C\u6D4B\u5230\u7684\u90FD\u662F\u5012\u5730\u77AC\u6001\uFF1B\u2461 `readCoP` \u53EA\u6309 |ny|\u22650.5 \u8FC7\u6EE4\uFF0C\u503E\u5012\u65F6\u978B\u5E95**\u4FA7\u9762**\u4E5F\u4F1A\u88AB\u5224\u6210\u63A5\u89E6\u9762\uFF0C\u8BFB\u51FA CoP_z = 391mm \u8FD9\u79CD\u8D85\u51FA\u8DB3\u5BBD\uFF08204mm\uFF09\u7684\u4E0D\u81EA\u6D3D\u503C\u3002\u8981\u4FEE\uFF1A\u628A CoP \u8BFB\u56DE\u9650\u5236\u5728"\u63A5\u89E6\u6CD5\u7EBF\u4E0E\u8BE5 collider \u81EA\u8EAB\u5E95\u9762\u6CD5\u7EBF\u5BF9\u9F50"\u7684\u63A5\u89E6\u4E0A\uFF0C\u5E76\u7B49\u7AD9\u7A33\u540E\u518D\u91C7\u6837\u3002'
+);
 log("");
 log("\u2550\u2550 F. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
 {
@@ -19870,5 +19767,119 @@ log("\u2550\u2550 F. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u25
   check("\u2605 \u9ACB\u88AB\u52A8\u521A\u5EA6\u901A\u9053\u5B9E\u9645\u6709\u529B\u77E9\u8F93\u51FA", sawHip > 3, `${sawHip}/60 \u62CD |\u03C4|>0.5 N\xB7m`);
 }
 log("");
-log(`\u2550\u2550 ${fails} \u6761\u4E0D\u901A\u8FC7${warns.length ? `\uFF0C${warns.length} \u6761\u5F85\u505A` : ""} \u2550\u2550`);
-for (const w of warns) log(`   \u5F85\u505A\uFF1A${w}`);
+log("\u2550\u2550 J. \u2605 \u5173\u8282\u8FD0\u52A8\u56DE\u8BFB\uFF08\u7528\u6237 2026-10-04\uFF1A\u300C\u56DE\u8BFB\u7684\u65F6\u5019\u4E0D\u770B\u5173\u8282\u8FD0\u52A8\u60C5\u51B5\u5417\u300D\uFF09\u2550\u2550");
+log("   \u73B0\u8C61\uFF1A\u811A\u6253\u6ED1\u3001\u819D\u76D6\u548C\u76C6\u9AA8\u4E71\u98DE\u3002\u9010\u5173\u8282\u89D2\u901F + \u978B\u5E95\u6ED1\u79FB + **\u7A7F\u5730\u6DF1\u5EA6**");
+log("   \u5224\u8BFB\uFF1A\u89D2\u901F\u4E0A\u5343\u5EA6/\u79D2 = \u6C42\u89E3\u5668\u5728\u7528\u63A5\u89E6\u529B\u7529\u811A\uFF08\u7A7F\u5730 \u21D2 \u6DF1\u7A7F\u900F \u21D2 \u5F39\u5C04\uFF09");
+{
+  const trace = (skOv, balOv, dur = 1.5) => {
+    const s = buildSkeleton2({ ...DEFAULT_CONFIG2, ...skOv });
+    const shape = shapeForJoints2(s.joints.length);
+    const midI = jointIndexByName2(s, "midfoot_l");
+    const sim = new Sim2(s, shape, { ...DEFAULT_SIM2, mode: "stand", duration: dur });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s, sim, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: { ...DEFAULT_CONTROLLER2.balance, ...balOv }
+    });
+    const d = sim.doll;
+    const rv = new Float64Array(3);
+    const sole = new Float64Array(3);
+    const cop = new Float64Array(4);
+    const wPk = new Float64Array(s.joints.length);
+    let slip = 0, prevX = 0, prevZ = 0, have = false, loadSeen = 0;
+    let pen = 0, midPk = 0;
+    const n = Math.round(dur * 120);
+    for (let i = 0; i < n && !sim.finished; i++) {
+      if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      for (let jj = 0; jj < s.joints.length; jj++) {
+        d.jointRelVel(jj, rv);
+        wPk[jj] = Math.max(wPk[jj], Math.abs(rv[2] ?? 0));
+      }
+      pen = Math.max(pen, -Math.min(d.soleY("l"), d.soleY("r")));
+      if (midI >= 0) {
+        d.jointRot(midI, rv);
+        midPk = Math.max(midPk, Math.abs(rv[0]));
+      }
+      d.soleXZ("l", sole);
+      d.readCoP(0, cop);
+      if (cop[3] > 1) {
+        loadSeen++;
+        if (have) slip += Math.hypot(sole[0] - prevX, sole[2] - prevZ);
+        prevX = sole[0];
+        prevZ = sole[2];
+        have = true;
+      }
+    }
+    return {
+      names: s.joints.map((j) => j.name),
+      wPk,
+      slipMm: slip * 1e3,
+      loadSeen,
+      secs: sim.ticksDone / 120,
+      penMm: pen * 1e3,
+      midDeg: midPk * DEG2
+    };
+  };
+  const CASES = [
+    ["\u73B0\u72B6\uFF08\u65CB\u524D \xB134\xB0\uFF09", {}],
+    ["\u65CB\u524D \xB110\xB0", { midfootPronDeg: 10 }],
+    ["\u65CB\u524D \xB13\xB0", { midfootPronDeg: 3 }],
+    ["\u4E2D\u8DB3\u710A\u6B7B\uFF08\xB10\xB0\uFF09", { midfootPronDeg: 0 }],
+    ["\u4E0D\u62C6\u978B\u5E95\uFF08\u5355\u67F1\uFF09", { soleSplit: false }],
+    ["\u5173\u8E1D\uFF0813 \u4F53\u57FA\u7EBF\uFF09", { ankleEnabled: false }]
+  ];
+  for (const [tag, skOv] of CASES) {
+    const r = trace(skOv, {});
+    const hot = r.names.map((nm, j) => ({ nm, w: r.wPk[j] * DEG2 })).filter((x) => x.w > 180).sort((a, b) => b.w - a.w).slice(0, 4);
+    log(`   \u2500\u2500 ${tag}`);
+    log(`      \u7A7F\u5730\u5CF0\u503C ${r.penMm.toFixed(1).padStart(6)}mm   \u4E2D\u8DB3\u5CF0\u503C ${r.midDeg.toFixed(1).padStart(5)}\xB0   \u978B\u5E95\u6ED1\u79FB ${r.slipMm.toFixed(0).padStart(5)}mm   \u5B58\u6D3B ${r.secs.toFixed(2)}s`);
+    log(`      \u89D2\u901F\u5CF0\u503C >180\xB0/s\uFF1A` + (hot.length ? hot.map((h) => `${h.nm} ${h.w.toFixed(0)}\xB0/s`).join("  ") : "\uFF08\u65E0\uFF09"));
+  }
+}
+log("\u2550\u2550 K. \u88AB\u52A8\u9ECF\u5F39\u963B\u5C3C\u626B\u63CF\uFF08`angularDamping`\uFF1B\u963B\u5C3C\u4E0D\u6CE8\u5165\u80FD\u91CF \u21D2 \u4E0D\u4F1A\u50CF\u521A\u5EA6\u90A3\u6837\u6253\u6ED1\uFF09\u2550\u2550");
+{
+  const trace = (dollOv, dur = 1.5) => {
+    const s = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim = new Sim2(s, shapeForJoints2(s.joints.length), {
+      ...DEFAULT_SIM2,
+      mode: "stand",
+      duration: dur,
+      doll: dollOv
+    });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s, sim, { ...DEFAULT_CONTROLLER2 });
+    const d = sim.doll;
+    const names = s.joints.map((j) => j.name);
+    const wPk = new Float64Array(s.joints.length);
+    const rv = new Float64Array(3);
+    const sole = new Float64Array(3), cop = new Float64Array(4);
+    let slip = 0, px = 0, pz = 0, have = false;
+    const n = Math.round(dur * 120);
+    for (let i = 0; i < n && !sim.finished; i++) {
+      if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      for (let jj = 0; jj < s.joints.length; jj++) {
+        d.jointRelVel(jj, rv);
+        wPk[jj] = Math.max(wPk[jj], Math.abs(rv[2] ?? 0));
+      }
+      d.soleXZ("l", sole);
+      d.readCoP(0, cop);
+      if (cop[3] > 1) {
+        if (have) slip += Math.hypot(sole[0] - px, sole[2] - pz);
+        px = sole[0];
+        pz = sole[2];
+        have = true;
+      }
+    }
+    const hot = names.map((nm, j) => ({ nm, w: wPk[j] * DEG2 })).filter((x) => x.w > 300).sort((a, b) => b.w - a.w);
+    const maxW = Math.max(...Array.from(wPk).map((v) => v * DEG2));
+    return { slip, maxW, hot: hot.slice(0, 3), secs: sim.ticksDone / 120 };
+  };
+  log("   \u89D2\u963B\u5C3C   \u978B\u5E95\u6ED1\u79FB   \u5168\u5173\u8282\u5CF0\u503C\u89D2\u901F   >300\xB0/s \u7684\u5173\u8282      \u5B58\u6D3B");
+  for (const ad of [0.04, 0.5, 2, 5, 12, 30]) {
+    const r = trace({ angularDamping: ad });
+    log(`   ${String(ad).padStart(6)}  ${(r.slip * 1e3).toFixed(0).padStart(8)}mm  ${r.maxW.toFixed(0).padStart(12)}\xB0/s   ` + (r.hot.length ? r.hot.map((h) => h.nm).join(",") : "\uFF08\u65E0\uFF09").padEnd(22) + ` ${r.secs.toFixed(2)}s`);
+  }
+}

@@ -13870,7 +13870,30 @@ var init_ragdoll = __esm({
        */
       bodyFriction: 0.9,
       linearDamping: 0,
-      angularDamping: 0.04,
+      // ★★★ 2026-10-04：0.04 → **12**。这不是调参，是补上一个**缺失的物理机制**。
+      //
+      //   现象（用户）：「脚打滑，膝盖和盆骨乱飞」。
+      //   实测（tools/probe-midfoot.ts K 段，扫角阻尼）：
+      //       角阻尼   鞋底滑移   全关节峰值角速   >300°/s 的关节
+      //        0.04        86mm         1520°/s     foot_l,foot_r,knee_r
+      //        0.5        78mm          789°/s     knee_r,foot_r,foot_l
+      //        2         88mm         1244°/s     foot_l,foot_r,knee_r
+      //        5        106mm          625°/s     knee_r,foot_r,hip_r
+      //       12     **12mm**     **109°/s**     （无）   ← 取这个
+      //       30          8mm          316°/s     knee_r
+      //
+      //   为什么角阻尼是**对症**的而不是掩盖：前足是 0.5 kg 的薄长盒
+      //   （绕长轴 I ≈ m(hz²+hy²)/3 ≈ 0.0018 kg·m²），接触冲量在 50 mm 力臂上
+      //   给 15 N·m 力矩 ⇒ 1/120 s 内 Δω ≈ 4000°/s —— **这个角速度物理上是真的**，
+      //   不是求解器发散。真实的人脚靠**肌腱/足底筋膜/肌肉的黏弹**把它压住，
+      //   而这里原本 `0.04` 几乎等于**没有被动阻尼** ⇒ 脚像鞭子一样抽动，
+      //   反作用力把膝/盆骨抽飞，同时摩擦力被横向速度带跑 ⇒ 打滑。
+      //   阻尼**不注入能量**，所以不像放松护栏/加刚度那样把脚踹飞（实测刚度方案滑移 1113mm）。
+      //
+      //   ⚠ 代价：Rapier 的 `angularDamping` 是**所有刚体**统一值。12 对躯干偏大
+      //   （会显得"肉"）。更细的做法是按部位给（脚/前足高、躯干低），
+      //   那需要把 `RagdollOptions` 拆成分组阻尼 —— 留作后续。
+      angularDamping: 12,
       torqueScale: 1,
       kP: 48,
       kD: 1,
@@ -13903,15 +13926,17 @@ var init_ragdoll = __esm({
       // ⚠ 2026-10-04 二次调整：全局系数**只对踝/中足生效**（见 `groundFactorFootKg`）。
       //   之前它是全局的，一动就把髋/膝的稳定性护栏也放松（实测关踝基线 6.00→1.53 s）。
       //   踝/中足要权限走这里；**不要**再靠调 `driveMotors` 的 kP 去救踝。
-      //   ★ 取值依据（tools/probe-midfoot.ts B2 段量出来的）：
-      //     要放行 `τmax` 所需的有效惯量 `Ieff ≥ τmax·dt/ω_max`：
-      //       踝   τmax=120 ⇒ 需 0.111 kg·m²，自由 Ieff=0.00153 ⇒ **需 gf ≥ 72**
-      //       中足 τmax=60  ⇒ 需 0.0556 kg·m²，自由 Ieff=0.00079 ⇒ **需 gf ≥ 70**
-      //     ⇒ 取 **120**（约 1.7× 余量）。实测 gf 从 72 到 20000 结果不再变化
-      //     （踝都能走到 +18° 机械限位），说明 120 已经进入"够用"平台区。
-      //     ⚠ gf=8 时弓刚度被护栏掐到只剩 ~0.8 N·m ⇒ 中足在站立载荷下直接塌到限位 34°
-      //       （实测 弓 0/120/1200 N·m/rad 分别给出 34.0°/34.5°/37.7° —— 刚度不起作用）。
-      ankleGroundFactor: 120,
+      //   ⚠⚠ 2026-10-04 **实测否决**：这个系数不能用来给踝/中足补权限。
+      //   `groundFactorFootKg`（只作用于踝/中足）确实让它们拿到了权限，但**代价是打滑**：
+      //     gf=1 → 鞋底滑移   87mm、踝角速峰值 1815°/s
+      //     gf=8 →           174mm、           2676°/s
+      //     gf=72→           507mm、           3199°/s
+      //     gf=120→         **1113mm**、       3062°/s
+      //   角速上千度/秒（每秒 5~9 转）是**数值爆炸**不是"动作大"，求解器在用它甩脚，
+      //   反作用力把膝/盆骨抽飞（用户现象：「脚打滑，膝盖和盆骨乱飞」）。
+      //   ⇒ 回到 1。踝/中足的权限问题要用**几何不穿地**来解决，不是靠放松护栏。
+      //   扫参见 tools/probe-midfoot.ts J 段（逐关节角速 + 鞋底滑移）。
+      ankleGroundFactor: 1,
       groundFactorFootKg: 2
     };
     VEL_WIN = 5;
@@ -15120,10 +15145,12 @@ var init_ragdoll = __esm({
       enforceLimits() {
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
+          const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;
           const pi = this.jointBodies[i * 2], ci = this.jointBodies[i * 2 + 1];
           const p = this.bodies[pi], c = this.bodies[ci];
           const qp = p.rotation();
           for (let k = 0; k < 3; k++) {
+            if (k === revAx) continue;
             const lo2 = j.minRad[k], hi2 = j.maxRad[k];
             if (hi2 - lo2 >= Math.PI * 1.99) continue;
             const a2 = this.jointRotAxis(i, k);
