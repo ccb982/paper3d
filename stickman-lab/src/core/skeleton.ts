@@ -325,6 +325,13 @@ export interface SkeletonConfig {
   archLimitDeg: readonly [number, number];
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 */
   archAtFrac: number;
+  /**
+   * ★ 鞋底分块之间的记缝（米，每块两侧各收一半）。
+   *   用途：避免**相邻共面 cuboid 边缘相接**产生重合接触点（接触层抖动的
+   *   主要来源）。详见 `blk()` 里的注释。
+   *   不选“合并块”是因为分块载荷是脚发力不均匀的唯一测量来源。
+   */
+  soleBlockGap?: number;
   /** ★ 踝（跖屈肌）力矩上限 N·m —— **A 方案的核心参数**。
    *   文献：人类跖屈肌 MVC ~120~140 N·m；Neptune/Perry, Front Neurol 2019, 10:999
    *   —— 跖屈肌是 CoM 推进的**主引擎**，效率是髋肌的 4 倍。
@@ -447,6 +454,11 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   archLimitDeg: [-4, 16],
   /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
   archAtFrac: 0.22,
+  // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
+  //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
+  //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
+  //   开关保留着，等找到真正的接触层解法后再调。
+  soleBlockGap: 0,
   // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
   //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
   ankleLimitDeg: [-12, 18],
@@ -1401,7 +1413,19 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
               // ★ 半轴 = **长度的一半**。`fx∈[-1,1] ↔ x∈[-L,+L]`，
               //   所以长度 = `(f1−f0)·L`，半长 `hx` 要再除以 2
               //   （漏掉 /2 会让足长变 336mm、最宽 200mm —— 实测踩到）
-              const hxm = ((fx1 - fx0) * L) / 2, hzm = ((fz1 - fz0) * HW) / 2;
+              // ★★ 块间留缝（解决 60Hz 周期-2 振动）。
+              //   每块在计划视图（XZ 平面）上两边各收 1.5mm。
+              //   原因：相邻块**共面且边缘相接**，在接缝处会生成重合接触点，
+              //   是 Rapier 接触求解器抖动的典型来源。实测：每脚 6 个共面 cuboid
+              //   → 周期恰好 2 个物理帧（60Hz，12~18mm）的竖向振动，且
+              //   **马达全部验零后仍然存在** ⇒ 排除控制轮，定位到接触层。
+              //   ★ 为什么不选“合并块”：分块载荷每块可读出来，那是“脚的
+              //     不均匀发力”的**唯一可测量来源**（弓承重百分比就靠它）。
+              //     合并会把刚拿到的东西丢掉。所以选留缝而不合并。
+              //   缝只收计划视图，不动 y（`hy`/`rise` 不变）⇒ 底面仍在同一高度。
+              const gap = (cfg.soleBlockGap ?? 0) / 2;
+              const hxm = Math.max(1e-4, ((fx1 - fx0) * L) / 2 - gap);
+              const hzm = Math.max(1e-4, ((fz1 - fz0) * HW) / 2 - gap);
               const cxm = ((fx0 + fx1) / 2) * L, czm = ((fz0 + fz1) / 2) * HW;
               const vol = 4 * hxm * hzm * hy;   // = (2hx)(2hz)(2hy)/2
               return {

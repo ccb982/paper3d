@@ -2615,7 +2615,10 @@ soleBlockLabels(side: 0 | 1): string[] {
     return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]!));
   }
 
+  /** 调试用：跳过逐轴限位投影（测探 60Hz 周期-2 振动可否来自它） */
+  skipLimits = false;
   enforceLimits(): void {
+    if (this.skipLimits) return;
     for (let i = 0; i < this.sk.joints.length; i++) {
       const j = this.sk.joints[i];
       // ★★★ 2026-10-04 修：**跳过 revolute 的那根轴** —— 它已经有**引擎级限位**。

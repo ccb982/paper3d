@@ -6621,7 +6621,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const soleBottom = local2[1] - soleHalfThick;
             const blk = (fx0, fx1, fz0, fz1, hyMm, rise, label) => {
               const hy = hyMm / 1e3 * cfg.soleFootScale;
-              const hxm = (fx1 - fx0) * L / 2, hzm = (fz1 - fz0) * HW / 2;
+              const gap = (cfg.soleBlockGap ?? 0) / 2;
+              const hxm = Math.max(1e-4, (fx1 - fx0) * L / 2 - gap);
+              const hzm = Math.max(1e-4, (fz1 - fz0) * HW / 2 - gap);
               const cxm = (fx0 + fx1) / 2 * L, czm = (fz0 + fz1) / 2 * HW;
               const vol = 4 * hxm * hzm * hy;
               return {
@@ -7146,6 +7148,11 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
+      // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
+      //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
+      //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
+      //   开关保留着，等找到真正的接触层解法后再调。
+      soleBlockGap: 0,
       // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
       //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
       ankleLimitDeg: [-12, 18],
@@ -13956,13 +13963,14 @@ var init_ragdoll = __esm({
       //   ⚠ 这两个数只在**护栏改成"只管阻尼项"之后**才有效 —— 修之前
       //   K 从 3 扫到 260 弓角摆幅**恒为 20°**（满限位、结果逐位相同），
       //   因为 `α·|err|·Ieff` 把小惯量的弓的马达限到了 1.3%。
-      // ★★ 这两个默认值**故意给得比"听起来该有的值"小两个数量级** ——
-      //   不是笔误，是数值稳定上限逼出来的。弓绕长轴转、沿自由轴惯量只有
-      //   ≈7e-5 kg·m²，dt=1/120 s ⇒ 合法上限 K<7.3 N·m/rad、B<0.031 N·m·s/rad。
-      //   构造函数里还有一道按实测惯量算的夹紧，这里只是让默认值本身就合法，
-      //   免得读代码的人以为"弓该是 100 那么硬"。
-      archStiffness: 6,
-      archDamping: 0.025,
+      // ★★ 弓的刚度按**真实足弓**取值，不是按弹簧取值。
+      //   足弓是骨骼 + 跖腱膜/弹簧韧带/绞盘机制组成的**刚性桁架**，负荷下只变形 2~3mm：
+      //     负荷弓前力矩 ≈ 686N × 0.02m ≈ 13.7 N·m，只变形 2°(0.035rad) ⇒ K ≈ 400 N·m/rad。
+      //   阻尼取略超临界（临界 = 2√(K·I) ≈ 2√(400×7e-5) ≈ 0.34）⇒ 快速沉降、不过冲。
+      //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
+      //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
+      archStiffness: 400,
+      archDamping: 2,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14100,10 +14108,17 @@ var init_ragdoll = __esm({
       torsoKey;
       /** 关节 i → [父刚体下标, 子刚体下标] */
       jointBodies;
+      /**
+       * ★ 由 **Rapier 引擎电机**（而非自研 PD）驱动的关节下标。
+       *   `driveMotors` 必须跳过它们 —— 否则双驱动，弹性不去动。
+       *   历史：中足曾因“PD 拉向 0 且 Rapier 弹簧也拉向 0”而被锻死，
+       *   外观指标却全部“正常”。
+       */
+      motorDriven = /* @__PURE__ */ new Set();
       /** ★ 最近一次 `driveMotors` 的物理步长 —— 弓增益的数值稳定上限要用它 */
       physicsDt = 0;
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
-      archGainClamp = null;
+      archMotor = null;
       /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
@@ -14209,6 +14224,7 @@ var init_ragdoll = __esm({
           for (let i = 0; i < sk2.joints.length; i++) {
             const j = sk2.joints[i];
             if (!j.name.startsWith("midfoot_") && !j.name.startsWith("arch_")) continue;
+            if (j.name.startsWith("arch_")) continue;
             if (gain[j.name]) continue;
             const ax = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : 0;
             const tmax = Math.max(1e-6, j.maxTorque[ax]);
@@ -14281,27 +14297,6 @@ var init_ragdoll = __esm({
           const ip = bodyI[this.jointBodies[i * 2]];
           const ic = bodyI[this.jointBodies[i * 2 + 1]];
           this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
-        }
-        this.archGainClamp = null;
-        const dt0 = this.physicsDt || 1 / 120;
-        for (let i = 0; i < sk2.joints.length; i++) {
-          const j = sk2.joints[i];
-          if (!j.name.startsWith("arch_") || !j.revoluteAxis) continue;
-          const g = this.opt.jointGain?.[j.name];
-          if (!g) continue;
-          const Iax = this.jointAxisInertia(i, j.revoluteAxis);
-          const kMax = 4 * Iax / (dt0 * dt0);
-          const bMax = 2 * Iax / dt0;
-          const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
-          const tmax = Math.max(1e-6, j.maxTorque[ax]);
-          const kNm = Math.min(g.kP * tmax / JOINT_MAX_SPEED, kMax);
-          const bNm = Math.min(g.kD * tmax / JOINT_MAX_SPEED, bMax);
-          this.archGainClamp = { kNm, bNm, kMax, bMax, requested: {
-            kNm: g.kP * tmax / JOINT_MAX_SPEED,
-            bNm: g.kD * tmax / JOINT_MAX_SPEED
-          } };
-          g.kP = kNm * JOINT_MAX_SPEED / tmax;
-          g.kD = bNm * JOINT_MAX_SPEED / tmax;
         }
         this.motorAuthority.fill(1);
         this.groundFactor.fill(1);
@@ -14436,6 +14431,15 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
+          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+            const mj = joint;
+            mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
+            const K = this.opt.archStiffness ?? 400;
+            const B = this.opt.archDamping ?? 2;
+            mj.configureMotorPosition(0, K, B);
+            this.motorDriven.add(i);
+            this.archMotor = { K, B, joint: i };
+          }
           if (j.revoluteAxis && typeof joint.setLimits === "function") {
             const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
             joint.setLimits(j.minRad[ax], j.maxRad[ax]);
@@ -15192,24 +15196,25 @@ var init_ragdoll = __esm({
       //   它和 `foot_l/r` 一样是脚的一部分，碰地是**正常的支撑**而不是摔倒。
       //   漏登记的后果实测：站立在**第 0 帧**就 `fallReason='crash'`（前足一着地即判摔倒），
       //   中足关节角恒 0°、四块鞋底受力合计只有 64N（体重 687N）—— 整条腿在第一帧就被截断。
-      static NOT_CRASH = /* @__PURE__ */ new Set([
-        "shin_l",
-        "shin_r",
-        "foot_l",
-        "foot_r",
-        "forefoot_l",
-        "forefoot_r",
-        // ★ 柔性足 F1 的前足
-        "arm_l",
-        "arm_r",
-        "hand_l",
-        "hand_r"
-      ]);
+      /**
+       * ★★ 判为"支撑/肢体"而**不算 crash** 的刚体 —— 改成**前缀模式**而不是硬编码名单。
+       *
+       *   为什么必须模式化：这是**第三次**被"改名漏掉"咬到了。名单里原本只有
+       *   `forefoot_*`（柔性足 F1 的前足命名），F2 把中足改名成 `arch_*` 之后
+       *   名单没跟着改 ⇒ **弓合法着地做旋前时 `bodyHitGround()` 立刻返回 true**、
+       *   `lastHitKey='arch_l'` ⇒ 回合被判 `fallReason='crash'`。
+       *   也就是说：**柔性足做得越对，越容易被判摔倒**（用户实测「摔倒会误判」）。
+       *
+       *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
+       */
+      static notCrashKey(key) {
+        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+      }
       bodyHitGround() {
         this.lastHitKey = "";
         for (let i = 0; i < this.bodies.length; i++) {
           const bd = this.sk.bodies[i];
-          if (_Ragdoll.NOT_CRASH.has(bd.key)) continue;
+          if (_Ragdoll.notCrashKey(bd.key)) continue;
           const b = this.bodies[i];
           for (let ci = 0; ci < b.numColliders(); ci++) {
             const col = b.collider(ci);
@@ -15576,6 +15581,7 @@ var init_ragdoll = __esm({
         const relL = this.relL;
         const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
+          if (this.motorDriven.has(i)) continue;
           const j = this.sk.joints[i];
           const pi = this.jointBodies[i * 2];
           const ci = this.jointBodies[i * 2 + 1];
@@ -15777,7 +15783,10 @@ var init_ragdoll = __esm({
         const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
         return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]));
       }
+      /** 调试用：跳过逐轴限位投影（测探 60Hz 周期-2 振动可否来自它） */
+      skipLimits = false;
       enforceLimits() {
+        if (this.skipLimits) return;
         for (let i = 0; i < this.sk.joints.length; i++) {
           const j = this.sk.joints[i];
           const revAx = j.revoluteAxis ? j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2 : -1;

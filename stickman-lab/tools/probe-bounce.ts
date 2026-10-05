@@ -1,4 +1,10 @@
-/** probe-bounce.ts —— 「脚上下弹」的**归因**：弓角 / 足体 / 全身，谁在弹 */
+/**
+ * probe-bounce.ts —— 「脚上下弹」的归因与控制频率敏感性
+ *
+ * 判据（都按后 2/3 采样，跳过落地瞬态）：
+ *   · 自相关主周期 → 频率。**等于控制频率 = 控制环极限环**；等于 1~3Hz = 物理振荡。
+ *   · 帧间最大位移 → 折算成加速度 (2πf)²·x。若≫g（9.8），说明是数值激励而非物理。
+ */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
@@ -19,114 +25,140 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const log = console.log;
-const sk = buildSkeleton(DEFAULT_CONFIG);
-const SHAPE = shapeForJoints(sk.joints.length);
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand' });
-sim.begin(new Float32Array(sim.paramCount));
-const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
-const doll = sim.doll;
-const bi = (k: string) => doll.sk.bodies.findIndex((b) => b.key === k);
-const iFoot = bi('foot_l'), iArch = bi('arch_l'), iShin = bi('shin_l'), iTorso = bi('torso');
-const ja = jointIndexByName(sk, 'arch_l');
+const PHz = DEFAULT_SIM.physicsHz ?? 120;
+const DTms = 1000 / PHz;
 
-const N = 360;   // 3 秒，要够分辨 60Hz 控制环与物理振动（≈0.83s）：再往后角色已摔倒，
-                    //   躺平后位移恒 0，统计出来全是 0.00 会掩盖真正的抖动
-const series = { arch: [] as number[], footY: [] as number[], shinY: [] as number[], torsoY: [] as number[] };
-for (let f = 0; f < N; f++) {
-  sim.motor.set(ctrl.step(1 / (DEFAULT_SIM.controlHz ?? 60)));
-  sim.advance(1);
-  series.arch.push(doll.jointAngle(ja));
-  series.footY.push(doll.bodies[iFoot]!.translation().y);
-  series.shinY.push(doll.bodies[iShin]!.translation().y);
-  series.torsoY.push(doll.bodies[iTorso]!.translation().y);
-}
-// 只统计后半段（跳过落地瞬态）
-const H = 60;   // 跳过落地瞬态
-const stat = (a: number[], scale = 1, unit = '') => {
-  const v = a.slice(H);
-  const mean = v.reduce((x, y) => x + y, 0) / v.length;
-  let sw = 0;
-  for (let i = 1; i < v.length; i++) sw = Math.max(sw, Math.abs(v[i] - v[i - 1]));
-  const sd = Math.sqrt(v.reduce((x, y) => x + (y - mean) ** 2, 0) / v.length);
-  return `均值 ${(mean * scale).toFixed(2)}${unit}  标准差 ${(sd * scale).toFixed(2)}${unit}  帧间最大 ${(sw * scale).toFixed(3)}${unit}`;
-};
-log('\u2550\u2550 \u300c\u811a\u4e0a\u4e0b\u5f39\u300d\u5f52\u56e0 \u2550\u2550   (dt=1/120s, 后 240 帧)');
-log(`   弓角        ${stat(series.arch, 57.3, '\u00b0')}`);
-log(`   足体高 y    ${stat(series.footY, 1000, 'mm')}`);
-log(`   小腿高 y    ${stat(series.shinY, 1000, 'mm')}`);
-log(`   躯干高 y    ${stat(series.torsoY, 1000, 'mm')}`);
-// 弓相对足体的角位移（去掉整体姿态）—— 若这一项远小于弓角，说明弹的是足体不是弓
-const rel = series.arch.map((a, i) => a);
-log('');
-log(`   判读：弓角与足体高度**同相**⇒ 弓在把整个足体顶起来（弓-地反作用）`);
-log(`         弓角幅值 >> 足体幅值 ⇒ 弓在限位间甩，撞限位产生冲击`);
-// ★ 是不是 Rapier 休眠了（刚体全睡 ⇒ 位移恒 0，看不出抖）
-let awake = 0, sleeping = 0;
-for (const b of doll.bodies) { if (b.isSleeping()) sleeping++; else awake++; }
-let vMax = 0;
-for (const b of doll.bodies) {
-  const v = b.linvel();
-  vMax = Math.max(vMax, Math.hypot(v.x, v.y, v.z));
-}
-log(`   足体下标 bi('foot_l')=${bi('foot_l')} iArch=${iArch} iShin=${iShin} iTorso=${iTorso}  bodies=${doll.bodies.length}`);
-log(`   原始序列 footY[0..8]=${series.footY.slice(0, 9).map((v) => (v * 1000).toFixed(2)).join(',')}`);
-log(`   原始序列 torsoY[0..8]=${series.torsoY.slice(0, 9).map((v) => (v * 1000).toFixed(2)).join(',')}`);
-log(`   原始序列 arch[0..8]=${series.arch.slice(0, 9).map((v) => (v * 57.3).toFixed(2)).join(',')}`);
-log(`   刚体 清醒 ${awake} / 休眠 ${sleeping}   最大线速度 ${vMax.toFixed(4)} m/s`);
-log(`   ${awake === 0 ? '⚠ 全部休眠（低事件）：上面的 0.00 意味着没动，不是真稳' : ''}`);
-// 弓角峰值对应的足体最低点
-let aPk = 0, yPk = 0, aAtYmin = 0;
-for (let i = H; i < N; i++) {
-  if (Math.abs(series.arch[i]!) > Math.abs(aPk)) aPk = series.arch[i]!;
-  if (series.footY[i]! < yPk) yPk = series.footY[i]!;
-}
-for (let i = H; i < N; i++) if (series.footY[i]! === yPk) aAtYmin = series.arch[i]!;
-log(`   弓角峰值 ${(aPk * 57.3).toFixed(2)}°  足体最低 ${(yPk * 1000).toFixed(1)}mm  彩降到最低时弓角 = ${(aAtYmin * 57.3).toFixed(2)}°`);
-// 弓角与足体高度的相关（同相：弓在顶足体）
-let cov = 0;
-const ma = series.arch.slice(H), my = series.footY.slice(H);
-const am = ma.reduce((a, b) => a + b, 0) / ma.length;
-const ym = my.reduce((a, b) => a + b, 0) / my.length;
-let sa = 0, sy = 0, sc = 0;
-for (let i = 0; i < ma.length; i++) { const da = ma[i]! - am, dy = my[i]! - ym; sa += da * da; sy += dy * dy; sc += da * dy; }
-cov = sa > 1e-12 && sy > 1e-12 ? sc / Math.sqrt(sa * sy) : NaN;
-log(`   相关系数 弓角~足体高 = ${cov.toFixed(3)}`
-  + `  ${cov > 0.5 ? '✓ 弓在顶足体 = 上下跳的归因' : '✗ 弓角与跳动无关'}`);
-// 弓角持续偏转幅度（软弹精的特征：长期偏罬而非挤二边抖动）
-const aMean = am * 57.3;
-log(`   弓角均值 ${aMean.toFixed(2)}°`
-  + `  ${Math.abs(aMean) > 1 ? '✗ 长期偏罬=' + Math.abs(aMean).toFixed(1) + '° → 软弹精在承重' : '✓ 无长期偏罬'}`);
-// ★ 主频：自相关函数。60Hz = 控制环限环（30 帧一周期），
-//   低频 = 物理振动。用自相关而不用 FFT（算法简单且不会漂移）。
-const sig = series.footY.slice(H);
-const m0 = sig.reduce((a, b) => a + b, 0) / sig.length;
-const c0 = sig.map((v) => v - m0);
-let bestLag = 0, bestR = -2;
-const rAt = (lag: number): number => {
-  let num = 0, d1 = 0, d2 = 0;
-  for (let i = 0; i + lag < c0.length; i++) {
-    num += c0[i]! * c0[i + lag]!;
-    d1 += c0[i]! * c0[i]!; d2 += c0[i + lag]! * c0[i + lag]!;
+/** 跑一次站立，返回弓角/足体/躯干的高度序列 */
+function run(ctlHz: number, alpha: number, N = 360, limpAt = -1, gapMm = NaN, noLim = false): Record<string, number[]> {
+  const cfg = { ...DEFAULT_CONFIG };
+  if (Number.isFinite(gapMm)) cfg.soleBlockGap = gapMm / 1000;
+  const sk = buildSkeleton(cfg);
+  const SHAPE = shapeForJoints(sk.joints.length);
+  const sim = new Sim(sk, SHAPE, {
+    ...DEFAULT_SIM, mode: 'stand', controlHz: ctlHz,
+    // ★ motorAlpha = 稳定性护栏的每步可吃掉额（显式 P 控制稳定需 α < 2）。
+    doll: { ...(DEFAULT_SIM.doll ?? {}), motorAlpha: alpha },
+  });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
+  const d = sim.doll;
+  const bi = (k: string) => d.sk.bodies.findIndex((b) => b.key === k);
+  const iF = bi('foot_l'), iA = bi('arch_l'), iT = bi('torso');
+  const ja = jointIndexByName(sk, 'arch_l');
+  const S = { arch: [] as number[], footY: [] as number[], torsoY: [] as number[],
+              gnd: [] as number[] };
+  for (let f = 0; f < N; f++) {
+    if (f === limpAt) { d.setLimp(true); }
+    if (noLim) (d as unknown as { skipLimits: boolean }).skipLimits = true;
+    sim.motor.set(ctrl.step(1 / ctlHz));
+    sim.advance(1);
+    S.arch.push(d.jointAngle(ja));
+    S.footY.push(d.bodies[iF]!.translation().y);
+    S.torsoY.push(d.bodies[iT]!.translation().y);
+    // ★ 逐帧接地数：若在 1/0 之间每帧切换 → 周期-2 的真正来源是接触打滑
+    S.gnd.push((d.footGrounded(0) ? 1 : 0) + (d.footGrounded(1) ? 1 : 0));
   }
-  return d1 > 1e-18 && d2 > 1e-18 ? num / Math.sqrt(d1 * d2) : 0;
-};
-for (let lag = 2; lag <= 60; lag++) { const r = rAt(lag); if (r > bestR) { bestR = r; bestLag = lag; } }
-const hz = (1 / DEFAULT_SIM.physicsHz!) * 1000 / 1000;
-log(`   自相关主周期 = ${bestLag} 帧 = ${(bestLag * 8.333).toFixed(1)} ms`
-  + `  频率 ${(1000 / (bestLag * 8.333)).toFixed(1)} Hz   r=${bestR.toFixed(3)}`);
-log(`   控制频率 ${DEFAULT_SIM.controlHz} Hz = ${(DEFAULT_SIM.physicsHz! / DEFAULT_SIM.controlHz!).toFixed(0)} 物理帧/控制帧`
-  + `  ${bestLag === DEFAULT_SIM.physicsHz! / DEFAULT_SIM.controlHz! ? '✗ 正好是控制环限环' : ''}`);
-// 帧间步长模式：奇偶交替 = 控制帧限环
-let alt = 0;
-for (let i = 1; i < sig.length; i++) if (Math.abs(sig[i]! - sig[i - 1]!) > 1e-9) alt++;
-log(`   有变化的帧比例 ${(alt / sig.length * 100).toFixed(0)}%`
-  + `  ${alt / sig.length > 0.9 ? '✗ 每帧都动 = 控制环限环' : '✓ 有一段完全不动(达制动位)'}`);
-// 弓角态参数
-let atLim = 0;
-for (let i = H; i < N; i++) {
-  const d = series.arch[i]! * 57.3;
-  if (Math.abs(d - sk.joints[ja].minRad[0] * 57.3) < 0.2 ||
-      Math.abs(d - sk.joints[ja].maxRad[0] * 57.3) < 0.2) atLim++;
+  return S;
 }
-log(`   弓贴限位帧数 ${atLim}/${N - H} (${(atLim / (N - H) * 100).toFixed(0)}%)`
-  + `  ${atLim > (N - H) * 0.15 ? '\u2717 \u6301\u7eed\u649e\u9650\u4f4d = \u5f39\u6027\u6765\u6e90' : '\u2713'}`);
+
+/**
+ * 自相关主周期（帧）—— **必须先去趋势**。
+ *
+ * ⚠⚠ 我第一版直接对原始序列做自相关，得出「60Hz / Nyquist / 周期-2」的结论 ——
+ *   那是**测量假象**：躯干 y 在 3 秒里从 825mm 单调掉到 190mm，斜坡信号在
+ *   小 lag 上的自相关天然接近 1，于是 lag=2 永远"最相关"，r=1.00。
+ *   ⇒ 任何"下降/上升趋势"都会被我读成"最高频振荡"。
+ *   修法：减掉**移动平均**（周期取窗口的 1/4，确保比要测的周期长），
+ *   彻底去掉趋势后再自相关。
+ */
+function detrend(sig: number[], win: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < sig.length; i++) {
+    const a = Math.max(0, i - (win >> 1)), b = Math.min(sig.length, i + (win >> 1));
+    let m = 0; for (let k = a; k < b; k++) m += sig[k]!;
+    out.push(sig[i]! - m / (b - a));
+  }
+  return out;
+}
+function acPeriod(raw: number[], maxLag = 60): { lag: number; r: number } {
+  const sig = detrend(raw, 41);
+  const c = sig.map((v) => v - (sig.reduce((a, b) => a + b, 0) / sig.length));
+  let best = { lag: 0, r: -2 };
+  for (let lag = 2; lag <= maxLag && lag < c.length - 2; lag++) {
+    let num = 0, d1 = 0, d2 = 0;
+    for (let i = 0; i + lag < c.length; i++) {
+      num += c[i]! * c[i + lag]!; d1 += c[i]! * c[i]!; d2 += c[i + lag]! * c[i + lag]!;
+    }
+    const r = d1 > 1e-18 && d2 > 1e-18 ? num / Math.sqrt(d1 * d2) : 0;
+    if (r > best.r) best = { lag, r };
+  }
+  return best;
+}
+function swing(sig: number[], from: number): number {
+  let m = 0;
+  for (let i = from + 1; i < sig.length; i++) m = Math.max(m, Math.abs(sig[i]! - sig[i - 1]!));
+  return m;
+}
+
+log(`\u2550\u2550 \u300c\u811a\u4e0a\u4e0b\u5f39\u300d\u5f52\u56e0\u00b7\u63a7\u5236\u9891\u7387\u654f\u611f\u6027 \u2550\u2550`);
+log(`   physics=${PHz}Hz  dt=${DTms.toFixed(2)}ms  control=60Hz`);
+log('');
+log('   controlHz  阶段   弓角峰   足体帧间   躯干帧间   主周期    频率     折算��速度');
+log('');
+for (const a of [1.0, 0.1]) {
+  const S = run(60, a);
+  const H = Math.floor(S.torsoY.length / 3);
+  log(`   α=${a}  逐帧接地数: ${S.gnd.slice(H, H + 24).join('')}`);
+}
+log('');
+log('   验证：前 120 帧平稳后毛软（所有马达归零），看振动是否消失');
+for (const [tag, la] of [['常规', -1], ['验证前', 120]] as const) {
+  const S = run(60, 1.0, 360, la);
+  const H = 180;
+  const hp = swing(detrend(S.torsoY.slice(H), 41), 0) * 1000;
+  const { lag, r } = acPeriod(S.torsoY.slice(H));
+  log(`   ${tag}: 去趋势帧间 ${hp.toFixed(1)}mm  主周期 ${lag}帧  r=${r.toFixed(2)}`
+    + `  ${hp < 2 ? '✓ 振动消失 => 是马达造成' : '✗ 仍在 => 是基础物理/缩放'}`);
+}
+log('');
+log('   每帧冲量层候选项（都不受 limp 影响）');
+for (const [tag, nl] of [['常规', false], ['关闭 enforceLimits', true]] as const) {
+  const S = run(60, 1.0, 360, -1, NaN, nl);
+  const H = 180;
+  const hp = swing(detrend(S.torsoY.slice(H), 41), 0) * 1000;
+  const { lag, r } = acPeriod(S.torsoY.slice(H));
+  log(`   ${tag}: 去趋势帧间 ${hp.toFixed(1).padStart(6)}mm  主周期 ${String(lag).padStart(2)}帧  r=${r.toFixed(2)}`
+    + `  ${hp < 4 ? '✓ 振动消失' : '✗ 仍在'}`);
+}
+log('');
+log('   弓膙 scan: 块间记缝对 60Hz 周期-2 振动的影响');
+for (const g of [NaN, 1.5, 4, 10]) {
+  const S = run(60, 1.0, 360, -1, g);
+  const H = 180;
+  const hp = swing(detrend(S.torsoY.slice(H), 41), 0) * 1000;
+  const { lag, r } = acPeriod(S.torsoY.slice(H));
+  log(`   gap=${Number.isFinite(g) ? (g + 'mm').padEnd(7) : ('默认'.padEnd(7))}`
+    + ` 去趋势帧间 ${hp.toFixed(1).padStart(6)}mm  主周期 ${String(lag).padStart(2)}帧  r=${r.toFixed(2)}`
+    + `  ${hp < 4 ? '✓ 振动几乎消失' : '✗ 仍在'}`);
+}
+log('');
+for (const a of [1.0, 0.6, 0.35, 0.2, 0.1]) {
+  const S = run(60, a);
+  const H = Math.floor(S.torsoY.length / 3);
+  const aPk = Math.max(...S.arch.slice(H).map(Math.abs)) * 57.3;
+  const fy = swing(S.footY, H);
+  const ty = swing(S.torsoY, H);
+  const { lag, r } = acPeriod(S.torsoY.slice(H));
+  const hp = swing(detrend(S.torsoY.slice(H), 41), 0) * 1000;
+  const hz = 1000 / (lag * DTms);
+  const acc = (2 * Math.PI * hz) ** 2 * fy;
+  log(`   ${a.toFixed(2).padStart(6)}`
+    + `  ${aPk.toFixed(2).padStart(6)}°`
+    + ` ${(fy * 1000).toFixed(1).padStart(9)}mm`
+    + ` ${(ty * 1000).toFixed(1).padStart(9)}mm`
+    + `  ${String(lag).padStart(3)}帧`
+    + ` ${hz.toFixed(1).padStart(6)}Hz`
+    + `  ${(acc / 9.81).toFixed(0).padStart(6)}g`
+    + `  去趋势帧间${hp.toFixed(1).padStart(6)}mm`
+    + `  ${r > 0.8 ? `✗ 周期-${lag} 振动 r=${r.toFixed(2)}` : `✓ 无规律振动 r=${r.toFixed(2)}`}`);
+}
