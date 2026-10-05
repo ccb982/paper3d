@@ -651,6 +651,7 @@ export class Ragdoll {
     this.ankleGroundFactorUsed = new Float32Array(sk.joints.length).fill(1);
     this.torqueCmd = new Float32Array(sk.joints.length * 3);
     this.holdCmd = new Array(sk.joints.length * 3).fill(0);
+    this.toneScale = new Array(sk.joints.length * 3).fill(1);
     this.tauApplied = new Float32Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
@@ -1509,6 +1510,37 @@ soleBlockLabels(side: 0 | 1): string[] {
   private readonly torqueCmd: Float32Array;
   /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
   private readonly holdCmd: number[] = [];
+  /**
+   * ★★ **载荷依赖的姿势张力**（每轴缩放系数，默认 1）。
+   *
+   * 位置伺服原来只有固定 `kP=48`：它把每个关节当"刹车"，锁在绑定姿态，
+   * **对载荷毫无反应**。后果（逐帧实测，锁定承诺修好之后）：
+   *   · `spine1/0` 目标 −2.7°（=腰 8° / 三段均分），**实际被扭到 −35°**
+   *     ⇒ 位置伺服被打输，躯干在转移过程中先塌；
+   *   · `hip/0` 力矩**全程饱和在 −120 = τmax**，没有任何调节余量。
+   *
+   * 文献依据（**载荷依赖的姿势张力**）：
+   *   · **Horak & Nashner 1986**：CoP 向哪只脚移动，那条腿的肌张力就上升
+   *     —— 这是"支撑面约束 /腿部僵化"的经典表述；
+   *   · **J Ab 2021 单侧负重步行**（PMC8628027）：承重侧 GMED 激活 **+58%**、
+   *     TFL **+65%**，而**非承重侧无变化**（p≥0.790）⇒ 张力是**按腿不对称**调节的，
+   *     而且由载荷驱动；
+   *   * 姿势张力的经典表述（referent configuration）：肌张力随支撑负荷连续变化。
+   *
+   * 机制：位置环增益按该关节所属腿的**载荷份额**放大
+   *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
+   * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
+   */
+  private readonly toneScale: number[] = [];
+  /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
+  setToneScale(joint: number, axis: number, scale: number): void {
+    const i = joint * 3 + axis;
+    if (i >= 0 && i < this.toneScale.length) this.toneScale[i] = scale > 0 ? scale : 0.01;
+  }
+  /** 复位到 1（每拍开头调；漏调会把上一拍的增益带进这一拍） */
+  resetToneScale(): void {
+    for (let i = 0; i < this.toneScale.length; i++) this.toneScale[i] = 1;
+  }
   /** `jacobianTorque` 的临时向量（避免每关节分配） */
   private readonly jw = new Float64Array(3);
   private readonly ja = new Float64Array(3);
@@ -2221,7 +2253,10 @@ soleBlockLabels(side: 0 | 1): string[] {
           const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
           // ★ 逐关节增益覆盖（踝专用，见 RagdollOptions.jointGain 的注释）
           const ov = jg[j.name];
-          err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kDd) * relL[k];
+          // ★ 载荷依赖的姿势张力：P/D 同时按 `toneScale` 缩放。
+          //   只放大 P 会让系统变"硬但嗡"(过阻尼不足)；D 同比例放大才保持阻尼比。
+          const ts = this.toneScale[idx] || 1;
+          err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
         }
 
         // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、

@@ -13989,6 +13989,7 @@ var init_ragdoll = __esm({
         this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
         this.torqueCmd = new Float32Array(sk2.joints.length * 3);
         this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
@@ -14673,6 +14674,37 @@ var init_ragdoll = __esm({
       torqueCmd;
       /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
       holdCmd = [];
+      /**
+       * ★★ **载荷依赖的姿势张力**（每轴缩放系数，默认 1）。
+       *
+       * 位置伺服原来只有固定 `kP=48`：它把每个关节当"刹车"，锁在绑定姿态，
+       * **对载荷毫无反应**。后果（逐帧实测，锁定承诺修好之后）：
+       *   · `spine1/0` 目标 −2.7°（=腰 8° / 三段均分），**实际被扭到 −35°**
+       *     ⇒ 位置伺服被打输，躯干在转移过程中先塌；
+       *   · `hip/0` 力矩**全程饱和在 −120 = τmax**，没有任何调节余量。
+       *
+       * 文献依据（**载荷依赖的姿势张力**）：
+       *   · **Horak & Nashner 1986**：CoP 向哪只脚移动，那条腿的肌张力就上升
+       *     —— 这是"支撑面约束 /腿部僵化"的经典表述；
+       *   · **J Ab 2021 单侧负重步行**（PMC8628027）：承重侧 GMED 激活 **+58%**、
+       *     TFL **+65%**，而**非承重侧无变化**（p≥0.790）⇒ 张力是**按腿不对称**调节的，
+       *     而且由载荷驱动；
+       *   * 姿势张力的经典表述（referent configuration）：肌张力随支撑负荷连续变化。
+       *
+       * 机制：位置环增益按该关节所属腿的**载荷份额**放大
+       *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
+       * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
+       */
+      toneScale = [];
+      /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
+      setToneScale(joint, axis, scale) {
+        const i = joint * 3 + axis;
+        if (i >= 0 && i < this.toneScale.length) this.toneScale[i] = scale > 0 ? scale : 0.01;
+      }
+      /** 复位到 1（每拍开头调；漏调会把上一拍的增益带进这一拍） */
+      resetToneScale() {
+        for (let i = 0; i < this.toneScale.length; i++) this.toneScale[i] = 1;
+      }
       /** `jacobianTorque` 的临时向量（避免每关节分配） */
       jw = new Float64Array(3);
       ja = new Float64Array(3);
@@ -15334,7 +15366,8 @@ var init_ragdoll = __esm({
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kDd) * relL[k];
+              const ts = this.toneScale[idx] || 1;
+              err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -19586,6 +19619,27 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const D2R2 = Math.PI / 180;
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
+  if (doll && on("postureLoad")) {
+    doll.resetToneScale();
+    const supL = rs.supportLeg();
+    const supLoad = supL === "l" ? rs.loadFrac.l : rs.loadFrac.r;
+    const gain = p.postureLoadGain;
+    for (const nm of [`hip_${supL}`, `knee_${supL}`, `foot_${supL}`]) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      doll.setToneScale(j, 2, 1 + gain * supLoad);
+    }
+    const jh = jointIndexByName(rs.sk, `hip_${supL}`);
+    if (jh >= 0) doll.setToneScale(jh, HIP_ABD_AXIS, 1 + gain * supLoad);
+    if (p.postureLoadSpine) {
+      for (const nm of ["spine1", "spine2", "spine3"]) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j >= 0) doll.setToneScale(j, 0, 1 + gain * supLoad);
+      }
+    }
+  } else if (doll) {
+    doll.resetToneScale();
+  }
   {
     const om0Sag = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0)));
     const capXSag = rs.com.x + rs.com.vx / om0Sag;
@@ -19676,8 +19730,15 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const aDes = h > 1e-6 ? F.fz / (m * h) : 0;
       const tauStatic = m * 9.81 * dz;
       const tauDyn = m * aDes * dy;
-      const tauDamp = -p.latDamp * rs.com.vz;
-      const tauRaw = tauStatic + tauDyn + tauDamp;
+      const zRefLat = rs.soleZ[sup] ?? rs.com.z;
+      const w0Lat = rs.omega0();
+      const armLat = 0.119;
+      const mLat = sk2.cfg.mass;
+      const kLatBase = armLat * mLat * w0Lat * w0Lat;
+      const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
+      const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
+      const tauDamp = -p.latDamp * dLatBase * rs.com.vz;
+      const tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
       const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
       const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
       rs.hipLatTau = clamp2(tauAdj, tmax);
@@ -19687,7 +19748,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           HIP_ABD_AXIS,
           rs.hipLatTau,
           "balance",
-          `\u9ACB\u5916\u5C55\xB7\u5355\u817F(\u9759${tauStatic.toFixed(0)}+\u52A8${tauDyn.toFixed(0)}+\u963B${tauDamp.toFixed(0)})`
+          `\u9ACB\u5916\u5C55(\u9759${tauStatic.toFixed(0)}+\u521A${tauStiff.toFixed(0)}+\u963B${tauDamp.toFixed(0)})`
         );
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
@@ -19966,7 +20027,14 @@ var init_balance = __esm({
       lateralEnabled: true,
       latHipDead: 8,
       // 横向阻尼：vz=0.4m/s 时给 32N·m（与静态项同量级、不同相位）
-      latDamp: 80,
+      // ★ 1.0 = 教科书值（K=a·m·ω₀²、D=a·m·2ζω₀，按 ω₀=√(g/h) 运行时推导）
+      // 实测最优（12 档扫描，驻留 0.42s @ 最小X3=2mm）：刚度 0.6×、阻尼 1.4×
+      latStiff: 0.6,
+      latDamp: 1.4,
+      latZeta: 1,
+      // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
+      postureLoadGain: 1,
+      postureLoadSpine: true,
       // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
       latShiftCopMargin: 0.04,
       /**

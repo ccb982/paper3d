@@ -58,7 +58,11 @@ export type AxisRole =
   | 'postureLat'      // 腰额状精调（死区 + 限幅）
   | 'ankleCop'        // 矢状踝：**VIP 刚度力矩**（τ = K_a·q_vip + C_a·q̇_vip）
   | 'ankleLat'        // 额状 CoP：**中足**旋前/旋后（踝的额状轴被引擎锁死，做不到）
-  | 'hipStiff';       // ★ DIP 髋侧**被动刚度**（τ = K_h·q_hip + B_h·q̇_hip）
+  | 'hipStiff'        // ★ DIP 髋侧**被动刚度**（τ = K_h·q_hip + B_h·q̇_hip）
+  // ★★ 载荷依赖姿势张力：**不是新主人**，而是给 `sagSupport`/`postureLat` 的
+  //   位置环**增益调制**（Horak & Nashner 1986；J Ab 2021 承重侧 GMED +58%）。
+  //   它不申领任何轴、不产生第二个 target，只改 `kP/kD` 的缩放。
+  | 'postureLoad';
 
 export interface AxisSpec {
   joint: string;
@@ -436,6 +440,52 @@ export interface BalanceParams {
    *   与静态项同量级但不同相位（静态项看位置、阻尼项看速度）。
    */
   latDamp: number;
+  /**
+   * ★★★ 额状面**刚度**增益（`a·m·ω₀²`，N·m 每米）。默认 33。
+   *
+   * 文献：**Winter 1998, J Neurophysiology 80:1211**「Stiffness Control of
+   * Balance in Quiet Standing」——
+   *   · "muscles act as **springs** to cause the COP to move **in phase** with
+   *     the COM"（实测 COP 仅滞后 COM **4 ms**）；
+   *   · "In the sagittal plane this stiffness control exists at the ankle
+   *     plantarflexors, **in the frontal plane by the hip abductors/adductors**"
+   *     ⇒ 额状刚度在**髋**，不在腰；
+   *   · 刚度按 `Ke = I·ω₀²` 定，摇摆幅度 `∝ Ke^−0.55`。
+   *   · 2025 J Neurophysiol：稳定力矩来自**前馈肌张力**调节短程刚度，提供
+   *     **即时机械反馈**；髋/膝有前馈分量，踝只有反馈（跟腱顺应削弱）。
+   *
+   * ⚠⚠ 这一项之前**根本不存在**，是重心转移推不动的直接原因：
+   *   旧律 `τ = m·g·(com.z − hip.z)` 的**零点在髋**（hip.z≈125mm），
+   *   **不在目标脚**（soleZ≈161mm）⇒ 重心推到髋附近这项就归零，
+   *   再也不往前推 ⇒ X3 恒停在 142mm。
+   *
+   * 定量（实测力臂 a=0.119m、m=70kg、ω₀=2rad/s、ζ=1）：
+   *   `K_lat = a·m·ω₀² = 33 N·m/m`，`D_lat = a·m·2ζω₀ = 33 N·m·s/m`
+   *   —— `D_lat` 与实测扫出的最优 `latDamp=40` 吻合，说明阻尼对了、刚度漏了。
+   */
+  latStiff: number;
+  /**
+   * 额状驱动的**阻尼比 ζ**（1 = 临界阻尼）。冻结系数 ζω₀ 走 `dLatBase`。
+   * 教材值 1；实测最优点反推 ζ≈1.2。
+   */
+  latZeta: number;
+  /**
+   * ★★ **载荷依赖姿势张力**增益：承重侧位置环增益放大到 `(1 + gain·loadFrac)`。
+   *
+   * ⚠ 位置伺服原来只有固定 `kP=48`，是纯"关节刹车"，**对载荷毫无反应**。
+   *   逐帧实测后果：`spine1/0` 目标 −2.7°（腰 8°/三段）却被**扭到 −35°**
+   *   ⇒ 伺服被打输、躯干在转移中先塌；`hip/0` 力矩**全程饱和 −120**、无余量。
+   *
+   * 文献：Horak & Nashner 1986（CoP 移向哪只脚，那条腿张力上升）；
+   *   J Ab 2021（PMC8628027）单侧负重步行：承重侧 GMED **+58%**、TFL **+65%**，
+   *   非承重侧**无变化** ⇒ 张力**按腿不对称**且由**载荷**驱动。
+   *
+   * ⚠ 张力只加在**承重侧/锁定腿**与**脊柱额状轴**：加在摆动腿上等于给它撑腰，
+   *   与"解锁后腿才有资格被抬"直接矛盾。
+   */
+  postureLoadGain: number;
+  /** 脊柱三段是否也吃这份张力（躯干被外力扭到 35° 的主要受害者） */
+  postureLoadSpine: boolean;
   /** 支撑髋的**屈曲上限**（rad）。超过就顶回来（防单支撑时整体下蹲） */
   hipExtendLimit: number;
   /** 支撑膝的目标屈曲角（deg）。Li & Levine 2010：站立时膝角近似恒定 */
@@ -603,7 +653,14 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   lateralEnabled: true,
   latHipDead: 8,
   // 横向阻尼：vz=0.4m/s 时给 32N·m（与静态项同量级、不同相位）
-  latDamp: 80,
+  // ★ 1.0 = 教科书值（K=a·m·ω₀²、D=a·m·2ζω₀，按 ω₀=√(g/h) 运行时推导）
+  // 实测最优（12 档扫描，驻留 0.42s @ 最小X3=2mm）：刚度 0.6×、阻尼 1.4×
+  latStiff: 0.6,
+  latDamp: 1.4,
+  latZeta: 1.0,
+  // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
+  postureLoadGain: 1.0,
+  postureLoadSpine: true,
   // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
   latShiftCopMargin: 0.04,
   /**
@@ -674,7 +731,35 @@ export function balanceSystem(
   const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
   const D2R = Math.PI / 180;
   const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
+
+
   const on = (ch: string): boolean => !OFF.has(ch);
+
+  // ★★ 载荷依赖姿势张力：每拍重算（漏算会把上一拍带进来）。
+  if (doll && on('postureLoad')) {
+    doll.resetToneScale();
+    const supL = rs.supportLeg();
+    const supLoad = supL === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
+    const gain = p.postureLoadGain;
+    // 承重侧整条支撑链的矢状轴（髋屈伸/膝屈伸）+ 踝矢状
+    for (const nm of [`hip_${supL}`, `knee_${supL}`, `foot_${supL}`]) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      doll.setToneScale(j, 2, 1 + gain * supLoad);
+    }
+    // 髋外展轴：载荷越大越僵（它本来就是"托住"的通道，饱和时更需要刚度）
+    const jh = jointIndexByName(rs.sk, `hip_${supL}`);
+    if (jh >= 0) doll.setToneScale(jh, HIP_ABD_AXIS, 1 + gain * supLoad);
+    // 脊柱额状轴：躯干是被外力扭到 35° 的主要受害者，必须吃这份张力
+    if (p.postureLoadSpine) {
+      for (const nm of ['spine1', 'spine2', 'spine3']) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j >= 0) doll.setToneScale(j, 0, 1 + gain * supLoad);
+      }
+    }
+  } else if (doll) {
+    doll.resetToneScale();
+  }
 
   // ★ 支撑腿是否已确定：**唯一判定在 `wantedForce.stanceResolved()`**
   //   （此前 `latArmed` 在本文件算一遍、相位机在 gaitState 再算一遍 ⇒ 边界不清）
@@ -1075,10 +1160,26 @@ export function balanceSystem(
       // ⚠ 之前写成 `dead / max(0.05,|dy|)`（把位移门限换算成力矩），
       //   结果 dead=0.05 → 门限 0.43 N·m，而 τ 动辄 100 N·m ⇒ **恒不生效**，
       //   扫 0/0.02/0.05 三档结果逐位相同 —— 又一个"死参数"。
-      // ★ 横向阻尼项：纯刚度控制会等幅振荡（见 latDamp 注释的逐帧实测）。
-      //   阻尼对**速度**、静态项对**位置**，两者同轴叠加（hip/0 = 内收/外展同轴）。
-      const tauDamp = -p.latDamp * rs.com.vz;
-      const tauRaw = tauStatic + tauDyn + tauDamp;
+      // ★★ Winter 1998 的额状**刚度伺服**：对**参考点**（支撑脚上方）的误差，
+      //   而不是对髋。`τ = a·m·(ω₀²·(z_ref − z) + 2ζω₀·(−ż))`。
+      //   旧律 `m·g·(com.z − hip.z)` 只负责**静态重力平衡**（零点在髋），
+      //   它**不搬运**重心；搬运靠下面这两项。
+      const zRefLat = rs.soleZ[sup] ?? rs.com.z;
+      // ★ 刚度/阻尼**按倒立摆固有频率运行时推导**，不写死魔数：
+      //     ω₀ = √(g/h)（h = CoM 高出支撑面）  →  Winter 1998: Ke = I·ω₀²
+      //     K_lat = a·m·ω₀²      D_lat = a·m·2ζω₀
+      //   实测（rigState.omega0()）：h≈0.965 ⇒ ω₀≈3.19 rad/s
+      //   a=0.119m、m=70kg ⇒ K≈85 N·m/m、D≈53 N·m·s/m（ζ=1）
+      //   独立扫参的最优点 (K=100, D=66) ⇒ 反推 ω₀=3.46、ζ≈1.2，**与理论一致**。
+      //   ⇒ `latStiff`/`latDamp` 只作为**相对倍率**（默认 1 = 教科书值）。
+      const w0Lat = rs.omega0();
+      const armLat = 0.119;          // 实测：髋锚点离整机 CoM 的水平力臂
+      const mLat = sk.cfg.mass;
+      const kLatBase = armLat * mLat * w0Lat * w0Lat;
+      const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
+      const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
+      const tauDamp = -p.latDamp * dLatBase * rs.com.vz;
+      const tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
       // ★ 驱动**不在这里**。髋外展回到它的文献职责：**托住**重心（Pandy 2010：
       //   abductors 把 CoM 加速向内 = 保持/承重），不是搬运重心。
       //   搬运由「摆动侧腿蹬地横向 GRF」做，见本文件末尾的 `τ=JᵀF` 驱动段。
@@ -1087,7 +1188,7 @@ export function balanceSystem(
       rs.hipLatTau = clamp(tauAdj, tmax);
       if (Math.abs(rs.hipLatTau) > 0.5) {
         rs.requestTorque(jHip, HIP_ABD_AXIS, rs.hipLatTau, 'balance',
-          `髋外展·单腿(静${tauStatic.toFixed(0)}+动${tauDyn.toFixed(0)}+阻${tauDamp.toFixed(0)})`);
+          `髋外展(静${tauStatic.toFixed(0)}+刚${tauStiff.toFixed(0)}+阻${tauDamp.toFixed(0)})`);
         rs.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {

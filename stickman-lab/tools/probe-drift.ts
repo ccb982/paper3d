@@ -28,12 +28,14 @@ const log = console.log;
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 const DEG = 180 / Math.PI;
+const { jointIndexByName } = await import('../src/core/skeleton');
+const SP1 = jointIndexByName(sk, 'spine1');
 
-interface C { ld: number; kp: number; kd: number }
+interface C { ld: number; kd: number; tone: number; ks: number }
 const CS: C[] = [];
-for (const ld of [0, 40, 80, 160, 300])
-  for (const kd of [1.2, 2.0])
-    CS.push({ ld, kp: 0.6, kd });
+for (const ks of [0.6, 1.0, 1.4, 2.0])
+  for (const kd of [0.8, 1.0, 1.4])
+    CS.push({ ld: kd, kd, tone: 0.5, ks });
 log('══ 残余漂移源 + 权限扫描（锁定已生效）══');
 log('   消融                          FMAX 腰限幅  最小X3  驻留  腰峰   vz峰   com.z末  存活  翻转');
 for (const c of CS) {
@@ -42,10 +44,10 @@ for (const c of CS) {
   const ctrl = new Controller(sk, sim, {
     ...DEFAULT_CONTROLLER,
     step: { ...DEFAULT_STEP_PARAMS, shiftFMax: 0 },
-    balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: c.kp, waistKd: c.kd, latDamp: c.ld },
+    balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: 0.6, waistKd: c.kd, latDamp: c.ld, postureLoadGain: c.tone, latStiff: c.ks },
   });
   let vzMax = 0, zEnd = 0, dzMin = 1e9, alive = 0, flips = 0, prevSup = '';
-  let run = 0, bestRun = 0, wMax = 0;
+  let run = 0, bestRun = 0, wMax = 0, spMax = 0;
   for (let i = 0; i < 120 * 6 && !sim.finished; i++) {
     if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
     sim.advance(1);
@@ -56,16 +58,18 @@ for (const c of CS) {
     if (dz <= 0.05) { run++; bestRun = Math.max(bestRun, run); } else run = 0;
     vzMax = Math.max(vzMax, Math.abs(s.com.vz));
     wMax = Math.max(wMax, Math.abs(s.waistTrim ?? 0));
+    const sp: any = s.axes.find((a: any) => a.joint === SP1 && a.axis === 0);
+    spMax = Math.max(spMax, Math.abs(sp?.pos ?? 0));
     zEnd = s.com.z;
     if (prevSup && s.supportLeg !== prevSup) flips++;
     prevSup = s.supportLeg;
     if (s.tiltDeg >= 25) break;
     alive = s.t;
   }
-  log(`   ${String(c.ld).padStart(5)} ${c.kd.toFixed(1).padStart(5)}`
+  log(`   ${c.ks.toFixed(1).padStart(6)}× ${c.ld.toFixed(1).padStart(6)}×`
     + ` ${(dzMin * 1000).toFixed(0).padStart(6)}mm`
     + ` ${(bestRun / 60).toFixed(2).padStart(5)}s${bestRun / 60 >= 1 ? '✓' : '✗'}`
-    + ` ${(wMax * DEG).toFixed(1).padStart(5)}°`
+    + ` ${(wMax * DEG).toFixed(1).padStart(5)}° ${(spMax * DEG).toFixed(1).padStart(6)}°`
     + ` ${(vzMax * 1000).toFixed(0).padStart(5)}`
     + ` ${(zEnd * 1000).toFixed(0).padStart(6)}mm`
     + ` ${alive.toFixed(2)}s ${flips}`);

@@ -33,11 +33,11 @@ const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'walk' });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
-  balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: 0.6, waistKd: 1.2, latDamp: 40 },
+  balance: { ...DEFAULT_BALANCE_PARAMS, waistKp: 0.6, waistKd: 1.2, latDamp: 40, postureLoadGain: 0.5 },
 });
 log('══ 逐帧：锁定承诺 + 腰PD(0.6,1.2) + 髋阻尼40，腿驱动关 ══');
-log('   （腰 = spine1 轴0；实际=pos，归属=ownerLabel）');
-log('   t    相位   锁 承重 L载  com.z   vz  X3 腰实 髋τ X1 X2 X3c X4 X5 X7 X8 MoS  倾角');
+log('   （腰指 = waistTrim/3 = 每段目标；腰目标 = 仲裁后 spine1/0 实际下发；腰实 = 实际角）');
+log('   t    相位   锁 承重 L载  com.z   vz  X3 腰指 腰目标 腰实 脊柱限位  髋τ  倾角');
 for (let i = 0; i < 120 * 3.2 && !sim.finished; i++) {
   if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
   sim.advance(1);
@@ -49,17 +49,16 @@ for (let i = 0; i < 120 * 3.2 && !sim.finished; i++) {
   const bl = s.loadBearer === 'l' ? 'L' : s.loadBearer === 'r' ? 'R' : '-';
   // 脊柱1 轴0 实际角
   const sp: any = s.axes.find((a: any) => a.joint === SP1 && a.axis === 0);
-  const hv: any = (s.criteria as any).handover;
-  const f = (k: string): string => (hv?.flags?.[k] ? '✓' : '·').padStart(2);
+  const spd: any = sk.joints[SP1];
   log(`  ${s.t.toFixed(2).padStart(5)} ${s.phase.padEnd(6)} ${lk}  ${bl}`
     + ` ${(s.legs.l.loadFrac * 100).toFixed(0).padStart(3)}%`
     + ` ${(s.com.z * 1000).toFixed(0).padStart(6)} ${(s.com.vz * 1000).toFixed(0).padStart(6)}`
     + ` ${dz.toFixed(0).padStart(4)}`
-    + ` ${((sp?.pos ?? 0) * DEG).toFixed(0).padStart(4)}`
+    + ` ${(((s.waistTrim ?? 0) * DEG) / 3).toFixed(1).padStart(4)}°`
+    + ` ${((sp?.target ?? 0) * DEG).toFixed(1).padStart(5)}°`
+    + ` ${((sp?.pos ?? 0) * DEG).toFixed(1).padStart(4)}°`
+    + ` ${((spd?.minRad?.[0] ?? 0) * DEG).toFixed(0)}~${((spd?.maxRad?.[0] ?? 0) * DEG).toFixed(0)}°`
     + ` ${(s.hipLatTau ?? 0).toFixed(0).padStart(5)}`
-    + ` ${f('X1_前腿接地')}${f('X2_矢状到位')}${f('X3_额状到位')}${f('X4_驻留')}`
-    + `${f('X5_前腿承重')}${f('X7_MoS')}${f('X8_倾角')}`
-    + ` ${((s.support.halfZ ?? 0) * 1000).toFixed(0).padStart(4)}`
     + ` ${s.tiltDeg.toFixed(1).padStart(5)}°`);
   if (s.tiltDeg >= 25) break;
 }

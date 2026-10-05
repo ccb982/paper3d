@@ -13989,6 +13989,7 @@ var init_ragdoll = __esm({
         this.ankleGroundFactorUsed = new Float32Array(sk2.joints.length).fill(1);
         this.torqueCmd = new Float32Array(sk2.joints.length * 3);
         this.holdCmd = new Array(sk2.joints.length * 3).fill(0);
+        this.toneScale = new Array(sk2.joints.length * 3).fill(1);
         this.tauApplied = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
@@ -14673,6 +14674,37 @@ var init_ragdoll = __esm({
       torqueCmd;
       /** 让位掩码（1=balance 让位、2=step 让位、0=正常位置伺服） */
       holdCmd = [];
+      /**
+       * ★★ **载荷依赖的姿势张力**（每轴缩放系数，默认 1）。
+       *
+       * 位置伺服原来只有固定 `kP=48`：它把每个关节当"刹车"，锁在绑定姿态，
+       * **对载荷毫无反应**。后果（逐帧实测，锁定承诺修好之后）：
+       *   · `spine1/0` 目标 −2.7°（=腰 8° / 三段均分），**实际被扭到 −35°**
+       *     ⇒ 位置伺服被打输，躯干在转移过程中先塌；
+       *   · `hip/0` 力矩**全程饱和在 −120 = τmax**，没有任何调节余量。
+       *
+       * 文献依据（**载荷依赖的姿势张力**）：
+       *   · **Horak & Nashner 1986**：CoP 向哪只脚移动，那条腿的肌张力就上升
+       *     —— 这是"支撑面约束 /腿部僵化"的经典表述；
+       *   · **J Ab 2021 单侧负重步行**（PMC8628027）：承重侧 GMED 激活 **+58%**、
+       *     TFL **+65%**，而**非承重侧无变化**（p≥0.790）⇒ 张力是**按腿不对称**调节的，
+       *     而且由载荷驱动；
+       *   * 姿势张力的经典表述（referent configuration）：肌张力随支撑负荷连续变化。
+       *
+       * 机制：位置环增益按该关节所属腿的**载荷份额**放大
+       *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
+       * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
+       */
+      toneScale = [];
+      /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
+      setToneScale(joint, axis, scale) {
+        const i = joint * 3 + axis;
+        if (i >= 0 && i < this.toneScale.length) this.toneScale[i] = scale > 0 ? scale : 0.01;
+      }
+      /** 复位到 1（每拍开头调；漏调会把上一拍的增益带进这一拍） */
+      resetToneScale() {
+        for (let i = 0; i < this.toneScale.length; i++) this.toneScale[i] = 1;
+      }
       /** `jacobianTorque` 的临时向量（避免每关节分配） */
       jw = new Float64Array(3);
       ja = new Float64Array(3);
@@ -15334,7 +15366,8 @@ var init_ragdoll = __esm({
               const cmd = this.motorTarget[idx];
               const thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
-              err = (ov ? ov.kP : kP) * (thRef - a) - (ov ? ov.kD : kDd) * relL[k];
+              const ts = this.toneScale[idx] || 1;
+              err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
             if (err === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
@@ -19599,6 +19632,27 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const D2R2 = Math.PI / 180;
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
+  if (doll && on("postureLoad")) {
+    doll.resetToneScale();
+    const supL = rs.supportLeg();
+    const supLoad = supL === "l" ? rs.loadFrac.l : rs.loadFrac.r;
+    const gain = p.postureLoadGain;
+    for (const nm of [`hip_${supL}`, `knee_${supL}`, `foot_${supL}`]) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      doll.setToneScale(j, 2, 1 + gain * supLoad);
+    }
+    const jh = jointIndexByName(rs.sk, `hip_${supL}`);
+    if (jh >= 0) doll.setToneScale(jh, HIP_ABD_AXIS, 1 + gain * supLoad);
+    if (p.postureLoadSpine) {
+      for (const nm of ["spine1", "spine2", "spine3"]) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j >= 0) doll.setToneScale(j, 0, 1 + gain * supLoad);
+      }
+    }
+  } else if (doll) {
+    doll.resetToneScale();
+  }
   {
     const om0Sag = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0)));
     const capXSag = rs.com.x + rs.com.vx / om0Sag;
@@ -19981,6 +20035,9 @@ var init_balance = __esm({
       latHipDead: 8,
       // 横向阻尼：vz=0.4m/s 时给 32N·m（与静态项同量级、不同相位）
       latDamp: 80,
+      // 承重腿位置环增益放大：loadFrac 0.5 ⇒ ×(1+0.5·gain)；默认 ×1.5
+      postureLoadGain: 1,
+      postureLoadSpine: true,
       // 保护伺服护栏：迈步系统申报的转移意图在 CoP 侧缘余量不足时一律不加。
       latShiftCopMargin: 0.04,
       /**
@@ -20278,11 +20335,11 @@ var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "walk" });
 sim.begin(new Float32Array(sim.paramCount));
 var ctrl = new Controller2(sk, sim, {
   ...DEFAULT_CONTROLLER2,
-  balance: { ...DEFAULT_BALANCE_PARAMS2, waistKp: 0.6, waistKd: 1.2, latDamp: 40 }
+  balance: { ...DEFAULT_BALANCE_PARAMS2, waistKp: 0.6, waistKd: 1.2, latDamp: 40, postureLoadGain: 0.5 }
 });
 log("\u2550\u2550 \u9010\u5E27\uFF1A\u9501\u5B9A\u627F\u8BFA + \u8170PD(0.6,1.2) + \u9ACB\u963B\u5C3C40\uFF0C\u817F\u9A71\u52A8\u5173 \u2550\u2550");
-log("   \uFF08\u8170 = spine1 \u8F740\uFF1B\u5B9E\u9645=pos\uFF0C\u5F52\u5C5E=ownerLabel\uFF09");
-log("   t    \u76F8\u4F4D   \u9501 \u627F\u91CD L\u8F7D  com.z   vz  X3 \u8170\u5B9E \u9ACB\u03C4 X1 X2 X3c X4 X5 X7 X8 MoS  \u503E\u89D2");
+log("   \uFF08\u8170\u6307 = waistTrim/3 = \u6BCF\u6BB5\u76EE\u6807\uFF1B\u8170\u76EE\u6807 = \u4EF2\u88C1\u540E spine1/0 \u5B9E\u9645\u4E0B\u53D1\uFF1B\u8170\u5B9E = \u5B9E\u9645\u89D2\uFF09");
+log("   t    \u76F8\u4F4D   \u9501 \u627F\u91CD L\u8F7D  com.z   vz  X3 \u8170\u6307 \u8170\u76EE\u6807 \u8170\u5B9E \u810A\u67F1\u9650\u4F4D  \u9ACB\u03C4  \u503E\u89D2");
 for (let i = 0; i < 120 * 3.2 && !sim.finished; i++) {
   if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
   sim.advance(1);
@@ -20293,8 +20350,7 @@ for (let i = 0; i < 120 * 3.2 && !sim.finished; i++) {
   const lk = s.locked.l ? "L" : s.locked.r ? "R" : "-";
   const bl = s.loadBearer === "l" ? "L" : s.loadBearer === "r" ? "R" : "-";
   const sp = s.axes.find((a) => a.joint === SP1 && a.axis === 0);
-  const hv = s.criteria.handover;
-  const f = (k) => (hv?.flags?.[k] ? "\u2713" : "\xB7").padStart(2);
-  log(`  ${s.t.toFixed(2).padStart(5)} ${s.phase.padEnd(6)} ${lk}  ${bl} ${(s.legs.l.loadFrac * 100).toFixed(0).padStart(3)}% ${(s.com.z * 1e3).toFixed(0).padStart(6)} ${(s.com.vz * 1e3).toFixed(0).padStart(6)} ${dz.toFixed(0).padStart(4)} ${((sp?.pos ?? 0) * DEG2).toFixed(0).padStart(4)} ${(s.hipLatTau ?? 0).toFixed(0).padStart(5)} ${f("X1_\u524D\u817F\u63A5\u5730")}${f("X2_\u77E2\u72B6\u5230\u4F4D")}${f("X3_\u989D\u72B6\u5230\u4F4D")}${f("X4_\u9A7B\u7559")}${f("X5_\u524D\u817F\u627F\u91CD")}${f("X7_MoS")}${f("X8_\u503E\u89D2")} ${((s.support.halfZ ?? 0) * 1e3).toFixed(0).padStart(4)} ${s.tiltDeg.toFixed(1).padStart(5)}\xB0`);
+  const spd = sk.joints[SP1];
+  log(`  ${s.t.toFixed(2).padStart(5)} ${s.phase.padEnd(6)} ${lk}  ${bl} ${(s.legs.l.loadFrac * 100).toFixed(0).padStart(3)}% ${(s.com.z * 1e3).toFixed(0).padStart(6)} ${(s.com.vz * 1e3).toFixed(0).padStart(6)} ${dz.toFixed(0).padStart(4)} ${((s.waistTrim ?? 0) * DEG2 / 3).toFixed(1).padStart(4)}\xB0 ${((sp?.target ?? 0) * DEG2).toFixed(1).padStart(5)}\xB0 ${((sp?.pos ?? 0) * DEG2).toFixed(1).padStart(4)}\xB0 ${((spd?.minRad?.[0] ?? 0) * DEG2).toFixed(0)}~${((spd?.maxRad?.[0] ?? 0) * DEG2).toFixed(0)}\xB0 ${(s.hipLatTau ?? 0).toFixed(0).padStart(5)} ${s.tiltDeg.toFixed(1).padStart(5)}\xB0`);
   if (s.tiltDeg >= 25) break;
 }
