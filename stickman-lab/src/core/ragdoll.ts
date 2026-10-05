@@ -294,6 +294,9 @@ export interface RagdollOptions {
   groundFactorFootKg?: number;
 }
 
+/** 鞋底接触法线与该块底面外法线的对齐门槛（|cos| ≥ 0.7 ⇒ 夹角 ≤ ~45°） */
+const SOLE_NORMAL_TOL = 0.7;
+
 const DEFAULTS: Required<RagdollOptions> = {
   groundFriction: 1.0,
   // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
@@ -1096,31 +1099,28 @@ export class Ragdoll {
    */
   readCoP(side: 0 | 1, out: Float64Array): void {
     out[0] = out[1] = out[2] = out[3] = 0;
-    // ★ 遍历**全部**鞋底 collider（脚跟 + 前脚掌）。单数版只读一块 ⇒ 拆成两块后
-    //   CoP 变成"半只脚的压力中心"，权限失真（实测基线从 214mm 漂到 191mm）。
+    // ★ 遍历**全部**鞋底 collider（脚跟 + 前脚掌 / 内侧弓 / 跖骨 / 趾）。
     let sx = 0, sy = 0, sz = 0, sl = 0;
     const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    const EPS = 2e-3;
     for (let ci = 0; ci < cols.length; ci++) {
       const col = cols[ci] as RAPIER.Collider;
       const bi = this.soleColBody[side]![ci];
       if (bi === undefined) continue;
-      const q = this.bodies[bi]!.rotation();
-      const cd = this.sk.bodies[bi]!.colliders[ci];
-      if (!cd) continue;
-      const cdOx = cd.offsetX ?? 0;
-      const EPS = 2e-3;
       this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
         this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          // ① 法线与该块底面外法线对齐
+          this.soleNormalAligned(bi, mf.normal());
+          if (this.soleAl < SOLE_NORMAL_TOL) return;
           const n = mf.numSolverContacts();
           for (let i = 0; i < n; i++) {
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
             const p = mf.solverContactPoint(i);
-            // 世界 → 该块局部；接触点必须落在它自己底面那块矩形内
-            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
-            const t = this.footTmp;
-            if (Math.abs(t[0]! - cdOx) > cd.hx + EPS) continue;
-            if (Math.abs(t[2]! - cd.offsetZ) > cd.hz + EPS) continue;
+            // ② 落在该脚世界系鞋底包围盒内
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS
+              || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
             sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
           }
         });
@@ -1148,6 +1148,8 @@ export class Ragdoll {
   soleColumnLoad(side: 0 | 1, out: Float64Array): void {
     const tmp = this.footTmp;
     const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    const bbMidZ = (bb[2]! + bb[3]!) / 2;
     for (let i = 0; i < out.length; i++) out[i] = 0;
     for (let ci = 0; ci < cols.length; ci++) {
       const col = cols[ci] as RAPIER.Collider;
@@ -1166,14 +1168,234 @@ export class Ragdoll {
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
             const p = mf.solverContactPoint(i);
-            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, tmp);
-            if (Math.abs(tmp[0]! - cdOx) > cd.hx + EPS) continue;
-            if (Math.abs(tmp[2]! - cd.offsetZ) > cd.hz + EPS) continue;
-            if (tmp[2]! >= 0) out[0] += l; else out[1] += l;
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            if (p.z >= bbMidZ) out[0] += l; else out[1] += l;
           }
         });
       });
     }
+  }
+
+  /**
+   * ★★ **摩擦占用**：鞋底切向冲量合计 / 法向冲量合计。
+   *
+   * 判读（这是"打滑"和"只是重心在动"的唯一分界）：
+   *   `|Σf_t| / (μ·Σf_n) ≈ 1` ⇒ 摩擦**饱和**，脚正在被拖着走（真打滑）
+   *   远小于 1            ⇒ 摩擦没用满，位移来自别的原因
+   *                            （通常是**绕棱转动** rocking：刚体中心几乎不动，
+   *                              但接触点在扫——`soleCoPLocal` 能看出来）
+   *
+   * @param out 写入 [Σ|f_t|, Σf_n]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+   */
+  soleFrictionUse(side: 0 | 1, out: Float64Array): void {
+    let ft = 0, fn = 0;
+    const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const q = this.bodies[bi]!.rotation();
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const p = mf.solverContactPoint(i);
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            ft += Math.hypot(mf.contactTangentImpulseX(i), mf.contactTangentImpulseY(i));
+            fn += Math.abs(mf.contactImpulse(i));
+          }
+        });
+      });
+    }
+    out[0] = ft; out[1] = fn;
+  }
+
+  /**
+   * ★★ 鞋底 **CoP 的世界坐标**（写入 out[0..2]）+ Σλ（out[3]）。
+   *
+   * ⚠ 2026-10-04：函数名还叫 `soleCoPLocal`，但**已改成返回世界坐标**。
+   *   原本想返回"脚刚体局部系"，实测不可靠 —— 脚掌有外八偏航 ~25°，
+   *   而刚体局部系算出来不可信（见 `soleNormalAligned` 上面的踩坑说明）。
+   *   需要"沿足长/内外"的语义时，用**块的 `_label` + `footSoleBounds`** 表达，
+   *   不要依赖这个局部系。名字保留是为了少动调用点。
+   *
+   * 为什么要有局部系版本：`soleXZ` / `footSoleBounds` 给的是世界量，而脚有
+   * **外八偏航（~25°）**，世界 x/z 和"脚的前后/内外"不是一回事。
+   * 局部系里 `x` = 沿足长（−跟 … +趾）、`z` = 内(+)/外(−)，语义直接可比。
+   * 用它区分两种"位移"：
+   *   · 局部 CoP 基本不动、刚体原点却在走 ⇒ **摩擦打滑**（压力点被拖着走）
+   *   · 局部 CoP 在鞋底上扫、刚体原点不动   ⇒ **绕棱 rocking**（不是打滑）
+   */
+  soleCoPLocal(side: 0 | 1, out: Float64Array): void {
+    out[0] = out[1] = out[2] = out[3] = 0;
+    let sx = 0, sy = 0, sz = 0, sl = 0;
+    // 以该侧**第一个**鞋底 collider 所属刚体的局部系为参照（同属一只脚）
+    const bi0 = this.soleColBody[side]![0];
+    if (bi0 === undefined) return;
+    const q0 = this.bodies[bi0]!.rotation();
+    const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const q = this.bodies[bi]!.rotation();
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          this.soleNormalAligned(bi, mf.normal());
+          if (this.soleAl < SOLE_NORMAL_TOL) return;
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const l = Math.abs(mf.contactImpulse(i));
+            if (!(l > 0)) continue;
+            const p = mf.solverContactPoint(i);
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            sx += p.x * l; sy += p.y * l; sz += p.z * l; sl += l;
+          }
+        });
+      });
+    }
+    if (sl > 0) { out[0] = sx / sl; out[1] = sy / sl; out[2] = sz / sl; }
+    out[3] = sl;
+  }
+
+  /** 某刚体的世界原点（诊断"刚体平移 vs 绕棱转动"用；不存在返回 false） */
+  bodyOrigin(key: string, out: Float64Array): boolean {
+    const i = this.indexByKey.get(key);
+    if (i === undefined) return false;
+    const t = this.bodies[i]!.translation();
+    out[0] = t.x; out[1] = t.y; out[2] = t.z;
+    return true;
+  }
+
+  /**
+   * ★ 诊断：数接触点。out = [manifold 总接触数, 通过底面过滤的接触数, Σf_n]
+   *   用来区分"接触本来就少"和"被我的底面过滤丢掉了"。
+   */
+  soleContactAudit(side: 0 | 1, out: Float64Array): void {
+    out[0] = 0; out[1] = 0; out[2] = 0;
+    const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const q = this.bodies[bi]!.rotation();
+      const cdOx = cd.offsetX ?? 0;
+      const EPS = 2e-3;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            out[0]++;
+            const p = mf.solverContactPoint(i);
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            out[1]++;
+            out[2] += Math.abs(mf.contactImpulse(i));
+          }
+        });
+      });
+    }
+  }
+
+  /**
+   * ★★ 鞋底接触的**权威判据**（frame-independent，两个条件都要满足）：
+   *   ① 接触法线与该鞋底块所在刚体的**底面外法线**对齐：`|n·axisW| ≥ soleNormalTol`
+   *   ② 接触点落在该脚的**世界系鞋底包围盒**内（`footSoleBounds`，已实测正确）
+   *
+   * ★★ 为什么**不能**用局部系判"接触点是否在底面矩形内"（2026-10-04 实测踩坑）：
+   *   我先写了局部系版本（`|local.x − offsetX| ≤ hx` 且 `|local.z − offsetZ| ≤ hz`），
+   *   看着最精确，结果 **16 个接触点只放过 2 个**、Σf_n 只有静止值的 11%。
+   *   逐点 dump 显示局部 z 读出 **−29 ~ −128 mm**（应 ±50 mm）。
+   *   根因：脚掌有**外八偏航 `restYaw ≈ 25°`**，而 `restTiltRad = 0`（脚保持水平）
+   *   ⇒ **y 分量对不对完全检验不出旋转对不对**（偏航绕 Y、不动 y）。
+   *   我当时就是被"y = −68.6mm 正好等于鞋底平面"骗过去的 —— y 对 ≠ 局部系对。
+   *   ⇒ 改用①+②：都与局部系无关，也不需要反旋转。
+   */
+  /** ① 法线是否与该块底面外法线对齐 */
+  private soleNormalAligned(bi: number, n: { x: number; y: number; z: number }): void {
+    const q = this.bodies[bi]!.rotation();
+    quatRotate(q.x, q.y, q.z, q.w, 0, -1, 0, this.soleAxisW);
+    this.soleAl = Math.abs(n.x * this.soleAxisW[0] + n.y * this.soleAxisW[1] + n.z * this.soleAxisW[2]);
+  }
+  private readonly soleAxisW = new Float64Array(3);
+  private soleAl = 0;
+  /** 各鞋底读回函数共用的"世界系鞋底包围盒"缓冲 */
+  private readonly soleBB = new Float64Array(4);
+
+  /**
+   * 世界点 → 刚体局部系。**必须先减掉刚体平移**再反旋转。
+   *
+   * ★★ 2026-10-04 修一个我自己写错的 bug：此前各处都写成
+   *   `quatRotate(-q…, p.x, p.y, p.z, out)` —— 漏了 `− translation`。
+   *   后果实测（tools/probe-midfoot.ts L 段）：脚掌本体在 z = 0.164 m、
+   *   局部 z 只该在 ±50 mm 内，却读出 **56~281 mm** ⇒ 底面过滤把
+   *   **16 个接触点里的 15 个**误判为"不在底面"⇒ CoP 只剩 1 个接触点、
+   *   Σ|λ| 只有体重的 4%（静止应 5.72 N·s）、压力点被钉死在足跟角上。
+   *   ⇒ 凡是"压力点钉住不动""载荷只有几个百分点"这类异常，先查这个。
+   */
+  toLocal(bodyIdx: number, wx: number, wy: number, wz: number, out: Float64Array): void {
+    const b = this.bodies[bodyIdx]!;
+    const t = b.translation();
+    const q = b.rotation();
+    quatRotate(-q.x, -q.y, -q.z, -q.w, wx - t.x, wy - t.y, wz - t.z, out);
+  }
+
+  /**
+   * ★ 诊断：把某侧鞋底**所有**接触点的局部坐标与所属块的范围全部列出。
+   *   实测发现底面过滤把 16 个接触点里的 15 个丢掉了（只剩 1 个），
+   *   所以必须看原始数据才能定位是"过滤写错了"还是"接触点坐标不对"。
+   * @param cb 每行一个：`块名 x z |lx-cd.offsetX| hx |lz-cd.offsetZ| hz 判定`
+   */
+  soleContactDump(side: 0 | 1, cb: (line: string) => void): void {
+    const cols = this.soleCols[side];
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      const cd = this.sk.bodies[bi]!.colliders[ci];
+      if (!cd) continue;
+      const lb = ((cd as unknown as { _label?: string })._label) ?? `#${ci}`;
+      const q = this.bodies[bi]!.rotation();
+      const tr = this.bodies[bi]!.translation();
+      const cdOx = cd.offsetX ?? 0;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const p = mf.solverContactPoint(i);
+            this.toLocal(bi, p.x, p.y, p.z, this.footTmp);
+            const t = this.footTmp;
+            const dx = Math.abs(t[0]! - cdOx), dz = Math.abs(t[2]! - cd.offsetZ);
+            const ok = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
+            cb(`     ${lb.padEnd(12)} 本体(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)})`
+              + ` 局部(${(t[0]! * 1000).toFixed(0)},${(t[1]! * 1000).toFixed(0)},${(t[2]! * 1000).toFixed(0)})mm`
+              + `  Δx${(dx * 1000).toFixed(0)}/${(cd.hx * 1000).toFixed(0)}`
+              + ` Δz${(dz * 1000).toFixed(0)}/${(cd.hz * 1000).toFixed(0)}  ${ok ? '✓' : '✗'}`);
+          }
+        });
+      });
+    }
+  }
+
+  /** 该侧鞋底的有效摩擦系数（Rapier 默认 Average 合成规则） */
+  soleFriction(side: 0 | 1): number {
+    const bi = this.soleColBody[side]![0];
+    const col = bi !== undefined ? this.soleCols[side][0] : undefined;
+    if (!col) return 0;
+    return ((col as unknown as { friction(): number }).friction()
+      + this.opt.groundFriction) / 2;
   }
 
   /**
@@ -1193,6 +1415,7 @@ export class Ragdoll {
    */
   soleBlockLoad(side: 0 | 1, out: Float64Array): void {
     const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
     for (let i = 0; i < out.length; i++) out[i] = 0;
     for (let ci = 0; ci < cols.length; ci++) {
       const col = cols[ci] as RAPIER.Collider;
@@ -1211,10 +1434,7 @@ export class Ragdoll {
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
             const p = mf.solverContactPoint(i);
-            quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
-            const t = this.footTmp;
-            if (Math.abs(t[0]! - cdOx) > cd.hx + EPS) continue;
-            if (Math.abs(t[2]! - cd.offsetZ) > cd.hz + EPS) continue;
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
             out[ci] += l;
           }
         });
@@ -1493,14 +1713,58 @@ soleBlockLabels(side: 0 | 1): string[] {
     */
   lastHitKey = '';
 
-  /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+  /**
+   * ★★ **所有与地面有竖直接触的刚体名**（诊断用）。
+   *
+   * 为什么要它：`bodyHitGround()` 只报**非脚部**刚体（`NOT_CRASH` 过滤掉了腿和脚），
+   * 所以"身体到底被什么撑住"这个问题它答不了。
+   * 而这个问题很关键：实测出现「躯干竖直速度 ≈0（没自由落体）但两脚 Σ|λ| 只有
+   * 体重的 4%」—— 说明支撑力来自**脚之外**的碰撞体。
+   *
+   * 判据与 `bodyHitGround` 同源（真实接触对 + |n·y| ≥ 0.5），但**不过滤**脚部。
+   */
+  groundTouching(): string[] {
+    const out: string[] = [];
+    for (let i = 0; i < this.bodies.length; i++) {
+      const b = this.bodies[i]!;
+      let hit = false;
+      for (let ci = 0; ci < b.numColliders() && !hit; ci++) {
+        const col = b.collider(ci);
+        this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+          this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+            if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+            const ny = mf.normal().y;
+            if (Math.abs(ny) > 0.5) hit = true;
+          });
+        });
+      }
+      if (hit) out.push(this.sk.bodies[i]!.key);
+    }
+    return out;
+  }
+
+  /**
+   * 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity
+   *
+   * ⚠ 2026-10-04：这个函数以前是**死的** —— 它调 `collider.aabb?.()`，
+   *   而 Rapier 0.14 的 `Collider` **没有 `aabb()` 方法**（AABB 在 `World` 上），
+   *   所以可选链永远取 undefined ⇒ 恒返回 `+Infinity`。
+   *   静默失效比报错更坏：任何依赖它的判据都会得到"永不触地"的结论。
+   *   改为**真去查接触**（与 `groundTouching` 同一套判据），并保留几何回退。
+   */
   lowestY(i: number): number {
-    const b = this.bodies[i];
+    const b = this.bodies[i]!;
     let lo = Infinity;
     for (let ci = 0; ci < b.numColliders(); ci++) {
-      const c = b.collider(ci) as unknown as { aabb?: () => { min: { y: number } } };
-      const a = c.aabb?.();
-      if (a && a.min.y < lo) lo = a.min.y;
+      const col = b.collider(ci);
+      let hit = false;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+          if (Math.abs(mf.normal().y) > 0.5) hit = true;
+        });
+      });
+      if (hit) lo = Math.min(lo, 0);
     }
     return lo;
   }

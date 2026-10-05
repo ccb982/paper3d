@@ -606,6 +606,145 @@ log('   逐个消融，看 γoff（负 = 沿不稳定流形发散）能不能变
   log('   判读：γoff 一直为负 ⇒ VIP 从出发就在发散；哪一行变正 ⇒ 那个通道是元凶。');
 }
 
+log('══ L. ★★ 左脚（承重脚）为什么"打滑" ══');
+log('   先分清三件事：① 摩擦饱和的真实打滑  ② 绕棱 rocking  ③ 整体平移（人被带着走）');
+log('   ★ 只看**站立期**（0.3~1.5s），把倒下那段的整体位移剔掉');
+{
+  const s2 = buildSkeleton(DEFAULT_CONFIG);
+  const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 3 });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller(s2, sim, {
+    ...DEFAULT_CONTROLLER,
+    gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+    balance: DEFAULT_CONTROLLER.balance,
+  });
+  const d = sim.doll;
+  const foot = new Float64Array(3), shin = new Float64Array(3), sole = new Float64Array(3);
+  const copL = new Float64Array(4), fr = new Float64Array(2);
+  const mu = d.soleFriction(0);
+  d.bodyOrigin('foot_l', foot); d.bodyOrigin('shin_l', shin);
+  const fx0 = foot[0]!, fz0 = foot[2]!, sx0 = shin[0]!, sz0 = shin[2]!;
+  let pFootX = fx0, pFootZ = fz0;
+  let footPath = 0, shinPath = 0, muPk = 0, nL = 0;
+  const lcx: number[] = [], lcz: number[] = [];
+  log(`   μ = ${mu.toFixed(2)}（body ${d.opt.bodyFriction} ⊕ ground ${d.opt.groundFriction}，Rapier 默认 Average）`);
+  log('     t     足x    足z   小腿x   小腿z   CoP.x(世界) CoP.z(世界)  摩擦占用   |τ踝|');
+  for (let i = 0; i < 360 && !sim.finished; i++) {
+    if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i < 36) continue;
+    const stand = i < 180;                    // ★ 站立期
+    d.bodyOrigin('foot_l', foot); d.bodyOrigin('shin_l', shin);
+    if (stand) {
+      footPath += Math.hypot(foot[0]! - pFootX, foot[2]! - pFootZ);
+      shinPath += Math.hypot(shin[0]! - sx0, shin[2]! - sz0) * 0;   // 见下：累计
+    }
+    shinPath = Math.hypot(shin[0]! - sx0, shin[2]! - sz0);
+    pFootX = foot[0]!; pFootZ = foot[2]!;
+    if (!stand) continue;
+    d.soleFrictionUse(0, fr);
+    d.soleCoPLocal(0, copL);
+    if (fr[1]! > 1e-6 && isFinite(fr[0]!)) { nL++; muPk = Math.max(muPk, fr[0]! / (mu * fr[1]!)); }
+    if (copL[3]! > 0) { lcx.push(copL[0]!); lcz.push(copL[2]!); }
+    if (i % 12 === 0) {
+      log(`   ${(i / 120).toFixed(2).padStart(5)}s ${((foot[0]! - fx0) * 1000).toFixed(0).padStart(6)}`
+        + ` ${((foot[2]! - fz0) * 1000).toFixed(0).padStart(6)}`
+        + ` ${((shin[0]! - sx0) * 1000).toFixed(0).padStart(7)}`
+        + ` ${((shin[2]! - sz0) * 1000).toFixed(0).padStart(7)}`
+        + ` ${(copL[0]! * 1000).toFixed(0).padStart(9)}mm ${(copL[2]! * 1000).toFixed(0).padStart(9)}mm`
+        + `   ${(muPk * 100).toFixed(0).padStart(5)}%  ${(ctrl.snapshot.ankleTauVip ?? 0).toFixed(0).padStart(6)}`);
+    }
+  }
+  log('');
+  log(`   站立期（0.3~1.5s）位移：左脚 ${(footPath * 1000).toFixed(0)}mm   小腿 ${(shinPath * 1000).toFixed(0)}mm`);
+  log(`   摩擦占用峰值 ${(muPk * 100).toFixed(0)}%（100% = 饱和）`);
+  if (lcx.length) {
+    log(`   CoP 世界 x（前后）：${(Math.min(...lcx) * 1000).toFixed(0)} ~ ${(Math.max(...lcx) * 1000).toFixed(0)}mm（鞋底 x 跨度见 footSoleBounds）`);
+    log(`   CoP 世界 z（内外）：${(Math.min(...lcz) * 1000).toFixed(0)} ~ ${(Math.max(...lcz) * 1000).toFixed(0)}mm（左脚在 z≈+164mm）`);
+  }
+  // ★★★ 到底是谁在撑住身体？逐刚体看最低点与接地情况
+  {
+    const s4 = buildSkeleton(DEFAULT_CONFIG);
+    const sim4 = new Sim(s4, shapeForJoints(s4.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 1.5 });
+    sim4.begin(new Float32Array(sim4.paramCount));
+    const c4 = new Controller(s4, sim4, {
+      ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: DEFAULT_CONTROLLER.balance,
+    });
+    let n4 = 0;
+    const touchCount: Record<string, number> = {};
+    for (let i = 0; i < 180 && !sim4.finished; i++) {
+      if (i % 2 === 0) sim4.doll.setMotorTargets(c4.step(1 / 60));
+      sim4.advance(1);
+      if (i < 36) continue;
+      n4++;
+      for (const k of sim4.doll.groundTouching()) touchCount[k] = (touchCount[k] ?? 0) + 1;
+    }
+    // ★ 接触点审计：过滤前 vs 过滤后 + 逐点 dump
+    {
+      const au = new Float64Array(3);
+      for (const [sd, nm] of [[0, '左脚'], [1, '右脚']] as [number, string][]) {
+        sim4.doll.soleContactAudit(sd as 0 | 1, au);
+        log(`   ${nm}：manifold 接触点 ${au[0]} → 通过底面过滤 ${au[1]}  Σf_n=${au[2]!.toFixed(4)} N·s`
+          + `（静止应 ${(70 * 9.81 / 120).toFixed(3)}）`);
+      }
+      log(`   ── 左脚接触点逐点明细（Δx/hx、Δz/hz 超过就是被过滤掉的）：`);
+      sim4.doll.soleContactDump(0, (l) => log(l));
+    }
+    const ord = Object.entries(touchCount).sort((a2, b2) => b2[1] - a2[1]);
+    log(`   站立期(${n4} 拍) 各刚体与地面竖直接触的拍数：`);
+    for (const [k, v] of ord) log(`     ${k.padEnd(12)} ${String(v).padStart(4)} 拍  ${(v / n4 * 100).toFixed(0)}%`);
+    const touching = ord.map(([k]) => k);
+    const NOT_SOLE = touching.filter((k) => !/^foot_/.test(k));
+    log(`   ⇒ 触地刚体：${touching.join(', ') || '（无）'}`);
+    check('★ 只有脚掌触地（小腿/大腿/手不应碰地）', NOT_SOLE.length === 0,
+      NOT_SOLE.length ? `非脚掌触地：${NOT_SOLE.join(', ')}` : touching.join(', '));
+  }
+
+  // ★ 两条腿各承多少（决定"左脚到底有没有在承重"）
+  {
+    const s3 = buildSkeleton(DEFAULT_CONFIG);
+    const sim3 = new Sim(s3, shapeForJoints(s3.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 1.5 });
+    sim3.begin(new Float32Array(sim3.paramCount));
+    const c3 = new Controller(s3, sim3, {
+      ...DEFAULT_CONTROLLER, gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: DEFAULT_CONTROLLER.balance,
+    });
+    const L = new Float64Array(6), R = new Float64Array(6);
+    let sl = 0, sr = 0, n3 = 0, yPrev = 0, yNow = 0, vPrev = 0, vNow = 0;
+    const W = 70 * 9.81, HZ = 120;
+    for (let i = 0; i < 180 && !sim3.finished; i++) {
+      if (i % 2 === 0) sim3.doll.setMotorTargets(c3.step(1 / 60));
+      sim3.advance(1);
+      const ty = sim3.doll.torso().translation().y;
+      if (i === 36) { yPrev = ty; vPrev = 0; }
+      if (i < 36) continue;
+      vNow = (ty - yPrev) * HZ; yPrev = ty;
+      sim3.doll.soleBlockLoad(0, L); sim3.doll.soleBlockLoad(1, R);
+      sl += Array.from(L).reduce((a, b) => a + b, 0);
+      sr += Array.from(R).reduce((a, b) => a + b, 0);
+      n3++;
+    }
+    const rawL = sl / n3, rawR = sr / n3;
+    const exp = W / HZ;          // 静止时全脚 Σ|λ| 应为 W·dt = W/120
+    log(`   ── 标定：静止时 Σ|λ|(全脚) 应 = m·g/120 = ${exp.toFixed(3)} N·s`);
+    log(`      实测原始 Σ|λ|：左 ${rawL.toFixed(4)}  右 ${rawR.toFixed(4)}  合计 ${(rawL + rawR).toFixed(4)} N·s`
+      + `  ⇒ 相当于 ${((rawL + rawR) * HZ).toFixed(0)} N，是体重的 ${((rawL + rawR) * HZ / W * 100).toFixed(0)}%`);
+    log(`      躯干竖直速度 ${vNow.toFixed(3)} m/s（自由落体 1.2s 后应为 −11.8 ⇒ 若≈0 说明被托住）`);
+    const share = rawL / Math.max(1e-9, rawL + rawR);
+    log(`   ⇒ **载荷份额**（这个比值与单位无关，可用）：左 ${(share * 100).toFixed(0)}%  右 ${((1 - share) * 100).toFixed(0)}%`);
+    var leftShare = share;
+  }
+  const heelOnly = false; void heelOnly;
+  check('★ 站立期摩擦**未**饱和（<85%）⇒ 不是摩擦打滑', muPk < 0.85, `峰值 ${(muPk * 100).toFixed(0)}%`);
+  check('★ 压力点在鞋底**前后中段**（不在跟端/趾端边缘）',
+    lcx.length > 20 && Math.max(...lcx) < 60 && Math.min(...lcx) > -60,
+    `CoP.x ∈ ${lcx.length ? ((Math.min(...lcx) * 1000).toFixed(0) + '~' + (Math.max(...lcx) * 1000).toFixed(0)) : '—'}mm`);
+  check('★ 站立期左脚几乎不平移（<20mm）', footPath * 1000 < 20, `${(footPath * 1000).toFixed(1)}mm`);
+  check('★ 左脚确实在承重（>30% 体重），否则"承重脚打滑"这个描述不成立',
+    (leftShare ?? 0) > 0.30, `左脚承担 ${((leftShare ?? 0) * 100).toFixed(0)}%`);
+}
+
 log('══ G. DIP/VIP 接线（Morasso 2019/2022）══');
 {
   const { AXIS_OWNERSHIP, ANKLE_ABSENT, axisRole } = await import('../src/core/systems/balance');

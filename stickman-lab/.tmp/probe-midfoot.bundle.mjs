@@ -13729,7 +13729,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -13752,6 +13752,7 @@ var init_ragdoll = __esm({
     STANCE_CLEAR_MIN = 0.03;
     STANCE_ENTER = 0.05;
     STANCE_EXIT = 0.1;
+    SOLE_NORMAL_TOL = 0.7;
     DEFAULTS = {
       groundFriction: 1,
       // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
@@ -14258,26 +14259,23 @@ var init_ragdoll = __esm({
         out[0] = out[1] = out[2] = out[3] = 0;
         let sx = 0, sy = 0, sz = 0, sl = 0;
         const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const EPS = 2e-3;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
           const bi = this.soleColBody[side][ci];
           if (bi === void 0) continue;
-          const q = this.bodies[bi].rotation();
-          const cd = this.sk.bodies[bi].colliders[ci];
-          if (!cd) continue;
-          const cdOx = cd.offsetX ?? 0;
-          const EPS = 2e-3;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
               const n = mf.numSolverContacts();
               for (let i = 0; i < n; i++) {
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
-                quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
-                const t = this.footTmp;
-                if (Math.abs(t[0] - cdOx) > cd.hx + EPS) continue;
-                if (Math.abs(t[2] - cd.offsetZ) > cd.hz + EPS) continue;
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
                 sx += p.x * l;
                 sy += p.y * l;
                 sz += p.z * l;
@@ -14311,6 +14309,9 @@ var init_ragdoll = __esm({
       soleColumnLoad(side, out) {
         const tmp = this.footTmp;
         const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const bbMidZ = (bb[2] + bb[3]) / 2;
         for (let i = 0; i < out.length; i++) out[i] = 0;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
@@ -14329,15 +14330,237 @@ var init_ragdoll = __esm({
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
-                quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, tmp);
-                if (Math.abs(tmp[0] - cdOx) > cd.hx + EPS) continue;
-                if (Math.abs(tmp[2] - cd.offsetZ) > cd.hz + EPS) continue;
-                if (tmp[2] >= 0) out[0] += l;
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                if (p.z >= bbMidZ) out[0] += l;
                 else out[1] += l;
               }
             });
           });
         }
+      }
+      /**
+       * ★★ **摩擦占用**：鞋底切向冲量合计 / 法向冲量合计。
+       *
+       * 判读（这是"打滑"和"只是重心在动"的唯一分界）：
+       *   `|Σf_t| / (μ·Σf_n) ≈ 1` ⇒ 摩擦**饱和**，脚正在被拖着走（真打滑）
+       *   远小于 1            ⇒ 摩擦没用满，位移来自别的原因
+       *                            （通常是**绕棱转动** rocking：刚体中心几乎不动，
+       *                              但接触点在扫——`soleCoPLocal` 能看出来）
+       *
+       * @param out 写入 [Σ|f_t|, Σf_n]（单位 N·s，按 120Hz 换算成 N 要 ×120）
+       */
+      soleFrictionUse(side, out) {
+        let ft = 0, fn = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                ft += Math.hypot(mf.contactTangentImpulseX(i), mf.contactTangentImpulseY(i));
+                fn += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+        out[0] = ft;
+        out[1] = fn;
+      }
+      /**
+       * ★★ 鞋底 **CoP 的世界坐标**（写入 out[0..2]）+ Σλ（out[3]）。
+       *
+       * ⚠ 2026-10-04：函数名还叫 `soleCoPLocal`，但**已改成返回世界坐标**。
+       *   原本想返回"脚刚体局部系"，实测不可靠 —— 脚掌有外八偏航 ~25°，
+       *   而刚体局部系算出来不可信（见 `soleNormalAligned` 上面的踩坑说明）。
+       *   需要"沿足长/内外"的语义时，用**块的 `_label` + `footSoleBounds`** 表达，
+       *   不要依赖这个局部系。名字保留是为了少动调用点。
+       *
+       * 为什么要有局部系版本：`soleXZ` / `footSoleBounds` 给的是世界量，而脚有
+       * **外八偏航（~25°）**，世界 x/z 和"脚的前后/内外"不是一回事。
+       * 局部系里 `x` = 沿足长（−跟 … +趾）、`z` = 内(+)/外(−)，语义直接可比。
+       * 用它区分两种"位移"：
+       *   · 局部 CoP 基本不动、刚体原点却在走 ⇒ **摩擦打滑**（压力点被拖着走）
+       *   · 局部 CoP 在鞋底上扫、刚体原点不动   ⇒ **绕棱 rocking**（不是打滑）
+       */
+      soleCoPLocal(side, out) {
+        out[0] = out[1] = out[2] = out[3] = 0;
+        let sx = 0, sy = 0, sz = 0, sl = 0;
+        const bi0 = this.soleColBody[side][0];
+        if (bi0 === void 0) return;
+        const q0 = this.bodies[bi0].rotation();
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                sx += p.x * l;
+                sy += p.y * l;
+                sz += p.z * l;
+                sl += l;
+              }
+            });
+          });
+        }
+        if (sl > 0) {
+          out[0] = sx / sl;
+          out[1] = sy / sl;
+          out[2] = sz / sl;
+        }
+        out[3] = sl;
+      }
+      /** 某刚体的世界原点（诊断"刚体平移 vs 绕棱转动"用；不存在返回 false） */
+      bodyOrigin(key, out) {
+        const i = this.indexByKey.get(key);
+        if (i === void 0) return false;
+        const t = this.bodies[i].translation();
+        out[0] = t.x;
+        out[1] = t.y;
+        out[2] = t.z;
+        return true;
+      }
+      /**
+       * ★ 诊断：数接触点。out = [manifold 总接触数, 通过底面过滤的接触数, Σf_n]
+       *   用来区分"接触本来就少"和"被我的底面过滤丢掉了"。
+       */
+      soleContactAudit(side, out) {
+        out[0] = 0;
+        out[1] = 0;
+        out[2] = 0;
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const q = this.bodies[bi].rotation();
+          const cdOx = cd.offsetX ?? 0;
+          const EPS = 2e-3;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                out[0]++;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                out[1]++;
+                out[2] += Math.abs(mf.contactImpulse(i));
+              }
+            });
+          });
+        }
+      }
+      /**
+       * ★★ 鞋底接触的**权威判据**（frame-independent，两个条件都要满足）：
+       *   ① 接触法线与该鞋底块所在刚体的**底面外法线**对齐：`|n·axisW| ≥ soleNormalTol`
+       *   ② 接触点落在该脚的**世界系鞋底包围盒**内（`footSoleBounds`，已实测正确）
+       *
+       * ★★ 为什么**不能**用局部系判"接触点是否在底面矩形内"（2026-10-04 实测踩坑）：
+       *   我先写了局部系版本（`|local.x − offsetX| ≤ hx` 且 `|local.z − offsetZ| ≤ hz`），
+       *   看着最精确，结果 **16 个接触点只放过 2 个**、Σf_n 只有静止值的 11%。
+       *   逐点 dump 显示局部 z 读出 **−29 ~ −128 mm**（应 ±50 mm）。
+       *   根因：脚掌有**外八偏航 `restYaw ≈ 25°`**，而 `restTiltRad = 0`（脚保持水平）
+       *   ⇒ **y 分量对不对完全检验不出旋转对不对**（偏航绕 Y、不动 y）。
+       *   我当时就是被"y = −68.6mm 正好等于鞋底平面"骗过去的 —— y 对 ≠ 局部系对。
+       *   ⇒ 改用①+②：都与局部系无关，也不需要反旋转。
+       */
+      /** ① 法线是否与该块底面外法线对齐 */
+      soleNormalAligned(bi, n) {
+        const q = this.bodies[bi].rotation();
+        quatRotate(q.x, q.y, q.z, q.w, 0, -1, 0, this.soleAxisW);
+        this.soleAl = Math.abs(n.x * this.soleAxisW[0] + n.y * this.soleAxisW[1] + n.z * this.soleAxisW[2]);
+      }
+      soleAxisW = new Float64Array(3);
+      soleAl = 0;
+      /** 各鞋底读回函数共用的"世界系鞋底包围盒"缓冲 */
+      soleBB = new Float64Array(4);
+      /**
+       * 世界点 → 刚体局部系。**必须先减掉刚体平移**再反旋转。
+       *
+       * ★★ 2026-10-04 修一个我自己写错的 bug：此前各处都写成
+       *   `quatRotate(-q…, p.x, p.y, p.z, out)` —— 漏了 `− translation`。
+       *   后果实测（tools/probe-midfoot.ts L 段）：脚掌本体在 z = 0.164 m、
+       *   局部 z 只该在 ±50 mm 内，却读出 **56~281 mm** ⇒ 底面过滤把
+       *   **16 个接触点里的 15 个**误判为"不在底面"⇒ CoP 只剩 1 个接触点、
+       *   Σ|λ| 只有体重的 4%（静止应 5.72 N·s）、压力点被钉死在足跟角上。
+       *   ⇒ 凡是"压力点钉住不动""载荷只有几个百分点"这类异常，先查这个。
+       */
+      toLocal(bodyIdx, wx, wy, wz, out) {
+        const b = this.bodies[bodyIdx];
+        const t = b.translation();
+        const q = b.rotation();
+        quatRotate(-q.x, -q.y, -q.z, -q.w, wx - t.x, wy - t.y, wz - t.z, out);
+      }
+      /**
+       * ★ 诊断：把某侧鞋底**所有**接触点的局部坐标与所属块的范围全部列出。
+       *   实测发现底面过滤把 16 个接触点里的 15 个丢掉了（只剩 1 个），
+       *   所以必须看原始数据才能定位是"过滤写错了"还是"接触点坐标不对"。
+       * @param cb 每行一个：`块名 x z |lx-cd.offsetX| hx |lz-cd.offsetZ| hz 判定`
+       */
+      soleContactDump(side, cb) {
+        const cols = this.soleCols[side];
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          const cd = this.sk.bodies[bi].colliders[ci];
+          if (!cd) continue;
+          const lb = cd._label ?? `#${ci}`;
+          const q = this.bodies[bi].rotation();
+          const tr = this.bodies[bi].translation();
+          const cdOx = cd.offsetX ?? 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const p = mf.solverContactPoint(i);
+                this.toLocal(bi, p.x, p.y, p.z, this.footTmp);
+                const t = this.footTmp;
+                const dx = Math.abs(t[0] - cdOx), dz = Math.abs(t[2] - cd.offsetZ);
+                const ok = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
+                cb(`     ${lb.padEnd(12)} \u672C\u4F53(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)}) \u5C40\u90E8(${(t[0] * 1e3).toFixed(0)},${(t[1] * 1e3).toFixed(0)},${(t[2] * 1e3).toFixed(0)})mm  \u0394x${(dx * 1e3).toFixed(0)}/${(cd.hx * 1e3).toFixed(0)} \u0394z${(dz * 1e3).toFixed(0)}/${(cd.hz * 1e3).toFixed(0)}  ${ok ? "\u2713" : "\u2717"}`);
+              }
+            });
+          });
+        }
+      }
+      /** 该侧鞋底的有效摩擦系数（Rapier 默认 Average 合成规则） */
+      soleFriction(side) {
+        const bi = this.soleColBody[side][0];
+        const col = bi !== void 0 ? this.soleCols[side][0] : void 0;
+        if (!col) return 0;
+        return (col.friction() + this.opt.groundFriction) / 2;
       }
       /**
        * ★★ **逐块鞋底法向载荷**（`out[i]` = 第 i 块鞋底 collider 的 Σ|λ|）。
@@ -14356,6 +14579,8 @@ var init_ragdoll = __esm({
        */
       soleBlockLoad(side, out) {
         const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
         for (let i = 0; i < out.length; i++) out[i] = 0;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
@@ -14374,10 +14599,7 @@ var init_ragdoll = __esm({
                 const l = Math.abs(mf.contactImpulse(i));
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
-                quatRotate(-q.x, -q.y, -q.z, -q.w, p.x, p.y, p.z, this.footTmp);
-                const t = this.footTmp;
-                if (Math.abs(t[0] - cdOx) > cd.hx + EPS) continue;
-                if (Math.abs(t[2] - cd.offsetZ) > cd.hz + EPS) continue;
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
                 out[ci] += l;
               }
             });
@@ -14638,14 +14860,57 @@ var init_ragdoll = __esm({
         *   如果它们也算 crash，就会误伤，把本可以继续的重心转移判成摔倒。
         */
       lastHitKey = "";
-      /** 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity */
+      /**
+       * ★★ **所有与地面有竖直接触的刚体名**（诊断用）。
+       *
+       * 为什么要它：`bodyHitGround()` 只报**非脚部**刚体（`NOT_CRASH` 过滤掉了腿和脚），
+       * 所以"身体到底被什么撑住"这个问题它答不了。
+       * 而这个问题很关键：实测出现「躯干竖直速度 ≈0（没自由落体）但两脚 Σ|λ| 只有
+       * 体重的 4%」—— 说明支撑力来自**脚之外**的碰撞体。
+       *
+       * 判据与 `bodyHitGround` 同源（真实接触对 + |n·y| ≥ 0.5），但**不过滤**脚部。
+       */
+      groundTouching() {
+        const out = [];
+        for (let i = 0; i < this.bodies.length; i++) {
+          const b = this.bodies[i];
+          let hit = false;
+          for (let ci = 0; ci < b.numColliders() && !hit; ci++) {
+            const col = b.collider(ci);
+            this.world.contactPairsWith(col, (other) => {
+              this.world.contactPair(col, other, (mf) => {
+                if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+                const ny = mf.normal().y;
+                if (Math.abs(ny) > 0.5) hit = true;
+              });
+            });
+          }
+          if (hit) out.push(this.sk.bodies[i].key);
+        }
+        return out;
+      }
+      /**
+       * 该刚体所有碰撞体的最低点世界 y（m）；没碰撞体返回 +Infinity
+       *
+       * ⚠ 2026-10-04：这个函数以前是**死的** —— 它调 `collider.aabb?.()`，
+       *   而 Rapier 0.14 的 `Collider` **没有 `aabb()` 方法**（AABB 在 `World` 上），
+       *   所以可选链永远取 undefined ⇒ 恒返回 `+Infinity`。
+       *   静默失效比报错更坏：任何依赖它的判据都会得到"永不触地"的结论。
+       *   改为**真去查接触**（与 `groundTouching` 同一套判据），并保留几何回退。
+       */
       lowestY(i) {
         const b = this.bodies[i];
         let lo = Infinity;
         for (let ci = 0; ci < b.numColliders(); ci++) {
-          const c = b.collider(ci);
-          const a = c.aabb?.();
-          if (a && a.min.y < lo) lo = a.min.y;
+          const col = b.collider(ci);
+          let hit = false;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numSolverContacts() === 0 && mf.numContacts() === 0) return;
+              if (Math.abs(mf.normal().y) > 0.5) hit = true;
+            });
+          });
+          if (hit) lo = Math.min(lo, 0);
         }
         return lo;
       }
@@ -20477,6 +20742,158 @@ log("   \u9010\u4E2A\u6D88\u878D\uFF0C\u770B \u03B3off\uFF08\u8D1F = \u6CBF\u4E0
   log("");
   log("   \u5224\u8BFB\uFF1A\u03B3off \u4E00\u76F4\u4E3A\u8D1F \u21D2 VIP \u4ECE\u51FA\u53D1\u5C31\u5728\u53D1\u6563\uFF1B\u54EA\u4E00\u884C\u53D8\u6B63 \u21D2 \u90A3\u4E2A\u901A\u9053\u662F\u5143\u51F6\u3002");
 }
+log('\u2550\u2550 L. \u2605\u2605 \u5DE6\u811A\uFF08\u627F\u91CD\u811A\uFF09\u4E3A\u4EC0\u4E48"\u6253\u6ED1" \u2550\u2550');
+log("   \u5148\u5206\u6E05\u4E09\u4EF6\u4E8B\uFF1A\u2460 \u6469\u64E6\u9971\u548C\u7684\u771F\u5B9E\u6253\u6ED1  \u2461 \u7ED5\u68F1 rocking  \u2462 \u6574\u4F53\u5E73\u79FB\uFF08\u4EBA\u88AB\u5E26\u7740\u8D70\uFF09");
+log("   \u2605 \u53EA\u770B**\u7AD9\u7ACB\u671F**\uFF080.3~1.5s\uFF09\uFF0C\u628A\u5012\u4E0B\u90A3\u6BB5\u7684\u6574\u4F53\u4F4D\u79FB\u5254\u6389");
+{
+  const s2 = buildSkeleton2(DEFAULT_CONFIG2);
+  const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 3 });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller2(s2, sim, {
+    ...DEFAULT_CONTROLLER2,
+    gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+    balance: DEFAULT_CONTROLLER2.balance
+  });
+  const d = sim.doll;
+  const foot = new Float64Array(3), shin = new Float64Array(3), sole = new Float64Array(3);
+  const copL = new Float64Array(4), fr = new Float64Array(2);
+  const mu = d.soleFriction(0);
+  d.bodyOrigin("foot_l", foot);
+  d.bodyOrigin("shin_l", shin);
+  const fx0 = foot[0], fz0 = foot[2], sx0 = shin[0], sz0 = shin[2];
+  let pFootX = fx0, pFootZ = fz0;
+  let footPath = 0, shinPath = 0, muPk = 0, nL = 0;
+  const lcx = [], lcz = [];
+  log(`   \u03BC = ${mu.toFixed(2)}\uFF08body ${d.opt.bodyFriction} \u2295 ground ${d.opt.groundFriction}\uFF0CRapier \u9ED8\u8BA4 Average\uFF09`);
+  log("     t     \u8DB3x    \u8DB3z   \u5C0F\u817Fx   \u5C0F\u817Fz   CoP.x(\u4E16\u754C) CoP.z(\u4E16\u754C)  \u6469\u64E6\u5360\u7528   |\u03C4\u8E1D|");
+  for (let i = 0; i < 360 && !sim.finished; i++) {
+    if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i < 36) continue;
+    const stand = i < 180;
+    d.bodyOrigin("foot_l", foot);
+    d.bodyOrigin("shin_l", shin);
+    if (stand) {
+      footPath += Math.hypot(foot[0] - pFootX, foot[2] - pFootZ);
+      shinPath += Math.hypot(shin[0] - sx0, shin[2] - sz0) * 0;
+    }
+    shinPath = Math.hypot(shin[0] - sx0, shin[2] - sz0);
+    pFootX = foot[0];
+    pFootZ = foot[2];
+    if (!stand) continue;
+    d.soleFrictionUse(0, fr);
+    d.soleCoPLocal(0, copL);
+    if (fr[1] > 1e-6 && isFinite(fr[0])) {
+      nL++;
+      muPk = Math.max(muPk, fr[0] / (mu * fr[1]));
+    }
+    if (copL[3] > 0) {
+      lcx.push(copL[0]);
+      lcz.push(copL[2]);
+    }
+    if (i % 12 === 0) {
+      log(`   ${(i / 120).toFixed(2).padStart(5)}s ${((foot[0] - fx0) * 1e3).toFixed(0).padStart(6)} ${((foot[2] - fz0) * 1e3).toFixed(0).padStart(6)} ${((shin[0] - sx0) * 1e3).toFixed(0).padStart(7)} ${((shin[2] - sz0) * 1e3).toFixed(0).padStart(7)} ${(copL[0] * 1e3).toFixed(0).padStart(9)}mm ${(copL[2] * 1e3).toFixed(0).padStart(9)}mm   ${(muPk * 100).toFixed(0).padStart(5)}%  ${(ctrl.snapshot.ankleTauVip ?? 0).toFixed(0).padStart(6)}`);
+    }
+  }
+  log("");
+  log(`   \u7AD9\u7ACB\u671F\uFF080.3~1.5s\uFF09\u4F4D\u79FB\uFF1A\u5DE6\u811A ${(footPath * 1e3).toFixed(0)}mm   \u5C0F\u817F ${(shinPath * 1e3).toFixed(0)}mm`);
+  log(`   \u6469\u64E6\u5360\u7528\u5CF0\u503C ${(muPk * 100).toFixed(0)}%\uFF08100% = \u9971\u548C\uFF09`);
+  if (lcx.length) {
+    log(`   CoP \u4E16\u754C x\uFF08\u524D\u540E\uFF09\uFF1A${(Math.min(...lcx) * 1e3).toFixed(0)} ~ ${(Math.max(...lcx) * 1e3).toFixed(0)}mm\uFF08\u978B\u5E95 x \u8DE8\u5EA6\u89C1 footSoleBounds\uFF09`);
+    log(`   CoP \u4E16\u754C z\uFF08\u5185\u5916\uFF09\uFF1A${(Math.min(...lcz) * 1e3).toFixed(0)} ~ ${(Math.max(...lcz) * 1e3).toFixed(0)}mm\uFF08\u5DE6\u811A\u5728 z\u2248+164mm\uFF09`);
+  }
+  {
+    const s4 = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim4 = new Sim2(s4, shapeForJoints2(s4.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 1.5 });
+    sim4.begin(new Float32Array(sim4.paramCount));
+    const c4 = new Controller2(s4, sim4, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: DEFAULT_CONTROLLER2.balance
+    });
+    let n4 = 0;
+    const touchCount = {};
+    for (let i = 0; i < 180 && !sim4.finished; i++) {
+      if (i % 2 === 0) sim4.doll.setMotorTargets(c4.step(1 / 60));
+      sim4.advance(1);
+      if (i < 36) continue;
+      n4++;
+      for (const k of sim4.doll.groundTouching()) touchCount[k] = (touchCount[k] ?? 0) + 1;
+    }
+    {
+      const au = new Float64Array(3);
+      for (const [sd, nm] of [[0, "\u5DE6\u811A"], [1, "\u53F3\u811A"]]) {
+        sim4.doll.soleContactAudit(sd, au);
+        log(`   ${nm}\uFF1Amanifold \u63A5\u89E6\u70B9 ${au[0]} \u2192 \u901A\u8FC7\u5E95\u9762\u8FC7\u6EE4 ${au[1]}  \u03A3f_n=${au[2].toFixed(4)} N\xB7s\uFF08\u9759\u6B62\u5E94 ${(70 * 9.81 / 120).toFixed(3)}\uFF09`);
+      }
+      log(`   \u2500\u2500 \u5DE6\u811A\u63A5\u89E6\u70B9\u9010\u70B9\u660E\u7EC6\uFF08\u0394x/hx\u3001\u0394z/hz \u8D85\u8FC7\u5C31\u662F\u88AB\u8FC7\u6EE4\u6389\u7684\uFF09\uFF1A`);
+      sim4.doll.soleContactDump(0, (l) => log(l));
+    }
+    const ord = Object.entries(touchCount).sort((a2, b2) => b2[1] - a2[1]);
+    log(`   \u7AD9\u7ACB\u671F(${n4} \u62CD) \u5404\u521A\u4F53\u4E0E\u5730\u9762\u7AD6\u76F4\u63A5\u89E6\u7684\u62CD\u6570\uFF1A`);
+    for (const [k, v] of ord) log(`     ${k.padEnd(12)} ${String(v).padStart(4)} \u62CD  ${(v / n4 * 100).toFixed(0)}%`);
+    const touching = ord.map(([k]) => k);
+    const NOT_SOLE = touching.filter((k) => !/^foot_/.test(k));
+    log(`   \u21D2 \u89E6\u5730\u521A\u4F53\uFF1A${touching.join(", ") || "\uFF08\u65E0\uFF09"}`);
+    check(
+      "\u2605 \u53EA\u6709\u811A\u638C\u89E6\u5730\uFF08\u5C0F\u817F/\u5927\u817F/\u624B\u4E0D\u5E94\u78B0\u5730\uFF09",
+      NOT_SOLE.length === 0,
+      NOT_SOLE.length ? `\u975E\u811A\u638C\u89E6\u5730\uFF1A${NOT_SOLE.join(", ")}` : touching.join(", ")
+    );
+  }
+  {
+    const s3 = buildSkeleton2(DEFAULT_CONFIG2);
+    const sim3 = new Sim2(s3, shapeForJoints2(s3.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 1.5 });
+    sim3.begin(new Float32Array(sim3.paramCount));
+    const c3 = new Controller2(s3, sim3, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: DEFAULT_CONTROLLER2.balance
+    });
+    const L = new Float64Array(6), R = new Float64Array(6);
+    let sl = 0, sr = 0, n3 = 0, yPrev = 0, yNow = 0, vPrev = 0, vNow = 0;
+    const W2 = 70 * 9.81, HZ = 120;
+    for (let i = 0; i < 180 && !sim3.finished; i++) {
+      if (i % 2 === 0) sim3.doll.setMotorTargets(c3.step(1 / 60));
+      sim3.advance(1);
+      const ty = sim3.doll.torso().translation().y;
+      if (i === 36) {
+        yPrev = ty;
+        vPrev = 0;
+      }
+      if (i < 36) continue;
+      vNow = (ty - yPrev) * HZ;
+      yPrev = ty;
+      sim3.doll.soleBlockLoad(0, L);
+      sim3.doll.soleBlockLoad(1, R);
+      sl += Array.from(L).reduce((a, b) => a + b, 0);
+      sr += Array.from(R).reduce((a, b) => a + b, 0);
+      n3++;
+    }
+    const rawL = sl / n3, rawR = sr / n3;
+    const exp = W2 / HZ;
+    log(`   \u2500\u2500 \u6807\u5B9A\uFF1A\u9759\u6B62\u65F6 \u03A3|\u03BB|(\u5168\u811A) \u5E94 = m\xB7g/120 = ${exp.toFixed(3)} N\xB7s`);
+    log(`      \u5B9E\u6D4B\u539F\u59CB \u03A3|\u03BB|\uFF1A\u5DE6 ${rawL.toFixed(4)}  \u53F3 ${rawR.toFixed(4)}  \u5408\u8BA1 ${(rawL + rawR).toFixed(4)} N\xB7s  \u21D2 \u76F8\u5F53\u4E8E ${((rawL + rawR) * HZ).toFixed(0)} N\uFF0C\u662F\u4F53\u91CD\u7684 ${((rawL + rawR) * HZ / W2 * 100).toFixed(0)}%`);
+    log(`      \u8EAF\u5E72\u7AD6\u76F4\u901F\u5EA6 ${vNow.toFixed(3)} m/s\uFF08\u81EA\u7531\u843D\u4F53 1.2s \u540E\u5E94\u4E3A \u221211.8 \u21D2 \u82E5\u22480 \u8BF4\u660E\u88AB\u6258\u4F4F\uFF09`);
+    const share = rawL / Math.max(1e-9, rawL + rawR);
+    log(`   \u21D2 **\u8F7D\u8377\u4EFD\u989D**\uFF08\u8FD9\u4E2A\u6BD4\u503C\u4E0E\u5355\u4F4D\u65E0\u5173\uFF0C\u53EF\u7528\uFF09\uFF1A\u5DE6 ${(share * 100).toFixed(0)}%  \u53F3 ${((1 - share) * 100).toFixed(0)}%`);
+    leftShare = share;
+  }
+  const heelOnly = false;
+  check("\u2605 \u7AD9\u7ACB\u671F\u6469\u64E6**\u672A**\u9971\u548C\uFF08<85%\uFF09\u21D2 \u4E0D\u662F\u6469\u64E6\u6253\u6ED1", muPk < 0.85, `\u5CF0\u503C ${(muPk * 100).toFixed(0)}%`);
+  check(
+    "\u2605 \u538B\u529B\u70B9\u5728\u978B\u5E95**\u524D\u540E\u4E2D\u6BB5**\uFF08\u4E0D\u5728\u8DDF\u7AEF/\u8DBE\u7AEF\u8FB9\u7F18\uFF09",
+    lcx.length > 20 && Math.max(...lcx) < 60 && Math.min(...lcx) > -60,
+    `CoP.x \u2208 ${lcx.length ? (Math.min(...lcx) * 1e3).toFixed(0) + "~" + (Math.max(...lcx) * 1e3).toFixed(0) : "\u2014"}mm`
+  );
+  check("\u2605 \u7AD9\u7ACB\u671F\u5DE6\u811A\u51E0\u4E4E\u4E0D\u5E73\u79FB\uFF08<20mm\uFF09", footPath * 1e3 < 20, `${(footPath * 1e3).toFixed(1)}mm`);
+  check(
+    '\u2605 \u5DE6\u811A\u786E\u5B9E\u5728\u627F\u91CD\uFF08>30% \u4F53\u91CD\uFF09\uFF0C\u5426\u5219"\u627F\u91CD\u811A\u6253\u6ED1"\u8FD9\u4E2A\u63CF\u8FF0\u4E0D\u6210\u7ACB',
+    (leftShare ?? 0) > 0.3,
+    `\u5DE6\u811A\u627F\u62C5 ${((leftShare ?? 0) * 100).toFixed(0)}%`
+  );
+}
+var leftShare;
 log("\u2550\u2550 G. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
 {
   const { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, ANKLE_ABSENT: ANKLE_ABSENT2, axisRole: axisRole2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
