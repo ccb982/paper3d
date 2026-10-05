@@ -271,13 +271,20 @@ export interface RagdollOptions {
    *   ⇒ 必须扫参，取"权限够但脚不离地"的那一档。
    */
   ankleGroundFactor?: number;
+  /**
+   * ★ 子侧子树总质量阈值（kg）：**不超过**它的关节才享受 `ankleGroundFactor` 放宽。
+   *   默认 2 kg —— 实测踝 1.01 / 中足 0.51 / 膝 4.27 / 髋 11.3 ⇒ 干净地只放开踝与中足。
+   *   理由见 `ankleGroundFactor` 那段注释：「着地脚掌的有效惯量由地面决定」
+   *   这条物理只对踝/中足成立，对髋/膝（内关节）不成立。
+   */
+  groundFactorFootKg?: number;
 }
 
 const DEFAULTS: Required<RagdollOptions> = {
   groundFriction: 1.0,
-  // ★ 中足被动弹簧（量级选取，见接口注释）
-  midfootStiffness: 30,
-  midfootDamping: 1.5,
+  // ★ 中足被动弓（**单位 N·m/rad**，折算见构造里那段注释）
+  midfootStiffness: 120,
+  midfootDamping: 8,
   /**
    * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
    *
@@ -314,7 +321,29 @@ const DEFAULTS: Required<RagdollOptions> = {
   //   额状面平衡要的那几十 N·m 走的就是那条路。
   //   ⇒ 位置反馈环保持原始护栏（站得住），前馈走无护栏通道（力矩够）。
   //   该系数只留给"踝接地时脚掌惯量重标定"用，见 probe-authority。
-  ankleGroundFactor: 1,
+  //
+  // ★★★ 2026-10-04 修：`1` 让这整条机制**恒等于死代码**。
+  //   `Math.max(1, Math.min(ankleGroundFactor, sum/free, need/free))` 在系数 = 1 时
+  //   永远返回 1 ⇒ 柔性足/踝的接地惯量放大**从未生效**（实测 16 个关节全是 1.00）。
+  //   后果：薄盒脚掌 Ieff ≈ 0.0015 kg·m² ⇒ 位置环护栏把踝/中足反馈掐到 **1% 权限**
+  //   （实测 motorAuthority = 0.01），踝与中足实际都是**自由铰**。
+  //   取 8：让髋/膝拿到它们本来该拿的量级，踝拿到够用的刚度而脚仍不脱离地面。
+  //   ⚠ 这个数**只在 VIP 刚度 + 髋被动刚度（文献结构）就位之后**才有意义 ——
+  //   在那之前放松护栏只会把脚踹飞（实测 factor 32/64 ⇒ 0.9~1.2 s 倒地）。
+  //   扫参见 tools/probe-midfoot.ts D3；改这个数必须重跑它。
+  // ⚠ 2026-10-04 二次调整：全局系数**只对踝/中足生效**（见 `groundFactorFootKg`）。
+  //   之前它是全局的，一动就把髋/膝的稳定性护栏也放松（实测关踝基线 6.00→1.53 s）。
+  //   踝/中足要权限走这里；**不要**再靠调 `driveMotors` 的 kP 去救踝。
+  //   ★ 取值依据（tools/probe-midfoot.ts B2 段量出来的）：
+  //     要放行 `τmax` 所需的有效惯量 `Ieff ≥ τmax·dt/ω_max`：
+  //       踝   τmax=120 ⇒ 需 0.111 kg·m²，自由 Ieff=0.00153 ⇒ **需 gf ≥ 72**
+  //       中足 τmax=60  ⇒ 需 0.0556 kg·m²，自由 Ieff=0.00079 ⇒ **需 gf ≥ 70**
+  //     ⇒ 取 **120**（约 1.7× 余量）。实测 gf 从 72 到 20000 结果不再变化
+  //     （踝都能走到 +18° 机械限位），说明 120 已经进入"够用"平台区。
+  //     ⚠ gf=8 时弓刚度被护栏掐到只剩 ~0.8 N·m ⇒ 中足在站立载荷下直接塌到限位 34°
+  //       （实测 弓 0/120/1200 N·m/rad 分别给出 34.0°/34.5°/37.7° —— 刚度不起作用）。
+  ankleGroundFactor: 120,
+  groundFactorFootKg: 2,
 };
 
 // ---------------------------------------------------------------- 四元数工具
@@ -570,6 +599,31 @@ export class Ragdoll {
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
+    // ★★ 被动弓的刚度折算成 `jointGain`（N·m/rad → 1/s 的等效增益）。
+    //   自研马达的力矩是 `τ = kP·(θ_ref−θ)·τmax/ωmax − kD·ω_rel·τmax/ωmax`，
+    //   令 `θ_ref = 0` 就是**以 0 rad 为原点的弹簧**，其
+    //       等效刚度 K = kP·τmax/ωmax        等效阻尼 B = kD·τmax/ωmax
+    //   ⇒ 反解 `kP = K·ωmax/τmax`。
+    //   这样 `midfootStiffness` 的单位**真的是 N·m/rad**（与文献同量纲），
+    //   而不是 Rapier 马达那种无量纲增益 —— 见 createJoints 里被删掉的那段注释。
+    if (this.opt.midfootStiffness || this.opt.midfootDamping) {
+      const gain: Record<string, { kP: number; kD: number }> = { ...(this.opt.jointGain ?? {}) };
+      for (let i = 0; i < sk.joints.length; i++) {
+        const j = sk.joints[i]!;
+        if (!j.name.startsWith('midfoot_')) continue;
+        if (gain[j.name]) continue;            // 调用方显式给了就不覆盖
+        const ax = j.revoluteAxis
+          ? (j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2)
+          : 0;
+        const tmax = Math.max(1e-6, j.maxTorque[ax]!);
+        gain[j.name] = {
+          kP: ((this.opt.midfootStiffness ?? 0) * JOINT_MAX_SPEED) / tmax,
+          kD: ((this.opt.midfootDamping ?? 0) * JOINT_MAX_SPEED) / tmax,
+        };
+      }
+      this.opt.jointGain = gain;
+    }
+
     // ★ 身体参考点：脊柱最上一段（spineN）；没有分段就是 'torso'
     let topSpine = -1;
     for (const b of sk.bodies) {
@@ -722,7 +776,10 @@ export class Ragdoll {
       // ⚠ 关踝时 `foot_l/r` **不是独立刚体**（焊在小腿上），所以只查 foot_* 会永远
       //   判成 false，髋/膝拿不到任何 groundFactor（实测 groundF=1.00、权威卡 51%）。
       //   ⇒ 接地判定按"这条链的**末端刚体**"：开踝是 foot_*，关踝是 shin_*。
-      const footKeys = ['foot_l', 'foot_r', 'shin_l', 'shin_r'];
+      // ★★ 柔性足 F1（2026-10-04 修）：**必须含 `forefoot_*`**。
+      //   中足关节的子体是 `forefoot_*`，而 `forefoot_*` 是叶子（无下级关节）
+      //   ⇒ 不显式播种的话 `walk('forefoot_l')` 恒 false ⇒ 中足永远拿不到放大。
+      const footKeys = ['foot_l', 'foot_r', 'forefoot_l', 'forefoot_r', 'shin_l', 'shin_r'];
       const hasFootBelow = new Map<string, boolean>();
       const walk = (k: string): boolean => {
         const hit = hasFootBelow.get(k);
@@ -777,8 +834,27 @@ export class Ragdoll {
         }
         const free = this.jointIeff[i]!;
         const need = Math.max(...jn.maxTorque) * (1 / 120) / JOINT_MAX_SPEED;
-        this.groundFactor[i] = Math.max(1, Math.min(this.opt.ankleGroundFactor,
-          sum / Math.max(1e-9, free), need / Math.max(1e-9, free)));
+
+        // ★★★ 2026-10-04：**只给"子侧就是一只着地脚掌"的关节**放宽护栏（踝、中足）。
+        //
+        //   为什么必须限定在这两个关节上（实测）：
+        //     全局放宽会把**髋/膝也一起放松**（它们的 `need/free` 本来就 >1：
+        //     髋 3.4、膝 1.6）⇒ 实测关踝基线从 6.00 s 掉到 1.53 s。
+        //     而"着地脚掌的有效惯量由地面决定、不是子树质量决定"这条物理理由
+        //     **对髋/膝不成立** —— 它们是两块都在动的身体段之间的内关节，
+        //     不存在地面约束。所以护栏在髋/膝上是**必要的稳定性保护**，不能动。
+        //
+        //   判据：子侧子树总质量 ≤ `groundFactorFootKg`（默认 2 kg）。
+        //     实测各关节子侧子树质量：踝 1.01 kg / 中足 0.51 kg
+        //                          膝 4.27 kg / 髋 11.3 kg ⇒ 2 kg 干净地分开。
+        let subMass = 0;
+        for (const bi of inSub) subMass += this.sk.bodies[bi]!.mass;
+        const footAnchored = subMass <= this.opt.groundFactorFootKg;
+
+        this.groundFactor[i] = footAnchored
+          ? Math.max(1, Math.min(this.opt.ankleGroundFactor,
+            sum / Math.max(1e-9, free), need / Math.max(1e-9, free)))
+          : 1;
         this.ankleGroundFactorUsed[i] = this.groundFactor[i]!;
       }
     }
@@ -889,19 +965,25 @@ export class Ragdoll {
         (joint as unknown as { setLimits(a: number, b: number): void })
           .setLimits(j.minRad[ax], j.maxRad[ax]);
       }
-      // ★★ 柔性足 F1：中足关节装**被动弹簧**（2026-10-04）。
-      //   revolute 若完全自由，前足会被接触力压到任意角度、打滑；
-      //   文献里的内侧弓是**有限刚度**的（arch recoil / windlass）。
-      //   用 `configureMotorPosition(target=0, stiffness, damping)` 当被动弹簧：
-      //   没有系统对它下指令（不在 `AXIS_OWNERSHIP` 里），只是给关节一个回复力矩。
-      if (j.name.startsWith('midfoot_') && typeof (joint as { configureMotorPosition?: unknown }).configureMotorPosition === 'function') {
-        (joint as unknown as {
-          configureMotorModel(m: number): void;
-          configureMotorPosition(t: number, s: number, d: number): void;
-        }).configureMotorModel(0);           // 0 = AccelerationBased
-        (joint as unknown as { configureMotorPosition(t: number, s: number, d: number): void })
-          .configureMotorPosition(0, this.opt.midfootStiffness, this.opt.midfootDamping);
-      }
+      // ★★ 柔性足 F1：中足关节的**被动弓**改由自研马达实现（2026-10-04 修）。
+      //
+      //   原来这里挂的是 Rapier 的 `configureMotorPosition(0, midfootStiffness,
+      //   midfootDamping)`。**双驱动是错的**，实测（tools/probe-midfoot.ts B/C 段）：
+      //     · `driveMotors()` 遍历**全部**关节做位置环 PD，没有被动关节排除名单
+      //       ⇒ 中足的 `motorTarget = 0` ⇒ 自研 PD 以 kP=48、τmax=60 N·m 把它拉向 0；
+      //     · 同时 Rapier 那条弹簧也在往 0 拉。
+      //   两个不同量纲的"刚度"（一个是 N·m/rad 的位置环，一个是 Rapier 马达的无量纲
+      //   增益）叠在一起，柔性足等于被**焊死**，而所有外观指标都看起来正常。
+      //   实测把 Rapier 弹簧关掉（`midfootStiffness: 0`）中足仍停在 14°，而
+      //   `joints[MID].maxTorque[0] = 60` 与 30 N·m/rad 的标称值都对不上 ——
+      //   证明 Rapier 的 `stiffness` 根本不是 N·m/rad。
+      //
+      //   ⇒ **统一到自研马达**（项目原则：马达与限位全部自实现，理由见文件头）。
+      //     弓的刚度由 `midfootStiffness`（N·m/rad）显式给出，语义唯一、可扫参、可回读。
+      //     位置伺服已经天然是弹簧：`τ = −kP·θ·τmax/ωmax − kD·θ̇·τmax/ωmax`
+      //     ⇒ 等效刚度 = `kP·τmax/ωmax` = 48×60/9 ≈ **320 N·m/rad**，
+      //     等效阻尼 = `kD·τmax/ωmax` = 1×60/9 ≈ 6.7 N·m·s/rad。
+      //     要改弓的软硬就调 `midfootStiffness`（→ `jointGain`），不要动别的地方。
       this.joints.push(joint);
     });
   }
@@ -2025,6 +2107,61 @@ export class Ragdoll {
   }
 
   /**
+   * 刚体系统绕某个关节的**当前姿态**转动惯量（kg·m²）。
+   *
+   * ★ 为什么必须有这个读回（DIP/VIP 的阻尼项要它）：
+   *   文献的临界阻尼是 `B = 2ζ√(K·I)`，其中 `I` 是**摆绕其铰链**的惯量
+   *   （Morasso 2019 PLOS ONE 14:e0213870：`I` = 刚体绕踝的转动惯量），
+   *   **不是** `jointIeff`。后者是"两个自由体的折合惯量"
+   *   （踝实测 0.0015 kg·m²），拿它算阻尼会**低估两个数量级**
+   *   ⇒ 阻尼系数 4 而不是 323 ⇒ 等效阻尼比 0.01 ⇒ 踝无阻尼 ⇒ 必然发散。
+   *
+   *   算法：`I = Σᵢ [ mᵢ·|rᵢ|² + I_com,ᵢ ]`，`rᵢ` = 质心到铰链的向量。
+   *   （平行轴定理；`principalInertia` 给的是绕自身质心的主惯量。）
+   *
+   * @param jointIdx 关节下标（`sk.joints` 的下标）
+   * @param side     只统计某一侧子树时传 `'l'`/`'r'`（髋的 DIP 只管上身 ⇒ 传侧别）
+   */
+  inertiaAboutJoint(jointIdx: number, side?: 'l' | 'r', excludeLegs?: boolean): number {
+    const j = this.sk.joints[jointIdx];
+    if (!j) return 0;
+    const aj = this.bodies[this.jointBodies[jointIdx * 2 + 1]]!;
+    const ap = aj.translation();
+    // 子侧子树（含该关节的子体）——side 限定时只算这一侧
+    const inSub = new Set<number>();
+    if (side) {
+      inSub.add(this.jointBodies[jointIdx * 2 + 1]);
+      let frontier = [this.sk.joints[jointIdx]!.childKey];
+      while (frontier.length) {
+        const k = frontier.pop()!;
+        for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+          if (inSub.has(bi)) continue;
+          if (this.sk.joints.some((jj) => jj.parentKey === k && jj.childKey === this.sk.bodies[bi]!.key)) {
+            inSub.add(bi); frontier.push(this.sk.bodies[bi]!.key);
+          }
+        }
+      }
+    }
+    // ★ DIP 的分段定义：绕髋的惯量只算 **HAT**（头+臂+躯干），**不含双腿**。
+    //   而髋的子侧子树从 `torso` 出发会把**对侧整条腿**也带上（髋挂在躯干上）
+    //   ⇒ 不排掉的话 `I_hip` 会从 ~7 涨到 ~11 kg·m²，阻尼系数跟着大 √2 倍。
+    //   （腿绕髋的转动惯量已经体现在"绕踝"那一段里了，不能重复计入。）
+    const LEG = /^(thigh|shin|foot|forefoot)_/;
+    let sum = 0;
+    for (let bi = 0; bi < this.sk.bodies.length; bi++) {
+      if (side && !inSub.has(bi)) continue;
+      if (excludeLegs && LEG.test(this.sk.bodies[bi]!.key)) continue;
+      const b = this.bodies[bi]!;
+      const t = b.translation();
+      const dx = t.x - ap.x, dy = t.y - ap.y, dz = t.z - ap.z;
+      const Ic = b.principalInertia();
+      const selfI = Math.max(Ic.x, Math.max(Ic.y, Ic.z));
+      sum += this.sk.bodies[bi]!.mass * (dx * dx + dy * dy + dz * dz) + selfI;
+    }
+    return sum;
+  }
+
+  /**
    * 脚掌某点的世界坐标写入 out[0..2]。
    * ★ 3D 之后不能再写 `body.y − length/2`：刚体会转，最低点必须按姿态算。
    *   脚掌 collider 的本地最低点 = (0, offsetY − hy, 0)。
@@ -2038,12 +2175,36 @@ export class Ragdoll {
     const useFoot = this.indexByKey.has(footKey);
     const key = useFoot ? footKey : (side === 'l' ? 'shin_l' : 'shin_r');
     const idx = this.indexByKey.get(key) ?? 0;
-    const b = this.bodies[idx];
-    const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === 'cuboid');
-    const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
-    const t = b.translation();
-    this.toWorld(b, 0, ly, 0, out);
-    out[0] += t.x; out[1] += t.y; out[2] += t.z;
+    const heelPt = this.heelTmp;
+    {
+      const b = this.bodies[idx];
+      const sole = this.sk.bodies[idx].colliders.find((c) => c.shape === 'cuboid');
+      const ly = sole ? sole.offsetY - sole.hy : -this.sk.bodies[idx].length / 2;
+      const t = b.translation();
+      this.toWorld(b, 0, ly, 0, heelPt);
+      heelPt[0] += t.x; heelPt[1] += t.y; heelPt[2] += t.z;
+    }
+    out[0] = heelPt[0]!; out[1] = heelPt[1]!; out[2] = heelPt[2]!;
+
+    // ★★ 柔性足 F1（2026-10-04 修）：**前足是独立刚体**，它才是真正着地的那块。
+    //   只量 `foot_*` 的话，中足一旦旋前/旋后（实测能走到限位 34°），前足就会
+    //   一头扎进地面或翘起来，而 `soleY()`/`soleXZ()` **完全看不见** ——
+    //   离地高度门、步长、重心支撑点全部读错。
+    //   ⇒ 取「跟块最低点」与「前掌最低点」里**更低的那个**（那才是鞋底真正的高度）。
+    //   x/z 也跟着取同一个块，免得 y 与 x/z 来自不同刚体（支撑点会算歪）。
+    const foreKey = side === 'l' ? 'forefoot_l' : 'forefoot_r';
+    const fidx = this.indexByKey.get(foreKey);
+    if (fidx !== undefined) {
+      const fb = this.bodies[fidx]!;
+      const fc = this.sk.bodies[fidx]!.colliders.find((c) => c.shape === 'cuboid');
+      if (fc) {
+        const forePt = this.foreTmp;
+        const ft = fb.translation();
+        this.toWorld(fb, 0, fc.offsetY - fc.hy, 0, forePt);
+        forePt[0] += ft.x; forePt[1] += ft.y; forePt[2] += ft.z;
+        if (forePt[1]! < out[1]!) { out[0] = forePt[0]!; out[1] = forePt[1]!; out[2] = forePt[2]!; }
+      }
+    }
   }
 
   /**
@@ -2064,6 +2225,9 @@ export class Ragdoll {
 
   private hipIdx: [number, number] = [-1, -1];
   private readonly footTmp = new Float64Array(3);
+  /** `footPoint` 的两块鞋底中间量（跟块 / 前掌），避免调用方的 out 被踩 */
+  private readonly heelTmp = new Float64Array(3);
+  private readonly foreTmp = new Float64Array(3);
 
   /** 脚掌最低点的世界 y（接地代理量，比接触查询便宜） */
   soleY(side: 'l' | 'r'): number {

@@ -77,16 +77,25 @@ const sk = buildSkeleton(DEFAULT_CONFIG);
 // ★ 网络形状跟着骨架走（脊柱分段后关节数不再是 9）
 const SHAPE = shapeForJoints(sk.joints.length);
 assertColliderMass(sk);
-// 踝关节由 cfg.ankleEnabled 控制（默认 false）：开 = 12 段（多两只独立脚掌），关 = 10 段
-check(`刚体数 = ${sk.cfg.ankleEnabled ? 12 : 10} + 脊柱段数 − 1${sk.cfg.ankleEnabled ? '（含两只独立脚掌）' : ''}`,
-  sk.bodies.length === (sk.cfg.ankleEnabled ? 12 : 10) + Math.max(0, sk.cfg.spineSegments - 1),
+// 踝关节由 cfg.ankleEnabled 控制。开踝 = 多 4 只刚体（foot_l/r + forefoot_l/r）
+// 与 4 个关节（foot_l/r 踝 + midfoot_l/r 中足）；关踝 = 脚掌焊在小腿上。
+// ★ 2026-10-04 修：原来写的是 `12 : 10` 段，柔性足 F1 加了 `forefoot_*` 之后
+//   实际是 `14 : 10`（实测 关踝 13 体 / 开踝 17 体，spineSegments=4）。
+check(`刚体数 = ${sk.cfg.ankleEnabled ? 14 : 10} + 脊柱段数 − 1${sk.cfg.ankleEnabled ? '（含 4 只脚：foot_* 与 forefoot_*）' : ''}`,
+  sk.bodies.length === (sk.cfg.ankleEnabled ? 14 : 10) + Math.max(0, sk.cfg.spineSegments - 1),
   `${sk.bodies.length}（spineSegments=${sk.cfg.spineSegments}）`);
-check(`关节数 = 躯干 9 + ${sk.cfg.ankleEnabled ? '踝 2 + ' : ''}脊柱 K-1`, sk.joints.length === (sk.cfg.ankleEnabled ? 11 : 9) + Math.max(0, sk.cfg.spineSegments - 1), `${sk.joints.length}（spineSegments=${sk.cfg.spineSegments}）`);
+check(`关节数 = 躯干 9 + ${sk.cfg.ankleEnabled ? '踝 2 + 中足 2 + ' : ''}脊柱 K-1`,
+  sk.joints.length === (sk.cfg.ankleEnabled ? 13 : 9) + Math.max(0, sk.cfg.spineSegments - 1),
+  `${sk.joints.length}（spineSegments=${sk.cfg.spineSegments}）`);
 // 踝关闭时 JOINT_ORDER 末两项（foot_l/foot_r）不建关节，脊柱关节提前 2 位
 const EXP_ORDER = sk.cfg.ankleEnabled ? JOINT_ORDER : JOINT_ORDER.filter((n) => !n.startsWith('foot_'));
-check('★ 有效关节顺序与 JOINT_ORDER（踝关时去掉末两项）逐字一致，脊柱关节接在后面',
+// ★ 中足关节由 `skeleton` 在腿循环里 push 进 `midfootJoints`，**最后统一编号**
+//   ⇒ 末尾是 `spine\d+` 之后跟 `midfoot_*`（实测 …,spine1,spine2,spine3,midfoot_l,midfoot_r）。
+//   原来只允许 `/^spine\d+$/` ⇒ 柔性足一加进来这条必红。
+const TAIL = sk.cfg.ankleEnabled ? /^(spine\d+|midfoot_[lr])$/ : /^spine\d+$/;
+check('★ 有效关节顺序与 JOINT_ORDER（踝关时去掉末两项）逐字一致，脊柱/中足关节接在后面',
   sk.joints.slice(0, EXP_ORDER.length).every((j, i) => j.name === EXP_ORDER[i]) &&
-  sk.joints.slice(EXP_ORDER.length).every((j) => /^spine\d+$/.test(j.name)),
+  sk.joints.slice(EXP_ORDER.length).every((j) => TAIL.test(j.name)),
   sk.joints.map((j) => j.name).join(','));
 check('总质量 = 70 kg', Math.abs(sk.massTotal - 70) < 1e-6, `${sk.massTotal.toFixed(3)} kg`);
 check('总身高 = 1.80 m', Math.abs(sk.totalHeight - 1.8) < 1e-6, `${sk.totalHeight.toFixed(4)} m`);
@@ -198,13 +207,31 @@ check('★ 前向一律 0（素材是正面视图，没有深度信息）',
   `thigh_r.z=${sk.bodies.find((b) => b.key === 'thigh_r')!.cz.toFixed(3)}`);
 
 // 关节锚点必须落在父/子刚体的碰撞体范围内（三维，含 Z）
+// ★★ 2026-10-04 修：原来用 `|anchor.y| <= body.length/2`，那假设**原点在中心**。
+//   脚掌/前掌的原点在**踝**（collider 全偏在下方 `offsetY ≈ −42 mm`），
+//   `soleDrop/2 = 34.5 mm < 42 mm` ⇒ 中足锚点被**误报**越界。
+//   但反过来只按 collider 实际 Y 跨度判又太严：`length/2` 对上臂/手/膝这些
+//   **原点在近端**的胶囊是一个刻意放宽的代理值（实测 elbow→hand 205mm、
+//   hand 的 collider 跨度只有 ~190mm）。
+//   ⇒ 断言是"锚点没飘飞"的粗筛，取两者**较大**值：既修好脚掌的误报，
+//     又不放走真正飘飞的锚点。
+function yExtent(b: typeof sk.bodies[number]): number {
+  let e = b.length / 2;
+  for (const c of b.colliders) {
+    const v = c.shape === 'capsule'
+      ? Math.max(Math.abs(c.offsetY - c.halfHeight), Math.abs(c.offsetY + c.halfHeight))
+      : Math.abs(c.offsetY) + c.hy;
+    if (v > e) e = v;
+  }
+  return e;
+}
 let anchorsOk = true;
 let anchorDetail = '';
 for (const j of sk.joints) {
   const parent = sk.bodies.find((b) => b.key === j.parentKey)!;
   const child = sk.bodies.find((b) => b.key === j.childKey)!;
-  const pOk = Math.abs(j.parentLocal[1]) <= parent.length / 2 + 1e-9;
-  const cOk = Math.abs(j.childLocal[1]) <= child.length / 2 + 1e-9;
+  const pOk = Math.abs(j.parentLocal[1]) <= yExtent(parent) + 1e-6;
+  const cOk = Math.abs(j.childLocal[1]) <= yExtent(child) + 1e-6;
   if (!(pOk && cOk)) { anchorsOk = false; anchorDetail += `${j.name}(p=${pOk},c=${cOk}) `; }
 }
 check('所有关节锚点都落在父子刚体内（沿长轴）', anchorsOk, anchorDetail);

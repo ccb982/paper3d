@@ -262,7 +262,10 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
   // `ANKLE_ABSENT`：本 rig 骨架里没有踝关节 ⇒ 踝 CoP 通道恒不执行。
   //   一旦有人给骨架加了踝，这个断言会失败，强制他在 AXIS_OWNERSHIP 里登记
   //   （否则就会重演"通道存在但没人知道它归谁"的老问题）。
-  const ankleWritten = [...allWritten].filter((w) => w.startsWith('ankle'));
+  // ★ 2026-10-04 修：原来匹配的是 `w.startsWith('ankle')`，但踝的**关节名其实叫
+  //   `foot_l` / `foot_r`**（`JOINT_ORDER` 里的踝就是 foot_*）⇒ 这条断言从来没生效过。
+  //   实测：骨架早已 `ankleEnabled = true`、踝轴也确实被写，门禁 E 却仍判绿。
+  const ankleWritten = [...allWritten].filter((w) => /^(foot|midfoot)_[lr]$/.test(w));
   if (ANKLE_ABSENT && ankleWritten.length) {
     bad(`声明 ANKLE_ABSENT=true，但踝轴被写了：${ankleWritten.join(', ')}`);
   } else if (ANKLE_ABSENT) {

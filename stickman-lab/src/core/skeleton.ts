@@ -994,7 +994,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
         const newHalfH = Math.max(1e-3, newLen / 2 - radius);
         length = newLen;
         halfHeight = newHalfH;
-        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2;
+        // ★★ 2026-10-04：中心要再往下挪一个 `legStretch`。
+        //   关节锚点 `wy = mapY(ayPx) − stretch`（见 JOINT_ORDER 循环），
+        //   而这里原本用**未拉伸**的膝/踝中点做中心 ⇒ 踝锚点比胶囊末端低
+        //   `stretch = 20 mm`，而 `PIVOT_PAD` 只有 15 mm ⇒ 差 5 mm，
+        //   门禁报 `foot_l.P 局部(0,−208,0) 超出 shin_l 包围球 5.0mm`。
+        //   两个锚点被**同样**下移，彼此间距不变 ⇒ 胶囊长度不用改，只挪中心。
+        centerY = (mapY(kn[1]) + mapY(ak[1])) / 2 - cfg.legStretch;
         // ★ 横向对准**膝锚点**（不是膝踝中点）：小腿骨按用户定调是**铅垂**的
         //   （restTiltOf 对 shin 强制 0），而素材里膝→踝是外撇 7.1°（x 527.5→454.5）。
         //   对准膝 ⇒ 膝铰链正好在骨轴上（门禁要求），踝锚点因此横向偏 24mm
@@ -1449,6 +1455,15 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     // ★ 锚点收窄必须与子环节一致：否则髋/膝锚点会飘到收窄后的刚体之外
     const stanceHere = legKeys.has(jm.child);
     const wx = 0;
+    // ★★ 2026-10-04：踝锚点的 z **必须用小腿中轴 `parent.cz`**，不能用素材实测的
+    //   `mapZ(axPx)`。后者带着"外八"的横向偏移（膝→踝不是铅垂，实测 ±42mm），
+    //   而小腿与脚掌两个刚体**都**已经放在 `centerZ` 上（见下方脚掌 `cz: centerZ`
+    //   那段「让脚部关节对称轴对着小腿的对称轴」的注释）。
+    //   ⇒ 锚点落在中轴外 ⇒ 局部锚点 z = ±42mm，`assertJointAnchors` 报
+    //     `foot_l.P 局部(20,−208,42) 超出 shin_l 包围球 10.2mm`，
+    //     而且球关节会在**空处**建铰链（实测踝在中轴外 ⇒ 受力臂偏、还多一个
+    //     恒定侧向偏置）。外八已经由 `restYawRad = restYawOf(...)` 单独表达了。
+    const wz = isAnkle ? parent.cz : mapZ(axPx, stanceHere);
     // ★★ 腿段拉伸（2026-10-02）：素材的**髋高 0.849 m 大于腿长 0.785 m**
     //   ⇒ 站直时膝天生折 ~30°，腿/髋 = 0.92 低于人体常态 0.95~1.0。
     //   实测后果：躯干持续前倾 35.8°、CoM 前移 0.46 m、平衡门因此永远不放行。
@@ -1456,7 +1471,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     //   （另一种是降髋锚点，但那会让大腿根部脱开素材 88mm；拉伸只动 39mm。）
     const stretch = /^(knee|foot)_/.test(name) ? cfg.legStretch : 0;
     const wy = mapY(ayPx) - stretch * (legKeys.has(jm.parent) ? 1 : 0);
-    const wz = mapZ(axPx, stanceHere);
+    // ⚠ `wz` 在上面已按 `isAnkle ? parent.cz : mapZ(axPx, …)` 算好，别重复声明。
 
     const xy = JOINT_LIMITS_XY_DEG[name] ?? [20, 20];
     // ★ 踝的屈伸限位改用 `cfg.ankleLimitDeg`（机械硬限位，见 SkeletonConfig 注释），
@@ -1563,25 +1578,61 @@ export function assertColliderMass(sk: Skeleton): void {
 }
 
 /**
- * 自检：关节锚点必须落在父子刚体的胶囊范围内（三维）。
+ * 自检：关节锚点必须落在父子刚体的**实际碰撞体**范围内（三维）。
  * 2D 版只校 Y，3D 之后必须连 Z 一起校 —— 侧向锚点飘出去的话，
  * 球关节会把父子刚体硬拽在一起，初始姿态就会自己抖起来。
+ *
+ * ★★ 2026-10-04 修：原来用 `reach = body.halfHeight + body.radius`，
+ *   那是**胶囊型肢体**的写法（刚体原点就在胶囊中心）。但脚掌/前掌的碰撞体是
+ *   **带 offset 的扁盒**（`offsetY ≈ −42 mm`，`hy ≈ 26 mm`），body 级的
+ *   `halfHeight/radius` 完全描述不了质量实际在哪 ⇒ 脚踝/中足锚点被**误报越界**
+ *   （实测 `midfoot_l.P |d|=42.4mm > reach=34.3mm`，而那个点其实正好在盒中心）。
+ *   ⇒ `reach` 改为**包住所有碰撞体的球半径**（逐 collider 算，取最大）。
+ *     胶囊：到轴线段的距离 + 半径；扁盒：到最远角点的距离。
+ *
+ *   ⚠ 口径保持"宽松的包围球"，**不要**改成"锚点必须在碰撞体内部"：
+ *     肩/髋锚点本来就落在细躯干胶囊的**外侧**（实测肩离 spine4 中轴 188mm、
+ *     躯干半径只有 136mm），按"必须在内部"判会误报 50~78mm。
+ *     这条断言的意图是"锚点没有飘到 body's extent 之外"，不是"锚点在体内"。
  */
 export function assertJointAnchors(sk: Skeleton): number {
+  /** 包住该刚体全部碰撞体的球半径（从刚体原点量起） */
+  const reachOf = (b: BodyDef): number => {
+    let r = 0;
+    for (const c of b.colliders) {
+      const ox = c.offsetX ?? 0;
+      let d: number;
+      if (c.shape === 'capsule') {
+        // ⚠ 刚体原点在**近端关节**上，不在胶囊中心 ⇒ 胶囊的 `offsetY` 通常非零。
+        //   包围球半径 = 到**最远那端**的距离 + 半径（不是到轴线段的距离）。
+        const ay = c.offsetY - c.halfHeight, by = c.offsetY + c.halfHeight;
+        d = Math.max(Math.hypot(ox, ay, c.offsetZ), Math.hypot(ox, by, c.offsetZ)) + c.radius;
+      } else {
+        // 到最远角点
+        d = Math.hypot(
+          Math.abs(ox) + c.hx,
+          Math.abs(c.offsetY) + c.hy,
+          Math.abs(c.offsetZ) + c.hz,
+        );
+      }
+      if (d > r) r = d;
+    }
+    return r;
+  };
+
   let worst = 0;
   for (const j of sk.joints) {
     const p = sk.bodies.find((b) => b.key === j.parentKey)!;
     const c = sk.bodies.find((b) => b.key === j.childKey)!;
     for (const [b, l, tag] of [[p, j.parentLocal, 'P'], [c, j.childLocal, 'C']] as const) {
-      // 允许偏离：胶囊半径 + 两端半球（= 半高 + 半径）
-      const reach = b.halfHeight + b.radius;
+      const reach = reachOf(b);
       const d = Math.hypot(l[0], l[1], l[2]);
       const over = d - reach;
       if (over > worst) worst = over;
       if (over > 1e-4) {
         // eslint-disable-next-line no-console
         console.log(`      [越界] ${j.name}.${tag} 局部(${l.map((v) => (v * 1000).toFixed(0)).join(',')})mm `
-          + `|d|=${(d * 1000).toFixed(1)}mm > reach=${(reach * 1000).toFixed(1)}mm  越 ${(over * 1000).toFixed(1)}mm`);
+          + `超出 ${b.key} 的包围球 ${(over * 1000).toFixed(1)}mm（reach=${(reach * 1000).toFixed(1)}mm）`);
       }
     }
   }

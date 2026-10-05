@@ -56,7 +56,9 @@ export type AxisRole =
   | 'pelvicLift'      // 骨盆抬升：从属于 latTransfer（侧向无需求时才占轴）
   | 'postureSag'      // 腰矢状姿态 PD
   | 'postureLat'      // 腰额状精调（死区 + 限幅）
-  | 'ankleCop';       // 踝 CoP 调节
+  | 'ankleCop'        // 矢状踝：**VIP 刚度力矩**（τ = K_a·q_vip + C_a·q̇_vip）
+  | 'ankleLat'        // 额状 CoP：**中足**旋前/旋后（踝的额状轴被引擎锁死，做不到）
+  | 'hipStiff';       // ★ DIP 髋侧**被动刚度**（τ = K_h·q_hip + B_h·q̇_hip）
 
 export interface AxisSpec {
   joint: string;
@@ -90,6 +92,9 @@ export const HIP_ABD_AXIS = 0;
 
 export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip' },
+  // ★ DIP 髋侧被动刚度：与 `sagSupport` **并联**的第二条通道（位置伺服 + 刚度力矩），
+  //   语义是"支撑角色的下属实现"，所以登记成从属记录而不是第二个主人。
+  { joint: 'hip', axis: 2, role: 'hipStiff', mode: 'tau', channel: 'hipStiff', subordinateTo: 'sagSupport' },
   { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat' },
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift', subordinateTo: 'latTransfer' },
@@ -103,14 +108,22 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'spine1', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
   { joint: 'spine2', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
   { joint: 'spine3', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
+  // ★ 踝（矢状）：VIP 刚度走**力矩通道**。踝是 revolute ⇒ 只有轴 2 能动。
+  { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop' },
+  // ★ 中足（额状）：踝的额状轴被引擎锁死 ⇒ 侧向 CoP 权限归中足的旋前/旋后。
+  { joint: 'midfoot', axis: 0, role: 'ankleLat', mode: 'pos', channel: 'ankleLat' },
 ]);
 
-/** 本 rig **没有**踝关节（`skeleton` 的关节表里不存在 `ankle_*`）。
- *  踝 CoP 通道因此恒不执行（`jAnk = jointIndexByName('ankle_l') = -1`）。
- *  保留这条说明是为了让"额状面没有踝通道"这个事实显式可见 ——
- *  `AXIS_OWNERSHIP` 里**故意不列踝**，门禁 E 会因为踝没被写过而通过。
- *  一旦骨架真的加了踝，必须同时在此登记，否则门禁 E 会报未登记。 */
-export const ANKLE_ABSENT = true;
+/**
+ * 本 rig **有**踝与中足（`skeleton` 的 `DEFAULT_CONFIG.ankleEnabled = true`）。
+ *
+ * ★ 2026-10-04 改：原来是 `true`，注释写着"一旦骨架真的加了踝，必须同时在此登记"。
+ *   骨架**真的**加了踝，但这行没改 ⇒ 门禁 E 里那句"强制登记"的断言
+ *   匹配的是 `w.startsWith('ankle')`，而踝的关节名其实叫 **`foot_l/foot_r`**
+ *   ⇒ **断言从来没生效过**（实测门禁 E 报「foot_l/0, foot_r/0 未登记」却仍然判绿）。
+ *   两处都已修：这里置 `false`，门禁 E 改成按 `foot_*` 匹配。
+ */
+export const ANKLE_ABSENT = false;
 
 /** 取某轴的角色（供门禁与 UI 回读）。找不到 = 未登记 ⇒ 属于架构错误。 */
 export function axisRole(jointName: string, axis: number): AxisSpec | undefined {
@@ -159,6 +172,46 @@ export interface BalanceParams {
   kVipAnkle: number;
   /** VIP 阻尼 `C_a`（N·m·s/rad）。按 `C_a = 2ζ√(K_a·I)` 由 `vipZeta` 算出 */
   vipZeta: number;
+  /**
+   * ══════════════════════════════════════════════════════════════════
+   * ★★★ DIP 的**髋侧被动刚度** `K_h`（N·m/rad）—— Morasso 2019/2022 的另一半。
+   * ══════════════════════════════════════════════════════════════════
+   *
+   * 原文（Morasso, Cherif, Zenzeri 2019, PLOS ONE 14(3):e0213870）：
+   *   > "As regards the hip joint we suggest a stiffness strategy [...]
+   *    the critical stiffness value is strongly smaller for the hip than for
+   *    the ankle case for purely biomechanical reasons, thus requiring a very
+   *    small amount of co-contraction of the hip muscles for achieving a
+   *    working level of hip stiffness."
+   *
+   *   推导（同文）：`τ_g = m·g·h·sin(q) ≈ m·g·h·q` ⇒ **`K_crit = m·g·h`**。
+   *     绕踝：全身 `m=70 kg`、`h=0.913 m` ⇒ `K_crit,ankle = 627 N·m/rad`
+   *     绕髋：**上身** `m₂ = 47.5 kg`（HAT）、`r₂ = 0.392 m` ⇒ `K_crit,hip = 183 N·m/rad`
+   *     ⇒ 只有踝的 **29%**。这就是"髋策略比踝策略省力"的力学根源。
+   *
+   *   取值：原文默认 **2× K_crit**（"twice the critical hip stiffness"），
+   *   并实测「只要 ≥ 1.2× K_crit 就能稳定」（`Table 5`）。
+   *   ⇒ 本 rig 取 `kVipHip = 366 N·m/rad = 2 × 183`。
+   *
+   * ★ 为什么这一项是**当前站不住的最后一块拼图**：
+   *   之前只有踝的 VIP 刚度（`kVipAnkle`）而**髋侧完全没有被动刚度**。
+   *   按原文，踝刚度**刻意欠临界**（实测人体 60~91% of K_crit，
+   *   原文明确「insufficient to stabilise」）⇒ 单靠它只有**边缘稳定**，
+   *   必须靠髋的过临界被动刚度兜住上身 —— 这正是 DIP 而非 SIP 的意义。
+   *   缺了它，踝力矩在 `|q_vip| > 120/552 = 0.217 rad` 处饱和
+   *   （实测 t=1.5 s 就撞上 −120 N·m 且踝角到 −12° 限位），而倾角继续长 ⇒ 必倒。
+   *
+   * ★ 与 `hip/2` 的 `sagSupport`（位置伺服）的关系：
+   *   两者是**并联**的两条通道（位置伺服给目标姿态、刚度给被动稳定），
+   *   与踝上 `τ_ankle` 与位置 PD 并联是同一套结构。
+   *   `AXIS_OWNERSHIP` 里以 `subordinateTo: 'sagSupport'` 登记，语义是
+   *   「刚度是支撑角色的下属实现」，不是第二个主人。
+   */
+  kVipHip: number;
+  /** 髋侧阻尼比 ζ_h（`B_h = 2ζ_h√(K_h·I_hip)`）。原文取阻尼比 ≈ 0.7 */
+  vipZetaHip: number;
+  /** 髋侧刚度的力矩上限（rad，超过即退化成"髋策略"的大幅摆动）。默认用 hip τmax */
+  maxHipStiffDeg: number;
   /** 矢状 P 增益 / ω₀²（无量纲）。与 VIP 踝刚度并联时此项只做残余修正 */
   ksagRatio: number;
   /**
@@ -324,6 +377,21 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   maxHipDeg: 0.52,
   kVipAnkle: 552,
   vipZeta: 0.9,
+  // ★ DIP 髋侧被动刚度。**实测标定**（tools/probe-midfoot.ts G 段，6 s 静置站立）：
+  //   K_h      关踝基线    开踝
+  //     0      6.00s      2.22s
+  //     50     6.00s      2.25s
+  //    120     6.00s      2.23s   ← 取这个
+  //    366     3.50s ✗    2.23s   ← 文献的 2×K_crit 会**打断已有的髋位置伺服**
+  //   ⚠ 为什么不能直接用文献的 366：本 rig 的髋**已经有主动位置伺服**
+  //     （`sagSupport`，等效刚度 `kP·τmax/ωmax = 48×200/9 ≈ 1067 N·m/rad`，
+  //     已是 366 的 3 倍）。再叠一层 366 的被动弹簧 = 与自己的伺服对着干
+  //     ⇒ 实测关踝基线从 6.00 s 掉到 3.50 s。
+  //     文献里髋是**纯被动**（没有主动髋控制），本 rig 不是 ⇒ 只能取"不打架"的量级。
+  //   ⚠ 开踝时 K_h 几乎不影响结果（2.22~2.25 s）⇒ 踝开着的瓶颈**不在髋**。
+  kVipHip: 120,
+  vipZetaHip: 0.7,
+  maxHipStiffDeg: 22,
   ksagRatio: 0.2,
   ksagZeta: 0.9,
   // 腰姿态保持：pitch 20° 时给约 −10°（实测 d(pitch)/d(spine) ≈ 1.9）
@@ -962,10 +1030,17 @@ export function balanceSystem(
       // q̇_vip：解析求导 `q = atan2(dx, h)` ⇒ `q̇ = (h·ẋ − dx·ḣ)/(dx²+h²)`
       //   （标准 LIPM 假设：把踝当固定支点 ⇒ ẋ=com.vx、ḣ=com.vy）
       const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
-      // 阻尼 `C_a = 2ζ√(K_a·I)`，I = 该轴的**并联等效惯量**（正规读回）
-      const iAnk = Math.max(1e-4, doll.jointIeff[jAnk * 3 + 2] ?? 8.77e-3);
+      // 阻尼 `C_a = 2ζ√(K_a·I)`，I = **全身绕踝**的转动惯量。
+      //   ★ 2026-10-04 修：原来写的是 `doll.jointIeff[jAnk * 3 + 2]` ——
+      //   `jointIeff` 的长度是**关节数**（按关节索引，不是按轴），`jAnk*3+2` 必然越界
+      //   ⇒ 永远取 `?? 8.77e-3` 那个 2D 时代的兜底常数。
+      //   于是 `C_a = 2×0.9×√(552×0.00877) = 4.0 N·m·s/rad`，
+      //   而正确值（`I = m·h² = 70×0.913² = 58.3 kg·m²`）是 **323 N·m·s/rad**
+      //   ⇒ **阻尼小了 80 倍**，等效阻尼比 ≈ 0.01 ⇒ 踝实质无阻尼 ⇒ 必然发散。
+      //   `inertiaAboutJoint` 按平行轴定理 `Σ(mᵢrᵢ² + I_com,ᵢ)` 正经算，且可回读。
+      const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
       const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
-      let tauAnk = p.kVipAnkle * qVip + cVip * qVipRate;
+      let tauAnk = p.kVipAnkle * qVip - cVip * qVipRate;
       // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
       if (rs.phase === 'PUSH') tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R;
       // ── 安全钳位：**必须**把请求值限在马达力矩上限内 ──────────────
@@ -983,10 +1058,59 @@ export function balanceSystem(
       rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度');
     }
 
-    // 额状面同样闭环在实测 CoP 上（目标 = 侧向捕获点）
-    //   ⚠ 侧向 CoP 用 `rs.support.cz`（支撑面中心）而不是被我删掉的局部 `cop`：
-    //   `posture.readSupport` 是唯一回读实现，侧向基准与腰、状态机一致。
-    const latErr = rs.dcm.z - rs.support.cz;
-    rs.requestAngle(jAnk, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '踝额状CoP');
+    // ── 额状面 CoP：**踝做不到，改由中足（距下关节）承担** ────────────
+    //   ⚠ 2026-10-04 修（原来这里是 `requestAngle(jAnk, 0, ...)`，一个**物理上不存在**
+    //   的通道）：踝建成的是**绕足横轴的 revolute**（`revoluteAxis = [0,0,1]`），
+    //   轴 0/1 被 `JointData.revolute` 在**引擎级锁死**（`ragdoll.createJoints` 里
+    //   `setLimits` 只对 revoluteAxis 对应的那一轴生效）⇒ 给轴 0 下角度伺服
+    //   在物理上**不可能产生任何运动**，只是让门禁看到一根"被写过但没登记"的轴
+    //   （实测 `probe-axisown` E 段报 `foot_l/0, foot_r/0` 未登记）。
+    //   ⇒ 额状面 CoP 权限归**中足**（`midfoot_*`，绕足长轴的旋前/旋后）——
+    //   这正是柔性足存在的意义（内侧弓/外侧柱两条载荷路径，见 createJoints 注释）。
+    const jMid = jointIndexByName(sk, sup === 'l' ? 'midfoot_l' : 'midfoot_r');
+    if (jMid >= 0) {
+      const latErr = rs.dcm.z - rs.support.cz;
+      // 中足旋前/旋后 → 前足内/外侧缘一抬一压 ⇒ 载荷在两柱之间转移（侧向 CoP）
+      rs.requestAngle(jMid, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '中足额状CoP');
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ★★★ DIP 的**髋侧被动刚度**（Morasso 2019/2022）—— 支撑腿的髋
+  // ══════════════════════════════════════════════════════════════════
+  //   `τ_hip = K_h·q_hip + B_h·q̇_hip`，纯被动，**不需要主动反馈**。
+  //
+  //   为什么要它（这是"踝刚度刻意欠临界"的直接后果）：
+  //     原文实测踝刚度只有临界的 60~91%，明确「insufficient to stabilise」
+  //     ⇒ 欠临界的踝只能给**边缘稳定**，兜住上身要靠**过临界的髋被动刚度**。
+  //     之前本 rig 只有踝那半边 ⇒ 踝力矩在 ±0.217 rad 处饱和（τmax=120/552）
+  //     而倾角继续长 ⇒ 2 s 内必倒（实测 trace：t=1.5 s τ=−120 N·m 已饱和）。
+  //
+  //   `I_hip` 用**该侧上身**（HAT）绕髋的惯量：`inertiaAboutJoint(jHip, side)`
+  //   ⇒ 自动满足 DIP 的"分段"定义（踝管全身、髋只管上身）。
+if (doll && on('hipStiff')) {
+    const jHipS = jointIndexByName(sk, sup === 'l' ? 'hip_l' : 'hip_r');
+    if (jHipS >= 0) {
+      const side: 'l' | 'r' = sup === 'l' ? 'l' : 'r';
+      const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
+      const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
+      // 髋矢状角：关节角已减去 restRad（零位 = 素材姿势），直接可用
+      const qHip = rs.pos[jHipS * 3 + 2]!;
+      const qHipRate = rs.vel[jHipS * 3 + 2]!;
+      const tauMaxHip = sk.joints[jHipS]?.maxTorque?.[2] ?? 200;
+      const qLim = p.maxHipStiffDeg * D2R;
+      // ★ 弹簧项：`−K_h·q`（回复到 0 rad），**限的是"送进弹簧的角度"不是"两项之差"**。
+      //   写成 `K_h·(clamp(q) − q)` 的话，在限位内恒等于 **0** —— 刚度整个消失
+      //   （这是第一版的 bug，实测关踝基线 6.00 s → 3.23 s）。
+      //   ⚠ 本文件的 `clamp` 是**对称两参版** `clamp(v, max)` = 限到 ±max。
+      const qEff = clamp(qHip, qLim);
+      // ★ 阻尼项：**负号**。力矩必须**反抗**角速度。
+      //   写成 `+B·q̇` 是正反馈（越晃越加力）⇒ 等效阻尼比变负 ⇒ 必然发散。
+      //   参照 `ragdoll.driveMotors` 的 `err = kP·(θ_ref−θ) − kD·ω_rel`：阻尼恒带负号。
+      let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
+      tauHip = clamp(tauHip, tauMaxHip);
+      rs.hipTauStiff = tauHip;
+rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
+    }
   }
 }

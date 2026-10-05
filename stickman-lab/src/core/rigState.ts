@@ -169,6 +169,12 @@ export interface RigSnapshot {
   ankleTauVip: number;
   /** 踝 VIP 力矩是否已饱和（> `τmax`）⇒ flat-foot 约束触发 */
   ankleTauSat: boolean;
+  /**
+   * ★★ DIP 髋侧被动刚度律输出的力矩（N·m，矢状）。支撑腿那一侧。
+   *   Morasso 2019/2022：`τ_hip = K_h·q_hip + B_h·q̇_hip`，纯被动、无主动反馈。
+   *   这是"踝刚度刻意欠临界"能成立的前提 —— 缺它则踝在 ±0.217 rad 饱和后必倒。
+   */
+  hipTauStiff: number;
   support: { cx: number; cz: number; halfX: number; halfZ: number; contactN: number };
   mos: number;
   grf: { x: number; y: number };
@@ -370,6 +376,8 @@ export class RigState {
    *   策略随之让位给髋（Michaels & Ting 2025）。
    */
   ankleTauSat = false;
+  /** ★ DIP 髋侧被动刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
+  hipTauStiff = 0;
   /** 额状主力（支撑髋外展）力矩命令（N·m）。正 = 把重心推向 +Z */
   hipLatTau = 0;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -952,6 +960,7 @@ export class RigState {
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
       qVip: this.qVip, ankleTauVip: this.ankleTauVip, ankleTauSat: this.ankleTauSat,
+      hipTauStiff: this.hipTauStiff,
       mos: this.mos, grf: { ...this.grf }, grfCmd: { ...this.grfCmd }, pelvicLift: this.pelvicLift,
       frontLegSide: this.frontLegSide, rearLegSide: this.rearLegSide,
       captureX: this.captureX, captureZ: this.captureZ, omega0Val: this.omega0Val,
