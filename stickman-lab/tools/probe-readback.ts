@@ -34,6 +34,18 @@ for (const nm of ['hip_l', 'knee_l', 'foot_l', 'spine1']) {
   log(`   ${nm.padEnd(8)} τmax = [${d!.maxTorque.map((v) => v.toFixed(0)).join(', ')}] N·m`
     + `   限位 ${d!.minRad.map((v) => (v * 180 / Math.PI).toFixed(0)).join('/')}°`);
 }
+log('══ 脚内部自由度检查（"柔性足"是否真的有柔性）══');
+for (const fn of ['foot_l', 'foot_r'] as const) {
+  const fi = (sk.bodies ?? []).findIndex((b: any) => b.key === fn);
+  const childJoints = sk.joints.filter((j: any) => j.parentKey === fn || j.childKey === fn);
+  log(`   刚体 ${fn}: idx=${fi}  colliders=${(sk as any).colliders?.filter((c: any) => c.body === fn).length ?? '?'}`);
+  log(`   挂在${fn} 上的关节: ${childJoints.length ? childJoints.map((j: any) => j.name).join(', ') : '★ 无 —— 这只脚是单个刚体'}`);
+}
+log(`══ 关节表（共 ${sk.joints.length} 个，按真实索引）══`);
+sk.joints.forEach((d, i) => {
+  log(`   [${String(i).padStart(2)}] ${d.name.padEnd(11)} parent=${String(d.parentKey).padEnd(8)}`
+    + ` child=${String(d.childKey).padEnd(9)} τmax=[${d.maxTorque.map((v) => v.toFixed(0)).join(',')}]`);
+});
 const jw = new Float64Array(3);
 for (let i = 0; i < 36; i++) {
   if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));

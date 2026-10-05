@@ -310,6 +310,19 @@ export interface SkeletonConfig {
   /** 内外翻余量（外八已经在静姿态偏航里） */
   ankleRollDeg: number;
   ankleTorque: number;
+  /**
+   * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
+   * 1.00 = 与屈伸轴同量级（200 N·m）；**0.60 = 原值（120 N·m），当前默认**。
+   *
+   * ⚠ 曾把它放到 1.00（撤掉"不超人"余量），实测**反而更差**：15 档刚度/阻尼
+   *   组合全部驻留 0.00s、最小 X3 大多 161mm；而 τmax=120 时同一律能到
+   *   **驻留 0.42s / 最小 X3 = 2mm**。
+   * ⇒ **髋外展权限不是瓶颈**，多给它会冲过目标。Inman 的静态需求 112 N·m
+   *   在 120 时已占 93%，实测那个"看起来不够"的余量恰好够用。
+   */
+  hipAbdTorqueFactor: number;
+  /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 */
+  archAtFrac: number;
   /** ★ 踝（跖屈肌）力矩上限 N·m —— **A 方案的核心参数**。
    *   文献：人类跖屈肌 MVC ~120~140 N·m；Neptune/Perry, Front Neurol 2019, 10:999
    *   —— 跖屈肌是 CoM 推进的**主引擎**，效率是髋肌的 4 倍。
@@ -419,6 +432,17 @@ export const DEFAULT_CONFIG: SkeletonConfig = {
   //   120 ⇒ 外展轴 72 N·m ⇒ CoP 偏移 72/687 = **105mm** ≈ 脚半宽 100mm
   //   （正好把 CoP 驱到足缘 —— van Mierlo 2022/2024：CMP 出支撑面是合法的）
   ankleTorque: 120,
+  /**
+   * ★ 髋**外展轴**的 τmax = `JOINT_MAX_TORQUE.hip × hipAbdTorqueFactor`。
+   *   1.00 = 与屈伸轴同量级（200 N·m）；0.60 = 原值（120）。
+   *   可扫，因为放开权限后实测**反而更差**（15 档刚度/阻尼组合全部驻留 0.00s，
+   *   而 τmax=120 时同一律能到驻留 0.42s / 最小 X3 = 2mm）⇒ 髋外展权限
+   *   **不是瓶颈**，多给会让它冲过目标。Inman 的 112 N·m 静态需求在 120 时
+   *   已占 93%，实测那个余量恰好够用。
+   */
+  hipAbdTorqueFactor: 0.60,
+  /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
+  archAtFrac: 0.22,
   // ★ 踝屈伸**机械硬限位**（背屈 −12°/ 跖屈 +18°）。比素材 limitDeg 略紧，
   //   模拟距骨滑车的几何锁定（mortise wedging），防踝被力矩甩出去导致崴脚。
   ankleLimitDeg: [-12, 18],
@@ -606,7 +630,11 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   knee_r: 150,
   // ★ 踝：比膝小一个量级（踝在人类身上本来就只有膝的 1/5~1/4 力矩），
   //   45 N·m 足够做"勾脚/尖脚"，太大反而会让脚像弹簧一样抽。
-  foot_l: 45,   // ★ 会被 cfg.ankleMaxTorque 覆盖
+  // ⚠ 这两个值**实际不生效**：踝走 `cfg.ankleTorque`（`skeleton.ts:1537` 的
+  //   `/^(foot|ankle)_/` 分支），当前默认 **120** N·m —— 因为 45 实测太小。
+  //   （原注释写"会被 cfg.ankleMaxTorque 覆盖"，但**那个配置项不存在**，
+  //     曾据此误判"踝拿到的是脊柱的 120、是个 bug"。真名是 `ankleTorque`。）
+  foot_l: 45,
   foot_r: 45,
 };
 
@@ -1306,8 +1334,14 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //     · Welte 2023：内侧弓的可动性是人类两足行走的演化产物
           //   ⇒ 仿人脚形状后**内侧弓天生离地** ⇒ 侧向 CoP 权限**白送**：
           //     给一点向外力，内侧柱本来就不承压，载荷立刻转到外侧缘。
-          //     而且弓本身就是**拱形柔顺结构**（承重压缩、离载回弹 = arch recoil），
-          //     不需要额外的中足关节去模拟。
+          //   ⚠⚠⚠ **原注释此处写过一句错误的话**（2026-10-05 更正）：
+          //   「弓本身就是拱形柔顺结构（承重压缩、离载回弹），**不需要额外的
+          //   中足关节来模拟**」—— **这是假的**。拱形柔顺需要**形变能力**，
+          //   而整只脚当时是**单个刚体**、形变能力为 0 ⇒ 内侧弓被硬编码离地
+          //   22mm 之后**永远不可能接地**。实测（`tools/probe-footroll.ts`）：
+          //   承重全在「足跟 + 外侧缘」，跖骨/趾 ≈ 0% ⇒ 支撑面退化成一条线
+          //   ⇒ 侧向 CoP 无处可去 ⇒ 侧翻。
+          //   ⇒ 真正的旋前自由度改由**弓刚体 + 弓关节**提供（见 archBlocks）。
           //
           //   比例（占足长百分比 / 绝对宽度 / 厚度），足长 = `2·L`：
           //     足跟  0–21%   宽 60mm   厚 26mm  全宽接地
@@ -1317,11 +1351,14 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           //   （100mm 宽 = `SOLE_WIDTH_TARGET`，符合 Millard 参考脚 30×10cm）
           // ══════════════════════════════════════════════════════════════════
           colliders: (() => {
-            const L = cfg.soleFootScale * hx;                             // 半长 140mm
-            const HW = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;        // 半宽 50mm
-            const soleBottom = local[1] - soleHalfThick;                  // 鞋底平面（body-local y）
+            // L / HW / soleBottom / archBlocks 已在 IIFE 外声明（供弓刚体段复用）
             const archRise = 0.022;   // 内侧弓顶点离地 22mm（人脚约 20~25mm）
             interface Blk extends ColliderDef { _vol: number; _label: string }
+            // ★ 下面几个量被 IIFE 外的「弓刚体」段复用，先在 IIFE 外声明
+            const L = cfg.soleFootScale * hx;
+            const HW = (SOLE_WIDTH_TARGET / 2) * cfg.soleFootScale;
+            const soleBottom = local[1] - soleHalfThick;
+            let archBlocks: Blk[] = [];
             /** 一块 collider：给 x0..x1 / z0..z1（相对半长半宽的比例）+ 厚度 + 离地抬升 */
             const blk = (fx0: number, fx1: number, fz0: number, fz1: number,
                          hyMm: number, rise: number, label: string): Blk => {
@@ -1350,6 +1387,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
               blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
               blk(0.145, 0.785, -1.00, 1.00, 20, 0, '跖骨头(最宽)'),
               blk(0.785, 1.00, -0.76, 0.76, 12, 0, '趾'),
+            ];
+            // ★★★ 弓刚体的两块（**已从 foot_* 上拆走**）：它们是唯一需要
+            //   **相对足体运动**的部分 —— 旋前时向下踩实、承重后回弹。
+            //   留在 foot_* 上就永远离地（见上面被更正的错误注释）。
+            archBlocks = [
+              blk(-0.435, -0.145, 0.40, 1.00, 20, archRise, '内侧弓·后'),
+              blk(-0.145, 0.145, 0.40, 1.00, 20, archRise, '内侧弓·前'),
             ];
             // 体积 → 质量归一（总质量 = soleMass，与旧实现一致）
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
@@ -1577,7 +1621,7 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
       //   即 τmax(hip/0) = hip_l 的 τ = 200 N·m。
       //   ⚠ 这是**工程余量**，不是解剖上限；真实股骨/髋臼能承受的远高于此。
       maxTorque: [
-        tau * (isHip ? 1.00 : TORQUE_AXIS_FACTOR[0]),
+        tau * (isHip ? cfg.hipAbdTorqueFactor : TORQUE_AXIS_FACTOR[0]),
         tau * TORQUE_AXIS_FACTOR[1],
         tau * TORQUE_AXIS_FACTOR[2],
       ],

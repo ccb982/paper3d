@@ -25,16 +25,18 @@ const { DEFAULT_STEP_PARAMS } = await import('../src/core/systems/step');
 const { DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
 
 const log = console.log;
-const sk = buildSkeleton(DEFAULT_CONFIG);
+const AB = Number(process.env.AB ?? 0.6);
+const sk = buildSkeleton({ ...DEFAULT_CONFIG, hipAbdTorqueFactor: AB });
 const SHAPE = shapeForJoints(sk.joints.length);
 const DEG = 180 / Math.PI;
 const { jointIndexByName } = await import('../src/core/skeleton');
 const SP1 = jointIndexByName(sk, 'spine1');
 
-interface C { ld: number; kd: number; tone: number; ks: number; st: number }
+interface C { ld: number; kd: number; tone: number; ks: number; st: number; ab: number }
 const CS: C[] = [];
-for (const t of [1.0, 1.5, 2.0, 2.5])
-    CS.push({ ld: 1.4, kd: 1.4, tone: 0.5, ks: 0.6, st: t });
+for (const ks of [0.4, 0.6, 0.8, 1.0, 1.3])
+  for (const kd of [0.8, 1.1, 1.4, 1.8])
+    CS.push({ ld: kd, kd, tone: 0.5, ks, st: 1.0, ab: 0.6 });
 log('══ 残余漂移源 + 权限扫描（锁定已生效）══');
 log('   消融                          FMAX 腰限幅  最小X3  驻留  腰峰   vz峰   com.z末  存活  翻转');
 for (const c of CS) {
@@ -65,7 +67,7 @@ for (const c of CS) {
     if (s.tiltDeg >= 25) break;
     alive = s.t;
   }
-  log(`   脊柱张力=${c.st.toFixed(1)}×`
+  log(`   刚度=${c.ks}× 阻尼=${c.ld}×`
     + ` ${(dzMin * 1000).toFixed(0).padStart(6)}mm`
     + ` ${(bestRun / 60).toFixed(2).padStart(5)}s${bestRun / 60 >= 1 ? '✓' : '✗'}`
     + ` ${(wMax * DEG).toFixed(1).padStart(5)}° ${(spMax * DEG).toFixed(1).padStart(6)}°`
