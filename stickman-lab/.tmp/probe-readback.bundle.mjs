@@ -14112,6 +14112,15 @@ var init_ragdoll = __esm({
        */
       soleCols = [[], []];
       /**
+       * ★ 与 `soleCols` / `soleColBody` **一一对应**的「该 collider 在**所属刚体**自己的
+       *   `colliders[]` 里的下标」。
+       *
+       *   为什么必须另存：`soleCols` 的下标是**全脚**顺序（左脚 6 块 = foot 4 + arch 2），
+       *   而 collider **定义**要在**所属刚体**的 `colliders[]` 里取。
+       *   直接拿 `ci` 去索引 `sk.bodies[bi].colliders[ci]` 对弓那两块一定是 `undefined`。
+       */
+      soleColLocalIdx = [[], []];
+      /**
        * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
        *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
        *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
@@ -14296,7 +14305,8 @@ var init_ragdoll = __esm({
             rapier_default.RigidBodyDesc.dynamic().setTranslation(b.cx, b.cy, b.cz).setRotation(this.restQ[i]).setLinearDamping(this.opt.linearDamping).setAngularDamping(/^foot_/.test(b.key) ? this.opt.footAngularDamping ?? this.opt.angularDamping : this.opt.angularDamping).setCanSleep(false)
           );
           this.bodies.push(body);
-          for (const c of b.colliders) {
+          for (let ci = 0; ci < b.colliders.length; ci++) {
+            const c = b.colliders[ci];
             const cd = c.shape === "capsule" ? rapier_default.ColliderDesc.capsule(c.halfHeight, c.radius) : rapier_default.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
             cd.setTranslation(c.offsetX ?? 0, c.offsetY, c.offsetZ).setMassProperties(
               c.mass,
@@ -14309,10 +14319,12 @@ var init_ragdoll = __esm({
               if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
+                this.soleColLocalIdx[0].push(ci);
                 this.soleCol[0] ??= col;
               } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
+                this.soleColLocalIdx[1].push(ci);
                 this.soleCol[1] ??= col;
               }
             }
@@ -14590,8 +14602,8 @@ var init_ragdoll = __esm({
           if (bi === void 0) continue;
           const body = this.bodies[bi];
           const q = body.rotation();
-          const cd = this.sk.bodies[bi].colliders[ci];
-          if (!cd) return;
+          const cd = this.sk.bodies[bi].colliders[this.soleColLocalIdx[side][ci] ?? ci];
+          if (!cd) continue;
           const cdOx = cd.offsetX ?? 0;
           const EPS = 2e-3;
           this.world.contactPairsWith(col, (other) => {

@@ -36,7 +36,7 @@ function trial(riseMm: number) {
   sim.begin(new Float32Array(sim.paramCount));
   const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
   const d = sim.doll;
-  const world = (d as any).world as InstanceType<typeof RAPIER.World>;
+  const wd = (d as any).world as InstanceType<typeof RAPIER.World>;
   const ja = jointIndexByName(sk, 'arch_l');
   const iA = sk.bodies.findIndex((b) => b.key === 'arch_l');
   const iF = sk.bodies.findIndex((b) => b.key === 'foot_l');
@@ -57,8 +57,8 @@ function trial(riseMm: number) {
     let lam = 0;
     for (let c = 0; c < nC; c++) {
       const col = archB.collider(c);
-      world.contactPairsWith(col, (other: any) => {
-        world.contactPair(col, other, (mf: any) => {
+      wd.contactPairsWith(col, (other: any) => {
+        wd.contactPair(col, other, (mf: any) => {
           if (mf.numContacts() === 0) return;
           for (let k = 0; k < mf.numContacts(); k++) lam += Math.abs(mf.contactImpulse(k));
         });
@@ -69,11 +69,34 @@ function trial(riseMm: number) {
     d.readCoP(0, COP); d.footSoleBounds(0, BB); d.soleBlockLoad(0, LD);
     cops.push(COP[2]!); tilt.push(d.tiltOf(d.bodies[iF]!));
   }
-  const tot = LD[0]! + LD[1]! + LD[2]! + LD[3]! + LD[4]! + LD[5]!;
+  const n = (d as any).soleCols[0].length;
+  const names = (d as any).soleBlockLabels(0);
+  let tot = 0;
+  for (let i = 0; i < n; i++) tot += LD[i]!;
+  // 归一化到「外侧柱」那一项（索引由真实块名定，不写死）
+  const li = names.findIndex((x: string) => x.includes('外侧柱'));
+  const archIdx = names.map((x: string, i: number) => [x, i] as const)
+    .filter(([x]) => x.includes('内侧弓')).map(([, i]) => i);
+  const archSum = archIdx.reduce((a: number, i: number) => a + (LD[i] ?? 0), 0);
+  // 逐块并排：直接读 contactImpulse vs 走 soleBlockLoad，定位彩虽在哪一层
+  const cols = (d as any).soleCols[0] as any[];
+  const direct: number[] = [];
+  for (let c = 0; c < cols.length; c++) {
+    let lam = 0;
+    wd.contactPairsWith(cols[c], (other: any) => {
+      wd.contactPair(cols[c], other, (mf: any) => {
+        if (mf.numContacts() === 0) return;
+        for (let k = 0; k < mf.numContacts(); k++) lam += Math.abs(mf.contactImpulse(k));
+      });
+    });
+    direct.push(lam);
+  }
   return {
+    names, n, li, archIdx, direct, viaLd: [...LD.slice(0, n)],
+    bbZ: `${(BB[2] * 1000).toFixed(0)}..${(BB[3] * 1000).toFixed(0)}`,
     hitPct: hit / Math.max(1, frames) * 100,
     aRange: (aMax - aMin) * 57.3, aMean: ((aMin + aMax) / 2) * 57.3,
-    lamPk, archShare: tot > 1e-9 ? (LD[4]! + LD[5]!) / tot * 100 : 0,
+    lamPk, archShare: tot > 1e-9 ? (archSum / tot) * 100 : 0,
     copR: (Math.max(...cops) - Math.min(...cops)) * 1000,
     tiltR: (Math.max(...tilt) - Math.min(...tilt)) * 57.3,
   };
@@ -83,11 +106,15 @@ log('══ 弓升起高度扫描：多低才承重？══');
 log('   （需旋前角 = asin(rise/126mm)；脚实测只能倾 ~2~7°）');
 log('');
 log('   rise   需旋前   弓接触帧   弓角行程   弓角均值   弓载荷峰   弓承重%   CoP行程   足倾角行程');
-for (const r of [22, 16, 12, 9, 6, 3, 0]) {
+for (const r of [0, 4, 6]) {
   const t = trial(r);
   const need = (Math.asin(Math.min(1, r / 126)) * 57.3).toFixed(1);
   log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}°`
-    + `   ${t.hitPct.toFixed(0).padStart(7)}%`
+    + `   块[${t.names.join('|')}]`
+    + `   直读λ[${t.direct.map((v) => v.toFixed(3)).join('|')}]`
+    + `   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join('|')}]`
+    + `   bb z[${t.bbZ}]`
+    + `   ${t.hitPct.toFixed(0).padStart(6)}%`
     + `   ${t.aRange.toFixed(2).padStart(7)}°`
     + `   ${t.aMean.toFixed(2).padStart(7)}°`
     + `   ${t.lamPk.toFixed(3).padStart(8)}`

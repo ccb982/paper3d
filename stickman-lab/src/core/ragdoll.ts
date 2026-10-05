@@ -549,6 +549,15 @@ export class Ragdoll {
    */
   readonly soleCols: [RAPIER.Collider[], RAPIER.Collider[]] = [[], []];
   /**
+   * ★ 与 `soleCols` / `soleColBody` **一一对应**的「该 collider 在**所属刚体**自己的
+   *   `colliders[]` 里的下标」。
+   *
+   *   为什么必须另存：`soleCols` 的下标是**全脚**顺序（左脚 6 块 = foot 4 + arch 2），
+   *   而 collider **定义**要在**所属刚体**的 `colliders[]` 里取。
+   *   直接拿 `ci` 去索引 `sk.bodies[bi].colliders[ci]` 对弓那两块一定是 `undefined`。
+   */
+  readonly soleColLocalIdx: [number[], number[]] = [[], []];
+  /**
    * ★ 与 `soleCols` 一一对应的**所属刚体下标**。
    *   为什么必须记：`readCoP` 要按"这块鞋底**自己的底面**"筛接触面（见该函数注释），
    *   而底面外法线取决于刚体姿态 ⇒ 必须知道 collider 挂在哪个刚体上。
@@ -783,7 +792,8 @@ export class Ragdoll {
       );
       this.bodies.push(body);
 
-      for (const c of b.colliders) {
+      for (let ci = 0; ci < b.colliders.length; ci++) {
+        const c = b.colliders[ci]!;   // ★ ci = 该 collider 在**本刚体** colliders[] 里的下标
         const cd = c.shape === 'capsule'
           ? RAPIER.ColliderDesc.capsule(c.halfHeight, c.radius)
           : RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz);
@@ -815,10 +825,12 @@ export class Ragdoll {
           if (b.key === 'shin_l' || b.key === 'foot_l' || b.key === 'forefoot_l' || b.key === 'arch_l') {
             this.soleCols[0].push(col);
             this.soleColBody[0].push(i);      // ★ 记下所属刚体（readCoP筛底面要用）
+            this.soleColLocalIdx[0].push(ci);
             this.soleCol[0] ??= col;      // 兼容旧调用点（= 第一块）
           } else if (b.key === 'shin_r' || b.key === 'foot_r' || b.key === 'forefoot_r' || b.key === 'arch_r') {
             this.soleCols[1].push(col);
             this.soleColBody[1].push(i);
+            this.soleColLocalIdx[1].push(ci);
             this.soleCol[1] ??= col;
           }
         }
@@ -1238,10 +1250,11 @@ export class Ragdoll {
       if (bi === undefined) continue;
       const body = this.bodies[bi]!;
       const q = body.rotation();
-      const cd = this.sk.bodies[bi]!.colliders[ci];
-      if (!cd) return;
+      // ★ 用**刚体内下标**取定义，不能用全脚下标 `ci`（弓的两块会取到 undefined）。
+      const cd = this.sk.bodies[bi]!.colliders[this.soleColLocalIdx[side][ci] ?? ci];
+      // ⚠ `continue` 不是 `return`：一个索引取不到定义不应该把**后面所有块**一起中断。
+      if (!cd) continue;
       const cdOx = cd.offsetX ?? 0;
-      const EPS = 2e-3;
       this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
         this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
           const n = mf.numSolverContacts();
@@ -1249,7 +1262,8 @@ export class Ragdoll {
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
             const p = mf.solverContactPoint(i);
-            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            // ★ 同理：用接触法向判断、不用 XZ 包围盒（见 `soleBlockLoad` 里的同样注释）。
+            if (Math.abs(mf.normal().y) < 0.5) continue;
             if (p.z >= bbMidZ) out[0] += l; else out[1] += l;
           }
         });
@@ -1501,26 +1515,28 @@ export class Ragdoll {
    */
   soleBlockLoad(side: 0 | 1, out: Float64Array): void {
     const cols = this.soleCols[side];
-    const bb = this.soleBB; this.footSoleBounds(side, bb);
     for (let i = 0; i < out.length; i++) out[i] = 0;
     for (let ci = 0; ci < cols.length; ci++) {
       const col = cols[ci] as RAPIER.Collider;
+      // ★★ 三个索引误区，全部会静默读出错值（“弓承重 0%”就是这么来的）：
+      //   1. collider 定义要取所属**刚体自己**的下标 `soleColLocalIdx[side][ci]`，
+      //      不能用全脚下标 `ci`（弓的两块会取到 undefined）。
+      //   2. 取不到定义必须 `continue`，不能 `return` —— `return` 会把**后面所有块**一起中断。
+      //   3. 不用 **XZ 包围盒**过滤：它会静默丢掉真实载荷（实测并排读数：
+      //        直读λ = [0.885, 0.866, **0.357**, 0, **0.016**, 0]
+      //        经过包围盒 = [0.885, 0.866, **0.000**, 0, **0.000**, 0]）。
+      //      只认「从上方压下来的接触」（|n·y| ≥ 0.5）才是鞋底承重。
       const bi = this.soleColBody[side]![ci];
       if (bi === undefined) continue;
-      const body = this.bodies[bi]!;
-      const q = body.rotation();
-      const cd = this.sk.bodies[bi]!.colliders[ci];
-      if (!cd) return;
-      const cdOx = cd.offsetX ?? 0;
-      const EPS = 2e-3;
+      const cd = this.sk.bodies[bi]!.colliders[this.soleColLocalIdx[side][ci] ?? ci];
+      if (!cd) continue;
       this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
         this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
           const n = mf.numSolverContacts();
           for (let i = 0; i < n; i++) {
             const l = Math.abs(mf.contactImpulse(i));
             if (!(l > 0)) continue;
-            const p = mf.solverContactPoint(i);
-            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            if (Math.abs(mf.normal().y) < 0.5) continue;
             out[ci] += l;
           }
         });
@@ -1533,7 +1549,10 @@ soleBlockLabels(side: 0 | 1): string[] {
     const out: string[] = [];
     for (let ci = 0; ci < this.soleCols[side].length; ci++) {
       const bi = this.soleColBody[side]![ci];
-      const c = bi !== undefined ? this.sk.bodies[bi]!.colliders[ci] : undefined;
+      // ★ 用**刚体内下标**（同 `soleBlockLoad`），否则弓的两块取不到标签、退化成 `#4`/`#5`。
+      const c = bi !== undefined
+        ? this.sk.bodies[bi]!.colliders[this.soleColLocalIdx[side][ci] ?? ci]
+        : undefined;
       out.push(((c as unknown as { _label?: string } | undefined)?._label) ?? `#${ci}`);
     }
     return out;
