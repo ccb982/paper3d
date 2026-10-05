@@ -1156,6 +1156,24 @@ export class Ragdoll {
   // ------------------------------------------------------------ 读状态
 
   /** 把刚体本地向量 v 转到世界，写入 out */
+  /**
+   * 关节 `i` 的第 `axis` 轴在世界系下的**单位方向**（写 out[0..2]）。
+   *
+   * 全链 QP 需要它把"关节力矩"翻译成"对地面的水平力"（附录 B.2 的等式 ①）：
+   * `τ` 沿这个方向，力臂由 `jointWorld` 给。
+   * ⚠ `toWorld` 是 private 且签名是**私有用法**（直接给三元组），
+   *   这里包一层给外部用，避免 QP 去访问私有实现。
+   */
+  bodyWorldAxis(i: number, axis: 0 | 1 | 2, out: Float64Array = this.axisWorldTmp): Float64Array {
+    const j = this.jointBodies[i * 2]!;                 // 父刚体
+    const b = this.bodies[j]!;
+    if (axis === 0) this.toWorld(b, 1, 0, 0, out);
+    else if (axis === 1) this.toWorld(b, 0, 1, 0, out);
+    else this.toWorld(b, 0, 0, 1, out);
+    return out;
+  }
+
+  private readonly axisWorldTmp = new Float64Array(3);
   private toWorld(b: RAPIER.RigidBody, vx: number, vy: number, vz: number, out: Float64Array): void {
     const q = b.rotation();
     quatRotate(q.x, q.y, q.z, q.w, vx, vy, vz, out);
