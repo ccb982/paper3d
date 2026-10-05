@@ -16998,6 +16998,7 @@ var init_rigState = __esm({
       // ★ 必须可回读：QP 不可行时给的是"尽力而为"的盒内点，
       //   下游若不知道就会当成有效修正 ⇒ 又一次静默失效。
       qpTick = null;
+      qpGrfSat = false;
       qpFeasible = true;
       qpResidual = 0;
       /** 中间量诊断（闭环判据的四项 + 实际强度） */
@@ -17402,6 +17403,36 @@ var init_rigState = __esm({
         }
         this.torqueRequestCount++;
         this.treq[i] = { value: tau, system, label };
+      }
+      /**
+       * ★ **累加**到该轴已有的力矩请求（不替换、不产生 `suppressed`）。
+       *
+       * ⚠⚠ 这是全链 QP 唯一正确的接线方式，两个原因都是实测出来的：
+       *
+       *  ① 用 `forceTorque`（顶替）会把同一通道里的 `hipStiff` / VIP 踝等
+       *     **静力矩直接抹掉**。而力矩通道与位置环是在 `driveMotors` 里**相加**的，
+       *     位置环（`sagSupport`）不受影响 —— 但力矩通道内的贡献会被删光。
+       *
+       *  ② 用 `requestTorque`（先到先得）则会被同拍更早的通道全部压制，
+       *     实测 QP 解出 −0.2…32 N·m 而电机实收恒 ±0.0。
+       *
+       *  ⇒ 累加是唯一同时满足"不被压制"与"不删他人"的写法。
+       *  ⚠ 它**不改变** `system`/`label`（保留原写者的归属，便于回读是谁在出力）；
+       *    所以若原轴无人写，`ownerLabel` 不会变成 QP —— 需要靠 `qpTick` 回读。
+       */
+      addTorque(joint, axis, tau, system, label) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        this.torqueRequestCount++;
+        const cur = this.treq[i];
+        if (!cur) {
+          this.treq[i] = { value: tau, system, label };
+          return;
+        }
+        cur.value += tau;
       }
       requestTorque(joint, axis, tau, system, label) {
         this.claimAxis(joint, axis, 2, system);
@@ -20343,6 +20374,27 @@ function solveWholeBodyQp(inp) {
   const tolEq = 0.01 * Math.max(1, Math.hypot(inp.fDesX, inp.fDesZ));
   return { tau, feasible: allInBox && copOk && residual <= tolEq, residual, iters };
 }
+function supportPolygon(doll) {
+  const bb = new Float64Array(4);
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
+  for (const idx of [0, 1]) {
+    if (!doll.footGrounded(idx)) continue;
+    doll.footSoleBounds(idx, bb);
+    x0 = Math.min(x0, bb[0]);
+    x1 = Math.max(x1, bb[1]);
+    z0 = Math.min(z0, bb[2]);
+    z1 = Math.max(z1, bb[3]);
+    n++;
+  }
+  if (n === 0) {
+    doll.footSoleBounds(0, bb);
+    x0 = bb[0];
+    x1 = bb[1];
+    z0 = bb[2];
+    z1 = bb[3];
+  }
+  return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, x: [x0, x1], z: [z0, z1], nFeet: n };
+}
 function buildQpAxes(rs, doll, sup, ankleMul = 4) {
   const sk2 = rs.sk;
   const out = [];
@@ -20396,26 +20448,36 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
   }
   return out;
 }
-function desiredGrfFromXi(rs, m) {
+function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - rs.com.vz / w0;
-  return { fx: -m * w0 * w0 * xiX, fz: -m * w0 * w0 * xiZ };
+  const xiX = rs.com.x - ref.x - rs.com.vx / w0;
+  const xiZ = rs.com.z - ref.z - rs.com.vz / w0;
+  let fx = -m * w0 * w0 * xiX;
+  let fz = -m * w0 * w0 * xiZ;
+  const lim = mu * m * 9.81;
+  const mag = Math.hypot(fx, fz);
+  let sat = false;
+  if (mag > lim && mag > 1e-9) {
+    fx *= lim / mag;
+    fz *= lim / mag;
+    sat = true;
+  }
+  return { fx, fz, xiX, xiZ, sat };
 }
 function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
   const sk2 = rs.sk;
   const axes = buildQpAxes(rs, doll, sup, opt.ankleMul ?? 4);
   const g = opt.gain ?? 1;
-  const { fx, fz } = desiredGrfFromXi(rs, sk2.massTotal);
-  const BB = new Float64Array(4);
-  doll.footSoleBounds(sup === "l" ? 0 : 1, BB);
+  const SP = supportPolygon(doll);
+  const grf = desiredGrfFromXi(rs, sk2.massTotal, { x: SP.cx, z: SP.cz });
+  const fx = grf.fx * g, fz = grf.fz * g;
   const out = solveWholeBodyQp({
     axes,
-    fDesX: fx * g,
-    fDesZ: fz * g,
-    copXRange: [BB[0], BB[1]],
-    copZRange: [BB[2], BB[3]],
+    fDesX: fx,
+    fDesZ: fz,
+    copXRange: SP.x,
+    copZRange: SP.z,
     iters: opt.iters ?? 40
   });
   const names = [];
@@ -20425,17 +20487,19 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     names.push(nm);
     const t = out.tau[i];
     if (Math.abs(t) < 1e-6) continue;
-    if (opt.overwrite) rs.forceTorque(a.joint, a.axis, t, "balance", `\u5168\u94FEQP/${nm}`);
-    else rs.requestTorque(a.joint, a.axis, t, "balance", `\u5168\u94FEQP/${nm}`);
+    rs.addTorque(a.joint, a.axis, t, "balance", `\u5168\u94FEQP/${nm}`);
   }
   return {
     tau: out.tau,
     names,
     feasible: out.feasible,
     residual: out.residual,
-    fDesX: fx * g,
-    fDesZ: fz * g,
-    nAxes: axes.length
+    fDesX: fx,
+    fDesZ: fz,
+    nAxes: axes.length,
+    xiX: grf.xiX,
+    xiZ: grf.xiZ,
+    grfSat: grf.sat
   };
 }
 var init_wholeBodyQp = __esm({
@@ -20482,18 +20546,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const qp = wholeBodyBalanceTick(rs, doll, sup, {
       ankleMul: p.qpAnkleMul ?? 4,
       gain: p.qpGain ?? 1,
-      iters: p.qpIters ?? 40,
-      // ★★ **必须**允许 QP 覆盖同拍更早写的通道。
-      //   `requestTorque` 是先到先得（`PRIORITY[cur] <= PRIORITY[system]` 就压制后来者），
-      //   而 QP 跑在 `balanceSystem` **末尾** ⇒ 同优先级的先写者（VIP 踝、载荷张力…）
-      //   全部把 QP 压掉。实测：QP 解出 −0.2 … 32 N·m（残差 0.00N），
-      //   而电机实收恒为 ±0.0 —— **解被静默丢弃**。
-      //   ⇒ QP 是"整条链的最终修正"，必须能覆盖各通道的中间结果。
-      overwrite: true
+      iters: p.qpIters ?? 40
     });
     rs.qpTick = qp;
     rs.qpFeasible = qp.feasible;
     rs.qpResidual = qp.residual;
+    rs.qpGrfSat = qp.grfSat;
   }
   if (doll && on("postureLoad")) {
     doll.resetToneScale();
@@ -21316,10 +21374,12 @@ for (let f = 0; f < Math.round(DUR * (DEFAULT_SIM2.physicsHz ?? 240)); f++) {
   const rs = sim.rig;
   const q = rs?.qpTick;
   if (!q) continue;
-  const w0 = Math.sqrt(9.81 / Math.max(0.05, rs.com.y));
-  const xiX = rs.com.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - rs.com.vz / w0;
-  last = { t: f / (DEFAULT_SIM2.physicsHz ?? 240), q, rs, xiX, xiZ };
+  last = { t: f / PHz, q, rs, xiX: q.xiX, xiZ: q.xiZ };
+  if (f === 0 || f === PHz) {
+    const BB0 = new Float64Array(4);
+    sim.doll.footSoleBounds(0, BB0);
+    log("  \u2605 t=" + (f / PHz).toFixed(2) + " com=(" + rs.com.x.toFixed(4) + ", " + rs.com.y.toFixed(4) + ", " + rs.com.z.toFixed(4) + ")  soleBounds X=[" + BB0[0].toFixed(3) + "," + BB0[1].toFixed(3) + "] Z=[" + BB0[2].toFixed(3) + "," + BB0[3].toFixed(3) + "]  ref=(" + ((BB0[0] + BB0[1]) / 2).toFixed(3) + "," + ((BB0[2] + BB0[3]) / 2).toFixed(3) + ")  \u03BE=(" + q.xiX.toFixed(3) + "," + q.xiZ.toFixed(3) + ")");
+  }
   if (f % Math.round(PHz * 0.5) !== 0) continue;
   const qq = last.q;
   let bi = -1, bv = 0;
@@ -21334,7 +21394,15 @@ for (let f = 0; f < Math.round(DUR * (DEFAULT_SIM2.physicsHz ?? 240)); f++) {
   const qa = bi >= 0 ? Number(axName.split("/")[1]) : 0;
   const tRec = qj >= 0 ? rs.tauOut?.[qj * 3 + qa] ?? 0 : 0;
   last.axName = axName;
-  log("  " + last.t.toFixed(2).padStart(5) + " " + xiX.toFixed(3).padStart(8) + " " + xiZ.toFixed(3).padStart(7) + " " + qq.fDesX.toFixed(1).padStart(8) + " " + qq.fDesZ.toFixed(1).padStart(7) + " " + String(qq.nAxes).padStart(4) + " " + qq.residual.toFixed(1).padStart(7) + "  " + (qq.feasible ? "\u2713" : "\u2717") + "  " + String(rs.axisConflicts?.length ?? 0).padStart(3) + " " + axName.padEnd(12) + " QP " + bv.toFixed(1).padStart(7) + "  \u7535\u673A " + tRec.toFixed(1).padStart(7));
+  log("  " + last.t.toFixed(2).padStart(5) + " " + last.xiX.toFixed(3).padStart(8) + " " + last.xiZ.toFixed(3).padStart(7) + " " + qq.fDesX.toFixed(1).padStart(8) + " " + qq.fDesZ.toFixed(1).padStart(7) + " " + String(qq.nAxes).padStart(4) + " " + qq.residual.toFixed(1).padStart(7) + "  " + (qq.feasible ? "\u2713" : "\u2717") + (qq.grfSat ? " SAT" : "    ") + String(rs.axisConflicts?.length ?? 0).padStart(3) + " " + axName.padEnd(12) + " QP " + bv.toFixed(1).padStart(7) + "  \u7535\u673A " + tRec.toFixed(1).padStart(7));
+}
+{
+  const rs = sim.rig;
+  const head = sim.doll?.headHitGround?.() ?? false;
+  log("  \u2550\u2550 \u7ED3\u5C40 \u2550\u2550");
+  log("   com.y \u6700\u7EC8 = " + rs.com.y.toFixed(4) + "   (\u521D\u59CB 0.9623)");
+  log("   \u5934\u78B0\u5730 = " + (head ? "\u2717 \u5DF2\u78B0" : "\u2713 \u672A\u78B0") + '   finishReason = "' + String(sim.finishReason ?? "") + '"');
+  log("   com \u6F02\u79FB = (" + rs.com.x.toFixed(3) + ", " + rs.com.z.toFixed(3) + ")");
 }
 if (!last) {
   log("   \u2605 QP \u4E00\u6B21\u90FD\u6CA1\u88AB\u8C03\u7528\uFF08qpTick \u59CB\u7EC8\u4E3A null\uFF09");

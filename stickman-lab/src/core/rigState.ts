@@ -479,8 +479,10 @@ export class RigState {
   // ── 全链 QP 的本拍读数（附录 C.1）────────────────────────────────
   // ★ 必须可回读：QP 不可行时给的是"尽力而为"的盒内点，
   //   下游若不知道就会当成有效修正 ⇒ 又一次静默失效。
-  qpTick: { tau: Float64Array; names: string[]; feasible: boolean;
-            residual: number; fDesX: number; fDesZ: number; nAxes: number } | null = null;
+  qpTick: { tau: Float64Array; names: string[]; feasible: boolean; residual: number;
+            fDesX: number; fDesZ: number; nAxes: number;
+            xiX: number; xiZ: number; grfSat: boolean } | null = null;
+  qpGrfSat = false;
   qpFeasible = true;
   qpResidual = 0;
   /** 中间量诊断（闭环判据的四项 + 实际强度） */
@@ -871,6 +873,31 @@ export class RigState {
     if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
     this.torqueRequestCount++;
     this.treq[i] = { value: tau, system, label };
+  }
+
+  /**
+   * ★ **累加**到该轴已有的力矩请求（不替换、不产生 `suppressed`）。
+   *
+   * ⚠⚠ 这是全链 QP 唯一正确的接线方式，两个原因都是实测出来的：
+   *
+   *  ① 用 `forceTorque`（顶替）会把同一通道里的 `hipStiff` / VIP 踝等
+   *     **静力矩直接抹掉**。而力矩通道与位置环是在 `driveMotors` 里**相加**的，
+   *     位置环（`sagSupport`）不受影响 —— 但力矩通道内的贡献会被删光。
+   *
+   *  ② 用 `requestTorque`（先到先得）则会被同拍更早的通道全部压制，
+   *     实测 QP 解出 −0.2…32 N·m 而电机实收恒 ±0.0。
+   *
+   *  ⇒ 累加是唯一同时满足"不被压制"与"不删他人"的写法。
+   *  ⚠ 它**不改变** `system`/`label`（保留原写者的归属，便于回读是谁在出力）；
+   *    所以若原轴无人写，`ownerLabel` 不会变成 QP —— 需要靠 `qpTick` 回读。
+   */
+  addTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    this.torqueRequestCount++;
+    const cur = this.treq[i];
+    if (!cur) { this.treq[i] = { value: tau, system, label }; return; }
+    cur.value += tau;
   }
 
   requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {

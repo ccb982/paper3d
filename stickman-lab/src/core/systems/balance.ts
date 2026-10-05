@@ -851,19 +851,14 @@ export function balanceSystem(
       ankleMul: p.qpAnkleMul ?? 4,
       gain: p.qpGain ?? 1,
       iters: p.qpIters ?? 40,
-      // ★★ **必须**允许 QP 覆盖同拍更早写的通道。
-      //   `requestTorque` 是先到先得（`PRIORITY[cur] <= PRIORITY[system]` 就压制后来者），
-      //   而 QP 跑在 `balanceSystem` **末尾** ⇒ 同优先级的先写者（VIP 踝、载荷张力…）
-      //   全部把 QP 压掉。实测：QP 解出 −0.2 … 32 N·m（残差 0.00N），
-      //   而电机实收恒为 ±0.0 —— **解被静默丢弃**。
-      //   ⇒ QP 是"整条链的最终修正"，必须能覆盖各通道的中间结果。
-      overwrite: true,
     });
     rs.qpTick = qp;
     // ★ 可行性必须回读：QP 不可行时它给的是"尽力而为"的盒内点，
     //   此时必须让下游知道，否则会当成有效修正（又是静默失效）。
     rs.qpFeasible = qp.feasible;
     rs.qpResidual = qp.residual;
+    // · 碰到摩擦锥上限 ⇒ 控制理论的前提不成立，下游必须知道
+    rs.qpGrfSat = qp.grfSat;
   }
 
   // ★★ 载荷依赖姿势张力：每拍重算（漏算会把上一拍带进来）。

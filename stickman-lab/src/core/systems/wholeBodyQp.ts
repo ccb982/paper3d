@@ -271,6 +271,43 @@ export interface QpTick {
   fDesZ: number;
   /** 本拍请求了哪些轴（人数） */
   nAxes: number;
+  /** ξ（相对支撑中心）—— 确认 F_des 满足控制理论前提时读它 */
+  xiX: number;
+  xiZ: number;
+  /** 是否碰到摩擦锥上限了（满足控制理论前提时应为 false） */
+  grfSat: boolean;
+}
+
+/**
+ * ★ **支撑多边形** = 所有**着地**脚的鞋底包围盒之并。
+ *
+ * ⚠⚠ **不能只取单脚**：实测（左脚着地，双脚站）
+ *     soleBounds Z=[0.077, 0.257] ⇒ 单脚中心 z=+0.167，而 `com.z=0.003`。
+ *     双脚着地时 com 在**两脚之间**，所以拿单脚中心当 ξ 的参考 ⇒
+ *     永久横向偏差 167mm = `F_des_z ≈ 0.8×760×0.167 = 127N` 恒定侧推
+ *     !d2 ξ 被自己喂大 !d2 正反馈 !d2 角色横着散开。
+ *     （这是本轮实测到的，不是推断。）
+ *
+ * ⇑ 参考点取**并集**的中心；CoP 可行区间也用并集
+ *   —— 否则 QP 会把“足底落在双支撑区里”判成不可行。
+ */
+export function supportPolygon(
+  doll: Ragdoll,
+): { cx: number; cz: number; x: [number, number]; z: [number, number]; nFeet: number } {
+  const bb = new Float64Array(4);
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity, n = 0;
+  for (const idx of [0, 1] as const) {
+    if (!doll.footGrounded(idx)) continue;
+    doll.footSoleBounds(idx, bb);
+    x0 = Math.min(x0, bb[0]!); x1 = Math.max(x1, bb[1]!);
+    z0 = Math.min(z0, bb[2]!); z1 = Math.max(z1, bb[3]!);
+    n++;
+  }
+  if (n === 0) {   // 一只脚都不着地 ⇒ 无支撑，退回单腿中心供调试
+    doll.footSoleBounds(0, bb);
+    x0 = bb[0]!; x1 = bb[1]!; z0 = bb[2]!; z1 = bb[3]!;
+  }
+  return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, x: [x0, x1], z: [z0, z1], nFeet: n };
 }
 
 /**
@@ -343,17 +380,37 @@ export function buildQpAxes(
  * 从 `RigState` 的 ξ 生成期望水平地面反力。
  *
  * ξ = CoM − Ẋ/ω₀（附录 B.3）。要 ξ → 0，需要 CoM 加速度 `a = −ω₀²·ξ`，
- * 由 `M·a = ΣF + mg` ⇒ **`F_des = m·(a − g)**：
+ * 由 `M·a = ΣF + mg` ⇒ **`F_des = m·(a − g)**`：
  *     Fx_des = −m·ω₀²·ξ_x
  *     Fz_des = −m·ω₀²·ξ_z
  *  ⇒ 只在**水平**两个方向给出目标（竖向由体重承担，不靠关节力矩）。
+ *
+ * ★★ **ξ 必须相对"期望 CoP 位置"算，不能相对世界原点** —— 这是实测踩到的：
+ *   第一版写 `xiX = com.x − vx/ω₀`（世界原点），于是角色只要走出 1m，
+ *   ξ 就变 1.0，`m·ω₀²·ξ = 763N` ⇒ 越走越用力，形成正反馈。
+ *   实测倒地把 F_des 推到 **3733N**（mω₀² = 760 ⇒ ξ≈4.9m），而那只是尸体状态。
+ *   ⇒ 改为相对支撑中心 `ref`，即"把 CoP 拉回支撑面中心"这件事。
+ *
+ * ★ 饱和：`|F_h| ≤ μ·N ≈ μ·m·g`（摩擦锥，μ 取 0.8）。
+ *   这是**物理上限**，不是经验裁剪：超过它就没有任何接触力分布能实现，
+ *   QP 也就不该收到这个目标。
  */
-export function desiredGrfFromXi(rs: RigState, m: number): { fx: number; fz: number } {
+export function desiredGrfFromXi(
+  rs: RigState, m: number,
+  ref: { x: number; z: number } = { x: 0, z: 0 },
+  mu = 0.8,
+): { fx: number; fz: number; xiX: number; xiZ: number; sat: boolean } {
   const h = Math.max(0.05, rs.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - rs.com.vz / w0;
-  return { fx: -m * w0 * w0 * xiX, fz: -m * w0 * w0 * xiZ };
+  const xiX = (rs.com.x - ref.x) - rs.com.vx / w0;
+  const xiZ = (rs.com.z - ref.z) - rs.com.vz / w0;
+  let fx = -m * w0 * w0 * xiX;
+  let fz = -m * w0 * w0 * xiZ;
+  const lim = mu * m * 9.81;
+  const mag = Math.hypot(fx, fz);
+  let sat = false;
+  if (mag > lim && mag > 1e-9) { fx *= lim / mag; fz *= lim / mag; sat = true; }
+  return { fx, fz, xiX, xiZ, sat };
 }
 
 /**
@@ -368,19 +425,20 @@ export function desiredGrfFromXi(rs: RigState, m: number): { fx: number; fz: num
  */
 export function wholeBodyBalanceTick(
   rs: RigState, doll: Ragdoll, sup: Side,
-  opt: { ankleMul?: number; gain?: number; iters?: number; overwrite?: boolean } = {},
+  opt: { ankleMul?: number; gain?: number; iters?: number } = {},
 ): QpTick {
   const sk = rs.sk;
   const axes = buildQpAxes(rs, doll, sup, opt.ankleMul ?? 4);
   const g = opt.gain ?? 1;
-  const { fx, fz } = desiredGrfFromXi(rs, sk.massTotal);
-  const BB = new Float64Array(4);
-  doll.footSoleBounds(sup === 'l' ? 0 : 1, BB);
+  // ★ 相对**支撑多边形**的中心（否则当双脚着地时会永远偏）
+  const SP = supportPolygon(doll);
+  const grf = desiredGrfFromXi(rs, sk.massTotal, { x: SP.cx, z: SP.cz });
+  const fx = grf.fx * g, fz = grf.fz * g;
   const out = solveWholeBodyQp({
     axes,
-    fDesX: fx * g, fDesZ: fz * g,
-    copXRange: [BB[0]!, BB[1]!],
-    copZRange: [BB[2]!, BB[3]!],
+    fDesX: fx, fDesZ: fz,
+    copXRange: SP.x,
+    copZRange: SP.z,
     iters: opt.iters ?? 40,
   });
 
@@ -391,12 +449,12 @@ export function wholeBodyBalanceTick(
     names.push(nm);
     const t = out.tau[i]!;
     if (Math.abs(t) < 1e-6) continue;      // 不写 0，避免把轴标成"有人管"
-    // ★ `overwrite`：QP 是整条链的**最终**修正，必须能覆盖同拍更早写的通道。
-    //   不加这个时 `requestTorque` 的先到先得会把 QP 全部压掉（实测电机实收 ±0.0）。
-    if (opt.overwrite) rs.forceTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
-    else rs.requestTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
+    // ★★ 统一用 `addTorque`（累加）—— 不用 `requestTorque`（会被压制）也不用
+    //   `forceTorque`（会抹掉同通道的静力矩）。两者的实测后果见 `addTorque` 注释。
+    rs.addTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
   }
   void DEFAULT_WANTED_FORCE;
   return { tau: out.tau, names, feasible: out.feasible, residual: out.residual,
-    fDesX: fx * g, fDesZ: fz * g, nAxes: axes.length };
+    fDesX: fx, fDesZ: fz, nAxes: axes.length,
+    xiX: grf.xiX, xiZ: grf.xiZ, grfSat: grf.sat };
 }

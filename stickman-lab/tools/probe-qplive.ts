@@ -55,10 +55,19 @@ for (let f = 0; f < Math.round(DUR * (DEFAULT_SIM.physicsHz ?? 240)); f++) {
   const q = rs?.qpTick;
   if (!q) continue;
   // ★ ξ 自己算（`RigState` 没有 ξ 字段，只有 com 与 v）—— ξ = com − ẋ/ω₀
-  const w0 = Math.sqrt(9.81 / Math.max(0.05, rs.com.y));
-  const xiX = rs.com.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - rs.com.vz / w0;
-  last = { t: f / (DEFAULT_SIM.physicsHz ?? 240), q, rs, xiX, xiZ };
+  // ★ ξ 由 QP 自己回读（已改为**相对支撑中心**），不要在这里重算
+  last = { t: f / PHz, q, rs, xiX: q.xiX, xiZ: q.xiZ };
+  // ★ 实测坐标与支撑中心（不推断）—— 用来判断 ref 选对了没
+  if (f === 0 || f === PHz) {
+    const BB0 = new Float64Array(4);
+    ((sim as any).doll as any).footSoleBounds(0, BB0);
+    log('  ★ t=' + (f / PHz).toFixed(2)
+      + ' com=(' + rs.com.x.toFixed(4) + ', ' + rs.com.y.toFixed(4) + ', ' + rs.com.z.toFixed(4) + ')'
+      + '  soleBounds X=[' + BB0[0]!.toFixed(3) + ',' + BB0[1]!.toFixed(3) + ']'
+      + ' Z=[' + BB0[2]!.toFixed(3) + ',' + BB0[3]!.toFixed(3) + ']'
+      + '  ref=(' + ((BB0[0]! + BB0[1]!) / 2).toFixed(3) + ',' + ((BB0[2]! + BB0[3]!) / 2).toFixed(3) + ')'
+      + '  ξ=(' + q.xiX.toFixed(3) + ',' + q.xiZ.toFixed(3) + ')');
+  }
   if (f % Math.round((PHz * 0.5)) !== 0) continue;
   // ★ 读 **QP 实际写的那根轴**，而不是固定读踝 —— 我第一版固定读 `foot_l/2`，
   //   而 QP 主要出力在膝/髋/腰，于是看起来"解被丢弃"，其实读错了轴。
@@ -71,14 +80,25 @@ for (let f = 0; f < Math.round(DUR * (DEFAULT_SIM.physicsHz ?? 240)); f++) {
   const tRec = qj >= 0 ? (rs.tauOut?.[qj * 3 + qa] ?? 0) : 0;
   last.axName = axName;
   log('  ' + last.t.toFixed(2).padStart(5)
-    + ' ' + xiX.toFixed(3).padStart(8) + ' ' + xiZ.toFixed(3).padStart(7)
+    + ' ' + last.xiX!.toFixed(3).padStart(8) + ' ' + last.xiZ!.toFixed(3).padStart(7)
     + ' ' + qq.fDesX.toFixed(1).padStart(8) + ' ' + qq.fDesZ.toFixed(1).padStart(7)
     + ' ' + String(qq.nAxes).padStart(4) + ' ' + qq.residual.toFixed(1).padStart(7)
-    + '  ' + (qq.feasible ? '✓' : '✗') + '  '
+    + '  ' + (qq.feasible ? '✓' : '✗')
+    + (qq.grfSat ? ' SAT' : '    ')
     + String(rs.axisConflicts?.length ?? 0).padStart(3)
     + ' ' + axName.padEnd(12)
     + ' QP ' + bv.toFixed(1).padStart(7)
     + '  电机 ' + tRec.toFixed(1).padStart(7));
+}
+// ★ 与模式无关的结局摘要（两种模式都能读）
+{
+  const rs: any = (sim as any).rig;
+  const head = ((sim as any).doll as any)?.headHitGround?.() ?? false;
+  log('  ══ 结局 ══');
+  log('   com.y 最终 = ' + rs.com.y.toFixed(4) + '   (初始 0.9623)');
+  log('   头碰地 = ' + (head ? '✗ 已碰' : '✓ 未碰')
+    + '   finishReason = "' + String((sim as any).finishReason ?? '') + '"');
+  log('   com 漂移 = (' + rs.com.x.toFixed(3) + ', ' + rs.com.z.toFixed(3) + ')');
 }
 if (!last) {
   log('   ★ QP 一次都没被调用（qpTick 始终为 null）');
