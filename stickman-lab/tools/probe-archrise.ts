@@ -40,12 +40,19 @@ function trial(riseMm: number) {
   const d = sim.doll;
   const wd = (d as any).world as InstanceType<typeof RAPIER.World>;
   const ja = jointIndexByName(sk, 'arch_l');
+  const jAnkle = jointIndexByName(sk, 'foot_l');
+  // ★ 弓的承重要用**关节力**测，不能用接触冲量：
+  //   真实足弧是连接足跟与前足的**承力构件**（像弓弦一样受拉），
+  //   足踝来的载荷经距骨→舟骨→楔骨→第一跳骨 全程经过它。
+  //   所以它**不接地也在承重**。只测「法向接触冲量」只能测到「它自己压在地上」。
+  const JF = new Float64Array(sk.joints.length * 5);
   const iA = sk.bodies.findIndex((b) => b.key === 'arch_l');
   const iF = sk.bodies.findIndex((b) => b.key === 'foot_l');
   const archB = d.bodies[iA]!, nC = archB.numColliders();
   const COP = new Float64Array(8), BB = new Float64Array(4), LD = new Float64Array(8);
   const ROT = new Float64Array(3);
   let frames = 0, hit = 0, aMin = 9, aMax = -9, lamSum = 0, lamPk = 0;
+  const archF: number[] = [], ankleF: number[] = [];
   const cops: number[] = [], tilt: number[] = [];
   // ⚠ 帧数直接决定耗时：每个 rise 都要**重建 Rapier World**（wasm 初始化 + 碰撞体构建）。
   //   3 个 rise × 720 帧 → 几十秒；改成 1 个 rise × 240 帧 → 几秒。扫描时把帧数加回去。
@@ -70,6 +77,10 @@ function trial(riseMm: number) {
     }
     if (lam > 1e-9) hit++;
     lamSum += lam; lamPk = Math.max(lamPk, lam);
+    d.jointForce(JF, 1 / PHz);
+    // 关节力：out[i*5+0..2] = 载荷向量（正=[向子体推），[3]=上向分量
+    archF.push(Math.hypot(JF[ja * 5]!, JF[ja * 5 + 1]!, JF[ja * 5 + 2]!));
+    ankleF.push(Math.hypot(JF[jAnkle * 5]!, JF[jAnkle * 5 + 1]!, JF[jAnkle * 5 + 2]!));
     d.readCoP(0, COP); d.footSoleBounds(0, BB); d.soleBlockLoad(0, LD);
     cops.push(COP[2]!); tilt.push(d.tiltOf(d.bodies[iF]!));
   }
@@ -102,6 +113,9 @@ function trial(riseMm: number) {
     aRange: (aMax - aMin) * 57.3, aMean: ((aMin + aMax) / 2) * 57.3,
     lamPk, archShare: tot > 1e-9 ? (archSum / tot) * 100 : 0,
     copR: (Math.max(...cops) - Math.min(...cops)) * 1000,
+    archF: archF.reduce((a, b) => a + b, 0) / Math.max(1, archF.length),
+    ankleF: ankleF.reduce((a, b) => a + b, 0) / Math.max(1, ankleF.length),
+    archFMax: archF.reduce((a, b) => Math.max(a, b), 0),
     tiltR: (Math.max(...tilt) - Math.min(...tilt)) * 57.3,
   };
 }
@@ -118,7 +132,9 @@ for (const r of [RISE_ONLY]) {
     + `   直读λ[${t.direct.map((v) => v.toFixed(3)).join('|')}]`
     + `   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join('|')}]`
     + `   bb z[${t.bbZ}]`
-    + `   ${t.hitPct.toFixed(0).padStart(6)}%`
+    + `   弓关节力均 ${t.archF.toFixed(0).padStart(5)}N 峰 ${t.archFMax.toFixed(0).padStart(4)}N`
+    + `  (跳关节力均 ${t.ankleF.toFixed(0)}N)`
+    + `   ${t.hitPct.toFixed(0).padStart(5)}%`
     + `   ${t.aRange.toFixed(2).padStart(7)}°`
     + `   ${t.aMean.toFixed(2).padStart(7)}°`
     + `   ${t.lamPk.toFixed(3).padStart(8)}`

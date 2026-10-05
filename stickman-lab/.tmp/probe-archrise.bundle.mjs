@@ -20942,12 +20942,15 @@ function trial(riseMm) {
   const d = sim.doll;
   const wd = d.world;
   const ja = jointIndexByName2(sk, "arch_l");
+  const jAnkle = jointIndexByName2(sk, "foot_l");
+  const JF = new Float64Array(sk.joints.length * 5);
   const iA = sk.bodies.findIndex((b) => b.key === "arch_l");
   const iF = sk.bodies.findIndex((b) => b.key === "foot_l");
   const archB = d.bodies[iA], nC = archB.numColliders();
   const COP = new Float64Array(8), BB = new Float64Array(4), LD = new Float64Array(8);
   const ROT = new Float64Array(3);
   let frames = 0, hit = 0, aMin = 9, aMax = -9, lamSum = 0, lamPk = 0;
+  const archF = [], ankleF = [];
   const cops = [], tilt = [];
   const N = Math.round(PHz * 1), skip = Math.round(PHz * 0.4);
   for (let f = 0; f < N; f++) {
@@ -20972,6 +20975,9 @@ function trial(riseMm) {
     if (lam > 1e-9) hit++;
     lamSum += lam;
     lamPk = Math.max(lamPk, lam);
+    d.jointForce(JF, 1 / PHz);
+    archF.push(Math.hypot(JF[ja * 5], JF[ja * 5 + 1], JF[ja * 5 + 2]));
+    ankleF.push(Math.hypot(JF[jAnkle * 5], JF[jAnkle * 5 + 1], JF[jAnkle * 5 + 2]));
     d.readCoP(0, COP);
     d.footSoleBounds(0, BB);
     d.soleBlockLoad(0, LD);
@@ -21011,6 +21017,9 @@ function trial(riseMm) {
     lamPk,
     archShare: tot > 1e-9 ? archSum / tot * 100 : 0,
     copR: (Math.max(...cops) - Math.min(...cops)) * 1e3,
+    archF: archF.reduce((a, b) => a + b, 0) / Math.max(1, archF.length),
+    ankleF: ankleF.reduce((a, b) => a + b, 0) / Math.max(1, ankleF.length),
+    archFMax: archF.reduce((a, b) => Math.max(a, b), 0),
     tiltR: (Math.max(...tilt) - Math.min(...tilt)) * 57.3
   };
 }
@@ -21021,5 +21030,5 @@ log("   rise   \u9700\u65CB\u524D   \u5F13\u63A5\u89E6\u5E27   \u5F13\u89D2\u884
 for (const r of [RISE_ONLY]) {
   const t = trial(r);
   const need = (Math.asin(Math.min(1, r / 126)) * 57.3).toFixed(1);
-  log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}\xB0   \u5757[${t.names.join("|")}]   \u76F4\u8BFB\u03BB[${t.direct.map((v) => v.toFixed(3)).join("|")}]   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join("|")}]   bb z[${t.bbZ}]   ${t.hitPct.toFixed(0).padStart(6)}%   ${t.aRange.toFixed(2).padStart(7)}\xB0   ${t.aMean.toFixed(2).padStart(7)}\xB0   ${t.lamPk.toFixed(3).padStart(8)}   ${t.archShare.toFixed(1).padStart(6)}%   ${t.copR.toFixed(1).padStart(6)}mm   ${t.tiltR.toFixed(2).padStart(7)}\xB0   ${t.hitPct > 20 ? "\u2713 \u627F\u91CD" : ""}`);
+  log(`   ${String(r).padStart(3)}mm  ${need.padStart(6)}\xB0   \u5757[${t.names.join("|")}]   \u76F4\u8BFB\u03BB[${t.direct.map((v) => v.toFixed(3)).join("|")}]   soleBlockLoad[${t.viaLd.map((v) => v.toFixed(3)).join("|")}]   bb z[${t.bbZ}]   \u5F13\u5173\u8282\u529B\u5747 ${t.archF.toFixed(0).padStart(5)}N \u5CF0 ${t.archFMax.toFixed(0).padStart(4)}N  (\u8DF3\u5173\u8282\u529B\u5747 ${t.ankleF.toFixed(0)}N)   ${t.hitPct.toFixed(0).padStart(5)}%   ${t.aRange.toFixed(2).padStart(7)}\xB0   ${t.aMean.toFixed(2).padStart(7)}\xB0   ${t.lamPk.toFixed(3).padStart(8)}   ${t.archShare.toFixed(1).padStart(6)}%   ${t.copR.toFixed(1).padStart(6)}mm   ${t.tiltR.toFixed(2).padStart(7)}\xB0   ${t.hitPct > 20 ? "\u2713 \u627F\u91CD" : ""}`);
 }
