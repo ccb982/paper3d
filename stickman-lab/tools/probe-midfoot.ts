@@ -369,6 +369,88 @@ log('   实测目前只能到 ~28mm ⇒ 差 5~6 倍，这就是"进不了 SINGLE
   check('★ 侧向权重转移权限足够（|CoM.z| > 120mm）', best > 120, `${best.toFixed(0)}mm / 需要 ${NEED}mm`);
 }
 
+log('══ E4. 内侧到底能不能承载（弓只抬了中足区，跖骨/足跟是全宽接地的）══');
+{
+  const s2 = buildSkeleton(DEFAULT_CONFIG);
+  const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 2.5 });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller(s2, sim, {
+    ...DEFAULT_CONTROLLER,
+    gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+    balance: DEFAULT_CONTROLLER.balance,
+  });
+  const d = sim.doll;
+  const labels = d.soleBlockLabels(0);
+  const blk = new Float64Array(labels.length);
+  const cop = new Float64Array(4);
+  const bb = new Float64Array(4);
+  d.footSoleBounds(0, bb);
+  const zMid = (bb[2]! + bb[3]!) / 2;
+  const halfZ = (bb[3]! - bb[2]!) / 2;
+  let n = 0;
+  const sum = new Float64Array(labels.length);
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i < 300 && !sim.finished; i++) {
+    if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i < 60) continue;
+    d.soleBlockLoad(0, blk);
+    d.readCoP(0, cop);
+    let tot = 0;
+    for (let k = 0; k < blk.length; k++) { sum[k] += blk[k]!; tot += blk[k]!; }
+    if (tot > 0) {
+      n++;
+      d.footSoleBounds(0, bb);
+      if (cop[3]! > 0) { zMin = Math.min(zMin, cop[2]!); zMax = Math.max(zMax, cop[2]!); }
+    }
+  }
+  log(`   鞋底世界 z 跨度 ${(bb[2]! * 1000).toFixed(0)}~${(bb[3]! * 1000).toFixed(0)}mm（半宽 ${(halfZ * 1000).toFixed(0)}mm，中点 ${(zMid * 1000).toFixed(0)}mm）`);
+  log('   静立时逐块载荷（左脚，承重采样 ' + n + ' 拍）：');
+  const totN = Array.from(sum).reduce((a, b) => a + b, 0) * 120 / Math.max(1, n);
+  for (let k = 0; k < labels.length; k++) {
+    const N = sum[k]! * 120 / Math.max(1, n);
+    log(`     ${labels[k]!.padEnd(14)}${N.toFixed(0).padStart(5)}N  ${(N / Math.max(1, totN) * 100).toFixed(0).padStart(3)}%`);
+  }
+  const relMin = (zMin - zMid) * 1000, relMax = (zMax - zMid) * 1000;
+  log(`   CoP_z 相对足中心：${relMin.toFixed(0)} ~ ${relMax.toFixed(0)}mm（半宽 ±${(halfZ * 1000).toFixed(0)}mm）`);
+  const needHalf = 163;   // 完全压到单腿需要的 CoM 偏移
+  log(`   ⇒ 足能提供的侧向 CoP 半程 ≈ ±${Math.max(Math.abs(relMin), Math.abs(relMax)).toFixed(0)}mm，单腿需要 ${needHalf}mm`);
+  check('★ 足能提供的侧向 CoP 半程 > 40mm（够不够把载荷集中到一条腿）',
+    Math.max(Math.abs(relMin), Math.abs(relMax)) > 40,
+    `±${Math.max(Math.abs(relMin), Math.abs(relMax)).toFixed(0)}mm`);
+}
+
+log('══ E5. 真正的堵点：矢状面发散（"维持平衡"是第一道门 laterally 之前）══');
+{
+  for (const [tag, ov] of [['开踝 15体', {}], ['关踝 13体', { ankleEnabled: false }]] as [string, Record<string, unknown>][]) {
+    const s2 = buildSkeleton({ ...DEFAULT_CONFIG, ...ov } as never);
+    const sim = new Sim(s2, shapeForJoints(s2.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: 4 });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller(s2, sim, {
+      ...DEFAULT_CONTROLLER,
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+      balance: DEFAULT_CONTROLLER.balance,
+    });
+    const ankI = jointIndexByName(s2, 'foot_l');
+    const rv = new Float64Array(3);
+    log(`   ── ${tag}`);
+    log('      t     qVip    τ踝    踝角    躯干y   倾角   CoM.x   碰地');
+    for (let i = 0; i < 480 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      if (i % 24) continue;
+      const sn = ctrl.snapshot;
+      sim.doll.jointRot(ankI, rv);
+      log(`      ${(i / 120).toFixed(2).padStart(5)}s ${(sn.qVip ?? 0).toFixed(3).padStart(6)}`
+        + ` ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(rv[2]! * DEG).toFixed(1).padStart(6)}°`
+        + ` ${sim.doll.torso().translation().y.toFixed(3).padStart(6)}`
+        + ` ${sn.tiltDeg.toFixed(0).padStart(5)}° ${(sn.com.x * 1000).toFixed(0).padStart(6)}mm`
+        + `   ${sim.finished ? sim.fallReason : ''}`);
+    }
+    log(`      ⇒ 存活 ${(sim.ticksDone / 60).toFixed(2)}s  死因=${sim.fallReason || '（未倒）'}  碰地刚体=${sim.doll.lastHitKey || '无'}`);
+  }
+}
+
 log('══ F. DIP/VIP 接线（Morasso 2019/2022）══');
 {
   const { AXIS_OWNERSHIP, ANKLE_ABSENT, axisRole } = await import('../src/core/systems/balance');

@@ -7017,6 +7017,17 @@ var init_skeleton = __esm({
       shoulder_r: 100,
       elbow_l: 40,
       elbow_r: 40,
+      // ★ 额状面力矩预算（文献数字，记在这里备用；**暂时保持 200**，见下）：
+      //     Inman 1947：单腿站立理论最小髋外展力矩 = 体重 × 半髋间距
+      //                  = 687 N × 0.163 m = **112 N·m**
+      //     hip=200 × TORQUE_AXIS_FACTOR[0]=0.60 ⇒ 外展轴 **120 N·m** ⇒ 占用 **93%**
+      //     （文献实测：健康青年男 ~50%、健康老年女 ~82%）
+      //   2026-10-04 实测把 hip 提到 250（外展 150 N·m、占用 75%）与
+      //   SPINE_TAU 提到 180（侧屈 108 N·m，依据「腰椎侧屈半程 ⇒ 髋外展需求 −37%」）：
+      //     侧向权限没变好、单支撑仍然 0.00s，**存活反而从 2.37s 掉到 1.97s**。
+      //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
+      //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
+      //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
       hip_l: 200,
       hip_r: 200,
       knee_l: 150,
@@ -20072,6 +20083,90 @@ log('   \u5B9E\u6D4B\u76EE\u524D\u53EA\u80FD\u5230 ~28mm \u21D2 \u5DEE 5~6 \u500
   }
   log(`   \u21D2 \u6700\u597D\u60C5\u51B5 |CoM.z| = ${best.toFixed(0)}mm\uFF0C\u9700\u8981 \xB1${NEED}mm \u624D\u80FD\u538B\u5230\u4E00\u6761\u817F\u4E0A \u21D2 \u5DEE ${(NEED / Math.max(1, best)).toFixed(1)} \u500D`);
   check("\u2605 \u4FA7\u5411\u6743\u91CD\u8F6C\u79FB\u6743\u9650\u8DB3\u591F\uFF08|CoM.z| > 120mm\uFF09", best > 120, `${best.toFixed(0)}mm / \u9700\u8981 ${NEED}mm`);
+}
+log("\u2550\u2550 E4. \u5185\u4FA7\u5230\u5E95\u80FD\u4E0D\u80FD\u627F\u8F7D\uFF08\u5F13\u53EA\u62AC\u4E86\u4E2D\u8DB3\u533A\uFF0C\u8DD6\u9AA8/\u8DB3\u8DDF\u662F\u5168\u5BBD\u63A5\u5730\u7684\uFF09\u2550\u2550");
+{
+  const s2 = buildSkeleton2(DEFAULT_CONFIG2);
+  const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 2.5 });
+  sim.begin(new Float32Array(sim.paramCount));
+  const ctrl = new Controller2(s2, sim, {
+    ...DEFAULT_CONTROLLER2,
+    gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+    balance: DEFAULT_CONTROLLER2.balance
+  });
+  const d = sim.doll;
+  const labels = d.soleBlockLabels(0);
+  const blk = new Float64Array(labels.length);
+  const cop = new Float64Array(4);
+  const bb = new Float64Array(4);
+  d.footSoleBounds(0, bb);
+  const zMid = (bb[2] + bb[3]) / 2;
+  const halfZ = (bb[3] - bb[2]) / 2;
+  let n = 0;
+  const sum = new Float64Array(labels.length);
+  let zMin = Infinity, zMax = -Infinity;
+  for (let i = 0; i < 300 && !sim.finished; i++) {
+    if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+    sim.advance(1);
+    if (i < 60) continue;
+    d.soleBlockLoad(0, blk);
+    d.readCoP(0, cop);
+    let tot = 0;
+    for (let k = 0; k < blk.length; k++) {
+      sum[k] += blk[k];
+      tot += blk[k];
+    }
+    if (tot > 0) {
+      n++;
+      d.footSoleBounds(0, bb);
+      if (cop[3] > 0) {
+        zMin = Math.min(zMin, cop[2]);
+        zMax = Math.max(zMax, cop[2]);
+      }
+    }
+  }
+  log(`   \u978B\u5E95\u4E16\u754C z \u8DE8\u5EA6 ${(bb[2] * 1e3).toFixed(0)}~${(bb[3] * 1e3).toFixed(0)}mm\uFF08\u534A\u5BBD ${(halfZ * 1e3).toFixed(0)}mm\uFF0C\u4E2D\u70B9 ${(zMid * 1e3).toFixed(0)}mm\uFF09`);
+  log("   \u9759\u7ACB\u65F6\u9010\u5757\u8F7D\u8377\uFF08\u5DE6\u811A\uFF0C\u627F\u91CD\u91C7\u6837 " + n + " \u62CD\uFF09\uFF1A");
+  const totN = Array.from(sum).reduce((a, b) => a + b, 0) * 120 / Math.max(1, n);
+  for (let k = 0; k < labels.length; k++) {
+    const N = sum[k] * 120 / Math.max(1, n);
+    log(`     ${labels[k].padEnd(14)}${N.toFixed(0).padStart(5)}N  ${(N / Math.max(1, totN) * 100).toFixed(0).padStart(3)}%`);
+  }
+  const relMin = (zMin - zMid) * 1e3, relMax = (zMax - zMid) * 1e3;
+  log(`   CoP_z \u76F8\u5BF9\u8DB3\u4E2D\u5FC3\uFF1A${relMin.toFixed(0)} ~ ${relMax.toFixed(0)}mm\uFF08\u534A\u5BBD \xB1${(halfZ * 1e3).toFixed(0)}mm\uFF09`);
+  const needHalf = 163;
+  log(`   \u21D2 \u8DB3\u80FD\u63D0\u4F9B\u7684\u4FA7\u5411 CoP \u534A\u7A0B \u2248 \xB1${Math.max(Math.abs(relMin), Math.abs(relMax)).toFixed(0)}mm\uFF0C\u5355\u817F\u9700\u8981 ${needHalf}mm`);
+  check(
+    "\u2605 \u8DB3\u80FD\u63D0\u4F9B\u7684\u4FA7\u5411 CoP \u534A\u7A0B > 40mm\uFF08\u591F\u4E0D\u591F\u628A\u8F7D\u8377\u96C6\u4E2D\u5230\u4E00\u6761\u817F\uFF09",
+    Math.max(Math.abs(relMin), Math.abs(relMax)) > 40,
+    `\xB1${Math.max(Math.abs(relMin), Math.abs(relMax)).toFixed(0)}mm`
+  );
+}
+log('\u2550\u2550 E5. \u771F\u6B63\u7684\u5835\u70B9\uFF1A\u77E2\u72B6\u9762\u53D1\u6563\uFF08"\u7EF4\u6301\u5E73\u8861"\u662F\u7B2C\u4E00\u9053\u95E8 laterally \u4E4B\u524D\uFF09\u2550\u2550');
+{
+  for (const [tag, ov] of [["\u5F00\u8E1D 15\u4F53", {}], ["\u5173\u8E1D 13\u4F53", { ankleEnabled: false }]]) {
+    const s2 = buildSkeleton2({ ...DEFAULT_CONFIG2, ...ov });
+    const sim = new Sim2(s2, shapeForJoints2(s2.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 4 });
+    sim.begin(new Float32Array(sim.paramCount));
+    const ctrl = new Controller2(s2, sim, {
+      ...DEFAULT_CONTROLLER2,
+      gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+      balance: DEFAULT_CONTROLLER2.balance
+    });
+    const ankI = jointIndexByName2(s2, "foot_l");
+    const rv = new Float64Array(3);
+    log(`   \u2500\u2500 ${tag}`);
+    log("      t     qVip    \u03C4\u8E1D    \u8E1D\u89D2    \u8EAF\u5E72y   \u503E\u89D2   CoM.x   \u78B0\u5730");
+    for (let i = 0; i < 480 && !sim.finished; i++) {
+      if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
+      sim.advance(1);
+      if (i % 24) continue;
+      const sn = ctrl.snapshot;
+      sim.doll.jointRot(ankI, rv);
+      log(`      ${(i / 120).toFixed(2).padStart(5)}s ${(sn.qVip ?? 0).toFixed(3).padStart(6)} ${(sn.ankleTauVip ?? 0).toFixed(0).padStart(6)} ${(rv[2] * DEG2).toFixed(1).padStart(6)}\xB0 ${sim.doll.torso().translation().y.toFixed(3).padStart(6)} ${sn.tiltDeg.toFixed(0).padStart(5)}\xB0 ${(sn.com.x * 1e3).toFixed(0).padStart(6)}mm   ${sim.finished ? sim.fallReason : ""}`);
+    }
+    log(`      \u21D2 \u5B58\u6D3B ${(sim.ticksDone / 60).toFixed(2)}s  \u6B7B\u56E0=${sim.fallReason || "\uFF08\u672A\u5012\uFF09"}  \u78B0\u5730\u521A\u4F53=${sim.doll.lastHitKey || "\u65E0"}`);
+  }
 }
 log("\u2550\u2550 F. DIP/VIP \u63A5\u7EBF\uFF08Morasso 2019/2022\uFF09\u2550\u2550");
 {

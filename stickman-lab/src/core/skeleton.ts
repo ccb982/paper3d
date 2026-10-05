@@ -549,6 +549,17 @@ export const JOINT_MAX_TORQUE: Readonly<Record<string, number>> = {
   shoulder_r: 100,
   elbow_l: 40,
   elbow_r: 40,
+  // ★ 额状面力矩预算（文献数字，记在这里备用；**暂时保持 200**，见下）：
+  //     Inman 1947：单腿站立理论最小髋外展力矩 = 体重 × 半髋间距
+  //                  = 687 N × 0.163 m = **112 N·m**
+  //     hip=200 × TORQUE_AXIS_FACTOR[0]=0.60 ⇒ 外展轴 **120 N·m** ⇒ 占用 **93%**
+  //     （文献实测：健康青年男 ~50%、健康老年女 ~82%）
+  //   2026-10-04 实测把 hip 提到 250（外展 150 N·m、占用 75%）与
+  //   SPINE_TAU 提到 180（侧屈 108 N·m，依据「腰椎侧屈半程 ⇒ 髋外展需求 −37%」）：
+  //     侧向权限没变好、单支撑仍然 0.00s，**存活反而从 2.37s 掉到 1.97s**。
+  //   ⇒ 原因不是额度不够，而是**矢状面就没稳住**（探针 E5：躯干倾角从 t=0.2s 起
+  //     就在 8~27° 振荡，t=1.4s 踝角打到 +15°、t=1.8s τ踝 饱和 −120 N·m、CoM.x 跑到 +143mm）。
+  //   ⇒ 先修矢状面，额度问题再谈；这里**回退到实测更稳的 200**。
   hip_l: 200,
   hip_r: 200,
   knee_l: 150,
@@ -1515,6 +1526,10 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
   if (K > 1) {
     const SPINE_XY_DEG: readonly [number, number] = [15, 20];   // [侧倾, 扭转]
     const SPINE_FLEX_DEG: readonly [number, number] = [-25, 25];
+    // 额状面文献预算（备用，见 JOINT_MAX_TORQUE.hip_l 的注释）：
+    //   腰椎侧屈是额状面主执行器 —— 文献实测「侧屈到一半 ⇒ 髋外展需求 −37%」
+    //   （112 → 71 N·m）。2026-10-04 试过 120 → 180（侧屈轴 72 → 108 N·m），
+    //   实测对单支撑建立无帮助、存活略降 ⇒ **回退 120**，等矢状面稳住再启用。
     const SPINE_TAU = 120;
     for (let s = 0; s < K - 1; s++) {
       const p = byKey.get(segKey(s));
