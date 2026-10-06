@@ -185,8 +185,14 @@ for (let i = 0; i < 1.0 * 120 && !sim.finished; i++) {
       const brS = BR[br] ?? String(br);
       const tRef = ((d.motorThRef[idx] ?? 0) * 57.2958);
       const eRv = ((d.motorErr[idx] ?? 0) * 57.2958);
+      // ★ τ 分量分解（rad/s 量纲）：P=弹簧 D=阻尼 FF=力矩通道
+      const eP = ((d.motorErrP[idx] ?? 0) * 57.2958);
+      const eD = ((d.motorErrD[idx] ?? 0) * 57.2958);
+      const eF = ((d.motorTauFF[idx] ?? 0));
+      const comp = (Math.abs(eP) > 3 || Math.abs(eD) > 3)
+        ? `{P${eP.toFixed(0)} D${eD.toFixed(0)}${Math.abs(eF) > 0.5 ? ' FF' + eF.toFixed(0) : ''}}` : '';
       cells.push(`轴${k}[${brS}${br >= 3 ? '★' : ''}${Math.abs(tRef) > 0.2 ? ' tRef' + tRef.toFixed(0) + '°' : ''}`
-        + `${Math.abs(eRv) > 5 ? ' err' + eRv.toFixed(0) : ''}] `
+        + `${Math.abs(eRv) > 5 ? ' err' + eRv.toFixed(0) : ''}${comp}] `
         + `cmd${cmd >= 0 ? '+' : ''}${cmd.toFixed(2)}`
         + ` 角${ang.toFixed(0).padStart(4)}° τ${tau.toFixed(0).padStart(4)}`
         + `${frac > 0.995 ? '⚠' : ' '}${(frac * 100).toFixed(0).padStart(3)}%`

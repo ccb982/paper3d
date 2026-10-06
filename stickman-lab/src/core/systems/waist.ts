@@ -1,6 +1,17 @@
 /**
  * ══════════════════════════════════════════════════════════════════
- * ④′  systems/waist.ts —— **腰（脊柱）的唯一发布者**（2026-10-06 重构）
+ * ④′  systems/waist.ts —— **`waist` 工具模块**（2026-10-06 重构；**不是系统**）
+ *
+ * ── 架构定位（用户 2026-10-06 定调）──────────────────────────────
+ *   「**waist 是一个工具**」「**平衡系统对上半身做修改的时候需要通过这个**」
+ *   「但是**脊柱本来就需要一个拉力修正，不经过平衡系统**」
+ *   ⇒ 本文件提供两个**工具**，没有自己的系统身份：
+ *     · `spineDefaultTone()` —— 脊柱/盆骨的**默认拉力**，**独立层**，
+ *       由 `controller.step` 直接调（**不经过 balance**）；
+ *     · `applyWaist()` —— 上身姿态合成，**由 `balanceSystem` 调用**
+ *       （balance 才是最终发布者）。
+ *   ⚠ 上一版把它做成"第三发布者"（controller 三连调）是**架构错误**，已改回。
+ * ──────────────────────────────────────────────────────────────
  * ══════════════════════════════════════════════════════════════════
  *
  * 用户定调（本节所有设计的唯一依据）：
@@ -55,6 +66,12 @@ export interface WaistParams {
   stagger?: number;
   /** 消融（逗号分隔）：`waist` = 整块不跑 */
   ablate?: string;
+  /**
+   * ★ 工具 ①（默认拉力）的参数 —— `WaistParams.tone`。
+   *   放在这里只是为了**一处配置**；它由 `controller.step` **独立调用**，
+   *   **不经过 balance**（用户：「脊柱本来就需要一个拉力修正，不经过平衡系统」）。
+   */
+  tone?: WaistToneParams;
 }
 
 export const DEFAULT_WAIST_PARAMS: WaistParams = {
@@ -76,7 +93,71 @@ const SPINE = ['spine1', 'spine2', 'spine3'] as const;
  * 调用点：`controller.step`，**在 `stepSystem` 与 `balanceSystem` 之后、`arbitrate` 之前**
  *   （顺序即依赖：两个系统先填意图，本模块再统一发布）。
  */
-export function waistSystem(rs: RigState, p: WaistParams = DEFAULT_WAIST_PARAMS): void {
+
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * 工具 ①：**脊柱/盆骨的默认拉力**（用户 2026-10-06 定调）
+ * ══════════════════════════════════════════════════════════════════
+ * 用户原话：
+ *   「应该有个**默认脊柱拉力**，否则就浪费很多发力在挺直腰上了」
+ *   「**脊柱、盆骨什么的都需要一个默认的拉力**」
+ *   「但是**脊柱本来就需要一个拉力修正，不经过平衡系统**」
+ *
+ * ⇒ 它是**独立层**：由 `controller.step` 直接调用，**不经过 `balanceSystem`**。
+ *   语义：不管目标是谁写的、写没写，都给脊柱一个**持续的抗折力矩**
+ *   `τ = (K·θ + D·θ̇)·sign`，逐轴按 `toneMaxN` 夹（**发力门禁**）。
+ *
+ * ⚠ 三条实测纪律（别改回去）：
+ *   ① **D 必须小**：原始 D=26 在骨盆 |ω|=300°/s 时给 137 N·m，超门禁 2.5 倍
+ *      ⇒ 恒被夹满 ⇒ 退化成 **bang-bang**（逐帧变号）。
+ *   ② **θ̇ 必须低通**（τf=50ms）—— 否则同样自激。
+ *   ③ **骨盆角速度超门时再降 D**（抖动时不要用微分：`pelvisW` 来自块⑧）。
+ *   ④ **符号按马达空间取**（实测：`rs.angle` 与 `driveMotors` 的 `rv` 在脊柱矢状轴上**反号**）。
+ */
+export interface WaistToneParams {
+  k?: number; d?: number; maxN?: number; sign?: number;
+  /** 骨盆角速度门（rad/s）：超过则降 D。缺省 5 */
+  pelvisWMax?: number;
+  ablate?: string;
+}
+export const DEFAULT_WAIST_TONE: WaistToneParams = { k: 260, d: 4, maxN: 55, sign: 1, pelvisWMax: 5 };
+
+export function spineDefaultTone(rs: RigState, p: WaistToneParams = DEFAULT_WAIST_TONE): void {
+  const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
+  const on = (ch: string): boolean => !OFF.has(ch);   // 轴归属门禁 A2 靠 `on('…')` 对账
+  if (!on('waistHold')) return;
+  const K = p.k ?? 0;
+  const gate = Math.max(1e-6, p.pelvisWMax ?? 5);
+  const dScale = rs.pelvisW > gate ? 0.15 : rs.pelvisW > gate * 0.6 ? 0.5 : 1;
+  const Dd = (p.d ?? 0) * dScale;
+  const MX = p.maxN ?? 0;
+  let held = 0;
+  for (const nm of ['spine1', 'spine2', 'spine3']) {
+    const j = jointIndexByName(rs.sk, nm);
+    if (j < 0) continue;
+    for (const ax of [2, 0]) {
+      const ang = rs.angle(j, ax);
+      const i9 = j * 3 + ax;
+      const raw = rs.jointVel(j, ax);
+      if (rs.waistHoldRateF.length !== rs.nAxes) rs.waistHoldRateF = new Float32Array(rs.nAxes);
+      const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
+      const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
+      rs.waistHoldRateF[i9] = rate;
+      let t = (K * ang + Dd * rate) * (p.sign ?? 1);
+      if (t > MX) t = MX; else if (t < -MX) t = -MX;
+      if (Math.abs(t) < 0.5) continue;
+      rs.requestTorque(j, ax, t, 'balance', '脊柱默认拉力(独立层)', true);
+      held += Math.abs(t);
+    }
+  }
+  rs.ubTau = held;
+}
+
+/**
+ * ★★★ **工具 ②：上身姿态合成**（用户：「`waist` 是一个工具；**平衡系统对上半身做修改的时候需要通过这个**」）。
+ *   由 `balanceSystem` 在块⑧ 末尾调用 —— **调用者才是发布者**，本函数不自己认领系统身份。
+ */
+export function applyWaist(rs: RigState, p: WaistParams = DEFAULT_WAIST_PARAMS): void {
   const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
   /** 与 `balance.ts`/`step.ts` **同名同义**的消融门（轴归属门禁 A2 靠 `on('…')` 这个写法对账） */
   const on = (ch: string): boolean => !OFF.has(ch);

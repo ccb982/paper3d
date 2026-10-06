@@ -212,7 +212,14 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     const ramp = p.shiftRamp > 0 ? Math.min(1, rs.stateT / p.shiftRamp) : 1;
     const smooth = ramp * ramp * (3 - 2 * ramp);
     rs.shiftDemandF = lim * smooth;
-    rs.shiftDriveSide = rs.swingLeg();   // ★ 对侧（轻）腿蹬地
+    // ★★★ 2026-10-06 **锁存驱动侧**（修"重心侧移不完成"的直接原因）：
+    //   原先每拍 `rs.swingLeg()` 现算，而它来自瞬时载荷 ⇒ 驱动侧每 0.1~0.3s 翻
+    //   ⇒ 横向推力左右互相抵消 ⇒ `CoM.z` 恒 ≈ 0（实测 |≤10mm|，目标 142mm）。
+    //   按 B1「角色必须锁存」：进入交接时**定一次**，交接完成/离相才解除。
+    if (!rs.shiftSideLatch) rs.shiftSideLatch = rs.swingLeg();
+    rs.shiftDriveSide = rs.shiftSideLatch;   // ★ 对侧（轻）腿蹬地
+  } else {
+    rs.shiftSideLatch = null;                // 交接完成 / 离相 ⇒ 解除锁存
   }
 
   // ══════════════════════════════════════════════════════════════

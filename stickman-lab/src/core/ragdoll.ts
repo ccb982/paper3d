@@ -85,6 +85,21 @@ const ZERO = { x: 0, y: 0, z: 0 };
 // ★ 2026-10-06：可从环境变量扫（`MOTOR_ALPHA=0.35 node tools/run.mjs …`）——
 //   实测头 7 拍"零命令、零角度、速度却指数涨"（31→276°/s）⇒ 疑离散时间自激，
 //   本护栏（"每步最多吃掉 α 比例的相对角速度误差"）就是治它的唯一旋钮。
+/**
+ * ★★★ **伺服"τ↔误差"换算系数**（= `JOINT_MAX_SPEED × JMS_SCALE`）。
+ *
+ *   实测（`probe-firstframes`）：`zero`（喂全零目标）与 `nocontrol` 都只有 1°/s，
+ *   而正常命令（首拍被软斜坡限到 **0.0044 ≈ 0.6°**）却造出 **τ=11 N·m、Δω=105°/s**，
+ *   并随后**恒定加速 ≈2000°/s²**（31→276°/s 七拍）⇒ 伺服刚度（17~36 N·m/度）
+ *   相对关节有效惯量与 1/120s 步长**过大**，离散环发散。
+ *   本旋钮就是那个刚度：`τ = err·τmax/(JMS·JMS_SCALE)`。
+ *   环境变量 `JMS_SCALE` 可扫（默认 1 = 原行为）。
+ */
+const JMS_SCALE = (() => {
+  const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.JMS_SCALE);
+  return Number.isFinite(v) && v > 0 ? v : 1;
+})();
+
 const MOTOR_ALPHA = (() => {
   const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOTOR_ALPHA);
   return Number.isFinite(v) && v > 0 ? v : 1.0;
@@ -801,6 +816,9 @@ export class Ragdoll {
     this.motorBranch = new Uint8Array(sk.joints.length * 3);
     this.motorThRef = new Float32Array(sk.joints.length * 3);
     this.motorErr = new Float32Array(sk.joints.length * 3);
+    this.motorErrP = new Float32Array(sk.joints.length * 3);
+    this.motorErrD = new Float32Array(sk.joints.length * 3);
+    this.motorTauFF = new Float32Array(sk.joints.length * 3);
     this.ankleJoint = jointIndexByName(sk, 'foot_l');
     this.ankleJointR = jointIndexByName(sk, 'foot_r');
 
@@ -1876,6 +1894,15 @@ soleBlockLabels(side: 0 | 1): string[] {
   readonly motorThRef: Float32Array;
   /** ★ 本步该轴的**误差项**（`err`，rad/s 量纲；限位分支会≥0 一大截） */
   readonly motorErr: Float32Array;
+  /**
+   * ★★★ **τ 分量分解**（用户「逐帧回读关节发力情况」的落地）。
+   *   为什么必须拆：实测开局第 0 拍，`hip_l` 在 **命令≈0** 的情况下拿到 **29~34°/s**，
+   *   而它**不随伺服增益变**（`JMS_SCALE` 1→6 只降 15%）⇒ 用整轴 `tauApplied` 看不出
+   *   是**哪个分量**给的。三者单位都是 rad/s（乘 `tauMax/(JMS·JMS_SCALE)` 才是 N·m）。
+   */
+  readonly motorErrP: Float32Array;   // 弹簧（位置）分量 `kp·ts·(thRef−a)`
+  readonly motorErrD: Float32Array;   // 阻尼（速度）分量 `−kd·ts·relL`
+  readonly motorTauFF: Float32Array;  // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
 
   /**
    * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
@@ -2792,6 +2819,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         this.motorBranch[i * 3 + k] = 0;
         this.motorThRef[i * 3 + k] = 0;
         this.motorErr[i * 3 + k] = 0;
+        this.motorErrP[i * 3 + k] = 0;
+        this.motorErrD[i * 3 + k] = 0;
+        this.motorTauFF[i * 3 + k] = 0;
         const lo = j.minRad[k];
         const hi = j.maxRad[k];
         const a = rv[k];
@@ -2823,6 +2853,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           //   定量支撑由 `τ = JᵀF` 力矩通道提供（见 setHoldMask / requestHold）。
           //   两者职责不重叠 ⇒ 不会再在同一轴上互相顶。
           err = -kDd * relL[k];
+          this.motorErrD[idx] = err;
           this.motorBranch[idx] = 2;
         } else {
           this.motorBranch[idx] = 1;
@@ -2874,6 +2905,8 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
           }
           kPSpring = kpUse;
           err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
+          this.motorErrP[idx] = kpUse * ts * (thRef - a);
+          this.motorErrD[idx] = -kdUse * ts * relL[k];
         }
 
         // ⚠ 已回退（2026-10-02）：曾在这里加「越界就清零该轴相对角速度」并注释为"速度级硬限位"、
@@ -2908,12 +2941,13 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         // ★ 逐帧回读用：参考角 / 误差 / 二分之后的实际 α
         this.motorThRef[idx] = thRef;
         this.motorErr[idx] = err;
+        this.motorTauFF[idx] = this.torqueCmd[idx]!;
         const ffEarly = this.torqueCmd[idx]!;
         // 只有“位置环错差为 0 **且**力矩通道也没使用”才真的无事可做。
         if (err === 0 && ffEarly === 0) continue;
 
         const tauMax = j.maxTorque[k] * scale;
-        let tau = err * (tauMax / JOINT_MAX_SPEED);
+        let tau = err * (tauMax / (JOINT_MAX_SPEED * JMS_SCALE));
         if (tau > tauMax) tau = tauMax;
         else if (tau < -tauMax) tau = -tauMax;
         // ★★★ 与 `τ = JᵀF` 的直接力矩通道**相加**后再饱和。
@@ -2936,7 +2970,7 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         const ff = this.torqueCmd[idx]!;
         // 弹簧分量的冲量（护栏要用，见下面的说明）
         const impSpring = Math.abs(kPSpring * ts * (thRef - a))
-          * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+          * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
         // ★★★ **护栏只该管阻尼项，不管弹簧项**（2026-10-05 修，柔性足 F2 逼出来的）。
         //
         //   原式 `|imp| ≤ α·|err|·Ieff + |ff|·dt` 里的 `err = kP·Δθ + kD·ω`

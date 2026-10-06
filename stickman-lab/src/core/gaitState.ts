@@ -198,10 +198,17 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   minClearance: 0.05,        // MFC = 5cm（Saunders 1953）
   stepIntervalSec: DEFAULT_STEP_INTERVAL,
   minDwellSec: 0.20,         // OSL `min_time_in_state`
-  sigFrac: 0.60,             // Perry 签名门槛系数（**工程初值，待标定**）
+  // ★★★ **可扫**（`SIG_FRAC=0.15 node tools/run.mjs …`）：Perry 签名 × 该系数 = 门槛。
+  //   实测 `LOAD -> PUSH` 长期卡在 `承接膝屈(吸振)`：门槛 = 20×0.6 = **12°**，
+  //   而承接膝只摆到 ~10° 就回落 ⇒ 状态机出不去（**完成周期 0**，永远不迈步）。
+  sigFrac: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SIG_FRAC) || 0.6,
   ankleVelEps: 2.0,          // 踝角速度死区 deg/s（判"背屈中/跖屈中"要互斥）
   loadBlocks: true,          // ★ 恢复阻塞（§3.7-B6）：L0 口径已收敛、readback 已断言可信
-  footFlatTolDeg: 12,        // 脚放平容差（绝对值，deg）—— 与落地方式无关         // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
+  // ★★★ **可扫**（`FOOT_FLAT_DEG=8 node tools/run.mjs …`）。
+  //   ⚠⚠ 默认 12 **正好等于踝关节限位** `[-12, 18]` ⇒ 踝被钉在 −12.000° 时
+  //   判据要求 `|踝| <= 12.000`，实测读到 **12.001** ⇒ **判据压在限位边界上**
+  //   （刀锋条件，靠浮点运气）。⇒ 真值应留余量（8°）。本轮扫它 + `SIG_FRAC`。
+  footFlatTolDeg: Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.FOOT_FLAT_DEG) || 12,
   tmaxSec: 2.0,              // Vughuma `Tmax`
   graceSec: 0.5,
   tiltMaxDeg: 20,

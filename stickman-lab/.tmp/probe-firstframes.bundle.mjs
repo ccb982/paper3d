@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14040,6 +14040,10 @@ var init_ragdoll = __esm({
     GROUPS_GROUND = (MEM_GROUND << 16 | MEM_SELF) >>> 0;
     IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
     ZERO = { x: 0, y: 0, z: 0 };
+    JMS_SCALE = (() => {
+      const v = Number(globalThis.process?.env?.JMS_SCALE);
+      return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
     MOTOR_ALPHA = (() => {
       const v = Number(globalThis.process?.env?.MOTOR_ALPHA);
       return Number.isFinite(v) && v > 0 ? v : 1;
@@ -14396,6 +14400,9 @@ var init_ragdoll = __esm({
         this.motorBranch = new Uint8Array(sk2.joints.length * 3);
         this.motorThRef = new Float32Array(sk2.joints.length * 3);
         this.motorErr = new Float32Array(sk2.joints.length * 3);
+        this.motorErrP = new Float32Array(sk2.joints.length * 3);
+        this.motorErrD = new Float32Array(sk2.joints.length * 3);
+        this.motorTauFF = new Float32Array(sk2.joints.length * 3);
         this.ankleJoint = jointIndexByName(sk2, "foot_l");
         this.ankleJointR = jointIndexByName(sk2, "foot_r");
         const archK = this.opt.archStiffness ?? 6;
@@ -15217,6 +15224,18 @@ var init_ragdoll = __esm({
       motorThRef;
       /** ★ 本步该轴的**误差项**（`err`，rad/s 量纲；限位分支会≥0 一大截） */
       motorErr;
+      /**
+       * ★★★ **τ 分量分解**（用户「逐帧回读关节发力情况」的落地）。
+       *   为什么必须拆：实测开局第 0 拍，`hip_l` 在 **命令≈0** 的情况下拿到 **29~34°/s**，
+       *   而它**不随伺服增益变**（`JMS_SCALE` 1→6 只降 15%）⇒ 用整轴 `tauApplied` 看不出
+       *   是**哪个分量**给的。三者单位都是 rad/s（乘 `tauMax/(JMS·JMS_SCALE)` 才是 N·m）。
+       */
+      motorErrP;
+      // 弹簧（位置）分量 `kp·ts·(thRef−a)`
+      motorErrD;
+      // 阻尼（速度）分量 `−kd·ts·relL`
+      motorTauFF;
+      // 力矩通道（τ=JᵀF / 踝 VIP / 髋外展…）
       /**
        * 该关节的**子侧是否有脚承重** ⇒ 是则用被地面约束放大的等效惯量。
        * 只需查踝（唯一直接连脚的身体），向上传递由调用方按关节链判断。
@@ -16062,6 +16081,9 @@ var init_ragdoll = __esm({
             this.motorBranch[i * 3 + k] = 0;
             this.motorThRef[i * 3 + k] = 0;
             this.motorErr[i * 3 + k] = 0;
+            this.motorErrP[i * 3 + k] = 0;
+            this.motorErrD[i * 3 + k] = 0;
+            this.motorTauFF[i * 3 + k] = 0;
             const lo = j.minRad[k];
             const hi = j.maxRad[k];
             const a = rv2[k];
@@ -16081,6 +16103,7 @@ var init_ragdoll = __esm({
               this.motorBranch[idx] = 4;
             } else if (this.holdCmd[idx]) {
               err = -kDd * relL[k];
+              this.motorErrD[idx] = err;
               this.motorBranch[idx] = 2;
             } else {
               this.motorBranch[idx] = 1;
@@ -16107,13 +16130,16 @@ var init_ragdoll = __esm({
               }
               kPSpring = kpUse;
               err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
+              this.motorErrP[idx] = kpUse * ts * (thRef - a);
+              this.motorErrD[idx] = -kdUse * ts * relL[k];
             }
             this.motorThRef[idx] = thRef;
             this.motorErr[idx] = err;
+            this.motorTauFF[idx] = this.torqueCmd[idx];
             const ffEarly = this.torqueCmd[idx];
             if (err === 0 && ffEarly === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
-            let tau = err * (tauMax / JOINT_MAX_SPEED);
+            let tau = err * (tauMax / (JOINT_MAX_SPEED * JMS_SCALE));
             if (tau > tauMax) tau = tauMax;
             else if (tau < -tauMax) tau = -tauMax;
             const tq = this.torqueCmd[idx];
@@ -16126,7 +16152,7 @@ var init_ragdoll = __esm({
             this.motorDemand[idx] = tau;
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
-            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
             const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
             const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
@@ -18515,6 +18541,7 @@ var init_rigState = __esm({
           this.axisModeOwner[i] = "balance";
         }
         this.axisConflicts.length = 0;
+        this.holdMask.fill(0);
         for (const h of this.holdList) this.holdMask[h.i] = h.system === "balance" ? 1 : 2;
         this.holdList.length = 0;
         this.torqueRequestCount = 0;
@@ -24252,7 +24279,11 @@ for (let i = 0; i < 1 * 120 && !sim.finished; i++) {
       const brS = BR[br] ?? String(br);
       const tRef = (d.motorThRef[idx] ?? 0) * 57.2958;
       const eRv = (d.motorErr[idx] ?? 0) * 57.2958;
-      cells.push(`\u8F74${k}[${brS}${br >= 3 ? "\u2605" : ""}${Math.abs(tRef) > 0.2 ? " tRef" + tRef.toFixed(0) + "\xB0" : ""}${Math.abs(eRv) > 5 ? " err" + eRv.toFixed(0) : ""}] cmd${cmd >= 0 ? "+" : ""}${cmd.toFixed(2)} \u89D2${ang.toFixed(0).padStart(4)}\xB0 \u03C4${tau.toFixed(0).padStart(4)}${frac > 0.995 ? "\u26A0" : " "}${(frac * 100).toFixed(0).padStart(3)}% [${own}${hold ? `/\u8BA9\u4F4D${hold}` : ""}]`);
+      const eP = (d.motorErrP[idx] ?? 0) * 57.2958;
+      const eD = (d.motorErrD[idx] ?? 0) * 57.2958;
+      const eF = d.motorTauFF[idx] ?? 0;
+      const comp = Math.abs(eP) > 3 || Math.abs(eD) > 3 ? `{P${eP.toFixed(0)} D${eD.toFixed(0)}${Math.abs(eF) > 0.5 ? " FF" + eF.toFixed(0) : ""}}` : "";
+      cells.push(`\u8F74${k}[${brS}${br >= 3 ? "\u2605" : ""}${Math.abs(tRef) > 0.2 ? " tRef" + tRef.toFixed(0) + "\xB0" : ""}${Math.abs(eRv) > 5 ? " err" + eRv.toFixed(0) : ""}${comp}] cmd${cmd >= 0 ? "+" : ""}${cmd.toFixed(2)} \u89D2${ang.toFixed(0).padStart(4)}\xB0 \u03C4${tau.toFixed(0).padStart(4)}${frac > 0.995 ? "\u26A0" : " "}${(frac * 100).toFixed(0).padStart(3)}% [${own}${hold ? `/\u8BA9\u4F4D${hold}` : ""}]`);
     }
     log(`     ${n.padEnd(7)} ${cells.join("  ")}`);
   }

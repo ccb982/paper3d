@@ -28,6 +28,7 @@
  */
 
 import { jointIndexByName } from '../skeleton';
+import { applyWaist, DEFAULT_WAIST_PARAMS } from './waist';
 import { computeWantedForce, stanceResolved, DEFAULT_WANTED_FORCE } from './wantedForce';
 import { wholeBodyBalanceTick, type QpTick } from './wholeBodyQp';
 import type { Ragdoll } from '../ragdoll';
@@ -456,6 +457,20 @@ export interface BalanceParams {
   waistHoldMaxN?: number;
   /** ★ 块⑨ 的符号（马达空间 vs 回读网关）：实测 +1（见块⑨ 注释），−1 仅作对照 */
   waistHoldSign?: number;
+  /** ★ `waist` 工具（上身合成）的参数透传 —— 见 `systems/waist.ts` */
+  waist?: import('./waist').WaistParams;
+  /**
+   * ★★★ **额状躯干姿态**增益（度/度）—— 用户「侧移**并保持平衡**」的落地。
+   *   世界侧倾误差（`trends.segos['torso']` 的倾斜在 z 轴上的投影）⇒ 腰部目标角。
+   *   实测缺它时：`torso roll` 漂到 −119°（侧移过程中横滚倒地）。
+   */
+  trunkRollK?: number;
+  /** 同上，倾角速率增益（度 每 度/秒）—— 不加会摆 */
+  trunkRollD?: number;
+  /** 额状躯干修正上限（度） */
+  trunkRollMaxDeg?: number;
+  /** 符号（域口径 vs 世界口径）：实测标定，默认 −1 */
+  trunkRollSign?: number;
   /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
   upBorrowSlewDeg?: number;
   /**
@@ -900,6 +915,14 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   waistHoldD: 4,
   waistHoldMaxN: 55,
   waistHoldSign: 1,
+  // ★ 可扫：`TRK=… node tools/run.mjs …`（实测标定用）
+  trunkRollK: (() => {
+    const e = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.TRK);
+    return Number.isFinite(e) && String((globalThis as any).process?.env?.TRK ?? '') !== '' ? e : 0.8;
+  })(),
+  trunkRollD: 0.25,
+  trunkRollMaxDeg: 8,
+  trunkRollSign: -1,
   upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
@@ -2175,65 +2198,59 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
     rs.waist.bal.pitch = cPitch / D2R;
     rs.waist.bal.roll = cRoll / D2R;
+
+    // ══════════════════════════════════════════════════════════════
+    // ★★★★ **额状躯干姿态**（用户 2026-10-06：
+    //   「重心无法完成侧移**并保持平衡**才不能迈步」）
+    // ══════════════════════════════════════════════════════════════
+    //   实测（`probe-lat`，锁存驱动侧之后）：
+    //     · `|CoM.z|max` 从 ~10mm 升到 **107mm**（重心确实开始侧移了）✓
+    //     · **但 `躯干roll` 一路漂到 −119°**（横滚倒地）✗
+    //   ⇒ 缺的正是"侧移时把**躯干的世界侧倾**拉回来"这一环：
+    //     · `postureLat`（旧的世界侧倾 PD）**早先被删**；
+    //     · 块⑨ 只管脊柱**相对骨盆**的角度（`rs.angle`），**不管世界侧倾**；
+    //     · 块⑤ 的侧向链里**脊柱已被移出**（2026-10-06）。
+    //   ⇒ 额状面躯干**没有任何控制器**。这里补上：用 `trends.segs['torso']`
+    //     的**世界倾角/倾角速率**（都相对静姿态，已滤过）做 PD，
+    //     输出走腰部（`waist.bal.roll` = `spine*/0` 的目标），
+    //     ⇒ 与块⑨ 并不同轴重复：块⑨ 是"脊柱不许对折"（相对角），
+    //       本条是"躯干不许倒"（世界姿态）。
+    // ⚠ `segs[].name` 存的是**中文显示名**（'躯干'），不是 key `'torso'`
+    //   —— 第一版写成 `=== 'torso'` ⇒ `find` 永远 undefined ⇒ 本块静默不跑。
+    const torso = rs.trends.segs.find((x) => x.name === '躯干');
+    if (torso && on('trunkRoll')) {
+      // 世界侧倾（+ = 向左歪）：`azim` 0=+x(前) / +90=+z(左) / −90=−z(右)
+      const az = torso.azimDeg * D2R;
+      const latDeg = torso.tiltDeg * Math.sin(az);
+      const latRate = torso.rateDeg * Math.sin(az);
+      const K = p.trunkRollK ?? 0;
+      const Dd = p.trunkRollD ?? 0;
+      if (K > 0) {
+        const want = (K * latDeg + Dd * latRate) * (p.trunkRollSign ?? -1);
+        const m = p.trunkRollMaxDeg ?? 8;
+        const add = want > m ? m : want < -m ? -m : want;
+        rs.waist.bal.roll += add;
+        rs.trunkRollCmd = add;
+        rs.trunkRollErr = latDeg;
+      }
+    }
     // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读
     ub.corrPitch = cPitch; ub.corrRoll = cRoll;
     ub.final.pitch = ub.step.pitch + cPitch;
     ub.final.roll = ub.step.roll + cRoll;
     rs.ubTau = Math.hypot(cPitch, cRoll);
+
+    // ★★★ **上身发布**：balance 是最终发布者，这里**调用 `waist` 工具**合成脊柱目标
+    //   （用户：「**waist 是一个工具**；平衡系统对上半身做修改的时候需要通过这个」）。
+    //   ⚠ 上一版把 waist 做成"第三发布者"（controller 三连调）是架构错误，已改回。
+    applyWaist(rs, { ...DEFAULT_WAIST_PARAMS, ...p.waist });
   }
 
-  // ══════════════════════════════════════════════════════════════
-  // ⑨ ★★★★ **腰部姿态保持（持续发力）** —— 用户 2026-10-06：
-  //   「**平衡系统就有义务保证腰不折**」「折腰需要做发力门禁」
-  // ══════════════════════════════════════════════════════════════
-  //   为什么必须**每拍**都发（而不是"位置伺服会管"）：
-  //     实测 `tauSrc` 在 `spine1/2/3` 上**恒为 `—`** ⇒ 腰上**没有任何持续力矩**。
-  //     位置伺服写的是**目标角**，而它在腰上早已不产生有效抗折力矩
-  //     （实测：折到 +91.5° 时 `tauApplied = +120`，**与折弯同号**）。
-  //   ⇒ 本块的语义：**不管目标是谁写的、写没写，平衡系统都持续托腰**。
-  //     `τ = −K·θ − D·θ̇`（`θ` = 该轴实测角，域口径：正=屈），
-  //     逐轴按 `waistHoldMaxN` 夹（**发力门禁**），`loadBearing=true`
-  //     （它是承重路径，不与位置环争语义：位置环管"要多直"，本块管"不许折"）。
-  if (on('waistHold') && doll) {
-    const K = p.waistHoldK ?? 0;
-    // ★★ **D 必须小 + 必须低通 + 必须受骨盆噪声门约束**（2026-10-06 实测）：
-    //   原始 `D=26` 在骨盆 `|ω|=300°/s` 时给出 137 N·m，超门禁（55）2.5 倍
-    //   ⇒ 恒被夹满 ⇒ **bang-bang 自激**（逐帧变号）。
-    //   ⇒ 三重处理：① D 降到量级与 K 匹配；② θ̇ 走 50ms 低通；
-    //     ③ 骨盆角速度超门时**再降 D**（抖动时不要用微分）。
-    const gate = Math.max(1e-6, p.pelvisWMax ?? 5);
-    const dScale = rs.pelvisW > gate ? 0.15 : rs.pelvisW > gate * 0.6 ? 0.5 : 1;
-    const Dd = (p.waistHoldD ?? 0) * dScale;
-    const MX = p.waistHoldMaxN ?? 0;
-    let held = 0;
-    for (const nm of ['spine1', 'spine2', 'spine3']) {
-      const j = jointIndexByName(rs.sk, nm);
-      if (j < 0) continue;
-      for (const ax of [2, 0]) {
-        const ang = rs.angle(j, ax);          // ★ 走关节回读网关（不自己读刚体）
-        const i9 = j * 3 + ax;
-        const raw = rs.jointVel(j, ax);
-        // ② 一阶低通（τf = 50ms）；数组懒初始化（长度随骨架）
-        if (rs.waistHoldRateF.length !== rs.nAxes) rs.waistHoldRateF = new Float32Array(rs.nAxes);
-        const a9 = Math.min(1, (rs.dtCtrl ?? 1 / 60) / 0.05);
-        const rate = (rs.waistHoldRateF[i9] ?? 0) + (raw - (rs.waistHoldRateF[i9] ?? 0)) * a9;
-        rs.waistHoldRateF[i9] = rate;
-        // ★★★ 符号（2026-10-06 **实测标定**，不是推的）：
-        //   `rs.angle`（回读网关，域口径"正=屈"）与 `driveMotors` 里马达用的 `rv[k]`
-        //   在脊柱矢状轴上**反号** —— 逐帧实测（`probe-pelvis`，目标=0）：
-        //     θ_rs=+1.6° 时 **PD 给 +28**（= 在马达空间把 `rv` 拉回 0，正确），
-        //     而按 `rs.angle` 算的 `−K·θ` 给出 **−23**，**方向与 PD 相反** ⇒ 正反馈。
-        //   ⇒ 本块必须按**马达空间**取号：`t = +(K·ang + D·rate)`。
-        //   （`SC.spineSagSign` 留作消融对照，默认 +1。）
-        let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
-        if (t > MX) t = MX; else if (t < -MX) t = -MX;
-        if (Math.abs(t) < 0.5) continue;
-        rs.requestTorque(j, ax, t, 'balance', '腰部姿态保持(持续·抗折)', true);
-        held += Math.abs(t);
-      }
-    }
-    rs.ubTau = held;
-  }
+  // ⑨ **腰部默认拉力**已移出本文件 —— 用户 2026-10-06 定调：
+  //   「**脊柱本来就需要一个拉力修正，不经过平衡系统**」
+  //   ⇒ 它现在是 `systems/waist.ts` 的**工具** `spineDefaultTone()`，
+  //     由 `controller.step` **独立调用**（不经过 balance）。
+  //   平衡系统对**上身**做修改时改走工具 `applyWaist()`（在本函数末尾调）。
 
   // ══════════════════════════════════════════════════════════════
   // ⑦ ★★★ **迈步提案 → 修正 → 发布**（用户 2026-10-06 定调）

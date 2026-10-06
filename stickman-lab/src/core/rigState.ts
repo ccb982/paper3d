@@ -1332,6 +1332,23 @@ export class RigState {
   shiftErrZ = 0;
   shiftDemandF = 0;
   shiftDriveSide: Side | null = null;
+  /**
+   * ★★★ **侧向交接的驱动侧锁存**（用户 2026-10-06：
+   *   「**是重心无法完成侧移并保持平衡才不能迈步啊**」）。
+   *
+   *   实测（`probe-lat`）：`shiftDriveSide` 原先每拍由 `rs.swingLeg()` 现算，而
+   *   `swingLeg()` 来自瞬时载荷 ⇒ 载荷在 `0.50/0.50 ↔ 0.68/0.32 ↔ 0.28/0.72`
+   *   之间跳 ⇒ **驱动侧每 0.1~0.3s 翻一次**，`hipLatτ` 于是 −78 → +83 → −68 …
+   *   ⇒ **往左推一下、再往右推一下，净位移为零**（实测 `CoM.z` 全程 |≤10mm|
+   *     而目标要 142mm）⇒ 交接永远达不成 ⇒ 状态机卡在 `LOAD` ⇒ 永远不迈步。
+   *
+   *   ⇒ 按架构**自己的 B1 纪律「角色必须锁存」**：交接期内驱动侧**只定一次**，
+   *     交接完成或离相才解除。
+   */
+  shiftSideLatch: Side | null = null;
+  /** ★ 额状躯干修正的本拍输出（度）与误差（度）—— `probe-lat` 逐帧回读用 */
+  trunkRollCmd = 0;
+  trunkRollErr = 0;
   /** 交接验证是否全过（`GaitState` 每拍写）。false = 迈步系统还有活：主动侧移 */
   handoverOk = false;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -2047,6 +2064,14 @@ export class RigState {
     // 轴声明是**每拍**重新申领的（通道可能按相位开关）⇒ 一并清零
     for (let i = 0; i < this.axisMode.length; i++) { this.axisMode[i] = 0; this.axisModeOwner[i] = 'balance'; }
     this.axisConflicts.length = 0;
+    // ★★★★ 2026-10-06 **`holdMask` 必须先清零**（修一处**锁存** bug）。
+    //   原写法只清 `holdList`、从不清 `holdMask` ⇒ 一旦某轴被让位过一次，
+    //   `holdMask[i]` 就**永久保持 1**，而 `setHoldMask` 把它直通
+    //   `driveMotors.holdCmd` ⇒ **该轴的位置伺服永久关闭、只剩阻尼**
+    //   （"腿没人管"）。
+    //   实测证据：`probe-firstframes` 全程 `让位1`；且**关掉让位门 `sagJfHold` 也无效**
+    //   （那时早已锁死）。⇒ 这让"支撑腿的位置控制"在开局几拍后**永久失效**。
+    this.holdMask.fill(0);
     for (const h of this.holdList) this.holdMask[h.i] = h.system === 'balance' ? 1 : 2;
     this.holdList.length = 0;
     this.torqueRequestCount = 0;

@@ -23,7 +23,7 @@ import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
 import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
 import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
-import { waistSystem, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
+import { spineDefaultTone, DEFAULT_WAIST_TONE, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
 import type { Sim } from './sim';
 import { jointIndexByName, type Skeleton } from './skeleton';
 
@@ -424,10 +424,13 @@ export class Controller {
     // ★ 2026-10-06：消融名单**只有一个来源**（`cfg.balance.ablate`）。
     //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
+    // ★★★ 2026-10-06 架构修正（用户定调）：
+    //   「**waist 是一个工具**」—— 平衡系统对上半身做修改时**内部**调它
+    //   （见 `balanceSystem` 块⑧ 末尾的 `applyWaist()`）⇒ **balance 是唯一最终发布者**。
+    //   「但是**脊柱本来就需要一个拉力修正，不经过平衡系统**」
+    //   ⇒ 默认拉力在这一行**独立**跑，不经过 `balanceSystem`。
     balanceSystem(rs, this.cfg.balance, this.sim.doll);
-    // ★★★ 2026-10-06 重构：**腰的唯一发布者** —— 必须在 step/balance **之后**
-    //   （它们填意图）、`arbitrate` **之前**（发布目标）。见 `systems/waist.ts`。
-    waistSystem(rs, { ...this.cfg.waist, ablate: this.cfg.balance.ablate });
+    spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
     // ★★★ 探针注入口（生产 `null`）：在仲裁**之前**写，这样它跟真实系统同路
