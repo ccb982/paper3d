@@ -23,6 +23,7 @@ import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
 import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
 import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
+import { fallGuard, DEFAULT_FALL_GUARD, type FallGuardParams } from './systems/fallGuard';
 import { spineDefaultTone, DEFAULT_WAIST_TONE, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
 import type { Sim } from './sim';
 import { jointIndexByName, type Skeleton } from './skeleton';
@@ -33,6 +34,7 @@ export interface ControllerConfig {
   balance: BalanceParams;
   step: StepParams;
   waist: WaistParams;
+  fallGuard: FallGuardParams;
 }
 
 export const DEFAULT_CONTROLLER: ControllerConfig = {
@@ -41,6 +43,7 @@ export const DEFAULT_CONTROLLER: ControllerConfig = {
   balance: DEFAULT_BALANCE_PARAMS,
   step: DEFAULT_STEP_PARAMS,
   waist: DEFAULT_WAIST_PARAMS,
+  fallGuard: DEFAULT_FALL_GUARD,
 };
 
 export class Controller {
@@ -423,6 +426,8 @@ export class Controller {
     //   而且 SHIFT 相刚进入时推力阶跃会晚一拍才生效。
     // ★ 2026-10-06：消融名单**只有一个来源**（`cfg.balance.ablate`）。
     //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
+    // ★★★ §22.19.4 第①步：**摔倒方向预测**（纯读，不写任何目标/力矩）
+    fallGuard(rs, this.cfg.fallGuard);
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
     // ★★★ 2026-10-06 架构修正（用户定调）：
     //   「**waist 是一个工具**」—— 平衡系统对上半身做修改时**内部**调它

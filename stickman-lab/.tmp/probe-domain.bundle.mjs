@@ -17558,6 +17558,62 @@ var init_rigState = __esm({
         note: "\u672A\u8FD0\u884C"
       };
       dcm = { x: 0, z: 0 };
+      /**
+       * ★★★★ **摔倒方向预测**（§22.19.4 第①步；`systems/fallGuard.ts` 每拍写、**纯读**）。
+       *   用户：「**想后倒的时候脚后跟是需要发更大的力的**」「需要一个**预测摔倒方向
+       *   从而在对应方向发力**的模块」。
+       *   ⇒ 本对象是那个模块的**唯一回读出口**：方向 / 紧迫度 / 象限 / 该方向的可用权限。
+       */
+      fall = {
+        ran: 0,
+        /** 支撑面有效（两侧都没着地 ⇒ false，此时其余字段不可信） */
+        valid: false,
+        /** 捕获点（XcoM）水平坐标 */
+        px: 0,
+        pz: 0,
+        /** 支撑面边界（由实测脚中心 ± 脚半尺寸） */
+        xMin: 0,
+        xMax: 0,
+        zMin: 0,
+        zMax: 0,
+        /** 四个方向的余量（m，正 = 还在支撑面内） */
+        mFront: 0,
+        mBack: 0,
+        mLeft: 0,
+        mRight: 0,
+        /** 最紧的那个余量（m） */
+        margin: 0,
+        /** 紧迫度 0..1（0 = 稳；1 = 已到边界） */
+        urgency: 0,
+        /** 方向单位向量（水平面，支撑中心 → 捕获点） */
+        dirX: 0,
+        dirZ: 0,
+        /** 方位角（度）：0 = +x（前），+90 = +z（左） */
+        dirDeg: 0,
+        /** 象限（余量最紧的方向；余量足够时 = 'center'） */
+        region: "center",
+        /** 该方向的**可用权限**（相对前向 = 1.0；见 `DIR_AUTHORITY`） */
+        authorityScale: 1,
+        /** 人话判读 */
+        note: "\u672A\u8FD0\u884C",
+        /** ★★★ 三档模式（用户：「各向摔倒都要有明确的应对机制」） */
+        mode: "normal",
+        /** ★★★ 应急时**解除角色分离**（「别管承重腿摆动腿了，优先稳住身体」） */
+        roleSuspended: false,
+        /** 连续处于 emergency/warn 的拍数（滞回与回读用） */
+        emergencyTicks: 0,
+        warnTicks: 0
+      };
+      /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
+      fallResp = {
+        on: 0,
+        s: 0,
+        addPitchDeg: 0,
+        addRollDeg: 0,
+        needX: 0,
+        needZ: 0,
+        mode: "normal"
+      };
       support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
       mos = 0;
       grf = { x: 0, y: 0 };
@@ -22869,7 +22925,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     return;
   }
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
-  const D2R2 = Math.PI / 180;
+  const D2R3 = Math.PI / 180;
   if (doll && (p.qpEnable || on("qp"))) {
     const qp = wholeBodyBalanceTick(rs, doll, sup, {
       ankleMul: p.qpAnkleMul ?? 4,
@@ -22934,15 +22990,15 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.waistErrLat = capErrLat;
   }
   const jq = rs.jointRead();
-  const kneeNow = jq.angleDeg(jKnee, 2) / D2R2;
-  const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
+  const kneeNow = jq.angleDeg(jKnee, 2) / D2R3;
+  const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R3;
   if (on("knee") && latArmed && on("stanceExt")) {
-    rs.requestAngle(jKnee, 2, -Math.abs(p.kneeStanceDeg) * D2R2, "balance", "\u652F\u6491\u819D\u4F38\u5C55");
+    rs.requestAngle(jKnee, 2, -Math.abs(p.kneeStanceDeg) * D2R3, "balance", "\u652F\u6491\u819D\u4F38\u5C55");
   }
   if (on("knee") && kneeNow < kneeLimit) {
     rs.requestAngle(jKnee, 2, kneeLimit, "balance", "\u819D\u5B88\u536B");
   }
-  const hipNow2 = jq.angleDeg(jHip, 2) / D2R2;
+  const hipNow2 = jq.angleDeg(jHip, 2) / D2R3;
   if (on("hip") && hipNow2 < -p.hipExtendLimit) {
     rs.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
   }
@@ -23133,7 +23189,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         }
         rs.settleOffPhase(qVip);
       }
-      if (rs.state === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
+      if (rs.state === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R3;
       const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
@@ -23153,10 +23209,10 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
       const jq2 = rs.jointRead();
-      const qHip = jq2.angleDeg(jHipS, 2) / D2R2;
-      const qHipRate = jq2.velDegPerSec(jHipS, 2) / D2R2;
+      const qHip = jq2.angleDeg(jHipS, 2) / D2R3;
+      const qHipRate = jq2.velDegPerSec(jHipS, 2) / D2R3;
       const tauMaxHip = sk2.joints[jHipS]?.maxTorque?.[2] ?? 200;
-      const qLim = p.maxHipStiffDeg * D2R2;
+      const qLim = p.maxHipStiffDeg * D2R3;
       const qEff = clamp2(qHip, qLim);
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp2(tauHip, tauMaxHip);
@@ -23200,7 +23256,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
     const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
     const upK = p.upLeanK ?? 0;
-    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R2;
+    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R3;
     const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
@@ -23217,11 +23273,38 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.waist.bal.gain = p.upBorrowK ?? 0;
     const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * (zRecv - rs.com.z), leanMax);
     const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * (xRecv - rs.com.x), leanMax);
-    rs.waist.bal.pitch = cPitch / D2R2;
-    rs.waist.bal.roll = cRoll / D2R2;
+    rs.waist.bal.pitch = cPitch / D2R3;
+    rs.waist.bal.roll = cRoll / D2R3;
+    if (on("fallResp") && rs.fall.valid && rs.fall.mode !== "normal") {
+      const uWarn = p.fallWarnU ?? 0.35;
+      const sE = clamp2((rs.fall.urgency - uWarn) / Math.max(1e-6, 1 - uWarn), 1);
+      const cxF = (rs.fall.xMin + rs.fall.xMax) / 2;
+      const czF = (rs.fall.zMin + rs.fall.zMax) / 2;
+      const hh = Math.max(0.3, rs.com.y);
+      const needX = cxF - rs.fall.px;
+      const needZ = czF - rs.fall.pz;
+      const k = (p.fallK ?? 1.2) * sE;
+      const mx = p.fallMaxDeg ?? 10;
+      const sgn = p.fallSign ?? -1;
+      const addPitch = clamp2(sgn * Math.atan2(needX, hh) * k / D2R3, mx);
+      const addRoll = clamp2(sgn * Math.atan2(needZ, hh) * k / D2R3, mx);
+      rs.waist.bal.pitch += addPitch;
+      rs.waist.bal.roll += addRoll;
+      rs.fallResp = {
+        on: 1,
+        s: sE,
+        addPitchDeg: addPitch,
+        addRollDeg: addRoll,
+        needX,
+        needZ,
+        mode: rs.fall.mode
+      };
+    } else {
+      rs.fallResp = { on: 0, s: 0, addPitchDeg: 0, addRollDeg: 0, needX: 0, needZ: 0, mode: rs.fall.mode };
+    }
     const torso = rs.trends.segs.find((x) => x.name === "\u8EAF\u5E72");
     if (torso && on("trunkRoll")) {
-      const az = torso.azimDeg * D2R2;
+      const az = torso.azimDeg * D2R3;
       const latDeg = torso.tiltDeg * Math.sin(az);
       const latRate = torso.rateDeg * Math.sin(az);
       const K = p.trunkRollK ?? 0;
@@ -23552,6 +23635,31 @@ var init_balance = __esm({
       trunkRollD: 0.25,
       trunkRollMaxDeg: 8,
       trunkRollSign: -1,
+      /**
+       * ⚠⚠ **默认 0（关）** —— 实测它**在骗存活**（§22.12 那个陷阱的又一次复发）：
+       *
+       *   | `fallK` | 生存 | **时间窗门禁** | 末帧腰最弯 |
+       *   |---|---|---|---|
+       *   | **0** | 1.66s | **1.13s ★** | 1.4° |
+       *   | 1.2 | 2.52s | **0.45s ✗** | **29.7°** |
+       *   | 1.8 | **5.13s** | 0.38s ✗ | 6.0° |
+       *
+       *  ⇒ 存活被拉长 3 倍，但**腰折了、直立窗口掉了一半** —— 典型的"挣扎得更久"。
+       *  病因：本应急走的是**腰部位置目标**（±10°），而腰的位置伺服会把脊柱**掰弯**
+       *  （块⑨ 与它同轴争语义）。文献的"髋策略"给的是**髋的水平剪力**，不是躯干目标角。
+       *
+       *  ⇒ **正确修法（下一步）**：应急走**髋力矩**（Horak & Nashner 1986 的 hip strategy /
+       *    Runge 1999 的"按可用力矩选策略"），**不写脊柱的位置目标**。
+       *  ⚠ 在此之前，本项**保持 0**；`FK=…` 仅供实验。
+       */
+      fallK: (() => {
+        const e = globalThis.process?.env?.FK;
+        const v = Number(e);
+        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
+      })(),
+      fallMaxDeg: 10,
+      fallWarnU: 0.35,
+      fallSign: -1,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,
@@ -23746,7 +23854,7 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const jSp3 = jointIndexByName(sk2, "spine3");
   if (jHip < 0 || jKnee < 0) return;
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
-  const D2R2 = Math.PI / 180;
+  const D2R3 = Math.PI / 180;
   const sup = rs.supportLeg();
   rs.shiftDemandF = 0;
   rs.shiftDriveSide = null;
@@ -23818,9 +23926,9 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     return u * u * (3 - 2 * u);
   })();
   const hipDeg = p.hipFlexPeakDeg * bell + holdHip - p.hipExtendDeg * sReach * (permit || rs.state === "SWING" ? 1 : 0);
-  rs.requestSwingLegAngle(swing, jHip, 2, clamp2(hipDeg * D2R2, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
+  rs.requestSwingLegAngle(swing, jHip, 2, clamp2(hipDeg * D2R3, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
-  rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
+  rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R3, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
   const swSign = swing === "l" ? 1 : -1;
   const kp2 = KEY_POSES[STATE_TO_GAIT[rs.state]];
@@ -23876,6 +23984,116 @@ var init_step = __esm({
   }
 });
 
+// src/core/systems/fallGuard.ts
+function wrapDeg(a) {
+  let x = a % 360;
+  if (x > 180) x -= 360;
+  if (x <= -180) x += 360;
+  return x;
+}
+function fallGuard(rs, p = DEFAULT_FALL_GUARD) {
+  const fg = rs.fall;
+  fg.ran++;
+  const uWarn = p.warnUrgency ?? DEFAULT_FALL_GUARD.warnUrgency;
+  const uEmg = p.emergencyUrgency ?? DEFAULT_FALL_GUARD.emergencyUrgency;
+  if (p.enabled === false) {
+    fg.note = "\u5173\u95ED";
+    return;
+  }
+  const hx = p.footHalfX ?? DEFAULT_FALL_GUARD.footHalfX;
+  const hz = p.footHalfZ ?? DEFAULT_FALL_GUARD.footHalfZ;
+  const gl = rs.grounded.l, gr = rs.grounded.r;
+  if (!gl && !gr) {
+    fg.note = "\u53CC\u811A\u79BB\u5730\uFF08\u65E0\u652F\u6491\u9762\uFF09";
+    fg.valid = false;
+    return;
+  }
+  fg.valid = true;
+  const zs = [], xs = [];
+  if (gl) {
+    zs.push(rs.soleZ.l);
+    xs.push(rs.soleX.l);
+  }
+  if (gr) {
+    zs.push(rs.soleZ.r);
+    xs.push(rs.soleX.r);
+  }
+  const xMin = Math.min(...xs) - hx, xMax = Math.max(...xs) + hx;
+  const zMin = Math.min(...zs) - hz, zMax = Math.max(...zs) + hz;
+  fg.xMin = xMin;
+  fg.xMax = xMax;
+  fg.zMin = zMin;
+  fg.zMax = zMax;
+  const px = rs.dcm.x, pz = rs.dcm.z;
+  fg.px = px;
+  fg.pz = pz;
+  const mFront = xMax - px, mBack = px - xMin;
+  const mLeft = zMax - pz, mRight = pz - zMin;
+  fg.mFront = mFront;
+  fg.mBack = mBack;
+  fg.mLeft = mLeft;
+  fg.mRight = mRight;
+  const margin = Math.min(mFront, mBack, mLeft, mRight);
+  fg.margin = margin;
+  const dz = p.deadZone ?? 0;
+  const sc = Math.max(1e-6, p.urgencyScale ?? 0.1);
+  fg.urgency = Math.max(0, Math.min(1, (sc - (margin - dz)) / sc));
+  const cx = (xMin + xMax) / 2, cz = (zMin + zMax) / 2;
+  const fx = px - cx, fz = pz - cz;
+  const len = Math.hypot(fx, fz);
+  if (len < 1e-6) {
+    fg.dirX = 0;
+    fg.dirZ = 0;
+    fg.dirDeg = 0;
+  } else {
+    fg.dirX = fx / len;
+    fg.dirZ = fz / len;
+    fg.dirDeg = wrapDeg(Math.atan2(fz, fx) * R2D2);
+  }
+  const cand = [
+    ["front", mFront],
+    ["back", mBack],
+    ["left", mLeft],
+    ["right", mRight]
+  ];
+  cand.sort((a, b) => a[1] - b[1]);
+  const region = cand[0][0];
+  fg.region = margin > (p.urgencyScale ?? 0.1) ? "center" : region;
+  fg.authorityScale = fg.region === "center" ? 1 : DIR_AUTHORITY[fg.region];
+  fg.mode = fg.urgency >= uEmg ? "emergency" : fg.urgency >= uWarn ? "warn" : "normal";
+  fg.roleSuspended = fg.mode === "emergency";
+  if (fg.mode === "emergency") fg.emergencyTicks++;
+  else fg.emergencyTicks = 0;
+  if (fg.mode === "warn") fg.warnTicks++;
+  else fg.warnTicks = 0;
+  fg.note = fg.region === "center" ? `\u7A33\uFF08\u4F59\u91CF ${(margin * 1e3).toFixed(0)}mm\uFF0C\u65B9\u4F4D ${fg.dirDeg.toFixed(0)}\xB0\uFF09` : `${fg.mode === "emergency" ? "\u2605\u5E94\u6025" : fg.mode === "warn" ? "\u26A0\u9884\u8B66" : ""}${fg.region}\uFF08\u4F59\u91CF ${(margin * 1e3).toFixed(0)}mm\uFF0C\u6743\u9650 ${(fg.authorityScale * 100).toFixed(0)}%\uFF09`;
+}
+var DIR_AUTHORITY, DEFAULT_FALL_GUARD, D2R2, R2D2;
+var init_fallGuard = __esm({
+  "src/core/systems/fallGuard.ts"() {
+    "use strict";
+    DIR_AUTHORITY = {
+      front: 1,
+      back: 1 / 3,
+      left: 0.3,
+      right: 0.3
+    };
+    DEFAULT_FALL_GUARD = {
+      // 本 rig 实测：脚半宽 ±90mm（§22.11.2 的 62 N·m 天花板就是它算出来的）
+      footHalfZ: 0.09,
+      // 脚全长约 240mm ⇒ 半长 ~120mm
+      footHalfX: 0.12,
+      urgencyScale: 0.1,
+      deadZone: 0.02,
+      enabled: true,
+      warnUrgency: 0.35,
+      emergencyUrgency: 0.7
+    };
+    D2R2 = Math.PI / 180;
+    R2D2 = 180 / Math.PI;
+  }
+});
+
 // src/core/controller.ts
 var controller_exports = {};
 __export(controller_exports, {
@@ -23895,6 +24113,7 @@ var init_controller = __esm({
     init_balance();
     init_forceChain();
     init_step();
+    init_fallGuard();
     init_waist();
     init_skeleton();
     DEFAULT_CONTROLLER = {
@@ -23902,7 +24121,8 @@ var init_controller = __esm({
       gait: DEFAULT_GAIT_CONFIG,
       balance: DEFAULT_BALANCE_PARAMS,
       step: DEFAULT_STEP_PARAMS,
-      waist: DEFAULT_WAIST_PARAMS
+      waist: DEFAULT_WAIST_PARAMS,
+      fallGuard: DEFAULT_FALL_GUARD
     };
     Controller = class {
       constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
@@ -24177,6 +24397,7 @@ var init_controller = __esm({
         rs.grf.x = 0;
         rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
         this.gait.update(dt);
+        fallGuard(rs, this.cfg.fallGuard);
         stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });

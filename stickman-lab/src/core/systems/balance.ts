@@ -471,6 +471,17 @@ export interface BalanceParams {
   trunkRollMaxDeg?: number;
   /** 符号（域口径 vs 世界口径）：实测标定，默认 −1 */
   trunkRollSign?: number;
+  /**
+   * ★★★★ **摔倒应急**（用户：「各向摔倒都要有明确的应对机制」
+   *   「要摔倒了 / 也别管承重腿摆动腿了，优先稳住身体」）。
+   *   `fallK` = 紧迫度 → 腰部倾角（度/rad）的总增益；`fallMaxDeg` = 逐轴上限。
+   */
+  fallK?: number;
+  fallMaxDeg?: number;
+  /** 预警阈值（与 `fallGuard.warnUrgency` 对齐；应急响应的零点） */
+  fallWarnU?: number;
+  /** 应急腰部倾角的**符号**（域口径：正=后仰 ⇒ 往前拉要取 −1）。实测标定 */
+  fallSign?: number;
   /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
   upBorrowSlewDeg?: number;
   /**
@@ -923,6 +934,31 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   trunkRollD: 0.25,
   trunkRollMaxDeg: 8,
   trunkRollSign: -1,
+  /**
+   * ⚠⚠ **默认 0（关）** —— 实测它**在骗存活**（§22.12 那个陷阱的又一次复发）：
+   *
+   *   | `fallK` | 生存 | **时间窗门禁** | 末帧腰最弯 |
+   *   |---|---|---|---|
+   *   | **0** | 1.66s | **1.13s ★** | 1.4° |
+   *   | 1.2 | 2.52s | **0.45s ✗** | **29.7°** |
+   *   | 1.8 | **5.13s** | 0.38s ✗ | 6.0° |
+   *
+   *  ⇒ 存活被拉长 3 倍，但**腰折了、直立窗口掉了一半** —— 典型的"挣扎得更久"。
+   *  病因：本应急走的是**腰部位置目标**（±10°），而腰的位置伺服会把脊柱**掰弯**
+   *  （块⑨ 与它同轴争语义）。文献的"髋策略"给的是**髋的水平剪力**，不是躯干目标角。
+   *
+   *  ⇒ **正确修法（下一步）**：应急走**髋力矩**（Horak & Nashner 1986 的 hip strategy /
+   *    Runge 1999 的"按可用力矩选策略"），**不写脊柱的位置目标**。
+   *  ⚠ 在此之前，本项**保持 0**；`FK=…` 仅供实验。
+   */
+  fallK: (() => {
+    const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.FK;
+    const v = Number(e);
+    return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0;
+  })(),
+  fallMaxDeg: 10,
+  fallWarnU: 0.35,
+  fallSign: -1,
   upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
@@ -2198,6 +2234,50 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
     rs.waist.bal.pitch = cPitch / D2R;
     rs.waist.bal.roll = cRoll / D2R;
+
+    // ══════════════════════════════════════════════════════════════
+    // ⑩ ★★★★ **摔倒应急**（用户 2026-10-06 定调）
+    //   「**对于各向摔倒都要有一个明确的应对机制**对吧」
+    //   「**要摔倒了 / 也别管承重腿摆动腿了，优先稳住身体**」
+    // ══════════════════════════════════════════════════════════════
+    //   文献（§22.19.2）：策略**级联** —— 踝（余量内）→ 髋（余量将尽）→
+    //     落足（越界）；且**按方向不同**（Carpenter 1999）。
+    //   ⇒ 本块就是"髋/躯干"那一级：
+    //     · 触发量 = `fallGuard` 的**紧迫度**（不是角度阈值，见 §22.19.4）
+    //     · 方向   = **捕获点相对支撑中心**（要把它拉回去）
+    //     · 作动器 = **腰部**（已验证：写脊柱目标 +10° ⇒ 承重分配 15/85→96/4）
+    //       + 应急时**解除角色分离**（`roleSuspended`）
+    //   ⚠ 不复用踝：踝归块⑥（VIP/CoP 调节器），本块若也写踝就是同轴双计。
+    if (on('fallResp') && rs.fall.valid && rs.fall.mode !== 'normal') {
+      const uWarn = p.fallWarnU ?? 0.35;
+      // 强度 0..1：预警阈值处为 0，urgency=1 时为 1
+      const sE = clamp((rs.fall.urgency - uWarn) / Math.max(1e-6, 1 - uWarn), 1);
+      const cxF = (rs.fall.xMin + rs.fall.xMax) / 2;
+      const czF = (rs.fall.zMin + rs.fall.zMax) / 2;
+      const hh = Math.max(0.3, rs.com.y);
+      // 需求位移：把**捕获点**拉回支撑中心（正 = 要往前 / 往左拉）
+      const needX = cxF - rs.fall.px;
+      const needZ = czF - rs.fall.pz;
+      const k = (p.fallK ?? 1.2) * sE;
+      const mx = p.fallMaxDeg ?? 10;
+      // ⚠ 两处已修（第一版都错）：
+      //   ① **量纲**：原先 `clamp(弧度值, mx)` 夹的是**弧度**到 ±10 rad（形同没有），
+      //      实测输出到 12.1°；现在先转**度**再夹。
+      //   ② **符号**：`probe-waist` 实测 `requestAngle(spine,2,+rad) ⇒ pitchDeg 正
+      //      = **后仰**`。而"把捕获点往前拉"要的是**前倾** ⇒ 必须取负。
+      //      实测（错号时）：`FK` 越大越糟（1.66s → 1.18s）。
+      const sgn = p.fallSign ?? -1;
+      const addPitch = clamp((sgn * Math.atan2(needX, hh) * k) / D2R, mx);   // 度
+      const addRoll = clamp((sgn * Math.atan2(needZ, hh) * k) / D2R, mx);
+      rs.waist.bal.pitch += addPitch;
+      rs.waist.bal.roll += addRoll;
+      rs.fallResp = {
+        on: 1, s: sE, addPitchDeg: addPitch, addRollDeg: addRoll,
+        needX, needZ, mode: rs.fall.mode,
+      };
+    } else {
+      rs.fallResp = { on: 0, s: 0, addPitchDeg: 0, addRollDeg: 0, needX: 0, needZ: 0, mode: rs.fall.mode };
+    }
 
     // ══════════════════════════════════════════════════════════════
     // ★★★★ **额状躯干姿态**（用户 2026-10-06：

@@ -1043,6 +1043,49 @@ export class RigState {
     segs: [], worstTiltDeg: 0, worstSeg: '—', rescueable: true, note: '未运行',
   };
   dcm = { x: 0, z: 0 };
+  /**
+   * ★★★★ **摔倒方向预测**（§22.19.4 第①步；`systems/fallGuard.ts` 每拍写、**纯读**）。
+   *   用户：「**想后倒的时候脚后跟是需要发更大的力的**」「需要一个**预测摔倒方向
+   *   从而在对应方向发力**的模块」。
+   *   ⇒ 本对象是那个模块的**唯一回读出口**：方向 / 紧迫度 / 象限 / 该方向的可用权限。
+   */
+  fall = {
+    ran: 0,
+    /** 支撑面有效（两侧都没着地 ⇒ false，此时其余字段不可信） */
+    valid: false,
+    /** 捕获点（XcoM）水平坐标 */
+    px: 0, pz: 0,
+    /** 支撑面边界（由实测脚中心 ± 脚半尺寸） */
+    xMin: 0, xMax: 0, zMin: 0, zMax: 0,
+    /** 四个方向的余量（m，正 = 还在支撑面内） */
+    mFront: 0, mBack: 0, mLeft: 0, mRight: 0,
+    /** 最紧的那个余量（m） */
+    margin: 0,
+    /** 紧迫度 0..1（0 = 稳；1 = 已到边界） */
+    urgency: 0,
+    /** 方向单位向量（水平面，支撑中心 → 捕获点） */
+    dirX: 0, dirZ: 0,
+    /** 方位角（度）：0 = +x（前），+90 = +z（左） */
+    dirDeg: 0,
+    /** 象限（余量最紧的方向；余量足够时 = 'center'） */
+    region: 'center' as 'front' | 'back' | 'left' | 'right' | 'center',
+    /** 该方向的**可用权限**（相对前向 = 1.0；见 `DIR_AUTHORITY`） */
+    authorityScale: 1,
+    /** 人话判读 */
+    note: '未运行',
+    /** ★★★ 三档模式（用户：「各向摔倒都要有明确的应对机制」） */
+    mode: 'normal' as 'normal' | 'warn' | 'emergency',
+    /** ★★★ 应急时**解除角色分离**（「别管承重腿摆动腿了，优先稳住身体」） */
+    roleSuspended: false,
+    /** 连续处于 emergency/warn 的拍数（滞回与回读用） */
+    emergencyTicks: 0,
+    warnTicks: 0,
+  };
+  /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
+  fallResp = {
+    on: 0, s: 0, addPitchDeg: 0, addRollDeg: 0,
+    needX: 0, needZ: 0, mode: 'normal' as 'normal' | 'warn' | 'emergency',
+  };
   support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
   mos = 0;
   grf = { x: 0, y: 0 };
