@@ -496,6 +496,12 @@ const PRIORITY: Record<SystemId, number> = { balance: 0, step: 1 };
  */
 export const LOAD_HYSTERESIS = 0.08;
 
+/** ★ 前/后腿判定的**迟滞带**（m）：3mm 死区在跌倒期会逐拍翻（门禁 0.033s<0.15s） */
+const FRONT_HYST = (() => {
+  const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FRONTHYST ?? '');
+  return Number.isFinite(v) && v > 0 ? v : 0.025;
+})();
+
 export interface RigStateConfig {
   /** 目标角变化率上限（单位：目标比例/秒）。防止抖。 */
   slewLimit: number;
@@ -1665,8 +1671,15 @@ export class RigState {
    */
   frontLeg(): Side {
     const dz = this.soleX.l - this.soleX.r;
-    if (dz > 0.003) { this.frontPrev = 'l'; return 'l'; }
-    if (dz < -0.003) { this.frontPrev = 'r'; return 'r'; }
+    // ★★★★★ 2026-10-06 **迟滞带**（门禁：最短驻留 0.033s < 0.15s 的修复）：
+    //   死区 3mm 对"静止并齐"够用，但**跌倒/踉跄期**两脚 x 会快速相互掠过
+    //   （`|Δx|` 最大 578 mm）⇒ 符号每 2 拍翻一次 ⇒ 前腿标签抖 ⇒ 下游换腿。
+    //   修法：把 3mm 死区扩成"**保持上一拍**的迟滞带"（`FRONT_HYST = 25mm`）：
+    //   只有新证据超过 25mm 才换边；带内保持 `frontPrev`。
+    //   25mm 的选取：正常步态的落脚差 ≥ 100mm（Perry 步长），25mm 不会误锁。
+    const H = FRONT_HYST;
+    if (dz > H) { this.frontPrev = 'l'; return 'l'; }
+    if (dz < -H) { this.frontPrev = 'r'; return 'r'; }
     // ★ 并齐（|Δx| ≤ 3mm）时保持**上一拍的前腿**，不再回落到 `loadBearer`。
     //   原来这里回落 `loadBearer`，而 `gaitState` 里又有
     //   `bearer = X1 && X5 ? front : …` ⇒ 两者互为对方 ⇒ **自激振荡**：

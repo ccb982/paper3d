@@ -2527,8 +2527,21 @@ if (doll && on('hipStiff')) {
     //   （先前在这里直接算 `applyUpperBorrow` 并写脊柱 ⇒ 与 step 各按各的相位借力，
     //     且脊柱的目标只在别处存在。现在脊柱的写入只有一个出口。）
     rs.waist.bal.gain = p.upBorrowK ?? 0;
-    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * (zRecv - rs.com.z), leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
+    // ★★★★★ 2026-10-06 **上身修正改由监督层驱动**（§21.11，用户：「腰一直侧向弯曲…
+    //   平衡系统对腰的修正可能出问题了」）：
+    //   旧输入是 `zRecv − com.z`（承接脚 − 重心）——**承接侧一翻转，修正就翻号**，
+    //   实测（`probe-waistlat`）`bal.roll` 在 ±8°（撞 `leanMax`）之间来回，
+    //   而 `zRecv−com.z` 从 +160 → −237 → +117 mm ⇒ **腰被来回拧**。
+    //   监督层的 `copPlan.errZ/errX = CoP_need − CoP_obs` 是**稳定量**
+    //   （正 = CoP 要往 +z/ +x 移 ⇒ 躯干往那边倾把 CoM 带过去）。
+    //   ⇒ 用 `errZ/errX`；监督层不可用时回退旧式（A/B 可测）。
+    const planW = rs.copPlan;
+    const usePlanW = !!(planW && planW.copOk);
+    const eRoll = usePlanW ? planW!.errZ : (zRecv - rs.com.z);
+    const ePitch = usePlanW ? planW!.errX : (xRecv - rs.com.x);
+    // 归一：`err` 是**米**（CoP 误差），旧式也是米 ⇒ 同一个 `kUp2`（rad/m）可复用
+    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * eRoll, leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * ePitch, leanMax);
     rs.waist.bal.pitch = cPitch / D2R;
     rs.waist.bal.roll = cRoll / D2R;
 

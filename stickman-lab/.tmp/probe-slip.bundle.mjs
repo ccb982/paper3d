@@ -17428,7 +17428,7 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, FRONT_HYST, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
@@ -17456,6 +17456,10 @@ var init_rigState = __esm({
     });
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
+    FRONT_HYST = (() => {
+      const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 0.025;
+    })();
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
       startupTicks: 30,
@@ -18299,11 +18303,12 @@ var init_rigState = __esm({
        */
       frontLeg() {
         const dz = this.soleX.l - this.soleX.r;
-        if (dz > 3e-3) {
+        const H = FRONT_HYST;
+        if (dz > H) {
           this.frontPrev = "l";
           return "l";
         }
-        if (dz < -3e-3) {
+        if (dz < -H) {
           this.frontPrev = "r";
           return "r";
         }
@@ -23553,8 +23558,12 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     const xRecv = recv === "l" ? rs2.soleX.l : rs2.soleX.r;
     const kUp2 = numOr("UPK", p.upLeanK ?? 0);
     rs2.waist.bal.gain = p.upBorrowK ?? 0;
-    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * (zRecv - rs2.com.z), leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * (xRecv - rs2.com.x), leanMax);
+    const planW = rs2.copPlan;
+    const usePlanW = !!(planW && planW.copOk);
+    const eRoll = usePlanW ? planW.errZ : zRecv - rs2.com.z;
+    const ePitch = usePlanW ? planW.errX : xRecv - rs2.com.x;
+    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * ePitch, leanMax);
     rs2.waist.bal.pitch = cPitch / D2R3;
     rs2.waist.bal.roll = cRoll / D2R3;
     if (on("fallResp") && rs2.fall.valid && rs2.fall.mode !== "normal") {
