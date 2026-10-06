@@ -147,6 +147,43 @@ if (!jq) {
         }
         if (!gc.trustable && gc.trustNote === '') bad('力链不可信却没给 trustNote');
         else if (!gc.trustable) ok(`不可信时有原因说明：「${gc.trustNote}」`);
+
+        // ── ★★ 柔性足侧向（2026-10-06）：三个量必须有限，且"能力边界"必须存在 ──
+        //   为什么值得单列：`fx/fzTan` 曾经**硬编码 0**（"GRF 方向"永远是 0.0°），
+        //   `tauMarginLat` 曾经拿 `ankleTau(0)`（一个不会动的轴）去比 ⇒ 全是幻觉。
+        //   这里钉死：① 水平力与加速度同源同号；② 支撑面边界有序；
+        //   ③ `forceChainLines` 的 11 行里**不许出现 '—'**（那是非有限值的占位符）。
+        {
+          // ★ 只钉**关键量**必须有限；单脚分率在 `copValid=false` 时**本来就该是 NaN**
+          //   （没接触就没有 CoP —— `—` 是正确显示，不是缺陷）。
+          const crit: [string, number][] = [
+            ['latMin', gc.latMin], ['latMax', gc.latMax], ['distEdgeZ', gc.distEdgeZ],
+            ['tauMarginLat', gc.tauMarginLat], ['tauMarginSag', gc.tauMarginSag],
+            ['grfX', gc.grfX], ['grfY', gc.grfY], ['grfZ', gc.grfZ], ['grfAngleDeg', gc.grfAngleDeg],
+          ];
+          const badv = crit.filter(([, v]) => !Number.isFinite(v));
+          if (badv.length === 0) ok(`力链关键量全部有限（支撑面/余量/水平力/方向，${crit.length} 项）`);
+          else bad(`力链有非有限量：${badv.map(([k]) => k).join(',')}`);
+          for (const [nm, f] of [['左', gc.l], ['右', gc.r]] as const) {
+            const v = nm === '左' ? gc.copFracLat.l : gc.copFracLat.r;
+            if (f.copValid && !Number.isFinite(v)) bad(`${nm}脚 copValid=true 但侧向分率非有限`);
+          }
+          const finiteFrac = [gc.copFracLat.l, gc.copFracLat.r].filter((v) => Number.isFinite(v));
+          ok(`侧向权限占用：${finiteFrac.map((v) => (v * 100).toFixed(0) + '%').join(' / ') || '（两脚都无接触）'}`
+            + `（无效脚显式给 —）`);
+          if (gc.latMin < gc.latMax) ok(`侧向支撑面有序：${(gc.latMin * 1000).toFixed(0)} ~ ${(gc.latMax * 1000).toFixed(0)}mm`);
+          else bad(`侧向支撑面边界异常：min ${gc.latMin} >= max ${gc.latMax}`);
+          ok(`水平地面反力 ${Math.hypot(gc.grfX, gc.grfZ).toFixed(1)}N（方向 ${gc.grfAngleDeg.toFixed(2)}°）`
+            + ' ← fx/fzTan 不再是硬编码 0');
+          // 支撑多边形口径：CoM 距边缘 = 可承受倾覆力矩 / 总法向力（两者必须自洽）
+          const fzTot = gc.l.fz + gc.r.fz;
+          if (fzTot > 15) {
+            const implied = gc.tauMarginLat / fzTot;
+            const rel = Math.abs(implied - gc.distEdgeZ) / Math.max(1e-6, Math.abs(gc.distEdgeZ));
+            if (rel < 0.02) ok(`侧向余量自洽：${(gc.distEdgeZ * 1000).toFixed(0)}mm × ${fzTot.toFixed(0)}N == ${gc.tauMarginLat.toFixed(1)}N·m`);
+            else bad(`侧向余量不自洽：distEdgeZ=${gc.distEdgeZ} vs τ/Fz=${implied}`);
+          }
+        }
       }
     }
 

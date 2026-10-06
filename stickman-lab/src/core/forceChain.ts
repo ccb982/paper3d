@@ -49,9 +49,27 @@ export function buildForceChain(
   massKg: number,
   tauMax: { sag: number; lat: number },
   footHalfLen: number,
+  /** ★ 重心水平加速度（m/s²，已低通）—— 真实水平地面反力的唯一来源 */
+  comA: { x: number; z: number } = { x: 0, z: 0 },
+  /** ★ 侧向支撑多边形（世界 z，m）：两脚鞋底包围盒的并集 */
+  support: { min: number; max: number; lMin: number; lMax: number; rMin: number; rMax: number } | null = null,
 ): ForceChain {
   const bothValid = l.copValid && r.copValid;
   const oneValid = l.copValid || r.copValid;
+
+  // ── ★ 水平地面反力：`ΣF_水平 = m·a_com`（牛顿第二定律）──
+  //   为什么不用 Rapier 的切向冲量：`contactTangentImpulseX/Y` 实测**恒 0/NaN**
+  //   （`probe-footlat` Q1：138 拍 Σ|f_t| = 0.0）⇒ 那条路已证死。
+  //   ⚠ 诚实声明：`m·a_com` 给的是**两脚合计**；按法向载荷分配到单脚是**估计**
+  //     （内力对会互相抵消：两脚对推时合计为 0，而单脚确实在发力）。
+  //     ⇒ 单脚的 `fx`/`fzTan` 当"合力分配"读，不当"接触测力"读。
+  const fzTot = l.fz + r.fz;
+  const wl = fzTot > FZ_MIN_N ? l.fz / fzTot : 0.5;
+  const wr = fzTot > FZ_MIN_N ? r.fz / fzTot : 0.5;
+  const grfX = massKg * comA.x;
+  const grfZ = massKg * comA.z;
+  l.fx = grfX * wl; r.fx = grfX * wr;
+  l.fzTan = grfZ * wl; r.fzTan = grfZ * wr;
 
   // ── 全局 CoP：按法向力加权 ──
   const wsum = (l.copValid ? l.fz : 0) + (r.copValid ? r.fz : 0);
@@ -60,9 +78,9 @@ export function buildForceChain(
   const copZ = copValid ? ((l.copValid ? l.fz * l.copZ : 0) + (r.copValid ? r.fz * r.copZ : 0)) / wsum : 0;
 
   // ── GRF 大小与方向（用户要的"力度和方向"）──
-  const grfX = l.fx + r.fx;
-  const grfY = l.fz + r.fz;
-  const grfZ = l.fzTan + r.fzTan;
+  //   ⚠ 旧代码写 `grfX = l.fx + r.fx`，而 `fx/fzTan` 当时**恒 0**（`soleForceProfile` 硬编码）
+  //     ⇒ "方向"永远是 0.0°。现在 `fx/fzTan` 由 `m·a_com` 分配而来，方向是**真的**。
+  const grfY = fzTot;
   const grfAngleDeg = grfY > 1e-6 ? (Math.atan2(Math.hypot(grfX, grfZ), grfY) * 180) / Math.PI : 0;
 
   // ── Winter 1996 的两条控制线 ──
@@ -91,7 +109,22 @@ export function buildForceChain(
   const tauReqSag = toppleSag;
   const tauReqLat = toppleLat;
   const tauMarginSag = tauMax.sag - Math.abs(tauReqSag);
-  const tauMarginLat = tauMax.lat - Math.abs(tauReqLat);
+  // ── ★★ 侧向边界 = **侧向支撑多边形**（柔性足的真实能力边界）──
+  //   `support` 给世界 z 的并集边界；CoM 投影离最近边缘还有多少 mm 才是真余量。
+  //   可承受的额外倾覆力矩 = `Fz·distEdge`（量纲 N·m，与旧口径同量纲、但**不再是幻觉**）。
+  const latMin = support ? support.min : Math.min(ankle.l.z, ankle.r.z) - 0.09;
+  const latMax = support ? support.max : Math.max(ankle.l.z, ankle.r.z) + 0.09;
+  const distEdgeZ = Math.min(com.z - latMin, latMax - com.z);   // 正 = CoM 还在支撑面内
+  const tauMarginLat = fzTot * distEdgeZ;
+  // 单脚 CoP 用了多少侧向权限（±1 = 压到鞋底边缘 ⇒ 该脚就要翻了）
+  //   ⚠ 分母必须是**该脚自己**的半宽，不是两脚并集的 —— 用并集会把"压到边缘"读小一倍。
+  const copFrac = (f: FootForce, side: Side): number => {
+    if (!support || !f.copValid) return Number.NaN;
+    const lo = side === 'l' ? support.lMin : support.rMin;
+    const hi = side === 'l' ? support.lMax : support.rMax;
+    const half = Math.max(1e-3, (hi - lo) / 2);
+    return (f.copZ - (lo + hi) / 2) / half;
+  };
 
   // ── 可信度与原因（人话，给 UI）──
   let trustNote = '';
@@ -101,6 +134,8 @@ export function buildForceChain(
     trustNote = '只有一脚读到有效载荷 ⇒ CoP 加权只用这一脚';
   } else if (Math.abs(armSag) > COP_MAX_ARM * footHalfLen * 2) {
     trustNote = 'CoP 跑到踝心外过远 ⇒ 力臂已超出足长，物理上不可达';
+  } else if (distEdgeZ < 0) {
+    trustNote = `CoM 已越出侧向支撑面 ${(distEdgeZ * 1000).toFixed(0)}mm ⇒ 侧向必然倒`;
   }
 
   return {
@@ -112,6 +147,7 @@ export function buildForceChain(
     toppleSag, toppleLat,
     tauReqSag, tauMarginSag,
     tauReqLat, tauMarginLat,
+    latMin, latMax, distEdgeZ, copFracLat: { l: copFrac(l, 'l'), r: copFrac(r, 'r') },
     trustable: copValid && trustNote === '',
     trustNote: trustNote || 'ok',
   };
@@ -134,8 +170,13 @@ export function forceChainLines(fc: ForceChain): string[] {
     `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N 方向 ${n(fc.grfAngleDeg, 1)}°`,
     `踝力臂 sag ${n(fc.armSag * 1000)}mm  lat ${n(fc.armLat * 1000)}mm`,
     `倾覆力矩 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N·m`,
-    `踝余量 sag ${n(fc.tauMarginSag, 1)} lat ${n(fc.tauMarginLat, 1)} N·m`
-      + `（负 = 必然倒）`,
+    `踝余量 sag ${n(fc.tauMarginSag, 1)} N·m（负 = 必然倒）`,
+    // ★ 侧向不写"踝余量"：踝没有额状执行器，侧向边界来自**足部几何**
+    `侧向支撑面 ${n(fc.latMin * 1000, 0)} ~ ${n(fc.latMax * 1000, 0)}mm`
+      + `　CoM 距边缘 ${n(fc.distEdgeZ * 1000, 0)}mm（负 = 已出界）`
+      + `　可承受倾覆 ${n(fc.tauMarginLat, 1)} N·m`,
+    `侧向权限占用 左 ${n(fc.copFracLat.l * 100, 0)}% 右 ${n(fc.copFracLat.r * 100, 0)}%`
+      + `（±100% = 压到鞋底边缘）`,
     `可信：${fc.trustable ? '是' : '否 — ' + fc.trustNote}`,
   ];
 }
@@ -154,5 +195,6 @@ export function buildGroundChain(src: ForceSource, rs: RigState): ForceChain {
     l, r, ankle,
     { x: rs.com.x, z: rs.com.z },
     src.massKg(), src.tauMax(), src.footLen(),
+    src.comAccel(), src.supportLat(),
   );
 }

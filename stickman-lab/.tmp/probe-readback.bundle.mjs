@@ -14235,6 +14235,12 @@ var init_ragdoll = __esm({
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
       archMotor = null;
       /**
+       * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
+       *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
+       *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。
+       */
+      archRollers = [];
+      /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
        *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
@@ -14562,6 +14568,7 @@ var init_ragdoll = __esm({
        * 球关节只有两个锚点参数，没有轴、没有限位 —— 限位和马达全在 driveMotors 里。
        */
       createJoints() {
+        this.archRollers.length = 0;
         this.joints.length = 0;
         this.hipIdx = [
           this.sk.joints.findIndex((j) => j.name === "hip_l"),
@@ -14595,6 +14602,7 @@ var init_ragdoll = __esm({
             mj.configureMotorPosition(0, K, B);
             this.motorDriven.add(i);
             this.archMotor = { K, B, joint: i };
+            this.archRollers.push({ side: j.name.endsWith("_l") ? 0 : 1, j: joint });
           }
           if (j.revoluteAxis && typeof joint.setLimits === "function") {
             const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
@@ -15758,6 +15766,43 @@ var init_ragdoll = __esm({
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
+      }
+      /**
+       * ★★★ **足部侧向发力通道**（2026-10-06，用户：「我的柔性足是支持脚的侧向发力的」）。
+       *
+       *   柔性足的侧向机构 = `arch_*` / `mfoot_*` 绕**足长轴**（axis 0）的旋前/旋后。
+       *   物理含义：roll 越大 ⇒ 内侧柱压得越实 ⇒ 压力中心（CoP）往内侧走（外侧同理）。
+       *   这就是"脚自己发侧向力"的机制 —— 不靠踝（踝 revolute 只有屈伸轴，额状轴被引擎锁死）。
+       *
+       *   ⚠ 为什么必须走这条通道、而不是 `setTorqueTargets`：
+       *     这两个关节由 **Rapier 力模式引擎电机**（隐式积分，K=400 N·m/rad）驱动，
+       *     已登记进 `motorDriven` ⇒ `driveMotors` **跳过**它们
+       *     （显式 PD 在 dt=1/120 对弓的稳定上限只有 7.3 N·m/rad，差 55 倍，见 createJoints 注释）。
+       *     ⇒ 自研力矩通道到不了它们；只能写引擎电机的**目标角**。
+       *
+       *   @param side 0 = 左 (`*_l`)、1 = 右 (`*_r`)
+       *   @param rad  目标角（rad）。正 = **旋前**（内侧弓下沉）；限位见 `cfg.archLimitDeg`
+       *   @returns 实际写入的关节数（0 = 该侧没有弓关节 ⇒ 调用方可据此报"通道不存在"）
+       */
+      setArchRoll(side, rad) {
+        const k = this.opt.archStiffness ?? 400;
+        const b = this.opt.archDamping ?? 2;
+        let n = 0;
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          a.j.configureMotorPosition(rad, k, b);
+          n++;
+        }
+        return n;
+      }
+      /** 弓/内侧前足关节（引擎电机驱动）的**当前目标角**回读（rad）。−1 侧无弓 ⇒ NaN */
+      archRollTarget(side) {
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          const t = a.j.motorPositionTarget?.();
+          return typeof t === "number" ? t : Number.NaN;
+        }
+        return Number.NaN;
       }
       /**
        * ══════════════════════════════════════════════════════════════
@@ -17224,6 +17269,7 @@ var init_rigState = __esm({
         wait: "0.00s",
         blocked: "\u65E0",
         legPlan: "\u2014",
+        balanceTarget: "\u2014",
         roleRecv: "l",
         roleSup: "l",
         roleRecvFree: "locked",
@@ -17296,6 +17342,10 @@ var init_rigState = __esm({
       // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
       /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
       comAz = 0;
+      /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
+      comAx = 0;
+      /** 上一拍的 vx（算 comAx 用） */
+      vxPrev2 = 0;
       /** 上一拍的 vz（算 comAz 用） */
       vzPrev = 0;
       /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
@@ -17610,6 +17660,9 @@ var init_rigState = __esm({
         const raw = (this.com.vz - this.vzPrev) / dtPhys;
         this.vzPrev = this.com.vz;
         this.comAz = this.comAz * 0.75 + raw * 0.25;
+        const rawX = (this.com.vx - this.vxPrev2) / dtPhys;
+        this.vxPrev2 = this.com.vx;
+        this.comAx = this.comAx * 0.75 + rawX * 0.25;
       }
       swingLeg() {
         return this.roleSw ?? (this.supportLeg() === "l" ? "r" : "l");
@@ -18389,16 +18442,23 @@ var init_jointQuery = __esm({
 });
 
 // src/core/forceChain.ts
-function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
+function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen, comA = { x: 0, z: 0 }, support = null) {
   const bothValid = l.copValid && r.copValid;
   const oneValid = l.copValid || r.copValid;
+  const fzTot = l.fz + r.fz;
+  const wl = fzTot > FZ_MIN_N ? l.fz / fzTot : 0.5;
+  const wr = fzTot > FZ_MIN_N ? r.fz / fzTot : 0.5;
+  const grfX = massKg * comA.x;
+  const grfZ = massKg * comA.z;
+  l.fx = grfX * wl;
+  r.fx = grfX * wr;
+  l.fzTan = grfZ * wl;
+  r.fzTan = grfZ * wr;
   const wsum = (l.copValid ? l.fz : 0) + (r.copValid ? r.fz : 0);
   const copValid = wsum > FZ_MIN_N;
   const copX = copValid ? ((l.copValid ? l.fz * l.copX : 0) + (r.copValid ? r.fz * r.copX : 0)) / wsum : 0;
   const copZ = copValid ? ((l.copValid ? l.fz * l.copZ : 0) + (r.copValid ? r.fz * r.copZ : 0)) / wsum : 0;
-  const grfX = l.fx + r.fx;
-  const grfY = l.fz + r.fz;
-  const grfZ = l.fzTan + r.fzTan;
+  const grfY = fzTot;
   const grfAngleDeg = grfY > 1e-6 ? Math.atan2(Math.hypot(grfX, grfZ), grfY) * 180 / Math.PI : 0;
   let luX0 = l.copValid ? l.copX : ankle.l.x;
   let luZ0 = l.copValid ? l.copZ : ankle.l.z;
@@ -18424,7 +18484,17 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
   const tauReqSag = toppleSag;
   const tauReqLat = toppleLat;
   const tauMarginSag = tauMax.sag - Math.abs(tauReqSag);
-  const tauMarginLat = tauMax.lat - Math.abs(tauReqLat);
+  const latMin = support ? support.min : Math.min(ankle.l.z, ankle.r.z) - 0.09;
+  const latMax = support ? support.max : Math.max(ankle.l.z, ankle.r.z) + 0.09;
+  const distEdgeZ = Math.min(com.z - latMin, latMax - com.z);
+  const tauMarginLat = fzTot * distEdgeZ;
+  const copFrac = (f, side) => {
+    if (!support || !f.copValid) return Number.NaN;
+    const lo = side === "l" ? support.lMin : support.rMin;
+    const hi = side === "l" ? support.lMax : support.rMax;
+    const half = Math.max(1e-3, (hi - lo) / 2);
+    return (f.copZ - (lo + hi) / 2) / half;
+  };
   let trustNote = "";
   if (!oneValid) {
     trustNote = "\u4E24\u811A\u90FD\u8BFB\u4E0D\u5230\u6709\u6548\u8F7D\u8377 \u21D2 \u529B\u94FE\u4E0D\u53EF\u4FE1\uFF08\u68C0\u67E5\u63A5\u89E6\u51B2\u91CF\uFF09";
@@ -18432,6 +18502,8 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
     trustNote = "\u53EA\u6709\u4E00\u811A\u8BFB\u5230\u6709\u6548\u8F7D\u8377 \u21D2 CoP \u52A0\u6743\u53EA\u7528\u8FD9\u4E00\u811A";
   } else if (Math.abs(armSag) > COP_MAX_ARM * footHalfLen * 2) {
     trustNote = "CoP \u8DD1\u5230\u8E1D\u5FC3\u5916\u8FC7\u8FDC \u21D2 \u529B\u81C2\u5DF2\u8D85\u51FA\u8DB3\u957F\uFF0C\u7269\u7406\u4E0A\u4E0D\u53EF\u8FBE";
+  } else if (distEdgeZ < 0) {
+    trustNote = `CoM \u5DF2\u8D8A\u51FA\u4FA7\u5411\u652F\u6491\u9762 ${(distEdgeZ * 1e3).toFixed(0)}mm \u21D2 \u4FA7\u5411\u5FC5\u7136\u5012`;
   }
   return {
     l,
@@ -18452,6 +18524,10 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
     tauMarginSag,
     tauReqLat,
     tauMarginLat,
+    latMin,
+    latMax,
+    distEdgeZ,
+    copFracLat: { l: copFrac(l, "l"), r: copFrac(r, "r") },
     trustable: copValid && trustNote === "",
     trustNote: trustNote || "ok"
   };
@@ -18468,7 +18544,10 @@ function forceChainLines(fc) {
     `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N \u65B9\u5411 ${n(fc.grfAngleDeg, 1)}\xB0`,
     `\u8E1D\u529B\u81C2 sag ${n(fc.armSag * 1e3)}mm  lat ${n(fc.armLat * 1e3)}mm`,
     `\u503E\u8986\u529B\u77E9 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N\xB7m`,
-    `\u8E1D\u4F59\u91CF sag ${n(fc.tauMarginSag, 1)} lat ${n(fc.tauMarginLat, 1)} N\xB7m\uFF08\u8D1F = \u5FC5\u7136\u5012\uFF09`,
+    `\u8E1D\u4F59\u91CF sag ${n(fc.tauMarginSag, 1)} N\xB7m\uFF08\u8D1F = \u5FC5\u7136\u5012\uFF09`,
+    // ★ 侧向不写"踝余量"：踝没有额状执行器，侧向边界来自**足部几何**
+    `\u4FA7\u5411\u652F\u6491\u9762 ${n(fc.latMin * 1e3, 0)} ~ ${n(fc.latMax * 1e3, 0)}mm\u3000CoM \u8DDD\u8FB9\u7F18 ${n(fc.distEdgeZ * 1e3, 0)}mm\uFF08\u8D1F = \u5DF2\u51FA\u754C\uFF09\u3000\u53EF\u627F\u53D7\u503E\u8986 ${n(fc.tauMarginLat, 1)} N\xB7m`,
+    `\u4FA7\u5411\u6743\u9650\u5360\u7528 \u5DE6 ${n(fc.copFracLat.l * 100, 0)}% \u53F3 ${n(fc.copFracLat.r * 100, 0)}%\uFF08\xB1100% = \u538B\u5230\u978B\u5E95\u8FB9\u7F18\uFF09`,
     `\u53EF\u4FE1\uFF1A${fc.trustable ? "\u662F" : "\u5426 \u2014 " + fc.trustNote}`
   ];
 }
@@ -18483,7 +18562,9 @@ function buildGroundChain(src, rs) {
     { x: rs.com.x, z: rs.com.z },
     src.massKg(),
     src.tauMax(),
-    src.footLen()
+    src.footLen(),
+    src.comAccel(),
+    src.supportLat()
   );
 }
 var FZ_MIN_N, COP_MAX_ARM;
@@ -18524,7 +18605,7 @@ function checkDomains(rs, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18691,6 +18772,44 @@ var init_gaitState = __esm({
         rear: "free",
         note: "\u6446\u52A8\u843D\u5730\uFF1A\u540E\u817F\u81EA\u7531\uFF0C\u89E6\u5730\u5373\u9501",
         ref: "Perry `MidSwing\u2192TerminalSwing`\uFF1B\u89E6\u5730\u5373\u9501 \u21D2 \u4E0E DOUBLE \u7684\u58F0\u660E\u8854\u63A5"
+      }
+    });
+    STATE_BALANCE_TARGET = Object.freeze({
+      DOUBLE: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u7A33\u4F4F\u627F\u91CD\u817F\uFF1BCoM \u6536\u5728\u53CC\u811A\u652F\u6301\u591A\u8FB9\u5F62\u5185\u3002\u4E0D\u642C\u91CD\u91CF\u3001\u4E0D\u78B0\u6446\u52A8\u817F"
+      },
+      LOAD: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u4E24\u811A\u90FD\u5728\u5730\u65F6\u7EF4\u6301\u4E0D\u5012\uFF1B\u5BF9\u8FC8\u6B65\u7CFB\u7EDF\u7684\u642C\u8FD0**\u9650\u5E45**\uFF08\u4E0D\u5F97\u592A\u8FC7\uFF09"
+      },
+      PUSH: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "none",
+        note: "\u5C11\u505A\uFF08\u88AB\u52A8\u62F1\u67B6\uFF1AGRF \u8FC7\u8E1D\u3001\u529B\u81C2\u22480\uFF09\u21D2 \u53EA\u7EF4\u6301\u7A33\u5B9A\uFF0C\u4E0D\u63A8\u8FDB"
+      },
+      THRUST: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "forward",
+        note: "\u4E3B\u52A8\uFF1A\u627F\u91CD\u817F\u8E1D\u8DD6\u5C48\u4EA7\u529B\u77E9\u3001CoP \u524D\u79FB\u5230\u524D\u811A\u638C"
+      },
+      LIFT: {
+        drive: "bearer",
+        mayClampTransfer: false,
+        cop: "hold",
+        note: "\u5355\u817F\u5E73\u8861\u5168\u6743\uFF1A\u4FA7\u5411\u53D1\u529B\u628A CoM \u63A7\u5728\u627F\u91CD\u811A\u652F\u6301\u9762\u5185"
+      },
+      SWING: {
+        drive: "bearer",
+        mayClampTransfer: true,
+        cop: "hold",
+        note: "\u5355\u817F\u5E73\u8861 + \u5BF9\u843D\u5730\u524D\u7684\u8FC7\u51B2**\u9650\u5E45**"
       }
     });
     STATE_ROLES = Object.freeze({
@@ -19491,6 +19610,11 @@ var init_gaitState = __esm({
             roleSup: sup2,
             roleRecvFree: STATE_LEGS[rs.state].front,
             roleRearFree: STATE_LEGS[rs.state].rear,
+            // ★ 本态的平衡目标（状态机给平衡系统的契约；UI 只渲染）
+            balanceTarget: (() => {
+              const bt = STATE_BALANCE_TARGET[rs.state];
+              return `${bt.note}${bt.mayClampTransfer ? "\u3000[\u53EF\u9650\u5E45\u642C\u8FD0]" : ""}`;
+            })(),
             next: STATE_LABEL[NEXT_STATE[rs.state]],
             wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
             blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
@@ -22798,6 +22922,7 @@ var init_controller = __esm({
         const footBody = sk2.bodies.find((b) => b.key === "foot_l");
         const fc = footBody?.colliders.find((c) => c.shape === "cuboid");
         const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
+        const bbL = new Float64Array(4), bbR = new Float64Array(4);
         const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
         this.rs.forceSrc = {
           sole: (side) => {
@@ -22811,8 +22936,24 @@ var init_controller = __esm({
             return { x: tmp[0], z: tmp[2] };
           },
           massKg: () => massKg,
-          tauMax: () => ({ sag: ankleTau(2), lat: ankleTau(0) }),
-          footLen: () => footLen
+          // ⚠ 额状给 **0**，不是 `ankleTau(0)`：踝是 revolute [0,0,1]，轴 0 不会动
+          //   ⇒ `ankleTau(0)` 只是骨架表里的一个死数（72 N·m），背后没有执行器。
+          //   侧向能力由 `supportLat()`（足部几何）表达，力链已改用那个口径。
+          tauMax: () => ({ sag: ankleTau(2), lat: 0 }),
+          footLen: () => footLen,
+          comAccel: () => ({ x: this.rs.comAx, z: this.rs.comAz }),
+          supportLat: () => {
+            doll.footSoleBounds(0, bbL);
+            doll.footSoleBounds(1, bbR);
+            return {
+              min: Math.min(bbL[2], bbR[2]),
+              max: Math.max(bbL[3], bbR[3]),
+              lMin: bbL[2],
+              lMax: bbL[3],
+              rMin: bbR[2],
+              rMax: bbR[3]
+            };
+          }
         };
       }
       get summary() {
@@ -23085,6 +23226,38 @@ if (!jq) {
         }
         if (!gc.trustable && gc.trustNote === "") bad("\u529B\u94FE\u4E0D\u53EF\u4FE1\u5374\u6CA1\u7ED9 trustNote");
         else if (!gc.trustable) ok(`\u4E0D\u53EF\u4FE1\u65F6\u6709\u539F\u56E0\u8BF4\u660E\uFF1A\u300C${gc.trustNote}\u300D`);
+        {
+          const crit = [
+            ["latMin", gc.latMin],
+            ["latMax", gc.latMax],
+            ["distEdgeZ", gc.distEdgeZ],
+            ["tauMarginLat", gc.tauMarginLat],
+            ["tauMarginSag", gc.tauMarginSag],
+            ["grfX", gc.grfX],
+            ["grfY", gc.grfY],
+            ["grfZ", gc.grfZ],
+            ["grfAngleDeg", gc.grfAngleDeg]
+          ];
+          const badv = crit.filter(([, v]) => !Number.isFinite(v));
+          if (badv.length === 0) ok(`\u529B\u94FE\u5173\u952E\u91CF\u5168\u90E8\u6709\u9650\uFF08\u652F\u6491\u9762/\u4F59\u91CF/\u6C34\u5E73\u529B/\u65B9\u5411\uFF0C${crit.length} \u9879\uFF09`);
+          else bad(`\u529B\u94FE\u6709\u975E\u6709\u9650\u91CF\uFF1A${badv.map(([k]) => k).join(",")}`);
+          for (const [nm, f] of [["\u5DE6", gc.l], ["\u53F3", gc.r]]) {
+            const v = nm === "\u5DE6" ? gc.copFracLat.l : gc.copFracLat.r;
+            if (f.copValid && !Number.isFinite(v)) bad(`${nm}\u811A copValid=true \u4F46\u4FA7\u5411\u5206\u7387\u975E\u6709\u9650`);
+          }
+          const finiteFrac = [gc.copFracLat.l, gc.copFracLat.r].filter((v) => Number.isFinite(v));
+          ok(`\u4FA7\u5411\u6743\u9650\u5360\u7528\uFF1A${finiteFrac.map((v) => (v * 100).toFixed(0) + "%").join(" / ") || "\uFF08\u4E24\u811A\u90FD\u65E0\u63A5\u89E6\uFF09"}\uFF08\u65E0\u6548\u811A\u663E\u5F0F\u7ED9 \u2014\uFF09`);
+          if (gc.latMin < gc.latMax) ok(`\u4FA7\u5411\u652F\u6491\u9762\u6709\u5E8F\uFF1A${(gc.latMin * 1e3).toFixed(0)} ~ ${(gc.latMax * 1e3).toFixed(0)}mm`);
+          else bad(`\u4FA7\u5411\u652F\u6491\u9762\u8FB9\u754C\u5F02\u5E38\uFF1Amin ${gc.latMin} >= max ${gc.latMax}`);
+          ok(`\u6C34\u5E73\u5730\u9762\u53CD\u529B ${Math.hypot(gc.grfX, gc.grfZ).toFixed(1)}N\uFF08\u65B9\u5411 ${gc.grfAngleDeg.toFixed(2)}\xB0\uFF09 \u2190 fx/fzTan \u4E0D\u518D\u662F\u786C\u7F16\u7801 0`);
+          const fzTot = gc.l.fz + gc.r.fz;
+          if (fzTot > 15) {
+            const implied = gc.tauMarginLat / fzTot;
+            const rel = Math.abs(implied - gc.distEdgeZ) / Math.max(1e-6, Math.abs(gc.distEdgeZ));
+            if (rel < 0.02) ok(`\u4FA7\u5411\u4F59\u91CF\u81EA\u6D3D\uFF1A${(gc.distEdgeZ * 1e3).toFixed(0)}mm \xD7 ${fzTot.toFixed(0)}N == ${gc.tauMarginLat.toFixed(1)}N\xB7m`);
+            else bad(`\u4FA7\u5411\u4F59\u91CF\u4E0D\u81EA\u6D3D\uFF1AdistEdgeZ=${gc.distEdgeZ} vs \u03C4/Fz=${implied}`);
+          }
+        }
       }
     }
     if (jq) {

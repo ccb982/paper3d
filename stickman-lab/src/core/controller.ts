@@ -105,6 +105,8 @@ export class Controller {
     const footBody = sk.bodies.find((b) => b.key === 'foot_l');
     const fc = footBody?.colliders.find((c) => c.shape === 'cuboid');
     const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
+    // ★ 侧向支撑多边形用的复用缓冲（`footSoleBounds` 写入 [xmin,xmax,zmin,zmax]）
+    const bbL = new Float64Array(4), bbR = new Float64Array(4);
 
     // ⚠ `soleForceProfile` 里的 `contactImpulse` 是**上一个物理步**的冲量
     //   （物理 120Hz，控制 60Hz）⇒ 必须按**物理步长**换算成力，
@@ -123,8 +125,20 @@ export class Controller {
         return { x: tmp[0]!, z: tmp[2]! };
       },
       massKg: () => massKg,
-      tauMax: () => ({ sag: ankleTau(2), lat: ankleTau(0) }),
+      // ⚠ 额状给 **0**，不是 `ankleTau(0)`：踝是 revolute [0,0,1]，轴 0 不会动
+      //   ⇒ `ankleTau(0)` 只是骨架表里的一个死数（72 N·m），背后没有执行器。
+      //   侧向能力由 `supportLat()`（足部几何）表达，力链已改用那个口径。
+      tauMax: () => ({ sag: ankleTau(2), lat: 0 }),
       footLen: () => footLen,
+      comAccel: () => ({ x: this.rs.comAx, z: this.rs.comAz }),
+      supportLat: () => {
+        doll.footSoleBounds(0, bbL);
+        doll.footSoleBounds(1, bbR);
+        return {
+          min: Math.min(bbL[2]!, bbR[2]!), max: Math.max(bbL[3]!, bbR[3]!),
+          lMin: bbL[2]!, lMax: bbL[3]!, rMin: bbR[2]!, rMax: bbR[3]!,
+        };
+      },
     };
   }
 

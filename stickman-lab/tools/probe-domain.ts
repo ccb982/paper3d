@@ -54,6 +54,11 @@ const SECS = Number(process.env.PD_SECS ?? 12);
 
 interface Trace {
   state: WalkState;
+  /** ★ 本拍 balance 提出的关节修正（`轴:度`）——「先回读平衡系统的修正情况」 */
+  bfix: string;
+  bfixN: number;
+  /** τ 余量 sag/lat（N·m；<0 = 该方向必然倒） */
+  bfixMargin: string;
   verified: boolean;
   safe: boolean;
   nViol: number;
@@ -148,6 +153,10 @@ function run(
         kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
         ankleRecv: rs.jq ? -rs.jq.angleDeg(`foot_${rs.roleRecv ?? rs.frontLeg()}`, 2) : 0,
         recvLoad: rs.loadFrac[rs.roleRecv ?? rs.frontLeg()],
+        bfix: rs.balanceFix.axes
+          .map((a) => `${a.axis}:${((a.dTheta * 180) / Math.PI).toFixed(1)}`).join(' '),
+        bfixN: rs.balanceFix.axes.length,
+        bfixMargin: `${rs.balanceFix.tauMarginSag.toFixed(0)}/${rs.balanceFix.tauMarginLat.toFixed(0)}`,
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount, clearance: rs.swingClearance,
       });
@@ -233,6 +242,30 @@ log(`══ A–B. 迁移只发生在验收通过时（${SECS}s）══`);
       + `${t.ankleRecv.toFixed(2).padStart(7)} ${t.kneeRecv.toFixed(2).padStart(7)}`
       + ` ${t.recvLoad.toFixed(3).padStart(6)}  ${d.toFixed(2).padStart(7)}   ${v}`);
   }
+  // ── ★★ 平衡系统修正回读（用户 2026-10-06：「先回读一下平衡系统的修正情况」）──
+  log('');
+  log('  平衡系统修正逐拍（前 40 拍 = DOUBLE/LOAD 段）：state 条数 τ余量sag/lat  修正(轴:度)');
+  for (const t of r.trace.slice(0, 40)) {
+    log(`    ${String(r.trace.indexOf(t)).padStart(3)}  ${t.state.padEnd(7)} ${String(t.bfixN).padStart(2)}`
+      + `  ${t.bfixMargin.padStart(9)}  ${t.bfix || '（无修正）'}`);
+  }
+  // 逐态汇总：每个态平均提出几条修正
+  {
+    const per = new Map<string, { n: number; k: number; hit: number }>();
+    for (const t of r.trace) {
+      const e = per.get(t.state) ?? { n: 0, k: 0, hit: 0 };
+      e.n++; e.k += t.bfixN; if (t.bfixN > 0) e.hit++;
+      per.set(t.state, e);
+    }
+    log('');
+    log('  平衡修正汇总（逐态）：态      拍数  有修正占比  平均条数');
+    for (const [st, e] of per) {
+      log(`    ${st.padEnd(8)} ${String(e.n).padStart(4)}`
+        + `  ${((100 * e.hit) / e.n).toFixed(0).padStart(7)}%`
+        + `  ${(e.k / e.n).toFixed(2).padStart(8)}`);
+    }
+  }
+
   log('');
   log('  跌倒前 14 拍逐拍回读：');
   for (const t of r.trace.slice(-14)) {

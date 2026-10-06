@@ -632,6 +632,12 @@ export class Ragdoll {
   /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
   archMotor: { K: number; B: number; joint: number } | null = null;
   /**
+   * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
+   *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
+   *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。
+   */
+  private readonly archRollers: { side: 0 | 1; j: unknown }[] = [];
+  /**
    * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
    * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
    *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
@@ -1140,6 +1146,10 @@ export class Ragdoll {
    * 球关节只有两个锚点参数，没有轴、没有限位 —— 限位和马达全在 driveMotors 里。
    */
   private createJoints(): void {
+    // ★ `reset()` 在 `purgeJointCache` 时会**删掉全部关节再重建**（清暖启动冲量缓存）
+    //   ⇒ 这里必须**先清空**，否则 `archRollers` 里会留下陈旧句柄、
+    //   对它调 `configureMotorPosition` 会让 Rapier wasm **panic**（实测 unreachable）。
+    this.archRollers.length = 0;
     this.joints.length = 0;
     // 预先记下左右髋在 joints 里的下标（hipPoint 每帧都要用，别每帧 findIndex）
     this.hipIdx = [
@@ -1212,6 +1222,8 @@ export class Ragdoll {
         //   用两种驱动方式会让链路一半可控一半不可控。
         this.motorDriven.add(i);
         this.archMotor = { K, B, joint: i };
+        // ★ 记下引擎关节句柄 ⇒ `setArchRoll` 能写它的**目标角**（见该方法注释）
+        this.archRollers.push({ side: j.name.endsWith('_l') ? 0 : 1, j: joint });
       }
       if (j.revoluteAxis && typeof (joint as { setLimits?: unknown }).setLimits === 'function') {
         // revolute 的限位取**与 revoluteAxis 对应的那一轴**（踝 = 轴2，中足 = 轴0）
@@ -2438,6 +2450,46 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
   setTorqueTargets(taus: Float32Array): void {
     const n = Math.min(this.torqueCmd.length, taus.length);
     for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i]!;
+  }
+
+  /**
+   * ★★★ **足部侧向发力通道**（2026-10-06，用户：「我的柔性足是支持脚的侧向发力的」）。
+   *
+   *   柔性足的侧向机构 = `arch_*` / `mfoot_*` 绕**足长轴**（axis 0）的旋前/旋后。
+   *   物理含义：roll 越大 ⇒ 内侧柱压得越实 ⇒ 压力中心（CoP）往内侧走（外侧同理）。
+   *   这就是"脚自己发侧向力"的机制 —— 不靠踝（踝 revolute 只有屈伸轴，额状轴被引擎锁死）。
+   *
+   *   ⚠ 为什么必须走这条通道、而不是 `setTorqueTargets`：
+   *     这两个关节由 **Rapier 力模式引擎电机**（隐式积分，K=400 N·m/rad）驱动，
+   *     已登记进 `motorDriven` ⇒ `driveMotors` **跳过**它们
+   *     （显式 PD 在 dt=1/120 对弓的稳定上限只有 7.3 N·m/rad，差 55 倍，见 createJoints 注释）。
+   *     ⇒ 自研力矩通道到不了它们；只能写引擎电机的**目标角**。
+   *
+   *   @param side 0 = 左 (`*_l`)、1 = 右 (`*_r`)
+   *   @param rad  目标角（rad）。正 = **旋前**（内侧弓下沉）；限位见 `cfg.archLimitDeg`
+   *   @returns 实际写入的关节数（0 = 该侧没有弓关节 ⇒ 调用方可据此报"通道不存在"）
+   */
+  setArchRoll(side: 0 | 1, rad: number): number {
+    const k = this.opt.archStiffness ?? 400;
+    const b = this.opt.archDamping ?? 2.0;
+    let n = 0;
+    for (const a of this.archRollers) {
+      if (a.side !== side) continue;
+      (a.j as { configureMotorPosition(t: number, k: number, b: number): void })
+        .configureMotorPosition(rad, k, b);
+      n++;
+    }
+    return n;
+  }
+
+  /** 弓/内侧前足关节（引擎电机驱动）的**当前目标角**回读（rad）。−1 侧无弓 ⇒ NaN */
+  archRollTarget(side: 0 | 1): number {
+    for (const a of this.archRollers) {
+      if (a.side !== side) continue;
+      const t = (a.j as { motorPositionTarget?: () => number }).motorPositionTarget?.();
+      return typeof t === 'number' ? t : Number.NaN;
+    }
+    return Number.NaN;
   }
 
   /**

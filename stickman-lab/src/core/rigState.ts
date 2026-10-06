@@ -47,6 +47,25 @@ export interface ForceSource {
   tauMax(): { sag: number; lat: number };
   /** 足长（m，CoP 合理性检查用） */
   footLen(): number;
+  /**
+   * ★ 重心的**水平加速度**（m/s²，已低通；x = 矢状，z = 额状）。
+   *   用途：`m·a_com = ΣF_水平`（牛顿第二定律）⇒ 这是**唯一**能拿到真实水平地面
+   *   反力的路子。Rapier 的 `contactTangentImpulseX/Y` 实测**恒 0/NaN**
+   *   （`probe-footlat` Q1：138 拍 Σ|f_t| = 0.0）⇒ 切向冲量路线已证死。
+   */
+  comAccel(): { x: number; z: number };
+  /**
+   * ★★ **侧向支撑多边形**（世界 z，m）：两只脚鞋底包围盒的并集。
+   *   这是柔性足侧向能力的**真边界** —— CoM 投影越出它才真的会倒。
+   *   （旧实现拿 `tauMax.lat = ankleTau(0)` 去比倾覆力矩是**幻觉**：
+   *     踝是 revolute [0,0,1]，轴 0 根本不会动，那个 τmax 背后没有执行器。）
+   */
+  supportLat(): {
+    /** 两脚并集（侧向支撑多边形总边界） */
+    min: number; max: number;
+    /** 左/右脚各自的鞋底 z 边界（单脚 CoP 权限占用要用自己的半宽） */
+    lMin: number; lMax: number; rMin: number; rMax: number;
+  };
 }
 
 /**
@@ -152,6 +171,16 @@ export interface ForceChain {
   tauReqSag: number; tauReqLat: number;
   /** 踝余量（N·m；**负 = 必然倒**） */
   tauMarginSag: number; tauMarginLat: number;
+  // ── ★★ 侧向边界（柔性足的真实能力，2026-10-06）──
+  //   踝是 revolute [0,0,1] ⇒ **没有额状执行器**；侧向能力来自**足部几何**：
+  //   鞋底包围盒的并集就是支撑多边形，CoM 投影越出它才真的会倒。
+  //   旧口径 `tauMax.lat = ankleTau(0)` 是幻觉（那个轴不会动）。
+  /** 侧向支撑多边形（世界 z，m） */
+  latMin: number; latMax: number;
+  /** CoM 投影到最近侧向边缘的距离（m；**负 = 已出界 ⇒ 必然倒**） */
+  distEdgeZ: number;
+  /** 单脚 CoP 对侧向权限的占用（±1 = 压到鞋底边缘） */
+  copFracLat: { l: number; r: number };
   /** L0 是否可信 */
   trustable: boolean;
   /** 不可信的原因（人话，直接给 UI） */
@@ -889,6 +918,10 @@ export class RigState {
   // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
   /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
   comAz = 0;
+  /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
+  comAx = 0;
+  /** 上一拍的 vx（算 comAx 用） */
+  vxPrev2 = 0;
   /** 上一拍的 vz（算 comAz 用） */
   private vzPrev = 0;
   /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
@@ -1210,6 +1243,11 @@ export class RigState {
     this.vzPrev = this.com.vz;
     // 一阶低通（τ≈50 ms）：捕获点律对加速度噪声很敏感，未滤波会自激
     this.comAz = this.comAz * 0.75 + raw * 0.25;
+    // ★ 矢状同法（力链的 `fx` 要用；两轴必须**同一套**差分与低通，
+    //   否则力链的水平合力与合方向会自相矛盾）
+    const rawX = (this.com.vx - this.vxPrev2) / dtPhys;
+    this.vxPrev2 = this.com.vx;
+    this.comAx = this.comAx * 0.75 + rawX * 0.25;
   }
   swingLeg(): Side {
     // ★ 摆动腿同样由状态机显式决定（与 `supportLeg` 互补）

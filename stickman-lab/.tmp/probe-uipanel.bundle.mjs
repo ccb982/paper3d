@@ -14235,6 +14235,12 @@ var init_ragdoll = __esm({
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
       archMotor = null;
       /**
+       * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
+       *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
+       *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。
+       */
+      archRollers = [];
+      /**
        * 关节 i 的等效惯量（单位冲量造成的相对角速度变化 = 1/Ieff），构造时算一次。
        * ★ 3D 版取两个刚体**三个主惯量的最小值**再合成 —— 偏保守。
        *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
@@ -14562,6 +14568,7 @@ var init_ragdoll = __esm({
        * 球关节只有两个锚点参数，没有轴、没有限位 —— 限位和马达全在 driveMotors 里。
        */
       createJoints() {
+        this.archRollers.length = 0;
         this.joints.length = 0;
         this.hipIdx = [
           this.sk.joints.findIndex((j) => j.name === "hip_l"),
@@ -14595,6 +14602,7 @@ var init_ragdoll = __esm({
             mj.configureMotorPosition(0, K, B);
             this.motorDriven.add(i);
             this.archMotor = { K, B, joint: i };
+            this.archRollers.push({ side: j.name.endsWith("_l") ? 0 : 1, j: joint });
           }
           if (j.revoluteAxis && typeof joint.setLimits === "function") {
             const ax = j.revoluteAxis[0] !== 0 ? 0 : j.revoluteAxis[1] !== 0 ? 1 : 2;
@@ -15758,6 +15766,43 @@ var init_ragdoll = __esm({
       setTorqueTargets(taus) {
         const n = Math.min(this.torqueCmd.length, taus.length);
         for (let i = 0; i < n; i++) this.torqueCmd[i] = taus[i];
+      }
+      /**
+       * ★★★ **足部侧向发力通道**（2026-10-06，用户：「我的柔性足是支持脚的侧向发力的」）。
+       *
+       *   柔性足的侧向机构 = `arch_*` / `mfoot_*` 绕**足长轴**（axis 0）的旋前/旋后。
+       *   物理含义：roll 越大 ⇒ 内侧柱压得越实 ⇒ 压力中心（CoP）往内侧走（外侧同理）。
+       *   这就是"脚自己发侧向力"的机制 —— 不靠踝（踝 revolute 只有屈伸轴，额状轴被引擎锁死）。
+       *
+       *   ⚠ 为什么必须走这条通道、而不是 `setTorqueTargets`：
+       *     这两个关节由 **Rapier 力模式引擎电机**（隐式积分，K=400 N·m/rad）驱动，
+       *     已登记进 `motorDriven` ⇒ `driveMotors` **跳过**它们
+       *     （显式 PD 在 dt=1/120 对弓的稳定上限只有 7.3 N·m/rad，差 55 倍，见 createJoints 注释）。
+       *     ⇒ 自研力矩通道到不了它们；只能写引擎电机的**目标角**。
+       *
+       *   @param side 0 = 左 (`*_l`)、1 = 右 (`*_r`)
+       *   @param rad  目标角（rad）。正 = **旋前**（内侧弓下沉）；限位见 `cfg.archLimitDeg`
+       *   @returns 实际写入的关节数（0 = 该侧没有弓关节 ⇒ 调用方可据此报"通道不存在"）
+       */
+      setArchRoll(side, rad) {
+        const k = this.opt.archStiffness ?? 400;
+        const b = this.opt.archDamping ?? 2;
+        let n = 0;
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          a.j.configureMotorPosition(rad, k, b);
+          n++;
+        }
+        return n;
+      }
+      /** 弓/内侧前足关节（引擎电机驱动）的**当前目标角**回读（rad）。−1 侧无弓 ⇒ NaN */
+      archRollTarget(side) {
+        for (const a of this.archRollers) {
+          if (a.side !== side) continue;
+          const t = a.j.motorPositionTarget?.();
+          return typeof t === "number" ? t : Number.NaN;
+        }
+        return Number.NaN;
       }
       /**
        * ══════════════════════════════════════════════════════════════
@@ -17297,6 +17342,10 @@ var init_rigState = __esm({
       // ── 倒立摆 / 力层量（Houska balance point 用）────────────────────
       /** CoM 横向加速度（m/s²，由 vz 有限差分）。`F_y = m(z_c·a_des − x_c·a)` 要用 */
       comAz = 0;
+      /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
+      comAx = 0;
+      /** 上一拍的 vx（算 comAx 用） */
+      vxPrev2 = 0;
       /** 上一拍的 vz（算 comAz 用） */
       vzPrev = 0;
       /** 摆动腿脚底 z（支撑腿的镜像；预判用） */
@@ -17611,6 +17660,9 @@ var init_rigState = __esm({
         const raw = (this.com.vz - this.vzPrev) / dtPhys;
         this.vzPrev = this.com.vz;
         this.comAz = this.comAz * 0.75 + raw * 0.25;
+        const rawX = (this.com.vx - this.vxPrev2) / dtPhys;
+        this.vxPrev2 = this.com.vx;
+        this.comAx = this.comAx * 0.75 + rawX * 0.25;
       }
       swingLeg() {
         return this.roleSw ?? (this.supportLeg() === "l" ? "r" : "l");
@@ -18390,16 +18442,23 @@ var init_jointQuery = __esm({
 });
 
 // src/core/forceChain.ts
-function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
+function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen, comA = { x: 0, z: 0 }, support = null) {
   const bothValid = l.copValid && r.copValid;
   const oneValid = l.copValid || r.copValid;
+  const fzTot = l.fz + r.fz;
+  const wl = fzTot > FZ_MIN_N ? l.fz / fzTot : 0.5;
+  const wr = fzTot > FZ_MIN_N ? r.fz / fzTot : 0.5;
+  const grfX = massKg * comA.x;
+  const grfZ = massKg * comA.z;
+  l.fx = grfX * wl;
+  r.fx = grfX * wr;
+  l.fzTan = grfZ * wl;
+  r.fzTan = grfZ * wr;
   const wsum = (l.copValid ? l.fz : 0) + (r.copValid ? r.fz : 0);
   const copValid = wsum > FZ_MIN_N;
   const copX = copValid ? ((l.copValid ? l.fz * l.copX : 0) + (r.copValid ? r.fz * r.copX : 0)) / wsum : 0;
   const copZ = copValid ? ((l.copValid ? l.fz * l.copZ : 0) + (r.copValid ? r.fz * r.copZ : 0)) / wsum : 0;
-  const grfX = l.fx + r.fx;
-  const grfY = l.fz + r.fz;
-  const grfZ = l.fzTan + r.fzTan;
+  const grfY = fzTot;
   const grfAngleDeg = grfY > 1e-6 ? Math.atan2(Math.hypot(grfX, grfZ), grfY) * 180 / Math.PI : 0;
   let luX0 = l.copValid ? l.copX : ankle.l.x;
   let luZ0 = l.copValid ? l.copZ : ankle.l.z;
@@ -18425,7 +18484,17 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
   const tauReqSag = toppleSag;
   const tauReqLat = toppleLat;
   const tauMarginSag = tauMax.sag - Math.abs(tauReqSag);
-  const tauMarginLat = tauMax.lat - Math.abs(tauReqLat);
+  const latMin = support ? support.min : Math.min(ankle.l.z, ankle.r.z) - 0.09;
+  const latMax = support ? support.max : Math.max(ankle.l.z, ankle.r.z) + 0.09;
+  const distEdgeZ = Math.min(com.z - latMin, latMax - com.z);
+  const tauMarginLat = fzTot * distEdgeZ;
+  const copFrac = (f, side) => {
+    if (!support || !f.copValid) return Number.NaN;
+    const lo = side === "l" ? support.lMin : support.rMin;
+    const hi = side === "l" ? support.lMax : support.rMax;
+    const half = Math.max(1e-3, (hi - lo) / 2);
+    return (f.copZ - (lo + hi) / 2) / half;
+  };
   let trustNote = "";
   if (!oneValid) {
     trustNote = "\u4E24\u811A\u90FD\u8BFB\u4E0D\u5230\u6709\u6548\u8F7D\u8377 \u21D2 \u529B\u94FE\u4E0D\u53EF\u4FE1\uFF08\u68C0\u67E5\u63A5\u89E6\u51B2\u91CF\uFF09";
@@ -18433,6 +18502,8 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
     trustNote = "\u53EA\u6709\u4E00\u811A\u8BFB\u5230\u6709\u6548\u8F7D\u8377 \u21D2 CoP \u52A0\u6743\u53EA\u7528\u8FD9\u4E00\u811A";
   } else if (Math.abs(armSag) > COP_MAX_ARM * footHalfLen * 2) {
     trustNote = "CoP \u8DD1\u5230\u8E1D\u5FC3\u5916\u8FC7\u8FDC \u21D2 \u529B\u81C2\u5DF2\u8D85\u51FA\u8DB3\u957F\uFF0C\u7269\u7406\u4E0A\u4E0D\u53EF\u8FBE";
+  } else if (distEdgeZ < 0) {
+    trustNote = `CoM \u5DF2\u8D8A\u51FA\u4FA7\u5411\u652F\u6491\u9762 ${(distEdgeZ * 1e3).toFixed(0)}mm \u21D2 \u4FA7\u5411\u5FC5\u7136\u5012`;
   }
   return {
     l,
@@ -18453,6 +18524,10 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
     tauMarginSag,
     tauReqLat,
     tauMarginLat,
+    latMin,
+    latMax,
+    distEdgeZ,
+    copFracLat: { l: copFrac(l, "l"), r: copFrac(r, "r") },
     trustable: copValid && trustNote === "",
     trustNote: trustNote || "ok"
   };
@@ -18469,7 +18544,10 @@ function forceChainLines(fc) {
     `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N \u65B9\u5411 ${n(fc.grfAngleDeg, 1)}\xB0`,
     `\u8E1D\u529B\u81C2 sag ${n(fc.armSag * 1e3)}mm  lat ${n(fc.armLat * 1e3)}mm`,
     `\u503E\u8986\u529B\u77E9 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N\xB7m`,
-    `\u8E1D\u4F59\u91CF sag ${n(fc.tauMarginSag, 1)} lat ${n(fc.tauMarginLat, 1)} N\xB7m\uFF08\u8D1F = \u5FC5\u7136\u5012\uFF09`,
+    `\u8E1D\u4F59\u91CF sag ${n(fc.tauMarginSag, 1)} N\xB7m\uFF08\u8D1F = \u5FC5\u7136\u5012\uFF09`,
+    // ★ 侧向不写"踝余量"：踝没有额状执行器，侧向边界来自**足部几何**
+    `\u4FA7\u5411\u652F\u6491\u9762 ${n(fc.latMin * 1e3, 0)} ~ ${n(fc.latMax * 1e3, 0)}mm\u3000CoM \u8DDD\u8FB9\u7F18 ${n(fc.distEdgeZ * 1e3, 0)}mm\uFF08\u8D1F = \u5DF2\u51FA\u754C\uFF09\u3000\u53EF\u627F\u53D7\u503E\u8986 ${n(fc.tauMarginLat, 1)} N\xB7m`,
+    `\u4FA7\u5411\u6743\u9650\u5360\u7528 \u5DE6 ${n(fc.copFracLat.l * 100, 0)}% \u53F3 ${n(fc.copFracLat.r * 100, 0)}%\uFF08\xB1100% = \u538B\u5230\u978B\u5E95\u8FB9\u7F18\uFF09`,
     `\u53EF\u4FE1\uFF1A${fc.trustable ? "\u662F" : "\u5426 \u2014 " + fc.trustNote}`
   ];
 }
@@ -18484,7 +18562,9 @@ function buildGroundChain(src, rs) {
     { x: rs.com.x, z: rs.com.z },
     src.massKg(),
     src.tauMax(),
-    src.footLen()
+    src.footLen(),
+    src.comAccel(),
+    src.supportLat()
   );
 }
 var FZ_MIN_N, COP_MAX_ARM;
@@ -22872,6 +22952,7 @@ var init_controller = __esm({
         const footBody = sk2.bodies.find((b) => b.key === "foot_l");
         const fc = footBody?.colliders.find((c) => c.shape === "cuboid");
         const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
+        const bbL = new Float64Array(4), bbR = new Float64Array(4);
         const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
         this.rs.forceSrc = {
           sole: (side) => {
@@ -22885,8 +22966,24 @@ var init_controller = __esm({
             return { x: tmp[0], z: tmp[2] };
           },
           massKg: () => massKg,
-          tauMax: () => ({ sag: ankleTau(2), lat: ankleTau(0) }),
-          footLen: () => footLen
+          // ⚠ 额状给 **0**，不是 `ankleTau(0)`：踝是 revolute [0,0,1]，轴 0 不会动
+          //   ⇒ `ankleTau(0)` 只是骨架表里的一个死数（72 N·m），背后没有执行器。
+          //   侧向能力由 `supportLat()`（足部几何）表达，力链已改用那个口径。
+          tauMax: () => ({ sag: ankleTau(2), lat: 0 }),
+          footLen: () => footLen,
+          comAccel: () => ({ x: this.rs.comAx, z: this.rs.comAz }),
+          supportLat: () => {
+            doll.footSoleBounds(0, bbL);
+            doll.footSoleBounds(1, bbR);
+            return {
+              min: Math.min(bbL[2], bbR[2]),
+              max: Math.max(bbL[3], bbR[3]),
+              lMin: bbL[2],
+              lMax: bbL[3],
+              rMin: bbR[2],
+              rMax: bbR[3]
+            };
+          }
         };
       }
       get summary() {
