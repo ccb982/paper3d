@@ -1107,6 +1107,10 @@ export class RigState {
   /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
   /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
   copWantX = 0;
+  /** ★ 矢状力一阶低通的状态（N）—— 见 `wantedForce.ts` 的 `SAGF_TAU` */
+  sagFilt = 0;
+  /** ★ 承重腿模块的遥测（τ 三轴 + 水平/竖向需求力） */
+  supLegTau = { hip: 0, knee: 0, ank: 0, Fh: 0, Fv: 0 };
   /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
   spillFx = 0;
   spillFz = 0;

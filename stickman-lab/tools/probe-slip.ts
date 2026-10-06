@@ -58,6 +58,7 @@ const ctrl = new Controller(sk, sim, {
 const d = sim.doll;
 const rs = ctrl.rs;
 const jw = new Float64Array(3);
+const jr2 = new Float64Array(3);
 const xOf = (j: number): number => { d.jointWorld(j, jw); return jw[0]!; };
 const tangentOf = (ff: { patches: { t: number }[] }): number => ff.patches.reduce((a, p) => a + (Number.isFinite(p.t) ? p.t : 0), 0);
 const head = d.bodyByKey('head');
@@ -86,7 +87,17 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
     + `${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)}`
     + ` | ${((rs.com.x * 1000).toFixed(0)).padStart(5)} ${((rs.com.vx * 1000).toFixed(0)).padStart(5)}`
     + ` ${((xOf(jSp1) * 1000).toFixed(0)).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)}`
+    + ` | 侧: CoMz=${((rs.com.z * 1000).toFixed(0)).padStart(5)} vz=${((rs.com.vz * 1000).toFixed(0)).padStart(5)}`
+    + ` | 前: needX=${((rs.copPlan?.needX ?? 0) * 1000).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1000).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1000).toFixed(0).padStart(5)}`
+    + ` 承τ=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)}`
     + `  头y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)}`
+    + ` grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})`
+    + (() => {
+      const supS = rs.supportLeg();
+      const jH = jn.indexOf(`hip_${supS}`), jK = jn.indexOf(`knee_${supS}`), jA = jn.indexOf(`foot_${supS}`);
+      const g = (j: number): string => { if (j < 0) return '  — '; d.jointRot(j, jr2); return (jr2[2]! * 57.2958).toFixed(0).padStart(4); };
+      return ` 支撑${supS}: 髋${g(jH)}° 膝${g(jK)}° 踝${g(jA)}°`;
+    })()
     + (rs.copPlan ? `  | 落足X=${(rs.copPlan.stepX * 1000).toFixed(0)} Z=${(rs.copPlan.stepZ * 1000).toFixed(0)} 急=${rs.copPlan.stepUrgent.toFixed(2)}${rs.copPlan.fallNeeded ? '★必迈' : ''}` : ''));
   prevL = xl; prevR = xr;
 }

@@ -364,12 +364,12 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
     // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
     //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
     //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
-    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold', 'dipHip'] },
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold', 'dipHip', 'supLeg'] },
   // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
   //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
   //   被算成「未声明的同轴异模式」。
   { joint: 'knee', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'qp',
-    extraGates: ['lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold'] },
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold', 'supLeg'] },
 
   // ── 额状链 ────────────────────────────────────────────────────────
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat',
@@ -386,7 +386,7 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop',
     // ★ `copSet`（显式 CoP 整定，与 `ANKLE_COP` 同一根轴的另一模式）、
     //   `trunkRoll`/`fallResp`（上身修正的增益门，不另占轴）—— 2026-10-06 门禁 A2 查出的漏登记。
-    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'copSet', 'trunkRoll', 'fallResp'] },
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'copSet', 'trunkRoll', 'fallResp', 'supLeg'] },
   // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
   //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
   //   `midfoot_*` 驱动块）。

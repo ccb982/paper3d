@@ -198,8 +198,35 @@ export function computeWantedForce(
     // ── 矢状：同一套律（x 向前为正，目标 = 支撑脚 x）──────────
     const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;
     const capX = rs.com.x + rs.com.vx / om0;
-    const aDesX = -kp * (capX - stanceX) - kd * rs.com.vx;
-    if (on('sag')) comp.sagittal = clamp(mass * h * aDesX, p.maxSagittal);
+    // ★★★★★ 2026-10-06 **矢状补死区**（修"承重腿不发力"）：
+    //   `probe-sagchain` 实测：`hip τ` 在 **±200 N·m 每拍翻号**、`ω` ±300°/s、
+    //   `F.fx` 自己也 ±翻转 ⇒ **时间平均≈0** ⇒ 腿"不发力"、被体重推着走。
+    //   根因：`kd·vx` 吃到逐拍速度噪声（|vx| 摆到 ±300 mm/s）⇒ 力 ±120 N 翻转；
+    //   而**额状早就有死区**（`LAT_ERR_DEAD`/`LAT_VZ_DEAD`，"人只在误差超噪声底才动作"），
+    //   矢状却直通 ⇒ 两边口径不一致（本文件自己的注释说两边该同量级）。
+    //   ⇒ 补同样的死区：误差 10 mm、速度 40 mm/s（人类侧 Winter 1998：矢状 0.8mm 底噪）。
+    const SAG_ERR_DEAD = 0.010, SAG_VZ_DEAD = 0.04;
+    const errX = capX - stanceX;
+    const errXDead = Math.abs(errX) <= SAG_ERR_DEAD ? 0 : errX - Math.sign(errX) * SAG_ERR_DEAD;
+    const vxDead = Math.abs(rs.com.vx) <= SAG_VZ_DEAD ? 0 : rs.com.vx;
+    const aDesX = -kp * errXDead - kd * vxDead;
+    // ★★★★★ 2026-10-06 **矢状力一阶低通**（`SAGF_TAU`，默认 0.08 s）：
+    //   `probe-sagchain` 实测：`F.fx` 逐拍翻号（+11/+30/+2/−11…）而 `τ` 打满 ±200、
+    //   `ω` ±300°/s ⇒ 时间平均≈0（"腿不发力"）。低通把指令的抖动压掉，
+    //   让 JᵀF 的分配有一个**稳定的输入**（分配合成对输入噪声极敏感）。
+    //   `SAGF_TAU=0` 关闭（A/B）。
+    const raw = clamp(mass * h * aDesX, p.maxSagittal);
+    const tauF = (() => {
+      const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SAGF_TAU ?? '');
+      return Number.isFinite(v) && v >= 0 ? v : 0.08;
+    })();
+    if (tauF > 0) {
+      const dtc = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+      const kf = Math.min(1, dtc / tauF);
+      if (!Number.isFinite(rs.sagFilt)) rs.sagFilt = raw;
+      rs.sagFilt += (raw - rs.sagFilt) * kf;
+      if (on('sag')) comp.sagittal = rs.sagFilt;
+    } else if (on('sag')) comp.sagittal = raw;
 
     // ── 竖向体重 ────────────────────────────────────────────
     //  ⚠ 默认**关**。位置伺服（`θ_ref ≠ θ ⇒ 一直有力矩`）本身已经在撑体重，

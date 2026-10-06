@@ -25,6 +25,11 @@ import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import { fallGuard, DEFAULT_FALL_GUARD, type FallGuardParams } from './systems/fallGuard';
 import { decomposeCop } from './systems/decompose';
+import { supportLegTick } from './systems/supportLeg';
+
+/** `SUPLEG=0` 关承重腿模块（默认开） */
+const SUPLEG = !['0', 'false', 'off'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SUPLEG ?? '').trim().toLowerCase());
 import { spineDefaultTone, DEFAULT_WAIST_TONE, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
 import type { Sim } from './sim';
 import { jointIndexByName, type Skeleton } from './skeleton';
@@ -437,6 +442,9 @@ export class Controller {
     fallGuard(rs, this.cfg.fallGuard);
     // ★★★★★ 监督层（§21.11）：把 (ξ, 支撑面) 切成逐轴修正量（纯计算，只写 `rs.copPlan`）
     decomposeCop(rs);
+    // ★ 承重腿专责模块（§21.14，用户提案）：位置环让位 + 静力映射的三轴 τ。
+    //   放在 balance 之前：同系统（balance）相加，④c 的全链 τ 若也写就叠加。
+    if (SUPLEG) supportLegTick(rs, sim.doll, this.cfg.balance.ablate);
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
     // ★★★ 2026-10-06 架构修正（用户定调）：
     //   「**waist 是一个工具**」—— 平衡系统对上半身做修改时**内部**调它

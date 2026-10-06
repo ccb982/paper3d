@@ -114,7 +114,7 @@ log('══ A2. 通道名单 vs 源码里的 on(…) 接线 ══');
 {
   const wired = new Set<string>();
   for (const f of ['src/core/systems/balance.ts', 'src/core/systems/wantedForce.ts',
-    'src/core/systems/step.ts',
+    'src/core/systems/step.ts', 'src/core/systems/supportLeg.ts',
     // ★ 2026-10-06 腰部重构：新模块的消融门也要纳入对账（否则 `waist` 会被误报"没接线"）
     'src/core/systems/waist.ts']) {
     if (!fs.existsSync(f)) continue;
