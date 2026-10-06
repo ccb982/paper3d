@@ -1126,6 +1126,8 @@ export class RigState {
   supLegToe = 0;
   /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
   shiftDoneLatch = false;
+  /** ★ 承重腿模块的折角历史（预先挺腰用）：{d 矢状, l 侧向, vd/vl 低通速率} */
+  supFoldPrev: { d: number; l: number; vd: number; vl: number } | null = null;
   /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
   shiftLatchSide: 'l' | 'r' | null = null;
   /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */

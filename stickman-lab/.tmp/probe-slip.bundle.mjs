@@ -17818,6 +17818,8 @@ var init_rigState = __esm({
       supLegToe = 0;
       /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
       shiftDoneLatch = false;
+      /** ★ 承重腿模块的折角历史（预先挺腰用）：{d 矢状, l 侧向, vd/vl 低通速率} */
+      supFoldPrev = null;
       /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
       shiftLatchSide = null;
       /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
@@ -22718,6 +22720,7 @@ var DEG3, DEFAULT_WAIST_PARAMS, SPINE, DEFAULT_WAIST_TONE;
 var init_waist = __esm({
   "src/core/systems/waist.ts"() {
     "use strict";
+    init_env();
     init_skeleton();
     DEG3 = Math.PI / 180;
     DEFAULT_WAIST_PARAMS = {
@@ -22731,7 +22734,13 @@ var init_waist = __esm({
       stagger: 1 / 3
     };
     SPINE = ["spine1", "spine2", "spine3"];
-    DEFAULT_WAIST_TONE = { k: 260, d: 4, maxN: 55, sign: 1, pelvisWMax: 5 };
+    DEFAULT_WAIST_TONE = {
+      k: envNum("WAISTK", 260, 0),
+      d: envNum("WAISTD", 4, 0),
+      maxN: envNum("WAISTMX", 55, 0),
+      sign: 1,
+      pelvisWMax: 5
+    };
   }
 });
 
@@ -24777,8 +24786,40 @@ function supportLegTick(rs2, doll, ablate = "") {
   };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
   const M = (p) => Fv * (copT - p.x) + Fh * p.y;
+  const kLegFold = envNum("LEGFOLDK", 2, 0);
+  const kLatFold = envNum("LATFOLDK", 0, 0);
+  const jrF = new Float64Array(3);
+  let foldDeg = 0, foldLatDeg = 0;
+  if (kLegFold > 0 || kLatFold > 0) {
+    for (const nm of ["spine1", "spine2", "spine3"]) {
+      const jf = jn2.indexOf(nm);
+      if (jf < 0) continue;
+      doll.jointRot(jf, jrF);
+      foldDeg += jrF[2] * (180 / Math.PI);
+      foldLatDeg += jrF[0] * (180 / Math.PI);
+    }
+  }
+  const kPreFold = envNum("PREFOLDK", 0.15, 0);
+  if (foldDeg !== 0 || foldLatDeg !== 0) {
+    const dtF = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+    const kf = Math.min(1, dtF / 0.08);
+    rs2.supFoldPrev = rs2.supFoldPrev ?? { d: 0, l: 0, vd: 0, vl: 0 };
+    const dFold = (foldDeg - rs2.supFoldPrev.d) / dtF;
+    const dLat = (foldLatDeg - rs2.supFoldPrev.l) / dtF;
+    rs2.supFoldPrev.d = foldDeg;
+    rs2.supFoldPrev.l = foldLatDeg;
+    rs2.supFoldPrev.vd += (dFold - rs2.supFoldPrev.vd) * kf;
+    rs2.supFoldPrev.vl += (dLat - rs2.supFoldPrev.vl) * kf;
+  }
+  const foldRate = rs2.supFoldPrev?.vd ?? 0;
+  const latRate = rs2.supFoldPrev?.vl ?? 0;
+  const foldTau = -kLegFold * foldDeg - kPreFold * foldRate;
+  const latFoldTau = -kLatFold * foldLatDeg - kPreFold * latRate;
   const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
-  const tauH = sH * M(pH), tauK = sK * M(pK);
+  const wH = envNum("FOLDW_H", 1.5, -3);
+  const wK = envNum("FOLDW_K", -1, -3);
+  const tauH = sH * M(pH) + foldTau * wH;
+  const tauK = sK * M(pK) + foldTau * wK;
   const tauA0 = sA * M(pA);
   const dirX = plan.errX;
   const sevX = Math.max(-1, Math.min(1, dirX / 0.08));
@@ -24791,7 +24832,17 @@ function supportLegTick(rs2, doll, ablate = "") {
   rs2.requestHold(jHip, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs2.requestHold(jKnee, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs2.requestHold(jAnk, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
+  const HBA = 0;
+  if (Math.abs(latFoldTau) > 0.05) {
+    const tmaxA = rs2.sk.joints[jHip].maxTorque[HBA] ?? 120;
+    const tf = Math.max(-tmaxA, Math.min(tmaxA, latFoldTau));
+    rs2.requestTorque(jHip, HBA, tf, "balance", "\u627F\u91CD\u817F\xB7\u4FA7\u5411\u633A\u8170", true);
+  }
+  const tFull = envNum("TENSION_FULL", 1, 0.05, 1);
   for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]]) {
+    const tNow = Math.abs(doll.tauApplied[j * 3 + 2] ?? 0);
+    const tmax0 = rs2.sk.joints[j].maxTorque[2] ?? 120;
+    if (tNow >= tmax0 * tFull) continue;
     const tmax = rs2.sk.joints[j].maxTorque[2] ?? 120;
     const share = envNum("SHARE_SUP", 1e9, 0);
     const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));
@@ -25271,7 +25322,14 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   nextT += STEP;
   const xl = xOf(jAnkL), xr = xOf(jAnkR);
   const mu = (v) => (Number.isFinite(v) ? v.toFixed(2) : " \u2014 ").padStart(5);
-  log(`   ${t.toFixed(2).padStart(5)} ${(xl * 1e3).toFixed(1).padStart(6)} ${((xl - prevL) * 1e3).toFixed(1).padStart(6)} ${(xr * 1e3).toFixed(1).padStart(6)} ${((xr - prevR) * 1e3).toFixed(1).padStart(6)} |${mu(fl.frictionUse)}${mu(fr.frictionUse)}${tangentOf(fl).toFixed(0).padStart(6)}${tangentOf(fr).toFixed(0).padStart(6)}${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)} | ${(rs.com.x * 1e3).toFixed(0).padStart(5)} ${(rs.com.vx * 1e3).toFixed(0).padStart(5)} ${(xOf(jSp1) * 1e3).toFixed(0).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)} | \u4FA7: CoMz=${(rs.com.z * 1e3).toFixed(0).padStart(5)} vz=${(rs.com.vz * 1e3).toFixed(0).padStart(5)} | \u4F59\u91CF: \u524D${(rs.fall.mFront * 1e3).toFixed(0).padStart(4)} \u540E${(rs.fall.mBack * 1e3).toFixed(0).padStart(4)} \u5DE6${(rs.fall.mLeft * 1e3).toFixed(0).padStart(4)} \u53F3${(rs.fall.mRight * 1e3).toFixed(0).padStart(4)} \u7D27\u8FEB${rs.fall.urgency.toFixed(2)} | \u524D: needX=${((rs.copPlan?.needX ?? 0) * 1e3).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1e3).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1e3).toFixed(0).padStart(5)} \u627F\u03C4=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)} \u9884\u5146FX=${rs.spillFx.toFixed(0)} \u9884\u5146FZ=${rs.spillFz.toFixed(0)}  \u5934y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)} grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})` + (() => {
+  log(`   ${t.toFixed(2).padStart(5)} ${(xl * 1e3).toFixed(1).padStart(6)} ${((xl - prevL) * 1e3).toFixed(1).padStart(6)} ${(xr * 1e3).toFixed(1).padStart(6)} ${((xr - prevR) * 1e3).toFixed(1).padStart(6)} |${mu(fl.frictionUse)}${mu(fr.frictionUse)}${tangentOf(fl).toFixed(0).padStart(6)}${tangentOf(fr).toFixed(0).padStart(6)}${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)} | ${(rs.com.x * 1e3).toFixed(0).padStart(5)} ${(rs.com.vx * 1e3).toFixed(0).padStart(5)} ${(xOf(jSp1) * 1e3).toFixed(0).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)} | \u4FA7: CoMz=${(rs.com.z * 1e3).toFixed(0).padStart(5)} vz=${(rs.com.vz * 1e3).toFixed(0).padStart(5)}` + (() => {
+    const fl2 = d.soleForceProfile(0, DT), fr2 = d.soleForceProfile(1, DT);
+    const wl = fl2.copValid ? fl2.fz : 0, wr = fr2.copValid ? fr2.fz : 0;
+    const ws = wl + wr;
+    const copG = ws > 15 ? (wl * fl2.copX + wr * fr2.copX) / ws : Number.NaN;
+    const aPred = Number.isFinite(copG) ? rs.omega0() ** 2 * (rs.com.x - copG) : Number.NaN;
+    return ` | \u2605\u5B9E\u6D4BCoP.x=${Number.isFinite(copG) ? (copG * 1e3).toFixed(0) : "\u2014"} a\u9884\u6D4B=${Number.isFinite(aPred) ? aPred.toFixed(1) : "\u2014"}`;
+  })() + ` | \u4F59\u91CF: \u524D${(rs.fall.mFront * 1e3).toFixed(0).padStart(4)} \u540E${(rs.fall.mBack * 1e3).toFixed(0).padStart(4)} \u5DE6${(rs.fall.mLeft * 1e3).toFixed(0).padStart(4)} \u53F3${(rs.fall.mRight * 1e3).toFixed(0).padStart(4)} \u7D27\u8FEB${rs.fall.urgency.toFixed(2)} | \u524D: needX=${((rs.copPlan?.needX ?? 0) * 1e3).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1e3).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1e3).toFixed(0).padStart(5)} \u627F\u03C4=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)} \u9884\u5146FX=${rs.spillFx.toFixed(0)} \u9884\u5146FZ=${rs.spillFz.toFixed(0)}  \u5934y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)} grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})` + (() => {
     const supS = rs.supportLeg();
     const jH = jn.indexOf(`hip_${supS}`), jK = jn.indexOf(`knee_${supS}`), jA = jn.indexOf(`foot_${supS}`);
     const g = (j) => {

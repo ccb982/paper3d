@@ -44,6 +44,7 @@
  *
  * 消融名：`waist`（整块不跑 ⇒ 回退 `bind`，用于对照"永远有目标"值多少）。
  */
+import { envNum } from '../env';
 import type { RigState } from '../rigState';
 import { jointIndexByName } from '../skeleton';
 
@@ -120,7 +121,19 @@ export interface WaistToneParams {
   pelvisWMax?: number;
   ablate?: string;
 }
-export const DEFAULT_WAIST_TONE: WaistToneParams = { k: 260, d: 4, maxN: 55, sign: 1, pelvisWMax: 5 };
+/**
+ * ★★★★★ 2026-10-06 **用户定调：「腰就应该保持多绷直 + 阻尼，才不容易倒」**
+ *   = 早先那条「应该有个**默认脊柱拉力**，否则就浪费很多发力在挺直腰上」的落地。
+ *   现状 `d=4` 相对 `k=260` 偏小 ⇒ 用 `envNum`（统一入口）暴露三个可扫量：
+ *   `WAISTK`（绷直刚度）/ `WAISTD`（阻尼）/ `WAISTMX`（力矩上限）。
+ */
+export const DEFAULT_WAIST_TONE: WaistToneParams = {
+  k: envNum('WAISTK', 260, 0),
+  d: envNum('WAISTD', 4, 0),
+  maxN: envNum('WAISTMX', 55, 0),
+  sign: 1,
+  pelvisWMax: 5,
+};
 
 export function spineDefaultTone(rs: RigState, p: WaistToneParams = DEFAULT_WAIST_TONE): void {
   const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));

@@ -17818,6 +17818,8 @@ var init_rigState = __esm({
       supLegToe = 0;
       /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
       shiftDoneLatch = false;
+      /** ★ 承重腿模块的折角历史（预先挺腰用）：{d 矢状, l 侧向, vd/vl 低通速率} */
+      supFoldPrev = null;
       /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
       shiftLatchSide = null;
       /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
@@ -22764,6 +22766,7 @@ var DEG3, DEFAULT_WAIST_PARAMS, SPINE, DEFAULT_WAIST_TONE;
 var init_waist = __esm({
   "src/core/systems/waist.ts"() {
     "use strict";
+    init_env();
     init_skeleton();
     DEG3 = Math.PI / 180;
     DEFAULT_WAIST_PARAMS = {
@@ -22777,7 +22780,13 @@ var init_waist = __esm({
       stagger: 1 / 3
     };
     SPINE = ["spine1", "spine2", "spine3"];
-    DEFAULT_WAIST_TONE = { k: 260, d: 4, maxN: 55, sign: 1, pelvisWMax: 5 };
+    DEFAULT_WAIST_TONE = {
+      k: envNum("WAISTK", 260, 0),
+      d: envNum("WAISTD", 4, 0),
+      maxN: envNum("WAISTMX", 55, 0),
+      sign: 1,
+      pelvisWMax: 5
+    };
   }
 });
 
@@ -24851,8 +24860,40 @@ function supportLegTick(rs, doll, ablate = "") {
   };
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
   const M = (p) => Fv * (copT - p.x) + Fh * p.y;
+  const kLegFold = envNum("LEGFOLDK", 2, 0);
+  const kLatFold = envNum("LATFOLDK", 0, 0);
+  const jrF = new Float64Array(3);
+  let foldDeg = 0, foldLatDeg = 0;
+  if (kLegFold > 0 || kLatFold > 0) {
+    for (const nm of ["spine1", "spine2", "spine3"]) {
+      const jf = jn.indexOf(nm);
+      if (jf < 0) continue;
+      doll.jointRot(jf, jrF);
+      foldDeg += jrF[2] * (180 / Math.PI);
+      foldLatDeg += jrF[0] * (180 / Math.PI);
+    }
+  }
+  const kPreFold = envNum("PREFOLDK", 0.15, 0);
+  if (foldDeg !== 0 || foldLatDeg !== 0) {
+    const dtF = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kf = Math.min(1, dtF / 0.08);
+    rs.supFoldPrev = rs.supFoldPrev ?? { d: 0, l: 0, vd: 0, vl: 0 };
+    const dFold = (foldDeg - rs.supFoldPrev.d) / dtF;
+    const dLat = (foldLatDeg - rs.supFoldPrev.l) / dtF;
+    rs.supFoldPrev.d = foldDeg;
+    rs.supFoldPrev.l = foldLatDeg;
+    rs.supFoldPrev.vd += (dFold - rs.supFoldPrev.vd) * kf;
+    rs.supFoldPrev.vl += (dLat - rs.supFoldPrev.vl) * kf;
+  }
+  const foldRate = rs.supFoldPrev?.vd ?? 0;
+  const latRate = rs.supFoldPrev?.vl ?? 0;
+  const foldTau = -kLegFold * foldDeg - kPreFold * foldRate;
+  const latFoldTau = -kLatFold * foldLatDeg - kPreFold * latRate;
   const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
-  const tauH = sH * M(pH), tauK = sK * M(pK);
+  const wH = envNum("FOLDW_H", 1.5, -3);
+  const wK = envNum("FOLDW_K", -1, -3);
+  const tauH = sH * M(pH) + foldTau * wH;
+  const tauK = sK * M(pK) + foldTau * wK;
   const tauA0 = sA * M(pA);
   const dirX = plan.errX;
   const sevX = Math.max(-1, Math.min(1, dirX / 0.08));
@@ -24865,7 +24906,17 @@ function supportLegTick(rs, doll, ablate = "") {
   rs.requestHold(jHip, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs.requestHold(jKnee, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs.requestHold(jAnk, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
+  const HBA = 0;
+  if (Math.abs(latFoldTau) > 0.05) {
+    const tmaxA = rs.sk.joints[jHip].maxTorque[HBA] ?? 120;
+    const tf = Math.max(-tmaxA, Math.min(tmaxA, latFoldTau));
+    rs.requestTorque(jHip, HBA, tf, "balance", "\u627F\u91CD\u817F\xB7\u4FA7\u5411\u633A\u8170", true);
+  }
+  const tFull = envNum("TENSION_FULL", 1, 0.05, 1);
   for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]]) {
+    const tNow = Math.abs(doll.tauApplied[j * 3 + 2] ?? 0);
+    const tmax0 = rs.sk.joints[j].maxTorque[2] ?? 120;
+    if (tNow >= tmax0 * tFull) continue;
     const tmax = rs.sk.joints[j].maxTorque[2] ?? 120;
     const share = envNum("SHARE_SUP", 1e9, 0);
     const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));

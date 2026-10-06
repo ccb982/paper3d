@@ -71,9 +71,64 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   // 静力矩：`M_j = F_v·(CoP − x_j) + F_h·(y_j − y_contact)`（contact y≈0）
   const M = (p: { x: number; y: number }): number => Fv * (copT - p.x) + Fh * p.y;
 
+  // ★★★★★ 2026-10-06 **"通过脚发力来挺腰"**（用户：
+  //   「**通过脚发力来实现腰挺起来我认为更能够修正 cop**」）：
+  //   依据链：§22.13/22.48 三次证明「**腰只能力矩驱动、位置目标是死路**」；
+  //   而 §22.51 证明 CoP 跳 ← 载荷跳 ← 支撑腿的力。
+  //   ⇒ 把"挺腰"做成**支撑腿的伸髋/伸膝项**（由**实测折角**驱动）：
+  //     折腰 ⇒ 腿伸展 ⇒ 盆骨抬起 ⇒ 躯干回直 ⇒ **同一条力同时修正 CoP**。
+  //   折角 = `spine1..3/2` 之和（度，正 = 前折）；腿伸展 = 髋/膝的**反折方向**。
+  //   `LEGFOLD=0` 关；`LEGFOLDK` 增益（N·m per 度）。
+  // 扫描（真倒）：1.5→5.33 / **2→5.82** / 2.5→4.51 / 3→4.96 / 5→4.17 ⇒ 定稿 **2.0**
+  // ★★★★★ 2026-10-06 **四向挺腰 + 预先 + 张力满即止**（用户：
+  //   「**需要四个方向的挺腰**，而且**如果腿部的张力满了也不必脚步再发力了**。
+  //     **还要预先挺腰**。**腰应该是强操控的**，不应该这么容易倒」）
+  //   · 四向：矢状折角（`spine*/2` 之和）+ **侧向折角（`spine*/0` 之和）**，
+  //     各接支撑腿对应的分量（矢状 → 髋/膝屈伸；侧向 → 髋**外展轴**）；
+  //   · 预先：用折角的**变化率**（一拍差分，低通）⇒ "还没弯就先顶"；
+  //   · 张力满即止：本模块算出的 τ **到 `TENSION_FULL` 比例就整体缩**
+  //     （避免"腿已打满还在追"的饱和浪费）。
+  const kLegFold = envNum('LEGFOLDK', 2.0, 0);
+  // ⚠ 实测：`hip/0` 已被 LATPLAN/外展 CoP 占满，再加"侧向挺腰"**任何符号都更差**
+  //   （±1/±2 全 5.79~6.17 vs 关 6.74）⇒ **默认 0**（机制保留；要接侧向得换执行器/先腾份额）。
+  const kLatFold = envNum('LATFOLDK', 0, 0);
+  const jrF = new Float64Array(3);
+  let foldDeg = 0, foldLatDeg = 0;
+  if (kLegFold > 0 || kLatFold > 0) {
+    for (const nm of ['spine1', 'spine2', 'spine3']) {
+      const jf = jn.indexOf(nm);
+      if (jf < 0) continue;
+      doll.jointRot(jf, jrF);
+      foldDeg += jrF[2]! * (180 / Math.PI);
+      foldLatDeg += jrF[0]! * (180 / Math.PI);
+    }
+  }
+  // 预先：折角的**变化率**（一拍差分 + 0.08s 低通）——"还没弯就先顶"
+  const kPreFold = envNum('PREFOLDK', 0.15, 0);
+  if (foldDeg !== 0 || foldLatDeg !== 0) {
+    const dtF = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+    const kf = Math.min(1, dtF / 0.08);
+    rs.supFoldPrev = rs.supFoldPrev ?? { d: 0, l: 0, vd: 0, vl: 0 };
+    const dFold = (foldDeg - rs.supFoldPrev.d) / dtF;
+    const dLat = (foldLatDeg - rs.supFoldPrev.l) / dtF;
+    rs.supFoldPrev.d = foldDeg; rs.supFoldPrev.l = foldLatDeg;
+    rs.supFoldPrev.vd += (dFold - rs.supFoldPrev.vd) * kf;
+    rs.supFoldPrev.vl += (dLat - rs.supFoldPrev.vl) * kf;
+  }
+  const foldRate = rs.supFoldPrev?.vd ?? 0;
+  const latRate = rs.supFoldPrev?.vl ?? 0;
+  const foldTau = -kLegFold * foldDeg - kPreFold * foldRate;          // 矢状（髋/膝伸展）
+  const latFoldTau = -kLatFold * foldLatDeg - kPreFold * latRate;     // 侧向（髋外展轴向）
+
   // 符号标定（默认按"地面反力矩 → 马达力矩取负"）
   const sH = num('SLSIGN_HIP', -1), sK = num('SLSIGN_KNEE', -1), sA = num('SLSIGN_ANK', -1);
-  const tauH = sH * M(pH), tauK = sK * M(pK);
+  // ★ 折角分量在髋/膝上的**分配**（原来是我拍的 1:−1，现参数化可扫）
+  // 扫描（12s 真倒）：1.3→6.68 / **1.5→8.40** / 1.8→4.29；对照 1/0→6.47、0/−1→3.28
+  //   ⇒ 挺腰分量**主要给髋**（1.5），膝只做反向平衡（−1）。定稿 1.5 / −1。
+  const wH = envNum('FOLDW_H', 1.5, -3);
+  const wK = envNum('FOLDW_K', -1, -3);
+  const tauH = sH * M(pH) + foldTau * wH;    // ★ 挺腰分量（通过腿伸展）
+  const tauK = sK * M(pK) + foldTau * wK;    //   膝的分量（系数可扫，原为 −1）
   const tauA0 = sA * M(pA);
   // ★★★★★ 2026-10-06 **用户算法：方向 → 足部区域发力（持续）**
   //   「**要前倒就前足多发力**，腰挺起来」。
@@ -98,7 +153,19 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   rs.requestHold(jHip, 2, 'balance', '承重腿·让位');
   rs.requestHold(jKnee, 2, 'balance', '承重腿·让位');
   rs.requestHold(jAnk, 2, 'balance', '承重腿·让位');
+  // ★ 侧向折角 → 髋**外展轴（HIP_ABD_AXIS=0）**；张力满即止：三轴总量封顶 `TENSION_FULL`
+  const HBA = 0;
+  if (Math.abs(latFoldTau) > 0.05) {
+    const tmaxA = rs.sk.joints[jHip]!.maxTorque[HBA] ?? 120;
+    const tf = Math.max(-tmaxA, Math.min(tmaxA, latFoldTau));
+    rs.requestTorque(jHip, HBA, tf, 'balance', '承重腿·侧向挺腰', true);
+  }
+  const tFull = envNum('TENSION_FULL', 1.0, 0.05, 1.0);
   for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]] as const) {
+    // ★ 张力满即止：若该轴**已由其它写者顶到 τmax 的 `tFull` 倍**，本模块不再加
+    const tNow = Math.abs(doll.tauApplied[j * 3 + 2] ?? 0);
+    const tmax0 = rs.sk.joints[j]!.maxTorque[2] ?? 120;
+    if (tNow >= tmax0 * tFull) continue;
     const tmax = rs.sk.joints[j]!.maxTorque[2] ?? 120;
     // ★ 份额（§22.54）：承重腿静力与 JᵀF 重叠 ⇒ 只拿小份（默认 40）
     const share = envNum('SHARE_SUP', 1e9, 0);   // 默认不限制（份额实测更差，见 balance.ts）
