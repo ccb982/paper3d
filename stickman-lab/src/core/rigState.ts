@@ -1051,8 +1051,12 @@ export class RigState {
   disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
   /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
   disposeK = 1;
-  /** 上身发力（块⑧）本拍在脊柱链上下发的 |τ| 之和（N·m）—— 0 = 没在出力 */
+  /** 上身发力（块⑧）本拍在脊柱链上下发的量（修正量的模，rad）—— 0 = 没在出力 */
   ubTau = 0;
+  /** 骨盆（树根）本拍角速度模（rad/s）—— 盆骨去噪门的输入 */
+  pelvisW = 0;
+  /** 被盆骨去噪门挡住的拍数（诊断：>0 说明门在咬） */
+  ubNoiseBlocked = 0;
   /** 块⑧执行次数（诊断：0 = 没跑） */
   ubRuns = 0;
   /**
@@ -1063,6 +1067,19 @@ export class RigState {
    *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
    */
   tauSrc: { system: string; label: string; value: number }[] = [];
+
+  /**
+   * ★★★ **修正增量通道**（用户 2026-10-06 定调：
+   *   「**迈步系统带着目标调整关节；平衡系统只修正，不考虑目标**」）。
+   *
+   *   为什么必须**独立于 `req[]`**：`req[]` 每轴只有一个槽、按优先级**覆盖**。
+   *   若 balance 直接往 `req[]` 写，它写的就是"目标"而不是"修正" ——
+   *   与用户的定调相反，而且会**盖掉**迈步的目标。
+   *   ⇒ `acorr[]` 是**相加**通道：`最终 = 目标(req) + 修正(acorr)`，职责不重叠。
+   */
+  acorr: Float64Array = new Float64Array(0);
+  /** 本拍被写过的修正轴（诊断/UI：谁加了多少） */
+  acorrStat: { axis: number; delta: number; label: string }[] = [];
   /**
    * ★★★ **逐关节发力门禁**（用户 2026-10-06：
    *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
@@ -1312,6 +1329,7 @@ export class RigState {
     this.tgtOut = new Float32Array(n);
     this.tauJ = new Float32Array(n);
     this.forceBuf = new Float64Array(sk.joints.length * 5);
+    this.acorr = new Float64Array(sk.joints.length * 3);
     this.treq.fill(undefined);
     for (let i = 0; i < n; i++) {
       this.tgt.push({
@@ -1814,6 +1832,13 @@ export class RigState {
     let republished = 0, overridden = 0;
     for (const p of this.stepProps) {
       const j = Math.floor(p.i / 3), a = p.i % 3;
+      // ★★ 躯干（脊柱）**不参与 `k` 缩放**（用户 2026-10-06 定调：
+      //   「**迈步系统带着目标调整关节；平衡系统只修正，不考虑目标**」）。
+      //   躯干的目标是"迈步带着的"，balance 对它的意见走 `acorr`（修正增量），
+      //   而不是在这里把目标按风险因子**缩掉**（那是"改目标"，与新定调相反）。
+      //   实测：把脊柱一起缩放时「默认（迈步开）」只有 0.99s。
+      const nm = this.sk.joints[j]?.name ?? '';
+      if (nm.startsWith('spine')) continue;
       const cur = this.req[p.i];
       // ① balance 自己已经写过这根轴 ⇒ 以 balance 为准，不重复发布
       // ② 该轴已让位给力矩通道 ⇒ 角度写了也会被屏蔽
@@ -1870,6 +1895,26 @@ export class RigState {
     ub.decidedBy = (Math.abs(corrPitch) + Math.abs(corrRoll) > 1e-4) ? 'balance' : 'step';
   }
 
+  /**
+   * ★★★ **修正增量**（弧度）—— 与 `requestAngle` 的目标**相加**，不是覆盖。
+   *
+   *   用户定调：「平衡系统**只修正，不考虑目标**」。
+   *   ⇒ 平衡系统调用本接口时**不需要知道目标是什么**，它只回答"该再补多少"。
+   *   ⚠ 量纲：与 `requestAngle` 一样收**弧度**，内部按量程归一化后累加。
+   */
+  requestAngleCorr(joint: number, axis: number, deltaRad: number, system: SystemId, label: string): void {
+    const i = joint * 3 + axis;
+    if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    if (!(Math.abs(deltaRad) > 1e-9)) return;
+    const def = this.sk.joints[joint];
+    if (!def) { this.badRequests++; return; }
+    const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
+    if (span <= 1e-6) { this.badRequests++; return; }
+    this.acorr[i] = (this.acorr[i] ?? 0) + (deltaRad * 0.9) / span;
+    this.acorrStat.push({ axis: i, delta: deltaRad, label });
+    this.requestCount++;
+  }
+
   // ── 仲裁 ────────────────────────────────────────────────
 
   /** 每拍开始：清空需求与仲裁痕迹 */
@@ -1890,6 +1935,8 @@ export class RigState {
     this.requestCount = 0;
     this.stepProps.length = 0;
     for (const t of this.tauSrc) { if (t) { t.label = '—'; t.value = 0; } }
+    this.acorr.fill(0);
+    this.acorrStat.length = 0;
     // ★ 上身提案每拍清零（累积语义，见 `proposeUpperBody`）
     this.upperBody.step.pitch = 0; this.upperBody.step.roll = 0; this.upperBody.step.yaw = 0;
     for (let i = 0; i < this.tgt.length; i++) {
@@ -1921,9 +1968,17 @@ export class RigState {
         out[i] = r.value;
       }
     }
+    // ★★ **修正增量**（`acorr`）：叠加在目标之上，**不覆盖** —— 见 `requestAngleCorr`。
+    //   放在 req 之后、"未提轴回退"之前：即使**没人提目标**（bind），修正照样生效
+    //   （这正是"balance 只修正、不管目标"的语义：它不需要目标存在）。
+    for (let i = 0; i < this.nAxes; i++) {
+      const d = this.acorr[i] ?? 0;
+      if (d === 0) continue;
+      out[i] = (out[i] ?? 0) + d;
+    }
     // 没被任何系统提的轴：回退到"保持上一拍"（= 绑定姿态附近），owner 记为 bind
     for (let i = 0; i < out.length; i++) {
-      if (!this.req[i]) { out[i] = this.prevTarget[i] ?? 0; const t = this.tgt[i]!; if (t.owner === 'none') { t.owner = 'bind'; t.ownerLabel = '保持'; t.tag = 'servo'; } }
+      if (!this.req[i]) { out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0); const t = this.tgt[i]!; if (t.owner === 'none') { t.owner = 'bind'; t.ownerLabel = '保持'; t.tag = 'servo'; } }
     }
     for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i]!;
     // 力矩通道仲裁（规则同角度通道：balance > step），再按 τmax 饱和

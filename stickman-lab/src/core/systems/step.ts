@@ -265,10 +265,22 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     //   （Mann 1975 只有 5~10°，绝不当主执行器）—— 两者都进 `upperBody.step`，
     //   由 balance 统一合成后**发布最终值**（见 `balance.ts` 块⑧）。
     if (on('upForce')) {
-      // ★★★ 2026-10-06：**从目标状态表取**（不再是 `trunkLat=0` 的占位符）。
+      // ★★★ 2026-10-06（用户定调：「**迈步系统带着目标调整关节**」）：
+      //   目标**由 step 直接落地**到脊柱三轴的关节角上；
+      //   balance 只往 `acorr`（修正增量）写，两者在 `arbitrate` 里**相加**。
       //   符号 = 摆动侧（表里存幅度）：正 = 倒向摆动腿那一侧 / 扭转与骨盆同向。
       //   文献依据见 `keyframe.ts` 的 `TRUNK_TARGET_SRC`（骨盆倾 5°、骨盆旋转 8°）。
       const swS = swing === 'l' ? 1 : -1;
+      const nSp = 3;
+      for (const jj of [jSp1, jSp2, jSp3]) {
+        if (jj < 0) continue;
+        rs.requestAngle(jj, 2, kp.trunkPitch / nSp, 'step', '躯干矢状·目标');
+        rs.requestAngle(jj, 0, (swS * kp.trunkLat) / nSp, 'step', '躯干额状·目标');
+        // ⚠ 轴1（扭转）**暂不驱动**：实测新写这根轴会把「默认（迈步开）」从 6.05s
+        //   打到 1.21s（该轴此前从无位置写入 ⇒ 位置范围/摩擦/惯量都没标定过）。
+        //   扭转目标仍记在 `upperBody.step.yaw` 里（诊断），标定后再接管。
+      }
+      // 诊断备份（`probe-upforce`/UI 用；控制不依赖它）
       rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
       // 消融退回旧路径（直写腰角），保证 A/B 可测
@@ -358,6 +370,13 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   const yawT = swSign * kp2.trunkYaw * rs.authority;
   const latT = swSign * kp2.trunkLat * rs.authority;
   if (on('upForce')) {
+    // ★ 同关键帧分支：目标由 step 直写脊柱（balance 只加修正）
+    const nSp2 = 3;
+    for (const jj of [jSp1, jSp2, jSp3]) {
+      if (jj < 0) continue;
+      rs.requestAngle(jj, 0, latT / nSp2, 'step', '躯干额状·目标');
+      // ⚠ 轴1（扭转）暂不驱动，理由见上
+    }
     rs.proposeUpperBody(0, latT, yawT);
   } else {
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, '迈步反相');

@@ -415,6 +415,14 @@ export interface BalanceParams {
   upLeanK?: number;
   /** ★ 上身额外倾角上限（度） */
   upLeanMaxDeg?: number;
+  /**
+   * ★ 盆骨去噪门限（rad/s）：骨盆（树根）角速度超过它时**不出上身修正**。
+   *   依据：`probe-pelvis` 实测盆骨角速度可达 11.7 rad/s（670 deg/s），
+   *   此时 `F_spine1 = F_hips + m_pelvis*(a-g)` 的差值项比两头的力还大
+   *   ⇒ 算出来的"上身力"没有物理意义，只会把噪声送进脊柱。
+   *   取 5 rad/s（286 deg/s）：约为实测峰值的 43%，留出正常步态余量。
+   */
+  pelvisWMax?: number;
   qpEnable?: boolean;
   /** QP 的踝权重倍数（Kim 2022：踝取髋的 3~5 倍；0 = 完全排除踝） */
   qpAnkleMul?: number;
@@ -835,6 +843,7 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
   //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
   upLeanK: 0,
+  pelvisWMax: 5,
   upLeanMaxDeg: 12,
   qpEnable: false,
   qpAnkleMul: 4,
@@ -2066,33 +2075,49 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     const leanMax = (p.upLeanMaxDeg ?? 12) * D2R;
     const corrPitch = clamp(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp(-upK * (capZ - stanceZ), leanMax);
-    // ★★ 综合并发布（**这一步就是用户说的"平衡系统再综合这个给一个最终的上身发力状态"**）
+    // ★★ 诊断：把 step 的目标记进 `upperBody.step`（控制不依赖它）——
+    //   真正的目标由 `step.ts` 直写脊柱三轴（见那里的注释）。
+    //   本块**只算修正增量**（用户：「平衡系统只修正，不考虑目标」）。
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
-    // 脊柱链（发布目标用）
-    const spineChain: number[] = [];
-    for (const nm of ['spine1', 'spine2', 'spine3']) {
-      const i2 = jointIndexByName(rs.sk, nm);
-      if (i2 >= 0) spineChain.push(i2);
-    }
-    // ③ 发布最终状态 —— **落到脊柱链的角度目标**。
+
+    // ★★★ ③ **盆骨去噪门**（用户：「逐帧回读，脊柱发力有问题」）
+    //   实测（`probe-pelvis`）：盆骨角速度可到 **670 deg/s**，此时
+    //   `F_spine1 = F_hips + m_pelvis*(a-g)` 的差值项比两头的力还大（竖向 -201 N）
+    //   ⇒ 在这种状态下算出来的"上身力"**没有物理意义**，只会把噪声送进脊柱。
+    //   ⇒ 角速度超过门限时**不出修正**（只记录，不静默）。
+    const pelvis = doll.bodyByKey('torso');       // 树根 = 骨盆
+    const pw = pelvis?.angvel();
+    const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
+    rs.pelvisW = pelvisW;
+    const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
+    if (noiseBlocked) rs.ubNoiseBlocked++;
+
+    // ★★★ ② **修正朝状态机阈值靠**（用户：「平衡系统…但是考虑一下状态机判定阈值」）
     //
-    //   ⚠⚠ 为什么是**角度**而不是力矩（实测教训）：
-    //     先写成 `τ = JᵀF`（力作用在上身 CoM）。但**纯竖向力**在脊柱上的力矩
-    //     ≈ 0（力与力臂共线：`(a−p) × (0,mg,0)` 的 z 分量 = Δx·mg，而 Δx≈0）
-    //     ⇒ 没有东西**维持姿态**。实测后果：`spine2` 弯到 **+33°**、让位后的
-    //     阻尼项顶到 ±120 来回翻（"腰不发力、对折"的机制重现）。
-    //     ⇒ 正确的分工：**力**由 `force` 表达（供门禁/诊断/上限计算），
-    //       **姿态**由角度目标落地（位置伺服是姿态的持有者，也该是）。
-    //     这就是用户说的「发力限制和方向需要严格计算」：
-    //       方向 = `final.pitch/roll` 的符号；限制 = `maxLean`（由力上限反解）。
-    const nSp = Math.max(1, spineChain.length);
-    for (let i2 = 0; i2 < spineChain.length; i2++) {
-      const jj = spineChain[i2]!;
-      // 矢状（axis 2）+ 额状（axis 0）各分摊 1/nSp；扭转（axis 1）先不动
-      rs.requestAngle(jj, 2, ub.final.pitch / nSp, 'balance', '上身·最终发布(矢状)');
-      rs.requestAngle(jj, 0, ub.final.roll / nSp, 'balance', '上身·最终发布(额状)');
+    //   状态机在 `LOAD -> PUSH` 要的是（`gaitState` 的判据）：
+    //       `承接腿承重 >= 0.6`、`com.z - stanceZ <= handoverTolZ`
+    //   ⇒ 修正**不去追瞬时平衡**（那会和阈值打架），而是**把 CoM 往承接腿推** ——
+    //     这正是"重心转移"的上身那一半，也是「拉不回来」缺的那一环。
+    //   ⚠ 只写**增量**：目标仍是 step 的（`req`），本通道只负责"再补多少"。
+    const recv = rs.roleRecv ?? rs.frontLeg();
+    const zRecv = recv === 'l' ? rs.soleZ.l : rs.soleZ.r;
+    const xRecv = recv === 'l' ? rs.soleX.l : rs.soleX.r;
+    const kUp2 = p.upLeanK ?? 0;
+    // ★ 去噪门：盆骨剧振时**修正置 0**（不 return —— 后面的块⑦还要跑）
+    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * (zRecv - rs.com.z), leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
+    const nSp = 3;
+    for (const nm of ['spine1', 'spine2', 'spine3']) {
+      const jj = jointIndexByName(rs.sk, nm);
+      if (jj < 0) continue;
+      rs.requestAngleCorr(jj, 2, cPitch / nSp, 'balance', 'balance修正·朝承接腿(矢状)');
+      rs.requestAngleCorr(jj, 0, cRoll / nSp, 'balance', 'balance修正·朝承接腿(额状)');
     }
-    rs.ubTau = Math.hypot(ub.force.fx, ub.force.fz);
+    // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读
+    ub.corrPitch = cPitch; ub.corrRoll = cRoll;
+    ub.final.pitch = ub.step.pitch + cPitch;
+    ub.final.roll = ub.step.roll + cRoll;
+    rs.ubTau = Math.hypot(cPitch, cRoll);
   }
 
   // ══════════════════════════════════════════════════════════════

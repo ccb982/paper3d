@@ -17494,8 +17494,12 @@ var init_rigState = __esm({
       disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
       /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
       disposeK = 1;
-      /** 上身发力（块⑧）本拍在脊柱链上下发的 |τ| 之和（N·m）—— 0 = 没在出力 */
+      /** 上身发力（块⑧）本拍在脊柱链上下发的量（修正量的模，rad）—— 0 = 没在出力 */
       ubTau = 0;
+      /** 骨盆（树根）本拍角速度模（rad/s）—— 盆骨去噪门的输入 */
+      pelvisW = 0;
+      /** 被盆骨去噪门挡住的拍数（诊断：>0 说明门在咬） */
+      ubNoiseBlocked = 0;
       /** 块⑧执行次数（诊断：0 = 没跑） */
       ubRuns = 0;
       /**
@@ -17506,6 +17510,18 @@ var init_rigState = __esm({
        *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
        */
       tauSrc = [];
+      /**
+       * ★★★ **修正增量通道**（用户 2026-10-06 定调：
+       *   「**迈步系统带着目标调整关节；平衡系统只修正，不考虑目标**」）。
+       *
+       *   为什么必须**独立于 `req[]`**：`req[]` 每轴只有一个槽、按优先级**覆盖**。
+       *   若 balance 直接往 `req[]` 写，它写的就是"目标"而不是"修正" ——
+       *   与用户的定调相反，而且会**盖掉**迈步的目标。
+       *   ⇒ `acorr[]` 是**相加**通道：`最终 = 目标(req) + 修正(acorr)`，职责不重叠。
+       */
+      acorr = new Float64Array(0);
+      /** 本拍被写过的修正轴（诊断/UI：谁加了多少） */
+      acorrStat = [];
       /**
        * ★★★ **逐关节发力门禁**（用户 2026-10-06：
        *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
@@ -17756,6 +17772,7 @@ var init_rigState = __esm({
         this.tgtOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
         this.forceBuf = new Float64Array(sk2.joints.length * 5);
+        this.acorr = new Float64Array(sk2.joints.length * 3);
         this.treq.fill(void 0);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
@@ -18257,6 +18274,8 @@ var init_rigState = __esm({
         let republished = 0, overridden = 0;
         for (const p of this.stepProps) {
           const j = Math.floor(p.i / 3), a = p.i % 3;
+          const nm = this.sk.joints[j]?.name ?? "";
+          if (nm.startsWith("spine")) continue;
           const cur = this.req[p.i];
           if (cur && cur.system === "balance" || this.hold[p.i]) {
             overridden++;
@@ -18316,6 +18335,34 @@ var init_rigState = __esm({
         ub.force.fz = ub.mass * 9.81 * Math.tan(cr);
         ub.decidedBy = Math.abs(corrPitch) + Math.abs(corrRoll) > 1e-4 ? "balance" : "step";
       }
+      /**
+       * ★★★ **修正增量**（弧度）—— 与 `requestAngle` 的目标**相加**，不是覆盖。
+       *
+       *   用户定调：「平衡系统**只修正，不考虑目标**」。
+       *   ⇒ 平衡系统调用本接口时**不需要知道目标是什么**，它只回答"该再补多少"。
+       *   ⚠ 量纲：与 `requestAngle` 一样收**弧度**，内部按量程归一化后累加。
+       */
+      requestAngleCorr(joint, axis, deltaRad, system, label) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        if (!(Math.abs(deltaRad) > 1e-9)) return;
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        this.acorr[i] = (this.acorr[i] ?? 0) + deltaRad * 0.9 / span;
+        this.acorrStat.push({ axis: i, delta: deltaRad, label });
+        this.requestCount++;
+      }
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
@@ -18341,6 +18388,8 @@ var init_rigState = __esm({
             t.value = 0;
           }
         }
+        this.acorr.fill(0);
+        this.acorrStat.length = 0;
         this.upperBody.step.pitch = 0;
         this.upperBody.step.roll = 0;
         this.upperBody.step.yaw = 0;
@@ -18383,9 +18432,14 @@ var init_rigState = __esm({
             out[i] = r.value;
           }
         }
+        for (let i = 0; i < this.nAxes; i++) {
+          const d = this.acorr[i] ?? 0;
+          if (d === 0) continue;
+          out[i] = (out[i] ?? 0) + d;
+        }
         for (let i = 0; i < out.length; i++) {
           if (!this.req[i]) {
-            out[i] = this.prevTarget[i] ?? 0;
+            out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
             const t = this.tgt[i];
             if (t.owner === "none") {
               t.owner = "bind";
@@ -22794,18 +22848,30 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
-    const spineChain = [];
+    const pelvis = doll.bodyByKey("torso");
+    const pw = pelvis?.angvel();
+    const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
+    rs.pelvisW = pelvisW;
+    const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
+    if (noiseBlocked) rs.ubNoiseBlocked++;
+    const recv = rs.roleRecv ?? rs.frontLeg();
+    const zRecv = recv === "l" ? rs.soleZ.l : rs.soleZ.r;
+    const xRecv = recv === "l" ? rs.soleX.l : rs.soleX.r;
+    const kUp2 = p.upLeanK ?? 0;
+    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * (zRecv - rs.com.z), leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * (xRecv - rs.com.x), leanMax);
+    const nSp = 3;
     for (const nm of ["spine1", "spine2", "spine3"]) {
-      const i2 = jointIndexByName(rs.sk, nm);
-      if (i2 >= 0) spineChain.push(i2);
+      const jj = jointIndexByName(rs.sk, nm);
+      if (jj < 0) continue;
+      rs.requestAngleCorr(jj, 2, cPitch / nSp, "balance", "balance\u4FEE\u6B63\xB7\u671D\u627F\u63A5\u817F(\u77E2\u72B6)");
+      rs.requestAngleCorr(jj, 0, cRoll / nSp, "balance", "balance\u4FEE\u6B63\xB7\u671D\u627F\u63A5\u817F(\u989D\u72B6)");
     }
-    const nSp = Math.max(1, spineChain.length);
-    for (let i2 = 0; i2 < spineChain.length; i2++) {
-      const jj = spineChain[i2];
-      rs.requestAngle(jj, 2, ub.final.pitch / nSp, "balance", "\u4E0A\u8EAB\xB7\u6700\u7EC8\u53D1\u5E03(\u77E2\u72B6)");
-      rs.requestAngle(jj, 0, ub.final.roll / nSp, "balance", "\u4E0A\u8EAB\xB7\u6700\u7EC8\u53D1\u5E03(\u989D\u72B6)");
-    }
-    rs.ubTau = Math.hypot(ub.force.fx, ub.force.fz);
+    ub.corrPitch = cPitch;
+    ub.corrRoll = cRoll;
+    ub.final.pitch = ub.step.pitch + cPitch;
+    ub.final.roll = ub.step.roll + cRoll;
+    rs.ubTau = Math.hypot(cPitch, cRoll);
   }
   rs.disposeK = (() => {
     if (!on("dispose")) return 1;
@@ -23083,6 +23149,7 @@ var init_balance = __esm({
       //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
       //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
       upLeanK: 0,
+      pelvisWMax: 5,
       upLeanMaxDeg: 12,
       qpEnable: false,
       qpAnkleMul: 4,
@@ -23320,6 +23387,12 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (on("upForce")) {
       const swS = swing === "l" ? 1 : -1;
+      const nSp = 3;
+      for (const jj of [jSp1, jSp2, jSp3]) {
+        if (jj < 0) continue;
+        rs.requestAngle(jj, 2, kp.trunkPitch / nSp, "step", "\u8EAF\u5E72\u77E2\u72B6\xB7\u76EE\u6807");
+        rs.requestAngle(jj, 0, swS * kp.trunkLat / nSp, "step", "\u8EAF\u5E72\u989D\u72B6\xB7\u76EE\u6807");
+      }
       rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
@@ -23344,6 +23417,11 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const yawT = swSign * kp2.trunkYaw * rs.authority;
   const latT = swSign * kp2.trunkLat * rs.authority;
   if (on("upForce")) {
+    const nSp2 = 3;
+    for (const jj of [jSp1, jSp2, jSp3]) {
+      if (jj < 0) continue;
+      rs.requestAngle(jj, 0, latT / nSp2, "step", "\u8EAF\u5E72\u989D\u72B6\xB7\u76EE\u6807");
+    }
     rs.proposeUpperBody(0, latT, yawT);
   } else {
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, "\u8FC8\u6B65\u53CD\u76F8");
