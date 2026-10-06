@@ -48,6 +48,14 @@ export class Controller {
   readonly rigReport: RigReport;
   /** 载荷比的低通状态（τ=60 ms）。理由见 `step()` 里赋值处的注释。 */
   private readonly loadFilt = { l: 0.5, r: 0.5 };
+  /** 接触去抖：上一拍的原始接地事实（用来判"翻转"） */
+  private gndPrev = { l: false, r: false };
+  /** 接触去抖：原始标志已连续保持多久（s） */
+  private gndRawT = { l: 0, r: 0 };
+  /** 接触去抖时长（s）。取 3 拍（60Hz）—— 实测翻转间隔约 1~2 拍，3 拍能把它们吃掉 */
+  private readonly groundedHoldSec = 3 / 60;
+  /** 本拍接触翻转次数（诊断用，累加后交给 `rs.contactFlips`） */
+  private contactFlips = 0;
 
   constructor(sk: Skeleton, private sim: Sim, cfg: ControllerConfig = DEFAULT_CONTROLLER) {
     this.cfg = cfg;
@@ -96,8 +104,32 @@ export class Controller {
     this.loadFilt.l += (fl - this.loadFilt.l) * kL;
     this.loadFilt.r += (fr - this.loadFilt.r) * kL;
     rs.loadFrac.l = this.loadFilt.l; rs.loadFrac.r = this.loadFilt.r;
-    rs.grounded.l = sim.doll.footGrounded(0);
-    rs.grounded.r = sim.doll.footGrounded(1);
+    // ★★ **接触去抖**（2026-10-06）。实测原始 `footGrounded` 逐拍在
+    //   `11 / 01 / 10` 之间翻转（`probe-domain` 的 LOAD 段可见），
+    //   而状态机的 `双脚接地` / `后脚未离地` / `承重腿在位` 都是**单采样**判据
+    //   ⇒ 会被接触噪声直接判死。
+    //   `rs.grounded` 保留**原始事实**（UI 的「接地/离地」要看真的），
+    //   另存一份**去抖后**的 `rs.gndStable` 专供判据。
+    const gRawL = sim.doll.footGrounded(0);
+    const gRawR = sim.doll.footGrounded(1);
+    if (gRawL !== this.gndPrev.l) { this.gndRawT.l = 0; this.contactFlips++; }
+    if (gRawR !== this.gndPrev.r) { this.gndRawT.r = 0; this.contactFlips++; }
+    if (gRawL === this.gndPrev.l) this.gndRawT.l += dt;
+    if (gRawR === this.gndPrev.r) this.gndRawT.r += dt;
+    this.gndPrev.l = gRawL; this.gndPrev.r = gRawR;
+    if (this.gndRawT.l >= this.groundedHoldSec) rs.gndStable.l = gRawL;
+    if (this.gndRawT.r >= this.groundedHoldSec) rs.gndStable.r = gRawR;
+    rs.grounded.l = gRawL;
+    rs.grounded.r = gRawR;
+    // 诊断：接触翻转数与「载荷读数落在 0.5/0.5 回退值」的占比
+    //   （后者是接触模型可信度的代理指标 —— 有接触却读到回退值 = 读数不可信）
+    rs.contactFlips = this.contactFlips;
+    this.contactFlips = 0;
+    if (Math.abs(rs.loadFrac.l - 0.5) < 2e-3 && Math.abs(rs.loadFrac.r - 0.5) < 2e-3) {
+      rs.loadFallbackFrac = Math.min(1, rs.loadFallbackFrac + 1 / Math.max(1, Math.round(0.5 / dt)));
+    } else {
+      rs.loadFallbackFrac *= 0.96;
+    }
     // ★★ **收敛点**："现在是真单支撑吗"由 `Ragdoll` 的统一判定给出
     //   （接触数 + 净空门槛 + 滞回），控制侧与计分侧读**同一份**。
     //   ⚠ 纯**读取** `stanceSingleNow`。挡位 II 下 `sim.cfg.driver==='controller'`

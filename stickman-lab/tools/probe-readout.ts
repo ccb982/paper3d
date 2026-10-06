@@ -23,6 +23,7 @@
  * ════════════════════════════════════════════════════════════════════════
  */
 import fs from 'node:fs';
+import type * as RAPIER from '@dimforge/rapier3d';
 import { createRequire } from 'node:module';
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
 
@@ -173,6 +174,96 @@ for (let i = 0; i < nTicks && !sim.finished; i++) {
 }
 
 // ══ ② 质心动量 ═══════════════════════════════════════════════════════════
+log('');
+log('╔══ ①b 接触解剖：分辨「真的离地」与「接触检测坏了」════════════════════════╗');
+log('║ 背景（2026-10-06 查 `后脚未离地` 时发现）：');
+log('║   trace 显示 `脚底离地 0/0mm`（脚就在地面高度）但 `接触块 0`、`触地 00`、');
+log('║   `载荷 00`，而 loadFrac 缓慢漂向 0.5/0.5（= 文档里写的「两脚都没受力」回退值）。');
+log('║   ⇒ 要么接触**真的不存在**（物理问题），要么 `footGrounded` 的判据把它漏掉了');
+log('║   （检测问题）。两者修法完全不同，所以逐 collider 摊开看。');
+{
+  // ⚠ 必须在**摔倒之前**测：主 sim 跑到这里时 `sim.finished` 已经为真
+  //   （体已经倒了，接触当然没有 ⇒ 测出来的"0 接触"是废话）。
+  //   所以另起一个干净的短 sim，只跑 0.30s。
+  const sk2 = buildSkeleton(DEFAULT_CONFIG);
+  const sim2 = new Sim(sk2, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 0.3 });
+  sim2.begin(new Float32Array(sim2.paramCount));
+  const ctrl2 = new Controller(sk2, sim2, DEFAULT_CONTROLLER);
+  const w2 = (sim2.doll as unknown as { world: RAPIER.World }).world;
+  log('  （另起一个干净 sim，只跑 0.30s —— 必须在摔倒前测）');
+  for (let tick = 0; tick < 4; tick++) {
+    for (let i = 0; i < Math.round(0.075 * sim2.cfg.physicsHz); i++) {
+      if (i % PHYS_PER_CTRL === 0) sim2.doll.setMotorTargets(ctrl2.step(1 / CTRL_HZ));
+      sim2.advance(1);
+    }
+    const tSec = sim2.ticksDone / CTRL_HZ;
+    const headY = sk2.bodies.find((b) => b.key === 'head')?.cy ?? NaN;
+    log(`  ── t=${tSec.toFixed(3)}s  headY=${headY.toFixed(3)}  结束=${sim2.finished ? '是' : '否'}`);
+    for (const side of [0, 1] as const) {
+      const cols = sim2.doll.soleCols[side];
+      let manifolds = 0; let contacts = 0; const nys: string[] = [];
+      for (const col of cols) {
+        w2.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
+          w2.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
+            const n = mf.numContacts();
+            if (n === 0) return;
+            manifolds++; contacts += n;
+            const ny = mf.normal().y;
+            // `footGrounded` 的判据：|n_y| > 0.5
+            nys.push(`${ny.toFixed(2)}${Math.abs(ny) > 0.5 ? '✓' : '✗'}`);
+          });
+        });
+      }
+      const lf = sim2.doll.footLoadFrac(1 / sim2.cfg.physicsHz);
+      const sd = side === 0 ? 'l' : 'r';
+      log(`     脚${side === 0 ? '左' : '右'}：块=${cols.length} 有流形=${manifolds} 接触点=${contacts}`
+        + ` n_y=[${nys.join(' ')}] grounded=${sim2.doll.footGrounded(side) ? 1 : 0}`
+        + ` loaded=${sim2.doll.footLoaded(side) ? 1 : 0} loadFrac=${lf[side].toFixed(3)}`
+        + ` soleY=${(ctrl2.rs.soleY[sd] ?? 0).toFixed(4)} comY=${ctrl2.rs.com.y.toFixed(3)}`);
+    }
+  }
+log('║');
+log('║ ② 关节读数的逐拍抖动（判据读的是这个信号，必须先知道它有多脏）：');
+{
+  // 背景：`probe-domain` 的 LOAD 段显示 `承接膝屈(吸振)` 在 +2.47 / -0.22 / +2.54 /
+  //   -1.61 / +1.98 … 之间逐拍跳变。膝关节不可能这样动 ⇒ 要么是读数抖，
+  //   要么是**电机在抖**（位置环振荡）。两者对判据的影响完全不同，先分清。
+  const sk3 = buildSkeleton(DEFAULT_CONFIG);
+  const sim3 = new Sim(sk3, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 0.5 });
+  sim3.begin(new Float32Array(sim3.paramCount));
+  const ctrl3 = new Controller(sk3, sim3, DEFAULT_CONTROLLER);
+  const N = 30;
+  const series: Record<string, number[]> = { '膝_l': [], '踝_l': [], '髋_l': [], '膝速度_l': [] };
+  for (let i = 0; i < Math.round(0.5 * sim3.cfg.physicsHz) && !sim3.finished; i++) {
+    if (i % PHYS_PER_CTRL === 0) {
+      sim3.doll.setMotorTargets(ctrl3.step(1 / CTRL_HZ));
+      const jq3 = ctrl3.rs.jq;
+      if (jq3) {
+        series['膝_l']!.push(jq3.angleDeg('knee_l', 2));
+        series['踝_l']!.push(jq3.angleDeg('foot_l', 2));
+        series['髋_l']!.push(jq3.angleDeg('hip_l', 2));
+        series['膝速度_l']!.push(jq3.velDegPerSec('knee_l', 2));
+      }
+    }
+    sim3.advance(1);
+  }
+  for (const [name, arr] of Object.entries(series)) {
+    const a = arr.slice(-N);
+    if (a.length < 5) { log(`║   ${name.padEnd(10)} 样本不足`); continue; }
+    const mean = a.reduce((x, y) => x + y, 0) / a.length;
+    const sd = Math.sqrt(a.reduce((x, y) => x + (y - mean) ** 2, 0) / a.length);
+    let maxStep = 0;
+    for (let i = 1; i < a.length; i++) maxStep = Math.max(maxStep, Math.abs(a[i]! - a[i - 1]!));
+    log(`║   ${name.padEnd(10)} 均值 ${mean.toFixed(2).padStart(8)}  标准差 ${sd.toFixed(3).padStart(7)}`
+      + `  逐拍最大跳变 ${maxStep.toFixed(3).padStart(7)}  范围 [${Math.min(...a).toFixed(2)}, ${Math.max(...a).toFixed(2)}]`);
+  }
+  log('║   读法：标准差 ≫ 0.1° ⇒ 读数本身在抖。判据若单采样，就会跨阈值抖动');
+  log('║         （表现为状态在边界反复、或"差一点点"却永远不过）⇒ 需要滤波/迟滞。');
+}
+log('║ 读法：`n_y` 全部带 ✗ ⇒ 法向接近水平 ⇒ `footGrounded` 的 |n_y|>0.5 判据把');
+  log('║       真实接触判成「没接地」—— 那是**检测判据**的问题（改判据即可）。');
+  log('║       `有流形的块=0` ⇒ 接触图里根本没有这一对 —— 那是**物理/碰撞体**的问题。');
+}
 log('');
 log('╔══ ② 质心动量（centroidal.ts 的输出，末拍）════════════════════════════╗');
 log(`║  m       = ${cs.m.toFixed(2)} kg`);

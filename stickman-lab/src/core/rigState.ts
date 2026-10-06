@@ -585,6 +585,24 @@ export class RigState {
   /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
   stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number }
     = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+  // ══ ★ 信号调理（2026-10-06）═════════════════════════════════════
+  //   实测（`probe-readout` ①b②）：**判据要读的信号本身在抖** ——
+  //     膝 σ=2.17°（逐拍最大跳 6.04°）、踝 σ=9.35°（跳 21.1°）、
+  //     膝角速度 σ=410 deg/s（跳 1069 deg/s）、
+  //     `grounded` 逐拍在 `11/01/10` 之间翻转、
+  //     载荷读数在**确实有接触**时也常打到「两脚都没受力」的 0.5/0.5 回退值。
+  //   而签名门槛只有 6~12° ⇒ **单采样判据在物理上不可能成立**。
+  //   下面是给判据用的**调理后**信号 / 诊断量；原始物理量仍然保留。
+  /** 接触**去抖后**的接地判定：原始标志连续保持 `groundedHoldSec` 才认（判据专用） */
+  gndStable: Record<Side, boolean> = { l: false, r: false };
+  /** 本拍接触翻转次数（诊断"接触在抖"；`Controller` 每拍写入） */
+  contactFlips = 0;
+  /** 关节角**低通后**的值（判据只用它，不用原始 `pos`） */
+  angLp: Float64Array = new Float64Array(0);
+  /** 原始关节角的逐拍最大跳变（deg）—— 抖动幅度，诊断用 */
+  jointNoiseDeg = 0;
+  /** 载荷读数落在 0.5/0.5 回退值的占比（0~1）—— 接触模型可信度的代理指标 */
+  loadFallbackFrac = 0;
   /**
    * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
    *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。

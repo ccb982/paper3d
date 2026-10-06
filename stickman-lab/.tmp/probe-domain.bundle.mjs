@@ -17032,6 +17032,24 @@ var init_rigState = __esm({
       lastMove = null;
       /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
       stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+      // ══ ★ 信号调理（2026-10-06）═════════════════════════════════════
+      //   实测（`probe-readout` ①b②）：**判据要读的信号本身在抖** ——
+      //     膝 σ=2.17°（逐拍最大跳 6.04°）、踝 σ=9.35°（跳 21.1°）、
+      //     膝角速度 σ=410 deg/s（跳 1069 deg/s）、
+      //     `grounded` 逐拍在 `11/01/10` 之间翻转、
+      //     载荷读数在**确实有接触**时也常打到「两脚都没受力」的 0.5/0.5 回退值。
+      //   而签名门槛只有 6~12° ⇒ **单采样判据在物理上不可能成立**。
+      //   下面是给判据用的**调理后**信号 / 诊断量；原始物理量仍然保留。
+      /** 接触**去抖后**的接地判定：原始标志连续保持 `groundedHoldSec` 才认（判据专用） */
+      gndStable = { l: false, r: false };
+      /** 本拍接触翻转次数（诊断"接触在抖"；`Controller` 每拍写入） */
+      contactFlips = 0;
+      /** 关节角**低通后**的值（判据只用它，不用原始 `pos`） */
+      angLp = new Float64Array(0);
+      /** 原始关节角的逐拍最大跳变（deg）—— 抖动幅度，诊断用 */
+      jointNoiseDeg = 0;
+      /** 载荷读数落在 0.5/0.5 回退值的占比（0~1）—— 接触模型可信度的代理指标 */
+      loadFallbackFrac = 0;
       /**
        * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
        *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。
@@ -18531,8 +18549,8 @@ var init_gaitState = __esm({
       DOUBLE: [
         {
           item: "\u53CC\u811A\u63A5\u5730",
-          ok: (c) => c.rs.grounded[c.front] && c.rs.grounded[c.rear],
-          val: (c) => (c.rs.grounded[c.front] ? 1 : 0) + (c.rs.grounded[c.rear] ? 1 : 0),
+          ok: (c) => c.gnd(c.front) && c.gnd(c.rear),
+          val: (c) => (c.gnd(c.front) ? 1 : 0) + (c.gnd(c.rear) ? 1 : 0),
           tol: () => 2
         },
         {
@@ -18585,16 +18603,29 @@ var init_gaitState = __esm({
         },
         {
           item: "\u540E\u811A\u672A\u79BB\u5730",
-          ok: (c) => c.rs.grounded[c.rear],
-          val: (c) => c.rs.grounded[c.rear] ? 1 : 0,
+          ok: (c) => c.gnd(c.rear),
+          val: (c) => c.gnd(c.rear) ? 1 : 0,
           tol: () => 1
         },
         // ★ SCONE `EarlyStance→LateStance`：承接脚不在重心前方太远
+        // ★ 2026-10-06 **判据映射纠错**（用户选题①时发现）：
+        //   原来这里是 `承接脚矢状位置 <= 0.10`，抄自 SCONE 的
+        //   `EarlyStance→LateStance`（`late_stance_threshold` = 0.0）——
+        //   但那是**「早支撑→晚支撑」**的判据，我把它贴到了 `LOAD`（= LoadingResponse）。
+        //   实测后果：`sagPosRel(recv)` 从 0.206 **单调增到 0.636**（门槛 0.100），
+        //   越走越远、永远回不来 ⇒ `LOAD` 被这一项**结构性**卡死。
+        //   而且它与本 rig 的站姿**根本不兼容**：双脚站距 327mm 时，前脚天然在重心
+        //   前方约半个步长，「前脚不在重心前方 0.10 腿长以内」在双支撑站姿下
+        //   是个几何上不可满足的条件。
+        //
+        //   正确判据（Perry）：`LoadingResponse` 的**定义事件**是 Initial Contact
+        //   —— 即承接腿那一瞬间的触地。所以判「承接腿已触地」才是这一态的主判据；
+        //   矢状位置属于 `PUSH`/`THRUST`（TerminalStance/PreSwing）该管的事。
         {
-          item: "\u627F\u63A5\u811A\u77E2\u72B6\u4F4D\u7F6E",
-          ok: (c) => c.rs.sagPosRel(c.recv) <= c.cfg.sagLoadThr,
-          val: (c) => c.rs.sagPosRel(c.recv),
-          tol: (c) => c.cfg.sagLoadThr
+          item: "\u627F\u63A5\u817F\u5DF2\u89E6\u5730",
+          ok: (c) => c.touchdown[c.recv] || c.gnd(c.recv),
+          val: (c) => (c.touchdown[c.recv] ? 1 : 0) + (c.gnd(c.recv) ? 1 : 0),
+          tol: () => 1
         },
         // ★ 手性不变式：本周期的摆动腿不能与上周期相同。
         //   SCONE/EPFL 是**每腿一个 FSM**，左右交替由结构保证；我们是**周期级** FSM，
@@ -18649,14 +18680,14 @@ var init_gaitState = __esm({
         },
         {
           item: "\u627F\u91CD\u817F\u5728\u4F4D",
-          ok: (c) => c.rs.grounded[c.sup],
-          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
+          ok: (c) => c.gnd(c.sup),
+          val: (c) => c.gnd(c.sup) ? 1 : 0,
           tol: () => 1
         },
         {
           item: "\u53CC\u811A\u4ECD\u7740\u5730",
-          ok: (c) => c.rs.grounded[c.rear],
-          val: (c) => c.rs.grounded[c.rear] ? 1 : 0,
+          ok: (c) => c.gnd(c.rear),
+          val: (c) => c.gnd(c.rear) ? 1 : 0,
           tol: () => 1
         },
         { item: "\u627F\u91CD\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
@@ -18712,8 +18743,8 @@ var init_gaitState = __esm({
         },
         {
           item: "\u627F\u91CD\u817F\u5728\u4F4D",
-          ok: (c) => c.rs.grounded[c.sup],
-          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
+          ok: (c) => c.gnd(c.sup),
+          val: (c) => c.gnd(c.sup) ? 1 : 0,
           tol: () => 1
         },
         { item: "\u627F\u91CD\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
@@ -18752,8 +18783,8 @@ var init_gaitState = __esm({
         },
         {
           item: "\u6446\u52A8\u817F\u5DF2\u79BB\u5730",
-          ok: (c) => !c.rs.grounded[c.sw],
-          val: (c) => c.rs.grounded[c.sw] ? 1 : 0,
+          ok: (c) => !c.gnd(c.sw),
+          val: (c) => c.gnd(c.sw) ? 1 : 0,
           tol: () => 0
         },
         {
@@ -18764,8 +18795,8 @@ var init_gaitState = __esm({
         },
         {
           item: "\u627F\u91CD\u817F\u5728\u4F4D",
-          ok: (c) => c.rs.grounded[c.sup],
-          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
+          ok: (c) => c.gnd(c.sup),
+          val: (c) => c.gnd(c.sup) ? 1 : 0,
           tol: () => 1
         },
         // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
@@ -18840,6 +18871,19 @@ var init_gaitState = __esm({
       t = 0;
       /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
       lastStepT = -1e9;
+      /**
+       * ★ 本周期是否**真的发生过一次抬腿**（2026-10-06 修）。
+       *
+       *   起因：`rs.grounded` 去抖后，起步时两脚"由空中转为稳定接地"同样会产生
+       *   **触地边沿**（`wasGrounded` 初值 false → `gndStable` 变 true）。
+       *   旧代码对任何 `touchdown[sw]` 都记账，于是**起步那一下被当成"刚迈完一步"**：
+       *     · `lastStepT = t` ⇒ `LOAD` 的「节奏间隔」从 0.23s 开始算，
+       *       被硬生生卡住整整 `stepIntervalSec = 1.0s`；
+       *     · `rs.lastSwing = sw` ⇒ 承接腿在起步瞬间被翻到"最后落地的那条"，
+       *       覆盖掉 `frontLeg()` 的一次性引导。
+       *   ⇒ 只有**先发生过离地**再触地，才算完成了一步。
+       */
+      hasStepped = false;
       /** 接地历史（边沿检测用） */
       wasGrounded = { l: false, r: false };
       /** 硬项连续越界时长（s）；超 `graceSec` ⇒ 安全态（Vughuma） */
@@ -18899,9 +18943,9 @@ var init_gaitState = __esm({
         const touchdown = { l: false, r: false };
         const liftoff = { l: false, r: false };
         for (const s of ["l", "r"]) {
-          if (rs.grounded[s] && !this.wasGrounded[s]) touchdown[s] = true;
-          if (!rs.grounded[s] && this.wasGrounded[s]) liftoff[s] = true;
-          this.wasGrounded[s] = rs.grounded[s];
+          if (rs.gndStable[s] && !this.wasGrounded[s]) touchdown[s] = true;
+          if (!rs.gndStable[s] && this.wasGrounded[s]) liftoff[s] = true;
+          this.wasGrounded[s] = rs.gndStable[s];
         }
         const recv = rs.lastSwing ?? rs.frontLeg();
         const rear = recv === "l" ? "r" : "l";
@@ -18936,6 +18980,7 @@ var init_gaitState = __esm({
           front,
           rear,
           recv,
+          gnd: (sd) => rs.gndStable[sd],
           touchdown,
           liftoff,
           swingKneeVel,
@@ -18988,15 +19033,18 @@ var init_gaitState = __esm({
         rs.supportEntryZ = supportEntry(rs.soleZ[sup]);
         if (touchdown[sw]) {
           rs.locked[sw] = true;
-          rs.lastSwing = sw;
-          this.lastStepT = this.t;
-          rs.cycleCount = rs.state === "SWING" ? rs.cycleCount + 1 : rs.cycleCount;
+          if (this.hasStepped) {
+            rs.lastSwing = sw;
+            this.lastStepT = this.t;
+            rs.cycleCount = rs.state === "SWING" ? rs.cycleCount + 1 : rs.cycleCount;
+          }
         }
         if (rs.state === "LIFT" || rs.state === "SWING") rs.locked[sw] = false;
         rs.stepPermit = makeCriteria(
           {
             P1_\u5DF2\u5378\u8F7D: rs.loadFrac[sw] <= cfg.loadReleaseFrac,
-            P2_\u5DF2\u79BB\u5730: !rs.grounded[sw],
+            P2_\u5DF2\u79BB\u5730: !rs.gndStable[sw],
+            // ★ 去抖信号：单拍噪声不该授予迈步许可
             P3_\u672A\u9501\u5B9A: !rs.locked[sw],
             P4_\u624B\u6027\u4EA4\u66FF: rs.lastSwing !== sw,
             P5_\u7A33\u5B9A\u6027: rs.mos >= cfg.mosMin && Math.abs(rs.tiltDeg) <= cfg.tiltMaxDeg,
@@ -19005,7 +19053,7 @@ var init_gaitState = __esm({
           {
             loadFrac: rs.loadFrac[sw],
             releaseThr: cfg.loadReleaseFrac,
-            grounded: rs.grounded[sw] ? 1 : 0,
+            grounded: rs.gndStable[sw] ? 1 : 0,
             locked: rs.locked[sw] ? 1 : 0,
             lastIsSwing: rs.lastSwing === sw ? 1 : 0,
             mos: rs.mos,
@@ -19049,6 +19097,7 @@ var init_gaitState = __esm({
           this.event.side = sw;
           this.event.note = `\u89E6\u5730\u5E76\u9501\u5B9A ${sw}`;
         } else if (liftoff[sw]) {
+          this.hasStepped = true;
           this.event.kind = "liftoff";
           this.event.side = sw;
           this.event.note = `\u79BB\u5730 ${sw}`;
@@ -19144,6 +19193,7 @@ var init_gaitState = __esm({
         this.t = 0;
         this.lastStepT = -1e9;
         this.badT = 0;
+        this.hasStepped = false;
         this.wasGrounded.l = false;
         this.wasGrounded.r = false;
         this.bearer = this.cfg.startBearer;
@@ -22384,6 +22434,14 @@ var init_controller = __esm({
       rigReport;
       /** 载荷比的低通状态（τ=60 ms）。理由见 `step()` 里赋值处的注释。 */
       loadFilt = { l: 0.5, r: 0.5 };
+      /** 接触去抖：上一拍的原始接地事实（用来判"翻转"） */
+      gndPrev = { l: false, r: false };
+      /** 接触去抖：原始标志已连续保持多久（s） */
+      gndRawT = { l: 0, r: 0 };
+      /** 接触去抖时长（s）。取 3 拍（60Hz）—— 实测翻转间隔约 1~2 拍，3 拍能把它们吃掉 */
+      groundedHoldSec = 3 / 60;
+      /** 本拍接触翻转次数（诊断用，累加后交给 `rs.contactFlips`） */
+      contactFlips = 0;
       get summary() {
         return rigSummary(this.rigReport);
       }
@@ -22405,8 +22463,31 @@ var init_controller = __esm({
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
         rs.loadFrac.l = this.loadFilt.l;
         rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim.doll.footGrounded(0);
-        rs.grounded.r = sim.doll.footGrounded(1);
+        const gRawL = sim.doll.footGrounded(0);
+        const gRawR = sim.doll.footGrounded(1);
+        if (gRawL !== this.gndPrev.l) {
+          this.gndRawT.l = 0;
+          this.contactFlips++;
+        }
+        if (gRawR !== this.gndPrev.r) {
+          this.gndRawT.r = 0;
+          this.contactFlips++;
+        }
+        if (gRawL === this.gndPrev.l) this.gndRawT.l += dt;
+        if (gRawR === this.gndPrev.r) this.gndRawT.r += dt;
+        this.gndPrev.l = gRawL;
+        this.gndPrev.r = gRawR;
+        if (this.gndRawT.l >= this.groundedHoldSec) rs.gndStable.l = gRawL;
+        if (this.gndRawT.r >= this.groundedHoldSec) rs.gndStable.r = gRawR;
+        rs.grounded.l = gRawL;
+        rs.grounded.r = gRawR;
+        rs.contactFlips = this.contactFlips;
+        this.contactFlips = 0;
+        if (Math.abs(rs.loadFrac.l - 0.5) < 2e-3 && Math.abs(rs.loadFrac.r - 0.5) < 2e-3) {
+          rs.loadFallbackFrac = Math.min(1, rs.loadFallbackFrac + 1 / Math.max(1, Math.round(0.5 / dt)));
+        } else {
+          rs.loadFallbackFrac *= 0.96;
+        }
         {
           sim.doll.stanceClearancePeak = Math.max(
             Math.max(0, sim.doll.soleY("l")),
@@ -22566,6 +22647,10 @@ function run(balanceOverrides, secs2, gaitOverrides = {}) {
         support: rs.supportLeg(),
         swing: rs.swingLeg(),
         grounded: `${rs.grounded.l ? 1 : 0}${rs.grounded.r ? 1 : 0}`,
+        soleYmm: `${((rs.soleY.l ?? 0) * 1e3).toFixed(0)}/${((rs.soleY.r ?? 0) * 1e3).toFixed(0)}`,
+        contactN: rs.support.contactN,
+        loaded: `${sim.doll.footLoaded(0) ? 1 : 0}${sim.doll.footLoaded(1) ? 1 : 0}`,
+        gndS: `${rs.gndStable.l ? 1 : 0}${rs.gndStable.r ? 1 : 0}`,
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount,
         clearance: rs.swingClearance
@@ -22632,10 +22717,21 @@ log(`\u2550\u2550 A\u2013B. \u8FC1\u79FB\u53EA\u53D1\u751F\u5728\u9A8C\u6536\u90
   else bad(`\u8FD9\u4E9B\u72B6\u6001\u4ECE\u672A\u88AB\u8BBF\u95EE\uFF1A${missing.join(", ")}`);
   log("");
   log("  \u8DCC\u5012\u524D 14 \u62CD\u9010\u62CD\u56DE\u8BFB\uFF1A");
-  log("    t(s)   state   ok  sup sw  gnd  loadL/loadR  \u51C0\u7A7A   \u9996\u9879\u672A\u8FC7 (\u5F53\u524D/\u95E8\u9650)");
+  log("    t(s)   state   ok  sup sw  gnd  load  \u89E6\u5730  \u8F7D\u8377  \u811A\u5E95\u79BB\u5730mm \u63A5\u89E6\u5757  \u9996\u9879\u672A\u8FC7 (\u5F53\u524D/\u95E8\u9650)");
+  const firstMove = r.moves.length ? Math.round(r.moves[0].tSec * CTRL_HZ) : 0;
+  log("");
+  log(`  \u8FC1\u79FB\u540E\u6BCF 4 \u62CD\u53D6 1 \u62CD\uFF08t=${(firstMove / CTRL_HZ).toFixed(2)}s \u8D77\uFF0C\u94FA\u6EE1\u5230\u7ED3\u675F = \u5361\u4F4F\u7684\u90A3\u4E00\u6BB5\uFF09\uFF1A`);
+  log("    t(s)   state   ok  sup sw  \u539F\u59CBgnd \u53BB\u6296gnd  load  \u8F7D\u8377  \u811A\u5E95\u79BB\u5730mm \u63A5\u89E6\u5757  \u9996\u9879\u672A\u8FC7 (\u5F53\u524D/\u95E8\u9650)");
+  const post = r.trace.slice(firstMove);
+  for (const t of post.filter((_x, i2) => i2 % 4 === 0 || i2 >= post.length - 3)) {
+    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : "\u2014";
+    log(`    ${(r.trace.indexOf(t) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)} ${t.verified ? "\u2713" : "\u2717"}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}    ${t.load}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
+  }
+  log("");
+  log("  \u8DCC\u5012\u524D 14 \u62CD\u9010\u62CD\u56DE\u8BFB\uFF1A");
   for (const t of r.trace.slice(-14)) {
     const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : "\u2014";
-    log(`    ${(r.trace.indexOf(t) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)} ${t.verified ? "\u2713" : "\u2717"}   ${t.support}   ${t.swing}   ${t.grounded}   ${t.load}  ${(t.clearance * 1e3).toFixed(0).padStart(4)}mm  ${v}`);
+    log(`    ${(r.trace.indexOf(t) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)} ${t.verified ? "\u2713" : "\u2717"}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}   ${t.load}   ${t.grounded}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
   }
 }
 log("");

@@ -63,6 +63,13 @@ interface Trace {
   support: string;
   swing: string;
   grounded: string;
+  /** ★ 诊断用：脚底离地高度(mm) / 接触块数 / 是否受正冲量 —— 用来分辨
+   *  「真的在空中」与「接触检测坏了」两种完全不同的故障 */
+  soleYmm: string;
+  contactN: number;
+  loaded: string;
+  /** ★ 去抖后的接地（判据真正读的那份）—— 与 `grounded` 并排才能看出是噪声还是真离地 */
+  gndS: string;
   load: string;
   cycles: number;
   clearance: number;
@@ -121,6 +128,10 @@ function run(
         wait: rs.telemetry.wait, blocked: rs.telemetry.blocked,
         support: rs.supportLeg(), swing: rs.swingLeg(),
         grounded: `${rs.grounded.l ? 1 : 0}${rs.grounded.r ? 1 : 0}`,
+        soleYmm: `${((rs.soleY.l ?? 0) * 1000).toFixed(0)}/${((rs.soleY.r ?? 0) * 1000).toFixed(0)}`,
+        contactN: rs.support.contactN,
+        loaded: `${sim.doll.footLoaded(0) ? 1 : 0}${sim.doll.footLoaded(1) ? 1 : 0}`,
+        gndS: `${rs.gndStable.l ? 1 : 0}${rs.gndStable.r ? 1 : 0}`,
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount, clearance: rs.swingClearance,
       });
@@ -190,12 +201,26 @@ log(`══ A–B. 迁移只发生在验收通过时（${SECS}s）══`);
   // ── 跌倒前逐拍回读（归因用：到底是哪一项先坏）────────────────
   log('');
   log('  跌倒前 14 拍逐拍回读：');
-  log('    t(s)   state   ok  sup sw  gnd  loadL/loadR  净空   首项未过 (当前/门限)');
+  log('    t(s)   state   ok  sup sw  gnd  load  触地  载荷  脚底离地mm 接触块  首项未过 (当前/门限)');
+  // ★ 先看**迁移之后那 40 拍**（= LOAD 段）—— 末 14 拍已在坠落，解释不了"为什么不进下一态"
+  const firstMove = r.moves.length ? Math.round(r.moves[0]!.tSec * CTRL_HZ) : 0;
+  log('');
+  log(`  迁移后每 4 拍取 1 拍（t=${(firstMove / CTRL_HZ).toFixed(2)}s 起，铺满到结束 = 卡住的那一段）：`);
+  log('    t(s)   state   ok  sup sw  原始gnd 去抖gnd  load  载荷  脚底离地mm 接触块  首项未过 (当前/门限)');
+  const post = r.trace.slice(firstMove);
+  for (const t of post.filter((_x, i2) => i2 % 4 === 0 || i2 >= post.length - 3)) {
+    const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : '—';
+    log(`    ${((r.trace.indexOf(t)) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)}`
+      + ` ${t.verified ? '✓' : '✗'}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}`
+      + `    ${t.load}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
+  }
+  log('');
+  log('  跌倒前 14 拍逐拍回读：');
   for (const t of r.trace.slice(-14)) {
     const v = t.firstItem ? `${t.firstItem} ${t.firstVal.toFixed(3)}/${t.firstTol.toFixed(3)}` : '—';
     log(`    ${((r.trace.indexOf(t)) / CTRL_HZ).toFixed(2)}  ${t.state.padEnd(7)}`
-      + ` ${t.verified ? '✓' : '✗'}   ${t.support}   ${t.swing}   ${t.grounded}`
-      + `   ${t.load}  ${(t.clearance * 1000).toFixed(0).padStart(4)}mm  ${v}`);
+      + ` ${t.verified ? '✓' : '✗'}   ${t.support}   ${t.swing}   ${t.grounded}  ${t.gndS}`
+      + `   ${t.load}   ${t.grounded}   ${t.loaded}   ${t.soleYmm.padEnd(9)} ${String(t.contactN).padStart(2)}   ${v}`);
   }
 }
 

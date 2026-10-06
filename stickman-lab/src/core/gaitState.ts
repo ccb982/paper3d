@@ -546,6 +546,17 @@ export interface VerifyCtx {
   rear: Side;
   /** 承接腿 = 本周期要成为承重腿的那只 */
   recv: Side;
+  /**
+   * ★ 判据专用的**去抖接地**判定（读 `rs.gndStable`，**不是**原始 `rs.grounded`）。
+   *
+   *   为什么必须走这一层（2026-10-06 实测）：原始 `footGrounded` 逐拍在
+   *   `11 / 01 / 10` 之间翻转（`probe-domain` 的 LOAD 段可见），而接触类判据
+   *   （`双脚接地` / `后脚未离地` / `承重腿在位` / `摆动腿已离地`）全是
+   *   **单采样** ⇒ 会被噪声直接判死或误放行。
+   *   `Controller` 用 `groundedHoldSec`（3 拍 = 50ms）做"连续保持才认"的滤波，
+   *   原始值仍保留在 `rs.grounded` 供 UI 显示**真实**接地事实。
+   */
+  gnd: (side: Side) => boolean;
   /** 本拍刚触地（边沿） */
   touchdown: Record<Side, boolean>;
   /** 本拍刚离地（边沿） */
@@ -584,8 +595,8 @@ export interface VerifyCtx {
 export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object.freeze({
   // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
   DOUBLE: [
-    { item: '双脚接地', ok: (c) => c.rs.grounded[c.front] && c.rs.grounded[c.rear],
-      val: (c) => (c.rs.grounded[c.front] ? 1 : 0) + (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 2 },
+    { item: '双脚接地', ok: (c) => c.gnd(c.front) && c.gnd(c.rear),
+      val: (c) => (c.gnd(c.front) ? 1 : 0) + (c.gnd(c.rear) ? 1 : 0), tol: () => 2 },
     { item: '轻腿仍有载荷', ok: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]) >= c.cfg.loadReleaseFrac,
       val: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]), tol: (c) => c.cfg.loadReleaseFrac },
     { item: '站姿在帧域内', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
@@ -615,11 +626,24 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
     { item: '承接腿承重(辅助)', ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
       val: (c) => c.rs.loadFrac[c.recv], tol: (c) => c.cfg.loadAcceptFrac,
       block: (c) => c.cfg.loadBlocks },
-    { item: '后脚未离地', ok: (c) => c.rs.grounded[c.rear],
-      val: (c) => (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 1 },
+    { item: '后脚未离地', ok: (c) => c.gnd(c.rear),
+      val: (c) => (c.gnd(c.rear) ? 1 : 0), tol: () => 1 },
     // ★ SCONE `EarlyStance→LateStance`：承接脚不在重心前方太远
-    { item: '承接脚矢状位置', ok: (c) => c.rs.sagPosRel(c.recv) <= c.cfg.sagLoadThr,
-      val: (c) => c.rs.sagPosRel(c.recv), tol: (c) => c.cfg.sagLoadThr },
+    // ★ 2026-10-06 **判据映射纠错**（用户选题①时发现）：
+    //   原来这里是 `承接脚矢状位置 <= 0.10`，抄自 SCONE 的
+    //   `EarlyStance→LateStance`（`late_stance_threshold` = 0.0）——
+    //   但那是**「早支撑→晚支撑」**的判据，我把它贴到了 `LOAD`（= LoadingResponse）。
+    //   实测后果：`sagPosRel(recv)` 从 0.206 **单调增到 0.636**（门槛 0.100），
+    //   越走越远、永远回不来 ⇒ `LOAD` 被这一项**结构性**卡死。
+    //   而且它与本 rig 的站姿**根本不兼容**：双脚站距 327mm 时，前脚天然在重心
+    //   前方约半个步长，「前脚不在重心前方 0.10 腿长以内」在双支撑站姿下
+    //   是个几何上不可满足的条件。
+    //
+    //   正确判据（Perry）：`LoadingResponse` 的**定义事件**是 Initial Contact
+    //   —— 即承接腿那一瞬间的触地。所以判「承接腿已触地」才是这一态的主判据；
+    //   矢状位置属于 `PUSH`/`THRUST`（TerminalStance/PreSwing）该管的事。
+    { item: '承接腿已触地', ok: (c) => c.touchdown[c.recv] || c.gnd(c.recv),
+      val: (c) => (c.touchdown[c.recv] ? 1 : 0) + (c.gnd(c.recv) ? 1 : 0), tol: () => 1 },
     // ★ 手性不变式：本周期的摆动腿不能与上周期相同。
     //   SCONE/EPFL 是**每腿一个 FSM**，左右交替由结构保证；我们是**周期级** FSM，
     //   不显式写死就会「一直用同一条腿摆动」。
@@ -651,10 +675,10 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
     //   否则"停在一个中间角度"也会算通过。
     { item: '背屈推进中', ok: (c) => c.ankleRearVel < -c.cfg.ankleVelEps,
       val: (c) => c.ankleRearVel, tol: (c) => -c.cfg.ankleVelEps },
-    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
-      val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
-    { item: '双脚仍着地', ok: (c) => c.rs.grounded[c.rear],
-      val: (c) => (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 1 },
+    { item: '承重腿在位', ok: (c) => c.gnd(c.sup),
+      val: (c) => (c.gnd(c.sup) ? 1 : 0), tol: () => 1 },
+    { item: '双脚仍着地', ok: (c) => c.gnd(c.rear),
+      val: (c) => (c.gnd(c.rear) ? 1 : 0), tol: () => 1 },
     { item: '承重帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
     { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
       val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
@@ -684,8 +708,8 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
     { item: '后脚矢状位置(辅助)', ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr
         || c.rs.loadFrac[c.front] >= c.cfg.loadAcceptFrac,
       val: (c) => c.rs.sagPosRel(c.rear), tol: (c) => c.cfg.sagLiftOffThr },
-    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
-      val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
+    { item: '承重腿在位', ok: (c) => c.gnd(c.sup),
+      val: (c) => (c.gnd(c.sup) ? 1 : 0), tol: () => 1 },
     { item: '承重帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
     { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
       val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
@@ -705,12 +729,12 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
       val: (c) => c.kneeSw, tol: (c) => HUMAN_REF.angle.toeOff.kneeFlex * c.cfg.sigFrac },
     { item: '摆动腿已卸载', ok: (c) => c.rs.loadFrac[c.sw] <= c.cfg.loadReleaseFrac,
       val: (c) => c.rs.loadFrac[c.sw], tol: (c) => c.cfg.loadReleaseFrac },
-    { item: '摆动腿已离地', ok: (c) => !c.rs.grounded[c.sw],
-      val: (c) => (c.rs.grounded[c.sw] ? 1 : 0), tol: () => 0 },
+    { item: '摆动腿已离地', ok: (c) => !c.gnd(c.sw),
+      val: (c) => (c.gnd(c.sw) ? 1 : 0), tol: () => 0 },
     { item: '离地净空', ok: (c) => c.clearance >= c.cfg.minClearance,
       val: (c) => c.clearance, tol: (c) => c.cfg.minClearance },
-    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
-      val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
+    { item: '承重腿在位', ok: (c) => c.gnd(c.sup),
+      val: (c) => (c.gnd(c.sup) ? 1 : 0), tol: () => 1 },
     // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
     // ★ 符号修正（2026-10-06）：原来写的是 `angle(knee,2)/DEG >= 20`，
     //   而**关节空间正 = 伸**（probe-readback 实测）⇒ 那条判据实际上在要求
@@ -788,6 +812,19 @@ export class GaitState {
   private t = 0;
   /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
   private lastStepT = -1e9;
+  /**
+   * ★ 本周期是否**真的发生过一次抬腿**（2026-10-06 修）。
+   *
+   *   起因：`rs.grounded` 去抖后，起步时两脚"由空中转为稳定接地"同样会产生
+   *   **触地边沿**（`wasGrounded` 初值 false → `gndStable` 变 true）。
+   *   旧代码对任何 `touchdown[sw]` 都记账，于是**起步那一下被当成"刚迈完一步"**：
+   *     · `lastStepT = t` ⇒ `LOAD` 的「节奏间隔」从 0.23s 开始算，
+   *       被硬生生卡住整整 `stepIntervalSec = 1.0s`；
+   *     · `rs.lastSwing = sw` ⇒ 承接腿在起步瞬间被翻到"最后落地的那条"，
+   *       覆盖掉 `frontLeg()` 的一次性引导。
+   *   ⇒ 只有**先发生过离地**再触地，才算完成了一步。
+   */
+  private hasStepped = false;
   /** 接地历史（边沿检测用） */
   private wasGrounded: Record<Side, boolean> = { l: false, r: false };
   /** 硬项连续越界时长（s）；超 `graceSec` ⇒ 安全态（Vughuma） */
@@ -843,11 +880,14 @@ export class GaitState {
 
     // ── 边沿：触地 / 离地（EPFL 的相位事件就是这两个）────────────
     const touchdown: Record<Side, boolean> = { l: false, r: false };
+    // ★ 边沿也走**去抖后**的接触（`rs.gndStable`）：原始信号单拍翻转会产生
+    //   **假触地/假离地**边沿，而边沿会改写 `rs.lastSwing`（= 下一周期的承接腿）
+    //   ⇒ 一次噪声就能把整条角色链带偏。延迟 50ms 无关紧要（最短驻留 200ms）。
     const liftoff: Record<Side, boolean> = { l: false, r: false };
     for (const s of ['l', 'r'] as Side[]) {
-      if (rs.grounded[s] && !this.wasGrounded[s]) touchdown[s] = true;
-      if (!rs.grounded[s] && this.wasGrounded[s]) liftoff[s] = true;
-      this.wasGrounded[s] = rs.grounded[s];
+      if (rs.gndStable[s] && !this.wasGrounded[s]) touchdown[s] = true;
+      if (!rs.gndStable[s] && this.wasGrounded[s]) liftoff[s] = true;
+      this.wasGrounded[s] = rs.gndStable[s];
     }
 
     // ── 角色指派：两条腿的角色由**接触事件历史**决定，不由几何 |Δx| 决定 ──
@@ -890,6 +930,7 @@ export class GaitState {
 
     const ctx: VerifyCtx = {
       rs, cfg, state: rs.state, sup, sw, front, rear, recv,
+      gnd: (sd: Side) => rs.gndStable[sd],
       touchdown, liftoff, swingKneeVel,
       swingKneeFlex: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
       // 帧域取样（全部经网关；负号 = 关节空间→域口径的符号换算）
@@ -944,9 +985,12 @@ export class GaitState {
     //   ⚠ 旧实现在交接开始时锁**承重腿**（"锁前腿"），与四篇实现相反。
     if (touchdown[sw]) {
       rs.locked[sw] = true;
-      rs.lastSwing = sw;
-      this.lastStepT = this.t;
-      rs.cycleCount = rs.state === 'SWING' ? rs.cycleCount + 1 : rs.cycleCount;
+      // ★ 锁定无条件（触地即锁），但**「完成一步」的记账**要求先抬过腿。
+      if (this.hasStepped) {
+        rs.lastSwing = sw;
+        this.lastStepT = this.t;
+        rs.cycleCount = rs.state === 'SWING' ? rs.cycleCount + 1 : rs.cycleCount;
+      }
     }
     // 抬腿前解锁：摆动腿在 `LIFT`/`SWING` 必须不锁（否则 requestSwingLeg 会被否决）
     if (rs.state === 'LIFT' || rs.state === 'SWING') rs.locked[sw] = false;
@@ -955,7 +999,7 @@ export class GaitState {
     rs.stepPermit = makeCriteria(
       {
         P1_已卸载: rs.loadFrac[sw] <= cfg.loadReleaseFrac,
-        P2_已离地: !rs.grounded[sw],
+        P2_已离地: !rs.gndStable[sw],   // ★ 去抖信号：单拍噪声不该授予迈步许可
         P3_未锁定: !rs.locked[sw],
         P4_手性交替: rs.lastSwing !== sw,
         P5_稳定性: rs.mos >= cfg.mosMin && Math.abs(rs.tiltDeg) <= cfg.tiltMaxDeg,
@@ -963,7 +1007,7 @@ export class GaitState {
       },
       {
         loadFrac: rs.loadFrac[sw], releaseThr: cfg.loadReleaseFrac,
-        grounded: rs.grounded[sw] ? 1 : 0, locked: rs.locked[sw] ? 1 : 0,
+        grounded: rs.gndStable[sw] ? 1 : 0, locked: rs.locked[sw] ? 1 : 0,
         lastIsSwing: rs.lastSwing === sw ? 1 : 0,
         mos: rs.mos, tiltDeg: rs.tiltDeg, safe: rs.safe ? 1 : 0,
       },
@@ -1007,6 +1051,7 @@ export class GaitState {
     if (touchdown[sw]) {
       this.event.kind = 'touchdown'; this.event.side = sw; this.event.note = `触地并锁定 ${sw}`;
     } else if (liftoff[sw]) {
+      this.hasStepped = true;      // ★ 从这一刻起，后续触地才算"完成一步"
       this.event.kind = 'liftoff'; this.event.side = sw; this.event.note = `离地 ${sw}`;
     }
 
@@ -1108,7 +1153,7 @@ export class GaitState {
   }
 
   reset(): void {
-    this.t = 0; this.lastStepT = -1e9; this.badT = 0;
+    this.t = 0; this.lastStepT = -1e9; this.badT = 0; this.hasStepped = false;
     this.wasGrounded.l = false; this.wasGrounded.r = false;
     this.bearer = this.cfg.startBearer; this.bearerCand = this.cfg.startBearer; this.bearerCandT = 0;
     const rs = this.rs;
