@@ -23110,8 +23110,10 @@ var init_balance = __esm({
       //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
       { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
       { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
-      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
-      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      // ★★ 2026-10-06 重构：`spine1/2`、`spine1/0` 两条 `keyframeStep` 行**已删除** ——
+      //   迈步系统不再直写脊柱（只填 `rs.waist.step` 意图），脊柱的位置写者只剩
+      //   `waistPos`（唯一发布者）。删掉不是因为"不写了"，而是因为**同一 (轴,模式)
+      //   必须合并成一条**（门禁 A）—— 旧行留着会让表说谎。
       // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
       //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
       //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
@@ -23165,78 +23167,15 @@ var init_balance = __esm({
       //     ⚠ 代价（必须知道）：腰**不再有位置伺服**，`spine*/0` 与 `spine*/2`
       //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
       //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
-      {
-        joint: "spine1",
-        axis: 0,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine1",
-        axis: 1,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine1",
-        axis: 2,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine2",
-        axis: 0,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine2",
-        axis: 1,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine2",
-        axis: 2,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine3",
-        axis: 0,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine3",
-        axis: 1,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
-      {
-        joint: "spine3",
-        axis: 2,
-        role: "waistPos",
-        mode: "pos",
-        channel: "waist",
-        extraGates: ["upForce"]
-      },
+      { joint: "spine1", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine1", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine1", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
       {
         joint: "spine1",
         axis: 0,
@@ -23679,7 +23618,8 @@ var init_step = __esm({
 // src/core/systems/waist.ts
 function waistSystem(rs, p = DEFAULT_WAIST_PARAMS) {
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
-  if (p.enabled === false || OFF.has("waist")) {
+  const on = (ch) => !OFF.has(ch);
+  if (p.enabled === false || !on("waist")) {
     rs.waist.published = 0;
     rs.waist.kSum = 0;
     return;
@@ -24210,6 +24150,12 @@ function run(balanceOverrides, secs2, gaitOverrides = {}) {
         pitch: rs.pitchDeg ?? 0,
         roll: rs.rollDeg ?? 0,
         spine1: rs.angleOf("spine1", 2) * 180 / Math.PI,
+        spineMax: Math.max(
+          Math.abs(rs.angleOf("spine1", 2) * 180 / Math.PI),
+          Math.abs(rs.angleOf("spine2", 2) * 180 / Math.PI),
+          Math.abs(rs.angleOf("spine3", 2) * 180 / Math.PI)
+        ),
+        comV: Math.hypot(rs.com.vx ?? 0, rs.com.vz ?? 0),
         ubY: rs.com.y
       });
       visited.add(rs.state);
@@ -24351,7 +24297,12 @@ log('\u2550\u2550 G. \u5F52\u56E0\u5BF9\u7167\uFF08\u533A\u5206"\u5E73\u8861\u57
   if (c.ticks > a.ticks + CTRL_HZ * 0.5) {
     ok(`\u5F52\u56E0\uFF1A\u5012\u56E0\u662F**\u8FDB\u5165 LOAD \u6001**\uFF08\u9489\u6B7B DOUBLE \u540E\u591A\u6D3B ${secs(c.ticks - a.ticks)}s\uFF09 \u21D2 \u5E73\u8861\u7CFB\u7EDF\u5728 LOAD \u6001\u7684\u884C\u4E3A\u662F P4 \u7684\u5F85\u529E\uFF0C\u4E0E\u56DE\u8BFB/\u9A8C\u6536\u6539\u52A8\u65E0\u5173`);
   } else {
-    log("\n  \u2550\u2550 \u59FF\u6001\u5217\uFF08\xA722.12.4\uFF1A\u4E0D\u5012 \u2260 \u7AD9\u4F4F\uFF09\u2550\u2550");
+    const WIN = Number(process.env.PD_WIN ?? 1);
+    const LIM = Number(process.env.PD_LIM ?? 10);
+    const YMIN = Number(process.env.PD_YMIN ?? 0.85);
+    log(`
+  \u2550\u2550 \u7AD9\u7ACB\u95E8\u7981\uFF08\u65F6\u95F4\u7A97 ${WIN}s\uFF1A|pitch|<${LIM}\xB0 \u4E14 \u8170\u6700\u5F2F<${LIM}\xB0 \u4E14 CoM.y>${YMIN}m\uFF09\u2550\u2550`);
+    log('     \u7528\u4F8B              \u6700\u957F\u633A\u76F4\u7A97\u53E3   \u5176\u4E2D"\u7A33\u4F4F"\u7A97\u53E3  \u672B\u5E27\u8170\u6700\u5F2F  \u5224\u5B9A');
     for (const [nm, r] of [
       ["\u9ED8\u8BA4\uFF08\u8FC8\u6B65\u5F00\uFF09", a],
       ["\u8FC8\u6B65\u7CFB\u7EDF\u505C\u624B", b],
@@ -24362,17 +24313,23 @@ log('\u2550\u2550 G. \u5F52\u56E0\u5BF9\u7167\uFF08\u533A\u5206"\u5E73\u8861\u57
       ["\u9489\u6B7B DOUBLE", c]
     ]) {
       const tr = r.trace;
-      const last = tr[tr.length - 1];
-      if (!last) {
-        log(`  ${nm.padEnd(16)} \u65E0\u6570\u636E`);
+      if (!tr.length) {
+        log(`     ${nm.padEnd(16)} \u65E0\u6570\u636E`);
         continue;
       }
-      let wp = 0, ws = 0;
+      const hz = CTRL_HZ;
+      let best = 0, run2 = 0, bestSteady = 0, steady = 0;
       for (const t of tr) {
-        if (Math.abs(t.pitch) > Math.abs(wp)) wp = t.pitch;
-        if (Math.abs(t.spine1) > Math.abs(ws)) ws = t.spine1;
+        const upright = Math.abs(t.pitch) < LIM && t.spineMax < LIM && t.ubY > YMIN;
+        run2 = upright ? run2 + 1 : 0;
+        if (run2 > best) best = run2;
+        const ok2 = upright && t.comV < 0.15;
+        steady = ok2 ? steady + 1 : 0;
+        if (steady > bestSteady) bestSteady = steady;
       }
-      log(`  ${nm.padEnd(16)} \u672B\u5E27 pitch ${last.pitch.toFixed(1).padStart(6)}\xB0 spine1 ${last.spine1.toFixed(1).padStart(6)}\xB0 CoM.y ${(last.ubY * 1e3).toFixed(0)}mm  \uFF5C \u6700\u5DEE |pitch| ${Math.abs(wp).toFixed(1)}\xB0 |spine1| ${Math.abs(ws).toFixed(1)}\xB0  ${Math.abs(wp) < 10 && Math.abs(ws) < 10 ? "\u2605 \u7AD9\u4F4F" : "\u2717 \u6298\u8170/\u5012"}`);
+      const dur = (n) => hz > 0 ? n / hz : 0;
+      const pass = dur(best) >= WIN;
+      log(`     ${nm.padEnd(16)} ${dur(best).toFixed(2).padStart(8)}s      ${dur(bestSteady).toFixed(2).padStart(8)}s      ${tr[tr.length - 1].spineMax.toFixed(1).padStart(7)}\xB0    ${pass ? "\u2605 \u8FC7\u95E8\u7981" : "\u2717 \u4E0D\u8FC7\uFF08\u8170\u5F2F/\u5728\u5012\uFF09"}`);
     }
     log("  \u5F52\u56E0\uFF1A\u9489\u6B7B DOUBLE \u4E5F\u4E00\u6837\u5012 \u21D2 \u4E0E\u72B6\u6001\u65E0\u5173\uFF0C\u9700\u53E6\u67E5\uFF08\u56DE\u8BFB\u6539\u52A8\u6216\u7269\u7406/\u63A5\u89E6\uFF09");
   }
