@@ -18540,8 +18540,10 @@ var init_gaitState = __esm({
       // Perry 签名门槛系数（**工程初值，待标定**）
       ankleVelEps: 2,
       // 踝角速度死区 deg/s（判"背屈中/跖屈中"要互斥）
-      loadBlocks: false,
-      // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
+      loadBlocks: true,
+      // ★ 恢复阻塞（§3.7-B6）：L0 口径已收敛、readback 已断言可信
+      footFlatTolDeg: 12,
+      // 脚放平容差（绝对值，deg）—— 与落地方式无关         // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
       tmaxSec: 2,
       // Vughuma `Tmax`
       graceSec: 0.5,
@@ -18819,12 +18821,15 @@ var init_gaitState = __esm({
       //   ⇒ 判据骨架是**角度签名**；载荷只作辅助（接触模型载荷读数还不可靠：
       //     `grounded=00` 却 `loadFrac≈0.5` 的矛盾没解决）。
       LOAD: [
-        // ★ Perry 签名 1：承接腿踝**跖屈到 ~10°**（足底着平）。帧域 `+` = 跖屈。
+        // ★ 签名 1（**自研口径**）：承接脚**放平** —— 踝角接近中立。
+        //   ⚠ 原来抄 Perry 的「踝跖屈 ≥6°」（`foot flat`），但那签名**假定足跟着地**；
+        //     本机平足落地时踝是**背屈**的（实测 −10.84°）⇒ 判据方向对不上、永远不过。
+        //   「脚放平」与落地方式无关：只看 **|踝|** 是否落在中立带内。
         {
-          item: "\u627F\u63A5\u8E1D\u8DD6\u5C48(\u8DB3\u5E95\u7740\u5E73)",
-          ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac,
-          val: (c) => c.ankleRecv,
-          tol: (c) => HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac
+          item: "\u627F\u63A5\u811A\u653E\u5E73(|\u8E1D|)",
+          ok: (c) => Math.abs(c.ankleRecv) <= c.cfg.footFlatTolDeg,
+          val: (c) => Math.abs(c.ankleRecv),
+          tol: (c) => c.cfg.footFlatTolDeg
         },
         // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
         {
@@ -19192,8 +19197,13 @@ var init_gaitState = __esm({
           this.wasGrounded[s] = rs.gndStable[s];
         }
         if (rs.roleSup === null || rs.roleSw === null) {
-          rs.roleSup = cfg.startBearer;
-          rs.roleSw = rs.roleSup === "l" ? "r" : "l";
+          const m = rs.loadDominant();
+          rs.roleSup = m;
+          rs.roleSw = m === "l" ? "r" : "l";
+        } else if (rs.lastSwing === null) {
+          const m = rs.loadDominant();
+          rs.roleSup = m;
+          rs.roleSw = m === "l" ? "r" : "l";
         }
         if (rs.lastSwing !== null && rs.lastSwing !== rs.roleSup) {
           rs.roleSup = rs.lastSwing;

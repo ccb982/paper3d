@@ -126,6 +126,15 @@ export interface GaitConfig {
    *   接触模型可信之后把它设成 true 即可，判据本身不用改。
    */
   loadBlocks: boolean;
+  /**
+   * ★ 承接脚「放平」的容差（deg，**绝对值**）。
+   *   为什么用绝对值而不是 Perry 的「跖屈 ≥10°」：那签名**假定足跟着地**
+   *   （足跟先着 → 足掌落下 → 踝跖屈）。本机**可能是平足落地**，此时踝是**背屈**的
+   *   （实测 −10.84°）⇒ 方向判据永远不过。
+   *   「脚放平」的物理含义与落地方式无关：**踝角接近中立**。
+   *   出处：本项目自研（§21.5「设计自研，论文只借数据」）。
+   */
+  footFlatTolDeg: number;
   /** `Tmax`（s）：任一状态超过它就回 `DOUBLE`（Vughuma 的时间上限，防卡死） */
   tmaxSec: number;
   /** 硬项连续越界多久进安全态（s） */
@@ -191,7 +200,8 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   minDwellSec: 0.20,         // OSL `min_time_in_state`
   sigFrac: 0.60,             // Perry 签名门槛系数（**工程初值，待标定**）
   ankleVelEps: 2.0,          // 踝角速度死区 deg/s（判"背屈中/跖屈中"要互斥）
-  loadBlocks: false,         // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
+  loadBlocks: true,          // ★ 恢复阻塞（§3.7-B6）：L0 口径已收敛、readback 已断言可信
+  footFlatTolDeg: 12,        // 脚放平容差（绝对值，deg）—— 与落地方式无关         // 载荷判据只报告不拦迁移（见 GaitConfig.loadBlocks）
   tmaxSec: 2.0,              // Vughuma `Tmax`
   graceSec: 0.5,
   tiltMaxDeg: 20,
@@ -688,9 +698,12 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
   //   ⇒ 判据骨架是**角度签名**；载荷只作辅助（接触模型载荷读数还不可靠：
   //     `grounded=00` 却 `loadFrac≈0.5` 的矛盾没解决）。
   LOAD: [
-    // ★ Perry 签名 1：承接腿踝**跖屈到 ~10°**（足底着平）。帧域 `+` = 跖屈。
-    { item: '承接踝跖屈(足底着平)', ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac,
-      val: (c) => c.ankleRecv, tol: (c) => HUMAN_REF.angle.footFlat.anklePF * c.cfg.sigFrac },
+    // ★ 签名 1（**自研口径**）：承接脚**放平** —— 踝角接近中立。
+    //   ⚠ 原来抄 Perry 的「踝跖屈 ≥6°」（`foot flat`），但那签名**假定足跟着地**；
+    //     本机平足落地时踝是**背屈**的（实测 −10.84°）⇒ 判据方向对不上、永远不过。
+    //   「脚放平」与落地方式无关：只看 **|踝|** 是否落在中立带内。
+    { item: '承接脚放平(|踝|)', ok: (c) => Math.abs(c.ankleRecv) <= c.cfg.footFlatTolDeg,
+      val: (c) => Math.abs(c.ankleRecv), tol: (c) => c.cfg.footFlatTolDeg },
     // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
     { item: '承接膝屈(吸振)', ok: (c) => c.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * c.cfg.sigFrac,
       val: (c) => c.kneeRecv, tol: (c) => HUMAN_REF.angle.footFlat.kneeFlex * c.cfg.sigFrac },
@@ -986,8 +999,24 @@ export class GaitState {
     //   ⇒ 角色是**事件驱动的滞回量**：不在载荷噪声上换，也不在几何抖动上换。
     //     载荷测量降级为**只读证据**（判据/遥测用），不再参与角色决定。
     if (rs.roleSup === null || rs.roleSw === null) {
-      rs.roleSup = cfg.startBearer;
-      rs.roleSw = rs.roleSup === 'l' ? 'r' : 'l';
+      // ★ **起步引导**（只做一次）：起步时"哪条腿真的在承重"是物理事实，
+      //   而配置里的 `startBearer` 只是意图 —— 两者不符时**会自锁**：
+      //   角色声明 startBearer，但 `承接腿已触地` 检查的是那条**没着地**的腿
+      //   ⇒ LOAD 永远不过 ⇒ 永远不抬腿 ⇒ `lastSwing` 永远为 null ⇒ 角色永不纠正。
+      //   （实测卡死：`承接腿已触地 0.000/1.000`，DOUBLE/LOAD 不前进。）
+      //   ⇒ 引导阶段允许**一次**用实测载荷定角色；`lastSwing !== null`（迈出第一步）
+      //     之后彻底冻结为**事件驱动**，不再看载荷（用户 2026-10-06：角色由状态机
+      //     显式决定，平衡系统/测量不得推断）。
+      const m = rs.loadDominant();
+      rs.roleSup = m; rs.roleSw = m === 'l' ? 'r' : 'l';
+    } else if (rs.lastSwing === null) {
+      // ★ **引导阶段（迈出第一步之前）持续跟随实测载荷**。
+      //   为什么不能"只引导一次"：t=0 时载荷读数还是初值 0.5/0.5（无数据），
+      //   一次性引导会把角色定死在一个**随机**的选择上 ⇒ 平衡系统驱动错误的腿
+      //   ⇒ 另一只脚飘起、`双脚接地` 永不过（实测 DOUBLE 卡 126 拍）。
+      //   迈出第一步（`lastSwing !== null`）之后**彻底冻结为事件驱动**。
+      const m = rs.loadDominant();
+      rs.roleSup = m; rs.roleSw = m === 'l' ? 'r' : 'l';
     }
     if (rs.lastSwing !== null && rs.lastSwing !== rs.roleSup) {
       rs.roleSup = rs.lastSwing;
