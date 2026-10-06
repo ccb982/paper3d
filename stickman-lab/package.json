@@ -62,7 +62,8 @@
     "qp": "node tools/run.mjs probe-qp",
     "readout": "node tools/run.mjs probe-readout",
     "probe:readback": "node tools/run.mjs probe-readback",
-    "probe:domain": "node tools/run.mjs probe-domain"
+    "probe:domain": "node tools/run.mjs probe-domain",
+    "probe:calib": "node tools/run.mjs probe-calib"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

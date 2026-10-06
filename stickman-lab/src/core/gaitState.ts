@@ -114,6 +114,21 @@ export interface GaitConfig {
 
   /** 起始承重腿（只影响 t=0，不是模式开关） */
   startBearer: Side;
+
+  /**
+   * ★ **标定模式**（默认 false）：验收照常逐项计算并记录，但**不拦截状态迁移**。
+   *
+   *   为什么需要它：文档 §11 原则 1 要求阈值「先只打印再反标」——
+   *   而拦截式阈值会让系统**卡在被怀疑的那一项上**，根本采不到分布
+   *   （实测：阈值 0.60 时承接腿载荷只到 0.57，状态机卡在 `LOAD` 150 拍直到跌落，
+   *     于是"到底能到多少"永远测不出来）。
+   *   ⇒ 标定模式下：**只靠最短驻留推进**，每拍把全部验收项的值写进
+   *     `rs.violations`（未过项）与 `rs.stateStats`（峰值/均值），由探针取分位数。
+   *
+   *   ⚠ 标定模式**只用于测量**，绝不能留在正式路径上
+   *     （门禁 `probe-domain` 在默认配置下断言"5 态全访问"就是它的护栏）。
+   */
+  calib?: boolean;
 }
 
 /** 迈步间隔下限（用户 2026-10-03：「每次迈步间隔 1s 左右」） */
@@ -564,7 +579,7 @@ export class GaitState {
       this.event.kind = 'safe';
       this.event.note = `安全态：硬项越界 ${this.badT.toFixed(2)}s`
         + `（${viol.find((v) => v.item.includes('帧域') || v.item.includes('站姿'))?.item ?? viol[0]?.item ?? '?'}）`;
-    } else if (rs.verified && dwellOk) {
+    } else if (cfg.calib ? dwellOk : (rs.verified && dwellOk)) {
       // ★ 判据快照**必须在迁移前**抓取（此刻 `violations[]` 还是**旧状态**的）
       const nViolAtMove = viol.length;
       rs.state = NEXT_STATE[rs.state];
@@ -587,6 +602,22 @@ export class GaitState {
 
     rs.stateT += dt;
 
+    // ── 极值统计（标定与诊断都靠它；开销可忽略）──────────────────
+    {
+      const recvNow = rs.loadFrac[recv];
+      const sagNow = rs.sagPosRel(recv);
+      const st = rs.stateStats;
+      if (rs.stateT <= dt * 1.5) {          // 刚进态 ⇒ 清零（含 stateT 被置 0 的那一拍）
+        st.recvLoad = recvNow; st.recvLoadN = 1; st.sagRecv = sagNow;
+        st.sagRecvMin = sagNow; st.sagRecvMax = sagNow;
+      } else {
+        st.recvLoad = Math.max(st.recvLoad, recvNow); st.recvLoadN++;
+        st.sagRecv = (st.sagRecv * (st.recvLoadN - 1) + sagNow) / st.recvLoadN;   // 同一拍计数复用
+        st.sagRecvMin = Math.min(st.sagRecvMin, sagNow);
+        st.sagRecvMax = Math.max(st.sagRecvMax, sagNow);
+      }
+    }
+
     // ── α(t)：腰的修正权限预算（**不是**迁移判据）────────────────
     rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
 
@@ -605,6 +636,7 @@ export class GaitState {
     rs.loadBearer = null; rs.locked.l = false; rs.locked.r = false;
     rs.state = 'DOUBLE'; rs.stateT = 0; rs.authority = 0;
     rs.verified = false; rs.violations = []; rs.safe = false; rs.lastMove = null;
+    rs.stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
     rs.lastSwing = null; rs.cycleCount = 0;
   }
 }

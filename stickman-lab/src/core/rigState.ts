@@ -213,6 +213,8 @@ export interface RigSnapshot {
    *   没有它，"迁移只发生在验收通过时"这条不变式只能靠读代码相信。
    */
   lastMove: { from: WalkState; to: WalkState; verified: boolean; nViol: number } | null;
+  /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
+  stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number };
   loadBearer: Side | null;
   supportLeg: Side;
   swingLeg: Side;
@@ -471,6 +473,9 @@ export class RigState {
    *   `nViol = -1` 表示这次迁移是 **`Tmax` 兜底**（不是验收驱动的）。
    */
   lastMove: { from: WalkState; to: WalkState; verified: boolean; nViol: number } | null = null;
+  /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
+  stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number }
+    = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
 
   // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
   //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
@@ -1352,6 +1357,7 @@ export class RigState {
       verified: this.verified, violations: this.violations.map((v) => ({ ...v })),
       safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
       lastMove: this.lastMove ? { ...this.lastMove } : null,
+      stateStats: { ...this.stateStats },
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

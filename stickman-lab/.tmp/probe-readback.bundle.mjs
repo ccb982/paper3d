@@ -17006,6 +17006,8 @@ var init_rigState = __esm({
        *   `nViol = -1` 表示这次迁移是 **`Tmax` 兜底**（不是验收驱动的）。
        */
       lastMove = null;
+      /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
+      stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
       // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
       //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
       //   R1：`balance` / `step` 不得再直读 `pos`/`vel`/`angle()`/`jointVel()`
@@ -17941,6 +17943,7 @@ var init_rigState = __esm({
           lastSwing: this.lastSwing,
           cycleCount: this.cycleCount,
           lastMove: this.lastMove ? { ...this.lastMove } : null,
+          stateStats: { ...this.stateStats },
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18565,7 +18568,7 @@ var init_gaitState = __esm({
         if (rs.safe) {
           this.event.kind = "safe";
           this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
-        } else if (rs.verified && dwellOk) {
+        } else if (cfg.calib ? dwellOk : rs.verified && dwellOk) {
           const nViolAtMove = viol.length;
           rs.state = NEXT_STATE[rs.state];
           rs.stateT = 0;
@@ -18591,6 +18594,24 @@ var init_gaitState = __esm({
           this.event.note = `\u79BB\u5730 ${sw}`;
         }
         rs.stateT += dt;
+        {
+          const recvNow = rs.loadFrac[recv];
+          const sagNow = rs.sagPosRel(recv);
+          const st = rs.stateStats;
+          if (rs.stateT <= dt * 1.5) {
+            st.recvLoad = recvNow;
+            st.recvLoadN = 1;
+            st.sagRecv = sagNow;
+            st.sagRecvMin = sagNow;
+            st.sagRecvMax = sagNow;
+          } else {
+            st.recvLoad = Math.max(st.recvLoad, recvNow);
+            st.recvLoadN++;
+            st.sagRecv = (st.sagRecv * (st.recvLoadN - 1) + sagNow) / st.recvLoadN;
+            st.sagRecvMin = Math.min(st.sagRecvMin, sagNow);
+            st.sagRecvMax = Math.max(st.sagRecvMax, sagNow);
+          }
+        }
         rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
         rs.handoverCriteria = makeCriteria(flags, values);
         rs.handoverOk = rs.verified;
@@ -18617,6 +18638,7 @@ var init_gaitState = __esm({
         rs.violations = [];
         rs.safe = false;
         rs.lastMove = null;
+        rs.stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
         rs.lastSwing = null;
         rs.cycleCount = 0;
       }
