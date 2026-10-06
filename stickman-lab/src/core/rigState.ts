@@ -1082,6 +1082,9 @@ export class RigState {
     warnTicks: 0,
   };
   /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
+  /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
+  copWantX = 0;
+  copErrX = 0;
   fallResp = {
     on: 0, s: 0, addPitchDeg: 0, addRollDeg: 0,
     needX: 0, needZ: 0, mode: 'normal' as 'normal' | 'warn' | 'emergency',
@@ -1392,6 +1395,9 @@ export class RigState {
   /** ★ 额状躯干修正的本拍输出（度）与误差（度）—— `probe-lat` 逐帧回读用 */
   trunkRollCmd = 0;
   trunkRollErr = 0;
+  /** ★ 矢状躯干姿态修正的本拍输出（度）与误差（度） */
+  trunkPitchCmd = 0;
+  trunkPitchErr = 0;
   /** 交接验证是否全过（`GaitState` 每拍写）。false = 迈步系统还有活：主动侧移 */
   handoverOk = false;
   /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */

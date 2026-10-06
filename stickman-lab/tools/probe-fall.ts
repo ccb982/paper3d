@@ -88,6 +88,16 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
     + `${(rs.mos * 1000).toFixed(0).padStart(9)}`
     + `${(rs.com.x * 1000).toFixed(0)}/${(rs.com.z * 1000).toFixed(0)}`.padStart(14)
     + `${(f.px * 1000).toFixed(0)}/${(f.pz * 1000).toFixed(0)}`.padStart(15)
+    // ★ CoP 位置 vs 应有位置（Hof 2005：CoP 应放到捕获点 ξ 处，CoM 才会停）
+    + (() => {
+      const gc2 = rs.groundChain;
+      const copXs = [gc2?.l?.copValid ? gc2.l.copX : NaN, gc2?.r?.copValid ? gc2.r.copX : NaN].filter((v) => Number.isFinite(v));
+      const cop = copXs.length ? copXs.reduce((a, b) => a + b, 0) / copXs.length : NaN;
+      const want = Math.max(f.xMin, Math.min(f.xMax, f.px));
+      const e = Number.isFinite(cop) ? (want - cop) * 1000 : NaN;
+      return `CoP${Number.isFinite(cop) ? (cop * 1000).toFixed(0) : '--'}`
+        + `/应有${(want * 1000).toFixed(0)}误差${Number.isFinite(e) ? e.toFixed(0) : '--'}mm`.padEnd(26);
+    })()
     + `${String(rs.fallResp.mode).padEnd(10)}`
     + `${rs.fallResp.on}`
     + `${rs.fallResp.s.toFixed(2).padStart(6)}`

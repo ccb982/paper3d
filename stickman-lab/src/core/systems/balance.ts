@@ -472,6 +472,16 @@ export interface BalanceParams {
   /** 符号（域口径 vs 世界口径）：实测标定，默认 −1 */
   trunkRollSign?: number;
   /**
+   * ★★★★ **矢状躯干姿态**增益（度/度）—— 用户：「**一直往后仰**让脚的位置出问题了」。
+   *   世界矢状倾角（`trends['躯干']` 的倾斜在 x 轴上的投影）⇒ 腰部目标角。
+   *   实测缺它时：关节角≈0 而**躯干世界 pitch 已 +49°**（整机绕踝后仰）。
+   *   `trunkPitchSign` = 符号（实测标定；域口径 正=后仰）。
+   */
+  trunkPitchK?: number;
+  trunkPitchD?: number;
+  trunkPitchMaxDeg?: number;
+  trunkPitchSign?: number;
+  /**
    * ★★★★ **摔倒应急**（用户：「各向摔倒都要有明确的应对机制」
    *   「要摔倒了 / 也别管承重腿摆动腿了，优先稳住身体」）。
    *   `fallK` = 紧迫度 → 腰部倾角（度/rad）的总增益；`fallMaxDeg` = 逐轴上限。
@@ -482,6 +492,16 @@ export interface BalanceParams {
   fallWarnU?: number;
   /** 应急腰部倾角的**符号**（域口径：正=后仰 ⇒ 往前拉要取 −1）。实测标定 */
   fallSign?: number;
+  /**
+   * ★★★★ **显式 CoP 整定**增益（用户：「脚的支撑点位是不是也要放到最合适的位置」）。
+   *   `τ = copSetK · Fz · (CoP实测 − CoP目标)`，`CoP目标 = clamp(ξ, 脚内)`。
+   *   0 = 关（仍走 VIP 欠临界弹簧）。实测：VIP 只给到所需的 43% ⇒ CoM 必漂。
+   */
+  copSetK?: number;
+  /** CoP 可用范围：踝轴→脚跟（m）。实测 ~50~60mm */
+  copBackM?: number;
+  /** CoP 可用范围：踝轴→脚尖（m）。实测 ~150~200mm */
+  copFwdM?: number;
   /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
   upBorrowSlewDeg?: number;
   /**
@@ -934,6 +954,17 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   trunkRollD: 0.25,
   trunkRollMaxDeg: 8,
   trunkRollSign: -1,
+  trunkPitchK: (() => {
+    const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.TPK;
+    const v = Number(e);
+    return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0;
+  })(),
+  trunkPitchD: 0.25,
+  trunkPitchMaxDeg: 8,
+  trunkPitchSign: (() => {
+    const e = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.TPS);
+    return Number.isFinite(e) && String((globalThis as any).process?.env?.TPS ?? '') !== '' ? e : 1;
+  })(),
   /**
    * ⚠⚠ **默认 0（关）** —— 实测它**在骗存活**（§22.12 那个陷阱的又一次复发）：
    *
@@ -959,6 +990,13 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   fallMaxDeg: 10,
   fallWarnU: 0.35,
   fallSign: -1,
+  copSetK: (() => {
+    const e = (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.COPSET;
+    const v = Number(e);
+    return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0;
+  })(),
+  copBackM: 0.05,
+  copFwdM: 0.15,
   upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
@@ -2069,6 +2107,38 @@ export function balanceSystem(
       //   文献上这正是 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩**自动饱和**
       //   （Michaels & Ting 2025：「limited ankle torque coupled with
       //   increased hip joint kinematics」）⇒ 饱和不是 bug，是策略的切换点。
+      // ══════════════════════════════════════════════════════════════
+      // ★★★★ **显式 CoP 整定**（用户 2026-10-06：
+      //   「**脚的支撑点位是不是也要放到最合适的位置**」）
+      // ══════════════════════════════════════════════════════════════
+      //   实测病因（`probe-fall`）：整段后倒过程里
+      //     实际 CoP 在 **+73 ~ +113mm（脚尖侧）**，而 ξ（捕获点）要求 **−41 ~ −208mm
+      //     （脚跟侧）** —— 差 **11~25cm**，几乎是对侧极端。
+      //   而 `ẍ = (g/h)(x_com − x_cop)` ⇒ `x_cop > x_com` 时水平力**向后**
+      //     ⇒ **在加速后倒**（不是"没帮上"，是在往后推）。
+      //   根因：块⑥ 走的是 VIP **欠临界弹簧**（`K_a = 270 = 0.43·K_crit`），
+      //     CoP 只是力矩的**副产物**，只有所需的 43% ⇒ CoM 必然漂。
+      //   ⇒ 本开关直接**整定 CoP**：把 CoP 放到 ξ（截断在脚内）。
+      //     Hof, Gazendam & Sinke 2005：**CoP 在 ξ 处 CoM 恰好停住**。
+      //     律：`τ = K·Fz·(CoP实测 − CoP目标)`（实测规律：负角⇒CoP前移 ⇒
+      //     要 CoP 后退需正 τ）。
+      const copSetOn = on('copSet') && (p.copSetK ?? 0) > 0 && doll;
+      let copErr = 0;
+      if (copSetOn) {
+        const gc2 = rs.groundChain;
+        const ff2 = sup === 'l' ? gc2?.l : gc2?.r;
+        if (ff2 && ff2.copValid && ff2.fz > 20) {
+          const ankX = ankW[0];
+          // 可用的 CoP 范围（脚内，含余量）：脚跟侧小、脚尖侧大 —— 与 §22.19.1 一致
+          const backM = p.copBackM ?? 0.05;    // 踝轴→脚跟 ≈ 50~60mm
+          const fwdM = p.copFwdM ?? 0.15;      // 踝轴→脚尖 ≈ 150~200mm
+          const wantRaw = rs.dcm.x;
+          const wantX = Math.max(ankX - backM, Math.min(ankX + fwdM, wantRaw));
+          copErr = ff2.copX - wantX;           // 正 = CoP 在目标**前**方 ⇒ 要往后退
+          tauAnk = clamp((p.copSetK ?? 1) * ff2.fz * copErr, (sk.joints[jAnk]?.maxTorque?.[2] ?? 120));
+          rs.copWantX = wantX; rs.copErrX = copErr;
+        }
+      }
       const tauMaxAnk = sk.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp(tauAnk, tauMaxAnk);   // 本文件 clamp 是对称两参版
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;   // 饱和标志（切髋策略用）
@@ -2112,7 +2182,11 @@ export function balanceSystem(
   //   ⇒ 自动满足 DIP 的"分段"定义（踝管全身、髋只管上身）。
 if (doll && on('hipStiff')) {
     const jHipS = jointIndexByName(sk, sup === 'l' ? 'hip_l' : 'hip_r');
-    if (jHipS >= 0) {
+    // ★★★ 2026-10-06：**本块原来没有任何 `on(…)` 门** ⇒ 跑「全消融」时它照发，
+    //   实测就是"消融全部逐位相同"的原因（`probe-t0`）。
+    //   它与矢状支撑的**位置环同轴相加**（`hip_sup/2`）且关不掉 ⇒ 无法归因。
+    //   ⇒ 补门 `dipHip`（默认开，消融时才关）。
+    if (on('dipHip') && jHipS >= 0) {
       const side: 'l' | 'r' = sup === 'l' ? 'l' : 'r';
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
@@ -2312,6 +2386,30 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
         rs.waist.bal.roll += add;
         rs.trunkRollCmd = add;
         rs.trunkRollErr = latDeg;
+      }
+      // ══════════════════════════════════════════════════════════════
+      // ★★★★ **矢状躯干姿态**（用户 2026-10-06：
+      //   「**但是初始位置的脚是可以的 / 是一直往后仰让脚的位置出问题了**」）
+      // ══════════════════════════════════════════════════════════════
+      //   实测（`probe-waist`）：脊柱三**关节角**≈0（挺的），而**躯干的世界 pitch
+      //   已 +49°（后仰）** ⇒ **骨盆/整机的世界朝向没人管**。
+      //   因为全项目的控制量都是**关节相对角**，整机可以绕踝"免费"后仰 ——
+      //   这才是"一直往后仰、脚的位置随之出问题"的源头。
+      //   横向此前已补（`trunkRoll`），矢状缺同款 ⇒ 这里对称补上。
+      //   ⚠ 与块⑨（脊柱默认拉力）不同轴语义：块⑨ 管"脊柱不许对折"（相对角），
+      //     本条管"整机不许后仰"（世界姿态）。
+      const Kp = p.trunkPitchK ?? 0;
+      const Dp = p.trunkPitchD ?? 0;
+      if (Kp > 0) {
+        // `azimDeg`: 0=+x(前) / ±180=后 / +90=+z(左) ⇒ `cos(az)` 是矢状投影
+        const sagDeg = torso.tiltDeg * Math.cos(az);      // 正 = 前倾
+        const sagRate = torso.rateDeg * Math.cos(az);
+        const want = (Kp * sagDeg + Dp * sagRate) * (p.trunkPitchSign ?? 1);
+        const m = p.trunkPitchMaxDeg ?? 8;
+        const add = want > m ? m : want < -m ? -m : want;
+        rs.waist.bal.pitch += add;
+        rs.trunkPitchCmd = add;
+        rs.trunkPitchErr = sagDeg;
       }
     }
     // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读

@@ -23245,8 +23245,9 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const needZ = czF - rs.fall.pz;
       const k = (p.fallK ?? 1.2) * sE;
       const mx = p.fallMaxDeg ?? 10;
-      const addPitch = clamp2(Math.atan2(needX, hh) * k, mx) / D2R3;
-      const addRoll = clamp2(Math.atan2(needZ, hh) * k, mx) / D2R3;
+      const sgn = p.fallSign ?? -1;
+      const addPitch = clamp2(sgn * Math.atan2(needX, hh) * k / D2R3, mx);
+      const addRoll = clamp2(sgn * Math.atan2(needZ, hh) * k / D2R3, mx);
       rs.waist.bal.pitch += addPitch;
       rs.waist.bal.roll += addRoll;
       rs.fallResp = {
@@ -23594,14 +23595,31 @@ var init_balance = __esm({
       trunkRollD: 0.25,
       trunkRollMaxDeg: 8,
       trunkRollSign: -1,
-      // ★ 可扫：`FK=… node tools/run.mjs …`（0 = 关应急）
+      /**
+       * ⚠⚠ **默认 0（关）** —— 实测它**在骗存活**（§22.12 那个陷阱的又一次复发）：
+       *
+       *   | `fallK` | 生存 | **时间窗门禁** | 末帧腰最弯 |
+       *   |---|---|---|---|
+       *   | **0** | 1.66s | **1.13s ★** | 1.4° |
+       *   | 1.2 | 2.52s | **0.45s ✗** | **29.7°** |
+       *   | 1.8 | **5.13s** | 0.38s ✗ | 6.0° |
+       *
+       *  ⇒ 存活被拉长 3 倍，但**腰折了、直立窗口掉了一半** —— 典型的"挣扎得更久"。
+       *  病因：本应急走的是**腰部位置目标**（±10°），而腰的位置伺服会把脊柱**掰弯**
+       *  （块⑨ 与它同轴争语义）。文献的"髋策略"给的是**髋的水平剪力**，不是躯干目标角。
+       *
+       *  ⇒ **正确修法（下一步）**：应急走**髋力矩**（Horak & Nashner 1986 的 hip strategy /
+       *    Runge 1999 的"按可用力矩选策略"），**不写脊柱的位置目标**。
+       *  ⚠ 在此之前，本项**保持 0**；`FK=…` 仅供实验。
+       */
       fallK: (() => {
         const e = globalThis.process?.env?.FK;
         const v = Number(e);
-        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 1.2;
+        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
       })(),
       fallMaxDeg: 10,
       fallWarnU: 0.35,
+      fallSign: -1,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,
@@ -24459,7 +24477,14 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
   n++;
   if (i % (PER * 6) !== 0) continue;
   rows.push(
-    `${t.toFixed(2).padStart(6)}  ${f.region.padEnd(6)}${f.dirDeg.toFixed(0).padStart(6)}${f.urgency.toFixed(2).padStart(8)}${(f.margin * 1e3).toFixed(0).padStart(8)}` + `${(f.mFront * 1e3).toFixed(0)}/${(f.mBack * 1e3).toFixed(0)}/${(f.mLeft * 1e3).toFixed(0)}/${(f.mRight * 1e3).toFixed(0)}`.padStart(20) + `${(f.authorityScale * 100).toFixed(0).padStart(6)}${(rs.mos * 1e3).toFixed(0).padStart(9)}` + `${(rs.com.x * 1e3).toFixed(0)}/${(rs.com.z * 1e3).toFixed(0)}`.padStart(14) + `${(f.px * 1e3).toFixed(0)}/${(f.pz * 1e3).toFixed(0)}`.padStart(15) + `${String(rs.fallResp.mode).padEnd(10)}${rs.fallResp.on}${rs.fallResp.s.toFixed(2).padStart(6)}` + `${rs.fallResp.addPitchDeg.toFixed(1)}/${rs.fallResp.addRollDeg.toFixed(1)}`.padStart(12) + `  ${f.note}`
+    `${t.toFixed(2).padStart(6)}  ${f.region.padEnd(6)}${f.dirDeg.toFixed(0).padStart(6)}${f.urgency.toFixed(2).padStart(8)}${(f.margin * 1e3).toFixed(0).padStart(8)}` + `${(f.mFront * 1e3).toFixed(0)}/${(f.mBack * 1e3).toFixed(0)}/${(f.mLeft * 1e3).toFixed(0)}/${(f.mRight * 1e3).toFixed(0)}`.padStart(20) + `${(f.authorityScale * 100).toFixed(0).padStart(6)}${(rs.mos * 1e3).toFixed(0).padStart(9)}` + `${(rs.com.x * 1e3).toFixed(0)}/${(rs.com.z * 1e3).toFixed(0)}`.padStart(14) + `${(f.px * 1e3).toFixed(0)}/${(f.pz * 1e3).toFixed(0)}`.padStart(15) + (() => {
+      const gc2 = rs.groundChain;
+      const copXs = [gc2?.l?.copValid ? gc2.l.copX : NaN, gc2?.r?.copValid ? gc2.r.copX : NaN].filter((v) => Number.isFinite(v));
+      const cop = copXs.length ? copXs.reduce((a, b) => a + b, 0) / copXs.length : NaN;
+      const want = Math.max(f.xMin, Math.min(f.xMax, f.px));
+      const e = Number.isFinite(cop) ? (want - cop) * 1e3 : NaN;
+      return `CoP${Number.isFinite(cop) ? (cop * 1e3).toFixed(0) : "--"}` + `/\u5E94\u6709${(want * 1e3).toFixed(0)}\u8BEF\u5DEE${Number.isFinite(e) ? e.toFixed(0) : "--"}mm`.padEnd(26);
+    })() + `${String(rs.fallResp.mode).padEnd(10)}${rs.fallResp.on}${rs.fallResp.s.toFixed(2).padStart(6)}` + `${rs.fallResp.addPitchDeg.toFixed(1)}/${rs.fallResp.addRollDeg.toFixed(1)}`.padStart(12) + `  ${f.note}`
   );
 }
 log(rows.join("\n"));

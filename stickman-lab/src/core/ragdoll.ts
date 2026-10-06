@@ -100,6 +100,33 @@ const JMS_SCALE = (() => {
   return Number.isFinite(v) && v > 0 ? v : 1;
 })();
 
+/**
+ * ★ 平行轴修正开关（`IEFF_FIX=0/1`）。
+ *   1 = 在首拍用运行期句柄把 `jointIeff` 补成**含 `m·d²`** 的真值（见 `refineJointIeff`）；
+ *   0 = 保持构造期的旧值（只有绕质心的主惯量）。
+ */
+/**
+ * ★★★★ **基础位置增益 `kP` 实验开关**（2026-10-06）。
+ *   实测（`probe-t0`）：前 0.1s **全部 15+ 条通道消融逐位相同**、护栏不夹、
+ *   换阻尼符号/换 JMS 都更糟 ⇒ 泵只可能在**始终常开的 PD** 里。
+ *   本开关直接扫基础增益（`KP=…`，默认 48 = 原值）。
+ */
+const KP_OVERRIDE = (() => {
+  const e = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.KP);
+  return Number.isFinite(e) && String((globalThis as any).process?.env?.KP ?? '') !== '' ? e : NaN;
+})();
+
+const IEFF_FIX = (() => {
+  const e = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.IEFF_FIX ?? '');
+  return e === '1';
+})();
+
+/** ★ 阻尼项符号实验开关（`KD_SIGN=-1` 翻转，用于验证"负阻尼"假说） */
+const KD_SIGN = (() => {
+  const e = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.KD_SIGN);
+  return Number.isFinite(e) && String((globalThis as any).process?.env?.KD_SIGN ?? '') !== '' ? e : 1;
+})();
+
 const MOTOR_ALPHA = (() => {
   const v = Number((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.MOTOR_ALPHA);
   return Number.isFinite(v) && v > 0 ? v : 1.0;
@@ -435,7 +462,7 @@ export const DEFAULTS: Required<RagdollOptions> = {
   angularDamping: 0.04,
   footAngularDamping: 12,
   torqueScale: 1.0,
-  kP: 48.0,
+  kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48.0,   // ★ 可由 `KP=…` 扫（实验）
   kD: 1.0,
   // 逐关节增益：默认空（全部用上面的全局值）
   jointGain: {} as Record<string, { kP: number; kD: number }>,
@@ -987,6 +1014,11 @@ export class Ragdoll {
       bodyI[i] = Math.max(1e-6, Math.max(I.x, Math.max(I.y, I.z)));
     }
     for (let i = 0; i < sk.joints.length; i++) {
+      // ⚠⚠ 2026-10-06 试过在这里加**平行轴项 `m·d²`**（理论上是必要的），
+      //   但**构造期**调用 `jointWorld`/`body.worldCom()` 会拿到未就绪的 wasm 句柄
+      //   ⇒ `probe:domain` 在 G 段 `World.step` 里 **RuntimeError: unreachable**。
+      //   ⇒ 已回退。**若要做，必须挪到构造之后**（见 `axisInertia`，它是运行期调用，
+      //     加平行轴项是安全的）。
       const ip = bodyI[this.jointBodies[i * 2]];
       const ic = bodyI[this.jointBodies[i * 2 + 1]];
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
@@ -2760,6 +2792,8 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
    */
   driveMotors(dt: number): void {
+    // ★★ 首拍懒算：把平行轴项补进 `jointIeff`（构造期句柄不可用，见 `refineJointIeff`）
+    if (IEFF_FIX) this.refineJointIeff();
     this.physicsDt = dt;
     // ★ 校正限位权限用的步长（2026-10-06）。构造期只能假定 `ASSUMED_PHYSICS_HZ`，
     //   而 `SimConfig.physicsHz` 可配（实测曾用 120）⇒ 步长变小会让马达角冲量变大、
@@ -2904,7 +2938,17 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
             }
           }
           kPSpring = kpUse;
-          err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
+          // ★★★★★ 2026-10-06 **阻尼项符号**（实测：`probe-t0` 逐轴 τ·ω 账）
+          //   实测（`hip_l` 三轴**全 `bind`**、角度仅 0.1~0.6°，却 ω=±17~41°/s、
+          //   τ=±1~69 N·m，且 **τ·ω > 0 = 在往系统里泵能量**）：
+          //     轴2  -0.2° / τ −35 / ω −30°/s   ⇒ **τ 与 ω 同号**
+          //   阻尼项 `−kd·ω` 应**反抗**速度，实测却同号 ⇒ `relL[k]` 与
+          //   `d(rv[k])/dt` **反号**（`quatRel` 与 `quatInvRotate` 的约定不一致）
+          //   ⇒ 阻尼变成**负阻尼（正反馈）** ⇒ 逐拍泵能量（KE 0.024→1.13 J / 0.12s，
+          //     执行器正功率 5.7→420 W）⇒ 关节高频抖振 ⇒ 踝的阻尼响应它 ⇒
+          //     CoP 被推到脚尖 ⇒ 0.2s 起被推着后倒。
+          //   `KD_SIGN=-1` 是**实验开关**（默认保持原样，先验证再决定）。
+          err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k] * KD_SIGN;
           this.motorErrP[idx] = kpUse * ts * (thRef - a);
           this.motorErrD[idx] = -kdUse * ts * relL[k];
         }
@@ -3157,6 +3201,87 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
    *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
    *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
    */
+
+  /** 关节世界位置复用缓冲（`axisInertiaAtJoint` 用） */
+  private readonly jwTmp = new Float64Array(3);
+
+  /**
+   * ★★★★★ **绕关节轴的有效惯量（含平行轴项 `m·d²`）** —— 2026-10-06 修。
+   *
+   *   原实现（`jointIeff` 与 `axisInertia` **两处都**）只用了刚体**绕自身质心**的
+   *   主惯量（`Iax = 1/(1/Ip + 1/Ic)`，`Ip = n·(I_p∘n)`）——**完全没有平行轴项**。
+   *   而关节的有效惯量里 `m·d²` 是**主导项**：
+   *     膝：小腿+脚 ~4kg、质心离膝 ~0.2m ⇒ `m·d² ≈ 0.16 kg·m²`，
+   *     绕质心的主惯量只有 ~0.02 ⇒ **实测 `jointIeff` 报 0.037，真值在 0.2 量级**。
+   *
+   *   ⇒ 后果（本轮实测，`probe-firstframes` 逐拍）：
+   *     拍0 `knee_l/2` imp 0.048 N·m·s（τ 仅 **5.7 N·m**）、I_eff 0.037 **⇒ Δω 73°/s**
+   *     拍6 `knee_r/2` imp 0.256（τ 30.7）                                   **⇒ 390°/s**
+   *     而 τ **没饱和**（τmax 120~200）、护栏也没夹 ⇒ 执行器层等效增益大 5~20 倍
+   *     ⇒ **逐拍"上劲"**（`max|ω|` 31→277°/s 而 CoM 一动不动）⇒ 踝的阻尼响应它
+   *     ⇒ CoP 被推到脚尖侧 ⇒ 水平力向后 ⇒ **开始后倒**。
+   *   ⇒ 这才是"一开始明明没问题，却站不准"的**根**。
+   *
+   *   ★ 构造期算一次就够：旋转关节的轴在该刚体**体坐标系**里固定，
+   *     质心到该轴线的垂距**不随姿态变** ⇒ 一次计算是**精确**的。
+   */
+  private axisInertiaAtJoint(i: number, k: number): number {
+    const p = this.bodies[this.jointBodies[i * 2]!];
+    const c = this.bodies[this.jointBodies[i * 2 + 1]!];
+    const ip = p.principalInertia(), ic = c.principalInertia();
+    const q = p.rotation();
+    const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
+    quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
+    const a = this.axisW;
+    this.jointWorld(i, this.jwTmp);
+    const jw = this.jwTmp;
+    const par = (rb: RAPIER.RigidBody): number => {
+      const m = rb.mass();
+      if (!(m > 1e-9)) return 0;
+      const cw = rb.worldCom();
+      const rx = cw.x - jw[0]!, ry = cw.y - jw[1]!, rz = cw.z - jw[2]!;
+      const d2 = rx * rx + ry * ry + rz * rz - (rx * a[0]! + ry * a[1]! + rz * a[2]!) ** 2;
+      return m * Math.max(0, d2);
+    };
+    const Ip = a[0]! * a[0]! * ip.x + a[1]! * a[1]! * ip.y + a[2]! * a[2]! * ip.z + par(p);
+    const Ic = a[0]! * a[0]! * ic.x + a[1]! * a[1]! * ic.y + a[2]! * a[2]! * ic.z + par(c);
+    return Math.max(1e-9, 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic)));
+  }
+
+  /** ★ 平行轴修正是否已用真实 wasm 句柄重算过 `jointIeff` */
+  private iEffRefined = false;
+
+  /**
+   * ★★★★★ **在运行期把平行轴项补进 `jointIeff`**（2026-10-06）。
+   *
+   *   为什么不能在构造期做：构造期 `jointWorld`/`body.worldCom()` 会拿到**未就绪**
+   *   的 wasm 句柄 ⇒ `probe:domain` 在 `World.step` 里 **RuntimeError: unreachable**。
+   *   ⇒ 改成**首拍懒算**（`driveMotors` 第一行调用），此时一切句柄都合法。
+   *
+   *   背景（本轮实测，`probe-t0`）：
+   *     · 前 0.1s 重心**不动**，但执行器在**泵能量**（KE 0.024→1.13J/0.12s，
+   *       正功率 5.7→420W；而**不调控制时恰好 0W**）
+   *     · 泵是 `hip_l`/`knee_l` **全 `bind`**（无人写、目标=0=静姿态）的轴：
+   *       角度仅 0.1~0.6°、ω=±17~41°/s、τ=±1~69 N·m ⇒ **τ·ω>0**
+   *     · 消融 sag/lat/weight/qp/waistHold/sagJf **逐位相同** ⇒ 泵在常开 PD 里
+   *     · `KD_SIGN=-1` 灾难性更糟、`JMS×6` 更糟 ⇒ 不是符号也不是简单增益
+   *
+   *   本修的作用：护栏 `impStable = α·|kd·ω|·Ieff·dt + |impSpring|` 里的 `Ieff`
+   *   从"只有绕质心主惯量"（0.037）变成**含 `m·d²`**（0.09~0.2，+3~5×）。
+   *   ⚠ 注意方向性：`Ieff` 变大 ⇒ `impStable` 变大 ⇒ 护栏**更宽松**；
+   *     它的目的是让 `Δω = imp/I_real` 与"每步吃掉 α 比例速度误差"这句话**一致** ——
+   *     原值偏小 3~5× ⇒ 那句话实际不成立。**是否解决泵，由 `probe-t0` 的 KE 判定。**
+   */
+  private refineJointIeff(): void {
+    if (this.iEffRefined) return;
+    this.iEffRefined = true;
+    for (let i = 0; i < this.sk.joints.length; i++) {
+      let mx = 0;
+      for (let k = 0; k < 3; k++) mx = Math.max(mx, this.axisInertiaAtJoint(i, k));
+      if (mx > 0 && Number.isFinite(mx)) this.jointIeff[i] = mx;
+    }
+  }
+
   private axisInertia(i: number, k: number): number {
     const p = this.bodies[this.jointBodies[i * 2]];
     const c = this.bodies[this.jointBodies[i * 2 + 1]];
@@ -3168,6 +3293,9 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
     quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
     const a = this.axisW;
     // I_world = R · diag(Ix,Iy,Iz) · Rᵀ ⇒ 取该轴分量 I_k = a·(I∘a)
+    // ⚠ 2026-10-06：这里也试过加平行轴项 `m·d²`（+3×，见 `axisInertiaAtJoint`），
+    //   与 `jointIeff` 同时改会触发构造期句柄问题 ⇒ 一起回退。
+    //   单改这一处（运行期）应当安全，但**必须先单独验证**（本会话未做）。
     const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
     const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
     const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));

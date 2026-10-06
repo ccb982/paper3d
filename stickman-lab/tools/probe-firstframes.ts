@@ -164,6 +164,39 @@ for (let i = 0; i < 1.0 * 120 && !sim.finished; i++) {
   log(`── 拍 ${String(tick).padStart(2)}　t=${(i / 120).toFixed(3)}s　`
     + `顶轨轴 ${String(sat).padStart(2)} 根　max|τ|/τmax ${(maxFrac * 100).toFixed(0)}%　`
     + `max|ω| ${maxW.toFixed(0)}°/s　状态 ${rs.state}　CoM.y ${rs.com.y.toFixed(3)}`);
+  // ★★★ 逐拍**物理状态行**（用户：「查前 0.1s，一开始明明没问题，到底发生了什么」）
+  {
+    const gc0 = rs.groundChain;
+    const copW = [gc0?.l, gc0?.r].filter((x: any) => x?.copValid);
+    const copX = copW.length
+      ? copW.reduce((a: number, x: any) => a + x.fz * x.copX, 0) / copW.reduce((a: number, x: any) => a + x.fz, 0)
+      : NaN;
+    log(`      物理： CoM.x ${(rs.com.x * 1000).toFixed(1).padStart(6)}mm  `
+      + `v.x ${(rs.com.vx * 1000).toFixed(1).padStart(7)}mm/s  `
+      + `CoM.z ${(rs.com.z * 1000).toFixed(1).padStart(6)}  `
+      + `CoP.x ${Number.isFinite(copX) ? (copX * 1000).toFixed(1).padStart(6) : '  --  '}mm  `
+      + `踝轴x ${(() => { const a = new Float64Array(3); d.jointWorld(jointIndexByName(sk, 'foot_l'), a); return (a[0]! * 1000).toFixed(0); })().padStart(5)}mm  `
+      + `pitch ${(rs.pitchDeg ?? 0).toFixed(2).padStart(6)}°  roll ${(rs.rollDeg ?? 0).toFixed(2).padStart(6)}°  `
+      + `紧迫度 ${(rs.fall.urgency ?? 0).toFixed(2)}  ${rs.fall.region}`);
+    // ★★ 冲量 vs 有效惯量：找出"上劲"到底是哪个冲量给的（Δω = imp/I_eff）
+    {
+      let bi = -1, bv = 0;
+      for (let a2 = 0; a2 < d.motorImpulse.length; a2++) {
+        const v2 = Math.abs(d.motorImpulse[a2] ?? 0);
+        if (v2 > bv) { bv = v2; bi = a2; }
+      }
+      if (bi >= 0) {
+        const jj2 = Math.floor(bi / 3), k2 = bi % 3;
+        const Ie = (d as any).jointIeff?.[jj2] ?? NaN;
+        const dW = Number.isFinite(Ie) && Ie > 0 ? (bv / Ie) * 57.2958 : NaN;
+        log(`      冲量： 最大轴 ${sk.joints[jj2]!.name}/${k2}  `
+          + `imp ${(bv * 1e6).toFixed(1).padStart(8)}e-6 N·m·s  `
+          + `I_eff ${Number.isFinite(Ie) ? Ie.toFixed(5) : '--'} kg·m²  `
+          + `⇒ Δω ${Number.isFinite(dW) ? dW.toFixed(0) : '--'}°/s  `
+          + `(τ等效 ${(bv / (1 / 120) / 1).toFixed(1)} N·m)`);
+      }
+    }
+  }
 
   for (const { n, i: ji } of AI) {
     if (ji < 0) continue;
