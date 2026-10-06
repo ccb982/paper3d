@@ -16950,6 +16950,7 @@ __export(rigState_exports, {
   LOAD_HYSTERESIS: () => LOAD_HYSTERESIS,
   NEXT_STATE: () => NEXT_STATE,
   RigState: () => RigState,
+  STATE_ORDER: () => STATE_ORDER,
   makeCriteria: () => makeCriteria
 });
 function cloneCriteria(c) {
@@ -16959,7 +16960,7 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
@@ -16972,6 +16973,9 @@ var init_rigState = __esm({
       LIFT: "SWING",
       SWING: "DOUBLE"
     });
+    STATE_ORDER = Object.freeze(
+      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
+    );
     LEGACY_STATE_ALIAS = Object.freeze({
       DOUBLE: "DOUBLE",
       SHIFT: "LOAD",
@@ -17017,6 +17021,13 @@ var init_rigState = __esm({
       lastMove = null;
       /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
       stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+      /**
+       * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
+       *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。
+       */
+      visited = /* @__PURE__ */ new Set();
+      /** 本周期**验收通过并离开过**的状态（五态环的 `✓`） */
+      passed = /* @__PURE__ */ new Set();
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
       telemetry = {
         stateLabel: "\u2014",
@@ -17037,6 +17048,10 @@ var init_rigState = __esm({
         recvPeak: "\u2014",
         domainWorst: "0.0",
         stepPermit: "\u2014",
+        ring: STATE_ORDER.map(() => "\u25CB"),
+        next: "\u2014",
+        wait: "0.00s",
+        blocked: "\u65E0",
         violations: "",
         roles: "\u2014",
         jointsDeg: "\u2014",
@@ -18236,7 +18251,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18279,9 +18294,6 @@ var init_gaitState = __esm({
       alphaSigma: 0.08,
       startBearer: "l"
     };
-    STATE_ORDER = Object.freeze(
-      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
-    );
     STATE_TO_SCORING = Object.freeze({
       DOUBLE: "adjust",
       LOAD: "adjust",
@@ -18634,14 +18646,22 @@ var init_gaitState = __esm({
           this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
         } else if (cfg.calib ? dwellOk : rs.verified && dwellOk) {
           const nViolAtMove = viol.length;
+          rs.passed.add(rs.state);
           rs.state = NEXT_STATE[rs.state];
           rs.stateT = 0;
+          rs.visited.add(rs.state);
+          if (rs.state === "DOUBLE" && rs.passed.has("SWING")) {
+            rs.visited.clear();
+            rs.passed.clear();
+            rs.visited.add("DOUBLE");
+          }
           rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
           this.event.kind = "state_change";
           this.event.note = `${prev} \u2192 ${rs.state}\uFF08\u9A8C\u6536 ${nViolAtMove === 0 ? "\u5168\u8FC7" : `${nViolAtMove} \u9879\u672A\u8FC7`}\uFF09`;
         } else if (rs.stateT > cfg.tmaxSec) {
           rs.state = "DOUBLE";
           rs.stateT = 0;
+          rs.visited.add("DOUBLE");
           rs.locked.l = false;
           rs.locked.r = false;
           rs.lastMove = { from: prev, to: "DOUBLE", verified: rs.verified, nViol: -1 };
@@ -18707,6 +18727,15 @@ var init_gaitState = __esm({
               rs.jq?.worstSwingErrDeg(false) ?? 0
             ).toFixed(1),
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
+            // ── 五态环：当前态 `▶`、本周期已过关 `✓`、未到达 `○`、到达但没过 `✗`
+            //   `visited`/`passed` 由状态机自己维护（迁移成功才置 passed），UI 不参与判断。
+            ring: STATE_ORDER.map((st) => {
+              const mark = st === rs.state ? "\u25B6" : rs.passed.has(st) ? "\u2713" : rs.visited.has(st) ? "\u2717" : "\u25CB";
+              return `${mark}${STATE_LABEL[st]}`;
+            }),
+            next: STATE_LABEL[NEXT_STATE[rs.state]],
+            wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
+            blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
             violations: rs.violations.map(violationText).join("\u3000"),
             roles: `${LEG_CN[sup2]}\u627F\u91CD \xB7 ${LEG_CN[sw2]}\u6446\u52A8`,
             jointsDeg: `\u9ACB ${jd(`${sup2}_hip`, 0)}\xB0  \u819D ${jd(`${sw2}_knee`, 0)}\xB0  \u8E1D ${jd(`${sup2}_ankle`, 0)}\xB0`,
@@ -18741,6 +18770,9 @@ var init_gaitState = __esm({
         rs.stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
         rs.lastSwing = null;
         rs.cycleCount = 0;
+        rs.visited.clear();
+        rs.passed.clear();
+        rs.visited.add("DOUBLE");
       }
     };
     PHASE_TO_SCORING = STATE_TO_SCORING;
@@ -22134,6 +22166,10 @@ function run(balanceOverrides, secs2, gaitOverrides = {}) {
         firstItem: v0?.item ?? "",
         firstVal: v0?.value ?? 0,
         firstTol: v0?.tol ?? 0,
+        ring: rs.telemetry.ring.slice(),
+        next: rs.telemetry.next,
+        wait: rs.telemetry.wait,
+        blocked: rs.telemetry.blocked,
         support: rs.supportLeg(),
         swing: rs.swingLeg(),
         grounded: `${rs.grounded.l ? 1 : 0}${rs.grounded.r ? 1 : 0}`,
@@ -22193,6 +22229,11 @@ log(`\u2550\u2550 A\u2013B. \u8FC1\u79FB\u53EA\u53D1\u751F\u5728\u9A8C\u6536\u90
   const cnt = /* @__PURE__ */ new Map();
   for (const t of r.trace) cnt.set(t.state, (cnt.get(t.state) ?? 0) + 1);
   log(`  \u72B6\u6001\u5206\u5E03\uFF1A${STATE_ORDER2.map((s) => `${s}=${cnt.get(s) ?? 0}`).join("  ")}`);
+  const lastT = r.trace[r.trace.length - 1];
+  if (lastT) {
+    log(`  \u672B\u5E27\u4E94\u6001\u73AF\uFF1A${lastT.ring.join(" | ")}`);
+    log(`             \u4E0B\u4E00\u6001 ${lastT.next}\u3000\u5DF2\u7B49/\u6700\u77ED\u9A7B\u7559 ${lastT.wait}\u3000\u5361\u5728 ${lastT.blocked}`);
+  }
   const missing = STATE_ORDER2.filter((s) => !cnt.get(s));
   if (!missing.length) ok("\u4E94\u4E2A\u72B6\u6001\u5168\u90E8\u88AB\u8BBF\u95EE\u5230");
   else bad(`\u8FD9\u4E9B\u72B6\u6001\u4ECE\u672A\u88AB\u8BBF\u95EE\uFF1A${missing.join(", ")}`);

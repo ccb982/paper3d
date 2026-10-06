@@ -47,6 +47,17 @@ export type WalkState = 'DOUBLE' | 'LOAD' | 'PUSH' | 'LIFT' | 'SWING';
 export const NEXT_STATE: Readonly<Record<WalkState, WalkState>> = Object.freeze({
   DOUBLE: 'LOAD', LOAD: 'PUSH', PUSH: 'LIFT', LIFT: 'SWING', SWING: 'DOUBLE',
 });
+
+/**
+ * ★ 状态的固定环顺序（**唯一真源**，2026-10-06 从 `gaitState` 下沉到这一层）。
+ *
+ *   为什么下沉：`RigState.telemetry.ring` 要按环序画五态环，而 `NEXT_STATE`
+ *   本来就在 `rigState`。留在 `gaitState` 的话 `rigState` 得反向 import
+ *   `gaitState` ⇒ 循环依赖（`gaitState` 已经 import `rigState`）。
+ *   `gaitState` 改为 re-export，所以外部引用方（探针/文档）不用改。
+ */
+export const STATE_ORDER: readonly WalkState[] = Object.freeze(
+  ['DOUBLE', 'LOAD', 'PUSH', 'LIFT', 'SWING'] as WalkState[]);
 /** 旧名 → 新名（迁移对照，见文档 §3.2；保留只为读旧日志/旧探针） */
 export const LEGACY_STATE_ALIAS: Readonly<Record<string, WalkState>> = Object.freeze({
   DOUBLE: 'DOUBLE', SHIFT: 'LOAD', SINGLE: 'LIFT', PUSH: 'PUSH', STEP: 'SWING',
@@ -120,6 +131,21 @@ export interface StateTelemetry {
   sagRecv: string;
   /** 状态内承接腿载荷峰值（百分比）—— 交接能力的上界 */
   recvPeak: string;
+  /**
+   * ★ 五态环的可视化（长度恒为 5，顺序 = `STATE_ORDER`）。
+   *   每格是**状态机自己写的**字符串，标记含义：
+   *     `▶` 当前态　`✓` 本周期已通过并离开过　`○` 未到达　`✗` 到达过但未通过
+   *   UI 只把这 5 个字符串塞进 5 个 span，**不判断、不排序、不推导**。
+   *   为什么需要它：状态机是"验收不过就不往下走"，所以**卡在哪一态**
+   *   就是全部诊断信息 —— 但以前这件事只能从日志里找。
+   */
+  ring: string[];
+  /** 下一态（`NEXT_STATE`）的中文名 —— 状态机打算去哪 */
+  next: string;
+  /** 在当前态已等多久 / 最短驻留要求，形如 `1.25s / 0.20s` */
+  wait: string;
+  /** 当前**卡住**的首个验收项（没有则 `无`）——「在等什么」 */
+  blocked: string;
   /** 帧域最差越界（deg；0 = 全在域内） */
   domainWorst: string;
   /** 迈步许可（`stepPermit.all`） */
@@ -542,12 +568,20 @@ export class RigState {
   /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
   stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number }
     = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+  /**
+   * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
+   *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。
+   */
+  visited = new Set<WalkState>();
+  /** 本周期**验收通过并离开过**的状态（五态环的 `✓`） */
+  passed = new Set<WalkState>();
   /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
   telemetry: StateTelemetry = {
     stateLabel: '—', state: 'DOUBLE', stateT: '0.00', verified: '—',
     support: '—', swing: '—', contact: '—', bearerLoad: '—', loadFrac: '—',
     mos: '—', pitch: '—', roll: '—', alpha: '0.00', clearance: '0',
     sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
+    ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
     violations: '', roles: '—', jointsDeg: '—', safe: '否',
   };
 

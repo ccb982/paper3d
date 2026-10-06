@@ -31,7 +31,7 @@
  */
 
 import {
-  RigState, makeCriteria, NEXT_STATE,
+  RigState, makeCriteria, NEXT_STATE, STATE_ORDER,
   type WalkState, type Side, type StateViolation,
 } from './rigState';
 import {
@@ -163,9 +163,12 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   startBearer: 'l',
 };
 
-/** ★ 状态的固定环顺序（**唯一真源**）。环走完一圈 = 一个完整迈步周期。 */
-export const STATE_ORDER: readonly WalkState[] = Object.freeze(
-  ['DOUBLE', 'LOAD', 'PUSH', 'LIFT', 'SWING'] as WalkState[]);
+/**
+ * ★ 状态的固定环顺序（**唯一真源**）。环走完一圈 = 一个完整迈步周期。
+ *   定义已下沉到 `rigState`（见那里 STATE_ORDER 的注释：遥测要画环，
+ *   而 NEXT_STATE 也在那一层）。这里 re-export，外部引用不变。
+ */
+export { STATE_ORDER };
 
 /**
  * 状态 → 计分相位（与 `gaitPhase.GaitPhaseMachine` 的词汇收敛点）。
@@ -590,13 +593,21 @@ export class GaitState {
     } else if (cfg.calib ? dwellOk : (rs.verified && dwellOk)) {
       // ★ 判据快照**必须在迁移前**抓取（此刻 `violations[]` 还是**旧状态**的）
       const nViolAtMove = viol.length;
+      rs.passed.add(rs.state);        // 本周期这一态已验收通过（五态环 ✓）
       rs.state = NEXT_STATE[rs.state];
       rs.stateT = 0;
+      rs.visited.add(rs.state);
+      // 环走完一圈（回到 DOUBLE）⇒ 新周期，两本账清零
+      if (rs.state === 'DOUBLE' && rs.passed.has('SWING')) {
+        rs.visited.clear(); rs.passed.clear(); rs.visited.add('DOUBLE');
+      }
       rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
       this.event.kind = 'state_change';
       this.event.note = `${prev} → ${rs.state}（验收 ${nViolAtMove === 0 ? '全过' : `${nViolAtMove} 项未过`}）`;
     } else if (rs.stateT > cfg.tmaxSec) {
+      // ⚠ Tmax 回退**不算通过**（`passed` 不加），否则五态环会显示假 ✓
       rs.state = 'DOUBLE'; rs.stateT = 0;
+      rs.visited.add('DOUBLE');
       rs.locked.l = false; rs.locked.r = false;
       rs.lastMove = { from: prev, to: 'DOUBLE', verified: rs.verified, nViol: -1 };
       this.event.kind = 'state_change';
@@ -661,6 +672,15 @@ export class GaitState {
         domainWorst: Math.max(
           rs.jq?.worstSupportErrDeg(false) ?? 0, rs.jq?.worstSwingErrDeg(false) ?? 0).toFixed(1),
         stepPermit: rs.stepPermit.all ? '放行' : '拦',
+        // ── 五态环：当前态 `▶`、本周期已过关 `✓`、未到达 `○`、到达但没过 `✗`
+        //   `visited`/`passed` 由状态机自己维护（迁移成功才置 passed），UI 不参与判断。
+        ring: STATE_ORDER.map((st) => {
+          const mark = st === rs.state ? '▶' : rs.passed.has(st) ? '✓' : rs.visited.has(st) ? '✗' : '○';
+          return `${mark}${STATE_LABEL[st]}`;
+        }),
+        next: STATE_LABEL[NEXT_STATE[rs.state]],
+        wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
+        blocked: rs.violations.length ? violationText(rs.violations[0]) : '无',
         violations: rs.violations.map(violationText).join('　'),
         roles: `${LEG_CN[sup]}承重 · ${LEG_CN[sw]}摆动`,
         jointsDeg: `髋 ${jd(`${sup}_hip`, 0)}°  膝 ${jd(`${sw}_knee`, 0)}°  踝 ${jd(`${sup}_ankle`, 0)}°`,
@@ -685,6 +705,7 @@ export class GaitState {
     rs.verified = false; rs.violations = []; rs.safe = false; rs.lastMove = null;
     rs.stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
     rs.lastSwing = null; rs.cycleCount = 0;
+    rs.visited.clear(); rs.passed.clear(); rs.visited.add('DOUBLE');
   }
 }
 

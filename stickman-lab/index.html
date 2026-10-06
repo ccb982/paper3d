@@ -163,6 +163,16 @@
         font-weight: 600; }
       /* 「命令大但速率≈0」= 力没作用到重心 → 标红，这是本面板最重要的一行 */
       #own .own-ct-t tr.stall td.v { color: #b91c1c; }
+      /* 五态环：当前态高亮，已过的打勾，没到的压暗 */
+      .own-ring { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-bottom: 6px; }
+      .own-ring .rg {
+        padding: 3px 2px; border-radius: 4px; text-align: center; font-size: 9.5px;
+        background: #f2f2f5; color: var(--ink-dim); white-space: nowrap; overflow: hidden;
+      }
+      .own-ring .rg[data-cur="1"] { background: var(--accent); color: #fff; font-weight: 600; }
+      .own-ring .rg[data-mark="✓"] { background: #e6f4ea; color: #1a7f37; }
+      .own-ring .rg[data-mark="✗"] { background: #fdecec; color: #b03030; }
+      #ctrl .own-v.wide { grid-column: 2 / -1; }
       /* 状态行：相 + 验收 + 安全。UI 唯一数据源是 rs.telemetry，样式不参与判断 */
       .own-state {
         display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px;
@@ -338,6 +348,24 @@
            以前 UI 自己去 rs 抓十几个量各自算，于是同一个物理量有两套口径 ——
            本项目栽过四次（轴索引 / 符号 / 单位 / 帧域），
            于是"UI 说过了、状态机说没过"，没人知道该信谁。现在只有一个口径。 -->
+
+      <!-- ★ 五态环：状态机"在判定哪一态"一眼可见。
+           标记由 `telemetry.ring` 原样给出，UI 不判断：
+             ▶ 当前　✓ 本周期已验收通过并离开　✗ 到过但没通过　○ 还没到 -->
+      <div class="own-ring" id="own-ring">
+        <span class="rg" id="own-ring-0">—</span>
+        <span class="rg" id="own-ring-1">—</span>
+        <span class="rg" id="own-ring-2">—</span>
+        <span class="rg" id="own-ring-3">—</span>
+        <span class="rg" id="own-ring-4">—</span>
+      </div>
+      <div class="own-bar">
+        <span class="own-k">下一态</span><span class="own-v" id="own-next">—</span>
+        <span class="own-k">已等/最短</span><span class="own-v" id="own-wait">—</span>
+      </div>
+      <div class="own-bar">
+        <span class="own-k">卡在</span><span class="own-v wide" id="own-blocked">—</span>
+      </div>
 
       <!-- 状态本体：相 + 驻留 + 验收结论（这一行就是"现在在哪、能不能往下走"） -->
       <div class="own-state" id="own-state">

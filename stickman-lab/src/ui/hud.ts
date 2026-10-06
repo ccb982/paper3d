@@ -114,6 +114,10 @@ export class Hud {
       // ── 「模块归属」面板（用户 2026-10-03）
       // ── 状态机面板：全部字段来自 `RigSnapshot.telemetry`（UI 不推导）
       ownPhase: $('own-phase'), ownVerified: $('own-verified'), ownSafe: $('own-safe'),
+      // ── 五态环 + 「下一态/已等/卡在」：状态机在判定哪一态、在等什么
+      ownRing0: $('own-ring-0'), ownRing1: $('own-ring-1'), ownRing2: $('own-ring-2'),
+      ownRing3: $('own-ring-3'), ownRing4: $('own-ring-4'),
+      ownNext: $('own-next'), ownWait: $('own-wait'), ownBlocked: $('own-blocked'),
       ownGround: $('own-ground'), ownLoadFrac: $('own-loadfrac'), ownSag: $('own-sag'),
       ownRecvPeak: $('own-recvpeak'), ownDomain: $('own-domain'), ownPermit: $('own-permit'),
       ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
@@ -331,6 +335,10 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownGate.dataset.ok = '1';
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
+      for (const c of [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4]) {
+        c.textContent = '—'; c.dataset.cur = '0'; c.dataset.mark = '';
+      }
+      e.ownNext.textContent = '—'; e.ownWait.textContent = '—'; e.ownBlocked.textContent = '—';
       e.ownPhase.textContent = '—'; e.ownVerified.textContent = '—'; e.ownSafe.textContent = '安全 否';
       e.ownGround.textContent = '—'; e.ownLoadFrac.textContent = '—'; e.ownSag.textContent = '—';
       e.ownRecvPeak.textContent = '—'; e.ownDomain.textContent = '—'; e.ownPermit.textContent = '—';
@@ -366,6 +374,19 @@ setOwnership(d: RigSnapshot | null): void {
     //   消费状态机的数据」。以前这里从 `d` 里抓十几个量各自格式化，
     //   于是 UI 与状态机有**两套口径**，两边不一致时没人知道信谁。
     const tm = d.telemetry;
+    // ★ 五态环：5 个字符串是状态机写的，UI 只按序塞进去 + 上色（不判断通过与否）
+    const ringCells = [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4];
+    for (let i = 0; i < ringCells.length; i++) {
+      const cell = ringCells[i]!;
+      const txt = tm.ring[i] ?? '—';
+      cell.textContent = txt;
+      cell.dataset.cur = txt.charCodeAt(0) === 0x25b6 ? '1' : '0';
+      cell.dataset.mark = txt.slice(0, 1);
+    }
+    e.ownNext.textContent = tm.next;
+    e.ownWait.textContent = tm.wait;
+    e.ownBlocked.textContent = tm.blocked;
+    e.ownBlocked.dataset.ok = tm.blocked === '无' ? '1' : '0';
     e.ownPhase.textContent = `${tm.stateLabel} ${tm.stateT}s`;
     e.ownVerified.textContent = tm.verified;
     e.ownVerified.dataset.ok = tm.verified.startsWith('✓') ? '1' : '0';

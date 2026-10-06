@@ -16950,7 +16950,7 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
@@ -16963,6 +16963,9 @@ var init_rigState = __esm({
       LIFT: "SWING",
       SWING: "DOUBLE"
     });
+    STATE_ORDER = Object.freeze(
+      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
+    );
     LEGACY_STATE_ALIAS = Object.freeze({
       DOUBLE: "DOUBLE",
       SHIFT: "LOAD",
@@ -17008,6 +17011,13 @@ var init_rigState = __esm({
       lastMove = null;
       /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
       stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+      /**
+       * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
+       *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。
+       */
+      visited = /* @__PURE__ */ new Set();
+      /** 本周期**验收通过并离开过**的状态（五态环的 `✓`） */
+      passed = /* @__PURE__ */ new Set();
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
       telemetry = {
         stateLabel: "\u2014",
@@ -17028,6 +17038,10 @@ var init_rigState = __esm({
         recvPeak: "\u2014",
         domainWorst: "0.0",
         stepPermit: "\u2014",
+        ring: STATE_ORDER.map(() => "\u25CB"),
+        next: "\u2014",
+        wait: "0.00s",
+        blocked: "\u65E0",
         violations: "",
         roles: "\u2014",
         jointsDeg: "\u2014",
@@ -18204,7 +18218,7 @@ function checkDomains(rs, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, JIDX, VERIFY, GaitState;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, JIDX, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18247,9 +18261,6 @@ var init_gaitState = __esm({
       alphaSigma: 0.08,
       startBearer: "l"
     };
-    STATE_ORDER = Object.freeze(
-      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
-    );
     STATE_TO_SCORING = Object.freeze({
       DOUBLE: "adjust",
       LOAD: "adjust",
@@ -18601,14 +18612,22 @@ var init_gaitState = __esm({
           this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
         } else if (cfg.calib ? dwellOk : rs.verified && dwellOk) {
           const nViolAtMove = viol.length;
+          rs.passed.add(rs.state);
           rs.state = NEXT_STATE[rs.state];
           rs.stateT = 0;
+          rs.visited.add(rs.state);
+          if (rs.state === "DOUBLE" && rs.passed.has("SWING")) {
+            rs.visited.clear();
+            rs.passed.clear();
+            rs.visited.add("DOUBLE");
+          }
           rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
           this.event.kind = "state_change";
           this.event.note = `${prev} \u2192 ${rs.state}\uFF08\u9A8C\u6536 ${nViolAtMove === 0 ? "\u5168\u8FC7" : `${nViolAtMove} \u9879\u672A\u8FC7`}\uFF09`;
         } else if (rs.stateT > cfg.tmaxSec) {
           rs.state = "DOUBLE";
           rs.stateT = 0;
+          rs.visited.add("DOUBLE");
           rs.locked.l = false;
           rs.locked.r = false;
           rs.lastMove = { from: prev, to: "DOUBLE", verified: rs.verified, nViol: -1 };
@@ -18674,6 +18693,15 @@ var init_gaitState = __esm({
               rs.jq?.worstSwingErrDeg(false) ?? 0
             ).toFixed(1),
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
+            // ── 五态环：当前态 `▶`、本周期已过关 `✓`、未到达 `○`、到达但没过 `✗`
+            //   `visited`/`passed` 由状态机自己维护（迁移成功才置 passed），UI 不参与判断。
+            ring: STATE_ORDER.map((st) => {
+              const mark = st === rs.state ? "\u25B6" : rs.passed.has(st) ? "\u2713" : rs.visited.has(st) ? "\u2717" : "\u25CB";
+              return `${mark}${STATE_LABEL[st]}`;
+            }),
+            next: STATE_LABEL[NEXT_STATE[rs.state]],
+            wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
+            blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
             violations: rs.violations.map(violationText).join("\u3000"),
             roles: `${LEG_CN[sup2]}\u627F\u91CD \xB7 ${LEG_CN[sw2]}\u6446\u52A8`,
             jointsDeg: `\u9ACB ${jd(`${sup2}_hip`, 0)}\xB0  \u819D ${jd(`${sw2}_knee`, 0)}\xB0  \u8E1D ${jd(`${sup2}_ankle`, 0)}\xB0`,
@@ -18708,6 +18736,9 @@ var init_gaitState = __esm({
         rs.stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
         rs.lastSwing = null;
         rs.cycleCount = 0;
+        rs.visited.clear();
+        rs.passed.clear();
+        rs.visited.add("DOUBLE");
       }
     };
   }
@@ -22169,6 +22200,15 @@ var init_hud = __esm({
           ownPhase: $("own-phase"),
           ownVerified: $("own-verified"),
           ownSafe: $("own-safe"),
+          // ── 五态环 + 「下一态/已等/卡在」：状态机在判定哪一态、在等什么
+          ownRing0: $("own-ring-0"),
+          ownRing1: $("own-ring-1"),
+          ownRing2: $("own-ring-2"),
+          ownRing3: $("own-ring-3"),
+          ownRing4: $("own-ring-4"),
+          ownNext: $("own-next"),
+          ownWait: $("own-wait"),
+          ownBlocked: $("own-blocked"),
           ownGround: $("own-ground"),
           ownLoadFrac: $("own-loadfrac"),
           ownSag: $("own-sag"),
@@ -22411,6 +22451,14 @@ var init_hud = __esm({
             r.dataset.r = "";
             r.querySelector("span").textContent = "\u2014";
           }
+          for (const c of [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4]) {
+            c.textContent = "\u2014";
+            c.dataset.cur = "0";
+            c.dataset.mark = "";
+          }
+          e.ownNext.textContent = "\u2014";
+          e.ownWait.textContent = "\u2014";
+          e.ownBlocked.textContent = "\u2014";
           e.ownPhase.textContent = "\u2014";
           e.ownVerified.textContent = "\u2014";
           e.ownSafe.textContent = "\u5B89\u5168 \u5426";
@@ -22447,6 +22495,18 @@ var init_hud = __esm({
           el.querySelector("span").textContent = tags.join(" \xB7 ");
         }
         const tm2 = d.telemetry;
+        const ringCells = [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4];
+        for (let i = 0; i < ringCells.length; i++) {
+          const cell = ringCells[i];
+          const txt2 = tm2.ring[i] ?? "\u2014";
+          cell.textContent = txt2;
+          cell.dataset.cur = txt2.charCodeAt(0) === 9654 ? "1" : "0";
+          cell.dataset.mark = txt2.slice(0, 1);
+        }
+        e.ownNext.textContent = tm2.next;
+        e.ownWait.textContent = tm2.wait;
+        e.ownBlocked.textContent = tm2.blocked;
+        e.ownBlocked.dataset.ok = tm2.blocked === "\u65E0" ? "1" : "0";
         e.ownPhase.textContent = `${tm2.stateLabel} ${tm2.stateT}s`;
         e.ownVerified.textContent = tm2.verified;
         e.ownVerified.dataset.ok = tm2.verified.startsWith("\u2713") ? "1" : "0";
@@ -22754,10 +22814,32 @@ var verbatim = [
   ["own-roll", `${tm.roll}\xB0`],
   ["own-alpha", tm.alpha],
   ["own-clr", `${tm.clearance} mm`],
-  ["own-joints", tm.jointsDeg]
+  ["own-joints", tm.jointsDeg],
+  ["own-next", tm.next],
+  ["own-wait", tm.wait],
+  ["own-blocked", tm.blocked]
 ];
 for (const [id, want] of verbatim) {
   check(`#${id} \u9010\u5B57 === telemetry`, txt(id) === want, `UI\u300C${txt(id)}\u300D vs \u8FDC\u6D4B\u300C${want}\u300D`);
+}
+{
+  const cells = [0, 1, 2, 3, 4].map((i) => txt(`own-ring-${i}`));
+  check(
+    "\u4E94\u6001\u73AF\u9010\u5B57 === telemetry.ring",
+    cells.every((c, i) => c === (tm.ring[i] ?? "\u2014")),
+    cells.join(" | ")
+  );
+  check(
+    "\u73AF\u4E0A\u6070\u597D\u4E00\u4E2A\u5F53\u524D\u6001 \u25B6",
+    tm.ring.filter((x) => x.charCodeAt(0) === 9654).length === 1,
+    tm.ring.join(" ")
+  );
+  check("\u73AF\u4E0A\u5F53\u524D\u6001 === rs.state \u7684\u6807\u7B7E", tm.ring.includes(`\u25B6${tm.stateLabel}`), tm.stateLabel);
+  check(
+    "\u4E0B\u4E00\u6001 === \u73AF\u7684\u56FA\u5B9A\u540E\u7EE7",
+    tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 9654) + 1) % 5].slice(1),
+    `${tm.next}`
+  );
 }
 check("\u7F51\u5173\u56DE\u8BFB\u4E0D\u662F\u5360\u4F4D\u7B26", !tm.jointsDeg.includes("\u2014") && tm.jointsDeg.length > 8, tm.jointsDeg);
 check(

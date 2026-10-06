@@ -140,9 +140,24 @@ const verbatim: [string, string][] = [
   ['own-alpha', tm.alpha],
   ['own-clr', `${tm.clearance} mm`],
   ['own-joints', tm.jointsDeg],
+  ['own-next', tm.next],
+  ['own-wait', tm.wait],
+  ['own-blocked', tm.blocked],
 ];
 for (const [id, want] of verbatim) {
   check(`#${id} 逐字 === telemetry`, txt(id) === want, `UI「${txt(id)}」 vs 远测「${want}」`);
+}
+// ★ 五态环：5 格逐字 === telemetry.ring，且当前态标记与 rs.state 一致
+{
+  const cells = [0, 1, 2, 3, 4].map((i) => txt(`own-ring-${i}`));
+  check('五态环逐字 === telemetry.ring',
+    cells.every((c, i) => c === (tm.ring[i] ?? '—')),
+    cells.join(' | '));
+  check('环上恰好一个当前态 ▶', tm.ring.filter((x) => x.charCodeAt(0) === 0x25b6).length === 1,
+    tm.ring.join(' '));
+  check('环上当前态 === rs.state 的标签', tm.ring.includes(`▶${tm.stateLabel}`), tm.stateLabel);
+  check('下一态 === 环的固定后继', tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 0x25b6) + 1) % 5]!.slice(1),
+    `${tm.next}`);
 }
 check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);
 check('未过项与状态机一致',
