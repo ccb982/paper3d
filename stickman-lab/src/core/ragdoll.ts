@@ -1809,22 +1809,39 @@ soleBlockLabels(side: 0 | 1): string[] {
    * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
    */
   footLoadFrac(dt: number): [number, number] {
-    const one = (side: 0 | 1): number => {
-      const col = this.soleCol[side];
-      if (!col) return 0;
+    // ★★★ 2026-10-06 修（实测 `tools/dbg-grip`）：原来读 `this.soleCol[side]`
+    //   —— **单个** collider，而每只脚有 **7 个**鞋底 collider
+    //   （`soleCols[0].length = 7`：foot 4 + arch 2 + mfoot 1）。
+    //   `soleCol` 是 `ragdoll.ts:882` 的 `??= col`，即**只拿到第一块**。
+    //   ⇒ 法向力漏掉 **6/7** ⇒ `sum` 常为 0 ⇒ 走 `sum > 1e-6` 的兜底
+    //      ⇒ 返回 `[0.5, 0.5]`。
+    //
+    //   ★ 后果链（这就是「为什么右腿是承重腿」的机制）：
+    //       `footLoadFrac` 恒 0.5/0.5 → `controller.ts:97` 的 `loadFrac` 恒 0.5/0.5
+    //       → `supportLeg()` 里 `loadDominant()` 的迟滞**永远不换边**（差值恒 0）
+    //       → 支撑腿永远停在初值 `'l'`
+    //       而 `readCoP` 实测右脚承重 357.7 N、左脚 0
+    //       ⇒ **物理承重腿 = 右，系统判定 = 左** ⇒ 右腿该支撑时被当摆动腿抬起来。
+    //
+    //   ⇒ 与 `readCoP`（ragdoll.ts:1313 已正确遍历 `soleCols`）对齐。
+    const sumOne = (side: 0 | 1): number => {
+      const cols = this.soleCols[side];
       let f = 0;
-      this.world.contactPairsWith(col as RAPIER.Collider, (other: RAPIER.Collider) => {
-        this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
-          if (mf.numContacts() === 0) return;
-          // ★ 不要按法向过滤：自碰撞是关的（GROUPS_SELF 只和地面碰），
-          //   鞋底上的接触对**只可能**是地面，加上 |n_y|>0.5 的过滤反而把
-          //   全部接触滤掉（实测载荷恒为 0 ⇒ 份额永远是 0.5/0.5）。
-          for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+      for (let ci = 0; ci < cols.length; ci++) {
+        const col = cols[ci] as RAPIER.Collider;
+        this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+          this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+            if (mf.numContacts() === 0) return;
+            // ★ 不要按法向过滤：自碰撞是关的（GROUPS_SELF 只和地面碰），
+            //   鞋底上的接触对**只可能**是地面，加上 |n_y|>0.5 的过滤反而把
+            //   全部接触滤掉（实测载荷恒为 0 ⇒ 份额永远是 0.5/0.5）。
+            for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+          });
         });
-      });
+      }
       return f;
     };
-    const fl = one(0), fr = one(1);
+    const fl = sumOne(0), fr = sumOne(1);
     const sum = fl + fr;
     return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
   }
@@ -1838,16 +1855,23 @@ soleBlockLabels(side: 0 | 1): string[] {
    *   Rapier 的 `TempContactManifold` 只暴露法向冲量，切向冲量要靠切点速度估计，
    *   这里用"接触点相对切向速度 × 法向冲量"做一阶估计。
    */
-  footGrip(side: 0 | 1, dt: number): [number, number, number] {
-    const col = this.soleCol[side];
-    if (!col) return [0, 0, 0];
+footGrip(side: 0 | 1, dt: number): [number, number, number] {
+    // ★★★ 2026-10-06 修：与 `footLoadFrac` 同一个 bug —— 原来读单数 `soleCol[side]`
+    //   （只拿到 7 块鞋底里的**第一块**）⇒ 法向力恒 0 ⇒ 实测「体���完全没压在脚上」
+    //   一直误报为「没压上」，而 `readCoP` 同时在说有 357.7 N。
+    //   `footGrip` 是**对外的诊断接口**（UI 的「脚有没有抓地」面板读它），
+    //   读错会让「体重没压上」和「接触力为零」这两件事无法区分。
+    const cols = this.soleCols[side];
     let fn = 0;
-    this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
-      this.world.contactPair(col as RAPIER.Collider, other, (mf: RAPIER.TempContactManifold) => {
-        if (mf.numContacts() === 0) return;
-        for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          if (mf.numContacts() === 0) return;
+          for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+        });
       });
-    });
+    }
     // 切向：接触点滑移速度 × 法向力（一阶近似，够判断"是否在打滑"）
     const body = this.bodies[this.indexByKey.get(side === 0 ? "foot_l" : "foot_r") ?? 0];
     const v = body.linvel();
