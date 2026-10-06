@@ -15172,6 +15172,62 @@ var init_ragdoll = __esm({
         return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
       }
       /**
+       * ★★★ 力链 L0/L1：**逐块法向力 + 该脚 CoP**（`架构_v2_三模块协作.md` §20.2）。
+       *
+       *   与 `readCoP` **同一套取法**，保证不会出现"两个 CoP"：
+       *     · `numSolverContacts()` 只含**真正的求解接触**，预测性接触不算 ——
+       *       这正是旧代码「有接触但冲量为 0」的来源（旧代码用 `numContacts()`）；
+       *     · `solverContactPoint()` 给**世界坐标**，不再用局部坐标 + 锚点近似；
+       *     · 法线对齐 + 鞋底包围盒过滤，与 `readCoP` 一致。
+       *
+       *   ★ `copValid=false` 时**所有数值返回 0**，绝不返回 `[0.5, 0.5]` 之类的兜底：
+       *     "有接触、没载荷"这种自相矛盾的状态必须**显式暴露**，
+       *     否则上层会把假值当真实载荷去控（旧 `footLoadFrac` 的坑）。
+       */
+      soleForceProfile(side, dt) {
+        const cols = this.soleCols[side];
+        const bb = this.soleBB;
+        this.footSoleBounds(side, bb);
+        const EPS = 2e-3;
+        const patches = [];
+        let fz = 0, sx = 0, sz = 0, contactN = 0;
+        for (let ci = 0; ci < cols.length; ci++) {
+          const col = cols[ci];
+          const bi = this.soleColBody[side][ci];
+          if (bi === void 0) continue;
+          let bfz = 0, bsum = 0, bpx = 0, bpz = 0;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              this.soleNormalAligned(bi, mf.normal());
+              if (this.soleAl < SOLE_NORMAL_TOL) return;
+              const n = mf.numSolverContacts();
+              for (let i = 0; i < n; i++) {
+                const l = Math.abs(mf.contactImpulse(i));
+                if (!(l > 0)) continue;
+                const p = mf.solverContactPoint(i);
+                if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
+                bfz += l / dt;
+                bsum += l;
+                bpx += p.x * l;
+                bpz += p.z * l;
+              }
+            });
+          });
+          if (bfz > 1e-6) {
+            contactN++;
+            fz += bfz;
+            sx += bpx;
+            sz += bpz;
+            patches.push({ block: ci, ny: bfz, tx: 0, tz: 0, cx: bpx / bsum, cz: bpz / bsum });
+          }
+        }
+        const valid = contactN > 0 && fz > 15;
+        if (!valid) {
+          return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches };
+        }
+        return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches };
+      }
+      /**
        * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
        *   用户 2026-10-02："我认为需要保证脚底真能抓地或者身体的体重真的压在脚上了"。
        *   返回 `[法向力N, 切向力N, μ·法向力N]`：
@@ -17065,6 +17121,19 @@ var init_rigState = __esm({
        *   清零时机：走完一圈（回 `DOUBLE`）时。
        */
       heelRose = false;
+      /**
+       * ★ **地面反力链快照**（每拍由 `gaitState` 通过 `forceChain.ts` 发布）。
+       *   **只有平衡系统读它**；`balance.ts`/`step.ts` 不得自己读接触/CoP
+       *   （`probe:readback` 静态门禁强制）。
+       *
+       *   ⚠ 与 `forceChain()` **方法**（`RigSnapshot.forceChain`）不是一回事：
+       *     那个是**关节传递力**（每关节下方子树的力，UI 的"力链"面板用，自下而上）；
+       *     这个是**脚底→GRF→力矩**的平衡力学链（CoP / 力臂 / 倾覆力矩 / τ 余量）。
+       *     `架构_v2_三模块协作.md` §20.2 的六层指的是这一个。
+       */
+      groundChain = null;
+      /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
+      forceSrc = null;
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
       telemetry = {
         stateLabel: "\u2014",
@@ -17090,6 +17159,7 @@ var init_rigState = __esm({
         wait: "0.00s",
         blocked: "\u65E0",
         sigs: [],
+        force: [],
         violations: "",
         roles: "\u2014",
         jointsDeg: "\u2014",
@@ -18031,7 +18101,7 @@ var init_rigState = __esm({
           cycleCount: this.cycleCount,
           lastMove: this.lastMove ? { ...this.lastMove } : null,
           stateStats: { ...this.stateStats },
-          telemetry: { ...this.telemetry },
+          telemetry: { ...this.telemetry, force: [...this.telemetry.force], sigs: [...this.telemetry.sigs], ring: [...this.telemetry.ring] },
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18242,6 +18312,110 @@ var init_jointQuery = __esm({
   }
 });
 
+// src/core/forceChain.ts
+function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen) {
+  const bothValid = l.copValid && r.copValid;
+  const oneValid = l.copValid || r.copValid;
+  const wsum = (l.copValid ? l.fz : 0) + (r.copValid ? r.fz : 0);
+  const copValid = wsum > FZ_MIN_N;
+  const copX = copValid ? ((l.copValid ? l.fz * l.copX : 0) + (r.copValid ? r.fz * r.copX : 0)) / wsum : 0;
+  const copZ = copValid ? ((l.copValid ? l.fz * l.copZ : 0) + (r.copValid ? r.fz * r.copZ : 0)) / wsum : 0;
+  const grfX = l.fx + r.fx;
+  const grfY = l.fz + r.fz;
+  const grfZ = l.fzTan + r.fzTan;
+  const grfAngleDeg = grfY > 1e-6 ? Math.atan2(Math.hypot(grfX, grfZ), grfY) * 180 / Math.PI : 0;
+  let luX0 = l.copValid ? l.copX : ankle.l.x;
+  let luZ0 = l.copValid ? l.copZ : ankle.l.z;
+  let luX1 = r.copValid ? r.copX : ankle.r.x;
+  let luZ1 = r.copValid ? r.copZ : ankle.r.z;
+  if (!l.copValid && !r.copValid) {
+    luX0 = 0;
+    luZ0 = 0;
+    luX1 = 1;
+    luZ1 = 0;
+  }
+  const dx = luX1 - luX0;
+  const dz = luZ1 - luZ0;
+  const dl = Math.hypot(dx, dz) || 1;
+  const ankleNx = -dz / dl;
+  const ankleNz = dx / dl;
+  const bear = r.copValid && r.fz > l.fz ? "r" : "l";
+  const armSag = copX - ankle[bear].x;
+  const armLat = copZ - ankle[bear].z;
+  const g = 9.81;
+  const toppleSag = massKg * g * (com.x - copX);
+  const toppleLat = massKg * g * (com.z - copZ);
+  const tauReqSag = toppleSag;
+  const tauReqLat = toppleLat;
+  const tauMarginSag = tauMax.sag - Math.abs(tauReqSag);
+  const tauMarginLat = tauMax.lat - Math.abs(tauReqLat);
+  let trustNote = "";
+  if (!oneValid) {
+    trustNote = "\u4E24\u811A\u90FD\u8BFB\u4E0D\u5230\u6709\u6548\u8F7D\u8377 \u21D2 \u529B\u94FE\u4E0D\u53EF\u4FE1\uFF08\u68C0\u67E5\u63A5\u89E6\u51B2\u91CF\uFF09";
+  } else if (!bothValid) {
+    trustNote = "\u53EA\u6709\u4E00\u811A\u8BFB\u5230\u6709\u6548\u8F7D\u8377 \u21D2 CoP \u52A0\u6743\u53EA\u7528\u8FD9\u4E00\u811A";
+  } else if (Math.abs(armSag) > COP_MAX_ARM * footHalfLen * 2) {
+    trustNote = "CoP \u8DD1\u5230\u8E1D\u5FC3\u5916\u8FC7\u8FDC \u21D2 \u529B\u81C2\u5DF2\u8D85\u51FA\u8DB3\u957F\uFF0C\u7269\u7406\u4E0A\u4E0D\u53EF\u8FBE";
+  }
+  return {
+    l,
+    r,
+    copX,
+    copZ,
+    copValid,
+    grfX,
+    grfY,
+    grfZ,
+    grfAngleDeg,
+    lines: { luX0, luZ0, luX1, luZ1, ankleNx, ankleNz },
+    armSag,
+    armLat,
+    toppleSag,
+    toppleLat,
+    tauReqSag,
+    tauMarginSag,
+    tauReqLat,
+    tauMarginLat,
+    trustable: copValid && trustNote === "",
+    trustNote: trustNote || "ok"
+  };
+}
+function forceChainLines(fc) {
+  const n = (v, d = 2) => Number.isFinite(v) ? v.toFixed(d) : "\u2014";
+  const m = (v, d = 0) => Number.isFinite(v) ? v.toFixed(d) : "\u2014";
+  return [
+    `CoP \u5168\u5C40 (${n(fc.copX * 1e3)}, ${n(fc.copZ * 1e3)}) mm ${fc.copValid ? "" : "**\u65E0\u6548**"}`,
+    `  \u5DE6 (${n(fc.l.copX * 1e3)}, ${n(fc.l.copZ * 1e3)}) ${m(fc.l.fz)}N\u3000\u53F3 (${n(fc.r.copX * 1e3)}, ${n(fc.r.copZ * 1e3)}) ${m(fc.r.fz)}N\u3000\u63A5\u89E6\u5757 ${fc.l.contactN}/${fc.r.contactN}`,
+    `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N \u65B9\u5411 ${n(fc.grfAngleDeg, 1)}\xB0`,
+    `\u8E1D\u529B\u81C2 sag ${n(fc.armSag * 1e3)}mm  lat ${n(fc.armLat * 1e3)}mm`,
+    `\u503E\u8986\u529B\u77E9 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N\xB7m`,
+    `\u8E1D\u4F59\u91CF sag ${n(fc.tauMarginSag, 1)} lat ${n(fc.tauMarginLat, 1)} N\xB7m\uFF08\u8D1F = \u5FC5\u7136\u5012\uFF09`,
+    `\u53EF\u4FE1\uFF1A${fc.trustable ? "\u662F" : "\u5426 \u2014 " + fc.trustNote}`
+  ];
+}
+function buildGroundChain(src, rs) {
+  const l = src.sole(0);
+  const r = src.sole(1);
+  const ankle = { l: src.ankle(0), r: src.ankle(1) };
+  return buildForceChain(
+    l,
+    r,
+    ankle,
+    { x: rs.com.x, z: rs.com.z },
+    src.massKg(),
+    src.tauMax(),
+    src.footLen()
+  );
+}
+var FZ_MIN_N, COP_MAX_ARM;
+var init_forceChain = __esm({
+  "src/core/forceChain.ts"() {
+    "use strict";
+    FZ_MIN_N = 15;
+    COP_MAX_ARM = 0.5;
+  }
+});
+
 // src/core/gaitState.ts
 var gaitState_exports = {};
 __export(gaitState_exports, {
@@ -18304,6 +18478,7 @@ var init_gaitState = __esm({
     init_rigState();
     init_keyframe();
     init_jointQuery();
+    init_forceChain();
     DEG2 = 180 / Math.PI;
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
@@ -18968,6 +19143,13 @@ var init_gaitState = __esm({
         rs.loadBearer = sup;
         const sw = rear;
         const front = recv;
+        if (rs.forceSrc) {
+          try {
+            rs.groundChain = buildGroundChain(rs.forceSrc, rs);
+          } catch {
+            rs.groundChain = null;
+          }
+        }
         const dm = checkDomains(rs, true);
         const dmLoose = checkDomains(rs, false);
         const swingKneeVel = rs.jq ? -rs.jq.velDegPerSec(`knee_${sw}`, 2) : 0;
@@ -19157,6 +19339,8 @@ var init_gaitState = __esm({
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
             // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
             //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+            // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
+            force: rs.groundChain ? forceChainLines(rs.groundChain) : ["\u529B\u94FE\u4E0D\u53EF\u7528\uFF08forceSrc \u672A\u5B89\u88C5\uFF09"],
             sigs: specs.map((sp) => {
               const it = sp.item;
               const v = values[it];
@@ -21767,14 +21951,22 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
   if (on("lat") && rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
     const drive = rs.shiftDriveSide;
-    const dIdx = drive === "l" ? 0 : 1;
-    doll.readCoP(dIdx, TMP_COP);
-    doll.footSoleBounds(dIdx, TMP_BB);
-    const driveMed = TMP_COP[2] - TMP_BB[2];
-    const sIdx = sup === "l" ? 0 : 1;
-    doll.readCoP(sIdx, TMP_COP);
-    doll.footSoleBounds(sIdx, TMP_BB);
-    const supMed = TMP_COP[2] - TMP_BB[2];
+    const gc = rs.groundChain;
+    const copZOf = (d) => {
+      if (!gc) return null;
+      const ff = d === "l" ? gc.l : gc.r;
+      return ff.copValid ? ff.copZ : null;
+    };
+    const copDrive = copZOf(drive);
+    const copSup = copZOf(sup);
+    const driveMed = copDrive === null ? Number.NEGATIVE_INFINITY : copDrive - (() => {
+      doll.footSoleBounds(drive === "l" ? 0 : 1, TMP_BB);
+      return TMP_BB[2];
+    })();
+    const supMed = copSup === null ? Number.NEGATIVE_INFINITY : copSup - (() => {
+      doll.footSoleBounds(sup === "l" ? 0 : 1, TMP_BB);
+      return TMP_BB[2];
+    })();
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, "spine1", "spine2", "spine3"]) {
@@ -22424,6 +22616,7 @@ var init_controller = __esm({
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
         sim.attachRigState(this.rs);
+        this.installForceSource();
         this.snapshot = this.rs.snapshot();
       }
       rs;
@@ -22442,6 +22635,53 @@ var init_controller = __esm({
       groundedHoldSec = 3 / 60;
       /** 本拍接触翻转次数（诊断用，累加后交给 `rs.contactFlips`） */
       contactFlips = 0;
+      /** ★ 本拍的鞋底力剖面缓存（`loadFrac` 与力链**共用同一份**，杜绝两套口径） */
+      soleCache = { l: null, r: null };
+      /** 本拍载荷读数是否可信（两脚有效载荷之和过阈） */
+      soleValid = false;
+      /**
+       * ★★ 安装**力链原始读数源**（用户 2026-10-06：力链分析放状态机，供平衡系统使用）。
+       *
+       *   与 `gaitState.installJointQuery()` 同一模式：**读的权限在状态机**，
+       *   这里只提供"怎么从 `Ragdoll` 读"，组装与解释全在状态机（`forceChain.ts`）。
+       */
+      installForceSource() {
+        const sk2 = this.rs.sk;
+        const doll = this.sim.doll;
+        const tmp = new Float64Array(3);
+        const massKg = sk2.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+        const ankleIdx = {
+          l: sk2.joints.findIndex((j) => j.name === "foot_l"),
+          r: sk2.joints.findIndex((j) => j.name === "foot_r")
+        };
+        const ankleTau = (ax) => {
+          let m = 0;
+          for (const gi of [ankleIdx.l, ankleIdx.r]) {
+            const j = sk2.joints[gi];
+            if (j) m = Math.max(m, Math.abs(j.maxTorque[ax] ?? 0));
+          }
+          return m;
+        };
+        const footBody = sk2.bodies.find((b) => b.key === "foot_l");
+        const fc = footBody?.colliders.find((c) => c.shape === "cuboid");
+        const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
+        const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+        this.rs.forceSrc = {
+          sole: (side) => {
+            const cached = side === 0 ? this.soleCache.l : this.soleCache.r;
+            return cached ?? doll.soleForceProfile(side, physDt);
+          },
+          ankle: (side) => {
+            const gi = ankleIdx[side === 0 ? "l" : "r"];
+            if (gi < 0) return { x: 0, z: 0 };
+            doll.jointWorld(gi, tmp);
+            return { x: tmp[0], z: tmp[2] };
+          },
+          massKg: () => massKg,
+          tauMax: () => ({ sag: ankleTau(2), lat: ankleTau(0) }),
+          footLen: () => footLen
+        };
+      }
       get summary() {
         return rigSummary(this.rigReport);
       }
@@ -22457,7 +22697,23 @@ var init_controller = __esm({
         rs.dcm.x = dcm(com.x, com.vx, om);
         rs.dcm.z = dcm(com.z, com.vz, om);
         rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
+        const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+        this.soleCache.l = sim.doll.soleForceProfile(0, physDt);
+        this.soleCache.r = sim.doll.soleForceProfile(1, physDt);
+        const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
+        const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
+        const fzSum = fzL + fzR;
+        let fl;
+        let fr;
+        if (fzSum > 15) {
+          fl = fzL / fzSum;
+          fr = fzR / fzSum;
+          this.soleValid = true;
+        } else {
+          fl = this.loadFilt.l;
+          fr = this.loadFilt.r;
+          this.soleValid = false;
+        }
         const kL = 1 - Math.exp(-dt / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;

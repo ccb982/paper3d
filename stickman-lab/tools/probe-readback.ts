@@ -79,9 +79,16 @@ if (!jq) {
   const names: [string, number][] = (['hip_l', 'knee_l', 'foot_l', 'hip_r', 'knee_r', 'foot_r'] as const)
     .map((n) => [n, sk.joints.findIndex((j) => j.name === n)] as [string, number]);
   let maxAng = 0; let maxVel = 0; let n = 0;
+  // ★ 力链必须在**站立中段**取值：跑到最后 rig 已经倒了，接触消失 ⇒
+  //   `groundChain` 合法地变成"不可信"。拿它去断言等于拿尸体做体检。
+  let gcMid: typeof ctrl.rs.groundChain = null;
+  let gcMidT = -1;
   for (let i = 0; i < 4 * PHYS_HZ && !sim.finished; i++) {
     if (i % PER_CTRL === 0) {
       sim.doll.setMotorTargets(ctrl.step(DT));
+      // 站得最稳的那一拍：取 0.5s 附近的力链
+      const tNow = i / PHYS_HZ;
+      if (gcMidT < 0 && tNow >= 0.45 && ctrl.rs.groundChain) { gcMid = ctrl.rs.groundChain; gcMidT = tNow; }
       for (const [nm, ji] of names) {
         if (ji < 0) continue;
         for (const ax of [0, 1, 2] as const) {
@@ -115,6 +122,34 @@ if (!jq) {
     if (tm.jointsDeg.includes('—')) problems.push(`jointsDeg 缺值：${tm.jointsDeg}（网关没通）`);
     if (!/^\d/.test(tm.loadFrac) && tm.loadFrac !== '—') problems.push(`loadFrac 格式异常：${tm.loadFrac}`);
     if (tm.domainWorst === '—' || tm.domainWorst === 'NaN') problems.push(`domainWorst 异常：${tm.domainWorst}`);
+    // ── ★ 力链（状态机拥有的地面反力链）────────────────────────────
+    //   用户 2026-10-06：「正确实现力链的分析放在状态机里，供平衡系统使用」。
+    //   钉死三件事：① 状态机真的发布了它；② L0 自洽（逐块和 == 脚合力）；
+    //   ③ 不可信时**必须显式说不信**，不许拿假值凑。
+    {
+      const gc = gcMid ?? ctrl.rs.groundChain;
+      ok(`力链取样于 t=${gcMidT.toFixed(2)}s（站立中段）`);
+      if (!gc) bad('rs.groundChain 为空：状态机没有发布力链（forceSrc 没装？）');
+      else {
+        ok(`力链已发布：CoP (${(gc.copX * 1000).toFixed(1)}, ${(gc.copZ * 1000).toFixed(1)}) mm`
+          + ` GRF ${gc.grfY.toFixed(0)}N 方向 ${gc.grfAngleDeg.toFixed(1)}°`
+          + ` 踝力臂 sag ${(gc.armSag * 1000).toFixed(1)}mm 余量 sag ${gc.tauMarginSag.toFixed(1)}N·m`
+          + ` 可信=${gc.trustable}${gc.trustable ? '' : '（' + gc.trustNote + '）'}`);
+        for (const [nm, ff] of [['左', gc.l], ['右', gc.r]] as const) {
+          if (!ff.copValid) {
+            ok(`${nm}脚无有效载荷（显式 copValid=false）：接触块 ${ff.contactN} 合力 ${ff.fz.toFixed(1)}N`);
+            continue;
+          }
+          const psum = ff.patches.reduce((a, x) => a + x.ny, 0);
+          const rel = Math.abs(psum - ff.fz) / Math.max(1e-6, ff.fz);
+          if (rel < 0.01) ok(`${nm}脚 L0 自洽：逐块和 ${psum.toFixed(1)}N == 合力 ${ff.fz.toFixed(1)}N`);
+          else bad(`${nm}脚 L0 不自洽：逐块和 ${psum.toFixed(1)}N vs 合力 ${ff.fz.toFixed(1)}N（差 ${(rel * 100).toFixed(1)}%）`);
+        }
+        if (!gc.trustable && gc.trustNote === '') bad('力链不可信却没给 trustNote');
+        else if (!gc.trustable) ok(`不可信时有原因说明：「${gc.trustNote}」`);
+      }
+    }
+
     // ── 关节名必须与 skeleton 一致，且**错名必须响** ────────────────
     //   实测踩过：遥测里写 `l_hip`，网关静默返回 -1 ⇒ 角度 0 ⇒
     //   面板上「髋 0.0° 膝 0.0° 踝 0.0°」一路全绿。所以这里钉死三件事：

@@ -38,6 +38,7 @@ import {
   STATE_TO_GAIT, KEY_POSES, stanceWidthRatio, supportEntry,
 } from './keyframe';
 import { createJointQuery } from './jointQuery';
+import { buildGroundChain, forceChainLines } from './forceChain';
 
 /** deg ← rad */
 const DEG = 180 / Math.PI;
@@ -917,6 +918,18 @@ export class GaitState {
     const sw: Side = rear;
     const front = recv;
 
+    // ── ★ 力链分析（用户 2026-10-06：放状态机里，供平衡系统使用）──────
+    //   在**角色指派之后**发布（`buildForceChain` 要按承重腿选力臂原点），
+    //   在**验收之前**（判据与平衡系统本拍就要用）。
+    if (rs.forceSrc) {
+      try {
+        rs.groundChain = buildGroundChain(rs.forceSrc, rs);
+      } catch {
+        // 力链失败**不许静默**：标成不可信，让 UI/判据看到
+        rs.groundChain = null;
+      }
+    }
+
     // ── 帧域检查：**两段式迟滞**（§3.7 规则 2）────────────────
     //   strict（严容差 `tolIn`）⇒ 决定**能否进入下一态**；
     //   loose （松容差 `tolOut`）⇒ 决定**是否还算保持得住**（不误触安全态）。
@@ -1117,6 +1130,8 @@ export class GaitState {
         stepPermit: rs.stepPermit.all ? '放行' : '拦',
         // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
         //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+        // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
+        force: rs.groundChain ? forceChainLines(rs.groundChain) : ['力链不可用（forceSrc 未安装）'],
         sigs: specs.map((sp) => {
           const it = sp.item;
           const v = values[it];

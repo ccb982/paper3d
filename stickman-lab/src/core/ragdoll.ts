@@ -39,6 +39,7 @@
 //   是数值发散的温床。代价是左右腿可以互穿 —— 对"纸片人偶"这个视觉风格反而是好事。
 
 import RAPIER from '@dimforge/rapier3d';
+import type { FootForce, SolePatch } from './rigState';
 import { JOINT_MAX_SPEED, jointIndexByName, restQuatOf, type BodyDef, type JointDef, type Skeleton, type Vec3 } from './skeleton';
 
 // ---------------------------------------------------------------- 碰撞分组
@@ -1844,6 +1845,58 @@ soleBlockLabels(side: 0 | 1): string[] {
     const fl = sumOne(0), fr = sumOne(1);
     const sum = fl + fr;
     return sum > 1e-6 ? [fl / sum, fr / sum] : [0.5, 0.5];
+  }
+
+  /**
+   * ★★★ 力链 L0/L1：**逐块法向力 + 该脚 CoP**（`架构_v2_三模块协作.md` §20.2）。
+   *
+   *   与 `readCoP` **同一套取法**，保证不会出现"两个 CoP"：
+   *     · `numSolverContacts()` 只含**真正的求解接触**，预测性接触不算 ——
+   *       这正是旧代码「有接触但冲量为 0」的来源（旧代码用 `numContacts()`）；
+   *     · `solverContactPoint()` 给**世界坐标**，不再用局部坐标 + 锚点近似；
+   *     · 法线对齐 + 鞋底包围盒过滤，与 `readCoP` 一致。
+   *
+   *   ★ `copValid=false` 时**所有数值返回 0**，绝不返回 `[0.5, 0.5]` 之类的兜底：
+   *     "有接触、没载荷"这种自相矛盾的状态必须**显式暴露**，
+   *     否则上层会把假值当真实载荷去控（旧 `footLoadFrac` 的坑）。
+   */
+  soleForceProfile(side: 0 | 1, dt: number): FootForce {
+    const cols = this.soleCols[side];
+    const bb = this.soleBB; this.footSoleBounds(side, bb);
+    const EPS = 2e-3;
+    const patches: SolePatch[] = [];
+    let fz = 0, sx = 0, sz = 0, contactN = 0;
+    for (let ci = 0; ci < cols.length; ci++) {
+      const col = cols[ci] as RAPIER.Collider;
+      const bi = this.soleColBody[side]![ci];
+      if (bi === undefined) continue;
+      let bfz = 0, bsum = 0, bpx = 0, bpz = 0;
+      this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
+        this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
+          this.soleNormalAligned(bi, mf.normal());
+          if (this.soleAl < SOLE_NORMAL_TOL) return;
+          const n = mf.numSolverContacts();
+          for (let i = 0; i < n; i++) {
+            const l = Math.abs(mf.contactImpulse(i));
+            if (!(l > 0)) continue;
+            const p = mf.solverContactPoint(i);
+            if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS
+              || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
+            bfz += l / dt; bsum += l; bpx += p.x * l; bpz += p.z * l;
+          }
+        });
+      });
+      if (bfz > 1e-6) {
+        contactN++;
+        fz += bfz; sx += bpx; sz += bpz;
+        patches.push({ block: ci, ny: bfz, tx: 0, tz: 0, cx: bpx / bsum, cz: bpz / bsum });
+      }
+    }
+    const valid = contactN > 0 && fz > 15;   // 15 N ≈ 体重的 2%，低于此 CoP 噪声被放大
+    if (!valid) {
+      return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches };
+    }
+    return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches };
   }
 
   /**

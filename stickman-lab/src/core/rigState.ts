@@ -28,6 +28,95 @@ import type { JointQuery } from './jointQuery';
 
 export type Side = 'l' | 'r';
 /**
+ * ★★ 力链的**原始传感器读数**提供者（由 `Controller` 安装，**状态机调用**）。
+ *
+ *   分工（用户 2026-10-06：「力链的分析放在状态机里」）：
+ *     · `ForceSource` 只负责**读**（鞋底冲量、踝关节世界坐标、质量、力矩上限）；
+ *     · **分析**（组装 CoP/GRF/力臂/倾覆力矩/τ 余量、逐态解释、可信度判定）
+ *       全部在状态机这一层（`forceChain.ts` 的 `buildGroundChain`）。
+ *   与 `JointQuery` 同一模式：读的权限在状态机手里，别人只能读状态机的结论。
+ */
+export interface ForceSource {
+  /** 单脚逐块法向力 + CoP（`Ragdoll.soleForceProfile`，已按**物理步长**换算成力） */
+  sole(side: 0 | 1): FootForce;
+  /** 踝关节世界 x/z（力臂原点；`Ragdoll.jointWorld`） */
+  ankle(side: 0 | 1): { x: number; z: number };
+  /** 全身体质量（kg） */
+  massKg(): number;
+  /** 踝关节可用力矩上限（N·m，矢状 / 额状） */
+  tauMax(): { sag: number; lat: number };
+  /** 足长（m，CoP 合理性检查用） */
+  footLen(): number;
+}
+
+/** 单个鞋底块的接触力（力链的最小分布单元） */
+export interface SolePatch {
+  /** 块序号 0..6 */
+  block: number;
+  /** 法向力（N，正值） */
+  ny: number;
+  /** 切向力（沿 x，N） */
+  tx: number;
+  /** 切向力（沿 z，N） */
+  tz: number;
+  /** 该块受力点（世界 x / z，m） */
+  cx: number;
+  cz: number;
+}
+
+/** 单脚：CoP + 合力 + 逐块分布。`copValid=false` 时**所有数值为 0**（不兜底）。 */
+export interface FootForce {
+  /** 有效接触块数 */
+  contactN: number;
+  /** 竖向合力（N） */
+  fz: number;
+  /** 切向合力（N，沿 x） */
+  fx: number;
+  /** 切向合力（N，沿 z） */
+  fzTan: number;
+  /** 该脚压力中心 CoP（世界坐标，m） */
+  copX: number;
+  copZ: number;
+  /** ★ 合力太小时 CoP 噪声被放大 ⇒ 标为不可信，**不做兜底** */
+  copValid: boolean;
+  /** 逐块分布（柔性足 §15 侧向发力要用） */
+  patches: SolePatch[];
+}
+
+/** Winter 1996（J Neurophysiol 75:2334）的两条独立控制线 */
+export interface ControlLines {
+  /** load/unload 线：两脚 CoP 连线（**髋机制**：在两脚间搬运重量） */
+  luX0: number; luZ0: number; luX1: number; luZ1: number;
+  /** 踝控制线：与 load/unload 线垂直的单位向量（**踝机制**：前后倾） */
+  ankleNx: number; ankleNz: number;
+}
+
+/** ★ 状态机每拍发布的力链快照（`架构_v2_三模块协作.md` §20.3） */
+export interface ForceChain {
+  l: FootForce;
+  r: FootForce;
+  /** 全局 CoP（两脚按法向力加权）—— M/L 平衡的总判据 */
+  copX: number; copZ: number; copValid: boolean;
+  /** 全局地面反力：**大小与方向**（用户要的"力度和方向"） */
+  grfX: number; grfY: number; grfZ: number;
+  /** GRF 相对竖直的倾角（deg）——"方向"的可读形式 */
+  grfAngleDeg: number;
+  lines: ControlLines;
+  /** 相对承重脚的踝力臂（**踝力矩的唯一来源**，Usherwood 2012） */
+  armSag: number; armLat: number;
+  /** 重力倾覆力矩（N·m，矢状 / 额状） */
+  toppleSag: number; toppleLat: number;
+  /** 踝需求力矩（N·m） */
+  tauReqSag: number; tauReqLat: number;
+  /** 踝余量（N·m；**负 = 必然倒**） */
+  tauMarginSag: number; tauMarginLat: number;
+  /** L0 是否可信 */
+  trustable: boolean;
+  /** 不可信的原因（人话，直接给 UI） */
+  trustNote: string;
+}
+
+/**
  * ★★★ **步态状态机的 5 个状态（固定环）** —— `架构_v2_三模块协作.md` §3
  *
  *   环：`DOUBLE → LOAD → PUSH → LIFT → SWING → DOUBLE`（一个完整迈步周期 = 一圈）
@@ -167,6 +256,8 @@ export interface StateTelemetry {
    *   这是"为什么还没进下一态"的完整答案，由状态机生成，UI 不推导。
    */
   sigs: string[];
+  /** ★ 力链逐行读数（CoP/GRF/力臂/倾覆/余量/可信度；状态机生成，UI 只渲染） */
+  force: string[];
   /** 未通过的验收项（人话，空 = 全过），如 `承接腿承重 0.51/0.60` */
   violations: string;
   /** 角色标签（承重/前腿），由状态机指派 */
@@ -603,6 +694,7 @@ export class RigState {
   jointNoiseDeg = 0;
   /** 载荷读数落在 0.5/0.5 回退值的占比（0~1）—— 接触模型可信度的代理指标 */
   loadFallbackFrac = 0;
+
   /**
    * ★ 本周期**到过**的状态（用于画五态环的 `○/✗`）。
    *   只由 `gaitState` 维护；UI 不读它，只读 `telemetry.ring`。
@@ -618,6 +710,20 @@ export class RigState {
    *   清零时机：走完一圈（回 `DOUBLE`）时。
    */
   heelRose = false;
+  /**
+   * ★ **地面反力链快照**（每拍由 `gaitState` 通过 `forceChain.ts` 发布）。
+   *   **只有平衡系统读它**；`balance.ts`/`step.ts` 不得自己读接触/CoP
+   *   （`probe:readback` 静态门禁强制）。
+   *
+   *   ⚠ 与 `forceChain()` **方法**（`RigSnapshot.forceChain`）不是一回事：
+   *     那个是**关节传递力**（每关节下方子树的力，UI 的"力链"面板用，自下而上）；
+   *     这个是**脚底→GRF→力矩**的平衡力学链（CoP / 力臂 / 倾覆力矩 / τ 余量）。
+   *     `架构_v2_三模块协作.md` §20.2 的六层指的是这一个。
+   */
+  groundChain: ForceChain | null = null;
+  /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
+  forceSrc: ForceSource | null = null;
+
   /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
   telemetry: StateTelemetry = {
     stateLabel: '—', state: 'DOUBLE', stateT: '0.00', verified: '—',
@@ -626,6 +732,7 @@ export class RigState {
     sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
     ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
     sigs: [],
+    force: [],
     violations: '', roles: '—', jointsDeg: '—', safe: '否',
   };
 
@@ -1510,7 +1617,7 @@ export class RigState {
       safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
       lastMove: this.lastMove ? { ...this.lastMove } : null,
       stateStats: { ...this.stateStats },
-      telemetry: { ...this.telemetry },
+      telemetry: { ...this.telemetry, force: [...this.telemetry.force], sigs: [...this.telemetry.sigs], ring: [...this.telemetry.ring] },
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

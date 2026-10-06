@@ -1514,16 +1514,27 @@ export function balanceSystem(
   //   `channel: 'lat'`（balance.ts:127）⇒ 表与接线在此处必须一致。
   if (on('lat') && rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
     const drive: Side = rs.shiftDriveSide;
-    // ── 护栏①：驱动脚 ──
-    const dIdx = drive === 'l' ? 0 : 1;
-    doll.readCoP(dIdx as 0 | 1, TMP_COP);
-    doll.footSoleBounds(dIdx as 0 | 1, TMP_BB);
-    const driveMed = TMP_COP[2]! - TMP_BB[2]!;
-    // ── 护栏②：支撑脚 ──
-    const sIdx = sup === 'l' ? 0 : 1;
-    doll.readCoP(sIdx as 0 | 1, TMP_COP);
-    doll.footSoleBounds(sIdx as 0 | 1, TMP_BB);
-    const supMed = TMP_COP[2]! - TMP_BB[2]!;
+    // ★★ 2026-10-06 **口径收敛**（`架构_v2_三模块协作.md` §20.3）：
+    //   CoP 不再自己 `readCoP`，改读状态机发布的力链 `rs.groundChain`。
+    //   理由：这两处此前各有一套口径（`readCoP` 用 `numSolverContacts`，
+    //   而 `footLoadFrac` 用 `numContacts`）⇒ 实测出现「力链说左脚接触块 0、
+    //   载荷读 0.53」同时成立，平衡系统按假载荷去控一条没着地的腿。
+    //   `footSoleBounds` 是**纯几何**（脚自己的包围盒），不是接触读数，保留。
+    const gc = rs.groundChain;
+    const copZOf = (d: Side): number | null => {
+      if (!gc) return null;
+      const ff = d === 'l' ? gc.l : gc.r;
+      return ff.copValid ? ff.copZ : null;
+    };
+    const copDrive = copZOf(drive);
+    const copSup = copZOf(sup);
+    // 护栏①/②：任一 CoP 不可信 ⇒ **不许驱动**（保守：宁可不搬，也不拿假 CoP 搬）
+    const driveMed = copDrive === null ? Number.NEGATIVE_INFINITY : copDrive - (() => {
+      doll.footSoleBounds(drive === 'l' ? 0 : 1, TMP_BB); return TMP_BB[2]!;
+    })();
+    const supMed = copSup === null ? Number.NEGATIVE_INFINITY : copSup - (() => {
+      doll.footSoleBounds(sup === 'l' ? 0 : 1, TMP_BB); return TMP_BB[2]!;
+    })();
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain: number[] = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, 'spine1', 'spine2', 'spine3']) {

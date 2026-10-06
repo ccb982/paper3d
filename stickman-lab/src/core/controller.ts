@@ -56,6 +56,10 @@ export class Controller {
   private readonly groundedHoldSec = 3 / 60;
   /** 本拍接触翻转次数（诊断用，累加后交给 `rs.contactFlips`） */
   private contactFlips = 0;
+  /** ★ 本拍的鞋底力剖面缓存（`loadFrac` 与力链**共用同一份**，杜绝两套口径） */
+  private soleCache: { l: import('./rigState').FootForce | null; r: import('./rigState').FootForce | null } = { l: null, r: null };
+  /** 本拍载荷读数是否可信（两脚有效载荷之和过阈） */
+  private soleValid = false;
 
   constructor(sk: Skeleton, private sim: Sim, cfg: ControllerConfig = DEFAULT_CONTROLLER) {
     this.cfg = cfg;
@@ -68,7 +72,60 @@ export class Controller {
     //   + `PelvisFirstTracker` 四套并行状态，逐拍推进 ⇒ 摆动腿、相位门禁、
     //   循环信用全都不来自 `gaitState`。注入后 reward 的相位/摆动腿只有一个来源。
     sim.attachRigState(this.rs);
+    this.installForceSource();
     this.snapshot = this.rs.snapshot();
+  }
+
+  /**
+   * ★★ 安装**力链原始读数源**（用户 2026-10-06：力链分析放状态机，供平衡系统使用）。
+   *
+   *   与 `gaitState.installJointQuery()` 同一模式：**读的权限在状态机**，
+   *   这里只提供"怎么从 `Ragdoll` 读"，组装与解释全在状态机（`forceChain.ts`）。
+   */
+  private installForceSource(): void {
+    const sk = this.rs.sk;
+    const doll = this.sim.doll;
+    const tmp = new Float64Array(3);
+    const massKg = sk.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
+    // 踝关节索引（力臂原点用）。`foot_l`/`foot_r` 就是踝。
+    const ankleIdx: Record<'l' | 'r', number> = {
+      l: sk.joints.findIndex((j) => j.name === 'foot_l'),
+      r: sk.joints.findIndex((j) => j.name === 'foot_r'),
+    };
+    // 踝可用力矩：矢状 = 绕 z（axis 2），额状 = 绕 x（axis 0）
+    const ankleTau = (ax: 0 | 2): number => {
+      let m = 0;
+      for (const gi of [ankleIdx.l, ankleIdx.r]) {
+        const j = sk.joints[gi];
+        if (j) m = Math.max(m, Math.abs(j.maxTorque[ax] ?? 0));
+      }
+      return m;
+    };
+    // 足长：足部 cuboid 的 x 向全宽（`hx` 是半长）。保底 0.22 m（成人足长量级）。
+    const footBody = sk.bodies.find((b) => b.key === 'foot_l');
+    const fc = footBody?.colliders.find((c) => c.shape === 'cuboid');
+    const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
+
+    // ⚠ `soleForceProfile` 里的 `contactImpulse` 是**上一个物理步**的冲量
+    //   （物理 120Hz，控制 60Hz）⇒ 必须按**物理步长**换算成力，
+    //   否则载荷被低估 2 倍（实测 135N vs 体重 687N）。
+    const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+    this.rs.forceSrc = {
+      sole: (side) => {
+        // 缓存为空（理论上不该发生：传感器块在 gait.update 之前跑）时兜底现读一次
+        const cached = side === 0 ? this.soleCache.l : this.soleCache.r;
+        return cached ?? doll.soleForceProfile(side, physDt);
+      },
+      ankle: (side) => {
+        const gi = ankleIdx[side === 0 ? 'l' : 'r'];
+        if (gi < 0) return { x: 0, z: 0 };
+        doll.jointWorld(gi, tmp);
+        return { x: tmp[0]!, z: tmp[2]! };
+      },
+      massKg: () => massKg,
+      tauMax: () => ({ sag: ankleTau(2), lat: ankleTau(0) }),
+      footLen: () => footLen,
+    };
   }
 
   get summary(): string { return rigSummary(this.rigReport); }
@@ -88,7 +145,28 @@ export class Controller {
     rs.dcm.z = dcm(com.z, com.vz, om);
     // MoS：支撑面前沿 − 捕获点（Hof 2005）
     rs.mos = (rs.support.cx + rs.support.halfX) - rs.dcm.x;
-    const [fl, fr] = sim.doll.footLoadFrac(dt);
+    // ★★ 2026-10-06 **口径收敛**：`loadFrac` 不再自己数接触（`footLoadFrac`），
+    //   而是与力链**共用同一份鞋底剖面**。原因（实测）：
+    //     旧 `footLoadFrac` 用 `numContacts()`（含**预测性接触**）且不做法线/包围盒过滤，
+    //     于是「左脚接触块 0（力链）」与「左脚载荷 0.53（loadFrac）」**同时成立** ——
+    //     平衡系统按 0.53 去控一条根本没着地的腿。
+    //   现在：只有真正有求解接触（`numSolverContacts`）的脚才算载荷；
+    //   两脚都读不到时**保持上一拍并降低可信度**，**不再回退 0.5/0.5**。
+    const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+    this.soleCache.l = sim.doll.soleForceProfile(0, physDt);
+    this.soleCache.r = sim.doll.soleForceProfile(1, physDt);
+    const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
+    const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
+    const fzSum = fzL + fzR;
+    let fl: number; let fr: number;
+    if (fzSum > 15) {
+      fl = fzL / fzSum; fr = fzR / fzSum;
+      this.soleValid = true;
+    } else {
+      // 两脚都没有有效载荷 ⇒ 沿用上一拍（**不编造 0.5/0.5**），并标记不可信
+      fl = this.loadFilt.l; fr = this.loadFilt.r;
+      this.soleValid = false;
+    }
     // ★★ 载荷分配必须**滤波**，否则 `supportLeg` 会跟着噪声翻转。
     //   实测未滤波时载荷比在 0.1 s 内这样跳：
     //     0.50/0.50 → 0.99/0.01 → 0.49/0.51 → 0.44/0.56 → 0.87/0.13 → …

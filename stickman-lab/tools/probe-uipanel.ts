@@ -175,6 +175,15 @@ for (const [id, want] of verbatim) {
   check('拦迁移项数 === rs.violations 数', hard === snap.violations.length,
     `签名 ✗ ${hard} 项 / violations ${snap.violations.length} 项`);
 }
+// ★ 力链块：必须逐字等于 telemetry.force
+{
+  const ftxt = txt('own-force');
+  const wantF = tm.force.join(NL);
+  check('力链块逐字 === telemetry.force', ftxt === wantF,
+    ftxt === wantF ? `UI ${tm.force.length} 行`
+      : `UI「${ftxt.slice(0, 40)}」 vs 遥测「${wantF.slice(0, 40)}」`);
+  check('力链行数合理（≥6 行）', tm.force.length >= 6, `${tm.force.length} 行`);
+}
 check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);
 check('未过项与状态机一致',
   snap.violations.length === 0
@@ -228,6 +237,18 @@ log('-- 静态门禁 --');
   const banned = ['d.state', 'd.stateT', 'd.verified', 'd.violations', 'd.mos', 'd.pitchDeg',
     'd.rollDeg', 'd.authority', 'd.swingClearance', 'd.phase'];
   const used = banned.filter((b) => hudSrc.includes(b));
+  // ★ 平衡/迈步**不得自己读接触与 CoP**：力链归状态机（架构 §20.3）。
+  //   此前这两处各有一套口径，导致"UI 说有接触、状态机说没有"。
+  for (const f of ['src/core/systems/balance.ts', 'src/core/systems/step.ts']) {
+    // ⚠ 必须先**剥掉注释**再查：这个门禁第一次跑就报"仍直读 readCoP"，
+    //   而那两处只是**注释里提到**了这个名字（本项目此前也栽过同样的假阳性）。
+    const raw = fs.readFileSync(path.resolve(process.cwd(), f), 'utf8');
+    const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+    const hits = ['rs.cop.', 'readCoP', 'footLoadFrac', 'footGrip', 'soleForceProfile']
+      .filter((k) => src.includes(k));
+    check(`${f} 不直读接触/CoP（只准读 rs.groundChain）`, hits.length === 0,
+      hits.length ? `仍直读：${hits.join(', ')}` : '');
+  }
   check('UI 不再自行推导状态机量（只读 telemetry.*）', used.length === 0,
     used.length ? `仍直接读：${used.join(', ')}` : '');
 }
