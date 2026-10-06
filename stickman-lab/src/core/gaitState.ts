@@ -75,6 +75,13 @@ export interface GaitConfig {
    * `PUSH` 验收：后脚已明显后移到可离地位置。
    * SCONE 的 `LateStance→LiftOff` 用 `sagittal_pos < liftoff_threshold`（默认 −1）。
    */
+  /**
+   * ★ LateStance 阈值（SCONE `late_stance_threshold`，默认 **0.0**）。
+   *   SCONE 的 `EarlyStance→LateStance` 与 `LateStance→LiftOff` 是**两个不同阈值**
+   *   （0.0 与 −1），我们原来只留了后者 ⇒ 少了"承重腿后移到重心之后"这一段。
+   */
+  sagLateStanceThr: number;
+  /** LiftOff 阈值（SCONE `liftoff_threshold`，默认 **−1**，以腿长归一） */
   sagLiftOffThr: number;
   /**
    * `SWING` 验收：落地脚已到重心前方。
@@ -147,8 +154,12 @@ export const DEFAULT_GAIT_CONFIG: GaitConfig = {
   bearerLoadHyst: 0.08,      // 载荷量级迟滞（与旧实现同值，双支撑各约 0.5）
   bearerMinDwellSec: 0.12,   // 承重腿换边最小驻留（双阈值迟滞的另一半）
   sagLoadThr: 0.10,          // 承接脚不超前重心 0.10 腿长
-  sagLiftOffThr: -0.35,      // 后脚后移到 −0.35 腿长（SCONE liftoff 默认 −1，按腿长归一后放宽）
-  sagLandingThr: -0.05,      // 落地脚到重心稍前即可
+  // ★ SCONE 官方默认值（scone.software GaitStateController）：
+  //     late_stance_threshold = 0.0    liftoff_threshold = −1    landing_threshold = 0.0
+  //   我们把 liftoff 从 −1 放宽到 −0.35（比文献**更严**，因为本 rig 步长小）。
+  sagLateStanceThr: 0.0,      // SCONE `late_stance_threshold` 默认值
+  sagLiftOffThr: -0.35,       // SCONE 默认 −1 ⇒ 本值更严，待本机标定
+  sagLandingThr: 0.0,       // SCONE `landing_threshold` 默认值：脚到重心**之前**
   swingKneeMinDeg: 20,       // 离地后膝至少屈 20°
   swingKneeVelMax: 40,       // 40 deg/s：EPFL 的 −1 deg/s 远保守，按本 rig 尺度放宽
   minClearance: 0.05,        // MFC = 5cm（Saunders 1953）
@@ -183,6 +194,7 @@ export const STATE_TO_SCORING: Readonly<Record<WalkState, 'both' | 'step' | 'adj
   DOUBLE: 'adjust',
   LOAD: 'adjust',
   PUSH: 'adjust',
+  THRUST: 'adjust',
   LIFT: 'step',
   SWING: 'step',
 });
@@ -198,7 +210,8 @@ export function stateStance(s: WalkState): 'single' | 'double' {
 
 /** 状态标签（导出给 `ui/hud.ts` 与 `tools/probe-uipanel.ts`，真源唯一） */
 export const STATE_LABEL: Record<WalkState, string> = {
-  DOUBLE: '双脚支撑', LOAD: '重量交接', PUSH: '蹬离', LIFT: '抬腿离地', SWING: '摆动落地',
+  DOUBLE: '双脚支撑', LOAD: '重量交接', PUSH: '被动拱架', THRUST: '主动蹬离',
+  LIFT: '抬腿离地', SWING: '摆动落地',
 };
 
 /** 兼容别名（旧名，2026-10-06 改名；保留给旧日志/旧探针读） */
@@ -213,7 +226,177 @@ function violationText(v: StateViolation): string {
 }
 
 /**
- * ★★ **阈值清单（唯一审计入口）** —— 每个数都写清「出处」与「是否已按本机标定」。
+ * ★★★ **人类步态参考值（判据的第一依据）**
+ *
+ *   用户 2026-10-06 定调：「我的偏好是查**有关人类运动**的文献，尽量别查机器人相关的，
+ *   游戏角色关节应该更接近真人。」
+ *   ⇒ 判据的**第一**依据是人类步态分析，机器人文献只作交叉验证。
+ *
+ *   主源：**Perry & Burnfield, Gait Analysis**（Rancho Los Amigos 八相位体系）
+ *   与 **Winter, Biomechanics of Walking**。两者都按**关节角/角速度签名**划分相位，
+ *   **不是**按载荷分数 —— 这是与 SCONE/OSL（机器人实现）最大的口径差异。
+ *
+ *   符号口径：本文件的角度一律用**帧域**（`degOf` 之后）：
+ *     髋 `+` = 屈　膝 `+` = 屈　踝 `+` = **跖屈**（实测见 probe-readback）。
+ *   人类文献给的是"背屈为正"的临床口径，下表已换算并在注释里保留原文。
+ */
+export const HUMAN_REF = Object.freeze({
+  /** Perry 八相位在步态周期中的区间（%GC）与三项任务 */
+  phases: Object.freeze([
+    { name: 'InitialContact', from: 0, to: 2, task: 'WeightAcceptance' },
+    { name: 'LoadingResponse', from: 2, to: 10, task: 'WeightAcceptance' },
+    { name: 'MidStance', from: 10, to: 31, task: 'SingleLimbSupport' },
+    { name: 'TerminalStance', from: 31, to: 50, task: 'SingleLimbSupport' },
+    { name: 'PreSwing', from: 50, to: 62, task: 'SingleLimbSupport' },
+    { name: 'InitialSwing', from: 62, to: 73, task: 'LimbAdvancement' },
+    { name: 'MidSwing', from: 73, to: 87, task: 'LimbAdvancement' },
+    { name: 'TerminalSwing', from: 87, to: 100, task: 'LimbAdvancement' },
+  ] as const),
+
+  /**
+   * 逐相位的**角度签名**（deg，帧域）。这是我们判据的骨架。
+   * 数值全部来自 Perry/Winter 的成人正常值，`approx` 表示文献本身给的是范围。
+   */
+  angle: Object.freeze({
+    /** IC：足跟着地时踝约 3° 跖屈（临床记 −3° 背屈），膝 0~5° 屈，髋 30° 屈 */
+    IC: { anklePF: 3, kneeFlex: 5, hipFlex: 30 },
+    /** LR（足底着平，10%GC）：踝跖屈 ~10° 后开始反向；膝屈到 20°；胫骨垂直 */
+    footFlat: { anklePF: 10, kneeFlex: 20 },
+    /** MS 末（提踵瞬间）：踝**背屈 +10°**（全支撑期最大背屈） */
+    heelRise: { ankleDF: 10 },
+    /** TS 末（单支撑末）：踝回到 5° 跖屈 */
+    endSLS: { anklePF: 5 },
+    /** PS（离地）：踝跖屈 **20°**；膝屈 35° */
+    toeOff: { anklePF: 20, kneeFlex: 35 },
+    /** MSW（摆动中期）：膝屈峰值 **60°**；髋 15~25° 屈 */
+    peakKnee: { kneeFlex: 60 },
+    /** TSW（终末摆动，落地前）：膝伸到 0~5°；踝背屈 10~15° 准备脚跟着地 */
+    preLanding: { kneeFlex: 5, ankleDF: 12 },
+  }),
+
+  /** 人类步宽（Perry Fig 3-13）：女性 ~7cm、男性 ~8cm。**这是 Q1 站距的标尺。** */
+  strideWidthM: { female: 0.07, male: 0.08 },
+  /** 腿长 ≈ 3 × 足长（Usherwood 2023 J R Soc Interface 20:20220800） */
+  legOverFoot: 3,
+  /** 足长 : 跟-跖 : 趾 ≈ 1 : 2 : 1（同上，碰撞几何预测） */
+  footRatio: Object.freeze({ hind: 0.25, mid: 0.5, fore: 0.25 }),
+  /**
+   * ★ 冲击—拱架—冲击（Usherwood 2012 J R Soc Interface 9:2396）：
+   *   早支撑 = 小腿肌（胫前）**离心**耗散；中期拱架 = **被动**（GRF 过踝，力臂≈0）；
+   *   晚支撑 = 足在踝**前方**受载 ⇒ 力臂 ⇒ 小腿肌（腓肠肌/比目鱼）**向心**蹬离。
+   *   这直接给出"两个系统每态做什么"的人类版本（见 `STATE_ROLES`）。
+   */
+  impulseVaultImpulse: Object.freeze([
+    { phase: 'veryEarlyStance', role: '小腿肌离心 · 耗散冲击', muscles: 'TA / EDL / EHL' },
+    { phase: 'vault(MidStance)', role: '被动 · 倒立摆', muscles: '几乎不加载' },
+    { phase: 'veryLateStance', role: '小腿肌向心 · 蹬离做功', muscles: 'Gastroc / Soleus' },
+  ]),
+});
+
+/**
+ * ★★★ **每态两个系统的显式分工**（用户 2026-10-06：
+ *   「两个系统也应该在不同的状态下显式做不同的事」）。
+ *
+ *   为什么必须是**表**而不是散在两个系统的 `if` 里：
+ *     · `balance.ts` 和 `step.ts` 各自按 `rs.state` 分支，久了就出现
+ *       「同一个态在两个文件里含义不同」——而本项目已经栽过
+ *       （前腿/承重腿定义、`LOAD` 承接腿语义、`PUSH→STEP` 混行为条件）。
+ *     · 判据表（`VERIFY`）只说**什么时候进下一态**，不说**这一态该干什么**。
+ *       缺了这张表，就会出现"验收过了但两个系统都在做同一件事"。
+ *
+ *   依据（每行都有出处，不是拍脑袋）：
+ *   · **OSL FSM**（opensourceleg 官方示例，踝关节 FSM + 每态阻抗）：
+ *       Early Stance = 中等刚度**吸振**；Late Stance = **高刚度蹬离**产生功率；
+ *       Early Swing = **低刚度**让踝快速背屈让出净空；Late Swing = **保持背屈**准备落地。
+ *   · **Lim et al. 2004**（WABIAN-RIII，位置型阻抗）：
+ *       双支撑**前半**把落地腿阻尼**大幅调高**以吸收冲击；
+ *       双支撑**后半**用多项式把腿的轨迹还给期望步态；
+ *       单支撑**前半**给落地腿**大刚度**以补偿被黏滞消耗的动量；
+ *       并且明确指出 **balance control 贯穿整个周期**，逐态变的是**阻抗/形状**。
+ *   · **HKIC / FSIC**（PMC10249435 / PMC11426229）：
+ *       支撑期用**阻抗**、摆动期用**运动学**；FSIC 还给出「落地后 6.7% 刚度不约束」
+ *       这类逐相位刚度下限，说明**相位相关的刚度差异是被文献明确要求**的。
+ *   · **EPFL**：摆动腿摆动轨迹在落地前更新；`LP` 用屈伸角速度判落地准备。
+ *
+ *   ⇒ 落到本项目：**平衡是"连续的一整套"，逐态变的是它的目标/权限；
+ *     迈步是"逐态换目标腿与形状"**。两者不共享判据，也不互相代劳。
+ */
+export interface StateRoles {
+  readonly state: WalkState;
+  /** 平衡维持系统（balance）这一态做什么 —— 逐字写清职责与权限 */
+  readonly balance: string;
+  /** 迈步系统（step）这一态做什么 */
+  readonly step: string;
+  /** 两条腿的角色（由状态机指派，不许各自推断） */
+  readonly legs: string;
+  /** 出处 */
+  readonly ref: string;
+}
+
+export const STATE_ROLES: Readonly<Record<WalkState, StateRoles>> = Object.freeze({
+  DOUBLE: {
+    state: 'DOUBLE',
+    legs: '双腿承重（front / rear 均为支撑）',
+    balance: '**唯一**双脚同时工作的态：额状/矢状都进入 `shift` 模式，'
+      + '把重心横向移到选定支撑腿 z，同时前倾到能起蹬的矢状位置。'
+      + '此时禁止任何抬腿。',
+    step: '**不产生摆动目标**。只允许更新摆动腿的**预备姿态**'
+      + '（hip/knee 目标抬到 `LIFT` 帧域入口），不追轨迹、不给速度。',
+    ref: 'Lim 2004 双支撑前半吸振/后半回归步态；本态 = 两半之和',
+  },
+  LOAD: {
+    state: 'LOAD',
+    legs: 'rear 承重 → recv 承接（尚未抬 rear）',
+    balance: '把承重腿的额状权限**逐步交给**承接腿：`hip/0` 与中足侧向力的目标'
+      + '从 rear 连续迁到 recv；腰参考偏置同步迁。'
+      + '这一态平衡**不追 CoP**，只做横向迁移。',
+    step: '维持摆动腿预备姿态**不动**（等交接完成才准动）。'
+      + '可提前算好 LIFT 的起始姿态，但不下发。',
+    ref: 'SCONE `Landing→EarlyStance`：`leg_load > stance_load_threshold`',
+  },
+  PUSH: {
+    state: 'PUSH',
+    legs: 'recv 单支撑，rear 已离地（摆动侧）',
+    // ★ 人类依据：此时 GRF **过踝**、外力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）
+    balance: '**少做** —— 这是倒立摆**被动**过拱架的一段。踝只维持稳定、不主动推进；'
+      + '横向做 `hold`，把额状权限全部交给单腿。'
+      + 'Perry：只有支撑中期的身体对位才接近静态站姿 ⇒ 此时过度干预反而有害。',
+    step: '摆动腿开始**蹬离后的小幅踝背屈**（为摆动中期让净空做准备），'
+      + '髋/膝仍在延展段，未进入屈曲。',
+    ref: 'Perry `MidStance` 10~31%GC；Usherwood 2012 vault（被动段）',
+  },
+  THRUST: {
+    state: 'THRUST',
+    legs: 'recv 单支撑，rear 变成后脚（准备离地）',
+    balance: '**主动做功** —— 踝跖屈产生蹬离力矩，同时 CoP 前移到前脚掌。'
+      + '力学前提（Perry/Usherwood）：**足必须在踝前方受载**才有力臂，'
+      + '所以本态的判据是踝的角度（提踵 → 反向跖屈），不是矢状位置。'
+      + '这是整周期里唯一允许"主动制造向前动量"的态。',
+    step: '后脚**卸载**并继续跖屈制造离地间隙，但**仍不抬腿**（抬腿是 `LIFT`）。',
+    ref: 'Perry `TerminalStance`+`PreSwing`「全周期最强推进力」；'
+      + 'Usherwood 2012 极晚支撑（足在踝前方受载 ⇒ 小腿肌向心做功）',
+  },
+  LIFT: {
+    state: 'LIFT',
+    legs: 'recv 承重（锁），sw 已离地',
+    balance: '承接腿进入**单腿硬支撑**：全部额状权限集中到它，'
+      + '中足 CoP 做精调；腰权限此时最大（唯一能靠腰配平的时候）。',
+    step: '**唯一抬腿的态**：摆动髋/膝追最小跃度轨迹，摆动踝做净空保持。',
+    ref: 'OSL Early Swing = 低刚度快速背屈让净空；Saunders MFC = 5cm',
+  },
+  SWING: {
+    state: 'SWING',
+    legs: 'sw 摆动，recv 承重',
+    balance: '继续单腿支撑，但重心**开始后移**为下一次交接做准备；'
+      + '同时盯落地窗口（前脚触地会产生冲击）。',
+    step: '摆动腿做**落地准备**：踝由背屈转跖屈准备触地，膝伸展减速，'
+      + '落点按 `sagLandingThr` 修正。',
+    ref: 'OSL Late Swing = 保持背屈准备落地；EPFL `LP` = 落地准备；'
+      + 'FSIC = 落地后 6.7% 刚度不约束（吸振窗口）',
+  },
+});
+
+/** ★★ 阈值清单（唯一审计入口） —— 每个数都写清「出处」与「是否已按本机标定」。
  *
  *   为什么要有这张表：验收项散落在 `VERIFY` 里，阈值散落在 `DEFAULT_GAIT_CONFIG`
  *   里，于是"这个 0.10 从哪来的"没人答得上来 —— 而本项目已经栽过：
@@ -235,26 +418,29 @@ export interface ThresholdDoc {
 }
 export const THRESHOLDS: readonly ThresholdDoc[] = Object.freeze([
   { cfgKey: 'loadAcceptFrac', unit: 'BW 占比', calibrated: 'guess',
-    source: 'OSL 0.40 BW 量级，因本 rig 双支撑各约 0.5 而上抬',
+    source: 'SCONE `stance_load_threshold` 默认 **0.0**；OSL 用 0.25 BW(lstance)/0.4 BW(e-stance)'
+      + ' ⇒ 本值 0.60 **比两者都严**，无文献支撑，属本 FSM「交接完成」的自定义语义',
     measured: 'DOUBLE 峰值 0.633 / LOAD 峰值 0.792（标定模式，跌落前）' },
   { cfgKey: 'loadReleaseFrac', unit: 'BW 占比', calibrated: 'literature',
     source: 'OSL `loadESwing = 0.15 BW`' },
   { cfgKey: 'sagLoadThr', unit: '腿长', calibrated: 'guess',
     source: 'SCONE `EarlyStance→LateStance` 矢状位置阈值（按腿长归一后自拟）',
     measured: 'LOAD 实测 +0.047~+0.256（p50 0.076）⇒ 0.10 卡在区间中段，39% 拍未过' },
+  { cfgKey: 'sagLateStanceThr', unit: '腿长', calibrated: 'literature',
+    source: 'SCONE `late_stance_threshold` **默认值 0.0**（`EarlyStance→LateStance`）' },
   { cfgKey: 'sagLiftOffThr', unit: '腿长', calibrated: 'guess',
-    source: 'SCONE `liftoff_threshold` 默认 −1（以腿长归一后放宽到 −0.35）',
-    measured: 'PUSH 实测 **+0.272~+0.539**（p50 0.419）⇒ 与 −0.35 **符号相反**',
-    // ↑ 这是 PUSH→LIFT 走不通的直接原因
-  },
-  { cfgKey: 'sagLandingThr', unit: '腿长', calibrated: 'guess',
-    source: 'SCONE `landing_threshold`（自拟）',
-    measured: 'SWING 实测 +1.34~+4.03 ⇒ 该阈值无鉴别力（跌落时也会轻易满足）' },
+    source: 'SCONE `liftoff_threshold` **默认 −1** ⇒ 本值 −0.35 比文献**更严**（本 rig 步长小）',
+    measured: '⚠ 上一轮我拿 `PUSH` 的实测 +0.27~+0.54 说它「符号相反」——**那是错的**：'
+      + '标定探针记的是 `sagPosRel(recv)`，而本项判的是 `sagPosRel(rear)`，**两条腿**。'
+      + '已在 probe-calib 里同时记录 sup/rear/recv 三条腿才可比较。' },
+  { cfgKey: 'sagLandingThr', unit: '腿长', calibrated: 'literature',
+    source: 'SCONE `landing_threshold` **默认值 0.0**（`Swing→Landing`）',
+    measured: '⚠ 上一轮记的 +1.34~+4.03 也是 `recv` 腿且取自跌落期，不能用来判这条' },
   { cfgKey: 'swingKneeMinDeg', unit: 'deg（域：正=屈）', calibrated: 'literature',
-    source: 'OSL 摆动膝屈曲下限',
+    source: 'OSL `kneeThetaESwingToLSwing = 50°`、`kneeThetaLSwingToEStance = 30°` ⇒ 本值 20° 更松',
     measured: '符号已于 2026-10-06 修正（原判据实际要求"伸 ≥20°"，与意图相反）' },
   { cfgKey: 'swingKneeVelMax', unit: 'deg/s（正=伸展）', calibrated: 'guess',
-    source: 'EPFL `LP` 落地准备用屈伸角速度阈值（本 rig 尺度放宽）' },
+    source: 'EPFL `LP` 落地准备用屈伸角速度阈值；OSL 对应用 `kneeDthetaESwingToLSwing = 3 deg/s`（更严）' },
   { cfgKey: 'minClearance', unit: 'm', calibrated: 'literature',
     source: 'Saunders 1953 最小离地净空 MFC = 5 cm' },
   { cfgKey: 'tiltMaxDeg', unit: 'deg', calibrated: 'literature',
@@ -333,6 +519,13 @@ export interface VerifyCtx {
   swingKneeVel: number;
   /** 摆动腿膝屈曲角（deg，**域口径正 = 屈**，由网关换算） */
   swingKneeFlex: number;
+  // ── Perry 角度签名的取样点（deg，帧域：髋/膝 + = 屈，踝 + = 跖屈）──
+  ankleRecv: number;   // 承接腿踝
+  kneeRecv: number;    // 承接腿膝
+  ankleRear: number;   // 后脚踝
+  ankleRearVel: number;   // 后脚踝角速度 deg/s，正=正在跖屈（判拱架/蹬离的趋势量）
+  ankleSw: number;     // 摆动腿踝
+  kneeSw: number;      // 摆动腿膝
   /** 离地净空（m） */
   clearance: number;
   /** 距上次抬腿的间隔（s） */
@@ -359,8 +552,19 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
   ],
 
   // ── LOAD → PUSH：重量已交到承接腿 = **抬腿的资格前提** ──────────
+  // ══ LOAD ≡ Perry `LoadingResponse`（2~10%GC，WeightAcceptance）══
+  //   人类的相位签名是**关节角**（Winter/Perry）：足底由 25° 落到平
+  //   （踝跖屈 ~10° 后反向）、膝屈到 20°、胫骨垂直。
+  //   ⇒ 判据骨架是**角度签名**；载荷只作辅助（接触模型载荷读数还不可靠：
+  //     `grounded=00` 却 `loadFrac≈0.5` 的矛盾没解决）。
   LOAD: [
-    { item: '承接腿承重', ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
+    // ★ Perry 签名 1：承接腿踝**跖屈到 ~10°**（足底着平）。帧域 `+` = 跖屈。
+    { item: '承接踝跖屈(足底着平)', ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * 0.6,
+      val: (c) => c.ankleRecv, tol: () => HUMAN_REF.angle.footFlat.anklePF * 0.6 },
+    // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
+    { item: '承接膝屈(吸振)', ok: (c) => c.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * 0.6,
+      val: (c) => c.kneeRecv, tol: () => HUMAN_REF.angle.footFlat.kneeFlex * 0.6 },
+    { item: '承接腿承重(辅助)', ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
       val: (c) => c.rs.loadFrac[c.recv], tol: (c) => c.cfg.loadAcceptFrac },
     { item: '后脚未离地', ok: (c) => c.rs.grounded[c.rear],
       val: (c) => (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 1 },
@@ -380,10 +584,47 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
     { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
       val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
   ],
-
-  // ── PUSH → LIFT：后脚已后移到可离地位置（SCONE `LateStance→LiftOff`）──
+  // ══ PUSH ≡ Perry `MidStance`（10~31%GC）—— **被动拱架** ══
+  //   人类此时 GRF **过踝**、外力臂 ≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
+  //   Perry：「只有支撑中期，身体对位才接近稳定的静立姿势」⇒ 这一态平衡系统
+  //   应当**少做**（踝只维持稳定），推进一律留到 `THRUST`。
+  //   签名：踝由 5° 跖屈**渐背屈**朝 +10° 峰值走；单支撑已建立。
   PUSH: [
-    { item: '后脚矢状位置', ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr,
+    // ★ Perry 签名 1：后脚踝**已进入背屈**（footFlat 5° 跖屈 → heelRise 10° 背屈之间）
+    { item: '后脚踝进入背屈(拱架)', ok: (c) => c.ankleRear <= HUMAN_REF.angle.endSLS.anklePF,
+      val: (c) => c.ankleRear, tol: () => HUMAN_REF.angle.endSLS.anklePF },
+    // ★ Perry 签名 2：**背屈正在推进**（还没到峰值）。用角速度判"进行中"，
+    //   否则"停在一个中间角度"也会算通过。
+    { item: '背屈推进中', ok: (c) => c.ankleRearVel <= 0,
+      val: (c) => c.ankleRearVel, tol: () => 0 },
+    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
+      val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
+    { item: '单支撑已建立', ok: (c) => !c.rs.grounded[c.front],
+      val: (c) => (c.rs.grounded[c.front] ? 1 : 0), tol: () => 0 },
+    { item: '承重帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+    { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
+      val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
+  ],
+
+  // ══ THRUST ≡ Perry `TerminalStance` + `PreSwing`（31~62%GC）—— **主动蹬离** ══
+  //   人类签名：提踵（踝达**全支撑期最大背屈 +10°**）→ 踝反向跖屈 → 离地 20° 跖屈；
+  //   膝由伸直到屈 35°。Perry 原文：这是「整个步态周期中最强的推进力」。
+  //   力学：足在踝**前方**受载 ⇒ 外力臂 ⇒ 小腿肌向心做功。**这就是拆态的原因**。
+  THRUST: [
+    // ★ Perry 签名 1：后脚踝**背屈达峰 10°**（提踵 = TerminalStance 的定义事件）。
+    //   帧域 `+` = 跖屈 ⇒ 背屈 10° 记作 −10°。
+    { item: '后脚提踵(背屈10°)', ok: (c) => c.ankleRear <= -HUMAN_REF.angle.heelRise.ankleDF,
+      val: (c) => c.ankleRear, tol: () => -HUMAN_REF.angle.heelRise.ankleDF },
+    // ★ Perry 签名 2：踝**反向跖屈**（TS 末 5° → PS 20°）—— 蹬离的力来自这里。
+    { item: '后脚反向跖屈(蹬离)', ok: (c) => c.ankleRear >= HUMAN_REF.angle.endSLS.anklePF * 0.6,
+      val: (c) => c.ankleRear, tol: () => HUMAN_REF.angle.endSLS.anklePF * 0.6 },
+    // ★ 签名 3：踝角速度**已由背屈转为跖屈**（这个反向点就是"提踵之后开始蹬离"的物理标志，
+    //   也是拆态后 PUSH/THRUST 不会同时满足的原因）
+    { item: '踝已转为跖屈向', ok: (c) => c.ankleRearVel >= 0,
+      val: (c) => c.ankleRearVel, tol: () => 0 },
+    // 辅助：矢状位置（SCONE 口径，交叉验证用）
+    { item: '后脚矢状位置(辅助)', ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr
+        || c.rs.loadFrac[c.front] >= c.cfg.loadAcceptFrac,
       val: (c) => c.rs.sagPosRel(c.rear), tol: (c) => c.cfg.sagLiftOffThr },
     { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
       val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
@@ -395,7 +636,15 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
   // ── LIFT → SWING：摆动腿**离地** + 已卸载 + 净空达标 ─────────────
   //   这组就是 SCONE `LateStance→LiftOff→Swing` 的等价物
   //   （`leg_load < swing_load_threshold`，OSL = 0.15 BW）。
+  // ══ LIFT ≡ Perry `PreSwing`→`InitialSwing`（50~73%GC）══
+  //   人类签名：离地时踝跖屈 20°、膝屈 35°；随后膝快速屈向 60° 峰值、踝背屈让净空。
   LIFT: [
+    // ★ Perry 签名 1：摆动踝离地时**跖屈 ~20°**（蹬离姿势带走）
+    { item: '摆动踝跖屈(蹬离)', ok: (c) => c.ankleSw >= HUMAN_REF.angle.toeOff.anklePF * 0.6,
+      val: (c) => c.ankleSw, tol: () => HUMAN_REF.angle.toeOff.anklePF * 0.6 },
+    // ★ Perry 签名 2：摆动膝**已屈到 ~35°**（PreSwing 末）
+    { item: '摆动膝屈(PreSwing)', ok: (c) => c.kneeSw >= HUMAN_REF.angle.toeOff.kneeFlex * 0.6,
+      val: (c) => c.kneeSw, tol: () => HUMAN_REF.angle.toeOff.kneeFlex * 0.6 },
     { item: '摆动腿已卸载', ok: (c) => c.rs.loadFrac[c.sw] <= c.cfg.loadReleaseFrac,
       val: (c) => c.rs.loadFrac[c.sw], tol: (c) => c.cfg.loadReleaseFrac },
     { item: '摆动腿已离地', ok: (c) => !c.rs.grounded[c.sw],
@@ -418,9 +667,21 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
   // ── SWING → DOUBLE：落地（接触事件 + 矢状位置 + 膝角速度回落）─────
   //   EPFL 用**同侧触地**触发；SCONE 用 `sagittal_pos > landing_threshold`；
   //   EPFL 的 `LP`（落地准备）用**屈伸角速度**阈值。
+  // ══ SWING ≡ Perry `InitialSwing`→`TerminalSwing`（62~100%GC）══
+  //   人类签名：膝屈在 MidSwing 达 **60° 峰值**，随后 TerminalSwing 膝伸到 0~5°、
+  //   踝背屈 10~15° 准备脚跟着地（"heel rocker"）。
   SWING: [
+    // ★ Perry 签名 1：摆动膝屈**达到峰值区**（~60°）。取 60% 作下限。
+    { item: '摆动膝屈峰值', ok: (c) => c.kneeSw >= HUMAN_REF.angle.peakKnee.kneeFlex * 0.6,
+      val: (c) => c.kneeSw, tol: () => HUMAN_REF.angle.peakKnee.kneeFlex * 0.6 },
+    // ★ Perry 签名 2：落地前踝**背屈**（帧域为负）准备脚跟着地
+    { item: '落地踝背屈', ok: (c) => c.ankleSw <= -HUMAN_REF.angle.preLanding.ankleDF * 0.6,
+      val: (c) => c.ankleSw, tol: () => -HUMAN_REF.angle.preLanding.ankleDF * 0.6 },
     { item: '落地事件', ok: (c) => c.touchdown[c.sw],
       val: (c) => (c.touchdown[c.sw] ? 1 : 0), tol: () => 1 },
+    // ★ SCONE `Swing→Landing`：`sagittal_pos > landing_threshold`（默认 0.0）。
+    //   我们额外要求**触地事件**（比 SCONE 只看矢状位置更严：脚还在空中就不会判落地），
+    //   膝角速度项来自 EPFL `LP`（落地准备）。
     { item: '落地矢状位置', ok: (c) => c.rs.sagPosRel(c.sw) >= c.cfg.sagLandingThr,
       val: (c) => c.rs.sagPosRel(c.sw), tol: (c) => c.cfg.sagLandingThr },
     { item: '膝角速度回落', ok: (c) => c.swingKneeVel <= c.cfg.swingKneeVelMax,
@@ -573,6 +834,13 @@ export class GaitState {
       rs, cfg, state: rs.state, sup, sw, front, rear, recv,
       touchdown, liftoff, swingKneeVel,
       swingKneeFlex: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
+      // 帧域取样（全部经网关；负号 = 关节空间→域口径的符号换算）
+      ankleRecv: rs.jq ? -rs.jq.angleDeg(`foot_${recv}`, 2) : 0,
+      kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${recv}`, 2) : 0,
+      ankleRear: rs.jq ? -rs.jq.angleDeg(`foot_${rear}`, 2) : 0,
+      ankleRearVel: rs.jq ? -rs.jq.velDegPerSec(`foot_${rear}`, 2) : 0,
+      ankleSw: rs.jq ? -rs.jq.angleDeg(`foot_${sw}`, 2) : 0,
+      kneeSw: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
       clearance: rs.swingClearance, sinceStep: this.t - this.lastStepT,
       domainBad: dm.bad, domainWorst: dm.worst, domainLooseBad: dmLoose.looseBad,
     };

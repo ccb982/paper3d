@@ -65,13 +65,16 @@ const f = (v: number, d = 3): string => (Number.isFinite(v) ? v.toFixed(d) : 'n/
 interface St {
   n: number; dwell: number[];
   recvLoad: number[]; sagRecv: number[]; worst: number[];
+  /** ★ 三条腿分别记：SCONE 的每个判据都作用在**某一条特定腿**上
+   *  （`sagPosRel(rear)` / `sagPosRel(recv)`），只记一条会导致拿错腿下结论。 */
+  sagSup: number[]; sagRear: number[];
   itemFail: Record<string, number>;
   peakRecvLoad: number[];
   _peak: number;
 }
 const stats: Record<string, St> = {};
 for (const s of STATE_ORDER) {
-  stats[s] = { n: 0, dwell: [], recvLoad: [], sagRecv: [], worst: [], itemFail: {}, peakRecvLoad: [], _peak: 0 };
+  stats[s] = { n: 0, dwell: [], recvLoad: [], sagRecv: [], worst: [], itemFail: {}, peakRecvLoad: [], _peak: 0, sagSup: [], sagRear: [] };
 }
 
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: SECS });
@@ -99,6 +102,8 @@ for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
     st.n++;
     st.recvLoad.push(rs.loadFrac[recv]);
     st.sagRecv.push(rs.sagPosRel(recv));
+    st.sagSup.push(rs.sagPosRel(rs.supportLeg()));
+    st.sagRear.push(rs.sagPosRel(rs.lastSwing === 'l' ? 'r' : 'l'));
     const w = Math.max(rs.jq?.worstSupportErrDeg(false) ?? 0, rs.jq?.worstSwingErrDeg(false) ?? 0);
     st.worst.push(w);
     for (const v of rs.violations) st.itemFail[v.item] = (st.itemFail[v.item] ?? 0) + 1;
@@ -122,7 +127,9 @@ for (const s of STATE_ORDER) {
     + `  最长 ${f(Math.max(...st.dwell) / CTRL_HZ, 2)}s`);
   log(`          承接腿载荷   p10=${f(q(st.recvLoad, 0.1))} p50=${f(q(st.recvLoad, 0.5))}`
     + ` p90=${f(q(st.recvLoad, 0.9))}  **状态内峰值中位=${f(q(st.peakRecvLoad, 0.5))}** 峰值最大=${f(Math.max(...st.peakRecvLoad))}`);
-  log(`          sagPosRel    min=${f(q(st.sagRecv, 0))} p50=${f(q(st.sagRecv, 0.5))} max=${f(q(st.sagRecv, 1))}  (腿长归一)`);
+  log(`          sagPosRel recv  min=${f(q(st.sagRecv, 0))} p50=${f(q(st.sagRecv, 0.5))} max=${f(q(st.sagRecv, 1))}`);
+  log(`          sagPosRel sup   min=${f(q(st.sagSup, 0))} p50=${f(q(st.sagSup, 0.5))} max=${f(q(st.sagSup, 1))}`);
+  log(`          sagPosRel rear  min=${f(q(st.sagRear, 0))} p50=${f(q(st.sagRear, 0.5))} max=${f(q(st.sagRear, 1))}   ← PUSH/LIFT 判的是这条`);
   log(`          帧域最差越界 p50=${f(q(st.worst, 0.5))}° p90=${f(q(st.worst, 0.9))}° max=${f(q(st.worst, 1))}°`);
   const items = Object.entries(st.itemFail).sort((a, b) => b[1] - a[1]);
   if (items.length) {

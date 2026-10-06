@@ -164,7 +164,7 @@
       /* 「命令大但速率≈0」= 力没作用到重心 → 标红，这是本面板最重要的一行 */
       #own .own-ct-t tr.stall td.v { color: #b91c1c; }
       /* 五态环：当前态高亮，已过的打勾，没到的压暗 */
-      .own-ring { display: grid; grid-template-columns: repeat(5, 1fr); gap: 3px; margin-bottom: 6px; }
+      .own-ring { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin-bottom: 6px; }
       .own-ring .rg {
         padding: 3px 2px; border-radius: 4px; text-align: center; font-size: 9.5px;
         background: #f2f2f5; color: var(--ink-dim); white-space: nowrap; overflow: hidden;
@@ -358,6 +358,7 @@
         <span class="rg" id="own-ring-2">—</span>
         <span class="rg" id="own-ring-3">—</span>
         <span class="rg" id="own-ring-4">—</span>
+        <span class="rg" id="own-ring-5">—</span>
       </div>
       <div class="own-bar">
         <span class="own-k">下一态</span><span class="own-v" id="own-next">—</span>

@@ -66,7 +66,7 @@ interface Trace {
   load: string;
   cycles: number;
   clearance: number;
-  /** 末帧的五态环 / 下一态 / 已等 / 卡在（直接取 `telemetry`，与网页同一份） */
+  /** 末帧的状态环 / 下一态 / 已等 / 卡在（直接取 `telemetry`，与网页同一份；长度 = STATE_ORDER） */
   ring: string[];
   next: string;
   wait: string;
@@ -176,11 +176,11 @@ log(`══ A–B. 迁移只发生在验收通过时（${SECS}s）══`);
   const cnt = new Map<WalkState, number>();
   for (const t of r.trace) cnt.set(t.state, (cnt.get(t.state) ?? 0) + 1);
   log(`  状态分布：${STATE_ORDER.map((s) => `${s}=${cnt.get(s) ?? 0}`).join('  ')}`);
-  // ★ 末帧的五态环（与网页面板同一份 `telemetry.ring`）：当前态在哪、哪些已过、哪些没到。
+  // ★ 末帧的状态环（与网页面板同一份 `telemetry.ring`，长度 = STATE_ORDER）：当前态在哪、哪些已过、哪些没到。
   //   状态机是"验收不过就不往下走"，所以这一行就是全部诊断信息。
   const lastT = r.trace[r.trace.length - 1];
   if (lastT) {
-    log(`  末帧五态环：${lastT.ring.join(' | ')}`);
+    log(`  末帧状态环：${lastT.ring.join(' | ')}`);
     log(`             下一态 ${lastT.next}　已等/最短驻留 ${lastT.wait}　卡在 ${lastT.blocked}`);
   }
   const missing = STATE_ORDER.filter((s) => !cnt.get(s));

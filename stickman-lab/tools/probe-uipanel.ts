@@ -39,6 +39,7 @@ const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
 const { DEFAULT_LAB, labHash } = await import('../src/core/lab');
+const { STATE_ORDER } = await import('../src/core/gaitState');
 const { Hud } = await import('../src/ui/hud');
 
 const log = console.log;
@@ -149,14 +150,18 @@ for (const [id, want] of verbatim) {
 }
 // ★ 五态环：5 格逐字 === telemetry.ring，且当前态标记与 rs.state 一致
 {
-  const cells = [0, 1, 2, 3, 4].map((i) => txt(`own-ring-${i}`));
-  check('五态环逐字 === telemetry.ring',
+  // 环长度**从 STATE_ORDER 取**，不许写死 5/6 —— 拆态时忘了改 UI 就会被这条抓住
+  const cells = STATE_ORDER.map((_st, i) => txt(`own-ring-${i}`));
+  check('状态环逐字 === telemetry.ring',
     cells.every((c, i) => c === (tm.ring[i] ?? '—')),
     cells.join(' | '));
   check('环上恰好一个当前态 ▶', tm.ring.filter((x) => x.charCodeAt(0) === 0x25b6).length === 1,
     tm.ring.join(' '));
+  check(`环长度 === STATE_ORDER（${STATE_ORDER.length}）`, tm.ring.length === STATE_ORDER.length,
+    `telemetry ${tm.ring.length} 格 / UI ${cells.length} 格`);
   check('环上当前态 === rs.state 的标签', tm.ring.includes(`▶${tm.stateLabel}`), tm.stateLabel);
-  check('下一态 === 环的固定后继', tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 0x25b6) + 1) % 5]!.slice(1),
+  check('下一态 === 环的固定后继',
+    tm.next === tm.ring[(tm.ring.findIndex((x) => x.charCodeAt(0) === 0x25b6) + 1) % tm.ring.length]!.slice(1),
     `${tm.next}`);
 }
 check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);

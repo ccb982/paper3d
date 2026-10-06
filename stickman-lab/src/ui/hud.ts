@@ -116,7 +116,7 @@ export class Hud {
       ownPhase: $('own-phase'), ownVerified: $('own-verified'), ownSafe: $('own-safe'),
       // ── 五态环 + 「下一态/已等/卡在」：状态机在判定哪一态、在等什么
       ownRing0: $('own-ring-0'), ownRing1: $('own-ring-1'), ownRing2: $('own-ring-2'),
-      ownRing3: $('own-ring-3'), ownRing4: $('own-ring-4'),
+      ownRing3: $('own-ring-3'), ownRing4: $('own-ring-4'), ownRing5: $('own-ring-5'),
       ownNext: $('own-next'), ownWait: $('own-wait'), ownBlocked: $('own-blocked'),
       ownGround: $('own-ground'), ownLoadFrac: $('own-loadfrac'), ownSag: $('own-sag'),
       ownRecvPeak: $('own-recvpeak'), ownDomain: $('own-domain'), ownPermit: $('own-permit'),
@@ -335,7 +335,7 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownGate.dataset.ok = '1';
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
-      for (const c of [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4]) {
+      for (const c of [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4, e.ownRing5]) {
         c.textContent = '—'; c.dataset.cur = '0'; c.dataset.mark = '';
       }
       e.ownNext.textContent = '—'; e.ownWait.textContent = '—'; e.ownBlocked.textContent = '—';
@@ -375,7 +375,7 @@ setOwnership(d: RigSnapshot | null): void {
     //   于是 UI 与状态机有**两套口径**，两边不一致时没人知道信谁。
     const tm = d.telemetry;
     // ★ 五态环：5 个字符串是状态机写的，UI 只按序塞进去 + 上色（不判断通过与否）
-    const ringCells = [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4];
+    const ringCells = [e.ownRing0, e.ownRing1, e.ownRing2, e.ownRing3, e.ownRing4, e.ownRing5];
     for (let i = 0; i < ringCells.length; i++) {
       const cell = ringCells[i]!;
       const txt = tm.ring[i] ?? '—';

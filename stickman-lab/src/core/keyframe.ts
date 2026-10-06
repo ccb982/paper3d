@@ -161,7 +161,8 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
 export const STATE_TO_GAIT: Readonly<Record<WalkState, GaitKey>> = Object.freeze({
   DOUBLE: 'MSt',
   LOAD: 'LR',
-  PUSH: 'TSt',
+  PUSH: 'MSt',
+  THRUST: 'TSt',
   LIFT: 'ISw',
   SWING: 'MSw',
 });
@@ -225,10 +226,18 @@ export const STATE_DOMAINS: readonly StateDomain[] = Object.freeze([
   { state: 'LOAD', leg: 'support', axis: 'ankle', lo: -8, hi: 18, tolIn: 12, tolOut: 22, hard: true },
   { state: 'LOAD', leg: 'trunk', axis: 'trunkLat', lo: -6, hi: 6, tolIn: 8, tolOut: 16, hard: false },
 
-  // ── PUSH：蹬离（Perry TSt→PSw：踝跖屈峰、膝伸、髋伸）
-  { state: 'PUSH', leg: 'support', axis: 'ankle', lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
-  { state: 'PUSH', leg: 'support', axis: 'kneeFlex', lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
-  { state: 'PUSH', leg: 'support', axis: 'hipFlex', lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+  // ── PUSH：**被动拱架**（Perry MSt 10~31%GC）
+  //   人类此时 GRF **过踝**、力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
+  //   姿态特征：踝由 5° 跖屈渐背屈至 +10°、膝髋渐伸。区间取"背屈途中"。
+  { state: 'PUSH', leg: 'support', axis: 'ankle', lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'PUSH', leg: 'support', axis: 'kneeFlex', lo: -2, hi: 14, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'PUSH', leg: 'support', axis: 'hipFlex', lo: -18, hi: 8, tolIn: 12, tolOut: 22, hard: true },
+
+  // ── THRUST：**主动蹬离**（Perry TSt→PSw 31~62%GC）
+  //   提踵（踝达全支撑期最大背屈 +10°）后反向跖屈；Perry：**全周期最强推进力**。
+  { state: 'THRUST', leg: 'support', axis: 'ankle', lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'THRUST', leg: 'support', axis: 'kneeFlex', lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'THRUST', leg: 'support', axis: 'hipFlex', lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
 
   // ── LIFT：摆动腿离地、建立单支撑（承重腿 = 静态站立姿态）
   { state: 'LIFT', leg: 'support', axis: 'kneeFlex', lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },

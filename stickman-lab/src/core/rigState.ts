@@ -42,10 +42,18 @@ export type Side = 'l' | 'r';
  *   ⚠ 迁移**只**由验收驱动（四篇实现一致），**没有计时器推进相位**；
  *     最短驻留只是防抖（OSL `min_time_in_state`）。
  */
-export type WalkState = 'DOUBLE' | 'LOAD' | 'PUSH' | 'LIFT' | 'SWING';
+/**
+ * ★ 固定环的六个状态（2026-10-06 由五态扩为六态，方案 B）。
+ *
+ *   `THRUST` 是新拆出来的：人类把 **MidStance（被动拱架，肌肉几乎不加载）**
+ *   与 **TerminalStance（主动蹬离，全周期最强推进）** 分成两个相位
+ *   （Perry 八相位；力学依据见 `架构_v2_三模块协作.md` §19.3 / Usherwood 2012）。
+ *   我们原来一个 `PUSH` 把两者装了 ⇒ **平衡系统无法表达"此刻该少做还是多做"**。
+ */
+export type WalkState = 'DOUBLE' | 'LOAD' | 'PUSH' | 'THRUST' | 'LIFT' | 'SWING';
 /** 固定环的下一状态（**唯一真源**，不许散落字面量） */
 export const NEXT_STATE: Readonly<Record<WalkState, WalkState>> = Object.freeze({
-  DOUBLE: 'LOAD', LOAD: 'PUSH', PUSH: 'LIFT', LIFT: 'SWING', SWING: 'DOUBLE',
+  DOUBLE: 'LOAD', LOAD: 'PUSH', PUSH: 'THRUST', THRUST: 'LIFT', LIFT: 'SWING', SWING: 'DOUBLE',
 });
 
 /**
@@ -57,10 +65,12 @@ export const NEXT_STATE: Readonly<Record<WalkState, WalkState>> = Object.freeze(
  *   `gaitState` 改为 re-export，所以外部引用方（探针/文档）不用改。
  */
 export const STATE_ORDER: readonly WalkState[] = Object.freeze(
-  ['DOUBLE', 'LOAD', 'PUSH', 'LIFT', 'SWING'] as WalkState[]);
+  ['DOUBLE', 'LOAD', 'PUSH', 'THRUST', 'LIFT', 'SWING'] as WalkState[]);
 /** 旧名 → 新名（迁移对照，见文档 §3.2；保留只为读旧日志/旧探针） */
 export const LEGACY_STATE_ALIAS: Readonly<Record<string, WalkState>> = Object.freeze({
   DOUBLE: 'DOUBLE', SHIFT: 'LOAD', SINGLE: 'LIFT', PUSH: 'PUSH', STEP: 'SWING',
+  // 旧五态里的 `PUSH`（混合拱架+蹬离）在六态里对应 `THRUST`（主动蹬离那一半）
+  PUSH_THRUST: 'THRUST',
 });
 
 /** 两套系统的标识 */

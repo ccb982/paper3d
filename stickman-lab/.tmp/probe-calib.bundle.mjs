@@ -16905,7 +16905,8 @@ var init_keyframe = __esm({
     STATE_TO_GAIT = Object.freeze({
       DOUBLE: "MSt",
       LOAD: "LR",
-      PUSH: "TSt",
+      PUSH: "MSt",
+      THRUST: "TSt",
       LIFT: "ISw",
       SWING: "MSw"
     });
@@ -16922,10 +16923,17 @@ var init_keyframe = __esm({
       { state: "LOAD", leg: "support", axis: "kneeFlex", lo: 0, hi: 20, tolIn: 10, tolOut: 20, hard: true },
       { state: "LOAD", leg: "support", axis: "ankle", lo: -8, hi: 18, tolIn: 12, tolOut: 22, hard: true },
       { state: "LOAD", leg: "trunk", axis: "trunkLat", lo: -6, hi: 6, tolIn: 8, tolOut: 16, hard: false },
-      // ── PUSH：蹬离（Perry TSt→PSw：踝跖屈峰、膝伸、髋伸）
-      { state: "PUSH", leg: "support", axis: "ankle", lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
-      { state: "PUSH", leg: "support", axis: "kneeFlex", lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
-      { state: "PUSH", leg: "support", axis: "hipFlex", lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+      // ── PUSH：**被动拱架**（Perry MSt 10~31%GC）
+      //   人类此时 GRF **过踝**、力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
+      //   姿态特征：踝由 5° 跖屈渐背屈至 +10°、膝髋渐伸。区间取"背屈途中"。
+      { state: "PUSH", leg: "support", axis: "ankle", lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
+      { state: "PUSH", leg: "support", axis: "kneeFlex", lo: -2, hi: 14, tolIn: 10, tolOut: 20, hard: true },
+      { state: "PUSH", leg: "support", axis: "hipFlex", lo: -18, hi: 8, tolIn: 12, tolOut: 22, hard: true },
+      // ── THRUST：**主动蹬离**（Perry TSt→PSw 31~62%GC）
+      //   提踵（踝达全支撑期最大背屈 +10°）后反向跖屈；Perry：**全周期最强推进力**。
+      { state: "THRUST", leg: "support", axis: "ankle", lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
+      { state: "THRUST", leg: "support", axis: "kneeFlex", lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+      { state: "THRUST", leg: "support", axis: "hipFlex", lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
       // ── LIFT：摆动腿离地、建立单支撑（承重腿 = 静态站立姿态）
       { state: "LIFT", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
       { state: "LIFT", leg: "support", axis: "ankle", lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
@@ -16959,19 +16967,22 @@ var init_rigState = __esm({
     NEXT_STATE = Object.freeze({
       DOUBLE: "LOAD",
       LOAD: "PUSH",
-      PUSH: "LIFT",
+      PUSH: "THRUST",
+      THRUST: "LIFT",
       LIFT: "SWING",
       SWING: "DOUBLE"
     });
     STATE_ORDER = Object.freeze(
-      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
+      ["DOUBLE", "LOAD", "PUSH", "THRUST", "LIFT", "SWING"]
     );
     LEGACY_STATE_ALIAS = Object.freeze({
       DOUBLE: "DOUBLE",
       SHIFT: "LOAD",
       SINGLE: "LIFT",
       PUSH: "PUSH",
-      STEP: "SWING"
+      STEP: "SWING",
+      // 旧五态里的 `PUSH`（混合拱架+蹬离）在六态里对应 `THRUST`（主动蹬离那一半）
+      PUSH_THRUST: "THRUST"
     });
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
@@ -18199,11 +18210,13 @@ var gaitState_exports = {};
 __export(gaitState_exports, {
   DEFAULT_GAIT_CONFIG: () => DEFAULT_GAIT_CONFIG,
   GaitState: () => GaitState,
+  HUMAN_REF: () => HUMAN_REF,
   PHASE_LABEL: () => PHASE_LABEL,
   PHASE_TO_SCORING: () => PHASE_TO_SCORING,
   SCORING_TO_STANCE: () => SCORING_TO_STANCE,
   STATE_LABEL: () => STATE_LABEL,
   STATE_ORDER: () => STATE_ORDER,
+  STATE_ROLES: () => STATE_ROLES,
   STATE_TO_SCORING: () => STATE_TO_SCORING,
   STEP_CYCLE_SEC: () => STEP_CYCLE_SEC,
   THRESHOLDS: () => THRESHOLDS,
@@ -18247,7 +18260,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, HUMAN_REF, STATE_ROLES, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18268,10 +18281,15 @@ var init_gaitState = __esm({
       // 承重腿换边最小驻留（双阈值迟滞的另一半）
       sagLoadThr: 0.1,
       // 承接脚不超前重心 0.10 腿长
+      // ★ SCONE 官方默认值（scone.software GaitStateController）：
+      //     late_stance_threshold = 0.0    liftoff_threshold = −1    landing_threshold = 0.0
+      //   我们把 liftoff 从 −1 放宽到 −0.35（比文献**更严**，因为本 rig 步长小）。
+      sagLateStanceThr: 0,
+      // SCONE `late_stance_threshold` 默认值
       sagLiftOffThr: -0.35,
-      // 后脚后移到 −0.35 腿长（SCONE liftoff 默认 −1，按腿长归一后放宽）
-      sagLandingThr: -0.05,
-      // 落地脚到重心稍前即可
+      // SCONE 默认 −1 ⇒ 本值更严，待本机标定
+      sagLandingThr: 0,
+      // SCONE `landing_threshold` 默认值：脚到重心**之前**
       swingKneeMinDeg: 20,
       // 离地后膝至少屈 20°
       swingKneeVelMax: 40,
@@ -18294,6 +18312,7 @@ var init_gaitState = __esm({
       DOUBLE: "adjust",
       LOAD: "adjust",
       PUSH: "adjust",
+      THRUST: "adjust",
       LIFT: "step",
       SWING: "step"
     });
@@ -18301,18 +18320,114 @@ var init_gaitState = __esm({
     STATE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
       LOAD: "\u91CD\u91CF\u4EA4\u63A5",
-      PUSH: "\u8E6C\u79BB",
+      PUSH: "\u88AB\u52A8\u62F1\u67B6",
+      THRUST: "\u4E3B\u52A8\u8E6C\u79BB",
       LIFT: "\u62AC\u817F\u79BB\u5730",
       SWING: "\u6446\u52A8\u843D\u5730"
     };
     PHASE_LABEL = STATE_LABEL;
     LEG_CN = { l: "\u5DE6", r: "\u53F3" };
+    HUMAN_REF = Object.freeze({
+      /** Perry 八相位在步态周期中的区间（%GC）与三项任务 */
+      phases: Object.freeze([
+        { name: "InitialContact", from: 0, to: 2, task: "WeightAcceptance" },
+        { name: "LoadingResponse", from: 2, to: 10, task: "WeightAcceptance" },
+        { name: "MidStance", from: 10, to: 31, task: "SingleLimbSupport" },
+        { name: "TerminalStance", from: 31, to: 50, task: "SingleLimbSupport" },
+        { name: "PreSwing", from: 50, to: 62, task: "SingleLimbSupport" },
+        { name: "InitialSwing", from: 62, to: 73, task: "LimbAdvancement" },
+        { name: "MidSwing", from: 73, to: 87, task: "LimbAdvancement" },
+        { name: "TerminalSwing", from: 87, to: 100, task: "LimbAdvancement" }
+      ]),
+      /**
+       * 逐相位的**角度签名**（deg，帧域）。这是我们判据的骨架。
+       * 数值全部来自 Perry/Winter 的成人正常值，`approx` 表示文献本身给的是范围。
+       */
+      angle: Object.freeze({
+        /** IC：足跟着地时踝约 3° 跖屈（临床记 −3° 背屈），膝 0~5° 屈，髋 30° 屈 */
+        IC: { anklePF: 3, kneeFlex: 5, hipFlex: 30 },
+        /** LR（足底着平，10%GC）：踝跖屈 ~10° 后开始反向；膝屈到 20°；胫骨垂直 */
+        footFlat: { anklePF: 10, kneeFlex: 20 },
+        /** MS 末（提踵瞬间）：踝**背屈 +10°**（全支撑期最大背屈） */
+        heelRise: { ankleDF: 10 },
+        /** TS 末（单支撑末）：踝回到 5° 跖屈 */
+        endSLS: { anklePF: 5 },
+        /** PS（离地）：踝跖屈 **20°**；膝屈 35° */
+        toeOff: { anklePF: 20, kneeFlex: 35 },
+        /** MSW（摆动中期）：膝屈峰值 **60°**；髋 15~25° 屈 */
+        peakKnee: { kneeFlex: 60 },
+        /** TSW（终末摆动，落地前）：膝伸到 0~5°；踝背屈 10~15° 准备脚跟着地 */
+        preLanding: { kneeFlex: 5, ankleDF: 12 }
+      }),
+      /** 人类步宽（Perry Fig 3-13）：女性 ~7cm、男性 ~8cm。**这是 Q1 站距的标尺。** */
+      strideWidthM: { female: 0.07, male: 0.08 },
+      /** 腿长 ≈ 3 × 足长（Usherwood 2023 J R Soc Interface 20:20220800） */
+      legOverFoot: 3,
+      /** 足长 : 跟-跖 : 趾 ≈ 1 : 2 : 1（同上，碰撞几何预测） */
+      footRatio: Object.freeze({ hind: 0.25, mid: 0.5, fore: 0.25 }),
+      /**
+       * ★ 冲击—拱架—冲击（Usherwood 2012 J R Soc Interface 9:2396）：
+       *   早支撑 = 小腿肌（胫前）**离心**耗散；中期拱架 = **被动**（GRF 过踝，力臂≈0）；
+       *   晚支撑 = 足在踝**前方**受载 ⇒ 力臂 ⇒ 小腿肌（腓肠肌/比目鱼）**向心**蹬离。
+       *   这直接给出"两个系统每态做什么"的人类版本（见 `STATE_ROLES`）。
+       */
+      impulseVaultImpulse: Object.freeze([
+        { phase: "veryEarlyStance", role: "\u5C0F\u817F\u808C\u79BB\u5FC3 \xB7 \u8017\u6563\u51B2\u51FB", muscles: "TA / EDL / EHL" },
+        { phase: "vault(MidStance)", role: "\u88AB\u52A8 \xB7 \u5012\u7ACB\u6446", muscles: "\u51E0\u4E4E\u4E0D\u52A0\u8F7D" },
+        { phase: "veryLateStance", role: "\u5C0F\u817F\u808C\u5411\u5FC3 \xB7 \u8E6C\u79BB\u505A\u529F", muscles: "Gastroc / Soleus" }
+      ])
+    });
+    STATE_ROLES = Object.freeze({
+      DOUBLE: {
+        state: "DOUBLE",
+        legs: "\u53CC\u817F\u627F\u91CD\uFF08front / rear \u5747\u4E3A\u652F\u6491\uFF09",
+        balance: "**\u552F\u4E00**\u53CC\u811A\u540C\u65F6\u5DE5\u4F5C\u7684\u6001\uFF1A\u989D\u72B6/\u77E2\u72B6\u90FD\u8FDB\u5165 `shift` \u6A21\u5F0F\uFF0C\u628A\u91CD\u5FC3\u6A2A\u5411\u79FB\u5230\u9009\u5B9A\u652F\u6491\u817F z\uFF0C\u540C\u65F6\u524D\u503E\u5230\u80FD\u8D77\u8E6C\u7684\u77E2\u72B6\u4F4D\u7F6E\u3002\u6B64\u65F6\u7981\u6B62\u4EFB\u4F55\u62AC\u817F\u3002",
+        step: "**\u4E0D\u4EA7\u751F\u6446\u52A8\u76EE\u6807**\u3002\u53EA\u5141\u8BB8\u66F4\u65B0\u6446\u52A8\u817F\u7684**\u9884\u5907\u59FF\u6001**\uFF08hip/knee \u76EE\u6807\u62AC\u5230 `LIFT` \u5E27\u57DF\u5165\u53E3\uFF09\uFF0C\u4E0D\u8FFD\u8F68\u8FF9\u3001\u4E0D\u7ED9\u901F\u5EA6\u3002",
+        ref: "Lim 2004 \u53CC\u652F\u6491\u524D\u534A\u5438\u632F/\u540E\u534A\u56DE\u5F52\u6B65\u6001\uFF1B\u672C\u6001 = \u4E24\u534A\u4E4B\u548C"
+      },
+      LOAD: {
+        state: "LOAD",
+        legs: "rear \u627F\u91CD \u2192 recv \u627F\u63A5\uFF08\u5C1A\u672A\u62AC rear\uFF09",
+        balance: "\u628A\u627F\u91CD\u817F\u7684\u989D\u72B6\u6743\u9650**\u9010\u6B65\u4EA4\u7ED9**\u627F\u63A5\u817F\uFF1A`hip/0` \u4E0E\u4E2D\u8DB3\u4FA7\u5411\u529B\u7684\u76EE\u6807\u4ECE rear \u8FDE\u7EED\u8FC1\u5230 recv\uFF1B\u8170\u53C2\u8003\u504F\u7F6E\u540C\u6B65\u8FC1\u3002\u8FD9\u4E00\u6001\u5E73\u8861**\u4E0D\u8FFD CoP**\uFF0C\u53EA\u505A\u6A2A\u5411\u8FC1\u79FB\u3002",
+        step: "\u7EF4\u6301\u6446\u52A8\u817F\u9884\u5907\u59FF\u6001**\u4E0D\u52A8**\uFF08\u7B49\u4EA4\u63A5\u5B8C\u6210\u624D\u51C6\u52A8\uFF09\u3002\u53EF\u63D0\u524D\u7B97\u597D LIFT \u7684\u8D77\u59CB\u59FF\u6001\uFF0C\u4F46\u4E0D\u4E0B\u53D1\u3002",
+        ref: "SCONE `Landing\u2192EarlyStance`\uFF1A`leg_load > stance_load_threshold`"
+      },
+      PUSH: {
+        state: "PUSH",
+        legs: "recv \u5355\u652F\u6491\uFF0Crear \u5DF2\u79BB\u5730\uFF08\u6446\u52A8\u4FA7\uFF09",
+        // ★ 人类依据：此时 GRF **过踝**、外力臂≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）
+        balance: "**\u5C11\u505A** \u2014\u2014 \u8FD9\u662F\u5012\u7ACB\u6446**\u88AB\u52A8**\u8FC7\u62F1\u67B6\u7684\u4E00\u6BB5\u3002\u8E1D\u53EA\u7EF4\u6301\u7A33\u5B9A\u3001\u4E0D\u4E3B\u52A8\u63A8\u8FDB\uFF1B\u6A2A\u5411\u505A `hold`\uFF0C\u628A\u989D\u72B6\u6743\u9650\u5168\u90E8\u4EA4\u7ED9\u5355\u817F\u3002Perry\uFF1A\u53EA\u6709\u652F\u6491\u4E2D\u671F\u7684\u8EAB\u4F53\u5BF9\u4F4D\u624D\u63A5\u8FD1\u9759\u6001\u7AD9\u59FF \u21D2 \u6B64\u65F6\u8FC7\u5EA6\u5E72\u9884\u53CD\u800C\u6709\u5BB3\u3002",
+        step: "\u6446\u52A8\u817F\u5F00\u59CB**\u8E6C\u79BB\u540E\u7684\u5C0F\u5E45\u8E1D\u80CC\u5C48**\uFF08\u4E3A\u6446\u52A8\u4E2D\u671F\u8BA9\u51C0\u7A7A\u505A\u51C6\u5907\uFF09\uFF0C\u9ACB/\u819D\u4ECD\u5728\u5EF6\u5C55\u6BB5\uFF0C\u672A\u8FDB\u5165\u5C48\u66F2\u3002",
+        ref: "Perry `MidStance` 10~31%GC\uFF1BUsherwood 2012 vault\uFF08\u88AB\u52A8\u6BB5\uFF09"
+      },
+      THRUST: {
+        state: "THRUST",
+        legs: "recv \u5355\u652F\u6491\uFF0Crear \u53D8\u6210\u540E\u811A\uFF08\u51C6\u5907\u79BB\u5730\uFF09",
+        balance: '**\u4E3B\u52A8\u505A\u529F** \u2014\u2014 \u8E1D\u8DD6\u5C48\u4EA7\u751F\u8E6C\u79BB\u529B\u77E9\uFF0C\u540C\u65F6 CoP \u524D\u79FB\u5230\u524D\u811A\u638C\u3002\u529B\u5B66\u524D\u63D0\uFF08Perry/Usherwood\uFF09\uFF1A**\u8DB3\u5FC5\u987B\u5728\u8E1D\u524D\u65B9\u53D7\u8F7D**\u624D\u6709\u529B\u81C2\uFF0C\u6240\u4EE5\u672C\u6001\u7684\u5224\u636E\u662F\u8E1D\u7684\u89D2\u5EA6\uFF08\u63D0\u8E35 \u2192 \u53CD\u5411\u8DD6\u5C48\uFF09\uFF0C\u4E0D\u662F\u77E2\u72B6\u4F4D\u7F6E\u3002\u8FD9\u662F\u6574\u5468\u671F\u91CC\u552F\u4E00\u5141\u8BB8"\u4E3B\u52A8\u5236\u9020\u5411\u524D\u52A8\u91CF"\u7684\u6001\u3002',
+        step: "\u540E\u811A**\u5378\u8F7D**\u5E76\u7EE7\u7EED\u8DD6\u5C48\u5236\u9020\u79BB\u5730\u95F4\u9699\uFF0C\u4F46**\u4ECD\u4E0D\u62AC\u817F**\uFF08\u62AC\u817F\u662F `LIFT`\uFF09\u3002",
+        ref: "Perry `TerminalStance`+`PreSwing`\u300C\u5168\u5468\u671F\u6700\u5F3A\u63A8\u8FDB\u529B\u300D\uFF1BUsherwood 2012 \u6781\u665A\u652F\u6491\uFF08\u8DB3\u5728\u8E1D\u524D\u65B9\u53D7\u8F7D \u21D2 \u5C0F\u817F\u808C\u5411\u5FC3\u505A\u529F\uFF09"
+      },
+      LIFT: {
+        state: "LIFT",
+        legs: "recv \u627F\u91CD\uFF08\u9501\uFF09\uFF0Csw \u5DF2\u79BB\u5730",
+        balance: "\u627F\u63A5\u817F\u8FDB\u5165**\u5355\u817F\u786C\u652F\u6491**\uFF1A\u5168\u90E8\u989D\u72B6\u6743\u9650\u96C6\u4E2D\u5230\u5B83\uFF0C\u4E2D\u8DB3 CoP \u505A\u7CBE\u8C03\uFF1B\u8170\u6743\u9650\u6B64\u65F6\u6700\u5927\uFF08\u552F\u4E00\u80FD\u9760\u8170\u914D\u5E73\u7684\u65F6\u5019\uFF09\u3002",
+        step: "**\u552F\u4E00\u62AC\u817F\u7684\u6001**\uFF1A\u6446\u52A8\u9ACB/\u819D\u8FFD\u6700\u5C0F\u8DC3\u5EA6\u8F68\u8FF9\uFF0C\u6446\u52A8\u8E1D\u505A\u51C0\u7A7A\u4FDD\u6301\u3002",
+        ref: "OSL Early Swing = \u4F4E\u521A\u5EA6\u5FEB\u901F\u80CC\u5C48\u8BA9\u51C0\u7A7A\uFF1BSaunders MFC = 5cm"
+      },
+      SWING: {
+        state: "SWING",
+        legs: "sw \u6446\u52A8\uFF0Crecv \u627F\u91CD",
+        balance: "\u7EE7\u7EED\u5355\u817F\u652F\u6491\uFF0C\u4F46\u91CD\u5FC3**\u5F00\u59CB\u540E\u79FB**\u4E3A\u4E0B\u4E00\u6B21\u4EA4\u63A5\u505A\u51C6\u5907\uFF1B\u540C\u65F6\u76EF\u843D\u5730\u7A97\u53E3\uFF08\u524D\u811A\u89E6\u5730\u4F1A\u4EA7\u751F\u51B2\u51FB\uFF09\u3002",
+        step: "\u6446\u52A8\u817F\u505A**\u843D\u5730\u51C6\u5907**\uFF1A\u8E1D\u7531\u80CC\u5C48\u8F6C\u8DD6\u5C48\u51C6\u5907\u89E6\u5730\uFF0C\u819D\u4F38\u5C55\u51CF\u901F\uFF0C\u843D\u70B9\u6309 `sagLandingThr` \u4FEE\u6B63\u3002",
+        ref: "OSL Late Swing = \u4FDD\u6301\u80CC\u5C48\u51C6\u5907\u843D\u5730\uFF1BEPFL `LP` = \u843D\u5730\u51C6\u5907\uFF1BFSIC = \u843D\u5730\u540E 6.7% \u521A\u5EA6\u4E0D\u7EA6\u675F\uFF08\u5438\u632F\u7A97\u53E3\uFF09"
+      }
+    });
     THRESHOLDS = Object.freeze([
       {
         cfgKey: "loadAcceptFrac",
         unit: "BW \u5360\u6BD4",
         calibrated: "guess",
-        source: "OSL 0.40 BW \u91CF\u7EA7\uFF0C\u56E0\u672C rig \u53CC\u652F\u6491\u5404\u7EA6 0.5 \u800C\u4E0A\u62AC",
+        source: "SCONE `stance_load_threshold` \u9ED8\u8BA4 **0.0**\uFF1BOSL \u7528 0.25 BW(lstance)/0.4 BW(e-stance) \u21D2 \u672C\u503C 0.60 **\u6BD4\u4E24\u8005\u90FD\u4E25**\uFF0C\u65E0\u6587\u732E\u652F\u6491\uFF0C\u5C5E\u672C FSM\u300C\u4EA4\u63A5\u5B8C\u6210\u300D\u7684\u81EA\u5B9A\u4E49\u8BED\u4E49",
         measured: "DOUBLE \u5CF0\u503C 0.633 / LOAD \u5CF0\u503C 0.792\uFF08\u6807\u5B9A\u6A21\u5F0F\uFF0C\u8DCC\u843D\u524D\uFF09"
       },
       {
@@ -18329,32 +18444,37 @@ var init_gaitState = __esm({
         measured: "LOAD \u5B9E\u6D4B +0.047~+0.256\uFF08p50 0.076\uFF09\u21D2 0.10 \u5361\u5728\u533A\u95F4\u4E2D\u6BB5\uFF0C39% \u62CD\u672A\u8FC7"
       },
       {
+        cfgKey: "sagLateStanceThr",
+        unit: "\u817F\u957F",
+        calibrated: "literature",
+        source: "SCONE `late_stance_threshold` **\u9ED8\u8BA4\u503C 0.0**\uFF08`EarlyStance\u2192LateStance`\uFF09"
+      },
+      {
         cfgKey: "sagLiftOffThr",
         unit: "\u817F\u957F",
         calibrated: "guess",
-        source: "SCONE `liftoff_threshold` \u9ED8\u8BA4 \u22121\uFF08\u4EE5\u817F\u957F\u5F52\u4E00\u540E\u653E\u5BBD\u5230 \u22120.35\uFF09",
-        measured: "PUSH \u5B9E\u6D4B **+0.272~+0.539**\uFF08p50 0.419\uFF09\u21D2 \u4E0E \u22120.35 **\u7B26\u53F7\u76F8\u53CD**"
-        // ↑ 这是 PUSH→LIFT 走不通的直接原因
+        source: "SCONE `liftoff_threshold` **\u9ED8\u8BA4 \u22121** \u21D2 \u672C\u503C \u22120.35 \u6BD4\u6587\u732E**\u66F4\u4E25**\uFF08\u672C rig \u6B65\u957F\u5C0F\uFF09",
+        measured: "\u26A0 \u4E0A\u4E00\u8F6E\u6211\u62FF `PUSH` \u7684\u5B9E\u6D4B +0.27~+0.54 \u8BF4\u5B83\u300C\u7B26\u53F7\u76F8\u53CD\u300D\u2014\u2014**\u90A3\u662F\u9519\u7684**\uFF1A\u6807\u5B9A\u63A2\u9488\u8BB0\u7684\u662F `sagPosRel(recv)`\uFF0C\u800C\u672C\u9879\u5224\u7684\u662F `sagPosRel(rear)`\uFF0C**\u4E24\u6761\u817F**\u3002\u5DF2\u5728 probe-calib \u91CC\u540C\u65F6\u8BB0\u5F55 sup/rear/recv \u4E09\u6761\u817F\u624D\u53EF\u6BD4\u8F83\u3002"
       },
       {
         cfgKey: "sagLandingThr",
         unit: "\u817F\u957F",
-        calibrated: "guess",
-        source: "SCONE `landing_threshold`\uFF08\u81EA\u62DF\uFF09",
-        measured: "SWING \u5B9E\u6D4B +1.34~+4.03 \u21D2 \u8BE5\u9608\u503C\u65E0\u9274\u522B\u529B\uFF08\u8DCC\u843D\u65F6\u4E5F\u4F1A\u8F7B\u6613\u6EE1\u8DB3\uFF09"
+        calibrated: "literature",
+        source: "SCONE `landing_threshold` **\u9ED8\u8BA4\u503C 0.0**\uFF08`Swing\u2192Landing`\uFF09",
+        measured: "\u26A0 \u4E0A\u4E00\u8F6E\u8BB0\u7684 +1.34~+4.03 \u4E5F\u662F `recv` \u817F\u4E14\u53D6\u81EA\u8DCC\u843D\u671F\uFF0C\u4E0D\u80FD\u7528\u6765\u5224\u8FD9\u6761"
       },
       {
         cfgKey: "swingKneeMinDeg",
         unit: "deg\uFF08\u57DF\uFF1A\u6B63=\u5C48\uFF09",
         calibrated: "literature",
-        source: "OSL \u6446\u52A8\u819D\u5C48\u66F2\u4E0B\u9650",
+        source: "OSL `kneeThetaESwingToLSwing = 50\xB0`\u3001`kneeThetaLSwingToEStance = 30\xB0` \u21D2 \u672C\u503C 20\xB0 \u66F4\u677E",
         measured: '\u7B26\u53F7\u5DF2\u4E8E 2026-10-06 \u4FEE\u6B63\uFF08\u539F\u5224\u636E\u5B9E\u9645\u8981\u6C42"\u4F38 \u226520\xB0"\uFF0C\u4E0E\u610F\u56FE\u76F8\u53CD\uFF09'
       },
       {
         cfgKey: "swingKneeVelMax",
         unit: "deg/s\uFF08\u6B63=\u4F38\u5C55\uFF09",
         calibrated: "guess",
-        source: "EPFL `LP` \u843D\u5730\u51C6\u5907\u7528\u5C48\u4F38\u89D2\u901F\u5EA6\u9608\u503C\uFF08\u672C rig \u5C3A\u5EA6\u653E\u5BBD\uFF09"
+        source: "EPFL `LP` \u843D\u5730\u51C6\u5907\u7528\u5C48\u4F38\u89D2\u901F\u5EA6\u9608\u503C\uFF1BOSL \u5BF9\u5E94\u7528 `kneeDthetaESwingToLSwing = 3 deg/s`\uFF08\u66F4\u4E25\uFF09"
       },
       {
         cfgKey: "minClearance",
@@ -18406,9 +18526,28 @@ var init_gaitState = __esm({
         { item: "MoS", ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin }
       ],
       // ── LOAD → PUSH：重量已交到承接腿 = **抬腿的资格前提** ──────────
+      // ══ LOAD ≡ Perry `LoadingResponse`（2~10%GC，WeightAcceptance）══
+      //   人类的相位签名是**关节角**（Winter/Perry）：足底由 25° 落到平
+      //   （踝跖屈 ~10° 后反向）、膝屈到 20°、胫骨垂直。
+      //   ⇒ 判据骨架是**角度签名**；载荷只作辅助（接触模型载荷读数还不可靠：
+      //     `grounded=00` 却 `loadFrac≈0.5` 的矛盾没解决）。
       LOAD: [
+        // ★ Perry 签名 1：承接腿踝**跖屈到 ~10°**（足底着平）。帧域 `+` = 跖屈。
         {
-          item: "\u627F\u63A5\u817F\u627F\u91CD",
+          item: "\u627F\u63A5\u8E1D\u8DD6\u5C48(\u8DB3\u5E95\u7740\u5E73)",
+          ok: (c) => c.ankleRecv >= HUMAN_REF.angle.footFlat.anklePF * 0.6,
+          val: (c) => c.ankleRecv,
+          tol: () => HUMAN_REF.angle.footFlat.anklePF * 0.6
+        },
+        // ★ Perry 签名 2：承接腿膝**屈到 ~20°**（吸振）。取 60% 作下限。
+        {
+          item: "\u627F\u63A5\u819D\u5C48(\u5438\u632F)",
+          ok: (c) => c.kneeRecv >= HUMAN_REF.angle.footFlat.kneeFlex * 0.6,
+          val: (c) => c.kneeRecv,
+          tol: () => HUMAN_REF.angle.footFlat.kneeFlex * 0.6
+        },
+        {
+          item: "\u627F\u63A5\u817F\u627F\u91CD(\u8F85\u52A9)",
           ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
           val: (c) => c.rs.loadFrac[c.recv],
           tol: (c) => c.cfg.loadAcceptFrac
@@ -18451,11 +18590,79 @@ var init_gaitState = __esm({
           tol: (c) => c.cfg.tiltMaxDeg
         }
       ],
-      // ── PUSH → LIFT：后脚已后移到可离地位置（SCONE `LateStance→LiftOff`）──
+      // ══ PUSH ≡ Perry `MidStance`（10~31%GC）—— **被动拱架** ══
+      //   人类此时 GRF **过踝**、外力臂 ≈0 ⇒ 肌肉几乎不加载（Usherwood 2012 的 vault）。
+      //   Perry：「只有支撑中期，身体对位才接近稳定的静立姿势」⇒ 这一态平衡系统
+      //   应当**少做**（踝只维持稳定），推进一律留到 `THRUST`。
+      //   签名：踝由 5° 跖屈**渐背屈**朝 +10° 峰值走；单支撑已建立。
       PUSH: [
+        // ★ Perry 签名 1：后脚踝**已进入背屈**（footFlat 5° 跖屈 → heelRise 10° 背屈之间）
         {
-          item: "\u540E\u811A\u77E2\u72B6\u4F4D\u7F6E",
-          ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr,
+          item: "\u540E\u811A\u8E1D\u8FDB\u5165\u80CC\u5C48(\u62F1\u67B6)",
+          ok: (c) => c.ankleRear <= HUMAN_REF.angle.endSLS.anklePF,
+          val: (c) => c.ankleRear,
+          tol: () => HUMAN_REF.angle.endSLS.anklePF
+        },
+        // ★ Perry 签名 2：**背屈正在推进**（还没到峰值）。用角速度判"进行中"，
+        //   否则"停在一个中间角度"也会算通过。
+        {
+          item: "\u80CC\u5C48\u63A8\u8FDB\u4E2D",
+          ok: (c) => c.ankleRearVel <= 0,
+          val: (c) => c.ankleRearVel,
+          tol: () => 0
+        },
+        {
+          item: "\u627F\u91CD\u817F\u5728\u4F4D",
+          ok: (c) => c.rs.grounded[c.sup],
+          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
+          tol: () => 1
+        },
+        {
+          item: "\u5355\u652F\u6491\u5DF2\u5EFA\u7ACB",
+          ok: (c) => !c.rs.grounded[c.front],
+          val: (c) => c.rs.grounded[c.front] ? 1 : 0,
+          tol: () => 0
+        },
+        { item: "\u627F\u91CD\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+        {
+          item: "\u8EAF\u5E72\u503E\u89D2",
+          ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
+          val: (c) => Math.abs(c.rs.tiltDeg),
+          tol: (c) => c.cfg.tiltMaxDeg
+        }
+      ],
+      // ══ THRUST ≡ Perry `TerminalStance` + `PreSwing`（31~62%GC）—— **主动蹬离** ══
+      //   人类签名：提踵（踝达**全支撑期最大背屈 +10°**）→ 踝反向跖屈 → 离地 20° 跖屈；
+      //   膝由伸直到屈 35°。Perry 原文：这是「整个步态周期中最强的推进力」。
+      //   力学：足在踝**前方**受载 ⇒ 外力臂 ⇒ 小腿肌向心做功。**这就是拆态的原因**。
+      THRUST: [
+        // ★ Perry 签名 1：后脚踝**背屈达峰 10°**（提踵 = TerminalStance 的定义事件）。
+        //   帧域 `+` = 跖屈 ⇒ 背屈 10° 记作 −10°。
+        {
+          item: "\u540E\u811A\u63D0\u8E35(\u80CC\u5C4810\xB0)",
+          ok: (c) => c.ankleRear <= -HUMAN_REF.angle.heelRise.ankleDF,
+          val: (c) => c.ankleRear,
+          tol: () => -HUMAN_REF.angle.heelRise.ankleDF
+        },
+        // ★ Perry 签名 2：踝**反向跖屈**（TS 末 5° → PS 20°）—— 蹬离的力来自这里。
+        {
+          item: "\u540E\u811A\u53CD\u5411\u8DD6\u5C48(\u8E6C\u79BB)",
+          ok: (c) => c.ankleRear >= HUMAN_REF.angle.endSLS.anklePF * 0.6,
+          val: (c) => c.ankleRear,
+          tol: () => HUMAN_REF.angle.endSLS.anklePF * 0.6
+        },
+        // ★ 签名 3：踝角速度**已由背屈转为跖屈**（这个反向点就是"提踵之后开始蹬离"的物理标志，
+        //   也是拆态后 PUSH/THRUST 不会同时满足的原因）
+        {
+          item: "\u8E1D\u5DF2\u8F6C\u4E3A\u8DD6\u5C48\u5411",
+          ok: (c) => c.ankleRearVel >= 0,
+          val: (c) => c.ankleRearVel,
+          tol: () => 0
+        },
+        // 辅助：矢状位置（SCONE 口径，交叉验证用）
+        {
+          item: "\u540E\u811A\u77E2\u72B6\u4F4D\u7F6E(\u8F85\u52A9)",
+          ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr || c.rs.loadFrac[c.front] >= c.cfg.loadAcceptFrac,
           val: (c) => c.rs.sagPosRel(c.rear),
           tol: (c) => c.cfg.sagLiftOffThr
         },
@@ -18476,7 +18683,23 @@ var init_gaitState = __esm({
       // ── LIFT → SWING：摆动腿**离地** + 已卸载 + 净空达标 ─────────────
       //   这组就是 SCONE `LateStance→LiftOff→Swing` 的等价物
       //   （`leg_load < swing_load_threshold`，OSL = 0.15 BW）。
+      // ══ LIFT ≡ Perry `PreSwing`→`InitialSwing`（50~73%GC）══
+      //   人类签名：离地时踝跖屈 20°、膝屈 35°；随后膝快速屈向 60° 峰值、踝背屈让净空。
       LIFT: [
+        // ★ Perry 签名 1：摆动踝离地时**跖屈 ~20°**（蹬离姿势带走）
+        {
+          item: "\u6446\u52A8\u8E1D\u8DD6\u5C48(\u8E6C\u79BB)",
+          ok: (c) => c.ankleSw >= HUMAN_REF.angle.toeOff.anklePF * 0.6,
+          val: (c) => c.ankleSw,
+          tol: () => HUMAN_REF.angle.toeOff.anklePF * 0.6
+        },
+        // ★ Perry 签名 2：摆动膝**已屈到 ~35°**（PreSwing 末）
+        {
+          item: "\u6446\u52A8\u819D\u5C48(PreSwing)",
+          ok: (c) => c.kneeSw >= HUMAN_REF.angle.toeOff.kneeFlex * 0.6,
+          val: (c) => c.kneeSw,
+          tol: () => HUMAN_REF.angle.toeOff.kneeFlex * 0.6
+        },
         {
           item: "\u6446\u52A8\u817F\u5DF2\u5378\u8F7D",
           ok: (c) => c.rs.loadFrac[c.sw] <= c.cfg.loadReleaseFrac,
@@ -18518,13 +18741,33 @@ var init_gaitState = __esm({
       // ── SWING → DOUBLE：落地（接触事件 + 矢状位置 + 膝角速度回落）─────
       //   EPFL 用**同侧触地**触发；SCONE 用 `sagittal_pos > landing_threshold`；
       //   EPFL 的 `LP`（落地准备）用**屈伸角速度**阈值。
+      // ══ SWING ≡ Perry `InitialSwing`→`TerminalSwing`（62~100%GC）══
+      //   人类签名：膝屈在 MidSwing 达 **60° 峰值**，随后 TerminalSwing 膝伸到 0~5°、
+      //   踝背屈 10~15° 准备脚跟着地（"heel rocker"）。
       SWING: [
+        // ★ Perry 签名 1：摆动膝屈**达到峰值区**（~60°）。取 60% 作下限。
+        {
+          item: "\u6446\u52A8\u819D\u5C48\u5CF0\u503C",
+          ok: (c) => c.kneeSw >= HUMAN_REF.angle.peakKnee.kneeFlex * 0.6,
+          val: (c) => c.kneeSw,
+          tol: () => HUMAN_REF.angle.peakKnee.kneeFlex * 0.6
+        },
+        // ★ Perry 签名 2：落地前踝**背屈**（帧域为负）准备脚跟着地
+        {
+          item: "\u843D\u5730\u8E1D\u80CC\u5C48",
+          ok: (c) => c.ankleSw <= -HUMAN_REF.angle.preLanding.ankleDF * 0.6,
+          val: (c) => c.ankleSw,
+          tol: () => -HUMAN_REF.angle.preLanding.ankleDF * 0.6
+        },
         {
           item: "\u843D\u5730\u4E8B\u4EF6",
           ok: (c) => c.touchdown[c.sw],
           val: (c) => c.touchdown[c.sw] ? 1 : 0,
           tol: () => 1
         },
+        // ★ SCONE `Swing→Landing`：`sagittal_pos > landing_threshold`（默认 0.0）。
+        //   我们额外要求**触地事件**（比 SCONE 只看矢状位置更严：脚还在空中就不会判落地），
+        //   膝角速度项来自 EPFL `LP`（落地准备）。
         {
           item: "\u843D\u5730\u77E2\u72B6\u4F4D\u7F6E",
           ok: (c) => c.rs.sagPosRel(c.sw) >= c.cfg.sagLandingThr,
@@ -18653,6 +18896,13 @@ var init_gaitState = __esm({
           liftoff,
           swingKneeVel,
           swingKneeFlex: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
+          // 帧域取样（全部经网关；负号 = 关节空间→域口径的符号换算）
+          ankleRecv: rs.jq ? -rs.jq.angleDeg(`foot_${recv}`, 2) : 0,
+          kneeRecv: rs.jq ? -rs.jq.angleDeg(`knee_${recv}`, 2) : 0,
+          ankleRear: rs.jq ? -rs.jq.angleDeg(`foot_${rear}`, 2) : 0,
+          ankleRearVel: rs.jq ? -rs.jq.velDegPerSec(`foot_${rear}`, 2) : 0,
+          ankleSw: rs.jq ? -rs.jq.angleDeg(`foot_${sw}`, 2) : 0,
+          kneeSw: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
           clearance: rs.swingClearance,
           sinceStep: this.t - this.lastStepT,
           domainBad: dm.bad,
@@ -22215,7 +22465,7 @@ var q = (a, p) => {
 var f = (v, d = 3) => Number.isFinite(v) ? v.toFixed(d) : "n/a";
 var stats = {};
 for (const s of STATE_ORDER2) {
-  stats[s] = { n: 0, dwell: [], recvLoad: [], sagRecv: [], worst: [], itemFail: {}, peakRecvLoad: [], _peak: 0 };
+  stats[s] = { n: 0, dwell: [], recvLoad: [], sagRecv: [], worst: [], itemFail: {}, peakRecvLoad: [], _peak: 0, sagSup: [], sagRear: [] };
 }
 var sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
 sim.begin(new Float32Array(sim.paramCount));
@@ -22244,6 +22494,8 @@ for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
     st.n++;
     st.recvLoad.push(rs.loadFrac[recv]);
     st.sagRecv.push(rs.sagPosRel(recv));
+    st.sagSup.push(rs.sagPosRel(rs.supportLeg()));
+    st.sagRear.push(rs.sagPosRel(rs.lastSwing === "l" ? "r" : "l"));
     const w = Math.max(rs.jq?.worstSupportErrDeg(false) ?? 0, rs.jq?.worstSwingErrDeg(false) ?? 0);
     st.worst.push(w);
     for (const v of rs.violations) st.itemFail[v.item] = (st.itemFail[v.item] ?? 0) + 1;
@@ -22269,7 +22521,9 @@ for (const s of STATE_ORDER2) {
   }
   log(`  ${s.padEnd(7)} \u5230\u8FBE ${String(st.n).padStart(4)} \u62CD  \u9A7B\u7559\u4E2D\u4F4D ${f(q(st.dwell, 0.5) / CTRL_HZ, 2)}s  \u6700\u957F ${f(Math.max(...st.dwell) / CTRL_HZ, 2)}s`);
   log(`          \u627F\u63A5\u817F\u8F7D\u8377   p10=${f(q(st.recvLoad, 0.1))} p50=${f(q(st.recvLoad, 0.5))} p90=${f(q(st.recvLoad, 0.9))}  **\u72B6\u6001\u5185\u5CF0\u503C\u4E2D\u4F4D=${f(q(st.peakRecvLoad, 0.5))}** \u5CF0\u503C\u6700\u5927=${f(Math.max(...st.peakRecvLoad))}`);
-  log(`          sagPosRel    min=${f(q(st.sagRecv, 0))} p50=${f(q(st.sagRecv, 0.5))} max=${f(q(st.sagRecv, 1))}  (\u817F\u957F\u5F52\u4E00)`);
+  log(`          sagPosRel recv  min=${f(q(st.sagRecv, 0))} p50=${f(q(st.sagRecv, 0.5))} max=${f(q(st.sagRecv, 1))}`);
+  log(`          sagPosRel sup   min=${f(q(st.sagSup, 0))} p50=${f(q(st.sagSup, 0.5))} max=${f(q(st.sagSup, 1))}`);
+  log(`          sagPosRel rear  min=${f(q(st.sagRear, 0))} p50=${f(q(st.sagRear, 0.5))} max=${f(q(st.sagRear, 1))}   \u2190 PUSH/LIFT \u5224\u7684\u662F\u8FD9\u6761`);
   log(`          \u5E27\u57DF\u6700\u5DEE\u8D8A\u754C p50=${f(q(st.worst, 0.5))}\xB0 p90=${f(q(st.worst, 0.9))}\xB0 max=${f(q(st.worst, 1))}\xB0`);
   const items = Object.entries(st.itemFail).sort((a, b) => b[1] - a[1]);
   if (items.length) {
