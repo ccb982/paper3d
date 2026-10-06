@@ -1240,7 +1240,10 @@ export function balanceSystem(
   //   ——那是**刚度**，不是目标角。
   //   而零输出时关节 PD 已经把膝保持在绑定角（本 rig ≈0°），**本来就不需要管**。
   //   ⇒ 只需在**超过屈曲限位**时顶回来，绝不主动命令弯曲。
-  const kneeNow = rs.angle(jKnee, 2);
+  // ★ 走关节回读网关（文档 §18 R1）。网关只做 **单位**换算（rad→deg），
+  //   **不换符号** —— 本 rig 髋/膝限位「负 = 屈」这个事实由本行自己负责。
+  const jq = rs.jointRead();                     // §18：唯一读关节的入口
+  const kneeNow = jq.angleDeg(jKnee, 2) / D2R;   // 网关给 deg，除回 rad 保持下游不变
   const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R;
   // ★ 单支撑时膝要有**主动刚度**（命令到轻微屈曲的目标角），不是只靠越界守卫。
   //   同样必须合并进这一次请求，否则被守卫分支或优先级吞掉。
@@ -1259,7 +1262,7 @@ export function balanceSystem(
   //   髋的矢状面目标本来是 `hipTgt`（随 com.x 修正），这里额外保证它不屈太多。
   //  ⚠ 符号：本 rig 髋/膝限位都是 `负 = 屈`（膝 [-145°,+2°]、髋 [-95°,+100°]），
   //    所以"屈太多"是 **< −limit**，不是 `> +limit`（原式反了，从没生效过）。
-  const hipNow2 = rs.angle(jHip, 2);
+  const hipNow2 = jq.angleDeg(jHip, 2) / D2R;
   if (on('hip') && hipNow2 < -p.hipExtendLimit) {
     rs.requestAngle(jHip, 2, -p.hipExtendLimit, 'balance', '髋屈守卫');
   }
@@ -1752,8 +1755,11 @@ if (doll && on('hipStiff')) {
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
       // 髋矢状角：关节角已减去 restRad（零位 = 素材姿势），直接可用
-      const qHip = rs.pos[jHipS * 3 + 2]!;
-      const qHipRate = rs.vel[jHipS * 3 + 2]!;
+      // ★ 走网关（§18 R1）。⚠ 网关给的是 **deg** ⇒ 必须除回 `D2R`，
+      //   否则刚度 `K_h·q` 的量纲差 57 倍（这个坑与"单位混用"同类）。
+      const jq2 = rs.jointRead();
+      const qHip = jq2.angleDeg(jHipS, 2) / D2R;
+      const qHipRate = jq2.velDegPerSec(jHipS, 2) / D2R;
       const tauMaxHip = sk.joints[jHipS]?.maxTorque?.[2] ?? 200;
       const qLim = p.maxHipStiffDeg * D2R;
       // ★ 弹簧项：`−K_h·q`（回复到 0 rad），**限的是"送进弹簧的角度"不是"两项之差"**。

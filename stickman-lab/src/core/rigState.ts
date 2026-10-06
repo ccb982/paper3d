@@ -22,6 +22,7 @@
 
 import { AXES_PER_JOINT, jointIndexByName, type Skeleton } from './skeleton';
 import { KEY_POSES, type GaitKey, type KeyPose } from './keyframe';
+import type { JointQuery } from './jointQuery';
 
 // ─────────────────────────────────────────────────── 身份
 
@@ -204,6 +205,14 @@ export interface RigSnapshot {
   lastSwing: Side | null;
   /** 已完成的迈步周期数 */
   cycleCount: number;
+  /**
+   * ★ 最近一次状态迁移的**判据快照**（诊断 / 门禁��用）。
+   *
+   *   为什么必须有：迁移发生在 `update()` 内部，迁移后 `violations[]` 已按
+   *   **新状态**重算 ⇒ 事后无法回答"迁移那一拍的验收是不是真的全过"。
+   *   没有它，"迁移只发生在验收通过时"这条不变式只能靠读代码相信。
+   */
+  lastMove: { from: WalkState; to: WalkState; verified: boolean; nViol: number } | null;
   loadBearer: Side | null;
   supportLeg: Side;
   swingLeg: Side;
@@ -457,6 +466,37 @@ export class RigState {
   lastSwing: Side | null = null;
   /** 已完成的迈步周期数（每绕环一圈 +1；门禁用它确认 5 态都被走过） */
   cycleCount = 0;
+  /**
+   * ★ 最近一次状态迁移的**判据快照**（诊断 / 门禁用）。
+   *   `nViol = -1` 表示这次迁移是 **`Tmax` 兜底**（不是验收驱动的）。
+   */
+  lastMove: { from: WalkState; to: WalkState; verified: boolean; nViol: number } | null = null;
+
+  // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
+  //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
+  //   R1：`balance` / `step` 不得再直读 `pos`/`vel`/`angle()`/`jointVel()`
+  //      （门禁 `probe-readback` 静态断言）。
+  jq: JointQuery | null = null;
+
+  /**
+   * 取关节回读网关。**两个系统读关节的唯一入口**（文档 §18 R1）。
+   *
+   *   为什么是抛错而不是回退到 `rs.angle()`：
+   *     回退 = 又多一条读路径 ⇒ 网关形同虚设，而且"两个口径不一致"这个
+   *     本次要根治的病会**静默复发**（轴索引/符号/单位三者只要有一处不同，
+   *     验收与控制就会说两套话）。⇒ 缺网关就在第一拍炸掉，绝不降级。
+   *
+   *   唯一注入点：`Controller` 构造 `GaitState` 时挂上（`GaitState.installJointQuery`）。
+   */
+  jointRead(): JointQuery {
+    if (!this.jq) {
+      throw new Error(
+        'rs.jq 未注入：关节回读必须经状态机网关（§18）。'
+        + '请确认 Controller 已构造 GaitState（它在构造时调用 installJointQuery）。',
+      );
+    }
+    return this.jq;
+  }
 
   // ── 读数（每拍从物理回读一次，两系统共享）
   readonly pos: Float64Array;
@@ -1311,6 +1351,7 @@ export class RigState {
       state: this.state, stateT: this.stateT,
       verified: this.verified, violations: this.violations.map((v) => ({ ...v })),
       safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
+      lastMove: this.lastMove ? { ...this.lastMove } : null,
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

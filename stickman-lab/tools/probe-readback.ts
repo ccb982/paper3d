@@ -1,161 +1,181 @@
-/** probe-readback.ts —— 回读实际站距/脚位/髋位（确认配置真的生效） */
+/**
+ * probe-readback.ts —— **关节回读网关验收**（`架构_v2_三模块协作.md` §18.3）
+ *
+ * 三件事：
+ *   ① **静态**：两个系统不得直读 `rs.pos/vel/angle/jointVel`（R1 规则）
+ *   ② **恒等**：网关的 `angleDeg/velDegPerSec` 与物理值逐拍一致（R0：证明网关没改口径）
+ *   ③ **符号**：三个轴的「域口径符号」用**实测**钉死，不靠注释断言
+ *      —— 注释里写的符号约定曾经互相矛盾（`balance.ts` 说踝「正 = 跖屈」，
+ *         而验收代码多取了一次负号），而验收阈值全靠这个符号。
+ *
+ * 用法：node tools/run.mjs probe-readback
+ */
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
+
 const require = createRequire(import.meta.url);
-const { buildSkeleton, DEFAULT_CONFIG, jointIndexByName } = await import('../src/core/skeleton');
+const { buildSkeleton, DEFAULT_CONFIG } = await import('../src/core/skeleton');
 await import('../src/core/ragdoll');
 {
   const p: string = require.resolve('@dimforge/rapier3d/rapier_wasm3d_bg.wasm');
   const c = await WebAssembly.compile(fs.readFileSync(p));
-  const bg = bgNs as any; const im: any = {};
+  const bg = bgNs as any;
+  const im: any = {};
   for (const i of WebAssembly.Module.imports(c)) {
-    const f = bg[i.name]; if (typeof f !== 'function') throw new Error(i.name);
+    const f = bg[i.name];
+    if (typeof f !== 'function') throw new Error(i.name);
     (im[i.module] ??= {})[i.name] = f;
   }
   bg.__wbg_set_wasm((await WebAssembly.instantiate(c, im)).exports);
 }
+
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
+
 const log = console.log;
-const skOff = buildSkeleton({ ...DEFAULT_CONFIG, flexibleArch: false });
-log(`══ 消融对照：flexibleArch=false ══`);
-{
-  const nb = skOff.bodies.length, nj = skOff.joints.length;
-  const m = skOff.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
-  const sole = (skOff.bodies.findIndex((b) => b.key === 'foot_l'));
-  const nCol = skOff.bodies[sole]?.colliders.length ?? 0;
-  const hasArch = skOff.bodies.some((b) => b.key === 'arch_l' || b.key === 'mfoot_l');
-  const hasJ = skOff.joints.some((j) => j.name === 'arch_l' || j.name === 'mfoot_l');
-  log(`   刚体 ${nb} / 关节 ${nj}   总质量 ${m.toFixed(2)}kg   foot_l colliders=${nCol}`);
-  log(`   无 arch_*/mfoot_* 刚体: ${!hasArch ? '✓' : '✗'}   无对应关节: ${!hasJ ? '✓' : '✗'}`
-    + `   质量守恒 ${Math.abs(m - DEFAULT_CONFIG.mass) < 1e-6 ? '✓' : '✗'}`);
-  log(`   ✓ 关掉后仍自洽，无 undefined / 无漏刚体`);
-}
-const sk0 = buildSkeleton(DEFAULT_CONFIG);
-const { assertColliderMass, assertJointAnchors } = await import('../src/core/skeleton');
-log('══ 启动门禁（main.ts:boot 调的就是这两个）══');
-try { assertColliderMass(sk0); log('   ✓ assertColliderMass 通过'); }
-catch (e) { log(`   ✗ ${(e as Error).message}`); }
-try { assertJointAnchors(sk0); log('   ✓ assertJointAnchors 通过'); }
-catch (e) { log(`   ✗ ${(e as Error).message}`); }
-const sk = sk0;
+const codeOnly = (s: string): string => s
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+let fails = 0;
+const bad = (m: string): void => { fails++; log(`  x ${m}`); };
+const ok = (m: string): void => log(`  v ${m}`);
+
+const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
-log(`   DEFAULT_CONFIG.stance = ${DEFAULT_CONFIG.stance}`);
-// ★ 关节锚点回读：比较各关节的锚点偏移量，找出“突兀的巨大关节”
-log('══ 骨骼调试包围盒尺寸对比（viewer 对每个刚体都画一个胶囊）══');
-log('   刚体              长度     半长(hh)   半径(rad)   调试胶囊总长');
+const PHYS_HZ = DEFAULT_SIM.physicsHz;
+const CTRL_HZ = DEFAULT_SIM.controlHz;
+const PER_CTRL = Math.max(1, Math.round(PHYS_HZ / CTRL_HZ));
+const DT = 1 / CTRL_HZ;
+
+// ══ A. 静态：两个系统不得直读关节数组 ══════════════════════════════
+log('== A. 静态：两个系统不得直读关节回读 ==');
 {
-  const rows = sk.bodies.map((b, i) => ({ k: b.key, len: b.length, hh: b.halfHeight, r: b.radius }))
-    .sort((a, b) => (b.hh * 2 + b.r * 2) - (a.hh * 2 + a.r * 2));
-  for (const r of rows.slice(0, 6)) {
-    log(`   ${r.k.padEnd(18)} ${(r.len * 1000).toFixed(0).padStart(6)}mm`
-      + ` ${(r.hh * 1000).toFixed(1).padStart(9)}mm`
-      + ` ${(r.r * 1000).toFixed(1).padStart(9)}mm`
-      + `   ${((r.hh * 2 + r.r * 2) * 1000).toFixed(0).padStart(6)}mm`
-      + `   ${r.k.startsWith('arch') ? '  ★ 弓' : ''}`);
-  }
-  const arch = rows.find((r) => r.k.startsWith('arch'))!;
-  const shin = rows.find((r) => r.k === 'shin_l')!;
-  log(`   弓胶囊 ${((arch.hh * 2 + arch.r * 2) * 1000).toFixed(0)}mm`
-    + `  vs 小腿 ${((shin.hh * 2 + shin.r * 2) * 1000).toFixed(0)}mm`
-    + `  比值 ${((arch.hh * 2 + arch.r * 2) / (shin.hh * 2 + shin.r * 2) * 100).toFixed(0)}%`
-    + `  ${(arch.hh * 2 + arch.r * 2) > 0.2 ? '✗ 仍是小腿量级' : '✓ 已缩到弓的尺寸'}`);
-}
-log('══ 关节锚点偏移量对比（官方绘图按这个绘）══');
-log('   关节            父锚点(腿身)   子锚点(腿身)   两锚点间距  父体心→锚点');
-{
-  const rows: { n: string; p: number; c: number; d: number; pc: number }[] = [];
-  for (let i = 0; i < sk.joints.length; i++) {
-    const j = sk.joints[i]!;
-    const pl = j.parentLocal, cl = j.childLocal;
-    const pm = Math.hypot(pl[0], pl[1], pl[2]);
-    const cm = Math.hypot(cl[0], cl[1], cl[2]);
-    rows.push({ n: j.name, p: pm, c: cm, d: Math.hypot(
-      (pl[0] - cl[0]), (pl[1] - cl[1]), (pl[2] - cl[2])), pc: pm });
-  }
-  rows.sort((a, b) => b.pc - a.pc);
-  const worst = rows[0]!.pc;
-  for (const r of rows.slice(0, 8)) {
-    log(`   ${r.n.padEnd(16)}`
-      + ` ${(r.p * 1000).toFixed(1).padStart(8)}mm`
-      + ` ${(r.c * 1000).toFixed(1).padStart(8)}mm`
-      + ` ${(r.d * 1000).toFixed(1).padStart(8)}mm`
-      + `   ${(r.pc * 1000).toFixed(1).padStart(8)}mm`
-      + `   ${r.pc === worst ? '  ★ 最大' : ''}`);
-  }
-  log(`   → 最大锚点偏移 ${(worst * 1000).toFixed(1)}mm`
-    + `  中位数 ${(rows.map((r) => r.pc).sort((a, b) => a - b)[rows.length >> 1]! * 1000).toFixed(1)}mm`
-    + `  最小 ${(rows[rows.length - 1]!.pc * 1000).toFixed(1)}mm`);
-}
-const hips = ['hip_l', 'hip_r'].map((n) => jointIndexByName(sk, n));
-log(`══ 静态回读（t=0.3s）══`);
-log('   量                左        右      差/合计');
-const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand' });
-sim.begin(new Float32Array(sim.paramCount));
-const ctrl = new Controller(sk, sim, { ...DEFAULT_CONTROLLER });
-const { jointIndexByName: jin } = await import('../src/core/skeleton');
-for (const nm of ['hip_l', 'knee_l', 'foot_l', 'spine1']) {
-  const j = jin(sk, nm); const d = sk.joints[j];
-  log(`   ${nm.padEnd(8)} τmax = [${d!.maxTorque.map((v) => v.toFixed(0)).join(', ')}] N·m`
-    + `   限位 ${d!.minRad.map((v) => (v * 180 / Math.PI).toFixed(0)).join('/')}°`);
-}
-log('══ 脚内部自由度检查（"柔性足"是否真的有柔性）══');
-log(`   刚体数 ${sk.bodies.length} / 关节数 ${sk.joints.length}   （柔性足前是15 / 14）`);
-for (const fn of ['foot_l', 'foot_r'] as const) {
-  const fi = sk.bodies.findIndex((b: any) => b.key === fn);
-  const ai = sk.bodies.findIndex((b: any) => b.key === fn.replace('foot', 'arch'));
-  const foot = sk.bodies[fi]!;
-  const arch = ai >= 0 ? sk.bodies[ai]! : null;
-  const childJoints = sk.joints.filter((j: any) => j.parentKey === fn || j.childKey === fn);
-  log(`   刚体 ${fn}: idx=${fi} colliders=${foot.colliders?.length ?? 0}`
-    + `  弓刚体 ${arch ? `idx=${ai} colliders=${arch.colliders?.length ?? 0} m=${arch.mass.toFixed(3)}kg` : '★无'}`);
-  log(`      挂在 ${fn} 上的关节: ${childJoints.map((j: any) => j.name).join(', ')}`);
-  for (const j of childJoints) {
-    if (j.name.startsWith('arch_')) {
-      log(`      ${j.name}: 自由轴=${JSON.stringify(j.revoluteAxis)}`
-        + ` 限位=[${(j.minRad![0]! * 180 / Math.PI).toFixed(0)}°,${(j.maxRad![0]! * 180 / Math.PI).toFixed(0)}°]`
-        + ` τmax=${j.maxTorque![0]!.toFixed(0)}N·m`
-        + ` 锚点世界=(${j.wx?.toFixed(3)},${j.wy?.toFixed(3)},${j.wz?.toFixed(3)})`);
+  const FORBID = [/\.pos\[/, /\.vel\[/, /\.angle\(/, /\.jointVel\(/, /\.jointPos\(/];
+  for (const f of ['src/core/systems/balance.ts', 'src/core/systems/step.ts']) {
+    if (!fs.existsSync(f)) { bad(`缺文件 ${f}`); continue; }
+    const src = codeOnly(fs.readFileSync(f, 'utf8'));
+    const hits: string[] = [];
+    for (const re of FORBID) {
+      const n = (src.match(new RegExp(re.source, 'g')) ?? []).length;
+      if (n > 0) hits.push(`${re.source} x${n}`);
     }
+    if (hits.length) bad(`${f} 仍直读关节回读：${hits.join(', ')} => 应走 rs.jointRead()`);
+    else ok(`${f} 只经网关读关节`);
   }
-  if (arch) log(`      弓 collider: ${arch.colliders?.map((c: any) => `${c.offsetX?.toFixed(3)},${c.offsetY?.toFixed(3)},${c.offsetZ?.toFixed(3)}`).join('  ')}`);
 }
-log(`══ 关节表（共 ${sk.joints.length} 个，按真实索引）══`);
-sk.joints.forEach((d, i) => {
-  log(`   [${String(i).padStart(2)}] ${d.name.padEnd(11)} parent=${String(d.parentKey).padEnd(8)}`
-    + ` child=${String(d.childKey).padEnd(9)} τmax=[${d.maxTorque.map((v) => v.toFixed(0)).join(',')}]`);
-});
-const jw = new Float64Array(3);
-for (let i = 0; i < 36; i++) {
-  if (i % 2 === 0) sim.doll.setMotorTargets(ctrl.step(1 / 60));
-  sim.advance(1);
+
+// ══ B. 恒等 + C. 符号 ═════════════════════════════════════════════
+log('');
+log('== B. 运行时：网关恒等 ==');
+const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 4 });
+sim.begin(new Float32Array(sim.paramCount));
+const ctrl = new Controller(sk, sim, DEFAULT_CONTROLLER);
+const jq = ctrl.rs.jq;
+if (!jq) {
+  bad('rs.jq 未注入：Controller 没有把网关交给两个系统');
+} else {
+  const names: [string, number][] = (['hip_l', 'knee_l', 'foot_l', 'hip_r', 'knee_r', 'foot_r'] as const)
+    .map((n) => [n, sk.joints.findIndex((j) => j.name === n)] as [string, number]);
+  let maxAng = 0; let maxVel = 0; let n = 0;
+  for (let i = 0; i < 4 * PHYS_HZ && !sim.finished; i++) {
+    if (i % PER_CTRL === 0) {
+      sim.doll.setMotorTargets(ctrl.step(DT));
+      for (const [nm, ji] of names) {
+        if (ji < 0) continue;
+        for (const ax of [0, 1, 2] as const) {
+          maxAng = Math.max(maxAng, Math.abs(jq.angleDeg(nm, ax) - ctrl.rs.angle(ji, ax) * 180 / Math.PI));
+          maxVel = Math.max(maxVel, Math.abs(jq.velDegPerSec(nm, ax) - ctrl.rs.jointVel(ji, ax) * 180 / Math.PI));
+        }
+      }
+      n++;
+    }
+    sim.advance(1);
+  }
+  if (maxAng < 1e-9) ok(`angleDeg 与物理值逐拍一致（${n} 拍 x ${names.length} 关节 x 3 轴，最大偏差 ${maxAng.toExponential(1)}）`);
+  else bad(`angleDeg 与物理值不一致：最大偏差 ${maxAng}`);
+  if (maxVel < 1e-9) ok(`velDegPerSec 与物理值逐拍一致（最大偏差 ${maxVel.toExponential(1)}）`);
+  else bad(`velDegPerSec 与物理值不一致：最大偏差 ${maxVel}`);
 }
-const s = ctrl.snapshot;
-sim.doll.jointWorld(hips[0]!, jw); const hl = jw[2]!;
-sim.doll.jointWorld(hips[1]!, jw); const hr = jw[2]!;
-const row = (nm: string, a: number, b: number, sum = false): void => {
-  log(`   ${nm.padEnd(16)} ${(a * 1000).toFixed(0).padStart(6)}mm ${(b * 1000).toFixed(0).padStart(7)}mm`
-    + `  ${(sum ? a + b : Math.abs(a - b)) === 0 ? '' : ((sum ? a + b : Math.abs(a - b)) * 1000).toFixed(0).padStart(6)}mm`);
-};
-row('髋 z', hl, hr, true);
-row('踝 z', s.legs.l.footZ, s.legs.r.footZ, true);
-row('CoP z', s.cop?.l?.z ?? 0, s.cop?.r?.z ?? 0, true);
-row('足外八/外张', 0, 0);
-// ★ 总质量 = Σ刚体主质量。**不要再加 Σcollider 质量** ——
-//   skeleton 里已加不变式后处理「刚体质量 := Σ其 collider 质量」，两者按构造相等，
-//   相加会得到 140kg 的假警报（之前一直显示「140.00 应为 70.00」，误导了好几轮）。
-const mBody = sk.bodies.reduce((a, b) => a + (b.mass ?? 0), 0);
-const mCol = sk.bodies.reduce((a, b) =>
-  a + (b.colliders ?? []).reduce((x, c: any) => x + (c.mass ?? 0), 0), 0);
-const mMassOk = Math.abs(mBody - DEFAULT_CONFIG.mass) < 1e-6;
-log(`   ★ 总质量 = Σ刚体 ${mBody.toFixed(2)} kg（目标 ${DEFAULT_CONFIG.mass.toFixed(2)}）`
-  + `  ${mMassOk ? '✓' : '✗ 不符'}   [collider 和 ${mCol.toFixed(2)} = 一致，不重复计]`);
-log(`   com.z = ${(s.com.z * 1000).toFixed(0)}mm   站距/髋间距 = ${s.strideRatio.toFixed(2)}×`);
-log(`   进支撑面需横移 = ${(s.supportEntryZ * 1000).toFixed(0)}mm`);
-const BB = new Float64Array(4);
-for (const [nm, i] of [['左', 0], ['右', 1]] as const) {
-  sim.doll.footSoleBounds(i as 0 | 1, BB);
-  log(`   ${nm}脚鞋底 z 范围 [${(BB[2]! * 1000).toFixed(0)}, ${(BB[3]! * 1000).toFixed(0)}]mm  半宽 ${((BB[3]! - BB[2]!) / 2 * 1000).toFixed(0)}mm`);
+
+// ══ C. 符号实测 ═══════════════════════════════════════════════════
+log('');
+log('== C. 符号实测（40ms 窗口，看解剖方向）==');
+//
+//  做法：给某轴一个已知角度偏移，观察**解剖学上可判的方向**：
+//    · 髋 +Δ ⇒ 膝的世界 x **后移** ⇒ **+ = 伸**（⇒ 域口径「正=屈」必须取负）
+//      （不能用脚：脚 planted 在地上，髋屈主要表现为膝移动）
+//    · 膝 +Δ ⇒ 脚中心 x **前移** ⇒ **+ = 伸**
+//    · 踝 +Δ ⇒ 足长轴（局部 X，heel→toe）的世界 y **下降** ⇒ **+ = 跖屈**
+//  ⚠ 窗口既不能太长（身体会自行倒下，3s 窗口实测 Δ脚x=373mm、踝 CoP 载荷为 0），
+//    也不能太短（10 个物理步只有亚毫米位移）⇒ 取 0.15s。
+//  ⚠ `soleColBody` 是 private ⇒ 踝的方向判据不能用"趾块/跟块高度"，
+//    改用**公开**的 `bodyWorldAxis(foot, 0)`（足长轴）世界 y 分量。
+{
+  const kick = (jointName: string, axis: 0 | 1 | 2, rad: number, secs = 0.15) => {
+    const ji = sk.joints.findIndex((j) => j.name === jointName);
+    if (ji < 0) return null;
+    const span = Math.max(Math.abs(sk.joints[ji]!.minRad[axis]), Math.abs(sk.joints[ji]!.maxRad[axis]));
+    const s2 = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 1 });
+    s2.begin(new Float32Array(s2.paramCount));
+    const cmd = new Float32Array(s2.doll.motorTarget.length);
+    const jKnee = sk.joints.findIndex((j) => j.name === 'knee_l');
+    const footKey = axis === 2 && jointName.startsWith('foot') ? jointName : 'foot_l';
+    const bi = s2.doll.indexByKey.get(footKey) ?? -1;
+    const w0 = new Float64Array(3);
+    const ax0 = new Float64Array(3);
+    const bbA = new Float64Array(4);
+    const bbB = new Float64Array(4);
+    s2.doll.footSoleBounds(0, bbA);
+    if (jKnee >= 0) s2.doll.jointWorld(jKnee, w0);
+    if (bi >= 0) s2.doll.bodyWorldAxis(bi, 0, ax0);
+    const kneeX0 = jKnee >= 0 ? w0[0] : 0;
+    const toeAxisY0 = bi >= 0 ? ax0[1] : 0;
+    cmd[ji * 3 + axis] = (rad * 0.9) / span;      // 与 rigState.requestAngle 同一换算
+    const steps = Math.max(2, Math.round(secs * PHYS_HZ));
+    for (let i = 0; i < steps; i++) { s2.doll.setMotorTargets(cmd); s2.advance(1); }
+    s2.doll.footSoleBounds(0, bbB);
+    if (jKnee >= 0) s2.doll.jointWorld(jKnee, w0);
+    if (bi >= 0) s2.doll.bodyWorldAxis(bi, 0, ax0);
+    return {
+      dKneeX: jKnee >= 0 ? w0[0] - kneeX0 : 0,
+      dFootX: (bbB[0]! + bbB[1]!) / 2 - (bbA[0]! + bbA[1]!) / 2,
+      dToeAxisY: bi >= 0 ? ax0[1] - toeAxisY0 : 0,
+    };
+  };
+
+    const mm = (v: number): string => `${(v * 1000).toFixed(2)} mm`;
+  const hip = kick('hip_l', 2, +0.25);
+  const knee = kick('knee_l', 2, +0.25);
+  if (hip && knee) {
+    log(`   髋 +0.25rad => 膝 Δx        = ${mm(hip.dKneeX)}   （+ = 伸 => 膝应后移）`);
+    log(`   膝 +0.25rad => 脚中心 Δx    = ${mm(knee.dFootX)}   （+ = 伸 => 脚应前移）`);
+    if (hip.dKneeX < -0.002) ok('髋：实测 +角 = 伸 ⇒ 域口径「正=屈」需**取负号**（与 degOf 一致）');
+    else bad(`髋：+角使膝前移（${mm(hip.dKneeX)}）⇒ 关节空间是「正=屈」⇒ degOf 的负号反了`);
+    if (knee.dFootX > 0.002) ok('膝：实测 +角 = 伸 ⇒ 域口径「正=屈」需**取负号**（与 degOf 一致）');
+    else bad(`膝：+角使脚后移（${mm(knee.dFootX)}）⇒ 关节空间是「正=屈」⇒ degOf 的负号反了`);
+  }
+
+  // ── 踝：**运动学**判据（`bodyWorldAxis(foot,0)` 的方向已由骨架定义确认）──
+  //   局部 +X = heel→toe：`skeleton.ts` 的鞋底块 `fx∈[-1,1] ↔ x∈[-L,+L]`，
+  //   足跟 `fx=-1`、趾 `fx=+1` ⇒ 局部 +X 指向趾端。
+  //   ⇒ 命令 +Δ 后若足长轴**抬升**，说明趾端上抬 = **背屈** ⇒ 域口径要取负。
+  //   ⚠ 不用 CoP 判据：测量窗口内需控制器维持站立，而本 rig 当前 ~1.4s 就倒，
+  //     窗口内 CoP 载荷读数为 0（实测）⇒ 测不到。
+  const ank = kick('foot_l', 2, +0.20);
+  if (ank) {
+    log(`   踝 +0.20rad => 足长轴(heel→toe) Δy = ${mm(ank.dToeAxisY)}   （抬升 = 趾端上抬 = 背屈）`);
+    if (ank.dToeAxisY > 0.002) ok('踝：实测 +角 = 背屈 ⇒ 域口径「正=跖屈」需**取负号**（与 degOf 一致）');
+    else if (ank.dToeAxisY === 0) bad('踝：读不到足长轴世界方向 ⇒ 无法自动判定');
+    else bad(`踝：+角使趾端下沉（${mm(ank.dToeAxisY)}）⇒ +角 是跖屈 ⇒ degOf 不该取负`);
+  }
+
+  log('');
+  log('   注：髋/膝用「运动方向」判、踝用「足长轴升降」判 —— 后者的局部轴方向');
+  log('       已由 skeleton.ts 的鞋底块定义确认，不靠假设。');
 }
+
+log('');
+if (fails) { log(`x 回读网关验收失败 ${fails} 项`); process.exit(1); }
+log('v 回读网关验收全绿：静态唯一读者 + 运行时恒等 + 符号实测一致');

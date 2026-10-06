@@ -35,9 +35,9 @@ import {
   type WalkState, type Side, type StateViolation,
 } from './rigState';
 import {
-  STATE_TO_GAIT, KEY_POSES, STATE_DOMAINS, stateDomains,
-  stanceWidthRatio, supportEntry, type StateDomain,
+  STATE_TO_GAIT, KEY_POSES, stanceWidthRatio, supportEntry,
 } from './keyframe';
+import { createJointQuery } from './jointQuery';
 
 /** deg ← rad */
 const DEG = 180 / Math.PI;
@@ -256,9 +256,11 @@ export interface VerifyCtx {
   clearance: number;
   /** 距上次抬腿的间隔（s） */
   sinceStep: number;
-  /** 帧域越界项数 / 最差偏差（deg） */
+  /** 帧域越界项数 / 最差偏差（deg，严容差） */
   domainBad: number;
   domainWorst: number;
+  /** 帧域在**松**容差下是否仍越界（0 = 还保持得住 ⇒ 不该升级安全态） */
+  domainLooseBad: number;
 }
 
 // 关节索引缓存（`RigState` 构造时绑定一次；避免每拍 `findIndex`）
@@ -346,42 +348,31 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
 });
 
 /**
- * ★ 帧域检查：实际姿态是否落在「本状态该有的区间」内（`STATE_DOMAINS`）。
+ * ★ 帧域检查 —— **已统一到 `jointQuery.ts`**（文档 §18）。
  *
- *   两段式迟滞（Rezazadeh 2018 的 FSM：`q > q₄₁` 进 S2、`q < q₄₃` 回 S1）：
- *   · 评估「**进入**下一态」时用 `tolIn`（严）
- *   · 「**保持**」本态时用 `tolOut`（松）
- *   没有它，接触噪声会让状态逐帧抖（旧实现「20 拍全 DOUBLE」就有这一份）。
+ *   历史教训（本函数曾两次出错，第三次才收敛）：
+ *     ① 单位混用：Perry 表是 deg、`rs.angle()` 是 rad ⇒ 阈值形同虚设；
+ *     ② **符号取反错了**：本 rig 髋/膝限位「负 = 屈」，而 `KeyPose`/`STATE_DOMAINS`
+ *        用「正 = 屈」⇒ 域口径必须取负；踝则相反（`balance.ts:743` 实测
+ *        「正踝角 = 跖屈」）⇒ **不取负**。曾对踝多取一次负，把区间判反。
+ *   ⇒ 现在符号/单位/轴口径**只在 `jointQuery.degOf` 里定义一次**，
+ *     任何验收代码都不许自己再取负/换算。
  *
- * @param entering 是否在评估「进入下一态」⇒ 用严容差
+ * @param strict true = 用**严**容差 `tolIn`（评估"能否进入下一态"）；
+ *                false = 用**松**容差 `tolOut`（评估"是否还保持得住"）。
  */
 export function checkDomains(
-  rs: RigState, state: WalkState, sup: Side, sw: Side, entering: boolean,
-): { bad: number; worst: number } {
-  const legDeg = (leg: Side, axis: StateDomain['axis']): number => {
-    switch (axis) {
-      case 'hipFlex': return rs.angle(JIDX[leg].hip, 2) / DEG;
-      case 'hipAbd': return rs.angle(JIDX[leg].hip, 0) / DEG;
-      case 'kneeFlex': return rs.angle(JIDX[leg].knee, 2) / DEG;
-      case 'ankle': return -rs.angle(JIDX[leg].foot, 2) / DEG;   // 正 = 跖屈
-      default: return 0;
-    }
+  rs: RigState, strict: boolean,
+): { bad: number; worst: number; looseBad: number } {
+  const jq = rs.jq;
+  if (!jq) return { bad: 0, worst: 0, looseBad: 0 };
+  const strictWorst = Math.max(jq.worstSupportErrDeg(strict), jq.worstSwingErrDeg(strict));
+  const looseWorst = Math.max(jq.worstSupportErrDeg(false), jq.worstSwingErrDeg(false));
+  return {
+    bad: strictWorst > 0 ? 1 : 0,
+    worst: strictWorst,
+    looseBad: looseWorst > 0 ? 1 : 0,
   };
-  let bad = 0;
-  let worst = 0;
-  const hit = (q: number, d: StateDomain): void => {
-    const tol = entering ? d.tolIn : d.tolOut;
-    const over = Math.max(d.lo - q, q - d.hi, 0);
-    if (over > tol) { bad++; worst = Math.max(worst, over - tol); }
-  };
-  for (const d of stateDomains(state)) {
-    if (d.leg === 'trunk') continue;
-    hit(legDeg(d.leg === 'support' ? sup : sw, d.axis), d);
-  }
-  for (const d of stateDomains(state, 'trunk')) {
-    hit(d.axis === 'trunkPitch' ? rs.pitchDeg : rs.rollDeg, d);
-  }
-  return { bad, worst };
 }
 
 export interface ExchangeEvent {
@@ -414,6 +405,27 @@ export class GaitState {
     JIDX.r = { hip: nm('hip_r'), knee: nm('knee_r'), foot: nm('foot_r') };
     this.bearer = cfg.startBearer;
     this.bearerCand = cfg.startBearer;
+    this.installJointQuery();
+  }
+
+  /**
+   * ★ 把关节回读网关挂到 `rs.jq` —— **回读权限的持有者就是状态机**（文档 §18）。
+   *
+   *   · 网关**不持有任何副本**：所有读数都现场走 `rs`，
+   *     所以"验收用的量"与"控制用的量"必然是同一个（这是本设计的核心收益）。
+   *   · 两个系统只拿到 `rs.jq`（只读、无 setter、不含 `request*`）。
+   */
+  private installJointQuery(): void {
+    const rs = this.rs;
+    const sup = (): Side => rs.loadBearer ?? rs.supportLeg();
+    rs.jq = createJointQuery(rs, {
+      get state() { return rs.state; },
+      get verified() { return rs.verified; },
+      get safe() { return rs.safe; },
+      get violations() { return rs.violations; },
+      supportLeg: sup,
+      swingLeg: () => (sup() === 'l' ? 'r' : 'l'),
+    });
   }
 
   stateLabel(s: WalkState): string { return STATE_LABEL[s]; }
@@ -467,8 +479,11 @@ export class GaitState {
     const sw: Side = rear;
     const front = recv;
 
-    // ── 帧域检查（评估「进入下一态」⇒ 严容差）───────────────────
-    const dm = checkDomains(rs, rs.state, sup, sw, true);
+    // ── 帧域检查：**两段式迟滞**（§3.7 规则 2）────────────────
+    //   strict（严容差 `tolIn`）⇒ 决定**能否进入下一态**；
+    //   loose （松容差 `tolOut`）⇒ 决定**是否还算保持得住**（不误触安全态）。
+    const dm = checkDomains(rs, true);
+    const dmLoose = checkDomains(rs, false);
 
     // ── 角速度（OSL `knee_vel` / EPFL `LP`）─────────────────────
     const swingKneeVel = (rs.jointVel(JIDX[sw].knee, 2) ?? 0) * DEG;
@@ -477,7 +492,7 @@ export class GaitState {
       rs, cfg, state: rs.state, sup, sw, front, rear, recv,
       touchdown, liftoff, swingKneeVel,
       clearance: rs.swingClearance, sinceStep: this.t - this.lastStepT,
-      domainBad: dm.bad, domainWorst: dm.worst,
+      domainBad: dm.bad, domainWorst: dm.worst, domainLooseBad: dmLoose.looseBad,
     };
 
     // ── 逐项验收 → `violations[]`（哪一项、当前值、门限）────────
@@ -492,6 +507,9 @@ export class GaitState {
       values[sp.item] = sp.val(ctx);
       if (!okv) {
         viol.push({ state: rs.state, item: sp.item, value: sp.val(ctx), tol: sp.tol(ctx) });
+        // ★ 硬项**只在松容差也越界**时才升级安全态：否则"刚好在严容差外一点"
+        //   就会每拍累积 graceSec 触发安全态 —— 那是误触发，不是降级。
+        if (sp.hard && sp.item.includes('帧域') && ctx.domainLooseBad === 0) continue;
         if (sp.hard) hardBad = true;
       }
     }
@@ -547,15 +565,19 @@ export class GaitState {
       this.event.note = `安全态：硬项越界 ${this.badT.toFixed(2)}s`
         + `（${viol.find((v) => v.item.includes('帧域') || v.item.includes('站姿'))?.item ?? viol[0]?.item ?? '?'}）`;
     } else if (rs.verified && dwellOk) {
+      // ★ 判据快照**必须在迁移前**抓取（此刻 `violations[]` 还是**旧状态**的）
+      const nViolAtMove = viol.length;
       rs.state = NEXT_STATE[rs.state];
       rs.stateT = 0;
+      rs.lastMove = { from: prev, to: rs.state, verified: rs.verified, nViol: nViolAtMove };
       this.event.kind = 'state_change';
-      this.event.note = `${prev} → ${rs.state}`;
+      this.event.note = `${prev} → ${rs.state}（验收 ${nViolAtMove === 0 ? '全过' : `${nViolAtMove} 项未过`}）`;
     } else if (rs.stateT > cfg.tmaxSec) {
       rs.state = 'DOUBLE'; rs.stateT = 0;
       rs.locked.l = false; rs.locked.r = false;
+      rs.lastMove = { from: prev, to: 'DOUBLE', verified: rs.verified, nViol: -1 };
       this.event.kind = 'state_change';
-      this.event.note = `${prev} 超时 ${cfg.tmaxSec}s ⇒ 回 DOUBLE`;
+      this.event.note = `${prev} 超时 ${cfg.tmaxSec}s ⇒ 回 DOUBLE（Tmax 兜底）`;
     }
     if (touchdown[sw]) {
       this.event.kind = 'touchdown'; this.event.side = sw; this.event.note = `触地并锁定 ${sw}`;
@@ -582,7 +604,7 @@ export class GaitState {
     const rs = this.rs;
     rs.loadBearer = null; rs.locked.l = false; rs.locked.r = false;
     rs.state = 'DOUBLE'; rs.stateT = 0; rs.authority = 0;
-    rs.verified = false; rs.violations = []; rs.safe = false;
+    rs.verified = false; rs.violations = []; rs.safe = false; rs.lastMove = null;
     rs.lastSwing = null; rs.cycleCount = 0;
   }
 }

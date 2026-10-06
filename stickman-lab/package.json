@@ -60,7 +60,9 @@
     "uipanel": "node tools/run-uipanel.mjs",
     "grf": "node tools/run.mjs probe-grf",
     "qp": "node tools/run.mjs probe-qp",
-    "readout": "node tools/run.mjs probe-readout"
+    "readout": "node tools/run.mjs probe-readout",
+    "probe:readback": "node tools/run.mjs probe-readback",
+    "probe:domain": "node tools/run.mjs probe-domain"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",
