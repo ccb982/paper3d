@@ -85,6 +85,8 @@ export interface StepParams {
    *   真的更好"的唯一判据，不能因为新方案更好就删掉旧路径。
    */
   useKeyFrame: boolean;
+  /** ★ "点到为止"的达标线（= 状态机同一个 `loadAcceptFrac` 的口径） */
+  loadAcceptFrac?: number;
 
   /**
    * ★ 消融通道名单（逗号分隔）。唯一被本系统消费的名字是 **`stepKeyframe`**
@@ -119,6 +121,7 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
   shiftFMax: 60,
   shiftRamp: 0.25,
   useKeyFrame: true,
+  loadAcceptFrac: 0.6,
 };
 
 /**
@@ -204,7 +207,15 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   用于确认前 0.1s 的泵是否由 `shiftDemandF`（→ balance 的髋外展 τ）引起。
   const NO_SHIFT = ['1', 'true', 'on'].includes(String(
     (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.NOSHIFT ?? '').toLowerCase());
-  if (!NO_SHIFT && (rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
+  // ★★★★★ 2026-10-06 **"点到为止"**（用户：「**重心转移就点到为止就行了**。
+  //   再优化各个状态下的关节驱动算法，我觉得可以**分段发力 + 检测，符合要求就停**」）
+  //   本系统是**离散动作原语**（发力 → 检测 → 达标 → 停），不是连续 PD：
+  //   转移的停止判据用**状态机同一个** `loadAcceptFrac`（承重达标线），不另立标准。
+  //   达标即把 `shiftDemandF` 归零 —— 而不是"一直追到 soleZ"（那会过冲）。
+  const recvSide: Side = rs.roleRecv ?? sup;
+  const recvLoad = recvSide === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
+  const transferDone = recvLoad >= (p.loadAcceptFrac ?? 0.6);
+  if (!NO_SHIFT && !transferDone && (rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     // 体重真源在 `sk.cfg.mass`（骨架唯一真源，`skeleton.ts:335`）

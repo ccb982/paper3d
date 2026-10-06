@@ -7377,7 +7377,24 @@ var init_skeleton = __esm({
       //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
       //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
       foot_l: [14, 10],
-      foot_r: [14, 10]
+      foot_r: [14, 10],
+      // ★★★★★ 2026-10-06 **脊柱补进表**（用户：「**一般人的脊柱也没这么大自由度啊，
+      //   什么人能脊柱转圈啊**」）：
+      //   此前这三根**不在表里** ⇒ 走的是兜底 `?? [20, 20]` —— **没有任何解剖依据**。
+      //   实测（`probe-yaw` 全开）`spine1/1` 扭转冲到 **−116°**（"脊柱转圈"的物理画面）。
+      //
+      //   人体腰椎的**轴转（Y）是全脊柱最小的自由度**：
+      //     · White & Panjabi《Clinical Biomechanics of the Spine》：腰椎每节轴转 ~2°
+      //       （小关节面朝向把旋转锁死；全腰椎合计 ~10~13°）；
+      //     · 侧屈（X）~20~30° 合计 ⇒ 每节 ~8~10°；
+      //     · 屈伸是主自由度（±25°/节，本 rig 的 `/2` 轴已有）。
+      //   ⇒ 取 **X=±12°、Y=±6°/节**（三节合计轴转 36°，仍偏宽松但已是解剖量级，
+      //     且比兜底的 20° 收紧 3.3 倍）。
+      //   ⚠ 与 §22.38 的"膝锁死反而崩"不同：脊柱的**侧屈/屈伸仍保留**，
+      //     只收**轴转**这一个解剖上本就最小的自由度。
+      spine1: [12, 6],
+      spine2: [12, 6],
+      spine3: [12, 6]
     };
     DEG = Math.PI / 180;
     AXES_PER_JOINT = 3;
@@ -23678,6 +23695,25 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     const cRoll = cRoll2;
     rs2.waist.bal.pitch = cPitch / D2R3;
     rs2.waist.bal.roll = cRoll / D2R3;
+    const kTw = (() => {
+      const raw = envB().TWISTD;
+      if (raw === void 0 || raw === "") return 20;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 8;
+    })();
+    if (kTw > 0 && doll) {
+      const jw2 = new Float64Array(3);
+      for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jw2);
+        const w = jw2[1];
+        const tauD = -kTw * w;
+        if (Math.abs(tauD) > 0.05) {
+          rs2.requestTorque(j, 1, tauD, "balance", "\u626D\u8F6C\xB7\u963B\u5C3C", true);
+        }
+      }
+    }
     if (on("fallResp") && rs2.fall.valid && rs2.fall.mode !== "normal") {
       const uWarn = p.fallWarnU ?? 0.35;
       const sE = clamp2((rs2.fall.urgency - uWarn) / Math.max(1e-6, 1 - uWarn), 1);
@@ -23764,9 +23800,9 @@ var init_balance = __esm({
     ).trim().toLowerCase());
     LATPLAN_MODE = (() => {
       const raw = String((globalThis.process?.env ?? {}).LATPLAN ?? "").trim().toLowerCase();
+      if (raw === "0" || raw === "off" || raw === "false") return 0;
       if (raw === "1") return 1;
-      if (raw === "2" || raw === "add") return 2;
-      return 0;
+      return 2;
     })();
     LATPLAN = LATPLAN_MODE > 0;
     _LATPLAN_OLD = ["1", "true", "on"].includes(String(
@@ -25143,9 +25179,15 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
     d.jointRot(j, jr);
     return jr[2] * DEG4;
   };
+  const a0 = (n) => {
+    const j = J(n);
+    if (j < 0) return Number.NaN;
+    d.jointRot(j, jr);
+    return jr[0] * DEG4;
+  };
   const supS = rs.supportLeg();
   const sIdx = supS === "l" ? 0 : 1;
   const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx] * 1e3 : Number.NaN;
   const ankT = d.tauApplied[J(supS === "l" ? "foot_l" : "foot_r") * 3 + 2] ?? 0;
-  console.log(`   ${t.toFixed(2).padStart(5)} ${rs.state.slice(0, 4)} | \u77E2\u72B6: spine1/2=${f(a2("spine1"))} spine2/2=${f(a2("spine2"))} spine3/2=${f(a2("spine3"))} \u53D1\u5E03pitch=${f(w.out.pitch)} bal\u4FEE\u6B63=${f(w.bal.pitch)} | \u652F\u6491${supS}\u8E1D: CoPx=${f(copX)} \u03C4=${f(ankT)} | CoM.x=${f(rs.com.x * 1e3)} vx=${f(rs.com.vx * 1e3)} \u8EAF\u5E72pitch=${f(rs.pitchDeg)} \u6298\u89D2=${f(rs.waistFoldDeg)}`);
+  console.log(`   ${t.toFixed(2).padStart(5)} ${rs.state.slice(0, 4)} | \u77E2\u72B6: ${f(a2("spine1"))}${f(a2("spine2"))}${f(a2("spine3"))} pit=${f(w.out.pitch)}/${f(w.bal.pitch)} | \u4FA7: ${f(a0("spine1"))}${f(a0("spine2"))}${f(a0("spine3"))} rol=${f(w.out.roll)}/${f(w.bal.roll)} \u9AA8\u76C6rol=${f(rs.rollDeg)} | \u652F\u6491${supS}\u8E1D: CoPx=${f(copX)} \u03C4=${f(ankT)} | CoM.x=${f(rs.com.x * 1e3)} vx=${f(rs.com.vx * 1e3)} \u8EAF\u5E72pitch=${f(rs.pitchDeg)} \u6298\u89D2=${f(rs.waistFoldDeg)}`);
 }

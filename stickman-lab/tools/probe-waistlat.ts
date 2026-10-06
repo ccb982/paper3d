@@ -54,13 +54,14 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const f = (v: number): string => (Number.isFinite(v) ? v.toFixed(1) : '—').padStart(6);
   // 矢状列（axis 2）：腰链角 + 发布 pitch + 修正 pitch；支撑踝的 CoP/τ
   const a2 = (n: string): number => { const j = J(n); if (j < 0) return Number.NaN; d.jointRot(j, jr); return jr[2]! * DEG; };
+  const a0 = (n: string): number => { const j = J(n); if (j < 0) return Number.NaN; d.jointRot(j, jr); return jr[0]! * DEG; };
   const supS = rs.supportLeg();
   const sIdx: 0 | 1 = supS === 'l' ? 0 : 1;
   const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx]! * 1000 : Number.NaN;
   const ankT = d.tauApplied[J(supS === 'l' ? 'foot_l' : 'foot_r')! * 3 + 2] ?? 0;
   console.log(`   ${t.toFixed(2).padStart(5)} ${rs.state.slice(0, 4)}`
-    + ` | 矢状: spine1/2=${f(a2('spine1'))} spine2/2=${f(a2('spine2'))} spine3/2=${f(a2('spine3'))}`
-    + ` 发布pitch=${f(w.out.pitch)} bal修正=${f(w.bal.pitch)}`
+    + ` | 矢状: ${f(a2('spine1'))}${f(a2('spine2'))}${f(a2('spine3'))} pit=${f(w.out.pitch)}/${f(w.bal.pitch)}`
+    + ` | 侧: ${f(a0('spine1'))}${f(a0('spine2'))}${f(a0('spine3'))} rol=${f(w.out.roll)}/${f(w.bal.roll)} 骨盆rol=${f(rs.rollDeg)}`
     + ` | 支撑${supS}踝: CoPx=${f(copX)} τ=${f(ankT)}`
     + ` | CoM.x=${f(rs.com.x * 1000)} vx=${f(rs.com.vx * 1000)} 躯干pitch=${f(rs.pitchDeg)} 折角=${f(rs.waistFoldDeg)}`);
 }

@@ -79,5 +79,8 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   log(`   ${t.toFixed(3)} ${rs.state === 'DOUBLE' ? 'DBL ' : rs.state.slice(0, 4)} ${mm(rs.com.x)} ${mm(rs.com.vx)} ${mm(xi)} ${mm(copX)} ${mm(copX - xi)}`
     + ` |${f1(fl.fz)} ${mm(fl.copX)} ${f1(fl.fx)} |${f1(fr.fz)} ${mm(fr.copX)} ${f1(fr.fx)}`
     + ` | ${f1(tau)} ${f1(jr[2]! * 57.2958)}° b${br} | ${f1(tauNeed)}   sup=${supS}`
+    + ` | 侧: CoMz=${mm(rs.com.z)} vz=${mm(rs.com.vz)} CoPzL=${mm(fl.copZ)} CoPzR=${mm(fr.copZ)} 骨盆roll=${f1(rs.rollDeg)}`
+    + ` | 转移: F=${f1(rs.shiftDemandF)} 侧=${String(rs.shiftDriveSide ?? '-')} 髋τ=${f1(rs.hipLatTau)}`
+    + ` 内外L=${f1(fl.colIn)}/${f1(fl.colOut)} R=${f1(fr.colIn)}/${f1(fr.colOut)}`
     + ` | 计划 need=${mm(plan.needX)} over=${mm(plan.overX)} err=${mm(plan.errX)} k=${plan.kX.toFixed(2)} 可救=${plan.actionability.toFixed(2)}${plan.fallNeeded ? '★落足' : ''} ${plan.region}`);
 }

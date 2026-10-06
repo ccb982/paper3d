@@ -24425,7 +24425,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const NO_SHIFT = ["1", "true", "on"].includes(String(
     globalThis.process?.env?.NOSHIFT ?? ""
   ).toLowerCase());
-  if (!NO_SHIFT && (rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
+  const recvSide = rs.roleRecv ?? sup;
+  const recvLoad = recvSide === "l" ? rs.loadFrac.l : rs.loadFrac.r;
+  const transferDone = recvLoad >= (p.loadAcceptFrac ?? 0.6);
+  if (!NO_SHIFT && !transferDone && (rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
@@ -24561,7 +24564,8 @@ var init_step = __esm({
       shiftZeta: 1,
       shiftFMax: 60,
       shiftRamp: 0.25,
-      useKeyFrame: true
+      useKeyFrame: true,
+      loadAcceptFrac: 0.6
     };
   }
 });
