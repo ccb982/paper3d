@@ -1,0 +1,211 @@
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * ③  gaitState.ts —— **显式状态机 + 交换协议**
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * 状态机**唯一**决定：现在处于哪一相、哪条腿承重、哪条腿锁着、
+ * 迈步系统能不能抬腿、以及腰的修正权限 α(t)。
+ * 两个系统都**并发**读它，但**不自己决定**这些事。
+ *
+ * ── 用户描述的序列（一一对应）────────────────────────────────
+ *   "迈腿后需要让前腿变为支撑腿，等重心转移到前腿后，身体平衡保持住了，再迈后腿"
+ *
+ *     STEP ──触地──► SHIFT ──承重判据达标──► SINGLE ──稳定窗口──► STEP(下一条腿)
+ *
+ * ── 承重腿 ≠ 锁定腿（两个独立字段）──────────────────────────
+ *   承重：达标才授予（B1..B4）。锁定：触地瞬间无条件获得。
+ *
+ * ── 参数全部来自文献（重构方案 §7.3 / §7.4）───────────────────
+ */
+
+import { RigState, makeCriteria, type Phase, type Side } from './rigState';
+import { PHASE_TO_GAIT, KEY_POSES, stanceWidthRatio, supportEntry } from './keyframe';
+
+export interface GaitConfig {
+  /** B2 承重判据：载荷占比阈值 */
+  bearerLoad: number;
+  /** B2 迟滞（避免在阈值附近抖动） */
+  bearerLoadHyst: number;
+  /** B3 承重判据：MoS 下限（m） */
+  bearerMosMin: number;
+  /** B4 承重判据：连续满足时长（s）。抗抖 */
+  bearerHoldSec: number;
+  /** U2 解锁判据：MoS 连续 ≥ 下限的时长（s） */
+  unlockMosHoldSec: number;
+  /** U3 解锁判据：躯干倾角上限（deg） */
+  unlockTiltMaxDeg: number;
+  /** P3 迈步许可：支撑腿 MoS 下限（m） */
+  permitMosMin: number;
+  /**
+   * ★★ 迈步**间隔**（s）：两次抬腿起点的最小间隔（用户 2026-10-03：
+   *   「增长迈步的间隔，每次迈步间隔 1s 左右，要有足够时间调整平衡」）。
+   *   这是**节奏**约束，与"重心是否移到位"（判据）正交 —— 判据管*能不能*，
+   *   间隔管*多久一次*。间隔给足，平衡系统才有时间把重心稳在前脚上。
+   */
+  stepIntervalSec: number;
+  /** 交接驻留：重心已在**前脚**上连续满足多久才算交接（s） */
+  handoverDwellSec: number;
+  /** DOUBLE（交接阶段）最短停留：给平衡系统把重心搬过去的时间（s） */
+  handoverMinSec: number;
+  /** SHIFT 超时回 DOUBLE（s） */
+  handoverTimeoutSec: number;
+  /** SINGLE 单支撑驻留（s）：用户「要有足够时间调整平衡」 */
+  singleDwellSec: number;
+  /** PUSH 超时回 DOUBLE（s）。**不能回 SINGLE**，否则与 SINGLE→PUSH 死循环 */
+  pushTimeoutSec: number;
+  /** STEP 超时回 DOUBLE（s） */
+  stepTimeoutSec: number;
+  /** 重心矢状允许的超出量（m）：`comOverFootX ≤ 0` 即"已在前脚上" */
+  handoverTolX: number;
+  /** 重心额状允许的偏移（m） */
+  handoverTolZ: number;
+  /** P4 迈步许可：双支撑相最小剩余时长（s） */
+  permitDoubleSupportSec: number;
+  /** α(t) 的软化宽度（相进度占比）。见 HugWBC arXiv:2502.03206 Eq.5 */
+  alphaSigma: number;
+  /** 单腿模式：强制支撑腿（不换脚）；null = 正常交替 */
+  /**
+   * ★ 起始支撑腿（只影响 t=0 时哪条腿算前腿）。**不是模式开关**。
+   *   历史实现把它当"单腿模式"用（有一条旁路直接跳 SINGLE），于是相位机之外
+   *   又有一套"单腿"概念。用户只有一个概念：**相位机**。
+   */
+  startBearer: Side;
+  /** 单腿模式下摆动腿保持高度（m） */
+  liftHold: number;
+}
+
+/**
+ * ★ 迈步间隔与交接判据的默认值。
+ *   `1.0` s 来自用户定调：「增长迈步的间隔，每次迈步间隔 1s 左右，
+ *   要有足够时间调整平衡」——这是**节奏**约束，与位置判据正交。
+ */
+const DEFAULT_STEP_INTERVAL = 1.0;
+/**
+ * ★★ **步态周期的唯一真源**（收敛点：控制路径与 ES 路径共用）
+ *
+ * 这个数此前被写了**三遍**且互不相干：
+ *   · `commander.stepPeriod = 1.6`      —— ES 路径的**节拍目标**
+ *   · `stability.TARGET_CYCLE = 1.0`   —— 奖励的节拍项目标
+ *   · `gaitState.stepIntervalSec = 1.0` —— 控制路径的**间隔下限**（`X6: >=`）
+ *
+ * ⚠ 注意后两者**角色不同、不是重复**：
+ *   · 「下限」= 至少隔这么久才允许换腿（安全约束）
+ *   · 「节拍目标」= 打算多久换一次（性能/风格）
+ *   ⇒ 所以正确做法是**一个真源 + 显式的不变式 `下限 ≤ 目标`**，
+ *     而不是把三个数强行改成一样（那会让 ES 的节拍被安全下限绑住）。
+ *
+ * 取 1.6 的依据：它是 ES 路径**实测能走**的值（腿令 1.2s + 腰令 0.4s，
+ * 左腿起点→右腿起点 = 1.6s）。1.0 是用户的下限要求。
+ */
+export const STEP_CYCLE_SEC = 1.6;
+const DEFAULT_HANDOVER_DWELL = 0.30;
+const DEFAULT_HANDOVER_TOL_X = 0.02;
+const DEFAULT_HANDOVER_TOL_Z = 0.05;
+
+export const DEFAULT_GAIT_CONFIG: GaitConfig = {
+  bearerLoad: 0.60,
+  bearerLoadHyst: 0.45,
+  bearerMosMin: 0.0,
+  bearerHoldSec: 0.08,
+  unlockMosHoldSec: 0.12,
+  unlockTiltMaxDeg: 20,
+  permitMosMin: 0.0,
+  permitDoubleSupportSec: 0.05,
+  // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+  //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+  //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
+  stepIntervalSec: DEFAULT_STEP_INTERVAL,
+  handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+  handoverTolX: DEFAULT_HANDOVER_TOL_X,
+  handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+  // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+  handoverMinSec: 0.40,
+  handoverTimeoutSec: 2.0,
+  singleDwellSec: 0.50,
+  pushTimeoutSec: 0.60,
+  stepTimeoutSec: 1.60,
+  alphaSigma: 0.08,
+  startBearer: 'l',
+  liftHold: 0.25,
+};
+
+const PHASE_ORDER: Phase[] = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'];
+
+/**
+ * ★★★ **控制相位 ⇄ 计分相位的映射表**（两台状态机之间的收敛点）
+ *
+ * 用户 2026-10-04：「控制和计分的状态机可以分开，但是还得做到收敛。」
+ *
+ * 两台机器**必须分开**（触发条件根本不同）：
+ *   · 控制相位（`gaitState`，本文件）：由 `X1..X8` 判据驱动 —— 重心是否
+ *     到前腿、间隔是否满 1s、MoS、倾角。**回答"哪条腿现在可以抬"**。
+ *   · 计分相位（`gaitPhase.GaitPhaseMachine`，ES 路径）：由接触数 `nGround`
+ *     与离地净空驱动。**回答"这一项奖励现在该不该给分"**。
+ *   把它们合并会让"能不能抬腿"被"离地够不够高"绑死 —— 概念错误。
+ *
+ * 但两者的**词汇**必须收敛，否则同一个物理时刻在两处被描述成两个词，
+ * 于是"为什么 UI 说 A 而计分说 B"无法推断。
+ *
+ * 语义对齐（依据 `gaitPhase.ts:153`/`:174` 的实测注释）：
+ *   计分 `step`   = **单支撑**（`nGround === 1`）
+ *   计分 `adjust` = **双脚支撑**（`nGround === 2`）
+ *   控制侧：`SINGLE`/`PUSH`/`STEP` 全是单支撑；`DOUBLE`/`SHIFT` 全是双脚
+ *   （`SHIFT` 是双脚支撑期内的重心搬运，脚还没离地）。
+ */
+export const PHASE_TO_SCORING: Readonly<Record<Phase, 'both' | 'step' | 'adjust'>> = Object.freeze({
+  DOUBLE: 'adjust',
+  SHIFT: 'adjust',
+  SINGLE: 'step',
+  PUSH: 'step',
+  STEP: 'step',
+});
+
+/**
+ * 反向：计分相位 ⇒ 属于哪一类支撑（`'single' | 'double'`）。
+ * 计分机只有三相、没有 SHIFT/PUSH 这些细节，所以反向是多对一。
+ */
+export const SCORING_TO_STANCE: Readonly<Record<'both' | 'step' | 'adjust', 'single' | 'double'>> =
+  Object.freeze({ both: 'double', step: 'single', adjust: 'double' });
+
+/** 分类：某个控制相位是单支撑还是双脚支撑。**门禁用它断言与映射表一致。 */
+export function phaseStance(p: Phase): 'single' | 'double' {
+  return SCORING_TO_STANCE[PHASE_TO_SCORING[p]];
+}
+/**
+ * 相位标签表。**导出**给 `ui/hud.ts` 与 `tools/probe-uipanel.ts` 引用。
+ *
+ * ⚠ 这里曾有**两份**定义：本文件一份（`const`，不导出）、`hud.ts` 一份（`export`）。
+ *   `hud.ts` 的注释说"探针曾自己复制了一份漏了 PUSH，所以导出给探针共用" ——
+ *   也就是说**探针那份副本被修掉了，本文件这份原始副本却留了下来**，
+ *   于是"同一事实两处定义"从探针搬到了 UI 与状态机之间。
+ *   ⇒ 现在真源唯一：`hud.ts` 反向引用本文件，不再自带一份。
+ */
+export const PHASE_LABEL: Record<Phase, string> = {
+  DOUBLE: '双脚支撑', SHIFT: '重心转移', SINGLE: '单支撑', PUSH: '蹬离', STEP: '摆动相',
+};
+
+/** 正常正态 CDF（HugWBC 的平滑接触概率用它） */
+function cdf(x: number): number {
+  // Abramowitz-Stegun 7.1.26 近似，|ε| < 7.5e-8
+  const s = x < 0 ? -1 : 1;
+  const z = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * z);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
+  return 0.5 * (1 + s * y);
+}
+
+/**
+ * ★ 平滑的权限调度 α(t)。
+ *   依据：HugWBC 用正态 CDF 把"接触/摆动"的硬阈值变成 ±3σ 区间，
+ *   以得到连续的切换；本函数把同样的手法用在**权限预算**上。
+ *   进入 STEP 时 α 从 0 升到 1，用 3/2 斜坡在前 ⅓ 完成（Lee et al. / HugWBC）。
+ */
+export function smoothAuthority(phase: Phase, phaseT: number, ramp: number, sigma: number): number {
+  if (phase !== 'STEP') return 0;
+  // 前 1/3 区间用 3/2 斜坡（不是线性也不是硬切），保证 dq̇/dt 连续
+  const p = Math.max(0, Math.min(1, phaseT / Math.max(1e-6, ramp)));
+  const ramped = Math.min(1, 1.5 * p);
+  // 再用 CDF 软化边界，避免相位抖动导致 α 抖
+  return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
+}
+

@@ -494,8 +494,9 @@ export class Sim {
   private get gaitPhase(): 'both' | 'step' | 'adjust' {
     const rs = this.rig;
     if (!rs) return 'both';
-    if (rs.phase === 'STEP') return 'step';
-    if (rs.phase === 'SINGLE' || rs.phase === 'SHIFT' || rs.phase === 'PUSH') return 'adjust';
+    // ★ 2026-10-06 状态改名后同步：单支撑 = `LIFT`/`SWING`；双脚 = 其余三态
+    if (rs.state === 'LIFT' || rs.state === 'SWING') return 'step';
+    return 'adjust';
     return 'both';
   }
   /** 摆动腿（唯一来源 = `gaitState`）；无 `RigState` 时退回几何判据 */
@@ -1270,7 +1271,7 @@ export class Sim {
         }
         // 循环信用：**每次进入调整相且站住了**记一次（原 `gp.tally.lastCredit` 的语义）
         const rs5 = this.rig;
-        if (rs5 && rs5.phase === 'SINGLE' && !this.gpPaidThisStep) {
+        if (rs5 && rs5.state === 'LIFT' && !this.gpPaidThisStep) {
           if (mosHere >= 0) { this.accCycle += 1; this.cycleN++; }
           this.gpPaidThisStep = true;
         }

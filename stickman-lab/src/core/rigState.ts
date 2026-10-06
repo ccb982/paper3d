@@ -26,9 +26,30 @@ import { KEY_POSES, type GaitKey, type KeyPose } from './keyframe';
 // ─────────────────────────────────────────────────── 身份
 
 export type Side = 'l' | 'r';
-/** 四相状态机（交换协议见 gaitState.ts） */
-/** 四相 + 蹬离（`PUSH`）—— 见重构方案 §13.5：蹬离是前进的唯一来源 */
-export type Phase = 'DOUBLE' | 'SHIFT' | 'SINGLE' | 'PUSH' | 'STEP';
+/**
+ * ★★★ **步态状态机的 5 个状态（固定环）** —— `架构_v2_三模块协作.md` §3
+ *
+ *   环：`DOUBLE → LOAD → PUSH → LIFT → SWING → DOUBLE`（一个完整迈步周期 = 一圈）
+ *
+ *   命名依据（文献，详见文档 §3.4）：
+ *     · `LOAD`  = **重量交接**（SCONE `EarlyStance` / EPFL `MS`，由**对侧趾离**触发）
+ *       —— 这是抬腿的**资格前提**（用户 2026-10-06：「迈步前需要先让重量转移到后脚」）
+ *     · `PUSH`  = 蹬离（SCONE `LateStance` / EPFL `PS`）
+ *     · `LIFT`  = 摆动腿离地、进入单支撑（SCONE `LiftOff`，判据 = 该腿载荷 < 阈值）
+ *     · `SWING` = 摆动到落地（SCONE `Swing`→`Landing` / EPFL `IS`+`LP`）
+ *
+ *   ⚠ 迁移**只**由验收驱动（四篇实现一致），**没有计时器推进相位**；
+ *     最短驻留只是防抖（OSL `min_time_in_state`）。
+ */
+export type WalkState = 'DOUBLE' | 'LOAD' | 'PUSH' | 'LIFT' | 'SWING';
+/** 固定环的下一状态（**唯一真源**，不许散落字面量） */
+export const NEXT_STATE: Readonly<Record<WalkState, WalkState>> = Object.freeze({
+  DOUBLE: 'LOAD', LOAD: 'PUSH', PUSH: 'LIFT', LIFT: 'SWING', SWING: 'DOUBLE',
+});
+/** 旧名 → 新名（迁移对照，见文档 §3.2；保留只为读旧日志/旧探针） */
+export const LEGACY_STATE_ALIAS: Readonly<Record<string, WalkState>> = Object.freeze({
+  DOUBLE: 'DOUBLE', SHIFT: 'LOAD', SINGLE: 'LIFT', PUSH: 'PUSH', STEP: 'SWING',
+});
 
 /** 两套系统的标识 */
 export type SystemId = 'balance' | 'step';
@@ -51,6 +72,26 @@ export interface Criteria {
   /** 逐条数值 */
   values: Record<string, number>;
   all: boolean;
+}
+
+/**
+ * ★ 一条**验收未通过**的明细（`rs.violations[]` 的元素）。
+ *
+ *   为什么要有「差多少」而不是只有一个 bool：
+ *   旧判据 `comOverFootZ ≤ 50mm` 失败时只给一个 false，而那个量
+ *   实测**永不收敛**（243mm，且 `soleZ` 本身随姿态移动）
+ *   ⇒ 看门禁只能知道"卡住了"，没法知道"差哪一项、差多少"。
+ *   ⇒ 每一项都必须能单独回答：**哪一项、当前值、门限**。
+ */
+export interface StateViolation {
+  /** 所属状态（`rs.state`） */
+  state: WalkState;
+  /** 项名（与 `Criteria.flags` 的键同名，便于 UI 对齐） */
+  item: string;
+  /** 当前值（物理量，单位见项名） */
+  value: number;
+  /** 门限（与 `value` 同单位） */
+  tol: number;
 }
 
 // ─────────────────────────────────────────────────── 需求与仲裁
@@ -149,8 +190,20 @@ export interface RigSnapshot {
   /** 拍号（单调递增，用于判断快照新鲜度） */
   tick: number;
   t: number;
-  phase: Phase;
-  phaseT: number;
+  /** ★ 当前状态（5 态固定环）。**只由 `gaitState` 写**。 */
+  state: WalkState;
+  /** 本状态已停留时间（**只用于防抖与 `Tmax`**，不参与推进） */
+  stateT: number;
+  /** 本拍验收是否通过（=「可以进下一个状态」） */
+  verified: boolean;
+  /** 逐项验收未通过的明细（哪一项、当前值、门限）。空数组 = 全过 */
+  violations: StateViolation[];
+  /** 安全态（Vughuma 2022）：硬项连续越界 ⇒ 迈步停手、平衡全权 */
+  safe: boolean;
+  /** 上一周期的摆动腿（手性不变式用） */
+  lastSwing: Side | null;
+  /** 已完成的迈步周期数 */
+  cycleCount: number;
   loadBearer: Side | null;
   supportLeg: Side;
   swingLeg: Side;
@@ -387,9 +440,23 @@ export class RigState {
   /** 上一拍的前腿（并齐时保持用，避免与 loadBearer 循环依赖，见 frontLeg） */
   frontPrev: Side | null = null;
   readonly locked: { l: boolean; r: boolean } = { l: false, r: false };
-  phase: Phase = 'DOUBLE';
-  phaseT = 0;
+  /** ★ 当前状态（5 态固定环）。**只由 `gaitState` 写**。 */
+  state: WalkState = 'DOUBLE';
+  /** 本状态已停留时间（**只用于防抖与 `Tmax`**，不参与推进） */
+  stateT = 0;
   authority = 0;
+
+  // ── 验收输出（状态机的全部输出，见文档 §7「穷举就这 6 项」）────────
+  /** 本拍验收是否通过（=「可以进下一个状态」） */
+  verified = false;
+  /** 逐项验收明细：哪一项没过、差多少、门限多少。**空数组 = 全过**。 */
+  violations: StateViolation[] = [];
+  /** 安全态（Vughuma 2022：每个正常态派生安全态 + `Tmax`） */
+  safe = false;
+  /** 上一周期摆动腿 —— 手性不变式：连续两周期的摆动腿必须不同 */
+  lastSwing: Side | null = null;
+  /** 已完成的迈步周期数（每绕环一圈 +1；门禁用它确认 5 态都被走过） */
+  cycleCount = 0;
 
   // ── 读数（每拍从物理回读一次，两系统共享）
   readonly pos: Float64Array;
@@ -790,6 +857,32 @@ export class RigState {
     return Math.abs(this.com.z - this.soleZ[side]);
   }
   isLocked(s: Side): boolean { return this.locked[s]; }
+
+  /**
+   * ★★ **足相对身体的矢状位置**（SCONE `GaitStateController.sagittal_pos`，无量纲）。
+   *
+   *   `sagPosRel(side) = (footX[side] − com.x) / legLen`，`legLen = com.y − soleY`
+   *   （腿长用 CoM 高出该脚足底的高度量，与 SCONE 的「以腿长为单位」同口径）。
+   *
+   *   **为什么用它取代 `comOverFootX` 做迁移判据**（文献依据）：
+   *     · SCONE 的 `Landing/EarlyStance/LateStance/LiftOff/Swing` **全部**用
+   *       「相对腿长的矢状足位置」阈值 + 足载阈值，**没有一个用重心位置**；
+   *     · 重心位置会**自己推着自己走**：`comOverFootX` 里减的 `footX` 来自
+   *       支撑脚，而支撑脚是控制器自己在推的量 ⇒ 实测永不收敛
+   *       （额状 243mm，矢状同理），状态机因此卡死在 `DOUBLE`。
+   *   ⇒ 判据必须是**独立于自身动作**的量：足的位置 + 脚的载荷。
+   *
+   *   正号 = 该脚在重心**前方**；负号 = 在重心后方。
+   */
+  sagPosRel(side: Side): number {
+    const legLen = Math.max(0.2, this.com.y - (this.soleY[side] ?? 0));
+    return ((this.soleX[side] ?? 0) - this.com.x) / legLen;
+  }
+  /** 腿长（用于把矢状距离归一化），与 `sagPosRel` 同一口径 */
+  legLength(): number {
+    const s = this.supportLeg();
+    return Math.max(0.2, this.com.y - (this.soleY[s] ?? 0));
+  }
 
   jointPos(joint: number, axis: number): number { return this.pos[joint * 3 + axis] ?? 0; }
   /** 按真实索引取角（重构后的内部统一用这个；名字查询只用于外部配置） */
@@ -1215,7 +1308,9 @@ export class RigState {
     }
     return {
       tick: this.tickNo, t: this.tSec,
-      phase: this.phase, phaseT: this.phaseT,
+      state: this.state, stateT: this.stateT,
+      verified: this.verified, violations: this.violations.map((v) => ({ ...v })),
+      safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

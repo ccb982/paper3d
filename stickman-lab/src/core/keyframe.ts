@@ -38,7 +38,7 @@
  *     ±5~10° 的**代偿**（Mann 1975），不再当主执行器。
  */
 
-import type { Side } from './rigState';
+import type { WalkState, Side } from './rigState';
 
 /** 步态相（Perry 8 相）。与 `Phase` 的映射在 `PHASE_TO_GAIT` 里显式给出。 */
 export type GaitKey =
@@ -157,15 +157,109 @@ export const KEY_POSES: Readonly<Record<GaitKey, KeyPose>> = Object.freeze({
   },
 });
 
-/** 本 rig 的 `Phase` → Perry 关键帧。**唯一映射表**，不许散落字面量。 */
-export const PHASE_TO_GAIT: Readonly<Record<string, GaitKey>> = Object.freeze({
-  // DOUBLE/SHIFT = 双支撑的前后两段 + 交接
+/** 本 rig 的 `GaitState` → Perry 关键帧。**唯一映射表**，不许散落字面量。 */
+export const STATE_TO_GAIT: Readonly<Record<WalkState, GaitKey>> = Object.freeze({
   DOUBLE: 'MSt',
-  SHIFT: 'LR',
-  SINGLE: 'MSt',
-  PUSH: 'PSw',
-  STEP: 'ISw',
+  LOAD: 'LR',
+  PUSH: 'TSt',
+  LIFT: 'ISw',
+  SWING: 'MSw',
 });
+
+/** 兼容别名（旧名 `PHASE_TO_GAIT` 已于 2026-10-06 改名，见文档 §3.5） */
+export const PHASE_TO_GAIT = STATE_TO_GAIT;
+
+// ══════════════════════════════════════════════════════════════════
+// ★★★ **帧域表（STATE_DOMAINS）—— 状态 → 该状态「该有的姿态」区间**
+// ══════════════════════════════════════════════════════════════════
+//
+//  状态机**不下发任何目标**（用户 2026-10-06：「状态机不需要每拍给目标」）。
+//  每个状态该有的姿态写在这张**常量**表里，两个系统按状态名**自己查**（只读）。
+//
+//  为什么是**区间**而不是点：Perry / Oberg 的规范值本身就是区间
+//  （中支撑膝 男 15~24°、女 12~20°；摆动膝峰 65~68°；髋总程随步速变化）
+//  ⇒ 控制律必须是「往区间里推」而不是「追一个点」。
+//
+//  为什么有 `tolIn` / `tolOut` 两个容差：两段式迟滞（Rezazadeh 2018 的 FSM
+//  就是 `q > q₄₁` 进 S2、`q < q₄₃` 回 S1）。没有它，接触噪声会让状态逐帧抖。
+//
+//  ⚠ 角度单位一律 **deg**，符号沿用 `KeyPose`：髋/膝**正 = 屈**，踝**正 = 跖屈**。
+export interface StateDomain {
+  state: WalkState;
+  /** 这条帧域约束的是哪条腿 */
+  leg: 'support' | 'swing' | 'trunk';
+  axis: 'hipFlex' | 'hipAbd' | 'kneeFlex' | 'ankle' | 'trunkPitch' | 'trunkLat';
+  /** 闭区间下界（deg） */
+  lo: number;
+  /** 闭区间上界（deg） */
+  hi: number;
+  /** 进入该状态时的容差（deg，严） */
+  tolIn: number;
+  /** 保持该状态时的容差（deg，松） */
+  tolOut: number;
+  /** true = 越界算异常（连续超时会进 `SAFE`） */
+  hard: boolean;
+}
+
+const D2R_ = Math.PI / 180;
+/** 便捷构造：`d(lo, hi, tolIn = 8, tolOut = 16, hard = true)` */
+function dg(lo: number, hi: number, tolIn = 8, tolOut = 16, hard = true): StateDomain {
+  return { state: 'DOUBLE', leg: 'support', axis: 'hipFlex', lo, hi, tolIn, tolOut, hard };
+}
+
+/**
+ * ★ 唯一真源。5 个状态 × (承重腿 / 摆动腿 / 躯干) 的可接受姿态区间。
+ *   取值来自 Perry 8 相与 Oberg 2002（见文档 §3.6 的对照表）。
+ */
+export const STATE_DOMAINS: readonly StateDomain[] = Object.freeze([
+  // ── DOUBLE：双脚稳定站立（= 安静站立姿态，Perry：MSt 附近接近静态站姿）
+  { state: 'DOUBLE', leg: 'support', axis: 'hipFlex', lo: -10, hi: 5, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'DOUBLE', leg: 'support', axis: 'kneeFlex', lo: 0, hi: 12, tolIn: 8, tolOut: 16, hard: true },
+  { state: 'DOUBLE', leg: 'support', axis: 'ankle', lo: -8, hi: 4, tolIn: 8, tolOut: 16, hard: true },
+  { state: 'DOUBLE', leg: 'trunk', axis: 'trunkPitch', lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
+  { state: 'DOUBLE', leg: 'trunk', axis: 'trunkLat', lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
+
+  // ── LOAD：重量交接。**被卸载腿不许塌**（它还要留下来承重）
+  { state: 'LOAD', leg: 'support', axis: 'hipFlex', lo: -10, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+  { state: 'LOAD', leg: 'support', axis: 'kneeFlex', lo: 0, hi: 20, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'LOAD', leg: 'support', axis: 'ankle', lo: -8, hi: 18, tolIn: 12, tolOut: 22, hard: true },
+  { state: 'LOAD', leg: 'trunk', axis: 'trunkLat', lo: -6, hi: 6, tolIn: 8, tolOut: 16, hard: false },
+
+  // ── PUSH：蹬离（Perry TSt→PSw：踝跖屈峰、膝伸、髋伸）
+  { state: 'PUSH', leg: 'support', axis: 'ankle', lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'PUSH', leg: 'support', axis: 'kneeFlex', lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'PUSH', leg: 'support', axis: 'hipFlex', lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+
+  // ── LIFT：摆动腿离地、建立单支撑（承重腿 = 静态站立姿态）
+  { state: 'LIFT', leg: 'support', axis: 'kneeFlex', lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'LIFT', leg: 'support', axis: 'ankle', lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'LIFT', leg: 'support', axis: 'hipFlex', lo: -12, hi: 5, tolIn: 12, tolOut: 22, hard: true },
+  // 摆动腿：离地瞬间（PSw→ISw：膝快速屈曲）
+  { state: 'LIFT', leg: 'swing', axis: 'kneeFlex', lo: 20, hi: 62, tolIn: 14, tolOut: 26, hard: false },
+  { state: 'LIFT', leg: 'swing', axis: 'ankle', lo: -12, hi: 20, tolIn: 14, tolOut: 26, hard: false },
+
+  // ── SWING：摆动到落地（Perry MSw→TSw：膝峰后落回、髋保持 25°）
+  { state: 'SWING', leg: 'support', axis: 'kneeFlex', lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'SWING', leg: 'support', axis: 'ankle', lo: -10, hi: 6, tolIn: 10, tolOut: 20, hard: true },
+  { state: 'SWING', leg: 'swing', axis: 'kneeFlex', lo: 0, hi: 40, tolIn: 14, tolOut: 26, hard: false },
+  { state: 'SWING', leg: 'swing', axis: 'hipFlex', lo: 18, hi: 32, tolIn: 12, tolOut: 24, hard: false },
+]);
+
+/** 取某状态对某腿/轴的帧域项。找不到 = 该组合**不受约束**（不是错误）。 */
+export function stateDomain(
+  state: WalkState, leg: StateDomain['leg'], axis: StateDomain['axis'],
+): StateDomain | undefined {
+  return STATE_DOMAINS.find((d) => d.state === state && d.leg === leg && d.axis === axis);
+}
+/** 取某状态的全部帧域项（`leg = null` 表示不筛腿） */
+export function stateDomains(state: WalkState, leg?: StateDomain['leg']): StateDomain[] {
+  return STATE_DOMAINS.filter((d) => d.state === state && (leg === undefined || d.leg === leg));
+}
+/** 帧域项 → 该状态允许的**进入**区间（区间外扩 `tolIn`，deg→rad 的换算留给调用方） */
+export function entryBand(d: StateDomain): [number, number] {
+  return [d.lo - d.tolIn, d.hi + d.tolIn];
+}
+export { D2R_ as D2R_KEYFRAME };
 
 /** 取某相的关键帧姿态（带侧别无关的默认值）。 */
 export function keyPose(key: GaitKey): KeyPose { return KEY_POSES[key]; }

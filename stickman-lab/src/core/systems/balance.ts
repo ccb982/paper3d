@@ -46,42 +46,76 @@ import type { RigState, Side } from '../rigState';
 //   ③ 「平衡全消融」仍发出 τ[hip/1]=29 N·m ⇒ **消融工具本身在说谎**，
 //      当时所有"是哪一条在搞破坏"的判断都不可信。
 //
-//  规则（由 `tools/probe-axisown.ts` 门禁强制）：
-//   · 每个 (关节, 轴) 在表里**恰好一行**；
-//   · `mode` 决定该轴走**位置伺服**还是**力矩通道**，二者**互斥**；
-//   · 一个轴上出现第二个不同模式的请求 = **冲突**，
-//     `rigState` 会拒收并计入 `axisConflicts`（不是静默吞掉）。
+//  ★★★ 2026-10-06 表的**模型换了**（之前那版 `subordinateTo` 是错的模型）
+//
+//  旧模型：每根轴**恰好一个主人**，第二个写者用 `subordinateTo:'主人'` 挂上去。
+//  实测这条规则被自己破坏了三次（全部是「表在说谎」而不是代码写错）：
+//    ① `foot/2` 写 `subordinateTo:'sagSupport'` —— 而 `sagSupport` 只占
+//       `hip/2`、`knee/2`，**不占 `foot/2`**（那里真主人是 `ankleCop`）
+//       ⇒ 让位给了空气；
+//    ② `knee/0` 挂 `subordinateTo:'sagSupport'` —— `knee/0` **一个主人都没有**；
+//    ③ 腰的 `postureSag`/`postureLat` 两行写着 `mode:'pos'`，而那两条位置 PD
+//       已在同一天删除 ⇒ 表声称有主人，运行时没有写者；
+//       同时真正的写者（`τ=JᵀF` 经脊柱链）在 `mode:'tau'` 上**没登记**。
+//  根源：`subordinateTo` 想表达的是「同一根轴上 pos 与 tau **并联**」，
+//  但把它绑成「主人/从属」就必然要求从属者 mode 不同（门禁 A 就这么查的），
+//  于是**同模式的第二个写者**（QP、`τ=JᵀF`、踝 VIP 都往 `hip/2` 写 tau）
+//  在表里无处安放 —— 只能硬塞成从属，或者干脆不登记。
+//
+//  ⇒ 现在的模型：**每个 (关节, 轴, 模式) 恰好一行**。
+//    · 同一 (轴, 模式) 的多个写者 = 同一个通道的并列实现（同一 `SystemId`），
+//      在 `request()` 里由优先级/顺序仲裁 ⇒ 合并成**一行**，用
+//      `channel` + `extraGates` 把它们的消融门全部写出来；
+//    · 同一轴上 `pos` 与 `tau` 两行 = **并联**（`driveMotors` 里相加后按 τmax 饱和，
+//      不存在谁覆盖谁）⇒ 这才是「并联」的正确含义，也不再需要 `subordinateTo`。
 export type AxisRole =
   | 'sagSupport'      // 垂直 + 矢状支撑：已验证站满 20s，**位置伺服**
   | 'latTransfer'     // 侧向重心转移：**力矩通道**（唯一写者 = τ=Jᵀ(F_lat)）
-  | 'pelvicLift'      // 骨盆抬升：从属于 latTransfer（侧向无需求时才占轴）
-  | 'postureSag'      // 腰矢状姿态 PD
-  | 'postureLat'      // 腰额状精调（死区 + 限幅）
+  | 'pelvicLift'      // 骨盆抬升：与 `latTransfer` 同轴、另一模式（位置伺服）
   | 'ankleCop'        // 矢状踝：**VIP 刚度力矩**（τ = K_a·q_vip + C_a·q̇_vip）
   | 'ankleLat'        // 额状 CoP：**中足**旋前/旋后（踝的额状轴被引擎锁死，做不到）
   | 'hipStiff'        // ★ DIP 髋侧**被动刚度**（τ = K_h·q_hip + B_h·q̇_hip）
-  // ★★ 载荷依赖姿势张力：**不是新主人**，而是给 `sagSupport`/`postureLat` 的
-  //   位置环**增益调制**（Horak & Nashner 1986；J Ab 2021 承重侧 GMED +58%）。
-  //   它不申领任何轴、不产生第二个 target，只改 `kP/kD` 的缩放。
-  // 载荷依赖姿势张力同样**不是新主人**（见上面 `postureLoad` 的说明）
-  | 'postureLoad'
-  // ★★★ **全链 QP**（附录 C.1）—— **从属实现**，与 `sagSupport`/`latTransfer` **并联**。
-  //   它求解的是**同一条链**（髋/膝/踝 + 腰）的矢状 + 额状力矩，
-  //   所以在轴归属表里必须登记成从属记录而不是第二个主人，
-  //   否则 `rigState` 会把"同一根轴两个 tau 写者"计入 `axisConflicts` 并拒收
-  //   ⇒ QP 静默失效，而所有指标看起来正常。这个坑本项目栽过 3 次。
-  | 'wholeBodyQp';
+  // ★★ `grfJacobian` = **唯一的地面反力映射** `τ = JᵀF`（Yin & Zhou 2004 /
+  //   Reitsma 2013）以及全链 QP（附录 C.1）—— 两者都是「先算 F，再按几何分配」。
+  //   ⚠ 2026-10-06 **腰的三轴已移出 QP**（Winter 1996/1998，见 `wholeBodyQp.ts`），
+  //     但脊柱仍然被 `τ=JᵀF` 的链条写着（块④/⑤ 的 chain 含 `spine1..3`）。
+  | 'grfJacobian'
+  // ★★ 迈步系统的**关键帧位置伺服**（附录 D.3）：`stepSystem` 用
+  //   `requestSwingLegAngle` / `requestWaistSlot` 把摆动腿与腰推向 Perry 帧域。
+  //   它与 balance 的 pos 记录同模式（同一根轴上都是"要这个角"）⇒ 由
+  //   `request()` 的优先级仲裁；与 balance 的 **tau** 记录才是跨模式并联，
+  //   而那一条**必须由 balance 让位**（附录 D.4），当前**尚未实现** ⇒
+  //   门禁 C 会把 `step` × `balance` 的同轴异模式报成未声明冲突。
+  | 'keyframeStep';
 
 export interface AxisSpec {
   joint: string;
   axis: number;
   role: AxisRole;
   mode: 'pos' | 'tau';
-  /** 该轴允许的消融通道名（`ablate`）—— 保证「全关 == 零输出」 */
+  /** 该轴上这个模式的**主**消融通道（`ablate`）—— 保证「全关 == 零输出」 */
   channel: string;
-  /** 从属轴：有主轴需求时必须让位（`role==='pelvicLift'` 依赖 `latTransfer`） */
-  subordinateTo?: AxisRole;
+  /**
+   * 同一 (轴, 模式) 上**其它**并列实现的消融门。
+   *   为什么需要它：`hip/2` 的 tau 上同时有 `hipStiff`（被动刚度）、`qp`
+   *   （全链 QP）、`lat/sag/weight`（`τ=JᵀF` 的矢状/额状/竖向分量）。
+   *   它们是**同一个 writer 的并列实现**（同一 `SystemId='balance'`），
+   *   在 `requestTorque` 里按优先级仲裁 ⇒ 表里必须是**一行**把门全写出来，
+   *   否则「全消融」名单就漏门 ⇒ 门禁 B 测的是假故障（本项目已栽 4 次）。
+   */
+  extraGates?: readonly string[];
 }
+
+/**
+ * ★ **不申领任何轴**的通道（门禁 A2 用它区分「表漏登记」与「本来就不是轴」）。
+ *
+ *   载荷依赖姿势张力（Horak & Nashner 1986；J Ab 2021 承重侧 GMED +58%）：
+ *   它只改 `sagSupport` 位置环的 `kP/kD` 缩放，**不产生第二个 target**。
+ *   ⇒ 它是**增益调制**，不是轴的主人；写进 `AXIS_OWNERSHIP` 就是表在说谎。
+ */
+export const NON_AXIS_CHANNELS: readonly { channel: string; why: string }[] = Object.freeze([
+  { channel: 'postureLoad', why: '只缩放 sagSupport 位置环的 kP/kD，不写 target、不申领轴' },
+]);
 
 /** ★ 髋外展轴的索引 —— **必须是 0**。
  *
@@ -103,43 +137,85 @@ export interface AxisSpec {
 export const HIP_ABD_AXIS = 0;
 
 export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
-  { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip' },
-  // ★ DIP 髋侧被动刚度：与 `sagSupport` **并联**的第二条通道（位置伺服 + 刚度力矩），
-  //   语义是"支撑角色的下属实现"，所以登记成从属记录而不是第二个主人。
-  { joint: 'hip', axis: 2, role: 'hipStiff', mode: 'tau', channel: 'hipStiff', subordinateTo: 'sagSupport' },
-  { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee' },
-  // ★★ 全链 QP 要写的轴（承重腿整链 + 腰，矢状 + 额状），**逐根**登记。
-  //   mode='tau' 与 `sagSupport`(pos) **并联** ⇒ `subordinateTo: 'sagSupport'`
-  //   语义与 `hipStiff` 相同：QP 是该支撑角色的第二种实现，不是新主人。
-  //   ⚠ 不登记的后果（实测）：`rigState` 把"同一轴第二个 tau 写者"计入
-  //     `axisConflicts` 并**拒收** ⇒ QP 静默失效，而所有指标看起来正常。
-  //     这个坑本项目栽过 3 次（见 AXIS_OWNERSHIP 上方注释），所以这里逐根写全。
-    // ⚠ `hip/0`（外展轴）**不给** QP：它的主人已经是 `latTransfer`。
-  //   两个真主人 ⇒ 双写 ⇒ `axisConflicts` 增并拒收
-  //   （实测 6 处冲突⇒ QP 静默失效）。
-  //   ⇑ QP 不写该轴，侧向交给 `latTransfer`；QP 仅管知道的其余轴。
-  { joint: 'hip', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
-  { joint: 'knee', axis: 0, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
-  { joint: 'knee', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
-  { joint: 'foot', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'sagSupport' },
-  { joint: 'spine1', axis: 0, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'postureLat' },
-  { joint: 'spine1', axis: 2, role: 'wholeBodyQp', mode: 'tau', channel: 'qp', subordinateTo: 'postureSag' },
-  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat' },
-  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift', subordinateTo: 'latTransfer' },
-  // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
-  //   曾图省事写 `joint: 'spine'`，而 `axisRole()` 是精确匹配 ⇒ 永远查不到
-  //   ⇒ 门禁 E（"每根被写过的轴必须已登记"）直接把这 6 根轴报成未登记。
-  //   ⇒ **表看着权威、实际没接上**，这比没有表更坏。
-  { joint: 'spine1', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
-  { joint: 'spine2', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
-  { joint: 'spine3', axis: 2, role: 'postureSag', mode: 'pos', channel: 'torso' },
-  { joint: 'spine1', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
-  { joint: 'spine2', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
-  { joint: 'spine3', axis: 0, role: 'postureLat', mode: 'pos', channel: 'latwaist' },
-  // ★ 踝（矢状）：VIP 刚度走**力矩通道**。踝是 revolute ⇒ 只有轴 2 能动。
-  { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop' },
-  // ★ 中足（额状）：踝的额状轴被引擎锁死 ⇒ 侧向 CoP 权限归中足的旋前/旋后。
+  // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
+  { joint: 'hip', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'hip', extraGates: ['stepKeyframe'] },
+  { joint: 'knee', axis: 2, role: 'sagSupport', mode: 'pos', channel: 'knee',
+    extraGates: ['stanceExt', 'stepKeyframe'] },
+
+  // ── 矢状链：力矩通道（DIP 被动刚度 / 全链 QP / τ=JᵀF）─────────────
+  { joint: 'hip', axis: 2, role: 'hipStiff', mode: 'tau', channel: 'hipStiff',
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean'] },
+  // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
+  //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
+  //   被算成「未声明的同轴异模式」。
+  { joint: 'knee', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+
+  // ── 额状链 ────────────────────────────────────────────────────────
+  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
+  //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
+  { joint: 'hip', axis: HIP_ABD_AXIS, role: 'pelvicLift', mode: 'pos', channel: 'pelvicLift' },
+
+  // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
+  { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop',
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean'] },
+  // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
+  //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
+  //   `midfoot_*` 驱动块）。
   { joint: 'midfoot', axis: 0, role: 'ankleLat', mode: 'pos', channel: 'ankleLat' },
+
+  // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
+  //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
+  //   这几根轴上 balance 只有 **tau** 写入 ⇒ 属跨模式并联，需要 balance 让位。
+  { joint: 'foot', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
+  { joint: 'hip', axis: 1, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
+  { joint: 'spine1', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
+  { joint: 'spine1', axis: 0, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
+
+  // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
+  //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
+  //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
+  //   ⚠ `hip/0`（外展轴）**不进 QP**：它的 tau 主人是 `latTransfer`（已登记）。
+  { joint: 'hip', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+  { joint: 'knee', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+  { joint: 'knee', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+  { joint: 'foot', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+  { joint: 'foot', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'qp',
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+
+  // ── 脊柱：躯干姿态已并入 `τ=JᵀF` 的脊柱链（块④/⑤）───────────────
+  //   ⚠ 2026-10-06：`postureSag`/`postureLat` 两条腰位置 PD **已删除**
+  //     （腰矢状阻尼量纲不平衡单独饱和 ⇒ 折腰）。表里原来那 6 行
+  //     `mode:'pos'` 是**在说谎**（运行时没有 pos 写者），
+  //     而真正的写者（脊柱链上的 τ）没登记 ⇒ 门禁 E 报「未登记」。
+  //   ⇒ 现在只登记真实存在的 tau 写入，位置行全部删除。
+  //     ⚠ 代价（必须知道）：腰**不再有位置伺服**，`spine*/0` 与 `spine*/2`
+  //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
+  //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
+  { joint: 'spine1', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine1', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine2', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine2', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine2', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine3', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine3', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
+  { joint: 'spine3', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
+    extraGates: ['sag', 'weight', 'trunkLean'] },
 ]);
 
 /**
@@ -1619,7 +1695,7 @@ export function balanceSystem(
         rs.settleOffPhase(qVip);
       }
       // 蹬离相：跖屈把地面反力斜向前 ⇒ 这是**前进的唯一来源**
-      if (rs.phase === 'PUSH') tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R;
+      if (rs.state === 'PUSH') tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R;
       // ── 安全钳位：**必须**把请求值限在马达力矩上限内 ──────────────
       //   实测（无钳位）：末端 `q_vip = −77°` ⇒ 请求 **−757 N·m**，
       //   而 `τmax(foot/2) = 120 N·m` ⇒ **超出 6.3 倍**。
@@ -1645,7 +1721,11 @@ export function balanceSystem(
     //   ⇒ 额状面 CoP 权限归**中足**（`midfoot_*`，绕足长轴的旋前/旋后）——
     //   这正是柔性足存在的意义（内侧弓/外侧柱两条载荷路径，见 createJoints 注释）。
     const jMid = jointIndexByName(sk, sup === 'l' ? 'midfoot_l' : 'midfoot_r');
-    if (jMid >= 0) {
+    // ★★ 2026-10-06 加 `on('ankleLat')` 门 —— 门禁 A2 查出来的**第五次**
+    //   「消融工具说谎」：表里 `midfoot/0` 登记 `channel:'ankleLat'`，
+    //   而这里**根本没有 `on(…)`** ⇒ `ablate:'ankleLat'` 关不掉它。
+    //   ⇒ 「全消融」里这条位置伺服仍在发指令（门禁 B 的存活秒数因此不可信）。
+    if (jMid >= 0 && on('ankleLat')) {
       const latErr = rs.dcm.z - rs.support.cz;
       // 中足旋前/旋后 → 前足内/外侧缘一抬一压 ⇒ 载荷在两柱之间转移（侧向 CoP）
       rs.requestAngle(jMid, 0, clamp(p.kCopLat * latErr, p.maxAnkleLat), 'balance', '中足额状CoP');

@@ -348,7 +348,12 @@ setOwnership(d: RigSnapshot | null): void {
     }
 
     const PH = PHASE_LABEL;
-    e.ownPhase.textContent = `${PH[d.phase] ?? d.phase} ${d.phaseT.toFixed(2)}s`;
+    // ★ 验收结论与「差哪一项」直接显示（用户 2026-10-06：验收不过就不进下一态，
+    //   所以"为什么卡住"必须是**一眼可见**的，而不是靠推断）
+    const v0 = d.violations[0];
+    e.ownPhase.textContent = `${PH[d.state] ?? d.state} ${d.stateT.toFixed(2)}s`
+      + `${d.verified ? ' ✓' : ' ✗'}${d.safe ? ' [安全]' : ''}`
+      + `${v0 ? ` ${v0.item} ${v0.value.toFixed(3)}/${v0.tol.toFixed(3)}` : ''}`;
     e.ownGround.textContent = `${d.support.contactN} 只`;
     e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;
     // 前/后倾 与 左/右倾 分开显示：合成的倾角大小分不出平面

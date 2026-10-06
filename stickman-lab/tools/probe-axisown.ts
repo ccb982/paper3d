@@ -50,12 +50,26 @@ await import('../src/core/ragdoll');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
-const { AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS } = await import('../src/core/systems/balance');
-import type { AxisRole } from '../src/core/systems/balance';
+const { AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, NON_AXIS_CHANNELS }
+  = await import('../src/core/systems/balance');
 
 const log = console.log;
 /** 门禁 F 要读源码文本（唯一性检查），所以需要一个文本读取器 */
 const read = (p: string): string => fs.readFileSync(p, 'utf8');
+/**
+ * ★ 2026-10-06：**去掉注释**再查「单源」。
+ *
+ *   门禁 D0 用正则 `(?<![.\w])frontLeg\s*\(` 在源码里找「前腿的定义」，
+ *   而 `gaitState.ts` 的**注释**里写了 ``frontLeg() 在双脚并齐时…`` ⇒ 命中 ⇒
+ *   误报「第 2 处定义」。实测：真正的定义只有 `rigState.ts` 一处。
+ *
+ *   ⇒ 门禁查的是**代码**，不是注释。（教训与 `tools/probe-*` 里其它几次
+ *     「探针自己说谎」同源：断言的匹配面比它想断言的东西大。）
+ */
+const codeOnly = (s: string): string => s
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')          // 块注释
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');     // 行注释（`://` 保留）
+const readCode = (p: string): string => codeOnly(read(p));
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const SHAPE = shapeForJoints(sk.joints.length);
 
@@ -65,47 +79,36 @@ const ok = (m: string): void => log(`  ✓ ${m}`);
 
 // ══ A. 轴归属表自身 ══════════════════════════════════════════════
 log('══ A. 轴归属表（AXIS_OWNERSHIP）══');
+//
+// ★ 2026-10-06 键从 `(关节, 轴)` 换成 `(关节, 轴, 模式)` —— 见 balance.ts
+//   顶部那段「表的模型换了」的注释：同模式的第二个写者必须**合并成一行**
+//   （`channel` + `extraGates`），而不是靠 `subordinateTo` 硬塞成从属
+//   （旧模型实测三处「让位给了空气 / 没有主人 / 声称有主人但没写者」）。
 {
-  const norm = (n: string): string => n.replace(/_\w+$/, '');
-  const masterOn = (jn: string, ax: number): AxisRole[] =>
-    AXIS_OWNERSHIP.filter((a) => a.joint === jn && a.axis === ax && !a.subordinateTo)
-      .map((a) => a.role);
-
-  const seen = new Map<string, string>();
+  const byMode = new Map<string, string>();
+  const allGates = new Set<string>();
   for (const a of AXIS_OWNERSHIP) {
-    const k = `${a.joint}/${a.axis}`;
-    if (a.subordinateTo) {
-      // ★ 2026-10-06：原断言只查「这个 role 名存在吗」。那**太弱** ——
-      //   `subordinateTo` 的语义是「让位给**同一根轴上的主人**」，
-      //   指向一个存在但**不占这根轴**的角色 = 让位给空气 = 该轴仍是双写。
-      //   实测两条：foot/2 的真主人是 `ankleCop`，表里却写 `subordinateTo:'sagSupport'`
-      //   （sagSupport 只占 hip/2、knee/2）；knee/0 的 wholeBodyQp 没有任何主人。
-      const masters = masterOn(a.joint, a.axis);
-      if (!masters.includes(a.subordinateTo)) {
-        bad(`${k} 的 ${a.role} 从属于 ${a.subordinateTo}，但该轴上的主人是`
-          + ` [${masters.join(', ') || '（无）'}] —— 让位给了不占这根轴的角色`);
-        continue;
-      }
-      // 从属记录的 mode 必须与它主人**不同**，否则「并联」无从谈起
-      const m = AXIS_OWNERSHIP.find((x) => x.joint === a.joint && x.axis === a.axis
-        && x.role === a.subordinateTo)!;
-      if (m.mode === a.mode) {
-        bad(`${k} 的 ${a.role}(${a.mode}) 与主人 ${a.subordinateTo}(${m.mode}) 同模式`
-          + ' —— 「并联」不成立，应合并成一条');
-      }
-      continue;
+    const k = `${a.joint}/${a.axis}/${a.mode}`;
+    const prev = byMode.get(k);
+    if (prev) {
+      bad(`${k} 有两条记录（${prev} 与 ${a.role}）—— 同一 (轴,模式) 必须合并成一条`);
     }
-    const prev = seen.get(k);
-    if (prev) bad(`${k} 有两个主记录（${prev} 与 ${a.role}）—— 必须恰好一个`);
-    seen.set(k, a.role);
+    byMode.set(k, a.role);
+    for (const g of [a.channel, ...(a.extraGates ?? [])]) {
+      if (!g) bad(`${k} 的消融门为空串`);
+      else allGates.add(g);
+    }
   }
-  if (!fails) ok(`${AXIS_OWNERSHIP.length} 条记录，${seen.size} 根轴各有且仅有一个主人`);
+  if (!fails) {
+    ok(`${AXIS_OWNERSHIP.length} 条记录、${byMode.size} 个 (轴,模式) 唯一`
+      + `（${allGates.size} 个消融门：${[...allGates].sort().join(', ')}）`);
+  }
 }
 
 // ══ A2. 通道名单与 `on('…')` 接线的一致性 ════════════════════════════
 //   为什么必须查：**消融名单漏一个通道 ⇒「全消融」不是全消融 ⇒ 门禁 B 测的是
 //   假故障**（已发生四次，见 ALL_CHANNELS 上方注释）。这里从源码里把
-//   真正被 `on('…')` 消费的名字全抠出来，与 `AXIS_OWNERSHIP` 的 channel 对账。
+//   真正被 `on('…')` 消费的名字全抠出来，与 `AXIS_OWNERSHIP` 对账。
 log('');
 log('══ A2. 通道名单 vs 源码里的 on(…) 接线 ══');
 {
@@ -113,9 +116,10 @@ log('══ A2. 通道名单 vs 源码里的 on(…) 接线 ══');
   for (const f of ['src/core/systems/balance.ts', 'src/core/systems/wantedForce.ts',
     'src/core/systems/step.ts']) {
     if (!fs.existsSync(f)) continue;
-    for (const m of read(f).matchAll(/\bon\('([a-zA-Z]+)'\)/g)) wired.add(m[1]!);
+    const src = readCode(f);
+    for (const m of src.matchAll(/\bon\('([a-zA-Z]+)'\)/g)) wired.add(m[1]!);
     // `computeWantedForce` 的 gate 回调里用 `ch === 'lat'` 形式，不是 `on()`
-    for (const m of read(f).matchAll(/ch === '([a-zA-Z]+)'/g)) wired.add(m[1]!);
+    for (const m of src.matchAll(/ch === '([a-zA-Z]+)'/g)) wired.add(m[1]!);
   }
   // `qpEnable || on('qp')` 这种**反向**语义：名字在表里但默认开着，
   // 必须真的能被 `ablate` 关掉，否则「全消融」关不住它。
@@ -124,21 +128,31 @@ log('══ A2. 通道名单 vs 源码里的 on(…) 接线 ══');
     bad("找不到 `qpEnable || on('qp')` —— QP 的启用语义变了，「全消融」名单需重新对账");
   } else ok("QP 的启用语义 = `qpEnable || on('qp')`（ablate 含 'qp' 才关得住）");
 
-  const inTable = new Set(AXIS_OWNERSHIP.map((a) => a.channel));
-  const notInTable = [...wired].filter((c) => !inTable.has(c)).sort();
+  // 表里的门 = `channel` ∪ `extraGates`，加上**明确声明不申领轴**的通道
+  const inTable = new Set<string>();
+  for (const a of AXIS_OWNERSHIP) {
+    inTable.add(a.channel);
+    for (const g of a.extraGates ?? []) inTable.add(g);
+  }
+  const nonAxis = new Set(NON_AXIS_CHANNELS.map((n) => n.channel));
+  for (const n of NON_AXIS_CHANNELS) {
+    if (!n.why) bad(`非轴通道 ${n.channel} 没写理由 ⇒ 无法判断它该不该申领轴`);
+  }
+  const notInTable = [...wired].filter((c) => !inTable.has(c) && !nonAxis.has(c)).sort();
   const notWired = [...inTable].filter((c) => !wired.has(c) && c !== 'qp').sort();
 
   if (notInTable.length) {
     bad(`这些通道在源码里被 on(…) 消费，但归属表里没有 ⇒ 表不完整：${notInTable.join(', ')}`);
   } else {
-    ok(`表里的 channel 全部在源码里有 on(…) 接线（${[...inTable].sort().join(', ')}）`);
+    ok(`表里的门全部在源码里有 on(…) 接线（${[...inTable].sort().join(', ')}）`
+      + (nonAxis.size ? `；非轴通道 ${[...nonAxis].join(', ')}` : ''));
   }
   if (notWired.length) {
     // ⚠ 这类是**表在说谎**：声明了通道名，实际没有 `on()` 门 ⇒ ablate 关不掉它。
-    bad(`这些通道在表里登记了 channel，但源码里没有任何 on(…) 门`
+    bad(`这些通道在表里登记了，但源码里没有任何 on(…) 门`
       + ` ⇒ ablate 对它们无效：${notWired.join(', ')}`);
   } else {
-    ok('每个登记的 channel 都有真实的 on(…) 门（ablate 真的能关掉它）');
+    ok('每个登记的门都有真实的 on(…) 门（ablate 真的能关掉它）');
   }
 }
 
@@ -154,17 +168,13 @@ log('══ A2. 通道名单 vs 源码里的 on(…) 接线 ══');
 //     ⇒ 手写名单漏了它，等于在「全消融」里把 QP 打开了。
 //   这是「消融工具说谎」的**第四次**复发（前三次记在 balance.ts 顶部注释），
 //   根因都是同一个：名单是人肉维护的。现在改成
-//     ① `AXIS_OWNERSHIP` 里出现过的每个 `channel`（表 = 归属的唯一真源）
-//     ② 加上 `on('…')` 在源码里真的接线、但表里没有的通道（门禁 A2 会报出来）
-//   的并集；门禁 A2 断言二者一致，所以以后新增通道忘了加名单会**当场报红**。
-const ALL_CHANNELS = Object.freeze([
-  ...new Set<string>([
-    ...AXIS_OWNERSHIP.map((a) => a.channel),
-    // 表里没有、但 `on('…')` 真的接线的通道：
-    'stanceExt',            // balance.ts:1132 膝的伸展限位
-    'sag', 'weight', 'trunkLean',   // wantedForce.ts:193 / 201 / 204
-  ]),
-].sort());
+//     ① `AXIS_OWNERSHIP` 里出现过的每个 `channel` + `extraGates`（表 = 归属真源）
+//     ② `NON_AXIS_CHANNELS` 里声明「不申领轴」的通道
+//   的并集；门禁 A2 断言二者与源码一致，所以以后新增通道忘了加名单会**当场报红**。
+const ALL_CHANNELS = Object.freeze([...new Set<string>([
+  ...AXIS_OWNERSHIP.flatMap((a) => [a.channel, ...(a.extraGates ?? [])]),
+  ...NON_AXIS_CHANNELS.map((n) => n.channel),
+])].sort());
 
 interface Conflict {
   joint: string;
@@ -185,6 +195,8 @@ interface Result {
   conflicts: Conflict[];
   /** 实际被写过（位置或力矩）的轴，形如 `hip_l/0` */
   written: string[];
+  /** 逐轴累计 |τ_out|（N·m）—— 判「某个门到底有没有在出力」用 */
+  tauAcc: number[];
   /**
    * ★ 存活时的**跌倒判据来源**。用户 2026-10-06 定：「以头落地为唯一标准」。
    *   `sim.checkFall()` 现在确实只判 `headHitGround()`（sim.ts:1559），
@@ -207,6 +219,7 @@ function run(bal: Record<string, unknown>, secs: number): Result {
   let tauMax = 0;
   let yMin = 9;
   const tauAxes = new Set<number>();
+  const tauAcc: number[] = new Array(ctrl.rs.axisCount).fill(0);
   const heldAxes = new Set<number>();
   const conflicts = new Map<string, Conflict>();
   const written = new Set<string>();
@@ -231,6 +244,7 @@ function run(bal: Record<string, unknown>, secs: number): Result {
       sim.doll.setMotorTargets(ctrl.step(CTRL_DT));
       for (let k = 0; k < ctrl.rs.tauOut.length; k++) {
         const v = Math.abs(ctrl.rs.tauOut[k] ?? 0);
+        tauAcc[k] = (tauAcc[k] ?? 0) + v;
         if (v > 0.5) { tauMax = Math.max(tauMax, v); tauAxes.add(k); }
       }
       for (let k = 0; k < ctrl.rs.holdMask.length; k++) if (ctrl.rs.holdMask[k]) heldAxes.add(k);
@@ -244,6 +258,7 @@ function run(bal: Record<string, unknown>, secs: number): Result {
     heldAxes: [...heldAxes].sort((a, b) => a - b),
     conflicts: [...conflicts.values()],
     written: [...written].sort(),
+    tauAcc,
     fallReason: sim.fallReason,
     headYAtFall: sim.fallDiag.headY,
     tiltDegAtFall: sim.fallDiag.tiltDeg,
@@ -352,22 +367,24 @@ log('══ C. 轴归属冲突（默认路径与各挡位）══');
 //
 // ★ 2026-10-06：原断言是「`axisConflicts` 恒为空」，**在当前设计下永远不可能绿**。
 //
-//   原因：`claimAxis`（rigState.ts:861）只在「同一根轴被两种模式申领」时记冲突，
-//   而它**完全不读 `subordinateTo`**。可归属表里 6 条记录恰恰**声明**了
-//   「同一根轴、两种模式」这种并联（wholeBodyQp 的 tau 从属于 sagSupport 的 pos、
-//   hipStiff 的 tau 从属于 sagSupport、pelvicLift 的 pos 从属于 latTransfer 的 tau）
+//   原因：`claimAxis`（rigState.ts）只在「同一根轴被两种模式申领」时记冲突。
+//   而归属表里 `hip/2`、`hip/0`、`foot/2`、`knee/2`、脊柱各轴**恰恰声明了**
+//   「同一根轴、两种模式」这种并联（pos 位置环 + tau 力矩通道，
+//   在 `driveMotors` 里**相加**后按 τmax 饱和，不存在谁覆盖谁）
 //   —— 按定义就会冲突。⇒ 断言与表**按构造互斥**。
 //
 //   正确的判据不是「有没有冲突」，而是「**有没有未声明的冲突**」：
-//   · 表里该轴有 `subordinateTo` 记录、且模式对得上 ⇒ **声明过的并联**，合法
-//   · 表里该轴只有一条主记录（或从属记录模式对不上）⇒ **未声明的双写**，架构错误
+//   · 表里该轴**同时有 pos 与 tau 记录** ⇒ **声明过的并联**，合法
+//   · 表里该轴只有一种模式 ⇒ **未声明的双写**，架构错误
 //   两者必须分开计数，否则要么永远红、要么被白名单放掉真错误。
+//
+// ⚠ 2026-10-06 表的键换成 (轴, 模式) 之后，这条判据顺带变严了：
+//   「声明」不再靠 `subordinateTo` 挂一条从属记录，而是**该轴真的有另一模式的记录**。
 {
   const norm = (n: string): string => n.replace(/_\w+$/, '');
-  /** 该轴声明过的并联：从属记录 + 它的 mode 集合 */
+  /** 该轴声明过的模式集合（表里出现过就算声明过） */
   const declared = new Map<string, Set<string>>();
   for (const a of AXIS_OWNERSHIP) {
-    if (!a.subordinateTo) continue;
     const k = `${norm(a.joint)}/${a.axis}`;
     let s = declared.get(k);
     if (!s) { s = new Set(); declared.set(k, s); }
@@ -386,8 +403,21 @@ log('══ C. 轴归属冲突（默认路径与各挡位）══');
     const okDeclared: string[] = [];
     for (const c of r.conflicts) {
       const key = `${norm(c.joint)}/${c.axis}`;
-      if (declared.get(key)?.has(c.mode)) {
+      // ★ 2026-10-06 加**跨系统**判据（附录 D.4 的可执行版本）。
+      //
+      //   表里 pos 与 tau 都有 ≠ 并联合法。判据必须是**谁在写**：
+      //     · 同一 SystemId（balance）在同一轴上 pos+tau = 设计如此
+      //       （位置环与 `τ=JᵀF` 在 `driveMotors` 里**相加**后按 τmax 饱和）
+      //       ⇒ 合法并联；
+      //     · **不同 SystemId**（balance 的 tau × step 的 pos）是附录 D.4
+      //       明令禁止的「平衡抢迈步系统的轴」⇒ 必须报红，
+      //       直到 balance 学会**让位**（那是 D.7 第 1 项）。
+      const crossSystem = c.by !== 'balance' || c.against !== 'balance';
+      if (declared.get(key)?.has(c.mode) && !crossSystem) {
         okDeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by}`);
+      } else if (crossSystem) {
+        undeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by} vs ${c.against}`
+          + '（跨系统同轴异模式 ⇒ D.4 要求 balance 让位，未让位）');
       } else {
         undeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by} vs ${c.against}`);
       }
@@ -406,6 +436,36 @@ log('══ C. 轴归属冲突（默认路径与各挡位）══');
 }
 
 log('');
+log('══ D0. ★ 状态机是「纯判据」：不得下发任何关节目标 ══');
+//
+// 用户 2026-10-06：「状态机不需要每拍给目标。」
+//   ⇒ 这条定调必须**可执行**，否则半年后又变成"状态机顺手也发了点指令"。
+//
+// 判据：`gaitState.ts` 的**代码**（剥掉注释）里不得出现任何关节需求接口。
+//   ⚠ 必须剥注释再匹配 —— 否则注释里写一句"这里本来是 requestAngle"就误报。
+{
+  const SRC = 'src/core/gaitState.ts';
+  const code = readCode(SRC);
+  const FORBID = [
+    'requestAngle', 'requestTorque', 'addTorque', 'forceTorque',
+    'requestHold', 'clearHold', 'requestSwingLeg', 'requestSwingLegAngle',
+    'requestSwingLegTorque', 'requestWaistSlot',
+  ];
+  const hit = FORBID.filter((f) => code.includes(f));
+  if (hit.length) {
+    bad(`状态机源码里出现了关节需求接口：${hit.join(', ')}`
+      + ' —— 「状态机不下发目标」这条定调被破坏了');
+  } else {
+    ok(`状态机是纯判据：${FORBID.length} 个关节需求接口一个都没出现`);
+  }
+  // 状态机**必须**输出这 6 项（文档 §7 的「穷举就这 6 项」）
+  const MUST = ['rs.state', 'rs.stateT', 'rs.verified', 'rs.violations',
+    'rs.loadBearer', 'rs.locked'];
+  const miss = MUST.filter((m) => !code.includes(m));
+  if (miss.length) bad(`状态机没写这些输出：${miss.join(', ')}`);
+  else ok(`状态机输出齐全（${MUST.join(', ')}）`);
+}
+
 log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
 //
 // ★ 2026-10-06：**删除**「前腿切换 >3 ⇒ snapshot() 与 frontLeg() 不是同一份实现」
@@ -423,7 +483,7 @@ log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
     'src/core/gaitState.ts'];
   // 定义 = `frontLeg(` 且前面不是 `.`（调用是 `.frontLeg(`）
   const frontDefs = SRC_D.filter((f) => fs.existsSync(f)
-    && /(?<![.\w])frontLeg\s*\(/.test(read(f)));
+    && /(?<![.\w])frontLeg\s*\(/.test(readCode(f)));
   if (frontDefs.length !== 1) {
     bad(`「前腿」的**定义**应恰好 1 处，实际 ${frontDefs.length} 处：${frontDefs.join(', ') || '无'}`);
   } else {
@@ -441,6 +501,13 @@ log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
   let n = 0, swB = 0, swF = 0, pb = '', pf = '';
   const viol: string[] = [];
   const dx: number[] = [];
+  // ★ 2026-10-06：断言从「切换次数 ≤3」改成「**每次切换都必须有最小驻留**」。
+  //   旧断言隐含假设「角色站着不动」；现在状态机真的会带着它走
+  //   （默认路径从 1.21s 变成 8.00s 不倒），前后腿每走一步就合法地换一次
+  //   ⇒ 计数超标不再是缺陷信号。**抖动**的判据是「驻留过短」，这才是要防的。
+  const minDwellB: number[] = [];
+  const minDwellF: number[] = [];
+  let lastB = -1e9, lastF = -1e9;
   for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
     if (i % PHYS_PER_CTRL === 0) {
       sim.doll.setMotorTargets(ctrl.step(CTRL_DT));
@@ -448,8 +515,9 @@ log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
       const L = s.legs.l, R = s.legs.r;
       const b = String(s.loadBearer);
       const f = L.isFront ? 'l' : 'r';
-      if (b !== pb) { swB++; pb = b; }
-      if (f !== pf) { swF++; pf = f; }
+      const tSec = i / CTRL_HZ;
+      if (b !== pb) { swB++; pb = b; minDwellB.push(tSec - lastB); lastB = tSec; }
+      if (f !== pf) { swF++; pf = f; minDwellF.push(tSec - lastF); lastF = tSec; }
       if (L.isBearer && R.isBearer) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} 两条腿同时标承重`);
       if (!L.isBearer && !R.isBearer) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} 没有腿被标承重`);
       if (L.isFront === R.isFront) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} 两条腿同为主前`);
@@ -465,19 +533,19 @@ log('══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══');
   log(`  ${SECS}s / ${n} 拍：承重腿切换 ${swB} 次，前腿切换 ${swF} 次`
     + `  |Δx| 中位 ${dxMed.toFixed(1)}mm / 最大 ${dxMax.toFixed(1)}mm（死区 3mm）`);
 
-  if (swB > 3) bad(`承重腿切换 ${swB} 次（>3）—— 迟滞没生效或存在第二份判据`);
-  else ok(`承重腿稳定（${swB} 次切换）`);
+  // 最小驻留 = 抖动判据。0.15s 略低于最短驻留 0.20s，容忍采样误差。
+  const minB = minDwellB.length ? Math.min(...minDwellB) : 9;
+  const minF = minDwellF.length ? Math.min(...minDwellF) : 9;
+  if (minB < 0.15) bad(`承重腿切换的最短驻留只有 ${minB.toFixed(3)}s（<0.15s）⇒ 是抖动不是行走`);
+  else ok(`承重腿无抖动（切换 ${swB} 次，最短驻留 ${minB.toFixed(2)}s）`);
 
-  if (swF > 3) {
-    // ★ 只报**事实 + 两种候选成因**，不替源码下结论。D0 已单独断言单源。
-    const inDeadZone = dxMax <= 3.5;
-    bad(`前腿切换 ${swF} 次（>3）。|Δx| 最大 ${dxMax.toFixed(1)}mm `
-      + (inDeadZone
-        ? `⇒ 全程在 3mm 死区内（最大 ${dxMax.toFixed(1)}mm）⇒ 是**迟滞死区不够**，`
-          + '不是第二份实现（单源已由 D0 断言）。加大死区或改判据，别去改 snapshot()'
-        : `⇒ 曾越过死区（最大 ${dxMax.toFixed(1)}mm）⇒ 角色**真的**在换前腿，`
-          + '次数超标是步态本身的问题，不是标签抖动'));
-  } else ok(`前腿稳定（${swF} 次切换）`);
+  if (minF < 0.15) {
+    bad(`前腿切换的最短驻留只有 ${minF.toFixed(3)}s（<0.15s）`
+      + `⇒ 3mm 死区不够（|Δx| 最大 ${dxMax.toFixed(1)}mm）`);
+  } else {
+    ok(`前腿无抖动（切换 ${swF} 次，最短驻留 ${minF.toFixed(2)}s；`
+      + `|Δx| 最大 ${dxMax.toFixed(0)}mm ⇒ 角色真的在换前腿，次数由步态决定）`);
+  }
 
   if (viol.length) bad(`角色一致性违例 ${viol.length} 条：${viol.slice(0, 2).join(' | ')}`);
   else ok('角色一致性（承重/前后）无违例');
@@ -508,7 +576,8 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
     ['横向驱动窗口（块⑤）', { torqueControl: true, lateralEnabled: true, kPelvicLift: 0 }],
   ];
   for (const [tag, bal] of CASES_E) {
-    for (const w of run(bal, 12).written) {
+    const rr = run(bal, 12);
+    for (const w of rr.written) {
       allWritten.add(w);
       const key = w.replace(/_[lr]$/, '');
       if (!seenAxes.has(key)) seenAxes.set(key, tag);
@@ -539,23 +608,55 @@ log('══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
     ok('ANKLE_ABSENT 与实际一致（无踝轴被写）；骨架一旦加踝，此处会强制登记');
   }
 
-  // ★★ E2：只看「有 owner」不够 —— 力矩通道走 `addTorque`（rigState.ts:924），
-  //   **不调 `claimAxis`**，所以 QP 写的轴从不做模式声明 ⇒ 上面这条永远查不到它。
-  //   这里直接按**轴归属表**枚举 QP 声明要写的轴，验证它们确实都被写了
-  //   （表说有主人、运行时没人写 = 表在说谎；反过来也要查）。
-  const qpAxes = AXIS_OWNERSHIP.filter((a) => a.role === 'wholeBodyQp')
+  // ★★ E2：**双向**对账 QP 的轴集合与归属表。
+  //
+  //   为什么必须单独查：力矩通道走 `addTorque`（rigState.ts），**不调 `claimAxis`**
+  //   ⇒ QP 写的轴从不做模式声明 ⇒ 上面「被写过的轴都要登记」永远查不到它；
+  //   而反过来「表里登记了但没人写」也无法从运行时观测得到（QP 对某些轴解出
+  //   的 τ 恒为 0，例如力臂几乎为零的扭转轴），**不能**要求每根都被写到。
+  //   ⇒ 判据改成**代码 ↔ 表**的一致性：`wholeBodyQp.QP_AXIS_SPEC`（唯一真源）
+  //   的每一根轴都必须在表里登记为 `tau` 且带 `qp` 门；反过来表里带 `qp` 门的
+  //   轴也必须在 QP 的轴集合里（否则那行登记就是多余的谎）。
+  const { QP_AXIS_SPEC } = await import('../src/core/systems/wholeBodyQp');
+  const qpSpec: string[] = [];
+  for (const g of QP_AXIS_SPEC) for (const ax of g.axes) qpSpec.push(`${g.joint}/${ax}`);
+  const tableHas = (jn: string, ax: number): boolean => AXIS_OWNERSHIP.some(
+    (a) => a.joint === jn && a.axis === ax && a.mode === 'tau'
+      && (a.channel === 'qp' || (a.extraGates ?? []).includes('qp')));
+  const missInTable = qpSpec.filter((k) => {
+    const m = /^(\w+)\/(\d)$/.exec(k)!;
+    return !tableHas(m[1]!, Number(m[2]));
+  });
+  const qpInTable = AXIS_OWNERSHIP
+    .filter((a) => a.channel === 'qp' || (a.extraGates ?? []).includes('qp'))
     .map((a) => `${a.joint}/${a.axis}`);
-  const qpNever = qpAxes.filter((k) => ![...seenAxes.keys()].some((w) => {
-    const m = /^(\w+?)_?[lr]?\/(\d)$/.exec(w);
-    return m && `${m[1]}/${m[2]}` === k;
-  }));
-  if (qpAxes.length === 0) {
-    bad('AXIS_OWNERSHIP 里没有 wholeBodyQp 的登记 —— QP 若在跑，就是完全没登记的双写');
-  } else if (qpNever.length) {
-    bad(`表里 wholeBodyQp 声明了这些轴，但 ${CASES_E.length} 种配置 × 12s 里一次都没被写：`
-      + `${qpNever.join(', ')}（表在说谎，或 QP 根本没接上）`);
+  const extraInTable = qpInTable.filter((k) => !qpSpec.includes(k));
+  if (missInTable.length) {
+    bad(`QP 会写但表里没登记为 tau+qp 的轴：${missInTable.join(', ')}（双写 ⇒ axisConflicts）`);
+  } else if (extraInTable.length) {
+    bad(`表里登记了 qp 门但 QP 不写的轴：${extraInTable.join(', ')}（表在说谎）`);
   } else {
-    ok(`wholeBodyQp 声明的 ${qpAxes.length} 根轴全部真的被写过（${qpAxes.join(', ')}）`);
+    ok(`QP 轴集合与表**双向一致**（${qpSpec.length} 根：${qpSpec.join(', ')}）`);
+  }
+
+  // E3：QP 在运行时**真的**在出力。
+  //   ⚠ 原来用 owner label 判（找 `全链QP/…`），**测不到** ——
+  //     `addTorque` 刻意**不换** `system`/`label`（保留首个写者，见 rigState 注释），
+  //     而 `hip/2`、`knee/2`、`foot/2` 上永远先有别的写者 ⇒ 那串 label 永不出现。
+  //     （又一个「探针自己说谎」：这次是匹配面**太窄**。）
+  //   ⇒ 改用**行为判据**：关掉 `qp` 门，逐轴累计 |τ| 必须变。
+  //     逐位相同 ⇒ QP 根本没接上（或解恒为 0）。
+  const qpOn = run({}, 4);
+  const qpOff = run({ ablate: 'qp' }, 4);
+  const diffs = qpOn.tauAcc.map((v, i) => Math.abs(v - (qpOff.tauAcc[i] ?? 0)));
+  const changed = diffs.map((d, i) => [i, d] as [number, number])
+    .filter(([, d]) => d > 1e-3).sort((a, b) => b[1] - a[1]);
+  if (!changed.length) {
+    bad('关掉 `qp` 门后逐轴累计 |τ| 逐位不变 ⇒ QP 根本没接上（或解恒为 0）');
+  } else {
+    const top = changed.slice(0, 3)
+      .map(([i, d]) => `${sk.joints[Math.floor(i / 3)]!.name}/${i % 3}:Δ${d.toFixed(1)}`);
+    ok(`关掉 qp 后逐轴累计 |τ| 改变 ⇒ QP 真的在出力（${changed.length} 根轴，最大 ${top.join(' ')}）`);
   }
 }
 
@@ -569,11 +670,11 @@ log('══ F. 唯一性：相位 / 角色标签只有一份定义 ══');
   for (const f of files) {
     if (!fs.existsSync(f)) continue;
     const s = read(f);
-    if (/PHASE_LABEL[^=]*=\s*\{[\s\S]{0,200}?DOUBLE:/.test(s)) defs.push(f);
+    if (/(?:STATE_LABEL|PHASE_LABEL)[^=]*=\s*\{[\s\S]{0,200}?DOUBLE:/.test(s)) defs.push(f);
   }
   if (defs.length > 1) bad(`相位标签表有 ${defs.length} 份定义：${defs.join(', ')}`);
   else if (defs.length === 1) ok(`相位标签表唯一（${defs[0]}）`);
-  else bad('找不到相位标签表定义');
+  else bad('找不到状态标签表定义（STATE_LABEL）');
 
   // F2：`rs.phase` / `rs.locked` 的写入者只能有 gaitState 一个模块
   const writers = new Set<string>();
@@ -614,7 +715,8 @@ log('══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽�
 {
   const { PHASE_TO_SCORING, SCORING_TO_STANCE, phaseStance } =
     await import('../src/core/gaitState');
-  const CTRL = ['DOUBLE', 'SHIFT', 'SINGLE', 'PUSH', 'STEP'] as const;
+  // ★ 2026-10-06 状态改名并重排（DOUBLE/LOAD/PUSH/LIFT/SWING，见 `架构_v2` §3）
+  const CTRL = ['DOUBLE', 'LOAD', 'PUSH', 'LIFT', 'SWING'] as const;
   const SCORE = ['both', 'step', 'adjust'] as const;
 
   // G1：每个控制相位都必须有映射（漏一个 = 两台机器对同一时刻说法不同）
@@ -628,16 +730,17 @@ log('══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽�
   else ok('映射目标全部合法');
 
   // G3：★ `phaseStance()` 必须与映射表一致（这就是"同一物理时刻同一个说法"）
-  //     控制侧的既有事实：`DOUBLE`/`SHIFT` 双脚、`SINGLE`/`PUSH`/`STEP` 单支撑。
+  //     控制侧的物理事实：`LIFT`/`SWING` 是**单支撑**（摆动腿离地）；
+  //     `DOUBLE`/`LOAD`/`PUSH` 是**双脚**（`PUSH` 是双脚支撑期内的蹬离）。
   const EXPECT: Record<string, string> = {
-    DOUBLE: 'double', SHIFT: 'double',
-    SINGLE: 'single', PUSH: 'single', STEP: 'single',
+    DOUBLE: 'double', LOAD: 'double', PUSH: 'double',
+    LIFT: 'single', SWING: 'single',
   };
   const wrong = CTRL.filter((p) => phaseStance(p) !== EXPECT[p]);
   if (wrong.length) {
     bad(`phaseStance 与控制侧语义不符：${wrong.map((p) => `${p}=${phaseStance(p)}(应 ${EXPECT[p]})`).join(', ')}`);
   } else {
-    ok('phaseStance 与控制侧语义一致（DOUBLE/SHIFT=双，SINGLE/PUSH/STEP=单）');
+    ok('phaseStance 与控制侧语义一致（DOUBLE/LOAD/PUSH=双，LIFT/SWING=单）');
   }
 
   // G4：计分三相必须都有支撑分类

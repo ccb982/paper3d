@@ -1,0 +1,181 @@
+export interface ExchangeEvent {
+  /** 本拍发生的事件（UI/日志用）。★ **不含**"状态迁移"以外的任何控制指令 */
+  kind: 'none' | 'state_change' | 'touchdown' | 'liftoff' | 'safe';
+  side?: Side;
+  note: string;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ★★★ **验收表（VERIFY）—— 每个状态「什么算通过」的唯一真源**
+// ══════════════════════════════════════════════════════════════════
+//
+//  迁移**只**由这张表驱动（用户 2026-10-06：「验收过了进下一个状态就行了」）。
+//  **没有任何计时器推进状态**；`stateT` 只用于 ① 防抖（OSL `min_time_in_state`）
+//  ② `Tmax` 超时回退（Vughuma 2022）。
+//
+//  判据类型全部来自文献（详见 `架构_v2_三模块协作.md` §3.4）：
+//   · 接触事件 / 接地标志 ................ SCONE、EPFL、OSL、Vughuma 全都用
+//   · 足底载荷阈值（体重归一）............ OSL 0.25/0.15/0.40 BW；SCONE stance/swing threshold
+//   · 足相对身体的**矢状位置**（腿长归一）.. SCONE `sagittal_pos` 全部迁移判据
+//   · 关节角阈值 + **角速度**阈值 ......... OSL `knee>50° ∧ knee_vel<3`；EPFL `LP` 用 −1°/s
+//   · 离地净空 .......................... Saunders 1953 MFC = 5cm
+//   ⚠ **没有任何一项用重心位置**（旧的 `comOverFootX/Z` 已退役：它会自己推着自己走，
+//     实测永不收敛 —— 243mm，见 `架构_v2` §3.5 的审计）。
+//   ⚠ MoS / 躯干倾角是**本 rig 特有的加强项**（四篇实现测不到这两个量）。
+export interface VerifySpec {
+  /** 项名（进 `rs.violations[].item`，UI 直接显示） */
+  item: string;
+  /** 该项怎么算通过。`ctx` 里是本拍算好的全部原始量。 */
+  ok: (ctx: VerifyCtx) => boolean;
+  /** 回读值（用于 `violations[].value`） */
+  val: (ctx: VerifyCtx) => number;
+  /** 门限（用于 `violations[].tol`） */
+  tol: (ctx: VerifyCtx) => number;
+  /** true = `hard` 项：连续越界超 `graceSec` ⇒ 进安全态 */
+  hard?: boolean;
+}
+
+export interface VerifyCtx {
+  rs: RigState;
+  cfg: GaitConfig;
+  state: GaitState;
+  /** 承重腿（载荷优势腿） */
+  sup: Side;
+  /** 摆动腿（= 另一条） */
+  sw: Side;
+  /** 前腿（几何 x，靠前的那只） */
+  front: Side;
+  /** 后腿 */
+  rear: Side;
+  /** 承接腿 = 本周期要成为承重腿的那只（DOUBLE/LOAD 期间由状态机指派） */
+  recv: Side;
+  /** 本拍刚触地（边沿） */
+  touchdown: Record<Side, boolean>;
+  /** 本拍刚离地（边沿） */
+  liftoff: Record<Side, boolean>;
+  /** 摆动腿膝角速度（deg/s，负 = 仍在屈曲，正 = 已在伸展） */
+  swingKneeVel: number;
+  /** 承重腿膝角速度（deg/s） */
+  supKneeVel: number;
+  /** 离地净空（m，≥0 表示已离地） */
+  clearance: number;
+  /** 距上次抬腿的间隔（s） */
+  sinceStep: number;
+  /** 帧域越界项数（由 `checkDomains` 填） */
+  domainBad: number;
+  /** 帧域越界总偏差（deg） */
+  domainWorst: number;
+}
+
+/**
+ * ★ 逐状态验收表。键 = 状态；值 = 该状态的**全部**验收项（AND 关系）。
+ *   新增状态或改判据**只改这一张表**，代码里不许散落字面量。
+ */
+export const VERIFY: Readonly<Record<GaitState, readonly VerifySpec[]>> = Object.freeze({
+  // ── DOUBLE → LOAD：双脚支撑 + 站得住（帧域 + 双脚接地 + 稳定性）────
+  DOUBLE: Object.freeze([
+    { item: '双脚接地', ok: (c) => c.rs.grounded[c.front] && c.rs.grounded[c.rear],
+      val: (c) => (c.rs.grounded[c.front] ? 1 : 0) + (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 2 },
+    // 两条腿都还带着重量 —— 真双支撑，而不是"一条腿已经卸掉"
+    { item: '轻腿仍有载荷', ok: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]) >= c.cfg.loadReleaseFrac,
+      val: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]), tol: (c) => c.cfg.loadReleaseFrac },
+    { item: '站姿在帧域内', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+    { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
+      val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
+    { item: 'MoS', ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin },
+  ] as readonly VerifySpec[]),
+
+  // ── LOAD → PUSH：重量已交到承接腿（= 抬腿的资格前提）─────────────
+  LOAD: Object.freeze([
+    { item: '承接腿承重', ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
+      val: (c) => c.rs.loadFrac[c.recv], tol: (c) => c.cfg.loadAcceptFrac },
+    { item: '后脚仍未离地', ok: (c) => c.rs.grounded[c.rear],
+      val: (c) => (c.rs.grounded[c.rear] ? 1 : 0), tol: () => 1 },
+    // ★ SCONE `EarlyStance→LateStance` 的等价判据：承接脚**不在重心前方太远**
+    { item: '承接脚矢状位置', ok: (c) => c.rs.sagPosRel(c.recv) <= c.cfg.sagLoadThr,
+      val: (c) => c.rs.sagPosRel(c.recv), tol: (c) => c.cfg.sagLoadThr },
+    // ★ 手性不变式：本周期的摆动腿不能与上周期相同
+    //   （SCONE/EPFL 是每腿一个 FSM，左右交替由结构保证；我们是周期级 FSM，
+    //     必须显式写死，否则"一直用同一条腿摆动"在结构上是允许的）
+    { item: '手性交替', ok: (c) => c.rs.lastSwing !== c.rear,
+      val: (c) => (c.rs.lastSwing === c.rear ? 0 : 1), tol: () => 1 },
+    { item: '节奏间隔', ok: (c) => c.sinceStep >= c.cfg.stepIntervalSec,
+      val: (c) => c.sinceStep, tol: (c) => c.cfg.stepIntervalSec },
+    { item: '帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+    { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
+      val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
+  ] as readonly VerifySpec[]),
+
+  // ── PUSH → LIFT：蹬离到位 + 后脚已后移到可离地位置 ────────────────
+  PUSH: Object.freeze([
+    { item: '承重踝跖屈到位', ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr,
+      val: (c) => c.rs.sagPosRel(c.rear), tol: (c) => c.cfg.sagLiftOffThr },
+    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup], val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
+    { item: '帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+    { item: '躯干倾角', ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
+      val: (c) => Math.abs(c.rs.tiltDeg), tol: (c) => c.cfg.tiltMaxDeg },
+  ] as readonly VerifySpec[]),
+
+  // ── LIFT → SWING：摆动腿**离地**、载荷已卸掉、净空达标 ────────────
+  //   这一组就是 SCONE `LateStance→LiftOff→Swing` 的等价物：
+  //   `leg_load < swing_load_threshold`（OSL 0.15 BW）。
+  LIFT: Object.freeze([
+    { item: '摆动腿已卸载', ok: (c) => c.rs.loadFrac[c.sw] <= c.cfg.loadReleaseFrac,
+      val: (c) => c.rs.loadFrac[c.sw], tol: (c) => c.cfg.loadReleaseFrac },
+    { item: '摆动腿已离地', ok: (c) => !c.rs.grounded[c.sw],
+      val: (c) => (c.rs.grounded[c.sw] ? 1 : 0), tol: () => 0 },
+    { item: '离地净空', ok: (c) => c.clearance >= c.cfg.minClearance,
+      val: (c) => c.clearance, tol: (c) => c.cfg.minClearance },
+    { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
+      val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
+    // ★ OSL：摆动腿膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
+    { item: '摆动膝屈曲', ok: (c) => c.rs.angle(J_KNEE(c.sw), 2) >= c.cfg.swingKneeMinDeg,
+      val: (c) => c.rs.angle(J_KNEE(c.sw), 2), tol: (c) => c.cfg.swingKneeMinDeg },
+    { item: '承重腿帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+    { item: 'MoS', ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin },
+  ] as readonly VerifySpec[]),
+
+  // ── SWING → DOUBLE：落地（接触事件 + 矢状位置 + 膝角速度回落）──────
+  //   EPFL 用**同侧触地**触发；SCONE 用 `sagittal_pos > landing_threshold`；
+  //   EPFL 的 `LP`（落地准备）用**屈伸角速度 < −1°/s**。
+  SWING: Object.freeze([
+    { item: '落地事件', ok: (c) => c.touchdown[c.sw], val: (c) => (c.touchdown[c.sw] ? 1 : 0), tol: () => 1 },
+    { item: '落地矢状位置', ok: (c) => c.rs.sagPosRel(c.sw) >= c.cfg.sagLandingThr,
+      val: (c) => c.rs.sagPosRel(c.sw), tol: (c) => c.cfg.sagLandingThr },
+    { item: '膝角速度回落', ok: (c) => c.swingKneeVel <= c.cfg.swingKneeVelMax,
+      val: (c) => c.swingKneeVel, tol: (c) => c.cfg.swingKneeVelMax },
+    { item: '承重腿未越界', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
+  ] as readonly VerifySpec[]),
+});
+
+/** 膝关节索引（按腿侧）。`jointIndexByName` 的轻量包装，避免每次查表 */
+function J_KNEE(side: Side): number {
+  const sk = KNEE_SIDE_CACHE;
+  return sk ? (side === 'l' ? sk.l : sk.r) : -1;
+}
+let KNEE_SIDE_CACHE: { l: number; r: number } | null = null;
+/** 由 `RigState` 初始化一次（`jointIndexByName` 需要骨架，rigState 里有） */
+export function bindJoints(rs: RigState): void {
+  const nm = (n: string): number => rs.sk.joints.findIndex((j) => j.name === n);
+  KNEE_SIDE_CACHE = { l: nm('knee_l'), r: nm('knee_r') };
+}
+
+/**
+ * ★ 帧域检查：实际姿态是否落在「本状态该有的区间」内。
+ *
+ *   两段式迟滞（Rezazadeh 2018 的 FSM：`q > q₄₁` 进 S2、`q < q₄₃` 回 S1）：
+ *   · **进入**下一态时用 `tolIn`（严）
+ *   · **保持**本态时用 `tolOut`（松）
+ *   ⇒ 没有它，接触噪声会让状态逐帧抖（这正是旧实现"20 拍全 DOUBLE"的原因之一）。
+ *
+ * @param entering 是否正在评估「进入下一状态」⇒ 用严容差
+ * @returns 越界项数与最差偏差（deg）
+ */
+function checkDomains(
+  rs: RigState, state: GaitState, sup: Side, sw: Side, entering: boolean,
+): { bad: number; worst: number } {
+  const supDeg = (axis: StateDomain['axis']): number => {
+    switch (axis) {
+      case 'hipFlex': return rs.angle(J_HIP(sup), 2) / DEG;
+      case 'hipAbd': return rs.angle(J_HIP(sup), 0) / DEG;
+      case 'kneeFlex': return rs.angle(J_KNE

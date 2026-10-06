@@ -79,6 +79,14 @@ export interface StepParams {
    *   真的更好"的唯一判据，不能因为新方案更好就删掉旧路径。
    */
   useKeyFrame: boolean;
+
+  /**
+   * ★ 消融通道名单（逗号分隔）。唯一被本系统消费的名字是 **`stepKeyframe`**
+   *   （= 整个迈步系统的总闸，见 `stepSystem()` 顶部的注释）。
+   *   ⚠ 由 `Controller` 把 `cfg.balance.ablate` **同一个字符串**传进来 ——
+   *     「全消融」必须只由一个开关定义，否则两个系统的消融实验互相对不上。
+   */
+  ablate?: string;
 }
 
 export const DEFAULT_STEP_PARAMS: StepParams = {
@@ -116,6 +124,24 @@ export const DEFAULT_STEP_PARAMS: StepParams = {
  *   · 腰的修正份额 = `rs.authority`（α(t)）
  */
 export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): void {
+  // ★★ 2026-10-06 加**总闸**：整个迈步系统一个 `ablate` 门（`stepKeyframe`）。
+  //
+  //   为什么必须有：门禁 B 要求「平衡全消融 ⇒ 与完全不经过 Controller 等价」，
+  //   而在此之前**本系统一个 `ablate` 门都没有** ⇒ 「全消融」里它照发位置指令，
+  //   ragdoll 的位置环仍在出力（力矩通道 τ≡0 但让位也 ≡0 ⇒ 位置环是活的）
+  //   ⇒ 实测全消融只活 **1.30s**，而真正零输出活 **4.48s**。
+  //   ⇒ 那个 3.2 秒的差**全部是本系统的位置指令**，不是平衡的残留。
+  //
+  //   ⚠ 门选 `stepKeyframe` 而不是 per-channel：本系统的语义就是「把关节往关键帧
+  //     区间推」，拆成多个门会让「全消融」又变成半消融（老问题）。
+  //   ⚠ 提前 return 也顺带把 `rs.shiftDemand*` 归零 —— 那是**故意的**：
+  //     `balance` 的横向驱动块以 `shiftDemandF !== 0` 为前提，
+  //     全消融时它必须一起消失，否则力通道又活了。
+  const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
+  /** 与 `balance.ts` 同名同义的消融门（门禁 A2 靠 `on('…')` 这个写法对账） */
+  const on = (ch: string): boolean => !OFF.has(ch);
+  if (!on('stepKeyframe')) return;
+
   const sk = rs.sk;
   const swing: Side = rs.swingLeg();
   const jHip = jointIndexByName(sk, swing === 'l' ? 'hip_l' : 'hip_r');
@@ -166,7 +192,9 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   `SINGLE`**（gaitState.ts:443-448），`SHIFT` 只能从 `STEP` 触地进入
   //   ⇒ **第一次交接根本没有 SHIFT 相**（只判 SHIFT 的通道永不触发）。
   //   `handoverOk === false` = 交接还没成 = 本系统还有活要干；一旦达成自动撤力。
-  if ((rs.phase === 'SHIFT' || rs.phase === 'DOUBLE') && !rs.handoverOk) {
+  // ★ 2026-10-06：`SHIFT` 已改名 `LOAD`（重量交接）。侧向搬运意图只在交接期发 ——
+  //   这与附录 §5.2 的 `shift` 子任务一致：交接由承重腿完成，摆动腿不许动。
+  if ((rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     // 体重真源在 `sk.cfg.mass`（骨架唯一真源，`skeleton.ts:335`）
@@ -175,7 +203,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
       + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
     // 渐入渐出：阶跃力会把 CoP 直接推出支撑面
-    const ramp = p.shiftRamp > 0 ? Math.min(1, rs.phaseT / p.shiftRamp) : 1;
+    const ramp = p.shiftRamp > 0 ? Math.min(1, rs.stateT / p.shiftRamp) : 1;
     const smooth = ramp * ramp * (3 - 2 * ramp);
     rs.shiftDemandF = lim * smooth;
     rs.shiftDriveSide = rs.swingLeg();   // ★ 对侧（轻）腿蹬地
@@ -186,17 +214,18 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   R1（Kuindersma）：感知接触与计划接触**都成立**才能离地。
   // ══════════════════════════════════════════════════════════════
   const permit = rs.stepPermit.all;
-  // 相内进度 s ∈ [0,1]：STEP 相才推进；其它相保持抬起高度或落下
-  const s = rs.phase === 'STEP'
-    ? Math.max(0, Math.min(1, rs.phaseT / Math.max(1e-6, p.halfPeriod)))
-    : (rs.phase === 'DOUBLE' || rs.phase === 'SHIFT' ? 0 : 1);
+  // 相内进度 s ∈ [0,1]：**`SWING` 相才推进**（摆动到落地）；其它相不动摆动腿。
+  // ⚠ `LIFT` 相**必须能抬腿**（它是「离地」这一态，见文档 §3.2），所以给固定抬升量。
+  const s = rs.state === 'SWING'
+    ? Math.max(0, Math.min(1, rs.stateT / Math.max(1e-6, p.halfPeriod)))
+    : 0;
+  const inSwing = rs.state === 'LIFT' || rs.state === 'SWING';
 
   // 抬升量：钟形，两端速度为零（sin(πs)）
-  const bell = Math.sin(Math.PI * s);
-  const hold = rs.phase === 'SINGLE' || rs.phase === 'STEP';
-  const lift = permit && hold
-    ? p.lift * bell + (s >= 1 ? p.liftHold : 0)
-    : (rs.phase === 'SINGLE' ? p.liftHold : 0);
+  const bell = rs.state === 'SWING' ? Math.sin(Math.PI * s) : 0;
+  const lift = permit && inSwing
+    ? (rs.state === 'LIFT' ? p.lift : p.lift * bell + (s >= 1 ? p.liftHold : 0))
+    : 0;
 
   // ══════════════════════════════════════════════════════════════
   // ★★ ② 摆动腿：**沿 Perry 关键帧曲线走**（`keyframe.ts` 唯一真源）
@@ -269,7 +298,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   const sReach = s <= p.reachFrom ? 0
     : (s >= 1 ? 1 : (() => { const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom); return u * u * (3 - 2 * u); })());
   const hipDeg = p.hipFlexPeakDeg * bell + holdHip
-    - p.hipExtendDeg * sReach * (permit || rs.phase === 'STEP' ? 1 : 0);
+    - p.hipExtendDeg * sReach * (permit || rs.state === 'SWING' ? 1 : 0);
   //   ↑ 末端伸展是**减去**伸展量（往 −x 收回）—— 与髋"正=屈"的约定一致。
   // ⚠⚠⚠ **髋与膝的屈伸符号约定相反**，别再照抄：
   //   实测（tools/_fs，腿自由摆 1.5 s，人物朝 +x）：

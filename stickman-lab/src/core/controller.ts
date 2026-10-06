@@ -167,7 +167,9 @@ export class Controller {
     //   balance 后跑：把它当偏置读进去，再叠 τmax / CoP 余量两道**护栏**。
     //   反过来 ⇒ balance 读到的是上一拍的意图，控制律整整滞后一帧（16.7ms），
     //   而且 SHIFT 相刚进入时推力阶跃会晚一拍才生效。
-    stepSystem(rs, this.cfg.step);
+    // ★ 2026-10-06：消融名单**只有一个来源**（`cfg.balance.ablate`）。
+    //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
+    stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
     balanceSystem(rs, this.cfg.balance, this.sim.doll);
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────

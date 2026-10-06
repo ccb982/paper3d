@@ -1886,12 +1886,12 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number | undefined} filter_groups
       * @param {Function} filter_predicate
       */
-      update_vehicle(dt, bodies, colliders, queries, filter_flags, filter_groups, filter_predicate) {
+      update_vehicle(dt2, bodies, colliders, queries, filter_flags, filter_groups, filter_predicate) {
         try {
           _assertClass(bodies, RawRigidBodySet);
           _assertClass(colliders, RawColliderSet);
           _assertClass(queries, RawQueryPipeline);
-          wasm.rawdynamicraycastvehiclecontroller_update_vehicle(this.__wbg_ptr, dt, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
+          wasm.rawdynamicraycastvehiclecontroller_update_vehicle(this.__wbg_ptr, dt2, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -3232,13 +3232,13 @@ var init_rapier_wasm3d_bg = __esm({
       * @param {number | undefined} filter_groups
       * @param {Function} filter_predicate
       */
-      computeColliderMovement(dt, bodies, colliders, queries, collider_handle, desired_translation_delta, apply_impulses_to_dynamic_bodies, character_mass, filter_flags, filter_groups, filter_predicate) {
+      computeColliderMovement(dt2, bodies, colliders, queries, collider_handle, desired_translation_delta, apply_impulses_to_dynamic_bodies, character_mass, filter_flags, filter_groups, filter_predicate) {
         try {
           _assertClass(bodies, RawRigidBodySet);
           _assertClass(colliders, RawColliderSet);
           _assertClass(queries, RawQueryPipeline);
           _assertClass(desired_translation_delta, RawVector);
-          wasm.rawkinematiccharactercontroller_computeColliderMovement(this.__wbg_ptr, dt, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, collider_handle, desired_translation_delta.__wbg_ptr, apply_impulses_to_dynamic_bodies, !isLikeNone(character_mass), isLikeNone(character_mass) ? 0 : character_mass, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
+          wasm.rawkinematiccharactercontroller_computeColliderMovement(this.__wbg_ptr, dt2, bodies.__wbg_ptr, colliders.__wbg_ptr, queries.__wbg_ptr, collider_handle, desired_translation_delta.__wbg_ptr, apply_impulses_to_dynamic_bodies, !isLikeNone(character_mass), isLikeNone(character_mass) ? 0 : character_mass, filter_flags, !isLikeNone(filter_groups), isLikeNone(filter_groups) ? 0 : filter_groups, addBorrowedObject(filter_predicate));
         } finally {
           heap[stack_pointer++] = void 0;
         }
@@ -11398,8 +11398,8 @@ var init_ray_cast_vehicle_controller = __esm({
        * @param filterGroups - Only colliders compatible with these groups will be hit by the wheels’ ray-casts.
        * @param filterPredicate - Callback to filter out which collider will be hit by the wheels’ ray-casts.
        */
-      updateVehicle(dt, filterFlags, filterGroups, filterPredicate) {
-        this.raw.update_vehicle(dt, this.bodies.raw, this.colliders.raw, this.queries.raw, filterFlags, filterGroups, this.colliders.castClosure(filterPredicate));
+      updateVehicle(dt2, filterFlags, filterGroups, filterPredicate) {
+        this.raw.update_vehicle(dt2, this.bodies.raw, this.colliders.raw, this.queries.raw, filterFlags, filterGroups, this.colliders.castClosure(filterPredicate));
       }
       /**
        * The current forward speed of the vehicle.
@@ -11909,8 +11909,8 @@ var init_world = __esm({
        *
        * @param dt - The timestep length, in seconds.
        */
-      set timestep(dt) {
-        this.integrationParameters.dt = dt;
+      set timestep(dt2) {
+        this.integrationParameters.dt = dt2;
       }
       /**
        * The approximate size of most dynamic objects in the scene.
@@ -14961,8 +14961,8 @@ var init_ragdoll = __esm({
                 this.toLocal(bi, p.x, p.y, p.z, this.footTmp);
                 const t = this.footTmp;
                 const dx = Math.abs(t[0] - cdOx), dz = Math.abs(t[2] - cd.offsetZ);
-                const ok2 = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
-                cb(`     ${lb.padEnd(12)} \u672C\u4F53(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)}) \u5C40\u90E8(${(t[0] * 1e3).toFixed(0)},${(t[1] * 1e3).toFixed(0)},${(t[2] * 1e3).toFixed(0)})mm  \u0394x${(dx * 1e3).toFixed(0)}/${(cd.hx * 1e3).toFixed(0)} \u0394z${(dz * 1e3).toFixed(0)}/${(cd.hz * 1e3).toFixed(0)}  ${ok2 ? "\u2713" : "\u2717"}`);
+                const ok = dx <= cd.hx + 2e-3 && dz <= cd.hz + 2e-3;
+                cb(`     ${lb.padEnd(12)} \u672C\u4F53(${tr.x.toFixed(3)},${tr.y.toFixed(3)},${tr.z.toFixed(3)}) \u5C40\u90E8(${(t[0] * 1e3).toFixed(0)},${(t[1] * 1e3).toFixed(0)},${(t[2] * 1e3).toFixed(0)})mm  \u0394x${(dx * 1e3).toFixed(0)}/${(cd.hx * 1e3).toFixed(0)} \u0394z${(dz * 1e3).toFixed(0)}/${(cd.hz * 1e3).toFixed(0)}  ${ok ? "\u2713" : "\u2717"}`);
               }
             });
           });
@@ -15152,7 +15152,7 @@ var init_ragdoll = __esm({
        *
        * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
        */
-      footLoadFrac(dt) {
+      footLoadFrac(dt2) {
         const sumOne = (side) => {
           const cols = this.soleCols[side];
           let f = 0;
@@ -15161,7 +15161,7 @@ var init_ragdoll = __esm({
             this.world.contactPairsWith(col, (other) => {
               this.world.contactPair(col, other, (mf) => {
                 if (mf.numContacts() === 0) return;
-                for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+                for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt2;
               });
             });
           }
@@ -15180,7 +15180,7 @@ var init_ragdoll = __esm({
        *   Rapier 的 `TempContactManifold` 只暴露法向冲量，切向冲量要靠切点速度估计，
        *   这里用"接触点相对切向速度 × 法向冲量"做一阶估计。
        */
-      footGrip(side, dt) {
+      footGrip(side, dt2) {
         const cols = this.soleCols[side];
         let fn = 0;
         for (let ci = 0; ci < cols.length; ci++) {
@@ -15188,7 +15188,7 @@ var init_ragdoll = __esm({
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               if (mf.numContacts() === 0) return;
-              for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt;
+              for (let k = 0; k < mf.numContacts(); k++) fn += Math.abs(mf.contactImpulse(k)) / dt2;
             });
           });
         }
@@ -15214,8 +15214,8 @@ var init_ragdoll = __esm({
        */
       lastStance = 0;
       stanceAge = 0;
-      altEvent(stanceNow, dt) {
-        this.stanceAge += dt;
+      altEvent(stanceNow, dt2) {
+        this.stanceAge += dt2;
         const prev = this.lastStance;
         this.lastStance = stanceNow;
         const switched = prev === 1 && stanceNow === 2 || prev === 2 && stanceNow === 1;
@@ -15256,7 +15256,7 @@ var init_ragdoll = __esm({
        *  这里给出公共读数，好让"真单支撑"的判据在两条路径上用**同一个数**。 */
       stanceClearancePeak = 0;
       /** ★ 唯一推进点：每个控制拍调一次（与 `altEvent` 同一处）。 */
-      advanceStance(dt) {
+      advanceStance(dt2) {
         const gL = this.footGrounded(0);
         const gR = this.footGrounded(1);
         const nGround = (gL ? 1 : 0) + (gR ? 1 : 0);
@@ -15264,11 +15264,11 @@ var init_ragdoll = __esm({
         const raw = nGround === 1 && Math.max(this.stanceClearancePeak, clr) >= STANCE_CLEAR_MIN;
         if (raw) {
           this.stanceExitT = 0;
-          this.stanceEnterT += dt;
+          this.stanceEnterT += dt2;
           if (this.stanceEnterT >= STANCE_ENTER) this.stanceSingle = true;
         } else {
           this.stanceEnterT = 0;
-          this.stanceExitT += dt;
+          this.stanceExitT += dt2;
           if (this.stanceExitT >= STANCE_EXIT) this.stanceSingle = false;
         }
       }
@@ -15562,10 +15562,10 @@ var init_ragdoll = __esm({
        *   **这是自下而上的读数**：foot 的子树 = 脚掌；knee 的子树 = 小腿+脚；
        *   hip 的子树 = 大腿+小腿+脚 ⇒ 数值应当**自下而上递增**。
        */
-      jointForce(out, dt) {
+      jointForce(out, dt2) {
         const g = 9.81;
         const win = Math.max(1, Math.min(this.velRing.length / Math.max(1, this.bodies.length), VEL_WIN));
-        const dtW = dt * win;
+        const dtW = dt2 * win;
         for (let i = 0; i < this.sk.joints.length; i++) {
           const o = i * 5;
           if (o + 4 >= out.length) break;
@@ -15765,10 +15765,10 @@ var init_ragdoll = __esm({
        *      ★ 它只在**越界之后**介入，越界时直接接管该轴的目标速度（不再走位置环）
        *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
-      driveMotors(dt) {
-        this.physicsDt = dt;
+      driveMotors(dt2) {
+        this.physicsDt = dt2;
         {
-          const hz = dt > 1e-9 ? 1 / dt : ASSUMED_PHYSICS_HZ;
+          const hz = dt2 > 1e-9 ? 1 / dt2 : ASSUMED_PHYSICS_HZ;
           if (Math.abs(hz - this.limitBiasMaxHz) / this.limitBiasMaxHz > 0.05) {
             const k = hz / this.limitBiasMaxHz;
             for (let i = 0; i < this.limitBiasMax.length; i++) {
@@ -15778,7 +15778,7 @@ var init_ragdoll = __esm({
           }
         }
         const scale = this.opt.torqueScale;
-        this.lastDt = dt;
+        this.lastDt = dt2;
         const limp = this.limp;
         const kP = limp ? 0 : this.opt.kP;
         const kD = limp ? 0 : this.opt.kD;
@@ -15847,11 +15847,11 @@ var init_ragdoll = __esm({
             }
             this.tauApplied[idx] = tau;
             this.motorDemand[idx] = tau;
-            let imp = tau * dt;
+            let imp = tau * dt2;
             const ff = this.torqueCmd[idx];
-            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt;
-            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
-            const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
+            const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / JOINT_MAX_SPEED) * dt2;
+            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt2;
+            const impStable = impDamp + Math.abs(ff) * dt2 + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
             else if (imp < -impStable) imp = -impStable;
@@ -16052,8 +16052,8 @@ var init_ragdoll = __esm({
        * ⚠ 已知局限：`copOffset` 是**运动学**的（直接给定位置），不含足底软组织的本构关系；
        *   要更真实需要把足底建成若干带弹簧的子段。
        */
-      applySupportPoint(dt) {
-        const [fl, fr] = this.footLoadFrac(dt);
+      applySupportPoint(dt2) {
+        const [fl, fr] = this.footLoadFrac(dt2);
         let mSum = 0;
         for (const b of this.bodies) mSum += b.mass();
         for (const side of [0, 1]) {
@@ -16072,11 +16072,11 @@ var init_ragdoll = __esm({
           this.ptTmp.y = p.y + ax[1] * this.copOffset[side];
           this.ptTmp.z = p.z + ax[2] * this.copOffset[side];
           this.ivUp.x = 0;
-          this.ivUp.y = F * dt;
+          this.ivUp.y = F * dt2;
           this.ivUp.z = 0;
           foot.applyImpulseAtPoint(this.ivUp, this.ptTmp, true);
           this.ivUp.x = 0;
-          this.ivUp.y = -F * dt;
+          this.ivUp.y = -F * dt2;
           this.ivUp.z = 0;
           foot.applyImpulseAtPoint(this.ivUp, this.pcTmp, true);
         }
@@ -16703,11 +16703,11 @@ var init_gaitRef = __esm({
        * @param grounded 该脚是否着地
        * @param onsetThr 启动阈值（rad/s），低于它算"静止"
        */
-      step(hipVel, kneeVel, grounded, dt, peakThr = 0.8) {
-        const a = 1 - Math.exp(-dt / 0.03);
+      step(hipVel, kneeVel, grounded, dt2, peakThr = 0.8) {
+        const a = 1 - Math.exp(-dt2 / 0.03);
         this.hv += (hipVel - this.hv) * a;
         this.kv += (kneeVel - this.kv) * a;
-        this.t += dt;
+        this.t += dt2;
         this.hvMax = Math.max(this.hvMax, Math.abs(this.hv));
         if (Math.abs(this.hv) > peakThr && Math.abs(this.hv) > Math.abs(this.hipPeakV)) {
           this.hipPeakV = this.hv;
@@ -16763,9 +16763,6 @@ var init_gaitRef = __esm({
 });
 
 // src/core/keyframe.ts
-function stateDomains(state, leg) {
-  return STATE_DOMAINS.filter((d) => d.state === state && (leg === void 0 || d.leg === leg));
-}
 function lerpKeyPose(from, to, s) {
   const a = KEY_POSES[from], b = KEY_POSES[to];
   const u = s < 0 ? 0 : s > 1 ? 1 : s;
@@ -16791,7 +16788,7 @@ function stanceWidthRatio(soleZl, soleZr, biiliac = 0.25) {
 function supportEntry(soleZl, footHalfWidth = 0.05) {
   return Math.abs(soleZl) - footHalfWidth;
 }
-var GAIT_KEY_RANGE, D, KEY_POSES, STATE_TO_GAIT, D2R_, STATE_DOMAINS;
+var GAIT_KEY_RANGE, D, KEY_POSES, PHASE_TO_GAIT;
 var init_keyframe = __esm({
   "src/core/keyframe.ts"() {
     "use strict";
@@ -16905,43 +16902,14 @@ var init_keyframe = __esm({
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
       }
     });
-    STATE_TO_GAIT = Object.freeze({
+    PHASE_TO_GAIT = Object.freeze({
+      // DOUBLE/SHIFT = 双支撑的前后两段 + 交接
       DOUBLE: "MSt",
-      LOAD: "LR",
-      PUSH: "TSt",
-      LIFT: "ISw",
-      SWING: "MSw"
+      SHIFT: "LR",
+      SINGLE: "MSt",
+      PUSH: "PSw",
+      STEP: "ISw"
     });
-    D2R_ = Math.PI / 180;
-    STATE_DOMAINS = Object.freeze([
-      // ── DOUBLE：双脚稳定站立（= 安静站立姿态，Perry：MSt 附近接近静态站姿）
-      { state: "DOUBLE", leg: "support", axis: "hipFlex", lo: -10, hi: 5, tolIn: 10, tolOut: 20, hard: true },
-      { state: "DOUBLE", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 8, tolOut: 16, hard: true },
-      { state: "DOUBLE", leg: "support", axis: "ankle", lo: -8, hi: 4, tolIn: 8, tolOut: 16, hard: true },
-      { state: "DOUBLE", leg: "trunk", axis: "trunkPitch", lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
-      { state: "DOUBLE", leg: "trunk", axis: "trunkLat", lo: -4, hi: 4, tolIn: 6, tolOut: 12, hard: false },
-      // ── LOAD：重量交接。**被卸载腿不许塌**（它还要留下来承重）
-      { state: "LOAD", leg: "support", axis: "hipFlex", lo: -10, hi: 5, tolIn: 12, tolOut: 22, hard: true },
-      { state: "LOAD", leg: "support", axis: "kneeFlex", lo: 0, hi: 20, tolIn: 10, tolOut: 20, hard: true },
-      { state: "LOAD", leg: "support", axis: "ankle", lo: -8, hi: 18, tolIn: 12, tolOut: 22, hard: true },
-      { state: "LOAD", leg: "trunk", axis: "trunkLat", lo: -6, hi: 6, tolIn: 8, tolOut: 16, hard: false },
-      // ── PUSH：蹬离（Perry TSt→PSw：踝跖屈峰、膝伸、髋伸）
-      { state: "PUSH", leg: "support", axis: "ankle", lo: -6, hi: 22, tolIn: 10, tolOut: 20, hard: true },
-      { state: "PUSH", leg: "support", axis: "kneeFlex", lo: -2, hi: 12, tolIn: 10, tolOut: 20, hard: true },
-      { state: "PUSH", leg: "support", axis: "hipFlex", lo: -20, hi: 5, tolIn: 12, tolOut: 22, hard: true },
-      // ── LIFT：摆动腿离地、建立单支撑（承重腿 = 静态站立姿态）
-      { state: "LIFT", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
-      { state: "LIFT", leg: "support", axis: "ankle", lo: -10, hi: 4, tolIn: 10, tolOut: 20, hard: true },
-      { state: "LIFT", leg: "support", axis: "hipFlex", lo: -12, hi: 5, tolIn: 12, tolOut: 22, hard: true },
-      // 摆动腿：离地瞬间（PSw→ISw：膝快速屈曲）
-      { state: "LIFT", leg: "swing", axis: "kneeFlex", lo: 20, hi: 62, tolIn: 14, tolOut: 26, hard: false },
-      { state: "LIFT", leg: "swing", axis: "ankle", lo: -12, hi: 20, tolIn: 14, tolOut: 26, hard: false },
-      // ── SWING：摆动到落地（Perry MSw→TSw：膝峰后落回、髋保持 25°）
-      { state: "SWING", leg: "support", axis: "kneeFlex", lo: 0, hi: 12, tolIn: 10, tolOut: 20, hard: true },
-      { state: "SWING", leg: "support", axis: "ankle", lo: -10, hi: 6, tolIn: 10, tolOut: 20, hard: true },
-      { state: "SWING", leg: "swing", axis: "kneeFlex", lo: 0, hi: 40, tolIn: 14, tolOut: 26, hard: false },
-      { state: "SWING", leg: "swing", axis: "hipFlex", lo: 18, hi: 32, tolIn: 12, tolOut: 24, hard: false }
-    ]);
   }
 });
 
@@ -16953,26 +16921,12 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
     init_skeleton();
     init_keyframe();
-    NEXT_STATE = Object.freeze({
-      DOUBLE: "LOAD",
-      LOAD: "PUSH",
-      PUSH: "LIFT",
-      LIFT: "SWING",
-      SWING: "DOUBLE"
-    });
-    LEGACY_STATE_ALIAS = Object.freeze({
-      DOUBLE: "DOUBLE",
-      SHIFT: "LOAD",
-      SINGLE: "LIFT",
-      PUSH: "PUSH",
-      STEP: "SWING"
-    });
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
@@ -16988,22 +16942,9 @@ var init_rigState = __esm({
       /** 上一拍的前腿（并齐时保持用，避免与 loadBearer 循环依赖，见 frontLeg） */
       frontPrev = null;
       locked = { l: false, r: false };
-      /** ★ 当前状态（5 态固定环）。**只由 `gaitState` 写**。 */
-      state = "DOUBLE";
-      /** 本状态已停留时间（**只用于防抖与 `Tmax`**，不参与推进） */
-      stateT = 0;
+      phase = "DOUBLE";
+      phaseT = 0;
       authority = 0;
-      // ── 验收输出（状态机的全部输出，见文档 §7「穷举就这 6 项」）────────
-      /** 本拍验收是否通过（=「可以进下一个状态」） */
-      verified = false;
-      /** 逐项验收明细：哪一项没过、差多少、门限多少。**空数组 = 全过**。 */
-      violations = [];
-      /** 安全态（Vughuma 2022：每个正常态派生安全态 + `Tmax`） */
-      safe = false;
-      /** 上一周期摆动腿 —— 手性不变式：连续两周期的摆动腿必须不同 */
-      lastSwing = null;
-      /** 已完成的迈步周期数（每绕环一圈 +1；门禁用它确认 5 态都被走过） */
-      cycleCount = 0;
       // ── 读数（每拍从物理回读一次，两系统共享）
       pos;
       vel;
@@ -17408,31 +17349,6 @@ var init_rigState = __esm({
       isLocked(s) {
         return this.locked[s];
       }
-      /**
-       * ★★ **足相对身体的矢状位置**（SCONE `GaitStateController.sagittal_pos`，无量纲）。
-       *
-       *   `sagPosRel(side) = (footX[side] − com.x) / legLen`，`legLen = com.y − soleY`
-       *   （腿长用 CoM 高出该脚足底的高度量，与 SCONE 的「以腿长为单位」同口径）。
-       *
-       *   **为什么用它取代 `comOverFootX` 做迁移判据**（文献依据）：
-       *     · SCONE 的 `Landing/EarlyStance/LateStance/LiftOff/Swing` **全部**用
-       *       「相对腿长的矢状足位置」阈值 + 足载阈值，**没有一个用重心位置**；
-       *     · 重心位置会**自己推着自己走**：`comOverFootX` 里减的 `footX` 来自
-       *       支撑脚，而支撑脚是控制器自己在推的量 ⇒ 实测永不收敛
-       *       （额状 243mm，矢状同理），状态机因此卡死在 `DOUBLE`。
-       *   ⇒ 判据必须是**独立于自身动作**的量：足的位置 + 脚的载荷。
-       *
-       *   正号 = 该脚在重心**前方**；负号 = 在重心后方。
-       */
-      sagPosRel(side) {
-        const legLen = Math.max(0.2, this.com.y - (this.soleY[side] ?? 0));
-        return ((this.soleX[side] ?? 0) - this.com.x) / legLen;
-      }
-      /** 腿长（用于把矢状距离归一化），与 `sagPosRel` 同一口径 */
-      legLength() {
-        const s = this.supportLeg();
-        return Math.max(0.2, this.com.y - (this.soleY[s] ?? 0));
-      }
       jointPos(joint, axis) {
         return this.pos[joint * 3 + axis] ?? 0;
       }
@@ -17704,10 +17620,10 @@ var init_rigState = __esm({
       }
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
-      beginTick(dt) {
-        this.dtCtrl = dt > 1e-6 ? dt : 1 / 60;
+      beginTick(dt2) {
+        this.dtCtrl = dt2 > 1e-6 ? dt2 : 1 / 60;
         this.tickNo++;
-        this.tSec += dt;
+        this.tSec += dt2;
         this.req.fill(void 0);
         this.treq.fill(void 0);
         this.hold.fill(false);
@@ -17736,9 +17652,9 @@ var init_rigState = __esm({
         this.lockReleased.r = false;
       }
       /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
-      arbitrate(dt) {
+      arbitrate(dt2) {
         const out = this.prevOut;
-        const maxStep = this.cfg.slewLimit * dt;
+        const maxStep = this.cfg.slewLimit * dt2;
         for (let i = 0; i < this.nAxes; i++) {
           const r = this.req[i];
           const t = this.tgt[i];
@@ -17824,13 +17740,13 @@ var init_rigState = __esm({
        * 每拍更新重心转移诊断。`dt` 用**控制拍**长（历史按拍推）。
        * `cmdGrfLat` 由平衡系统写入（`grfCmd.z`），这里只读，避免两个系统互写。
        */
-      updateComTransfer(dt) {
+      updateComTransfer(dt2) {
         const front = this.frontLegSide;
         const stanceZ = front === "l" ? this.soleZ.l : this.soleZ.r;
         const stanceX = front === "l" ? this.soleX.l : this.soleX.r;
         this.comErrLat = this.com.z - stanceZ;
         this.comErrSag = this.com.x - stanceX;
-        if (this.rateLatHave && dt > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt;
+        if (this.rateLatHave && dt2 > 1e-6) this.comRateLat = (this.comErrLat - this.rateLatPrev) / dt2;
         this.rateLatPrev = this.comErrLat;
         this.rateLatHave = true;
         this.comTransferHist.push(this.comErrLat);
@@ -17908,13 +17824,8 @@ var init_rigState = __esm({
         return {
           tick: this.tickNo,
           t: this.tSec,
-          state: this.state,
-          stateT: this.stateT,
-          verified: this.verified,
-          violations: this.violations.map((v) => ({ ...v })),
-          safe: this.safe,
-          lastSwing: this.lastSwing,
-          cycleCount: this.cycleCount,
+          phase: this.phase,
+          phaseT: this.phaseT,
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18025,26 +17936,6 @@ var init_rigState = __esm({
 });
 
 // src/core/gaitState.ts
-var gaitState_exports = {};
-__export(gaitState_exports, {
-  DEFAULT_GAIT_CONFIG: () => DEFAULT_GAIT_CONFIG,
-  GaitState: () => GaitState,
-  PHASE_LABEL: () => PHASE_LABEL,
-  PHASE_TO_SCORING: () => PHASE_TO_SCORING,
-  SCORING_TO_STANCE: () => SCORING_TO_STANCE,
-  STATE_LABEL: () => STATE_LABEL,
-  STATE_ORDER: () => STATE_ORDER,
-  STATE_TO_SCORING: () => STATE_TO_SCORING,
-  STEP_CYCLE_SEC: () => STEP_CYCLE_SEC,
-  VERIFY: () => VERIFY,
-  checkDomains: () => checkDomains,
-  phaseStance: () => phaseStance,
-  smoothAuthority: () => smoothAuthority,
-  stateStance: () => stateStance
-});
-function stateStance(s) {
-  return SCORING_TO_STANCE[STATE_TO_SCORING[s]];
-}
 function cdf(x) {
   const s = x < 0 ? -1 : 1;
   const z = Math.abs(x) / Math.SQRT2;
@@ -18052,456 +17943,337 @@ function cdf(x) {
   const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-z * z);
   return 0.5 * (1 + s * y);
 }
-function smoothAuthority(state, stateT, ramp, sigma) {
-  if (state !== "SWING") return 0;
-  const p = Math.max(0, Math.min(1, stateT / Math.max(1e-6, ramp)));
+function smoothAuthority(phase, phaseT, ramp, sigma) {
+  if (phase !== "STEP") return 0;
+  const p = Math.max(0, Math.min(1, phaseT / Math.max(1e-6, ramp)));
   const ramped = Math.min(1, 1.5 * p);
   return 0.5 * (1 + cdf((ramped - 0.5) / Math.max(1e-6, sigma)));
 }
-function checkDomains(rs, state, sup, sw, entering) {
-  const legDeg = (leg, axis) => {
-    switch (axis) {
-      case "hipFlex":
-        return rs.angle(JIDX[leg].hip, 2) / DEG2;
-      case "hipAbd":
-        return rs.angle(JIDX[leg].hip, 0) / DEG2;
-      case "kneeFlex":
-        return rs.angle(JIDX[leg].knee, 2) / DEG2;
-      case "ankle":
-        return -rs.angle(JIDX[leg].foot, 2) / DEG2;
-      default:
-        return 0;
-    }
-  };
-  let bad2 = 0;
-  let worst = 0;
-  const hit = (q, d) => {
-    const tol = entering ? d.tolIn : d.tolOut;
-    const over = Math.max(d.lo - q, q - d.hi, 0);
-    if (over > tol) {
-      bad2++;
-      worst = Math.max(worst, over - tol);
-    }
-  };
-  for (const d of stateDomains(state)) {
-    if (d.leg === "trunk") continue;
-    hit(legDeg(d.leg === "support" ? sup : sw, d.axis), d);
-  }
-  for (const d of stateDomains(state, "trunk")) {
-    hit(d.axis === "trunkPitch" ? rs.pitchDeg : rs.rollDeg, d);
-  }
-  return { bad: bad2, worst };
-}
-function phaseStance(s) {
-  return stateStance(s);
-}
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_HANDOVER_DWELL, DEFAULT_HANDOVER_TOL_X, DEFAULT_HANDOVER_TOL_Z, DEFAULT_GAIT_CONFIG, PHASE_ORDER, PHASE_TO_SCORING, SCORING_TO_STANCE, PHASE_LABEL, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
     init_rigState();
     init_keyframe();
-    DEG2 = 180 / Math.PI;
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
+    DEFAULT_HANDOVER_DWELL = 0.3;
+    DEFAULT_HANDOVER_TOL_X = 0.02;
+    DEFAULT_HANDOVER_TOL_Z = 0.05;
     DEFAULT_GAIT_CONFIG = {
-      loadAcceptFrac: 0.6,
-      // OSL 0.40 BW 量级；取 0.60 因为本 rig 双支撑各约 0.5
-      loadReleaseFrac: 0.15,
-      // OSL `loadESwing = 0.15 BW`
-      bearerLoadHyst: 0.08,
-      // 载荷量级迟滞（与旧实现同值，双支撑各约 0.5）
-      sagLoadThr: 0.1,
-      // 承接脚不超前重心 0.10 腿长
-      sagLiftOffThr: -0.35,
-      // 后脚后移到 −0.35 腿长（SCONE liftoff 默认 −1，按腿长归一后放宽）
-      sagLandingThr: -0.05,
-      // 落地脚到重心稍前即可
-      swingKneeMinDeg: 20,
-      // 离地后膝至少屈 20°
-      swingKneeVelMax: 40,
-      // 40 deg/s：EPFL 的 −1 deg/s 远保守，按本 rig 尺度放宽
-      minClearance: 0.05,
-      // MFC = 5cm（Saunders 1953）
+      bearerLoad: 0.6,
+      bearerLoadHyst: 0.45,
+      bearerMosMin: 0,
+      bearerHoldSec: 0.08,
+      unlockMosHoldSec: 0.12,
+      unlockTiltMaxDeg: 20,
+      permitMosMin: 0,
+      permitDoubleSupportSec: 0.05,
+      // ★ 迈步间隔**下限** 1s（用户定调）+ 交接驻留与位置容差。
+      //   ⚠ 它是**下限**（`X6: 已隔 >= 此值`），不是节拍目标；节拍目标是
+      //     `STEP_CYCLE_SEC`（ES 路径用）。不变式 `下限 ≤ 目标` 由门禁 G7 断言。
       stepIntervalSec: DEFAULT_STEP_INTERVAL,
-      minDwellSec: 0.2,
-      // OSL `min_time_in_state`
-      tmaxSec: 2,
-      // Vughuma `Tmax`
-      graceSec: 0.5,
-      tiltMaxDeg: 20,
-      mosMin: 0,
-      authorityRamp: 0.4,
+      handoverDwellSec: DEFAULT_HANDOVER_DWELL,
+      handoverTolX: DEFAULT_HANDOVER_TOL_X,
+      handoverTolZ: DEFAULT_HANDOVER_TOL_Z,
+      // DOUBLE 至少停 0.4s 做交接；SINGLE 驻留 0.5s 给平衡系统调时间
+      handoverMinSec: 0.4,
+      handoverTimeoutSec: 2,
+      singleDwellSec: 0.5,
+      pushTimeoutSec: 0.6,
+      stepTimeoutSec: 1.6,
       alphaSigma: 0.08,
-      startBearer: "l"
+      startBearer: "l",
+      liftHold: 0.25
     };
-    STATE_ORDER = Object.freeze(
-      ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"]
-    );
-    STATE_TO_SCORING = Object.freeze({
+    PHASE_ORDER = ["DOUBLE", "SHIFT", "SINGLE", "PUSH", "STEP"];
+    PHASE_TO_SCORING = Object.freeze({
       DOUBLE: "adjust",
-      LOAD: "adjust",
-      PUSH: "adjust",
-      LIFT: "step",
-      SWING: "step"
+      SHIFT: "adjust",
+      SINGLE: "step",
+      PUSH: "step",
+      STEP: "step"
     });
     SCORING_TO_STANCE = Object.freeze({ both: "double", step: "single", adjust: "double" });
-    STATE_LABEL = {
+    PHASE_LABEL = {
       DOUBLE: "\u53CC\u811A\u652F\u6491",
-      LOAD: "\u91CD\u91CF\u4EA4\u63A5",
+      SHIFT: "\u91CD\u5FC3\u8F6C\u79FB",
+      SINGLE: "\u5355\u652F\u6491",
       PUSH: "\u8E6C\u79BB",
-      LIFT: "\u62AC\u817F\u79BB\u5730",
-      SWING: "\u6446\u52A8\u843D\u5730"
+      STEP: "\u6446\u52A8\u76F8"
     };
-    PHASE_LABEL = STATE_LABEL;
-    JIDX = { l: { hip: -1, knee: -1, foot: -1 }, r: { hip: -1, knee: -1, foot: -1 } };
-    VERIFY = Object.freeze({
-      // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
-      DOUBLE: [
-        {
-          item: "\u53CC\u811A\u63A5\u5730",
-          ok: (c) => c.rs.grounded[c.front] && c.rs.grounded[c.rear],
-          val: (c) => (c.rs.grounded[c.front] ? 1 : 0) + (c.rs.grounded[c.rear] ? 1 : 0),
-          tol: () => 2
-        },
-        {
-          item: "\u8F7B\u817F\u4ECD\u6709\u8F7D\u8377",
-          ok: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]) >= c.cfg.loadReleaseFrac,
-          val: (c) => Math.min(c.rs.loadFrac[c.front], c.rs.loadFrac[c.rear]),
-          tol: (c) => c.cfg.loadReleaseFrac
-        },
-        { item: "\u7AD9\u59FF\u5728\u5E27\u57DF\u5185", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
-        {
-          item: "\u8EAF\u5E72\u503E\u89D2",
-          ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
-          val: (c) => Math.abs(c.rs.tiltDeg),
-          tol: (c) => c.cfg.tiltMaxDeg
-        },
-        { item: "MoS", ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin }
-      ],
-      // ── LOAD → PUSH：重量已交到承接腿 = **抬腿的资格前提** ──────────
-      LOAD: [
-        {
-          item: "\u627F\u63A5\u817F\u627F\u91CD",
-          ok: (c) => c.rs.loadFrac[c.recv] >= c.cfg.loadAcceptFrac,
-          val: (c) => c.rs.loadFrac[c.recv],
-          tol: (c) => c.cfg.loadAcceptFrac
-        },
-        {
-          item: "\u540E\u811A\u672A\u79BB\u5730",
-          ok: (c) => c.rs.grounded[c.rear],
-          val: (c) => c.rs.grounded[c.rear] ? 1 : 0,
-          tol: () => 1
-        },
-        // ★ SCONE `EarlyStance→LateStance`：承接脚不在重心前方太远
-        {
-          item: "\u627F\u63A5\u811A\u77E2\u72B6\u4F4D\u7F6E",
-          ok: (c) => c.rs.sagPosRel(c.recv) <= c.cfg.sagLoadThr,
-          val: (c) => c.rs.sagPosRel(c.recv),
-          tol: (c) => c.cfg.sagLoadThr
-        },
-        // ★ 手性不变式：本周期的摆动腿不能与上周期相同
-        //   （SCONE/EPFL 是每腿一个 FSM，左右交替由结构保证；我们是周期级 FSM，
-        //     不显式写死就会「一直用同一条腿摆动」）
-        {
-          item: "\u624B\u6027\u4EA4\u66FF",
-          ok: (c) => c.rs.lastSwing !== c.rear,
-          val: (c) => c.rs.lastSwing === c.rear ? 0 : 1,
-          tol: () => 1
-        },
-        {
-          item: "\u8282\u594F\u95F4\u9694",
-          ok: (c) => c.sinceStep >= c.cfg.stepIntervalSec,
-          val: (c) => c.sinceStep,
-          tol: (c) => c.cfg.stepIntervalSec
-        },
-        { item: "\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
-        {
-          item: "\u8EAF\u5E72\u503E\u89D2",
-          ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
-          val: (c) => Math.abs(c.rs.tiltDeg),
-          tol: (c) => c.cfg.tiltMaxDeg
-        }
-      ],
-      // ── PUSH → LIFT：后脚已后移到可离地位置（SCONE `LateStance→LiftOff`）──
-      PUSH: [
-        {
-          item: "\u540E\u811A\u77E2\u72B6\u4F4D\u7F6E",
-          ok: (c) => c.rs.sagPosRel(c.rear) <= c.cfg.sagLiftOffThr,
-          val: (c) => c.rs.sagPosRel(c.rear),
-          tol: (c) => c.cfg.sagLiftOffThr
-        },
-        {
-          item: "\u627F\u91CD\u817F\u5728\u4F4D",
-          ok: (c) => c.rs.grounded[c.sup],
-          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
-          tol: () => 1
-        },
-        { item: "\u627F\u91CD\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
-        {
-          item: "\u8EAF\u5E72\u503E\u89D2",
-          ok: (c) => Math.abs(c.rs.tiltDeg) <= c.cfg.tiltMaxDeg,
-          val: (c) => Math.abs(c.rs.tiltDeg),
-          tol: (c) => c.cfg.tiltMaxDeg
-        }
-      ],
-      // ── LIFT → SWING：摆动腿**离地** + 已卸载 + 净空达标 ─────────────
-      //   这组就是 SCONE `LateStance→LiftOff→Swing` 的等价物
-      //   （`leg_load < swing_load_threshold`，OSL = 0.15 BW）。
-      LIFT: [
-        {
-          item: "\u6446\u52A8\u817F\u5DF2\u5378\u8F7D",
-          ok: (c) => c.rs.loadFrac[c.sw] <= c.cfg.loadReleaseFrac,
-          val: (c) => c.rs.loadFrac[c.sw],
-          tol: (c) => c.cfg.loadReleaseFrac
-        },
-        {
-          item: "\u6446\u52A8\u817F\u5DF2\u79BB\u5730",
-          ok: (c) => !c.rs.grounded[c.sw],
-          val: (c) => c.rs.grounded[c.sw] ? 1 : 0,
-          tol: () => 0
-        },
-        {
-          item: "\u79BB\u5730\u51C0\u7A7A",
-          ok: (c) => c.clearance >= c.cfg.minClearance,
-          val: (c) => c.clearance,
-          tol: (c) => c.cfg.minClearance
-        },
-        {
-          item: "\u627F\u91CD\u817F\u5728\u4F4D",
-          ok: (c) => c.rs.grounded[c.sup],
-          val: (c) => c.rs.grounded[c.sup] ? 1 : 0,
-          tol: () => 1
-        },
-        // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
-        {
-          item: "\u6446\u52A8\u819D\u5C48\u66F2",
-          ok: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG2 >= c.cfg.swingKneeMinDeg,
-          val: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG2,
-          tol: (c) => c.cfg.swingKneeMinDeg
-        },
-        { item: "\u627F\u91CD\u817F\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
-        { item: "MoS", ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin }
-      ],
-      // ── SWING → DOUBLE：落地（接触事件 + 矢状位置 + 膝角速度回落）─────
-      //   EPFL 用**同侧触地**触发；SCONE 用 `sagittal_pos > landing_threshold`；
-      //   EPFL 的 `LP`（落地准备）用**屈伸角速度**阈值。
-      SWING: [
-        {
-          item: "\u843D\u5730\u4E8B\u4EF6",
-          ok: (c) => c.touchdown[c.sw],
-          val: (c) => c.touchdown[c.sw] ? 1 : 0,
-          tol: () => 1
-        },
-        {
-          item: "\u843D\u5730\u77E2\u72B6\u4F4D\u7F6E",
-          ok: (c) => c.rs.sagPosRel(c.sw) >= c.cfg.sagLandingThr,
-          val: (c) => c.rs.sagPosRel(c.sw),
-          tol: (c) => c.cfg.sagLandingThr
-        },
-        {
-          item: "\u819D\u89D2\u901F\u5EA6\u56DE\u843D",
-          ok: (c) => c.swingKneeVel <= c.cfg.swingKneeVelMax,
-          val: (c) => c.swingKneeVel,
-          tol: (c) => c.cfg.swingKneeVelMax
-        },
-        { item: "\u627F\u91CD\u817F\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true }
-      ]
-    });
     GaitState = class {
-      constructor(rs, cfg = DEFAULT_GAIT_CONFIG) {
-        this.rs = rs;
+      constructor(rs2, cfg = DEFAULT_GAIT_CONFIG) {
+        this.rs = rs2;
         this.cfg = cfg;
-        const nm = (n) => rs.sk.joints.findIndex((j) => j.name === n);
-        JIDX.l = { hip: nm("hip_l"), knee: nm("knee_l"), foot: nm("foot_l") };
-        JIDX.r = { hip: nm("hip_r"), knee: nm("knee_r"), foot: nm("foot_r") };
       }
       cfg;
-      /** 状态机自己的时钟（s）；迈步间隔从它算起 */
+      /** 上一次的承重判据连续满足时长 */
+      /** 上一次是否已授予承重（用于迟滞撤销） */
+      hadBearer = false;
+      /** 双支撑相已持续时长 */
+      doubleT = 0;
+      /** 本拍刚触地（边沿） */
+      wasGrounded = { l: false, r: false };
+      /**
+       * 状态机自己的时钟（s）。`RigState.tSec` 是 private，这里不越界访问。
+       * 迈步间隔（用户：「每次迈步间隔 1s 左右」）从它算起。
+       */
       t = 0;
       /** 上一次**抬腿起点**时刻（s）。−1e9 = 还没迈过步 ⇒ 间隔条件天然满足 */
       lastStepT = -1e9;
-      /** 接地历史（边沿检测用） */
-      wasGrounded = { l: false, r: false };
-      /** 硬项连续越界时长（s）；超 `graceSec` ⇒ 安全态（Vughuma） */
-      badT = 0;
+      /** 交接驻留计时（s）：重心连续落在**前腿**上的时长（防抖） */
+      handoverT = 0;
       event = { kind: "none", note: "" };
-      stateLabel(s) {
-        return STATE_LABEL[s];
+      phaseLabel(p) {
+        return PHASE_LABEL[p];
       }
-      stateOrder(s) {
-        return STATE_ORDER.indexOf(s);
+      phaseOrder(p) {
+        return PHASE_ORDER.indexOf(p);
       }
-      /**
-       * ★★★ 每拍调用一次。**全部职责**（文档 §7：穷举就这 6 项）：
-       *   ① 指角色（support / swing / recv）② 逐项验收（写 `violations[]`）
-       *   ③ 过了且驻留够 ⇒ 进下一态 ④ 写关键帧映射 ⑤ 写 α(t) ⑥ 锁定/解锁
-       * **不发任何关节目标** —— 这是用户 2026-10-06 的第二条定调。
-       */
-      update(dt) {
-        const rs = this.rs;
-        const cfg = this.cfg;
-        this.t += dt;
+      /** ★ 每拍调用一次：更新判据 → 迁移状态 → 写回 rigState（含 α） */
+      update(dt2) {
+        const rs2 = this.rs;
+        this.t += dt2;
         this.event.kind = "none";
         this.event.note = "";
         this.event.side = void 0;
-        const touchdown = { l: false, r: false };
-        const liftoff = { l: false, r: false };
+        const supSide = rs2.supportLeg();
+        const swing = rs2.swingLeg();
+        const bothGrounded = rs2.grounded.l && rs2.grounded.r;
+        if (bothGrounded) this.doubleT += dt2;
+        else this.doubleT = 0;
         for (const s of ["l", "r"]) {
-          if (rs.grounded[s] && !this.wasGrounded[s]) touchdown[s] = true;
-          if (!rs.grounded[s] && this.wasGrounded[s]) liftoff[s] = true;
-          this.wasGrounded[s] = rs.grounded[s];
+          if (rs2.grounded[s] && !this.wasGrounded[s]) {
+            rs2.touchdown[s] = true;
+            this.wasGrounded[s] = true;
+          } else if (!rs2.grounded[s]) this.wasGrounded[s] = false;
         }
-        const sup = rs.loadDominant(rs.loadBearer, cfg.bearerLoadHyst);
-        rs.loadBearer = sup;
-        const sw = sup === "l" ? "r" : "l";
-        const front = rs.frontLeg();
-        const rear = rs.rearLeg();
-        const recv = front;
-        const dm = checkDomains(rs, rs.state, sup, sw, true);
-        const swingKneeVel = (rs.jointVel(JIDX[sw].knee, 2) ?? 0) * DEG2;
-        const ctx = {
-          rs,
-          cfg,
-          state: rs.state,
-          sup,
-          sw,
-          front,
-          rear,
-          recv,
-          touchdown,
-          liftoff,
-          swingKneeVel,
-          clearance: rs.swingClearance,
-          sinceStep: this.t - this.lastStepT,
-          domainBad: dm.bad,
-          domainWorst: dm.worst
-        };
-        const specs = VERIFY[rs.state];
-        const flags = {};
-        const values = {};
-        const viol = [];
-        let hardBad = false;
-        for (const sp of specs) {
-          const okv = sp.ok(ctx);
-          flags[sp.item] = okv;
-          values[sp.item] = sp.val(ctx);
-          if (!okv) {
-            viol.push({ state: rs.state, item: sp.item, value: sp.val(ctx), tol: sp.tol(ctx) });
-            if (sp.hard) hardBad = true;
-          }
-        }
-        rs.violations = viol;
-        this.badT = hardBad ? this.badT + dt : 0;
-        rs.safe = this.badT > cfg.graceSec;
-        rs.verified = viol.length === 0 && !rs.safe;
-        const gk = STATE_TO_GAIT[rs.state];
-        rs.gaitKey = gk;
-        rs.keyPose = KEY_POSES[gk];
-        rs.strideRatio = stanceWidthRatio(rs.soleZ.l, rs.soleZ.r);
-        rs.supportEntryZ = supportEntry(rs.soleZ[sup]);
-        if (touchdown[sw]) {
-          rs.locked[sw] = true;
-          rs.lastSwing = sw;
-          this.lastStepT = this.t;
-          rs.cycleCount = rs.state === "SWING" ? rs.cycleCount + 1 : rs.cycleCount;
-        }
-        if (rs.state === "LIFT" || rs.state === "SWING") rs.locked[sw] = false;
-        rs.stepPermit = makeCriteria(
+        const front = rs2.frontLeg();
+        const rear = rs2.rearLeg();
+        const dxOver = rs2.comOverFootX(front);
+        const dzOver = rs2.comOverFootZ(front);
+        const X1 = rs2.grounded[front];
+        const X2 = dxOver <= this.cfg.handoverTolX;
+        const X3 = dzOver <= this.cfg.handoverTolZ;
+        if (X2 && X3) this.handoverT += dt2;
+        else this.handoverT = 0;
+        const X4 = this.handoverT >= this.cfg.handoverDwellSec;
+        const X5 = rs2.loadFrac[front] >= this.cfg.bearerLoadHyst;
+        const X6 = this.t - this.lastStepT >= this.cfg.stepIntervalSec;
+        const X7 = rs2.mos >= this.cfg.permitMosMin;
+        const X8 = rs2.tiltDeg <= this.cfg.unlockTiltMaxDeg;
+        rs2.handoverCriteria = makeCriteria(
           {
-            P1_\u5DF2\u5378\u8F7D: rs.loadFrac[sw] <= cfg.loadReleaseFrac,
-            P2_\u5DF2\u79BB\u5730: !rs.grounded[sw],
-            P3_\u672A\u9501\u5B9A: !rs.locked[sw],
-            P4_\u624B\u6027\u4EA4\u66FF: rs.lastSwing !== sw,
-            P5_\u7A33\u5B9A\u6027: rs.mos >= cfg.mosMin && Math.abs(rs.tiltDeg) <= cfg.tiltMaxDeg,
-            P6_\u975E\u5B89\u5168\u6001: !rs.safe
+            X1_\u524D\u817F\u63A5\u5730: X1,
+            X2_\u77E2\u72B6\u5230\u4F4D: X2,
+            X3_\u989D\u72B6\u5230\u4F4D: X3,
+            X4_\u9A7B\u7559: X4,
+            X5_\u524D\u817F\u627F\u91CD: X5,
+            X6_\u95F4\u96941s: X6,
+            X7_MoS: X7,
+            X8_\u503E\u89D2: X8
           },
           {
-            loadFrac: rs.loadFrac[sw],
-            releaseThr: cfg.loadReleaseFrac,
-            grounded: rs.grounded[sw] ? 1 : 0,
-            locked: rs.locked[sw] ? 1 : 0,
-            lastIsSwing: rs.lastSwing === sw ? 1 : 0,
-            mos: rs.mos,
-            tiltDeg: rs.tiltDeg,
-            safe: rs.safe ? 1 : 0
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3,
+            tolXmm: this.cfg.handoverTolX * 1e3,
+            tolZmm: this.cfg.handoverTolZ * 1e3,
+            dwellSec: this.handoverT,
+            needSec: this.cfg.handoverDwellSec,
+            frontLoad: rs2.loadFrac[front],
+            loadThr: this.cfg.bearerLoadHyst,
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs2.mos,
+            tiltDeg: rs2.tiltDeg,
+            frontIsL: front === "l" ? 1 : 0,
+            rearIsL: rear === "l" ? 1 : 0
           }
         );
-        const prev = rs.state;
-        const dwellOk = rs.stateT >= cfg.minDwellSec;
-        if (rs.safe) {
-          this.event.kind = "safe";
-          this.event.note = `\u5B89\u5168\u6001\uFF1A\u786C\u9879\u8D8A\u754C ${this.badT.toFixed(2)}s\uFF08${viol.find((v) => v.item.includes("\u5E27\u57DF") || v.item.includes("\u7AD9\u59FF"))?.item ?? viol[0]?.item ?? "?"}\uFF09`;
-        } else if (rs.verified && dwellOk) {
-          rs.state = NEXT_STATE[rs.state];
-          rs.stateT = 0;
-          this.event.kind = "state_change";
-          this.event.note = `${prev} \u2192 ${rs.state}`;
-        } else if (rs.stateT > cfg.tmaxSec) {
-          rs.state = "DOUBLE";
-          rs.stateT = 0;
-          rs.locked.l = false;
-          rs.locked.r = false;
-          this.event.kind = "state_change";
-          this.event.note = `${prev} \u8D85\u65F6 ${cfg.tmaxSec}s \u21D2 \u56DE DOUBLE`;
+        const handoverOk = X1 && X2 && X3 && X4 && X5 && X7 && X8;
+        rs2.handoverOk = handoverOk;
+        const rearLocked = rs2.locked[rear];
+        const canSwingRear = handoverOk && X6 && !rearLocked;
+        const bearer = rs2.loadDominant(rs2.loadBearer, this.cfg.bearerLoadHyst);
+        rs2.loadBearer = bearer;
+        const gk = PHASE_TO_GAIT[rs2.phase] ?? "MSt";
+        rs2.gaitKey = gk;
+        rs2.keyPose = KEY_POSES[gk];
+        rs2.strideRatio = stanceWidthRatio(rs2.soleZ.l, rs2.soleZ.r);
+        rs2.supportEntryZ = supportEntry(rs2.soleZ[rs2.supportLeg()]);
+        this.hadBearer = this.hadBearer || handoverOk;
+        rs2.bearerCriteria = makeCriteria(
+          { B1_\u63A5\u5730: X1, B2_\u8F7D\u8377: X5, B3_MoS: X7, B4_\u9A7B\u7559: X4 },
+          {
+            frontIsL: front === "l" ? 1 : 0,
+            rearIsL: rear === "l" ? 1 : 0,
+            loadFrac: rs2.loadFrac[front],
+            thr: this.cfg.bearerLoadHyst,
+            mos: rs2.mos,
+            holdSec: this.handoverT,
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3
+          }
+        );
+        for (const sd of ["l", "r"]) {
+          rs2.unlockCriteria = makeCriteria(
+            {
+              U1_\u4EA4\u63A5\u5B8C\u6210: handoverOk,
+              U2_\u95F4\u96941s: X6,
+              U3_\u662F\u540E\u817F: sd === rear,
+              U4_\u672A\u9501\u5B9A: sd === rear && !rs2.locked[sd],
+              U5_\u7A33\u5B9A: X7 && X8
+            },
+            { handoverOk: handoverOk ? 1 : 0, intervalSec: this.t - this.lastStepT, isRear: sd === rear ? 1 : 0 }
+          );
+          if (rs2.locked[sd] && sd === rear && handoverOk && X6) {
+            rs2.locked[sd] = false;
+            rs2.lockReleased[sd] = true;
+            this.event.kind = "lock_released";
+            this.event.side = sd;
+            this.event.note = `\u89E3\u9501\u540E\u817F\uFF08\u95F4\u9694 ${(this.t - this.lastStepT).toFixed(2)}s\u3001\u91CD\u5FC3\u5728\u524D\u817F \u77E2${(dxOver * 1e3).toFixed(0)}mm/\u989D${(dzOver * 1e3).toFixed(0)}mm\uFF09`;
+          }
         }
-        if (touchdown[sw]) {
-          this.event.kind = "touchdown";
-          this.event.side = sw;
-          this.event.note = `\u89E6\u5730\u5E76\u9501\u5B9A ${sw}`;
-        } else if (liftoff[sw]) {
-          this.event.kind = "liftoff";
-          this.event.side = sw;
-          this.event.note = `\u79BB\u5730 ${sw}`;
+        rs2.stepPermit = makeCriteria(
+          { P1_\u4EA4\u63A5\u5B8C\u6210: handoverOk, P2_\u95F4\u96941s: X6, P3_\u540E\u817F\u672A\u9501: !rearLocked, P4_MoS: X7, P5_\u7A33\u5B9A: X8 },
+          {
+            dxOverMm: dxOver * 1e3,
+            dzOverMm: dzOver * 1e3,
+            rearLocked: rearLocked ? 1 : 0,
+            intervalSec: this.t - this.lastStepT,
+            needInterval: this.cfg.stepIntervalSec,
+            mos: rs2.mos,
+            tiltDeg: rs2.tiltDeg,
+            canSwingRear: canSwingRear ? 1 : 0
+          }
+        );
+        const prev = rs2.phase;
+        this.migrate(prev, dt2, bothGrounded, supSide, swing);
+        if (rs2.phase !== prev && this.event.kind === "none") {
+          this.event.kind = rs2.phase === "STEP" ? "enter_step" : "none";
+          this.event.note = `${prev} \u2192 ${rs2.phase}`;
         }
-        rs.stateT += dt;
-        rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
-        rs.handoverCriteria = makeCriteria(flags, values);
-        rs.handoverOk = rs.verified;
-        rs.unlockCriteria = rs.stepPermit;
+        rs2.phaseT += dt2;
+        const ramp = 0.4;
+        rs2.authority = smoothAuthority(rs2.phase, rs2.phaseT, ramp, this.cfg.alphaSigma);
         return this.event;
+      }
+      /**
+       * ══════════════════════════════════════════════════════════════
+       * 相位迁移。用户 2026-10-03 定调的形状：
+       *
+       *   「**计时状态允许两脚接地，这时候的工作就是重心交接**」
+       *
+       *   ⇒ **DOUBLE 就是交接阶段**：双脚站在地上，把重心从后腿**显式**搬到前腿。
+       *     单支撑（SINGLE）只在**交接验证通过**之后才进入 ——
+       *     不是"时间到了就进"，也不是"singleLeg 模式直接跳进去"。
+       *
+       *   修复的两个具体缺陷：
+       *   ① 原 `DOUBLE` 有 `if (cfg.singleLeg) { 0.2s 后直接进 SINGLE }`
+       *      ⇒ **整个重心交接阶段被跳过**（用户要的"两脚接地做交接"从来没发生过）。
+       *   ② 原 `PUSH` 超时回 `SINGLE` ⇒ 与 `SINGLE→PUSH`（0.15s）构成
+       *      **永久振荡** SINGLE(0.15s)↔PUSH(0.5s)，实测相位一直在这两者之间跳、
+       *      永远不回到 DOUBLE、也永远进不了 STEP。
+       *      现在 PUSH 超时回 **DOUBLE**（重新双脚接地、重做交接），符合用户定义。
+       */
+      /**
+       * ★★ 本次交接**承诺**的目标腿（`null` = 未开始）。
+       *
+       * ⚠⚠ 修掉的 bug：加锁入口前移后，我在 `DOUBLE` 分支里**每拍**用
+       *   `rs.frontLeg()` 重新决定锁哪条腿。而 `frontLeg()` 本身按几何 x 判定、
+       *   并齐时回落 `loadBearer` ⇒ 它会翻转 ⇒ **锁定变成翻转器**
+       *   （实测 3.10s 内支撑腿翻转 **14 次**，腰 8° 下 X3 已达 3mm 却只驻留 0.05s）。
+       *
+       * 锁定必须是**一次承诺**：交接窗口打开时定一次，整个交接期间不变，
+       * 直到交接失败/超时/触地才释放。否则"锁定"和"载荷测量"一样会抖，
+       * 转移目标一直跳，任何驱动都在追移动目标（实测加驱动反而更早倒）。
+       */
+      handoverTarget = null;
+      migrate(prev, dt2, both, supSide, swing) {
+        const rs2 = this.rs;
+        const hv = rs2.handoverCriteria.flags;
+        const handoverOk = hv["X1_\u524D\u817F\u63A5\u5730"] === true && hv["X2_\u77E2\u72B6\u5230\u4F4D"] === true && hv["X3_\u989D\u72B6\u5230\u4F4D"] === true && hv["X4_\u9A7B\u7559"] === true && hv["X5_\u524D\u817F\u627F\u91CD"] === true && hv["X7_MoS"] === true && hv["X8_\u503E\u89D2"] === true;
+        switch (prev) {
+          case "DOUBLE":
+            if (rs2.phaseT >= this.cfg.handoverMinSec && this.handoverTarget === null) {
+              this.handoverTarget = rs2.frontLeg();
+              const rear = this.handoverTarget === "l" ? "r" : "l";
+              rs2.locked[this.handoverTarget] = true;
+              rs2.locked[rear] = false;
+            }
+            if (rs2.phaseT >= this.cfg.handoverMinSec && handoverOk) {
+              rs2.phase = "SINGLE";
+              rs2.phaseT = 0;
+            }
+            break;
+          case "SHIFT":
+            if (handoverOk) {
+              rs2.phase = "SINGLE";
+              rs2.phaseT = 0;
+            } else if (rs2.phaseT > this.cfg.handoverTimeoutSec) {
+              rs2.locked.l = false;
+              rs2.locked.r = false;
+              rs2.phase = "DOUBLE";
+              rs2.phaseT = 0;
+              this.handoverTarget = null;
+            }
+            break;
+          case "SINGLE":
+            if (rs2.phaseT >= this.cfg.singleDwellSec) {
+              rs2.phase = "PUSH";
+              rs2.phaseT = 0;
+            }
+            break;
+          case "PUSH":
+            if (rs2.stepPermit.all && both) {
+              rs2.phase = "STEP";
+              rs2.phaseT = 0;
+            } else if (rs2.phaseT > this.cfg.pushTimeoutSec) {
+              rs2.locked.l = false;
+              rs2.locked.r = false;
+              this.handoverTarget = null;
+              rs2.phase = "DOUBLE";
+              rs2.phaseT = 0;
+            }
+            break;
+          case "STEP":
+            if (rs2.touchdown[swing]) {
+              rs2.locked[swing] = true;
+              this.handoverTarget = swing;
+              rs2.phase = "SHIFT";
+              rs2.phaseT = 0;
+            } else if (rs2.phaseT > this.cfg.stepTimeoutSec) {
+              rs2.locked.l = false;
+              rs2.locked.r = false;
+              this.handoverTarget = null;
+              rs2.phase = "DOUBLE";
+              rs2.phaseT = 0;
+            }
+            break;
+        }
       }
       reset() {
         this.t = 0;
         this.lastStepT = -1e9;
-        this.badT = 0;
+        this.handoverT = 0;
+        this.hadBearer = false;
+        this.doubleT = 0;
         this.wasGrounded.l = false;
         this.wasGrounded.r = false;
-        const rs = this.rs;
-        rs.loadBearer = null;
-        rs.locked.l = false;
-        rs.locked.r = false;
-        rs.state = "DOUBLE";
-        rs.stateT = 0;
-        rs.authority = 0;
-        rs.verified = false;
-        rs.violations = [];
-        rs.safe = false;
-        rs.lastSwing = null;
-        rs.cycleCount = 0;
+        this.rs.loadBearer = null;
+        this.rs.locked.l = false;
+        this.rs.locked.r = false;
+        this.rs.phase = "DOUBLE";
+        this.rs.phaseT = 0;
+        this.rs.authority = 0;
+        this.handoverTarget = null;
       }
     };
-    PHASE_TO_SCORING = STATE_TO_SCORING;
   }
 });
 
 // src/core/stability.ts
-var stability_exports = {};
-__export(stability_exports, {
-  MIN_CLEARANCE: () => MIN_CLEARANCE,
-  MIN_CYCLE: () => MIN_CYCLE,
-  MIN_SWING: () => MIN_SWING,
-  MOS_TARGET: () => MOS_TARGET,
-  SETTLE_WIN: () => SETTLE_WIN,
-  STEP_LEN_IN_FEET: () => STEP_LEN_IN_FEET,
-  StepSettleTracker: () => StepSettleTracker,
-  TARGET_CYCLE: () => TARGET_CYCLE,
-  cadenceScore: () => cadenceScore,
-  clamp01: () => clamp012,
-  marginOfStability: () => marginOfStability,
-  mosBand: () => mosBand,
-  stepLenScore: () => stepLenScore
-});
 function marginOfStability(comX, comVx, om, supEdgeX, comZ, comVz, supEdgeZ) {
   const xcoM = comX + (om > 1e-3 ? comVx / om : 0);
   const zcoM = comZ + (om > 1e-3 ? comVz / om : 0);
@@ -18651,7 +18423,7 @@ var init_stability = __esm({
        * @param dt
        * @returns 本拍该脚拿到的分（带符号；负 = 罚）
        */
-      step(grounded, mosX, dt, footX = NaN) {
+      step(grounded, mosX, dt2, footX = NaN) {
         if (grounded) {
           this.gndRun++;
           this.airRun = 0;
@@ -18662,7 +18434,7 @@ var init_stability = __esm({
         const air = this.airRun >= _StepSettleTracker.MIN_RUN;
         const gnd = this.gndRun >= _StepSettleTracker.MIN_RUN;
         if (!air && !gnd) return 0;
-        this.tSinceLast += dt;
+        this.tSinceLast += dt2;
         if (air) {
           if (this.phase === "settle") {
             this.credit = 0;
@@ -18673,7 +18445,7 @@ var init_stability = __esm({
             this.stepT = 0;
           }
           this.swungTicks++;
-          this.tSwing += dt;
+          this.tSwing += dt2;
           return 0;
         }
         if (this.phase === "swing") {
@@ -18705,11 +18477,11 @@ var init_stability = __esm({
           return 0;
         }
         if (this.swungTicks > 0) this.accCredit -= 0;
-        this.tSettle += dt;
+        this.tSettle += dt2;
         this.mosMin = Math.min(this.mosMin, mosX);
         this.mosEnd = mosX;
-        const gain = mosBand(mosX) * dt;
-        if (this.tSettle >= SETTLE_WIN - dt * 0.5) {
+        const gain = mosBand(mosX) * dt2;
+        if (this.tSettle >= SETTLE_WIN - dt2 * 0.5) {
           const paceFrac = clamp012(this.stepT / MIN_SWING);
           const okStable = this.mosEnd >= 0;
           const cleanStable = this.mosMin >= 0;
@@ -18808,12 +18580,12 @@ var init_balanceJudge = __esm({
        * @param headY 当前头（或最高点）世界高度
        * @param dt
        */
-      step(lbuf, headY, dt, pitch = 0, mosX = 1) {
+      step(lbuf, headY, dt2, pitch = 0, mosX = 1) {
         const mag = Math.hypot(lbuf[0], lbuf[1], lbuf[2]);
         let rate = 0;
         if (this.hasPrev) {
           const dl = Math.hypot(lbuf[0] - this.prev[0], lbuf[1] - this.prev[1], lbuf[2] - this.prev[2]);
-          rate = dl / Math.max(1e-6, dt);
+          rate = dl / Math.max(1e-6, dt2);
         }
         this.prev[0] = lbuf[0];
         this.prev[1] = lbuf[1];
@@ -18824,9 +18596,9 @@ var init_balanceJudge = __esm({
         const headRatio = this.head0 > 0 ? headY / this.head0 : 1;
         const valid = headRatio >= HEAD_MIN && headRatio <= HEAD_MAX && Math.abs(pitch) < MAX_PITCH && mosX > MOS_VOID;
         const imb = Math.tanh(0.7 * wbam) + 0.5 * Math.tanh(0.7 * wbamRate);
-        this.accImb += imb * dt;
-        this.accTicks += dt;
-        if (!valid) this.badHead += dt;
+        this.accImb += imb * dt2;
+        this.accTicks += dt2;
+        if (!valid) this.badHead += dt2;
         this.wbamMax = Math.max(this.wbamMax, mag);
         this.headMin = Math.min(this.headMin, headRatio);
         return { wbam, wbamRate, headRatio, valid };
@@ -19230,15 +19002,15 @@ var init_sim = __esm({
       // ══════════════════════════════════════════════════════════════════════
       rig = null;
       /** 由 `Controller` 构造时注入，使 reward 与控制**共用同一个状态机** */
-      attachRigState(rs) {
-        this.rig = rs;
+      attachRigState(rs2) {
+        this.rig = rs2;
       }
       /** 归一化相位（与 `gp.now` 的三值口径对齐，供下面少数 `===` 比较用） */
       get gaitPhase() {
-        const rs = this.rig;
-        if (!rs) return "both";
-        if (rs.state === "LIFT" || rs.state === "SWING") return "step";
-        return "adjust";
+        const rs2 = this.rig;
+        if (!rs2) return "both";
+        if (rs2.phase === "STEP") return "step";
+        if (rs2.phase === "SINGLE" || rs2.phase === "SHIFT" || rs2.phase === "PUSH") return "adjust";
         return "both";
       }
       /** 摆动腿（唯一来源 = `gaitState`）；无 `RigState` 时退回几何判据 */
@@ -19269,8 +19041,8 @@ var init_sim = __esm({
         }
       }
       get gaitSwingLeg() {
-        const rs = this.rig;
-        return rs ? rs.swingLeg() : footGrounded(this.doll, "l") ? "r" : "l";
+        const rs2 = this.rig;
+        return rs2 ? rs2.swingLeg() : footGrounded(this.doll, "l") ? "r" : "l";
       }
       /** ★ 连续稳住多久才允许发下一条令（s）——"没稳住就不许迈下一步" */
       settleHold = 0;
@@ -19836,14 +19608,14 @@ var init_sim = __esm({
           x[k + 11 + s2 * 3] = dy;
           x[k + 12 + s2 * 3] = q1(Math.hypot(dx, dy));
         }
-        const dt = 1 / this.cfg.controlHz;
-        this.accVel += tv.x * dt;
-        this.accUpright += Math.cos(doll.tiltOf(torso)) * dt;
-        this.accHeight += Math.abs(tp.y - this.initTorsoY) * dt;
-        this.accLateral += Math.abs(tp.z) * dt;
+        const dt2 = 1 / this.cfg.controlHz;
+        this.accVel += tv.x * dt2;
+        this.accUpright += Math.cos(doll.tiltOf(torso)) * dt2;
+        this.accHeight += Math.abs(tp.y - this.initTorsoY) * dt2;
+        this.accLateral += Math.abs(tp.z) * dt2;
         const eX = dcmExcess(nx, 0, 1);
         const eZ = dcmExcess(nz, 0, 1);
-        if (this.cfg.mode === "fight") this.accBalance += (eX * eX + eZ * eZ) * dt;
+        if (this.cfg.mode === "fight") this.accBalance += (eX * eX + eZ * eZ) * dt2;
         if (eX === 0 && eZ === 0) this.inDomainTicks++;
         this.balanceTicks++;
         const gL = footGrounded(doll, "l"), gR = footGrounded(doll, "r");
@@ -19852,12 +19624,12 @@ var init_sim = __esm({
         else if (nGround === 1) this.gN1++;
         else this.gN2++;
         const stanceNow = nGround === 0 ? 0 : gL ? 1 : 2;
-        const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt);
+        const altNow = nGround === 1 && this.doll.altEvent(stanceNow, dt2);
         if (altNow) this.altCount++;
         this.doll.stanceClearancePeak = Math.max(this.airPeakL, this.airPeakR);
-        this.doll.advanceStance(dt);
-        this.airL = gL ? 0 : this.airL + dt;
-        this.airR = gR ? 0 : this.airR + dt;
+        this.doll.advanceStance(dt2);
+        this.airL = gL ? 0 : this.airL + dt2;
+        this.airR = gR ? 0 : this.airR + dt2;
         if (gL) this.airPeakL = 0;
         else this.airPeakL = Math.max(this.airPeakL, this.doll.soleY("l"));
         if (gR) this.airPeakR = 0;
@@ -19865,17 +19637,17 @@ var init_sim = __esm({
         const air = Math.min(1, this.airL / AIR_TARGET) + Math.min(1, this.airR / AIR_TARGET);
         const clL = this.airPeakL >= MIN_CLEARANCE, clR = this.airPeakR >= MIN_CLEARANCE;
         const cl = nGround === 1 ? gL ? clR : clL : nGround === 0 ? clL && clR : false;
-        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt;
+        this.accLift += air * (nGround === 1 ? 1 : nGround === 0 ? 0.5 : 0) * (cl ? 1 : 0.15) * dt2;
         const hRatio = tp.y / Math.max(0.2, this.initTorsoY);
         const alive = Math.max(0, Math.min(1, (hRatio - 0.6) / 0.2));
-        this.accAlive += alive * dt;
-        const [fl2, fr2] = this.doll.footLoadFrac(dt);
+        this.accAlive += alive * dt2;
+        const [fl2, fr2] = this.doll.footLoadFrac(dt2);
         this.lastLoadFrac = [fl2, fr2];
-        if (this.gate("loadShift", nGround)) this.accShift += Math.abs(fl2 - fr2) * dt;
+        if (this.gate("loadShift", nGround)) this.accShift += Math.abs(fl2 - fr2) * dt2;
         const dom = fl2 > 0.7 ? 1 : fr2 > 0.7 ? 2 : 0;
         const domGround = dom === 1 ? gL : dom === 2 ? gR : false;
         const otherGround = dom === 1 ? gR : dom === 2 ? gL : true;
-        if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt)) {
+        if (dom !== 0 && domGround && !otherGround && this.doll.altEvent(dom, dt2)) {
           const airPeak = dom === 1 ? this.airPeakR : this.airPeakL;
           if (airPeak < MIN_CLEARANCE) {
             this.flickerCount++;
@@ -19888,10 +19660,10 @@ var init_sim = __esm({
           }
         }
         if (this.gate("singleSupport", nGround))
-          this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt;
-        if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt;
+          this.accSingle += (this.doll.stanceSingleNow ? 1 : 0) * (cl ? 1 : 0.1) * dt2;
+        if (nGround === 0) this.accSingle += -0.5 * (cl ? 1 : 0.1) * dt2;
         if (this.cfg.mode === "stand" && nGround === 2) {
-          this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt;
+          this.accSingle += -STAND_BOTH_FEET * (cl ? 1 : 0.1) * dt2;
         }
         {
           const clr = Math.max(this.airPeakL, this.airPeakR);
@@ -19911,12 +19683,12 @@ var init_sim = __esm({
           const bodyMove = Math.abs(this.com.vz) + Math.abs(this.com.vx) * 0.3 + wb * 0.08;
           if (nGround === 1) {
             if (stillOn) {
-              this.accStill += bodyMove * dt;
-              this.stillStep += bodyMove * dt;
-            } else if (this.gpBodyFree) this.stillAdjust += bodyMove * dt;
+              this.accStill += bodyMove * dt2;
+              this.stillStep += bodyMove * dt2;
+            } else if (this.gpBodyFree) this.stillAdjust += bodyMove * dt2;
           }
           const rs5 = this.rig;
-          if (rs5 && rs5.state === "LIFT" && !this.gpPaidThisStep) {
+          if (rs5 && rs5.phase === "SINGLE" && !this.gpPaidThisStep) {
             if (mosHere >= 0) {
               this.accCycle += 1;
               this.cycleN++;
@@ -19941,11 +19713,11 @@ var init_sim = __esm({
           const hipSt = rd(swingIsL ? "hip_r" : "hip_l"), kneeSt = rd(swingIsL ? "knee_r" : "knee_l");
           const a = scoreLeg(tSw, hipSw, kneeSw);
           const b = scoreLeg((tSw + 0.5) % 1, hipSt, kneeSt);
-          this.accRefHip += (a.hip + b.hip) * 0.5 * dt;
-          this.accRefKnee += (a.knee + b.knee) * 0.5 * dt;
+          this.accRefHip += (a.hip + b.hip) * 0.5 * dt2;
+          this.accRefKnee += (a.knee + b.knee) * 0.5 * dt2;
         }
         {
-          const dt2 = dt;
+          const dt22 = dt2;
           const vel = (name) => {
             const i = JOINT_ORDER.indexOf(name);
             if (i < 0) return 0;
@@ -19953,12 +19725,12 @@ var init_sim = __esm({
             return this.jbuf[2];
           };
           const ph2 = this.phase >= 1 ? this.phase - 1 : this.phase;
-          this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt2);
-          this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt2);
+          this.pfL.step(vel("hip_l"), vel("knee_l"), gL, dt22);
+          this.pfR.step(vel("hip_r"), vel("knee_r"), gR, dt22);
           if (pelvisGate)
-            this.accPelvisL += this.pfL.score() * dt;
+            this.accPelvisL += this.pfL.score() * dt2;
           if (pelvisGate)
-            this.accPelvisR += this.pfR.score() * dt;
+            this.accPelvisR += this.pfR.score() * dt2;
         }
         {
           doll.soleXZ("l", this.footTmpL);
@@ -19978,18 +19750,18 @@ var init_sim = __esm({
             comB.vz,
             supB.cz + supB.halfZ
           );
-          const b = this.bal.step(this.lbuf, headY, dt, pitch, mosB.x);
+          const b = this.bal.step(this.lbuf, headY, dt2, pitch, mosB.x);
           const fx = this.footMaxX();
           if (fx > this.footFar) this.footFar = fx;
-          this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt) - this.footVel) * 0.3;
+          this.footVel += ((fx - this.lastFootX) / Math.max(1e-6, dt2) - this.footVel) * 0.3;
           this.lastFootX = fx;
           this.torsoDist = doll.torso().translation().x - this.startX;
           if (b.valid) {
             this.footDist = fx - this.footStart;
-            this.validTicks += dt;
-            this.stepCycleT += dt;
+            this.validTicks += dt2;
+            this.stepCycleT += dt2;
           } else {
-            this.imbAcc += 0.5 * dt;
+            this.imbAcc += 0.5 * dt2;
           }
         }
         {
@@ -20011,23 +19783,23 @@ var init_sim = __esm({
             this.mosN++;
           }
           const fXl = this.footTmpL[0], fXr = this.footTmpR[0];
-          const gL2 = this.ssL.step(gL, mos.x, dt, fXl);
-          const gR2 = this.ssR.step(gR, mos.x, dt, fXr);
+          const gL2 = this.ssL.step(gL, mos.x, dt2, fXl);
+          const gR2 = this.ssR.step(gR, mos.x, dt2, fXr);
           if (this.gate("balance", nGround))
-            this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt;
+            this.accMoS += mosBand(mos.x) * (nGround === 1 ? 1 : 0) * dt2;
           const stableNow = nGround >= 2 && mos.x > 0.02;
-          if (stableNow) this.settleHold += dt;
+          if (stableNow) this.settleHold += dt2;
           else this.settleHold = 0;
           this.servoReady = this.settleHold >= SETTLE_HOLD;
           if (nGround === 1) {
             const xi = sup2.cx + sup2.halfX - mos.x;
             const footX = gL ? this.footTmpR[0] : this.footTmpL[0];
             const err = Math.abs(footX - xi);
-            this.accPlace += (err <= 0.05 ? 1 : Math.max(0, 1 - (err - 0.05) / 0.25)) * dt;
+            this.accPlace += (err <= 0.05 ? 1 : Math.max(0, 1 - (err - 0.05) / 0.25)) * dt2;
           }
-          if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt;
+          if (gL2 < 0 || gR2 < 0) this.accPace += Math.min(gL2, gR2) * dt2;
         }
-        this.accTicks += dt;
+        this.accTicks += dt2;
         let jSpd = 0, jMove = 0;
         for (let i2 = 0; i2 < doll.jointCount; i2++) {
           doll.jointRelVel(i2, this.jbuf);
@@ -20036,7 +19808,7 @@ var init_sim = __esm({
           if (MOVE_SET.has(JOINT_ORDER[i2])) {
             const sp = Math.sqrt(jSpd === 0 ? w0 * w0 : w0 * w0 + w1 * w1 + w2 * w2);
             const f = Math.min(1, sp / JOINT_MOVE_TARGET);
-            if (nGround === 1) this.accJtMove[JOINT_ORDER[i2]] += f * dt;
+            if (nGround === 1) this.accJtMove[JOINT_ORDER[i2]] += f * dt2;
             jMove += f;
           }
         }
@@ -20048,20 +19820,20 @@ var init_sim = __esm({
           const tq2 = this.doll.motorImpulse[i2] / this.dt;
           tau2 += tq2 * tq2;
         }
-        this.accJointMotion += jSpd * dt;
-        this.accActRate += act2 * dt;
-        this.accTau += tau2 * dt;
-        this.accMoveSum += (nGround === 1 ? jMove : 0) * dt;
+        this.accJointMotion += jSpd * dt2;
+        this.accActRate += act2 * dt2;
+        this.accTau += tau2 * dt2;
+        this.accMoveSum += (nGround === 1 ? jMove : 0) * dt2;
         const tvx = this.footVel, tvz = tv.z;
         const ang = torso.angvel();
-        this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt;
-        this.accYaw += phi(-ang.y) * dt;
-        this.accLat += tvz * tvz * dt;
-        this.accTilt += (ang.x * ang.x + ang.y * ang.y + ang.z * ang.z) * dt;
-        if (this.cfg.mode === "fight") this.fightTick(dt);
+        this.accVelTrack += (phi(TARGET_VX - tvx) - phi(TARGET_VX)) * dt2;
+        this.accYaw += phi(-ang.y) * dt2;
+        this.accLat += tvz * tvz * dt2;
+        this.accTilt += (ang.x * ang.x + ang.y * ang.y + ang.z * ang.z) * dt2;
+        if (this.cfg.mode === "fight") this.fightTick(dt2);
       }
       /** 战斗模式的额外逻辑：假人出拳节奏 + 命中/受击判定 */
-      fightTick(dt) {
+      fightTick(dt2) {
         const doll = this.doll;
         const fist = this.fist;
         if (!fist || !this.puppet) return;
@@ -20088,8 +19860,8 @@ var init_sim = __esm({
         if (touching && !this.fistTouching) this.hurts++;
         this.fistTouching = touching;
         const pp = this.puppet.translation();
-        this.handCooldownL -= dt;
-        this.handCooldownR -= dt;
+        this.handCooldownL -= dt2;
+        this.handCooldownR -= dt2;
         let nearest = Infinity;
         const checkHand = (key, cd) => {
           const idx = doll.indexByKey.get(key);
@@ -20113,7 +19885,7 @@ var init_sim = __esm({
         this.handCooldownL = checkHand("hand_l", this.handCooldownL);
         this.handCooldownR = checkHand("hand_r", this.handCooldownR);
         if (Number.isFinite(nearest)) {
-          this.accClose += Math.max(0, 1 - nearest / 1.2) * dt;
+          this.accClose += Math.max(0, 1 - nearest / 1.2) * dt2;
         }
       }
       /** 摔倒判定：躯干塌下去 / 倾角太大 / 头贴地 → 提前结束 */
@@ -20471,39 +20243,39 @@ var init_rig = __esm({
 });
 
 // src/core/systems/wantedForce.ts
-function stanceResolved(rs) {
-  return rs.tiltDeg < 90;
+function stanceResolved(rs2) {
+  return rs2.tiltDeg < 90;
 }
-function computeWantedForce(rs, p, on) {
-  const sup = rs.supportLeg();
-  const resolved = stanceResolved(rs);
+function computeWantedForce(rs2, p, on) {
+  const sup = rs2.supportLeg();
+  const resolved = stanceResolved(rs2);
   const comp = { sagittal: 0, weight: 0, lateral: 0, trunkLean: 0 };
   if (resolved) {
-    const soleY = rs.soleY[sup] ?? 0;
-    const h = Math.max(0.3, rs.com.y - soleY - 0.05);
+    const soleY = rs2.soleY[sup] ?? 0;
+    const h = Math.max(0.3, rs2.com.y - soleY - 0.05);
     const om0 = Math.sqrt(9.81 / h);
-    const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-    const capZ = rs.com.z + rs.com.vz / om0;
+    const stanceZ = sup === "l" ? rs2.soleZ.l : rs2.soleZ.r;
+    const capZ = rs2.com.z + rs2.com.vz / om0;
     const kp = p.kXRatio * om0 * om0;
     const kd = 2 * p.zeta * om0;
     const errZ = capZ - stanceZ;
     const errZDead = Math.abs(errZ) <= LAT_ERR_DEAD ? 0 : errZ - Math.sign(errZ) * LAT_ERR_DEAD;
-    const vzDead = Math.abs(rs.com.vz) <= LAT_VZ_DEAD ? 0 : rs.com.vz;
+    const vzDead = Math.abs(rs2.com.vz) <= LAT_VZ_DEAD ? 0 : rs2.com.vz;
     const aDesZ = -kp * errZDead - kd * vzDead;
     const mass = p.weight / 9.81;
     if (on("lat")) {
-      const halfZ = Math.max(0.02, rs.support.halfZ);
+      const halfZ = Math.max(0.02, rs2.support.halfZ);
       const marginZ = Math.max(0, halfZ * LAT_MARGIN_RHO - Math.abs(errZ));
       const fMaxLat = Math.min(p.maxLateral, mass * 9.81 * marginZ / Math.max(0.2, h));
       comp.lateral = clamp(mass * h * aDesZ, fMaxLat);
     }
-    const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
-    const capX = rs.com.x + rs.com.vx / om0;
-    const aDesX = -kp * (capX - stanceX) - kd * rs.com.vx;
+    const stanceX = sup === "l" ? rs2.soleX.l : rs2.soleX.r;
+    const capX = rs2.com.x + rs2.com.vx / om0;
+    const aDesX = -kp * (capX - stanceX) - kd * rs2.com.vx;
     if (on("sag")) comp.sagittal = clamp(mass * h * aDesX, p.maxSagittal);
     if (on("weight")) comp.weight = p.weight;
     if (on("trunkLean") && p.kTrunkLean !== 0) {
-      const dz = rs.com.z - stanceZ;
+      const dz = rs2.com.z - stanceZ;
       comp.trunkLean = clamp(p.kTrunkLean * dz * 140, p.maxTrunkLean);
     }
     return {
@@ -20525,8 +20297,8 @@ function computeWantedForce(rs, p, on) {
     comp,
     stanceResolved: false,
     sup,
-    captureZ: rs.com.z + rs.com.vz / 3.1,
-    captureX: rs.com.x + rs.com.vx / 3.1,
+    captureZ: rs2.com.z + rs2.com.vz / 3.1,
+    captureX: rs2.com.x + rs2.com.vx / 3.1,
     omega0: 3.1
   };
 }
@@ -20551,15 +20323,6 @@ var init_wantedForce = __esm({
 });
 
 // src/core/systems/wholeBodyQp.ts
-var wholeBodyQp_exports = {};
-__export(wholeBodyQp_exports, {
-  QP_AXIS_SPEC: () => QP_AXIS_SPEC,
-  buildQpAxes: () => buildQpAxes,
-  desiredGrfFromXi: () => desiredGrfFromXi,
-  solveWholeBodyQp: () => solveWholeBodyQp,
-  supportPolygon: () => supportPolygon,
-  wholeBodyBalanceTick: () => wholeBodyBalanceTick
-});
 function solveWholeBodyQp(inp) {
   const n = inp.axes.length;
   const tau = new Float64Array(n);
@@ -20766,8 +20529,8 @@ function supportPolygon(doll) {
   }
   return { cx: (x0 + x1) / 2, cz: (z0 + z1) / 2, x: [x0, x1], z: [z0, z1], nFeet: n };
 }
-function buildQpAxes(rs, doll, sup, ankleMul = 4) {
-  const sk2 = rs.sk;
+function buildQpAxes(rs2, doll, sup, ankleMul = 4) {
+  const sk2 = rs2.sk;
   const out = [];
   const idx = (nm) => sk2.joints.findIndex((j) => j.name === nm);
   const supW = new Float64Array(3);
@@ -20775,10 +20538,44 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
   const BBt = new Float64Array(4);
   doll.footSoleBounds(sup === "l" ? 0 : 1, BBt);
   const copW = new Float64Array([(BBt[0] + BBt[1]) / 2, BBt[2], (BBt[2] + BBt[3]) / 2]);
-  const spec = [];
-  for (const g of QP_AXIS_SPEC) {
-    for (const ax of g.axes) spec.push([`${g.joint}_${sup}`, ax]);
-  }
+  const spec = [
+    [`foot_${sup}`, 0],
+    [`foot_${sup}`, 1],
+    [`foot_${sup}`, 2],
+    [`knee_${sup}`, 0],
+    [`knee_${sup}`, 1],
+    [`knee_${sup}`, 2],
+    // ★ `hip/0`（外展轴）不进 QP —— 它的主人是 `latTransfer`，
+    //   两个真主人 ⇒ `axisConflicts` 增并拒收 ⇒ QP 静默失效（实测 6 处冲突）。
+    //   ⇑ 侧向由 `latTransfer` 负责，QP 管知道其余轴。
+    [`hip_${sup}`, 1],
+    [`hip_${sup}`, 2]
+    // ★★ 2026-10-06 腰的三轴**移出 QP**（依据 Winter 1996 / 1998，见下）。
+    //   QP 的等式只有**水平两行**（`wholeBodyQp.ts` 的 `Cx/Cz`），所以
+    //   腰在 QP 里既没有"该多直"的约束、也没有任何姿态项 ——
+    //   它只是被动分摊水平力矩的一个**冗余自由度**，由最小范数随意填。
+    //   实测后果（`tools/dbg-spine2`，每物理步）：
+    //       t=0.000  spine1/2 = −1.4°  τ = +14.3
+    //       t=0.050  spine1/2 = −27.2° τ = −120.0（打满）
+    //       t=0.250  spine1/2 = −43.9° τ = −120.0（限位 ±25°，超 1.8 倍）
+    //   目标恒为 0（`requestWaistSlot` 在 `DOUBLE` 相 `authority=0` ⇒ 请求 0）
+    //   ⇒ **没有任何指令折腰，是 QP 自己在把它折下去。**
+    //
+    //   文献依据：
+    //     Winter 1996 *J Neurophysiol* 75:2334 — 静立两个平衡机构完全分离，
+    //       矢状 = 踝、额状 = 髋，**腰在两张表里都不出现**。
+    //     Winter 1998 80:1211 — `Ke ≈ 850 N·m/rad` 在**踝**跖屈肌，
+    //       `Ma = R·px`（踝力矩 ∝ CoP 偏移）。
+    //     Horak & Nashner 1986 — 踝策略远端→近端，躯干最后被动参与。
+    //   ⇒ 腰不进平衡求解；它只该抵抗自重折叠（静态 3% MVC）。
+    //   ⇒ QP 要搬水平力，用**踝**（矢状，Vincent/CoP 策略）和**髋外展**（额状，
+    //     换载荷），这两条本来就已经在跑（`ankleCop` / `latTransfer`）。
+    //
+    //   ⚠ 代价（必须知道）：移出后腰在水平面内**完全不受 QP 约束**，
+    //     躯干姿态不再被 QP 主动修正 —— 这与用户「平衡系统需要能控制体态」
+    //     的要求冲突。正确形态是**躯干姿态作为一个任务**进 QP（任务空间），
+    //     而不是让腰作为冗余自由度被动分摊。这属于 #1 逆动力学的后续工作。
+  ];
   for (const [nm, ax] of spec) {
     const ji = idx(nm);
     if (ji < 0) continue;
@@ -20806,11 +20603,11 @@ function buildQpAxes(rs, doll, sup, ankleMul = 4) {
   }
   return out;
 }
-function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
-  const h = Math.max(0.05, rs.com.y);
+function desiredGrfFromXi(rs2, m, ref = { x: 0, z: 0 }, mu = 0.8) {
+  const h = Math.max(0.05, rs2.com.y);
   const w0 = Math.sqrt(9.81 / h);
-  const xiX = rs.com.x - ref.x - rs.com.vx / w0;
-  const xiZ = rs.com.z - ref.z - rs.com.vz / w0;
+  const xiX = rs2.com.x - ref.x - rs2.com.vx / w0;
+  const xiZ = rs2.com.z - ref.z - rs2.com.vz / w0;
   let fx = -m * w0 * w0 * xiX;
   let fz = -m * w0 * w0 * xiZ;
   const lim = mu * m * 9.81;
@@ -20823,12 +20620,12 @@ function desiredGrfFromXi(rs, m, ref = { x: 0, z: 0 }, mu = 0.8) {
   }
   return { fx, fz, xiX, xiZ, sat };
 }
-function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
-  const sk2 = rs.sk;
-  const axes = buildQpAxes(rs, doll, sup, opt.ankleMul ?? 4);
+function wholeBodyBalanceTick(rs2, doll, sup, opt = {}) {
+  const sk2 = rs2.sk;
+  const axes = buildQpAxes(rs2, doll, sup, opt.ankleMul ?? 4);
   const g = opt.gain ?? 1;
   const SP = supportPolygon(doll);
-  const grf = desiredGrfFromXi(rs, sk2.massTotal, { x: SP.cx, z: SP.cz });
+  const grf = desiredGrfFromXi(rs2, sk2.massTotal, { x: SP.cx, z: SP.cz });
   const fx = grf.fx * g, fz = grf.fz * g;
   const fy = sk2.massTotal * 9.81;
   const out = solveWholeBodyQp({
@@ -20847,7 +20644,7 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     names.push(nm);
     const t = out.tau[i];
     if (Math.abs(t) < 1e-6) continue;
-    rs.addTorque(a.joint, a.axis, t, "balance", `\u5168\u94FEQP/${nm}`);
+    rs2.addTorque(a.joint, a.axis, t, "balance", `\u5168\u94FEQP/${nm}`);
   }
   return {
     tau: out.tau,
@@ -20866,38 +20663,18 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     residualXYZ: out.residualXYZ
   };
 }
-var QP_AXIS_SPEC;
 var init_wholeBodyQp = __esm({
   "src/core/systems/wholeBodyQp.ts"() {
     "use strict";
     init_wantedForce();
-    QP_AXIS_SPEC = Object.freeze([
-      { joint: "foot", axes: Object.freeze([0, 1, 2]) },
-      { joint: "knee", axes: Object.freeze([0, 1, 2]) },
-      { joint: "hip", axes: Object.freeze([1, 2]) }
-    ]);
   }
 });
 
 // src/core/systems/balance.ts
-var balance_exports = {};
-__export(balance_exports, {
-  ANKLE_ABSENT: () => ANKLE_ABSENT,
-  AXIS_OWNERSHIP: () => AXIS_OWNERSHIP,
-  DEFAULT_BALANCE_PARAMS: () => DEFAULT_BALANCE_PARAMS,
-  HIP_ABD_AXIS: () => HIP_ABD_AXIS,
-  NON_AXIS_CHANNELS: () => NON_AXIS_CHANNELS,
-  axisRole: () => axisRole,
-  balanceSystem: () => balanceSystem
-});
-function axisRole(jointName, axis) {
-  const norm = jointName.replace(/_\w+$/, "");
-  return AXIS_OWNERSHIP.find((a) => a.joint === jointName) ?? AXIS_OWNERSHIP.find((a) => a.joint === norm);
-}
-function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
-  const sk2 = rs.sk;
-  const sup = rs.supportLeg();
-  const latArmed = stanceResolved(rs);
+function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
+  const sk2 = rs2.sk;
+  const sup = rs2.supportLeg();
+  const latArmed = stanceResolved(rs2);
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
   const latOwnsAbduction = latArmed && p.lateralEnabled && on("lat");
@@ -20908,37 +20685,37 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const jSp3 = jointIndexByName(sk2, "spine3");
   const jAnk = jointIndexByName(sk2, sup === "l" ? "foot_l" : "foot_r");
   if (jHip < 0 || jKnee < 0 || jSp1 < 0) {
-    rs.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
+    rs2.request(-1, 0, 0, "balance", "\u9AA8\u67B6\u7F3A\u652F\u6491\u817F/\u8170\u5173\u8282");
     return;
   }
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
   if (doll && (p.qpEnable || on("qp"))) {
-    const qp = wholeBodyBalanceTick(rs, doll, sup, {
+    const qp = wholeBodyBalanceTick(rs2, doll, sup, {
       ankleMul: p.qpAnkleMul ?? 4,
       gain: p.qpGain ?? 1,
       iters: p.qpIters ?? 40
     });
-    rs.qpTick = qp;
-    rs.qpFeasible = qp.feasible;
-    rs.qpResidual = qp.residual;
-    rs.qpGrfSat = qp.grfSat;
+    rs2.qpTick = qp;
+    rs2.qpFeasible = qp.feasible;
+    rs2.qpResidual = qp.residual;
+    rs2.qpGrfSat = qp.grfSat;
   }
   if (doll && on("postureLoad")) {
     doll.resetToneScale();
-    const supL = rs.supportLeg();
-    const supLoad = supL === "l" ? rs.loadFrac.l : rs.loadFrac.r;
+    const supL = rs2.supportLeg();
+    const supLoad = supL === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
     const gain = p.postureLoadGain;
     for (const nm of [`hip_${supL}`, `knee_${supL}`, `foot_${supL}`]) {
-      const j = jointIndexByName(rs.sk, nm);
+      const j = jointIndexByName(rs2.sk, nm);
       if (j < 0) continue;
       doll.setToneScale(j, 2, 1 + gain * supLoad);
     }
-    const jh = jointIndexByName(rs.sk, `hip_${supL}`);
-    if (jh >= 0) doll.setToneScale(jh, HIP_ABD_AXIS, 1 + gain * supLoad);
+    const jh2 = jointIndexByName(rs2.sk, `hip_${supL}`);
+    if (jh2 >= 0) doll.setToneScale(jh2, HIP_ABD_AXIS, 1 + gain * supLoad);
     if (p.postureLoadSpine) {
       for (const nm of ["spine1", "spine2", "spine3"]) {
-        const j = jointIndexByName(rs.sk, nm);
+        const j = jointIndexByName(rs2.sk, nm);
         if (j >= 0) doll.setToneScale(j, 0, p.postureSpineTonic * (1 + gain * supLoad));
         if (j >= 0) doll.setToneScale(j, 2, p.postureSpineTonic * (1 + gain * supLoad));
       }
@@ -20947,49 +20724,49 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     doll.resetToneScale();
   }
   {
-    const om0Sag = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0)));
-    const capXSag = rs.com.x + rs.com.vx / om0Sag;
-    const stanceXSag = sup === "l" ? rs.soleX.l : rs.soleX.r;
+    const om0Sag = Math.sqrt(9.81 / Math.max(0.3, rs2.com.y - (rs2.soleY[sup] ?? 0)));
+    const capXSag = rs2.com.x + rs2.com.vx / om0Sag;
+    const stanceXSag = sup === "l" ? rs2.soleX.l : rs2.soleX.r;
     const kpSag = p.ksagRatio * om0Sag * om0Sag;
     const kdSag = 2 * p.ksagZeta * om0Sag;
     const hipTgt = clamp2(
-      -kpSag * (capXSag - stanceXSag) - kdSag * rs.com.vx,
+      -kpSag * (capXSag - stanceXSag) - kdSag * rs2.com.vx,
       p.maxHipDeg
     );
     if (!p.dipSagittal && on("hip") && jHip >= 0) {
-      rs.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
+      rs2.requestAngle(jHip, 2, hipTgt, "balance", "\u77E2\u72B6\u9ACB(\u4F4D\u7F6E\u6321)");
     }
-    const stanceZLat = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-    const dzLat = rs.com.z - stanceZLat;
+    const stanceZLat = sup === "l" ? rs2.soleZ.l : rs2.soleZ.r;
+    const dzLat = rs2.com.z - stanceZLat;
     const dead = p.waistTrimDead;
     const errLat = Math.abs(dzLat) <= dead ? 0 : dzLat - Math.sign(dzLat) * dead;
-    const om0Lat = Math.sqrt(9.81 / Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05));
-    const capZLat = rs.com.z + rs.com.vz / om0Lat;
+    const om0Lat = Math.sqrt(9.81 / Math.max(0.3, rs2.com.y - (rs2.soleY[sup] ?? 0) - 0.05));
+    const capZLat = rs2.com.z + rs2.com.vz / om0Lat;
     const supCz = stanceZLat;
-    const supHalf = Math.max(0.02, Math.min(rs.support.halfZ, 0.05));
+    const supHalf = Math.max(0.02, Math.min(rs2.support.halfZ, 0.05));
     const capErrLat = capZLat - supCz;
     const marginLat = supHalf * 0.6 - Math.abs(capErrLat);
     const shortFrac = Math.max(0, Math.min(1, -marginLat / Math.max(1e-3, supHalf * 0.6)));
-    const waistErr = rs.com.z - (rs.soleZ[sup] ?? 0);
-    const waistCmd = -(p.waistKp * waistErr + p.waistKd * rs.com.vz);
+    const waistErr = rs2.com.z - (rs2.soleZ[sup] ?? 0);
+    const waistCmd = -(p.waistKp * waistErr + p.waistKd * rs2.com.vz);
     const gate = 0.35 + 0.65 * shortFrac;
-    rs.waistTrim = clamp2(waistCmd * gate, p.maxWaistTrim);
-    rs.waistErrLat = capErrLat;
+    rs2.waistTrim = clamp2(waistCmd * gate, p.maxWaistTrim);
+    rs2.waistErrLat = capErrLat;
   }
-  const kneeNow = rs.angle(jKnee, 2);
+  const kneeNow = rs2.angle(jKnee, 2);
   const kneeLimit = -Math.abs(p.kneeHoldDeg) * D2R2;
   if (on("knee") && latArmed && on("stanceExt")) {
-    rs.requestAngle(jKnee, 2, -Math.abs(p.kneeStanceDeg) * D2R2, "balance", "\u652F\u6491\u819D\u4F38\u5C55");
+    rs2.requestAngle(jKnee, 2, -Math.abs(p.kneeStanceDeg) * D2R2, "balance", "\u652F\u6491\u819D\u4F38\u5C55");
   }
   if (on("knee") && kneeNow < kneeLimit) {
-    rs.requestAngle(jKnee, 2, kneeLimit, "balance", "\u819D\u5B88\u536B");
+    rs2.requestAngle(jKnee, 2, kneeLimit, "balance", "\u819D\u5B88\u536B");
   }
-  const hipNow2 = rs.angle(jHip, 2);
+  const hipNow2 = rs2.angle(jHip, 2);
   if (on("hip") && hipNow2 < -p.hipExtendLimit) {
-    rs.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
+    rs2.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
   }
   if (latArmed && doll) {
-    const F = computeWantedForce(rs, {
+    const F = computeWantedForce(rs2, {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
       kTrunkLean: p.kTrunkLean,
@@ -20999,75 +20776,75 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (ch === "lat") return p.lateralEnabled && on("lat");
       return on(ch);
     });
-    rs.grfCmd.x = F.fx;
-    rs.grfCmd.y = F.fy;
-    rs.grfCmd.z = F.fz;
-    rs.captureX = F.captureX;
-    rs.captureZ = F.captureZ;
-    rs.omega0Val = F.omega0;
+    rs2.grfCmd.x = F.fx;
+    rs2.grfCmd.y = F.fy;
+    rs2.grfCmd.z = F.fz;
+    rs2.captureX = F.captureX;
+    rs2.captureZ = F.captureZ;
+    rs2.omega0Val = F.omega0;
     const chain = [];
     for (const nm of [`hip_${sup}`, `knee_${sup}`, `foot_${sup}`, "spine1", "spine2", "spine3"]) {
-      const i2 = jointIndexByName(rs.sk, nm);
+      const i2 = jointIndexByName(rs2.sk, nm);
       if (i2 >= 0) chain.push(i2);
     }
-    doll.jacobianTorque(F.fx, F.fy, F.fz, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+    doll.jacobianTorque(F.fx, F.fy, F.fz, rs2.com.x, rs2.com.y, rs2.com.z, chain, TMP_TAU);
     if (jHip >= 0 && latOwnsAbduction) {
       doll.jointWorld(jHip, TMP_JOINT);
       const hipY = TMP_JOINT[1];
       const hipZ = TMP_JOINT[2];
-      const dz = rs.com.z - hipZ;
-      const dy = rs.com.y - hipY;
+      const dz = rs2.com.z - hipZ;
+      const dy = rs2.com.y - hipY;
       const m = DEFAULT_WANTED_FORCE.weight / 9.81;
-      const h = Math.max(0.3, rs.com.y - (rs.soleY[sup] ?? 0) - 0.05);
+      const h = Math.max(0.3, rs2.com.y - (rs2.soleY[sup] ?? 0) - 0.05);
       const aDes = h > 1e-6 ? F.fz / (m * h) : 0;
       const tauStatic = m * 9.81 * dz;
       const tauDyn = m * aDes * dy;
-      const zRefLat = rs.soleZ[sup] ?? rs.com.z;
-      const w0Lat = rs.omega0();
+      const zRefLat = rs2.soleZ[sup] ?? rs2.com.z;
+      const w0Lat = rs2.omega0();
       const armLat = 0.119;
       const mLat = sk2.cfg.mass;
       const kLatBase = armLat * mLat * w0Lat * w0Lat;
       const dLatBase = armLat * mLat * 2 * p.latZeta * w0Lat;
-      const tauStiff = p.latStiff * kLatBase * (zRefLat - rs.com.z);
-      const tauDamp = -p.latDamp * dLatBase * rs.com.vz;
+      const tauStiff = p.latStiff * kLatBase * (zRefLat - rs2.com.z);
+      const tauDamp = -p.latDamp * dLatBase * rs2.com.vz;
       const tauRaw = tauStatic + tauDyn + tauStiff + tauDamp;
       const tauAdj = Math.abs(tauRaw) <= p.latHipDead ? 0 : tauRaw;
-      const tmax = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
-      rs.hipLatTau = clamp2(tauAdj, tmax);
-      if (Math.abs(rs.hipLatTau) > 0.5) {
-        rs.requestTorque(
+      const tmax = rs2.sk.joints[jHip].maxTorque[HIP_ABD_AXIS];
+      rs2.hipLatTau = clamp2(tauAdj, tmax);
+      if (Math.abs(rs2.hipLatTau) > 0.5) {
+        rs2.requestTorque(
           jHip,
           HIP_ABD_AXIS,
-          rs.hipLatTau,
+          rs2.hipLatTau,
           "balance",
           `\u9ACB\u5916\u5C55(\u9759${tauStatic.toFixed(0)}+\u521A${tauStiff.toFixed(0)}+\u963B${tauDamp.toFixed(0)})`
         );
-        rs.clearHold(jHip, HIP_ABD_AXIS);
+        rs2.clearHold(jHip, HIP_ABD_AXIS);
       }
     } else if (jHip >= 0) {
-      rs.hipLatTau = 0;
+      rs2.hipLatTau = 0;
     }
     {
-      const stanceZl = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-      rs.waistGapM = rs.com.z - stanceZl;
+      const stanceZl = sup === "l" ? rs2.soleZ.l : rs2.soleZ.r;
+      rs2.waistGapM = rs2.com.z - stanceZl;
     }
     if (on("pelvicLift") && !latOwnsAbduction && (p.kPelvicLift > 0 || p.targetClearance > 0) && jHip >= 0) {
-      const sw = rs.swingLeg();
-      const clr = rs.soleY[sw] ?? 0;
-      rs.swingClearance = clr;
+      const sw = rs2.swingLeg();
+      const clr = rs2.soleY[sw] ?? 0;
+      rs2.swingClearance = clr;
       const pelv = clamp2(
         p.pelvicLiftSign * (p.kPelvicLift + p.kClearance * (p.targetClearance - clr)),
         p.maxPelvicLift
       );
-      rs.pelvicLift = pelv;
-      rs.clearHold(jHip, HIP_ABD_AXIS);
-      rs.requestAngle(jHip, HIP_ABD_AXIS, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u4FA7\u5411\u65E0\u9700\u6C42\u65F6\u624D\u5360\u8F74)");
+      rs2.pelvicLift = pelv;
+      rs2.clearHold(jHip, HIP_ABD_AXIS);
+      rs2.requestAngle(jHip, HIP_ABD_AXIS, pelv, "balance", "\u9AA8\u76C6\u62AC\u5347(\u4FA7\u5411\u65E0\u9700\u6C42\u65F6\u624D\u5360\u8F74)");
     } else if (jHip >= 0) {
-      rs.pelvicLift = 0;
+      rs2.pelvicLift = 0;
     }
   }
-  if (on("lat") && rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
-    const drive = rs.shiftDriveSide;
+  if (on("lat") && rs2.shiftDemandF !== 0 && rs2.shiftDriveSide && doll) {
+    const drive = rs2.shiftDriveSide;
     const dIdx = drive === "l" ? 0 : 1;
     doll.readCoP(dIdx, TMP_COP);
     doll.footSoleBounds(dIdx, TMP_BB);
@@ -21079,50 +20856,50 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain = [];
       for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, "spine1", "spine2", "spine3"]) {
-        const i2 = jointIndexByName(rs.sk, nm);
+        const i2 = jointIndexByName(rs2.sk, nm);
         if (i2 >= 0) chain.push(i2);
       }
-      doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
-      const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
+      doll.jacobianTorque(0, 0, rs2.shiftDemandF, rs2.com.x, rs2.com.y, rs2.com.z, chain, TMP_TAU);
+      const dHip = jointIndexByName(rs2.sk, `hip_${drive}`);
       let applied = 0;
       for (let i2 = 0; i2 < chain.length; i2++) {
         const jj = chain[i2];
         for (let ax = 0; ax < 3; ax++) {
           const t = TMP_TAU[jj * 3 + ax];
           if (Math.abs(t) > 0.05) {
-            rs.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
+            rs2.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
             applied += Math.abs(t);
           }
         }
       }
-      rs.shiftPushTau = applied;
-      if (dHip >= 0) rs.clearHold(dHip, HIP_ABD_AXIS);
+      rs2.shiftPushTau = applied;
+      if (dHip >= 0) rs2.clearHold(dHip, HIP_ABD_AXIS);
     }
   }
   if (jAnk >= 0 && on("ankleCop")) {
     if (doll) {
       const ankW = new Float64Array(3);
       doll.jointWorld(jAnk, ankW);
-      const dxv = rs.com.x - ankW[0];
-      const hv = Math.max(0.2, rs.com.y - ankW[1]);
+      const dxv = rs2.com.x - ankW[0];
+      const hv = Math.max(0.2, rs2.com.y - ankW[1]);
       const qVip = Math.atan2(dxv, hv);
-      const qVipRate = (hv * rs.com.vx - dxv * rs.com.vy) / (dxv * dxv + hv * hv);
+      const qVipRate = (hv * rs2.com.vx - dxv * rs2.com.vy) / (dxv * dxv + hv * hv);
       const iAnk = Math.max(1e-4, doll.inertiaAboutJoint(jAnk));
       const cVip = 2 * p.vipZeta * Math.sqrt(p.kVipAnkle * iAnk);
       let tauAnk = p.kVipAnkle * qVip - cVip * qVipRate;
       if (on("ankleCop")) {
-        const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+        const dtC = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
         const omega0 = Math.sqrt(Math.max(
           1e-6,
-          sk2.massTotal * 9.81 * Math.max(0.05, rs.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
+          sk2.massTotal * 9.81 * Math.max(0.05, rs2.com.y - ankW[1]) / Math.max(1e-4, doll.inertiaAboutJoint(jAnk))
         ));
         const a = p.vipOmegaFrac * omega0;
-        rs.vipOmega = omega0;
-        rs.pushVip(qVip, qVipRate);
-        rs.vipDelayed(p.vipDelaySec / dtC, rs.vipD1);
-        const qD = rs.vipD1[0], qdD = rs.vipD1[1];
+        rs2.vipOmega = omega0;
+        rs2.pushVip(qVip, qVipRate);
+        rs2.vipDelayed(p.vipDelaySec / dtC, rs2.vipD1);
+        const qD = rs2.vipD1[0], qdD = rs2.vipD1[1];
         const wantOn = qD * (qdD - a * qD) > 0;
-        rs.vipDiag = {
+        rs2.vipDiag = {
           qD,
           qdD,
           a,
@@ -21132,30 +20909,30 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
           q: qVip,
           qVipRate
         };
-        if (wantOn !== rs.vipOn) {
-          rs.vipOn = wantOn;
-          rs.vipSwitches++;
+        if (wantOn !== rs2.vipOn) {
+          rs2.vipOn = wantOn;
+          rs2.vipSwitches++;
         }
         const qAbs = Math.abs(qD);
-        rs.vipGamma = qAbs > 1e-5 ? -qdD / (omega0 * qD) : Infinity;
-        const g = rs.vipGamma;
-        rs.vipTCross = g > 1 ? p.vipDelaySec * Math.log((1 + g) / Math.abs(1 - g)) : 0;
-        if (rs.vipOn) {
+        rs2.vipGamma = qAbs > 1e-5 ? -qdD / (omega0 * qD) : Infinity;
+        const g = rs2.vipGamma;
+        rs2.vipTCross = g > 1 ? p.vipDelaySec * Math.log((1 + g) / Math.abs(1 - g)) : 0;
+        if (rs2.vipOn) {
           tauAnk += p.vipP * qD + p.vipD * qdD;
         }
-        rs.settleOffPhase(qVip);
+        rs2.settleOffPhase(qVip);
       }
-      if (rs.state === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
+      if (rs2.phase === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R2;
       const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
-      rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
-      rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
-      rs.qVip = qVip;
-      rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
+      rs2.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
+      rs2.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
+      rs2.qVip = qVip;
+      rs2.requestTorque(jAnk, 2, rs2.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
     }
     const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
-    if (jMid >= 0 && on("ankleLat")) {
-      const latErr = rs.dcm.z - rs.support.cz;
-      rs.requestAngle(jMid, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u4E2D\u8DB3\u989D\u72B6CoP");
+    if (jMid >= 0) {
+      const latErr = rs2.dcm.z - rs2.support.cz;
+      rs2.requestAngle(jMid, 0, clamp2(p.kCopLat * latErr, p.maxAnkleLat), "balance", "\u4E2D\u8DB3\u989D\u72B6CoP");
     }
   }
   if (doll && on("hipStiff")) {
@@ -21164,219 +20941,65 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       const side = sup === "l" ? "l" : "r";
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
-      const qHip = rs.pos[jHipS * 3 + 2];
-      const qHipRate = rs.vel[jHipS * 3 + 2];
+      const qHip = rs2.pos[jHipS * 3 + 2];
+      const qHipRate = rs2.vel[jHipS * 3 + 2];
       const tauMaxHip = sk2.joints[jHipS]?.maxTorque?.[2] ?? 200;
       const qLim = p.maxHipStiffDeg * D2R2;
       const qEff = clamp2(qHip, qLim);
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
       tauHip = clamp2(tauHip, tauMaxHip);
-      rs.hipTauStiff = tauHip;
-      rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
+      rs2.hipTauStiff = tauHip;
+      rs2.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
     }
   }
 }
-var NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
     init_wantedForce();
     init_wholeBodyQp();
-    NON_AXIS_CHANNELS = Object.freeze([
-      { channel: "postureLoad", why: "\u53EA\u7F29\u653E sagSupport \u4F4D\u7F6E\u73AF\u7684 kP/kD\uFF0C\u4E0D\u5199 target\u3001\u4E0D\u7533\u9886\u8F74" }
-    ]);
     HIP_ABD_AXIS = 0;
     AXIS_OWNERSHIP = Object.freeze([
-      // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
-      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip", extraGates: ["stepKeyframe"] },
-      {
-        joint: "knee",
-        axis: 2,
-        role: "sagSupport",
-        mode: "pos",
-        channel: "knee",
-        extraGates: ["stanceExt", "stepKeyframe"]
-      },
-      // ── 矢状链：力矩通道（DIP 被动刚度 / 全链 QP / τ=JᵀF）─────────────
-      {
-        joint: "hip",
-        axis: 2,
-        role: "hipStiff",
-        mode: "tau",
-        channel: "hipStiff",
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean"]
-      },
-      // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
-      //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
-      //   被算成「未声明的同轴异模式」。
-      {
-        joint: "knee",
-        axis: 2,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      // ── 额状链 ────────────────────────────────────────────────────────
-      {
-        joint: "hip",
-        axis: HIP_ABD_AXIS,
-        role: "latTransfer",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
-      //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift" },
-      // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
-      {
-        joint: "foot",
-        axis: 2,
-        role: "ankleCop",
-        mode: "tau",
-        channel: "ankleCop",
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean"]
-      },
-      // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
-      //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
-      //   `midfoot_*` 驱动块）。
-      { joint: "midfoot", axis: 0, role: "ankleLat", mode: "pos", channel: "ankleLat" },
-      // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
-      //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
-      //   这几根轴上 balance 只有 **tau** 写入 ⇒ 属跨模式并联，需要 balance 让位。
-      { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
-      //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
-      //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
-      //   ⚠ `hip/0`（外展轴）**不进 QP**：它的 tau 主人是 `latTransfer`（已登记）。
-      {
-        joint: "hip",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "knee",
-        axis: 0,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "knee",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "foot",
-        axis: 0,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "foot",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
-      // ── 脊柱：躯干姿态已并入 `τ=JᵀF` 的脊柱链（块④/⑤）───────────────
-      //   ⚠ 2026-10-06：`postureSag`/`postureLat` 两条腰位置 PD **已删除**
-      //     （腰矢状阻尼量纲不平衡单独饱和 ⇒ 折腰）。表里原来那 6 行
-      //     `mode:'pos'` 是**在说谎**（运行时没有 pos 写者），
-      //     而真正的写者（脊柱链上的 τ）没登记 ⇒ 门禁 E 报「未登记」。
-      //   ⇒ 现在只登记真实存在的 tau 写入，位置行全部删除。
-      //     ⚠ 代价（必须知道）：腰**不再有位置伺服**，`spine*/0` 与 `spine*/2`
-      //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
-      //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
-      {
-        joint: "spine1",
-        axis: 0,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine1",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine1",
-        axis: 2,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine2",
-        axis: 0,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine2",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine2",
-        axis: 2,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine3",
-        axis: 0,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine3",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      },
-      {
-        joint: "spine3",
-        axis: 2,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
-      }
+      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip" },
+      // ★ DIP 髋侧被动刚度：与 `sagSupport` **并联**的第二条通道（位置伺服 + 刚度力矩），
+      //   语义是"支撑角色的下属实现"，所以登记成从属记录而不是第二个主人。
+      { joint: "hip", axis: 2, role: "hipStiff", mode: "tau", channel: "hipStiff", subordinateTo: "sagSupport" },
+      { joint: "knee", axis: 2, role: "sagSupport", mode: "pos", channel: "knee" },
+      // ★★ 全链 QP 要写的轴（承重腿整链 + 腰，矢状 + 额状），**逐根**登记。
+      //   mode='tau' 与 `sagSupport`(pos) **并联** ⇒ `subordinateTo: 'sagSupport'`
+      //   语义与 `hipStiff` 相同：QP 是该支撑角色的第二种实现，不是新主人。
+      //   ⚠ 不登记的后果（实测）：`rigState` 把"同一轴第二个 tau 写者"计入
+      //     `axisConflicts` 并**拒收** ⇒ QP 静默失效，而所有指标看起来正常。
+      //     这个坑本项目栽过 3 次（见 AXIS_OWNERSHIP 上方注释），所以这里逐根写全。
+      // ⚠ `hip/0`（外展轴）**不给** QP：它的主人已经是 `latTransfer`。
+      //   两个真主人 ⇒ 双写 ⇒ `axisConflicts` 增并拒收
+      //   （实测 6 处冲突⇒ QP 静默失效）。
+      //   ⇑ QP 不写该轴，侧向交给 `latTransfer`；QP 仅管知道的其余轴。
+      { joint: "hip", axis: 2, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "sagSupport" },
+      { joint: "knee", axis: 0, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "sagSupport" },
+      { joint: "knee", axis: 2, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "sagSupport" },
+      { joint: "foot", axis: 2, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "sagSupport" },
+      { joint: "spine1", axis: 0, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "postureLat" },
+      { joint: "spine1", axis: 2, role: "wholeBodyQp", mode: "tau", channel: "qp", subordinateTo: "postureSag" },
+      { joint: "hip", axis: HIP_ABD_AXIS, role: "latTransfer", mode: "tau", channel: "lat" },
+      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift", subordinateTo: "latTransfer" },
+      // ⚠ 关节名必须与 `skeleton` 里的**真实名字**逐字一致（`spine1/2/3`）。
+      //   曾图省事写 `joint: 'spine'`，而 `axisRole()` 是精确匹配 ⇒ 永远查不到
+      //   ⇒ 门禁 E（"每根被写过的轴必须已登记"）直接把这 6 根轴报成未登记。
+      //   ⇒ **表看着权威、实际没接上**，这比没有表更坏。
+      { joint: "spine1", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine2", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine3", axis: 2, role: "postureSag", mode: "pos", channel: "torso" },
+      { joint: "spine1", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine2", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      { joint: "spine3", axis: 0, role: "postureLat", mode: "pos", channel: "latwaist" },
+      // ★ 踝（矢状）：VIP 刚度走**力矩通道**。踝是 revolute ⇒ 只有轴 2 能动。
+      { joint: "foot", axis: 2, role: "ankleCop", mode: "tau", channel: "ankleCop" },
+      // ★ 中足（额状）：踝的额状轴被引擎锁死 ⇒ 侧向 CoP 权限归中足的旋前/旋后。
+      { joint: "midfoot", axis: 0, role: "ankleLat", mode: "pos", channel: "ankleLat" }
     ]);
-    ANKLE_ABSENT = false;
     DEFAULT_BALANCE_PARAMS = {
       // ★ 旧额状面律（走 spine1/0）保留但**默认不用**：它权限 35mm、需求 100mm ⇒ 发散。
       //   见 §17：主通道已换成支撑髋外展（kHipAbd）。留这个字段是为了可对照消融。
@@ -21579,12 +21202,9 @@ var init_balance = __esm({
 });
 
 // src/core/systems/step.ts
-function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
-  const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
-  const on = (ch) => !OFF.has(ch);
-  if (!on("stepKeyframe")) return;
-  const sk2 = rs.sk;
-  const swing = rs.swingLeg();
+function stepSystem(rs2, p = DEFAULT_STEP_PARAMS) {
+  const sk2 = rs2.sk;
+  const swing = rs2.swingLeg();
   const jHip = jointIndexByName(sk2, swing === "l" ? "hip_l" : "hip_r");
   const jKnee = jointIndexByName(sk2, swing === "l" ? "knee_l" : "knee_r");
   const jSp1 = jointIndexByName(sk2, "spine1");
@@ -21593,25 +21213,25 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   if (jHip < 0 || jKnee < 0) return;
   const clamp2 = (v, m) => v > m ? m : v < -m ? -m : v;
   const D2R2 = Math.PI / 180;
-  const sup = rs.supportLeg();
-  rs.shiftDemandF = 0;
-  rs.shiftDriveSide = null;
-  if ((rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
-    const zRef = rs.soleZ[sup];
+  const sup = rs2.supportLeg();
+  rs2.shiftDemandF = 0;
+  rs2.shiftDriveSide = null;
+  if ((rs2.phase === "SHIFT" || rs2.phase === "DOUBLE") && !rs2.handoverOk) {
+    const zRef = rs2.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
-    const raw = mTot * (w0 * w0 * (zRef - rs.com.z) + 2 * p.shiftZeta * w0 * (0 - rs.com.vz));
+    const raw = mTot * (w0 * w0 * (zRef - rs2.com.z) + 2 * p.shiftZeta * w0 * (0 - rs2.com.vz));
     const lim = raw > p.shiftFMax ? p.shiftFMax : raw < -p.shiftFMax ? -p.shiftFMax : raw;
-    const ramp = p.shiftRamp > 0 ? Math.min(1, rs.stateT / p.shiftRamp) : 1;
+    const ramp = p.shiftRamp > 0 ? Math.min(1, rs2.phaseT / p.shiftRamp) : 1;
     const smooth = ramp * ramp * (3 - 2 * ramp);
-    rs.shiftDemandF = lim * smooth;
-    rs.shiftDriveSide = rs.swingLeg();
+    rs2.shiftDemandF = lim * smooth;
+    rs2.shiftDriveSide = rs2.swingLeg();
   }
-  const permit = rs.stepPermit.all;
-  const s = rs.state === "SWING" ? Math.max(0, Math.min(1, rs.stateT / Math.max(1e-6, p.halfPeriod))) : 0;
-  const inSwing = rs.state === "LIFT" || rs.state === "SWING";
-  const bell = rs.state === "SWING" ? Math.sin(Math.PI * s) : 0;
-  const lift = permit && inSwing ? rs.state === "LIFT" ? p.lift : p.lift * bell + (s >= 1 ? p.liftHold : 0) : 0;
+  const permit = rs2.stepPermit.all;
+  const s = rs2.phase === "STEP" ? Math.max(0, Math.min(1, rs2.phaseT / Math.max(1e-6, p.halfPeriod))) : rs2.phase === "DOUBLE" || rs2.phase === "SHIFT" ? 0 : 1;
+  const bell = Math.sin(Math.PI * s);
+  const hold = rs2.phase === "SINGLE" || rs2.phase === "STEP";
+  const lift = permit && hold ? p.lift * bell + (s >= 1 ? p.liftHold : 0) : rs2.phase === "SINGLE" ? p.liftHold : 0;
   const KF_SWING_SEG = [
     [0, "PSw"],
     [0.33, "ISw"],
@@ -21627,17 +21247,17 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
         return lerpKeyPose(k0, k1, w);
       }
     }
-    return rs.keyPose;
+    return rs2.keyPose;
   }
   if (p.useKeyFrame) {
     const kp = keySwing(s);
-    rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
-    rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
+    rs2.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+    rs2.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
-    if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
-    if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55\xB7\u8BA9\u5F00", false);
+    if (jFt >= 0) rs2.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
+    if (jSp1 >= 0) rs2.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
+    if (jSp1 >= 0) rs2.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
+    if (lift > 0.01) rs2.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55\xB7\u8BA9\u5F00", false);
     return;
   }
   const holdHip = s >= 1 && permit ? p.hipHoldDeg : 0;
@@ -21646,17 +21266,17 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     const u = (s - p.reachFrom) / Math.max(1e-6, 1 - p.reachFrom);
     return u * u * (3 - 2 * u);
   })();
-  const hipDeg = p.hipFlexPeakDeg * bell + holdHip - p.hipExtendDeg * sReach * (permit || rs.state === "SWING" ? 1 : 0);
-  rs.requestSwingLegAngle(swing, jHip, 2, clamp2(hipDeg * D2R2, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
+  const hipDeg = p.hipFlexPeakDeg * bell + holdHip - p.hipExtendDeg * sReach * (permit || rs2.phase === "STEP" ? 1 : 0);
+  rs2.requestSwingLegAngle(swing, jHip, 2, clamp2(hipDeg * D2R2, 1.05), "\u6446\u52A8\u9ACB\u5C48", lift > 0.01);
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
-  rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
-  if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
+  rs2.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
+  if (lift > 0.01) rs2.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
   if (jSp1 >= 0) {
     const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
-    rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
+    rs2.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
   }
-  if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
-  if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
+  if (jSp2 >= 0) rs2.requestWaistSlot(jSp2, 0, rs2.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
+  if (jSp3 >= 0) rs2.requestWaistSlot(jSp3, 0, rs2.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
 }
 var KNEE_FLEX_PEAK, DEFAULT_STEP_PARAMS;
 var init_step = __esm({
@@ -21718,13 +21338,13 @@ var init_controller = __esm({
       step: DEFAULT_STEP_PARAMS
     };
     Controller = class {
-      constructor(sk2, sim, cfg = DEFAULT_CONTROLLER) {
-        this.sim = sim;
+      constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
+        this.sim = sim2;
         this.cfg = cfg;
-        this.rigReport = assertRigInvariants(sk2, sim.shape);
+        this.rigReport = assertRigInvariants(sk2, sim2.shape);
         this.rs = new RigState(sk2, cfg.rig);
         this.gait = new GaitState(this.rs, cfg.gait);
-        sim.attachRigState(this.rs);
+        sim2.attachRigState(this.rs);
         this.snapshot = this.rs.snapshot();
       }
       rs;
@@ -21739,86 +21359,86 @@ var init_controller = __esm({
         return rigSummary(this.rigReport);
       }
       /** ★ 一个控制拍。返回本拍的动作目标（已仲裁）。 */
-      step(dt) {
-        const rs = this.rs;
-        const sim = this.sim;
-        rs.beginTick(dt);
-        const com = readCom(sim.doll, rs.com);
-        readSupport(sim.doll, rs.support);
-        rs.updateComAccel(dt);
+      step(dt2) {
+        const rs2 = this.rs;
+        const sim2 = this.sim;
+        rs2.beginTick(dt2);
+        const com = readCom(sim2.doll, rs2.com);
+        readSupport(sim2.doll, rs2.support);
+        rs2.updateComAccel(dt2);
         const om = omegaAt(com.y);
-        rs.dcm.x = dcm(com.x, com.vx, om);
-        rs.dcm.z = dcm(com.z, com.vz, om);
-        rs.mos = rs.support.cx + rs.support.halfX - rs.dcm.x;
-        const [fl, fr] = sim.doll.footLoadFrac(dt);
-        const kL = 1 - Math.exp(-dt / 0.06);
+        rs2.dcm.x = dcm(com.x, com.vx, om);
+        rs2.dcm.z = dcm(com.z, com.vz, om);
+        rs2.mos = rs2.support.cx + rs2.support.halfX - rs2.dcm.x;
+        const [fl, fr] = sim2.doll.footLoadFrac(dt2);
+        const kL = 1 - Math.exp(-dt2 / 0.06);
         this.loadFilt.l += (fl - this.loadFilt.l) * kL;
         this.loadFilt.r += (fr - this.loadFilt.r) * kL;
-        rs.loadFrac.l = this.loadFilt.l;
-        rs.loadFrac.r = this.loadFilt.r;
-        rs.grounded.l = sim.doll.footGrounded(0);
-        rs.grounded.r = sim.doll.footGrounded(1);
+        rs2.loadFrac.l = this.loadFilt.l;
+        rs2.loadFrac.r = this.loadFilt.r;
+        rs2.grounded.l = sim2.doll.footGrounded(0);
+        rs2.grounded.r = sim2.doll.footGrounded(1);
         {
-          sim.doll.stanceClearancePeak = Math.max(
-            Math.max(0, sim.doll.soleY("l")),
-            Math.max(0, sim.doll.soleY("r"))
+          sim2.doll.stanceClearancePeak = Math.max(
+            Math.max(0, sim2.doll.soleY("l")),
+            Math.max(0, sim2.doll.soleY("r"))
           );
-          sim.doll.advanceStance(dt);
-          rs.stanceSingle = sim.doll.stanceSingleNow;
+          sim2.doll.advanceStance(dt2);
+          rs2.stanceSingle = sim2.doll.stanceSingleNow;
         }
-        sim.doll.soleXZ("l", TMP_A);
-        rs.soleX.l = TMP_A[0];
-        rs.soleZ.l = TMP_A[2];
-        sim.doll.soleXZ("r", TMP_B);
-        rs.soleX.r = TMP_B[0];
-        rs.soleZ.r = TMP_B[2];
-        const n = sim.doll.jointCount;
+        sim2.doll.soleXZ("l", TMP_A);
+        rs2.soleX.l = TMP_A[0];
+        rs2.soleZ.l = TMP_A[2];
+        sim2.doll.soleXZ("r", TMP_B);
+        rs2.soleX.r = TMP_B[0];
+        rs2.soleZ.r = TMP_B[2];
+        const n = sim2.doll.jointCount;
         for (let j = 0; j < n; j++) {
           for (let a = 0; a < 3; a++) {
             const i = j * 3 + a;
-            sim.doll.jointRot(j, TMP_RV);
-            rs.pos[i] = TMP_RV[a];
-            sim.doll.jointRelVel(j, TMP_RV);
-            rs.vel[i] = TMP_RV[a];
+            sim2.doll.jointRot(j, TMP_RV);
+            rs2.pos[i] = TMP_RV[a];
+            sim2.doll.jointRelVel(j, TMP_RV);
+            rs2.vel[i] = TMP_RV[a];
           }
         }
-        sim.doll.readCoP(0, TMP_COP_L);
-        sim.doll.readCoP(1, TMP_COP_R);
-        rs.cop.l.x = TMP_COP_L[0];
-        rs.cop.l.z = TMP_COP_L[2];
-        rs.cop.l.load = TMP_COP_L[3];
-        rs.cop.r.x = TMP_COP_R[0];
-        rs.cop.r.z = TMP_COP_R[2];
-        rs.cop.r.load = TMP_COP_R[3];
-        rs.torsoY = sim.doll.torso().translation().y;
-        rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+        sim2.doll.readCoP(0, TMP_COP_L);
+        sim2.doll.readCoP(1, TMP_COP_R);
+        rs2.cop.l.x = TMP_COP_L[0];
+        rs2.cop.l.z = TMP_COP_L[2];
+        rs2.cop.l.load = TMP_COP_L[3];
+        rs2.cop.r.x = TMP_COP_R[0];
+        rs2.cop.r.z = TMP_COP_R[2];
+        rs2.cop.r.load = TMP_COP_R[3];
+        rs2.torsoY = sim2.doll.torso().translation().y;
+        rs2.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         {
-          const q = sim.doll.torso().rotation();
+          const q = sim2.doll.torso().rotation();
           const ax = 2 * (q.x * q.y + q.w * q.z);
           const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
           const az = 2 * (q.y * q.z - q.w * q.x);
           const uy = 1 - 2 * (q.x * q.x + q.z * q.z);
-          rs.pitchDeg = Math.atan2(ax, ay) * 57.2958;
-          rs.rollDeg = Math.atan2(az, uy) * 57.2958;
-          const av = sim.doll.torso().angvel();
-          rs.pitchRate = av.z * 57.2958;
-          rs.rollRate = av.x * 57.2958;
+          rs2.pitchDeg = Math.atan2(ax, ay) * 57.2958;
+          rs2.rollDeg = Math.atan2(az, uy) * 57.2958;
+          const av = sim2.doll.torso().angvel();
+          rs2.pitchRate = av.z * 57.2958;
+          rs2.rollRate = av.x * 57.2958;
         }
-        rs.grf.x = 0;
-        rs.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
-        this.gait.update(dt);
-        stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
-        balanceSystem(rs, this.cfg.balance, this.sim.doll);
-        const out = rs.arbitrate(dt);
+        rs2.grf.x = 0;
+        rs2.grf.y = Math.max(0.2, 686.7 * Math.max(fl, fr));
+        this.gait.update(dt2);
+        stepSystem(rs2, this.cfg.step);
+        balanceSystem(rs2, this.cfg.balance, this.sim.doll);
+        const out = rs2.arbitrate(dt2);
         this.sim.doll.setMotorTargets(out);
-        this.sim.doll.setTorqueTargets(rs.tauOut);
-        this.sim.doll.setHoldMask(rs.holdMask);
+        this.sim.doll.setTorqueTargets(rs2.tauOut);
+        this.sim.doll.setHoldMask(rs2.holdMask);
         this.sim.doll.primeVelocities();
-        this.sim.doll.jointForce(rs.forceBuf, dt);
-        rs.forceReady = this.sim.doll.forceChainReady();
-        rs.cmdGrfLat = rs.grfCmd.z;
-        rs.updateComTransfer(dt);
-        this.snapshot = rs.snapshot();
+        this.sim.doll.jointForce(rs2.forceBuf, dt2);
+        rs2.forceReady = this.sim.doll.forceChainReady();
+        rs2.cmdGrfLat = rs2.grfCmd.z;
+        rs2.updateComTransfer(dt2);
+        this.snapshot = rs2.snapshot();
         return out;
       }
       /** 脚底离地高度（UI 显示用；与快照同源 —— 每次调用都回读并写进 rs） */
@@ -21843,7 +21463,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-axisown.ts
+// tools/dbg-full.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -21865,557 +21485,53 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
-var { AXIS_OWNERSHIP: AXIS_OWNERSHIP2, DEFAULT_BALANCE_PARAMS: DEFAULT_BALANCE_PARAMS2, NON_AXIS_CHANNELS: NON_AXIS_CHANNELS2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
-var log = console.log;
-var read = (p) => fs.readFileSync(p, "utf8");
-var codeOnly = (s) => s.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
-var readCode = (p) => codeOnly(read(p));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
-var SHAPE = shapeForJoints2(sk.joints.length);
-var fails = 0;
-var bad = (m) => {
-  fails++;
-  log(`  \u2717 ${m}`);
-};
-var ok = (m) => log(`  \u2713 ${m}`);
-log("\u2550\u2550 A. \u8F74\u5F52\u5C5E\u8868\uFF08AXIS_OWNERSHIP\uFF09\u2550\u2550");
-{
-  const byMode = /* @__PURE__ */ new Map();
-  const allGates = /* @__PURE__ */ new Set();
-  for (const a of AXIS_OWNERSHIP2) {
-    const k = `${a.joint}/${a.axis}/${a.mode}`;
-    const prev = byMode.get(k);
-    if (prev) {
-      bad(`${k} \u6709\u4E24\u6761\u8BB0\u5F55\uFF08${prev} \u4E0E ${a.role}\uFF09\u2014\u2014 \u540C\u4E00 (\u8F74,\u6A21\u5F0F) \u5FC5\u987B\u5408\u5E76\u6210\u4E00\u6761`);
-    }
-    byMode.set(k, a.role);
-    for (const g of [a.channel, ...a.extraGates ?? []]) {
-      if (!g) bad(`${k} \u7684\u6D88\u878D\u95E8\u4E3A\u7A7A\u4E32`);
-      else allGates.add(g);
-    }
-  }
-  if (!fails) {
-    ok(`${AXIS_OWNERSHIP2.length} \u6761\u8BB0\u5F55\u3001${byMode.size} \u4E2A (\u8F74,\u6A21\u5F0F) \u552F\u4E00\uFF08${allGates.size} \u4E2A\u6D88\u878D\u95E8\uFF1A${[...allGates].sort().join(", ")}\uFF09`);
+var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: 1 });
+sim.begin(new Float32Array(sim.paramCount));
+var ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
+var PH = DEFAULT_SIM2.physicsHz;
+var CH = DEFAULT_SIM2.controlHz;
+var PPC = Math.max(1, Math.round(PH / CH));
+var rs = ctrl.rs;
+var D2 = sim.doll;
+var dt = 1 / PH;
+var jh = sk.joints.findIndex((j) => j.name === "hip_l");
+var jr = sk.joints.findIndex((j) => j.name === "hip_r");
+var jk = sk.joints.findIndex((j) => j.name === "knee_l");
+var ja = sk.joints.findIndex((j) => j.name === "foot_l");
+console.log("\u2550\u2550 \u2460 \u72B6\u6001\u673A gaitState \u2550\u2550");
+console.log("   t(s)  phase      phaseT  authority  handoverOk  comOverFootX  comOverFootZ  mos(mm)  key");
+for (let i = 0; i < Math.round(0.35 * PH); i++) {
+  if (i % PPC === 0) sim.doll.setMotorTargets(ctrl.step(1 / CH));
+  sim.advance(1);
+  if (i % 12 === 0) {
+    console.log(`${(i / PH).toFixed(3)}  ${rs.phase.padEnd(9)} ${rs.phaseT.toFixed(3)} ${rs.authority.toFixed(2)}      ${rs.handoverOk ? "\u2713" : "\u2717"}      ${(rs.comOverFootX("l") * 1e3).toFixed(0).padStart(6)}mm      ${(rs.comOverFootZ("l") * 1e3).toFixed(0).padStart(6)}mm  ${(rs.mos * 1e3).toFixed(0).padStart(6)}  ${rs.gaitKey}`);
   }
 }
-log("");
-log("\u2550\u2550 A2. \u901A\u9053\u540D\u5355 vs \u6E90\u7801\u91CC\u7684 on(\u2026) \u63A5\u7EBF \u2550\u2550");
-{
-  const wired = /* @__PURE__ */ new Set();
-  for (const f of [
-    "src/core/systems/balance.ts",
-    "src/core/systems/wantedForce.ts",
-    "src/core/systems/step.ts"
-  ]) {
-    if (!fs.existsSync(f)) continue;
-    const src = readCode(f);
-    for (const m of src.matchAll(/\bon\('([a-zA-Z]+)'\)/g)) wired.add(m[1]);
-    for (const m of src.matchAll(/ch === '([a-zA-Z]+)'/g)) wired.add(m[1]);
-  }
-  const qpDefaultOn = /qpEnable\s*\|\|\s*on\('qp'\)/.test(read("src/core/systems/balance.ts"));
-  if (!qpDefaultOn) {
-    bad("\u627E\u4E0D\u5230 `qpEnable || on('qp')` \u2014\u2014 QP \u7684\u542F\u7528\u8BED\u4E49\u53D8\u4E86\uFF0C\u300C\u5168\u6D88\u878D\u300D\u540D\u5355\u9700\u91CD\u65B0\u5BF9\u8D26");
-  } else ok("QP \u7684\u542F\u7528\u8BED\u4E49 = `qpEnable || on('qp')`\uFF08ablate \u542B 'qp' \u624D\u5173\u5F97\u4F4F\uFF09");
-  const inTable = /* @__PURE__ */ new Set();
-  for (const a of AXIS_OWNERSHIP2) {
-    inTable.add(a.channel);
-    for (const g of a.extraGates ?? []) inTable.add(g);
-  }
-  const nonAxis = new Set(NON_AXIS_CHANNELS2.map((n) => n.channel));
-  for (const n of NON_AXIS_CHANNELS2) {
-    if (!n.why) bad(`\u975E\u8F74\u901A\u9053 ${n.channel} \u6CA1\u5199\u7406\u7531 \u21D2 \u65E0\u6CD5\u5224\u65AD\u5B83\u8BE5\u4E0D\u8BE5\u7533\u9886\u8F74`);
-  }
-  const notInTable = [...wired].filter((c) => !inTable.has(c) && !nonAxis.has(c)).sort();
-  const notWired = [...inTable].filter((c) => !wired.has(c) && c !== "qp").sort();
-  if (notInTable.length) {
-    bad(`\u8FD9\u4E9B\u901A\u9053\u5728\u6E90\u7801\u91CC\u88AB on(\u2026) \u6D88\u8D39\uFF0C\u4F46\u5F52\u5C5E\u8868\u91CC\u6CA1\u6709 \u21D2 \u8868\u4E0D\u5B8C\u6574\uFF1A${notInTable.join(", ")}`);
-  } else {
-    ok(`\u8868\u91CC\u7684\u95E8\u5168\u90E8\u5728\u6E90\u7801\u91CC\u6709 on(\u2026) \u63A5\u7EBF\uFF08${[...inTable].sort().join(", ")}\uFF09` + (nonAxis.size ? `\uFF1B\u975E\u8F74\u901A\u9053 ${[...nonAxis].join(", ")}` : ""));
-  }
-  if (notWired.length) {
-    bad(`\u8FD9\u4E9B\u901A\u9053\u5728\u8868\u91CC\u767B\u8BB0\u4E86\uFF0C\u4F46\u6E90\u7801\u91CC\u6CA1\u6709\u4EFB\u4F55 on(\u2026) \u95E8 \u21D2 ablate \u5BF9\u5B83\u4EEC\u65E0\u6548\uFF1A${notWired.join(", ")}`);
-  } else {
-    ok("\u6BCF\u4E2A\u767B\u8BB0\u7684\u95E8\u90FD\u6709\u771F\u5B9E\u7684 on(\u2026) \u95E8\uFF08ablate \u771F\u7684\u80FD\u5173\u6389\u5B83\uFF09");
+console.log("");
+console.log("\u2550\u2550 \u2461 \u5E73\u8861\u7CFB\u7EDF balance\uFF1A\u77E2\u72B6\u9762\uFF08\u6587\u732E\uFF1A\u8E1D\u8DD6\u5C48 Winter 1998, Ke\u2248850\uFF09\u2550\u2550");
+console.log("   t(s)   com.x   soleX(l)  \u8BEF\u5DEE(mm)  ankle\u03C4(L)  ankle\u03C4(R)  ankle\u9971\u548C  hip\u03C4(L) hip\u03C4(R)  ksag");
+for (let i = 0; i < Math.round(0.35 * PH); i++) {
+  if (i % PPC === 0) sim.doll.setMotorTargets(ctrl.step(1 / CH));
+  sim.advance(1);
+  if (i % 12 === 0) {
+    const aL = rs.tauOut[ja * 3 + 2], aR = rs.tauOut[sk.joints.findIndex((j) => j.name === "foot_r") * 3 + 2];
+    const hL = rs.tauOut[jh * 3 + 2], hR = rs.tauOut[jr * 3 + 2];
+    console.log(`${(i / PH).toFixed(3)} ${rs.com.x.toFixed(4)} ${rs.soleX.l.toFixed(4)}  ${((rs.com.x - rs.soleX.l) * 1e3).toFixed(0).padStart(7)}   ${aL.toFixed(1).padStart(7)} ${aR.toFixed(1).padStart(8)}   ${rs.ankleTauSat ? "\u2605" : " "}    ${hL.toFixed(1).padStart(6)} ${hR.toFixed(1).padStart(7)}`);
   }
 }
-var ALL_CHANNELS = Object.freeze([.../* @__PURE__ */ new Set([
-  ...AXIS_OWNERSHIP2.flatMap((a) => [a.channel, ...a.extraGates ?? []]),
-  ...NON_AXIS_CHANNELS2.map((n) => n.channel)
-])].sort());
-function run(bal, secs) {
-  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: secs });
-  sim.begin(new Float32Array(sim.paramCount));
-  const ctrl = new Controller2(sk, sim, {
-    ...DEFAULT_CONTROLLER2,
-    balance: { ...DEFAULT_CONTROLLER2.balance, ...bal }
-  });
-  let tauMax = 0;
-  let yMin = 9;
-  const tauAxes = /* @__PURE__ */ new Set();
-  const tauAcc = new Array(ctrl.rs.axisCount).fill(0);
-  const heldAxes = /* @__PURE__ */ new Set();
-  const conflicts = /* @__PURE__ */ new Map();
-  const written = /* @__PURE__ */ new Set();
-  for (let i = 0; i < Math.round(secs * PHYS_HZ) && !sim.finished; i++) {
-    for (let k = 0; k < ctrl.rs.axisCount; k++) {
-      const owner = ctrl.rs.axisOwner(k);
-      if (owner === "none" || owner === "bind") continue;
-      written.add(`${sk.joints[Math.floor(k / 3)].name}/${k % 3}`);
-    }
-    for (const c of ctrl.snapshot.axisConflicts) {
-      conflicts.set(
-        `${c.joint}/${c.axis % 3} ${c.mode}<-${c.by}`,
-        { joint: c.joint, axis: c.axis % 3, mode: c.mode, by: c.by, against: c.against }
-      );
-    }
-    if (i % PHYS_PER_CTRL === 0) {
-      sim.doll.setMotorTargets(ctrl.step(CTRL_DT));
-      for (let k = 0; k < ctrl.rs.tauOut.length; k++) {
-        const v = Math.abs(ctrl.rs.tauOut[k] ?? 0);
-        tauAcc[k] = (tauAcc[k] ?? 0) + v;
-        if (v > 0.5) {
-          tauMax = Math.max(tauMax, v);
-          tauAxes.add(k);
-        }
-      }
-      for (let k = 0; k < ctrl.rs.holdMask.length; k++) if (ctrl.rs.holdMask[k]) heldAxes.add(k);
-    }
-    sim.advance(1);
-    if (i % 6 === 0) yMin = Math.min(yMin, ctrl.snapshot.torsoY);
-  }
-  return {
-    ticks: sim.ticksDone,
-    yMin,
-    tauMax,
-    tauAxes: [...tauAxes].sort((a, b) => a - b),
-    heldAxes: [...heldAxes].sort((a, b) => a - b),
-    conflicts: [...conflicts.values()],
-    written: [...written].sort(),
-    tauAcc,
-    fallReason: sim.fallReason,
-    headYAtFall: sim.fallDiag.headY,
-    tiltDegAtFall: sim.fallDiag.tiltDeg,
-    torsoYAtFall: sim.fallDiag.torsoY
-  };
-}
-function fmtRun(r) {
-  const s = secsOf(r.ticks).toFixed(2);
-  if (r.fallReason === "head") {
-    return `${s}s  \u5934\u843D\u5730@${(r.ticks / 120).toFixed(2)}s  \u5934 y=${r.headYAtFall.toFixed(3)}  \u8EAF\u5E72 y=${r.torsoYAtFall.toFixed(3)}  \u503E\u89D2 ${r.tiltDegAtFall.toFixed(1)}\xB0`;
-  }
-  return `${s}s  \u8EAF\u5E72 y=${r.yMin.toFixed(3)}  ${r.fallReason ? `\u8DCC\u5012\u5224\u636E=${r.fallReason}` : "\u672A\u8DCC\u5012\uFF08\u65F6\u957F\u4E0A\u9650\uFF09"}`;
-}
-var PHYS_HZ = DEFAULT_SIM2.physicsHz;
-var CTRL_HZ = DEFAULT_SIM2.controlHz;
-var secsOf = (ticks) => ticks / CTRL_HZ;
-var PHYS_PER_CTRL = Math.max(1, Math.round(PHYS_HZ / CTRL_HZ));
-var CTRL_DT = 1 / CTRL_HZ;
-var SECS = 20;
-function checkHeadOnlyCriterion(r, tag) {
-  if (!r.fallReason) {
-    ok(`${tag}\uFF1A\u8DD1\u5230\u65F6\u957F\u4E0A\u9650\uFF0C\u5934\u672A\u843D\u5730`);
-    return;
-  }
-  if (r.fallReason === "head") ok(`${tag}\uFF1A\u8DCC\u5012\u5224\u636E = \u5934\u843D\u5730\uFF08\u552F\u4E00\u6807\u51C6\uFF09`);
-  else bad(`${tag}\uFF1A\u8DCC\u5012\u5224\u636E = "${r.fallReason}" \u2014\u2014 \u4E0D\u662F\u5934\u843D\u5730\uFF01\u6709\u4EBA\u52A0\u4E86\u7B2C\u4E8C\u6761\u5224\u636E\uFF0C"\u5B58\u6D3B\u79D2\u6570"\u7684\u542B\u4E49\u5DF2\u7ECF\u53D8\u4E86`);
-}
-log("");
-log("\u2550\u2550 B. \u96F6\u8F93\u51FA\u7B49\u4EF7\uFF08\u5168\u6D88\u878D \u21D2 \u9010\u8F74 \u03C4\u22610\u3001\u8BA9\u4F4D\u22610\u3001\u4E14\u7AD9\u5F97\u4F4F\uFF09\u2550\u2550");
-{
-  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
-  sim.begin(new Float32Array(sim.paramCount));
-  const z = new Float32Array(sk.joints.length * 3);
-  let yRef = 9;
-  for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
-    sim.doll.setMotorTargets(z);
-    sim.advance(1);
-    if (i % 6 === 0) yRef = Math.min(yRef, sim.doll.torso().translation().y);
-  }
-  const refTicks = sim.ticksDone;
-  log(`  \u53C2\u7167\uFF08\u96F6\u8F93\u51FA\uFF0C\u4E0D\u7ECF Controller\uFF09\uFF1A${secsOf(refTicks).toFixed(2)}s  \u8EAF\u5E72 y=${yRef.toFixed(3)}  \u5224\u636E=${sim.fallReason || "\u672A\u843D\u5730"}`);
-  if (sim.fallReason && sim.fallReason !== "head") {
-    bad(`\u96F6\u8F93\u51FA\u53C2\u7167\u7684\u8DCC\u5012\u5224\u636E = "${sim.fallReason}"\uFF0C\u4E0D\u662F\u5934\u843D\u5730`);
-  }
-  log(`  \u6D88\u878D\u540D\uFF1A${ALL_CHANNELS.join(",")}`);
-  const r = run({ ablate: ALL_CHANNELS.join(",") }, SECS);
-  log(`  \u5168\u6D88\u878D\uFF1A${fmtRun(r)}  \u03C4max=${r.tauMax.toFixed(1)} \u8F74[${r.tauAxes}] \u8BA9\u4F4D[${r.heldAxes}]`);
-  checkHeadOnlyCriterion(r, "\u5168\u6D88\u878D");
-  if (r.tauMax !== 0 || r.tauAxes.length) bad(`\u5168\u6D88\u878D\u4ECD\u5728\u53D1 \u03C4\uFF08\u8F74 ${r.tauAxes}\uFF09\u2014\u2014 \u67D0\u6761\u901A\u9053\u6CA1\u63A5\u5230 ablate`);
-  else ok("\u5168\u6D88\u878D \u21D2 \u9010\u8F74 \u03C4 \u2261 0");
-  if (r.heldAxes.length) bad(`\u5168\u6D88\u878D\u4ECD\u8BA9\u4F4D ${r.heldAxes.length} \u8F74 \u2014\u2014 requestHold \u6CA1\u63A5\u5230 ablate`);
-  else ok("\u5168\u6D88\u878D \u21D2 \u8BA9\u4F4D\u6570 \u2261 0");
-  if (r.ticks < refTicks) bad(`\u5168\u6D88\u878D\u5B58\u6D3B ${secsOf(r.ticks).toFixed(2)}s < \u96F6\u8F93\u51FA ${secsOf(refTicks).toFixed(2)}s`);
-  else ok(`\u5168\u6D88\u878D\u5B58\u6D3B \u2265 \u96F6\u8F93\u51FA\uFF08${secsOf(r.ticks).toFixed(2)}s vs ${secsOf(refTicks).toFixed(2)}s\uFF09`);
-}
-log("");
-log("\u2550\u2550 C. \u8F74\u5F52\u5C5E\u51B2\u7A81\uFF08\u9ED8\u8BA4\u8DEF\u5F84\u4E0E\u5404\u6321\u4F4D\uFF09\u2550\u2550");
-{
-  const norm = (n) => n.replace(/_\w+$/, "");
-  const declared = /* @__PURE__ */ new Map();
-  for (const a of AXIS_OWNERSHIP2) {
-    const k = `${norm(a.joint)}/${a.axis}`;
-    let s = declared.get(k);
-    if (!s) {
-      s = /* @__PURE__ */ new Set();
-      declared.set(k, s);
-    }
-    s.add(a.mode);
-  }
-  const cases = [
-    ["\u6321\u4F4D I \u9ED8\u8BA4", {}],
-    ["\u6321\u4F4D I + \u4FA7\u5411\u529B\u77E9", { torqueControl: true, lateralEnabled: true, maxLateral: 200 }],
-    ["\u6321\u4F4D II \u7EAF\u4FA7\u5411 \u03C4", { torqueControl: true, lateralEnabled: true }],
-    ["\u6321\u4F4D I + \u9AA8\u76C6\u62AC\u5347", { kPelvicLift: 0.06 }]
-  ];
-  for (const [tag, bal] of cases) {
-    const r = run(bal, 8);
-    const undeclared = [];
-    const okDeclared = [];
-    for (const c of r.conflicts) {
-      const key = `${norm(c.joint)}/${c.axis}`;
-      const crossSystem = c.by !== "balance" || c.against !== "balance";
-      if (declared.get(key)?.has(c.mode) && !crossSystem) {
-        okDeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by}`);
-      } else if (crossSystem) {
-        undeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by} vs ${c.against}\uFF08\u8DE8\u7CFB\u7EDF\u540C\u8F74\u5F02\u6A21\u5F0F \u21D2 D.4 \u8981\u6C42 balance \u8BA9\u4F4D\uFF0C\u672A\u8BA9\u4F4D\uFF09`);
-      } else {
-        undeclared.push(`${c.joint}/${c.axis} ${c.mode}<-${c.by} vs ${c.against}`);
-      }
-    }
-    log(`  ${tag}\uFF1A${fmtRun(r)}`);
-    checkHeadOnlyCriterion(r, tag);
-    if (undeclared.length) {
-      bad(`${tag}\uFF1A${undeclared.length} \u5904**\u672A\u58F0\u660E**\u7684\u540C\u8F74\u5F02\u6A21\u5F0F \u2014\u2014 ${undeclared.slice(0, 4).join(" | ")}`);
-    } else {
-      ok(`${tag}\uFF1A0 \u5904\u672A\u58F0\u660E\u51B2\u7A81\uFF08\u58F0\u660E\u8FC7\u7684\u5E76\u8054 ${okDeclared.length} \u5904${okDeclared.length ? "\uFF1A" + [...new Set(okDeclared)].slice(0, 4).join(" | ") : ""}\uFF09  \u03C4\u8F74[${r.tauAxes}] \u8BA9\u4F4D[${r.heldAxes}]`);
-    }
+console.log("");
+console.log("\u2550\u2550 \u2462 \u5E73\u8861\u7CFB\u7EDF balance\uFF1A\u989D\u72B6\u9762\uFF08\u6587\u732E\uFF1A\u9ACB\u5916\u5C55\u6362\u8F7D\u8377 Winter 1998\uFF09\u2550\u2550");
+console.log("   t(s)   com.z  soleZ(sup)  \u8BEF\u5DEE(mm)  loadFrac(sup)  hip0\u03C4(sup)  hip0\u03C4max  \u642C\u8FD0  waistTrim  dcm.z");
+for (let i = 0; i < Math.round(0.35 * PH); i++) {
+  if (i % PPC === 0) sim.doll.setMotorTargets(ctrl.step(1 / CH));
+  sim.advance(1);
+  if (i % 12 === 0) {
+    const sup = rs.supportLeg();
+    const js = sk.joints.findIndex((j) => j.name === `hip_${sup}`);
+    const h0 = rs.tauOut[js * 3];
+    const tmax = sk.joints[js].maxTorque[0];
+    const load = sup === "l" ? rs.loadFrac.l : rs.loadFrac.r;
+    console.log(`${(i / PH).toFixed(3)} ${rs.com.z.toFixed(4)}  ${rs.soleZ[sup].toFixed(4)}   ${((rs.com.z - rs.soleZ[sup]) * 1e3).toFixed(0).padStart(7)}   ${load.toFixed(3)}     ${h0.toFixed(1).padStart(7)}      ${tmax}   ${rs.shiftDemandF.toFixed(1).padStart(6)}  ${rs.waistTrim.toFixed(3).padStart(7)}  ${rs.dcm.z.toFixed(4)}`);
   }
 }
-log("");
-log("\u2550\u2550 D0. \u2605 \u72B6\u6001\u673A\u662F\u300C\u7EAF\u5224\u636E\u300D\uFF1A\u4E0D\u5F97\u4E0B\u53D1\u4EFB\u4F55\u5173\u8282\u76EE\u6807 \u2550\u2550");
-{
-  const SRC = "src/core/gaitState.ts";
-  const code = readCode(SRC);
-  const FORBID = [
-    "requestAngle",
-    "requestTorque",
-    "addTorque",
-    "forceTorque",
-    "requestHold",
-    "clearHold",
-    "requestSwingLeg",
-    "requestSwingLegAngle",
-    "requestSwingLegTorque",
-    "requestWaistSlot"
-  ];
-  const hit = FORBID.filter((f) => code.includes(f));
-  if (hit.length) {
-    bad(`\u72B6\u6001\u673A\u6E90\u7801\u91CC\u51FA\u73B0\u4E86\u5173\u8282\u9700\u6C42\u63A5\u53E3\uFF1A${hit.join(", ")} \u2014\u2014 \u300C\u72B6\u6001\u673A\u4E0D\u4E0B\u53D1\u76EE\u6807\u300D\u8FD9\u6761\u5B9A\u8C03\u88AB\u7834\u574F\u4E86`);
-  } else {
-    ok(`\u72B6\u6001\u673A\u662F\u7EAF\u5224\u636E\uFF1A${FORBID.length} \u4E2A\u5173\u8282\u9700\u6C42\u63A5\u53E3\u4E00\u4E2A\u90FD\u6CA1\u51FA\u73B0`);
-  }
-  const MUST = [
-    "rs.state",
-    "rs.stateT",
-    "rs.verified",
-    "rs.violations",
-    "rs.loadBearer",
-    "rs.locked"
-  ];
-  const miss = MUST.filter((m) => !code.includes(m));
-  if (miss.length) bad(`\u72B6\u6001\u673A\u6CA1\u5199\u8FD9\u4E9B\u8F93\u51FA\uFF1A${miss.join(", ")}`);
-  else ok(`\u72B6\u6001\u673A\u8F93\u51FA\u9F50\u5168\uFF08${MUST.join(", ")}\uFF09`);
-}
-log("\u2550\u2550 D. \u89D2\u8272\u6807\u7B7E\u7A33\u5B9A\u6027\uFF08\u627F\u91CD\u817F / \u524D\u817F\u4E0D\u5F97\u95EA\uFF09\u2550\u2550");
-{
-  const SRC_D = [
-    "src/core/rigState.ts",
-    "src/ui/hud.ts",
-    "src/core/controller.ts",
-    "src/core/sim.ts",
-    "src/core/systems/step.ts",
-    "src/core/systems/balance.ts",
-    "src/core/gaitState.ts"
-  ];
-  const frontDefs = SRC_D.filter((f) => fs.existsSync(f) && /(?<![.\w])frontLeg\s*\(/.test(readCode(f)));
-  if (frontDefs.length !== 1) {
-    bad(`\u300C\u524D\u817F\u300D\u7684**\u5B9A\u4E49**\u5E94\u6070\u597D 1 \u5904\uFF0C\u5B9E\u9645 ${frontDefs.length} \u5904\uFF1A${frontDefs.join(", ") || "\u65E0"}`);
-  } else {
-    ok(`\u524D\u817F\u5224\u5B9A\u552F\u4E00\uFF08${frontDefs[0]}\uFF09\uFF0Csnapshot() \u8BFB\u7684\u662F\u5B83`);
-  }
-  const rsSrc = read("src/core/rigState.ts");
-  const snapBody = rsSrc.slice(rsSrc.indexOf("snapshot(limitHit"));
-  if (/\bfrontLeg\(\)/.test(snapBody)) ok("snapshot() \u5185\u90E8\u8C03\u7528 frontLeg()\uFF08\u4E0D\u662F\u7B2C\u4E8C\u4EFD\u6BD4\u8F83\uFF09");
-  else bad("snapshot() \u91CC\u627E\u4E0D\u5230 frontLeg() \u8C03\u7528 \u2014\u2014 \u53EF\u80FD\u53C8\u5199\u4E86\u4E00\u4EFD\u88F8\u6BD4\u8F83");
-  const sim = new Sim2(sk, SHAPE, { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
-  sim.begin(new Float32Array(sim.paramCount));
-  const ctrl = new Controller2(sk, sim, DEFAULT_CONTROLLER2);
-  let n = 0, swB = 0, swF = 0, pb = "", pf = "";
-  const viol = [];
-  const dx = [];
-  const minDwellB = [];
-  const minDwellF = [];
-  let lastB = -1e9, lastF = -1e9;
-  for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
-    if (i % PHYS_PER_CTRL === 0) {
-      sim.doll.setMotorTargets(ctrl.step(CTRL_DT));
-      const s = ctrl.snapshot;
-      const L = s.legs.l, R = s.legs.r;
-      const b = String(s.loadBearer);
-      const f = L.isFront ? "l" : "r";
-      const tSec = i / CTRL_HZ;
-      if (b !== pb) {
-        swB++;
-        pb = b;
-        minDwellB.push(tSec - lastB);
-        lastB = tSec;
-      }
-      if (f !== pf) {
-        swF++;
-        pf = f;
-        minDwellF.push(tSec - lastF);
-        lastF = tSec;
-      }
-      if (L.isBearer && R.isBearer) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} \u4E24\u6761\u817F\u540C\u65F6\u6807\u627F\u91CD`);
-      if (!L.isBearer && !R.isBearer) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} \u6CA1\u6709\u817F\u88AB\u6807\u627F\u91CD`);
-      if (L.isFront === R.isFront) viol.push(`t=${(i / PHYS_HZ).toFixed(2)} \u4E24\u6761\u817F\u540C\u4E3A\u4E3B\u524D`);
-      dx.push(Math.abs(ctrl.rs.soleX.l - ctrl.rs.soleX.r) * 1e3);
-      n++;
-    }
-    sim.advance(1);
-  }
-  const dxMax = dx.length ? Math.max(...dx) : 0;
-  const dxMed = dx.length ? [...dx].sort((a, b) => a - b)[dx.length >> 1] : 0;
-  log(`  ${SECS}s / ${n} \u62CD\uFF1A\u627F\u91CD\u817F\u5207\u6362 ${swB} \u6B21\uFF0C\u524D\u817F\u5207\u6362 ${swF} \u6B21  |\u0394x| \u4E2D\u4F4D ${dxMed.toFixed(1)}mm / \u6700\u5927 ${dxMax.toFixed(1)}mm\uFF08\u6B7B\u533A 3mm\uFF09`);
-  const minB = minDwellB.length ? Math.min(...minDwellB) : 9;
-  const minF = minDwellF.length ? Math.min(...minDwellF) : 9;
-  if (minB < 0.15) bad(`\u627F\u91CD\u817F\u5207\u6362\u7684\u6700\u77ED\u9A7B\u7559\u53EA\u6709 ${minB.toFixed(3)}s\uFF08<0.15s\uFF09\u21D2 \u662F\u6296\u52A8\u4E0D\u662F\u884C\u8D70`);
-  else ok(`\u627F\u91CD\u817F\u65E0\u6296\u52A8\uFF08\u5207\u6362 ${swB} \u6B21\uFF0C\u6700\u77ED\u9A7B\u7559 ${minB.toFixed(2)}s\uFF09`);
-  if (minF < 0.15) {
-    bad(`\u524D\u817F\u5207\u6362\u7684\u6700\u77ED\u9A7B\u7559\u53EA\u6709 ${minF.toFixed(3)}s\uFF08<0.15s\uFF09\u21D2 3mm \u6B7B\u533A\u4E0D\u591F\uFF08|\u0394x| \u6700\u5927 ${dxMax.toFixed(1)}mm\uFF09`);
-  } else {
-    ok(`\u524D\u817F\u65E0\u6296\u52A8\uFF08\u5207\u6362 ${swF} \u6B21\uFF0C\u6700\u77ED\u9A7B\u7559 ${minF.toFixed(2)}s\uFF1B|\u0394x| \u6700\u5927 ${dxMax.toFixed(0)}mm \u21D2 \u89D2\u8272\u771F\u7684\u5728\u6362\u524D\u817F\uFF0C\u6B21\u6570\u7531\u6B65\u6001\u51B3\u5B9A\uFF09`);
-  }
-  if (viol.length) bad(`\u89D2\u8272\u4E00\u81F4\u6027\u8FDD\u4F8B ${viol.length} \u6761\uFF1A${viol.slice(0, 2).join(" | ")}`);
-  else ok("\u89D2\u8272\u4E00\u81F4\u6027\uFF08\u627F\u91CD/\u524D\u540E\uFF09\u65E0\u8FDD\u4F8B");
-}
-log("");
-log("\u2550\u2550 E. \u6BCF\u6839\u88AB\u5199\u8FC7\u7684\u8F74\u90FD\u5FC5\u987B\u5728 AXIS_OWNERSHIP \u91CC\u767B\u8BB0 \u2550\u2550");
-{
-  const { axisRole: axisRole2, ANKLE_ABSENT: ANKLE_ABSENT2 } = await Promise.resolve().then(() => (init_balance(), balance_exports));
-  const seenAxes = /* @__PURE__ */ new Map();
-  const allWritten = /* @__PURE__ */ new Set();
-  const CASES_E = [
-    ["\u6321\u4F4D I \u9ED8\u8BA4", {}],
-    ["\u6321\u4F4D II \u7EAF\u4FA7\u5411 \u03C4", { torqueControl: true, lateralEnabled: true }],
-    ["\u6321\u4F4D I + \u9AA8\u76C6\u62AC\u5347", { kPelvicLift: 0.06 }],
-    // ★ 新增：`shiftDemandF != 0` 的窗口 —— 块⑤ `τ=JᵀF` 只在
-    //   `phase ∈ {SHIFT, DOUBLE} && !handoverOk` 时发。8s 内若交接已完成
-    //   就永远不发，那根轴就查不到。`lateralEnabled:true` 让它尽早 arm。
-    ["\u6A2A\u5411\u9A71\u52A8\u7A97\u53E3\uFF08\u5757\u2464\uFF09", { torqueControl: true, lateralEnabled: true, kPelvicLift: 0 }]
-  ];
-  for (const [tag, bal] of CASES_E) {
-    const rr = run(bal, 12);
-    for (const w of rr.written) {
-      allWritten.add(w);
-      const key = w.replace(/_[lr]$/, "");
-      if (!seenAxes.has(key)) seenAxes.set(key, tag);
-    }
-  }
-  const unregistered = [...seenAxes.keys()].filter((k) => {
-    const m = /^(\w+?)_?[lr]?\/(\d)$/.exec(k);
-    if (!m) return true;
-    return axisRole2(m[1], Number(m[2])) === void 0;
-  });
-  log(`  \u5B9E\u9645\u5199\u8FC7\u7684\u8F74\uFF08\u53BB\u817F\u4FA7\u540E\uFF09\uFF1A${[...seenAxes.keys()].sort().join(", ")}`);
-  if (unregistered.length) {
-    bad(`\u8FD9\u4E9B\u8F74\u88AB\u5199\u4E86\u4F46\u6CA1\u5728 AXIS_OWNERSHIP \u767B\u8BB0\uFF1A${unregistered.join(", ")}`);
-  } else {
-    ok(`\u5168\u90E8\u5DF2\u767B\u8BB0\uFF08\u7ECF ${seenAxes.size} \u6839\u8F74\u3001${CASES_E.length} \u79CD\u914D\u7F6E\u3001\u6BCF\u62CD\u91C7\u6837\u9A8C\u8BC1\uFF09`);
-  }
-  const ankleWritten = [...allWritten].filter((w) => /^(foot|midfoot)_[lr]$/.test(w));
-  if (ANKLE_ABSENT2 && ankleWritten.length) {
-    bad(`\u58F0\u660E ANKLE_ABSENT=true\uFF0C\u4F46\u8E1D\u8F74\u88AB\u5199\u4E86\uFF1A${ankleWritten.join(", ")}`);
-  } else if (ANKLE_ABSENT2) {
-    ok("ANKLE_ABSENT \u4E0E\u5B9E\u9645\u4E00\u81F4\uFF08\u65E0\u8E1D\u8F74\u88AB\u5199\uFF09\uFF1B\u9AA8\u67B6\u4E00\u65E6\u52A0\u8E1D\uFF0C\u6B64\u5904\u4F1A\u5F3A\u5236\u767B\u8BB0");
-  }
-  const { QP_AXIS_SPEC: QP_AXIS_SPEC2 } = await Promise.resolve().then(() => (init_wholeBodyQp(), wholeBodyQp_exports));
-  const qpSpec = [];
-  for (const g of QP_AXIS_SPEC2) for (const ax of g.axes) qpSpec.push(`${g.joint}/${ax}`);
-  const tableHas = (jn, ax) => AXIS_OWNERSHIP2.some(
-    (a) => a.joint === jn && a.axis === ax && a.mode === "tau" && (a.channel === "qp" || (a.extraGates ?? []).includes("qp"))
-  );
-  const missInTable = qpSpec.filter((k) => {
-    const m = /^(\w+)\/(\d)$/.exec(k);
-    return !tableHas(m[1], Number(m[2]));
-  });
-  const qpInTable = AXIS_OWNERSHIP2.filter((a) => a.channel === "qp" || (a.extraGates ?? []).includes("qp")).map((a) => `${a.joint}/${a.axis}`);
-  const extraInTable = qpInTable.filter((k) => !qpSpec.includes(k));
-  if (missInTable.length) {
-    bad(`QP \u4F1A\u5199\u4F46\u8868\u91CC\u6CA1\u767B\u8BB0\u4E3A tau+qp \u7684\u8F74\uFF1A${missInTable.join(", ")}\uFF08\u53CC\u5199 \u21D2 axisConflicts\uFF09`);
-  } else if (extraInTable.length) {
-    bad(`\u8868\u91CC\u767B\u8BB0\u4E86 qp \u95E8\u4F46 QP \u4E0D\u5199\u7684\u8F74\uFF1A${extraInTable.join(", ")}\uFF08\u8868\u5728\u8BF4\u8C0E\uFF09`);
-  } else {
-    ok(`QP \u8F74\u96C6\u5408\u4E0E\u8868**\u53CC\u5411\u4E00\u81F4**\uFF08${qpSpec.length} \u6839\uFF1A${qpSpec.join(", ")}\uFF09`);
-  }
-  const qpOn = run({}, 4);
-  const qpOff = run({ ablate: "qp" }, 4);
-  const diffs = qpOn.tauAcc.map((v, i) => Math.abs(v - (qpOff.tauAcc[i] ?? 0)));
-  const changed = diffs.map((d, i) => [i, d]).filter(([, d]) => d > 1e-3).sort((a, b) => b[1] - a[1]);
-  if (!changed.length) {
-    bad("\u5173\u6389 `qp` \u95E8\u540E\u9010\u8F74\u7D2F\u8BA1 |\u03C4| \u9010\u4F4D\u4E0D\u53D8 \u21D2 QP \u6839\u672C\u6CA1\u63A5\u4E0A\uFF08\u6216\u89E3\u6052\u4E3A 0\uFF09");
-  } else {
-    const top = changed.slice(0, 3).map(([i, d]) => `${sk.joints[Math.floor(i / 3)].name}/${i % 3}:\u0394${d.toFixed(1)}`);
-    ok(`\u5173\u6389 qp \u540E\u9010\u8F74\u7D2F\u8BA1 |\u03C4| \u6539\u53D8 \u21D2 QP \u771F\u7684\u5728\u51FA\u529B\uFF08${changed.length} \u6839\u8F74\uFF0C\u6700\u5927 ${top.join(" ")}\uFF09`);
-  }
-}
-log("");
-log("\u2550\u2550 F. \u552F\u4E00\u6027\uFF1A\u76F8\u4F4D / \u89D2\u8272\u6807\u7B7E\u53EA\u6709\u4E00\u4EFD\u5B9A\u4E49 \u2550\u2550");
-{
-  const files = [
-    "src/core/gaitState.ts",
-    "src/ui/hud.ts",
-    "src/core/rigState.ts",
-    "src/core/controller.ts",
-    "src/core/sim.ts",
-    "src/main.ts"
-  ];
-  const defs = [];
-  for (const f of files) {
-    if (!fs.existsSync(f)) continue;
-    const s = read(f);
-    if (/(?:STATE_LABEL|PHASE_LABEL)[^=]*=\s*\{[\s\S]{0,200}?DOUBLE:/.test(s)) defs.push(f);
-  }
-  if (defs.length > 1) bad(`\u76F8\u4F4D\u6807\u7B7E\u8868\u6709 ${defs.length} \u4EFD\u5B9A\u4E49\uFF1A${defs.join(", ")}`);
-  else if (defs.length === 1) ok(`\u76F8\u4F4D\u6807\u7B7E\u8868\u552F\u4E00\uFF08${defs[0]}\uFF09`);
-  else bad("\u627E\u4E0D\u5230\u72B6\u6001\u6807\u7B7E\u8868\u5B9A\u4E49\uFF08STATE_LABEL\uFF09");
-  const writers = /* @__PURE__ */ new Set();
-  for (const f of files) {
-    if (!fs.existsSync(f)) continue;
-    const s = read(f);
-    const n = (s.match(/\brs\.(phase|phaseT|locked)\w*\s*=(?![=>])/g) || []).length;
-    if (n) writers.add(`${f}(${n})`);
-  }
-  const nonGs = [...writers].filter((w) => !w.startsWith("src/core/gaitState.ts"));
-  if (nonGs.length) bad(`rs.phase / rs.locked \u88AB\u8FD9\u4E9B\u6A21\u5757\u5199\uFF1A${nonGs.join(", ")} \u2014\u2014 \u72B6\u6001\u673A\u5FC5\u987B\u72EC\u5360`);
-  else ok("rs.phase / rs.locked \u53EA\u6709 gaitState \u5199");
-  const deadMods = ["teacher", "balanceHold", "stepSystem", "gaitEvents", "normGait"];
-  const deadFiles = deadMods.filter((m) => !fs.existsSync(`src/core/${m}.ts`));
-  const liveRefs = [];
-  for (const f of files) {
-    if (!fs.existsSync(f)) continue;
-    for (const m of deadMods) {
-      if (new RegExp(`from ['"][^'"]*/${m}['"]`).test(read(f))) {
-        liveRefs.push(`${f} \u2192 ${m}`);
-      }
-    }
-  }
-  if (liveRefs.length) {
-    bad(`\u4ECD import \u5DF2\u5220\u9664\u7684\u6A21\u5757\uFF1A${liveRefs.join(", ")}`);
-  } else {
-    ok(`\u65E0\u6307\u5411\u5DF2\u5220\u6A21\u5757\u7684 import\uFF08\u5DF2\u5220\uFF1A${deadFiles.join(", ") || "\u65E0"}\uFF09`);
-  }
-}
-log("");
-log("\u2550\u2550 G. \u4E24\u53F0\u72B6\u6001\u673A\u7684\u6536\u655B\uFF08\u8BCD\u6C47\u6620\u5C04\u5FC5\u987B\u5168\u8986\u76D6\u4E14\u81EA\u6D3D\uFF09\u2550\u2550");
-{
-  const { PHASE_TO_SCORING: PHASE_TO_SCORING2, SCORING_TO_STANCE: SCORING_TO_STANCE2, phaseStance: phaseStance2 } = await Promise.resolve().then(() => (init_gaitState(), gaitState_exports));
-  const CTRL = ["DOUBLE", "LOAD", "PUSH", "LIFT", "SWING"];
-  const SCORE = ["both", "step", "adjust"];
-  const missing = CTRL.filter((p) => PHASE_TO_SCORING2[p] === void 0);
-  if (missing.length) bad(`\u8FD9\u4E9B\u63A7\u5236\u76F8\u4F4D\u6CA1\u6709\u6620\u5C04\u5230\u8BA1\u5206\u76F8\u4F4D\uFF1A${missing.join(", ")}`);
-  else ok(`${CTRL.length} \u4E2A\u63A7\u5236\u76F8\u4F4D\u5168\u90E8\u6709\u6620\u5C04`);
-  const badTarget = CTRL.filter((p) => !SCORE.includes(PHASE_TO_SCORING2[p]));
-  if (badTarget.length) bad(`\u6620\u5C04\u5230\u4E86\u975E\u6CD5\u8BA1\u5206\u76F8\u4F4D\uFF1A${badTarget.join(", ")}`);
-  else ok("\u6620\u5C04\u76EE\u6807\u5168\u90E8\u5408\u6CD5");
-  const EXPECT = {
-    DOUBLE: "double",
-    LOAD: "double",
-    PUSH: "double",
-    LIFT: "single",
-    SWING: "single"
-  };
-  const wrong = CTRL.filter((p) => phaseStance2(p) !== EXPECT[p]);
-  if (wrong.length) {
-    bad(`phaseStance \u4E0E\u63A7\u5236\u4FA7\u8BED\u4E49\u4E0D\u7B26\uFF1A${wrong.map((p) => `${p}=${phaseStance2(p)}(\u5E94 ${EXPECT[p]})`).join(", ")}`);
-  } else {
-    ok("phaseStance \u4E0E\u63A7\u5236\u4FA7\u8BED\u4E49\u4E00\u81F4\uFF08DOUBLE/LOAD/PUSH=\u53CC\uFF0CLIFT/SWING=\u5355\uFF09");
-  }
-  const noStance = SCORE.filter((s) => SCORING_TO_STANCE2[s] === void 0);
-  if (noStance.length) bad(`\u8FD9\u4E9B\u8BA1\u5206\u76F8\u4F4D\u6CA1\u6709\u652F\u6491\u5206\u7C7B\uFF1A${noStance.join(", ")}`);
-  else ok(`${SCORE.length} \u4E2A\u8BA1\u5206\u76F8\u4F4D\u5168\u90E8\u6709\u652F\u6491\u5206\u7C7B`);
-  const SRC = [
-    "src/core/ragdoll.ts",
-    "src/core/gaitState.ts",
-    "src/core/sim.ts",
-    "src/core/rigState.ts",
-    "src/core/controller.ts",
-    "src/core/systems/step.ts",
-    "src/core/systems/balance.ts"
-  ];
-  const definedIn = SRC.filter((f) => fs.existsSync(f) && /(?<![.\w])advanceStance\s*\(/.test(read(f)));
-  if (definedIn.length !== 1) {
-    bad(`"\u771F\u5355\u652F\u6491"\u7684**\u5B9A\u4E49**\u5E94\u6070\u597D 1 \u5904\uFF0C\u5B9E\u9645 ${definedIn.length} \u5904\uFF1A${definedIn.join(", ") || "\u65E0"}`);
-  } else {
-    ok(`\u5B9A\u4E49\u552F\u4E00\uFF08${definedIn[0]}\uFF09`);
-  }
-  const callers = SRC.filter((f) => fs.existsSync(f) && /\.advanceStance\s*\(/.test(read(f)));
-  if (fs.existsSync("src/core/sim.ts") && /stanceIsSingleSupport/.test(read("src/core/sim.ts"))) {
-    bad('sim.ts \u7684\u5956\u52B1\u8DEF\u5F84\u91CC\u4ECD\u51FA\u73B0"\u8BFB\u65F6\u63A8\u8FDB"\u7684 stanceIsSingleSupport \u2014\u2014 \u5FC5\u987B\u6539\u6210\u7EAF\u8BFB\u53D6 stanceSingleNow');
-  } else {
-    ok('\u5956\u52B1\u8DEF\u5F84\u662F\u7EAF\u8BFB\u53D6\uFF08stanceSingleNow\uFF09\uFF0C\u65E0"\u8BFB\u65F6\u63A8\u8FDB"\u526F\u4F5C\u7528');
-  }
-  if (callers.includes("src/core/sim.ts") && callers.includes("src/core/controller.ts")) {
-    ok(`\u4E24\u6761\u8DEF\u5F84\u90FD\u5728\u56FA\u5B9A\u62CD\u4E0A\u63A8\u8FDB\uFF08${callers.length} \u4E2A\u8C03\u7528\u70B9\uFF1A${callers.map((f) => f.replace("src/core/", "")).join(", ")}\uFF09`);
-  } else {
-    bad(`\u63A8\u8FDB\u672A\u88AB\u4E24\u6761\u8DEF\u5F84\u90FD\u63A5\u5165\uFF08\u8C03\u7528\u70B9\uFF1A${callers.join(", ") || "\u65E0"}\uFF09`);
-  }
-  const ctrlUses = read("src/core/controller.ts").includes("stanceSingleNow");
-  const rsHas = /stanceSingle\s*=\s*false/.test(read("src/core/rigState.ts"));
-  if (ctrlUses && rsHas) ok("\u63A7\u5236\u4FA7\u5DF2\u63A5\u5165\u6536\u655B\u5224\u636E\uFF08controller \u2192 rigState.stanceSingle\uFF09");
-  else bad(`\u6536\u655B\u5224\u636E\u672A\u88AB\u63A7\u5236\u4FA7\u63A5\u5165\uFF08controller=${ctrlUses} rigState\u5B57\u6BB5=${rsHas}\uFF09`);
-}
-log("");
-log("\u2550\u2550 H. \u6B65\u6001\u5468\u671F\u53EA\u6709\u4E00\u4E2A\u771F\u6E90\uFF0C\u4E14\u300C\u4E0B\u9650 \u2264 \u76EE\u6807\u300D\u2550\u2550");
-{
-  const { STEP_CYCLE_SEC: STEP_CYCLE_SEC2, DEFAULT_GAIT_CONFIG: DEFAULT_GAIT_CONFIG2 } = await Promise.resolve().then(() => (init_gaitState(), gaitState_exports));
-  const { TARGET_CYCLE: TARGET_CYCLE2, MIN_CYCLE: MIN_CYCLE2 } = await Promise.resolve().then(() => (init_stability(), stability_exports));
-  const floor = DEFAULT_GAIT_CONFIG2.stepIntervalSec;
-  log(`  \u771F\u6E90 STEP_CYCLE_SEC = ${STEP_CYCLE_SEC2}s\uFF08ES \u8282\u62CD\u76EE\u6807\uFF09`);
-  log(`  \u4E0B\u9650 stepIntervalSec = ${floor}s\uFF08\u63A7\u5236\u8DEF\u5F84 X6\uFF09`);
-  log(`  stability.TARGET_CYCLE = ${TARGET_CYCLE2}s   MIN_CYCLE = ${MIN_CYCLE2}s`);
-  if (TARGET_CYCLE2 === STEP_CYCLE_SEC2) ok(`TARGET_CYCLE \u5F15\u7528\u771F\u6E90\uFF08=${STEP_CYCLE_SEC2}\uFF09`);
-  else bad(`TARGET_CYCLE=${TARGET_CYCLE2} \u2260 STEP_CYCLE_SEC=${STEP_CYCLE_SEC2} \u2014\u2014 \u53C8\u5199\u6B7B\u4E86\u4E00\u4EFD`);
-  if (MIN_CYCLE2 === floor) ok(`MIN_CYCLE \u5F15\u7528\u63A7\u5236\u4E0B\u9650\uFF08=${floor}\uFF09`);
-  else bad(`MIN_CYCLE=${MIN_CYCLE2} \u2260 stepIntervalSec=${floor} \u2014\u2014 \u53C8\u5199\u6B7B\u4E86\u4E00\u4EFD`);
-  if (floor <= STEP_CYCLE_SEC2) ok(`\u4E0D\u53D8\u5F0F\u6210\u7ACB\uFF1A\u4E0B\u9650 ${floor} \u2264 \u76EE\u6807 ${STEP_CYCLE_SEC2}`);
-  else bad(`\u77DB\u76FE\uFF1A\u4E0B\u9650 ${floor}s > \u76EE\u6807 ${STEP_CYCLE_SEC2}s\uFF08ES \u4F1A\u88AB\u5B89\u5168\u4E0B\u9650\u7ED1\u4F4F\uFF0C\u53CD\u4E4B\u4EA6\u7136\uFF09`);
-  const simS = read("src/core/sim.ts");
-  const parallelImports = ["gaitPhase", "commander", "modules"].filter(
-    (m) => new RegExp(`froms*'./${m}'`).test(simS)
-  );
-  if (parallelImports.length === 0) ok("sim.ts \u4E0D\u518D import \u4EFB\u4F55\u5E76\u884C\u72B6\u6001\u673A\u6A21\u5757");
-  else bad(`sim.ts \u4ECD import \u5E76\u884C\u72B6\u6001\u673A\uFF1A${parallelImports.join(", ")}`);
-  if (/this\.gp|this\.cmd|this\.mod/.test(simS)) {
-    bad("sim.ts \u4ECD\u6301\u6709\u5E76\u884C\u72B6\u6001\u673A\u5B9E\u4F8B\uFF08this.gp / this.cmd / this.mod\uFF09");
-  } else ok("sim.ts \u65E0\u5E76\u884C\u72B6\u6001\u673A\u5B9E\u4F8B");
-  if (/attachRigState/.test(simS) && /attachRigState\(this\.rs\)/.test(read("src/core/controller.ts"))) {
-    ok("reward \u7684\u76F8\u4F4D/\u6446\u52A8\u817F\u6765\u6E90 = gaitState\uFF08Controller \u6CE8\u5165 RigState\uFF09");
-  } else bad("sim.ts \u672A\u63A5\u5165 gaitState \u7684 RigState \u2014\u2014 \u76F8\u4F4D\u4ECD\u6709\u4E24\u5957\u6765\u6E90");
-  if (/export const STEP_CYCLE_SEC/.test(read("src/core/gaitState.ts"))) {
-    ok("\u6B65\u6001\u5468\u671F\u771F\u6E90 STEP_CYCLE_SEC \u5728 gaitState.ts");
-  } else bad("STEP_CYCLE_SEC \u4E0D\u5728 gaitState.ts");
-  const simStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(simS);
-  const stabStateImports = /import\s*\{[^}]*GaitState[^}]*\}/.test(read("src/core/stability.ts"));
-  if (simStateImports || stabStateImports) {
-    bad("ES \u8DEF\u5F84 import \u4E86\u63A7\u5236\u4FA7\u7684 GaitState \u7C7B \u2014\u2014 \u53EA\u5141\u8BB8 import \u5E38\u6570");
-  } else {
-    ok("ES \u8DEF\u5F84\u53EA import \u5E38\u6570\uFF08\u65E0\u8FD0\u884C\u65F6\u8026\u5408\uFF09");
-  }
-}
-log("");
-if (fails) {
-  log(`\u2717 \u8F74\u5F52\u5C5E\u95E8\u7981\u5931\u8D25 ${fails} \u9879`);
-  process.exit(1);
-}
-log("\u2605 \u8F74\u5F52\u5C5E\u95E8\u7981\u5168\u7EFF\uFF1A\u6BCF\u8F74\u4E00\u4E2A\u4E3B\u4EBA\uFF0C\u5168\u6D88\u878D == \u96F6\u8F93\u51FA\uFF0C\u65E0\u540C\u8F74\u5F02\u6A21\u5F0F\uFF0C\u89D2\u8272\u6807\u7B7E\u4E0D\u95EA");

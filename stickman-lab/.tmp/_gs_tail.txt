@@ -1,0 +1,9 @@
+  reset(): void {
+    this.t = 0; this.lastStepT = -1e9; this.handoverT = 0;
+    this.hadBearer = false; this.doubleT = 0;
+    this.wasGrounded.l = false; this.wasGrounded.r = false;
+    this.rs.loadBearer = null; this.rs.locked.l = false; this.rs.locked.r = false;
+    this.rs.phase = 'DOUBLE'; this.rs.phaseT = 0; this.rs.authority = 0;
+    this.handoverTarget = null;
+  }
+}

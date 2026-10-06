@@ -438,14 +438,27 @@ export function supportPolygon(
 }
 
 /**
- * 从 `Ragdoll` 的当前状态构造待求轴：**承重腿整条链 + 腰**，矢状 + 额状。
+ * ★★★ QP 的**轴集合（唯一真源）** —— 关节基名 + 轴号，运行时补上腿侧后缀。
+ *
+ *   为什么要导出成常量：`AXIS_OWNERSHIP`（balance.ts）必须登记 QP 要写的每一根轴，
+ *   而这份名单以前是**手抄**在两处的（这里 + 表里）⇒ 改一处忘另一处，
+ *   就会出现「表在说谎」或「轴没登记」。门禁 E2 现在拿它双向对账。
+ *
+ *   ⚠ `hip` 只有 1、2 轴：`hip/0`（外展）的 tau 主人是 `latTransfer`。
+ *   ⚠ 2026-10-06 腰（`spine1..3`）已移出（依据 Winter 1996 / 1998，见下）。
+ */
+export const QP_AXIS_SPEC: readonly { joint: string; axes: readonly number[] }[] = Object.freeze([
+  { joint: 'foot', axes: Object.freeze([0, 1, 2]) },
+  { joint: 'knee', axes: Object.freeze([0, 1, 2]) },
+  { joint: 'hip', axes: Object.freeze([1, 2]) },
+]);
+
+/**
+ * 从 `Ragdoll` 的当前状态构造待求轴：**承重腿整条链**，矢状 + 额状。
  *
  * 为什么只取承重腿（附录 B.1：「一次动一个模块」是 step 的职责）：
  *   摆动腿不承重，它的地面对 CoM 无净贡献；把它放进等式约束会让
  *   求解器去"命令一条不接触地面的腿"，那是纯粹的伪自由度。
- *
- * 为什么含腰：文献（Horak 2006 / Xu & Sher）指出躯干侧倾能用重力矩卸载髋，
- *   额度可观。腰的力臂长（~0.5m）⇒ 同样的 τ 能产生大得多的水平力。
  *
  * @param ankleMul 踝轴权重倍数（Kim 2022：踝取髋的 3~5 倍）。
  *   权重**按 τmax 归一**后乘这个 —— 含义是"同样 τmax 下踝更值得用"。
@@ -465,15 +478,12 @@ export function buildQpAxes(
   const copW = new Float64Array([(BBt[0]! + BBt[1]!) / 2, BBt[2]!, (BBt[2]! + BBt[3]!) / 2]);
   void supW;
 
-  // 关节与要解的轴：[关节名, 轴号]。含腰（spine1/2/3 的侧倾与屈伸）
-  const spec: [string, number][] = [
-    [`foot_${sup}`, 0], [`foot_${sup}`, 1], [`foot_${sup}`, 2],
-    [`knee_${sup}`, 0], [`knee_${sup}`, 1], [`knee_${sup}`, 2],
-    // ★ `hip/0`（外展轴）不进 QP —— 它的主人是 `latTransfer`，
-    //   两个真主人 ⇒ `axisConflicts` 增并拒收 ⇒ QP 静默失效（实测 6 处冲突）。
-    //   ⇑ 侧向由 `latTransfer` 负责，QP 管知道其余轴。
-    [`hip_${sup}`, 1], [`hip_${sup}`, 2],
-    // ★★ 2026-10-06 腰的三轴**移出 QP**（依据 Winter 1996 / 1998，见下）。
+  // 关节与要解的轴：由 `QP_AXIS_SPEC` 展开（表与代码的唯一真源）
+  const spec: [string, number][] = [];
+  for (const g of QP_AXIS_SPEC) {
+    for (const ax of g.axes) spec.push([`${g.joint}_${sup}`, ax]);
+  }
+  // ★★ 2026-10-06 腰的三轴**移出 QP**（依据 Winter 1996 / 1998，见下）。
     //   QP 的等式只有**水平两行**（`wholeBodyQp.ts` 的 `Cx/Cz`），所以
     //   腰在 QP 里既没有"该多直"的约束、也没有任何姿态项 ——
     //   它只是被动分摊水平力矩的一个**冗余自由度**，由最小范数随意填。
@@ -498,8 +508,6 @@ export function buildQpAxes(
     //     躯干姿态不再被 QP 主动修正 —— 这与用户「平衡系统需要能控制体态」
     //     的要求冲突。正确形态是**躯干姿态作为一个任务**进 QP（任务空间），
     //     而不是让腰作为冗余自由度被动分摊。这属于 #1 逆动力学的后续工作。
-
-  ];
   for (const [nm, ax] of spec) {
     const ji = idx(nm);
     if (ji < 0) continue;
