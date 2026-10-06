@@ -14249,6 +14249,20 @@ var init_ragdoll = __esm({
        */
       tauCap = new Float32Array(0);
       // 保留字段：供探针回读上限表，不再执行
+      /**
+       * ★★★ **逐轴刚度上限**（N·m/rad；0 = 不设限）—— 见 `driveMotors` 里的长注释。
+       *   与 `tauCap`（发力上限）**是两件事**：`tauCap` 限"一次能发多大劲"，
+       *   `stiffCap` 限"对一个角度误差反应多硬"。实测脊柱后者超了 7 倍。
+       */
+      stiffCap = new Float32Array(0);
+      /** 被刚度上限夹住的次数（可回读） */
+      stiffCapHits = 0;
+      /** 各轴**夹之前**的 kP 峰值（诊断：用来反推"本来有多硬"） */
+      kpRawPeak = new Float64Array(256);
+      /** 安装逐轴刚度上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+      setStiffCaps(caps) {
+        this.stiffCap = caps;
+      }
       /** 被夹住的次数（已停用；保留 0 以兼容回读） */
       capHits = 0;
       /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
@@ -14631,6 +14645,50 @@ var init_ragdoll = __esm({
           }
           this.joints.push(joint);
         });
+      }
+      /**
+       * ★★★ **接触参数（研究用）** —— 读 Rapier 的 `integrationParameters`。
+       *
+       *   为什么需要它（2026-10-06，用户「先把这个链路打通」）：
+       *   `probe-footpush` 实测**脚在共面接触块之间逐拍翻号**（内 509 N <-> 外 305 N），
+       *   ⇒ 单脚 CoP 每 1/60 s 跳 ~180 mm ⇒ 对 CoM 的力矩 ±300 N·m 白噪声
+       *   ⇒ 「脚发力带动全身倾斜」在**信息论上**就不可能。
+       *
+       *   机理假设：**共面刚性接触的载荷分配是静不定的** —— 由 LCP 求解器挑一个解，
+       *   微小的数值差就翻面；若接触变软（`contact_natural_frequency` 降低），
+       *   分配改由**穿透深度**（连续量）决定 ⇒ 应当稳定。
+       */
+      contactTuning() {
+        const ip = this.world.integrationParameters;
+        const num = (k) => typeof ip[k] === "number" ? ip[k] : Number.NaN;
+        return {
+          freq: num("contact_natural_frequency"),
+          erp: num("contact_erp"),
+          iters: num("numSolverIterations"),
+          small: this.smallSteps ?? false
+        };
+      }
+      /** 小步长 PGS 求解器开关（Rapier：堆叠接触更准，专治静不定分配） */
+      smallSteps = false;
+      /** ★ 诊断：在原型链上找某个属性的**类型**（区分数据字段 / getter / 方法） */
+      contactPropType(k) {
+        const ip = this.world.integrationParameters;
+        return typeof ip[k];
+      }
+      /** 写接触参数（`undefined` = 不动那一项）。返回写入后的实况。 */
+      setContactTuning(o) {
+        const ip = this.world.integrationParameters;
+        if (o.freq !== void 0) ip["contact_natural_frequency"] = o.freq;
+        if (o.erp !== void 0) ip["contact_erp"] = o.erp;
+        if (o.iters !== void 0) ip["numSolverIterations"] = o.iters;
+        if (o.linearErr !== void 0) ip["normalizedAllowedLinearError"] = o.linearErr;
+        if (o.small !== void 0) {
+          this.smallSteps = o.small;
+          const m = this.world.integrationParameters;
+          if (o.small && typeof m["switchToSmallStepsPgsSolver"] === "function") m["switchToSmallStepsPgsSolver"]();
+          else if (!o.small && typeof m["switchToStandardPgsSolver"] === "function") m["switchToStandardPgsSolver"]();
+        }
+        return this.contactTuning();
       }
       get jointCount() {
         return this.joints.length;
@@ -15127,6 +15185,7 @@ var init_ragdoll = __esm({
        * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
        */
       toneScale = [];
+      // ★ 2026-10-06 供 probe-waist 回读（只读）
       /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
       setToneScale(joint, axis, scale) {
         const i = joint * 3 + axis;
@@ -16005,8 +16064,25 @@ var init_ragdoll = __esm({
               thRef = cmd >= 0 ? cmd * this.refPos[idx] : cmd * this.refNeg[idx];
               const ov = jg[j.name];
               ts = this.toneScale[idx] || 1;
-              kPSpring = ov ? ov.kP : kP;
-              err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
+              let kpUse = ov ? ov.kP : kP;
+              let kdUse = ov ? ov.kD : kDd;
+              const kpRaw = kpUse, kdRaw = kdUse;
+              const scMax = this.stiffCap[idx] ?? 0;
+              if (scMax > 0) {
+                const tmaxAxis = (j.maxTorque[k] ?? 0) * this.opt.torqueScale;
+                if (tmaxAxis > 1e-6) {
+                  const kpCap = scMax * JOINT_MAX_SPEED / tmaxAxis;
+                  if (kpUse > kpCap) {
+                    if (kpUse > (this.kpRawPeak[idx] ?? 0)) this.kpRawPeak[idx] = kpUse;
+                    const r = kpCap / kpUse;
+                    kpUse = kpCap;
+                    if (!this.holdCmd[idx]) kdUse = Math.min(kdUse, kdRaw * r);
+                    this.stiffCapHits++;
+                  }
+                }
+              }
+              kPSpring = kpUse;
+              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
             }
             const ffEarly = this.torqueCmd[idx];
             if (err === 0 && ffEarly === 0) continue;
@@ -16952,6 +17028,7 @@ function lerpKeyPose(from, to, s) {
     swAnkle: L(a.swAnkle, b.swAnkle),
     trunkPitch: L(a.trunkPitch, b.trunkPitch),
     trunkLat: L(a.trunkLat, b.trunkLat),
+    trunkYaw: L(a.trunkYaw, b.trunkYaw),
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
@@ -16988,7 +17065,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: -2 * D,
         trunkPitch: 4 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
       },
       LR: {
@@ -17000,7 +17078,8 @@ var init_keyframe = __esm({
         supAnkle: 12.5 * D,
         swAnkle: -5 * D,
         trunkPitch: 2 * D,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
       },
       MSt: {
@@ -17014,7 +17093,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 5 * D,
+        trunkYaw: 4 * D,
         primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
       },
       TSt: {
@@ -17026,7 +17106,8 @@ var init_keyframe = __esm({
         supAnkle: -10 * D,
         swAnkle: -18 * D,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 4 * D,
+        trunkYaw: 3 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
       },
       PSw: {
@@ -17038,7 +17119,8 @@ var init_keyframe = __esm({
         supAnkle: 20 * D,
         swAnkle: -20 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
       },
       ISw: {
@@ -17050,7 +17132,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: -3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
       },
       MSw: {
@@ -17062,7 +17145,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: 0,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
       },
       TSw: {
@@ -17074,7 +17158,8 @@ var init_keyframe = __esm({
         supAnkle: -2 * D,
         swAnkle: -3 * D,
         trunkPitch: 3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
       }
     });
@@ -17164,6 +17249,8 @@ var init_rigState = __esm({
     LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
+      startupTicks: 30,
+      // 0.5s @60Hz（开局那一砸发生在头 0.22s）
       waistSlotMax: 6 * Math.PI / 180,
       mosBudgetZ: 25e-4
     };
@@ -17358,6 +17445,33 @@ var init_rigState = __esm({
       stanceSingle = false;
       com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
       /**
+       * ★★★ **上身发力状态**（用户 2026-10-06 定调）：
+       *   「迈步系统和平衡系统的**上身发力都需要好好设计**」
+       *   「顺序是**先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态**」
+       *
+       *   ── 为什么做成"一个力"而不是"各轴各写各的" ────────────────────
+       *   用户原话：「力是从脚、从腿往上传的，**盲目发力就是会折腰**」。
+       *   实测（`probe:upforce`）：迈步只要求躯干 0.0°，而 `spine1/2` 的力矩
+       *   被块⑤的**侧向搬运链**顶到 **−120 N·m（= τmax）** —— 那就是"盲目发力"。
+       *
+       *   ⇒ 上身的输出 = **上身 CoM 处的一个力** `(fx, fy, fz)`，
+       *     脊柱各轴力矩由 `τ = JᵀF`（虚功）**唯一确定**，不存在"第二套分配"。
+       *     `pitch/roll` 是同一件事的姿态表达：`fx = m_u·g·tan(pitch)`。
+       */
+      upperBody = {
+        step: { pitch: 0, roll: 0, yaw: 0 },
+        bal: { pitch: 0, roll: 0 },
+        final: { pitch: 0, roll: 0, yaw: 0 },
+        decidedBy: "none",
+        corrPitch: 0,
+        corrRoll: 0,
+        force: { fx: 0, fy: 0, fz: 0 },
+        mass: 0,
+        comX: 0,
+        comY: 0,
+        comZ: 0
+      };
+      /**
        * ★★ **救回门槛**（deg）。用户 2026-10-06：
        *   「我觉得在歪倒一定角度之前都可以尝试救回来，歪倒角度过大确实是没救了」。
        *   语义：最歪那一段的倾角 < 它 ⇒ `trends.rescueable = true`，平衡系统**全力救**；
@@ -17417,6 +17531,85 @@ var init_rigState = __esm({
       disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
       /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
       disposeK = 1;
+      /** 上身发力（块⑧）本拍在脊柱链上下发的量（修正量的模，rad）—— 0 = 没在出力 */
+      ubTau = 0;
+      /** 骨盆（树根）本拍角速度模（rad/s）—— 盆骨去噪门的输入 */
+      pelvisW = 0;
+      /**
+       * ★★★ **力链低通的状态**（一阶，τ≈80 ms）—— 用户 2026-10-06：
+       *   「都做吧」+ `probe-footpush` 实测：脚部载荷**逐拍在内外侧柱之间翻号**
+       *   （±300 N·m 的力矩噪声），而有效的**均值力矩只有 ~60 N·m** ⇒ 信噪比 ≈ 0.2。
+       *   纯物理/求解器层面压不住（见 §22.11 的扫描表：接触参数/小步长/求解器迭代/
+       *   弓刚度/弓阻尼/脚角阻尼**全部无效**）⇒ 唯一出路是**在信号层低通**。
+       *   ⚠ 只滤**原始输入**（fz / colIn / colOut / CoP），派生量（力臂/余量/倾覆）
+       *     由滤后的输入重算 —— 否则会出现"力矩与力不一致"。
+       */
+      ffFlt = [];
+      /** 低通是否已初始化（首拍直接把原始值填进去，避免从 0 爬升） */
+      ffFltInit = false;
+      /** 被盆骨去噪门挡住的拍数（诊断：>0 说明门在咬） */
+      ubNoiseBlocked = 0;
+      /** 块⑧执行次数（诊断：0 = 没跑） */
+      ubRuns = 0;
+      /**
+       * ★★★ **力矩来源逐轴记录**（诊断；用户 2026-10-06「逐帧回读看腰咋发力的」）。
+       *   为什么必须有：`arbitrate` 只在 `ownerLabel === '—'` 时才给 τ 记 label
+       *   （否则角度主人盖住它）⇒ 实测出现"脊柱 ω 只有 1~4°/s、角度 2°，
+       *   而 τ 顶到 ±120 来回翻"却**查不出是谁写的**。
+       *   本表在 `requestTorque` 入口无条件记录（最后写入者）。
+       */
+      tauSrc = [];
+      /**
+       * ★★★★ **腰部借力**（用户 2026-10-06：「**平衡系统和迈步系统都走腰部借力才对**」、
+       *   「腰部也要主动发力啊。**是腿部发力，然后腰部借力才对**」）。
+       *
+       *   ── 物理 ──────────────────────────────────────────────────────
+       *   腰**不自己产生力**。腿推地 → 水平 GRF → 上身**顺着这个力倾**，
+       *   把腿给的力**用**在重心转移上（而不是另算一个目标去顶）。
+       *   ⇒ 输入只有一个：**腿产生的水平 GRF**（`groundChain.grfX/grfZ`，已低通 80ms）。
+       *
+       *   ── 为什么做成"一个共享通道"而不是两边各写 ──────────────────
+       *   两个系统都"借"同一份力：**增益相加**、**由同一处算**、**写同一个 `acorr`**。
+       *   若各写各的（step 写目标、balance 写修正），就会出现"两边按各自的相位借，
+       *   互相抵消"——这正是此前"重心转移拉不回来"的结构原因。
+       */
+      /**
+       * ★★★★ **腰（脊柱）的状态** —— 2026-10-06 重构（`systems/waist.ts`）。
+       *
+       *   语义：`step` 与 `balance` 只往这里**填意图**（度、域口径），
+       *   **唯一发布者**是 `waistSystem` —— 它把「基准 + 迈步名义 + 借力 + 平衡修正」
+       *   合成后逐轴写成脊柱的**目标角**。
+       *   ⇒ 脊柱永远有人写目标（`axisOwner` 不再是 `bind`），这是"折腰"的结构解。
+       */
+      waist = {
+        /** 迈步系统的意图（度；`gain` = 它那一份借力增益，按相位 `authority` 调） */
+        step: { pitch: 0, roll: 0, yaw: 0, gain: 0, authority: 0 },
+        /** 平衡系统的意图（度；`gain` = 它那一份借力增益） */
+        bal: { pitch: 0, roll: 0, gain: 0 },
+        /** 本拍腿产生的水平 GRF（已低通）—— 借力的**唯一来源** */
+        grfX: 0,
+        grfZ: 0,
+        /** 本拍借力项（度，诊断） */
+        borrow: { pitch: 0, roll: 0 },
+        /** 本拍**实际发布**的目标（度） */
+        out: { pitch: 0, roll: 0, yaw: 0 },
+        /** 增益和（诊断） */
+        kSum: 0,
+        /** 本拍是否发布过（0 = 消融/关闭 —— 读回端必须能区分"没发布"与"发布了 0"） */
+        published: 0
+      };
+      /**
+       * ★★★ **修正增量通道**（用户 2026-10-06 定调：
+       *   「**迈步系统带着目标调整关节；平衡系统只修正，不考虑目标**」）。
+       *
+       *   为什么必须**独立于 `req[]`**：`req[]` 每轴只有一个槽、按优先级**覆盖**。
+       *   若 balance 直接往 `req[]` 写，它写的就是"目标"而不是"修正" ——
+       *   与用户的定调相反，而且会**盖掉**迈步的目标。
+       *   ⇒ `acorr[]` 是**相加**通道：`最终 = 目标(req) + 修正(acorr)`，职责不重叠。
+       */
+      acorr = new Float64Array(0);
+      /** 本拍被写过的修正轴（诊断/UI：谁加了多少） */
+      acorrStat = [];
       /**
        * ★★★ **逐关节发力门禁**（用户 2026-10-06：
        *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
@@ -17436,6 +17629,8 @@ var init_rigState = __esm({
       capHits = { req: 0, servo: 0 };
       /** 最近一次被夹的轴与幅度（诊断） */
       capLast = { axis: -1, want: 0, cap: 0, label: "" };
+      /** 发力门禁本拍是否启用（`ablate` 含 `forceCap` 时为 false） */
+      tauCapOn = true;
       /**
        * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
        *
@@ -17665,6 +17860,7 @@ var init_rigState = __esm({
         this.tgtOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
         this.forceBuf = new Float64Array(sk2.joints.length * 5);
+        this.acorr = new Float64Array(sk2.joints.length * 3);
         this.treq.fill(void 0);
         for (let i = 0; i < n; i++) {
           this.tgt.push({
@@ -17854,6 +18050,13 @@ var init_rigState = __esm({
         return this.pos[i * 3 + axis] ?? 0;
       }
       /**
+       * ★★★ **探针注入口**（生产恒 `null`）：`tools/probe-waist.ts` 用它直接测
+       *   「给脊柱写目标/写修正 ⇒ 位置伺服出不出力矩、腰动不动」。
+       *   `mode='tgt'` 走 `requestAngle`（写目标）；`mode='corr'` 走 `requestAngleCorr`
+       *   （只写增量，验证"没人写目标时修正能否单独挺起腰"）。
+       */
+      waistInject = null;
+      /**
        * ★ 提需求。两个系统**并发**调用同一个 `rigState`，由 `arbitrate()` 合并。
        *   注意语义：这是"登记意图"，**不直接改 target**。
        */
@@ -17993,7 +18196,14 @@ var init_rigState = __esm({
         }
         cur.value += tau;
       }
-      requestTorque(joint, axis, tau, system, label) {
+      /**
+       * @param loadBearing ★ 调用方**显式声明**这条力矩是**承重**（该轴位置伺服已让位、
+       *   这条力矩就是唯一的支撑路径）⇒ 不夹到 `tauCap`（用户：「承重无上限」）。
+       *   ⚠ 默认 **false = 按发力夹**。第一版把"让位"当成自动豁免，结果**上身力**
+       *     （块⑧，同样是主动发力）也豁免了 ⇒ `spine2` 弯到 +33°、τ 到 116（实测）。
+       *   "我是不是承重"**只有调用方知道**，不能由 `hold` 自动推断。
+       */
+      requestTorque(joint, axis, tau, system, label, loadBearing = false) {
         this.claimAxis(joint, axis, 2, system);
         const i = joint * 3 + axis;
         if (i < 0 || i >= this.nAxes) {
@@ -18001,7 +18211,7 @@ var init_rigState = __esm({
           return;
         }
         let v = tau;
-        const cap = this.hold[i] ? 0 : this.tauCap[i] ?? 0;
+        const cap = loadBearing ? 0 : this.tauCap[i] ?? 0;
         if (cap > 0 && Math.abs(v) > cap) {
           this.capHits.req++;
           this.capLast = { axis: i, want: v, cap, label };
@@ -18009,12 +18219,27 @@ var init_rigState = __esm({
         }
         const cur = this.treq[i];
         this.torqueRequestCount++;
-        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+        if (cur && cur.system !== system && PRIORITY[cur.system] <= PRIORITY[system]) {
           this.tgt[i].suppressed.push({ system, label: `${label}(\u529B\u77E9)` });
           return;
         }
-        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
-        this.treq[i] = { value: v, system, label };
+        if (cur && cur.system !== system) {
+          this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
+          this.treq[i] = { value: v, system, label };
+        } else if (cur) {
+          cur.value += v;
+        } else {
+          this.treq[i] = { value: v, system, label };
+        }
+        let t = this.tauSrc[i];
+        if (!t) {
+          t = { system, label, value: v };
+          this.tauSrc[i] = t;
+        } else {
+          t.system = system;
+          t.label = label;
+          t.value = v;
+        }
       }
       /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
       requestSwingLegTorque(side, joint, axis, tau, label, isLift) {
@@ -18150,6 +18375,8 @@ var init_rigState = __esm({
         let republished = 0, overridden = 0;
         for (const p of this.stepProps) {
           const j = Math.floor(p.i / 3), a = p.i % 3;
+          const nm = this.sk.joints[j]?.name ?? "";
+          if (nm.startsWith("spine")) continue;
           const cur = this.req[p.i];
           if (cur && cur.system === "balance" || this.hold[p.i]) {
             overridden++;
@@ -18169,6 +18396,78 @@ var init_rigState = __esm({
         this.disposeStat = { props: this.stepProps.length, republished, overridden, k: kk };
         return this.disposeStat;
       }
+      /**
+       * ★★★ **迈步系统**提出上身姿态（用户定调的第一步）。
+       *   ⚠ 只写 `upperBody.step` —— **不直接下发关节角**（那是 balance 综合后的职责）。
+       *   消融：由调用方查 `on('upForce')`（表里登记在脊柱行）。
+       */
+      proposeUpperBody(pitch, roll, yaw) {
+        const st = this.upperBody.step;
+        st.pitch += pitch;
+        st.roll += roll;
+        st.yaw += yaw;
+      }
+      /**
+       * ★★★ **平衡系统**综合并**发布最终上身发力状态**（用户定调的第二步）。
+       *
+       *   `final = step ⊕ bal`，逐轴夹在 ±`maxLean`。随后由调用方按 `final` 算力
+       *   （`m_u·g·tan(θ)`）并用 `τ=JᵀF` 落到脊柱链 —— 见 `balance.ts` 块⑧。
+       *
+       *   ★ 为什么刻意**四参而非两参**（Stephens 2007 / Hof 2005）：
+       *     支架上的"倾斜"看起来是姿态，**实质是力**：倾 θ ⇒ 上身 CoM 横移 `h_u·sin θ`
+       *     ⇒ 对全身 CoM 的贡献 `m_u/m · h_u·sin θ`。所以上限要按**力**来定
+       *     （`forceCap` 与 `tauCap` 同一套），而不是按角度拍一个魔数。
+       *
+       * @param maxLean 允许的额外倾角上限（rad，balance 按力上限反解后传入）
+       */
+      finalizeUpperBody(corrPitch, corrRoll, maxLean) {
+        const ub = this.upperBody;
+        ub.bal.pitch = corrPitch;
+        ub.bal.roll = corrRoll;
+        const cp = Math.max(-maxLean, Math.min(maxLean, ub.step.pitch + corrPitch));
+        const cr = Math.max(-maxLean, Math.min(maxLean, ub.step.roll + corrRoll));
+        ub.corrPitch = cp - ub.step.pitch;
+        ub.corrRoll = cr - ub.step.roll;
+        ub.final.pitch = cp;
+        ub.final.roll = cr;
+        ub.final.yaw = ub.step.yaw;
+        ub.force.fx = ub.mass * 9.81 * Math.tan(cp);
+        ub.force.fy = ub.mass * 9.81;
+        ub.force.fz = ub.mass * 9.81 * Math.tan(cr);
+        ub.decidedBy = Math.abs(corrPitch) + Math.abs(corrRoll) > 1e-4 ? "balance" : "step";
+      }
+      /**
+       * ★★★ **修正增量**（弧度）—— 与 `requestAngle` 的目标**相加**，不是覆盖。
+       *
+       *   用户定调：「平衡系统**只修正，不考虑目标**」。
+       *   ⇒ 平衡系统调用本接口时**不需要知道目标是什么**，它只回答"该再补多少"。
+       *   ⚠ 量纲：与 `requestAngle` 一样收**弧度**，内部按量程归一化后累加。
+       */
+      requestAngleCorr(joint, axis, deltaRad, system, label) {
+        const i = joint * 3 + axis;
+        if (i < 0 || i >= this.nAxes) {
+          this.badRequests++;
+          return;
+        }
+        if (!(Math.abs(deltaRad) > 1e-9)) return;
+        const def = this.sk.joints[joint];
+        if (!def) {
+          this.badRequests++;
+          return;
+        }
+        const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
+        if (span <= 1e-6) {
+          this.badRequests++;
+          return;
+        }
+        this.acorr[i] = (this.acorr[i] ?? 0) + deltaRad * 0.9 / span;
+        this.acorrStat.push({ axis: i, delta: deltaRad, label });
+        this.requestCount++;
+      }
+      ubPrevRoll = 0;
+      ubPrevPitch = 0;
+      /** 全身体重（N）—— 借力的归一化基准（由 Controller 安装） */
+      massN = 686.7;
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
@@ -18188,6 +18487,17 @@ var init_rigState = __esm({
         this.torqueRequestCount = 0;
         this.requestCount = 0;
         this.stepProps.length = 0;
+        for (const t of this.tauSrc) {
+          if (t) {
+            t.label = "\u2014";
+            t.value = 0;
+          }
+        }
+        this.acorr.fill(0);
+        this.acorrStat.length = 0;
+        this.upperBody.step.pitch = 0;
+        this.upperBody.step.roll = 0;
+        this.upperBody.step.yaw = 0;
         for (let i = 0; i < this.tgt.length; i++) {
           const t = this.tgt[i];
           t.suppressed.length = 0;
@@ -18206,12 +18516,20 @@ var init_rigState = __esm({
       /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
       arbitrate(dt) {
         const out = this.prevOut;
-        const maxStep = this.cfg.slewLimit * dt;
+        const stT = this.cfg.startupTicks ?? 0;
+        const ramp = stT > 0 ? Math.min(1, this.tickNo / stT) : 1;
+        const maxStep = this.cfg.slewLimit * dt * ramp;
         for (let i = 0; i < this.nAxes; i++) {
           const r = this.req[i];
           const t = this.tgt[i];
           if (!r || !t) {
-            out[i] = this.prevTarget[i] ?? 0;
+            this.prevTarget[i] = this.prevTarget[i] ?? 0;
+            const tt = this.tgt[i];
+            if (tt.owner === "none") {
+              tt.owner = "bind";
+              tt.ownerLabel = "\u4FDD\u6301";
+              tt.tag = "servo";
+            }
             continue;
           }
           t.value = r.value;
@@ -18221,24 +18539,15 @@ var init_rigState = __esm({
           const prev2 = this.prevTarget[i] ?? 0;
           const d2 = r.value - prev2;
           if (Math.abs(d2) > maxStep) {
-            out[i] = prev2 + Math.sign(d2) * maxStep;
+            this.prevTarget[i] = prev2 + Math.sign(d2) * maxStep;
             t.clamped = true;
           } else {
-            out[i] = r.value;
+            this.prevTarget[i] = r.value;
           }
         }
         for (let i = 0; i < out.length; i++) {
-          if (!this.req[i]) {
-            out[i] = this.prevTarget[i] ?? 0;
-            const t = this.tgt[i];
-            if (t.owner === "none") {
-              t.owner = "bind";
-              t.ownerLabel = "\u4FDD\u6301";
-              t.tag = "servo";
-            }
-          }
+          out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
         }
-        for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i];
         for (let i = 0; i < this.nAxes; i++) {
           const r = this.treq[i];
           if (!r) {
@@ -18247,12 +18556,18 @@ var init_rigState = __esm({
           }
           const j = this.sk.joints[Math.floor(i / 3)];
           const k = i % 3;
-          const tmax = j ? j.maxTorque[k] : 0;
-          let v = r.value;
+          const tmax = j ? j.maxTorque[k] ?? 0 : 0;
+          let v = r.value * ramp;
           if (v > tmax) v = tmax;
           else if (v < -tmax) v = -tmax;
           this.tauOut[i] = v;
           const t = this.tgt[i];
+          const ts = this.tauSrc[i];
+          if (ts) {
+            ts.label = r.label;
+            ts.value = v;
+            ts.system = r.system;
+          }
           if (t && t.ownerLabel === "\u2014") {
             t.owner = r.system;
             t.ownerLabel = `${r.label}(\u03C4)`;
@@ -18510,16 +18825,16 @@ function buildIndex(rs) {
   return m;
 }
 function degOf(rs, idx, leg, axis) {
-  const DEG3 = 180 / Math.PI;
+  const DEG4 = 180 / Math.PI;
   switch (axis) {
     case "hipFlex":
-      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG3;
+      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG4;
     case "hipAbd":
-      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG3;
+      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG4;
     case "kneeFlex":
-      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG3;
+      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG4;
     case "ankle":
-      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG3;
+      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG4;
     case "trunkPitch":
       return rs.pitchDeg;
     case "trunkLat":
@@ -18603,6 +18918,9 @@ var init_jointQuery = __esm({
 });
 
 // src/core/forceChain.ts
+function setForceFilterTau(t) {
+  FORCE_FLT_TAU = t;
+}
 function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen, comA = { x: 0, z: 0 }, support = null) {
   const bothValid = l.copValid && r.copValid;
   const oneValid = l.copValid || r.copValid;
@@ -18666,12 +18984,17 @@ function buildForceChain(l, r, ankle, com, massKg, tauMax, footHalfLen, comA = {
   } else if (distEdgeZ < 0) {
     trustNote = `CoM \u5DF2\u8D8A\u51FA\u4FA7\u5411\u652F\u6491\u9762 ${(distEdgeZ * 1e3).toFixed(0)}mm \u21D2 \u4FA7\u5411\u5FC5\u7136\u5012`;
   }
+  const momentMaxSag = fzTot * footHalfLen;
+  const momentMaxLat = fzTot * Math.max(Math.abs(com.z - latMin), Math.abs(latMax - com.z));
   return {
     l,
     r,
     copX,
     copZ,
     copValid,
+    momentMaxSag,
+    momentMaxLat,
+    chainFiltered: false,
     grfX,
     grfY,
     grfZ,
@@ -18712,11 +19035,47 @@ function forceChainLines(fc) {
     `\u53EF\u4FE1\uFF1A${fc.trustable ? "\u662F" : "\u5426 \u2014 " + fc.trustNote}`
   ];
 }
-function buildGroundChain(src, rs) {
-  const l = src.sole(0);
-  const r = src.sole(1);
+function buildGroundChain(src, rs, dtPhys = 1 / 120) {
+  const rawL = src.sole(0);
+  const rawR = src.sole(1);
+  if (!rs.ffFlt.length) {
+    rs.ffFlt = [
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 },
+      { fz: 0, colIn: 0, colOut: 0, copX: 0, copZ: 0, n: 0 }
+    ];
+  }
+  const a = FORCE_FLT_TAU <= 0 ? 1 : dtPhys > 1e-9 ? Math.min(1, dtPhys / FORCE_FLT_TAU) : 0.2;
+  const flt = (side, raw) => {
+    const f = rs.ffFlt[side];
+    if (!rs.ffFltInit || !raw.copValid) {
+      f.fz = raw.fz;
+      f.colIn = raw.colIn;
+      f.colOut = raw.colOut;
+      f.copX = raw.copX;
+      f.copZ = raw.copZ;
+      f.n = raw.contactN;
+    } else {
+      f.fz += a * (raw.fz - f.fz);
+      f.colIn += a * (raw.colIn - f.colIn);
+      f.colOut += a * (raw.colOut - f.colOut);
+      f.copX += a * (raw.copX - f.copX);
+      f.copZ += a * (raw.copZ - f.copZ);
+      f.n = raw.contactN;
+    }
+    return {
+      ...raw,
+      fz: f.fz,
+      colIn: f.colIn,
+      colOut: f.colOut,
+      copX: f.copX,
+      copZ: f.copZ
+    };
+  };
+  const l = flt(0, rawL);
+  const r = flt(1, rawR);
+  rs.ffFltInit = true;
   const ankle = { l: src.ankle(0), r: src.ankle(1) };
-  return buildForceChain(
+  const out = buildForceChain(
     l,
     r,
     ankle,
@@ -18727,11 +19086,15 @@ function buildGroundChain(src, rs) {
     src.comAccel(),
     src.supportLat()
   );
+  out.chainFiltered = true;
+  return out;
 }
-var FZ_MIN_N, COP_MAX_ARM;
+var FORCE_FLT_TAU_DEFAULT, FORCE_FLT_TAU, FZ_MIN_N, COP_MAX_ARM;
 var init_forceChain = __esm({
   "src/core/forceChain.ts"() {
     "use strict";
+    FORCE_FLT_TAU_DEFAULT = 0.08;
+    FORCE_FLT_TAU = FORCE_FLT_TAU_DEFAULT;
     FZ_MIN_N = 15;
     COP_MAX_ARM = 0.5;
   }
@@ -19523,7 +19886,7 @@ var init_gaitState = __esm({
         const front = recv;
         if (rs.forceSrc) {
           try {
-            rs.groundChain = buildGroundChain(rs.forceSrc, rs);
+            rs.groundChain = buildGroundChain(rs.forceSrc, rs, 1 / 120);
           } catch {
             rs.groundChain = null;
           }
@@ -19746,6 +20109,9 @@ var init_gaitState = __esm({
               }
               const ds = rs.disposeStat;
               const head = `\u8FC8\u6B65\u63D0\u6848 ${ds.props} \u6761 \u2192 balance \u53D1\u5E03 ${ds.republished} \u6761\uFF08\u88AB balance \u8986\u76D6 ${ds.overridden}\uFF09\u3000\u98CE\u9669\u56E0\u5B50 k=${ds.k.toFixed(2)}\uFF08k=1 \u8FC8\u6B65\u5168\u6743\uFF0Ck=0 \u51BB\u7ED3\u59FF\u6001\uFF09`;
+              const ch = rs.capHits.req;
+              const cl = rs.capLast;
+              const capLine = rs.tauCapOn ? `\u53D1\u529B\u95E8\u7981 \u5DF2\u5939 ${ch} \u6B21/\u672C\u62CD\u7D2F\u8BA1` + (cl.axis >= 0 && Math.abs(cl.want) > 0 ? `\u3000\u6700\u8FD1\uFF1A\u8F74${cl.axis} \u60F3${cl.want.toFixed(0)}\u2192\u5939${cl.cap.toFixed(0)}N\xB7m\uFF08${cl.label}\uFF09` : "") + "\u3000\u627F\u91CD\u8F74\u653E\u884C\uFF08\u8BA9\u4F4D\u8F74\u4E0D\u5939\uFF09" : "\u53D1\u529B\u95E8\u7981 **\u5DF2\u6D88\u878D**\uFF08\u9000\u56DE \u03C4max \u4E0A\u9650\uFF09";
               const rest = !bf.axes.length ? ["\uFF08\u672C\u62CD\u5E73\u8861\u7CFB\u7EDF\u6CA1\u6709\u63D0\u51FA\u4EFB\u4F55\u5173\u8282\u4FEE\u6B63\uFF09"] : bf.axes.map((a) => {
                 const j = Math.floor(a.axis / 3);
                 const ax = a.axis % 3;
@@ -19754,7 +20120,7 @@ var init_gaitState = __esm({
                 const sg = d2 >= 0 ? "+" : "";
                 return `\u8F74${a.axis}(${nm}/${ax}) ${sg}${d2.toFixed(1)}\xB0\u3000${a.label}`;
               });
-              return [head, ...rest];
+              return [head, capLine, ...rest];
             })(),
             // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
             force: rs.groundChain ? forceChainLines(rs.groundChain) : ["\u529B\u94FE\u4E0D\u53EF\u7528\uFF08forceSrc \u672A\u5B89\u88C5\uFF09"],
@@ -22207,19 +22573,46 @@ var init_wholeBodyQp = __esm({
 });
 
 // src/core/systems/balance.ts
+function buildStiffCaps(joints) {
+  const caps = new Float32Array(joints.length * 3);
+  for (const spec of AXIS_OWNERSHIP) {
+    if (spec.stiffMaxN === void 0) continue;
+    for (let j = 0; j < joints.length; j++) {
+      const nm = joints[j].name;
+      if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
+      if ((joints[j].maxTorque[spec.axis] ?? 0) <= 0) continue;
+      const i = j * 3 + spec.axis;
+      const prev2 = caps[i];
+      caps[i] = prev2 === 0 ? spec.stiffMaxN : Math.min(prev2, spec.stiffMaxN);
+    }
+  }
+  return caps;
+}
 function buildTorqueCaps(joints) {
   const caps = new Float32Array(joints.length * 3);
+  const explicit = new Float32Array(joints.length * 3);
+  const declared = new Uint8Array(joints.length * 3);
   for (const spec of AXIS_OWNERSHIP) {
     for (let j = 0; j < joints.length; j++) {
       const nm = joints[j].name;
       if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
-      const tmax = joints[j].maxTorque[spec.axis] ?? 0;
-      if (tmax <= 0) continue;
-      const c = spec.tauCapN ?? tmax * TAU_CAP_FRAC;
+      if ((joints[j].maxTorque[spec.axis] ?? 0) <= 0) continue;
       const i = j * 3 + spec.axis;
-      const prev2 = caps[i];
-      caps[i] = prev2 === 0 ? c : Math.min(prev2, c);
+      declared[i] = 1;
+      if (spec.tauCapN !== void 0) {
+        const prev2 = explicit[i];
+        explicit[i] = prev2 === 0 ? spec.tauCapN : Math.min(prev2, spec.tauCapN);
+      }
     }
+  }
+  for (let i = 0; i < caps.length; i++) {
+    if (!declared[i]) continue;
+    if (explicit[i] > 0) {
+      caps[i] = explicit[i];
+      continue;
+    }
+    const j = Math.floor(i / 3), k = i % 3;
+    caps[i] = (joints[j].maxTorque[k] ?? 0) * TAU_CAP_FRAC;
   }
   return caps;
 }
@@ -22358,7 +22751,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.sagJfHeld++;
       }
       if (Math.abs(t) < 0.05) continue;
-      rs.requestTorque(jj, 2, t, "balance", "\u77E2\u72B6J\u1D40F");
+      rs.requestTorque(jj, 2, t, "balance", "\u77E2\u72B6J\u1D40F", true);
       rs.sagJfTau += Math.abs(t);
     }
     if (jHip >= 0 && latOwnsAbduction) {
@@ -22434,9 +22827,15 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const supMed = copSup === null ? 0 : copSup - bound(sup);
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain = [];
-      for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, "spine1", "spine2", "spine3"]) {
+      for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`]) {
         const i2 = jointIndexByName(rs.sk, nm);
         if (i2 >= 0) chain.push(i2);
+      }
+      if (!on("upForce")) {
+        for (const nm of ["spine1", "spine2", "spine3"]) {
+          const i2 = jointIndexByName(rs.sk, nm);
+          if (i2 >= 0) chain.push(i2);
+        }
       }
       doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
       const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
@@ -22532,6 +22931,88 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
     }
   }
+  if (on("upForce") && doll) {
+    rs.ubRuns++;
+    const ub = rs.upperBody;
+    const fc = rs.forceChain();
+    const s1 = jointIndexByName(rs.sk, "spine1");
+    ub.mass = fc.ready && s1 >= 0 ? fc.joints[s1]?.mass ?? 0 : 0;
+    {
+      let ms = 0, cx = 0, cy = 0, cz = 0;
+      for (const k of UPPER_KEYS) {
+        const b = doll.bodyByKey(k);
+        if (!b) continue;
+        const m = b.mass();
+        if (!(m > 0)) continue;
+        const t = b.translation();
+        ms += m;
+        cx += m * t.x;
+        cy += m * t.y;
+        cz += m * t.z;
+      }
+      if (ms > 1e-6) {
+        ub.comX = cx / ms;
+        ub.comY = cy / ms;
+        ub.comZ = cz / ms;
+      } else {
+        const tp = doll.torso().translation();
+        ub.comX = tp.x;
+        ub.comY = tp.y;
+        ub.comZ = tp.z;
+      }
+    }
+    const omU = Math.max(0.5, rs.omega0());
+    const capX = rs.com.x + rs.com.vx / omU;
+    const capZ = rs.com.z + rs.com.vz / omU;
+    const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
+    const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
+    const upK = p.upLeanK ?? 0;
+    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R2;
+    const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
+    const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
+    rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
+    const pelvis = doll.bodyByKey("torso");
+    const pw = pelvis?.angvel();
+    const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
+    rs.pelvisW = pelvisW;
+    const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
+    if (noiseBlocked) rs.ubNoiseBlocked++;
+    const recv = rs.roleRecv ?? rs.frontLeg();
+    const zRecv = recv === "l" ? rs.soleZ.l : rs.soleZ.r;
+    const xRecv = recv === "l" ? rs.soleX.l : rs.soleX.r;
+    const kUp2 = p.upLeanK ?? 0;
+    rs.waist.bal.gain = p.upBorrowK ?? 0;
+    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * (zRecv - rs.com.z), leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * (xRecv - rs.com.x), leanMax);
+    rs.waist.bal.pitch = cPitch / D2R2;
+    rs.waist.bal.roll = cRoll / D2R2;
+    ub.corrPitch = cPitch;
+    ub.corrRoll = cRoll;
+    ub.final.pitch = ub.step.pitch + cPitch;
+    ub.final.roll = ub.step.roll + cRoll;
+    rs.ubTau = Math.hypot(cPitch, cRoll);
+  }
+  if (on("waistHold") && doll) {
+    const K = p.waistHoldK ?? 0;
+    const Dd = p.waistHoldD ?? 0;
+    const MX = p.waistHoldMaxN ?? 0;
+    let held = 0;
+    for (const nm of ["spine1", "spine2", "spine3"]) {
+      const j = jointIndexByName(rs.sk, nm);
+      if (j < 0) continue;
+      for (const ax of [2, 0]) {
+        const ang = rs.angle(j, ax);
+        const rate = rs.jointVel(j, ax);
+        let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
+        if (t > MX) t = MX;
+        else if (t < -MX) t = -MX;
+        if (Math.abs(t) < 0.5) continue;
+        rs.requestTorque(j, ax, t, "balance", "\u8170\u90E8\u59FF\u6001\u4FDD\u6301(\u6301\u7EED\xB7\u6297\u6298)", true);
+        held += Math.abs(t);
+      }
+    }
+    rs.ubTau = held;
+  }
   rs.disposeK = (() => {
     if (!on("dispose")) return 1;
     const gate = Math.max(1e-3, rs.rescueMaxTiltDeg);
@@ -22541,21 +23022,36 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TAU_CAP_FRAC, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
     init_wantedForce();
     init_wholeBodyQp();
+    TRUNK_STIFF_MAX = 350;
     TAU_CAP_FRAC = 0.35;
+    UPPER_KEYS = ["head", "torso", "arm_l", "arm_r", "hand_l", "hand_r"];
     NON_AXIS_CHANNELS = Object.freeze([
       { channel: "postureLoad", why: "\u53EA\u7F29\u653E sagSupport \u4F4D\u7F6E\u73AF\u7684 kP/kD\uFF0C\u4E0D\u5199 target\u3001\u4E0D\u7533\u9886\u8F74" }
     ]);
     HIP_ABD_AXIS = 0;
     AXIS_OWNERSHIP = Object.freeze([
       // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
-      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip", extraGates: ["stepKeyframe"] },
+      //   ★★ **躯干相对腿的倒立摆**（文献口径，2026-10-06）：Morasso 2022 的 DIP 模型里
+      //     **躯干是一整段刚体、髋是被动关节** ⇒ 临界刚度 **175 N·m/rad**，模型取 2× = 350；
+      //     Goodworth & Peterka 2014 实测主动上身反馈刚度 **121~352**。
+      //   ⚠ 本 rig 实测 `hip/2` 有效刚度 = 48×200/9 = **1067**（超 3 倍）⇒ 夹到 350。
+      //   ⚠ 对比：`spine1/2/3` 是**腰椎**，人体在 DIP 模型里当刚体 ⇒ 那三根**不夹**（是结构）。
+      {
+        joint: "hip",
+        axis: 2,
+        role: "sagSupport",
+        mode: "pos",
+        channel: "hip",
+        stiffMaxN: TRUNK_STIFF_MAX,
+        extraGates: ["stepKeyframe"]
+      },
       {
         joint: "knee",
         axis: 2,
@@ -22601,7 +23097,14 @@ var init_balance = __esm({
       },
       // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
       //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift" },
+      {
+        joint: "hip",
+        axis: HIP_ABD_AXIS,
+        role: "pelvicLift",
+        mode: "pos",
+        channel: "pelvicLift",
+        stiffMaxN: TRUNK_STIFF_MAX
+      },
       // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
       {
         joint: "foot",
@@ -22623,8 +23126,10 @@ var init_balance = __esm({
       //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
       { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
       { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
-      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
-      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      // ★★ 2026-10-06 重构：`spine1/2`、`spine1/0` 两条 `keyframeStep` 行**已删除** ——
+      //   迈步系统不再直写脊柱（只填 `rs.waist.step` 意图），脊柱的位置写者只剩
+      //   `waistPos`（唯一发布者）。删掉不是因为"不写了"，而是因为**同一 (轴,模式)
+      //   必须合并成一条**（门禁 A）—— 旧行留着会让表说谎。
       // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
       //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
       //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
@@ -22678,77 +23183,86 @@ var init_balance = __esm({
       //     ⚠ 代价（必须知道）：腰**不再有位置伺服**，`spine*/0` 与 `spine*/2`
       //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
       //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
+      { joint: "spine1", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine1", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine1", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine2", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 0, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 1, role: "waistPos", mode: "pos", channel: "waist" },
+      { joint: "spine3", axis: 2, role: "waistPos", mode: "pos", channel: "waist" },
       {
         joint: "spine1",
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine1",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine1",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       },
       {
         joint: "spine2",
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine2",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine2",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       },
       {
         joint: "spine3",
         axis: 0,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine3",
         axis: 1,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "lat"]
       },
       {
         joint: "spine3",
         axis: 2,
         role: "grfJacobian",
         mode: "tau",
-        channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
+        channel: "waistHold",
+        extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine", "lat"]
       }
     ]);
     DEFAULT_BALANCE_PARAMS = {
@@ -22775,6 +23289,34 @@ var init_balance = __esm({
       //   而实测 q_vip 会走到 **23°** ⇒ 被动项 K·q 在 12.5° 就顶满并**独吞饱和额度**，
       //   间歇反馈项（vipP·qδ）挤不进去。K=270 → 饱和角 **25.5°** 覆盖实测区间。
       kVipAnkle: 270,
+      /**
+       * ★★ **上身发力**（用户 2026-10-06：「先迈步给出，balance 再综合」）。
+       *   `upLeanK` = 捕获点误差 → 上身额外倾角的增益（1/m 量级）：
+       *     `θ_bal = −upLeanK · (ξ − 支撑脚)`（负号：捕获点在前 ⇒ 上身**后**倾把 CoM 拉回）。
+       *   `upLeanMaxDeg` = 允许的额外倾角上限（度）。**由"上身力上限"反解**：
+       *     上身水平力 ≈ `m_u·g·tan θ`，取 12° ⇒ tan12° × 380N ≈ **81 N**。
+       */
+      // ⚠ **默认 0 = 只启用架构、不启用修正**：这样 A/B（`upForce` 开/关）
+      //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
+      //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
+      upLeanK: 0,
+      /**
+       * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
+       *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：
+       *     · 斜率限制（3 deg/拍）—— 无效；
+       *     · 只借指向承接腿的分量（整流防正反馈）—— 无效；
+       *     · 把借力从"balance 私有"改成"step/balance 共享通道" —— 无效。
+       *   ⇒ 真正的堵点在**脊柱位置伺服本身**：它对这个量级的修正无法稳定接受
+       *     （此前已实测：3 deg 误差就顶到 τmax，见 §22.7.2/§22.9）。**未解**。
+       */
+      upBorrowK: 0,
+      waistHoldK: 260,
+      waistHoldD: 26,
+      waistHoldMaxN: 55,
+      waistHoldSign: 1,
+      upBorrowSlewDeg: 3,
+      pelvisWMax: 5,
+      upLeanMaxDeg: 12,
       qpEnable: false,
       qpAnkleMul: 4,
       qpGain: 1,
@@ -23009,8 +23551,22 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
+    if (on("upForce")) {
+      const swS = swing === "l" ? 1 : -1;
+      const nSp = 3;
+      for (const jj of [jSp1, jSp2, jSp3]) {
+        if (jj < 0) continue;
+        rs.waist.step.pitch += kp.trunkPitch;
+        rs.waist.step.roll += swS * kp.trunkLat;
+        rs.waist.step.yaw += swS * kp.trunkYaw;
+        rs.waist.step.authority = rs.authority;
+      }
+      rs.waist.step.gain = rs.authority * (p.waistBorrowK ?? 0);
+      rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
+    } else {
+      if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
+      if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
+    }
     if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, "\u6446\u52A8\u5916\u5C55\xB7\u8BA9\u5F00", false);
     return;
   }
@@ -23025,12 +23581,24 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
   rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
-  if (jSp1 >= 0) {
-    const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
-    rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
+  const swSign = swing === "l" ? 1 : -1;
+  const kp2 = KEY_POSES[STATE_TO_GAIT[rs.state]];
+  const yawT = swSign * kp2.trunkYaw * rs.authority;
+  const latT = swSign * kp2.trunkLat * rs.authority;
+  if (on("upForce")) {
+    const nSp2 = 3;
+    for (const jj of [jSp1, jSp2, jSp3]) {
+      if (jj < 0) continue;
+      rs.waist.step.roll += latT;
+      rs.waist.step.authority = rs.authority;
+    }
+    rs.waist.step.gain = rs.authority * (p.waistBorrowK ?? 0);
+    rs.proposeUpperBody(0, latT, yawT);
+  } else {
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
   }
-  if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
-  if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
 }
 var KNEE_FLEX_PEAK, DEFAULT_STEP_PARAMS;
 var init_step = __esm({
@@ -23067,6 +23635,85 @@ var init_step = __esm({
   }
 });
 
+// src/core/systems/waist.ts
+function waistSystem(rs, p = DEFAULT_WAIST_PARAMS) {
+  const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+  const on = (ch) => !OFF.has(ch);
+  if (p.enabled === false || !on("waist")) {
+    rs.waist.published = 0;
+    rs.waist.kSum = 0;
+    return;
+  }
+  rs.waist.published = 1;
+  const w = rs.waist;
+  const base2 = {
+    pitch: p.basePitchDeg ?? 0,
+    roll: p.baseRollDeg ?? 0,
+    yaw: p.baseYawDeg ?? 0
+  };
+  const gc = rs.groundChain;
+  w.grfX = gc ? gc.grfX : 0;
+  w.grfZ = gc ? gc.grfZ : 0;
+  const kSum = (w.step.gain ?? 0) + (w.bal.gain ?? 0);
+  w.kSum = kSum;
+  const leanMax = (p.leanMaxDeg ?? 12) * DEG3;
+  const bodyN = Math.max(1, rs.massN);
+  const borrowK = (p.borrowK ?? 0) * kSum;
+  const recv = rs.roleRecv ?? rs.frontLeg();
+  const dirZ = Math.sign((recv === "l" ? rs.soleZ.l : rs.soleZ.r) - rs.com.z);
+  const dirX = Math.sign((recv === "l" ? rs.soleX.l : rs.soleX.r) - rs.com.x);
+  const helpZ = dirZ === 0 ? 0 : Math.max(0, w.grfZ * dirZ);
+  const helpX = dirX === 0 ? 0 : Math.max(0, w.grfX * dirX);
+  const bRoll = Math.max(-leanMax, Math.min(leanMax, borrowK * helpZ / bodyN));
+  const bPitch = Math.max(-leanMax, Math.min(leanMax, borrowK * helpX / bodyN));
+  w.borrow.pitch = bPitch / DEG3;
+  w.borrow.roll = bRoll / DEG3;
+  const tgt = {
+    pitch: base2.pitch + (w.step.pitch ?? 0) + bPitch / DEG3 + (w.bal.pitch ?? 0),
+    roll: base2.roll + (w.step.roll ?? 0) + bRoll / DEG3 + (w.bal.roll ?? 0),
+    yaw: base2.yaw + (w.step.yaw ?? 0)
+  };
+  const maxStep = p.slewDegPerTick ?? 3;
+  const slew = (v, prev2) => {
+    const d2 = v - prev2;
+    return Math.abs(d2) > maxStep ? prev2 + Math.sign(d2) * maxStep : v;
+  };
+  const oPitch = slew(tgt.pitch, w.out.pitch);
+  const oRoll = slew(tgt.roll, w.out.roll);
+  const oYaw = slew(tgt.yaw, w.out.yaw);
+  w.out.pitch = oPitch;
+  w.out.roll = oRoll;
+  w.out.yaw = oYaw;
+  const st = p.stagger ?? 1 / 3;
+  for (const nm of SPINE) {
+    const j = jointIndexByName(rs.sk, nm);
+    if (j < 0) continue;
+    rs.requestAngle(j, 2, oPitch * st * DEG3, "balance", "\u8170\u90E8\xB7\u77E2\u72B6(\u57FA\u51C6+\u501F\u529B+\u4FEE\u6B63)");
+    rs.requestAngle(j, 0, oRoll * st * DEG3, "balance", "\u8170\u90E8\xB7\u989D\u72B6(\u57FA\u51C6+\u501F\u529B+\u4FEE\u6B63)");
+    rs.requestAngle(j, 1, oYaw * st * DEG3, "balance", "\u8170\u90E8\xB7\u626D\u8F6C(\u8FC8\u6B65\u540D\u4E49)");
+  }
+  rs.ubTau = Math.hypot(oPitch, oRoll);
+}
+var DEG3, DEFAULT_WAIST_PARAMS, SPINE;
+var init_waist = __esm({
+  "src/core/systems/waist.ts"() {
+    "use strict";
+    init_skeleton();
+    DEG3 = Math.PI / 180;
+    DEFAULT_WAIST_PARAMS = {
+      enabled: true,
+      basePitchDeg: 0,
+      baseRollDeg: 0,
+      baseYawDeg: 0,
+      leanMaxDeg: 12,
+      borrowK: 0,
+      slewDegPerTick: 3,
+      stagger: 1 / 3
+    };
+    SPINE = ["spine1", "spine2", "spine3"];
+  }
+});
+
 // src/core/controller.ts
 var controller_exports = {};
 __export(controller_exports, {
@@ -23084,12 +23731,16 @@ var init_controller = __esm({
     init_rigState();
     init_gaitState();
     init_balance();
+    init_forceChain();
     init_step();
+    init_waist();
+    init_skeleton();
     DEFAULT_CONTROLLER = {
       rig: DEFAULT_RIGSTATE_CONFIG,
       gait: DEFAULT_GAIT_CONFIG,
       balance: DEFAULT_BALANCE_PARAMS,
-      step: DEFAULT_STEP_PARAMS
+      step: DEFAULT_STEP_PARAMS,
+      waist: DEFAULT_WAIST_PARAMS
     };
     Controller = class {
       constructor(sk2, sim2, cfg = DEFAULT_CONTROLLER) {
@@ -23150,9 +23801,15 @@ var init_controller = __esm({
         const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
         const bbL = new Float64Array(4), bbR = new Float64Array(4);
         const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
-        const caps = buildTorqueCaps(sk2.joints);
+        const capOff = (this.cfg.balance.ablate ?? "").split(",").map((x) => x.trim()).includes("forceCap");
+        setForceFilterTau((this.cfg.balance.ablate ?? "").includes("forceFlt") ? 0 : 0.08);
+        const caps = capOff ? new Float32Array(sk2.joints.length * 3) : buildTorqueCaps(sk2.joints);
         this.rs.tauCap = new Float64Array(caps);
+        this.rs.tauCapOn = !capOff;
         doll.setTauCaps(caps);
+        const stiffOn = (this.cfg.balance.ablate ?? "").split(",").map((x) => x.trim()).includes("stiffCap");
+        const stiffCaps = stiffOn && !capOff ? buildStiffCaps(sk2.joints) : new Float32Array(sk2.joints.length * 3);
+        doll.setStiffCaps(stiffCaps);
         this.rs.forceSrc = {
           sole: (side) => {
             const cached = side === 0 ? this.soleCache.l : this.soleCache.r;
@@ -23360,6 +24017,17 @@ var init_controller = __esm({
         this.gait.update(dt);
         stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs, this.cfg.balance, this.sim.doll);
+        waistSystem(rs, { ...this.cfg.waist, ablate: this.cfg.balance.ablate });
+        if (rs.waistInject) {
+          const { mode, deg } = rs.waistInject;
+          const dRad = deg * Math.PI / 180 / 3;
+          for (const nm of ["spine1", "spine2", "spine3"]) {
+            const j = jointIndexByName(rs.sk, nm);
+            if (j < 0) continue;
+            if (mode === "tgt") rs.requestAngle(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u76EE\u6807");
+            else rs.requestAngleCorr(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u4FEE\u6B63");
+          }
+        }
         const out = rs.arbitrate(dt);
         this.sim.doll.setMotorTargets(out);
         this.sim.doll.setTorqueTargets(rs.tauOut);

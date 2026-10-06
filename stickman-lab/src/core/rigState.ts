@@ -486,6 +486,16 @@ export const LOAD_HYSTERESIS = 0.08;
 export interface RigStateConfig {
   /** 目标角变化率上限（单位：目标比例/秒）。防止抖。 */
   slewLimit: number;
+  /**
+   * ★★★★ **启动软斜坡**（用户「读最开始的几帧…是不是用力太狠」的落地）。
+   *   实测（`probe-firstframes` 第 0 拍）：角度全 0°、`CoM.y` 0.962 正常，
+   *   但 **3 根轴顶 τmax、角速度已 145~436°/s**（`nocontrol` 时只有 1°/s）
+   *   ⇒ 那 400°/s 是**第一条控制命令**打出来的（`Δω = τ·dt/I_eff`，一拍就够），
+   *     也是 0.22s 重心开跑 / 0.43s 出直立包线的**触发源**。
+   *   本项：前 `startupTicks` 个控制拍内，斜率上限与力矩输出都按
+   *   `tickNo / startupTicks` 线性放开（0→1）。
+   */
+  startupTicks?: number;
   /** 腰的"受限修正槽"最大幅度（rad）—— 文献：骨盆横断面旋转 6° */
   waistSlotMax: number;
   /**
@@ -498,6 +508,7 @@ export interface RigStateConfig {
 
 export const DEFAULT_RIGSTATE_CONFIG: RigStateConfig = {
   slewLimit: 8.0,
+  startupTicks: 30,   // 0.5s @60Hz（开局那一砸发生在头 0.22s）
   waistSlotMax: 6 * Math.PI / 180,
   mosBudgetZ: 0.0025,
 };
@@ -2050,7 +2061,9 @@ export class RigState {
   /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
   arbitrate(dt: number): Float32Array {
     const out = this.prevOut;
-    const maxStep = this.cfg.slewLimit * dt;
+    const stT = this.cfg.startupTicks ?? 0;
+    const ramp = stT > 0 ? Math.min(1, this.tickNo / stT) : 1;
+    const maxStep = this.cfg.slewLimit * dt * ramp;
     // ══════════════════════════════════════════════════════════════
     // ★★★ 三轮分离（2026-10-06 重构，修一处**积分 bug**）
     //
@@ -2091,6 +2104,32 @@ export class RigState {
     // ── 第 2 轮：**送达值 = 目标 + 修正**（`acorr` 是偏置，**不写回目标**）──
     for (let i = 0; i < out.length; i++) {
       out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
+    }
+    // ══════════════════════════════════════════════════════════════
+    // ── 第 3 轮：**力矩通道仲裁**（⚠⚠ 2026-10-06 恢复被误删的一段）──
+    //
+    //   `τ=JᵀF` / 踝 VIP / 髋外展 / 块⑨ 全都靠这里落到 `tauOut`。
+    //   我在同日的"三轮分离"补丁里把这一段**整段删掉了**（替换区间没包住它），
+    //   后果：`tauOut` **恒为 0** ⇒ **整条力矩通道静默失效**，
+    //   而表象是"改了参数却逐位不变"（本轮排查被这个坑骗了很久）。
+    //   ⇒ 教训：**改 `arbitrate` 必须回读 `tauOut`/`tauSrc`**，不能只看角度。
+    // ══════════════════════════════════════════════════════════════
+    for (let i = 0; i < this.nAxes; i++) {
+      const r = this.treq[i];
+      if (!r) { this.tauOut[i] = 0; continue; }
+      const j = this.sk.joints[Math.floor(i / 3)];
+      const k = i % 3;
+      const tmax = j ? (j.maxTorque[k] ?? 0) : 0;
+      let v = r.value * ramp;          // ★ 软斜坡（τ 通道不受位置斜率限制，必须单独放）
+      if (v > tmax) v = tmax; else if (v < -tmax) v = -tmax;
+      this.tauOut[i] = v;
+      const t = this.tgt[i];
+      // ★ 位置与力矩是**两条独立通道**，来源必须分别记账
+      //   （原先只在 `ownerLabel === '—'` 时记 ⇒ 腰部位置写会**遮住** τ 来源，
+      //    实测 `probe-pelvis` 显示 `τ:—` 而 `tauApplied = +120`）
+      const ts = this.tauSrc[i];
+      if (ts) { ts.label = r.label; ts.value = v; ts.system = r.system; }
+      if (t && t.ownerLabel === '—') { t.owner = r.system; t.ownerLabel = `${r.label}(τ)`; }
     }
     this.tgtOut.set(out);      // ★ 见 `tgtOut` 的注释：送达值由仲裁器自己存
     return out;

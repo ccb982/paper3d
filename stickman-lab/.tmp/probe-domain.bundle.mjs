@@ -17259,6 +17259,8 @@ var init_rigState = __esm({
     LOAD_HYSTERESIS = 0.08;
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
+      startupTicks: 30,
+      // 0.5s @60Hz（开局那一砸发生在头 0.22s）
       waistSlotMax: 6 * Math.PI / 180,
       mosBudgetZ: 25e-4
     };
@@ -18524,7 +18526,9 @@ var init_rigState = __esm({
       /** 每拍结束：合并成唯一的 target，返回可直接喂给 `setMotorTargets` 的数组 */
       arbitrate(dt) {
         const out = this.prevOut;
-        const maxStep = this.cfg.slewLimit * dt;
+        const stT = this.cfg.startupTicks ?? 0;
+        const ramp = stT > 0 ? Math.min(1, this.tickNo / stT) : 1;
+        const maxStep = this.cfg.slewLimit * dt * ramp;
         for (let i = 0; i < this.nAxes; i++) {
           const r = this.req[i];
           const t = this.tgt[i];
@@ -18553,6 +18557,31 @@ var init_rigState = __esm({
         }
         for (let i = 0; i < out.length; i++) {
           out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
+        }
+        for (let i = 0; i < this.nAxes; i++) {
+          const r = this.treq[i];
+          if (!r) {
+            this.tauOut[i] = 0;
+            continue;
+          }
+          const j = this.sk.joints[Math.floor(i / 3)];
+          const k = i % 3;
+          const tmax = j ? j.maxTorque[k] ?? 0 : 0;
+          let v = r.value * ramp;
+          if (v > tmax) v = tmax;
+          else if (v < -tmax) v = -tmax;
+          this.tauOut[i] = v;
+          const t = this.tgt[i];
+          const ts = this.tauSrc[i];
+          if (ts) {
+            ts.label = r.label;
+            ts.value = v;
+            ts.system = r.system;
+          }
+          if (t && t.ownerLabel === "\u2014") {
+            t.owner = r.system;
+            t.ownerLabel = `${r.label}(\u03C4)`;
+          }
         }
         this.tgtOut.set(out);
         return out;
