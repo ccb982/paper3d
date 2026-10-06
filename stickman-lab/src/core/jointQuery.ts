@@ -125,14 +125,28 @@ export function createJointQuery(rs: RigState, host: {
 }): JointQuery {
   const idx = buildIndex(rs);
 
-  const resolve = (j: string | number): number =>
-    (typeof j === 'number' ? j : idx.get(j) ?? idx.get(base(j)) ?? -1);
+  /**
+   * 关节名 → 索引。**未知名字直接抛错**。
+   *
+   * ⚠ 为什么不能像原来那样 `?? -1`：那样拼错名字会得到 `rs.angle(-1, …)`，
+   *   而 `angle()` 对越界索引返回 **0** ⇒ 读数看起来"正常但是假的"。
+   *   实测踩过：遥测里写成 `l_hip`（skeleton 的真名是 `hip_l`），
+   *   于是面板上 `髋 0.0° 膝 0.0° 踝 0.0°` —— 一路"通过"到 UI 门禁。
+   *   本项目栽过好几次静默失效（`onAxisMarkers`、滑块标签、`ready=false` 显示 0）。
+   *   ⇒ 名字错必须是**响的**。
+   */
+  const resolve = (j: string | number): number => {
+    if (typeof j === 'number') return j;
+    const i = idx.get(j) ?? idx.get(base(j));
+    if (i === undefined) throw new Error(`[jointQuery] 未知关节名 "${j}"（skeleton 里没有；已知如 hip_l / knee_l / foot_l）`);
+    return i;
+  };
 
   const one = (leg: DomainLeg, axis: DomainAxis, strict: boolean): DomainResult => {
     const d = STATE_DOMAINS.find((x) => x.state === host.state && x.leg === leg && x.axis === axis);
     if (!d) return { ok: true, errDeg: 0, tolDeg: 0 };   // 该组合不受约束
     const side: Side = rs.loadBearer ?? rs.supportLeg();
-    const q = leg === 'trunk' ? degOf(rs, idx, side, axis) : degOf(rs, idx, side, axis);
+    const q = degOf(rs, idx, side, axis);
     const tol = strict ? d.tolIn : d.tolOut;
     const err = Math.max(d.lo - q, q - d.hi, 0);
     return { ok: err <= tol, errDeg: err, tolDeg: tol };

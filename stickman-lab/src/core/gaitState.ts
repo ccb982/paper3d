@@ -212,6 +212,59 @@ function violationText(v: StateViolation): string {
   return `${v.item} ${v.value.toFixed(3)}/${v.tol > 0 ? '' : '-'}${Math.abs(v.tol).toFixed(3)}`;
 }
 
+/**
+ * ★★ **阈值清单（唯一审计入口）** —— 每个数都写清「出处」与「是否已按本机标定」。
+ *
+ *   为什么要有这张表：验收项散落在 `VERIFY` 里，阈值散落在 `DEFAULT_GAIT_CONFIG`
+ *   里，于是"这个 0.10 从哪来的"没人答得上来 —— 而本项目已经栽过：
+ *     · 髋/膝/踝**符号**照抄注释 ⇒ 域全错（实测才发现）
+ *     · `sagLiftOffThr = -0.35` 与本机可达区间 `+0.27~+0.54` **完全错位**
+ *       ⇒ `PUSH→LIFT` 在结构上**永远不可能通过**
+ *   ⇒ 这里把「出处」和「标定状态」显式化，`tools/probe-calib.ts` 逐项核对。
+ *
+ *   `calibrated: 'measured'` = 有本机实测支撑；`'literature'` = 出自文献/机器人文献，
+ *   本机未验证；`'guess'` = **没有依据的初值**，别当结论用。
+ */
+export interface ThresholdDoc {
+  readonly cfgKey: keyof GaitConfig;
+  readonly unit: string;
+  readonly source: string;
+  readonly calibrated: 'measured' | 'literature' | 'guess';
+  /** 本机实测区间（标定模式采得，仅供对照；跌落期数据不作标定依据） */
+  readonly measured?: string;
+}
+export const THRESHOLDS: readonly ThresholdDoc[] = Object.freeze([
+  { cfgKey: 'loadAcceptFrac', unit: 'BW 占比', calibrated: 'guess',
+    source: 'OSL 0.40 BW 量级，因本 rig 双支撑各约 0.5 而上抬',
+    measured: 'DOUBLE 峰值 0.633 / LOAD 峰值 0.792（标定模式，跌落前）' },
+  { cfgKey: 'loadReleaseFrac', unit: 'BW 占比', calibrated: 'literature',
+    source: 'OSL `loadESwing = 0.15 BW`' },
+  { cfgKey: 'sagLoadThr', unit: '腿长', calibrated: 'guess',
+    source: 'SCONE `EarlyStance→LateStance` 矢状位置阈值（按腿长归一后自拟）',
+    measured: 'LOAD 实测 +0.047~+0.256（p50 0.076）⇒ 0.10 卡在区间中段，39% 拍未过' },
+  { cfgKey: 'sagLiftOffThr', unit: '腿长', calibrated: 'guess',
+    source: 'SCONE `liftoff_threshold` 默认 −1（以腿长归一后放宽到 −0.35）',
+    measured: 'PUSH 实测 **+0.272~+0.539**（p50 0.419）⇒ 与 −0.35 **符号相反**',
+    // ↑ 这是 PUSH→LIFT 走不通的直接原因
+  },
+  { cfgKey: 'sagLandingThr', unit: '腿长', calibrated: 'guess',
+    source: 'SCONE `landing_threshold`（自拟）',
+    measured: 'SWING 实测 +1.34~+4.03 ⇒ 该阈值无鉴别力（跌落时也会轻易满足）' },
+  { cfgKey: 'swingKneeMinDeg', unit: 'deg（域：正=屈）', calibrated: 'literature',
+    source: 'OSL 摆动膝屈曲下限',
+    measured: '符号已于 2026-10-06 修正（原判据实际要求"伸 ≥20°"，与意图相反）' },
+  { cfgKey: 'swingKneeVelMax', unit: 'deg/s（正=伸展）', calibrated: 'guess',
+    source: 'EPFL `LP` 落地准备用屈伸角速度阈值（本 rig 尺度放宽）' },
+  { cfgKey: 'minClearance', unit: 'm', calibrated: 'literature',
+    source: 'Saunders 1953 最小离地净空 MFC = 5 cm' },
+  { cfgKey: 'tiltMaxDeg', unit: 'deg', calibrated: 'literature',
+    source: '躯干倾角上限（20° 量级取自直立行走文献）' },
+  { cfgKey: 'mosMin', unit: 'm', calibrated: 'guess',
+    source: 'MoS ≥ 0（正裕度）。本 rig `mos` 实测常在数百 mm，尚未标定' },
+  { cfgKey: 'stepIntervalSec', unit: 's', calibrated: 'literature',
+    source: '步态周期量级（`STEP_CYCLE_SEC`）' },
+]);
+
 /** 正常正态 CDF（把硬阈值软化成连续权限用） */
 function cdf(x: number): number {
   const s = x < 0 ? -1 : 1;
@@ -278,6 +331,8 @@ export interface VerifyCtx {
   liftoff: Record<Side, boolean>;
   /** 摆动腿膝角速度（deg/s；负 = 仍在屈曲，正 = 已在伸展） */
   swingKneeVel: number;
+  /** 摆动腿膝屈曲角（deg，**域口径正 = 屈**，由网关换算） */
+  swingKneeFlex: number;
   /** 离地净空（m） */
   clearance: number;
   /** 距上次抬腿的间隔（s） */
@@ -288,9 +343,6 @@ export interface VerifyCtx {
   /** 帧域在**松**容差下是否仍越界（0 = 还保持得住 ⇒ 不该升级安全态） */
   domainLooseBad: number;
 }
-
-// 关节索引缓存（`RigState` 构造时绑定一次；避免每拍 `findIndex`）
-const JIDX = { l: { hip: -1, knee: -1, foot: -1 }, r: { hip: -1, knee: -1, foot: -1 } };
 
 /** ★ 逐状态验收表。**新增状态或改判据只改这一张表**。 */
 export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object.freeze({
@@ -353,8 +405,12 @@ export const VERIFY: Readonly<Record<WalkState, readonly VerifySpec[]>> = Object
     { item: '承重腿在位', ok: (c) => c.rs.grounded[c.sup],
       val: (c) => (c.rs.grounded[c.sup] ? 1 : 0), tol: () => 1 },
     // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
-    { item: '摆动膝屈曲', ok: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG >= c.cfg.swingKneeMinDeg,
-      val: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG, tol: (c) => c.cfg.swingKneeMinDeg },
+    // ★ 符号修正（2026-10-06）：原来写的是 `angle(knee,2)/DEG >= 20`，
+    //   而**关节空间正 = 伸**（probe-readback 实测）⇒ 那条判据实际上在要求
+    //   「膝**伸** ≥20°」才算"屈曲达标"，与注释、与 OSL 的意图都相反。
+    //   域口径「正 = 屈」由网关统一负责（`kneeFlex = -angle/DEG`）。
+    { item: '摆动膝屈曲', ok: (c) => c.swingKneeFlex >= c.cfg.swingKneeMinDeg,
+      val: (c) => c.swingKneeFlex, tol: (c) => c.cfg.swingKneeMinDeg },
     { item: '承重腿帧域', ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
     { item: 'MoS', ok: (c) => c.rs.mos >= c.cfg.mosMin, val: (c) => c.rs.mos, tol: (c) => c.cfg.mosMin },
   ],
@@ -426,9 +482,6 @@ export class GaitState {
 
   constructor(private rs: RigState, cfg: GaitConfig = DEFAULT_GAIT_CONFIG) {
     this.cfg = cfg;
-    const nm = (n: string): number => rs.sk.joints.findIndex((j) => j.name === n);
-    JIDX.l = { hip: nm('hip_l'), knee: nm('knee_l'), foot: nm('foot_l') };
-    JIDX.r = { hip: nm('hip_r'), knee: nm('knee_r'), foot: nm('foot_r') };
     this.bearer = cfg.startBearer;
     this.bearerCand = cfg.startBearer;
     this.installJointQuery();
@@ -512,11 +565,14 @@ export class GaitState {
     const dmLoose = checkDomains(rs, false);
 
     // ── 角速度（OSL `knee_vel` / EPFL `LP`）─────────────────────
-    const swingKneeVel = (rs.jointVel(JIDX[sw].knee, 2) ?? 0) * DEG;
+    //   ★ 走**回读网关**，不直接 `rs.jointVel`。原来这里还有个 `JIDX` 私有旁路
+    //   （自己缓存关节索引），那等于绕过网关 —— 已删。域口径：正 = 伸展。
+    const swingKneeVel = rs.jq ? -rs.jq.velDegPerSec(`knee_${sw}`, 2) : 0;
 
     const ctx: VerifyCtx = {
       rs, cfg, state: rs.state, sup, sw, front, rear, recv,
       touchdown, liftoff, swingKneeVel,
+      swingKneeFlex: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
       clearance: rs.swingClearance, sinceStep: this.t - this.lastStepT,
       domainBad: dm.bad, domainWorst: dm.worst, domainLooseBad: dmLoose.looseBad,
     };
@@ -683,7 +739,9 @@ export class GaitState {
         blocked: rs.violations.length ? violationText(rs.violations[0]) : '无',
         violations: rs.violations.map(violationText).join('　'),
         roles: `${LEG_CN[sup]}承重 · ${LEG_CN[sw]}摆动`,
-        jointsDeg: `髋 ${jd(`${sup}_hip`, 0)}°  膝 ${jd(`${sw}_knee`, 0)}°  踝 ${jd(`${sup}_ankle`, 0)}°`,
+        // ⚠ 名字必须与 `skeleton.ts` 一致：`hip_l` / `knee_l` / `foot_l`（**后缀**）。
+        //   写成 `l_hip` 会让网关抛错 —— 这是故意的，见 jointQuery.resolve 的注释。
+        jointsDeg: `髋 ${jd(`hip_${sup}`, 0)}°  膝 ${jd(`knee_${sw}`, 0)}°  踝 ${jd(`foot_${sup}`, 0)}°`,
         safe: rs.safe ? '是' : '否',
       };
     }

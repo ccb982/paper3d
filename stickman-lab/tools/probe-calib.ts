@@ -38,7 +38,7 @@ await import('../src/core/ragdoll');
 const { Sim, DEFAULT_SIM } = await import('../src/core/sim');
 const { shapeForJoints } = await import('../src/core/brain');
 const { Controller, DEFAULT_CONTROLLER } = await import('../src/core/controller');
-const { VERIFY, STATE_ORDER } = await import('../src/core/gaitState');
+const { VERIFY, STATE_ORDER, THRESHOLDS, DEFAULT_GAIT_CONFIG } = await import('../src/core/gaitState');
 import type { WalkState } from '../src/core/rigState';
 
 const log = console.log;
@@ -130,6 +130,23 @@ for (const s of STATE_ORDER) {
   } else {
     log('          全部验收项在本状态内都通过过');
   }
+}
+
+log('');
+log('══ 阈值清单审计（出处 + 是否已按本机标定）══');
+{
+  let guess = 0;
+  for (const t of THRESHOLDS) {
+    // ★ 数值**从配置派生**，清单不手抄 ⇒ 不会出现"清单与实际不符"
+    const live = (DEFAULT_GAIT_CONFIG as unknown as Record<string, number>)[t.cfgKey];
+    if (t.calibrated === 'guess') guess++;
+    log(`  [${t.calibrated === 'measured' ? '实测' : t.calibrated === 'literature' ? '文献' : '**无依据**'}] `
+      + `${t.cfgKey.padEnd(18)} ${String(live).padStart(7)} ${t.unit.padEnd(16)} ${t.source}`);
+    if (t.measured) log(`      实测：${t.measured}`);
+  }
+  log('');
+  log(`  共 ${THRESHOLDS.length} 个阈值，其中 **${guess} 个没有依据（guess）**。`);
+  if (guess > 0) log('  ⇒ 这些数只能当"起点"，不能当验收依据；标定须等 P4（能站住）+ Q1（站距）。');
 }
 
 log('');

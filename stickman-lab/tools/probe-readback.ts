@@ -115,6 +115,34 @@ if (!jq) {
     if (tm.jointsDeg.includes('—')) problems.push(`jointsDeg 缺值：${tm.jointsDeg}（网关没通）`);
     if (!/^\d/.test(tm.loadFrac) && tm.loadFrac !== '—') problems.push(`loadFrac 格式异常：${tm.loadFrac}`);
     if (tm.domainWorst === '—' || tm.domainWorst === 'NaN') problems.push(`domainWorst 异常：${tm.domainWorst}`);
+    // ── 关节名必须与 skeleton 一致，且**错名必须响** ────────────────
+    //   实测踩过：遥测里写 `l_hip`，网关静默返回 -1 ⇒ 角度 0 ⇒
+    //   面板上「髋 0.0° 膝 0.0° 踝 0.0°」一路全绿。所以这里钉死三件事：
+    //     ① 正确的后缀名能取到**非零**读数（运动中）
+    //     ② 错名（`l_hip`）必须抛错，不能静默给 0
+    //     ③ 遥测里的关节角 === 网关用正确名读到的值
+    if (jq) {
+      const good = ['hip_l', 'knee_l', 'foot_l', 'hip_r', 'knee_r', 'foot_r'];
+      let nonzero = 0;
+      for (const nm of good) for (const ax of [0, 1, 2] as const) if (Math.abs(jq.angleDeg(nm, ax)) > 0.5) nonzero++;
+      if (nonzero > 0) ok(`后缀命名（hip_l/knee_l/foot_l）能取到真实读数（运动中 ${nonzero} 个非零）`);
+      else bad('后缀命名的读数全为 0 —— 又一次假零（名字又写错了？）');
+      let threw = '';
+      try { jq.angleDeg('l_hip', 0); } catch (e) { threw = (e as Error).message; }
+      if (threw) ok(`错名被拒绝而不是静默给 0：${threw.slice(0, 46)}…`);
+      else bad('错名 "l_hip" 没抛错 ⇒ 会静默返回 0（危险）');
+      // ③ 遥测逐字等于网关读数
+      const sup = ctrl.rs.supportLeg();
+      const sw = ctrl.rs.swingLeg();
+      const want = [
+        `髋 ${jq.angleDeg(`hip_${sup}`, 0).toFixed(1)}°`,
+        `膝 ${jq.angleDeg(`knee_${sw}`, 0).toFixed(1)}°`,
+        `踝 ${jq.angleDeg(`foot_${sup}`, 0).toFixed(1)}°`,
+      ].join('  ');
+      if (tm.jointsDeg === want) ok(`遥测关节角 === 网关读数（${want}）`);
+      else bad(`遥测关节角与网关不一致：遥测「${tm.jointsDeg}」vs 网关「${want}」`);
+    }
+
     if (problems.length === 0) {
       ok(`遥测与状态机逐拍一致（UI 只渲染，不推导）：${tm.stateLabel} ${tm.stateT}s `
         + `${tm.verified}｜承重 ${tm.bearerLoad} ${tm.loadFrac}｜越界 ${tm.domainWorst}°`);

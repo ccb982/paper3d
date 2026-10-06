@@ -18132,12 +18132,17 @@ function degOf(rs, idx, leg, axis) {
 }
 function createJointQuery(rs, host) {
   const idx = buildIndex(rs);
-  const resolve = (j) => typeof j === "number" ? j : idx.get(j) ?? idx.get(base(j)) ?? -1;
+  const resolve = (j) => {
+    if (typeof j === "number") return j;
+    const i = idx.get(j) ?? idx.get(base(j));
+    if (i === void 0) throw new Error(`[jointQuery] \u672A\u77E5\u5173\u8282\u540D "${j}"\uFF08skeleton \u91CC\u6CA1\u6709\uFF1B\u5DF2\u77E5\u5982 hip_l / knee_l / foot_l\uFF09`);
+    return i;
+  };
   const one = (leg, axis, strict) => {
     const d = STATE_DOMAINS.find((x) => x.state === host.state && x.leg === leg && x.axis === axis);
     if (!d) return { ok: true, errDeg: 0, tolDeg: 0 };
     const side = rs.loadBearer ?? rs.supportLeg();
-    const q = leg === "trunk" ? degOf(rs, idx, side, axis) : degOf(rs, idx, side, axis);
+    const q = degOf(rs, idx, side, axis);
     const tol = strict ? d.tolIn : d.tolOut;
     const err = Math.max(d.lo - q, q - d.hi, 0);
     return { ok: err <= tol, errDeg: err, tolDeg: tol };
@@ -18211,6 +18216,7 @@ __export(gaitState_exports, {
   STATE_ORDER: () => STATE_ORDER,
   STATE_TO_SCORING: () => STATE_TO_SCORING,
   STEP_CYCLE_SEC: () => STEP_CYCLE_SEC,
+  THRESHOLDS: () => THRESHOLDS,
   VERIFY: () => VERIFY,
   checkDomains: () => checkDomains,
   phaseStance: () => phaseStance,
@@ -18251,7 +18257,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, THRESHOLDS, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18311,7 +18317,80 @@ var init_gaitState = __esm({
     };
     PHASE_LABEL = STATE_LABEL;
     LEG_CN = { l: "\u5DE6", r: "\u53F3" };
-    JIDX = { l: { hip: -1, knee: -1, foot: -1 }, r: { hip: -1, knee: -1, foot: -1 } };
+    THRESHOLDS = Object.freeze([
+      {
+        cfgKey: "loadAcceptFrac",
+        unit: "BW \u5360\u6BD4",
+        calibrated: "guess",
+        source: "OSL 0.40 BW \u91CF\u7EA7\uFF0C\u56E0\u672C rig \u53CC\u652F\u6491\u5404\u7EA6 0.5 \u800C\u4E0A\u62AC",
+        measured: "DOUBLE \u5CF0\u503C 0.633 / LOAD \u5CF0\u503C 0.792\uFF08\u6807\u5B9A\u6A21\u5F0F\uFF0C\u8DCC\u843D\u524D\uFF09"
+      },
+      {
+        cfgKey: "loadReleaseFrac",
+        unit: "BW \u5360\u6BD4",
+        calibrated: "literature",
+        source: "OSL `loadESwing = 0.15 BW`"
+      },
+      {
+        cfgKey: "sagLoadThr",
+        unit: "\u817F\u957F",
+        calibrated: "guess",
+        source: "SCONE `EarlyStance\u2192LateStance` \u77E2\u72B6\u4F4D\u7F6E\u9608\u503C\uFF08\u6309\u817F\u957F\u5F52\u4E00\u540E\u81EA\u62DF\uFF09",
+        measured: "LOAD \u5B9E\u6D4B +0.047~+0.256\uFF08p50 0.076\uFF09\u21D2 0.10 \u5361\u5728\u533A\u95F4\u4E2D\u6BB5\uFF0C39% \u62CD\u672A\u8FC7"
+      },
+      {
+        cfgKey: "sagLiftOffThr",
+        unit: "\u817F\u957F",
+        calibrated: "guess",
+        source: "SCONE `liftoff_threshold` \u9ED8\u8BA4 \u22121\uFF08\u4EE5\u817F\u957F\u5F52\u4E00\u540E\u653E\u5BBD\u5230 \u22120.35\uFF09",
+        measured: "PUSH \u5B9E\u6D4B **+0.272~+0.539**\uFF08p50 0.419\uFF09\u21D2 \u4E0E \u22120.35 **\u7B26\u53F7\u76F8\u53CD**"
+        // ↑ 这是 PUSH→LIFT 走不通的直接原因
+      },
+      {
+        cfgKey: "sagLandingThr",
+        unit: "\u817F\u957F",
+        calibrated: "guess",
+        source: "SCONE `landing_threshold`\uFF08\u81EA\u62DF\uFF09",
+        measured: "SWING \u5B9E\u6D4B +1.34~+4.03 \u21D2 \u8BE5\u9608\u503C\u65E0\u9274\u522B\u529B\uFF08\u8DCC\u843D\u65F6\u4E5F\u4F1A\u8F7B\u6613\u6EE1\u8DB3\uFF09"
+      },
+      {
+        cfgKey: "swingKneeMinDeg",
+        unit: "deg\uFF08\u57DF\uFF1A\u6B63=\u5C48\uFF09",
+        calibrated: "literature",
+        source: "OSL \u6446\u52A8\u819D\u5C48\u66F2\u4E0B\u9650",
+        measured: '\u7B26\u53F7\u5DF2\u4E8E 2026-10-06 \u4FEE\u6B63\uFF08\u539F\u5224\u636E\u5B9E\u9645\u8981\u6C42"\u4F38 \u226520\xB0"\uFF0C\u4E0E\u610F\u56FE\u76F8\u53CD\uFF09'
+      },
+      {
+        cfgKey: "swingKneeVelMax",
+        unit: "deg/s\uFF08\u6B63=\u4F38\u5C55\uFF09",
+        calibrated: "guess",
+        source: "EPFL `LP` \u843D\u5730\u51C6\u5907\u7528\u5C48\u4F38\u89D2\u901F\u5EA6\u9608\u503C\uFF08\u672C rig \u5C3A\u5EA6\u653E\u5BBD\uFF09"
+      },
+      {
+        cfgKey: "minClearance",
+        unit: "m",
+        calibrated: "literature",
+        source: "Saunders 1953 \u6700\u5C0F\u79BB\u5730\u51C0\u7A7A MFC = 5 cm"
+      },
+      {
+        cfgKey: "tiltMaxDeg",
+        unit: "deg",
+        calibrated: "literature",
+        source: "\u8EAF\u5E72\u503E\u89D2\u4E0A\u9650\uFF0820\xB0 \u91CF\u7EA7\u53D6\u81EA\u76F4\u7ACB\u884C\u8D70\u6587\u732E\uFF09"
+      },
+      {
+        cfgKey: "mosMin",
+        unit: "m",
+        calibrated: "guess",
+        source: "MoS \u2265 0\uFF08\u6B63\u88D5\u5EA6\uFF09\u3002\u672C rig `mos` \u5B9E\u6D4B\u5E38\u5728\u6570\u767E mm\uFF0C\u5C1A\u672A\u6807\u5B9A"
+      },
+      {
+        cfgKey: "stepIntervalSec",
+        unit: "s",
+        calibrated: "literature",
+        source: "\u6B65\u6001\u5468\u671F\u91CF\u7EA7\uFF08`STEP_CYCLE_SEC`\uFF09"
+      }
+    ]);
     VERIFY = Object.freeze({
       // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
       DOUBLE: [
@@ -18433,10 +18512,14 @@ var init_gaitState = __esm({
           tol: () => 1
         },
         // ★ OSL：摆动膝角阈值（离地后膝要真的屈起来，否则是"拖着走"）
+        // ★ 符号修正（2026-10-06）：原来写的是 `angle(knee,2)/DEG >= 20`，
+        //   而**关节空间正 = 伸**（probe-readback 实测）⇒ 那条判据实际上在要求
+        //   「膝**伸** ≥20°」才算"屈曲达标"，与注释、与 OSL 的意图都相反。
+        //   域口径「正 = 屈」由网关统一负责（`kneeFlex = -angle/DEG`）。
         {
           item: "\u6446\u52A8\u819D\u5C48\u66F2",
-          ok: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG2 >= c.cfg.swingKneeMinDeg,
-          val: (c) => c.rs.angle(JIDX[c.sw].knee, 2) / DEG2,
+          ok: (c) => c.swingKneeFlex >= c.cfg.swingKneeMinDeg,
+          val: (c) => c.swingKneeFlex,
           tol: (c) => c.cfg.swingKneeMinDeg
         },
         { item: "\u627F\u91CD\u817F\u5E27\u57DF", ok: (c) => c.domainBad === 0, val: (c) => c.domainBad, tol: () => 0, hard: true },
@@ -18471,9 +18554,6 @@ var init_gaitState = __esm({
       constructor(rs, cfg = DEFAULT_GAIT_CONFIG) {
         this.rs = rs;
         this.cfg = cfg;
-        const nm = (n) => rs.sk.joints.findIndex((j) => j.name === n);
-        JIDX.l = { hip: nm("hip_l"), knee: nm("knee_l"), foot: nm("foot_l") };
-        JIDX.r = { hip: nm("hip_r"), knee: nm("knee_r"), foot: nm("foot_r") };
         this.bearer = cfg.startBearer;
         this.bearerCand = cfg.startBearer;
         this.installJointQuery();
@@ -18569,7 +18649,7 @@ var init_gaitState = __esm({
         const front = recv;
         const dm = checkDomains(rs, true);
         const dmLoose = checkDomains(rs, false);
-        const swingKneeVel = (rs.jointVel(JIDX[sw].knee, 2) ?? 0) * DEG2;
+        const swingKneeVel = rs.jq ? -rs.jq.velDegPerSec(`knee_${sw}`, 2) : 0;
         const ctx = {
           rs,
           cfg,
@@ -18582,6 +18662,7 @@ var init_gaitState = __esm({
           touchdown,
           liftoff,
           swingKneeVel,
+          swingKneeFlex: rs.jq ? -rs.jq.angleDeg(`knee_${sw}`, 2) : 0,
           clearance: rs.swingClearance,
           sinceStep: this.t - this.lastStepT,
           domainBad: dm.bad,
@@ -18738,7 +18819,9 @@ var init_gaitState = __esm({
             blocked: rs.violations.length ? violationText(rs.violations[0]) : "\u65E0",
             violations: rs.violations.map(violationText).join("\u3000"),
             roles: `${LEG_CN[sup2]}\u627F\u91CD \xB7 ${LEG_CN[sw2]}\u6446\u52A8`,
-            jointsDeg: `\u9ACB ${jd(`${sup2}_hip`, 0)}\xB0  \u819D ${jd(`${sw2}_knee`, 0)}\xB0  \u8E1D ${jd(`${sup2}_ankle`, 0)}\xB0`,
+            // ⚠ 名字必须与 `skeleton.ts` 一致：`hip_l` / `knee_l` / `foot_l`（**后缀**）。
+            //   写成 `l_hip` 会让网关抛错 —— 这是故意的，见 jointQuery.resolve 的注释。
+            jointsDeg: `\u9ACB ${jd(`hip_${sup2}`, 0)}\xB0  \u819D ${jd(`knee_${sw2}`, 0)}\xB0  \u8E1D ${jd(`foot_${sup2}`, 0)}\xB0`,
             safe: rs.safe ? "\u662F" : "\u5426"
           };
         }
