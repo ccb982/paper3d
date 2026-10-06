@@ -17818,6 +17818,12 @@ var init_rigState = __esm({
       supLegToe = 0;
       /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
       shiftDoneLatch = false;
+      /** ★ 腰·重心调整（CoM 速度 → 上身躯干倾）的命令值（度），供回读 */
+      trunkComPitch = 0;
+      trunkComRoll = 0;
+      /** ★ 腰·重心调整的**限速积分**状态（§22.49 模板：低频量驱动，不跟每拍噪声） */
+      trunkComIntP = 0;
+      trunkComIntR = 0;
       /** ★ 承重腿模块的折角历史（预先挺腰用）：{d 矢状, l 侧向, vd/vl 低通速率} */
       supFoldPrev = null;
       /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
@@ -23886,6 +23892,38 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.waist.bal.pitch += add;
         rs.trunkPitchCmd = add;
         rs.trunkPitchErr = sagDeg;
+      }
+    }
+    const Kc = (() => {
+      const e = globalThis.process?.env?.TCK;
+      const v = Number(e);
+      return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
+    })();
+    const Kcz = (() => {
+      const e = globalThis.process?.env?.TCZ;
+      const v = Number(e);
+      return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
+    })();
+    if (Kc > 0 || Kcz > 0) {
+      const mx = p.trunkPitchMaxDeg ?? 8;
+      const tauCom = (() => {
+        const e = globalThis.process?.env?.TCTAU;
+        const v = Number(e);
+        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0.5;
+      })();
+      const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+      const kInt = Math.min(1, dtC / Math.max(0.02, tauCom));
+      if (Kc > 0) {
+        const want = Math.max(-mx, Math.min(mx, -Kc * (rs.com.vx ?? 0)));
+        rs.trunkComIntP += (want - rs.trunkComIntP) * kInt;
+        rs.waist.bal.pitch += rs.trunkComIntP;
+        rs.trunkComPitch = rs.trunkComIntP;
+      }
+      if (Kcz > 0) {
+        const want = Math.max(-mx, Math.min(mx, -Kcz * (rs.com.vz ?? 0)));
+        rs.trunkComIntR += (want - rs.trunkComIntR) * kInt;
+        rs.waist.bal.roll += rs.trunkComIntR;
+        rs.trunkComRoll = rs.trunkComIntR;
       }
     }
     ub.corrPitch = cPitch;

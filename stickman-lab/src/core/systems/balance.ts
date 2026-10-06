@@ -2826,6 +2826,54 @@ if (doll && on('hipStiff')) {
         rs.trunkPitchErr = sagDeg;
       }
     }
+    // ══════════════════════════════════════════════════════════════
+    // ★★★★★ 2026-10-06 **"腰做重心调整"**（用户：
+    //   「**腰绷直了，但是腰也应该在做重心调整才对，腰的调整机制没落实**」）
+    //   —— 与上面的形态**本质不同**：上面是"躯干不许倒"（姿态 PD）；
+    //      本条是"**用腰把 CoM 搬回去**"（髋策略的躯干段，Horak & Nashner 1986）：
+    //        CoM 前冲（vx>0）⇒ 上身后倾把 CoM **拽回**；侧冲（vz）同理。
+    //      · 与 `upLeanK` 的区别：那是**位置误差**（ξ−支撑脚），这是**速度**
+    //        （提前量）—— 后者才是"还没倒就先搬"的机制。
+    //      · 保守：clamp ±`TRUNKC_MAX`(8°)，与现有 `upLean` 叠加后由腰伺服执行。
+    //   `TCK`（pitch 增益，度 per m/s）/`TCZ`（roll 增益）可扫，默认为 0=不启用。
+    const Kc = (() => {
+      const e = (globalThis as any).process?.env?.TCK;
+      const v = Number(e);
+      return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0;
+    })();
+    const Kcz = (() => {
+      const e = (globalThis as any).process?.env?.TCZ;
+      const v = Number(e);
+      return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0;
+    })();
+    if (Kc > 0 || Kcz > 0) {
+      // ⚠ 第一版（逐拍直通）实测：正增益 4.08/5.28/5.22（全差于关 8.40），
+      //   负增益**与关完全相同** ⇒ `vx` 每拍翻向（−30→+87→+38→+11），
+      //   腰只是**抖**、没有**搬**。⇒ 按本项目唯一被证有效的模板
+      //   （§22.49「**低频量驱动 + 速率限幅积分**」＝ `溢出剪力`/`髋外展` 的形态）：
+      //     把 `−K·v` 变成**限速积分**（`τ_com`=时间常数，`maxSlew`=度/拍），
+      //     即"持续朝一侧搬，不跟着每拍噪声换向"。
+      const mx = p.trunkPitchMaxDeg ?? 8;
+      const tauCom = (() => {
+        const e = (globalThis as any).process?.env?.TCTAU;
+        const v = Number(e);
+        return e !== undefined && e !== '' && Number.isFinite(v) ? v : 0.5;
+      })();
+      const dtC = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
+      const kInt = Math.min(1, dtC / Math.max(0.02, tauCom));
+      if (Kc > 0) {
+        const want = Math.max(-mx, Math.min(mx, -Kc * (rs.com.vx ?? 0)));
+        rs.trunkComIntP += (want - rs.trunkComIntP) * kInt;
+        rs.waist.bal.pitch += rs.trunkComIntP;
+        rs.trunkComPitch = rs.trunkComIntP;
+      }
+      if (Kcz > 0) {
+        const want = Math.max(-mx, Math.min(mx, -Kcz * (rs.com.vz ?? 0)));
+        rs.trunkComIntR += (want - rs.trunkComIntR) * kInt;
+        rs.waist.bal.roll += rs.trunkComIntR;
+        rs.trunkComRoll = rs.trunkComIntR;
+      }
+    }
     // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读
     ub.corrPitch = cPitch; ub.corrRoll = cRoll;
     ub.final.pitch = ub.step.pitch + cPitch;

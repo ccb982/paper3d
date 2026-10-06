@@ -1126,6 +1126,12 @@ export class RigState {
   supLegToe = 0;
   /** ★ 转移"点到为止"的**锁存**：同一轮交接内一旦达标就永不再推（`step.ts` ⓪） */
   shiftDoneLatch = false;
+  /** ★ 腰·重心调整（CoM 速度 → 上身躯干倾）的命令值（度），供回读 */
+  trunkComPitch = 0;
+  trunkComRoll = 0;
+  /** ★ 腰·重心调整的**限速积分**状态（§22.49 模板：低频量驱动，不跟每拍噪声） */
+  trunkComIntP = 0;
+  trunkComIntR = 0;
   /** ★ 承重腿模块的折角历史（预先挺腰用）：{d 矢状, l 侧向, vd/vl 低通速率} */
   supFoldPrev: { d: number; l: number; vd: number; vl: number } | null = null;
   /** ★ 锁存所属的承接侧（换侧 = 新一轮 ⇒ 解锁） */
