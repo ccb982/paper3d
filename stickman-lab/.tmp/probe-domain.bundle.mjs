@@ -23489,8 +23489,13 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const capZ = rs.com.z + rs.com.vz / omU;
     const stanceX = sup === "l" ? rs.soleX.l : rs.soleX.r;
     const stanceZ = sup === "l" ? rs.soleZ.l : rs.soleZ.r;
-    const upK = p.upLeanK ?? 0;
-    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R3;
+    const envT = globalThis.process?.env ?? {};
+    const numOr = (k, d) => {
+      const v = Number(envT[k] ?? "");
+      return Number.isFinite(v) && v > 0 ? v : d;
+    };
+    const upK = numOr("UPK", p.upLeanK ?? 0);
+    const leanMax = numOr("UPMAX", p.upLeanMaxDeg ?? 12) * D2R3;
     const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
@@ -23498,12 +23503,12 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const pw = pelvis?.angvel();
     const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
     rs.pelvisW = pelvisW;
-    const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
+    const noiseBlocked = pelvisW > numOr("UPNB", p.pelvisWMax ?? 5);
     if (noiseBlocked) rs.ubNoiseBlocked++;
     const recv = rs.roleRecv ?? rs.frontLeg();
     const zRecv = recv === "l" ? rs.soleZ.l : rs.soleZ.r;
     const xRecv = recv === "l" ? rs.soleX.l : rs.soleX.r;
-    const kUp2 = p.upLeanK ?? 0;
+    const kUp2 = numOr("UPK", p.upLeanK ?? 0);
     rs.waist.bal.gain = p.upBorrowK ?? 0;
     const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * (zRecv - rs.com.z), leanMax);
     const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * (xRecv - rs.com.x), leanMax);
@@ -23868,7 +23873,10 @@ var init_balance = __esm({
       //   链路本来就通（本块算 `corrPitch/corrRoll` → 写 `rs.waist.bal.pitch/roll`
       //   → `applyWaist` 作为**腰目标**发布 → 脊柱位置伺服执行），只因默认 0 而"没给出"。
       //   0.4 rad/m：10 cm 误差 ⇒ 2.3°，clamp 到 `upLeanMaxDeg`（12°）。
-      upLeanK: 0.4,
+      // ★★★★★ 2026-10-06 **定稿值 0.5**（扫描 0.4/0.5/0.6/0.7/0.8/1.2 实测）：
+      //   0.4→2.55s、**0.5→12.00s（倒=无，整段）**、0.6→6.97s、0.7→2.92s、0.8→5.49s、1.2→2.02s。
+      //   用户：「上身修正量给的不太足」⇒ 补足到 0.5 后默认场景**整段不倒**。
+      upLeanK: 0.5,
       /**
        * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
        *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：

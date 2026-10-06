@@ -1002,7 +1002,10 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   链路本来就通（本块算 `corrPitch/corrRoll` → 写 `rs.waist.bal.pitch/roll`
   //   → `applyWaist` 作为**腰目标**发布 → 脊柱位置伺服执行），只因默认 0 而"没给出"。
   //   0.4 rad/m：10 cm 误差 ⇒ 2.3°，clamp 到 `upLeanMaxDeg`（12°）。
-  upLeanK: 0.4,
+  // ★★★★★ 2026-10-06 **定稿值 0.5**（扫描 0.4/0.5/0.6/0.7/0.8/1.2 实测）：
+  //   0.4→2.55s、**0.5→12.00s（倒=无，整段）**、0.6→6.97s、0.7→2.92s、0.8→5.49s、1.2→2.02s。
+  //   用户：「上身修正量给的不太足」⇒ 补足到 0.5 后默认场景**整段不倒**。
+  upLeanK: 0.5,
   /**
    * ⚠⚠ **默认 0**（未标定）：实测**任何非零的腰部修正都会打崩站立**
    *   （「迈步系统停手」12.00s → 1.15s）。试过并否证的手段：
@@ -2459,8 +2462,15 @@ if (doll && on('hipStiff')) {
     const capZ = rs.com.z + rs.com.vz / omU;
     const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;
     const stanceZ = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
-    const upK = p.upLeanK ?? 0;
-    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R;
+    // ★ 2026-10-06 调参开关（逐拍读 env，便于扫描；用户：「上身修正量给的不太足」）：
+    //   `UPNB` 去噪门（rad/s）、`UPK` 增益（rad/m）、`UPMAX` 倾角上限（度）
+    const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+    const numOr = (k: string, d: number): number => {
+      const v = Number(envT[k] ?? '');
+      return Number.isFinite(v) && v > 0 ? v : d;
+    };
+    const upK = numOr('UPK', p.upLeanK ?? 0);
+    const leanMax = numOr('UPMAX', p.upLeanMaxDeg ?? 12) * D2R;
     const corrPitch = clamp(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp(-upK * (capZ - stanceZ), leanMax);
     // ★★ 诊断：把 step 的目标记进 `upperBody.step`（控制不依赖它）——
@@ -2477,7 +2487,7 @@ if (doll && on('hipStiff')) {
     const pw = pelvis?.angvel();
     const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
     rs.pelvisW = pelvisW;
-    const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
+    const noiseBlocked = pelvisW > numOr('UPNB', p.pelvisWMax ?? 5);
     if (noiseBlocked) rs.ubNoiseBlocked++;
 
     // ★★★ ② **修正朝状态机阈值靠**（用户：「平衡系统…但是考虑一下状态机判定阈值」）
@@ -2490,7 +2500,7 @@ if (doll && on('hipStiff')) {
     const recv = rs.roleRecv ?? rs.frontLeg();
     const zRecv = recv === 'l' ? rs.soleZ.l : rs.soleZ.r;
     const xRecv = recv === 'l' ? rs.soleX.l : rs.soleX.r;
-    const kUp2 = p.upLeanK ?? 0;
+    const kUp2 = numOr('UPK', p.upLeanK ?? 0);
     // ★ 去噪门：盆骨剧振时**修正置 0**（不 return —— 后面的块⑦还要跑）
     // ★★★ ③ **腰部借力（共享通道）** —— 用户：「**平衡系统和迈步系统都走腰部借力才对**」。
     //   balance 只设**自己的增益**（`kBal`），方向与合力由 `RigState.applyUpperBorrow`
