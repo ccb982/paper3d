@@ -1285,6 +1285,20 @@ export class GaitState {
         stepPermit: rs.stepPermit.all ? '放行' : '拦',
         // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
         //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+        // ★★ 运动趋势逐行（状态机给的行，UI 只渲染）
+        trends: (() => {
+          const tr = rs.trends;
+          const out = [`判读：${tr.note}　门槛 ${rs.rescueMaxTiltDeg}°　可救=${tr.rescueable ? '是' : '否'}`];
+          for (const t of tr.segs) {
+            const a = t.azimDeg;
+            const dir = a >= -45 && a < 45 ? '前' : a >= 45 && a < 135 ? '左'
+              : a >= -135 && a < -45 ? '右' : '后';
+            out.push(`${t.name.padEnd(4)} ${t.tiltDeg.toFixed(1).padStart(5)}°　`
+              + `方位 ${dir}(${a.toFixed(0)}°)　速率 ${t.rateDeg >= 0 ? '+' : ''}${t.rateDeg.toFixed(0)}°/s`
+              + (t.diverging ? '　⚠在发散' : ''));
+          }
+          return out;
+        })(),
         // ★ 平衡修正：逐行列出"这一拍 balance 在动哪些关节、动多少度"
         //   + 硬目标余量/限幅（来自力链）。全部由状态机生成，UI 只渲染。
         balanceFix: (() => {

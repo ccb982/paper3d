@@ -15535,6 +15535,17 @@ var init_ragdoll = __esm({
         }
         return false;
       }
+      /**
+       * ★★ 刚体"上"轴在**世界系**的单位向量（⇒ 倾角**大小** + **倾斜方位**）。
+       *   用户 2026-10-06：「状态机还得捕捉各个身体的**运动趋势**」。
+       *
+       *   ⚠ 为什么不能只用 `tiltOf`：它只给合成大小，**分不出前倾还是侧倒**
+       *     （`rigState.ts:630` 记着这个教训："我曾因此把「腰向前折」误判成侧倒"）。
+       *   这里把向量写出来 ⇒ `azim = atan2(z, x)` 直接可读（0=朝前，90=朝左）。
+       */
+      leanVector(body, out) {
+        this.toWorld(body, 0, 1, 0, out);
+      }
       tiltOf(body) {
         this.toWorld(body, 0, 1, 0, this.dirTmp);
         const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];
@@ -17270,6 +17281,7 @@ var init_rigState = __esm({
         blocked: "\u65E0",
         legPlan: "\u2014",
         balanceTarget: "\u2014",
+        trends: [],
         roleRecv: "l",
         roleSup: "l",
         roleRecvFree: "locked",
@@ -17322,6 +17334,30 @@ var init_rigState = __esm({
        */
       stanceSingle = false;
       com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+      /**
+       * ★★ **救回门槛**（deg）。用户 2026-10-06：
+       *   「我觉得在歪倒一定角度之前都可以尝试救回来，歪倒角度过大确实是没救了」。
+       *   语义：最歪那一段的倾角 < 它 ⇒ `trends.rescueable = true`，平衡系统**全力救**；
+       *        ≥ 它 ⇒ 放弃救（继续挣扎只会让倒地姿态更乱、更难归因）。
+       *   取值 25°：人类躯干倾角超过 ~25° 后踝策略已无望、必须迈步（Runge 1999 的
+       *   平台速度扫描也是这个量级），而本 rig 的迈步还不成熟 ⇒ 先按"救不回来就算了"。
+       */
+      rescueMaxTiltDeg = 25;
+      /**
+       * ★★ 趋势用的**静姿态参考**（每控制器首拍捕获）。
+       *   为什么必须相对静姿态：**肢体本来就不竖直**（大腿静姿就 8~17°"歪"着），
+       *   拿绝对倾角当"歪倒程度"会永远选中大腿当最歪段（实测前 0.75s 全是"左大腿"）。
+       *   ⇒ 趋势量 = 当前"上"向量与**静姿态**"上"向量的夹角 = 真实的姿势偏离。
+       */
+      trendRest = null;
+      /** ★★ 各身体段的运动趋势快照（`Controller` 每拍写；平衡系统只读） */
+      trends = {
+        segs: [],
+        worstTiltDeg: 0,
+        worstSeg: "\u2014",
+        rescueable: true,
+        note: "\u672A\u8FD0\u884C"
+      };
       dcm = { x: 0, z: 0 };
       support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
       mos = 0;
@@ -19591,6 +19627,17 @@ var init_gaitState = __esm({
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
             // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
             //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+            // ★★ 运动趋势逐行（状态机给的行，UI 只渲染）
+            trends: (() => {
+              const tr = rs.trends;
+              const out = [`\u5224\u8BFB\uFF1A${tr.note}\u3000\u95E8\u69DB ${rs.rescueMaxTiltDeg}\xB0\u3000\u53EF\u6551=${tr.rescueable ? "\u662F" : "\u5426"}`];
+              for (const t of tr.segs) {
+                const a = t.azimDeg;
+                const dir = a >= -45 && a < 45 ? "\u524D" : a >= 45 && a < 135 ? "\u5DE6" : a >= -135 && a < -45 ? "\u53F3" : "\u540E";
+                out.push(`${t.name.padEnd(4)} ${t.tiltDeg.toFixed(1).padStart(5)}\xB0\u3000\u65B9\u4F4D ${dir}(${a.toFixed(0)}\xB0)\u3000\u901F\u7387 ${t.rateDeg >= 0 ? "+" : ""}${t.rateDeg.toFixed(0)}\xB0/s` + (t.diverging ? "\u3000\u26A0\u5728\u53D1\u6563" : ""));
+              }
+              return out;
+            })(),
             // ★ 平衡修正：逐行列出"这一拍 balance 在动哪些关节、动多少度"
             //   + 硬目标余量/限幅（来自力链）。全部由状态机生成，UI 只渲染。
             balanceFix: (() => {
@@ -22879,7 +22926,7 @@ __export(controller_exports, {
   auditJoints: () => auditJoints,
   rigSummary: () => rigSummary
 });
-var DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R;
+var DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R, TREND_KEYS, TREND_LEAN, TREND_PREV, TREND_DIVERGE_RATE, TREND_NOTE_MIN;
 var init_controller = __esm({
   "src/core/controller.ts"() {
     "use strict";
@@ -23083,6 +23130,68 @@ var init_controller = __esm({
         rs.torsoY = sim2.doll.torso().translation().y;
         rs.tiltDeg = sim2.doll.tiltOf(sim2.doll.torso()) * 57.2958;
         {
+          const segs = rs.trends.segs;
+          const n2 = TREND_KEYS.length;
+          if (!rs.trendRest || rs.trendRest.length !== n2 * 3) {
+            rs.trendRest = new Float64Array(n2 * 3);
+            for (let k = 0; k < n2; k++) {
+              const body = sim2.doll.bodyByKey(TREND_KEYS[k][0]);
+              if (!body) continue;
+              sim2.doll.leanVector(body, TREND_LEAN);
+              rs.trendRest[k * 3] = TREND_LEAN[0];
+              rs.trendRest[k * 3 + 1] = TREND_LEAN[1];
+              rs.trendRest[k * 3 + 2] = TREND_LEAN[2];
+              TREND_PREV[k] = 0;
+            }
+          }
+          const rest = rs.trendRest;
+          let worst = 0, worstSeg = "\u2014";
+          for (let k = 0; k < n2; k++) {
+            const [key, label] = TREND_KEYS[k];
+            let t = segs[k];
+            if (!t) {
+              t = { name: label, tiltDeg: 0, rateDeg: 0, azimDeg: 0, diverging: false };
+              segs[k] = t;
+            }
+            t.name = label;
+            const body = sim2.doll.bodyByKey(key);
+            if (!body) {
+              t.tiltDeg = 0;
+              t.rateDeg = 0;
+              t.azimDeg = 0;
+              t.diverging = false;
+              continue;
+            }
+            sim2.doll.leanVector(body, TREND_LEAN);
+            const dot = TREND_LEAN[0] * rest[k * 3] + TREND_LEAN[1] * rest[k * 3 + 1] + TREND_LEAN[2] * rest[k * 3 + 2];
+            t.tiltDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 57.2958;
+            t.azimDeg = Math.atan2(TREND_LEAN[2], TREND_LEAN[0]) * 57.2958;
+            const prev = TREND_PREV[k];
+            t.rateDeg = dt > 1e-6 ? (t.tiltDeg - prev) / dt : 0;
+            TREND_PREV[k] = t.tiltDeg;
+            t.diverging = t.rateDeg > TREND_DIVERGE_RATE;
+            if (t.tiltDeg > worst) {
+              worst = t.tiltDeg;
+              worstSeg = label;
+            }
+          }
+          rs.trends.worstTiltDeg = worst;
+          rs.trends.worstSeg = worstSeg;
+          rs.trends.rescueable = worst < rs.rescueMaxTiltDeg;
+          let w;
+          for (const t of segs) if (t.name === worstSeg) w = t;
+          if (w && worst > TREND_NOTE_MIN) {
+            const a = w.azimDeg;
+            const dir = a >= -45 && a < 45 ? "\u524D" : a >= 45 && a < 135 ? "\u5DE6" : a >= -135 && a < -45 ? "\u53F3" : "\u540E";
+            const vDir = Math.atan2(rs.com.vz, rs.com.vx) * 57.2958;
+            const vd = vDir >= -45 && vDir < 45 ? "\u524D" : vDir >= 45 && vDir < 135 ? "\u5DE6" : vDir >= -135 && vDir < -45 ? "\u53F3" : "\u540E";
+            const vMag = Math.hypot(rs.com.vx, rs.com.vz) * 1e3;
+            rs.trends.note = `${worstSeg}\u5F80${dir}\u504F ${worst.toFixed(0)}\xB0\uFF08${w.rateDeg >= 0 ? "\u5728\u52A0\u901F +" : "\u5728\u56DE\u6B63 "}${w.rateDeg.toFixed(0)}\xB0/s\uFF09\uFF5C\u91CD\u5FC3\u5F80${vd}\u8DD1 ${vMag.toFixed(0)}mm/s` + (rs.trends.rescueable ? " \u21D2 \u53EF\u6551\uFF0C\u5168\u529B\u6551" : ` \u21D2 \u8D8A\u8FC7 ${rs.rescueMaxTiltDeg}\xB0 \u95E8\u69DB\uFF0C\u653E\u5F03`);
+          } else {
+            rs.trends.note = `\u59FF\u6001\u5E73\u7A33\uFF08\u6700\u6B6A ${worstSeg} ${worst.toFixed(1)}\xB0\uFF09`;
+          }
+        }
+        {
           const q = sim2.doll.torso().rotation();
           const ax = 2 * (q.x * q.y + q.w * q.z);
           const ay = 1 - 2 * (q.y * q.y + q.z * q.z);
@@ -23130,6 +23239,18 @@ var init_controller = __esm({
     TMP_RV = new Float64Array(3);
     TMP_COP_L = new Float64Array(4);
     TMP_COP_R = new Float64Array(4);
+    TREND_KEYS = [
+      ["torso", "\u8EAF\u5E72"],
+      ["head", "\u5934"],
+      ["thigh_l", "\u5DE6\u5927\u817F"],
+      ["thigh_r", "\u53F3\u5927\u817F"],
+      ["shin_l", "\u5DE6\u5C0F\u817F"],
+      ["shin_r", "\u53F3\u5C0F\u817F"]
+    ];
+    TREND_LEAN = new Float64Array(3);
+    TREND_PREV = new Float64Array(TREND_KEYS.length);
+    TREND_DIVERGE_RATE = 5;
+    TREND_NOTE_MIN = 3;
   }
 });
 
@@ -23306,6 +23427,7 @@ var init_hud = __esm({
           ownForce: $("own-force"),
           ownBFix: $("own-bfix"),
           ownBTgt: $("own-btgt"),
+          ownTrend: $("own-trend"),
           ownRoleL: $("own-role-l"),
           ownRoleR: $("own-role-r"),
           ownCrit: $("own-crit")
@@ -23556,6 +23678,7 @@ var init_hud = __esm({
           e.ownForce.textContent = "\u529B\u94FE \u2014";
           e.ownBFix.textContent = "\u5E73\u8861\u4FEE\u6B63 \u2014";
           e.ownBTgt.textContent = "\u2014";
+          e.ownTrend.textContent = "\u8D8B\u52BF \u2014";
           e.ownAxL.textContent = "z \u2014";
           e.ownAxR.textContent = "z \u2014";
           return;
@@ -23597,6 +23720,7 @@ var init_hud = __esm({
         e.ownForce.textContent = tm2.force.length ? tm2.force.join(NL) : "\u529B\u94FE \u2014";
         e.ownBFix.textContent = tm2.balanceFix.length ? tm2.balanceFix.join(NL) : "\u5E73\u8861\u4FEE\u6B63 \u2014";
         e.ownBTgt.textContent = tm2.balanceTarget;
+        e.ownTrend.textContent = tm2.trends.length ? tm2.trends.join(NL) : "\u8D8B\u52BF \u2014";
         e.ownPhase.textContent = `${tm2.stateLabel} ${tm2.stateT}s`;
         e.ownVerified.textContent = tm2.verified;
         e.ownVerified.dataset.ok = tm2.verified.startsWith("\u2713") ? "1" : "0";
@@ -23962,6 +24086,11 @@ for (const [id, want] of verbatim) {
     ftxt === wantF ? `UI ${tm.force.length} \u884C` : `UI\u300C${ftxt.slice(0, 40)}\u300D vs \u9065\u6D4B\u300C${wantF.slice(0, 40)}\u300D`
   );
   check("\u529B\u94FE\u884C\u6570\u5408\u7406\uFF08\u22656 \u884C\uFF09", tm.force.length >= 6, `${tm.force.length} \u884C`);
+}
+{
+  const ttxt = txt("own-trend");
+  check("\u8D8B\u52BF\u5757\u9010\u5B57 === telemetry.trends", ttxt === tm.trends.join(NL2), `UI ${tm.trends.length} \u884C`);
+  check("\u8D8B\u52BF\u5757\u6709\u9010\u6BB5\u8BFB\u6570\uFF08\u22652 \u884C\uFF1A\u5224\u8BFB + \u81F3\u5C11\u4E00\u6BB5\uFF09", tm.trends.length >= 2, tm.trends[0] ?? "(\u7A7A)");
 }
 {
   const btxt = txt("own-bfix");

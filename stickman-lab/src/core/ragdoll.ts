@@ -2207,6 +2207,18 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
     return false;
   }
 
+  /**
+   * ★★ 刚体"上"轴在**世界系**的单位向量（⇒ 倾角**大小** + **倾斜方位**）。
+   *   用户 2026-10-06：「状态机还得捕捉各个身体的**运动趋势**」。
+   *
+   *   ⚠ 为什么不能只用 `tiltOf`：它只给合成大小，**分不出前倾还是侧倒**
+   *     （`rigState.ts:630` 记着这个教训："我曾因此把「腰向前折」误判成侧倒"）。
+   *   这里把向量写出来 ⇒ `azim = atan2(z, x)` 直接可读（0=朝前，90=朝左）。
+   */
+  leanVector(body: RAPIER.RigidBody, out: Float64Array): void {
+    this.toWorld(body, 0, 1, 0, out);
+  }
+
   tiltOf(body: RAPIER.RigidBody): number {
     this.toWorld(body, 0, 1, 0, this.dirTmp);
     const y = this.dirTmp[1] > 1 ? 1 : this.dirTmp[1] < -1 ? -1 : this.dirTmp[1];

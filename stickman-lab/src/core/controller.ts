@@ -18,7 +18,7 @@
 
 import { omegaAt, dcm, readCom, readSupport } from './posture';
 import { assertRigInvariants, auditJoints, rigSummary, type RigReport } from './rig';
-import { RigState, DEFAULT_RIGSTATE_CONFIG, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
+import { RigState, DEFAULT_RIGSTATE_CONFIG, type BodyTrend, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
 import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
 import { balanceSystem, DEFAULT_BALANCE_PARAMS, type BalanceParams } from './systems/balance';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
@@ -269,12 +269,84 @@ export class Controller {
         rs.vel[i] = TMP_RV[a]!;
       }
     }
+    // ★ 趋势：段表 + 复用缓冲（模块级；每控制器首拍 `rateDeg` 因 prev=0 会偏大一次，
+    //   这是**已知且无害**的 —— 第 2 拍起就是真差分）
     // ★ 真·压力中心（足部发力的直接测量，见 Ragdoll.readCoP）
     sim.doll.readCoP(0, TMP_COP_L); sim.doll.readCoP(1, TMP_COP_R);
     rs.cop.l.x = TMP_COP_L[0]!; rs.cop.l.z = TMP_COP_L[2]!; rs.cop.l.load = TMP_COP_L[3]!;
     rs.cop.r.x = TMP_COP_R[0]!; rs.cop.r.z = TMP_COP_R[2]!; rs.cop.r.load = TMP_COP_R[3]!;
     rs.torsoY = sim.doll.torso().translation().y;
     rs.tiltDeg = sim.doll.tiltOf(sim.doll.torso()) * 57.2958;
+
+    // ══════════════════════════════════════════════════════════════
+    // ★★★ 各身体段的**运动趋势**（用户 2026-10-06：
+    //   「状态机我觉得还得捕捉各个身体的运动趋势」）
+    // ══════════════════════════════════════════════════════════════
+    //   与 `tiltDeg`（只有躯干、只有大小）的区别：
+    //     · **逐段**（头/躯干/大腿/小腿）—— 前折和侧倒的救法完全不同；
+    //     · 给**方位**（0=前 90=左）—— 只知道"歪了 20°"没法决定往哪发力；
+    //     · 给**速率与发散标志**—— "正在加速歪" 才是要救的时刻。
+    {
+      const segs = rs.trends.segs;
+      const n = TREND_KEYS.length;
+      // ★ 首拍捕获**静姿态参考**（`sim.begin()` 刚把姿态复位到静姿 ⇒ 此刻就是基准）
+      if (!rs.trendRest || rs.trendRest.length !== n * 3) {
+        rs.trendRest = new Float64Array(n * 3);
+        for (let k = 0; k < n; k++) {
+          const body = sim.doll.bodyByKey(TREND_KEYS[k]![0]);
+          if (!body) continue;
+          sim.doll.leanVector(body, TREND_LEAN);
+          rs.trendRest[k * 3] = TREND_LEAN[0]!;
+          rs.trendRest[k * 3 + 1] = TREND_LEAN[1]!;
+          rs.trendRest[k * 3 + 2] = TREND_LEAN[2]!;
+          TREND_PREV[k] = 0;
+        }
+      }
+      const rest = rs.trendRest;
+      let worst = 0, worstSeg = '—';
+      for (let k = 0; k < n; k++) {
+        const [key, label] = TREND_KEYS[k]!;
+        let t = segs[k];
+        if (!t) { t = { name: label, tiltDeg: 0, rateDeg: 0, azimDeg: 0, diverging: false }; segs[k] = t; }
+        t.name = label;
+        const body = sim.doll.bodyByKey(key);
+        if (!body) { t.tiltDeg = 0; t.rateDeg = 0; t.azimDeg = 0; t.diverging = false; continue; }
+        sim.doll.leanVector(body, TREND_LEAN);
+        // ★ 偏离量 = 当前"上"向量 与 **静姿态**"上"向量 的夹角（肢体也适用）
+        const dot = TREND_LEAN[0]! * rest[k * 3]! + TREND_LEAN[1]! * rest[k * 3 + 1]!
+          + TREND_LEAN[2]! * rest[k * 3 + 2]!;
+        t.tiltDeg = Math.acos(Math.max(-1, Math.min(1, dot))) * 57.2958;
+        // 方位仍取**绝对**倾斜方向（"往哪边歪"是绝对量，不是相对量）
+        t.azimDeg = Math.atan2(TREND_LEAN[2]!, TREND_LEAN[0]!) * 57.2958;
+        const prev = TREND_PREV[k]!;
+        t.rateDeg = dt > 1e-6 ? (t.tiltDeg - prev) / dt : 0;
+        TREND_PREV[k] = t.tiltDeg;
+        t.diverging = t.rateDeg > TREND_DIVERGE_RATE;
+        if (t.tiltDeg > worst) { worst = t.tiltDeg; worstSeg = label; }
+      }
+      rs.trends.worstTiltDeg = worst;
+      rs.trends.worstSeg = worstSeg;
+      rs.trends.rescueable = worst < rs.rescueMaxTiltDeg;
+
+      // ── 综合判读（人话；UI 只渲染）──
+      let w: BodyTrend | undefined;
+      for (const t of segs) if (t.name === worstSeg) w = t;
+      if (w && worst > TREND_NOTE_MIN) {
+        const a = w.azimDeg;
+        const dir = a >= -45 && a < 45 ? '前' : a >= 45 && a < 135 ? '左' : a >= -135 && a < -45 ? '右' : '后';
+        // ★ 重心的运动趋势才是救回律的**驱动量**（姿势歪只是表因，重心在跑才是要拦的）
+        const vDir = Math.atan2(rs.com.vz, rs.com.vx) * 57.2958;
+        const vd = vDir >= -45 && vDir < 45 ? '前' : vDir >= 45 && vDir < 135 ? '左'
+          : vDir >= -135 && vDir < -45 ? '右' : '后';
+        const vMag = Math.hypot(rs.com.vx, rs.com.vz) * 1000;
+        rs.trends.note = `${worstSeg}往${dir}偏 ${worst.toFixed(0)}°`
+          + `（${w.rateDeg >= 0 ? '在加速 +' : '在回正 '}${w.rateDeg.toFixed(0)}°/s）`
+          + `｜重心往${vd}跑 ${vMag.toFixed(0)}mm/s`
+          + (rs.trends.rescueable ? ' ⇒ 可救，全力救' : ` ⇒ 越过 ${rs.rescueMaxTiltDeg}° 门槛，放弃`);
+      } else {
+        rs.trends.note = `姿态平稳（最歪 ${worstSeg} ${worst.toFixed(1)}°）`;
+      }
+    }
     // ★★ 倾角按平面分解（否则分不出"腰向前折"还是"向侧倒"）。
     //   我的盲区：一直只报合成倾角大小，把前倾误当侧倒排查了很久
     //   （用户 2026-10-03：「之前还是侧向折，现在只是向前折」）。
@@ -369,5 +441,21 @@ const TMP_B = new Float64Array(3);
 const TMP_RV = new Float64Array(3);
 const TMP_COP_L = new Float64Array(4);
 const TMP_COP_R = new Float64Array(4);
+
+// ── ★★ 运动趋势（`rs.trends`）用的段表与复用缓冲 ─────────────
+//   段的选择依据：跌倒的力学链是 **躯干前折/侧倒（质量 49.7%）+ 头（8.1%）**
+//   与**腿的甩动** ⇒ 头/躯干/两条大腿/两条小腿六段足够判读趋势。
+//   （臂总质量不到 10%，先不进趋势表。）
+const TREND_KEYS: readonly (readonly [string, string])[] = [
+  ['torso', '躯干'], ['head', '头'],
+  ['thigh_l', '左大腿'], ['thigh_r', '右大腿'],
+  ['shin_l', '左小腿'], ['shin_r', '右小腿'],
+];
+const TREND_LEAN = new Float64Array(3);
+const TREND_PREV = new Float64Array(TREND_KEYS.length);
+/** 倾角速率超过它就判"在加速歪"（deg/s）。脚下摩擦噪声量级约 1~3°/s ⇒ 取 5 */
+const TREND_DIVERGE_RATE = 5;
+/** 小于这个倾角就不报趋势（避免静立时满屏噪声） */
+const TREND_NOTE_MIN = 3;
 export { auditJoints, rigSummary };
 export type { RigReport, RigSnapshot };

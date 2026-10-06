@@ -184,6 +184,12 @@ for (const [id, want] of verbatim) {
       : `UI「${ftxt.slice(0, 40)}」 vs 遥测「${wantF.slice(0, 40)}」`);
   check('力链行数合理（≥6 行）', tm.force.length >= 6, `${tm.force.length} 行`);
 }
+// ★ 运动趋势块：逐字等于 telemetry.trends，且必须**真的捕捉到东西**
+{
+  const ttxt = txt('own-trend');
+  check('趋势块逐字 === telemetry.trends', ttxt === tm.trends.join(NL), `UI ${tm.trends.length} 行`);
+  check('趋势块有逐段读数（≥2 行：判读 + 至少一段）', tm.trends.length >= 2, tm.trends[0] ?? '(空)');
+}
 // ★ 平衡修正块：逐字等于 telemetry.balanceFix
 {
   const btxt = txt('own-bfix');

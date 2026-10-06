@@ -114,6 +114,7 @@
       /* 轴约定图例：常驻显示，左右靠颜色与箭头区分 */
       .own-force { background: #f4f7fb; border-color: #dbe4ee; }
       .own-bfix { background: #fdf7f2; border-color: #eedfd2; }
+      .own-trend { background: #f3f8f3; border-color: #d8e6d8; }
       .own-sig {
         margin: 6px 0; padding: 5px 7px; border-radius: 5px; background: #f7f7f9;
         border: 1px solid #e6e6ea; font-family: ui-monospace, Menlo, Consolas, monospace;
@@ -436,6 +437,9 @@
            由状态机从请求入口自动记录（不是 balance 自己报的），UI 只渲染。 -->
       <pre class="own-sig own-bfix" id="own-bfix">平衡修正 —</pre>
       <div class="own-bar"><span class="own-k">平衡目标</span><span class="own-v wide" id="own-btgt">—</span></div>
+
+      <!-- ★★ 各身体段的运动趋势（状态机捕捉；平衡系统据此决定往哪发力、还要不要救） -->
+      <pre class="own-sig own-trend" id="own-trend">趋势 —</pre>
 
       <!-- ★ Perry 角度签名逐项读数：回答"离进下一态还差什么"。
            标记 ✓ 通过 / ✗ 未通过（拦迁移） / · 未通过但只报告。状态机生成，UI 不推导。 -->

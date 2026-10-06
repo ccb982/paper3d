@@ -144,6 +144,49 @@ export interface FootForce {
   tangentValid: boolean;
 }
 
+/**
+ * ★★★ **单个身体段的运动趋势**（用户 2026-10-06：
+ *   「状态机我觉得还得捕捉各个身体的**运动趋势**」）。
+ *
+ *   为什么必须**逐段**、而不是只看一个 `tiltDeg`：
+ *     · 躯干前折 和 整体侧倒 的合成倾角可能一样，但**救法完全不同**
+ *       （前折要踝/髋矢状发力；侧倒要髋外展 + 足部旋前/旋后）；
+ *     · 趋势还要给**方位**：只知道"歪了 20°"没用，得知道"往哪边歪、还在不在加速歪"。
+ *
+ *   轴约定（与全局一致）：x = 矢状(前)、y = 竖直、z = 额状(左)。
+ */
+export interface BodyTrend {
+  /** 段名（head/torso/thigh_l/…） */
+  name: string;
+  /** 相对竖直的倾角大小（deg，0 = 正立） */
+  tiltDeg: number;
+  /** 倾角速率（deg/s，**正 = 越歪越狠**，负 = 正在回正） */
+  rateDeg: number;
+  /** 倾斜方位（deg；0 = 朝 +x（前），+90 = 朝 +z（左），−90 = 朝 −z（右）） */
+  azimDeg: number;
+  /** 是否**正在发散**（倾角在增大且超过判读噪声）⇒ 这一段需要救 */
+  diverging: boolean;
+}
+
+/**
+ * ★★★ **运动趋势快照**（状态机每拍写；平衡系统只读）。
+ *
+ *   「在歪倒一定角度之前都可以尝试救回来；歪倒角度过大确实是没救了」
+ *   ⇒ `rescueable` 就是这条线；`worstTiltDeg` 是与门槛比较的量。
+ */
+export interface BodyTrends {
+  /** 逐段趋势（head/torso/thigh_l/thigh_r/shin_l/shin_r） */
+  segs: BodyTrend[];
+  /** 最歪那一段的倾角（deg） */
+  worstTiltDeg: number;
+  /** 最歪那一段的名字 */
+  worstSeg: string;
+  /** **还能不能救**：`worstTiltDeg < rescueMaxTiltDeg`。false ⇒ 放弃救、记录死因 */
+  rescueable: boolean;
+  /** 综合判读（人话，UI 直接渲染） */
+  note: string;
+}
+
 /** Winter 1996（J Neurophysiol 75:2334）的两条独立控制线 */
 export interface ControlLines {
   /** load/unload 线：两脚 CoP 连线（**髋机制**：在两脚间搬运重量） */
@@ -322,6 +365,8 @@ export interface StateTelemetry {
   legPlan: string;
   /** ★ 本态**平衡系统的目标契约**（来自 `STATE_BALANCE_TARGET`；状态机给，UI 只渲染） */
   balanceTarget: string;
+  /** ★★ 各身体段的运动趋势逐行读数（状态机生成，UI 只渲染） */
+  trends: string[];
   /** ★ **具体是哪条腿**（状态机锁存的角色，UI 的腿卡直接用它，不许自己推断） */
   roleRecv: 'l' | 'r';
   roleSup: 'l' | 'r';
@@ -848,6 +893,7 @@ export class RigState {
     ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
     legPlan: '—',
     balanceTarget: '—',
+    trends: [],
     roleRecv: 'l', roleSup: 'l', roleRecvFree: 'locked', roleRearFree: 'locked',
     sigs: [],
     force: [],
@@ -898,6 +944,26 @@ export class RigState {
    */
   stanceSingle = false;
   com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
+  /**
+   * ★★ **救回门槛**（deg）。用户 2026-10-06：
+   *   「我觉得在歪倒一定角度之前都可以尝试救回来，歪倒角度过大确实是没救了」。
+   *   语义：最歪那一段的倾角 < 它 ⇒ `trends.rescueable = true`，平衡系统**全力救**；
+   *        ≥ 它 ⇒ 放弃救（继续挣扎只会让倒地姿态更乱、更难归因）。
+   *   取值 25°：人类躯干倾角超过 ~25° 后踝策略已无望、必须迈步（Runge 1999 的
+   *   平台速度扫描也是这个量级），而本 rig 的迈步还不成熟 ⇒ 先按"救不回来就算了"。
+   */
+  rescueMaxTiltDeg = 25;
+  /**
+   * ★★ 趋势用的**静姿态参考**（每控制器首拍捕获）。
+   *   为什么必须相对静姿态：**肢体本来就不竖直**（大腿静姿就 8~17°"歪"着），
+   *   拿绝对倾角当"歪倒程度"会永远选中大腿当最歪段（实测前 0.75s 全是"左大腿"）。
+   *   ⇒ 趋势量 = 当前"上"向量与**静姿态**"上"向量的夹角 = 真实的姿势偏离。
+   */
+  trendRest: Float64Array | null = null;
+  /** ★★ 各身体段的运动趋势快照（`Controller` 每拍写；平衡系统只读） */
+  trends: BodyTrends = {
+    segs: [], worstTiltDeg: 0, worstSeg: '—', rescueable: true, note: '未运行',
+  };
   dcm = { x: 0, z: 0 };
   support = { cx: 0, cz: 0, halfX: 0, halfZ: 0, halfZActive: 0, contactN: 0 };
   mos = 0;

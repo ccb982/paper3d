@@ -130,7 +130,7 @@ export class Hud {
       ownFcState: $('own-fc-state'), ownFcTb: $('own-fc-tb'),
       ownCtCv: $cv('own-ct-cv'), ownCtTb: $('own-ct-tb'),
       ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
-      ownGate: $('own-gate'), ownGrid: $('own-grid'), ownSig: $('own-sig'), ownForce: $('own-force'), ownBFix: $('own-bfix'), ownBTgt: $('own-btgt'),
+      ownGate: $('own-gate'), ownGrid: $('own-grid'), ownSig: $('own-sig'), ownForce: $('own-force'), ownBFix: $('own-bfix'), ownBTgt: $('own-btgt'), ownTrend: $('own-trend'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
       ownCrit: $('own-crit'),
     };
@@ -350,7 +350,7 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownMos.textContent = '—'; e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
       e.ownAlpha.textContent = '—'; e.ownClr.textContent = '—'; e.ownJoints.textContent = '—';
       e.ownCrit.textContent = '判据 —'; e.ownSig.textContent = '签名 —'; e.ownForce.textContent = '力链 —';
-      e.ownBFix.textContent = '平衡修正 —'; e.ownBTgt.textContent = '—';
+      e.ownBFix.textContent = '平衡修正 —'; e.ownBTgt.textContent = '—'; e.ownTrend.textContent = '趋势 —';
       e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
     }
@@ -407,6 +407,7 @@ setOwnership(d: RigSnapshot | null): void {
     e.ownForce.textContent = tm.force.length ? tm.force.join(NL) : '力链 —';
     e.ownBFix.textContent = tm.balanceFix.length ? tm.balanceFix.join(NL) : '平衡修正 —';
     e.ownBTgt.textContent = tm.balanceTarget;
+    e.ownTrend.textContent = tm.trends.length ? tm.trends.join(NL) : '趋势 —';
     e.ownPhase.textContent = `${tm.stateLabel} ${tm.stateT}s`;
     e.ownVerified.textContent = tm.verified;
     e.ownVerified.dataset.ok = tm.verified.startsWith('✓') ? '1' : '0';
