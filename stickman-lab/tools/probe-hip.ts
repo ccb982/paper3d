@@ -47,5 +47,19 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const t = i / HZ;
   if (t + 1e-6 < nextT) continue;
   nextT += STEP;
-  console.log(`   ${t.toFixed(2).padStart(5)}  ${rs.supportLeg()} | ${g3(hi)}  ${t3(hi).padEnd(16)} | ${g3(hr)}  ${t3(hr)}`);
+  // ★ 外载的几何估计：M = Fz × (髋到 CoP 的水平距离)（矢状）
+  const sup = rs.supportLeg();
+  const sIdx: 0 | 1 = sup === 'l' ? 0 : 1;
+  const jSupHip = sup === 'l' ? hi : hr;
+  const jw = new Float64Array(3); d.jointWorld(jSupHip, jw);
+  const Fz = rs.soleCopValid[sIdx] ? rs.soleCopFz[sIdx]! : (sup === 'l' ? rs.loadFrac.l : rs.loadFrac.r) * sk.cfg.mass * 9.81;
+  const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx]! : Number.NaN;
+  const dxHipCop = Number.isFinite(copX) ? (copX - jw[0]!) : Number.NaN;
+  const copZ = rs.soleCopValid[sIdx] ? rs.soleCopZ[sIdx]! : Number.NaN;
+  const dzHipCop = Number.isFinite(copZ) ? (copZ - jw[2]!) : Number.NaN;
+  const mX = Number.isFinite(dxHipCop) ? -Fz * dxHipCop : Number.NaN;
+  const mZ = Number.isFinite(dzHipCop) ? Fz * dzHipCop : Number.NaN;
+  const mEst = Number.isFinite(mX) && Number.isFinite(mZ) ? Math.hypot(mX, mZ) : (Number.isFinite(mX) ? Math.abs(mX) : Number.NaN);
+  console.log(`   ${t.toFixed(2).padStart(5)}  ${rs.supportLeg()} | ${g3(hi)}  ${t3(hi).padEnd(16)} | ${g3(hr)}  ${t3(hr)}`
+    + `  ‖ Fz=${Fz.toFixed(0)} 髋→CoP dx=${(dxHipCop * 1000).toFixed(0)} dz=${Number.isFinite(dzHipCop) ? (dzHipCop * 1000).toFixed(0) : '—'}mm **合成矩=${Number.isFinite(mEst) ? mEst.toFixed(0) : '—'}** N·m`);
 }

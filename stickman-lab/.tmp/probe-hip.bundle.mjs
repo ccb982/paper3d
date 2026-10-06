@@ -23358,7 +23358,9 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs2.sagJfHeld++;
       }
       if (Math.abs(t) < 0.05) continue;
-      rs2.requestTorque(jj, 2, t, "balance", "\u77E2\u72B6J\u1D40F", true);
+      const jjName = rs2.sk.joints[jj]?.name ?? "";
+      const tShare = jjName.startsWith("hip_") ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
+      rs2.requestTorque(jj, 2, tShare, "balance", "\u77E2\u72B6J\u1D40F", true);
       rs2.sagJfTau += Math.abs(t);
     }
     if (jHip >= 0 && latOwnsAbduction) {
@@ -23617,7 +23619,7 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
       const qLim = p.maxHipStiffDeg * D2R3;
       const qEff = clamp2(qHip, qLim);
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
-      tauHip = clamp2(tauHip, tauMaxHip);
+      tauHip = clamp2(tauHip, Math.min(tauMaxHip, SHARE.dip));
       rs2.hipTauStiff = tauHip;
       rs2.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6", true);
     }
@@ -23812,7 +23814,7 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs2.disposeStepProposals(rs2.disposeK);
   else rs2.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN_MODE, LATPLAN, _LATPLAN_OLD, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN_MODE, LATPLAN, SHARE, _LATPLAN_OLD, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -23832,6 +23834,30 @@ var init_balance = __esm({
       return 2;
     })();
     LATPLAN = LATPLAN_MODE > 0;
+    SHARE = {
+      // ⚠⚠ **实测：份额化（120/50/40）真倒 8.47→3.42 s（更差）** —— 与锁存/一次性同一结局：
+      //   系统当前**依赖堆叠的全权需求**在硬撑；份额化削弱了主路径（JᵀF 的 200→120）
+      //   ⇒ 先保行为，份额机制**保留但默认放到不限制**（= τmax），供"先腾出余量"后再启用。
+      //   （这是本会话第 4 次"理想形态不如脏堆叠"——规律已入档 §22.54。）
+      sag: (() => {
+        const r = envB().SHARE_SAG;
+        if (r === void 0 || r === "") return 1e9;
+        const v = Number(r);
+        return Number.isFinite(v) && v >= 0 ? v : 1e9;
+      })(),
+      dip: (() => {
+        const r = envB().SHARE_DIP;
+        if (r === void 0 || r === "") return 1e9;
+        const v = Number(r);
+        return Number.isFinite(v) && v >= 0 ? v : 1e9;
+      })(),
+      sup: (() => {
+        const r = envB().SHARE_SUP;
+        if (r === void 0 || r === "") return 1e9;
+        const v = Number(r);
+        return Number.isFinite(v) && v >= 0 ? v : 1e9;
+      })()
+    };
     _LATPLAN_OLD = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATPLAN ?? ""
     ).toLowerCase());
@@ -24778,7 +24804,13 @@ function supportLegTick(rs2, doll, ablate = "") {
   rs2.requestHold(jAnk, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]]) {
     const tmax = rs2.sk.joints[j].maxTorque[2] ?? 120;
-    const tc = Math.max(-tmax, Math.min(tmax, t));
+    const share = (() => {
+      const r = globalThis.process?.env?.SHARE_SUP;
+      if (r === void 0 || r === "") return 1e9;
+      const v = Number(r);
+      return Number.isFinite(v) && v >= 0 ? v : 1e9;
+    })();
+    const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));
     if (Math.abs(tc) > 0.05) rs2.requestTorque(j, 2, tc, "balance", "\u627F\u91CD\u817F\xB7\u9759\u529B", true);
   }
   rs2.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
@@ -25227,5 +25259,18 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const t = i / HZ;
   if (t + 1e-6 < nextT) continue;
   nextT += STEP;
-  console.log(`   ${t.toFixed(2).padStart(5)}  ${rs.supportLeg()} | ${g3(hi)}  ${t3(hi).padEnd(16)} | ${g3(hr)}  ${t3(hr)}`);
+  const sup = rs.supportLeg();
+  const sIdx = sup === "l" ? 0 : 1;
+  const jSupHip = sup === "l" ? hi : hr;
+  const jw = new Float64Array(3);
+  d.jointWorld(jSupHip, jw);
+  const Fz = rs.soleCopValid[sIdx] ? rs.soleCopFz[sIdx] : (sup === "l" ? rs.loadFrac.l : rs.loadFrac.r) * sk.cfg.mass * 9.81;
+  const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx] : Number.NaN;
+  const dxHipCop = Number.isFinite(copX) ? copX - jw[0] : Number.NaN;
+  const copZ = rs.soleCopValid[sIdx] ? rs.soleCopZ[sIdx] : Number.NaN;
+  const dzHipCop = Number.isFinite(copZ) ? copZ - jw[2] : Number.NaN;
+  const mX = Number.isFinite(dxHipCop) ? -Fz * dxHipCop : Number.NaN;
+  const mZ = Number.isFinite(dzHipCop) ? Fz * dzHipCop : Number.NaN;
+  const mEst = Number.isFinite(mX) && Number.isFinite(mZ) ? Math.hypot(mX, mZ) : Number.isFinite(mX) ? Math.abs(mX) : Number.NaN;
+  console.log(`   ${t.toFixed(2).padStart(5)}  ${rs.supportLeg()} | ${g3(hi)}  ${t3(hi).padEnd(16)} | ${g3(hr)}  ${t3(hr)}  \u2016 Fz=${Fz.toFixed(0)} \u9ACB\u2192CoP dx=${(dxHipCop * 1e3).toFixed(0)} dz=${Number.isFinite(dzHipCop) ? (dzHipCop * 1e3).toFixed(0) : "\u2014"}mm **\u5408\u6210\u77E9=${Number.isFinite(mEst) ? mEst.toFixed(0) : "\u2014"}** N\xB7m`);
 }

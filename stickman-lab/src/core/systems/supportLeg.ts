@@ -25,6 +25,7 @@
  * 开关：`SUPLEG=0` 关（默认开）；`SUPLEGK` 水平增益；`SLSIGN_*` 标定符号。
  */
 import type { RigState } from '../rigState';
+import { envNum } from '../env';
 import type { Ragdoll } from '../ragdoll';
 
 const env = (): Record<string, string> =>
@@ -54,15 +55,8 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   const lf = sup === 'l' ? rs.loadFrac.l : rs.loadFrac.r;
   const Fv = rawOk ? rs.soleCopFz[side]! : lf * rs.sk.massTotal * 9.81;
   if (!(Fv > 40)) return;
-  const num = (k: string, d: number): number => {
-    // ★⚠ `Number('') === 0` 且 `isFinite(0)` 为真 ⇒ 旧写法在**未设环境变量时返回 0，
-    //   默认值永远用不上** ⇒ 符号/增益全 0 ⇒ 模块静默输出恒 0（实测：Fh=0、τ=0，
-    //   而中间量 M_A=−101.8 —— 就是这里）。必须显式判空串。
-    const raw = env()[k];
-    if (raw === undefined || raw === '') return d;
-    const v = Number(raw);
-    return Number.isFinite(v) ? v : d;
-  };
+  /** ★ 统一走 `envNum`（`Number('')` 坑本项目犯过 4 次，见 `core/env.ts`） */
+  const num = (k: string, d: number): number => envNum(k, d);
   const kH = num('SUPLEGK', 1.0);
   const m = rs.sk.massTotal;
   const w0 = rs.omega0();
@@ -106,7 +100,9 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
   rs.requestHold(jAnk, 2, 'balance', '承重腿·让位');
   for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]] as const) {
     const tmax = rs.sk.joints[j]!.maxTorque[2] ?? 120;
-    const tc = Math.max(-tmax, Math.min(tmax, t));
+    // ★ 份额（§22.54）：承重腿静力与 JᵀF 重叠 ⇒ 只拿小份（默认 40）
+    const share = envNum('SHARE_SUP', 1e9, 0);   // 默认不限制（份额实测更差，见 balance.ts）
+    const tc = Math.max(-Math.min(tmax, share), Math.min(Math.min(tmax, share), t));
     if (Math.abs(tc) > 0.05) rs.requestTorque(j, 2, tc, 'balance', '承重腿·静力', true);
   }
   rs.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };

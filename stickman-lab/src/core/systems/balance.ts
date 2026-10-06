@@ -27,6 +27,7 @@
  *   · 单腿保持目标余量：MoS 侧向 −0.025 m、捕获点出域 0.09 s/3.3 s（arXiv:2608.00500）。
  */
 
+import { envNum } from '../env';
 import { jointIndexByName } from '../skeleton';
 import { applyWaist, DEFAULT_WAIST_PARAMS } from './waist';
 import { computeWantedForce, stanceResolved, DEFAULT_WANTED_FORCE } from './wantedForce';
@@ -230,6 +231,27 @@ const LATPLAN_MODE = (() => {
 
 const LATPLAN = LATPLAN_MODE > 0;
 
+/**
+ * ★★★★★ 2026-10-06 **髋/2 的"份额"表**（用户：「**做 1 吧**」= 明确份额，不再各出全权叠加）。
+ *   实测（`probe-hip` 消融）：髋/2 上有 **4 个全权写者**（DIP 被动刚度 / `τ=JᵀF` /
+ *   承重腿静力 / QP），**每个单独都能顶到 ±200** ⇒ 叠起来常年饱和（"腿永远 ±200 打摆子"）。
+ *   ⇒ 按下表**给每个写者一个份额上限**（N·m），和为 τmax 之内：
+ *      · `sag`（`τ=JᵀF`）：**主路径**（承重/前馈）→ 120
+ *      · `dip`（髋被动刚度）：**稳定器** → 50
+ *      · `sup`（承重腿静力）：**与 JᵀF 重叠** → 40（小份，补前馈没覆盖的部分）
+ *      · `qp`（全链 QP 在髋/2 上）：**与两者都重叠** → 默认**退出该轴**（`QPHIP=1` 恢复）
+ *   `SHARE_SAG/SHARE_DIP/SHARE_SUP` 可扫。
+ */
+const SHARE = {
+  // ⚠⚠ **实测：份额化（120/50/40）真倒 8.47→3.42 s（更差）** —— 与锁存/一次性同一结局：
+  //   系统当前**依赖堆叠的全权需求**在硬撑；份额化削弱了主路径（JᵀF 的 200→120）
+  //   ⇒ 先保行为，份额机制**保留但默认放到不限制**（= τmax），供"先腾出余量"后再启用。
+  //   （这是本会话第 4 次"理想形态不如脏堆叠"——规律已入档 §22.54。）
+  sag: envNum('SHARE_SAG', 1e9, 0),
+  dip: envNum('SHARE_DIP', 1e9, 0),
+  sup: envNum('SHARE_SUP', 1e9, 0),
+};
+
 const _LATPLAN_OLD = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').toLowerCase());
 /** `LATK`：额状 CoP 律的归一化增益（默认 0.5，同 `COPK`） */
@@ -240,8 +262,7 @@ function latK(): number {
 const LATK = latK();
 
 function copK(): number {
-  const v = Number(envB().COPK ?? '');
-  return Number.isFinite(v) && v > 0 ? v : 0.5;
+  return envNum('COPK', 0.5, 1e-12);
 }
 /** `ANKCAL` = 标定注入：直接指定踝 τ（N·m），供 `probe-ankcop` 用 */
 function ankCal(): number {
@@ -1767,9 +1788,31 @@ export function balanceSystem(
       if (plan0 && plan0.valid) {
         const m0 = rs.sk.massTotal;
         const w0s = rs.omega0();
-        spillFx = -m0 * w0s * w0s * plan0.overX;
-        spillFz = -m0 * w0s * w0s * plan0.overZ;
-        const mu = (() => { const v = Number(envB().SPILL_MU ?? ''); return Number.isFinite(v) && v > 0 ? v : 0.6; })();
+        // ★★★★★ 2026-10-06 **预兆驱动**（用户：「回读…现在是前倾，比侧倾强」）：
+        //   `probe-slip` 实测：`fallGuard` 的余量/紧迫度**提前 ~1s 就转向**
+        //     （t=2.5 紧迫 0.64、t=3.0 余量归零），而响应（`over≠0`）到 t≈3.3 才启动
+        //     ⇒ 中间 0.8 s **没有任何通道在动** ⇒ "救晚了"。
+        //   ⇒ 本项在 `over` 之外加**预兆**：ξ 到边界的余量 < `PREM`(40mm) 时，
+        //     按"还差多少"给剪力（= 把 anticipated over 当 over 用）。
+        //   `PREM`=0 关。
+        //   ⚠ 第一版用"余量 < 40mm 的差额"⇒ 余量 56mm 时还是 0（t=3.0 才点火，已晚）。
+        //   ⇒ 改**紧迫度比例**：`紧迫 > 0.3` 就按方向给预兆剪力（量级 ~35·紧迫 N）。
+        // ⚠ `Number('')` 坑**第 4 次**（本项目自己犯的）：未设时 `Number('')=0`、`0>=0` 真
+        //   ⇒ `kPre=0`、预兆项**恒 0**。必须显式判空串。
+        const kPre = envNum('PREM', 0.05, 0);   // ★ 统一入口（原第 4 次 Number('') 坑）
+        const urg = rs.fall.valid ? rs.fall.urgency : 0;
+        // ★★★★★ 2026-10-06 **逐轴独立**（用户：「**侧向没有预兆量吗**」）：
+        //   第一版只取"四向里最紧的那一个" ⇒ 前向更紧时**侧向预兆被整个忽略**
+        //   （实测 `预兆FZ ≡ 0` 而 `mRight` 已到 110mm）。物理上两个方向**各救各的**：
+        //   每个轴由**自己那两个余量**里更紧的那个决定方向。
+        const preFx = (urg > 0.3 && rs.fall.valid)
+          ? (rs.fall.mFront < rs.fall.mBack ? -1 : 1) * kPre * urg : 0;   // 前紧 ⇒ 后推
+        const preFz = (urg > 0.3 && rs.fall.valid)
+          ? (rs.fall.mRight < rs.fall.mLeft ? 1 : -1) * kPre * urg : 0;   // 右紧 ⇒ 左推
+        // ⚠ 符号经 `−m·ω²·(over − pre)` 统一成剪力（与 `over` 同号约定，见上）。
+        spillFx = -m0 * w0s * w0s * (plan0.overX - preFx);
+        spillFz = -m0 * w0s * w0s * (plan0.overZ - preFz);
+        const mu = envNum('SPILL_MU', 0.6, 1e-12);
         const lim = mu * m0 * 9.81;
         const mag = Math.hypot(spillFx, spillFz);
         if (mag > lim && mag > 1e-9) { spillFx *= lim / mag; spillFz *= lim / mag; }
@@ -1873,7 +1916,10 @@ export function balanceSystem(
       if (Math.abs(t) < 0.05) continue;
       // ★ `loadBearing=true`：该轴位置伺服已让位 ⇒ 这条力矩是**唯一承重路径**
       //   （用户：「承重无上限」）。上身力（块⑧）则**不声明** ⇒ 按发力夹。
-      rs.requestTorque(jj, 2, t, 'balance', '矢状JᵀF', true);
+      // ★★ 2026-10-06 **份额**（§22.54）：髋/2 上 JᵀF 最多 `SHARE.sag`（主路径的份额）。
+      const jjName = rs.sk.joints[jj]?.name ?? '';
+      const tShare = jjName.startsWith('hip_') ? Math.max(-SHARE.sag, Math.min(SHARE.sag, t)) : t;
+      rs.requestTorque(jj, 2, tShare, 'balance', '矢状JᵀF', true);
       rs.sagJfTau += Math.abs(t);
     }
 // ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
@@ -1948,8 +1994,7 @@ export function balanceSystem(
         //   十拍就卷到 cap（±70）⇒ 腰被拧塌（实测钉死 DOUBLE 腰弯 **73°**、
         //   存活 12→1.23s）。限到 `LATSLEW` N·m/拍（默认 4）。
         const slewZ = (() => {
-          const v = Number(envB().LATSLEW ?? '');
-          return Number.isFinite(v) && v > 0 ? v : 4;
+          return envNum('LATSLEW', 4, 1e-12);
         })();
         const d = kLatCop * errZ * fzTotalL;
         const dCl = d > slewZ ? slewZ : d < -slewZ ? -slewZ : d;
@@ -2109,8 +2154,7 @@ export function balanceSystem(
       //   `v.z=+102~+202 mm/s` **单调 +Z 加速**（3 → 171 mm 一路跑到倒地）。
       //   ⇒ 加 `LATSIGN` 开关（默认 1 = 保持现状，−1 = 翻转实际施加方向）。
       const latSign = (() => {
-        const v = Number(envB().LATSIGN ?? '');
-        return Number.isFinite(v) && v !== 0 ? v : 1;
+        return envNum('LATSIGN', 1);
       })();
       doll.jacobianTorque(0, 0, latSign * rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
       const dHip = jointIndexByName(rs.sk, `hip_${drive}`);
@@ -2363,8 +2407,7 @@ export function balanceSystem(
           //       τ ← τ_prev + err·Fz·k     （err 用 m，Fz 用 N ⇒ N·m）
           //   k = 1 是"一拍收敛"（deadbeat）；**k ≤ 0.5 留稳定裕度**（实测 k=1 会过冲）。
           const kCop = (() => {
-            const v = Number(envB().COPK ?? '');
-            return Number.isFinite(v) && v > 0 ? v : 0.5;
+            return envNum('COPK', 0.5, 1e-12);
           })();
           const dTau = kCop * (copObs - wantX) * fzCop;
           // ★★ **τ 速率限幅**（2026-10-06 实测必需）：
@@ -2374,8 +2417,7 @@ export function balanceSystem(
           //   （实测 `COPK` 0.05~0.3 的 CoP 读数**逐位相同**）。
           //   ⇒ 每控制拍最多变 `COPSLEW` N·m（默认 12，≈720 N·m/s）。
           const slew = (() => {
-            const v = Number(envB().COPSLEW ?? '');
-            return Number.isFinite(v) && v > 0 ? v : 12;
+            return envNum('COPSLEW', 12, 1e-12);
           })();
           const dClamp = dTau > slew ? slew : dTau < -slew ? -slew : dTau;
           tauAnk = rs.ankCopTau + dClamp;
@@ -2472,7 +2514,7 @@ if (doll && on('hipStiff')) {
       //   写成 `+B·q̇` 是正反馈（越晃越加力）⇒ 等效阻尼比变负 ⇒ 必然发散。
       //   参照 `ragdoll.driveMotors` 的 `err = kP·(θ_ref−θ) − kD·ω_rel`：阻尼恒带负号。
       let tauHip = -p.kVipHip * qEff - bHip * qHipRate;
-      tauHip = clamp(tauHip, tauMaxHip);
+      tauHip = clamp(tauHip, Math.min(tauMaxHip, SHARE.dip));   // ★ 份额（§22.54）
       rs.hipTauStiff = tauHip;
       // ★★★ 2026-10-06 **声明承重**（`probe-upforce` 实测：`轴17/20 想200→被夹70`）。
       //   这块是**支撑腿**髋的被动刚度（`jHipS` 按 `sup` 取），它与位置伺服一起
@@ -2535,10 +2577,7 @@ if (doll && on('hipStiff')) {
     // ★ 2026-10-06 调参开关（逐拍读 env，便于扫描；用户：「上身修正量给的不太足」）：
     //   `UPNB` 去噪门（rad/s）、`UPK` 增益（rad/m）、`UPMAX` 倾角上限（度）
     const envT = (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
-    const numOr = (k: string, d: number): number => {
-      const v = Number(envT[k] ?? '');
-      return Number.isFinite(v) && v > 0 ? v : d;
-    };
+    const numOr = (k: string, d: number): number => envNum(k, d, 1e-12);   // ★ 统一入口（env.ts）
     const upK = numOr('UPK', p.upLeanK ?? 0);
     const leanMax = numOr('UPMAX', p.upLeanMaxDeg ?? 12) * D2R;
     const corrPitch = clamp(-upK * (capX - stanceX), leanMax);
@@ -2612,10 +2651,7 @@ if (doll && on('hipStiff')) {
       //   我要的是**多种机制持续发力**，这样才能长久持续」）
       //   ⇒ 默认 0.6（回直项开）。存活秒数**不再是判据**；
       //     判据 = **各机制是否在持续发力**（τ 同号时长、各通道的活动占空比）。
-      const raw = envB().WAISTKFOLD;
-      if (raw === undefined || raw === '') return 0.6;
-      const v = Number(raw);
-      return Number.isFinite(v) && v >= 0 ? v : 0.6;   // 度(回挺)/度(折角)
+      return envNum('WAISTKFOLD', 0.6, 0);   // 度(回挺)/度(折角)；★ 统一入口
     })();
     let foldSum = 0;
     if (kFold > 0 && doll) {
@@ -2663,12 +2699,8 @@ if (doll && on('hipStiff')) {
     //   ⇒ 本块给扭转轴**纯阻尼**（τ = −c·ω_rel，**不含位置目标** =
     //     不是"把它扳回去"，而是"吸收它的能量"，防止自由累积）。
     //   覆盖：脊柱 3 段的 1 号轴 + 两髋的 1 号轴。`TWISTD=0` 关。
-    const kTw = (() => {
-      const raw = envB().TWISTD;
-      if (raw === undefined || raw === '') return 20;   // N·m·s/rad（实测 0/8/20 中 20 转得最少）
-      const v = Number(raw);
-      return Number.isFinite(v) && v >= 0 ? v : 8;
-    })();
+    // ★ 统一入口（原实现"未设→20、非法→8"不一致，`envNum` 统一为 20）
+    const kTw = envNum('TWISTD', 20, 0);   // N·m·s/rad（实测 0/8/20 中 20 转得最少）
     // ★★★★★ 2026-10-06 **侧向关节阻尼**（用户：「**加阻尼**，不要乱七八糟的
     //   **非主动施力的外力**」）：
     //   侧向现在只有"弹簧"（`hipLatTau` 把重心拉向支撑脚），**没有吸能项** ⇒
@@ -2677,12 +2709,7 @@ if (doll && on('hipStiff')) {
     //   （肌肉黏弹的工程形式；**走执行器、不走外力**）——
     //   与 §22.50 的扭转阻尼同一模式（那里一加：156°→24°）。
     //   覆盖：两髋的**外展轴（0）** + 两中足的额状轴（0）。`LATDMP=0` 关。
-    const kLatD = (() => {
-      const raw = envB().LATDMP;
-      if (raw === undefined || raw === '') return 12;   // N·m·s/rad（实测 |CoM.z|max 92→11mm）
-      const v = Number(raw);
-      return Number.isFinite(v) && v >= 0 ? v : 12;
-    })();
+    const kLatD = envNum('LATDMP', 12, 0);   // N·m·s/rad（实测 |CoM.z|max 92→11mm）
     if (kLatD > 0 && doll) {
       const jwL = new Float64Array(3);
       for (const [nm, ax] of [['hip_l', 0], ['hip_r', 0], ['midfoot_l', 0], ['midfoot_r', 0]] as const) {

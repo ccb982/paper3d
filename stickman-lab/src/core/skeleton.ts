@@ -1160,6 +1160,21 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
     const qVisInv = invQuatOf(restVisualQuatOf(tilt));
     let centerY = mapY(part.cy);
     let centerZ = mapZ(part.cx, !!spec.leg);
+    // ★★★★★ 2026-10-06 **中线归零**（用户「回读前 0.1s」暴露的 +2.85mm 真身）：
+    //   `probe-init` 实测：四肢镜像对称（±0.164/±0.224/±0.341），而**中线不对称**——
+    //   躯干/脊柱 **z=+7mm**、头 **z=−6mm**（源画布 `cx` 画偏 ±6~7mm 经 `mapZ` 映射而来）
+    //   ⇒ **CoM 第 0 拍就 +2.85mm** ⇒ 侧翻的**物理种子**（与控制无关）。
+    //   ⇒ 中线部件（head/neck/torso）的世界 z **强制归零**。
+    //   `CENTERC=0` 可关（A/B）。
+    // ⚠⚠ **实测：强制归零更差**（CoM.z +2.85→**+3.35mm**、真倒 8.47→5.62s）——
+    //   说明脊柱分段的位置**不是**从 `torso.centerZ` 派生的（注入层选错），
+    //   且**又是"改掉歪斜反而更差"**（本会话第 5 次同规律）。
+    //   ⇒ 默认**关**；发现（源画布中线画偏 ±6~7mm）保留在 §22.55。
+    const CENTER_C = !['0', 'false', 'off'].includes(String(
+      ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).CENTERC ?? '').trim().toLowerCase());
+    if (CENTER_C && (spec.key === 'head' || spec.key === 'neck' || spec.key === 'torso')) {
+      centerZ = 0;
+    }
     if (ax && TILTED.has(spec.key)) {
       const midY = (ax.proxTip[1] + ax.distTip[1]) / 2;
       const midX = (ax.proxTip[0] + ax.distTip[0]) / 2;
@@ -1804,7 +1819,13 @@ export function buildSkeleton(cfg: SkeletonConfig = DEFAULT_CONFIG): Skeleton {
           part,
           cx: 0,
           cy: cyS,
-          cz: mapZ(part.cx, false),
+          // ★★★★★ 2026-10-06 **这里才是"中线 +7mm"的真身**（`probe-init` 追出来的）：
+          //   分段体**直接**从源画布 `part.cx` 重推 z（`mapZ`），**绕过**了上面
+          //   `centerZ` 的修正 ⇒ 躯干/脊柱整段 z=+7mm ⇒ CoM 第 0 拍 +2.85mm。
+          //   ⇒ 中线（脊柱）强制 z = 0；`CENTERC=0` 可关（A/B）。
+          cz: ['0', 'false', 'off'].includes(String(
+            ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).CENTERC ?? '').trim().toLowerCase())
+            ? mapZ(part.cx, false) : 0,
           restTiltRad: 0,          // 躯干不设静倾角（脊柱段要同朝向才能 LBS）
           restYawRad: 0,
           plateOffset: [0, 0, 0],  // 蒙皮板由 viewer 逐段插值，不用刚体中心

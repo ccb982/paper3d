@@ -24,6 +24,7 @@
  *   额状面的水平力必须沿 **z**。曾错传给 fx（矢状）⇒ 人前后倒、横向无人管。
  */
 
+import { envNum } from '../env';
 import type { RigState, Side } from '../rigState';
 
 /** F 的**分量**（N）。每个分量一个真实的消融开关。 */
@@ -216,14 +217,9 @@ export function computeWantedForce(
     //   让 JᵀF 的分配有一个**稳定的输入**（分配合成对输入噪声极敏感）。
     //   `SAGF_TAU=0` 关闭（A/B）。
     const raw = clamp(mass * h * aDesX, p.maxSagittal);
-    const tauF = (() => {
-      // ⚠ 同 `Number('')` 坑：未设时旧写法返回 0 ⇒ 低通被静默关闭
-      // ★ 用户定调「全开」⇒ 默认 0.08（低通开）。存活秒数不是判据。
-      const raw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SAGF_TAU;
-      if (raw === undefined || raw === '') return 0.08;
-      const v = Number(raw);
-      return Number.isFinite(v) && v >= 0 ? v : 0.08;
-    })();
+    // ★ 已治本：走 `envNum`（`Number('')` 坑本项目犯过 4 次，见 core/env.ts）。
+    //   用户定调「全开」⇒ 默认 0.08（低通开）；存活秒数不是判据。
+    const tauF = envNum('SAGF_TAU', 0.08, 0);
     if (tauF > 0) {
       const dtc = rs.dtCtrl > 1e-6 ? rs.dtCtrl : 1 / 60;
       const kf = Math.min(1, dtc / tauF);

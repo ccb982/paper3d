@@ -94,8 +94,9 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
     + ` | ${((rs.com.x * 1000).toFixed(0)).padStart(5)} ${((rs.com.vx * 1000).toFixed(0)).padStart(5)}`
     + ` ${((xOf(jSp1) * 1000).toFixed(0)).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)}`
     + ` | 侧: CoMz=${((rs.com.z * 1000).toFixed(0)).padStart(5)} vz=${((rs.com.vz * 1000).toFixed(0)).padStart(5)}`
+    + ` | 余量: 前${(rs.fall.mFront * 1000).toFixed(0).padStart(4)} 后${(rs.fall.mBack * 1000).toFixed(0).padStart(4)} 左${(rs.fall.mLeft * 1000).toFixed(0).padStart(4)} 右${(rs.fall.mRight * 1000).toFixed(0).padStart(4)} 紧迫${rs.fall.urgency.toFixed(2)}`
     + ` | 前: needX=${((rs.copPlan?.needX ?? 0) * 1000).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1000).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1000).toFixed(0).padStart(5)}`
-    + ` 承τ=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)}`
+    + ` 承τ=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)} 预兆FX=${rs.spillFx.toFixed(0)} 预兆FZ=${rs.spillFz.toFixed(0)}`
     + `  头y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)}`
     + ` grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})`
     + (() => {
