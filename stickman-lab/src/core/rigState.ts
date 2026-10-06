@@ -1107,6 +1107,9 @@ export class RigState {
   /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
   /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
   copWantX = 0;
+  /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
+  spillFx = 0;
+  spillFz = 0;
   copErrX = 0;
   /**
    * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。

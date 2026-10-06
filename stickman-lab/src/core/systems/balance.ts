@@ -1728,6 +1728,28 @@ export function balanceSystem(
     //   消融开关（`sag` / `lat` / `weight` / `trunkLean`）**每一个都真实接线**
     //   到下面的求和 —— 此前 `lat`/`invDyn`/`ankleSag`/`ankleLat` 是死开关，
     //   导致所有"额状面有没有害"的对照实验作废。
+    // ★★★★★ 2026-10-06 **W1：溢出 → 剪力**（§21.13 待接线 #1；§21.11 分解层）
+    //   推导（LIPM）：`ẍ = ω₀²(x − p)`，`p` 被夹到 `CoP_need` 后
+    //     `ẍ = −ω₀·v + ω₀²·over`（`over = ξ − CoP_need` 就是**发散的驱动项**）
+    //   ⇒ 用 τ=JᵀF 的水平力**抵消**它：`F_shear = −m·ω₀²·over`（N）。
+    //   夹在摩擦锥内：`|F_h| ≤ μ·m·g`（`SPILL_MU` 可调）。
+    //   `SPILL=0` 关闭（仅 A/B）。
+    const SPILL = !['0', 'false', 'off'].includes(String(envB().SPILL ?? '').trim().toLowerCase());
+    let spillFx = 0, spillFz = 0;
+    if (SPILL) {
+      const plan0 = rs.copPlan;
+      if (plan0 && plan0.valid) {
+        const m0 = rs.sk.massTotal;
+        const w0s = rs.omega0();
+        spillFx = -m0 * w0s * w0s * plan0.overX;
+        spillFz = -m0 * w0s * w0s * plan0.overZ;
+        const mu = (() => { const v = Number(envB().SPILL_MU ?? ''); return Number.isFinite(v) && v > 0 ? v : 0.6; })();
+        const lim = mu * m0 * 9.81;
+        const mag = Math.hypot(spillFx, spillFz);
+        if (mag > lim && mag > 1e-9) { spillFx *= lim / mag; spillFz *= lim / mag; }
+        rs.spillFx = spillFx; rs.spillFz = spillFz;
+      }
+    }
     const F = computeWantedForce(rs, {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
@@ -1750,6 +1772,8 @@ export function balanceSystem(
       if (ch === 'lat') return p.lateralEnabled && on('lat');
       return on(ch);
     });
+    // ★ W1：把溢出剪力**叠加**到期望力上（分摊规则仍是 `τ=JᵀF`，不新增通道）
+    F.fx += spillFx; F.fz += spillFz;
     rs.grfCmd.x = F.fx; rs.grfCmd.y = F.fy; rs.grfCmd.z = F.fz;
     rs.captureX = F.captureX; rs.captureZ = F.captureZ; rs.omega0Val = F.omega0;
 

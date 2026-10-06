@@ -17772,6 +17772,9 @@ var init_rigState = __esm({
       /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
       /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
       copWantX = 0;
+      /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
+      spillFx = 0;
+      spillFz = 0;
       copErrX = 0;
       /**
        * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。
@@ -19481,7 +19484,7 @@ function checkDomains(rs2, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
+var DEG2, STEP_TRIG, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -19490,6 +19493,9 @@ var init_gaitState = __esm({
     init_jointQuery();
     init_forceChain();
     DEG2 = 180 / Math.PI;
+    STEP_TRIG = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).STEPTRIG ?? ""
+    ).trim().toLowerCase());
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
     DEFAULT_GAIT_CONFIG = {
@@ -20332,6 +20338,12 @@ var init_gaitState = __esm({
             P4_\u624B\u6027\u4EA4\u66FF: rs2.lastSwing !== sw,
             P5_\u7A33\u5B9A\u6027: rs2.mos >= cfg.mosMin && Math.abs(rs2.tiltDeg) <= cfg.tiltMaxDeg,
             P6_\u975E\u5B89\u5168\u6001: !rs2.safe
+            // ★★★★★ 2026-10-06 **W2：感知 → 迈步触发**（§21.13 待接线 #2；§21.11 分解层）
+            //   监督层的 `copPlan.fallNeeded`（= `actionability ≤ 0`，**脚放不下了**）
+            //   是"**必须迈**"的判据。语义是 OR（应急放行），不是 AND：
+            //     `许可 = (P1..P6 全过) ∨ (P7_感知落足 ∧ P6_非安全态)`
+            //   —— 用户定调：「**要摔倒了/也别管承重腿摆动腿了，优先稳住身体**」。
+            //   ⚠ P6 必须仍成立（安全态下不许迈，那是"停手让平衡全权"）。
           },
           {
             loadFrac: rs2.loadFrac[sw],
@@ -20344,6 +20356,10 @@ var init_gaitState = __esm({
             safe: rs2.safe ? 1 : 0
           }
         );
+        if (STEP_TRIG && rs2.stepPermit && !rs2.safe && (rs2.copPlan?.fallNeeded ?? false)) {
+          rs2.stepPermit.all = true;
+          rs2.stepPermit.values.emergencyStep = 1;
+        }
         const prev = rs2.state;
         const dwellOk = rs2.stateT >= cfg.minDwellSec;
         if (rs2.safe) {
@@ -23215,6 +23231,29 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs2.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
   }
   if (latArmed && doll) {
+    const SPILL = !["0", "false", "off"].includes(String(envB().SPILL ?? "").trim().toLowerCase());
+    let spillFx = 0, spillFz = 0;
+    if (SPILL) {
+      const plan0 = rs2.copPlan;
+      if (plan0 && plan0.valid) {
+        const m0 = rs2.sk.massTotal;
+        const w0s = rs2.omega0();
+        spillFx = -m0 * w0s * w0s * plan0.overX;
+        spillFz = -m0 * w0s * w0s * plan0.overZ;
+        const mu = (() => {
+          const v = Number(envB().SPILL_MU ?? "");
+          return Number.isFinite(v) && v > 0 ? v : 0.6;
+        })();
+        const lim = mu * m0 * 9.81;
+        const mag = Math.hypot(spillFx, spillFz);
+        if (mag > lim && mag > 1e-9) {
+          spillFx *= lim / mag;
+          spillFz *= lim / mag;
+        }
+        rs2.spillFx = spillFx;
+        rs2.spillFz = spillFz;
+      }
+    }
     const F = computeWantedForce(rs2, {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
@@ -23225,6 +23264,8 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (ch === "lat") return p.lateralEnabled && on("lat");
       return on(ch);
     });
+    F.fx += spillFx;
+    F.fz += spillFz;
     rs2.grfCmd.x = F.fx;
     rs2.grfCmd.y = F.fy;
     rs2.grfCmd.z = F.fz;
@@ -24246,11 +24287,14 @@ function stepSystem(rs2, p = DEFAULT_STEP_PARAMS) {
     }
     return rs2.keyPose;
   }
+  const KF_STATE = !["0", "false", "off"].includes(String(
+    globalThis.process?.env?.KFSTATE ?? ""
+  ).toLowerCase());
   const swingGateOff = ["0", "false", "off"].includes(String(
     globalThis.process?.env?.SWGATE ?? ""
   ).toLowerCase());
   if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
-    const kp = keySwing(s);
+    const kp = KF_STATE && rs2.state !== "SWING" && rs2.state !== "LIFT" ? KEY_POSES[STATE_TO_GAIT[rs2.state]] : keySwing(s);
     rs2.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs2.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");

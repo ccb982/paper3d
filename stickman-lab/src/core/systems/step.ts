@@ -280,10 +280,24 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   // ★★ 2026-10-06 **转正为默认**（门禁实测：默认 1.13→1.18s ★、关发力门禁 0.54→1.40s ★、
   //   钉死 DOUBLE 0.88→0.97s；"迈步停手"不变 1.34s ⇒ 门只动步态的写入，符合预期）。
   //   要回到旧行为（非摆动相也写 PSw）用 `SWGATE=0`。
+  // ★ W6 开关（`KFSTATE=0` 关）：非摆动相的关键帧取自状态（见下方长注释）
+  const KF_STATE = !['0', 'false', 'off'].includes(String(
+    (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.KFSTATE ?? '').toLowerCase());
   const swingGateOff = ['0', 'false', 'off'].includes(String(
     (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SWGATE ?? '').toLowerCase());
   if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
-    const kp = keySwing(s);
+    // ★★★★★ 2026-10-06 **W6 修复：非摆动相用"状态自己的关键帧"**
+    //   （用户：「踝被定死是什么现象」——查实：非摆动相 `s≡0` ⇒ `keySwing(0)=PSw`
+    //     （蹬离前姿势，`swAnkle=−20°`）而踝的机械限位是 **[−12°,+18°]**
+    //     ⇒ 目标顶在限位上 ⇒ **钉死在 −12°** ⇒ LOAD 的"承接脚放平 `|踝|≤12`"
+    //       测到的 12.001 正是这个钉子（**刀锋条件的真相**）。
+    //   而 `STATE_TO_GAIT[LOAD] = 'LR'`（承载响应：`swAnkle=−5°`、膝屈 18° 吸振）
+    //   —— 状态自己的关键帧本来就是对的，只是**没人用它**。
+    //   ⇒ LIFT/SWING 用摆动曲线 `keySwing(s)`；其余相用 `KEY_POSES[STATE_TO_GAIT]`。
+    //   `KFSTATE=0` 可回退（A/B）。
+    const kp = (KF_STATE && rs.state !== 'SWING' && rs.state !== 'LIFT')
+      ? KEY_POSES[STATE_TO_GAIT[rs.state]]
+      : keySwing(s);
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
     rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex, 1.05), '摆动髋·关键帧', lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), '摆动膝·关键帧', lift > 0.01);

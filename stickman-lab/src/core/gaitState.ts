@@ -43,6 +43,13 @@ import { buildGroundChain, forceChainLines } from './forceChain';
 /** deg ← rad */
 const DEG = 180 / Math.PI;
 
+/**
+ * ★ W2 开关（`STEPTRIG=0` 关）：`copPlan.fallNeeded` 应急放行迈步许可。
+ *   见 `stepPermit` 构造后的那段（"要摔倒了也别管承重腿摆动腿了"——用户定调）。
+ */
+const STEP_TRIG = !['0', 'false', 'off'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).STEPTRIG ?? '').trim().toLowerCase());
+
 export interface GaitConfig {
   // ── 载荷阈值（体重归一，SCONE / OSL 口径）─────────────────────
   /**
@@ -1178,6 +1185,12 @@ export class GaitState {
         P4_手性交替: rs.lastSwing !== sw,
         P5_稳定性: rs.mos >= cfg.mosMin && Math.abs(rs.tiltDeg) <= cfg.tiltMaxDeg,
         P6_非安全态: !rs.safe,
+        // ★★★★★ 2026-10-06 **W2：感知 → 迈步触发**（§21.13 待接线 #2；§21.11 分解层）
+        //   监督层的 `copPlan.fallNeeded`（= `actionability ≤ 0`，**脚放不下了**）
+        //   是"**必须迈**"的判据。语义是 OR（应急放行），不是 AND：
+        //     `许可 = (P1..P6 全过) ∨ (P7_感知落足 ∧ P6_非安全态)`
+        //   —— 用户定调：「**要摔倒了/也别管承重腿摆动腿了，优先稳住身体**」。
+        //   ⚠ P6 必须仍成立（安全态下不许迈，那是"停手让平衡全权"）。
       },
       {
         loadFrac: rs.loadFrac[sw], releaseThr: cfg.loadReleaseFrac,
@@ -1186,6 +1199,16 @@ export class GaitState {
         mos: rs.mos, tiltDeg: rs.tiltDeg, safe: rs.safe ? 1 : 0,
       },
     );
+    // ★★★★★ 2026-10-06 **W2：感知 → 迈步触发**（§21.13 待接线 #2）：**OR 语义**
+    //   监督层 `copPlan.fallNeeded`（= 脚放不下、必摔）⇒ **应急放行**：
+    //     `许可 = (P1..P6 全过) ∨ (fallNeeded ∧ P6_非安全态)`
+    //   —— 用户：「**要摔倒了/也别管承重腿摆动腿了，优先稳住身体**」。
+    //   ⚠ P6（非安全态）仍必须成立：安全态下不迈（那是"停手让平衡全权"）。
+    //   `STEPTRIG=0` 关闭（A/B）。`fallNeeded` 不可用时**不放行**（保守）。
+    if (STEP_TRIG && rs.stepPermit && !rs.safe && (rs.copPlan?.fallNeeded ?? false)) {
+      rs.stepPermit.all = true;
+      rs.stepPermit.values.emergencyStep = 1;
+    }
 
     // ── 迁移：**只有三条路** ────────────────────────────────
     //   ① 验收通过 + 最短驻留 ⇒ 进下一态（固定环）
