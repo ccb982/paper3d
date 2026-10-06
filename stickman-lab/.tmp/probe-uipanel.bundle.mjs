@@ -15161,6 +15161,7 @@ var init_ragdoll = __esm({
        * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
        */
       footLoadFrac(dt) {
+        const dStep = dt > 1e-9 ? dt : this.physicsDt > 1e-9 ? this.physicsDt : 1 / 120;
         const sumOne = (side) => {
           const cols = this.soleCols[side];
           let f = 0;
@@ -15169,7 +15170,7 @@ var init_ragdoll = __esm({
             this.world.contactPairsWith(col, (other) => {
               this.world.contactPair(col, other, (mf) => {
                 if (mf.numContacts() === 0) return;
-                for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+                for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dStep;
               });
             });
           }
@@ -16641,8 +16642,9 @@ function readSupport(doll, out) {
   }
   let cx, cz, halfX, halfZ;
   if (inL && inR) {
-    const fL = inL ? doll.footLoadFrac(0)[0] : 0;
-    const fR = inR ? doll.footLoadFrac(0)[1] : 0;
+    const flr = doll.footLoadFrac(0);
+    const fL = inL ? flr[0] : 0;
+    const fR = inR ? flr[1] : 0;
     const sum = fL + fR;
     if (Number.isFinite(sum) && sum > 1e-6) {
       const uL = fL / sum, uR = fR / sum;
@@ -17380,6 +17382,16 @@ var init_rigState = __esm({
       comAz = 0;
       /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
       comAx = 0;
+      /**
+       * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
+       *
+       *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
+       *   **不能**从 `grfCmd.x` 判断 —— 实测它精确跟踪到 396N，而关节上一动不动。
+       *   必须有一个量能证明"力真的落到关节上了"。0 = 又断了。
+       */
+      sagJfTau = 0;
+      /** 矢状链前馈让位的轴数（`requestHold` 的真实生效数） */
+      sagJfHeld = 0;
       /** 上一拍的 vx（算 comAx 用） */
       vxPrev2 = 0;
       /** 上一拍的 vz（算 comAz 用） */
@@ -21731,7 +21743,7 @@ function computeWantedForce(rs, p, on) {
     const aDesZ = -kp * errZDead - kd * vzDead;
     const mass = p.weight / 9.81;
     if (on("lat")) {
-      const halfZ = Math.max(0.02, rs.support.halfZ);
+      const halfZ = Math.max(0.02, rs.support.halfZActive);
       const marginZ = Math.max(0, halfZ * LAT_MARGIN_RHO - Math.abs(errZ));
       const fMaxLat = Math.min(p.maxLateral, mass * 9.81 * marginZ / Math.max(0.2, h));
       comp.lateral = clamp(mass * h * aDesZ, fMaxLat);
@@ -22230,6 +22242,24 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (i2 >= 0) chain.push(i2);
     }
     doll.jacobianTorque(F.fx, F.fy, F.fz, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+    rs.sagJfTau = 0;
+    rs.sagJfHeld = 0;
+    const sagJfOn = on("sagJf");
+    const sagJfHold = sagJfOn && on("sagJfHold");
+    const sagJfSpine = OFF.has("sagJfSpine");
+    for (let i2 = 0; sagJfOn && i2 < chain.length; i2++) {
+      const jj = chain[i2];
+      if (jj === jAnk) continue;
+      if (!sagJfSpine && (jj === jSp1 || jj === jSp2 || jj === jSp3)) continue;
+      const t = TMP_TAU[jj * 3 + 2];
+      if (sagJfHold) {
+        rs.requestHold(jj, 2, "balance", "\u77E2\u72B6J\u1D40F\u8BA9\u4F4D");
+        rs.sagJfHeld++;
+      }
+      if (Math.abs(t) < 0.05) continue;
+      rs.requestTorque(jj, 2, t, "balance", "\u77E2\u72B6J\u1D40F");
+      rs.sagJfTau += Math.abs(t);
+    }
     if (jHip >= 0 && latOwnsAbduction) {
       doll.jointWorld(jHip, TMP_JOINT);
       const hipY = TMP_JOINT[1];

@@ -206,8 +206,11 @@ export function readSupport(doll: Ragdoll, out: Support): Support {
     //   · 一脚独承 ⇒ `cz` 完全等于那只脚自己的中心（等价于单腿分支）
     //
     //   权重用 `footLoadFrac`（正规回读接口，Σ 载荷归一）。任一项读不到则退回平均。
-    const fL = inL ? doll.footLoadFrac(0)[0] : 0;
-    const fR = inR ? doll.footLoadFrac(0)[1] : 0;
+    // ★ 一次调用取两脚（`footLoadFrac` 返回 `[左, 右]`，参数是 **dt** 不是 side）。
+    //   dt 传 0 已由 `Ragdoll.footLoadFrac` 内部兜底成本机物理步长（见那里的注释）。
+    const flr = doll.footLoadFrac(0);
+    const fL = inL ? flr[0] : 0;
+    const fR = inR ? flr[1] : 0;
     const sum = fL + fR;
     if (Number.isFinite(sum) && sum > 1e-6) {
       const uL = fL / sum, uR = fR / sum;

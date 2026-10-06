@@ -1822,6 +1822,19 @@ soleBlockLabels(side: 0 | 1): string[] {
    * 取法与 `tools/probe-coact` 一致：Σ|n_y·冲量| / dt，取绝对值 ⇒ 与法向符号约定无关。
    */
   footLoadFrac(dt: number): [number, number] {
+    // ★★★ 2026-10-06 修（`probe:sagchain` 顺带查出）：**`dt = 0` 会让本函数恒返回 NaN**。
+    //
+    //   机理：下面算的是 `f += |impulse| / dt`。调用方 `posture.ts:209` 传的是
+    //   `doll.footLoadFrac(0)`（把一个**布尔式的 0** 当 dt 传进来了），于是
+    //     · 有接触 ⇒ `fl = fr = Infinity` ⇒ `sum = Infinity` ⇒ `fl/sum = NaN`
+    //     · `posture.ts` 拿到 `NaN` ⇒ `Number.isFinite(sum)` 为假
+    //       ⇒ 走**未加权平均**的兜底分支
+    //   ⇒ 那段"按载荷加权"的修复（`posture.ts:191-207` 注释，明确写着这是
+    //     「单腿交接永远不启动」的结构性原因）被这一行调用**整体废掉**。
+    //
+    //   修法：`dt` 非正时**退回本机自己的物理步长**（`driveMotors` 每拍更新），
+    //   再兜底 1/120。⇒ 调用方再传 0 也不会坏（旧调用点保持兼容）。
+    const dStep = dt > 1e-9 ? dt : (this.physicsDt > 1e-9 ? this.physicsDt : 1 / 120);
     // ★★★ 2026-10-06 修（实测 `tools/dbg-grip`）：原来读 `this.soleCol[side]`
     //   —— **单个** collider，而每只脚有 **7 个**鞋底 collider
     //   （`soleCols[0].length = 7`：foot 4 + arch 2 + mfoot 1）。
@@ -1848,7 +1861,7 @@ soleBlockLabels(side: 0 | 1): string[] {
             // ★ 不要按法向过滤：自碰撞是关的（GROUPS_SELF 只和地面碰），
             //   鞋底上的接触对**只可能**是地面，加上 |n_y|>0.5 的过滤反而把
             //   全部接触滤掉（实测载荷恒为 0 ⇒ 份额永远是 0.5/0.5）。
-            for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dt;
+            for (let k = 0; k < mf.numContacts(); k++) f += Math.abs(mf.contactImpulse(k)) / dStep;
           });
         });
       }

@@ -180,7 +180,16 @@ export function computeWantedForce(
       //      `gaitState.ts:302` 的 `X7 = rs.mos >= permitMosMin`（捕获点出界就
       //      迈步）此前与本通道完全脱节 —— 状态机知道要迈步，平衡系统还在
       //      同方向加力，两个系统互相打架。现在两者都挂在捕获点上。
-      const halfZ = Math.max(0.02, rs.support.halfZ);
+      // ★★★ 2026-10-06 修：限幅的**半宽必须用"并集"**（`halfZActive`），不是加权平均。
+      //   物理：判据是「**捕获点必须留在支撑多边形内**」（Pratt 2006 / Stephens 2007）。
+      //   双脚并立时，净 CoP 可以在**两脚足迹的并集**里任意分配（把载荷在两脚间搬），
+      //   所以支撑多边形的侧向半宽 = 两脚外缘之间的一半（实测 ≈253mm）。
+      //   而 `halfZ`（按载荷加权的**单脚**半宽，≈75mm × ρ=0.6 ⇒ 45mm）描述的是
+      //   「基准面有多宽」，**不是**「CoP 能走多远」——
+      //   拿它当限幅 ⇒ 重心一漂过 45mm 就把侧向力**清零**。
+      //   实测后果：整个倒地过程 `comp.lateral ≡ 0`（`probe:sagchain` 的 `F.fz` 列全 0），
+      //   侧向完全无人抵抗 ⇒ `com.z` 单调冲到 542mm、`vz` 1147mm/s。
+      const halfZ = Math.max(0.02, rs.support.halfZActive);
       const marginZ = Math.max(0, halfZ * LAT_MARGIN_RHO - Math.abs(errZ));
       const fMaxLat = Math.min(p.maxLateral, mass * 9.81 * marginZ / Math.max(0.2, h));
       comp.lateral = clamp(mass * h * aDesZ, fMaxLat);

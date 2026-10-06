@@ -1375,6 +1375,65 @@ export function balanceSystem(
       if (i2 >= 0) chain.push(i2);
     }
     doll.jacobianTorque(F.fx, F.fy, F.fz, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
+
+    // ══════════════════════════════════════════════════════════════
+    // ★★★ ④c **矢状链前馈落地**（2026-10-06 修一处死代码）
+    // ══════════════════════════════════════════════════════════════
+    //   病灶：上一行算出的完整力（实测 `F.fx` 从 28 涨到 396 N，精确跟踪
+    //   `aDesX = −kp·(capX−stanceX) − kd·vx`）写进 `TMP_TAU` 后**没有消费者** ——
+    //   全文唯一读 `TMP_TAU` 的地方在块⑤，那里又重算了一遍、只传横向力。
+    //   ⇒ 矢状力从未落地。实测后果（`probe:sagchain`、`probe:rescue`）：
+    //     本 rig **向后单调发散** `vx → −1430 mm/s`、倾角 1.15 s 冲到 92° 倒地。
+    //
+    //   为什么必须同时 `requestHold`：实测 `hip/2`、`knee/2`、`spine*/2` 的位置
+    //   伺服**每拍饱和到 ±τmax 且变号**（±200 / ±150 / ±120）⇒ 时间积分≈0
+    //   （净冲量零）、而且盖掉前馈。让位后位置环只剩阻尼，定量支撑全由
+    //   `τ = JᵀF` 给 —— 就是 `RagdollOptions` 注释里那个"逆动力学模式"。
+    //
+    //   ⚠ **只取矢状轴（`ax === 2`）且跳过踝**：
+    //     · `hip/0` 归块④自己的髋外展律（下面 1400 行）；
+    //     · `foot/2` 归块⑥的踝 VIP —— 它已饱和，但那是 **flat-foot 约束**的
+    //       正确行为（CoP 到脚掌边缘后踝力矩自动饱和，Michaels & Ting 2025）；
+    //     · `/1` 是扭转轴，`τ=JᵀF` 在它上面的分量本就≈0。
+    //   碰上面任何一条都是**同轴双写**（本项目栽过四次，门禁 `probe:axisown` 会报）。
+    //
+    //   ⚠⚠ 让位是**每拍**的（`rs.holdList` 每拍清空，见 `arbitrate`）：
+    //     所以本块必须每拍都调 `requestHold`，一旦不调位置伺服**立刻回来**。
+    rs.sagJfTau = 0;
+    rs.sagJfHeld = 0;
+    const sagJfOn = on('sagJf');
+    const sagJfHold = sagJfOn && on('sagJfHold');
+    // ★★★ 2026-10-06 **默认不碰脊柱**（用户实测反馈：「腰不发力了，开始对折了」）。
+    //
+    //   病因：`requestHold` 会把该轴位置伺服的 **P 项置零**（只留阻尼）。
+    //   脊柱矢状轴的主人按 `AXIS_OWNERSHIP` 是 `postureSag`（`mode:'pos'`）——
+    //   我把它一起让位，等于**把腰的姿态伺服关掉了** ⇒ 躯干自由对折
+    //   （实测 `tilt` 冲到 82~123°，肉眼就是"腰不发力、对折"）。
+    //
+    //   ⇒ 职责边界：**腿的矢状支撑**（hip/knee）走前馈；
+    //     **躯干的矢状姿态**仍由 `postureSag` 的位置伺服负责。
+    //   `sagJfSpine` 消融 = 把脊柱也拉进前馈（仅用于对照，不进默认路径）。
+    // ⚠ 语义取反：`OFF` 里**列出** `sagJfSpine` 才把脊柱拉进前馈（仅用于对照）。
+    //   不能用 `on('sagJfSpine')` —— 它默认 true，等于"默认就让位脊柱"，正是上面的病因。
+    const sagJfSpine = OFF.has('sagJfSpine');
+    for (let i2 = 0; sagJfOn && i2 < chain.length; i2++) {
+      const jj = chain[i2]!;
+      if (jj === jAnk) continue;                 // 踝归块⑥，绝不双写
+      // 默认**跳过**脊柱：腰的姿态归 `postureSag`（消融 `sagJfSpine` 才拉进来对照）
+      if (!sagJfSpine && (jj === jSp1 || jj === jSp2 || jj === jSp3)) continue;
+      // 只取矢状分量；脊柱的矢状轴（`spine*/2`）同样让位 ——
+      // 否则力少了脊柱那一份就不等于上层要的 `F`（虚功分配是整条链的）。
+      const t = TMP_TAU[jj * 3 + 2]!;
+      // A/B 开关：`sagJfHold` 消融 = **只给力矩、不让位**（位置伺服照常跑）
+      //   用途：分离"力矩没落地"与"让位后的阻尼顶轨"两件事。
+      if (sagJfHold) {
+        rs.requestHold(jj, 2, 'balance', '矢状JᵀF让位');
+        rs.sagJfHeld++;
+      }
+      if (Math.abs(t) < 0.05) continue;
+      rs.requestTorque(jj, 2, t, 'balance', '矢状JᵀF');
+      rs.sagJfTau += Math.abs(t);
+    }
 // ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
     //   strategy ... the totally dominant defence」；定量见 Neumann 2010 /
     //   Inman 1947 / Pandy 2010），作用在 `hip_${sup}/${HIP_ABD_AXIS}`。
