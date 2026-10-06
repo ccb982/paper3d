@@ -473,8 +473,32 @@ export function buildQpAxes(
     //   两个真主人 ⇒ `axisConflicts` 增并拒收 ⇒ QP 静默失效（实测 6 处冲突）。
     //   ⇑ 侧向由 `latTransfer` 负责，QP 管知道其余轴。
     [`hip_${sup}`, 1], [`hip_${sup}`, 2],
-    ['spine1', 0], ['spine1', 2],
-    ['spine2', 0], ['spine2', 2],
+    // ★★ 2026-10-06 腰的三轴**移出 QP**（依据 Winter 1996 / 1998，见下）。
+    //   QP 的等式只有**水平两行**（`wholeBodyQp.ts` 的 `Cx/Cz`），所以
+    //   腰在 QP 里既没有"该多直"的约束、也没有任何姿态项 ——
+    //   它只是被动分摊水平力矩的一个**冗余自由度**，由最小范数随意填。
+    //   实测后果（`tools/dbg-spine2`，每物理步）：
+    //       t=0.000  spine1/2 = −1.4°  τ = +14.3
+    //       t=0.050  spine1/2 = −27.2° τ = −120.0（打满）
+    //       t=0.250  spine1/2 = −43.9° τ = −120.0（限位 ±25°，超 1.8 倍）
+    //   目标恒为 0（`requestWaistSlot` 在 `DOUBLE` 相 `authority=0` ⇒ 请求 0）
+    //   ⇒ **没有任何指令折腰，是 QP 自己在把它折下去。**
+    //
+    //   文献依据：
+    //     Winter 1996 *J Neurophysiol* 75:2334 — 静立两个平衡机构完全分离，
+    //       矢状 = 踝、额状 = 髋，**腰在两张表里都不出现**。
+    //     Winter 1998 80:1211 — `Ke ≈ 850 N·m/rad` 在**踝**跖屈肌，
+    //       `Ma = R·px`（踝力矩 ∝ CoP 偏移）。
+    //     Horak & Nashner 1986 — 踝策略远端→近端，躯干最后被动参与。
+    //   ⇒ 腰不进平衡求解；它只该抵抗自重折叠（静态 3% MVC）。
+    //   ⇒ QP 要搬水平力，用**踝**（矢状，Vincent/CoP 策略）和**髋外展**（额状，
+    //     换载荷），这两条本来就已经在跑（`ankleCop` / `latTransfer`）。
+    //
+    //   ⚠ 代价（必须知道）：移出后腰在水平面内**完全不受 QP 约束**，
+    //     躯干姿态不再被 QP 主动修正 —— 这与用户「平衡系统需要能控制体态」
+    //     的要求冲突。正确形态是**躯干姿态作为一个任务**进 QP（任务空间），
+    //     而不是让腰作为冗余自由度被动分摊。这属于 #1 逆动力学的后续工作。
+
   ];
   for (const [nm, ax] of spec) {
     const ji = idx(nm);
@@ -611,11 +635,33 @@ export function wholeBodyBalanceTick(
   //   ⚠ `addTorque` **不调** `claimAxis`（见 `rigState.ts:924` 的注释），
   //     所以这一行是 QP 唯一被记入 `holdMask` 的地方 —— 去掉它，
   //     `mg` 与位置伺服的力矩会同时存在，且**没有任何机制会报告这件事**。
-  for (let i = 0; i < axes.length; i++) {
-    const a = axes[i]!;
-    if (Math.abs(out.tau[i]!) < 1e-6) continue;   // 只让位给真正要出力的轴
-    rs.requestHold(a.joint, a.axis, 'balance', `全链QP/${sk.joints[a.joint]!.name}/${a.axis}`);
-  }
+  // ★★★ 2026-10-06 **撤回这一步**（`probe-readout` ⑤ 实测腰在 0.18s 内被推到限位 3.2 倍）。
+  //
+  //   原本的想法是「QP 接管 ⇒ 位置环退化为纯阻尼 ⇒ 等式里的 mg 不双计」。
+  //   但实测表明**在腰上这个前提根本不成立**，而且失效方式很坏：
+  //
+  //     · 让位后 `err = −kD·ω_rel`（纯阻尼），于是该轴**唯一的**回复力矩
+  //       来自 `enforceLimits`，而它的权限虽然刚被修好（3× 马达），
+  //       回收速度上限 36 rad/s 仍然需要约 **10 个物理步**才能把 55° 拉回 25°；
+  //       期间腰的姿态目标（`postureSag`/`postureLat`，位置环通道）被完全忽略。
+  //     · 实测：让位后 `spine1/2` 从 −1.4° 单调冲到 **−79.6°**（限位 ±25° 的 3.2 倍），
+  //       `spine1/0` 冲到 **+54.5°**（限位 ±15° 的 3.6 倍）。
+  //     · 四轴 τmax 全耗在对抗限位冲量上 ⇒ 力矩全变成内耗，
+  //       一点都变不成地面上的力 ⇒ CoM 从 0.962 掉到 0.866（0.25 s 内）。
+  //
+  //   ⇒ 正确的顺序**反过来**：竖向支撑不该靠「QP 让位 + 等式里放 mg」，
+  //     而该靠**接触约束**（λ-QP 的单边/摩擦锥/CoP 那一路，见 `grfQp.ts`）——
+  //     地面法向力本来就不需要关节力矩去"造"。
+  //     关节力矩该负责的是**力矩平衡**（把 CoP 搬到该在的位置），那部分才交给 QP。
+  //
+  //   ⇒ 在那之前：**不**让位。让位置环继续给腰做姿态保持（它至少能守住限位），
+  //     QP 的 τ 走 `addTorque` **并联**叠加（力矩通道与位置环在 `driveMotors`
+  //     里相加、最后按 τmax 饱和，两条路径不冲突）。
+  //
+  //   ⚠ 这是**撤回一次已经写下的机制**，不是新增。原因记录在案，
+  //     免得后面有人看到「等式里有 mg 却不让位」又困惑。
+  //   void requestHold(...)  ← 保留位置标记，等 λ-QP 接进 `balance` 后再定
+  void 0;
   void DEFAULT_WANTED_FORCE;
   return { tau: out.tau, names, feasible: out.feasible, residual: out.residual,
     fDesX: fx, fDesY: fy, fDesZ: fz, nAxes: axes.length,

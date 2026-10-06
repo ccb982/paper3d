@@ -991,16 +991,38 @@ export function balanceSystem(
     //    ⇒ `enforceLimits` 每帧硬拉回，净效果比饱和更差，且与髋反向。
     //    ⇒ 腰矢状保持 `0.02 / 15°`（= 关节限位内、请求不越界）。
     //    矢状稳定交给**矢状髋的捕获点律**（下面 `ksagRatio/ksagZeta`）。
-    const spineTgt = clamp(
-      -p.kTorsoHold * rs.pitchDeg - p.kTorsoHoldD * rs.pitchRate,
-      p.maxTorsoDeg,
-    );
-    for (const j of [jSp1, jSp2, jSp3]) {
-      if (j !== undefined && j >= 0 && on('torso')) {
-        rs.requestAngle(j, 2, spineTgt, 'balance', '腰矢状姿态保持');
-      }
-    }
-
+    //
+    // ══════════════════════════════════════════════════════════════
+    // ★★★ 2026-10-06 **腰矢状主动 PD 整体删除**（`requestAngle(spine*/2)` 那条）。
+    //
+    // 依据（人类文献，两篇互相独立）：
+    //   Winter 1996, *J Neurophysiol* 75(6):2334 — 静立时两个平衡机构
+    //     **完全分离**，且**都不在腰上**：
+    //       双脚并行站姿：矢状(A/P) = **踝**跖屈/背屈；额状(M/L) = **髋**外展/内收
+    //       *"A straight line joining the individual COPs under each foot is the
+    //         load/unload line controlled by the **hip** mechanism. At right
+    //         angles to this load/unload line ... is the independent control
+    //         line by the **ankle** muscles."*
+    //       —— 腰在两张表里都**不出现**。
+    //   Winter 1998, *J Neurophysiol* 80(3):1211 — 定量：
+    //       矢状刚度在踝跖屈肌，`Ke ≈ 850 N·m/rad ≈ 15 N·m/deg`
+    //       **COP 是控制量、COM 是被控量**；`Ma = R·px`（踝力矩 ∝ CoP 偏移）
+    //       COP 与 COM **同相**（滞后 4 ms）
+    //       额状靠**髋换载荷**："the hip moments change in phase with the sway,
+    //       causing the **unloading of one limb and instantaneous loading of
+    //       the other**"
+    //   Horak & Nashner 1986 — 踝策略的肌肉激活是**远端→近端**
+    //     （ankle → thigh → trunk），躯干肌肉**最后被动参与**，不是发起者。
+    //
+    // ⇒ 腰**不参与平衡**。它唯一的作用是抵抗自重下的折叠（Jeffs / Shirazi-Adl：
+    //   静立时腰多裂肌仅 **3% MVC**，>5% 即疲劳不可行）。
+    // ⇒ 矢状平衡交给**踝**（`kVipAnkle` 那套 VIP），额状交给**髋外展**（`latTransfer`）。
+    //
+    // ⚠ 这条 PD 之前的问题（实测 `tools/dbg-pitch`）：
+    //     `kTorsoHoldD == kTorsoHold`，但 `rate`(°/s) 量级是 `pitch`(°) 的 10~20 倍
+    //     ⇒ 阻尼项单独饱和到 ±14.9°。躯干只在轻轻晃（pitch < 3°），腰输出已打满。
+    //   而且同一目标角发给 3 个串联脊柱关节 ⇒ 累计 3× = 45° > 单段限位 25°。
+    //
     // ── 腰（额状）精调 + 骨盆载荷转移 ───────────────────────────
     //   用户 2026-10-04：「查腰和盆骨的发力情况…腰和盆骨在平衡保持的
     //   情况下，还要尽可能把重心移到支撑腿上，**而且不能太过**」。
@@ -1113,14 +1135,18 @@ export function balanceSystem(
     //   取小），保证不撞脊柱关节限位、不进入 Inman 表里那个靠"力臂变长"
     //   才能把外展肌活动归零的代偿档位。
     //   意图为 0 时本系统仍然是纯保护伺服（只有静态保持 + 阻尼）。
-    if (on('latwaist') && jSp1 >= 0 && rs.waistTrim !== 0) {
-      // 正 = 推向 +Z（实测标定）。脊柱三段均分 ⇒ 得到自然的弧度而非单段折角。
-      // ⚠ 主/精调必须**同向叠加**：文献里两者都是"把躯干倒向支撑侧"，
-      //   反向叠加会互相抵消 ⇒ 又变成一个"看着在接线、实际互相抵消"通道。
-      for (const j of [jSp1, jSp2, jSp3]) {
-        if (j !== undefined && j >= 0) rs.requestAngle(j, 0, rs.waistTrim / 3, 'balance', '腰额状精调/卸载髋');
-      }
-    }
+    //
+    // ⚠⚠ 2026-10-06：**这条 `requestAngle` 通道整个删除**（连同上面的 `waistTrim`
+    //   伺服），依据是 Winter 1996 / 1998 的两个机构表 —— 额状平衡由
+    //   **髋外展换载荷**（`latTransfer`，`τ = m·g·Δz`）负责，**不在腰上**。
+    //
+    //   实测它为什么有害（`tools/dbg-who`，腰/额状）：
+    //     目标 0.160（归一化）→ 折 15°，三段累计 → 折到 +17.5°，
+    //     且 `ownerLabel` 恒为「腰额状精调/卸载髋」而关节继续滑到 +36.1°
+    //     （限位 ±15°）⇒ **目标被设了、但没有执行力**（因为同时有 `requestHold`）。
+    //
+    //   ⇒ 额状搬运唯一正确的载体是**髋外展**（换载荷），腰不承担。
+    //     `waistTrim` 保留为**诊断量**（UI 回读「还差多少到支撑脚」）。
   }
 // ══════════════════════════════════════════════════════════════
   //   ⚠ 这里原来**又抄了一份** `requestHold(hip/2)`+`requestHold(knee/2)`

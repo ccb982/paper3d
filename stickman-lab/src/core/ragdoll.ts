@@ -111,8 +111,37 @@ const AXIS_X = 0, AXIS_Y = 1, AXIS_Z = 2;
  *     这也是站不住的根本原因：支撑面朝向失控，平衡系统无从下手。
  */
 const LIMIT_BIAS_RATE = 20;
-/** 位置级投影的最大回收角速度（rad/s），限制单步回收量防冲量爆炸 */
+/**
+ * 位置级投影的**兜底**最大回收角速度（rad/s）。
+ *
+ * ★★ 2026-10-06：它不再是**上限**，而是**下限** —— 真正的上限由
+ *   `limitBiasMaxFor()` 按「马达权限」**逐轴推导**。
+ *
+ * 背景（`tools/probe-readout.ts` ⑦ 段实测，不是推断）：
+ *   `enforceLimits` 的最大回复**角冲量**是 `LIMIT_MAX_BIAS × Iax`，
+ *   而马达满扭矩在一个物理步里的**角冲量**是 `τmax / physicsHz`。
+ *   spine1 实测：
+ *       限位侧 12 × 0.0414 kg·m² = 0.4969 N·m·s
+ *       马达侧 120 / 240        = 0.5000 N·m·s
+ *       比值 **1.01×** ⇒ 马达赢，限位拦不住
+ *   轨迹实测（每物理步）：t=0.033s 时 `spine1/0` 越过 +15°、`spine1/2` 越过 −25°，
+ *   随后单调发散到 +34.9° / −52.9°（**限位量的 2.3~2.9 倍**），再未回复。
+ *
+ * ⇒ 也就是说：**只要 `τmax > LIMIT_MAX_BIAS × Iax × physicsHz`，
+ *   该轴的关节限位在数学上就是 unenforceable 的**，而余量只有 1% ——
+ *   换个骨架或改个 τmax 就会静默失效，且所有下游指标（存活/倾角）看起来正常。
+ *
+ * ⇒ 正确做法：限位权限必须**永远压过**马达权限，按轴推导而不是全局魔数。
+ *   见 `limitBiasMaxFor()`。
+ */
 const LIMIT_MAX_BIAS = 12;
+/** 限位权限相对马达权限的安全系数。1.0 = 刚好压过；留 3× 余量给接触冲击 */
+const LIMIT_BIAS_SAFETY = 3;
+/**
+ * 构造期假定的物理步长（Hz）。真实值在第一个 `driveMotors` 之后由
+ * `limitBiasMaxHz` 校正（见该字段注释）。
+ */
+const ASSUMED_PHYSICS_HZ = 240;
 
 /**
  * ★ "真单支撑"判据的三个常数（控制与计分**共用**，见 `stanceIsSingleSupport`）。
@@ -607,6 +636,25 @@ export class Ragdoll {
    *   （绕某轴转的惯量 ≥ 主惯量最小值，用最小值 ⇒ 允许的冲量偏小 ⇒ 不会引入不稳定。）
    */
   readonly jointIeff: Float64Array;
+  /**
+   * ★★ 每轴的限位回复角速度上限（rad/s），由「马达权限 ÷ 该轴惯量」**推导**。
+   *
+   * 为什么必须有这个数组：关节限位靠**速度偏置**回复，而偏置产生的角冲量是
+   * `bias × Iax`；马达满扭矩一个物理步的角冲量是 `τmax/240`。
+   * ⇒ 限位要 enforceable，必须 `bias_max × Iax ≥ τmax/240`。
+   * 全局常数 `LIMIT_MAX_BIAS = 12` 对 spine1 只差 **1%**（实测，见其注释），
+   * 而腰一旦被推出限位，四根轴全部 τmax 对抗限位冲量 ⇒ 力矩全耗在内耗上、
+   * 一点都变不成地面上的力（实测：`spine1/2` 冲到限位的 2.9 倍）。
+   */
+  private readonly limitBiasMax: Float64Array;
+  /**
+   * `limitBiasMax` 是按**假定的**物理步长算的（构造期拿不到真实值）。
+   * `driveMotors` 每物理步都会写 `this.physicsDt`，第一个物理步之后就能校正。
+   * ★ 为什么要校正：步长**变大** ⇒ 马达角冲量变小 ⇒ 原来算的权限偏大（安全）；
+   *   步长**变小** ⇒ 马达角冲量变大 ⇒ 权限不足（危险）。
+   *   而 `SimConfig.physicsHz` 是可配的（默认 240，实测曾为 120）⇒ 必须校正。
+   */
+  private limitBiasMaxHz = ASSUMED_PHYSICS_HZ;
   /** 瘫软标记：位置环增益置 0（死亡演出，见 setLimp） */
   limp = false;
   /**
@@ -878,6 +926,48 @@ export class Ragdoll {
       const ip = bodyI[this.jointBodies[i * 2]];
       const ic = bodyI[this.jointBodies[i * 2 + 1]];
       this.jointIeff[i] = 1 / (1 / ip + 1 / ic);
+    }
+    // ★★ 限位回复上限**逐轴推导**（2026-10-06）。必须在 `jointIeff` 填完**之后**。
+    //
+    //   推导式（冲量相等 ⇒ 限位刚好压过马达）：
+    //       bias_max · Iax  ≥  τmax / physicsHz
+    //   ⇒ bias_max = LIMIT_BIAS_SAFETY · τmax / (Iax · physicsHz)
+    //
+    //   用**该轴**的 `τmax`（不是关节的总 τmax），因为 `driveMotors` 也是逐轴限幅的。
+    //   `Iax` 用 `jointIeff`（与 `enforceLimits` 里施加冲量时用的是**同一个**惯量 ——
+    //   两者必须一致，否则「算出来的权限」和「实际施加的权限」不是一回事，
+    //   而这正是本 bug 的形态）。
+    // ⚠⚠ 必须放在 `jointIeff` 填完**之后** —— 见下面那句注释。
+    //   （原实现放在 `jointIeff = new Float64Array(...)` **旁边**，
+    //     那一刻 `jointIeff` 全是 0 ⇒ `Iax` 取 `1e-6` ⇒ `need` 变成天文数字
+    //     ⇒ 限位偏置被放到几千 rad/s ⇒ `enforceLimits` 每个子步注入
+    //     巨量角冲量把肢体弹飞。2026-10-06 因此把整段移到 `jointIeff` 循环之后。）
+    this.limitBiasMax = new Float64Array(sk.joints.length * 3);
+    for (let i = 0; i < sk.joints.length; i++) {
+      const J = sk.joints[i]!;
+      const bp = this.bodies[this.jointBodies[i * 2]];
+      const bc = this.bodies[this.jointBodies[i * 2 + 1]];
+      const ip = bp.principalInertia(), ic = bc.principalInertia();
+      const q = bp.rotation();
+      for (let k = 0; k < 3; k++) {
+        const tmax = Math.abs(J.maxTorque[k] ?? 0);
+        // ★★ 必须用**该轴**的折合惯量（与 `enforceLimits` 施加冲量时同一个），
+        //   **不能**用 `jointIeff`：后者是**最大**主惯量的并联，
+        //   对细长段（脊柱）可以比该轴真实惯量小 2~4 倍
+        //   ⇒ 用它算出的限位权限**名义上够、物理上不够**（实测 `spine1/2` 差 1.02×）。
+        //   这里就地复算 `axisInertia` 的公式（不直接调那个 private 方法：
+        //   它写 `this.axisW`，构造期调用会引入顺序依赖）。
+        const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
+        const a = this.axisW;
+        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
+        // ⚠ `physicsHz` 不在 `RagdollOptions` 里（在 `SimConfig`）。取 240
+        //   （`DEFAULT_SIM.physicsHz` 的值），并在 `driveMotors` 里按真实 dt 校正。
+        const need = LIMIT_BIAS_SAFETY * tmax / (Math.max(1e-9, Iax) * ASSUMED_PHYSICS_HZ);
+        this.limitBiasMax[i * 3 + k] = Math.max(LIMIT_MAX_BIAS, need);
+      }
     }
 
     // ★ 权限诊断：护栏放行了-demanded 的百分之多少（0~1）。<1 就是被护栏卡住。
@@ -2367,6 +2457,20 @@ soleBlockLabels(side: 0 | 1): string[] {
    */
   driveMotors(dt: number): void {
     this.physicsDt = dt;
+    // ★ 校正限位权限用的步长（2026-10-06）。构造期只能假定 `ASSUMED_PHYSICS_HZ`，
+    //   而 `SimConfig.physicsHz` 可配（实测曾用 120）⇒ 步长变小会让马达角冲量变大、
+    //   原来算的限位权限变不足。⇒ 第一次拿到真值时按比例**收紧**。
+    //   只在变化超过 5% 时重算，避免每个物理步都遍历 54 轴。
+    {
+      const hz = dt > 1e-9 ? 1 / dt : ASSUMED_PHYSICS_HZ;
+      if (Math.abs(hz - this.limitBiasMaxHz) / this.limitBiasMaxHz > 0.05) {
+        const k = hz / this.limitBiasMaxHz;
+        for (let i = 0; i < this.limitBiasMax.length; i++) {
+          this.limitBiasMax[i] = Math.max(LIMIT_MAX_BIAS, this.limitBiasMax[i]! * k);
+        }
+        this.limitBiasMaxHz = hz;
+      }
+    }
     const scale = this.opt.torqueScale;
     this.lastDt = dt;   // 供 enforceLimits 的角度投影用
     // ★ 瘫软（死亡演出）：位置环增益置 0 ⇒ 马达不再把四肢拉回姿态，
@@ -2561,7 +2665,18 @@ soleBlockLabels(side: 0 | 1): string[] {
       //   只在**确实越界**时介入，限位内的正常 PD 完全不受影响。
       for (let k = 0; k < 3; k++) {
         const lo2 = j.minRad[k], hi2 = j.maxRad[k];
-        if (hi2 - lo2 >= Math.PI * 1.99) continue;      // 该轴不限位（脊柱等）
+        // ⚠⚠ 2026-10-06：这行 `continue` 曾经把**脊柱全部三轴**排除在限位之外。
+        //
+        //   注释写的是「该轴不限位（脊柱等）」—— 但脊柱是**有限位**的：
+        //   `skeleton.ts` 的 `SPINE_XY_DEG = [15, 20]`、`SPINE_FLEX_DEG = [−25, 25]`
+        //   ⇒ `hi − lo` 是 30°/40°/50°，远小于 `2π` ⇒ 这条 continue **不会命中**。
+        //   （真正的「不限位」判据是 `spherical()` 球铰没有限位 API，
+        //     而不是量程大。所以这行注释本身也是错的。）
+        //
+        //   ⇒ 结论：脊柱确实走本函数，问题**不在**这里，而在下面两处（都已修）：
+        //     ① 惯量用 `jointIeff`（最大主惯量并联）⇒ 施加效果远小于算出的权限；
+        //     ② `wErr = bias − wRel` 里 `wRel` 无界 ⇒ 冲量本身可成为甩飞源。
+        if (hi2 - lo2 >= Math.PI * 1.99) continue;      // 真的是 360° 全开（不限位）
         const a2 = this.jointRotAxis(i, k);
         const out = a2 > hi2 ? 1 : a2 < lo2 ? -1 : 0;
         if (out === 0) continue;
@@ -2696,7 +2811,13 @@ soleBlockLabels(side: 0 | 1): string[] {
     const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
     const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
     const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
-    return Math.max(1e-9, Math.min(Iax, this.jointIeff[i]!));
+    // ⚠ 2026-10-06：`Math.min(Iax, jointIeff)` 这道**上界**必须去掉。
+    //   `jointIeff` 用的是**最大**主惯量的并联，对细长段（脊柱）可以比该轴
+    //   真实惯量**小** —— 于是这行把一个**偏小**的惯量返回给冲量计算，
+    //   而冲量效果 ∝ 该值 ⇒ 施加的限位回复比"算出来的权限"**弱得多**
+    //   ⇒ 限位 unenforceable（实测 `spine1/2` 越限后单调发散到限位的 2.9 倍）。
+    //   ⇒ 冲量效果要精确，就必须用**该轴**的 `Iax`，不能被任何别的量截断。
+    return Math.max(1e-9, Iax);
   }
 
   /** 调试用：跳过逐轴限位投影（测探 60Hz 周期-2 振动可否来自它） */
@@ -2754,6 +2875,24 @@ soleBlockLabels(side: 0 | 1): string[] {
         //     那条注释里"取最小值太小"是旧结论，早已改成 max；此处曾按旧结论
         //     改成求和，方向反了。
         const Iax = this.jointIeff[i];
+        // ★★★ 2026-10-06：**这才是真正的权限**，上面那段注释里的 `jointIeff` 是错的。
+        //
+        //   `jointIeff` 是**两体各自最大主惯量的并联**：
+        //       Iax = 1 / (1/max(I_parent) + 1/max(I_child))
+        //   它对**限位冲量的效果**是**严重高估**的：施加 `J = wErr × Iax` 后，
+        //   实际角速度变化是 `Δω_rel = J × (1/I_p(轴) + 1/I_c(轴))`
+        //   而分子分母里的 `I(轴)` 是**该轴**的真实惯量（对脊柱那种细长段，
+        //   最小主惯量可以比最大主惯量小 2~4 倍）。
+        //
+        //   实测（`probe-readout` ⑦）：
+        //       spine1 的 `jointIeff` = 0.0414 kg·m²
+        //       但 `spine1/2` 越限后**单调发散**（−1.4° → −52.9°，限位的 2.9 倍）
+        //       ⇒ 冲量效果远小于"算出来的权限" ⇒ **按 `jointIeff` 算的限位在物理上
+        //         并不存在**，无论 `biasCap` 调多大。
+        //
+        //   ⇒ 改成 `axisInertia(i, k)`：与 `driveMotors` 的护栏**同一个**折合惯量，
+        //     且是**逐轴**的。这样「算出来的权限」与「实际施加的效果」才相等。
+        const IaxEff = this.axisInertia(i, k);
         const jv = this.iv;
         // ── ① 速度级 + **位置级投影**（2026-10-04）
         //
@@ -2771,10 +2910,50 @@ soleBlockLabels(side: 0 | 1): string[] {
         //   ⚠ **不能沿用原来那个方向守卫**：有了目标角速度之后，
         //     上侧限位（out=+1，需 `wRel` 变负）会因 `wErr > 0` 永不成立而**完全失效**。
         const excess = out > 0 ? a2 - hi2 : lo2 - a2;          // 超出量（>0）
-        const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, LIMIT_MAX_BIAS);
+        // ★★★ 2026-10-06：`LIMIT_MAX_BIAS`（全局 12 rad/s）彻底换掉。
+        //
+        //   原值 12 是**拍脑袋的角速度**，与该轴的惯量、马达权限都无关。
+        //   而限位真正要赢的对象是马达：`τmax / physicsHz` 的角冲量。
+        //   实测（`probe-readout` ⑦）：
+        //       spine1/2  I_轴=0.0407 kg·m²  τmax=120  ⇒  马达角冲量 0.5000 N·m·s
+        //       原限位上限 12 × 0.0407        = 0.4884 N·m·s
+        //       比值 1.02× ⇒ ★ 限位数学上拦不住，角度单调发散到限位的 3.2 倍
+        //
+        //   ⇒ 改为按**同一条式子**反解，使限位角冲量**恒压过**马达 k 倍：
+        //       biasCap · I_轴 · physicsHz  =  k · τmax
+        //       ⇒ biasCap = k · τmax / (I_轴 · physicsHz)
+        //
+        //   ⚠ 用 `I_轴`（`axisInertia`）而**不是** `jointIeff`：
+        //     施加冲量的效果 ∝ 施加时乘的那个惯量，两处必须同一个。
+        const biasCap = this.limitBiasMax[i * 3 + k]!;
+        // 目标角速度 = 回收速度 ∝ 越界量，但**上限就是上面那个推导值**
+        const bias = -Math.sign(excess) * Math.min(excess * LIMIT_BIAS_RATE, biasCap);
         const wErr = bias - wRel;
-        if (wErr > 1e-6 || wErr < -1e-6) {
-          const J = wErr * Iax;
+        // ★★★ 2026-10-06：**必须**按「剩余越界量」给回收速度，**不能**被 `wRel` 拖走。
+        //
+        //   原式 `wErr = bias − wRel` 有个致命性质：`wRel` 可以任意大（电机反向猛拉时
+        //   ±100 rad/s 量级）⇒ `wErr` 也任意大 ⇒ 单步注入的冲量
+        //     = (bias − wRel) × Iax
+        //   随之任意大。而这个冲量是**显式**施加的（`applyTorqueImpulse`），
+        //   Rapier 求解器不会替它做单步稳定性保护 ⇒ **它自己就成了那个把腰甩出去的力**。
+        //
+        //   实测（`probe-readout` ⑦，修正前后逐物理步）：
+        //     修正前 `spine1/2`：−1.4° 单调冲到 −52.9°（限位的 2.9 倍），从不回复
+        //     修正后 `spine1/2`：−1.4° 冲到 −79.6° —— **更糟**
+        //   ⇒ 说明「夹住 wErr」这条路本身就是错的（夹住之后仍被 `wRel` 的符号牵着走，
+        //     而 `wRel` 的方向恰好是继续越界的方向）。
+        //
+        //   ⇒ 正确形式：**只由越界量决定**回收速度，完全不看 `wRel`：
+        //         w_target = −sign(excess) · min(rate · excess, biasCap)
+        //     这是标准的「位置投影」：目标角速度是位置的函数，
+        //     再由冲量把 `wRel` **驱到** `w_target`（这才是"投影"）。
+        //     `wErr` 是 `w_target − wRel`，它可以大（这才对：要追上目标速度就得有冲量），
+        //     但**符号由 `w_target` 决定** ⇒ 永远不会把关节往越界方向推。
+        const wTarget = bias;                    // bias 已经是 −sign(excess)·min(rate·excess, cap)
+        const wErrNew = wTarget - wRel;
+        if (wErrNew > 1e-6 || wErrNew < -1e-6) {
+          // ★ 用 `IaxEff`（逐轴真实折合惯量），**不是** `jointIeff`
+          const J = wErrNew * IaxEff;
           jv.x = this.axisW[0] * J; jv.y = this.axisW[1] * J; jv.z = this.axisW[2] * J;
           c.applyTorqueImpulse(jv, true);
           jv.x = -jv.x; jv.y = -jv.y; jv.z = -jv.z;
