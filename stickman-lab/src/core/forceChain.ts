@@ -237,10 +237,16 @@ export function buildGroundChain(src: ForceSource, rs: RigState, dtPhys = 1 / 12
       f.copZ += a * (raw.copZ - f.copZ);
       f.n = raw.contactN;
     }
+    // ★★★★★ 2026-10-06 **修"L0 不自洽"**（`probe-readback` 实测差 47.8%~562%）：
+    //   本对象此前是 `{...raw, fz: 滤波值}` —— **patches（原始）与 fz/CoP（滤波）混装**，
+    //   任何按"逐块和 vs 合力"对账的人都会拿到巨大差（其实只是低通滞后）。
+    //   ⇒ 显式成对给出：**滤波后的标量**（控制用）+ **原始标量**（与 patches 同源，对账用）。
     return {
       ...raw,
       fz: f.fz, colIn: f.colIn, colOut: f.colOut,
       copX: f.copX, copZ: f.copZ,
+      // 原始（未低通）标量：与 `patches` 同源 ⇒ `Σpatches[].ny === fzRaw`
+      fzRaw: raw.fz, copXRaw: raw.copX, copZRaw: raw.copZ,
     };
   };
   const l = flt(0, rawL);

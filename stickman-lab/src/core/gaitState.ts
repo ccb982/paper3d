@@ -439,7 +439,7 @@ export const STATE_LEGS: Readonly<Record<WalkState, StateLegPlan>> = Object.free
   // 卸载蹬离：同上
   THRUST: { front: 'locked', rear: 'grounded-unlocked',
     note: '卸载蹬离：后腿解锁但仍留地',
-    ref: 'Perry `PreSwing`；`locked` 仍为真以免被 `requestSwingLegAngle` 提前抬走' },
+    ref: 'Perry `PreSwing`；`locked` 仍为真以免摆动腿被提前抬走' },
 
   // 唯一允许离地
   LIFT: { front: 'locked', rear: 'free',

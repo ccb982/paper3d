@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, DEATH_EFF, FOOTDMP_OVERRIDE, AX_PAR, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14069,7 +14069,19 @@ var init_ragdoll = __esm({
     AXIS_Z = 2;
     LIMIT_BIAS_RATE = 20;
     LIMIT_MAX_BIAS = 12;
-    LIMIT_BIAS_SAFETY = 3;
+    DEATH_EFF = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).DEATHEFF ?? ""
+    ).trim().toLowerCase());
+    FOOTDMP_OVERRIDE = Number(
+      (globalThis.process?.env ?? {}).FOOTDMP ?? ""
+    );
+    AX_PAR = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).AXPAR ?? ""
+    ).trim().toLowerCase());
+    LIMIT_BIAS_SAFETY = (() => {
+      const v = Number((globalThis.process?.env ?? {}).LBIAS ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 3;
+    })();
     ASSUMED_PHYSICS_HZ = 240;
     STANCE_CLEAR_MIN = 0.03;
     STANCE_ENTER = 0.05;
@@ -14096,7 +14108,13 @@ var init_ragdoll = __esm({
       //   ★ 这两个值由 **Rapier 力模式电机**执行（隐式积分），所以不受显式 PD 的
       //     K < 4I/dt² ≈ 7.3 那个上限约束 —— 见 createJoints 里"弓用引擎电机"那段。
       archStiffness: 400,
-      archDamping: 2,
+      // ★★★★★ 2026-10-06 **2.0 → 12**（用户实测"落地散架"的定位）：
+      //   `probe-jointtrace` 实测远端小关节速度爆：`foot_l/r` **4500/4100°/s**、
+      //   `mfoot/arch` 1000~1900°/s。前足是 0.123 kg 薄盒、`I≈2e-4`，
+      //   弓电机 K=400 ⇒ ω_n≈1414 rad/s（远超 120 Hz 步长）而 B=2.0 只给 ζ≈0.35
+      //   ⇒ 数值上就是个"抖振放大器"。B 提到 12（ζ≈2，过阻尼）把这些抽动按住。
+      //   （瘫软/死亡演出仍可复现"散架"——那是刻意的效果，见 `setLimp`。）
+      archDamping: 12,
       /**
        * ★ 中足关节（距下关节）的**被动弹簧刚度/阻尼**（N·m/rad、N·m·s/rad）。
        *
@@ -14143,7 +14161,11 @@ var init_ragdoll = __esm({
       //   「刻意把重心转移到左腿上，然后才能迈步」这条序列的第一道门就是侧向权重转移，
       //   全局高阻尼会直接把它堵死。
       angularDamping: 0.04,
-      footAngularDamping: 12,
+      // ★ 2026-10-06：12 → 30（"落地散架"定位后）。
+      //   脚 `I≈0.0018`，接触冲量 50mm 力臂即可给 Δω≈4000°/s；
+      //   `angularDamping=12` 的时间常数 83ms 压不住那次抽击，提到 30（33ms）。
+      //   ⚠ 上限：再大脚会"发木"（触地感消失）⇒ 30 是实测折中，`FOOTDMP` 可扫。
+      footAngularDamping: Number.isFinite(FOOTDMP_OVERRIDE) ? FOOTDMP_OVERRIDE : 30,
       torqueScale: 1,
       kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48,
       // ★ 可由 `KP=…` 扫（实验）
@@ -15387,9 +15409,17 @@ var init_ragdoll = __esm({
             patches,
             colIn: 0,
             colOut: 0,
+            ftMag: 0,
+            slipV: Number.NaN,
             frictionUse: Number.NaN,
             tangentValid
           };
+        }
+        let slipV = Number.NaN;
+        {
+          const b = this.shin(side === 0 ? "l" : "r");
+          const lv = b.linvel();
+          slipV = Math.hypot(lv.x, lv.z);
         }
         return {
           contactN,
@@ -15402,6 +15432,8 @@ var init_ragdoll = __esm({
           patches,
           colIn,
           colOut,
+          ftMag: tangentValid ? ft : 0,
+          slipV,
           // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
           frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
           tangentValid
@@ -16009,8 +16041,25 @@ var init_ragdoll = __esm({
        *   注意：这只改马达，**不碰 `enforceLimits`**（关节限位必须留着，
        *   否则关节会无限转圈）。
        */
+      /**
+       * ★★★★★ 2026-10-06 **瘫软 = 死亡演出**（用户：「有个很神奇的散架效果…
+       *   这个可以**敌人死后复现**这个效果」「腰部向下弯曲然后转一个圈，
+       *   也是**可以保留并复刻**的效果」）。
+       *
+       *   实测两个"魔法效果"的**机制是同一根因**：
+       *     · **散架**：远端小关节速度爆（`foot_l/r` **4500/4100 °/s**、
+       *       `mfoot/arch` 1000~1900 °/s）——接触冲量打在轻体（脚 `I≈0.0018`）上的单步抽击；
+       *     · **弯腰 + 转圈**：ball 关节**非主轴限位失效**——
+       *       `spine1/0` 折到 **179.8°**（限位 ±15°）、`spine1/1` −104.8°（扭转）、
+       *       `knee_r/0` 122.8°（偏航）⇒ 躯干从骨盆折过去 + 下半身绕长轴自由转。
+       *
+       *   ⇒ 结论：**这些效果就是"限位失效"本身**。正常游玩要修限位；
+       *     死亡演出要**故意关掉限位**（`skipLimits`）⇒ 效果**可复刻、可开关**。
+       *   `DEATHEFF=0` 可关（瘫软时也保留限位）。
+       */
       setLimp(on) {
         this.limp = on;
+        if (DEATH_EFF) this.skipLimits = on;
       }
       setMotorTargets(targets) {
         for (let i = 0; i < this.motorTarget.length; i++) {
@@ -16379,8 +16428,21 @@ var init_ragdoll = __esm({
         ax[2] = k === 2 ? 1 : 0;
         quatRotate(q.x, q.y, q.z, q.w, ax[0], ax[1], ax[2], this.axisW);
         const a = this.axisW;
-        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
-        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        let Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z;
+        let Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z;
+        const jw = new Float64Array(3);
+        this.jointWorld(i, jw);
+        const parAx = (b, Icom) => {
+          const t = b.translation();
+          const dx = t.x - jw[0], dy = t.y - jw[1], dz = t.z - jw[2];
+          const along = dx * a[0] + dy * a[1] + dz * a[2];
+          const d2 = Math.max(0, dx * dx + dy * dy + dz * dz - along * along);
+          return Icom + b.mass() * d2;
+        };
+        if (AX_PAR) {
+          Ip = parAx(p, Ip);
+          Ic = parAx(c, Ic);
+        }
         const Iax = 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic));
         return Math.max(1e-9, Iax);
       }
@@ -16416,7 +16478,11 @@ var init_ragdoll = __esm({
             const wTarget = bias;
             const wErrNew = wTarget - wRel;
             if (wErrNew > 1e-6 || wErrNew < -1e-6) {
-              const J = wErrNew * IaxEff;
+              const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
+              const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
+              let J = wErrNew * IaxEff;
+              if (J > Jcap) J = Jcap;
+              else if (J < -Jcap) J = -Jcap;
               jv.x = this.axisW[0] * J;
               jv.y = this.axisW[1] * J;
               jv.z = this.axisW[2] * J;
@@ -19036,7 +19102,12 @@ var init_rigState = __esm({
               cop: { ...this.cop.l },
               isFront: front === "l",
               isBack: front !== "l",
-              isBearer: this.loadBearer === "l",
+              // ★★★★★ 2026-10-06 **承重标识改由角色决定**（架构单一真源）：
+              //   旧实现取遗留的 `loadBearer`（由 B4 判据授予）⇒ 起步/换腿窗口里
+              //   它是 `null` ⇒ `probe-axisown` 的"角色一致性"报 211 条
+              //   "没有腿被标承重"。而用户定调「**让状态机显式决定承重腿、摆动腿**」
+              //   ⇒ 承重 = `roleSup`（`supportLeg()` 的回退链保证非空）。
+              isBearer: (this.roleSup ?? this.loadBearer) === "l",
               locked: this.locked.l
             },
             r: {
@@ -19049,7 +19120,7 @@ var init_rigState = __esm({
               cop: { ...this.cop.r },
               isFront: front === "r",
               isBack: front !== "r",
-              isBearer: this.loadBearer === "r",
+              isBearer: (this.roleSup ?? this.loadBearer) === "r",
               locked: this.locked.r
             }
           },
@@ -19336,7 +19407,11 @@ function buildGroundChain(src, rs, dtPhys = 1 / 120) {
       colIn: f.colIn,
       colOut: f.colOut,
       copX: f.copX,
-      copZ: f.copZ
+      copZ: f.copZ,
+      // 原始（未低通）标量：与 `patches` 同源 ⇒ `Σpatches[].ny === fzRaw`
+      fzRaw: raw.fz,
+      copXRaw: raw.copX,
+      copZRaw: raw.copZ
     };
   };
   const l = flt(0, rawL);
@@ -19583,7 +19658,7 @@ var init_gaitState = __esm({
         front: "locked",
         rear: "grounded-unlocked",
         note: "\u5378\u8F7D\u8E6C\u79BB\uFF1A\u540E\u817F\u89E3\u9501\u4F46\u4ECD\u7559\u5730",
-        ref: "Perry `PreSwing`\uFF1B`locked` \u4ECD\u4E3A\u771F\u4EE5\u514D\u88AB `requestSwingLegAngle` \u63D0\u524D\u62AC\u8D70"
+        ref: "Perry `PreSwing`\uFF1B`locked` \u4ECD\u4E3A\u771F\u4EE5\u514D\u6446\u52A8\u817F\u88AB\u63D0\u524D\u62AC\u8D70"
       },
       // 唯一允许离地
       LIFT: {
@@ -22981,18 +23056,25 @@ function wholeBodyBalanceTick(rs, doll, sup, opt = {}) {
     residualXYZ: out.residualXYZ
   };
 }
-var QP_NO_ANKLE, QP_AXIS_SPEC;
+var QP_TWIST, QP_NO_ANKLE, QP_AXIS_SPEC;
 var init_wholeBodyQp = __esm({
   "src/core/systems/wholeBodyQp.ts"() {
     "use strict";
     init_wantedForce();
-    QP_NO_ANKLE = !["0", "false", "off"].includes(String(
+    QP_TWIST = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).QPTWIST ?? ""
+    ).trim().toLowerCase());
+    QP_NO_ANKLE = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).QPNK ?? ""
     ).trim().toLowerCase());
     QP_AXIS_SPEC = Object.freeze([
       { joint: "foot", axes: Object.freeze(QP_NO_ANKLE ? [0, 1] : [0, 1, 2]) },
       { joint: "knee", axes: Object.freeze([0, 1, 2]) },
-      { joint: "hip", axes: Object.freeze([1, 2]) }
+      // ★★★★★ 2026-10-06：`hip/1`（**扭转轴**）默认**摘掉**（`QPTWIST=1` 可恢复）。
+      //   实测（`probe-yaw`）：落地后整机转圈的真凶是 `hip_l/1` 累积（+55° vs 限位 ±40°）
+      //   + `spine1/1` 累积（−56°）⇒ 骨盆世界偏航 0→48°（用户：「**还在转圈**」）。
+      //   扭转轴对平衡**没有价值**（髋屈伸/外展才是承力轴），QP 驱动它只会拧转身体。
+      { joint: "hip", axes: Object.freeze(QP_TWIST ? [1, 2] : [2]) }
     ]);
   }
 });
@@ -23304,6 +23386,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       for (let i2 = 0; i2 < chain.length; i2++) {
         const jj = chain[i2];
         for (let ax = 0; ax < 3; ax++) {
+          if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax];
           if (Math.abs(t) > 0.05) {
             rs.requestTorque(jj, ax, t, "balance", `\u6A2A\u5411\u9A71\u52A8\xB7${drive}\u817F(J\u1D40F)`);
@@ -23585,7 +23668,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LATPLAN, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -23595,6 +23678,9 @@ var init_balance = __esm({
     init_wholeBodyQp();
     TRUNK_STIFF_MAX = 350;
     TAU_CAP_FRAC = 0.35;
+    LAT_SWING_FULL = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).LATSWING ?? ""
+    ).trim().toLowerCase());
     LATPLAN = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATPLAN ?? ""
     ).toLowerCase());
@@ -23638,7 +23724,7 @@ var init_balance = __esm({
         // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
         //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
         //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold"]
+        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold", "dipHip"]
       },
       // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
       //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
@@ -23680,7 +23766,9 @@ var init_balance = __esm({
         role: "ankleCop",
         mode: "tau",
         channel: "ankleCop",
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean"]
+        // ★ `copSet`（显式 CoP 整定，与 `ANKLE_COP` 同一根轴的另一模式）、
+        //   `trunkRoll`/`fallResp`（上身修正的增益门，不另占轴）—— 2026-10-06 门禁 A2 查出的漏登记。
+        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "copSet", "trunkRoll", "fallResp"]
       },
       // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
       //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
@@ -23702,14 +23790,10 @@ var init_balance = __esm({
       //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
       //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
       //   ⚠ `hip/0`（外展轴）**不进 QP**：它的 tau 主人是 `latTransfer`（已登记）。
-      {
-        joint: "hip",
-        axis: 1,
-        role: "grfJacobian",
-        mode: "tau",
-        channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
-      },
+      // ★ 2026-10-06：`hip/1`（**扭转轴**）的 `qp` 行**已删除** ——
+      //   QP 的轴集里已摘掉它（`QP_AXIS_SPEC`，实测它是"落地转圈"的主源，占比 44%）。
+      //   表与代码必须一致（门禁 E2：表 ⊆ 代码 且 代码 ⊆ 表）；
+      //   `QPTWIST=1` 的实验模式会重新写它 —— 那是**已知例外**，用实验模式时门禁会报，属预期。
       {
         joint: "knee",
         axis: 0,

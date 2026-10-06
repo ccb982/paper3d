@@ -121,6 +121,11 @@ export interface FootForce {
   contactN: number;
   /** 竖向合力（N） */
   fz: number;
+  /** ★ 力链低通后的**原始（未滤波）标量**，与 `patches` 同源（`Σpatches[].ny === fzRaw`）。
+   *  `soleForceProfile` 的原始返回里它们与 `fz/copX` 相同；力链包装后才有差别。 */
+  fzRaw?: number;
+  copXRaw?: number;
+  copZRaw?: number;
   /** 切向合力（N，沿 x） */
   fx: number;
   /** 切向合力（N，沿 z） */
@@ -2415,14 +2420,19 @@ export class RigState {
           footX: this.soleX.l, footZ: this.soleZ.l,
           cop: { ...this.cop.l },
           isFront: front === 'l', isBack: front !== 'l',
-          isBearer: this.loadBearer === 'l', locked: this.locked.l,
+          // ★★★★★ 2026-10-06 **承重标识改由角色决定**（架构单一真源）：
+          //   旧实现取遗留的 `loadBearer`（由 B4 判据授予）⇒ 起步/换腿窗口里
+          //   它是 `null` ⇒ `probe-axisown` 的"角色一致性"报 211 条
+          //   "没有腿被标承重"。而用户定调「**让状态机显式决定承重腿、摆动腿**」
+          //   ⇒ 承重 = `roleSup`（`supportLeg()` 的回退链保证非空）。
+          isBearer: (this.roleSup ?? this.loadBearer) === 'l', locked: this.locked.l,
         },
         r: {
           side: 'r', grounded: this.grounded.r, loadFrac: this.loadFrac.r, soleY: this.soleY.r,
           footX: this.soleX.r, footZ: this.soleZ.r,
           cop: { ...this.cop.r },
           isFront: front === 'r', isBack: front !== 'r',
-          isBearer: this.loadBearer === 'r', locked: this.locked.r,
+          isBearer: (this.roleSup ?? this.loadBearer) === 'r', locked: this.locked.r,
         },
       },
       axes,

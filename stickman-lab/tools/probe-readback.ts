@@ -140,10 +140,12 @@ if (!jq) {
             ok(`${nm}脚无有效载荷（显式 copValid=false）：接触块 ${ff.contactN} 合力 ${ff.fz.toFixed(1)}N`);
             continue;
           }
+          // ★ 2026-10-06：对账必须用**原始**标量（`fzRaw`）——`fz` 是低通后的，与 patches 不同源。
+          const fzRef = ff.fzRaw ?? ff.fz;
           const psum = ff.patches.reduce((a, x) => a + x.ny, 0);
-          const rel = Math.abs(psum - ff.fz) / Math.max(1e-6, ff.fz);
-          if (rel < 0.01) ok(`${nm}脚 L0 自洽：逐块和 ${psum.toFixed(1)}N == 合力 ${ff.fz.toFixed(1)}N`);
-          else bad(`${nm}脚 L0 不自洽：逐块和 ${psum.toFixed(1)}N vs 合力 ${ff.fz.toFixed(1)}N（差 ${(rel * 100).toFixed(1)}%）`);
+          const rel = Math.abs(psum - fzRef) / Math.max(1e-6, fzRef);
+          if (rel < 0.01) ok(`${nm}脚 L0 自洽：逐块和 ${psum.toFixed(1)}N == 原始合力 ${fzRef.toFixed(1)}N（滤波后 ${ff.fz.toFixed(1)}N）`);
+          else bad(`${nm}脚 L0 不自洽：逐块和 ${psum.toFixed(1)}N vs 原始合力 ${fzRef.toFixed(1)}N（差 ${(rel * 100).toFixed(1)}%）`);
         }
         if (!gc.trustable && gc.trustNote === '') bad('力链不可信却没给 trustNote');
         else if (!gc.trustable) ok(`不可信时有原因说明：「${gc.trustNote}」`);

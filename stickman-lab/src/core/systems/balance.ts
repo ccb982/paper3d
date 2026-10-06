@@ -199,6 +199,10 @@ function ankleCopEnabled(): boolean {
  *   ⚠ 2026-10-06：先试过固定 `G`（`ΔCoP/Δτ` 标定），但植物增益 `g=1/Fz`
  *     而实测 Fz 在 **0~578 N** 之间跳 ⇒ 固定 G 不可能对（见模块顶部长注释）。
  */
+/** `LATSWING=1`：横向驱动恢复"全链写"（默认只写髋外展轴，见写入处 D.4 收敛注释） */
+const LAT_SWING_FULL = ['1', 'true', 'on'].includes(String(
+  ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATSWING ?? '').trim().toLowerCase());
+
 /** `LATPLAN=1`：额状也由监督层 `copPlan.needZ` 驱动（§21.11） */
 const LATPLAN = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').toLowerCase());
@@ -334,7 +338,7 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
     // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
     //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
     //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
-    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold'] },
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold', 'dipHip'] },
   // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
   //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
   //   被算成「未声明的同轴异模式」。
@@ -354,7 +358,9 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
 
   // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
   { joint: 'foot', axis: 2, role: 'ankleCop', mode: 'tau', channel: 'ankleCop',
-    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean'] },
+    // ★ `copSet`（显式 CoP 整定，与 `ANKLE_COP` 同一根轴的另一模式）、
+    //   `trunkRoll`/`fallResp`（上身修正的增益门，不另占轴）—— 2026-10-06 门禁 A2 查出的漏登记。
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'copSet', 'trunkRoll', 'fallResp'] },
   // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
   //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
   //   `midfoot_*` 驱动块）。
@@ -377,8 +383,10 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
   //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
   //   ⚠ `hip/0`（外展轴）**不进 QP**：它的 tau 主人是 `latTransfer`（已登记）。
-  { joint: 'hip', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'qp',
-    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+  // ★ 2026-10-06：`hip/1`（**扭转轴**）的 `qp` 行**已删除** ——
+  //   QP 的轴集里已摘掉它（`QP_AXIS_SPEC`，实测它是"落地转圈"的主源，占比 44%）。
+  //   表与代码必须一致（门禁 E2：表 ⊆ 代码 且 代码 ⊆ 表）；
+  //   `QPTWIST=1` 的实验模式会重新写它 —— 那是**已知例外**，用实验模式时门禁会报，属预期。
   { joint: 'knee', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'qp',
     extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
   { joint: 'knee', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'qp',
@@ -2056,6 +2064,14 @@ export function balanceSystem(
       for (let i2 = 0; i2 < chain.length; i2++) {
         const jj = chain[i2]!;
         for (let ax = 0; ax < 3; ax++) {
+          // ★★★★★ 2026-10-06 **只写外展轴（D.4 收敛）**：
+          //   驱动腿是**摆动腿**，而步态在同一根腿上写关键帧位置（hip/2、knee/2、foot/2）
+          //   ⇒ 全链写 τ 会与 step 的 pos **同轴异模式**（`probe-conflict` 实测
+          //     t=1.350：`hip_l/2`、`knee_l/2` τ←balance vs step ⇒ D.4 禁止）。
+          //   文献上横向驱动的主通道本来就是**髋外展**（Winter 1998 / Horak & Nashner 1986：
+          //   "separate hip load/unload strategy ... the totally dominant defence"）
+          //   ⇒ 只写 `HIP_ABD_AXIS`，其余轴交还步态。`LATSWING=1` 可恢复全链对照。
+          if (!LAT_SWING_FULL && ax !== HIP_ABD_AXIS) continue;
           const t = TMP_TAU[jj * 3 + ax]!;
           if (Math.abs(t) > 0.05) {
             rs.requestTorque(jj, ax, t, 'balance', `横向驱动·${drive}腿(JᵀF)`);
