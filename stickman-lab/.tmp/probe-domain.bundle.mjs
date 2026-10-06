@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14043,6 +14043,14 @@ var init_ragdoll = __esm({
     JMS_SCALE = (() => {
       const v = Number(globalThis.process?.env?.JMS_SCALE);
       return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
+    KP_OVERRIDE = (() => {
+      const e = Number(globalThis.process?.env?.KP);
+      return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
+    })();
+    IEFF_FIX = (() => {
+      const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
+      return e === "1";
     })();
     KD_SIGN = (() => {
       const e = Number(globalThis.process?.env?.KD_SIGN);
@@ -14136,7 +14144,8 @@ var init_ragdoll = __esm({
       angularDamping: 0.04,
       footAngularDamping: 12,
       torqueScale: 1,
-      kP: 48,
+      kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48,
+      // ★ 可由 `KP=…` 扫（实验）
       kD: 1,
       // 逐关节增益：默认空（全部用上面的全局值）
       jointGain: {},
@@ -16040,6 +16049,7 @@ var init_ragdoll = __esm({
        *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
       driveMotors(dt) {
+        if (IEFF_FIX) this.refineJointIeff();
         this.physicsDt = dt;
         {
           const hz = dt > 1e-9 ? 1 / dt : ASSUMED_PHYSICS_HZ;
@@ -16324,6 +16334,38 @@ var init_ragdoll = __esm({
         const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z + par(p);
         const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z + par(c);
         return Math.max(1e-9, 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic)));
+      }
+      /** ★ 平行轴修正是否已用真实 wasm 句柄重算过 `jointIeff` */
+      iEffRefined = false;
+      /**
+       * ★★★★★ **在运行期把平行轴项补进 `jointIeff`**（2026-10-06）。
+       *
+       *   为什么不能在构造期做：构造期 `jointWorld`/`body.worldCom()` 会拿到**未就绪**
+       *   的 wasm 句柄 ⇒ `probe:domain` 在 `World.step` 里 **RuntimeError: unreachable**。
+       *   ⇒ 改成**首拍懒算**（`driveMotors` 第一行调用），此时一切句柄都合法。
+       *
+       *   背景（本轮实测，`probe-t0`）：
+       *     · 前 0.1s 重心**不动**，但执行器在**泵能量**（KE 0.024→1.13J/0.12s，
+       *       正功率 5.7→420W；而**不调控制时恰好 0W**）
+       *     · 泵是 `hip_l`/`knee_l` **全 `bind`**（无人写、目标=0=静姿态）的轴：
+       *       角度仅 0.1~0.6°、ω=±17~41°/s、τ=±1~69 N·m ⇒ **τ·ω>0**
+       *     · 消融 sag/lat/weight/qp/waistHold/sagJf **逐位相同** ⇒ 泵在常开 PD 里
+       *     · `KD_SIGN=-1` 灾难性更糟、`JMS×6` 更糟 ⇒ 不是符号也不是简单增益
+       *
+       *   本修的作用：护栏 `impStable = α·|kd·ω|·Ieff·dt + |impSpring|` 里的 `Ieff`
+       *   从"只有绕质心主惯量"（0.037）变成**含 `m·d²`**（0.09~0.2，+3~5×）。
+       *   ⚠ 注意方向性：`Ieff` 变大 ⇒ `impStable` 变大 ⇒ 护栏**更宽松**；
+       *     它的目的是让 `Δω = imp/I_real` 与"每步吃掉 α 比例速度误差"这句话**一致** ——
+       *     原值偏小 3~5× ⇒ 那句话实际不成立。**是否解决泵，由 `probe-t0` 的 KE 判定。**
+       */
+      refineJointIeff() {
+        if (this.iEffRefined) return;
+        this.iEffRefined = true;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          let mx = 0;
+          for (let k = 0; k < 3; k++) mx = Math.max(mx, this.axisInertiaAtJoint(i, k));
+          if (mx > 0 && Number.isFinite(mx)) this.jointIeff[i] = mx;
+        }
       }
       axisInertia(i, k) {
         const p = this.bodies[this.jointBodies[i * 2]];
@@ -23275,7 +23317,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
   if (doll && on("hipStiff")) {
     const jHipS = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
-    if (jHipS >= 0) {
+    if (on("dipHip") && jHipS >= 0) {
       const side = sup === "l" ? "l" : "r";
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);

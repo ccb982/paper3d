@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14043,6 +14043,18 @@ var init_ragdoll = __esm({
     JMS_SCALE = (() => {
       const v = Number(globalThis.process?.env?.JMS_SCALE);
       return Number.isFinite(v) && v > 0 ? v : 1;
+    })();
+    KP_OVERRIDE = (() => {
+      const e = Number(globalThis.process?.env?.KP);
+      return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
+    })();
+    IEFF_FIX = (() => {
+      const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
+      return e === "1";
+    })();
+    KD_SIGN = (() => {
+      const e = Number(globalThis.process?.env?.KD_SIGN);
+      return Number.isFinite(e) && String(globalThis.process?.env?.KD_SIGN ?? "") !== "" ? e : 1;
     })();
     MOTOR_ALPHA = (() => {
       const v = Number(globalThis.process?.env?.MOTOR_ALPHA);
@@ -14132,7 +14144,8 @@ var init_ragdoll = __esm({
       angularDamping: 0.04,
       footAngularDamping: 12,
       torqueScale: 1,
-      kP: 48,
+      kP: Number.isFinite(KP_OVERRIDE) ? KP_OVERRIDE : 48,
+      // ★ 可由 `KP=…` 扫（实验）
       kD: 1,
       // 逐关节增益：默认空（全部用上面的全局值）
       jointGain: {},
@@ -16036,6 +16049,7 @@ var init_ragdoll = __esm({
        *        —— 回程是"保命动作"，不该被网络的位置命令拖住。
        */
       driveMotors(dt) {
+        if (IEFF_FIX) this.refineJointIeff();
         this.physicsDt = dt;
         {
           const hz = dt > 1e-9 ? 1 / dt : ASSUMED_PHYSICS_HZ;
@@ -16129,7 +16143,7 @@ var init_ragdoll = __esm({
                 }
               }
               kPSpring = kpUse;
-              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k];
+              err = kpUse * ts * (thRef - a) - kdUse * ts * relL[k] * KD_SIGN;
               this.motorErrP[idx] = kpUse * ts * (thRef - a);
               this.motorErrD[idx] = -kdUse * ts * relL[k];
             }
@@ -16277,6 +16291,82 @@ var init_ragdoll = __esm({
        *   的并联，是给马达护栏用的保守上界）。偏大 ⇒ 限位冲量过冲 ⇒ 正反馈发散。
        *   详见 `enforceLimits` 里 `J = -wRel * Iax` 处的长注释。
        */
+      /** 关节世界位置复用缓冲（`axisInertiaAtJoint` 用） */
+      jwTmp = new Float64Array(3);
+      /**
+       * ★★★★★ **绕关节轴的有效惯量（含平行轴项 `m·d²`）** —— 2026-10-06 修。
+       *
+       *   原实现（`jointIeff` 与 `axisInertia` **两处都**）只用了刚体**绕自身质心**的
+       *   主惯量（`Iax = 1/(1/Ip + 1/Ic)`，`Ip = n·(I_p∘n)`）——**完全没有平行轴项**。
+       *   而关节的有效惯量里 `m·d²` 是**主导项**：
+       *     膝：小腿+脚 ~4kg、质心离膝 ~0.2m ⇒ `m·d² ≈ 0.16 kg·m²`，
+       *     绕质心的主惯量只有 ~0.02 ⇒ **实测 `jointIeff` 报 0.037，真值在 0.2 量级**。
+       *
+       *   ⇒ 后果（本轮实测，`probe-firstframes` 逐拍）：
+       *     拍0 `knee_l/2` imp 0.048 N·m·s（τ 仅 **5.7 N·m**）、I_eff 0.037 **⇒ Δω 73°/s**
+       *     拍6 `knee_r/2` imp 0.256（τ 30.7）                                   **⇒ 390°/s**
+       *     而 τ **没饱和**（τmax 120~200）、护栏也没夹 ⇒ 执行器层等效增益大 5~20 倍
+       *     ⇒ **逐拍"上劲"**（`max|ω|` 31→277°/s 而 CoM 一动不动）⇒ 踝的阻尼响应它
+       *     ⇒ CoP 被推到脚尖侧 ⇒ 水平力向后 ⇒ **开始后倒**。
+       *   ⇒ 这才是"一开始明明没问题，却站不准"的**根**。
+       *
+       *   ★ 构造期算一次就够：旋转关节的轴在该刚体**体坐标系**里固定，
+       *     质心到该轴线的垂距**不随姿态变** ⇒ 一次计算是**精确**的。
+       */
+      axisInertiaAtJoint(i, k) {
+        const p = this.bodies[this.jointBodies[i * 2]];
+        const c = this.bodies[this.jointBodies[i * 2 + 1]];
+        const ip = p.principalInertia(), ic = c.principalInertia();
+        const q = p.rotation();
+        const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
+        quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
+        const a = this.axisW;
+        this.jointWorld(i, this.jwTmp);
+        const jw = this.jwTmp;
+        const par = (rb) => {
+          const m = rb.mass();
+          if (!(m > 1e-9)) return 0;
+          const cw = rb.worldCom();
+          const rx = cw.x - jw[0], ry = cw.y - jw[1], rz = cw.z - jw[2];
+          const d2 = rx * rx + ry * ry + rz * rz - (rx * a[0] + ry * a[1] + rz * a[2]) ** 2;
+          return m * Math.max(0, d2);
+        };
+        const Ip = a[0] * a[0] * ip.x + a[1] * a[1] * ip.y + a[2] * a[2] * ip.z + par(p);
+        const Ic = a[0] * a[0] * ic.x + a[1] * a[1] * ic.y + a[2] * a[2] * ic.z + par(c);
+        return Math.max(1e-9, 1 / (1 / Math.max(1e-9, Ip) + 1 / Math.max(1e-9, Ic)));
+      }
+      /** ★ 平行轴修正是否已用真实 wasm 句柄重算过 `jointIeff` */
+      iEffRefined = false;
+      /**
+       * ★★★★★ **在运行期把平行轴项补进 `jointIeff`**（2026-10-06）。
+       *
+       *   为什么不能在构造期做：构造期 `jointWorld`/`body.worldCom()` 会拿到**未就绪**
+       *   的 wasm 句柄 ⇒ `probe:domain` 在 `World.step` 里 **RuntimeError: unreachable**。
+       *   ⇒ 改成**首拍懒算**（`driveMotors` 第一行调用），此时一切句柄都合法。
+       *
+       *   背景（本轮实测，`probe-t0`）：
+       *     · 前 0.1s 重心**不动**，但执行器在**泵能量**（KE 0.024→1.13J/0.12s，
+       *       正功率 5.7→420W；而**不调控制时恰好 0W**）
+       *     · 泵是 `hip_l`/`knee_l` **全 `bind`**（无人写、目标=0=静姿态）的轴：
+       *       角度仅 0.1~0.6°、ω=±17~41°/s、τ=±1~69 N·m ⇒ **τ·ω>0**
+       *     · 消融 sag/lat/weight/qp/waistHold/sagJf **逐位相同** ⇒ 泵在常开 PD 里
+       *     · `KD_SIGN=-1` 灾难性更糟、`JMS×6` 更糟 ⇒ 不是符号也不是简单增益
+       *
+       *   本修的作用：护栏 `impStable = α·|kd·ω|·Ieff·dt + |impSpring|` 里的 `Ieff`
+       *   从"只有绕质心主惯量"（0.037）变成**含 `m·d²`**（0.09~0.2，+3~5×）。
+       *   ⚠ 注意方向性：`Ieff` 变大 ⇒ `impStable` 变大 ⇒ 护栏**更宽松**；
+       *     它的目的是让 `Δω = imp/I_real` 与"每步吃掉 α 比例速度误差"这句话**一致** ——
+       *     原值偏小 3~5× ⇒ 那句话实际不成立。**是否解决泵，由 `probe-t0` 的 KE 判定。**
+       */
+      refineJointIeff() {
+        if (this.iEffRefined) return;
+        this.iEffRefined = true;
+        for (let i = 0; i < this.sk.joints.length; i++) {
+          let mx = 0;
+          for (let k = 0; k < 3; k++) mx = Math.max(mx, this.axisInertiaAtJoint(i, k));
+          if (mx > 0 && Number.isFinite(mx)) this.jointIeff[i] = mx;
+        }
+      }
       axisInertia(i, k) {
         const p = this.bodies[this.jointBodies[i * 2]];
         const c = this.bodies[this.jointBodies[i * 2 + 1]];
@@ -17595,6 +17685,9 @@ var init_rigState = __esm({
         warnTicks: 0
       };
       /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
+      /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
+      copWantX = 0;
+      copErrX = 0;
       fallResp = {
         on: 0,
         s: 0,
@@ -17912,6 +18005,9 @@ var init_rigState = __esm({
       /** ★ 额状躯干修正的本拍输出（度）与误差（度）—— `probe-lat` 逐帧回读用 */
       trunkRollCmd = 0;
       trunkRollErr = 0;
+      /** ★ 矢状躯干姿态修正的本拍输出（度）与误差（度） */
+      trunkPitchCmd = 0;
+      trunkPitchErr = 0;
       /** 交接验证是否全过（`GaitState` 每拍写）。false = 迈步系统还有活：主动侧移 */
       handoverOk = false;
       /** 捕获点（Houska）：ξ = com + v/ω₀。UI 回读用 */
@@ -23223,6 +23319,23 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.settleOffPhase(qVip);
       }
       if (rs.state === "PUSH") tauAnk += DEFAULT_WANTED_FORCE.weight * Math.abs(p.pushDeg) * D2R3;
+      const copSetOn = on("copSet") && (p.copSetK ?? 0) > 0 && doll;
+      let copErr = 0;
+      if (copSetOn) {
+        const gc2 = rs.groundChain;
+        const ff2 = sup === "l" ? gc2?.l : gc2?.r;
+        if (ff2 && ff2.copValid && ff2.fz > 20) {
+          const ankX = ankW[0];
+          const backM = p.copBackM ?? 0.05;
+          const fwdM = p.copFwdM ?? 0.15;
+          const wantRaw = rs.dcm.x;
+          const wantX = Math.max(ankX - backM, Math.min(ankX + fwdM, wantRaw));
+          copErr = ff2.copX - wantX;
+          tauAnk = clamp2((p.copSetK ?? 1) * ff2.fz * copErr, sk2.joints[jAnk]?.maxTorque?.[2] ?? 120);
+          rs.copWantX = wantX;
+          rs.copErrX = copErr;
+        }
+      }
       const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
@@ -23237,7 +23350,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   }
   if (doll && on("hipStiff")) {
     const jHipS = jointIndexByName(sk2, sup === "l" ? "hip_l" : "hip_r");
-    if (jHipS >= 0) {
+    if (on("dipHip") && jHipS >= 0) {
       const side = sup === "l" ? "l" : "r";
       const iHip = Math.max(1e-4, doll.inertiaAboutJoint(jHipS, side, true));
       const bHip = 2 * p.vipZetaHip * Math.sqrt(p.kVipHip * iHip);
@@ -23349,6 +23462,18 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         rs.waist.bal.roll += add;
         rs.trunkRollCmd = add;
         rs.trunkRollErr = latDeg;
+      }
+      const Kp = p.trunkPitchK ?? 0;
+      const Dp = p.trunkPitchD ?? 0;
+      if (Kp > 0) {
+        const sagDeg = torso.tiltDeg * Math.cos(az);
+        const sagRate = torso.rateDeg * Math.cos(az);
+        const want = (Kp * sagDeg + Dp * sagRate) * (p.trunkPitchSign ?? 1);
+        const m = p.trunkPitchMaxDeg ?? 8;
+        const add = want > m ? m : want < -m ? -m : want;
+        rs.waist.bal.pitch += add;
+        rs.trunkPitchCmd = add;
+        rs.trunkPitchErr = sagDeg;
       }
     }
     ub.corrPitch = cPitch;
@@ -23669,6 +23794,17 @@ var init_balance = __esm({
       trunkRollD: 0.25,
       trunkRollMaxDeg: 8,
       trunkRollSign: -1,
+      trunkPitchK: (() => {
+        const e = globalThis.process?.env?.TPK;
+        const v = Number(e);
+        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
+      })(),
+      trunkPitchD: 0.25,
+      trunkPitchMaxDeg: 8,
+      trunkPitchSign: (() => {
+        const e = Number(globalThis.process?.env?.TPS);
+        return Number.isFinite(e) && String(globalThis.process?.env?.TPS ?? "") !== "" ? e : 1;
+      })(),
       /**
        * ⚠⚠ **默认 0（关）** —— 实测它**在骗存活**（§22.12 那个陷阱的又一次复发）：
        *
@@ -23694,6 +23830,13 @@ var init_balance = __esm({
       fallMaxDeg: 10,
       fallWarnU: 0.35,
       fallSign: -1,
+      copSetK: (() => {
+        const e = globalThis.process?.env?.COPSET;
+        const v = Number(e);
+        return e !== void 0 && e !== "" && Number.isFinite(v) ? v : 0;
+      })(),
+      copBackM: 0.05,
+      copFwdM: 0.15,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,
