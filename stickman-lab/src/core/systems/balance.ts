@@ -1854,4 +1854,30 @@ if (doll && on('hipStiff')) {
 rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     }
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑦ ★★★ **迈步提案 → 修正 → 发布**（用户 2026-10-06 定调）
+  // ══════════════════════════════════════════════════════════════
+  //   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+  //     然后发布最终命令并且身体能够平衡」
+  //
+  //   ★ 顺序正好合适：`controller.step` 里是 `stepSystem(rs)` → `balanceSystem(rs)`
+  //     （step **先**跑）⇒ 本函数结尾拿到的 `rs.stepProps` 就是**本拍**的提案。
+  //
+  //   风险因子 `k`（0..1）—— 直接挂用户定的**救回门槛**：
+  //       k = 1 − 最歪段倾角 / rescueMaxTiltDeg
+  //     直立 ⇒ k≈1（迈步全权）；越接近门槛 ⇒ k→0（冻结姿态、全力救）。
+  //     这就是「平衡系统有权力修正…**不得太过**」的一般化：
+  //     不改迈步的**方向**，只按危险程度**收缩它的偏离量**。
+  rs.disposeK = (() => {
+    if (!on('dispose')) return 1;
+    const gate = Math.max(1e-3, rs.rescueMaxTiltDeg);
+    const t = rs.trends.worstTiltDeg;
+    return Math.max(0, Math.min(1, 1 - t / gate));
+  })();
+  // 发布：修正后的最终值以 **balance** 名义写入（覆盖 step 的需求）
+  // ⚠ 消融 `dispose` 必须**整块不跑**（否则只是 k=1 的"原样重发布"，
+  //   对照实验会测不出机制本身 —— 本轮就踩过这个：D 变体名义"关"实际仍在发布）。
+  if (on('dispose')) rs.disposeStepProposals(rs.disposeK);
+  else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }

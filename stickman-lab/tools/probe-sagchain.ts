@@ -53,6 +53,8 @@ interface Sum {
   comX: number; maxVx: number; tilt: number; maxTilt: number;
   sagTau: number; hipW: number; kneeW: number; rows: string[];
   spine1Ang: number; spine1Tau: number;
+  /** ★ 提案发布统计：props=step 提案数, rep=balance 重发布数, ovr=被 balance 覆盖数, k=风险因子 */
+  props: number; rep: number; ovr: number; dk: number;
 }
 
 function run(tag: string, ablate: string, dur: number, verbose: boolean): Sum {
@@ -67,6 +69,7 @@ function run(tag: string, ablate: string, dur: number, verbose: boolean): Sum {
   const out: Sum = {
     tag, secs: 0, fall: '', comX: 0, maxVx: 0, tilt: 0, maxTilt: 0,
     sagTau: 0, hipW: 0, kneeW: 0, rows: [], spine1Ang: 0, spine1Tau: 0,
+    props: 0, rep: 0, ovr: 0, dk: 1,
   };
   const rv = new Float64Array(3);
   if (verbose) {
@@ -122,6 +125,8 @@ function run(tag: string, ablate: string, dur: number, verbose: boolean): Sum {
   d.jointRot(jiS, rv);
   out.spine1Ang = -rv[2]! * 57.2958;
   out.spine1Tau = d.tauApplied[jiS * 3 + 2] ?? 0;
+  const ds = ctrl.rs.disposeStat;
+  out.props = ds.props; out.rep = ds.republished; out.ovr = ds.overridden; out.dk = ds.k;
   return out;
 }
 
@@ -132,30 +137,35 @@ log(`   ⇒ 存活 ${A.secs.toFixed(2)}s  死因 ${A.fall}  tilt ${A.tilt.toFixe
 
 log('');
 log('══ 对照（同 1.8s）══');
-log('   变体                        存活   死因   末tilt  末com.x   |vx|max  末Σ|τ|  腰(脊1角/τ)');
+log('   变体                        末tilt  末com.x   |vx|max  末Σ|τ|  腰(角/τ)     提案(数/重发布/覆盖 k)');
 const results: Sum[] = [A];
 for (const [tag, ab] of [
   ['A2 脊柱也进前馈（对照）', 'sagJfSpine'],
+  ['D ④c开·关提案发布', 'dispose'],
   ['B 只给前馈·不让位', 'sagJfHold'],
-  ['C 整块关（修前基线）', 'sagJf'],
+  ['C ④c整块关', 'sagJf'],
 ] as [string, string][]) {
   const r = run(tag, ab, 1.8, false);
   results.push(r);
-  log(`   ${tag.padEnd(26)} ${r.secs.toFixed(2).padStart(5)}s  ${r.fall.padEnd(6)}`
+  log(`   ${tag.padEnd(26)}`
     + ` ${r.tilt.toFixed(0).padStart(5)}°`
     + ` ${r.comX.toFixed(0).padStart(8)}mm`
     + ` ${(r.maxVx * 1000).toFixed(0).padStart(8)}`
     + ` ${r.sagTau.toFixed(0).padStart(7)}`
-    + `  ${r.spine1Ang.toFixed(0).padStart(5)}°/${r.spine1Tau.toFixed(0).padStart(5)}`);
+    + `  ${r.spine1Ang.toFixed(0).padStart(4)}°/${r.spine1Tau.toFixed(0).padStart(5)}`
+    + `  ${String(r.props).padStart(3)}/${String(r.rep).padStart(3)}/${String(r.ovr).padStart(3)}`
+    + ` k=${r.dk.toFixed(2)}`);
 }
 log('');
 {
-  const A2 = results[1]!;
-  log(`   A2（脊柱不进前馈）tilt ${A2.tilt.toFixed(0)}° com.x ${A2.comX.toFixed(0)}mm |vx|max ${(A2.maxVx * 1000).toFixed(0)}`
-    + `　vs A tilt ${A.tilt.toFixed(0)}° com.x ${A.comX.toFixed(0)}mm`);
-  const better = A.comX > results[3]!.comX && A.maxVx < results[3]!.maxVx;
+  const D = results[2]!;
+  log(`   ★ 提案发布（D vs A）：关掉后 tilt ${D.tilt.toFixed(0)}° com.x ${D.comX.toFixed(0)}mm |vx|max ${(D.maxVx * 1000).toFixed(0)}`
+    + `　vs 开着 tilt ${A.tilt.toFixed(0)}° com.x ${A.comX.toFixed(0)}mm |vx|max ${(A.maxVx * 1000).toFixed(0)}`);
+  const dispHelp = Math.abs(A.comX) < Math.abs(D.comX) || A.tilt < D.tilt;
+  log(`   ⇒ 提案发布${dispHelp ? '**有益**' : '**无益或有害**'}`);
+  const better = A.comX > results[4]!.comX && A.maxVx < results[4]!.maxVx;
   log(`   判读：A 的 com.x ${A.comX.toFixed(0)}mm / |vx|max ${(A.maxVx * 1000).toFixed(0)}mm/s`
     + `　vs　C（修前）${results[2]!.comX.toFixed(0)}mm / ${(results[2]!.maxVx * 1000).toFixed(0)}mm/s`);
-  log(`   ⇒ 矢状前馈${better ? '**有效**（漂移与速度都更小）' : '**无效或更差**'}`
-    + `；B 相对 A ${Math.abs(results[2]!.comX) < Math.abs(A.comX) ? '更好（让位反而有害）' : '更差（让位是必需的）'}`);
+  log(`   ⇒ 矢状前馈（A vs C）${better ? '**有效**（漂移与速度都更小）' : '**无效或更差**'}`
+    + `；不让位（B）${Math.abs(results[3]!.comX) < Math.abs(A.comX) ? '更好（让位反而有害）' : '更差（让位是必需的）'}`);
 }

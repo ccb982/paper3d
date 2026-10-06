@@ -17383,6 +17383,20 @@ var init_rigState = __esm({
       /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
       comAx = 0;
       /**
+       * ★★★ **迈步系统的原始提案**（用户 2026-10-06：
+       *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+       *     然后发布最终命令并且身体能够平衡」）。
+       *
+       *   每拍由 `requestAngle(..., 'step', ...)` **自动归档**（不必改 `step.ts` 的
+       *   任何调用点）。随后 `disposeStepProposals()` 由 balance 决定最终值并**以
+       *   balance 的名义重发布**（balance 优先级更高，`request()` 会覆盖 step 的）。
+       */
+      stepProps = [];
+      /** 本拍 balance 对 step 提案的处理统计（供 UI/探针回读） */
+      disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
+      /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
+      disposeK = 1;
+      /**
        * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
        *
        *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
@@ -17873,6 +17887,7 @@ var init_rigState = __esm({
           this.badRequests++;
           return;
         }
+        if (system === "step") this.stepProps.push({ i: joint * 3 + axis, rad, label });
         if (system === "balance") {
           const i = joint * 3 + axis;
           const d = rad - (this.pos[i] ?? 0);
@@ -18057,6 +18072,56 @@ var init_rigState = __esm({
           label + (Math.abs(v - rad) > 1e-9 ? `(\u5939\u5230${(capRad * 57.3).toFixed(1)}\xB0)` : "")
         );
       }
+      /**
+       * ★★★ **迈步提案 → balance 修正 → balance 发布最终值**（用户 2026-10-06 定调）。
+       *
+       *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+       *     然后**发布最终命令**并且身体能够平衡」
+       *
+       *   ── 怎么做到"不改 step.ts" ──────────────────────────────────
+       *   `requestAngle(..., 'step', ...)` 会自动把每次写入归档进 `stepProps`。
+       *   本方法在 `stepSystem` **之后**调用，于是：
+       *     · 该轴 balance 自己没提过 ⇒ balance **重发布**（`PRIORITY[balance] > PRIORITY[step]`
+       *       ⇒ `request()` 覆盖 step 的），`tgt[].owner` 从 `step` 变成 `balance`；
+       *     · 该轴 balance 提过 ⇒ 以 balance 为准（`overridden` 计数）。
+       *
+       *   ── 修正律（v1）────────────────────────────────────────────
+       *        final = 当前实测角 + (提案 − 当前实测角) × k
+       *     `k` 是 balance 给的**风险因子**（0..1）：
+       *       k=1 ⇒ 直立安全，提案**原样发布**（迈步全权）；
+       *       k=0 ⇒ 已到救回门槛，冻结在**当前姿态**（不许再把身体推出去）。
+       *     ⇒ 这就是"平衡系统有权力修正、但**不改目标方向**、只是不得太过"的
+       *       一般化形式：越危险，迈步的**偏离量**被收缩得越多。
+       *
+       *   ⚠ 已让位给 `τ=JᵀF` 的轴（`hold[i]`）**不重发布**：那里主人是力矩通道，
+       *     再写角度只会制造"写了但被让位掩码屏蔽"的假象。
+       *
+       * @param k 风险因子 ∈ [0,1]（越界自动夹紧）
+       */
+      disposeStepProposals(k) {
+        const kk = k < 0 ? 0 : k > 1 ? 1 : k;
+        let republished = 0, overridden = 0;
+        for (const p of this.stepProps) {
+          const j = Math.floor(p.i / 3), a = p.i % 3;
+          const cur = this.req[p.i];
+          if (cur && cur.system === "balance" || this.hold[p.i]) {
+            overridden++;
+            continue;
+          }
+          const now = this.pos[p.i] ?? p.rad;
+          const final = now + (p.rad - now) * kk;
+          this.requestAngle(
+            j,
+            a,
+            final,
+            "balance",
+            kk >= 0.999 ? `step\u63D0\u6848\xB7\u539F\u6837\u53D1\u5E03(${p.label})` : `step\u63D0\u6848\xB7\u9650\u5E45${Math.round(kk * 100)}%(${p.label})`
+          );
+          republished++;
+        }
+        this.disposeStat = { props: this.stepProps.length, republished, overridden, k: kk };
+        return this.disposeStat;
+      }
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
@@ -18075,6 +18140,7 @@ var init_rigState = __esm({
         this.holdList.length = 0;
         this.torqueRequestCount = 0;
         this.requestCount = 0;
+        this.stepProps.length = 0;
         for (let i = 0; i < this.tgt.length; i++) {
           const t = this.tgt[i];
           t.suppressed.length = 0;
@@ -19631,8 +19697,9 @@ var init_gaitState = __esm({
                 bf.trustable = rs.groundChain.trustable;
                 bf.trustNote = rs.groundChain.trustNote;
               }
-              if (!bf.axes.length) return ["\uFF08\u672C\u62CD\u5E73\u8861\u7CFB\u7EDF\u6CA1\u6709\u63D0\u51FA\u4EFB\u4F55\u5173\u8282\u4FEE\u6B63\uFF09"];
-              return bf.axes.map((a) => {
+              const ds = rs.disposeStat;
+              const head = `\u8FC8\u6B65\u63D0\u6848 ${ds.props} \u6761 \u2192 balance \u53D1\u5E03 ${ds.republished} \u6761\uFF08\u88AB balance \u8986\u76D6 ${ds.overridden}\uFF09\u3000\u98CE\u9669\u56E0\u5B50 k=${ds.k.toFixed(2)}\uFF08k=1 \u8FC8\u6B65\u5168\u6743\uFF0Ck=0 \u51BB\u7ED3\u59FF\u6001\uFF09`;
+              const rest = !bf.axes.length ? ["\uFF08\u672C\u62CD\u5E73\u8861\u7CFB\u7EDF\u6CA1\u6709\u63D0\u51FA\u4EFB\u4F55\u5173\u8282\u4FEE\u6B63\uFF09"] : bf.axes.map((a) => {
                 const j = Math.floor(a.axis / 3);
                 const ax = a.axis % 3;
                 const nm = rs.sk.joints[j]?.name ?? `j${j}`;
@@ -19640,6 +19707,7 @@ var init_gaitState = __esm({
                 const sg = d >= 0 ? "+" : "";
                 return `\u8F74${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}\xB0\u3000${a.label}`;
               });
+              return [head, ...rest];
             })(),
             // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
             force: rs.groundChain ? forceChainLines(rs.groundChain) : ["\u529B\u94FE\u4E0D\u53EF\u7528\uFF08forceSrc \u672A\u5B89\u88C5\uFF09"],
@@ -22401,6 +22469,14 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
     }
   }
+  rs.disposeK = (() => {
+    if (!on("dispose")) return 1;
+    const gate = Math.max(1e-3, rs.rescueMaxTiltDeg);
+    const t = rs.trends.worstTiltDeg;
+    return Math.max(0, Math.min(1, 1 - t / gate));
+  })();
+  if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
+  else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
 var NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({

@@ -1309,14 +1309,18 @@ export class GaitState {
             bf.trustable = rs.groundChain.trustable;
             bf.trustNote = rs.groundChain.trustNote;
           }
-          if (!bf.axes.length) return ['（本拍平衡系统没有提出任何关节修正）'];
-          return bf.axes.map((a) => {
+          const ds = rs.disposeStat;
+          const head = `迈步提案 ${ds.props} 条 → balance 发布 ${ds.republished} 条`
+            + `（被 balance 覆盖 ${ds.overridden}）　风险因子 k=${ds.k.toFixed(2)}`
+            + `（k=1 迈步全权，k=0 冻结姿态）`;
+          const rest = !bf.axes.length ? ['（本拍平衡系统没有提出任何关节修正）'] : bf.axes.map((a) => {
             const j = Math.floor(a.axis / 3); const ax = a.axis % 3;
             const nm = rs.sk.joints[j]?.name ?? `j${j}`;
             const d = (a.dTheta * 180) / Math.PI;
             const sg = d >= 0 ? '+' : '';
             return `轴${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}°　${a.label}`;
           });
+          return [head, ...rest];
         })(),
         // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
         force: rs.groundChain ? forceChainLines(rs.groundChain) : ['力链不可用（forceSrc 未安装）'],

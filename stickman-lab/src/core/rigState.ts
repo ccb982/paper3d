@@ -987,6 +987,20 @@ export class RigState {
   /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
   comAx = 0;
   /**
+   * ★★★ **迈步系统的原始提案**（用户 2026-10-06：
+   *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+   *     然后发布最终命令并且身体能够平衡」）。
+   *
+   *   每拍由 `requestAngle(..., 'step', ...)` **自动归档**（不必改 `step.ts` 的
+   *   任何调用点）。随后 `disposeStepProposals()` 由 balance 决定最终值并**以
+   *   balance 的名义重发布**（balance 优先级更高，`request()` 会覆盖 step 的）。
+   */
+  stepProps: { i: number; rad: number; label: string }[] = [];
+  /** 本拍 balance 对 step 提案的处理统计（供 UI/探针回读） */
+  disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
+  /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
+  disposeK = 1;
+  /**
    * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
    *
    *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
@@ -1483,6 +1497,9 @@ export class RigState {
     if (!def) { this.badRequests++; return; }
     const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
     if (span <= 1e-6) { this.badRequests++; return; }
+    // ★★ 归档 step 的**原始提案**（见 `stepProps` 注释）：balance 稍后据此重发布。
+    //   只归档**角度**写入 —— 力矩通道（`τ=JᵀF`）不走"提案"语义。
+    if (system === 'step') this.stepProps.push({ i: joint * 3 + axis, rad, label });
     // ★ 记录 balance 的修正（→ `balanceFix.axes`，供 UI 绘制"平衡在动哪些关节"）。
     //   记录的是**物理量**（目标 − 当前角，rad），不是归一化值 ⇒ UI 可直接显示度。
     if (system === 'balance') {
@@ -1653,6 +1670,51 @@ export class RigState {
       label + (Math.abs(v - rad) > 1e-9 ? `(夹到${(capRad * 57.3).toFixed(1)}°)` : ''));
   }
 
+  /**
+   * ★★★ **迈步提案 → balance 修正 → balance 发布最终值**（用户 2026-10-06 定调）。
+   *
+   *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+   *     然后**发布最终命令**并且身体能够平衡」
+   *
+   *   ── 怎么做到"不改 step.ts" ──────────────────────────────────
+   *   `requestAngle(..., 'step', ...)` 会自动把每次写入归档进 `stepProps`。
+   *   本方法在 `stepSystem` **之后**调用，于是：
+   *     · 该轴 balance 自己没提过 ⇒ balance **重发布**（`PRIORITY[balance] > PRIORITY[step]`
+   *       ⇒ `request()` 覆盖 step 的），`tgt[].owner` 从 `step` 变成 `balance`；
+   *     · 该轴 balance 提过 ⇒ 以 balance 为准（`overridden` 计数）。
+   *
+   *   ── 修正律（v1）────────────────────────────────────────────
+   *        final = 当前实测角 + (提案 − 当前实测角) × k
+   *     `k` 是 balance 给的**风险因子**（0..1）：
+   *       k=1 ⇒ 直立安全，提案**原样发布**（迈步全权）；
+   *       k=0 ⇒ 已到救回门槛，冻结在**当前姿态**（不许再把身体推出去）。
+   *     ⇒ 这就是"平衡系统有权力修正、但**不改目标方向**、只是不得太过"的
+   *       一般化形式：越危险，迈步的**偏离量**被收缩得越多。
+   *
+   *   ⚠ 已让位给 `τ=JᵀF` 的轴（`hold[i]`）**不重发布**：那里主人是力矩通道，
+   *     再写角度只会制造"写了但被让位掩码屏蔽"的假象。
+   *
+   * @param k 风险因子 ∈ [0,1]（越界自动夹紧）
+   */
+  disposeStepProposals(k: number): { props: number; republished: number; overridden: number; k: number } {
+    const kk = k < 0 ? 0 : k > 1 ? 1 : k;
+    let republished = 0, overridden = 0;
+    for (const p of this.stepProps) {
+      const j = Math.floor(p.i / 3), a = p.i % 3;
+      const cur = this.req[p.i];
+      // ① balance 自己已经写过这根轴 ⇒ 以 balance 为准，不重复发布
+      // ② 该轴已让位给力矩通道 ⇒ 角度写了也会被屏蔽
+      if ((cur && cur.system === 'balance') || this.hold[p.i]) { overridden++; continue; }
+      const now = this.pos[p.i] ?? p.rad;
+      const final = now + (p.rad - now) * kk;
+      this.requestAngle(j, a, final, 'balance',
+        kk >= 0.999 ? `step提案·原样发布(${p.label})` : `step提案·限幅${Math.round(kk * 100)}%(${p.label})`);
+      republished++;
+    }
+    this.disposeStat = { props: this.stepProps.length, republished, overridden, k: kk };
+    return this.disposeStat;
+  }
+
   // ── 仲裁 ────────────────────────────────────────────────
 
   /** 每拍开始：清空需求与仲裁痕迹 */
@@ -1671,6 +1733,7 @@ export class RigState {
     this.holdList.length = 0;
     this.torqueRequestCount = 0;
     this.requestCount = 0;
+    this.stepProps.length = 0;
     for (let i = 0; i < this.tgt.length; i++) {
       const t = this.tgt[i]!;
       t.suppressed.length = 0; t.vetoed.length = 0; t.clamped = false;

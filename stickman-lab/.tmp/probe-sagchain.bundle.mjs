@@ -17383,6 +17383,20 @@ var init_rigState = __esm({
       /** ★ 低通后的**矢状**加速度（m/s²）。与 `comAz` 同一套差分+低通，供力链用 */
       comAx = 0;
       /**
+       * ★★★ **迈步系统的原始提案**（用户 2026-10-06：
+       *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+       *     然后发布最终命令并且身体能够平衡」）。
+       *
+       *   每拍由 `requestAngle(..., 'step', ...)` **自动归档**（不必改 `step.ts` 的
+       *   任何调用点）。随后 `disposeStepProposals()` 由 balance 决定最终值并**以
+       *   balance 的名义重发布**（balance 优先级更高，`request()` 会覆盖 step 的）。
+       */
+      stepProps = [];
+      /** 本拍 balance 对 step 提案的处理统计（供 UI/探针回读） */
+      disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
+      /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
+      disposeK = 1;
+      /**
        * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
        *
        *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
@@ -17873,6 +17887,7 @@ var init_rigState = __esm({
           this.badRequests++;
           return;
         }
+        if (system === "step") this.stepProps.push({ i: joint * 3 + axis, rad, label });
         if (system === "balance") {
           const i = joint * 3 + axis;
           const d = rad - (this.pos[i] ?? 0);
@@ -18057,6 +18072,56 @@ var init_rigState = __esm({
           label + (Math.abs(v - rad) > 1e-9 ? `(\u5939\u5230${(capRad * 57.3).toFixed(1)}\xB0)` : "")
         );
       }
+      /**
+       * ★★★ **迈步提案 → balance 修正 → balance 发布最终值**（用户 2026-10-06 定调）。
+       *
+       *   「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，
+       *     然后**发布最终命令**并且身体能够平衡」
+       *
+       *   ── 怎么做到"不改 step.ts" ──────────────────────────────────
+       *   `requestAngle(..., 'step', ...)` 会自动把每次写入归档进 `stepProps`。
+       *   本方法在 `stepSystem` **之后**调用，于是：
+       *     · 该轴 balance 自己没提过 ⇒ balance **重发布**（`PRIORITY[balance] > PRIORITY[step]`
+       *       ⇒ `request()` 覆盖 step 的），`tgt[].owner` 从 `step` 变成 `balance`；
+       *     · 该轴 balance 提过 ⇒ 以 balance 为准（`overridden` 计数）。
+       *
+       *   ── 修正律（v1）────────────────────────────────────────────
+       *        final = 当前实测角 + (提案 − 当前实测角) × k
+       *     `k` 是 balance 给的**风险因子**（0..1）：
+       *       k=1 ⇒ 直立安全，提案**原样发布**（迈步全权）；
+       *       k=0 ⇒ 已到救回门槛，冻结在**当前姿态**（不许再把身体推出去）。
+       *     ⇒ 这就是"平衡系统有权力修正、但**不改目标方向**、只是不得太过"的
+       *       一般化形式：越危险，迈步的**偏离量**被收缩得越多。
+       *
+       *   ⚠ 已让位给 `τ=JᵀF` 的轴（`hold[i]`）**不重发布**：那里主人是力矩通道，
+       *     再写角度只会制造"写了但被让位掩码屏蔽"的假象。
+       *
+       * @param k 风险因子 ∈ [0,1]（越界自动夹紧）
+       */
+      disposeStepProposals(k) {
+        const kk = k < 0 ? 0 : k > 1 ? 1 : k;
+        let republished = 0, overridden = 0;
+        for (const p of this.stepProps) {
+          const j = Math.floor(p.i / 3), a = p.i % 3;
+          const cur = this.req[p.i];
+          if (cur && cur.system === "balance" || this.hold[p.i]) {
+            overridden++;
+            continue;
+          }
+          const now = this.pos[p.i] ?? p.rad;
+          const final = now + (p.rad - now) * kk;
+          this.requestAngle(
+            j,
+            a,
+            final,
+            "balance",
+            kk >= 0.999 ? `step\u63D0\u6848\xB7\u539F\u6837\u53D1\u5E03(${p.label})` : `step\u63D0\u6848\xB7\u9650\u5E45${Math.round(kk * 100)}%(${p.label})`
+          );
+          republished++;
+        }
+        this.disposeStat = { props: this.stepProps.length, republished, overridden, k: kk };
+        return this.disposeStat;
+      }
       // ── 仲裁 ────────────────────────────────────────────────
       /** 每拍开始：清空需求与仲裁痕迹 */
       beginTick(dt) {
@@ -18075,6 +18140,7 @@ var init_rigState = __esm({
         this.holdList.length = 0;
         this.torqueRequestCount = 0;
         this.requestCount = 0;
+        this.stepProps.length = 0;
         for (let i = 0; i < this.tgt.length; i++) {
           const t = this.tgt[i];
           t.suppressed.length = 0;
@@ -22401,6 +22467,14 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       rs.requestTorque(jHipS, 2, tauHip, "balance", "\u9ACB\u88AB\u52A8\u521A\u5EA6");
     }
   }
+  rs.disposeK = (() => {
+    if (!on("dispose")) return 1;
+    const gate = Math.max(1e-3, rs.rescueMaxTiltDeg);
+    const t = rs.trends.worstTiltDeg;
+    return Math.max(0, Math.min(1, 1 - t / gate));
+  })();
+  if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
+  else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
 var NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
@@ -23303,7 +23377,11 @@ function run(tag, ablate, dur, verbose) {
     kneeW: 0,
     rows: [],
     spine1Ang: 0,
-    spine1Tau: 0
+    spine1Tau: 0,
+    props: 0,
+    rep: 0,
+    ovr: 0,
+    dk: 1
   };
   const rv = new Float64Array(3);
   if (verbose) {
@@ -23350,6 +23428,11 @@ function run(tag, ablate, dur, verbose) {
   d.jointRot(jiS, rv);
   out.spine1Ang = -rv[2] * 57.2958;
   out.spine1Tau = d.tauApplied[jiS * 3 + 2] ?? 0;
+  const ds = ctrl.rs.disposeStat;
+  out.props = ds.props;
+  out.rep = ds.republished;
+  out.ovr = ds.overridden;
+  out.dk = ds.k;
   return out;
 }
 log("\u2550\u2550 \u53D8\u4F53 A\uFF1A\u2463c \u5168\u5F00\uFF08\u8BA9\u4F4D + \u77E2\u72B6\u524D\u9988\uFF09\u2550\u2550");
@@ -23358,22 +23441,25 @@ for (const r of A.rows) log(r);
 log(`   \u21D2 \u5B58\u6D3B ${A.secs.toFixed(2)}s  \u6B7B\u56E0 ${A.fall}  tilt ${A.tilt.toFixed(0)}\xB0  com.x ${A.comX.toFixed(0)}mm`);
 log("");
 log("\u2550\u2550 \u5BF9\u7167\uFF08\u540C 1.8s\uFF09\u2550\u2550");
-log("   \u53D8\u4F53                        \u5B58\u6D3B   \u6B7B\u56E0   \u672Btilt  \u672Bcom.x   |vx|max  \u672B\u03A3|\u03C4|  \u8170(\u810A1\u89D2/\u03C4)");
+log("   \u53D8\u4F53                        \u672Btilt  \u672Bcom.x   |vx|max  \u672B\u03A3|\u03C4|  \u8170(\u89D2/\u03C4)     \u63D0\u6848(\u6570/\u91CD\u53D1\u5E03/\u8986\u76D6 k)");
 var results = [A];
 for (const [tag, ab] of [
   ["A2 \u810A\u67F1\u4E5F\u8FDB\u524D\u9988\uFF08\u5BF9\u7167\uFF09", "sagJfSpine"],
+  ["D \u2463c\u5F00\xB7\u5173\u63D0\u6848\u53D1\u5E03", "dispose"],
   ["B \u53EA\u7ED9\u524D\u9988\xB7\u4E0D\u8BA9\u4F4D", "sagJfHold"],
-  ["C \u6574\u5757\u5173\uFF08\u4FEE\u524D\u57FA\u7EBF\uFF09", "sagJf"]
+  ["C \u2463c\u6574\u5757\u5173", "sagJf"]
 ]) {
   const r = run(tag, ab, 1.8, false);
   results.push(r);
-  log(`   ${tag.padEnd(26)} ${r.secs.toFixed(2).padStart(5)}s  ${r.fall.padEnd(6)} ${r.tilt.toFixed(0).padStart(5)}\xB0 ${r.comX.toFixed(0).padStart(8)}mm ${(r.maxVx * 1e3).toFixed(0).padStart(8)} ${r.sagTau.toFixed(0).padStart(7)}  ${r.spine1Ang.toFixed(0).padStart(5)}\xB0/${r.spine1Tau.toFixed(0).padStart(5)}`);
+  log(`   ${tag.padEnd(26)} ${r.tilt.toFixed(0).padStart(5)}\xB0 ${r.comX.toFixed(0).padStart(8)}mm ${(r.maxVx * 1e3).toFixed(0).padStart(8)} ${r.sagTau.toFixed(0).padStart(7)}  ${r.spine1Ang.toFixed(0).padStart(4)}\xB0/${r.spine1Tau.toFixed(0).padStart(5)}  ${String(r.props).padStart(3)}/${String(r.rep).padStart(3)}/${String(r.ovr).padStart(3)} k=${r.dk.toFixed(2)}`);
 }
 log("");
 {
-  const A2 = results[1];
-  log(`   A2\uFF08\u810A\u67F1\u4E0D\u8FDB\u524D\u9988\uFF09tilt ${A2.tilt.toFixed(0)}\xB0 com.x ${A2.comX.toFixed(0)}mm |vx|max ${(A2.maxVx * 1e3).toFixed(0)}\u3000vs A tilt ${A.tilt.toFixed(0)}\xB0 com.x ${A.comX.toFixed(0)}mm`);
-  const better = A.comX > results[3].comX && A.maxVx < results[3].maxVx;
+  const D2 = results[2];
+  log(`   \u2605 \u63D0\u6848\u53D1\u5E03\uFF08D vs A\uFF09\uFF1A\u5173\u6389\u540E tilt ${D2.tilt.toFixed(0)}\xB0 com.x ${D2.comX.toFixed(0)}mm |vx|max ${(D2.maxVx * 1e3).toFixed(0)}\u3000vs \u5F00\u7740 tilt ${A.tilt.toFixed(0)}\xB0 com.x ${A.comX.toFixed(0)}mm |vx|max ${(A.maxVx * 1e3).toFixed(0)}`);
+  const dispHelp = Math.abs(A.comX) < Math.abs(D2.comX) || A.tilt < D2.tilt;
+  log(`   \u21D2 \u63D0\u6848\u53D1\u5E03${dispHelp ? "**\u6709\u76CA**" : "**\u65E0\u76CA\u6216\u6709\u5BB3**"}`);
+  const better = A.comX > results[4].comX && A.maxVx < results[4].maxVx;
   log(`   \u5224\u8BFB\uFF1AA \u7684 com.x ${A.comX.toFixed(0)}mm / |vx|max ${(A.maxVx * 1e3).toFixed(0)}mm/s\u3000vs\u3000C\uFF08\u4FEE\u524D\uFF09${results[2].comX.toFixed(0)}mm / ${(results[2].maxVx * 1e3).toFixed(0)}mm/s`);
-  log(`   \u21D2 \u77E2\u72B6\u524D\u9988${better ? "**\u6709\u6548**\uFF08\u6F02\u79FB\u4E0E\u901F\u5EA6\u90FD\u66F4\u5C0F\uFF09" : "**\u65E0\u6548\u6216\u66F4\u5DEE**"}\uFF1BB \u76F8\u5BF9 A ${Math.abs(results[2].comX) < Math.abs(A.comX) ? "\u66F4\u597D\uFF08\u8BA9\u4F4D\u53CD\u800C\u6709\u5BB3\uFF09" : "\u66F4\u5DEE\uFF08\u8BA9\u4F4D\u662F\u5FC5\u9700\u7684\uFF09"}`);
+  log(`   \u21D2 \u77E2\u72B6\u524D\u9988\uFF08A vs C\uFF09${better ? "**\u6709\u6548**\uFF08\u6F02\u79FB\u4E0E\u901F\u5EA6\u90FD\u66F4\u5C0F\uFF09" : "**\u65E0\u6548\u6216\u66F4\u5DEE**"}\uFF1B\u4E0D\u8BA9\u4F4D\uFF08B\uFF09${Math.abs(results[3].comX) < Math.abs(A.comX) ? "\u66F4\u597D\uFF08\u8BA9\u4F4D\u53CD\u800C\u6709\u5BB3\uFF09" : "\u66F4\u5DEE\uFF08\u8BA9\u4F4D\u662F\u5FC5\u9700\u7684\uFF09"}`);
 }
