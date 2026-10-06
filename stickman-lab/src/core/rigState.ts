@@ -1771,12 +1771,30 @@ export class RigState {
     }
     const cur = this.treq[i];
     this.torqueRequestCount++;
-    if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+    // ★★★★ 2026-10-06 **同系统相加，跨系统按优先级**（修一处架构级 bug）。
+    //
+    //   原写法 `if (cur && PRIORITY[cur.system] <= PRIORITY[system]) return;`
+    //   对 `balance`（优先级 0）自己也是一样 ⇒ **同一系统内后来者被全部丢弃**。
+    //   力矩是**力**，同一系统内多条分量（块④c 的矢状前馈、块⑤ 的横向驱动、
+    //   块⑨ 的持续托腰……）必须**相加**，否则：
+    //     · 块⑨「持续托腰」登记成功（`tauSrc` 有 label）却**进不了 `tauApplied`**
+    //       （实测：加块⑨前后逐轴 τ 逐位相同）；
+    //     · 而且"谁先跑到谁赢"取决于代码顺序 —— 一个纯粹的顺序陷阱。
+    //   ⇒ 同系统：**累加**（并保持首次的系统/标签，便于回读"谁在出力"）；
+    //     跨系统：**高优先级（小数字）压制低优先级**，语义不变。
+    if (cur && cur.system !== system && PRIORITY[cur.system] <= PRIORITY[system]) {
       this.tgt[i]!.suppressed.push({ system, label: `${label}(力矩)` });
       return;
     }
-    if (cur) this.tgt[i]!.suppressed.push({ system: cur.system, label: `${cur.label}(力矩)` });
-    this.treq[i] = { value: v, system, label };
+    if (cur && cur.system !== system) {
+      this.tgt[i]!.suppressed.push({ system: cur.system, label: `${cur.label}(力矩)` });
+      this.treq[i] = { value: v, system, label };
+    } else if (cur) {
+      // 同系统：相加（**不换标签**，标签仍指"首个出力者"，便于逐帧回读）
+      cur.value += v;
+    } else {
+      this.treq[i] = { value: v, system, label };
+    }
     let t = this.tauSrc[i];
     if (!t) { t = { system, label, value: v }; this.tauSrc[i] = t; }
     else { t.system = system; t.label = label; t.value = v; }

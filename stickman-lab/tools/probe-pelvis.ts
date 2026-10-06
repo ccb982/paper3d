@@ -96,13 +96,17 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
     const own = rs.axisOwner(ji! * 3 + 2);
     const hold = rs.holdMask[ji! * 3 + 2] ?? 0;
     const ts = rs.tauSrc[ji! * 3 + 2];
+    // ★ 符号判定：目标值 / 实际角 / 位置伺服本拍给出的 τ 分量（`tauApplied` 减 τ 通道）
+    const tg = rs.tgt[ji! * 3 + 2]?.value ?? 0;
     // ★ 三轴全打（疑点：`driveMotors` 内部读的 `a` 可能是**别的轴** ⇒ 软限位误触发）
     d.jointRot(ji!, rv);
     const a0 = -rv[0]! * DEG, a1 = rv[1]! * DEG, a2 = -rv[2]! * DEG;
     const t0 = d.tauApplied[ji! * 3] ?? 0, t1 = d.tauApplied[ji! * 3 + 1] ?? 0;
     cells.push(`[0:${a0.toFixed(0)}°/${t0.toFixed(0)} 1:${a1.toFixed(0)}°/${t1.toFixed(0)}`
       + ` 2:${a2.toFixed(1)}°/${tau.toFixed(0)}]`
-      + `{${own}${hold ? '/让' + hold : ''}|τ:${(ts?.label ?? '—').slice(0, 10)}}`);
+      + `{${own}${hold ? '/让' + hold : ''}|τ:${(ts?.label ?? '—').slice(0, 10)}`
+      + `|tgt:${(tg * (rs.sk.joints[ji!]!.maxRad[2] ?? 1) * 57.3).toFixed(1)}°}`
+      + `|tq:${(ts?.value ?? 0).toFixed(0)}`);
   }
   log(`   ${(i / 120).toFixed(3)} ${pv.y.toFixed(3)} ${(pv.y * 1000).toFixed(0).padStart(5)} `
     + `${(Math.hypot(pw.x, pw.y, pw.z) * DEG).toFixed(0).padStart(4)}° `

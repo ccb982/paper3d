@@ -18217,12 +18217,18 @@ var init_rigState = __esm({
         }
         const cur = this.treq[i];
         this.torqueRequestCount++;
-        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+        if (cur && cur.system !== system && PRIORITY[cur.system] <= PRIORITY[system]) {
           this.tgt[i].suppressed.push({ system, label: `${label}(\u529B\u77E9)` });
           return;
         }
-        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
-        this.treq[i] = { value: v, system, label };
+        if (cur && cur.system !== system) {
+          this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
+          this.treq[i] = { value: v, system, label };
+        } else if (cur) {
+          cur.value += v;
+        } else {
+          this.treq[i] = { value: v, system, label };
+        }
         let t = this.tauSrc[i];
         if (!t) {
           t = { system, label, value: v };
@@ -24105,10 +24111,11 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
     const own = rs.axisOwner(ji * 3 + 2);
     const hold = rs.holdMask[ji * 3 + 2] ?? 0;
     const ts = rs.tauSrc[ji * 3 + 2];
+    const tg = rs.tgt[ji * 3 + 2]?.value ?? 0;
     d.jointRot(ji, rv);
     const a0 = -rv[0] * DEG4, a1 = rv[1] * DEG4, a2 = -rv[2] * DEG4;
     const t0 = d.tauApplied[ji * 3] ?? 0, t1 = d.tauApplied[ji * 3 + 1] ?? 0;
-    cells.push(`[0:${a0.toFixed(0)}\xB0/${t0.toFixed(0)} 1:${a1.toFixed(0)}\xB0/${t1.toFixed(0)} 2:${a2.toFixed(1)}\xB0/${tau.toFixed(0)}]{${own}${hold ? "/\u8BA9" + hold : ""}|\u03C4:${(ts?.label ?? "\u2014").slice(0, 10)}}`);
+    cells.push(`[0:${a0.toFixed(0)}\xB0/${t0.toFixed(0)} 1:${a1.toFixed(0)}\xB0/${t1.toFixed(0)} 2:${a2.toFixed(1)}\xB0/${tau.toFixed(0)}]{${own}${hold ? "/\u8BA9" + hold : ""}|\u03C4:${(ts?.label ?? "\u2014").slice(0, 10)}|tgt:${(tg * (rs.sk.joints[ji].maxRad[2] ?? 1) * 57.3).toFixed(1)}\xB0}|tq:${(ts?.value ?? 0).toFixed(0)}`);
   }
   log(`   ${(i / 120).toFixed(3)} ${pv.y.toFixed(3)} ${(pv.y * 1e3).toFixed(0).padStart(5)} ${(Math.hypot(pw.x, pw.y, pw.z) * DEG4).toFixed(0).padStart(4)}\xB0 (${downFx.toFixed(0).padStart(5)},${downFy.toFixed(0).padStart(5)},${downFz.toFixed(0).padStart(5)}) (${s1.fx.toFixed(0).padStart(5)},${s1.fy.toFixed(0).padStart(5)},${s1.fz.toFixed(0).padStart(5)}) (${(s1.fx - downFx).toFixed(0).padStart(4)},${(s1.fy - downFy).toFixed(0).padStart(4)},${(s1.fz - downFz).toFixed(0).padStart(4)}) | ${rs.pitchDeg.toFixed(1).padStart(6)} | ${cells.join("  ")}`);
 }

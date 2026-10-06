@@ -18227,12 +18227,18 @@ var init_rigState = __esm({
         }
         const cur = this.treq[i];
         this.torqueRequestCount++;
-        if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
+        if (cur && cur.system !== system && PRIORITY[cur.system] <= PRIORITY[system]) {
           this.tgt[i].suppressed.push({ system, label: `${label}(\u529B\u77E9)` });
           return;
         }
-        if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
-        this.treq[i] = { value: v, system, label };
+        if (cur && cur.system !== system) {
+          this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
+          this.treq[i] = { value: v, system, label };
+        } else if (cur) {
+          cur.value += v;
+        } else {
+          this.treq[i] = { value: v, system, label };
+        }
         let t = this.tauSrc[i];
         if (!t) {
           t = { system, label, value: v };
@@ -23008,7 +23014,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
       for (const ax of [2, 0]) {
         const ang = rs.angle(j, ax);
         const rate = rs.jointVel(j, ax);
-        let t = -(K * ang + Dd * rate);
+        let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
         if (t > MX) t = MX;
         else if (t < -MX) t = -MX;
         if (Math.abs(t) < 0.5) continue;
@@ -23318,6 +23324,7 @@ var init_balance = __esm({
       waistHoldK: 260,
       waistHoldD: 26,
       waistHoldMaxN: 55,
+      waistHoldSign: 1,
       upBorrowSlewDeg: 3,
       pelvisWMax: 5,
       upLeanMaxDeg: 12,

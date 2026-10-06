@@ -454,6 +454,8 @@ export interface BalanceParams {
   waistHoldD?: number;
   /** 腰部姿态保持的**逐轴力矩上限**（N·m，绝对值）—— 发力门禁 */
   waistHoldMaxN?: number;
+  /** ★ 块⑨ 的符号（马达空间 vs 回读网关）：实测 +1（见块⑨ 注释），−1 仅作对照 */
+  waistHoldSign?: number;
   /** 借力倾角的**斜率限制**（度/控制拍）—— 防抖；实测不加限制会打崩站立 */
   upBorrowSlewDeg?: number;
   /**
@@ -897,6 +899,7 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   waistHoldK: 260,
   waistHoldD: 26,
   waistHoldMaxN: 55,
+  waistHoldSign: 1,
   upBorrowSlewDeg: 3,
   pelvisWMax: 5,
   upLeanMaxDeg: 12,
@@ -2202,7 +2205,14 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
       for (const ax of [2, 0]) {
         const ang = rs.angle(j, ax);          // ★ 走关节回读网关（不自己读刚体）
         const rate = rs.jointVel(j, ax);
-        let t = -(K * ang + Dd * rate);
+        // ★★★ 符号（2026-10-06 **实测标定**，不是推的）：
+        //   `rs.angle`（回读网关，域口径"正=屈"）与 `driveMotors` 里马达用的 `rv[k]`
+        //   在脊柱矢状轴上**反号** —— 逐帧实测（`probe-pelvis`，目标=0）：
+        //     θ_rs=+1.6° 时 **PD 给 +28**（= 在马达空间把 `rv` 拉回 0，正确），
+        //     而按 `rs.angle` 算的 `−K·θ` 给出 **−23**，**方向与 PD 相反** ⇒ 正反馈。
+        //   ⇒ 本块必须按**马达空间**取号：`t = +(K·ang + D·rate)`。
+        //   （`SC.spineSagSign` 留作消融对照，默认 +1。）
+        let t = (K * ang + Dd * rate) * (p.waistHoldSign ?? 1);
         if (t > MX) t = MX; else if (t < -MX) t = -MX;
         if (Math.abs(t) < 0.5) continue;
         rs.requestTorque(j, ax, t, 'balance', '腰部姿态保持(持续·抗折)', true);
