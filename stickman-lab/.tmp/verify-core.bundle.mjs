@@ -6435,7 +6435,10 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     archCx: 0,
     archCz: 0,
     archMass: 0,
-    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 }
+    archDims: { len: 0.081, rad: 7e-3, hh: 0.01 },
+    mfootBlocks: [],
+    mfootMass: 0,
+    mfootCx: 0
   };
   for (const spec of SEGMENTS) {
     const part = PART_BY_KEY.get(spec.key);
@@ -6660,21 +6663,36 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             const blocks = [
               blk(-1, -0.435, -0.6, 0.6, 26, 0, "\u8DB3\u8DDF"),
               blk(-0.435, 0.145, -1, -0.4, 10, 0, "\u5916\u4FA7\u67F1"),
-              blk(0.145, 0.785, -1, 1, 20, 0, "\u8DD6\u9AA8\u5934(\u6700\u5BBD)"),
+              blk(0.145, 0.785, -1, 0, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5916\u4FA7"),
               blk(0.785, 1, -0.76, 0.76, 12, 0, "\u8DBE")
             ];
+            const mfootBlocks = [
+              blk(0.145, 0.785, 0, 1, 20, 0, "\u8DD6\u9AA8\u5934\xB7\u5185\u4FA7")
+            ];
+            if (cfg.flexibleArch === false) blocks.push(mfootBlocks[0]);
             const archBlocks = [
               blk(-0.435, -0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u540E"),
               blk(-0.145, 0.145, 0.4, 1, 20, archRise, "\u5185\u4FA7\u5F13\xB7\u524D")
             ];
+            if (cfg.flexibleArch === false) blocks.push(...archBlocks);
             const archVol = archBlocks.reduce((a, b) => a + b._vol, 0);
-            const allVol = archVol + blocks.reduce((a, b) => a + b._vol, 0);
-            const archMass = soleMass * (archVol / allVol);
-            for (const b of archBlocks) {
-              b.mass = archMass * (b._vol / archVol);
-              b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
-              b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+            const mfootVol = mfootBlocks.reduce((a, b) => a + b._vol, 0);
+            const archVolAll = cfg.flexibleArch === false ? 0 : archVol;
+            const mfootVolAll = cfg.flexibleArch === false ? 0 : mfootVol;
+            const allVol = archVolAll + mfootVolAll + blocks.reduce((a, b) => a + b._vol, 0);
+            const archMass = soleMass * (archVolAll / allVol);
+            const mfootMass = soleMass * (mfootVolAll / allVol);
+            for (const [grp, gm] of [[archBlocks, archMass], [mfootBlocks, mfootMass]]) {
+              const gv = grp.reduce((a, b) => a + b._vol, 0);
+              for (const b of grp) {
+                b.mass = gm * (b._vol / gv);
+                b.inertiaZ = b.mass * (b.hx * b.hx + b.hy * b.hy) / 3;
+                b.inertiaXY = b.mass * (b.hz * b.hz + b.hy * b.hy) / 3;
+              }
             }
+            ARCH_OUT.mfootBlocks = mfootBlocks;
+            ARCH_OUT.mfootMass = mfootMass;
+            ARCH_OUT.mfootCx = 0.145 * L2;
             ARCH_OUT.archBlocks = archBlocks;
             ARCH_OUT.archRise = archRise;
             ARCH_OUT.archCx = (-0.435 + 0.145) / 2 * L2;
@@ -6697,7 +6715,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
                 hh: (aHi[1] - aLo[1]) / 2
               };
             }
-            const footMass = soleMass - ARCH_OUT.archMass;
+            const footMass = soleMass - ARCH_OUT.archMass - ARCH_OUT.mfootMass;
             const volTot = blocks.reduce((a, b) => a + b._vol, 0);
             for (const b of blocks) {
               const m = footMass * (b._vol / volTot);
@@ -6709,7 +6727,7 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
           })(),
           leg: true
         });
-        {
+        if (cfg.flexibleArch !== false) {
           const isL = spec.key === "shin_l";
           const footKey = isL ? "foot_l" : "foot_r";
           const archKey = isL ? "arch_l" : "arch_r";
@@ -6749,6 +6767,26 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             colliders: ARCH_OUT.archBlocks,
             leg: true
           });
+          bodies.push({
+            key: isL ? "mfoot_l" : "mfoot_r",
+            bone: spec.bone,
+            label: isL ? "\u5DE6\u5185\u4FA7\u524D\u8DB3" : "\u53F3\u5185\u4FA7\u524D\u8DB3",
+            part,
+            cx: 0,
+            cy: ankleY,
+            cz: centerZ,
+            restTiltRad: tilt,
+            restYawRad: yaw,
+            plateHidden: true,
+            // 靿子那张图由 foot_* 整张画，再画会出现「两只脚」
+            plateOffset,
+            length: ARCH_OUT.archDims.len,
+            radius: ARCH_OUT.archDims.rad,
+            halfHeight: ARCH_OUT.archDims.hh,
+            mass: ARCH_OUT.mfootMass,
+            colliders: ARCH_OUT.mfootBlocks,
+            leg: true
+          });
           const HWm = SOLE_WIDTH_TARGET / 2 * cfg.soleFootScale;
           const rollZ = centerZ + -0.7 * HWm;
           const rollY = ankleY + (ARCH_OUT.archBlocks[0].offsetY ?? 0) - ARCH_OUT.archBlocks[0].hy - ARCH_OUT.archRise;
@@ -6766,7 +6804,12 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
             // 鞋底底面（旋前轴的高度）
             wz: rollZ,
             // 外侧接地棱（旋前轴的侧向位置）
-            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass)
+            massFrac: ARCH_OUT.archMass / Math.max(1e-6, soleMass),
+            // ★ 内侧前足接在弓的远侧端：弓的远端 fx = +0.145
+            mfootKey: isL ? "mfoot_l" : "mfoot_r",
+            mwx: ARCH_OUT.mfootCx,
+            mwy: rollY,
+            mwz: rollZ
           });
         }
         bodies.push({
@@ -6982,6 +7025,32 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       revoluteAxis: [1, 0, 0],
       maxTorque: [tauArch, tauArch, tauArch]
     });
+    const mfoot = byKey.get(as.mfootKey);
+    if (!mfoot) throw new Error(`[skeleton] \u5185\u4FA7\u524D\u8DB3 ${as.mfootKey} \u7684\u521A\u4F53\u4E0D\u5B58\u5728`);
+    const mParent = rotVecByQuat(
+      invQuatOf(restQuatOf(child.restTiltRad, child.restYawRad)),
+      [as.mwx - child.cx, as.mwy - child.cy, as.mwz - child.cz]
+    );
+    const mChild = rotVecByQuat(
+      invQuatOf(restQuatOf(mfoot.restTiltRad, mfoot.restYawRad)),
+      [as.mwx - mfoot.cx, as.mwy - mfoot.cy, as.mwz - mfoot.cz]
+    );
+    joints.push({
+      name: as.mfootKey,
+      index: joints.length,
+      parentKey: as.archKey,
+      childKey: as.mfootKey,
+      wx: as.mwx,
+      wy: as.mwy,
+      wz: as.mwz,
+      parentLocal: mParent,
+      childLocal: mChild,
+      restRad: [0, 0, 0],
+      minRad: [cfg.archLimitDeg[0] * DEG, -20 * DEG, -25 * DEG],
+      maxRad: [cfg.archLimitDeg[1] * DEG, 20 * DEG, 25 * DEG],
+      revoluteAxis: [1, 0, 0],
+      maxTorque: [tauArch, tauArch, tauArch]
+    });
   }
   if (K > 1) {
     const SPINE_XY_DEG = [15, 20];
@@ -7186,8 +7255,8 @@ var init_skeleton = __esm({
       archLimitDeg: [-4, 16],
       /** 弓关节锚点沿足长的位置（0=足跟端, 1=脚尖端）。默认 0.22 = 弓的近端 */
       archAtFrac: 0.22,
-      archRise: 6e-3,
-      // ★ 见下面的说明（不是人体解剖值 20~25mm）
+      archRise: 0,
+      // ★ 实测定的（不是人体解剖值 20~25mm）
       // ★★ **默认 0（不留缝）** —— 实测空缝并未压掉 60Hz 周期-2 振动：
       //   gap=1.5/4/10mm 得到的去趋势帧间是 24.5 / 9.1 / 18.4mm（无单调趋势，是噪声），
       //   主周期恒为 2 帧。⇒ 共面接缝不是振动来源，默认开启只会无意义地改动质量分布。
@@ -14059,7 +14128,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14072,6 +14141,7 @@ var init_ragdoll = __esm({
     IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
     ZERO = { x: 0, y: 0, z: 0 };
     MOTOR_ALPHA = 1;
+    LEGACY_MFOOT_PD = globalThis.__LEGACY_MFOOT_PD === true;
     MOTOR_ALPHA_RECOVER = 1;
     LIMIT_SOFT_ZONE = 0.3;
     AXIS_X = 0;
@@ -14417,12 +14487,12 @@ var init_ragdoll = __esm({
             ).setFriction(this.opt.bodyFriction).setRestitution(0).setCollisionGroups(GROUPS_SELF);
             const col = this.world.createCollider(cd, body);
             if (c.shape === "cuboid") {
-              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l") {
+              if (b.key === "shin_l" || b.key === "foot_l" || b.key === "forefoot_l" || b.key === "arch_l" || b.key === "mfoot_l") {
                 this.soleCols[0].push(col);
                 this.soleColBody[0].push(i);
                 this.soleColLocalIdx[0].push(ci);
                 this.soleCol[0] ??= col;
-              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r") {
+              } else if (b.key === "shin_r" || b.key === "foot_r" || b.key === "forefoot_r" || b.key === "arch_r" || b.key === "mfoot_r") {
                 this.soleCols[1].push(col);
                 this.soleColBody[1].push(i);
                 this.soleColLocalIdx[1].push(ci);
@@ -14577,7 +14647,7 @@ var init_ragdoll = __esm({
             jd = rapier_default.JointData.spherical(anch1, anch2);
           }
           const joint = this.world.createImpulseJoint(jd, this.bodies[pi], this.bodies[ci], true);
-          if (j.name.startsWith("arch_") && j.revoluteAxis) {
+          if ((j.name.startsWith("arch_") || j.name.startsWith("mfoot_") && !LEGACY_MFOOT_PD) && j.revoluteAxis) {
             const mj = joint;
             mj.configureMotorModel(rapier_default.MotorModel.ForceBased);
             const K = this.opt.archStiffness ?? 400;
@@ -14598,6 +14668,23 @@ var init_ragdoll = __esm({
       }
       // ------------------------------------------------------------ 读状态
       /** 把刚体本地向量 v 转到世界，写入 out */
+      /**
+       * 关节 `i` 的第 `axis` 轴在世界系下的**单位方向**（写 out[0..2]）。
+       *
+       * 全链 QP 需要它把"关节力矩"翻译成"对地面的水平力"（附录 B.2 的等式 ①）：
+       * `τ` 沿这个方向，力臂由 `jointWorld` 给。
+       * ⚠ `toWorld` 是 private 且签名是**私有用法**（直接给三元组），
+       *   这里包一层给外部用，避免 QP 去访问私有实现。
+       */
+      bodyWorldAxis(i, axis, out = this.axisWorldTmp) {
+        const j = this.jointBodies[i * 2];
+        const b = this.bodies[j];
+        if (axis === 0) this.toWorld(b, 1, 0, 0, out);
+        else if (axis === 1) this.toWorld(b, 0, 1, 0, out);
+        else this.toWorld(b, 0, 0, 1, out);
+        return out;
+      }
+      axisWorldTmp = new Float64Array(3);
       toWorld(b, vx, vy, vz, out) {
         const q = b.rotation();
         quatRotate(q.x, q.y, q.z, q.w, vx, vy, vz, out);
@@ -15346,7 +15433,34 @@ var init_ragdoll = __esm({
        *   前缀覆盖：小腿/脚掌/前足/**弓** 四类足部构件 + 上肢。
        */
       static notCrashKey(key) {
-        return /^(shin|foot|forefoot|arch|midfoot|toe)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+        return /^(shin|foot|forefoot|arch|midfoot|toe|mfoot)_[lr]$/.test(key) || /^(arm|hand|forearm)_[lr]$/.test(key);
+      }
+      /**
+       * ★★ **头是否碰到地面** —— 跌倒的唯一判据（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+       *
+       *   为什么必须是"头"而不是任何别的部位：
+       *     · 弓/内侧前足/足趾**合法承重时就要接地** ⇒ 用它们当判据等于"脚一干活就死"
+       *       （`notCrashKey` 漏 `mfoot` 时就是这么炸的：回合 t=0 结束）。
+       *     · 躯干高度、倾角在**恢复过程中**必然穿越，早判等于把"正在纠正"当"已经倒了"。
+       *     · 而站着、走路、单腿站、弓承重、足趾抓地时，**头不可能碰地** ⇒ 零误伤。
+       *
+       * 判据与 `bodyHitGround()` 同源（真实接触对 + |n·y| ≥ 0.5），只作用在**头**这���刚体上。
+       */
+      headHitGround() {
+        const b = this.bodies[this.indexByKey.get("head")];
+        if (!b) return false;
+        for (let ci = 0; ci < b.numColliders(); ci++) {
+          const col = b.collider(ci);
+          let hit = false;
+          this.world.contactPairsWith(col, (other) => {
+            this.world.contactPair(col, other, (mf) => {
+              if (mf.numContacts() === 0) return;
+              if (Math.abs(mf.normal().y) > 0.5) hit = true;
+            });
+          });
+          if (hit) return true;
+        }
+        return false;
       }
       bodyHitGround() {
         this.lastHitKey = "";
@@ -15765,7 +15879,8 @@ var init_ragdoll = __esm({
               kPSpring = ov ? ov.kP : kP;
               err = (ov ? ov.kP : kP) * ts * (thRef - a) - (ov ? ov.kD : kDd) * ts * relL[k];
             }
-            if (err === 0) continue;
+            const ffEarly = this.torqueCmd[idx];
+            if (err === 0 && ffEarly === 0) continue;
             const tauMax = j.maxTorque[k] * scale;
             let tau = err * (tauMax / JOINT_MAX_SPEED);
             if (tau > tauMax) tau = tauMax;
@@ -18495,32 +18610,36 @@ var init_sim = __esm({
         }
       }
       /** 摔倒判定：躯干塌下去 / 倾角太大 / 头贴地 → 提前结束 */
+      /**
+       * ★★ **跌倒判定：只看"头碰地"一条**（用户 2026-10-05：「头碰地为跌倒，只留这一个判据得了」）。
+       *
+       * 为什么砍掉另外两条：
+       *   · `bodyHitGround()`（任何非脚刚体触地）—— 误伤太重。弓/内侧前足**合法承重时
+       *     就要接地**，把它们判成摔倒等于"脚一承重就死"（这个坑当天栽过一次：
+       *     `notCrashKey` 漏了 `mfoot`，脚一碰地回合就在 t=0 结束）。
+       *   · 躯干高度比 —— 姿态下沉过程中必然穿越，早判无意义（该判据此前已被关过一次）。
+       *   · 倾角 `rT` —— 在我们这里会把"还在恢复过程中的大倾角"当成终点，
+       *     而用户要的是"真的摔了没有"。倾角读数保留在 `fallDiag` 里做诊断，不参与判定。
+       *
+       * ⇒ 判据：`头` 与地面有竖直接触（`headHitGround()`）⇒ 跌倒。
+       *   这是唯一一条**不会**在正常动作过程中误触的：站着、走路、单腿站、
+       *   弓承重、足趾抓地时，头都不可能碰地。
+       */
       checkFall() {
         if (this.finished) return true;
-        const torso = this.doll.torso();
-        const tp = torso.translation();
-        const tilt = this.doll.tiltOf(torso);
+        const tp = this.doll.torso().translation();
+        const tilt = this.doll.tiltOf(this.doll.torso());
         const headY = this.doll.head().translation().y;
-        if (this.doll.bodyHitGround()) {
-          this.fallReason = "crash";
-          this.fallDiag = { rH: +(this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y)).toFixed(3), rT: +NaN.toFixed(3), rD: +NaN.toFixed(3), torsoY: +tp.y.toFixed(3), headY: +headY.toFixed(3), tiltDeg: 0, hit: this.doll.lastHitKey };
-          this.finish(true);
-          return true;
-        }
-        const useH = this.cfg.fallHeightRatio > 0;
-        const rH = useH ? this.initTorsoY * this.cfg.fallHeightRatio / Math.max(1e-6, tp.y) : 0;
-        const rT = tilt / this.cfg.fallAngle;
-        const rD = this.cfg.headMinHeight / Math.max(1e-6, headY);
-        if (useH && rH > 1 || rT > 1 || rD > 1) {
-          this.fallReason = rT > 1 ? "tilt" : "head";
+        if (this.doll.headHitGround()) {
+          this.fallReason = "head";
           this.fallDiag = {
-            rH: +rH.toFixed(3),
-            rT: +rT.toFixed(3),
-            rD: +rD.toFixed(3),
+            rH: 0,
+            rT: +(tilt / Math.max(1e-6, this.cfg.fallAngle)).toFixed(3),
+            rD: +(this.cfg.headMinHeight / Math.max(1e-6, headY)).toFixed(3),
             torsoY: +tp.y.toFixed(3),
             headY: +headY.toFixed(3),
             tiltDeg: +(tilt * 180 / Math.PI).toFixed(1),
-            hit: this.doll.lastHitKey
+            hit: "head"
           };
           this.finish(true);
           return true;

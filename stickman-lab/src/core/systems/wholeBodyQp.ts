@@ -57,12 +57,42 @@ export interface QpAxis {
 export interface QpInput {
   /** 被求解的轴（通常是承重腿的 hip/knee/ankle + 腰，全部矢状+额状） */
   axes: QpAxis[];
-  /** 期望的水平地面反力（N）。由 ξ 收敛律给出 */
+  /** 期望的地面反力 —— **矢状**（N，+x 朝前） */
   fDesX: number;
+  /**
+   * ★★ 期望的地面反力 —— **竖向**（N，+y 朝上）。
+   *
+   *   **必填，且不是可选项。** 完整逆动力学是
+   *       `M(q)a + C + g = Sᵀτ + JᵀF`
+   *   竖向那一行**就是撑体重**：`F_y = m·(g + a_y_des)`，静态时 `= m·g`。
+   *
+   *   ⚠⚠ 为什么必填（这是本文件最重要的一次修正，2026-10-06）：
+   *   原实现**显式排除**竖向（注释：「竖向由体重承担，不靠关节力矩」），只解
+   *   2×2 正规方程。后果不是"少了一维、精度差一点"，而是：
+   *       等式只管水平 ⇒ 求出来的 τ 是「在任意竖向载荷下都成立」的力矩，
+   *       而系统此刻正被 mg 压着 ⇒ **QP 一写进去就把唯一的支撑擦掉**。
+   *   这与 `wantedForce.ts:196` 记的是同一件事的两面：那里因为「位置伺服
+   *   已经在撑体重」而把 `weight` 关掉，理由是「叠一份 mg 就是重力双计」。
+   *   两边都躲，于是**谁都没撑体重**。
+   *
+   *   ⇒ 正确处置（`wantedForce.ts:200` 已经写下了配方，本文件是执行它）：
+   *     ① QP 对它求解的每一根轴调 `requestHold` ⇒ 位置环 P 项归零、退化为纯阻尼
+   *        （`ragdoll.ts:2435`），不再有第二个撑体重的来源；
+   *     ② 此时才允许把 `mg` 放进等式的竖向行。
+   *   顺序反了就是双计，顺序对了才是定量支撑。
+   */
+  fDesY: number;
+  /** 期望的地面反力 —— **额状**（N，+z 朝左） */
   fDesZ: number;
   /** 支撑多边形在世界系下的 X 区间 [minX, maxX] */
   copXRange: [number, number];
   copZRange: [number, number];
+  /**
+   * 摩擦系数（F/T 摩擦锥）。QP **不能**给出一个摩擦锥外的地面反力 ——
+   * 那不是"推不动"，是**物理上不存在**。默认 0.8（橡胶底/橡胶地）。
+   * 用它替代原来那句「竖向不参与等式」：竖向不进等式 ⇒ 摩擦锥无从判定。
+   */
+  mu?: number;
   /** 迭代数（默认 40，实测够） */
   iters?: number;
   /** 权重放大：踝相对髋的倍数（文献 3~5，取 4） */
@@ -74,8 +104,24 @@ export interface QpOutput {
   tau: Float64Array;
   /** 是否全部约束都满足（不满足时 `tau` 是"尽力而为"的投影点） */
   feasible: boolean;
-  /** 等式残差 ‖Σ τ·arm − F_des‖（N）。0 = 精确解 */
+  /** 等式残差 ‖Σ τ·arm − F_des‖（N，**三维**）。0 = 精确解 */
   residual: number;
+  /**
+   * 分量残差（magnitude）。`residual` 是三个分量的合成模，
+   * 而竖向分量天然比水平大一个量级（mg≈687 N vs 侧向几十 N），
+   * ⇒ 只看合成模会**把竖向没撑住这件事完全掩盖掉**。
+   * 这正是本文件原来"看不见自己错在哪"的原因。
+   */
+  residualXYZ: [number, number, number];
+  /** 合成地面反力（N，三维），便于回读 */
+  fActual: [number, number, number];
+  /** 各条不等式的逐条结果（false = 这条没过，`feasible` 才是 false） */
+  checks: {
+    box: boolean;        // |τ_i| ≤ τmax_i
+    equality: boolean;    // ‖residual‖ ≤ tol
+    cop: boolean;        // 合力方向落在支撑多边形凸锥内
+    friction: boolean;   // |F_h| ≤ μ·F_y 且 F_y ≥ 0
+  };
   iters: number;
 }
 
@@ -92,59 +138,115 @@ export interface QpOutput {
 export function solveWholeBodyQp(inp: QpInput): QpOutput {
   const n = inp.axes.length;
   const tau = new Float64Array(n);
+  const mu = inp.mu ?? 0.8;
   if (n === 0) {
-    return { tau, feasible: false, residual: 0, iters: 0 };
+    return {
+      tau, feasible: false, residual: 0,
+      residualXYZ: [0, 0, 0], fActual: [0, 0, 0],
+      checks: { box: false, equality: false, cop: false, friction: false },
+      iters: 0,
+    };
   }
   const iters = inp.iters ?? 40;
 
-  // ── 等式约束的最小范数解：τ₀ = W⁻¹Aᵀ(AW⁻¹Aᵀ)⁻¹ b ──────────────────
-  // A 是 3×n（水平两个方向 + 竖向不用力矩），这里只用**水平两行**
-  // （竖向由体重承担，不靠关节力矩 —— 那是 `wantedForce.weight`，默认关）。
-  // 用 2×2 的正规方程闭式解，n 很小，无需通用线性代数。
-  // ★ 力矩对地面反力的比系数：`c_i = axis_i × r_i`（三维）。
-  //   然后 `F = Σ τ_i · c_i`。
-  //   强约束：只约束**水平两个分量**（x/z）——竖向由体重承担（不靠关节力矩）。
-  const cx3 = new Float64Array(n);
-  const cz3 = new Float64Array(n);
+  // ── 等式约束：三维，不是两维 ──────────────────────────────────────────
+  //   `c_i = axis_i × r_i`（**三维**），`F = Σ τ_i · c_i`。
+  //   ★ 2026-10-06：原实现只取 `c` 的 x、z 两个分量（竖向被显式丢弃）。
+  //     丢掉的那一项 `c_y = w_z·r_x − w_x·r_z` 恰恰是**踝策略的物理通道**：
+  //     绕 X（外展）轴的力矩给出 `F_y = −τ_x·r_z` —— 前后半臂就是竖向力，
+  //     所以踝改变压力中心（CoP）**必须**经过这一项。
+  //     竖向不进等式 ⇒ 踝的 CoP 权限在数学上就不存在。
+  const C = new Float64Array(n * 3);       // 行主序 3×n：行 0=x, 1=y, 2=z
   for (let i = 0; i < n; i++) {
     const a = inp.axes[i]!;
-    // c = axis × r
-    cx3[i] = a.wy * a.rz - a.wz * a.ry;
-    cz3[i] = a.wx * a.ry - a.wy * a.rx;
+    C[i * 3]     = a.wy * a.rz - a.wz * a.ry;   // c_x
+    C[i * 3 + 1] = a.wz * a.rx - a.wx * a.rz;   // c_y  ← 新增
+    C[i * 3 + 2] = a.wx * a.ry - a.wy * a.rx;   // c_z
   }
-  const Aw = new Float64Array(n * 2);
-  for (let i = 0; i < n; i++) { Aw[i * 2] = cx3[i]!; Aw[i * 2 + 1] = cz3[i]!; }
   const iw = new Float64Array(n);
   for (let i = 0; i < n; i++) iw[i] = 1 / Math.max(1e-9, inp.axes[i]!.w);
-  let m00 = 0, m01 = 0, m11 = 0;
-  for (let i = 0; i < n; i++) {
-    m00 += Aw[i * 2]! * iw[i]! * Aw[i * 2]!;
-    m01 += Aw[i * 2]! * iw[i]! * Aw[i * 2 + 1]!;
-    m11 += Aw[i * 2 + 1]! * iw[i]! * Aw[i * 2 + 1]!;
-  }
-  const det = m00 * m11 - m01 * m01;
-  let tau0: Float64Array;
-  if (Math.abs(det) < 1e-12) {
-    // 力臂退化（全部轴的力臂共线，或 rx/rz 全为 0）⇒ **无法解等式**。
-    // 此时改用“带最大约束的单轴”：选力臂最长的轴按 F_des 比例满足。
-    // 这个降级必须在输出里说出来（feasible 会掉），不能静默。
-    let best = 0, bestR = 1e-9;
+
+  // `b` = F_des（三维）
+  const b0 = inp.fDesX, b1 = inp.fDesY, b2 = inp.fDesZ;
+
+  /**
+   * 3×3 对称矩阵的闭式求逆解 `λ = N⁻¹ r`。
+   *
+   * 用伴随矩阵而不是 Cramer 展开式，是为了**同时拿到行列式**做奇异性判定：
+   * `det` 接近 0 ⇒ 这组轴的力臂在三维里退化（共面/共线）⇒ 等式欠定。
+   * 原来的 2×2 版本只看水平面，垂向退化完全不可见 —— 而**垂向正是撑体重
+   * 所在的方向**，退化时输出会是一组"看起来正常但没有竖向权限"的力矩。
+   *
+   * @param off 起始下标（用来在子矩阵 `N` 上就地累加，不额外分配）
+   * @param fix 非 0 的轴被钉在边界上，只累加自由轴的贡献（= 子矩阵）
+   */
+  const solve3 = (
+    N: Float64Array, fix: Int8Array | null,
+    r0: number, r1: number, r2: number,
+  ): { ok: boolean; l0: number; l1: number; l2: number } => {
+    // 累加 N = A_free · W_free⁻¹ · A_freeᵀ（3×3，对称）
+    N[0] = 0; N[1] = 0; N[2] = 0; N[3] = 0; N[4] = 0; N[5] = 0;
+    N[6] = 0; N[7] = 0; N[8] = 0;
     for (let i = 0; i < n; i++) {
-      const r = Math.hypot(Aw[i * 2]!, Aw[i * 2 + 1]!);
+      if (fix !== null && fix[i] !== 0) continue;
+      const w = iw[i]!;
+      const a0 = C[i * 3]!, a1 = C[i * 3 + 1]!, a2 = C[i * 3 + 2]!;
+      N[0] += a0 * w * a0; N[1] += a0 * w * a1; N[2] += a0 * w * a2;
+      N[4] += a1 * w * a1; N[5] += a1 * w * a2;
+      N[8] += a2 * w * a2;
+    }
+    N[3] = N[1]!; N[6] = N[2]!; N[7] = N[5]!;      // 对称化
+    const m00 = N[0]!, m01 = N[1]!, m02 = N[2]!;
+    const m11 = N[4]!, m12 = N[5]!, m22 = N[8]!;
+    // 伴随矩阵（对称阵的伴随 = 余子式矩阵）
+    const a00 = m11 * m22 - m12 * m12;
+    const a01 = m12 * m02 - m01 * m22;
+    const a02 = m01 * m12 - m11 * m02;
+    const a11 = m00 * m22 - m02 * m02;
+    const a12 = m02 * m01 - m00 * m12;
+    const a22 = m00 * m11 - m01 * m01;
+    const det = a00 * m00 + a01 * m01 + a02 * m02;
+    // 尺度相关的退化阈值：用 N 的迹，量纲一致
+    const scale = Math.abs(m00) + Math.abs(m11) + Math.abs(m22);
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12 * Math.max(1e-30, scale ** 3)) {
+      return { ok: false, l0: 0, l1: 0, l2: 0 };
+    }
+    const id = 1 / det;
+    return {
+      ok: true,
+      l0: (a00 * r0 + a01 * r1 + a02 * r2) * id,
+      l1: (a01 * r0 + a11 * r1 + a12 * r2) * id,
+      l2: (a02 * r0 + a12 * r1 + a22 * r2) * id,
+    };
+  };
+
+  // ── 无约束最小范数解：τ₀ = W⁻¹Aᵀ(AW⁻¹Aᵀ)⁻¹ b ────────────────────────
+  const Nfull = new Float64Array(9);
+  const l0f = solve3(Nfull, null, b0, b1, b2);
+  let tau0: Float64Array;
+  let degenerate = false;
+  if (l0f.ok) {
+    tau0 = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      tau0[i] = iw[i]! * (C[i * 3]! * l0f.l0 + C[i * 3 + 1]! * l0f.l1 + C[i * 3 + 2]! * l0f.l2);
+    }
+  } else {
+    // ★ 力臂在三维里退化（全部共面或共线）⇒ **无法解等式**。
+    //   退化方向上取 |c| 最长的轴按 F_des 的模长比例满足，让输出至少"动起来"。
+    //   这个降级**必须**在输出里说出来（`checks.equality` 会掉、`feasible=false`），
+    //   绝不静默 —— 否则调用方拿到一组看似正常的 τ。
+    degenerate = true;
+    let best = -1, bestR = 1e-9;
+    for (let i = 0; i < n; i++) {
+      const r = Math.hypot(C[i * 3]!, C[i * 3 + 1]!, C[i * 3 + 2]!);
       if (r > bestR) { bestR = r; best = i; }
     }
     tau0 = new Float64Array(n);
-    if (bestR > 1e-9) {
-      const mag = Math.hypot(inp.fDesX, inp.fDesZ);
-      tau0[best] = (mag / bestR) * Math.sign(
-        Aw[best * 2]! * inp.fDesX + Aw[best * 2 + 1]! * inp.fDesZ || 1);
-    }
-  } else {
-    const l0 = (m11 * inp.fDesX - m01 * inp.fDesZ) / det;
-    const l1 = (m00 * inp.fDesZ - m01 * inp.fDesX) / det;
-    tau0 = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      tau0[i] = iw[i]! * (Aw[i * 2]! * l0 + Aw[i * 2 + 1]! * l1);
+    if (best >= 0) {
+      const mag = Math.hypot(b0, b1, b2);
+      // 沿 c 的方向投 F_des：τ = (c·b̂)/|c|² × mag，取 c·b 的符号
+      const dot = C[best * 3]! * b0 + C[best * 3 + 1]! * b1 + C[best * 3 + 2]! * b2;
+      tau0[best] = (mag / bestR) * Math.sign(dot || 1);
     }
   }
 
@@ -154,49 +256,43 @@ export function solveWholeBodyQp(inp: QpInput): QpOutput {
 
   // ── 求解：**主动集法**（active-set QP），不是 POCS ────────────────────
   //
-  // 问题：约束是「盒 + 2 个等式」，POCS 在这类混合约束上不收敛
-  //   · 阻尼步长 0.5 ⇒ 投影在盒边界来回弹跳，F_des=20N 给�� 322.8N（过冲 16 倍）
+  // 问题：约束是「盒 + 3 个等式」，POCS 在这类混合约束上不收敛
+  //   · 阻尼步长 0.5 ⇒ 投影在盒边界来回弹跳，F_des=20N 给出 322.8N（过冲 16 倍）
   //   · 步长 1.0 ⇒ 等式投影把盒内点推出去，输出达 τmax 的 100 倍
   //
   // 正确做法：这是**标准的带等式约束 QP**。把当前违反盒约束的轴固定在边界上，
-  //   对剩下的自由轴解等式 —— 降到 1×1/2×2 闭式，**精确**、**单调**、无过冲。
-  //   迭代：找出违规轴 → 钉住 → 解 → 若有轴从"钉住"变为应松开则松开（交换）
-  //   每步的 τ 都**严格在盒内**，等式残差逐步下降。
+  // 对剩下的自由轴解等式 —— 降到 3×3 闭式，**精确**、**单调**、无过冲。
+  // 迭代：找出违规轴 → 钉住 → 解 → 重复
+  // 每步的 τ 都**严格在盒内**，等式残差逐步下降。
   //
   // 变量定义：free = 未被钉住的轴；fixed = 被钉在 ±τmax 的轴。
-  //   A_free τ_free + A_fixed τ_fixed = b  ⇒  τ_free = τ_free⁰ + W_f⁻¹A_fᵀ M⁻¹ (b − A_free τ_free⁰)
+  //   A_free τ_free + A_fixed τ_fixed = b  ⇒  τ_free = τ_free⁰ + W_f⁻¹A_fᵀ N_f⁻¹ (b − A_free τ_free⁰)
   const FIXED = new Int8Array(n);      // 0 = 自由, 1 = 钉在 +, -1 = 钉在 −
+  const Nsub = new Float64Array(9);
+  let used = 0;
   for (let iter = 0; iter < 8 * n; iter++) {
+    used = iter + 1;
     // ① 当前解（自由轴取最优，钉住轴取边界）
     tau.set(tau0);
     for (let i = 0; i < n; i++) {
       if (FIXED[i] === 1) tau[i] = inp.axes[i]!.tauMax;
       else if (FIXED[i] === -1) tau[i] = -inp.axes[i]!.tauMax;
     }
-    // ② 算自由轴的修正量
-    let g0 = 0, g1 = 0, nf = 0;
+    // ② 自由轴当前已贡献的部分 g，以及残差 r = b − g（**三维**）
+    let g0 = 0, g1 = 0, g2 = 0, nf = 0;
     for (let i = 0; i < n; i++) {
       if (FIXED[i] !== 0) continue;
-      g0 += Aw[i * 2]! * tau[i]!; g1 += Aw[i * 2 + 1]! * tau[i]!; nf++;
-      // 用该轴自身权重参与 M（子矩阵）
+      const t = tau[i]!;
+      g0 += C[i * 3]! * t; g1 += C[i * 3 + 1]! * t; g2 += C[i * 3 + 2]! * t; nf++;
     }
-    let n00 = 0, n01 = 0, n11 = 0;
+    if (nf === 0) break;
+    const lam = solve3(Nsub, FIXED, b0 - g0, b1 - g1, b2 - g2);
+    if (!lam.ok) break;
     for (let i = 0; i < n; i++) {
       if (FIXED[i] !== 0) continue;
-      n00 += Aw[i * 2]! * iw[i]! * Aw[i * 2]!;
-      n01 += Aw[i * 2]! * iw[i]! * Aw[i * 2 + 1]!;
-      n11 += Aw[i * 2 + 1]! * iw[i]! * Aw[i * 2 + 1]!;
+      tau[i] = tau[i]! + iw[i]! * (C[i * 3]! * lam.l0 + C[i * 3 + 1]! * lam.l1 + C[i * 3 + 2]! * lam.l2);
     }
-    const nd = n00 * n11 - n01 * n01;
-    if (nf === 0 || Math.abs(nd) < 1e-12) break;
-    const r0 = inp.fDesX - g0, r1 = inp.fDesZ - g1;
-    const id = 1 / nd;
-    const l0 = (n11 * r0 - n01 * r1) * id, l1 = (n00 * r1 - n01 * r0) * id;
-    for (let i = 0; i < n; i++) {
-      if (FIXED[i] !== 0) continue;
-      tau[i] = tau[i]! + iw[i]! * (Aw[i * 2]! * l0 + Aw[i * 2 + 1]! * l1);
-    }
-    // ③ 若某个自由轴越界 ⇒ 钉它；已钉的轴若"应该松开"（方向反了）则松开
+    // ③ 若某个自由轴越界 ⇒ 钉它
     let changed = false;
     for (let i = 0; i < n; i++) {
       const m = inp.axes[i]!.tauMax;
@@ -208,31 +304,33 @@ export function solveWholeBodyQp(inp: QpInput): QpOutput {
     if (!changed) break;
   }
 
-  // 残差 + 可行性
-  let s0 = 0, s1 = 0;
-  let allInBox = true;
+  // ── 残差（分分量报告）+ 四条不等式逐条判定 ───────────────────────────
+  let s0 = 0, s1 = 0, s2 = 0;
+  let boxOk = true;
   for (let i = 0; i < n; i++) {
-    s0 += tau[i]! * cx3[i]!;
-    s1 += tau[i]! * cz3[i]!;
-    if (Math.abs(tau[i]!) > inp.axes[i]!.tauMax * 1.001) allInBox = false;
+    s0 += tau[i]! * C[i * 3]!;
+    s1 += tau[i]! * C[i * 3 + 1]!;
+    s2 += tau[i]! * C[i * 3 + 2]!;
+    if (Math.abs(tau[i]!) > inp.axes[i]!.tauMax * 1.001) boxOk = false;
   }
-  const residual = Math.hypot(s0 - inp.fDesX, s1 - inp.fDesZ);
+  const rx = s0 - b0, ry = s1 - b1, rz = s2 - b2;
+  const residualXYZ: [number, number, number] = [rx, ry, rz];
+  const residual = Math.hypot(rx, ry, rz);
+
   // ★ CoP 可行性：**支撑多边形的凸锥**判据（Piazza 2024, Thm 1 / Lemma 1）。
   //
   //   合成水平力 (Fx,Fz) 必须能被多边形内的分布**纯压力**地分解
   //   ⇔ 该矢量落在以原点为顶点的**多边形凸锥**内。
   //   判定：把多边形各顶点按"极角"排序，矢量方向必须落在相邻顶点的角度区间内。
-  //   （我第一版写的是 `|F| ≤ 半宽 × 686` —— 686 是**体重（竖直）**，
+  //   （我第一版写的是 `|F| ≤ 半宽 × 686` —— 686 是**体重（竖向）**，
   //     与水平分力能否实现毫无关系，纯属臆造；射线法又漏掉 t<0 的情形，已删。）
   const copOk = (() => {
-    const F = Math.hypot(s0, s1);
+    const F = Math.hypot(s0, s2);
     if (F < 1e-9) return true;                        // 无水平力 ⇒ 恒可行
     const [x0, x1] = inp.copXRange, [z0, z1] = inp.copZRange;
     const ang = (x: number, z: number): number => Math.atan2(z, x);
-    // 多边形 4 角的方向区间（取跨度 < π 的那一侧，含原点）
     const a = [ang(x0, z0), ang(x1, z0), ang(x1, z1), ang(x0, z1)];
-    const target = ang(s0, s1);
-    // 逐边检查"target 是否落在由两个角张成的 <π 区间内"
+    const target = ang(s0, s2);
     for (let k = 0; k < 4; k++) {
       let a0 = a[k]!, a1 = a[(k + 1) % 4]!;
       let d = a1 - a0;
@@ -245,12 +343,31 @@ export function solveWholeBodyQp(inp: QpInput): QpOutput {
     }
     return false;
   })();
-  // ★ `feasible` 必须**同时**要求：盒内 ∧ 等式成立 ∧ CoP 在多边形锥内。
-  //   只判前两项会让「力矩全在限幅内但等式没满足」被误报成成功 ——
-  //   实测 F_des=3000N 时输出 324N（残差 2677N）却曾报 feasible=✓。
-  //   容差取 1% 的 F_des（相对残差），避免浮点噪声误判。
-  const tolEq = 0.01 * Math.max(1, Math.hypot(inp.fDesX, inp.fDesZ));
-  return { tau, feasible: allInBox && copOk && residual <= tolEq, residual, iters };
+
+  // ★ 摩擦锥（F/T）：`|F_h| ≤ μ·F_y` 且 `F_y ≥ 0`。
+  //   这条在竖向不进等式时**根本无法判定**（没有 F_y）。
+  //   ⇒ 它正是把竖向补回等式之后才拿得到的那条物理上限：
+  //     「推不动」和「物理上不存在」必须分开报，否则调参会一直撞幻觉墙。
+  const Fh = Math.hypot(s0, s2);
+  const frictionOk = s1 >= 0 && Fh <= mu * s1 + 1e-6;
+
+  // ★ 容差按**每个分量各自**给，不按合成模给。
+  //   原实现 `tolEq = 1% × |F_h|`：竖向分量比水平大一个量级（mg≈687 vs 几十），
+  //   于是「竖向差 300 N」在合成模里被摊薄成合格 —— 而那 300 N 就是「没撑住」。
+  const tolEqX = 0.01 * Math.max(1, Math.abs(b0));
+  const tolEqY = 0.01 * Math.max(1, Math.abs(b1));
+  const tolEqZ = 0.01 * Math.max(1, Math.abs(b2));
+  const equalityOk = !degenerate
+    && Math.abs(rx) <= tolEqX && Math.abs(ry) <= tolEqY && Math.abs(rz) <= tolEqZ;
+
+  return {
+    tau,
+    feasible: boxOk && equalityOk && copOk && frictionOk,
+    residual, residualXYZ,
+    fActual: [s0, s1, s2],
+    checks: { box: boxOk, equality: equalityOk, cop: copOk, friction: frictionOk },
+    iters: used,
+  };
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -267,8 +384,18 @@ export interface QpTick {
   names: string[];
   feasible: boolean;
   residual: number;
+  /** 分量残差（N）：竖向那一项就是"没撑住多少" */
+  residualXYZ: [number, number, number];
   fDesX: number;
+  /** ★ 竖向目标 = 撑体重（`m·g`） */
+  fDesY: number;
   fDesZ: number;
+  /** 实际合成出来的地面反力（N，三维） */
+  fActual: [number, number, number];
+  /** 四条不等式逐条结果 —— `feasible` 只是它们的与 */
+  checks: {
+    box: boolean; equality: boolean; cop: boolean; friction: boolean;
+  };
   /** 本拍请求了哪些轴（人数） */
   nAxes: number;
   /** ξ（相对支撑中心）—— 确认 F_des 满足控制理论前提时读它 */
@@ -434,9 +561,25 @@ export function wholeBodyBalanceTick(
   const SP = supportPolygon(doll);
   const grf = desiredGrfFromXi(rs, sk.massTotal, { x: SP.cx, z: SP.cz });
   const fx = grf.fx * g, fz = grf.fz * g;
+
+  // ★★ 竖向：**撑体重**。`F_y = m·(g + a_y)`，静态时 `a_y = 0` ⇒ `m·g`。
+  //
+  //   这一项必须与下面 ① 的 `requestHold` **成对出现**，顺序不能反：
+  //     · 先 `requestHold`（位置环 P 项归零，只剩阻尼）⇒ 位置伺服不再撑体重；
+  //     · 再把 `mg` 放进等式 ⇒ 竖向支撑**定量**且**只有一份**。
+  //   只做前者不做后者 ⇒ 没人撑体重（当前状态）；
+  //   只做后者不做前者 ⇒ mg 双计，把关节灌爆
+  //   （`wantedForce.ts:197` 实测：含 mg 且位置伺服还在，单腿 1.5 s → 0.43 s，
+  //     `hip/1` 钉在 ±70 N·m）。
+  //
+  //   体重真源用 `sk.massTotal`（骨架唯一真源），不用 `70×9.81` 那个魔数
+  //   —— `wantedForce.ts:79` 的 `weight: 70*9.81` 是**另一处**独立写死的，
+  //   本文件不复制它。
+  const fy = sk.massTotal * 9.81;
+
   const out = solveWholeBodyQp({
     axes,
-    fDesX: fx, fDesZ: fz,
+    fDesX: fx, fDesY: fy, fDesZ: fz,
     copXRange: SP.x,
     copZRange: SP.z,
     iters: opt.iters ?? 40,
@@ -453,8 +596,29 @@ export function wholeBodyBalanceTick(
     //   `forceTorque`（会抹掉同通道的静力矩）。两者的实测后果见 `addTorque` 注释。
     rs.addTorque(a.joint, a.axis, t, 'balance', `全链QP/${nm}`);
   }
+  // ★★★ ① **让位**：QP 求解的轴，位置环必须交出 P 项。
+  //
+  //   这是竖向支撑能定量起来的**唯一前提**（见上面 `fy` 处的说明）：
+  //   位置伺服只要还在跟 `θ_ref ≠ θ`，它就在持续输出一个撑体重的力矩，
+  //   与等式里的 `mg` 构成**重力双计**。
+  //
+  //   `requestHold` ⇒ `holdMask` ⇒ `ragdoll.ts:2435` `holdCmd` ⇒
+  //   位置环退化为 `err = -kDd·ω_rel`（纯阻尼，P 项为零）。
+  //
+  //   ⚠ 为什么放在**写完 τ 之后**：让位是"这根轴交给力矩通道"的**声明**，
+  //   不是求解的前提。放在求解之后，于是"本拍解出来了"与"本拍让位了"
+  //     是同一个循环里相邻的两步，读者能一眼看出它们成对。
+  //   ⚠ `addTorque` **不调** `claimAxis`（见 `rigState.ts:924` 的注释），
+  //     所以这一行是 QP 唯一被记入 `holdMask` 的地方 —— 去掉它，
+  //     `mg` 与位置伺服的力矩会同时存在，且**没有任何机制会报告这件事**。
+  for (let i = 0; i < axes.length; i++) {
+    const a = axes[i]!;
+    if (Math.abs(out.tau[i]!) < 1e-6) continue;   // 只让位给真正要出力的轴
+    rs.requestHold(a.joint, a.axis, 'balance', `全链QP/${sk.joints[a.joint]!.name}/${a.axis}`);
+  }
   void DEFAULT_WANTED_FORCE;
   return { tau: out.tau, names, feasible: out.feasible, residual: out.residual,
-    fDesX: fx, fDesZ: fz, nAxes: axes.length,
-    xiX: grf.xiX, xiZ: grf.xiZ, grfSat: grf.sat };
+    fDesX: fx, fDesY: fy, fDesZ: fz, nAxes: axes.length,
+    xiX: grf.xiX, xiZ: grf.xiZ, grfSat: grf.sat,
+    checks: out.checks, fActual: out.fActual, residualXYZ: out.residualXYZ };
 }

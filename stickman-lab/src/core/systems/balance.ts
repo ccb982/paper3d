@@ -811,8 +811,25 @@ export function balanceSystem(
   //   否则同一 tick 内会出现两种模式 —— 轴归属门禁会报
   //   `hip_r/0 pos←balance vs balance`。
   //   ⚠ 只能看"装不 armed"，**不能**看 |F.fz| 之类量值：重心掠过支撑脚时
-  //     F.fz 过零会让归属每拍翻转。
-  const latOwnsAbduction = latArmed && p.lateralEnabled;
+//     F.fz 过零会让归属每拍翻转。
+  //
+  // ★★ 2026-10-06 **加 `on('lat')`** —— 与块⑤ 同一类漏网，
+  //   `probe:axisown` 门禁 B 实测抓到：「全消融（14 通道全关）」时
+  //   `hip/0`、`hip_r/0` 仍在发 τ（τmax = 120，两根都打满）。
+  //   根因同块⑤：`latOwnsAbduction` 只看 `latArmed`（姿态没倒）与
+  //   `p.lateralEnabled`（默认 true），**两个都不查 `ablate`**。
+  //   而 `AXIS_OWNERSHIP` 里 `latTransfer` 声明的正是 `channel: 'lat'`
+  //   ⇒ 表说它是额状通道、可消融，代码却关不掉。
+  //   代价实测：全消融存活 1.41 s < 零输出 4.48 s（差 3.1 s），
+  //   其中这 120 N·m×2 的髋外展就是剩下的漏源。
+  // ★ 消融开关。**必须声明在 `latOwnsAbduction` 之前**（2026-10-06）：
+  //   给 `latOwnsAbduction` 补 `on('lat')` 门时发现它在下面 20 行才声明 ⇒
+  //   TS2448「used before its declaration」。放到这里，因为它现在被
+  //   `latOwnsAbduction`（额状归属的第一道判据）用到。
+  const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
+  const on = (ch: string): boolean => !OFF.has(ch);
+
+  const latOwnsAbduction = latArmed && p.lateralEnabled && on('lat');
   const jHip = jointIndexByName(sk, sup === 'l' ? 'hip_l' : 'hip_r');
   const jKnee = jointIndexByName(sk, sup === 'l' ? 'knee_l' : 'knee_r');
   const jSp1 = jointIndexByName(sk, 'spine1');
@@ -830,10 +847,6 @@ export function balanceSystem(
    *  于是一律返回那个负值。曾因此把横向 GRF 恒定钉死在 −500 N（同一个坑当天第二次）。 */
   const clamp = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
   const D2R = Math.PI / 180;
-  const OFF = new Set((p.ablate ?? '').split(',').map((x) => x.trim()).filter(Boolean));
-
-
-  const on = (ch: string): boolean => !OFF.has(ch);
 
   // ══════════════════════════════════════════════════════════════
   // ★★★ **全链 QP**（附录 C.1）—— 静态伺服平衡的机制本体
@@ -1371,7 +1384,30 @@ export function balanceSystem(
   //     ① **驱动脚** CoP 侧缘余量：蹬地会把压力中心推出支撑面，跑出去救不回；
   //     ② **支撑脚** CoP 侧缘余量：横向力改变载荷分配，支撑脚先到边就翻；
   //     ③ 力矩由各轴 τmax 物理夹住（`arbitrate` 里），这里不重复限。
-  if (rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
+  //
+  // ★★ 2026-10-06 **加 `on('lat')` 门** —— 这是「消融工具说谎」的**第四次**复发，
+  //   也是第一次被探针**当场定量抓到**（前三次都只有事后归因）：
+  //
+  //   原条件 `rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll` 里**没有一个
+  //   能被 `ablate` 关掉**：`shiftDemandF` 由 `stepSystem` 直接写（step.ts:180），
+  //   只看相位（`SHIFT`/`DOUBLE` 且交接未成），**根本不查 ablate**。
+  //   ⇒ 跑「全消融」时本块照发 `τ=JᵀF`。
+  //
+  //   实测代价（`npm run probe:axisown` 门禁 B，14 个通道全关）：
+  //     零输出（完全不经过 Controller）  存活 **8.97 s**
+  //     全消融（仍经过 Controller）      存活 **2.22 s**，且在 **27 根轴**发 τ
+  //   27 根轴逐位对得上本块的写入集合：hip_l/r 0-2、knee_l/r 0-2、
+  //   foot_l/r 0-2、spine1-3 的 0 与 2（本块 `for ax in 0..2` 无差别写，
+  //   逐帧按 `|τ| > 0.05` 过滤 ⇒ 某些轴偶尔不过阈值，所以 spine1/1、spine2/1
+  //   没进名单，但**它们同样在被请求**）。
+  //
+  //   ⇒ 结论：**控制器"什么都不做"比"什么都不经过 Controller"早死 6.7 秒**。
+  //     杀死角色的是这条通路本身，不是任何一条控制律的调参问题。
+  //
+  //   为什么门是 `on('lat')` 而不是别的：本块是**额状**驱动（作用点 CoM、
+  //   沿 +Z 推），`AXIS_OWNERSHIP` 里额状通道 `latTransfer` 声明的正是
+  //   `channel: 'lat'`（balance.ts:127）⇒ 表与接线在此处必须一致。
+  if (on('lat') && rs.shiftDemandF !== 0 && rs.shiftDriveSide && doll) {
     const drive: Side = rs.shiftDriveSide;
     // ── 护栏①：驱动脚 ──
     const dIdx = drive === 'l' ? 0 : 1;

@@ -1,0 +1,25 @@
+{
+  // ⚠ 这是 `tsconfig.tools.json` 的**收窄版**：只查门禁探针自己（+ `src/`）。
+  //
+  // 存在理由（2026-10-06 实测）：
+  //   `npm run probe:axisown` = `npm run typecheck:tools && node tools/run.mjs probe-axisown`。
+  //   而 `tsconfig.tools.json` 的 `include` 是 **`tools/**/*.ts`（全部 46 个探针）**
+  //   ⇒ 任何一个**别的**探针腐烂，就让这个门禁的第一步失败 ⇒
+  //   **门禁脚本整体跑不起来**，而这正是最坏的失效模式：
+  //   「检查器自己有病」比「被检查的东西有病」更隐蔽，因为它看起来是红的、
+  //   于是被当成「哦，红了」而没人细究到底是哪一条红。
+  //
+  //   实测：`tools/` 里有 12 个探针共 28 个**既存**类型错误
+  //   （`sim.motor` 变 private、`StepParams.shiftPushGain` 被删、
+  //    `RigSnapshot.cop` / `.stanceSingle` 被删、`DEFAULT_RAGDOLL` 不存在……），
+  //   它们让 `npm run probe:axisown` **直接 exit 1**，一个断言都没跑。
+  //
+  //   ⇒ 门禁的类型检查必须**只覆盖门禁自己**。别的探针腐烂是它们自己的事，
+  //     由各自脚本负责，不该有能力否决轴归属门禁。
+  //
+  //   ⚠ 这里**不放宽**任何选项：探针该被严格检查。
+  //     `strict:false` 只为容忍「戳 private 成员做诊断」这一设计意图
+  //     （沿用 `tsconfig.tools.json` 的口径，见那里的注释）。
+  "extends": "./tsconfig.tools.json",
+  "include": ["tools/probe-axisown.ts", "src/**/*.ts"]
+}

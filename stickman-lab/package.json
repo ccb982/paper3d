@@ -10,10 +10,11 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "typecheck:tools": "tsc -p tsconfig.tools.json --noEmit",
+    "typecheck:gate": "tsc -p tsconfig.gate.json --noEmit",
     "parts": "python tools/build-parts.py",
     "size": "node tools/measure-size.mjs",
     "verify": "node tools/run.mjs verify-core",
-    "probe:axisown": "npm run typecheck:tools && node tools/run.mjs probe-axisown",
+    "probe:axisown": "npm run typecheck:gate && node tools/run.mjs probe-axisown",
     "forces": "node tools/run.mjs probe-forces",
     "forces:walk": "node tools/run.mjs probe-forces walk 30",
     "ground": "node tools/run.mjs probe-ground",
@@ -56,7 +57,9 @@
     "balsweep": "node tools/run.mjs probe-balsweep",
     "balance2": "node tools/run.mjs probe-balance2",
     "authority": "node tools/run.mjs probe-authority",
-    "uipanel": "node tools/run-uipanel.mjs"
+    "uipanel": "node tools/run-uipanel.mjs",
+    "grf": "node tools/run.mjs probe-grf",
+    "qp": "node tools/run.mjs probe-qp"
   },
   "dependencies": {
     "@dimforge/rapier3d": "0.14.0",

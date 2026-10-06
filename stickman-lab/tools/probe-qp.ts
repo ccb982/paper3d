@@ -58,7 +58,7 @@ for (const [fx, fz] of [[0, 0], [20, 0], [0, 30], [-50, -50], [200, 200]]) {
   const runs: QpTickLite[] = [];
   for (let k = 0; k < 3; k++) {
     const o = solveWholeBodyQp({
-      axes, fDesX: fx, fDesZ: fz, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09],
+      axes, fDesX: fx, fDesY: 0, fDesZ: fz, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09],
     });
     runs.push({ t: [...o.tau], f: o.feasible, r: o.residual });
   }
@@ -77,9 +77,64 @@ for (const [fx, fz] of [[0, 0], [20, 0], [0, 30], [-50, -50], [200, 200]]) {
 interface QpTickLite { t: number[]; f: boolean; r: number }
 
 log('');
+log('  ⑥★ 竖向权限体检：`τ=JᵀF` 这套形式**能不能撑起体重**');
+//
+//  这不是调参问题，是**形式本身**的问题，值得单独量一次。
+//
+//  竖向分量的力臂：`c_y = w_z·r_x − w_x·r_z`
+//    · 绕 X（外展）轴 ⇒ `c_y = −r_z` = 关节相对接触点的**前后**偏移
+//    · 绕 Z（屈伸）轴 ⇒ `c_y = +r_x` = 关节相对接触点的**侧向**偏移
+//  而承重腿上这两个偏移**恰恰是最小的量**（踝离地 5cm，髋/膝都在支撑中心
+//  正上方几厘米）⇒ 竖向权限 = Σ|τ|·|偏移|，比水平权限（臂 = 离地高度，
+//  踝 5cm 但膝 42cm、髋 90cm）小一个量级。
+//
+//  ★ 关键结论（下面有实测）：**关节力矩无法产生竖向反力**。
+//  在浮动基座系统里，关节力矩是**内力**，改不了系统总竖直动量
+//  ——竖向支撑只能来自地面对腿的**轴向压缩**（约束力），不是驱动力矩。
+//  这正是 `τ=JᵀF` 关系在竖向分量上**没有逆**。
+//  ⇒ 想让等式含 mg，必须先给腿一个能传轴向力的自由度（踝/髋的 prismatic），
+//    或者改用 `τ = τ_bias + JᵀF_task`（重力偏置走 RNEA，见 ⑥b）。
+{
+  const maxFy = axes.reduce((s, a) => s + a.tauMax
+    * Math.hypot(a.wz * a.rx - a.wx * a.rz), 0);
+  const MG = 70 * 9.81;
+  log(`     竖向上限（所有轴顶满 τmax）  = ${maxFy.toFixed(1)} N`);
+  log(`     体重 m·g（m=70kg）           = ${MG.toFixed(1)} N`);
+  log(`     缺口                         = ${(MG - maxFy).toFixed(1)} N`
+    + `  ⇒ 竖向权限只有体重的 ${(100 * maxFy / MG).toFixed(1)}%`);
+
+  // 实测：真给 mg，看它落在哪
+  const o = solveWholeBodyQp({
+    axes, fDesX: 0, fDesY: MG, fDesZ: 0,
+    copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09],
+  });
+  log(`     给 F_des=(0, ${MG.toFixed(0)}, 0) → 实际 F_y=${o.fActual[1].toFixed(1)} N`
+    + `  残差_y=${o.residualXYZ[1].toFixed(1)} N`
+    + `  equality=${o.checks.equality ? '✓' : '✗'}  friction=${o.checks.friction ? '✓' : '✗'}`
+    + `  feasible=${o.feasible ? '✓' : '✗'}`);
+  log(`     ⇒ 等式照实报 infeasible，这是**正确行为**，不是求解器坏了。`);
+}
+
+log('');
+log('  ⑥b 摩擦锥：竖向有了才判得了 |F_h| ≤ μ·F_y');
+{
+  for (const [fx, fy] of [[40, 0], [40, 20], [40, 100], [600, 700]] as const) {
+    const o = solveWholeBodyQp({
+      axes, fDesX: fx, fDesY: fy, fDesZ: 0,
+      copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09],
+    });
+    const fh = Math.hypot(o.fActual[0], o.fActual[2]);
+    log(`     F_des=(${String(fx).padStart(3)},${String(fy).padStart(3)},0)`
+      + ` → |F_h|=${fh.toFixed(0).padStart(4)}  摩擦锥 ${fh <= 0.8 * o.fActual[1] ? '内' : '外'}`
+      + `  friction=${o.checks.friction ? '✓' : '✗'}`);
+  }
+  log(`     ⇒ 竖向为 0 时摩擦锥恒判「外」：没有 F_y 就无从谈摩擦。`);
+}
+
+log('');
 log('  ③ 力矩分配：矢状(前后) vs 额状(侧向) 各出一份，对比踝权重的作用');
 {
-  const o = solveWholeBodyQp({ axes, fDesX: 40, fDesZ: 30, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
+  const o = solveWholeBodyQp({ axes, fDesX: 40, fDesY: 0, fDesZ: 30, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
   const nm = ['踝旋前', '踝矢状', '踝外翻', '膝侧', '膝矢状', '髋侧', '髋矢状', '腰侧倾', '腰屈伸'];
   o.tau.forEach((v, i) => log(`     ${nm[i]!.padEnd(6)} ${v.toFixed(1).padStart(8)} N·m  (τmax ${axes[i]!.tauMax})`));
 }
@@ -88,7 +143,7 @@ log('');
 log('  ④ 踝权重的作用：把 ankleMul 从 4 降到 0，看分配怎么变');
 for (const mul of [4, 1, 0]) {
   const ax2 = axes.map((a, i) => (i < 3 ? { ...a, w: mul / a.tauMax } : a));
-  const o = solveWholeBodyQp({ axes: ax2, fDesX: 40, fDesZ: 30, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
+  const o = solveWholeBodyQp({ axes: ax2, fDesX: 40, fDesY: 0, fDesZ: 30, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
   const g = (i0: number): string => (o.tau[i0] ?? 0).toFixed(1).padStart(7);
   log(`     ankleMul=${mul}  踝[旋前 ${g(0)} 矢状 ${g(1)} 外翻 ${g(2)}]`
     + `  膝[侧 ${g(3)} 矢 ${g(4)}]  髋[侧 ${g(5)} 矢 ${g(6)}]  腰[侧 ${g(7)} 矢 ${g(8)}]`);
@@ -97,7 +152,7 @@ for (const mul of [4, 1, 0]) {
 log('');
 log('  ⑤ 欠定：F_des 大到力矩上限也做不到（feasible 必须为 ✗）');
 for (const f of [300, 1000, 3000]) {
-  const o = solveWholeBodyQp({ axes, fDesX: f, fDesZ: 0, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
+  const o = solveWholeBodyQp({ axes, fDesX: f, fDesY: 0, fDesZ: 0, copXRange: [-0.14, 0.14], copZRange: [-0.05, 0.09] });
   let s0 = 0;
   o.tau.forEach((v, i) => {
     const a = axes[i]!;

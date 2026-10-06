@@ -1,0 +1,73 @@
+
+> stickman-lab@0.1.0 probe:axisown
+> npm run typecheck:gate && node tools/run.mjs probe-axisown
+
+
+> stickman-lab@0.1.0 typecheck:gate
+> tsc -p tsconfig.gate.json --noEmit
+
+══ A. 轴归属表（AXIS_OWNERSHIP）══
+  ✗ knee/0 的 wholeBodyQp 从属于 sagSupport，但该轴上的主人是 [（无）] —— 让位给了不占这根轴的角色
+  ✗ foot/2 的 wholeBodyQp 从属于 sagSupport，但该轴上的主人是 [ankleCop] —— 让位给了不占这根轴的角色
+
+══ A2. 通道名单 vs 源码里的 on(…) 接线 ══
+  ✓ QP 的启用语义 = `qpEnable || on('qp')`（ablate 含 'qp' 才关得住）
+  ✗ 这些通道在源码里被 on(…) 消费，但归属表里没有 ⇒ 表不完整：postureLoad, sag, stanceExt, trunkLean, weight
+  ✗ 这些通道在表里登记了 channel，但源码里没有任何 on(…) 门 ⇒ ablate 对它们无效：ankleLat
+
+══ B. 零输出等价（全消融 ⇒ 逐轴 τ≡0、让位≡0、且站得住）══
+  参照（零输出，不经 Controller）：8.97s  躯干 y=0.144
+  消融名：ankleCop,ankleLat,hip,hipStiff,knee,lat,latwaist,pelvicLift,qp,sag,stanceExt,torso,trunkLean,weight
+  全消融：2.22s  躯干 y=0.138  τmax=120.0 轴[15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,45,46,47,48,49,50,51,52,53]  让位[]
+  ✗ 全消融仍在发 τ（轴 15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,45,46,47,48,49,50,51,52,53）—— 某条通道没接到 ablate
+  ✓ 全消融 ⇒ 让位数 ≡ 0
+  ✗ 全消融存活 2.22s < 零输出 8.97s
+
+══ C. 轴归属冲突（默认路径与各挡位）══
+  ✗ 挡位 I 默认：4 处**未声明**的同轴异模式 —— spine2/0 tau<-balance vs balance | spine3/0 tau<-balance vs balance | spine2/2 tau<-balance vs balance | spine3/2 tau<-balance vs balance
+  ✗ 挡位 I + 侧向力矩：4 处**未声明**的同轴异模式 —— spine2/0 tau<-balance vs balance | spine3/0 tau<-balance vs balance | spine2/2 tau<-balance vs balance | spine3/2 tau<-balance vs balance
+  ✗ 挡位 II 纯侧向 τ：4 处**未声明**的同轴异模式 —— spine2/0 tau<-balance vs balance | spine3/0 tau<-balance vs balance | spine2/2 tau<-balance vs balance | spine3/2 tau<-balance vs balance
+  ✗ 挡位 I + 骨盆抬升：4 处**未声明**的同轴异模式 —— spine2/0 tau<-balance vs balance | spine3/0 tau<-balance vs balance | spine2/2 tau<-balance vs balance | spine3/2 tau<-balance vs balance
+
+══ D. 角色标签稳定性（承重腿 / 前腿不得闪）══
+  ✗ 「前腿」的**定义**应恰好 1 处，实际 2 处：src/core/rigState.ts, src/core/gaitState.ts
+  ✓ snapshot() 内部调用 frontLeg()（不是第二份比较）
+  20s / 160 拍：承重腿切换 3 次，前腿切换 7 次  |Δx| 中位 29.4mm / 最大 334.6mm（死区 3mm）
+  ✓ 承重腿稳定（3 次切换）
+  ✗ 前腿切换 7 次（>3）。|Δx| 最大 334.6mm ⇒ 曾越过死区（最大 334.6mm）⇒ 角色**真的**在换前腿，次数超标是步态本身的问题，不是标签抖动
+  ✓ 角色一致性（承重/前后）无违例
+
+══ E. 每根被写过的轴都必须在 AXIS_OWNERSHIP 里登记 ══
+  实际写过的轴（去腿侧后）：foot_l/2, foot_r/2, hip_l/2, hip_r/1, hip_r/2, knee_l/2, knee_r/2, spine1/0, spine1/2, spine2/0, spine2/2, spine3/0, spine3/2
+  ✓ 全部已登记（经 13 根轴、4 种配置、每拍采样验证）
+  ✗ 表里 wholeBodyQp 声明了这些轴，但 4 种配置 × 12s 里一次都没被写：knee/0（表在说谎，或 QP 根本没接上）
+
+══ F. 唯一性：相位 / 角色标签只有一份定义 ══
+  ✓ 相位标签表唯一（src/core/gaitState.ts）
+  ✓ rs.phase / rs.locked 只有 gaitState 写
+  ✓ 无指向已删模块的 import（已删：teacher, balanceHold, stepSystem, gaitEvents, normGait）
+
+══ G. 两台状态机的收敛（词汇映射必须全覆盖且自洽）══
+  ✓ 5 个控制相位全部有映射
+  ✓ 映射目标全部合法
+  ✓ phaseStance 与控制侧语义一致（DOUBLE/SHIFT=双，SINGLE/PUSH/STEP=单）
+  ✓ 3 个计分相位全部有支撑分类
+  ✓ 定义唯一（src/core/ragdoll.ts）
+  ✓ 奖励路径是纯读取（stanceSingleNow），无"读时推进"副作用
+  ✓ 两条路径都在固定拍上推进（2 个调用点：sim.ts, controller.ts）
+  ✓ 控制侧已接入收敛判据（controller → rigState.stanceSingle）
+
+══ H. 步态周期只有一个真源，且「下限 ≤ 目标」══
+  真源 STEP_CYCLE_SEC = 1.6s（ES 节拍目标）
+  下限 stepIntervalSec = 1s（控制路径 X6）
+  stability.TARGET_CYCLE = 1.6s   MIN_CYCLE = 1s
+  ✓ TARGET_CYCLE 引用真源（=1.6）
+  ✓ MIN_CYCLE 引用控制下限（=1）
+  ✓ 不变式成立：下限 1 ≤ 目标 1.6
+  ✓ sim.ts 不再 import 任何并行状态机模块
+  ✓ sim.ts 无并行状态机实例
+  ✓ reward 的相位/摆动腿来源 = gaitState（Controller 注入 RigState）
+  ✓ 步态周期真源 STEP_CYCLE_SEC 在 gaitState.ts
+  ✓ ES 路径只 import 常数（无运行时耦合）
+
+✗ 轴归属门禁失败 13 项
