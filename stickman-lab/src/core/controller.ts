@@ -23,14 +23,16 @@ import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
 import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, buildStiffCaps, type BalanceParams } from './systems/balance';
 import { setForceFilterTau } from './forceChain';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
+import { waistSystem, DEFAULT_WAIST_PARAMS, type WaistParams } from './systems/waist';
 import type { Sim } from './sim';
-import type { Skeleton } from './skeleton';
+import { jointIndexByName, type Skeleton } from './skeleton';
 
 export interface ControllerConfig {
   rig: RigStateConfig;
   gait: GaitConfig;
   balance: BalanceParams;
   step: StepParams;
+  waist: WaistParams;
 }
 
 export const DEFAULT_CONTROLLER: ControllerConfig = {
@@ -38,6 +40,7 @@ export const DEFAULT_CONTROLLER: ControllerConfig = {
   gait: DEFAULT_GAIT_CONFIG,
   balance: DEFAULT_BALANCE_PARAMS,
   step: DEFAULT_STEP_PARAMS,
+  waist: DEFAULT_WAIST_PARAMS,
 };
 
 export class Controller {
@@ -422,8 +425,22 @@ export class Controller {
     //   此前 `step` 一个门都没有 ⇒ 「全消融」名不副实（门禁 B 实测差 3.2s）。
     stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
     balanceSystem(rs, this.cfg.balance, this.sim.doll);
+    // ★★★ 2026-10-06 重构：**腰的唯一发布者** —— 必须在 step/balance **之后**
+    //   （它们填意图）、`arbitrate` **之前**（发布目标）。见 `systems/waist.ts`。
+    waistSystem(rs, { ...this.cfg.waist, ablate: this.cfg.balance.ablate });
 
     // ── 6. 仲裁 → 唯一 target ──────────────────────────────
+    // ★★★ 探针注入口（生产 `null`）：在仲裁**之前**写，这样它跟真实系统同路
+    if (rs.waistInject) {
+      const { mode, deg } = rs.waistInject;
+      const dRad = (deg * Math.PI) / 180 / 3;
+      for (const nm of ['spine1', 'spine2', 'spine3']) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        if (mode === 'tgt') rs.requestAngle(j, 2, dRad, 'balance', 'waist注入·目标');
+        else rs.requestAngleCorr(j, 2, dRad, 'balance', 'waist注入·修正');
+      }
+    }
     const out = rs.arbitrate(dt);
     // ★★★ 角度通道（位置伺服）：`out` 就是它，但**这条线一直缺着**。
     //   实测（tools/probe-motortarget）：480 拍里 `setMotorTargets` 被调用

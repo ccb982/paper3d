@@ -87,6 +87,8 @@ interface Trace {
   load: string;
   cycles: number;
   clearance: number;
+  /** ★★★ 姿态（2026-10-06 加，§22.12.4）：**“不倒”不等于“站住”** —— 必须同时看姿态 */
+  pitch: number; roll: number; spine1: number; ubY: number;
   /** 末帧的状态环 / 下一态 / 已等 / 卡在（直接取 `telemetry`，与网页同一份；长度 = STATE_ORDER） */
   ring: string[];
   next: string;
@@ -159,6 +161,9 @@ function run(
         bfixMargin: `${rs.balanceFix.tauMarginSag.toFixed(0)}/${rs.balanceFix.tauMarginLat.toFixed(0)}`,
         load: `${rs.loadFrac.l.toFixed(2)}/${rs.loadFrac.r.toFixed(2)}`,
         cycles: rs.cycleCount, clearance: rs.swingClearance,
+        pitch: rs.pitchDeg ?? 0, roll: rs.rollDeg ?? 0,
+        spine1: (rs.angleOf('spine1', 2) * 180) / Math.PI,
+        ubY: rs.com.y,
       });
       visited.add(rs.state);
       if (rs.safe) safeCount++;
@@ -328,7 +333,24 @@ log('══ G. 归因对照（区分"平衡坏"与"开始迈步"）══');
     ok(`归因：倒因是**进入 LOAD 态**（钉死 DOUBLE 后多活 ${secs(c.ticks - a.ticks)}s）`
       + ' ⇒ 平衡系统在 LOAD 态的行为是 P4 的待办，与回读/验收改动无关');
   } else {
-    log('  归因：钉死 DOUBLE 也一样倒 ⇒ 与状态无关，需另查（回读改动或物理/接触）');
+    // ★★★ §22.12.4：**姿态列** —— 「不倒」≠「站住」（那个 12.00s 曾是折腰熬满的）
+  log('\n  ══ 姿态列（§22.12.4：不倒 ≠ 站住）══');
+  for (const [nm, r] of [['默认（迈步开）', a], ['迈步系统停手', b], ['关发力门禁', capOff],
+    ['关力链低通', fltOff], ['关上身架构', upOff], ['停手+关架构', upOffStepOff],
+    ['钉死 DOUBLE', c]] as const) {
+    const tr = r.trace;
+    const last = tr[tr.length - 1];
+    if (!last) { log(`  ${nm.padEnd(16)} 无数据`); continue; }
+    let wp = 0, ws = 0;
+    for (const t of tr) {
+      if (Math.abs(t.pitch) > Math.abs(wp)) wp = t.pitch;
+      if (Math.abs(t.spine1) > Math.abs(ws)) ws = t.spine1;
+    }
+    log(`  ${nm.padEnd(16)} 末帧 pitch ${last.pitch.toFixed(1).padStart(6)}° spine1 ${last.spine1.toFixed(1).padStart(6)}°`
+      + ` CoM.y ${(last.ubY * 1000).toFixed(0)}mm  ｜ 最差 |pitch| ${Math.abs(wp).toFixed(1)}° |spine1| ${Math.abs(ws).toFixed(1)}°`
+      + `  ${Math.abs(wp) < 10 && Math.abs(ws) < 10 ? '★ 站住' : '✗ 折腰/倒'}`);
+  }
+  log('  归因：钉死 DOUBLE 也一样倒 ⇒ 与状态无关，需另查（回读改动或物理/接触）');
   }
 }
 

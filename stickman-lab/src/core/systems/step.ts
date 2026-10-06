@@ -27,6 +27,12 @@ import type { RigState, Side } from '../rigState';
 export const KNEE_FLEX_PEAK = 63;
 
 export interface StepParams {
+  /**
+   * ★★★ 本系统那一份**借力增益**（2026-10-06 重构，用户定调「两个系统都走腰部借力才对」）。
+   *   最终倾角 = `(kStep + kBal) · GRF_水平 / (m·g)`，由 `waistSystem` 统一算。
+   *   默认 0 = 未标定（先让 balance 单独借，避免两边互相抵消）。
+   */
+  waistBorrowK?: number;
   /** 摆动相时长的一半（s） */
   halfPeriod: number;
   /** 抬升峰值高度（m） */
@@ -274,8 +280,14 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
       const nSp = 3;
       for (const jj of [jSp1, jSp2, jSp3]) {
         if (jj < 0) continue;
-        rs.requestAngle(jj, 2, kp.trunkPitch / nSp, 'step', '躯干矢状·目标');
-        rs.requestAngle(jj, 0, (swS * kp.trunkLat) / nSp, 'step', '躯干额状·目标');
+        void jj; void nSp;
+        // ★★★ 2026-10-06 重构：**不再直写脊柱**（用户：「两个系统都走腰部借力」）
+        //   本系统只填**意图**（名义倾角 + 自己那一份借力增益），由 `waistSystem` 统一发布。
+        //   理由（`§22.12.2`）：脊柱原先的目标只存在于本分支 ⇒ 迈步一停手就 `bind`、腰自由折。
+        rs.waist.step.pitch += kp.trunkPitch;
+        rs.waist.step.roll += swS * kp.trunkLat;
+        rs.waist.step.yaw += swS * kp.trunkYaw;
+        rs.waist.step.authority = rs.authority;
         // ⚠ 轴1（扭转）**暂不驱动**：实测新写这根轴会把「默认（迈步开）」从 6.05s
         //   打到 1.21s（该轴此前从无位置写入 ⇒ 位置范围/摩擦/惯量都没标定过）。
         //   扭转目标仍记在 `upperBody.step.yaw` 里（诊断），标定后再接管。
@@ -283,7 +295,7 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
       // ★★★ **迈步系统也走"腰部借力"**（用户：「平衡系统和迈步系统都走腰部借力才对」）
       //   step 只设**增益**（按相位 `authority`），方向由**腿的力**决定
       //   ⇒ 不在本文件里算方向，统一由 `RigState.applyUpperBorrow` 落地。
-      rs.upperBorrow.kStep = rs.authority * 0.0;   // ⚠ A/B：0.3 会把「迈步系统停手」打到 1.17s
+      rs.waist.step.gain = rs.authority * (p.waistBorrowK ?? 0.0);
       // 诊断备份（`probe-upforce`/UI 用；控制不依赖它）
       rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
@@ -378,10 +390,12 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     const nSp2 = 3;
     for (const jj of [jSp1, jSp2, jSp3]) {
       if (jj < 0) continue;
-      rs.requestAngle(jj, 0, latT / nSp2, 'step', '躯干额状·目标');
+      void jj; void nSp2;
+      rs.waist.step.roll += latT;
+      rs.waist.step.authority = rs.authority;
       // ⚠ 轴1（扭转）暂不驱动，理由见上
     }
-    rs.upperBorrow.kStep = rs.authority * 0.3;
+    rs.waist.step.gain = rs.authority * (p.waistBorrowK ?? 0.0);
     rs.proposeUpperBody(0, latT, yawT);
   } else {
     if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, '迈步反相');

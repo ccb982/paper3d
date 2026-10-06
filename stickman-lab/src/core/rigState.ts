@@ -1110,17 +1110,29 @@ export class RigState {
    *   若各写各的（step 写目标、balance 写修正），就会出现"两边按各自的相位借，
    *   互相抵消"——这正是此前"重心转移拉不回来"的结构原因。
    */
-  upperBorrow = {
-    /** 迈步系统的借力增益（按相位 `authority` 调） */
-    kStep: 0,
-    /** 平衡系统的借力增益（`upBorrowK`） */
-    kBal: 0,
-    /** 本拍腿产生的水平 GRF（已低通） */
+  /**
+   * ★★★★ **腰（脊柱）的状态** —— 2026-10-06 重构（`systems/waist.ts`）。
+   *
+   *   语义：`step` 与 `balance` 只往这里**填意图**（度、域口径），
+   *   **唯一发布者**是 `waistSystem` —— 它把「基准 + 迈步名义 + 借力 + 平衡修正」
+   *   合成后逐轴写成脊柱的**目标角**。
+   *   ⇒ 脊柱永远有人写目标（`axisOwner` 不再是 `bind`），这是"折腰"的结构解。
+   */
+  waist = {
+    /** 迈步系统的意图（度；`gain` = 它那一份借力增益，按相位 `authority` 调） */
+    step: { pitch: 0, roll: 0, yaw: 0, gain: 0, authority: 0 },
+    /** 平衡系统的意图（度；`gain` = 它那一份借力增益） */
+    bal: { pitch: 0, roll: 0, gain: 0 },
+    /** 本拍腿产生的水平 GRF（已低通）—— 借力的**唯一来源** */
     grfX: 0, grfZ: 0,
-    /** 本拍算出的借力倾角（rad，写进 `acorr` 的量） */
-    roll: 0, pitch: 0,
+    /** 本拍借力项（度，诊断） */
+    borrow: { pitch: 0, roll: 0 },
+    /** 本拍**实际发布**的目标（度） */
+    out: { pitch: 0, roll: 0, yaw: 0 },
     /** 增益和（诊断） */
     kSum: 0,
+    /** 本拍是否发布过（0 = 消融/关闭 —— 读回端必须能区分"没发布"与"发布了 0"） */
+    published: 0,
   };
 
   /**
@@ -1582,6 +1594,14 @@ export class RigState {
   }
 
   /**
+   * ★★★ **探针注入口**（生产恒 `null`）：`tools/probe-waist.ts` 用它直接测
+   *   「给脊柱写目标/写修正 ⇒ 位置伺服出不出力矩、腰动不动」。
+   *   `mode='tgt'` 走 `requestAngle`（写目标）；`mode='corr'` 走 `requestAngleCorr`
+   *   （只写增量，验证"没人写目标时修正能否单独挺起腰"）。
+   */
+  waistInject: { mode: string; deg: number } | null = null;
+
+  /**
    * ★ 提需求。两个系统**并发**调用同一个 `rigState`，由 `arbitrate()` 合并。
    *   注意语义：这是"登记意图"，**不直接改 target**。
    */
@@ -1970,37 +1990,7 @@ export class RigState {
     this.requestCount++;
   }
 
-  /**
-   * ★★★★ **算出并写入"腰部借力"**（共享通道；`step`/`balance` 只负责设增益）。
-   *
-   *   `lean = clamp(kSum · GRF_水平 / (m·g), ±leanMax)`，逐轴**斜率限制**
-   *   （`slewMax` rad/拍）—— 防止增益或 GRF 的抖动变成脊柱的抖动
-   *   （实测：不加斜率限制时，「迈步系统停手」从 12.00s 掉到 1.22s）。
-   *
-   * @returns 本拍实际写入的 (roll, pitch)
-   */
-  applyUpperBorrow(leanMax: number, slewMax: number, dirZ = 0, dirX = 0): { roll: number; pitch: number } {
-    const ub = this.upperBorrow;
-    const gc = this.groundChain;
-    ub.grfX = gc ? gc.grfX : 0;
-    ub.grfZ = gc ? gc.grfZ : 0;
-    ub.kSum = ub.kStep + ub.kBal;
-    const bodyN = Math.max(1, this.massN);
-    // ★★★ **只借"指向目标"的那个分量**（`max(0, F·dir)`）—— 这是**稳定性关键**：
-    //   若把 `grfZ` 直接反馈进腰部倾角，而 `grfZ` 又是 CoM 运动的结果，
-    //   就构成**正反馈自激**（倾得越多⇒推得越多⇒倾得越多）。
-    //   实测：不整流时「迈步系统停手」12.00s → **1.17s**；整流后见 `probe-domain`。
-    const helpZ = dirZ === 0 ? 0 : Math.max(0, ub.grfZ * dirZ);
-    const helpX = dirX === 0 ? 0 : Math.max(0, ub.grfX * dirX);
-    const rT = Math.max(-leanMax, Math.min(leanMax, ub.kSum * helpZ / bodyN));
-    const pT = Math.max(-leanMax, Math.min(leanMax, ub.kSum * helpX / bodyN));
-    const rPrev = this.ubPrevRoll, pPrev = this.ubPrevPitch;
-    const r = Math.max(rPrev - slewMax, Math.min(rPrev + slewMax, rT));
-    const p = Math.max(pPrev - slewMax, Math.min(pPrev + slewMax, pT));
-    this.ubPrevRoll = r; this.ubPrevPitch = p;
-    ub.roll = r; ub.pitch = p;
-    return { roll: r, pitch: p };
-  }
+
   private ubPrevRoll = 0;
   private ubPrevPitch = 0;
   /** 全身体重（N）—— 借力的归一化基准（由 Controller 安装） */
@@ -2043,47 +2033,46 @@ export class RigState {
   arbitrate(dt: number): Float32Array {
     const out = this.prevOut;
     const maxStep = this.cfg.slewLimit * dt;
+    // ══════════════════════════════════════════════════════════════
+    // ★★★ 三轮分离（2026-10-06 重构，修一处**积分 bug**）
+    //
+    //   语义必须严格区分两个量：
+    //     · **目标** `prevTarget[i]`  —— 位置伺服的参考（**不含**修正）
+    //     · **送达值** `out[i]`       —— 真正下发给马达的（**含**修正）
+    //
+    //   原实现把两者混为一谈（`prevTarget[i] = out[i]`，而 `out` 已叠了 `acorr`）
+    //   ⇒ `requestAngleCorr` 从"**偏置**"退化成"**斜坡积分器**"：
+    //     实测 `probe-waist`：连写 +10°/3 的修正，0.1 s 后脊柱跑到 8.3°
+    //     （偏置应为 ≈2.9°），归一化目标 3 拍涨到 0.31（应恒为 0.104）。
+    //   ⇒ 后果：**balance 走的每一处修正都在悄悄积分** ——
+    //     这几乎可以确定就是"**任何腰部修正都打崩站立**"（§22.12.5）的机理。
+    // ══════════════════════════════════════════════════════════════
+
+    // ── 第 1 轮：**目标**（req 有谁写就用谁，含斜率限制；没人写就保持）──
     for (let i = 0; i < this.nAxes; i++) {
       const r = this.req[i];
       const t = this.tgt[i];
-      if (!r || !t) { out[i] = this.prevTarget[i] ?? 0; continue; }
+      if (!r || !t) {
+        // 没被任何系统提的轴：保持上一拍的**目标**（= 绑定姿态附近），owner 记为 bind
+        this.prevTarget[i] = this.prevTarget[i] ?? 0;
+        const tt = this.tgt[i]!;
+        if (tt.owner === 'none') { tt.owner = 'bind'; tt.ownerLabel = '保持'; tt.tag = 'servo'; }
+        continue;
+      }
       t.value = r.value; t.owner = r.system; t.ownerLabel = r.label;
       t.tag = r.system === 'balance' ? 'hold' : 'step';
-      // 斜率限制
       const prev = this.prevTarget[i] ?? 0;
       const d = r.value - prev;
       if (Math.abs(d) > maxStep) {
-        out[i] = prev + Math.sign(d) * maxStep;
+        this.prevTarget[i] = prev + Math.sign(d) * maxStep;
         t.clamped = true;
       } else {
-        out[i] = r.value;
+        this.prevTarget[i] = r.value;
       }
     }
-    // ★★ **修正增量**（`acorr`）：叠加在目标之上，**不覆盖** —— 见 `requestAngleCorr`。
-    //   放在 req 之后、"未提轴回退"之前：即使**没人提目标**（bind），修正照样生效
-    //   （这正是"balance 只修正、不管目标"的语义：它不需要目标存在）。
-    for (let i = 0; i < this.nAxes; i++) {
-      const d = this.acorr[i] ?? 0;
-      if (d === 0) continue;
-      out[i] = (out[i] ?? 0) + d;
-    }
-    // 没被任何系统提的轴：回退到"保持上一拍"（= 绑定姿态附近），owner 记为 bind
+    // ── 第 2 轮：**送达值 = 目标 + 修正**（`acorr` 是偏置，**不写回目标**）──
     for (let i = 0; i < out.length; i++) {
-      if (!this.req[i]) { out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0); const t = this.tgt[i]!; if (t.owner === 'none') { t.owner = 'bind'; t.ownerLabel = '保持'; t.tag = 'servo'; } }
-    }
-    for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i]!;
-    // 力矩通道仲裁（规则同角度通道：balance > step），再按 τmax 饱和
-    for (let i = 0; i < this.nAxes; i++) {
-      const r = this.treq[i];
-      if (!r) { this.tauOut[i] = 0; continue; }
-      const j = this.sk.joints[Math.floor(i / 3)];
-      const k = i % 3;
-      const tmax = j ? j.maxTorque[k]! : 0;
-      let v = r.value;
-      if (v > tmax) v = tmax; else if (v < -tmax) v = -tmax;
-      this.tauOut[i] = v;
-      const t = this.tgt[i];
-      if (t && t.ownerLabel === '—') { t.owner = r.system; t.ownerLabel = `${r.label}(τ)`; }
+      out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
     }
     this.tgtOut.set(out);      // ★ 见 `tgtOut` 的注释：送达值由仲裁器自己存
     return out;

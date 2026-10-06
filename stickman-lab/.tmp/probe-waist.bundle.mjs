@@ -16017,7 +16017,7 @@ var init_ragdoll = __esm({
         const kP = limp ? 0 : this.opt.kP;
         const kD = limp ? 0 : this.opt.kD;
         const qRel = this.qRel;
-        const rv2 = this.rv;
+        const rv = this.rv;
         const relL = this.relL;
         const jg = this.opt.jointGain ?? {};
         for (let i = 0; i < this.joints.length; i++) {
@@ -16031,11 +16031,11 @@ var init_ragdoll = __esm({
           const qc = c.rotation();
           const wp = p.angvel();
           const wc = c.angvel();
-          calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv2);
+          calcJointRot(qp.x, qp.y, qp.z, qp.w, qc.x, qc.y, qc.z, qc.w, qRel, rv);
           const rr = j.restRad;
-          rv2[0] -= rr[0];
-          rv2[1] -= rr[1];
-          rv2[2] -= rr[2];
+          rv[0] -= rr[0];
+          rv[1] -= rr[1];
+          rv[2] -= rr[2];
           calcJointRelVel(qp.x, qp.y, qp.z, qp.w, wc.x - wp.x, wc.y - wp.y, wc.z - wp.z, relL);
           const gf = this.footLoadedFlag(i) && this.groundFactor[i] > 1 ? this.groundFactor[i] : 1;
           const Ieff = this.jointIeff[i] * gf;
@@ -16044,7 +16044,7 @@ var init_ragdoll = __esm({
             this.motorDemand[i * 3 + k] = 0;
             const lo = j.minRad[k];
             const hi = j.maxRad[k];
-            const a = rv2[k];
+            const a = rv[k];
             const idx = i * 3 + k;
             let alpha = this.opt.motorAlpha;
             let err;
@@ -18790,16 +18790,16 @@ function buildIndex(rs) {
   return m;
 }
 function degOf(rs, idx, leg, axis) {
-  const DEG5 = 180 / Math.PI;
+  const DEG4 = 180 / Math.PI;
   switch (axis) {
     case "hipFlex":
-      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG5;
+      return -rs.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG4;
     case "hipAbd":
-      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG5;
+      return rs.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG4;
     case "kneeFlex":
-      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG5;
+      return -rs.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG4;
     case "ankle":
-      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG5;
+      return -rs.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG4;
     case "trunkPitch":
       return rs.pitchDeg;
     case "trunkLat":
@@ -22936,8 +22936,8 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const corrPitch = clamp2(-upK * (capX - stanceX), leanMax);
     const corrRoll = clamp2(-upK * (capZ - stanceZ), leanMax);
     rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
-    const pelvis2 = doll.bodyByKey("torso");
-    const pw = pelvis2?.angvel();
+    const pelvis = doll.bodyByKey("torso");
+    const pw = pelvis?.angvel();
     const pelvisW = pw ? Math.hypot(pw.x, pw.y, pw.z) : 0;
     rs.pelvisW = pelvisW;
     const noiseBlocked = pelvisW > (p.pelvisWMax ?? 5);
@@ -23070,10 +23070,8 @@ var init_balance = __esm({
       //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
       { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
       { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
-      // ★★ 2026-10-06 重构：`spine1/2`、`spine1/0` 两条 `keyframeStep` 行**已删除** ——
-      //   迈步系统不再直写脊柱（只填 `rs.waist.step` 意图），脊柱的位置写者只剩
-      //   `waistPos`（唯一发布者）。删掉不是因为"不写了"，而是因为**同一 (轴,模式)
-      //   必须合并成一条**（门禁 A）—— 旧行留着会让表说谎。
+      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
       // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
       //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
       //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
@@ -23578,8 +23576,7 @@ var init_step = __esm({
 // src/core/systems/waist.ts
 function waistSystem(rs, p = DEFAULT_WAIST_PARAMS) {
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));
-  const on = (ch) => !OFF.has(ch);
-  if (p.enabled === false || !on("waist")) {
+  if (p.enabled === false || OFF.has("waist")) {
     rs.waist.published = 0;
     rs.waist.kSum = 0;
     return;
@@ -24014,7 +24011,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-pelvis.ts
+// tools/probe-waist.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -24038,80 +24035,49 @@ var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
 var log = (s) => console.log(s);
 var ARGS = globalThis.__PROBE_ARGS ?? [];
-var SECS = Number(ARGS[0] ?? 0.6);
-var EVERY = Number(ARGS[1] ?? 5);
-var DEG4 = 57.2958;
+var SECS = Number(ARGS[0] ?? 3);
+var MODE = (ARGS[1] ?? "tgt").trim();
+var HZ = 120;
+var DT = 1 / HZ;
+var R2D2 = 57.2958;
+log(`\u2550\u2550 probe-waist \u6A21\u5F0F=${MODE} \u65F6\u957F=${SECS}s\uFF08t=0 \u8D77\u6CE8\u5165 +10\xB0\uFF09\u2550\u2550`);
+log("  t(s)  \u810A\u67F1\u76EE\u6807  spine1\u89D2  spine2\u89D2  spine3\u89D2   \u03C41   \u03C42   \u03C43  |\u03C9|\u9AA8\u76C6 pitch  CoM.z  Fz_l  Fz_r  \u80F8\u9AD8");
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
 sim.begin(new Float32Array(sim.paramCount));
 var ctrl = new Controller2(sk, sim, {
   ...DEFAULT_CONTROLLER2,
   gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
-  balance: DEFAULT_CONTROLLER2.balance
+  // ★ 迈步系统停手（只看"腰"）+ 上身架构关（否则块⑧会另写脊柱）
+  balance: { ...DEFAULT_CONTROLLER2.balance, ablate: "stepKeyframe,upForce" }
 });
 var d = sim.doll;
-var rv = new Float64Array(3);
-var JHIP = { l: jointIndexByName2(sk, "hip_l"), r: jointIndexByName2(sk, "hip_r") };
-var JSP = [1, 2, 3].map((n) => jointIndexByName2(sk, `spine${n}`));
-var pelvis = d.bodyByKey("torso");
-log("\u2550\u2550 \u529B\u7684\u4F20\u64AD\uFF1A\u9AA8\u76C6\u662F\u52A0\u548C\u70B9\uFF08`F_spine1 = F_hips + m_pelvis\xB7(a\u2212g)`\uFF09\u2550\u2550");
-log("   \u9AA8\u76C6\u5217\uFF1Ay / vy / |\u03C9| / \u6536\u5230(\u03A3\u9ACB\u5B50\u6811\u529B) / \u4F20\u4E0A(spine1\u5B50\u6811\u529B) / \u5DEE\u503C");
-log("   \u810A\u67F1\u5217\uFF1A\u89D2\u5EA6\xB0 / \u89D2\u901F\u5EA6\xB0/s / \u5B9E\u9645\u03C4 / \u5F52\u5C5E(\u8BA9\u4F4D)");
-log("");
-log("   t(s)  \u9AA8\u76C6y  v_y    |\u03C9|    \u6536\u5230F(\u4E0B)        \u4F20\u4E0AF(\u4E0A)         \u5DEE\u503C     | \u80F8\u8154pitch\xB0 | spine1 [\u8F740 \u8F741 \u8F742]           spine2 [\u8F740 \u8F741 \u8F742]           spine3 [\u8F740 \u8F741 \u8F742]");
-for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
-  if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
+var j1 = jointIndexByName2(sk, "spine1");
+var j2 = jointIndexByName2(sk, "spine2");
+var j3 = jointIndexByName2(sk, "spine3");
+if (j1 < 0) throw new Error("\u7F3A spine1");
+var rows = [];
+for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
+  const t = i * DT;
+  const active = t >= 0;
+  ctrl.rs.waistInject = active ? { mode: MODE, deg: 10 } : null;
+  if (i % 2 === 0) d.setMotorTargets(ctrl.step(DT));
   sim.advance(1);
-  if (i % (EVERY * 2) !== 0) continue;
+  if (i % 4 !== 0) continue;
   const rs = ctrl.rs;
-  void rs.pitchDeg;
-  const fc = rs.forceChain();
-  if (!fc.ready) continue;
-  const fl = fc.joints[JHIP.l], fr = fc.joints[JHIP.r];
-  const downFx = fl.fx + fr.fx, downFy = fl.fy + fr.fy, downFz = fl.fz + fr.fz;
-  const s1 = fc.joints[JSP[0]];
-  const pv = pelvis.linvel();
-  const pw = pelvis.angvel();
-  const cells = [];
-  for (const ji of JSP) {
-    d.jointRot(ji, rv);
-    const ang = -rv[2] * DEG4;
-    const w = Math.abs(rv[2]) * DEG4;
-    const tau = d.tauApplied[ji * 3 + 2] ?? 0;
-    const own = rs.axisOwner(ji * 3 + 2);
-    const hold = rs.holdMask[ji * 3 + 2] ?? 0;
-    const ts = rs.tauSrc[ji * 3 + 2];
-    d.jointRot(ji, rv);
-    const a0 = -rv[0] * DEG4, a1 = rv[1] * DEG4, a2 = -rv[2] * DEG4;
-    const t0 = d.tauApplied[ji * 3] ?? 0, t1 = d.tauApplied[ji * 3 + 1] ?? 0;
-    cells.push(`[0:${a0.toFixed(0)}\xB0/${t0.toFixed(0)} 1:${a1.toFixed(0)}\xB0/${t1.toFixed(0)} 2:${a2.toFixed(1)}\xB0/${tau.toFixed(0)}]{${own}${hold ? "/\u8BA9" + hold : ""}|\u03C4:${(ts?.label ?? "\u2014").slice(0, 10)}}`);
+  const fa = (j) => rs.angle(j, 2) * R2D2;
+  const zl = (rs.loadFrac.l ?? 0) * 100;
+  const zr = (rs.loadFrac.r ?? 0) * 100;
+  if (rows.length === 0) {
+    log(`   [\u8BCA\u65AD] acorrStat=${rs.acorrStat.length} badRequests=${rs.badRequests} reqCount=${rs.requestCount} span1=${(() => {
+      const dj = sk.joints[j1];
+      return Math.max(Math.abs(dj.minRad[2]), Math.abs(dj.maxRad[2])).toFixed(3);
+    })()}`);
   }
-  log(`   ${(i / 120).toFixed(3)} ${pv.y.toFixed(3)} ${(pv.y * 1e3).toFixed(0).padStart(5)} ${(Math.hypot(pw.x, pw.y, pw.z) * DEG4).toFixed(0).padStart(4)}\xB0 (${downFx.toFixed(0).padStart(5)},${downFy.toFixed(0).padStart(5)},${downFz.toFixed(0).padStart(5)}) (${s1.fx.toFixed(0).padStart(5)},${s1.fy.toFixed(0).padStart(5)},${s1.fz.toFixed(0).padStart(5)}) (${(s1.fx - downFx).toFixed(0).padStart(4)},${(s1.fy - downFy).toFixed(0).padStart(4)},${(s1.fz - downFz).toFixed(0).padStart(4)}) | ${rs.pitchDeg.toFixed(1).padStart(6)} | ${cells.join("  ")}`);
+  rows.push(
+    `${t.toFixed(2).padStart(6)}${(active && MODE === "tgt" ? "+10\xB0" : active && MODE === "corr" ? "\u4FEE\u6B63" : " \u2014 ").padStart(9)}${fa(j1).toFixed(1).padStart(10)}${fa(j2).toFixed(1).padStart(10)}${fa(j3).toFixed(1).padStart(10)}${(d.tauApplied[j1 * 3 + 2] ?? 0).toFixed(0).padStart(6)}${(d.tauApplied[j2 * 3 + 2] ?? 0).toFixed(0).padStart(5)}${(d.tauApplied[j3 * 3 + 2] ?? 0).toFixed(0).padStart(5)}${(rs.pelvisW ?? 0).toFixed(0).padStart(7)}${(rs.pitchDeg ?? 0).toFixed(1).padStart(6)}${(rs.com.z * 1e3).toFixed(0).padStart(7)}${zl.toFixed(0).padStart(5)}%${zr.toFixed(0).padStart(5)}%${(rs.com.y * 1e3).toFixed(0).padStart(7)}`
+  );
 }
-log("");
-{
-  const rs = ctrl.rs;
-  const ub = rs.upperBody;
-  log(`\u4E0A\u8EAB\u72B6\u6001\uFF1A\u8D28\u91CF ${ub.mass.toFixed(1)}kg\u3000\u4F5C\u7528\u70B9 (${ub.comX.toFixed(3)}, ${ub.comY.toFixed(3)}, ${ub.comZ.toFixed(3)})`);
-  log(`  \u63D0\u6848 pitch=${(ub.step.pitch * DEG4).toFixed(1)}\xB0 roll=${(ub.step.roll * DEG4).toFixed(1)}\xB0\u3000\u4FEE\u6B63 pitch=${(ub.corrPitch * DEG4).toFixed(1)}\xB0 roll=${(ub.corrRoll * DEG4).toFixed(1)}\xB0\u3000final pitch=${(ub.final.pitch * DEG4).toFixed(1)}\xB0 roll=${(ub.final.roll * DEG4).toFixed(1)}\xB0 (${ub.decidedBy})`);
-  log(`  \u529B (${ub.force.fx.toFixed(0)}, ${ub.force.fy.toFixed(0)}, ${ub.force.fz.toFixed(0)})N`);
-}
-{
-  const JSP2 = [1, 2, 3].map((n) => jointIndexByName2(sk, `spine${n}`));
-  log("");
-  log("\u2550\u2550 \u521A\u5EA6\u4E0A\u9650\u8BCA\u65AD \u2550\u2550");
-  log(`   \u5939\u4F4F\u6B21\u6570 ${d.stiffCapHits}\u3000\uFF080 = \u4E0A\u9650\u6CA1\u751F\u6548\uFF09`);
-  for (const ji of JSP2) {
-    if (ji === void 0 || ji < 0) continue;
-    const jdef = sk.joints[ji];
-    for (const ax of [0, 2]) {
-      const idx = ji * 3 + ax;
-      const kpRaw = d.kpRawPeak[idx] ?? 0;
-      const tmax = jdef.maxTorque[ax] ?? 0;
-      const kRaw = kpRaw * tmax / 9;
-      const cap = d.stiffCap[idx] ?? 0;
-      log(`   ${jdef.name}/\u8F74${ax}  \u539F\u59CB kP=${kpRaw.toFixed(0)}\uFF08\u21D2 K\u2248${kRaw.toFixed(0)} N\xB7m/rad\uFF09\u3000\u4E0A\u9650 ${cap > 0 ? cap.toFixed(0) : "\u65E0"}`);
-    }
-  }
-}
-log(`\u5B58\u6D3B ${(sim.ticksDone / 60).toFixed(2)}s  \u6B7B\u56E0 ${sim.fallReason || "\u672A\u5012"}`);
+log(rows.join("\n"));
+log(`
+\u5B58\u6D3B ${sim.t.toFixed(2)}s\uFF08\u4E0A\u9650 ${SECS}s\uFF09`);

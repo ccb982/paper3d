@@ -15185,6 +15185,7 @@ var init_ragdoll = __esm({
        * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
        */
       toneScale = [];
+      // ★ 2026-10-06 供 probe-waist 回读（只读）
       /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
       setToneScale(joint, axis, scale) {
         const i = joint * 3 + axis;
@@ -18036,6 +18037,13 @@ var init_rigState = __esm({
         return this.pos[i * 3 + axis] ?? 0;
       }
       /**
+       * ★★★ **探针注入口**（生产恒 `null`）：`tools/probe-waist.ts` 用它直接测
+       *   「给脊柱写目标/写修正 ⇒ 位置伺服出不出力矩、腰动不动」。
+       *   `mode='tgt'` 走 `requestAngle`（写目标）；`mode='corr'` 走 `requestAngleCorr`
+       *   （只写增量，验证"没人写目标时修正能否单独挺起腰"）。
+       */
+      waistInject = null;
+      /**
        * ★ 提需求。两个系统**并发**调用同一个 `rigState`，由 `arbitrate()` 合并。
        *   注意语义：这是"登记意图"，**不直接改 target**。
        */
@@ -18523,7 +18531,13 @@ var init_rigState = __esm({
           const r = this.req[i];
           const t = this.tgt[i];
           if (!r || !t) {
-            out[i] = this.prevTarget[i] ?? 0;
+            this.prevTarget[i] = this.prevTarget[i] ?? 0;
+            const tt = this.tgt[i];
+            if (tt.owner === "none") {
+              tt.owner = "bind";
+              tt.ownerLabel = "\u4FDD\u6301";
+              tt.tag = "servo";
+            }
             continue;
           }
           t.value = r.value;
@@ -18533,47 +18547,14 @@ var init_rigState = __esm({
           const prev = this.prevTarget[i] ?? 0;
           const d2 = r.value - prev;
           if (Math.abs(d2) > maxStep) {
-            out[i] = prev + Math.sign(d2) * maxStep;
+            this.prevTarget[i] = prev + Math.sign(d2) * maxStep;
             t.clamped = true;
           } else {
-            out[i] = r.value;
+            this.prevTarget[i] = r.value;
           }
-        }
-        for (let i = 0; i < this.nAxes; i++) {
-          const d2 = this.acorr[i] ?? 0;
-          if (d2 === 0) continue;
-          out[i] = (out[i] ?? 0) + d2;
         }
         for (let i = 0; i < out.length; i++) {
-          if (!this.req[i]) {
-            out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
-            const t = this.tgt[i];
-            if (t.owner === "none") {
-              t.owner = "bind";
-              t.ownerLabel = "\u4FDD\u6301";
-              t.tag = "servo";
-            }
-          }
-        }
-        for (let i = 0; i < out.length; i++) this.prevTarget[i] = out[i];
-        for (let i = 0; i < this.nAxes; i++) {
-          const r = this.treq[i];
-          if (!r) {
-            this.tauOut[i] = 0;
-            continue;
-          }
-          const j = this.sk.joints[Math.floor(i / 3)];
-          const k = i % 3;
-          const tmax = j ? j.maxTorque[k] : 0;
-          let v = r.value;
-          if (v > tmax) v = tmax;
-          else if (v < -tmax) v = -tmax;
-          this.tauOut[i] = v;
-          const t = this.tgt[i];
-          if (t && t.ownerLabel === "\u2014") {
-            t.owner = r.system;
-            t.ownerLabel = `${r.label}(\u03C4)`;
-          }
+          out[i] = (this.prevTarget[i] ?? 0) + (this.acorr[i] ?? 0);
         }
         this.tgtOut.set(out);
         return out;
@@ -23626,6 +23607,7 @@ var init_controller = __esm({
     init_balance();
     init_forceChain();
     init_step();
+    init_skeleton();
     DEFAULT_CONTROLLER = {
       rig: DEFAULT_RIGSTATE_CONFIG,
       gait: DEFAULT_GAIT_CONFIG,
@@ -23907,6 +23889,16 @@ var init_controller = __esm({
         this.gait.update(dt);
         stepSystem(rs, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs, this.cfg.balance, this.sim.doll);
+        if (rs.waistInject) {
+          const { mode, deg } = rs.waistInject;
+          const dRad = deg * Math.PI / 180 / 3;
+          for (const nm of ["spine1", "spine2", "spine3"]) {
+            const j = jointIndexByName(rs.sk, nm);
+            if (j < 0) continue;
+            if (mode === "tgt") rs.requestAngle(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u76EE\u6807");
+            else rs.requestAngleCorr(j, 2, dRad, "balance", "waist\u6CE8\u5165\xB7\u4FEE\u6B63");
+          }
+        }
         const out = rs.arbitrate(dt);
         this.sim.doll.setMotorTargets(out);
         this.sim.doll.setTorqueTargets(rs.tauOut);

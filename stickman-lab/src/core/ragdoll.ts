@@ -1841,7 +1841,7 @@ soleBlockLabels(side: 0 | 1): string[] {
    *   `kP_eff = kP · toneScale`，`kD_eff = kD · toneScale`。
    * 由 balance 每拍写（它掌握 `loadFrac` 与锁定腿），这里只负责施加。
    */
-  private readonly toneScale: number[] = [];
+  readonly toneScale: number[] = [];   // ★ 2026-10-06 供 probe-waist 回读（只读）
   /** 本拍生效的姿势张力（balance 每拍写；未写则保持上一拍 ⇒ 必须有复位） */
   setToneScale(joint: number, axis: number, scale: number): void {
     const i = joint * 3 + axis;

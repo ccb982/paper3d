@@ -86,7 +86,12 @@ export type AxisRole =
   //   `request()` 的优先级仲裁；与 balance 的 **tau** 记录才是跨模式并联，
   //   而那一条**必须由 balance 让位**（附录 D.4），当前**尚未实现** ⇒
   //   门禁 C 会把 `step` × `balance` 的同轴异模式报成未声明冲突。
-  | 'keyframeStep';
+  | 'keyframeStep'
+  // ★★★ 2026-10-06 重构：**腰部位置伺服**（`systems/waist.ts` 是脊柱的**唯一发布者**）。
+  //   它每拍给 `spine1/2/3` 的三轴写**目标角**（基准 + 迈步名义 + 借力 + 平衡修正），
+  //   消灭了「迈步一停手就 `bind`、腰自由折」（§22.12.2）。
+  //   消融门 `waist`（整块不跑 ⇒ 回退 `bind`，用于对照"永远有目标"值多少）。
+  | 'waistPos';
 
 export interface AxisSpec {
   joint: string;
@@ -297,8 +302,10 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
   { joint: 'foot', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
   { joint: 'hip', axis: 1, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
-  { joint: 'spine1', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
-  { joint: 'spine1', axis: 0, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
+  // ★★ 2026-10-06 重构：`spine1/2`、`spine1/0` 两条 `keyframeStep` 行**已删除** ——
+  //   迈步系统不再直写脊柱（只填 `rs.waist.step` 意图），脊柱的位置写者只剩
+  //   `waistPos`（唯一发布者）。删掉不是因为"不写了"，而是因为**同一 (轴,模式)
+  //   必须合并成一条**（门禁 A）—— 旧行留着会让表说谎。
 
   // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
   //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
@@ -324,6 +331,15 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   //     ⚠ 代价（必须知道）：腰**不再有位置伺服**，`spine*/0` 与 `spine*/2`
   //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
   //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
+  { joint: 'spine1', axis: 0, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine1', axis: 1, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine1', axis: 2, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine2', axis: 0, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine2', axis: 1, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine2', axis: 2, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine3', axis: 0, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine3', axis: 1, role: 'waistPos', mode: 'pos', channel: 'waist' },
+  { joint: 'spine3', axis: 2, role: 'waistPos', mode: 'pos', channel: 'waist' },
   { joint: 'spine1', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
@@ -2127,23 +2143,15 @@ rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     //   balance 只设**自己的增益**（`kBal`），方向与合力由 `RigState.applyUpperBorrow`
     //   从**腿的实测水平 GRF**（已低通 80ms，信噪比≈10）统一算出。
     //   ⇒ 两个系统"借同一份力"，不会各按各的相位互相抵消。
-    rs.upperBorrow.kBal = p.upBorrowK ?? 0;
-    const slew = (p.upBorrowSlewDeg ?? 3) * D2R / 60;   // 每控制拍最多转多少（防抖）
-    //   ⚠ 方向（dir）必须传：只有"腿推力指向承接腿"时才借（防正反馈自激）
-    const dirZ2 = Math.sign(zRecv - rs.com.z);
-    const dirX2 = Math.sign(xRecv - rs.com.x);
-    const borrow = noiseBlocked ? { roll: 0, pitch: 0 }
-      : rs.applyUpperBorrow(leanMax, slew, dirZ2, dirX2);
-    // ② 之上再叠"朝承接腿"的修正（阈值服务项；`upLeanK` 默认 0）
-    const cRoll = noiseBlocked ? 0 : clamp(borrow.roll + kUp2 * (zRecv - rs.com.z), leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp(borrow.pitch + kUp2 * (xRecv - rs.com.x), leanMax);
-    const nSp = 3;
-    for (const nm of ['spine1', 'spine2', 'spine3']) {
-      const jj = jointIndexByName(rs.sk, nm);
-      if (jj < 0) continue;
-      rs.requestAngleCorr(jj, 2, cPitch / nSp, 'balance', 'balance修正·朝承接腿(矢状)');
-      rs.requestAngleCorr(jj, 0, cRoll / nSp, 'balance', 'balance修正·朝承接腿(额状)');
-    }
+    // ★★★ 2026-10-06 重构：**借力的方向与合成收归 `waistSystem`**。
+    //   balance 只填两件：① 自己那一份**借力增益**；② 保护性**修正量**。
+    //   （先前在这里直接算 `applyUpperBorrow` 并写脊柱 ⇒ 与 step 各按各的相位借力，
+    //     且脊柱的目标只在别处存在。现在脊柱的写入只有一个出口。）
+    rs.waist.bal.gain = p.upBorrowK ?? 0;
+    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * (zRecv - rs.com.z), leanMax);
+    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * (xRecv - rs.com.x), leanMax);
+    rs.waist.bal.pitch = cPitch / D2R;
+    rs.waist.bal.roll = cRoll / D2R;
     // 诊断：corr 与 final 的含义已改为"修正量"，写进 `upperBody` 供逐帧回读
     ub.corrPitch = cPitch; ub.corrRoll = cRoll;
     ub.final.pitch = ub.step.pitch + cPitch;
