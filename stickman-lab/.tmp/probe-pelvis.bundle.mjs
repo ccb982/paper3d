@@ -16031,7 +16031,7 @@ var init_ragdoll = __esm({
                     if (kpUse > (this.kpRawPeak[idx] ?? 0)) this.kpRawPeak[idx] = kpUse;
                     const r = kpCap / kpUse;
                     kpUse = kpCap;
-                    kdUse = Math.min(kdUse, kdRaw * r);
+                    if (!this.holdCmd[idx]) kdUse = Math.min(kdUse, kdRaw * r);
                     this.stiffCapHits++;
                   }
                 }
@@ -16983,6 +16983,7 @@ function lerpKeyPose(from, to, s) {
     swAnkle: L(a.swAnkle, b.swAnkle),
     trunkPitch: L(a.trunkPitch, b.trunkPitch),
     trunkLat: L(a.trunkLat, b.trunkLat),
+    trunkYaw: L(a.trunkYaw, b.trunkYaw),
     primeMover: u < 0.5 ? a.primeMover : b.primeMover
   };
 }
@@ -17019,7 +17020,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: -2 * D,
         trunkPitch: 4 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\u8E1D\u8DD6\u5C48\u808C\uFF08\u5236\u52A8\uFF09"
       },
       LR: {
@@ -17031,7 +17033,8 @@ var init_keyframe = __esm({
         supAnkle: 12.5 * D,
         swAnkle: -5 * D,
         trunkPitch: 2 * D,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u80A1\u56DB\u5934\u808C\uFF08\u79BB\u5FC3\uFF09+ \u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u79BB\u5FC3\uFF09"
       },
       MSt: {
@@ -17045,7 +17048,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 5 * D,
+        trunkYaw: 4 * D,
         primeMover: "\u81C0\u4E2D\u808C + \u9614\u7B4B\u819C\u5F20\u808C\uFF08\u9ACB\u5916\u5C55\uFF09"
       },
       TSt: {
@@ -17057,7 +17061,8 @@ var init_keyframe = __esm({
         supAnkle: -10 * D,
         swAnkle: -18 * D,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 4 * D,
+        trunkYaw: 3 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u8E6C\u79BB\uFF09+ \u81C0\u5927\u808C"
       },
       PSw: {
@@ -17069,7 +17074,8 @@ var init_keyframe = __esm({
         supAnkle: 20 * D,
         swAnkle: -20 * D,
         trunkPitch: 0,
-        trunkLat: 0,
+        trunkLat: 2 * D,
+        trunkYaw: 2 * D,
         primeMover: "\u8158\u7EF3\u808C + \u5185\u6536\u808C\uFF08\u5378\u8F7D\u540E\u817F\uFF09"
       },
       ISw: {
@@ -17081,7 +17087,8 @@ var init_keyframe = __esm({
         supAnkle: -5 * D,
         swAnkle: -10 * D,
         trunkPitch: -3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u9AC2\u8170\u808C + \u80A1\u76F4\u808C\uFF08\u52A0\u901F\u6446\u52A8\u817F\uFF09"
       },
       MSw: {
@@ -17093,7 +17100,8 @@ var init_keyframe = __esm({
         supAnkle: 0,
         swAnkle: 0,
         trunkPitch: -2 * D,
-        trunkLat: 0,
+        trunkLat: 0 * D,
+        trunkYaw: 0 * D,
         primeMover: "\uFF08\u88AB\u52A8\u949F\u6446\uFF09"
       },
       TSw: {
@@ -17105,7 +17113,8 @@ var init_keyframe = __esm({
         supAnkle: -2 * D,
         swAnkle: -3 * D,
         trunkPitch: 3 * D,
-        trunkLat: 0,
+        trunkLat: 1 * D,
+        trunkYaw: 1 * D,
         primeMover: "\u8153\u80A0\u808C-\u6BD4\u76EE\u9C7C\u808C\uFF08\u672B\u7AEF\u5236\u52A8\uFF09"
       }
     });
@@ -22753,7 +22762,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     const nSp = Math.max(1, spineChain.length);
     for (let i2 = 0; i2 < spineChain.length; i2++) {
       const jj = spineChain[i2];
-      rs.requestAngle(jj, 2, ub.final.pitch / nSp, "balance", "\u4E0A\u8EAB\xB7\u6700\u7EC8\u53D1\u5E03(\u77E2\u72B6)");
+      rs.requestAngle(jj, 2, ub.final.pitch / nSp + 0.3, "balance", "\u2605\u7B26\u53F7\u5B9E\u9A8C+0.3rad");
       rs.requestAngle(jj, 0, ub.final.roll / nSp, "balance", "\u4E0A\u8EAB\xB7\u6700\u7EC8\u53D1\u5E03(\u989D\u72B6)");
     }
     rs.ubTau = Math.hypot(ub.force.fx, ub.force.fz);
@@ -22783,7 +22792,20 @@ var init_balance = __esm({
     HIP_ABD_AXIS = 0;
     AXIS_OWNERSHIP = Object.freeze([
       // ── 矢状链：位置伺服（`sagSupport`）──────────────────────────────
-      { joint: "hip", axis: 2, role: "sagSupport", mode: "pos", channel: "hip", extraGates: ["stepKeyframe"] },
+      //   ★★ **躯干相对腿的倒立摆**（文献口径，2026-10-06）：Morasso 2022 的 DIP 模型里
+      //     **躯干是一整段刚体、髋是被动关节** ⇒ 临界刚度 **175 N·m/rad**，模型取 2× = 350；
+      //     Goodworth & Peterka 2014 实测主动上身反馈刚度 **121~352**。
+      //   ⚠ 本 rig 实测 `hip/2` 有效刚度 = 48×200/9 = **1067**（超 3 倍）⇒ 夹到 350。
+      //   ⚠ 对比：`spine1/2/3` 是**腰椎**，人体在 DIP 模型里当刚体 ⇒ 那三根**不夹**（是结构）。
+      {
+        joint: "hip",
+        axis: 2,
+        role: "sagSupport",
+        mode: "pos",
+        channel: "hip",
+        stiffMaxN: TRUNK_STIFF_MAX,
+        extraGates: ["stepKeyframe"]
+      },
       {
         joint: "knee",
         axis: 2,
@@ -22829,7 +22851,14 @@ var init_balance = __esm({
       },
       // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
       //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
-      { joint: "hip", axis: HIP_ABD_AXIS, role: "pelvicLift", mode: "pos", channel: "pelvicLift" },
+      {
+        joint: "hip",
+        axis: HIP_ABD_AXIS,
+        role: "pelvicLift",
+        mode: "pos",
+        channel: "pelvicLift",
+        stiffMaxN: TRUNK_STIFF_MAX
+      },
       // ── 踝：矢状 VIP 刚度（τ）+ QP + τ=JᵀF ──────────────────────────
       {
         joint: "foot",
@@ -22912,7 +22941,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce"]
       },
       {
@@ -22929,7 +22957,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
       },
       {
@@ -22938,7 +22965,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce"]
       },
       {
@@ -22955,7 +22981,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
       },
       {
@@ -22964,7 +22989,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce"]
       },
       {
@@ -22981,7 +23005,6 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        stiffMaxN: TRUNK_STIFF_MAX,
         extraGates: ["sag", "weight", "trunkLean", "upForce", "sagJfSpine"]
       }
     ]);
@@ -23256,7 +23279,8 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
     if (on("upForce")) {
-      rs.proposeUpperBody(kp.trunkPitch, kp.trunkLat, 0);
+      const swS = swing === "l" ? 1 : -1;
+      rs.proposeUpperBody(kp.trunkPitch, swS * kp.trunkLat, swS * kp.trunkYaw);
     } else {
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, "\u8EAF\u5E72\u77E2\u72B6\xB7\u5173\u952E\u5E27");
       if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, "\u8EAF\u5E72\u989D\u72B6\u4EE3\u507F");
@@ -23275,15 +23299,16 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const kneeDeg = p.kneeFlexPeakDeg * bell + holdKnee;
   rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kneeDeg * D2R2, 1.2), "\u6446\u52A8\u819D\u5C48", lift > 0.01);
   if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12 + (s >= 1 ? 0.1 : 0), "\u6446\u52A8\u5916\u5C55", false);
-  const yaw = bell * 6 * D2R2 * (swing === "l" ? 1 : -1);
+  const swSign = swing === "l" ? 1 : -1;
+  const kp2 = KEY_POSES[STATE_TO_GAIT[rs.state]];
+  const yawT = swSign * kp2.trunkYaw * rs.authority;
+  const latT = swSign * kp2.trunkLat * rs.authority;
   if (on("upForce")) {
-    rs.proposeUpperBody(0, yaw, 0);
-    if (jSp2 >= 0) rs.proposeUpperBody(0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), 0);
-    if (jSp3 >= 0) rs.proposeUpperBody(0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), 0);
+    rs.proposeUpperBody(0, latT, yawT);
   } else {
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, yaw, "\u8FC8\u6B65\u53CD\u76F8");
-    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
-    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R2 * (swing === "l" ? 1 : -1), "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, latT, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
+    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, yawT * 0.5, "\u8FC8\u6B65\u53CD\u76F8");
   }
 }
 var KNEE_FLEX_PEAK, DEFAULT_STEP_PARAMS;
@@ -23409,7 +23434,8 @@ var init_controller = __esm({
         this.rs.tauCap = new Float64Array(caps);
         this.rs.tauCapOn = !capOff;
         doll.setTauCaps(caps);
-        const stiffCaps = capOff ? new Float32Array(sk2.joints.length * 3) : buildStiffCaps(sk2.joints);
+        const stiffOn = (this.cfg.balance.ablate ?? "").split(",").map((x) => x.trim()).includes("stiffCap");
+        const stiffCaps = stiffOn && !capOff ? buildStiffCaps(sk2.joints) : new Float32Array(sk2.joints.length * 3);
         doll.setStiffCaps(stiffCaps);
         this.rs.forceSrc = {
           sole: (side) => {
@@ -23708,12 +23734,13 @@ log("\u2550\u2550 \u529B\u7684\u4F20\u64AD\uFF1A\u9AA8\u76C6\u662F\u52A0\u548C\u
 log("   \u9AA8\u76C6\u5217\uFF1Ay / vy / |\u03C9| / \u6536\u5230(\u03A3\u9ACB\u5B50\u6811\u529B) / \u4F20\u4E0A(spine1\u5B50\u6811\u529B) / \u5DEE\u503C");
 log("   \u810A\u67F1\u5217\uFF1A\u89D2\u5EA6\xB0 / \u89D2\u901F\u5EA6\xB0/s / \u5B9E\u9645\u03C4 / \u5F52\u5C5E(\u8BA9\u4F4D)");
 log("");
-log("   t(s)  \u9AA8\u76C6y  v_y    |\u03C9|    \u6536\u5230F(\u4E0B)        \u4F20\u4E0AF(\u4E0A)         \u5DEE\u503C     | spine1 [\u8F740 \u8F741 \u8F742]           spine2 [\u8F740 \u8F741 \u8F742]           spine3 [\u8F740 \u8F741 \u8F742]");
+log("   t(s)  \u9AA8\u76C6y  v_y    |\u03C9|    \u6536\u5230F(\u4E0B)        \u4F20\u4E0AF(\u4E0A)         \u5DEE\u503C     | \u80F8\u8154pitch\xB0 | spine1 [\u8F740 \u8F741 \u8F742]           spine2 [\u8F740 \u8F741 \u8F742]           spine3 [\u8F740 \u8F741 \u8F742]");
 for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
   if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
   sim.advance(1);
   if (i % (EVERY * 2) !== 0) continue;
   const rs = ctrl.rs;
+  void rs.pitchDeg;
   const fc = rs.forceChain();
   if (!fc.ready) continue;
   const fl = fc.joints[JHIP.l], fr = fc.joints[JHIP.r];
@@ -23735,7 +23762,7 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
     const t0 = d.tauApplied[ji * 3] ?? 0, t1 = d.tauApplied[ji * 3 + 1] ?? 0;
     cells.push(`[0:${a0.toFixed(0)}\xB0/${t0.toFixed(0)} 1:${a1.toFixed(0)}\xB0/${t1.toFixed(0)} 2:${a2.toFixed(1)}\xB0/${tau.toFixed(0)}]{${own}${hold ? "/\u8BA9" + hold : ""}|\u03C4:${(ts?.label ?? "\u2014").slice(0, 10)}}`);
   }
-  log(`   ${(i / 120).toFixed(3)} ${pv.y.toFixed(3)} ${(pv.y * 1e3).toFixed(0).padStart(5)} ${(Math.hypot(pw.x, pw.y, pw.z) * DEG3).toFixed(0).padStart(4)}\xB0 (${downFx.toFixed(0).padStart(5)},${downFy.toFixed(0).padStart(5)},${downFz.toFixed(0).padStart(5)}) (${s1.fx.toFixed(0).padStart(5)},${s1.fy.toFixed(0).padStart(5)},${s1.fz.toFixed(0).padStart(5)}) (${(s1.fx - downFx).toFixed(0).padStart(4)},${(s1.fy - downFy).toFixed(0).padStart(4)},${(s1.fz - downFz).toFixed(0).padStart(4)}) | ${cells.join("  ")}`);
+  log(`   ${(i / 120).toFixed(3)} ${pv.y.toFixed(3)} ${(pv.y * 1e3).toFixed(0).padStart(5)} ${(Math.hypot(pw.x, pw.y, pw.z) * DEG3).toFixed(0).padStart(4)}\xB0 (${downFx.toFixed(0).padStart(5)},${downFy.toFixed(0).padStart(5)},${downFz.toFixed(0).padStart(5)}) (${s1.fx.toFixed(0).padStart(5)},${s1.fy.toFixed(0).padStart(5)},${s1.fz.toFixed(0).padStart(5)}) (${(s1.fx - downFx).toFixed(0).padStart(4)},${(s1.fy - downFy).toFixed(0).padStart(4)},${(s1.fz - downFz).toFixed(0).padStart(4)}) | ${rs.pitchDeg.toFixed(1).padStart(6)} | ${cells.join("  ")}`);
 }
 log("");
 {

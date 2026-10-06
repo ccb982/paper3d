@@ -74,12 +74,13 @@ log('   骨盆列：y / vy / |ω| / 收到(Σ髋子树力) / 传上(spine1子树
 log('   脊柱列：角度° / 角速度°/s / 实际τ / 归属(让位)');
 log('');
 log('   t(s)  骨盆y  v_y    |ω|    收到F(下)        传上F(上)         差值     '
-  + '| spine1 [轴0 轴1 轴2]           spine2 [轴0 轴1 轴2]           spine3 [轴0 轴1 轴2]');
+  + '| 胸腔pitch° | spine1 [轴0 轴1 轴2]           spine2 [轴0 轴1 轴2]           spine3 [轴0 轴1 轴2]');
 for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
   if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
   sim.advance(1);
   if (i % (EVERY * 2) !== 0) continue;
   const rs = ctrl.rs;
+  void rs.pitchDeg;
   const fc = rs.forceChain();
   if (!fc.ready) continue;
   const fl = fc.joints[JHIP.l]!, fr = fc.joints[JHIP.r]!;
@@ -108,7 +109,7 @@ for (let i = 0; i < SECS * 120 && !sim.finished; i++) {
     + `(${downFx.toFixed(0).padStart(5)},${downFy.toFixed(0).padStart(5)},${downFz.toFixed(0).padStart(5)})`
     + ` (${s1.fx.toFixed(0).padStart(5)},${s1.fy.toFixed(0).padStart(5)},${s1.fz.toFixed(0).padStart(5)})`
     + ` (${(s1.fx - downFx).toFixed(0).padStart(4)},${(s1.fy - downFy).toFixed(0).padStart(4)},${(s1.fz - downFz).toFixed(0).padStart(4)})`
-    + ` | ${cells.join('  ')}`);
+    + ` | ${rs.pitchDeg.toFixed(1).padStart(6)} | ${cells.join('  ')}`);
 }
 log('');
 {
