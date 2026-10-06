@@ -72,6 +72,16 @@ export function decomposeCop(rs: RigState, onFall = true): void {
   const overMag = Math.hypot(overX, overZ);
   const actionability = Math.max(0, Math.min(1, 1 - overMag / OVER_SCALE));
 
+  // ★★★★★ **应急落足目标**（§21.11 的 W3；用户：「应急的最重要作用是调整脚位置」）
+  //   落足点 = 捕获点 ξ，截断到"以**支撑脚**为原点的可及范围"（capture-point 落足）。
+  //   可及范围（`STEP_REACH`）：前后 ±0.45 m、侧 ±0.30 m（≈ 腿长 × sin(30°)，保守）。
+  //   相对量 ⇒ 与步态的"落脚差"同一口径（`soleX/soleZ`）。
+  const supS0 = rs.supportLeg();
+  const footX0 = supS0 === 'l' ? rs.soleX.l : rs.soleX.r;
+  const footZ0 = supS0 === 'l' ? rs.soleZ.l : rs.soleZ.r;
+  const clS = (v: number, m: number): number => (v > m ? m : v < -m ? -m : v);
+  const stepX = clS(xiX - footX0, 0.45);
+  const stepZ = clS(xiZ - footZ0, 0.30);
   rs.copPlan = {
     valid: valid,
     copOk,
@@ -85,5 +95,6 @@ export function decomposeCop(rs: RigState, onFall = true): void {
     actionability,
     fallNeeded: actionability <= 0,
     copX, copZ,
+    stepX, stepZ, stepUrgent: Math.max(0, Math.min(1, urg)),
   };
 }

@@ -295,11 +295,28 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     //   —— 状态自己的关键帧本来就是对的，只是**没人用它**。
     //   ⇒ LIFT/SWING 用摆动曲线 `keySwing(s)`；其余相用 `KEY_POSES[STATE_TO_GAIT]`。
     //   `KFSTATE=0` 可回退（A/B）。
+    // ★★★★★ 2026-10-06 **W3：应急落足**（用户：「应急的最重要作用是**调整脚位置**，
+    //   需要**迅速把脚调整到可支撑的位置**。这是最关键的」）
+    //   感知层已给出 `copPlan.{stepX,stepZ,stepUrgent}`（= ξ 截断到可及范围的落足点）。
+    //   执行：① 落足点 → 髋的屈伸（矢状）/外展（额状）偏移；
+    //        ② 紧迫度 → **摆动加速**（相内进度 s 按 (1+2·urg) 推进 ⇒ 迅速落足）。
+    const planS = rs.copPlan;
+    const emer = !!(planS && planS.valid && (planS.fallNeeded || planS.stepUrgent > 0.5));
+    const sUse = emer ? Math.min(1, s * (1 + 2 * (planS?.stepUrgent ?? 0))) : s;
     const kp = (KF_STATE && rs.state !== 'SWING' && rs.state !== 'LIFT')
       ? KEY_POSES[STATE_TO_GAIT[rs.state]]
-      : keySwing(s);
+      : keySwing(sUse);
+    // 落足点 → 角度偏移（髋正=屈=脚前；L≈0.9 m ⇒ deg/m ≈ 64）
+    const L_LEG = 0.9;
+    const emerHip = emer ? (planS!.stepX / L_LEG) : 0;   // rad
+    const emerAb = emer ? (planS!.stepZ / L_LEG) : 0;    // rad（髋外展=轴0）
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
-    rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex, 1.05), '摆动髋·关键帧', lift > 0.01);
+    rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex + emerHip, 1.05), '摆动髋·关键帧', lift > 0.01);
+    // ★ 应急侧向落足：直接给**外展轴（0）**（髋外展=轴0，见 skeleton 的 AXIS 约定；
+    //   ⚠ 下面"摆动外展·让开"写的是轴 1 —— 那是历史遗留，语义存疑，不动它）
+    if (emer && Math.abs(emerAb) > 1e-3) {
+      rs.requestSwingLegAngle(swing, jHip, 0, clamp(emerAb, 0.6), '应急·侧向落足', false);
+    }
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp(-kp.swKneeFlex, 1.2), '摆动膝·关键帧', lift > 0.01);
     // 踝：正 = 跖屈（本 rig 约定）
     const jFt = jointIndexByName(sk, swing === 'l' ? 'foot_l' : 'foot_r');

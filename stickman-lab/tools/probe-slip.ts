@@ -86,7 +86,8 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
     + `${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)}`
     + ` | ${((rs.com.x * 1000).toFixed(0)).padStart(5)} ${((rs.com.vx * 1000).toFixed(0)).padStart(5)}`
     + ` ${((xOf(jSp1) * 1000).toFixed(0)).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)}`
-    + `  头y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)}`);
+    + `  头y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)}`
+    + (rs.copPlan ? `  | 落足X=${(rs.copPlan.stepX * 1000).toFixed(0)} Z=${(rs.copPlan.stepZ * 1000).toFixed(0)} 急=${rs.copPlan.stepUrgent.toFixed(2)}${rs.copPlan.fallNeeded ? '★必迈' : ''}` : ''));
   prevL = xl; prevR = xr;
 }
 log(`\n── 全段滑移总量 ──`);

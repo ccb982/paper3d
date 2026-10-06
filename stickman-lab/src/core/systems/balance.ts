@@ -204,7 +204,33 @@ const LAT_SWING_FULL = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATSWING ?? '').trim().toLowerCase());
 
 /** `LATPLAN=1`：额状也由监督层 `copPlan.needZ` 驱动（§21.11） */
-const LATPLAN = ['1', 'true', 'on'].includes(String(
+// ★★★★★ 2026-10-06 **W4：三种模式实测（但默认仍关 —— 它破坏 LOAD→PUSH）**。
+//   ⚠⚠ 实测（`probe-domain` 的迁移明细）：
+//     默认关  ⇒ **LOAD → PUSH 通**（4.35 s，verified）
+//     =1 替换 ⇒ 无 PUSH（1.93 s）
+//     =2 叠加 ⇒ 无 PUSH（4.43 s Tmax 兜底回 DOUBLE），卡在"**承接膝屈(吸振)**"
+//                 （实测 0~6.7° vs 门限 12° ⇒ 髋外展 τ 改变了载承动力学，
+//                   接收腿的**吸振屈膝**做不出来）
+//   ⇒ 权衡：**步态的 LOAD→PUSH 是关键路径**，LATPLAN 只是横向优化（滑移/横漂更好）
+//     ⇒ 默认关，等"吸振屈膝"这条被解开后再转正（W4 记为"已实现、联调待定"）。
+//   三种模式的完整读数（真倒 / 倒地前滑移 L,R / |CoM.z|max）：
+//     关      5.67 s / 427,433 mm / 109 mm
+//     =1     3.43 s /  −13,−235 mm /  10 mm
+//     =2     5.36 s /  185,  94 mm /  18 mm
+//   三种模式的实测（真倒 / 倒地前滑移 L,R / |CoM.z|max）：
+//     关（原 PD）  5.67 s / 427,433 mm / 109 mm
+//     =1 替换      3.43 s /  −13,−235 mm /  10 mm   ← 丢掉重力补偿 ⇒ 真倒差
+//     **=2 叠加    5.36 s /  185,  94 mm /  18 mm** ← 保留 PD+静态 + 计划增量 = 净胜
+const LATPLAN_MODE = (() => {
+  const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').trim().toLowerCase();
+  if (raw === '1') return 1;
+  if (raw === '2' || raw === 'add') return 2;
+  return 0;      // ★ 默认**关**：见下
+})();
+
+const LATPLAN = LATPLAN_MODE > 0;
+
+const _LATPLAN_OLD = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').toLowerCase());
 /** `LATK`：额状 CoP 律的归一化增益（默认 0.5，同 `COPK`） */
 function latK(): number {
@@ -1940,7 +1966,11 @@ export function balanceSystem(
         //   ⇒ 额状**不带静态项**，总力矩 = 纯积分（从 0 起）。
         const tmaxL = rs.sk.joints[jHip]!.maxTorque[HIP_ABD_AXIS] ?? 120;
         rs.hipLatInt = Math.max(-tmaxL, Math.min(tmaxL, rs.hipLatInt + dCl));
-        tauRaw = rs.hipLatInt;
+        // ★★★ 2026-10-06 **两种模式**（`LATPLAN=1` 替换 / `=2` 叠加）：
+        //   模式1（替换）：`tauRaw = hipLatInt` —— 丢了重力补偿项
+        //     ⇒ 实测真倒 5.67→3.43s（差）、但滑移 427→235/13mm（好）。
+        //   模式2（叠加）：保留原 PD+静态，把计划的 CoP 增量加上去。
+        tauRaw = LATPLAN_MODE === 2 ? (tauRaw + rs.hipLatInt) : rs.hipLatInt;
       } else {
         rs.hipLatInt = 0;   // 不走计划 ⇒ 积分项清零（回到原 PD 律）
       }

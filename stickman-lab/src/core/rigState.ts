@@ -1127,6 +1127,12 @@ export class RigState {
     urgency: number; region: string;
     actionability: number; fallNeeded: boolean;
     copX: number; copZ: number;
+    // ★★★★★ 2026-10-06 **应急落足目标**（用户：「应急的最重要作用是**调整脚位置**，
+    //   需要**迅速把脚调整到可支撑的位置**。这是最关键的」）：
+    //   落足点 = 捕获点 ξ 截断到"以当前支撑脚为原点的可及范围"（capture-point 落足，
+    //   Hof 2005 / Pratt 2006 / Maki & McIlroy 1997 的补偿性迈步）。
+    //   `stepX/stepZ` = 相对**支撑脚**的落足偏移（m）；`stepUrgent` = 0..1 紧迫度。
+    stepX: number; stepZ: number; stepUrgent: number;
   } | null = null;
 
   fallResp = {

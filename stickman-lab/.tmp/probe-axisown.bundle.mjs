@@ -23402,7 +23402,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         const dCl = d > slewZ ? slewZ : d < -slewZ ? -slewZ : d;
         const tmaxL = rs.sk.joints[jHip].maxTorque[HIP_ABD_AXIS] ?? 120;
         rs.hipLatInt = Math.max(-tmaxL, Math.min(tmaxL, rs.hipLatInt + dCl));
-        tauRaw = rs.hipLatInt;
+        tauRaw = LATPLAN_MODE === 2 ? tauRaw + rs.hipLatInt : rs.hipLatInt;
       } else {
         rs.hipLatInt = 0;
       }
@@ -23765,7 +23765,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN_MODE, LATPLAN, _LATPLAN_OLD, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, ANKLE_ABSENT, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -23778,7 +23778,14 @@ var init_balance = __esm({
     LAT_SWING_FULL = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATSWING ?? ""
     ).trim().toLowerCase());
-    LATPLAN = ["1", "true", "on"].includes(String(
+    LATPLAN_MODE = (() => {
+      const raw = String((globalThis.process?.env ?? {}).LATPLAN ?? "").trim().toLowerCase();
+      if (raw === "0" || raw === "off" || raw === "false") return 0;
+      if (raw === "1") return 1;
+      return 2;
+    })();
+    LATPLAN = LATPLAN_MODE > 0;
+    _LATPLAN_OLD = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATPLAN ?? ""
     ).toLowerCase());
     LATK = latK();
@@ -24368,8 +24375,17 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     globalThis.process?.env?.SWGATE ?? ""
   ).toLowerCase());
   if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
-    const kp = KF_STATE && rs.state !== "SWING" && rs.state !== "LIFT" ? KEY_POSES[STATE_TO_GAIT[rs.state]] : keySwing(s);
-    rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+    const planS = rs.copPlan;
+    const emer = !!(planS && planS.valid && (planS.fallNeeded || planS.stepUrgent > 0.5));
+    const sUse = emer ? Math.min(1, s * (1 + 2 * (planS?.stepUrgent ?? 0))) : s;
+    const kp = KF_STATE && rs.state !== "SWING" && rs.state !== "LIFT" ? KEY_POSES[STATE_TO_GAIT[rs.state]] : keySwing(sUse);
+    const L_LEG = 0.9;
+    const emerHip = emer ? planS.stepX / L_LEG : 0;
+    const emerAb = emer ? planS.stepZ / L_LEG : 0;
+    rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex + emerHip, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+    if (emer && Math.abs(emerAb) > 1e-3) {
+      rs.requestSwingLegAngle(swing, jHip, 0, clamp2(emerAb, 0.6), "\u5E94\u6025\xB7\u4FA7\u5411\u843D\u8DB3", false);
+    }
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
@@ -24597,6 +24613,12 @@ function decomposeCop(rs, onFall = true) {
   const kZ = K_SIDE * (1 + urg);
   const overMag = Math.hypot(overX, overZ);
   const actionability = Math.max(0, Math.min(1, 1 - overMag / OVER_SCALE));
+  const supS0 = rs.supportLeg();
+  const footX0 = supS0 === "l" ? rs.soleX.l : rs.soleX.r;
+  const footZ0 = supS0 === "l" ? rs.soleZ.l : rs.soleZ.r;
+  const clS = (v, m) => v > m ? m : v < -m ? -m : v;
+  const stepX = clS(xiX - footX0, 0.45);
+  const stepZ = clS(xiZ - footZ0, 0.3);
   rs.copPlan = {
     valid,
     copOk,
@@ -24615,7 +24637,10 @@ function decomposeCop(rs, onFall = true) {
     actionability,
     fallNeeded: actionability <= 0,
     copX,
-    copZ
+    copZ,
+    stepX,
+    stepZ,
+    stepUrgent: Math.max(0, Math.min(1, urg))
   };
 }
 var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
