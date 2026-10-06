@@ -79,7 +79,26 @@ export function supportLegTick(rs: RigState, doll: Ragdoll, ablate = ''): void {
 
   // 符号标定（默认按"地面反力矩 → 马达力矩取负"）
   const sH = num('SLSIGN_HIP', -1), sK = num('SLSIGN_KNEE', -1), sA = num('SLSIGN_ANK', -1);
-  const tauH = sH * M(pH), tauK = sK * M(pK), tauA = sA * M(pA);
+  const tauH = sH * M(pH), tauK = sK * M(pK);
+  const tauA0 = sA * M(pA);
+  // ★★★★★ 2026-10-06 **用户算法：方向 → 足部区域发力（持续）**
+  //   「**要前倒就前足多发力**，腰挺起来」。
+  //   方向量：`plan.errX`（+ = CoP 要前移 = **前倒**）与 `plan.errZ`（+ = 往左）。
+  //   本项**叠加**在静力映射之外，是一个**带速率限幅的持续偏置**
+  //   （静力映射对上游 err 的逐拍抖动敏感 ⇒ 会翻号；速率限幅让它"认准方向、慢慢加"，
+  //    这正是人"及时但持续地蹬"的形态 —— 而不是每拍换向的抖动）。
+  const dirX = plan.errX;
+  const sevX = Math.max(-1, Math.min(1, dirX / 0.08));      // 归一化（8cm ≈ 满）
+  //   ⚠⚠ **实测净负**（真倒：+1.2→4.49 s、−1.2→5.61、−0.6→3.33、+0.6→5.70，
+  //     基线 6.47 s）⇒ **默认 0（关）**。读法：静力映射里的 `CoP_t`（= 计划把 CoP
+  //     钉在足缘）**已经隐含**"前倒→前足发力"的力矩；再叠一项就是**双计**，
+  //     反而把力链推离平衡。开关保留供未来"替换而非叠加"的整定。
+  const kToe = num('TOEK', 0);                              // N·m / 单位严重度（×Fv 归一）
+  const tauToeWant = kToe * sevX * (Fv / 400);              // 前倒 sevX>0 ⇒ 正（前足蹬）
+  const slewT = num('TOESLEW', 6);                          // N·m / 控制拍（速率限幅）
+  const dT = Math.max(-slewT, Math.min(slewT, tauToeWant - rs.supLegToe));
+  rs.supLegToe += dT;
+  const tauA = tauA0 - rs.supLegToe;   // 踝的符号约定：正 τ = CoP 后移 ⇒ 前足蹬取**负**
 
   // 让位（位置环只留阻尼；力矩是唯一承重路径）+ 承重声明
   rs.requestHold(jHip, 2, 'balance', '承重腿·让位');

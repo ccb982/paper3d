@@ -14558,13 +14558,13 @@ var init_ragdoll = __esm({
         }
         this.limitBiasMax = new Float64Array(sk2.joints.length * 3);
         for (let i = 0; i < sk2.joints.length; i++) {
-          const J2 = sk2.joints[i];
+          const J = sk2.joints[i];
           const bp = this.bodies[this.jointBodies[i * 2]];
           const bc = this.bodies[this.jointBodies[i * 2 + 1]];
           const ip = bp.principalInertia(), ic = bc.principalInertia();
           const q = bp.rotation();
           for (let k = 0; k < 3; k++) {
-            const tmax = Math.abs(J2.maxTorque[k] ?? 0);
+            const tmax = Math.abs(J.maxTorque[k] ?? 0);
             const axk = k === 0 ? 1 : 0, ayk = k === 1 ? 1 : 0, azk = k === 2 ? 1 : 0;
             quatRotate(q.x, q.y, q.z, q.w, axk, ayk, azk, this.axisW);
             const a = this.axisW;
@@ -16287,11 +16287,11 @@ var init_ragdoll = __esm({
             const wRel = (av.x - ap.x) * this.axisW[0] + (av.y - ap.y) * this.axisW[1] + (av.z - ap.z) * this.axisW[2];
             if (out > 0 ? wRel <= 0 : wRel >= 0) continue;
             const Iax = this.axisInertia(i, k);
-            const J2 = -wRel * Iax;
+            const J = -wRel * Iax;
             const jv = this.iv;
-            jv.x = this.axisW[0] * J2;
-            jv.y = this.axisW[1] * J2;
-            jv.z = this.axisW[2] * J2;
+            jv.x = this.axisW[0] * J;
+            jv.y = this.axisW[1] * J;
+            jv.z = this.axisW[2] * J;
             c.applyTorqueImpulse(jv, true);
             jv.x = -jv.x;
             jv.y = -jv.y;
@@ -16511,12 +16511,12 @@ var init_ragdoll = __esm({
             if (wErrNew > 1e-6 || wErrNew < -1e-6) {
               const dtL = this.lastDt > 1e-9 ? this.lastDt : 1 / ASSUMED_PHYSICS_HZ;
               const Jcap = LIMIT_BIAS_SAFETY * Math.abs(j.maxTorque[k] ?? 0) * dtL;
-              let J2 = wErrNew * IaxEff;
-              if (J2 > Jcap) J2 = Jcap;
-              else if (J2 < -Jcap) J2 = -Jcap;
-              jv.x = this.axisW[0] * J2;
-              jv.y = this.axisW[1] * J2;
-              jv.z = this.axisW[2] * J2;
+              let J = wErrNew * IaxEff;
+              if (J > Jcap) J = Jcap;
+              else if (J < -Jcap) J = -Jcap;
+              jv.x = this.axisW[0] * J;
+              jv.y = this.axisW[1] * J;
+              jv.z = this.axisW[2] * J;
               c.applyTorqueImpulse(jv, true);
               jv.x = -jv.x;
               jv.y = -jv.y;
@@ -19214,16 +19214,16 @@ function buildIndex(rs2) {
   return m;
 }
 function degOf(rs2, idx, leg, axis) {
-  const DEG5 = 180 / Math.PI;
+  const DEG4 = 180 / Math.PI;
   switch (axis) {
     case "hipFlex":
-      return -rs2.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG5;
+      return -rs2.angle(idx.get(`hip_${leg}`) ?? -1, 2) / DEG4;
     case "hipAbd":
-      return rs2.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG5;
+      return rs2.angle(idx.get(`hip_${leg}`) ?? -1, 0) / DEG4;
     case "kneeFlex":
-      return -rs2.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG5;
+      return -rs2.angle(idx.get(`knee_${leg}`) ?? -1, 2) / DEG4;
     case "ankle":
-      return -rs2.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG5;
+      return -rs2.angle(idx.get(`foot_${leg}`) ?? -1, 2) / DEG4;
     case "trunkPitch":
       return rs2.pitchDeg;
     case "trunkLat":
@@ -25116,7 +25116,7 @@ var init_controller = __esm({
   }
 });
 
-// tools/probe-yaw.ts
+// tools/probe-sustain.ts
 init_rapier_wasm3d_bg();
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -25138,65 +25138,62 @@ await Promise.resolve().then(() => (init_ragdoll(), ragdoll_exports));
 var { Sim: Sim2, DEFAULT_SIM: DEFAULT_SIM2 } = await Promise.resolve().then(() => (init_sim(), sim_exports));
 var { Controller: Controller2, DEFAULT_CONTROLLER: DEFAULT_CONTROLLER2 } = await Promise.resolve().then(() => (init_controller(), controller_exports));
 var { shapeForJoints: shapeForJoints2 } = await Promise.resolve().then(() => (init_brain(), brain_exports));
-var log = (s) => console.log(s);
 var ARGS = globalThis.__PROBE_ARGS ?? [];
 var SECS = Number(ARGS[0] ?? 6);
-var STEP = Number(ARGS[1] ?? 0.25);
 var HZ = 120;
-var DT = 1 / HZ;
+var DT = 1 / 120;
 var PER = 2;
-var DEG4 = 180 / Math.PI;
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var jn = sk.joints.map((j) => j.name);
-var J = (n) => jn.indexOf(n);
-log(`\u2550\u2550 probe-yaw ${SECS}s\uFF1A\u4E16\u754C\u504F\u822A\uFF08\u9AA8\u76C6/\u5934\uFF09+ \u626D\u8F6C\u8F74\uFF08\u6BCF ${STEP}s\uFF09\u2550\u2550`);
-log("   t(s)  \u9AA8\u76C6yaw  \u5934yaw  \u8EAF\u5E72roll | spine1/1 spine2/1 spine3/1 | hip_l/1 hip_r/1 | knee_l/1 knee_r/1 | comZ");
 var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
 sim.begin(new Float32Array(sim.paramCount));
-var ctrl = new Controller2(sk, sim, {
-  ...DEFAULT_CONTROLLER2,
-  gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" }
-});
+var ctrl = new Controller2(sk, sim, { ...DEFAULT_CONTROLLER2, gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" } });
 var d = sim.doll;
 var rs = ctrl.rs;
-var jr = new Float64Array(3);
-var yawOf = (q) => {
-  const x = q.x, y = q.y, z = q.z, w = q.w;
-  const bx = 1 - 2 * (y * y + z * z);
-  const bz = 2 * (x * z + y * w);
-  return Math.atan2(bz, bx) * DEG4;
+var mk = () => ({ n: 0, on: 0, sign: 0, streak: 0, best: 0, sum: 0 });
+var chans = {
+  "\u8E1D(\u77E2\u72B6)": mk(),
+  "\u9ACB(\u77E2\u72B6)": mk(),
+  "\u819D(\u77E2\u72B6)": mk(),
+  "\u9ACB(\u5916\u5C55)": mk(),
+  "\u8170(\u77E2\u72B6)": mk(),
+  "\u6EA2\u51FA\u526A\u529B": mk()
 };
-var prevYaw = Number.NaN;
-var unwrapped = 0;
-var total = 0;
-var firstYawP = Number.NaN;
-var nextT = 0;
+var feed = (a, tau) => {
+  a.n++;
+  a.sum += Math.abs(tau);
+  if (Math.abs(tau) > 3) {
+    a.on++;
+    const s = Math.sign(tau);
+    if (s === a.sign) a.streak++;
+    else {
+      a.sign = s;
+      a.streak = 1;
+    }
+    if (a.streak > a.best) a.best = a.streak;
+  }
+};
 for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   if (i % PER === 0) d.setMotorTargets(ctrl.step(DT));
   sim.advance(1);
-  const t = i / HZ;
-  if (t + 1e-6 < nextT) continue;
-  nextT += STEP;
-  const qp = d.root().rotation(), qh = d.head().rotation();
-  let yawP = yawOf(qp);
-  if (!Number.isFinite(firstYawP)) firstYawP = yawP;
-  if (Number.isFinite(prevYaw)) {
-    let dY = yawP - prevYaw;
-    if (dY > 180) dY -= 360;
-    else if (dY < -180) dY += 360;
-    unwrapped += dY;
-    total += Math.abs(dY);
-  }
-  prevYaw = yawP;
-  const a = (n) => {
-    const j = J(n);
-    if (j < 0) return "  \u2014 ";
-    d.jointRot(j, jr);
-    return (jr[1] * DEG4).toFixed(0).padStart(5);
+  if (i % PER !== 0) continue;
+  const sup = rs.supportLeg();
+  const g = (nm, ax) => {
+    const j = jn.indexOf(nm);
+    return j < 0 ? 0 : d.tauApplied[j * 3 + ax] ?? 0;
   };
-  log(`   ${t.toFixed(2).padStart(5)} ${yawP.toFixed(0).padStart(7)} ${yawOf(qh).toFixed(0).padStart(6)}  (\u7D2F\u8BA1 ${unwrapped.toFixed(0).padStart(5)}\xB0) |${a("spine1")}${a("spine2")}${a("spine3")} |${a("hip_l")}${a("hip_r")} |${a("knee_l")}${a("knee_r")} | ${(rs.com.z * 1e3).toFixed(0).padStart(5)}`);
+  feed(chans["\u8E1D(\u77E2\u72B6)"], g(`foot_${sup}`, 2));
+  feed(chans["\u9ACB(\u77E2\u72B6)"], g(`hip_${sup}`, 2));
+  feed(chans["\u819D(\u77E2\u72B6)"], g(`knee_${sup}`, 2));
+  feed(chans["\u9ACB(\u5916\u5C55)"], g(`hip_${sup}`, 0));
+  feed(chans["\u8170(\u77E2\u72B6)"], g("spine1", 2) + g("spine2", 2) + g("spine3", 2));
+  feed(chans["\u6EA2\u51FA\u526A\u529B"], rs.spillFx);
 }
-log(`
-\u2500\u2500 \u5168\u6BB5 \u2500\u2500`);
-log(`  \u9AA8\u76C6**\u51C0\u8F6C\u4E86** ${unwrapped.toFixed(0)}\xB0\uFF08\u6B63=\u9006\u65F6\u9488\uFF0C\u7D2F\u8BA1\u7EDD\u5BF9\u8F6C\u89D2 ${total.toFixed(0)}\xB0\uFF09`);
-log(`  \u21D2 \u82E5 ${"\u51C0\u8F6C"} \u2265 300\xB0 \u21D2 **\u786E\u5B9E\u8F6C\u6EE1\u4E00\u5708**\uFF08\u7528\u6237\u89C2\u611F\u6B63\u786E\uFF09`);
+console.log('\u2550\u2550 probe-sustain\uFF1A\u591A\u673A\u5236"\u6301\u7EED\u53D1\u529B"\u9A8C\u6536\uFF08\u6BCF 33ms \u4E00\u62CD\uFF09\u2550\u2550');
+console.log("   \u901A\u9053         \u5360\u7A7A\u6BD4   |\u03C4|\u5747\u503C   \u6700\u957F\u540C\u53F7\u6BB5  \u5E73\u5747\u540C\u53F7\u6BB5");
+for (const [nm, a] of Object.entries(chans)) {
+  const duty = a.n ? a.on / a.n * 100 : 0;
+  const avg = a.on ? (a.n / a.on).toFixed(1) : "\u2014";
+  console.log(`   ${nm.padEnd(12)} ${duty.toFixed(0).padStart(4)}%   ${(a.sum / Math.max(1, a.n)).toFixed(0).padStart(5)}   ${String(a.best).padStart(8)}  ${String(avg).padStart(8)}`);
+}
+console.log('   \u8BFB\u6CD5\uFF1A\u5360\u7A7A\u6BD4 = \u5728"\u8E6C"\u7684\u65F6\u95F4\u6BD4\u4F8B\uFF1B\u6700\u957F\u540C\u53F7\u6BB5 = \u8FDE\u7EED\u8E6C\u4E86\u591A\u5C11\u62CD\uFF0833ms/\u62CD\uFF09');

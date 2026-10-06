@@ -496,6 +496,13 @@ const PRIORITY: Record<SystemId, number> = { balance: 0, step: 1 };
  */
 export const LOAD_HYSTERESIS = 0.08;
 
+/** ★ τ 通道出口低通的时间常数（s）。`TAUF=0` 关闭（A/B）。 */
+const TAU_F = (() => {
+  const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TAUF ?? '');
+  if (String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).TAUF ?? '') === '') return 0;
+  return Number.isFinite(v) && v >= 0 ? v : 0;
+})();
+
 /** ★ 前/后腿判定的**迟滞带**（m）：3mm 死区在跌倒期会逐拍翻（门禁 0.033s<0.15s） */
 const FRONT_HYST = (() => {
   const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).FRONTHYST ?? '');
@@ -1107,10 +1114,16 @@ export class RigState {
   /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
   /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
   copWantX = 0;
+  /** ★ τ 通道出口低通的状态（逐轴）—— 见 `arbitrate` 里的 `TAUF` 说明 */
+  tauFilt: Float64Array = new Float64Array(0);
   /** ★ 矢状力一阶低通的状态（N）—— 见 `wantedForce.ts` 的 `SAGF_TAU` */
   sagFilt = 0;
   /** ★ 承重腿模块的遥测（τ 三轴 + 水平/竖向需求力） */
   supLegTau = { hip: 0, knee: 0, ank: 0, Fh: 0, Fv: 0 };
+  /** ★ 实测的腰折角（`spine1..3/2` 之和，度；正=前折）——回直项的输入，供回读 */
+  waistFoldDeg = 0;
+  /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
+  supLegToe = 0;
   /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
   spillFx = 0;
   spillFz = 0;
@@ -1551,6 +1564,7 @@ export class RigState {
     this.hold.fill(false);
     for (let i = 0; i < n; i++) { this.hold[i] = false; this.axisMode[i] = 0; this.holdMask[i] = 0; }
     this.tauOut = new Float32Array(n);
+    this.tauFilt = new Float64Array(n);
     this.tgtOut = new Float32Array(n);
     this.tauJ = new Float32Array(n);
     this.forceBuf = new Float64Array(sk.joints.length * 5);
@@ -2284,6 +2298,22 @@ export class RigState {
       const tmax = j ? (j.maxTorque[k] ?? 0) : 0;
       let v = r.value * ramp;          // ★ 软斜坡（τ 通道不受位置斜率限制，必须单独放）
       if (v > tmax) v = tmax; else if (v < -tmax) v = -tmax;
+      // ★★★★★ 2026-10-06 **τ 通道出口的一阶低通**（`TAUF`，默认 0.04 s）：
+      //   用户：「无论重心前移后移、左移右移，脚都得**发力及时调整**」；
+      //   而实测（`probe-sagchain`）各轴 τ **每 2~3 拍换向、±120~200 打满**、
+      //   `τ·ω>0`（泵） ⇒ **时间平均≈0** ⇒ "抖着救、够不着劲"。
+      //   ⇒ 在**唯一出口**做低通（一处覆盖 ④c/承重腿/踝/髋外展/腰 全部写者），
+      //     把控制频率的振荡压掉，让"同号持续"成为可能。
+      //   ⚠ 代价：引入相位滞后（≈1 个时间常数）——用 `probe-sagchain` 的
+      //     `hip τ` 序列验收（目标：**连续 ≥0.3 s 同号**）与 `probe-slip` 真倒。
+      //   ⚠ **实测默认关（0）**：`TAUF=0.04` 真倒 3.58 s、`0.08` 5.68 s、**关 6.47 s**
+//     ⇒ **相位滞后的代价 > 抖动收益**（低通压了抖动但拖慢了响应）⇒ 默认 0。
+//   真正的路是**抬相位裕度**（降增益/改结构），不是出口滤波。
+      if (TAU_F > 0 && dt > 1e-9) {
+        const kk = Math.min(1, dt / TAU_F);
+        this.tauFilt[i] = this.tauFilt[i]! + (v - this.tauFilt[i]!) * kk;
+        v = this.tauFilt[i]!;
+      }
       this.tauOut[i] = v;
       const t = this.tgt[i];
       // ★ 位置与力矩是**两条独立通道**，来源必须分别记账

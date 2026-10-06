@@ -217,7 +217,11 @@ export function computeWantedForce(
     //   `SAGF_TAU=0` 关闭（A/B）。
     const raw = clamp(mass * h * aDesX, p.maxSagittal);
     const tauF = (() => {
-      const v = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SAGF_TAU ?? '');
+      // ⚠ 同 `Number('')` 坑：未设时旧写法返回 0 ⇒ 低通被静默关闭
+      // ★ 用户定调「全开」⇒ 默认 0.08（低通开）。存活秒数不是判据。
+      const raw = ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).SAGF_TAU;
+      if (raw === undefined || raw === '') return 0.08;
+      const v = Number(raw);
       return Number.isFinite(v) && v >= 0 ? v : 0.08;
     })();
     if (tauF > 0) {

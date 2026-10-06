@@ -7377,7 +7377,24 @@ var init_skeleton = __esm({
       //       取 **X=±14°（覆盖外翻全范围）/ Y=±10°** 作为可动上限。
       //   ⇒ 侧向自由度不是"放开就会乱翻"，而是**单腿平衡的必要执行器**。
       foot_l: [14, 10],
-      foot_r: [14, 10]
+      foot_r: [14, 10],
+      // ★★★★★ 2026-10-06 **脊柱补进表**（用户：「**一般人的脊柱也没这么大自由度啊，
+      //   什么人能脊柱转圈啊**」）：
+      //   此前这三根**不在表里** ⇒ 走的是兜底 `?? [20, 20]` —— **没有任何解剖依据**。
+      //   实测（`probe-yaw` 全开）`spine1/1` 扭转冲到 **−116°**（"脊柱转圈"的物理画面）。
+      //
+      //   人体腰椎的**轴转（Y）是全脊柱最小的自由度**：
+      //     · White & Panjabi《Clinical Biomechanics of the Spine》：腰椎每节轴转 ~2°
+      //       （小关节面朝向把旋转锁死；全腰椎合计 ~10~13°）；
+      //     · 侧屈（X）~20~30° 合计 ⇒ 每节 ~8~10°；
+      //     · 屈伸是主自由度（±25°/节，本 rig 的 `/2` 轴已有）。
+      //   ⇒ 取 **X=±12°、Y=±6°/节**（三节合计轴转 36°，仍偏宽松但已是解剖量级，
+      //     且比兜底的 20° 收紧 3.3 倍）。
+      //   ⚠ 与 §22.38 的"膝锁死反而崩"不同：脊柱的**侧屈/屈伸仍保留**，
+      //     只收**轴转**这一个解剖上本就最小的自由度。
+      spine1: [12, 6],
+      spine2: [12, 6],
+      spine3: [12, 6]
     };
     DEG = Math.PI / 180;
     AXES_PER_JOINT = 3;
@@ -17442,7 +17459,7 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, FRONT_HYST, DEFAULT_RIGSTATE_CONFIG, RigState;
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, TAU_F, FRONT_HYST, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
@@ -17470,6 +17487,11 @@ var init_rigState = __esm({
     });
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
+    TAU_F = (() => {
+      const v = Number((globalThis.process?.env ?? {}).TAUF ?? "");
+      if (String((globalThis.process?.env ?? {}).TAUF ?? "") === "") return 0;
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    })();
     FRONT_HYST = (() => {
       const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
       return Number.isFinite(v) && v > 0 ? v : 0.025;
@@ -17772,10 +17794,16 @@ var init_rigState = __esm({
       /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
       /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
       copWantX = 0;
+      /** ★ τ 通道出口低通的状态（逐轴）—— 见 `arbitrate` 里的 `TAUF` 说明 */
+      tauFilt = new Float64Array(0);
       /** ★ 矢状力一阶低通的状态（N）—— 见 `wantedForce.ts` 的 `SAGF_TAU` */
       sagFilt = 0;
       /** ★ 承重腿模块的遥测（τ 三轴 + 水平/竖向需求力） */
       supLegTau = { hip: 0, knee: 0, ank: 0, Fh: 0, Fv: 0 };
+      /** ★ 实测的腰折角（`spine1..3/2` 之和，度；正=前折）——回直项的输入，供回读 */
+      waistFoldDeg = 0;
+      /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
+      supLegToe = 0;
       /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
       spillFx = 0;
       spillFz = 0;
@@ -18203,6 +18231,7 @@ var init_rigState = __esm({
           this.holdMask[i] = 0;
         }
         this.tauOut = new Float32Array(n);
+        this.tauFilt = new Float64Array(n);
         this.tgtOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
         this.forceBuf = new Float64Array(sk2.joints.length * 5);
@@ -18908,6 +18937,11 @@ var init_rigState = __esm({
           let v = r.value * ramp;
           if (v > tmax) v = tmax;
           else if (v < -tmax) v = -tmax;
+          if (TAU_F > 0 && dt > 1e-9) {
+            const kk = Math.min(1, dt / TAU_F);
+            this.tauFilt[i] = this.tauFilt[i] + (v - this.tauFilt[i]) * kk;
+            v = this.tauFilt[i];
+          }
           this.tauOut[i] = v;
           const t = this.tgt[i];
           const ts = this.tauSrc[i];
@@ -22696,7 +22730,9 @@ function computeWantedForce(rs2, p, on) {
     const aDesX = -kp * errXDead - kd * vxDead;
     const raw = clamp(mass * h * aDesX, p.maxSagittal);
     const tauF = (() => {
-      const v = Number((globalThis.process?.env ?? {}).SAGF_TAU ?? "");
+      const raw2 = (globalThis.process?.env ?? {}).SAGF_TAU;
+      if (raw2 === void 0 || raw2 === "") return 0.08;
+      const v = Number(raw2);
       return Number.isFinite(v) && v >= 0 ? v : 0.08;
     })();
     if (tauF > 0) {
@@ -23636,10 +23672,48 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     const usePlanW = !!(planW && planW.copOk);
     const eRoll = usePlanW ? planW.errZ : zRecv - rs2.com.z;
     const ePitch = usePlanW ? planW.errX : xRecv - rs2.com.x;
-    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * ePitch, leanMax);
+    const kFold = (() => {
+      const raw = envB().WAISTKFOLD;
+      if (raw === void 0 || raw === "") return 0.6;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 0.6;
+    })();
+    let foldSum = 0;
+    if (kFold > 0 && doll) {
+      const j2 = new Float64Array(3);
+      for (const nm of ["spine1", "spine2", "spine3"]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRot(j, j2);
+        foldSum += j2[2] * (180 / Math.PI);
+      }
+    }
+    const foldCorr = clamp2(-kFold * foldSum * D2R3, leanMax);
+    rs2.waistFoldDeg = foldSum;
+    const cRoll2 = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
+    const cPitch = clamp2((noiseBlocked ? 0 : kUp2 * ePitch) + foldCorr, leanMax);
+    const cRoll = cRoll2;
     rs2.waist.bal.pitch = cPitch / D2R3;
     rs2.waist.bal.roll = cRoll / D2R3;
+    const kTw = (() => {
+      const raw = envB().TWISTD;
+      if (raw === void 0 || raw === "") return 20;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 8;
+    })();
+    if (kTw > 0 && doll) {
+      const jw2 = new Float64Array(3);
+      for (const nm of ["spine1", "spine2", "spine3", "hip_l", "hip_r"]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jw2);
+        const w = jw2[1];
+        const tauD = -kTw * w;
+        if (Math.abs(tauD) > 0.05) {
+          rs2.requestTorque(j, 1, tauD, "balance", "\u626D\u8F6C\xB7\u963B\u5C3C", true);
+        }
+      }
+    }
     if (on("fallResp") && rs2.fall.valid && rs2.fall.mode !== "normal") {
       const uWarn = p.fallWarnU ?? 0.35;
       const sE = clamp2((rs2.fall.urgency - uWarn) / Math.max(1e-6, 1 - uWarn), 1);
@@ -23726,9 +23800,9 @@ var init_balance = __esm({
     ).trim().toLowerCase());
     LATPLAN_MODE = (() => {
       const raw = String((globalThis.process?.env ?? {}).LATPLAN ?? "").trim().toLowerCase();
+      if (raw === "0" || raw === "off" || raw === "false") return 0;
       if (raw === "1") return 1;
-      if (raw === "2" || raw === "add") return 2;
-      return 0;
+      return 2;
     })();
     LATPLAN = LATPLAN_MODE > 0;
     _LATPLAN_OLD = ["1", "true", "on"].includes(String(
@@ -24603,38 +24677,20 @@ var init_decompose = __esm({
 function supportLegTick(rs2, doll, ablate = "") {
   const OFF = new Set(ablate.split(",").map((x) => x.trim()).filter(Boolean));
   const on = (ch) => !OFF.has(ch);
-  rs2.supLegTau.Fh = -111;
-  if (!on("supLeg")) {
-    rs2.supLegTau.Fh = -222;
-    return;
-  }
+  if (!on("supLeg")) return;
   const plan = rs2.copPlan;
-  if (!plan) {
-    rs2.supLegTau.Fh = -333;
-    return;
-  }
-  if (!plan.valid) {
-    rs2.supLegTau.Fh = -444;
-    return;
-  }
+  if (!plan || !plan.valid) return;
   const sup = rs2.supportLeg();
   const jn2 = rs2.sk.joints.map((j) => j.name);
   const jHip = jn2.indexOf(`hip_${sup}`);
   const jKnee = jn2.indexOf(`knee_${sup}`);
   const jAnk = jn2.indexOf(`foot_${sup}`);
-  if (jHip < 0 || jKnee < 0 || jAnk < 0) {
-    rs2.supLegTau.Fh = -555;
-    return;
-  }
+  if (jHip < 0 || jKnee < 0 || jAnk < 0) return;
   const side = sup === "l" ? 0 : 1;
   const rawOk = rs2.soleCopValid[side] === true && rs2.soleCopFz[side] > 15;
   const lf = sup === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
   const Fv = rawOk ? rs2.soleCopFz[side] : lf * rs2.sk.massTotal * 9.81;
-  if (!(Fv > 40)) {
-    rs2.supLegTau.Fh = -666;
-    rs2.supLegTau.Fv = Fv;
-    return;
-  }
+  if (!(Fv > 40)) return;
   const num = (k, d2) => {
     const raw = env()[k];
     if (raw === void 0 || raw === "") return d2;
@@ -24654,7 +24710,16 @@ function supportLegTick(rs2, doll, ablate = "") {
   const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
   const M = (p) => Fv * (copT - p.x) + Fh * p.y;
   const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
-  const tauH = sH * M(pH), tauK = sK * M(pK), tauA = sA * M(pA);
+  const tauH = sH * M(pH), tauK = sK * M(pK);
+  const tauA0 = sA * M(pA);
+  const dirX = plan.errX;
+  const sevX = Math.max(-1, Math.min(1, dirX / 0.08));
+  const kToe = num("TOEK", 0);
+  const tauToeWant = kToe * sevX * (Fv / 400);
+  const slewT = num("TOESLEW", 6);
+  const dT = Math.max(-slewT, Math.min(slewT, tauToeWant - rs2.supLegToe));
+  rs2.supLegToe += dT;
+  const tauA = tauA0 - rs2.supLegToe;
   rs2.requestHold(jHip, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs2.requestHold(jKnee, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
   rs2.requestHold(jAnk, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
@@ -24664,8 +24729,6 @@ function supportLegTick(rs2, doll, ablate = "") {
     if (Math.abs(tc) > 0.05) rs2.requestTorque(j, 2, tc, "balance", "\u627F\u91CD\u817F\xB7\u9759\u529B", true);
   }
   rs2.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
-  rs2.supLegTau.knee = tauK;
-  rs2.dbg = `copT=${(copT * 1e3).toFixed(0)} xH=${(pH.x * 1e3).toFixed(0)} xK=${(pK.x * 1e3).toFixed(0)} xA=${(pA.x * 1e3).toFixed(0)} M_A=${M(pA).toFixed(1)}`;
 }
 var env;
 var init_supportLeg = __esm({
@@ -25079,9 +25142,9 @@ var log = (s) => console.log(s);
 var ARGS = globalThis.__PROBE_ARGS ?? [];
 var SECS = Number(ARGS[0] ?? 12);
 var STEP = Number(ARGS[1] ?? 0.5);
-var HZ = 120;
-var DT = 1 / HZ;
-var PER = 2;
+var HZ = PHZ > 0 ? PHZ : 120;
+var DT = 1 / 120;
+var PER = Math.max(1, Math.round(HZ / 60));
 var sk = buildSkeleton2(DEFAULT_CONFIG2);
 var jn = sk.joints.map((j) => j.name);
 var jAnkL = jn.indexOf("foot_l");
@@ -25089,11 +25152,19 @@ var jAnkR = jn.indexOf("foot_r");
 var jSp1 = jn.indexOf("spine1");
 log(`\u2550\u2550 probe-slip ${SECS}s\uFF1A\u627F\u91CD\u811A\u6ED1\u79FB + \u8170\u5411\u540E\uFF08\u6BCF ${STEP}s\uFF09\u2550\u2550`);
 log("   t(s)  \u8E1DL.x   \u0394L    \u8E1DR.x   \u0394R   | \u5DE6\u03BC \u53F3\u03BC  \u5DE6Ft \u53F3Ft  \u5DE6\u03BCFz \u53F3\u03BCFz | CoM.x  vx   \u8170x    pitch");
-var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), { ...DEFAULT_SIM2, mode: "stand", duration: SECS });
+var PHZ = Number((globalThis.process?.env ?? {}).PHZ ?? "") || 0;
+var sim = new Sim2(sk, shapeForJoints2(sk.joints.length), {
+  ...DEFAULT_SIM2,
+  mode: "stand",
+  duration: SECS,
+  ...PHZ > 0 ? { physicsHz: PHZ } : {}
+});
 sim.begin(new Float32Array(sim.paramCount));
+var ABL = (ARGS[2] ?? "").trim();
 var ctrl = new Controller2(sk, sim, {
   ...DEFAULT_CONTROLLER2,
-  gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" }
+  gait: { ...DEFAULT_CONTROLLER2.gait, startBearer: "l" },
+  balance: { ...DEFAULT_CONTROLLER2.balance, ablate: ABL || void 0 }
 });
 var d = sim.doll;
 var rs = ctrl.rs;
@@ -25132,7 +25203,7 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   nextT += STEP;
   const xl = xOf(jAnkL), xr = xOf(jAnkR);
   const mu = (v) => (Number.isFinite(v) ? v.toFixed(2) : " \u2014 ").padStart(5);
-  log(`   ${t.toFixed(2).padStart(5)} ${(xl * 1e3).toFixed(1).padStart(6)} ${((xl - prevL) * 1e3).toFixed(1).padStart(6)} ${(xr * 1e3).toFixed(1).padStart(6)} ${((xr - prevR) * 1e3).toFixed(1).padStart(6)} |${mu(fl.frictionUse)}${mu(fr.frictionUse)}${tangentOf(fl).toFixed(0).padStart(6)}${tangentOf(fr).toFixed(0).padStart(6)}${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)} | ${(rs.com.x * 1e3).toFixed(0).padStart(5)} ${(rs.com.vx * 1e3).toFixed(0).padStart(5)} ${(xOf(jSp1) * 1e3).toFixed(0).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)} | \u4FA7: CoMz=${(rs.com.z * 1e3).toFixed(0).padStart(5)} vz=${(rs.com.vz * 1e3).toFixed(0).padStart(5)} | \u524D: needX=${((rs.copPlan?.needX ?? 0) * 1e3).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1e3).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1e3).toFixed(0).padStart(5)} \u627F\u03C4=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)} ${rs.dbg ?? ""}  \u5934y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)} grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})` + (() => {
+  log(`   ${t.toFixed(2).padStart(5)} ${(xl * 1e3).toFixed(1).padStart(6)} ${((xl - prevL) * 1e3).toFixed(1).padStart(6)} ${(xr * 1e3).toFixed(1).padStart(6)} ${((xr - prevR) * 1e3).toFixed(1).padStart(6)} |${mu(fl.frictionUse)}${mu(fr.frictionUse)}${tangentOf(fl).toFixed(0).padStart(6)}${tangentOf(fr).toFixed(0).padStart(6)}${(0.8 * fl.fz).toFixed(0).padStart(7)}${(0.8 * fr.fz).toFixed(0).padStart(7)} | ${(rs.com.x * 1e3).toFixed(0).padStart(5)} ${(rs.com.vx * 1e3).toFixed(0).padStart(5)} ${(xOf(jSp1) * 1e3).toFixed(0).padStart(5)}  ${(rs.tiltDeg ?? 0).toFixed(1)} | \u4FA7: CoMz=${(rs.com.z * 1e3).toFixed(0).padStart(5)} vz=${(rs.com.vz * 1e3).toFixed(0).padStart(5)} | \u524D: needX=${((rs.copPlan?.needX ?? 0) * 1e3).toFixed(0).padStart(5)} overX=${((rs.copPlan?.overX ?? 0) * 1e3).toFixed(0).padStart(5)} errX=${((rs.copPlan?.errX ?? 0) * 1e3).toFixed(0).padStart(5)} \u627F\u03C4=(${rs.supLegTau.hip.toFixed(0)},${rs.supLegTau.knee.toFixed(0)},${rs.supLegTau.ank.toFixed(0)}) Fh=${rs.supLegTau.Fh.toFixed(0)} Fv=${rs.supLegTau.Fv.toFixed(0)}  \u5934y=${headY().toFixed(2)} CoMy=${rs.com.y.toFixed(2)} grf=(${rs.grfCmd.x.toFixed(0)},${rs.grfCmd.y.toFixed(0)},${rs.grfCmd.z.toFixed(0)})` + (() => {
     const supS = rs.supportLeg();
     const jH = jn.indexOf(`hip_${supS}`), jK = jn.indexOf(`knee_${supS}`), jA = jn.indexOf(`foot_${supS}`);
     const g = (j) => {

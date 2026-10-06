@@ -6924,6 +6924,9 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
     if (!jm) throw new Error(`[skeleton] parts.json \u7F3A\u5C11\u5173\u8282 ${name}`);
     const isAnkle = jm.child === "foot_l" || jm.child === "foot_r";
     const isHip = /^hip_[lr]$/.test(jm.name);
+    const isKnee = ["1", "true", "on"].includes(String(
+      (globalThis.process?.env ?? {}).KNEE_REVOLUTE ?? ""
+    ).trim().toLowerCase()) && (jm.name === "knee_l" || jm.name === "knee_r");
     const childPart = PART_BY_KEY.get(jm.child) ?? PART_BY_KEY.get(isAnkle ? jm.parent : "");
     if (!childPart) throw new Error(`[skeleton] \u5173\u8282 ${name} \u7684\u5B50\u90E8\u4EF6\u5143\u6570\u636E\u4E0D\u5B58\u5728`);
     const [axPx, ayPx] = anchorPx(name, jm);
@@ -6965,7 +6968,18 @@ function buildSkeleton(cfg = DEFAULT_CONFIG) {
       minRad: [-xy[0] * DEG, -xy[1] * DEG, flexMin],
       maxRad: [xy[0] * DEG, xy[1] * DEG, flexMax],
       // ★ 踝（foot_l/foot_r）走 revolute：自由转轴 = 局部 Z（= 屈伸，见 AXIS_* 约定）
-      revoluteAxis: isAnkle ? [0, 0, 1] : void 0,
+      // ★★★★★ 2026-10-06 **膝也照踝做**（用户：「可能问题在**膝盖撑不住了**，
+      //   直接**反向折断**了，需要**参考脚踝的实现**」）：
+      //   踝之所以"撑得住"，是因为它是 `RevoluteImpulseJoint` + **引擎级限位**
+      //   （`joint.setLimits`，由求解器直接管）；而膝此前是 **ball 关节**，
+      //   只靠自研的冲量限位（`enforceLimits`）——实测它在落地冲击下
+      //   **过伸到 +19.8°（限位 +2°）**、侧向 −24.5°（限位 −6°）、扭转 13°（±8°）
+      //   ⇒ 肉眼就是"**反向折断**"。
+      //   ⇒ 膝改成 revolute（只放开屈伸 Z）：
+      //     ① 屈伸限位 [−145°, +2°] 交给**求解器**（与踝同机制，稳）；
+      //     ② 侧向/扭转两轴**被引擎锁死** ⇒ 那两类超限从根上消失。
+      //   （人体膝本来就是**铰链**；`LEGACY_KNEE_BALL=1` 可回退 ball 对照。）
+      revoluteAxis: isAnkle || isKnee ? [0, 0, 1] : void 0,
       // ★★ 髋**外展轴**用独立倍率（不动全局 `TORQUE_AXIS_FACTOR`，否则
       //   颈/肩/肘的外展轴会跟着变粗 —— 那三个的次要轴是**刻意压小**的，
       //   见 `JOINT_LIMITS_XY_DEG` 的注释）。
@@ -17428,7 +17442,7 @@ function makeCriteria(flags, values) {
   const ks = Object.keys(flags);
   return { flags, values, all: ks.length > 0 && ks.every((k) => flags[k]) };
 }
-var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, DEFAULT_RIGSTATE_CONFIG, RigState;
+var NEXT_STATE, STATE_ORDER, LEGACY_STATE_ALIAS, PRIORITY, LOAD_HYSTERESIS, TAU_F, FRONT_HYST, DEFAULT_RIGSTATE_CONFIG, RigState;
 var init_rigState = __esm({
   "src/core/rigState.ts"() {
     "use strict";
@@ -17456,6 +17470,15 @@ var init_rigState = __esm({
     });
     PRIORITY = { balance: 0, step: 1 };
     LOAD_HYSTERESIS = 0.08;
+    TAU_F = (() => {
+      const v = Number((globalThis.process?.env ?? {}).TAUF ?? "");
+      if (String((globalThis.process?.env ?? {}).TAUF ?? "") === "") return 0;
+      return Number.isFinite(v) && v >= 0 ? v : 0;
+    })();
+    FRONT_HYST = (() => {
+      const v = Number((globalThis.process?.env ?? {}).FRONTHYST ?? "");
+      return Number.isFinite(v) && v > 0 ? v : 0.025;
+    })();
     DEFAULT_RIGSTATE_CONFIG = {
       slewLimit: 8,
       startupTicks: 30,
@@ -17754,6 +17777,19 @@ var init_rigState = __esm({
       /** ★★★ 摔倒应急响应的本拍状态（`balance` 块⑩ 写；逐帧回读用） */
       /** ★ 显式 CoP 整定的目标/误差（m，逐帧回读） */
       copWantX = 0;
+      /** ★ τ 通道出口低通的状态（逐轴）—— 见 `arbitrate` 里的 `TAUF` 说明 */
+      tauFilt = new Float64Array(0);
+      /** ★ 矢状力一阶低通的状态（N）—— 见 `wantedForce.ts` 的 `SAGF_TAU` */
+      sagFilt = 0;
+      /** ★ 承重腿模块的遥测（τ 三轴 + 水平/竖向需求力） */
+      supLegTau = { hip: 0, knee: 0, ank: 0, Fh: 0, Fv: 0 };
+      /** ★ 实测的腰折角（`spine1..3/2` 之和，度；正=前折）——回直项的输入，供回读 */
+      waistFoldDeg = 0;
+      /** ★ 承重腿模块的"方向 → 足部区域发力"持续偏置（N·m，带速率限幅）——回读 */
+      supLegToe = 0;
+      /** ★ W1 溢出剪力（N，世界系；`copPlan.over` → `−m·ω₀²·over`，夹摩擦锥）—— 遥测/回读 */
+      spillFx = 0;
+      spillFz = 0;
       copErrX = 0;
       /**
        * ★★★★★ **监督层分解结果**（`systems/decompose.ts`，§21.11）。
@@ -18178,6 +18214,7 @@ var init_rigState = __esm({
           this.holdMask[i] = 0;
         }
         this.tauOut = new Float32Array(n);
+        this.tauFilt = new Float64Array(n);
         this.tgtOut = new Float32Array(n);
         this.tauJ = new Float32Array(n);
         this.forceBuf = new Float64Array(sk2.joints.length * 5);
@@ -18299,11 +18336,12 @@ var init_rigState = __esm({
        */
       frontLeg() {
         const dz = this.soleX.l - this.soleX.r;
-        if (dz > 3e-3) {
+        const H = FRONT_HYST;
+        if (dz > H) {
           this.frontPrev = "l";
           return "l";
         }
-        if (dz < -3e-3) {
+        if (dz < -H) {
           this.frontPrev = "r";
           return "r";
         }
@@ -18882,6 +18920,11 @@ var init_rigState = __esm({
           let v = r.value * ramp;
           if (v > tmax) v = tmax;
           else if (v < -tmax) v = -tmax;
+          if (TAU_F > 0 && dt > 1e-9) {
+            const kk = Math.min(1, dt / TAU_F);
+            this.tauFilt[i] = this.tauFilt[i] + (v - this.tauFilt[i]) * kk;
+            v = this.tauFilt[i];
+          }
           this.tauOut[i] = v;
           const t = this.tgt[i];
           const ts = this.tauSrc[i];
@@ -19462,7 +19505,7 @@ function checkDomains(rs2, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
+var DEG2, STEP_TRIG, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, HUMAN_REF, STATE_LEGS, STATE_BALANCE_TARGET, STATE_ROLES, THRESHOLDS, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -19471,6 +19514,9 @@ var init_gaitState = __esm({
     init_jointQuery();
     init_forceChain();
     DEG2 = 180 / Math.PI;
+    STEP_TRIG = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).STEPTRIG ?? ""
+    ).trim().toLowerCase());
     DEFAULT_STEP_INTERVAL = 1;
     STEP_CYCLE_SEC = 1.6;
     DEFAULT_GAIT_CONFIG = {
@@ -20313,6 +20359,12 @@ var init_gaitState = __esm({
             P4_\u624B\u6027\u4EA4\u66FF: rs2.lastSwing !== sw,
             P5_\u7A33\u5B9A\u6027: rs2.mos >= cfg.mosMin && Math.abs(rs2.tiltDeg) <= cfg.tiltMaxDeg,
             P6_\u975E\u5B89\u5168\u6001: !rs2.safe
+            // ★★★★★ 2026-10-06 **W2：感知 → 迈步触发**（§21.13 待接线 #2；§21.11 分解层）
+            //   监督层的 `copPlan.fallNeeded`（= `actionability ≤ 0`，**脚放不下了**）
+            //   是"**必须迈**"的判据。语义是 OR（应急放行），不是 AND：
+            //     `许可 = (P1..P6 全过) ∨ (P7_感知落足 ∧ P6_非安全态)`
+            //   —— 用户定调：「**要摔倒了/也别管承重腿摆动腿了，优先稳住身体**」。
+            //   ⚠ P6 必须仍成立（安全态下不许迈，那是"停手让平衡全权"）。
           },
           {
             loadFrac: rs2.loadFrac[sw],
@@ -20325,6 +20377,10 @@ var init_gaitState = __esm({
             safe: rs2.safe ? 1 : 0
           }
         );
+        if (STEP_TRIG && rs2.stepPermit && !rs2.safe && (rs2.copPlan?.fallNeeded ?? false)) {
+          rs2.stepPermit.all = true;
+          rs2.stepPermit.values.emergencyStep = 1;
+        }
         const prev = rs2.state;
         const dwellOk = rs2.stateT >= cfg.minDwellSec;
         if (rs2.safe) {
@@ -22650,8 +22706,25 @@ function computeWantedForce(rs2, p, on) {
     }
     const stanceX = sup === "l" ? rs2.soleX.l : rs2.soleX.r;
     const capX = rs2.com.x + rs2.com.vx / om0;
-    const aDesX = -kp * (capX - stanceX) - kd * rs2.com.vx;
-    if (on("sag")) comp.sagittal = clamp(mass * h * aDesX, p.maxSagittal);
+    const SAG_ERR_DEAD = 0.01, SAG_VZ_DEAD = 0.04;
+    const errX = capX - stanceX;
+    const errXDead = Math.abs(errX) <= SAG_ERR_DEAD ? 0 : errX - Math.sign(errX) * SAG_ERR_DEAD;
+    const vxDead = Math.abs(rs2.com.vx) <= SAG_VZ_DEAD ? 0 : rs2.com.vx;
+    const aDesX = -kp * errXDead - kd * vxDead;
+    const raw = clamp(mass * h * aDesX, p.maxSagittal);
+    const tauF = (() => {
+      const raw2 = (globalThis.process?.env ?? {}).SAGF_TAU;
+      if (raw2 === void 0 || raw2 === "") return 0.08;
+      const v = Number(raw2);
+      return Number.isFinite(v) && v >= 0 ? v : 0.08;
+    })();
+    if (tauF > 0) {
+      const dtc = rs2.dtCtrl > 1e-6 ? rs2.dtCtrl : 1 / 60;
+      const kf = Math.min(1, dtc / tauF);
+      if (!Number.isFinite(rs2.sagFilt)) rs2.sagFilt = raw;
+      rs2.sagFilt += (raw - rs2.sagFilt) * kf;
+      if (on("sag")) comp.sagittal = rs2.sagFilt;
+    } else if (on("sag")) comp.sagittal = raw;
     if (on("weight")) comp.weight = p.weight;
     if (on("trunkLean") && p.kTrunkLean !== 0) {
       const dz = rs2.com.z - stanceZ;
@@ -23196,6 +23269,29 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs2.requestAngle(jHip, 2, -p.hipExtendLimit, "balance", "\u9ACB\u5C48\u5B88\u536B");
   }
   if (latArmed && doll) {
+    const SPILL = !["0", "false", "off"].includes(String(envB().SPILL ?? "").trim().toLowerCase());
+    let spillFx = 0, spillFz = 0;
+    if (SPILL) {
+      const plan0 = rs2.copPlan;
+      if (plan0 && plan0.valid) {
+        const m0 = rs2.sk.massTotal;
+        const w0s = rs2.omega0();
+        spillFx = -m0 * w0s * w0s * plan0.overX;
+        spillFz = -m0 * w0s * w0s * plan0.overZ;
+        const mu = (() => {
+          const v = Number(envB().SPILL_MU ?? "");
+          return Number.isFinite(v) && v > 0 ? v : 0.6;
+        })();
+        const lim = mu * m0 * 9.81;
+        const mag = Math.hypot(spillFx, spillFz);
+        if (mag > lim && mag > 1e-9) {
+          spillFx *= lim / mag;
+          spillFz *= lim / mag;
+        }
+        rs2.spillFx = spillFx;
+        rs2.spillFz = spillFz;
+      }
+    }
     const F = computeWantedForce(rs2, {
       ...DEFAULT_WANTED_FORCE,
       kXRatio: p.kXRatio,
@@ -23206,6 +23302,8 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
       if (ch === "lat") return p.lateralEnabled && on("lat");
       return on(ch);
     });
+    F.fx += spillFx;
+    F.fz += spillFz;
     rs2.grfCmd.x = F.fx;
     rs2.grfCmd.y = F.fy;
     rs2.grfCmd.z = F.fz;
@@ -23269,7 +23367,7 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
         const dCl = d2 > slewZ ? slewZ : d2 < -slewZ ? -slewZ : d2;
         const tmaxL = rs2.sk.joints[jHip].maxTorque[HIP_ABD_AXIS] ?? 120;
         rs2.hipLatInt = Math.max(-tmaxL, Math.min(tmaxL, rs2.hipLatInt + dCl));
-        tauRaw = rs2.hipLatInt;
+        tauRaw = LATPLAN_MODE === 2 ? tauRaw + rs2.hipLatInt : rs2.hipLatInt;
       } else {
         rs2.hipLatInt = 0;
       }
@@ -23557,8 +23655,27 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
     const usePlanW = !!(planW && planW.copOk);
     const eRoll = usePlanW ? planW.errZ : zRecv - rs2.com.z;
     const ePitch = usePlanW ? planW.errX : xRecv - rs2.com.x;
-    const cRoll = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp2(kUp2 * ePitch, leanMax);
+    const kFold = (() => {
+      const raw = envB().WAISTKFOLD;
+      if (raw === void 0 || raw === "") return 0.6;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 0.6;
+    })();
+    let foldSum = 0;
+    if (kFold > 0 && doll) {
+      const j2 = new Float64Array(3);
+      for (const nm of ["spine1", "spine2", "spine3"]) {
+        const j = jointIndexByName(rs2.sk, nm);
+        if (j < 0) continue;
+        doll.jointRot(j, j2);
+        foldSum += j2[2] * (180 / Math.PI);
+      }
+    }
+    const foldCorr = clamp2(-kFold * foldSum * D2R3, leanMax);
+    rs2.waistFoldDeg = foldSum;
+    const cRoll2 = noiseBlocked ? 0 : clamp2(kUp2 * eRoll, leanMax);
+    const cPitch = clamp2((noiseBlocked ? 0 : kUp2 * ePitch) + foldCorr, leanMax);
+    const cRoll = cRoll2;
     rs2.waist.bal.pitch = cPitch / D2R3;
     rs2.waist.bal.roll = cRoll / D2R3;
     if (on("fallResp") && rs2.fall.valid && rs2.fall.mode !== "normal") {
@@ -23632,7 +23749,7 @@ function balanceSystem(rs2, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs2.disposeStepProposals(rs2.disposeK);
   else rs2.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TRUNK_STIFF_MAX, TAU_CAP_FRAC, LAT_SWING_FULL, LATPLAN_MODE, LATPLAN, _LATPLAN_OLD, LATK, UPPER_KEYS, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
@@ -23645,7 +23762,14 @@ var init_balance = __esm({
     LAT_SWING_FULL = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATSWING ?? ""
     ).trim().toLowerCase());
-    LATPLAN = ["1", "true", "on"].includes(String(
+    LATPLAN_MODE = (() => {
+      const raw = String((globalThis.process?.env ?? {}).LATPLAN ?? "").trim().toLowerCase();
+      if (raw === "1") return 1;
+      if (raw === "2" || raw === "add") return 2;
+      return 0;
+    })();
+    LATPLAN = LATPLAN_MODE > 0;
+    _LATPLAN_OLD = ["1", "true", "on"].includes(String(
       (globalThis.process?.env ?? {}).LATPLAN ?? ""
     ).toLowerCase());
     LATK = latK();
@@ -23688,7 +23812,7 @@ var init_balance = __esm({
         // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
         //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
         //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold", "dipHip"]
+        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold", "dipHip", "supLeg"]
       },
       // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
       //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
@@ -23699,7 +23823,7 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold"]
+        extraGates: ["lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold", "supLeg"]
       },
       // ── 额状链 ────────────────────────────────────────────────────────
       {
@@ -23732,7 +23856,7 @@ var init_balance = __esm({
         channel: "ankleCop",
         // ★ `copSet`（显式 CoP 整定，与 `ANKLE_COP` 同一根轴的另一模式）、
         //   `trunkRoll`/`fallResp`（上身修正的增益门，不另占轴）—— 2026-10-06 门禁 A2 查出的漏登记。
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "copSet", "trunkRoll", "fallResp"]
+        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "copSet", "trunkRoll", "fallResp", "supLeg"]
       },
       // ★ 额状 CoP 权限归**中足**：踝建成的是绕足横轴的 revolute，轴 0/1 被
       //   引擎锁死 ⇒ 给轴 0 下角度伺服在物理上不可能产生运动（见本文件末的
@@ -24227,12 +24351,24 @@ function stepSystem(rs2, p = DEFAULT_STEP_PARAMS) {
     }
     return rs2.keyPose;
   }
+  const KF_STATE = !["0", "false", "off"].includes(String(
+    globalThis.process?.env?.KFSTATE ?? ""
+  ).toLowerCase());
   const swingGateOff = ["0", "false", "off"].includes(String(
     globalThis.process?.env?.SWGATE ?? ""
   ).toLowerCase());
   if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
-    const kp = keySwing(s);
-    rs2.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+    const planS = rs2.copPlan;
+    const emer = !!(planS && planS.valid && (planS.fallNeeded || planS.stepUrgent > 0.5));
+    const sUse = emer ? Math.min(1, s * (1 + 2 * (planS?.stepUrgent ?? 0))) : s;
+    const kp = KF_STATE && rs2.state !== "SWING" && rs2.state !== "LIFT" ? KEY_POSES[STATE_TO_GAIT[rs2.state]] : keySwing(sUse);
+    const L_LEG = 0.9;
+    const emerHip = emer ? planS.stepX / L_LEG : 0;
+    const emerAb = emer ? planS.stepZ / L_LEG : 0;
+    rs2.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex + emerHip, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
+    if (emer && Math.abs(emerAb) > 1e-3) {
+      rs2.requestSwingLegAngle(swing, jHip, 0, clamp2(emerAb, 0.6), "\u5E94\u6025\xB7\u4FA7\u5411\u843D\u8DB3", false);
+    }
     rs2.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
     const jFt = jointIndexByName(sk2, swing === "l" ? "foot_l" : "foot_r");
     if (jFt >= 0) rs2.requestSwingLegAngle(swing, jFt, 2, clamp2(kp.swAnkle, 0.5), "\u6446\u52A8\u8E1D\xB7\u5173\u952E\u5E27", false);
@@ -24460,6 +24596,12 @@ function decomposeCop(rs2, onFall = true) {
   const kZ = K_SIDE * (1 + urg);
   const overMag = Math.hypot(overX, overZ);
   const actionability = Math.max(0, Math.min(1, 1 - overMag / OVER_SCALE));
+  const supS0 = rs2.supportLeg();
+  const footX0 = supS0 === "l" ? rs2.soleX.l : rs2.soleX.r;
+  const footZ0 = supS0 === "l" ? rs2.soleZ.l : rs2.soleZ.r;
+  const clS = (v, m) => v > m ? m : v < -m ? -m : v;
+  const stepX = clS(xiX - footX0, 0.45);
+  const stepZ = clS(xiZ - footZ0, 0.3);
   rs2.copPlan = {
     valid,
     copOk,
@@ -24478,7 +24620,10 @@ function decomposeCop(rs2, onFall = true) {
     actionability,
     fallNeeded: actionability <= 0,
     copX,
-    copZ
+    copZ,
+    stepX,
+    stepZ,
+    stepUrgent: Math.max(0, Math.min(1, urg))
   };
 }
 var K_FRONT, K_BACK, K_SIDE, OVER_SCALE;
@@ -24492,6 +24637,71 @@ var init_decompose = __esm({
   }
 });
 
+// src/core/systems/supportLeg.ts
+function supportLegTick(rs2, doll, ablate = "") {
+  const OFF = new Set(ablate.split(",").map((x) => x.trim()).filter(Boolean));
+  const on = (ch) => !OFF.has(ch);
+  if (!on("supLeg")) return;
+  const plan = rs2.copPlan;
+  if (!plan || !plan.valid) return;
+  const sup = rs2.supportLeg();
+  const jn2 = rs2.sk.joints.map((j) => j.name);
+  const jHip = jn2.indexOf(`hip_${sup}`);
+  const jKnee = jn2.indexOf(`knee_${sup}`);
+  const jAnk = jn2.indexOf(`foot_${sup}`);
+  if (jHip < 0 || jKnee < 0 || jAnk < 0) return;
+  const side = sup === "l" ? 0 : 1;
+  const rawOk = rs2.soleCopValid[side] === true && rs2.soleCopFz[side] > 15;
+  const lf = sup === "l" ? rs2.loadFrac.l : rs2.loadFrac.r;
+  const Fv = rawOk ? rs2.soleCopFz[side] : lf * rs2.sk.massTotal * 9.81;
+  if (!(Fv > 40)) return;
+  const num = (k, d2) => {
+    const raw = env()[k];
+    if (raw === void 0 || raw === "") return d2;
+    const v = Number(raw);
+    return Number.isFinite(v) ? v : d2;
+  };
+  const kH = num("SUPLEGK", 1);
+  const m = rs2.sk.massTotal;
+  const w0 = rs2.omega0();
+  const Fh = kH * (-m * w0 * w0 * plan.overX - 2 * m * w0 * 0.9 * rs2.com.vx * 0.5);
+  const copT = plan.needX;
+  const jw = new Float64Array(3);
+  const pos = (j) => {
+    doll.jointWorld(j, jw);
+    return { x: jw[0], y: jw[1] };
+  };
+  const pH = pos(jHip), pK = pos(jKnee), pA = pos(jAnk);
+  const M = (p) => Fv * (copT - p.x) + Fh * p.y;
+  const sH = num("SLSIGN_HIP", -1), sK = num("SLSIGN_KNEE", -1), sA = num("SLSIGN_ANK", -1);
+  const tauH = sH * M(pH), tauK = sK * M(pK);
+  const tauA0 = sA * M(pA);
+  const dirX = plan.errX;
+  const sevX = Math.max(-1, Math.min(1, dirX / 0.08));
+  const kToe = num("TOEK", 0);
+  const tauToeWant = kToe * sevX * (Fv / 400);
+  const slewT = num("TOESLEW", 6);
+  const dT = Math.max(-slewT, Math.min(slewT, tauToeWant - rs2.supLegToe));
+  rs2.supLegToe += dT;
+  const tauA = tauA0 - rs2.supLegToe;
+  rs2.requestHold(jHip, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
+  rs2.requestHold(jKnee, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
+  rs2.requestHold(jAnk, 2, "balance", "\u627F\u91CD\u817F\xB7\u8BA9\u4F4D");
+  for (const [j, t] of [[jHip, tauH], [jKnee, tauK], [jAnk, tauA]]) {
+    const tmax = rs2.sk.joints[j].maxTorque[2] ?? 120;
+    const tc = Math.max(-tmax, Math.min(tmax, t));
+    if (Math.abs(tc) > 0.05) rs2.requestTorque(j, 2, tc, "balance", "\u627F\u91CD\u817F\xB7\u9759\u529B", true);
+  }
+  rs2.supLegTau = { hip: tauH, knee: tauK, ank: tauA, Fh, Fv };
+}
+var env;
+var init_supportLeg = __esm({
+  "src/core/systems/supportLeg.ts"() {
+    "use strict";
+    env = () => globalThis.process?.env ?? {};
+  }
+});
+
 // src/core/controller.ts
 var controller_exports = {};
 __export(controller_exports, {
@@ -24500,7 +24710,7 @@ __export(controller_exports, {
   auditJoints: () => auditJoints,
   rigSummary: () => rigSummary
 });
-var DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R, TREND_KEYS, TREND_LEAN, TREND_PREV, TREND_DIVERGE_RATE, TREND_NOTE_MIN;
+var SUPLEG, DEFAULT_CONTROLLER, Controller, TMP_A, TMP_B, TMP_RV, TMP_COP_L, TMP_COP_R, TREND_KEYS, TREND_LEAN, TREND_PREV, TREND_DIVERGE_RATE, TREND_NOTE_MIN;
 var init_controller = __esm({
   "src/core/controller.ts"() {
     "use strict";
@@ -24513,8 +24723,12 @@ var init_controller = __esm({
     init_step();
     init_fallGuard();
     init_decompose();
+    init_supportLeg();
     init_waist();
     init_skeleton();
+    SUPLEG = !["0", "false", "off"].includes(String(
+      (globalThis.process?.env ?? {}).SUPLEG ?? ""
+    ).trim().toLowerCase());
     DEFAULT_CONTROLLER = {
       rig: DEFAULT_RIGSTATE_CONFIG,
       gait: DEFAULT_GAIT_CONFIG,
@@ -24806,6 +25020,7 @@ var init_controller = __esm({
         this.gait.update(dt);
         fallGuard(rs2, this.cfg.fallGuard);
         decomposeCop(rs2);
+        if (SUPLEG) supportLegTick(rs2, sim2.doll, this.cfg.balance.ablate);
         stepSystem(rs2, { ...this.cfg.step, ablate: this.cfg.balance.ablate });
         balanceSystem(rs2, this.cfg.balance, this.sim.doll);
         spineDefaultTone(rs2, { ...DEFAULT_WAIST_TONE, ...this.cfg.waist.tone, ablate: this.cfg.balance.ablate });
@@ -24922,5 +25137,15 @@ for (let i = 0; i < SECS * HZ && !sim.finished; i++) {
   const recv = rs.roleRecv ?? rs.frontLeg();
   const zR = recv === "l" ? rs.soleZ.l : rs.soleZ.r;
   const f = (v) => (Number.isFinite(v) ? v.toFixed(1) : "\u2014").padStart(6);
-  console.log(`   ${t.toFixed(2).padStart(5)} ${rs.state.slice(0, 4)} | ${f(w.step.roll)} ${f(w.bal.roll)} ${f(w.borrow.roll)} ${f(w.out.roll)} | ${f(a("spine1"))} ${f(a("spine2"))} ${f(a("spine3"))} ${f(d.tauApplied[J("spine1") * 3 + 0] ?? 0)} | ${f(rs.rollDeg)} ${f(rs.tiltDeg)} | ${f((zR - rs.com.z) * 1e3)}`);
+  const a2 = (n) => {
+    const j = J(n);
+    if (j < 0) return Number.NaN;
+    d.jointRot(j, jr);
+    return jr[2] * DEG4;
+  };
+  const supS = rs.supportLeg();
+  const sIdx = supS === "l" ? 0 : 1;
+  const copX = rs.soleCopValid[sIdx] ? rs.soleCopX[sIdx] * 1e3 : Number.NaN;
+  const ankT = d.tauApplied[J(supS === "l" ? "foot_l" : "foot_r") * 3 + 2] ?? 0;
+  console.log(`   ${t.toFixed(2).padStart(5)} ${rs.state.slice(0, 4)} | \u77E2\u72B6: spine1/2=${f(a2("spine1"))} spine2/2=${f(a2("spine2"))} spine3/2=${f(a2("spine3"))} \u53D1\u5E03pitch=${f(w.out.pitch)} bal\u4FEE\u6B63=${f(w.bal.pitch)} | \u652F\u6491${supS}\u8E1D: CoPx=${f(copX)} \u03C4=${f(ankT)} | CoM.x=${f(rs.com.x * 1e3)} vx=${f(rs.com.vx * 1e3)} \u8EAF\u5E72pitch=${f(rs.pitchDeg)} \u6298\u89D2=${f(rs.waistFoldDeg)}`);
 }

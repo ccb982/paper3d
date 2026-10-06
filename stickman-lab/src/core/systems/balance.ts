@@ -223,9 +223,9 @@ const LAT_SWING_FULL = ['1', 'true', 'on'].includes(String(
 //     **=2 叠加    5.36 s /  185,  94 mm /  18 mm** ← 保留 PD+静态 + 计划增量 = 净胜
 const LATPLAN_MODE = (() => {
   const raw = String(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).LATPLAN ?? '').trim().toLowerCase();
+  if (raw === '0' || raw === 'off' || raw === 'false') return 0;
   if (raw === '1') return 1;
-  if (raw === '2' || raw === 'add') return 2;
-  return 0;      // ★ 默认**关**：见下
+  return 2;      // ★ 用户定调「全开」⇒ 默认 2（叠加）
 })();
 
 const LATPLAN = LATPLAN_MODE > 0;
@@ -2594,8 +2594,52 @@ if (doll && on('hipStiff')) {
     const eRoll = usePlanW ? planW!.errZ : (zRecv - rs.com.z);
     const ePitch = usePlanW ? planW!.errX : (xRecv - rs.com.x);
     // 归一：`err` 是**米**（CoP 误差），旧式也是米 ⇒ 同一个 `kUp2`（rad/m）可复用
-    const cRoll = noiseBlocked ? 0 : clamp(kUp2 * eRoll, leanMax);
-    const cPitch = noiseBlocked ? 0 : clamp(kUp2 * ePitch, leanMax);
+    // ★★★★★ 2026-10-06 **"让腰挺起来"项**（用户：「现在的腰怎么向前折了…**让腰挺起来**」）：
+    //   回读（`probe-waistlat`）：`spine1/2` 冲到 **21°（更早 42.7°）**，而 `bal.pitch`
+    //   只有 −2.2~−3.3° ⇒ **修正量挺不住**（脊位伺服在 τmax=120 上饱和后被载荷压弯）。
+    //   ⇒ 加一条**回直**项：由**实测折角**驱动（`spine*/2` 的和，正值 = 前折），
+    //     经 `applyWaist` 作为腰的额外倾角发布 ⇒ 把腰往回挺。
+    //   符号：`spine/2` 前折为正 ⇒ 要往**后**挺 ⇒ 加到 `bal.pitch` 上用**负号**。
+    const kFold = (() => {
+      // ⚠ `Number('') === 0` ⇒ 旧写法（`isFinite(v) && v >= 0`）在未设环境变量时
+      //   返回 **0**、默认 0.6 永远用不上 ⇒ 回直项从未生效（本坑第三次：见 supportLeg）
+      // ★★★★ 2026-10-06 **实测净负 ⇒ 默认 0（关）**：
+      //   把 `Number('')` 坑修好、回直项**真正生效**后，真倒 6.47→**3.88 s（更差）**；
+      //   单独关它 3.18 s、单独关矢状低通 3.92 s、**两个都关 6.47 s（最好）**。
+      //   ⇒ 结论：**"让腰挺起来"这条算法在"经腰位目标执行"的形态下是净负**；
+      //     当前最优 = 不启用（开关保留，等"经力矩通道执行"的另一形态）。
+      // ★★★★★ 2026-10-06 **用户定调：全开**（「就要都开，别在乎这几秒的时间。
+      //   我要的是**多种机制持续发力**，这样才能长久持续」）
+      //   ⇒ 默认 0.6（回直项开）。存活秒数**不再是判据**；
+      //     判据 = **各机制是否在持续发力**（τ 同号时长、各通道的活动占空比）。
+      const raw = envB().WAISTKFOLD;
+      if (raw === undefined || raw === '') return 0.6;
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 0.6;   // 度(回挺)/度(折角)
+    })();
+    let foldSum = 0;
+    if (kFold > 0 && doll) {
+      const j2 = new Float64Array(3);
+      for (const nm of ['spine1', 'spine2', 'spine3']) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRot(j, j2);
+        foldSum += j2[2]! * (180 / Math.PI);
+      }
+    }
+    // ⚠ 单位：`foldSum` 是**度**，`cPitch`/`leanMax` 是**弧度** ⇒ 必须换算（此处踩过）
+    const foldCorr = clamp(-kFold * foldSum * D2R, leanMax);
+    rs.waistFoldDeg = foldSum;
+    // ★★★★★ 2026-10-06 **"意图力直通、去噪门只当阻尼"**（用户定调）：
+    //   「**发力应该有直接通道**；去噪门是给**不发力情况下的莫名抖动**用的，
+    //     **相当于阻尼**。人体的肌肉会吸收动能，使用阻尼是非常对的」。
+    //   ⇒ 分工：
+    //     · `foldCorr`（**让腰挺起来** = 意图力）→ **直通**，不受去噪门；
+    //     · `kUp2·ePitch/eRoll`（CoP 误差驱动的**反应项**）→ 受去噪门
+    //       （它相当于"不发力时的阻尼/抖动抑制"）。
+    const cRoll2 = noiseBlocked ? 0 : clamp(kUp2 * eRoll, leanMax);
+    const cPitch = clamp((noiseBlocked ? 0 : kUp2 * ePitch) + foldCorr, leanMax);
+    const cRoll = cRoll2;
     rs.waist.bal.pitch = cPitch / D2R;
     rs.waist.bal.roll = cRoll / D2R;
 
@@ -2612,6 +2656,33 @@ if (doll && on('hipStiff')) {
     //     · 作动器 = **腰部**（已验证：写脊柱目标 +10° ⇒ 承重分配 15/85→96/4）
     //       + 应急时**解除角色分离**（`roleSuspended`）
     //   ⚠ 不复用踝：踝归块⑥（VIP/CoP 调节器），本块若也写踝就是同轴双计。
+    // ★★★★★ 2026-10-06 **扭转阻尼（用户：「跌倒的早是盆骨又开始转了」+「阻尼是非常对的」）**
+    //   回读（`probe-yaw` 全开配置）：骨盆 yaw 2.5s 起加速 **22°→63°→156°**，
+    //   元凶 = **`spine1/1` 扭转冲到 −116°**（而 hip/1 已被摘掉 QP 后只剩 −3/4）。
+    //   ⇒ 扭转是**被动自由度**：人靠**肌肉黏弹**吸收它的动能（用户："肌肉会吸收动能"）。
+    //   ⇒ 本块给扭转轴**纯阻尼**（τ = −c·ω_rel，**不含位置目标** =
+    //     不是"把它扳回去"，而是"吸收它的能量"，防止自由累积）。
+    //   覆盖：脊柱 3 段的 1 号轴 + 两髋的 1 号轴。`TWISTD=0` 关。
+    const kTw = (() => {
+      const raw = envB().TWISTD;
+      if (raw === undefined || raw === '') return 20;   // N·m·s/rad（实测 0/8/20 中 20 转得最少）
+      const v = Number(raw);
+      return Number.isFinite(v) && v >= 0 ? v : 8;
+    })();
+    if (kTw > 0 && doll) {
+      const jw2 = new Float64Array(3);
+      for (const nm of ['spine1', 'spine2', 'spine3', 'hip_l', 'hip_r']) {
+        const j = jointIndexByName(rs.sk, nm);
+        if (j < 0) continue;
+        doll.jointRelVel(j, jw2);
+        const w = jw2[1]!;                          // 该关节的 1 号轴（扭转）相对角速度
+        const tauD = -kTw * w;
+        if (Math.abs(tauD) > 0.05) {
+          rs.requestTorque(j, 1, tauD, 'balance', '扭转·阻尼', true);
+        }
+      }
+    }
+
     if (on('fallResp') && rs.fall.valid && rs.fall.mode !== 'normal') {
       const uWarn = p.fallWarnU ?? 0.35;
       // 强度 0..1：预警阈值处为 0，urgency=1 时为 1

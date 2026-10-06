@@ -41,7 +41,7 @@ const log = (s: string) => console.log(s);
 const ARGS = (globalThis as { __PROBE_ARGS?: string[] }).__PROBE_ARGS ?? [];
 const SECS = Number(ARGS[0] ?? 12);
 const STEP = Number(ARGS[1] ?? 0.5);
-const HZ = 120, DT = 1 / HZ, PER = 2;
+const HZ = PHZ > 0 ? PHZ : 120, DT = 1 / 120, PER = Math.max(1, Math.round(HZ / 60));
 const sk = buildSkeleton(DEFAULT_CONFIG);
 const jn = sk.joints.map((j) => j.name);
 const jAnkL = jn.indexOf('foot_l'), jAnkR = jn.indexOf('foot_r');
@@ -49,11 +49,17 @@ const jSp1 = jn.indexOf('spine1');
 
 log(`══ probe-slip ${SECS}s：承重脚滑移 + 腰向后（每 ${STEP}s）══`);
 log('   t(s)  踝L.x   ΔL    踝R.x   ΔR   | 左μ 右μ  左Ft 右Ft  左μFz 右μFz | CoM.x  vx   腰x    pitch');
-const sim = new Sim(sk, shapeForJoints(sk.joints.length), { ...DEFAULT_SIM, mode: 'stand', duration: SECS });
+const PHZ = Number(((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).PHZ ?? '') || 0;
+const sim = new Sim(sk, shapeForJoints(sk.joints.length), {
+  ...DEFAULT_SIM, mode: 'stand', duration: SECS,
+  ...(PHZ > 0 ? { physicsHz: PHZ } : {}),
+});
 sim.begin(new Float32Array(sim.paramCount));
+const ABL = (ARGS[2] ?? '').trim();   // 用法: probe-slip [秒] [间隔] [ABL]
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
   gait: { ...DEFAULT_CONTROLLER.gait, startBearer: 'l' },
+  balance: { ...DEFAULT_CONTROLLER.balance, ablate: ABL || undefined },
 });
 const d = sim.doll;
 const rs = ctrl.rs;
