@@ -293,8 +293,12 @@ log('══ G. 归因对照（区分"平衡坏"与"开始迈步"）══');
 {
   const a = run({}, SECS);
   const b = run({ ablate: 'stepKeyframe' }, SECS);
+  // ★★ 发力门禁 A/B（用户 2026-10-06：「承重无上限，但发力有上限」）
+  const capOff = run({ ablate: 'forceCap' }, SECS);
   log(`  默认（迈步开）      存活 ${secs(a.ticks)}s  倒=${a.fall || '无'}  周期 ${a.trace[a.trace.length-1]?.cycles ?? 0}`);
   log(`  迈步系统停手        存活 ${secs(b.ticks)}s  倒=${b.fall || '无'}  周期 ${b.trace[b.trace.length-1]?.cycles ?? 0}`);
+  log(`  迈步停手+关发力门禁   存活 ${secs(capOff.ticks)}s  倒=${capOff.fall || '无'}  周期 ${capOff.trace[capOff.trace.length-1]?.cycles ?? 0}`
+    + '　← 与"迈步系统停手"之差 = 发力门禁的净贡献');
   const cycA = a.trace[a.trace.length-1]?.cycles ?? 0;
   if (cycA > 0 && b.ticks > a.ticks) {
     ok(`结论：**迈步一启动就倒**（周期 ${cycA}，停手后多活 ${secs(b.ticks - a.ticks)}s）`

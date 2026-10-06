@@ -14235,6 +14235,27 @@ var init_ragdoll = __esm({
       /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
       archMotor = null;
       /**
+       * ★★★ **逐关节发力门禁** —— 用户 2026-10-06 定调：
+       *   「**承重无上限，但是发力有上限**」。
+       *
+       *   ⇒ 本类（位置伺服 + 最终输出）**不做**额外上限：
+       *     位置伺服是**承重**路径（撑住身体、保持姿态），它只能被 `τmax` 限
+       *     —— 那也是"能扛住的最大力"，不是"能一直发的力"。
+       *   ⇒ 真正的发力门禁在 `RigState.requestTorque`（**主动命令**入口），
+       *     见那里的 `tauCap`/`hold` 判据。0 = 不设上限。
+       *
+       *   ⚠ 我曾在这里加了第二道夹（连位置伺服一起夹到 0.35·τmax）——
+       *     那会把**承重**也限住（"撑不住自己"），与用户定调相反，已撤。
+       */
+      tauCap = new Float32Array(0);
+      // 保留字段：供探针回读上限表，不再执行
+      /** 被夹住的次数（已停用；保留 0 以兼容回读） */
+      capHits = 0;
+      /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+      setTauCaps(caps) {
+        this.tauCap = caps;
+      }
+      /**
        * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
        *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
        *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。
@@ -17397,6 +17418,27 @@ var init_rigState = __esm({
       /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
       disposeK = 1;
       /**
+       * ★★★ **逐关节发力门禁**（用户 2026-10-06：
+       *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
+       *     巨量的发力 0.5s 就能直接让身体姿态崩溃」）。
+       *
+       *   `tauCap[flat]` = 该轴允许的**持续发力上限**（N·m）。**0 = 不设上限**。
+       *   在 `requestTorque` **入口**夹紧 ⇒ 任何通道（balance/step/QP/踝 VIP/`τ=JᵀF`）
+       *   都不得越过；`Ragdoll.driveMotors` 里还有**第二道**（连位置伺服的 PD 也管）。
+       *
+       *   为什么不能只靠 τmax：`τmax` 是**解剖/工程极限**（瞬时能扛），
+       *   而"站住"是**持续任务** —— 拿 τmax 去站，等于让关节一直在极限收缩。
+       *   实测（`probe:firstframes`）：开局 8 根轴顶到 τmax，一个物理步就把髋打到
+       *   **645°/s**，全身姿态在 0.5s 内崩掉。
+       */
+      tauCap = new Float64Array(0);
+      /** 被发力门禁夹住的次数（请求口 / 马达口分开记，便于归因） */
+      capHits = { req: 0, servo: 0 };
+      /** 最近一次被夹的轴与幅度（诊断） */
+      capLast = { axis: -1, want: 0, cap: 0, label: "" };
+      /** 发力门禁本拍是否启用（`ablate` 含 `forceCap` 时为 false） */
+      tauCapOn = true;
+      /**
        * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
        *
        *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
@@ -17960,6 +18002,13 @@ var init_rigState = __esm({
           this.badRequests++;
           return;
         }
+        let v = tau;
+        const cap = this.hold[i] ? 0 : this.tauCap[i] ?? 0;
+        if (cap > 0 && Math.abs(v) > cap) {
+          this.capHits.req++;
+          this.capLast = { axis: i, want: v, cap, label };
+          v = v > 0 ? cap : -cap;
+        }
         const cur = this.treq[i];
         this.torqueRequestCount++;
         if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
@@ -17967,7 +18016,7 @@ var init_rigState = __esm({
           return;
         }
         if (cur) this.tgt[i].suppressed.push({ system: cur.system, label: `${cur.label}(\u529B\u77E9)` });
-        this.treq[i] = { value: tau, system, label };
+        this.treq[i] = { value: v, system, label };
       }
       /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
       requestSwingLegTorque(side, joint, axis, tau, label, isLift) {
@@ -19699,6 +19748,9 @@ var init_gaitState = __esm({
               }
               const ds = rs.disposeStat;
               const head = `\u8FC8\u6B65\u63D0\u6848 ${ds.props} \u6761 \u2192 balance \u53D1\u5E03 ${ds.republished} \u6761\uFF08\u88AB balance \u8986\u76D6 ${ds.overridden}\uFF09\u3000\u98CE\u9669\u56E0\u5B50 k=${ds.k.toFixed(2)}\uFF08k=1 \u8FC8\u6B65\u5168\u6743\uFF0Ck=0 \u51BB\u7ED3\u59FF\u6001\uFF09`;
+              const ch = rs.capHits.req;
+              const cl = rs.capLast;
+              const capLine = rs.tauCapOn ? `\u53D1\u529B\u95E8\u7981 \u5DF2\u5939 ${ch} \u6B21/\u672C\u62CD\u7D2F\u8BA1` + (cl.axis >= 0 && Math.abs(cl.want) > 0 ? `\u3000\u6700\u8FD1\uFF1A\u8F74${cl.axis} \u60F3${cl.want.toFixed(0)}\u2192\u5939${cl.cap.toFixed(0)}N\xB7m\uFF08${cl.label}\uFF09` : "") + "\u3000\u627F\u91CD\u8F74\u653E\u884C\uFF08\u8BA9\u4F4D\u8F74\u4E0D\u5939\uFF09" : "\u53D1\u529B\u95E8\u7981 **\u5DF2\u6D88\u878D**\uFF08\u9000\u56DE \u03C4max \u4E0A\u9650\uFF09";
               const rest = !bf.axes.length ? ["\uFF08\u672C\u62CD\u5E73\u8861\u7CFB\u7EDF\u6CA1\u6709\u63D0\u51FA\u4EFB\u4F55\u5173\u8282\u4FEE\u6B63\uFF09"] : bf.axes.map((a) => {
                 const j = Math.floor(a.axis / 3);
                 const ax = a.axis % 3;
@@ -19707,7 +19759,7 @@ var init_gaitState = __esm({
                 const sg = d >= 0 ? "+" : "";
                 return `\u8F74${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}\xB0\u3000${a.label}`;
               });
-              return [head, ...rest];
+              return [head, capLine, ...rest];
             })(),
             // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
             force: rs.groundChain ? forceChainLines(rs.groundChain) : ["\u529B\u94FE\u4E0D\u53EF\u7528\uFF08forceSrc \u672A\u5B89\u88C5\uFF09"],
@@ -22160,6 +22212,22 @@ var init_wholeBodyQp = __esm({
 });
 
 // src/core/systems/balance.ts
+function buildTorqueCaps(joints) {
+  const caps = new Float32Array(joints.length * 3);
+  for (const spec of AXIS_OWNERSHIP) {
+    for (let j = 0; j < joints.length; j++) {
+      const nm = joints[j].name;
+      if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
+      const tmax = joints[j].maxTorque[spec.axis] ?? 0;
+      if (tmax <= 0) continue;
+      const c = spec.tauCapN ?? tmax * TAU_CAP_FRAC;
+      const i = j * 3 + spec.axis;
+      const prev = caps[i];
+      caps[i] = prev === 0 ? c : Math.min(prev, c);
+    }
+  }
+  return caps;
+}
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const sk2 = rs.sk;
   rs.balanceFix.axes.length = 0;
@@ -22284,7 +22352,7 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
     rs.sagJfHeld = 0;
     const sagJfOn = on("sagJf");
     const sagJfHold = sagJfOn && on("sagJfHold");
-    const sagJfSpine = OFF.has("sagJfSpine");
+    const sagJfSpine = !on("sagJfSpine");
     for (let i2 = 0; sagJfOn && i2 < chain.length; i2++) {
       const jj = chain[i2];
       if (jj === jAnk) continue;
@@ -22478,13 +22546,14 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   if (on("dispose")) rs.disposeStepProposals(rs.disposeK);
   else rs.disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
 }
-var NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
+var TAU_CAP_FRAC, NON_AXIS_CHANNELS, HIP_ABD_AXIS, AXIS_OWNERSHIP, DEFAULT_BALANCE_PARAMS, TMP_TAU, TMP_JOINT, TMP_COP, TMP_BB;
 var init_balance = __esm({
   "src/core/systems/balance.ts"() {
     "use strict";
     init_skeleton();
     init_wantedForce();
     init_wholeBodyQp();
+    TAU_CAP_FRAC = 0.35;
     NON_AXIS_CHANNELS = Object.freeze([
       { channel: "postureLoad", why: "\u53EA\u7F29\u653E sagSupport \u4F4D\u7F6E\u73AF\u7684 kP/kD\uFF0C\u4E0D\u5199 target\u3001\u4E0D\u7533\u9886\u8F74" }
     ]);
@@ -22507,7 +22576,10 @@ var init_balance = __esm({
         role: "hipStiff",
         mode: "tau",
         channel: "hipStiff",
-        extraGates: ["qp", "lat", "sag", "weight", "trunkLean"]
+        // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
+        //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
+        //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
+        extraGates: ["qp", "lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold"]
       },
       // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
       //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
@@ -22518,7 +22590,7 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "qp",
-        extraGates: ["lat", "sag", "weight", "trunkLean"]
+        extraGates: ["lat", "sag", "weight", "trunkLean", "sagJf", "sagJfHold"]
       },
       // ── 额状链 ────────────────────────────────────────────────────────
       {
@@ -22527,6 +22599,9 @@ var init_balance = __esm({
         role: "latTransfer",
         mode: "tau",
         channel: "lat",
+        // ★ 70 N·m 是**本文件自己推出的硬约束**（1391-1399 行）：
+        //   `τ_abd = m·g·(z_com − z_hip)`，配 `m·g ≈ 686N` ⇒ 重心横向偏移不得超过 102mm。
+        tauCapN: 70,
         extraGates: ["sag", "weight", "trunkLean"]
       },
       // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
@@ -22548,10 +22623,13 @@ var init_balance = __esm({
       // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
       //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
       //   这几根轴上 balance 只有 **tau** 写入 ⇒ 属跨模式并联，需要 balance 让位。
-      { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
-      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe" },
+      //   ★ `dispose` = 块⑦ 把 step 的提案**以 balance 名义重发布**（同一根轴、同一模式
+      //     ⇒ 同一行的另一个门）。用户 2026-10-06 定调的架构：
+      //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
+      { joint: "foot", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      { joint: "hip", axis: 1, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      { joint: "spine1", axis: 2, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
+      { joint: "spine1", axis: 0, role: "keyframeStep", mode: "pos", channel: "stepKeyframe", extraGates: ["dispose"] },
       // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
       //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
       //   这里逐根登记，便于门禁 E2 双向对账（表 ⊆ 代码 且 代码 ⊆ 表）。
@@ -22627,7 +22705,7 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
       },
       {
         joint: "spine2",
@@ -22651,7 +22729,7 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
       },
       {
         joint: "spine3",
@@ -22675,7 +22753,7 @@ var init_balance = __esm({
         role: "grfJacobian",
         mode: "tau",
         channel: "lat",
-        extraGates: ["sag", "weight", "trunkLean"]
+        extraGates: ["sag", "weight", "trunkLean", "sagJfSpine"]
       }
     ]);
     DEFAULT_BALANCE_PARAMS = {
@@ -23077,6 +23155,11 @@ var init_controller = __esm({
         const footLen = Math.max(0.18, Math.abs(fc?.hx ?? 0.11) * 2);
         const bbL = new Float64Array(4), bbR = new Float64Array(4);
         const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+        const capOff = (this.cfg.balance.ablate ?? "").split(",").map((x) => x.trim()).includes("forceCap");
+        const caps = capOff ? new Float32Array(sk2.joints.length * 3) : buildTorqueCaps(sk2.joints);
+        this.rs.tauCap = new Float64Array(caps);
+        this.rs.tauCapOn = !capOff;
+        doll.setTauCaps(caps);
         this.rs.forceSrc = {
           sole: (side) => {
             const cached = side === 0 ? this.soleCache.l : this.soleCache.r;

@@ -104,6 +104,58 @@ export interface AxisSpec {
    *   否则「全消融」名单就漏门 ⇒ 门禁 B 测的是假故障（本项目已栽 4 次）。
    */
   extraGates?: readonly string[];
+  /**
+   * ★★★ 该轴允许的**持续发力上限**（N·m，绝对值）。
+   *   缺省 = `τmax × TAU_CAP_FRAC`（见常量注释）。
+   *   **0 = 显式不设上限**（放行到 τmax）。
+   */
+  tauCapN?: number;
+}
+
+/**
+ * ★★★ **持续发力上限系数**（占 τmax 的比例）—— 用户 2026-10-06：
+ *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
+ *     巨量的发力 0.5s 就能直接让身体姿态崩溃」。
+ *
+ *   ── 取 0.35 的依据 ─────────────────────────────────────────────
+ *     · `τmax` 是**解剖/工程极限**（能扛住的最大的力），不是"能一直发的力"；
+ *     · 而站立平衡是**持续任务** —— 人体持续等长收缩的耐力上限约 **15~20% MVC**，
+ *       但本 rig 的 τmax 是**保守估计**（`hip=200` 只为 "工程余量"，
+ *       `JOINT_MAX_TORQUE` 注释写明"不是解剖上限"）⇒ 直接套 20% 会过紧：
+ *       单腿站立本身就需要 ~52 N·m 的静态髋力矩（本文件 1388 行），
+ *       52/200 = 26% ⇒ **取 0.35（= 70 N·m）留 35% 余量**。
+ *     · 个别轴有**本文件已记下的已知需求**时用 `tauCapN` 覆盖（如 `hip/0` 外展
+ *       的 70 N·m：`τ_abd = m·g·Δz`，约束是"重心横向偏移 ≤ 102mm"）。
+ *
+ *   ⚠ 这是**工程初值**，必须用 `probe:firstframes` / `probe:domain` 扫参校准；
+ *     `rs.capHits` 会告诉你它有没有在咬。
+ */
+export const TAU_CAP_FRAC = 0.35;
+
+/**
+ * ★★★ 从 `AXIS_OWNERSHIP` 生成**逐轴发力上限表**（长度 = 关节数×3）。
+ *
+ *   - 表里声明过的轴：取 `tauCapN`，否则 `τmax × TAU_CAP_FRAC`；
+ *   - 同一根轴被多行声明（同轴异模式/多角色）⇒ 取**最严**的那个（min）；
+ *   - 表里**没声明**的轴：0（不设限）—— 未接管的关节（臂、颈）不受本门禁约束。
+ */
+export function buildTorqueCaps(
+  joints: readonly { name: string; maxTorque: readonly (number | undefined)[] }[],
+): Float32Array {
+  const caps = new Float32Array(joints.length * 3);
+  for (const spec of AXIS_OWNERSHIP) {
+    for (let j = 0; j < joints.length; j++) {
+      const nm = joints[j]!.name;
+      if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
+      const tmax = joints[j]!.maxTorque[spec.axis] ?? 0;
+      if (tmax <= 0) continue;
+      const c = spec.tauCapN ?? tmax * TAU_CAP_FRAC;
+      const i = j * 3 + spec.axis;
+      const prev = caps[i]!;
+      caps[i] = prev === 0 ? c : Math.min(prev, c);
+    }
+  }
+  return caps;
 }
 
 /**
@@ -144,15 +196,21 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
 
   // ── 矢状链：力矩通道（DIP 被动刚度 / 全链 QP / τ=JᵀF）─────────────
   { joint: 'hip', axis: 2, role: 'hipStiff', mode: 'tau', channel: 'hipStiff',
-    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean'] },
+    // ★ `sagJf`/`sagJfHold` = 矢状链前馈落地（2026-10-06 ④c）写的同一根轴。
+    //   ⚠ 必须登记：门禁 A2 查「源码里 `on(...)` 消费过、但表里没有」的通道，
+    //     漏登记 ⇒ **「全消融」名单漏门** ⇒ 对照实验测的是假故障（本项目栽 4 次）。
+    extraGates: ['qp', 'lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold'] },
   // ★ 这行是 2026-10-06 门禁查出来的**漏登记**：QP 与 `τ=JᵀF` 都写 `knee/2`
   //   的力矩，旧表却只登记了 `knee/0` ⇒ 运行时 `knee_l/2 tau<-balance vs step`
   //   被算成「未声明的同轴异模式」。
   { joint: 'knee', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'qp',
-    extraGates: ['lat', 'sag', 'weight', 'trunkLean'] },
+    extraGates: ['lat', 'sag', 'weight', 'trunkLean', 'sagJf', 'sagJfHold'] },
 
   // ── 额状链 ────────────────────────────────────────────────────────
   { joint: 'hip', axis: HIP_ABD_AXIS, role: 'latTransfer', mode: 'tau', channel: 'lat',
+    // ★ 70 N·m 是**本文件自己推出的硬约束**（1391-1399 行）：
+    //   `τ_abd = m·g·(z_com − z_hip)`，配 `m·g ≈ 686N` ⇒ 重心横向偏移不得超过 102mm。
+    tauCapN: 70,
     extraGates: ['sag', 'weight', 'trunkLean'] },
   // 骨盆抬升与 `latTransfer` **同轴、另一模式** ⇒ 并联（相加，不是覆盖）。
   //   旧表把它写成 `subordinateTo:'latTransfer'`，语义是"让位给不占这根轴的角色"。
@@ -169,10 +227,13 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   // ── 迈步系统独占的**位置**写入（Perry 关键帧，附录 D.3）──────────
   //   `foot/2` 摆动踝、`hip/1` 摆动外展让开、脊柱腰槽（trunkPitch / trunkLat）。
   //   这几根轴上 balance 只有 **tau** 写入 ⇒ 属跨模式并联，需要 balance 让位。
-  { joint: 'foot', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
-  { joint: 'hip', axis: 1, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
-  { joint: 'spine1', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
-  { joint: 'spine1', axis: 0, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe' },
+  //   ★ `dispose` = 块⑦ 把 step 的提案**以 balance 名义重发布**（同一根轴、同一模式
+  //     ⇒ 同一行的另一个门）。用户 2026-10-06 定调的架构：
+  //     「迈步系统把自己的命令交给平衡系统，平衡系统再做修正，然后发布最终命令」。
+  { joint: 'foot', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
+  { joint: 'hip', axis: 1, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
+  { joint: 'spine1', axis: 2, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
+  { joint: 'spine1', axis: 0, role: 'keyframeStep', mode: 'pos', channel: 'stepKeyframe', extraGates: ['dispose'] },
 
   // ── 全链 QP 与 τ=JᵀF 在**其余**承重腿轴上的写入 ──────────────────
   //   QP 的轴集合由 `wholeBodyQp.QP_AXIS_SPEC` 定义（那里是唯一真源），
@@ -203,19 +264,19 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean'] },
   { joint: 'spine1', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
   { joint: 'spine2', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean'] },
   { joint: 'spine2', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean'] },
   { joint: 'spine2', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
   { joint: 'spine3', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean'] },
   { joint: 'spine3', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
     extraGates: ['sag', 'weight', 'trunkLean'] },
   { joint: 'spine3', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
 ]);
 
 /**
@@ -1415,7 +1476,9 @@ export function balanceSystem(
     //   `sagJfSpine` 消融 = 把脊柱也拉进前馈（仅用于对照，不进默认路径）。
     // ⚠ 语义取反：`OFF` 里**列出** `sagJfSpine` 才把脊柱拉进前馈（仅用于对照）。
     //   不能用 `on('sagJfSpine')` —— 它默认 true，等于"默认就让位脊柱"，正是上面的病因。
-    const sagJfSpine = OFF.has('sagJfSpine');
+    //   （写 `!on(...)` 而不是 `OFF.has(...)`：门禁 A2 用正则扫源码里的
+    //    `on('…')` 接线来对账，写成 `OFF.has` 会被判成"表里有门、源码没有"。）
+    const sagJfSpine = !on('sagJfSpine');
     for (let i2 = 0; sagJfOn && i2 < chain.length; i2++) {
       const jj = chain[i2]!;
       if (jj === jAnk) continue;                 // 踝归块⑥，绝不双写

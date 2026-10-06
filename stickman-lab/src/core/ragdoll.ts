@@ -632,6 +632,24 @@ export class Ragdoll {
   /** 弓增益被夹紧的实况（可回读：`requested` vs 实际生效），null = 没夹或没有弓 */
   archMotor: { K: number; B: number; joint: number } | null = null;
   /**
+   * ★★★ **逐关节发力门禁** —— 用户 2026-10-06 定调：
+   *   「**承重无上限，但是发力有上限**」。
+   *
+   *   ⇒ 本类（位置伺服 + 最终输出）**不做**额外上限：
+   *     位置伺服是**承重**路径（撑住身体、保持姿态），它只能被 `τmax` 限
+   *     —— 那也是"能扛住的最大力"，不是"能一直发的力"。
+   *   ⇒ 真正的发力门禁在 `RigState.requestTorque`（**主动命令**入口），
+   *     见那里的 `tauCap`/`hold` 判据。0 = 不设上限。
+   *
+   *   ⚠ 我曾在这里加了第二道夹（连位置伺服一起夹到 0.35·τmax）——
+   *     那会把**承重**也限住（"撑不住自己"），与用户定调相反，已撤。
+   */
+  tauCap: Float32Array = new Float32Array(0);   // 保留字段：供探针回读上限表，不再执行
+  /** 被夹住的次数（已停用；保留 0 以兼容回读） */
+  capHits = 0;
+  /** 安装逐轴发力上限（长度 = 关节数×3；`Controller` 构造时调一次） */
+  setTauCaps(caps: Float32Array): void { this.tauCap = caps; }
+  /**
    * ★★★ 弓/内侧前足关节的**引擎电机句柄**（侧 → 引擎关节对象）。
    *   它们由 Rapier 力模式电机驱动，不进 `driveMotors` 的自研 PD 阵列
    *   ⇒ `setTorqueTargets` 到不了。这里留一句柄给 `setArchRoll` 写**目标角**。

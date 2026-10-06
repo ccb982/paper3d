@@ -20,7 +20,7 @@ import { omegaAt, dcm, readCom, readSupport } from './posture';
 import { assertRigInvariants, auditJoints, rigSummary, type RigReport } from './rig';
 import { RigState, DEFAULT_RIGSTATE_CONFIG, type BodyTrend, type RigSnapshot, type RigStateConfig, type Side } from './rigState';
 import { GaitState, DEFAULT_GAIT_CONFIG, type GaitConfig } from './gaitState';
-import { balanceSystem, DEFAULT_BALANCE_PARAMS, type BalanceParams } from './systems/balance';
+import { balanceSystem, DEFAULT_BALANCE_PARAMS, buildTorqueCaps, type BalanceParams } from './systems/balance';
 import { stepSystem, DEFAULT_STEP_PARAMS, type StepParams } from './systems/step';
 import type { Sim } from './sim';
 import type { Skeleton } from './skeleton';
@@ -112,6 +112,17 @@ export class Controller {
     //   （物理 120Hz，控制 60Hz）⇒ 必须按**物理步长**换算成力，
     //   否则载荷被低估 2 倍（实测 135N vs 体重 687N）。
     const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
+    // ★★★ **逐关节发力门禁**（用户 2026-10-06）——两道：
+    //   ① `rs.tauCap`：`requestTorque` 入口夹（拦所有控制通道）
+    //   ② `doll.tauCap`：`driveMotors` 最终夹（连位置伺服的 PD 一起管）
+    //   数值由 `AXIS_OWNERSHIP` 唯一真源生成（`buildTorqueCaps`）。
+    //   消融名 `forceCap` = 整表清零（= 退回 τmax 上限），用于 A/B 对照。
+    const capOff = (this.cfg.balance.ablate ?? '').split(',').map((x) => x.trim()).includes('forceCap');
+    const caps = capOff ? new Float32Array(sk.joints.length * 3) : buildTorqueCaps(sk.joints);
+    this.rs.tauCap = new Float64Array(caps);
+    this.rs.tauCapOn = !capOff;
+    doll.setTauCaps(caps);
+
     this.rs.forceSrc = {
       sole: (side) => {
         // 缓存为空（理论上不该发生：传感器块在 gait.update 之前跑）时兜底现读一次

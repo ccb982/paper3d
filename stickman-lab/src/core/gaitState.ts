@@ -1313,6 +1313,15 @@ export class GaitState {
           const head = `迈步提案 ${ds.props} 条 → balance 发布 ${ds.republished} 条`
             + `（被 balance 覆盖 ${ds.overridden}）　风险因子 k=${ds.k.toFixed(2)}`
             + `（k=1 迈步全权，k=0 冻结姿态）`;
+          // ★ 发力门禁：本拍被夹次数（承重轴放行、发力轴受夹，见 `RigState.tauCap`）
+          const ch = rs.capHits.req;
+          const cl = rs.capLast;
+          const capLine = rs.tauCapOn
+            ? `发力门禁 已夹 ${ch} 次/本拍累计`
+              + (cl.axis >= 0 && Math.abs(cl.want) > 0
+                ? `　最近：轴${cl.axis} 想${cl.want.toFixed(0)}→夹${cl.cap.toFixed(0)}N·m（${cl.label}）` : '')
+              + '　承重轴放行（让位轴不夹）'
+            : '发力门禁 **已消融**（退回 τmax 上限）';
           const rest = !bf.axes.length ? ['（本拍平衡系统没有提出任何关节修正）'] : bf.axes.map((a) => {
             const j = Math.floor(a.axis / 3); const ax = a.axis % 3;
             const nm = rs.sk.joints[j]?.name ?? `j${j}`;
@@ -1320,7 +1329,7 @@ export class GaitState {
             const sg = d >= 0 ? '+' : '';
             return `轴${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}°　${a.label}`;
           });
-          return [head, ...rest];
+          return [head, capLine, ...rest];
         })(),
         // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
         force: rs.groundChain ? forceChainLines(rs.groundChain) : ['力链不可用（forceSrc 未安装）'],

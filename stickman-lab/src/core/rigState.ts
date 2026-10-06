@@ -1001,6 +1001,27 @@ export class RigState {
   /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
   disposeK = 1;
   /**
+   * ★★★ **逐关节发力门禁**（用户 2026-10-06：
+   *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
+   *     巨量的发力 0.5s 就能直接让身体姿态崩溃」）。
+   *
+   *   `tauCap[flat]` = 该轴允许的**持续发力上限**（N·m）。**0 = 不设上限**。
+   *   在 `requestTorque` **入口**夹紧 ⇒ 任何通道（balance/step/QP/踝 VIP/`τ=JᵀF`）
+   *   都不得越过；`Ragdoll.driveMotors` 里还有**第二道**（连位置伺服的 PD 也管）。
+   *
+   *   为什么不能只靠 τmax：`τmax` 是**解剖/工程极限**（瞬时能扛），
+   *   而"站住"是**持续任务** —— 拿 τmax 去站，等于让关节一直在极限收缩。
+   *   实测（`probe:firstframes`）：开局 8 根轴顶到 τmax，一个物理步就把髋打到
+   *   **645°/s**，全身姿态在 0.5s 内崩掉。
+   */
+  tauCap: Float64Array = new Float64Array(0);
+  /** 被发力门禁夹住的次数（请求口 / 马达口分开记，便于归因） */
+  capHits = { req: 0, servo: 0 };
+  /** 最近一次被夹的轴与幅度（诊断） */
+  capLast = { axis: -1, want: 0, cap: 0, label: '' };
+  /** 发力门禁本拍是否启用（`ablate` 含 `forceCap` 时为 false） */
+  tauCapOn = true;
+  /**
    * ★★ **矢状链 `τ=JᵀF` 本拍下发的力矩绝对值之和**（N·m）。
    *
    *   为什么需要这个回读（2026-10-06）：修 ④c 死代码时，`F.fx` 算得对不对
@@ -1566,6 +1587,24 @@ export class RigState {
     this.claimAxis(joint, axis, 2, system);
     const i = joint * 3 + axis;
     if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
+    // ★★★ 发力门禁（**唯一**一道：主动命令入口）—— 用户 2026-10-06：
+    //   「**承重无上限，但是发力有上限**」。
+    //
+    //   判据的关键是**这根轴本拍由谁承重**：
+    //     · `hold[i]` = 该轴位置伺服已让位（只留阻尼）⇒ **力矩通道就是唯一的
+    //       承重路径** ⇒ 此时它是"承重"，**不夹**（放行到 τmax，由 `arbitrate` 末端管）。
+    //     · 未让位 ⇒ 位置伺服在承重，这条力矩是**额外的主动发力** ⇒ 夹到 `tauCap`。
+    //   ⇒ 语义严格对上用户定调：承重（含让位轴的力矩）无上限，发力（叠加项）有上限。
+    //
+    //   ⚠ 顺序依赖：调用方必须先 `requestHold` 再 `requestTorque`（本文件块④c 如此），
+    //     否则同一拍内 `hold[i]` 还是 false、承重会被误夹。
+    let v = tau;
+    const cap = this.hold[i] ? 0 : (this.tauCap[i] ?? 0);
+    if (cap > 0 && Math.abs(v) > cap) {
+      this.capHits.req++;
+      this.capLast = { axis: i, want: v, cap, label };
+      v = v > 0 ? cap : -cap;
+    }
     const cur = this.treq[i];
     this.torqueRequestCount++;
     if (cur && PRIORITY[cur.system] <= PRIORITY[system]) {
@@ -1573,7 +1612,7 @@ export class RigState {
       return;
     }
     if (cur) this.tgt[i]!.suppressed.push({ system: cur.system, label: `${cur.label}(力矩)` });
-    this.treq[i] = { value: tau, system, label };
+    this.treq[i] = { value: v, system, label };
   }
   /** 锁定闸门的力矩版本：被锁定腿上的抬腿力矩直接丢弃 */
   requestSwingLegTorque(side: Side, joint: number, axis: number, tau: number, label: string, isLift: boolean): void {
