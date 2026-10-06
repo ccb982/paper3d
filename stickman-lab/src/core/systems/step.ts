@@ -259,10 +259,18 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     // 踝：正 = 跖屈（本 rig 约定）
     const jFt = jointIndexByName(sk, swing === 'l' ? 'foot_l' : 'foot_r');
     if (jFt >= 0) rs.requestSwingLegAngle(swing, jFt, 2, clamp(kp.swAnkle, 0.5), '摆动踝·关键帧', false);
-    // 躯干矢状倾（Perry：IC 前倾 4°、摆动相后倾）
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, '躯干矢状·关键帧');
-    // 腰的**代偿**侧倾（Mann 1975 只有 5~10°，绝不当主执行器）
-    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, '躯干额状代偿');
+    // ★★★ 上身：**提案**而不是直写腰角（用户 2026-10-06 定调的**第一步**：
+    //   「**先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态**」）。
+    //   躯干矢状倾（Perry：IC 前倾 4°、摆动相后倾）+ 腰的代偿侧倾
+    //   （Mann 1975 只有 5~10°，绝不当主执行器）—— 两者都进 `upperBody.step`，
+    //   由 balance 统一合成后**发布最终值**（见 `balance.ts` 块⑧）。
+    if (on('upForce')) {
+      rs.proposeUpperBody(kp.trunkPitch, kp.trunkLat, 0);
+    } else {
+      // 消融退回旧路径（直写腰角），保证 A/B 可测
+      if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 2, kp.trunkPitch, '躯干矢状·关键帧');
+      if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, kp.trunkLat, '躯干额状代偿');
+    }
     // 摆动腿髋外展只做"让开"，不参与重心搬运（Winter 1998：搬运归支撑侧髋外展）
     if (lift > 0.01) rs.requestSwingLegAngle(swing, jHip, 1, 0.12, '摆动外展·让开', false);
     return;   // 关键帧分支已完整覆盖摆动腿，旧律不再执行
@@ -332,10 +340,18 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   · 且乘 α(t)（只��单支撑/摆动相非零）
   //   · 落回地面（s→1）时修正归零，避免残留
   // ══════════════════════════════════════════════════════════════
-  if (jSp1 >= 0) {
-    const yaw = (bell * 6) * D2R * (swing === 'l' ? 1 : -1);
-    rs.requestWaistSlot(jSp1, 0, yaw, '迈步反相');
+  // ★ 上身反相：同样走**提案**（累加到 `roll`）。
+  //   ⚠ 旧实现把反相**分发到 spine1/2/3 三根轴各自的角**（链的"形状"）；
+  //     新模型把上身当一个整体（一个倾角 ⇒ 一个力），**形状由 balance 的
+  //     `τ=JᵀF` 按几何分配**。这是一次**建模简化**，用 A/B 验证（消融 `upForce`）。
+  const yaw = (bell * 6) * D2R * (swing === 'l' ? 1 : -1);
+  if (on('upForce')) {
+    rs.proposeUpperBody(0, yaw, 0);
+    if (jSp2 >= 0) rs.proposeUpperBody(0, rs.authority * 3 * D2R * (swing === 'l' ? 1 : -1), 0);
+    if (jSp3 >= 0) rs.proposeUpperBody(0, rs.authority * 2 * D2R * (swing === 'l' ? 1 : -1), 0);
+  } else {
+    if (jSp1 >= 0) rs.requestWaistSlot(jSp1, 0, yaw, '迈步反相');
+    if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
+    if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
   }
-  if (jSp2 >= 0) rs.requestWaistSlot(jSp2, 0, rs.authority * 3 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
-  if (jSp3 >= 0) rs.requestWaistSlot(jSp3, 0, rs.authority * 2 * D2R * (swing === 'l' ? 1 : -1), '迈步反相');
 }

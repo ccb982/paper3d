@@ -133,6 +133,13 @@ export interface AxisSpec {
 export const TAU_CAP_FRAC = 0.35;
 
 /**
+ * ★ **上身的刚体 key**（用于质量加权求"上身质心"）。
+ *   与 `skeleton.ts` 的 `PART_SPECS` 一致：头 + 躯干 + 左右上臂 + 左右前臂。
+ *   ⚠ 不含腿/骨盆 —— 那部分的力是"从脚往上传"的**上游**，不是上身自己发的。
+ */
+const UPPER_KEYS = ['head', 'torso', 'arm_l', 'arm_r', 'hand_l', 'hand_r'] as const;
+
+/**
  * ★★★ 从 `AXIS_OWNERSHIP` 生成**逐轴发力上限表**（长度 = 关节数×3）。
  *
  *   - 表里声明过的轴：取 `tauCapN`，否则 `τmax × TAU_CAP_FRAC`；
@@ -143,17 +150,30 @@ export function buildTorqueCaps(
   joints: readonly { name: string; maxTorque: readonly (number | undefined)[] }[],
 ): Float32Array {
   const caps = new Float32Array(joints.length * 3);
+  const explicit = new Float32Array(joints.length * 3);   // 0 = 没显式给过
+  const declared = new Uint8Array(joints.length * 3);     // 该轴有没有被表声明过
   for (const spec of AXIS_OWNERSHIP) {
     for (let j = 0; j < joints.length; j++) {
       const nm = joints[j]!.name;
       if (nm !== spec.joint && !nm.startsWith(`${spec.joint}_`)) continue;
-      const tmax = joints[j]!.maxTorque[spec.axis] ?? 0;
-      if (tmax <= 0) continue;
-      const c = spec.tauCapN ?? tmax * TAU_CAP_FRAC;
+      if ((joints[j]!.maxTorque[spec.axis] ?? 0) <= 0) continue;
       const i = j * 3 + spec.axis;
-      const prev = caps[i]!;
-      caps[i] = prev === 0 ? c : Math.min(prev, c);
+      declared[i] = 1;
+      if (spec.tauCapN !== undefined) {
+        const prev = explicit[i]!;
+        explicit[i] = prev === 0 ? spec.tauCapN : Math.min(prev, spec.tauCapN);
+      }
     }
+  }
+  for (let i = 0; i < caps.length; i++) {
+    if (!declared[i]) continue;                       // 表没声明的轴 ⇒ 不设限
+    // ★ 显式 `tauCapN` **优先**，只在没显式给过时才落回 `TAU_CAP_FRAC`。
+    //   ⚠ 第一版写成"每行都算一遍再取 min" ⇒ `hip/0` 的显式 70 N·m 被同轴的
+    //     `pelvicLift`（pos）行按缺省算出的 42 压掉（实测 `capLast` 报 42）。
+    //     没显式声明的行**不该**代表那根轴表态。
+    if (explicit[i]! > 0) { caps[i] = explicit[i]!; continue; }
+    const j = Math.floor(i / 3), k = i % 3;
+    caps[i] = (joints[j]!.maxTorque[k] ?? 0) * TAU_CAP_FRAC;
   }
   return caps;
 }
@@ -260,23 +280,23 @@ export const AXIS_OWNERSHIP: readonly AxisSpec[] = Object.freeze([
   //     在块⑤ 的 |τ|>0.05 过滤之下多数时候拿不到指令；腰的姿态保持
   //     完全依赖块⑤ 的 `τ=JᵀF` + `enforceLimits`。
   { joint: 'spine1', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine1', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine1', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
   { joint: 'spine2', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine2', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine2', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
   { joint: 'spine3', axis: 0, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine3', axis: 1, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce'] },
   { joint: 'spine3', axis: 2, role: 'grfJacobian', mode: 'tau', channel: 'lat',
-    extraGates: ['sag', 'weight', 'trunkLean', 'sagJfSpine'] },
+    extraGates: ['sag', 'weight', 'trunkLean', 'upForce', 'sagJfSpine'] },
 ]);
 
 /**
@@ -346,6 +366,10 @@ export interface BalanceParams {
    *   ⚠ 不要因为"默认关着看着像没做完"就翻过来。翻之前先看 `probe-qp` 的
    *     真实状态读数（见 `架构设计.md` C.4 第一条）。
    */
+  /** ★ 上身发力：捕获点误差 → 上身额外倾角的增益（见 `DEFAULT_BALANCE_PARAMS`） */
+  upLeanK?: number;
+  /** ★ 上身额外倾角上限（度） */
+  upLeanMaxDeg?: number;
   qpEnable?: boolean;
   /** QP 的踝权重倍数（Kim 2022：踝取髋的 3~5 倍；0 = 完全排除踝） */
   qpAnkleMul?: number;
@@ -755,6 +779,18 @@ export const DEFAULT_BALANCE_PARAMS: BalanceParams = {
   //   而实测 q_vip 会走到 **23°** ⇒ 被动项 K·q 在 12.5° 就顶满并**独吞饱和额度**，
   //   间歇反馈项（vipP·qδ）挤不进去。K=270 → 饱和角 **25.5°** 覆盖实测区间。
   kVipAnkle: 270,
+  /**
+   * ★★ **上身发力**（用户 2026-10-06：「先迈步给出，balance 再综合」）。
+   *   `upLeanK` = 捕获点误差 → 上身额外倾角的增益（1/m 量级）：
+   *     `θ_bal = −upLeanK · (ξ − 支撑脚)`（负号：捕获点在前 ⇒ 上身**后**倾把 CoM 拉回）。
+   *   `upLeanMaxDeg` = 允许的额外倾角上限（度）。**由"上身力上限"反解**：
+   *     上身水平力 ≈ `m_u·g·tan θ`，取 12° ⇒ tan12° × 380N ≈ **81 N**。
+   */
+  // ⚠ **默认 0 = 只启用架构、不启用修正**：这样 A/B（`upForce` 开/关）
+  //   隔离的是"上身走提案+JᵀF" vs "迈步直写腰角"，不被增益标定混进来。
+  //   标定好增益后再开（初值 1.2 一上来就饱和到 12°、把脊柱力矩顶爆，已复现）。
+  upLeanK: 0,
+  upLeanMaxDeg: 12,
   qpEnable: false,
   qpAnkleMul: 4,
   qpGain: 1,
@@ -1494,7 +1530,9 @@ export function balanceSystem(
         rs.sagJfHeld++;
       }
       if (Math.abs(t) < 0.05) continue;
-      rs.requestTorque(jj, 2, t, 'balance', '矢状JᵀF');
+      // ★ `loadBearing=true`：该轴位置伺服已让位 ⇒ 这条力矩是**唯一承重路径**
+      //   （用户：「承重无上限」）。上身力（块⑧）则**不声明** ⇒ 按发力夹。
+      rs.requestTorque(jj, 2, t, 'balance', '矢状JᵀF', true);
       rs.sagJfTau += Math.abs(t);
     }
 // ★★★ 单腿**髋外展策略**（Horak & Nashner 1986「separate hip load/unload
@@ -1667,9 +1705,21 @@ export function balanceSystem(
     const supMed = copSup === null ? 0 : copSup - bound(sup);
     if (driveMed >= p.latShiftCopMargin && supMed >= p.latShiftCopMargin) {
       const chain: number[] = [];
-      for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`, 'spine1', 'spine2', 'spine3']) {
+      // ★★★ 2026-10-06：**脊柱已从本链条移出** —— 上身的力矩改由块⑧
+      //   （`upperBody` 的综合结果 + `τ=JᵀF`）唯一负责。
+      //   依据（`probe:upforce` 实测）：迈步只要求躯干 0.0°，而本块把
+      //   `spine1/2` 顶到 **−120 N·m（τmax）** —— 就是用户说的
+      //   「力是从脚往上传的，**盲目发力就是会折腰**」。
+      //   消融 `upForce` 时退回旧行为（脊柱在本链里）。
+      for (const nm of [`hip_${drive}`, `knee_${drive}`, `foot_${drive}`]) {
         const i2 = jointIndexByName(rs.sk, nm);
         if (i2 >= 0) chain.push(i2);
+      }
+      if (!on('upForce')) {
+        for (const nm of ['spine1', 'spine2', 'spine3']) {
+          const i2 = jointIndexByName(rs.sk, nm);
+          if (i2 >= 0) chain.push(i2);
+        }
       }
       // 作用点 = CoM；`fz` 就是横向力（正 = 把重心推向 +Z）
       doll.jacobianTorque(0, 0, rs.shiftDemandF, rs.com.x, rs.com.y, rs.com.z, chain, TMP_TAU);
@@ -1916,6 +1966,88 @@ if (doll && on('hipStiff')) {
       rs.hipTauStiff = tauHip;
 rs.requestTorque(jHipS, 2, tauHip, 'balance', '髋被动刚度');
     }
+  }
+
+  // ══════════════════════════════════════════════════════════════
+  // ⑧ ★★★ **上身发力：综合迈步提案 → 发布最终状态**
+  // ══════════════════════════════════════════════════════════════
+  //   用户 2026-10-06 定调：
+  //     「迈步系统和平衡系统的**上身发力都需要好好设计**」
+  //     「顺序是**先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态**」
+  //     「力是从脚、从腿往上传的，**盲目发力就是会折腰**。**发力限制和方向需要严格计算**」
+  //
+  //   ── 三步 ──────────────────────────────────────────────────────
+  //     ① 读迈步的提案（`rs.upperBody.step`，由 `step.ts` 累积）
+  //     ② balance 综合：按**捕获点误差**加一个额外倾角 `θ_bal`（把 CoM 拉回）
+  //        —— 这正是人的"**髋策略**"（Horak & Nashner 1986；Winter 1996：额状归髋）
+  //     ③ 发布 `final = step ⊕ bal`，再由 `final` 导出力
+  //        `(m_u·g·tan θ_pitch, m_u·g, m_u·g·tan θ_roll)` 作用在**上身 CoM**，
+  //        脊柱力矩由 `τ = JᵀF`（虚功）**唯一确定** ⇒ 不存在第二套分配，
+  //        也**不可能折腰**（力小则力矩小，力方向就是倾角方向）。
+  //
+  //   ⚠ 让位是必需的：本块在脊柱上写 **tau**，而位置伺服（若还有目标）会与它
+  //     双计 ⇒ 逐轴 `requestHold`（本项目的既有纪律，见 `requestHold` 注释）。
+  //     实测（`probe:sagchain` B 变体）：不让位 ⇒ 位置环饱和后把前馈整个吞掉。
+  if (on('upForce') && doll) {
+    rs.ubRuns++;
+    const ub = rs.upperBody;
+    const fc = rs.forceChain();
+    const s1 = jointIndexByName(rs.sk, 'spine1');
+    // 上身质量 = `spine1` 的**子树质量**（力链已算好；实测静立 38.8 kg）
+    ub.mass = (fc.ready && s1 >= 0) ? (fc.joints[s1]?.mass ?? 0) : 0;
+    // ★ 作用点 = **上身质心**（质量加权 6 个上身刚体）。
+    //   ⚠ 不能用 `doll.torso()`：它返回的是 `spine3`（胸腔顶端，实测 y=1.43），
+    //     比上身质心（≈1.2）高一截 ⇒ 力臂被放大、脊柱力矩被顶爆（实测 −120 饱和）。
+    {
+      let ms = 0, cx = 0, cy = 0, cz = 0;
+      for (const k of UPPER_KEYS) {
+        const b = doll.bodyByKey(k);
+        if (!b) continue;
+        const m = b.mass();
+        if (!(m > 0)) continue;
+        const t = b.translation();
+        ms += m; cx += m * t.x; cy += m * t.y; cz += m * t.z;
+      }
+      if (ms > 1e-6) { ub.comX = cx / ms; ub.comY = cy / ms; ub.comZ = cz / ms; }
+      else { const tp = doll.torso().translation(); ub.comX = tp.x; ub.comY = tp.y; ub.comZ = tp.z; }
+    }
+    // ② balance 的需求：捕获点误差 → 额外倾角（负号 = 把 CoM 拉回支撑脚上方）
+    const omU = Math.max(0.5, rs.omega0());
+    const capX = rs.com.x + rs.com.vx / omU;
+    const capZ = rs.com.z + rs.com.vz / omU;
+    const stanceX = sup === 'l' ? rs.soleX.l : rs.soleX.r;
+    const stanceZ = sup === 'l' ? rs.soleZ.l : rs.soleZ.r;
+    const upK = p.upLeanK ?? 0;
+    const leanMax = (p.upLeanMaxDeg ?? 12) * D2R;
+    const corrPitch = clamp(-upK * (capX - stanceX), leanMax);
+    const corrRoll = clamp(-upK * (capZ - stanceZ), leanMax);
+    // ★★ 综合并发布（**这一步就是用户说的"平衡系统再综合这个给一个最终的上身发力状态"**）
+    rs.finalizeUpperBody(corrPitch, corrRoll, leanMax);
+    // 脊柱链（发布目标用）
+    const spineChain: number[] = [];
+    for (const nm of ['spine1', 'spine2', 'spine3']) {
+      const i2 = jointIndexByName(rs.sk, nm);
+      if (i2 >= 0) spineChain.push(i2);
+    }
+    // ③ 发布最终状态 —— **落到脊柱链的角度目标**。
+    //
+    //   ⚠⚠ 为什么是**角度**而不是力矩（实测教训）：
+    //     先写成 `τ = JᵀF`（力作用在上身 CoM）。但**纯竖向力**在脊柱上的力矩
+    //     ≈ 0（力与力臂共线：`(a−p) × (0,mg,0)` 的 z 分量 = Δx·mg，而 Δx≈0）
+    //     ⇒ 没有东西**维持姿态**。实测后果：`spine2` 弯到 **+33°**、让位后的
+    //     阻尼项顶到 ±120 来回翻（"腰不发力、对折"的机制重现）。
+    //     ⇒ 正确的分工：**力**由 `force` 表达（供门禁/诊断/上限计算），
+    //       **姿态**由角度目标落地（位置伺服是姿态的持有者，也该是）。
+    //     这就是用户说的「发力限制和方向需要严格计算」：
+    //       方向 = `final.pitch/roll` 的符号；限制 = `maxLean`（由力上限反解）。
+    const nSp = Math.max(1, spineChain.length);
+    for (let i2 = 0; i2 < spineChain.length; i2++) {
+      const jj = spineChain[i2]!;
+      // 矢状（axis 2）+ 额状（axis 0）各分摊 1/nSp；扭转（axis 1）先不动
+      rs.requestAngle(jj, 2, ub.final.pitch / nSp, 'balance', '上身·最终发布(矢状)');
+      rs.requestAngle(jj, 0, ub.final.roll / nSp, 'balance', '上身·最终发布(额状)');
+    }
+    rs.ubTau = Math.hypot(ub.force.fx, ub.force.fz);
   }
 
   // ══════════════════════════════════════════════════════════════

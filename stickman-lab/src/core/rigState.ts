@@ -169,6 +169,34 @@ export interface BodyTrend {
 }
 
 /**
+ * ★★★ **上身发力状态**（用户 2026-10-06：
+ *   「先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态」）。
+ *
+ *   接口形状刻意做成「**姿态 + 由姿态导出的力**」：
+ *     · `step`/`bal` 都是**姿态**量（rad）—— 因为"上身要往哪边倾"是两个系统
+ *       都能表达、且物理上可加的；
+ *     · `final` = `step ⊕ bal`（逐轴夹在 `maxLean` 内）；
+ *     · `force` = `m_u·g·(tan(pitch), 1, tan(roll))` —— 上身要"发"的力，
+ *       在**上身 CoM** 处作用，脊柱力矩由 `τ=JᵀF` 唯一确定。
+ */
+export interface UpperBody {
+  /** 迈步系统的提案（rad）：矢状俯仰 / 额状侧倾 / 扭转 */
+  step: { pitch: number; roll: number; yaw: number };
+  /** 平衡系统的需求（rad）：为救平衡要**额外**倾的角 */
+  bal: { pitch: number; roll: number };
+  /** ★ 最终发布 = step ⊕ bal（逐轴夹紧） */
+  final: { pitch: number; roll: number; yaw: number };
+  /** 谁最终定的（诊断：'none' | 'step' | 'balance'） */
+  decidedBy: string;
+  /** balance 对 step 提案的修正量（rad） */
+  corrPitch: number; corrRoll: number;
+  /** 由 `final` 导出的上身力（世界系 N）：`(m_u·g·tan(pitch), m_u·g, m_u·g·tan(roll))` */
+  force: { fx: number; fy: number; fz: number };
+  /** 上身质量（kg，来自 `forceChain` 的 spine1 子树）与作用点（上身 CoM，世界 m） */
+  mass: number; comX: number; comY: number; comZ: number;
+}
+
+/**
  * ★★★ **运动趋势快照**（状态机每拍写；平衡系统只读）。
  *
  *   「在歪倒一定角度之前都可以尝试救回来；歪倒角度过大确实是没救了」
@@ -945,6 +973,29 @@ export class RigState {
   stanceSingle = false;
   com = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 };
   /**
+   * ★★★ **上身发力状态**（用户 2026-10-06 定调）：
+   *   「迈步系统和平衡系统的**上身发力都需要好好设计**」
+   *   「顺序是**先迈步系统给出，然后平衡系统再综合这个给一个最终的上身发力状态**」
+   *
+   *   ── 为什么做成"一个力"而不是"各轴各写各的" ────────────────────
+   *   用户原话：「力是从脚、从腿往上传的，**盲目发力就是会折腰**」。
+   *   实测（`probe:upforce`）：迈步只要求躯干 0.0°，而 `spine1/2` 的力矩
+   *   被块⑤的**侧向搬运链**顶到 **−120 N·m（= τmax）** —— 那就是"盲目发力"。
+   *
+   *   ⇒ 上身的输出 = **上身 CoM 处的一个力** `(fx, fy, fz)`，
+   *     脊柱各轴力矩由 `τ = JᵀF`（虚功）**唯一确定**，不存在"第二套分配"。
+   *     `pitch/roll` 是同一件事的姿态表达：`fx = m_u·g·tan(pitch)`。
+   */
+  upperBody: UpperBody = {
+    step: { pitch: 0, roll: 0, yaw: 0 },
+    bal: { pitch: 0, roll: 0 },
+    final: { pitch: 0, roll: 0, yaw: 0 },
+    decidedBy: 'none',
+    corrPitch: 0, corrRoll: 0,
+    force: { fx: 0, fy: 0, fz: 0 },
+    mass: 0, comX: 0, comY: 0, comZ: 0,
+  };
+  /**
    * ★★ **救回门槛**（deg）。用户 2026-10-06：
    *   「我觉得在歪倒一定角度之前都可以尝试救回来，歪倒角度过大确实是没救了」。
    *   语义：最歪那一段的倾角 < 它 ⇒ `trends.rescueable = true`，平衡系统**全力救**；
@@ -1000,6 +1051,10 @@ export class RigState {
   disposeStat = { props: 0, republished: 0, overridden: 0, k: 1 };
   /** balance 本拍给迈步提案算出的**风险因子**（1 = 全权，0 = 冻结姿态） */
   disposeK = 1;
+  /** 上身发力（块⑧）本拍在脊柱链上下发的 |τ| 之和（N·m）—— 0 = 没在出力 */
+  ubTau = 0;
+  /** 块⑧执行次数（诊断：0 = 没跑） */
+  ubRuns = 0;
   /**
    * ★★★ **逐关节发力门禁**（用户 2026-10-06：
    *   「给每个关节发力做一个门禁，不同关节不同，不得超过上限；
@@ -1583,7 +1638,15 @@ export class RigState {
     cur.value += tau;
   }
 
-  requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string): void {
+  /**
+   * @param loadBearing ★ 调用方**显式声明**这条力矩是**承重**（该轴位置伺服已让位、
+   *   这条力矩就是唯一的支撑路径）⇒ 不夹到 `tauCap`（用户：「承重无上限」）。
+   *   ⚠ 默认 **false = 按发力夹**。第一版把"让位"当成自动豁免，结果**上身力**
+   *     （块⑧，同样是主动发力）也豁免了 ⇒ `spine2` 弯到 +33°、τ 到 116（实测）。
+   *   "我是不是承重"**只有调用方知道**，不能由 `hold` 自动推断。
+   */
+  requestTorque(joint: number, axis: number, tau: number, system: SystemId, label: string,
+    loadBearing = false): void {
     this.claimAxis(joint, axis, 2, system);
     const i = joint * 3 + axis;
     if (i < 0 || i >= this.nAxes) { this.badRequests++; return; }
@@ -1599,7 +1662,7 @@ export class RigState {
     //   ⚠ 顺序依赖：调用方必须先 `requestHold` 再 `requestTorque`（本文件块④c 如此），
     //     否则同一拍内 `hold[i]` 还是 false、承重会被误夹。
     let v = tau;
-    const cap = this.hold[i] ? 0 : (this.tauCap[i] ?? 0);
+    const cap = loadBearing ? 0 : (this.tauCap[i] ?? 0);
     if (cap > 0 && Math.abs(v) > cap) {
       this.capHits.req++;
       this.capLast = { axis: i, want: v, cap, label };
@@ -1754,6 +1817,48 @@ export class RigState {
     return this.disposeStat;
   }
 
+  /**
+   * ★★★ **迈步系统**提出上身姿态（用户定调的第一步）。
+   *   ⚠ 只写 `upperBody.step` —— **不直接下发关节角**（那是 balance 综合后的职责）。
+   *   消融：由调用方查 `on('upForce')`（表里登记在脊柱行）。
+   */
+  proposeUpperBody(pitch: number, roll: number, yaw: number): void {
+    // ★ **累积**语义：迈步系统在两个分支里各写一次（关键帧躯干俯仰 + 迈步反相），
+    //   每拍在 `beginTick` 清零 ⇒ 这里累加，不覆盖。
+    const st = this.upperBody.step;
+    st.pitch += pitch; st.roll += roll; st.yaw += yaw;
+  }
+
+  /**
+   * ★★★ **平衡系统**综合并**发布最终上身发力状态**（用户定调的第二步）。
+   *
+   *   `final = step ⊕ bal`，逐轴夹在 ±`maxLean`。随后由调用方按 `final` 算力
+   *   （`m_u·g·tan(θ)`）并用 `τ=JᵀF` 落到脊柱链 —— 见 `balance.ts` 块⑧。
+   *
+   *   ★ 为什么刻意**四参而非两参**（Stephens 2007 / Hof 2005）：
+   *     支架上的"倾斜"看起来是姿态，**实质是力**：倾 θ ⇒ 上身 CoM 横移 `h_u·sin θ`
+   *     ⇒ 对全身 CoM 的贡献 `m_u/m · h_u·sin θ`。所以上限要按**力**来定
+   *     （`forceCap` 与 `tauCap` 同一套），而不是按角度拍一个魔数。
+   *
+   * @param maxLean 允许的额外倾角上限（rad，balance 按力上限反解后传入）
+   */
+  finalizeUpperBody(corrPitch: number, corrRoll: number, maxLean: number): void {
+    const ub = this.upperBody;
+    ub.bal.pitch = corrPitch;
+    ub.bal.roll = corrRoll;
+    const cp = Math.max(-maxLean, Math.min(maxLean, ub.step.pitch + corrPitch));
+    const cr = Math.max(-maxLean, Math.min(maxLean, ub.step.roll + corrRoll));
+    ub.corrPitch = cp - ub.step.pitch;
+    ub.corrRoll = cr - ub.step.roll;
+    ub.final.pitch = cp;
+    ub.final.roll = cr;
+    ub.final.yaw = ub.step.yaw;
+    ub.force.fx = ub.mass * 9.81 * Math.tan(cp);
+    ub.force.fy = ub.mass * 9.81;
+    ub.force.fz = ub.mass * 9.81 * Math.tan(cr);
+    ub.decidedBy = (Math.abs(corrPitch) + Math.abs(corrRoll) > 1e-4) ? 'balance' : 'step';
+  }
+
   // ── 仲裁 ────────────────────────────────────────────────
 
   /** 每拍开始：清空需求与仲裁痕迹 */
@@ -1773,6 +1878,8 @@ export class RigState {
     this.torqueRequestCount = 0;
     this.requestCount = 0;
     this.stepProps.length = 0;
+    // ★ 上身提案每拍清零（累积语义，见 `proposeUpperBody`）
+    this.upperBody.step.pitch = 0; this.upperBody.step.roll = 0; this.upperBody.step.yaw = 0;
     for (let i = 0; i < this.tgt.length; i++) {
       const t = this.tgt[i]!;
       t.suppressed.length = 0; t.vetoed.length = 0; t.clamped = false;
