@@ -453,11 +453,19 @@ export function supportPolygon(
 //   关掉整个 QP（`ABL=qp`）：CoP 回到 **−5mm**、`vx` 保持 +1.4→+3.5、踝 τ 回到 ∓个位数
 //   ⇒ **前 0.1s 的前后破坏源就是 QP 的踝轴**（它还与 `ankleCop` 同轴，是门禁里
 //   那条未登记的冲突）。
-// ★★★ 2026-10-06 **转正为默认**：QP 不再写 `foot/2`（`QPNK=0` 可关）。
-//   依据：QP 写踝是前 0.1s 前后破坏的源头（`probe-foot01`：默认 CoP +7→+20 mm 前移、
-//   `vx`→−14.5；摘掉后 CoP −4~−12 mm、`vx` 恒正）；且它本与 `ankleCop` 同轴，
-//   是门禁里那条"未登记的跨系统冲突"。与 `ANKLE_COP=1` 配套后默认站立窗 1.18→2.75 s。
-const QP_NO_ANKLE = !['0', 'false', 'off'].includes(String(
+// ★★★★★ 2026-10-06 **实测回退为默认关**（`QPNK=1` 可开，仅作对照）。
+//
+//   病史：曾"转正为默认"并宣称帮助（依据是 `probe-domain` 的存活 12 s）——
+//   那是**假象**：倒地判据只有「头碰地」一条，而实测身体在 3.4 s 就已侧塌
+//   （头 y 1.59→0.16 但头没碰地）⇒ 存活读数骗人（`probe-slip` 加"头y<0.6"判据后暴露）。
+//
+//   真读数（`probe-slip` 真倒时刻 / 双脚滑移）：
+//     全关（旧基线）      3.18 s /  88+ 37 mm
+//     `QPNK=1` 单独       3.58 s /   2+219 mm
+//     **`ANKLE_COP=1` 单独 4.58 s / 143+238 mm**   ← 最好
+//     `ANKLE_COP+QPNK`    3.43 s / **900+1128 mm** ← 组合出巨大滑移（"承重脚打滑"的来源）
+//   ⇒ 两者各自可行、**组合冲突**；保留 `ANKLE_COP`，`QPNK` 回退为门后。
+const QP_NO_ANKLE = ['1', 'true', 'on'].includes(String(
   ((globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {}).QPNK ?? '').trim().toLowerCase());
 
 export const QP_AXIS_SPEC: readonly { joint: string; axes: readonly number[] }[] = Object.freeze([
