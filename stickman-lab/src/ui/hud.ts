@@ -11,7 +11,6 @@ import type { RigSnapshot, SystemTag } from '../core/rigState';
 //   本文件曾自带一份，与 `core/gaitState.ts` 内容相同但独立；那份的注释还说
 //   "导出给 probe-uipanel，之前探针自己复制了一份漏了 PUSH" —— 探针那份副本修掉了，
 //   **本文件这份原始副本却留了下来**，于是"同一事实两处定义"从探针搬到了 UI 与状态机之间。
-import { PHASE_LABEL } from '../core/gaitState';
 
 export interface HudHooks {
   onPause: () => void;
@@ -30,7 +29,6 @@ export interface HudHooks {
   onSpeed: (v: number) => void;
   onPhase: (mode: SimMode) => void;
   /** ★ 驱动源切换：ES 大脑 ↔ 手写平衡维持系统（调平衡时必须切到 teacher） */
-  onDriver: (d: 'brain' | 'teacher') => void;
   /** ★ 起始支撑腿 + 抬腿驻留（不换脚）。**不是"单腿模式开关"** —— 相位机是唯一概念 */
   onSingleLeg: (side: 'l' | 'r', liftHold: number) => void;
   /** ★ 回合时长（改它要重建 Sim） */
@@ -114,13 +112,19 @@ export class Hud {
       boot: $('boot'), pause: $('b-pause'), ghost: $('b-ghost'),
       joints: $('b-joints'), tex: $('b-tex'),
       // ── 「模块归属」面板（用户 2026-10-03）
-      ownPhase: $('own-phase'), ownGround: $('own-ground'), ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
+      // ── 状态机面板：全部字段来自 `RigSnapshot.telemetry`（UI 不推导）
+      ownPhase: $('own-phase'), ownVerified: $('own-verified'), ownSafe: $('own-safe'),
+      ownGround: $('own-ground'), ownLoadFrac: $('own-loadfrac'), ownSag: $('own-sag'),
+      ownRecvPeak: $('own-recvpeak'), ownDomain: $('own-domain'), ownPermit: $('own-permit'),
+      ownMos: $('own-mos'), ownPitch: $('own-pitch'), ownRoll: $('own-roll'),
+      ownAlpha: $('own-alpha'), ownClr: $('own-clr'), ownJoints: $('own-joints'),
+      // ── 物理诊断面板（与状态机分开）
       ownFcState: $('own-fc-state'), ownFcTb: $('own-fc-tb'),
       ownCtCv: $cv('own-ct-cv'), ownCtTb: $('own-ct-tb'),
-      ownPelv: $('own-pelv'), ownClr: $('own-clr'), ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
+      ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
       ownGate: $('own-gate'), ownGrid: $('own-grid'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
-      ownAlpha: $('own-alpha'), ownCrit: $('own-crit'),
+      ownCrit: $('own-crit'),
     };
     // 归属表头：轴 0/1/2 与身体部位一一对应（与 skeleton 的 AXIS_* 约定一致）
     this.ownAxes = ['轴0 内外旋', '轴1 外展', '轴2 屈伸'];
@@ -154,44 +158,51 @@ export class Hud {
     wire('b-joints', 'click', hooks.onJoints);
     wire('b-tex', 'click', hooks.onTextures);
 
-    const bindRange = (id: string, label: string, hooks2: (v: number) => void, fmt: (v: number) => string) => {
+    /**
+     * ★ 绑一个滑块。`labelId` 是 **DOM id**，两个元素都必须真实存在。
+     *
+     *   以前这里写的是 `const out = this.el[label]` 然后 `if (!input || !out) return;`
+     *   —— 静默跳过。后果实测：`v-driver` / `v-singleleg` / `v-lifthold` / `v-dur`
+     *   在 `el` 映射表里根本没有这些键，而 4 个 moveScale 传的是**带短横的 id**
+     *   （`v-mhip_l`）去查驼峰键（`vMHipL`）⇒ **8 个滑块是死的**，
+     *   数值永远停在 `—`，而页面看起来"有滑块"。
+     *   本项目栽过好几次"静默失效"（onAxisMarkers、ready=false 显示 0）。
+     *   ⇒ 这里改成**直接按 id 取 + 缺失即抛**，让不同步在启动时炸掉。
+     */
+    const bindRange = (id: string, labelId: string, hooks2: (v: number) => void, fmt: (v: number) => string) => {
       const input = document.getElementById(id) as HTMLInputElement | null;
-      const out = this.el[label];
-      if (!input || !out) return;
+      if (!input) throw new Error(`[hud] 缺少滑块 #${id}（index.html 与 hud.ts 不同步）`);
+      const out = document.getElementById(labelId) as HTMLElement | null;
+      if (!out) throw new Error(`[hud] 滑块 #${id} 的数值标签 #${labelId} 不存在（index.html 与 hud.ts 不同步）`);
       const sync = () => { out.textContent = fmt(Number(input.value)); hooks2(Number(input.value)); };
       input.addEventListener('input', sync);
       sync();
     };
-    bindRange('i-sigma', 'vSigma', hooks.onSigma, (v) => v.toFixed(2));
-    bindRange('i-budget', 'vBudget', hooks.onBudget, (v) => `${v.toFixed(0)} ms`);
-    bindRange('i-speed', 'vSpeed', hooks.onSpeed, (v) => `${v.toFixed(1)}×`);
+    bindRange('i-sigma', 'v-sigma', hooks.onSigma, (v) => v.toFixed(2));
+    bindRange('i-budget', 'v-budget', hooks.onBudget, (v) => `${v.toFixed(0)} ms`);
+    bindRange('i-speed', 'v-speed', hooks.onSpeed, (v) => `${v.toFixed(1)}×`);
     // ★ 三档：走路 / **站立** / 战斗。站立必须在里面 —— 它是平衡的验收口径。
     const PHASE = ['walk', 'stand', 'fight'] as const;
-    bindRange('i-speedgoal', 'vPhase',
+    bindRange('i-speedgoal', 'v-speedgoal',
       (v) => hooks.onPhase(PHASE[Math.round(v)] ?? 'stand'),
       (v) => ({ walk: '学走路', stand: '学站立', fight: '学战斗' })[PHASE[Math.round(v)] ?? 'stand']);
-
-    const DRV = ['brain', 'teacher'] as const;
-    bindRange('i-driver', 'vDriver',
-      (v) => hooks.onDriver(DRV[Math.round(v)] ?? 'teacher'),
-      (v) => (DRV[Math.round(v)] === 'teacher' ? '手写平衡模块' : 'ES 神经网络'));
 
     const SL = ['l', 'r', null] as const;
     let lift = 0.25;
     const pushSL = (v: number) => hooks.onSingleLeg(SL[Math.round(v)] === 'r' ? 'r' : 'l', lift);
-    bindRange('i-singleleg', 'vSingleLeg', pushSL,
+    bindRange('i-singleleg', 'v-singleleg', pushSL,
       (v) => ({ l: '左腿支撑', r: '右腿支撑', null: '双脚（正常迈步）' })[Math.round(v)] ?? '双脚');
-    bindRange('i-lifthold', 'vLiftHold', (v) => { lift = v; pushSL(Number((document.getElementById('i-singleleg') as HTMLInputElement).value)); },
+    bindRange('i-lifthold', 'v-lifthold', (v) => { lift = v; pushSL(Number((document.getElementById('i-singleleg') as HTMLInputElement).value)); },
       (v) => v.toFixed(2));
-    bindRange('i-dur', 'vDur', (v) => hooks.onDur(v), (v) => `${v.toFixed(0)} s`);
+    bindRange('i-dur', 'v-dur', (v) => hooks.onDur(v), (v) => `${v.toFixed(0)} s`);
 
     // ---- 步态奖励可调项（用户 2026-10-01："做成可调的按钮，走直线和阈值都是可选项"）----
-    bindRange('i-veltrack', 'vVelTrack', (v) => hooks.onGaitTune({ velTrack: v }), (v) => v.toFixed(2));
-    bindRange('i-lift', 'vLift', (v) => hooks.onGaitTune({ lift: v }), (v) => v.toFixed(2));
-    bindRange('i-single', 'vSingle', (v) => hooks.onGaitTune({ single: v }), (v) => v.toFixed(2));
-    bindRange('i-jointmove', 'vJointMove', (v) => hooks.onGaitTune({ jointMove: v }), (v) => v.toFixed(2));
-    bindRange('i-lateral', 'vLateral', (v) => hooks.onGaitTune({ lateral: v }), (v) => v.toFixed(2));
-    bindRange('i-actrate', 'vActRate', (v) => hooks.onGaitTune({ actRate: v }), (v) => v.toFixed(2));
+    bindRange('i-veltrack', 'v-veltrack', (v) => hooks.onGaitTune({ velTrack: v }), (v) => v.toFixed(2));
+    bindRange('i-lift', 'v-lift', (v) => hooks.onGaitTune({ lift: v }), (v) => v.toFixed(2));
+    bindRange('i-single', 'v-single', (v) => hooks.onGaitTune({ single: v }), (v) => v.toFixed(2));
+    bindRange('i-jointmove', 'v-jointmove', (v) => hooks.onGaitTune({ jointMove: v }), (v) => v.toFixed(2));
+    bindRange('i-lateral', 'v-lateral', (v) => hooks.onGaitTune({ lateral: v }), (v) => v.toFixed(2));
+    bindRange('i-actrate', 'v-actrate', (v) => hooks.onGaitTune({ actRate: v }), (v) => v.toFixed(2));
     for (const [id, key] of [['i-mhip_l', 'hip_l'], ['i-mhip_r', 'hip_r'], ['i-mknee_l', 'knee_l'], ['i-mknee_r', 'knee_r']] as [string, string][]) {
       // ★ label 的 id 必须和 index.html 里的完全一致（`v-mhip_l` 这种带短横），
       //   拼错的话 $() 取不到元素 ⇒ 数值一直显示 "—"（用户看到的就是这个）。
@@ -320,9 +331,12 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownGate.dataset.ok = '1';
       if (this.ownBuilt) { e.ownGrid.innerHTML = '<tr><td class="hint" colspan="5">切到「手写平衡模块」看归属</td></tr>'; }
       for (const r of [e.ownRoleL, e.ownRoleR]) { r.dataset.r = ''; r.querySelector('span')!.textContent = '—'; }
-      e.ownPhase.textContent = '—'; e.ownGround.textContent = '—'; e.ownMos.textContent = '—';
-      e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
-      e.ownPelv.textContent = '—'; e.ownClr.textContent = '—';
+      e.ownPhase.textContent = '—'; e.ownVerified.textContent = '—'; e.ownSafe.textContent = '安全 否';
+      e.ownGround.textContent = '—'; e.ownLoadFrac.textContent = '—'; e.ownSag.textContent = '—';
+      e.ownRecvPeak.textContent = '—'; e.ownDomain.textContent = '—'; e.ownPermit.textContent = '—';
+      e.ownMos.textContent = '—'; e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
+      e.ownAlpha.textContent = '—'; e.ownClr.textContent = '—'; e.ownJoints.textContent = '—';
+      e.ownCrit.textContent = '判据 —';
       e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
     }
@@ -347,35 +361,44 @@ setOwnership(d: RigSnapshot | null): void {
       el.querySelector('span')!.textContent = tags.join(' · ');
     }
 
-    const PH = PHASE_LABEL;
-    // ★ 验收结论与「差哪一项」直接显示（用户 2026-10-06：验收不过就不进下一态，
-    //   所以"为什么卡住"必须是**一眼可见**的，而不是靠推断）
-    const v0 = d.violations[0];
-    e.ownPhase.textContent = `${PH[d.state] ?? d.state} ${d.stateT.toFixed(2)}s`
-      + `${d.verified ? ' ✓' : ' ✗'}${d.safe ? ' [安全]' : ''}`
-      + `${v0 ? ` ${v0.item} ${v0.value.toFixed(3)}/${v0.tol.toFixed(3)}` : ''}`;
-    e.ownGround.textContent = `${d.support.contactN} 只`;
-    e.ownMos.textContent = `${(d.mos * 1000).toFixed(0)} mm`;
+    // ★★★ 状态机面板：**只渲染 `telemetry`**，一个数都不自己算 ───
+    //   用户 2026-10-06：「我应该回读各种状态机的数据才对，所有的回读也是
+    //   消费状态机的数据」。以前这里从 `d` 里抓十几个量各自格式化，
+    //   于是 UI 与状态机有**两套口径**，两边不一致时没人知道信谁。
+    const tm = d.telemetry;
+    e.ownPhase.textContent = `${tm.stateLabel} ${tm.stateT}s`;
+    e.ownVerified.textContent = tm.verified;
+    e.ownVerified.dataset.ok = tm.verified.startsWith('✓') ? '1' : '0';
+    e.ownSafe.textContent = `安全 ${tm.safe}`;
+    e.ownGround.textContent = tm.contact;
+    e.ownLoadFrac.textContent = `${tm.loadFrac} %`;
+    e.ownSag.textContent = tm.sagRecv;
+    e.ownRecvPeak.textContent = `${tm.recvPeak} %`;
+    e.ownDomain.textContent = `${tm.domainWorst}°`;
+    e.ownPermit.textContent = tm.stepPermit;
+    e.ownPermit.dataset.ok = tm.stepPermit === '放行' ? '1' : '0';
+    e.ownMos.textContent = `${tm.mos} mm`;
     // 前/后倾 与 左/右倾 分开显示：合成的倾角大小分不出平面
-    e.ownPitch.textContent = `${d.pitchDeg.toFixed(1)}°`;
-    e.ownRoll.textContent = `${d.rollDeg.toFixed(1)}°`;
+    e.ownPitch.textContent = `${tm.pitch}°`;
+    e.ownRoll.textContent = `${tm.roll}°`;
+    e.ownAlpha.textContent = tm.alpha;
+    e.ownClr.textContent = `${tm.clearance} mm`;
+    e.ownJoints.textContent = tm.jointsDeg;
     this.renderForceChain(d.forceChain);
     this.renderComTransfer(d.comTransfer);
-    // 骨盆抬升 / 摆动净空（与 3D 方向标同一份快照，同源）
-    e.ownPelv.textContent = `${(d.pelvicLift * 57.2958).toFixed(1)}°`;
-    e.ownClr.textContent = `${(d.swingClearance * 1000).toFixed(0)} mm`;
     // ★ 轴约定：用**实测脚 z** 自证左右（约定 +Z=左，静态打印很容易看反）
     e.ownAxL.textContent = `z ${d.legs.l.footZ >= 0 ? '+' : ''}${(d.legs.l.footZ * 1000).toFixed(0)}mm`;
     e.ownAxR.textContent = `z ${d.legs.r.footZ >= 0 ? '+' : ''}${(d.legs.r.footZ * 1000).toFixed(0)}mm`;
-    e.ownAlpha.textContent = d.authority.toFixed(2);
-    e.ownGate.textContent = `α(腰权限)=${d.authority.toFixed(2)}  ξ=(${d.dcm.x.toFixed(3)}, ${d.dcm.z.toFixed(3)})  倾角 ${d.tiltDeg.toFixed(1)}°`;
+    e.ownGate.textContent = `承重 ${tm.bearerLoad} · 角色 ${tm.roles}`;
     e.ownGate.dataset.ok = '1';
 
     // ---- 判据逐条回显（"为什么没迈步"不用推断）----
     const cf = (c: typeof d.criteria.bearer): string =>
       Object.entries(c.flags).map(([k, v]) => `${v ? '✓' : '✗'}${k}`).join(' ');
+    // 越界项由状态机拼好（`violationText` 是唯一措辞表），UI 只显示
     e.ownCrit.textContent =
-      `承重 ${cf(d.criteria.bearer)} ${d.criteria.bearer.all ? '【达成】' : ''}
+      `${tm.violations ? `未过：${tm.violations}\n` : '判据全过\n'}`
+      + `承重 ${cf(d.criteria.bearer)} ${d.criteria.bearer.all ? '【达成】' : ''}
 `
       + `解锁 ${cf(d.criteria.unlock)} ${d.criteria.unlock.all ? '【达成】' : ''}
 `

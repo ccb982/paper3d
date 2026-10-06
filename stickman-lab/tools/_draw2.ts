@@ -18,7 +18,7 @@ const cfg: any = { ...DEFAULT_CONTROLLER, balance: { ...(DEFAULT_CONTROLLER as a
 const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 3 });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, cfg);
-for (let i = 0; i < 120; i++) { sim.motor.set(ctrl.step(1 / 60)); sim.advance(1); }
+for (let i = 0; i < 120; i++) { (sim as unknown as { motor: { set(v: Float32Array): void } }).motor.set(ctrl.step(1 / 60)); sim.advance(1); }
 const d: any = sim.doll;
 
 const qmul = (a, b) => ({ x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y, y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x, z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w, w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z });

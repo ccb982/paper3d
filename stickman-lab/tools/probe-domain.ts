@@ -202,9 +202,9 @@ log('══ G. 归因对照（区分"平衡坏"与"开始迈步"）══');
 {
   const a = run({}, SECS);
   const b = run({ ablate: 'stepKeyframe' }, SECS);
-  log(`  默认（迈步开）      存活 ${secs(a.ticks)}s  倒=${a.fall || '无'}  周期 ${a.trace.at(-1)?.cycles ?? 0}`);
-  log(`  迈步系统停手        存活 ${secs(b.ticks)}s  倒=${b.fall || '无'}  周期 ${b.trace.at(-1)?.cycles ?? 0}`);
-  const cycA = a.trace.at(-1)?.cycles ?? 0;
+  log(`  默认（迈步开）      存活 ${secs(a.ticks)}s  倒=${a.fall || '无'}  周期 ${a.trace[a.trace.length-1]?.cycles ?? 0}`);
+  log(`  迈步系统停手        存活 ${secs(b.ticks)}s  倒=${b.fall || '无'}  周期 ${b.trace[b.trace.length-1]?.cycles ?? 0}`);
+  const cycA = a.trace[a.trace.length-1]?.cycles ?? 0;
   if (cycA > 0 && b.ticks > a.ticks) {
     ok(`结论：**迈步一启动就倒**（周期 ${cycA}，停手后多活 ${secs(b.ticks - a.ticks)}s）`
       + ' ⇒ 平衡尚不能承担当前迈步，属 P3/P4 待办，不是回读改动引起');
@@ -218,7 +218,7 @@ log('══ G. 归因对照（区分"平衡坏"与"开始迈步"）══');
   //   若此时能站住 ⇒ 倒的原因是「离开 DOUBLE、进入 LOAD」，与迈步无关，
   //   指向 **平衡系统在 LOAD 态的行为**（P4 未做），而不是回读或验收。
   const c = run({}, SECS, { minDwellSec: 1e9 });
-  log(`  状态机钉死 DOUBLE     存活 ${secs(c.ticks)}s  倒=${c.fall || '无'}  周期 ${c.trace.at(-1)?.cycles ?? 0}`);
+  log(`  状态机钉死 DOUBLE     存活 ${secs(c.ticks)}s  倒=${c.fall || '无'}  周期 ${c.trace[c.trace.length-1]?.cycles ?? 0}`);
   if (c.ticks > a.ticks + CTRL_HZ * 0.5) {
     ok(`归因：倒因是**进入 LOAD 态**（钉死 DOUBLE 后多活 ${secs(c.ticks - a.ticks)}s）`
       + ' ⇒ 平衡系统在 LOAD 态的行为是 P4 的待办，与回读/验收改动无关');

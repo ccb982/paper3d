@@ -73,13 +73,10 @@ const hud = new Hud({
   onBudget: (v) => { state.budgetMs = v; },
   onSpeed: (v) => { state.speed = v; },
   onPhase: (m) => { if (booted && m !== state.mode) rebuild(m); },
-  // ★ 2026-10-04：ES/brain 驱动路径已删除，`Driver` 只剩 `'teacher'` 一个取值，
-  //   `Sim` 的唯一驱动者是 `Controller` ⇒ 这个切换回调退化为「(重)建控制器会话」。
-  onDriver: () => {
-    if (!booted) return;
-    session = null;
-    resetSession();
-  },
+  // ★ 2026-10-06：「驱动源」滑块与「切换驱动源」按钮**已删**。
+  //   依据：`Driver` 只剩 `'teacher'`（ES/brain 路径 2026-10-04 已删），
+  //   所以那个滑块的两个档位里有一个**没有实现** —— 用户看到的却是
+  //   "可以切"。留着它就是假控件，数值还永远停在 `—`。
   onSingleLeg: (side: 'l' | 'r', liftHold: number) => {
     if (!booted) return;
     state.startBearer = side; state.liftHold = liftHold;

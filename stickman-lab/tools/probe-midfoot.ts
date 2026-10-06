@@ -20,6 +20,7 @@
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as bgNs from '@dimforge/rapier3d/rapier_wasm3d_bg.js';
+import { stateStance } from '../src/core/gaitState';
 
 const require = createRequire(import.meta.url);
 const { buildSkeleton, DEFAULT_CONFIG, jointIndexByName } = await import('../src/core/skeleton');
@@ -212,7 +213,7 @@ log('   判据：单支撑相里，内侧弓载荷应 ≈ 0（它离地），载
     sim.begin(new Float32Array(sim.paramCount));
     const ctrl = new Controller(s2, sim, {
       ...DEFAULT_CONTROLLER,
-      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: bearer, liftHold: 0 },
+      gait: { ...DEFAULT_CONTROLLER.gait, startBearer: bearer },
       balance: DEFAULT_CONTROLLER.balance,
     });
     const side = bearer === 'l' ? 0 : 1;
@@ -228,9 +229,9 @@ log('   判据：单支撑相里，内侧弓载荷应 ≈ 0（它离地），载
     for (let i = 0; i < dur * 120 && !sim.finished; i++) {
       if (i % 2 === 0) d.setMotorTargets(ctrl.step(1 / 60));
       sim.advance(1);
-      const ph = ctrl.snapshot.phase;
+      const ph = ctrl.snapshot.state;
       phaseCount[ph] = (phaseCount[ph] ?? 0) + 1;
-      if (ctrl.snapshot.stanceSingle) {
+      if (stateStance(ctrl.snapshot.state) === 'single') {
         singleTicks++;
         d.soleBlockLoad(side, blk);
         d.readCoP(side, cop);
@@ -299,7 +300,7 @@ log('        并且维持平衡，然后才能实现迈腿」—— 实测相位
     const s = ctrl.snapshot;
     sim.doll.jointRot(ANK_L, rv);
     const L = s.legs.l.loadFrac, R = s.legs.r.loadFrac;
-    log(`   ${(i / 120).toFixed(2).padStart(5)}s ${s.phase.padEnd(8)}`
+    log(`   ${(i / 120).toFixed(2).padStart(5)}s ${s.state.padEnd(8)}`
       + ` ${(L * 100).toFixed(0).padStart(4)}% ${(R * 100).toFixed(0).padStart(4)}%`
       + `  ${L > R ? 'L' : 'R'}     ${String(s.loadBearer ?? '—').padEnd(6)}`
       + ` ${(s.com.z * 1000).toFixed(0).padStart(5)}mm`
@@ -340,7 +341,7 @@ log('   实测目前只能到 ~28mm ⇒ 差 5~6 倍，这就是"进不了 SINGLE
       if (i > 40) {
         const sn = ctrl.snapshot;
         maxCom = Math.max(maxCom, Math.abs(sn.com.z));
-        if (sn.stanceSingle) single++;
+        if (stateStance(sn.state) === 'single') single++;
         d.soleXZ('l', sole); d.readCoP(0, cop);
         if (cop[3]! > 1) { if (have) slip += Math.hypot(sole[0]! - px, sole[2]! - pz); px = sole[0]!; pz = sole[2]!; have = true; }
       }
@@ -588,7 +589,7 @@ log('   逐个消融，看 γoff（负 = 沿不稳定流形发散）能不能变
         if (Math.abs(sn.qVip ?? 0) < 0.02 && tSettle === 0) tSettle = i / 120;
       }
     }
-    const r: [string, string, number, number, number, string] = [tag,
+    const r: [string, string, string, string, string] = [tag,
       isFinite(g / Math.max(1, n)) ? (g / Math.max(1, n)).toFixed(2) : '—',
       (on / Math.max(1, n) * 100).toFixed(0), qMax.toFixed(3),
       (sim.ticksDone / 60).toFixed(2) + 's ' + (sim.fallReason || '站住')];
@@ -646,7 +647,7 @@ log('   ★ 先验证 Rapier 是否真的在算切向冲量（占用恒 0% 可�
         + ` ${(fz * 1000).toFixed(0).padStart(8)} ${(cx * 1000).toFixed(0).padStart(9)}`
         + ` ${(cz * 1000).toFixed(0).padStart(9)} ${(v * 1000).toFixed(0).padStart(9)}`
         + ` ${(fr[1]! > 1e-6 ? (fr[0]! / (mu * fr[1]!) * 100).toFixed(0) + '%' : '—').padStart(8)}`
-        + ` ${fr[0]!.toFixed(4).padStart(7)} ${fr[1]!.toFixed(3).padStart(7)}  ${ctrl.snapshot.phase}`);
+        + ` ${fr[0]!.toFixed(4).padStart(7)} ${fr[1]!.toFixed(3).padStart(7)}  ${ctrl.snapshot.state}`);
     }
     pf.x = foot[0]!; pf.z = foot[2]!; pc.x = cx; pc.z = cz; t0 = i;
   }
@@ -783,7 +784,7 @@ log('══ N. ★★★ 逐帧追踪：重心转移 + 每个关节的工作 + �
         const med = cp[3]! > 0 ? ((cp[2]! - bb[2]!) * 1000).toFixed(0) : '—';
         const tmax0 = s2.joints[iHip]!.maxTorque[0]!;
         const dl = DEFAULT_CONTROLLER.balance.latHipDead ?? 0;
-        log(`   ${(tick / 60).toFixed(2).padStart(5)} ${sn.phase.padEnd(6)}`
+        log(`   ${(tick / 60).toFixed(2).padStart(5)} ${sn.state.padEnd(6)}`
           + ` ${(sn.legs.l.loadFrac * 100).toFixed(0).padStart(4)}%`
           + ` ${(sn.com.z * 1000).toFixed(0).padStart(6)}`
           + ` ${((foot[2]! - fz0) * 1000).toFixed(0).padStart(4)}`
@@ -797,7 +798,7 @@ log('══ N. ★★★ 逐帧追踪：重心转移 + 每个关节的工作 + �
       }
       sim.advance(1);
     }
-    log(`   ⇒ 存活 ${(sim.ticksDone / 60).toFixed(2)}s  死因=${sim.fallReason || '未倒'}  相位计数=${JSON.stringify(c2.snapshot.phase)}`);
+    log(`   ⇒ 存活 ${(sim.ticksDone / 60).toFixed(2)}s  死因=${sim.fallReason || '未倒'}  状态=${c2.snapshot.state}`);
   };
   FRAME('stand');
   log('');

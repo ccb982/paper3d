@@ -97,6 +97,31 @@ if (!jq) {
   else bad(`angleDeg 与物理值不一致：最大偏差 ${maxAng}`);
   if (maxVel < 1e-9) ok(`velDegPerSec 与物理值逐拍一致（最大偏差 ${maxVel.toExponential(1)}）`);
   else bad(`velDegPerSec 与物理值不一致：最大偏差 ${maxVel}`);
+
+  // ── ★ 遥测门禁：UI 显示的必须是**状态机的原话** ──────────────────
+  //   用户 2026-10-06：「我应该回读各种状态机的数据才对，所有的回读也是消费状态机的数据」。
+  //   本项目栽过四次"两套口径"（轴索引 / 符号 / 单位 / 帧域），
+  //   所以这里把"UI 只能渲染状态机遥测"变成**可执行的门禁**，而不是口头约定。
+  {
+    const rs = ctrl.rs;
+    const tm = rs.telemetry;
+    const problems: string[] = [];
+    if (tm.state !== rs.state) problems.push(`state ${tm.state} != rs.state ${rs.state}`);
+    if (!tm.stateLabel || tm.stateLabel === '—') problems.push('stateLabel 未填');
+    if (tm.stateT === '0.00' && rs.stateT > 0.05) problems.push(`stateT ${tm.stateT} 与 rs.stateT ${rs.stateT.toFixed(2)} 不符`);
+    if (rs.verified && tm.violations !== '') problems.push(`已验收却带越界文案「${tm.violations}」`);
+    if (!rs.verified && rs.violations.length > 0 && tm.violations === '') problems.push('有越界却没给 UI 文案');
+    if (rs.violations.length > 0 && !tm.verified.startsWith('✗')) problems.push(`verified 文案「${tm.verified}」与越界数不符`);
+    if (tm.jointsDeg.includes('—')) problems.push(`jointsDeg 缺值：${tm.jointsDeg}（网关没通）`);
+    if (!/^\d/.test(tm.loadFrac) && tm.loadFrac !== '—') problems.push(`loadFrac 格式异常：${tm.loadFrac}`);
+    if (tm.domainWorst === '—' || tm.domainWorst === 'NaN') problems.push(`domainWorst 异常：${tm.domainWorst}`);
+    if (problems.length === 0) {
+      ok(`遥测与状态机逐拍一致（UI 只渲染，不推导）：${tm.stateLabel} ${tm.stateT}s `
+        + `${tm.verified}｜承重 ${tm.bearerLoad} ${tm.loadFrac}｜越界 ${tm.domainWorst}°`);
+    } else {
+      for (const pr of problems) bad(`遥测不一致：${pr}`);
+    }
+  }
 }
 
 // ══ C. 符号实测 ═══════════════════════════════════════════════════

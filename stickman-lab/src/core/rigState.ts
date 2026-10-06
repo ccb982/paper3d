@@ -84,6 +84,56 @@ export interface Criteria {
  *   ⇒ 看门禁只能知道"卡住了"，没法知道"差哪一项、差多少"。
  *   ⇒ 每一项都必须能单独回答：**哪一项、当前值、门限**。
  */
+/**
+ * ★ 状态机遥测（UI 唯一数据源）。字段刻意做成**扁平 + 已格式化**，
+ * 让 UI 不需要知道单位、符号、也不需要自己判断"通过/未通过"。
+ */
+export interface StateTelemetry {
+  /** 状态标签（中文，来自 `STATE_LABEL`） */
+  stateLabel: string;
+  /** 状态枚举（`'DOUBLE' | 'LOAD' | 'PUSH' | 'LIFT' | 'SWING'`） */
+  state: WalkState;
+  /** 本状态驻留（s，2 位小数） */
+  stateT: string;
+  /** 验收结论：`✓ 全过` / `✗ N 项未过` / `[安全] 降级中` */
+  verified: string;
+  /** 承重腿 / 摆动腿（中文 左/右） */
+  support: string;
+  swing: string;
+  /** 接地数（只脚）+ 明细，如 `2 只 (左 右)` */
+  contact: string;
+  /** 承重腿载荷占比（百分比） */
+  bearerLoad: string;
+  /** 两条腿的载荷（百分比），如 `52 / 48` */
+  loadFrac: string;
+  /** 稳定裕度 MoS（mm） */
+  mos: string;
+  /** 躯干前/后倾（deg） */
+  pitch: string;
+  /** 躯干左/右倾（deg） */
+  roll: string;
+  /** 腰参考偏置权限 α（0..1，2 位小数） */
+  alpha: string;
+  /** 摆动腿离地净空（mm；未离地为 0） */
+  clearance: string;
+  /** 承接腿相对身体的矢状位置（腿长归一，3 位小数，SCONE 口径） */
+  sagRecv: string;
+  /** 状态内承接腿载荷峰值（百分比）—— 交接能力的上界 */
+  recvPeak: string;
+  /** 帧域最差越界（deg；0 = 全在域内） */
+  domainWorst: string;
+  /** 迈步许可（`stepPermit.all`） */
+  stepPermit: string;
+  /** 未通过的验收项（人话，空 = 全过），如 `承接腿承重 0.51/0.60` */
+  violations: string;
+  /** 角色标签（承重/前腿），由状态机指派 */
+  roles: string;
+  /** 关节角（经回读网关，deg）拼成的一行：`髋 -3.1° 膝 5.2° 踝 -1.0°` */
+  jointsDeg: string;
+  /** 安全态 */
+  safe: string;
+}
+
 export interface StateViolation {
   /** 所属状态（`rs.state`） */
   state: WalkState;
@@ -215,6 +265,22 @@ export interface RigSnapshot {
   lastMove: { from: WalkState; to: WalkState; verified: boolean; nViol: number } | null;
   /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
   stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number };
+  /**
+   * ★★ **状态机遥测**（UI 的**唯一**数据源）。
+   *
+   *   为什么要有这一块（用户 2026-10-06：「我应该回读各种状态机的数据才对，
+   *   所有的回读也是消费状态机的数据」）：
+   *     · 以前 UI 自己去 `rs` 上抓十几个量、各自算各自的"相/接地/MoS/倾角"，
+   *       于是**同一个物理量在 UI 与状态机里有两个口径** —— 本项目栽过四次
+   *       （轴索引、符号、单位、帧域）。UI 显示"验收通过"但状态机说没过，
+   *       或者反过来，人就不知道该信谁。
+   *     · 现在这块由 `gaitState` **每拍填写**，UI 只渲染，不再自己推导。
+   *       「相、验收、角色、越界、许可」全部是状态机的原话。
+   *
+   *   字段全是**已格式化好的字符串**：UI 不做单位换算、不做符号推断，
+   *   于是"UI 显示的"与"状态机判的"必然是同一件事。
+   */
+  telemetry: StateTelemetry;
   loadBearer: Side | null;
   supportLeg: Side;
   swingLeg: Side;
@@ -476,6 +542,14 @@ export class RigState {
   /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
   stateStats: { recvLoad: number; recvLoadN: number; sagRecv: number; sagRecvMin: number; sagRecvMax: number }
     = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+  /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
+  telemetry: StateTelemetry = {
+    stateLabel: '—', state: 'DOUBLE', stateT: '0.00', verified: '—',
+    support: '—', swing: '—', contact: '—', bearerLoad: '—', loadFrac: '—',
+    mos: '—', pitch: '—', roll: '—', alpha: '0.00', clearance: '0',
+    sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
+    violations: '', roles: '—', jointsDeg: '—', safe: '否',
+  };
 
   // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
   //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
@@ -1358,6 +1432,7 @@ export class RigState {
       safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
       lastMove: this.lastMove ? { ...this.lastMove } : null,
       stateStats: { ...this.stateStats },
+      telemetry: { ...this.telemetry },
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

@@ -63,7 +63,7 @@ const sim = new Sim(sk, SHAPE, { ...DEFAULT_SIM, mode: 'stand', duration: 8 });
 sim.begin(new Float32Array(sim.paramCount));
 const ctrl = new Controller(sk, sim, {
   ...DEFAULT_CONTROLLER,
-  gait: { ...DEFAULT_CONTROLLER.gait, startBearer: DEFAULT_LAB.startBearer, liftHold: DEFAULT_LAB.liftHold },
+  gait: { ...DEFAULT_CONTROLLER.gait, startBearer: DEFAULT_LAB.startBearer },
 });
 const dtC = 1 / sim.cfg.controlHz, dtP = 1 / sim.cfg.physicsHz;
 const stages = Math.max(1, Math.round(dtP / dtC));
@@ -77,7 +77,7 @@ const snap = ctrl.snapshot;
 const hud = new Hud({
   onPause() {}, onResetPopulation() {}, onRespawn() {}, onExport() {}, onImport() {},
   onGhost() {}, onJoints() {}, onTextures() {}, onSigma() {}, onBudget() {}, onSpeed() {},
-  onPhase() {}, onDriver() {}, onSingleLeg() {}, onDur() {}, onGaitTune() {},
+  onPhase() {}, onSingleLeg() {}, onDur() {}, onGaitTune() {},
   // ★ 这个以前**漏了** —— `HudHooks` 要求 `onAxisMarkers`，探针没提供。
   //   于是 UI 门禁**根本没覆盖方向标控件**（+X 前 / +Z 左 / -Z 右 那三个标记），
   //   而 typecheck 之前不检查 tools/ ⇒ 这个覆盖缺口一直没人发现。
@@ -88,7 +88,6 @@ hud.setOwnership(snap);
 
 const $ = (id: string): HTMLElement => document.getElementById(id) as HTMLElement;
 const txt = (id: string): string => ($(id).textContent ?? '').trim();
-import { PHASE_LABEL as PH } from '../src/core/gaitState';   // ★ 与 HUD 同一份，不再复制
 import type { Skeleton } from '../src/core/skeleton';
 
 /** 绑定姿态下某刚体的中心 z（**米**，与仿真帧无关）。用于校验轴约定。 */
@@ -98,7 +97,7 @@ function skBodyZ(sk: Skeleton, key: string): number {
 
 log('同源门禁 —— UI 与冒烟测试读同一个 RigSnapshot');
 log(`  配置 ${labHash(DEFAULT_LAB)}`);
-log(`  快照 tick=${snap.tick} t=${snap.t.toFixed(2)}s phase=${snap.phase} 承重=${snap.loadBearer ?? '-'}`);
+log(`  快照 tick=${snap.tick} t=${snap.t.toFixed(2)}s state=${snap.state} 承重=${snap.loadBearer ?? '-'}`);
 log(`  控制器本拍提需求数 = ${demand}（0 ⇒ 控制器没在控制）`);
 log('');
 log('-- UI 实际渲染 --');
@@ -116,23 +115,46 @@ for (const tr of Array.from(grid.querySelectorAll('tr')).slice(0, 6)) {
     + ` ${tds[4]?.textContent ?? ''}`);
 }
 log('');
-log('-- 断言 --');
+log('-- 断言：UI 必须**逐字**渲染 telemetry（不推导）--');
+const tm = snap.telemetry;
 check('控制器真的提了需求（≠0）', demand > 0, `${demand} 条`);
 check('需求全部落在真实关节上（badRequests=0）', ctrl.rs.badRequests === 0, `${ctrl.rs.badRequests}`);
 check('左腿卡非空', txt('own-role-l').length > 4, txt('own-role-l'));
 check('右腿卡非空', txt('own-role-r').length > 4, txt('own-role-r'));
-check('相位/接地/MoS/alpha 都非空',
-  txt('own-phase') !== '—' && txt('own-ground') !== '—' && txt('own-mos') !== '—' && txt('own-alpha') !== '—');
+// ★ 核心断言：这些字段**只允许**来自 telemetry，逐字相等。
+//   以前 UI 自己去快照抓量自己格式化，于是同一物理量有两套口径 ——
+//   本项目栽过四次（轴索引 / 符号 / 单位 / 帧域）。
+const verbatim: [string, string][] = [
+  ['own-phase', `${tm.stateLabel} ${tm.stateT}s`],
+  ['own-verified', tm.verified],
+  ['own-safe', `安全 ${tm.safe}`],
+  ['own-ground', tm.contact],
+  ['own-loadfrac', `${tm.loadFrac} %`],
+  ['own-sag', tm.sagRecv],
+  ['own-recvpeak', `${tm.recvPeak} %`],
+  ['own-domain', `${tm.domainWorst}°`],
+  ['own-permit', tm.stepPermit],
+  ['own-mos', `${tm.mos} mm`],
+  ['own-pitch', `${tm.pitch}°`],
+  ['own-roll', `${tm.roll}°`],
+  ['own-alpha', tm.alpha],
+  ['own-clr', `${tm.clearance} mm`],
+  ['own-joints', tm.jointsDeg],
+];
+for (const [id, want] of verbatim) {
+  check(`#${id} 逐字 === telemetry`, txt(id) === want, `UI「${txt(id)}」 vs 远测「${want}」`);
+}
+check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);
+check('未过项与状态机一致',
+  snap.violations.length === 0
+    ? txt('own-crit').includes('判据全过')
+    : txt('own-crit').includes(tm.violations.split('　')[0]!),
+  `${snap.violations.length} 项`);
 check('判据面板含承重/迈步', txt('own-crit').includes('承重') && txt('own-crit').includes('迈步'));
 check('网格 15 行（1 表头 + 14 部位）', grid.querySelectorAll('tr').length === 15);
 const colored = Array.from(grid.querySelectorAll('span')).filter((sp) => /sw-(hold|step|servo)/.test(sp.className));
 check('网格有归属着色', colored.length >= 4, `${colored.length} 格`);
 
-const uiMos = Number(txt('own-mos').replace(/[^0-9.\-]/g, ''));
-check('UI 的 MoS === 快照.mos', Math.abs(uiMos - snap.mos * 1000) < 1.5,
-  `UI ${uiMos} vs 快照 ${(snap.mos * 1000).toFixed(0)}`);
-check('UI 的相 === 快照.phase', txt('own-phase').startsWith(PH[snap.phase] ?? '?'));
-check('UI 的 alpha === 快照.authority', Math.abs(Number(txt('own-alpha')) - snap.authority) < 0.01);
 // ★ 轴约定自证：约定是 `+Z = 左`。
 //   ⚠ 必须用**绑定姿态**（t=0、未受力）来验证，**不能**用仿真中的某一帧：
 //     身体会偏航/倒地，live z 会翻（曾实测到右脚 z=+223mm），那是姿态不是约定。
@@ -150,10 +172,33 @@ check('UI 的 alpha === 快照.authority', Math.abs(Number(txt('own-alpha')) - s
     && Math.abs(Number(txtR) - snap.legs.r.footZ * 1000) < 1.5,
     `UI ${txtL}/${txtR} vs 快照 ${(snap.legs.l.footZ * 1000).toFixed(0)}/${(snap.legs.r.footZ * 1000).toFixed(0)}`);
 }
-check('承重腿卡与快照一致',
-  snap.loadBearer === null || (txt('own-role-l') + txt('own-role-r')).includes('★承重'));
+// ★ 承重腿以 **telemetry.roles**（状态机原话）为准。
+//   以前断言去两张腿卡里找 '★承重' 字样：跌倒时会出现
+//   「loadBearer=l 但该腿已离地 ⇒ 卡上写『摆动』」，断言就红了 ——
+//   那不是 UI 撒谎，是断言用错了口径（腿卡是物理诊断，承重腿是状态机角色）。
+check('承重腿 === 状态机角色', txt('own-gate').includes(tm.roles), `gate「${txt('own-gate')}」vs roles「${tm.roles}」`);
 
 hud.setOwnership(null);
 check('切到 ES 脑驱动时明确提示而非空白', txt('own-gate').includes('不是 controller'));
 log('');
+// ══ 静态门禁：UI 不得再出现"第二套口径" ══════════════════════════════
+log('');
+log('-- 静态门禁 --');
+{
+  const hudSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/ui/hud.ts'), 'utf8');
+  const htmlIds = new Set(Array.from(html.matchAll(/id="([\w-]+)"/g)).map((m) => m[1]!));
+  const wantIds = Array.from(hudSrc.matchAll(/\$\('([\w-]+)'\)/g)).map((m) => m[1]!);
+  const missing = wantIds.filter((i) => !htmlIds.has(i));
+  check(`hud.ts 引用的 ${wantIds.length} 个元素 id 全部存在于 index.html`, missing.length === 0,
+    missing.length ? `缺：${missing.join(', ')}` : '');
+
+  // ★ 反向门禁：UI 不得自己从快照里取"状态机已经算过的量"。
+  //   只允许 telemetry.*；d.criteria / d.forceChain / d.legs 是另外两类数据（判据明细与物理诊断）。
+  const banned = ['d.state', 'd.stateT', 'd.verified', 'd.violations', 'd.mos', 'd.pitchDeg',
+    'd.rollDeg', 'd.authority', 'd.swingClearance', 'd.phase'];
+  const used = banned.filter((b) => hudSrc.includes(b));
+  check('UI 不再自行推导状态机量（只读 telemetry.*）', used.length === 0,
+    used.length ? `仍直接读：${used.join(', ')}` : '');
+}
+
 log(fails === 0 ? '★ 全绿：UI 与冒烟测试同源' : `X ${fails} 项失败`);

@@ -17017,6 +17017,31 @@ var init_rigState = __esm({
       lastMove = null;
       /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
       stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+      /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
+      telemetry = {
+        stateLabel: "\u2014",
+        state: "DOUBLE",
+        stateT: "0.00",
+        verified: "\u2014",
+        support: "\u2014",
+        swing: "\u2014",
+        contact: "\u2014",
+        bearerLoad: "\u2014",
+        loadFrac: "\u2014",
+        mos: "\u2014",
+        pitch: "\u2014",
+        roll: "\u2014",
+        alpha: "0.00",
+        clearance: "0",
+        sagRecv: "\u2014",
+        recvPeak: "\u2014",
+        domainWorst: "0.0",
+        stepPermit: "\u2014",
+        violations: "",
+        roles: "\u2014",
+        jointsDeg: "\u2014",
+        safe: "\u5426"
+      };
       // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
       //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
       //   R1：`balance` / `step` 不得再直读 `pos`/`vel`/`angle()`/`jointVel()`
@@ -17953,6 +17978,7 @@ var init_rigState = __esm({
           cycleCount: this.cycleCount,
           lastMove: this.lastMove ? { ...this.lastMove } : null,
           stateStats: { ...this.stateStats },
+          telemetry: { ...this.telemetry },
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18179,6 +18205,10 @@ __export(gaitState_exports, {
 function stateStance(s) {
   return SCORING_TO_STANCE[STATE_TO_SCORING[s]];
 }
+function violationText(v) {
+  if (!Number.isFinite(v.value) || !Number.isFinite(v.tol)) return `${v.item} ${v.value}/${v.tol}`;
+  return `${v.item} ${v.value.toFixed(3)}/${v.tol > 0 ? "" : "-"}${Math.abs(v.tol).toFixed(3)}`;
+}
 function cdf(x) {
   const s = x < 0 ? -1 : 1;
   const z = Math.abs(x) / Math.SQRT2;
@@ -18206,7 +18236,7 @@ function checkDomains(rs, strict) {
 function phaseStance(s) {
   return stateStance(s);
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, PHASE_LABEL, LEG_CN, JIDX, VERIFY, GaitState, PHASE_TO_SCORING;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18268,6 +18298,7 @@ var init_gaitState = __esm({
       SWING: "\u6446\u52A8\u843D\u5730"
     };
     PHASE_LABEL = STATE_LABEL;
+    LEG_CN = { l: "\u5DE6", r: "\u53F3" };
     JIDX = { l: { hip: -1, knee: -1, foot: -1 }, r: { hip: -1, knee: -1, foot: -1 } };
     VERIFY = Object.freeze({
       // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
@@ -18646,6 +18677,42 @@ var init_gaitState = __esm({
           }
         }
         rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
+        {
+          const sup2 = rs.supportLeg();
+          const sw2 = rs.swingLeg();
+          const recv2 = rs.lastSwing ?? sw2;
+          const jd = (j, a) => {
+            const d = rs.jq ? rs.jq.angleDeg(j, a) : NaN;
+            return Number.isFinite(d) ? `${d.toFixed(1)}` : "\u2014";
+          };
+          rs.telemetry = {
+            state: rs.state,
+            stateLabel: STATE_LABEL[rs.state],
+            stateT: rs.stateT.toFixed(2),
+            verified: rs.safe ? "[\u5B89\u5168] \u964D\u7EA7\u4E2D" : rs.verified ? "\u2713 \u5168\u8FC7" : `\u2717 ${rs.violations.length} \u9879\u672A\u8FC7`,
+            support: LEG_CN[sup2],
+            swing: LEG_CN[sw2],
+            contact: `${rs.support.contactN} \u53EA` + (rs.support.contactN === 2 ? " (\u5DE6 \u53F3)" : rs.support.contactN === 1 ? ` (${LEG_CN[sup2]})` : " (\u65E0)"),
+            bearerLoad: `${(rs.loadFrac[sup2] * 100).toFixed(0)}%`,
+            loadFrac: `${(rs.loadFrac.l * 100).toFixed(0)} / ${(rs.loadFrac.r * 100).toFixed(0)}`,
+            mos: (rs.mos * 1e3).toFixed(1),
+            pitch: rs.pitchDeg.toFixed(1),
+            roll: rs.rollDeg.toFixed(1),
+            alpha: rs.authority.toFixed(2),
+            clearance: (Math.max(0, rs.swingClearance) * 1e3).toFixed(0),
+            sagRecv: rs.sagPosRel(recv2).toFixed(3),
+            recvPeak: (rs.stateStats.recvLoad * 100).toFixed(0),
+            domainWorst: Math.max(
+              rs.jq?.worstSupportErrDeg(false) ?? 0,
+              rs.jq?.worstSwingErrDeg(false) ?? 0
+            ).toFixed(1),
+            stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
+            violations: rs.violations.map(violationText).join("\u3000"),
+            roles: `${LEG_CN[sup2]}\u627F\u91CD \xB7 ${LEG_CN[sw2]}\u6446\u52A8`,
+            jointsDeg: `\u9ACB ${jd(`${sup2}_hip`, 0)}\xB0  \u819D ${jd(`${sw2}_knee`, 0)}\xB0  \u8E1D ${jd(`${sup2}_ankle`, 0)}\xB0`,
+            safe: rs.safe ? "\u662F" : "\u5426"
+          };
+        }
         rs.handoverCriteria = makeCriteria(flags, values);
         rs.handoverOk = rs.verified;
         rs.unlockCriteria = rs.stepPermit;
@@ -22151,9 +22218,9 @@ log('\u2550\u2550 G. \u5F52\u56E0\u5BF9\u7167\uFF08\u533A\u5206"\u5E73\u8861\u57
 {
   const a = run({}, SECS);
   const b = run({ ablate: "stepKeyframe" }, SECS);
-  log(`  \u9ED8\u8BA4\uFF08\u8FC8\u6B65\u5F00\uFF09      \u5B58\u6D3B ${secs(a.ticks)}s  \u5012=${a.fall || "\u65E0"}  \u5468\u671F ${a.trace.at(-1)?.cycles ?? 0}`);
-  log(`  \u8FC8\u6B65\u7CFB\u7EDF\u505C\u624B        \u5B58\u6D3B ${secs(b.ticks)}s  \u5012=${b.fall || "\u65E0"}  \u5468\u671F ${b.trace.at(-1)?.cycles ?? 0}`);
-  const cycA = a.trace.at(-1)?.cycles ?? 0;
+  log(`  \u9ED8\u8BA4\uFF08\u8FC8\u6B65\u5F00\uFF09      \u5B58\u6D3B ${secs(a.ticks)}s  \u5012=${a.fall || "\u65E0"}  \u5468\u671F ${a.trace[a.trace.length - 1]?.cycles ?? 0}`);
+  log(`  \u8FC8\u6B65\u7CFB\u7EDF\u505C\u624B        \u5B58\u6D3B ${secs(b.ticks)}s  \u5012=${b.fall || "\u65E0"}  \u5468\u671F ${b.trace[b.trace.length - 1]?.cycles ?? 0}`);
+  const cycA = a.trace[a.trace.length - 1]?.cycles ?? 0;
   if (cycA > 0 && b.ticks > a.ticks) {
     ok(`\u7ED3\u8BBA\uFF1A**\u8FC8\u6B65\u4E00\u542F\u52A8\u5C31\u5012**\uFF08\u5468\u671F ${cycA}\uFF0C\u505C\u624B\u540E\u591A\u6D3B ${secs(b.ticks - a.ticks)}s\uFF09 \u21D2 \u5E73\u8861\u5C1A\u4E0D\u80FD\u627F\u62C5\u5F53\u524D\u8FC8\u6B65\uFF0C\u5C5E P3/P4 \u5F85\u529E\uFF0C\u4E0D\u662F\u56DE\u8BFB\u6539\u52A8\u5F15\u8D77`);
   } else if (cycA === 0) {
@@ -22162,7 +22229,7 @@ log('\u2550\u2550 G. \u5F52\u56E0\u5BF9\u7167\uFF08\u533A\u5206"\u5E73\u8861\u57
     ok(`\u505C\u624B\u540E\u672A\u53D8\u5DEE\uFF08${secs(a.ticks)}s vs ${secs(b.ticks)}s\uFF09`);
   }
   const c = run({}, SECS, { minDwellSec: 1e9 });
-  log(`  \u72B6\u6001\u673A\u9489\u6B7B DOUBLE     \u5B58\u6D3B ${secs(c.ticks)}s  \u5012=${c.fall || "\u65E0"}  \u5468\u671F ${c.trace.at(-1)?.cycles ?? 0}`);
+  log(`  \u72B6\u6001\u673A\u9489\u6B7B DOUBLE     \u5B58\u6D3B ${secs(c.ticks)}s  \u5012=${c.fall || "\u65E0"}  \u5468\u671F ${c.trace[c.trace.length - 1]?.cycles ?? 0}`);
   if (c.ticks > a.ticks + CTRL_HZ * 0.5) {
     ok(`\u5F52\u56E0\uFF1A\u5012\u56E0\u662F**\u8FDB\u5165 LOAD \u6001**\uFF08\u9489\u6B7B DOUBLE \u540E\u591A\u6D3B ${secs(c.ticks - a.ticks)}s\uFF09 \u21D2 \u5E73\u8861\u7CFB\u7EDF\u5728 LOAD \u6001\u7684\u884C\u4E3A\u662F P4 \u7684\u5F85\u529E\uFF0C\u4E0E\u56DE\u8BFB/\u9A8C\u6536\u6539\u52A8\u65E0\u5173`);
   } else {

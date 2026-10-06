@@ -35,5 +35,11 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["node"]
   },
-  "include": ["tools/**/*.ts", "src/**/*.ts"]
+  //   2026-10-06：归档了 32 个一次性探针到 `tools/legacy/`（用户「90% 的探针无用」）。
+  //   它们**故意不修**：引用的是已经不存在的字段（`snapshot.phase`、`stanceSingle`…），
+  //   修它们等于把历史垃圾重新变成"看起来在维护"的代码。
+  //   ⇒ `exclude` 掉 legacy，让本门禁只对**活着的**探针生效（否则 169 个报错全是噪音，
+  //     真信号会被埋掉 —— 这本身就是当初要立这个门禁的原因）。
+  "include": ["tools/**/*.ts", "src/**/*.ts"],
+  "exclude": ["tools/legacy/**"]
 }

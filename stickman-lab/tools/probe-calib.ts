@@ -51,8 +51,8 @@ const DT = 1 / CTRL_HZ;
 const SECS = Number(process.env.PD_SECS ?? 20);
 
 /** 在状态内维护承接腿载荷峰值（收尾时直接取） */
-function peakOf(st: St, v: number): number {
-  st._peak = Math.max(st._peak, v);
+function peakOf(st: St, v = Number.NEGATIVE_INFINITY): number {
+  if (Number.isFinite(v)) st._peak = Math.max(st._peak, v);
   return st._peak;
 }
 const q = (a: number[], p: number): number => {
@@ -91,7 +91,7 @@ for (let i = 0; i < Math.round(SECS * PHYS_HZ) && !sim.finished; i++) {
     //   ⇒ 必须用 `stats[cur]` 收尾，再切 `cur`（否则驻留/峰值会错位一态）。
     if (rs.state !== cur) {
       const old = stats[cur];
-      if (old.n > 0) { old.dwell.push(ticks); old.peakRecvLoad.push(old.n === 0 ? 0 : peakOf(old)); }
+      if (old.n > 0) { old.dwell.push(ticks); old.peakRecvLoad.push(peakOf(old)); }
       cur = rs.state; ticks = 0;
     }
     const st = stats[rs.state];

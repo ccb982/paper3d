@@ -17008,6 +17008,31 @@ var init_rigState = __esm({
       lastMove = null;
       /** 本状态内的极值/均值统计（标定与诊断用；进态时由状态机清零） */
       stateStats = { recvLoad: 0, recvLoadN: 0, sagRecv: 0, sagRecvMin: 0, sagRecvMax: 0 };
+      /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
+      telemetry = {
+        stateLabel: "\u2014",
+        state: "DOUBLE",
+        stateT: "0.00",
+        verified: "\u2014",
+        support: "\u2014",
+        swing: "\u2014",
+        contact: "\u2014",
+        bearerLoad: "\u2014",
+        loadFrac: "\u2014",
+        mos: "\u2014",
+        pitch: "\u2014",
+        roll: "\u2014",
+        alpha: "0.00",
+        clearance: "0",
+        sagRecv: "\u2014",
+        recvPeak: "\u2014",
+        domainWorst: "0.0",
+        stepPermit: "\u2014",
+        violations: "",
+        roles: "\u2014",
+        jointsDeg: "\u2014",
+        safe: "\u5426"
+      };
       // ── 关节回读网关（**唯一**对外读关节的入口，见 `jointQuery.ts` / 文档 §18）──
       //   由 `Controller` 注入 `GaitState.query`：**只读、无 setter、不含 request***。
       //   R1：`balance` / `step` 不得再直读 `pos`/`vel`/`angle()`/`jointVel()`
@@ -17944,6 +17969,7 @@ var init_rigState = __esm({
           cycleCount: this.cycleCount,
           lastMove: this.lastMove ? { ...this.lastMove } : null,
           stateStats: { ...this.stateStats },
+          telemetry: { ...this.telemetry },
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18150,6 +18176,10 @@ var init_jointQuery = __esm({
 });
 
 // src/core/gaitState.ts
+function violationText(v) {
+  if (!Number.isFinite(v.value) || !Number.isFinite(v.tol)) return `${v.item} ${v.value}/${v.tol}`;
+  return `${v.item} ${v.value.toFixed(3)}/${v.tol > 0 ? "" : "-"}${Math.abs(v.tol).toFixed(3)}`;
+}
 function cdf(x) {
   const s = x < 0 ? -1 : 1;
   const z = Math.abs(x) / Math.SQRT2;
@@ -18174,7 +18204,7 @@ function checkDomains(rs, strict) {
     looseBad: looseWorst > 0 ? 1 : 0
   };
 }
-var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, JIDX, VERIFY, GaitState;
+var DEG2, DEFAULT_STEP_INTERVAL, STEP_CYCLE_SEC, DEFAULT_GAIT_CONFIG, STATE_ORDER, STATE_TO_SCORING, SCORING_TO_STANCE, STATE_LABEL, LEG_CN, JIDX, VERIFY, GaitState;
 var init_gaitState = __esm({
   "src/core/gaitState.ts"() {
     "use strict";
@@ -18235,6 +18265,7 @@ var init_gaitState = __esm({
       LIFT: "\u62AC\u817F\u79BB\u5730",
       SWING: "\u6446\u52A8\u843D\u5730"
     };
+    LEG_CN = { l: "\u5DE6", r: "\u53F3" };
     JIDX = { l: { hip: -1, knee: -1, foot: -1 }, r: { hip: -1, knee: -1, foot: -1 } };
     VERIFY = Object.freeze({
       // ── DOUBLE → LOAD：真双支撑 + 站得住 ────────────────────────────
@@ -18613,6 +18644,42 @@ var init_gaitState = __esm({
           }
         }
         rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
+        {
+          const sup2 = rs.supportLeg();
+          const sw2 = rs.swingLeg();
+          const recv2 = rs.lastSwing ?? sw2;
+          const jd = (j, a) => {
+            const d = rs.jq ? rs.jq.angleDeg(j, a) : NaN;
+            return Number.isFinite(d) ? `${d.toFixed(1)}` : "\u2014";
+          };
+          rs.telemetry = {
+            state: rs.state,
+            stateLabel: STATE_LABEL[rs.state],
+            stateT: rs.stateT.toFixed(2),
+            verified: rs.safe ? "[\u5B89\u5168] \u964D\u7EA7\u4E2D" : rs.verified ? "\u2713 \u5168\u8FC7" : `\u2717 ${rs.violations.length} \u9879\u672A\u8FC7`,
+            support: LEG_CN[sup2],
+            swing: LEG_CN[sw2],
+            contact: `${rs.support.contactN} \u53EA` + (rs.support.contactN === 2 ? " (\u5DE6 \u53F3)" : rs.support.contactN === 1 ? ` (${LEG_CN[sup2]})` : " (\u65E0)"),
+            bearerLoad: `${(rs.loadFrac[sup2] * 100).toFixed(0)}%`,
+            loadFrac: `${(rs.loadFrac.l * 100).toFixed(0)} / ${(rs.loadFrac.r * 100).toFixed(0)}`,
+            mos: (rs.mos * 1e3).toFixed(1),
+            pitch: rs.pitchDeg.toFixed(1),
+            roll: rs.rollDeg.toFixed(1),
+            alpha: rs.authority.toFixed(2),
+            clearance: (Math.max(0, rs.swingClearance) * 1e3).toFixed(0),
+            sagRecv: rs.sagPosRel(recv2).toFixed(3),
+            recvPeak: (rs.stateStats.recvLoad * 100).toFixed(0),
+            domainWorst: Math.max(
+              rs.jq?.worstSupportErrDeg(false) ?? 0,
+              rs.jq?.worstSwingErrDeg(false) ?? 0
+            ).toFixed(1),
+            stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
+            violations: rs.violations.map(violationText).join("\u3000"),
+            roles: `${LEG_CN[sup2]}\u627F\u91CD \xB7 ${LEG_CN[sw2]}\u6446\u52A8`,
+            jointsDeg: `\u9ACB ${jd(`${sup2}_hip`, 0)}\xB0  \u819D ${jd(`${sw2}_knee`, 0)}\xB0  \u8E1D ${jd(`${sup2}_ankle`, 0)}\xB0`,
+            safe: rs.safe ? "\u662F" : "\u5426"
+          };
+        }
         rs.handoverCriteria = makeCriteria(flags, values);
         rs.handoverOk = rs.verified;
         rs.unlockCriteria = rs.stepPermit;
@@ -22051,6 +22118,25 @@ if (!jq) {
   else bad(`angleDeg \u4E0E\u7269\u7406\u503C\u4E0D\u4E00\u81F4\uFF1A\u6700\u5927\u504F\u5DEE ${maxAng}`);
   if (maxVel < 1e-9) ok(`velDegPerSec \u4E0E\u7269\u7406\u503C\u9010\u62CD\u4E00\u81F4\uFF08\u6700\u5927\u504F\u5DEE ${maxVel.toExponential(1)}\uFF09`);
   else bad(`velDegPerSec \u4E0E\u7269\u7406\u503C\u4E0D\u4E00\u81F4\uFF1A\u6700\u5927\u504F\u5DEE ${maxVel}`);
+  {
+    const rs = ctrl.rs;
+    const tm = rs.telemetry;
+    const problems = [];
+    if (tm.state !== rs.state) problems.push(`state ${tm.state} != rs.state ${rs.state}`);
+    if (!tm.stateLabel || tm.stateLabel === "\u2014") problems.push("stateLabel \u672A\u586B");
+    if (tm.stateT === "0.00" && rs.stateT > 0.05) problems.push(`stateT ${tm.stateT} \u4E0E rs.stateT ${rs.stateT.toFixed(2)} \u4E0D\u7B26`);
+    if (rs.verified && tm.violations !== "") problems.push(`\u5DF2\u9A8C\u6536\u5374\u5E26\u8D8A\u754C\u6587\u6848\u300C${tm.violations}\u300D`);
+    if (!rs.verified && rs.violations.length > 0 && tm.violations === "") problems.push("\u6709\u8D8A\u754C\u5374\u6CA1\u7ED9 UI \u6587\u6848");
+    if (rs.violations.length > 0 && !tm.verified.startsWith("\u2717")) problems.push(`verified \u6587\u6848\u300C${tm.verified}\u300D\u4E0E\u8D8A\u754C\u6570\u4E0D\u7B26`);
+    if (tm.jointsDeg.includes("\u2014")) problems.push(`jointsDeg \u7F3A\u503C\uFF1A${tm.jointsDeg}\uFF08\u7F51\u5173\u6CA1\u901A\uFF09`);
+    if (!/^\d/.test(tm.loadFrac) && tm.loadFrac !== "\u2014") problems.push(`loadFrac \u683C\u5F0F\u5F02\u5E38\uFF1A${tm.loadFrac}`);
+    if (tm.domainWorst === "\u2014" || tm.domainWorst === "NaN") problems.push(`domainWorst \u5F02\u5E38\uFF1A${tm.domainWorst}`);
+    if (problems.length === 0) {
+      ok(`\u9065\u6D4B\u4E0E\u72B6\u6001\u673A\u9010\u62CD\u4E00\u81F4\uFF08UI \u53EA\u6E32\u67D3\uFF0C\u4E0D\u63A8\u5BFC\uFF09\uFF1A${tm.stateLabel} ${tm.stateT}s ${tm.verified}\uFF5C\u627F\u91CD ${tm.bearerLoad} ${tm.loadFrac}\uFF5C\u8D8A\u754C ${tm.domainWorst}\xB0`);
+    } else {
+      for (const pr of problems) bad(`\u9065\u6D4B\u4E0D\u4E00\u81F4\uFF1A${pr}`);
+    }
+  }
 }
 log("");
 log("== C. \u7B26\u53F7\u5B9E\u6D4B\uFF0840ms \u7A97\u53E3\uFF0C\u770B\u89E3\u5256\u65B9\u5411\uFF09==");

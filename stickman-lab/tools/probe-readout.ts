@@ -167,7 +167,7 @@ for (let i = 0; i < nTicks && !sim.finished; i++) {
       sim.doll.jointRot(jj, TMPJ);
       ang[jj * 3] = TMPJ[0]!; ang[jj * 3 + 1] = TMPJ[1]!; ang[jj * 3 + 2] = TMPJ[2]!;
     }
-    spineTrace.push({ t: i / PHYS_HZ, ang, tau: Float32Array.from(ctrl.rs.tauOut) });
+    spineTrace.push({ t: i / PHYS_HZ, ang, tau: Float64Array.from(ctrl.rs.tauOut) });
   }
   k++;
 }

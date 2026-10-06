@@ -201,6 +201,14 @@ export const STATE_LABEL: Record<WalkState, string> = {
 /** 兼容别名（旧名，2026-10-06 改名；保留给旧日志/旧探针读） */
 export const PHASE_LABEL = STATE_LABEL;
 
+const LEG_CN: Record<Side, string> = { l: '左', r: '右' };
+
+/** 越界项 → 人话（给 UI 用的**唯一**措辞表，避免 UI 自己拼字符串） */
+function violationText(v: StateViolation): string {
+  if (!Number.isFinite(v.value) || !Number.isFinite(v.tol)) return `${v.item} ${v.value}/${v.tol}`;
+  return `${v.item} ${v.value.toFixed(3)}/${v.tol > 0 ? '' : '-'}${Math.abs(v.tol).toFixed(3)}`;
+}
+
 /** 正常正态 CDF（把硬阈值软化成连续权限用） */
 function cdf(x: number): number {
   const s = x < 0 ? -1 : 1;
@@ -620,6 +628,45 @@ export class GaitState {
 
     // ── α(t)：腰的修正权限预算（**不是**迁移判据）────────────────
     rs.authority = smoothAuthority(rs.state, rs.stateT, cfg.authorityRamp, cfg.alphaSigma);
+
+    // ── ★ 状态机遥测：UI 的**唯一**数据源 ────────────────────────
+    //   UI 不再自己去 `rs` 抓量、自己算单位/符号/通过与否（那等于第二套口径）。
+    //   这里把"状态机眼里的世界"拍平成已格式化字符串交给 UI。
+    {
+      const sup = rs.supportLeg();
+      const sw = rs.swingLeg();
+      const recv2 = rs.lastSwing ?? sw;
+      const jd = (j: string, a: 0 | 1 | 2): string => {
+        const d = rs.jq ? rs.jq.angleDeg(j, a) : NaN;
+        return Number.isFinite(d) ? `${d.toFixed(1)}` : '—';
+      };
+      rs.telemetry = {
+        state: rs.state,
+        stateLabel: STATE_LABEL[rs.state],
+        stateT: rs.stateT.toFixed(2),
+        verified: rs.safe ? '[安全] 降级中' : rs.verified ? '✓ 全过' : `✗ ${rs.violations.length} 项未过`,
+        support: LEG_CN[sup],
+        swing: LEG_CN[sw],
+        contact: `${rs.support.contactN} 只`
+          + (rs.support.contactN === 2 ? ' (左 右)' : rs.support.contactN === 1 ? ` (${LEG_CN[sup]})` : ' (无)'),
+        bearerLoad: `${(rs.loadFrac[sup] * 100).toFixed(0)}%`,
+        loadFrac: `${(rs.loadFrac.l * 100).toFixed(0)} / ${(rs.loadFrac.r * 100).toFixed(0)}`,
+        mos: (rs.mos * 1000).toFixed(1),
+        pitch: rs.pitchDeg.toFixed(1),
+        roll: rs.rollDeg.toFixed(1),
+        alpha: rs.authority.toFixed(2),
+        clearance: (Math.max(0, rs.swingClearance) * 1000).toFixed(0),
+        sagRecv: rs.sagPosRel(recv2).toFixed(3),
+        recvPeak: (rs.stateStats.recvLoad * 100).toFixed(0),
+        domainWorst: Math.max(
+          rs.jq?.worstSupportErrDeg(false) ?? 0, rs.jq?.worstSwingErrDeg(false) ?? 0).toFixed(1),
+        stepPermit: rs.stepPermit.all ? '放行' : '拦',
+        violations: rs.violations.map(violationText).join('　'),
+        roles: `${LEG_CN[sup]}承重 · ${LEG_CN[sw]}摆动`,
+        jointsDeg: `髋 ${jd(`${sup}_hip`, 0)}°  膝 ${jd(`${sw}_knee`, 0)}°  踝 ${jd(`${sup}_ankle`, 0)}°`,
+        safe: rs.safe ? '是' : '否',
+      };
+    }
 
     // 判据快照（UI 用；`handover` 这一项现在是「重量交接」的逐项明细）
     rs.handoverCriteria = makeCriteria(flags, values);

@@ -58,7 +58,7 @@ function sweep(iters: number, physHz: number): R {
   const lams: number[] = [], vys: number[] = [], ncs: number[] = [];
   const NF = Math.round(physHz * 0.8), skip = Math.round(physHz * 0.35);
   for (let f = 0; f < NF; f++) {
-    sim.motor.set(ctrl.step(2 / physHz));
+    (sim as unknown as { motor: { set(v: Float32Array): void } }).motor.set(ctrl.step(2 / physHz));
     sim.advance(1);
     if (f < skip) continue;
     let lam = 0, nc = 0;

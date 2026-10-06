@@ -64,7 +64,7 @@ log('');
 log('══ A. 静态站立：F_y 必须 ≈ m·g，且不是"没人管它"══');
 {
   const cs = mkCs();
-  const o = solveGrfQp({ contacts: bothFeet(), cs, aDesX: 0, aDesY: 0, aDesZ: 0, dhDes: null });
+  const o = solveGrfQp({ contacts: bothFeet(), cs, aDesX: 0, aDesY: 0, aDesZ: 0 });
   const fy = o.fTotal[1];
   const want = M * G;
   log(`   期望 F_y = m·g = ${want.toFixed(1)} N`);
@@ -119,7 +119,7 @@ log('══ B. 水平力的代价：CoP 必须搬进支撑多边形内 ══');
   }
 
   // 水平力过大 ⇒ CoP 跑出支撑面 ⇒ 必须报 infeasible 而不是硬给
-  const big = solveGrfQp({ contacts: bothFeet(), cs, aDesX: 30, aDesY: 0, aDesZ: 0, dhDes: null });
+  const big = solveGrfQp({ contacts: bothFeet(), cs, aDesX: 30, aDesY: 0, aDesZ: 0 });
   log(`   a_des = (+30, 0, 0) m/s² ⇒  F_x = ${big.fTotal[0].toFixed(0)} N`
     + `  ZMP_x = ${big.zmp[0].toFixed(3)} m  feasible=${big.feasible ? '✓' : '✗'}`
     + `  checks=${JSON.stringify(big.checks)}`);
@@ -134,7 +134,7 @@ log('══ C. 单支撑：摆动脚必须 f_y ≡ 0，不能"分到一点载荷
   const cs = mkCs();
   const c = bothFeet();
   c[1]!.active = false;                 // 右脚离地
-  const o = solveGrfQp({ contacts: c, cs, aDesX: 0, aDesY: 0, aDesZ: 0, dhDes: null });
+  const o = solveGrfQp({ contacts: c, cs, aDesX: 0, aDesY: 0, aDesZ: 0 });
   const fySwing = o.lambda[6]!;   // 右脚 f_y = lambda[5*1+1]
   log(`   摆动脚 f_y = ${fySwing.toFixed(6)} N   支撑脚 f_y = ${o.lambda[1]!.toFixed(1)} N`);
   if (Math.abs(fySwing) < 1e-6) ok('摆动脚 f_y ≡ 0（单边约束硬生效）');
@@ -183,7 +183,7 @@ log('══ E. 退化必须显式报出：f_y ≈ 0 ⇒ ZMP 无定义 ══');
   const cs = mkCs();
   const c = bothFeet();
   c[0]!.active = false; c[1]!.active = false;    // 双脚都离地（腾空）
-  const o = solveGrfQp({ contacts: c, cs, aDesX: 0, aDesY: -G, aDesZ: 0, dhDes: null });
+  const o = solveGrfQp({ contacts: c, cs, aDesX: 0, aDesY: -G, aDesZ: 0 });
   log(`   腾空（a_des_y = −g ⇒ 自由落体）⇒  F_y = ${o.fTotal[1].toFixed(3)} N`
     + `   ZMP = (${o.zmp[0]}, ${o.zmp[1]})`);
   if (Number.isNaN(o.zmp[0])) ok('ZMP 报 NaN（无 f_y ⇒ CoP 无定义），而不是静默给 0');

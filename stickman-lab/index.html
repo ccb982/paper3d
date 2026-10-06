@@ -36,8 +36,26 @@
         backdrop-filter: blur(6px);
       }
 
+      /* ---- ★ 左侧栏：把 stats / own / diag / boot 竖排在一列里 ----
+         为什么必须这样（用户 2026-10-06：「很多 ui 是互相遮挡的」）：
+           原来三个面板各自 `position: fixed` + 写死 `top`：
+             #stats  left:12 top:12  ← 高度**随内容变**（含 74px 图表）
+             #own    left:12 top:300 ← 写死 300
+           `#stats` 一旦超过 288px 就压到 `#own` 上；`#diag` 更是**完全没有
+           定位规则**，于是按 static 位置落在中间，挡住 3D 画面和别的面板。
+           写死的 top 是"当前内容高度恰好对"的巧合，不是布局。
+         ⇒ 改成**一个 flex 列容器**：面板在栏内 `position: static`，
+           谁都不可能重叠；栏本身可滚动 ⇒ 面板再多也够得着。 */
+      #rail {
+        position: fixed; left: 12px; top: 12px; bottom: 12px; width: 344px;
+        display: flex; flex-direction: column; gap: 10px;
+        overflow-y: auto; overscroll-behavior: contain; z-index: 10;
+        pointer-events: none;           /* 空白处不挡 3D 画面的拖拽 */
+      }
+      #rail > .panel { position: static; width: 100%; flex: 0 0 auto; pointer-events: auto; }
+
       /* ---- 左上：统计 ---- */
-      #stats { left: 12px; top: 12px; width: 320px; padding: 10px 12px; }
+      #stats { padding: 10px 12px; }
       #stats h1 {
         margin: 0 0 8px; font-size: 13px; letter-spacing: .04em;
         display: flex; align-items: baseline; gap: 8px;
@@ -71,16 +89,26 @@
       button[data-on="1"] { background: var(--accent); border-color: var(--accent); color: #fff; }
       button.wide { flex: 1 0 100%; }
 
+      /* ---- 物理诊断（栏内第三块）---- */
+      #diag { padding: 9px 11px; font-size: 11px; }
+
       /* ---- 左下：状态条 ---- */
-      #boot {
-        left: 12px; bottom: 12px; padding: 7px 12px; color: var(--ink-dim);
+      #boot { padding: 7px 12px; color: var(--ink-dim); }
+
+      /* ES 训练控件：默认收起（见 index.html 里的说明） */
+      #ctrl details.es-only { margin: 8px 0; }
+      #ctrl details.es-only > summary {
+        cursor: pointer; font-size: 10.5px; color: var(--ink-dim);
+        padding: 4px 6px; border-radius: 5px; background: rgba(30,41,59,.05);
+        list-style: none;
       }
+      #ctrl details.es-only > summary::-webkit-details-marker { display: none; }
+      #ctrl details.es-only > summary::before { content: '\25b8 '; }
+      #ctrl details.es-only[open] > summary::before { content: '\25be '; }
+      #ctrl details.es-only[open] > summary { margin-bottom: 4px; }
 
       /* ── 「模块归属」面板 ───────────────────────────────────────── */
-      #own {
-        left: 12px; top: 300px; width: 340px; padding: 9px 11px;
-        font-size: 11px; max-height: 46vh; overflow-y: auto;
-      }
+      #own { padding: 9px 11px; font-size: 11px; }
       #own h2 { margin: 0 0 7px; font-size: 11px; display: flex; gap: 6px; align-items: baseline; }
       #own h2 small { font-weight: 400; color: var(--ink-dim); font-size: 10px; }
       /* 轴约定图例：常驻显示，左右靠颜色与箭头区分 */
@@ -135,6 +163,16 @@
         font-weight: 600; }
       /* 「命令大但速率≈0」= 力没作用到重心 → 标红，这是本面板最重要的一行 */
       #own .own-ct-t tr.stall td.v { color: #b91c1c; }
+      /* 状态行：相 + 验收 + 安全。UI 唯一数据源是 rs.telemetry，样式不参与判断 */
+      .own-state {
+        display: flex; align-items: baseline; gap: 8px; margin-bottom: 7px;
+        padding: 5px 7px; border-radius: 5px; background: #f7f7f9; border: 1px solid #e6e6ea;
+      }
+      .own-state b { font-size: 13px; }
+      .own-state span { font-size: 11px; font-weight: 600; color: #b03030; }
+      .own-state span[data-ok="1"] { color: #1a7f37; }
+      .own-state i { margin-left: auto; font-size: 10px; color: var(--ink-dim); font-style: normal; }
+      .own-v.mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 9.5px; letter-spacing: -0.2px; }
       .own-roles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 7px; }
       .own-role {
         border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px;
@@ -185,24 +223,19 @@
   <body>
     <canvas id="view"></canvas>
 
-    <div class="panel" id="stats">
-      <h1>火柴人实验室 <em>stickman-lab</em></h1>
-      <div class="row"><span>阶段</span><b id="s-stage">—</b></div>
-      <div class="row"><span>代数</span><b id="s-gen">0</b></div>
-      <div class="row"><span>个体</span><b id="s-pop">0</b></div>
-      <div class="sep"></div>
-      <div class="row"><span>当代最佳</span><b id="s-best">—</b></div>
-      <div class="row"><span>历史最佳</span><b id="s-top">—</b></div>
-      <div class="row"><span>展示对象</span><b id="s-show">—</b></div>
-      <div class="sep"></div>
-      <div class="row"><span>训练速度</span><b id="s-tps">—</b></div>
-      <div class="row"><span>帧内预算</span><b id="s-budget">—</b></div>
-      <canvas id="chart" width="600" height="150"></canvas>
-    </div>
-
     <div class="panel" id="ctrl">
       <h2>控制台</h2>
 
+      <!-- ══ ES 训练控件（折叠）═════════════════════════════════════
+           ★ 为什么折叠（用户 2026-10-06：「这个面板也是 80% 的按钮无用了吧」）：
+             真正在跑的驱动源只有**手写状态机控制器**，而 σ / 物理预算 / 11 项
+             奖励权重只喂给 **ES 训练器**（`trainer.applyWalkWeights`）。
+             在 teacher 驱动下拖它们，**画面上什么都不会变** ——
+             不是坏了，是根本不在这条链路上。
+             ⇒ 默认收起；要训练时再展开，而不是让 11 个滑块常驻占屏
+               （常驻还挤压别的面板，用户报"UI 互相遮挡"）。 -->
+      <details class="es-only">
+        <summary>ES 训练（当前驱动不生效）</summary>
       <label>变异强度 σ <b id="v-sigma">—</b></label>
       <input id="i-sigma" type="range" min="0.02" max="0.6" step="0.01" />
 
@@ -217,19 +250,19 @@
            此前这里是二值的 walk/fight，导致 stand 在网页上根本选不到。 -->
       <input id="i-speedgoal" type="range" min="0" max="2" step="1" value="1" />
 
-      <label>驱动源 <b id="v-driver">—</b></label>
-      <input id="i-driver" type="range" min="0" max="1" step="1" value="1" />
-
       <label>支撑腿（单腿站立） <b id="v-singleleg">—</b></label>
       <input id="i-singleleg" type="range" min="0" max="2" step="1" value="0" />
 
       <label>摆动腿抬高 (m) <b id="v-lifthold">—</b></label>
       <input id="i-lifthold" type="range" min="0.05" max="0.5" step="0.01" value="0.25" />
 
+      </details>
+
       <label>回合时长 (s) <b id="v-dur">—</b></label>
       <input id="i-dur" type="range" min="2" max="30" step="1" value="8" />
 
-      <h2>走路奖励（walkReward.ts 的 11 项）</h2>
+      <details class="es-only">
+        <summary>走路奖励权重（walkReward.ts 的 11 项 · ES 训练用）</summary>
 
       <label>速度跟踪 v*=0.5 m/s <b id="v-veltrack">—</b></label>
       <input id="i-veltrack" type="range" min="0" max="4" step="0.1" value="1" />
@@ -257,10 +290,10 @@
       <input id="i-mknee_l" type="range" min="0" max="3" step="0.1" value="1" />
       <label>膝盖右·要动 <b id="v-mknee_r">—</b></label>
       <input id="i-mknee_r" type="range" min="0" max="3" step="0.1" value="1" />
+      </details>
 
       <div class="btns">
         <button id="b-pause">暂停</button>
-        <button id="b-driver">切换驱动源</button>
         <button id="b-reset">重开种群</button>
         <button id="b-respawn">重开当前</button>
         <button id="b-export">导出基因组</button>
@@ -281,33 +314,78 @@
             并标出前腿 / 后腿 / 承重腿（用户 2026-10-03）。
             数据源：`TeacherSession.diag`（teacher.ts 每拍刷新）。
          ══════════════════════════════════════════════════════════════ -->
-    <div class="panel" id="own">
-      <h2>模块归属<small>平衡维持 / 迈步 · 前后腿</small></h2>
+    <div id="rail">
+    <div class="panel" id="stats">
+      <h1>火柴人实验室 <em>stickman-lab</em></h1>
+      <div class="row"><span>阶段</span><b id="s-stage">—</b></div>
+      <div class="row"><span>代数</span><b id="s-gen">0</b></div>
+      <div class="row"><span>个体</span><b id="s-pop">0</b></div>
+      <div class="sep"></div>
+      <div class="row"><span>当代最佳</span><b id="s-best">—</b></div>
+      <div class="row"><span>历史最佳</span><b id="s-top">—</b></div>
+      <div class="row"><span>展示对象</span><b id="s-show">—</b></div>
+      <div class="sep"></div>
+      <div class="row"><span>训练速度</span><b id="s-tps">—</b></div>
+      <div class="row"><span>帧内预算</span><b id="s-budget">—</b></div>
+      <canvas id="chart" width="600" height="150"></canvas>
+    </div>
 
+    <div class="panel" id="own">
+      <h2>状态机<small>唯一数据源 · 平衡维持 / 迈步 · 前后腿</small></h2>
+
+      <!-- ★★ 全部数值来自 `rs.telemetry`（由 gaitState 每拍填写）。
+           UI **不做任何推导**：不换算单位、不推断符号、不自己判断通过与否。
+           以前 UI 自己去 rs 抓十几个量各自算，于是同一个物理量有两套口径 ——
+           本项目栽过四次（轴索引 / 符号 / 单位 / 帧域），
+           于是"UI 说过了、状态机说没过"，没人知道该信谁。现在只有一个口径。 -->
+
+      <!-- 状态本体：相 + 驻留 + 验收结论（这一行就是"现在在哪、能不能往下走"） -->
+      <div class="own-state" id="own-state">
+        <b id="own-phase">—</b>
+        <span id="own-verified">—</span>
+        <i id="own-safe">安全 否</i>
+      </div>
+
+      <!-- 角色：状态机指派的承重/摆动（不由几何 |Δx| 猜） -->
       <div class="own-roles">
         <div class="own-role" id="own-role-l"><b>左腿</b><span>—</span></div>
         <div class="own-role" id="own-role-r"><b>右腿</b><span>—</span></div>
       </div>
 
+      <!-- 载荷与接地：交接能力的直接读数（阈值 0.60 就是拿这个量的峰值反标的） -->
       <div class="own-bar">
-        <span class="own-k">相</span><span class="own-v" id="own-phase">—</span>
         <span class="own-k">接地</span><span class="own-v" id="own-ground">—</span>
-        <span class="own-k">MoS</span><span class="own-v" id="own-mos">—</span>
+        <span class="own-k">载荷 左/右</span><span class="own-v" id="own-loadfrac">—</span>
       </div>
-      <!-- 倾角**按平面分开**显示。只看一个合成的倾角大小，分不出
-           是「腰向前折」还是「向侧倒」（用户 2026-10-03 指出这个盲区）。
-           约定：x=前 y=上 z=左；pitch 绕 z = 前/后倾，roll 绕 x = 左/右倾。 -->
+      <div class="own-bar">
+        <span class="own-k">承接腿矢状</span><span class="own-v" id="own-sag">—</span>
+        <span class="own-k">本态载荷峰值</span><span class="own-v" id="own-recvpeak">—</span>
+      </div>
+
+      <!-- 平衡几何：MoS 与两个平面的倾角（合成倾角大小分不出是前倒还是侧倒） -->
+      <div class="own-bar">
+        <span class="own-k">MoS</span><span class="own-v" id="own-mos">—</span>
+        <span class="own-k">α 腰权限</span><span class="own-v" id="own-alpha">—</span>
+      </div>
       <div class="own-bar">
         <span class="own-k">前/后倾</span><span class="own-v" id="own-pitch">—</span>
         <span class="own-k">左/右倾</span><span class="own-v" id="own-roll">—</span>
       </div>
+
+      <!-- 交接与摆动：许可、净空、帧域最差越界 -->
       <div class="own-bar">
-        <span class="own-k">α 腰权限</span><span class="own-v" id="own-alpha">—</span>
-      </div>
-      <div class="own-bar">
-        <span class="own-k">骨盆抬升</span><span class="own-v" id="own-pelv">—</span>
+        <span class="own-k">迈步许可</span><span class="own-v" id="own-permit">—</span>
         <span class="own-k">摆动净空</span><span class="own-v" id="own-clr">—</span>
       </div>
+      <div class="own-bar">
+        <span class="own-k">帧域最差</span><span class="own-v" id="own-domain">—</span>
+      </div>
+
+      <!-- 网关回读：状态机看到的关节角（deg，域口径；两个系统也只能看这个） -->
+      <div class="own-bar">
+        <span class="own-k">网关回读</span><span class="own-v" id="own-joints">—</span>
+      </div>
+
       <div class="own-gate" id="own-gate">—</div>
       <pre class="own-crit" id="own-crit">判据 —</pre>
       <!-- ★ 轴约定图例：必须常驻。3D 画面里的左右在 **Z** 轴上（+Z = 左），
@@ -316,32 +394,36 @@
       <div class="own-axis" id="own-axis">
         <b>轴约定</b>
         <span class="ax-l">◀ 左 = <code>+Z</code> <i id="own-ax-l">z —</i></span>
-        <span class="ax-r">右 = <code>−Z</code> <i id="own-ax-r">z —</i> ▶</span>
+        <span class="ax-r">右 = <code>−Z</code> <i id="own-ax-r">z —</i></span>
         <span class="ax-f">前 = <code>+X</code></span>
       </div>
       <label class="own-tgl"><input type="checkbox" id="own-axis3d" checked> 3D 地面方向标</label>
+    </div>
 
-      <!-- ★★ 力链（自下而上的传递力）。用户 2026-10-04：
-           「力应该是自脚往上传的，盆骨只是运用了这股力」「应该从下往上查」。
-           每个关节读的是它**下方**子树（踝→脚掌；膝→小腿+脚；髋→大腿+小腿+脚），
-           所以数值天然自下而上递增。按 |F| 着色：绿 < 体重 → 黄 < 1.5×体重 → 红。
-           ⚠ 「未就绪」时数值不可信（速度环未填满），必须显式说明而不是显示 0。 -->
+    <!-- ══════════════════════════════════════════════════════════════
+         ★★ 「物理诊断」面板 —— 与状态机面板**刻意分开**。
+            这里的东西**不是**状态机的判据，是"为什么判不过"的物理解释。
+            数据同样只来自快照字段，UI 不做推导。
+            力链：每个关节读它**下方**子树的传递力（踝→脚掌；膝→小腿+脚；
+            髋→大腿+小腿+脚），所以数值天然自下而上递增。
+            按 |F| 着色：绿 < 体重 → 黄 < 1.5×体重 → 红。
+            ⚠ 速度环未填满时数值不可信，必须显式说明而不是显示 0。
+         ══════════════════════════════════════════════════════════════ -->
+    <div class="panel" id="diag">
+      <h2>物理诊断<small>力链 / 重心转移 / 轴归属 · 非状态机判据</small></h2>
       <div class="own-fc">
         <div class="own-fc-h"><b>力链</b><small>自下而上 · 传递力 N</small><i id="own-fc-state">—</i></div>
         <table class="own-fc-t"><tbody id="own-fc-tb"></tbody></table>
         <div class="own-fc-note">体重 70kg ⇒ 静态单腿竖向 ≈ 687 N</div>
       </div>
-
-      <!-- ★★ 重心转移诊断。用户 2026-10-04：「我需要看的是**如何把重心转移到单腿中**」。
-           单腿力链看不到是因为转移做不到（因果反了）⇒ 这里画转移过程本身。
-           刻意把「谁在出力」和「谁真的在动」并排：命令很大而速率≈0 就证明
-           力发出去没作用到重心，不用猜。曲线是横向误差的滚动趋势（4s）。 -->
+      <!-- 重心转移诊断：刻意把「谁在出力」和「谁真的在动」并排 ——
+           命令很大而速率≈0 就证明力发出去没作用到重心，不用猜。
+           曲线是横向误差的滚动趋势（4s）。 -->
       <div class="own-ct">
         <div class="own-ct-h"><b>重心转移</b><small>横向误差 com.z − stanceZ</small></div>
         <canvas id="own-ct-cv" width="252" height="46"></canvas>
         <table class="own-ct-t"><tbody id="own-ct-tb"></tbody></table>
       </div>
-
       <table class="own-grid" id="own-grid"></table>
 
       <div class="own-legend">
@@ -352,6 +434,7 @@
     </div>
 
     <div class="panel" id="boot">初始化…</div>
+    </div><!-- /#rail -->
 
     <script type="module" src="/src/main.ts"></script>
   </body>
