@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14048,6 +14048,7 @@ var init_ragdoll = __esm({
       const e = Number(globalThis.process?.env?.KP);
       return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
     })();
+    DMPFIX = ["1", "true", "on"].includes(String(globalThis.process?.env?.DMPFIX ?? "").toLowerCase());
     IEFF_FIX = (() => {
       const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
       return e === "1";
@@ -16167,7 +16168,7 @@ var init_ragdoll = __esm({
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
             const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
-            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impDamp = DMPFIX ? alpha * Math.abs(relL[k]) * Ieff : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
             const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
@@ -23961,7 +23962,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const sup = rs.supportLeg();
   rs.shiftDemandF = 0;
   rs.shiftDriveSide = null;
-  if ((rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
+  const NO_SHIFT = ["1", "true", "on"].includes(String(
+    globalThis.process?.env?.NOSHIFT ?? ""
+  ).toLowerCase());
+  if (!NO_SHIFT && (rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
@@ -23997,7 +24001,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     }
     return rs.keyPose;
   }
-  if (p.useKeyFrame) {
+  const SWGATE = ["1", "true", "on"].includes(String(
+    globalThis.process?.env?.SWGATE ?? ""
+  ).toLowerCase());
+  if (p.useKeyFrame && (!SWGATE || inSwing)) {
     const kp = keySwing(s);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);

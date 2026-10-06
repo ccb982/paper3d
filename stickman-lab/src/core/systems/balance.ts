@@ -155,6 +155,55 @@ export const TRUNK_STIFF_MAX = 350;
 export const TAU_CAP_FRAC = 0.35;
 
 /**
+ * ★★★★★ **踝的单主 CoP 定位律**（2026-10-06，§21.9 第 1 步）。
+ *
+ *   用户定调：「**需要重构整个平衡调整的力链对吧**」＋
+ *   「平衡系统救的机制不太行，**救了但是力度不够**」。
+ *
+ *   文献形式（Winter 1995：`CoP` 是踝力矩的直接读数）：
+ *     不是"用速度阻尼去刹车"，而是**直接把 CoP 摆到目标位置**。
+ *
+ *   律（**增量式**，用实测植物逆，稳态零误差）：
+ *     `τ ← τ_prev + (CoP_obs − CoP_want) / G`
+ *   其中 `G` = 实测的 `ΔCoP/Δτ`（mm per N·m），由 `tools/probe-ankcop.ts` 标定；
+ *   `CoP_want = clamp(ξ, 足内)`，`ξ = rs.dcm.x`（捕获点）。
+ *
+ *   ⚠ 与旧 VIP/`copSet` 的三点区别（都是实测逼出来的）：
+ *     1. **单主、无回退**：旧 `copSet` 只在"力读数有效"时接管、否则落回 VIP
+ *        ⇒ 踝在两套律之间逐拍切换 ⇒ **τ 每 0.08 s 换向、零均值**
+ *        （`probe-footpush` 实测 +36→−89→+66→−120）；这里读数无效时**保持**上一 τ。
+ *     2. **增量**：旧式 `τ = K·Fz·(CoP−want)` 是纯比例 ⇒ 没有记忆、稳态必留误差，
+ *        且闭环增益 `K·Fz·G` 一旦 >1 就成**正反馈**（实测 K=2/8 时 0.56/1.04 s）。
+ *     3. **不叠 VIP 阻尼**：`ANKLE_COP=1` 时 VIP/S3 的 τ 被本律**整体接管**，
+ *        阻尼只作为"稳定器"留在别处（§21.9）。
+ */
+// ★⚠ 必须**逐拍读**环境变量（2026-10-06 踩坑）：模块级 `const` 在 import 时就取值，
+//   而标定探针是**运行时**改 `process.env` 的 ⇒ 常量永远是 NaN、注入静默失效
+//   （实测 `probe-ankcop` 七档 τ 的 CoP 读数**逐位相同**，就是这个）。
+function envB(): Record<string, string> {
+  return (globalThis as { process?: { env?: Record<string, string> } }).process?.env ?? {};
+}
+/** `ANKLE_COP=1` 启用踝的单主 CoP 定位律 */
+function ankleCopEnabled(): boolean {
+  return ['1', 'true', 'on'].includes(String(envB().ANKLE_COP ?? '').toLowerCase());
+}
+/**
+ * `COPK` = 归一化 CoP 增益（0~1；1 = 一拍收敛，0.5 = 留裕度）。
+ *   ⇒ 律：`τ ← τ_prev + COPK·(CoP_obs − CoP_want)·Fz`
+ *   ⚠ 2026-10-06：先试过固定 `G`（`ΔCoP/Δτ` 标定），但植物增益 `g=1/Fz`
+ *     而实测 Fz 在 **0~578 N** 之间跳 ⇒ 固定 G 不可能对（见模块顶部长注释）。
+ */
+function copK(): number {
+  const v = Number(envB().COPK ?? '');
+  return Number.isFinite(v) && v > 0 ? v : 0.5;
+}
+/** `ANKCAL` = 标定注入：直接指定踝 τ（N·m），供 `probe-ankcop` 用 */
+function ankCal(): number {
+  const raw = String(envB().ANKCAL ?? '').trim();
+  return raw === '' ? Number.NaN : Number(raw);
+}
+
+/**
  * ★ **上身的刚体 key**（用于质量加权求"上身质心"）。
  *   与 `skeleton.ts` 的 `PART_SPECS` 一致：头 + 躯干 + 左右上臂 + 左右前臂。
  *   ⚠ 不含腿/骨盆 —— 那部分的力是"从脚往上传"的**上游**，不是上身自己发的。
@@ -2139,11 +2188,81 @@ export function balanceSystem(
           rs.copWantX = wantX; rs.copErrX = copErr;
         }
       }
+      // ★★★★★ 2026-10-06 **ANKLE_COP：踝的单主 CoP 定位律**（见模块顶部长注释）
       const tauMaxAnk = sk.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      const aOn = ankleCopEnabled();
+      const aCal = ankCal();
+      let copHeld = false;   // ★ 本拍踝是否被 CoP 律接管（让位 + 承重豁免）
+      if (aOn && Number.isFinite(aCal)) {
+        // 标定模式：直接注入指定 τ（`probe-ankcop` 扫 τ ⇒ 量 ΔCoP）
+        tauAnk = aCal;
+        copHeld = true;
+        rs.ankCopOn = 0;
+      } else if (aOn) {
+        const gc3 = rs.groundChain;
+        const ff3 = sup === 'l' ? gc3?.l : gc3?.r;
+        const ankX = ankW[0];
+        const wantX = Math.max(ankX - (p.copBackM ?? 0.05),
+          Math.min(ankX + (p.copFwdM ?? 0.15), rs.dcm.x));
+        // ★★★★★ 用**原始**（未低通）读数，不用力链那份（0.08s 低通 ⇒ 相位滞后
+        //   ⇒ 实测"`err<0` 但 τ 仍全速上涨"就是这个滞后造成的）。
+        const sideIdx: 0 | 1 = sup === 'l' ? 0 : 1;
+        const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx]! > 20;
+        const copObs = copOk ? rs.soleCopX[sideIdx]! : Number.NaN;
+        const fzCop = copOk ? rs.soleCopFz[sideIdx]! : Number.NaN;
+        if (Number.isFinite(copObs) && Number.isFinite(fzCop)) {
+          // ★★ 归一化增量式（2026-10-06 实测修正）：
+          //   植物增益是 `g = 1/Fz`（mm/N·m），而 **Fz 在变**（实测 0~578 N！）
+          //   ⇒ 固定 G 不可能对（G 是 Fz 的函数）。直接代入 `g = 1/Fz`：
+          //       τ ← τ_prev + err·Fz·k     （err 用 m，Fz 用 N ⇒ N·m）
+          //   k = 1 是"一拍收敛"（deadbeat）；**k ≤ 0.5 留稳定裕度**（实测 k=1 会过冲）。
+          const kCop = (() => {
+            const v = Number(envB().COPK ?? '');
+            return Number.isFinite(v) && v > 0 ? v : 0.5;
+          })();
+          const dTau = kCop * (copObs - wantX) * fzCop;
+          // ★★ **τ 速率限幅**（2026-10-06 实测必需）：
+          //   前足是 0.5 kg 的薄长盒（`I ≈ 0.0018 kg·m²`，见 createJoints 注释），
+          //   大 τ 一步就能把它甩起来 ⇒ 脚在脚跟/脚尖之间**拍打**（实测 Fz 0↔578 N），
+          //   而拍打期间 CoP 被几何钉在边缘、**与 τ 无关**
+          //   （实测 `COPK` 0.05~0.3 的 CoP 读数**逐位相同**）。
+          //   ⇒ 每控制拍最多变 `COPSLEW` N·m（默认 12，≈720 N·m/s）。
+          const slew = (() => {
+            const v = Number(envB().COPSLEW ?? '');
+            return Number.isFinite(v) && v > 0 ? v : 12;
+          })();
+          const dClamp = dTau > slew ? slew : dTau < -slew ? -slew : dTau;
+          tauAnk = rs.ankCopTau + dClamp;
+          rs.copWantX = wantX; rs.copErrX = copObs - wantX;
+          copHeld = true;
+          rs.ankCopOn = 1;
+        } else {
+          tauAnk = rs.ankCopTau;   // ★ 读数无效 ⇒ **保持**（绝不回退 VIP —— 那是换向源）
+          rs.ankCopOn = 2;
+        }
+      }
+      // ★★★★ **让位是力矩通道生效的前提**（2026-10-06 标定实测）：
+      //   位置伺服与力矩通道在 `driveMotors` 里是**相加**的
+      //   （`tau = kp·(thRef−a) − kd·ω + tq`，见 ragdoll.ts）。
+      //   ⇒ 不让位时，伺服弹簧会把注入的 τ **整体吸收**：踝只转 `τ/640` rad
+      //     就达到新平衡、净力矩回零 ⇒ **CoP 一动不动**
+      //     （`probe-ankcop` 实测：注入 ±20 N·m 的 ΔCoP ≈ 0.03 mm/N·m ≈ 0，
+      //      而理论值 `1/Fz ≈ 4.2`）。
+      //   ⇒ CoP 律必须像 ④c 一样先 `requestHold`（位置环降为纯阻尼）。
+      if (aOn) {
+        rs.requestHold(jAnk, 2, 'balance', '踝CoP定位让位');
+      }
+      rs.ankCopTau = clamp(tauAnk, tauMaxAnk);
       rs.ankleTauVip = clamp(tauAnk, tauMaxAnk);   // 本文件 clamp 是对称两参版
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;   // 饱和标志（切髋策略用）
       rs.qVip = qVip;
-      rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度');
+      // ★★★★ **承重豁免**（2026-10-06 实测，两个坑叠加）：
+      //   本轴的 τ cap = `120×TAU_CAP_FRAC(0.35) = 42 N·m`。CoP 律请求 45~114
+      //   ⇒ **全被夹到 42** ⇒ 物理逐位相同（实测 `COPK` 0.05~0.5 的 CoP 读数
+      //   **一模一样**、踝角一模一样 —— 一度让我以为"τ 对 CoP 无作用"）。
+      //   而让位之后这条力矩就是**唯一的支撑路径** ⇒ 按用户定调「承重无上限」
+      //   应当 `loadBearing=true`（与 ④c 矢状JᵀF 同一处理）。
+      rs.requestTorque(jAnk, 2, rs.ankleTauVip, 'balance', '踝VIP刚度', copHeld);
     }
 
     // ── 额状面 CoP：**踝做不到，改由中足（距下关节）承担** ────────────

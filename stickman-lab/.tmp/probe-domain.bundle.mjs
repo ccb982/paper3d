@@ -14028,7 +14028,7 @@ function calcJointRot(qpx, qpy, qpz, qpw, qcx, qcy, qcz, qcw, tmp4, out) {
 function calcJointRelVel(qpx, qpy, qpz, qpw, rx, ry, rz, out) {
   quatInvRotate(qpx, qpy, qpz, qpw, rx, ry, rz, out);
 }
-var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
+var MEM_GROUND, MEM_SELF, GROUPS_SELF, GROUPS_GROUND, IDENTITY, ZERO, JMS_SCALE, KP_OVERRIDE, DMPFIX, IEFF_FIX, KD_SIGN, MOTOR_ALPHA, LEGACY_MFOOT_PD, MOTOR_ALPHA_RECOVER, LIMIT_SOFT_ZONE, AXIS_X, AXIS_Y, AXIS_Z, LIMIT_BIAS_RATE, LIMIT_MAX_BIAS, LIMIT_BIAS_SAFETY, ASSUMED_PHYSICS_HZ, STANCE_CLEAR_MIN, STANCE_ENTER, STANCE_EXIT, SOLE_NORMAL_TOL, DEFAULTS, VEL_WIN, Ragdoll;
 var init_ragdoll = __esm({
   "src/core/ragdoll.ts"() {
     "use strict";
@@ -14048,6 +14048,7 @@ var init_ragdoll = __esm({
       const e = Number(globalThis.process?.env?.KP);
       return Number.isFinite(e) && String(globalThis.process?.env?.KP ?? "") !== "" ? e : NaN;
     })();
+    DMPFIX = ["1", "true", "on"].includes(String(globalThis.process?.env?.DMPFIX ?? "").toLowerCase());
     IEFF_FIX = (() => {
       const e = String(globalThis.process?.env?.IEFF_FIX ?? "");
       return e === "1";
@@ -16167,7 +16168,7 @@ var init_ragdoll = __esm({
             let imp = tau * dt;
             const ff = this.torqueCmd[idx];
             const impSpring = Math.abs(kPSpring * ts * (thRef - a)) * (j.maxTorque[k] * scale / (JOINT_MAX_SPEED * JMS_SCALE)) * dt;
-            const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+            const impDamp = DMPFIX ? alpha * Math.abs(relL[k]) * Ieff : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
             const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
             const impWant = imp;
             if (imp > impStable) imp = impStable;
@@ -17884,6 +17885,21 @@ var init_rigState = __esm({
       qVip = 0;
       /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
       ankleTauVip = 0;
+      ankCopTau = 0;
+      /**
+       * ★★★★★ **原始（未低通）CoP 与 Fz**，[0]=左 [1]=右（世界 x，m / N）。
+       *
+       *   为什么必须有：力链（`rs.groundChain`）对 CoP 做了 **`FORCE_FLT_TAU=0.08s`**
+       *   的一阶低通（≈12 个控制拍的相位滞后）。把滤波后的 CoP 喂给 CoP 定位律
+       *   会产生严重滞后 ⇒ 实测"`err<0` 但 τ 仍按限幅全速上涨"（律在追 12 拍前的旧值）。
+       *   ⇒ 控制输入必须是**原始读数**；滤波只配"显示/诊断"用。
+       */
+      soleCopX = [0, 0];
+      /** 原始 CoP 有效性（`copValid`） */
+      soleCopValid = [false, false];
+      /** 原始竖直力（N） */
+      soleCopFz = [0, 0];
+      ankCopOn = 0;
       /**
        * ★ 踝 VIP 力矩**是否已饱和**（请求值 > `τmax`）。
        *   对应文献的 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩自动饱和，
@@ -18957,6 +18973,8 @@ var init_rigState = __esm({
           qVip: this.qVip,
           ankleTauVip: this.ankleTauVip,
           ankleTauSat: this.ankleTauSat,
+          ankCopTau: this.ankCopTau,
+          ankCopOn: this.ankCopOn,
           hipTauStiff: this.hipTauStiff,
           vipOn: this.vipOn,
           vipGamma: this.vipGamma,
@@ -22958,6 +22976,16 @@ var init_wholeBodyQp = __esm({
 });
 
 // src/core/systems/balance.ts
+function envB() {
+  return globalThis.process?.env ?? {};
+}
+function ankleCopEnabled() {
+  return ["1", "true", "on"].includes(String(envB().ANKLE_COP ?? "").toLowerCase());
+}
+function ankCal() {
+  const raw = String(envB().ANKCAL ?? "").trim();
+  return raw === "" ? Number.NaN : Number(raw);
+}
 function buildStiffCaps(joints) {
   const caps = new Float32Array(joints.length * 3);
   for (const spec of AXIS_OWNERSHIP) {
@@ -23304,10 +23332,54 @@ function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
         }
       }
       const tauMaxAnk = sk2.joints[jAnk]?.maxTorque?.[2] ?? 120;
+      const aOn = ankleCopEnabled();
+      const aCal = ankCal();
+      let copHeld = false;
+      if (aOn && Number.isFinite(aCal)) {
+        tauAnk = aCal;
+        copHeld = true;
+        rs.ankCopOn = 0;
+      } else if (aOn) {
+        const gc3 = rs.groundChain;
+        const ff3 = sup === "l" ? gc3?.l : gc3?.r;
+        const ankX = ankW[0];
+        const wantX = Math.max(
+          ankX - (p.copBackM ?? 0.05),
+          Math.min(ankX + (p.copFwdM ?? 0.15), rs.dcm.x)
+        );
+        const sideIdx = sup === "l" ? 0 : 1;
+        const copOk = rs.soleCopValid[sideIdx] === true && rs.soleCopFz[sideIdx] > 20;
+        const copObs = copOk ? rs.soleCopX[sideIdx] : Number.NaN;
+        const fzCop = copOk ? rs.soleCopFz[sideIdx] : Number.NaN;
+        if (Number.isFinite(copObs) && Number.isFinite(fzCop)) {
+          const kCop = (() => {
+            const v = Number(envB().COPK ?? "");
+            return Number.isFinite(v) && v > 0 ? v : 0.5;
+          })();
+          const dTau = kCop * (copObs - wantX) * fzCop;
+          const slew = (() => {
+            const v = Number(envB().COPSLEW ?? "");
+            return Number.isFinite(v) && v > 0 ? v : 12;
+          })();
+          const dClamp = dTau > slew ? slew : dTau < -slew ? -slew : dTau;
+          tauAnk = rs.ankCopTau + dClamp;
+          rs.copWantX = wantX;
+          rs.copErrX = copObs - wantX;
+          copHeld = true;
+          rs.ankCopOn = 1;
+        } else {
+          tauAnk = rs.ankCopTau;
+          rs.ankCopOn = 2;
+        }
+      }
+      if (aOn) {
+        rs.requestHold(jAnk, 2, "balance", "\u8E1DCoP\u5B9A\u4F4D\u8BA9\u4F4D");
+      }
+      rs.ankCopTau = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauVip = clamp2(tauAnk, tauMaxAnk);
       rs.ankleTauSat = Math.abs(tauAnk) > tauMaxAnk;
       rs.qVip = qVip;
-      rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6");
+      rs.requestTorque(jAnk, 2, rs.ankleTauVip, "balance", "\u8E1DVIP\u521A\u5EA6", copHeld);
     }
     const jMid = jointIndexByName(sk2, sup === "l" ? "midfoot_l" : "midfoot_r");
     if (jMid >= 0 && on("ankleLat")) {
@@ -24001,7 +24073,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
   const sup = rs.supportLeg();
   rs.shiftDemandF = 0;
   rs.shiftDriveSide = null;
-  if ((rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
+  const NO_SHIFT = ["1", "true", "on"].includes(String(
+    globalThis.process?.env?.NOSHIFT ?? ""
+  ).toLowerCase());
+  if (!NO_SHIFT && (rs.state === "LOAD" || rs.state === "DOUBLE") && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     const mTot = sk2.cfg.mass;
@@ -24037,7 +24112,10 @@ function stepSystem(rs, p = DEFAULT_STEP_PARAMS) {
     }
     return rs.keyPose;
   }
-  if (p.useKeyFrame) {
+  const swingGateOff = ["0", "false", "off"].includes(String(
+    globalThis.process?.env?.SWGATE ?? ""
+  ).toLowerCase());
+  if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
     const kp = keySwing(s);
     rs.requestSwingLegAngle(swing, jHip, 2, clamp2(kp.swHipFlex, 1.05), "\u6446\u52A8\u9ACB\xB7\u5173\u952E\u5E27", lift > 0.01);
     rs.requestSwingLegAngle(swing, jKnee, 2, clamp2(-kp.swKneeFlex, 1.2), "\u6446\u52A8\u819D\xB7\u5173\u952E\u5E27", lift > 0.01);
@@ -24385,6 +24463,12 @@ var init_controller = __esm({
         const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
         this.soleCache.l = sim.doll.soleForceProfile(0, physDt);
         this.soleCache.r = sim.doll.soleForceProfile(1, physDt);
+        rs.soleCopX[0] = this.soleCache.l.copX;
+        rs.soleCopValid[0] = this.soleCache.l.copValid;
+        rs.soleCopX[1] = this.soleCache.r.copX;
+        rs.soleCopValid[1] = this.soleCache.r.copValid;
+        rs.soleCopFz[0] = this.soleCache.l.fz;
+        rs.soleCopFz[1] = this.soleCache.r.fz;
         const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
         const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
         const fzSum = fzL + fzR;

@@ -615,6 +615,10 @@ export interface RigSnapshot {
   qVip: number;
   /** 踝 VIP 刚度律输出的力矩（N·m，矢状） */
   ankleTauVip: number;
+  /** ★ `ANKLE_COP=1` 单主 CoP 律的**上一步 τ**（增量式的状态；N·m）。见 balance.ts 块⑥ */
+  ankCopTau: number;
+  /** ★ 单主 CoP 律的读数状态：0=未启用 1=正常闭环 2=读数无效(保持上一 τ) */
+  ankCopOn: number;
   /** 踝 VIP 力矩是否已饱和（> `τmax`）⇒ flat-foot 约束触发 */
   ankleTauSat: boolean;
   /**
@@ -1268,6 +1272,21 @@ export class RigState {
   qVip = 0;
   /** ★ 踝 VIP 刚度律输出的力矩（N·m，矢状，**已钳到 τmax**），诊断/UI 用 */
   ankleTauVip = 0;
+  ankCopTau = 0;
+  /**
+   * ★★★★★ **原始（未低通）CoP 与 Fz**，[0]=左 [1]=右（世界 x，m / N）。
+   *
+   *   为什么必须有：力链（`rs.groundChain`）对 CoP 做了 **`FORCE_FLT_TAU=0.08s`**
+   *   的一阶低通（≈12 个控制拍的相位滞后）。把滤波后的 CoP 喂给 CoP 定位律
+   *   会产生严重滞后 ⇒ 实测"`err<0` 但 τ 仍按限幅全速上涨"（律在追 12 拍前的旧值）。
+   *   ⇒ 控制输入必须是**原始读数**；滤波只配"显示/诊断"用。
+   */
+  soleCopX: [number, number] = [0, 0];
+  /** 原始 CoP 有效性（`copValid`） */
+  soleCopValid: [boolean, boolean] = [false, false];
+  /** 原始竖直力（N） */
+  soleCopFz: [number, number] = [0, 0];
+  ankCopOn = 0;
   /**
    * ★ 踝 VIP 力矩**是否已饱和**（请求值 > `τmax`）。
    *   对应文献的 **flat-foot 约束**：CoP 走到脚掌边缘后踝力矩自动饱和，
@@ -2341,6 +2360,7 @@ export class RigState {
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },
       qVip: this.qVip, ankleTauVip: this.ankleTauVip, ankleTauSat: this.ankleTauSat,
+      ankCopTau: this.ankCopTau, ankCopOn: this.ankCopOn,
       hipTauStiff: this.hipTauStiff,
       vipOn: this.vipOn, vipGamma: this.vipGamma, vipTCross: this.vipTCross,
       vipOmega: this.vipOmega, vipSwitches: this.vipSwitches,

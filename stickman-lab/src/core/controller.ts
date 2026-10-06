@@ -214,6 +214,11 @@ export class Controller {
     const physDt = 1 / (this.sim.cfg?.physicsHz ?? 120);
     this.soleCache.l = sim.doll.soleForceProfile(0, physDt);
     this.soleCache.r = sim.doll.soleForceProfile(1, physDt);
+    // ★ 原始（未低通）读数直接进 rs：CoP 定位律的控制输入必须用它，
+    //   力链那份是 0.08s 低通后的（相位滞后 ≈12 个控制拍，喂给律会振荡）。
+    rs.soleCopX[0] = this.soleCache.l.copX; rs.soleCopValid[0] = this.soleCache.l.copValid;
+    rs.soleCopX[1] = this.soleCache.r.copX; rs.soleCopValid[1] = this.soleCache.r.copValid;
+    rs.soleCopFz[0] = this.soleCache.l.fz; rs.soleCopFz[1] = this.soleCache.r.fz;
     const fzL = this.soleCache.l.copValid ? this.soleCache.l.fz : 0;
     const fzR = this.soleCache.r.copValid ? this.soleCache.r.fz : 0;
     const fzSum = fzL + fzR;

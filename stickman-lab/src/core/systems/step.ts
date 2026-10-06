@@ -200,7 +200,11 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
   //   `handoverOk === false` = 交接还没成 = 本系统还有活要干；一旦达成自动撤力。
   // ★ 2026-10-06：`SHIFT` 已改名 `LOAD`（重量交接）。侧向搬运意图只在交接期发 ——
   //   这与附录 §5.2 的 `shift` 子任务一致：交接由承重腿完成，摆动腿不许动。
-  if ((rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
+  // ★ 实验开关 `NOSHIFT=1`：只关**侧向重心驱动**（保留步态其余部分），
+  //   用于确认前 0.1s 的泵是否由 `shiftDemandF`（→ balance 的髋外展 τ）引起。
+  const NO_SHIFT = ['1', 'true', 'on'].includes(String(
+    (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.NOSHIFT ?? '').toLowerCase());
+  if (!NO_SHIFT && (rs.state === 'LOAD' || rs.state === 'DOUBLE') && !rs.handoverOk) {
     const zRef = rs.soleZ[sup];
     const w0 = p.shiftOmega > 0 ? p.shiftOmega : 1;
     // 体重真源在 `sk.cfg.mass`（骨架唯一真源，`skeleton.ts:335`）
@@ -264,7 +268,21 @@ export function stepSystem(rs: RigState, p: StepParams = DEFAULT_STEP_PARAMS): v
     }
     return rs.keyPose;
   }
-  if (p.useKeyFrame) {
+  // ★★★★★ 2026-10-06 **发现（`probe-t0` 消融定位）**：
+  //   非摆动相（DOUBLE/LOAD/PUSH/THRUST）里 `s ≡ 0` ⇒ `keySwing(0)` 返回 **`PSw`**
+  //   （摆动腿的"蹬离前"姿势：膝屈 20°、踝背屈 20°），而这三条写入**不受
+  //   `inSwing`/`lift` 门控、每拍都发** ⇒ **开局双脚还在地上时，步态系统就在
+  //   命令摆动腿膝屈 20°、踝背屈 20°**（= 硬把那只脚往起抬）⇒ 单支撑瞬间丢给
+  //   对侧腿而重心还在中间 ⇒ "一上来就倒"。
+  //   实测（`probe-t0`）：关整个步态（`stepKeyframe`）前 0.067s 的 KE 减半
+  //   （0.377→0.189 J），再关 QP 到 0.0896（≈ `nocontrol` 0.0766）。
+  //   ⇒ 本门 `SWGATE=1` 只允许**摆动相**写摆动腿关键帧。
+  // ★★ 2026-10-06 **转正为默认**（门禁实测：默认 1.13→1.18s ★、关发力门禁 0.54→1.40s ★、
+  //   钉死 DOUBLE 0.88→0.97s；"迈步停手"不变 1.34s ⇒ 门只动步态的写入，符合预期）。
+  //   要回到旧行为（非摆动相也写 PSw）用 `SWGATE=0`。
+  const swingGateOff = ['0', 'false', 'off'].includes(String(
+    (globalThis as { process?: { env?: Record<string, string> } }).process?.env?.SWGATE ?? '').toLowerCase());
+  if (p.useKeyFrame && (!swingGateOff ? inSwing : true)) {
     const kp = keySwing(s);
     // 髋：正 = 屈曲（本 rig 约定），膝：正 = 屈曲
     rs.requestSwingLegAngle(swing, jHip, 2, clamp(kp.swHipFlex, 1.05), '摆动髋·关键帧', lift > 0.01);

@@ -116,6 +116,9 @@ const KP_OVERRIDE = (() => {
   return Number.isFinite(e) && String((globalThis as any).process?.env?.KP ?? '') !== '' ? e : NaN;
 })();
 
+/** ★ 阻尼护栏量纲修正开关（`DMPFIX=0/1`）。1 = `α·|relL|·Ieff`（正确语义）。 */
+const DMPFIX = ['1','true','on'].includes(String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.DMPFIX ?? '').toLowerCase());
+
 const IEFF_FIX = (() => {
   const e = String((globalThis as { process?: { env?: Record<string, string> } }).process?.env?.IEFF_FIX ?? '');
   return e === '1';
@@ -3031,7 +3034,14 @@ footGrip(side: 0 | 1, dt: number): [number, number, number] {
         //   ⇒ **被限到 1.3%**。实测后果：`archStiffness` 从 3 扫到 **260
         //   N·m/rad，弓角摆幅恒为 20°（满限位）、结果逐位相同** ——
         //   马达根本推不动，弓被地面反力直接压到限位。
-        const impDamp = alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
+        // ★★★★★ 2026-10-06 **阻尼护栏的量纲 bug**（`DMPFIX=1` 修）：
+        //   "每步最多吃掉 α 比例的相对角速度误差" ⇒ `Δω = α·|relL|` ⇒
+        //   `imp = Ieff·Δω = α·|relL|·Ieff`。原式**多乘了 `kDd·ts·dt`**
+        //   （≈1/120）⇒ 允许量小 **120 倍** ⇒ D 项被剪到 ~0.7% ⇒ **全身等于没有阻尼**
+        //   （实测 `motorAuthority` 常显 0~4%）。这是"泵能无人吸收"的直接原因。
+        const impDamp = DMPFIX
+          ? alpha * Math.abs(relL[k]) * Ieff
+          : alpha * Math.abs(kDdEff * ts * relL[k]) * Ieff * dt;
         const impStable = impDamp + Math.abs(ff) * dt + Math.abs(impSpring);
         const impWant = imp;
         if (imp > impStable) imp = impStable;
