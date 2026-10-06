@@ -130,7 +130,7 @@ export class Hud {
       ownFcState: $('own-fc-state'), ownFcTb: $('own-fc-tb'),
       ownCtCv: $cv('own-ct-cv'), ownCtTb: $('own-ct-tb'),
       ownAxL: $('own-ax-l'), ownAxR: $('own-ax-r'),
-      ownGate: $('own-gate'), ownGrid: $('own-grid'), ownSig: $('own-sig'), ownForce: $('own-force'),
+      ownGate: $('own-gate'), ownGrid: $('own-grid'), ownSig: $('own-sig'), ownForce: $('own-force'), ownBFix: $('own-bfix'), ownBTgt: $('own-btgt'),
       ownRoleL: $('own-role-l'), ownRoleR: $('own-role-r'),
       ownCrit: $('own-crit'),
     };
@@ -350,6 +350,7 @@ setOwnership(d: RigSnapshot | null): void {
       e.ownMos.textContent = '—'; e.ownPitch.textContent = '—'; e.ownRoll.textContent = '—';
       e.ownAlpha.textContent = '—'; e.ownClr.textContent = '—'; e.ownJoints.textContent = '—';
       e.ownCrit.textContent = '判据 —'; e.ownSig.textContent = '签名 —'; e.ownForce.textContent = '力链 —';
+      e.ownBFix.textContent = '平衡修正 —'; e.ownBTgt.textContent = '—';
       e.ownAxL.textContent = 'z —'; e.ownAxR.textContent = 'z —';
       return;
     }
@@ -404,6 +405,8 @@ setOwnership(d: RigSnapshot | null): void {
     // ★ Perry 签名逐项：状态机给的每一行原样显示（不排序、不改写、不着色判断）
     e.ownSig.textContent = tm.sigs.length ? tm.sigs.join(NL) : '签名 —';
     e.ownForce.textContent = tm.force.length ? tm.force.join(NL) : '力链 —';
+    e.ownBFix.textContent = tm.balanceFix.length ? tm.balanceFix.join(NL) : '平衡修正 —';
+    e.ownBTgt.textContent = tm.balanceTarget;
     e.ownPhase.textContent = `${tm.stateLabel} ${tm.stateT}s`;
     e.ownVerified.textContent = tm.verified;
     e.ownVerified.dataset.ok = tm.verified.startsWith('✓') ? '1' : '0';

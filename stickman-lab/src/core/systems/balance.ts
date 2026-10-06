@@ -878,6 +878,11 @@ export function balanceSystem(
   rs: RigState, p: BalanceParams = DEFAULT_BALANCE_PARAMS, doll?: Ragdoll,
 ): void {
   const sk = rs.sk;
+  // ★★ 每拍清零修正向量：`requestAngle(..., 'balance', ...)` 会在本拍重新填入。
+  //   ⇒ `rs.balanceFix` 始终 = **本拍 balance 实际提出的全部关节修正**（不多不少）。
+  //   用户 2026-10-06：「平衡系统是一次给一个完整的各个关节的修正」。
+  rs.balanceFix.axes.length = 0;
+  rs.balanceFix.transferClamp = 0;
   const sup: Side = rs.supportLeg();
   // ★ 支撑腿是否已确定：**唯一判定在 `wantedForce.stanceResolved()`**
   //   （此前 `latArmed` 在本文件算一遍、相位机在 gaitState 再算一遍 ⇒ 边界不清）

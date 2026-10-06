@@ -49,16 +49,48 @@ export interface ForceSource {
   footLen(): number;
 }
 
+/**
+ * ★★★ 平衡系统的**完整修正向量**（一拍一份；用户 2026-10-06 要求）。
+ *
+ *   「平衡系统是**一次给一个完整的各个关节的修正**」「UI 也要绘制平衡系统给出的修正量」。
+ *
+ *   实现方式：**在请求入口自动记录**（`requestAngle(..., 'balance', ...)`），
+ *   而不是在 `balance.ts` 里手工维护副本 —— 后者会与真实输出漂移。
+ *   ⇒ 这份向量**就是**平衡系统本拍实际提出的东西，不多不少。
+ */
+export interface BalanceCorrection {
+  /** 本拍 balance 请求过的轴（未涉及的轴不出现） */
+  axes: {
+    /** flat 轴下标 = joint*3 + axis */
+    axis: number;
+    /** 修正量 = 请求目标 − 当前角（rad；正 = 想往正方向转） */
+    dTheta: number;
+    /** 发起这条修正的标签（`requestAngle` 的 label，直接可读） */
+    label: string;
+  }[];
+  /** 硬目标余量（N·m；< 0 = 该方向必然倒），来自力链 */
+  tauMarginSag: number;
+  tauMarginLat: number;
+  /** 对迈步系统搬运的限幅：0 = 未限幅，1 = 已否决/挡住 */
+  transferClamp: number;
+  /** 力链是否可信（false 时上面的余量不可信） */
+  trustable: boolean;
+  trustNote: string;
+}
+
 /** 单个鞋底块的接触力（力链的最小分布单元） */
 export interface SolePatch {
   /** 块序号 0..6 */
   block: number;
   /** 法向力（N，正值） */
   ny: number;
-  /** 切向力（沿 x，N） */
-  tx: number;
-  /** 切向力（沿 z，N） */
-  tz: number;
+  /**
+   * 切向力**幅值**（N）。
+   * ⚠ 只给幅值，不给方向：Rapier 的 `contactTangentImpulseX/Y` 是**接触局部系**
+   *   分量，且实测**经常返回 NaN**（`ragdoll.ts:1416` 有记录）⇒ 世界系方向不可靠。
+   *   侧向发力的**方向**由 CoP 横移（`copZ − ankleZ`）表达，不由这里表达。
+   */
+  t: number;
   /** 该块受力点（世界 x / z，m） */
   cx: number;
   cz: number;
@@ -81,6 +113,16 @@ export interface FootForce {
   copValid: boolean;
   /** 逐块分布（柔性足 §15 侧向发力要用） */
   patches: SolePatch[];
+  // ── ★ 柔性足专用（§15.5：力链必须暴露这四个量）──
+  /** **内侧柱**法向合力（N）。分组规则与 `Ragdoll.soleColumnLoad` **完全一致**
+   *  （接触点 z ≥ 鞋底包围盒的中位 z = 内侧）—— 不许另立一套口径 */
+  colIn: number;
+  /** **外侧柱**法向合力（N） */
+  colOut: number;
+  /** 摩擦占用 = Σ|f_t| / (μ·Σf_n)；`NaN` = 切向冲量不可用（Rapier 的已知问题） */
+  frictionUse: number;
+  /** 切向冲量本拍是否有效（false 时 `frictionUse`/`t` 都不可信） */
+  tangentValid: boolean;
 }
 
 /** Winter 1996（J Neurophysiol 75:2334）的两条独立控制线 */
@@ -249,6 +291,8 @@ export interface StateTelemetry {
   domainWorst: string;
   /** ★ 本态的**腿角色 + 锁定声明**（来自 `STATE_LEGS`，UI 只渲染） */
   legPlan: string;
+  /** ★ 本态**平衡系统的目标契约**（来自 `STATE_BALANCE_TARGET`；状态机给，UI 只渲染） */
+  balanceTarget: string;
   /** ★ **具体是哪条腿**（状态机锁存的角色，UI 的腿卡直接用它，不许自己推断） */
   roleRecv: 'l' | 'r';
   roleSup: 'l' | 'r';
@@ -266,6 +310,8 @@ export interface StateTelemetry {
   sigs: string[];
   /** ★ 力链逐行读数（CoP/GRF/力臂/倾覆/余量/可信度；状态机生成，UI 只渲染） */
   force: string[];
+  /** ★ 平衡系统的修正向量逐行读数（本拍 balance 在动哪些关节、动多少；状态机生成） */
+  balanceFix: string[];
   /** 未通过的验收项（人话，空 = 全过），如 `承接腿承重 0.51/0.60` */
   violations: string;
   /** 角色标签（承重/前腿），由状态机指派 */
@@ -755,6 +801,12 @@ export class RigState {
    *   用户 2026-10-06：「往前迈的是摆动腿。一个承重腿，一个摆动腿。」
    */
   roleSw: Side | null = null;
+  /** ★★ 平衡系统的完整修正向量（每拍由 `balanceSystem` 重置并记录） */
+  balanceFix: BalanceCorrection = {
+    axes: [], tauMarginSag: 0, tauMarginLat: 0, transferClamp: 0,
+    trustable: false, trustNote: '未运行',
+  };
+
   /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
   forceSrc: ForceSource | null = null;
 
@@ -766,9 +818,11 @@ export class RigState {
     sagRecv: '—', recvPeak: '—', domainWorst: '0.0', stepPermit: '—',
     ring: STATE_ORDER.map(() => '○'), next: '—', wait: '0.00s', blocked: '无',
     legPlan: '—',
+    balanceTarget: '—',
     roleRecv: 'l', roleSup: 'l', roleRecvFree: 'locked', roleRearFree: 'locked',
     sigs: [],
     force: [],
+    balanceFix: [],
     violations: '', roles: '—', jointsDeg: '—', safe: '否',
   };
 
@@ -1315,6 +1369,13 @@ export class RigState {
     if (!def) { this.badRequests++; return; }
     const span = Math.max(Math.abs(def.minRad[axis]), Math.abs(def.maxRad[axis]));
     if (span <= 1e-6) { this.badRequests++; return; }
+    // ★ 记录 balance 的修正（→ `balanceFix.axes`，供 UI 绘制"平衡在动哪些关节"）。
+    //   记录的是**物理量**（目标 − 当前角，rad），不是归一化值 ⇒ UI 可直接显示度。
+    if (system === 'balance') {
+      const i = joint * 3 + axis;
+      const d = rad - (this.pos[i] ?? 0);
+      this.balanceFix.axes.push({ axis: i, dTheta: d, label });
+    }
     // 与 ragdoll.posRefScale（0.9）保持一致：目标不占满量程
     this.request(joint, axis, (rad * 0.9) / span, system, label);
   }
@@ -1660,7 +1721,13 @@ export class RigState {
       safe: this.safe, lastSwing: this.lastSwing, cycleCount: this.cycleCount,
       lastMove: this.lastMove ? { ...this.lastMove } : null,
       stateStats: { ...this.stateStats },
-      telemetry: { ...this.telemetry, force: [...this.telemetry.force], sigs: [...this.telemetry.sigs], ring: [...this.telemetry.ring] },
+      telemetry: {
+        ...this.telemetry,
+        force: [...this.telemetry.force],
+        sigs: [...this.telemetry.sigs],
+        ring: [...this.telemetry.ring],
+        balanceFix: [...this.telemetry.balanceFix],
+      },
       loadBearer: this.loadBearer, supportLeg: this.supportLeg(), swingLeg: this.swingLeg(),
       locked: { ...this.locked }, authority: this.authority,
       com: { ...this.com }, dcm: { ...this.dcm }, support: { ...this.support },

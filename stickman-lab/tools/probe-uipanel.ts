@@ -184,6 +184,14 @@ for (const [id, want] of verbatim) {
       : `UI「${ftxt.slice(0, 40)}」 vs 遥测「${wantF.slice(0, 40)}」`);
   check('力链行数合理（≥6 行）', tm.force.length >= 6, `${tm.force.length} 行`);
 }
+// ★ 平衡修正块：逐字等于 telemetry.balanceFix
+{
+  const btxt = txt('own-bfix');
+  check('平衡修正块逐字 === telemetry.balanceFix', btxt === tm.balanceFix.join(NL),
+    `UI ${tm.balanceFix.length} 行`);
+  check('平衡修正块有内容（平衡系统真的在动关节）', tm.balanceFix.length >= 1,
+    tm.balanceFix[0] ?? '(空)');
+}
 check('网关回读不是占位符', !tm.jointsDeg.includes('—') && tm.jointsDeg.length > 8, tm.jointsDeg);
 check('未过项与状态机一致',
   snap.violations.length === 0

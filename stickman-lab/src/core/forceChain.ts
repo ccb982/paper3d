@@ -126,6 +126,11 @@ export function forceChainLines(fc: ForceChain): string[] {
     `  左 (${n(fc.l.copX * 1000)}, ${n(fc.l.copZ * 1000)}) ${m(fc.l.fz)}N`
       + `　右 (${n(fc.r.copX * 1000)}, ${n(fc.r.copZ * 1000)}) ${m(fc.r.fz)}N`
       + `　接触块 ${fc.l.contactN}/${fc.r.contactN}`,
+    // ★ 柔性足专用（§15.5）：内/外侧柱分配 + 摩擦占用 —— 脚"侧向发力"的直接读数
+    `柔性足 左 内${m(fc.l.colIn)}/外${m(fc.l.colOut)}N`
+      + `　右 内${m(fc.r.colIn)}/外${m(fc.r.colOut)}N`,
+    `摩擦占用 左 ${fc.l.tangentValid ? (fc.l.frictionUse * 100).toFixed(0) + '%' : '不可用(切向NaN)'}`
+      + `　右 ${fc.r.tangentValid ? (fc.r.frictionUse * 100).toFixed(0) + '%' : '不可用(切向NaN)'}`,
     `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N 方向 ${n(fc.grfAngleDeg, 1)}°`,
     `踝力臂 sag ${n(fc.armSag * 1000)}mm  lat ${n(fc.armLat * 1000)}mm`,
     `倾覆力矩 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N·m`,

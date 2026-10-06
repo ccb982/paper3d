@@ -445,6 +445,42 @@ export const STATE_LEGS: Readonly<Record<WalkState, StateLegPlan>> = Object.free
     ref: 'Perry `MidSwing→TerminalSwing`；触地即锁 ⇒ 与 DOUBLE 的声明衔接' },
 });
 
+/**
+ * ★★★ **逐态平衡目标（唯一真源）** —— 用户 2026-10-06：
+ *   「平衡系统在**不同阶段下作用不一样**」「平衡系统是**一次给一个完整的各个关节的修正**」。
+ *
+ *   这张表把 §21.4 的逐态行为**从文档变成代码数据**：
+ *   平衡系统重写后直接读它（不许在 `balance.ts` 里再抄一份 `if (state===...)`）。
+ *
+ *   ⚠ 定位：这是**目标**，不是控制律。控制律（怎么达标的）在 `balance.ts`，
+ *     但"这个态该干什么"必须只有这一个来源。
+ */
+export interface StateBalanceTarget {
+  /** 本态平衡系统**驱动哪条腿**：`bearer` = 只驱动承重腿（永远不许碰摆动腿） */
+  readonly drive: 'bearer';
+  /** 本态允许平衡系统**对搬运限幅/否决**（迈步系统搬得太过时） */
+  readonly mayClampTransfer: boolean;
+  /** 本态的 CoP 目标策略 */
+  readonly cop: 'hold' | 'none' | 'forward';
+  /** 一句话职责（UI 直接显示） */
+  readonly note: string;
+}
+
+export const STATE_BALANCE_TARGET: Readonly<Record<WalkState, StateBalanceTarget>> = Object.freeze({
+  DOUBLE: { drive: 'bearer', mayClampTransfer: true, cop: 'hold',
+    note: '稳住承重腿；CoM 收在双脚支持多边形内。不搬重量、不碰摆动腿' },
+  LOAD: { drive: 'bearer', mayClampTransfer: true, cop: 'hold',
+    note: '两脚都在地时维持不倒；对迈步系统的搬运**限幅**（不得太过）' },
+  PUSH: { drive: 'bearer', mayClampTransfer: false, cop: 'none',
+    note: '少做（被动拱架：GRF 过踝、力臂≈0）⇒ 只维持稳定，不推进' },
+  THRUST: { drive: 'bearer', mayClampTransfer: false, cop: 'forward',
+    note: '主动：承重腿踝跖屈产力矩、CoP 前移到前脚掌' },
+  LIFT: { drive: 'bearer', mayClampTransfer: false, cop: 'hold',
+    note: '单腿平衡全权：侧向发力把 CoM 控在承重脚支持面内' },
+  SWING: { drive: 'bearer', mayClampTransfer: true, cop: 'hold',
+    note: '单腿平衡 + 对落地前的过冲**限幅**' },
+});
+
 export const STATE_ROLES: Readonly<Record<WalkState, StateRoles>> = Object.freeze({
   DOUBLE: {
     state: 'DOUBLE',
@@ -1249,6 +1285,25 @@ export class GaitState {
         stepPermit: rs.stepPermit.all ? '放行' : '拦',
         // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
         //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+        // ★ 平衡修正：逐行列出"这一拍 balance 在动哪些关节、动多少度"
+        //   + 硬目标余量/限幅（来自力链）。全部由状态机生成，UI 只渲染。
+        balanceFix: (() => {
+          const bf = rs.balanceFix;
+          if (rs.groundChain) {
+            bf.tauMarginSag = rs.groundChain.tauMarginSag;
+            bf.tauMarginLat = rs.groundChain.tauMarginLat;
+            bf.trustable = rs.groundChain.trustable;
+            bf.trustNote = rs.groundChain.trustNote;
+          }
+          if (!bf.axes.length) return ['（本拍平衡系统没有提出任何关节修正）'];
+          return bf.axes.map((a) => {
+            const j = Math.floor(a.axis / 3); const ax = a.axis % 3;
+            const nm = rs.sk.joints[j]?.name ?? `j${j}`;
+            const d = (a.dTheta * 180) / Math.PI;
+            const sg = d >= 0 ? '+' : '';
+            return `轴${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}°　${a.label}`;
+          });
+        })(),
         // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
         force: rs.groundChain ? forceChainLines(rs.groundChain) : ['力链不可用（forceSrc 未安装）'],
         sigs: specs.map((sp) => {
@@ -1276,6 +1331,11 @@ export class GaitState {
         })(),
         roleRecv: recv, roleSup: sup,
         roleRecvFree: STATE_LEGS[rs.state].front, roleRearFree: STATE_LEGS[rs.state].rear,
+        // ★ 本态的平衡目标（状态机给平衡系统的契约；UI 只渲染）
+        balanceTarget: (() => {
+          const bt = STATE_BALANCE_TARGET[rs.state];
+          return `${bt.note}${bt.mayClampTransfer ? '　[可限幅搬运]' : ''}`;
+        })(),
         next: STATE_LABEL[NEXT_STATE[rs.state]],
         wait: `${rs.stateT.toFixed(2)}s / ${cfg.minDwellSec.toFixed(2)}s`,
         blocked: rs.violations.length ? violationText(rs.violations[0]) : '无',

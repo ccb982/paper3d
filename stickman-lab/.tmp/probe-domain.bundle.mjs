@@ -15188,14 +15188,18 @@ var init_ragdoll = __esm({
         const cols = this.soleCols[side];
         const bb = this.soleBB;
         this.footSoleBounds(side, bb);
+        const bbMidZ = (bb[2] + bb[3]) / 2;
         const EPS = 2e-3;
         const patches = [];
         let fz = 0, sx = 0, sz = 0, contactN = 0;
+        let colIn = 0, colOut = 0;
+        let ft = 0;
+        let tangentValid = false;
         for (let ci = 0; ci < cols.length; ci++) {
           const col = cols[ci];
           const bi = this.soleColBody[side][ci];
           if (bi === void 0) continue;
-          let bfz = 0, bsum = 0, bpx = 0, bpz = 0;
+          let bfz = 0, bsum = 0, bpx = 0, bpz = 0, bt = 0;
           this.world.contactPairsWith(col, (other) => {
             this.world.contactPair(col, other, (mf) => {
               this.soleNormalAligned(bi, mf.normal());
@@ -15206,10 +15210,20 @@ var init_ragdoll = __esm({
                 if (!(l > 0)) continue;
                 const p = mf.solverContactPoint(i);
                 if (p.x < bb[0] - EPS || p.x > bb[1] + EPS || p.z < bb[2] - EPS || p.z > bb[3] + EPS) continue;
-                bfz += l / dt;
+                const f = l / dt;
+                bfz += f;
                 bsum += l;
                 bpx += p.x * l;
                 bpz += p.z * l;
+                if (p.z >= bbMidZ) colIn += f;
+                else colOut += f;
+                const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+                if (Number.isFinite(tx) || Number.isFinite(ty)) {
+                  tangentValid = true;
+                  const tm = Math.hypot(tx || 0, ty || 0) / dt;
+                  bt += tm;
+                  ft += tm;
+                }
               }
             });
           });
@@ -15218,14 +15232,41 @@ var init_ragdoll = __esm({
             fz += bfz;
             sx += bpx;
             sz += bpz;
-            patches.push({ block: ci, ny: bfz, tx: 0, tz: 0, cx: bpx / bsum, cz: bpz / bsum });
+            patches.push({ block: ci, ny: bfz, t: bt, cx: bpx / bsum, cz: bpz / bsum });
           }
         }
         const valid = contactN > 0 && fz > 15;
         if (!valid) {
-          return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches };
+          return {
+            contactN,
+            fz: 0,
+            fx: 0,
+            fzTan: 0,
+            copX: 0,
+            copZ: 0,
+            copValid: false,
+            patches,
+            colIn: 0,
+            colOut: 0,
+            frictionUse: Number.NaN,
+            tangentValid
+          };
         }
-        return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches };
+        return {
+          contactN,
+          fz,
+          fx: 0,
+          fzTan: 0,
+          copX: sx / (fz * dt),
+          copZ: sz / (fz * dt),
+          copValid: true,
+          patches,
+          colIn,
+          colOut,
+          // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
+          frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
+          tangentValid
+        };
       }
       /**
        * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
@@ -17157,6 +17198,15 @@ var init_rigState = __esm({
        *   用户 2026-10-06：「往前迈的是摆动腿。一个承重腿，一个摆动腿。」
        */
       roleSw = null;
+      /** ★★ 平衡系统的完整修正向量（每拍由 `balanceSystem` 重置并记录） */
+      balanceFix = {
+        axes: [],
+        tauMarginSag: 0,
+        tauMarginLat: 0,
+        transferClamp: 0,
+        trustable: false,
+        trustNote: "\u672A\u8FD0\u884C"
+      };
       /** ★ 力链原始读数源（`Controller` 安装；`gaitState` 每拍调用） */
       forceSrc = null;
       /** ★ 状态机遥测（每拍由 `gaitState` 填写；UI 只渲染它） */
@@ -17190,6 +17240,7 @@ var init_rigState = __esm({
         roleRearFree: "locked",
         sigs: [],
         force: [],
+        balanceFix: [],
         violations: "",
         roles: "\u2014",
         jointsDeg: "\u2014",
@@ -17731,6 +17782,11 @@ var init_rigState = __esm({
           this.badRequests++;
           return;
         }
+        if (system === "balance") {
+          const i = joint * 3 + axis;
+          const d = rad - (this.pos[i] ?? 0);
+          this.balanceFix.axes.push({ axis: i, dTheta: d, label });
+        }
         this.request(joint, axis, rad * 0.9 / span, system, label);
       }
       // ── 力矩请求通道（`τ = JᵀF` 的产物，N·m）────────────────────────
@@ -18125,7 +18181,13 @@ var init_rigState = __esm({
           cycleCount: this.cycleCount,
           lastMove: this.lastMove ? { ...this.lastMove } : null,
           stateStats: { ...this.stateStats },
-          telemetry: { ...this.telemetry, force: [...this.telemetry.force], sigs: [...this.telemetry.sigs], ring: [...this.telemetry.ring] },
+          telemetry: {
+            ...this.telemetry,
+            force: [...this.telemetry.force],
+            sigs: [...this.telemetry.sigs],
+            ring: [...this.telemetry.ring],
+            balanceFix: [...this.telemetry.balanceFix]
+          },
           loadBearer: this.loadBearer,
           supportLeg: this.supportLeg(),
           swingLeg: this.swingLeg(),
@@ -18410,6 +18472,9 @@ function forceChainLines(fc) {
   return [
     `CoP \u5168\u5C40 (${n(fc.copX * 1e3)}, ${n(fc.copZ * 1e3)}) mm ${fc.copValid ? "" : "**\u65E0\u6548**"}`,
     `  \u5DE6 (${n(fc.l.copX * 1e3)}, ${n(fc.l.copZ * 1e3)}) ${m(fc.l.fz)}N\u3000\u53F3 (${n(fc.r.copX * 1e3)}, ${n(fc.r.copZ * 1e3)}) ${m(fc.r.fz)}N\u3000\u63A5\u89E6\u5757 ${fc.l.contactN}/${fc.r.contactN}`,
+    // ★ 柔性足专用（§15.5）：内/外侧柱分配 + 摩擦占用 —— 脚"侧向发力"的直接读数
+    `\u67D4\u6027\u8DB3 \u5DE6 \u5185${m(fc.l.colIn)}/\u5916${m(fc.l.colOut)}N\u3000\u53F3 \u5185${m(fc.r.colIn)}/\u5916${m(fc.r.colOut)}N`,
+    `\u6469\u64E6\u5360\u7528 \u5DE6 ${fc.l.tangentValid ? (fc.l.frictionUse * 100).toFixed(0) + "%" : "\u4E0D\u53EF\u7528(\u5207\u5411NaN)"}\u3000\u53F3 ${fc.r.tangentValid ? (fc.r.frictionUse * 100).toFixed(0) + "%" : "\u4E0D\u53EF\u7528(\u5207\u5411NaN)"}`,
     `GRF ${m(Math.hypot(fc.grfX, fc.grfY, fc.grfZ))}N \u65B9\u5411 ${n(fc.grfAngleDeg, 1)}\xB0`,
     `\u8E1D\u529B\u81C2 sag ${n(fc.armSag * 1e3)}mm  lat ${n(fc.armLat * 1e3)}mm`,
     `\u503E\u8986\u529B\u77E9 sag ${n(fc.toppleSag, 1)} lat ${n(fc.toppleLat, 1)} N\xB7m`,
@@ -19416,6 +19481,26 @@ var init_gaitState = __esm({
             stepPermit: rs.stepPermit.all ? "\u653E\u884C" : "\u62E6",
             // ★ Perry 签名逐项读数：**状态机自己写的**，UI 只按行渲染。
             //   这一块回答"现在离进下一态还差什么"，逐项给出实测值与门槛。
+            // ★ 平衡修正：逐行列出"这一拍 balance 在动哪些关节、动多少度"
+            //   + 硬目标余量/限幅（来自力链）。全部由状态机生成，UI 只渲染。
+            balanceFix: (() => {
+              const bf = rs.balanceFix;
+              if (rs.groundChain) {
+                bf.tauMarginSag = rs.groundChain.tauMarginSag;
+                bf.tauMarginLat = rs.groundChain.tauMarginLat;
+                bf.trustable = rs.groundChain.trustable;
+                bf.trustNote = rs.groundChain.trustNote;
+              }
+              if (!bf.axes.length) return ["\uFF08\u672C\u62CD\u5E73\u8861\u7CFB\u7EDF\u6CA1\u6709\u63D0\u51FA\u4EFB\u4F55\u5173\u8282\u4FEE\u6B63\uFF09"];
+              return bf.axes.map((a) => {
+                const j = Math.floor(a.axis / 3);
+                const ax = a.axis % 3;
+                const nm = rs.sk.joints[j]?.name ?? `j${j}`;
+                const d = a.dTheta * 180 / Math.PI;
+                const sg = d >= 0 ? "+" : "";
+                return `\u8F74${a.axis}(${nm}/${ax}) ${sg}${d.toFixed(1)}\xB0\u3000${a.label}`;
+              });
+            })(),
             // ★ 力链：状态机给的行，UI 原样渲染（不换算、不判断）
             force: rs.groundChain ? forceChainLines(rs.groundChain) : ["\u529B\u94FE\u4E0D\u53EF\u7528\uFF08forceSrc \u672A\u5B89\u88C5\uFF09"],
             sigs: specs.map((sp) => {
@@ -21865,6 +21950,8 @@ var init_wholeBodyQp = __esm({
 // src/core/systems/balance.ts
 function balanceSystem(rs, p = DEFAULT_BALANCE_PARAMS, doll) {
   const sk2 = rs.sk;
+  rs.balanceFix.axes.length = 0;
+  rs.balanceFix.transferClamp = 0;
   const sup = rs.supportLeg();
   const latArmed = stanceResolved(rs);
   const OFF = new Set((p.ablate ?? "").split(",").map((x) => x.trim()).filter(Boolean));

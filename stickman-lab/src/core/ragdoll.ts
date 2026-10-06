@@ -1863,14 +1863,18 @@ soleBlockLabels(side: 0 | 1): string[] {
   soleForceProfile(side: 0 | 1, dt: number): FootForce {
     const cols = this.soleCols[side];
     const bb = this.soleBB; this.footSoleBounds(side, bb);
+    const bbMidZ = (bb[2]! + bb[3]!) / 2;   // ★ 与 `soleColumnLoad` 同一分组界线
     const EPS = 2e-3;
     const patches: SolePatch[] = [];
     let fz = 0, sx = 0, sz = 0, contactN = 0;
+    let colIn = 0, colOut = 0;      // 内 / 外侧柱法向合力（N）
+    let ft = 0;                     // 切向幅值合计（N）
+    let tangentValid = false;
     for (let ci = 0; ci < cols.length; ci++) {
       const col = cols[ci] as RAPIER.Collider;
       const bi = this.soleColBody[side]![ci];
       if (bi === undefined) continue;
-      let bfz = 0, bsum = 0, bpx = 0, bpz = 0;
+      let bfz = 0, bsum = 0, bpx = 0, bpz = 0, bt = 0;
       this.world.contactPairsWith(col, (other: RAPIER.Collider) => {
         this.world.contactPair(col, other, (mf: RAPIER.TempContactManifold) => {
           this.soleNormalAligned(bi, mf.normal());
@@ -1882,22 +1886,39 @@ soleBlockLabels(side: 0 | 1): string[] {
             const p = mf.solverContactPoint(i);
             if (p.x < bb[0]! - EPS || p.x > bb[1]! + EPS
               || p.z < bb[2]! - EPS || p.z > bb[3]! + EPS) continue;
-            bfz += l / dt; bsum += l; bpx += p.x * l; bpz += p.z * l;
+            const f = l / dt;
+            bfz += f; bsum += l; bpx += p.x * l; bpz += p.z * l;
+            // ★ 内外侧柱：与 `soleColumnLoad` 同一规则（z ≥ 中位 = 内侧）
+            if (p.z >= bbMidZ) colIn += f; else colOut += f;
+            // ★ 切向幅值：`contactTangentImpulseX/Y` 在部分接触上返回 NaN
+            //   （`soleFrictionUse` 已记录该问题）⇒ 只有有限值才算有效
+            const tx = mf.contactTangentImpulseX(i), ty = mf.contactTangentImpulseY(i);
+            if (Number.isFinite(tx) || Number.isFinite(ty)) {
+              tangentValid = true;
+              const tm = Math.hypot(tx || 0, ty || 0) / dt;
+              bt += tm; ft += tm;
+            }
           }
         });
       });
       if (bfz > 1e-6) {
         contactN++;
         fz += bfz; sx += bpx; sz += bpz;
-        patches.push({ block: ci, ny: bfz, tx: 0, tz: 0, cx: bpx / bsum, cz: bpz / bsum });
+        patches.push({ block: ci, ny: bfz, t: bt, cx: bpx / bsum, cz: bpz / bsum });
       }
     }
     const valid = contactN > 0 && fz > 15;   // 15 N ≈ 体重的 2%，低于此 CoP 噪声被放大
     if (!valid) {
-      return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches };
+      return { contactN, fz: 0, fx: 0, fzTan: 0, copX: 0, copZ: 0, copValid: false, patches,
+        colIn: 0, colOut: 0, frictionUse: Number.NaN, tangentValid };
     }
-    return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches };
+    return { contactN, fz, fx: 0, fzTan: 0, copX: sx / (fz * dt), copZ: sz / (fz * dt), copValid: true, patches,
+      colIn, colOut,
+      // 摩擦占用：Σ|f_t| / (μ·Σf_n)。μ 用鞋底-地面系数（`GROUPS` 里设的 `bodyFriction`）。
+      frictionUse: tangentValid ? ft / Math.max(1e-6, 0.8 * fz) : Number.NaN,
+      tangentValid };
   }
+
 
   /**
    * ★★ 支撑脚的**法向力 / 切向力 / 摩擦利用率**（诊断"体重有没有真的压上去、脚有没有打滑"）。
